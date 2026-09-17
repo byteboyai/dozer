@@ -44,6 +44,11 @@ pub struct FileHistorySnapshot {
 /// `git_log::DEFAULT_MAX_COMMITS` 的量级(见该常量文档)。
 pub const DEFAULT_MAX_COUNT: usize = 200;
 
+/// `diff_against_current()` patch 文本的字符数上限,超过就截断——同
+/// `git_log.rs::MAX_PATCH_CHARS` 的理由(大 diff 一次性喂给 `text()` widget
+/// 排版,布局开销肉眼可见),量级也保持一致。
+const MAX_PATCH_CHARS: usize = 20_000;
+
 /// 一次「查看此文件历史」的目标——右键哪个文件、属于哪个项目/仓库。
 #[derive(Debug, Clone)]
 pub struct FileHistoryTarget {
@@ -114,7 +119,11 @@ pub enum Message {
     /// (弹窗打开期间项目被切走/关闭时,过期结果直接丢弃)。
     SnapshotLoaded(PathBuf, PathBuf, Result<FileHistorySnapshot, String>),
     SelectCommit(git2::Oid),
-    DiffLoaded(git2::Oid, Result<String, String>),
+    /// `(repo_path, file_path)` 同 `SnapshotLoaded`——目标已切换(弹窗关了
+    /// 又对另一个文件重开)时丢弃过期结果,不能只按 `oid` 判断:两个不同
+    /// 文件的历史列表完全可能包含同一个 commit(比如一次全仓格式化提交),
+    /// 若不核对目标,晚到达的旧文件 diff 会被错插进新文件的缓存里。
+    DiffLoaded(PathBuf, PathBuf, git2::Oid, Result<String, String>),
     RollbackRequest(git2::Oid),
     RollbackDone(git2::Oid, Result<(), String>),
 }
@@ -158,8 +167,12 @@ pub fn update(
                 spawn_diff(target, oid, handle, emit);
             }
         }
-        Message::DiffLoaded(oid, result) => {
+        Message::DiffLoaded(repo_path, file_path, oid, result) => {
             let Some(s) = state else { return };
+            let Some(target) = &s.target else { return };
+            if target.repo_path != repo_path || target.file_path != file_path {
+                return; // 已经不是当前目标,丢弃(见上面 `DiffLoaded` 文档)。
+            }
             s.diff_cache.insert(oid, result);
         }
         Message::RollbackRequest(oid) => {
@@ -179,16 +192,19 @@ pub fn update(
                 emit(Message::RollbackDone(oid, result));
             });
         }
-        Message::RollbackDone(oid, result) => {
+        Message::RollbackDone(_oid, result) => {
             let Some(s) = state else { return };
             s.rollback_pending = None;
             match result {
                 Ok(()) => {
-                    s.diff_cache.remove(&oid);
-                    if s.selected == Some(oid)
-                        && let Some(target) = &s.target
+                    // 回滚改的是整个工作区文件的实时内容,之前缓存的所有
+                    // diff(都是"某提交 vs 回滚前的工作区内容")全部失效,
+                    // 不能只清掉被回滚到的这一个 oid。
+                    s.diff_cache.clear();
+                    if let Some(target) = &s.target
+                        && let Some(selected) = s.selected
                     {
-                        spawn_diff(target, oid, handle, emit);
+                        spawn_diff(target, selected, handle, emit);
                     }
                 }
                 Err(err) => {
@@ -215,7 +231,7 @@ fn spawn_diff(
         })
         .await
         .unwrap_or_else(|e| Err(format!("diff 加载任务失败: {e}")));
-        emit(Message::DiffLoaded(oid, result));
+        emit(Message::DiffLoaded(repo_path, file_path, oid, result));
     });
 }
 
@@ -307,7 +323,16 @@ pub fn diff_against_current(
         .map_err(|e| e.message().to_string())?;
 
     let mut patch = String::new();
+    let mut truncated = false;
     diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+        if truncated {
+            return true;
+        }
+        if patch.len() >= MAX_PATCH_CHARS {
+            truncated = true;
+            patch.push_str("\n… diff 过长,已截断显示\n");
+            return true;
+        }
         let prefix = match line.origin() {
             '+' | '-' | ' ' => line.origin().to_string(),
             _ => String::new(),
@@ -832,13 +857,44 @@ mod tests {
         let handle = tokio::runtime::Handle::current();
         update(
             &mut state,
-            Message::DiffLoaded(oid, Ok("patch text".to_string())),
+            Message::DiffLoaded(
+                target().repo_path,
+                target().file_path,
+                oid,
+                Ok("patch text".to_string()),
+            ),
             &handle,
             |_| {},
         );
         assert_eq!(
             state.unwrap().diff_for(oid),
             Some(&Ok("patch text".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn diff_loaded_ignores_result_for_different_target() {
+        // 弹窗对文件 A 打开时发出的 diff 查询,晚到达时弹窗已经关了又对
+        // 另一个文件 B 重开——不能把 A 的 diff 插进 B 的缓存里(即便两者
+        // 恰好用了同一个 oid,比如一次全仓格式化提交)。
+        let mut state = Some(State::new(target()));
+        let oid = fake_oid(8);
+        let other_file = PathBuf::from("b.txt");
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::DiffLoaded(
+                target().repo_path,
+                other_file,
+                oid,
+                Ok("diff for a different file".to_string()),
+            ),
+            &handle,
+            |_| {},
+        );
+        assert!(
+            state.unwrap().diff_for(oid).is_none(),
+            "file_path 不匹配,结果应被丢弃"
         );
     }
 
@@ -878,24 +934,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rollback_done_ok_clears_cache_entry_for_that_oid() {
+    async fn rollback_done_ok_clears_entire_diff_cache() {
+        // 回滚改的是整个工作区文件的实时内容,不能只清掉被回滚到的这一个
+        // oid——之前为其它提交缓存的 diff(都是"某提交 vs 回滚前的工作区
+        // 内容")全部失效,必须整体清空。
         let mut state = Some(State::new(target()));
-        let oid = fake_oid(7);
+        let rolled_back_oid = fake_oid(7);
+        let other_oid = fake_oid(8);
         {
             let s = state.as_mut().unwrap();
-            s.rollback_pending = Some(oid);
-            s.selected = Some(fake_oid(99)); // 不等于 oid,不会触发重新查询
-            s.diff_cache.insert(oid, Ok("stale".to_string()));
+            s.rollback_pending = Some(rolled_back_oid);
+            s.selected = Some(other_oid);
+            s.diff_cache.insert(rolled_back_oid, Ok("a".to_string()));
+            s.diff_cache.insert(other_oid, Ok("b".to_string()));
         }
         let handle = tokio::runtime::Handle::current();
         update(
             &mut state,
-            Message::RollbackDone(oid, Ok(())),
+            Message::RollbackDone(rolled_back_oid, Ok(())),
             &handle,
-            |_| panic!("selected 不是这个 oid,不该重新查询 diff"),
+            |_| {},
         );
         let s = state.unwrap();
         assert!(s.rollback_pending().is_none());
-        assert!(s.diff_for(oid).is_none(), "回滚成功应清掉旧缓存");
+        assert!(s.diff_for(rolled_back_oid).is_none());
+        assert!(
+            s.diff_for(other_oid).is_none(),
+            "回滚后其它提交的旧缓存也该失效,不能只清被回滚到的那一个"
+        );
     }
 }
