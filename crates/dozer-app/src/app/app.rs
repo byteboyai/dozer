@@ -6,6 +6,7 @@ use crate::chrome::homespace::{self, HomeRecentConversation, HomeRecentFile};
 use crate::chrome::rail;
 use crate::extensions::browser;
 use crate::extensions::database;
+use crate::extensions::file_history;
 use crate::extensions::files;
 use crate::extensions::footbar;
 use crate::extensions::git_log;
@@ -361,6 +362,9 @@ pub struct App {
     /// Project 面板「项目文档 / Agent 记忆」链接行的右键菜单浮层状态,坐标
     /// 同样复用 `files.last_right_click`。
     pub(crate) project_link_menu: Option<ProjectLinkMenu>,
+    /// 文件历史对比弹窗状态——见 `extensions::file_history::State`。`None`
+    /// 表示弹窗未打开。
+    pub(crate) file_history: Option<file_history::State>,
     /// Todo 分类树节点右键菜单浮层状态,坐标复用 `files.last_right_click`。
     pub(crate) category_context_menu: Option<CategoryContextMenu>,
     /// 分类选择器("移动到..." / 任务挂分类)浮层状态:定位坐标 + 目标。
@@ -744,6 +748,7 @@ impl App {
             rail_drag: None,
             files: files::AppState::default(),
             project_link_menu: None,
+            file_history: None,
             category_context_menu: None,
             category_picker: None,
             text_input_menu: None,
