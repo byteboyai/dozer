@@ -5,8 +5,8 @@
 **Goal:** 把 `dozer-app` 里平铺的 ~50 个 `src/*.rs` 按"域"聚合进子目录，并拆分行数过大的单文件（`app.rs` 13004 行、`main.rs` 3569 行、`workspace.rs` 5266 行，以及 5 个 >2000 行的 `extensions/*`）。**纯重构，不改变任何用户可见行为。**
 
 **Architecture:** 代码库里已经存在两种可复用的既定模式，本计划分别对应用到不同文件上，注意它们不是同一回事：
-1. **"主文件保留内容 + 同名子目录放子模块"**（`extensions.rs`+`extensions/`、`theme.rs`+`theme/`、`project.rs`+`project/`、`ssh.rs`+`ssh/sftp.rs`）——主文件本身还有实质内容，子目录只装被它 `pub mod` 出去的一部分。Phase 4.4 的域目录（`chrome/`/`project/`/`editor/`/`assets/`）用的是这个模式。
-2. **"整个文件被同名目录+`mod.rs` 取代"**（Phase 2/3 的 `app.rs`→`app/mod.rs`、Phase 4.1/4.2 的 `workspace.rs`/`preview.rs`）——原文件物理删除，`mod.rs` 只做转发。这个拓扑在本仓库不是首次出现，`code_editor/mod.rs`、`dozerd/src/transcripts/mod.rs`、`byteui` 几个 `*/mod.rs` 已经在用，但**跟 extensions.rs/theme.rs 那四个例子不是同一种拓扑**，不要混为一谈——真正要复用的先例是前者这几个 `mod.rs` 目录。
+1. **"主文件保留内容 + 同名子目录放子模块"**（`extensions.rs`+`extensions/`、`theme.rs`+`theme/`、`project.rs`+`project/`、`ssh.rs`+`ssh/sftp.rs`）——主文件本身还有实质内容，子目录只装被它 `pub mod` 出去的一部分。
+2. **"整个文件被同名目录+`mod.rs` 取代"**（Phase 2/3 的 `app.rs`→`app/mod.rs`、Phase 4.1/4.2 的 `workspace.rs`/`preview.rs`）——原文件物理删除，`mod.rs` 只做转发。这个拓扑在本仓库不是首次出现，`code_editor/mod.rs`、`dozerd/src/transcripts/mod.rs`、`byteui` 几个 `*/mod.rs` 已经在用，但**跟 extensions.rs/theme.rs 那四个例子不是同一种拓扑**，不要混为一谈——真正要复用的先例是前者这几个 `mod.rs` 目录。Phase 4.4 的域目录（`chrome/`/`project/`/`assets/`；原计划还有 `editor/`，写计划后核实调用图判定站不住已取消，见 Task 4.4）用的是模式 1。
 
 以及"每扩展自带 `Message`/`State`/`update`/`view`"的扩展化方向（`git_log`/`conversations` 两个试点已完成）。本计划把这个既定方向**做完、做均匀**：先抽平台胶水（`main.rs`），再拆核心 `app.rs`，最后把 5 个巨型扩展目录化。
 
@@ -32,14 +32,15 @@
 | `src/preview.rs` | 2265 | — |
 | `src/extensions/project.rs` | 2264 | 已裂出 `project/`，仍偏大 |
 
-2000 行门槛以下、原先在 800 门槛下也在列的文件降级为"不必再拆"：`extensions/git_log.rs`（1937）、`extensions/browser.rs`（1883）、`extensions/ssh.rs`（1580，已裂出 `ssh/sftp.rs`）——按 Phase 4.4 归进 `chrome`/`extensions` 域目录即可，不需要 Phase 4.5 那种 state/update/view 内部再拆。`homespace.rs`/`rail.rs`/`webview_geometry.rs`（~1000）本来就是"次优先级，归域后视需要内拆"，门槛调整不影响它们。
+2000 行门槛以下、原先在 800 门槛下也在列的文件降级为"不必再拆"：`extensions/git_log.rs`（1937）、`extensions/browser.rs`（1883）、`extensions/ssh.rs`（1580，已裂出 `ssh/sftp.rs`）——按 Phase 4.4 归进 `chrome`/`extensions` 域目录即可，不需要 Phase 4.5 那种 state/update/view 内部再拆。`homespace.rs`/`rail.rs`（~1000）本来就是"次优先级，归域后视需要内拆"，门槛调整不影响它们；`webview_geometry.rs`（~1000）经 Task 4.4 核实调用图后判定不进任何域目录，留在顶层原地不动（见 Task 4.4 修订说明），不再套用"次优先级归域"这条。
 
 其余 crate 相对健康：`dozer-core/protocol.rs`（1540）、`dozerd/server.rs`（1246）、`dozerd/transcripts/mod.rs`（1319）在 Phase 5 处理。
 
-**已知的两个"门槛提到 2000 也救不了"的残留点**（提前记录，避免执行完后被当成意外新发现）：
-- **`app/app.rs`**（Phase 3.4 收敛后，`struct App` + 生命周期/accessor/布局持久化 `impl` 块，2414–5042）预计仍有 **≈2628 行**，且这个数字已经刨掉了测试（测试在 Task 3.4 就单独迁入 `app/tests/`）——它不是"测试太多"的问题，是这个 `impl` 块本身没有对应 `update.rs`/`view.rs` 那种二次拆分,Phase 3 没安排。
+**已知的三个"门槛提到 2000 也救不了"的残留点**（提前记录，避免执行完后被当成意外新发现；第三个是执行完 Phase 1 后审阅才发现的，补记于此）：
+- **`app/app.rs`**（Phase 3.4 收敛后，`struct App` + 生命周期/accessor/布局持久化 `impl` 块，2414–5042）预计仍有 **≈2628 行**，且这个数字已经刨掉了测试（测试在 Task 3.4 就单独迁入 `app/tests/`）——它不是"测试太多"的问题，是这个 `impl` 块本身没有对应 `update.rs`/`view.rs` 那种二次拆分,Phase 3 没安排。**（2026-09-17 实测更新：Task 3.4 的测试拆分实际执行时被跳过未做，测试整体留在了 `app/app.rs` 尾部，实际行数是 5148 行，远超这里预估的 2628——测试拆分留待后续单独处理，见 Phase 3 Task 3.4 的实际结果记录。）**
 - **`workspace/state.rs`**（`struct Workspace` + 全部 `impl Workspace`，89–2531）预计仍有 **≈2443 行**，同样已经刨掉测试（`workspace/tests/`）。Phase 4.1 对 `workspace.rs` 的拆分只切出了 `view.rs`/`hook.rs` 两块边角，`impl Workspace` 本体没有像 `app.rs` 那样的 update/view 二次切分方案。
-- 这两处如果要真正压到 2000 行以下，需要在 Phase 3/4.1 之外补一个新 Task（比如 `app/app.rs` 再按"生命周期/accessor/布局持久化"三块拆，`workspace/state.rs` 参照 `app.rs` 的 update/view 分离思路再拆一层）——**当前版本计划没有这个 Task**，是否补，等实施到那一步时再定。
+- **`platform/window_events.rs`**（Phase 1 事后修正，见该 Phase"实际结果"一节）：`enum Runner` + `impl Runner` + `impl ApplicationHandler<Message> for Runner` 三部分合并后实测 **2708 行**——这是把同一个 `Runner` 类型的两个 impl 块合到一起的自然结果（内聚性更好），但也超过了门槛，要压下去需要在这个文件内部再按"`on_window_event` 状态机" vs "`ApplicationHandler` 三个 trait 方法"切一层。
+- 这三处如果要真正压到 2000 行以下，需要在各自 Phase 之外补新 Task（`app/app.rs` 补做 Task 3.4 的测试域拆分，`workspace/state.rs` 参照 `app.rs` 的 update/view 分离思路再拆一层，`window_events.rs` 按状态机/trait 实现切开）——**当前版本计划没有这些 Task**，是否补，等实施到那一步时再定。
 
 ---
 
@@ -71,11 +72,13 @@ src/
 ├── term/                      # term_model / term_view / terminal
 ├── assets/                    # assets / fonts / clipboard_image
 ├── chrome/                    # topbar / rail / tab_widget / menu / native_menu / homespace
-├── project/                   # project / project_meta / project_scaffold / open_projects / panel_layouts / git_watch
-├── editor/                    # code_editor / diff_render / delivery / transcript / conversation / webview_geometry
+├── project/                   # 按调用图核实后收缩为 project_meta（详见 Task 4.4 修订说明）
+├── code_editor/                # 保持原地，不再包一层 editor/（Task 4.4 修订说明：editor/ 取消）
+├── conversation.rs / transcript.rs / webview_geometry.rs / delivery.rs / open_projects.rs / panel_layouts.rs
+│                             # ← 原计划分进 project/editor 两个域，核实调用图后判定是内核级/跨域共享文件，留在顶层（panel_layouts.rs 最终并入 app/app.rs，见 Task 4.4）
 ├── settings.rs / keymap.rs / dialog.rs / frosted.rs / layout.rs / osc.rs
 ├── theme.rs + theme/          # 保持不变
-└── extensions.rs + extensions/ # 内部按 Phase 4 目录化
+└── extensions.rs + extensions/ # 内部按 Phase 4 目录化，project_scaffold.rs 并入 extensions/project/scaffold.rs、diff_render.rs 移到 extensions/ 顶层挨着 git_log.rs
 ```
 
 ---
@@ -89,6 +92,7 @@ src/
 - **行号只作参考**：拆分的行号边界会因为前面的搬移而漂移，定位时用函数/结构体的闭合大括号，不要只信行号。
 - 每个 Task 结束都要 `cargo build -p dozer-app && cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets && cargo fmt` 干净通过。
 - **协作节奏**：`app.rs`/`workspace.rs`/`extensions/*` 是这个仓库改动最频繁的热点文件，本计划要分十几次 Task 逐步合并。开工前跟其他并行开发协调好这段时间对这几个文件的改动节奏（暂停非必要改动，或接受期间要多次 rebase 处理冲突），不要假设分支能一路开到 Phase 4 结束都不冲突。
+- **域目录分配按调用图,不按文件名联想**：Phase 4.4/4.5 把文件分进哪个域目录之前，先跑 `grep -rl "<模块名>::" crates/dozer-app/src/` 确认真实调用方，不要凭文件名"读起来像哪个域"拍板。判断规则：只有一个消费者的文件，跟那个消费者放在一起（比如只被 `git_log` 用的文件应该贴着 `git_log` 走，不该进一个共享域目录，隔着一层目录反而更难找）；被三个以上不相关域共用的文件，是真正的共享内核工具，留在顶层或单独一个 `shared`/`util` 类目录，不要硬塞进某一个域的名字里——`webview_geometry.rs` 自己的模块文档就写着"跟文件预览业务域无关，是历史命名遗留"，这类自带说明的文件尤其要先读文档再分类。具体分组结果和取消/改派的成员见 **Task 4.4** 的修订说明（"目标目录结构"一节的树状图里也同步标了简注）。
 
 ---
 
@@ -142,13 +146,23 @@ src/
 
 `main()` 内 `enum Runner { Loading(..), Ready { .. } }`（main.rs:696–779）+ `impl Runner`（999–2187，含 `clear_file_drag_hover`(1011) 和 `on_window_event(&mut self, event: &WindowEvent) -> bool`(1037)）整体搬进 `window_events.rs`，`Runner` 枚举定义随同迁移（`platform/mod.rs` 做 `pub use`）。**这块实测约 1490 行**（`enum Runner` ~83 行 + `impl Runner` ~1188 行），比早先估算的"~380–905 行(约 525 行)"大近 3 倍——是 Phase 1 里工作量最大的一个 Task，预留时间要按实测数字算，不要按旧估算。
 
-`impl winit::application::ApplicationHandler<Message> for Runner`（2188 起，含 `resumed`/`user_event`/`window_event`）是另一个独立 impl 块，**不在本 Task 搬移范围内**，留在 `main.rs`（它调用 `on_window_event` 这个跨文件的关联函数即可，`impl` 跨文件不影响调用）。
+`impl winit::application::ApplicationHandler<Message> for Runner`（2188 起，含 `resumed`/`user_event`/`window_event`，约 1360 行）是另一个独立 impl 块——**这条判断是错的，已经在实测中纠正**：写这份计划时以为它可以留在 `main.rs`（理由是"`impl` 跨文件不影响调用，不用管它"），但没意识到这样会让 `main.rs` 整体依旧是个大文件，跟 Phase 1 标题自己定的"main.rs 收敛"目标直接矛盾。**正确做法是这个 impl 块也要搬进 `window_events.rs`**，跟 `impl Runner` 合并——两者是同一个 `Runner` 类型的两半，本就该在一起，也是内聚性更好的选择。
 
 ### Task 1.5：收敛 `main()` 入口
 
 `main.rs` 最终只保留：`mod` 声明、`pub fn main()`（调 `fonts`/`theme` 初始化、建 event loop/tokio/client、`block_on(build_app(..))`、`event_loop.run_app`）。`build_app` 若仍在 `main.rs` 内且较大，一并并入 `runtime.rs`。
 
 ### Task 1.6：编译 / 测试 / clippy / fmt / 人工验收 + commit
+
+### Phase 1 实际结果（2026-09-17 执行 + 事后修正）
+
+首次执行只搬了 `enum Runner` + `impl Runner`（Task 1.4 原计划范围），`impl ApplicationHandler<Message> for Runner` 按 Task 1.4 当时（错误）的措辞留在了 `main.rs`——结果 `pub fn main()` 函数本身确实缩到了 <50 行，但**整个文件仍有 1498 行**，因为那块约 1360 行的事件分发状态机还杵在原地，跟 Phase 1"main.rs 收敛"的目标没对上。审阅发现后已在独立 commit（`6063645`）里补上：把 `impl ApplicationHandler` 连同它依赖的 `TODO_POLL_INTERVAL`/`DRAG_REDRAW_INTERVAL`/`menu_edit_key` 三个辅助项一起搬进 `platform/window_events.rs`，跟 `impl Runner` 合并到一起，并把 `app/app.rs`/`app/update.rs` 两处跨文件引用改成 `crate::platform::window_events::` 路径。
+
+最终实测行数：
+- `main.rs`：**82 行**（`pub fn main()` 本身 + `mod` 声明 + 极少量 `use`），达标。
+- `platform/window_events.rs`：**2708 行**（`enum Runner` + `impl Runner` + `impl ApplicationHandler<Message> for Runner` 三部分合并后的结果）——这是"整个 Runner 事件状态机"一个内聚概念被合到一起的自然结果，不是意外堆积；但它现在也超过了本计划自己定的 2000 行门槛，如果要压下去，需要在这个文件内部再按"`on_window_event` 状态机" vs "`ApplicationHandler` 三个 trait 方法"切一层——本次未做，留作后续可选项，跟 `app/app.rs`/`workspace/state.rs` 那两处"门槛提到 2000 也救不了的残留点"是同一类情况。
+
+`cargo build/test（859 全过）/clippy/fmt` 全绿。
 
 ---
 
@@ -198,13 +212,15 @@ pub use layout::*;
 ### Task 2.4：`layout.rs` —— 布局/几何类型与纯函数
 
 搬移 `app.rs` 现有行段：
-- 440–985：`ShellLayout`（+Default）、`PanelDims`、`default_panel_dims`、`sanitize_shell_layout`、`sanitize_panel_dims`、`Divider`、`RowDivider`、`TabGroup`、`TabDrag`、拖拽阈值常量与判断函数、`webview_hidden_by_panel_popup`、各菜单项构造器（`project_link_menu_items`/`text_input_menu_items`/`database_source_menu_items`/`category_context_menu_items`）
+- 440–985：`ShellLayout`（+Default）、`PanelDims`、`default_panel_dims`、`sanitize_shell_layout`、`sanitize_panel_dims`、`Divider`、`RowDivider`、`TabGroup`、`TabDrag`、拖拽阈值常量与判断函数、`webview_hidden_by_panel_popup`
 - 1075–1700：`pair_list_content_width`、`pair_columns_tests`、`preview_desired_concurrent_tests`、`list_rendered_first`、`pair_split_ratio`、`with_pair_split_ratio`
 - 1701–1885：`zone_at_x`、`terminal_pane_pixel_size`、`ssh_terminal_pane_pixel_size`、`UI_ZOOM_STEP`
 
+**注意，不要把四个菜单项构造器（`project_link_menu_items`(822)/`text_input_menu_items`(839)/`database_source_menu_items`(887)/`category_context_menu_items`(927)，虽然物理位置落在 440–985 区间内）一起搬进 `layout.rs`**——它们分别构造 `Message::Project`/`Message::TextInputMenuCut` 等/`Message::Database`/`Message::Todo`，是四个不相关域各自的原生菜单数据，只是因为原文件里跟 `ShellLayout` 挨得近才显得像"布局"的一部分，塞进一个通用几何文件会让 `layout.rs` 变成跨四个域的杂物抽屉。这四个函数唯一的调用方分别是 `database_source_context_menu`(4511)/`project_link_context_menu`(4533)/`todo_category_context_menu`(4567) 三个方法（`text_input_menu_items` 的调用点在别处，同类性质），这三个方法本身落在 2796–5042 区间，属于 Task 2.5/3.4 最终收敛进 `app/app.rs` 的那块——所以这四个菜单构造器应该跟它们的调用方一起留在 `app/app.rs`，不要经过 `layout.rs` 中转。
+
 ### Task 2.5：`app/app.rs` —— `struct App` + `impl App` 主体迁入
 
-`app/mod.rs` 里 `mod app;` 承载 `app.rs` 原 2414–9343 的 `struct App` + `impl App`（这一阶段**不拆 impl**，先整体平移，保持 `app/mod.rs` 的 `pub use app::*;` 让 `crate::app::App` 路径不变）。剩余自由 view 函数（9344–10743）与测试（10744–13004）暂留原 `app.rs`，本阶段先并入 `app/app.rs` 尾部，避免文件碎片化。
+`app/mod.rs` 里 `mod app;` 承载 `app.rs` 原 2414–9343 的 `struct App` + `impl App`（这一阶段**不拆 impl**，先整体平移，保持 `app/mod.rs` 的 `pub use app::*;` 让 `crate::app::App` 路径不变）。剩余自由 view 函数（9344–10743）与测试（10744–13004）暂留原 `app.rs`，本阶段先并入 `app/app.rs` 尾部，避免文件碎片化。另外把 Task 2.4 特意排除在 `layout.rs` 之外的四个菜单项构造器（`project_link_menu_items`/`text_input_menu_items`/`database_source_menu_items`/`category_context_menu_items`）也带过来，跟它们各自唯一的调用方（`database_source_context_menu`/`project_link_context_menu`/`todo_category_context_menu` 等）放在同一个文件里。
 
 ### Task 2.6：编译 / 测试 / clippy / fmt / 人工验收 + commit
 
@@ -248,6 +264,8 @@ pub use layout::*;
 - `workspace/mod.rs`：`pub use` 转发，保证 `crate::workspace::Workspace` 等旧路径不变；同时把原 `workspace.rs` 顶部模块级 `//!` 文档注释（如果有）搬过来。
 - **Delete**：`crates/dozer-app/src/workspace.rs` 本身——同 Task 2.1 的 `app.rs` 一样，`workspace.rs` 和 `workspace/mod.rs` 不能同时存在，内容搬空后要物理删除原文件，不能只留着不管。
 
+**内聚缺口（跟 Phase 3 对 `app.rs` 的处理不对称，先记录，不在本 Task 强制做）**：`workspace/state.rs` 是本计划里唯一一处"只挖走边角、`impl` 本体不拆"的地方——`struct Workspace` + 全部 `impl Workspace`（89–2531，≈2443 行）整体平移，没有对应 `app.rs` 那种 update/view 二次切分。这个 `impl` 块大概率能按子域再拆（终端会话页签生命周期 `spawn_new_tab`/`close_tab`/`attach` 一组、SSH 终端会话一组、`ws.review` 审阅内容加载一组、`from_restore`/`adopt_project`/`loading_for_project` 项目恢复重建一组——`hook.rs`/`view.rs` 已经把 hook 安装和纯 view 函数摘出去了，剩下的就是这几类），可以照 Task 3.1–3.2 的思路（先分类、再一个个搬）做一个 `workspace/tabs.rs` + `workspace/ssh_session.rs` + `workspace/review.rs` + `workspace/restore.rs` 之类的二次拆分。**跟 Task 3.3 一样标为可选**：本 Task 只做到 state/view/hook/tests 四分，二次拆分视工作量决定是否补一个 Task 4.1b 或独立成后续 plan——但不要在执行完 Task 4.1 后就当作"workspace.rs 已经处理完"，它是这次重组里内聚提升最不彻底的一块。
+
 ### Task 4.2：`preview/` 目录
 
 `preview.rs`（2265）落目录，按 `state.rs`（preview 状态结构）/`native_editor.rs`（可编辑原生编辑器）/`webview.rs`（webview spec）/`view.rs` 切分。同样要把模块级文档注释搬进 `preview/mod.rs`，并在内容搬空后**删除原 `crates/dozer-app/src/preview.rs`**（原因同上，`preview.rs` 与 `preview/mod.rs` 不能共存）。
@@ -256,12 +274,27 @@ pub use layout::*;
 
 `term_model.rs`（787）/`term_view.rs`（703）/`terminal.rs`（301）三个小文件聚合进 `term/`，`term/mod.rs` 转发。
 
-### Task 4.4：`assets/`、`chrome/`、`project/`、`editor/` 域目录（纯聚合，不改文件内部）
+### Task 4.4：`assets/`、`chrome/`、`project/` 域目录（纯聚合，不改文件内部）；`editor/` 取消
 
-- `assets/`：`assets.rs` + `fonts.rs` + `clipboard_image.rs`
-- `chrome/`：`topbar.rs` + `rail.rs` + `tab_widget.rs` + `menu.rs` + `native_menu.rs` + `homespace.rs`
-- `project/`：`project.rs` + `project_meta.rs` + `project_scaffold.rs` + `open_projects.rs` + `panel_layouts.rs` + `git_watch.rs`
-- `editor/`：`code_editor/`（并入）+ `diff_render.rs` + `delivery.rs` + `transcript.rs` + `conversation.rs` + `webview_geometry.rs`
+写这份计划时 `project/`/`editor/` 两个分组是按文件名联想拼的，写计划后用 `grep -rl "<模块名>::" crates/dozer-app/src/` 实测调用方，发现分组跟真实依赖对不上，按 Global Constraints 的"域目录分配按调用图"原则重新分：
+
+- `assets/`：`assets.rs` + `fonts.rs` + `clipboard_image.rs`（未重新核实，按原计划）
+- `chrome/`：`topbar.rs` + `rail.rs` + `tab_widget.rs` + `menu.rs` + `native_menu.rs` + `homespace.rs`（未重新核实，按原计划）
+- `project/`：只留 `project_meta.rs`（调用方：`app.rs`/`extensions/project.rs`/`workspace.rs`，多消费者且含 `extensions::project`，是真正的"project 域"共享类型）。原计划里的另外三个成员改派：
+  - `project_scaffold.rs`：**唯一调用方是 `extensions::project`**，不进 `project/`，改挪进 **`extensions/project/scaffold.rs`**（该目录已有 `delete.rs`/`links.rs`，正好配套），比隔着一层 `crate::project` 更贴近实际依赖，也避免跟 `extensions::project` 撞名造成误读。
+  - `open_projects.rs`：唯一调用方是 `app.rs`（内核，管的是"跨项目的最近打开列表"，不是单个 project 内部状态），留在内核层，不进任何域目录。
+  - `panel_layouts.rs`：唯一调用方也是 `app.rs`，且内容就是"面板布局持久化"——跟 Task 3.4 已经规划进 `app/app.rs` 的"生命周期/accessor/布局持久化"impl 块是同一件事，建议直接并入 `app/app.rs`，不单独成域。
+  - `project.rs`（文件树状态机本体）：调用方除 `workspace.rs`/`main.rs` 外还有 `extensions/files.rs` **和** `extensions/ssh/sftp.rs`——不止服务"project"域，是文件树的通用抽象，被 Files 和 SSH/SFTP 两个不相关的面板复用。是否该叫 `project/`（会跟 `extensions::project` 撞名）值得重新命名（比如 `file_tree/`），具体分配到执行这个 Task 时再核实一遍，不要照抄本段的推测。
+  - `git_watch.rs`：调用方是 `app.rs`/`workspace.rs`，跟同样是 git 工具的 `delivery.rs`（见下）性质一致，建议两个放一起，不归进 `project/`。
+- **`editor/` 域整体取消**，原计划的六个成员逐一核实后没有一个站得住："跟 `code_editor` 放一起"这个理由本身就是按名字联想，不是按调用关系：
+  - `diff_render.rs`：**唯一调用方是 `extensions::git_log`**，改挪进 `extensions/git_log.rs` 所在位置（Task 4.5 里 `git_log.rs` 已经在 2000 行门槛下判定"不用再拆"，`diff_render.rs` 直接留在 `extensions/` 顶层跟 `git_log.rs` 相邻即可，不用为它单独开子目录）。
+  - `conversation.rs`：调用方是 `extensions::conversations`/`extensions::usage`/`homespace.rs`——没有一个是"编辑器"，是 Conversations 和 Usage 两个扩展共享的会话元数据类型，留在内核顶层（`src/conversation.rs` 原地不动），不并入任何域目录。
+  - `transcript.rs`：调用方是 `app.rs`/`workspace.rs`，内容是"会话审阅"用的 `ReviewEntry` 适配器（跟 `conversation.rs` 是同一类"会话/审阅"数据，不是编辑器）。同样留在内核顶层原地不动。
+  - `delivery.rs`：内容其实是 git CLI 薄封装（`repo_root`/分支/脏标），调用方横跨 `extensions/files.rs`、`extensions/git_log.rs`、`extensions/project.rs`、`homespace.rs`、`project_scaffold.rs`、`workspace.rs`、`app.rs`——不是"编辑器"，是被四五个不相关模块共用的 git 工具，建议跟 `git_watch.rs` 放一起（不强求进哪个域目录，两者都留顶层也可以，只要别进 `editor/`）。
+  - `webview_geometry.rs`：文件自己的模块文档已经写明"跟文件预览业务域本身无关，是历史命名遗留"，调用方只有 `app.rs`/`main.rs`（内核），留在内核顶层原地不动，这条其实原计划的诊断表也该早点读到。
+  - `code_editor/`：本来就是独立目录，本 Task 之前它已经在 `src/code_editor/`，不需要改动，也不需要为它单独包一层 `editor/`。
+
+结论：Task 4.4 缩成 `assets/`/`chrome/`/`project/`（只剩 `project_meta.rs` 一个成员，规模很小，可以考虑跟 Task 4.4 一起顺手评估是否值得单独开目录，还是直接留在顶层）三个域目录，`editor/`/`git_watch.rs`+`delivery.rs` 这一组、`project.rs`(文件树) 的归属留给执行时用 `grep -rl` 现查现定，不要沿用本计划最初的猜测分组。
 
 每域 `mod.rs` 用 `pub use` 做兼容层，再统一收敛 `app.rs`/`workspace.rs` 里的引用路径（`crate::topbar` → `crate::chrome::topbar`）。
 
