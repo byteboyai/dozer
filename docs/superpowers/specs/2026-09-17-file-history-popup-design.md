@@ -93,32 +93,39 @@ pub struct FileHistorySnapshot {
 调用):
 
 ```rust
-/// 手写 revwalk:从 HEAD 开始逐提交跟其父提交做 `diff_tree_to_tree`,
-/// delta 命中 `file_path` 才收进结果,按 `max_count` 截断。没有
-/// `git log --follow` 的 rename 跟踪(见"非目标")。根提交(无父)按空树
-/// 对比,逻辑同 `git_log.rs::commit_detail` 处理根提交的既有写法。
+/// 手写 revwalk:从 HEAD 开始逐提交,对每个提交用
+/// `repo.diff_tree_to_tree(parent_tree, tree, Some(&mut opts))` 配合
+/// `DiffOptions::pathspec(file_path)` 判断这次提交是否碰过这个文件
+/// (`diff.deltas().len() > 0`,pathspec 下推给 git2 做,不用自己在结果里
+/// 过滤),命中的收进结果,按 `max_count` 截断。没有 `git log --follow` 的
+/// rename 跟踪(见"非目标")。根提交(无父)按空树对比,逻辑同
+/// `git_log.rs::commit_detail` 处理根提交的既有写法。注意:文件历史稀疏时
+/// (比如仓库有几万个提交、这个文件只被改过 3 次)需要遍历大量提交才能凑够
+/// `max_count` 条结果——这是 `git log -- <path>` 的固有特性,不是本实现的
+/// bug,不额外做"最多扫描 N 个提交就放弃"的截断(YAGNI,真遇到性能问题再
+/// 加)。
 pub fn build(repo_path: &Path, file_path: &Path, max_count: usize)
     -> Result<FileHistorySnapshot, String>;
 
-/// 取 `oid` 对应提交树里 `file_path` 的 blob 内容,跟*当前磁盘文件*的实时
-/// 字节(`std::fs::read(abs_file_path)`,不是 HEAD/索引里的版本,可能包含
-/// 未提交改动)用 `git2::Diff::blob_to_buffer` 生成 patch。当前内容的读取
-/// 路径显式传 `abs_file_path`(而非在函数内部拼 `repo_path.join(file_path)`),
-/// 与 `rollback_to` 的写入路径同一个来源、同样的理由(符号链接/大小写不
-/// 敏感文件系统边界问题)。两边内容相同返回空字符串(`diff_pane_view`/新
-/// view 函数据此显示"内容相同"提示,同参考图的蓝色提示条语义,但样式沿用
-/// 本仓已有的"无 diff 内容"占位文案,不新做提示条组件)。逐行拼 patch 的
-/// 写法照抄 `git_log.rs::commit_detail` 里 `DiffFormat::Patch` 回调那段。
-/// 文件在该提交里不存在(比如后来才新增)时视为"旧内容为空"(对应 git2 里
-/// old blob 传 `None`)。
-pub fn diff_against_current(abs_file_path: &Path, repo_path: &Path, file_path: &Path, oid: git2::Oid)
+/// `oid` 对应提交的树 vs *当前工作目录*的这一个文件,用
+/// `repo.diff_tree_to_workdir(Some(&tree), Some(&mut opts))`(`opts` 同样
+/// 配 `pathspec(file_path)`)。`diff_tree_to_workdir` 直接读磁盘上的实时
+/// 内容(不是索引/HEAD 里的版本,可能包含未提交改动),不需要自己
+/// `std::fs::read` 再手动比较——这也是选它而不是"读两份 blob 手动比较"的
+/// 原因(git2 0.21 并未导出 `git_diff_blob_to_buffer` 这个 C API,没有
+/// "blob 对内存 buffer"直接比较的安全封装)。两边内容相同时 `diff` 是空
+/// (`0` deltas),返回空字符串(`diff_pane_view`/新 view 函数据此显示"内容
+/// 相同"提示,同参考图的蓝色提示条语义,但样式沿用本仓已有的"无 diff 内容"
+/// 占位文案,不新做提示条组件)。逐行拼 patch 的写法照抄
+/// `git_log.rs::commit_detail` 里 `DiffFormat::Patch` 回调那段。
+pub fn diff_against_current(repo_path: &Path, file_path: &Path, oid: git2::Oid)
     -> Result<String, String>;
 
-/// 把 `oid` 对应提交树里 `file_path` 的 blob 字节写入磁盘上的实际文件
-/// (绝对路径由调用方传入,不在这里再拼 `repo_path.join(file_path)`,
-/// 避免相对路径在符号链接/大小写不敏感文件系统上的边界问题)。不碰 git
-/// 索引,不 `git add`,是纯粹的文件系统写入。
-pub fn rollback_to(abs_file_path: &Path, repo_path: &Path, file_path: &Path, oid: git2::Oid)
+/// 取 `oid` 对应提交树里 `file_path` 的 blob 字节(`tree.get_path(file_path)`
+/// → `entry.to_object(&repo)` → `.into_blob()`),写入
+/// `repo_path.join(file_path)`。不碰 git 索引,不 `git add`,是纯粹的文件
+/// 系统写入。
+pub fn rollback_to(repo_path: &Path, file_path: &Path, oid: git2::Oid)
     -> Result<(), String>;
 ```
 
@@ -128,8 +135,8 @@ pub fn rollback_to(abs_file_path: &Path, repo_path: &Path, file_path: &Path, oid
 pub struct FileHistoryTarget {
     pub project_id: i64,
     pub repo_path: PathBuf,
-    pub file_path: PathBuf,     // 仓库相对路径,git 查询用
-    pub abs_path: PathBuf,      // 绝对路径,读当前内容/回滚写盘用
+    pub file_path: PathBuf,     // 仓库相对路径,git 查询与磁盘读写都用它
+                                 // (`repo_path.join(file_path)`)拼出实际路径
 }
 
 #[derive(Default)]
