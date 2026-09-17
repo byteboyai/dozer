@@ -1734,6 +1734,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 clipboard,
                 cache,
                 resized,
+                search_overlay,
                 ..
             } = self
             else {
@@ -2625,6 +2626,20 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     // 显隐、全屏进出、拖拽缩放都会经过这里，见
                     // `center_traffic_lights`（内部按基线幂等，重复调用安全）。
                     crate::platform::window::center_traffic_lights(window);
+                    // search overlay 是一扇尺寸跟随主窗口宽度的子窗口,主窗口
+                    // resize 后要重新居中 + 重配 surface(`with_parent_window`
+                    // 只管"跟着移动",不管尺寸/布局联动)。
+                    if let Some(overlay) = search_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                            app.window_size.0,
+                        );
+                    }
                     // bounds 同步由本函数末尾的 sync_previews 统一执行
                 }
                 WindowEvent::CloseRequested => {
