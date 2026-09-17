@@ -199,10 +199,12 @@ project_root) -> Element<...>`，不再包 `crate::dialog::scrim(...)` +
 
 - `app/view.rs:131-143`：删除 `search::search_modal(...)` 从主窗口
   `stack![...]` 的组合。
-- `app.rs:2737-2738`（`preview_desired` 的 `app_modal_open`）与
-  `app.rs:2809`（`browser_desired` 的 `app_modal_open`）：去掉
+- `app.rs:2737-2738`（`preview_desired` 的 `app_modal_open`）：去掉
   `ws.search.is_open()` 这一项——这正是本设计要达成的效果：search 打开
-  不再需要强制隐藏 preview/browser webview。
+  不再需要强制隐藏 preview webview。（`browser_desired` 的
+  `app_modal_open`，`app.rs:2809`，本来就不含 `ws.search.is_open()`——
+  只有 `text_input_menu`/`file_history`，不受本次改动影响，之前的草稿
+  在这点上写错了，一并订正。）
 - `extensions/search.rs`：`search_modal()` 及其 scrim/stack 包装删除；
   新增 `search_card()`（从 `search_modal()` 内部拆出，逻辑不变）。
 - `platform/window_events.rs`：`Ready` 新增 `search_overlay` 字段；新增
@@ -213,9 +215,15 @@ project_root) -> Element<...>`，不再包 `crate::dialog::scrim(...)` +
 
 ## 错误处理
 
-- **overlay 创建失败**（adapter/device/窗口创建失败，低概率）：记录日志，
-  `ws.search.open` 保持/回退为 `false`——退化成"没打开"，不维护第二套
-  实现作为回退（现状 `search_modal()` 已删除）。
+- **overlay 创建失败**（窗口/surface 创建失败，低概率——`Device`/`Queue`/
+  `Adapter` 复用主窗口已经建好的，新失败面只剩"再开一扇窗口"和"再建一个
+  `Surface`"这两步）：`.expect(...)` 崩溃，跟本文件（`window_events.rs`）
+  里主窗口自己的 `create_window`/`request_device`/`create_surface` 一律
+  `.expect(...)` 的现状处理方式保持一致，不为 overlay 单独发明一套"记录
+  日志、优雅降级成'没打开'"的例外——真要做优雅降级，还得解决"降级后
+  `ws.search.open` 一直是 `true` 但 overlay 一直建不出来，`sync_action`
+  每次都判定 `Open`"这个重试风暴问题，复杂度不值得为一个低概率、且和
+  主窗口本身失败概率同量级的路径单独买单。
 - **资源释放**：依赖普通 `Drop`（spike 已证实反复开关 20 次无泄漏），
   不需要额外的显式清理记账。主窗口 `WindowEvent::CloseRequested`
   处理里在 `event_loop.exit()` 前显式丢弃 `search_overlay`，图干净，
