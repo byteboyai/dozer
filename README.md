@@ -1,4 +1,4 @@
-# Dozer
+# Dozer AI Coder
 
 站在用户（甲方）一侧的、agent 中立的 **AI 治理与验收层**。macOS（Apple Silicon）先发，Rust workspace。
 

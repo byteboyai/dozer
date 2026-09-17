@@ -455,11 +455,17 @@ command grep -n "git_statuses: HashMap<PathBuf, FileGitStatus>" crates/dozer-app
     pub(crate) dir_statuses: HashMap<PathBuf, delivery::TreeState>,
 ```
 
-`delivery` 模块需在本文件可见——若 `state.rs` 尚未 `use crate::delivery`,补上(它已经引用了 `FileGitStatus`,通常随 `super::*` 或直接 `use` 带入,核对后补齐 `TreeState` 的引入)。
+**必做**:`state.rs` 目前没有 `use crate::delivery`(核对过——裸 `FileGitStatus` 能用是因为 `files/mod.rs` 里私有的 `use crate::delivery::FileGitStatus;` 经 `super::*` 带进本文件,但那条 `use` 只带入了 `FileGitStatus` 这个名字,没有把 `delivery` 这个路径段本身带进来)。新字段写的是 `delivery::TreeState`,必须在 `state.rs` 顶部补一行 `use crate::delivery;`,否则编译不过。
 
 - [ ] **Step 4: 重置点一并清空**
 
-定位 `state.rs:452` 的 `self.git_statuses = HashMap::new();`,紧跟加 `self.dir_statuses = HashMap::new();`。
+定位:
+
+```bash
+command grep -n "git_statuses = HashMap::new" crates/dozer-app/src/extensions/files/state.rs
+```
+
+预期在 `state.rs:459`(`reset_for_project` 方法内)的 `self.git_statuses = HashMap::new();`,紧跟加 `self.dir_statuses = HashMap::new();`。
 
 - [ ] **Step 5: `StatusesRefreshed` 时一并算出**
 
@@ -575,15 +581,36 @@ pub struct RingBuffer {
     }
 ```
 
-改成:
+改成(**注意**:逐出不能整 chunk 丢弃——若最老的 chunk 比当前溢出量大,直接
+`pop_front` 会把该 chunk 里本该保留的尾部字节一起扔掉,破坏"精确保留最后
+`cap` 字节"的既有契约,`eviction_keeps_only_last_cap_bytes`/
+`read_from_returns_tail_or_none_when_evicted`/
+`oversized_push_keeps_last_cap_bytes` 三个测试会实测失败。逐出循环要按
+"这个 chunk 是否整体都是多余的"分支,只在确实整体多余时整块弹出,否则把
+该 chunk 裁成需要保留的尾部塞回队首——每次 `push` 至多触发一次这种裁剪
+(裁剪后 `len` 精确等于 `cap`,循环条件必然不再成立),不是逐字节拷贝,
+不违背这次优化的目的):
 
 ```rust
     pub fn push(&mut self, data: &[u8]) -> u64 {
-        self.buf.push_back(data.to_vec().into_boxed_slice());
-        self.len += data.len();
+        if !data.is_empty() {
+            self.buf.push_back(data.to_vec().into_boxed_slice());
+            self.len += data.len();
+        }
         while self.len > self.cap {
-            if let Some(front) = self.buf.pop_front() {
+            let overflow = self.len - self.cap;
+            let front = self
+                .buf
+                .pop_front()
+                .expect("len > cap 时 buf 不可能为空");
+            if front.len() <= overflow {
+                // 整个 chunk 都在待逐出的范围内，整块丢弃。
                 self.len -= front.len();
+            } else {
+                // 只有 chunk 前面 `overflow` 字节是该逐出的，裁掉前缀、
+                // 保留尾部塞回队首；裁剪后 len 精确落在 cap 上，循环即退出。
+                self.len -= overflow;
+                self.buf.push_front(front[overflow..].to_vec().into_boxed_slice());
             }
         }
         self.total += data.len() as u64;
@@ -655,7 +682,31 @@ pub struct RingBuffer {
 
 - [ ] **Step 4: 补分块边界测试**
 
-在 `ring.rs` 测试模块加一例:交替 `push` 大块与小块(如先 `push` 4 字节、再 `push` 8 字节、再 `push` 2 字节),断言 `snapshot()` 拼出的字节流与逐次 push 顺序一致、`read_from` 跨 chunk 边界取尾部正确、逐出后 `window_start` 落到 chunk 边界上也能正确 `read_from`。既有五个测试应全部保持绿(它们只断言字节内容/offset/逐出,不关心内部表示)。
+在 `ring.rs` 测试模块加两例:
+
+1. 交替 `push` 大块与小块(如先 `push` 4 字节、再 `push` 8 字节、再 `push` 2 字节),断言 `snapshot()` 拼出的字节流与逐次 push 顺序一致、`read_from` 跨 chunk 边界取尾部正确、逐出后 `window_start` 落到 chunk 边界上也能正确 `read_from`。
+
+2. **专门覆盖 Step 2 的部分裁剪分支**(现有五个测试都是"单个 chunk 整体超出 cap"的场景,不会走到"裁掉一个 chunk 的前缀、保留其尾部"这条路径,必须单独补):
+
+```rust
+#[test]
+fn eviction_partially_trims_a_stale_chunk() {
+    let mut r = RingBuffer::new(10);
+    r.push(b"abcde"); // chunk1: 5 字节，len=5
+    r.push(b"fghij"); // chunk2: 5 字节，len=10，未触发逐出
+    r.push(b"klm"); // len=13，溢出 3；最老的 chunk1(5 字节)比溢出量大，
+    // 应只裁掉 chunk1 的前 3 字节("abc")，保留"de"塞回队首，
+    // 而不是把 chunk1 整块丢掉。
+    let (data, next) = r.snapshot();
+    assert_eq!(data, b"defghijklm");
+    assert_eq!(next, 13);
+    // 裁剪后的边界（原 chunk1 与 chunk2 的接缝挪到了"de"|"fghijklm"之间）
+    // 也要能正确跨界读取。
+    assert_eq!(r.read_from(5).unwrap(), b"fghijklm");
+}
+```
+
+既有五个测试应全部保持绿(它们只断言字节内容/offset/逐出,不关心内部表示)。
 
 - [ ] **Step 5: 编译 + 格式检查 + 测试**
 
@@ -671,8 +722,11 @@ perf(dozerd): RingBuffer 改分块存储,消除逐字节 copied 拷贝
 
 push 用 extend(data.iter().copied()) 逐字节拷,snapshot/read_from 用
 iter().copied().collect() 整段拷。改成 VecDeque<Box<[u8]>> 分块存储 +
-字节计数,追加直接 extend 一个 chunk,读取先 with_capacity 再
-extend_from_slice。公开 API 与 SCROLLBACK_CAP 语义不变,既有测试全绿。
+字节计数,追加直接 push_back 一个 chunk,读取先 with_capacity 再
+extend_from_slice。逐出按"chunk 是否整体多余"分支,只在确实整体多余时
+整块弹出,否则裁掉 chunk 前缀、保留尾部塞回队首,避免整 chunk 丢弃把
+本该保留的字节一并冲掉。公开 API 与 SCROLLBACK_CAP 语义不变,既有测试
+全绿。
 
 Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
 EOF

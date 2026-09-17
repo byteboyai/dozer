@@ -191,6 +191,18 @@ ignored 时置 `Ignored`(现有 `dir_status` 语义不变)。
 `extend_from_slice`,消除逐字节 `copied()`。公开 API 与 `SCROLLBACK_CAP`
 语义不变,现有测试应全部保持绿。
 
+**逐出粒度不能是整个 chunk。** 原实现逐字节 `pop_front`,精确保留最后
+`cap` 字节;若分块后逐出简单改成"整 chunk `pop_front`",一旦最老的
+chunk 比当前溢出量大(典型场景:单次 `push` 的数据本身就接近或超过
+`cap`——daemon 侧一次 PTY `read()` 对应一次 `push()`,这并非罕见边界
+情况),会把该 chunk 里本该保留的尾部字节一并冲掉,破坏"精确保留最后
+`cap` 字节"的契约,直接打掉 `eviction_keeps_only_last_cap_bytes`/
+`read_from_returns_tail_or_none_when_evicted`/
+`oversized_push_keeps_last_cap_bytes` 三个现有测试。逐出循环要按"这个
+chunk 是否整体都在待逐出范围内"分支:整体多余则整块弹出;否则裁掉该
+chunk 的前缀、保留尾部塞回队首(每次 `push` 至多触发一次这种裁剪,裁剪
+后 `len` 精确落在 `cap` 上,循环随即退出)。
+
 ## 错误处理
 
 不适用——纯重构,无新增失败路径。
@@ -205,7 +217,10 @@ ignored 时置 `Ignored`(现有 `dir_status` 语义不变)。
 - Task 3 新增 `rollup_dir_statuses` 单测(与现有 `dir_status` 测试同款
   造 fixture 手法),并核对既有 `dir_status` 测试保持绿。
 - Task 4 既有 `ring.rs` 测试(`push`/`snapshot`/`read_from`/逐出/超量)
-  全部保持绿,另补一个"分块边界"用例(单次 push 大块 + 多次小块混合)。
+  全部保持绿,另补两例:"分块边界"(单次 push 大块 + 多次小块混合)与
+  "部分裁剪"(逐出边界落在某个 chunk 中间,验证只裁前缀、保留尾部,不
+  整块丢弃——现有五个测试都是"单 chunk 整体超出 cap"场景,覆盖不到这条
+  分支)。
 
 ## 排期备注
 
