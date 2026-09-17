@@ -6,10 +6,10 @@
 //! 的 `impl` 块。见 `docs/superpowers/specs/2026-08-08-home-page-4col-layout-design.md`。
 
 use crate::app::{App, HoverId, Message, PaneCorner, zone_pane_border};
+use crate::chrome::rail::RailButton;
 use crate::conversation::ConversationMeta;
 use crate::delivery;
 use crate::extensions::browser;
-use crate::rail::RailButton;
 use crate::theme;
 use crate::workspace::{agent_dot_color, agent_icon, lh, relative_time_text};
 use byteui::interaction::icons;

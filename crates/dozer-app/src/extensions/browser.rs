@@ -9,8 +9,8 @@
 //! 用不到的逻辑),两者各自维护、互不知情。
 
 use crate::app::tab_divider;
+use crate::chrome::tab_widget::{PanelTabArgs, panel_tab};
 use crate::preview::WebviewSpec;
-use crate::tab_widget::{PanelTabArgs, panel_tab};
 use crate::theme;
 use crate::workspace::{lh, split_portions};
 use byteui::interaction::icons;

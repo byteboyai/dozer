@@ -1716,7 +1716,7 @@ pub fn view<'a>(
     // 内边距对齐文件树面板(body 用 `project_pane` region 的 `padding` 把头
     // 及其自带分割线整体内缩):不再用 `[20,20]` 额外撑高头部、也不让分割线
     // 被大 padding 顶下去,与文件面板头部高度/分割线位置一致。
-    let header = container(crate::homespace::home_panel_head(
+    let header = container(crate::chrome::homespace::home_panel_head(
         icons::IconKind::ListTodo,
         "Todo",
     ))
@@ -2860,7 +2860,7 @@ fn todo_card<'a>(
 /// `todo_dispatch_overlay` 的原生菜单版本,纯数据组装——只列出有 headless
 /// 适配器的四种 agent。仅 macOS 编译。
 #[cfg(target_os = "macos")]
-pub(crate) fn dispatch_items(idx: usize) -> Vec<crate::native_menu::Item<Message>> {
+pub(crate) fn dispatch_items(idx: usize) -> Vec<crate::chrome::native_menu::Item<Message>> {
     [
         AgentKind::Claude,
         AgentKind::Codebuddy,
@@ -2869,7 +2869,7 @@ pub(crate) fn dispatch_items(idx: usize) -> Vec<crate::native_menu::Item<Message
     ]
     .into_iter()
     .map(|agent| {
-        crate::native_menu::Item::entry(
+        crate::chrome::native_menu::Item::entry(
             Some(agent_icon(agent)),
             agent.label(),
             Message::AssignAgent(idx, agent),
@@ -2881,8 +2881,8 @@ pub(crate) fn dispatch_items(idx: usize) -> Vec<crate::native_menu::Item<Message
 /// `todo_status_overlay` 的原生菜单版本,纯数据组装——四态,文字用各自
 /// `status_meta` 色。仅 macOS 编译。
 #[cfg(target_os = "macos")]
-pub(crate) fn status_items(idx: usize) -> Vec<crate::native_menu::Item<Message>> {
-    use crate::native_menu::Item;
+pub(crate) fn status_items(idx: usize) -> Vec<crate::chrome::native_menu::Item<Message>> {
+    use crate::chrome::native_menu::Item;
     [
         TodoState::Pending,
         TodoState::InProgress,
@@ -2907,7 +2907,7 @@ pub(crate) fn status_items(idx: usize) -> Vec<crate::native_menu::Item<Message>>
 /// Todo 指派选择层(窗口级 overlay 版):选一个 agent 种类完成指派,不再
 /// 要求"存在活着的 tab"(2026-09-02 起,指派与执行解耦——指派只是记录,
 /// 真正执行靠分类轮询开关或详情弹窗手动"处理")。样式沿用
-/// `crate::menu::item_row_fill` + `menu::shell`,定位靠 `dispatch_anchor`。
+/// `crate::chrome::menu::item_row_fill` + `menu::shell`,定位靠 `dispatch_anchor`。
 pub fn todo_dispatch_overlay<'a>(
     ws: &Workspace,
     window_size: (f32, f32),
@@ -2932,7 +2932,7 @@ pub fn todo_dispatch_overlay<'a>(
                 byteui::theme::icon_size::row(),
                 byteui::theme::color::current().body,
             );
-            crate::menu::item_row(
+            crate::chrome::menu::item_row(
                 Some(icon),
                 agent.label().to_string(),
                 byteui::theme::color::current().body,
@@ -2940,7 +2940,7 @@ pub fn todo_dispatch_overlay<'a>(
             )
         })
         .collect();
-    let popup = crate::menu::shell_frosted(items, Length::Shrink);
+    let popup = crate::chrome::menu::shell_frosted(items, Length::Shrink);
 
     // 全窗口容器 + padding 把弹层推到锚点;窗口边界钳制,避免超出右下。
     let (ax, ay) = anchor;
@@ -3050,10 +3050,10 @@ pub fn todo_status_overlay<'a>(
         .into_iter()
         .map(|st| {
             let (label, color) = status_meta(st);
-            crate::menu::item_row(None, label, color, Some(Message::StatusPick(idx, st)))
+            crate::chrome::menu::item_row(None, label, color, Some(Message::StatusPick(idx, st)))
         })
         .collect();
-    let popup = crate::menu::shell_frosted(items, Length::Shrink);
+    let popup = crate::chrome::menu::shell_frosted(items, Length::Shrink);
 
     // 全窗口容器 + padding 把弹层推到锚点;窗口边界钳制,避免超出右下。
     let (ax, ay) = anchor;
@@ -3871,7 +3871,7 @@ mod tests {
         let agents: Vec<AgentKind> = items
             .iter()
             .map(|i| match i {
-                crate::native_menu::Item::Entry {
+                crate::chrome::native_menu::Item::Entry {
                     msg: Message::AssignAgent(idx, agent),
                     ..
                 } => {
@@ -3900,7 +3900,7 @@ mod tests {
         let states: Vec<TodoState> = items
             .iter()
             .map(|i| match i {
-                crate::native_menu::Item::Entry {
+                crate::chrome::native_menu::Item::Entry {
                     msg: Message::StatusPick(idx, st),
                     ..
                 } => {

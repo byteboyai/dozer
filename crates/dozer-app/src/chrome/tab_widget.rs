@@ -457,14 +457,14 @@ where
 pub(crate) fn tab_overflow_items<Msg: Clone>(
     entries: &[(usize, String, bool)],
     on_select: impl Fn(usize) -> Msg,
-) -> Vec<crate::native_menu::Item<Msg>> {
+) -> Vec<crate::chrome::native_menu::Item<Msg>> {
     let cream = byteui::theme::color::current().cream;
     let body = byteui::theme::color::current().body;
     entries
         .iter()
         .map(|(idx, title, active)| {
             let color = if *active { cream } else { body };
-            crate::native_menu::Item::Entry {
+            crate::chrome::native_menu::Item::Entry {
                 icon: None,
                 icon_color: None,
                 label: title.clone(),
@@ -593,7 +593,7 @@ where
         );
     }
 
-    let list = crate::menu::shell(
+    let list = crate::chrome::menu::shell(
         vec![
             scrollable(column(rows).spacing(2))
                 .height(Length::Shrink)
@@ -645,8 +645,8 @@ mod tests {
         ];
         let items = tab_overflow_items(&entries, |idx| idx);
         let color_at = |i: usize| match &items[i] {
-            crate::native_menu::Item::Entry { color, .. } => *color,
-            crate::native_menu::Item::Separator => panic!("expected entry"),
+            crate::chrome::native_menu::Item::Entry { color, .. } => *color,
+            crate::chrome::native_menu::Item::Separator => panic!("expected entry"),
         };
         assert_eq!(color_at(0), byteui::theme::color::current().body);
         assert_eq!(color_at(1), byteui::theme::color::current().cream);
@@ -658,8 +658,8 @@ mod tests {
         let entries = vec![(5usize, "five".to_string(), false)];
         let items = tab_overflow_items(&entries, |idx| format!("picked:{idx}"));
         match &items[0] {
-            crate::native_menu::Item::Entry { msg, .. } => assert_eq!(msg, "picked:5"),
-            crate::native_menu::Item::Separator => panic!("expected entry"),
+            crate::chrome::native_menu::Item::Entry { msg, .. } => assert_eq!(msg, "picked:5"),
+            crate::chrome::native_menu::Item::Separator => panic!("expected entry"),
         }
     }
 

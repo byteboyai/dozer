@@ -1,6 +1,10 @@
 //! `App::view` 顶层渲染 + 自由 view 函数。Phase 3 结构重组时从 `app/app.rs`
 //! 拆出,逻辑保持原样。
 
+use crate::chrome::homespace::{self};
+use crate::chrome::rail;
+use crate::chrome::tab_widget;
+use crate::chrome::topbar;
 use crate::extensions::browser;
 use crate::extensions::conversations;
 use crate::extensions::database;
@@ -12,14 +16,10 @@ use crate::extensions::search;
 use crate::extensions::ssh;
 use crate::extensions::todo;
 use crate::extensions::usage;
-use crate::homespace::{self};
-use crate::rail;
 use crate::settings;
-use crate::tab_widget;
 use crate::term::term_view;
 use crate::term::terminal;
 use crate::theme;
-use crate::topbar;
 use crate::workspace::{
     PreviewPaneKind, Workspace, agent_list_pane, agent_picker_popup, dot_color,
     no_project_placeholder, preview_pane, preview_tab_overflow_popup, project_preview_pane,

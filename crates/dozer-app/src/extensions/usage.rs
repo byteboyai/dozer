@@ -5,8 +5,8 @@
 //! `dozerd`/`dozer-core::protocol` 完全不参与——所有数据直接读磁盘上的
 //! agent transcript JSONL。
 
+use crate::chrome::homespace::{home_panel_head, home_section_head};
 use crate::conversation::ConversationMeta;
-use crate::homespace::{home_panel_head, home_section_head};
 use byteui::interaction::icons;
 use dozer_core::protocol::AgentKind;
 use iced_widget::canvas::{self, Canvas};
@@ -502,7 +502,7 @@ pub fn content_pane<'a>(
         Message::ToggleListCollapse,
         move |hovered| Message::Hover(crate::app::HoverId::UsageListCollapse, hovered),
     );
-    let head = crate::homespace::home_panel_head_with_actions(
+    let head = crate::chrome::homespace::home_panel_head_with_actions(
         icons::IconKind::BarChart3,
         "用量",
         Some(collapse),

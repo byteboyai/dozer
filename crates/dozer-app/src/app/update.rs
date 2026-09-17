@@ -1,6 +1,9 @@
 //! `App::update` 消息分发 + 全部 handler 方法。Phase 3 结构重组时从
 //! `app/app.rs` 拆出,逻辑保持原样。
 
+use crate::chrome::homespace::{self, load_home_recents};
+use crate::chrome::rail;
+use crate::chrome::tab_widget;
 use crate::extensions::browser;
 use crate::extensions::conversations;
 use crate::extensions::database;
@@ -13,9 +16,6 @@ use crate::extensions::ssh;
 use crate::extensions::todo;
 use crate::extensions::usage;
 use crate::git_watch;
-use crate::homespace::{self, load_home_recents};
-use crate::rail;
-use crate::tab_widget;
 use crate::term::terminal;
 use crate::workspace::{
     CONVERSATION_DETAIL_PAGE_SIZE, RestorePayload, ReviewSource, ReviewView, SshOut,
@@ -148,7 +148,7 @@ impl App {
                         .active_workspace()
                         .map(|ws| conversations::agent_picker_items(&ws.conversations))
                         .unwrap_or_default();
-                    if let Some(msg) = crate::native_menu::show(items, last_cursor) {
+                    if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
                         self.update(Message::Conversations(msg));
                     }
                 }
@@ -199,7 +199,7 @@ impl App {
                 {
                     let (x, y) = self.last_cursor;
                     let items = crate::workspace::agent_picker_items();
-                    if let Some(msg) = crate::native_menu::show(items, (x, y)) {
+                    if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
                         self.update(msg);
                     }
                 }
@@ -227,9 +227,11 @@ impl App {
                     let last_cursor = self.last_cursor;
                     let open_ids: std::collections::HashSet<i64> =
                         self.projects.keys().copied().collect();
-                    let items =
-                        crate::topbar::project_add_menu_items(&self.recent_projects, &open_ids);
-                    if let Some(msg) = crate::native_menu::show(items, last_cursor) {
+                    let items = crate::chrome::topbar::project_add_menu_items(
+                        &self.recent_projects,
+                        &open_ids,
+                    );
+                    if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
                         self.update(msg);
                     }
                 }
@@ -312,7 +314,7 @@ impl App {
                         .active_workspace()
                         .map(|ws| database::tab_overflow_items(&ws.database))
                         .unwrap_or_default();
-                    if let Some(msg) = crate::native_menu::show(items, last_cursor) {
+                    if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
                         self.update(Message::Database(msg));
                     }
                 }
@@ -367,7 +369,7 @@ impl App {
                     {
                         let last_cursor = self.last_cursor;
                         let items = todo::dispatch_items(idx);
-                        if let Some(msg) = crate::native_menu::show(items, last_cursor) {
+                        if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
                             self.update(Message::Todo(msg));
                         }
                     }
@@ -381,7 +383,7 @@ impl App {
                     {
                         let last_cursor = self.last_cursor;
                         let items = todo::status_items(idx);
-                        if let Some(msg) = crate::native_menu::show(items, last_cursor) {
+                        if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
                             self.update(Message::Todo(msg));
                         }
                     }
@@ -514,7 +516,7 @@ impl App {
                 {
                     let (x, y) = self.files.last_right_click();
                     let items = text_input_menu_items(&target);
-                    if let Some(msg) = crate::native_menu::show(items, (x, y))
+                    if let Some(msg) = crate::chrome::native_menu::show(items, (x, y))
                         && let Some(ch) = crate::menu_edit_key(&msg)
                     {
                         self.pending_native_menu_edit_key = Some((ch, target.id.clone()));
@@ -696,7 +698,7 @@ impl App {
                         }
                         None => Vec::new(),
                     };
-                    if let Some(msg) = crate::native_menu::show(items, last_cursor) {
+                    if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
                         self.update(msg);
                     }
                 }
@@ -736,7 +738,7 @@ impl App {
                         }
                         None => Vec::new(),
                     };
-                    if let Some(msg) = crate::native_menu::show(items, last_cursor) {
+                    if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
                         self.update(msg);
                     }
                 }
@@ -912,7 +914,7 @@ impl App {
                         }
                         None => Vec::new(),
                     };
-                    if let Some(msg) = crate::native_menu::show(items, last_cursor) {
+                    if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
                         self.update(msg);
                     }
                 }
@@ -1545,7 +1547,7 @@ impl App {
                         }
                         None => Vec::new(),
                     };
-                    if let Some(msg) = crate::native_menu::show(items, last_cursor) {
+                    if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
                         self.update(msg);
                     }
                 }
@@ -1591,7 +1593,7 @@ impl App {
                     });
                     let (x, y) = self.files.last_right_click();
                     let items = ssh::sftp::context_menu_items(&host_id, is_local);
-                    if let Some(msg) = crate::native_menu::show(items, (x, y)) {
+                    if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
                         self.update(Message::Ssh(ssh::Message::Sftp(msg)));
                     }
                 }
@@ -3315,7 +3317,7 @@ impl App {
             None => return column![].into(),
         };
         let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
-            vec![crate::menu::item::<Message>(
+            vec![crate::chrome::menu::item::<Message>(
                 Some(icons::IconKind::Trash),
                 "删除",
                 Message::Project(project::Message::LinkRemove {
@@ -3325,7 +3327,7 @@ impl App {
             )];
 
         let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-            crate::menu::shell_frosted(items, Length::Shrink);
+            crate::chrome::menu::shell_frosted(items, Length::Shrink);
         container(list)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -3352,7 +3354,7 @@ impl App {
         // 完整节点操作集。
         let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
             match menu.id {
-                None => vec![crate::menu::item::<Message>(
+                None => vec![crate::chrome::menu::item::<Message>(
                     Some(icons::IconKind::SquarePlus),
                     "新建分类",
                     Message::Todo(todo::Message::CategoryNewSibling(None)),
@@ -3368,17 +3370,17 @@ impl App {
                             .and_then(|c| c.parent_id)
                     });
                     vec![
-                        crate::menu::item::<Message>(
+                        crate::chrome::menu::item::<Message>(
                             Some(icons::IconKind::SquarePlus),
                             "新建子分类",
                             Message::Todo(todo::Message::CategoryNewChild(id)),
                         ),
-                        crate::menu::item::<Message>(
+                        crate::chrome::menu::item::<Message>(
                             Some(icons::IconKind::SquarePlus),
                             "新建同级分类",
                             Message::Todo(todo::Message::CategoryNewSibling(sibling_parent_id)),
                         ),
-                        crate::menu::item::<Message>(
+                        crate::chrome::menu::item::<Message>(
                             Some(icons::IconKind::ChevronUp),
                             "上移",
                             Message::Todo(todo::Message::CategoryMoveSibling(
@@ -3386,7 +3388,7 @@ impl App {
                                 dozer_core::protocol::CategoryMoveDirection::Up,
                             )),
                         ),
-                        crate::menu::item::<Message>(
+                        crate::chrome::menu::item::<Message>(
                             Some(icons::IconKind::ChevronDown),
                             "下移",
                             Message::Todo(todo::Message::CategoryMoveSibling(
@@ -3394,17 +3396,17 @@ impl App {
                                 dozer_core::protocol::CategoryMoveDirection::Down,
                             )),
                         ),
-                        crate::menu::item::<Message>(
+                        crate::chrome::menu::item::<Message>(
                             Some(icons::IconKind::FolderOpen),
                             "移动到...",
                             Message::Todo(todo::Message::CategoryReparentPickerOpen(id)),
                         ),
-                        crate::menu::item::<Message>(
+                        crate::chrome::menu::item::<Message>(
                             Some(icons::IconKind::Rename),
                             "重命名",
                             Message::Todo(todo::Message::CategoryRenameStart(id)),
                         ),
-                        crate::menu::item::<Message>(
+                        crate::chrome::menu::item::<Message>(
                             Some(icons::IconKind::Trash),
                             "删除",
                             Message::Todo(todo::Message::CategoryDelete(id)),
@@ -3414,7 +3416,7 @@ impl App {
             };
 
         let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-            crate::menu::shell_frosted(items, Length::Shrink);
+            crate::chrome::menu::shell_frosted(items, Length::Shrink);
         container(list)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -3606,34 +3608,34 @@ impl App {
             .is_some_and(|ws| ws.database.is_expanded(&source_id));
         let dim = byteui::theme::color::current().dim;
         let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = vec![
-            crate::menu::item::<Message>(
+            crate::chrome::menu::item::<Message>(
                 Some(icons::IconKind::RefreshCw),
                 "测试连接",
                 Message::Database(database::Message::TestConnection(source_id.clone())),
             ),
-            crate::menu::item::<Message>(
+            crate::chrome::menu::item::<Message>(
                 Some(icons::IconKind::Settings),
                 "编辑",
                 Message::Database(database::Message::EditSourceStart(source_id.clone())),
             ),
-            crate::menu::item::<Message>(
+            crate::chrome::menu::item::<Message>(
                 Some(icons::IconKind::Trash),
                 "删除",
                 Message::Database(database::Message::DeleteSourceRequest(source_id.clone())),
             ),
         ];
         items.push(if expanded {
-            crate::menu::item::<Message>(
+            crate::chrome::menu::item::<Message>(
                 Some(icons::IconKind::RotateCw),
                 "刷新",
                 Message::Database(database::Message::SchemaRefresh(source_id.clone())),
             )
         } else {
-            crate::menu::item_locked(Some(icons::IconKind::RotateCw), "刷新", dim)
+            crate::chrome::menu::item_locked(Some(icons::IconKind::RotateCw), "刷新", dim)
         });
 
         let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-            crate::menu::shell_frosted(
+            crate::chrome::menu::shell_frosted(
                 items,
                 Length::Fixed(byteui::theme::geometry::menu_item_width()),
             );
@@ -3665,41 +3667,41 @@ impl App {
             Vec::new();
         if menu.target.secure {
             // 密码框:复制/剪切同原生快捷键一样被禁用,置灰不可点。
-            items.push(crate::menu::item_locked(
+            items.push(crate::chrome::menu::item_locked(
                 Some(icons::IconKind::Scissors),
                 "剪切",
                 dim,
             ));
-            items.push(crate::menu::item_locked(
+            items.push(crate::chrome::menu::item_locked(
                 Some(icons::IconKind::Copy),
                 "复制",
                 dim,
             ));
         } else {
-            items.push(crate::menu::item(
+            items.push(crate::chrome::menu::item(
                 Some(icons::IconKind::Scissors),
                 "剪切",
                 Message::TextInputMenuCut,
             ));
-            items.push(crate::menu::item(
+            items.push(crate::chrome::menu::item(
                 Some(icons::IconKind::Copy),
                 "复制",
                 Message::TextInputMenuCopy,
             ));
         }
-        items.push(crate::menu::item(
+        items.push(crate::chrome::menu::item(
             Some(icons::IconKind::ClipboardPaste),
             "粘贴",
             Message::TextInputMenuPaste,
         ));
-        items.push(crate::menu::item(
+        items.push(crate::chrome::menu::item(
             Some(icons::IconKind::SelectAll),
             "全选",
             Message::TextInputMenuSelectAll,
         ));
 
         let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-            crate::menu::shell_frosted(
+            crate::chrome::menu::shell_frosted(
                 items,
                 Length::Fixed(byteui::theme::geometry::menu_item_width()),
             );

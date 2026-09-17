@@ -965,7 +965,7 @@ pub fn update(
                     .unwrap_or(false);
                 let has_clipboard = ws_state.tree_clipboard.is_some();
                 let items = context_menu_items(&path, is_dir, is_root, has_clipboard);
-                if let Some(msg) = crate::native_menu::show(items, (x, y)) {
+                if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
                     // 不能直接递归调用本函数(`update`)——`OpenSearch`/
                     // `CopyPath` 这两个菜单项产出的消息是"内核拦截处理"的
                     // (打开搜索弹窗要跨到 `search::Message`,写系统剪贴板
@@ -2045,7 +2045,7 @@ pub fn view<'a>(
 
     let body = container(
         column![
-            crate::homespace::home_panel_head(icons::IconKind::FolderTree, "文件"),
+            crate::chrome::homespace::home_panel_head(icons::IconKind::FolderTree, "文件"),
             header,
             Scrollable::new(tree_col)
                 .width(Length::Fill)
@@ -2303,7 +2303,7 @@ pub fn branch_picker_popup(
         .is_some();
     // dirty → 除当前分支外的其余分支全部置灰禁用。
     let lock_others = is_dirty;
-    // 面板项/间隔统一走 `crate::menu`(样式基准即文件树右键菜单)。
+    // 面板项/间隔统一走 `crate::chrome::menu`(样式基准即文件树右键菜单)。
     let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
         Vec::new();
     if ws_state.git_branches.is_empty() {
@@ -2343,7 +2343,7 @@ pub fn branch_picker_popup(
             }
             n
         };
-        items.push(crate::menu::item_row(
+        items.push(crate::chrome::menu::item_row(
             Some(indicator),
             label,
             color,
@@ -2352,7 +2352,7 @@ pub fn branch_picker_popup(
         ));
     }
     let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        crate::menu::shell_frosted(items, Length::Shrink);
+        crate::chrome::menu::shell_frosted(items, Length::Shrink);
 
     // 把下拉框钉到 git 底栏正上方:左缘对齐文件面板(左图标栏 + project_pane
     // 左 padding),底缘对齐 git 底栏顶部(footbar 高 + project_pane 底 padding
@@ -2409,8 +2409,8 @@ pub fn context_menu_items(
     is_dir: bool,
     is_root: bool,
     has_clipboard: bool,
-) -> Vec<crate::native_menu::Item<Message>> {
-    use crate::native_menu::Item;
+) -> Vec<crate::chrome::native_menu::Item<Message>> {
+    use crate::chrome::native_menu::Item;
     let dim = byteui::theme::color::current().dim;
     let target = target.to_path_buf();
     let mut items = vec![
@@ -2517,26 +2517,26 @@ pub fn context_menu_popup<'a>(
         .unwrap_or(false);
     // "搜索"恒置顶(对目录=全文搜该目录,对文件=搜该文件),与其余项用一条
     // 分隔线隔开。
-    items.push(crate::menu::item::<Message>(
+    items.push(crate::chrome::menu::item::<Message>(
         Some(icons::IconKind::Search),
         "搜索",
         Message::OpenSearch(menu.target.clone(), menu.is_dir),
     ));
     push_sep(&mut items);
     if menu.is_dir {
-        items.push(crate::menu::item::<Message>(
+        items.push(crate::chrome::menu::item::<Message>(
             Some(icons::IconKind::FilePlus),
             "新建文件",
             Message::NewFile(menu.target.clone()),
         ));
-        items.push(crate::menu::item::<Message>(
+        items.push(crate::chrome::menu::item::<Message>(
             Some(icons::IconKind::FolderPlus),
             "新建文件夹",
             Message::NewFolder(menu.target.clone()),
         ));
     }
     push_sep(&mut items);
-    items.push(crate::menu::item::<Message>(
+    items.push(crate::chrome::menu::item::<Message>(
         Some(icons::IconKind::Copy),
         "复制",
         Message::Copy(menu.target.clone(), menu.is_dir),
@@ -2545,12 +2545,16 @@ pub fn context_menu_popup<'a>(
         let has_clipboard = ws_state.tree_clipboard.is_some();
         let paste_msg = Message::Paste(menu.target.clone());
         items.push(if has_clipboard {
-            crate::menu::item::<Message>(Some(icons::IconKind::ClipboardPaste), "粘贴", paste_msg)
+            crate::chrome::menu::item::<Message>(
+                Some(icons::IconKind::ClipboardPaste),
+                "粘贴",
+                paste_msg,
+            )
         } else {
             // 剪贴槽为空:置灰且不挂 on_press,真正不可点(同 P1L tab 箭头
             // "到头变灰"的既有处理口径,不是视觉变灰但仍能点)。背景透明
             // 透出容器底,不要 hover 高亮——保持视觉一致的"灰且不可点"。
-            crate::menu::item_locked::<Message>(
+            crate::chrome::menu::item_locked::<Message>(
                 Some(icons::IconKind::ClipboardPaste),
                 "粘贴",
                 byteui::theme::color::current().dim,
@@ -2559,41 +2563,41 @@ pub fn context_menu_popup<'a>(
     }
     // 项目根不可删除/重命名:从菜单隐去这两项(其余目录均可)。
     if !is_root {
-        items.push(crate::menu::item::<Message>(
+        items.push(crate::chrome::menu::item::<Message>(
             Some(icons::IconKind::Trash),
             "删除",
             Message::DeleteRequest(menu.target.clone(), menu.is_dir),
         ));
-        items.push(crate::menu::item::<Message>(
+        items.push(crate::chrome::menu::item::<Message>(
             Some(icons::IconKind::Rename),
             "重命名",
             Message::RenameStart(menu.target.clone()),
         ));
     }
     push_sep(&mut items);
-    items.push(crate::menu::item::<Message>(
+    items.push(crate::chrome::menu::item::<Message>(
         None,
         "复制绝对路径",
         Message::CopyPath(menu.target.clone(), crate::project::PathKind::Absolute),
     ));
-    items.push(crate::menu::item::<Message>(
+    items.push(crate::chrome::menu::item::<Message>(
         None,
         "复制相对路径",
         Message::CopyPath(menu.target.clone(), crate::project::PathKind::Relative),
     ));
-    items.push(crate::menu::item::<Message>(
+    items.push(crate::chrome::menu::item::<Message>(
         Some(icons::IconKind::FolderOpen),
         "在 Finder 中打开",
         Message::RevealInFinder(menu.target.clone()),
     ));
-    items.push(crate::menu::item::<Message>(
+    items.push(crate::chrome::menu::item::<Message>(
         Some(icons::IconKind::RefreshCw),
         "从磁盘重新加载",
         Message::ReloadFromDisk,
     ));
 
     let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        crate::menu::shell_frosted(items, Length::Shrink);
+        crate::chrome::menu::shell_frosted(items, Length::Shrink);
 
     container(list)
         .width(Length::Fill)
@@ -2612,7 +2616,7 @@ pub fn context_menu_popup<'a>(
 /// 再额外加 padding。
 pub(crate) fn menu_separator<'a>()
 -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    crate::menu::separator::<Message>()
+    crate::chrome::menu::separator::<Message>()
 }
 
 /// 删除确认框:居中浮层,显示目标文件名 + 确认/取消两个按钮。
@@ -4444,7 +4448,7 @@ mod tests {
         let has_delete = items.iter().any(|i| {
             matches!(
                 i,
-                crate::native_menu::Item::Entry {
+                crate::chrome::native_menu::Item::Entry {
                     msg: Message::DeleteRequest(..),
                     ..
                 }
@@ -4460,7 +4464,7 @@ mod tests {
         let has_delete = items.iter().any(|i| {
             matches!(
                 i,
-                crate::native_menu::Item::Entry {
+                crate::chrome::native_menu::Item::Entry {
                     msg: Message::DeleteRequest(..),
                     ..
                 }
@@ -4474,7 +4478,7 @@ mod tests {
     fn context_menu_items_paste_locked_when_clipboard_empty() {
         let items = context_menu_items(Path::new("/proj/src"), true, false, false);
         let paste = items.iter().find_map(|i| match i {
-            crate::native_menu::Item::Entry {
+            crate::chrome::native_menu::Item::Entry {
                 msg: Message::Paste(_),
                 enabled,
                 ..
@@ -4489,7 +4493,7 @@ mod tests {
     fn context_menu_items_paste_enabled_when_clipboard_has_content() {
         let items = context_menu_items(Path::new("/proj/src"), true, false, true);
         let paste = items.iter().find_map(|i| match i {
-            crate::native_menu::Item::Entry {
+            crate::chrome::native_menu::Item::Entry {
                 msg: Message::Paste(_),
                 enabled,
                 ..
@@ -4506,7 +4510,7 @@ mod tests {
         let has_new_file = items.iter().any(|i| {
             matches!(
                 i,
-                crate::native_menu::Item::Entry {
+                crate::chrome::native_menu::Item::Entry {
                     msg: Message::NewFile(_),
                     ..
                 }
@@ -4515,7 +4519,7 @@ mod tests {
         let has_paste = items.iter().any(|i| {
             matches!(
                 i,
-                crate::native_menu::Item::Entry {
+                crate::chrome::native_menu::Item::Entry {
                     msg: Message::Paste(_),
                     ..
                 }

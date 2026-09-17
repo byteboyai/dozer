@@ -301,3 +301,6 @@ mod tests {
         assert!(percent_decode("%GG").is_none());
     }
 }
+
+pub mod clipboard_image;
+pub mod fonts;

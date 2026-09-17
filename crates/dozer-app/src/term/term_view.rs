@@ -64,10 +64,10 @@ fn cell_font(bold: bool) -> Font {
     if bold {
         Font {
             weight: Weight::Bold,
-            ..crate::fonts::code_font()
+            ..crate::assets::fonts::code_font()
         }
     } else {
-        crate::fonts::code_font()
+        crate::assets::fonts::code_font()
     }
 }
 

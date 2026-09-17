@@ -1713,7 +1713,7 @@ async fn test_connection(source: DataSource, password: Option<String>) -> Result
 }
 
 /// 驱动管理弹窗:窗口级居中浮层,视觉模板同 `delete_confirm_popup`(CARD
-/// 底 + 圆角描边 + 标题图标)。此前走 `crate::menu::shell_frosted`(右键
+/// 底 + 圆角描边 + 标题图标)。此前走 `crate::chrome::menu::shell_frosted`(右键
 /// 菜单同款外壳)、内联挂在数据源列表下方,不居中也没有遮罩——改成跟本面板
 /// 其它弹窗一致的普通弹窗(2026-09-15)。每行一个 checkbox 前置位的条目
 /// (启用的打 ✓),点按切换启用/禁用,不关弹窗。窗口级 overlay,由
@@ -1742,7 +1742,7 @@ pub fn drivers_popup<'a>(
             text(if enabled { "✓" } else { " " })
                 .size(byteui::theme::font::body())
                 .into();
-        items_col = items_col.push(crate::menu::item_row_fill(
+        items_col = items_col.push(crate::chrome::menu::item_row_fill(
             Some(checkbox),
             driver.label(),
             byteui::theme::color::current().body,
@@ -2220,7 +2220,7 @@ pub fn view<'a>(
     // 固定在面板最下方——镜像 `ssh.rs::view`/`ssh_footer_bar` 的既有布局
     // (原先两个按钮跟标题挤在同一行,不随内容滚动分区,验收反馈参照主机
     // 面板"添加主机"统一到 footer-bar)。
-    let head = container(crate::homespace::home_panel_head(
+    let head = container(crate::chrome::homespace::home_panel_head(
         icons::IconKind::Database,
         "数据库",
     ))
@@ -2445,7 +2445,7 @@ pub fn content_pane<'a>(
     )> = vec![(
         // tab 宽度估算要把前缀图标(图标宽 + 4px 间距)算进去,窗口裁剪才准。
         tab_title_display_width("空白") + byteui::theme::icon_size::row() + 4.0,
-        crate::tab_widget::panel_tab(crate::tab_widget::PanelTabArgs {
+        crate::chrome::tab_widget::panel_tab(crate::chrome::tab_widget::PanelTabArgs {
             title: "空白".to_string(),
             active: blank_active,
             hover_t: app.hover_progress(crate::app::HoverId::DatabaseTabItem(BLANK_HOVER_KEY)),
@@ -2472,7 +2472,7 @@ pub fn content_pane<'a>(
         let title = tab_title(tab, ws_state);
         (
             tab_title_display_width(&title),
-            crate::tab_widget::panel_tab(crate::tab_widget::PanelTabArgs {
+            crate::chrome::tab_widget::panel_tab(crate::chrome::tab_widget::PanelTabArgs {
                 title,
                 active,
                 hover_t: title_hover_t,
@@ -2488,7 +2488,7 @@ pub fn content_pane<'a>(
         )
     }));
     let widths: Vec<f32> = entries.iter().map(|(w, _)| *w).collect();
-    let window = crate::tab_widget::tab_window(
+    let window = crate::chrome::tab_widget::tab_window(
         &widths,
         4.0,
         byteui::theme::geometry::tab_bar_avail_px(),
@@ -2505,7 +2505,7 @@ pub fn content_pane<'a>(
     // V 只数**真实** tab,不算"空白"占位——下拉本就不列空白(见
     // `tab_overflow_popup`),只剩空白页时 V 本身也不该显示(验收反馈)。
     let db_tab_total = content.tabs().len();
-    let overflow_button = crate::tab_widget::tab_overflow_button(
+    let overflow_button = crate::chrome::tab_widget::tab_overflow_button(
         db_tab_total,
         app.hover_progress(crate::app::HoverId::DatabaseTabOverflow),
         Message::TabOverflowToggle,
@@ -2581,7 +2581,7 @@ pub fn content_pane<'a>(
 #[cfg(target_os = "macos")]
 pub(crate) fn tab_overflow_items(
     ws_state: &WorkspaceState,
-) -> Vec<crate::native_menu::Item<Message>> {
+) -> Vec<crate::chrome::native_menu::Item<Message>> {
     let content = ws_state.content();
     let mut entries: Vec<(usize, String, bool)> = Vec::new();
     for (i, tab) in content.tabs().iter().enumerate() {
@@ -2592,7 +2592,7 @@ pub(crate) fn tab_overflow_items(
             Some(i) == content.active_idx(),
         ));
     }
-    crate::tab_widget::tab_overflow_items(&entries, |idx| {
+    crate::chrome::tab_widget::tab_overflow_items(&entries, |idx| {
         if idx == 0 {
             Message::SelectBlankTab
         } else {
@@ -2615,10 +2615,11 @@ pub fn tab_overflow_popup<'a>(
     // 当前被挤出可见区的子集。"空白"占位不进列表(点开也没什么可跳的);
     // 下标沿用调用方 `on_select`/`on_close`(`idx - 1` 换算)既有的 1 起步
     // 方案(0 留给空白,虽然它现在不会出现在列表里,翻译逻辑不用跟着改)。
-    let mut overflow_entries: Vec<crate::tab_widget::TabOverflowEntry<'_, Message>> = Vec::new();
+    let mut overflow_entries: Vec<crate::chrome::tab_widget::TabOverflowEntry<'_, Message>> =
+        Vec::new();
     for (i, tab) in content.tabs().iter().enumerate() {
         let idx = i + 1;
-        overflow_entries.push(crate::tab_widget::TabOverflowEntry {
+        overflow_entries.push(crate::chrome::tab_widget::TabOverflowEntry {
             index: idx,
             prefix: None,
             title: tab_title(tab, ws_state),
@@ -2627,8 +2628,8 @@ pub fn tab_overflow_popup<'a>(
             hover_t: app.hover_progress(crate::app::HoverId::TabOverflowRow(idx)),
         });
     }
-    Some(crate::tab_widget::tab_overflow_menu(
-        crate::tab_widget::TabOverflowMenuArgs {
+    Some(crate::chrome::tab_widget::tab_overflow_menu(
+        crate::chrome::tab_widget::TabOverflowMenuArgs {
             entries: overflow_entries,
             anchor,
             window_size: app.window_size,
@@ -3426,7 +3427,7 @@ impl DatabaseContentState {
     /// 钳出包含它的窗口;已可见则不动。`widths` 由渲染侧按 `tab_bar_avail_px`
     /// 同一套口径传入(含开头的空白占位 tab 宽度)。
     pub fn reveal_tab(&mut self, widths: &[f32], target: usize) {
-        self.tab_scroll_first = crate::tab_widget::tab_window_reveal(
+        self.tab_scroll_first = crate::chrome::tab_widget::tab_window_reveal(
             widths,
             4.0,
             byteui::theme::geometry::tab_bar_avail_px(),

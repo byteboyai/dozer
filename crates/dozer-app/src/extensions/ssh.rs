@@ -1293,7 +1293,7 @@ pub fn view<'a>(
     // `project_pane` padding 就会跟它们的内距重复叠加,导致卡片左右边距比
     // todo 面板宽了 8px、footbar 分割线两端也比 todo 面板多缩进 8px(验收
     // 反馈:主机卡片边距/footbar 分割线长度、按钮位置跟 todo 面板不一致)。
-    let head = container(crate::homespace::home_panel_head(
+    let head = container(crate::chrome::homespace::home_panel_head(
         byteui::interaction::icons::IconKind::Server,
         "主机",
     ))

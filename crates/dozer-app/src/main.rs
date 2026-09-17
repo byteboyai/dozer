@@ -1,21 +1,16 @@
 mod app;
 mod assets;
-mod clipboard_image;
+mod chrome;
 mod code_editor;
 mod conversation;
 mod delivery;
 mod dialog;
-mod diff_render;
 mod event;
 mod extensions;
-mod fonts;
 mod frosted;
 mod git_watch;
-mod homespace;
 mod keymap;
 mod layout;
-mod menu;
-mod native_menu;
 mod open_projects;
 mod osc;
 mod panel_layouts;
@@ -24,14 +19,10 @@ mod preview;
 mod preview_state;
 mod project;
 mod project_meta;
-mod project_scaffold;
-mod rail;
 mod runtime;
 mod settings;
-mod tab_widget;
 mod term;
 mod theme;
-mod topbar;
 mod transcript;
 mod webview_geometry;
 mod workspace;
@@ -101,8 +92,8 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
     // 第一次文本排版之前：先注册内嵌的 JetBrains Mono（代码/终端字体），
     // 再剔除毒化 CJK 回退的位图字体（见 fonts.rs 模块注释）。顺序很重要——
     // 注册在前，终端 `Family::Name("JetBrains Mono")` 才能解析。
-    fonts::load_embedded_fonts();
-    fonts::sanitize_font_db();
+    assets::fonts::load_embedded_fonts();
+    assets::fonts::sanitize_font_db();
 
     // 先建立 token 基准值：把 workspace.json 灌进 byteui 三个 token 模块
     // （font/geometry/icon_size），取代其编译期内置默认值。
@@ -277,7 +268,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             // 原生右键菜单(NSMenu)弹层挂靠的内容 view:记一份裸指针供
             // `native_menu::show` 后续弹菜单用,见 `native_menu.rs`。
             #[cfg(target_os = "macos")]
-            native_menu::install_content_view(&window);
+            crate::chrome::native_menu::install_content_view(&window);
 
             let physical_size = window.inner_size();
             let viewport = Viewport::with_physical_size(
@@ -1016,9 +1007,9 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                 crate::runtime::run_operate(
                                     &mut interface,
                                     renderer,
-                                    &mut homespace::CaptureHomeSearchFocus,
+                                    &mut crate::chrome::homespace::CaptureHomeSearchFocus,
                                 );
-                                homespace::take_home_search_focused()
+                                crate::chrome::homespace::take_home_search_focused()
                             } else {
                                 false
                             };

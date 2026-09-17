@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use dozer_core::protocol::ProjectInfo;
 use iced_widget::core::Color;
 
-use crate::rail;
+use crate::chrome::rail;
 use crate::workspace::Workspace;
 
 use super::layout::{PanelDims, ShellLayout};

@@ -11,8 +11,8 @@
 
 use crate::app::App;
 use crate::app::{HoverId, ProjectId, TextInputTarget};
+use crate::chrome::homespace::home_panel_head;
 use crate::conversation::SessionRow;
-use crate::homespace::home_panel_head;
 use crate::theme;
 use crate::workspace::{agent_dot_color, agent_icon, lh, relative_time_text};
 use byteui::interaction::icons;
@@ -319,8 +319,8 @@ fn footer_bar<'a>(
 #[cfg(target_os = "macos")]
 pub(crate) fn agent_picker_items(
     ws_state: &WorkspaceState,
-) -> Vec<crate::native_menu::Item<Message>> {
-    use crate::native_menu::Item;
+) -> Vec<crate::chrome::native_menu::Item<Message>> {
+    use crate::chrome::native_menu::Item;
     let gold = byteui::theme::color::current().gold;
     let body = byteui::theme::color::current().body;
     let agents = conversation_agents_present(ws_state.sessions().unwrap_or(&[]));
@@ -361,7 +361,7 @@ fn agent_picker_view(
     let is_all_current = ws_state.agent_filter.is_none();
     let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
         Vec::new();
-    items.push(crate::menu::item_row_fill(
+    items.push(crate::chrome::menu::item_row_fill(
         None,
         "全部",
         if is_all_current {
@@ -383,7 +383,7 @@ fn agent_picker_view(
             byteui::theme::icon_size::row(),
             agent_dot_color(agent),
         );
-        items.push(crate::menu::item_row_fill(
+        items.push(crate::chrome::menu::item_row_fill(
             Some(leading),
             agent.label(),
             color,
@@ -391,7 +391,7 @@ fn agent_picker_view(
         ));
     }
     let panel: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        crate::menu::shell_frosted(items, Length::Fill);
+        crate::chrome::menu::shell_frosted(items, Length::Fill);
 
     let dismiss = MouseArea::new(
         iced_widget::Space::new()
@@ -769,8 +769,8 @@ mod tests {
             ..WorkspaceState::default()
         };
         let all_enabled = |ws: &WorkspaceState| match &agent_picker_items(ws)[0] {
-            crate::native_menu::Item::Entry { enabled, .. } => *enabled,
-            crate::native_menu::Item::Separator => panic!("expected entry"),
+            crate::chrome::native_menu::Item::Entry { enabled, .. } => *enabled,
+            crate::chrome::native_menu::Item::Separator => panic!("expected entry"),
         };
         assert!(!all_enabled(&no_filter), "已经是'全部'时该项自身该锁定");
 
@@ -797,8 +797,8 @@ mod tests {
         // items[0] = "全部",之后按 conversation_agents_present 的稳定顺序
         // (Claude 先于 Opencode)排列。
         let enabled_at = |i: usize| match &items[i] {
-            crate::native_menu::Item::Entry { enabled, .. } => *enabled,
-            crate::native_menu::Item::Separator => panic!("expected entry"),
+            crate::chrome::native_menu::Item::Entry { enabled, .. } => *enabled,
+            crate::chrome::native_menu::Item::Separator => panic!("expected entry"),
         };
         assert!(!enabled_at(1), "当前选中的 Claude 该锁定");
         assert!(enabled_at(2), "未选中的 Opencode 该可点");

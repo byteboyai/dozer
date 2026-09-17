@@ -2,13 +2,13 @@
 //! agent picker、review 内容 pane、preview pane 等渲染函数。
 
 use crate::app::{App, HoverId, Message, PanelKind, tab_divider};
-use crate::extensions::conversations;
-use crate::homespace::home_panel_head_with_actions;
-use crate::preview::TabKind;
-use crate::tab_widget::{
+use crate::chrome::homespace::home_panel_head_with_actions;
+use crate::chrome::tab_widget::{
     PanelTabArgs, TabOverflowEntry, TabOverflowMenuArgs, panel_tab, tab_overflow_button,
     tab_overflow_menu, tab_render_mode_button, tab_window,
 };
+use crate::extensions::conversations;
+use crate::preview::TabKind;
 use crate::theme;
 use crate::theme::terminal_font;
 use byteui::interaction::icons;
@@ -275,8 +275,8 @@ pub(crate) fn agent_picker_toggle_button<'a>(
 /// (`agent_dot_color`)、文字用 BODY。仅 macOS 编译,非 mac 平台继续走
 /// `agent_picker_popup` 的 iced 弹层。
 #[cfg(target_os = "macos")]
-pub(crate) fn agent_picker_items() -> Vec<crate::native_menu::Item<Message>> {
-    use crate::native_menu::Item;
+pub(crate) fn agent_picker_items() -> Vec<crate::chrome::native_menu::Item<Message>> {
+    use crate::chrome::native_menu::Item;
     let body = byteui::theme::color::current().body;
     let agents: [(&str, PickerLaunch); 6] = [
         ("Claude", PickerLaunch::Agent(Some(AgentKind::Claude))),
@@ -324,7 +324,7 @@ pub(crate) fn agent_picker_popup(
         return column![].into();
     }
     // 常规 agent 按标签首字母排序。"Git Shell" / "纯 Shell" 归到菜单最底部,
-    // 与上方 agent 用 1px 分割线(`crate::menu::separator`)分组隔开。
+    // 与上方 agent 用 1px 分割线(`crate::chrome::menu::separator`)分组隔开。
     let agents: [(&str, PickerLaunch); 6] = [
         ("Claude", PickerLaunch::Agent(Some(AgentKind::Claude))),
         ("CodeBuddy", PickerLaunch::Agent(Some(AgentKind::Codebuddy))),
@@ -337,7 +337,7 @@ pub(crate) fn agent_picker_popup(
         ("Git Shell", PickerLaunch::Git),
         ("纯 Shell", PickerLaunch::Agent(None)),
     ];
-    // 单项统一走 `crate::menu::item_row`:图标沿用各 agent 代表色,文字保持
+    // 单项统一走 `crate::chrome::menu::item_row`:图标沿用各 agent 代表色,文字保持
     // `BODY`(同 `menu::item()` 的标准配色);hover/锁定语义、常宽、padding
     // 同文件树右键菜单基准。
     let mk_item = |label: &'static str,
@@ -348,7 +348,7 @@ pub(crate) fn agent_picker_popup(
             PickerLaunch::Agent(None) => (IconKind::Terminal, byteui::theme::color::current().body),
             PickerLaunch::Git => (IconKind::GitBranch, byteui::theme::color::current().body),
         };
-        crate::menu::item_row(
+        crate::chrome::menu::item_row(
             Some(icons::view(
                 icon,
                 byteui::theme::icon_size::row(),
@@ -365,12 +365,12 @@ pub(crate) fn agent_picker_popup(
         list.push(mk_item(label, agent));
     }
     // 1px 分割线:把 Shell 类(底部)与上方常规 agent 分组隔开。
-    list.push(crate::menu::separator());
+    list.push(crate::chrome::menu::separator());
     for (label, agent) in shells {
         list.push(mk_item(label, agent));
     }
     let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        crate::menu::shell_frosted(
+        crate::chrome::menu::shell_frosted(
             list,
             Length::Fixed(byteui::theme::geometry::menu_item_width()),
         );

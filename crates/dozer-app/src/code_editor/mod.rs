@@ -459,7 +459,7 @@ impl CodeView {
         let editor = text_editor::TextEditor::new(&self.content)
             .id(self.id.clone())
             .height(Length::Fill)
-            .font(crate::fonts::code_font())
+            .font(crate::assets::fonts::code_font())
             .size(Pixels(font_size))
             .line_height(Pixels(line_height_px))
             .highlight_with::<highlighter::Highlighter>(

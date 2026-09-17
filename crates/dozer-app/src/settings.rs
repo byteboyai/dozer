@@ -19,7 +19,7 @@ fn scheme_row<'a>(
         text(if selected { "✓" } else { " " })
             .size(byteui::theme::font::body())
             .into();
-    crate::menu::item_row_fill(
+    crate::chrome::menu::item_row_fill(
         Some(mark),
         label,
         if selected {

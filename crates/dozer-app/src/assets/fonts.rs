@@ -14,7 +14,7 @@
 /// 内嵌的 JetBrains Mono（variable 字体，SIL OFL 授权，可随程序分发）。
 /// 经 `include_bytes!` 编译进二进制，macOS 打包无需额外拷贝资源。
 /// 代码/终端字体统一走它（见 `code_font`）；UI 字体保持系统默认，不用它。
-const JETBRAINS_MONO: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono[wght].ttf");
+const JETBRAINS_MONO: &[u8] = include_bytes!("../../assets/fonts/JetBrainsMono[wght].ttf");
 
 /// 代码/终端字体的字族名（与字体文件内声明的 family 一致）。
 pub const CODE_FONT_FAMILY: &str = "JetBrains Mono";

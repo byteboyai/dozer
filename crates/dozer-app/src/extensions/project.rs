@@ -3,6 +3,7 @@
 
 pub mod delete;
 pub mod links;
+pub mod scaffold;
 
 use byteui::interaction::icons;
 use dozer_core::protocol::ProjectInfo;
@@ -12,8 +13,6 @@ use iced_widget::core::{Border, Element, Length, Rectangle};
 use iced_widget::{MouseArea, button, column, container, row, text};
 use std::path::PathBuf;
 
-use crate::project_scaffold;
-
 /// 单个同步 scaffold 步骤(缓存目录/README/git 仓库/项目文档与 Agent
 /// 记忆)在弹窗里的实时状态。`ScaffoldStepResult` 只有终态,这里补一层
 /// pending/running。
@@ -21,7 +20,7 @@ use crate::project_scaffold;
 pub enum ScaffoldStepState {
     Pending,
     Running,
-    Done(project_scaffold::ScaffoldStepResult),
+    Done(scaffold::ScaffoldStepResult),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -41,7 +40,7 @@ pub enum BackfillStepState {
 }
 
 /// 一次"修复项目"弹窗跑的完整状态:4 个同步步骤 + 转录历史补录 + 补总结
-/// 聚合进度。`steps` 里固定 5 项,顺序 = `project_scaffold::scaffold_steps()`
+/// 聚合进度。`steps` 里固定 5 项,顺序 = `scaffold::scaffold_steps()`
 /// 的 4 项 + 追加的"agent 历史"转录补录(与既有 `spawn_scaffold_run` 的
 /// 拼接顺序一致)。
 #[derive(Debug, Clone, PartialEq)]
@@ -53,7 +52,7 @@ pub struct ScaffoldRunState {
 impl ScaffoldRunState {
     /// 初始态:全部步骤 Pending,补总结也 Pending。
     fn pending() -> Self {
-        let mut steps: Vec<(String, ScaffoldStepState)> = project_scaffold::scaffold_steps()
+        let mut steps: Vec<(String, ScaffoldStepState)> = scaffold::scaffold_steps()
             .into_iter()
             .map(|s| (s.label.to_string(), ScaffoldStepState::Pending))
             .collect();
@@ -341,11 +340,11 @@ pub enum Message {
     /// `ScaffoldRunState.steps`)进入 Running。
     ScaffoldStepStarted(i64, usize),
     /// 同上,携带该步骤终态。
-    ScaffoldStepFinished(i64, usize, project_scaffold::ScaffoldStepResult),
+    ScaffoldStepFinished(i64, usize, scaffold::ScaffoldStepResult),
     /// "agent 历史"转录补录步骤(固定是 `steps` 的最后一项)开始。
     TranscriptBackfillStarted(i64),
     /// 同上,携带终态。
-    TranscriptBackfillFinished(i64, project_scaffold::ScaffoldStepResult),
+    TranscriptBackfillFinished(i64, scaffold::ScaffoldStepResult),
     /// 补总结轮询到新的 `(completed, total)`。`completed >= total` 时
     /// `update()` 把 `backfill` 置为 `Done`,否则 `Running`。
     SummaryBackfillProgress(i64, u32, u32),
@@ -573,8 +572,7 @@ pub fn spawn_scaffold_run(
     let cwd = repo_path.to_string_lossy().into_owned();
     handle.spawn(async move {
         let repo_path2 = repo_path.clone();
-        let _ = tokio::task::spawn_blocking(move || project_scaffold::run_sync_steps(&repo_path2))
-            .await;
+        let _ = tokio::task::spawn_blocking(move || scaffold::run_sync_steps(&repo_path2)).await;
         let _ = client.backfill_project_transcripts(&cwd).await;
         emit(Message::ScaffoldDone);
     });
@@ -597,23 +595,21 @@ pub fn spawn_repair_run(
 ) {
     let cwd = repo_path.to_string_lossy().into_owned();
     handle.spawn(async move {
-        let steps = project_scaffold::scaffold_steps();
+        let steps = scaffold::scaffold_steps();
         for (idx, step) in steps.into_iter().enumerate() {
             emit(Message::ScaffoldStepStarted(project_id, idx));
             let repo_path3 = repo_path.clone();
             let result = tokio::task::spawn_blocking(move || (step.run)(&repo_path3))
                 .await
-                .unwrap_or_else(|e| {
-                    project_scaffold::ScaffoldStepResult::Failed(format!("内部错误: {e}"))
-                });
+                .unwrap_or_else(|e| scaffold::ScaffoldStepResult::Failed(format!("内部错误: {e}")));
             emit(Message::ScaffoldStepFinished(project_id, idx, result));
         }
 
         emit(Message::TranscriptBackfillStarted(project_id));
         let backfill_result = match client.backfill_project_transcripts(&cwd).await {
-            Ok(0) => project_scaffold::ScaffoldStepResult::AlreadyOk,
-            Ok(n) => project_scaffold::ScaffoldStepResult::Created(format!("导入 {n} 个历史文件")),
-            Err(e) => project_scaffold::ScaffoldStepResult::Failed(e.to_string()),
+            Ok(0) => scaffold::ScaffoldStepResult::AlreadyOk,
+            Ok(n) => scaffold::ScaffoldStepResult::Created(format!("导入 {n} 个历史文件")),
+            Err(e) => scaffold::ScaffoldStepResult::Failed(e.to_string()),
         };
         emit(Message::TranscriptBackfillFinished(
             project_id,
@@ -738,7 +734,7 @@ pub fn view<'a>(
         .width(Length::Fill)
         .height(Length::Fill);
 
-    content = content.push(crate::homespace::home_panel_head(
+    content = content.push(crate::chrome::homespace::home_panel_head(
         icons::IconKind::Briefcase,
         "项目",
     ));
@@ -1109,15 +1105,15 @@ fn scaffold_step_row<'a>(
             byteui::theme::color::current().gold,
             "进行中".to_string(),
         ),
-        ScaffoldStepState::Done(project_scaffold::ScaffoldStepResult::AlreadyOk) => (
+        ScaffoldStepState::Done(scaffold::ScaffoldStepResult::AlreadyOk) => (
             "✓",
             byteui::theme::color::current().green,
             "已是最新".to_string(),
         ),
-        ScaffoldStepState::Done(project_scaffold::ScaffoldStepResult::Created(msg)) => {
+        ScaffoldStepState::Done(scaffold::ScaffoldStepResult::Created(msg)) => {
             ("✓", byteui::theme::color::current().green, msg.clone())
         }
-        ScaffoldStepState::Done(project_scaffold::ScaffoldStepResult::Failed(msg)) => {
+        ScaffoldStepState::Done(scaffold::ScaffoldStepResult::Failed(msg)) => {
             ("✗", byteui::theme::color::current().red, msg.clone())
         }
     };
@@ -2044,7 +2040,7 @@ mod tests {
 
         update(
             &mut ws,
-            Message::ScaffoldStepFinished(1, 1, project_scaffold::ScaffoldStepResult::AlreadyOk),
+            Message::ScaffoldStepFinished(1, 1, scaffold::ScaffoldStepResult::AlreadyOk),
             1,
             "名字",
             &test_repo_path(),
@@ -2055,7 +2051,7 @@ mod tests {
         let run = ws.scaffold_run.as_ref().unwrap();
         assert_eq!(
             run.steps[1].1,
-            ScaffoldStepState::Done(project_scaffold::ScaffoldStepResult::AlreadyOk)
+            ScaffoldStepState::Done(scaffold::ScaffoldStepResult::AlreadyOk)
         );
     }
 
@@ -2083,7 +2079,7 @@ mod tests {
             &mut ws,
             Message::TranscriptBackfillFinished(
                 1,
-                project_scaffold::ScaffoldStepResult::Created("导入 3 个历史文件".into()),
+                scaffold::ScaffoldStepResult::Created("导入 3 个历史文件".into()),
             ),
             1,
             "名字",
@@ -2095,7 +2091,7 @@ mod tests {
         let run = ws.scaffold_run.as_ref().unwrap();
         assert_eq!(
             run.steps[last].1,
-            ScaffoldStepState::Done(project_scaffold::ScaffoldStepResult::Created(
+            ScaffoldStepState::Done(scaffold::ScaffoldStepResult::Created(
                 "导入 3 个历史文件".into()
             ))
         );
@@ -2190,7 +2186,7 @@ mod tests {
         let mut ws = new_ws();
         let mut run = ScaffoldRunState::pending();
         for (_, state) in run.steps.iter_mut() {
-            *state = ScaffoldStepState::Done(project_scaffold::ScaffoldStepResult::AlreadyOk);
+            *state = ScaffoldStepState::Done(scaffold::ScaffoldStepResult::AlreadyOk);
         }
         run.backfill = BackfillStepState::Done(BackfillProgress {
             completed: 0,

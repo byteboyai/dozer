@@ -633,7 +633,7 @@ pub fn sftp_pane_view<'a>(
 /// 右键菜单浮层:按 `context_menu` 的 `is_local` 决定只出现"上传"(本地行)
 /// 或"下载"(远程行)——不渲染无意义的禁用态(见 plan 的 UI 简化决定)。
 /// 菜单本身固定叠在面板左上角,不追光标像素定位(v1 简化,够用即可)。
-/// 表面/单项样式统一走 `crate::menu`(基准即文件树右键菜单)。
+/// 表面/单项样式统一走 `crate::chrome::menu`(基准即文件树右键菜单)。
 fn sftp_context_menu<'a>(
     state: &'a SftpTabState,
 ) -> iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -656,8 +656,8 @@ fn sftp_context_menu<'a>(
         )
     };
     let item: iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        crate::menu::item(Some(icon), label, msg);
-    crate::menu::shell_frosted(
+        crate::chrome::menu::item(Some(icon), label, msg);
+    crate::chrome::menu::shell_frosted(
         vec![item],
         iced_widget::core::Length::Fixed(byteui::theme::geometry::menu_item_width()),
     )
@@ -669,7 +669,7 @@ fn sftp_context_menu<'a>(
 pub(crate) fn context_menu_items(
     host_id: &str,
     is_local: bool,
-) -> Vec<crate::native_menu::Item<Message>> {
+) -> Vec<crate::chrome::native_menu::Item<Message>> {
     let (icon, label, msg) = if is_local {
         (
             byteui::interaction::icons::IconKind::ChevronUp,
@@ -683,7 +683,11 @@ pub(crate) fn context_menu_items(
             Message::Download(host_id.to_string()),
         )
     };
-    vec![crate::native_menu::Item::entry(Some(icon), label, msg)]
+    vec![crate::chrome::native_menu::Item::entry(
+        Some(icon),
+        label,
+        msg,
+    )]
 }
 
 #[cfg(test)]
@@ -823,7 +827,7 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert!(matches!(
             items[0],
-            crate::native_menu::Item::Entry {
+            crate::chrome::native_menu::Item::Entry {
                 msg: Message::Upload(_),
                 ..
             }
@@ -837,7 +841,7 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert!(matches!(
             items[0],
-            crate::native_menu::Item::Entry {
+            crate::chrome::native_menu::Item::Entry {
                 msg: Message::Download(_),
                 ..
             }

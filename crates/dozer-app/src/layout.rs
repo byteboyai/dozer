@@ -43,7 +43,7 @@ fn save_to(path: &Path, layout: &ShellLayout) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rail::RailLayout;
+    use crate::chrome::rail::RailLayout;
 
     #[test]
     fn load_from_missing_file_returns_default() {

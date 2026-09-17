@@ -6,6 +6,7 @@
 pub mod browser;
 pub mod conversations;
 pub mod database;
+pub mod diff_render;
 pub mod files;
 pub mod footbar;
 pub mod git_log;

@@ -18,7 +18,7 @@
 
 use super::term_view;
 use crate::app::{App, HoverId, Message, PanelKind, TabGroup, ZoneSide, tab_divider};
-use crate::tab_widget;
+use crate::chrome::tab_widget;
 use crate::theme;
 use crate::workspace::{SessionTab, Workspace, dot_color, tab_display_width, tab_title};
 use iced_widget::core::mouse;

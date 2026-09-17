@@ -780,7 +780,7 @@ impl Runner {
                             app.update(Message::TermPaste(target, text));
                             window.request_redraw();
                         } else if let Some(path) =
-                            crate::clipboard_image::read_pasteboard_image_as_temp_file()
+                            crate::assets::clipboard_image::read_pasteboard_image_as_temp_file()
                         {
                             // 剪贴板没有文本表示(纯截图),iced 的
                             // Clipboard::read 只认字符串,取不到图片

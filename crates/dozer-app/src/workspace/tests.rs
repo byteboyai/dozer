@@ -1,8 +1,8 @@
 use super::*;
 
 use crate::app::{Message, PanelKind};
+use crate::chrome::tab_widget::tab_window;
 use crate::osc::OscScanner;
-use crate::tab_widget::tab_window;
 use crate::term::term_model::TerminalModel;
 use crate::transcript::ReviewEntry;
 use byteui::interaction::icons::IconKind;
@@ -395,7 +395,7 @@ fn tab_window_reveal_keeps_visible_tab_still_no_jump() {
     let widths = [100.0; 5];
     // first=1 时可见区间是 [1,3):选中已经可见的 tab 1,first 不应该变。
     assert_eq!(
-        crate::tab_widget::tab_window_reveal(&widths, 0.0, 250.0, 1, 1),
+        crate::chrome::tab_widget::tab_window_reveal(&widths, 0.0, 250.0, 1, 1),
         1
     );
 }
@@ -405,7 +405,7 @@ fn tab_window_reveal_scrolls_hidden_tab_into_view() {
     let widths = [100.0; 5];
     // first=0 时可见区间是 [0,2):选中隐藏在右侧的 tab 4,应重新钳出
     // 一个包含它的窗口。
-    let new_first = crate::tab_widget::tab_window_reveal(&widths, 0.0, 250.0, 0, 4);
+    let new_first = crate::chrome::tab_widget::tab_window_reveal(&widths, 0.0, 250.0, 0, 4);
     let w = tab_window(&widths, 0.0, 250.0, new_first);
     assert!((w.first..w.visible_end).contains(&4));
 }
@@ -1052,11 +1052,14 @@ fn agent_picker_items_has_nine_rows_matching_old_picker() {
 #[test]
 fn agent_picker_items_separator_splits_agents_from_shells() {
     let items = agent_picker_items();
-    assert!(matches!(items[6], crate::native_menu::Item::Separator));
+    assert!(matches!(
+        items[6],
+        crate::chrome::native_menu::Item::Separator
+    ));
     let launches: Vec<PickerLaunch> = items
         .iter()
         .filter_map(|i| match i {
-            crate::native_menu::Item::Entry {
+            crate::chrome::native_menu::Item::Entry {
                 msg: Message::AgentPickerSelect(launch),
                 ..
             } => Some(*launch),

@@ -881,8 +881,10 @@ pub fn view<'a>(
     // 的分隔线与内容容器统一按同一水平 inset 排布,避免 Git 面板自己另起
     // 一套 → 0 的 padding 与文件树/项目面板(8)错位。
     let pad = theme::region::project_pane().padding;
-    let head =
-        crate::homespace::home_panel_head(byteui::interaction::icons::IconKind::GitGraph, "Git");
+    let head = crate::chrome::homespace::home_panel_head(
+        byteui::interaction::icons::IconKind::GitGraph,
+        "Git",
+    );
 
     let loading = state.pending.is_some();
     let Some(snapshot) = state.cache.as_ref() else {
@@ -1065,7 +1067,9 @@ fn diff_pane_view<'a>(
                 .color(byteui::theme::color::current().dim),
         );
     } else {
-        content = content.push(crate::diff_render::colored_diff_lines(&entry.patch));
+        content = content.push(crate::extensions::diff_render::colored_diff_lines(
+            &entry.patch,
+        ));
     }
     if entry.truncated {
         content = content.push(
@@ -1188,7 +1192,7 @@ fn branch_picker_view<'a>(
     }
     // dirty(有未提交改动)时锁定除当前分支外的其余分支;切换请求进行中时
     // 全部锁定——跟 `git_panel_footer_bar` 的 `branch_switch_pending` 禁用
-    // 语义一致。单项统一走 `crate::menu::item_row_fill`:同一套 hover/
+    // 语义一致。单项统一走 `crate::chrome::menu::item_row_fill`:同一套 hover/
     // 锁定样式,但整行撑满 Git 面板宽度(窄面板里好用)。
     for name in &state.branches {
         let is_current = Some(name.as_str()) == head_branch;
@@ -1205,16 +1209,16 @@ fn branch_picker_view<'a>(
         } else {
             name.clone()
         };
-        items.push(crate::menu::item_row_fill(
+        items.push(crate::chrome::menu::item_row_fill(
             None,
             label,
             color,
             (!locked && !is_current).then(|| Message::BranchSwitch(name.clone())),
         ));
     }
-    // 面板壳走 `crate::menu::shell`(context_menu 表面 = 文件树右键菜单基准)。
+    // 面板壳走 `crate::chrome::menu::shell`(context_menu 表面 = 文件树右键菜单基准)。
     let panel: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        crate::menu::shell_frosted(items, Length::Fill);
+        crate::chrome::menu::shell_frosted(items, Length::Fill);
     // 下拉层锚定在左侧面板底部、footbar 正上方:全高 stack 铺一层透明
     // `dismiss` 用于"点外关闭",面板用 `Space::Fill` 顶到最底,从 footbar
     // 上方弹出(与文件树 `branch_picker_popup` 钉在 git 底栏上方的语义一致,

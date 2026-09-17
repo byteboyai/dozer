@@ -4,8 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::chrome::rail;
 use crate::extensions::project;
-use crate::rail;
 use crate::theme;
 
 use super::state::{
@@ -386,7 +386,7 @@ pub(crate) fn tree_drag_held_long_enough(elapsed: std::time::Duration) -> bool {
 /// 判断某一侧的 webview 是否要因为**面板自身内部**的原生浮层被强制隐藏
 /// ——`preview_desired` 里 `app_modal_open`/`tab_overflow_open` 两种"整块
 /// 面板级"场景已经在调用处单独合并,这里补的是"面板本身还在,但面板内
-/// 某个 `crate::menu` 弹层可能压住 webview 内容区"的场景:Files 面板的
+/// 某个 `crate::chrome::menu` 弹层可能压住 webview 内容区"的场景:Files 面板的
 /// 文件树右键菜单、Project 面板的链接行右键菜单、Conversations 面板的
 /// agent 筛选下拉。原生 wry 子视图不听 iced 绘制顺序摆布,只能靠调用方
 /// 显式把 `WebviewSpec.visible` 置 `false` 才能让浮层真正盖住它。

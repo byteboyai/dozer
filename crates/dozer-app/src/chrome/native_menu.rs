@@ -161,7 +161,7 @@ fn color_key(color: Color) -> u32 {
     (r << 24) | (g << 16) | (b << 8) | a
 }
 
-/// 菜单项图标像素尺寸——同 `crate::menu.rs::icon_leading` 用的
+/// 菜单项图标像素尺寸——同 `crate::chrome::menu.rs::icon_leading` 用的
 /// `icon_size::row()`(已含全局 scale),原生菜单和 iced 菜单在同一次
 /// 缩放调整下应保持一致大小。
 fn icon_size_px() -> u32 {
@@ -250,7 +250,7 @@ fn icon_image(kind: IconKind, color: Color, size_px: u32) -> Retained<NSImage> {
 
 /// 同步弹出原生菜单,阻塞到用户选中一项或点外部/按 Esc 取消。`items` 为
 /// 空时直接返回 `None`,不弹菜单。`view_pos` 是内容 view 自己坐标系里的
-/// 一点——和现有 `crate::menu.rs` 弹层用的 `last_right_click()` 是同一份
+/// 一点——和现有 `crate::chrome::menu.rs` 弹层用的 `last_right_click()` 是同一份
 /// 逻辑坐标,不需要转换成屏幕坐标(`popUpMenuPositioningItem:atLocation:inView:`
 /// 的 `atLocation:` 就是"目标 view 自己坐标系里的一点")。
 pub fn show<Msg: Clone>(items: Vec<Item<Msg>>, view_pos: (f32, f32)) -> Option<Msg> {
@@ -359,7 +359,7 @@ mod menu_item_view {
     use objc2_quartz_core::CALayer;
     use std::cell::Cell;
 
-    /// hover 高亮的圆角半径,对齐 `crate::menu.rs` 里 iced 版菜单项的
+    /// hover 高亮的圆角半径,对齐 `crate::chrome::menu.rs` 里 iced 版菜单项的
     /// `MENU_HOVER_RADIUS`。
     const HOVER_RADIUS: f64 = 6.0;
 
@@ -439,7 +439,7 @@ mod menu_item_view {
         /// 组一整行:自身画 hover 底色(靠 `wantsLayer`+`layer.backgroundColor`
         /// 更简单),内部横排图标(可选)+ 文字。宽/内边距/图标↔文字间距/
         /// 字号全部读 `byteui::theme` token(均已含全局 scale),和
-        /// `crate::menu.rs` 的 iced 版菜单项共用同一套尺寸口径,放大/缩小
+        /// `crate::chrome::menu.rs` 的 iced 版菜单项共用同一套尺寸口径,放大/缩小
         /// UI 时原生菜单跟着一起变,不会停在编译期写死的固定像素。
         pub fn new(
             mtm: MainThreadMarker,

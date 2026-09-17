@@ -2,6 +2,8 @@
 //! update/view)+ 自由 view 函数 + 测试。Phase 2 结构重组时从 `app.rs` 整体
 //! 平移进来,Phase 3 再按 update/view 拆开。
 
+use crate::chrome::homespace::{self, HomeRecentConversation, HomeRecentFile};
+use crate::chrome::rail;
 use crate::extensions::browser;
 use crate::extensions::database;
 use crate::extensions::files;
@@ -9,12 +11,10 @@ use crate::extensions::footbar;
 use crate::extensions::git_log;
 use crate::extensions::project;
 use crate::extensions::todo;
-use crate::homespace::{self, HomeRecentConversation, HomeRecentFile};
 use crate::layout;
 use crate::open_projects;
 use crate::panel_layouts;
 use crate::preview::WebviewSpec;
-use crate::rail;
 use crate::term::terminal;
 use crate::theme;
 use crate::transcript::ReviewEntry;
@@ -75,8 +75,8 @@ pub(crate) fn merge_review_entries(
 pub(crate) fn project_link_menu_items(
     target: project::links::LinkTarget,
     index: usize,
-) -> Vec<crate::native_menu::Item<Message>> {
-    vec![crate::native_menu::Item::Entry {
+) -> Vec<crate::chrome::native_menu::Item<Message>> {
+    vec![crate::chrome::native_menu::Item::Entry {
         icon: Some(icons::IconKind::Trash),
         icon_color: None,
         label: "删除".into(),
@@ -91,8 +91,8 @@ pub(crate) fn project_link_menu_items(
 #[cfg(target_os = "macos")]
 pub(crate) fn text_input_menu_items(
     target: &TextInputTarget,
-) -> Vec<crate::native_menu::Item<Message>> {
-    use crate::native_menu::Item;
+) -> Vec<crate::chrome::native_menu::Item<Message>> {
+    use crate::chrome::native_menu::Item;
     let body = byteui::theme::color::current().body;
     let dim = byteui::theme::color::current().dim;
     let (cut_copy_color, cut_copy_enabled) = if target.secure {
@@ -142,8 +142,8 @@ pub(crate) fn text_input_menu_items(
 pub(crate) fn database_source_menu_items(
     source_id: &str,
     expanded: bool,
-) -> Vec<crate::native_menu::Item<Message>> {
-    use crate::native_menu::Item;
+) -> Vec<crate::chrome::native_menu::Item<Message>> {
+    use crate::chrome::native_menu::Item;
     let dim = byteui::theme::color::current().dim;
     let id = source_id.to_string();
     vec![
@@ -182,8 +182,8 @@ pub(crate) fn database_source_menu_items(
 pub(crate) fn category_context_menu_items(
     id: Option<i64>,
     sibling_parent_id: Option<i64>,
-) -> Vec<crate::native_menu::Item<Message>> {
-    use crate::native_menu::Item;
+) -> Vec<crate::chrome::native_menu::Item<Message>> {
+    use crate::chrome::native_menu::Item;
     match id {
         None => vec![Item::entry(
             Some(icons::IconKind::SquarePlus),
@@ -2348,7 +2348,7 @@ impl App {
                 .active_workspace()
                 .is_some_and(|ws| ws.database.is_expanded(&source_id));
             let items = database_source_menu_items(&source_id, expanded);
-            if let Some(msg) = crate::native_menu::show(items, (x, y)) {
+            if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
                 self.update(msg);
             }
         }
@@ -2381,7 +2381,7 @@ impl App {
         {
             let (x, y) = self.files.last_right_click();
             let items = project_link_menu_items(target, index);
-            if let Some(msg) = crate::native_menu::show(items, (x, y)) {
+            if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
                 self.update(msg);
             }
         }
@@ -2414,7 +2414,7 @@ impl App {
                 })
             });
             let items = category_context_menu_items(id, sibling_parent_id);
-            if let Some(msg) = crate::native_menu::show(items, (x, y)) {
+            if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
                 self.update(msg);
             }
         }
@@ -2968,7 +2968,7 @@ mod tests {
     }
 
     /// Files 面板右键菜单开着时该隐藏该侧 webview——同 `tab_overflow_open`
-    /// 的既有口径,只是浮层换成了文件树右键菜单(`crate::menu.rs` 文档里
+    /// 的既有口径,只是浮层换成了文件树右键菜单(`crate::chrome::menu.rs` 文档里
     /// "唯一基准"的那个)。
     #[test]
     fn webview_hidden_by_panel_popup_files_context_menu_open() {
@@ -3033,7 +3033,7 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert!(matches!(
             items[0],
-            crate::native_menu::Item::Entry {
+            crate::chrome::native_menu::Item::Entry {
                 msg: Message::Project(project::Message::LinkRemove { index: 2, .. }),
                 ..
             }
@@ -3049,7 +3049,7 @@ mod tests {
         };
         let items = text_input_menu_items(&target);
         let cut_enabled = items.iter().find_map(|i| match i {
-            crate::native_menu::Item::Entry {
+            crate::chrome::native_menu::Item::Entry {
                 msg: Message::TextInputMenuCut,
                 enabled,
                 ..
@@ -3068,7 +3068,7 @@ mod tests {
         };
         let items = text_input_menu_items(&target);
         let cut_enabled = items.iter().find_map(|i| match i {
-            crate::native_menu::Item::Entry {
+            crate::chrome::native_menu::Item::Entry {
                 msg: Message::TextInputMenuCut,
                 enabled,
                 ..
@@ -3093,7 +3093,7 @@ mod tests {
     fn database_source_menu_items_locks_refresh_when_not_expanded() {
         let items = database_source_menu_items("pg-main", false);
         let refresh_enabled = items.iter().find_map(|i| match i {
-            crate::native_menu::Item::Entry {
+            crate::chrome::native_menu::Item::Entry {
                 msg: Message::Database(database::Message::SchemaRefresh(_)),
                 enabled,
                 ..
@@ -3108,7 +3108,7 @@ mod tests {
     fn database_source_menu_items_enables_refresh_when_expanded() {
         let items = database_source_menu_items("pg-main", true);
         let refresh_enabled = items.iter().find_map(|i| match i {
-            crate::native_menu::Item::Entry {
+            crate::chrome::native_menu::Item::Entry {
                 msg: Message::Database(database::Message::SchemaRefresh(_)),
                 enabled,
                 ..
@@ -3131,7 +3131,7 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert!(matches!(
             items[0],
-            crate::native_menu::Item::Entry {
+            crate::chrome::native_menu::Item::Entry {
                 msg: Message::Todo(todo::Message::CategoryNewSibling(None)),
                 ..
             }
@@ -3150,7 +3150,7 @@ mod tests {
         let has_sibling_with_parent = items.iter().any(|i| {
             matches!(
                 i,
-                crate::native_menu::Item::Entry {
+                crate::chrome::native_menu::Item::Entry {
                     msg: Message::Todo(todo::Message::CategoryNewSibling(Some(3))),
                     ..
                 }

@@ -5,11 +5,11 @@ use std::path::PathBuf;
 
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 
+use crate::chrome::homespace::{self, HomeRecentConversation, HomeRecentFile};
 use crate::extensions::{
     browser, conversations, database, files, footbar, git_log, project, search, ssh, todo, usage,
 };
 use crate::git_watch;
-use crate::homespace::{self, HomeRecentConversation, HomeRecentFile};
 use crate::term::terminal;
 use crate::transcript::ReviewEntry;
 use crate::workspace::{PickerLaunch, RestorePayload, ReviewSource};

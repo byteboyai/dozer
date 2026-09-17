@@ -476,7 +476,7 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> Op
 mod tests {
     use super::*;
     use crate::app::{PanelDims, ShellLayout};
-    use crate::rail;
+    use crate::chrome::rail;
 
     fn test_state() -> ShellState {
         ShellState {

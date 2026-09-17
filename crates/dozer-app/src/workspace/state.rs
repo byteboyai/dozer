@@ -5,6 +5,7 @@
 use crate::app::{
     DEFAULT_COLS, DEFAULT_ROWS, Message, PROJECT_PREVIEW_ID_OFFSET, PanelKind, ProjectId,
 };
+use crate::chrome::tab_widget::tab_window_reveal;
 use crate::delivery::{self};
 use crate::extensions::browser;
 use crate::extensions::conversations;
@@ -20,7 +21,6 @@ use crate::osc::{OscEvent, OscScanner};
 use crate::preview::{PreviewPane, TabKind};
 use crate::preview_state;
 use crate::project::FileTree;
-use crate::tab_widget::tab_window_reveal;
 use crate::term::term_model::TerminalModel;
 use crate::transcript::{self, ReviewEntry};
 use dozer_client::{Client, TermEvent};

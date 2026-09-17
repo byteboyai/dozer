@@ -411,8 +411,8 @@ fn project_tabs_row(
 pub(crate) fn project_add_menu_items(
     recent_projects: &[ProjectInfo],
     open_project_ids: &std::collections::HashSet<i64>,
-) -> Vec<crate::native_menu::Item<Message>> {
-    use crate::native_menu::Item;
+) -> Vec<crate::chrome::native_menu::Item<Message>> {
+    use crate::chrome::native_menu::Item;
     let mut projects: Vec<&ProjectInfo> = recent_projects
         .iter()
         .filter(|p| !open_project_ids.contains(&p.id))
@@ -440,7 +440,7 @@ pub(crate) fn project_add_menu_items(
 /// 不列,少一次无意义点击)。列表下面跟一条分隔线 + "新建项目"项
 /// (`Message::ProjectTabPickFolder`,同顶栏按钮原有功能——rfd 文件夹
 /// 选择),菜单项列表为空时
-/// 不画多余的孤立分隔线。样式走 `crate::menu`
+/// 不画多余的孤立分隔线。样式走 `crate::chrome::menu`
 /// 标准右键菜单原语(同文件树右键菜单基准)。
 ///
 /// 定位:"＋"按钮自己的 x 随已开页签数量浮动(`project_tabs_row` 里页签
@@ -468,13 +468,17 @@ pub(crate) fn project_add_menu_popup(
         projects
             .into_iter()
             .map(|p| {
-                crate::menu::item::<Message>(None, p.name.clone(), Message::ProjectSelect(p.id))
+                crate::chrome::menu::item::<Message>(
+                    None,
+                    p.name.clone(),
+                    Message::ProjectSelect(p.id),
+                )
             })
             .collect();
     if !items.is_empty() {
-        items.push(crate::menu::separator());
+        items.push(crate::chrome::menu::separator());
     }
-    items.push(crate::menu::item::<Message>(
+    items.push(crate::chrome::menu::item::<Message>(
         Some(icons::IconKind::SquarePlus),
         "新建项目",
         Message::ProjectTabPickFolder,
@@ -482,7 +486,7 @@ pub(crate) fn project_add_menu_popup(
 
     let row_count = items.len();
     let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        crate::menu::shell_frosted(
+        crate::chrome::menu::shell_frosted(
             items,
             Length::Fixed(byteui::theme::geometry::menu_item_width()),
         );
@@ -783,7 +787,7 @@ mod tests {
         let has_b = items.iter().any(|i| {
             matches!(
                 i,
-                crate::native_menu::Item::Entry {
+                crate::chrome::native_menu::Item::Entry {
                     msg: Message::ProjectSelect(2),
                     ..
                 }
@@ -798,8 +802,8 @@ mod tests {
         let recent = [project(1, "older", 100), project(2, "newer", 200)];
         let items = project_add_menu_items(&recent, &std::collections::HashSet::new());
         let msg_at = |idx: usize| match &items[idx] {
-            crate::native_menu::Item::Entry { msg, .. } => msg.clone(),
-            crate::native_menu::Item::Separator => panic!("expected entry at {idx}"),
+            crate::chrome::native_menu::Item::Entry { msg, .. } => msg.clone(),
+            crate::chrome::native_menu::Item::Separator => panic!("expected entry at {idx}"),
         };
         assert!(matches!(msg_at(0), Message::ProjectSelect(2)));
         assert!(matches!(msg_at(1), Message::ProjectSelect(1)));
@@ -811,7 +815,7 @@ mod tests {
         let items = project_add_menu_items(&[], &std::collections::HashSet::new());
         assert!(matches!(
             items.last(),
-            Some(crate::native_menu::Item::Entry {
+            Some(crate::chrome::native_menu::Item::Entry {
                 msg: Message::ProjectTabPickFolder,
                 ..
             })
