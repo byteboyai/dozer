@@ -1672,17 +1672,19 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             && let Some(overlay) = search_overlay
             && window_id == overlay.window_id()
         {
-            let close_by_focus_loss = matches!(event, WindowEvent::Focused(false));
-            let close_by_request = matches!(event, WindowEvent::CloseRequested);
             if matches!(event, WindowEvent::RedrawRequested) {
                 overlay.redraw(app);
-            } else if !close_by_focus_loss && !close_by_request {
+            } else if matches!(event, WindowEvent::CloseRequested) {
+                self.dispatch(Message::Search(extensions::search::Message::SearchClose));
+            } else if let WindowEvent::Focused(focused) = event {
+                // 合成 Focused(false) 不计为失焦(见 SearchOverlay::handle_focus)。
+                if overlay.handle_focus(focused) {
+                    self.dispatch(Message::Search(extensions::search::Message::SearchClose));
+                }
+            } else {
                 for message in overlay.handle_input(app, &event) {
                     self.dispatch(message);
                 }
-            }
-            if close_by_focus_loss || close_by_request {
-                self.dispatch(Message::Search(extensions::search::Message::SearchClose));
             }
             self.sync_search_overlay(event_loop);
             return;

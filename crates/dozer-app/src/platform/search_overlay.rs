@@ -68,6 +68,19 @@ pub(crate) fn sync_action(search_open: bool, overlay_present: bool) -> SyncActio
     }
 }
 
+/// 焦点转移的纯判定:`(新的 focused 状态, 是否该因失焦关闭)`。
+/// winit 在窗口刚创建时会无条件排一个合成 `Focused(false)`,必须忽略它——
+/// 只有"先 `Focused(true)` 再 `Focused(false)`"才算真正的失焦。
+fn focus_transition(was_focused: bool, now_focused: bool) -> (bool, bool) {
+    if now_focused {
+        (true, false)
+    } else if was_focused {
+        (false, true)
+    } else {
+        (false, false)
+    }
+}
+
 /// 独立原生窗口宿主——`search_card()` 的独立渲染管线。不持有独立的
 /// `Device`/`Queue`/`Adapter`/`Instance`:全部从主窗口 `Ready` 借来的
 /// 共享句柄(`Device`/`Queue`/`Adapter` 便宜 `Clone`),只有 `Surface`/
@@ -84,6 +97,13 @@ pub(crate) struct SearchOverlay {
     clipboard: Clipboard,
     cursor: mouse::Cursor,
     modifiers: ModifiersState,
+    /// 是否真的获得过 OS 键盘焦点。winit 在窗口刚创建时会**无条件**排一个
+    /// 合成的 `Focused(false)`(见 winit `window_delegate.rs` 里那句
+    /// "Send Focused(false) right after creating the window delegate")——
+    /// 若直接拿它当"点外部关闭"信号,窗口一打开就会被这个合成事件误关。
+    /// 只有先收到过 `Focused(true)`、再收到 `Focused(false)` 才算真正的
+    /// 失焦(用户点到别处/别的 App)。
+    focused: bool,
 }
 
 impl SearchOverlay {
@@ -186,7 +206,19 @@ impl SearchOverlay {
             clipboard,
             cursor: mouse::Cursor::Unavailable,
             modifiers: ModifiersState::default(),
+            focused: false,
         }
+    }
+
+    /// 记录焦点事件,返回"是否该因失焦而关闭"。winit 在窗口创建时会先排
+    /// 一个合成 `Focused(false)`,所以只有"先 `Focused(true)` 再
+    /// `Focused(false)`"才算真正的失焦(用户点到别处),返回 `true`;
+    /// 合成的那一发 `Focused(false)`(以及任何还没聚焦过的 `Focused(false)`)
+    /// 返回 `false`,不触发关闭。
+    pub(crate) fn handle_focus(&mut self, focused: bool) -> bool {
+        let (new_focused, should_close) = focus_transition(self.focused, focused);
+        self.focused = new_focused;
+        should_close
     }
 
     /// 主窗口 resize 后重新居中 + 重配置 surface(`with_parent_window` 的
@@ -404,5 +436,17 @@ mod tests {
         assert_eq!(size, PhysicalSize::new(600, 640));
         assert_eq!(pos.x, (1000 - 600) / 2);
         assert_eq!(pos.y, (1000 - 640) / 2);
+    }
+
+    #[test]
+    fn focus_transition_ignores_synthetic_false_and_closes_on_real_loss() {
+        // 合成 Focused(false):窗口刚创建、还没真聚焦过——不关闭。
+        assert_eq!(focus_transition(false, false), (false, false));
+        // 真拿到焦点:不关闭。
+        assert_eq!(focus_transition(false, true), (true, false));
+        // 已聚焦过、现在失焦(用户点到别处):关闭。
+        assert_eq!(focus_transition(true, false), (false, true));
+        // 持续聚焦:不关闭。
+        assert_eq!(focus_transition(true, true), (true, false));
     }
 }
