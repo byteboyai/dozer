@@ -8,7 +8,7 @@ use grep_searcher::{Searcher, SearcherBuilder, Sink, SinkMatch};
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
 use iced_widget::core::{Border, Color, Element, Length, Rectangle};
-use iced_widget::{button, column, container, row, scrollable, stack, text};
+use iced_widget::{button, column, container, row, scrollable, text};
 use std::path::{Path, PathBuf};
 
 /// 搜索作用域：右键目标。
@@ -424,43 +424,6 @@ pub(crate) fn search_card<'a>(
         .height(Length::Fill)
         .style(crate::dialog::card_style)
         .into()
-}
-
-/// 搜索弹窗本体:套用 `dialog` 模块统一的弹窗原语(磨砂遮罩 + 金色描边
-/// 卡片)。由 `App::view()` 顶层浮层链的 `stack!` 里调用;未打开时返回空元素。
-///
-/// 2026-09-17:迁独立原生窗口过渡期的旧路径,`search_card()` 是新路径
-/// (`platform/search_overlay.rs`)复用的部分——本函数连同调用它的
-/// `app/view.rs:131-143` 那段会在本计划 Task 5 一并删除,过渡期内暂时保留
-/// 让现状行为不受影响。
-pub fn search_modal<'a>(
-    ws: &'a WorkspaceState,
-    project_root: Option<&'a Path>,
-    window_width: f32,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    if !ws.open {
-        return column![].into();
-    }
-
-    let dialog = container(search_card(ws, project_root))
-        .width(crate::dialog::width(window_width))
-        .height(Length::Shrink)
-        .max_height(640.0);
-
-    let scrim = crate::dialog::scrim(Message::SearchClose);
-
-    stack![
-        scrim,
-        container(dialog)
-            .padding(40.0)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_x(iced_widget::core::alignment::Horizontal::Center)
-            .align_y(iced_widget::core::alignment::Vertical::Center)
-    ]
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
 }
 
 #[cfg(test)]

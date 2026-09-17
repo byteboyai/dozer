@@ -2726,16 +2726,13 @@ impl App {
         let Some(ws) = self.active_workspace() else {
             return Vec::new();
         };
-        // `search_modal` 是满窗 SCRIM+卡片形制(见
-        // `extensions/search.rs::search_modal` 注释),打开时要隐藏 webview,
-        // 否则 webview 会盖住遮罩和弹窗卡片。`text_input_menu`(输入框右键
-        // 剪切/复制/粘贴菜单)是屏幕空间单例、不区分左右哪一侧,和
-        // `search_modal` 一样按"两侧都可能被盖住"从宽处理——比如文件树
-        // 搜索框右键时,菜单向下弹出恰好压在下方的预览 webview 上。
+        // `text_input_menu`(输入框右键剪切/复制/粘贴菜单)是屏幕空间
+        // 单例、不区分左右哪一侧,按"两侧都可能被盖住"从宽处理——比如
+        // 文件树搜索框右键时,菜单向下弹出恰好压在下方的预览 webview 上。
         // `file_history`(文件历史对比弹窗)是窗口级 overlay(左右两侧
-        // 都可能被它盖住),同款从宽处理。
-        let app_modal_open =
-            ws.search.is_open() || self.text_input_menu.is_some() || self.file_history.is_some();
+        // 都可能被它盖住),同款从宽处理。search 弹窗已迁独立原生窗口,
+        // 不需要再为它隐藏 webview(2026-09-17)。
+        let app_modal_open = self.text_input_menu.is_some() || self.file_history.is_some();
         let mut out = Vec::new();
         for side in [Side::Left, Side::Right] {
             let kind = match side {
