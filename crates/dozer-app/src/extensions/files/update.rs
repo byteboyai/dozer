@@ -52,7 +52,8 @@ pub fn update(
                     .map(|t| t.root() == path.as_path())
                     .unwrap_or(false);
                 let has_clipboard = ws_state.tree_clipboard.is_some();
-                let items = context_menu_items(&path, is_dir, is_root, has_clipboard);
+                let items =
+                    context_menu_items(&path, is_dir, is_root, has_clipboard, ws_state.git_is_repo);
                 if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
                     // 不能直接递归调用本函数(`update`)——`OpenSearch`/
                     // `CopyPath` 这两个菜单项产出的消息是"内核拦截处理"的
@@ -281,6 +282,9 @@ pub fn update(
         }
         Message::OpenSearch(..) => {
             unreachable!("由内核拦截处理,映射成 search::Message::SearchOpen")
+        }
+        Message::FileHistoryOpen(_) => {
+            unreachable!("由内核拦截处理,见 files::Message::FileHistoryOpen 文档")
         }
         // 工具行 icon 按钮的 hover 由内核 `Message::Files` 分支转发到
         // `HoverId`(文件树面板不挂 App 的 hover 动画表),`update` 吃不到
