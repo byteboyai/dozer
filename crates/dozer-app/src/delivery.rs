@@ -231,14 +231,19 @@ fn state_priority(state: TreeState) -> u8 {
 /// `dir_status` 完全一致,只是把 O(N×M) 的逐行全表扫描换成一次
 /// O(M×depth) 的祖先传播)。文件树渲染时按路径 O(1) 查表。被忽略的
 /// 条目不向上传播(同 `dir_status` 的既有语义);目录自身被忽略(精确
-/// 路径在 `statuses` 里标 `ignored`)时整目录落 `Ignored`。
+/// 路径在 `statuses` 里标 `ignored`)时整目录落 `Ignored`,且这条规则
+/// 优先级恒高于任何聚合结果——分两遍写:第一遍只聚合非忽略条目,第二遍
+/// 把"自身被忽略"的目录直接覆盖成 `Ignored`。这样不管 `statuses`(一个
+/// `HashMap`,迭代顺序不固定)先遍历到自身条目还是子孙条目,结果都一样;
+/// 合成一遍写、靠"先 or_insert 再比优先级"处理自身条目会让结果随机取决
+/// 于遍历顺序(`Ignored` 优先级最低,子孙条目若晚于自身条目被处理,会把
+/// `Ignored` 覆盖掉)。
 pub fn rollup_dir_statuses(
     statuses: &HashMap<PathBuf, FileGitStatus>,
 ) -> HashMap<PathBuf, TreeState> {
     let mut dirs: HashMap<PathBuf, TreeState> = HashMap::new();
     for (path, st) in statuses {
         if st.ignored {
-            dirs.insert(path.clone(), TreeState::Ignored);
             continue;
         }
         let state = TreeState::from(*st);
@@ -249,6 +254,11 @@ pub fn rollup_dir_statuses(
                 *entry = state;
             }
             cur = dir.parent();
+        }
+    }
+    for (path, st) in statuses {
+        if st.ignored {
+            dirs.insert(path.clone(), TreeState::Ignored);
         }
     }
     dirs
@@ -732,6 +742,41 @@ mod tests {
         );
         // 忽略目录不向祖先传播。
         assert_eq!(rolled.get(Path::new("/r")).copied(), None);
+    }
+
+    /// 防漂移锚:目录自身被忽略、同时又有非忽略子孙把状态传播上来这个
+    /// 组合(理论上不该从真实 `file_statuses()` 输出里出现,但函数自己
+    /// 不能靠这个假设——两条规则在同一个 `HashMap` 上跑,不能让结果随
+    /// 迭代顺序摇摆),自身 Ignored 必须恒赢,不能被子孙的更高优先级状态
+    /// 覆盖。
+    #[test]
+    fn rollup_dir_statuses_self_ignored_wins_over_descendant() {
+        use std::path::{Path, PathBuf};
+        let mut s = HashMap::new();
+        s.insert(
+            PathBuf::from("/r/out"),
+            FileGitStatus {
+                kind: ChangeKind::Modified,
+                staged: false,
+                unstaged: false,
+                ignored: true,
+            },
+        );
+        s.insert(
+            PathBuf::from("/r/out/keep.rs"),
+            FileGitStatus {
+                kind: ChangeKind::New,
+                staged: false,
+                unstaged: true,
+                ignored: false,
+            },
+        );
+        let rolled = rollup_dir_statuses(&s);
+        assert_eq!(
+            rolled.get(Path::new("/r/out")).copied(),
+            Some(TreeState::Ignored),
+            "目录自身被忽略时应恒为 Ignored,不受子孙状态或 HashMap 迭代顺序影响"
+        );
     }
 
     #[test]

@@ -654,6 +654,10 @@ mod tests {
 
     #[test]
     fn style_change_splits_runs() {
+        // 断言的是深色主题 RED,`row_of` 经 `visible_lines()` 间接读全局
+        // `current_scheme()`,须加锁避免与切主题测试并行时读到浅色值
+        // (同 term_model.rs 里 sgr_red_foreground_is_mapped 的竞态,同款修法)。
+        let _guard = crate::term::term_model::lock_scheme();
         let runs = layout_runs(&row_of(b"a\x1b[31mb", 40), TEST_TERM_BG);
         assert_eq!(runs.len(), 2);
         assert_eq!((runs[0].col, runs[0].text.as_str()), (0, "a"));
@@ -691,7 +695,9 @@ mod tests {
     fn inverse_cell_swaps_fg_and_bg_falling_back_to_term_bg() {
         // 反相格默认背景(未显式设过 bg)要换算成 `term_bg` 才能当新前景色
         // 用——不能继续留 `None`(那是"不填色"的意思，反相格恰恰要填)；
-        // 新背景色固定是原本的前景色(终端默认前景 `(0x9A, 0xB4, 0xC4)`)。
+        // 新背景色固定是原本的前景色(终端默认前景 `(0x9A, 0xB4, 0xC4)`,
+        // 深色主题值，同上一个测试同样需要 scheme 锁避免并行读到浅色值)。
+        let _guard = crate::term::term_model::lock_scheme();
         let runs = layout_runs(&row_of(b"\x1b[7mA", 40), TEST_TERM_BG);
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].fg, TEST_TERM_BG);

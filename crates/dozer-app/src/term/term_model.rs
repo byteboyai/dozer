@@ -485,19 +485,26 @@ impl TerminalModel {
     }
 }
 
+/// `byteui::theme::color` 的当前配色方案是进程级共享 static，见
+/// `byteui/src/theme/color.rs` 测试模块同名锁的注释。任何断言了具体主题
+/// 色值的测试都要持有这把锁再跑——不止本文件内切主题的测试会碰它，
+/// `term_view.rs` 里硬编码深色 RGB 的测试（`layout_runs` 经
+/// `visible_lines()` 间接读 `current_scheme()`）也要用同一把锁串行化，
+/// 否则 `cargo test` 默认多线程并行时会偶发读到另一个线程临时切换的浅色
+/// 值而失败（2026-09 性能优化分支实测炸过一次，见 `sgr_red_foreground_is_mapped`
+/// 的提交历史）。挪到模块级（而不是留在 `mod tests` 内）就是为了让
+/// `term_view.rs` 的测试模块也能引用到。
+#[cfg(test)]
+pub(crate) static SCHEME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn lock_scheme() -> std::sync::MutexGuard<'static, ()> {
+    SCHEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// `byteui::theme::color` 的当前配色方案是进程级共享 static，见
-    /// `byteui/src/theme/color.rs` 测试模块同名锁的注释。这里只有下面两个
-    /// 主题相关测试会碰它，加锁避免它们互相插队。
-    static SCHEME_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-    fn lock_scheme() -> std::sync::MutexGuard<'static, ()> {
-        SCHEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
-    }
 
     fn line_text(cells: &[Cell]) -> String {
         cells
