@@ -2732,7 +2732,10 @@ impl App {
         // 剪切/复制/粘贴菜单)是屏幕空间单例、不区分左右哪一侧,和
         // `search_modal` 一样按"两侧都可能被盖住"从宽处理——比如文件树
         // 搜索框右键时,菜单向下弹出恰好压在下方的预览 webview 上。
-        let app_modal_open = ws.search.is_open() || self.text_input_menu.is_some();
+        // `file_history`(文件历史对比弹窗)是窗口级 overlay(左右两侧
+        // 都可能被它盖住),同款从宽处理。
+        let app_modal_open =
+            ws.search.is_open() || self.text_input_menu.is_some() || self.file_history.is_some();
         let mut out = Vec::new();
         for side in [Side::Left, Side::Right] {
             let kind = match side {
