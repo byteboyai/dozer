@@ -1025,7 +1025,9 @@ impl App {
             return;
         }
         let now = std::time::Instant::now();
-        if now.duration_since(self.last_todo_poll_at) < crate::TODO_POLL_INTERVAL {
+        if now.duration_since(self.last_todo_poll_at)
+            < crate::platform::window_events::TODO_POLL_INTERVAL
+        {
             return;
         }
         self.last_todo_poll_at = now;

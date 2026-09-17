@@ -517,7 +517,7 @@ impl App {
                     let (x, y) = self.files.last_right_click();
                     let items = text_input_menu_items(&target);
                     if let Some(msg) = crate::chrome::native_menu::show(items, (x, y))
-                        && let Some(ch) = crate::menu_edit_key(&msg)
+                        && let Some(ch) = crate::platform::window_events::menu_edit_key(&msg)
                     {
                         self.pending_native_menu_edit_key = Some((ch, target.id.clone()));
                     }
