@@ -587,6 +587,10 @@ mod tests {
 
     #[test]
     fn sgr_red_foreground_is_mapped() {
+        // 断言的是深色主题 RED,与切主题测试共享进程级 scheme,须加锁避免
+        // 与后者并行时读到浅色版色值(2026-09 性能优化引入 Rc 缓存后实测
+        // 出现过一次这种竞态)。
+        let _guard = lock_scheme();
         let mut t = TerminalModel::new(40, 10);
         let _ = t.feed(b"\x1b[31mred\x1b[0m");
         let cell = &t.visible_lines()[0][0];
