@@ -121,6 +121,15 @@ pub enum HoverId {
     /// Agent 面板头部"＋"按钮:无背景的 `SquarePlus` 图标,未选中态静止 DIM,
     /// hover 平滑过渡到 GOLD(见 `agent_picker_toggle_button`)。
     AgentPickerToggle,
+    /// Project 面板「项目文档」标题行"＋"按钮,处理方式同 `AgentPickerToggle`
+    /// (见 `extensions::project::view`)。
+    ProjectDocsAdd,
+    /// Project 面板「Agent 记忆」标题行"＋"按钮,处理方式同 `AgentPickerToggle`。
+    ProjectMemoryAdd,
+    /// Project 面板「Git 远程仓库」标题行"＋"按钮:功能未接入前的纯视觉占位
+    /// (`interactive` 为假,点击无动作),hover 动画处理方式同
+    /// `AgentPickerToggle`。
+    ProjectRemoteAdd,
     /// 文件树搜索提交按钮(`FolderSearch`):静止 DIM,hover 过渡到 GOLD
     /// (见 `extensions/files.rs` 的搜索按钮)。
     FilesSearchSubmit,

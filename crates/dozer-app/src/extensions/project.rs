@@ -258,11 +258,28 @@ impl Operation<()> for CaptureDescriptionEditFocus {
     }
 }
 
+/// 面板头部带 hover 动画的"＋"图标按钮标识。本面板只有 `WorkspaceState`,
+/// 不挂内核 `App` 的 hover 动画表,`view` 通过调用方传入的 `ProjectPaneHover`
+/// 取动画进度,进入/离开则以 `Message::ToolbarHover` 上报给内核(转发到
+/// `HoverId`,同 `files::FilesToolbarTarget` 的既有先例)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectToolbarTarget {
+    Docs,
+    Memory,
+    Remote,
+}
+
 /// 组合 git 刷新结果里跟 Project 有关的部分(`branch`/`dirty`/`remote_url`)、
 /// daemon 改名结果。`GitRefreshed`/`NameRenamed` 由内核分发,带 `project_id`,
 /// 走 `with_project`;其余是用户交互消息。
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// 占位:非交互态图标按钮(如 Git 远程仓库"＋",功能未接入前)的
+    /// `icon_button_entry` 仍需要一个具体的 `on_select` 值,但 `interactive`
+    /// 为假时该值不会真的被 `on_press` 调用——这个变体只为满足类型签名。
+    Noop,
+    /// 面板头部"＋"按钮 hover 动画上报,见 `ProjectToolbarTarget` 文档。
+    ToolbarHover(ProjectToolbarTarget, bool),
     GitRefreshed(i64, Option<String>, bool, Vec<String>),
     /// 磁盘占用统计结果(排除构建产物后的字节数)。
     DiskUsageLoaded(i64, u64),

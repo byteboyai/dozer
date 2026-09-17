@@ -1332,6 +1332,17 @@ impl App {
             Message::Project(project::Message::TextInputMenuOpen(target)) => {
                 self.update(Message::TextInputMenuOpen(target));
             }
+            Message::Project(project::Message::ToolbarHover(target, hovered)) => {
+                // Project 面板头部"＋"按钮的 hover:本面板不挂 App 的 hover 动画表,
+                // 把进入/离开转发成 `HoverId` 由内核统一驱动动画进度(同
+                // `Message::Files(files::Message::ToolbarHover(..))` 的既有先例)。
+                let id = match target {
+                    project::ProjectToolbarTarget::Docs => HoverId::ProjectDocsAdd,
+                    project::ProjectToolbarTarget::Memory => HoverId::ProjectMemoryAdd,
+                    project::ProjectToolbarTarget::Remote => HoverId::ProjectRemoteAdd,
+                };
+                self.set_hover(id, hovered);
+            }
             Message::Project(msg) => {
                 let Some(project_id) = self.active_project_id else {
                     return;

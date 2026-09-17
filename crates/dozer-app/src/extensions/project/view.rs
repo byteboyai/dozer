@@ -8,6 +8,17 @@ use std::path::PathBuf;
 
 use super::*;
 
+/// 面板头部三颗"＋"按钮(Git 远程仓库 / 项目文档 / Agent 记忆)的 hover 动画
+/// 进度,由调用方(`app/view.rs`)从 `App::hover_progress` 取值后传入——本面板
+/// 只有 `WorkspaceState`,不挂内核的 hover 动画表。三个同类型 `f32` 相邻,
+/// 用具名字段的结构体传递,避免位置参数顺序传错(见 `CLAUDE.md` 参数结构体
+/// 裁决)。
+pub struct ProjectPaneHover {
+    pub docs_add: f32,
+    pub memory_add: f32,
+    pub remote_add: f32,
+}
+
 /// 面板主入口——`project` 为 `None` 时内核不会真正走到这里
 /// (`left_panel_area` 对 `PanelKind::Project` 无条件调用本函数,但
 /// `App::view()` 顶层只在有聚焦项目时才会渲染到这个分支),这里仍保留一次
@@ -20,6 +31,7 @@ pub fn view<'a>(
     project: Option<&'a ProjectInfo>,
     width: Length,
     outer: Border,
+    hover: ProjectPaneHover,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(p) = project else {
         return container(iced_widget::Space::new())
@@ -206,6 +218,23 @@ pub fn view<'a>(
                 text("Git 远程仓库")
                     .size(byteui::theme::font::label())
                     .color(byteui::theme::color::current().dim),
+                iced_widget::space::horizontal(),
+                // 尚未接入「添加 remote」流程,先与「项目文档」的 + 按钮对齐占位
+                // (2026-09-17 用户确认暂不接功能);`interactive: false` 使其
+                // 不挂 `on_press`,`on_select` 传 `Message::Noop` 纯粹满足签名。
+                icons::icon_button_entry(
+                    icons::IconKind::SquarePlus,
+                    byteui::theme::icon_size::row(),
+                    false,
+                    false,
+                    hover.remote_add,
+                    false,
+                    byteui::theme::geometry::tab_button_size(),
+                    false,
+                    Message::Noop,
+                    |hovered| Message::ToolbarHover(ProjectToolbarTarget::Remote, hovered),
+                    "",
+                ),
             ]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center),
@@ -239,6 +268,8 @@ pub fn view<'a>(
     content = content.push(links_section(
         "项目文档",
         links::LinkTarget::Docs,
+        ProjectToolbarTarget::Docs,
+        hover.docs_add,
         &ws_state.links,
         &ws_state.expanded_link_dirs,
         &ws_state.selected_link,
@@ -246,6 +277,8 @@ pub fn view<'a>(
     content = content.push(links_section(
         "Agent 记忆",
         links::LinkTarget::Memory,
+        ProjectToolbarTarget::Memory,
+        hover.memory_add,
         &ws_state.links,
         &ws_state.expanded_link_dirs,
         &ws_state.selected_link,
@@ -700,10 +733,16 @@ fn shorten_path(p: &str) -> String {
 fn links_section<'a>(
     title: &'static str,
     target: links::LinkTarget,
+    toolbar_target: ProjectToolbarTarget,
+    hover_t: f32,
     links_state: &'a links::LinksState,
     expanded: &'a std::collections::HashMap<PathBuf, Vec<links::DirRow>>,
     selected_link: &'a Option<PathBuf>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let tooltip = match target {
+        links::LinkTarget::Docs => "添加文档",
+        links::LinkTarget::Memory => "添加记忆",
+    };
     let mut col = column![].spacing(6);
     col = col.push(
         row![
@@ -716,17 +755,19 @@ fn links_section<'a>(
                 .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().cream),
             iced_widget::space::horizontal(),
-            button(
-                text("+")
-                    .size(byteui::theme::font::label())
-                    .color(byteui::theme::color::current().dim)
-            )
-            .on_press(Message::Pick(target))
-            .style(|_t, _s| iced_widget::button::Style {
-                background: None,
-                text_color: byteui::theme::color::current().dim,
-                ..iced_widget::button::Style::default()
-            }),
+            icons::icon_button_entry(
+                icons::IconKind::SquarePlus,
+                byteui::theme::icon_size::row(),
+                false,
+                false,
+                hover_t,
+                false,
+                byteui::theme::geometry::tab_button_size(),
+                true,
+                Message::Pick(target),
+                move |hovered| Message::ToolbarHover(toolbar_target, hovered),
+                tooltip,
+            ),
         ]
         .spacing(6)
         .align_y(iced_widget::core::Alignment::Center),

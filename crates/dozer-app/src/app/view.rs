@@ -914,6 +914,11 @@ pub(crate) fn panel_body<'a>(
                     ws.project.as_ref(),
                     Length::FillPortion(list_portion),
                     zone_pane_border(zone, lc),
+                    project::ProjectPaneHover {
+                        docs_add: app.hover_progress(HoverId::ProjectDocsAdd),
+                        memory_add: app.hover_progress(HoverId::ProjectMemoryAdd),
+                        remote_add: app.hover_progress(HoverId::ProjectRemoteAdd),
+                    },
                 )
                 .map(Message::Project);
             let preview = project_preview_pane(

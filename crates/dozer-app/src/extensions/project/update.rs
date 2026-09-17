@@ -17,6 +17,10 @@ pub fn update(
     emit: impl Fn(Message) + Send + 'static,
 ) {
     match msg {
+        Message::Noop => {}
+        Message::ToolbarHover(..) => {
+            unreachable!("由内核拦截处理,见 project::Message::ToolbarHover 文档")
+        }
         Message::GitRefreshed(_, branch, dirty, remote_url) => {
             ws_state.branch = branch;
             ws_state.dirty = dirty;
