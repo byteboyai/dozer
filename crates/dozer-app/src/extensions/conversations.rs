@@ -758,4 +758,49 @@ mod tests {
     fn conversation_agents_present_empty_for_no_rows() {
         assert!(conversation_agents_present(&[]).is_empty());
     }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn agent_picker_items_all_entry_enabled_only_when_a_filter_is_set() {
+        let rows = vec![session_row("a", AgentKind::Claude)];
+        let no_filter = WorkspaceState {
+            sessions: Some(rows.clone()),
+            agent_filter: None,
+            ..WorkspaceState::default()
+        };
+        let all_enabled = |ws: &WorkspaceState| match &agent_picker_items(ws)[0] {
+            crate::native_menu::Item::Entry { enabled, .. } => *enabled,
+            crate::native_menu::Item::Separator => panic!("expected entry"),
+        };
+        assert!(!all_enabled(&no_filter), "已经是'全部'时该项自身该锁定");
+
+        let with_filter = WorkspaceState {
+            sessions: Some(rows),
+            agent_filter: Some(AgentKind::Claude),
+            ..WorkspaceState::default()
+        };
+        assert!(all_enabled(&with_filter), "筛了某个 agent 时'全部'项该可点");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn agent_picker_items_locks_currently_selected_agent() {
+        let ws_state = WorkspaceState {
+            sessions: Some(vec![
+                session_row("a", AgentKind::Claude),
+                session_row("b", AgentKind::Opencode),
+            ]),
+            agent_filter: Some(AgentKind::Claude),
+            ..WorkspaceState::default()
+        };
+        let items = agent_picker_items(&ws_state);
+        // items[0] = "全部",之后按 conversation_agents_present 的稳定顺序
+        // (Claude 先于 Opencode)排列。
+        let enabled_at = |i: usize| match &items[i] {
+            crate::native_menu::Item::Entry { enabled, .. } => *enabled,
+            crate::native_menu::Item::Separator => panic!("expected entry"),
+        };
+        assert!(!enabled_at(1), "当前选中的 Claude 该锁定");
+        assert!(enabled_at(2), "未选中的 Opencode 该可点");
+    }
 }

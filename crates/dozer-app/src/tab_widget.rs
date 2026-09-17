@@ -631,3 +631,41 @@ where
 
     stack![dismiss, positioned].into()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn tab_overflow_items_colors_active_tab_cream_others_body() {
+        let entries = vec![
+            (0usize, "a".to_string(), false),
+            (1usize, "b".to_string(), true),
+        ];
+        let items = tab_overflow_items(&entries, |idx| idx);
+        let color_at = |i: usize| match &items[i] {
+            crate::native_menu::Item::Entry { color, .. } => *color,
+            crate::native_menu::Item::Separator => panic!("expected entry"),
+        };
+        assert_eq!(color_at(0), byteui::theme::color::current().body);
+        assert_eq!(color_at(1), byteui::theme::color::current().cream);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn tab_overflow_items_msg_carries_original_index_via_on_select() {
+        let entries = vec![(5usize, "five".to_string(), false)];
+        let items = tab_overflow_items(&entries, |idx| format!("picked:{idx}"));
+        match &items[0] {
+            crate::native_menu::Item::Entry { msg, .. } => assert_eq!(msg, "picked:5"),
+            crate::native_menu::Item::Separator => panic!("expected entry"),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn tab_overflow_items_empty_entries_produce_empty_menu() {
+        assert!(tab_overflow_items(&[], |idx: usize| idx).is_empty());
+    }
+}

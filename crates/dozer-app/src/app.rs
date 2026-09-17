@@ -5233,7 +5233,10 @@ impl App {
                 #[cfg(target_os = "macos")]
                 {
                     let last_cursor = self.last_cursor;
-                    let items = crate::topbar::project_add_menu_items(self);
+                    let open_ids: std::collections::HashSet<i64> =
+                        self.projects.keys().copied().collect();
+                    let items =
+                        crate::topbar::project_add_menu_items(&self.recent_projects, &open_ids);
                     if let Some(msg) = crate::native_menu::show(items, last_cursor) {
                         self.update(msg);
                     }
@@ -10942,6 +10945,80 @@ mod tests {
             secure: false,
         };
         assert_eq!(text_input_menu_items(&target).len(), 4);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn database_source_menu_items_locks_refresh_when_not_expanded() {
+        let items = database_source_menu_items("pg-main", false);
+        let refresh_enabled = items.iter().find_map(|i| match i {
+            crate::native_menu::Item::Entry {
+                msg: Message::Database(database::Message::SchemaRefresh(_)),
+                enabled,
+                ..
+            } => Some(*enabled),
+            _ => None,
+        });
+        assert_eq!(refresh_enabled, Some(false), "未展开时刷新该锁定");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn database_source_menu_items_enables_refresh_when_expanded() {
+        let items = database_source_menu_items("pg-main", true);
+        let refresh_enabled = items.iter().find_map(|i| match i {
+            crate::native_menu::Item::Entry {
+                msg: Message::Database(database::Message::SchemaRefresh(_)),
+                enabled,
+                ..
+            } => Some(*enabled),
+            _ => None,
+        });
+        assert_eq!(refresh_enabled, Some(true));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn database_source_menu_items_always_has_four_entries() {
+        assert_eq!(database_source_menu_items("pg-main", false).len(), 4);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn category_context_menu_items_root_pseudo_node_has_only_new_category() {
+        let items = category_context_menu_items(None, None);
+        assert_eq!(items.len(), 1);
+        assert!(matches!(
+            items[0],
+            crate::native_menu::Item::Entry {
+                msg: Message::Todo(todo::Message::CategoryNewSibling(None)),
+                ..
+            }
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn category_context_menu_items_real_node_has_full_action_set() {
+        let items = category_context_menu_items(Some(7), Some(3));
+        assert_eq!(
+            items.len(),
+            7,
+            "新建子/同级、上移、下移、移动到、重命名、删除"
+        );
+        let has_sibling_with_parent = items.iter().any(|i| {
+            matches!(
+                i,
+                crate::native_menu::Item::Entry {
+                    msg: Message::Todo(todo::Message::CategoryNewSibling(Some(3))),
+                    ..
+                }
+            )
+        });
+        assert!(
+            has_sibling_with_parent,
+            "新建同级分类该挂到 sibling_parent_id"
+        );
     }
 
     /// 复现验收反馈的核心机制:关 tab 后立刻退出,`event_loop.exit()` 不该

@@ -3862,4 +3862,62 @@ mod tests {
             assigned_agent: None,
         }
     }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn dispatch_items_covers_the_four_headless_agents() {
+        let items = dispatch_items(2);
+        assert_eq!(items.len(), 4);
+        let agents: Vec<AgentKind> = items
+            .iter()
+            .map(|i| match i {
+                crate::native_menu::Item::Entry {
+                    msg: Message::AssignAgent(idx, agent),
+                    ..
+                } => {
+                    assert_eq!(*idx, 2);
+                    *agent
+                }
+                _ => panic!("expected AssignAgent entry"),
+            })
+            .collect();
+        assert_eq!(
+            agents,
+            vec![
+                AgentKind::Claude,
+                AgentKind::Codebuddy,
+                AgentKind::Opencode,
+                AgentKind::V8agent,
+            ]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn status_items_covers_all_four_states_for_given_index() {
+        let items = status_items(9);
+        assert_eq!(items.len(), 4);
+        let states: Vec<TodoState> = items
+            .iter()
+            .map(|i| match i {
+                crate::native_menu::Item::Entry {
+                    msg: Message::StatusPick(idx, st),
+                    ..
+                } => {
+                    assert_eq!(*idx, 9);
+                    *st
+                }
+                _ => panic!("expected StatusPick entry"),
+            })
+            .collect();
+        assert_eq!(
+            states,
+            vec![
+                TodoState::Pending,
+                TodoState::InProgress,
+                TodoState::Suspended,
+                TodoState::Done,
+            ]
+        );
+    }
 }

@@ -408,12 +408,14 @@ fn project_tabs_row(
 /// `project_add_menu_popup` 的原生菜单版本,纯数据组装。仅 macOS 编译,
 /// 非 mac 平台继续走 `project_add_menu_popup` 的 iced 弹层。
 #[cfg(target_os = "macos")]
-pub(crate) fn project_add_menu_items(app: &App) -> Vec<crate::native_menu::Item<Message>> {
+pub(crate) fn project_add_menu_items(
+    recent_projects: &[ProjectInfo],
+    open_project_ids: &std::collections::HashSet<i64>,
+) -> Vec<crate::native_menu::Item<Message>> {
     use crate::native_menu::Item;
-    let mut projects: Vec<&ProjectInfo> = app
-        .recent_projects
+    let mut projects: Vec<&ProjectInfo> = recent_projects
         .iter()
-        .filter(|p| !app.projects.contains_key(&p.id))
+        .filter(|p| !open_project_ids.contains(&p.id))
         .collect();
     projects.sort_by_key(|p| std::cmp::Reverse(p.updated_ms));
     let mut items: Vec<Item<Message>> = projects
@@ -756,4 +758,71 @@ fn project_tab_dot(ws: &Workspace) -> Option<Color> {
         .map(|t| (t.agent_state, t.agent))
         .collect();
     project_dot(&alive)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project(id: i64, name: &str, updated_ms: u64) -> ProjectInfo {
+        ProjectInfo {
+            id,
+            path: format!("/tmp/{name}"),
+            name: name.to_string(),
+            last_active_ms: updated_ms,
+            created_ms: updated_ms,
+            updated_ms,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn project_add_menu_items_excludes_already_open_projects() {
+        let recent = [project(1, "a", 100), project(2, "b", 200)];
+        let open: std::collections::HashSet<i64> = [2].into_iter().collect();
+        let items = project_add_menu_items(&recent, &open);
+        let has_b = items.iter().any(|i| {
+            matches!(
+                i,
+                crate::native_menu::Item::Entry {
+                    msg: Message::ProjectSelect(2),
+                    ..
+                }
+            )
+        });
+        assert!(!has_b, "已打开的项目不该出现在菜单里");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn project_add_menu_items_sorts_recent_projects_by_updated_ms_desc() {
+        let recent = [project(1, "older", 100), project(2, "newer", 200)];
+        let items = project_add_menu_items(&recent, &std::collections::HashSet::new());
+        let msg_at = |idx: usize| match &items[idx] {
+            crate::native_menu::Item::Entry { msg, .. } => msg.clone(),
+            crate::native_menu::Item::Separator => panic!("expected entry at {idx}"),
+        };
+        assert!(matches!(msg_at(0), Message::ProjectSelect(2)));
+        assert!(matches!(msg_at(1), Message::ProjectSelect(1)));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn project_add_menu_items_always_ends_with_open_project_action() {
+        let items = project_add_menu_items(&[], &std::collections::HashSet::new());
+        assert!(matches!(
+            items.last(),
+            Some(crate::native_menu::Item::Entry {
+                msg: Message::ProjectTabPickFolder,
+                ..
+            })
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn project_add_menu_items_no_separator_when_no_recent_projects() {
+        let items = project_add_menu_items(&[], &std::collections::HashSet::new());
+        assert_eq!(items.len(), 1, "没有最近项目时不该有多余的分隔线");
+    }
 }

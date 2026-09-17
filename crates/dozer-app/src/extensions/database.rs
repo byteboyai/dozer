@@ -5292,4 +5292,11 @@ mod content_message_tests {
         assert!(b.result.is_none(), "过期/未运行的结果不应落地");
         assert!(!b.loading);
     }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn tab_overflow_items_empty_when_no_tabs_open() {
+        let ws_state = WorkspaceState::default();
+        assert!(tab_overflow_items(&ws_state).is_empty());
+    }
 }

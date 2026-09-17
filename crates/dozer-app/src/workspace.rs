@@ -5235,4 +5235,32 @@ mod tests {
             "点非编辑器区仍应让出预览编辑器焦点"
         );
     }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn agent_picker_items_has_nine_rows_matching_old_picker() {
+        // 六个 agent + 1 条分隔线 + 两个 shell(Git Shell/纯 Shell)= 9 行,
+        // 对应旧版文档说的"八个选项"(不含分隔线本身)。
+        assert_eq!(agent_picker_items().len(), 9);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn agent_picker_items_separator_splits_agents_from_shells() {
+        let items = agent_picker_items();
+        assert!(matches!(items[6], crate::native_menu::Item::Separator));
+        let launches: Vec<PickerLaunch> = items
+            .iter()
+            .filter_map(|i| match i {
+                crate::native_menu::Item::Entry {
+                    msg: Message::AgentPickerSelect(launch),
+                    ..
+                } => Some(*launch),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(launches.len(), 8, "六个 agent + 两个 shell,不含分隔线");
+        assert_eq!(launches[6], PickerLaunch::Git);
+        assert_eq!(launches[7], PickerLaunch::Agent(None));
+    }
 }
