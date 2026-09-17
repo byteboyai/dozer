@@ -7,6 +7,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use byteui::interaction::icons;
+use iced_widget::core::{Element, Length};
+use iced_widget::{button, column, container, row, scrollable, text};
+
 /// 该文件在某一次提交里的记录——按 `build()` 的 revwalk 顺序(时间倒序)
 /// 收集,只包含真正改动过这个文件的提交。
 #[derive(Debug, Clone)]
@@ -15,6 +19,9 @@ pub struct FileHistoryEntry {
     pub short_sha: String,
     /// commit message 首行。
     pub summary: String,
+    /// 收集了作者名但当前弹窗列表未渲染(见 spec「架构」数据类型定义),
+    /// 保留在接口里供后续列表项展示作者,故 `#[allow(dead_code)]`。
+    #[allow(dead_code)]
     pub author: Option<String>,
     /// author time,Unix 秒。
     pub time: i64,
@@ -22,9 +29,13 @@ pub struct FileHistoryEntry {
 
 #[derive(Debug, Clone)]
 pub struct FileHistorySnapshot {
+    /// 目标字段:当前 view 只消费 `entries`,这两个字段留作后续"快照是否
+    /// 仍对应当前目标"的核对接口,故 `#[allow(dead_code)]`。
+    #[allow(dead_code)]
     pub repo_path: PathBuf,
     /// 仓库相对路径,git 查询与磁盘读写都用它(`repo_path.join(file_path)`
     /// 拼出实际路径)。
+    #[allow(dead_code)]
     pub file_path: PathBuf,
     pub entries: Vec<FileHistoryEntry>,
 }
@@ -36,6 +47,10 @@ pub const DEFAULT_MAX_COUNT: usize = 200;
 /// 一次「查看此文件历史」的目标——右键哪个文件、属于哪个项目/仓库。
 #[derive(Debug, Clone)]
 pub struct FileHistoryTarget {
+    /// 当前 `SnapshotLoaded` 只按 `repo_path`/`file_path` 核对目标(见 spec
+    /// 「错误处理」),`project_id` 留在接口里供后续按项目核对,故
+    /// `#[allow(dead_code)]`。
+    #[allow(dead_code)]
     pub project_id: i64,
     pub repo_path: PathBuf,
     /// 仓库相对路径,`build`/`diff_against_current`/`rollback_to` 都吃它。
@@ -64,6 +79,9 @@ impl State {
         }
     }
 
+    /// 目标只读访问器:作为 `State` 的公开接口被 plan 定义,当前 view/update
+    /// 内部直接读私有字段、尚未从外部调用,故 `#[allow(dead_code)]`。
+    #[allow(dead_code)]
     pub fn target(&self) -> Option<&FileHistoryTarget> {
         self.target.as_ref()
     }
@@ -154,11 +172,10 @@ pub fn update(
             handle.spawn(async move {
                 let repo_path2 = repo_path.clone();
                 let file_path2 = file_path.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    rollback_to(&repo_path2, &file_path2, oid)
-                })
-                .await
-                .unwrap_or_else(|e| Err(format!("回滚任务失败: {e}")));
+                let result =
+                    tokio::task::spawn_blocking(move || rollback_to(&repo_path2, &file_path2, oid))
+                        .await
+                        .unwrap_or_else(|e| Err(format!("回滚任务失败: {e}")));
                 emit(Message::RollbackDone(oid, result));
             });
         }
@@ -326,6 +343,264 @@ pub fn rollback_to(repo_path: &Path, file_path: &Path, oid: git2::Oid) -> Result
     Ok(())
 }
 
+/// 弹窗顶部标题 + 左侧提交列表 + 右侧 diff 区。布局参照
+/// `project::project_delete_confirm_popup` 的窗口级卡片外壳(CARD 底 +
+/// 圆角描边),但宽度/高度不用 `dialog::width`(那是"整窗 1/3"的确认框
+/// 默认值,内容是左右分栏的提交列表 + diff,1/3 窗宽放不下,`dialog.rs`
+/// 文档本身允许"字段特别多的表单"在这个默认值基础上另外调整)。
+pub fn popup_view<'a>(
+    state: &'a State,
+    window_width: f32,
+    window_height: f32,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let title = row![
+        icons::view(
+            icons::IconKind::History,
+            byteui::theme::icon_size::row(),
+            byteui::theme::color::current().cream,
+        ),
+        text("文件历史")
+            .size(byteui::theme::font::subtitle())
+            .color(byteui::theme::color::current().cream),
+        iced_widget::space::horizontal(),
+        button(
+            text("×")
+                .size(byteui::theme::font::subtitle())
+                .color(byteui::theme::color::current().dim)
+        )
+        .on_press(Message::Close)
+        .style(|_t, _s| iced_widget::button::Style {
+            background: None,
+            text_color: byteui::theme::color::current().dim,
+            ..iced_widget::button::Style::default()
+        }),
+    ]
+    .spacing(6)
+    .align_y(iced_widget::core::Alignment::Center);
+
+    let body = row![
+        container(commit_list_view(state))
+            .width(Length::Fixed(240.0))
+            .height(Length::Fill),
+        diff_area_view(state),
+    ]
+    .spacing(12)
+    .height(Length::Fill);
+
+    let dialog = container(column![title, body].spacing(12))
+        .width(Length::Fixed(window_width * 0.75))
+        .height(Length::Fixed(window_height * 0.8))
+        .padding(16)
+        .style(crate::dialog::card_style);
+
+    container(dialog)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .into()
+}
+
+fn commit_list_view<'a>(
+    state: &'a State,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let Some(snapshot) = state.snapshot() else {
+        return container(
+            text("加载中…")
+                .size(byteui::theme::font::caption())
+                .color(byteui::theme::color::current().dim),
+        )
+        .padding(8)
+        .into();
+    };
+    let entries = match snapshot {
+        Ok(s) => &s.entries,
+        Err(err) => {
+            return container(
+                text(err.clone())
+                    .size(byteui::theme::font::caption())
+                    .color(byteui::theme::color::current().red),
+            )
+            .padding(8)
+            .into();
+        }
+    };
+    if entries.is_empty() {
+        return container(
+            text("该文件没有提交记录")
+                .size(byteui::theme::font::caption())
+                .color(byteui::theme::color::current().dim),
+        )
+        .padding(8)
+        .into();
+    }
+    let mut col = column![].spacing(4);
+    for entry in entries {
+        let is_selected = state.selected() == Some(entry.oid);
+        let label = column![
+            text(entry.summary.clone())
+                .size(byteui::theme::font::body())
+                .color(byteui::theme::color::current().cream),
+            text(format_commit_time(entry.time))
+                .size(byteui::theme::font::caption_sm())
+                .color(byteui::theme::color::current().dim),
+        ]
+        .spacing(2);
+        let row_btn = button(label)
+            .on_press(Message::SelectCommit(entry.oid))
+            .width(Length::Fill)
+            .padding(8)
+            .style(move |_t, _s| iced_widget::button::Style {
+                background: if is_selected {
+                    Some(byteui::theme::color::current().card.into())
+                } else {
+                    None
+                },
+                text_color: byteui::theme::color::current().body,
+                ..iced_widget::button::Style::default()
+            });
+        col = col.push(row_btn);
+    }
+    scrollable(col)
+        .direction(scrollable::Direction::Vertical(
+            byteui::interaction::scrollbar::scrollbar(),
+        ))
+        .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style())
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+fn diff_area_view<'a>(
+    state: &'a State,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let Some(oid) = state.selected() else {
+        return container(
+            text("未选中版本")
+                .size(byteui::theme::font::caption())
+                .color(byteui::theme::color::current().dim),
+        )
+        .padding(8)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into();
+    };
+
+    let header = row![
+        text(format!("当前 vs {}", short_sha_of(state, oid)))
+            .size(byteui::theme::font::label())
+            .color(byteui::theme::color::current().cream),
+        iced_widget::space::horizontal(),
+        rollback_button(state, oid),
+    ]
+    .spacing(8)
+    .align_y(iced_widget::core::Alignment::Center);
+
+    let content: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = match state
+        .diff_for(oid)
+    {
+        None => container(
+            text("加载中…")
+                .size(byteui::theme::font::caption())
+                .color(byteui::theme::color::current().dim),
+        )
+        .padding(8)
+        .into(),
+        Some(Err(err)) => container(
+            text(err.clone())
+                .size(byteui::theme::font::caption())
+                .color(byteui::theme::color::current().red),
+        )
+        .padding(8)
+        .into(),
+        Some(Ok(patch)) if patch.is_empty() => container(
+            text("内容相同")
+                .size(byteui::theme::font::caption())
+                .color(byteui::theme::color::current().dim),
+        )
+        .padding(8)
+        .into(),
+        Some(Ok(patch)) => scrollable(crate::extensions::diff_render::colored_diff_lines(patch))
+            .direction(scrollable::Direction::Vertical(
+                byteui::interaction::scrollbar::scrollbar(),
+            ))
+            .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into(),
+    };
+
+    let mut col = column![header, content]
+        .spacing(8)
+        .width(Length::Fill)
+        .height(Length::Fill);
+    if let Some(err) = state.rollback_error() {
+        col = col.push(
+            text(format!("回滚失败: {err}"))
+                .size(byteui::theme::font::caption())
+                .color(byteui::theme::color::current().red),
+        );
+    }
+    col.into()
+}
+
+fn rollback_button<'a>(
+    state: &'a State,
+    oid: git2::Oid,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let disabled = state.rollback_pending().is_some();
+    button(
+        text("回滚")
+            .size(byteui::theme::font::label())
+            .color(byteui::theme::color::current().gold),
+    )
+    .on_press_maybe((!disabled).then_some(Message::RollbackRequest(oid)))
+    .padding([4, 10])
+    .style(crate::dialog::action_button_style(
+        byteui::theme::color::current().gold,
+    ))
+    .into()
+}
+
+fn short_sha_of(state: &State, oid: git2::Oid) -> String {
+    state
+        .snapshot()
+        .and_then(|r| r.as_ref().ok())
+        .and_then(|s| s.entries.iter().find(|e| e.oid == oid))
+        .map(|e| e.short_sha.clone())
+        .unwrap_or_else(|| oid.to_string().chars().take(7).collect())
+}
+
+/// commit 时间戳格式化,`YYYY-MM-DD HH:MM:SS`,UTC。跟
+/// `git_log.rs::format_commit_time` 同源但那边是模块私有、不便跨模块复用
+/// (该函数自己的文档也是这么处理 `todo.rs` 同名函数的),这里照抄一份。
+fn format_commit_time(unix_secs: i64) -> String {
+    let secs = unix_secs.max(0) as u64;
+    let days = (secs / 86_400) as i64;
+    let secs_of_day = secs % 86_400;
+    let (h, m, s) = (
+        secs_of_day / 3600,
+        (secs_of_day / 60) % 60,
+        secs_of_day % 60,
+    );
+    let (y, mo, d) = civil_from_days(days);
+    format!("{y:04}-{mo:02}-{d:02} {h:02}:{m:02}:{s:02}")
+}
+
+/// Howard Hinnant 的 `civil_from_days` 算法:Unix epoch 起的天数 → (年, 月, 日)。
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,8 +690,7 @@ mod tests {
     #[test]
     fn build_returns_empty_for_file_never_touched() {
         let (_d, repo) = mkrepo();
-        let snapshot =
-            build(&repo, Path::new("never-existed.txt"), 10).expect("build 应成功");
+        let snapshot = build(&repo, Path::new("never-existed.txt"), 10).expect("build 应成功");
         assert!(snapshot.entries.is_empty());
     }
 
@@ -460,7 +734,10 @@ mod tests {
         let c1_oid = snapshot.entries[1].oid;
         rollback_to(&repo, Path::new("a.txt"), c1_oid).unwrap();
         let patch = diff_against_current(&repo, Path::new("a.txt"), c1_oid).unwrap();
-        assert!(patch.is_empty(), "回滚后跟同一版本对比应是内容相同: {patch:?}");
+        assert!(
+            patch.is_empty(),
+            "回滚后跟同一版本对比应是内容相同: {patch:?}"
+        );
     }
 
     #[tokio::test]
@@ -611,9 +888,12 @@ mod tests {
             s.diff_cache.insert(oid, Ok("stale".to_string()));
         }
         let handle = tokio::runtime::Handle::current();
-        update(&mut state, Message::RollbackDone(oid, Ok(())), &handle, |_| {
-            panic!("selected 不是这个 oid,不该重新查询 diff")
-        });
+        update(
+            &mut state,
+            Message::RollbackDone(oid, Ok(())),
+            &handle,
+            |_| panic!("selected 不是这个 oid,不该重新查询 diff"),
+        );
         let s = state.unwrap();
         assert!(s.rollback_pending().is_none());
         assert!(s.diff_for(oid).is_none(), "回滚成功应清掉旧缓存");
