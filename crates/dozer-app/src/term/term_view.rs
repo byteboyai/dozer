@@ -528,7 +528,7 @@ mod tests {
     fn row_of(input: &[u8], cols: u16) -> Vec<Cell> {
         let mut t = TerminalModel::new(cols, 4);
         let _ = t.feed(input);
-        t.visible_lines().remove(0)
+        t.visible_lines()[0].clone()
     }
 
     #[test]
@@ -537,7 +537,7 @@ mod tests {
         let _ = t.feed(b"abcdef");
         t.selection_start(1, 0, false);
         t.selection_update(3, 0, true); // 选中 bcd
-        let row = t.visible_lines().remove(0);
+        let row = t.visible_lines()[0].clone();
         let runs = layout_runs(&row, TEST_TERM_BG);
         let shape: Vec<_> = runs
             .iter()
@@ -555,7 +555,7 @@ mod tests {
         let _ = t.feed(b"a b");
         t.selection_start(0, 0, false);
         t.selection_update(2, 0, true); // 选中 "a b"，中间空格也要高亮
-        let row = t.visible_lines().remove(0);
+        let row = t.visible_lines()[0].clone();
         let runs = layout_runs(&row, TEST_TERM_BG);
         assert_eq!(runs.len(), 1);
         assert_eq!(

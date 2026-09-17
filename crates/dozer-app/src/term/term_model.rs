@@ -12,6 +12,7 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Processor, Rgb};
+use byteui::theme::color::ColorScheme;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -244,6 +245,10 @@ impl EventListener for PtyResponses {
     }
 }
 
+/// `visible_lines` 的构建缓存：配色方案 + 网格快照。方案随缓存一起记，
+/// 因为切浅/深主题不经任何 terminal mutator，只有靠它判断缓存是否失效。
+type LinesCache = Option<(ColorScheme, Rc<Vec<Vec<Cell>>>)>;
+
 /// headless 终端状态机：字节流喂给 VTE 解析器，驱动 `alacritty_terminal`
 /// 的 `Term` 网格状态；对外只暴露只读快照（`visible_lines`/`cursor`）。
 pub struct TerminalModel {
@@ -251,6 +256,10 @@ pub struct TerminalModel {
     parser: Processor,
     /// 与 `term` 内 listener 共享同一块缓冲，`feed` 后取走。
     responses: PtyResponses,
+    /// 上次 `visible_lines()` 的构建结果；`None` = 脏（需要重建）。用 `Rc`
+    /// 是为了 `visible_lines(&self)` 干净时能零拷贝返回一份共享句柄，
+    /// 不破坏 `TermCanvas` 对模型的不可变借用（`draw` 只能拿到 `&self`）。
+    cache: RefCell<LinesCache>,
 }
 
 impl TerminalModel {
@@ -266,6 +275,7 @@ impl TerminalModel {
             term,
             parser: Processor::new(),
             responses,
+            cache: RefCell::new(None),
         }
     }
 
@@ -276,6 +286,7 @@ impl TerminalModel {
     /// 查询不能补发陈旧应答）。
     #[must_use = "PTY 应答字节需要显式处理：实时输出写回 daemon，快照回放丢弃"]
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<u8> {
+        *self.cache.borrow_mut() = None;
         // `Processor::advance` 需要同时可变借用 parser 与 term；先解构再
         // 分别取字段引用，避免对 `self` 的双重可变借用。
         let Self { term, parser, .. } = self;
@@ -291,6 +302,7 @@ impl TerminalModel {
 
     /// 调整终端尺寸，尽量保留既有内容（委托给 `Term::resize` 的重排逻辑）。
     pub fn resize(&mut self, cols: u16, rows: u16) {
+        *self.cache.borrow_mut() = None;
         let size = TermSize {
             columns: cols as usize,
             screen_lines: rows as usize,
@@ -301,11 +313,13 @@ impl TerminalModel {
     /// 向历史方向（正数）或活动区方向（负数）滚动视口 `delta` 行；
     /// 越界由 alacritty 自动钳制在 `[0, history_len]`。
     pub fn scroll_display(&mut self, delta: i32) {
+        *self.cache.borrow_mut() = None;
         self.term.scroll_display(Scroll::Delta(delta));
     }
 
     /// 回到活动区底部（`display_offset` 归零）。
     pub fn scroll_to_bottom(&mut self) {
+        *self.cache.borrow_mut() = None;
         self.term.scroll_display(Scroll::Bottom);
     }
 
@@ -335,6 +349,7 @@ impl TerminalModel {
     /// 鼠标按下：在 `(col, row)`（视口坐标）起一个新的简单选区。
     /// `right_half` 表示按点落在格子的右半（决定选区端点贴哪一侧）。
     pub fn selection_start(&mut self, col: usize, row: usize, right_half: bool) {
+        *self.cache.borrow_mut() = None;
         let point = self.viewport_to_point(col, row);
         let side = if right_half { Side::Right } else { Side::Left };
         self.term.selection = Some(Selection::new(SelectionType::Simple, point, side));
@@ -342,6 +357,7 @@ impl TerminalModel {
 
     /// 鼠标拖拽：把选区末端拖到 `(col, row)`（视口坐标）。
     pub fn selection_update(&mut self, col: usize, row: usize, right_half: bool) {
+        *self.cache.borrow_mut() = None;
         let point = self.viewport_to_point(col, row);
         let side = if right_half { Side::Right } else { Side::Left };
         if let Some(selection) = &mut self.term.selection {
@@ -356,12 +372,19 @@ impl TerminalModel {
 
     /// 清除选区。
     pub fn selection_clear(&mut self) {
+        *self.cache.borrow_mut() = None;
         self.term.selection = None;
     }
 
     /// 可视网格快照，逐行逐格返回（已计入 `display_offset`——回看历史时
     /// 返回的就是屏幕上应显示的行）。宽字符的 spacer 格 `ch` 置为空格。
-    pub fn visible_lines(&self) -> Vec<Vec<Cell>> {
+    pub fn visible_lines(&self) -> Rc<Vec<Vec<Cell>>> {
+        let scheme = byteui::theme::color::current_scheme();
+        if let Some((cached_scheme, cached)) = &*self.cache.borrow()
+            && *cached_scheme == scheme
+        {
+            return Rc::clone(cached);
+        }
         let grid = self.term.grid();
         let cols = grid.columns();
         let rows = grid.screen_lines();
@@ -374,7 +397,7 @@ impl TerminalModel {
         let table = ansi16();
         let dfg = default_fg();
 
-        (0..rows)
+        let built: Vec<Vec<Cell>> = (0..rows)
             .map(|row| {
                 // 视口第 `row` 行对应网格 `Line(row - offset)`：负值索引
                 // 进入滚屏历史（alacritty 的 `Index<Line>` 原生支持）。
@@ -398,7 +421,11 @@ impl TerminalModel {
                     })
                     .collect()
             })
-            .collect()
+            .collect();
+
+        let shared = Rc::new(built);
+        *self.cache.borrow_mut() = Some((scheme, Rc::clone(&shared)));
+        shared
     }
 
     /// 光标位置 `(col, row)`，row 为可视行号（无 scrollback，因此等于
@@ -751,6 +778,24 @@ mod tests {
         assert_eq!(default_fg_rgb(), (0x36, 0x42, 0x4e));
         byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Dark);
         assert_eq!(default_fg_rgb(), (0x9A, 0xB4, 0xC4));
+    }
+
+    /// `visible_lines` 的缓存按配色方案失效：切主题不经任何 terminal
+    /// mutator，若缓存只按"脏/净"判断，切主题后终端会一直用旧色。这里
+    /// 验证浅色主题的红与深色不同，且切回后能读到新值（不是陈旧缓存）。
+    #[test]
+    fn visible_lines_cache_recolors_after_scheme_switch() {
+        let _guard = lock_scheme();
+        byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Dark);
+        let mut t = TerminalModel::new(40, 10);
+        let _ = t.feed(b"\x1b[31mred\x1b[0m");
+        assert_eq!(t.visible_lines()[0][0].fg, (0xFF, 0x6E, 0x6E)); // 深色 RED
+
+        byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Light);
+        assert_eq!(t.visible_lines()[0][0].fg, (0xd1, 0x48, 0x3f)); // 浅色 RED
+
+        byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Dark);
+        assert_eq!(t.visible_lines()[0][0].fg, (0xFF, 0x6E, 0x6E));
     }
 
     /// opencode 靠 OSC 10/11 查询探测终端真实前景/背景色来决定自己的
