@@ -35,6 +35,7 @@ use winit::{
 
 use crate::app::{App, Message, PanelKind};
 use crate::extensions;
+use crate::platform::search_overlay;
 use crate::preview;
 use crate::theme;
 
@@ -50,6 +51,14 @@ pub(crate) enum Runner {
         window: Arc<winit::window::Window>,
         queue: wgpu::Queue,
         device: wgpu::Device,
+        /// 建主窗口 wgpu 资源时用的 `Instance`/`Adapter`,原本只是
+        /// `resumed()` 里的局部变量、用完就扔——search overlay 窗口
+        /// (`platform/search_overlay.rs`)要另开一个 `Surface`+`Engine`,
+        /// 必须用同一个 `Instance` 建 surface、同一个 `Adapter` 建
+        /// `Engine`(不能用一个新建的、跟当前 `device`/`queue` 没有血缘
+        /// 关系的 `Instance`/`Adapter`),所以补存下来。
+        instance: wgpu::Instance,
+        adapter: wgpu::Adapter,
         surface: wgpu::Surface<'static>,
         format: wgpu::TextureFormat,
         renderer: iced_renderer::Renderer,
@@ -121,6 +130,9 @@ pub(crate) enum Runner {
         /// 事件循环代理:webview IPC handler 用它把 `WebViewFocused` 送回
         /// UI 线程(winit 收不到子 webview 上的鼠标点击)。
         proxy: winit::event_loop::EventLoopProxy<Message>,
+        /// 独立原生窗口宿主——`None` 表示当前没开。生命周期由
+        /// `sync_search_overlay` 按 `ws.search.is_open()` 单向驱动开/关。
+        search_overlay: Option<search_overlay::SearchOverlay>,
     },
 }
 
@@ -1010,6 +1022,41 @@ impl Runner {
         );
     }
 
+    /// 独立按 `ws.search.is_open()` 开/关 search overlay 窗口,跟
+    /// `sync_previews` 同款"每次分发完消息就跑一遍"模式,但各管各的
+    /// (webview 池同步跟 overlay 窗口生命周期没有交集)。
+    fn sync_search_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let Self::Ready {
+            window,
+            instance,
+            adapter,
+            device,
+            queue,
+            app,
+            search_overlay,
+            ..
+        } = self
+        else {
+            return;
+        };
+        match search_overlay::sync_action(app.search_popup_open(), search_overlay.is_some()) {
+            search_overlay::SyncAction::Open => {
+                let window_width = app.window_size.0;
+                *search_overlay = Some(search_overlay::SearchOverlay::open(
+                    window,
+                    adapter,
+                    device,
+                    queue,
+                    instance,
+                    window_width,
+                    el,
+                ));
+            }
+            search_overlay::SyncAction::Close => *search_overlay = None,
+            search_overlay::SyncAction::Noop => {}
+        }
+    }
+
     /// 首页右栏全局浏览器(`home_browser`)的 webview 像素边界:占满右侧
     /// 面板区(左图标栏 + 首页侧栏 + 分隔线之后,到右侧图标栏之前),扣掉
     /// right_zone 的 margin、顶栏/footbar 高度与浏览器地址栏高度。原生
@@ -1580,6 +1627,8 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 window,
                 device,
                 queue,
+                instance,
+                adapter,
                 renderer,
                 surface,
                 format,
@@ -1604,6 +1653,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 // 默认终端拿键盘,跟现状(启动时终端可打字)一致。
                 current_focus: FocusIntent::Terminal,
                 proxy: proxy.clone(),
+                search_overlay: None,
             };
         }
     }
@@ -1612,7 +1662,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
     /// （attach 数据流的输出/退出、daemon 错误、新建会话完成……）在这里
     /// 落地：直接喂给 `App::update`，跟 `window_event` 里处理
     /// iced 消息走的是同一条 `update` 逻辑，只是消息来源不同。
-    fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: Message) {
+    fn user_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, event: Message) {
         if !matches!(self, Self::Ready { .. }) {
             return;
         }
@@ -1623,14 +1673,41 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_previews();
         self.apply_pending_focus();
         self.apply_pending_zoom_toggle();
+        self.sync_search_overlay(event_loop);
     }
 
     fn window_event(
         &mut self,
         event_loop: &winit::event_loop::ActiveEventLoop,
-        _window_id: winit::window::WindowId,
+        window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
+        // search overlay 窗口自己那份 `WindowId` 的事件,整段独立处理,
+        // 早退保证不动下面那 ~1000 行主窗口的既有 `match`。
+        if let Self::Ready {
+            app,
+            search_overlay,
+            ..
+        } = self
+            && let Some(overlay) = search_overlay
+            && window_id == overlay.window_id()
+        {
+            let close_by_focus_loss = matches!(event, WindowEvent::Focused(false));
+            let close_by_request = matches!(event, WindowEvent::CloseRequested);
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app);
+            } else if !close_by_focus_loss && !close_by_request {
+                for message in overlay.handle_input(app, &event) {
+                    self.dispatch(message);
+                }
+            }
+            if close_by_focus_loss || close_by_request {
+                self.dispatch(Message::Search(extensions::search::Message::SearchClose));
+            }
+            self.sync_search_overlay(event_loop);
+            return;
+        }
+
         // `consumed == true`:已经被应用级快捷键接管(见
         // `on_window_event` 顶部文档),下面不能再把同一个原始事件转换
         // 喂给 iced 标准管线,否则会重复处理(⌘S 这类字母快捷键会在
@@ -2704,5 +2781,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_previews();
         self.apply_pending_focus();
         self.apply_pending_zoom_toggle();
+        self.sync_search_overlay(event_loop);
     }
 }
