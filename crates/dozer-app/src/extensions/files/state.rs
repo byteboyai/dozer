@@ -1,6 +1,7 @@
 //! Files 面板状态类型与状态机:TreeEditMode/TreeEdit/ContextMenu/PendingMove/
 //! WorkspaceState/GitInfo/AppState/Message/焦点捕获。
 
+use crate::delivery;
 use crate::project::{FileTree, PathKind};
 use iced_widget::core::Rectangle;
 use iced_widget::core::widget::operation::Focusable;
@@ -62,6 +63,10 @@ pub struct PendingMove {
 pub struct WorkspaceState {
     pub(crate) file_tree: Option<FileTree>,
     pub(crate) git_statuses: HashMap<PathBuf, FileGitStatus>,
+    /// 目录 → 聚合 git 状态(由 `delivery::rollup_dir_statuses` 在
+    /// `StatusesRefreshed` 时一并算出),文件树渲染 O(1) 查表,取代每行
+    /// 一次 `dir_status` 的全表扫描(2026-09-17 性能优化)。
+    pub(crate) dir_statuses: HashMap<PathBuf, delivery::TreeState>,
     pub(crate) tree_selected: Option<PathBuf>,
     pub(crate) tree_clipboard: Option<(PathBuf, bool)>,
     pub(crate) tree_error: Option<String>,
@@ -457,6 +462,7 @@ impl WorkspaceState {
         self.file_tree = Some(file_tree);
         self.tree_selected = None;
         self.git_statuses = HashMap::new();
+        self.dir_statuses = HashMap::new();
         self.tree_search.clear();
         self.search_query.clear();
         self.search_focused = false;

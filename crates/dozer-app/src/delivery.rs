@@ -187,6 +187,11 @@ impl From<FileGitStatus> for TreeState {
 /// `Unchanged`·灰)。被忽略的子孙不参与聚合(否则目录里顺带忽略的
 /// `.DS_Store` 会往上带),忽略档只在**目录自身**被 `.gitignore` 忽略时
 /// 触发。
+///
+/// 渲染热路径已改用一次性的 [`rollup_dir_statuses`](O(M×depth)),这个
+/// 逐目录 O(N×M) 版本保留下来作为语义参照——`rollup_dir_statuses` 的
+/// 测试用它当 oracle 逐目录比对,确保重构不漂移。只在 test 构建可见。
+#[cfg(test)]
 pub fn dir_status(dir: &Path, statuses: &HashMap<PathBuf, FileGitStatus>) -> Option<TreeState> {
     if matches!(statuses.get(dir), Some(FileGitStatus { ignored: true, .. })) {
         return Some(TreeState::Ignored);
@@ -220,6 +225,33 @@ fn state_priority(state: TreeState) -> u8 {
         TreeState::Unchanged => 2,
         TreeState::Ignored => 1,
     }
+}
+
+/// 预聚合:每个目录 → 子孙改动里优先级最高的 `TreeState`(语义与
+/// `dir_status` 完全一致,只是把 O(N×M) 的逐行全表扫描换成一次
+/// O(M×depth) 的祖先传播)。文件树渲染时按路径 O(1) 查表。被忽略的
+/// 条目不向上传播(同 `dir_status` 的既有语义);目录自身被忽略(精确
+/// 路径在 `statuses` 里标 `ignored`)时整目录落 `Ignored`。
+pub fn rollup_dir_statuses(
+    statuses: &HashMap<PathBuf, FileGitStatus>,
+) -> HashMap<PathBuf, TreeState> {
+    let mut dirs: HashMap<PathBuf, TreeState> = HashMap::new();
+    for (path, st) in statuses {
+        if st.ignored {
+            dirs.insert(path.clone(), TreeState::Ignored);
+            continue;
+        }
+        let state = TreeState::from(*st);
+        let mut cur = path.parent();
+        while let Some(dir) = cur {
+            let entry = dirs.entry(dir.to_path_buf()).or_insert(state);
+            if state_priority(state) > state_priority(*entry) {
+                *entry = state;
+            }
+            cur = dir.parent();
+        }
+    }
+    dirs
 }
 
 /// 当前分支名;非 git / 无提交 / detached HEAD 返回 None。
@@ -622,6 +654,84 @@ mod tests {
             dir_status(Path::new("/r/mix"), &s),
             Some(TreeState::Untracked)
         );
+    }
+
+    #[test]
+    fn rollup_dir_statuses_matches_dir_status_per_dir() {
+        use std::path::{Path, PathBuf};
+        let mut s = HashMap::new();
+        s.insert(
+            PathBuf::from("/r/logo/a.png"),
+            FileGitStatus {
+                kind: ChangeKind::New,
+                staged: false,
+                unstaged: true,
+                ignored: false,
+            },
+        );
+        s.insert(
+            PathBuf::from("/r/src/main.rs"),
+            FileGitStatus {
+                kind: ChangeKind::Modified,
+                staged: false,
+                unstaged: true,
+                ignored: false,
+            },
+        );
+        // 被忽略文件不向上传播(否则 .DS_Store 会污染整个目录)。
+        s.insert(
+            PathBuf::from("/r/src/.DS_Store"),
+            FileGitStatus {
+                kind: ChangeKind::Modified,
+                staged: false,
+                unstaged: false,
+                ignored: true,
+            },
+        );
+
+        let rolled = rollup_dir_statuses(&s);
+        // 对每个关心的目录,聚合结果必须与逐目录 dir_status 一致。
+        for dir in ["/r", "/r/logo", "/r/src", "/r/docs"] {
+            assert_eq!(
+                rolled.get(Path::new(dir)).copied(),
+                dir_status(Path::new(dir), &s),
+                "dir {dir} 聚合不一致"
+            );
+        }
+        // 跨层传播:子目录 /r/logo 的未加入版本改动滚到根 /r → 红。
+        assert_eq!(
+            rolled.get(Path::new("/r")).copied(),
+            Some(TreeState::Untracked)
+        );
+        // 被忽略文件本身在表里,但 /r/src 的聚合不应被 .DS_Store 抬高。
+        assert_eq!(
+            rolled.get(Path::new("/r/src")).copied(),
+            Some(TreeState::Modified)
+        );
+        // 无关目录无条目 → 调用方补成 Unchanged。
+        assert_eq!(rolled.get(Path::new("/r/docs")).copied(), None);
+    }
+
+    #[test]
+    fn rollup_dir_statuses_marks_dir_itself_ignored() {
+        use std::path::{Path, PathBuf};
+        let mut s = HashMap::new();
+        s.insert(
+            PathBuf::from("/r/out"),
+            FileGitStatus {
+                kind: ChangeKind::Modified,
+                staged: false,
+                unstaged: false,
+                ignored: true,
+            },
+        );
+        let rolled = rollup_dir_statuses(&s);
+        assert_eq!(
+            rolled.get(Path::new("/r/out")).copied(),
+            Some(TreeState::Ignored)
+        );
+        // 忽略目录不向祖先传播。
+        assert_eq!(rolled.get(Path::new("/r")).copied(), None);
     }
 
     #[test]

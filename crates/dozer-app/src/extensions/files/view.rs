@@ -106,7 +106,10 @@ pub fn view<'a>(
             .unwrap_or_else(|| root.display().to_string());
         // 根目录名称颜色跟着 git 状态走(与树行同款 `tree_state_color`),
         // 图标恒为灰(`DIM`),不再用 CREAM 高亮。
-        let root_state = delivery::dir_status(root, &ws_state.git_statuses)
+        let root_state = ws_state
+            .dir_statuses
+            .get(root)
+            .copied()
             .unwrap_or(delivery::TreeState::Unchanged);
         let root_color = tree_state_color(root_state);
         // 根目录本身也是合法的拖拽落点(项目内移动到顶层),但它不在
@@ -197,7 +200,10 @@ pub fn view<'a>(
             // 聚合取子孙中最高档(`dir_status`),让用户先注意到没加入版本
             // 管理的文件。无任何 git 记录的干净条目(状态 `None`)补成"一般"。
             let state: delivery::TreeState = if row.is_dir {
-                delivery::dir_status(&row.path, &ws_state.git_statuses)
+                ws_state
+                    .dir_statuses
+                    .get(&row.path)
+                    .copied()
                     .unwrap_or(delivery::TreeState::Unchanged)
             } else {
                 ws_state
@@ -521,8 +527,8 @@ fn git_footer_bar(
         let root = ws_state.file_tree.as_ref().map(|t| t.root().to_path_buf());
         let dirty_state = root
             .as_deref()
-            .and_then(|r| delivery::dir_status(r, &ws_state.git_statuses))
-            // `dir_status` 聚合时忽略被忽略文件,`Some` 即真实未提交改动。
+            .and_then(|r| ws_state.dir_statuses.get(r).copied())
+            // 聚合时忽略被忽略文件,`Some` 即真实未提交改动。
             .filter(|st| *st != delivery::TreeState::Ignored);
         let branch_name = ws_state
             .current_branch
@@ -676,7 +682,7 @@ pub fn branch_picker_popup(
         .as_ref()
         .map(|t| t.root().to_path_buf())
         .as_deref()
-        .and_then(|r| delivery::dir_status(r, &ws_state.git_statuses))
+        .and_then(|r| ws_state.dir_statuses.get(r).copied())
         .filter(|st| *st != delivery::TreeState::Ignored)
         .is_some();
     // dirty → 除当前分支外的其余分支全部置灰禁用。

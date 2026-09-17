@@ -1,5 +1,6 @@
 //! Files 面板 update 消息分发 + git 信息加载 spawn。
 
+use crate::delivery;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -30,6 +31,7 @@ pub fn update(
             }
         }
         Message::StatusesRefreshed(project_id, statuses) => {
+            ws_state.dir_statuses = delivery::rollup_dir_statuses(&statuses);
             ws_state.git_statuses = statuses;
             // 项目 git 状态更新(git_watch 拾起 HEAD/refs 变化后)常伴随分支
             // 切换,顺手把分支栏的仓库信息一并刷新,让底栏与树保持一致。
