@@ -22,8 +22,8 @@
 //!
 //! 光标最后画：先补一块实心格（focused：CREAM 底 + TERM_BG 字；未聚焦：
 //! CREAM 描边），覆盖在 run 字形之上，天然处理"光标落在任意 run 中间"。
+use super::term_model::{Cell, TerminalModel};
 use crate::app::Message;
-use crate::term_model::{Cell, TerminalModel};
 use crate::theme::terminal_font;
 use iced_widget::canvas::{self, Canvas};
 use iced_widget::core::font::Weight;
@@ -237,7 +237,7 @@ fn encode_wheel_report(up: bool, col: usize, row: usize, sgr: bool) -> Vec<u8> {
 struct TermCanvas<'a> {
     model: &'a TerminalModel,
     focused: bool,
-    target: crate::terminal::TermTarget,
+    target: super::terminal::TermTarget,
     /// IME 组字预览(未提交):有值时画在光标位置(带下划线),不写进
     /// `model`——真正的 PTY 网格只由 `Ime::Commit` 驱动。
     preedit: Option<&'a str>,
@@ -506,7 +506,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
 pub fn view<'a>(
     model: &'a TerminalModel,
     focused: bool,
-    target: crate::terminal::TermTarget,
+    target: super::terminal::TermTarget,
     preedit: Option<&'a str>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     Canvas::new(TermCanvas {

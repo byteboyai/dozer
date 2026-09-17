@@ -16,9 +16,9 @@
 //! (`ssh_terminal_pane`/`workspace.rs` 预览页签栏也在用)同样留在
 //! `app.rs`。
 
+use super::term_view;
 use crate::app::{App, HoverId, Message, PanelKind, TabGroup, ZoneSide, tab_divider};
 use crate::tab_widget;
-use crate::term_view;
 use crate::theme;
 use crate::workspace::{SessionTab, Workspace, dot_color, tab_display_width, tab_title};
 use iced_widget::core::mouse;

@@ -16,7 +16,7 @@ use crate::git_watch;
 use crate::homespace::{self, load_home_recents};
 use crate::rail;
 use crate::tab_widget;
-use crate::terminal;
+use crate::term::terminal;
 use crate::workspace::{
     CONVERSATION_DETAIL_PAGE_SIZE, RestorePayload, ReviewSource, ReviewView, SshOut,
     TabAttachedArgs, TabBackend, Workspace, exited_marker, preview_tab_display_width,

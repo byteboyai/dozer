@@ -16,8 +16,8 @@ use crate::homespace::{self};
 use crate::rail;
 use crate::settings;
 use crate::tab_widget;
-use crate::term_view;
-use crate::terminal;
+use crate::term::term_view;
+use crate::term::terminal;
 use crate::theme;
 use crate::topbar;
 use crate::workspace::{

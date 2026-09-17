@@ -1468,32 +1468,32 @@ mod tests {
         let t = dozer_syntax_theme();
         assert_eq!(
             syntax_token(&t, "string").expect("未命中 string"),
-            crate::term_model::ansi16_color(2).unwrap(),
+            crate::term::term_model::ansi16_color(2).unwrap(),
             "字符串应锚定终端 Green"
         );
         assert_eq!(
             syntax_token(&t, "keyword").expect("未命中 keyword"),
-            crate::term_model::ansi16_color(6).unwrap(),
+            crate::term::term_model::ansi16_color(6).unwrap(),
             "关键字应锚定终端 Cyan"
         );
         assert_eq!(
             syntax_token(&t, "comment").expect("未命中 comment"),
-            crate::term_model::ansi16_color(8).unwrap(),
+            crate::term::term_model::ansi16_color(8).unwrap(),
             "注释应锚定终端 BrightBlack"
         );
         assert_eq!(
             syntax_token(&t, "entity.name.type").expect("未命中类型"),
-            crate::term_model::ansi16_color(4).unwrap(),
+            crate::term::term_model::ansi16_color(4).unwrap(),
             "类型应锚定终端 Blue"
         );
         assert_eq!(
             syntax_token(&t, "entity.name.function").expect("未命中函数"),
-            crate::term_model::ansi16_color(12).unwrap(),
+            crate::term::term_model::ansi16_color(12).unwrap(),
             "函数应锚定终端 BrightBlue"
         );
         assert_eq!(
             syntax_token(&t, "operator").expect("未命中 operator"),
-            crate::term_model::default_fg_rgb(),
+            crate::term::term_model::default_fg_rgb(),
             "运算符应锚定终端默认前景"
         );
         assert!(

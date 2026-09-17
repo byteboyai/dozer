@@ -3,7 +3,7 @@ use super::*;
 use crate::app::{Message, PanelKind};
 use crate::osc::OscScanner;
 use crate::tab_widget::tab_window;
-use crate::term_model::TerminalModel;
+use crate::term::term_model::TerminalModel;
 use crate::transcript::ReviewEntry;
 use byteui::interaction::icons::IconKind;
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};

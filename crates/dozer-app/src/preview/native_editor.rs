@@ -123,11 +123,11 @@ pub(crate) fn dozer_syntax_theme() -> syntect::highlighting::Theme {
     }
     /// 终端 16 色面板第 `idx` 项(下标见 `term_model::ANSI16`)。
     fn ansi(idx: usize) -> (u8, u8, u8) {
-        crate::term_model::ansi16_color(idx).expect("ANSI16 静态色表必须完整")
+        crate::term::term_model::ansi16_color(idx).expect("ANSI16 静态色表必须完整")
     }
     /// 终端默认前景。
     fn body() -> (u8, u8, u8) {
-        crate::term_model::default_fg_rgb()
+        crate::term::term_model::default_fg_rgb()
     }
     /// 单条 scope 着色规则。
     fn scope(s: &str, rgb: (u8, u8, u8)) -> ThemeItem {

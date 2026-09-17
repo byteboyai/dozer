@@ -10,7 +10,7 @@ use crate::extensions::{
 };
 use crate::git_watch;
 use crate::homespace::{self, HomeRecentConversation, HomeRecentFile};
-use crate::terminal;
+use crate::term::terminal;
 use crate::transcript::ReviewEntry;
 use crate::workspace::{PickerLaunch, RestorePayload, ReviewSource};
 

@@ -15,7 +15,7 @@ use crate::open_projects;
 use crate::panel_layouts;
 use crate::preview::WebviewSpec;
 use crate::rail;
-use crate::terminal;
+use crate::term::terminal;
 use crate::theme;
 use crate::transcript::ReviewEntry;
 use crate::webview_geometry;
@@ -2030,13 +2030,13 @@ impl App {
         let (w, h) = self.window_size;
         let shown = terminal_grid_state(self.shell_state());
         let (pane_w, pane_h) = terminal_pane_pixel_size(w, h, &shown);
-        let (cols, rows) = crate::term_view::grid_size(pane_w, pane_h);
+        let (cols, rows) = crate::term::term_view::grid_size(pane_w, pane_h);
         // SSH 面板内嵌终端挂在左面板区,几何与共享终端完全不同,由
         // `ssh_terminal_pane_pixel_size` 按左栏 `主机列表|终端` 配对换算一份
         // 独立网格——否则 SSH 终端永远套用共享终端的列数,窗口/分隔条一动
         // 宽度就跟不上宿主面板(见该函数注释)。
         let (ssh_pane_w, ssh_pane_h) = ssh_terminal_pane_pixel_size(w, h, &self.shell_state());
-        let (ssh_cols, ssh_rows) = crate::term_view::grid_size(ssh_pane_w, ssh_pane_h);
+        let (ssh_cols, ssh_rows) = crate::term::term_view::grid_size(ssh_pane_w, ssh_pane_h);
         // 共享终端与 SSH 终端各自只在当前可见时才有可测量的 pane。某个 pane
         // 此刻不可换算(右侧收起 / 左面板区收起)时,它的终端可能仍挂在后台
         // (SSH tab 跨左视图常驻),这时沿用上一次跟踪的网格、发一个等值尺寸
@@ -3874,8 +3874,11 @@ mod tests {
         assert_ne!((w, h), normal, "放大态几何必须和平时不同");
         assert!(w > normal.0, "放大后终端必须真的更宽(网格跟着变宽)");
 
-        assert_eq!(crate::term_view::grid_size(w, h), (95, 43));
-        assert_eq!(crate::term_view::grid_size(normal.0, normal.1), (51, 47));
+        assert_eq!(crate::term::term_view::grid_size(w, h), (95, 43));
+        assert_eq!(
+            crate::term::term_view::grid_size(normal.0, normal.1),
+            (51, 47)
+        );
 
         // 左侧放大不改变右面板区几何(右半只是被遮罩盖住)。
         let left_maxed = ShellState {
@@ -3911,7 +3914,7 @@ mod tests {
         }
 
         // 具体网格:1440x900 下应是 51x47(已扣 right_zone 上下 margin),不是兜底的 80x24。
-        let (cols, rows) = crate::term_view::grid_size(shown.0, shown.1);
+        let (cols, rows) = crate::term::term_view::grid_size(shown.0, shown.1);
         assert_eq!((cols, rows), (51, 47));
         assert_ne!(
             (cols as u16, rows as u16),
