@@ -6,6 +6,7 @@ use crate::chrome::homespace::{self, HomeRecentConversation, HomeRecentFile};
 use crate::chrome::rail;
 use crate::extensions::browser;
 use crate::extensions::database;
+use crate::extensions::file_history;
 use crate::extensions::files;
 use crate::extensions::footbar;
 use crate::extensions::git_log;
@@ -361,6 +362,9 @@ pub struct App {
     /// Project 面板「项目文档 / Agent 记忆」链接行的右键菜单浮层状态,坐标
     /// 同样复用 `files.last_right_click`。
     pub(crate) project_link_menu: Option<ProjectLinkMenu>,
+    /// 文件历史对比弹窗状态——见 `extensions::file_history::State`。`None`
+    /// 表示弹窗未打开。
+    pub(crate) file_history: Option<file_history::State>,
     /// Todo 分类树节点右键菜单浮层状态,坐标复用 `files.last_right_click`。
     pub(crate) category_context_menu: Option<CategoryContextMenu>,
     /// 分类选择器("移动到..." / 任务挂分类)浮层状态:定位坐标 + 目标。
@@ -744,6 +748,7 @@ impl App {
             rail_drag: None,
             files: files::AppState::default(),
             project_link_menu: None,
+            file_history: None,
             category_context_menu: None,
             category_picker: None,
             text_input_menu: None,
@@ -2727,7 +2732,10 @@ impl App {
         // 剪切/复制/粘贴菜单)是屏幕空间单例、不区分左右哪一侧,和
         // `search_modal` 一样按"两侧都可能被盖住"从宽处理——比如文件树
         // 搜索框右键时,菜单向下弹出恰好压在下方的预览 webview 上。
-        let app_modal_open = ws.search.is_open() || self.text_input_menu.is_some();
+        // `file_history`(文件历史对比弹窗)是窗口级 overlay(左右两侧
+        // 都可能被它盖住),同款从宽处理。
+        let app_modal_open =
+            ws.search.is_open() || self.text_input_menu.is_some() || self.file_history.is_some();
         let mut out = Vec::new();
         for side in [Side::Left, Side::Right] {
             let kind = match side {
@@ -2793,11 +2801,12 @@ impl App {
         window_height: f32,
     ) -> Vec<(WebviewSpec, (f32, f32, f32, f32))> {
         // 地址栏右键"剪切/复制/粘贴"菜单向下弹出,恰好压在下方的浏览器
-        // webview 内容区上——同 `preview_desired` 里 `text_input_menu` 的
-        // 处理,原生 wry 子视图不听 iced 绘制顺序摆布,必须显式
-        // visible=false 才能真正藏起来。首页(`home_browser`)和工作区内
-        // (`ws.browser`)两条分支共用这一个判断。
-        let text_input_menu_open = self.text_input_menu.is_some();
+        // webview 内容区上;`file_history`(文件历史对比弹窗)是窗口级
+        // overlay,左右两侧都可能被它盖住——同 `preview_desired` 里
+        // `app_modal_open` 的处理,原生 wry 子视图不听 iced 绘制顺序摆布,
+        // 必须显式 visible=false 才能真正藏起来。首页(`home_browser`)和
+        // 工作区内(`ws.browser`)两条分支共用这一个判断。
+        let app_modal_open = self.text_input_menu.is_some() || self.file_history.is_some();
         // 首页右栏恒为全局浏览器(`home_browser`),与 `left_view` 无关——
         // 进首页就让它成为浏览器 webview 池的唯一来源,否则默认 URL 的 tab
         // 建了却永远等不到 webview(见 `sync_webview_pool`)。
@@ -2807,7 +2816,7 @@ impl App {
                 .desired_webviews()
                 .into_iter()
                 .map(|mut s| {
-                    if text_input_menu_open {
+                    if app_modal_open {
                         s.visible = false;
                     }
                     (s, (0.0, 0.0, 0.0, 0.0))
@@ -2834,7 +2843,7 @@ impl App {
             .desired_webviews()
             .into_iter()
             .map(|mut s| {
-                if text_input_menu_open {
+                if app_modal_open {
                     s.visible = false;
                 }
                 (s, bounds)

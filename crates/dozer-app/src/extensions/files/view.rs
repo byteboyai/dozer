@@ -788,17 +788,25 @@ pub fn context_menu_items(
     is_dir: bool,
     is_root: bool,
     has_clipboard: bool,
+    is_git_repo: bool,
 ) -> Vec<crate::chrome::native_menu::Item<Message>> {
-    crate::menu_spec::to_native(context_menu_spec(target, is_dir, is_root, has_clipboard))
+    crate::menu_spec::to_native(context_menu_spec(
+        target,
+        is_dir,
+        is_root,
+        has_clipboard,
+        is_git_repo,
+    ))
 }
 
 /// 文件树右键菜单内容——native(`context_menu_items`)和 iced fallback
-/// (`context_menu_popup`)共用同一份数据,11 个条件分支只写一遍。
+/// (`context_menu_popup`)共用同一份数据,12 个条件分支只写一遍。
 pub(crate) fn context_menu_spec(
     target: &Path,
     is_dir: bool,
     is_root: bool,
     has_clipboard: bool,
+    is_git_repo: bool,
 ) -> MenuSpec<Message> {
     let dim = byteui::theme::color::current().dim;
     let target = target.to_path_buf();
@@ -875,6 +883,13 @@ pub(crate) fn context_menu_spec(
         "从磁盘重新加载",
         Message::ReloadFromDisk,
     ));
+    if !is_dir && is_git_repo {
+        items.push(MenuSpecItem::entry(
+            Some(icons::IconKind::History),
+            "查看此文件历史",
+            Message::FileHistoryOpen(target.clone()),
+        ));
+    }
     items
 }
 
@@ -899,7 +914,13 @@ pub fn context_menu_popup<'a>(
     let has_clipboard = ws_state.tree_clipboard.is_some();
     // 菜单内容组装收拢到 `context_menu_spec()`(与 native 版共用同一份
     // 条件分支),这里只做 iced 转换。注意宽度保持原值 `Length::Shrink`。
-    let spec = context_menu_spec(&menu.target, menu.is_dir, is_root, has_clipboard);
+    let spec = context_menu_spec(
+        &menu.target,
+        menu.is_dir,
+        is_root,
+        has_clipboard,
+        ws_state.git_is_repo,
+    );
     let list = crate::menu_spec::to_iced(spec, Length::Shrink);
 
     container(list)

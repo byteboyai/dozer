@@ -8,6 +8,7 @@ use crate::chrome::topbar;
 use crate::extensions::browser;
 use crate::extensions::conversations;
 use crate::extensions::database;
+use crate::extensions::file_history;
 use crate::extensions::files;
 use crate::extensions::footbar;
 use crate::extensions::git_log;
@@ -570,6 +571,20 @@ impl App {
                     .height(Length::Fill)
                     .into(),
             }
+        } else if let Some(state) = self.file_history.as_ref() {
+            // 文件历史对比弹窗:窗口级 overlay,同其它面板弹窗的既有口径。
+            // 状态是 `App` 级单例(不挂 `Workspace`),同 `project_link_menu`/
+            // `self.database.drivers_popup_open()` 的既有先例。
+            let dismiss = crate::dialog::scrim(Message::FileHistory(file_history::Message::Close));
+            stack![
+                base,
+                dismiss,
+                file_history::popup_view(state, self.window_size.0, self.window_size.1)
+                    .map(Message::FileHistory)
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
         } else {
             // 始终用 `Stack` 作根,与上面两个分支(删确认弹窗 / 右键菜单)保持一致:
             // 右键菜单开关会把根 widget 类型在 `Column`(`base.into()`)与 `Stack`

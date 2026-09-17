@@ -7,7 +7,8 @@ use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 
 use crate::chrome::homespace::{self, HomeRecentConversation, HomeRecentFile};
 use crate::extensions::{
-    browser, conversations, database, files, footbar, git_log, project, search, ssh, todo, usage,
+    browser, conversations, database, file_history, files, footbar, git_log, project, search, ssh,
+    todo, usage,
 };
 use crate::git_watch;
 use crate::term::terminal;
@@ -444,6 +445,9 @@ pub enum Message {
     /// Git Log 面板的全部消息,内核只转发不解读——见
     /// `extensions::git_log::Message`。
     GitLog(git_log::Message),
+    /// 文件历史对比弹窗的全部消息,内核只转发不解读——见
+    /// `extensions::file_history::Message`。
+    FileHistory(file_history::Message),
     /// Files 面板的全部消息,内核只转发不解读——见 `extensions::files::Message`。
     Files(files::Message),
     /// Project 信息面板的全部消息,内核只转发不解读——见

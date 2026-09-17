@@ -1633,7 +1633,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_hides_delete_rename_for_root() {
-        let items = context_menu_items(Path::new("/proj"), true, true, false);
+        let items = context_menu_items(Path::new("/proj"), true, true, false, true);
         let has_delete = items.iter().any(|i| {
             matches!(
                 i,
@@ -1649,7 +1649,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_shows_delete_rename_for_non_root() {
-        let items = context_menu_items(Path::new("/proj/src"), true, false, false);
+        let items = context_menu_items(Path::new("/proj/src"), true, false, false, true);
         let has_delete = items.iter().any(|i| {
             matches!(
                 i,
@@ -1665,7 +1665,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_paste_locked_when_clipboard_empty() {
-        let items = context_menu_items(Path::new("/proj/src"), true, false, false);
+        let items = context_menu_items(Path::new("/proj/src"), true, false, false, true);
         let paste = items.iter().find_map(|i| match i {
             crate::chrome::native_menu::Item::Entry {
                 msg: Message::Paste(_),
@@ -1680,7 +1680,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_paste_enabled_when_clipboard_has_content() {
-        let items = context_menu_items(Path::new("/proj/src"), true, false, true);
+        let items = context_menu_items(Path::new("/proj/src"), true, false, true, true);
         let paste = items.iter().find_map(|i| match i {
             crate::chrome::native_menu::Item::Entry {
                 msg: Message::Paste(_),
@@ -1695,7 +1695,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_file_target_has_no_new_file_or_paste() {
-        let items = context_menu_items(Path::new("/proj/src/main.rs"), false, false, false);
+        let items = context_menu_items(Path::new("/proj/src/main.rs"), false, false, false, true);
         let has_new_file = items.iter().any(|i| {
             matches!(
                 i,
@@ -1715,5 +1715,53 @@ mod tests {
             )
         });
         assert!(!has_new_file && !has_paste, "非目录不该有新建文件/粘贴");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn context_menu_items_shows_file_history_for_git_repo_file() {
+        let items = context_menu_items(Path::new("/proj/src/main.rs"), false, false, false, true);
+        let has_history = items.iter().any(|i| {
+            matches!(
+                i,
+                crate::chrome::native_menu::Item::Entry {
+                    msg: Message::FileHistoryOpen(..),
+                    ..
+                }
+            )
+        });
+        assert!(has_history, "git 仓库里的文件行该有「查看此文件历史」");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn context_menu_items_hides_file_history_for_non_git_repo() {
+        let items = context_menu_items(Path::new("/proj/src/main.rs"), false, false, false, false);
+        let has_history = items.iter().any(|i| {
+            matches!(
+                i,
+                crate::chrome::native_menu::Item::Entry {
+                    msg: Message::FileHistoryOpen(..),
+                    ..
+                }
+            )
+        });
+        assert!(!has_history, "非 git 仓库不该出现「查看此文件历史」");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn context_menu_items_hides_file_history_for_directory() {
+        let items = context_menu_items(Path::new("/proj/src"), true, false, false, true);
+        let has_history = items.iter().any(|i| {
+            matches!(
+                i,
+                crate::chrome::native_menu::Item::Entry {
+                    msg: Message::FileHistoryOpen(..),
+                    ..
+                }
+            )
+        });
+        assert!(!has_history, "目录行不该出现「查看此文件历史」");
     }
 }

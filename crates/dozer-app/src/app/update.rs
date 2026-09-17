@@ -7,6 +7,7 @@ use crate::chrome::tab_widget;
 use crate::extensions::browser;
 use crate::extensions::conversations;
 use crate::extensions::database;
+use crate::extensions::file_history;
 use crate::extensions::files;
 use crate::extensions::footbar;
 use crate::extensions::git_log;
@@ -1126,6 +1127,14 @@ impl App {
                     );
                 }
             }
+            Message::FileHistory(msg) => {
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                let emit = move |m| {
+                    let _ = proxy.send_event(Message::FileHistory(m));
+                };
+                file_history::update(&mut self.file_history, msg, &handle, emit);
+            }
             Message::Files(files::Message::CopyPath(path, kind)) => {
                 let _ = (path, kind); // main.rs 拦截处理写剪贴板,这里维持现状空分支
             }
@@ -1141,6 +1150,49 @@ impl App {
                     search::Scope::File(path)
                 };
                 self.update(Message::Search(search::Message::SearchOpen(scope)));
+            }
+            Message::Files(files::Message::FileHistoryOpen(path)) => {
+                // 右键"查看此文件历史":先收起右键菜单(同 OpenSearch 的既有
+                // 约定),再解析出仓库相对路径、组出 `FileHistoryTarget`、
+                // 异步跑一次 `build()`。
+                self.files.close_context_menu();
+                let Some(project_id) = self.active_project_id else {
+                    return;
+                };
+                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+                    return;
+                };
+                let Some(project) = ws.project.as_ref() else {
+                    return;
+                };
+                let repo_path = PathBuf::from(&project.path);
+                let Ok(file_path) = path.strip_prefix(&repo_path).map(|p| p.to_path_buf()) else {
+                    return;
+                };
+                let target = file_history::FileHistoryTarget {
+                    project_id,
+                    repo_path: repo_path.clone(),
+                    file_path: file_path.clone(),
+                };
+                self.file_history = Some(file_history::State::new(target));
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                handle.spawn(async move {
+                    let repo_path2 = repo_path.clone();
+                    let file_path2 = file_path.clone();
+                    let result = tokio::task::spawn_blocking(move || {
+                        file_history::build(
+                            &repo_path2,
+                            &file_path2,
+                            file_history::DEFAULT_MAX_COUNT,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(format!("加载失败: {e}")));
+                    let _ = proxy.send_event(Message::FileHistory(
+                        file_history::Message::SnapshotLoaded(repo_path, file_path, result),
+                    ));
+                });
             }
             Message::Files(
                 msg @ (files::Message::StatusesRefreshed(project_id, ..)

@@ -182,6 +182,13 @@ pub enum Message {
         is_dir: bool,
     },
     ContextMenuClose,
+    /// 右键"查看此文件历史":内核拦截,不进 `update`——由内核解析出仓库
+    /// 相对路径、组出 `file_history::FileHistoryTarget`,写入
+    /// `App::file_history` 并异步跑 `file_history::build`(见
+    /// `docs/superpowers/specs/2026-09-17-file-history-popup-design.md`)。
+    /// 携带的是右键目标的绝对路径,同其它右键菜单消息(`DeleteRequest`/
+    /// `RevealInFinder` 等)的既有口径。
+    FileHistoryOpen(PathBuf),
     /// 右键菜单"搜索":内核拦截,不进 `update`——由内核映射成
     /// `search::Message::SearchOpen` 打开文件树右键作用域的搜索弹窗。
     OpenSearch(PathBuf, bool),
