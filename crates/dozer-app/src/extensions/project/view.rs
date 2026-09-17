@@ -223,7 +223,7 @@ pub fn view<'a>(
                 // (2026-09-17 用户确认暂不接功能);`interactive: false` 使其
                 // 不挂 `on_press`,`on_select` 传 `Message::Noop` 纯粹满足签名。
                 icons::icon_button_entry(
-                    icons::IconKind::SquarePlus,
+                    icons::IconKind::Plus,
                     byteui::theme::icon_size::row(),
                     false,
                     false,
@@ -756,7 +756,7 @@ fn links_section<'a>(
                 .color(byteui::theme::color::current().cream),
             iced_widget::space::horizontal(),
             icons::icon_button_entry(
-                icons::IconKind::SquarePlus,
+                icons::IconKind::Plus,
                 byteui::theme::icon_size::row(),
                 false,
                 false,

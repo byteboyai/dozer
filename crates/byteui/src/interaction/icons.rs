@@ -87,6 +87,9 @@ pub enum IconKind {
     /// 顶栏 `dozer_home_tab` 品牌页签标题图标(Lucide house)。
     Home,
     RefreshCw,
+    /// 无外框的裸加号(Lucide plus),项目面板小节行的"+"按钮用——
+    /// `SquarePlus` 的方框版留给顶栏/tab 栏等需要更强视觉重量的位置。
+    Plus,
     SquarePlus,
     GitBranch,
     /// Git Log 面板 commit 列表"普通提交"图标(Lucide git-commit-vertical)。
@@ -246,6 +249,7 @@ impl IconKind {
             IconKind::Maximize => include_bytes!("../../assets/icons/maximize-2.svg"),
             IconKind::Home => include_bytes!("../../assets/icons/home.svg"),
             IconKind::RefreshCw => include_bytes!("../../assets/icons/refresh-cw.svg"),
+            IconKind::Plus => include_bytes!("../../assets/icons/plus.svg"),
             IconKind::SquarePlus => include_bytes!("../../assets/icons/square-plus.svg"),
             IconKind::GitBranch => include_bytes!("../../assets/icons/git-branch.svg"),
             IconKind::GitCommitVertical => {
