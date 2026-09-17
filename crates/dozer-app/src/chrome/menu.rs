@@ -115,7 +115,7 @@ pub fn item_row_fill<'a, Msg: 'a + Clone>(
 }
 
 /// 把可选的图标转成前置元素(`None` = 无图标,只渲染文字)。
-fn icon_leading<'a, Msg: 'a>(
+pub(crate) fn icon_leading<'a, Msg: 'a>(
     icon: Option<icons::IconKind>,
     color: Color,
 ) -> Option<Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer>> {

@@ -41,30 +41,6 @@ impl<Msg> Item<Msg> {
             msg,
         }
     }
-
-    /// 图标独立着色项:文字仍用 BODY 色,图标用 `icon_color`(agent 选择器等
-    /// 双色菜单用)。
-    pub fn entry_tinted(
-        icon: IconKind,
-        icon_color: Color,
-        label: impl Into<String>,
-        msg: Msg,
-    ) -> Self {
-        let body = byteui::theme::color::current().body;
-        Item::Entry {
-            icon: Some(icon),
-            icon_color: Some(icon_color),
-            label: label.into(),
-            color: body,
-            enabled: true,
-            msg,
-        }
-    }
-
-    /// 分组分隔线。
-    pub fn separator() -> Self {
-        Item::Separator
-    }
 }
 
 /// 把内嵌 Lucide SVG(`IconKind::bytes()`)按给定颜色栅格化成

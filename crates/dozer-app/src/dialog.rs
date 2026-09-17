@@ -31,8 +31,9 @@
 //!   `action_button_border_color`。
 
 use crate::theme;
+use byteui::interaction::icons::IconKind;
 use iced_widget::core::{Border, Color, Element, Length, alignment::Horizontal};
-use iced_widget::{MouseArea, Row, Stack, button, column, container};
+use iced_widget::{MouseArea, Row, Stack, button, column, container, row, text};
 
 /// 弹窗默认宽度:整个软件窗体宽度(`App::window_size.0`,逻辑像素)的
 /// 1/3——2026-09-15 统一约定,取代此前各弹窗各写一个固定像素值(360/420/
@@ -121,4 +122,123 @@ fn scrim_layer<'a, Msg: 'a>() -> Element<'a, Msg, iced_widget::Theme, iced_rende
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
+}
+
+/// `confirm()` 的入参——字段数≥7 且 `title`/`description` 两个相邻同类型
+/// `String` 传错顺序编译器发现不了，按 CLAUDE.md 关键裁决用具名字段结构体
+/// 代替位置参数。
+pub struct ConfirmDialog<Msg> {
+    /// 标题前的可选图标（无图标传 `None`，如文件/主机/数据源删除确认）。
+    pub icon: Option<IconKind>,
+    pub title: String,
+    pub description: String,
+    pub cancel_label: String,
+    pub cancel_msg: Msg,
+    pub confirm_label: String,
+    pub confirm_msg: Msg,
+    /// 确认按钮文字色：`red` 给危险删除，`gold` 给非破坏性主要确认。
+    pub confirm_color: Color,
+    /// 标题/说明/按钮行之间的纵向间距——四处原弹窗的 `column.spacing`
+    /// 不统一(files/ssh/database 用 8、todo 用 12)，为了让 `confirm()` 覆盖
+    /// 四处又不改视觉，这里不写死，由各调用方原样搬它原本的间距值。
+    pub content_spacing: f32,
+}
+
+/// 标题 + 说明 + 取消/确认两按钮的确认弹窗骨架——`files::delete_confirm_popup`/
+/// `ssh::delete_confirm_popup`/`todo::clear_confirm_popup`/
+/// `database::delete_confirm_popup` 共用同一份组装，取代此前四处手写。
+/// 只适用于"纯文字+两按钮"的简单确认框；带输入框/单选组等额外控件的弹窗
+/// (`files::move_confirm_popup`/`project::project_delete_confirm_popup`)
+/// 不适用，继续各自实现。
+pub fn confirm<'a, Msg: 'a + Clone>(
+    spec: ConfirmDialog<Msg>,
+    window_width: f32,
+) -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {
+    let title_row: Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> = match spec.icon {
+        Some(icon) => row![
+            byteui::interaction::icons::view(
+                icon,
+                byteui::theme::icon_size::row(),
+                byteui::theme::color::current().cream,
+            ),
+            text(spec.title)
+                .size(byteui::theme::font::subtitle())
+                .color(byteui::theme::color::current().cream),
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center)
+        .into(),
+        None => text(spec.title)
+            .size(byteui::theme::font::subtitle())
+            .color(byteui::theme::color::current().cream)
+            .into(),
+    };
+    let cancel = button(
+        text(spec.cancel_label)
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().dim),
+    )
+    .on_press(spec.cancel_msg)
+    .padding([6, 12])
+    .style(action_button_style(byteui::theme::color::current().dim));
+    let confirm = button(
+        text(spec.confirm_label)
+            .size(byteui::theme::font::body())
+            .color(spec.confirm_color),
+    )
+    .on_press(spec.confirm_msg)
+    .padding([6, 12])
+    .style(action_button_style(spec.confirm_color));
+
+    let dialog = container(
+        column![
+            title_row,
+            text(spec.description)
+                .size(byteui::theme::font::label())
+                .color(byteui::theme::color::current().dim),
+            actions(row![cancel, confirm].spacing(8)),
+        ]
+        .spacing(spec.content_spacing),
+    )
+    .width(width(window_width))
+    .padding(16)
+    .style(card_style);
+
+    container(dialog)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .into()
+}
+
+#[cfg(test)]
+mod confirm_tests {
+    use super::*;
+
+    #[derive(Debug, Clone, PartialEq)]
+    enum TestMsg {
+        Cancel,
+        Confirm,
+    }
+
+    #[test]
+    fn confirm_dialog_struct_carries_all_fields() {
+        // 这个测试只验证 ConfirmDialog 结构体字段可以正常构造和读取——
+        // confirm() 返回 iced Element，无法在单测里断言内部渲染结构，
+        // 真正的视觉/交互核对在 Task 6-9 的人工核对步骤里做。
+        let spec = ConfirmDialog {
+            icon: None,
+            title: "删除文件 \"a.txt\"?".to_string(),
+            description: "会移入系统回收站。".to_string(),
+            cancel_label: "取消".to_string(),
+            cancel_msg: TestMsg::Cancel,
+            confirm_label: "删除".to_string(),
+            confirm_msg: TestMsg::Confirm,
+            confirm_color: byteui::theme::color::current().red,
+            content_spacing: 8.0,
+        };
+        assert_eq!(spec.title, "删除文件 \"a.txt\"?");
+        assert_eq!(spec.confirm_msg, TestMsg::Confirm);
+    }
 }

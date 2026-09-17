@@ -11,6 +11,7 @@ mod frosted;
 mod git_watch;
 mod keymap;
 mod layout;
+mod menu_spec;
 mod open_projects;
 mod osc;
 mod panel_layouts;

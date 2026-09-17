@@ -8,6 +8,7 @@ use crate::chrome::tab_widget::{
     tab_overflow_menu, tab_render_mode_button, tab_window,
 };
 use crate::extensions::conversations;
+use crate::menu_spec::{MenuSpec, MenuSpecItem};
 use crate::preview::TabKind;
 use crate::theme;
 use crate::theme::terminal_font;
@@ -276,8 +277,12 @@ pub(crate) fn agent_picker_toggle_button<'a>(
 /// `agent_picker_popup` 的 iced 弹层。
 #[cfg(target_os = "macos")]
 pub(crate) fn agent_picker_items() -> Vec<crate::chrome::native_menu::Item<Message>> {
-    use crate::chrome::native_menu::Item;
-    let body = byteui::theme::color::current().body;
+    crate::menu_spec::to_native(agent_picker_spec())
+}
+
+/// Agent 选择器菜单内容——native(`agent_picker_items`)和 iced fallback
+/// (`agent_picker_popup`)共用同一份数据，只在这里组装一次。
+pub(crate) fn agent_picker_spec() -> MenuSpec<Message> {
     let agents: [(&str, PickerLaunch); 6] = [
         ("Claude", PickerLaunch::Agent(Some(AgentKind::Claude))),
         ("CodeBuddy", PickerLaunch::Agent(Some(AgentKind::Codebuddy))),
@@ -290,23 +295,21 @@ pub(crate) fn agent_picker_items() -> Vec<crate::chrome::native_menu::Item<Messa
         ("Git Shell", PickerLaunch::Git),
         ("纯 Shell", PickerLaunch::Agent(None)),
     ];
-    let mk_item = |label: &'static str, agent: PickerLaunch| {
-        let (icon, icon_color) = match agent {
+    let mk = |label: &str, launch: PickerLaunch| {
+        let (icon, icon_color) = match launch {
             PickerLaunch::Agent(Some(kind)) => (agent_icon(kind), agent_dot_color(kind)),
-            PickerLaunch::Agent(None) => (IconKind::Terminal, body),
-            PickerLaunch::Git => (IconKind::GitBranch, body),
+            PickerLaunch::Agent(None) => (IconKind::Terminal, byteui::theme::color::current().body),
+            PickerLaunch::Git => (IconKind::GitBranch, byteui::theme::color::current().body),
         };
-        Item::entry_tinted(icon, icon_color, label, Message::AgentPickerSelect(agent))
+        MenuSpecItem::entry_tinted(icon, icon_color, label, Message::AgentPickerSelect(launch))
     };
-    let mut items: Vec<Item<Message>> = Vec::new();
-    for (label, agent) in agents {
-        items.push(mk_item(label, agent));
-    }
-    items.push(Item::separator());
-    for (label, agent) in shells {
-        items.push(mk_item(label, agent));
-    }
-    items
+    let mut spec: MenuSpec<Message> = agents
+        .into_iter()
+        .map(|(label, launch)| mk(label, launch))
+        .collect();
+    spec.push(MenuSpecItem::separator());
+    spec.extend(shells.into_iter().map(|(label, launch)| mk(label, launch)));
+    spec
 }
 
 /// Agent 选择菜单浮层:固定挂在窗口右上角("＋"按钮下方——该按钮
@@ -325,55 +328,11 @@ pub(crate) fn agent_picker_popup(
     }
     // 常规 agent 按标签首字母排序。"Git Shell" / "纯 Shell" 归到菜单最底部,
     // 与上方 agent 用 1px 分割线(`crate::chrome::menu::separator`)分组隔开。
-    let agents: [(&str, PickerLaunch); 6] = [
-        ("Claude", PickerLaunch::Agent(Some(AgentKind::Claude))),
-        ("CodeBuddy", PickerLaunch::Agent(Some(AgentKind::Codebuddy))),
-        ("Codex", PickerLaunch::Agent(Some(AgentKind::Codex))),
-        ("Kilo", PickerLaunch::Agent(Some(AgentKind::Kilo))),
-        ("OpenCode", PickerLaunch::Agent(Some(AgentKind::Opencode))),
-        ("v8agent", PickerLaunch::Agent(Some(AgentKind::V8agent))),
-    ];
-    let shells: [(&str, PickerLaunch); 2] = [
-        ("Git Shell", PickerLaunch::Git),
-        ("纯 Shell", PickerLaunch::Agent(None)),
-    ];
-    // 单项统一走 `crate::chrome::menu::item_row`:图标沿用各 agent 代表色,文字保持
-    // `BODY`(同 `menu::item()` 的标准配色);hover/锁定语义、常宽、padding
-    // 同文件树右键菜单基准。
-    let mk_item = |label: &'static str,
-                   agent: PickerLaunch|
-     -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
-        let (icon, icon_color) = match agent {
-            PickerLaunch::Agent(Some(kind)) => (agent_icon(kind), agent_dot_color(kind)),
-            PickerLaunch::Agent(None) => (IconKind::Terminal, byteui::theme::color::current().body),
-            PickerLaunch::Git => (IconKind::GitBranch, byteui::theme::color::current().body),
-        };
-        crate::chrome::menu::item_row(
-            Some(icons::view(
-                icon,
-                byteui::theme::icon_size::row(),
-                icon_color,
-            )),
-            label,
-            byteui::theme::color::current().body,
-            Some(Message::AgentPickerSelect(agent)),
-        )
-    };
-    let mut list: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
-        Vec::new();
-    for (label, agent) in agents {
-        list.push(mk_item(label, agent));
-    }
-    // 1px 分割线:把 Shell 类(底部)与上方常规 agent 分组隔开。
-    list.push(crate::chrome::menu::separator());
-    for (label, agent) in shells {
-        list.push(mk_item(label, agent));
-    }
-    let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        crate::chrome::menu::shell_frosted(
-            list,
-            Length::Fixed(byteui::theme::geometry::menu_item_width()),
-        );
+    // 菜单内容组装收拢到 `agent_picker_spec()`,这里只做 iced 转换。
+    let list = crate::menu_spec::to_iced(
+        agent_picker_spec(),
+        Length::Fixed(byteui::theme::geometry::menu_item_width()),
+    );
     // 右上角固定偏移:48px 避开顶栏,16px 避开窗口右边缘。这是估算值,
     // 不是像素级对齐"＋"按钮(spec 明确"不算点击坐标")——Task 4 最后
     // 一步的人工验收里如果视觉上偏得明显,回来调这两个数字即可,不影响

@@ -15,6 +15,7 @@ use crate::app::{
     App, AppPage, HoverId, Message, TabGroup, TopbarButton, WorkspaceSlot, controlled_tooltip,
     project_dot, top_bar_font,
 };
+use crate::menu_spec::{MenuSpec, MenuSpecItem};
 use crate::theme;
 use crate::workspace::Workspace;
 use byteui::interaction::{icons, tabs};
@@ -406,38 +407,50 @@ fn project_tabs_row(
 }
 
 /// `project_add_menu_popup` 的原生菜单版本,纯数据组装。仅 macOS 编译,
-/// 非 mac 平台继续走 `project_add_menu_popup` 的 iced 弹层。
+/// 非 mac 平台继续走 `project_add_menu_popup` 的 iced 弹层。数据组装
+/// 收拢到 `project_add_menu_spec()`,这里只做 native 转换。
 #[cfg(target_os = "macos")]
 pub(crate) fn project_add_menu_items(
     recent_projects: &[ProjectInfo],
     open_project_ids: &std::collections::HashSet<i64>,
 ) -> Vec<crate::chrome::native_menu::Item<Message>> {
-    use crate::chrome::native_menu::Item;
+    crate::menu_spec::to_native(project_add_menu_spec(recent_projects, open_project_ids))
+}
+
+/// 顶栏"＋新增项目"菜单内容——native(`project_add_menu_items`)和 iced
+/// fallback(`project_add_menu_popup`)共用同一份数据。2026-09-17 迁移时
+/// 发现最后一项在两个渲染后端都写"新建项目",而"＋"按钮自己的 tooltip
+/// 写"打开项目"——统一成"打开项目"(跟 `Message::ProjectTabPickFolder`
+/// 触发的 rfd 文件夹选择器语义一致——是"打开已有目录"不是"新建")。
+pub(crate) fn project_add_menu_spec(
+    recent_projects: &[ProjectInfo],
+    open_project_ids: &std::collections::HashSet<i64>,
+) -> MenuSpec<Message> {
     let mut projects: Vec<&ProjectInfo> = recent_projects
         .iter()
         .filter(|p| !open_project_ids.contains(&p.id))
         .collect();
     projects.sort_by_key(|p| std::cmp::Reverse(p.updated_ms));
-    let mut items: Vec<Item<Message>> = projects
+    let mut spec: MenuSpec<Message> = projects
         .into_iter()
-        .map(|p| Item::entry(None, p.name.clone(), Message::ProjectSelect(p.id)))
+        .map(|p| MenuSpecItem::entry(None, p.name.clone(), Message::ProjectSelect(p.id)))
         .collect();
-    if !items.is_empty() {
-        items.push(Item::separator());
+    if !spec.is_empty() {
+        spec.push(MenuSpecItem::separator());
     }
-    items.push(Item::entry(
+    spec.push(MenuSpecItem::entry(
         Some(icons::IconKind::SquarePlus),
-        "新建项目",
+        "打开项目",
         Message::ProjectTabPickFolder,
     ));
-    items
+    spec
 }
 
 /// 顶栏"＋新增项目"按钮的最近项目选择菜单:与 homespace 项目列表同源
 /// (`app.recent_projects`,按 `updated_ms` 降序——同
 /// `homespace::paginate_recent_projects` 的排序口径,这里不分页,一次
 /// 列全),已经开着页签的项目从列表里去掉(点了也只是切过去,不如干脆
-/// 不列,少一次无意义点击)。列表下面跟一条分隔线 + "新建项目"项
+/// 不列,少一次无意义点击)。列表下面跟一条分隔线 + "打开项目"项
 /// (`Message::ProjectTabPickFolder`,同顶栏按钮原有功能——rfd 文件夹
 /// 选择),菜单项列表为空时
 /// 不画多余的孤立分隔线。样式走 `crate::chrome::menu`
@@ -457,39 +470,13 @@ pub(crate) fn project_add_menu_popup(
     if !app.project_add_menu_open {
         return column![].into();
     }
-    let mut projects: Vec<&ProjectInfo> = app
-        .recent_projects
-        .iter()
-        .filter(|p| !app.projects.contains_key(&p.id))
-        .collect();
-    projects.sort_by_key(|p| std::cmp::Reverse(p.updated_ms));
-
-    let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
-        projects
-            .into_iter()
-            .map(|p| {
-                crate::chrome::menu::item::<Message>(
-                    None,
-                    p.name.clone(),
-                    Message::ProjectSelect(p.id),
-                )
-            })
-            .collect();
-    if !items.is_empty() {
-        items.push(crate::chrome::menu::separator());
-    }
-    items.push(crate::chrome::menu::item::<Message>(
-        Some(icons::IconKind::SquarePlus),
-        "新建项目",
-        Message::ProjectTabPickFolder,
-    ));
-
-    let row_count = items.len();
-    let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        crate::chrome::menu::shell_frosted(
-            items,
-            Length::Fixed(byteui::theme::geometry::menu_item_width()),
-        );
+    let open_ids: std::collections::HashSet<i64> = app.projects.keys().copied().collect();
+    let spec = project_add_menu_spec(&app.recent_projects, &open_ids);
+    let row_count = spec.len();
+    let list = crate::menu_spec::to_iced(
+        spec,
+        Length::Fixed(byteui::theme::geometry::menu_item_width()),
+    );
 
     // 全窗口容器 + padding 把弹层推到锚点,窗口边界钳制,手法同
     // `todo_calendar_overlay`。菜单宽是固定值(`menu_item_width`);高是

@@ -431,62 +431,22 @@ pub fn clear_confirm_popup(
     _ws_state: &WorkspaceState,
     window_width: f32,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let title = row![
-        icons::view(
-            icons::IconKind::ListTodo,
-            byteui::theme::icon_size::row(),
-            byteui::theme::color::current().cream,
-        ),
-        text("清空列表")
-            .size(byteui::theme::font::subtitle())
-            .color(byteui::theme::color::current().cream),
-    ]
-    .spacing(6)
-    .align_y(iced_widget::core::Alignment::Center);
-
-    let cancel = button(
-        text("取消")
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().dim),
+    crate::dialog::confirm(
+        crate::dialog::ConfirmDialog {
+            icon: Some(icons::IconKind::ListTodo),
+            title: "清空列表".to_string(),
+            description: "这会清空当前项目的全部任务,操作不可撤销。".to_string(),
+            cancel_label: "取消".to_string(),
+            cancel_msg: Message::ClearListCancel,
+            confirm_label: "清空".to_string(),
+            confirm_msg: Message::ClearListConfirm,
+            confirm_color: byteui::theme::color::current().red,
+            // 原 `clear_confirm_popup` 的 `column.spacing(12)`，其它三处弹窗
+            // 是 8，这里原样保留 12，不随 `confirm()` 默认值归一。
+            content_spacing: 12.0,
+        },
+        window_width,
     )
-    .on_press(Message::ClearListCancel)
-    .padding([6, 12])
-    .style(crate::dialog::action_button_style(
-        byteui::theme::color::current().dim,
-    ));
-    let confirm = button(
-        text("清空")
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().red),
-    )
-    .on_press(Message::ClearListConfirm)
-    .padding([6, 12])
-    .style(crate::dialog::action_button_style(
-        byteui::theme::color::current().red,
-    ));
-
-    let dialog = container(
-        column![
-            title,
-            text("这会清空当前项目的全部任务,操作不可撤销。")
-                .size(byteui::theme::font::label())
-                .color(byteui::theme::color::current().dim),
-            crate::dialog::actions(row![cancel, confirm].spacing(8)),
-        ]
-        .spacing(12),
-    )
-    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定)——此前没给
-    // 显式宽度,靠内容撑开。
-    .width(crate::dialog::width(window_width))
-    .padding(16)
-    .style(crate::dialog::card_style);
-
-    container(dialog)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(iced_widget::core::alignment::Horizontal::Center)
-        .align_y(iced_widget::core::alignment::Vertical::Center)
-        .into()
 }
 
 /// 顶部搜索框:真正的 `byteui::form::input_text`,形状与 Files 搜索框

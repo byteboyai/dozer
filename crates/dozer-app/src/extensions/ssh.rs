@@ -1372,52 +1372,20 @@ pub fn delete_confirm_popup<'a>(
         .find(|h| h.id == host_id)
         .map(|h| h.name.as_str())
         .unwrap_or(host_id);
-    let cancel = button(
-        text("取消")
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().dim),
+    crate::dialog::confirm(
+        crate::dialog::ConfirmDialog {
+            icon: None,
+            title: format!("删除主机 \"{name}\"?"),
+            description: "这会永久删除这台主机的连接记录。".to_string(),
+            cancel_label: "取消".to_string(),
+            cancel_msg: Message::DeleteHostCancel,
+            confirm_label: "删除".to_string(),
+            confirm_msg: Message::DeleteHost(host_id.to_string()),
+            confirm_color: byteui::theme::color::current().red,
+            content_spacing: 8.0,
+        },
+        window_width,
     )
-    .on_press(Message::DeleteHostCancel)
-    .padding([6, 12])
-    .style(crate::dialog::action_button_style(
-        byteui::theme::color::current().dim,
-    ));
-    let confirm = button(
-        text("删除")
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().red),
-    )
-    .on_press(Message::DeleteHost(host_id.to_string()))
-    .padding([6, 12])
-    .style(crate::dialog::action_button_style(
-        byteui::theme::color::current().red,
-    ));
-
-    let dialog = container(
-        column![
-            text(format!("删除主机 \"{name}\"?"))
-                .size(byteui::theme::font::subtitle())
-                .color(byteui::theme::color::current().cream),
-            text("这会永久删除这台主机的连接记录。")
-                .size(byteui::theme::font::label())
-                .color(byteui::theme::color::current().dim),
-            crate::dialog::actions(row![cancel, confirm].spacing(8)),
-        ]
-        .spacing(8),
-    )
-    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定)——此前没给
-    // 显式宽度,靠内容(一行确认文案)撑开,跟其它弹窗的固定/自适应宽度
-    // 互相不一致。
-    .width(crate::dialog::width(window_width))
-    .padding(16)
-    .style(crate::dialog::card_style);
-
-    container(dialog)
-        .width(iced_widget::core::Length::Fill)
-        .height(iced_widget::core::Length::Fill)
-        .align_x(iced_widget::core::alignment::Horizontal::Center)
-        .align_y(iced_widget::core::alignment::Vertical::Center)
-        .into()
 }
 
 /// 主机面板底部 footer-bar:1px `BORDER` 分隔线 + `padding([6, 8])` 容器,

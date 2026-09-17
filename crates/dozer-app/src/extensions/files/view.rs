@@ -1,6 +1,7 @@
 //! Files 面板 view:文件树列表/行内编辑/git footer/分支选择器/右键菜单/
 //! 删除与移动确认浮层。
 
+use crate::menu_spec::{MenuSpec, MenuSpecItem};
 use crate::project::PathKind;
 use crate::theme::terminal_font;
 use crate::{delivery, theme};
@@ -779,7 +780,8 @@ fn branch_picker_popup_offset(ws_state: &WorkspaceState) -> (f32, f32) {
 /// `context_menu_popup` 的原生菜单版本——纯数据组装,不碰渲染/AppKit,和
 /// 旧版共用完全相同的条件分支(是否目录/是否根/是否有剪贴内容),方便
 /// 单测覆盖,行为上二者应保持一致。仅 macOS 编译(`native_menu` 是平台专属
-/// 模块),非 mac 平台继续走 `context_menu_popup` 的 iced 弹层。
+/// 模块),非 mac 平台继续走 `context_menu_popup` 的 iced 弹层。数据组装
+/// 收拢到 `context_menu_spec()`,这里只做 native 转换。
 #[cfg(target_os = "macos")]
 pub fn context_menu_items(
     target: &Path,
@@ -787,37 +789,47 @@ pub fn context_menu_items(
     is_root: bool,
     has_clipboard: bool,
 ) -> Vec<crate::chrome::native_menu::Item<Message>> {
-    use crate::chrome::native_menu::Item;
+    crate::menu_spec::to_native(context_menu_spec(target, is_dir, is_root, has_clipboard))
+}
+
+/// 文件树右键菜单内容——native(`context_menu_items`)和 iced fallback
+/// (`context_menu_popup`)共用同一份数据,11 个条件分支只写一遍。
+pub(crate) fn context_menu_spec(
+    target: &Path,
+    is_dir: bool,
+    is_root: bool,
+    has_clipboard: bool,
+) -> MenuSpec<Message> {
     let dim = byteui::theme::color::current().dim;
     let target = target.to_path_buf();
     let mut items = vec![
-        Item::entry(
+        MenuSpecItem::entry(
             Some(icons::IconKind::Search),
             "搜索",
             Message::OpenSearch(target.clone(), is_dir),
         ),
-        Item::separator(),
+        MenuSpecItem::separator(),
     ];
     if is_dir {
-        items.push(Item::entry(
+        items.push(MenuSpecItem::entry(
             Some(icons::IconKind::FilePlus),
             "新建文件",
             Message::NewFile(target.clone()),
         ));
-        items.push(Item::entry(
+        items.push(MenuSpecItem::entry(
             Some(icons::IconKind::FolderPlus),
             "新建文件夹",
             Message::NewFolder(target.clone()),
         ));
-        items.push(Item::separator());
+        items.push(MenuSpecItem::separator());
     }
-    items.push(Item::entry(
+    items.push(MenuSpecItem::entry(
         Some(icons::IconKind::Copy),
         "复制",
         Message::Copy(target.clone(), is_dir),
     ));
     if is_dir {
-        items.push(Item::Entry {
+        items.push(MenuSpecItem::Entry {
             icon: Some(icons::IconKind::ClipboardPaste),
             icon_color: None,
             label: "粘贴".into(),
@@ -831,34 +843,34 @@ pub fn context_menu_items(
         });
     }
     if !is_root {
-        items.push(Item::entry(
+        items.push(MenuSpecItem::entry(
             Some(icons::IconKind::Trash),
             "删除",
             Message::DeleteRequest(target.clone(), is_dir),
         ));
-        items.push(Item::entry(
+        items.push(MenuSpecItem::entry(
             Some(icons::IconKind::Rename),
             "重命名",
             Message::RenameStart(target.clone()),
         ));
     }
-    items.push(Item::separator());
-    items.push(Item::entry(
+    items.push(MenuSpecItem::separator());
+    items.push(MenuSpecItem::entry(
         None,
         "复制绝对路径",
         Message::CopyPath(target.clone(), PathKind::Absolute),
     ));
-    items.push(Item::entry(
+    items.push(MenuSpecItem::entry(
         None,
         "复制相对路径",
         Message::CopyPath(target.clone(), PathKind::Relative),
     ));
-    items.push(Item::entry(
+    items.push(MenuSpecItem::entry(
         Some(icons::IconKind::FolderOpen),
         "在 Finder 中打开",
         Message::RevealInFinder(target.clone()),
     ));
-    items.push(Item::entry(
+    items.push(MenuSpecItem::entry(
         Some(icons::IconKind::RefreshCw),
         "从磁盘重新加载",
         Message::ReloadFromDisk,
@@ -877,14 +889,6 @@ pub fn context_menu_popup<'a>(
     let Some(menu) = &app_state.context_menu else {
         return column![].into();
     };
-    let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
-        Vec::new();
-    let push_sep =
-        |items: &mut Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>>| {
-            if !items.is_empty() {
-                items.push(menu_separator());
-            }
-        };
     // 目标是否为项目根:根目录不可删除/重命名(否则会连整个项目目录一起
     // 删/改名),据此从菜单隐去对应项。
     let is_root = ws_state
@@ -892,89 +896,11 @@ pub fn context_menu_popup<'a>(
         .as_ref()
         .map(|t| t.root() == menu.target.as_path())
         .unwrap_or(false);
-    // "搜索"恒置顶(对目录=全文搜该目录,对文件=搜该文件),与其余项用一条
-    // 分隔线隔开。
-    items.push(crate::chrome::menu::item::<Message>(
-        Some(icons::IconKind::Search),
-        "搜索",
-        Message::OpenSearch(menu.target.clone(), menu.is_dir),
-    ));
-    push_sep(&mut items);
-    if menu.is_dir {
-        items.push(crate::chrome::menu::item::<Message>(
-            Some(icons::IconKind::FilePlus),
-            "新建文件",
-            Message::NewFile(menu.target.clone()),
-        ));
-        items.push(crate::chrome::menu::item::<Message>(
-            Some(icons::IconKind::FolderPlus),
-            "新建文件夹",
-            Message::NewFolder(menu.target.clone()),
-        ));
-    }
-    push_sep(&mut items);
-    items.push(crate::chrome::menu::item::<Message>(
-        Some(icons::IconKind::Copy),
-        "复制",
-        Message::Copy(menu.target.clone(), menu.is_dir),
-    ));
-    if menu.is_dir {
-        let has_clipboard = ws_state.tree_clipboard.is_some();
-        let paste_msg = Message::Paste(menu.target.clone());
-        items.push(if has_clipboard {
-            crate::chrome::menu::item::<Message>(
-                Some(icons::IconKind::ClipboardPaste),
-                "粘贴",
-                paste_msg,
-            )
-        } else {
-            // 剪贴槽为空:置灰且不挂 on_press,真正不可点(同 P1L tab 箭头
-            // "到头变灰"的既有处理口径,不是视觉变灰但仍能点)。背景透明
-            // 透出容器底,不要 hover 高亮——保持视觉一致的"灰且不可点"。
-            crate::chrome::menu::item_locked::<Message>(
-                Some(icons::IconKind::ClipboardPaste),
-                "粘贴",
-                byteui::theme::color::current().dim,
-            )
-        });
-    }
-    // 项目根不可删除/重命名:从菜单隐去这两项(其余目录均可)。
-    if !is_root {
-        items.push(crate::chrome::menu::item::<Message>(
-            Some(icons::IconKind::Trash),
-            "删除",
-            Message::DeleteRequest(menu.target.clone(), menu.is_dir),
-        ));
-        items.push(crate::chrome::menu::item::<Message>(
-            Some(icons::IconKind::Rename),
-            "重命名",
-            Message::RenameStart(menu.target.clone()),
-        ));
-    }
-    push_sep(&mut items);
-    items.push(crate::chrome::menu::item::<Message>(
-        None,
-        "复制绝对路径",
-        Message::CopyPath(menu.target.clone(), crate::project::PathKind::Absolute),
-    ));
-    items.push(crate::chrome::menu::item::<Message>(
-        None,
-        "复制相对路径",
-        Message::CopyPath(menu.target.clone(), crate::project::PathKind::Relative),
-    ));
-    items.push(crate::chrome::menu::item::<Message>(
-        Some(icons::IconKind::FolderOpen),
-        "在 Finder 中打开",
-        Message::RevealInFinder(menu.target.clone()),
-    ));
-    items.push(crate::chrome::menu::item::<Message>(
-        Some(icons::IconKind::RefreshCw),
-        "从磁盘重新加载",
-        Message::ReloadFromDisk,
-    ));
-
-    let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        crate::chrome::menu::shell_frosted(items, Length::Shrink);
+    let has_clipboard = ws_state.tree_clipboard.is_some();
+    // 菜单内容组装收拢到 `context_menu_spec()`(与 native 版共用同一份
+    // 条件分支),这里只做 iced 转换。注意宽度保持原值 `Length::Shrink`。
+    let spec = context_menu_spec(&menu.target, menu.is_dir, is_root, has_clipboard);
+    let list = crate::menu_spec::to_iced(spec, Length::Shrink);
 
     container(list)
         .width(Length::Fill)
@@ -986,14 +912,6 @@ pub fn context_menu_popup<'a>(
             bottom: 0.0,
         })
         .into()
-}
-
-/// 菜单项之间的细分隔线:1px BORDER 高度,左右各留一点内边距,与 macOS
-/// 系统菜单分组线同款。列项之间由 `column.spacing` 控间距,分隔线本身不
-/// 再额外加 padding。
-pub(crate) fn menu_separator<'a>()
--> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    crate::chrome::menu::separator::<Message>()
 }
 
 /// 删除确认框:居中浮层,显示目标文件名 + 确认/取消两个按钮。
@@ -1009,54 +927,20 @@ pub fn delete_confirm_popup(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string());
     let kind = if *is_dir { "文件夹" } else { "文件" };
-    let dialog = container(
-        column![
-            text(format!("删除{kind} \"{name}\"?"))
-                .size(byteui::theme::font::subtitle())
-                .color(byteui::theme::color::current().cream),
-            text("会移入系统回收站,可从回收站找回。")
-                .size(byteui::theme::font::label())
-                .color(byteui::theme::color::current().dim),
-            crate::dialog::actions(
-                row![
-                    button(
-                        text("取消")
-                            .size(byteui::theme::font::body())
-                            .color(byteui::theme::color::current().dim)
-                    )
-                    .on_press(Message::DeleteCancel)
-                    .padding([6, 12])
-                    .style(crate::dialog::action_button_style(
-                        byteui::theme::color::current().dim
-                    )),
-                    button(
-                        text("删除")
-                            .size(byteui::theme::font::body())
-                            .color(byteui::theme::color::current().red)
-                    )
-                    .on_press(Message::DeleteConfirm)
-                    .padding([6, 12])
-                    .style(crate::dialog::action_button_style(
-                        byteui::theme::color::current().red
-                    )),
-                ]
-                .spacing(8),
-            ),
-        ]
-        .spacing(8),
+    crate::dialog::confirm(
+        crate::dialog::ConfirmDialog {
+            icon: None,
+            title: format!("删除{kind} \"{name}\"?"),
+            description: "会移入系统回收站,可从回收站找回。".to_string(),
+            cancel_label: "取消".to_string(),
+            cancel_msg: Message::DeleteCancel,
+            confirm_label: "删除".to_string(),
+            confirm_msg: Message::DeleteConfirm,
+            confirm_color: byteui::theme::color::current().red,
+            content_spacing: 8.0,
+        },
+        window_width,
     )
-    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定)——此前没给
-    // 显式宽度,靠内容撑开。
-    .width(crate::dialog::width(window_width))
-    .padding(16)
-    .style(crate::dialog::card_style);
-
-    container(dialog)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(iced_widget::core::alignment::Horizontal::Center)
-        .align_y(iced_widget::core::alignment::Vertical::Center)
-        .into()
 }
 
 /// 拖拽移动确认框:居中浮层,视觉模板同 `delete_confirm_popup`(卡片 +
