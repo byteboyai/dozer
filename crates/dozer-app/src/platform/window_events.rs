@@ -36,6 +36,7 @@ use winit::{
 use crate::app::{App, Message, PanelKind};
 use crate::extensions;
 use crate::platform::file_history_overlay;
+use crate::platform::project_create_overlay;
 use crate::platform::search_overlay;
 use crate::preview;
 use crate::theme;
@@ -139,6 +140,11 @@ pub(crate) enum Runner {
         /// is_some()` 单向驱动开/关,且与 `search_overlay` 互斥(见
         /// `OverlayKind`/`close_other_overlays`)。
         file_history_overlay: Option<file_history_overlay::FileHistoryOverlay>,
+        /// 同 `search_overlay`/`file_history_overlay`,"创建项目"弹窗的
+        /// 独立窗口宿主。**不接入失焦关闭**(见 `ProjectCreateOverlay` 文档
+        /// 注释),生命周期只由 `sync_project_create_overlay` 按
+        /// `app.project_create.is_some()` 驱动。
+        project_create_overlay: Option<project_create_overlay::ProjectCreateOverlay>,
     },
 }
 
@@ -158,6 +164,7 @@ pub(crate) enum FocusIntent {
 pub(crate) enum OverlayKind {
     Search,
     FileHistory,
+    ProjectCreate,
 }
 
 impl Runner {
@@ -1056,6 +1063,7 @@ impl Runner {
         let Self::Ready {
             search_overlay,
             file_history_overlay,
+            project_create_overlay,
             ..
         } = self
         else {
@@ -1066,6 +1074,9 @@ impl Runner {
         }
         if keep != OverlayKind::FileHistory {
             *file_history_overlay = None;
+        }
+        if keep != OverlayKind::ProjectCreate {
+            *project_create_overlay = None;
         }
     }
 
@@ -1197,6 +1208,73 @@ impl Runner {
             return;
         };
         if let Some(overlay) = file_history_overlay {
+            overlay.request_redraw();
+        }
+    }
+
+    fn sync_project_create_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let action = {
+            let Self::Ready {
+                app,
+                project_create_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            project_create_overlay::sync_action(
+                app.project_create.is_some(),
+                project_create_overlay.is_some(),
+            )
+        };
+        match action {
+            project_create_overlay::SyncAction::Open => {
+                self.close_other_overlays(OverlayKind::ProjectCreate);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    app,
+                    project_create_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                let main_window_size =
+                    winit::dpi::LogicalSize::new(app.window_size.0, app.window_size.1);
+                *project_create_overlay = Some(project_create_overlay::ProjectCreateOverlay::open(
+                    window,
+                    adapter,
+                    device,
+                    queue,
+                    instance,
+                    main_window_size,
+                    el,
+                ));
+            }
+            project_create_overlay::SyncAction::Close => {
+                let Self::Ready {
+                    project_create_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *project_create_overlay = None;
+            }
+            project_create_overlay::SyncAction::Noop => {}
+        }
+        let Self::Ready {
+            project_create_overlay,
+            ..
+        } = self
+        else {
+            return;
+        };
+        if let Some(overlay) = project_create_overlay {
             overlay.request_redraw();
         }
     }
@@ -1336,6 +1414,33 @@ impl Runner {
             Message::ProjectTabPickFolder => {
                 if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                     app.update(Message::ProjectTabOpen(dir));
+                }
+            }
+            // "创建项目"弹窗里两处"选择根目录…":同 `ProjectTabPickFolder`
+            // 的套路,原生模态选中后回填 `*RootDirPicked`。`project_create`
+            // 模块自己不认识 `rfd`(保持可在单测里构造),原生选择器必须
+            // 在这层窗口句柄侧拦截。本窗口不做失焦关闭(见
+            // `ProjectCreateOverlay`),即为了此模态弹起时表单不被误关。
+            Message::ProjectCreate(
+                crate::extensions::project_create::Message::LocalRootDirPick,
+            ) => {
+                if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                    app.update(Message::ProjectCreate(
+                        crate::extensions::project_create::Message::LocalRootDirPicked(
+                            dir.display().to_string(),
+                        ),
+                    ));
+                }
+            }
+            Message::ProjectCreate(
+                crate::extensions::project_create::Message::CloneRootDirPick,
+            ) => {
+                if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                    app.update(Message::ProjectCreate(
+                        crate::extensions::project_create::Message::CloneRootDirPicked(
+                            dir.display().to_string(),
+                        ),
+                    ));
                 }
             }
             // 拖拽移动确认框"到目录"旁边的"..."浏览按钮:同上一条
@@ -1799,6 +1904,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 proxy: proxy.clone(),
                 search_overlay: None,
                 file_history_overlay: None,
+                project_create_overlay: None,
             };
         }
     }
@@ -1820,6 +1926,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.apply_pending_zoom_toggle();
         self.sync_search_overlay(event_loop);
         self.sync_file_history_overlay(event_loop);
+        self.sync_project_create_overlay(event_loop);
     }
 
     fn window_event(
@@ -1913,6 +2020,35 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             return;
         }
 
+        if let Self::Ready {
+            app,
+            project_create_overlay,
+            ..
+        } = self
+            && let Some(overlay) = project_create_overlay
+            && window_id == overlay.window_id()
+        {
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app);
+            } else if matches!(event, WindowEvent::CloseRequested) {
+                self.dispatch(Message::ProjectCreate(
+                    extensions::project_create::Message::Close,
+                ));
+            } else {
+                // 故意不处理 `WindowEvent::Focused`——本窗口不做失焦关闭
+                // (见 `ProjectCreateOverlay` 文档注释),根目录字段要弹
+                // 嵌套的 rfd 选择器,那会让本窗口瞬间失焦,若照搬 search/
+                // file_history 的失焦关闭逻辑会在用户选目录过程中把整个
+                // 表单误关掉。Esc 键的关闭由 `handle_input` 内部拦截,
+                // 走的是普通消息返回路径,不需要这里特殊处理。
+                for message in overlay.handle_input(app, &event) {
+                    self.dispatch(message);
+                }
+            }
+            self.sync_project_create_overlay(event_loop);
+            return;
+        }
+
         // `consumed == true`:已经被应用级快捷键接管(见
         // `on_window_event` 顶部文档),下面不能再把同一个原始事件转换
         // 喂给 iced 标准管线,否则会重复处理(⌘S 这类字母快捷键会在
@@ -1941,6 +2077,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 resized,
                 search_overlay,
                 file_history_overlay,
+                project_create_overlay,
                 ..
             } = self
             else {
@@ -2834,12 +2971,25 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             app.window_size.1,
                         );
                     }
+                    if let Some(overlay) = project_create_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                            app.window_size.0,
+                            app.window_size.1,
+                        );
+                    }
                     // bounds 同步由本函数末尾的 sync_previews 统一执行
                 }
                 WindowEvent::CloseRequested => {
                     // 图干净,不是正确性要求——Drop 本身就会释放。
                     *search_overlay = None;
                     *file_history_overlay = None; // 同上,图干净。
+                    *project_create_overlay = None; // 图干净,Drop 本身就会释放。
                     // 同步写盘,不用 `spawn_shell_layout_save` 的异步路径——
                     // 进程马上退出,spawn 的 tokio 任务不保证跑得完。
                     app.persist_window_size_on_exit();
@@ -2995,5 +3145,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.apply_pending_zoom_toggle();
         self.sync_search_overlay(event_loop);
         self.sync_file_history_overlay(event_loop);
+        self.sync_project_create_overlay(event_loop);
     }
 }
