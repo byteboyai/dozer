@@ -136,9 +136,61 @@ pub fn delete_token(provider: GitProvider) -> Result<(), String> {
     }
 }
 
+/// 三家 whoami 接口(GitHub `/user`、GitLab `/api/v4/user`、Gitee
+/// `/api/v5/user`)返回的用户名字段都叫 `login`,不需要按 provider 分支。
+pub(crate) fn extract_username(json: &str) -> Result<String, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("解析响应失败: {e}"))?;
+    value
+        .get("login")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "响应中缺少 login 字段".to_string())
+}
+
+/// 调用服务商 whoami 接口校验 `token` 有效,成功返回用户名。三家鉴权方式
+/// 不同:GitHub 用 `Authorization: Bearer`,GitLab 用 `PRIVATE-TOKEN` 头,
+/// Gitee 用 `access_token` query 参数(Gitee API v5 的既定用法)。不做
+/// 401/403/404 的文案区分(YAGNI),非 2xx 一律归为"令牌无效或已过期"。
+pub async fn validate_token(provider: GitProvider, token: &str) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let mut req = client
+        .get(provider.whoami_url())
+        .header("User-Agent", "dozer");
+    req = match provider {
+        GitProvider::GitHub => req.header("Authorization", format!("Bearer {token}")),
+        GitProvider::GitLab => req.header("PRIVATE-TOKEN", token),
+        GitProvider::Gitee => req.query(&[("access_token", token)]),
+    };
+    let resp = req.send().await.map_err(|e| format!("网络请求失败: {e}"))?;
+    if !resp.status().is_success() {
+        return Err("令牌无效或已过期".to_string());
+    }
+    let body = resp.text().await.map_err(|e| format!("读取响应失败: {e}"))?;
+    extract_username(&body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extract_username_reads_login_field() {
+        assert_eq!(
+            extract_username(r#"{"login":"octocat","id":1}"#).unwrap(),
+            "octocat"
+        );
+    }
+
+    #[test]
+    fn extract_username_rejects_missing_login() {
+        assert!(extract_username(r#"{"id":1}"#).is_err());
+    }
+
+    #[test]
+    fn extract_username_rejects_invalid_json() {
+        assert!(extract_username("not json").is_err());
+    }
 
     #[test]
     fn git_provider_keys_and_urls_are_distinct() {
