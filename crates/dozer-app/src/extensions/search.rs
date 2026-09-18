@@ -8,7 +8,7 @@ use grep_searcher::{Searcher, SearcherBuilder, Sink, SinkMatch};
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
 use iced_widget::core::{Border, Color, Element, Length, Rectangle};
-use iced_widget::{button, column, container, row, scrollable, stack, text};
+use iced_widget::{button, column, container, row, scrollable, text};
 use std::path::{Path, PathBuf};
 
 /// 搜索作用域：右键目标。
@@ -335,12 +335,16 @@ fn results_list<'a>(
         .into()
 }
 
-/// 搜索弹窗本体:套用 `dialog` 模块统一的弹窗原语(磨砂遮罩 + 金色描边
-/// 卡片)。由 `App::view()` 顶层浮层链的 `stack!` 里调用;未打开时返回空元素。
-pub fn search_modal<'a>(
+/// 搜索弹窗的卡片本体(标题行 + 查询行 + 结果列表),无遮罩、无外层定位——
+/// 这次拆分是为了让独立 overlay 窗口(`platform/search_overlay.rs`)能直接
+/// 复用同一份视图逻辑,只是换一个宿主(独立窗口取代 `App::view()` 的
+/// `stack!` 层)。`height(Length::Fill)`:调用方现在总是给一块已经量好的
+/// 画布(要么是旧路径里 `container(dialog)` 分配的区域,要么是新路径里
+/// 整扇 overlay 窗口的画布),不需要 `Length::Shrink` 那种"在更大画布里
+/// 收缩适配内容"的语义。
+pub(crate) fn search_card<'a>(
     ws: &'a WorkspaceState,
     project_root: Option<&'a Path>,
-    window_width: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     if !ws.open {
         return column![].into();
@@ -415,32 +419,11 @@ pub fn search_modal<'a>(
         );
     }
 
-    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定),取代此前
-    // 写死的 560px。
-    let dialog = container(body.padding(16))
-        .width(crate::dialog::width(window_width))
-        .height(Length::Shrink)
-        .max_height(640.0)
-        .style(crate::dialog::card_style);
-
-    // 全窗遮罩做成可点击的目标:点在卡片**外**(遮罩上)即 `SearchClose`。
-    // 卡片本体是上层 `stack!` 的兄弟元素(自适配宽高、垂直/水平居中),不盖住
-    // 遮罩的点击——所以"点遮罩关闭"能成立(与只靠 ×/Esc 的 `edit_modal` 略不同,
-    // 但更贴合 spec 验收"点遮罩都能关闭")。
-    let scrim = crate::dialog::scrim(Message::SearchClose);
-
-    stack![
-        scrim,
-        container(dialog)
-            .padding(40.0)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_x(iced_widget::core::alignment::Horizontal::Center)
-            .align_y(iced_widget::core::alignment::Vertical::Center)
-    ]
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
+    container(body.padding(16))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(crate::dialog::card_style)
+        .into()
 }
 
 #[cfg(test)]

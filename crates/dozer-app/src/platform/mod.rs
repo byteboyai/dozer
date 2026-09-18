@@ -4,5 +4,6 @@
 
 pub mod file_drag;
 pub mod picker;
+pub mod search_overlay;
 pub mod window;
 pub mod window_events;

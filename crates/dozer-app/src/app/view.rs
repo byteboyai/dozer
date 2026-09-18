@@ -13,7 +13,6 @@ use crate::extensions::files;
 use crate::extensions::footbar;
 use crate::extensions::git_log;
 use crate::extensions::project;
-use crate::extensions::search;
 use crate::extensions::ssh;
 use crate::extensions::todo;
 use crate::extensions::usage;
@@ -128,20 +127,7 @@ impl App {
         ];
         let base = column![top, body];
 
-        let popped = if ws.search_popup_open() {
-            // 文件树右键"搜索"弹窗:窗口级浮层。遮罩"点点即关"由
-            // `search_modal` 内部自己处理(整窗 `SCRIM` 做成可点击目标,卡片
-            // 是兄弟元素盖在上面),这里只需把弹窗叠在 `base` 之上。
-            let project_root = ws.project.as_ref().map(|p| std::path::Path::new(&p.path));
-            stack![
-                base,
-                search::search_modal(&ws.search, project_root, self.window_size.0)
-                    .map(Message::Search)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        } else if ws.files.tree_delete_confirm_is_some() {
+        let popped = if ws.files.tree_delete_confirm_is_some() {
             let dismiss = crate::dialog::scrim(Message::Files(files::Message::DeleteCancel));
             stack![
                 base,

@@ -35,6 +35,7 @@ use winit::{
 
 use crate::app::{App, Message, PanelKind};
 use crate::extensions;
+use crate::platform::search_overlay;
 use crate::preview;
 use crate::theme;
 
@@ -50,6 +51,14 @@ pub(crate) enum Runner {
         window: Arc<winit::window::Window>,
         queue: wgpu::Queue,
         device: wgpu::Device,
+        /// 建主窗口 wgpu 资源时用的 `Instance`/`Adapter`,原本只是
+        /// `resumed()` 里的局部变量、用完就扔——search overlay 窗口
+        /// (`platform/search_overlay.rs`)要另开一个 `Surface`+`Engine`,
+        /// 必须用同一个 `Instance` 建 surface、同一个 `Adapter` 建
+        /// `Engine`(不能用一个新建的、跟当前 `device`/`queue` 没有血缘
+        /// 关系的 `Instance`/`Adapter`),所以补存下来。
+        instance: wgpu::Instance,
+        adapter: wgpu::Adapter,
         surface: wgpu::Surface<'static>,
         format: wgpu::TextureFormat,
         renderer: iced_renderer::Renderer,
@@ -121,6 +130,9 @@ pub(crate) enum Runner {
         /// 事件循环代理:webview IPC handler 用它把 `WebViewFocused` 送回
         /// UI 线程(winit 收不到子 webview 上的鼠标点击)。
         proxy: winit::event_loop::EventLoopProxy<Message>,
+        /// 独立原生窗口宿主——`None` 表示当前没开。生命周期由
+        /// `sync_search_overlay` 按 `ws.search.is_open()` 单向驱动开/关。
+        search_overlay: Option<search_overlay::SearchOverlay>,
     },
 }
 
@@ -493,10 +505,14 @@ impl Runner {
             }
             _ => {}
         }
-        // 右键"搜索"弹窗打开时,Esc 优先:任何时候直接关整个弹窗(迁移到
-        // 原生 text_input 后查询框聚焦态由 iced 自己管,不再有"编辑态"
-        // 这个中间态,不再区分先退编辑态再关弹窗的两级行为)。不放靠后
-        // 位置以免被终端当普通按键消费掉。
+
+        // 兜底:search overlay 打开时,主窗口这边收到的 Esc 也关掉它。
+        // 正常路径是 overlay 自己的 `SearchOverlay::handle_input`(它有
+        // 独立的 `WindowId`,这个按键根本不会落到这里)——这里纯粹是万一
+        // overlay 没能真的拿到 OS 键盘焦点(比如某个平台/窗口管理器边界
+        // 情形导致按键被系统转投回了主窗口)时的安全阀,不是主路径,不
+        // 要求它一直有效。跟下面这段"原生放行闸门"里补的
+        // `app.search_popup_open()` 是同一个防御性考虑,理由见那处注释。
         if app.search_popup_open()
             && let WindowEvent::KeyboardInput {
                 event,
@@ -765,7 +781,14 @@ impl Runner {
             || app.files_move_confirm_open()
             || app.project_name_focused()
             || app.project_description_focused()
-            || app.query_focused()
+            // search overlay 打开时的防御性兜底:查询框已经不在主窗口的
+            // `UserInterface` 里了,正常情况下这个窗口的按键事件根本不会
+            // 落到这条主窗口路径(overlay 是独立 `WindowId`,自己的
+            // `SearchOverlay::handle_input` 处理)。这里加上纯粹是为了
+            // "万一 overlay 没能真的拿到 OS 键盘焦点"这种边界情形兜底——
+            // 至少不让按键被当成 ⌘ 组合键/终端输入误处理(即便它们也到
+            // 不了查询框,`Esc` 靠上面那条独立的兜底块能关掉弹窗)。
+            || app.search_popup_open()
         {
             return false;
         }
@@ -1008,6 +1031,52 @@ impl Runner {
             // 从 URL 切到 HTML `<title>`。
             true,
         );
+    }
+
+    /// 独立按 `ws.search.is_open()` 开/关 search overlay 窗口,跟
+    /// `sync_previews` 同款"每次分发完消息就跑一遍"模式,但各管各的
+    /// (webview 池同步跟 overlay 窗口生命周期没有交集)。
+    fn sync_search_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let Self::Ready {
+            window,
+            instance,
+            adapter,
+            device,
+            queue,
+            app,
+            search_overlay,
+            ..
+        } = self
+        else {
+            return;
+        };
+        match search_overlay::sync_action(app.search_popup_open(), search_overlay.is_some()) {
+            search_overlay::SyncAction::Open => {
+                let window_width = app.window_size.0;
+                *search_overlay = Some(search_overlay::SearchOverlay::open(
+                    window,
+                    adapter,
+                    device,
+                    queue,
+                    instance,
+                    window_width,
+                    el,
+                ));
+            }
+            search_overlay::SyncAction::Close => *search_overlay = None,
+            search_overlay::SyncAction::Noop => {}
+        }
+        // 这次分发的消息可能只是改了 `ws.search` 的内容(典型例子:异步
+        // `SearchResults` 从 `user_event` 落地),不涉及开/关窗口,上面的
+        // `match` 不会碰它——但内容变了就得让这扇窗口重绘,不然会一直停在
+        // "搜索中…"直到用户碰巧在这扇窗口里移动一下鼠标(`handle_input`
+        // 自己也会 `request_redraw`,纯属误打误撞)。不判断"到底是不是真的
+        // 有变化",跟主窗口 `dispatch()` 对几乎每条消息都无条件
+        // `request_redraw()` 的既有尺度一致,不用为这个小对话框单独发明一套
+        // 精确脏检查。
+        if let Some(overlay) = search_overlay {
+            overlay.request_redraw();
+        }
     }
 
     /// 首页右栏全局浏览器(`home_browser`)的 webview 像素边界:占满右侧
@@ -1580,6 +1649,8 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 window,
                 device,
                 queue,
+                instance,
+                adapter,
                 renderer,
                 surface,
                 format,
@@ -1604,6 +1675,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 // 默认终端拿键盘,跟现状(启动时终端可打字)一致。
                 current_focus: FocusIntent::Terminal,
                 proxy: proxy.clone(),
+                search_overlay: None,
             };
         }
     }
@@ -1612,7 +1684,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
     /// （attach 数据流的输出/退出、daemon 错误、新建会话完成……）在这里
     /// 落地：直接喂给 `App::update`，跟 `window_event` 里处理
     /// iced 消息走的是同一条 `update` 逻辑，只是消息来源不同。
-    fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: Message) {
+    fn user_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, event: Message) {
         if !matches!(self, Self::Ready { .. }) {
             return;
         }
@@ -1623,14 +1695,69 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_previews();
         self.apply_pending_focus();
         self.apply_pending_zoom_toggle();
+        self.sync_search_overlay(event_loop);
     }
 
     fn window_event(
         &mut self,
         event_loop: &winit::event_loop::ActiveEventLoop,
-        _window_id: winit::window::WindowId,
+        window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
+        // search overlay 窗口自己那份 `WindowId` 的事件,整段独立处理,
+        // 早退保证不动下面那 ~1000 行主窗口的既有 `match`。
+        if let Self::Ready {
+            app,
+            search_overlay,
+            ..
+        } = self
+            && let Some(overlay) = search_overlay
+            && window_id == overlay.window_id()
+        {
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app);
+            } else if matches!(event, WindowEvent::CloseRequested) {
+                self.dispatch(Message::Search(extensions::search::Message::SearchClose));
+            } else if let WindowEvent::Focused(focused) = event {
+                // 合成 Focused(false) 不计为失焦(见 SearchOverlay::handle_focus)。
+                if overlay.handle_focus(focused) {
+                    self.dispatch(Message::Search(extensions::search::Message::SearchClose));
+                }
+            } else {
+                for message in overlay.handle_input(app, &event) {
+                    self.dispatch(message);
+                }
+            }
+            // 查询框原生右键菜单(剪切/复制/粘贴)选中一项后的合成按键收尾——
+            // 主窗口那份等价逻辑(window_event 尾部)建的是 `app.view()`,
+            // 查询框已经不在那棵树里,够不着,这扇窗口自己补一遍。上面的
+            // `self.dispatch(...)` 需要整个 `self` 的可变借用,跟这里已经
+            // 借出去的 `app`/`overlay` 冲突不了(NLL 允许 `app`/`overlay`
+            // 在各自分支内"最后一次用"之后释放),但这一步要在 dispatch 循环
+            // *之后* 再用一次 `app`,所以在这里重新单独借一次,而不是复用
+            // 上面那次借用。
+            if let Self::Ready {
+                app,
+                search_overlay,
+                ..
+            } = self
+                && let Some(overlay) = search_overlay
+            {
+                overlay.apply_pending_native_menu_edit_key(app);
+            }
+            // 挑中一条结果(`Message::Search(Pick(hit))`)在 `dispatch` 里
+            // 被内核拦截成 `PreviewOpenPath` + `SearchClose`,会新开/切换
+            // 预览 webview、设置待聚焦意图——这两件事平时都要靠这三个调用
+            // 落地(`user_event`/主窗口 `window_event` 尾部都是这个顺序),
+            // overlay 这条分支之前漏调了,新开的预览要等主窗口凑巧被别的
+            // 事件触发到这段收尾才会真的显示出来/拿到焦点。
+            self.sync_previews();
+            self.apply_pending_focus();
+            self.apply_pending_zoom_toggle();
+            self.sync_search_overlay(event_loop);
+            return;
+        }
+
         // `consumed == true`:已经被应用级快捷键接管(见
         // `on_window_event` 顶部文档),下面不能再把同一个原始事件转换
         // 喂给 iced 标准管线,否则会重复处理(⌘S 这类字母快捷键会在
@@ -1657,6 +1784,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 clipboard,
                 cache,
                 resized,
+                search_overlay,
                 ..
             } = self
             else {
@@ -1750,16 +1878,13 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                 .active_workspace_mut()
                                 .is_some_and(|ws| ws.todo.take_category_rename_focus_pending());
 
-                            // 同理,消费 项目名称编辑/右键搜索 弹窗查询框两个
-                            // 一次性聚焦位(触发点击落在旧的 button/MouseArea
-                            // 上,真 `text_input` 本帧才出现、不会自己拿焦点;
-                            // 验收意见框常驻可见、点击即原生聚焦,不需要这机制)。
+                            // 同理,消费 项目名称编辑 的一次性聚焦位(触发
+                            // 点击落在旧的 button/MouseArea 上,真
+                            // `text_input` 本帧才出现、不会自己拿焦点;验收
+                            // 意见框常驻可见、点击即原生聚焦,不需要这机制)。
                             let name_edit_focus_pending = app
                                 .active_workspace_mut()
                                 .is_some_and(|ws| ws.take_name_edit_focus_pending());
-                            let query_focus_pending = app
-                                .active_workspace_mut()
-                                .is_some_and(|ws| ws.take_query_focus_pending());
 
                             // 同理,消费"浏览器地址栏刚获得焦点、需要全选
                             // 当前网址"的一次性位(单击即选中整条,见
@@ -1921,13 +2046,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                 let mut op =
                                     iced_widget::core::widget::operation::focusable::focus::<()>(
                                         extensions::project::name_field_id(),
-                                    );
-                                crate::runtime::run_operate(&mut interface, renderer, &mut op);
-                            }
-                            if query_focus_pending {
-                                let mut op =
-                                    iced_widget::core::widget::operation::focusable::focus::<()>(
-                                        extensions::search::query_field_id(),
                                     );
                                 crate::runtime::run_operate(&mut interface, renderer, &mut op);
                             }
@@ -2289,19 +2407,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                     false
                                 };
 
-                            // 右键搜索弹窗查询框(Stage 6):全局浮层,不挂靠
-                            // 任何 `left_view`,gating 条件用 `search_popup_open`。
-                            let query_focused = if app.search_popup_open() {
-                                crate::runtime::run_operate(
-                                    &mut interface,
-                                    renderer,
-                                    &mut extensions::search::CaptureQueryFocus,
-                                );
-                                extensions::search::take_query_focused()
-                            } else {
-                                false
-                            };
-
                             // IME 组字预览浮层的落点 + 内容,`State::Updated`
                             // 分支下面填充,画在 `interface.draw()` 之后
                             // (见下方"画 IME 组字预览浮层"注释)。
@@ -2482,7 +2587,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             app.set_detail_reply_focused(detail_reply_focused);
                             app.set_project_name_focused(name_edit_focused);
                             app.set_project_description_focused(description_edit_focused);
-                            app.set_query_focused(query_focused);
                             app.set_conversation_search_focused(conversation_search_focused);
                             app.set_git_log_search_focused(git_log_search_focused);
                             app.set_find_query_focused(
@@ -2548,9 +2652,25 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     // 显隐、全屏进出、拖拽缩放都会经过这里，见
                     // `center_traffic_lights`（内部按基线幂等，重复调用安全）。
                     crate::platform::window::center_traffic_lights(window);
+                    // search overlay 是一扇尺寸跟随主窗口宽度的子窗口,主窗口
+                    // resize 后要重新居中 + 重配 surface(`with_parent_window`
+                    // 只管"跟着移动",不管尺寸/布局联动)。
+                    if let Some(overlay) = search_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                            app.window_size.0,
+                        );
+                    }
                     // bounds 同步由本函数末尾的 sync_previews 统一执行
                 }
                 WindowEvent::CloseRequested => {
+                    // 图干净,不是正确性要求——Drop 本身就会释放。
+                    *search_overlay = None;
                     // 同步写盘,不用 `spawn_shell_layout_save` 的异步路径——
                     // 进程马上退出,spawn 的 tokio 任务不保证跑得完。
                     app.persist_window_size_on_exit();
@@ -2704,5 +2824,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_previews();
         self.apply_pending_focus();
         self.apply_pending_zoom_toggle();
+        self.sync_search_overlay(event_loop);
     }
 }
