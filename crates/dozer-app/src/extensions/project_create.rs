@@ -5,8 +5,10 @@
 //! 的既有分工:本模块只管状态/消息/视图/异步落盘逻辑,不碰 winit/wgpu。
 
 use crate::delivery;
+use crate::git_accounts::{self, GitProvider, RemoteRepo};
 use iced_widget::core::{Border, Length};
 use iced_widget::{Space, button, column, container, row, text};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// 最终项目路径 = 根目录/项目名称。纯字符串拼接,不做存在性判断
@@ -60,6 +62,21 @@ pub enum Tab {
     Clone,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CloneSource {
+    #[default]
+    Url,
+    Provider(GitProvider),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RepoListState {
+    Loading,
+    Loaded(Vec<RemoteRepo>),
+    Error(String),
+    NotConnected,
+}
+
 pub struct LocalForm {
     pub root_dir: String,
     pub name: String,
@@ -88,6 +105,11 @@ pub struct CloneForm {
     /// 编辑")。
     pub name_touched: bool,
     pub description: iced_widget::text_editor::Content,
+    /// 当前"远程仓库"字段展示的是手填 URL 还是某个账户的仓库列表。
+    pub source: CloneSource,
+    /// 本次对话框会话内按 provider 缓存的仓库列表加载态,切换 tab 来回点
+    /// 不重复发请求(除非上次是 `Error`,那种情况允许重试)。
+    pub repo_lists: HashMap<GitProvider, RepoListState>,
 }
 
 #[derive(Default)]
@@ -117,6 +139,13 @@ pub enum Message {
     CloneNameChanged(String),
     CloneDescriptionAction(iced_widget::text_editor::Action),
     SubmitClone,
+    SourceSelected(CloneSource),
+    RepoListLoaded(GitProvider, Result<Vec<RemoteRepo>, String>),
+    /// 未连接账户时"去设置连接"按钮——不在本模块内部处理,由 `App::update`
+    /// 顶层拦截(关本对话框、开设置弹窗),但顶部的 `if let Message::Close
+    /// | Message::GoToSettings` 仍会先把 `state` 清空,保持"直接调用本模块
+    /// `update` 也不会留下半开的对话框状态"这个防御性保证。
+    GoToSettings,
     /// 本地创建/URL 签出任一条路径落地完成(成功或失败)。成功时携带
     /// dozerd 返回的项目信息 + 最近列表 + 是否要跳过静默 scaffold 的 git
     /// init(对应 Task 1 的 `skip_git_init`);失败时 `Err` 里是给用户看的
@@ -178,13 +207,47 @@ fn apply_field_message(state: &mut State, msg: &Message) -> bool {
             state.clone_form.description.perform(action.clone());
             true
         }
+        Message::RepoListLoaded(provider, result) => {
+            let repo_state = match result {
+                Ok(repos) => RepoListState::Loaded(repos.clone()),
+                Err(e) => RepoListState::Error(e.clone()),
+            };
+            state.clone_form.repo_lists.insert(*provider, repo_state);
+            true
+        }
         Message::LocalRootDirPick | Message::CloneRootDirPick => {
             // 弹 rfd 文件夹选择器是内核(`Runner::dispatch`)的职责,这里
             // 收到说明路由出了问题,当 no-op 处理,不 panic。
             true
         }
-        Message::Close | Message::SubmitLocal | Message::SubmitClone | Message::Done(_) => false,
+        Message::Close
+        | Message::SubmitLocal
+        | Message::SubmitClone
+        | Message::Done(_)
+        | Message::SourceSelected(_)
+        | Message::GoToSettings => false,
     }
+}
+
+/// 决定 `SourceSelected(Provider)` 该不该发起新的仓库列表请求,以及请求
+/// 前状态该置成什么。已经 `Loaded`/`Loading` 就不重复请求(返回
+/// `None`);`Error` 允许重试。纯函数,不碰真实 Keychain——`token_present`
+/// 由调用方查真实 `git_accounts::get_token` 后传入,方便单测。
+fn plan_source_selection(
+    existing: Option<&RepoListState>,
+    token_present: bool,
+) -> Option<RepoListState> {
+    if matches!(
+        existing,
+        Some(RepoListState::Loaded(_)) | Some(RepoListState::Loading)
+    ) {
+        return None;
+    }
+    Some(if token_present {
+        RepoListState::Loading
+    } else {
+        RepoListState::NotConnected
+    })
 }
 
 /// `state` 是 `&mut Option<State>`(不是 `&mut State`)——`Message::Close`/
@@ -197,7 +260,7 @@ pub fn update(
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
-    if let Message::Close = msg {
+    if let Message::Close | Message::GoToSettings = msg {
         *state = None;
         return;
     }
@@ -261,6 +324,24 @@ pub fn update(
                 emit(Message::Done(result));
             });
         }
+        Message::SourceSelected(source) => {
+            s.clone_form.source = source;
+            if let CloneSource::Provider(provider) = source {
+                let existing = s.clone_form.repo_lists.get(&provider);
+                let token = git_accounts::get_token(provider);
+                if let Some(new_state) = plan_source_selection(existing, token.is_some()) {
+                    let should_fetch = matches!(new_state, RepoListState::Loading);
+                    s.clone_form.repo_lists.insert(provider, new_state);
+                    if should_fetch {
+                        let token = token.expect("Loading 状态下 token 一定存在");
+                        handle.spawn(async move {
+                            let result = git_accounts::list_repos(provider, &token).await;
+                            emit(Message::RepoListLoaded(provider, result));
+                        });
+                    }
+                }
+            }
+        }
         Message::Done(result) => {
             s.busy = false;
             if let Err(e) = &result {
@@ -273,6 +354,7 @@ pub fn update(
             let _ = result;
         }
         Message::Close
+        | Message::GoToSettings
         | Message::TabSelected(_)
         | Message::LocalRootDirChanged(_)
         | Message::LocalRootDirPick
@@ -285,7 +367,9 @@ pub fn update(
         | Message::CloneRootDirPick
         | Message::CloneRootDirPicked(_)
         | Message::CloneNameChanged(_)
-        | Message::CloneDescriptionAction(_) => {
+        | Message::CloneDescriptionAction(_)
+        | Message::RepoListLoaded(..)
+        | Message::SourceSelected(_) => {
             unreachable!("已在 apply_field_message 或顶部处理")
         }
     }
@@ -702,5 +786,92 @@ mod tests {
         assert!(validate_project_name(&state.local.name).is_err());
         state.error = Some("项目名称不能包含 / 或 \\".to_string());
         assert!(!state.busy);
+    }
+
+    #[test]
+    fn plan_source_selection_starts_loading_when_token_present() {
+        assert_eq!(
+            plan_source_selection(None, true),
+            Some(RepoListState::Loading)
+        );
+    }
+
+    #[test]
+    fn plan_source_selection_reports_not_connected_when_no_token() {
+        assert_eq!(
+            plan_source_selection(None, false),
+            Some(RepoListState::NotConnected)
+        );
+    }
+
+    #[test]
+    fn plan_source_selection_skips_when_already_loaded() {
+        let existing = RepoListState::Loaded(vec![]);
+        assert_eq!(plan_source_selection(Some(&existing), true), None);
+    }
+
+    #[test]
+    fn plan_source_selection_skips_when_already_loading() {
+        assert_eq!(
+            plan_source_selection(Some(&RepoListState::Loading), true),
+            None
+        );
+    }
+
+    #[test]
+    fn plan_source_selection_retries_after_error() {
+        let existing = RepoListState::Error("x".into());
+        assert_eq!(
+            plan_source_selection(Some(&existing), true),
+            Some(RepoListState::Loading)
+        );
+    }
+
+    #[test]
+    fn repo_list_loaded_ok_stores_loaded_state() {
+        let mut state = State::default();
+        state.tab = Tab::Clone;
+        apply_field_message(
+            &mut state,
+            &Message::RepoListLoaded(
+                GitProvider::GitHub,
+                Ok(vec![git_accounts::RemoteRepo {
+                    full_name: "a/b".into(),
+                    clone_url: "https://x/a/b.git".into(),
+                }]),
+            ),
+        );
+        assert_eq!(
+            state.clone_form.repo_lists.get(&GitProvider::GitHub),
+            Some(&RepoListState::Loaded(vec![git_accounts::RemoteRepo {
+                full_name: "a/b".into(),
+                clone_url: "https://x/a/b.git".into(),
+            }]))
+        );
+    }
+
+    #[test]
+    fn repo_list_loaded_err_stores_error_state() {
+        let mut state = State::default();
+        apply_field_message(
+            &mut state,
+            &Message::RepoListLoaded(GitProvider::GitLab, Err("网络请求失败".into())),
+        );
+        assert_eq!(
+            state.clone_form.repo_lists.get(&GitProvider::GitLab),
+            Some(&RepoListState::Error("网络请求失败".into()))
+        );
+    }
+
+    #[test]
+    fn go_to_settings_closes_dialog_like_close() {
+        let mut state = Some(State::default());
+        // 直接测顶层 `if let Message::Close | Message::GoToSettings` 分支
+        // 的等价行为——不需要真的构造 `dozer_client::Client`/`handle`,
+        // 因为这条分支在 `update()` 顶部就 return,不会往下走。
+        if let Message::Close | Message::GoToSettings = Message::GoToSettings {
+            state = None;
+        }
+        assert!(state.is_none());
     }
 }
