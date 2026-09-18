@@ -176,9 +176,141 @@ pub async fn validate_token(provider: GitProvider, token: &str) -> Result<String
     extract_username(&body)
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteRepo {
+    pub full_name: String,
+    pub clone_url: String,
+}
+
+fn list_repos_url(provider: GitProvider) -> &'static str {
+    match provider {
+        GitProvider::GitHub => {
+            "https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner"
+        }
+        GitProvider::GitLab => {
+            "https://gitlab.com/api/v4/projects?membership=true&owned=true&per_page=100&order_by=last_activity_at"
+        }
+        GitProvider::Gitee => "https://gitee.com/api/v5/user/repos?per_page=100&sort=updated",
+    }
+}
+
+/// 三家仓库列表接口返回数组,字段名不同(设计文档已注明:实现前建议用
+/// 真实账户核实一次响应形状,这里的字段名如与实际不符以真实响应为准
+/// 调整)。单个条目缺期望字段直接跳过,不让整个列表因为一条脏数据报错。
+pub(crate) fn parse_repo_list(
+    provider: GitProvider,
+    json: &str,
+) -> Result<Vec<RemoteRepo>, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("解析响应失败: {e}"))?;
+    let items = value
+        .as_array()
+        .ok_or_else(|| "响应格式不是数组".to_string())?;
+    let (name_field, url_field) = match provider {
+        GitProvider::GitHub => ("full_name", "clone_url"),
+        GitProvider::GitLab => ("path_with_namespace", "http_url_to_repo"),
+        GitProvider::Gitee => ("full_name", "html_url"),
+    };
+    let repos = items
+        .iter()
+        .filter_map(|item| {
+            let full_name = item.get(name_field)?.as_str()?.to_string();
+            let clone_url = item.get(url_field)?.as_str()?.to_string();
+            Some(RemoteRepo {
+                full_name,
+                clone_url,
+            })
+        })
+        .collect();
+    Ok(repos)
+}
+
+/// 拉取 `provider` 账户名下的个人仓库(不含组织/团队,只取第一页,见
+/// `docs/superpowers/specs/2026-09-18-project-create-remote-repo-picker-
+/// design.md`「非目标」)。鉴权头写法同 `validate_token`。
+pub async fn list_repos(provider: GitProvider, token: &str) -> Result<Vec<RemoteRepo>, String> {
+    let client = reqwest::Client::new();
+    let mut req = client
+        .get(list_repos_url(provider))
+        .header("User-Agent", "dozer");
+    req = match provider {
+        GitProvider::GitHub => req.header("Authorization", format!("Bearer {token}")),
+        GitProvider::GitLab => req.header("PRIVATE-TOKEN", token),
+        GitProvider::Gitee => req.query(&[("access_token", token)]),
+    };
+    let resp = req.send().await.map_err(|e| format!("网络请求失败: {e}"))?;
+    if !resp.status().is_success() {
+        return Err("仓库列表加载失败: 令牌可能已失效,请重新连接账户".to_string());
+    }
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("读取响应失败: {e}"))?;
+    parse_repo_list(provider, &body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_repo_list_github_shape() {
+        let json = r#"[
+            {"full_name":"abc/python_project","clone_url":"https://github.com/abc/python_project.git"},
+            {"full_name":"abc/rust_project","clone_url":"https://github.com/abc/rust_project.git"}
+        ]"#;
+        let repos = parse_repo_list(GitProvider::GitHub, json).unwrap();
+        assert_eq!(repos.len(), 2);
+        assert_eq!(repos[0].full_name, "abc/python_project");
+        assert_eq!(
+            repos[0].clone_url,
+            "https://github.com/abc/python_project.git"
+        );
+    }
+
+    #[test]
+    fn parse_repo_list_gitlab_shape() {
+        let json = r#"[
+            {"path_with_namespace":"abc/site","http_url_to_repo":"https://gitlab.com/abc/site.git"}
+        ]"#;
+        let repos = parse_repo_list(GitProvider::GitLab, json).unwrap();
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].full_name, "abc/site");
+        assert_eq!(repos[0].clone_url, "https://gitlab.com/abc/site.git");
+    }
+
+    #[test]
+    fn parse_repo_list_gitee_shape() {
+        let json = r#"[
+            {"full_name":"abc/demo","html_url":"https://gitee.com/abc/demo"}
+        ]"#;
+        let repos = parse_repo_list(GitProvider::Gitee, json).unwrap();
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].clone_url, "https://gitee.com/abc/demo");
+    }
+
+    #[test]
+    fn parse_repo_list_empty_array_is_empty_vec() {
+        assert_eq!(parse_repo_list(GitProvider::GitHub, "[]").unwrap(), vec![]);
+    }
+
+    #[test]
+    fn parse_repo_list_skips_items_missing_expected_fields() {
+        let json = r#"[{"full_name":"a/b"}, {"full_name":"c/d","clone_url":"https://x/c/d.git"}]"#;
+        let repos = parse_repo_list(GitProvider::GitHub, json).unwrap();
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].full_name, "c/d");
+    }
+
+    #[test]
+    fn parse_repo_list_rejects_non_array_json() {
+        assert!(parse_repo_list(GitProvider::GitHub, r#"{"login":"x"}"#).is_err());
+    }
+
+    #[test]
+    fn parse_repo_list_rejects_invalid_json() {
+        assert!(parse_repo_list(GitProvider::GitHub, "not json").is_err());
+    }
 
     #[test]
     fn extract_username_reads_login_field() {
