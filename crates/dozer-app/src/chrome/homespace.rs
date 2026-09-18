@@ -687,9 +687,17 @@ fn home_recent_files_card(
 
     if !app.home_recents_loaded {
         col = col.push(
-            text("加载中…")
-                .size(theme::homespace_font::body())
-                .color(theme::homespace_color::dim()),
+            row![
+                byteui::feedback::math_curve::view_animated(
+                    byteui::feedback::math_curve::Curve::RoseThree,
+                    24.0,
+                ),
+                text("加载中…")
+                    .size(theme::homespace_font::body())
+                    .color(theme::homespace_color::dim()),
+            ]
+            .spacing(8)
+            .align_y(iced_widget::core::Alignment::Center),
         );
     } else if app.home_recent_files.is_empty() {
         col = col.push(
@@ -763,9 +771,17 @@ fn home_recent_conversations_card(
 
     if !app.home_recents_loaded {
         col = col.push(
-            text("加载中…")
-                .size(theme::homespace_font::body())
-                .color(theme::homespace_color::dim()),
+            row![
+                byteui::feedback::math_curve::view_animated(
+                    byteui::feedback::math_curve::Curve::RoseThree,
+                    24.0,
+                ),
+                text("加载中…")
+                    .size(theme::homespace_font::body())
+                    .color(theme::homespace_color::dim()),
+            ]
+            .spacing(8)
+            .align_y(iced_widget::core::Alignment::Center),
         );
     } else if app.home_recent_conversations.is_empty() {
         col = col.push(

@@ -439,13 +439,11 @@ fn commit_list_view<'a>(
     state: &'a State,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(snapshot) = state.snapshot() else {
-        return container(
-            text("加载中…")
-                .size(byteui::theme::font::caption())
-                .color(byteui::theme::color::current().dim),
-        )
-        .padding(8)
-        .into();
+        return byteui::feedback::math_curve::loading_hint(
+            byteui::feedback::math_curve::Curve::RoseThree,
+            "加载中…",
+            36.0,
+        );
     };
     let entries = match snapshot {
         Ok(s) => &s.entries,
@@ -533,13 +531,11 @@ fn diff_area_view<'a>(
     let content: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = match state
         .diff_for(oid)
     {
-        None => container(
-            text("加载中…")
-                .size(byteui::theme::font::caption())
-                .color(byteui::theme::color::current().dim),
-        )
-        .padding(8)
-        .into(),
+        None => byteui::feedback::math_curve::loading_hint(
+            byteui::feedback::math_curve::Curve::RoseThree,
+            "加载中…",
+            48.0,
+        ),
         Some(Err(err)) => container(
             text(err.clone())
                 .size(byteui::theme::font::caption())

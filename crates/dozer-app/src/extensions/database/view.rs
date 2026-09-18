@@ -1130,14 +1130,15 @@ pub(crate) fn browse_view<'a>(
     .spacing(8)
     .align_y(iced_widget::core::Alignment::Center);
 
-    let mut col = column![toolbar].spacing(8);
+    let mut col = column![toolbar].spacing(8).height(Length::Fill);
 
     if b.loading {
-        col = col.push(
-            text("加载中…")
-                .size(byteui::theme::font::caption_sm())
-                .color(byteui::theme::color::current().dim),
-        );
+        col = col.push(byteui::feedback::math_curve::loading_hint(
+            byteui::feedback::math_curve::Curve::RoseThree,
+            "查询中…",
+            48.0,
+        ));
+        return col.into();
     }
     if let Some(e) = &b.error {
         col = col.push(

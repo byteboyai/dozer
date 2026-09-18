@@ -7,8 +7,9 @@ license = "MIT"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-iced_widget = { version = "0.14", features = ["svg"] }
+iced_widget = { version = "0.14", features = ["svg", "canvas"] }
 iced_renderer = "0.14"
+iced_futures = { version = "0.14", features = ["tokio"] }
 
 [dev-dependencies]
 tempfile = "3"

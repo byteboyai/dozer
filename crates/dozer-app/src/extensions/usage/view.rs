@@ -39,11 +39,11 @@ pub fn content_pane<'a>(
     let mut content = column![head].spacing(12).padding(14).width(Length::Fill);
 
     if loading {
-        content = content.push(
-            text("统计中…")
-                .size(byteui::theme::font::body())
-                .color(byteui::theme::color::current().dim),
-        );
+        content = content.push(byteui::feedback::math_curve::loading_hint(
+            byteui::feedback::math_curve::Curve::RoseThree,
+            "统计中…",
+            64.0,
+        ));
     } else if rows.is_empty() {
         content = content.push(
             text("这个项目还没有 agent 对话记录")

@@ -888,15 +888,26 @@ pub fn view<'a>(
 
     let loading = state.pending.is_some();
     let Some(snapshot) = state.cache.as_ref() else {
-        let text_content = if loading {
-            "加载中…"
-        } else {
-            "未打开项目"
-        };
+        if loading {
+            return container(
+                column![
+                    head,
+                    byteui::feedback::math_curve::loading_hint(
+                        byteui::feedback::math_curve::Curve::RoseThree,
+                        "加载中…",
+                        48.0,
+                    ),
+                ]
+                .spacing(8)
+                .padding(pad)
+                .height(Length::Fill),
+            )
+            .into();
+        }
         return container(
             column![
                 head,
-                text(text_content)
+                text("未打开项目")
                     .size(byteui::theme::font::caption())
                     .color(byteui::theme::color::current().dim)
             ]

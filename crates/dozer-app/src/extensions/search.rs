@@ -458,9 +458,15 @@ pub(crate) fn search_card<'a>(
     let mut body = column![title_row, query_row]
         .width(Length::Fill)
         .spacing(8)
-        .height(Length::Shrink);
+        .height(Length::Fill);
 
-    if ws.has_searched && ws.results.is_empty() && ws.error.is_none() {
+    if ws.running {
+        body = body.push(byteui::feedback::math_curve::loading_hint(
+            byteui::feedback::math_curve::Curve::RoseThree,
+            "搜索中…",
+            48.0,
+        ));
+    } else if ws.has_searched && ws.results.is_empty() && ws.error.is_none() {
         body = body.push(
             text("无匹配")
                 .size(byteui::theme::font::body())

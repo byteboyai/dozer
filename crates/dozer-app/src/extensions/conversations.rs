@@ -448,9 +448,11 @@ pub fn view<'a>(
     ));
 
     let Some(rows) = ws_state.sessions.as_ref() else {
-        content = content.push(lh(text("加载中…")
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().dim)));
+        content = content.push(byteui::feedback::math_curve::loading_hint(
+            byteui::feedback::math_curve::Curve::RoseThree,
+            "加载中…",
+            48.0,
+        ));
         return container(content.padding(region.padding))
             .width(width)
             .height(Length::Fill)
