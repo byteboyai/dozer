@@ -28,7 +28,7 @@
 - Consumes: `GitProvider`(既有)
 - Produces: `RemoteRepo { full_name: String, clone_url: String }`(`Debug, Clone, PartialEq`)、`pub(crate) fn parse_repo_list(provider: GitProvider, json: &str) -> Result<Vec<RemoteRepo>, String>`(纯函数)、`pub async fn list_repos(provider: GitProvider, token: &str) -> Result<Vec<RemoteRepo>, String>`——Task 2 的 `project_create::update` 会调用后者。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `crates/dozer-app/src/git_accounts.rs` 的 `#[cfg(test)] mod tests` 里追加:
 
@@ -93,12 +93,12 @@
     }
 ```
 
-- [ ] **Step 2: 跑测试确认因类型/函数不存在而编译失败**
+- [x] **Step 2: 跑测试确认因类型/函数不存在而编译失败**
 
 Run: `cargo test -p dozer-app --lib git_accounts`
 Expected: 编译错误 `cannot find type 'RemoteRepo'`/`cannot find function 'parse_repo_list'`。
 
-- [ ] **Step 3: 实现——追加到 `crates/dozer-app/src/git_accounts.rs`,紧跟 `validate_token` 之后**
+- [x] **Step 3: 实现——追加到 `crates/dozer-app/src/git_accounts.rs`,紧跟 `validate_token` 之后**
 
 ```rust
 #[derive(Debug, Clone, PartialEq)]
@@ -170,12 +170,12 @@ pub async fn list_repos(provider: GitProvider, token: &str) -> Result<Vec<Remote
 }
 ```
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 Run: `cargo test -p dozer-app --lib git_accounts`
 Expected: 新增的 7 个 `parse_repo_list_*` 测试全部 PASS,既有测试不受影响。`list_repos` 本身(真实网络调用)不做自动化测试,留给 Task 5 的人工验证清单。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/git_accounts.rs
@@ -195,7 +195,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Consumes: `git_accounts::{GitProvider, RemoteRepo, get_token, list_repos}`(既有 + Task 1)
 - Produces: `CloneSource`(`Url`/`Provider(GitProvider)`,`Default`=`Url`)、`RepoListState`(`Loading`/`Loaded(Vec<RemoteRepo>)`/`Error(String)`/`NotConnected`)、`CloneForm` 新增 `source`/`repo_lists` 字段、`Message::{SourceSelected, RepoListLoaded, GoToSettings}`——Task 3 的视图函数、Task 4 的 `App` 级拦截都要用到。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `crates/dozer-app/src/extensions/project_create.rs` 的 `#[cfg(test)] mod tests` 里追加(与既有测试同一个 `mod tests`):
 
@@ -285,12 +285,12 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
     }
 ```
 
-- [ ] **Step 2: 跑测试确认因类型/函数不存在而编译失败**
+- [x] **Step 2: 跑测试确认因类型/函数不存在而编译失败**
 
 Run: `cargo test -p dozer-app --lib extensions::project_create`
 Expected: 编译错误(`RepoListState`/`plan_source_selection`/`Message::RepoListLoaded`/`Message::GoToSettings` 不存在)。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 顶部 `use` 区块加:
 
@@ -453,12 +453,12 @@ fn plan_source_selection(
 }
 ```
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 Run: `cargo test -p dozer-app --lib extensions::project_create`
 Expected: 新增的 8 个测试(`plan_source_selection_*` 5 个 + `repo_list_loaded_*` 2 个 + `go_to_settings_closes_dialog_like_close`)全部 PASS,既有测试不受影响。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/extensions/project_create.rs
@@ -478,7 +478,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Consumes: `CloneSource`/`RepoListState`(Task 2)
 - Produces: `sidebar_entry` 签名变更(接受 `on_press: Option<Message>` 而非 `enabled: bool`)、新的 `remote_repo_field`/`repo_radio_row` 视图函数、更新后的 `clone_sidebar`/`clone_form_view`。
 
-- [ ] **Step 1: 改 `sidebar_entry`——从"禁用占位"改成"可点选中态"**
+- [x] **Step 1: 改 `sidebar_entry`——从"禁用占位"改成"可点选中态"**
 
 把:
 ```rust
@@ -565,7 +565,7 @@ fn clone_sidebar(source: CloneSource) -> Element<'static> {
 }
 ```
 
-- [ ] **Step 2: 新增 `remote_repo_field`/`repo_radio_row`,替换 `clone_form_view` 里固定的 URL 输入框**
+- [x] **Step 2: 新增 `remote_repo_field`/`repo_radio_row`,替换 `clone_form_view` 里固定的 URL 输入框**
 
 在 `clone_sidebar` 之后、`clone_form_view` 之前插入:
 
@@ -689,12 +689,12 @@ fn remote_repo_field(form: &CloneForm) -> Element<'_> {
 
 以及函数末尾的 `row![clone_sidebar(), fields]` 改成 `row![clone_sidebar(form.source), fields]`。
 
-- [ ] **Step 3: 编译检查**
+- [x] **Step 3: 编译检查**
 
 Run: `cargo build -p dozer-app 2>&1 | grep -E "^error" | head -60`
 Expected: 干净编译(此时 `Message::GoToSettings` 已经存在于 `project_create::Message`,`App` 级拦截还没加,但这不影响本 crate 自身编译——`Message::ProjectCreate(project_create::Message::GoToSettings)` 若没有专门的拦截分支,会落进 Task 9 已有的通用转发分支 `Message::ProjectCreate(msg) => { ... project_create::update(...) }`,调用 `project_create::update` 时顶部的 `if let Message::Close | Message::GoToSettings` 分支会正确关闭对话框,只是不会额外打开设置弹窗——这是 Task 4 要补的部分,不是编译问题)。若报 `iced_widget::Column::with_children` 或 `MouseArea` 相关签名不对,以实际报错为准调整(不同 iced 0.14 patch 版本个别构造器名字可能略有出入)。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/dozer-app/src/extensions/project_create.rs
@@ -714,12 +714,12 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Consumes: `App.settings: Option<settings::State>`、`settings::State::load()`(前置依赖,见 Global Constraints)
 - Produces: 点"去设置连接"能正确关掉创建项目对话框、打开设置弹窗。
 
-- [ ] **Step 1: 确认前置依赖已落地**
+- [x] **Step 1: 确认前置依赖已落地**
 
 Run: `grep -n "pub(crate) settings: Option<settings::State>" crates/dozer-app/src/app/app.rs`
 Expected: 有输出。若没有,说明 `docs/superpowers/plans/2026-09-18-git-account-settings.md` 的 Task 9 还没完成——**停下**,先确认那份计划的执行状态,不要在缺依赖的情况下继续本任务(会编译不过)。
 
-- [ ] **Step 2: 加拦截分支**
+- [x] **Step 2: 加拦截分支**
 
 `crates/dozer-app/src/app/update.rs`,在 `Message::ProjectCreate(project_create::Message::Done(result)) => { ... }` 分支**之前**插入(必须在通用转发分支 `Message::ProjectCreate(msg) => { ... }` 之前,顺序规则同 `Done` 的既有先例):
 
@@ -730,7 +730,7 @@ Expected: 有输出。若没有,说明 `docs/superpowers/plans/2026-09-18-git-ac
             }
 ```
 
-- [ ] **Step 3: 编译 + 全量测试**
+- [x] **Step 3: 编译 + 全量测试**
 
 Run: `cargo build -p dozer-app 2>&1 | tail -60`
 Expected: 干净编译通过。
@@ -738,7 +738,7 @@ Expected: 干净编译通过。
 Run: `cargo test -p dozer-app --lib`
 Expected: 全部既有测试 + 本计划新增的所有测试(Task 1-3)PASS。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/dozer-app/src/app/update.rs
@@ -755,7 +755,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 **Interfaces:** 无
 
-- [ ] **Step 1: 全量构建/测试/静态检查**
+- [x] **Step 1: 全量构建/测试/静态检查**
 
 ```bash
 cargo build
