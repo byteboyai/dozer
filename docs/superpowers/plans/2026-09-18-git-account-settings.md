@@ -1219,12 +1219,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: 编译检查**
+- [x] **Step 3: 编译检查**
 
 Run: `cargo build -p dozer-app 2>&1 | grep -E "^error" | grep -v "crate::settings\b" | head -60`
 Expected: 报 `App` 没有 `settings` 字段(Task 9 才加)、`Message::Settings` 变体不存在(同上)——这些是预期的;确认本文件自身没有其它编译错误。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/dozer-app/src/platform/settings_overlay.rs crates/dozer-app/src/platform/mod.rs
@@ -1244,7 +1244,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Consumes: `SettingsOverlay::{open, redraw, handle_input, handle_focus, reposition, window_id, request_redraw}`(Task 7)、`app.settings.is_some()`(Task 9)
 - Produces: 设置弹窗能开合、跟随主窗口移动/resize、失焦/Esc/关闭按钮均可关闭、与 search/file_history/project_create 互斥。
 
-- [ ] **Step 1: `use` 声明 + `Ready` 结构体加字段**
+- [x] **Step 1: `use` 声明 + `Ready` 结构体加字段**
 
 顶部 `use crate::platform::project_create_overlay;` 旁边加:
 
@@ -1268,7 +1268,7 @@ use crate::platform::settings_overlay;
                 settings_overlay: None,
 ```
 
-- [ ] **Step 2: `OverlayKind` 加变体**
+- [x] **Step 2: `OverlayKind` 加变体**
 
 ```rust
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1280,7 +1280,7 @@ pub(crate) enum OverlayKind {
 }
 ```
 
-- [ ] **Step 3: `close_other_overlays` 加分支**
+- [x] **Step 3: `close_other_overlays` 加分支**
 
 ```rust
     fn close_other_overlays(&mut self, keep: OverlayKind) {
@@ -1309,7 +1309,7 @@ pub(crate) enum OverlayKind {
     }
 ```
 
-- [ ] **Step 4: 新增 `sync_settings_overlay`,克隆自 `sync_file_history_overlay`(带 `Focused` 场景的那一版,不是 `sync_project_create_overlay`)**
+- [x] **Step 4: 新增 `sync_settings_overlay`,克隆自 `sync_file_history_overlay`(带 `Focused` 场景的那一版,不是 `sync_project_create_overlay`)**
 
 ```rust
     /// 同 `sync_file_history_overlay`,按 `app.settings.is_some()` 开/关
@@ -1377,7 +1377,7 @@ pub(crate) enum OverlayKind {
     }
 ```
 
-- [ ] **Step 5: `window_event` 新增按 `WindowId` 分发的分支(模板是 file_history 那版,带 `Focused` 处理)**
+- [x] **Step 5: `window_event` 新增按 `WindowId` 分发的分支(模板是 file_history 那版,带 `Focused` 处理)**
 
 紧跟 file-history overlay 分支之后插入:
 
@@ -1408,7 +1408,7 @@ pub(crate) enum OverlayKind {
         }
 ```
 
-- [ ] **Step 6: `Resized`/`CloseRequested` 处理加对应调用**
+- [x] **Step 6: `Resized`/`CloseRequested` 处理加对应调用**
 
 `Resized` 分支(`project_create_overlay` 的 `reposition` 调用之后)追加:
 
@@ -1435,7 +1435,7 @@ pub(crate) enum OverlayKind {
 
 这两处所在的 `let Self::Ready { .. } = self else { return; };` 大解构字段列表都要把 `settings_overlay` 加进去。
 
-- [ ] **Step 7: 两处"每帧结尾同步调用"追加**
+- [x] **Step 7: 两处"每帧结尾同步调用"追加**
 
 `user_event` 结尾和 `window_event` 结尾(`self.sync_project_create_overlay(event_loop);` 之后)都追加:
 
@@ -1443,12 +1443,12 @@ pub(crate) enum OverlayKind {
         self.sync_settings_overlay(event_loop);
 ```
 
-- [ ] **Step 8: 编译 + 测试**
+- [x] **Step 8: 编译 + 测试**
 
 Run: `cargo build -p dozer-app 2>&1 | grep -E "^error" | grep -v "crate::settings\b\|App.*settings\|Message::Settings" | head -60`
 Expected: 除了 Task 9 才处理的 `App::settings`/`Message::Settings` 缺失外,`window_events.rs` 自身不再新增编译错误。
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add crates/dozer-app/src/platform/window_events.rs
@@ -1471,7 +1471,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Consumes: `settings::{State, Message, update}`(Task 4-5)
 - Produces: `App.settings: Option<settings::State>`;`Message::Settings(settings::Message)`;`Message::SettingsOpen` 保留但改指向新字段;整个 crate 恢复可编译状态。
 
-- [ ] **Step 1: `App` 结构体——替换旧字段**
+- [x] **Step 1: `App` 结构体——替换旧字段**
 
 `crates/dozer-app/src/app/app.rs`:删掉 `pub(crate) settings_modal_open: bool,`(约 337 行)及其构造初始化 `settings_modal_open: false,`(约 745 行),在 `project_create: Option<project_create::State>,` 之后插入:
 
@@ -1493,7 +1493,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 use crate::extensions::settings;
 ```
 
-- [ ] **Step 2: `Message` 枚举——替换旧变体**
+- [x] **Step 2: `Message` 枚举——替换旧变体**
 
 `crates/dozer-app/src/app/message.rs`:模块级 `use crate::extensions::{...}` 列表按字母序加 `settings`:
 
@@ -1518,7 +1518,7 @@ use crate::extensions::{
     SettingsOpen,
 ```
 
-- [ ] **Step 3: `app/update.rs`——改 `SettingsOpen` 处理,删旧分支,加新分发**
+- [x] **Step 3: `app/update.rs`——改 `SettingsOpen` 处理,删旧分支,加新分发**
 
 把:
 ```rust
@@ -1548,7 +1548,7 @@ use crate::extensions::{
             }
 ```
 
-- [ ] **Step 4: `app/view.rs`——删掉旧的内嵌叠层分支**
+- [x] **Step 4: `app/view.rs`——删掉旧的内嵌叠层分支**
 
 把:
 ```rust
@@ -1586,17 +1586,17 @@ use crate::extensions::{
 
 删掉本文件顶部现在已死的 `use crate::settings;`(若删除后 `stack!`/`Length` 等导入因这是唯一用途而变成未使用,一并清理;`view_inner()` 内部若还用得到 `Length`/`stack!` 则保留)。
 
-- [ ] **Step 5: 全量编译**
+- [x] **Step 5: 全量编译**
 
 Run: `cargo build -p dozer-app 2>&1 | tail -100`
 Expected: 干净编译通过——此时 Task 4/5/6/7/8 里所有"预期中的残留引用错误"都应该消失。若还有报错,大概率是某处遗漏的 `Message::SettingsClose`/`Message::SettingsThemeSelected`/`self.settings_modal_open`/`crate::settings::` 引用,按报错定位补齐。
 
-- [ ] **Step 6: 全量测试**
+- [x] **Step 6: 全量测试**
 
 Run: `cargo test -p dozer-app --lib`
 Expected: 全部既有测试 + 本计划新增的所有测试(Task 2-8)PASS,零失败。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/dozer-app/src/app/app.rs crates/dozer-app/src/app/message.rs crates/dozer-app/src/app/update.rs crates/dozer-app/src/app/view.rs
@@ -1613,7 +1613,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 **Interfaces:** 无
 
-- [ ] **Step 1: 全量构建/测试/静态检查**
+- [x] **Step 1: 全量构建/测试/静态检查**
 
 ```bash
 cargo build
