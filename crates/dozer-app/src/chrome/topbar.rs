@@ -443,6 +443,11 @@ pub(crate) fn project_add_menu_spec(
         "打开项目",
         Message::ProjectTabPickFolder,
     ));
+    spec.push(MenuSpecItem::entry(
+        Some(icons::IconKind::FolderPlus),
+        "创建项目",
+        Message::ProjectCreateOpen,
+    ));
     spec
 }
 
