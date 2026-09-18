@@ -1166,15 +1166,14 @@ impl Runner {
                 else {
                     return;
                 };
-                let (window_width, window_height) = app.window_size;
+                let main_window_size = LogicalSize::new(app.window_size.0, app.window_size.1);
                 *file_history_overlay = Some(file_history_overlay::FileHistoryOverlay::open(
                     window,
                     adapter,
                     device,
                     queue,
                     instance,
-                    window_width,
-                    window_height,
+                    main_window_size,
                     el,
                 ));
             }

@@ -60,18 +60,22 @@ impl FileHistoryOverlay {
         self.window.request_redraw();
     }
 
+    /// `main_window_size` 用具名字段的 `LogicalSize`(`.width`/`.height`)
+    /// 承载,而不是两个相邻的 `f32` 位置参数——8 个位置参数会触发
+    /// `clippy::too_many_arguments`,且 width/height 相邻同型传反编译器不
+    /// 报错,按 CLAUDE.md 关键裁决改具名字段(同 `workspace/state.rs` 的
+    /// `TabAttachedArgs` 先例),不加 `#[allow]`。
     pub(crate) fn open(
         main_window: &Arc<Window>,
         adapter: &wgpu::Adapter,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         instance: &wgpu::Instance,
-        window_width: f32,
-        window_height: f32,
+        main_window_size: LogicalSize<f32>,
         el: &ActiveEventLoop,
     ) -> FileHistoryOverlay {
         let scale = main_window.scale_factor();
-        let card_logical = card_logical_size(window_width, window_height);
+        let card_logical = card_logical_size(main_window_size.width, main_window_size.height);
         let (pos, size) = centered_overlay_bounds(
             main_window
                 .outer_position()
