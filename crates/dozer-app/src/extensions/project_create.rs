@@ -368,8 +368,7 @@ pub fn update(
         | Message::CloneRootDirPicked(_)
         | Message::CloneNameChanged(_)
         | Message::CloneDescriptionAction(_)
-        | Message::RepoListLoaded(..)
-        | Message::SourceSelected(_) => {
+        | Message::RepoListLoaded(..) => {
             unreachable!("已在 apply_field_message 或顶部处理")
         }
     }
@@ -481,44 +480,105 @@ fn local_form_view(form: &LocalForm) -> Element<'_> {
     .into()
 }
 
-fn sidebar_entry(label: &'static str, enabled: bool) -> Element<'static> {
+/// `selected` 决定高亮,`on_press` 现在四项都会给(GitHub/GitLab/Gitee 账户
+/// 接入已经落地,不再有占位禁用项——见
+/// `docs/superpowers/specs/2026-09-18-project-create-remote-repo-picker-
+/// design.md`)。
+fn sidebar_entry(label: &'static str, selected: bool, on_press: Message) -> Element<'static> {
     let colors = byteui::theme::color::current();
     let label_el = text(label)
         .size(byteui::theme::font::body())
-        .color(if enabled { colors.cream } else { colors.dim });
+        .color(if selected { colors.cream } else { colors.dim });
     let cell = container(label_el)
         .padding([8, 12])
         .width(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(if enabled { colors.card } else { colors.bg }.into()),
+            background: Some(if selected { colors.card } else { colors.bg }.into()),
             ..container::Style::default()
         });
-    // GitLab/Gitee 等账户接入推迟到后续(spec「非目标」):`enabled=false`
-    // 视觉置灰、不挂 `on_press`,与 `menu_spec::to_iced` 里 `enabled=false`
-    // 项"点不动"的既有语义一致。
-    cell.into()
+    iced_widget::MouseArea::new(cell)
+        .interaction(iced_widget::core::mouse::Interaction::Pointer)
+        .on_press(on_press)
+        .into()
 }
 
-fn clone_sidebar() -> Element<'static> {
+fn clone_sidebar(source: CloneSource) -> Element<'static> {
     column![
-        sidebar_entry("仓库URL", true),
-        sidebar_entry("GitHub", false),
-        sidebar_entry("GitLab", false),
-        sidebar_entry("Gitee", false),
+        sidebar_entry(
+            "仓库URL",
+            source == CloneSource::Url,
+            Message::SourceSelected(CloneSource::Url)
+        ),
+        sidebar_entry(
+            "GitHub",
+            source == CloneSource::Provider(GitProvider::GitHub),
+            Message::SourceSelected(CloneSource::Provider(GitProvider::GitHub))
+        ),
+        sidebar_entry(
+            "GitLab",
+            source == CloneSource::Provider(GitProvider::GitLab),
+            Message::SourceSelected(CloneSource::Provider(GitProvider::GitLab))
+        ),
+        sidebar_entry(
+            "Gitee",
+            source == CloneSource::Provider(GitProvider::Gitee),
+            Message::SourceSelected(CloneSource::Provider(GitProvider::Gitee))
+        ),
     ]
     .spacing(4)
     .width(Length::Fixed(120.0))
     .into()
 }
 
-fn clone_form_view(form: &CloneForm) -> Element<'_> {
-    let description_editor = iced_widget::text_editor(&form.description)
-        .placeholder("项目描述…")
-        .on_action(Message::CloneDescriptionAction)
-        .height(Length::Fixed(96.0));
-    let fields = column![
-        field_label("远程仓库"),
-        byteui::form::input_text::view(
+fn repo_radio_row(repo: &RemoteRepo, current_url: &str) -> Element<'static> {
+    let colors = byteui::theme::color::current();
+    let is_selected = repo.clone_url == current_url;
+    let dot = container(Space::new())
+        .width(Length::Fixed(10.0))
+        .height(Length::Fixed(10.0))
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: if is_selected {
+                Some(colors.gold.into())
+            } else {
+                None
+            },
+            border: Border {
+                color: if is_selected {
+                    colors.gold
+                } else {
+                    colors.border
+                },
+                width: 1.5,
+                radius: 5.0.into(),
+            },
+            ..container::Style::default()
+        });
+    let ring = container(dot)
+        .width(Length::Fixed(16.0))
+        .height(Length::Fixed(16.0))
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center);
+    iced_widget::MouseArea::new(
+        row![
+            ring,
+            text(repo.full_name.clone())
+                .size(byteui::theme::font::body())
+                .color(colors.cream),
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::alignment::Vertical::Center),
+    )
+    .interaction(iced_widget::core::mouse::Interaction::Pointer)
+    .on_press(Message::CloneUrlChanged(repo.clone_url.clone()))
+    .into()
+}
+
+/// "远程仓库"字段的内容——`CloneSource::Url` 时是手填输入框(原有行为),
+/// `CloneSource::Provider` 时按加载态切换成引导/加载中/报错/单选列表。
+fn remote_repo_field(form: &CloneForm) -> Element<'_> {
+    let colors = byteui::theme::color::current();
+    match form.source {
+        CloneSource::Url => byteui::form::input_text::view(
             "Input",
             &form.url,
             false,
@@ -528,6 +588,52 @@ fn clone_form_view(form: &CloneForm) -> Element<'_> {
             false,
             Message::CloneUrlChanged,
         ),
+        CloneSource::Provider(provider) => match form.repo_lists.get(&provider) {
+            None | Some(RepoListState::NotConnected) => {
+                let hint = text(format!("未连接 {} 账户", provider.display_name()))
+                    .size(byteui::theme::font::body())
+                    .color(colors.dim);
+                let go_btn = button(text("去设置连接").size(byteui::theme::font::body()))
+                    .on_press(Message::GoToSettings)
+                    .padding([6, 14]);
+                column![hint, go_btn].spacing(8).into()
+            }
+            Some(RepoListState::Loading) => text("加载仓库列表中…")
+                .size(byteui::theme::font::body())
+                .color(colors.dim)
+                .into(),
+            Some(RepoListState::Error(e)) => {
+                let msg = text(format!("仓库列表加载失败: {e}"))
+                    .size(byteui::theme::font::body())
+                    .color(colors.red);
+                let retry = button(text("重试").size(byteui::theme::font::body()))
+                    .on_press(Message::SourceSelected(CloneSource::Provider(provider)))
+                    .padding([6, 14]);
+                column![msg, retry].spacing(8).into()
+            }
+            Some(RepoListState::Loaded(repos)) if repos.is_empty() => text("该账户名下没有仓库")
+                .size(byteui::theme::font::body())
+                .color(colors.dim)
+                .into(),
+            Some(RepoListState::Loaded(repos)) => {
+                let rows: Vec<Element<'_>> = repos
+                    .iter()
+                    .map(|repo| repo_radio_row(repo, &form.url))
+                    .collect();
+                iced_widget::Column::with_children(rows).spacing(6).into()
+            }
+        },
+    }
+}
+
+fn clone_form_view(form: &CloneForm) -> Element<'_> {
+    let description_editor = iced_widget::text_editor(&form.description)
+        .placeholder("项目描述…")
+        .on_action(Message::CloneDescriptionAction)
+        .height(Length::Fixed(96.0));
+    let fields = column![
+        field_label("远程仓库"),
+        remote_repo_field(form),
         field_label("根目录"),
         root_dir_row(
             &form.root_dir,
@@ -549,7 +655,7 @@ fn clone_form_view(form: &CloneForm) -> Element<'_> {
         description_editor,
     ]
     .spacing(10);
-    row![clone_sidebar(), fields].spacing(16).into()
+    row![clone_sidebar(form.source), fields].spacing(16).into()
 }
 
 fn primary_button(label: &'static str, msg: Message, busy: bool) -> Element<'static> {
@@ -829,8 +935,10 @@ mod tests {
 
     #[test]
     fn repo_list_loaded_ok_stores_loaded_state() {
-        let mut state = State::default();
-        state.tab = Tab::Clone;
+        let mut state = State {
+            tab: Tab::Clone,
+            ..Default::default()
+        };
         apply_field_message(
             &mut state,
             &Message::RepoListLoaded(
