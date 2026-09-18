@@ -8,7 +8,7 @@ use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 use crate::chrome::homespace::{self, HomeRecentConversation, HomeRecentFile};
 use crate::extensions::{
     browser, conversations, database, file_history, files, footbar, git_log, project,
-    project_create, search, ssh, todo, usage,
+    project_create, search, settings, ssh, todo, usage,
 };
 use crate::git_watch;
 use crate::term::terminal;
@@ -484,18 +484,10 @@ pub enum Message {
     /// winit 的根本 `MouseInput{Released}` 收不到,`TabDragEnd` 就永不触发,
     /// 拖拽状态会残留、变成"松开还能继续拖"。这条消息统一兜底清掉。
     WebViewMouseUp,
-    /// 顶栏设置齿轮:开主题设置弹窗。App 级状态(不挂 `Workspace`)——
-    /// 首页/空工作区/项目工作区三种 `view()` 分支都画顶栏,弹窗必须在三者
-    /// 之上都能弹出,见 `App::view` 里 `view_inner` 的外层叠加。
+    /// 顶栏设置齿轮:打开设置弹窗(独立原生窗口,主题 + Git 账户)。
     SettingsOpen,
-    /// 设置弹窗:点遮罩/关闭按钮收起,不需要"取消"语义——选中主题即时生效
-    /// 并已落盘,收起只是隐藏浮层。
-    SettingsClose,
-    /// 设置弹窗:选中一个配色方案,立即调
-    /// `byteui::theme::color::set_scheme` 全局生效并调 `persist_scheme`
-    /// 落盘(跨重启记住选择,同 `ZoomIn`/`ZoomOut` 之于 `icon_size::persist_scale`
-    /// 的模式)。
-    SettingsThemeSelected(byteui::theme::color::ColorScheme),
+    /// 设置弹窗内部消息,转发给 `extensions::settings::update`。
+    Settings(settings::Message),
 }
 pub(crate) struct ProjectLinkMenu {
     pub(crate) x: f32,

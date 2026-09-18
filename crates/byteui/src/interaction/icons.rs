@@ -91,6 +91,10 @@ pub enum IconKind {
     /// `SquarePlus` 的方框版留给顶栏/tab 栏等需要更强视觉重量的位置。
     Plus,
     SquarePlus,
+    /// 浏览器面板"新标签页"按钮图标(Lucide circle-plus:圆环 + 中心加号),
+    /// 2026-09-18 起替换原 `SquarePlus` 方框版——更轻、更贴合 tab 栏整体
+    /// 的圆角语言(`CircleArrow*` 那组导航按钮也是同款圆环家族)。
+    CirclePlus,
     GitBranch,
     /// Git Log 面板 commit 列表"普通提交"图标(Lucide git-commit-vertical)。
     GitCommitVertical,
@@ -251,6 +255,7 @@ impl IconKind {
             IconKind::RefreshCw => include_bytes!("../../assets/icons/refresh-cw.svg"),
             IconKind::Plus => include_bytes!("../../assets/icons/plus.svg"),
             IconKind::SquarePlus => include_bytes!("../../assets/icons/square-plus.svg"),
+            IconKind::CirclePlus => include_bytes!("../../assets/icons/circle-plus.svg"),
             IconKind::GitBranch => include_bytes!("../../assets/icons/git-branch.svg"),
             IconKind::GitCommitVertical => {
                 include_bytes!("../../assets/icons/git-commit-vertical.svg")

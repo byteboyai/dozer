@@ -15,7 +15,6 @@ use crate::extensions::project;
 use crate::extensions::ssh;
 use crate::extensions::todo;
 use crate::extensions::usage;
-use crate::settings;
 use crate::term::term_view;
 use crate::term::terminal;
 use crate::theme;
@@ -38,22 +37,9 @@ impl App {
     pub fn view(
         &self,
     ) -> iced_widget::core::Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-        let content = self.view_inner();
-        // 设置弹窗是 App 级浮层(见 `settings_modal_open` 字段文档),必须能
-        // 盖在首页/空工作区/项目工作区三种 `view_inner` 分支之上——所以放在
-        // 最外层统一叠加,而不是塞进 `view_inner` 内部某个分支。
-        if self.settings_modal_open {
-            stack![
-                content,
-                crate::dialog::scrim(Message::SettingsClose),
-                settings::settings_modal(self.window_size.0)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        } else {
-            content
-        }
+        // 设置弹窗已迁到独立原生窗口(见 `platform::settings_overlay`),
+        // 不再作为 iced 叠层叠加。
+        self.view_inner()
     }
 
     fn view_inner(

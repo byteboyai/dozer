@@ -1686,7 +1686,7 @@ pub fn view(
     // 它也位于页签最右端紧挨着,而不是被 `Length::Fill` 顶到 tab 栏最右缘。
     // 行整体横向溢出被 clip(页签/按钮一多会被裁出可视区,与页签同一待遇)。
     let new_tab_btn = icons::icon_button_entry(
-        icons::IconKind::SquarePlus,
+        icons::IconKind::CirclePlus,
         byteui::theme::icon_size::row(),
         false,
         false,

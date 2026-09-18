@@ -12,6 +12,7 @@ use crate::extensions::footbar;
 use crate::extensions::git_log;
 use crate::extensions::project;
 use crate::extensions::project_create;
+use crate::extensions::settings;
 use crate::extensions::todo;
 use crate::layout;
 use crate::open_projects;
@@ -331,10 +332,6 @@ pub struct App {
     /// 页签之后),没有固定 padding 能蒙对,改用 `todo::set_calendar_anchor`
     /// /`set_dispatch_anchor` 同款"记下点击时的 `App::last_cursor`"手法。
     pub(crate) project_add_menu_anchor: (f32, f32),
-    /// 顶栏设置齿轮的主题设置弹窗是否打开。挂在 `App` 而不是某个
-    /// `Workspace` 上——设置按钮本身就在顶栏,不属于任何单个项目,同
-    /// `project_add_menu_open` 的归属考量。
-    pub(crate) settings_modal_open: bool,
     /// 全局 UI 缩放(⌘/Ctrl +/-)改变后,预览/浏览器 webview 的
     /// `WebView::zoom` 也要同步——但 `App` 不持有 webview 句柄,只能
     /// 置这个标记,由 main.rs 轮询 `take_pending_preview_zoom` 后逐个
@@ -369,6 +366,9 @@ pub struct App {
     /// "创建项目"对话框状态——见 `extensions::project_create::State`。
     /// `None` 表示当前没开。
     pub(crate) project_create: Option<project_create::State>,
+    /// 设置弹窗状态(主题 + Git 账户)——见 `extensions::settings::State`。
+    /// `None` 表示当前没开。
+    pub(crate) settings: Option<settings::State>,
     /// Todo 分类树节点右键菜单浮层状态,坐标复用 `files.last_right_click`。
     pub(crate) category_context_menu: Option<CategoryContextMenu>,
     /// 分类选择器("移动到..." / 任务挂分类)浮层状态:定位坐标 + 目标。
@@ -742,7 +742,6 @@ impl App {
             pending_zoom_toggle: false,
             project_add_menu_open: false,
             project_add_menu_anchor: (0.0, 0.0),
-            settings_modal_open: false,
             pending_preview_zoom: false,
             window_size: byteui::theme::geometry::initial_window_size(),
             last_cursor: (0.0, 0.0),
@@ -754,6 +753,7 @@ impl App {
             project_link_menu: None,
             file_history: None,
             project_create: None,
+            settings: None,
             category_context_menu: None,
             category_picker: None,
             text_input_menu: None,

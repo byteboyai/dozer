@@ -232,10 +232,15 @@ fn provider_row(
             let disconnect_btn = button(text("断开连接").size(byteui::theme::font::body()))
                 .on_press(Message::Disconnect(provider))
                 .padding([6, 14]);
-            row![title, status, Space::new().width(Length::Fill), disconnect_btn]
-                .spacing(10)
-                .align_y(Alignment::Center)
-                .into()
+            row![
+                title,
+                status,
+                Space::new().width(Length::Fill),
+                disconnect_btn
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center)
+            .into()
         }
         ConnectState::Editing { token, busy, error } => {
             let input = byteui::form::input_text::view_on_bg(
@@ -266,13 +271,13 @@ fn provider_row(
                 .on_press(Message::ConnectCancel(provider));
             let error_row: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
                 if let Some(e) = error {
-                text(e.clone())
-                    .size(byteui::theme::font::label())
-                    .color(colors.red)
-                    .into()
-            } else {
-                Space::new().into()
-            };
+                    text(e.clone())
+                        .size(byteui::theme::font::label())
+                        .color(colors.red)
+                        .into()
+                } else {
+                    Space::new().into()
+                };
             column![
                 title,
                 input,

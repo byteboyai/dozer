@@ -14,6 +14,7 @@ use crate::extensions::git_log;
 use crate::extensions::project;
 use crate::extensions::project_create;
 use crate::extensions::search;
+use crate::extensions::settings;
 use crate::extensions::ssh;
 use crate::extensions::todo;
 use crate::extensions::usage;
@@ -1765,14 +1766,15 @@ impl App {
                 self.pending_preview_zoom = true;
             }
             Message::SettingsOpen => {
-                self.settings_modal_open = true;
+                self.settings = Some(settings::State::load());
             }
-            Message::SettingsClose => {
-                self.settings_modal_open = false;
-            }
-            Message::SettingsThemeSelected(scheme) => {
-                byteui::theme::color::set_scheme(scheme);
-                byteui::theme::color::persist_scheme(&crate::theme::color_theme_path());
+            Message::Settings(msg) => {
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                let emit = move |m| {
+                    let _ = proxy.send_event(Message::Settings(m));
+                };
+                settings::update(&mut self.settings, msg, &handle, emit);
             }
             // WebViewFocused 只在 main.rs 的 dispatch 里设 pending_focus,
             // App::update 无需处理。

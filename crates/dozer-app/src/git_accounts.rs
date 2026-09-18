@@ -15,7 +15,8 @@ pub enum GitProvider {
 }
 
 impl GitProvider {
-    pub const ALL: [GitProvider; 3] = [GitProvider::GitHub, GitProvider::GitLab, GitProvider::Gitee];
+    pub const ALL: [GitProvider; 3] =
+        [GitProvider::GitHub, GitProvider::GitLab, GitProvider::Gitee];
 
     pub fn as_key(self) -> &'static str {
         match self {
@@ -114,7 +115,9 @@ fn keyring_entry(provider: GitProvider) -> Result<keyring::Entry, keyring::Error
 /// 读不到按未连接处理,不 panic(同 `extensions::ssh::keyring_password`
 /// 的既有口径)。
 pub fn get_token(provider: GitProvider) -> Option<String> {
-    keyring_entry(provider).ok().and_then(|e| e.get_password().ok())
+    keyring_entry(provider)
+        .ok()
+        .and_then(|e| e.get_password().ok())
 }
 
 pub fn set_token(provider: GitProvider, token: &str) -> Result<(), String> {
@@ -166,7 +169,10 @@ pub async fn validate_token(provider: GitProvider, token: &str) -> Result<String
     if !resp.status().is_success() {
         return Err("令牌无效或已过期".to_string());
     }
-    let body = resp.text().await.map_err(|e| format!("读取响应失败: {e}"))?;
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("读取响应失败: {e}"))?;
     extract_username(&body)
 }
 

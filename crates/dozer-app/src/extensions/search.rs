@@ -48,14 +48,81 @@ impl Sink for HitSink {
     }
 }
 
+/// 已命中文件路径 → 该文件的命中行,各 worker 线程自己攒,最后合并。
+type HitMap = std::collections::BTreeMap<String, Vec<SearchHit>>;
+
+/// 每个 worker 线程一个的 visitor:持有自己的 `Searcher`(不跨线程共享,
+/// 复用其内部缓冲),把本线程扫到的命中写进共享的 `HitMap`(加锁只发生在
+/// "一个文件扫完、确实有命中"这一次,不在逐行热路径上)。二进制文件靠
+/// `Searcher` 默认的 NUL 检测早退,不在此显式处理。
+struct HitVisitor<'a> {
+    matcher: &'a grep_regex::RegexMatcher,
+    shared: &'a std::sync::Mutex<HitMap>,
+    searcher: Searcher,
+}
+
+impl<'a> ignore::ParallelVisitor for HitVisitor<'a> {
+    fn visit(&mut self, entry: Result<ignore::DirEntry, ignore::Error>) -> ignore::WalkState {
+        let de = match entry {
+            Ok(de) => de,
+            Err(e) => {
+                tracing::warn!("搜索遍历跳过错误条目: {e}");
+                return ignore::WalkState::Continue;
+            }
+        };
+        // 只处理常规文件;目录由 walker 自己继续下钻。
+        if !de.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+            return ignore::WalkState::Continue;
+        }
+        let path = de.path().to_path_buf();
+        let mut sink = HitSink {
+            path: path.clone(),
+            hits: Vec::new(),
+        };
+        if self
+            .searcher
+            .search_path(self.matcher, &path, &mut sink)
+            .is_err()
+        {
+            return ignore::WalkState::Continue; // 读不了的(权限/消失)跳过,不 panic
+        }
+        if !sink.hits.is_empty() {
+            self.shared
+                .lock()
+                .unwrap()
+                .insert(path.display().to_string(), sink.hits);
+        }
+        ignore::WalkState::Continue
+    }
+}
+
+/// 为每个 worker 线程构造 `HitVisitor`。builder 被 `WalkParallel::visit`
+/// 在每个线程启动时调用一次。
+struct HitVisitorBuilder<'a> {
+    matcher: &'a grep_regex::RegexMatcher,
+    shared: &'a std::sync::Mutex<HitMap>,
+}
+
+impl<'a> ignore::ParallelVisitorBuilder<'a> for HitVisitorBuilder<'a> {
+    fn build(&mut self) -> Box<dyn ignore::ParallelVisitor + 'a> {
+        Box::new(HitVisitor {
+            matcher: self.matcher,
+            shared: self.shared,
+            searcher: SearcherBuilder::new().line_number(true).build(),
+        })
+    }
+}
+
 /// 在 scope 内做字面子串(大小写不敏感)搜索，按文件分组返回，组内按行号升序。
 /// 返回 `Vec<(绝对路径字符串, 该文件的命中)>`，键恒为整段绝对路径，相对展示交给
 /// view 层用 `project_root` 换算。空查询直接返回空结果，不发起搜索。
 ///
-/// 目录作用域用 `ignore::WalkBuilder` 递归(尊重 `.gitignore` 与隐藏文件;
-/// `require_git(false)` 让目录即便不在 git 仓库内也应用根目录的 `.gitignore`,
-/// 同 ripgrep 的 `--no-require-git` 口径);
-/// 文件作用域只搜那一个文件。二进制/非 UTF-8 行用 lossy 转换，不 panic。
+/// 目录作用域用 `ignore::WalkBuilder::build_parallel` 递归(尊重 `.gitignore`
+/// 与隐藏文件;`require_git(false)` 让目录即便不在 git 仓库内也应用根目录的
+/// `.gitignore`，同 ripgrep 的 `--no-require-git` 口径)，多核并行扫——
+/// 此前是"先串行 WalkBuilder 收集全部路径、再逐个串行 search_path"，大仓库下
+/// 只有单核忙。文件作用域仍只搜那一个文件。二进制/非 UTF-8 行用 lossy
+/// 转换，不 panic。
 pub fn search_scope(scope: &Scope, query: &str) -> Result<Vec<(String, Vec<SearchHit>)>, String> {
     if query.trim().is_empty() {
         return Ok(Vec::new());
@@ -65,42 +132,33 @@ pub fn search_scope(scope: &Scope, query: &str) -> Result<Vec<(String, Vec<Searc
         .build(query)
         .map_err(|e| format!("搜索模式无效: {e}"))?;
 
-    let mut searcher = SearcherBuilder::new().line_number(true).build();
-
-    // 作用域内所有待搜文件(绝对路径)。
-    let mut files: Vec<PathBuf> = Vec::new();
-    match scope {
-        Scope::File(p) => files.push(p.clone()),
-        Scope::Dir(p) => {
-            for entry in ignore::WalkBuilder::new(p).require_git(false).build() {
-                match entry {
-                    Ok(de) if de.file_type().map(|ft| ft.is_file()).unwrap_or(false) => {
-                        files.push(de.path().to_path_buf());
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        tracing::warn!("搜索遍历跳过错误条目: {e}");
-                    }
-                }
-            }
-        }
-    }
-
-    // 已发现命中文件的路径 → 其结果组(用绝对路径字符串作键)。
-    let mut by_file: std::collections::BTreeMap<String, Vec<SearchHit>> =
-        std::collections::BTreeMap::new();
-    for path in files {
+    // 文件作用域:单文件,无需并行遍历,直接扫。
+    if let Scope::File(p) = scope {
+        let mut searcher = SearcherBuilder::new().line_number(true).build();
         let mut sink = HitSink {
-            path: path.clone(),
+            path: p.clone(),
             hits: Vec::new(),
         };
-        if searcher.search_path(&matcher, &path, &mut sink).is_err() {
-            continue; // 读不了的(权限/消失)跳过,不 panic
+        if searcher.search_path(&matcher, p, &mut sink).is_ok() && !sink.hits.is_empty() {
+            return Ok(vec![(p.display().to_string(), sink.hits)]);
         }
-        if !sink.hits.is_empty() {
-            by_file.insert(path.display().to_string(), sink.hits);
-        }
+        return Ok(Vec::new());
     }
+
+    // 目录作用域:并行遍历 + 每线程各自搜索。
+    let shared: std::sync::Mutex<HitMap> = std::sync::Mutex::new(HitMap::new());
+    let Scope::Dir(dir) = scope else {
+        unreachable!()
+    };
+    let mut builder = ignore::WalkBuilder::new(dir);
+    builder.require_git(false);
+    let mut visitor_builder = HitVisitorBuilder {
+        matcher: &matcher,
+        shared: &shared,
+    };
+    builder.build_parallel().visit(&mut visitor_builder);
+
+    let by_file = shared.into_inner().unwrap();
     Ok(by_file.into_iter().collect())
 }
 
@@ -479,6 +537,24 @@ mod tests {
         assert!(keys.iter().any(|k| k.ends_with("keep.txt")));
         assert!(keys.iter().any(|k| k.ends_with("nested/sub.txt")));
         assert!(!keys.iter().any(|k| k.ends_with("ignored.txt")));
+    }
+
+    #[test]
+    fn dir_scope_parallel_groups_by_file_and_orders_lines() {
+        // 并行遍历下:结果仍按文件路径(BTreeMap 键)升序分组,组内按行号升序,
+        // 且同一文件的多条命中不丢、不漏。
+        let dir = tempfile::tempdir().unwrap();
+        place(dir.path(), "a.txt", "needle one\nplain\nneedle two\n");
+        place(dir.path(), "b.txt", "no hit here\n");
+        place(dir.path(), "c.txt", "needle three\n");
+        let hits = search_scope(&Scope::Dir(dir.path().to_path_buf()), "needle").unwrap();
+        // b.txt 无命中,不出现;命中文件按路径升序。
+        assert_eq!(hits.len(), 2, "只应有 a.txt / c.txt 两组,得 {hits:?}");
+        assert!(hits[0].0.ends_with("a.txt"));
+        assert!(hits[1].0.ends_with("c.txt"));
+        // a.txt 两条命中,行号升序。
+        assert_eq!(hits[0].1.len(), 2);
+        assert!(hits[0].1[0].line_no < hits[0].1[1].line_no);
     }
 
     #[test]
