@@ -364,6 +364,35 @@ pub fn init_repo(repo: &Path) -> Result<(), String> {
     }
 }
 
+/// 系统是否装了可用的 git——URL 签出 tab 提交前的轻量检测,不解析
+/// 具体版本号,只看子进程能否成功跑起来。
+pub fn git_available() -> bool {
+    Command::new("git")
+        .arg("--version")
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
+}
+
+/// `git clone <url> <dest>`,鉴权完全委托系统已配置的 SSH agent/凭证
+/// 管理器(不接 `RemoteCallbacks`,不做任何 Token 输入,见
+/// `docs/superpowers/specs/2026-09-18-new-project-creation-design.md`)。
+/// `dest` 必须还不存在(调用方在此之前已经校验过,见 `project_create`
+/// 模块的 `validate_target_not_exists`),失败把 git 的 stderr 原样透传。
+pub fn clone_repo(url: &str, dest: &Path) -> Result<(), String> {
+    let out = Command::new("git")
+        .arg("clone")
+        .arg(url)
+        .arg(dest)
+        .output()
+        .map_err(|e| format!("无法运行 git: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -860,5 +889,33 @@ mod tests {
     fn remote_url_none_for_non_git_dir() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(remote_url(dir.path()), Vec::<String>::new());
+    }
+
+    #[test]
+    fn git_available_detects_system_git() {
+        // 仓库里其它 git 相关测试都要求系统装了真 git 才能跑
+        // (`mkrepo()` 本身就 shell 出真 git),这里断言同一个前提。
+        assert!(git_available());
+    }
+
+    #[test]
+    fn clone_repo_copies_local_source_repo() {
+        let (_src_dir, src_repo) = mkrepo();
+        let dest_parent = tempfile::tempdir().unwrap();
+        let dest = dest_parent.path().join("cloned");
+        clone_repo(&src_repo.to_string_lossy(), &dest).unwrap();
+        assert!(dest.join(".git").exists());
+        assert_eq!(
+            std::fs::read_to_string(dest.join("a.txt")).unwrap(),
+            "one\n"
+        );
+    }
+
+    #[test]
+    fn clone_repo_fails_on_missing_source() {
+        let dest_parent = tempfile::tempdir().unwrap();
+        let dest = dest_parent.path().join("cloned");
+        let missing = dest_parent.path().join("does-not-exist");
+        assert!(clone_repo(&missing.to_string_lossy(), &dest).is_err());
     }
 }
