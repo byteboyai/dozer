@@ -117,6 +117,18 @@ pub fn update(
             }
             Err(e) => ws_state.tree_error = Some(e),
         },
+        Message::FileHistoryRollbackDone(_project_id, abs_path, result) => match result {
+            Ok(()) => {
+                // 还原成功:刷新被回滚文件所在的父目录,让树里该文件的状态
+                // (大小/可能的新增标记)重新读盘。
+                if let (Some(tree), Some(parent)) =
+                    (&mut ws_state.file_tree, abs_path.parent())
+                {
+                    tree.refresh(parent);
+                }
+            }
+            Err(e) => ws_state.tree_error = Some(e),
+        },
         Message::DeleteRequest(path, is_dir) => {
             app_state.context_menu = None;
             ws_state.tree_delete_confirm = Some((path, is_dir));
@@ -287,6 +299,9 @@ pub fn update(
         }
         Message::FileHistoryOpen(_) => {
             unreachable!("由内核拦截处理,见 files::Message::FileHistoryOpen 文档")
+        }
+        Message::FileHistoryRollbackPrevious(_) => {
+            unreachable!("由 app 拦截处理,见 files::Message::FileHistoryRollbackPrevious 文档")
         }
         // 工具行 icon 按钮的 hover 由内核 `Message::Files` 分支转发到
         // `HoverId`(文件树面板不挂 App 的 hover 动画表),`update` 吃不到

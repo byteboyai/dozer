@@ -194,6 +194,16 @@ pub enum Message {
     /// 携带的是右键目标的绝对路径,同其它右键菜单消息(`DeleteRequest`/
     /// `RevealInFinder` 等)的既有口径。
     FileHistoryOpen(PathBuf),
+    /// 右键菜单"回滚到上一版本":内核/app 拦截,不进 `files::update`——
+    /// 由 `app/update.rs` 解析出仓库相对路径、算上一版本 Oid、调
+    /// `file_history::rollback_to` 把文件还原(同 `FileHistoryOpen` 在 app
+    /// 层接线的既有写法,见其注释)。携带右键目标的绝对路径。
+    FileHistoryRollbackPrevious(PathBuf),
+    /// `FileHistoryRollbackPrevious` 的异步结果:成功即把文件还原到了上一版本,
+    /// 失败带错误信息。由 `app/update.rs` 发出、在 `files::update` 里刷新树/
+    /// 写 `tree_error`(不进 `file_history` 弹窗状态机——这是从文件树右键发起
+    /// 的一键动作,与弹窗内的版本挑选回滚是两条独立路径)。
+    FileHistoryRollbackDone(i64, PathBuf, Result<(), String>),
     /// 右键菜单"搜索":内核拦截,不进 `update`——由内核映射成
     /// `search::Message::SearchOpen` 打开文件树右键作用域的搜索弹窗。
     OpenSearch(PathBuf, bool),

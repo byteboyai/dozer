@@ -368,6 +368,20 @@ pub fn rollback_to(repo_path: &Path, file_path: &Path, oid: git2::Oid) -> Result
     Ok(())
 }
 
+/// 取文件「上一版本」对应的 commit Oid——供文件树右键菜单「回滚」一键还原
+/// 用。定义:最近一次修改该文件的提交(HEAD 版本)之前的那个版本;若该文件
+/// 在整个仓库历史里只有一次提交(没有更早的版本),回落到那唯一一次提交
+/// (等价于把工作区还原到最近一次提交、丢弃未提交改动);文件不在 git 跟踪内
+/// (历史为空)则返回 `None`。复用 `build` 但只取前两条,避免拉满整份历史。
+pub fn previous_oid(repo_path: &Path, file_path: &Path) -> Result<Option<git2::Oid>, String> {
+    let snapshot = build(repo_path, file_path, 2)?;
+    Ok(snapshot
+        .entries
+        .get(1)
+        .or_else(|| snapshot.entries.get(0))
+        .map(|e| e.oid))
+}
+
 /// 弹窗卡片本体(标题 + 左侧提交列表 + 右侧 diff 区),无外层居中容器——
 /// 这次拆分是为了让独立 overlay 窗口(`platform/file_history_overlay.rs`)
 /// 能直接复用同一份视图逻辑,只是换一个宿主(独立窗口取代 `App::view()`

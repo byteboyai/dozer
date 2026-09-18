@@ -1764,4 +1764,87 @@ mod tests {
         });
         assert!(!has_history, "目录行不该出现「查看此文件历史」");
     }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn context_menu_items_dir_first_item_is_search_not_separator() {
+        let items = context_menu_items(Path::new("/proj/src"), true, false, false, true);
+        // 文件夹菜单:顶部组(搜索/新建)紧贴,组前无分隔线——第一项应是「搜索」。
+        assert!(
+            matches!(
+                items.first(),
+                Some(crate::chrome::native_menu::Item::Entry {
+                    msg: Message::OpenSearch(..),
+                    ..
+                })
+            ),
+            "文件夹菜单第一项应为「搜索」而非分隔线"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn context_menu_items_file_has_no_search_or_paste() {
+        let items = context_menu_items(Path::new("/proj/src/main.rs"), false, false, true, true);
+        let has_search = items.iter().any(|i| {
+            matches!(
+                i,
+                crate::chrome::native_menu::Item::Entry {
+                    msg: Message::OpenSearch(..),
+                    ..
+                }
+            )
+        });
+        let has_paste = items.iter().any(|i| {
+            matches!(
+                i,
+                crate::chrome::native_menu::Item::Entry {
+                    msg: Message::Paste(_),
+                    ..
+                }
+            )
+        });
+        assert!(!has_search && !has_paste, "文件右键菜单不该有搜索/粘贴");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn context_menu_items_rollback_for_git_file_only() {
+        let git_file = context_menu_items(Path::new("/proj/src/main.rs"), false, false, false, true);
+        let non_git_file =
+            context_menu_items(Path::new("/proj/src/main.rs"), false, false, false, false);
+        let dir = context_menu_items(Path::new("/proj/src"), true, false, false, true);
+        let rollback = |items: &[crate::chrome::native_menu::Item<Message>]| {
+            items.iter().any(|i| {
+                matches!(
+                    i,
+                    crate::chrome::native_menu::Item::Entry {
+                        msg: Message::FileHistoryRollbackPrevious(..),
+                        ..
+                    }
+                )
+            })
+        };
+        assert!(rollback(&git_file), "git 文件该有「回滚」");
+        assert!(!rollback(&non_git_file), "非 git 文件不该有「回滚」");
+        assert!(!rollback(&dir), "目录不该有「回滚」");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn context_menu_items_file_without_top_group_has_no_leading_separator() {
+        // 非 git 文件没有顶部组(回滚/历史),组前分隔线不应悬空——第一项应是
+        // 复制(中间组首项),而非分隔线。
+        let items = context_menu_items(Path::new("/proj/src/main.rs"), false, false, false, false);
+        assert!(
+            matches!(
+                items.first(),
+                Some(crate::chrome::native_menu::Item::Entry {
+                    msg: Message::Copy(..),
+                    ..
+                })
+            ),
+            "无顶部组的文件菜单第一项应为「复制」而非分隔线"
+        );
+    }
 }

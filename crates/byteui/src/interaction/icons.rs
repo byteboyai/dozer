@@ -201,6 +201,13 @@ pub enum IconKind {
     /// 同上,文件树位于**右侧** zone 且已收起时,再点展开用 panel-right-open:
     /// 指右栏的三角箭头,提示"把右侧面板展开"。
     PanelRightOpen,
+    /// 文件右键菜单"回滚到上一版本"图标(Lucide undo-2:弯带回箭头,表撤销/
+    /// 回退到更早的状态),2026-09-18 起用于文件树文件右键菜单顶部"回滚"项。
+    Undo2,
+    /// 文件右键菜单"历史"图标(Lucide file-clock:文件 + 时钟,表文件版本
+    /// 历史),2026-09-18 起替换原 `History` 的"查看此文件历史"项,语义更聚焦
+    /// "历史"本身(其余历史面板仍用 `History`)。
+    FileClock,
 }
 
 impl IconKind {
@@ -308,6 +315,8 @@ impl IconKind {
                 include_bytes!("../../assets/icons/panel-right-close.svg")
             }
             IconKind::PanelRightOpen => include_bytes!("../../assets/icons/panel-right-open.svg"),
+            IconKind::Undo2 => include_bytes!("../../assets/icons/undo-2.svg"),
+            IconKind::FileClock => include_bytes!("../../assets/icons/file-clock.svg"),
         }
     }
 }

@@ -806,7 +806,20 @@ pub fn context_menu_items(
 }
 
 /// 文件树右键菜单内容——native(`context_menu_items`)和 iced fallback
-/// (`context_menu_popup`)共用同一份数据,12 个条件分支只写一遍。
+/// (`context_menu_popup`)共用同一份数据,按"顶部操作组 / 中间主操作组 /
+/// 底部工具组"三段组装,条件分支只写一遍。
+///
+/// 结构(2026-09-18 调整):
+/// - 文件夹:顶部 = 搜索 / 新建文件 / 新建文件夹(三者紧贴,组前无分隔线);
+///   中间 = 复制 / 粘贴(仅目录) / 删除 / 重命名(非根才有);底部 = 复制绝对
+///   路径 / 复制相对路径 / 在 Finder 中打开 / 从磁盘重新加载。
+/// - 文件:顶部 = 回滚(undo-2) / 历史(file-clock),仅 git 仓库文件才有;
+///   中间 = 复制 / 删除 / 重命名(文件不显示"粘贴"——粘贴是"粘贴进目标
+///   目录",对文件无语义);底部同文件夹。
+/// - 三组之间用分隔线隔开;顶部组为空(非 git 文件)时不画组前分隔线,避免
+///   悬空一条线。底部四项按设计纯文字:复制路径两项本就无图标,"在 Finder
+///   中打开"/"从磁盘重新加载" 的 FolderOpen/RefreshCw 图标也在此去掉,与顶部
+///   带图标的操作项区分开。
 pub(crate) fn context_menu_spec(
     target: &Path,
     is_dir: bool,
@@ -816,34 +829,48 @@ pub(crate) fn context_menu_spec(
 ) -> MenuSpec<Message> {
     let dim = byteui::theme::color::current().dim;
     let target = target.to_path_buf();
-    let mut items = vec![
-        MenuSpecItem::entry(
+
+    // 顶部操作组:文件夹=搜索/新建;文件=回滚/历史(git 才有)。
+    let mut top: Vec<MenuSpecItem<Message>> = Vec::new();
+    if is_dir {
+        top.push(MenuSpecItem::entry(
             Some(icons::IconKind::Search),
             "搜索",
             Message::OpenSearch(target.clone(), is_dir),
-        ),
-        MenuSpecItem::separator(),
-    ];
-    if is_dir {
-        items.push(MenuSpecItem::entry(
+        ));
+        top.push(MenuSpecItem::entry(
             Some(icons::IconKind::FilePlus),
             "新建文件",
             Message::NewFile(target.clone()),
         ));
-        items.push(MenuSpecItem::entry(
+        top.push(MenuSpecItem::entry(
             Some(icons::IconKind::FolderPlus),
             "新建文件夹",
             Message::NewFolder(target.clone()),
         ));
-        items.push(MenuSpecItem::separator());
+    } else if is_git_repo {
+        top.push(MenuSpecItem::entry(
+            Some(icons::IconKind::Undo2),
+            "回滚",
+            Message::FileHistoryRollbackPrevious(target.clone()),
+        ));
+        top.push(MenuSpecItem::entry(
+            Some(icons::IconKind::FileClock),
+            "历史",
+            Message::FileHistoryOpen(target.clone()),
+        ));
     }
-    items.push(MenuSpecItem::entry(
+
+    // 中间主操作组:复制恒在;粘贴仅目录(无剪贴内容时置灰禁用);删除/重命名
+    // 仅非根目标才有。
+    let mut mid: Vec<MenuSpecItem<Message>> = Vec::new();
+    mid.push(MenuSpecItem::entry(
         Some(icons::IconKind::Copy),
         "复制",
         Message::Copy(target.clone(), is_dir),
     ));
     if is_dir {
-        items.push(MenuSpecItem::Entry {
+        mid.push(MenuSpecItem::Entry {
             icon: Some(icons::IconKind::ClipboardPaste),
             icon_color: None,
             label: "粘贴".into(),
@@ -857,45 +884,43 @@ pub(crate) fn context_menu_spec(
         });
     }
     if !is_root {
-        items.push(MenuSpecItem::entry(
+        mid.push(MenuSpecItem::entry(
             Some(icons::IconKind::Trash),
             "删除",
             Message::DeleteRequest(target.clone(), is_dir),
         ));
-        items.push(MenuSpecItem::entry(
+        mid.push(MenuSpecItem::entry(
             Some(icons::IconKind::Rename),
             "重命名",
             Message::RenameStart(target.clone()),
         ));
     }
-    items.push(MenuSpecItem::separator());
-    items.push(MenuSpecItem::entry(
-        None,
-        "复制绝对路径",
-        Message::CopyPath(target.clone(), PathKind::Absolute),
-    ));
-    items.push(MenuSpecItem::entry(
-        None,
-        "复制相对路径",
-        Message::CopyPath(target.clone(), PathKind::Relative),
-    ));
-    items.push(MenuSpecItem::entry(
-        Some(icons::IconKind::FolderOpen),
-        "在 Finder 中打开",
-        Message::RevealInFinder(target.clone()),
-    ));
-    items.push(MenuSpecItem::entry(
-        Some(icons::IconKind::RefreshCw),
-        "从磁盘重新加载",
-        Message::ReloadFromDisk,
-    ));
-    if !is_dir && is_git_repo {
-        items.push(MenuSpecItem::entry(
-            Some(icons::IconKind::History),
-            "查看此文件历史",
-            Message::FileHistoryOpen(target.clone()),
-        ));
+
+    // 底部工具组:纯文字(无图标)。
+    let bottom: Vec<MenuSpecItem<Message>> = vec![
+        MenuSpecItem::entry(
+            None,
+            "复制绝对路径",
+            Message::CopyPath(target.clone(), PathKind::Absolute),
+        ),
+        MenuSpecItem::entry(
+            None,
+            "复制相对路径",
+            Message::CopyPath(target.clone(), PathKind::Relative),
+        ),
+        MenuSpecItem::entry(None, "在 Finder 中打开", Message::RevealInFinder(target.clone())),
+        MenuSpecItem::entry(None, "从磁盘重新加载", Message::ReloadFromDisk),
+    ];
+
+    let mut items = Vec::new();
+    let has_top = !top.is_empty();
+    items.extend(top);
+    if has_top {
+        items.push(MenuSpecItem::separator());
     }
+    items.extend(mid);
+    items.push(MenuSpecItem::separator());
+    items.extend(bottom);
     items
 }
 

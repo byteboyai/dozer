@@ -1229,6 +1229,47 @@ impl App {
                     ));
                 });
             }
+            Message::Files(files::Message::FileHistoryRollbackPrevious(path)) => {
+                // 右键"回滚到上一版本":先收起右键菜单,再解析出仓库相对路径,
+                // 算上一版本 Oid 并 `rollback_to` 还原(同 `FileHistoryOpen` 在
+                // app 层接线的写法,但这里是"一键还原"而非"打开历史浮层")。
+                self.files.close_context_menu();
+                let Some(project_id) = self.active_project_id else {
+                    return;
+                };
+                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+                    return;
+                };
+                let Some(project) = ws.project.as_ref() else {
+                    return;
+                };
+                let repo_path = PathBuf::from(&project.path);
+                let Ok(file_path) = path.strip_prefix(&repo_path).map(|p| p.to_path_buf()) else {
+                    return;
+                };
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                handle.spawn(async move {
+                    let repo_path2 = repo_path.clone();
+                    let file_path2 = file_path.clone();
+                    let path2 = path.clone();
+                    let result = tokio::task::spawn_blocking(move || {
+                        file_history::previous_oid(&repo_path2, &file_path2).and_then(|opt| {
+                            match opt {
+                                Some(oid) => {
+                                    file_history::rollback_to(&repo_path2, &file_path2, oid)
+                                }
+                                None => Err("该文件没有可回滚的历史版本".to_string()),
+                            }
+                        })
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(format!("回滚任务失败: {e}")));
+                    let _ = proxy.send_event(Message::Files(
+                        files::Message::FileHistoryRollbackDone(project_id, path2, result),
+                    ));
+                });
+            }
             Message::Files(
                 msg @ (files::Message::StatusesRefreshed(project_id, ..)
                 | files::Message::PasteDone(project_id, ..)
