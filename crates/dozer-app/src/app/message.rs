@@ -7,8 +7,8 @@ use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 
 use crate::chrome::homespace::{self, HomeRecentConversation, HomeRecentFile};
 use crate::extensions::{
-    browser, conversations, database, file_history, files, footbar, git_log, project, search, ssh,
-    todo, usage,
+    browser, conversations, database, file_history, files, footbar, git_log, project,
+    project_create, search, ssh, todo, usage,
 };
 use crate::git_watch;
 use crate::term::terminal;
@@ -405,6 +405,10 @@ pub enum Message {
     /// 是否跳过静默 scaffold 的 git init 步骤)。`None` = 这次打开失败,只
     /// 报错、不改任何页签状态,此时第三个字段无意义。
     ProjectTabOpened(Option<ProjectInfo>, Vec<ProjectInfo>, bool),
+    /// topbar "+"菜单"创建项目"入口——打开"创建项目"对话框。
+    ProjectCreateOpen,
+    /// "创建项目"对话框内部消息,转发给 `extensions::project_create::update`。
+    ProjectCreate(project_create::Message),
     /// H0 项目中心:`Message::TopBarHome` 发起的异步刷新完成(最近改动的文件、
     /// 最近的对话两份列表;D4)。
     HomeRecentsLoaded(Vec<HomeRecentFile>, Vec<HomeRecentConversation>),

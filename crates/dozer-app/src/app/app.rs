@@ -7,6 +7,7 @@ use crate::chrome::rail;
 use crate::extensions::browser;
 use crate::extensions::database;
 use crate::extensions::file_history;
+use crate::extensions::project_create;
 use crate::extensions::files;
 use crate::extensions::footbar;
 use crate::extensions::git_log;
@@ -365,6 +366,9 @@ pub struct App {
     /// 文件历史对比弹窗状态——见 `extensions::file_history::State`。`None`
     /// 表示弹窗未打开。
     pub(crate) file_history: Option<file_history::State>,
+    /// "创建项目"对话框状态——见 `extensions::project_create::State`。
+    /// `None` 表示当前没开。
+    pub(crate) project_create: Option<project_create::State>,
     /// Todo 分类树节点右键菜单浮层状态,坐标复用 `files.last_right_click`。
     pub(crate) category_context_menu: Option<CategoryContextMenu>,
     /// 分类选择器("移动到..." / 任务挂分类)浮层状态:定位坐标 + 目标。
@@ -749,6 +753,7 @@ impl App {
             files: files::AppState::default(),
             project_link_menu: None,
             file_history: None,
+            project_create: None,
             category_context_menu: None,
             category_picker: None,
             text_input_menu: None,

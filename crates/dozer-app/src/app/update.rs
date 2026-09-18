@@ -12,6 +12,7 @@ use crate::extensions::files;
 use crate::extensions::footbar;
 use crate::extensions::git_log;
 use crate::extensions::project;
+use crate::extensions::project_create;
 use crate::extensions::search;
 use crate::extensions::ssh;
 use crate::extensions::todo;
@@ -1136,6 +1137,35 @@ impl App {
                     let _ = proxy.send_event(Message::FileHistory(m));
                 };
                 file_history::update(&mut self.file_history, msg, &handle, emit);
+            }
+            Message::ProjectCreateOpen => {
+                self.project_create = Some(project_create::State::default());
+            }
+            Message::ProjectCreate(project_create::Message::Done(result)) => {
+                self.project_create = None;
+                match result {
+                    Ok((project, recent, skip_git_init)) => {
+                        self.project_tab_opened(project, recent, skip_git_init);
+                    }
+                    Err(e) => {
+                        // 落地失败(dozerd 侧,不是表单校验失败——校验失败
+                        // 走 project_create::update 内部的 s.error,不会
+                        // 产出 Err 这条路径,这里只处理"表单校验都通过、
+                        // fs/git/dozerd 某一步失败"的情况)。对话框已经
+                        // 关了,退化成顶层错误条,与 `project_tab_opened`
+                        // 失败分支同一处 `daemon_error` 展示方式一致。
+                        self.daemon_error = Some(e);
+                    }
+                }
+            }
+            Message::ProjectCreate(msg) => {
+                let client = self.client.clone();
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                let emit = move |m| {
+                    let _ = proxy.send_event(Message::ProjectCreate(m));
+                };
+                project_create::update(&mut self.project_create, msg, &client, &handle, emit);
             }
             Message::Files(files::Message::CopyPath(path, kind)) => {
                 let _ = (path, kind); // main.rs 拦截处理写剪贴板,这里维持现状空分支
