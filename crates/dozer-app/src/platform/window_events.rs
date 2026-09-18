@@ -506,6 +506,29 @@ impl Runner {
             _ => {}
         }
 
+        // 兜底:search overlay 打开时,主窗口这边收到的 Esc 也关掉它。
+        // 正常路径是 overlay 自己的 `SearchOverlay::handle_input`(它有
+        // 独立的 `WindowId`,这个按键根本不会落到这里)——这里纯粹是万一
+        // overlay 没能真的拿到 OS 键盘焦点(比如某个平台/窗口管理器边界
+        // 情形导致按键被系统转投回了主窗口)时的安全阀,不是主路径,不
+        // 要求它一直有效。跟下面这段"原生放行闸门"里补的
+        // `app.search_popup_open()` 是同一个防御性考虑,理由见那处注释。
+        if app.search_popup_open()
+            && let WindowEvent::KeyboardInput {
+                event,
+                is_synthetic: false,
+                ..
+            } = event
+            && event.state == ElementState::Pressed
+            && event.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+        {
+            app.update(Message::Search(
+                crate::extensions::search::Message::SearchClose,
+            ));
+            window.request_redraw();
+            return false;
+        }
+
         // 右键菜单打开时,Esc 优先关菜单,不进正常键盘分发(不然会被当作
         // 普通按键继续往下走,可能被地址栏/终端等其它分支消费掉)。
         if app.context_menu_open()
@@ -758,6 +781,14 @@ impl Runner {
             || app.files_move_confirm_open()
             || app.project_name_focused()
             || app.project_description_focused()
+            // search overlay 打开时的防御性兜底:查询框已经不在主窗口的
+            // `UserInterface` 里了,正常情况下这个窗口的按键事件根本不会
+            // 落到这条主窗口路径(overlay 是独立 `WindowId`,自己的
+            // `SearchOverlay::handle_input` 处理)。这里加上纯粹是为了
+            // "万一 overlay 没能真的拿到 OS 键盘焦点"这种边界情形兜底——
+            // 至少不让按键被当成 ⌘ 组合键/终端输入误处理(即便它们也到
+            // 不了查询框,`Esc` 靠上面那条独立的兜底块能关掉弹窗)。
+            || app.search_popup_open()
         {
             return false;
         }
@@ -1714,6 +1745,15 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             {
                 overlay.apply_pending_native_menu_edit_key(app);
             }
+            // 挑中一条结果(`Message::Search(Pick(hit))`)在 `dispatch` 里
+            // 被内核拦截成 `PreviewOpenPath` + `SearchClose`,会新开/切换
+            // 预览 webview、设置待聚焦意图——这两件事平时都要靠这三个调用
+            // 落地(`user_event`/主窗口 `window_event` 尾部都是这个顺序),
+            // overlay 这条分支之前漏调了,新开的预览要等主窗口凑巧被别的
+            // 事件触发到这段收尾才会真的显示出来/拿到焦点。
+            self.sync_previews();
+            self.apply_pending_focus();
+            self.apply_pending_zoom_toggle();
             self.sync_search_overlay(event_loop);
             return;
         }
