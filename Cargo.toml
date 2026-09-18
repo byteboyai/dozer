@@ -6,6 +6,16 @@ members = ["crates/*", "spike/*"]
 edition = "2024"
 license = "MIT"
 
+# 发布体积优化(2026-09-18):默认 release profile 什么都不开,打包出的
+# dozer GUI 二进制 51M。开 LTO + 单 codegen 单元 + opt-level=s + strip
+# 实测降到 24M(-53%),daemon/mcp/hook 同比例收缩。打包编译时间变长
+# (约 1m16s -> 3m47s),但这是发布链路、不是日常 dev 链路,可接受。
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = "s"
+strip = true
+
 [workspace.dependencies]
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
