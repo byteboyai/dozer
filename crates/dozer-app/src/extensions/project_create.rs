@@ -5,6 +5,8 @@
 //! 的既有分工:本模块只管状态/消息/视图/异步落盘逻辑,不碰 winit/wgpu。
 
 use crate::delivery;
+use iced_widget::core::{Border, Length};
+use iced_widget::{Space, button, column, container, row, text};
 use std::path::{Path, PathBuf};
 
 /// 最终项目路径 = 根目录/项目名称。纯字符串拼接,不做存在性判断
@@ -287,6 +289,252 @@ pub fn update(
             unreachable!("已在 apply_field_message 或顶部处理")
         }
     }
+}
+
+type Element<'a> = iced_widget::core::Element<
+    'a,
+    Message,
+    iced_widget::Theme,
+    iced_renderer::Renderer,
+>;
+
+/// 卡片逻辑尺寸——比 file_history(75%/80%)略窄但更高,双栏表单不需要
+/// 那么宽,但字段多需要更高的纵向空间。
+pub(crate) fn card_logical_size(
+    window_width: f32,
+    window_height: f32,
+) -> iced_winit::core::Size<f32> {
+    iced_winit::core::Size::new(
+        (window_width * 0.55).max(560.0),
+        (window_height * 0.75).max(520.0),
+    )
+}
+
+fn tab_button(label: &str, active: bool, tab: Tab) -> Element<'_> {
+    let colors = byteui::theme::color::current();
+    let label_el = text(label)
+        .size(byteui::theme::font::body())
+        .color(if active { colors.cream } else { colors.dim });
+    let inner = container(label_el)
+        .padding([10, 16])
+        .width(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(if active { colors.card } else { colors.bg }.into()),
+            border: Border {
+                color: colors.border,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
+            ..container::Style::default()
+        });
+    iced_widget::MouseArea::new(inner)
+        .interaction(iced_widget::core::mouse::Interaction::Pointer)
+        .on_press(Message::TabSelected(tab))
+        .into()
+}
+
+fn tab_row(active: Tab) -> Element<'static> {
+    row![
+        tab_button("新建本地项目", active == Tab::Local, Tab::Local),
+        tab_button("签出Git远程仓库的项目", active == Tab::Clone, Tab::Clone),
+    ]
+    .into()
+}
+
+fn field_label(label: &str) -> Element<'static> {
+    text(label.to_string())
+        .size(byteui::theme::font::label())
+        .color(byteui::theme::color::current().dim)
+        .into()
+}
+
+fn root_dir_row<'a>(
+    value: &'a str,
+    on_change: impl Fn(String) -> Message + 'a,
+    on_pick: Message,
+) -> Element<'a> {
+    let input = byteui::form::input_text::view(
+        "Input",
+        value,
+        false,
+        None,
+        false,
+        None,
+        false,
+        on_change,
+    );
+    let pick_btn = button(text("📁").size(byteui::theme::font::body()))
+        .on_press(on_pick)
+        .padding([6, 10]);
+    row![input, pick_btn].spacing(6).into()
+}
+
+fn local_form_view(form: &LocalForm) -> Element<'_> {
+    let description_editor = iced_widget::text_editor(&form.description)
+        .placeholder("项目描述…")
+        .on_action(Message::LocalDescriptionAction)
+        .height(Length::Fixed(96.0));
+    column![
+        field_label("根目录"),
+        root_dir_row(
+            &form.root_dir,
+            Message::LocalRootDirChanged,
+            Message::LocalRootDirPick
+        ),
+        field_label("项目名称"),
+        byteui::form::input_text::view(
+            "Input",
+            &form.name,
+            false,
+            None,
+            false,
+            None,
+            false,
+            Message::LocalNameChanged,
+        ),
+        field_label("项目描述"),
+        description_editor,
+        row![
+            Space::new().width(Length::Fill),
+            byteui::form::checkbox::view(
+                "创建Git仓库",
+                form.create_git,
+                Message::LocalCreateGitToggled
+            ),
+        ]
+        .align_y(iced_widget::core::Alignment::Center),
+    ]
+    .spacing(10)
+    .into()
+}
+
+fn sidebar_entry(label: &'static str, enabled: bool) -> Element<'static> {
+    let colors = byteui::theme::color::current();
+    let label_el = text(label)
+        .size(byteui::theme::font::body())
+        .color(if enabled { colors.cream } else { colors.dim });
+    let cell = container(label_el)
+        .padding([8, 12])
+        .width(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(if enabled { colors.card } else { colors.bg }.into()),
+            ..container::Style::default()
+        });
+    // GitLab/Gitee 等账户接入推迟到后续(spec「非目标」):`enabled=false`
+    // 视觉置灰、不挂 `on_press`,与 `menu_spec::to_iced` 里 `enabled=false`
+    // 项"点不动"的既有语义一致。
+    cell.into()
+}
+
+fn clone_sidebar() -> Element<'static> {
+    column![
+        sidebar_entry("仓库URL", true),
+        sidebar_entry("GitHub", false),
+        sidebar_entry("GitLab", false),
+        sidebar_entry("Gitee", false),
+    ]
+    .spacing(4)
+    .width(Length::Fixed(120.0))
+    .into()
+}
+
+fn clone_form_view(form: &CloneForm) -> Element<'_> {
+    let description_editor = iced_widget::text_editor(&form.description)
+        .placeholder("项目描述…")
+        .on_action(Message::CloneDescriptionAction)
+        .height(Length::Fixed(96.0));
+    let fields = column![
+        field_label("远程仓库"),
+        byteui::form::input_text::view(
+            "Input",
+            &form.url,
+            false,
+            None,
+            false,
+            None,
+            false,
+            Message::CloneUrlChanged,
+        ),
+        field_label("根目录"),
+        root_dir_row(
+            &form.root_dir,
+            Message::CloneRootDirChanged,
+            Message::CloneRootDirPick
+        ),
+        field_label("项目名称"),
+        byteui::form::input_text::view(
+            "Input",
+            &form.name,
+            false,
+            None,
+            false,
+            None,
+            false,
+            Message::CloneNameChanged,
+        ),
+        field_label("项目描述"),
+        description_editor,
+    ]
+    .spacing(10);
+    row![clone_sidebar(), fields].spacing(16).into()
+}
+
+fn primary_button(label: &'static str, msg: Message, busy: bool) -> Element<'static> {
+    let btn = button(
+        text(if busy { "处理中…" } else { label }).size(byteui::theme::font::body()),
+    )
+    .style(|_t: &iced_widget::Theme, status| {
+        crate::dialog::action_button_style(byteui::theme::color::current().gold)(_t, status)
+    })
+    .padding([8, 20]);
+    if busy {
+        btn.into()
+    } else {
+        btn.on_press(msg).into()
+    }
+}
+
+pub(crate) fn project_create_card(state: &State) -> Element<'_> {
+    let body = match state.tab {
+        Tab::Local => local_form_view(&state.local),
+        Tab::Clone => clone_form_view(&state.clone_form),
+    };
+    let submit = match state.tab {
+        Tab::Local => primary_button("创建项目", Message::SubmitLocal, state.busy),
+        Tab::Clone => primary_button("签出项目", Message::SubmitClone, state.busy),
+    };
+    let error_row: Element<'_> = if let Some(err) = &state.error {
+        text(err.clone())
+            .size(byteui::theme::font::label())
+            .color(byteui::theme::color::current().red)
+            .into()
+    } else {
+        Space::new().into()
+    };
+    let cancel = button(text("取消").size(byteui::theme::font::body()))
+        .on_press(Message::Close)
+        .padding([8, 20])
+        .style(crate::dialog::action_button_style(
+            byteui::theme::color::current().dim,
+        ));
+    let content = column![
+        text("新建项目").size(byteui::theme::font::title()),
+        tab_row(state.tab),
+        container(body)
+            .padding(16)
+            .width(Length::Fill)
+            .height(Length::Fill),
+        error_row,
+        crate::dialog::actions(row![cancel, submit].spacing(8)),
+    ]
+    .spacing(12);
+    container(content)
+        .padding(16)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(crate::dialog::card_style)
+        .into()
 }
 
 type SubmitResult = Result<
