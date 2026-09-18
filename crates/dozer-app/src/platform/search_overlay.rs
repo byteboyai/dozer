@@ -104,11 +104,27 @@ pub(crate) struct SearchOverlay {
     /// 只有先收到过 `Focused(true)`、再收到 `Focused(false)` 才算真正的
     /// 失焦(用户点到别处/别的 App)。
     focused: bool,
+    /// 这扇窗口里最近一次右键按下的逻辑坐标——`TextInputMenuOpen` 的原生
+    /// 菜单定位复用 `app.files.last_right_click`(全应用共享的坐标缓存,
+    /// 不是 Files 专属),在这扇窗口里右键时必须先把它覆写成这扇窗口自己
+    /// 的坐标,否则菜单会弹在主窗口上次右键的旧位置(见 `handle_input`)。
+    last_right_click: (f32, f32),
+    /// 主窗口句柄——`open()` 时把 `chrome::native_menu` 的挂靠目标临时
+    /// 指向这扇窗口自己的 NSView,`Drop` 时得指回来,不然这扇窗口关掉后
+    /// Files/Project 等主窗口里其它输入框的右键菜单会继续错误地尝试挂在
+    /// 一个已经销毁的 NSView 上。
+    main_window: Arc<Window>,
 }
 
 impl SearchOverlay {
     pub(crate) fn window_id(&self) -> WindowId {
         self.window.id()
+    }
+
+    /// 供 `sync_search_overlay` 在"这次分发的消息可能只是改了 `ws.search`
+    /// 内容"时补一次重绘(见调用点注释)。
+    pub(crate) fn request_redraw(&self) {
+        self.window.request_redraw();
     }
 
     /// 开一扇挂成主窗口子窗口的独立窗口,复用主窗口的 `Device`/`Queue`/
@@ -117,7 +133,7 @@ impl SearchOverlay {
     /// 可行:见 `docs/superpowers/specs/2026-09-17-multi-window-overlay-
     /// spike-findings.md`)。
     pub(crate) fn open(
-        main_window: &Window,
+        main_window: &Arc<Window>,
         adapter: &wgpu::Adapter,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -157,6 +173,16 @@ impl SearchOverlay {
                 .expect("create search overlay window"),
         );
         window.focus_window();
+        // CJK 组字要靠这个才能拿到候选窗——主窗口在 `resumed()` 里也调了
+        // 同一个方法(`window_events.rs:1497`),winit 对新窗口默认关闭 IME,
+        // 这扇窗口是独立创建的,不会继承主窗口那次调用的效果。
+        window.set_ime_allowed(true);
+        // 原生右键菜单(`chrome::native_menu`)靠一个进程级 thread_local
+        // 记"该往哪个 NSView 上弹",只在主窗口初始化时装过一次——这扇窗口
+        // 打开期间,查询框的剪切/复制/粘贴菜单也要经这条路径,得先把挂靠
+        // 目标指过来,`Drop` 里再指回主窗口(见该字段与 `impl Drop` 的文档)。
+        #[cfg(target_os = "macos")]
+        crate::chrome::native_menu::install_content_view(&window);
 
         let surface = instance
             .create_surface(window.clone())
@@ -207,6 +233,8 @@ impl SearchOverlay {
             cursor: mouse::Cursor::Unavailable,
             modifiers: ModifiersState::default(),
             focused: false,
+            last_right_click: (0.0, 0.0),
+            main_window: main_window.clone(),
         }
     }
 
@@ -354,6 +382,20 @@ impl SearchOverlay {
                 self.viewport.scale_factor(),
             ));
         }
+        // 查询框右键(剪切/复制/粘贴菜单,`extensions::search::Message::
+        // TextInputMenuOpen`)复用 `app.files.last_right_click` 这个全应用
+        // 共享的坐标缓存定位原生菜单——不先在这里覆写,菜单会弹在主窗口
+        // 上一次右键的旧位置(那个字段只有主窗口自己的右键处理会写)。
+        if let WindowEvent::MouseInput {
+            state: winit::event::ElementState::Pressed,
+            button: winit::event::MouseButton::Right,
+            ..
+        } = event
+            && let mouse::Cursor::Available(point) = self.cursor
+        {
+            self.last_right_click = (point.x, point.y);
+            app.files.last_right_click = self.last_right_click;
+        }
         let Some(iced_event) =
             conversion::window_event(event.clone(), self.viewport.scale_factor(), self.modifiers)
         else {
@@ -384,6 +426,68 @@ impl SearchOverlay {
         self.cache = interface.into_cache();
         self.window.request_redraw();
         messages
+    }
+
+    /// 原生右键菜单(查询框的剪切/复制/粘贴/全选)选中一项后,`App::update`
+    /// 已经同步弹完 `NSMenu`、把待合成的按键写进
+    /// `app.pending_native_menu_edit_key`——主窗口那份等价收尾逻辑
+    /// (`window_events.rs` 尾部)建的是 `app.view()`,查询框已经不在那棵
+    /// 树里,够不着,所以这扇窗口自己的事件分支里要单独收一遍。只在目标
+    /// 确实是查询框时才 `take()`:这个字段是全应用共享的单槽位,`take()`
+    /// 会连同"根本不是查询框"的情形一起清空,那样会偷走本该留给主窗口
+    /// 其它输入框的合成按键。调用点:`window_event` 的 overlay 分支,
+    /// 在 `handle_input` 派发完消息之后、早退之前。
+    pub(crate) fn apply_pending_native_menu_edit_key(&mut self, app: &mut App) {
+        let is_query_field = app
+            .pending_native_menu_edit_key
+            .as_ref()
+            .is_some_and(|(_, id)| *id == search::query_field_id());
+        if !is_query_field {
+            return;
+        }
+        let Some((ch, target_id)) = app.take_pending_native_menu_edit_key() else {
+            return;
+        };
+        let Some(ws) = app.active_workspace_mut() else {
+            return;
+        };
+        let project_root = ws
+            .project
+            .as_ref()
+            .map(|p| std::path::Path::new(&p.path).to_path_buf());
+        let mut interface = UserInterface::build(
+            search::search_card(&ws.search, project_root.as_deref()).map(Message::Search),
+            self.viewport.logical_size(),
+            std::mem::take(&mut self.cache),
+            &mut self.renderer,
+        );
+        let mut op = iced_winit::core::widget::operation::focusable::focus::<()>(target_id);
+        crate::runtime::run_operate(&mut interface, &mut self.renderer, &mut op);
+        let synth = [crate::event::unique_command_event(ch)];
+        // 剪切/复制/粘贴/全选作用于纯文本编辑,不会产出需要二次处理的业务
+        // 消息(跟主窗口同款收尾逻辑一样直接丢弃产出);置信度来自两边走的
+        // 是同一个查询框 `text_input`,行为不会因为宿主窗口不同而分叉。
+        let mut ignored = Vec::new();
+        let _ = interface.update(
+            &synth,
+            self.cursor,
+            &mut self.renderer,
+            &mut self.clipboard,
+            &mut ignored,
+        );
+        self.cache = interface.into_cache();
+        self.window.request_redraw();
+    }
+}
+
+impl Drop for SearchOverlay {
+    /// 把 `chrome::native_menu` 的挂靠目标指回主窗口——`open()` 打开时
+    /// 临时指到了这扇窗口自己的 NSView(见那里的调用点注释),这扇窗口
+    /// 消失后,Files/Project 等主窗口里其它输入框的右键菜单还得继续正常
+    /// 弹在主窗口上。
+    fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
+        crate::chrome::native_menu::install_content_view(&self.main_window);
     }
 }
 

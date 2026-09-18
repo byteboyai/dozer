@@ -1035,6 +1035,17 @@ impl Runner {
             search_overlay::SyncAction::Close => *search_overlay = None,
             search_overlay::SyncAction::Noop => {}
         }
+        // 这次分发的消息可能只是改了 `ws.search` 的内容(典型例子:异步
+        // `SearchResults` 从 `user_event` 落地),不涉及开/关窗口,上面的
+        // `match` 不会碰它——但内容变了就得让这扇窗口重绘,不然会一直停在
+        // "搜索中…"直到用户碰巧在这扇窗口里移动一下鼠标(`handle_input`
+        // 自己也会 `request_redraw`,纯属误打误撞)。不判断"到底是不是真的
+        // 有变化",跟主窗口 `dispatch()` 对几乎每条消息都无条件
+        // `request_redraw()` 的既有尺度一致,不用为这个小对话框单独发明一套
+        // 精确脏检查。
+        if let Some(overlay) = search_overlay {
+            overlay.request_redraw();
+        }
     }
 
     /// 首页右栏全局浏览器(`home_browser`)的 webview 像素边界:占满右侧
@@ -1685,6 +1696,23 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 for message in overlay.handle_input(app, &event) {
                     self.dispatch(message);
                 }
+            }
+            // 查询框原生右键菜单(剪切/复制/粘贴)选中一项后的合成按键收尾——
+            // 主窗口那份等价逻辑(window_event 尾部)建的是 `app.view()`,
+            // 查询框已经不在那棵树里,够不着,这扇窗口自己补一遍。上面的
+            // `self.dispatch(...)` 需要整个 `self` 的可变借用,跟这里已经
+            // 借出去的 `app`/`overlay` 冲突不了(NLL 允许 `app`/`overlay`
+            // 在各自分支内"最后一次用"之后释放),但这一步要在 dispatch 循环
+            // *之后* 再用一次 `app`,所以在这里重新单独借一次,而不是复用
+            // 上面那次借用。
+            if let Self::Ready {
+                app,
+                search_overlay,
+                ..
+            } = self
+                && let Some(overlay) = search_overlay
+            {
+                overlay.apply_pending_native_menu_edit_key(app);
             }
             self.sync_search_overlay(event_loop);
             return;
