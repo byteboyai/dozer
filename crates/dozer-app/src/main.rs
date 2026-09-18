@@ -22,7 +22,6 @@ mod preview_state;
 mod project;
 mod project_meta;
 mod runtime;
-mod settings;
 mod term;
 mod theme;
 mod transcript;

@@ -14,6 +14,7 @@ pub mod git_log;
 pub mod project;
 pub mod project_create;
 pub mod search;
+pub mod settings;
 pub mod ssh;
 pub mod todo;
 pub mod usage;
