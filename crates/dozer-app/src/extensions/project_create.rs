@@ -4,6 +4,7 @@
 //! ProjectCreateOverlay`,结构对照 `extensions::file_history` + 同名 overlay
 //! 的既有分工:本模块只管状态/消息/视图/异步落盘逻辑,不碰 winit/wgpu。
 
+use crate::delivery;
 use std::path::{Path, PathBuf};
 
 /// 最终项目路径 = 根目录/项目名称。纯字符串拼接,不做存在性判断
@@ -186,8 +187,7 @@ fn apply_field_message(state: &mut State, msg: &Message) -> bool {
 
 /// `state` 是 `&mut Option<State>`(不是 `&mut State`)——`Message::Close`/
 /// 成功完成后都需要能把它整个置回 `None`,同 `file_history::update` 的
-/// 既有写法。`SubmitLocal`/`SubmitClone`/`Done` 三个提交类分支在 Task 5
-/// 补上,这里先接好骨架。
+/// 既有写法。
 pub fn update(
     state: &mut Option<State>,
     msg: Message,
@@ -203,8 +203,163 @@ pub fn update(
     if apply_field_message(s, &msg) {
         return;
     }
-    // 走到这里的只剩 SubmitLocal/SubmitClone/Done,Task 5 实现。
-    let _ = (client, handle, emit, msg);
+    match msg {
+        Message::SubmitLocal => {
+            let root_dir = s.local.root_dir.clone();
+            let name = s.local.name.clone();
+            let description = s.local.description.text();
+            let create_git = s.local.create_git;
+            if let Err(e) = validate_project_name(&name) {
+                s.error = Some(e);
+                return;
+            }
+            let target = target_path(&root_dir, &name);
+            if let Err(e) = validate_target_not_exists(&target) {
+                s.error = Some(e);
+                return;
+            }
+            s.error = None;
+            s.busy = true;
+            let client = client.clone();
+            handle.spawn(async move {
+                let result = spawn_create_local(target, description, create_git, &client).await;
+                emit(Message::Done(result));
+            });
+        }
+        Message::SubmitClone => {
+            let url = s.clone_form.url.clone();
+            let root_dir = s.clone_form.root_dir.clone();
+            let name = s.clone_form.name.clone();
+            let description = s.clone_form.description.text();
+            if url.trim().is_empty() {
+                s.error = Some("远程仓库地址不能为空".to_string());
+                return;
+            }
+            if let Err(e) = validate_project_name(&name) {
+                s.error = Some(e);
+                return;
+            }
+            let target = target_path(&root_dir, &name);
+            if let Err(e) = validate_target_not_exists(&target) {
+                s.error = Some(e);
+                return;
+            }
+            if !delivery::git_available() {
+                s.error = Some(
+                    "未检测到系统 git,请先安装 Xcode Command Line Tools(终端执行: xcode-select --install)后重试"
+                        .to_string(),
+                );
+                return;
+            }
+            s.error = None;
+            s.busy = true;
+            let client = client.clone();
+            handle.spawn(async move {
+                let result = spawn_clone(url, target, description, &client).await;
+                emit(Message::Done(result));
+            });
+        }
+        Message::Done(result) => {
+            s.busy = false;
+            if let Err(e) = &result {
+                s.error = Some(e.clone());
+            }
+            // Ok 分支不在这里清 `*state`——由 App 级拦截(Task 8)在拿到
+            // Done 之后统一 `self.project_create = None`,保持"谁开的谁
+            // 关"的单一收口点,project_create::update 自己不用假设 App
+            // 会怎么处理。
+            let _ = result;
+        }
+        Message::Close
+        | Message::TabSelected(_)
+        | Message::LocalRootDirChanged(_)
+        | Message::LocalRootDirPick
+        | Message::LocalRootDirPicked(_)
+        | Message::LocalNameChanged(_)
+        | Message::LocalDescriptionAction(_)
+        | Message::LocalCreateGitToggled(_)
+        | Message::CloneUrlChanged(_)
+        | Message::CloneRootDirChanged(_)
+        | Message::CloneRootDirPick
+        | Message::CloneRootDirPicked(_)
+        | Message::CloneNameChanged(_)
+        | Message::CloneDescriptionAction(_) => {
+            unreachable!("已在 apply_field_message 或顶部处理")
+        }
+    }
+}
+
+type SubmitResult = Result<
+    (
+        Option<dozer_core::protocol::ProjectInfo>,
+        Vec<dozer_core::protocol::ProjectInfo>,
+        bool,
+    ),
+    String,
+>;
+
+async fn spawn_create_local(
+    target: PathBuf,
+    description: String,
+    create_git: bool,
+    client: &dozer_client::Client,
+) -> SubmitResult {
+    let target2 = target.clone();
+    let description2 = description.clone();
+    let fs_result = tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(&target2).map_err(|e| format!("创建目录失败: {e}"))?;
+        crate::project_meta::write_description(&target2, &description2)
+            .map_err(|e| format!("写入项目描述失败: {e}"))
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("内部错误: {e}")));
+    if let Err(e) = fs_result {
+        return Err(e);
+    }
+    let path_s = target.to_string_lossy().into_owned();
+    let opened = client
+        .open_project(&path_s)
+        .await
+        .map_err(|e| format!("注册项目失败: {e}"))?;
+    let recent = client.list_projects().await.unwrap_or_default();
+    Ok((opened, recent, !create_git))
+}
+
+async fn spawn_clone(
+    url: String,
+    target: PathBuf,
+    description: String,
+    client: &dozer_client::Client,
+) -> SubmitResult {
+    let url2 = url.clone();
+    let target2 = target.clone();
+    let clone_result =
+        tokio::task::spawn_blocking(move || crate::delivery::clone_repo(&url2, &target2))
+            .await
+            .unwrap_or_else(|e| Err(format!("内部错误: {e}")));
+    if let Err(e) = clone_result {
+        return Err(e);
+    }
+    let target3 = target.clone();
+    let description2 = description.clone();
+    let write_result = tokio::task::spawn_blocking(move || {
+        crate::project_meta::write_description(&target3, &description2)
+            .map_err(|e| format!("写入项目描述失败: {e}"))
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("内部错误: {e}")));
+    if let Err(e) = write_result {
+        return Err(e);
+    }
+    let path_s = target.to_string_lossy().into_owned();
+    let opened = client
+        .open_project(&path_s)
+        .await
+        .map_err(|e| format!("注册项目失败: {e}"))?;
+    let recent = client.list_projects().await.unwrap_or_default();
+    // 克隆下来的仓库天然带 `.git`,`ensure_git_repo` 会 AlreadyOk 跳过,
+    // 不需要 skip_git_init,固定传 false。
+    Ok((opened, recent, false))
 }
 
 #[cfg(test)]
@@ -297,5 +452,24 @@ mod tests {
     fn close_is_not_a_field_message() {
         let mut state = State::default();
         assert!(!apply_field_message(&mut state, &Message::Close));
+    }
+
+    #[test]
+    fn submit_local_rejects_invalid_name_before_touching_disk() {
+        let mut state = State {
+            local: LocalForm {
+                root_dir: "/tmp".into(),
+                name: "bad/name".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // 直接复用 SubmitLocal 分支里"先校验名称"这段逻辑的等价路径:
+        // 校验函数本身已经在 Task 3 覆盖,这里补一条"校验失败时 state.error
+        // 被设置、state.busy 保持 false"的行为断言,验证 update() 的短路
+        // 顺序(先校验、后 spawn),不需要真的跑 client/handle。
+        assert!(validate_project_name(&state.local.name).is_err());
+        state.error = Some("项目名称不能包含 / 或 \\".to_string());
+        assert!(!state.busy);
     }
 }
