@@ -803,12 +803,12 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn project_add_menu_items_always_ends_with_open_project_action() {
+    fn project_add_menu_items_always_ends_with_create_project_action() {
         let items = project_add_menu_items(&[], &std::collections::HashSet::new());
         assert!(matches!(
             items.last(),
             Some(crate::chrome::native_menu::Item::Entry {
-                msg: Message::ProjectTabPickFolder,
+                msg: Message::ProjectCreateOpen,
                 ..
             })
         ));
@@ -818,6 +818,10 @@ mod tests {
     #[test]
     fn project_add_menu_items_no_separator_when_no_recent_projects() {
         let items = project_add_menu_items(&[], &std::collections::HashSet::new());
-        assert_eq!(items.len(), 1, "没有最近项目时不该有多余的分隔线");
+        assert_eq!(
+            items.len(),
+            2,
+            "没有最近项目时不该有多余的分隔线,只剩打开项目/创建项目两项"
+        );
     }
 }

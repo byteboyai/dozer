@@ -291,12 +291,8 @@ pub fn update(
     }
 }
 
-type Element<'a> = iced_widget::core::Element<
-    'a,
-    Message,
-    iced_widget::Theme,
-    iced_renderer::Renderer,
->;
+type Element<'a> =
+    iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>;
 
 /// 卡片逻辑尺寸——比 file_history(75%/80%)略窄但更高,双栏表单不需要
 /// 那么宽,但字段多需要更高的纵向空间。
@@ -354,16 +350,8 @@ fn root_dir_row<'a>(
     on_change: impl Fn(String) -> Message + 'a,
     on_pick: Message,
 ) -> Element<'a> {
-    let input = byteui::form::input_text::view(
-        "Input",
-        value,
-        false,
-        None,
-        false,
-        None,
-        false,
-        on_change,
-    );
+    let input =
+        byteui::form::input_text::view("Input", value, false, None, false, None, false, on_change);
     let pick_btn = button(text("📁").size(byteui::theme::font::body()))
         .on_press(on_pick)
         .padding([6, 10]);
@@ -481,13 +469,11 @@ fn clone_form_view(form: &CloneForm) -> Element<'_> {
 }
 
 fn primary_button(label: &'static str, msg: Message, busy: bool) -> Element<'static> {
-    let btn = button(
-        text(if busy { "处理中…" } else { label }).size(byteui::theme::font::body()),
-    )
-    .style(|_t: &iced_widget::Theme, status| {
-        crate::dialog::action_button_style(byteui::theme::color::current().gold)(_t, status)
-    })
-    .padding([8, 20]);
+    let btn = button(text(if busy { "处理中…" } else { label }).size(byteui::theme::font::body()))
+        .style(|_t: &iced_widget::Theme, status| {
+            crate::dialog::action_button_style(byteui::theme::color::current().gold)(_t, status)
+        })
+        .padding([8, 20]);
     if busy {
         btn.into()
     } else {
@@ -561,9 +547,7 @@ async fn spawn_create_local(
     })
     .await
     .unwrap_or_else(|e| Err(format!("内部错误: {e}")));
-    if let Err(e) = fs_result {
-        return Err(e);
-    }
+    fs_result?;
     let path_s = target.to_string_lossy().into_owned();
     let opened = client
         .open_project(&path_s)
@@ -585,9 +569,7 @@ async fn spawn_clone(
         tokio::task::spawn_blocking(move || crate::delivery::clone_repo(&url2, &target2))
             .await
             .unwrap_or_else(|e| Err(format!("内部错误: {e}")));
-    if let Err(e) = clone_result {
-        return Err(e);
-    }
+    clone_result?;
     let target3 = target.clone();
     let description2 = description.clone();
     let write_result = tokio::task::spawn_blocking(move || {
@@ -596,9 +578,7 @@ async fn spawn_clone(
     })
     .await
     .unwrap_or_else(|e| Err(format!("内部错误: {e}")));
-    if let Err(e) = write_result {
-        return Err(e);
-    }
+    write_result?;
     let path_s = target.to_string_lossy().into_owned();
     let opened = client
         .open_project(&path_s)
@@ -688,7 +668,10 @@ mod tests {
         );
         assert_eq!(state.clone_form.name, "foo");
         // 用户手动改过名称之后,再改 URL 不应该覆盖用户的手改。
-        apply_field_message(&mut state, &Message::CloneNameChanged("my-custom-name".into()));
+        apply_field_message(
+            &mut state,
+            &Message::CloneNameChanged("my-custom-name".into()),
+        );
         apply_field_message(
             &mut state,
             &Message::CloneUrlChanged("https://github.com/abc/bar.git".into()),
