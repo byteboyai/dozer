@@ -25,10 +25,34 @@ fn not_found() -> ProtocolReply {
     }
 }
 
-/// 一期 dev 形态:资产直接从仓库源码树读(cargo run 即用,host.html 可
-/// 热改)。打包分发(app bundle 内资源目录)是后续任务,不在 P1d。
+/// flyfish 静态资源的根目录。
+///
+/// 两种形态:
+/// - 打包分发:可执行文件位于 `<Dozer AI Coder.app>/Contents/MacOS/dozer`,
+///   资源随包放在 `Contents/Resources/flyfish`(`scripts/build-macos-app.sh`
+///   打包时拷入)。从 `current_exe` 向上找 `.app` 边界定位 Resources。
+/// - dev 形态(cargo run):直接从仓库源码树读,host.html 可热改。
 pub fn assets_root() -> PathBuf {
+    if let Some(resources) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| bundle_resources_root(&exe))
+    {
+        return resources.join("flyfish");
+    }
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/flyfish"))
+}
+
+/// 给定可执行文件路径,若它位于 macOS `.app` 包内(祖先目录名以 `.app`
+/// 结尾),返回该包的 `Contents/Resources`;否则 `None`(dev/裸二进制)。
+///
+/// 纯函数、可测;不依赖 AppKit/objc2,仅用 `std::path::Path` 祖先遍历。
+fn bundle_resources_root(exe: &Path) -> Option<PathBuf> {
+    for ancestor in exe.ancestors() {
+        if ancestor.extension().and_then(|e| e.to_str()) == Some("app") {
+            return Some(ancestor.join("Contents").join("Resources"));
+        }
+    }
+    None
 }
 
 pub fn percent_decode(s: &str) -> Option<String> {
@@ -291,6 +315,24 @@ mod tests {
                 "{uri}"
             );
         }
+    }
+
+    #[test]
+    fn bundle_resources_root_finds_app_ancestor() {
+        let exe = Path::new("/Applications/Dozer AI Coder.app/Contents/MacOS/dozer");
+        assert_eq!(
+            bundle_resources_root(exe).as_deref(),
+            Some(Path::new(
+                "/Applications/Dozer AI Coder.app/Contents/Resources"
+            ))
+        );
+    }
+
+    #[test]
+    fn bundle_resources_root_none_outside_app() {
+        // 裸二进制(dev/直接跑 target 里的可执行文件):祖先里没有 `.app`。
+        let exe = Path::new("/tmp/dozer/target/aarch64-apple-darwin/release/dozer");
+        assert_eq!(bundle_resources_root(exe), None);
     }
 
     #[test]

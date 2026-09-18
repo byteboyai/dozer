@@ -96,6 +96,10 @@ cp "$HOOK_BIN_PATH" "$APP_DIR/Contents/MacOS/$HOOK_BIN_NAME"
 cp "$MCP_BIN_PATH" "$APP_DIR/Contents/MacOS/$MCP_BIN_NAME"
 cp "$PACKAGING_DIR/Info.plist" "$APP_DIR/Contents/Info.plist"
 cp "$PACKAGING_DIR/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
+# flyfish 文件预览静态资源(text/image/pdf 渲染管线 + vendor/pdf)。
+# dozer 的 `assets::assets_root()` 在打包态从 `Contents/Resources/flyfish`
+# 读(dev 态才回退源码树),漏拷会导致分发后的文件预览 404。
+cp -R "$ROOT_DIR/crates/dozer-app/assets/flyfish" "$APP_DIR/Contents/Resources/flyfish"
 
 # Nudge Finder/Dock to drop any cached icon for a previous build at this path.
 touch "$APP_DIR"
