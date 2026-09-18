@@ -2715,10 +2715,9 @@ impl App {
         // `text_input_menu`(输入框右键剪切/复制/粘贴菜单)是屏幕空间
         // 单例、不区分左右哪一侧,按"两侧都可能被盖住"从宽处理——比如
         // 文件树搜索框右键时,菜单向下弹出恰好压在下方的预览 webview 上。
-        // `file_history`(文件历史对比弹窗)是窗口级 overlay(左右两侧
-        // 都可能被它盖住),同款从宽处理。search 弹窗已迁独立原生窗口,
-        // 不需要再为它隐藏 webview(2026-09-17)。
-        let app_modal_open = self.text_input_menu.is_some() || self.file_history.is_some();
+        // search 弹窗已迁独立原生窗口、file_history 也已迁独立窗口
+        // (2026-09-18),都不需要再为它们隐藏 webview。
+        let app_modal_open = self.text_input_menu.is_some();
         let mut out = Vec::new();
         for side in [Side::Left, Side::Right] {
             let kind = match side {
@@ -2784,12 +2783,11 @@ impl App {
         window_height: f32,
     ) -> Vec<(WebviewSpec, (f32, f32, f32, f32))> {
         // 地址栏右键"剪切/复制/粘贴"菜单向下弹出,恰好压在下方的浏览器
-        // webview 内容区上;`file_history`(文件历史对比弹窗)是窗口级
-        // overlay,左右两侧都可能被它盖住——同 `preview_desired` 里
-        // `app_modal_open` 的处理,原生 wry 子视图不听 iced 绘制顺序摆布,
+        // webview 内容区上;file_history 已迁独立窗口(2026-09-18),不参与
+        // 这里的显式隐藏。原生 wry 子视图不听 iced 绘制顺序摆布,
         // 必须显式 visible=false 才能真正藏起来。首页(`home_browser`)和
         // 工作区内(`ws.browser`)两条分支共用这一个判断。
-        let app_modal_open = self.text_input_menu.is_some() || self.file_history.is_some();
+        let app_modal_open = self.text_input_menu.is_some();
         // 首页右栏恒为全局浏览器(`home_browser`),与 `left_view` 无关——
         // 进首页就让它成为浏览器 webview 池的唯一来源,否则默认 URL 的 tab
         // 建了却永远等不到 webview(见 `sync_webview_pool`)。

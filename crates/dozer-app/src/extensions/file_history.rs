@@ -368,16 +368,17 @@ pub fn rollback_to(repo_path: &Path, file_path: &Path, oid: git2::Oid) -> Result
     Ok(())
 }
 
-/// 弹窗顶部标题 + 左侧提交列表 + 右侧 diff 区。布局参照
-/// `project::project_delete_confirm_popup` 的窗口级卡片外壳(CARD 底 +
-/// 圆角描边),但宽度/高度不用 `dialog::width`(那是"整窗 1/3"的确认框
-/// 默认值,内容是左右分栏的提交列表 + diff,1/3 窗宽放不下,`dialog.rs`
-/// 文档本身允许"字段特别多的表单"在这个默认值基础上另外调整)。
-pub fn popup_view<'a>(
-    state: &'a State,
-    window_width: f32,
-    window_height: f32,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+/// 弹窗卡片本体(标题 + 左侧提交列表 + 右侧 diff 区),无外层居中容器——
+/// 这次拆分是为了让独立 overlay 窗口(`platform/file_history_overlay.rs`)
+/// 能直接复用同一份视图逻辑,只是换一个宿主(独立窗口取代 `App::view()`
+/// 的 `stack!` 层)。`Length::Fill`:调用方现在总是给一块已经量好的
+/// 画布(独立窗口整扇画布),不需要 `popup_view` 原本那种按
+/// `window_width`/`window_height` 算 `Length::Fixed` 像素值再居中的
+/// 语义(那部分逻辑挪进 `FileHistoryOverlay::open`/`reposition` 的
+/// 窗口尺寸计算,不在这里)。
+pub fn file_history_card(
+    state: &State,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let title = row![
         icons::view(
             icons::IconKind::History,
@@ -412,17 +413,11 @@ pub fn popup_view<'a>(
     .spacing(12)
     .height(Length::Fill);
 
-    let dialog = container(column![title, body].spacing(12))
-        .width(Length::Fixed(window_width * 0.75))
-        .height(Length::Fixed(window_height * 0.8))
-        .padding(16)
-        .style(crate::dialog::card_style);
-
-    container(dialog)
+    container(column![title, body].spacing(12))
         .width(Length::Fill)
         .height(Length::Fill)
-        .align_x(iced_widget::core::alignment::Horizontal::Center)
-        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .padding(16)
+        .style(crate::dialog::card_style)
         .into()
 }
 

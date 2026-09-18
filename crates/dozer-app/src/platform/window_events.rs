@@ -35,6 +35,7 @@ use winit::{
 
 use crate::app::{App, Message, PanelKind};
 use crate::extensions;
+use crate::platform::file_history_overlay;
 use crate::platform::search_overlay;
 use crate::preview;
 use crate::theme;
@@ -133,6 +134,11 @@ pub(crate) enum Runner {
         /// 独立原生窗口宿主——`None` 表示当前没开。生命周期由
         /// `sync_search_overlay` 按 `ws.search.is_open()` 单向驱动开/关。
         search_overlay: Option<search_overlay::SearchOverlay>,
+        /// 同 `search_overlay`,`file_history` 弹窗的独立窗口宿主。生命
+        /// 周期由 `sync_file_history_overlay` 按 `app.file_history.
+        /// is_some()` 单向驱动开/关,且与 `search_overlay` 互斥(见
+        /// `OverlayKind`/`close_other_overlays`)。
+        file_history_overlay: Option<file_history_overlay::FileHistoryOverlay>,
     },
 }
 
@@ -143,6 +149,15 @@ pub(crate) enum FocusIntent {
     Preview(PanelKind),
     Browser,
     Terminal,
+}
+
+/// 独立窗口弹窗的种类,给"开一个就关掉其它已开的"这条互斥规则用(见
+/// `docs/superpowers/specs/2026-09-18-overlay-window-shared-abstraction-
+/// design.md`「架构」第 2 节)。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OverlayKind {
+    Search,
+    FileHistory,
 }
 
 impl Runner {
@@ -1033,25 +1048,58 @@ impl Runner {
         );
     }
 
-    /// 独立按 `ws.search.is_open()` 开/关 search overlay 窗口,跟
-    /// `sync_previews` 同款"每次分发完消息就跑一遍"模式,但各管各的
-    /// (webview 池同步跟 overlay 窗口生命周期没有交集)。
-    fn sync_search_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+    /// 打开任意一类独立窗口弹窗前,先关掉其余已开的——见 `OverlayKind`
+    /// 文档。现状代码里"旧弹窗状态没真正清空、被高优先级弹窗遮住之后又
+    /// 冒出来"是已确认的真实漂移(见 spec「架构」第 2 节),独立窗口没有
+    /// `App::view()` 那种渲染优先级兜底,必须显式互斥。
+    fn close_other_overlays(&mut self, keep: OverlayKind) {
         let Self::Ready {
-            window,
-            instance,
-            adapter,
-            device,
-            queue,
-            app,
             search_overlay,
+            file_history_overlay,
             ..
         } = self
         else {
             return;
         };
-        match search_overlay::sync_action(app.search_popup_open(), search_overlay.is_some()) {
+        if keep != OverlayKind::Search {
+            *search_overlay = None;
+        }
+        if keep != OverlayKind::FileHistory {
+            *file_history_overlay = None;
+        }
+    }
+
+    /// 独立按 `ws.search.is_open()` 开/关 search overlay 窗口,跟
+    /// `sync_previews` 同款"每次分发完消息就跑一遍"模式,但各管各的
+    /// (webview 池同步跟 overlay 窗口生命周期没有交集)。
+    fn sync_search_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let action = {
+            let Self::Ready {
+                app,
+                search_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            search_overlay::sync_action(app.search_popup_open(), search_overlay.is_some())
+        };
+        match action {
             search_overlay::SyncAction::Open => {
+                self.close_other_overlays(OverlayKind::Search);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    app,
+                    search_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
                 let window_width = app.window_size.0;
                 *search_overlay = Some(search_overlay::SearchOverlay::open(
                     window,
@@ -1063,18 +1111,92 @@ impl Runner {
                     el,
                 ));
             }
-            search_overlay::SyncAction::Close => *search_overlay = None,
+            search_overlay::SyncAction::Close => {
+                let Self::Ready { search_overlay, .. } = self else {
+                    return;
+                };
+                *search_overlay = None;
+            }
             search_overlay::SyncAction::Noop => {}
         }
         // 这次分发的消息可能只是改了 `ws.search` 的内容(典型例子:异步
         // `SearchResults` 从 `user_event` 落地),不涉及开/关窗口,上面的
         // `match` 不会碰它——但内容变了就得让这扇窗口重绘,不然会一直停在
-        // "搜索中…"直到用户碰巧在这扇窗口里移动一下鼠标(`handle_input`
-        // 自己也会 `request_redraw`,纯属误打误撞)。不判断"到底是不是真的
-        // 有变化",跟主窗口 `dispatch()` 对几乎每条消息都无条件
-        // `request_redraw()` 的既有尺度一致,不用为这个小对话框单独发明一套
-        // 精确脏检查。
+        // "搜索中…"直到用户碰巧在这扇窗口里移动一下鼠标。不判断"到底是
+        // 不是真的有变化",跟主窗口 `dispatch()` 对几乎每条消息都无条件
+        // `request_redraw()` 的既有尺度一致。
+        let Self::Ready { search_overlay, .. } = self else {
+            return;
+        };
         if let Some(overlay) = search_overlay {
+            overlay.request_redraw();
+        }
+    }
+
+    /// 同 `sync_search_overlay`,按 `app.file_history.is_some()` 开/关
+    /// file_history overlay 窗口。
+    fn sync_file_history_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let action = {
+            let Self::Ready {
+                app,
+                file_history_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            file_history_overlay::sync_action(
+                app.file_history.is_some(),
+                file_history_overlay.is_some(),
+            )
+        };
+        match action {
+            file_history_overlay::SyncAction::Open => {
+                self.close_other_overlays(OverlayKind::FileHistory);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    app,
+                    file_history_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                let main_window_size = LogicalSize::new(app.window_size.0, app.window_size.1);
+                *file_history_overlay = Some(file_history_overlay::FileHistoryOverlay::open(
+                    window,
+                    adapter,
+                    device,
+                    queue,
+                    instance,
+                    main_window_size,
+                    el,
+                ));
+            }
+            file_history_overlay::SyncAction::Close => {
+                let Self::Ready {
+                    file_history_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *file_history_overlay = None;
+            }
+            file_history_overlay::SyncAction::Noop => {}
+        }
+        let Self::Ready {
+            file_history_overlay,
+            ..
+        } = self
+        else {
+            return;
+        };
+        if let Some(overlay) = file_history_overlay {
             overlay.request_redraw();
         }
     }
@@ -1676,6 +1798,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 current_focus: FocusIntent::Terminal,
                 proxy: proxy.clone(),
                 search_overlay: None,
+                file_history_overlay: None,
             };
         }
     }
@@ -1696,6 +1819,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.apply_pending_focus();
         self.apply_pending_zoom_toggle();
         self.sync_search_overlay(event_loop);
+        self.sync_file_history_overlay(event_loop);
     }
 
     fn window_event(
@@ -1758,6 +1882,37 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             return;
         }
 
+        // file_history overlay 窗口自己那份 `WindowId` 的事件,同 search
+        // overlay 早退分支的手法,互相独立。
+        if let Self::Ready {
+            app,
+            file_history_overlay,
+            ..
+        } = self
+            && let Some(overlay) = file_history_overlay
+            && window_id == overlay.window_id()
+        {
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app);
+            } else if matches!(event, WindowEvent::CloseRequested) {
+                self.dispatch(Message::FileHistory(
+                    extensions::file_history::Message::Close,
+                ));
+            } else if let WindowEvent::Focused(focused) = event {
+                if overlay.handle_focus(focused) {
+                    self.dispatch(Message::FileHistory(
+                        extensions::file_history::Message::Close,
+                    ));
+                }
+            } else {
+                for message in overlay.handle_input(app, &event) {
+                    self.dispatch(message);
+                }
+            }
+            self.sync_file_history_overlay(event_loop);
+            return;
+        }
+
         // `consumed == true`:已经被应用级快捷键接管(见
         // `on_window_event` 顶部文档),下面不能再把同一个原始事件转换
         // 喂给 iced 标准管线,否则会重复处理(⌘S 这类字母快捷键会在
@@ -1785,6 +1940,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 cache,
                 resized,
                 search_overlay,
+                file_history_overlay,
                 ..
             } = self
             else {
@@ -2666,11 +2822,24 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             app.window_size.0,
                         );
                     }
+                    if let Some(overlay) = file_history_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                            app.window_size.0,
+                            app.window_size.1,
+                        );
+                    }
                     // bounds 同步由本函数末尾的 sync_previews 统一执行
                 }
                 WindowEvent::CloseRequested => {
                     // 图干净,不是正确性要求——Drop 本身就会释放。
                     *search_overlay = None;
+                    *file_history_overlay = None; // 同上,图干净。
                     // 同步写盘,不用 `spawn_shell_layout_save` 的异步路径——
                     // 进程马上退出,spawn 的 tokio 任务不保证跑得完。
                     app.persist_window_size_on_exit();
@@ -2825,5 +2994,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.apply_pending_focus();
         self.apply_pending_zoom_toggle();
         self.sync_search_overlay(event_loop);
+        self.sync_file_history_overlay(event_loop);
     }
 }
