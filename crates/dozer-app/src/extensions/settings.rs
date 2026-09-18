@@ -4,6 +4,8 @@
 
 use crate::git_accounts::{self, GitAccountsState, GitProvider};
 use byteui::theme::color::ColorScheme;
+use iced_widget::core::{Alignment, Element, Length};
+use iced_widget::{Space, button, column, container, row, text};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConnectState {
@@ -178,6 +180,149 @@ pub fn update(
         });
         emit(Message::ConnectResult(provider, result));
     });
+}
+
+fn scheme_row<'a>(
+    label: &'static str,
+    scheme: ColorScheme,
+    current: ColorScheme,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let selected = scheme == current;
+    let mark: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        text(if selected { "✓" } else { " " })
+            .size(byteui::theme::font::body())
+            .into();
+    crate::chrome::menu::item_row_fill(
+        Some(mark),
+        label,
+        if selected {
+            byteui::theme::color::current().gold
+        } else {
+            byteui::theme::color::current().body
+        },
+        Some(Message::ThemeSelected(scheme)),
+    )
+}
+
+fn provider_row(
+    provider: GitProvider,
+    state: &ConnectState,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let colors = byteui::theme::color::current();
+    let title = text(provider.display_name())
+        .size(byteui::theme::font::body())
+        .color(colors.cream);
+    match state {
+        ConnectState::NotConnected => {
+            let status = text("未连接")
+                .size(byteui::theme::font::label())
+                .color(colors.dim);
+            let connect_btn = button(text("连接").size(byteui::theme::font::body()))
+                .on_press(Message::ConnectClicked(provider))
+                .padding([6, 14]);
+            row![title, status, Space::new().width(Length::Fill), connect_btn]
+                .spacing(10)
+                .align_y(Alignment::Center)
+                .into()
+        }
+        ConnectState::Connected { username } => {
+            let status = text(format!("已连接: {username}"))
+                .size(byteui::theme::font::label())
+                .color(colors.gold);
+            let disconnect_btn = button(text("断开连接").size(byteui::theme::font::body()))
+                .on_press(Message::Disconnect(provider))
+                .padding([6, 14]);
+            row![title, status, Space::new().width(Length::Fill), disconnect_btn]
+                .spacing(10)
+                .align_y(Alignment::Center)
+                .into()
+        }
+        ConnectState::Editing { token, busy, error } => {
+            let input = byteui::form::input_text::view_on_bg(
+                "Personal Access Token",
+                token,
+                true,
+                None,
+                false,
+                None,
+                false,
+                move |v| Message::TokenChanged(provider, v),
+            );
+            let hint = iced_widget::MouseArea::new(
+                text("没有 PAT?点此生成")
+                    .size(byteui::theme::font::label())
+                    .color(colors.gold),
+            )
+            .interaction(iced_widget::core::mouse::Interaction::Pointer)
+            .on_press(Message::OpenTokenPage(provider));
+            let confirm_label = if *busy { "校验中…" } else { "确认" };
+            let confirm = button(text(confirm_label).size(byteui::theme::font::body()));
+            let confirm = if *busy {
+                confirm
+            } else {
+                confirm.on_press(Message::ConnectSubmit(provider))
+            };
+            let cancel = button(text("取消").size(byteui::theme::font::body()))
+                .on_press(Message::ConnectCancel(provider));
+            let error_row: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+                if let Some(e) = error {
+                text(e.clone())
+                    .size(byteui::theme::font::label())
+                    .color(colors.red)
+                    .into()
+            } else {
+                Space::new().into()
+            };
+            column![
+                title,
+                input,
+                row![hint, Space::new().width(Length::Fill), cancel, confirm].spacing(8),
+                error_row,
+            ]
+            .spacing(6)
+            .into()
+        }
+    }
+}
+
+pub fn settings_card(
+    state: &State,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let colors = byteui::theme::color::current();
+    let current = byteui::theme::color::current_scheme();
+    let theme_title = text("主题")
+        .size(byteui::theme::font::subtitle())
+        .color(colors.cream);
+    let git_title = text("Git 账户")
+        .size(byteui::theme::font::subtitle())
+        .color(colors.cream);
+    let close = button(
+        text("关闭")
+            .size(byteui::theme::font::body())
+            .color(colors.dim),
+    )
+    .on_press(Message::Close)
+    .padding([6, 12])
+    .style(crate::dialog::action_button_style(colors.dim));
+
+    let content = column![
+        theme_title,
+        scheme_row("深色 · ByteBoy2077", ColorScheme::Dark, current),
+        scheme_row("浅色 · ByteBoy2077-Light", ColorScheme::Light, current),
+        git_title,
+        provider_row(GitProvider::GitHub, &state.github),
+        provider_row(GitProvider::GitLab, &state.gitlab),
+        provider_row(GitProvider::Gitee, &state.gitee),
+        crate::dialog::actions(row![close]),
+    ]
+    .spacing(14);
+
+    container(content)
+        .padding(16)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(crate::dialog::card_style)
+        .into()
 }
 
 #[cfg(test)]
