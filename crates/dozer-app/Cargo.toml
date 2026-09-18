@@ -53,6 +53,9 @@ mongodb = { version = "3", default-features = false, features = ["rustls-tls", "
 # （v3→v4 无功能性 API 变化，`Entry::new`/`set_password`/`get_password`/
 # `delete_credential` 签名不变，纯粹是内部 credential store 选择机制调整）。
 keyring = "4.1.6"
+# reqwest：Git 账户设置(extensions::settings)校验 PAT 用的异步 HTTP 客户端。
+# 走 rustls-tls 与 sqlx/mongodb/russh-sftp 一致，不引入 OpenSSL。
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # gleisbau = 原生 git 提交图布局库,嵌入 iced Canvas(已转正,非 spike)。
 # git2 = git 数据层(git_log 提交图 + delivery 状态查询 + worktree 列表),
 # 依赖版本与 gleisbau 传递依赖对齐,避免 cargo 拉两份。
@@ -78,6 +81,8 @@ sysinfo = "0.32"
 # ripgrep 搜索内核(纯 Rust),用于文件树右键"搜索"弹窗的全文内容搜索。
 # 直接依赖 grep-searcher + grep-regex 做匹配(grep 伞 crate 本身没被
 # `use` 过,2026-08-12 经 cargo-machete 核实后移除)。
+# ignore 的 `WalkBuilder::build_parallel` 做多核并行遍历(每 worker 线程各持
+# 一个 Searcher),取代早期"串行遍历收集路径 + 逐个串行 search_path"的单核实现。
 grep-regex = "0.1.14"
 grep-searcher = "0.1.17"
 ignore = "0.4"
