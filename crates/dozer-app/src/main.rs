@@ -8,6 +8,7 @@ mod dialog;
 mod event;
 mod extensions;
 mod frosted;
+mod git_accounts;
 mod git_watch;
 mod keymap;
 mod layout;
