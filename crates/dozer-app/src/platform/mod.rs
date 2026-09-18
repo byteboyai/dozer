@@ -10,5 +10,6 @@ pub mod overlay_window;
 pub mod picker;
 pub mod project_create_overlay;
 pub mod search_overlay;
+pub mod settings_overlay;
 pub mod window;
 pub mod window_events;
