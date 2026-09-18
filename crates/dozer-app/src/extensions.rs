@@ -12,6 +12,7 @@ pub mod files;
 pub mod footbar;
 pub mod git_log;
 pub mod project;
+pub mod project_create;
 pub mod search;
 pub mod ssh;
 pub mod todo;
