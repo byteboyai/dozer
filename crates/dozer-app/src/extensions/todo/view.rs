@@ -349,10 +349,11 @@ pub(crate) fn todo_footer_bar<'a>(
         .into()
 }
 
-/// 左栏底部栏(位于分类导航之下、靠底):仅右侧"清空列表"按钮,不再展示
+/// 左栏底部栏(位于分类导航之下、靠底):"清空列表"按钮撑满整行,不再展示
 /// 左侧任务计数与图标。已从 content pane 右下角迁到左栏(见 `view`)。样式
-/// 对齐 `files.rs` 的 `git_footer_bar`
-/// (顶部分隔线 + 左图标/文案 + 右侧操作按钮)。危险操作(清空整个列表
+/// 对齐 `project/view.rs::project_footer_bar` / `database/view.rs::
+/// database_footer_bar` 的统一规范(footer 按钮撑满整行、左缘对齐面板内边距,
+/// 顶部分隔线内缩对齐 `project_pane` 水平内距)。危险操作(清空整个列表
 /// 不可撤销),点按钮先弹确认框(`clear_confirm_popup`)而非直接清空;
 /// 按统一按钮规范(见 `dialog::action_button_border_color` 文档)走红字 +
 /// 描边静止态 `border`、悬浮/按下态变 `gold`(此前固定奶油字 + 不响应
@@ -362,7 +363,9 @@ pub(crate) fn todo_footer_bar<'a>(
 pub(crate) fn todo_clear_footer_bar<'a>(
     _ws_state: &'a WorkspaceState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let clear = button(
+    // 内容套一层 `width(Fill).align_x(Center)` 容器,让图标+文字在撑满整行
+    // 的按钮里整体居中(与 `project/view.rs::footer_button_label` 同款手法)。
+    let clear_label = container(
         row![
             icons::view(
                 icons::IconKind::Trash,
@@ -376,20 +379,25 @@ pub(crate) fn todo_clear_footer_bar<'a>(
         .spacing(6)
         .align_y(iced_widget::core::Alignment::Center),
     )
-    .on_press(Message::ClearListRequest)
-    .padding([4, 8])
-    .style(|_t: &iced_widget::Theme, s| button::Style {
-        background: Some(byteui::theme::color::current().bg.into()),
-        border: Border {
-            color: crate::dialog::action_button_border_color(s),
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        text_color: byteui::theme::color::current().red,
-        ..button::Style::default()
-    });
+    .width(Length::Fill)
+    .align_x(iced_widget::core::alignment::Horizontal::Center);
 
-    let bar = row![space::horizontal(), clear]
+    let clear = button(clear_label)
+        .on_press(Message::ClearListRequest)
+        .width(Length::Fill)
+        .padding([4, 8])
+        .style(|_t: &iced_widget::Theme, s| button::Style {
+            background: Some(byteui::theme::color::current().bg.into()),
+            border: Border {
+                color: crate::dialog::action_button_border_color(s),
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            text_color: byteui::theme::color::current().red,
+            ..button::Style::default()
+        });
+
+    let bar = row![clear]
         .spacing(6)
         .align_y(iced_widget::core::Alignment::Center);
 

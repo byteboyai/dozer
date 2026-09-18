@@ -613,7 +613,10 @@ pub fn delete_confirm_popup<'a>(
 pub(crate) fn database_footer_bar<'a>()
 -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let btn = |icon: icons::IconKind, label: &'static str, on_press: Message| {
-        button(
+        // 内容套一层 `width(Fill).align_x(Center)` 容器,让图标+文字在撑满
+        // 半行的按钮里整体居中(与 `project/view.rs::footer_button_label`
+        // 同款手法——button 本身不会把 Shrink 内容居中,只贴左上角)。
+        let content = container(
             row![
                 icons::view(
                     icon,
@@ -627,22 +630,26 @@ pub(crate) fn database_footer_bar<'a>()
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center),
         )
-        .on_press(on_press)
-        .padding([4, 8])
-        .style(|_t: &iced_widget::Theme, s| button::Style {
-            background: Some(byteui::theme::color::current().bg.into()),
-            border: iced_widget::core::Border {
-                color: crate::dialog::action_button_border_color(s),
-                width: 1.0,
-                radius: 4.0.into(),
-            },
-            text_color: byteui::theme::color::current().dim,
-            ..button::Style::default()
-        })
+        .width(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Center);
+
+        button(content)
+            .on_press(on_press)
+            .width(Length::Fill)
+            .padding([4, 8])
+            .style(|_t: &iced_widget::Theme, s| button::Style {
+                background: Some(byteui::theme::color::current().bg.into()),
+                border: iced_widget::core::Border {
+                    color: crate::dialog::action_button_border_color(s),
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                text_color: byteui::theme::color::current().dim,
+                ..button::Style::default()
+            })
     };
 
     let bar = row![
-        iced_widget::space::horizontal(),
         btn(
             icons::IconKind::Settings,
             "管理驱动",
