@@ -38,6 +38,7 @@ use crate::extensions;
 use crate::platform::file_history_overlay;
 use crate::platform::project_create_overlay;
 use crate::platform::search_overlay;
+use crate::platform::settings_overlay;
 use crate::preview;
 use crate::theme;
 
@@ -145,6 +146,11 @@ pub(crate) enum Runner {
         /// 注释),生命周期只由 `sync_project_create_overlay` 按
         /// `app.project_create.is_some()` 驱动。
         project_create_overlay: Option<project_create_overlay::ProjectCreateOverlay>,
+        /// 同 `search_overlay`/`file_history_overlay`/`project_create_
+        /// overlay`,设置弹窗的独立窗口宿主。生命周期由
+        /// `sync_settings_overlay` 按 `app.settings.is_some()` 单向驱动
+        /// 开/关,与其余三类互斥。
+        settings_overlay: Option<settings_overlay::SettingsOverlay>,
     },
 }
 
@@ -165,6 +171,7 @@ pub(crate) enum OverlayKind {
     Search,
     FileHistory,
     ProjectCreate,
+    Settings,
 }
 
 impl Runner {
@@ -1064,6 +1071,7 @@ impl Runner {
             search_overlay,
             file_history_overlay,
             project_create_overlay,
+            settings_overlay,
             ..
         } = self
         else {
@@ -1077,6 +1085,9 @@ impl Runner {
         }
         if keep != OverlayKind::ProjectCreate {
             *project_create_overlay = None;
+        }
+        if keep != OverlayKind::Settings {
+            *settings_overlay = None;
         }
     }
 
@@ -1275,6 +1286,70 @@ impl Runner {
             return;
         };
         if let Some(overlay) = project_create_overlay {
+            overlay.request_redraw();
+        }
+    }
+
+    /// 同 `sync_file_history_overlay`,按 `app.settings.is_some()` 开/关
+    /// settings overlay 窗口。
+    fn sync_settings_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let action = {
+            let Self::Ready {
+                app,
+                settings_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            settings_overlay::sync_action(app.settings.is_some(), settings_overlay.is_some())
+        };
+        match action {
+            settings_overlay::SyncAction::Open => {
+                self.close_other_overlays(OverlayKind::Settings);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    app,
+                    settings_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                let main_window_size =
+                    winit::dpi::LogicalSize::new(app.window_size.0, app.window_size.1);
+                *settings_overlay = Some(settings_overlay::SettingsOverlay::open(
+                    window,
+                    adapter,
+                    device,
+                    queue,
+                    instance,
+                    main_window_size,
+                    el,
+                ));
+            }
+            settings_overlay::SyncAction::Close => {
+                let Self::Ready {
+                    settings_overlay, ..
+                } = self
+                else {
+                    return;
+                };
+                *settings_overlay = None;
+            }
+            settings_overlay::SyncAction::Noop => {}
+        }
+        let Self::Ready {
+            settings_overlay, ..
+        } = self
+        else {
+            return;
+        };
+        if let Some(overlay) = settings_overlay {
             overlay.request_redraw();
         }
     }
@@ -1905,6 +1980,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 search_overlay: None,
                 file_history_overlay: None,
                 project_create_overlay: None,
+                settings_overlay: None,
             };
         }
     }
@@ -1927,6 +2003,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_search_overlay(event_loop);
         self.sync_file_history_overlay(event_loop);
         self.sync_project_create_overlay(event_loop);
+        self.sync_settings_overlay(event_loop);
     }
 
     fn window_event(
@@ -2049,6 +2126,33 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             return;
         }
 
+        if let Self::Ready {
+            app,
+            settings_overlay,
+            ..
+        } = self
+            && let Some(overlay) = settings_overlay
+            && window_id == overlay.window_id()
+        {
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app);
+            } else if matches!(event, WindowEvent::CloseRequested) {
+                self.dispatch(Message::Settings(extensions::settings::Message::Close));
+            } else if let WindowEvent::Focused(focused) = event {
+                // 本弹窗接入失焦即关闭(与"创建项目"对话框刻意不同,那里
+                // 要弹嵌套 rfd 选择器;本表单没有这种原生面板)。
+                if overlay.handle_focus(focused) {
+                    self.dispatch(Message::Settings(extensions::settings::Message::Close));
+                }
+            } else {
+                for message in overlay.handle_input(app, &event) {
+                    self.dispatch(message);
+                }
+            }
+            self.sync_settings_overlay(event_loop);
+            return;
+        }
+
         // `consumed == true`:已经被应用级快捷键接管(见
         // `on_window_event` 顶部文档),下面不能再把同一个原始事件转换
         // 喂给 iced 标准管线,否则会重复处理(⌘S 这类字母快捷键会在
@@ -2078,6 +2182,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 search_overlay,
                 file_history_overlay,
                 project_create_overlay,
+                settings_overlay,
                 ..
             } = self
             else {
@@ -2983,6 +3088,18 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             app.window_size.1,
                         );
                     }
+                    if let Some(overlay) = settings_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                            app.window_size.0,
+                            app.window_size.1,
+                        );
+                    }
                     // bounds 同步由本函数末尾的 sync_previews 统一执行
                 }
                 WindowEvent::CloseRequested => {
@@ -2990,6 +3107,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     *search_overlay = None;
                     *file_history_overlay = None; // 同上,图干净。
                     *project_create_overlay = None; // 图干净,Drop 本身就会释放。
+                    *settings_overlay = None; // 图干净,Drop 本身就会释放。
                     // 同步写盘,不用 `spawn_shell_layout_save` 的异步路径——
                     // 进程马上退出,spawn 的 tokio 任务不保证跑得完。
                     app.persist_window_size_on_exit();
@@ -3146,5 +3264,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_search_overlay(event_loop);
         self.sync_file_history_overlay(event_loop);
         self.sync_project_create_overlay(event_loop);
+        self.sync_settings_overlay(event_loop);
     }
 }
