@@ -103,15 +103,19 @@ pub fn scaffold_steps() -> Vec<ScaffoldStep> {
     ]
 }
 
-/// 顺序跑完全部同步步骤。这几步都可能阻塞(尤其 `ensure_git_repo` 会
-/// shell 出子进程),批量一次跑完的调用方(静默路径
+/// 顺序跑完全部同步步骤。`skip_git_init=true` 时跳过"git 仓库"这一步
+/// (供"新建本地项目"对话框的"创建Git仓库"复选框未勾选时使用,见
+/// `docs/superpowers/specs/2026-09-18-new-project-creation-design.md`
+/// 「对既有共享代码的修正」一节)。这几步都可能阻塞(尤其 `ensure_git_repo`
+/// 会 shell 出子进程),批量一次跑完的调用方(静默路径
 /// `extensions::project::spawn_scaffold_run`)负责把这个函数整体包进
 /// `tokio::task::spawn_blocking`——需要逐步骤实时反馈的路径
 /// (`spawn_repair_run`)改成对每个 `scaffold_steps()` 元素单独
-/// `spawn_blocking`,不调这个批量函数。这里本身不做任何异步处理。
-pub fn run_sync_steps(repo: &Path) -> Vec<(String, ScaffoldStepResult)> {
+/// `spawn_blocking`,不调这个批量函数,因此不受这个参数影响。
+pub fn run_sync_steps(repo: &Path, skip_git_init: bool) -> Vec<(String, ScaffoldStepResult)> {
     scaffold_steps()
         .into_iter()
+        .filter(|step| !(skip_git_init && step.label == "git 仓库"))
         .map(|step| (step.label.to_string(), (step.run)(repo)))
         .collect()
 }
@@ -171,12 +175,31 @@ mod tests {
     #[test]
     fn run_sync_steps_covers_all_registered_steps_in_order() {
         let tmp = tempfile::tempdir().unwrap();
-        let results = run_sync_steps(tmp.path());
+        let results = run_sync_steps(tmp.path(), false);
         let labels: Vec<&str> = results.iter().map(|(l, _)| l.as_str()).collect();
         assert_eq!(
             labels,
             vec!["缓存目录", "README", "git 仓库", "项目文档/Agent 记忆"]
         );
+    }
+
+    #[test]
+    fn run_sync_steps_skips_git_step_when_requested() {
+        let tmp = tempfile::tempdir().unwrap();
+        let results = run_sync_steps(tmp.path(), true);
+        assert!(
+            !results.iter().any(|(label, _)| label == "git 仓库"),
+            "skip_git_init=true 时不应该出现 git 仓库这一步"
+        );
+        assert!(!tmp.path().join(".git").exists());
+    }
+
+    #[test]
+    fn run_sync_steps_runs_git_step_by_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let results = run_sync_steps(tmp.path(), false);
+        assert!(results.iter().any(|(label, _)| label == "git 仓库"));
+        assert!(tmp.path().join(".git").exists());
     }
 
     #[test]

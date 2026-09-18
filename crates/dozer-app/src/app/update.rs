@@ -1021,10 +1021,12 @@ impl App {
                 self.handle.spawn(async move {
                     let opened = client.open_project(&path_s).await.ok().flatten();
                     let recent = client.list_projects().await.unwrap_or_default();
-                    let _ = proxy.send_event(Message::ProjectTabOpened(opened, recent));
+                    let _ = proxy.send_event(Message::ProjectTabOpened(opened, recent, false));
                 });
             }
-            Message::ProjectTabOpened(project, recent) => self.project_tab_opened(project, recent),
+            Message::ProjectTabOpened(project, recent, skip_git_init) => {
+                self.project_tab_opened(project, recent, skip_git_init)
+            }
             Message::ProjectTabSwitch(id) => self.project_tab_switch(id),
             Message::ProjectTabClose(id) => self.project_tab_close(id),
             Message::ProjectSlotLoaded(id, payload) => self.project_slot_loaded(id, payload),
@@ -1784,7 +1786,7 @@ impl App {
         self.handle.spawn(async move {
             let recent = client.list_projects().await.unwrap_or_default();
             let opened = recent.iter().find(|p| p.id == id).cloned();
-            let _ = proxy.send_event(Message::ProjectTabOpened(opened, recent));
+            let _ = proxy.send_event(Message::ProjectTabOpened(opened, recent, false));
         });
     }
 
@@ -1792,6 +1794,7 @@ impl App {
         &mut self,
         project: Option<ProjectInfo>,
         recent: Vec<ProjectInfo>,
+        skip_git_init: bool,
     ) {
         self.recent_projects = recent.clone();
         // `None` = 这次打开失败(daemon 不通/回 `Reply::Error`)。硬性
@@ -1850,7 +1853,7 @@ impl App {
         let emit = move |m| {
             let _ = proxy.send_event(Message::Project(m));
         };
-        project::spawn_scaffold_run(repo_path, client, &handle, emit);
+        project::spawn_scaffold_run(repo_path, client, &handle, emit, skip_git_init);
     }
 
     pub(crate) fn project_tab_switch(&mut self, id: i64) {

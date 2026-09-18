@@ -401,9 +401,10 @@ pub enum Message {
     DatabaseSourceContextMenuClose,
     /// 项目页签:把某路径作为**新页签**打开(不动任何已存在页签的内容)。
     ProjectTabOpen(PathBuf),
-    /// 项目页签:`ProjectTabOpen` 异步完成(daemon upsert 结果 + 最近列表)。
-    /// `None` = 这次打开失败,只报错、不改任何页签状态。
-    ProjectTabOpened(Option<ProjectInfo>, Vec<ProjectInfo>),
+    /// 项目页签:`ProjectTabOpen` 异步完成(daemon upsert 结果 + 最近列表 +
+    /// 是否跳过静默 scaffold 的 git init 步骤)。`None` = 这次打开失败,只
+    /// 报错、不改任何页签状态,此时第三个字段无意义。
+    ProjectTabOpened(Option<ProjectInfo>, Vec<ProjectInfo>, bool),
     /// H0 项目中心:`Message::TopBarHome` 发起的异步刷新完成(最近改动的文件、
     /// 最近的对话两份列表;D4)。
     HomeRecentsLoaded(Vec<HomeRecentFile>, Vec<HomeRecentConversation>),

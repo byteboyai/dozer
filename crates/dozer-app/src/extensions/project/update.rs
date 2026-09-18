@@ -222,11 +222,14 @@ pub fn spawn_scaffold_run(
     client: dozer_client::Client,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
+    skip_git_init: bool,
 ) {
     let cwd = repo_path.to_string_lossy().into_owned();
     handle.spawn(async move {
         let repo_path2 = repo_path.clone();
-        let _ = tokio::task::spawn_blocking(move || scaffold::run_sync_steps(&repo_path2)).await;
+        let _ =
+            tokio::task::spawn_blocking(move || scaffold::run_sync_steps(&repo_path2, skip_git_init))
+                .await;
         let _ = client.backfill_project_transcripts(&cwd).await;
         emit(Message::ScaffoldDone);
     });
