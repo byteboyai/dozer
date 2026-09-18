@@ -2,9 +2,12 @@
 //! `docs/superpowers/specs/2026-09-18-git-account-settings-design.md`。
 //! 结构上是 `FileHistoryOverlay`(`FocusTracker` 失焦即关闭)与
 //! `ProjectCreateOverlay`(IME + 原生右键菜单挂靠,PAT 输入框需要)两者的
-//! 混合:接入失焦关闭是因为本表单没有嵌套的 rfd 原生面板会触发意外
-//! 失焦(跟"创建项目"对话框的场景不同),但仍需要 IME(账户用户名可能是
-//! 中文相关字符)和原生右键菜单(PAT 输入框的粘贴)。
+//! 混合:接入失焦关闭,但"没有 PAT?点此生成"会拉起系统浏览器,那**确实**
+//! 会让本窗口收到一次真实失焦(这一点上一版文档说错了,代码评审已指出:
+//! PAT-link click can auto-close Settings)——`handle_focus` 需要配合
+//! `extensions::settings::State::suppress_next_blur` 吞掉那一次,不能只
+//! 靠 `FocusTracker` 自己判断。仍需要 IME(账户用户名可能是中文相关字符)
+//! 和原生右键菜单(PAT 输入框的粘贴)。
 
 use std::sync::Arc;
 
@@ -42,6 +45,19 @@ pub(crate) fn sync_action(open: bool, overlay_present: bool) -> SyncAction {
         (true, false) => SyncAction::Open,
         (false, true) => SyncAction::Close,
         (true, true) | (false, false) => SyncAction::Noop,
+    }
+}
+
+/// `handle_focus` 的吞掉判定拆成纯函数,不需要真建 `SettingsOverlay`/
+/// `FocusTracker` 就能单测。`Some(should_close)` 表示这次事件已经判完,
+/// 不用再交给 `FocusTracker`;`None` 表示按正常失焦逻辑走。只在"这次是
+/// 失焦、且标志位确实置着"时消费标志位并返回 `Some(false)`——聚焦事件或
+/// 标志位未置都不消费,交还给 `FocusTracker` 正常判定。
+fn suppressed_close(focused: bool, suppress_next_blur: &mut bool) -> Option<bool> {
+    if !focused && std::mem::take(suppress_next_blur) {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -99,7 +115,14 @@ impl SettingsOverlay {
         }
     }
 
-    pub(crate) fn handle_focus(&mut self, focused: bool) -> bool {
+    /// `suppress_next_blur` 来自 `extensions::settings::State`——"没有
+    /// PAT?点此生成"拉起系统浏览器时置位,这里读到就吞掉这一次失焦、不
+    /// touch `FocusTracker` 内部状态(浏览器打开后窗口重新聚焦会收到真实
+    /// `Focused(true)`,届时状态自然纠正)。
+    pub(crate) fn handle_focus(&mut self, focused: bool, suppress_next_blur: &mut bool) -> bool {
+        if let Some(should_close) = suppressed_close(focused, suppress_next_blur) {
+            return should_close;
+        }
         self.focus.handle_focus(focused)
     }
 
@@ -237,5 +260,25 @@ mod tests {
     fn sync_action_noop_when_states_already_match() {
         assert_eq!(sync_action(true, true), SyncAction::Noop);
         assert_eq!(sync_action(false, false), SyncAction::Noop);
+    }
+
+    #[test]
+    fn suppressed_close_consumes_flag_and_swallows_the_blur() {
+        let mut suppress = true;
+        assert_eq!(suppressed_close(false, &mut suppress), Some(false));
+        assert!(!suppress, "标志位应该被消费掉,不能留着吞掉下一次真失焦");
+    }
+
+    #[test]
+    fn suppressed_close_defers_to_focus_tracker_when_flag_not_set() {
+        let mut suppress = false;
+        assert_eq!(suppressed_close(false, &mut suppress), None);
+    }
+
+    #[test]
+    fn suppressed_close_does_not_consume_flag_on_focus_gain() {
+        let mut suppress = true;
+        assert_eq!(suppressed_close(true, &mut suppress), None);
+        assert!(suppress, "聚焦事件不是要吞的那一次失焦,标志位应该留着");
     }
 }

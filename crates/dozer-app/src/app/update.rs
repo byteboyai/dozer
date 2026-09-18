@@ -1146,23 +1146,21 @@ impl App {
                 self.project_create = None;
                 self.settings = Some(settings::State::load());
             }
-            Message::ProjectCreate(project_create::Message::Done(result)) => {
+            Message::ProjectCreate(project_create::Message::Done(Ok((
+                project,
+                recent,
+                skip_git_init,
+            )))) => {
                 self.project_create = None;
-                match result {
-                    Ok((project, recent, skip_git_init)) => {
-                        self.project_tab_opened(project, recent, skip_git_init);
-                    }
-                    Err(e) => {
-                        // 落地失败(dozerd 侧,不是表单校验失败——校验失败
-                        // 走 project_create::update 内部的 s.error,不会
-                        // 产出 Err 这条路径,这里只处理"表单校验都通过、
-                        // fs/git/dozerd 某一步失败"的情况)。对话框已经
-                        // 关了,退化成顶层错误条,与 `project_tab_opened`
-                        // 失败分支同一处 `daemon_error` 展示方式一致。
-                        self.daemon_error = Some(e);
-                    }
-                }
+                self.project_tab_opened(project, recent, skip_git_init);
             }
+            // 失败分支故意不在这里拦截:`project_create::update` 自己的
+            // `Done` 处理会把错误填进 `State::error` 并保持对话框打开
+            // (模块文档已经这么承诺),所以让它落进下面的泛化转发分支
+            // 走那条路径,不在内核这里重复处理、更不能整体关掉对话框——
+            // 那样会把用户已经填好的表单内容(根目录/名称/描述)连同错误
+            // 一起丢掉(代码评审 finding:Failed clone/create always
+            // discards the dialog)。
             Message::ProjectCreate(msg) => {
                 let client = self.client.clone();
                 let handle = self.handle.clone();

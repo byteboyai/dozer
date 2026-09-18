@@ -379,9 +379,14 @@ pub fn git_available() -> bool {
 /// `docs/superpowers/specs/2026-09-18-new-project-creation-design.md`)。
 /// `dest` 必须还不存在(调用方在此之前已经校验过,见 `project_create`
 /// 模块的 `validate_target_not_exists`),失败把 git 的 stderr 原样透传。
+/// `url` 可能来自用户直接粘贴,也可能来自第三方 API 返回的 clone_url
+/// (见 `git_accounts::list_repos`)——两者都不可信,用 `--` 结束选项解析,
+/// 防止以 `-` 开头的伪造 URL 被 git 当成命令行选项吃掉(同 CVE-2017-1000117
+/// 那一类问题)。
 pub fn clone_repo(url: &str, dest: &Path) -> Result<(), String> {
     let out = Command::new("git")
         .arg("clone")
+        .arg("--")
         .arg(url)
         .arg(dest)
         .output()
@@ -917,5 +922,20 @@ mod tests {
         let dest = dest_parent.path().join("cloned");
         let missing = dest_parent.path().join("does-not-exist");
         assert!(clone_repo(&missing.to_string_lossy(), &dest).is_err());
+    }
+
+    #[test]
+    fn clone_repo_treats_dash_prefixed_url_as_a_path_not_an_option() {
+        // 回归测试:确保 `--` 结束选项解析这道防线还在——若被误删,git 会
+        // 把这个"URL"解析成 `--upload-pack` 选项而不是报"找不到仓库",
+        // 这个测试就会失败(同 CVE-2017-1000117 那一类问题)。
+        let dest_parent = tempfile::tempdir().unwrap();
+        let dest = dest_parent.path().join("cloned");
+        let err = clone_repo("--upload-pack=touch /tmp/dozer-test-pwned", &dest).unwrap_err();
+        assert!(
+            !dest.exists(),
+            "伪造的 --upload-pack 参数不应该被当成选项接受"
+        );
+        assert!(!err.is_empty());
     }
 }

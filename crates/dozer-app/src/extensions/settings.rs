@@ -6,6 +6,7 @@ use crate::git_accounts::{self, GitAccountsState, GitProvider};
 use byteui::theme::color::ColorScheme;
 use iced_widget::core::{Alignment, Element, Length};
 use iced_widget::{Space, button, column, container, row, text};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConnectState {
@@ -35,6 +36,16 @@ pub struct State {
     pub github: ConnectState,
     pub gitlab: ConnectState,
     pub gitee: ConnectState,
+    /// `OpenTokenPage` 拉起系统浏览器时置位——那会让本窗口收到一次真实
+    /// `Focused(false)`,若照常触发失焦即关闭会把正在填的 PAT 表单整个
+    /// 关掉(代码评审 finding:PAT-link click can auto-close Settings)。
+    /// `SettingsOverlay::handle_focus` 读到就消费掉、吞掉这一次失焦。
+    pub(crate) suppress_next_blur: bool,
+    /// 正在进行的 `ConnectSubmit` 异步任务句柄,按 provider 存一份。
+    /// `ConnectCancel` 用它真正中止任务,防止取消后 token 仍被异步写进
+    /// Keychain/本地文件(代码评审 finding:Cancel doesn't stop in-flight
+    /// connect task)。
+    connect_tasks: HashMap<GitProvider, tokio::task::AbortHandle>,
 }
 
 impl State {
@@ -46,6 +57,8 @@ impl State {
             github: ConnectState::from_accounts(&accounts, GitProvider::GitHub),
             gitlab: ConnectState::from_accounts(&accounts, GitProvider::GitLab),
             gitee: ConnectState::from_accounts(&accounts, GitProvider::Gitee),
+            suppress_next_blur: false,
+            connect_tasks: HashMap::new(),
         }
     }
 
@@ -96,34 +109,66 @@ fn apply_sync_message(state: &mut State, msg: &Message) -> bool {
             true
         }
         Message::ConnectCancel(provider) => {
+            // 真正中止掉还在跑的 validate_token/set_token/save 任务——
+            // 只改 UI 状态不够,那个任务不知道自己被"取消"了,还是会把
+            // token 写进 Keychain(代码评审 finding:Cancel doesn't stop
+            // in-flight connect task)。
+            if let Some(task) = state.connect_tasks.remove(provider) {
+                task.abort();
+            }
             *state.slot_mut(*provider) = ConnectState::NotConnected;
             true
         }
         Message::OpenTokenPage(provider) => {
+            state.suppress_next_blur = true;
             let _ = std::process::Command::new("open")
                 .arg(provider.token_creation_url())
                 .spawn();
             true
         }
         Message::Disconnect(provider) => {
-            let _ = git_accounts::delete_token(*provider);
+            // 先写本地非敏感记录,成功了才删 Keychain token——反过来做的话,
+            // 本地文件写失败会留下"Keychain 已删、json 仍写着已连接"这种
+            // 更糟的不一致态(代码评审 finding:Disconnect drops failed
+            // save, leaves stale state)。写失败就整个放弃这次断开,保留
+            // 原有已连接展示,只记日志。
             let mut accounts = git_accounts::load();
             accounts.set(*provider, None);
-            let _ = git_accounts::save(&accounts);
-            *state.slot_mut(*provider) = ConnectState::NotConnected;
+            match git_accounts::save(&accounts) {
+                Ok(()) => {
+                    let _ = git_accounts::delete_token(*provider);
+                    *state.slot_mut(*provider) = ConnectState::NotConnected;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        provider = provider.as_key(),
+                        error = %e,
+                        "断开账户失败:写入本地记录出错,已保留 Keychain token 与已连接展示"
+                    );
+                }
+            }
             true
         }
         Message::ConnectResult(provider, result) => {
-            match result {
-                Ok(username) => {
-                    *state.slot_mut(*provider) = ConnectState::Connected {
-                        username: username.clone(),
-                    };
-                }
-                Err(e) => {
-                    if let ConnectState::Editing { busy, error, .. } = state.slot_mut(*provider) {
-                        *busy = false;
-                        *error = Some(e.clone());
+            // 任务已经跑完,不管结果如何都清掉记着的句柄。
+            state.connect_tasks.remove(provider);
+            // 结果到达时若已经不是 Editing 态(用户已经 Cancel 或又开了
+            // 新一轮),说明这是一份过期结果,丢弃不应用——否则会出现
+            // "已经点了取消,连接状态却又被悄悄改回已连接"的情况(代码
+            // 评审 finding:Cancel doesn't stop in-flight connect task)。
+            if matches!(state.slot_mut(*provider), ConnectState::Editing { .. }) {
+                match result {
+                    Ok(username) => {
+                        *state.slot_mut(*provider) = ConnectState::Connected {
+                            username: username.clone(),
+                        };
+                    }
+                    Err(e) => {
+                        if let ConnectState::Editing { busy, error, .. } = state.slot_mut(*provider)
+                        {
+                            *busy = false;
+                            *error = Some(e.clone());
+                        }
                     }
                 }
             }
@@ -164,7 +209,13 @@ pub fn update(
         }
         _ => return,
     };
-    handle.spawn(async move {
+    // 防御性清理:正常 UI 流程不会在上一次提交还没出结果时再提交一次
+    // (按钮在 busy 态会被禁用),但如果真的发生了,先中止旧任务再开新的,
+    // 不留两个任务同时跑。
+    if let Some(old) = s.connect_tasks.remove(&provider) {
+        old.abort();
+    }
+    let join_handle = handle.spawn(async move {
         let result = git_accounts::validate_token(provider, &token).await;
         let result = result.and_then(|username| {
             git_accounts::set_token(provider, &token)?;
@@ -180,6 +231,7 @@ pub fn update(
         });
         emit(Message::ConnectResult(provider, result));
     });
+    s.connect_tasks.insert(provider, join_handle.abort_handle());
 }
 
 fn scheme_row<'a>(
@@ -334,13 +386,26 @@ pub fn settings_card(
 mod tests {
     use super::*;
 
+    /// 测试专用构造:`connect_tasks`/`suppress_next_blur` 是任务生命周期
+    /// 相关的簿记字段,跟这些纯状态转换测试无关,统一给默认值,避免每个
+    /// 测试都重复写。
+    fn test_state(github: ConnectState, gitlab: ConnectState, gitee: ConnectState) -> State {
+        State {
+            github,
+            gitlab,
+            gitee,
+            suppress_next_blur: false,
+            connect_tasks: HashMap::new(),
+        }
+    }
+
     #[test]
     fn connect_clicked_opens_editing_row() {
-        let mut state = State {
-            github: ConnectState::NotConnected,
-            gitlab: ConnectState::NotConnected,
-            gitee: ConnectState::NotConnected,
-        };
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
         apply_sync_message(&mut state, &Message::ConnectClicked(GitProvider::GitHub));
         assert!(matches!(state.github, ConnectState::Editing { .. }));
         assert_eq!(state.gitlab, ConnectState::NotConnected);
@@ -348,15 +413,15 @@ mod tests {
 
     #[test]
     fn token_changed_updates_editing_draft() {
-        let mut state = State {
-            github: ConnectState::Editing {
+        let mut state = test_state(
+            ConnectState::Editing {
                 token: String::new(),
                 busy: false,
                 error: None,
             },
-            gitlab: ConnectState::NotConnected,
-            gitee: ConnectState::NotConnected,
-        };
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
         apply_sync_message(
             &mut state,
             &Message::TokenChanged(GitProvider::GitHub, "ghp_xxx".into()),
@@ -373,30 +438,62 @@ mod tests {
 
     #[test]
     fn connect_cancel_resets_to_not_connected() {
-        let mut state = State {
-            github: ConnectState::Editing {
+        let mut state = test_state(
+            ConnectState::Editing {
                 token: "x".into(),
                 busy: false,
                 error: None,
             },
-            gitlab: ConnectState::NotConnected,
-            gitee: ConnectState::NotConnected,
-        };
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
         apply_sync_message(&mut state, &Message::ConnectCancel(GitProvider::GitHub));
         assert_eq!(state.github, ConnectState::NotConnected);
     }
 
     #[test]
-    fn connect_result_ok_sets_connected() {
-        let mut state = State {
-            github: ConnectState::Editing {
+    fn connect_cancel_aborts_in_flight_task_and_discards_late_result() {
+        let mut state = test_state(
+            ConnectState::Editing {
                 token: "x".into(),
                 busy: true,
                 error: None,
             },
-            gitlab: ConnectState::NotConnected,
-            gitee: ConnectState::NotConnected,
-        };
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
+        let join = tokio::spawn(async {
+            std::future::pending::<()>().await;
+        });
+        state
+            .connect_tasks
+            .insert(GitProvider::GitHub, join.abort_handle());
+        apply_sync_message(&mut state, &Message::ConnectCancel(GitProvider::GitHub));
+        assert_eq!(state.github, ConnectState::NotConnected);
+        assert!(!state.connect_tasks.contains_key(&GitProvider::GitHub));
+        // 取消之后,哪怕之前那次任务的结果晚一步才送达,也不应该把状态
+        // 又悄悄改回 Connected(代码评审 finding:Cancel doesn't stop
+        // in-flight connect task)。
+        apply_sync_message(
+            &mut state,
+            &Message::ConnectResult(GitProvider::GitHub, Ok("octocat".into())),
+        );
+        assert_eq!(state.github, ConnectState::NotConnected);
+    }
+
+    #[test]
+    fn connect_result_ok_sets_connected() {
+        let mut state = test_state(
+            ConnectState::Editing {
+                token: "x".into(),
+                busy: true,
+                error: None,
+            },
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
         apply_sync_message(
             &mut state,
             &Message::ConnectResult(GitProvider::GitHub, Ok("octocat".into())),
@@ -411,15 +508,15 @@ mod tests {
 
     #[test]
     fn connect_result_err_keeps_editing_with_error() {
-        let mut state = State {
-            github: ConnectState::Editing {
+        let mut state = test_state(
+            ConnectState::Editing {
                 token: "x".into(),
                 busy: true,
                 error: None,
             },
-            gitlab: ConnectState::NotConnected,
-            gitee: ConnectState::NotConnected,
-        };
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
         apply_sync_message(
             &mut state,
             &Message::ConnectResult(GitProvider::GitHub, Err("令牌无效或已过期".into())),
@@ -435,12 +532,27 @@ mod tests {
     }
 
     #[test]
+    fn open_token_page_sets_suppress_next_blur() {
+        let mut state = test_state(
+            ConnectState::Editing {
+                token: "x".into(),
+                busy: false,
+                error: None,
+            },
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        apply_sync_message(&mut state, &Message::OpenTokenPage(GitProvider::GitHub));
+        assert!(state.suppress_next_blur);
+    }
+
+    #[test]
     fn close_is_not_a_sync_message() {
-        let mut state = State {
-            github: ConnectState::NotConnected,
-            gitlab: ConnectState::NotConnected,
-            gitee: ConnectState::NotConnected,
-        };
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
         assert!(!apply_sync_message(&mut state, &Message::Close));
     }
 }

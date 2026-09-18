@@ -2122,7 +2122,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     self.dispatch(message);
                 }
             }
+            // `handle_input` 上面这一圈 `dispatch` 里可能出现
+            // `GoToSettings`(设 `app.settings = Some(...)`)——那扇窗口的
+            // 生命周期由 `sync_settings_overlay` 单独驱动,这个分支只调
+            // 自己的 `sync_project_create_overlay` 的话,新窗口不保证在
+            // 这一帧就被建出来(代码评审 finding:GoToSettings doesn't
+            // sync new overlay same tick),两个都要跟着 dispatch 后调。
             self.sync_project_create_overlay(event_loop);
+            self.sync_settings_overlay(event_loop);
             return;
         }
 
@@ -2139,9 +2146,16 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             } else if matches!(event, WindowEvent::CloseRequested) {
                 self.dispatch(Message::Settings(extensions::settings::Message::Close));
             } else if let WindowEvent::Focused(focused) = event {
-                // 本弹窗接入失焦即关闭(与"创建项目"对话框刻意不同,那里
-                // 要弹嵌套 rfd 选择器;本表单没有这种原生面板)。
-                if overlay.handle_focus(focused) {
+                // 本弹窗接入失焦即关闭,但"没有 PAT?点此生成"会拉起系统
+                // 浏览器,那次真实失焦要靠 `State::suppress_next_blur`
+                // 吞掉(见 `SettingsOverlay::handle_focus` 文档注释)。
+                let mut fallback = false;
+                let suppress = app
+                    .settings
+                    .as_mut()
+                    .map(|s| &mut s.suppress_next_blur)
+                    .unwrap_or(&mut fallback);
+                if overlay.handle_focus(focused, suppress) {
                     self.dispatch(Message::Settings(extensions::settings::Message::Close));
                 }
             } else {
