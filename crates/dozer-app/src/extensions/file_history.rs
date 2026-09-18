@@ -421,32 +421,6 @@ pub fn file_history_card(
         .into()
 }
 
-/// 弹窗全貌:`file_history_card` 套一层"限定像素尺寸 + 全窗居中"的外壳。
-/// 布局参照 `project::project_delete_confirm_popup` 的窗口级卡片外壳,
-/// 宽度/高度不用 `dialog::width`(那是"整窗 1/3"的确认框默认值,内容是
-/// 左右分栏的提交列表 + diff,1/3 窗宽放不下)。
-///
-/// 2026-09-18:迁独立原生窗口过渡期的旧路径,`file_history_card()` 是
-/// 新路径(`platform/file_history_overlay.rs`)复用的部分——本函数连同
-/// 调用它的 `app/view.rs:560-573` 那段会在本计划 Task 4 一并删除,过渡
-/// 期内暂时保留让现状行为不受影响。
-pub fn popup_view<'a>(
-    state: &'a State,
-    window_width: f32,
-    window_height: f32,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let dialog = container(file_history_card(state))
-        .width(Length::Fixed(window_width * 0.75))
-        .height(Length::Fixed(window_height * 0.8));
-
-    container(dialog)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(iced_widget::core::alignment::Horizontal::Center)
-        .align_y(iced_widget::core::alignment::Vertical::Center)
-        .into()
-}
-
 fn commit_list_view<'a>(
     state: &'a State,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
