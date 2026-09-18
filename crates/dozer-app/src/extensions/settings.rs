@@ -133,7 +133,7 @@ fn apply_sync_message(state: &mut State, msg: &Message) -> bool {
 
 /// `state` 是 `&mut Option<State>`(不是 `&mut State`)——`Message::Close`
 /// 需要能把它整个置回 `None`,同 `file_history::update`/`project_create::
-/// update` 的既有写法。`ConnectSubmit` 在 Task 5 补上。
+/// update` 的既有写法。
 pub fn update(
     state: &mut Option<State>,
     msg: Message,
@@ -148,8 +148,36 @@ pub fn update(
     if apply_sync_message(s, &msg) {
         return;
     }
-    // 走到这里的只剩 ConnectSubmit,Task 5 实现。
-    let _ = (handle, emit, msg);
+    let Message::ConnectSubmit(provider) = msg else {
+        unreachable!("已在 apply_sync_message 或顶部处理");
+    };
+    let token = match s.slot_mut(provider) {
+        ConnectState::Editing { token, busy, error } => {
+            if token.trim().is_empty() {
+                return;
+            }
+            *busy = true;
+            *error = None;
+            token.clone()
+        }
+        _ => return,
+    };
+    handle.spawn(async move {
+        let result = git_accounts::validate_token(provider, &token).await;
+        let result = result.and_then(|username| {
+            git_accounts::set_token(provider, &token)?;
+            let mut accounts = git_accounts::load();
+            accounts.set(
+                provider,
+                Some(git_accounts::ConnectedAccount {
+                    username: username.clone(),
+                }),
+            );
+            git_accounts::save(&accounts).map_err(|e| format!("写入本地记录失败: {e}"))?;
+            Ok(username)
+        });
+        emit(Message::ConnectResult(provider, result));
+    });
 }
 
 #[cfg(test)]
