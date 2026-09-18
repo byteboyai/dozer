@@ -1142,6 +1142,10 @@ impl App {
             Message::ProjectCreateOpen => {
                 self.project_create = Some(project_create::State::default());
             }
+            Message::ProjectCreate(project_create::Message::GoToSettings) => {
+                self.project_create = None;
+                self.settings = Some(settings::State::load());
+            }
             Message::ProjectCreate(project_create::Message::Done(result)) => {
                 self.project_create = None;
                 match result {
