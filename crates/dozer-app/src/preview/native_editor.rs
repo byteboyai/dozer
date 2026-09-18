@@ -245,9 +245,12 @@ pub(crate) fn extension_to_syntax(path: &std::path::Path) -> String {
         "html" | "htm" => "html",
         "css" => "css",
         "scss" => "scss",
-        // two-face 语法集没有独立 JSON5 语法,借用 JSON 做近似高亮(JSON5 是
-        // JSON 超集,注释/尾逗号/不加引号的键不会被认出,但比纯文本好)。
-        "json" | "json5" => "json",
+        // JSON5 是 JSON 超集(允许注释、尾逗号、不加引号的键),交给 vendored
+        // 的 `JSONC` 语法高亮(见 `code_editor::highlighter` 的 EXTRA_SYNTAXES_DIR),
+        // 这样 `//` / `/* */` 注释与尾逗号都能正确着色;`.jsonc` 同理。
+        // 严格 `.json` 仍走 bundle 自带的 `JSON` 语法(不认注释,符合 JSON 规范)。
+        "json" => "json",
+        "jsonc" | "json5" => "jsonc",
         "yaml" | "yml" => "yaml",
         "toml" => "toml",
         "md" | "markdown" => "markdown",
