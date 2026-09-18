@@ -3,6 +3,7 @@
 //! 选择。全部逻辑保持原样,只改模块归属。
 
 pub mod file_drag;
+pub mod file_history_overlay;
 pub mod overlay_focus;
 pub mod overlay_gpu;
 pub mod overlay_window;
