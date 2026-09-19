@@ -346,7 +346,7 @@ pub(crate) fn stat(
         text(value)
             .size(15.0)
             .color(color)
-            .font(iced_widget::core::Font::MONOSPACE),
+            .font(iced_widget::core::Font::default()),
     ]
     .spacing(2)
     .into()

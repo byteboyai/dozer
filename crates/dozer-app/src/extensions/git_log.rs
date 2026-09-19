@@ -695,7 +695,7 @@ fn commit_list_view<'a>(
             text(author_or_id)
                 .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim)
-                .font(Font::MONOSPACE),
+                .font(Font::default()),
         ]
         .spacing(8)
         .align_y(alignment::Vertical::Center);
@@ -733,7 +733,7 @@ fn commit_list_view<'a>(
             text(branch_text)
                 .size(byteui::theme::font::caption_sm())
                 .color(branch_color)
-                .font(Font::MONOSPACE),
+                .font(Font::default()),
         )
         .padding(iced_widget::core::Padding {
             top: 0.0,

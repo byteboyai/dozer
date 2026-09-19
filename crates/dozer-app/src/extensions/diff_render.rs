@@ -28,7 +28,7 @@ pub fn colored_diff_lines<'a, M: 'a>(
             text(line.to_string())
                 .size(byteui::theme::font::body())
                 .color(color)
-                .font(Font::MONOSPACE)
+                .font(Font::default())
                 .line_height(iced_widget::core::text::LineHeight::Relative(1.3)),
         );
     }

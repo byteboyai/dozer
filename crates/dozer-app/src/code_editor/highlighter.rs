@@ -187,7 +187,7 @@ impl Highlight {
                     } else {
                         font::Style::Normal
                     },
-                    ..Font::MONOSPACE
+                    ..crate::assets::fonts::code_font()
                 })
             } else {
                 None

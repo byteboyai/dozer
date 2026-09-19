@@ -144,7 +144,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for G
                 position: Point::new(GRID_LABEL_GUTTER - 4.0, y),
                 color: label_color,
                 size: iced_widget::core::Pixels(7.0),
-                font: iced_widget::core::Font::MONOSPACE,
+                font: iced_widget::core::Font::default(),
                 align_x: iced_widget::core::text::Alignment::Right,
                 align_y: iced_widget::core::alignment::Vertical::Center,
                 ..canvas::Text::default()
@@ -203,7 +203,7 @@ pub(crate) fn day_tooltip_bubble(
                 text(format!("{} {}", agent.label(), format_count(value)))
                     .size(byteui::theme::font::caption_sm())
                     .color(byteui::theme::color::current().dim)
-                    .font(iced_widget::core::Font::MONOSPACE),
+                    .font(iced_widget::core::Font::default()),
             ]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center),
@@ -223,7 +223,7 @@ pub(crate) fn agent_bar(
         text(format_count(value))
             .size(8.0)
             .color(byteui::theme::color::current().dim)
-            .font(iced_widget::core::Font::MONOSPACE),
+            .font(iced_widget::core::Font::default()),
         bar_segment(value as f32 * scale, color, true),
     ]
     .spacing(2)
@@ -268,7 +268,7 @@ pub(crate) fn bar_chart(
             text(d.label.clone())
                 .size(8.0)
                 .color(byteui::theme::color::current().dim)
-                .font(iced_widget::core::Font::MONOSPACE),
+                .font(iced_widget::core::Font::default()),
         ]
         .spacing(4)
         .align_x(iced_widget::core::alignment::Horizontal::Center);
@@ -354,7 +354,7 @@ pub(crate) fn trend_tooltip_bubble(
                 text(format!("{label}: {}", format_count(day.values[i])))
                     .size(byteui::theme::font::caption_sm())
                     .color(byteui::theme::color::current().dim)
-                    .font(iced_widget::core::Font::MONOSPACE),
+                    .font(iced_widget::core::Font::default()),
             ]
             .spacing(6)
             .align_y(iced_widget::core::alignment::Vertical::Center),
@@ -527,7 +527,7 @@ pub(crate) fn trend_line_chart(
             text(d.label.clone())
                 .size(8.0)
                 .color(byteui::theme::color::current().dim)
-                .font(iced_widget::core::Font::MONOSPACE),
+                .font(iced_widget::core::Font::default()),
         ]
         .spacing(4)
         .align_x(iced_widget::core::alignment::Horizontal::Center);
@@ -910,7 +910,7 @@ pub(crate) fn metric_group_banner(
         text(format!("{} total", format_count(total)))
             .size(byteui::theme::font::caption())
             .color(c.cream)
-            .font(iced_widget::core::Font::MONOSPACE),
+            .font(iced_widget::core::Font::default()),
     ]
     .spacing(8)
     .into()
@@ -932,7 +932,7 @@ pub(crate) fn chart_stat_list(
         text(format!("{title}({})", format_count(total)))
             .size(byteui::theme::font::caption())
             .color(dim)
-            .font(iced_widget::core::Font::MONOSPACE),
+            .font(iced_widget::core::Font::default()),
     ]
     .spacing(8);
     for (agent, value) in share {
@@ -964,7 +964,7 @@ pub(crate) fn chart_stat_list(
                 ))
                 .size(byteui::theme::font::caption_sm())
                 .color(dim)
-                .font(iced_widget::core::Font::MONOSPACE),
+                .font(iced_widget::core::Font::default()),
             ]
             .spacing(6)
             .align_y(iced_widget::core::Alignment::Center),
