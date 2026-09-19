@@ -1775,7 +1775,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "dozer-app"
-version = "0.5.160"
+version = "0.5.161"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -1839,6 +1839,7 @@ dependencies = [
  "base64 0.22.1",
  "dozer-core",
  "dozerd",
+ "tempfile",
  "tokio",
  "tracing",
  "uuid",
