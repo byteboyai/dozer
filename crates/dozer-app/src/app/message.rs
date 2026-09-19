@@ -344,6 +344,27 @@ pub enum Message {
     /// 网格/切换条发回的纯动作,由 `Workspace::preview_pane_tabular_action`
     /// 定位对应 tab 后 `apply`。
     TabularAction(PanelKind, usize, crate::tabular::Action),
+    /// 表格 tab 首次打开的后台加载完成(见 `crate::tabular` 模块文档"够数
+    /// 即停"的性能策略——大文件解析不能卡 UI 线程)。`ProjectId` 按项目路由
+    /// (异步结果可能晚于用户切走项目才回来,不能假设"当前聚焦的就是它",
+    /// 同 `database::Message` 的既有做法);`PanelKind`+`usize`(`PreviewTab.id`)
+    /// 定位具体哪个面板的哪个 tab。
+    TabularLoaded(
+        ProjectId,
+        PanelKind,
+        usize,
+        Result<crate::tabular::TabularView, String>,
+    ),
+    /// 表格 tab 懒加载某个 sheet 完成(用户切到一个还没加载过的 sheet 触发,
+    /// 见 `crate::tabular::SheetLoadRequest`),回填进已存在的 `TabularView`。
+    /// 路由字段含义同 `TabularLoaded`,多一个 `usize` 是 sheet 下标。
+    TabularSheetLoaded(
+        ProjectId,
+        PanelKind,
+        usize,
+        usize,
+        Result<crate::tabular::Sheet, String>,
+    ),
     /// Project 面板右配对预览:打开本地文件为新 tab,语义同 `PreviewOpenPath`。
     ProjectPreviewOpenPath(PathBuf),
     /// Project 面板右配对预览:切换 tab(vec 位置)。

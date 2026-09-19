@@ -525,7 +525,7 @@ impl Workspace {
         // 个根在项目目录的终端,不用用户手动点"+"。
         ws.ensure_project_terminal(io);
         // 认回上次退出前打开的预览文件 tab（重启后自动重开）。
-        ws.restore_preview_state();
+        ws.restore_preview_state(io);
         // 启动就把"恢复出来的东西"（或 `None`）推一次:dozerd 可能比 GUI
         // 活得久,上次会话留下的缓存值不该在新会话里冒充当前上下文。
         ws.spawn_preview_context_push(io);
@@ -989,7 +989,7 @@ impl Workspace {
         );
         self.project = Some(project);
         self.ensure_project_terminal(io);
-        self.restore_preview_state();
+        self.restore_preview_state(io);
         // 启动就把"恢复出来的东西"（或 `None`）推一次:dozerd 可能比 GUI
         // 活得久,上次会话留下的缓存值不该在新会话里冒充当前上下文。
         self.spawn_preview_context_push(io);
@@ -1201,8 +1201,10 @@ impl Workspace {
     }
 
     /// 项目打开/启动恢复时,认回上次持久化的预览 tab(仅文件类;已被删除/
-    /// 移动的文件静默跳过,不报错占位)。
-    pub(crate) fn restore_preview_state(&mut self) {
+    /// 移动的文件静默跳过,不报错占位)。恢复出的表格 tab 全部走异步加载
+    /// (见 `crate::tabular` 模块文档)——上次会话开着好几个大表格也不会
+    /// 挨个卡住启动过程,而是并行丢进后台线程。
+    pub(crate) fn restore_preview_state(&mut self, io: &ShellIo) {
         let Some(project) = &self.project else {
             return;
         };
@@ -1222,6 +1224,7 @@ impl Workspace {
                 active_id = Some(id);
             }
         }
+        self.spawn_pending_tabular_loads(PanelKind::Files, io);
         if let Some(id) = active_id
             && let Some(idx) = self.preview.tabs().iter().position(|t| t.id == id)
         {
@@ -1902,22 +1905,64 @@ impl Workspace {
         self.preview_pane_save_at(kind, idx);
     }
 
-    /// 表格预览 tab 的交互动作(滚动/sheet 切换):按 `tab_id` 定位对应 tab 的
-    /// `TabularView` 并 `apply`。tab 不存在 / 该 tab 不是表格时 no-op。
-    pub fn preview_pane_tabular_action(
-        &mut self,
-        kind: PanelKind,
-        tab_id: usize,
-        action: crate::tabular::Action,
-    ) {
+    /// 把 `kind` 面板刚 `open_path`/`push_tab` 攒下的待加载表格 tab 全部
+    /// spawn 到后台线程,完成后经 `Message::TabularLoaded` 回填(按
+    /// `project_id` 路由,见该消息文档)。`open_path` 调用方在拿到返回值
+    /// 之后应立即调用这个方法——不能攒着不调,不然队列里的条目会一直
+    /// 停在待发状态,对应 tab 也就一直卡在 `TabularState::Loading`。
+    pub fn spawn_pending_tabular_loads(&mut self, kind: PanelKind, io: &ShellIo) {
+        let Some(project_id) = self.project_id() else {
+            return;
+        };
         let pane = if kind == PanelKind::Project {
             &mut self.project_preview
         } else {
             &mut self.preview
         };
-        if let Some(view) = pane.tabular_mut(tab_id) {
-            view.apply(action);
+        for (tab_id, path) in pane.take_pending_tabular_loads() {
+            let proxy = io.proxy.clone();
+            io.handle.spawn_blocking(move || {
+                let result = crate::tabular::load(&path);
+                let _ = proxy.send_event(Message::TabularLoaded(project_id, kind, tab_id, result));
+            });
         }
+    }
+
+    /// 表格预览 tab 的交互动作(滚动/sheet 切换):按 `tab_id` 定位对应 tab 的
+    /// `TabularView` 并 `apply`。tab 不存在 / 该 tab 不是表格 / 还在加载中都
+    /// no-op。切到一个还没加载过的 sheet 时,`apply` 会返回
+    /// `SheetLoadRequest`——这里负责把它 spawn 到后台线程,完成后经
+    /// `Message::TabularSheetLoaded` 回填(同 `TabularLoaded` 的路由方式,
+    /// 按 `project_id` 而非"当前聚焦项目",见该消息文档)。
+    pub fn preview_pane_tabular_action(
+        &mut self,
+        kind: PanelKind,
+        tab_id: usize,
+        action: crate::tabular::Action,
+        io: &ShellIo,
+    ) {
+        let Some(project_id) = self.project_id() else {
+            return;
+        };
+        let pane = if kind == PanelKind::Project {
+            &mut self.project_preview
+        } else {
+            &mut self.preview
+        };
+        let Some(request) = pane.tabular_mut(tab_id).and_then(|view| view.apply(action)) else {
+            return;
+        };
+        let proxy = io.proxy.clone();
+        io.handle.spawn_blocking(move || {
+            let result = crate::tabular::load_sheet(&request.path, &request.name);
+            let _ = proxy.send_event(Message::TabularSheetLoaded(
+                project_id,
+                kind,
+                tab_id,
+                request.index,
+                result,
+            ));
+        });
     }
 
     /// 把 `kind` 面板**指定下标**tab 的就地改动保存到磁盘,语义同

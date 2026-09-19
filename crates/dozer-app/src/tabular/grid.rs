@@ -165,7 +165,13 @@ impl<'a> canvas::Program<Action> for TabularGrid<'a> {
     ) -> Vec<canvas::Geometry> {
         let m = Metrics::new();
         let colors = byteui::theme::color::current();
-        let sheet = self.view.active_sheet();
+        let mut frame = Frame::new(renderer, bounds.size());
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), colors.panel);
+        // `view.rs` 只在 sheet 已加载时才装配这个 Canvas(未加载时改画
+        // loading_hint),这里是防御性兜底,不应该真的走到。
+        let Some(sheet) = self.view.active_sheet() else {
+            return vec![frame.into_geometry()];
+        };
 
         let data_w = (bounds.width - m.gutter_w).max(0.0);
         let data_h = (bounds.height - m.header_h).max(0.0);
@@ -190,12 +196,7 @@ impl<'a> canvas::Program<Action> for TabularGrid<'a> {
             col_end = idx + 1;
         }
 
-        let mut frame = Frame::new(renderer, bounds.size());
-
-        // 1. 整体背景。
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), colors.panel);
-
-        // 2. 列头行 + 左上角转角。
+        // 1. 列头行 + 左上角转角(整体背景已在上面提前画过)。
         frame.fill_rectangle(
             Point::ORIGIN,
             Size::new(bounds.width, m.header_h),
@@ -207,7 +208,7 @@ impl<'a> canvas::Program<Action> for TabularGrid<'a> {
             colors.card,
         );
 
-        // 3. 列头字母。
+        // 2. 列头字母。
         let mut hx = m.gutter_w;
         for (col, w) in col_w
             .iter()
@@ -226,7 +227,7 @@ impl<'a> canvas::Program<Action> for TabularGrid<'a> {
             hx += w;
         }
 
-        // 4. 行号 gutter 背景 + 行号。
+        // 3. 行号 gutter 背景 + 行号。
         frame.fill_rectangle(
             Point::new(0.0, m.header_h),
             Size::new(m.gutter_w, data_h),
@@ -245,7 +246,7 @@ impl<'a> canvas::Program<Action> for TabularGrid<'a> {
             frame.fill_text(rt);
         }
 
-        // 5. 数据单元格 + 网格线。
+        // 4. 数据单元格 + 网格线。
         for row in scroll_row..row_end {
             let y = m.header_h + (row - scroll_row) as f32 * m.row_height;
             let cells = sheet.rows.get(row);
@@ -288,7 +289,7 @@ impl<'a> canvas::Program<Action> for TabularGrid<'a> {
             }
         }
 
-        // 6. 列头与数据区之间的横线 + gutter 竖线。
+        // 5. 列头与数据区之间的横线 + gutter 竖线。
         frame.fill_rectangle(
             Point::new(0.0, m.header_h),
             Size::new(bounds.width, 1.0),

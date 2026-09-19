@@ -1190,18 +1190,32 @@ pub(crate) fn preview_pane_for<'a>(
         } else if let Some(tabular) = &active_tab.tabular {
             // 表格 tab:iced 原生渲染 Tabular Viewer(虚拟化网格 + sheet 切换
             // 条),消息由 `grid::Action` 映射到 `Message::TabularAction`(带
-            // `tab_id` + `PanelKind`,同 Find 条的手法)。
-            let tab_id = active_tab.id;
-            let panel = find_panel();
-            content = content.push(
-                container(
-                    tabular
-                        .view()
-                        .map(move |act| Message::TabularAction(panel, tab_id, act)),
-                )
-                .width(Length::Fill)
-                .height(Length::Fill),
-            );
+            // `tab_id` + `PanelKind`,同 Find 条的手法)。首次打开的解析是
+            // 后台线程跑的(大文件不能卡住 UI,见 `crate::tabular` 模块文档),
+            // 没跑完时 `TabularState::Loading`,画统一 loading 动画占位。
+            match tabular {
+                crate::preview::TabularState::Ready(view) => {
+                    let tab_id = active_tab.id;
+                    let panel = find_panel();
+                    content = content.push(
+                        container(
+                            view.view()
+                                .map(move |act| Message::TabularAction(panel, tab_id, act)),
+                        )
+                        .width(Length::Fill)
+                        .height(Length::Fill),
+                    );
+                }
+                crate::preview::TabularState::Loading => {
+                    // `loading_hint` 自带 `center_x/center_y(Fill)`,不需要
+                    // 再包一层容器(同其余既有调用点)。
+                    content = content.push(byteui::feedback::math_curve::loading_hint(
+                        byteui::feedback::math_curve::Curve::RoseThree,
+                        "正在打开表格…",
+                        48.0,
+                    ));
+                }
+            }
         } else if active_tab.kind == TabKind::Blank {
             // 关到最后一个 tab 后自动补的空白占位:没有 wry 页面,内容区
             // 纯 iced 原生渲染,居中放 Dozer 品牌标(`IconKind::Dozer`,此前

@@ -181,11 +181,19 @@ impl PreviewPane {
             }
             _ => None,
         };
-        // 表格类文件委托 Tabular Viewer(与 editor 互斥)。加载失败落到 `None`,
-        // 该 tab 会走 webview/flyfish 兜底(同 editor 打开失败的降级路径)。
+        // 表格类文件委托 Tabular Viewer(与 editor 互斥)。实际解析是异步的
+        // (calamine/csv 对大文件可能要跑一阵,不能卡在这个同步方法里,见
+        // `crate::tabular` 模块文档的"够数即停"性能策略)——这里只登记
+        // "这是个表格 tab、正在加载",把 `(id, path)` 记进
+        // `pending_tabular_loads` 队列,交给调用方(手上有 handle/proxy 那层,
+        // 即 `app/update.rs` 的 `preview_open_path`/`project_preview_open_path`)
+        // 在 `push_tab` 返回之后立即 `take_pending_tabular_loads()` 取走并
+        // spawn 后台加载。`open_path` 复用已存在 tab 的分支不经过 `push_tab`,
+        // 不会重复入队,不会对一个正在加载的 tab 触发第二次加载。
         let tabular = match &kind {
             TabKind::File(path) if crate::tabular::is_tabular_extension(path) => {
-                crate::tabular::load(path).ok()
+                self.pending_tabular_loads.push((id, path.clone()));
+                Some(TabularState::Loading)
             }
             _ => None,
         };
@@ -725,14 +733,40 @@ impl PreviewPane {
             .and_then(|t| t.editor.as_mut())
     }
 
-    /// 按 tab id 取该 tab 的 Tabular Viewer 可变引用。tab 不存在或该 tab 不是
-    /// 表格(没有 `tabular`)都返回 `None`。workspace 把
-    /// `Message::TabularAction` 的 `Action` 用它路由给正确的 tab 后 `apply`。
+    /// 按 tab id 取该 tab 的 Tabular Viewer 可变引用。tab 不存在、该 tab 不是
+    /// 表格、或表格还在后台加载中(`TabularState::Loading`)都返回 `None`
+    /// (滚动/切 sheet 这类交互动作在数据到位前没有意义,直接 no-op)。
+    /// workspace 把 `Message::TabularAction` 的 `Action` 用它路由给正确的
+    /// tab 后 `apply`。
     pub fn tabular_mut(&mut self, tab_id: usize) -> Option<&mut crate::tabular::TabularView> {
         self.tabs
             .iter_mut()
             .find(|t| t.id == tab_id)
             .and_then(|t| t.tabular.as_mut())
+            .and_then(|t| match t {
+                TabularState::Ready(view) => Some(view),
+                TabularState::Loading => None,
+            })
+    }
+
+    /// 按 tab id 取出该 tab 的 `TabularState` 可变引用,供加载完成/懒加载
+    /// sheet 完成的回填使用(`Message::TabularLoaded`/`TabularSheetLoaded`
+    /// 的处理函数)。与 `tabular_mut` 不同,这个不区分 `Loading`/`Ready`——
+    /// 回填就是要把 `Loading` 变成 `Ready`。
+    pub fn tabular_state_mut(&mut self, tab_id: usize) -> Option<&mut TabularState> {
+        self.tabs
+            .iter_mut()
+            .find(|t| t.id == tab_id)
+            .and_then(|t| t.tabular.as_mut())
+    }
+
+    /// 取走(清空)`push_tab` 攒下的、还没被 spawn 后台加载的表格 tab 队列。
+    /// 调用方(`open_path` 的上层)应在每次调用 `open_path` 之后立即取走,
+    /// 不要跨调用攒着——攒着会让后来居上的取用者对着不属于自己这次
+    /// `open_path` 调用产生的条目误发 spawn(虽然当前所有调用点都是"取走就
+    /// 立刻 spawn",天然不会攒,但方法本身按"一次性取干净"设计更不容易踩)。
+    pub fn take_pending_tabular_loads(&mut self) -> Vec<(usize, PathBuf)> {
+        std::mem::take(&mut self.pending_tabular_loads)
     }
 
     /// 编辑保存后调用:按 `PreviewTab.id` 找到对应 tab,推进 reload。原生
@@ -1246,21 +1280,65 @@ mod tests {
     }
 
     #[test]
-    fn open_tabular_file_builds_tabular_view_and_excludes_from_webviews() {
+    fn open_tabular_file_starts_loading_and_queues_background_load() {
         let p = std::env::temp_dir().join(format!("tabular_route_{}.csv", std::process::id()));
         std::fs::write(&p, "a,b\n1,2\n").unwrap();
         let mut pane = PreviewPane::default();
-        pane.open_path(p.clone());
+        let id = pane.open_path(p.clone());
         let tab = &pane.tabs()[pane.active_idx()];
-        assert!(tab.tabular.is_some(), "csv 应构造 TabularView");
+        // 打开这一刻还没跑后台线程,tab 先落在 Loading——真正解析是异步的
+        // (见 `crate::tabular` 模块文档的"够数即停"性能策略)。
+        assert!(
+            matches!(tab.tabular, Some(TabularState::Loading)),
+            "csv tab 应先进入 Loading 态,而不是同步构造好 TabularView"
+        );
         assert!(tab.editor.is_none(), "csv 不应再进代码编辑器");
         assert!(
             pane.desired_webviews().is_empty(),
-            "tabular tab 不该进 webview 池"
+            "tabular tab(哪怕还在加载)不该进 webview 池"
         );
         assert!(
             pane.active_tab_is_native(),
             "tabular tab 应是原生 iced 渲染"
+        );
+        assert_eq!(
+            pane.take_pending_tabular_loads(),
+            vec![(id, p.clone())],
+            "push_tab 应把这个新 tab 登记进待加载队列,供调用方 spawn 后台加载"
+        );
+        // 队列取过一次即清空,不会被后续调用重复消费。
+        assert!(pane.take_pending_tabular_loads().is_empty());
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn reopening_already_open_tabular_file_does_not_requeue_load() {
+        let p = std::env::temp_dir().join(format!("tabular_reopen_{}.csv", std::process::id()));
+        std::fs::write(&p, "a,b\n1,2\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id0 = pane.open_path(p.clone());
+        pane.take_pending_tabular_loads();
+        // 同一路径再开一次:走"复用已有 tab"分支,不应该对着还在 Loading
+        // 的 tab 再触发一次后台加载(否则两次加载结果谁后到谁覆盖就成了
+        // 竞态)。
+        let id1 = pane.open_path(p.clone());
+        assert_eq!(id0, id1);
+        assert!(pane.take_pending_tabular_loads().is_empty());
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn tabular_state_transitions_from_loading_to_ready_via_load_result() {
+        let p = std::env::temp_dir().join(format!("tabular_ready_{}.csv", std::process::id()));
+        std::fs::write(&p, "a,b\n1,2\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(p.clone());
+        assert!(pane.tabular_mut(id).is_none(), "加载完成前 apply 应 no-op");
+        let loaded = crate::tabular::load(&p).expect("测试用 csv 应能正常解析");
+        *pane.tabular_state_mut(id).expect("tab 应存在") = TabularState::Ready(loaded);
+        assert!(
+            pane.tabular_mut(id).is_some(),
+            "Ready 之后 tabular_mut 应能拿到可变引用"
         );
         std::fs::remove_file(p).ok();
     }
