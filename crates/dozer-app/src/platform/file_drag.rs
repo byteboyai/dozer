@@ -114,6 +114,14 @@ pub(crate) fn install_file_drag_position_tracker(window: &std::sync::Arc<winit::
         {
             let view: &NSView = unsafe { &*view_ptr };
             let local: NSPoint = view.convertPoint_fromView(loc, None);
+            tracing::debug!(
+                raw_x = loc.x,
+                raw_y = loc.y,
+                local_x = local.x,
+                local_y = local.y,
+                view_frame = ?view.frame(),
+                "file_drag: draggingUpdated raw→local"
+            );
             if let Ok(mut pos) = FILE_DRAG_POSITION.lock() {
                 *pos = Some((local.x as f32, local.y as f32));
             }

@@ -847,7 +847,16 @@ impl App {
             &self.shell_state(),
         );
         let rows = ws.files.visible_tree_rows();
-        files::tree_drop_target(x, y, bounds, ws.files.tree_scroll(), &rows)
+        let scroll = ws.files.tree_scroll();
+        let hit = files::tree_drop_target(x, y, bounds, scroll, &rows);
+        tracing::debug!(
+            x, y, window_w, window_h,
+            ?side, ?bounds, scroll,
+            row_count = rows.len(),
+            ?hit,
+            "file_drag: files_drop_target hit-test"
+        );
+        hit
     }
 
     /// 拖拽(外部 OS 拖入/内部树拖拽共用)悬停命中一个仍处于折叠态的目录时
