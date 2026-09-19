@@ -1,12 +1,32 @@
 //! 可编辑原生编辑器:读盘构造 CodeView、可编辑扩展名判定、wry 切换资格、
 //! syntect 语法主题与扩展名映射。
 
+/// 原生可写编辑器能吃得下的文件大小上限(字节)。超过则退回只读 flyfish
+/// 预览——`Editor::with_text` 会对整份文档做一次 `Shaping::Advanced`
+/// 预整形(cosmic-text `set_text` → `shape_until_scroll`,buffer 尚无尺寸时
+/// 会整形**全部行**),大文件(尤其含 CJK,实测 ~14ms/KB,267KB ≈ 3.5s、7.5MB
+/// ≈ 98s)会阻塞 UI 线程数秒到数十秒,表现为「打开即卡死/未响应」。只读
+/// 预览由 webview 独立进程渲染,不占 UI 线程,与「预览优先于编辑」的裁决一致。
+pub(crate) const MAX_NATIVE_EDITOR_BYTES: u64 = 256 * 1024;
+
+/// 文件是否超过原生编辑器的可载入上限(只看 `fs::metadata` 的 `len`,
+/// 不读内容;拿不到元数据按「未超限」处理,交给后续真正的读盘去报错)。
+pub(crate) fn exceeds_native_editor_limit(path: &std::path::Path) -> bool {
+    std::fs::metadata(path)
+        .map(|m| m.len() > MAX_NATIVE_EDITOR_BYTES)
+        .unwrap_or(false)
+}
+
 /// 读盘并按白名单扩展名构造一个**可写** `CodeView`(2026-09-06 起原生文本预览
 /// 不再只读:用户可直接拖选/复制/就地编辑,配合 `Workspace` 侧的脏标记与
 /// `preview_pane_save` ⌘S 落盘——见 `docs/superpowers/plans/2026-09-06-*.md`）。
 /// 内容不是合法 UTF-8 时降级用 lossy 转换(不当错误);其余读取失败(不存在/权限
 /// 不够等)原样透传 `std::io::Error`,调用方(`push_tab`/`bump_reload`)按现有
 /// "打开失败"路径处理,不在这里新增错误类型。
+///
+/// 超过 [`MAX_NATIVE_EDITOR_BYTES`] 的文件直接返回 Err(在真正读盘前就拦下),
+/// 让 `push_tab` 的 `.ok()` 落到 `None` → 该 tab 走 wry 只读 flyfish 预览,
+/// 避免把 UI 线程卡死在整文档预整形上。
 ///
 /// 打开即程序化聚焦(键盘事件无需先点击一次即可直达编辑器)这件事挪到
 /// `push_tab` 里置一次性 `pending_focus` 位——官方 `text_editor` 的焦点是
@@ -15,6 +35,11 @@
 pub(crate) fn read_and_build_native_editor(
     path: &std::path::Path,
 ) -> std::io::Result<crate::code_editor::CodeView> {
+    if exceeds_native_editor_limit(path) {
+        return Err(std::io::Error::other(
+            "file exceeds native editor size limit",
+        ));
+    }
     let text = std::fs::read_to_string(path).or_else(|e| {
         // 白名单扩展名但内容不是合法 UTF-8:降级用 lossy 转换,不当错误处理
         // (多数文本查看器的通行做法,见设计文档"错误处理"一节)。

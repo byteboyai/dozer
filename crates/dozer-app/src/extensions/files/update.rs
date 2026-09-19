@@ -121,9 +121,7 @@ pub fn update(
             Ok(()) => {
                 // 还原成功:刷新被回滚文件所在的父目录,让树里该文件的状态
                 // (大小/可能的新增标记)重新读盘。
-                if let (Some(tree), Some(parent)) =
-                    (&mut ws_state.file_tree, abs_path.parent())
-                {
+                if let (Some(tree), Some(parent)) = (&mut ws_state.file_tree, abs_path.parent()) {
                     tree.refresh(parent);
                 }
             }

@@ -1810,7 +1810,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_rollback_for_git_file_only() {
-        let git_file = context_menu_items(Path::new("/proj/src/main.rs"), false, false, false, true);
+        let git_file =
+            context_menu_items(Path::new("/proj/src/main.rs"), false, false, false, true);
         let non_git_file =
             context_menu_items(Path::new("/proj/src/main.rs"), false, false, false, false);
         let dir = context_menu_items(Path::new("/proj/src"), true, false, false, true);

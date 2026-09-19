@@ -933,6 +933,49 @@ mod tests {
     }
 
     #[test]
+    fn oversized_file_routes_to_readonly_webview_instead_of_native_editor() {
+        // 超过 MAX_NATIVE_EDITOR_BYTES 的文件必须退回 wry 只读预览——原生
+        // `Editor::with_text` 的整文档预整形会阻塞 UI 线程(见
+        // `preview::MAX_NATIVE_EDITOR_BYTES` 文档),不能被白名单扩展名误拉进编辑器。
+        let dir = std::env::temp_dir();
+        let big_path = dir.join(format!(
+            "preview_oversize_test_{}.json5",
+            std::process::id()
+        ));
+        let small_path = dir.join(format!("preview_small_test_{}.json5", std::process::id()));
+        let filler = "x".repeat(1024);
+        let mut big = String::new();
+        while big.len() <= crate::preview::MAX_NATIVE_EDITOR_BYTES as usize {
+            big.push_str(&filler);
+            big.push('\n');
+        }
+        std::fs::write(&big_path, &big).unwrap();
+        std::fs::write(&small_path, "[{ id: 1 }]").unwrap();
+
+        let mut p = PreviewPane::default();
+        p.open_path(big_path.clone());
+        p.open_path(small_path.clone());
+
+        assert!(
+            p.tabs()[1].editor.is_none(),
+            "超大 .json5 不应构造原生 editor,退回 wry 只读预览"
+        );
+        assert!(
+            p.tabs()[2].editor.is_some(),
+            "小 .json5 照常构造原生 editor"
+        );
+        let specs = p.desired_webviews();
+        assert_eq!(
+            specs.iter().filter(|s| s.id == p.tabs()[1].id).count(),
+            1,
+            "超大文件应出现在 wry 期望清单里"
+        );
+
+        std::fs::remove_file(&big_path).ok();
+        std::fs::remove_file(&small_path).ok();
+    }
+
+    #[test]
     fn markdown_renders_via_webview_but_stays_editable() {
         // .md 是白名单扩展名(`is_editable_extension` 仍为 true,右键"编辑"
         // 照常出现),但默认预览要走 flyfish 的 markdown 渲染器而不是原生

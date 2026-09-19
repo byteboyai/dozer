@@ -908,7 +908,11 @@ pub(crate) fn context_menu_spec(
             "复制相对路径",
             Message::CopyPath(target.clone(), PathKind::Relative),
         ),
-        MenuSpecItem::entry(None, "在 Finder 中打开", Message::RevealInFinder(target.clone())),
+        MenuSpecItem::entry(
+            None,
+            "在 Finder 中打开",
+            Message::RevealInFinder(target.clone()),
+        ),
         MenuSpecItem::entry(None, "从磁盘重新加载", Message::ReloadFromDisk),
     ];
 
