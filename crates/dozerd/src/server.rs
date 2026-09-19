@@ -8,9 +8,10 @@ use base64::engine::general_purpose::STANDARD as B64;
 use dozer_core::protocol::{Reply, Request, decode_line, encode_line};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::broadcast;
+use tokio::sync::{Notify, broadcast};
 
 /// `ProcessTodoNow` handler 的实际执行:查任务 → 加入 in_flight → 调
 /// `task_processor::process_task` → 移出 in_flight → 回最新任务或错误。
@@ -98,45 +99,60 @@ pub async fn serve(
     }
     let listener = UnixListener::bind(socket)?;
     tracing::info!(socket = %socket.display(), "dozerd 监听中");
+    let draining = Arc::new(AtomicBool::new(false));
+    let shutdown_signal = Arc::new(Notify::new());
     loop {
-        let (stream, _) = match listener.accept().await {
-            Ok(pair) => pair,
-            Err(e) => {
-                tracing::warn!(error = %e, "accept 失败，跳过本次连接");
-                continue;
+        tokio::select! {
+            accepted = listener.accept() => {
+                let (stream, _) = match accepted {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "accept 失败，跳过本次连接");
+                        continue;
+                    }
+                };
+                let registry = registry.clone();
+                let projects = projects.clone();
+                let bookmarks = bookmarks.clone();
+                let preview_contexts = preview_contexts.clone();
+                let ide_bridge = ide_bridge.clone();
+                let transcripts = transcripts.clone();
+                let session_summaries = session_summaries.clone();
+                let backfill_registry = backfill_registry.clone();
+                let todos = todos.clone();
+                let categories = categories.clone();
+                let in_flight = in_flight.clone();
+                let draining = draining.clone();
+                let shutdown_signal = shutdown_signal.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = handle_conn(
+                        stream,
+                        registry,
+                        projects,
+                        bookmarks,
+                        preview_contexts,
+                        ide_bridge,
+                        transcripts,
+                        session_summaries,
+                        backfill_registry,
+                        todos.clone(),
+                        categories.clone(),
+                        in_flight,
+                        draining,
+                        shutdown_signal,
+                    )
+                    .await
+                    {
+                        tracing::debug!(error = %e, "连接结束");
+                    }
+                });
             }
-        };
-        let registry = registry.clone();
-        let projects = projects.clone();
-        let bookmarks = bookmarks.clone();
-        let preview_contexts = preview_contexts.clone();
-        let ide_bridge = ide_bridge.clone();
-        let transcripts = transcripts.clone();
-        let session_summaries = session_summaries.clone();
-        let backfill_registry = backfill_registry.clone();
-        let todos = todos.clone();
-        let categories = categories.clone();
-        let in_flight = in_flight.clone();
-        tokio::spawn(async move {
-            if let Err(e) = handle_conn(
-                stream,
-                registry,
-                projects,
-                bookmarks,
-                preview_contexts,
-                ide_bridge,
-                transcripts,
-                session_summaries,
-                backfill_registry,
-                todos.clone(),
-                categories.clone(),
-                in_flight,
-            )
-            .await
-            {
-                tracing::debug!(error = %e, "连接结束");
+            _ = shutdown_signal.notified() => {
+                tracing::info!("收到 Shutdown 请求收尾完成，dozerd 退出");
+                let _ = std::fs::remove_file(socket);
+                return Ok(());
             }
-        });
+        }
     }
 }
 
@@ -289,6 +305,46 @@ async fn finalize_session_summary(
     }
 }
 
+/// `Request::Shutdown` 收尾:对 `registry` 里当前存活的每个会话复用
+/// `finalize_session_summary`(与 `Request::CloseWithSummary` 同一函数),
+/// 全部完成后返回。`timeout`/`poll_interval` 抽成参数只为方便测试注入
+/// 短间隔,生产调用点(`Request::Shutdown` 分支)固定用
+/// `CLOSE_WITH_SUMMARY_TIMEOUT`/`CLOSE_WITH_SUMMARY_POLL_INTERVAL`——同
+/// `finalize_session_summary` 自身的既有约定。并发 spawn 每个会话各自的
+/// 收尾任务,再逐个 await:每个任务自带截止时间且互不依赖,总耗时约等于
+/// 其中最慢的一个,不需要再套一层外部超时。
+async fn drain_all_sessions(
+    registry: Arc<SessionRegistry>,
+    session_summaries: Arc<crate::session_summary::SessionSummaryStore>,
+    transcripts: Arc<crate::transcripts::TranscriptStore>,
+    timeout: std::time::Duration,
+    poll_interval: std::time::Duration,
+) {
+    let ids: Vec<String> = registry.list().into_iter().map(|info| info.id).collect();
+    let mut handles = Vec::with_capacity(ids.len());
+    for id in ids {
+        let Some(s) = registry.get(&id) else { continue };
+        let agent = s.info().agent;
+        let conversation_id = conversation_id_for_session(&s);
+        if let Err(e) = s.write(SUMMARY_PROMPT.as_bytes()) {
+            tracing::warn!(error = %e, session_id = %id, "停止 dozerd 前注入总结 prompt 失败");
+        }
+        handles.push(tokio::spawn(finalize_session_summary(
+            id,
+            conversation_id,
+            registry.clone(),
+            session_summaries.clone(),
+            transcripts.clone(),
+            agent,
+            timeout,
+            poll_interval,
+        )));
+    }
+    for h in handles {
+        let _ = h.await;
+    }
+}
+
 /// spec P1e D6：hook 事件名 → 四态映射；未知事件不改状态。
 pub fn agent_state_for(event: &str) -> Option<dozer_core::protocol::AgentState> {
     use dozer_core::protocol::AgentState::*;
@@ -315,6 +371,8 @@ async fn handle_conn(
     todos: Arc<crate::todo::TodoStore>,
     categories: Arc<crate::todo_category::CategoryStore>,
     in_flight: crate::task_poller::InFlight,
+    draining: Arc<AtomicBool>,
+    shutdown_signal: Arc<Notify>,
 ) -> Result<()> {
     let (r, mut w) = stream.into_split();
     let mut lines = BufReader::new(r).lines();
@@ -327,38 +385,43 @@ async fn handle_conn(
         tokio::select! {
             line = lines.next_line() => {
                 let Some(line) = line? else { break }; // 客户端断连：直接退出，不动会话
+                let mut should_exit_after_reply = false;
                 let reply = match decode_line::<Request>(&line) {
                     Err(e) => Reply::Error { message: format!("协议错误: {e}") },
                     Ok(req) => match req {
                         Request::ListSessions => Reply::Sessions { sessions: registry.list() },
                         Request::CreateSession { name, command, args, cwd, cols, rows, project_id } => {
-                            match registry.create(SessionSpec { name, command, args, cwd: cwd.clone(), cols, rows, project_id }) {
-                                Ok(s) => {
-                                    // `session_started` 失败(绑端口/写锁文件出错)时不会在
-                                    // registry 里留下这次调用对应的记录——这种情况下绝不能
-                                    // spawn 退出监听器,否则这个会话将来退出时会去 `session_ended`
-                                    // 一个它从未真正占过的项目名额,把同项目下另一个真正活着的
-                                    // 会话的 bridge 提前拆掉(复现过的 bug,见代码审查记录)。
-                                    if ide_bridge.session_started(project_id, &cwd).await {
-                                        let ide_bridge_watch = ide_bridge.clone();
-                                        let mut exit_rx = s.subscribe();
-                                        tokio::spawn(async move {
-                                            loop {
-                                                match exit_rx.recv().await {
-                                                    Ok(SessionEvent::Exited { .. }) => {
-                                                        ide_bridge_watch.session_ended(project_id).await;
-                                                        break;
+                            if draining.load(Ordering::SeqCst) {
+                                Reply::Error { message: "dozerd 正在停止,无法创建新会话".into() }
+                            } else {
+                                match registry.create(SessionSpec { name, command, args, cwd: cwd.clone(), cols, rows, project_id }) {
+                                    Ok(s) => {
+                                        // `session_started` 失败(绑端口/写锁文件出错)时不会在
+                                        // registry 里留下这次调用对应的记录——这种情况下绝不能
+                                        // spawn 退出监听器,否则这个会话将来退出时会去 `session_ended`
+                                        // 一个它从未真正占过的项目名额,把同项目下另一个真正活着的
+                                        // 会话的 bridge 提前拆掉(复现过的 bug,见代码审查记录)。
+                                        if ide_bridge.session_started(project_id, &cwd).await {
+                                            let ide_bridge_watch = ide_bridge.clone();
+                                            let mut exit_rx = s.subscribe();
+                                            tokio::spawn(async move {
+                                                loop {
+                                                    match exit_rx.recv().await {
+                                                        Ok(SessionEvent::Exited { .. }) => {
+                                                            ide_bridge_watch.session_ended(project_id).await;
+                                                            break;
+                                                        }
+                                                        Ok(_) => continue,
+                                                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                                                        Err(broadcast::error::RecvError::Closed) => break,
                                                     }
-                                                    Ok(_) => continue,
-                                                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                                                    Err(broadcast::error::RecvError::Closed) => break,
                                                 }
-                                            }
-                                        });
+                                            });
+                                        }
+                                        Reply::Created { session: s.info() }
                                     }
-                                    Reply::Created { session: s.info() }
+                                    Err(e) => Reply::Error { message: e.to_string() },
                                 }
-                                Err(e) => Reply::Error { message: e.to_string() },
                             }
                         }
                         Request::Attach { session_id, from_offset } => match registry.get(&session_id) {
@@ -405,6 +468,24 @@ async fn handle_conn(
                             Ok(()) => Reply::Ok,
                             Err(e) => Reply::Error { message: e.to_string() },
                         },
+                        Request::Shutdown => {
+                            if draining.compare_exchange(
+                                false, true, Ordering::SeqCst, Ordering::SeqCst,
+                            ).is_err() {
+                                Reply::Error { message: "dozerd 正在停止中".into() }
+                            } else {
+                                drain_all_sessions(
+                                    registry.clone(),
+                                    session_summaries.clone(),
+                                    transcripts.clone(),
+                                    CLOSE_WITH_SUMMARY_TIMEOUT,
+                                    CLOSE_WITH_SUMMARY_POLL_INTERVAL,
+                                )
+                                .await;
+                                should_exit_after_reply = true;
+                                Reply::Ok
+                            }
+                        }
                         Request::HookEvent { session_id, agent, event, ts_ms, data } => {
                             match registry.get(&session_id) {
                                 None => {
@@ -803,6 +884,10 @@ async fn handle_conn(
                     },
                 };
                 w.write_all(encode_line(&reply).as_bytes()).await?;
+                if should_exit_after_reply {
+                    shutdown_signal.notify_one();
+                    return Ok(());
+                }
             }
             ev = async {
                 match &mut sub {
@@ -1242,5 +1327,75 @@ mod tests {
             .expect("watcher 任务不应 panic");
 
         assert!(ide_bridge.active_projects().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn drain_all_sessions_with_no_sessions_returns_immediately() {
+        let registry = Arc::new(crate::registry::SessionRegistry::new());
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("t.db");
+        let transcripts = Arc::new(crate::transcripts::TranscriptStore::open(&db).unwrap());
+        let session_summaries =
+            Arc::new(crate::session_summary::SessionSummaryStore::open(&db).unwrap());
+
+        let started = std::time::Instant::now();
+        drain_all_sessions(
+            registry,
+            session_summaries,
+            transcripts,
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(2),
+        )
+        .await;
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(200),
+            "0 会话不应该等待任何轮询间隔"
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_all_sessions_falls_back_to_heuristic_on_timeout_and_kills_session() {
+        let registry = Arc::new(crate::registry::SessionRegistry::new());
+        let session = registry
+            .create(crate::session::SessionSpec {
+                name: "test".into(),
+                command: "/bin/sh".into(),
+                args: vec!["-c".into(), "sleep 5".into()],
+                cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+                cols: 80,
+                rows: 24,
+                project_id: 1,
+            })
+            .unwrap();
+        let sid = session.id().to_string();
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("t.db");
+        let transcripts = Arc::new(crate::transcripts::TranscriptStore::open(&db).unwrap());
+        let session_summaries =
+            Arc::new(crate::session_summary::SessionSummaryStore::open(&db).unwrap());
+
+        // 短超时/短轮询只为测试注入,不代表生产行为——生产调用点固定用
+        // `CLOSE_WITH_SUMMARY_TIMEOUT`/`CLOSE_WITH_SUMMARY_POLL_INTERVAL`。
+        drain_all_sessions(
+            registry.clone(),
+            session_summaries.clone(),
+            transcripts,
+            std::time::Duration::from_millis(80),
+            std::time::Duration::from_millis(10),
+        )
+        .await;
+
+        let summary = session_summaries
+            .get(&sid)
+            .unwrap()
+            .expect("超时后应该落一份启发式兜底总结");
+        assert_eq!(
+            summary.status,
+            dozer_core::protocol::SummaryStatus::HeuristicFallback
+        );
+        assert!(
+            !registry.get(&sid).unwrap().info().alive,
+            "超时兜底后应该 kill 掉这个会话"
+        );
     }
 }
