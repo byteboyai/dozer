@@ -32,6 +32,21 @@ impl ConnectState {
     }
 }
 
+/// "高级"区块(停止/重新启动 dozerd)的状态机。`Idle`/`Stopped` 各自内嵌
+/// `error: Option<String>`——失败态就是"回到默认态/已停止态,附一行错误
+/// 文案",不单独建一个 `Failed` 变体(spec「UI 设计」:停止失败按钮恢复
+/// 默认态、重启失败保留"重新启动"按钮,两者语义上就是各自基础态的一个
+/// 变体,不是第三种独立状态)。
+#[derive(Debug, Clone, PartialEq)]
+pub enum AdvancedState {
+    Idle { error: Option<String> },
+    FetchingCount,
+    ConfirmingStop { session_count: u32 },
+    Stopping,
+    Stopped { error: Option<String> },
+    RestartingDozerd,
+}
+
 pub struct State {
     pub github: ConnectState,
     pub gitlab: ConnectState,
@@ -46,6 +61,7 @@ pub struct State {
     /// Keychain/本地文件(代码评审 finding:Cancel doesn't stop in-flight
     /// connect task)。
     connect_tasks: HashMap<GitProvider, tokio::task::AbortHandle>,
+    pub advanced: AdvancedState,
 }
 
 impl State {
@@ -59,6 +75,7 @@ impl State {
             gitee: ConnectState::from_accounts(&accounts, GitProvider::Gitee),
             suppress_next_blur: false,
             connect_tasks: HashMap::new(),
+            advanced: AdvancedState::Idle { error: None },
         }
     }
 
@@ -82,6 +99,13 @@ pub enum Message {
     ConnectSubmit(GitProvider),
     ConnectResult(GitProvider, Result<String, String>),
     Disconnect(GitProvider),
+    AdvancedStopClicked,
+    AdvancedSessionCountReady(Result<u32, String>),
+    AdvancedStopCancel,
+    AdvancedStopConfirm,
+    AdvancedStopResult(Result<(), String>),
+    AdvancedRestartClicked,
+    AdvancedRestartResult(Result<(), String>),
 }
 
 /// 处理不需要 `handle`(异步)的消息,返回 `true` 表示已处理完。纯状态
@@ -174,7 +198,42 @@ fn apply_sync_message(state: &mut State, msg: &Message) -> bool {
             }
             true
         }
-        Message::Close | Message::ConnectSubmit(_) => false,
+        Message::AdvancedStopCancel => {
+            state.advanced = AdvancedState::Idle { error: None };
+            true
+        }
+        Message::AdvancedSessionCountReady(result) => {
+            state.advanced = match result {
+                Ok(n) => AdvancedState::ConfirmingStop { session_count: *n },
+                Err(e) => AdvancedState::Idle {
+                    error: Some(e.clone()),
+                },
+            };
+            true
+        }
+        Message::AdvancedStopResult(result) => {
+            state.advanced = match result {
+                Ok(()) => AdvancedState::Stopped { error: None },
+                Err(e) => AdvancedState::Idle {
+                    error: Some(e.clone()),
+                },
+            };
+            true
+        }
+        Message::AdvancedRestartResult(result) => {
+            state.advanced = match result {
+                Ok(()) => AdvancedState::Idle { error: None },
+                Err(e) => AdvancedState::Stopped {
+                    error: Some(e.clone()),
+                },
+            };
+            true
+        }
+        Message::Close
+        | Message::ConnectSubmit(_)
+        | Message::AdvancedStopClicked
+        | Message::AdvancedStopConfirm
+        | Message::AdvancedRestartClicked => false,
     }
 }
 
@@ -184,6 +243,7 @@ fn apply_sync_message(state: &mut State, msg: &Message) -> bool {
 pub fn update(
     state: &mut Option<State>,
     msg: Message,
+    client: &dozer_client::Client,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
@@ -195,8 +255,49 @@ pub fn update(
     if apply_sync_message(s, &msg) {
         return;
     }
-    let Message::ConnectSubmit(provider) = msg else {
-        unreachable!("已在 apply_sync_message 或顶部处理");
+    let provider = match msg {
+        Message::ConnectSubmit(provider) => provider,
+        Message::AdvancedStopClicked => {
+            if !matches!(s.advanced, AdvancedState::Idle { .. }) {
+                return;
+            }
+            s.advanced = AdvancedState::FetchingCount;
+            let client = client.clone();
+            handle.spawn(async move {
+                let result = client
+                    .list()
+                    .await
+                    .map(|sessions| sessions.len() as u32)
+                    .map_err(|e| e.to_string());
+                emit(Message::AdvancedSessionCountReady(result));
+            });
+            return;
+        }
+        Message::AdvancedStopConfirm => {
+            if !matches!(s.advanced, AdvancedState::ConfirmingStop { .. }) {
+                return;
+            }
+            s.advanced = AdvancedState::Stopping;
+            let client = client.clone();
+            handle.spawn(async move {
+                let result = client.shutdown_daemon().await.map_err(|e| e.to_string());
+                emit(Message::AdvancedStopResult(result));
+            });
+            return;
+        }
+        Message::AdvancedRestartClicked => {
+            if !matches!(s.advanced, AdvancedState::Stopped { .. }) {
+                return;
+            }
+            s.advanced = AdvancedState::RestartingDozerd;
+            let client = client.clone();
+            handle.spawn(async move {
+                let result = crate::runtime::ensure_daemon(&client).await;
+                emit(Message::AdvancedRestartResult(result));
+            });
+            return;
+        }
+        _ => unreachable!("已在 apply_sync_message 或上面处理"),
     };
     let token = match s.slot_mut(provider) {
         ConnectState::Editing { token, busy, error } => {
@@ -342,6 +443,95 @@ fn provider_row(
     }
 }
 
+fn advanced_row(state: &AdvancedState) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let colors = byteui::theme::color::current();
+    let hint = |s: String| {
+        text(s)
+            .size(byteui::theme::font::label())
+            .color(colors.dim)
+    };
+    let error_line = |e: &Option<String>| -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+        match e {
+            Some(msg) => text(msg.clone())
+                .size(byteui::theme::font::label())
+                .color(colors.red)
+                .into(),
+            None => Space::new().into(),
+        }
+    };
+    match state {
+        AdvancedState::Idle { error } => {
+            let btn = button(text("停止 dozerd").size(byteui::theme::font::body()))
+                .on_press(Message::AdvancedStopClicked)
+                .padding([6, 14]);
+            column![
+                hint("停止后所有正在运行的 agent 会话会结束并生成总结,可随时重新启动。".into()),
+                row![Space::new().width(Length::Fill), btn],
+                error_line(error),
+            ]
+            .spacing(6)
+            .into()
+        }
+        AdvancedState::FetchingCount => {
+            let btn = button(text("检查中…").size(byteui::theme::font::body())).padding([6, 14]);
+            row![
+                hint("停止后所有正在运行的 agent 会话会结束并生成总结,可随时重新启动。".into()),
+                Space::new().width(Length::Fill),
+                btn
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .into()
+        }
+        AdvancedState::ConfirmingStop { session_count } => {
+            let body = if *session_count == 0 {
+                "当前没有正在运行的会话,dozerd 会直接停止。".to_string()
+            } else {
+                format!(
+                    "这会结束当前 {session_count} 个正在运行的 agent 会话并生成总结(可能需要约 1 分钟)。"
+                )
+            };
+            let cancel = button(text("取消").size(byteui::theme::font::body()))
+                .on_press(Message::AdvancedStopCancel)
+                .padding([6, 14]);
+            let confirm = button(
+                text("确认停止")
+                    .size(byteui::theme::font::body())
+                    .color(colors.red),
+            )
+            .on_press(Message::AdvancedStopConfirm)
+            .padding([6, 14]);
+            column![
+                hint(body),
+                row![Space::new().width(Length::Fill), cancel, confirm].spacing(8),
+            ]
+            .spacing(6)
+            .into()
+        }
+        AdvancedState::Stopping => {
+            let btn = button(text("停止中…(等待会话总结,最长约 1 分钟)").size(byteui::theme::font::body()))
+                .padding([6, 14]);
+            row![Space::new().width(Length::Fill), btn].into()
+        }
+        AdvancedState::Stopped { error } => {
+            let btn = button(text("重新启动 dozerd").size(byteui::theme::font::body()))
+                .on_press(Message::AdvancedRestartClicked)
+                .padding([6, 14]);
+            column![
+                hint("dozerd 已停止,部分功能不可用。".into()),
+                row![Space::new().width(Length::Fill), btn],
+                error_line(error),
+            ]
+            .spacing(6)
+            .into()
+        }
+        AdvancedState::RestartingDozerd => {
+            let btn = button(text("启动中…").size(byteui::theme::font::body())).padding([6, 14]);
+            row![Space::new().width(Length::Fill), btn].into()
+        }
+    }
+}
+
 pub fn settings_card(
     state: &State,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -362,6 +552,9 @@ pub fn settings_card(
     .padding([6, 12])
     .style(crate::dialog::action_button_style(colors.dim));
 
+    let advanced_title = text("高级")
+        .size(byteui::theme::font::subtitle())
+        .color(colors.cream);
     let content = column![
         theme_title,
         scheme_row("深色 · ByteBoy2077", ColorScheme::Dark, current),
@@ -370,6 +563,8 @@ pub fn settings_card(
         provider_row(GitProvider::GitHub, &state.github),
         provider_row(GitProvider::GitLab, &state.gitlab),
         provider_row(GitProvider::Gitee, &state.gitee),
+        advanced_title,
+        advanced_row(&state.advanced),
         crate::dialog::actions(row![close]),
     ]
     .spacing(14);
@@ -396,6 +591,7 @@ mod tests {
             gitee,
             suppress_next_blur: false,
             connect_tasks: HashMap::new(),
+            advanced: AdvancedState::Idle { error: None },
         }
     }
 
@@ -554,5 +750,131 @@ mod tests {
             ConnectState::NotConnected,
         );
         assert!(!apply_sync_message(&mut state, &Message::Close));
+    }
+
+    #[test]
+    fn advanced_stop_cancel_returns_to_idle() {
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        state.advanced = AdvancedState::ConfirmingStop { session_count: 2 };
+        apply_sync_message(&mut state, &Message::AdvancedStopCancel);
+        assert_eq!(state.advanced, AdvancedState::Idle { error: None });
+    }
+
+    #[test]
+    fn advanced_session_count_ready_ok_opens_confirm() {
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        state.advanced = AdvancedState::FetchingCount;
+        apply_sync_message(&mut state, &Message::AdvancedSessionCountReady(Ok(3)));
+        assert_eq!(
+            state.advanced,
+            AdvancedState::ConfirmingStop { session_count: 3 }
+        );
+    }
+
+    #[test]
+    fn advanced_session_count_ready_err_returns_to_idle_with_error() {
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        state.advanced = AdvancedState::FetchingCount;
+        apply_sync_message(
+            &mut state,
+            &Message::AdvancedSessionCountReady(Err("daemon 断开".into())),
+        );
+        assert_eq!(
+            state.advanced,
+            AdvancedState::Idle {
+                error: Some("daemon 断开".into())
+            }
+        );
+    }
+
+    #[test]
+    fn advanced_stop_result_ok_marks_stopped() {
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        state.advanced = AdvancedState::Stopping;
+        apply_sync_message(&mut state, &Message::AdvancedStopResult(Ok(())));
+        assert_eq!(state.advanced, AdvancedState::Stopped { error: None });
+    }
+
+    #[test]
+    fn advanced_stop_result_err_returns_to_idle_with_error() {
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        state.advanced = AdvancedState::Stopping;
+        apply_sync_message(
+            &mut state,
+            &Message::AdvancedStopResult(Err("等待 dozerd 停止超时".into())),
+        );
+        assert_eq!(
+            state.advanced,
+            AdvancedState::Idle {
+                error: Some("等待 dozerd 停止超时".into())
+            }
+        );
+    }
+
+    #[test]
+    fn advanced_restart_result_ok_returns_to_idle() {
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        state.advanced = AdvancedState::RestartingDozerd;
+        apply_sync_message(&mut state, &Message::AdvancedRestartResult(Ok(())));
+        assert_eq!(state.advanced, AdvancedState::Idle { error: None });
+    }
+
+    #[test]
+    fn advanced_restart_result_err_stays_stopped_with_error() {
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        state.advanced = AdvancedState::RestartingDozerd;
+        apply_sync_message(
+            &mut state,
+            &Message::AdvancedRestartResult(Err("无法连接 dozerd".into())),
+        );
+        assert_eq!(
+            state.advanced,
+            AdvancedState::Stopped {
+                error: Some("无法连接 dozerd".into())
+            }
+        );
+    }
+
+    #[test]
+    fn advanced_async_messages_are_not_sync_messages() {
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        assert!(!apply_sync_message(&mut state, &Message::AdvancedStopClicked));
+        assert!(!apply_sync_message(&mut state, &Message::AdvancedStopConfirm));
+        assert!(!apply_sync_message(
+            &mut state,
+            &Message::AdvancedRestartClicked
+        ));
     }
 }
