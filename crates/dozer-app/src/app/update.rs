@@ -877,8 +877,38 @@ impl App {
                 });
             }
             Message::TabularAction(kind, tab_id, action) => {
-                self.with_focused_project(move |ws, _io| {
-                    ws.preview_pane_tabular_action(kind, tab_id, action);
+                self.with_focused_project(move |ws, io| {
+                    ws.preview_pane_tabular_action(kind, tab_id, action, io);
+                });
+            }
+            Message::TabularLoaded(project_id, kind, tab_id, result) => {
+                self.with_project(project_id, move |ws, _io| {
+                    let pane = if kind == PanelKind::Project {
+                        &mut ws.project_preview
+                    } else {
+                        &mut ws.preview
+                    };
+                    let Ok(view) = result else {
+                        tracing::warn!("表格首次加载失败,tab 停留在 Loading");
+                        return;
+                    };
+                    if let Some(slot) = pane.tabular_state_mut(tab_id) {
+                        *slot = crate::preview::TabularState::Ready(view);
+                    }
+                });
+            }
+            Message::TabularSheetLoaded(project_id, kind, tab_id, sheet_index, result) => {
+                self.with_project(project_id, move |ws, _io| {
+                    let pane = if kind == PanelKind::Project {
+                        &mut ws.project_preview
+                    } else {
+                        &mut ws.preview
+                    };
+                    if let Some(crate::preview::TabularState::Ready(view)) =
+                        pane.tabular_state_mut(tab_id)
+                    {
+                        view.apply_sheet_loaded(sheet_index, result);
+                    }
                 });
             }
             Message::ProjectPreviewOpenPath(path) => self.project_preview_open_path(path),
@@ -3172,6 +3202,7 @@ impl App {
                 .expect("allowed_files 锁")
                 .insert(path.clone());
             ws.preview.open_path(path);
+            ws.spawn_pending_tabular_loads(PanelKind::Files, io);
             // 新 tab 落在末尾(复用已开的文件则落在该文件原来的位置)——
             // 用跟 `preview_select_tab` 同一套 `tab_window_reveal`,把窗口
             // 起点钳到"包含这个新激活 tab"的位置,而不是无脑滚回最左
@@ -3232,7 +3263,7 @@ impl App {
     /// 避免与 Files 预览那份持久化 `preview_state` 互相覆盖。
     pub(crate) fn project_preview_open_path(&mut self, path: PathBuf) {
         let avail_w = self.preview_tab_bar_avail_px(PanelKind::Project);
-        self.with_focused_project(|ws, _io| {
+        self.with_focused_project(|ws, io| {
             if !path.is_file() {
                 ws.project_preview_error = Some(format!("文件不存在或不可读: {}", path.display()));
                 return;
@@ -3244,6 +3275,7 @@ impl App {
                 .expect("allowed_files 锁")
                 .insert(path.clone());
             ws.project_preview.open_path(path);
+            ws.spawn_pending_tabular_loads(PanelKind::Project, io);
             // 新 tab 落在末尾(或复用已开文件原位),用 `tab_window_reveal`
             // 钳出包含它的窗口起点,不再无脑滚回最左(同 Files 预览)。
             let active = ws.project_preview.active_idx();

@@ -20,8 +20,11 @@ pub struct PreviewTab {
     pub editor: Option<crate::code_editor::CodeView>,
     /// 表格类文件(`tabular::is_tabular_extension`)的文件 tab 有值,非空即代表
     /// 这个 tab 走 Tabular Viewer 原生渲染(网格)。与 `editor` 互斥:同一 tab
-    /// 要么代码编辑器、要么表格、要么 webview,三者取其一。
-    pub tabular: Option<crate::tabular::TabularView>,
+    /// 要么代码编辑器、要么表格、要么 webview,三者取其一。表格加载是异步的
+    /// (见 `TabularState` 文档),`Some` 在"是不是表格 tab"这个问题上从打开
+    /// 那一刻起就恒定,不随加载有没有完成而改变——所有原有 `tabular.is_some()
+    /// /is_none()` 判断("这个 tab 是不是已被表格/编辑器认领")因此不用改。
+    pub tabular: Option<TabularState>,
     /// 原生可编辑 tab 的"buffer 与磁盘不一致"标记:用户就地改过、还没 ⌘S 保存
     /// (或右键"刷新"/项目切换丢弃归零)为 `true`。`Blank`/`webview` tab 恒
     /// `false`。2026-09-06 原生预览不再只读,有了就地编辑就必须能显式挂脏并兜底,
@@ -41,6 +44,17 @@ impl std::fmt::Debug for PreviewTab {
             .field("tabular", &self.tabular.is_some())
             .finish()
     }
+}
+
+/// 表格 tab 的加载态。`Loading` = 首次打开该文件、或懒加载某个 sheet 期间
+/// 在后台线程跑(见 `crate::tabular::load`/`load_sheet`),完成后经
+/// `Message::TabularLoaded` 落回 `Ready`。加载失败时(极少见:文件在打开
+/// 那一刻被删/损坏)保留 `Loading`,不额外建一个 `Failed` 变体——那种情况下
+/// 用户能做的唯一有意义动作是关掉这个 tab 重开,持续显示 loading 转圈比
+/// 静默切回空白/报内部错误码更不容易让人误以为"文件是空的"。
+pub enum TabularState {
+    Loading,
+    Ready(crate::tabular::TabularView),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -122,6 +136,11 @@ pub struct PreviewPane {
     pub(crate) pending_editor_reveal_focus: bool,
     /// 文件内搜索(⌘F)会话,`Some` 表示条已显示;Files / Project 各一份,独立。
     pub(crate) find: Option<FindState>,
+    /// `push_tab` 刚创建、还没被外层 spawn 后台加载的表格 tab
+    /// `(PreviewTab.id, 文件路径)` 队列。调用方在 `open_path`/`push_tab`
+    /// 返回后立即 `take_pending_tabular_loads()` 取走清空,不应该攒着不取
+    /// (见 `PreviewPane::take_pending_tabular_loads` 文档)。
+    pub(crate) pending_tabular_loads: Vec<(usize, PathBuf)>,
 }
 
 impl Default for PreviewPane {
@@ -137,6 +156,7 @@ impl Default for PreviewPane {
             pending_find_focus: false,
             pending_editor_reveal_focus: false,
             find: None,
+            pending_tabular_loads: Vec::new(),
         }
     }
 }
