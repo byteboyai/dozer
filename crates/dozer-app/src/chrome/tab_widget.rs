@@ -450,9 +450,13 @@ where
 }
 
 /// `tab_overflow_menu` 的原生菜单版本——纯选择列表。`entries` 由各调用方把
-/// 各自的 tab 列表映射成 `(index, title, active)` 三元组;当前 tab 用 CREAM
-/// 文字标识、其余 BODY。不含关闭按钮/状态点/hover(原生 NSMenu 是整行单击
-/// 模型,见"迁移但去掉关闭按钮"的裁决),仅 macOS 编译。
+/// 各自的 tab 列表映射成 `(index, title, active)` 三元组;当前 tab(选中行)
+/// 用 CREAM 文字 + 标题前固定图标列里的 `>`(`chevron-right`,CREAM)标识,
+/// 其余行 BODY 且不画 `>`(2026-09 用户反馈:没选中的项不要显示箭头)。文字
+/// 对齐靠渲染端 `MenuItemView` **无条件**预留固定图标列,无论该行是否真有
+/// 图标,文字起点都钉在同一 x——不画箭头的行也不会错位。不含关闭按钮/
+/// 状态点/hover(原生 NSMenu 是整行单击模型,见"迁移但去掉关闭按钮"的裁决),
+/// 仅 macOS 编译。
 #[cfg(target_os = "macos")]
 pub(crate) fn tab_overflow_items<Msg: Clone>(
     entries: &[(usize, String, bool)],
@@ -464,9 +468,20 @@ pub(crate) fn tab_overflow_items<Msg: Clone>(
         .iter()
         .map(|(idx, title, active)| {
             let color = if *active { cream } else { body };
+            // 只有选中行带 `>` 图标(CREAM),未选中行 `icon: None` 不画箭头
+            // (2026-09 用户反馈:没选中的项不要显示 `>`)。文字对齐靠原生渲染
+            // 端 `MenuItemView` **无条件**预留固定图标列(宽度恒为
+            // `icon_px + gap`),无论该行是否真有图标,文字起点都钉在同一 x——
+            // 因此不画箭头的行不会把文字右推错位;iced 端 `tab_overflow_menu`
+            // 走同一口径(固定 `chevron_w` 列,未选中行塞 `Space`)。
+            let (icon, icon_color) = if *active {
+                (Some(icons::IconKind::ChevronRight), Some(cream))
+            } else {
+                (None, None)
+            };
             crate::chrome::native_menu::Item::Entry {
-                icon: None,
-                icon_color: None,
+                icon,
+                icon_color,
                 label: title.clone(),
                 color,
                 enabled: true,
@@ -508,8 +523,12 @@ const TAB_OVERFLOW_MENU_MAX_HEIGHT: f32 = 320.0;
 /// tab 那行永远描边、其它行只有真悬停时才短暂显形,两种视觉规则混在一起,
 /// 看着像"hover 行为没统一"——一个格子的高亮到底是不是跟着鼠标走,行与行
 /// 之间应该一致)。`entry.active` 仍然传给 `tab_label` 控制标题文字颜色
-/// (CREAM vs 悬停插值的 DIM→GOLD),只是不再额外叠一个背景框,当前 tab
-/// 靠文字颜色就能认出来。
+/// (CREAM vs 悬停插值的 DIM→GOLD),不叠背景框;当前 tab 改用标题前固定
+/// 图标列里的 `>`(`chevron-right`,CREAM)来认(2026-09 用户要求)——所有行
+/// 都给 `>` 留一个固定宽度的列,选中行画出来、未选中行留空,文字因此始终
+/// 左对齐到同一 x,选中行不会被图标右推错位(原生版 `tab_overflow_items`
+/// 只给选中行 `icon: Some(ChevronRight)`,未选中行 `icon: None`,靠渲染端
+/// 无条件预留图标列走同一对齐口径)。
 ///
 /// 悬浮定位:向下弹,手法同 `project_add_menu_popup`/`todo_calendar_overlay`——
 /// `padding.top/left` 直接钉到锚点,钳一次 x/y 防止超出窗口右/下边缘(高度
@@ -562,7 +581,29 @@ where
     let mut rows: Vec<Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>> = Vec::new();
     for entry in entries {
         let idx = entry.index;
-        let label = tab_label(entry.prefix, entry.title, entry.active, 0.0, row_max_w);
+        // 固定宽度的 `>` 图标列:选中行画 CREAM 的 chevron、未选中行留空
+        // (`Space`),但两行都占同一列宽,文字由此左对齐到同一 x(与原生
+        // `tab_overflow_items` 只给选中行塞 `icon: Some(ChevronRight)`、
+        // 未选中行 `icon: None`、渲染端无条件预留图标列的口径一致);列宽
+        // 统一从标题预算里扣掉,避免长标题被裁。
+        let chevron_w = byteui::theme::icon_size::row() + byteui::theme::geometry::menu_gap();
+        let label_max_w = (row_max_w - chevron_w).max(0.0);
+        let label = tab_label(entry.prefix, entry.title, entry.active, 0.0, label_max_w);
+        let marker: Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> = if entry.active {
+            row![icons::view(
+                icons::IconKind::ChevronRight,
+                byteui::theme::icon_size::row(),
+                byteui::theme::color::current().cream,
+            )]
+            .into()
+        } else {
+            iced_widget::Space::new().into()
+        };
+        let label: Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> =
+            row![container(marker).width(Length::Fixed(chevron_w)), label,]
+                .spacing(0)
+                .align_y(iced_widget::core::Alignment::Center)
+                .into();
         let close_color = byteui::theme::color::current().dim;
         let (select, close) = tabs::tab_core(tabs::TabCoreArgs {
             content: label,
@@ -649,6 +690,34 @@ mod tests {
         };
         assert_eq!(color_at(0), byteui::theme::color::current().body);
         assert_eq!(color_at(1), byteui::theme::color::current().cream);
+    }
+
+    /// 只有选中行带 `chevron-right` 图标(CREAM)、未选中行 `icon: None`
+    /// 不画箭头(2026-09 用户反馈:没选中的项不要显示 `>`);文字对齐由渲染端
+    /// 无条件预留图标列保证,这里钉住"数据层只给选中行塞图标"的口径。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn tab_overflow_items_only_active_row_carries_chevron() {
+        let entries = vec![
+            (0usize, "a".to_string(), false),
+            (1usize, "b".to_string(), true),
+        ];
+        let items = tab_overflow_items(&entries, |idx| idx);
+        let row_at = |i: usize| match &items[i] {
+            crate::chrome::native_menu::Item::Entry {
+                icon, icon_color, ..
+            } => (*icon, *icon_color),
+            crate::chrome::native_menu::Item::Separator => panic!("expected entry"),
+        };
+        let cream = byteui::theme::color::current().cream;
+        let (icon0, color0) = row_at(0);
+        let (icon1, color1) = row_at(1);
+        // 未选中行不画箭头:icon 与 icon_color 都应是 None。
+        assert_eq!(icon0, None);
+        assert_eq!(color0, None);
+        // 选中行画 CREAM 的 `>`。
+        assert_eq!(icon1, Some(icons::IconKind::ChevronRight));
+        assert_eq!(color1, Some(cream));
     }
 
     #[cfg(target_os = "macos")]

@@ -15,16 +15,17 @@
 //!   接受任意前置元素(图标/指示点/复选框…)+ 自定义文字色 + 可选点击/锁定;
 //!   `item_row_fill` 为整行撑满(`Fill`)的版本(窄面板内选择器用)。三者统一
 //!   `menu_pad_v/h` 内外边距 + `menu_gap` 图标↔文字间距;hover/pressed →
-//!   `TAB_HOVER` 底色 + 圆角 4。
+//!   `TAB_HOVER` 底色 + 圆角 6,高亮矩形左右各再内缩 `menu_hover_inset`
+//!   (比分隔线用的 `menu_pad_h` 小,于是高亮比分隔线略长、文字四周都留边距)。
 //! - 锁定 `item_locked`/`msg: None`: 置灰且不可点、hover 不高亮。
-//! - 分组 `separator`: 一条 1px `BORDER` 分隔线。
+//! - 分组 `separator`: 一条 1px `BORDER` 分隔线,左右各内缩 `menu_pad_h`。
 //!
 //! 所有原语对消息类型 `Msg` 泛型化,任何面板的 `Message` 都能直接复用,
 //! 不再为每个面板各写一份 `menu_item`。
 
 use crate::theme;
 use byteui::interaction::icons;
-use iced_widget::core::{Border, Color, Element, Length, Shadow, Vector};
+use iced_widget::core::{Border, Color, Element, Length, Padding, Shadow, Vector};
 use iced_widget::{Stack, button, column, container, row, text};
 
 /// macOS 原生右键菜单的高亮/命中区是较大的圆角矩形(而非直角),`item`/
@@ -125,8 +126,20 @@ pub(crate) fn icon_leading<'a, Msg: 'a>(
 /// 菜单项之间的细分隔线:1px `BORDER` 高度,宽同菜单常宽(与 macOS 系统菜单
 /// 分组线同款)。
 pub fn separator<'a, Msg: 'a>() -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {
-    container(byteui::layout::divider::horizontal())
+    // 左右各让开 `menu_pad_h`——比 hover 高亮的 `menu_hover_inset` 多一截,
+    // 分隔线因此比高亮矩形略短(2026-09 用户口径),与原生菜单
+    // `separator_view` 的留白量同一数值。
+    let divider: Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> =
+        container(byteui::layout::divider::horizontal())
+            .width(Length::Fill)
+            .into();
+    container(divider)
         .width(Length::Fixed(byteui::theme::geometry::menu_item_width()))
+        .padding(Padding {
+            left: byteui::theme::geometry::menu_pad_h(),
+            right: byteui::theme::geometry::menu_pad_h(),
+            ..Padding::default()
+        })
         .into()
 }
 
@@ -184,8 +197,9 @@ pub fn shell_frosted<'a, Msg: 'a>(
 }
 
 /// 菜单单项按钮的通用样式接线:透明底(透出容器底色)、文字 `base_color`、
-/// hover/pressed 切 `TAB_HOVER` 底 + 圆角 4。`Some(msg)` 挂 `on_press`,
-/// `None` 表示锁定/置灰项(不可点、不高亮)。
+/// hover/pressed 切 `TAB_HOVER` 底 + `MENU_HOVER_RADIUS` 圆角,高亮矩形再
+/// 左右各内缩 `menu_hover_inset`(见 `menu.rs` 模块头)。`Some(msg)` 挂
+/// `on_press`,`None` 表示锁定/置灰项(不可点、不高亮)。
 fn menu_button<'a, Msg: 'a + Clone>(
     content: iced_widget::Row<'a, Msg, iced_widget::Theme, iced_renderer::Renderer>,
     base_color: Color,
@@ -196,12 +210,14 @@ fn menu_button<'a, Msg: 'a + Clone>(
         .spacing(byteui::theme::geometry::menu_gap())
         .align_y(iced_widget::core::Alignment::Center);
     let enabled = msg.is_some();
+    // 按钮自身左右 padding 扣掉外侧 `menu_hover_inset`,文字位置仍落在
+    // `menu_pad_h`(与原生菜单 `MenuItemView` 的文字起点同一口径);省下的
+    // inset 由外层容器承担,成为高亮矩形到菜单内容边缘的左右留白。
+    let inset = byteui::theme::geometry::menu_hover_inset();
+    let pad_h = (byteui::theme::geometry::menu_pad_h() - inset).max(0.0);
     let btn = button(content)
-        .width(width)
-        .padding([
-            byteui::theme::geometry::menu_pad_v(),
-            byteui::theme::geometry::menu_pad_h(),
-        ])
+        .width(Length::Fill)
+        .padding([byteui::theme::geometry::menu_pad_v(), pad_h])
         .style(move |_t: &iced_widget::Theme, s: button::Status| {
             let base = button::Style {
                 background: None,
@@ -225,8 +241,20 @@ fn menu_button<'a, Msg: 'a + Clone>(
                 base
             }
         });
-    match msg {
+    let btn: Element<'_, Msg, iced_widget::Theme, iced_renderer::Renderer> = match msg {
         Some(msg) => btn.on_press(msg.clone()).into(),
         None => btn.into(),
-    }
+    };
+    // 左右内缩:外层容器透明底、左右各 padding `menu_hover_inset` 推开内层
+    // 按钮,hover 高亮矩形只画在按钮上,于是高亮左右缘相对菜单内容边缘各
+    // 内移一道缝隙(macOS 原生右键菜单同款圆角内缩观感),文字因按钮自身的
+    // padding 而落在这块高亮内部、四周都有边距。
+    container(btn)
+        .width(width)
+        .padding(Padding {
+            left: inset,
+            right: inset,
+            ..Padding::default()
+        })
+        .into()
 }

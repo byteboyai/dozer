@@ -171,10 +171,11 @@ fn entry_row_height() -> f64 {
     content_height + pad_v * 2.0
 }
 
-/// 分隔线:1px `BORDER` 色横线,左右各让开 `row_geometry` 的 margin——同
-/// `menu_item_view::MenuItemView` 的 hover 高亮共享同一条留白规则,不用
-/// `NSMenuItem::separatorItem()` 的系统默认样式(那条线的内边距是系统
-/// 控制的,跟自定义高亮的留白量对不上)。
+/// 分隔线:1px `BORDER` 色横线,左右各让开 `row_geometry` 的 margin
+/// (`menu_pad_h`)——比 `menu_item_view::MenuItemView` 的 hover 高亮(让开
+/// `menu_hover_inset`)更短一截,于是高亮矩形比分隔线略长(2026-09 用户
+/// 口径)。不用 `NSMenuItem::separatorItem()` 的系统默认样式(那条线的
+/// 内边距是系统控制的,跟自定义高亮的留白量对不上)。
 fn separator_view(mtm: objc2::MainThreadMarker) -> Retained<NSView> {
     let (row_width, margin) = row_geometry();
     let container = NSView::initWithFrame(
@@ -345,10 +346,12 @@ mod menu_item_view {
     /// 高亮——`NSMenuItem` 挂了自定义 `view` 后 AppKit 不会自动画选中态,
     /// 必须自己维护这个状态并据此改层背景色,不能只靠 `setNeedsDisplay`
     /// (没有 `drawRect:` 覆写,那样什么也不会变)。
-    /// `highlight` 是整行自身图层之上的一块独立子图层,左右各留出一截
-    /// margin 再画背景色——不能直接用整行自身的根图层(那样高亮会顶到
-    /// 行的左右边缘,贴着菜单外框,跟 iced 版菜单/系统原生菜单的"高亮块比
-    /// 整行窄一圈"观感不一致)。
+    /// `highlight` 是整行自身图层之上的一块独立子图层,左右各留出
+    /// `menu_hover_inset` 的 margin 再画背景色——不能直接用整行自身的根图层
+    /// (那样高亮会顶到行的左右边缘,贴着菜单外框,跟 iced 版菜单/系统原生
+    /// 菜单的"高亮块比整行窄一圈"观感不一致)。这块 margin 比文字/分隔线的
+    /// `menu_pad_h` 小,高亮矩形因此比分隔线略长、且与文字之间留出一圈左右
+    /// 边距(见 `new` 里的说明)。
     pub struct Ivars {
         index: usize,
         enabled: bool,
@@ -435,9 +438,12 @@ mod menu_item_view {
             // 菜单超出窗口。
             let text_height = font_size + 4.0;
             let row_height = super::entry_row_height();
-            // hover 高亮块左右各让开一截,和 `super::separator_view` 的分隔线
-            // 共用同一份 `row_geometry()` margin,保证两者左右留白严格一致。
-            let highlight_margin = pad_h;
+            // hover 高亮块左右各让开 `menu_hover_inset`——比文字/分隔线的
+            // `menu_pad_h` 小,于是高亮矩形比分隔线略长,且高亮左/右缘与文字
+            // 之间留出 `menu_pad_h - menu_hover_inset` 的边距(2026-09 用户
+            // 反馈:原先高亮与分隔线同宽、左缘又和文字起点重合,文字紧贴高亮
+            // 边缘、没有左右边距)。
+            let highlight_margin = byteui::theme::geometry::menu_hover_inset() as f64;
             let highlight = CALayer::new();
             highlight.setFrame(NSRect::new(
                 NSPoint::new(highlight_margin, 0.0),
@@ -476,15 +482,20 @@ mod menu_item_view {
             this.addTrackingArea(&tracking);
 
             let mut x = pad_h;
+            // 无论该行是否真的有图标,都给图标列预留 `icon_px + gap` 宽位,
+            // 让文字起点恒等于 `pad_h + icon_px + gap`(macOS 原生菜单同款:
+            // 图标是固定左列,无图标的项文字也对齐到同一列)。tab 溢出菜单
+            // 借此把"选中项前置 `>`"落进这个固定列,未选中行不画图标、文字
+            // 仍与选中行对齐,不会出现选中行被箭头右推错位。
+            x += icon_px + gap;
             if let Some(icon) = icon {
                 let icon_y = (row_height - icon_px) / 2.0;
                 let image_view = NSImageView::initWithFrame(
                     NSImageView::alloc(mtm),
-                    NSRect::new(NSPoint::new(x, icon_y), NSSize::new(icon_px, icon_px)),
+                    NSRect::new(NSPoint::new(pad_h, icon_y), NSSize::new(icon_px, icon_px)),
                 );
                 image_view.setImage(Some(&icon));
                 this.addSubview(&image_view);
-                x += icon_px + gap;
             }
             let text_y = (row_height - text_height) / 2.0;
             let text = NSTextField::initWithFrame(

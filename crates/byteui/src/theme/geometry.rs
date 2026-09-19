@@ -56,6 +56,10 @@ pub struct GeometryTokens {
     pub menu_pad_v: f32,
     /// 菜单项左右内边距（设计基准 14，对齐 macOS 原生右键菜单的横向留白）。
     pub menu_pad_h: f32,
+    /// 菜单项 hover/选中高亮矩形的左侧内缩（设计基准 6）：高亮不再贴住
+    /// 菜单内容左缘，留出一道缝隙（macOS 原生右键菜单同款圆角内缩观感）。
+    /// 仅作用于高亮矩形的左缘，右缘仍对齐菜单内容右缘。
+    pub menu_hover_inset: f32,
     /// H0 项目中心左栏固定宽（设计基准 248，Figma 同值）。
     pub h0_sidebar_width: f32,
 }
@@ -94,6 +98,7 @@ impl GeometryTokens {
             menu_gap: 8.0,
             menu_pad_v: 5.0,
             menu_pad_h: 14.0,
+            menu_hover_inset: 6.0,
             h0_sidebar_width: 248.0,
         }
     }
@@ -276,6 +281,11 @@ pub fn menu_pad_h() -> f32 {
     current().menu_pad_h * icon_size::scale()
 }
 
+/// 菜单项 hover/选中高亮矩形的左侧内缩，已含全局 scale。
+pub fn menu_hover_inset() -> f32 {
+    current().menu_hover_inset * icon_size::scale()
+}
+
 /// H0 项目中心左栏固定宽（逻辑像素），已含全局 scale。
 pub fn h0_sidebar_width() -> f32 {
     current().h0_sidebar_width * icon_size::scale()
@@ -318,6 +328,7 @@ mod tests {
         assert_eq!(t.menu_gap, 8.0);
         assert_eq!(t.menu_pad_v, 5.0);
         assert_eq!(t.menu_pad_h, 14.0);
+        assert_eq!(t.menu_hover_inset, 6.0);
         assert_eq!(t.h0_sidebar_width, 248.0);
     }
 

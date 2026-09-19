@@ -272,7 +272,7 @@ pub(crate) fn agent_picker_toggle_button<'a>(
 }
 
 /// `agent_picker_popup` 的原生菜单版本,纯数据组装——八个选项与旧版完全
-/// 一致(六 agent + 分隔线 + Git Shell/纯 Shell),agent 图标用各自专属色
+/// 一致(六 agent + 分隔线 + Git Shell/OS Shell),agent 图标用各自专属色
 /// (`agent_dot_color`)、文字用 BODY。仅 macOS 编译,非 mac 平台继续走
 /// `agent_picker_popup` 的 iced 弹层。
 #[cfg(target_os = "macos")]
@@ -293,12 +293,15 @@ pub(crate) fn agent_picker_spec() -> MenuSpec<Message> {
     ];
     let shells: [(&str, PickerLaunch); 2] = [
         ("Git Shell", PickerLaunch::Git),
-        ("纯 Shell", PickerLaunch::Agent(None)),
+        ("OS Shell", PickerLaunch::Agent(None)),
     ];
     let mk = |label: &str, launch: PickerLaunch| {
         let (icon, icon_color) = match launch {
             PickerLaunch::Agent(Some(kind)) => (agent_icon(kind), agent_dot_color(kind)),
-            PickerLaunch::Agent(None) => (IconKind::Terminal, byteui::theme::color::current().body),
+            PickerLaunch::Agent(None) => (
+                IconKind::SquareTerminal,
+                byteui::theme::color::current().body,
+            ),
             PickerLaunch::Git => (IconKind::GitBranch, byteui::theme::color::current().body),
         };
         MenuSpecItem::entry_tinted(icon, icon_color, label, Message::AgentPickerSelect(launch))
@@ -315,7 +318,7 @@ pub(crate) fn agent_picker_spec() -> MenuSpec<Message> {
 /// Agent 选择菜单浮层:固定挂在窗口右上角("＋"按钮下方——该按钮
 /// 就在最靠右的 Agent 面板头部,近似等于窗口右上角),八个选项按标签
 /// 首字母顺序排列:Claude/CodeBuddy/Codex/Git Shell/Kilo/OpenCode/
-/// v8agent/纯 Shell(验收反馈,2026-08-21;此前是手写的固定顺序,不便
+/// v8agent/OS Shell(验收反馈,2026-08-21;此前是手写的固定顺序,不便
 /// 找到目标 agent)。跟项目树右键菜单(`context_menu_popup`)同款按钮
 /// 样式,但不需要像素坐标定位——同 `delete_confirm_popup` 一样固定
 /// padding 摆位。`ws.agent_picker_open` 为假时返回空视图,调用方
@@ -326,7 +329,7 @@ pub(crate) fn agent_picker_popup(
     if !ws.agent_picker_open {
         return column![].into();
     }
-    // 常规 agent 按标签首字母排序。"Git Shell" / "纯 Shell" 归到菜单最底部,
+    // 常规 agent 按标签首字母排序。"Git Shell" / "OS Shell" 归到菜单最底部,
     // 与上方 agent 用 1px 分割线(`crate::chrome::menu::separator`)分组隔开。
     // 菜单内容组装收拢到 `agent_picker_spec()`,这里只做 iced 转换。
     let list = crate::menu_spec::to_iced(
