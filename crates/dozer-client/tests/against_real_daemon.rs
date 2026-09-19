@@ -443,3 +443,22 @@ async fn set_todo_category_roundtrip() {
     let cleared = client.set_todo_category(todo.id, None).await.unwrap();
     assert_eq!(cleared.category_id, None);
 }
+
+#[tokio::test]
+async fn shutdown_daemon_with_no_sessions_succeeds() {
+    let (sock, _registry, _guard) = start_daemon().await;
+    let client = Client::new(sock.clone());
+    assert!(client.list().await.unwrap().is_empty());
+
+    client.shutdown_daemon().await.unwrap();
+
+    let mut removed = false;
+    for _ in 0..100 {
+        if !sock.exists() {
+            removed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(removed, "daemon 应在 shutdown_daemon() 成功后退出并清理 socket");
+}

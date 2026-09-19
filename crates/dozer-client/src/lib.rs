@@ -7,6 +7,7 @@ use dozer_core::protocol::{
     SessionSummaryPayload, TodoInfo, TurnRecord, UsagePayload, decode_line, encode_line,
 };
 use std::path::PathBuf;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
@@ -135,6 +136,17 @@ impl Client {
             Reply::Ok => Ok(()),
             other => bail!("意外应答: {other:?}"),
         }
+    }
+
+    /// 请求 dozerd 对所有存活会话收尾后退出。内部等待时长与 daemon 侧
+    /// 收尾耗时挂钩(最长约 60s),外层包一个 90s 超时兜底纯通信层面的
+    /// 异常(进程卡死、socket 异常等),超时视为失败,不代表 daemon 一定
+    /// 没停。
+    pub async fn shutdown_daemon(&self) -> Result<()> {
+        let outcome =
+            tokio::time::timeout(Duration::from_secs(90), self.roundtrip(&Request::Shutdown))
+                .await;
+        interpret_shutdown_reply(outcome)
     }
 
     /// 触发某 cwd 下缺失总结会话的批量补录(项目"修复"按钮用,spec
@@ -695,3 +707,58 @@ impl Client {
         Ok((snapshot, next, rx))
     }
 }
+
+/// `shutdown_daemon()` 的超时/协议错误/成功三分支映射,拆成纯函数是为了
+/// 不用真的等 90s 或起一个假 UDS server 就能测到每条分支(`Client`::
+/// `shutdown_daemon` 本身只做一次 `tokio::time::timeout` 包裹,逻辑全在
+/// 这里)。
+fn interpret_shutdown_reply(
+    outcome: std::result::Result<Result<Reply>, tokio::time::error::Elapsed>,
+) -> Result<()> {
+    match outcome {
+        Err(_) => Err(anyhow!("等待 dozerd 停止超时")),
+        Ok(Err(e)) => Err(e),
+        Ok(Ok(Reply::Ok)) => Ok(()),
+        Ok(Ok(other)) => Err(anyhow!("意外应答: {other:?}")),
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+
+    #[test]
+    fn interpret_shutdown_reply_ok_maps_to_success() {
+        let outcome: std::result::Result<Result<Reply>, tokio::time::error::Elapsed> =
+            Ok(Ok(Reply::Ok));
+        assert!(interpret_shutdown_reply(outcome).is_ok());
+    }
+
+    #[test]
+    fn interpret_shutdown_reply_unexpected_reply_is_error() {
+        let outcome: std::result::Result<Result<Reply>, tokio::time::error::Elapsed> =
+            Ok(Ok(Reply::Sessions { sessions: vec![] }));
+        assert!(interpret_shutdown_reply(outcome).is_err());
+    }
+
+    #[test]
+    fn interpret_shutdown_reply_inner_error_propagates() {
+        let outcome: std::result::Result<Result<Reply>, tokio::time::error::Elapsed> =
+            Ok(Err(anyhow!("daemon 错误: dozerd 正在停止中")));
+        let err = interpret_shutdown_reply(outcome).unwrap_err();
+        assert!(err.to_string().contains("正在停止中"));
+    }
+
+    #[tokio::test]
+    async fn interpret_shutdown_reply_timeout_is_error() {
+        let elapsed = tokio::time::timeout(
+            std::time::Duration::from_millis(0),
+            std::future::pending::<Result<Reply>>(),
+        )
+        .await
+        .unwrap_err();
+        let err = interpret_shutdown_reply(Err(elapsed)).unwrap_err();
+        assert!(err.to_string().contains("超时"));
+    }
+}
+
