@@ -1822,12 +1822,27 @@ impl App {
                 // 参数(见 preview::flyfish_url),不重载不会跟着变。两个预览
                 // 面板(Files/Project)各推进各自 wry tab 的 reload_nonce。
                 let theme_changed = matches!(msg, settings::Message::ThemeSelected(_));
+                // 停止/重新启动 dozerd 的结果要顺带更新 `daemon_error`——
+                // 这是"daemon 连不上"的整程序共享状态(`app/view.rs`/
+                // `term/terminal.rs` 已经在读),不新建 UI 组件(spec「复用
+                // App.daemon_error」)。跟 `theme_changed` 一样,要在
+                // `msg` 被 move 进 `settings::update` 之前取值。
+                let stop_succeeded = matches!(msg, settings::Message::AdvancedStopResult(Ok(())));
+                let restart_succeeded =
+                    matches!(msg, settings::Message::AdvancedRestartResult(Ok(())));
+                let client = self.client.clone();
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
                 let emit = move |m| {
                     let _ = proxy.send_event(Message::Settings(m));
                 };
-                settings::update(&mut self.settings, msg, &handle, emit);
+                settings::update(&mut self.settings, msg, &client, &handle, emit);
+                if stop_succeeded {
+                    self.daemon_error = Some("dozerd 已停止,部分功能不可用".to_string());
+                }
+                if restart_succeeded {
+                    self.daemon_error = None;
+                }
                 if theme_changed && let Some(ws) = self.active_workspace_mut() {
                     ws.preview.reload_all_webviews_for_theme();
                     ws.project_preview.reload_all_webviews_for_theme();
