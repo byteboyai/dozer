@@ -84,10 +84,12 @@ Shutdown,
 /// 请求 dozerd 对所有存活会话收尾后退出。内部等待时长与 daemon 侧收尾
 /// 耗时挂钩(最长约 60s),外层包一个 90s 超时兜底纯通信层面的异常
 /// (进程卡死、socket 异常等),超时视为失败,不代表 daemon 一定没停。
+/// `roundtrip` 本身已经在收到 `Reply::Error` 时转成 `Err`,这里不需要
+/// 再单独匹配一次。
 pub async fn shutdown_daemon(&self) -> Result<()> {
-    match tokio::time::timeout(std::time::Duration::from_secs(90), self.roundtrip(&Request::Shutdown))
+    match tokio::time::timeout(Duration::from_secs(90), self.roundtrip(&Request::Shutdown))
         .await
-        .context("等待 dozerd 停止超时")??
+        .map_err(|_| anyhow!("等待 dozerd 停止超时"))??
     {
         Reply::Ok => Ok(()),
         other => bail!("意外应答: {other:?}"),
@@ -106,15 +108,18 @@ pub async fn shutdown_daemon(&self) -> Result<()> {
 - **默认态**:说明文字("停止后所有正在运行的 agent 会话会结束并生成总结,可随时重新启动") + 按钮"停止 dozerd"。
 - **确认态**:点击后弹出复用现有确认弹窗组件,标题"停止 dozerd?",正文动态插入当前存活会话数(打开确认弹窗前先发一次 `ListSessions` 取数):"这会结束当前 N 个正在运行的 agent 会话并生成总结(可能需要约 1 分钟)。"确认/取消两个按钮。若 N 为 0,正文改为"当前没有正在运行的会话,dozerd 会直接停止。"
 - **停止中态**:按钮禁用,文案"停止中…(等待会话总结,最长约 1 分钟)",调用 `shutdown_daemon()`。
-- **已停止态**:按钮文案变为"重新启动 dozerd",同时(见下)全局提示条出现。
+- **已停止态**:按钮文案变为"重新启动 dozerd",同时(见下)`daemon_error` 提示出现。
 - **重启中态**:点击"重新启动 dozerd"后按钮短暂禁用、文案"启动中…",调用现有 `runtime::spawn_dozerd()` 后复用现有 `ensure_daemon()` 那套探活轮询确认真正起来了,成功后回到默认态、提示条消失;探活多次失败给出内联报错但保留"重新启动"按钮可再次点击。
 - **失败态**(`shutdown_daemon()` 返回 Err,通常是 90s 通信超时):按钮恢复默认态可点击,内联展示"停止请求未确认完成,dozerd 可能仍在运行或已经停止,可以重试或手动检查",不擅自假设成功或失败。
 
-### 全局提示条
+### 复用 `App.daemon_error`
 
-全仓没有现成的"全局 toast/banner"组件,唯一跨所有项目页签共享的 App 级常驻状态展示是 `crates/dozer-app/src/extensions/footbar.rs`(`AppState`,现有 CPU/RAM/网速/Proxy 那条系统信息条)。本设计在这条 footbar 里新增一段"dozerd 已停止,部分功能不可用"文案(用现有的告警色,参考 CPU/RAM 超阈值时的既有配色处理),而不是新造一套独立的全局提示条组件——挂载点复用现有基础设施,不新增一个只为本次单一场景服务的 UI 组件。提示条本身不提供操作入口(操作入口只在 Settings 弹窗里),避免同一个功能有两个不同位置的重启按钮造成状态不一致。
+仓库已经有一个专门表达"daemon 连不上"的 App 级共享状态:`App.daemon_error: Option<String>`(`crates/dozer-app/src/app/app.rs:266`),其文档注释明确写着这是"整个程序共享的状态"。它目前有两处渲染:没打开任何项目时的空态提示(`app/view.rs:72`)与有工作区时终端面板顶部的警示条(`term/terminal.rs:63`);"打开项目失败""删除项目失败"等既有场景都是直接 `self.daemon_error = Some(...)` 复用这套展示,不新建组件。本设计同样复用它,不新造 footbar 段落或独立提示条组件:
 
-判断"是否显示"的状态来源:成功收到 `shutdown_daemon()` 的 `Reply::Ok` 后置位 GUI 本地的"daemon 已知已停止"标记,`ensure_daemon()` 探活成功后清除。若 `dozer-app` 启动时/常规探活发现 `dozerd` 连不上(例如用户在终端手动 kill 掉的),同样应该置位这个标记,而不是只在走 Settings 按钮这条路径时才生效——即这个标记的语义是"当前已知连不上 daemon",不专属于本次新增的停止操作。
+- 停止成功后:`self.daemon_error = Some("dozerd 已停止,部分功能不可用".into())`。
+- 重新启动并探活成功后:`self.daemon_error = None`。
+
+**不做的事**:不引入一套主动心跳/探活机制去检测"用户在终端手动 kill 了 dozerd"这类本设计之外发生的断连——现状 `daemon_error` 只在几个具体失败路径(开项目失败、删项目失败、启动探活失败)里被动设置,本设计只新增"停止/重新启动"这两个动作各自对这个字段的读写,不扩大它的置位来源范围(YAGNI)。
 
 ### 其它面板
 
@@ -142,7 +147,6 @@ Agent 会话、文件树、Git Log、用量统计等面板不做代码改动—�
 - GUI 侧单测:Settings"高级"分区按钮的状态机(默认→确认中→停止中→已停止→重启中→默认,以及失败态的回退),风格同其它 extension 模块现有的 update/state 测试。
 - 人工验收清单:
   1. 开 2-3 个不同 agent 的会话,点"停止 dozerd",确认弹窗文案里的会话数正确,确认后等待期间其它面板仍可正常浏览(只是新建会话被挡),完成后检查每个会话确实生成了总结记录。
-  2. 停止完成后确认全局提示条出现,依赖 dozerd 的面板显示预期的"连接失败"空态。
-  3. 点"重新启动 dozerd",确认真正拉起且提示条消失。
-  4. 手动在终端 `kill` 掉 `dozerd` 进程(不经过 Settings 按钮),确认全局提示条依然会出现(验证"标记来源不专属于按钮路径"这条设计)。
-  5. Quit Dozer 菜单退出 GUI 前后,用 `ps`/`Activity Monitor` 确认 `dozerd` 进程原样存活,未被本次改动意外影响。
+  2. 停止完成后确认 `daemon_error` 提示出现(终端面板顶部警示条/空态提示,视当前是否有打开的项目而定),依赖 dozerd 的面板显示预期的"连接失败"空态。
+  3. 点"重新启动 dozerd",确认真正拉起且 `daemon_error` 提示消失。
+  4. Quit Dozer 菜单退出 GUI 前后,用 `ps`/`Activity Monitor` 确认 `dozerd` 进程原样存活,未被本次改动意外影响。
