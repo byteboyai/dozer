@@ -13,3 +13,4 @@ tracing.workspace = true
 [dev-dependencies]
 dozerd = { path = "../dozerd" }
 uuid.workspace = true
+tempfile = "3"

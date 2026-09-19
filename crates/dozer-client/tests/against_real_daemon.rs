@@ -24,9 +24,11 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
     let backfill_registry = Arc::new(dozerd::session_summary_backfill::BackfillRegistry::new());
     let todos = Arc::new(dozerd::todo::TodoStore::new(&db).unwrap());
     let categories = Arc::new(dozerd::todo_category::CategoryStore::new(&db).unwrap());
+    let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
     tokio::spawn(async move {
         dozerd::server::serve(
             &s,
+            ide_lock_dir.path().to_path_buf(),
             r,
             projects,
             bookmarks,
@@ -142,15 +144,19 @@ async fn reader_task_exits_when_receiver_dropped() {
         )
         .await
         .unwrap();
+    // `CreateSession` 会为 ide_bridge 起停监听 spawn 一个常驻的退出监听器
+    // 并持有 `s.subscribe()`（见 server.rs `Request::CreateSession` 分支），
+    // 因此空闲会话的基线订阅数恒为 1，而不是 0。
     let session = registry.get(&info.id).expect("session just created");
-    assert_eq!(session.subscriber_count(), 0, "尚未 attach，不应有订阅");
+    let baseline = session.subscriber_count();
+    assert_eq!(baseline, 1, "CreateSession 的退出监听器应持有一个订阅");
 
     for round in 0..20 {
         let (_snap, _next, rx) = c.attach(&info.id, 0).await.unwrap();
         assert_eq!(
             session.subscriber_count(),
-            1,
-            "round {round}: attach 应产生一个订阅"
+            baseline + 1,
+            "round {round}: attach 应产生一个额外订阅"
         );
         drop(rx); // 模拟关闭 tab：不再有人消费 TermEvent
 
@@ -159,7 +165,7 @@ async fn reader_task_exits_when_receiver_dropped() {
         // handle_conn 在下一次 next_line() 收到 EOF 退出 → sub 被 drop。
         let mut released = false;
         for _ in 0..100 {
-            if session.subscriber_count() == 0 {
+            if session.subscriber_count() == baseline {
                 released = true;
                 break;
             }
