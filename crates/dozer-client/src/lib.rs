@@ -144,8 +144,7 @@ impl Client {
     /// 没停。
     pub async fn shutdown_daemon(&self) -> Result<()> {
         let outcome =
-            tokio::time::timeout(Duration::from_secs(90), self.roundtrip(&Request::Shutdown))
-                .await;
+            tokio::time::timeout(Duration::from_secs(90), self.roundtrip(&Request::Shutdown)).await;
         interpret_shutdown_reply(outcome)
     }
 
@@ -761,4 +760,3 @@ mod shutdown_tests {
         assert!(err.to_string().contains("超时"));
     }
 }
-

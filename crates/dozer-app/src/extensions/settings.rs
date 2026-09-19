@@ -443,22 +443,21 @@ fn provider_row(
     }
 }
 
-fn advanced_row(state: &AdvancedState) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+fn advanced_row(
+    state: &AdvancedState,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = byteui::theme::color::current();
-    let hint = |s: String| {
-        text(s)
-            .size(byteui::theme::font::label())
-            .color(colors.dim)
-    };
-    let error_line = |e: &Option<String>| -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-        match e {
-            Some(msg) => text(msg.clone())
-                .size(byteui::theme::font::label())
-                .color(colors.red)
-                .into(),
-            None => Space::new().into(),
-        }
-    };
+    let hint = |s: String| text(s).size(byteui::theme::font::label()).color(colors.dim);
+    let error_line =
+        |e: &Option<String>| -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+            match e {
+                Some(msg) => text(msg.clone())
+                    .size(byteui::theme::font::label())
+                    .color(colors.red)
+                    .into(),
+                None => Space::new().into(),
+            }
+        };
     match state {
         AdvancedState::Idle { error } => {
             let btn = button(text("停止 dozerd").size(byteui::theme::font::body()))
@@ -509,8 +508,10 @@ fn advanced_row(state: &AdvancedState) -> Element<'_, Message, iced_widget::Them
             .into()
         }
         AdvancedState::Stopping => {
-            let btn = button(text("停止中…(等待会话总结,最长约 1 分钟)").size(byteui::theme::font::body()))
-                .padding([6, 14]);
+            let btn = button(
+                text("停止中…(等待会话总结,最长约 1 分钟)").size(byteui::theme::font::body()),
+            )
+            .padding([6, 14]);
             row![Space::new().width(Length::Fill), btn].into()
         }
         AdvancedState::Stopped { error } => {
@@ -870,8 +871,14 @@ mod tests {
             ConnectState::NotConnected,
             ConnectState::NotConnected,
         );
-        assert!(!apply_sync_message(&mut state, &Message::AdvancedStopClicked));
-        assert!(!apply_sync_message(&mut state, &Message::AdvancedStopConfirm));
+        assert!(!apply_sync_message(
+            &mut state,
+            &Message::AdvancedStopClicked
+        ));
+        assert!(!apply_sync_message(
+            &mut state,
+            &Message::AdvancedStopConfirm
+        ));
         assert!(!apply_sync_message(
             &mut state,
             &Message::AdvancedRestartClicked

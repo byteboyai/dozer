@@ -125,7 +125,10 @@ async fn create_session_rejected_while_draining() {
     let Reply::Error { message } = c_probe.recv().await else {
         panic!("draining 期间 CreateSession 应该被拒绝")
     };
-    assert!(message.contains("停止"), "错误文案应说明正在停止: {message}");
+    assert!(
+        message.contains("停止"),
+        "错误文案应说明正在停止: {message}"
+    );
 
     let mut c_finish = Client::connect(&sock).await;
     c_finish
@@ -160,7 +163,10 @@ async fn duplicate_shutdown_rejected_while_draining() {
     let Reply::Error { message } = c_dup.recv().await else {
         panic!("draining 期间重复 Shutdown 应该被拒绝")
     };
-    assert!(message.contains("停止"), "错误文案应说明正在停止: {message}");
+    assert!(
+        message.contains("停止"),
+        "错误文案应说明正在停止: {message}"
+    );
 
     let mut c_finish = Client::connect(&sock).await;
     c_finish
