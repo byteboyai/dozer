@@ -320,7 +320,19 @@ async fn drain_all_sessions(
     timeout: std::time::Duration,
     poll_interval: std::time::Duration,
 ) {
-    let ids: Vec<String> = registry.list().into_iter().map(|info| info.id).collect();
+    // 只收存活会话(spec 2026-09-19 §「实现要点」step 1:"从 `registry` 取
+    // 当前存活会话 id 快照")。`SessionRegistry` 从不摘除已退出的会话,所以
+    // `list()` 里混着 `alive=false` 的死会话——对死会话注入 prompt 没人会
+    // 回应,`finalize_session_summary` 只能干等到超时(生产 60s)才走启发式
+    // 兜底。只要 registry 里有一个从没落过总结的死会话(比如用户关掉过的
+    // 普通 shell tab,`should_summarize_on_close` 只给 agent 会话落总结),
+    // 整个 Shutdown 就会被它拖满 60s。
+    let ids: Vec<String> = registry
+        .list()
+        .into_iter()
+        .filter(|info| info.alive)
+        .map(|info| info.id)
+        .collect();
     let mut handles = Vec::with_capacity(ids.len());
     for id in ids {
         let Some(s) = registry.get(&id) else { continue };
@@ -342,6 +354,30 @@ async fn drain_all_sessions(
     }
     for h in handles {
         let _ = h.await;
+    }
+    kill_remaining_live_sessions(&registry);
+}
+
+/// Shutdown 收尾的最后兜底:把 registry 里仍然存活的会话全部 kill 掉。
+///
+/// 正常情况下 `drain_all_sessions` 已经把快照里的会话都收尾并 kill 了,这里
+/// 扫的是漏网的:一个 `CreateSession` 可能刚好通过了 draining 检查、却在
+/// `drain_all_sessions` 取 `list()` 快照**之后**才把自己插进 registry
+/// (TOCTOU 窗口 ≈ PTY spawn 的几毫秒)。这种会话没人给它落总结也没人 kill
+/// 它,而 dozerd 一退出,它的 PTY 子进程就被 reparent 给 launchd 变成孤儿
+/// agent 进程——正是本功能要消灭的东西(`main.rs` 的 `serve()` 返回后直接
+/// `Ok(())`,没有任何 registry 级别的清理)。
+fn kill_remaining_live_sessions(registry: &SessionRegistry) {
+    for info in registry.list() {
+        if info.alive
+            && let Err(e) = registry.kill(&info.id)
+        {
+            tracing::warn!(
+                error = %e,
+                session_id = %info.id,
+                "Shutdown 兜底 kill 残留存活会话失败"
+            );
+        }
     }
 }
 
@@ -1396,6 +1432,91 @@ mod tests {
         assert!(
             !registry.get(&sid).unwrap().info().alive,
             "超时兜底后应该 kill 掉这个会话"
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_all_sessions_skips_already_dead_sessions() {
+        let registry = Arc::new(crate::registry::SessionRegistry::new());
+        let session = registry
+            .create(crate::session::SessionSpec {
+                name: "test".into(),
+                command: "/bin/sh".into(),
+                args: vec!["-c".into(), "true".into()],
+                cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+                cols: 80,
+                rows: 24,
+                project_id: 1,
+            })
+            .unwrap();
+        let sid = session.id().to_string();
+        // 等这个会话真的死掉。registry 从不摘除已死会话,所以它一定会
+        // 出现在 `list()` 里。
+        for _ in 0..200 {
+            if !registry.get(&sid).unwrap().info().alive {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            !registry.get(&sid).unwrap().info().alive,
+            "前置条件:会话应该已经退出"
+        );
+
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("t.db");
+        let transcripts = Arc::new(crate::transcripts::TranscriptStore::open(&db).unwrap());
+        let session_summaries =
+            Arc::new(crate::session_summary::SessionSummaryStore::open(&db).unwrap());
+
+        let started = std::time::Instant::now();
+        drain_all_sessions(
+            registry,
+            session_summaries,
+            transcripts,
+            std::time::Duration::from_secs(3),
+            std::time::Duration::from_millis(50),
+        )
+        .await;
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(500),
+            "已死会话不可能再落总结,却让它跑满 3s 超时;实际耗时 {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn kill_remaining_live_sessions_kills_live_and_tolerates_dead() {
+        let registry = Arc::new(crate::registry::SessionRegistry::new());
+        let spec = |cmd: &str| crate::session::SessionSpec {
+            name: "test".into(),
+            command: "/bin/sh".into(),
+            args: vec!["-c".into(), cmd.into()],
+            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+            cols: 80,
+            rows: 24,
+            project_id: 1,
+        };
+        let live = registry.create(spec("sleep 30")).unwrap();
+        let live_id = live.id().to_string();
+        let shortlived = registry.create(spec("true")).unwrap();
+        let shortlived_id = shortlived.id().to_string();
+        for _ in 0..200 {
+            if !registry.get(&shortlived_id).unwrap().info().alive {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        kill_remaining_live_sessions(&registry);
+
+        assert!(
+            !registry.get(&live_id).unwrap().info().alive,
+            "残留的存活会话必须被 kill,否则 dozerd 退出后它变孤儿进程"
+        );
+        assert!(
+            !registry.get(&shortlived_id).unwrap().info().alive,
+            "已死会话应该原样容忍,不 panic"
         );
     }
 }

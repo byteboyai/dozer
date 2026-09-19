@@ -1149,7 +1149,7 @@ impl App {
             }
             Message::ProjectCreate(project_create::Message::GoToSettings) => {
                 self.project_create = None;
-                self.settings = Some(settings::State::load());
+                self.settings = Some(settings::State::load(self.daemon_error.as_deref()));
             }
             Message::ProjectCreate(project_create::Message::Done(Ok((
                 project,
@@ -1814,7 +1814,7 @@ impl App {
                 self.pending_preview_zoom = true;
             }
             Message::SettingsOpen => {
-                self.settings = Some(settings::State::load());
+                self.settings = Some(settings::State::load(self.daemon_error.as_deref()));
             }
             Message::Settings(msg) => {
                 // 主题切换要在设置 update(它会 set_scheme 改全局配色)之后,把

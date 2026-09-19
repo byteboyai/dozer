@@ -67,7 +67,16 @@ pub struct State {
 impl State {
     /// 打开设置弹窗时调用——从本地 `git_accounts.json` 重建三家的连接
     /// 展示态(不重新校验 token 有效性,只是回显上次连接成功记下的用户名)。
-    pub fn load() -> State {
+    ///
+    /// `daemon_error` 是 `App.daemon_error`(整程序共享的"daemon 连不上"
+    /// 状态)。每次开 Settings 都会重建一份 `State`,如果 `advanced` 一律从
+    /// `Idle` 起步,用户停止 dozerd 后关窗再开就只剩"停止 dozerd"按钮,
+    /// "重新启动 dozerd"这个入口永久丢失(spec 2026-09-19:"可随时重新
+    /// 启动"),再点一次只会拿到一行连接报错。所以这里按 daemon 当前是否
+    /// 可达推导初值——真相源是可达性,不是上次 UI 停在哪。`ensure_daemon`
+    /// 幂等(daemon 其实活着时 `list()` 立刻成功返回 `Ok`),即便传进来的是
+    /// 过期的 `daemon_error` 也不会误伤。
+    pub fn load(daemon_error: Option<&str>) -> State {
         let accounts = git_accounts::load();
         State {
             github: ConnectState::from_accounts(&accounts, GitProvider::GitHub),
@@ -75,7 +84,7 @@ impl State {
             gitee: ConnectState::from_accounts(&accounts, GitProvider::Gitee),
             suppress_next_blur: false,
             connect_tasks: HashMap::new(),
-            advanced: AdvancedState::Idle { error: None },
+            advanced: advanced_state_for_daemon(daemon_error),
         }
     }
 
@@ -85,6 +94,16 @@ impl State {
             GitProvider::GitLab => &mut self.gitlab,
             GitProvider::Gitee => &mut self.gitee,
         }
+    }
+}
+
+/// 开窗时"高级"区块的初始态:`daemon_error` 有值 = daemon 不可达 = 该给
+/// "重新启动 dozerd";否则给默认的"停止 dozerd"。抽成纯函数是为了不起
+/// daemon 就能测两个分支。
+fn advanced_state_for_daemon(daemon_error: Option<&str>) -> AdvancedState {
+    match daemon_error {
+        Some(_) => AdvancedState::Stopped { error: None },
+        None => AdvancedState::Idle { error: None },
     }
 }
 
@@ -267,7 +286,7 @@ pub fn update(
                 let result = client
                     .list()
                     .await
-                    .map(|sessions| sessions.len() as u32)
+                    .map(|sessions| count_live_sessions(&sessions))
                     .map_err(|e| e.to_string());
                 emit(Message::AdvancedSessionCountReady(result));
             });
@@ -441,6 +460,15 @@ fn provider_row(
             .into()
         }
     }
+}
+
+/// 确认弹窗正文里"N 个正在运行的 agent 会话"的 N(spec 2026-09-19 §「UI
+/// 设计」:插入的是"当前**存活**会话数")。`ListSessions` 返回的是 registry
+/// 全量快照——daemon 侧从不摘除已退出的会话,所以直接 `len()` 会把用户早就
+/// 关掉的 tab 也算进"正在运行",既虚报数字又让 N==0 那条分支几乎永远走不到。
+/// 抽成纯函数是为了不起 daemon 就能测。
+fn count_live_sessions(sessions: &[dozer_core::protocol::SessionInfo]) -> u32 {
+    sessions.iter().filter(|s| s.alive).count() as u32
 }
 
 fn advanced_row(
@@ -865,6 +893,36 @@ mod tests {
     }
 
     #[test]
+    fn count_live_sessions_ignores_dead_sessions_in_registry_snapshot() {
+        let session = |id: &str, alive: bool| dozer_core::protocol::SessionInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            command: "/bin/sh".to_string(),
+            cwd: "/tmp".to_string(),
+            alive,
+            created_ms: 0,
+            agent_state: dozer_core::protocol::AgentState::Idle,
+            transcript_path: None,
+            project_id: Some(1),
+            agent: dozer_core::protocol::AgentKind::Unknown,
+        };
+
+        assert_eq!(count_live_sessions(&[]), 0);
+        assert_eq!(count_live_sessions(&[session("a", true)]), 1);
+        assert_eq!(count_live_sessions(&[session("a", false)]), 0);
+        assert_eq!(
+            count_live_sessions(&[
+                session("a", true),
+                session("b", false),
+                session("c", true),
+                session("d", false),
+            ]),
+            2,
+            "registry 快照里的死会话不该被算成「正在运行」"
+        );
+    }
+
+    #[test]
     fn advanced_async_messages_are_not_sync_messages() {
         let mut state = test_state(
             ConnectState::NotConnected,
@@ -883,5 +941,19 @@ mod tests {
             &mut state,
             &Message::AdvancedRestartClicked
         ));
+    }
+
+    #[test]
+    fn advanced_state_for_daemon_offers_restart_only_when_daemon_unreachable() {
+        assert_eq!(
+            advanced_state_for_daemon(None),
+            AdvancedState::Idle { error: None },
+            "daemon 可达时应该给「停止 dozerd」"
+        );
+        assert_eq!(
+            advanced_state_for_daemon(Some("dozerd 已停止,部分功能不可用")),
+            AdvancedState::Stopped { error: None },
+            "daemon 不可达时必须给「重新启动 dozerd」,否则关窗重开后入口丢失"
+        );
     }
 }
