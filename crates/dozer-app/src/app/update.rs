@@ -1812,12 +1812,21 @@ impl App {
                 self.settings = Some(settings::State::load());
             }
             Message::Settings(msg) => {
+                // 主题切换要在设置 update(它会 set_scheme 改全局配色)之后,把
+                // 所有已开预览 webview 按新主题重载——flyfish 的 theme 是 URL
+                // 参数(见 preview::flyfish_url),不重载不会跟着变。两个预览
+                // 面板(Files/Project)各推进各自 wry tab 的 reload_nonce。
+                let theme_changed = matches!(msg, settings::Message::ThemeSelected(_));
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
                 let emit = move |m| {
                     let _ = proxy.send_event(Message::Settings(m));
                 };
                 settings::update(&mut self.settings, msg, &handle, emit);
+                if theme_changed && let Some(ws) = self.active_workspace_mut() {
+                    ws.preview.reload_all_webviews_for_theme();
+                    ws.project_preview.reload_all_webviews_for_theme();
+                }
             }
             // WebViewFocused 只在 main.rs 的 dispatch 里设 pending_focus,
             // App::update 无需处理。

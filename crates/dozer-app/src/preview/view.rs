@@ -803,6 +803,23 @@ impl PreviewPane {
             self.bump_reload(id);
         }
     }
+
+    /// 配色方案切换后调用:把所有走 wry 的文件 tab 的 `reload_nonce` 各推一格,
+    /// 逼 `desired_webviews()` 换 URL(新 URL 带新的 `&theme=` 参数)重新导航,
+    /// flyfish 据此切到新主题。原生编辑器 tab 不受影响(其配色由 iced 主题
+    /// 直接驱动,无需重载);`Blank` 占位 tab 没有 wry 页面,同样跳过。
+    pub fn reload_all_webviews_for_theme(&mut self) {
+        let ids: Vec<usize> = self
+            .tabs
+            .iter()
+            .filter(|t| t.editor.is_none())
+            .filter(|t| matches!(t.kind, TabKind::File(_)))
+            .map(|t| t.id)
+            .collect();
+        for id in ids {
+            self.bump_reload(id);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -922,7 +939,7 @@ mod tests {
         assert_eq!(
             specs[0].url,
             format!(
-                "dozer://flyfish/host.html?p={}",
+                "dozer://flyfish/host.html?p={}&theme=dark",
                 encode_component(&png_path.to_string_lossy())
             ),
             "剩下的唯一一条 wry 期望清单条目应该是 .png 那个,URL 编码规则同 flyfish_url"
@@ -1213,12 +1230,12 @@ mod tests {
         assert_eq!(specs.len(), 2);
         assert_eq!(
             specs[0].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fa%20b.md&ln=1"
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fa%20b.md&theme=dark&ln=1"
         );
         assert!(!specs[0].visible, "非激活 tab 不可见");
         assert_eq!(
             specs[1].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fc.md&ln=1"
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fc.md&theme=dark&ln=1"
         );
         assert!(specs[1].visible);
     }
@@ -1232,16 +1249,16 @@ mod tests {
         let specs = p.desired_webviews();
         assert_eq!(
             specs[0].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&ln=1&_r=1"
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&theme=dark&ln=1&_r=1"
         );
         assert_eq!(
             specs[1].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&ln=1"
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&theme=dark&ln=1"
         );
         p.bump_reload(id0);
         assert_eq!(
             p.desired_webviews()[0].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&ln=1&_r=2"
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&theme=dark&ln=1&_r=2"
         );
         // 未知 id 是 no-op,不 panic。
         p.bump_reload(9999);
@@ -1270,7 +1287,7 @@ mod tests {
         assert_eq!(p.tabs()[2].reload_nonce, 1, "b.md 命中,webview 推进");
         let specs = p.desired_webviews();
         assert_eq!(
-            specs[1].url, "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&ln=1&_r=1",
+            specs[1].url, "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&theme=dark&ln=1&_r=1",
             "命中的 webview 换 URL 重载"
         );
 
@@ -1289,6 +1306,51 @@ mod tests {
         std::fs::remove_file(&rs_path).ok();
     }
 
+    /// 主题参数跟随全局配色方案:`set_scheme(Light)` 后 URL 带 `&theme=light`。
+    /// 配色方案是进程级共享 static,测完复原成 Dark,避免污染其它测试。
+    #[test]
+    fn flyfish_url_carries_light_theme_when_scheme_is_light() {
+        use byteui::theme::color::{ColorScheme, set_scheme};
+        let restore = byteui::theme::color::current_scheme();
+        set_scheme(ColorScheme::Light);
+        let url = flyfish_url(Path::new("/tmp/notes.md"));
+        set_scheme(restore);
+        assert!(
+            url.contains("&theme=light"),
+            "浅色方案下 URL 应带 &theme=light,实际: {url}"
+        );
+    }
+
+    /// 切主题后 `reload_all_webviews_for_theme` 推进所有 wry 文件 tab 的
+    /// nonce(逼它们按新 theme 重新导航),但不碰原生 editor tab。
+    #[test]
+    fn reload_all_webviews_for_theme_bumps_only_wry_file_tabs() {
+        let mut p = PreviewPane::default();
+        p.open_path(PathBuf::from("/tmp/a.md")); // webview
+        p.open_path(PathBuf::from("/tmp/b.md")); // webview
+        let rs_path =
+            std::env::temp_dir().join(format!("preview_theme_reload_{}.rs", std::process::id()));
+        std::fs::write(&rs_path, "fn main() {}").unwrap();
+        let _ = p.open_path(rs_path.clone()); // 原生 editor
+
+        p.reload_all_webviews_for_theme();
+
+        assert_eq!(p.tabs()[1].reload_nonce, 1, "a.md(webview)应被推进");
+        assert_eq!(p.tabs()[2].reload_nonce, 1, "b.md(webview)应被推进");
+        assert_eq!(
+            p.tabs()[3].reload_nonce,
+            0,
+            "原生 editor tab 不该被主题切换推进(其配色由 iced 主题驱动)"
+        );
+        assert_eq!(
+            p.tabs()[0].reload_nonce,
+            0,
+            "Blank 占位 tab 没有 wry 页面,不该被推进"
+        );
+
+        std::fs::remove_file(&rs_path).ok();
+    }
+
     #[test]
     fn select_reloads_webview_tab_on_switch_but_not_same_or_native() {
         let mut p = PreviewPane::default();
@@ -1301,12 +1363,12 @@ mod tests {
         p.select(1);
         assert_eq!(
             p.desired_webviews()[0].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&ln=1&_r=1",
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&theme=dark&ln=1&_r=1",
             "切到异 tab 的 webview 要自动推进 reload_nonce"
         );
         assert_eq!(
             p.desired_webviews()[1].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&ln=1",
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&theme=dark&ln=1",
             "非目标 tab 不受影响"
         );
 
@@ -1314,7 +1376,7 @@ mod tests {
         p.select(1);
         assert_eq!(
             p.desired_webviews()[0].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&ln=1&_r=1",
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&theme=dark&ln=1&_r=1",
             "重复选同一 tab 不改 reload_nonce"
         );
 
@@ -1329,7 +1391,7 @@ mod tests {
         p.select(2); // 切回 b.md(webview)
         assert_eq!(
             p.desired_webviews()[0].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&ln=1&_r=1",
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&theme=dark&ln=1&_r=1",
             "再切回 webview 推进一次 reload"
         );
         p.select(3); // 切回 c.rs(原生)

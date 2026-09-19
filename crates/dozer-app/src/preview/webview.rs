@@ -33,15 +33,30 @@ pub fn encode_component(s: &str) -> String {
 /// 文本文件(`is_editable_extension`)额外挂 `&ln=1`:host.html 读到后给
 /// flyfish 的 text 渲染器开 `options.text.lineNumbers`,预览里显示行号
 ///(图片/PDF 渲染器不认这个 option,挂了也无副作用)。
+///
+/// `&theme=light|dark` 让预览渲染跟随 dozer 当前配色方案(单一真相源
+/// `byteui::theme::color::current_scheme()`)——host.html 读它设置
+/// flyfish 的 `theme` 属性,不再硬编码深色。切主题时由 `App` 推进所有
+/// wry 文件 tab 的 `reload_nonce`,让 webview 带着新 theme 参数重新导航。
 pub(crate) fn flyfish_url(path: &std::path::Path) -> String {
     let mut u = format!(
-        "dozer://flyfish/host.html?p={}",
-        encode_component(&path.to_string_lossy())
+        "dozer://flyfish/host.html?p={}&theme={}",
+        encode_component(&path.to_string_lossy()),
+        crate::preview::scheme_query_value()
     );
     if is_editable_extension(path) {
         u.push_str("&ln=1");
     }
     u
+}
+
+/// 当前配色方案 → flyfish `theme` 属性/URL 参数取值(`light`/`dark`),
+/// host.html 与 `flyfish_url` 共用一份,避免两处各写一次映射。
+pub(crate) fn scheme_query_value() -> &'static str {
+    match byteui::theme::color::current_scheme() {
+        byteui::theme::color::ColorScheme::Light => "light",
+        byteui::theme::color::ColorScheme::Dark => "dark",
+    }
 }
 
 /// html/htm 走真实 `file://` URL 直接加载,不经 flyfish——flyfish 的渲染
