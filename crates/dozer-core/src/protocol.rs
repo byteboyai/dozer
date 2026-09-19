@@ -332,6 +332,10 @@ pub enum Request {
     Kill {
         session_id: String,
     },
+    /// 请求 daemon 对所有存活会话完成"总结后关闭"收尾,再退出进程自身。
+    /// 与 `Kill`(杀单个会话)、`CloseWithSummary`(单会话总结后关闭)不同,
+    /// 这是唯一一个"daemon 进程整体退出"的请求。
+    Shutdown,
     /// dozer-hook 单向上报的 agent hook 事件；data 原样透传（P1f 消费）。
     HookEvent {
         session_id: String,
@@ -1151,6 +1155,13 @@ mod tests {
         let req = Request::CloseWithSummary {
             session_id: "s1".into(),
         };
+        let line = encode_line(&req);
+        assert_eq!(decode_line::<Request>(&line).unwrap(), req);
+    }
+
+    #[test]
+    fn shutdown_request_roundtrips() {
+        let req = Request::Shutdown;
         let line = encode_line(&req);
         assert_eq!(decode_line::<Request>(&line).unwrap(), req);
     }
