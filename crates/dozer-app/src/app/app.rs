@@ -850,8 +850,13 @@ impl App {
         let scroll = ws.files.tree_scroll();
         let hit = files::tree_drop_target(x, y, bounds, scroll, &rows);
         tracing::debug!(
-            x, y, window_w, window_h,
-            ?side, ?bounds, scroll,
+            x,
+            y,
+            window_w,
+            window_h,
+            ?side,
+            ?bounds,
+            scroll,
             row_count = rows.len(),
             ?hit,
             "file_drag: files_drop_target hit-test"

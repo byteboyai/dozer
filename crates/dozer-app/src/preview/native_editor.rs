@@ -133,7 +133,16 @@ pub fn wry_toggle_eligible(path: &std::path::Path) -> bool {
 /// 同级角色(字符串/关键字/注释/类型/函数……)观感一致,不会出现"编辑
 /// 器一套饱和霓虹、终端一套灰调"的割裂。金 `#F2D94E`(ANSI Yellow)是
 /// 甲方动作专属,不用于语法着色——需要"奶油黄"角色时用 BrightYellow。
-pub(crate) fn dozer_syntax_theme() -> syntect::highlighting::Theme {
+///
+/// `scheme` 显式传入而非读全局 `current_scheme()`:浅/深两份主题由调用方
+/// (见 `code_editor::highlighter` 的两个 `LazyLock`)各自按方案预计算并
+/// 缓存,缓存时机与当时的全局方案无关,因此换主题不会错色,也不会因为
+/// "第一次打开编辑器时恰好是深色"就把浅色主题永久冻成深色。终端色板与
+/// 默认前景本身早已支持双方案(`term_model::ansi16_color_for`/
+/// `default_fg_rgb_for`),这里只是把"取哪个方案的表"变成入参。
+pub(crate) fn dozer_syntax_theme(
+    scheme: byteui::theme::color::ColorScheme,
+) -> syntect::highlighting::Theme {
     use std::str::FromStr;
     use syntect::highlighting::{Color, ScopeSelectors, StyleModifier, ThemeItem};
 
@@ -146,14 +155,13 @@ pub(crate) fn dozer_syntax_theme() -> syntect::highlighting::Theme {
             a: 255,
         }
     }
-    /// 终端 16 色面板第 `idx` 项(下标见 `term_model::ANSI16`)。
-    fn ansi(idx: usize) -> (u8, u8, u8) {
-        crate::term::term_model::ansi16_color(idx).expect("ANSI16 静态色表必须完整")
-    }
-    /// 终端默认前景。
-    fn body() -> (u8, u8, u8) {
-        crate::term::term_model::default_fg_rgb()
-    }
+    // 用闭包而非 fn:要捕获本次构造的 `scheme`(fn item 不能捕获环境)。
+    // `scheme` 下终端 16 色面板第 `idx` 项(下标见 `term_model::ANSI16`)。
+    let ansi = |idx: usize| {
+        crate::term::term_model::ansi16_color_for(scheme, idx).expect("ANSI16 静态色表必须完整")
+    };
+    // `scheme` 下终端默认前景。
+    let body = || crate::term::term_model::default_fg_rgb_for(scheme);
     /// 单条 scope 着色规则。
     fn scope(s: &str, rgb: (u8, u8, u8)) -> ThemeItem {
         ThemeItem {
@@ -180,12 +188,16 @@ pub(crate) fn dozer_syntax_theme() -> syntect::highlighting::Theme {
     const ORANGE: usize = 11; // BrightYellow #FFF3B0(非甲方金)
     const FUNCTION: usize = 12; // BrightBlue   #B5A5FF
 
+    // 背景留空:编辑器不画自己的底色(见 `code_editor::editor_style` 的
+    // 透明背景),面板底色透上来,语法主题只负责文字前景色。`to_format`
+    // 本来就只暴露前景/字重,这里填什么都进不了渲染,留 `None` 最诚实——
+    // "背景归面板管,编辑器不持有背景"。
     syntect::highlighting::Theme {
-        name: Some("ByteBoy2077".to_string()),
+        name: Some(format!("ByteBoy2077-{scheme:?}")),
         author: Some("Dozer".to_string()),
         settings: syntect::highlighting::ThemeSettings {
             foreground: Some(c(ansi(CREAM))),
-            background: Some(c((0x0a, 0x0e, 0x16))),
+            background: None,
             ..Default::default()
         },
         scopes: vec![

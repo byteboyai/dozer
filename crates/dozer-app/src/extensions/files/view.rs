@@ -67,7 +67,7 @@ pub fn view<'a>(
         .file_tree
         .as_ref()
         .map(|t| t.dotfiles_shown())
-        .unwrap_or(true);
+        .unwrap_or(false);
     let dotfiles_button = icons::icon_button_entry(
         if dotfiles_shown {
             icons::IconKind::Eye

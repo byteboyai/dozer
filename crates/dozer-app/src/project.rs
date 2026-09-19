@@ -35,8 +35,9 @@ pub struct FileTree {
     expanded: HashSet<PathBuf>,
     children: HashMap<PathBuf, Vec<Entry>>,
     /// 是否显示以 `.` 开头的文件/目录(点文件,如 `.env`、`.gitignore`)。
-    /// 为 true 时只按 `HIDDEN` 名单过滤(默认);为 false 时额外隐藏所有
-    /// 点文件和点目录。搜索框后的"眼睛"按钮(`ToggleDotfiles`)切换此值,
+    /// 默认 false(2026-09 用户口径:文件树默认不显示隐藏文件)——只按
+    /// `HIDDEN` 名单过滤的基础上再隐藏所有点文件和点目录;为 true 时只按
+    /// `HIDDEN` 名单过滤。搜索框后的"眼睛"按钮(`ToggleDotfiles`)切换此值,
     /// 切换后重读所有已缓存目录让树立刻反映新口径。
     show_dotfiles: bool,
 }
@@ -78,7 +79,7 @@ impl FileTree {
             root,
             expanded: HashSet::new(),
             children: HashMap::new(),
-            show_dotfiles: true,
+            show_dotfiles: false,
         };
         tree.children
             .insert(tree.root.clone(), read_children(&tree, &tree.root));
@@ -745,40 +746,40 @@ mod tests {
         std::fs::create_dir(r.join(".git")).unwrap(); // 仍在固定 HIDDEN 名单
 
         let mut t = FileTree::new(r.to_path_buf());
-        // 默认:显示点文件(.env/.gitignore 都在;.git 仍按 HIDDEN 名单剔除)。
-        assert!(t.dotfiles_shown());
-        let names: Vec<_> = t
-            .visible_rows()
-            .into_iter()
-            .map(|r| r.name)
-            .collect::<Vec<_>>();
-        assert_eq!(names, vec!["src", ".env", ".gitignore"]);
-
-        // 展开 src 后隐藏点文件:set_show_dotfiles 重读全部缓存目录,根层
-        // 只剩 src,已展开的 src 仍保留(不清 expanded)。
-        t.toggle(&r.join("src"));
-        assert_eq!(
-            t.visible_rows().len(),
-            4,
-            "展开 src 后可见 src、main.rs、.env、.gitignore"
-        );
-        t.set_show_dotfiles(false);
+        // 默认:不显示点文件(.env/.gitignore 都不在;.git 仍按 HIDDEN 名单剔除)。
         assert!(!t.dotfiles_shown());
         let names: Vec<_> = t
             .visible_rows()
             .into_iter()
             .map(|r| r.name)
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["src", "main.rs"], "点文件全隐藏,src 展开保留");
+        assert_eq!(names, vec!["src"]);
 
-        // 重新显示点文件,点文件立刻回来。
+        // 展开 src 后显示点文件:set_show_dotfiles 重读全部缓存目录,已展开
+        // 的 src 仍保留(不清 expanded)。
+        t.toggle(&r.join("src"));
+        assert_eq!(t.visible_rows().len(), 2, "展开 src 后可见 src、main.rs");
         t.set_show_dotfiles(true);
+        assert!(t.dotfiles_shown());
         let names: Vec<_> = t
             .visible_rows()
             .into_iter()
             .map(|r| r.name)
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["src", "main.rs", ".env", ".gitignore"]);
+        assert_eq!(
+            names,
+            vec!["src", "main.rs", ".env", ".gitignore"],
+            "点文件全回来,src 展开保留"
+        );
+
+        // 重新隐藏点文件,点文件立刻消失。
+        t.set_show_dotfiles(false);
+        let names: Vec<_> = t
+            .visible_rows()
+            .into_iter()
+            .map(|r| r.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["src", "main.rs"]);
     }
 
     #[test]

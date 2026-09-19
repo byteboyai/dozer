@@ -465,6 +465,7 @@ impl CodeView {
             .highlight_with::<highlighter::Highlighter>(
                 highlighter::Settings {
                     token: self.token.clone(),
+                    scheme: byteui::theme::color::current_scheme(),
                 },
                 |highlight, _theme| highlight.to_format(),
             )
@@ -573,12 +574,18 @@ fn replace_pass_nth(
 /// 编辑器 chrome 对齐到 ByteBoy2077 配色——官方 `text_editor::Style` 字段比
 /// vendored 版本简单得多(没有 gutter/滚动条/右键菜单的概念,那些 UI 官方
 /// widget 本来就不画),这里只覆盖它实际暴露的几项。
+///
+/// 背景**透明**:编辑器所在的内容面板本来就铺了一层主题底色,编辑器再画
+/// 一层自己的 `palette.bg` 只会在面板与编辑区之间多出一条色差边界(且这层
+/// 背景自己的取色/缓存时机与语法主题是两套,换主题时容易各变各的)。留空
+/// 让面板底色透上来,视觉上编辑区与预览面板连成一体,也省掉"编辑器背景
+/// 跟哪一档主题走"的分歧——背景归面板管,编辑器只负责文字与语法色。
 fn editor_style(_theme: &iced_widget::Theme, _status: text_editor::Status) -> text_editor::Style {
     use iced_widget::core::{Background, Border};
     let palette = byteui::theme::color::current();
     let cyan = palette.cyan;
     text_editor::Style {
-        background: Background::Color(palette.bg),
+        background: Background::Color(Color::TRANSPARENT),
         border: Border::default(),
         placeholder: palette.dim,
         value: palette.cream,

@@ -42,6 +42,50 @@ use crate::platform::settings_overlay;
 use crate::preview;
 use crate::theme;
 
+/// 按 iced 本帧算出的 `mouse_interaction` 刷新窗口光标。
+///
+/// 这套事件循环是手写的(不是 `iced_winit::program::run`),光标刷新必须
+/// **两条路径都走**:`RedrawRequested` 分支画完帧后算一次首屏/存量态,
+/// 事件分支(尤其 `CursorMoved`)也必须立刻用 `interface.update` 返回的
+/// state 更新一次。少了后者就会出一个很隐蔽的 bug:纯 hover 移动鼠标
+/// (不点击、不产生消息、不触发重绘)时 iced 根本不会重算 interaction
+/// ——光标形状会停在**进入前**那一片区域的形状上。代码编辑器尤其明显:
+/// `text_editor` 悬停时只返回 `Interaction::Text`、不做任何会引发重绘的
+/// 动画/hover 消息,于是即使它正确地报了 `Text`,窗口光标也永远刷不出
+/// I 形;而页签/按钮有 hover 动画、会触发重绘,看上去"正常",掩盖了缺口。
+///
+/// 光标落进任一**可见** wry 子视图(预览/浏览器面板)时把控制权让给
+/// WKWebView:窗口级 NSCursor 全局唯一、谁最后写谁赢,iced 每帧强刷会把
+/// webview 自己的握手/文本光标盖成箭头(见 `webview_rects` 字段文档)。
+fn apply_mouse_cursor(
+    window: &winit::window::Window,
+    app: &App,
+    webview_rects: &[(f32, f32, f32, f32)],
+    mouse_interaction: mouse::Interaction,
+) {
+    if let Some(icon) = conversion::mouse_interaction(mouse_interaction) {
+        let cursor_over_webview = webview_rects.iter().any(|&(wx, wy, ww, wh)| {
+            let (cx, cy) = app.last_cursor;
+            ww > 0.0 && wh > 0.0 && cx >= wx && cx <= wx + ww && cy >= wy && cy <= wy + wh
+        });
+        if !cursor_over_webview {
+            window.set_cursor(icon);
+            window.set_cursor_visible(true);
+        }
+    } else {
+        window.set_cursor_visible(false);
+    }
+
+    // 顶栏原生拖窗守卫复用这同一个每帧算出的 interaction——非 `None`
+    // 即悬停在某个可交互控件上(页签/关闭按钮/…),见
+    // `install_topbar_drag_guard` 文档。
+    #[cfg(target_os = "macos")]
+    crate::platform::window::TOPBAR_CONTROL_HOVERED.store(
+        mouse_interaction != mouse::Interaction::None,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Runner {
     /// 持有启动序列已经构建好的 `App`（daemon 已连上/已降级为
@@ -2824,49 +2868,15 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             // (见下方"画 IME 组字预览浮层"注释)。
                             let mut ime_overlay: Option<(Rectangle, String)> = None;
 
-                            // Update the mouse cursor
+                            // Update the mouse cursor(见 `apply_mouse_cursor`
+                            // 文档:事件路径也调它,两条路径都要刷)。
                             if let user_interface::State::Updated {
                                 mouse_interaction,
                                 input_method,
                                 ..
                             } = state
                             {
-                                // Update the mouse cursor
-                                if let Some(icon) = conversion::mouse_interaction(mouse_interaction)
-                                {
-                                    // 光标落进任一**可见** wry 子视图(预览面板
-                                    // / 浏览器面板)时,把光标控制权让给 WKWebView:
-                                    // 否则 iced 每帧 `window.set_cursor` 会把窗口
-                                    // 光标强制刷成箭头,盖掉 WKWebView 自己在超链接
-                                    // 上显示的握手光标(窗口级 NSCursor 是全局唯一
-                                    // 的,谁最后写谁赢)。webview 自身会管理光标
-                                    // (箭头/握手/文本),无需我们隐藏或覆写。
-                                    let cursor_over_webview =
-                                        webview_rects.iter().any(|&(wx, wy, ww, wh)| {
-                                            let (cx, cy) = app.last_cursor;
-                                            ww > 0.0
-                                                && wh > 0.0
-                                                && cx >= wx
-                                                && cx <= wx + ww
-                                                && cy >= wy
-                                                && cy <= wy + wh
-                                        });
-                                    if !cursor_over_webview {
-                                        window.set_cursor(icon);
-                                        window.set_cursor_visible(true);
-                                    }
-                                } else {
-                                    window.set_cursor_visible(false);
-                                }
-                                // 顶栏原生拖窗守卫复用这同一个每帧算出的
-                                // interaction——非 `None` 即悬停在某个可
-                                // 交互控件上（页签/关闭按钮/…），见
-                                // `install_topbar_drag_guard` 文档。
-                                #[cfg(target_os = "macos")]
-                                crate::platform::window::TOPBAR_CONTROL_HOVERED.store(
-                                    mouse_interaction != mouse::Interaction::None,
-                                    std::sync::atomic::Ordering::Relaxed,
-                                );
+                                apply_mouse_cursor(window, app, webview_rects, mouse_interaction);
 
                                 // IME 候选窗跟随文本光标:优先用 iced 自己
                                 // 算出的 `input_method.cursor`(任何原生
@@ -3180,7 +3190,19 @@ impl winit::application::ApplicationHandler<Message> for Runner {
 
                 let mut messages: Vec<Message> = Vec::new();
 
-                let _ = interface.update(events, *cursor, renderer, clipboard, &mut messages);
+                let (state, _) =
+                    interface.update(events, *cursor, renderer, clipboard, &mut messages);
+
+                // 事件路径也必须立刻刷新窗口光标,不能只等 `RedrawRequested`
+                // ——纯 hover 移动鼠标不产生消息、不触发重绘,不在这里刷就会
+                // 漏掉光标形状变化(代码编辑器的 I 形即由此丢失)。见
+                // `apply_mouse_cursor` 文档。
+                if let user_interface::State::Updated {
+                    mouse_interaction, ..
+                } = state
+                {
+                    apply_mouse_cursor(window, app, webview_rects, mouse_interaction);
+                }
 
                 events.clear();
 

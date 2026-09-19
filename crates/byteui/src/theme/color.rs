@@ -76,7 +76,7 @@ impl ColorTokens {
             },
             tab_active_border: c(0xDC, 0xC9, 0xA3),
             tab_active_bg: c(0x15, 0x26, 0x30),
-            tab_hover: c(0x15, 0x26, 0x30),
+            tab_hover: c(0x27, 0x7a, 0x85),
             desc_bg: c(0x15, 0x26, 0x30),
         }
     }

@@ -1614,35 +1614,38 @@ mod tests {
 
     #[test]
     fn dozer_syntax_theme_anchored_to_terminal_palette() {
-        let t = dozer_syntax_theme();
+        // 显式指定 Dark:主题按方案预计算,断言就不受其它测试线程改全局
+        // scheme 的影响(term_model 的用例会来回 set_scheme)。
+        use byteui::theme::color::ColorScheme;
+        let t = dozer_syntax_theme(ColorScheme::Dark);
         assert_eq!(
             syntax_token(&t, "string").expect("未命中 string"),
-            crate::term::term_model::ansi16_color(2).unwrap(),
+            crate::term::term_model::ansi16_color_for(ColorScheme::Dark, 2).unwrap(),
             "字符串应锚定终端 Green"
         );
         assert_eq!(
             syntax_token(&t, "keyword").expect("未命中 keyword"),
-            crate::term::term_model::ansi16_color(6).unwrap(),
+            crate::term::term_model::ansi16_color_for(ColorScheme::Dark, 6).unwrap(),
             "关键字应锚定终端 Cyan"
         );
         assert_eq!(
             syntax_token(&t, "comment").expect("未命中 comment"),
-            crate::term::term_model::ansi16_color(8).unwrap(),
+            crate::term::term_model::ansi16_color_for(ColorScheme::Dark, 8).unwrap(),
             "注释应锚定终端 BrightBlack"
         );
         assert_eq!(
             syntax_token(&t, "entity.name.type").expect("未命中类型"),
-            crate::term::term_model::ansi16_color(4).unwrap(),
+            crate::term::term_model::ansi16_color_for(ColorScheme::Dark, 4).unwrap(),
             "类型应锚定终端 Blue"
         );
         assert_eq!(
             syntax_token(&t, "entity.name.function").expect("未命中函数"),
-            crate::term::term_model::ansi16_color(12).unwrap(),
+            crate::term::term_model::ansi16_color_for(ColorScheme::Dark, 12).unwrap(),
             "函数应锚定终端 BrightBlue"
         );
         assert_eq!(
             syntax_token(&t, "operator").expect("未命中 operator"),
-            crate::term::term_model::default_fg_rgb(),
+            crate::term::term_model::default_fg_rgb_for(ColorScheme::Dark),
             "运算符应锚定终端默认前景"
         );
         assert!(
@@ -1652,6 +1655,41 @@ mod tests {
                 != 0xd9,
             "regexp 不应使用甲方金 #F2D94E"
         );
+    }
+
+    /// 浅色主题必须带来一套**不同**的 token 色,而不是沿用深色那套
+    /// (否则「随主题自动切换」名存实亡)。同时两侧都仍锚定到各自方案的终端色板。
+    #[test]
+    fn dozer_syntax_theme_light_scheme_differs_and_stays_anchored() {
+        use byteui::theme::color::ColorScheme;
+
+        let dark = dozer_syntax_theme(ColorScheme::Dark);
+        let light = dozer_syntax_theme(ColorScheme::Light);
+
+        assert_ne!(
+            syntax_token(&dark, "keyword"),
+            syntax_token(&light, "keyword"),
+            "关键字颜色必须随深/浅方案变化"
+        );
+        assert_eq!(
+            syntax_token(&light, "string").expect("未命中 string"),
+            crate::term::term_model::ansi16_color_for(ColorScheme::Light, 2).unwrap(),
+            "浅色下字符串仍须锚定浅色终端 Green"
+        );
+    }
+
+    /// 语法主题**不持有背景**:编辑器背景已透明(见 `code_editor::editor_style`),
+    /// 面板底色透上来。主题再塞一个背景色只会是一份进不了渲染、还容易与面板
+    /// 实际底色打架的死数据。
+    #[test]
+    fn dozer_syntax_theme_has_no_background() {
+        use byteui::theme::color::ColorScheme;
+        for scheme in [ColorScheme::Dark, ColorScheme::Light] {
+            assert!(
+                dozer_syntax_theme(scheme).settings.background.is_none(),
+                "语法主题不该自带背景色({scheme:?})"
+            );
+        }
     }
 
     #[test]

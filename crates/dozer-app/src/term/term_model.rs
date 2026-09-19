@@ -59,25 +59,33 @@ const ANSI16_LIGHT: [(u8, u8, u8); 16] = [
     (0x0b, 0x13, 0x1a), // BrightWhite
 ];
 
-/// 当前生效的 ANSI16 表：随 `byteui::theme::color::current_scheme()`
-/// 切换，不需要重开终端。
-fn ansi16() -> &'static [(u8, u8, u8); 16] {
-    match byteui::theme::color::current_scheme() {
-        byteui::theme::color::ColorScheme::Dark => &ANSI16_DARK,
-        byteui::theme::color::ColorScheme::Light => &ANSI16_LIGHT,
-    }
-}
-
 /// 默认前景色（无显式 SGR 时的字符颜色），深色版数值。
 const DEFAULT_FG_DARK: (u8, u8, u8) = (0x9A, 0xB4, 0xC4);
 /// 默认前景色，浅色版数值（== 语义色板 `body`）。
 const DEFAULT_FG_LIGHT: (u8, u8, u8) = (0x36, 0x42, 0x4e);
 
-fn default_fg() -> (u8, u8, u8) {
-    match byteui::theme::color::current_scheme() {
-        byteui::theme::color::ColorScheme::Dark => DEFAULT_FG_DARK,
-        byteui::theme::color::ColorScheme::Light => DEFAULT_FG_LIGHT,
+fn default_fg_for(scheme: ColorScheme) -> (u8, u8, u8) {
+    match scheme {
+        ColorScheme::Dark => DEFAULT_FG_DARK,
+        ColorScheme::Light => DEFAULT_FG_LIGHT,
     }
+}
+
+fn ansi16_for(scheme: ColorScheme) -> &'static [(u8, u8, u8); 16] {
+    match scheme {
+        ColorScheme::Dark => &ANSI16_DARK,
+        ColorScheme::Light => &ANSI16_LIGHT,
+    }
+}
+
+/// 当前生效的 ANSI16 表：随 `byteui::theme::color::current_scheme()`
+/// 切换，不需要重开终端。
+fn ansi16() -> &'static [(u8, u8, u8); 16] {
+    ansi16_for(byteui::theme::color::current_scheme())
+}
+
+fn default_fg() -> (u8, u8, u8) {
+    default_fg_for(byteui::theme::color::current_scheme())
 }
 
 /// 终端默认前景色（无显式 SGR 时的字符颜色）。供预览编辑器把语法高亮
@@ -86,11 +94,22 @@ pub(crate) fn default_fg_rgb() -> (u8, u8, u8) {
     default_fg()
 }
 
-/// ANSI 16 色主题的第 `idx` 个 RGB（`0..16`，下标即 `NamedColor`）。供
-/// 预览编辑器把语法高亮 token 锚定到终端色板时取用（见
+/// 指定配色方案下的终端默认前景色。语法高亮主题要按**目标方案**取色
+/// （而不是"调用这一刻的全局方案"），这样浅/深两份主题可以各自预计算并
+/// 缓存，不会因为缓存时机撞上另一种方案而永久错色。
+pub(crate) fn default_fg_rgb_for(scheme: ColorScheme) -> (u8, u8, u8) {
+    default_fg_for(scheme)
+}
+
+/// 指定配色方案下的 ANSI 16 色第 `idx` 项（`0..16`，下标即 `NamedColor`）。
+/// 供预览编辑器按目标方案预计算语法高亮主题时取用（见
 /// `preview::dozer_syntax_theme`）。越界返回 `None`。
-pub(crate) fn ansi16_color(idx: usize) -> Option<(u8, u8, u8)> {
-    ansi16().get(idx).copied()
+///
+/// 只保留"按方案取色"这一种形态：语法主题按方案缓存，绝不能读"调用这一刻
+/// 的全局方案"，否则第一次高亮时的方案会把另一方案永久冻错（见
+/// `code_editor::highlighter` 的模块文档）。
+pub(crate) fn ansi16_color_for(scheme: ColorScheme, idx: usize) -> Option<(u8, u8, u8)> {
+    ansi16_for(scheme).get(idx).copied()
 }
 
 /// 渲染层唯一数据源：一个终端网格格子。刻意只含原始值（`char`/`(u8,u8,u8)`），
@@ -773,13 +792,21 @@ mod tests {
     /// 立即生效，不需要重开终端。
     #[test]
     fn ansi16_color_reflects_light_scheme() {
+        use byteui::theme::color::ColorScheme;
         let _guard = lock_scheme();
-        byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Light);
-        assert_eq!(ansi16_color(0), Some((0xfe, 0xf2, 0xe4))); // Black ≈ term_bg
-        assert_eq!(ansi16_color(1), Some((0xd1, 0x48, 0x3f))); // Red
-        assert_eq!(ansi16_color(3), Some((0xc9, 0xa2, 0x27))); // Yellow(浅色版不再与 gold 同值)
-        byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Dark);
-        assert_eq!(ansi16_color(0), Some((0x0a, 0x0e, 0x16)));
+        byteui::theme::color::set_scheme(ColorScheme::Light);
+        let light = |idx| ansi16_color_for(ColorScheme::Light, idx);
+        assert_eq!(light(0), Some((0xfe, 0xf2, 0xe4))); // Black ≈ term_bg
+        assert_eq!(light(1), Some((0xd1, 0x48, 0x3f))); // Red
+        assert_eq!(light(3), Some((0xc9, 0xa2, 0x27))); // Yellow(浅色版不再与 gold 同值)
+        byteui::theme::color::set_scheme(ColorScheme::Dark);
+        assert_eq!(
+            ansi16_color_for(ColorScheme::Dark, 0),
+            Some((0x0a, 0x0e, 0x16))
+        );
+        // 全局方案切回深色后,`Light` 表本身不受影响——这正是"按方案取色"
+        // 相比"读全局方案"的价值:两份表可以并存、各自可缓存。
+        assert_eq!(light(0), Some((0xfe, 0xf2, 0xe4)));
     }
 
     #[test]

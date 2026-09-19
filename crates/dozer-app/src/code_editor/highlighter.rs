@@ -6,12 +6,21 @@
 //!
 //! 实现结构照抄 `iced_highlighter` 自己的源码(参照
 //! `~/.cargo/registry/.../iced_highlighter-0.14.0/src/lib.rs`,同一份
-//! syntect/two-face 依赖版本),只把主题来源换成单一的 dozer 主题——不再
-//! 需要 `Settings.theme` 字段,`Settings` 只剩 `token`(语法名)。
+//! syntect/two-face 依赖版本),只把主题来源换成 dozer 自己的两份主题。
+//!
+//! 主题随 `byteui::theme::color::current_scheme()` 在深/浅两套之间切换
+//! (2026-09-19):`Settings` 带上当前 `scheme`,`text_editor` 在 layout 时
+//! 比对 `highlighter_settings`,不等就调 `update()` 重建 highlighter,于是
+//! 用户在设置里换主题后已开的编辑器会自动重新着色。两份主题各自
+//! `LazyLock` 缓存(按方案预计算,不读调用时刻的全局方案),既避免每次
+//! 重解析 scope 表,也不会出现"第一次高亮时恰好是某方案就把另一方案永久
+//! 冻错"的缓存污染。
 
 use iced_widget::core::font;
 use iced_widget::core::text::highlighter::{self, Format};
 use iced_widget::core::{Color, Font};
+
+use byteui::theme::color::ColorScheme;
 
 use std::ops::Range;
 use std::sync::LazyLock;
@@ -36,16 +45,29 @@ static SYNTAXES: LazyLock<parsing::SyntaxSet> = LazyLock::new(|| {
         .expect("加载 assets/syntaxes 下的额外语法失败");
     builder.build()
 });
-static THEME: LazyLock<highlighting::Theme> = LazyLock::new(crate::preview::dozer_syntax_theme);
+static THEME_DARK: LazyLock<highlighting::Theme> =
+    LazyLock::new(|| crate::preview::dozer_syntax_theme(ColorScheme::Dark));
+static THEME_LIGHT: LazyLock<highlighting::Theme> =
+    LazyLock::new(|| crate::preview::dozer_syntax_theme(ColorScheme::Light));
+
+/// 取该方案对应的 `&'static` 主题(`LazyLock` 首次解引用即缓存,之后零成本)。
+fn theme_for(scheme: ColorScheme) -> &'static highlighting::Theme {
+    match scheme {
+        ColorScheme::Dark => &THEME_DARK,
+        ColorScheme::Light => &THEME_LIGHT,
+    }
+}
 
 const LINES_PER_SNAPSHOT: usize = 50;
 
-/// [`Highlighter`] 的配置:只有语法 token(文件扩展名对应的 syntect 语言名,
-/// 见 `preview::extension_to_syntax`)——主题固定是 dozer 自己的
-/// `dozer_syntax_theme()`,不是可配置项。
+/// [`Highlighter`] 的配置:语法 token(文件扩展名对应的 syntect 语言名,
+/// 见 `preview::extension_to_syntax`)+ 当前配色方案。`scheme` 必须进
+/// `Settings`——`text_editor` 靠 `PartialEq` 比对来决定要不要重建
+/// highlighter,不带上方案的话换主题后它认为"设置没变",不会重新着色。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     pub token: String,
+    pub scheme: ColorScheme,
 }
 
 /// 语法高亮器,drop-in 对应 `iced_highlighter::Highlighter` 但主题固定。
@@ -68,7 +90,7 @@ impl highlighter::Highlighter for Highlighter {
             .find_syntax_by_token(&settings.token)
             .unwrap_or_else(|| SYNTAXES.find_syntax_plain_text());
 
-        let highlighter = highlighting::Highlighter::new(&THEME);
+        let highlighter = highlighting::Highlighter::new(theme_for(settings.scheme));
 
         let parser = parsing::ParseState::new(syntax);
         let stack = parsing::ScopeStack::new();
@@ -86,7 +108,7 @@ impl highlighter::Highlighter for Highlighter {
             .find_syntax_by_token(&new_settings.token)
             .unwrap_or_else(|| SYNTAXES.find_syntax_plain_text());
 
-        self.highlighter = highlighting::Highlighter::new(&THEME);
+        self.highlighter = highlighting::Highlighter::new(theme_for(new_settings.scheme));
 
         self.change_line(0);
     }
@@ -214,6 +236,7 @@ mod repro {
         let text = std::fs::read_to_string(path).unwrap();
         let settings = Settings {
             token: "json".into(),
+            scheme: ColorScheme::Dark,
         };
         let mut h = Highlighter::new(&settings);
         h.change_line(0);
@@ -245,6 +268,7 @@ mod repro {
 
         let mut hl = Highlighter::new(&Settings {
             token: "json".into(),
+            scheme: ColorScheme::Dark,
         });
         let mut editor = iced_renderer::graphics::text::Editor::with_text(&text);
 
@@ -293,6 +317,54 @@ impl Iterator for ScopeRangeIterator {
 
         self.index += 1;
         Some((range, op))
+    }
+}
+
+#[cfg(test)]
+mod scheme_tests {
+    use super::*;
+    use iced_widget::core::text::highlighter::Highlighter as _;
+
+    /// 同一份源码,深色与浅色高亮器给出的关键字颜色必须不同——这是"主题
+    /// 切换能推动编辑器重新着色"的底层保证(上层 `text_editor` 靠
+    /// `Settings` 不等来触发 `update()`)。
+    #[test]
+    fn dark_and_light_settings_produce_different_highlight_colors() {
+        let line = "fn main() { let x = 1; } // c";
+
+        let first_color = |scheme| {
+            let mut h = Highlighter::new(&Settings {
+                token: "rust".into(),
+                scheme,
+            });
+            h.change_line(0);
+            h.highlight_line(line)
+                .find_map(|(_, hl)| hl.color())
+                .expect("该行应有带前景色的高亮片段")
+        };
+
+        assert_ne!(
+            first_color(ColorScheme::Dark),
+            first_color(ColorScheme::Light),
+            "深/浅两套主题必须给出不同的高亮色"
+        );
+    }
+
+    /// `Settings` 必须把 scheme 纳入相等性判定——否则 `text_editor` 在 layout
+    /// 时会认为"设置没变",用户换主题后已开的编辑器不会重新着色。
+    #[test]
+    fn settings_equality_is_scheme_sensitive() {
+        assert_ne!(
+            Settings {
+                token: "rust".into(),
+                scheme: ColorScheme::Dark,
+            },
+            Settings {
+                token: "rust".into(),
+                scheme: ColorScheme::Light,
+            },
+            "仅 scheme 不同时 Settings 必须整体不等,才会触发高亮器重建"
+        );
     }
 }
 
