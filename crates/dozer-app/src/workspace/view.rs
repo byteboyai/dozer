@@ -830,7 +830,62 @@ pub(crate) fn preview_pane_for<'a>(
             // 切走文件时 `PreviewPane` 已 cull 掉失配会话,条随之一并消失——既然
             // open/lifecycle 保证 `find` 总锁着激活原生 tab、此处又只在激活 tab 是
             // 原生时进入,读数即可,不必再校 tab 归属。
-            if let Some(find) = preview.find_state() {
+            if editor.is_read_only() {
+                // 只读大文件档:⌘F 已在 `Message::PreviewFindOpen` 分流到
+                // `large_file_search`(见 Task 5),这里画对应的搜索条而不是
+                // 下面的普通 Find 条——大文件搜索走磁盘流式扫描,没有"替换"
+                // 概念,条更简单(查询框 + n/m 计数 + 上一条/下一条 + 关闭)。
+                if let Some(session) = preview.large_file_search_state() {
+                    let colors = byteui::theme::color::current();
+                    let panel = find_panel();
+                    let query_for_submit = session.query.clone();
+                    let count_label = text(format!(
+                        "{}/{}",
+                        if session.hits.is_empty() {
+                            0
+                        } else {
+                            session.current + 1
+                        },
+                        session.hits.len()
+                    ))
+                    .size(byteui::theme::font::body())
+                    .color(colors.dim);
+                    let input = byteui::form::input_text::view(
+                        "搜索文件内容…",
+                        &session.query,
+                        false,
+                        None,
+                        !session.query.is_empty(),
+                        Some(Message::PreviewLargeFileSearchSubmit(
+                            panel,
+                            tab_id,
+                            query_for_submit,
+                        )),
+                        false,
+                        move |s: String| Message::PreviewLargeFileSearchSubmit(panel, tab_id, s),
+                    );
+                    let row_el = row![
+                        input,
+                        count_label,
+                        button(text("↑")).on_press(Message::PreviewLargeFileSearchGo(panel, false)),
+                        button(text("↓")).on_press(Message::PreviewLargeFileSearchGo(panel, true)),
+                        button(text("×")).on_press(Message::PreviewLargeFileSearchClose(panel)),
+                    ]
+                    .spacing(6)
+                    .align_y(iced_widget::core::alignment::Alignment::Center);
+                    content = content.push(container(row_el).padding(8).style(
+                        move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                            background: Some(colors.card.into()),
+                            border: iced_widget::core::Border {
+                                color: colors.border,
+                                width: 1.0,
+                                radius: 8.0.into(),
+                            },
+                            ..iced_widget::container::Style::default()
+                        },
+                    ));
+                }
+            } else if let Some(find) = preview.find_state() {
                 let panel = find_panel();
                 let colors = byteui::theme::color::current();
                 // Find 条紧贴右侧编辑器,查询框/替换框正文用与编辑器相同的代码
@@ -1185,6 +1240,72 @@ pub(crate) fn preview_pane_for<'a>(
                     );
                 content = content.push(find_rows);
             }
+            // 只读大文件档提示:整读/分块两档只读文件(`native_editor::
+            // SizeTier`)在编辑器上方加一条横幅——整读档只报大小,分块档还
+            // 报"仅加载前 X MB"并给"加载更多"按钮续读下一段(Task 4)。
+            if editor.is_read_only() {
+                let colors = byteui::theme::color::current();
+                // 搜索入口:鼠标点击等价于 ⌘F(见 `Message::PreviewFindOpen`
+                // 对只读态的分流),给不知道快捷键的用户一个可点的入口
+                // (人工验收清单"⌘F(或点击搜索入口)")。搜索条已经开着(锁的
+                // 就是这个 tab)时不重复画按钮。
+                let search_already_open = preview
+                    .large_file_search_state()
+                    .is_some_and(|s| s.tab_id == tab_id);
+                let search_button = (!search_already_open).then(|| {
+                    button(
+                        text("搜索")
+                            .size(byteui::theme::font::body())
+                            .color(colors.cyan),
+                    )
+                    .on_press(Message::PreviewLargeFileSearchOpen(find_panel(), tab_id))
+                    .padding([4, 10])
+                });
+                if active_tab.truncated {
+                    let mut banner = row![
+                        text(format!(
+                            "只读 · 文件过大 · 仅加载前 {:.1}MB,共 {:.1}MB",
+                            active_tab.loaded_bytes as f64 / (1024.0 * 1024.0),
+                            active_tab.total_bytes as f64 / (1024.0 * 1024.0)
+                        ))
+                        .size(byteui::theme::font::body())
+                        .color(colors.dim),
+                        iced_widget::space::horizontal(),
+                    ]
+                    .spacing(8)
+                    .align_y(iced_widget::core::Alignment::Center);
+                    if let Some(btn) = search_button {
+                        banner = banner.push(btn);
+                    }
+                    banner = banner.push(
+                        button(
+                            text("加载更多")
+                                .size(byteui::theme::font::body())
+                                .color(colors.gold),
+                        )
+                        .on_press(Message::PreviewLoadMore(find_panel(), tab_id))
+                        .padding([4, 10])
+                        .style(crate::dialog::action_button_style(colors.gold)),
+                    );
+                    content = content.push(container(banner).padding([4, 8]));
+                } else {
+                    let mut banner = row![
+                        text(format!(
+                            "只读 · 文件过大({:.1}MB)",
+                            active_tab.total_bytes as f64 / (1024.0 * 1024.0)
+                        ))
+                        .size(byteui::theme::font::body())
+                        .color(colors.dim),
+                        iced_widget::space::horizontal(),
+                    ]
+                    .spacing(8)
+                    .align_y(iced_widget::core::Alignment::Center);
+                    if let Some(btn) = search_button {
+                        banner = banner.push(btn);
+                    }
+                    content = content.push(container(banner).padding([4, 8]));
+                }
+            }
             content = content.push(
                 container(editor.view().map(move |ev| editor_msg(tab_id, ev)))
                     .width(Length::Fill)
@@ -1219,6 +1340,22 @@ pub(crate) fn preview_pane_for<'a>(
                     ));
                 }
             }
+        } else if active_tab.loading {
+            // 原生编辑器候选正在后台线程异步读盘+构造(见 `App::
+            // preview_open_path`/`PreviewPane::insert_loading_tab`)——这段
+            // 时间不阻塞 UI 线程,画个居中提示占位,结果回来后
+            // `apply_native_load` 会把这个分支换成上面 `editor` 那支。
+            content = content.push(
+                container(
+                    text("加载中…")
+                        .size(byteui::theme::font::body())
+                        .color(byteui::theme::color::current().dim),
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(iced_widget::core::alignment::Horizontal::Center)
+                .align_y(iced_widget::core::alignment::Vertical::Center),
+            );
         } else if active_tab.kind == TabKind::Blank {
             // 关到最后一个 tab 后自动补的空白占位:没有 wry 页面,内容区
             // 纯 iced 原生渲染,居中放 Dozer 品牌标(`IconKind::Dozer`,此前

@@ -1,59 +1,206 @@
 //! 可编辑原生编辑器:读盘构造 CodeView、可编辑扩展名判定、wry 切换资格、
 //! syntect 语法主题与扩展名映射。
 
-/// 原生可写编辑器能吃得下的文件大小上限(字节)。超过则退回只读 flyfish
-/// 预览——`Editor::with_text` 会对整份文档做一次 `Shaping::Advanced`
-/// 预整形(cosmic-text `set_text` → `shape_until_scroll`,buffer 尚无尺寸时
-/// 会整形**全部行**),大文件(尤其含 CJK,实测 ~14ms/KB,267KB ≈ 3.5s、7.5MB
-/// ≈ 98s)会阻塞 UI 线程数秒到数十秒,表现为「打开即卡死/未响应」。只读
-/// 预览由 webview 独立进程渲染,不占 UI 线程,与「预览优先于编辑」的裁决一致。
-pub(crate) const MAX_NATIVE_EDITOR_BYTES: u64 = 256 * 1024;
+/// 低于此值:全功能编辑(含 undo/保存)。固定值,不随机器内存缩放——这一档
+/// 的瓶颈是 undo 栈本身的设计(`code_editor::EDIT_HISTORY_LIMIT` 份整文件
+/// `String` 快照),不是单次读取的内存代价。见
+/// `docs/superpowers/specs/2026-09-19-large-file-editor-performance-design.md`
+/// "分档策略与阈值"。
+pub(crate) const EDIT_MODE_MAX_BYTES: u64 = 20 * 1024 * 1024;
 
-/// 文件是否超过原生编辑器的可载入上限(只看 `fs::metadata` 的 `len`,
-/// 不读内容;拿不到元数据按「未超限」处理,交给后续真正的读盘去报错)。
-pub(crate) fn exceeds_native_editor_limit(path: &std::path::Path) -> bool {
-    std::fs::metadata(path)
-        .map(|m| m.len() > MAX_NATIVE_EDITOR_BYTES)
-        .unwrap_or(false)
+/// 按机器可用内存动态算"只读·整读"档上限(纯函数,供 [`full_load_max_bytes`]
+/// 与单测复用):总内存 10% ÷ 3(读取+校验临时拷贝+常驻拷贝的峰值安全边际),
+/// 钳到 [256MB, 4GB]。
+pub(crate) fn full_load_max_bytes_for(total_ram_bytes: u64) -> u64 {
+    ((total_ram_bytes as f64 * 0.10 / 3.0) as u64).clamp(256 * 1024 * 1024, 4 * 1024 * 1024 * 1024)
 }
 
-/// 读盘并按白名单扩展名构造一个**可写** `CodeView`(2026-09-06 起原生文本预览
-/// 不再只读:用户可直接拖选/复制/就地编辑,配合 `Workspace` 侧的脏标记与
-/// `preview_pane_save` ⌘S 落盘——见 `docs/superpowers/plans/2026-09-06-*.md`）。
-/// 内容不是合法 UTF-8 时降级用 lossy 转换(不当错误);其余读取失败(不存在/权限
-/// 不够等)原样透传 `std::io::Error`,调用方(`push_tab`/`bump_reload`)按现有
-/// "打开失败"路径处理,不在这里新增错误类型。
+/// 查询系统总内存并套 [`full_load_max_bytes_for`]。查询失败(极端环境)时
+/// 退化为 512MB 默认值,不 panic、不阻塞打开流程。
+pub(crate) fn full_load_max_bytes() -> u64 {
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    let total = sys.total_memory();
+    if total == 0 {
+        return 512 * 1024 * 1024;
+    }
+    full_load_max_bytes_for(total)
+}
+
+/// 三档分类结果。
+pub(crate) enum SizeTier {
+    /// < `EDIT_MODE_MAX_BYTES`:全功能编辑。
+    Edit,
+    /// [`EDIT_MODE_MAX_BYTES`, full_load_max):只读,整文件读入内存。
+    FullLoadReadOnly,
+    /// >= full_load_max:只读,首屏只读入 full_load_max 字节,可"加载更多"。
+    ChunkedReadOnly,
+}
+
+/// 按文件大小(`len`)与本次打开时算好的整读上限(`full_load_max`,调用方
+/// 传入而非在这里现查,避免每次分类都重复查一次系统内存)分类。
+pub(crate) fn classify_size(len: u64, full_load_max: u64) -> SizeTier {
+    if len < EDIT_MODE_MAX_BYTES {
+        SizeTier::Edit
+    } else if len < full_load_max {
+        SizeTier::FullLoadReadOnly
+    } else {
+        SizeTier::ChunkedReadOnly
+    }
+}
+
+/// 在 `bytes` 里找不超过 `max_len` 的最大合法 UTF-8 前缀长度——分块读取截断
+/// 点若落在多字节字符中间,回退到该字符起点之前,避免产生非法 UTF-8 或
+/// 半个字符。`max_len` 超过 `bytes.len()` 时钳到 `bytes.len()`。
+pub(crate) fn utf8_safe_prefix_len(bytes: &[u8], max_len: usize) -> usize {
+    let max_len = max_len.min(bytes.len());
+    match std::str::from_utf8(&bytes[..max_len]) {
+        Ok(_) => max_len,
+        Err(e) => e.valid_up_to(),
+    }
+}
+
+/// 读盘 + 三档分类的纯数据结果(不含 `CodeView`)。`#[derive(Debug, Clone)]`
+/// ——专为跨 `Message`/线程边界传递设计(`CodeView` 没有实现 `Clone`,而
+/// `Message` enum 整体 `#[derive(Debug, Clone)]`,见 Task 3):异步读盘任务
+/// 只做 I/O 与分类,`CodeView::new`(全局 `font_system` 锁,纯 CPU 计算,
+/// 已验证是 `Send`、不要求在"拥有窗口/事件循环"的线程上做,见 Task 1"对
+/// Task 3 的影响")留给 Task 3 的后台任务在同一个 `spawn_blocking` 里现场
+/// 构造。
+#[derive(Debug, Clone)]
+pub(crate) struct NativeFileData {
+    pub text: String,
+    pub syntax_token: String,
+    pub read_only: bool,
+    pub loaded_bytes: u64,
+    pub total_bytes: u64,
+    pub truncated: bool,
+}
+
+/// 读盘并按三档策略产出 [`NativeFileData`]:
+/// - `SizeTier::Edit`(< 20MB):全量读入,可写(`read_only=false`),语义同
+///   2026-09-06 起的"原生预览默认可编辑"。
+/// - `SizeTier::FullLoadReadOnly`:全量读入,但 `read_only=true`。
+/// - `SizeTier::ChunkedReadOnly`:只读入前 `full_load_max` 字节(按合法 UTF-8
+///   边界截断),`read_only=true`,`truncated=true`。
 ///
-/// 超过 [`MAX_NATIVE_EDITOR_BYTES`] 的文件直接返回 Err(在真正读盘前就拦下),
-/// 让 `push_tab` 的 `.ok()` 落到 `None` → 该 tab 走 wry 只读 flyfish 预览,
-/// 避免把 UI 线程卡死在整文档预整形上。
+/// 内容不是合法 UTF-8 时降级用 lossy 转换(不当错误);其余读取失败(不存在/
+/// 权限不够等)原样透传 `std::io::Error`。
+pub(crate) fn read_native_file_data(path: &std::path::Path) -> std::io::Result<NativeFileData> {
+    let total_bytes = std::fs::metadata(path)?.len();
+    let full_load_max = full_load_max_bytes();
+    let tier = classify_size(total_bytes, full_load_max);
+
+    let (raw, loaded_bytes, truncated) = match tier {
+        SizeTier::Edit | SizeTier::FullLoadReadOnly => {
+            let bytes = std::fs::read(path)?;
+            let len = bytes.len() as u64;
+            (bytes, len, false)
+        }
+        SizeTier::ChunkedReadOnly => {
+            use std::io::Read;
+            let mut file = std::fs::File::open(path)?;
+            let cap = full_load_max as usize;
+            let mut buf = vec![0u8; cap];
+            let mut read_total = 0usize;
+            while read_total < cap {
+                let n = file.read(&mut buf[read_total..])?;
+                if n == 0 {
+                    break;
+                }
+                read_total += n;
+            }
+            buf.truncate(read_total);
+            let safe_len = utf8_safe_prefix_len(&buf, buf.len());
+            buf.truncate(safe_len);
+            let len = buf.len() as u64;
+            (buf, len, true)
+        }
+    };
+
+    let text = String::from_utf8(raw)
+        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+    let read_only = !matches!(tier, SizeTier::Edit);
+    Ok(NativeFileData {
+        text,
+        syntax_token: extension_to_syntax(path),
+        read_only,
+        loaded_bytes,
+        total_bytes,
+        truncated,
+    })
+}
+
+/// 读盘 + 构造好的 `CodeView` 打包在一起。两个来源:`push_tab`/
+/// `bump_reload`/`enter_code_mode` 的**同步**路径(已知不大的场景:测试
+/// fixture、已打开文件保存后刷新、预览↔代码切换只对 `wry_toggle_eligible`
+/// 的 md/html 生效)直接拿 [`read_and_build_native_editor`] 的返回值;
+/// `App::preview_open_path`/`project_preview_open_path` 的**异步**路径
+/// (Task 3,用户从文件树打开任意大小文件走这条)在 `spawn_blocking` 里构造
+/// 好之后,包一层 [`NativeEditorLoadHandle`] 跨 `Message` 边界传回——见该
+/// 类型文档"为什么不能直接放进 `Message`"。
+pub(crate) struct NativeEditorLoad {
+    pub view: crate::code_editor::CodeView,
+    pub loaded_bytes: u64,
+    pub total_bytes: u64,
+    pub truncated: bool,
+}
+
+/// 读盘并构造 `CodeView`(阻塞调用方线程——同步路径直接在调用方线程做;
+/// 异步路径在 `spawn_blocking` 的后台线程里做,见上方 [`NativeEditorLoad`]
+/// 文档)。内容不是合法 UTF-8 时降级用 lossy 转换;其余读取失败原样透传
+/// `std::io::Error`。
 ///
 /// 打开即程序化聚焦(键盘事件无需先点击一次即可直达编辑器)这件事挪到
-/// `push_tab` 里置一次性 `pending_focus` 位——官方 `text_editor` 的焦点是
-/// 真实 iced 焦点树的一部分,不能像 vendored 版本那样在构造时直接
-/// `request_focus()` 拿到。
+/// `push_tab`/`PreviewPane::apply_native_load` 里置一次性 `pending_focus`
+/// 位——官方 `text_editor` 的焦点是真实 iced 焦点树的一部分,不能像
+/// vendored 版本那样在构造时直接 `request_focus()` 拿到。
 pub(crate) fn read_and_build_native_editor(
     path: &std::path::Path,
-) -> std::io::Result<crate::code_editor::CodeView> {
-    if exceeds_native_editor_limit(path) {
-        return Err(std::io::Error::other(
-            "file exceeds native editor size limit",
-        ));
+) -> std::io::Result<NativeEditorLoad> {
+    let data = read_native_file_data(path)?;
+    let view = crate::code_editor::CodeView::new(&data.text, data.syntax_token, data.read_only);
+    Ok(NativeEditorLoad {
+        view,
+        loaded_bytes: data.loaded_bytes,
+        total_bytes: data.total_bytes,
+        truncated: data.truncated,
+    })
+}
+
+/// 跨 `Message` 边界传递一次性构造好的 [`NativeEditorLoad`]。`CodeView`
+/// 没有实现 `Clone`(撤销栈/`Content` 都不必要求 `Clone`),而 `Message`
+/// 整体 `#[derive(Debug, Clone)]`,所有变体的字段都要满足这两个 trait——
+/// 见 Task 1"对 Task 3 的影响":`CodeView`/`Content` 已验证是 `Send`,不要求
+/// 在"拥有窗口/事件循环"的线程上构造,所以 `spawn_blocking` 的后台任务可以
+/// 直接把 `CodeView::new` 一起做了,不必只传纯数据回主线程现场构造(那样
+/// 反而会把真正耗时的 shaping 挪回 UI 线程,违背异步化的本意)。
+/// `Arc<Mutex<Option<_>>>` 本身廉价 `Clone`(只是引用计数 + 一次判空锁),
+/// 接收端 [`NativeEditorLoadHandle::take`] 精确取出一次;`Debug` 手写为占位
+/// (不下探锁内容,同 `PreviewTab` 对不可 `Debug` 字段的既有处理方式)。
+#[derive(Clone)]
+pub(crate) struct NativeEditorLoadHandle(
+    std::sync::Arc<std::sync::Mutex<Option<NativeEditorLoad>>>,
+);
+
+impl std::fmt::Debug for NativeEditorLoadHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NativeEditorLoadHandle")
+            .finish_non_exhaustive()
     }
-    let text = std::fs::read_to_string(path).or_else(|e| {
-        // 白名单扩展名但内容不是合法 UTF-8:降级用 lossy 转换,不当错误处理
-        // (多数文本查看器的通行做法,见设计文档"错误处理"一节)。
-        if e.kind() == std::io::ErrorKind::InvalidData {
-            std::fs::read(path).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-        } else {
-            Err(e)
-        }
-    })?;
-    Ok(crate::code_editor::CodeView::new(
-        &text,
-        extension_to_syntax(path),
-        false,
-    ))
+}
+
+impl NativeEditorLoadHandle {
+    pub(crate) fn new(load: NativeEditorLoad) -> Self {
+        Self(std::sync::Arc::new(std::sync::Mutex::new(Some(load))))
+    }
+
+    /// 取出内部的 `NativeEditorLoad`;正常只应被调用一次(`apply_native_load`
+    /// 收到结果时取走),第二次调用返回 `None`。锁中毒(持锁线程 panic)时
+    /// 同样按 `None` 处理——不让这里的 panic 传播炸掉 `update()`。
+    pub(crate) fn take(&self) -> Option<NativeEditorLoad> {
+        self.0.lock().ok().and_then(|mut guard| guard.take())
+    }
 }
 
 /// "编辑/原生 code editor 预览"的适用范围。判定规则单一来源 = 语法能力:
@@ -90,6 +237,38 @@ pub fn is_editable_extension(path: &std::path::Path) -> bool {
         ext.as_str(),
         "txt" | "log" | "conf" | "cfg" | "ini" | "csv" | "tsv"
     )
+}
+
+/// "加载更多"续读:从字节偏移 `start` 起读最多 `max_extra` 字节(按合法
+/// UTF-8 边界截断),返回 `(续读到的文本, 新的已加载字节数, 是否仍被截断)`。
+/// `truncated` 语义:`start + 实际读到的字节数 < 文件总大小` 则仍为真。
+pub(crate) fn read_more_bytes(
+    path: &std::path::Path,
+    start: u64,
+    max_extra: u64,
+) -> std::io::Result<(String, u64, bool)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let total_bytes = std::fs::metadata(path)?.len();
+    let mut file = std::fs::File::open(path)?;
+    file.seek(SeekFrom::Start(start))?;
+    let cap = max_extra as usize;
+    let mut buf = vec![0u8; cap];
+    let mut read_total = 0usize;
+    while read_total < cap {
+        let n = file.read(&mut buf[read_total..])?;
+        if n == 0 {
+            break;
+        }
+        read_total += n;
+    }
+    buf.truncate(read_total);
+    let safe_len = utf8_safe_prefix_len(&buf, buf.len());
+    buf.truncate(safe_len);
+    let new_loaded = start + buf.len() as u64;
+    let text = String::from_utf8(buf)
+        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+    let truncated = new_loaded < total_bytes;
+    Ok((text, new_loaded, truncated))
 }
 
 /// 默认预览要不要走 flyfish 渲染而不是原生代码编辑器:目前只有
@@ -308,4 +487,98 @@ pub(crate) fn extension_to_syntax(path: &std::path::Path) -> String {
         _ => "txt",
     }
     .to_string()
+}
+
+#[cfg(test)]
+mod size_tier_tests {
+    use super::*;
+
+    #[test]
+    fn full_load_max_clamps_to_floor_on_small_machines() {
+        // 4GB 机器:4×0.10/3 ≈ 137MB,应钳到 256MB 下限。
+        let max = full_load_max_bytes_for(4 * 1024 * 1024 * 1024);
+        assert_eq!(max, 256 * 1024 * 1024);
+    }
+
+    #[test]
+    fn full_load_max_clamps_to_ceiling_on_huge_machines() {
+        // 128GB 机器:128×0.10/3 ≈ 4.27GB,应钳到 4GB 上限。
+        let max = full_load_max_bytes_for(128 * 1024 * 1024 * 1024);
+        assert_eq!(max, 4 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn full_load_max_scales_between_clamps() {
+        // 32GB 机器:32×0.10/3 ≈ 1.0667GB,应落在钳位区间内、非两端。
+        let max = full_load_max_bytes_for(32 * 1024 * 1024 * 1024);
+        assert!(max > 256 * 1024 * 1024 && max < 4 * 1024 * 1024 * 1024);
+        // 32×1024³×0.10/3 = 1_145_324_612.26…,`as u64` 截断取整。
+        assert_eq!(max, 1_145_324_612);
+    }
+
+    #[test]
+    fn classify_size_boundaries() {
+        let full_max = 1_000_000_000u64;
+        assert!(matches!(classify_size(0, full_max), SizeTier::Edit));
+        assert!(matches!(
+            classify_size(EDIT_MODE_MAX_BYTES - 1, full_max),
+            SizeTier::Edit
+        ));
+        assert!(matches!(
+            classify_size(EDIT_MODE_MAX_BYTES, full_max),
+            SizeTier::FullLoadReadOnly
+        ));
+        assert!(matches!(
+            classify_size(full_max - 1, full_max),
+            SizeTier::FullLoadReadOnly
+        ));
+        assert!(matches!(
+            classify_size(full_max, full_max),
+            SizeTier::ChunkedReadOnly
+        ));
+    }
+
+    #[test]
+    fn utf8_safe_prefix_len_trims_incomplete_multibyte_tail() {
+        // "中" 是 3 字节 UTF-8(E4 B8 AD)。截在第 1、2 字节处都应回退到
+        // 该字符起点之前;截在第 3 字节(字符完整)处应保留整个字符。
+        let text = "ab中cd";
+        let bytes = text.as_bytes();
+        assert_eq!(utf8_safe_prefix_len(bytes, 2), 2);
+        assert_eq!(utf8_safe_prefix_len(bytes, 3), 2);
+        assert_eq!(utf8_safe_prefix_len(bytes, 4), 2);
+        assert_eq!(utf8_safe_prefix_len(bytes, 5), 5);
+        assert_eq!(utf8_safe_prefix_len(bytes, 100), bytes.len());
+    }
+
+    #[test]
+    fn read_native_file_data_edit_tier_is_writable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("small.rs");
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let data = read_native_file_data(&path).unwrap();
+        assert!(!data.read_only);
+        assert!(!data.truncated);
+        assert_eq!(data.total_bytes, data.loaded_bytes);
+        assert_eq!(data.text, "fn main() {}\n");
+        assert_eq!(data.syntax_token, "rust");
+    }
+
+    #[test]
+    fn read_more_bytes_continues_from_offset_and_respects_utf8_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.txt");
+        // "中" 在字节 8..11(前 8 字节是 "aaaaaaaa"),故意把续读窗口卡在
+        // 这个多字节字符中间,验证不产生半个字符。
+        std::fs::write(&path, "aaaaaaaa中bbbbbbbb").unwrap();
+        let (first, loaded1, truncated1) = read_more_bytes(&path, 0, 9).unwrap();
+        assert_eq!(first, "aaaaaaaa");
+        assert_eq!(loaded1, 8);
+        assert!(truncated1);
+
+        let (second, loaded2, truncated2) = read_more_bytes(&path, loaded1, 100).unwrap();
+        assert_eq!(second, "中bbbbbbbb");
+        assert!(!truncated2);
+        assert_eq!(loaded2, std::fs::metadata(&path).unwrap().len());
+    }
 }

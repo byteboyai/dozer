@@ -30,6 +30,21 @@ pub struct PreviewTab {
     /// `false`。2026-09-06 原生预览不再只读,有了就地编辑就必须能显式挂脏并兜底,
     /// 否则用户会无声丢改动(见 workspace.rs 关闭/切换前的确认)。
     pub dirty: bool,
+    /// 只读大文件档(`FullLoadReadOnly`/`ChunkedReadOnly`)已载入的字节数;
+    /// 编辑档/非文件 tab 恒为 0(无意义,不展示)。
+    pub loaded_bytes: u64,
+    /// 打开时 `fs::metadata` 测到的文件总字节数;语义同上,非只读大文件 tab
+    /// 恒为 0。
+    pub total_bytes: u64,
+    /// 是否被截断(`ChunkedReadOnly` 档为真;其余恒假)。UI 据此渲染"仅加载
+    /// 前 X MB"横幅 + "加载更多"按钮。
+    pub truncated: bool,
+    /// 原生编辑器正在异步读盘中(`PreviewPane::insert_loading_tab` 置真,
+    /// `apply_native_load` 收到结果后置假)。为真时 `editor`/`tabular` 均
+    /// `None`,但这个 tab **不**应该被当成"该文件没有原生编辑器"误判进
+    /// webview 池——`desired_webviews()`/`active_webview_id()`/`select()` 等
+    /// 判据要额外排除 `loading` 为真的 tab。
+    pub loading: bool,
 }
 
 impl std::fmt::Debug for PreviewTab {
@@ -40,6 +55,10 @@ impl std::fmt::Debug for PreviewTab {
             .field("title", &self.title)
             .field("reload_nonce", &self.reload_nonce)
             .field("dirty", &self.dirty)
+            .field("loaded_bytes", &self.loaded_bytes)
+            .field("total_bytes", &self.total_bytes)
+            .field("truncated", &self.truncated)
+            .field("loading", &self.loading)
             .field("editor", &self.editor.is_some())
             .field("tabular", &self.tabular.is_some())
             .finish()
@@ -109,6 +128,19 @@ pub struct FindState {
     pub query_focused: bool,
 }
 
+/// 只读大文件档的搜索会话——⌘F 在这类 tab 上不打开 `FindState`(内存线性
+/// 扫描,大文件上代价不可接受),而是打开这个,复用
+/// `extensions::search::search_scope` 的磁盘流式扫描。`line_no` 是 1-based
+/// (grep_searcher 惯例,见 `SearchHit` 文档)。
+#[derive(Debug, Clone, Default)]
+pub struct LargeFileSearch {
+    pub tab_id: usize,
+    pub query: String,
+    pub hits: Vec<crate::extensions::search::SearchHit>,
+    pub current: usize,
+    pub running: bool,
+}
+
 pub struct PreviewPane {
     pub(crate) tabs: Vec<PreviewTab>,
     pub(crate) active: usize,
@@ -136,6 +168,10 @@ pub struct PreviewPane {
     pub(crate) pending_editor_reveal_focus: bool,
     /// 文件内搜索(⌘F)会话,`Some` 表示条已显示;Files / Project 各一份,独立。
     pub(crate) find: Option<FindState>,
+    /// 只读大文件档的搜索会话,`Some` 表示条已显示。与 `find`(小文件 ⌘F)
+    /// 互斥:同一时刻一个 tab 只可能命中其中一种(`open_large_file_search`/
+    /// `preview_find_open` 由调用方按 `editor.is_read_only()` 二选一触发)。
+    pub(crate) large_file_search: Option<LargeFileSearch>,
     /// `push_tab` 刚创建、还没被外层 spawn 后台加载的表格 tab
     /// `(PreviewTab.id, 文件路径)` 队列。调用方在 `open_path`/`push_tab`
     /// 返回后立即 `take_pending_tabular_loads()` 取走清空,不应该攒着不取
@@ -156,6 +192,7 @@ impl Default for PreviewPane {
             pending_find_focus: false,
             pending_editor_reveal_focus: false,
             find: None,
+            large_file_search: None,
             pending_tabular_loads: Vec::new(),
         }
     }

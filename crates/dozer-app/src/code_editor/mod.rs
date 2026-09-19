@@ -39,7 +39,8 @@ pub mod highlighter;
 use iced_widget::canvas;
 use iced_widget::core::widget::Id as WidgetId;
 use iced_widget::core::{Color, Element, Length, Pixels, Point, Rectangle, Size, mouse};
-use iced_widget::text_editor::{self, Action};
+use iced_widget::text_editor::{self, Action, Edit};
+use std::sync::Arc;
 
 /// 官方 `text_editor::TextEditor` 自己的默认 padding(`Padding::new(5.0)`,
 /// 见 `iced_widget::text_editor` 源码)。在这里显式设出来并喂给 `.padding(...)`,
@@ -83,6 +84,26 @@ fn commit_history(sink: &mut Vec<Snapshot>, snap: Snapshot) {
     }
 }
 
+/// 建一个已装载 `text` 的 `Content`。**曾经**试过"空 Content 起手 +
+/// `Action::Edit(Edit::Paste(..))` 一次性灌入整份文本"绕开
+/// `Content::with_text` 的无界 shaping(理论依据:`insert_at` 只切行不
+/// shaping,shaping 交给 widget 每帧 `layout()` 触发的、天然有界的
+/// `Editor::update()`)——**已证伪,不要重试**:cosmic-text
+/// `edit/editor.rs::insert_at` 对多行 `Paste` 里的每一"中间行"都
+/// `buffer.lines.insert(insert_line, tmp)`,插入点固定不变,Vec
+/// 逐行搬移是 *O(n²)*(n = 插入的行数)。实测(release,20 万行/
+/// 约 8MB):`Content::with_text` 7.8s(线性,~39µs/行) vs 这条
+/// "更快"路径反而 88.3s——比什么都不做还慢好几倍。真正的修复方向
+/// 不是"让整份文档构造更快"(单行 shaping 本身有真实、不可省略的
+/// 计算成本,线性已经是下限),而是"整份文档构造绝不能跑在 UI 线程
+/// 上"——见 `preview::native_editor` 打开流程异步化(把这个函数的
+/// 调用挪进 `spawn_blocking`,构造完的 `CodeView` 是 `Send`,可以
+/// 跨线程传回)。这里退回官方 `Content::with_text`,只是恢复成线性
+/// 而不是更糟的二次方。
+fn content_from_text(text: &str) -> text_editor::Content {
+    text_editor::Content::with_text(text)
+}
+
 /// 组出可直接嵌入的 `text_editor`(preview.rs 文件/项目预览的原生 tab 在用,
 /// 见模块文档用途演进)——`read_only` 决定 [`Action::Edit`] 是否被过滤掉。
 /// 撤销历史在这里全量与 buffer 一起记:官方引擎不暴露按动作回滚,见模块
@@ -109,7 +130,7 @@ impl CodeView {
     pub fn new(text: &str, token: impl Into<String>, read_only: bool) -> Self {
         Self {
             id: WidgetId::unique(),
-            content: text_editor::Content::with_text(text),
+            content: content_from_text(text),
             scroll_lines: 0.0,
             read_only,
             token: token.into(),
@@ -122,6 +143,42 @@ impl CodeView {
     /// 当前完整文本内容(脏标记 = `text() != saved_content`)。
     pub fn text(&self) -> String {
         self.content.text()
+    }
+
+    /// 只读态(见 `preview::native_editor::SizeTier`:整读/分块两档只读文件
+    /// 走 `read_only=true` 构造)——UI 据此渲染"只读"提示 chip、隐藏保存
+    /// 入口;`perform`/`record_before` 已经用同一个字段过滤编辑动作与跳过
+    /// undo 记录(见模块文档"用途演进"),这里只是补一个公开只读访问器。
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    /// 当前 buffer 总行数——只读大文件档搜索用它判定一处命中是否落在
+    /// "已加载"范围内(见 `App` 的 `PreviewLargeFileSearchGo` 处理)。
+    pub fn content_line_count(&self) -> usize {
+        self.content.line_count()
+    }
+
+    /// 只读大文件档"加载更多"专用:把 `more` 追加到 buffer 末尾,不经过
+    /// `perform()`(不记 undo、不受 `read_only` 过滤——这不是用户编辑,是
+    /// 继续把磁盘上的原有内容灌进来)。直接对 `self.content` 发
+    /// `Action::Edit(Edit::Paste(..))`——同 [`content_from_text`],
+    /// `insert_at` 只切行不 shaping,shaping 交给下一次有界的 `update()`。
+    /// 插入点是当前 buffer 末尾(最后一行末尾),不影响用户已有的滚动位置/
+    /// 光标(只读态下光标本来也不承载编辑语义)。
+    pub fn append_text(&mut self, more: &str) {
+        if more.is_empty() {
+            return;
+        }
+        let last_line = self.content.line_count().saturating_sub(1);
+        let last_col = self
+            .content
+            .line(last_line)
+            .map(|l| l.text.len())
+            .unwrap_or(0);
+        self.move_cursor_to((last_line, last_col));
+        self.content
+            .perform(Action::Edit(Edit::Paste(Arc::new(more.to_string()))));
     }
 
     /// 0-indexed `(line, column)`——供 `preview_context_from_editor_state`
@@ -391,7 +448,7 @@ impl CodeView {
     fn restore(&mut self, snap: Snapshot) {
         let last_line = self.content.line_count();
         let line = snap.line.min(last_line.saturating_sub(1));
-        self.content = text_editor::Content::with_text(&snap.text);
+        self.content = content_from_text(&snap.text);
         self.scroll_lines = self
             .scroll_lines
             .clamp(0.0, self.content.line_count().saturating_sub(1) as f32);
@@ -418,7 +475,7 @@ impl CodeView {
         if count == 0 {
             return 0;
         }
-        self.content = text_editor::Content::with_text(&new_text);
+        self.content = content_from_text(&new_text);
         self.reset_edit_history();
         count
     }
@@ -440,7 +497,7 @@ impl CodeView {
         else {
             return false;
         };
-        self.content = text_editor::Content::with_text(&new_text);
+        self.content = content_from_text(&new_text);
         self.reset_edit_history();
         true
     }
@@ -660,6 +717,59 @@ impl<Message> canvas::Program<Message> for Scrollstrip {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opening_large_document_produces_correct_content() {
+        // 这里不再断言一个绝对耗时上限:`content_from_text` 走的是官方
+        // `Content::with_text`,单行 shaping 本身有真实、不可省略的计算
+        // 成本,线性总耗时随行数增长是预期行为,不是 bug(见
+        // `content_from_text` 文档"已证伪,不要重试" ——之前想用
+        // `Action::Edit(Edit::Paste(..))` 绕开这个耗时,结果那条路径是
+        // *O(n²)*,反而更慢,已被这个事实推翻)。一个固定的绝对耗时阈值在
+        // debug/release、不同机器之间会相差几十倍,选太紧会在慢机器/debug
+        // build 上抖动误报,选太松又测不出真的二次方回归(小规模下 O(n²)
+        // 系数反而比 O(n) 系数小,两者的"交叉点"在实测中位于 20 万行以上,
+        // 拿一个几千行的小样本做比例测试测不出问题)。所以这个测试只保证
+        // *正确性*(行数、内容不丢不错);真正的"没有退化成二次方"用下面
+        // 被 `#[ignore]` 的 `scratch_bench_with_text_vs_paste_not_quadratic`
+        // 人工验证——touch `content_from_text` 时手动跑一次。
+        let big_text: String = (0..5_000)
+            .map(|i| format!("let line_{i:06} = {i}; // filler filler filler\n"))
+            .collect();
+        let view = CodeView::new(&big_text, "rust", false);
+        assert_eq!(view.content.line_count(), 5_001, "5000 行 + 尾随空行");
+        assert_eq!(view.text(), big_text);
+    }
+
+    #[test]
+    #[ignore = "手动验证专用:确认 content_from_text 是线性而非二次方,\
+                改动 content_from_text/CodeView::new 时手动跑一次"]
+    fn scratch_bench_with_text_vs_paste_not_quadratic() {
+        fn make_text(lines: usize) -> String {
+            (0..lines)
+                .map(|i| format!("let line_{i:06} = {i}; // filler filler filler\n"))
+                .collect()
+        }
+        // 需要跨过实测的"O(n) vs O(n²) 交叉点"(约 20 万行)才有区分力,
+        // 见 `content_from_text` 文档。
+        for &n in &[50_000usize, 100_000, 200_000] {
+            let text = make_text(n);
+            let t0 = std::time::Instant::now();
+            let content = content_from_text(&text);
+            let elapsed = t0.elapsed();
+            assert_eq!(content.line_count(), n + 1);
+            eprintln!("n={n:>7} content_from_text={elapsed:>10?}");
+        }
+    }
+
+    #[test]
+    fn append_text_extends_buffer_without_touching_undo() {
+        let mut view = CodeView::new("line1\nline2", "txt", true);
+        assert_eq!(view.undo.len(), 0);
+        view.append_text("\nline3\nline4");
+        assert_eq!(view.text(), "line1\nline2\nline3\nline4");
+        assert_eq!(view.undo.len(), 0, "追加加载不应产生 undo 记录");
+    }
 
     #[test]
     fn read_only_filters_edit_but_allows_move_and_scroll() {
