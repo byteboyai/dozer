@@ -18,6 +18,10 @@ pub struct PreviewTab {
     /// `CodeView` 没有实现 `Clone`/`PartialEq`,这也是 `PreviewTab` 摘掉这两个
     /// derive 的原因(见下方手写的 `Debug`)。
     pub editor: Option<crate::code_editor::CodeView>,
+    /// 表格类文件(`tabular::is_tabular_extension`)的文件 tab 有值,非空即代表
+    /// 这个 tab 走 Tabular Viewer 原生渲染(网格)。与 `editor` 互斥:同一 tab
+    /// 要么代码编辑器、要么表格、要么 webview,三者取其一。
+    pub tabular: Option<crate::tabular::TabularView>,
     /// 原生可编辑 tab 的"buffer 与磁盘不一致"标记:用户就地改过、还没 ⌘S 保存
     /// (或右键"刷新"/项目切换丢弃归零)为 `true`。`Blank`/`webview` tab 恒
     /// `false`。2026-09-06 原生预览不再只读,有了就地编辑就必须能显式挂脏并兜底,
@@ -34,6 +38,7 @@ impl std::fmt::Debug for PreviewTab {
             .field("reload_nonce", &self.reload_nonce)
             .field("dirty", &self.dirty)
             .field("editor", &self.editor.is_some())
+            .field("tabular", &self.tabular.is_some())
             .finish()
     }
 }

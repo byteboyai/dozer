@@ -16,6 +16,7 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         title: "空白".into(),
         reload_nonce: 0,
         editor: None,
+        tabular: None,
         dirty: false,
     }
 }
@@ -141,7 +142,7 @@ impl PreviewPane {
     pub fn active_tab_is_native(&self) -> bool {
         self.tabs
             .get(self.active)
-            .is_some_and(|t| t.editor.is_some())
+            .is_some_and(|t| t.editor.is_some() || t.tabular.is_some())
     }
 
     pub fn open_path(&mut self, path: PathBuf) -> usize {
@@ -172,10 +173,19 @@ impl PreviewPane {
         let id = self.next_id;
         self.next_id += 1;
         let editor = match &kind {
+            TabKind::File(path) if crate::tabular::is_tabular_extension(path) => None,
             TabKind::File(path)
                 if is_editable_extension(path) && !prefers_rendered_preview(path) =>
             {
                 read_and_build_native_editor(path).ok()
+            }
+            _ => None,
+        };
+        // 表格类文件委托 Tabular Viewer(与 editor 互斥)。加载失败落到 `None`,
+        // 该 tab 会走 webview/flyfish 兜底(同 editor 打开失败的降级路径)。
+        let tabular = match &kind {
+            TabKind::File(path) if crate::tabular::is_tabular_extension(path) => {
+                crate::tabular::load(path).ok()
             }
             _ => None,
         };
@@ -190,6 +200,7 @@ impl PreviewPane {
             title,
             reload_nonce: 0,
             editor,
+            tabular,
             dirty: false,
         });
         self.active = self.tabs.len() - 1;
@@ -207,7 +218,9 @@ impl PreviewPane {
     pub fn active_webview_id(&self) -> Option<usize> {
         self.tabs
             .get(self.active)
-            .filter(|t| t.editor.is_none() && matches!(t.kind, TabKind::File(_)))
+            .filter(|t| {
+                t.editor.is_none() && t.tabular.is_none() && matches!(t.kind, TabKind::File(_))
+            })
             .map(|t| t.id)
     }
     /// 手动点 tab / 打开时切到已存在 tab。切到**另一个**文件 tab 时,若目标
@@ -221,7 +234,7 @@ impl PreviewPane {
         }
         let is_webview_file = matches!(
             &self.tabs[idx].kind,
-            TabKind::File(_) if self.tabs[idx].editor.is_none()
+            TabKind::File(_) if self.tabs[idx].editor.is_none() && self.tabs[idx].tabular.is_none()
         );
         self.active = idx;
         if is_webview_file {
@@ -291,7 +304,7 @@ impl PreviewPane {
         self.tabs
             .iter()
             .enumerate()
-            .filter(|(_, tab)| tab.editor.is_none())
+            .filter(|(_, tab)| tab.editor.is_none() && tab.tabular.is_none())
             .filter_map(|(idx, tab)| {
                 // `Blank` 没有 wry 页面(内容区是纯 iced 渲染的 Dozer 品牌标),
                 // 不进期望清单——`sync_webview_pool` 据此不会为它创建 webview。
@@ -712,6 +725,16 @@ impl PreviewPane {
             .and_then(|t| t.editor.as_mut())
     }
 
+    /// 按 tab id 取该 tab 的 Tabular Viewer 可变引用。tab 不存在或该 tab 不是
+    /// 表格(没有 `tabular`)都返回 `None`。workspace 把
+    /// `Message::TabularAction` 的 `Action` 用它路由给正确的 tab 后 `apply`。
+    pub fn tabular_mut(&mut self, tab_id: usize) -> Option<&mut crate::tabular::TabularView> {
+        self.tabs
+            .iter_mut()
+            .find(|t| t.id == tab_id)
+            .and_then(|t| t.tabular.as_mut())
+    }
+
     /// 编辑保存后调用:按 `PreviewTab.id` 找到对应 tab,推进 reload。原生
     /// (有 `editor`)tab 直接读盘重建编辑器实例(`bump_reload` 路径),wry
     /// tab 走 `reload_nonce` 计数(驱动 `desired_webviews()` 换 URL)。未知
@@ -735,7 +758,7 @@ impl PreviewPane {
                 // 是否弹确认由调用方 handler 决定,清空这里是为了状态自洽)。
                 tab.dirty = false;
             }
-        } else {
+        } else if tab.tabular.is_none() {
             tab.reload_nonce += 1;
         }
     }
@@ -784,7 +807,7 @@ impl PreviewPane {
         let mut matched: Vec<usize> = self
             .tabs
             .iter()
-            .filter(|t| t.editor.is_none())
+            .filter(|t| t.editor.is_none() && t.tabular.is_none())
             .filter_map(|t| match &t.kind {
                 TabKind::File(path)
                     if changed.iter().any(|c| c == path)
@@ -806,13 +829,14 @@ impl PreviewPane {
 
     /// 配色方案切换后调用:把所有走 wry 的文件 tab 的 `reload_nonce` 各推一格,
     /// 逼 `desired_webviews()` 换 URL(新 URL 带新的 `&theme=` 参数)重新导航,
-    /// flyfish 据此切到新主题。原生编辑器 tab 不受影响(其配色由 iced 主题
-    /// 直接驱动,无需重载);`Blank` 占位 tab 没有 wry 页面,同样跳过。
+    /// flyfish 据此切到新主题。原生编辑器 / Tabular Viewer tab 不受影响(它们
+    /// 是 iced 原生渲染、每帧读 `byteui::theme::color::current()`,切主题自然
+    /// 跟随);`Blank` 占位 tab 没有 wry 页面,同样跳过。
     pub fn reload_all_webviews_for_theme(&mut self) {
         let ids: Vec<usize> = self
             .tabs
             .iter()
-            .filter(|t| t.editor.is_none())
+            .filter(|t| t.editor.is_none() && t.tabular.is_none())
             .filter(|t| matches!(t.kind, TabKind::File(_)))
             .map(|t| t.id)
             .collect();
@@ -1219,6 +1243,26 @@ mod tests {
         assert_eq!(p.tabs()[0].kind, TabKind::Blank);
         assert_eq!(p.tabs()[1].title, "a.md");
         assert_eq!(p.tabs()[2].title, "b.md");
+    }
+
+    #[test]
+    fn open_tabular_file_builds_tabular_view_and_excludes_from_webviews() {
+        let p = std::env::temp_dir().join(format!("tabular_route_{}.csv", std::process::id()));
+        std::fs::write(&p, "a,b\n1,2\n").unwrap();
+        let mut pane = PreviewPane::default();
+        pane.open_path(p.clone());
+        let tab = &pane.tabs()[pane.active_idx()];
+        assert!(tab.tabular.is_some(), "csv 应构造 TabularView");
+        assert!(tab.editor.is_none(), "csv 不应再进代码编辑器");
+        assert!(
+            pane.desired_webviews().is_empty(),
+            "tabular tab 不该进 webview 池"
+        );
+        assert!(
+            pane.active_tab_is_native(),
+            "tabular tab 应是原生 iced 渲染"
+        );
+        std::fs::remove_file(p).ok();
     }
 
     #[test]

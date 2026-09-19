@@ -22,6 +22,7 @@ mod preview_state;
 mod project;
 mod project_meta;
 mod runtime;
+mod tabular;
 mod term;
 mod theme;
 mod transcript;

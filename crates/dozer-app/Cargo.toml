@@ -86,6 +86,11 @@ sysinfo = "0.32"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.17"
 ignore = "0.4"
+# calamine：表格预览(Tabular Viewer)解析 .xls/.xlsx/.ods,`dates` feature
+# 打开 chrono 日期值供单元格日期格式化(见 tabular::data_to_string)。
+# csv：.csv/.tsv 的流式解析(引号/转义/参差行由它处理)。
+calamine = { version = "0.36", features = ["dates"] }
+csv = "1"
 
 [dev-dependencies]
 tempfile = "3"

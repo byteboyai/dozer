@@ -339,6 +339,11 @@ pub enum Message {
     /// File-Find 条「替换全部」:与 `PreviewFindReplaceCurrent` 同一 buffer-only
     /// 语义,只是把这轮每一处命中一次性全改、同样标脏等 ⌘S。
     PreviewFindReplaceAll(PanelKind),
+    /// 表格预览 tab 的交互(滚动/sheet 切换)。`usize` 是 `PreviewTab.id`,
+    /// `PanelKind` 区分 Files / Project 两个预览面板;`tabular::Action` 是
+    /// 网格/切换条发回的纯动作,由 `Workspace::preview_pane_tabular_action`
+    /// 定位对应 tab 后 `apply`。
+    TabularAction(PanelKind, usize, crate::tabular::Action),
     /// Project 面板右配对预览:打开本地文件为新 tab,语义同 `PreviewOpenPath`。
     ProjectPreviewOpenPath(PathBuf),
     /// Project 面板右配对预览:切换 tab(vec 位置)。

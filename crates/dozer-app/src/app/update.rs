@@ -876,6 +876,11 @@ impl App {
                     ws.preview_find_replace_all(kind);
                 });
             }
+            Message::TabularAction(kind, tab_id, action) => {
+                self.with_focused_project(move |ws, _io| {
+                    ws.preview_pane_tabular_action(kind, tab_id, action);
+                });
+            }
             Message::ProjectPreviewOpenPath(path) => self.project_preview_open_path(path),
             Message::ProjectPreviewSelectTab(idx) => self.project_preview_select_tab(idx),
             Message::ProjectPreviewCloseTab(idx) => {

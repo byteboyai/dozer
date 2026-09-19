@@ -1902,6 +1902,24 @@ impl Workspace {
         self.preview_pane_save_at(kind, idx);
     }
 
+    /// 表格预览 tab 的交互动作(滚动/sheet 切换):按 `tab_id` 定位对应 tab 的
+    /// `TabularView` 并 `apply`。tab 不存在 / 该 tab 不是表格时 no-op。
+    pub fn preview_pane_tabular_action(
+        &mut self,
+        kind: PanelKind,
+        tab_id: usize,
+        action: crate::tabular::Action,
+    ) {
+        let pane = if kind == PanelKind::Project {
+            &mut self.project_preview
+        } else {
+            &mut self.preview
+        };
+        if let Some(view) = pane.tabular_mut(tab_id) {
+            view.apply(action);
+        }
+    }
+
     /// 把 `kind` 面板**指定下标**tab 的就地改动保存到磁盘,语义同
     /// `preview_pane_save_active`(其实现已改为委托这个方法),差别只是不再
     /// 局限于"当前激活"——`preview_pane_toggle_render_mode`(代码→预览)、
