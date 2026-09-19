@@ -78,16 +78,27 @@ fn column_letter(mut idx: usize) -> String {
     s
 }
 
-/// 折叠换行并截断到最多 `max_chars` 个字符,供单元格单行展示(超长省略)。
-fn truncate_to(s: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
+/// 折叠换行并按「等宽字符格」(`unicode` 显示宽,中文占 2 格)截断到最多
+/// `max_cells` 格,供单元格单行展示(超长省略)。按显示宽而非字符数截断,
+/// 中文这类宽字符不会因按字符计数而溢出列宽。
+fn truncate_to(s: &str, max_cells: usize) -> String {
+    if max_cells == 0 {
         return String::new();
     }
-    let collapsed: String = s
-        .chars()
-        .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
-        .collect();
-    collapsed.chars().take(max_chars).collect()
+    let mut width = 0usize;
+    let mut out = String::new();
+    for ch in s.chars() {
+        let ch = if ch == '\n' || ch == '\r' { ' ' } else { ch };
+        let w = unicode_width::UnicodeWidthChar::width(ch)
+            .unwrap_or(0)
+            .max(1);
+        if width + w > max_cells {
+            break;
+        }
+        width += w;
+        out.push(ch);
+    }
+    out
 }
 
 fn cell_text(
@@ -104,10 +115,14 @@ fn cell_text(
         color,
         size: Pixels(m.font_size),
         line_height: LineHeight::Relative(1.0),
+        // 系统默认字体(非代码场景不用 JetBrains Mono,见 CLAUDE.md 字体统一
+        // 裁决);`Shaping::Advanced` 做字体回退——中文等非 ASCII 字形回退到
+        // 系统 CJK 字体。`Basic` 明确不做回退(见 iced 文档),会导致中文变
+        // 方块/空白。
         font: Font::default(),
         align_x: Alignment::Left,
         align_y: alignment::Vertical::Top,
-        shaping: Shaping::Basic,
+        shaping: Shaping::Advanced,
     }
 }
 
@@ -297,4 +312,29 @@ pub fn view<'a>(
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_to_counts_cjk_by_display_width() {
+        // 4 格预算:两个中文(各 2 格)放得下,第三个中文(超预算)被截掉。
+        assert_eq!(truncate_to("你好世界", 4), "你好");
+        // 混排:a(1) + 中(2) + b(1) = 4 格,正好放满。
+        assert_eq!(truncate_to("a中b", 4), "a中b");
+        // 换行折叠成空格。
+        assert_eq!(truncate_to("a\nb", 4), "a b");
+        // 0 格直接空。
+        assert_eq!(truncate_to("abc", 0), "");
+    }
+
+    #[test]
+    fn column_letter_is_excel_style() {
+        assert_eq!(column_letter(0), "A");
+        assert_eq!(column_letter(25), "Z");
+        assert_eq!(column_letter(26), "AA");
+        assert_eq!(column_letter(27), "AB");
+    }
 }

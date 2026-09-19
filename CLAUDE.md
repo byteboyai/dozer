@@ -42,3 +42,4 @@ cargo clippy --all-targets && cargo fmt
 - 主题 ByteBoy2077：bg `#0a0e16`、金 `#F2D94E`（甲方动作专属）、奶油文字 `#FFE5B4`、青 `#47DEF0`、绿 `#1AD585`。
 - 新增/改造 icon 按钮、tab 类 UI 时优先复用统一组件（`icons::icon_button_entry`/`tabs::tab_core`），不要重新手写一套 `MouseArea`+`on_enter`/`on_exit` 接线；确需自定义（形状/交互模式明显不同）要在 plan 里说明理由，不是绝对禁止。
 - 新增/改造函数参数 ≥7 个、且有多个同类型参数相邻（顺序传错编译器发现不了，如连续几个 `&str`/`bool`/同一消息类型）时，优先用具名字段的参数结构体替代位置参数（Rust Design Patterns: Builder），不要无脑加 `#[allow(clippy::too_many_arguments)]` 了事；结构体带闭包字段时用结构体自身的泛型参数承载（不要 `Box<dyn Fn>`），保持零成本。参数虽多但天然同质、不易传错的情况（如四个方向 padding、RGBA 四值）不受此约束。
+- **字体统一：只有 code editor 和 pty 终端用 JetBrains Mono（`assets::fonts::code_font()`），其余所有场景（UI 文本、表格预览、面板等）一律用系统默认字体（`Font::default()`），不得给非代码/终端场景上等宽代码字体。** 非 ASCII 文本（如中文）的正确渲染靠 `Shaping::Advanced`（做字体回退到系统 CJK 字体），与主字体无关——`Shaping::Basic` 明确不做回退，会让中文变方块/空白，任何用 canvas `fill_text` 或自绘文本的地方都不能用 `Basic`。
