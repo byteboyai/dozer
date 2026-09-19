@@ -9,6 +9,7 @@ use iced_widget::core::mouse;
 use iced_widget::core::{Border, Color, Element, Length};
 use iced_widget::svg;
 use iced_widget::{Tooltip, text, tooltip};
+use std::borrow::Cow;
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -141,6 +142,10 @@ pub enum IconKind {
     /// 三角,表示"渲染/播放这个文件"),点它切回预览(见
     /// `tab_widget::tab_render_mode_button`)。
     FilePlay,
+    /// 预览工具栏"用外部软件打开"按钮图标(Lucide file-symlink:文件 +
+    /// 跳出箭头,表示"转交给外部程序打开"),见
+    /// `tab_widget::tab_open_external_button`。
+    FileSymlink,
     /// 终端/Shell(纯 Shell 启动项),Lucide。
     Terminal,
     /// SSH 主机面板 rail 图标(Lucide server)。
@@ -284,6 +289,7 @@ impl IconKind {
             IconKind::Eye => include_bytes!("../../assets/icons/eye.svg"),
             IconKind::EyeOff => include_bytes!("../../assets/icons/eye-off.svg"),
             IconKind::FilePlay => include_bytes!("../../assets/icons/file-play.svg"),
+            IconKind::FileSymlink => include_bytes!("../../assets/icons/file-symlink.svg"),
             IconKind::Terminal => include_bytes!("../../assets/icons/terminal.svg"),
             IconKind::Server => include_bytes!("../../assets/icons/server.svg"),
             IconKind::LayoutList => include_bytes!("../../assets/icons/layout-list.svg"),
@@ -378,7 +384,11 @@ pub fn icon_button_entry<'a, M: Clone + 'a>(
     interactive: bool,
     on_select: M,
     on_hover: impl Fn(bool) -> M + 'a,
-    tooltip: &'a str,
+    // `impl Into<Cow<str>>`(非固定 `&'a str`):绝大多数调用方传静态字符串
+    // 字面量(零成本借用),预览工具栏"用外部软件打开"按钮需要按 App 名字
+    // 拼一句动态提示文案(`format!`产生的 `String` 活不过 `'a`),两者都要
+    // 能过——`&str`/`String` 都实现 `Into<Cow<'a, str>>`,调用方不用变。
+    tooltip: impl Into<Cow<'a, str>>,
 ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
     // 图标颜色:选中态恒为金;未选中时 hover 平滑过渡到金(SVG 颜色构建时
     // 定死、不吃 `button::Status`,所以 hover 进度靠 `hover_t` 参数从调用方
@@ -446,6 +456,7 @@ pub fn icon_button_entry<'a, M: Clone + 'a>(
         .into();
     // `tooltip` 空串表示"这个按钮不需要提示"——不包 `Tooltip`,而不是包一个
     // 空气泡(悬停时会显出一个没有文字的圆角框,比没有提示更糟)。
+    let tooltip: Cow<'a, str> = tooltip.into();
     if tooltip.is_empty() {
         content
     } else {
@@ -477,8 +488,9 @@ pub fn tooltip_bubble_style() -> impl Fn(&iced_widget::Theme) -> container::Styl
 /// (项目 UI 面向甲方,中文优先)。
 pub fn with_tooltip<'a, M: Clone + 'a, R: iced_widget::core::text::Renderer + 'a>(
     content: impl Into<Element<'a, M, iced_widget::Theme, R>> + 'a,
-    label: &'a str,
+    label: impl Into<Cow<'a, str>>,
 ) -> Element<'a, M, iced_widget::Theme, R> {
+    let label = label.into();
     let bubble = container(
         text(label)
             .size(12)

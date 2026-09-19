@@ -818,6 +818,22 @@ impl App {
                     ws.preview_pane_toggle_render_mode(PanelKind::Files, idx);
                 });
             }
+            Message::PreviewOpenExternal(path, app_name) => {
+                // 同 `Message::RevealInFinder`(`extensions::files::update`)的
+                // 错误处理口径:`spawn()` 失败(App 名字拼错/系统没装)只记日志,
+                // 不额外弹 toast。
+                if let Err(err) = std::process::Command::new("open")
+                    .arg("-a")
+                    .arg(&app_name)
+                    .arg(&path)
+                    .spawn()
+                {
+                    tracing::warn!(
+                        "用外部软件打开失败: app={app_name} path={} err={err}",
+                        path.display()
+                    );
+                }
+            }
             Message::PreviewEditorEvent(_tab_id, _action) => {
                 // main.rs 直接调 `App::preview_tab_editor_event`,不经过这里。
             }

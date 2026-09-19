@@ -7,6 +7,7 @@ mod delivery;
 mod dialog;
 mod event;
 mod extensions;
+mod external_apps;
 mod frosted;
 mod git_accounts;
 mod git_watch;

@@ -214,6 +214,14 @@ pub enum HoverId {
     /// Project 面板配对预览"预览/代码切换"按钮,处理方式同 `PreviewRenderMode`
     /// (同一份 `preview_pane_for` 渲染,按 `PreviewPaneKind` 区分)。
     ProjectPreviewRenderMode,
+    /// 文件预览 tab 组最右侧"用外部软件打开"按钮(`FileSymlink`):仅当前
+    /// 选中 tab 的扩展名在 `App::external_apps` 里有配置才出现,处理方式同
+    /// `PreviewRenderMode`(见 `tab_widget::tab_open_external_button`)。
+    PreviewOpenExternal,
+    /// Project 面板配对预览"用外部软件打开"按钮,处理方式同
+    /// `PreviewOpenExternal`(同一份 `preview_pane_for` 渲染,按
+    /// `PreviewPaneKind` 区分)。
+    ProjectPreviewOpenExternal,
     /// Todo 面板单个任务卡(按下标区分):hover 时填充 `CARD` 背景 + 金色描边
     /// (见 `extensions::todo::todo_card`,统一卡片样式)。
     TodoCard(usize),

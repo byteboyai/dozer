@@ -14,6 +14,7 @@ use crate::extensions::project;
 use crate::extensions::project_create;
 use crate::extensions::settings;
 use crate::extensions::todo;
+use crate::external_apps;
 use crate::layout;
 use crate::open_projects;
 use crate::panel_layouts;
@@ -446,6 +447,10 @@ pub struct App {
     /// 阶段启动一个长生命周期 tokio 任务,每 1s/300s 采样一次发回
     /// `Message::Footbar(Message::Sampled)`,UI 即刻刷新。
     pub(crate) footbar: footbar::AppState,
+    /// "扩展名 -> 外部 App"配置表(预览窗口工具栏"外部打开"按钮用),启动时
+    /// `external_apps::load()` 读一次,本期没有运行时改写(见
+    /// `external_apps` 模块文档)。
+    pub(crate) external_apps: external_apps::ExternalAppsConfig,
 }
 
 /// 前台化一个**已经存在**的项目页签:只改"当前是哪个页签",一个槽位的内容
@@ -778,6 +783,7 @@ impl App {
             git_log: git_log::State::default(),
             database: database::AppState::load(),
             footbar: footbar::AppState::default(),
+            external_apps: external_apps::load(),
         };
         // 启动 footbar 采样任务(fire-and-forget):runtime drop 时任务自然取消。
         let io = shell.shell_io();

@@ -404,6 +404,32 @@ pub(crate) fn tab_render_mode_button<'a, M: Clone + 'a>(
     )
 }
 
+/// 预览工具栏"用外部软件打开"按钮:调用方(`workspace::preview_pane_for`)
+/// 只在当前选中 tab 的扩展名能在 `App::external_apps` 里查到对应 App 时才
+/// 画一个,查不到就整个不出现(不留空位,见按钮显隐设计)。尺寸/风格与
+/// `tab_render_mode_button` 对齐,方便挤在同一条工具栏里。`tooltip` 由调用方
+/// 传入(`"用 {app} 打开"`),这里不猜文案。
+pub(crate) fn tab_open_external_button<'a, M: Clone + 'a>(
+    hover_t: f32,
+    on_press: M,
+    on_hover: impl Fn(bool) -> M + 'a,
+    tooltip: impl Into<std::borrow::Cow<'a, str>>,
+) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
+    icons::icon_button_entry(
+        icons::IconKind::FileSymlink,
+        byteui::theme::icon_size::row(),
+        false,
+        false,
+        hover_t,
+        false,
+        byteui::theme::icon_size::row() + 6.0,
+        true,
+        on_press,
+        on_hover,
+        tooltip,
+    )
+}
+
 /// 悬浮下拉里的一行,对应该 tab 组里的**某个 tab**(V 菜单列的是组内全部
 /// tab,不局限于当前横向被裁掉的)。`prefix` 与横向 tab 用同一个已经建好的
 /// `Element`(状态点/图标/无),`active` 只决定标题文字颜色(CREAM,同
