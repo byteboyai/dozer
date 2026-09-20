@@ -92,6 +92,9 @@ ignore = "0.4"
 calamine = { version = "0.36", features = ["dates"] }
 csv = "1"
 sonic-rs = "0.5.10"
+# json5：.json5/.jsonc 一次性规范化为标准 JSON 后再交给 sonic-rs 做树视图
+# 的惰性按需解码(JSON5 是配置格式、无 SIMD 解析器,json5-rs ~225MiB/s 已是最快)。
+json5 = "1"
 
 [dev-dependencies]
 tempfile = "3"

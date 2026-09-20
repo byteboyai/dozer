@@ -104,6 +104,10 @@ pub struct JsonTreeView {
     /// 不在本计划范围内，故此处只标注不擅改）。
     #[allow(dead_code)]
     bytes: Vec<u8>,
+    /// `.json5`/`.jsonc` 为 `Some`：加载时一次性规范化为标准 JSON 后的字节。
+    /// 源盘上不是合法 JSON（有注释/尾逗号/裸键等），所以 `expand()` 不能重读
+    /// 原文件，必须用内存里这份规范化结果（见 `expand_source_for`）。
+    normalized: Option<std::sync::Arc<[u8]>>,
     /// jsonl/ndjson 为 `Some`（与 `roots` 下标对齐）；单个 `.json` 为 `None`。
     line_ranges: Option<Vec<std::ops::Range<usize>>>,
     pub roots: Vec<RootResult>,
@@ -130,6 +134,7 @@ impl JsonTreeView {
             bytes,
             line_ranges,
             roots,
+            normalized: None,
             expanded: std::collections::HashSet::new(),
             decoded: std::collections::HashMap::new(),
             loading_nodes: std::collections::HashSet::new(),
@@ -196,6 +201,9 @@ impl JsonTreeView {
 
     /// `Task 8` 的 `preview_pane_json_tree_action` 用它构造 `ExpandBytesSource`。
     pub fn expand_source_for(&self, root_index: usize) -> ExpandBytesSource {
+        if let Some(json) = &self.normalized {
+            return ExpandBytesSource::Normalized(json.clone());
+        }
         match &self.line_ranges {
             None => ExpandBytesSource::WholeFile(self.path.clone()),
             Some(ranges) => ExpandBytesSource::JsonLine {
@@ -236,7 +244,7 @@ pub fn is_json_tree_extension(path: &Path) -> bool {
             .unwrap_or("")
             .to_ascii_lowercase()
             .as_str(),
-        "json" | "jsonl" | "ndjson"
+        "json" | "jsonl" | "ndjson" | "json5" | "jsonc"
     )
 }
 
@@ -339,11 +347,14 @@ mod tests {
             "/tmp/a.json",
             "/tmp/a.jsonl",
             "/tmp/a.ndjson",
+            "/tmp/a.json5",
+            "/tmp/a.jsonc",
             "/tmp/A.JSON",
+            "/tmp/A.JSONC",
         ] {
             assert!(is_json_tree_extension(Path::new(p)), "{p}");
         }
-        for p in ["/tmp/a.md", "/tmp/a.csv", "/tmp/a.json5", "/tmp/a.jsonc"] {
+        for p in ["/tmp/a.md", "/tmp/a.csv", "/tmp/a.json7", "/tmp/a.geojson"] {
             assert!(!is_json_tree_extension(Path::new(p)), "{p}");
         }
     }
@@ -552,6 +563,75 @@ mod load_jsonl_tests {
     }
 }
 
+#[cfg(test)]
+mod load_json5_tests {
+    use super::*;
+
+    #[test]
+    fn load_json5_normalizes_comments_trailing_commas_and_bare_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("cfg.json5");
+        std::fs::write(
+            &p,
+            r#"{
+                // 注释
+                unquoted: "ok",
+                single: 'I can use "double quotes"',
+                hex: 0xdecaf,
+                trailing: [1, 2, 3,],
+            }"#,
+        )
+        .unwrap();
+        let view = load_json5(&p).unwrap();
+        let root = view.roots[0].as_ref().unwrap();
+        assert_eq!(root.kind, JsonKind::Object);
+        let NodeContent::Object { entries, truncated } = root.content.as_ref().unwrap() else {
+            panic!("json5 root should decode as object");
+        };
+        assert!(!truncated);
+        let keys: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["unquoted", "single", "hex", "trailing"]);
+        // hex 0xdecaf 规范化成 912559，树里应是 Number。
+        assert!(
+            entries
+                .iter()
+                .any(|(k, kind)| k == "hex" && *kind == JsonKind::Number)
+        );
+    }
+
+    #[test]
+    fn load_jsonc_strips_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("tsconfig.jsonc");
+        std::fs::write(&p, "{ /* 块注释 */ \"a\": 1, // 行注释\n \"b\": 2, }").unwrap();
+        let view = load_json5(&p).unwrap();
+        let root = view.roots[0].as_ref().unwrap();
+        let NodeContent::Object { entries, .. } = root.content.as_ref().unwrap() else {
+            panic!("jsonc root should decode as object");
+        };
+        let keys: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["a", "b"]);
+    }
+
+    #[test]
+    fn load_json5_marks_normalized_and_expand_source_is_normalized() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("cfg.json5");
+        std::fs::write(&p, "{ a: { b: 1 } }").unwrap();
+        let view = load_json5(&p).unwrap();
+        assert!(view.normalized.is_some(), "json5 视图必须持有规范化 JSON");
+        assert!(matches!(
+            view.expand_source_for(0),
+            ExpandBytesSource::Normalized(_)
+        ));
+    }
+
+    #[test]
+    fn normalize_json5_rejects_invalid_input() {
+        assert!(normalize_json5(b"{ not valid !! }").is_err());
+    }
+}
+
 pub fn load(path: &std::path::Path) -> Result<JsonTreeView, String> {
     let ext = path
         .extension()
@@ -561,8 +641,39 @@ pub fn load(path: &std::path::Path) -> Result<JsonTreeView, String> {
     match ext.as_str() {
         "json" => load_json(path),
         "jsonl" | "ndjson" => load_jsonl(path),
+        "json5" | "jsonc" => load_json5(path),
         _ => Err(format!("非 JSON 文件: {ext}")),
     }
+}
+
+/// `.json5`/`.jsonc` 加载：先把文件规范化为标准 JSON，再走与 `.json` 相同的
+/// 惰性解码路径。JSON5 是 JSON 超集（注释/尾逗号/裸键/单引号/十六进制/多行
+/// 字符串等），sonic-rs 只认严格 JSON，所以必须先行规范化。源文件是配置级
+/// 大小（KB~几 MB），一次性全量规范化毫秒级可完成，不触碰 1GB 数据场景。
+pub fn load_json5(path: &std::path::Path) -> Result<JsonTreeView, String> {
+    let raw = std::fs::read(path).map_err(|e| e.to_string())?;
+    let normalized = normalize_json5(&raw)?;
+    let root_kind = root_kind_of(&normalized)?;
+    let content = decode_node(&normalized, &[])?;
+    let root = JsonNode {
+        kind: root_kind,
+        content: Some(content),
+    };
+    let mut view = JsonTreeView::new(path.to_path_buf(), raw, None, vec![Ok(root)]);
+    view.normalized = Some(std::sync::Arc::from(normalized));
+    Ok(view)
+}
+
+/// JSON5 → 标准 JSON 字节。经 `serde_json::Value` 中转：`json5` 负责吃下超集
+/// 语法，`serde_json` 负责序列化成严格 JSON 供 sonic-rs 解析。
+///
+/// 已知局限：JSON5 的 `Infinity`/`NaN` 字面量会落到 `f64` 非有限值，而
+/// `serde_json` 序列化拒绝非有限浮点，这类文件会像非法 JSON 一样解析失败
+/// （tab 停在 Loading）。配置场景几乎不出现，不做特殊兜底。
+fn normalize_json5(raw: &[u8]) -> Result<Vec<u8>, String> {
+    let text = std::str::from_utf8(raw).map_err(|e| e.to_string())?;
+    let value: serde_json::Value = json5::from_str(text).map_err(|e| e.to_string())?;
+    serde_json::to_vec(&value).map_err(|e| e.to_string())
 }
 
 /// `expand()` 解码所依据的字节来源 —— 由调用方（Task 8 的消息处理）
@@ -575,6 +686,9 @@ pub enum ExpandBytesSource {
         path: std::path::PathBuf,
         byte_range: std::ops::Range<usize>,
     },
+    /// `.json5`/`.jsonc`：加载时已规范化的标准 JSON 字节。源盘不是合法 JSON，
+    /// 不能重读原文件，必须用这份内存结果。
+    Normalized(std::sync::Arc<[u8]>),
 }
 
 /// 后台线程按需解码单个节点的入口。
@@ -601,6 +715,7 @@ pub fn expand(source: &ExpandBytesSource, path: &[PathSegment]) -> Result<NodeCo
                 .ok_or("行范围越界(文件在打开后被改动?)")?;
             decode_node(line, path)
         }
+        ExpandBytesSource::Normalized(json) => decode_node(json, path),
     }
 }
 
@@ -620,6 +735,11 @@ mod load_dispatch_tests {
         std::fs::write(&jsonl_path, "{}\n{}\n").unwrap();
         let view = load(&jsonl_path).unwrap();
         assert_eq!(view.roots.len(), 2);
+
+        let json5_path = dir.path().join("a.json5");
+        std::fs::write(&json5_path, "{ a: 1 }").unwrap();
+        let view = load(&json5_path).unwrap();
+        assert_eq!(view.roots.len(), 1);
     }
 
     #[test]
@@ -665,6 +785,17 @@ mod expand_tests {
         )
         .unwrap();
         assert!(matches!(content, NodeContent::Array { .. }));
+    }
+
+    #[test]
+    fn expand_normalized_decodes_the_requested_path() {
+        let normalized = std::sync::Arc::from(r#"{"a": {"b": 1}}"#.as_bytes().to_vec());
+        let content = expand(
+            &ExpandBytesSource::Normalized(normalized),
+            &[PathSegment::Key("a".into())],
+        )
+        .unwrap();
+        assert!(matches!(content, NodeContent::Object { .. }));
     }
 
     #[test]
