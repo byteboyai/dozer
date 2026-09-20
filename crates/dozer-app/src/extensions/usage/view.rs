@@ -182,7 +182,7 @@ pub fn content_pane<'a>(
                     );
                     let c = byteui::theme::color::current();
                     let behavior_series_def: TrendSeries =
-                        vec![("触达文件", c.cream), ("Git提交", c.gold)];
+                        vec![("触达文件", c.cream), ("Git提交", c.green)];
                     if let Some(sec) =
                         trend_chart_section("每日行为统计", behavior_series_def, &behavior)
                     {
