@@ -276,9 +276,14 @@ impl App {
                     let last_cursor = self.last_cursor;
                     let open_ids: std::collections::HashSet<i64> =
                         self.projects.keys().copied().collect();
+                    // 激活页签判定与 `project_tabs_row` 同一套互斥口径。
+                    let active_project_id = (self.current_page == AppPage::Workspace)
+                        .then_some(self.active_project_id)
+                        .flatten();
                     let items = crate::chrome::topbar::project_add_menu_items(
                         &self.recent_projects,
                         &open_ids,
+                        active_project_id,
                     );
                     if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
                         self.update(msg);

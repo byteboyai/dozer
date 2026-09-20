@@ -413,8 +413,13 @@ fn project_tabs_row(
 pub(crate) fn project_add_menu_items(
     recent_projects: &[ProjectInfo],
     open_project_ids: &std::collections::HashSet<i64>,
+    active_project_id: Option<i64>,
 ) -> Vec<crate::chrome::native_menu::Item<Message>> {
-    crate::menu_spec::to_native(project_add_menu_spec(recent_projects, open_project_ids))
+    crate::menu_spec::to_native(project_add_menu_spec(
+        recent_projects,
+        open_project_ids,
+        active_project_id,
+    ))
 }
 
 /// 顶栏"＋新增项目"菜单内容——native(`project_add_menu_items`)和 iced
@@ -422,19 +427,45 @@ pub(crate) fn project_add_menu_items(
 /// 发现最后一项在两个渲染后端都写"新建项目",而"＋"按钮自己的 tooltip
 /// 写"打开项目"——统一成"打开项目"(跟 `Message::ProjectTabPickFolder`
 /// 触发的 rfd 文件夹选择器语义一致——是"打开已有目录"不是"新建")。
+///
+/// `active_project_id` 是当前激活的项目页签(调用方按 `project_tabs_row`
+/// 同一套互斥口径算:`current_page == AppPage::Workspace` 才算数)。它本
+/// 身是已打开项目、会被下面的 open 过滤掉,但菜单要"选中当前激活的 tab"
+/// (2026-09-20 用户反馈)——把它显式插到列表最顶上,用终端 tab 溢出菜单
+/// 同款选中态(cream 文字 + 前置 `>` chevron,见
+/// `tab_widget::tab_overflow_items`),点了就是切回该页签
+/// (`Message::ProjectSelect`)。名字从 `recent_projects` 里查,查不到
+/// (不在 daemon 项目表里)就不画这一项。
 pub(crate) fn project_add_menu_spec(
     recent_projects: &[ProjectInfo],
     open_project_ids: &std::collections::HashSet<i64>,
+    active_project_id: Option<i64>,
 ) -> MenuSpec<Message> {
+    let mut spec: MenuSpec<Message> = Vec::new();
+    // 当前激活页签置顶 + 选中态(cream + `>`),与 tab 溢出菜单同口径。
+    if let Some(id) = active_project_id
+        && let Some(info) = recent_projects.iter().find(|p| p.id == id)
+    {
+        let cream = byteui::theme::color::current().cream;
+        spec.push(MenuSpecItem::Entry {
+            icon: Some(icons::IconKind::ChevronRight),
+            icon_color: Some(cream),
+            label: info.name.clone(),
+            color: cream,
+            enabled: true,
+            msg: Message::ProjectSelect(id),
+        });
+    }
     let mut projects: Vec<&ProjectInfo> = recent_projects
         .iter()
         .filter(|p| !open_project_ids.contains(&p.id))
         .collect();
     projects.sort_by_key(|p| std::cmp::Reverse(p.updated_ms));
-    let mut spec: MenuSpec<Message> = projects
-        .into_iter()
-        .map(|p| MenuSpecItem::entry(None, p.name.clone(), Message::ProjectSelect(p.id)))
-        .collect();
+    spec.extend(
+        projects
+            .into_iter()
+            .map(|p| MenuSpecItem::entry(None, p.name.clone(), Message::ProjectSelect(p.id))),
+    );
     if !spec.is_empty() {
         spec.push(MenuSpecItem::separator());
     }
@@ -476,7 +507,11 @@ pub(crate) fn project_add_menu_popup(
         return column![].into();
     }
     let open_ids: std::collections::HashSet<i64> = app.projects.keys().copied().collect();
-    let spec = project_add_menu_spec(&app.recent_projects, &open_ids);
+    // 激活页签判定与 `project_tabs_row` 同一套互斥口径(见该函数注释)。
+    let active_project_id = (app.current_page == AppPage::Workspace)
+        .then_some(app.active_project_id)
+        .flatten();
+    let spec = project_add_menu_spec(&app.recent_projects, &open_ids, active_project_id);
     let row_count = spec.len();
     let list = crate::menu_spec::to_iced(
         spec,
@@ -775,7 +810,7 @@ mod tests {
     fn project_add_menu_items_excludes_already_open_projects() {
         let recent = [project(1, "a", 100), project(2, "b", 200)];
         let open: std::collections::HashSet<i64> = [2].into_iter().collect();
-        let items = project_add_menu_items(&recent, &open);
+        let items = project_add_menu_items(&recent, &open, None);
         let has_b = items.iter().any(|i| {
             matches!(
                 i,
@@ -792,7 +827,7 @@ mod tests {
     #[test]
     fn project_add_menu_items_sorts_recent_projects_by_updated_ms_desc() {
         let recent = [project(1, "older", 100), project(2, "newer", 200)];
-        let items = project_add_menu_items(&recent, &std::collections::HashSet::new());
+        let items = project_add_menu_items(&recent, &std::collections::HashSet::new(), None);
         let msg_at = |idx: usize| match &items[idx] {
             crate::chrome::native_menu::Item::Entry { msg, .. } => msg.clone(),
             crate::chrome::native_menu::Item::Separator => panic!("expected entry at {idx}"),
@@ -804,7 +839,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn project_add_menu_items_always_ends_with_create_project_action() {
-        let items = project_add_menu_items(&[], &std::collections::HashSet::new());
+        let items = project_add_menu_items(&[], &std::collections::HashSet::new(), None);
         assert!(matches!(
             items.last(),
             Some(crate::chrome::native_menu::Item::Entry {
@@ -817,11 +852,59 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn project_add_menu_items_no_separator_when_no_recent_projects() {
-        let items = project_add_menu_items(&[], &std::collections::HashSet::new());
+        let items = project_add_menu_items(&[], &std::collections::HashSet::new(), None);
         assert_eq!(
             items.len(),
             2,
             "没有最近项目时不该有多余的分隔线,只剩打开项目/创建项目两项"
+        );
+    }
+
+    /// 当前激活页签要置顶出现在菜单里,且带选中态(cream 文字 + 前置 `>`
+    /// chevron,与终端 tab 溢出菜单同口径);它虽是已打开项目,不受
+    /// "排除已打开项目"过滤影响。激活项不在 `recent_projects` 里时不画。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn project_add_menu_items_pins_active_project_first_with_selected_mark() {
+        use byteui::interaction::icons::IconKind;
+
+        let recent = [project(1, "a", 100), project(2, "b", 200)];
+        // 激活项 id=2 同时也在 open 集合里——正是真实场景(激活页签必然已开)。
+        let open: std::collections::HashSet<i64> = [1, 2].into_iter().collect();
+        let items = project_add_menu_items(&recent, &open, Some(2));
+        let (Some(first), Some(second)) = (items.first(), items.get(1)) else {
+            panic!("菜单至少应有激活项 + 打开项目两项");
+        };
+        match first {
+            crate::chrome::native_menu::Item::Entry {
+                icon,
+                icon_color,
+                label,
+                color,
+                msg,
+                ..
+            } => {
+                assert_eq!(*icon, Some(IconKind::ChevronRight), "选中行要带 `>`");
+                assert_eq!(*icon_color, Some(byteui::theme::color::current().cream));
+                assert_eq!(label, "b");
+                assert_eq!(*color, byteui::theme::color::current().cream);
+                assert!(matches!(msg, Message::ProjectSelect(2)));
+            }
+            _ => panic!("第一项应是激活项目 entry"),
+        }
+        // 打开项目/创建项目仍垫底,激活项不挤掉它们。
+        assert!(matches!(
+            second,
+            crate::chrome::native_menu::Item::Separator
+        ));
+
+        // 激活 id 不在 recent_projects 里:不画选中项,菜单回到原样。
+        let items = project_add_menu_items(&recent, &open, Some(99));
+        assert!(
+            items
+                .iter()
+                .all(|i| !matches!(i, crate::chrome::native_menu::Item::Entry { icon: Some(IconKind::ChevronRight), .. })),
+            "查不到名字时不应画选中项"
         );
     }
 }
