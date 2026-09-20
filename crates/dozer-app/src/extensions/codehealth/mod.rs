@@ -6,6 +6,9 @@
 mod aggregate;
 pub(crate) use aggregate::*;
 
+mod view;
+pub(crate) use view::content_pane;
+
 use dozer_codehealth::ProjectReport;
 
 #[derive(Default)]
