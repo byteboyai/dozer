@@ -54,6 +54,129 @@ pub struct JsonNode {
     pub content: Option<NodeContent>,
 }
 
+/// 一个文档（`.json`）或一行（`.jsonl`）解码后的根，或该根产生的错误。
+pub type RootResult = Result<JsonNode, String>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    Tree,
+    RawText,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Action {
+    Scroll { dy: i32 },
+    ToggleExpand(NodePath),
+    ToggleViewMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeExpandRequest {
+    pub path: NodePath,
+    pub root_index: usize,
+}
+
+pub struct JsonTreeView {
+    /// 源文件路径 —— 每次惰性展开都从磁盘重读（原因见 `expand()` 文档）。
+    path: std::path::PathBuf,
+    /// 常驻源字节：`.json` 为整文件；`.jsonl`/`.ndjson` 也是整文件
+    /// （行靠 `line_ranges` 切片，不另存一份，避免大文件双份内存）。
+    bytes: Vec<u8>,
+    /// jsonl/ndjson 为 `Some`（与 `roots` 下标对齐）；单个 `.json` 为 `None`。
+    line_ranges: Option<Vec<std::ops::Range<usize>>>,
+    pub roots: Vec<RootResult>,
+    expanded: std::collections::HashSet<NodePath>,
+    /// 非根节点的已解码内容，按路径缓存（根节点内容在 `roots[i].content`）。
+    decoded: std::collections::HashMap<NodePath, NodeContent>,
+    loading_nodes: std::collections::HashSet<NodePath>,
+    pub view_mode: ViewMode,
+    pub scroll_row: usize,
+}
+
+impl JsonTreeView {
+    pub fn new(
+        path: std::path::PathBuf,
+        bytes: Vec<u8>,
+        line_ranges: Option<Vec<std::ops::Range<usize>>>,
+        roots: Vec<RootResult>,
+    ) -> Self {
+        Self {
+            path,
+            bytes,
+            line_ranges,
+            roots,
+            expanded: std::collections::HashSet::new(),
+            decoded: std::collections::HashMap::new(),
+            loading_nodes: std::collections::HashSet::new(),
+            view_mode: ViewMode::Tree,
+            scroll_row: 0,
+        }
+    }
+
+    /// 纯状态转移，不做 IO。`Scroll` 只在下界 0 处收敛 —— 上界取决于
+    /// 当前可见行数（展开/折叠会变），由 canvas widget 的 `draw()` 每帧
+    /// 用同一个 flatten 函数现算后裁剪，保持唯一真相。
+    pub fn apply(&mut self, action: Action) -> Option<NodeExpandRequest> {
+        match action {
+            Action::Scroll { dy } => {
+                self.scroll_row = self.scroll_row.saturating_add_signed(dy as isize);
+                None
+            }
+            Action::ToggleViewMode => {
+                self.view_mode = match self.view_mode {
+                    ViewMode::Tree => ViewMode::RawText,
+                    ViewMode::RawText => ViewMode::Tree,
+                };
+                None
+            }
+            Action::ToggleExpand(path) => self.toggle_expand(path),
+        }
+    }
+
+    fn toggle_expand(&mut self, path: NodePath) -> Option<NodeExpandRequest> {
+        if self.expanded.remove(&path) {
+            return None; // 之前是展开的，现在折叠 —— 从不触发加载
+        }
+        self.expanded.insert(path.clone());
+        let already_decoded = if path.is_empty() {
+            self.roots
+                .first()
+                .is_some_and(|r| matches!(r, Ok(n) if n.content.is_some()))
+        } else {
+            self.decoded.contains_key(&path)
+        };
+        if already_decoded || !self.loading_nodes.insert(path.clone()) {
+            return None;
+        }
+        Some(NodeExpandRequest {
+            path,
+            root_index: 0,
+        }) // root_index 由 Task 4/5 修正
+    }
+
+    /// 后台解码完成；`root_index` 标识哪个根（单个 `.json` 恒为 0，jsonl 为行号）。
+    pub fn apply_node_loaded(
+        &mut self,
+        path: NodePath,
+        result: Result<NodeContent, String>,
+        root_index: usize,
+    ) {
+        self.loading_nodes.remove(&path);
+        match result {
+            Ok(content) => {
+                if path.is_empty() {
+                    if let Some(Ok(root)) = self.roots.get_mut(root_index) {
+                        root.content = Some(content);
+                    }
+                } else {
+                    self.decoded.insert(path, content);
+                }
+            }
+            Err(err) => tracing::warn!(?path, %err, "JSON 节点后台解码失败"),
+        }
+    }
+}
+
 pub fn is_json_tree_extension(path: &Path) -> bool {
     matches!(
         path.extension()
@@ -253,5 +376,90 @@ mod decode_tests {
             "as_raw_str includes the JSON quoting, this plan does not strip it — confirm this reads acceptably in the tree UI in Task 6, strip quotes there at render time if not, not here in the data layer"
         );
         assert!(!truncated);
+    }
+}
+
+#[cfg(test)]
+mod apply_tests {
+    use super::*;
+    use std::rc::Rc;
+
+    fn empty_view() -> JsonTreeView {
+        JsonTreeView::new(
+            std::path::PathBuf::from("/tmp/x.json"),
+            b"{}".to_vec(),
+            None,
+            vec![Ok(JsonNode {
+                kind: JsonKind::Object,
+                content: None,
+            })],
+        )
+    }
+
+    #[test]
+    fn toggle_view_mode_flips_between_tree_and_raw_text() {
+        let mut v = empty_view();
+        assert_eq!(v.view_mode, ViewMode::Tree);
+        assert_eq!(v.apply(Action::ToggleViewMode), None);
+        assert_eq!(v.view_mode, ViewMode::RawText);
+        assert_eq!(v.apply(Action::ToggleViewMode), None);
+        assert_eq!(v.view_mode, ViewMode::Tree);
+    }
+
+    #[test]
+    fn toggle_expand_on_new_path_expands_and_requests_load_if_undecoded() {
+        let mut v = empty_view();
+        let path: NodePath = Rc::from(vec![PathSegment::Key("a".to_string())]);
+        let req = v.apply(Action::ToggleExpand(path.clone()));
+        assert_eq!(
+            req,
+            Some(NodeExpandRequest {
+                path: path.clone(),
+                root_index: 0
+            })
+        );
+    }
+
+    #[test]
+    fn toggle_expand_twice_collapses_without_requesting_load_again() {
+        let mut v = empty_view();
+        let path: NodePath = Rc::from(vec![PathSegment::Key("a".to_string())]);
+        v.apply(Action::ToggleExpand(path.clone())); // expand: requests load
+        let second = v.apply(Action::ToggleExpand(path.clone())); // collapse
+        assert_eq!(second, None, "collapsing never triggers a load");
+    }
+
+    #[test]
+    fn reexpanding_still_loading_node_does_not_requeue_load() {
+        let mut v = empty_view();
+        let path: NodePath = Rc::from(vec![PathSegment::Key("a".to_string())]);
+        assert!(
+            v.apply(Action::ToggleExpand(path.clone())).is_some(),
+            "first expand requests a load"
+        );
+        v.apply(Action::ToggleExpand(path.clone())); // collapse
+        let req = v.apply(Action::ToggleExpand(path.clone())); // expand again, load still in flight
+        assert_eq!(
+            req, None,
+            "a load for this path is already in flight, must not spawn a second one"
+        );
+    }
+
+    #[test]
+    fn expanding_already_decoded_node_does_not_request_load() {
+        let mut v = empty_view();
+        let path: NodePath = Rc::from(vec![PathSegment::Key("a".to_string())]);
+        v.apply(Action::ToggleExpand(path.clone()));
+        v.apply_node_loaded(
+            path.clone(),
+            Ok(NodeContent::Leaf {
+                display: "1".into(),
+                truncated: false,
+            }),
+            0,
+        );
+        v.apply(Action::ToggleExpand(path.clone())); // collapse
+        let req = v.apply(Action::ToggleExpand(path.clone())); // expand again, already decoded
+        assert_eq!(req, None, "content is cached, no need to re-decode");
     }
 }
