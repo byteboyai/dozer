@@ -21,8 +21,9 @@ JSON 与 xlsx 有一个本质差异,影响了这次的核心技术选型:JSON �
 2. **Tree / 原始文本双视图切换**——与 tabular 完全接管 `.xlsx`/`.csv` 不同,JSON 本身是纯文本,用户可能需要复制/查看原始格式;顶部提供切换按钮,在 Tree 视图与现有的原生代码编辑器(JSON 语法高亮纯文本)之间切换,两个视图共享同一份已加载数据,来回切不重新加载文件。
 3. **高性能,支持 1GB 级文件**:基于第三方高性能 JSON 库的"惰性/on-demand"能力,只解析/物化用户实际展开的节点;未展开的子树只记"这里有个 Object/Array,大概多少个子项"这类形状信息,不深入解码其内容。canvas 虚拟化渲染,只画可视窗口内的行。
 4. `.jsonl`/`.ndjson` 支持:按行流式读取,每行是一个独立的懒加载根节点,读满行数封顶即停(同 CSV 的"够数即停")。
-5. 类型标注:节点按 JSON 类型(object/array/string/number/bool/null)显示,object 的 key 序,array 的下标,叶子值做展示裁剪(超长字符串截断)。
-6. 配色对齐 ByteBoy2077,深浅色自动跟随全局 `set_scheme`。
+5. `.json5`/`.jsonc` 支持:加载时一次性规范化为标准 JSON(注释/尾逗号/裸键/单引号等超集语法)再走与 `.json` 相同的树视图与惰性解码;原始文本视图仍显示未规范化的原文。
+6. 类型标注:节点按 JSON 类型(object/array/string/number/bool/null)显示,object 的 key 序,array 的下标,叶子值做展示裁剪(超长字符串截断)。
+7. 配色对齐 ByteBoy2077,深浅色自动跟随全局 `set_scheme`。
 
 **非目标(一期裁掉):**
 
@@ -31,7 +32,7 @@ JSON 与 xlsx 有一个本质差异,影响了这次的核心技术选型:JSON �
 - JSON Schema 校验、类型推断之外的语义理解。
 - 排序 / 过滤 / 节点拖拽重排。
 - 单元格/节点复制到剪贴板之外的编辑类交互(纯文本视图本身可选中复制,已经覆盖"要原文"的诉求,不用在树上再做一套)。
-- 除 `.json`/`.jsonl`/`.ndjson` 外的近似格式(如 JSON5、JSONC 带注释)——只认标准 JSON。
+- 除 `.json`/`.jsonl`/`.ndjson`/`.json5`/`.jsonc` 外的其它近似格式(如 YAML、TOML)——不在本计划范围。
 - 对象/数组封顶之上的分页浏览(超出封顶的子项只提示"还有更多",不提供"加载下一页")。
 
 ## 关键技术决策与风险
@@ -195,9 +196,11 @@ pub struct NodeExpandRequest {
 
 ```rust
 pub fn is_json_tree_extension(path: &Path) -> bool {
-    matches!(ext.as_str(), "json" | "jsonl" | "ndjson")
+    matches!(ext.as_str(), "json" | "jsonl" | "ndjson" | "json5" | "jsonc")
 }
 ```
+
+`.json5`/`.jsonc` 走与 `.json` 相同的双视图路由,但加载时多一步规范化:先经 `json5` crate 把超集语法(注释/尾逗号/裸键/单引号等)规范化为标准 JSON 字节,再交给 sonic-rs 做树视图的惰性解码;`editor` 半边仍显示未规范化的原文(JSONC 语法高亮),树视图的半边基于规范化结果。
 
 与 tabular 的关键差异:**不从 `is_editable_extension` 里摘除 `.json`**——`push_tab` 对这三个扩展名同时构造 `editor`(原生 CodeView,已有的 JSON 语法高亮路径,复用现状代码不动)与 `json_tree`(懒加载,`JsonTreeState::Loading` 起步,同 tabular 的 `TabularState`),两者都挂在 `PreviewTab` 上,`view_mode` 决定当前渲染哪一个。默认 `ViewMode::Tree`。
 
@@ -288,3 +291,18 @@ sonic-rs = "0.3"  # 具体版本以 spike 时 crates.io 最新稳定版为准
 
 - `MAX_JSON_CHILDREN`/`MAX_LEAF_PREVIEW_CHARS` 的具体数值是这次给的建议值,实现阶段可能需要按真实大文件样本微调,不是硬性约束。
 - 原始文本视图切换后,若用户在原始文本里手动修改了内容(理论上不该发生,因为这是只读预览,但要在实现阶段确认 `CodeView` 是否已经统一走只读态,不然会出现"树视图数据"和"文本视图内容"不一致的问题)。
+
+## 实现偏差记录（addendum，2026-09-20）
+
+实现阶段对上面的设计做了若干偏离，均已在实现计划 `2026-09-19-json-preview-viewer.md` 落地或由代码审查补正。此处按"规格是唯一需求真相源"的职责记录，供后续 reader 对照，不逐行改写上文：
+
+1. **`NodePath` 用 `Arc<[PathSegment]>` 而非 `Rc<[PathSegment]>`**：`NodePath` 被装进 `Message::JsonNodeLoaded`，经 iced 的 `proxy.send_event` 跨线程投递，`Message` 必须 `Send`，`Rc` 不满足。`Arc` 的共享所有权语义不变（clone 仍只是引用计数，不深拷贝路径）。
+2. **节点身份纳入 `root_index`（关键正确性修正）**：原设计用 `NodePath` 作 `expanded`/`loading_nodes`/`decoded` 的键，但 `.jsonl`/`.ndjson` 各行 schema 高度同质（同名键是常态），路径不含根身份会导致跨行串数据、展开/折叠状态跨行联动。实现引入 `NodeKey = (usize, NodePath)` 作为三个集合的键；`Action::ToggleExpand` 携带 `root_index`；`NodeExpandRequest`、`apply_node_loaded`、`JsonNodeLoaded` 消息都补上 `root_index`。单个 `.json` 里 `root_index` 恒为 0，行为不变。
+3. **`JsonNode.byte_range` 字段移除**：spike 证实 `sonic_rs::get(bytes, path)` 每次从头重新解析路径、支持任意顺序访问，无需偏移记账。懒加载展开时按 `ExpandBytesSource`（`WholeFile` / `JsonLine { byte_range }`）重读磁盘对应切片解码——`JsonLine` 的 `byte_range` 是**整行在文件里的字节区间**（仅用于切片），不再是"节点在行内缓冲区的偏移"。
+4. **`NodeContent` 的子项存 `JsonKind` 而非 `JsonNode`**：一次 decode 只解析单层形状（子项的 kind），不递归；子节点成为可独立展开的实体，靠 flatten 层按 `NodeKey` 缓存，不预建整棵 `JsonNode` 树。
+5. **`.jsonl` 根节点在加载时即解码形状**（上文"首次打开"原写"展开时才解码"）：实现为每行 `root_kind_of` + `decode_node` 各一次（后台线程 + loading 动画覆盖），使折叠根也能直接显示"第 i 行：{Object, N keys}"这类摘要，展开/折叠无需再请求。代价是首开对每行做两次 `get()`，在 100k 行封顶下可接受。
+6. **`JsonTreeState::Ready(Box<JsonTreeView>)` 装箱**：`JsonTreeView` ≥256 字节（内含 `Vec<u8>`/`PathBuf`/多个集合），不装箱触发 clippy `large_enum_variant`；每 tab 一份，装箱开销可忽略。
+7. **`sonic-rs = "0.3"` 实际解析到 `0.5.10`**（计划 spike 时锁定；以下述 API 为准：`sonic_rs::get`、`PointerNode`、`LazyValue`、`JsonValueTrait`）。
+8. **行数截断提示的呈现**：新增 `JsonTreeView.lines_truncated` 标记 + flatten 末尾追加一行 sentinel（"…（仅显示前 100000 行，还有更多）"），而非上文封顶策略表里写的"顶部提示条"——语义一致，形态是行内提示。
+9. **UI 层小偏离**（代码注释均已记录）：canvas 无法嵌入 SVG，chevron 用字形 `▸`/`▾`；叶子行渲染解码后的值（字符串去引号），而非只显示 kind；顶部 Tree/原始文本切换按钮用 `button`+`icons::view` 而非 `icon_button_entry`（后者需调用方传入 `App::hover_progress`，`view(&self)` 拿不到）。
+10. **`.json5`/`.jsonc` 纳入支持（范围扩大，2026-09-20）**：原"非目标"列了 JSON5/JSONC 只认标准 JSON，后按产品决策纳入。实现为加载时用 `json5` crate 一次性规范化为标准 JSON（`serde_json::Value` 中转后 `serde_json::to_vec`），存入 `JsonTreeView.normalized`；`ExpandBytesSource` 新增 `Normalized(Arc<[u8]>)` 变体，`expand()`/`expand_source_for` 对这类文件改用内存规范化字节、不重读源盘。JSON5 是配置格式、无 SIMD 解析器（json5-rs ~225MiB/s 已是生态最快），但源文件 KB~几 MB，一次性规范化毫秒级，不触碰 1GB 数据场景。已知局限：JSON5 的 `Infinity`/`NaN` 字面量落到非有限 f64、`serde_json` 序列化拒绝，此类文件会像非法 JSON 一样停在 Loading。

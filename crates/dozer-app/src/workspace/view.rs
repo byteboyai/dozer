@@ -1021,6 +1021,48 @@ pub(crate) fn preview_pane_for<'a>(
                     ));
                 }
             }
+        } else if let Some(json_tree) = &active_tab.json_tree {
+            // JSON/JSONL tab:双视图。Tree 模式下画树(消息映射到
+            // `Message::JsonTreeAction`,带 `tab_id` + `PanelKind`);RawText
+            // 模式下复用上面 `editor` 那支完全一样的渲染方式画原生代码编辑器
+            // ——`json_tree::view()` 在 RawText 态只返回顶部的模式切换头,
+            // 不画树,所以这里先 push 头、再 push 编辑器主体。首次加载是后台
+            // 线程跑的,没跑完时 `JsonTreeState::Loading`,画统一 loading 占位。
+            let tab_id = active_tab.id;
+            let panel = find_panel();
+            match json_tree {
+                crate::preview::JsonTreeState::Ready(view) => {
+                    let raw_text = view.view_mode == crate::json_tree::ViewMode::RawText;
+                    // 头部(切换控件)+ Tree 模式下的树主体都在这个 Element 里。
+                    content = content.push(
+                        container(
+                            view.view()
+                                .map(move |act| Message::JsonTreeAction(panel, tab_id, act)),
+                        )
+                        .width(Length::Fill)
+                        .height(if raw_text {
+                            Length::Shrink
+                        } else {
+                            Length::Fill
+                        }),
+                    );
+                    if raw_text && let Some(editor) = &active_tab.editor {
+                        // 复用与上面 `editor` 分支逐字一致的 Element 构造。
+                        content = content.push(
+                            container(editor.view().map(move |ev| editor_msg(tab_id, ev)))
+                                .width(Length::Fill)
+                                .height(Length::Fill),
+                        );
+                    }
+                }
+                crate::preview::JsonTreeState::Loading => {
+                    content = content.push(byteui::feedback::math_curve::loading_hint(
+                        byteui::feedback::math_curve::Curve::RoseThree,
+                        "正在打开 JSON…",
+                        48.0,
+                    ));
+                }
+            }
         } else if active_tab.loading {
             // 原生编辑器候选正在后台线程异步读盘+构造(见 `App::
             // preview_open_path`/`PreviewPane::insert_loading_tab`)——这段

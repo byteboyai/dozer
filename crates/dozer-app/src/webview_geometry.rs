@@ -124,7 +124,8 @@ pub fn preview_content_bounds_for(
             PanelKind::Database
             | PanelKind::Ssh
             | PanelKind::Agent
-            | PanelKind::Usage => (0.0, 0.0, 0.0, 0.0),
+            | PanelKind::Usage
+            | PanelKind::CodeHealth => (0.0, 0.0, 0.0, 0.0),
             // 审阅内容放大态:跟非放大态同一份 `!mirrored` 理由,只是
             // x0/avail_w/avail_h 换成放大盒子的换算(同 Files/Project 放大
             // 态分支)。
@@ -256,7 +257,7 @@ pub fn preview_content_bounds_for(
         PanelKind::Ssh => (0.0, 0.0, 0.0, 0.0),
         // Stage 4a 跨栏拖拽:该侧视图可为另一栏面板,纯 iced 绘制、该侧
         // 无 webview 可摆,装空矩形。
-        PanelKind::Agent | PanelKind::Usage => (0.0, 0.0, 0.0, 0.0),
+        PanelKind::Agent | PanelKind::Usage | PanelKind::CodeHealth => (0.0, 0.0, 0.0, 0.0),
         // 审阅内容(2026-08-21 webview trace 改造):跟 Files/Project 同款
         // "配对列宽 + preview chrome 高度"算法,但 `mirrored` 要取反——
         // app.rs 的 `PanelKind::Conversations` 分支未镜像时渲染顺序是
@@ -852,7 +853,7 @@ mod tests {
     /// 矩形,见 `preview_content_bounds_conversations_*` 两个测试)。
     #[test]
     fn preview_content_bounds_bare_for_right_panel_on_left() {
-        for kind in [PanelKind::Agent, PanelKind::Usage] {
+        for kind in [PanelKind::Agent, PanelKind::Usage, PanelKind::CodeHealth] {
             let state = ShellState {
                 left_view: kind,
                 ..test_state()
@@ -879,7 +880,12 @@ mod tests {
     /// 不得命中 `_ => unreachable!`)。
     #[test]
     fn is_in_preview_column_false_for_right_panel_on_left() {
-        for kind in [PanelKind::Agent, PanelKind::Conversations, PanelKind::Usage] {
+        for kind in [
+            PanelKind::Agent,
+            PanelKind::Conversations,
+            PanelKind::Usage,
+            PanelKind::CodeHealth,
+        ] {
             let state = ShellState {
                 left_view: kind,
                 ..test_state()

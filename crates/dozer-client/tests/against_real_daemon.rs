@@ -18,6 +18,7 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
     let db = std::path::PathBuf::from(format!("/tmp/dz-{}.db", uuid::Uuid::new_v4()));
     let projects = Arc::new(dozerd::projects::ProjectStore::new(&db).unwrap());
     let bookmarks = Arc::new(dozerd::bookmarks::BookmarkStore::new(&db).unwrap());
+    let code_health = Arc::new(dozerd::code_health::CodeHealthStore::new(&db).unwrap());
     let transcripts = Arc::new(dozerd::transcripts::TranscriptStore::open(&db).unwrap());
     let session_summaries =
         Arc::new(dozerd::session_summary::SessionSummaryStore::open(&db).unwrap());
@@ -32,6 +33,7 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
             r,
             projects,
             bookmarks,
+            code_health,
             transcripts,
             session_summaries,
             backfill_registry,

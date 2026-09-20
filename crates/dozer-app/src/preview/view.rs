@@ -17,11 +17,13 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         reload_nonce: 0,
         editor: None,
         tabular: None,
+        json_tree: None,
         dirty: false,
         loaded_bytes: 0,
         total_bytes: 0,
         truncated: false,
         loading: false,
+        pending_jump_line: None,
     }
 }
 
@@ -231,6 +233,16 @@ impl PreviewPane {
             }
             _ => None,
         };
+        // JSON/JSONL:在原生代码编辑器之外**额外**挂一个树查看器(双视图,
+        // 不排斥 editor)。同 tabular,只登记"正在加载",`(id, path)` 交给
+        // 调用方 `take_pending_json_tree_loads()` 取走 spawn 后台加载。
+        let json_tree = match &kind {
+            TabKind::File(path) if crate::json_tree::is_json_tree_extension(path) => {
+                self.pending_json_tree_loads.push((id, path.clone()));
+                Some(JsonTreeState::Loading)
+            }
+            _ => None,
+        };
         // 新建原生编辑器 tab:键盘事件无需先点击一次即可直达编辑器(见
         // `pending_editor_focus` 文档)。
         if editor.is_some() {
@@ -243,11 +255,13 @@ impl PreviewPane {
             reload_nonce: 0,
             editor,
             tabular,
+            json_tree,
             dirty: false,
             loaded_bytes,
             total_bytes,
             truncated,
             loading: false,
+            pending_jump_line: None,
         });
         self.active = self.tabs.len() - 1;
         // 新 tab 成为激活者(可能顶掉旧 find tab)——清掉不再匹配的 Find
@@ -265,6 +279,16 @@ impl PreviewPane {
     pub fn insert_loading_tab(&mut self, kind: TabKind, title: String) -> usize {
         let id = self.next_id;
         self.next_id += 1;
+        // JSON 走的就是这条异步路径(`is_native_editor_candidate(json)==true`),
+        // 所以 json_tree 的双视图登记必须在这里也做一遍——只在 `push_tab`
+        // 登记会让用户从文件树打开 JSON(走异步路径)时拿不到树视图。
+        let json_tree = match &kind {
+            TabKind::File(path) if crate::json_tree::is_json_tree_extension(path) => {
+                self.pending_json_tree_loads.push((id, path.clone()));
+                Some(JsonTreeState::Loading)
+            }
+            _ => None,
+        };
         self.tabs.push(PreviewTab {
             id,
             kind,
@@ -272,11 +296,13 @@ impl PreviewPane {
             reload_nonce: 0,
             editor: None,
             tabular: None,
+            json_tree,
             dirty: false,
             loaded_bytes: 0,
             total_bytes: 0,
             truncated: false,
             loading: true,
+            pending_jump_line: None,
         });
         self.active = self.tabs.len() - 1;
         self.cull_stale_find();
@@ -306,6 +332,13 @@ impl PreviewPane {
             tab.total_bytes = load.total_bytes;
             tab.truncated = load.truncated;
             self.pending_editor_focus = true;
+            // 外部面板（代码健康度）请求的"打开后跳转定位"：编辑器刚填上，
+            // 消费掉 pending 行号并把光标落过去（1-based → 0-based）。
+            if let Some(line) = tab.pending_jump_line.take()
+                && let Some(editor) = tab.editor.as_mut()
+            {
+                editor.move_cursor_to((line.saturating_sub(1), 0));
+            }
         }
     }
 
@@ -386,6 +419,7 @@ impl PreviewPane {
             .filter(|t| {
                 t.editor.is_none()
                     && t.tabular.is_none()
+                    && t.json_tree.is_none()
                     && !t.loading
                     && matches!(t.kind, TabKind::File(_))
             })
@@ -405,6 +439,7 @@ impl PreviewPane {
             TabKind::File(_)
                 if self.tabs[idx].editor.is_none()
                     && self.tabs[idx].tabular.is_none()
+                    && self.tabs[idx].json_tree.is_none()
                     && !self.tabs[idx].loading
         );
         self.active = idx;
@@ -475,7 +510,12 @@ impl PreviewPane {
         self.tabs
             .iter()
             .enumerate()
-            .filter(|(_, tab)| tab.editor.is_none() && tab.tabular.is_none() && !tab.loading)
+            .filter(|(_, tab)| {
+                tab.editor.is_none()
+                    && tab.tabular.is_none()
+                    && tab.json_tree.is_none()
+                    && !tab.loading
+            })
             .filter_map(|(idx, tab)| {
                 // `Blank` 没有 wry 页面(内容区是纯 iced 渲染的 Dozer 品牌标),
                 // 不进期望清单——`sync_webview_pool` 据此不会为它创建 webview。
@@ -1056,6 +1096,35 @@ impl PreviewPane {
         std::mem::take(&mut self.pending_tabular_loads)
     }
 
+    /// 按 tab id 取该 tab 的 JSON 树可变引用。tab 不存在、该 tab 不是 JSON、
+    /// 或树还在后台加载中(`JsonTreeState::Loading`)都返回 `None`(展开/滚动
+    /// 这类交互在数据到位前没有意义)。语义与 `tabular_mut` 完全对齐。
+    pub fn json_tree_mut(&mut self, tab_id: usize) -> Option<&mut crate::json_tree::JsonTreeView> {
+        self.tabs
+            .iter_mut()
+            .find(|t| t.id == tab_id)
+            .and_then(|t| t.json_tree.as_mut())
+            .and_then(|t| match t {
+                JsonTreeState::Ready(view) => Some(view.as_mut()),
+                JsonTreeState::Loading => None,
+            })
+    }
+
+    /// 按 tab id 取出该 tab 的 `JsonTreeState` 可变引用,供加载完成回填使用
+    /// (要把 `Loading` 变成 `Ready`)。语义与 `tabular_state_mut` 对齐。
+    pub fn json_tree_state_mut(&mut self, tab_id: usize) -> Option<&mut JsonTreeState> {
+        self.tabs
+            .iter_mut()
+            .find(|t| t.id == tab_id)
+            .and_then(|t| t.json_tree.as_mut())
+    }
+
+    /// 取走(清空)JSON 树的后台加载队列。语义与 `take_pending_tabular_loads`
+    /// 完全对齐(见其文档):每次 `open_path` 后立即取走,不跨调用攒着。
+    pub fn take_pending_json_tree_loads(&mut self) -> Vec<(usize, PathBuf)> {
+        std::mem::take(&mut self.pending_json_tree_loads)
+    }
+
     /// 编辑保存后调用:按 `PreviewTab.id` 找到对应 tab,推进 reload。原生
     /// (有 `editor`)tab 直接读盘重建编辑器实例(`bump_reload` 路径),wry
     /// tab 走 `reload_nonce` 计数(驱动 `desired_webviews()` 换 URL)。未知
@@ -1134,7 +1203,7 @@ impl PreviewPane {
         let mut matched: Vec<usize> = self
             .tabs
             .iter()
-            .filter(|t| t.editor.is_none() && t.tabular.is_none())
+            .filter(|t| t.editor.is_none() && t.tabular.is_none() && t.json_tree.is_none())
             .filter_map(|t| match &t.kind {
                 TabKind::File(path)
                     if changed.iter().any(|c| c == path)
@@ -1163,7 +1232,7 @@ impl PreviewPane {
         let ids: Vec<usize> = self
             .tabs
             .iter()
-            .filter(|t| t.editor.is_none() && t.tabular.is_none())
+            .filter(|t| t.editor.is_none() && t.tabular.is_none() && t.json_tree.is_none())
             .filter(|t| matches!(t.kind, TabKind::File(_)))
             .map(|t| t.id)
             .collect();
@@ -2412,5 +2481,38 @@ mod tests {
         assert_eq!(text, "aa bb Y\ncc", "current=1 应该只替换第二个 aa");
         assert!(p.tabs()[p.active_idx()].dirty);
         std::fs::remove_file(tmp).ok();
+    }
+
+    #[test]
+    fn open_json_file_populates_both_editor_and_json_tree() {
+        // JSON 是双视图:原生代码编辑器(RawText 半边)与 JSON 树(Tree 半边)
+        // 同时存在,切换按钮在两者间选。不同于 tabular 的"独占认领"。
+        let p = std::env::temp_dir().join(format!("json_route_{}.json", std::process::id()));
+        std::fs::write(&p, "{}").unwrap();
+        let mut pane = PreviewPane::default();
+        pane.open_path(p.clone());
+        let tab = &pane.tabs()[pane.active_idx()];
+        assert!(
+            tab.editor.is_some(),
+            "JSON 应该仍然进原生代码编辑器(双视图之一)"
+        );
+        assert!(
+            matches!(tab.json_tree, Some(JsonTreeState::Loading)),
+            "JSON tab 应该同时进入 json_tree 的 Loading 态"
+        );
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn json_tab_is_excluded_from_webview_pool() {
+        let p = std::env::temp_dir().join(format!("json_webview_{}.json", std::process::id()));
+        std::fs::write(&p, "{}").unwrap();
+        let mut pane = PreviewPane::default();
+        pane.open_path(p.clone());
+        assert!(
+            pane.desired_webviews().is_empty(),
+            "json tab 不该进 webview 池"
+        );
+        std::fs::remove_file(p).ok();
     }
 }

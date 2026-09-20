@@ -65,6 +65,7 @@ async fn session_survives_client_disconnect() {
                 registry,
                 test_projects(),
                 test_bookmarks(),
+                test_code_health(),
                 test_transcripts(),
                 test_session_summaries(),
                 test_backfill_registry(),
@@ -201,6 +202,7 @@ async fn unknown_session_returns_error_reply() {
                 registry,
                 test_projects(),
                 test_bookmarks(),
+                test_code_health(),
                 test_transcripts(),
                 test_session_summaries(),
                 test_backfill_registry(),
@@ -247,6 +249,7 @@ async fn attach_delivers_marker_exactly_once() {
                 registry,
                 test_projects(),
                 test_bookmarks(),
+                test_code_health(),
                 test_transcripts(),
                 test_session_summaries(),
                 test_backfill_registry(),
@@ -329,6 +332,7 @@ async fn attach_from_offset_resumes_within_window() {
                 registry,
                 test_projects(),
                 test_bookmarks(),
+                test_code_health(),
                 test_transcripts(),
                 test_session_summaries(),
                 test_backfill_registry(),
@@ -440,6 +444,7 @@ async fn attach_stream_offset_invariant_under_load() {
                 registry,
                 test_projects(),
                 test_bookmarks(),
+                test_code_health(),
                 test_transcripts(),
                 test_session_summaries(),
                 test_backfill_registry(),
@@ -538,6 +543,7 @@ async fn attach_from_offset_out_of_window_falls_back_to_full_snapshot() {
                 registry,
                 test_projects(),
                 test_bookmarks(),
+                test_code_health(),
                 test_transcripts(),
                 test_session_summaries(),
                 test_backfill_registry(),
@@ -612,6 +618,12 @@ fn test_projects() -> std::sync::Arc<dozerd::projects::ProjectStore> {
 fn test_bookmarks() -> std::sync::Arc<dozerd::bookmarks::BookmarkStore> {
     let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
     std::sync::Arc::new(dozerd::bookmarks::BookmarkStore::new(&db).unwrap())
+}
+
+/// 每次调用建独立临时库的代码健康度存储（测试用；serve 需要）。
+fn test_code_health() -> std::sync::Arc<dozerd::code_health::CodeHealthStore> {
+    let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
+    std::sync::Arc::new(dozerd::code_health::CodeHealthStore::new(&db).unwrap())
 }
 
 /// 每次调用建独立临时库的对话/用量摄取存储（测试用；serve 需要）。

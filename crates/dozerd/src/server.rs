@@ -73,6 +73,7 @@ pub async fn serve(
     registry: Arc<SessionRegistry>,
     projects: Arc<crate::projects::ProjectStore>,
     bookmarks: Arc<crate::bookmarks::BookmarkStore>,
+    code_health: Arc<crate::code_health::CodeHealthStore>,
     transcripts: Arc<crate::transcripts::TranscriptStore>,
     session_summaries: Arc<crate::session_summary::SessionSummaryStore>,
     backfill_registry: Arc<crate::session_summary_backfill::BackfillRegistry>,
@@ -114,6 +115,7 @@ pub async fn serve(
                 let registry = registry.clone();
                 let projects = projects.clone();
                 let bookmarks = bookmarks.clone();
+                let code_health = code_health.clone();
                 let preview_contexts = preview_contexts.clone();
                 let ide_bridge = ide_bridge.clone();
                 let transcripts = transcripts.clone();
@@ -130,6 +132,7 @@ pub async fn serve(
                         registry,
                         projects,
                         bookmarks,
+                        code_health,
                         preview_contexts,
                         ide_bridge,
                         transcripts,
@@ -399,6 +402,7 @@ async fn handle_conn(
     registry: Arc<SessionRegistry>,
     projects: Arc<crate::projects::ProjectStore>,
     bookmarks: Arc<crate::bookmarks::BookmarkStore>,
+    code_health: Arc<crate::code_health::CodeHealthStore>,
     preview_contexts: Arc<PreviewContextStore>,
     ide_bridge: Arc<IdeBridgeRegistry>,
     transcripts: Arc<crate::transcripts::TranscriptStore>,
@@ -593,6 +597,37 @@ async fn handle_conn(
                                 Ok(bookmarks) => Reply::Bookmarks { bookmarks },
                                 Err(e) => Reply::Error {
                                     message: format!("列收藏失败: {e}"),
+                                },
+                            }
+                        }
+                        Request::SaveCodeHealthReport {
+                            project_id,
+                            report_json,
+                            total_loc,
+                            total_functions,
+                            critical_functions,
+                            overall_tier,
+                        } => {
+                            let info = dozer_core::protocol::CodeHealthReportInfo {
+                                total_loc,
+                                total_functions,
+                                critical_functions,
+                                overall_tier,
+                                report_json,
+                                scanned_at_ms: 0, // store 内部会用自己的 now_ms() 覆盖
+                            };
+                            match code_health.save(project_id, &info) {
+                                Ok(()) => Reply::Ok,
+                                Err(e) => Reply::Error {
+                                    message: format!("保存代码健康度报告失败: {e}"),
+                                },
+                            }
+                        }
+                        Request::GetCodeHealthReport { project_id } => {
+                            match code_health.get(project_id) {
+                                Ok(report) => Reply::CodeHealthReport { report },
+                                Err(e) => Reply::Error {
+                                    message: format!("查询代码健康度报告失败: {e}"),
                                 },
                             }
                         }
@@ -1029,6 +1064,7 @@ mod tests {
             registry: std::sync::Arc<crate::registry::SessionRegistry>,
             projects: std::sync::Arc<crate::projects::ProjectStore>,
             bookmarks: std::sync::Arc<crate::bookmarks::BookmarkStore>,
+            code_health: std::sync::Arc<crate::code_health::CodeHealthStore>,
             transcripts: std::sync::Arc<crate::transcripts::TranscriptStore>,
             session_summaries: std::sync::Arc<crate::session_summary::SessionSummaryStore>,
             todos: std::sync::Arc<crate::todo::TodoStore>,
@@ -1040,6 +1076,7 @@ mod tests {
                 registry,
                 projects,
                 bookmarks,
+                code_health,
                 transcripts,
                 session_summaries,
                 std::sync::Arc::new(crate::session_summary_backfill::BackfillRegistry::new()),

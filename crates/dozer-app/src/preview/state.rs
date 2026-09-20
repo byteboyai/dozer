@@ -25,6 +25,13 @@ pub struct PreviewTab {
     /// 那一刻起就恒定,不随加载有没有完成而改变——所有原有 `tabular.is_some()
     /// /is_none()` 判断("这个 tab 是不是已被表格/编辑器认领")因此不用改。
     pub tabular: Option<TabularState>,
+    /// JSON/JSONL 文件的文件 tab 有值,非空即代表这个 tab 额外走 JSON 树查看器
+    /// (在原生代码编辑器之外多给一个只读 Tree 视图,二者用 tab 顶部切换按钮
+    /// 二选一)。**与 `editor`/`tabular` 不同,JSON 不是"独占认领"——它是双
+    /// 视图**:`editor` 仍然有值(原生代码编辑器作为 RawText 半边),`json_tree`
+    /// 同时有值提供 Tree 半边。因此 webview 池判据仍不能被 JSON 认领(见
+    /// `desired_webviews`)。`Some` 从打开那一刻起恒定,不随加载完成与否改变。
+    pub json_tree: Option<JsonTreeState>,
     /// 原生可编辑 tab 的"buffer 与磁盘不一致"标记:用户就地改过、还没 ⌘S 保存
     /// (或右键"刷新"/项目切换丢弃归零)为 `true`。`Blank`/`webview` tab 恒
     /// `false`。2026-09-06 原生预览不再只读,有了就地编辑就必须能显式挂脏并兜底,
@@ -45,6 +52,12 @@ pub struct PreviewTab {
     /// webview 池——`desired_webviews()`/`active_webview_id()`/`select()` 等
     /// 判据要额外排除 `loading` 为真的 tab。
     pub loading: bool,
+    /// 由外部面板（目前只有代码健康度面板）请求的"打开后立即跳转到这一
+    /// 行"——`Some` 只在"这个 tab 刚被新建、还在 `loading` 中"的窗口期内
+    /// 有意义，`apply_native_load` 收到结果、把 `editor` 填上的那一刻立刻
+    /// `take()` 消费掉。已经打开且 `editor` 已就绪的 tab 不走这个字段，
+    /// 直接同步调用 `CodeView::move_cursor_to`。
+    pub pending_jump_line: Option<usize>,
 }
 
 impl std::fmt::Debug for PreviewTab {
@@ -61,6 +74,8 @@ impl std::fmt::Debug for PreviewTab {
             .field("loading", &self.loading)
             .field("editor", &self.editor.is_some())
             .field("tabular", &self.tabular.is_some())
+            .field("json_tree", &self.json_tree.is_some())
+            .field("pending_jump_line", &self.pending_jump_line)
             .finish()
     }
 }
@@ -74,6 +89,16 @@ impl std::fmt::Debug for PreviewTab {
 pub enum TabularState {
     Loading,
     Ready(crate::tabular::TabularView),
+}
+
+/// JSON tab 的树查看器加载态——与 `TabularState` 同构(同样"加载失败保留
+/// Loading、不建 Failed 变体以免误导用户以为文件是空的")。`Ready` 里
+/// `Box<JsonTreeView>`:该结构体本身 ≥256 字节(内含 `Vec<u8>`/`PathBuf`/
+/// 多个集合),不装箱会让 `Loading` 变体和它之间出现明显的枚举尺寸差
+/// (clippy::large_enum_variant);每个 tab 只存一份,装箱开销可忽略。
+pub enum JsonTreeState {
+    Loading,
+    Ready(Box<crate::json_tree::JsonTreeView>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -233,6 +258,8 @@ pub struct PreviewPane {
     /// 返回后立即 `take_pending_tabular_loads()` 取走清空,不应该攒着不取
     /// (见 `PreviewPane::take_pending_tabular_loads` 文档)。
     pub(crate) pending_tabular_loads: Vec<(usize, PathBuf)>,
+    /// 同 `pending_tabular_loads`,但针对 JSON 树查看器(见 `JsonTreeState`)。
+    pub(crate) pending_json_tree_loads: Vec<(usize, PathBuf)>,
 }
 
 impl Default for PreviewPane {
@@ -251,6 +278,7 @@ impl Default for PreviewPane {
             large_file_search: None,
             pending_webview_find_clear: None,
             pending_tabular_loads: Vec::new(),
+            pending_json_tree_loads: Vec::new(),
         }
     }
 }

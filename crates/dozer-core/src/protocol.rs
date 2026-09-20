@@ -201,6 +201,22 @@ pub struct BookmarkInfo {
     pub created_ms: u64,
 }
 
+/// 一次代码健康度扫描的落盘结果。`report_json` 是
+/// `dozer_codehealth::ProjectReport` 的完整序列化（含 `functions` 明细列表），
+/// 顶部几个标量字段冗余存一份是为了 dozerd 侧不需要反序列化整个 JSON
+/// 就能回答"这个项目健康度是什么档位"这类粗粒度查询（目前没有这类查询，
+/// 但同 `session_summaries` 表"标量列 + 大文本列"并存的既有设计一致，
+/// 不额外增加复杂度）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CodeHealthReportInfo {
+    pub total_loc: u64,
+    pub total_functions: u64,
+    pub critical_functions: u64,
+    pub overall_tier: String,
+    pub report_json: String,
+    pub scanned_at_ms: u64,
+}
+
 /// `SetTodoStatus` 期望的**已存储**逻辑状态。注意"进行中"(派发到某个
 /// 存活会话)不是纯存储态——它由 `dispatch_session_id` 的存活与否在服务端
 /// 之外(GUI)推导,不在此列。三值各自对应 `todos` 表 `done`/`paused`/
@@ -422,6 +438,19 @@ pub enum Request {
     ListBookmarks {
         project_id: Option<i64>,
     },
+    /// 保存一次代码健康度扫描的落盘结果（一个项目只保留最新一次）。
+    SaveCodeHealthReport {
+        project_id: i64,
+        report_json: String,
+        total_loc: u64,
+        total_functions: u64,
+        critical_functions: u64,
+        overall_tier: String,
+    },
+    /// 查询某项目上次代码健康度扫描结果；`None` = 还没扫描过。
+    GetCodeHealthReport {
+        project_id: i64,
+    },
     /// `dozer-app` 预览面板变化时推送最新上下文；`context: None` 表示当前
     /// 无活动文本预览。`dozerd` 侧纯内存缓存，同一 `project_id` 后写覆盖
     /// 前写。
@@ -627,6 +656,10 @@ pub enum Reply {
     /// 收藏夹列表。
     Bookmarks {
         bookmarks: Vec<BookmarkInfo>,
+    },
+    /// `GetCodeHealthReport` 应答。`None` = 这个项目还没扫描过。
+    CodeHealthReport {
+        report: Option<CodeHealthReportInfo>,
     },
     /// `ListConversations` 应答。
     Conversations {
@@ -1320,6 +1353,51 @@ mod tests {
         let line = encode_line(&reply);
         assert!(line.contains(r#""type":"bookmarks""#));
         assert_eq!(decode_line::<Reply>(line.trim()).unwrap(), reply);
+    }
+
+    #[test]
+    fn save_code_health_report_serializes_with_type_tag() {
+        let req = Request::SaveCodeHealthReport {
+            project_id: 1,
+            report_json: "{}".into(),
+            total_loc: 100,
+            total_functions: 10,
+            critical_functions: 1,
+            overall_tier: "watch".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"type\":\"save_code_health_report\""));
+    }
+
+    #[test]
+    fn get_code_health_report_round_trips() {
+        let req = Request::GetCodeHealthReport { project_id: 7 };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: Request = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[test]
+    fn code_health_report_reply_round_trips_with_none() {
+        let reply = Reply::CodeHealthReport { report: None };
+        let json = serde_json::to_string(&reply).unwrap();
+        let back: Reply = serde_json::from_str(&json).unwrap();
+        assert_eq!(reply, back);
+    }
+
+    #[test]
+    fn code_health_report_info_round_trips() {
+        let info = CodeHealthReportInfo {
+            total_loc: 100,
+            total_functions: 10,
+            critical_functions: 1,
+            overall_tier: "critical".into(),
+            report_json: "{\"functions\":[]}".into(),
+            scanned_at_ms: 1_700_000_000_000,
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let back: CodeHealthReportInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(info, back);
     }
 
     #[test]

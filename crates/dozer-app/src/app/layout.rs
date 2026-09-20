@@ -543,6 +543,8 @@ pub(crate) fn pair_split_ratio(dims: &PanelDims, kind: PanelKind) -> Option<f32>
         PanelKind::Agent => Some(dims.agent_split),
         PanelKind::Conversations => Some(dims.conversations_split),
         PanelKind::Usage => Some(dims.usage_split),
+        // CodeHealth 单块内容、无 list pane，不参与分栏 → 无 split 字段。
+        PanelKind::CodeHealth => None,
     }
 }
 
@@ -589,6 +591,8 @@ pub(crate) fn with_pair_split_ratio(dims: PanelDims, kind: PanelKind, ratio: f32
             usage_split: ratio,
             ..dims
         },
+        // CodeHealth 无分栏，写入侧原样返回（没有任何 split 字段可写）。
+        PanelKind::CodeHealth => dims,
     }
 }
 

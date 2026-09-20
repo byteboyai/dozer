@@ -3,8 +3,9 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use dozer_core::protocol::{
     AgentKind, AgentState, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
-    ConversationSummary, PreviewContext, ProjectInfo, Reply, Request, SessionInfo,
-    SessionSummaryPayload, TodoInfo, TurnRecord, UsagePayload, decode_line, encode_line,
+    CodeHealthReportInfo, ConversationSummary, PreviewContext, ProjectInfo, Reply, Request,
+    SessionInfo, SessionSummaryPayload, TodoInfo, TurnRecord, UsagePayload, decode_line,
+    encode_line,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -238,6 +239,46 @@ impl Client {
             .await?
         {
             Reply::Bookmarks { bookmarks } => Ok(bookmarks),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn save_code_health_report(
+        &self,
+        project_id: i64,
+        report_json: String,
+        total_loc: u64,
+        total_functions: u64,
+        critical_functions: u64,
+        overall_tier: String,
+    ) -> Result<()> {
+        match self
+            .roundtrip(&Request::SaveCodeHealthReport {
+                project_id,
+                report_json,
+                total_loc,
+                total_functions,
+                critical_functions,
+                overall_tier,
+            })
+            .await?
+        {
+            Reply::Ok => Ok(()),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn get_code_health_report(
+        &self,
+        project_id: i64,
+    ) -> Result<Option<CodeHealthReportInfo>> {
+        match self
+            .roundtrip(&Request::GetCodeHealthReport { project_id })
+            .await?
+        {
+            Reply::CodeHealthReport { report } => Ok(report),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
             other => bail!("意外应答: {other:?}"),
         }
     }

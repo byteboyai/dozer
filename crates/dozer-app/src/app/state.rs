@@ -29,6 +29,7 @@ pub enum PanelKind {
     Agent,
     Conversations,
     Usage,
+    CodeHealth,
 }
 
 impl PanelKind {
@@ -44,7 +45,7 @@ impl PanelKind {
             | Self::Database
             | Self::Ssh
             | Self::Web => Side::Left,
-            Self::Agent | Self::Conversations | Self::Usage => Side::Right,
+            Self::Agent | Self::Conversations | Self::Usage | Self::CodeHealth => Side::Right,
         }
     }
 }

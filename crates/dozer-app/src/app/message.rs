@@ -7,7 +7,7 @@ use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 
 use crate::chrome::homespace::{self, HomeRecentConversation, HomeRecentFile};
 use crate::extensions::{
-    browser, conversations, database, file_history, files, footbar, git_log, project,
+    browser, codehealth, conversations, database, file_history, files, footbar, git_log, project,
     project_create, search, settings, ssh, todo, usage,
 };
 use crate::git_watch;
@@ -64,6 +64,8 @@ pub enum Message {
     TodoDetailLoaded(usize, Vec<dozer_core::protocol::TurnRecord>),
     /// Usage 面板的全部消息,内核只转发不解读——见 `extensions::usage::Message`。
     Usage(usage::Message),
+    /// 代码健康度面板的全部消息,内核只转发不解读——见 `extensions::codehealth::Message`。
+    CodeHealth(codehealth::Message),
     /// 对话(Conversations)面板列表侧的全部消息,内核只转发不解读——见
     /// `extensions::conversations::Message`。其中 `SessionOpen`/
     /// `DetailLoadMore`/`Hover`/`TextInputMenuOpen` 四种由内核直接拦截处理,
@@ -420,6 +422,30 @@ pub enum Message {
         usize,
         usize,
         Result<crate::tabular::Sheet, String>,
+    ),
+    /// JSON 树查看器的交互(滚动/展开折叠/切视图模式)。路由字段同
+    /// `TabularAction`,动作由 `Workspace::preview_pane_json_tree_action` 定位
+    /// 对应 tab 后 `apply`;`apply` 返回 `Some(NodeExpandRequest)` 表示这次
+    /// 展开的节点还没解码、需要后台补读。
+    JsonTreeAction(PanelKind, usize, crate::json_tree::Action),
+    /// JSON tab 首次打开的后台加载完成(整棵树的根形态 + 行范围)。路由字段
+    /// 同 `TabularLoaded`,`ProjectId` 按项目路由以防结果晚于切项目才回来。
+    JsonTreeLoaded(
+        ProjectId,
+        PanelKind,
+        usize,
+        Result<crate::json_tree::JsonTreeView, String>,
+    ),
+    /// JSON 树某个节点(点开一个还没解码的 object/array)后台解码完成,回填进
+    /// 已存在的 `JsonTreeView`。`NodePath` 是节点的路径,`usize` 是 root_index
+    /// (单个 `.json` 恒为 0,`.jsonl` 为行号),路由字段含义同 `JsonTreeLoaded`。
+    JsonNodeLoaded(
+        ProjectId,
+        PanelKind,
+        usize,
+        crate::json_tree::NodePath,
+        usize,
+        Result<crate::json_tree::NodeContent, String>,
     ),
     /// Project 面板右配对预览:打开本地文件为新 tab,语义同 `PreviewOpenPath`。
     ProjectPreviewOpenPath(PathBuf),

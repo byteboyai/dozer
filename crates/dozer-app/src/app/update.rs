@@ -5,6 +5,7 @@ use crate::chrome::homespace::{self, load_home_recents};
 use crate::chrome::rail;
 use crate::chrome::tab_widget;
 use crate::extensions::browser;
+use crate::extensions::codehealth;
 use crate::extensions::conversations;
 use crate::extensions::database;
 use crate::extensions::file_history;
@@ -187,6 +188,25 @@ impl App {
             Message::Usage(msg) => {
                 self.with_focused_project(|ws, _io| {
                     usage::update(&mut ws.usage, msg);
+                });
+            }
+            Message::CodeHealth(msg @ codehealth::Message::Loaded(project_id, ..)) => {
+                self.with_project(project_id, move |ws, _io| {
+                    codehealth::update(&mut ws.codehealth, msg);
+                });
+            }
+            Message::CodeHealth(msg @ codehealth::Message::Scanned(project_id, ..)) => {
+                self.with_project(project_id, move |ws, _io| {
+                    codehealth::update(&mut ws.codehealth, msg);
+                });
+            }
+            Message::CodeHealth(codehealth::Message::OpenLocation(path, line)) => {
+                self.code_health_open_location(path, line);
+            }
+            Message::CodeHealth(codehealth::Message::ScanRequested) => {
+                self.with_focused_project(|ws, io| {
+                    codehealth::update(&mut ws.codehealth, codehealth::Message::ScanRequested);
+                    ws.spawn_codehealth_scan(io);
                 });
             }
             Message::SelectTab(idx) => self.select_tab(idx),
@@ -1107,6 +1127,41 @@ impl App {
                         pane.tabular_state_mut(tab_id)
                     {
                         view.apply_sheet_loaded(sheet_index, result);
+                    }
+                });
+            }
+            Message::JsonTreeAction(kind, tab_id, action) => {
+                self.with_focused_project(move |ws, io| {
+                    ws.preview_pane_json_tree_action(kind, tab_id, action, io);
+                });
+            }
+            Message::JsonTreeLoaded(project_id, kind, tab_id, result) => {
+                self.with_project(project_id, move |ws, _io| {
+                    let pane = if kind == PanelKind::Project {
+                        &mut ws.project_preview
+                    } else {
+                        &mut ws.preview
+                    };
+                    let Ok(view) = result else {
+                        tracing::warn!("JSON 首次加载失败,tab 停留在 Loading");
+                        return;
+                    };
+                    if let Some(slot) = pane.json_tree_state_mut(tab_id) {
+                        *slot = crate::preview::JsonTreeState::Ready(Box::new(view));
+                    }
+                });
+            }
+            Message::JsonNodeLoaded(project_id, kind, tab_id, path, root_index, result) => {
+                self.with_project(project_id, move |ws, _io| {
+                    let pane = if kind == PanelKind::Project {
+                        &mut ws.project_preview
+                    } else {
+                        &mut ws.preview
+                    };
+                    if let Some(crate::preview::JsonTreeState::Ready(view)) =
+                        pane.json_tree_state_mut(tab_id)
+                    {
+                        view.apply_node_loaded(path, result, root_index);
                     }
                 });
             }
@@ -3263,6 +3318,11 @@ impl App {
                     ws.usage.set_loading(true);
                     ws.spawn_usage_refresh(io);
                 }),
+                // 代码健康度面板切入时只读上次落盘结果，不自动扫描（spec：
+                // 手动触发，与 Usage 的"打开即自动扫"是明确的行为差异）。
+                PanelKind::CodeHealth => self.with_focused_project(|ws, io| {
+                    ws.spawn_codehealth_load(io);
+                }),
                 // 会话列表原本只在项目打开时和回合结束时刷新,切进这个面板时
                 // 没有任何补救手段——离开一段时间再切回来看到的还是上次的
                 // 快照。补一次切入即刷新,同 `Usage` 面板的既有口径。
@@ -3410,6 +3470,10 @@ impl App {
     /// `CodeView` 包一层 `NativeEditorLoadHandle` 传回 `Message::
     /// PreviewFileLoaded`,由 `apply_native_load` 取出装进 tab。
     pub(crate) fn preview_open_path(&mut self, path: PathBuf) {
+        self.preview_open_path_at(path, None);
+    }
+
+    pub(crate) fn preview_open_path_at(&mut self, path: PathBuf, target_line: Option<usize>) {
         // 同 `preview_select_tab`:`preview_tab_bar_avail_px` 要 `&self`,
         // 得在 `with_focused_project` 的 `&mut self` 借用之前先算好。
         let avail_w = self.preview_tab_bar_avail_px(PanelKind::Files);
@@ -3431,6 +3495,17 @@ impl App {
             if let Some(idx) = ws.preview.find_existing_file_tab(&path) {
                 // 同一文件已开则切过去,不重复开/重复读盘。
                 ws.preview.select(idx);
+                if let Some(line) = target_line
+                    && let Some(tab) = ws.preview.tabs_mut().get_mut(idx)
+                {
+                    if let Some(editor) = tab.editor.as_mut() {
+                        // `FunctionMetric.start_line` 是 1-based,`CodeView`
+                        // 光标是 0-based,转一次。
+                        editor.move_cursor_to((line.saturating_sub(1), 0));
+                    } else {
+                        tab.pending_jump_line = Some(line);
+                    }
+                }
             } else if crate::preview::is_native_editor_candidate(&path) {
                 let title = path
                     .file_name()
@@ -3439,6 +3514,11 @@ impl App {
                 let tab_id = ws
                     .preview
                     .insert_loading_tab(crate::preview::TabKind::File(path.clone()), title);
+                if let Some(line) = target_line
+                    && let Some(tab) = ws.preview.tabs_mut().iter_mut().find(|t| t.id == tab_id)
+                {
+                    tab.pending_jump_line = Some(line);
+                }
                 let proxy = io.proxy.clone();
                 let load_path = path.clone();
                 io.handle.spawn(async move {
@@ -3454,8 +3534,12 @@ impl App {
                 });
             } else {
                 ws.preview.open_path(path.clone());
+                // 非原生编辑器候选(webview/表格类)无法跳转光标,target_line
+                // 静默忽略——这类文件本来就不会是代码健康度面板的分析对象
+                // (只扫 .rs),实践中不会走到这条分支。
             }
             ws.spawn_pending_tabular_loads(PanelKind::Files, io);
+            ws.spawn_pending_json_tree_loads(PanelKind::Files, io);
             // 新 tab 落在末尾(复用已开的文件则落在该文件原来的位置)——
             // 用跟 `preview_select_tab` 同一套 `tab_window_reveal`,把窗口
             // 起点钳到"包含这个新激活 tab"的位置,而不是无脑滚回最左
@@ -3473,6 +3557,17 @@ impl App {
             ws.spawn_preview_state_save(io);
             ws.spawn_preview_context_push(io);
         });
+    }
+
+    /// 代码健康度面板"点击函数跳转"入口：确保 Files 面板可见，再打开该
+    /// 文件并跳到目标行。`panel_select` 在已选中同一面板时会触发"收起/
+    /// 展开"的 toggle 副作用（见 `panel_select` 文档），这里先判断避免
+    /// 误触。
+    pub(crate) fn code_health_open_location(&mut self, path: PathBuf, line: usize) {
+        if self.right_view != PanelKind::Files {
+            self.panel_select(PanelKind::Files);
+        }
+        self.preview_open_path_at(path, Some(line));
     }
 
     pub(crate) fn preview_select_tab(&mut self, idx: usize) {
@@ -3559,6 +3654,7 @@ impl App {
                 ws.project_preview.open_path(path.clone());
             }
             ws.spawn_pending_tabular_loads(PanelKind::Project, io);
+            ws.spawn_pending_json_tree_loads(PanelKind::Project, io);
             // 新 tab 落在末尾(或复用已开文件原位),用 `tab_window_reveal`
             // 钳出包含它的窗口起点,不再无脑滚回最左(同 Files 预览)。
             let active = ws.project_preview.active_idx();

@@ -1,6 +1,6 @@
 [package]
 name = "dozer-app"
-version = "0.5.167"
+version = "0.5.168"
 edition.workspace = true
 
 [[bin]]
@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 dozer-core = { path = "../dozer-core" }
 dozer-client = { path = "../dozer-client" }
+dozer-codehealth = { path = "../dozer-codehealth" }
 # 复用 dozer-hook 的 hook 安装逻辑(install::run_at/opencode_install::run_at)，
 # 新建 agent 会话时静默注册对应 CLI 的 hook，不必用户手动跑 `dozer-hook install`。
 dozer-hook = { path = "../dozer-hook" }
@@ -91,6 +92,10 @@ ignore = "0.4"
 # csv：.csv/.tsv 的流式解析(引号/转义/参差行由它处理)。
 calamine = { version = "0.36", features = ["dates"] }
 csv = "1"
+sonic-rs = "0.5.10"
+# json5：.json5/.jsonc 一次性规范化为标准 JSON 后再交给 sonic-rs 做树视图
+# 的惰性按需解码(JSON5 是配置格式、无 SIMD 解析器,json5-rs ~225MiB/s 已是最快)。
+json5 = "1"
 
 [dev-dependencies]
 tempfile = "3"

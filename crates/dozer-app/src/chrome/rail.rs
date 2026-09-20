@@ -1,5 +1,5 @@
 // crates/dozer-app/src/rail.rs
-//! 图标栏(Rail):10 个面板挂载的两条侧栏,支持点击切换、同栏重排、跨栏
+//! 图标栏(Rail):11 个面板挂载的两条侧栏,支持点击切换、同栏重排、跨栏
 //! 拖拽换边。类型 + 纯逻辑 + 槽位动画 + 渲染都在这个模块——不是
 //! `extensions/` 那种私有 Message+State+update+view 的 extension 形态,
 //! `rail_layout`/`rail_drag`/`rail_slot_anims` 三个字段仍然挂在
@@ -84,7 +84,7 @@ impl RailLayout {
     }
 
     /// 给定面板,反查它当前挂在哪条栏。`RailLayout` 的不变式(见
-    /// `sanitize_rail_layout`)保证 10 个面板不重不漏分布在两条栏,
+    /// `sanitize_rail_layout`)保证 11 个面板不重不漏分布在两条栏,
     /// 所以这里的 `expect` 不会在合法状态下触发——`RailLayout` 一旦
     /// 通不过消毒就已经在 `layout::load_from` 里回落 `default()` 了,
     /// 不会带着"某个面板哪条栏都不在"的坏数据流到这里。
@@ -122,12 +122,17 @@ impl Default for RailLayout {
                 PanelKind::Ssh,
                 PanelKind::Web,
             ],
-            right: vec![PanelKind::Agent, PanelKind::Conversations, PanelKind::Usage],
+            right: vec![
+                PanelKind::Agent,
+                PanelKind::Conversations,
+                PanelKind::Usage,
+                PanelKind::CodeHealth,
+            ],
         }
     }
 }
 
-/// `RailLayout` 的消毒:任一栏为空,或两侧合计不是恰 10 个不重复的
+/// `RailLayout` 的消毒:任一栏为空,或两侧合计不是恰 11 个不重复的
 /// `PanelKind`(手改/版本不一致导致的坏数据),整个回落 `default()`。
 /// 不做部分修复——缺一个面板就补在默认栏这种中间态比"直接用默认值"
 /// 更难排查。
@@ -138,7 +143,7 @@ pub(crate) fn sanitize_rail_layout(rail: RailLayout) -> RailLayout {
     let mut all: Vec<_> = rail.left.iter().chain(rail.right.iter()).collect();
     all.sort_by_key(|k| format!("{k:?}"));
     all.dedup();
-    if all.len() != 10 || rail.left.len() + rail.right.len() != 10 {
+    if all.len() != 11 || rail.left.len() + rail.right.len() != 11 {
         return RailLayout::default();
     }
     rail
@@ -479,7 +484,7 @@ pub(crate) fn icon_rail(
         .into()
 }
 
-/// 面板 → (图标, 图标栏 tooltip 文案)。10 个 `PanelKind` variant 逐一
+/// 面板 → (图标, 图标栏 tooltip 文案)。11 个 `PanelKind` variant 逐一
 /// 对应,顺序与 `PanelKind` 定义顺序一致,不代表渲染顺序(渲染顺序看
 /// `RailLayout`)。
 fn panel_meta(kind: PanelKind) -> (icons::IconKind, &'static str) {
@@ -494,6 +499,7 @@ fn panel_meta(kind: PanelKind) -> (icons::IconKind, &'static str) {
         PanelKind::Agent => (icons::IconKind::Brain, "代理"),
         PanelKind::Conversations => (icons::IconKind::BotMessageSquare, "对话"),
         PanelKind::Usage => (icons::IconKind::BarChart3, "用量"),
+        PanelKind::CodeHealth => (icons::IconKind::SquareActivity, "代码健康度"),
     }
 }
 
@@ -667,17 +673,17 @@ mod tests {
         );
     }
 
-    /// `RailLayout::default()` 把 10 个面板不重不漏分到左右两栏,
-    /// 与现状 7/3 分组逐一对应(防漂移锚)。
+    /// `RailLayout::default()` 把 11 个面板不重不漏分到左右两栏,
+    /// 与现状 7/4 分组逐一对应(防漂移锚)。
     #[test]
     fn rail_layout_default_covers_all_panels_without_duplicates() {
         let rail = RailLayout::default();
         assert_eq!(rail.left.len(), 7);
-        assert_eq!(rail.right.len(), 3);
+        assert_eq!(rail.right.len(), 4);
         let mut all: Vec<_> = rail.left.iter().chain(rail.right.iter()).collect();
         all.sort_by_key(|k| format!("{k:?}"));
         all.dedup();
-        assert_eq!(all.len(), 10, "10 个面板不重不漏分到左右两栏");
+        assert_eq!(all.len(), 11, "11 个面板不重不漏分到左右两栏");
     }
 
     #[test]

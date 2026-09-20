@@ -6,6 +6,7 @@ use crate::chrome::rail;
 use crate::chrome::tab_widget;
 use crate::chrome::topbar;
 use crate::extensions::browser;
+use crate::extensions::codehealth;
 use crate::extensions::conversations;
 use crate::extensions::database;
 use crate::extensions::files;
@@ -1244,6 +1245,12 @@ pub(crate) fn panel_body<'a>(
                 .width(Length::Fill)
                 .into()
             }
+        }
+        PanelKind::CodeHealth => {
+            // 单块内容、无 list pane、无分栏：整条内容交还给
+            // `codehealth::content_pane`，背景/外框由外层 `right_panel_area`
+            // 的 zone 容器统一套。
+            codehealth::content_pane(&ws.codehealth, Length::Fill).map(Message::CodeHealth)
         }
     }
 }
