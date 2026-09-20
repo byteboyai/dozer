@@ -4,7 +4,8 @@ use base64::engine::general_purpose::STANDARD as B64;
 use dozer_core::protocol::{
     AgentKind, AgentState, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
     CodeHealthReportInfo, ConversationSummary, PreviewContext, ProjectInfo, Reply, Request,
-    SessionInfo, SessionSummaryPayload, TodoInfo, TurnRecord, UsagePayload, decode_line, encode_line,
+    SessionInfo, SessionSummaryPayload, TodoInfo, TurnRecord, UsagePayload, decode_line,
+    encode_line,
 };
 use std::path::PathBuf;
 use std::time::Duration;

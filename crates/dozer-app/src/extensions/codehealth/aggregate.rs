@@ -16,7 +16,11 @@ pub fn spawn_load_cached(
 ) {
     let client = client.clone();
     handle.spawn(async move {
-        let cached = client.get_code_health_report(project_id).await.ok().flatten();
+        let cached = client
+            .get_code_health_report(project_id)
+            .await
+            .ok()
+            .flatten();
         let (report, scanned_at_ms) = match cached {
             Some(info) => {
                 let report: Option<ProjectReport> = serde_json::from_str(&info.report_json).ok();
@@ -39,11 +43,10 @@ pub fn spawn_scan(
 ) {
     let client = client.clone();
     handle.spawn(async move {
-        let result = tokio::task::spawn_blocking(move || {
-            dozer_codehealth::scan_project(&project_path)
-        })
-        .await
-        .unwrap_or_else(|e| Err(anyhow::anyhow!("扫描任务被取消: {e}")));
+        let result =
+            tokio::task::spawn_blocking(move || dozer_codehealth::scan_project(&project_path))
+                .await
+                .unwrap_or_else(|e| Err(anyhow::anyhow!("扫描任务被取消: {e}")));
         match result {
             Ok(report) => {
                 if let Ok(report_json) = serde_json::to_string(&report) {

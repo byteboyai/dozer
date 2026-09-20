@@ -8,6 +8,7 @@ use crate::app::{
 use crate::chrome::tab_widget::tab_window_reveal;
 use crate::delivery::{self};
 use crate::extensions::browser;
+use crate::extensions::codehealth;
 use crate::extensions::conversations;
 use crate::extensions::database;
 use crate::extensions::files;
@@ -357,6 +358,8 @@ pub struct Workspace {
     /// （spec 非目标"不做实时更新"）。
     /// Usage 面板 per-project 状态——见 `extensions::usage::WorkspaceState`。
     pub(crate) usage: usage::WorkspaceState,
+    /// 代码健康度面板 per-project 状态——见 `extensions::codehealth::WorkspaceState`。
+    pub(crate) codehealth: codehealth::WorkspaceState,
     /// 当前项目（None=未打开；P1g）。
     pub(crate) project: Option<ProjectInfo>,
     /// 最近项目（切换用）。
@@ -603,6 +606,7 @@ impl Workspace {
             review_nonce: 0,
             conversations: conversations::WorkspaceState::default(),
             usage: usage::WorkspaceState::default(),
+            codehealth: codehealth::WorkspaceState::default(),
             project: None,
             project_panel: project::WorkspaceState::default(),
             recent_projects: Vec::new(),
@@ -789,6 +793,35 @@ impl Workspace {
             let _ = proxy.send_event(Message::Usage(m));
         };
         usage::spawn_refresh(project_id, project_path, &io.client, &io.handle, emit);
+    }
+
+    /// 代码健康度面板切进时调用：只读 dozerd 落盘的"上次扫描结果"缓存，
+    /// **不**自动触发扫描（spec：手动触发，与 Usage 面板"打开即自动扫"不同）。
+    pub(crate) fn spawn_codehealth_load(&self, io: &ShellIo) {
+        let Some(p) = &self.project else {
+            return;
+        };
+        let project_id = p.id;
+        let proxy = io.proxy.clone();
+        let emit = move |m| {
+            let _ = proxy.send_event(Message::CodeHealth(m));
+        };
+        codehealth::spawn_load_cached(project_id, &io.client, &io.handle, emit);
+    }
+
+    /// 点"扫描"按钮：本地跑 `dozer_codehealth::scan_project`（CPU/IO 密集，
+    /// `spawn_blocking`），成功后落盘 dozerd 并回灌 UI。
+    pub(crate) fn spawn_codehealth_scan(&self, io: &ShellIo) {
+        let Some(p) = &self.project else {
+            return;
+        };
+        let project_id = p.id;
+        let project_path = PathBuf::from(&p.path);
+        let proxy = io.proxy.clone();
+        let emit = move |m| {
+            let _ = proxy.send_event(Message::CodeHealth(m));
+        };
+        codehealth::spawn_scan(project_id, project_path, &io.client, &io.handle, emit);
     }
 
     /// 本 `Workspace` 归属的项目 id。所有"发起时已知项目、结果晚些才回来"的
@@ -981,6 +1014,7 @@ impl Workspace {
         self.git_watch = None;
         self.conversations = conversations::WorkspaceState::default();
         self.usage = usage::WorkspaceState::default();
+        self.codehealth = codehealth::WorkspaceState::default();
         let project_id = project.id;
         let repo_path = PathBuf::from(&project.path);
         self.project_panel = project::WorkspaceState::new(

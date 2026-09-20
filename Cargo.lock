@@ -1854,6 +1854,7 @@ dependencies = [
  "calamine",
  "csv",
  "dozer-client",
+ "dozer-codehealth",
  "dozer-core",
  "dozer-hook",
  "dozer-mcp",
@@ -1924,6 +1925,8 @@ dependencies = [
  "anyhow",
  "ast-grep-core",
  "ast-grep-language",
+ "serde",
+ "tempfile",
 ]
 
 [[package]]

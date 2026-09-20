@@ -103,7 +103,10 @@ mod tests {
     #[test]
     fn loaded_populates_report_and_timestamp() {
         let mut ws = WorkspaceState::default();
-        update(&mut ws, Message::Loaded(1, Some(sample_report()), Some(123)));
+        update(
+            &mut ws,
+            Message::Loaded(1, Some(sample_report()), Some(123)),
+        );
         assert!(ws.report().is_some());
         assert_eq!(ws.scanned_at_ms(), Some(123));
     }

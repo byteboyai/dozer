@@ -7,7 +7,7 @@ use super::{Message, WorkspaceState};
 use byteui::theme::color::ColorTokens;
 use dozer_codehealth::{FunctionMetric, HealthTier, ProjectReport, Severity};
 use iced_widget::core::{Element, Length};
-use iced_widget::{button, column, container, row, scrollable, text, Column};
+use iced_widget::{Column, button, column, container, row, scrollable, text};
 use std::collections::BTreeMap;
 
 fn tier_color(tier: HealthTier, tokens: &ColorTokens) -> iced_widget::core::Color {
@@ -66,7 +66,9 @@ fn format_ms(ms: u64) -> String {
     format!("{secs}s epoch")
 }
 
-fn problem_row(f: &FunctionMetric) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+fn problem_row(
+    f: &FunctionMetric,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let tokens = byteui::theme::color::current();
     let color = match f.severity {
         Severity::Critical => tokens.red,
@@ -84,7 +86,9 @@ fn problem_row(f: &FunctionMetric) -> Element<'_, Message, iced_widget::Theme, i
     .into()
 }
 
-fn problem_list(report: &ProjectReport) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+fn problem_list(
+    report: &ProjectReport,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let tokens = byteui::theme::color::current();
     let mut by_file: BTreeMap<&std::path::Path, Vec<&FunctionMetric>> = BTreeMap::new();
     for f in &report.functions {
@@ -92,11 +96,7 @@ fn problem_list(report: &ProjectReport) -> Element<'_, Message, iced_widget::The
     }
     let mut col = Column::new().spacing(4);
     for (path, functions) in by_file {
-        col = col.push(
-            text(path.display().to_string())
-                .size(12)
-                .color(tokens.dim),
-        );
+        col = col.push(text(path.display().to_string()).size(12).color(tokens.dim));
         for f in functions {
             col = col.push(problem_row(f));
         }

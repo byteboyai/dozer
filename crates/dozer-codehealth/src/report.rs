@@ -116,7 +116,7 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
     let scale = scale_tier(total_loc);
     let density = density_tier(critical_functions, total_functions);
     let mut functions = all_functions;
-    functions.sort_by(|a, b| b.severity_rank().cmp(&a.severity_rank()));
+    functions.sort_by_key(|f| std::cmp::Reverse(f.severity_rank()));
 
     Ok(ProjectReport {
         total_loc,

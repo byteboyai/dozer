@@ -5,6 +5,7 @@ use crate::chrome::homespace::{self, load_home_recents};
 use crate::chrome::rail;
 use crate::chrome::tab_widget;
 use crate::extensions::browser;
+use crate::extensions::codehealth;
 use crate::extensions::conversations;
 use crate::extensions::database;
 use crate::extensions::file_history;
@@ -187,6 +188,22 @@ impl App {
             Message::Usage(msg) => {
                 self.with_focused_project(|ws, _io| {
                     usage::update(&mut ws.usage, msg);
+                });
+            }
+            Message::CodeHealth(msg @ codehealth::Message::Loaded(project_id, ..)) => {
+                self.with_project(project_id, move |ws, _io| {
+                    codehealth::update(&mut ws.codehealth, msg);
+                });
+            }
+            Message::CodeHealth(msg @ codehealth::Message::Scanned(project_id, ..)) => {
+                self.with_project(project_id, move |ws, _io| {
+                    codehealth::update(&mut ws.codehealth, msg);
+                });
+            }
+            Message::CodeHealth(codehealth::Message::ScanRequested) => {
+                self.with_focused_project(|ws, io| {
+                    codehealth::update(&mut ws.codehealth, codehealth::Message::ScanRequested);
+                    ws.spawn_codehealth_scan(io);
                 });
             }
             Message::SelectTab(idx) => self.select_tab(idx),
@@ -3271,6 +3288,11 @@ impl App {
                 PanelKind::Usage => self.with_focused_project(|ws, io| {
                     ws.usage.set_loading(true);
                     ws.spawn_usage_refresh(io);
+                }),
+                // 代码健康度面板切入时只读上次落盘结果，不自动扫描（spec：
+                // 手动触发，与 Usage 的"打开即自动扫"是明确的行为差异）。
+                PanelKind::CodeHealth => self.with_focused_project(|ws, io| {
+                    ws.spawn_codehealth_load(io);
                 }),
                 // 会话列表原本只在项目打开时和回合结束时刷新,切进这个面板时
                 // 没有任何补救手段——离开一段时间再切回来看到的还是上次的

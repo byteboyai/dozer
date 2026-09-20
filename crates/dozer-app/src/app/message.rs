@@ -7,7 +7,7 @@ use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 
 use crate::chrome::homespace::{self, HomeRecentConversation, HomeRecentFile};
 use crate::extensions::{
-    browser, conversations, database, file_history, files, footbar, git_log, project,
+    browser, codehealth, conversations, database, file_history, files, footbar, git_log, project,
     project_create, search, settings, ssh, todo, usage,
 };
 use crate::git_watch;
@@ -64,6 +64,8 @@ pub enum Message {
     TodoDetailLoaded(usize, Vec<dozer_core::protocol::TurnRecord>),
     /// Usage 面板的全部消息,内核只转发不解读——见 `extensions::usage::Message`。
     Usage(usage::Message),
+    /// 代码健康度面板的全部消息,内核只转发不解读——见 `extensions::codehealth::Message`。
+    CodeHealth(codehealth::Message),
     /// 对话(Conversations)面板列表侧的全部消息,内核只转发不解读——见
     /// `extensions::conversations::Message`。其中 `SessionOpen`/
     /// `DetailLoadMore`/`Hover`/`TextInputMenuOpen` 四种由内核直接拦截处理,

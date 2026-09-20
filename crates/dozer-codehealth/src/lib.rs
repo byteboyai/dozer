@@ -5,7 +5,7 @@
 mod function_metric;
 mod report;
 
-pub use function_metric::{functions_in_source, severity_for, FunctionMetric, Severity};
+pub use function_metric::{FunctionMetric, Severity, functions_in_source, severity_for};
 pub use report::{
-    density_tier, file_metric, scale_tier, scan_project, FileMetric, HealthTier, ProjectReport,
+    FileMetric, HealthTier, ProjectReport, density_tier, file_metric, scale_tier, scan_project,
 };
