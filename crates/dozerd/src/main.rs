@@ -82,6 +82,9 @@ async fn main() -> Result<()> {
     let bookmarks = Arc::new(dozerd::bookmarks::BookmarkStore::new(
         &dozer_core::paths::state_dir().join("dozer.db"),
     )?);
+    let code_health = Arc::new(dozerd::code_health::CodeHealthStore::new(
+        &dozer_core::paths::state_dir().join("dozer.db"),
+    )?);
     let transcripts = Arc::new(dozerd::transcripts::TranscriptStore::open(
         &dozer_core::paths::state_dir().join("dozer.db"),
     )?);
@@ -115,6 +118,7 @@ async fn main() -> Result<()> {
         registry,
         projects,
         bookmarks,
+        code_health,
         transcripts,
         session_summaries,
         backfill_registry,

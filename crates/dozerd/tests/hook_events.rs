@@ -38,6 +38,7 @@ async fn hook_event_reaches_attached_client_and_list() {
                 registry,
                 test_projects(),
                 test_bookmarks(),
+                test_code_health(),
                 test_transcripts(),
                 test_session_summaries(),
                 test_backfill_registry(),
@@ -167,6 +168,12 @@ fn test_bookmarks() -> std::sync::Arc<dozerd::bookmarks::BookmarkStore> {
     std::sync::Arc::new(dozerd::bookmarks::BookmarkStore::new(&db).unwrap())
 }
 
+/// 每次调用建独立临时库的代码健康度存储（测试用；serve 需要）。
+fn test_code_health() -> std::sync::Arc<dozerd::code_health::CodeHealthStore> {
+    let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
+    std::sync::Arc::new(dozerd::code_health::CodeHealthStore::new(&db).unwrap())
+}
+
 /// 每次调用建独立临时库的对话/用量摄取存储（测试用；serve 需要）。
 fn test_transcripts() -> std::sync::Arc<dozerd::transcripts::TranscriptStore> {
     let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
@@ -202,6 +209,7 @@ async fn project_open_and_list_roundtrip() {
     let registry = Arc::new(SessionRegistry::new());
     let projects = Arc::new(dozerd::projects::ProjectStore::new(&db).unwrap());
     let bookmarks = Arc::new(dozerd::bookmarks::BookmarkStore::new(&db).unwrap());
+    let code_health = Arc::new(dozerd::code_health::CodeHealthStore::new(&db).unwrap());
     let transcripts = Arc::new(dozerd::transcripts::TranscriptStore::open(&db).unwrap());
     let session_summaries =
         Arc::new(dozerd::session_summary::SessionSummaryStore::open(&db).unwrap());
@@ -214,6 +222,7 @@ async fn project_open_and_list_roundtrip() {
             registry,
             projects,
             bookmarks,
+            code_health,
             transcripts,
             session_summaries,
             backfill_registry,
@@ -224,6 +233,7 @@ async fn project_open_and_list_roundtrip() {
             registry.clone(),
             projects.clone(),
             bookmarks.clone(),
+            code_health.clone(),
             transcripts.clone(),
             session_summaries.clone(),
             backfill_registry.clone(),
@@ -238,6 +248,7 @@ async fn project_open_and_list_roundtrip() {
                 registry,
                 projects,
                 bookmarks,
+                code_health,
                 transcripts,
                 session_summaries,
                 backfill_registry,
@@ -279,6 +290,7 @@ async fn record_and_get_session_summary_roundtrip() {
     let registry = Arc::new(SessionRegistry::new());
     let projects = test_projects();
     let bookmarks = test_bookmarks();
+    let code_health = test_code_health();
     let transcripts = test_transcripts();
     let session_summaries = test_session_summaries();
     let backfill_registry = test_backfill_registry();
@@ -295,6 +307,7 @@ async fn record_and_get_session_summary_roundtrip() {
                 registry,
                 projects,
                 bookmarks,
+                code_health,
                 transcripts,
                 session_summaries,
                 backfill_registry,
@@ -375,6 +388,7 @@ async fn close_with_summary_kills_session_after_ai_summary_recorded() {
     let registry = Arc::new(SessionRegistry::new());
     let projects = test_projects();
     let bookmarks = test_bookmarks();
+    let code_health = test_code_health();
     let transcripts = test_transcripts();
     let session_summaries = test_session_summaries();
     let backfill_registry = test_backfill_registry();
@@ -391,6 +405,7 @@ async fn close_with_summary_kills_session_after_ai_summary_recorded() {
                 registry,
                 projects,
                 bookmarks,
+                code_health,
                 transcripts,
                 session_summaries,
                 backfill_registry,
@@ -496,6 +511,7 @@ async fn list_conversations_with_summaries_joins_correctly() {
                 registry,
                 test_projects(),
                 test_bookmarks(),
+                test_code_health(),
                 transcripts,
                 session_summaries,
                 backfill_registry,
