@@ -137,6 +137,59 @@ fn color_key(color: Color) -> u32 {
     (r << 24) | (g << 16) | (b << 8) | a
 }
 
+/// 把调用方按"当前配色方案"取的语义色翻译成 Dark 方案的同名语义色。
+///
+/// 原生 NSMenu 的底色是 macOS 系统深色铬,不随应用内深/浅配色方案切换——
+/// 浅色方案下弹出的原生菜单仍是深色底。而调用方组装菜单项时统一读
+/// `current()`(iced 弹层的既有语义,那边底色随方案切换、取色跟着切是对的),
+/// 浅色方案下会拿到为浅底设计的深色文字(`body` #36424e)、深色 cream、浅蓝
+/// hover 等,落在深色菜单上不可读(2026-09-20 用户反馈:浅色主题的菜单字体
+/// 颜色要保持和深色主题一致)。这里在原生边界统一换算:颜色若与当前方案的
+/// 某个语义 token 相等,就换成 Dark 方案的同名 token;不在 token 表里的
+/// 自定义色(agent 专属色等)原样透传。Dark 方案下 `current()` 本身就是
+/// Dark token,换算是恒等。
+fn dark_equivalent(c: Color) -> Color {
+    dark_equivalent_with(byteui::theme::color::current(), c)
+}
+
+/// [`dark_equivalent`] 的纯函数核心:显式传入"当前方案 token",不读全局——
+/// 可测试性(避免测试里切全局方案与并行测试互相污染)。
+fn dark_equivalent_with(cur: byteui::theme::color::ColorTokens, c: Color) -> Color {
+    use byteui::theme::color::ColorTokens;
+    let dark = ColorTokens::byteboy2077();
+    let pairs = [
+        (cur.bg, dark.bg),
+        (cur.panel, dark.panel),
+        (cur.term_bg, dark.term_bg),
+        (cur.card, dark.card),
+        (cur.border, dark.border),
+        (cur.cream, dark.cream),
+        (cur.body, dark.body),
+        (cur.dim, dark.dim),
+        (cur.gold, dark.gold),
+        (cur.cyan, dark.cyan),
+        (cur.green, dark.green),
+        (cur.purple, dark.purple),
+        (cur.red, dark.red),
+        (cur.ignored, dark.ignored),
+        (cur.orange, dark.orange),
+        (cur.magenta, dark.magenta),
+        (cur.blue, dark.blue),
+        (cur.lime, dark.lime),
+        (cur.scrim, dark.scrim),
+        (cur.tab_active_border, dark.tab_active_border),
+        (cur.tab_active_bg, dark.tab_active_bg),
+        (cur.tab_hover, dark.tab_hover),
+        (cur.desc_bg, dark.desc_bg),
+    ];
+    for (cur_token, dark_token) in pairs {
+        if c == cur_token {
+            return dark_token;
+        }
+    }
+    c
+}
+
 /// 菜单项图标像素尺寸——同 `crate::chrome::menu.rs::icon_leading` 用的
 /// `icon_size::row()`(已含全局 scale),原生菜单和 iced 菜单在同一次
 /// 缩放调整下应保持一致大小。
@@ -194,7 +247,9 @@ fn separator_view(mtm: objc2::MainThreadMarker) -> Retained<NSView> {
     );
     line.setWantsLayer(true);
     if let Some(layer) = line.layer() {
-        let border = byteui::theme::color::current().border;
+        // 恒取 Dark 方案的 BORDER——原生菜单底色不随应用内方案切换(见
+        // `dark_equivalent` 文档),分隔线跟着浅色方案变浅会消失在深色底上。
+        let border = byteui::theme::color::ColorTokens::byteboy2077().border;
         let ns_color = NSColor::colorWithRed_green_blue_alpha(
             border.r as f64,
             border.g as f64,
@@ -290,6 +345,11 @@ pub fn show<Msg: Clone>(items: Vec<Item<Msg>>, view_pos: (f32, f32)) -> Option<M
                     )
                 };
                 ns_item.setEnabled(enabled);
+                // 调用方按 `current()` 取色(iced 弹层语义);原生菜单底色恒为
+                // 深色,在边界统一翻译成 Dark 方案同名语义色,浅色方案下不再
+                // 出现"深色文字落在深色菜单上"(见 `dark_equivalent` 文档)。
+                let color = dark_equivalent(color);
+                let icon_color = icon_color.map(dark_equivalent);
                 let icon_px = icon_size_px();
                 let icon_color = icon_color.unwrap_or(color);
                 if let Some(icon) = icon {
@@ -402,7 +462,10 @@ mod menu_item_view {
         fn apply_hover_background(&self) {
             let highlight = &self.ivars().highlight;
             if self.ivars().hovered.get() {
-                let hover = byteui::theme::color::current().tab_hover;
+                // 恒取 Dark 方案的 TAB_HOVER——原生菜单底色不随应用内方案切换
+                // (见 `dark_equivalent` 文档),浅色方案的浅蓝 hover 落在深色
+                // 底上观感割裂,且与换算成深色后的文字对比度不对。
+                let hover = byteui::theme::color::ColorTokens::byteboy2077().tab_hover;
                 let ns_color = NSColor::colorWithRed_green_blue_alpha(
                     hover.r as f64,
                     hover.g as f64,
@@ -528,6 +591,28 @@ mod menu_item_view {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 浅色方案下组装菜单项读 `current()` 会拿到为浅底设计的深色文字;原生
+    /// 菜单底色恒为深色,`dark_equivalent` 应把这些语义 token 换成 Dark 方案
+    /// 的同名 token(2026-09-20 用户反馈:浅色主题的菜单字体颜色保持和深色
+    /// 主题一致)。自定义色(不在 token 表里)必须原样透传,agent 专属图标
+    /// 色不能被吞掉。
+    #[test]
+    fn dark_equivalent_maps_light_tokens_to_dark_and_passes_custom_through() {
+        let light = byteui::theme::color::ColorTokens::byteboy2077_light();
+        let dark = byteui::theme::color::ColorTokens::byteboy2077();
+        // 为浅底设计的深色文字/cream/dim → Dark 方案同名 token。
+        assert_eq!(dark_equivalent_with(light, light.body), dark.body);
+        assert_eq!(dark_equivalent_with(light, light.cream), dark.cream);
+        assert_eq!(dark_equivalent_with(light, light.dim), dark.dim);
+        // Dark 方案自身是恒等换算(运行在深色方案时菜单观感不变)。
+        assert_eq!(dark_equivalent_with(dark, dark.body), dark.body);
+        assert_eq!(dark_equivalent_with(dark, dark.cream), dark.cream);
+        // 自定义色透传:agent 专属图标色不在 token 表里,不能被换算吞掉。
+        let custom = Color::from_rgb(0.42, 0.08, 0.16);
+        assert_eq!(dark_equivalent_with(light, custom), custom);
+        assert_eq!(dark_equivalent_with(dark, custom), custom);
+    }
 
     /// Files 右键菜单用到的图标都能正常栅格化成非空、非全透明的位图——
     /// 不要求逐像素比对(信任 resvg 渲染正确性),只验证"栅格化流程本身
