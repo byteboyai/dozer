@@ -317,7 +317,7 @@ pub(crate) fn bar_chart(
 
 /// 一张趋势折线图里并列的若干序列标签与配色。`values` 下标与这里一一对应,
 /// 渲染与图例共用同一份,避免两处各写一遍序列名/色。
-type TrendSeries = Vec<(&'static str, Color)>;
+pub(crate) type TrendSeries = Vec<(&'static str, Color)>;
 
 /// 悬停趋势图某天柱子的气泡:日期 + 该天各序列值(>0 才列,同 `chart_stat_list`
 /// 只列有效数据的口径)。样式复用 `icons::tooltip_bubble_style`。

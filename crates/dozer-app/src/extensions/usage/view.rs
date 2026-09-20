@@ -170,6 +170,24 @@ pub fn content_pane<'a>(
                             .push(align_to_section_title(bar_chart(&days)));
                         content = content.push(day_section);
                     }
+
+                    // "每日行为统计":每天 [触达文件数, Git提交数] 双线折线(连续
+                    // 15 天窗口,同 Session/Token 趋势口径)。跟"每日用量统计"不同,
+                    // 这是连续时间轴折线而非按 agent 分组柱状图——它衡量的是项目
+                    // 本身的"行为活跃度"(改了哪些文件、提交了多少),不按 agent 拆。
+                    let behavior = behavior_series(
+                        &filtered_rows,
+                        ws_state.git_commits_by_day(),
+                        today_day_index(),
+                    );
+                    let c = byteui::theme::color::current();
+                    let behavior_series_def: TrendSeries =
+                        vec![("触达文件", c.cream), ("Git提交", c.gold)];
+                    if let Some(sec) =
+                        trend_chart_section("每日行为统计", behavior_series_def, &behavior)
+                    {
+                        content = content.push(sec);
+                    }
                 }
             }
         }

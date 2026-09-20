@@ -3,7 +3,7 @@
 
 use crate::conversation::ConversationMeta;
 use dozer_core::protocol::AgentKind;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// 单个会话（= 一份 transcript 文件）的用量统计。
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -332,6 +332,47 @@ pub fn agent_cache_token_share(
     rows: &[(ConversationMeta, ConversationUsage)],
 ) -> Vec<(AgentKind, u64)> {
     agent_metric_share(rows, |u| u.tokens_cache_read + u.tokens_cache_write)
+}
+
+/// "每日行为统计"的连续窗口天数:与 Session/Token 趋势同口径(15 天),让
+/// 折线在最近两周上连续铺开;空天补 0,不漂窗口(同 `trend_series`)。
+pub(crate) const BEHAVIOR_TREND_WINDOW: i64 = 15;
+
+/// 每天 `[触达文件数, Git提交数]` 两序列,连续 `BEHAVIOR_TREND_WINDOW` 天轴。
+/// 触达文件按会话的 `modified_ms` 落到 UTC 日、当天所有会话的 `files_touched`
+/// 并集去重计数——跟 `daily_totals_by_agent` 同一套"以会话修改日为其所属天"的
+/// 近似口径(会话跨天则整体算在最后修改那天);不追求把单个会话拆到多天。
+/// Git提交数直接吃 `git_commits_by_day`(刷新时在 `spawn_refresh` 里用 revwalk
+/// 按提交时间 UTC 日分桶算好的),窗口外的天一律 0。
+pub(crate) fn behavior_series(
+    rows: &[(ConversationMeta, ConversationUsage)],
+    git_commits_by_day: &BTreeMap<i64, u64>,
+    today_index: i64,
+) -> Vec<DaySeries> {
+    let mut files_by_day: BTreeMap<i64, BTreeSet<String>> = BTreeMap::new();
+    for (meta, usage) in rows {
+        let day = day_index_from_ms(meta.modified_ms);
+        files_by_day
+            .entry(day)
+            .or_default()
+            .extend(usage.files_touched.iter().cloned());
+    }
+    let first_day = today_index - BEHAVIOR_TREND_WINDOW + 1;
+    (first_day..=today_index)
+        .map(|day_index| {
+            let (_, m, d) = civil_from_days(day_index);
+            let files = files_by_day
+                .get(&day_index)
+                .map(|s| s.len() as u64)
+                .unwrap_or(0);
+            let commits = git_commits_by_day.get(&day_index).copied().unwrap_or(0);
+            DaySeries {
+                day_index,
+                label: format!("{m:02}/{d:02}"),
+                values: vec![files, commits],
+            }
+        })
+        .collect()
 }
 
 /// 项目里实际出现过的 agent,顺序固定(共用上面的 `AGENT_ORDER`,含 V8agent

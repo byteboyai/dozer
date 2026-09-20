@@ -6,6 +6,7 @@
 
 use crate::conversation::ConversationMeta;
 use dozer_core::protocol::AgentKind;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 mod aggregate;
@@ -28,6 +29,9 @@ pub struct WorkspaceState {
     /// 与 agent 筛选无关——它是项目级统计,不随 `agent_filter` 收缩;非
     /// git 仓库记 0。
     git_commits: u64,
+    /// HEAD 可达提交按 UTC 提交日的逐日计数,供"每日行为统计"折线图用。
+    /// 键是 `day_index_from_ms` 同口径的 UTC 日索引;窗口外/非 git 仓库为空。
+    git_commits_by_day: BTreeMap<i64, u64>,
 }
 
 impl WorkspaceState {
@@ -42,6 +46,11 @@ impl WorkspaceState {
     /// 项目 git 提交总数,见 [`WorkspaceState::git_commits`]。
     pub fn git_commits(&self) -> u64 {
         self.git_commits
+    }
+
+    /// 每日 git 提交计数(UTC 日索引 → 次数),见 [`WorkspaceState::git_commits_by_day`]。
+    pub fn git_commits_by_day(&self) -> &BTreeMap<i64, u64> {
+        &self.git_commits_by_day
     }
 
     /// 供内核 `PanelSelect(PanelKind::Usage)` 分支调用——切到面板时
@@ -63,9 +72,15 @@ impl WorkspaceState {
 /// `Workspace::spawn_usage_refresh` 自动刷新,不再需要面板内按钮。
 #[derive(Debug, Clone)]
 pub enum Message {
-    /// 第三个字段是项目 git 提交总数(与 transcript 用量无关,顺手在同一个
-    /// 刷新任务里算掉,避免再加一条异步链路)。
-    Loaded(i64, Vec<(ConversationMeta, ConversationUsage)>, u64),
+    /// 第三字段是项目 git 提交总数(供"Git提交"格),第四字段是每日提交计数
+    /// (供"每日行为统计"折线图)——两者都与 transcript 用量无关,顺手在同一个
+    /// 刷新任务里算掉,避免再加一条异步链路。
+    Loaded(
+        i64,
+        Vec<(ConversationMeta, ConversationUsage)>,
+        u64,
+        BTreeMap<i64, u64>,
+    ),
     /// 右侧 agent 筛选栏点击(2026-08-28):`None` 选"全部agent"。
     AgentFilterSet(Option<AgentKind>),
     /// 内容侧"收起/展开列表列"按钮:内核拦截,不进 `update`——转发成顶层
@@ -78,9 +93,10 @@ pub enum Message {
 
 pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
     match msg {
-        Message::Loaded(_, rows, git_commits) => {
+        Message::Loaded(_, rows, git_commits, git_commits_by_day) => {
             ws_state.rows = rows;
             ws_state.git_commits = git_commits;
+            ws_state.git_commits_by_day = git_commits_by_day;
             ws_state.loading = false;
         }
         Message::AgentFilterSet(agent) => {
@@ -122,11 +138,21 @@ pub fn spawn_refresh(
                 )
             })
             .collect::<Vec<_>>();
-        // git 提交数是纯本地仓库遍历,丢进 spawn_blocking 不占异步 worker。
-        let git_commits = tokio::task::spawn_blocking(move || count_git_commits(&project_path))
-            .await
-            .unwrap_or(0);
-        emit(Message::Loaded(project_id, rows, git_commits));
+        // git 提交数(总数 + 每日分桶)是纯本地仓库遍历,丢进 spawn_blocking
+        // 不占异步 worker。
+        let (git_commits, git_commits_by_day) = tokio::task::spawn_blocking(move || {
+            let total = count_git_commits(&project_path);
+            let by_day = count_git_commits_by_day(&project_path);
+            (total, by_day)
+        })
+        .await
+        .unwrap_or((0, BTreeMap::new()));
+        emit(Message::Loaded(
+            project_id,
+            rows,
+            git_commits,
+            git_commits_by_day,
+        ));
     });
 }
 
@@ -145,6 +171,33 @@ fn count_git_commits(path: &std::path::Path) -> u64 {
         return 0;
     }
     revwalk.count() as u64
+}
+
+/// 统计 HEAD 可达提交按 UTC 提交日的逐日计数,供"每日行为统计"折线图用。
+/// 与 `day_index_from_ms` 同口径:UTC 日索引 = `提交时间秒 / 86_400`(注意这里
+/// 整段除以 86400,跟毫秒口径 `ms / 86_400_000` 等价)。项目不是 git 仓库/
+/// 任何 git2 报错都返回空 map;不会因提交多而爆炸——返回的只是"有提交的那
+/// 些天"的计数,不是每一条提交。
+fn count_git_commits_by_day(path: &std::path::Path) -> BTreeMap<i64, u64> {
+    let Ok(repo) = git2::Repository::discover(path) else {
+        return BTreeMap::new();
+    };
+    let Ok(mut revwalk) = repo.revwalk() else {
+        return BTreeMap::new();
+    };
+    if revwalk.push_head().is_err() {
+        return BTreeMap::new();
+    };
+    let mut by_day: BTreeMap<i64, u64> = BTreeMap::new();
+    for oid in revwalk {
+        let Ok(oid) = oid else { continue };
+        let Ok(commit) = repo.find_commit(oid) else {
+            continue;
+        };
+        let day = commit.time().seconds() / 86_400;
+        *by_day.entry(day).or_insert(0) += 1;
+    }
+    by_day
 }
 
 /// 面板内容侧:统计图表 + 顶部"用量"标题。原先跟 `list_pane`(agent 筛选栏)
@@ -526,6 +579,47 @@ mod tests {
     }
 
     #[test]
+    fn behavior_series_counts_files_touched_and_git_commits_per_day() {
+        let today = 20_672i64;
+        let day = today - 2;
+        let rows = vec![
+            (
+                meta_at(AgentKind::Claude, day as u64 * 86_400_000),
+                ConversationUsage {
+                    files_touched: ["a.rs", "b.rs"].iter().map(|s| s.to_string()).collect(),
+                    ..Default::default()
+                },
+            ),
+            (
+                meta_at(AgentKind::Claude, today as u64 * 86_400_000),
+                ConversationUsage {
+                    files_touched: ["a.rs", "c.rs"].iter().map(|s| s.to_string()).collect(),
+                    ..Default::default()
+                },
+            ),
+        ];
+        let mut git = BTreeMap::new();
+        git.insert(day, 3);
+        git.insert(today, 5);
+        let series = behavior_series(&rows, &git, today);
+        assert_eq!(series.len(), 15, "连续 15 天窗口");
+        let last = series.last().unwrap();
+        assert_eq!(last.day_index, today);
+        assert_eq!(
+            last.values,
+            vec![2, 5],
+            "today 触达 a.rs/c.rs 去重后 2 个文件,Git 5 次"
+        );
+        let two_ago = &series[series.len() - 3];
+        assert_eq!(two_ago.day_index, day);
+        assert_eq!(
+            two_ago.values,
+            vec![2, 3],
+            "day 触达 a.rs/b.rs 去重后 2 个文件,Git 3 次"
+        );
+    }
+
+    #[test]
     fn loaded_clears_loading_and_stores_rows() {
         let mut ws_state = WorkspaceState {
             loading: true,
@@ -538,10 +632,14 @@ mod tests {
                 ..Default::default()
             },
         )];
-        update(&mut ws_state, Message::Loaded(1, rows.clone(), 42));
+        update(
+            &mut ws_state,
+            Message::Loaded(1, rows.clone(), 42, Default::default()),
+        );
         assert!(!ws_state.loading());
         assert_eq!(ws_state.rows(), rows.as_slice());
         assert_eq!(ws_state.git_commits(), 42);
+        assert!(ws_state.git_commits_by_day().is_empty());
     }
 
     #[test]
