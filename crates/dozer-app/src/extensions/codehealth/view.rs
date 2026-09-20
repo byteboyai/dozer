@@ -59,11 +59,31 @@ fn health_card(
     .into()
 }
 
+/// 同 `git_log.rs::format_commit_time` 的处理方式：展示 UTC，不做本地
+/// 时区换算——扫描时间戳是纯展示态，UTC 足够，不为此引入时区库。
 fn format_ms(ms: u64) -> String {
-    // 面板本身不需要时区感知的复杂格式化——这里只做一个粗略的可读展示，
-    // 精确格式化（本地时区/相对时间等）不是本设计的核心诉求，YAGNI。
-    let secs = ms / 1000;
-    format!("{secs}s epoch")
+    let secs = (ms / 1000) as i64;
+    let days = secs / 86_400;
+    let secs_of_day = secs % 86_400;
+    let (h, m, s) = (secs_of_day / 3600, (secs_of_day / 60) % 60, secs_of_day % 60);
+    let (y, mo, d) = civil_from_days(days);
+    format!("{y:04}-{mo:02}-{d:02} {h:02}:{m:02}:{s:02} UTC")
+}
+
+/// Howard Hinnant 的 `civil_from_days` 算法：Unix epoch 起的天数 → (年, 月, 日)。
+/// 范围覆盖 1970..=2100。与 `git_log.rs`/`todo.rs` 的同名函数同源，第三份
+/// "照抄一份"（那两处已经说明过：跨模块复用一个几行的纯函数不值得引入耦合）。
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
 }
 
 fn problem_row(
@@ -160,4 +180,17 @@ pub fn content_pane(
     }
     col = col.push(problem_list(report));
     container(col).width(width).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_ms_matches_expected_layout() {
+        // 2026-09-20 07:58:06 UTC（真实扫描数据的时间戳，固定输入 → 固定输出）。
+        assert_eq!(format_ms(1_789_891_086_991), "2026-09-20 07:58:06 UTC");
+        // epoch 0 边界。
+        assert_eq!(format_ms(0), "1970-01-01 00:00:00 UTC");
+    }
 }
