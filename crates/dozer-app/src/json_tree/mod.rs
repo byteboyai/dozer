@@ -7,6 +7,7 @@
 use std::path::Path;
 
 pub mod tree;
+pub mod view;
 
 pub const MAX_JSON_CHILDREN: usize = 10_000;
 pub const MAX_LEAF_PREVIEW_CHARS: usize = 2_000;
