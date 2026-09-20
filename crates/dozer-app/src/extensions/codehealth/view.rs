@@ -99,7 +99,11 @@ fn format_ms(ms: u64) -> String {
     let secs = (ms / 1000) as i64;
     let days = secs / 86_400;
     let secs_of_day = secs % 86_400;
-    let (h, m, s) = (secs_of_day / 3600, (secs_of_day / 60) % 60, secs_of_day % 60);
+    let (h, m, s) = (
+        secs_of_day / 3600,
+        (secs_of_day / 60) % 60,
+        secs_of_day % 60,
+    );
     let (y, mo, d) = civil_from_days(days);
     format!("{y:04}-{mo:02}-{d:02} {h:02}:{m:02}:{s:02} UTC")
 }
@@ -166,7 +170,9 @@ fn problem_row<'a>(
                 .color(color),
         ]
         .spacing(8),
-        text(f.file.display().to_string()).size(11).color(tokens.dim),
+        text(f.file.display().to_string())
+            .size(11)
+            .color(tokens.dim),
     ]
     .spacing(2)
     .padding([4, 8]);
@@ -264,7 +270,13 @@ mod tests {
         assert_eq!(format_ms(0), "1970-01-01 00:00:00 UTC");
     }
 
-    fn sample_report(total_loc: usize, scale_tier: HealthTier, critical_functions: usize, total_functions: usize, density_tier: HealthTier) -> ProjectReport {
+    fn sample_report(
+        total_loc: usize,
+        scale_tier: HealthTier,
+        critical_functions: usize,
+        total_functions: usize,
+        density_tier: HealthTier,
+    ) -> ProjectReport {
         ProjectReport {
             total_loc,
             total_functions,
@@ -314,7 +326,10 @@ mod tests {
         ProjectReport {
             total_loc: 0,
             total_functions: functions.len(),
-            critical_functions: functions.iter().filter(|f| f.severity == Severity::Critical).count(),
+            critical_functions: functions
+                .iter()
+                .filter(|f| f.severity == Severity::Critical)
+                .count(),
             scale_tier: HealthTier::Healthy,
             density_tier: HealthTier::Healthy,
             overall_tier: HealthTier::Healthy,
