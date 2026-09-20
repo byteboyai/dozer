@@ -72,6 +72,18 @@ pub fn functions_in_source(src: &str, file: &Path) -> Vec<FunctionMetric> {
         .collect()
 }
 
+impl FunctionMetric {
+    /// 供 `ProjectReport.functions` 按严重度降序排列用，不对外暴露 `Severity`
+    /// 的 `Ord`——`Critical` 应排最前。
+    pub(crate) fn severity_rank(&self) -> u8 {
+        match self.severity {
+            Severity::Critical => 2,
+            Severity::Watch => 1,
+            Severity::Normal => 0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

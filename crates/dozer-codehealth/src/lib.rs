@@ -3,4 +3,9 @@
 //! 纯函数库，不依赖 iced/UDS 协议。
 
 mod function_metric;
+mod report;
+
 pub use function_metric::{functions_in_source, severity_for, FunctionMetric, Severity};
+pub use report::{
+    density_tier, file_metric, scale_tier, scan_project, FileMetric, HealthTier, ProjectReport,
+};
