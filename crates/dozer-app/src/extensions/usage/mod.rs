@@ -602,7 +602,7 @@ mod tests {
         git.insert(day, 3);
         git.insert(today, 5);
         let series = behavior_series(&rows, &git, today);
-        assert_eq!(series.len(), 15, "连续 15 天窗口");
+        assert_eq!(series.len(), 7, "连续 7 天窗口");
         let last = series.last().unwrap();
         assert_eq!(last.day_index, today);
         assert_eq!(

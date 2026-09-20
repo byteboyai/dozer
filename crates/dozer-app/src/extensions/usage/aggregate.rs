@@ -334,9 +334,10 @@ pub fn agent_cache_token_share(
     agent_metric_share(rows, |u| u.tokens_cache_read + u.tokens_cache_write)
 }
 
-/// "每日行为统计"的连续窗口天数:与 Session/Token 趋势同口径(15 天),让
-/// 折线在最近两周上连续铺开;空天补 0,不漂窗口(同 `trend_series`)。
-pub(crate) const BEHAVIOR_TREND_WINDOW: i64 = 15;
+/// "每日行为统计"的连续窗口天数:与"每日用量统计"`DAILY_CHART_WINDOW_DAYS`
+/// 同口径(最近 7 天),2026-09-20 用户要求统一到近一周窗口。空天补 0,不漂
+/// 窗口(同 `trend_series`)。
+pub(crate) const BEHAVIOR_TREND_WINDOW: i64 = 7;
 
 /// 每天 `[触达文件数, Git提交数]` 两序列,连续 `BEHAVIOR_TREND_WINDOW` 天轴。
 /// 触达文件按会话的 `modified_ms` 落到 UTC 日、当天所有会话的 `files_touched`
