@@ -130,6 +130,16 @@ pub struct NodeExpandRequest {
 
 ---
 
+## Implementation deviations (addendum, 2026-09-20)
+
+The "Reference: types this plan locks in" block above was written before implementation; several of its signatures were legitimately changed during implementation. These supersede the block where they disagree (full rationale in the spec `2026-09-19-json-preview-design.md`'s "实现偏差记录" addendum, which this mirrors at signature level):
+
+- **`NodePath = Arc<[PathSegment]>`, not `Rc<[PathSegment]>`** — `NodePath` rides in `Message::JsonNodeLoaded` through `proxy.send_event`, so `Message` must be `Send`; `Rc` is not (spec addendum #1).
+- **`Action::ToggleExpand { root_index: usize, path: NodePath }`, not `ToggleExpand(NodePath)`**; new **`NodeKey = (usize, NodePath)`** keys `expanded`/`decoded`/`loading_nodes`; **`NodeExpandRequest { path, root_index }`** (the spec's `byte_range` field was already dropped with the spike finding). See spec addendum #2 — this is the fix for a plan-inherited bug: Task 2's `toggle_expand` returned `root_index: 0` with a "fixed up in Task 4/5" comment, but Task 4/5 never fixed it, so multi-root `.jsonl`/`.ndjson` nodes shared identity across lines (same-named keys collided, one click expanded every root, child decodes always hit line 0).
+- **`JsonTreeState::Ready(Box<JsonTreeView>)`**, not `Ready(JsonTreeView)` — clippy `large_enum_variant` (spec addendum #6); `JsonTreeView` also gained a `lines_truncated: bool` field for the jsonl line-cap indicator (spec addendum #8).
+
+---
+
 ### Task 1: Module skeleton, core types, and the sonic-rs decode primitive (spike)
 
 This is both the risk-resolution spike from the spec *and* the first real piece of production code — there is no throwaway/separate spike phase, the code written here is what ships.
