@@ -1,10 +1,10 @@
 //! "用外部软件打开"配置表:文件扩展名 -> 外部 App 名字(如 `"Microsoft
-//! Excel"`),供预览窗口工具栏的外部打开按钮按扩展名指定要用哪个 App。这只是
-//! **可选覆盖**——按钮本身对任何文件 tab 都会出现,查不到配置就退回系统默认
-//! 打开方式(`open <path>`,见 `Message::PreviewOpenExternal` 的处理)。本期
-//! 没有管理 UI,想指定特定 App 的用户手工编辑
-//! `config_dir()/external_apps.json`,启动时读一次进 `App::external_apps`,
-//! 不在每帧 `view()` 里读盘。
+//! Excel"`),供文件树右键菜单的"用系统默认方式打开"按扩展名指定要用哪个
+//! App。这只是**可选覆盖**——该菜单项对任何文件/目录都会出现,查不到配置就
+//! 退回系统默认打开方式(`open <path>`,见 `Message::OpenWithDefault` 的处理,
+//! 在 `extensions::files::update` 里)。本期没有管理 UI,想指定特定 App 的用户
+//! 手工编辑 `config_dir()/external_apps.json`,启动时读一次进
+//! `App::external_apps`,不在每帧 `view()` 里读盘。
 //!
 //! `load()`/`save()` 是真实调用方用的入口(固定读写
 //! `external_apps.json`);`load_from`/`save_to` 接收显式路径,供单测指向

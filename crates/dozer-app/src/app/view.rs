@@ -142,7 +142,8 @@ impl App {
             stack![
                 base,
                 dismiss,
-                files::context_menu_popup(&self.files, &ws.files).map(Message::Files)
+                files::context_menu_popup(&self.files, &ws.files, &self.external_apps)
+                    .map(Message::Files)
             ]
             .width(Length::Fill)
             .height(Length::Fill)

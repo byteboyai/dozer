@@ -795,6 +795,7 @@ pub fn context_menu_items(
     is_root: bool,
     has_clipboard: bool,
     is_git_repo: bool,
+    external_apps: &crate::external_apps::ExternalAppsConfig,
 ) -> Vec<crate::chrome::native_menu::Item<Message>> {
     crate::menu_spec::to_native(context_menu_spec(
         target,
@@ -802,6 +803,7 @@ pub fn context_menu_items(
         is_root,
         has_clipboard,
         is_git_repo,
+        external_apps,
     ))
 }
 
@@ -812,23 +814,33 @@ pub fn context_menu_items(
 /// 结构(2026-09-18 调整):
 /// - 文件夹:顶部 = 搜索 / 新建文件 / 新建文件夹(三者紧贴,组前无分隔线);
 ///   中间 = 复制 / 粘贴(仅目录) / 删除 / 重命名(非根才有);底部 = 复制绝对
-///   路径 / 复制相对路径 / 在 Finder 中打开 / 从磁盘重新加载。
+///   路径 / 复制相对路径 / 用系统默认方式打开 / 从磁盘重新加载。
 /// - 文件:顶部 = 回滚(undo-2) / 历史(file-clock),仅 git 仓库文件才有;
 ///   中间 = 复制 / 删除 / 重命名(文件不显示"粘贴"——粘贴是"粘贴进目标
 ///   目录",对文件无语义);底部同文件夹。
 /// - 三组之间用分隔线隔开;顶部组为空(非 git 文件)时不画组前分隔线,避免
-///   悬空一条线。底部四项按设计纯文字:复制路径两项本就无图标,"在 Finder
-///   中打开"/"从磁盘重新加载" 的 FolderOpen/RefreshCw 图标也在此去掉,与顶部
-///   带图标的操作项区分开。
+///   悬空一条线。底部四项按设计纯文字:复制路径两项本就无图标,"用系统默认
+///   方式打开"/"从磁盘重新加载" 的 FolderOpen/RefreshCw 图标也在此去掉,与
+///   顶部带图标的操作项区分开。
 pub(crate) fn context_menu_spec(
     target: &Path,
     is_dir: bool,
     is_root: bool,
     has_clipboard: bool,
     is_git_repo: bool,
+    external_apps: &crate::external_apps::ExternalAppsConfig,
 ) -> MenuSpec<Message> {
     let dim = byteui::theme::color::current().dim;
     let target = target.to_path_buf();
+    // 菜单项文案与打开动作都按扩展名查一次配置:有配置显示"用 {app} 打开"
+    // 并指定 App,查不到显示"用系统默认方式打开"、退回系统默认。和预览工具栏
+    // 同款(见 `App::external_apps`),把结果同时喂给 label 与 `OpenWithDefault`
+    // 消息,handler 不再重复查。
+    let open_app_name = external_apps.lookup_for_path(&target).map(str::to_string);
+    let open_label = match &open_app_name {
+        Some(name) => format!("用 {name} 打开"),
+        None => "用系统默认方式打开".to_string(),
+    };
 
     // 顶部操作组:文件夹=搜索/新建;文件=回滚/历史(git 才有)。
     let mut top: Vec<MenuSpecItem<Message>> = Vec::new();
@@ -910,8 +922,8 @@ pub(crate) fn context_menu_spec(
         ),
         MenuSpecItem::entry(
             None,
-            "在 Finder 中打开",
-            Message::RevealInFinder(target.clone()),
+            &open_label,
+            Message::OpenWithDefault(target.clone(), open_app_name),
         ),
         MenuSpecItem::entry(None, "从磁盘重新加载", Message::ReloadFromDisk),
     ];
@@ -935,6 +947,7 @@ pub(crate) fn context_menu_spec(
 pub fn context_menu_popup<'a>(
     app_state: &'a AppState,
     ws_state: &'a WorkspaceState,
+    external_apps: &'a crate::external_apps::ExternalAppsConfig,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(menu) = &app_state.context_menu else {
         return column![].into();
@@ -955,6 +968,7 @@ pub fn context_menu_popup<'a>(
         is_root,
         has_clipboard,
         ws_state.git_is_repo,
+        external_apps,
     );
     let list = crate::menu_spec::to_iced(spec, Length::Shrink);
 

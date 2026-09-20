@@ -192,7 +192,7 @@ pub enum Message {
     /// `App::file_history` 并异步跑 `file_history::build`(见
     /// `docs/superpowers/specs/2026-09-17-file-history-popup-design.md`)。
     /// 携带的是右键目标的绝对路径,同其它右键菜单消息(`DeleteRequest`/
-    /// `RevealInFinder` 等)的既有口径。
+    /// `OpenWithDefault` 等)的既有口径。
     FileHistoryOpen(PathBuf),
     /// 右键菜单"回滚到上一版本":内核/app 拦截,不进 `files::update`——
     /// 由 `app/update.rs` 解析出仓库相对路径、算上一版本 Oid、调
@@ -210,7 +210,13 @@ pub enum Message {
     /// 内核拦截,不进 `update`——真正的系统剪贴板写入需要 `main.rs` 的
     /// `Clipboard` 句柄,`update()` 拿不到(见设计文档"关键语义确认")。
     CopyPath(PathBuf, PathKind),
-    RevealInFinder(PathBuf),
+    /// 右键菜单"用系统默认方式打开":以系统默认 App 打开右键目标(文件或
+    /// 目录)。`app_name` 为 `None` 时退回系统默认打开方式(`open <path>`,
+    /// 不带 `-a`);为 `Some` 时按 `App::external_apps` 配置用指定 App 打开
+    /// (`open -a <app> <path>`)。`app_name` 在组装菜单时就按扩展名查好、随
+    /// 消息一并带下来(菜单项的展示文案也用它,见 `context_menu_spec`),
+    /// `files::update` 的 handler 直接按它 spawn,不重复查配置。
+    OpenWithDefault(PathBuf, Option<String>),
     Copy(PathBuf, bool),
     Paste(PathBuf),
     PasteDone(i64, Result<PathBuf, String>),

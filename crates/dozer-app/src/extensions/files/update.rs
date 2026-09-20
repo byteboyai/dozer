@@ -17,6 +17,7 @@ pub fn update(
     project_id: i64,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
+    external_apps: &crate::external_apps::ExternalAppsConfig,
 ) {
     match msg {
         Message::Toggle(dir) => {
@@ -54,8 +55,14 @@ pub fn update(
                     .map(|t| t.root() == path.as_path())
                     .unwrap_or(false);
                 let has_clipboard = ws_state.tree_clipboard.is_some();
-                let items =
-                    context_menu_items(&path, is_dir, is_root, has_clipboard, ws_state.git_is_repo);
+                let items = context_menu_items(
+                    &path,
+                    is_dir,
+                    is_root,
+                    has_clipboard,
+                    ws_state.git_is_repo,
+                    external_apps,
+                );
                 if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
                     // 不能直接递归调用本函数(`update`)——`OpenSearch`/
                     // `CopyPath` 这两个菜单项产出的消息是"内核拦截处理"的
@@ -83,12 +90,24 @@ pub fn update(
         Message::ContextMenuClose => {
             app_state.context_menu = None;
         }
-        Message::RevealInFinder(path) => {
+        Message::OpenWithDefault(path, app_name) => {
             app_state.context_menu = None;
-            let _ = std::process::Command::new("open")
-                .arg("-R")
-                .arg(&path)
-                .spawn();
+            // 与预览工具栏原"用外部软件打开"按钮(`App::update` 里被移除的
+            // `Message::PreviewOpenExternal`)同口径:`spawn()` 失败(App 名字
+            // 拼错/系统没装)只记日志,不弹 toast。`app_name` 为 `None` 退回
+            // 系统默认打开方式(`open <path>`,不带 `-a`)。
+            let mut command = std::process::Command::new("open");
+            if let Some(app_name) = &app_name {
+                command.arg("-a").arg(app_name);
+            }
+            command.arg(&path);
+            if let Err(err) = command.spawn() {
+                tracing::warn!(
+                    "用外部软件打开失败: app={} path={} err={err}",
+                    app_name.as_deref().unwrap_or("<系统默认>"),
+                    path.display()
+                );
+            }
         }
         Message::Copy(path, is_dir) => {
             app_state.context_menu = None;

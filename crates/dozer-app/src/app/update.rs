@@ -934,24 +934,6 @@ impl App {
                     ws.preview_pane_toggle_render_mode(PanelKind::Files, idx);
                 });
             }
-            Message::PreviewOpenExternal(path, app_name) => {
-                // 同 `Message::RevealInFinder`(`extensions::files::update`)的
-                // 错误处理口径:`spawn()` 失败(App 名字拼错/系统没装)只记日志,
-                // 不额外弹 toast。`app_name` 为 `None`(该扩展名没有显式配置)
-                // 时退回系统默认打开方式,即 `open <path>` 不带 `-a`。
-                let mut command = std::process::Command::new("open");
-                if let Some(app_name) = &app_name {
-                    command.arg("-a").arg(app_name);
-                }
-                command.arg(&path);
-                if let Err(err) = command.spawn() {
-                    tracing::warn!(
-                        "用外部软件打开失败: app={} path={} err={err}",
-                        app_name.as_deref().unwrap_or("<系统默认>"),
-                        path.display()
-                    );
-                }
-            }
             Message::PreviewEditorEvent(_tab_id, _action) => {
                 // main.rs 直接调 `App::preview_tab_editor_event`,不经过这里。
             }
@@ -1577,7 +1559,16 @@ impl App {
                 let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
                     return;
                 };
-                files::update(&mut ws.files, app_files, msg, project_id, &handle, emit);
+                let external_apps = self.external_apps.clone();
+                files::update(
+                    &mut ws.files,
+                    app_files,
+                    msg,
+                    project_id,
+                    &handle,
+                    emit,
+                    &external_apps,
+                );
             }
             Message::Project(
                 msg @ (project::Message::GitRefreshed(project_id, ..)
@@ -3805,7 +3796,16 @@ impl App {
         let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
             return;
         };
-        files::update(&mut ws.files, app_files, msg, project_id, &handle, emit);
+        let external_apps = self.external_apps.clone();
+        files::update(
+            &mut ws.files,
+            app_files,
+            msg,
+            project_id,
+            &handle,
+            emit,
+            &external_apps,
+        );
     }
 
     /// Project 面板链接行右键菜单浮层:当前只含"删除"。定位坐标复用

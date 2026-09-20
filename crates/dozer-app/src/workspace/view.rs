@@ -4,8 +4,8 @@
 use crate::app::{App, HoverId, Message, PanelKind, tab_divider};
 use crate::chrome::homespace::home_panel_head_with_actions;
 use crate::chrome::tab_widget::{
-    PanelTabArgs, TabOverflowEntry, TabOverflowMenuArgs, panel_tab, tab_open_external_button,
-    tab_overflow_button, tab_overflow_menu, tab_render_mode_button, tab_window,
+    PanelTabArgs, TabOverflowEntry, TabOverflowMenuArgs, panel_tab, tab_overflow_button,
+    tab_overflow_menu, tab_render_mode_button, tab_window,
 };
 use crate::extensions::conversations;
 use crate::menu_spec::{MenuSpec, MenuSpecItem};
@@ -654,10 +654,6 @@ pub(crate) fn preview_pane_for<'a>(
         PreviewPaneKind::Files => HoverId::PreviewRenderMode,
         PreviewPaneKind::Project => HoverId::ProjectPreviewRenderMode,
     };
-    let open_external_hover = move || match kind {
-        PreviewPaneKind::Files => HoverId::PreviewOpenExternal,
-        PreviewPaneKind::Project => HoverId::ProjectPreviewOpenExternal,
-    };
     let editor_msg = move |tab_id, ev| match kind {
         PreviewPaneKind::Files => Message::PreviewEditorEvent(tab_id, ev),
         PreviewPaneKind::Project => Message::ProjectPreviewEditorEvent(tab_id, ev),
@@ -760,32 +756,6 @@ pub(crate) fn preview_pane_for<'a>(
             )
         })
     });
-    // 预览右上角"用外部软件打开"按钮:只要当前选中 tab 是文件就画。扩展名能在
-    // `App::external_apps` 配置表里查到对应 App 时,点击用该 App 打开;查不到
-    // 就退回系统默认打开方式(`open <path>`,不带 `-a`),不再要求用户必须手工
-    // 配置 `external_apps.json` 才能用上这个按钮。点击携带解析出的路径与
-    // (可选的)App 名字,副作用统一在 `Message::PreviewOpenExternal` 里
-    // spawn,两侧预览面板共用同一条消息(不像 `render_mode_button` 那样要按
-    // Files/Project 分,因为这里不碰任何面板/tab 状态)。
-    let open_external_button: Option<
-        Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
-    > = preview.tabs().get(preview.active_idx()).and_then(|tab| {
-        let path = match &tab.kind {
-            crate::preview::TabKind::File(p) => p,
-            _ => return None,
-        };
-        let app_name = app.external_apps.lookup_for_path(path).map(str::to_string);
-        let tooltip = match &app_name {
-            Some(name) => format!("用 {name} 打开"),
-            None => "用系统默认方式打开".to_string(),
-        };
-        Some(tab_open_external_button(
-            app.hover_progress(open_external_hover()),
-            Message::PreviewOpenExternal(path.clone(), app_name),
-            move |hovered| Message::Hover(open_external_hover(), hovered),
-            tooltip,
-        ))
-    });
     let overflow_button = tab_overflow_button(
         preview.tabs().len(),
         app.hover_progress(overflow_hover()),
@@ -824,9 +794,6 @@ pub(crate) fn preview_pane_for<'a>(
     }
     tab_bar_row = tab_bar_row.push(clipped);
     if let Some(btn) = render_mode_button {
-        tab_bar_row = tab_bar_row.push(btn);
-    }
-    if let Some(btn) = open_external_button {
         tab_bar_row = tab_bar_row.push(btn);
     }
     let tab_bar = tab_bar_row.push(collapse);
@@ -1076,11 +1043,6 @@ pub(crate) fn preview_pane_for<'a>(
             .into();
     base
 }
-
-/// 文件/项目预览 tab 栏"溢出下拉"浮层。**必须**在 `App::view` 顶层
-/// `stack![base, ...]` 里拼(同 `terminal::term_tab_overflow_popup` 文档
-/// 解释的理由——`anchor`/`window_size` 是全窗口坐标系,嵌在 `preview_pane_for`
-/// 自己的局部布局里换算位置会跟真实点击位置对不上)。
 
 /// 文件内 Find 条的共有渲染:`native editor` 档与 `webview(flyfish)` 档复用同一
 /// 套查询框 / 「Aa」大小写开关 / n-m 计数 / 上下命中按钮,差别只在"搜索引擎"
@@ -1393,6 +1355,10 @@ pub(crate) fn preview_find_bar_widget<'a>(
         .into()
 }
 
+/// 文件/项目预览 tab 栏"溢出下拉"浮层。**必须**在 `App::view` 顶层
+/// `stack![base, ...]` 里拼(同 `terminal::term_tab_overflow_popup` 文档
+/// 解释的理由——`anchor`/`window_size` 是全窗口坐标系,嵌在 `preview_pane_for`
+/// 自己的局部布局里换算位置会跟真实点击位置对不上)。
 pub(crate) fn preview_tab_overflow_popup<'a>(
     app: &'a App,
     ws: &'a Workspace,
