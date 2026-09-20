@@ -1,4 +1,4 @@
-use crate::function_metric::{severity_for, FunctionMetric, Severity};
+use crate::function_metric::{FunctionMetric, Severity};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -131,6 +131,7 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::function_metric::severity_for;
 
     #[test]
     fn health_tier_ordered_critical_highest() {
