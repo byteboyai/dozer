@@ -286,6 +286,19 @@ mod tests {
             density_tier,
             overall_tier: scale_tier.max(density_tier),
             functions: Vec::new(),
+            color_findings: Vec::new(),
+            color_tier: HealthTier::Healthy,
+            spacing_findings: Vec::new(),
+            spacing_tier: HealthTier::Healthy,
+            font_findings: Vec::new(),
+            font_tier: HealthTier::Healthy,
+            distinct_color_values: 0,
+            distinct_spacing_values: 0,
+            duplicate_clusters: Vec::new(),
+            duplicate_cluster_tier: HealthTier::Healthy,
+            nesting_depth_tier: HealthTier::Healthy,
+            event_handler_tier: HealthTier::Healthy,
+            ui_tier: HealthTier::Healthy,
         }
     }
 
@@ -337,6 +350,19 @@ mod tests {
             density_tier: HealthTier::Healthy,
             overall_tier: HealthTier::Healthy,
             functions,
+            color_findings: Vec::new(),
+            color_tier: HealthTier::Healthy,
+            spacing_findings: Vec::new(),
+            spacing_tier: HealthTier::Healthy,
+            font_findings: Vec::new(),
+            font_tier: HealthTier::Healthy,
+            distinct_color_values: 0,
+            distinct_spacing_values: 0,
+            duplicate_clusters: Vec::new(),
+            duplicate_cluster_tier: HealthTier::Healthy,
+            nesting_depth_tier: HealthTier::Healthy,
+            event_handler_tier: HealthTier::Healthy,
+            ui_tier: HealthTier::Healthy,
         }
     }
 

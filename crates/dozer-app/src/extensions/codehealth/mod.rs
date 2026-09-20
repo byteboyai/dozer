@@ -105,6 +105,19 @@ mod tests {
             density_tier: HealthTier::Watch,
             overall_tier: HealthTier::Watch,
             functions: vec![],
+            color_findings: vec![],
+            color_tier: HealthTier::Healthy,
+            spacing_findings: vec![],
+            spacing_tier: HealthTier::Healthy,
+            font_findings: vec![],
+            font_tier: HealthTier::Healthy,
+            distinct_color_values: 0,
+            distinct_spacing_values: 0,
+            duplicate_clusters: vec![],
+            duplicate_cluster_tier: HealthTier::Healthy,
+            nesting_depth_tier: HealthTier::Healthy,
+            event_handler_tier: HealthTier::Healthy,
+            ui_tier: HealthTier::Healthy,
         }
     }
 
