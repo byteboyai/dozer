@@ -333,6 +333,11 @@ pub fn update(
         Message::FileDragHover(dirs) => {
             ws_state.drag_hover = dirs;
         }
+        // 鼠标进入/离开树行:维护 hover 行,`view` 据此画行 hover 背景
+        // (同菜单项 hover 的 `TAB_HOVER` 底色)。
+        Message::TreeRowHover(path) => {
+            ws_state.tree_hover = path;
+        }
         // 外部文件被松开在某目录上:逐个移动(同 Finder 拖拽的 move 语义,
         // 跨文件系统在 `move_item` 里降级为复制+删源)。全部完成后 `emit`
         // `FileDropDone` 刷新目标目录。

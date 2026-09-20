@@ -321,6 +321,13 @@ pub fn view<'a>(
             // `icon_button_entry` 早就踩过的坑(见其"必须传 interactive:
             // false,不接 button::on_press"的文档)。改接到下面包裹的
             // `MouseArea::on_press` 上——那是真·`ButtonPressed` 就发。
+            // 行 hover 判定放在闭包外:闭包是 `move`,在这里引用 `row.path`
+            // 会把整个 `PathBuf` 移进去,后面 `on_press`/`on_double_click`
+            // 还要 `clone` 它。只捕获算好的 bool。树内拖拽确认进行中不画
+            // hover 底——那时已有金色落点描边做反馈,沿途扫过的行再亮底色
+            // 是噪音。
+            let is_hovered = !ws_state.tree_drag_confirmed()
+                && ws_state.tree_hover.as_deref() == Some(row.path.as_path());
             let row_btn: iced_widget::Button<
                 '_,
                 Message,
@@ -328,7 +335,7 @@ pub fn view<'a>(
                 iced_renderer::Renderer,
             > = button(line)
                 .width(Length::Fill)
-                .style(move |_t, s: button::Status| {
+                .style(move |_t, _s: button::Status| {
                     // 选中态背景改半透明(验收反馈:实底奶油太抢,0.3 透明度
                     // 让下面的行/缩进线隐约透出)——文字色跟着从"反色"
                     // (`bg` 深色压亮底)改回 `cream`(同 hover/active 页签的
@@ -336,8 +343,11 @@ pub fn view<'a>(
                     // 鼠标划过(未选中)时填 `tab_hover`——和右键菜单/溢出下拉
                     // 里菜单项 hover 的背景色完全一致(`chrome::menu::menu_button`),
                     // 圆角也同样是 6px,视觉上对齐。
-                    let hovered = matches!(s, button::Status::Hovered)
-                        || matches!(s, button::Status::Pressed);
+                    // hover 判定**不能**用 `_s`(`button::Status::Hovered`)——
+                    // 内层 button 不挂 `on_press`(按下走外层 `MouseArea`,见
+                    // `TreeRowPress` 文档),iced 视其为禁用态、永远报
+                    // `Disabled`,`Hovered` 分支是死代码。改读 `is_hovered`
+                    // (由 `tree_hover` 状态算出,见闭包外)。
                     button::Style {
                         background: if is_selected {
                             Some(
@@ -347,7 +357,7 @@ pub fn view<'a>(
                                 }
                                 .into(),
                             )
-                        } else if hovered {
+                        } else if is_hovered {
                             Some(byteui::theme::color::current().tab_hover.into())
                         } else {
                             None
@@ -382,7 +392,13 @@ pub fn view<'a>(
                 .on_right_press(Message::ContextMenuOpen {
                     path: row.path.clone(),
                     is_dir: row.is_dir,
-                });
+                })
+                // 行 hover 背景:进入/离开上报 `TreeRowHover`,见
+                // `WorkspaceState::tree_hover` 文档(为什么不能靠
+                // `button::Status::Hovered`)。同一行 enter/exit 各持一份
+                // `PathBuf`,互不借用。
+                .on_enter(Message::TreeRowHover(Some(row.path.clone())))
+                .on_exit(Message::TreeRowHover(None));
             // 树内拖拽已确认(`Dragging`,越过距离+时长两道阈值):光标划过
             // 任意行(文件或目录都上报,`Message::TreeDragOver` 里再解析
             // 落点/高亮,见其文档)即上报为悬停命中,驱动 `TreeDragOver` 校验
@@ -823,13 +839,13 @@ pub fn context_menu_items(
 /// 结构(2026-09-18 调整):
 /// - 文件夹:顶部 = 搜索 / 新建文件 / 新建文件夹(三者紧贴,组前无分隔线);
 ///   中间 = 复制 / 粘贴(仅目录) / 删除 / 重命名(非根才有);底部 = 复制绝对
-///   路径 / 复制相对路径 / 用系统默认方式打开 / 从磁盘重新加载。
+///   路径 / 复制相对路径 / 用外部软件打开 / 从磁盘重新加载。
 /// - 文件:顶部 = 回滚(undo-2) / 历史(file-clock),仅 git 仓库文件才有;
 ///   中间 = 复制 / 删除 / 重命名(文件不显示"粘贴"——粘贴是"粘贴进目标
 ///   目录",对文件无语义);底部同文件夹。
 /// - 三组之间用分隔线隔开;顶部组为空(非 git 文件)时不画组前分隔线,避免
-///   悬空一条线。底部四项按设计纯文字:复制路径两项本就无图标,"用系统默认
-///   方式打开"/"从磁盘重新加载" 的 FolderOpen/RefreshCw 图标也在此去掉,与
+///   悬空一条线。底部四项按设计纯文字:复制路径两项本就无图标,"用外部软件打开"
+///   /"从磁盘重新加载" 的 FolderOpen/RefreshCw 图标也在此去掉,与
 ///   顶部带图标的操作项区分开。
 pub(crate) fn context_menu_spec(
     target: &Path,
@@ -842,13 +858,13 @@ pub(crate) fn context_menu_spec(
     let dim = byteui::theme::color::current().dim;
     let target = target.to_path_buf();
     // 菜单项文案与打开动作都按扩展名查一次配置:有配置显示"用 {app} 打开"
-    // 并指定 App,查不到显示"用系统默认方式打开"、退回系统默认。和预览工具栏
+    // 并指定 App,查不到显示"用外部软件打开"、退回系统默认。和预览工具栏
     // 同款(见 `App::external_apps`),把结果同时喂给 label 与 `OpenWithDefault`
     // 消息,handler 不再重复查。
     let open_app_name = external_apps.lookup_for_path(&target).map(str::to_string);
     let open_label = match &open_app_name {
         Some(name) => format!("用 {name} 打开"),
-        None => "用系统默认方式打开".to_string(),
+        None => "用外部软件打开".to_string(),
     };
 
     // 顶部操作组:文件夹=搜索/新建;文件=回滚/历史(git 才有)。

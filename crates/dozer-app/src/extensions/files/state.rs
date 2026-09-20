@@ -99,6 +99,13 @@ pub struct WorkspaceState {
     /// 外部文件拖拽悬停时命中的目录集合:命中即整行高亮为"拖入落点",
     /// 由 `FileDragHover` 更新、清空时为空集合。
     pub(crate) drag_hover: HashSet<PathBuf>,
+    /// 鼠标当前悬停的树行(行 hover 背景用)。**不能**靠内层 `button` 的
+    /// `button::Status::Hovered` 判断——树行按下走外层 `MouseArea`(见
+    /// `TreeRowPress` 文档),内层 button 不挂 `on_press`,iced 视其为
+    /// 禁用态、永远报 `Disabled` 而非 `Hovered`。改由行 `MouseArea` 的
+    /// `on_enter`/`on_exit` 上报 `TreeRowHover` 维护,与
+    /// `byteui::icons::icon_button_entry` 的 hover 手法同款。
+    pub(crate) tree_hover: Option<PathBuf>,
     /// 底部 git 分支栏信息是否已加载(`GitInfoLoaded` 送达前为 false,此时
     /// 分支栏显示中性"…"占位)。
     pub(crate) git_loaded: bool,
@@ -210,7 +217,7 @@ pub enum Message {
     /// 内核拦截,不进 `update`——真正的系统剪贴板写入需要 `main.rs` 的
     /// `Clipboard` 句柄,`update()` 拿不到(见设计文档"关键语义确认")。
     CopyPath(PathBuf, PathKind),
-    /// 右键菜单"用系统默认方式打开":以系统默认 App 打开右键目标(文件或
+    /// 右键菜单"用外部软件打开":以系统默认 App 打开右键目标(文件或
     /// 目录)。`app_name` 为 `None` 时退回系统默认打开方式(`open <path>`,
     /// 不带 `-a`);为 `Some` 时按 `App::external_apps` 配置用指定 App 打开
     /// (`open -a <app> <path>`)。`app_name` 在组装菜单时就按扩展名查好、随
@@ -343,6 +350,12 @@ pub enum Message {
     /// `FileDragHover` 分开走——内部拖拽还要校验落点合法性,见
     /// `is_valid_move_target`,非法落点不高亮、不记为待定目标)。
     TreeDragOver(PathBuf),
+    /// 鼠标进入/离开某个树行:`Some(路径)` = 进入(行 hover 背景,同右键
+    /// 菜单项 hover 的 `TAB_HOVER` 底色),`None` = 离开。行 `MouseArea`
+    /// 的 `on_enter`/`on_exit` 上报,见 `WorkspaceState::tree_hover` 文档
+    /// (为什么不能靠 `button::Status::Hovered`)。不跨内核边界,
+    /// `files::update()` 直接处理。
+    TreeRowHover(Option<PathBuf>),
     /// 树内拖拽松开左键:main.rs 全局 `MouseInput::Released` 在
     /// `App::dragging_tree_item()` 为真时发出。这条本身跨内核边界(内核要
     /// 拿 `App::last_cursor` 和武装时的 `press_pos` 比对,算出下面
