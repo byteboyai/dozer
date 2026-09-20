@@ -6,6 +6,8 @@
 
 use std::path::Path;
 
+pub mod tree;
+
 pub const MAX_JSON_CHILDREN: usize = 10_000;
 pub const MAX_LEAF_PREVIEW_CHARS: usize = 2_000;
 pub const MAX_JSON_LINES: usize = 100_000;
@@ -77,6 +79,7 @@ pub struct NodeExpandRequest {
     pub root_index: usize,
 }
 
+#[derive(Debug, Clone)]
 pub struct JsonTreeView {
     /// 源文件路径 —— 每次惰性展开都从磁盘重读（原因见 `expand()` 文档）。
     path: std::path::PathBuf,
@@ -153,6 +156,33 @@ impl JsonTreeView {
             path,
             root_index: 0,
         }) // root_index 由 Task 4/5 修正
+    }
+
+    /// 该节点当前是否处于展开态。
+    pub fn is_expanded(&self, path: &NodePath) -> bool {
+        self.expanded.contains(path)
+    }
+
+    /// `path` 处已解码的内容（如有）——根路径（`path.is_empty()`，由调用方
+    /// 对照正确的 root）取自 `roots`，更深的路径取自 `decoded` 缓存。未解码
+    /// （仍在加载或尚未请求）返回 `None`。
+    pub fn content_at(&self, root_index: usize, path: &NodePath) -> Option<&NodeContent> {
+        if path.is_empty() {
+            self.roots.get(root_index)?.as_ref().ok()?.content.as_ref()
+        } else {
+            self.decoded.get(path)
+        }
+    }
+
+    /// `Task 8` 的 `preview_pane_json_tree_action` 用它构造 `ExpandBytesSource`。
+    pub fn expand_source_for(&self, root_index: usize) -> ExpandBytesSource {
+        match &self.line_ranges {
+            None => ExpandBytesSource::WholeFile(self.path.clone()),
+            Some(ranges) => ExpandBytesSource::JsonLine {
+                path: self.path.clone(),
+                byte_range: ranges[root_index].clone(),
+            },
+        }
     }
 
     /// 后台解码完成；`root_index` 标识哪个根（单个 `.json` 恒为 0，jsonl 为行号）。
@@ -399,7 +429,7 @@ pub fn load_json(path: &std::path::Path) -> Result<JsonTreeView, String> {
 /// 只做顶层类型判断，不展开子级 —— 让 `JsonNode.kind` 在 `decode_node`
 /// 返回前就准确（`decode_node` 只报告子级的 kind，不报告自己）。
 fn root_kind_of(bytes: &[u8]) -> Result<JsonKind, String> {
-    use sonic_rs::{JsonValueTrait, PointerNode};
+    use sonic_rs::PointerNode;
     let empty: Vec<PointerNode> = Vec::new();
     let value = sonic_rs::get(bytes, empty).map_err(|e| e.to_string())?;
     Ok(lazy_value_kind(&value))
