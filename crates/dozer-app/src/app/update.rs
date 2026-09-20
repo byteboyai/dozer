@@ -937,15 +937,17 @@ impl App {
             Message::PreviewOpenExternal(path, app_name) => {
                 // 同 `Message::RevealInFinder`(`extensions::files::update`)的
                 // 错误处理口径:`spawn()` 失败(App 名字拼错/系统没装)只记日志,
-                // 不额外弹 toast。
-                if let Err(err) = std::process::Command::new("open")
-                    .arg("-a")
-                    .arg(&app_name)
-                    .arg(&path)
-                    .spawn()
-                {
+                // 不额外弹 toast。`app_name` 为 `None`(该扩展名没有显式配置)
+                // 时退回系统默认打开方式,即 `open <path>` 不带 `-a`。
+                let mut command = std::process::Command::new("open");
+                if let Some(app_name) = &app_name {
+                    command.arg("-a").arg(app_name);
+                }
+                command.arg(&path);
+                if let Err(err) = command.spawn() {
                     tracing::warn!(
-                        "用外部软件打开失败: app={app_name} path={} err={err}",
+                        "用外部软件打开失败: app={} path={} err={err}",
+                        app_name.as_deref().unwrap_or("<系统默认>"),
                         path.display()
                     );
                 }

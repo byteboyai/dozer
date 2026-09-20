@@ -1,7 +1,10 @@
 //! "用外部软件打开"配置表:文件扩展名 -> 外部 App 名字(如 `"Microsoft
-//! Excel"`),供预览窗口工具栏的外部打开按钮查询。本期没有管理 UI,用户
-//! 手工编辑 `config_dir()/external_apps.json`,启动时读一次进
-//! `App::external_apps`,不在每帧 `view()` 里读盘。
+//! Excel"`),供预览窗口工具栏的外部打开按钮按扩展名指定要用哪个 App。这只是
+//! **可选覆盖**——按钮本身对任何文件 tab 都会出现,查不到配置就退回系统默认
+//! 打开方式(`open <path>`,见 `Message::PreviewOpenExternal` 的处理)。本期
+//! 没有管理 UI,想指定特定 App 的用户手工编辑
+//! `config_dir()/external_apps.json`,启动时读一次进 `App::external_apps`,
+//! 不在每帧 `view()` 里读盘。
 //!
 //! `load()`/`save()` 是真实调用方用的入口(固定读写
 //! `external_apps.json`);`load_from`/`save_to` 接收显式路径,供单测指向
@@ -22,7 +25,7 @@ pub struct ExternalAppsConfig {
 impl ExternalAppsConfig {
     /// 按文件路径的扩展名查配置的外部 App 名字,扩展名大小写不敏感。没有
     /// 扩展名或配置表里没有对应项都返回 `None`——调用方(预览工具栏)据此
-    /// 决定"外部打开"按钮要不要出现。
+    /// 退回系统默认打开方式,而不是不出按钮(按钮始终出现)。
     pub fn lookup_for_path(&self, path: &Path) -> Option<&str> {
         let ext = path.extension()?.to_str()?.to_ascii_lowercase();
         self.by_extension.get(&ext).map(String::as_str)

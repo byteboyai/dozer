@@ -328,8 +328,9 @@ pub enum Message {
     /// 预览工具栏"用外部软件打开"按钮(两侧预览面板共用同一条,单纯 spawn
     /// 外部进程的副作用,不碰任何面板/tab 状态,不需要像
     /// `PreviewToggleRenderMode` 那样按 Files/Project 分开)。携带打开的文件
-    /// 路径,与从 `App::external_apps` 按当前 tab 扩展名查到的 App 名字。
-    PreviewOpenExternal(PathBuf, String),
+    /// 路径,与从 `App::external_apps` 按当前 tab 扩展名查到的 App 名字——
+    /// `None` 表示该扩展名没有显式配置,退回系统默认打开方式。
+    PreviewOpenExternal(PathBuf, Option<String>),
     /// 原生预览 tab 的 `text_editor::Action`,`usize` 是 `PreviewTab.id`。由
     /// `main.rs` 的 dispatch 直接转发给 `App::preview_tab_editor_event`(剪贴
     /// 板由 iced 运行时自己处理,不需要像 vendored `iced-code-editor` 那样手动

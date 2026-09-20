@@ -760,12 +760,13 @@ pub(crate) fn preview_pane_for<'a>(
             )
         })
     });
-    // 预览右上角"用外部软件打开"按钮:只在当前选中 tab 的扩展名能在
-    // `App::external_apps` 配置表里查到对应 App 时才画(查不到不留空位,
-    // 见 `external_apps` 模块设计)。点击携带解析出的路径与 App 名字,
-    // 副作用统一在 `Message::PreviewOpenExternal` 里 spawn,两侧预览面板
-    // 共用同一条消息(不像 `render_mode_button` 那样要按 Files/Project 分,
-    // 因为这里不碰任何面板/tab 状态)。
+    // 预览右上角"用外部软件打开"按钮:只要当前选中 tab 是文件就画。扩展名能在
+    // `App::external_apps` 配置表里查到对应 App 时,点击用该 App 打开;查不到
+    // 就退回系统默认打开方式(`open <path>`,不带 `-a`),不再要求用户必须手工
+    // 配置 `external_apps.json` 才能用上这个按钮。点击携带解析出的路径与
+    // (可选的)App 名字,副作用统一在 `Message::PreviewOpenExternal` 里
+    // spawn,两侧预览面板共用同一条消息(不像 `render_mode_button` 那样要按
+    // Files/Project 分,因为这里不碰任何面板/tab 状态)。
     let open_external_button: Option<
         Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
     > = preview.tabs().get(preview.active_idx()).and_then(|tab| {
@@ -773,8 +774,11 @@ pub(crate) fn preview_pane_for<'a>(
             crate::preview::TabKind::File(p) => p,
             _ => return None,
         };
-        let app_name = app.external_apps.lookup_for_path(path)?.to_string();
-        let tooltip = format!("用 {app_name} 打开");
+        let app_name = app.external_apps.lookup_for_path(path).map(str::to_string);
+        let tooltip = match &app_name {
+            Some(name) => format!("用 {name} 打开"),
+            None => "用系统默认方式打开".to_string(),
+        };
         Some(tab_open_external_button(
             app.hover_progress(open_external_hover()),
             Message::PreviewOpenExternal(path.clone(), app_name),
