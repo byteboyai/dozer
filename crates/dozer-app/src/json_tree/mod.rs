@@ -25,6 +25,13 @@ pub enum PathSegment {
 /// `proxy.send_event` 跨线程投递，`Message` 必须 `Send`，`Rc` 不满足。
 pub type NodePath = std::sync::Arc<[PathSegment]>;
 
+/// 节点身份 = `(root_index, path)`。`root_index` 在单个 `.json` 里恒为 0，
+/// 在 `.jsonl`/`.ndjson` 里是该节点所属根的行号。必须把 root 也纳入 key：
+/// `NodePath` 本身不含根身份，而 jsonl 各行 schema 高度同质（同名键是常态），
+/// 若只用 `path` 做 key，第 N 行与第 M 行的同名键会串数据、展开/折叠状态会
+/// 跨行联动。见 `JsonTreeView` 的 `expanded`/`decoded`/`loading_nodes`。
+pub type NodeKey = (usize, NodePath);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JsonKind {
     Object,
@@ -72,7 +79,7 @@ pub enum ViewMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     Scroll { dy: i32 },
-    ToggleExpand(NodePath),
+    ToggleExpand { root_index: usize, path: NodePath },
     ToggleViewMode,
 }
 
@@ -100,10 +107,13 @@ pub struct JsonTreeView {
     /// jsonl/ndjson 为 `Some`（与 `roots` 下标对齐）；单个 `.json` 为 `None`。
     line_ranges: Option<Vec<std::ops::Range<usize>>>,
     pub roots: Vec<RootResult>,
-    expanded: std::collections::HashSet<NodePath>,
-    /// 非根节点的已解码内容，按路径缓存（根节点内容在 `roots[i].content`）。
-    decoded: std::collections::HashMap<NodePath, NodeContent>,
-    loading_nodes: std::collections::HashSet<NodePath>,
+    /// 当前处于展开态的节点，key = `NodeKey`（含 root_index，见其文档）。
+    expanded: std::collections::HashSet<NodeKey>,
+    /// 非根节点的已解码内容，按 `NodeKey` 缓存（根节点内容在 `roots[i].content`）。
+    decoded: std::collections::HashMap<NodeKey, NodeContent>,
+    loading_nodes: std::collections::HashSet<NodeKey>,
+    /// jsonl/ndjson 在 `MAX_JSON_LINES` 处被截断时为 `true`（还有更多行没读入）。
+    pub lines_truncated: bool,
     pub view_mode: ViewMode,
     pub scroll_row: usize,
 }
@@ -123,6 +133,7 @@ impl JsonTreeView {
             expanded: std::collections::HashSet::new(),
             decoded: std::collections::HashMap::new(),
             loading_nodes: std::collections::HashSet::new(),
+            lines_truncated: false,
             view_mode: ViewMode::Tree,
             scroll_row: 0,
         }
@@ -144,44 +155,42 @@ impl JsonTreeView {
                 };
                 None
             }
-            Action::ToggleExpand(path) => self.toggle_expand(path),
+            Action::ToggleExpand { root_index, path } => self.toggle_expand(root_index, path),
         }
     }
 
-    fn toggle_expand(&mut self, path: NodePath) -> Option<NodeExpandRequest> {
-        if self.expanded.remove(&path) {
+    fn toggle_expand(&mut self, root_index: usize, path: NodePath) -> Option<NodeExpandRequest> {
+        let key: NodeKey = (root_index, path.clone());
+        if self.expanded.remove(&key) {
             return None; // 之前是展开的，现在折叠 —— 从不触发加载
         }
-        self.expanded.insert(path.clone());
+        self.expanded.insert(key.clone());
         let already_decoded = if path.is_empty() {
             self.roots
-                .first()
+                .get(root_index)
                 .is_some_and(|r| matches!(r, Ok(n) if n.content.is_some()))
         } else {
-            self.decoded.contains_key(&path)
+            self.decoded.contains_key(&key)
         };
-        if already_decoded || !self.loading_nodes.insert(path.clone()) {
+        if already_decoded || !self.loading_nodes.insert(key) {
             return None;
         }
-        Some(NodeExpandRequest {
-            path,
-            root_index: 0,
-        }) // root_index 由 Task 4/5 修正
+        Some(NodeExpandRequest { path, root_index })
     }
 
-    /// 该节点当前是否处于展开态。
-    pub fn is_expanded(&self, path: &NodePath) -> bool {
-        self.expanded.contains(path)
+    /// 该节点（以 `root_index` 区分所属根）当前是否处于展开态。
+    pub fn is_expanded(&self, root_index: usize, path: &NodePath) -> bool {
+        self.expanded.contains(&(root_index, path.clone()))
     }
 
     /// `path` 处已解码的内容（如有）——根路径（`path.is_empty()`，由调用方
-    /// 对照正确的 root）取自 `roots`，更深的路径取自 `decoded` 缓存。未解码
-    /// （仍在加载或尚未请求）返回 `None`。
+    /// 对照正确的 root）取自 `roots`，更深的路径取自 `decoded` 缓存（key 含
+    /// `root_index`，见 `NodeKey`）。未解码（仍在加载或尚未请求）返回 `None`。
     pub fn content_at(&self, root_index: usize, path: &NodePath) -> Option<&NodeContent> {
         if path.is_empty() {
             self.roots.get(root_index)?.as_ref().ok()?.content.as_ref()
         } else {
-            self.decoded.get(path)
+            self.decoded.get(&(root_index, path.clone()))
         }
     }
 
@@ -203,7 +212,8 @@ impl JsonTreeView {
         result: Result<NodeContent, String>,
         root_index: usize,
     ) {
-        self.loading_nodes.remove(&path);
+        let key: NodeKey = (root_index, path.clone());
+        self.loading_nodes.remove(&key);
         match result {
             Ok(content) => {
                 if path.is_empty() {
@@ -211,7 +221,7 @@ impl JsonTreeView {
                         root.content = Some(content);
                     }
                 } else {
-                    self.decoded.insert(path, content);
+                    self.decoded.insert(key, content);
                 }
             }
             Err(err) => tracing::warn!(?path, %err, "JSON 节点后台解码失败"),
@@ -464,6 +474,8 @@ pub fn load_jsonl(path: &std::path::Path) -> Result<JsonTreeView, String> {
     if start < bytes.len() && line_ranges.len() < MAX_JSON_LINES {
         line_ranges.push(start..bytes.len());
     }
+    // 触达行数上限后文件里还有剩余字节 → 还有更多行没读入，需要标记截断。
+    let lines_truncated = line_ranges.len() >= MAX_JSON_LINES && start < bytes.len();
     let roots: Vec<RootResult> = line_ranges
         .iter()
         .map(|range| {
@@ -476,12 +488,9 @@ pub fn load_jsonl(path: &std::path::Path) -> Result<JsonTreeView, String> {
             })
         })
         .collect();
-    Ok(JsonTreeView::new(
-        path.to_path_buf(),
-        bytes,
-        Some(line_ranges),
-        roots,
-    ))
+    let mut view = JsonTreeView::new(path.to_path_buf(), bytes, Some(line_ranges), roots);
+    view.lines_truncated = lines_truncated;
+    Ok(view)
 }
 
 #[cfg(test)]
@@ -527,6 +536,19 @@ mod load_jsonl_tests {
             MAX_JSON_LINES,
             "must stop at the cap, not read the whole file"
         );
+        assert!(
+            view.lines_truncated,
+            "超出上限的文件必须标记 lines_truncated，供 UI 展示截断提示"
+        );
+    }
+
+    #[test]
+    fn load_jsonl_under_cap_is_not_marked_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("small.jsonl");
+        std::fs::write(&p, "{}\n{}\n").unwrap();
+        let view = load_jsonl(&p).unwrap();
+        assert!(!view.lines_truncated, "不足上限的文件不该标记截断");
     }
 }
 
@@ -746,7 +768,10 @@ mod apply_tests {
     fn toggle_expand_on_new_path_expands_and_requests_load_if_undecoded() {
         let mut v = empty_view();
         let path: NodePath = Arc::from(vec![PathSegment::Key("a".to_string())]);
-        let req = v.apply(Action::ToggleExpand(path.clone()));
+        let req = v.apply(Action::ToggleExpand {
+            root_index: 0,
+            path: path.clone(),
+        });
         assert_eq!(
             req,
             Some(NodeExpandRequest {
@@ -760,8 +785,14 @@ mod apply_tests {
     fn toggle_expand_twice_collapses_without_requesting_load_again() {
         let mut v = empty_view();
         let path: NodePath = Arc::from(vec![PathSegment::Key("a".to_string())]);
-        v.apply(Action::ToggleExpand(path.clone())); // expand: requests load
-        let second = v.apply(Action::ToggleExpand(path.clone())); // collapse
+        v.apply(Action::ToggleExpand {
+            root_index: 0,
+            path: path.clone(),
+        }); // expand: requests load
+        let second = v.apply(Action::ToggleExpand {
+            root_index: 0,
+            path: path.clone(),
+        }); // collapse
         assert_eq!(second, None, "collapsing never triggers a load");
     }
 
@@ -770,11 +801,21 @@ mod apply_tests {
         let mut v = empty_view();
         let path: NodePath = Arc::from(vec![PathSegment::Key("a".to_string())]);
         assert!(
-            v.apply(Action::ToggleExpand(path.clone())).is_some(),
+            v.apply(Action::ToggleExpand {
+                root_index: 0,
+                path: path.clone()
+            })
+            .is_some(),
             "first expand requests a load"
         );
-        v.apply(Action::ToggleExpand(path.clone())); // collapse
-        let req = v.apply(Action::ToggleExpand(path.clone())); // expand again, load still in flight
+        v.apply(Action::ToggleExpand {
+            root_index: 0,
+            path: path.clone(),
+        }); // collapse
+        let req = v.apply(Action::ToggleExpand {
+            root_index: 0,
+            path: path.clone(),
+        }); // expand again, load still in flight
         assert_eq!(
             req, None,
             "a load for this path is already in flight, must not spawn a second one"
@@ -785,7 +826,10 @@ mod apply_tests {
     fn expanding_already_decoded_node_does_not_request_load() {
         let mut v = empty_view();
         let path: NodePath = Arc::from(vec![PathSegment::Key("a".to_string())]);
-        v.apply(Action::ToggleExpand(path.clone()));
+        v.apply(Action::ToggleExpand {
+            root_index: 0,
+            path: path.clone(),
+        });
         v.apply_node_loaded(
             path.clone(),
             Ok(NodeContent::Leaf {
@@ -794,8 +838,93 @@ mod apply_tests {
             }),
             0,
         );
-        v.apply(Action::ToggleExpand(path.clone())); // collapse
-        let req = v.apply(Action::ToggleExpand(path.clone())); // expand again, already decoded
+        v.apply(Action::ToggleExpand {
+            root_index: 0,
+            path: path.clone(),
+        }); // collapse
+        let req = v.apply(Action::ToggleExpand {
+            root_index: 0,
+            path: path.clone(),
+        }); // expand again, already decoded
         assert_eq!(req, None, "content is cached, no need to re-decode");
+    }
+
+    fn jsonl_view() -> JsonTreeView {
+        // 两个根，各自预解码了内容（jsonl 加载时的真实形态）。
+        let object = |key: &str, val: JsonKind| NodeContent::Object {
+            entries: vec![(key.to_string(), val)],
+            truncated: false,
+        };
+        JsonTreeView::new(
+            std::path::PathBuf::from("/tmp/x.jsonl"),
+            b"{\"a\":1}\n{\"a\":2}\n".to_vec(),
+            Some(vec![0..8, 8..16]),
+            vec![
+                Ok(JsonNode {
+                    kind: JsonKind::Object,
+                    content: Some(object("a", JsonKind::Number)),
+                }),
+                Ok(JsonNode {
+                    kind: JsonKind::Object,
+                    content: Some(object("a", JsonKind::Number)),
+                }),
+            ],
+        )
+    }
+
+    #[test]
+    fn expanding_one_jsonl_root_does_not_expand_the_others() {
+        let mut v = jsonl_view();
+        v.apply(Action::ToggleExpand {
+            root_index: 0,
+            path: Arc::from(Vec::<PathSegment>::new()),
+        });
+        assert!(
+            v.is_expanded(0, &Arc::from(Vec::<PathSegment>::new())),
+            "root 0 展开"
+        );
+        assert!(
+            !v.is_expanded(1, &Arc::from(Vec::<PathSegment>::new())),
+            "root 1 不受影响——回归：单点空路径曾展开所有根"
+        );
+    }
+
+    #[test]
+    fn same_named_child_across_jsonl_roots_keeps_independent_state() {
+        let mut v = jsonl_view();
+        let child: NodePath = Arc::from(vec![PathSegment::Key("a".to_string())]);
+        // 展开 root 0 的 "a"，请求解码——root_index 必须指向 0 而不是恒 0 的行 1。
+        let req0 = v
+            .apply(Action::ToggleExpand {
+                root_index: 0,
+                path: child.clone(),
+            })
+            .expect("root 0 的 child 应请求加载");
+        assert_eq!(req0.root_index, 0, "root_index 应来自点击所在行");
+        // 同名字段在 root 1 下尚未解码，展开它也应独立请求（不能因 root 0 在加载而吞掉）。
+        let req1 = v
+            .apply(Action::ToggleExpand {
+                root_index: 1,
+                path: child.clone(),
+            })
+            .expect("root 1 的同名 child 应独立请求加载");
+        assert_eq!(req1.root_index, 1);
+        // 回填 root 1 的解码结果，不应污染 root 0 的缓存。
+        v.apply_node_loaded(
+            child.clone(),
+            Ok(NodeContent::Leaf {
+                display: "2".into(),
+                truncated: false,
+            }),
+            1,
+        );
+        assert!(
+            v.content_at(0, &child).is_none(),
+            "root 0 的缓存不能被 root 1 的回填污染"
+        );
+        assert!(matches!(
+            v.content_at(1, &child),
+            Some(NodeContent::Leaf { .. })
+        ));
     }
 }

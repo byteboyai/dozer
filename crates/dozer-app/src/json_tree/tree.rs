@@ -65,6 +65,20 @@ pub fn flatten_visible_rows(view: &JsonTreeView) -> Vec<VisibleRow> {
             node.kind,
         );
     }
+    if view.lines_truncated {
+        // jsonl 在 `MAX_JSON_LINES` 处被截断：末尾插一行提示，让用户知道
+        // 后面还有更多行没读入（规格：超过上限不做精确统计，展示"还有更多"即可）。
+        rows.push(VisibleRow {
+            root_index: rows.len(),
+            path: Arc::from(Vec::<PathSegment>::new()),
+            depth: 0,
+            key_label: format!("…（仅显示前 {} 行，还有更多）", super::MAX_JSON_LINES),
+            kind: JsonKind::Null,
+            expandable: false,
+            expanded: false,
+            sentinel: true,
+        });
+    }
     rows
 }
 
@@ -79,7 +93,7 @@ fn push_row_and_children(
     kind: JsonKind,
 ) {
     let expandable = matches!(kind, JsonKind::Object | JsonKind::Array);
-    let expanded = view.is_expanded(&path);
+    let expanded = view.is_expanded(root_index, &path);
     rows.push(VisibleRow {
         root_index,
         path: path.clone(),
@@ -210,7 +224,12 @@ impl<'a> TreeCanvas<'a> {
     /// 「展开/折叠」chevron 的命中区：仅 chevron 所在的左侧窄条，避免整行
     /// 点击都触发展开。命中区用与 `draw()` 同一套 `Metrics`，并同样按
     /// 「当前行数」裁剪 scroll 上界，保持点击与绘制一致。
-    fn chevron_hit_at(&self, cursor: Point, bounds: Rectangle, m: &Metrics) -> Option<NodePath> {
+    fn chevron_hit_at(
+        &self,
+        cursor: Point,
+        bounds: Rectangle,
+        m: &Metrics,
+    ) -> Option<(usize, NodePath)> {
         if cursor.y < 0.0 || cursor.y > bounds.height {
             return None;
         }
@@ -226,7 +245,7 @@ impl<'a> TreeCanvas<'a> {
         let left = m.indent(row.depth);
         let right = left + m.chevron_w;
         if cursor.x >= left && cursor.x <= right {
-            Some(row.path.clone())
+            Some((row.root_index, row.path.clone()))
         } else {
             None
         }
@@ -257,8 +276,11 @@ impl<'a> canvas::Program<Action> for TreeCanvas<'a> {
             }
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let cursor = cursor.position()?;
-                let path = self.chevron_hit_at(cursor, bounds, &m)?;
-                Some(canvas::Action::publish(Action::ToggleExpand(path)))
+                let (root_index, path) = self.chevron_hit_at(cursor, bounds, &m)?;
+                Some(canvas::Action::publish(Action::ToggleExpand {
+                    root_index,
+                    path,
+                }))
             }
             _ => None,
         }
@@ -410,7 +432,10 @@ mod tests {
         };
         let mut view = view_with_root(JsonKind::Object, Some(content));
         let root_path: NodePath = Arc::from(Vec::<PathSegment>::new());
-        view.apply(Action::ToggleExpand(root_path));
+        view.apply(Action::ToggleExpand {
+            root_index: 0,
+            path: root_path,
+        });
         let rows = flatten_visible_rows(&view);
         assert_eq!(rows.len(), 3, "root + 2 children");
         assert_eq!(rows[1].key_label, "a");
@@ -425,9 +450,15 @@ mod tests {
             truncated: false,
         };
         let mut view = view_with_root(JsonKind::Object, Some(content));
-        view.apply(Action::ToggleExpand(Arc::from(Vec::<PathSegment>::new())));
+        view.apply(Action::ToggleExpand {
+            root_index: 0,
+            path: Arc::from(Vec::<PathSegment>::new()),
+        });
         let child_path: NodePath = Arc::from(vec![PathSegment::Key("child".to_string())]);
-        view.apply(Action::ToggleExpand(child_path)); // expand child; not decoded yet
+        view.apply(Action::ToggleExpand {
+            root_index: 0,
+            path: child_path,
+        }); // expand child; not decoded yet
         let rows = flatten_visible_rows(&view);
         assert_eq!(
             rows.len(),
@@ -447,10 +478,23 @@ mod tests {
             truncated: true,
         };
         let mut view = view_with_root(JsonKind::Object, Some(content));
-        view.apply(Action::ToggleExpand(Arc::from(Vec::<PathSegment>::new())));
+        view.apply(Action::ToggleExpand {
+            root_index: 0,
+            path: Arc::from(Vec::<PathSegment>::new()),
+        });
         let rows = flatten_visible_rows(&view);
         assert_eq!(rows.len(), 3, "root + child + truncation sentinel");
         assert!(rows[2].sentinel, "末行应是截断提示合成行");
         assert!(!rows[2].expandable);
+    }
+
+    #[test]
+    fn lines_truncated_flag_appends_a_line_cap_sentinel() {
+        let mut view = view_with_root(JsonKind::Object, None);
+        view.lines_truncated = true;
+        let rows = flatten_visible_rows(&view);
+        assert_eq!(rows.len(), 2, "root + 行数截断提示行");
+        assert!(rows[1].sentinel, "末行应是行数截断提示");
+        assert!(rows[1].key_label.contains("还有更多"));
     }
 }
