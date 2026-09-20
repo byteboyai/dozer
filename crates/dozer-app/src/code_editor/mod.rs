@@ -561,7 +561,14 @@ impl CodeView {
             .line_height(Pixels(line_height_px))
             .highlight_with::<highlighter::Highlighter>(
                 highlighter::Settings {
-                    token: self.token.clone(),
+                    // 只读档(`SizeTier` 的整读/分块两档,均 >= 20MB)关闭语法
+                    // 高亮:文件动辄几十 MB,逐行 syntect 解析纯属浪费,且只读
+                    // 态本就无法编辑,着色没有意义。见 `DISABLED_TOKEN`。
+                    token: if self.read_only {
+                        highlighter::DISABLED_TOKEN.to_string()
+                    } else {
+                        self.token.clone()
+                    },
                     scheme: byteui::theme::color::current_scheme(),
                 },
                 |highlight, _theme| highlight.to_format(),

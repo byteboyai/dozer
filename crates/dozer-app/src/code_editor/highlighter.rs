@@ -60,6 +60,14 @@ fn theme_for(scheme: ColorScheme) -> &'static highlighting::Theme {
 
 const LINES_PER_SNAPSHOT: usize = 50;
 
+/// 关闭高亮的哨兵 token:空串。任何真实语法 token 都非空
+/// (`find_syntax_by_token` 也绝不给空串命中),所以空串可无歧义地表达
+/// "这个编辑器不做语法高亮"。`CodeView` 在只读大文件档(`read_only`)下
+/// 传入它——只读大文件动辄几十 MB,逐行跑 syntect 解析纯属浪费,且只读态
+/// 用户本来也无法编辑,着色没有意义(2026-09-20 用户:75MB sql 进只读模式时
+/// 也应去掉 highlight)。
+pub const DISABLED_TOKEN: &str = "";
+
 /// [`Highlighter`] 的配置:语法 token(文件扩展名对应的 syntect 语言名,
 /// 见 `preview::extension_to_syntax`)+ 当前配色方案。`scheme` 必须进
 /// `Settings`——`text_editor` 靠 `PartialEq` 比对来决定要不要重建
@@ -77,6 +85,10 @@ pub struct Highlighter {
     highlighter: highlighting::Highlighter<'static>,
     caches: Vec<(parsing::ParseState, parsing::ScopeStack)>,
     current_line: usize,
+    /// token 为 [`DISABLED_TOKEN`](空串)时为真:`highlight_line` 直接返回
+    /// 空迭代器,连 `parse_line` 都不跑。只被 `view()` 里 `read_only` 的
+    /// 大文件档触发。
+    disabled: bool,
 }
 
 impl highlighter::Highlighter for Highlighter {
@@ -86,9 +98,14 @@ impl highlighter::Highlighter for Highlighter {
     type Iterator<'a> = Box<dyn Iterator<Item = (Range<usize>, Self::Highlight)> + 'a>;
 
     fn new(settings: &Self::Settings) -> Self {
-        let syntax = SYNTAXES
-            .find_syntax_by_token(&settings.token)
-            .unwrap_or_else(|| SYNTAXES.find_syntax_plain_text());
+        let disabled = settings.token == DISABLED_TOKEN;
+        let syntax = if disabled {
+            SYNTAXES.find_syntax_plain_text()
+        } else {
+            SYNTAXES
+                .find_syntax_by_token(&settings.token)
+                .unwrap_or_else(|| SYNTAXES.find_syntax_plain_text())
+        };
 
         let highlighter = highlighting::Highlighter::new(theme_for(settings.scheme));
 
@@ -100,13 +117,19 @@ impl highlighter::Highlighter for Highlighter {
             highlighter,
             caches: vec![(parser, stack)],
             current_line: 0,
+            disabled,
         }
     }
 
     fn update(&mut self, new_settings: &Self::Settings) {
-        self.syntax = SYNTAXES
-            .find_syntax_by_token(&new_settings.token)
-            .unwrap_or_else(|| SYNTAXES.find_syntax_plain_text());
+        self.disabled = new_settings.token == DISABLED_TOKEN;
+        self.syntax = if self.disabled {
+            SYNTAXES.find_syntax_plain_text()
+        } else {
+            SYNTAXES
+                .find_syntax_by_token(&new_settings.token)
+                .unwrap_or_else(|| SYNTAXES.find_syntax_plain_text())
+        };
 
         self.highlighter = highlighting::Highlighter::new(theme_for(new_settings.scheme));
 
@@ -135,6 +158,14 @@ impl highlighter::Highlighter for Highlighter {
     }
 
     fn highlight_line(&mut self, line: &str) -> Self::Iterator<'_> {
+        if self.disabled {
+            // 关闭高亮:连 `parse_line` 都不跑,直接给一段无格式文本。只读
+            // 大文件档专用(见 [`DISABLED_TOKEN`]),把逐行 syntect 解析的
+            // CPU 开销整段省掉;文本本身仍由 `text_editor` 用默认前景色绘制。
+            self.current_line += 1;
+            return Box::new(std::iter::empty());
+        }
+
         if self.current_line / LINES_PER_SNAPSHOT >= self.caches.len() {
             let (parser, stack) = self.caches.last().expect("caches must not be empty");
 
@@ -305,6 +336,55 @@ mod scheme_tests {
             },
             "仅 scheme 不同时 Settings 必须整体不等,才会触发高亮器重建"
         );
+    }
+
+    /// 空串哨兵 token 必须彻底关闭高亮:`highlight_line` 返回空迭代器(无任何
+    /// 带色片段),而不是回退成 plain text 仍然逐行解析。
+    #[test]
+    fn disabled_token_yields_no_highlights() {
+        let line = "fn main() { let x = 1; } // c";
+        let mut h = Highlighter::new(&Settings {
+            token: DISABLED_TOKEN.into(),
+            scheme: ColorScheme::Dark,
+        });
+        h.change_line(0);
+        assert_eq!(
+            h.highlight_line(line).count(),
+            0,
+            "关闭高亮时必须给空片段,不能有带色/带格式片段"
+        );
+
+        // 反向:同一行用真实 token 必须产出片段,证明上面的 0 是"关了"而不是
+        // 该行本来就没片段。
+        let mut h2 = Highlighter::new(&Settings {
+            token: "rust".into(),
+            scheme: ColorScheme::Dark,
+        });
+        h2.change_line(0);
+        assert!(
+            h2.highlight_line(line).count() > 0,
+            "真实 token 下同一行应有高亮片段"
+        );
+    }
+
+    /// `update()` 切到空串哨兵时也必须关闭高亮(用户在编辑档/只读档之间复用
+    /// 同一个 `text_editor` 时走这条路)。
+    #[test]
+    fn update_to_disabled_token_turns_highlight_off() {
+        let line = "fn main() { let x = 1; }";
+        let mut h = Highlighter::new(&Settings {
+            token: "rust".into(),
+            scheme: ColorScheme::Dark,
+        });
+        h.change_line(0);
+        assert!(h.highlight_line(line).count() > 0);
+
+        h.update(&Settings {
+            token: DISABLED_TOKEN.into(),
+            scheme: ColorScheme::Dark,
+        });
+        h.change_line(0);
+        assert_eq!(h.highlight_line(line).count(), 0);
     }
 }
 
