@@ -489,6 +489,121 @@ mod load_jsonl_tests {
     }
 }
 
+pub fn load(path: &std::path::Path) -> Result<JsonTreeView, String> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "json" => load_json(path),
+        "jsonl" | "ndjson" => load_jsonl(path),
+        _ => Err(format!("非 JSON 文件: {ext}")),
+    }
+}
+
+/// `expand()` 解码所依据的字节来源 —— 由调用方（Task 8 的消息处理）
+/// 在 spawn 后台线程前，用已有数据构造（绝不借用活的 `&JsonTreeView`，
+/// 那会要求跨异步边界借用 view）。
+pub enum ExpandBytesSource {
+    WholeFile(std::path::PathBuf),
+    JsonLine {
+        path: std::path::PathBuf,
+        byte_range: std::ops::Range<usize>,
+    },
+}
+
+/// 后台线程按需解码单个节点的入口。
+///
+/// 注意这里每次展开都从磁盘重读文件，而不是复用初次加载已常驻内存的
+/// `bytes` —— 这是 tabular spec 为 `load_sheet` 每次惰性切表都重开
+/// workbook 记录过的同一取舍：展开是低频、显式、已被 spinner 覆盖的用户
+/// 动作，不是热路径；而跨线程边界维持对 view `bytes` 的活借用，正是那份
+/// 取舍要规避的复杂度。未来 reviewer 不要在不重读那份理由的情况下，把它
+/// “优化”成新的复杂度。
+pub fn expand(source: &ExpandBytesSource, path: &[PathSegment]) -> Result<NodeContent, String> {
+    match source {
+        ExpandBytesSource::WholeFile(p) => {
+            let bytes = std::fs::read(p).map_err(|e| e.to_string())?;
+            decode_node(&bytes, path)
+        }
+        ExpandBytesSource::JsonLine {
+            path: p,
+            byte_range,
+        } => {
+            let bytes = std::fs::read(p).map_err(|e| e.to_string())?;
+            let line = bytes
+                .get(byte_range.clone())
+                .ok_or("行范围越界(文件在打开后被改动?)")?;
+            decode_node(line, path)
+        }
+    }
+}
+
+#[cfg(test)]
+mod load_dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn load_dispatches_by_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let json_path = dir.path().join("a.json");
+        std::fs::write(&json_path, "{}").unwrap();
+        let view = load(&json_path).unwrap();
+        assert_eq!(view.roots.len(), 1);
+
+        let jsonl_path = dir.path().join("a.jsonl");
+        std::fs::write(&jsonl_path, "{}\n{}\n").unwrap();
+        let view = load(&jsonl_path).unwrap();
+        assert_eq!(view.roots.len(), 2);
+    }
+
+    #[test]
+    fn load_rejects_non_json_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.md");
+        std::fs::write(&p, "# hi").unwrap();
+        assert!(load(&p).is_err());
+    }
+}
+
+#[cfg(test)]
+mod expand_tests {
+    use super::*;
+
+    #[test]
+    fn expand_whole_file_decodes_the_requested_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.json");
+        std::fs::write(&p, r#"{"a": {"b": 1}}"#).unwrap();
+        let content = expand(
+            &ExpandBytesSource::WholeFile(p),
+            &[PathSegment::Key("a".into())],
+        )
+        .unwrap();
+        assert!(matches!(content, NodeContent::Object { .. }));
+    }
+
+    #[test]
+    fn expand_json_line_decodes_within_that_lines_byte_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.jsonl");
+        std::fs::write(&p, "{\"x\":1}\n{\"y\":[1,2]}\n").unwrap();
+        let first_len = "{\"x\":1}\n".len();
+        let second_len = "{\"y\":[1,2]}".len();
+        let range = first_len..(first_len + second_len);
+        let content = expand(
+            &ExpandBytesSource::JsonLine {
+                path: p,
+                byte_range: range,
+            },
+            &[PathSegment::Key("y".into())],
+        )
+        .unwrap();
+        assert!(matches!(content, NodeContent::Array { .. }));
+    }
+}
+
 #[cfg(test)]
 mod load_json_tests {
     use super::*;
