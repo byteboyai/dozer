@@ -273,6 +273,50 @@ pub enum Message {
     /// 预览:打开本地文件为新 tab(路径已由入口侧确认存在,来自项目树点击/
     /// 会话恢复;预览面板本身已不再有"打开文件…"按钮或地址栏)。
     PreviewOpenPath(PathBuf),
+    /// Files 面板原生编辑器异步读盘+构造结果回灌。`ProjectId` 按打开时所属
+    /// 项目路由(见 `App::with_project` 文档,不能假设用户没有切走项目),
+    /// `usize` 是 `PreviewTab.id`。携带的是已经在后台线程构造好的
+    /// `NativeEditorLoadHandle`(不是纯数据)——`CodeView::new` 本身是
+    /// `Send`、不要求在 UI 线程上做,见
+    /// `docs/superpowers/plans/2026-09-19-large-file-editor-performance.md`
+    /// Task 1"对 Task 3 的影响"与该类型自己的文档。
+    PreviewFileLoaded(
+        crate::app::layout::ProjectId,
+        usize,
+        Result<crate::preview::NativeEditorLoadHandle, String>,
+    ),
+    /// "加载更多"横幅点击:续读下一段。`PanelKind` 区分 Files/Project,
+    /// `usize` 是 `PreviewTab.id`。
+    PreviewLoadMore(PanelKind, usize),
+    /// 续读结果回灌,语义同 `PreviewFileLoaded`。`PanelKind` 决定回填
+    /// `ws.preview` 还是 `ws.project_preview`(与 `PreviewFileLoaded`/
+    /// `ProjectPreviewFileLoaded` 用两条独立消息不同,这里两个面板共用一条
+    /// 消息——`(String, u64, bool)` 是普通值类型,`Clone`/`Debug` 都天然成
+    /// 立,不像 `NativeEditorLoadHandle` 那样需要为不可 `Clone` 的
+    /// `CodeView` 绕一层,没有理由拆两条)。
+    PreviewMoreLoaded(
+        crate::app::layout::ProjectId,
+        PanelKind,
+        usize,
+        Result<(String, u64, bool), String>,
+    ),
+    /// 只读大文件档 ⌘F:打开搜索条,锁定 `usize`(`PreviewTab.id`)。
+    PreviewLargeFileSearchOpen(PanelKind, usize),
+    PreviewLargeFileSearchClose(PanelKind),
+    /// 查询框回车/点搜索:`String` 是本次提交的 query。
+    PreviewLargeFileSearchSubmit(PanelKind, usize, String),
+    /// 异步结果回灌,语义同 `PreviewMoreLoaded`。
+    PreviewLargeFileSearchResults(
+        crate::app::layout::ProjectId,
+        PanelKind,
+        usize,
+        Result<Vec<crate::extensions::search::SearchHit>, String>,
+    ),
+    /// 上一条/下一条命中(`bool` = 是否前进)。命中若在已加载范围内
+    /// (`line_no <= 当前 CodeView 行数`)直接跳转光标;否则置
+    /// `preview_error`/`project_preview_error` 提示"超出已加载范围"
+    /// (复用现有错误提示横幅,不新增一套错误 UI)。
+    PreviewLargeFileSearchGo(PanelKind, bool),
     /// 预览:切换 tab(vec 位置).
     PreviewSelectTab(usize),
     /// 预览:关闭 tab(vec 位置).
@@ -372,6 +416,13 @@ pub enum Message {
     ),
     /// Project 面板右配对预览:打开本地文件为新 tab,语义同 `PreviewOpenPath`。
     ProjectPreviewOpenPath(PathBuf),
+    /// Project 面板右配对预览:异步读盘+构造结果回灌,语义同 `PreviewFileLoaded`
+    /// (两面板各自的 `PreviewPane` 是完全独立的状态,不共用一条消息)。
+    ProjectPreviewFileLoaded(
+        crate::app::layout::ProjectId,
+        usize,
+        Result<crate::preview::NativeEditorLoadHandle, String>,
+    ),
     /// Project 面板右配对预览:切换 tab(vec 位置)。
     ProjectPreviewSelectTab(usize),
     /// Project 面板右配对预览:关闭 tab(vec 位置)。

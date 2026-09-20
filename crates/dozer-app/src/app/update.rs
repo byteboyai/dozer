@@ -797,6 +797,122 @@ impl App {
             }
             Message::TermPaste(target, text) => self.term_paste(target, text),
             Message::PreviewOpenPath(path) => self.preview_open_path(path),
+            Message::PreviewFileLoaded(project_id, tab_id, result) => {
+                self.with_project(project_id, move |ws, _io| {
+                    ws.preview.apply_native_load(tab_id, result);
+                });
+            }
+            Message::PreviewLoadMore(kind, tab_id) => self.preview_load_more(kind, tab_id),
+            Message::PreviewMoreLoaded(project_id, kind, tab_id, result) => {
+                self.with_project(project_id, move |ws, _io| {
+                    let pane = match kind {
+                        PanelKind::Project => &mut ws.project_preview,
+                        _ => &mut ws.preview,
+                    };
+                    pane.apply_more_loaded(tab_id, result);
+                });
+            }
+            Message::PreviewLargeFileSearchOpen(kind, tab_id) => {
+                self.with_focused_project(move |ws, _io| match kind {
+                    PanelKind::Project => ws.project_preview.open_large_file_search(tab_id),
+                    _ => ws.preview.open_large_file_search(tab_id),
+                });
+            }
+            Message::PreviewLargeFileSearchClose(kind) => {
+                self.with_focused_project(move |ws, _io| match kind {
+                    PanelKind::Project => ws.project_preview.close_large_file_search(),
+                    _ => ws.preview.close_large_file_search(),
+                });
+            }
+            Message::PreviewLargeFileSearchSubmit(kind, tab_id, query) => {
+                let Some(project_id) = self.active_project_id else {
+                    return;
+                };
+                self.with_focused_project(move |ws, io| {
+                    let pane = match kind {
+                        PanelKind::Project => &mut ws.project_preview,
+                        _ => &mut ws.preview,
+                    };
+                    let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
+                        return;
+                    };
+                    let crate::preview::TabKind::File(path) = tab.kind.clone() else {
+                        return;
+                    };
+                    if let Some(session) = pane.large_file_search.as_mut() {
+                        session.query = query.clone();
+                        session.running = true;
+                    }
+                    let proxy = io.proxy.clone();
+                    io.handle.spawn(async move {
+                        let scope = crate::extensions::search::Scope::File(path);
+                        let result = tokio::task::spawn_blocking(move || {
+                            crate::extensions::search::search_scope(&scope, &query).map(|by_file| {
+                                by_file
+                                    .into_iter()
+                                    .flat_map(|(_, hits)| hits)
+                                    .collect::<Vec<_>>()
+                            })
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(e.to_string()));
+                        let _ = proxy.send_event(Message::PreviewLargeFileSearchResults(
+                            project_id, kind, tab_id, result,
+                        ));
+                    });
+                });
+            }
+            Message::PreviewLargeFileSearchResults(project_id, kind, tab_id, result) => {
+                self.with_project(project_id, move |ws, _io| {
+                    let pane = match kind {
+                        PanelKind::Project => &mut ws.project_preview,
+                        _ => &mut ws.preview,
+                    };
+                    pane.set_large_file_search_results(tab_id, result);
+                });
+            }
+            Message::PreviewLargeFileSearchGo(kind, forward) => {
+                self.with_focused_project(move |ws, _io| {
+                    let pane = match kind {
+                        PanelKind::Project => &mut ws.project_preview,
+                        _ => &mut ws.preview,
+                    };
+                    let Some(session) = pane.large_file_search.clone() else {
+                        return;
+                    };
+                    if session.hits.is_empty() {
+                        return;
+                    }
+                    let next = if forward {
+                        (session.current + 1) % session.hits.len()
+                    } else {
+                        (session.current + session.hits.len() - 1) % session.hits.len()
+                    };
+                    let hit = session.hits[next].clone();
+                    let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == session.tab_id)
+                    else {
+                        return;
+                    };
+                    let Some(editor) = tab.editor.as_mut() else {
+                        return;
+                    };
+                    let target_line = (hit.line_no.saturating_sub(1)) as usize;
+                    let error_slot = match kind {
+                        PanelKind::Project => &mut ws.project_preview_error,
+                        _ => &mut ws.preview_error,
+                    };
+                    if target_line < editor.content_line_count() {
+                        editor.move_cursor_to((target_line, 0));
+                        *error_slot = None;
+                        if let Some(s) = pane.large_file_search.as_mut() {
+                            s.current = next;
+                        }
+                    } else {
+                        *error_slot =
+                            Some("命中内容超出已加载范围,点击「加载更多」后再试".to_string());
+                    }
+                });
+            }
             Message::PreviewSelectTab(idx) => self.preview_select_tab(idx),
             Message::PreviewCloseTab(idx) => {
                 self.with_focused_project(|ws, io| {
@@ -857,10 +973,58 @@ impl App {
                 self.with_focused_project(move |ws, _io| ws.preview_pane_redo_active(kind));
             }
             Message::PreviewFindOpen(kind) => {
-                self.with_focused_project(move |ws, _io| ws.preview_find_open(kind));
+                self.with_focused_project(move |ws, _io| {
+                    let pane = match kind {
+                        PanelKind::Project => &ws.project_preview,
+                        _ => &ws.preview,
+                    };
+                    let active_is_read_only = pane
+                        .tabs()
+                        .get(pane.active_idx())
+                        .and_then(|t| t.editor.as_ref())
+                        .is_some_and(|e| e.is_read_only());
+                    if active_is_read_only {
+                        let tab_id = pane.tabs().get(pane.active_idx()).map(|t| t.id);
+                        if let Some(tab_id) = tab_id {
+                            match kind {
+                                PanelKind::Project => {
+                                    ws.project_preview.open_large_file_search(tab_id)
+                                }
+                                _ => ws.preview.open_large_file_search(tab_id),
+                            }
+                        }
+                    } else {
+                        ws.preview_find_open(kind);
+                    }
+                });
             }
             Message::PreviewFindOpenWithReplace(kind) => {
-                self.with_focused_project(move |ws, _io| ws.preview_find_open_with_replace(kind));
+                // 只读大文件档没有"替换"概念,同样分流到大文件搜索条(忽略
+                // "默认展开替换行"这个语义,大文件搜索条本来就没有替换行)。
+                self.with_focused_project(move |ws, _io| {
+                    let pane = match kind {
+                        PanelKind::Project => &ws.project_preview,
+                        _ => &ws.preview,
+                    };
+                    let active_is_read_only = pane
+                        .tabs()
+                        .get(pane.active_idx())
+                        .and_then(|t| t.editor.as_ref())
+                        .is_some_and(|e| e.is_read_only());
+                    if active_is_read_only {
+                        let tab_id = pane.tabs().get(pane.active_idx()).map(|t| t.id);
+                        if let Some(tab_id) = tab_id {
+                            match kind {
+                                PanelKind::Project => {
+                                    ws.project_preview.open_large_file_search(tab_id)
+                                }
+                                _ => ws.preview.open_large_file_search(tab_id),
+                            }
+                        }
+                    } else {
+                        ws.preview_find_open_with_replace(kind);
+                    }
+                });
             }
             Message::PreviewFindReplaceToggle(kind) => {
                 self.with_focused_project(move |ws, _io| ws.preview_find_toggle_replace(kind));
@@ -928,6 +1092,11 @@ impl App {
                 });
             }
             Message::ProjectPreviewOpenPath(path) => self.project_preview_open_path(path),
+            Message::ProjectPreviewFileLoaded(project_id, tab_id, result) => {
+                self.with_project(project_id, move |ws, _io| {
+                    ws.project_preview.apply_native_load(tab_id, result);
+                });
+            }
             Message::ProjectPreviewSelectTab(idx) => self.project_preview_select_tab(idx),
             Message::ProjectPreviewCloseTab(idx) => {
                 self.with_focused_project(|ws, _io| {
@@ -3202,10 +3371,23 @@ impl App {
         });
     }
 
+    /// 打开文件预览:非原生编辑器候选(webview/表格类)照旧走同步
+    /// `PreviewPane::open_path`,不慢不用异步。原生编辑器候选
+    /// (`preview::is_native_editor_candidate`)——即用户从文件树打开任意
+    /// 大小文件的常见路径——先同步插入一个 `loading` 占位 tab,再
+    /// `spawn_blocking` 到后台线程完成"读盘 + 三档分类 + `CodeView::new`"
+    /// (2026-09-19 大文件编辑器性能优化:`CodeView::new` 本身是 `Send`、
+    /// 不要求在 UI 线程上做,见该计划 Task 1"对 Task 3 的影响",所以整个
+    /// 耗时链条——包括真实的字体 shaping——都不在这里阻塞)。构造好的
+    /// `CodeView` 包一层 `NativeEditorLoadHandle` 传回 `Message::
+    /// PreviewFileLoaded`,由 `apply_native_load` 取出装进 tab。
     pub(crate) fn preview_open_path(&mut self, path: PathBuf) {
         // 同 `preview_select_tab`:`preview_tab_bar_avail_px` 要 `&self`,
         // 得在 `with_focused_project` 的 `&mut self` 借用之前先算好。
         let avail_w = self.preview_tab_bar_avail_px(PanelKind::Files);
+        let Some(project_id) = self.active_project_id else {
+            return;
+        };
         self.with_focused_project(move |ws, io| {
             if !path.is_file() {
                 ws.preview_error = Some(format!("文件不存在或不可读: {}", path.display()));
@@ -3217,7 +3399,34 @@ impl App {
                 .lock()
                 .expect("allowed_files 锁")
                 .insert(path.clone());
-            ws.preview.open_path(path);
+
+            if let Some(idx) = ws.preview.find_existing_file_tab(&path) {
+                // 同一文件已开则切过去,不重复开/重复读盘。
+                ws.preview.select(idx);
+            } else if crate::preview::is_native_editor_candidate(&path) {
+                let title = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.to_string_lossy().into_owned());
+                let tab_id = ws
+                    .preview
+                    .insert_loading_tab(crate::preview::TabKind::File(path.clone()), title);
+                let proxy = io.proxy.clone();
+                let load_path = path.clone();
+                io.handle.spawn(async move {
+                    let result = tokio::task::spawn_blocking(move || {
+                        crate::preview::read_and_build_native_editor(&load_path)
+                            .map(crate::preview::NativeEditorLoadHandle::new)
+                            .map_err(|e| e.to_string())
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+                    let _ =
+                        proxy.send_event(Message::PreviewFileLoaded(project_id, tab_id, result));
+                });
+            } else {
+                ws.preview.open_path(path.clone());
+            }
             ws.spawn_pending_tabular_loads(PanelKind::Files, io);
             // 新 tab 落在末尾(复用已开的文件则落在该文件原来的位置)——
             // 用跟 `preview_select_tab` 同一套 `tab_window_reveal`,把窗口
@@ -3279,7 +3488,10 @@ impl App {
     /// 避免与 Files 预览那份持久化 `preview_state` 互相覆盖。
     pub(crate) fn project_preview_open_path(&mut self, path: PathBuf) {
         let avail_w = self.preview_tab_bar_avail_px(PanelKind::Project);
-        self.with_focused_project(|ws, io| {
+        let Some(project_id) = self.active_project_id else {
+            return;
+        };
+        self.with_focused_project(move |ws, io| {
             if !path.is_file() {
                 ws.project_preview_error = Some(format!("文件不存在或不可读: {}", path.display()));
                 return;
@@ -3290,7 +3502,34 @@ impl App {
                 .lock()
                 .expect("allowed_files 锁")
                 .insert(path.clone());
-            ws.project_preview.open_path(path);
+
+            if let Some(idx) = ws.project_preview.find_existing_file_tab(&path) {
+                ws.project_preview.select(idx);
+            } else if crate::preview::is_native_editor_candidate(&path) {
+                let title = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.to_string_lossy().into_owned());
+                let tab_id = ws
+                    .project_preview
+                    .insert_loading_tab(crate::preview::TabKind::File(path.clone()), title);
+                let proxy = io.proxy.clone();
+                let load_path = path.clone();
+                io.handle.spawn(async move {
+                    let result = tokio::task::spawn_blocking(move || {
+                        crate::preview::read_and_build_native_editor(&load_path)
+                            .map(crate::preview::NativeEditorLoadHandle::new)
+                            .map_err(|e| e.to_string())
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+                    let _ = proxy.send_event(Message::ProjectPreviewFileLoaded(
+                        project_id, tab_id, result,
+                    ));
+                });
+            } else {
+                ws.project_preview.open_path(path.clone());
+            }
             ws.spawn_pending_tabular_loads(PanelKind::Project, io);
             // 新 tab 落在末尾(或复用已开文件原位),用 `tab_window_reveal`
             // 钳出包含它的窗口起点,不再无脑滚回最左(同 Files 预览)。
@@ -3308,6 +3547,40 @@ impl App {
                 ws.project_preview_tab_first,
                 active,
             );
+        });
+    }
+
+    /// 只读分块档"加载更多"横幅点击:从当前已加载字节数续读下一段(大小同
+    /// 首屏的整读上限 `full_load_max_bytes()`),异步读盘不阻塞 UI 线程。
+    /// `kind` 决定从 `ws.preview` 还是 `ws.project_preview` 找 tab。
+    pub(crate) fn preview_load_more(&mut self, kind: PanelKind, tab_id: usize) {
+        let Some(project_id) = self.active_project_id else {
+            return;
+        };
+        self.with_focused_project(move |ws, io| {
+            let pane = match kind {
+                PanelKind::Project => &ws.project_preview,
+                _ => &ws.preview,
+            };
+            let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
+                return;
+            };
+            let crate::preview::TabKind::File(path) = tab.kind.clone() else {
+                return;
+            };
+            let start = tab.loaded_bytes;
+            let proxy = io.proxy.clone();
+            io.handle.spawn(async move {
+                let max_extra = crate::preview::full_load_max_bytes();
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::preview::read_more_bytes(&path, start, max_extra)
+                        .map_err(|e| e.to_string())
+                })
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()));
+                let _ =
+                    proxy.send_event(Message::PreviewMoreLoaded(project_id, kind, tab_id, result));
+            });
         });
     }
 

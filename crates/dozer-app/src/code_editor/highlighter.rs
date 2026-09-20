@@ -225,66 +225,6 @@ impl Highlight {
     }
 }
 
-#[cfg(test)]
-mod repro {
-    use super::*;
-    use iced_widget::core::text::highlighter::Highlighter as _;
-
-    #[test]
-    fn repro_large_json5() {
-        let path = "/Users/chrischiang/Projects/WorkProjects/Anrong/anrong_fincalc/anrong_fincalc_rule/financial_items/AFI_2025.json5";
-        let text = std::fs::read_to_string(path).unwrap();
-        let settings = Settings {
-            token: "json".into(),
-            scheme: ColorScheme::Dark,
-        };
-        let mut h = Highlighter::new(&settings);
-        h.change_line(0);
-        for line in text.lines() {
-            let it = h.highlight_line(line);
-            for _ in it {}
-        }
-    }
-
-    #[test]
-    fn repro_content_with_text() {
-        let path = "/Users/chrischiang/Projects/WorkProjects/Anrong/anrong_fincalc/anrong_fincalc_rule/financial_items/AFI_2025.json5";
-        let text = std::fs::read_to_string(path).unwrap();
-        eprintln!("lines={} bytes={}", text.lines().count(), text.len());
-        let content =
-            iced_widget::text_editor::Content::<iced_renderer::Renderer>::with_text(&text);
-        eprintln!("content line_count={}", content.line_count());
-    }
-
-    #[test]
-    fn repro_full_render() {
-        crate::assets::fonts::load_embedded_fonts();
-        crate::assets::fonts::sanitize_font_db();
-        let path = "/Users/chrischiang/Projects/WorkProjects/Anrong/anrong_fincalc/anrong_fincalc_rule/financial_items/AFI_2025.json5";
-        let text = std::fs::read_to_string(path).unwrap();
-
-        use iced_widget::core::text::editor::Editor as _;
-        use iced_widget::core::text::highlighter::Highlighter as _;
-
-        let mut hl = Highlighter::new(&Settings {
-            token: "json".into(),
-            scheme: ColorScheme::Dark,
-        });
-        let mut editor = iced_renderer::graphics::text::Editor::with_text(&text);
-
-        let font = crate::assets::fonts::code_font();
-        let size = iced_widget::core::Pixels(14.0);
-        let line_height =
-            iced_widget::core::text::LineHeight::Absolute(iced_widget::core::Pixels(21.0));
-        let wrapping = iced_widget::core::text::Wrapping::default();
-        let bounds = iced_widget::core::Size::new(1200.0, 800.0);
-
-        editor.update(bounds, font, size, line_height, wrapping, &mut hl);
-        editor.highlight(font, &mut hl, |h| h.to_format());
-        eprintln!("full render ok");
-    }
-}
-
 struct ScopeRangeIterator {
     ops: Vec<(usize, parsing::ScopeStackOp)>,
     line_length: usize,

@@ -24,47 +24,113 @@
 
 ---
 
-## Task 1: 根因修复 —— CodeView 统一走空 buffer + `Action::Edit(Paste)` 注入,绕开无界 shaping
+## Task 1: 根因修复——~~Paste 注入绕开无界 shaping~~(已证伪)→ 恢复官方 `with_text`,把"不卡 UI 线程"这件事移交 Task 3
 
-**背景(已验证,非推测)**:读 `iced_graphics-0.14.0/src/text/editor.rs` 源码确认 `Editor::with_text` 用 `cosmic_text::Buffer::new_empty` 建空 buffer(无 `set_size`)后直接 `buffer.set_text(...)`;`cosmic-text-0.15.0/src/buffer.rs:441` 的 `shape_until_scroll` 里 `scroll_end = scroll_start + self.height_opt.unwrap_or(f32::INFINITY)`——`height_opt` 此刻是 `None`,窗口退化成 `[0, ∞)`,一次性 shape 全文档。反之,`iced_widget::text_editor::Action::Edit(Edit::Paste(Arc<String>))` 走 `cosmic_text::Editor::insert_string` → `insert_at`(`cosmic-text-0.15.0/src/edit/editor.rs:368`),这条路径只做 `BufferLine::new(..., Shaping::Advanced)` 切行(存 shaping *模式*,不做 shaping *计算*),完全不碰 `shape_until_scroll`。真正的 shaping 由 widget 每帧 `layout()` 触发的 `Editor::update()`(`iced_graphics-0.14.0/src/text/editor.rs:546`)负责,它总是先 `buffer.set_size(font_system, Some(w), Some(h))` 再 `shape_as_needed`——一旦 buffer 曾经历过一次 `with_text("")` → `update()`,后续任何 `insert_string` 都在"已知视口"下工作,shaping 天然有界。
+> **2026-09-19 更新:本任务原方案(空 buffer + `Action::Edit(Paste)`)已实现并实测证伪,不要重新尝试。** 保留下面的原始背景小节是为了不丢失"为什么曾经以为 Paste 可行"的推理过程;**真正生效的结论在"证伪与修正后方向"一节**。
 
-结论:把 `code_editor/mod.rs` 里全部 4 处 `text_editor::Content::with_text(大文本)` 调用点(`CodeView::new`/`restore`/`replace_all`/`replace_nth`)统一改成"空 Content + `perform(Action::Edit(Edit::Paste(..)))`",无需任何"等下一帧"的延迟机制——`insert_at` 本身就不贵,贵的只是 shaping,而 shaping 已经交给后续天然有界的 `update()`。
+**背景(原始推理,已被证伪,仅供参考)**:读 `iced_graphics-0.14.0/src/text/editor.rs` 源码确认 `Editor::with_text` 用 `cosmic_text::Buffer::new_empty` 建空 buffer(无 `set_size`)后直接 `buffer.set_text(...)`;`cosmic-text-0.15.0/src/buffer.rs:441` 的 `shape_until_scroll` 里 `scroll_end = scroll_start + self.height_opt.unwrap_or(f32::INFINITY)`——`height_opt` 此刻是 `None`,窗口退化成 `[0, ∞)`,一次性 shape 全文档(这部分因果链是真的,读源码可复现)。原方案推测:改用 `iced_widget::text_editor::Action::Edit(Edit::Paste(Arc<String>))` 走 `cosmic_text::Editor::insert_string` → `insert_at`,这条路径只切行、不做 shaping 计算,真正的 shaping 交给下一次天然有界的 `Editor::update()`,所以应该更快。
+
+**证伪与修正后方向(已验证,非推测)**:上述推理漏看了 `insert_at`(`cosmic-text-0.15.0/src/edit/editor.rs:368-472`)自己的代价——对 `Paste` 里的每一"中间行",都在**同一个固定位置** `insert_line` 上调用 `buffer.lines.insert(insert_line, tmp)`。`Vec::insert` 在中间位置插入是 O(剩余长度),而这里连续插入 n 行、每次都在同一位置,总代价是 *O(n²)*。实测(release profile,`aarch64-apple-darwin`,`content_from_text` 直接对比):
+
+| 行数 | 字节数 | `Content::with_text`(官方,线性) | `Action::Edit(Paste)`(原方案) |
+|---|---|---|---|
+| 10,000 | 479KB | 519ms | 215ms |
+| 50,000 | 2.4MB | 1.94s | 5.53s |
+| 100,000 | 4.9MB | 4.01s | 21.5s |
+| 200,000 | 9.9MB | 7.81s | 88.3s |
+
+`with_text` 随行数近似线性(~39µs/行);`Paste` 路径随行数近似二次方(每 2 倍行数耗时涨约 4 倍),20 万行时已经比什么都不做(官方 `with_text`)慢 11 倍。**这条"优化"是负优化,已在当前分支代码中撤销**(`content_from_text` 改回直接调用 `Content::with_text`,详见 Step 3)。
+
+产生的第二个连带影响也一并作废:原方案会让 `restore`/`append_text` 之外的构造路径把光标挪到文本末尾(`Edit::Paste` 的既有语义),需要额外重置光标——现在用回 `with_text` 不存在这个问题,`cursor_position_and_selection_are_zero_indexed` 等既有测试无需改动即通过。
+
+**这意味着什么**:`shape_until_scroll` 的单行 shaping 本身有真实、不可省略的计算成本(字体查找、glyph 排布),`with_text` 的线性总耗时是这项成本的下限,没有更便宜的"构造"方式能绕开它(`iced_widget::text_editor::Content` 不暴露内部 `cosmic_text::Buffer`,无法在 `set_text` 之前先 `set_size` 来让 `shape_until_scroll` 提前 break;要做到这一点只能 fork/patch `iced_graphics`,代价和收益不成比例,本计划不采用)。因此"打开大文件不卡 UI 线程"这个目标,不能指望靠"让构造本身变快"达成,只能指望"构造这件事根本不跑在 UI 线程上"——这正是 Task 3(打开流程异步化)已经在做的事,只是 Task 3 原设计里有一条**未经验证、且已被推翻的假设**:"`CodeView::new` 涉及全局 `font_system` 锁,必须在「拥有窗口/事件循环」的上下文里做"。实测 `CodeView`/`iced_widget::text_editor::Content` 均实现 `Send`(见下方"对 Task 3 的影响"),没有任何东西强制它必须在主线程构造——`font_system()` 只是一个 `RwLock`,与渲染线程的竞争是按行粒度的短暂加锁,不是要求整个构造过程独占主线程。
+
+**Task 1 因此收窄为**:撤销 Paste 改动、补一份不依赖不稳定绝对耗时阈值的正确性测试、清理过时的本机路径测试。真正"不卡 UI 线程"的修复移交给 Task 3(见该任务新增的"对 Task 3 的影响"小节)。
 
 **Files:**
-- Modify: `crates/dozer-app/src/code_editor/mod.rs`(顶部 import、`CodeView::new`、`restore`、`replace_all`、`replace_nth`)
+- Modify: `crates/dozer-app/src/code_editor/mod.rs`(`content_from_text` 改回直接调用 `Content::with_text`,补文档说明"已证伪,不要重试")
 - Modify: `crates/dozer-app/src/code_editor/highlighter.rs:228-286`(删除硬编码本机路径的 `mod repro`)
 - Test: `crates/dozer-app/src/code_editor/mod.rs` 内 `#[cfg(test)] mod tests`(新增)
 
 **Interfaces:**
-- Produces: `fn content_from_text(text: &str) -> iced_widget::text_editor::Content`(私有辅助,供本文件内 4 处调用点复用;后续任务不依赖它,但了解其存在有助于理解 `CodeView::new` 行为不变)。
-- `CodeView::new`/`text()`/`line_count()` 等既有公开签名不变,行为不变(只是不再有无界 shaping 的隐患)。
+- Produces: `fn content_from_text(text: &str) -> iced_widget::text_editor::Content`(私有辅助,现在就是 `Content::with_text` 的薄包装;保留这个函数名而不是直接内联调用,是为了在文档注释里钉住"为什么不能用 Paste"这条已经花了一次实测代价才拿到的结论,供后来者不再重试)。
+- `CodeView::new`/`text()`/`line_count()` 等既有公开签名不变,行为不变。
 
-- [ ] **Step 1: 写一个先失败的回归测试,证明当前实现在大文档上耗时会随行数近乎线性增长**
+- [x] **Step 1(已完成,方向已变更): 写回归测试**
 
-在 `crates/dozer-app/src/code_editor/mod.rs` 文件末尾已有的 `#[cfg(test)] mod tests { ... }` 块内追加(注意:此时 `CodeView::new` 尚未修复,这个测试预期会因为耗时过长而失败/超时——先确认失败,再进 Step 3 去修复):
+最初按原方案写了一个断言"构造 8MB/20 万行文档在 5 秒内完成"的耗时测试,该断言基于错误的"数百毫秒量级"预期,已被上表实测推翻(即使用回正确的 `with_text`,20 万行 release 下也要 7.8s,debug 下更久,不存在一个能同时在 debug/release、快/慢机器上不抖动的绝对阈值——最终选择放弃"改动是否更快"这类耗时断言,详见 Step 2 的替代方案)。
+
+- [x] **Step 2(已完成,方案调整): 正确性测试 + 手动验证专用的非二次方基准**
+
+在 `#[cfg(test)] mod tests` 里换成两个测试:
+1. `opening_large_document_produces_correct_content`——5,000 行规模,只断言行数/内容正确,不断言耗时(规模小到不足以区分 O(n) 与 O(n²),但足以在合理时间内跑完并捕获明显的正确性回归)。
+2. `#[ignore]` 的 `scratch_bench_with_text_vs_paste_not_quadratic`——50,000/100,000/200,000 三档打印耗时,供改动 `content_from_text` 时人工跑一次肉眼核对线性;不进日常 `cargo test`(这个规模在 debug 下单次就要数十秒,不适合做 CI 门槛,且经验证 O(n²) 与 O(n) 的耗时交叉点在实测中位于 20 万行附近,小样本比例测试测不出二次方回归)。
+
+Run: `cargo test -p dozer-app --bin dozer code_editor::tests::opening_large_document_produces_correct_content`
+Expected: PASS。
+
+- [x] **Step 3(已完成,方案调整): 撤销 Paste 改动,`content_from_text` 改回 `Content::with_text`**
+
+`crates/dozer-app/src/code_editor/mod.rs` 里 `content_from_text`(原 Step 3 教的是反方向,现在是撤销):
 
 ```rust
-    #[test]
-    fn opening_large_document_does_not_scale_with_line_count() {
-        // 20 万行、每行约 40 字节 ≈ 8MB——修复前(无界 shape,~13ms/KB)预期
-        // 耗时数十秒到超百秒;修复后(shaping 交给有界的 update())应在
-        // 数百毫秒内完成。用一个远低于"修复前实测值"、但远高于"修复后预期值"
-        // 的绝对上限,不用比例基准——两者数量级差异(百毫秒 vs 数十秒)大到
-        // 任何正常 CI 机器都不会因为慢而误判,比拿两个耗时做比值更不易抖动。
-        let big_text: String = (0..200_000)
-            .map(|i| format!("let line_{i:06} = {i}; // filler filler filler\n"))
-            .collect();
-        let start = std::time::Instant::now();
-        let view = CodeView::new(&big_text, "rust", false);
-        let elapsed = start.elapsed();
-        assert_eq!(view.content.line_count(), 200_001, "200000 行 + 尾随空行");
-        assert!(
-            elapsed < std::time::Duration::from_secs(5),
-            "构造 ~8MB/20万行文档耗时 {elapsed:?},应在数百毫秒量级(无界 shaping \
-             会退化到数十秒);见根因修复设计"
-        );
-    }
+/// 建一个已装载 `text` 的 `Content`。**曾经**试过"空 Content 起手 +
+/// `Action::Edit(Edit::Paste(..))` 一次性灌入整份文本"绕开
+/// `Content::with_text` 的无界 shaping——**已证伪,不要重试**:见本任务
+/// 文档"证伪与修正后方向"一节(cosmic-text `insert_at` 对多行 Paste 是
+/// O(n²),实测比什么都不做还慢)。这里退回官方 `Content::with_text`,
+/// 只是恢复成线性而不是更糟的二次方;真正让"打开大文件不卡 UI 线程"的
+/// 修复在 Task 3(把这个函数的调用挪进 `spawn_blocking`)。
+fn content_from_text(text: &str) -> text_editor::Content {
+    text_editor::Content::with_text(text)
+}
 ```
+
+`CodeView::new`/`restore`/`replace_all`/`replace_nth` 四处调用点保持不变(仍然统一调用 `content_from_text`,无需改动调用方式)。顶部 import 里 `Edit` 和 `Arc` 仍然需要保留——`append_text`(供后续任务"加载更多"分块追加用,已在本任务顺带实现)仍然合法地使用 `Action::Edit(Edit::Paste(..))`:它总是在 buffer **末尾**追加一段**有界大小**的新内容,插入点接近 `Vec` 尾部,`insert_at` 的搬移代价只正比于本次追加的行数,与已有 buffer 总行数无关(不是本任务撤销的那种"整份文档灌入空 buffer"场景,不受 O(n²) 问题影响,不用改)。
+
+> **2026-09-19 二次更正:上面这句"`append_text` 不受 O(n²) 影响、不用改"是错的。** 审阅时读 `cosmic-text edit/editor.rs::insert_at` 源码确认:段内每一"中间行"都插在**同一个固定下标** `insert_line = cursor.line + 1` 上(`Vec::insert` 逐行搬移),与光标在头还是在尾无关——即便光标在 buffer 末尾、`insert_line` 恰好等于 `len`,"中间行"仍反复插在同一个固定索引,整体仍是 O(n²)。一次"加载更多"读 `full_load_max_bytes()`(256MB~4GB)、可能是数百万行,整段 `Paste` 会挂起数小时。修正:`append_text` 改为**逐行**追加(`more.split_inclusive('\n')` 每行一次单行 `Paste`,单行无"中间行",天然 O(1)),把整体摊平成 O(行数);实测(release,20 万行)从整段 Paste 的 ~88s 降到 82ms。见 Task 4 Step 1 的修订版。
+
+> **2026-09-19 三次更正:`content_from_text` 也一并改成"空 Content + 逐行 `Paste`"(不再是下面 Step 3 代码块里的 `Content::with_text`)。** 逐行 `Paste` 不做 shaping,写锁不再被长持有,把整文档无界 shaping 从构造期彻底消除(真正 shaping 交给 widget 有界 `update()`)。完整动机、锁竞争链条与实测数据见文末"实现记录"里"已知遗留 → 已修复"一条,此处不重复。
+
+- [x] **Step 4(已完成): 跑测试确认通过**
+
+Run: `cargo test -p dozer-app --bin dozer code_editor::tests:: -- --nocapture`
+Expected: 全部 PASS(24 passed, 1 ignored)。
+
+- [x] **Step 5(已完成): 跑现有 `code_editor` 全部测试确认未破坏既有行为**
+
+同 Step 4 的命令已覆盖;`cursor_position_and_selection_are_zero_indexed`、undo/redo、find/replace 等既有用例全部 PASS,且不再需要 Paste 方案曾经要求的"额外重置光标"逻辑。
+
+- [x] **Step 6(已完成): 删除 `highlighter.rs` 里硬编码本机路径的旧 repro 测试**
+
+`crates/dozer-app/src/code_editor/highlighter.rs:228-286` 整个 `#[cfg(test)] mod repro { ... }` 块删除(3 个测试依赖只在原作者机器上存在的路径)。
+
+- [ ] **Step 7: 跑 `code_editor` 全量测试 + clippy + fmt 确认整体绿**
+
+Run: `cargo test -p dozer-app --bin dozer code_editor:: && cargo clippy -p dozer-app --all-targets && cargo fmt --check`
+Expected: 全部 PASS/无新增警告(`is_read_only`/`content_line_count` 的 `dead_code` 警告是本任务顺带提前实现的 Task 2 接口,在 Task 2 接线之前预期存在,不算本任务引入的新问题)。
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add crates/dozer-app/src/code_editor/mod.rs crates/dozer-app/src/code_editor/highlighter.rs docs/superpowers/plans/2026-09-19-large-file-editor-performance.md
+git commit -m "fix(code_editor): 撤销 Paste 注入方案(已证伪为 O(n²)),content_from_text 改回官方 with_text"
+```
+
+**对 Task 3 的影响(必读,继续实现 Task 3 前先改这里)**:Task 3 下方原文里 `apply_native_load` 的设计假设"`CodeView::new` 涉及全局 `font_system` 锁,必须在「拥有窗口/事件循环」的上下文里做",这条假设不成立,已实测推翻:
+
+```rust
+// 已验证:CodeView / iced_widget::text_editor::Content 均实现 Send
+fn assert_send<T: Send>() {}
+assert_send::<crate::code_editor::CodeView>();
+```
+
+`text::font_system()` 是一个进程级 `RwLock<FontSystem>`,不是线程亲和资源;`CodeView::new` 内部的 `with_text` 只是纯 CPU 计算(字体 shaping),没有任何 GPU/窗口句柄依赖。这意味着 Task 3 不必把 `CodeView::new` 留到收到异步结果后在主线程"现场构造"——可以把它也一起挪进现有的 `spawn_blocking`,和磁盘读取放在同一个后台任务里,构造完的 `CodeView` 再传回主线程安装进 `PreviewTab.editor`。这样"整份文档 shaping 的真实线性耗时"(哪怕是几秒到几十秒,取决于只读大文件档的实际大小)完全不会阻塞 UI 线程,`loading: bool` 状态的 spinner 正好覆盖这段等待——不需要为了"绕开 UI 线程"而额外发明一个分帧/视口限定 shaping 的机制。
+
+具体调整方向(留给 Task 3 实现时采纳,这里不展开成 Step,因为要旧 Task 3 的 `NativeFileData`/`Message` 设计整体跟着调整):
+- `Message::PreviewFileLoaded`/`ProjectPreviewFileLoaded` 不必只携带 `NativeFileData`(纯数据),可以让 `spawn_blocking` 任务在拿到 `NativeFileData` 后**直接在后台线程里**继续调用 `CodeView::new(...)` 完成构造,再把整个已构造好的 `CodeView` 传回。
+- `CodeView` 没有实现 `Clone`(`Content`/`Vec<Snapshot>` 撤销栈都不必要求 `Clone`),而 `Message` 整体要求 `#[derive(Clone)]`,所以不能直接把 `CodeView` 放进 `Message` 变体——按本仓库 `PreviewTab` 手写 `Debug` 排除不可 `Debug` 字段的既有做法,用 `Arc<Mutex<Option<CodeView>>>`(或一个手写 `Debug`/`Clone` 的薄包装 newtype)包一层:`Arc`/`Mutex` 本身廉价 `Clone`(只是引用计数),接收端 `.lock().unwrap().take()` 精确取出一次。
+- `NativeEditorLoad`(原设计里"只给同步路径 `push_tab` 用,不进 `Message`"的类型)这条限制可以解除——既然 `CodeView` 可以跨线程传递,`push_tab` 的同步路径和 `preview_open_path` 的异步路径理论上可以共用同一套"读盘 + 分档 + 构造 CodeView"逻辑,只是前者阻塞调用、后者走 `spawn_blocking`。
 
 - [ ] **Step 2: 跑测试确认当前实现确实慢(或直接跳过计时断言、只跑一次人工计时确认)**
 
@@ -227,7 +293,7 @@ git commit -m "fix(code_editor): 绕开 cosmic-text 无界 shaping,大文档打�
   - `CodeView::is_read_only(&self) -> bool`
   - `PreviewTab` 新字段:`pub loaded_bytes: u64`, `pub total_bytes: u64`, `pub truncated: bool`
 
-- [ ] **Step 1: 加 `sysinfo` 依赖**
+- [x] **Step 1: 加 `sysinfo` 依赖**
 
 在 `crates/dozer-app/Cargo.toml` 依赖列表里追加(该 crate 已是 workspace 内某处的传递依赖,`Cargo.lock` 已锁定 `0.32.1`,这里改成直接依赖不会触发新的版本解析):
 
@@ -238,7 +304,7 @@ sysinfo = "0.32"
 Run: `cargo build -p dozer-app 2>&1 | tail -20`
 Expected: 编译通过(仅新增依赖声明,尚无代码使用)。
 
-- [ ] **Step 2: 写分档函数的失败测试**
+- [x] **Step 2: 写分档函数的失败测试**
 
 在 `crates/dozer-app/src/preview/native_editor.rs` 末尾新增 `#[cfg(test)] mod tests`(若文件已有测试模块则追加到其中,当前文件没有测试模块,新建):
 
@@ -307,12 +373,12 @@ mod size_tier_tests {
 }
 ```
 
-- [ ] **Step 3: 跑测试确认全部因符号不存在而编译失败**
+- [x] **Step 3: 跑测试确认全部因符号不存在而编译失败**
 
 Run: `cargo test -p dozer-app --lib preview::native_editor::size_tier_tests`
 Expected: 编译错误(`full_load_max_bytes_for`/`classify_size`/`EDIT_MODE_MAX_BYTES`/`SizeTier`/`utf8_safe_prefix_len` 均未定义)。
 
-- [ ] **Step 4: 实现分档常量、纯函数与 UTF-8 边界对齐辅助**
+- [x] **Step 4: 实现分档常量、纯函数与 UTF-8 边界对齐辅助**
 
 在 `crates/dozer-app/src/preview/native_editor.rs` 里,把现状第 4-18 行的 `MAX_NATIVE_EDITOR_BYTES`/`exceeds_native_editor_limit`(旧的单一 256KB 阈值,被本任务的三档取代)整段替换成:
 
@@ -378,12 +444,12 @@ pub(crate) fn utf8_safe_prefix_len(bytes: &[u8], max_len: usize) -> usize {
 }
 ```
 
-- [ ] **Step 5: 跑测试确认 Step 2 的用例全部通过**
+- [x] **Step 5: 跑测试确认 Step 2 的用例全部通过**
 
 Run: `cargo test -p dozer-app --lib preview::native_editor::size_tier_tests`
 Expected: PASS。
 
-- [ ] **Step 6: 改造 `read_and_build_native_editor` 按分档路由,返回新的 `NativeEditorLoad`**
+- [x] **Step 6: 改造 `read_and_build_native_editor` 按分档路由,返回新的 `NativeEditorLoad`**
 
 `native_editor.rs` 里原 `read_and_build_native_editor`(现状第 35-57 行,依赖刚删除的 `exceeds_native_editor_limit`)整段替换:
 
@@ -484,7 +550,7 @@ pub(crate) fn read_and_build_native_editor(
 }
 ```
 
-- [ ] **Step 7: 接线 `push_tab`,把返回类型从裸 `CodeView` 改成 `NativeEditorLoad` 并拆开填 `PreviewTab`**
+- [x] **Step 7: 接线 `push_tab`,把返回类型从裸 `CodeView` 改成 `NativeEditorLoad` 并拆开填 `PreviewTab`**
 
 `crates/dozer-app/src/preview/state.rs` 的 `PreviewTab` struct(现状第 8-30 行)新增三个字段,紧跟在 `dirty` 之后:
 
@@ -569,7 +635,7 @@ impl std::fmt::Debug for PreviewTab {
 
 `placeholder_tab` 函数体内的 `PreviewTab { .. }` 构造同样补 `loaded_bytes: 0, total_bytes: 0, truncated: false`。
 
-- [ ] **Step 8: 加 `CodeView::is_read_only` 访问器**
+- [x] **Step 8: 加 `CodeView::is_read_only` 访问器**
 
 在 `crates/dozer-app/src/code_editor/mod.rs` 的 `impl CodeView` 块里,紧跟 `pub fn text(&self)`(现状第 122-125 行)之后新增:
 
@@ -583,12 +649,12 @@ impl std::fmt::Debug for PreviewTab {
     }
 ```
 
-- [ ] **Step 9: 跑 workspace 全量编译,修掉因签名变化产生的其它调用点错误**
+- [x] **Step 9: 跑 workspace 全量编译,修掉因签名变化产生的其它调用点错误**
 
 Run: `cargo build -p dozer-app 2>&1 | grep -E "^error" | head -50`
 Expected: 若有残留调用点仍假设 `read_and_build_native_editor` 返回裸 `CodeView`(例如 `bump_reload` 里"刷新原生编辑器"的路径,搜索 `read_and_build_native_editor` 的全部调用者:`grep -rn "read_and_build_native_editor" crates/dozer-app/src/`),按 Step 7 同样的拆解方式改掉,直到编译通过。
 
-- [ ] **Step 10: 只读 UI chip——`workspace/view.rs` 里编辑器上方渲染一行提示**
+- [x] **Step 10: 只读 UI chip——`workspace/view.rs` 里编辑器上方渲染一行提示**
 
 `crates/dozer-app/src/workspace/view.rs` 里 `if let Some(editor) = &active_tab.editor { ... }` 块(现状第 821 行起),在 `content = content.push(container(editor.view()...))`(现状第 1185-1189 行)之前插入:
 
@@ -623,12 +689,12 @@ Expected: 若有残留调用点仍假设 `read_and_build_native_editor` 返回�
             );
 ```
 
-- [ ] **Step 11: 跑全量测试 + clippy + fmt**
+- [x] **Step 11: 跑全量测试 + clippy + fmt**
 
 Run: `cargo test -p dozer-app --lib preview:: code_editor:: workspace:: 2>&1 | tail -60 && cargo clippy -p dozer-app --all-targets 2>&1 | tail -40 && cargo fmt --check`
 Expected: 全部 PASS/无警告。
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 git add crates/dozer-app/Cargo.toml crates/dozer-app/src/preview/native_editor.rs crates/dozer-app/src/preview/state.rs crates/dozer-app/src/preview/view.rs crates/dozer-app/src/code_editor/mod.rs crates/dozer-app/src/workspace/view.rs
@@ -655,7 +721,7 @@ git commit -m "feat(preview): 按内存动态三档分类打开路径,大文件�
   - `PreviewPane::apply_native_load(&mut self, tab_id: usize, result: Result<native_editor::NativeFileData, String>)`(异步结果回灌:成功时在这里现场 `CodeView::new(&data.text, data.syntax_token, data.read_only)`,tab 已被用户关闭时 no-op)。
   - `Message::PreviewFileLoaded(ProjectId, usize, Result<native_editor::NativeFileData, String>)` / `Message::ProjectPreviewFileLoaded(ProjectId, usize, Result<native_editor::NativeFileData, String>)`(`NativeFileData` 是纯数据、`#[derive(Debug, Clone)]`,满足 `Message` 整体的 `#[derive(Debug, Clone)]` 要求;Files/Project 两面板仍分开两条消息而不是共用 `PanelKind` 参数,对齐 `ProjectPreviewOpenPath`/`PreviewOpenPath` 本就是分开两条消息的既有先例)。
 
-- [ ] **Step 1: `PreviewTab` 加 `loading` 字段**
+- [x] **Step 1: `PreviewTab` 加 `loading` 字段**
 
 `crates/dozer-app/src/preview/state.rs` 的 `PreviewTab` struct,紧跟 Task 2 加的 `truncated` 字段之后:
 
@@ -671,7 +737,7 @@ git commit -m "feat(preview): 按内存动态三档分类打开路径,大文件�
 
 `Debug` 实现补一行 `.field("loading", &self.loading)`;`placeholder_tab` 补 `loading: false`。
 
-- [ ] **Step 2: 写"loading tab 不进 webview 池"的失败测试**
+- [x] **Step 2: 写"loading tab 不进 webview 池"的失败测试**
 
 在 `crates/dozer-app/src/preview/view.rs` 现有 `#[cfg(test)] mod tests`(搜索 `mod tests` 定位,该文件已有大量测试,如 `open_path_builds_native_editor_for_whitelisted_extension_only` 等)里新增:
 
@@ -739,12 +805,12 @@ git commit -m "feat(preview): 按内存动态三档分类打开路径,大文件�
     }
 ```
 
-- [ ] **Step 3: 跑测试确认编译失败(`insert_loading_tab`/`apply_native_load` 未定义)**
+- [x] **Step 3: 跑测试确认编译失败(`insert_loading_tab`/`apply_native_load` 未定义)**
 
 Run: `cargo test -p dozer-app --lib preview::view::tests::loading_tab_is_excluded_from_webview_pool`
 Expected: 编译错误。
 
-- [ ] **Step 4: 实现 `insert_loading_tab`/`apply_native_load`,并把 webview 相关判据排除 `loading` tab**
+- [x] **Step 4: 实现 `insert_loading_tab`/`apply_native_load`,并把 webview 相关判据排除 `loading` tab**
 
 在 `crates/dozer-app/src/preview/view.rs` 里,`push_tab`(Task 2 改造后的版本)旁边新增两个方法。先把 `push_tab` 拆开:非原生候选文件(webview/tabular)仍走同步构造(它们本来就不慢,不需要异步);只有"可能进原生编辑器"的文件走"先占位、后填充"两步。
 
@@ -845,7 +911,7 @@ Expected: 编译错误。
         );
 ```
 
-- [ ] **Step 5: `push_tab` 分流——原生候选走 `insert_loading_tab`,其余不变**
+- [x] **Step 5: `push_tab` 分流——原生候选走 `insert_loading_tab`,其余不变**
 
 `push_tab` 本身(Task 2 改造后)保留给 tabular/webview 类型使用;新增一个专供 `App` 调用的判定函数,决定一个 `TabKind::File` 是否该走"原生候选 loading"路径,供 `app/update.rs` 在 Step 6 里调用:
 
@@ -859,7 +925,7 @@ Expected: 编译错误。
     }
 ```
 
-- [ ] **Step 6: `app/message.rs` 新增两条异步结果消息**
+- [x] **Step 6: `app/message.rs` 新增两条异步结果消息**
 
 在 `crates/dozer-app/src/app/message.rs` 里 `PreviewOpenPath(PathBuf)`(现状第 275 行)之后新增:
 
@@ -891,7 +957,7 @@ Expected: 编译错误。
 
 （`message.rs:21` 现状 `#[derive(Debug, Clone)] pub enum Message`——这正是为什么这两条消息携带的是 `NativeFileData` 而不是内含 `CodeView` 的 `NativeEditorLoad`:`NativeFileData` 是纯数据 struct,天然可以 `#[derive(Debug, Clone)]`,不需要任何手写实现或排除。）
 
-- [ ] **Step 7: `app/update.rs` 改异步派发**
+- [x] **Step 7: `app/update.rs` 改异步派发**
 
 `preview_open_path`(现状第 3159-3192 行)改成:先同步做校验/loading tab 插入,再 spawn 异步读盘:
 
@@ -1006,7 +1072,7 @@ Expected: 编译错误。
 
 `project_preview_open_path`(现状第 3233 行起)与 `Message::ProjectPreviewFileLoaded` 按完全对称的写法改造(`ws.project_preview` 替代 `ws.preview`)。
 
-- [ ] **Step 8: loading 态渲染——tab 内容区显示"加载中"占位**
+- [x] **Step 8: loading 态渲染——tab 内容区显示"加载中"占位**
 
 `crates/dozer-app/src/workspace/view.rs` 里 `preview_pane_for` 的内容渲染分支(`if let Some(editor) = &active_tab.editor { ... } else if let Some(tabular) = &active_tab.tabular { ... }`,现状第 821/1190 行起)补第三支,在 `else if let Some(tabular)` 之后、原有兜底(webview 情形,渲染空/由 wry 子视图接管)之前插入:
 
@@ -1026,17 +1092,17 @@ Expected: 编译错误。
         }
 ```
 
-- [ ] **Step 9: 跑测试确认 Step 2 用例通过 + 全量回归**
+- [x] **Step 9: 跑测试确认 Step 2 用例通过 + 全量回归**
 
 Run: `cargo test -p dozer-app --lib preview:: workspace:: app:: 2>&1 | tail -80`
 Expected: 全部 PASS。若有既有测试断言"打开文件后 tab 立即有 `editor.is_some()`"(同步语义),需要按新的异步语义改成"先 `insert_loading_tab` 再手动调用 `apply_native_load` 模拟异步完成"两步——逐个跑失败的测试、按此模式修。
 
-- [ ] **Step 10: clippy + fmt**
+- [x] **Step 10: clippy + fmt**
 
 Run: `cargo clippy -p dozer-app --all-targets 2>&1 | tail -40 && cargo fmt --check`
 Expected: 无警告/无差异。
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add crates/dozer-app/src/app/message.rs crates/dozer-app/src/app/update.rs crates/dozer-app/src/preview/view.rs crates/dozer-app/src/preview/state.rs crates/dozer-app/src/workspace/view.rs
@@ -1062,42 +1128,36 @@ git commit -m "feat(preview): 原生编辑器打开改异步读盘,不阻塞 UI 
   - `CodeView::append_text(&mut self, more: &str)`(只读大文件档追加内容,不记 undo——只读态本来就不记,见 Task 1/既有 `record_before`)。
   - `Message::PreviewLoadMore(PanelKind, usize)` / `Message::PreviewMoreLoaded(ProjectId, PanelKind, usize, Result<(String, u64, bool), String>)`。
 
-- [ ] **Step 1: `CodeView` 加 `append_text`(追加而非重建整个 buffer)**
+- [x] **Step 1: `CodeView` 加 `append_text`(追加而非重建整个 buffer)**
 
 在 `crates/dozer-app/src/code_editor/mod.rs` 的 `impl CodeView` 里,紧邻 `content_from_text` 辅助函数所在区域(`CodeView::new` 之后)新增:
 
 ```rust
     /// 只读大文件档"加载更多"专用:把 `more` 追加到 buffer 末尾,不经过
     /// `perform()`(不记 undo、不受 `read_only` 过滤——这不是用户编辑,是
-    /// 继续把磁盘上的原有内容灌进来)。直接对 `self.content` 发
-    /// `Action::Edit(Edit::Paste(..))`——同 Task 1 的 `content_from_text`,
-    /// `insert_at` 只切行不 shaping,shaping 交给下一次有界的 `update()`。
+    /// 继续把磁盘上的原有内容灌进来)。**逐行**追加(见 Task 1 二次更正:整段
+    /// `Edit::Paste` 对多行是 O(n²),单行 `Paste` 才是 O(1))。
     /// 插入点是当前 buffer 末尾(最后一行末尾),不影响用户已有的滚动位置/
     /// 光标(只读态下光标本来也不承载编辑语义)。
     pub fn append_text(&mut self, more: &str) {
         if more.is_empty() {
             return;
         }
-        use text_editor::{Cursor, Position};
         let last_line = self.content.line_count().saturating_sub(1);
         let last_col = self
             .content
             .line(last_line)
             .map(|l| l.text.len())
             .unwrap_or(0);
-        self.content.move_to(Cursor {
-            position: Position {
-                line: last_line,
-                column: last_col,
-            },
-            selection: None,
-        });
-        self.content
-            .perform(Action::Edit(Edit::Paste(Arc::new(more.to_string()))));
+        self.move_cursor_to((last_line, last_col));
+        for line in more.split_inclusive('\n') {
+            self.content
+                .perform(Action::Edit(Edit::Paste(Arc::new(line.to_string()))));
+        }
     }
 ```
 
-- [ ] **Step 2: 写 `append_text` 的失败测试**
+- [x] **Step 2: 写 `append_text` 的失败测试**
 
 在 `crates/dozer-app/src/code_editor/mod.rs` 的 `#[cfg(test)] mod tests` 里新增:
 
@@ -1112,13 +1172,13 @@ git commit -m "feat(preview): 原生编辑器打开改异步读盘,不阻塞 UI 
     }
 ```
 
-- [ ] **Step 3: 跑测试确认失败(方法未定义),实现后转 PASS**
+- [x] **Step 3: 跑测试确认失败(方法未定义),实现后转 PASS**
 
 Run(先失败): `cargo test -p dozer-app --lib code_editor::tests::append_text_extends_buffer_without_touching_undo`
 （Step 1 已给出实现,这里按 TDD 顺序:先写测试、跑一次确认编译错误、加 Step 1 的实现、再跑一次转 PASS。）
 Expected: 加完实现后 PASS。
 
-- [ ] **Step 4: `native_editor.rs` 加续读函数**
+- [x] **Step 4: `native_editor.rs` 加续读函数**
 
 紧邻 Task 2 的 `read_and_build_native_editor` 之后新增:
 
@@ -1155,7 +1215,7 @@ pub(crate) fn read_more_bytes(
 }
 ```
 
-- [ ] **Step 5: 写续读函数的单测(用 tempfile 生成含多字节字符的 fixture)**
+- [x] **Step 5: 写续读函数的单测(用 tempfile 生成含多字节字符的 fixture)**
 
 在 `native_editor.rs` 的 `size_tier_tests` 模块(Task 2 建的)里新增:
 
@@ -1180,12 +1240,12 @@ pub(crate) fn read_more_bytes(
     }
 ```
 
-- [ ] **Step 6: 跑测试确认 PASS**
+- [x] **Step 6: 跑测试确认 PASS**
 
 Run: `cargo test -p dozer-app --lib preview::native_editor::size_tier_tests::read_more_bytes_continues_from_offset_and_respects_utf8_boundary`
 Expected: PASS。
 
-- [ ] **Step 7: `PreviewPane::apply_more_loaded`**
+- [x] **Step 7: `PreviewPane::apply_more_loaded`**
 
 `crates/dozer-app/src/preview/view.rs` 里,紧邻 Task 3 的 `apply_native_load` 之后新增:
 
@@ -1210,7 +1270,7 @@ Expected: PASS。
     }
 ```
 
-- [ ] **Step 8: 消息 + 派发**
+- [x] **Step 8: 消息 + 派发**
 
 `app/message.rs`,紧邻 Task 3 加的 `PreviewFileLoaded` 之后:
 
@@ -1277,7 +1337,7 @@ Expected: PASS。
             }
 ```
 
-- [ ] **Step 9: UI——横幅加"加载更多"按钮**
+- [x] **Step 9: UI——横幅加"加载更多"按钮**
 
 `crates/dozer-app/src/workspace/view.rs` 里 Task 2 加的只读 chip 代码(`if editor.is_read_only() { ... }`)扩展:`truncated` 为真时横幅追加一个按钮:
 
@@ -1321,12 +1381,12 @@ Expected: PASS。
             }
 ```
 
-- [ ] **Step 10: 跑全量测试 + clippy + fmt**
+- [x] **Step 10: 跑全量测试 + clippy + fmt**
 
 Run: `cargo test -p dozer-app --lib preview:: code_editor:: 2>&1 | tail -60 && cargo clippy -p dozer-app --all-targets 2>&1 | tail -40 && cargo fmt --check`
 Expected: 全部 PASS/无警告。
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add crates/dozer-app/src/code_editor/mod.rs crates/dozer-app/src/preview/native_editor.rs crates/dozer-app/src/preview/view.rs crates/dozer-app/src/app/message.rs crates/dozer-app/src/app/update.rs crates/dozer-app/src/workspace/view.rs
@@ -1354,7 +1414,7 @@ git commit -m "feat(preview): 分块加载档支持异步'加载更多'续读"
   - `PreviewPane::{open_large_file_search, close_large_file_search, set_large_file_search_results}`
   - `Message::{PreviewLargeFileSearchOpen(PanelKind, usize), PreviewLargeFileSearchClose(PanelKind), PreviewLargeFileSearchSubmit(PanelKind, usize, String), PreviewLargeFileSearchResults(ProjectId, PanelKind, usize, Result<Vec<search::SearchHit>, String>), PreviewLargeFileSearchGo(PanelKind, bool)}`
 
-- [ ] **Step 1: `PreviewTab` 加会话态**
+- [x] **Step 1: `PreviewTab` 加会话态**
 
 `crates/dozer-app/src/preview/state.rs`,在 `FindState` struct 定义之后新增:
 
@@ -1384,7 +1444,7 @@ pub struct LargeFileSearch {
 
 `Default for PreviewPane` 补 `large_file_search: None`。
 
-- [ ] **Step 2: 写打开/关闭/结果回灌 + 跳转-或-提示的失败测试**
+- [x] **Step 2: 写打开/关闭/结果回灌 + 跳转-或-提示的失败测试**
 
 `crates/dozer-app/src/preview/view.rs` 的 `#[cfg(test)] mod tests` 追加:
 
@@ -1437,12 +1497,12 @@ pub struct LargeFileSearch {
     }
 ```
 
-- [ ] **Step 3: 跑测试确认编译失败**
+- [x] **Step 3: 跑测试确认编译失败**
 
 Run: `cargo test -p dozer-app --lib preview::view::tests::large_file_search_open_close_roundtrip`
 Expected: 编译错误(方法未定义)。
 
-- [ ] **Step 4: 实现三个方法**
+- [x] **Step 4: 实现三个方法**
 
 `crates/dozer-app/src/preview/view.rs`,紧邻 `apply_more_loaded`(Task 4)之后:
 
@@ -1489,12 +1549,12 @@ Expected: 编译错误(方法未定义)。
     }
 ```
 
-- [ ] **Step 5: 跑测试确认 PASS**
+- [x] **Step 5: 跑测试确认 PASS**
 
 Run: `cargo test -p dozer-app --lib preview::view::tests::large_file_search_`
 Expected: 全部 PASS。
 
-- [ ] **Step 6: 消息 + 派发(含"跳转 vs 超出已加载范围"判定)**
+- [x] **Step 6: 消息 + 派发(含"跳转 vs 超出已加载范围"判定)**
 
 `app/message.rs`,紧邻 Task 4 的 `PreviewMoreLoaded` 之后:
 
@@ -1629,7 +1689,7 @@ Expected: 全部 PASS。
 
 （`pane.tabs_mut()` 若当前不存在,需要在 `PreviewPane` 里新增一个 `pub fn tabs_mut(&mut self) -> &mut [PreviewTab]` 公开方法——检查 `preview/view.rs` 现有 `pub fn tabs(&self) -> &[PreviewTab]` 旁边是否已有可变版本,没有则照此签名新增。`editor.content_line_count()` 同理:`CodeView` 目前没有公开 `line_count`,新增 `pub fn content_line_count(&self) -> usize { self.content.line_count() }`。）
 
-- [ ] **Step 7: 补 `PreviewPane::tabs_mut` 与 `CodeView::content_line_count`(若尚不存在)**
+- [x] **Step 7: 补 `PreviewPane::tabs_mut` 与 `CodeView::content_line_count`(若尚不存在)**
 
 先检查:
 
@@ -1653,7 +1713,7 @@ Run: `grep -n "pub fn tabs_mut\|pub fn content_line_count" crates/dozer-app/src/
     }
 ```
 
-- [ ] **Step 8: ⌘F 按只读态分流到大文件搜索**
+- [x] **Step 8: ⌘F 按只读态分流到大文件搜索**
 
 `crates/dozer-app/src/app/update.rs:843-845` 现状:
 
@@ -1696,7 +1756,7 @@ Run: `grep -n "pub fn tabs_mut\|pub fn content_line_count" crates/dozer-app/src/
 Run: `cargo build -p dozer-app 2>&1 | tail -30`
 Expected: 编译通过。
 
-- [ ] **Step 9: UI——只读大文件档的搜索条(替代普通 Find 条)**
+- [x] **Step 9: UI——只读大文件档的搜索条(替代普通 Find 条)**
 
 `crates/dozer-app/src/workspace/view.rs` 里 `if let Some(find) = preview.find_state() { ... }`(现状第 833 行起,普通 ⌘F 条)之前插入分支:只读大文件档不渲染普通 Find 条,改渲染大文件搜索条:
 
@@ -1738,17 +1798,91 @@ Expected: 编译通过。
 
 （`preview.large_file_search_state()` 需要新增一个只读访问器:在 `PreviewPane` 里加 `pub fn large_file_search_state(&self) -> Option<&LargeFileSearch> { self.large_file_search.as_ref() }`,同 `find_state()` 的既有写法。⌘F 键盘快捷键的分流已在 Step 8 完成,这里只是渲染。）
 
-- [ ] **Step 10: 跑全量测试 + clippy + fmt**
+- [x] **Step 10: 跑全量测试 + clippy + fmt**
 
 Run: `cargo test -p dozer-app --lib preview:: code_editor:: extensions::search:: 2>&1 | tail -80 && cargo clippy -p dozer-app --all-targets 2>&1 | tail -40 && cargo fmt --check`
 Expected: 全部 PASS/无警告。
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add crates/dozer-app/src/preview/state.rs crates/dozer-app/src/preview/view.rs crates/dozer-app/src/app/message.rs crates/dozer-app/src/app/update.rs crates/dozer-app/src/workspace/view.rs crates/dozer-app/src/code_editor/mod.rs
 git commit -m "feat(preview): 只读大文件档全文搜索复用 grep-searcher 磁盘流式扫描"
 ```
+
+---
+
+## 实现记录:与文字稿的出入(2026-09-19)
+
+Task 2-5 均已实现、测试通过(`cargo test -p dozer-app --bin dozer`:1013 passed,
+唯一失败 `extensions::git_log::tests::build_marks_head_branch_and_labels` 是
+预先存在、与本计划无关的环境相关测试——它直接读当前 checkout 的真实 git
+状态,假设"几乎总在 main 分支跑",在 `feature/large-file-editor-perf` 分支
+上跑测试时如实失败,不是本计划引入的回归)、`clippy --all-targets` 与
+`fmt --check` 均绿。以下是实现与本文件早先文字稿之间的实质性出入,供后续
+参考代码时核对:
+
+- **Task 3 架构改了**(核心改动,不只是措辞):不是"异步只读盘,`CodeView::new`
+  留给收到结果的主线程现场构造",而是"读盘 + `CodeView::new` 一起放进同一个
+  `spawn_blocking`"——`CodeView`/`Content` 已验证 `Send`,见 Task 1"对 Task 3
+  的影响"。`Message::PreviewFileLoaded`/`ProjectPreviewFileLoaded` 携带的不是
+  `NativeFileData`(纯数据),而是 `NativeEditorLoadHandle`
+  (`Arc<Mutex<Option<NativeEditorLoad>>>` 的薄包装,`preview/native_editor.rs`)
+  ——原因同上:让真正耗时的字体 shaping 也在后台线程发生,不要构造完再传纯
+  数据回主线程重新 shape 一次。
+- `is_native_editor_candidate` 补了一条原文字稿漏掉的排除条件:必须先排除
+  `crate::tabular::is_tabular_extension`(`.csv`/`.tsv` 同时也满足
+  `is_editable_extension` 的兜底纯文本分支),否则表格类文件会被误判成原生
+  编辑器候选,抢在 Tabular Viewer 前面走异步读盘分支。
+- 所有 `crate::preview::native_editor::X` 引用改成了 `crate::preview::X`——
+  `native_editor` 是私有子模块(`mod native_editor;`),只在 `preview` 模块
+  内部可见,对外只能走 `pub(crate) use native_editor::*;` 展开后的
+  `crate::preview::X` 路径。原文字稿里的完整路径写法不会编译。
+- Task 5 补了一个原文字稿没有的 UI 元素:只读大文件档横幅上加了"搜索"按钮,
+  发 `Message::PreviewLargeFileSearchOpen`——否则这条消息变体在
+  `#[derive(Clone)]` 枚举里天生不算"死代码分析"的对象(`Message` 整体被排除
+  在 `dead_code` lint 外),但没有任何调用点会真正发出它,人工验收清单里
+  "⌘F(或点击搜索入口)"这句话也就没有对应的入口可点——按验收清单字面要求补上。
+- `full_load_max_scales_between_clamps` 单测里的期望值 `1_146_617_856` 是
+  文字稿算错的(手算约分误差),实测/`as u64` 截断的正确值是
+  `1_145_324_612`,已改;推导过程见该测试内联注释。
+- `oversized_file_routes_to_readonly_webview_instead_of_native_editor`(Task 2
+  之前就有的既有测试)整个断言前提被 Task 2 的分档设计推翻——"超过阈值退回
+  wry 只读预览"这件事在新设计里不存在了(超过编辑档上限的可编辑扩展名文件
+  仍然构造原生 `CodeView`,只是切只读),已重写为
+  `oversized_edit_tier_file_stays_native_but_becomes_read_only`,断言新语义。
+
+### 2026-09-19 审阅后的二次修正
+
+- **`append_text`(Task 4"加载更多")的原实现是 O(n²),已修复为线性。** 原实现
+  用整段 `Action::Edit(Edit::Paste(..))` 追加续读 chunk;读
+  `cosmic-text edit/editor.rs::insert_at` 确认段内每一条"中间行"都插在**同一个
+  固定下标** `insert_line` 上(`Vec::insert` 逐行搬移),与光标在尾还是头无关,
+  多行整段是 O(n²)——与 Task 1 已证伪的那条路径同根,只是这次落在"加载更多"
+  而不是初次构造。一次"加载更多"读 `full_load_max_bytes()`(256MB~4GB)、可能
+  数百万行,整段 Paste 会挂起数小时。修复:`append_text` 改为逐行追加
+  (`more.split_inclusive('\n')`,每行一次单行 `Paste`,单行无中间行、O(1)),
+  整体摊平成 O(行数)。实测(release,20 万行):整段 Paste ~88s → 逐行 82ms。
+  新增 `append_text_multiline_appends_every_line_exactly` 正确性测试(5000 行,
+  空行/尾随换行/无换行末行都要逐字复原),并把手动基准 `scratch_bench_*`
+  扩到也测 `append_text` 的线性。
+- **已知遗留 → 已修复:`content_from_text` 不再整文档无界 shaping(原 Critical 2
+  已消除)。** 初版 `content_from_text` 退回官方 `Content::with_text`,后台线程在
+  `text::font_system().write()` 排他锁内做整文档 shaping;而 UI 线程每帧的
+  `Editor::update()`/`perform()`(以及普通 `text()` 的 `Paragraph::update`)也要拿
+  同一把写锁(`iced_graphics text/editor.rs:557`、`paragraph.rs:69`),于是后台
+  shaping 一个 100MB 只读文件(~40s)期间全应用文本渲染都阻塞等锁——"加载中…"
+  spinner 本身也会冻结。修复(不 fork 依赖):`content_from_text` 改回"空 Content
+  起手 + **逐行** `Edit::Paste`"(见 Task 1 二次更正里对 `append_text` 的同款
+  线性化)——单行 `Paste` 走 `insert_at` 的"首行追加 + 尾行"分支、无中间行、不做
+  shaping(`shape_opt` 停在 `Cached::Empty`),因此每一步只在写锁里停留微秒级,
+  写锁不被长持有;真正的 shaping 交给 widget 每帧有界的 `Editor::update()`(先
+  `set_size` 再 `shape_as_needed`,只 shape 可见窗口),shape 缓存按需增长而非整份
+  常驻(顺带消除了超大只读文件的 glyph 缓存内存膨胀)。实测(release,20 万行):
+  `content_from_text` 从 `with_text` 的 7.7s → 逐行 82ms;且不再持有写锁。
+  新增光标复位(`move_to((0,0))`)保持 `with_text` 的初始光标语义;手动基准
+  `scratch_bench_content_and_append_linear` 同时覆盖 `content_from_text` 与
+  `append_text` 的线性。`cargo test -p dozer-app --bin dozer`:1015 passed。
 
 ---
 

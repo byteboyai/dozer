@@ -18,7 +18,22 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         editor: None,
         tabular: None,
         dirty: false,
+        loaded_bytes: 0,
+        total_bytes: 0,
+        truncated: false,
+        loading: false,
     }
+}
+
+/// `path` 是否会被打开为"原生编辑器候选"(即 `is_editable_extension &&
+/// !prefers_rendered_preview`,与 `push_tab` 里挑 `read_and_build_native_editor`
+/// 分支的判据完全一致)。`App::preview_open_path`/`project_preview_open_path`
+/// 用它决定走 `insert_loading_tab`(异步读盘+构造)还是原有 `open_path`
+/// (表格/webview 类,同步、本来就不慢)。
+pub(crate) fn is_native_editor_candidate(path: &std::path::Path) -> bool {
+    !crate::tabular::is_tabular_extension(path)
+        && is_editable_extension(path)
+        && !prefers_rendered_preview(path)
 }
 
 /// Find 输入框的稳定 `widget::Id`。Files / Project 两个预览面板各渲染一根
@@ -77,6 +92,10 @@ impl Operation<()> for CaptureFindFocus {
 impl PreviewPane {
     pub fn tabs(&self) -> &[PreviewTab] {
         &self.tabs
+    }
+
+    pub fn tabs_mut(&mut self) -> &mut [PreviewTab] {
+        &mut self.tabs
     }
 
     pub fn active_idx(&self) -> usize {
@@ -145,15 +164,18 @@ impl PreviewPane {
             .is_some_and(|t| t.editor.is_some() || t.tabular.is_some())
     }
 
+    /// 同一文件已开的 tab 下标(供 `open_path` 与 `App::preview_open_path`
+    /// 的异步路径共用同一份"已打开则复用"判重逻辑)。
+    pub fn find_existing_file_tab(&self, path: &std::path::Path) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|t| t.kind == TabKind::File(path.to_path_buf()))
+    }
+
     pub fn open_path(&mut self, path: PathBuf) -> usize {
         // 同一文件已开则切过去,不重复开 tab（验收反馈）。
-        if let Some((idx, tab)) = self
-            .tabs
-            .iter()
-            .enumerate()
-            .find(|(_, t)| t.kind == TabKind::File(path.clone()))
-        {
-            let id = tab.id;
+        if let Some(idx) = self.find_existing_file_tab(&path) {
+            let id = self.tabs[idx].id;
             self.active = idx;
             // 直接切激活(不经过 `push_tab`)—若换到的文件不是正在搜索的,丢条。
             self.cull_stale_find();
@@ -168,11 +190,14 @@ impl PreviewPane {
 
     /// 追加一个真实 tab(占位 `Blank` 恒在 index 0,这里只用来加 `File`)。
     /// 文件 tab 一律追加在末尾,占位 tab 永远留在最前面,形态对齐 SSH/数据库
-    /// 面板 tab 条最前面那个固定"空白"占位。
+    /// 面板 tab 条最前面那个固定"空白"占位。**这是同步路径**——阻塞调用方
+    /// 线程读盘+构造,供测试 fixture 与内部小文件场景(README 自动预览等)
+    /// 用;用户从文件树打开任意大小文件走 `App::preview_open_path` 的异步路径
+    /// (`insert_loading_tab` + `apply_native_load`,见下方),不经过这里。
     fn push_tab(&mut self, kind: TabKind, title: String) -> usize {
         let id = self.next_id;
         self.next_id += 1;
-        let editor = match &kind {
+        let native_load = match &kind {
             TabKind::File(path) if crate::tabular::is_tabular_extension(path) => None,
             TabKind::File(path)
                 if is_editable_extension(path) && !prefers_rendered_preview(path) =>
@@ -180,6 +205,15 @@ impl PreviewPane {
                 read_and_build_native_editor(path).ok()
             }
             _ => None,
+        };
+        let (editor, loaded_bytes, total_bytes, truncated) = match native_load {
+            Some(load) => (
+                Some(load.view),
+                load.loaded_bytes,
+                load.total_bytes,
+                load.truncated,
+            ),
+            None => (None, 0, 0, false),
         };
         // 表格类文件委托 Tabular Viewer(与 editor 互斥)。实际解析是异步的
         // (calamine/csv 对大文件可能要跑一阵,不能卡在这个同步方法里,见
@@ -210,6 +244,10 @@ impl PreviewPane {
             editor,
             tabular,
             dirty: false,
+            loaded_bytes,
+            total_bytes,
+            truncated,
+            loading: false,
         });
         self.active = self.tabs.len() - 1;
         // 新 tab 成为激活者(可能顶掉旧 find tab)——清掉不再匹配的 Find
@@ -217,6 +255,125 @@ impl PreviewPane {
         // 已存在 tab"的 `open_path` 路径,`push_tab` 不跑,见其自行 cull。
         self.cull_stale_find();
         id
+    }
+
+    /// 追加一个"原生编辑器候选、但内容尚未读到"的占位 tab,立即返回 `id`——
+    /// 供调用方(`App::preview_open_path`)紧接着 spawn 异步读盘+构造任务,
+    /// 完成后用 `apply_native_load` 回填。`title`/`pending_editor_focus`/
+    /// `cull_stale_find` 等副作用与 `push_tab` 对齐(新 tab 成为激活者、清
+    /// stale find)。
+    pub fn insert_loading_tab(&mut self, kind: TabKind, title: String) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.tabs.push(PreviewTab {
+            id,
+            kind,
+            title,
+            reload_nonce: 0,
+            editor: None,
+            tabular: None,
+            dirty: false,
+            loaded_bytes: 0,
+            total_bytes: 0,
+            truncated: false,
+            loading: true,
+        });
+        self.active = self.tabs.len() - 1;
+        self.cull_stale_find();
+        id
+    }
+
+    /// 异步读盘+构造结果回灌:按 `tab_id` 定位(用户可能在结果回来前关掉/
+    /// 切走这个 tab,找不到就静默丢弃)。成功则把已经在后台线程构造好的
+    /// `CodeView` 取出装进 tab(`NativeEditorLoadHandle::take` 只应在这里
+    /// 调用一次)并置一次性聚焦位(同步路径 `push_tab` 原有行为);失败则
+    /// 保持 `editor: None`(该 tab 落回 webview/flyfish 兜底,`loading` 已
+    /// 置假,`desired_webviews()` 会在下一帧自然把它纳入期望清单)。
+    pub fn apply_native_load(
+        &mut self,
+        tab_id: usize,
+        result: Result<native_editor::NativeEditorLoadHandle, String>,
+    ) {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return;
+        };
+        tab.loading = false;
+        if let Ok(handle) = result
+            && let Some(load) = handle.take()
+        {
+            tab.editor = Some(load.view);
+            tab.loaded_bytes = load.loaded_bytes;
+            tab.total_bytes = load.total_bytes;
+            tab.truncated = load.truncated;
+            self.pending_editor_focus = true;
+        }
+    }
+
+    /// "加载更多"异步续读结果回灌:tab 已不存在/没有 `editor`(结果回来前
+    /// 用户关掉了 tab,或该 tab 根本不是原生编辑器)则 no-op。
+    pub fn apply_more_loaded(
+        &mut self,
+        tab_id: usize,
+        result: Result<(String, u64, bool), String>,
+    ) {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return;
+        };
+        let Ok((more_text, new_loaded, truncated)) = result else {
+            return;
+        };
+        if let Some(editor) = &mut tab.editor {
+            editor.append_text(&more_text);
+        }
+        tab.loaded_bytes = new_loaded;
+        tab.truncated = truncated;
+    }
+
+    /// 打开只读大文件档搜索条,锁定 `tab_id`。已开着且锁的是同一个 tab 则
+    /// no-op(保留已输入的 query,同 `FindState` 既有语义);换 tab 重开会
+    /// 丢旧会话(`query`/`hits` 清空)。
+    pub fn open_large_file_search(&mut self, tab_id: usize) {
+        if self
+            .large_file_search
+            .as_ref()
+            .is_some_and(|s| s.tab_id == tab_id)
+        {
+            return;
+        }
+        self.large_file_search = Some(LargeFileSearch {
+            tab_id,
+            ..Default::default()
+        });
+    }
+
+    pub fn close_large_file_search(&mut self) {
+        self.large_file_search = None;
+    }
+
+    /// 只读访问器,供渲染层判断要不要画大文件搜索条(同 `find_state` 的既有
+    /// 写法)。
+    pub fn large_file_search_state(&self) -> Option<&LargeFileSearch> {
+        self.large_file_search.as_ref()
+    }
+
+    /// 异步搜索结果回灌:会话已被关闭,或已换锁到别的 tab(用户在结果回来
+    /// 前又做了别的操作)时静默丢弃。
+    pub fn set_large_file_search_results(
+        &mut self,
+        tab_id: usize,
+        result: Result<Vec<crate::extensions::search::SearchHit>, String>,
+    ) {
+        let Some(session) = self.large_file_search.as_mut() else {
+            return;
+        };
+        if session.tab_id != tab_id {
+            return;
+        }
+        session.running = false;
+        if let Ok(hits) = result {
+            session.hits = hits;
+            session.current = 0;
+        }
     }
 
     /// 当前激活 tab 若是**文件**且走 wry 路径则返回其 id(=webview 池的 key)。
@@ -227,7 +384,10 @@ impl PreviewPane {
         self.tabs
             .get(self.active)
             .filter(|t| {
-                t.editor.is_none() && t.tabular.is_none() && matches!(t.kind, TabKind::File(_))
+                t.editor.is_none()
+                    && t.tabular.is_none()
+                    && !t.loading
+                    && matches!(t.kind, TabKind::File(_))
             })
             .map(|t| t.id)
     }
@@ -242,7 +402,10 @@ impl PreviewPane {
         }
         let is_webview_file = matches!(
             &self.tabs[idx].kind,
-            TabKind::File(_) if self.tabs[idx].editor.is_none() && self.tabs[idx].tabular.is_none()
+            TabKind::File(_)
+                if self.tabs[idx].editor.is_none()
+                    && self.tabs[idx].tabular.is_none()
+                    && !self.tabs[idx].loading
         );
         self.active = idx;
         if is_webview_file {
@@ -312,7 +475,7 @@ impl PreviewPane {
         self.tabs
             .iter()
             .enumerate()
-            .filter(|(_, tab)| tab.editor.is_none() && tab.tabular.is_none())
+            .filter(|(_, tab)| tab.editor.is_none() && tab.tabular.is_none() && !tab.loading)
             .filter_map(|(idx, tab)| {
                 // `Blank` 没有 wry 页面(内容区是纯 iced 渲染的 Dozer 品牌标),
                 // 不进期望清单——`sync_webview_pool` 据此不会为它创建 webview。
@@ -785,8 +948,11 @@ impl PreviewPane {
             let TabKind::File(path) = &tab.kind else {
                 return;
             };
-            if let Ok(fresh) = read_and_build_native_editor(path) {
-                tab.editor = Some(fresh);
+            if let Ok(load) = read_and_build_native_editor(path) {
+                tab.editor = Some(load.view);
+                tab.loaded_bytes = load.loaded_bytes;
+                tab.total_bytes = load.total_bytes;
+                tab.truncated = load.truncated;
                 // 读盘重建 = 重载/刷新:buffer 回到磁盘态,原先的就地改动(若有)
                 // 一并丢弃,脏标记清零(可写后"刷新"会丢未保存改动——右键刷新前
                 // 是否弹确认由调用方 handler 决定,清空这里是为了状态自洽)。
@@ -809,9 +975,12 @@ impl PreviewPane {
         let TabKind::File(path) = &tab.kind else {
             return Ok(());
         };
-        let editor = read_and_build_native_editor(path)?;
+        let load = read_and_build_native_editor(path)?;
         if let Some(tab) = self.tabs.get_mut(idx) {
-            tab.editor = Some(editor);
+            tab.editor = Some(load.view);
+            tab.loaded_bytes = load.loaded_bytes;
+            tab.total_bytes = load.total_bytes;
+            tab.truncated = load.truncated;
             tab.dirty = false;
         }
         Ok(())
@@ -884,6 +1053,53 @@ impl PreviewPane {
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn large_file_search_open_close_roundtrip() {
+        let mut p = PreviewPane::default();
+        let id = p.push_tab(
+            TabKind::File(std::path::PathBuf::from("/tmp/x.log")),
+            "x.log".into(),
+        );
+        p.open_large_file_search(id);
+        assert!(p.large_file_search.as_ref().is_some_and(|s| s.tab_id == id));
+        p.close_large_file_search();
+        assert!(p.large_file_search.is_none());
+    }
+
+    #[test]
+    fn large_file_search_results_fill_hits_and_reset_current() {
+        let mut p = PreviewPane::default();
+        let id = p.push_tab(
+            TabKind::File(std::path::PathBuf::from("/tmp/x.log")),
+            "x.log".into(),
+        );
+        p.open_large_file_search(id);
+        let hits = vec![crate::extensions::search::SearchHit {
+            path: "/tmp/x.log".into(),
+            line_no: 42,
+            line_text: "needle here".into(),
+        }];
+        p.set_large_file_search_results(id, Ok(hits.clone()));
+        let s = p.large_file_search.as_ref().unwrap();
+        assert_eq!(s.hits, hits);
+        assert_eq!(s.current, 0);
+        assert!(!s.running);
+    }
+
+    #[test]
+    fn large_file_search_results_ignore_stale_tab() {
+        // 结果回来前用户已经关了搜索条/切走了文件:tab_id 不匹配,忽略。
+        let mut p = PreviewPane::default();
+        let id = p.push_tab(
+            TabKind::File(std::path::PathBuf::from("/tmp/x.log")),
+            "x.log".into(),
+        );
+        p.open_large_file_search(id);
+        p.close_large_file_search();
+        p.set_large_file_search_results(id, Ok(vec![])); // 不应 panic,也不应重新打开条
+        assert!(p.large_file_search.is_none());
+    }
 
     #[test]
     fn bump_reload_rebuilds_native_editor_without_bumping_nonce() {
@@ -1008,10 +1224,12 @@ mod tests {
     }
 
     #[test]
-    fn oversized_file_routes_to_readonly_webview_instead_of_native_editor() {
-        // 超过 MAX_NATIVE_EDITOR_BYTES 的文件必须退回 wry 只读预览——原生
-        // `Editor::with_text` 的整文档预整形会阻塞 UI 线程(见
-        // `preview::MAX_NATIVE_EDITOR_BYTES` 文档),不能被白名单扩展名误拉进编辑器。
+    fn oversized_edit_tier_file_stays_native_but_becomes_read_only() {
+        // 2026-09-19 起(大文件编辑器性能优化)不再有"超过阈值就退回 wry 只读
+        // 预览"这回事——原生编辑器按内存动态分三档(`native_editor::SizeTier`),
+        // 超过 `EDIT_MODE_MAX_BYTES`(20MB)的可编辑扩展名文件仍然构造原生
+        // `CodeView`,只是从可写切换成只读(`is_read_only() == true`),不会
+        // 出现在 `desired_webviews()` 期望清单里。
         let dir = std::env::temp_dir();
         let big_path = dir.join(format!(
             "preview_oversize_test_{}.json5",
@@ -1020,7 +1238,7 @@ mod tests {
         let small_path = dir.join(format!("preview_small_test_{}.json5", std::process::id()));
         let filler = "x".repeat(1024);
         let mut big = String::new();
-        while big.len() <= crate::preview::MAX_NATIVE_EDITOR_BYTES as usize {
+        while big.len() <= crate::preview::EDIT_MODE_MAX_BYTES as usize {
             big.push_str(&filler);
             big.push('\n');
         }
@@ -1031,19 +1249,21 @@ mod tests {
         p.open_path(big_path.clone());
         p.open_path(small_path.clone());
 
-        assert!(
-            p.tabs()[1].editor.is_none(),
-            "超大 .json5 不应构造原生 editor,退回 wry 只读预览"
-        );
-        assert!(
-            p.tabs()[2].editor.is_some(),
-            "小 .json5 照常构造原生 editor"
-        );
+        let big_editor = p.tabs()[1]
+            .editor
+            .as_ref()
+            .expect("超大文件仍构造原生 editor");
+        assert!(big_editor.is_read_only(), "超过编辑档上限应变只读");
+        let small_editor = p.tabs()[2]
+            .editor
+            .as_ref()
+            .expect("小文件照常构造原生 editor");
+        assert!(!small_editor.is_read_only(), "小文件仍可写");
         let specs = p.desired_webviews();
         assert_eq!(
             specs.iter().filter(|s| s.id == p.tabs()[1].id).count(),
-            1,
-            "超大文件应出现在 wry 期望清单里"
+            0,
+            "只读大文件走原生编辑器渲染,不应出现在 wry 期望清单里"
         );
 
         std::fs::remove_file(&big_path).ok();
