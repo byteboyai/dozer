@@ -248,7 +248,14 @@ pub(crate) fn bar_chart(
     // "同日横向对比 + 跨日纵向看趋势"(2026-08-27 由"每日一根堆叠柱"改为
     // 分组柱状图)。颜色统一走 `agent_dot_color`,不再在这里单独维护一份
     // cyan/purple/green 映射。
-    let mut groups = iced_widget::row![].spacing(8);
+    //
+    // 组间距弹性化(2026-09-20 用户要求,两轮口径):组与组之间垫 `Fill`
+    // 空位,chart 整体越宽空位撑得越大,不再是写死的 8px;首组贴左、末组
+    // 贴右(只有两组时左右分立),单组时整组居中(见循环后的包装)。行恒
+    // `spacing(8)` 只作窄面板兜底——`Fill` 空位缩到 0 时相邻条带至少还
+    // 留一条缝,不至于贴死。
+    let mut groups = iced_widget::row![].spacing(8).width(Length::Fill);
+    let n = days.len();
     for (i, d) in days.iter().enumerate() {
         let scale = BAR_MAX_HEIGHT / max_total as f32;
         let mut day_group = iced_widget::row![].spacing(3);
@@ -295,15 +302,31 @@ pub(crate) fn bar_chart(
                 },
             );
 
+        // 组间 `Fill` 空位:宽度吃掉首末组之外的全部剩余空间,把首组顶到
+        // 最左、末组顶到最右;三组及以上时各空位等宽,中间组均匀分布。
+        if i > 0 {
+            groups = groups.push(iced_widget::Space::new().width(Length::Fill));
+        }
         groups = groups.push(banded);
     }
+
+    // 单组没有"贴左/贴右"可言,整组在图内水平居中。
+    let groups_row: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        if n == 1 {
+            container(groups)
+                .width(Length::Fill)
+                .align_x(iced_widget::core::alignment::Horizontal::Center)
+                .into()
+        } else {
+            groups.into()
+        };
 
     // 网格线画布叠在柱子行后面(`stack!`):柱子行整体右移 `GRID_LABEL_GUTTER`
     // 给左侧刻度数字腾地方,网格线本身(`GridLines::draw`)从这条线右边
     // 才开始画,两者不会互相遮挡。
     stack![
         grid_lines_canvas(max_total),
-        container(groups).padding(iced_widget::core::Padding {
+        container(groups_row).padding(iced_widget::core::Padding {
             top: 0.0,
             right: 0.0,
             bottom: 0.0,
