@@ -2,6 +2,7 @@ use crate::report::HealthTier;
 use ast_grep_core::matcher::Pattern;
 use ast_grep_language::SupportLang;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -259,10 +260,92 @@ pub fn event_handler_count(
         .sum()
 }
 
+const WIDGET_MACRO_NAMES: &[&str] = &["row", "column"];
+
+/// 结构指纹:子树 dfs 只拼接 `node.kind()`,丢弃字面量文本——两个 widget
+/// 构造表达式指纹相同说明"形状"一样,即使传的文字/数字不同(见 spec
+/// 「组件化重复结构」)。
+fn structural_fingerprint<D: ast_grep_core::Doc>(node: &ast_grep_core::Node<'_, D>) -> String {
+    let mut out = String::new();
+    fn walk<D: ast_grep_core::Doc>(node: &ast_grep_core::Node<'_, D>, out: &mut String) {
+        out.push('(');
+        out.push_str(node.kind().as_ref());
+        for c in node.children() {
+            walk(&c, out);
+        }
+        out.push(')');
+    }
+    walk(node, &mut out);
+    out
+}
+
+/// 只找**顶层**(不嵌套在另一个宏参数里的)`row!`/`column!` 调用——命中就
+/// 不下钻,避免一个大结构和它内部的子结构互相污染彼此的计数。
+fn top_level_widget_macros<'t, D: ast_grep_core::Doc>(
+    node: &ast_grep_core::Node<'t, D>,
+) -> Vec<ast_grep_core::Node<'t, D>> {
+    let mut out = Vec::new();
+    fn walk<'t, D: ast_grep_core::Doc>(
+        node: &ast_grep_core::Node<'t, D>,
+        out: &mut Vec<ast_grep_core::Node<'t, D>>,
+    ) {
+        let is_target = node.kind() == "macro_invocation"
+            && node
+                .field("macro")
+                .map(|m| WIDGET_MACRO_NAMES.contains(&m.text().as_ref()))
+                .unwrap_or(false);
+        if is_target {
+            out.push(node.clone());
+            return;
+        }
+        for c in node.children() {
+            walk(&c, out);
+        }
+    }
+    walk(node, &mut out);
+    out
+}
+
+/// 把一个文件里顶层 widget 构造的结构指纹累加进跨文件共享的 `registry`。
+/// 调用方(`scan_project`)负责在文件循环里逐个调用、循环结束后统一转成
+/// `Vec<DuplicateCluster>`(见 `clusters_from_registry`),因为去重判定本来
+/// 就需要跨全部文件比较。
+pub fn find_duplicate_clusters(
+    root: &ast_grep_core::Node<'_, impl ast_grep_core::Doc>,
+    file: &Path,
+    registry: &mut HashMap<String, Vec<(PathBuf, usize)>>,
+) {
+    for w in top_level_widget_macros(root) {
+        let fp = structural_fingerprint(&w);
+        registry
+            .entry(fp)
+            .or_default()
+            .push((file.to_path_buf(), w.start_pos().line() + 1));
+    }
+}
+
+/// 过滤出现次数 `>= 3` 的指纹组成簇,按出现次数降序排列(同 spec「组件化
+/// 重复结构」的簇判定门槛)。
+pub fn clusters_from_registry(
+    registry: HashMap<String, Vec<(PathBuf, usize)>>,
+) -> Vec<DuplicateCluster> {
+    let mut clusters: Vec<DuplicateCluster> = registry
+        .into_iter()
+        .filter(|(_, locs)| locs.len() >= 3)
+        .map(|(fp, occurrences)| DuplicateCluster {
+            node_count: fp.len(),
+            occurrences,
+        })
+        .collect();
+    clusters.sort_by_key(|c| std::cmp::Reverse(c.occurrences.len()));
+    clusters
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ast_grep_language::{LanguageExt, SupportLang};
+    use std::collections::HashMap;
     use std::path::Path;
 
     #[test]
@@ -412,5 +495,49 @@ mod tests {
         let root_node = root.root();
         let f = first_function(&root_node);
         assert_eq!(event_handler_count(&f, &patterns), 0);
+    }
+
+    #[test]
+    fn find_duplicate_clusters_groups_structurally_identical_widgets() {
+        let mut registry = HashMap::new();
+        let srcs = [
+            "fn a() { row![text(\"x\"), text(\"y\")] }",
+            "fn b() { row![text(\"p\"), text(\"q\")] }",
+            "fn c() { row![text(\"m\"), text(\"n\")] }",
+        ];
+        for (i, src) in srcs.iter().enumerate() {
+            let root = parse(src);
+            find_duplicate_clusters(&root.root(), Path::new(&format!("f{i}.rs")), &mut registry);
+        }
+        let clusters = clusters_from_registry(registry);
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].occurrences.len(), 3);
+    }
+
+    #[test]
+    fn find_duplicate_clusters_ignores_structurally_different_widgets() {
+        let mut registry = HashMap::new();
+        let srcs = [
+            "fn a() { row![text(\"x\")] }",
+            "fn b() { row![text(\"x\"), text(\"y\"), text(\"z\")] }",
+        ];
+        for (i, src) in srcs.iter().enumerate() {
+            let root = parse(src);
+            find_duplicate_clusters(&root.root(), Path::new(&format!("f{i}.rs")), &mut registry);
+        }
+        // 两个结构不同(子元素数量不一样),都只出现 1 次,不构成 >=3 的簇。
+        assert!(clusters_from_registry(registry).is_empty());
+    }
+
+    #[test]
+    fn find_duplicate_clusters_below_threshold_not_included() {
+        let mut registry = HashMap::new();
+        let srcs = ["fn a() { row![text(\"x\")] }", "fn b() { row![text(\"y\")] }"];
+        for (i, src) in srcs.iter().enumerate() {
+            let root = parse(src);
+            find_duplicate_clusters(&root.root(), Path::new(&format!("f{i}.rs")), &mut registry);
+        }
+        // 只出现 2 次,< 3 门槛,不成簇。
+        assert!(clusters_from_registry(registry).is_empty());
     }
 }
