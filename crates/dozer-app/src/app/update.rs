@@ -1093,6 +1093,41 @@ impl App {
                     }
                 });
             }
+            Message::JsonTreeAction(kind, tab_id, action) => {
+                self.with_focused_project(move |ws, io| {
+                    ws.preview_pane_json_tree_action(kind, tab_id, action, io);
+                });
+            }
+            Message::JsonTreeLoaded(project_id, kind, tab_id, result) => {
+                self.with_project(project_id, move |ws, _io| {
+                    let pane = if kind == PanelKind::Project {
+                        &mut ws.project_preview
+                    } else {
+                        &mut ws.preview
+                    };
+                    let Ok(view) = result else {
+                        tracing::warn!("JSON 首次加载失败,tab 停留在 Loading");
+                        return;
+                    };
+                    if let Some(slot) = pane.json_tree_state_mut(tab_id) {
+                        *slot = crate::preview::JsonTreeState::Ready(Box::new(view));
+                    }
+                });
+            }
+            Message::JsonNodeLoaded(project_id, kind, tab_id, path, root_index, result) => {
+                self.with_project(project_id, move |ws, _io| {
+                    let pane = if kind == PanelKind::Project {
+                        &mut ws.project_preview
+                    } else {
+                        &mut ws.preview
+                    };
+                    if let Some(crate::preview::JsonTreeState::Ready(view)) =
+                        pane.json_tree_state_mut(tab_id)
+                    {
+                        view.apply_node_loaded(path, result, root_index);
+                    }
+                });
+            }
             Message::ProjectPreviewOpenPath(path) => self.project_preview_open_path(path),
             Message::ProjectPreviewFileLoaded(project_id, tab_id, result) => {
                 self.with_project(project_id, move |ws, _io| {
@@ -3430,6 +3465,7 @@ impl App {
                 ws.preview.open_path(path.clone());
             }
             ws.spawn_pending_tabular_loads(PanelKind::Files, io);
+            ws.spawn_pending_json_tree_loads(PanelKind::Files, io);
             // 新 tab 落在末尾(复用已开的文件则落在该文件原来的位置)——
             // 用跟 `preview_select_tab` 同一套 `tab_window_reveal`,把窗口
             // 起点钳到"包含这个新激活 tab"的位置,而不是无脑滚回最左
@@ -3533,6 +3569,7 @@ impl App {
                 ws.project_preview.open_path(path.clone());
             }
             ws.spawn_pending_tabular_loads(PanelKind::Project, io);
+            ws.spawn_pending_json_tree_loads(PanelKind::Project, io);
             // 新 tab 落在末尾(或复用已开文件原位),用 `tab_window_reveal`
             // 钳出包含它的窗口起点,不再无脑滚回最左(同 Files 预览)。
             let active = ws.project_preview.active_idx();

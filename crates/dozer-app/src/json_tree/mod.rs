@@ -21,7 +21,9 @@ pub enum PathSegment {
 }
 
 /// 从根到某节点的路径，共享所有权（flatten/缓存都用它做 key，避免反复深拷贝）。
-pub type NodePath = std::rc::Rc<[PathSegment]>;
+/// 用 `Arc` 而非 `Rc`：它会被放进 `Message::JsonNodeLoaded`，经 iced 的
+/// `proxy.send_event` 跨线程投递，`Message` 必须 `Send`，`Rc` 不满足。
+pub type NodePath = std::sync::Arc<[PathSegment]>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JsonKind {
@@ -86,6 +88,14 @@ pub struct JsonTreeView {
     path: std::path::PathBuf,
     /// 常驻源字节：`.json` 为整文件；`.jsonl`/`.ndjson` 也是整文件
     /// （行靠 `line_ranges` 切片，不另存一份，避免大文件双份内存）。
+    ///
+    /// **当前未被读取**：惰性展开走 `expand()` 从磁盘重读（见其文档，理由
+    /// 是该函数要在后台线程独立持有字节源、不能借活着的 view）。因此这份
+    /// 常驻副本对超大文件是纯内存开销，保留它只是维持 `new` 的签形状与
+    /// 早期计划一致——若后续确认 `expand()` 一律走磁盘，可把本字段与
+    /// `new` 的 `bytes` 参数一起删掉（那是一次跨 Tasks 3-5 的签名收敛，
+    /// 不在本计划范围内，故此处只标注不擅改）。
+    #[allow(dead_code)]
     bytes: Vec<u8>,
     /// jsonl/ndjson 为 `Some`（与 `roots` 下标对齐）；单个 `.json` 为 `None`。
     line_ranges: Option<Vec<std::ops::Range<usize>>>,
@@ -536,6 +546,7 @@ pub fn load(path: &std::path::Path) -> Result<JsonTreeView, String> {
 /// `expand()` 解码所依据的字节来源 —— 由调用方（Task 8 的消息处理）
 /// 在 spawn 后台线程前，用已有数据构造（绝不借用活的 `&JsonTreeView`，
 /// 那会要求跨异步边界借用 view）。
+#[derive(Debug)]
 pub enum ExpandBytesSource {
     WholeFile(std::path::PathBuf),
     JsonLine {
@@ -633,6 +644,50 @@ mod expand_tests {
         .unwrap();
         assert!(matches!(content, NodeContent::Array { .. }));
     }
+
+    #[test]
+    fn expand_source_for_json_is_whole_file() {
+        let view = JsonTreeView::new(
+            std::path::PathBuf::from("/tmp/x.json"),
+            b"{}".to_vec(),
+            None,
+            vec![Ok(JsonNode {
+                kind: JsonKind::Object,
+                content: None,
+            })],
+        );
+        assert!(matches!(
+            view.expand_source_for(0),
+            ExpandBytesSource::WholeFile(_)
+        ));
+    }
+
+    #[test]
+    fn expand_source_for_jsonl_uses_that_roots_byte_range() {
+        // 两个根,`line_ranges[i]` 应对上第 i 行的字节范围(这里验证非 0 号
+        // 根拿到的不是首行范围)。
+        let view = JsonTreeView::new(
+            std::path::PathBuf::from("/tmp/x.jsonl"),
+            b"{\"a\":1}\n{\"b\":2}\n".to_vec(),
+            Some(vec![0..8, 8..16]),
+            vec![
+                Ok(JsonNode {
+                    kind: JsonKind::Object,
+                    content: None,
+                }),
+                Ok(JsonNode {
+                    kind: JsonKind::Object,
+                    content: None,
+                }),
+            ],
+        );
+        match view.expand_source_for(1) {
+            ExpandBytesSource::JsonLine { byte_range, .. } => {
+                assert_eq!(byte_range, 8..16, "1 号根应取第 2 行的字节范围");
+            }
+            other => panic!("jsonl 视图应给 JsonLine,拿到 {other:?}"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -663,7 +718,7 @@ mod load_json_tests {
 #[cfg(test)]
 mod apply_tests {
     use super::*;
-    use std::rc::Rc;
+    use std::sync::Arc;
 
     fn empty_view() -> JsonTreeView {
         JsonTreeView::new(
@@ -690,7 +745,7 @@ mod apply_tests {
     #[test]
     fn toggle_expand_on_new_path_expands_and_requests_load_if_undecoded() {
         let mut v = empty_view();
-        let path: NodePath = Rc::from(vec![PathSegment::Key("a".to_string())]);
+        let path: NodePath = Arc::from(vec![PathSegment::Key("a".to_string())]);
         let req = v.apply(Action::ToggleExpand(path.clone()));
         assert_eq!(
             req,
@@ -704,7 +759,7 @@ mod apply_tests {
     #[test]
     fn toggle_expand_twice_collapses_without_requesting_load_again() {
         let mut v = empty_view();
-        let path: NodePath = Rc::from(vec![PathSegment::Key("a".to_string())]);
+        let path: NodePath = Arc::from(vec![PathSegment::Key("a".to_string())]);
         v.apply(Action::ToggleExpand(path.clone())); // expand: requests load
         let second = v.apply(Action::ToggleExpand(path.clone())); // collapse
         assert_eq!(second, None, "collapsing never triggers a load");
@@ -713,7 +768,7 @@ mod apply_tests {
     #[test]
     fn reexpanding_still_loading_node_does_not_requeue_load() {
         let mut v = empty_view();
-        let path: NodePath = Rc::from(vec![PathSegment::Key("a".to_string())]);
+        let path: NodePath = Arc::from(vec![PathSegment::Key("a".to_string())]);
         assert!(
             v.apply(Action::ToggleExpand(path.clone())).is_some(),
             "first expand requests a load"
@@ -729,7 +784,7 @@ mod apply_tests {
     #[test]
     fn expanding_already_decoded_node_does_not_request_load() {
         let mut v = empty_view();
-        let path: NodePath = Rc::from(vec![PathSegment::Key("a".to_string())]);
+        let path: NodePath = Arc::from(vec![PathSegment::Key("a".to_string())]);
         v.apply(Action::ToggleExpand(path.clone()));
         v.apply_node_loaded(
             path.clone(),
