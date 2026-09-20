@@ -203,6 +203,62 @@ pub fn find_font_findings(
     out
 }
 
+/// 组件树嵌套深度:对函数源码文本做 `row![`/`column![` 方括号深度扫描的
+/// 迷你状态机,不用 AST(tree-sitter-rust 不会把嵌套在另一个宏参数里的宏
+/// 调用识别成独立节点,spike 已验证技术不可行——见 spec「组件树嵌套深度」)。
+/// 已知局限:字符串/注释里偶然出现的 "row![" / "column![" 文本会被误判,
+/// 同函数级 complexity_signal 一样是"粗代理,不追求精确"的定位,可接受。
+pub fn widget_nesting_depth(fn_source: &str) -> usize {
+    let bytes = fn_source.as_bytes();
+    let mut depth = 0usize;
+    let mut max_depth = 0usize;
+    // 栈记录每一层"[" 是不是由 row!/column! 触发的(true)还是普通的 "["
+    // (数组字面量等,false,不计入 widget 深度但仍要正确配对好方括号)。
+    let mut stack: Vec<bool> = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'[' {
+            let is_widget = starts_with_widget_macro(&fn_source[..i]);
+            if is_widget {
+                depth += 1;
+                max_depth = max_depth.max(depth);
+            }
+            stack.push(is_widget);
+            i += 1;
+        } else if bytes[i] == b']' {
+            if let Some(was_widget) = stack.pop()
+                && was_widget
+            {
+                depth = depth.saturating_sub(1);
+            }
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    max_depth
+}
+
+/// `text_before_bracket` 是从函数源码开头到(不含)当前 "[" 的切片,检查它是不是
+/// 紧接着以 "row!" 或 "column!" 结尾(允许前面有空白/换行,同真实代码风格)。
+fn starts_with_widget_macro(text_before_bracket: &str) -> bool {
+    let trimmed = text_before_bracket.trim_end();
+    trimmed.ends_with("row!") || trimmed.ends_with("column!")
+}
+
+/// 事件回调密度:`.on_press`/`.on_enter`/`.on_exit`/`.on_input`/`.on_submit`
+/// 方法调用总数,复用 Task 2 已验证的 pattern 匹配技术。
+pub fn event_handler_count(
+    fn_node: &ast_grep_core::Node<'_, impl ast_grep_core::Doc>,
+    patterns: &Patterns,
+) -> usize {
+    patterns
+        .event_handlers
+        .iter()
+        .map(|p| fn_node.find_all(p).count())
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,5 +352,65 @@ mod tests {
         let findings = find_font_findings(&root.root(), &patterns, Path::new("a.rs"));
         // 裸字符串字面量算一次发现,引用常量(CODE_FONT_FAMILY,identifier)不算。
         assert_eq!(findings.len(), 1);
+    }
+
+    #[test]
+    fn widget_nesting_depth_flat_is_one() {
+        assert_eq!(widget_nesting_depth("row![text(\"a\")]"), 1);
+    }
+
+    #[test]
+    fn widget_nesting_depth_counts_nested_row_in_column() {
+        assert_eq!(widget_nesting_depth("column![row![text(\"a\")]]"), 2);
+    }
+
+    #[test]
+    fn widget_nesting_depth_counts_three_levels() {
+        assert_eq!(
+            widget_nesting_depth("column![row![column![text(\"a\")]]]"),
+            3
+        );
+    }
+
+    #[test]
+    fn widget_nesting_depth_siblings_do_not_add_up() {
+        // 两个平级的 row!,不是嵌套,深度还是 2(column 包一层 row)。
+        assert_eq!(
+            widget_nesting_depth("column![row![text(\"a\")], row![text(\"b\")]]"),
+            2
+        );
+    }
+
+    #[test]
+    fn widget_nesting_depth_no_widget_macro_is_zero() {
+        assert_eq!(widget_nesting_depth("fn f() { let x = 1; }"), 0);
+    }
+
+    fn first_function<'a, D: ast_grep_core::Doc>(
+        root: &ast_grep_core::Node<'a, D>,
+    ) -> ast_grep_core::Node<'a, D> {
+        root.dfs()
+            .find(|n| n.kind() == "function_item")
+            .expect("at least one function_item in fixture source")
+    }
+
+    #[test]
+    fn event_handler_count_sums_all_handler_kinds() {
+        let patterns = Patterns::compile(SupportLang::Rust);
+        let root = parse(
+            "fn f() { btn.on_press(Msg::A).into(); area.on_enter(Msg::B); }",
+        );
+        let root_node = root.root();
+        let f = first_function(&root_node);
+        assert_eq!(event_handler_count(&f, &patterns), 2);
+    }
+
+    #[test]
+    fn event_handler_count_zero_when_no_handlers() {
+        let patterns = Patterns::compile(SupportLang::Rust);
+        let root = parse("fn f() { let x = 1; }");
+        let root_node = root.root();
+        let f = first_function(&root_node);
+        assert_eq!(event_handler_count(&f, &patterns), 0);
     }
 }
