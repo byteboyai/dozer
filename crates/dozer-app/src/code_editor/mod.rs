@@ -84,24 +84,54 @@ fn commit_history(sink: &mut Vec<Snapshot>, snap: Snapshot) {
     }
 }
 
-/// 建一个已装载 `text` 的 `Content`。**曾经**试过"空 Content 起手 +
-/// `Action::Edit(Edit::Paste(..))` 一次性灌入整份文本"绕开
-/// `Content::with_text` 的无界 shaping(理论依据:`insert_at` 只切行不
-/// shaping,shaping 交给 widget 每帧 `layout()` 触发的、天然有界的
-/// `Editor::update()`)——**已证伪,不要重试**:cosmic-text
-/// `edit/editor.rs::insert_at` 对多行 `Paste` 里的每一"中间行"都
-/// `buffer.lines.insert(insert_line, tmp)`,插入点固定不变,Vec
-/// 逐行搬移是 *O(n²)*(n = 插入的行数)。实测(release,20 万行/
-/// 约 8MB):`Content::with_text` 7.8s(线性,~39µs/行) vs 这条
-/// "更快"路径反而 88.3s——比什么都不做还慢好几倍。真正的修复方向
-/// 不是"让整份文档构造更快"(单行 shaping 本身有真实、不可省略的
-/// 计算成本,线性已经是下限),而是"整份文档构造绝不能跑在 UI 线程
-/// 上"——见 `preview::native_editor` 打开流程异步化(把这个函数的
-/// 调用挪进 `spawn_blocking`,构造完的 `CodeView` 是 `Send`,可以
-/// 跨线程传回)。这里退回官方 `Content::with_text`,只是恢复成线性
-/// 而不是更糟的二次方。
+/// 建一个已装载 `text` 的 `Content`,但**不**触发 `Content::with_text(text)`
+/// 的整文档无界 shaping。
+///
+/// 历史与结论(务必读完再动这里):
+/// - `Content::with_text(text)` 底层 `iced_graphics Editor::with_text` 在
+///   `text::font_system().write()` 排他锁内 `buffer.set_text(..)` → 无界
+///   `shape_until_scroll`(buffer 尚无尺寸,`height_opt = None`,窗口退化成
+///   `[0, ∞)`)一次性 shape 全文档。shape 缓存常驻内存,且写锁被持有整个
+///   shaping 期间——而 UI 线程每帧的 `Editor::update()` 也要拿**同一把写锁**
+///   (`iced_graphics text/editor.rs:557`),普通 `text()` 的 `Paragraph::update`
+///   同样 `.write()`(`paragraph.rs:69`)。所以哪怕把 `with_text` 挪进
+///   `spawn_blocking`,后台 shaping 期间全应用的文本渲染仍会阻塞等锁,
+///   100MB 只读文件 ~40s 里 UI 照样冻住。
+/// - 原计划试过"空 Content + 一次性 `Edit::Paste(整份)`"绕开 shaping,已证伪:
+///   `insert_at` 对多行 Paste 的每一条中间行都插在**同一固定下标**上,是
+///   O(n²)(20 万行 88s,比 `with_text` 的 7.8s 还慢)。
+///
+/// 现在的做法 = 空 Content 起手 + **逐行** `Edit::Paste`(线性,规避上面
+/// O(n²)),再加一次光标复位:
+/// - **单行** `Edit::Paste`(段内无 `\n`)走 `insert_at` 只有"首行追加 + 尾行"
+///   两个分支、没有中间行,天然 O(1) 且**不做 shaping**(只把每行存成
+///   `BufferLine { Shaping::Advanced }`,`shape_opt` 是 `Cached::Empty`)。
+///   因此逐行灌入整份文本的每一步都只在写锁里停留微秒级(不做字体计算),
+///   整份构造线性完成、写锁不被长持有,UI 线程可正常在逐行之间插入它的
+///   每帧 `update()`。
+/// - 真正的 shaping 交给 widget 每帧 `layout()` 触发的、天然有界的
+///   `Editor::update()`:它先 `buffer.set_size(..)` 再 `shape_as_needed`,
+///   只 shape 可见窗口(滚动到哪 shape 到哪),shape 缓存按需增长而不是
+///   整份常驻。这也顺带消除了 `with_text` 在超大只读文件上的 glyph 缓存
+///   内存膨胀。
+/// - 逐行的 `Edit::Paste` 会把光标停在文本末尾,这里最后 `move_to((0,0))`
+///   恢复 `with_text` 的"光标在开头"语义(既有测试
+///   `cursor_position_and_selection_are_zero_indexed` 依赖此)。
+///
+/// 空文本直接返回空 `Content`,不必走一次空循环。
 fn content_from_text(text: &str) -> text_editor::Content {
-    text_editor::Content::with_text(text)
+    let mut content = text_editor::Content::with_text("");
+    if !text.is_empty() {
+        for line in text.split_inclusive('\n') {
+            content.perform(Action::Edit(Edit::Paste(Arc::new(line.to_string()))));
+        }
+        use text_editor::{Cursor, Position};
+        content.move_to(Cursor {
+            position: Position { line: 0, column: 0 },
+            selection: None,
+        });
+    }
+    content
 }
 
 /// 组出可直接嵌入的 `text_editor`(preview.rs 文件/项目预览的原生 tab 在用,
@@ -161,9 +191,17 @@ impl CodeView {
 
     /// 只读大文件档"加载更多"专用:把 `more` 追加到 buffer 末尾,不经过
     /// `perform()`(不记 undo、不受 `read_only` 过滤——这不是用户编辑,是
-    /// 继续把磁盘上的原有内容灌进来)。直接对 `self.content` 发
-    /// `Action::Edit(Edit::Paste(..))`——同 [`content_from_text`],
-    /// `insert_at` 只切行不 shaping,shaping 交给下一次有界的 `update()`。
+    /// 继续把磁盘上的原有内容灌进来)。
+    ///
+    /// 为什么逐行而不是一次性 `Edit::Paste` 整段:`Edit::Paste` 底层
+    /// `cosmic_text::edit/editor.rs::insert_at` 会把段内的每一"中间行"都插
+    /// 在**同一个固定下标**上(`buffer.lines.insert(insert_line, tmp)`,
+    /// `Vec::insert` 逐行搬移),多行整段是 *O(n²)*——与 [`content_from_text`]
+    /// 里已实测证伪的那条路径同根。而**单行** `Paste`(段内不含 `\n`)只命中
+    /// `insert_at` 的"首行追加 + 尾行"两个分支,没有中间行,天然 O(1)。逐行
+    /// 追加把整体摊平成 O(行数);一次"加载更多"读 `full_load_max_bytes()`
+    /// (256MB~4GB)那么多字节、可能是数百万行,走整段 Paste 会挂起数小时,
+    /// 逐行是线性、毫秒~秒级完成。
     /// 插入点是当前 buffer 末尾(最后一行末尾),不影响用户已有的滚动位置/
     /// 光标(只读态下光标本来也不承载编辑语义)。
     pub fn append_text(&mut self, more: &str) {
@@ -177,8 +215,10 @@ impl CodeView {
             .map(|l| l.text.len())
             .unwrap_or(0);
         self.move_cursor_to((last_line, last_col));
-        self.content
-            .perform(Action::Edit(Edit::Paste(Arc::new(more.to_string()))));
+        for line in more.split_inclusive('\n') {
+            self.content
+                .perform(Action::Edit(Edit::Paste(Arc::new(line.to_string()))));
+        }
     }
 
     /// 0-indexed `(line, column)`——供 `preview_context_from_editor_state`
@@ -742,16 +782,17 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "手动验证专用:确认 content_from_text 是线性而非二次方,\
-                改动 content_from_text/CodeView::new 时手动跑一次"]
-    fn scratch_bench_with_text_vs_paste_not_quadratic() {
+    #[ignore = "手动验证专用:确认 content_from_text/append_text 都是线性而非二次方,\
+                改动这两处时手动跑一次"]
+    fn scratch_bench_content_and_append_linear() {
         fn make_text(lines: usize) -> String {
             (0..lines)
                 .map(|i| format!("let line_{i:06} = {i}; // filler filler filler\n"))
                 .collect()
         }
-        // 需要跨过实测的"O(n) vs O(n²) 交叉点"(约 20 万行)才有区分力,
-        // 见 `content_from_text` 文档。
+        // 逐行灌入是 O(行数);历史上整段 `Edit::Paste` 是 O(n²)(固定下标
+        // 逐行 Vec::insert),而 `Content::with_text` 是 O(n) 但带整文档无界
+        // shaping(约 39µs/行 + 写锁长持有)。2 倍行数耗时约 2 倍即线性。
         for &n in &[50_000usize, 100_000, 200_000] {
             let text = make_text(n);
             let t0 = std::time::Instant::now();
@@ -759,6 +800,17 @@ mod tests {
             let elapsed = t0.elapsed();
             assert_eq!(content.line_count(), n + 1);
             eprintln!("n={n:>7} content_from_text={elapsed:>10?}");
+        }
+
+        // 同样验证 append_text(与 content_from_text 同一条逐行路径)。
+        for &n in &[50_000usize, 100_000, 200_000] {
+            let chunk = make_text(n);
+            let mut view = CodeView::new("", "txt", true);
+            let t0 = std::time::Instant::now();
+            view.append_text(&chunk);
+            let elapsed = t0.elapsed();
+            assert_eq!(view.content.line_count(), n + 1);
+            eprintln!("n={n:>7} append_text={elapsed:>10?}");
         }
     }
 
@@ -769,6 +821,26 @@ mod tests {
         view.append_text("\nline3\nline4");
         assert_eq!(view.text(), "line1\nline2\nline3\nline4");
         assert_eq!(view.undo.len(), 0, "追加加载不应产生 undo 记录");
+    }
+
+    #[test]
+    fn append_text_multiline_appends_every_line_exactly() {
+        // "加载更多"续读的 chunk 是磁盘字节的直接续段,可能含任意多的换行、
+        // 空行与无尾随换行的末行。逐行追加必须一字不差地复原整段(空行、尾随
+        // `\n`、末行无换行都要对),且不能因为内部逐行而丢行或重复行。
+        let existing = "header\n"; // 尾随换行 → buffer 天然带一个空尾行
+        let chunk: String = (0..5_000)
+            .map(|i| format!("line_{i:05}\n"))
+            .chain(std::iter::once("tail-no-newline".to_string()))
+            .collect();
+        let expected = format!("{existing}{chunk}");
+        let expected_lines = expected.matches('\n').count() + 1;
+
+        let mut view = CodeView::new(existing, "txt", true);
+        view.append_text(&chunk);
+
+        assert_eq!(view.text(), expected, "逐行追加必须与整段原文一致");
+        assert_eq!(view.content.line_count(), expected_lines);
     }
 
     #[test]

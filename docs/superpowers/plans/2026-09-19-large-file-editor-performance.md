@@ -88,6 +88,10 @@ fn content_from_text(text: &str) -> text_editor::Content {
 
 `CodeView::new`/`restore`/`replace_all`/`replace_nth` 四处调用点保持不变(仍然统一调用 `content_from_text`,无需改动调用方式)。顶部 import 里 `Edit` 和 `Arc` 仍然需要保留——`append_text`(供后续任务"加载更多"分块追加用,已在本任务顺带实现)仍然合法地使用 `Action::Edit(Edit::Paste(..))`:它总是在 buffer **末尾**追加一段**有界大小**的新内容,插入点接近 `Vec` 尾部,`insert_at` 的搬移代价只正比于本次追加的行数,与已有 buffer 总行数无关(不是本任务撤销的那种"整份文档灌入空 buffer"场景,不受 O(n²) 问题影响,不用改)。
 
+> **2026-09-19 二次更正:上面这句"`append_text` 不受 O(n²) 影响、不用改"是错的。** 审阅时读 `cosmic-text edit/editor.rs::insert_at` 源码确认:段内每一"中间行"都插在**同一个固定下标** `insert_line = cursor.line + 1` 上(`Vec::insert` 逐行搬移),与光标在头还是在尾无关——即便光标在 buffer 末尾、`insert_line` 恰好等于 `len`,"中间行"仍反复插在同一个固定索引,整体仍是 O(n²)。一次"加载更多"读 `full_load_max_bytes()`(256MB~4GB)、可能是数百万行,整段 `Paste` 会挂起数小时。修正:`append_text` 改为**逐行**追加(`more.split_inclusive('\n')` 每行一次单行 `Paste`,单行无"中间行",天然 O(1)),把整体摊平成 O(行数);实测(release,20 万行)从整段 Paste 的 ~88s 降到 82ms。见 Task 4 Step 1 的修订版。
+
+> **2026-09-19 三次更正:`content_from_text` 也一并改成"空 Content + 逐行 `Paste`"(不再是下面 Step 3 代码块里的 `Content::with_text`)。** 逐行 `Paste` 不做 shaping,写锁不再被长持有,把整文档无界 shaping 从构造期彻底消除(真正 shaping 交给 widget 有界 `update()`)。完整动机、锁竞争链条与实测数据见文末"实现记录"里"已知遗留 → 已修复"一条,此处不重复。
+
 - [x] **Step 4(已完成): 跑测试确认通过**
 
 Run: `cargo test -p dozer-app --bin dozer code_editor::tests:: -- --nocapture`
@@ -1131,31 +1135,25 @@ git commit -m "feat(preview): 原生编辑器打开改异步读盘,不阻塞 UI 
 ```rust
     /// 只读大文件档"加载更多"专用:把 `more` 追加到 buffer 末尾,不经过
     /// `perform()`(不记 undo、不受 `read_only` 过滤——这不是用户编辑,是
-    /// 继续把磁盘上的原有内容灌进来)。直接对 `self.content` 发
-    /// `Action::Edit(Edit::Paste(..))`——同 Task 1 的 `content_from_text`,
-    /// `insert_at` 只切行不 shaping,shaping 交给下一次有界的 `update()`。
+    /// 继续把磁盘上的原有内容灌进来)。**逐行**追加(见 Task 1 二次更正:整段
+    /// `Edit::Paste` 对多行是 O(n²),单行 `Paste` 才是 O(1))。
     /// 插入点是当前 buffer 末尾(最后一行末尾),不影响用户已有的滚动位置/
     /// 光标(只读态下光标本来也不承载编辑语义)。
     pub fn append_text(&mut self, more: &str) {
         if more.is_empty() {
             return;
         }
-        use text_editor::{Cursor, Position};
         let last_line = self.content.line_count().saturating_sub(1);
         let last_col = self
             .content
             .line(last_line)
             .map(|l| l.text.len())
             .unwrap_or(0);
-        self.content.move_to(Cursor {
-            position: Position {
-                line: last_line,
-                column: last_col,
-            },
-            selection: None,
-        });
-        self.content
-            .perform(Action::Edit(Edit::Paste(Arc::new(more.to_string()))));
+        self.move_cursor_to((last_line, last_col));
+        for line in more.split_inclusive('\n') {
+            self.content
+                .perform(Action::Edit(Edit::Paste(Arc::new(line.to_string()))));
+        }
     }
 ```
 
@@ -1853,6 +1851,38 @@ Task 2-5 均已实现、测试通过(`cargo test -p dozer-app --bin dozer`:1013 
   wry 只读预览"这件事在新设计里不存在了(超过编辑档上限的可编辑扩展名文件
   仍然构造原生 `CodeView`,只是切只读),已重写为
   `oversized_edit_tier_file_stays_native_but_becomes_read_only`,断言新语义。
+
+### 2026-09-19 审阅后的二次修正
+
+- **`append_text`(Task 4"加载更多")的原实现是 O(n²),已修复为线性。** 原实现
+  用整段 `Action::Edit(Edit::Paste(..))` 追加续读 chunk;读
+  `cosmic-text edit/editor.rs::insert_at` 确认段内每一条"中间行"都插在**同一个
+  固定下标** `insert_line` 上(`Vec::insert` 逐行搬移),与光标在尾还是头无关,
+  多行整段是 O(n²)——与 Task 1 已证伪的那条路径同根,只是这次落在"加载更多"
+  而不是初次构造。一次"加载更多"读 `full_load_max_bytes()`(256MB~4GB)、可能
+  数百万行,整段 Paste 会挂起数小时。修复:`append_text` 改为逐行追加
+  (`more.split_inclusive('\n')`,每行一次单行 `Paste`,单行无中间行、O(1)),
+  整体摊平成 O(行数)。实测(release,20 万行):整段 Paste ~88s → 逐行 82ms。
+  新增 `append_text_multiline_appends_every_line_exactly` 正确性测试(5000 行,
+  空行/尾随换行/无换行末行都要逐字复原),并把手动基准 `scratch_bench_*`
+  扩到也测 `append_text` 的线性。
+- **已知遗留 → 已修复:`content_from_text` 不再整文档无界 shaping(原 Critical 2
+  已消除)。** 初版 `content_from_text` 退回官方 `Content::with_text`,后台线程在
+  `text::font_system().write()` 排他锁内做整文档 shaping;而 UI 线程每帧的
+  `Editor::update()`/`perform()`(以及普通 `text()` 的 `Paragraph::update`)也要拿
+  同一把写锁(`iced_graphics text/editor.rs:557`、`paragraph.rs:69`),于是后台
+  shaping 一个 100MB 只读文件(~40s)期间全应用文本渲染都阻塞等锁——"加载中…"
+  spinner 本身也会冻结。修复(不 fork 依赖):`content_from_text` 改回"空 Content
+  起手 + **逐行** `Edit::Paste`"(见 Task 1 二次更正里对 `append_text` 的同款
+  线性化)——单行 `Paste` 走 `insert_at` 的"首行追加 + 尾行"分支、无中间行、不做
+  shaping(`shape_opt` 停在 `Cached::Empty`),因此每一步只在写锁里停留微秒级,
+  写锁不被长持有;真正的 shaping 交给 widget 每帧有界的 `Editor::update()`(先
+  `set_size` 再 `shape_as_needed`,只 shape 可见窗口),shape 缓存按需增长而非整份
+  常驻(顺带消除了超大只读文件的 glyph 缓存内存膨胀)。实测(release,20 万行):
+  `content_from_text` 从 `with_text` 的 7.7s → 逐行 82ms;且不再持有写锁。
+  新增光标复位(`move_to((0,0))`)保持 `with_text` 的初始光标语义;手动基准
+  `scratch_bench_content_and_append_linear` 同时覆盖 `content_from_text` 与
+  `append_text` 的线性。`cargo test -p dozer-app --bin dozer`:1015 passed。
 
 ---
 
