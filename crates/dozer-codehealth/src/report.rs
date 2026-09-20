@@ -192,10 +192,17 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
         .map(|f| event_handler_tier(f.event_handler_count))
         .max()
         .unwrap_or(HealthTier::Healthy);
-    let ui_tier = [color_t, spacing_t, font_t, duplicate_t, nesting_t, handler_t]
-        .into_iter()
-        .max()
-        .unwrap();
+    let ui_tier = [
+        color_t,
+        spacing_t,
+        font_t,
+        duplicate_t,
+        nesting_t,
+        handler_t,
+    ]
+    .into_iter()
+    .max()
+    .unwrap();
 
     Ok(ProjectReport {
         total_loc,

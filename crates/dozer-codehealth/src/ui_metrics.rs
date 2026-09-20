@@ -193,8 +193,7 @@ pub fn find_font_findings(
     patterns: &Patterns,
     file: &Path,
 ) -> Vec<RawLiteralFinding> {
-    let mut out =
-        find_literal_arg_findings(root, &patterns.font_method, FONT_LITERAL_KINDS, file);
+    let mut out = find_literal_arg_findings(root, &patterns.font_method, FONT_LITERAL_KINDS, file);
     out.extend(find_literal_arg_findings(
         root,
         &patterns.font_with_name,
@@ -480,9 +479,7 @@ mod tests {
     #[test]
     fn event_handler_count_sums_all_handler_kinds() {
         let patterns = Patterns::compile(SupportLang::Rust);
-        let root = parse(
-            "fn f() { btn.on_press(Msg::A).into(); area.on_enter(Msg::B); }",
-        );
+        let root = parse("fn f() { btn.on_press(Msg::A).into(); area.on_enter(Msg::B); }");
         let root_node = root.root();
         let f = first_function(&root_node);
         assert_eq!(event_handler_count(&f, &patterns), 2);
@@ -532,7 +529,10 @@ mod tests {
     #[test]
     fn find_duplicate_clusters_below_threshold_not_included() {
         let mut registry = HashMap::new();
-        let srcs = ["fn a() { row![text(\"x\")] }", "fn b() { row![text(\"y\")] }"];
+        let srcs = [
+            "fn a() { row![text(\"x\")] }",
+            "fn b() { row![text(\"y\")] }",
+        ];
         for (i, src) in srcs.iter().enumerate() {
             let root = parse(src);
             find_duplicate_clusters(&root.root(), Path::new(&format!("f{i}.rs")), &mut registry);

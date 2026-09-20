@@ -232,7 +232,9 @@ fn nesting_depth_section(
     let mut offenders: Vec<&FunctionMetric> = report
         .functions
         .iter()
-        .filter(|f| dozer_codehealth::nesting_depth_tier(f.widget_nesting_depth) != HealthTier::Healthy)
+        .filter(|f| {
+            dozer_codehealth::nesting_depth_tier(f.widget_nesting_depth) != HealthTier::Healthy
+        })
         .collect();
     offenders.sort_by_key(|f| std::cmp::Reverse(f.widget_nesting_depth));
     let header = format!(
@@ -240,8 +242,12 @@ fn nesting_depth_section(
         tier_label(report.nesting_depth_tier),
         offenders.len()
     );
-    let mut col =
-        column![text(header).size(13).color(tier_color(report.nesting_depth_tier, &tokens))].spacing(4);
+    let mut col = column![
+        text(header)
+            .size(13)
+            .color(tier_color(report.nesting_depth_tier, &tokens))
+    ]
+    .spacing(4);
     for f in offenders {
         let line_text = format!(
             "{}:{}  {}  depth={}",
@@ -265,7 +271,9 @@ fn event_handler_section(
     let mut offenders: Vec<&FunctionMetric> = report
         .functions
         .iter()
-        .filter(|f| dozer_codehealth::event_handler_tier(f.event_handler_count) != HealthTier::Healthy)
+        .filter(|f| {
+            dozer_codehealth::event_handler_tier(f.event_handler_count) != HealthTier::Healthy
+        })
         .collect();
     offenders.sort_by_key(|f| std::cmp::Reverse(f.event_handler_count));
     let header = format!(
@@ -273,8 +281,12 @@ fn event_handler_section(
         tier_label(report.event_handler_tier),
         offenders.len()
     );
-    let mut col =
-        column![text(header).size(13).color(tier_color(report.event_handler_tier, &tokens))].spacing(4);
+    let mut col = column![
+        text(header)
+            .size(13)
+            .color(tier_color(report.event_handler_tier, &tokens))
+    ]
+    .spacing(4);
     for f in offenders {
         let line_text = format!(
             "{}:{}  {}  回调数={}",
@@ -300,9 +312,11 @@ fn duplicate_clusters_section(
         tier_label(report.duplicate_cluster_tier),
         report.duplicate_clusters.len()
     );
-    let mut col = column![text(header)
-        .size(13)
-        .color(tier_color(report.duplicate_cluster_tier, &tokens))]
+    let mut col = column![
+        text(header)
+            .size(13)
+            .color(tier_color(report.duplicate_cluster_tier, &tokens))
+    ]
     .spacing(4);
     for cluster in &report.duplicate_clusters {
         let tier = dozer_codehealth::cluster_tier(cluster.occurrences.len());

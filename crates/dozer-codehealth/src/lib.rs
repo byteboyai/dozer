@@ -11,6 +11,6 @@ pub use report::{
     FileMetric, HealthTier, ProjectReport, density_tier, file_metric, scale_tier, scan_project,
 };
 pub use ui_metrics::{
-    DuplicateCluster, RawLiteralFinding, color_tier, cluster_tier, event_handler_tier, font_tier,
+    DuplicateCluster, RawLiteralFinding, cluster_tier, color_tier, event_handler_tier, font_tier,
     nesting_depth_tier, spacing_tier,
 };
