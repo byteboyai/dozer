@@ -1,15 +1,16 @@
 use ast_grep_core::Doc;
 use ast_grep_language::{LanguageExt, SupportLang};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Severity {
     Normal,
     Watch,
     Critical,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FunctionMetric {
     pub name: String,
     pub file: PathBuf,

@@ -1,14 +1,15 @@
 use crate::function_metric::{FunctionMetric, Severity};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum HealthTier {
     Healthy,
     Watch,
     Critical,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FileMetric {
     pub path: PathBuf,
     pub loc: usize,
@@ -36,7 +37,7 @@ pub fn file_metric(path: &Path, file_loc: usize, functions: &[FunctionMetric]) -
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectReport {
     pub total_loc: usize,
     pub total_functions: usize,
