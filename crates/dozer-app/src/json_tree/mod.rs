@@ -8,6 +8,7 @@ use std::path::Path;
 
 pub const MAX_JSON_CHILDREN: usize = 10_000;
 pub const MAX_LEAF_PREVIEW_CHARS: usize = 2_000;
+pub const MAX_JSON_LINES: usize = 100_000;
 
 /// 单个节点在文档里的定位：对象取键，数组取下标。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -402,6 +403,90 @@ fn root_kind_of(bytes: &[u8]) -> Result<JsonKind, String> {
     let empty: Vec<PointerNode> = Vec::new();
     let value = sonic_rs::get(bytes, empty).map_err(|e| e.to_string())?;
     Ok(lazy_value_kind(&value))
+}
+
+pub fn load_jsonl(path: &std::path::Path) -> Result<JsonTreeView, String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let mut line_ranges = Vec::new();
+    let mut start = 0usize;
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'\n' {
+            if start < i {
+                line_ranges.push(start..i);
+            }
+            start = i + 1;
+            if line_ranges.len() >= MAX_JSON_LINES {
+                break;
+            }
+        }
+    }
+    if start < bytes.len() && line_ranges.len() < MAX_JSON_LINES {
+        line_ranges.push(start..bytes.len());
+    }
+    let roots: Vec<RootResult> = line_ranges
+        .iter()
+        .map(|range| {
+            let line = &bytes[range.clone()];
+            let kind = root_kind_of(line)?;
+            let content = decode_node(line, &[])?;
+            Ok(JsonNode {
+                kind,
+                content: Some(content),
+            })
+        })
+        .collect();
+    Ok(JsonTreeView::new(
+        path.to_path_buf(),
+        bytes,
+        Some(line_ranges),
+        roots,
+    ))
+}
+
+#[cfg(test)]
+mod load_jsonl_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn load_jsonl_makes_one_root_per_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("sample.jsonl");
+        std::fs::write(&p, "{\"a\":1}\n[1,2,3]\n\"just a string\"\n").unwrap();
+        let view = load_jsonl(&p).unwrap();
+        assert_eq!(view.roots.len(), 3);
+        assert_eq!(view.roots[0].as_ref().unwrap().kind, JsonKind::Object);
+        assert_eq!(view.roots[1].as_ref().unwrap().kind, JsonKind::Array);
+        assert_eq!(view.roots[2].as_ref().unwrap().kind, JsonKind::String);
+    }
+
+    #[test]
+    fn load_jsonl_one_bad_line_does_not_break_the_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("sample.jsonl");
+        std::fs::write(&p, "{\"a\":1}\nnot json\n{\"c\":3}\n").unwrap();
+        let view = load_jsonl(&p).unwrap();
+        assert_eq!(view.roots.len(), 3);
+        assert!(view.roots[0].is_ok());
+        assert!(view.roots[1].is_err());
+        assert!(view.roots[2].is_ok());
+    }
+
+    #[test]
+    fn load_jsonl_stops_reading_at_the_line_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("big.jsonl");
+        let mut f = std::fs::File::create(&p).unwrap();
+        for i in 0..MAX_JSON_LINES + 5 {
+            writeln!(f, "{i}").unwrap();
+        }
+        let view = load_jsonl(&p).unwrap();
+        assert_eq!(
+            view.roots.len(),
+            MAX_JSON_LINES,
+            "must stop at the cap, not read the whole file"
+        );
+    }
 }
 
 #[cfg(test)]
