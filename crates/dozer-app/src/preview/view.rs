@@ -23,6 +23,7 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         total_bytes: 0,
         truncated: false,
         loading: false,
+        pending_jump_line: None,
     }
 }
 
@@ -260,6 +261,7 @@ impl PreviewPane {
             total_bytes,
             truncated,
             loading: false,
+            pending_jump_line: None,
         });
         self.active = self.tabs.len() - 1;
         // 新 tab 成为激活者(可能顶掉旧 find tab)——清掉不再匹配的 Find
@@ -300,6 +302,7 @@ impl PreviewPane {
             total_bytes: 0,
             truncated: false,
             loading: true,
+            pending_jump_line: None,
         });
         self.active = self.tabs.len() - 1;
         self.cull_stale_find();
@@ -329,6 +332,13 @@ impl PreviewPane {
             tab.total_bytes = load.total_bytes;
             tab.truncated = load.truncated;
             self.pending_editor_focus = true;
+            // 外部面板（代码健康度）请求的"打开后跳转定位"：编辑器刚填上，
+            // 消费掉 pending 行号并把光标落过去（1-based → 0-based）。
+            if let Some(line) = tab.pending_jump_line.take()
+                && let Some(editor) = tab.editor.as_mut()
+            {
+                editor.move_cursor_to((line.saturating_sub(1), 0));
+            }
         }
     }
 

@@ -49,6 +49,11 @@ pub enum Message {
     Scanned(i64, Result<ProjectReport, String>),
     /// 点"扫描"按钮。
     ScanRequested,
+    /// 问题列表点击某函数：文件路径 + 目标行(1-based)。由内核（`app/update.rs`
+    /// 的 `Message::CodeHealth` 分发处）拦截转成顶层 `Message::CodeHealthOpenLocation`，
+    /// 不进入本模块自己的 `update`（同 `usage::Message::ToggleListCollapse`
+    /// "由内核拦截处理"的既有模式——见 `usage/mod.rs`）。
+    OpenLocation(std::path::PathBuf, usize),
 }
 
 pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
@@ -72,6 +77,9 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
         Message::ScanRequested => {
             ws_state.scanning = true;
             ws_state.scan_error = None;
+        }
+        Message::OpenLocation(..) => {
+            unreachable!("由内核拦截处理,见 codehealth::Message::OpenLocation 文档")
         }
     }
 }

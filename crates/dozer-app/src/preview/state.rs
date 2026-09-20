@@ -52,6 +52,12 @@ pub struct PreviewTab {
     /// webview 池——`desired_webviews()`/`active_webview_id()`/`select()` 等
     /// 判据要额外排除 `loading` 为真的 tab。
     pub loading: bool,
+    /// 由外部面板（目前只有代码健康度面板）请求的"打开后立即跳转到这一
+    /// 行"——`Some` 只在"这个 tab 刚被新建、还在 `loading` 中"的窗口期内
+    /// 有意义，`apply_native_load` 收到结果、把 `editor` 填上的那一刻立刻
+    /// `take()` 消费掉。已经打开且 `editor` 已就绪的 tab 不走这个字段，
+    /// 直接同步调用 `CodeView::move_cursor_to`。
+    pub pending_jump_line: Option<usize>,
 }
 
 impl std::fmt::Debug for PreviewTab {
@@ -69,6 +75,7 @@ impl std::fmt::Debug for PreviewTab {
             .field("editor", &self.editor.is_some())
             .field("tabular", &self.tabular.is_some())
             .field("json_tree", &self.json_tree.is_some())
+            .field("pending_jump_line", &self.pending_jump_line)
             .finish()
     }
 }

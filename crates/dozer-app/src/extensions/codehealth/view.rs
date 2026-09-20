@@ -7,7 +7,7 @@ use super::{Message, WorkspaceState};
 use byteui::theme::color::ColorTokens;
 use dozer_codehealth::{FunctionMetric, HealthTier, ProjectReport, Severity};
 use iced_widget::core::{Element, Length};
-use iced_widget::{Column, button, column, container, row, scrollable, text};
+use iced_widget::{Column, button, column, container, mouse_area, row, scrollable, text};
 use std::collections::BTreeMap;
 
 fn tier_color(tier: HealthTier, tokens: &ColorTokens) -> iced_widget::core::Color {
@@ -75,15 +75,17 @@ fn problem_row(
         Severity::Watch => tokens.cyan,
         Severity::Normal => tokens.dim,
     };
-    row![
+    let content = row![
         text(&f.name).size(13).color(tokens.cream),
         text(format!("complexity={} loc={}", f.complexity_signal, f.loc))
             .size(12)
             .color(color),
     ]
     .spacing(8)
-    .padding([2, 8])
-    .into()
+    .padding([2, 8]);
+    mouse_area(content)
+        .on_press(Message::OpenLocation(f.file.clone(), f.start_line))
+        .into()
 }
 
 fn problem_list(
