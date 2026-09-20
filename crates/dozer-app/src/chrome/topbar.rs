@@ -901,9 +901,13 @@ mod tests {
         // 激活 id 不在 recent_projects 里:不画选中项,菜单回到原样。
         let items = project_add_menu_items(&recent, &open, Some(99));
         assert!(
-            items
-                .iter()
-                .all(|i| !matches!(i, crate::chrome::native_menu::Item::Entry { icon: Some(IconKind::ChevronRight), .. })),
+            items.iter().all(|i| !matches!(
+                i,
+                crate::chrome::native_menu::Item::Entry {
+                    icon: Some(IconKind::ChevronRight),
+                    ..
+                }
+            )),
             "查不到名字时不应画选中项"
         );
     }
