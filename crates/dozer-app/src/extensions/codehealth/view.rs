@@ -26,6 +26,32 @@ fn tier_label(tier: HealthTier) -> &'static str {
     }
 }
 
+fn density_pct(critical: usize, total: usize) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        critical as f64 / total as f64 * 100.0
+    }
+}
+
+fn scale_summary(report: &ProjectReport) -> String {
+    format!(
+        "规模：{}（{} 行）",
+        tier_label(report.scale_tier),
+        report.total_loc
+    )
+}
+
+fn density_summary(report: &ProjectReport) -> String {
+    let pct = density_pct(report.critical_functions, report.total_functions);
+    format!(
+        "密度：{}（{}/{}，约 {pct:.1}%）",
+        tier_label(report.density_tier),
+        report.critical_functions,
+        report.total_functions
+    )
+}
+
 fn health_card(
     report: &ProjectReport,
     scanned_at_ms: Option<u64>,
@@ -46,6 +72,15 @@ fn health_card(
                 .size(20)
                 .color(badge_color),
             text(summary).size(14).color(tokens.body),
+        ]
+        .spacing(12),
+        row![
+            text(scale_summary(report))
+                .size(12)
+                .color(tier_color(report.scale_tier, &tokens)),
+            text(density_summary(report))
+                .size(12)
+                .color(tier_color(report.density_tier, &tokens)),
         ]
         .spacing(12),
         row![
@@ -192,5 +227,39 @@ mod tests {
         assert_eq!(format_ms(1_789_891_086_991), "2026-09-20 07:58:06 UTC");
         // epoch 0 边界。
         assert_eq!(format_ms(0), "1970-01-01 00:00:00 UTC");
+    }
+
+    fn sample_report(total_loc: usize, scale_tier: HealthTier, critical_functions: usize, total_functions: usize, density_tier: HealthTier) -> ProjectReport {
+        ProjectReport {
+            total_loc,
+            total_functions,
+            critical_functions,
+            scale_tier,
+            density_tier,
+            overall_tier: scale_tier.max(density_tier),
+            functions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn density_pct_computes_percentage() {
+        assert!((density_pct(9, 3890) - 0.231_362_47).abs() < 1e-6);
+    }
+
+    #[test]
+    fn density_pct_zero_total_avoids_div_by_zero() {
+        assert_eq!(density_pct(0, 0), 0.0);
+    }
+
+    #[test]
+    fn scale_summary_formats_loc_and_label() {
+        let report = sample_report(101_052, HealthTier::Critical, 9, 3890, HealthTier::Healthy);
+        assert_eq!(scale_summary(&report), "规模：警戒（101052 行）");
+    }
+
+    #[test]
+    fn density_summary_formats_ratio_and_label() {
+        let report = sample_report(101_052, HealthTier::Critical, 9, 3890, HealthTier::Healthy);
+        assert_eq!(density_summary(&report), "密度：健康（9/3890，约 0.2%）");
     }
 }
