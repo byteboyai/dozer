@@ -328,41 +328,50 @@ pub fn view<'a>(
                 iced_renderer::Renderer,
             > = button(line)
                 .width(Length::Fill)
-                .style(move |_t, _s| button::Style {
+                .style(move |_t, s: button::Status| {
                     // 选中态背景改半透明(验收反馈:实底奶油太抢,0.3 透明度
                     // 让下面的行/缩进线隐约透出)——文字色跟着从"反色"
                     // (`bg` 深色压亮底)改回 `cream`(同 hover/active 页签的
                     // 既有配色),半透明底上深色字对比度会不够。
-                    background: if is_selected {
-                        Some(
-                            Color {
-                                a: 0.3,
-                                ..byteui::theme::color::current().cream
-                            }
-                            .into(),
-                        )
-                    } else {
-                        None
-                    },
-                    text_color: if is_selected {
-                        byteui::theme::color::current().cream
-                    } else {
-                        byteui::theme::color::current().body
-                    },
-                    // 圆角恒为 6px——不只是拖拽落点描边要圆角,选中态的奶油色
-                    // 实底同样要圆角(2026-09 用户实测反馈),不能只在有描边
-                    // 时才圆,否则选中背景会露出方角。未选中且非落点时颜色
-                    // 透明、宽度 0,圆角设了也看不出来,不需要另外分支。
-                    border: Border {
-                        color: if is_drop_target {
-                            byteui::theme::color::current().gold
+                    // 鼠标划过(未选中)时填 `tab_hover`——和右键菜单/溢出下拉
+                    // 里菜单项 hover 的背景色完全一致(`chrome::menu::menu_button`),
+                    // 圆角也同样是 6px,视觉上对齐。
+                    let hovered = matches!(s, button::Status::Hovered)
+                        || matches!(s, button::Status::Pressed);
+                    button::Style {
+                        background: if is_selected {
+                            Some(
+                                Color {
+                                    a: 0.3,
+                                    ..byteui::theme::color::current().cream
+                                }
+                                .into(),
+                            )
+                        } else if hovered {
+                            Some(byteui::theme::color::current().tab_hover.into())
                         } else {
-                            Color::TRANSPARENT
+                            None
                         },
-                        width: if is_drop_target { 1.0 } else { 0.0 },
-                        radius: 6.0.into(),
-                    },
-                    ..button::Style::default()
+                        text_color: if is_selected {
+                            byteui::theme::color::current().cream
+                        } else {
+                            byteui::theme::color::current().body
+                        },
+                        // 圆角恒为 6px——不只是拖拽落点描边要圆角,选中态的奶油色
+                        // 实底同样要圆角(2026-09 用户实测反馈),不能只在有描边
+                        // 时才圆,否则选中背景会露出方角。未选中且非落点时颜色
+                        // 透明、宽度 0,圆角设了也看不出来,不需要另外分支。
+                        border: Border {
+                            color: if is_drop_target {
+                                byteui::theme::color::current().gold
+                            } else {
+                                Color::TRANSPARENT
+                            },
+                            width: if is_drop_target { 1.0 } else { 0.0 },
+                            radius: 6.0.into(),
+                        },
+                        ..button::Style::default()
+                    }
                 });
             let mut row_area = MouseArea::new(row_btn)
                 .on_press(msg)
