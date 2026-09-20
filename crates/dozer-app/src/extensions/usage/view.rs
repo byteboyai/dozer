@@ -69,9 +69,10 @@ pub fn content_pane<'a>(
             // 标题等之间的常规间距——两者解耦,避免一刀切把别处空隙也放大。
             let proj_section = column![home_section_head("项目用量统计")]
                 .spacing(SECTION_CHART_GAP)
-                .push(align_to_section_title(project_summary_boxes(&aggregate(
-                    &usages,
-                ))));
+                .push(align_to_section_title(project_summary_boxes(
+                    &aggregate(&usages),
+                    ws_state.git_commits(),
+                )));
             content = content.push(proj_section);
 
             // 内容在"选中具体 agent"与"全部 agent"两态用两套统计:选单个 agent
@@ -353,8 +354,8 @@ pub(crate) fn stat(
 }
 
 /// 一个带边框的统计卡片:一行 `stat` 并排。`project_summary_boxes` 拿它
-/// 拼出两张卡(会话/回合/工具调用/触达文件 一张,四个 token 分项另一张)
-/// ——参照设计草图,两张卡各自成框、并排放,不是原来的单卡通栏。
+/// 拼出两张卡(会话/回合/工具调用/触达文件/Git提交 一张,四个 token 分项
+/// 另一张)——参照设计草图,两张卡各自成框、并排放,不是原来的单卡通栏。
 pub(crate) fn stat_box(
     stats: Vec<Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer>>,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -381,8 +382,11 @@ pub(crate) fn stat_box(
 /// 原来只出现在小字说明行里,草图把它列成正式的一格统计,这里跟着改。
 /// `工具调用(改动)`的改动数细分草图没画,不在这张汇总卡上重复(单会话
 /// 行已在「会话明细」阶段移除,改动数本身仍由 `mutating_tool_calls` 统计)。
+/// `git_commits` 是项目仓库 HEAD 可达的提交总数(2026-09-20 新增),项目级
+/// 口径,不随 agent 筛选变化。
 pub(crate) fn project_summary_boxes(
     totals: &ProjectUsageTotals,
+    git_commits: u64,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let cream = byteui::theme::color::current().cream;
     let cyan = byteui::theme::color::current().cyan;
@@ -391,6 +395,7 @@ pub(crate) fn project_summary_boxes(
         stat("回合", format_count(totals.turns), cream),
         stat("工具调用", format_count(totals.tool_calls), cream),
         stat("触达文件", format_count(totals.files_touched), cream),
+        stat("Git提交", format_count(git_commits), cream),
     ]);
     let token_box = stat_box(vec![
         stat("Input", format_count(totals.tokens_in), cyan),

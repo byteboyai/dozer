@@ -24,6 +24,10 @@ pub struct WorkspaceState {
     loading: bool,
     /// 右侧 agent 筛选栏当前选中项:`None` = "全部agent"(默认,不过滤)。
     agent_filter: Option<AgentKind>,
+    /// 项目仓库 HEAD 可达的 git 提交总数(2026-09-20 新增的"Git提交"格)。
+    /// 与 agent 筛选无关——它是项目级统计,不随 `agent_filter` 收缩;非
+    /// git 仓库记 0。
+    git_commits: u64,
 }
 
 impl WorkspaceState {
@@ -33,6 +37,11 @@ impl WorkspaceState {
 
     pub fn loading(&self) -> bool {
         self.loading
+    }
+
+    /// 项目 git 提交总数,见 [`WorkspaceState::git_commits`]。
+    pub fn git_commits(&self) -> u64 {
+        self.git_commits
     }
 
     /// 供内核 `PanelSelect(PanelKind::Usage)` 分支调用——切到面板时
@@ -54,7 +63,9 @@ impl WorkspaceState {
 /// `Workspace::spawn_usage_refresh` 自动刷新,不再需要面板内按钮。
 #[derive(Debug, Clone)]
 pub enum Message {
-    Loaded(i64, Vec<(ConversationMeta, ConversationUsage)>),
+    /// 第三个字段是项目 git 提交总数(与 transcript 用量无关,顺手在同一个
+    /// 刷新任务里算掉,避免再加一条异步链路)。
+    Loaded(i64, Vec<(ConversationMeta, ConversationUsage)>, u64),
     /// 右侧 agent 筛选栏点击(2026-08-28):`None` 选"全部agent"。
     AgentFilterSet(Option<AgentKind>),
     /// 内容侧"收起/展开列表列"按钮:内核拦截,不进 `update`——转发成顶层
@@ -67,8 +78,9 @@ pub enum Message {
 
 pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
     match msg {
-        Message::Loaded(_, rows) => {
+        Message::Loaded(_, rows, git_commits) => {
             ws_state.rows = rows;
+            ws_state.git_commits = git_commits;
             ws_state.loading = false;
         }
         Message::AgentFilterSet(agent) => {
@@ -110,8 +122,29 @@ pub fn spawn_refresh(
                 )
             })
             .collect::<Vec<_>>();
-        emit(Message::Loaded(project_id, rows));
+        // git 提交数是纯本地仓库遍历,丢进 spawn_blocking 不占异步 worker。
+        let git_commits = tokio::task::spawn_blocking(move || count_git_commits(&project_path))
+            .await
+            .unwrap_or(0);
+        emit(Message::Loaded(project_id, rows, git_commits));
     });
+}
+
+/// 统计项目仓库 HEAD 可达的提交总数(当前分支口径,同 git_log 面板的
+/// revwalk 起点)。项目不是 git 仓库、空仓库或任何 git2 报错都一律记 0
+/// ——这格统计不值得让整个面板失败。
+fn count_git_commits(path: &std::path::Path) -> u64 {
+    // `discover` 兼容项目路径是仓库子目录的情况;`open` 只认仓库根。
+    let Ok(repo) = git2::Repository::discover(path) else {
+        return 0;
+    };
+    let Ok(mut revwalk) = repo.revwalk() else {
+        return 0;
+    };
+    if revwalk.push_head().is_err() {
+        return 0;
+    }
+    revwalk.count() as u64
 }
 
 /// 面板内容侧:统计图表 + 顶部"用量"标题。原先跟 `list_pane`(agent 筛选栏)
@@ -505,9 +538,10 @@ mod tests {
                 ..Default::default()
             },
         )];
-        update(&mut ws_state, Message::Loaded(1, rows.clone()));
+        update(&mut ws_state, Message::Loaded(1, rows.clone(), 42));
         assert!(!ws_state.loading());
         assert_eq!(ws_state.rows(), rows.as_slice());
+        assert_eq!(ws_state.git_commits(), 42);
     }
 
     #[test]
