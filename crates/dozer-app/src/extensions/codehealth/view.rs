@@ -203,6 +203,158 @@ fn problem_list(
     scrollable(col.padding(16)).into()
 }
 
+fn raw_literal_findings_section(
+    title: &str,
+    findings: &[dozer_codehealth::RawLiteralFinding],
+    tier: HealthTier,
+    distinct_count: Option<usize>,
+    tokens: ColorTokens,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let mut header_text = format!("{title}：{}（{} 处）", tier_label(tier), findings.len());
+    if let Some(n) = distinct_count {
+        header_text.push_str(&format!("，{n} 种不同取值"));
+    }
+    let mut col = column![text(header_text).size(13).color(tier_color(tier, &tokens))].spacing(4);
+    for f in findings {
+        let line_text = format!("{}:{}  {}", f.file.display(), f.line, f.snippet);
+        col = col.push(
+            mouse_area(text(line_text).size(11).color(tokens.dim))
+                .on_press(Message::OpenLocation(f.file.clone(), f.line)),
+        );
+    }
+    col.padding([4, 8]).into()
+}
+
+fn nesting_depth_section(
+    report: &ProjectReport,
+    tokens: ColorTokens,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let mut offenders: Vec<&FunctionMetric> = report
+        .functions
+        .iter()
+        .filter(|f| dozer_codehealth::nesting_depth_tier(f.widget_nesting_depth) != HealthTier::Healthy)
+        .collect();
+    offenders.sort_by_key(|f| std::cmp::Reverse(f.widget_nesting_depth));
+    let header = format!(
+        "组件树嵌套深度：{}（{} 个函数超标）",
+        tier_label(report.nesting_depth_tier),
+        offenders.len()
+    );
+    let mut col =
+        column![text(header).size(13).color(tier_color(report.nesting_depth_tier, &tokens))].spacing(4);
+    for f in offenders {
+        let line_text = format!(
+            "{}:{}  {}  depth={}",
+            f.file.display(),
+            f.start_line,
+            f.name,
+            f.widget_nesting_depth
+        );
+        col = col.push(
+            mouse_area(text(line_text).size(11).color(tokens.dim))
+                .on_press(Message::OpenLocation(f.file.clone(), f.start_line)),
+        );
+    }
+    col.padding([4, 8]).into()
+}
+
+fn event_handler_section(
+    report: &ProjectReport,
+    tokens: ColorTokens,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let mut offenders: Vec<&FunctionMetric> = report
+        .functions
+        .iter()
+        .filter(|f| dozer_codehealth::event_handler_tier(f.event_handler_count) != HealthTier::Healthy)
+        .collect();
+    offenders.sort_by_key(|f| std::cmp::Reverse(f.event_handler_count));
+    let header = format!(
+        "事件回调密度：{}（{} 个函数超标）",
+        tier_label(report.event_handler_tier),
+        offenders.len()
+    );
+    let mut col =
+        column![text(header).size(13).color(tier_color(report.event_handler_tier, &tokens))].spacing(4);
+    for f in offenders {
+        let line_text = format!(
+            "{}:{}  {}  回调数={}",
+            f.file.display(),
+            f.start_line,
+            f.name,
+            f.event_handler_count
+        );
+        col = col.push(
+            mouse_area(text(line_text).size(11).color(tokens.dim))
+                .on_press(Message::OpenLocation(f.file.clone(), f.start_line)),
+        );
+    }
+    col.padding([4, 8]).into()
+}
+
+fn duplicate_clusters_section(
+    report: &ProjectReport,
+    tokens: ColorTokens,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let header = format!(
+        "组件化重复结构：{}（{} 组）",
+        tier_label(report.duplicate_cluster_tier),
+        report.duplicate_clusters.len()
+    );
+    let mut col = column![text(header)
+        .size(13)
+        .color(tier_color(report.duplicate_cluster_tier, &tokens))]
+    .spacing(4);
+    for cluster in &report.duplicate_clusters {
+        let tier = dozer_codehealth::cluster_tier(cluster.occurrences.len());
+        let summary = format!("出现 {} 次", cluster.occurrences.len());
+        col = col.push(text(summary).size(12).color(tier_color(tier, &tokens)));
+        for (file, line) in &cluster.occurrences {
+            let line_text = format!("{}:{}", file.display(), line);
+            col = col.push(
+                mouse_area(text(line_text).size(11).color(tokens.dim))
+                    .on_press(Message::OpenLocation(file.clone(), *line)),
+            );
+        }
+    }
+    col.padding([4, 8]).into()
+}
+
+fn ui_consistency_section(
+    report: &ProjectReport,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let tokens = byteui::theme::color::current();
+    column![
+        text("UI 一致性").size(16).color(tokens.body),
+        raw_literal_findings_section(
+            "颜色硬编码",
+            &report.color_findings,
+            report.color_tier,
+            Some(report.distinct_color_values),
+            tokens,
+        ),
+        raw_literal_findings_section(
+            "边距硬编码",
+            &report.spacing_findings,
+            report.spacing_tier,
+            Some(report.distinct_spacing_values),
+            tokens,
+        ),
+        raw_literal_findings_section(
+            "字体硬编码",
+            &report.font_findings,
+            report.font_tier,
+            None,
+            tokens,
+        ),
+        nesting_depth_section(report, tokens),
+        event_handler_section(report, tokens),
+        duplicate_clusters_section(report, tokens),
+    ]
+    .spacing(12)
+    .padding(16)
+    .into()
+}
+
 fn error_banner<'a>(
     message: &'a str,
     tokens: &ColorTokens,
@@ -256,6 +408,7 @@ pub fn content_pane(
         col = col.push(err);
     }
     col = col.push(problem_list(report));
+    col = col.push(ui_consistency_section(report));
     container(col).width(width).into()
 }
 
