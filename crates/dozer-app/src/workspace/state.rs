@@ -387,6 +387,11 @@ pub struct Workspace {
     /// Agent 面板"＋"按钮弹出的"新建"菜单当前是否打开。不需要坐标——面板顶部固定
     /// 位置的下拉,不像项目树右键菜单需要跟随点击坐标。
     pub(crate) agent_picker_open: bool,
+    /// 关 Agent 面板 tab 前的待确认状态:目标会话处于 Running/AwaitingInput
+    /// 时,先把要关的下标存这里并弹确认框,确认后才真正 `close_tab`。关闭
+    /// 期间遮罩挡住 base 交互,下标不会被重排/越界(见 `app::update`
+    /// `Message::CloseTab` 的分流)。
+    pub(crate) pending_close_tab: Option<usize>,
     /// 消息驱动(非鼠标点击)把焦点拨离预览编辑器时置位——官方 `text_editor`
     /// 的焦点是真实 iced 焦点树的一部分,不能像 vendored `iced-code-editor`
     /// 那样直接对某个实例调 `lose_focus()`,改成一次性位,main.rs 下一帧用
@@ -615,6 +620,7 @@ impl Workspace {
             project_preview_tab_overflow_anchor: None,
             files: files::WorkspaceState::default(),
             agent_picker_open: false,
+            pending_close_tab: None,
             pending_editor_unfocus: false,
             todo: todo::WorkspaceState::default(),
             database: database::WorkspaceState::default(),

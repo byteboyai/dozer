@@ -193,8 +193,34 @@ impl App {
             Message::SelectTabNoDrag(idx) => self.select_tab_no_drag(idx),
             Message::CloseTab(idx) => {
                 self.with_focused_project(|ws, io| {
-                    ws.close_tab(io, idx);
-                    ws.ensure_project_terminal(io);
+                    // 目标会话仍在 Running/AwaitingInput → 先弹确认框,不直接
+                    // 关(避免误关正在跑/等输入的 agent 会话)。其它状态(IDle/
+                    // TurnEnded/已退出)直接关,保持原手感。
+                    let confirm_needed = ws.tabs.get(idx).is_some_and(|t| {
+                        matches!(
+                            t.agent_state,
+                            AgentState::Running | AgentState::AwaitingInput
+                        )
+                    });
+                    if confirm_needed {
+                        ws.pending_close_tab = Some(idx);
+                    } else {
+                        ws.close_tab(io, idx);
+                        ws.ensure_project_terminal(io);
+                    }
+                });
+            }
+            Message::TermTabCloseConfirm => {
+                self.with_focused_project(|ws, io| {
+                    if let Some(idx) = ws.pending_close_tab.take() {
+                        ws.close_tab(io, idx);
+                        ws.ensure_project_terminal(io);
+                    }
+                });
+            }
+            Message::TermTabCloseCancel => {
+                self.with_focused_project(|ws, _io| {
+                    ws.pending_close_tab = None;
                 });
             }
             Message::AgentPickerToggle => {

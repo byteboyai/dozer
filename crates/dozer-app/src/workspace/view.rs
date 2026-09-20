@@ -354,6 +354,39 @@ pub(crate) fn agent_picker_popup(
         .into()
 }
 
+/// 关 Agent 面板 tab 前的确认弹窗:目标会话处于 Running/AwaitingInput 时才
+/// 弹(分流见 `app::update` `Message::CloseTab`)。窗口级 overlay,复用
+/// `crate::dialog::confirm` 骨架(同文件树删除/主机删除确认框)。`pending_close_tab`
+/// 存的是被点 × 的下标,这里按它取出标题写进文案——下标在弹窗存活期间不会被
+/// 重排(遮罩挡住 base 交互),取得到就取,取不到(极端竞态)兜底成"会话"。
+pub(crate) fn agent_close_confirm_popup<'a>(
+    ws: &'a Workspace,
+    window_width: f32,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let Some(idx) = ws.pending_close_tab else {
+        return column![].into();
+    };
+    let title = ws
+        .tabs
+        .get(idx)
+        .map(|t| crate::workspace::hook::tab_title(t.agent, t.cwd.as_deref(), &t.info.name))
+        .unwrap_or_else(|| "会话".to_string());
+    crate::dialog::confirm(
+        crate::dialog::ConfirmDialog {
+            icon: None,
+            title: format!("关闭 \"{title}\"?"),
+            description: "该会话仍在运行 / 等待输入,关闭会结束此会话。".to_string(),
+            cancel_label: "取消".to_string(),
+            cancel_msg: Message::TermTabCloseCancel,
+            confirm_label: "关闭".to_string(),
+            confirm_msg: Message::TermTabCloseConfirm,
+            confirm_color: byteui::theme::color::current().red,
+            content_spacing: 8.0,
+        },
+        window_width,
+    )
+}
+
 /// 审阅内容的 webview 期望清单(`preview::desired_webviews` 同款语义)。
 /// 没有审阅内容 / 出错 / 空回合区间时返回空清单——`sync_webview_pool`
 /// 的 `retain` 会据此销毁 webview,不需要额外的隐藏逻辑。有内容时返回

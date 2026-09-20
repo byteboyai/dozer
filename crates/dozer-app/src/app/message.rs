@@ -92,6 +92,11 @@ pub enum Message {
     /// 反馈裁决：重开 app 只恢复"关 app 时还开着"的 tab，已关的不还魂）。
     /// "会话存活"保的是关 app/崩溃不掉会话——退 app 才是 detach。
     CloseTab(usize),
+    /// 关 Agent 面板 tab 确认框:确认(目标会话确实在 Running/AwaitingInput,
+    /// 用户仍要坚持关掉、结束此会话)。
+    TermTabCloseConfirm,
+    /// 关 Agent 面板 tab 确认框:取消,关掉确认框、什么都不做。
+    TermTabCloseCancel,
     /// Agent 面板"＋"按钮:开/关 agent 选择菜单。
     AgentPickerToggle,
     /// agent 选择菜单:点击菜单外/Esc,关闭不建会话。
