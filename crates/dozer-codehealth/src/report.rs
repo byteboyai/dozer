@@ -97,6 +97,8 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
         collect_rs_files(root, &mut files)?;
     }
 
+    let patterns = crate::ui_metrics::Patterns::compile(ast_grep_language::SupportLang::Rust);
+
     let mut all_functions = Vec::new();
     let mut total_loc = 0usize;
     for path in &files {
@@ -105,7 +107,9 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
             continue;
         };
         total_loc += src.lines().count();
-        all_functions.extend(crate::function_metric::functions_in_source(&src, path));
+        all_functions.extend(crate::function_metric::functions_in_source(
+            &src, path, &patterns,
+        ));
     }
 
     let total_functions = all_functions.len();
@@ -154,6 +158,8 @@ mod tests {
             loc: 2,
             complexity_signal: 41,
             severity: severity_for(41),
+            widget_nesting_depth: 0,
+            event_handler_count: 0,
         };
         let m = file_metric(Path::new("a.rs"), 100, &[f]);
         assert_eq!(m.critical_functions, 1);

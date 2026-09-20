@@ -320,6 +320,8 @@ mod tests {
             loc: 2,
             complexity_signal,
             severity,
+            widget_nesting_depth: 0,
+            event_handler_count: 0,
         }
     }
 

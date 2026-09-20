@@ -19,6 +19,8 @@ pub struct FunctionMetric {
     pub loc: usize,
     pub complexity_signal: usize,
     pub severity: Severity,
+    pub widget_nesting_depth: usize,
+    pub event_handler_count: usize,
 }
 
 /// spec「函数级」判定表：`> 40` Critical，`16..=40` Watch，`<= 15` Normal。
@@ -47,7 +49,11 @@ fn complexity_signal_of<D: Doc>(node: &ast_grep_core::Node<'_, D>) -> usize {
         .count()
 }
 
-pub fn functions_in_source(src: &str, file: &Path) -> Vec<FunctionMetric> {
+pub fn functions_in_source(
+    src: &str,
+    file: &Path,
+    patterns: &crate::ui_metrics::Patterns,
+) -> Vec<FunctionMetric> {
     let root = SupportLang::Rust.ast_grep(src);
     root.root()
         .dfs()
@@ -60,6 +66,7 @@ pub fn functions_in_source(src: &str, file: &Path) -> Vec<FunctionMetric> {
             let start_line = f.start_pos().line() + 1;
             let end_line = f.end_pos().line() + 1;
             let complexity_signal = complexity_signal_of(&f);
+            let fn_source = f.text();
             FunctionMetric {
                 name,
                 file: file.to_path_buf(),
@@ -68,6 +75,8 @@ pub fn functions_in_source(src: &str, file: &Path) -> Vec<FunctionMetric> {
                 loc: end_line - start_line + 1,
                 complexity_signal,
                 severity: severity_for(complexity_signal),
+                widget_nesting_depth: crate::ui_metrics::widget_nesting_depth(&fn_source),
+                event_handler_count: crate::ui_metrics::event_handler_count(&f, patterns),
             }
         })
         .collect()
@@ -100,7 +109,8 @@ mod tests {
     #[test]
     fn functions_in_source_extracts_name_and_loc() {
         let src = "fn foo() {\n    let x = 1;\n    x\n}\n";
-        let metrics = functions_in_source(src, Path::new("a.rs"));
+        let patterns = crate::ui_metrics::Patterns::compile(SupportLang::Rust);
+        let metrics = functions_in_source(src, Path::new("a.rs"), &patterns);
         assert_eq!(metrics.len(), 1);
         assert_eq!(metrics[0].name, "foo");
         assert_eq!(metrics[0].file, Path::new("a.rs"));
@@ -114,16 +124,17 @@ mod tests {
     #[test]
     fn functions_in_source_counts_control_flow_nodes() {
         let src = "fn bar(n: i32) -> i32 {\n    if n > 0 {\n        for i in 0..n {\n            let _ = i;\n        }\n    }\n    match n {\n        0 => 0,\n        _ => n,\n    }\n}\n";
-        let metrics = functions_in_source(src, Path::new("b.rs"));
+        let patterns = crate::ui_metrics::Patterns::compile(SupportLang::Rust);
+        let metrics = functions_in_source(src, Path::new("b.rs"), &patterns);
         assert_eq!(metrics.len(), 1);
-        // if(1) + for(1) + match(1) = 3
         assert_eq!(metrics[0].complexity_signal, 3);
     }
 
     #[test]
     fn functions_in_source_handles_multiple_functions() {
         let src = "fn one() {}\nfn two() {}\n";
-        let metrics = functions_in_source(src, Path::new("c.rs"));
+        let patterns = crate::ui_metrics::Patterns::compile(SupportLang::Rust);
+        let metrics = functions_in_source(src, Path::new("c.rs"), &patterns);
         assert_eq!(metrics.len(), 2);
         assert_eq!(metrics[0].name, "one");
         assert_eq!(metrics[1].name, "two");
@@ -131,6 +142,23 @@ mod tests {
 
     #[test]
     fn functions_in_source_empty_file_returns_empty() {
-        assert!(functions_in_source("", Path::new("empty.rs")).is_empty());
+        let patterns = crate::ui_metrics::Patterns::compile(SupportLang::Rust);
+        assert!(functions_in_source("", Path::new("empty.rs"), &patterns).is_empty());
+    }
+
+    #[test]
+    fn functions_in_source_computes_widget_nesting_depth() {
+        let src = "fn view() -> Element {\n    column![row![text(\"a\")]]\n}\n";
+        let patterns = crate::ui_metrics::Patterns::compile(SupportLang::Rust);
+        let metrics = functions_in_source(src, Path::new("d.rs"), &patterns);
+        assert_eq!(metrics[0].widget_nesting_depth, 2);
+    }
+
+    #[test]
+    fn functions_in_source_computes_event_handler_count() {
+        let src = "fn view() -> Element {\n    btn.on_press(Msg::A)\n}\n";
+        let patterns = crate::ui_metrics::Patterns::compile(SupportLang::Rust);
+        let metrics = functions_in_source(src, Path::new("e.rs"), &patterns);
+        assert_eq!(metrics[0].event_handler_count, 1);
     }
 }
