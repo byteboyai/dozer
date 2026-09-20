@@ -9,7 +9,7 @@ use crate::chrome::tab_widget::{
 };
 use crate::extensions::conversations;
 use crate::menu_spec::{MenuSpec, MenuSpecItem};
-use crate::preview::TabKind;
+use crate::preview::{PreviewPane, TabKind};
 use crate::theme;
 use crate::theme::terminal_font;
 use byteui::interaction::icons;
@@ -918,360 +918,8 @@ pub(crate) fn preview_pane_for<'a>(
                         },
                     ));
                 }
-            } else if let Some(find) = preview.find_state() {
-                let panel = find_panel();
-                let colors = byteui::theme::color::current();
-                // Find 条紧贴右侧编辑器,查询框/替换框正文用与编辑器相同的代码
-                // 字号(`tree_row_font_size` 与 code_editor 同公式),让用户敲的
-                // 词跟被找的文件正文看齐(需求:文件内查找条字号 = text editor)。
-                let find_font = tree_row_font_size();
-                // 「Aa」大小写开关:无独立 SVG 的字形钮(同被删的 Find × 按钮,但
-                // 有真状态)。开(逐字严格)文字青 `cyan`、关(ASCII 折叠)灰 `dim`。
-                // 青是 ByteBoy2077 甲方金之外的"用户动作强调色",toggle 归用户操作,
-                // 不用甲方专属 gold,遵循 CLAUDE.md 裁决。
-                // 内嵌在输入框同一圈边框内靠右(`input_text::view_with_suffix`,
-                // 结构参照 search_box 的"共框尾控件"既有做法),不再占条上独立槽位。
-                let case_toggle: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> = {
-                    let active = find.case_sensitive;
-                    button(text("Aa").size(byteui::theme::font::body()))
-                        .on_press(match panel {
-                            PanelKind::Project => {
-                                Message::PreviewFindCase(PanelKind::Project, !active)
-                            }
-                            _ => Message::PreviewFindCase(PanelKind::Files, !active),
-                        })
-                        .padding(2)
-                        .style(move |_t, _s| button::Style {
-                            background: None,
-                            text_color: if active { colors.cyan } else { colors.dim },
-                            ..button::Style::default()
-                        })
-                        .into()
-                };
-                // 边框高亮同 search_box 约定由调用方给:查询词非空即金框。
-                // 用 unframed 透明版 text_input(框/底由外层 `find_field_shell`
-                // 统一垫 editor 背景 + 描边),让 Aa 大小写钮共享同一圈内边距。
-                let input = byteui::form::input_text::view_with_suffix_unframed_at_size(
-                    find_font,
-                    "搜索",
-                    &find.query,
-                    false,
-                    Some(crate::preview::find_field_id(panel)),
-                    !find.query.is_empty(),
-                    None,
-                    move |q: String| match panel {
-                        PanelKind::Project => Message::PreviewFindText(PanelKind::Project, q),
-                        _ => Message::PreviewFindText(PanelKind::Files, q),
-                    },
-                    case_toggle,
-                );
-                // 命中计数:n 1-based;查无命中(非空 query)标红;新开 empty query
-                // 不显示计数——这条进列就 pad 占用让条高稳定,避免每次刷字数跳动。
-                let count_label: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-                    if find.count > 0 {
-                        text(format!("{}/{}", find.current + 1, find.count))
-                            .size(byteui::theme::font::body())
-                            .color(colors.dim)
-                            .into()
-                    } else if !find.query.is_empty() {
-                        text("0 个结果")
-                            .size(byteui::theme::font::body())
-                            .color(colors.red)
-                            .into()
-                    } else {
-                        container(iced_widget::Row::<
-                            Message,
-                            iced_widget::Theme,
-                            iced_renderer::Renderer,
-                        >::new())
-                        .into()
-                    };
-                let hover = move |next: bool| match next {
-                    true => match panel {
-                        PanelKind::Project => HoverId::ProjectPreviewFindNext,
-                        _ => HoverId::PreviewFindNext,
-                    },
-                    false => match panel {
-                        PanelKind::Project => HoverId::ProjectPreviewFindPrev,
-                        _ => HoverId::PreviewFindPrev,
-                    },
-                };
-                let step_icon = move |next: bool| -> iced_widget::core::Element<
-                    'static,
-                    Message,
-                    iced_widget::Theme,
-                    iced_renderer::Renderer,
-                > {
-                    let hid = hover(next);
-                    let btn = icons::icon_button_entry(
-                        if next {
-                            icons::IconKind::ArrowDown
-                        } else {
-                            icons::IconKind::ArrowUp
-                        },
-                        byteui::theme::icon_size::row(),
-                        false,
-                        false,
-                        app.hover_progress(hid),
-                        false,
-                        byteui::theme::geometry::tab_button_size(),
-                        true,
-                        match (next, panel) {
-                            (true, PanelKind::Project) => {
-                                Message::PreviewFindGo(PanelKind::Project, true)
-                            }
-                            (true, _) => Message::PreviewFindGo(PanelKind::Files, true),
-                            (false, PanelKind::Project) => {
-                                Message::PreviewFindGo(PanelKind::Project, false)
-                            }
-                            (false, _) => Message::PreviewFindGo(PanelKind::Files, false),
-                        },
-                        move |hovered| Message::Hover(hid, hovered),
-                        if next { "下一个" } else { "上一个" },
-                    );
-                    // 同替换行图标按钮:外面补一圈固定可见的圆角边框(`icon_
-                    // button_entry` 只在 `active` 态描边,这两个按钮没有持久
-                    // 选中态)。
-                    container(btn)
-                        .style(
-                            move |_t: &iced_widget::Theme| iced_widget::container::Style {
-                                background: None,
-                                border: Border {
-                                    color: colors.border,
-                                    width: 1.0,
-                                    radius: 6.0.into(),
-                                },
-                                ..iced_widget::container::Style::default()
-                            },
-                        )
-                        .into()
-                };
-                // 文件内搜索的查询框与替换框各自独立、成两个带 1px 圆角边框的
-                // 输入框(需求:v0.5.94 之后改回,不再合成一整块):框内底色与
-                // 右侧代码编辑器同一 `colors.bg`,敲词文字底色跟被找正文看板一致
-                // (比亮一点的 card 更"嵌进"编辑区);有内容时整框描金、否则普通
-                // 边色。命中计数与上下箭头、替换按钮都摆在框外右侧,不占框内。
-                type EE<'x> = iced_widget::core::Element<
-                    'x,
-                    Message,
-                    iced_widget::Theme,
-                    iced_renderer::Renderer,
-                >;
-                // 查询框前的展开/收起替换行圆盘箭头:收起态 `ChevronRight`、
-                // 展开态 `ChevronDown`(同文件树/Todo 分类树展开箭头的既有语义)。
-                // ⌘F 打开条时收起、⌘R 打开时展开(见 `PreviewFindOpen`/
-                // `PreviewFindOpenWithReplace`),这里手动点按翻转。
-                let replace_open = find.replace_open;
-                let replace_toggle_hid = match panel {
-                    PanelKind::Project => HoverId::ProjectPreviewFindReplaceToggle,
-                    _ => HoverId::PreviewFindReplaceToggle,
-                };
-                let replace_toggle: EE<'_> = icons::icon_button_entry(
-                    if replace_open {
-                        icons::IconKind::ChevronDown
-                    } else {
-                        icons::IconKind::ChevronRight
-                    },
-                    byteui::theme::icon_size::row(),
-                    false,
-                    false,
-                    app.hover_progress(replace_toggle_hid),
-                    false,
-                    byteui::theme::geometry::tab_button_size(),
-                    true,
-                    match panel {
-                        PanelKind::Project => Message::PreviewFindReplaceToggle(PanelKind::Project),
-                        _ => Message::PreviewFindReplaceToggle(PanelKind::Files),
-                    },
-                    move |hovered| Message::Hover(replace_toggle_hid, hovered),
-                    if replace_open {
-                        "收起替换"
-                    } else {
-                        "展开替换"
-                    },
-                );
-                // 查询框与替换框要"长度一样、右边缘对齐"(参照 VSCode 查找条):
-                // 两行各自的框后附件(计数+上下箭头 vs 替换按钮×2)天然宽度不
-                // 等,若各自吃 `Length::Fill` 剩余空间,两个框会不等宽。这里给
-                // 两行的"框后附件"统一钳到同一个固定宽度(取较宽的替换按钮组
-                // 富余出来),框本身仍吃 `Length::Fill`——总行宽相同、附件区宽度
-                // 相同,余下的 `Fill` 自然等宽,顺带右边缘也对齐。
-                // 「替换当前」/「替换全部」改图标按钮后trailing 区收窄回来——
-                // 决定宽度的现在是查询行那边"命中计数 + 上下箭头"这一组,不再
-                // 是文字按钮组。
-                const FIND_TRAILING_ZONE: f32 = 150.0;
-                let query_trailing = container(
-                    row![count_label, step_icon(false), step_icon(true)]
-                        .spacing(4)
-                        .align_y(iced_widget::core::alignment::Alignment::Center),
-                )
-                .width(Length::Fixed(FIND_TRAILING_ZONE))
-                .align_x(iced_widget::core::alignment::Horizontal::Right);
-                let mut find_rows: Vec<EE<'_>> = vec![];
-                // 边框描金:查询词非空 **或** 输入框持有真实焦点——2026-09-11
-                // 需求补上聚焦态,不再只靠已有内容触发(此前空 query 时点进框里
-                // 光标闪烁却没有任何视觉反馈)。
-                let query_active = !find.query.is_empty() || preview.find_query_focused();
-                let query_row: EE<'_> = container(
-                    row![
-                        replace_toggle,
-                        find_field_shell(input, colors, 7.0, 10.0, query_active),
-                        query_trailing,
-                    ]
-                    .spacing(4)
-                    .align_y(iced_widget::core::alignment::Alignment::Center),
-                )
-                .width(Length::Fill)
-                .into();
-                find_rows.push(query_row);
-
-                // ---- 文件内替换行(条身之下第二行) ----
-                // 替换只改锁定 buffer 并标脏、落盘仍等 ⌘S(`PreviewPane::replace_*`
-                // 的语义),不做直接磁盘写。默认跳过空命中(避免误把用户缓冲区清空
-                // 成替换框逗号残片)。“替换当前”会顺带到下一命中、方便一路处理,
-                // “替换全部”把这一轮全部落一次。两个按钮共用一轮是否可替换的开关。
-                let armed = find.count > 0;
-                // 替换框同查询框独立栅格:bare=true 去底去框透明,边框/底色交给
-                // 下方 `editor_field` 统一垫(editor 背景色)。
-                let replacement_input = byteui::form::input_text::view_at_size(
-                    find_font,
-                    "替换",
-                    &find.replacement,
-                    false,
-                    None,
-                    !find.replacement.is_empty(),
-                    None,
-                    true,
-                    move |s: String| match panel {
-                        PanelKind::Project => {
-                            Message::PreviewFindReplacement(PanelKind::Project, s)
-                        }
-                        _ => Message::PreviewFindReplacement(PanelKind::Files, s),
-                    },
-                );
-                // 「替换当前」/「替换全部」改图标按钮(Lucide replace /
-                // replace-all,2026-09-07 需求),不再是文字按钮——无命中时
-                // `dim` 置灰 + `interactive=false` 不可点,同 `armed` 语义。
-                let replace_icon_button = |kind: icons::IconKind,
-                                           hid: HoverId,
-                                           msg: Message,
-                                           tooltip: &'static str,
-                                           disabled: bool|
-                 -> iced_widget::core::Element<
-                    'static,
-                    Message,
-                    iced_widget::Theme,
-                    iced_renderer::Renderer,
-                > {
-                    let btn = icons::icon_button_entry(
-                        kind,
-                        byteui::theme::icon_size::row(),
-                        false,
-                        disabled,
-                        app.hover_progress(hid),
-                        false,
-                        byteui::theme::geometry::tab_button_size(),
-                        !disabled,
-                        msg,
-                        move |hovered| Message::Hover(hid, hovered),
-                        tooltip,
-                    );
-                    // `icon_button_entry` 本身只在 `active` 态描边(这两个按钮
-                    // 没有持久选中态,永远描不出来)——外面再包一圈固定可见的
-                    // 圆角边框,让它们看起来像独立按钮而不是裸图标。
-                    container(btn)
-                        .style(
-                            move |_t: &iced_widget::Theme| iced_widget::container::Style {
-                                background: None,
-                                border: Border {
-                                    color: colors.border,
-                                    width: 1.0,
-                                    radius: 6.0.into(),
-                                },
-                                ..iced_widget::container::Style::default()
-                            },
-                        )
-                        .into()
-                };
-                // 替换框要跟上面查询框左对齐:查询框前多了圆盘箭头
-                // (`tab_button_size()` 宽 + `query_row` 的 `spacing(4)`),这里
-                // 用等宽占位补上——占位宽度扣掉本行自己的 `spacing(6)`,两行加
-                // 起来对 `find_field_shell` 左边缘落在同一个 x。
-                let replace_indent =
-                    (byteui::theme::geometry::tab_button_size() + 4.0 - 6.0).max(0.0);
-                let replace_trailing = container(
-                    row![
-                        replace_icon_button(
-                            icons::IconKind::Replace,
-                            match panel {
-                                PanelKind::Project => HoverId::ProjectPreviewFindReplaceCurrentBtn,
-                                _ => HoverId::PreviewFindReplaceCurrentBtn,
-                            },
-                            match panel {
-                                PanelKind::Project => {
-                                    Message::PreviewFindReplaceCurrent(PanelKind::Project)
-                                }
-                                _ => Message::PreviewFindReplaceCurrent(PanelKind::Files),
-                            },
-                            "替换当前",
-                            !armed,
-                        ),
-                        replace_icon_button(
-                            icons::IconKind::ReplaceAll,
-                            match panel {
-                                PanelKind::Project => HoverId::ProjectPreviewFindReplaceAllBtn,
-                                _ => HoverId::PreviewFindReplaceAllBtn,
-                            },
-                            match panel {
-                                PanelKind::Project => {
-                                    Message::PreviewFindReplaceAll(PanelKind::Project)
-                                }
-                                _ => Message::PreviewFindReplaceAll(PanelKind::Files),
-                            },
-                            "替换全部",
-                            !armed,
-                        ),
-                    ]
-                    .spacing(6)
-                    .align_y(iced_widget::core::alignment::Alignment::Center),
-                )
-                .width(Length::Fixed(FIND_TRAILING_ZONE))
-                .align_x(iced_widget::core::alignment::Horizontal::Right);
-                let replace_row = container(
-                    row![
-                        iced_widget::Space::new().width(Length::Fixed(replace_indent)),
-                        find_field_shell(
-                            replacement_input,
-                            colors,
-                            4.0,
-                            10.0,
-                            !find.replacement.is_empty()
-                        ),
-                        replace_trailing,
-                    ]
-                    .spacing(6)
-                    .align_y(iced_widget::core::alignment::Alignment::Center),
-                )
-                .width(Length::Fill)
-                .into();
-                if replace_open {
-                    find_rows.push(replace_row);
-                }
-                let find_rows = container(column(find_rows).spacing(4))
-                    .width(Length::Fill)
-                    .padding(8)
-                    .style(
-                        move |_t: &iced_widget::Theme| iced_widget::container::Style {
-                            background: Some(colors.card.into()),
-                            border: iced_widget::core::Border {
-                                color: colors.border,
-                                width: 1.0,
-                                radius: 8.0.into(),
-                            },
-                            ..iced_widget::container::Style::default()
-                        },
-                    );
-                content = content.push(find_rows);
+            } else if let Some(_find) = preview.find_state() {
+                content = content.push(preview_find_bar_widget(app, preview, kind, true));
             }
             // 只读大文件档提示:整读/分块两档只读文件(`native_editor::
             // SizeTier`)在编辑器上方加一条横幅——整读档只报大小,分块档还
@@ -1376,19 +1024,14 @@ pub(crate) fn preview_pane_for<'a>(
         } else if active_tab.loading {
             // 原生编辑器候选正在后台线程异步读盘+构造(见 `App::
             // preview_open_path`/`PreviewPane::insert_loading_tab`)——这段
-            // 时间不阻塞 UI 线程,画个居中提示占位,结果回来后
+            // 时间不阻塞 UI 线程,画个居中 loading 动画占位(与表格/搜索/
+            // 数据库等其它异步加载场景同一套 `loading_hint`),结果回来后
             // `apply_native_load` 会把这个分支换成上面 `editor` 那支。
-            content = content.push(
-                container(
-                    text("加载中…")
-                        .size(byteui::theme::font::body())
-                        .color(byteui::theme::color::current().dim),
-                )
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(iced_widget::core::alignment::Horizontal::Center)
-                .align_y(iced_widget::core::alignment::Vertical::Center),
-            );
+            content = content.push(byteui::feedback::math_curve::loading_hint(
+                byteui::feedback::math_curve::Curve::RoseThree,
+                "正在打开文件…",
+                48.0,
+            ));
         } else if active_tab.kind == TabKind::Blank {
             // 关到最后一个 tab 后自动补的空白占位:没有 wry 页面,内容区
             // 纯 iced 原生渲染,居中放 Dozer 品牌标(`IconKind::Dozer`,此前
@@ -1403,6 +1046,20 @@ pub(crate) fn preview_pane_for<'a>(
                 .height(Length::Fill)
                 .align_x(iced_widget::core::alignment::Horizontal::Center)
                 .align_y(iced_widget::core::alignment::Vertical::Center),
+            );
+        }
+        // webview(flyfish)档 Find 条:渲染在内容区顶部,给已被 `preview_desired`
+        // 下推的 webview 矩形让出固定高度的那一条。复用原生 Find 条(隐藏替换),
+        // 高度钳到 `PREVIEW_FIND_BAR_HEIGHT` 与 webview 让位精确对齐——webview
+        // 是原生子视图、不听 iced 绘制顺序,必须显式缩小它而不是指望层级遮挡。
+        // 原生 editor 档走上面 `else if let Some(editor)` 分支里的 `true` 调用,
+        // 二者互斥(find 会话要么锁原生、要么锁 webview),不会出现双条。
+        if preview.find_state().is_some_and(|f| f.is_webview) {
+            let bar = preview_find_bar_widget(app, preview, kind, false);
+            content = content.push(
+                container(bar)
+                    .width(Length::Fill)
+                    .height(Length::Fixed(crate::preview::PREVIEW_FIND_BAR_HEIGHT)),
             );
         }
     }
@@ -1424,6 +1081,318 @@ pub(crate) fn preview_pane_for<'a>(
 /// `stack![base, ...]` 里拼(同 `terminal::term_tab_overflow_popup` 文档
 /// 解释的理由——`anchor`/`window_size` 是全窗口坐标系,嵌在 `preview_pane_for`
 /// 自己的局部布局里换算位置会跟真实点击位置对不上)。
+
+/// 文件内 Find 条的共有渲染:`native editor` 档与 `webview(flyfish)` 档复用同一
+/// 套查询框 / 「Aa」大小写开关 / n-m 计数 / 上下命中按钮,差别只在"搜索引擎"
+/// 由谁执行(`PreviewPane::find_type`/`find_go` 对原生走 `CodeView` 现算、对
+/// webview 挂 `pending_webview_exec` 给 `window_events` 注入 flyfish API)。
+/// `show_replace` 控制是否渲染替换行与其展开圆盘箭头——原生 editor 档传
+/// `true`,webview 档 flyfish 没有替换概念传 `false`(`open_find_on_active` 也已
+/// 强制 `replace_open=false`,即使为 true 也不渲染)。`preview` 取只读引用读
+/// `find_state()`/`find_query_focused()`,消息按 `kind` 路由到对应面板。
+pub(crate) fn preview_find_bar_widget<'a>(
+    app: &'a App,
+    preview: &'a PreviewPane,
+    kind: PreviewPaneKind,
+    show_replace: bool,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let Some(find) = preview.find_state() else {
+        return iced_widget::Space::new().into();
+    };
+    let panel = match kind {
+        PreviewPaneKind::Files => PanelKind::Files,
+        PreviewPaneKind::Project => PanelKind::Project,
+    };
+    let colors = byteui::theme::color::current();
+    let find_font = tree_row_font_size();
+    let case_toggle: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> = {
+        let active = find.case_sensitive;
+        button(text("Aa").size(byteui::theme::font::body()))
+            .on_press(match panel {
+                PanelKind::Project => Message::PreviewFindCase(PanelKind::Project, !active),
+                _ => Message::PreviewFindCase(PanelKind::Files, !active),
+            })
+            .padding(2)
+            .style(move |_t, _s| button::Style {
+                background: None,
+                text_color: if active { colors.cyan } else { colors.dim },
+                ..button::Style::default()
+            })
+            .into()
+    };
+    let input = byteui::form::input_text::view_with_suffix_unframed_at_size(
+        find_font,
+        "搜索",
+        &find.query,
+        false,
+        Some(crate::preview::find_field_id(panel)),
+        !find.query.is_empty(),
+        None,
+        move |q: String| match panel {
+            PanelKind::Project => Message::PreviewFindText(PanelKind::Project, q),
+            _ => Message::PreviewFindText(PanelKind::Files, q),
+        },
+        case_toggle,
+    );
+    let count_label: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        if find.count > 0 {
+            text(format!("{}/{}", find.current + 1, find.count))
+                .size(byteui::theme::font::body())
+                .color(colors.dim)
+                .into()
+        } else if !find.query.is_empty() {
+            text("0 个结果")
+                .size(byteui::theme::font::body())
+                .color(colors.red)
+                .into()
+        } else {
+            container(iced_widget::Row::<
+                Message,
+                iced_widget::Theme,
+                iced_renderer::Renderer,
+            >::new())
+            .into()
+        };
+    let hover = move |next: bool| match next {
+        true => match panel {
+            PanelKind::Project => HoverId::ProjectPreviewFindNext,
+            _ => HoverId::PreviewFindNext,
+        },
+        false => match panel {
+            PanelKind::Project => HoverId::ProjectPreviewFindPrev,
+            _ => HoverId::PreviewFindPrev,
+        },
+    };
+    let step_icon = move |next: bool| -> iced_widget::core::Element<
+        'static,
+        Message,
+        iced_widget::Theme,
+        iced_renderer::Renderer,
+    > {
+        let hid = hover(next);
+        let btn = icons::icon_button_entry(
+            if next {
+                icons::IconKind::ArrowDown
+            } else {
+                icons::IconKind::ArrowUp
+            },
+            byteui::theme::icon_size::row(),
+            false,
+            false,
+            app.hover_progress(hid),
+            false,
+            byteui::theme::geometry::tab_button_size(),
+            true,
+            match (next, panel) {
+                (true, PanelKind::Project) => Message::PreviewFindGo(PanelKind::Project, true),
+                (true, _) => Message::PreviewFindGo(PanelKind::Files, true),
+                (false, PanelKind::Project) => Message::PreviewFindGo(PanelKind::Project, false),
+                (false, _) => Message::PreviewFindGo(PanelKind::Files, false),
+            },
+            move |hovered| Message::Hover(hid, hovered),
+            if next { "下一个" } else { "上一个" },
+        );
+        container(btn)
+            .style(
+                move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                    background: None,
+                    border: Border {
+                        color: colors.border,
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..iced_widget::container::Style::default()
+                },
+            )
+            .into()
+    };
+    type EE<'x> =
+        iced_widget::core::Element<'x, Message, iced_widget::Theme, iced_renderer::Renderer>;
+    // 替换行展开圆盘箭头只在 show_replace(原生档)出现;webview 档 flyfish 无
+    // 替换,直接给 `None`,查询行不再渲染那个箭头。
+    let replace_toggle_opt: Option<EE<'_>> = if show_replace {
+        let replace_open = find.replace_open;
+        let replace_toggle_hid = match panel {
+            PanelKind::Project => HoverId::ProjectPreviewFindReplaceToggle,
+            _ => HoverId::PreviewFindReplaceToggle,
+        };
+        Some(icons::icon_button_entry(
+            if replace_open {
+                icons::IconKind::ChevronDown
+            } else {
+                icons::IconKind::ChevronRight
+            },
+            byteui::theme::icon_size::row(),
+            false,
+            false,
+            app.hover_progress(replace_toggle_hid),
+            false,
+            byteui::theme::geometry::tab_button_size(),
+            true,
+            match panel {
+                PanelKind::Project => Message::PreviewFindReplaceToggle(PanelKind::Project),
+                _ => Message::PreviewFindReplaceToggle(PanelKind::Files),
+            },
+            move |hovered| Message::Hover(replace_toggle_hid, hovered),
+            if replace_open {
+                "收起替换"
+            } else {
+                "展开替换"
+            },
+        ))
+    } else {
+        None
+    };
+    const FIND_TRAILING_ZONE: f32 = 150.0;
+    let query_trailing = container(
+        row![count_label, step_icon(false), step_icon(true)]
+            .spacing(4)
+            .align_y(iced_widget::core::alignment::Alignment::Center),
+    )
+    .width(Length::Fixed(FIND_TRAILING_ZONE))
+    .align_x(iced_widget::core::alignment::Horizontal::Right);
+    let query_active = !find.query.is_empty() || preview.find_query_focused();
+    let mut query_row_children: Vec<EE<'_>> = Vec::new();
+    if let Some(rt) = replace_toggle_opt {
+        query_row_children.push(rt);
+    }
+    query_row_children.push(find_field_shell(input, colors, 7.0, 10.0, query_active));
+    query_row_children.push(query_trailing.into());
+    let mut query_row_inner = iced_widget::Row::new()
+        .spacing(4)
+        .align_y(iced_widget::core::alignment::Alignment::Center);
+    for c in query_row_children {
+        query_row_inner = query_row_inner.push(c);
+    }
+    let query_row: EE<'_> = container(query_row_inner).width(Length::Fill).into();
+    let mut find_rows: Vec<EE<'_>> = vec![query_row];
+    // 替换行只在 show_replace(原生档)且展开时出现;webview 档恒不渲染。
+    if show_replace && find.replace_open {
+        let armed = find.count > 0;
+        let replacement_input = byteui::form::input_text::view_at_size(
+            find_font,
+            "替换",
+            &find.replacement,
+            false,
+            None,
+            !find.replacement.is_empty(),
+            None,
+            true,
+            move |s: String| match panel {
+                PanelKind::Project => Message::PreviewFindReplacement(PanelKind::Project, s),
+                _ => Message::PreviewFindReplacement(PanelKind::Files, s),
+            },
+        );
+        let replace_icon_button = |kind: icons::IconKind,
+                                   hid: HoverId,
+                                   msg: Message,
+                                   tooltip: &'static str,
+                                   disabled: bool|
+         -> iced_widget::core::Element<
+            'static,
+            Message,
+            iced_widget::Theme,
+            iced_renderer::Renderer,
+        > {
+            let btn = icons::icon_button_entry(
+                kind,
+                byteui::theme::icon_size::row(),
+                false,
+                disabled,
+                app.hover_progress(hid),
+                false,
+                byteui::theme::geometry::tab_button_size(),
+                !disabled,
+                msg,
+                move |hovered| Message::Hover(hid, hovered),
+                tooltip,
+            );
+            container(btn)
+                .style(
+                    move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                        background: None,
+                        border: Border {
+                            color: colors.border,
+                            width: 1.0,
+                            radius: 6.0.into(),
+                        },
+                        ..iced_widget::container::Style::default()
+                    },
+                )
+                .into()
+        };
+        let replace_indent = (byteui::theme::geometry::tab_button_size() + 4.0 - 6.0).max(0.0);
+        let replace_trailing = container(
+            row![
+                replace_icon_button(
+                    icons::IconKind::Replace,
+                    match panel {
+                        PanelKind::Project => HoverId::ProjectPreviewFindReplaceCurrentBtn,
+                        _ => HoverId::PreviewFindReplaceCurrentBtn,
+                    },
+                    match panel {
+                        PanelKind::Project =>
+                            Message::PreviewFindReplaceCurrent(PanelKind::Project),
+                        _ => Message::PreviewFindReplaceCurrent(PanelKind::Files),
+                    },
+                    "替换当前",
+                    !armed,
+                ),
+                replace_icon_button(
+                    icons::IconKind::ReplaceAll,
+                    match panel {
+                        PanelKind::Project => HoverId::ProjectPreviewFindReplaceAllBtn,
+                        _ => HoverId::PreviewFindReplaceAllBtn,
+                    },
+                    match panel {
+                        PanelKind::Project => Message::PreviewFindReplaceAll(PanelKind::Project),
+                        _ => Message::PreviewFindReplaceAll(PanelKind::Files),
+                    },
+                    "替换全部",
+                    !armed,
+                ),
+            ]
+            .spacing(6)
+            .align_y(iced_widget::core::alignment::Alignment::Center),
+        )
+        .width(Length::Fixed(FIND_TRAILING_ZONE))
+        .align_x(iced_widget::core::alignment::Horizontal::Right);
+        let replace_row = container(
+            row![
+                iced_widget::Space::new().width(Length::Fixed(replace_indent)),
+                find_field_shell(
+                    replacement_input,
+                    colors,
+                    4.0,
+                    10.0,
+                    !find.replacement.is_empty()
+                ),
+                replace_trailing,
+            ]
+            .spacing(6)
+            .align_y(iced_widget::core::alignment::Alignment::Center),
+        )
+        .width(Length::Fill)
+        .into();
+        find_rows.push(replace_row);
+    }
+    container(column(find_rows).spacing(4))
+        .width(Length::Fill)
+        .padding(8)
+        .style(
+            move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                background: Some(colors.card.into()),
+                border: iced_widget::core::Border {
+                    color: colors.border,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..iced_widget::container::Style::default()
+            },
+        )
+        .into()
+}
+
 pub(crate) fn preview_tab_overflow_popup<'a>(
     app: &'a App,
     ws: &'a Workspace,

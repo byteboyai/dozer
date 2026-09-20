@@ -521,27 +521,63 @@ impl PreviewPane {
         self.find.is_some()
     }
 
-    /// 针对**当前激活**的原生 tab 打开(或刷新)Find。已对该 tab 开着时是
-    /// no-op(⌘F 连按只把 focus 还给输入框,不清输入内容);切到别的文件后再开,
-    /// 丢弃旧会话重建空 query。激活 tab 不是原生(webview/Blank)时 no-op——
-    /// Find 只对有 iced `text_editor` 的 tab 有意义。
+    /// 针对**当前激活** tab 打开(或刷新)Find。原生 editor tab 走
+    /// `CodeView::find_matches_all` 同步现算那一套;webview(flyfish) tab 走
+    /// flyfish 自带搜索 API——此时 `is_webview=true` 且锁定 `webview_pool_id`
+    /// (webview 池 key,已含 Project 偏移),真正的 JS 注入延后到
+    /// `window_events::apply_pending_preview_find`(句柄只那里拿得到)。
+    ///
+    /// 已对该 tab 开着时是 no-op(⌘F 连按只把 focus 还给输入框,不清输入内容);
+    /// 切到别的文件后再开,丢弃旧会话重建空 query。激活 tab 是 Blank 占位时
+    /// no-op——Find 只对"有内容可搜"的 tab 有意义。
     ///
     /// `replace_open` 定住这次打开动作要的替换行展开态——⌘F 传 `false`(收起)、
     /// ⌘R 传 `true`(展开),每次调用都显式生效(哪怕会话已开着),不是只在
-    /// 新建时起作用:用户按下的是哪个快捷键,条就该立刻呈现对应形态,不能因为
-    /// "会话已存在"就沿用上一次的展开态。
-    pub fn open_find_on_active(&mut self, replace_open: bool) {
-        let Some(active_id) = self
+    /// 新建时起作用:用户按下的是哪个快捷键,条就该立刻呈现对应形态。webview
+    /// 档 flyfish 没有替换概念,`replace_open` 在这里被强制收起。
+    ///
+    /// `webview_pool_id` 是调用方(`Workspace::preview_find_open` 已用
+    /// `active_preview_webview_id(kind)` 算好的、含 Project 偏移的池 key)传
+    /// 进来的——只有激活 tab 正好是 webview 时才会被用到,原生档忽略它。
+    pub fn open_find_on_active(&mut self, replace_open: bool, webview_pool_id: Option<usize>) {
+        // 优先:激活 tab 是原生 editor → 原生 Find 会话。
+        if let Some(active_id) = self
             .tabs
             .get(self.active)
             .filter(|t| t.editor.is_some())
             .map(|t| t.id)
-        else {
+        {
+            if self.find.as_ref().is_some_and(|f| f.tab_id == active_id) {
+                if let Some(f) = self.find.as_mut() {
+                    f.replace_open = replace_open;
+                }
+            } else {
+                self.find = Some(FindState {
+                    tab_id: active_id,
+                    query: String::new(),
+                    current: 0,
+                    count: 0,
+                    case_sensitive: false,
+                    replacement: String::new(),
+                    replace_open,
+                    query_focused: false,
+                    is_webview: false,
+                    pending_webview_exec: None,
+                    webview_pool_id: None,
+                });
+            }
+            return;
+        }
+        // 其次:激活 tab 是 flyfish webview(无原生 editor、是文件、未在读盘
+        // 中)→ webview Find 会话。锁 webview 池 key,强制收起替换行(无替换)。
+        let Some(active_id) = self.active_webview_id() else {
             return;
         };
         if self.find.as_ref().is_some_and(|f| f.tab_id == active_id) {
             if let Some(f) = self.find.as_mut() {
-                f.replace_open = replace_open;
+                f.replace_open = false;
+                // 连按 ⌘F 重触发一次搜索,把已输入 query 重新高亮出来。
+                f.pending_webview_exec = Some(WebviewFindAction::Search);
             }
         } else {
             self.find = Some(FindState {
@@ -551,8 +587,11 @@ impl PreviewPane {
                 count: 0,
                 case_sensitive: false,
                 replacement: String::new(),
-                replace_open,
+                replace_open: false,
                 query_focused: false,
+                is_webview: true,
+                pending_webview_exec: Some(WebviewFindAction::Search),
+                webview_pool_id,
             });
         }
     }
@@ -566,8 +605,36 @@ impl PreviewPane {
     }
 
     /// 关掉 Find 条目(⌘F 里输入框 ×、Esc、切走文件后的自动清扫都走这里)。
+    /// webview(flyfish)档丢会话前先把"该清哪块 webview 高亮"记下来,等
+    /// `apply_pending_preview_find` 在事件环里注入 `clearDocumentSearch()`。
     pub fn close_find(&mut self) {
+        if let Some(id) = self.find.as_ref().and_then(|f| f.webview_pool_id) {
+            self.pending_webview_find_clear = Some(id);
+        }
         self.find = None;
+    }
+
+    /// 取走(消费式)webview(flyfish)档 Find 待下发的搜索动作 + 当前查询词 +
+    /// 大小写敏感开关,供 `platform/window_events::apply_pending_preview_find`
+    /// 注入 flyfish JS。不是 webview 会话或没有待下发动作时返回 `None`;取走即
+    /// 把 `pending_webview_exec` 清回 `None`(同 `pending_focus` 的"派发完消息后
+    /// 轮询"节奏,避免重复注入)。
+    pub fn take_pending_webview_find(&mut self) -> Option<(WebviewFindAction, String, bool)> {
+        if self.find.as_ref()?.is_webview {
+            let action = self.find.as_mut()?.pending_webview_exec.take()?;
+            let query = self.find.as_ref()?.query.clone();
+            let cs = self.find.as_ref()?.case_sensitive;
+            Some((action, query, cs))
+        } else {
+            None
+        }
+    }
+
+    /// 取走(消费式)webview(flyfish)档待清理的 webview 池 key,供
+    /// `apply_pending_preview_find` 注入 `clearDocumentSearch()` 抹掉高亮。无则
+    /// `None`(取走即清)。
+    pub fn take_pending_webview_find_clear(&mut self) -> Option<usize> {
+        self.pending_webview_find_clear.take()
     }
 
     /// Find 会话只读引用(视图展示 n/m 与判灰用);未打开时 `None`。
@@ -598,6 +665,16 @@ impl PreviewPane {
     /// **自动在正文里框出关键词**(用户输入时眼睛跟着查询词的位置),只把光标放
     /// 起点是无选区的裸光标,代码里看不到任何东西被选中。
     pub fn find_type(&mut self, query: String) {
+        // webview(flyfish)档:只把 query 落进状态、挂一次待下发的搜索动作,
+        // 真正的命中清点交给 flyfish API(`apply_pending_preview_find` 注入
+        // `searchDocument`),不在这里碰 `CodeView`(webview tab 没有原生 editor)。
+        if self.find.as_ref().is_some_and(|f| f.is_webview) {
+            if let Some(s) = self.find.as_mut() {
+                s.query = query;
+                s.pending_webview_exec = Some(WebviewFindAction::Search);
+            }
+            return;
+        }
         let Some(tab_id) = self.find.as_ref().map(|f| f.tab_id) else {
             return;
         };
@@ -651,6 +728,19 @@ impl PreviewPane {
     /// 「上一个」停到命中**前缘**([`CodeView::select_range_backward`]),这样同向
     /// 连按能单调续走得动,不会因锚点卡在原命中原处。query 空或 0 命中不动作。
     pub fn find_go(&mut self, next: bool) {
+        // webview(flyfish)档:翻命中只挂一次待下发的 `Next`/`Prev` 动作,真正
+        // 的跳转高亮交给 `apply_pending_preview_find` 注入
+        // `nextSearchResult`/`previousSearchResult`;不在这里用 `CodeView` 现算。
+        if self.find.as_ref().is_some_and(|f| f.is_webview) {
+            if let Some(s) = self.find.as_mut() {
+                s.pending_webview_exec = Some(if next {
+                    WebviewFindAction::Next
+                } else {
+                    WebviewFindAction::Prev
+                });
+            }
+            return;
+        }
         let Some(state) = self.find.as_ref() else {
             return;
         };
@@ -759,6 +849,24 @@ impl PreviewPane {
     /// count/current 按新敏感度重算)。改完后用户再敲下一轮 query 或点下一个/
     /// 上一个即以新敏感度重搜;翻回相同值 no-op。
     pub fn set_find_case(&mut self, case_sensitive: bool) {
+        // webview(flyfish)档:只翻状态里的敏感开关、挂一次待下发的搜索动作,
+        // 真正的重搜交给 flyfish(`apply_pending_preview_find` 注入
+        // `searchDocument` 时带上新 `caseSensitive`)。不调 `find_refresh_
+        // after_edit`(那是原生 editor 的计数刷新路径)。
+        if self.find.as_ref().is_some_and(|f| f.is_webview) {
+            if self
+                .find
+                .as_ref()
+                .is_some_and(|f| f.case_sensitive == case_sensitive)
+            {
+                return;
+            }
+            if let Some(s) = self.find.as_mut() {
+                s.case_sensitive = case_sensitive;
+                s.pending_webview_exec = Some(WebviewFindAction::Search);
+            }
+            return;
+        }
         let Some(tab_id) = self.find.as_ref().map(|f| f.tab_id) else {
             return;
         };
@@ -873,15 +981,31 @@ impl PreviewPane {
 
     /// 内部:激活 tab / 关闭/清空导致激活的原生 tab 变了时,清掉不再匹配的 Find。
     /// tab 交换(reorder)也隐式适用。用户从"正在搜索的文件 A"切到 B 或关掉 A,
-    /// 挂着上一文件的失配搜索条毫无意义,直接丢弃。
+    /// 挂着上一文件的失配搜索条毫无意义,直接丢弃。webview(flyfish)档的会话
+    /// 同样只在"激活 tab 仍是同一块 webview"时保留,切走/关掉就丢——丢之前把
+    /// 该 webview 的搜索高亮清掉(记进 `pending_webview_find_clear`,等
+    /// `apply_pending_preview_find` 注入 `clearDocumentSearch()`)。
     fn cull_stale_find(&mut self) {
         let keep = self.find.as_ref().is_some_and(|f| {
-            matches!(
-                self.tabs.get(self.active),
-                Some(t) if t.editor.is_some() && t.id == f.tab_id
-            )
+            let Some(t) = self.tabs.get(self.active) else {
+                return false;
+            };
+            if f.is_webview {
+                // webview 档:激活 tab 必须还是同一块 webview(无原生 editor)。
+                t.id == f.tab_id
+                    && t.editor.is_none()
+                    && t.tabular.is_none()
+                    && !t.loading
+                    && matches!(t.kind, TabKind::File(_))
+            } else {
+                // 原生 editor 档:激活 tab 必须是有 editor 且 id 匹配。
+                matches!(t, _ if t.editor.is_some() && t.id == f.tab_id)
+            }
         });
         if !keep {
+            if let Some(id) = self.find.as_ref().and_then(|f| f.webview_pool_id) {
+                self.pending_webview_find_clear = Some(id);
+            }
             self.find = None;
         }
     }
@@ -1991,7 +2115,7 @@ mod tests {
     }
 
     #[test]
-    fn open_find_binds_to_active_native_tab_only() {
+    fn open_find_binds_to_active_tab_native_or_webview() {
         let tmp = |name: &str| {
             let p = std::env::temp_dir().join(format!("{name}_{}.rs", std::process::id()));
             std::fs::write(&p, "fn x() {}").unwrap();
@@ -2004,7 +2128,9 @@ mod tests {
         created.extend([a.clone(), b.clone()]);
 
         let mut p = PreviewPane::default();
-        // 非可编辑文件(非原生)的 tab 上 ⌘F 是 no-op,不开条。
+        // 非可编辑文件(flyfish webview 档,如 .xyz)的 tab 上 ⌘F 仍开条,但
+        // 走 webview 搜索(flyfish 自带 API),`is_webview=true` 且锁到该
+        // webview tab——不碰原生 `CodeView::find_matches_all` 那一套。
         let web = std::env::temp_dir().join(format!("find_web_{}.xyz", std::process::id()));
         std::fs::write(&web, "no editor").unwrap();
         created.push(web.clone());
@@ -2013,14 +2139,24 @@ mod tests {
             p.tabs()[p.active_idx()].editor.is_none(),
             "非原生扩展(.xyz)不该有 editor"
         );
-        p.open_find_on_active(false);
-        assert!(!p.find_bar_open(), "非原生激活 tab 上 ⌘F 不该开条");
+        p.open_find_on_active(false, None);
+        assert!(
+            p.find_bar_open(),
+            "webview 档 ⌘F 应开 find 条(走 flyfish 搜索)"
+        );
+        let fweb = p.find_state().expect("webview 档应锁到 find 会话");
+        assert!(fweb.is_webview, "webview 档 find 应为 is_webview");
+        assert_eq!(
+            fweb.tab_id,
+            p.tabs()[p.active_idx()].id,
+            "应锁到 webview tab"
+        );
 
         // 打开原生 A、B:B 为激活,⌘F 锁到 B。
         p.open_path(a.clone());
         p.open_path(b.clone());
         let id_b = p.tabs()[p.active_idx()].id;
-        p.open_find_on_active(false);
+        p.open_find_on_active(false, None);
         assert!(p.find_bar_open());
         assert_eq!(p.find_state().map(|f| f.tab_id), Some(id_b));
 
@@ -2032,7 +2168,7 @@ mod tests {
         );
 
         // select 在 A、B 间切换同样触发 cull。
-        p.open_find_on_active(false); // 激活是 A,锁 A
+        p.open_find_on_active(false, None); // 激活是 A,锁 A
         let id_a = p.tabs()[p.active_idx()].id;
         let idx_b = p.tabs().iter().position(|t| t.id == id_b).unwrap();
         p.select(idx_b);
@@ -2051,7 +2187,7 @@ mod tests {
 
         let mut p = PreviewPane::default();
         p.open_path(path.clone());
-        p.open_find_on_active(false);
+        p.open_find_on_active(false, None);
 
         // 输入 query:当场清点 count 并把首个命中**整段选中**("lo" 在 "hello" 起于
         // 首行 col3,含 2 个字节,结束时 col5,光标落末缘——正文里能看见词被框住)。
@@ -2071,7 +2207,7 @@ mod tests {
 
         // 已锁定同一 tab 再 ⌘F 是 no-op——query/count 保留(供 main 重聚焦);
         // 这时 text 只命中 1 次,find_go(prev) 也仍停在 col3(循环不自增越界)。
-        p.open_find_on_active(false);
+        p.open_find_on_active(false, None);
         assert_eq!(p.find_state().unwrap().query, "lo");
         assert_eq!(p.find_state().unwrap().count, 1);
         p.find_go(false);
@@ -2095,7 +2231,7 @@ mod tests {
         assert!(!p.find_bar_open());
         assert!(p.find_state().is_none());
 
-        p.open_find_on_active(false);
+        p.open_find_on_active(false, None);
         assert!(p.find_bar_open());
         let s = p.find_state().unwrap();
         assert!(s.query.is_empty());
@@ -2111,7 +2247,7 @@ mod tests {
         std::fs::write(&path, "ab\ncd\nab\nab\nef").unwrap();
         let mut p = PreviewPane::default();
         p.open_path(path.clone());
-        p.open_find_on_active(false);
+        p.open_find_on_active(false, None);
 
         // "ab" 命中 3 次:行0 col0 / 行2 col0 / 行3 col0。
         p.find_type("ab".into());
@@ -2198,7 +2334,7 @@ mod tests {
 
         let mut p = PreviewPane::default();
         let id = p.open_path(p_a.clone());
-        p.open_find_on_active(false);
+        p.open_find_on_active(false, None);
         assert!(p.find_bar_open());
 
         // 关掉正搜索的文件会清空 vec → 自动补 Blank(push_tab 里的 cull)。
@@ -2211,7 +2347,7 @@ mod tests {
 
         // clear_all(项目切换路径)同样吐掉 find。
         p.open_path(p_b.clone());
-        p.open_find_on_active(false);
+        p.open_find_on_active(false, None);
         assert!(p.find_bar_open());
         p.clear_all();
         assert!(p.find_state().is_none(), "clear_all 后 Find 应一并丢弃");
@@ -2238,6 +2374,9 @@ mod tests {
             replacement: "SEO".into(),
             replace_open: true,
             query_focused: false,
+            is_webview: false,
+            pending_webview_exec: None,
+            webview_pool_id: None,
         });
         assert!(p.replace_all(), "两处命中应全换掉");
         let editor_text = p.tabs()[p.active_idx()].editor.as_ref().unwrap().text();
@@ -2264,6 +2403,9 @@ mod tests {
             replacement: "Y".into(),
             replace_open: true,
             query_focused: false,
+            is_webview: false,
+            pending_webview_exec: None,
+            webview_pool_id: None,
         });
         assert!(p.replace_current());
         let text = p.tabs()[p.active_idx()].editor.as_ref().unwrap().text();

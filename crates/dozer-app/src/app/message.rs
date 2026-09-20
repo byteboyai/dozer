@@ -389,6 +389,13 @@ pub enum Message {
     /// File-Find 条「替换全部」:与 `PreviewFindReplaceCurrent` 同一 buffer-only
     /// 语义,只是把这轮每一处命中一次性全改、同样标脏等 ⌘S。
     PreviewFindReplaceAll(PanelKind),
+    /// webview(flyfish)档 Find 的命中计数 / 当前序号回写:flyfish
+    /// `getSearchState()` 异步算完(`apply_pending_preview_find` 注入
+    /// `searchDocument`/`next`/`prev` 后用 `evaluate_script_with_callback`
+    /// 取回)经 `EventLoopProxy` 送回主线程,落进 `kind` 面板当前 webview Find
+    /// 会话的 `count`/`current`。`current` 是 0-based 序号(idx),`total` 是命中
+    /// 总数(0 表示无命中)。原生 editor 档不走这条(计数是本地现算的)。
+    PreviewFindWebviewState(PanelKind, usize, usize),
     /// 表格预览 tab 的交互(滚动/sheet 切换)。`usize` 是 `PreviewTab.id`,
     /// `PanelKind` 区分 Files / Project 两个预览面板;`tabular::Action` 是
     /// 网格/切换条发回的纯动作,由 `Workspace::preview_pane_tabular_action`

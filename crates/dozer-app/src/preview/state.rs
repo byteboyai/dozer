@@ -99,6 +99,25 @@ pub enum TabKind {
 /// 空 query / 未命中时 `count==0`。编辑正文时若输入框开着,旧 count 会短暂陈旧,
 /// 但下一次 typing(受 `PreviewFindText` 驱动)或导航会基于**当前 buffer** 重算,
 /// 因此陈旧值只在期间展示,不产生错误落点。
+/// flyfish 预览(走 wry webview 的文件 tab)的"文件内搜索"靠驱动
+/// `<flyfish-file-viewer>` 元素自带的搜索 API(`searchDocument` /
+/// `nextSearchResult` / `previousSearchResult` / `clearDocumentSearch` /
+/// `getSearchState`),副作用只能在持有 webview 句柄的 window_events 事件环里
+/// 跑——见 `platform/window_events.rs::apply_pending_preview_find`。这一枚举
+/// 是"本轮要下发给 webview 的那一个动作",由 `FindState::pending_webview_exec`
+/// 持有;`App` 的 update 只更新纯状态(query/case_sensitive…),真正的 JS 注入
+/// 等每帧 `apply_pending_preview_find` 看到脏标记才做(同 `apply_pending_focus`
+/// 的"派发完消息后轮询待处理标记"节奏)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebviewFindAction {
+    /// 用当前 `query` 重新执行 `searchDocument`(⌘F 打开/键入/翻大小写开关时)。
+    Search,
+    /// 翻到下一个命中(`nextSearchResult`)。
+    Next,
+    /// 翻到上一个命中(`previousSearchResult`)。
+    Prev,
+}
+
 #[derive(Debug, Clone)]
 pub struct FindState {
     /// 搜索锁定到的原生 tab 的 `PreviewTab.id`。跳转光标只作用在它身上。
@@ -106,19 +125,25 @@ pub struct FindState {
     /// 输入框草稿(query 原文,不做 trim)。
     pub query: String,
     /// 当前选中的匹配序号(0-based;`< count` 才有意义;nav 到末尾 wrap 回 0)。
+    /// 原生 editor 档由 `CodeView::find_matches_all` 现算回填;webview(flyfish)
+    /// 档由 `getSearchState().currentIndex` 回写(00 态记为 0)。
     pub current: usize,
-    /// 当前 `query` 在该 tab buffer 里总共命中数,调用方执行后回填,视图只读。
+    /// 当前 `query` 在该 tab 里总共命中数,视图只读。原生 editor 档由调用方
+    /// 执行后回填;webview(flyfish)档由 `getSearchState().total` 回写。空 query
+    /// / 未命中时 `count==0`。
     pub count: usize,
     /// 大小写敏感开关(false=默认的 ASCII 大小写折叠,true=逐字严格比较)。由
     /// 调用方以 `Message` 翻转后持久在这里;每次匹配 / 导航 / 编辑后现算都读它。
     pub case_sensitive: bool,
     /// “替换为”文本草稿(替换条的输入框内容,不吃 query 的大小写折叠——只是
     /// 一个要被原样插进去的字符串,不做规则匹配)。`replace_current` /
-    /// `replace_all` 都拿它当替换物;空串表示“删掉那处命中”。
+    /// `replace_all` 都拿它当替换物;空串表示“删掉那处命中”。webview(flyfish)
+    /// 档 flyfish 没有替换概念,这一字段恒空、替换行永不展开。
     pub replacement: String,
     /// 替换行(第二行,含替换输入框 + 「替换当前」/「替换全部」)是否展开
     /// 显示。⌘F 打开时收起、⌘R 打开时展开;查询框前的圆盘箭头可随时手动
-    /// 切换。默认收起,不占多余纵向空间——多数查找场景不需要替换。
+    /// 切换。默认收起,不占多余纵向空间——多数查找场景不需要替换。webview
+    /// (flyfish)档恒为 false(flyfish 搜索不支持替换)。
     pub replace_open: bool,
     /// 查询输入框是否持有 iced 真实焦点——main.rs 每帧用
     /// `CaptureFindFocus`/`take_find_focused` 查回来写进这里(同 Files 搜索框
@@ -126,7 +151,30 @@ pub struct FindState {
     /// `query_row` 用它 `|| !query.is_empty()` 一起决定,2026-09-11 需求:
     /// 聚焦态也该描金,不能只靠已有内容触发)。
     pub query_focused: bool,
+    /// 是否锁定在走 wry webview(flyfish)的预览 tab 上。原生 editor 档为
+    /// false——那种走 `CodeView::find_matches_all` 现算那一套;`true` 时搜索
+    /// 引擎换成 flyfish 自带 API(`pending_webview_exec` 驱动)。
+    pub is_webview: bool,
+    /// webview(flyfish)档的"待下发动作":`Some` 表示 `apply_pending_preview_
+    /// find` 这帧要往 webview 注入一次对应 JS(`Search`/`Next`/`Prev`),
+    /// 消费后清回 `None`。原生 editor 档恒为 `None`(那套同步现算,不靠轮询
+    /// 脏标记)。
+    pub pending_webview_exec: Option<WebviewFindAction>,
+    /// webview(flyfish)档锁定的那个 webview 在 `webviews` 池里的 key——已
+    /// 把 `PROJECT_PREVIEW_ID_OFFSET` 偏移算进去(Project 面板预览用),原生
+    /// editor 档为 `None`。关条/切走要清高亮时(`pending_webview_find_clear`)
+    /// 用它在 `window_events` 事件环里找回句柄,因为 `FindState` 已被丢的
+    /// 时刻句柄只那里拿得到(同 `pending_webview_exec` 的"派发完消息后轮询"
+    /// 节奏)。
+    pub webview_pool_id: Option<usize>,
 }
+
+/// 预览 Find 条在 webview(flyfish)档占的纵向高度(逻辑像素)。webview 是原生
+/// 子视图、不听 iced 绘制顺序,直接叠在最上——⌘F 打开 webview 档 find 时,
+/// `preview_desired` 会把 webview 矩形下推 + 压低这一高度,把这块条让给 iced
+/// 渲染(见 `App::preview_find_bar_over_webview` 与 `crate::app::App::
+/// preview_desired`)。原生 editor 档 find 不盖 webview,那条路不读这个常量。
+pub(crate) const PREVIEW_FIND_BAR_HEIGHT: f32 = 44.0;
 
 /// 只读大文件档的搜索会话——⌘F 在这类 tab 上不打开 `FindState`(内存线性
 /// 扫描,大文件上代价不可接受),而是打开这个,复用
@@ -172,6 +220,14 @@ pub struct PreviewPane {
     /// 互斥:同一时刻一个 tab 只可能命中其中一种(`open_large_file_search`/
     /// `preview_find_open` 由调用方按 `editor.is_read_only()` 二选一触发)。
     pub(crate) large_file_search: Option<LargeFileSearch>,
+    /// webview(flyfish)档 find 关条/切走时,需往旧 webview 注入一次
+    /// `clearDocumentSearch()` 把高亮抹掉——但 `FindState` 在 `close_find`/
+    /// `cull_stale_find` 里已经被丢,句柄又只在 window_events 事件环里拿得到,
+    /// 所以把"该清一次 + 清哪个 webview"这个一次性意图先落在这里,由
+    /// `apply_pending_preview_find` 消费(window_events 同 `pending_focus` 的
+    /// "派发完消息后轮询"节奏)。`Some(id)` 存的是该 webview 池 key(已含
+    /// Project 偏移);`None` 表示无事发生。
+    pub(crate) pending_webview_find_clear: Option<usize>,
     /// `push_tab` 刚创建、还没被外层 spawn 后台加载的表格 tab
     /// `(PreviewTab.id, 文件路径)` 队列。调用方在 `open_path`/`push_tab`
     /// 返回后立即 `take_pending_tabular_loads()` 取走清空,不应该攒着不取
@@ -193,6 +249,7 @@ impl Default for PreviewPane {
             pending_editor_reveal_focus: false,
             find: None,
             large_file_search: None,
+            pending_webview_find_clear: None,
             pending_tabular_loads: Vec::new(),
         }
     }

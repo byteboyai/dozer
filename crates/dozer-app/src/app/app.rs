@@ -2520,6 +2520,46 @@ impl App {
             .unwrap_or(false)
     }
 
+    /// Find 条是否正压在 `kind` 面板的 webview(flyfish)预览之上——即该面板
+    /// 当前有个 `is_webview` 的 Find 会话开着。语义用来让 `preview_desired`
+    /// 把对应 webview 矩形下推 `PREVIEW_FIND_BAR_HEIGHT`,给 iced Find 条让出
+    /// 顶部那一条(webview 是原生子视图、不听 iced 绘制顺序,必须显式缩小它
+    /// 而不是指望层级遮挡)。
+    pub fn preview_find_bar_over_webview(&self, kind: PanelKind) -> bool {
+        self.active_workspace()
+            .map(|ws| ws.preview_find_bar_open(kind) && ws.preview_find_is_webview(kind))
+            .unwrap_or(false)
+    }
+
+    /// 取走 `kind` 面板 webview(flyfish)档 Find 待下发动作 + 查询词 + 大小写
+    /// 开关,供 `window_events::apply_pending_preview_find` 注入 flyfish JS。
+    pub fn take_preview_webview_find(
+        &mut self,
+        kind: PanelKind,
+    ) -> Option<(crate::preview::WebviewFindAction, String, bool)> {
+        self.active_workspace_mut()
+            .and_then(|ws| ws.take_preview_webview_find(kind))
+    }
+
+    /// 取走 `kind` 面板 webview(flyfish)档待清理的 webview 池 key。
+    pub fn take_preview_webview_find_clear(&mut self, kind: PanelKind) -> Option<usize> {
+        self.active_workspace_mut()
+            .and_then(|ws| ws.take_preview_webview_find_clear(kind))
+    }
+
+    /// 把 flyfish `getSearchState()` 回写的命中计数 / 当前序号落进 `kind`
+    /// 面板当前 webview Find 会话。
+    pub fn preview_find_set_webview_state(
+        &mut self,
+        kind: PanelKind,
+        current: usize,
+        total: usize,
+    ) {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.preview_find_set_webview_state(kind, current, total);
+        }
+    }
+
     /// 每帧渲染循环读走 `preview::CaptureFindFocus` 查到的真实焦点态后写进
     /// 当前工作区。
     pub fn set_find_query_focused(&mut self, kind: PanelKind, focused: bool) {
@@ -2779,12 +2819,20 @@ impl App {
                 self.project_link_menu.is_some(),
                 ws.conversations.agent_picker_open(),
             );
-            let bounds = webview_geometry::preview_content_bounds_for(
+            let mut bounds = webview_geometry::preview_content_bounds_for(
                 side,
                 window_width,
                 window_height,
                 &self.shell_state(),
             );
+            // webview(flyfish)档 Find 条打开时,它压在 webview 之上(原生子视图
+            // 不听 iced 绘制顺序)——把 webview 矩形下推 + 压低一个 Find 条高,
+            // 给 iced 那一条让位(同 `App::preview_find_bar_over_webview` 文档)。
+            if self.preview_find_bar_over_webview(kind) {
+                let h = crate::preview::PREVIEW_FIND_BAR_HEIGHT;
+                bounds.1 += h;
+                bounds.3 = (bounds.3 - h).max(0.0);
+            }
             out.extend(specs.into_iter().map(|mut s| {
                 s.id += id_offset;
                 // 搜索弹窗/tab 溢出下拉/面板内浮层开着时,原生浮层盖住了

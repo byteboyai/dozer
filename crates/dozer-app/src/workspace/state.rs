@@ -2078,23 +2078,26 @@ impl Workspace {
     /// 用 `find_field_id(panel)` 真正把焦点给输入框。替换行默认收起(⌘R 走
     /// `preview_find_open_with_replace` 才展开)。
     pub fn preview_find_open(&mut self, kind: PanelKind) {
+        let pool_id = self.active_preview_webview_id(kind);
         let pane = if kind == PanelKind::Project {
             &mut self.project_preview
         } else {
             &mut self.preview
         };
-        pane.open_find_on_active(false);
+        pane.open_find_on_active(false, pool_id);
         pane.request_find_focus();
     }
 
-    /// 同 `preview_find_open`,但替换行默认展开(⌘R)。
+    /// 同 `preview_find_open`,但替换行默认展开(⌘R)。webview(flyfish)档没有
+    /// 替换概念,展开态会被 `open_find_on_active` 强制收起。
     pub fn preview_find_open_with_replace(&mut self, kind: PanelKind) {
+        let pool_id = self.active_preview_webview_id(kind);
         let pane = if kind == PanelKind::Project {
             &mut self.project_preview
         } else {
             &mut self.preview
         };
-        pane.open_find_on_active(true);
+        pane.open_find_on_active(true, pool_id);
         pane.request_find_focus();
     }
 
@@ -2115,6 +2118,18 @@ impl Workspace {
         } else {
             self.preview.find_bar_open()
         }
+    }
+
+    /// `kind` 面板当前开着的 Find 会话是否锁在 webview(flyfish)预览 tab 上
+    /// (`is_webview=true`)。`preview_find_bar_open` 为真但这里是假 ⇒ 锁的是
+    /// 原生 editor,二者配合判断 Find 条是否该压在 webview 之上。
+    pub fn preview_find_is_webview(&self, kind: PanelKind) -> bool {
+        let pane = if kind == PanelKind::Project {
+            &self.project_preview
+        } else {
+            &self.preview
+        };
+        pane.find_state().is_some_and(|f| f.is_webview)
     }
 
     /// 每帧渲染循环把 `preview::take_find_focused(kind)` 查到的真实焦点态
@@ -2193,6 +2208,50 @@ impl Workspace {
             self.project_preview.replace_all();
         } else {
             self.preview.replace_all();
+        }
+    }
+
+    /// 取走 `kind` 面板 webview(flyfish)档 Find 待下发的搜索动作 + 查询词 +
+    /// 大小写开关,供 `window_events::apply_pending_preview_find` 注入 flyfish JS。
+    /// 非 webview 会话 / 无待发动作时返回 `None`。
+    pub fn take_preview_webview_find(
+        &mut self,
+        kind: PanelKind,
+    ) -> Option<(crate::preview::WebviewFindAction, String, bool)> {
+        match kind {
+            PanelKind::Project => self.project_preview.take_pending_webview_find(),
+            _ => self.preview.take_pending_webview_find(),
+        }
+    }
+
+    /// 取走 `kind` 面板 webview(flyfish)档待清理的 webview 池 key,供
+    /// `apply_pending_preview_find` 注入 `clearDocumentSearch()` 抹高亮。
+    pub fn take_preview_webview_find_clear(&mut self, kind: PanelKind) -> Option<usize> {
+        match kind {
+            PanelKind::Project => self.project_preview.take_pending_webview_find_clear(),
+            _ => self.preview.take_pending_webview_find_clear(),
+        }
+    }
+
+    /// 把 flyfish `getSearchState()` 回写的命中总数 / 当前序号(idx,0-based)
+    /// 落进 `kind` 面板当前 webview Find 会话的 `count`/`current`。回调只在
+    /// webview 会话上生效,否则 no-op(原生 editor 档的计数是本地现算的)。
+    pub fn preview_find_set_webview_state(
+        &mut self,
+        kind: PanelKind,
+        current: usize,
+        total: usize,
+    ) {
+        let pane = if kind == PanelKind::Project {
+            &mut self.project_preview
+        } else {
+            &mut self.preview
+        };
+        if let Some(f) = pane.find.as_mut()
+            && f.is_webview
+        {
+            f.count = total;
+            f.current = current;
         }
     }
 

@@ -1058,6 +1058,15 @@ impl App {
                     ws.preview_find_replace_all(kind);
                 });
             }
+            Message::PreviewFindWebviewState(kind, current, total) => {
+                // flyfish `getSearchState()` 回写:直接落进 `kind` 面板当前
+                // webview Find 会话的 `current`/`count`。这是异步回调(经
+                // `EventLoopProxy` 送回),不依赖任何 webview 句柄,在 `App`
+                // 顶部 update 里落库即可——真正的 JS 注入在 `window_events::
+                // apply_pending_preview_find`(句柄只在那里拿得到)。iced 在
+                // 处理完这条消息后会自然重绘,n/m 计数立即刷新。
+                self.preview_find_set_webview_state(kind, current, total);
+            }
             Message::TabularAction(kind, tab_id, action) => {
                 self.with_focused_project(move |ws, io| {
                     ws.preview_pane_tabular_action(kind, tab_id, action, io);

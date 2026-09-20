@@ -8,6 +8,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde_json;
+
 use iced_wgpu::graphics::{Shell, Viewport};
 use iced_wgpu::{Engine, Renderer, wgpu};
 use iced_winit::Clipboard;
@@ -1735,6 +1737,55 @@ impl Runner {
             }
         }
     }
+
+    /// webview(flyfish)档 Find 的副作用落点:把 `PreviewPane` 里"待下发"的搜索
+    /// 动作注入对应 webview,并把遗留的"清高亮"意图抹掉。webview 句柄只活在
+    /// `Runner::Ready.webviews`,`App` 的 update 只动纯状态(`query`/
+    /// `case_sensitive`/`pending_webview_exec`),真正的 JS 在这里、每帧派发完
+    /// 消息后轮询执行(window_events 同 `apply_pending_focus` 的"派发完消息后
+    /// 轮询待处理标记"节奏)。
+    ///
+    /// 每次注入后顺带把 flyfish `getSearchState()` 回写的命中总数/当前序号经
+    /// `EventLoopProxy` 送回主线程的 `Message::PreviewFindWebviewState`,驱动 n/m
+    /// 计数刷新——搜索是异步的,不能在注入当帧同步拿到结果,必须靠
+    /// `evaluate_script_with_callback` 的回调(结果被 wry 序列化成 JSON 串)。
+    pub(crate) fn apply_pending_preview_find(&mut self) {
+        let Self::Ready {
+            app,
+            webviews,
+            proxy,
+            ..
+        } = self
+        else {
+            return;
+        };
+        for kind in [PanelKind::Files, PanelKind::Project] {
+            // 待下发的搜索动作(Search / Next / Prev):注入 flyfish 对应 API,
+            // 再用回调把搜索结果状态回写主线程。
+            if let Some((action, query, cs)) = app.take_preview_webview_find(kind)
+                && let Some(id) = app.active_preview_webview_id(kind)
+                && let Some((view, _)) = webviews.get(&id)
+            {
+                let js = build_flyfish_find_js(action, &query, cs);
+                let proxy2 = proxy.clone();
+                let _ = view.evaluate_script_with_callback(&js, move |res| {
+                    if let Some((current, total)) = parse_flyfish_search_state(&res) {
+                        let _ = proxy2
+                            .send_event(Message::PreviewFindWebviewState(kind, current, total));
+                    }
+                });
+            }
+            // 关条/切走遗留的"清高亮"意图:找到对应 webview 注入一次
+            // `clearDocumentSearch()`(无需状态回写)。
+            if let Some(id) = app.take_preview_webview_find_clear(kind)
+                && let Some((view, _)) = webviews.get(&id)
+            {
+                let _ = view.evaluate_script(
+                    "var el=document.querySelector('flyfish-file-viewer'); if(el&&el.clearDocumentSearch){el.clearDocumentSearch();}",
+                );
+            }
+        }
+    }
 }
 
 /// 从 main.rs 迁移(main.rs 瘦身补做,原 impl ApplicationHandler 依赖它们)。
@@ -1757,6 +1808,46 @@ pub(crate) fn menu_edit_key(message: &Message) -> Option<char> {
         Message::TextInputMenuSelectAll => Some('a'),
         _ => None,
     }
+}
+
+/// 拼出往 flyfish `<flyfish-file-viewer>` 注入的搜索 JS。`Search` 调
+/// `searchDocument({query, caseSensitive})`,`Next`/`Prev` 调
+/// `nextSearchResult`/`previousSearchResult`,三者都 `await` 后 `return` 出
+/// `getSearchState()` 的状态对象——交给 `evaluate_script_with_callback` 的
+/// 回调当结果(wry 把它序列化成 JSON 串)。query 用 `serde_json` 串成 JSON
+/// 字符串字面量,避免引号/反斜杠等注入破坏脚本结构。
+fn build_flyfish_find_js(
+    action: crate::preview::WebviewFindAction,
+    query: &str,
+    case_sensitive: bool,
+) -> String {
+    let q = serde_json::to_string(query).unwrap_or_else(|_| "\"\"".to_string());
+    let call = match action {
+        crate::preview::WebviewFindAction::Search => {
+            format!("st = await el.searchDocument({{query:{q}, caseSensitive:{case_sensitive}}});")
+        }
+        crate::preview::WebviewFindAction::Next => "st = await el.nextSearchResult();".to_string(),
+        crate::preview::WebviewFindAction::Prev => {
+            "st = await el.previousSearchResult();".to_string()
+        }
+    };
+    format!(
+        "(async function(){{ var el=document.querySelector('flyfish-file-viewer'); if(!el||!el.searchDocument) return null; var st=null; {call} return st; }})()"
+    )
+}
+
+/// 解析 `getSearchState()` 回写的状态 JSON(形如
+/// `{{"query":...,"total":N,"currentIndex":I,...}}`),取出总数与当前序号。
+/// `currentIndex` 为 -1(无当前命中)时记 0;解析失败返回 `None`。
+fn parse_flyfish_search_state(json: &str) -> Option<(usize, usize)> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let total = v.get("total")?.as_u64()? as usize;
+    let current = v
+        .get("currentIndex")
+        .and_then(|x| x.as_i64())
+        .unwrap_or(-1)
+        .max(0) as usize;
+    Some((current, total))
 }
 
 impl winit::application::ApplicationHandler<Message> for Runner {
@@ -2044,6 +2135,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_previews();
         self.apply_pending_focus();
         self.apply_pending_zoom_toggle();
+        self.apply_pending_preview_find();
         self.sync_search_overlay(event_loop);
         self.sync_file_history_overlay(event_loop);
         self.sync_project_create_overlay(event_loop);
@@ -2106,6 +2198,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             self.sync_previews();
             self.apply_pending_focus();
             self.apply_pending_zoom_toggle();
+            self.apply_pending_preview_find();
             self.sync_search_overlay(event_loop);
             return;
         }
@@ -3297,6 +3390,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_previews();
         self.apply_pending_focus();
         self.apply_pending_zoom_toggle();
+        self.apply_pending_preview_find();
         self.sync_search_overlay(event_loop);
         self.sync_file_history_overlay(event_loop);
         self.sync_project_create_overlay(event_loop);
