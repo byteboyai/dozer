@@ -379,6 +379,56 @@ mod decode_tests {
     }
 }
 
+pub fn load_json(path: &std::path::Path) -> Result<JsonTreeView, String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let root_kind = root_kind_of(&bytes)?;
+    let content = decode_node(&bytes, &[])?;
+    let root = JsonNode {
+        kind: root_kind,
+        content: Some(content),
+    };
+    Ok(JsonTreeView::new(
+        path.to_path_buf(),
+        bytes,
+        None,
+        vec![Ok(root)],
+    ))
+}
+
+/// 只做顶层类型判断，不展开子级 —— 让 `JsonNode.kind` 在 `decode_node`
+/// 返回前就准确（`decode_node` 只报告子级的 kind，不报告自己）。
+fn root_kind_of(bytes: &[u8]) -> Result<JsonKind, String> {
+    use sonic_rs::{JsonValueTrait, PointerNode};
+    let empty: Vec<PointerNode> = Vec::new();
+    let value = sonic_rs::get(bytes, empty).map_err(|e| e.to_string())?;
+    Ok(lazy_value_kind(&value))
+}
+
+#[cfg(test)]
+mod load_json_tests {
+    use super::*;
+
+    #[test]
+    fn load_json_decodes_root_shape_eagerly() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("sample.json");
+        std::fs::write(&p, r#"{"a": 1, "b": [1,2,3]}"#).unwrap();
+        let view = load_json(&p).unwrap();
+        assert_eq!(view.roots.len(), 1);
+        let root = view.roots[0].as_ref().unwrap();
+        assert_eq!(root.kind, JsonKind::Object);
+        let NodeContent::Object { entries, .. } = root.content.as_ref().unwrap() else {
+            panic!("root content should be decoded already");
+        };
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn load_json_rejects_missing_file() {
+        assert!(load_json(std::path::Path::new("/tmp/does_not_exist_12345.json")).is_err());
+    }
+}
+
 #[cfg(test)]
 mod apply_tests {
     use super::*;
