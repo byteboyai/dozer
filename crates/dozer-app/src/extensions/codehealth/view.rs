@@ -8,7 +8,6 @@ use byteui::theme::color::ColorTokens;
 use dozer_codehealth::{FunctionMetric, HealthTier, ProjectReport, Severity};
 use iced_widget::core::{Element, Length};
 use iced_widget::{Column, button, column, container, mouse_area, row, scrollable, text};
-use std::collections::BTreeMap;
 
 fn tier_color(tier: HealthTier, tokens: &ColorTokens) -> iced_widget::core::Color {
     match tier {
@@ -121,23 +120,56 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
 }
 
-fn problem_row(
-    f: &FunctionMetric,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let tokens = byteui::theme::color::current();
-    let color = match f.severity {
-        Severity::Critical => tokens.red,
-        Severity::Watch => tokens.cyan,
-        Severity::Normal => tokens.dim,
+fn severity_rank(s: Severity) -> u8 {
+    match s {
+        Severity::Critical => 2,
+        Severity::Watch => 1,
+        Severity::Normal => 0,
+    }
+}
+
+/// 过滤掉 `Severity::Normal`、按严重度降序 + 复杂度降序排出扁平排行榜。
+/// `report.functions` 本身已经按严重度排过（`dozer-codehealth::report::scan_project`
+/// 的契约，供 dozer-mcp 未来复用全量数据，这里不改那份排序，只在展示层重排一份
+/// 过滤后的视图）。`severity_rank` 是本文件私有的排名映射，不是
+/// `dozer_codehealth::FunctionMetric` 的 `pub(crate)` 方法（那个跨 crate 不可见）。
+fn ranked_problems(report: &ProjectReport) -> Vec<&FunctionMetric> {
+    let mut v: Vec<&FunctionMetric> = report
+        .functions
+        .iter()
+        .filter(|f| f.severity != Severity::Normal)
+        .collect();
+    v.sort_by_key(|f| {
+        (
+            std::cmp::Reverse(severity_rank(f.severity)),
+            std::cmp::Reverse(f.complexity_signal),
+        )
+    });
+    v
+}
+
+fn problem_row<'a>(
+    f: &'a FunctionMetric,
+    tokens: ColorTokens,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let (label, color) = match f.severity {
+        Severity::Critical => ("警戒", tokens.red),
+        Severity::Watch => ("关注", tokens.cyan),
+        Severity::Normal => unreachable!("ranked_problems 已过滤掉 Normal"),
     };
-    let content = row![
-        text(&f.name).size(13).color(tokens.cream),
-        text(format!("complexity={} loc={}", f.complexity_signal, f.loc))
-            .size(12)
-            .color(color),
+    let content = column![
+        row![
+            text(label).size(11).color(color),
+            text(&f.name).size(13).color(tokens.cream),
+            text(format!("complexity={} loc={}", f.complexity_signal, f.loc))
+                .size(12)
+                .color(color),
+        ]
+        .spacing(8),
+        text(f.file.display().to_string()).size(11).color(tokens.dim),
     ]
-    .spacing(8)
-    .padding([2, 8]);
+    .spacing(2)
+    .padding([4, 8]);
     mouse_area(content)
         .on_press(Message::OpenLocation(f.file.clone(), f.start_line))
         .into()
@@ -147,16 +179,19 @@ fn problem_list(
     report: &ProjectReport,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let tokens = byteui::theme::color::current();
-    let mut by_file: BTreeMap<&std::path::Path, Vec<&FunctionMetric>> = BTreeMap::new();
-    for f in &report.functions {
-        by_file.entry(f.file.as_path()).or_default().push(f);
+    let ranked = ranked_problems(report);
+    if ranked.is_empty() {
+        return container(
+            text("没有发现结构复杂的函数，代码整体健康。")
+                .size(13)
+                .color(tokens.dim),
+        )
+        .padding(16)
+        .into();
     }
     let mut col = Column::new().spacing(4);
-    for (path, functions) in by_file {
-        col = col.push(text(path.display().to_string()).size(12).color(tokens.dim));
-        for f in functions {
-            col = col.push(problem_row(f));
-        }
+    for f in ranked {
+        col = col.push(problem_row(f, tokens));
     }
     scrollable(col.padding(16)).into()
 }
@@ -261,5 +296,68 @@ mod tests {
     fn density_summary_formats_ratio_and_label() {
         let report = sample_report(101_052, HealthTier::Critical, 9, 3890, HealthTier::Healthy);
         assert_eq!(density_summary(&report), "密度：健康（9/3890，约 0.2%）");
+    }
+
+    fn metric(name: &str, severity: Severity, complexity_signal: usize) -> FunctionMetric {
+        FunctionMetric {
+            name: name.to_string(),
+            file: std::path::PathBuf::from("a.rs"),
+            start_line: 1,
+            end_line: 2,
+            loc: 2,
+            complexity_signal,
+            severity,
+        }
+    }
+
+    fn report_with_functions(functions: Vec<FunctionMetric>) -> ProjectReport {
+        ProjectReport {
+            total_loc: 0,
+            total_functions: functions.len(),
+            critical_functions: functions.iter().filter(|f| f.severity == Severity::Critical).count(),
+            scale_tier: HealthTier::Healthy,
+            density_tier: HealthTier::Healthy,
+            overall_tier: HealthTier::Healthy,
+            functions,
+        }
+    }
+
+    #[test]
+    fn severity_rank_orders_critical_highest() {
+        assert!(severity_rank(Severity::Critical) > severity_rank(Severity::Watch));
+        assert!(severity_rank(Severity::Watch) > severity_rank(Severity::Normal));
+    }
+
+    #[test]
+    fn ranked_problems_filters_out_normal() {
+        let report = report_with_functions(vec![
+            metric("a", Severity::Normal, 5),
+            metric("b", Severity::Watch, 20),
+        ]);
+        let ranked = ranked_problems(&report);
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].name, "b");
+    }
+
+    #[test]
+    fn ranked_problems_sorts_by_severity_then_complexity_desc() {
+        let report = report_with_functions(vec![
+            metric("watch_low", Severity::Watch, 16),
+            metric("critical_low", Severity::Critical, 41),
+            metric("critical_high", Severity::Critical, 255),
+            metric("watch_high", Severity::Watch, 40),
+        ]);
+        let ranked = ranked_problems(&report);
+        let names: Vec<&str> = ranked.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["critical_high", "critical_low", "watch_high", "watch_low"]
+        );
+    }
+
+    #[test]
+    fn ranked_problems_empty_when_all_normal() {
+        let report = report_with_functions(vec![metric("a", Severity::Normal, 0)]);
+        assert!(ranked_problems(&report).is_empty());
     }
 }
