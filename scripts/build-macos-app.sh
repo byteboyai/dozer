@@ -101,7 +101,25 @@ cp "$PACKAGING_DIR/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
 # 读(dev 态才回退源码树),漏拷会导致分发后的文件预览 404。
 cp -R "$ROOT_DIR/crates/dozer-app/assets/flyfish" "$APP_DIR/Contents/Resources/flyfish"
 
+# cargo 链接期只对裸二进制做了 ad-hoc 签名(`codesign -dv` 显示
+# `Info.plist=not bound`),装进 bundle 后这个签名并不覆盖 Info.plist/资源,
+# 而且每次 rebuild 内容一变,ad-hoc identifier 也跟着变。macOS 对同一路径
+# 突然"换了身份"的 app 会重新走一次首次运行校验,表现为图标第一次点击弹出
+# 访达式的包内容预览而不是直接启动,得点第二次才真的打开(2026-09-21 用户
+# 报告)。装配完整个 bundle 之后对它整体重签一次 ad-hoc 签名,让签名覆盖
+# Info.plist,给这次构建一个自洽的身份。
+codesign --force --deep --sign - "$APP_DIR"
+
 # Nudge Finder/Dock to drop any cached icon for a previous build at this path.
 touch "$APP_DIR"
+
+# 光靠 touch 只能让 Finder 丢弃图标缓存,Spotlight/Quick Look 认不认这个路径
+# 是"应用程序"归 Launch Services 的索引管,touch 碰不到。同一路径重复
+# rm -rf 重建之后,LS 的索引可能还留着旧那份、或者干脆还没跟上,不强制刷新
+# 就是前面那条 codesign 要解决的"第一次点击不对、第二次才行"的另一半成因。
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
+if [ -x "$LSREGISTER" ]; then
+  "$LSREGISTER" -f "$APP_DIR"
+fi
 
 echo "Bundled: $APP_DIR"
