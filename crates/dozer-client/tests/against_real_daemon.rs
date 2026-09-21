@@ -467,3 +467,44 @@ async fn shutdown_daemon_with_no_sessions_succeeds() {
         "daemon 应在 shutdown_daemon() 成功后退出并清理 socket"
     );
 }
+
+#[tokio::test]
+async fn code_health_report_history_roundtrip() {
+    use dozer_core::protocol::CodeHealthReportInfo;
+
+    let (sock, _registry, _guard) = start_daemon().await;
+    let client = Client::new(sock);
+
+    // 还没扫描过 → None / 空列表。
+    assert_eq!(client.get_code_health_report(1).await.unwrap(), None);
+    assert!(client.list_code_health_reports(1, 10).await.unwrap().is_empty());
+
+    let mk = |loc: u64| CodeHealthReportInfo {
+        total_loc: loc,
+        total_functions: 10,
+        critical_functions: 1,
+        overall_tier: "watch".into(),
+        report_json: format!("{{\"total_loc\":{loc}}}"),
+        scanned_at_ms: 0,
+        schema_version: 2,
+        git_head: Some("abc123".into()),
+        git_branch: Some("main".into()),
+        git_dirty: false,
+    };
+
+    client.save_code_health_report(1, &mk(100)).await.unwrap();
+    client.save_code_health_report(1, &mk(200)).await.unwrap();
+
+    let latest = client.get_code_health_report(1).await.unwrap().unwrap();
+    assert_eq!(latest.total_loc, 200);
+    assert_eq!(latest.schema_version, 2);
+    assert_eq!(latest.git_branch.as_deref(), Some("main"));
+
+    let history = client.list_code_health_reports(1, 10).await.unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].total_loc, 200, "最新在前");
+    assert_eq!(history[1].total_loc, 100);
+
+    // 不同项目隔离。
+    assert_eq!(client.get_code_health_report(2).await.unwrap(), None);
+}

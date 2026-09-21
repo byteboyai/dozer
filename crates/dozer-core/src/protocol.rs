@@ -215,6 +215,19 @@ pub struct CodeHealthReportInfo {
     pub overall_tier: String,
     pub report_json: String,
     pub scanned_at_ms: u64,
+    /// 报告 schema 版本（`dozer_codehealth::SCHEMA_VERSION`）。旧协议帧缺字段
+    /// 回落 0，UI 据此判定“旧版报告”。
+    #[serde(default)]
+    pub schema_version: u32,
+    /// 扫描时的 Git HEAD。旧协议帧缺字段回落 `None`。
+    #[serde(default)]
+    pub git_head: Option<String>,
+    /// 扫描时的 Git 分支。旧协议帧缺字段回落 `None`。
+    #[serde(default)]
+    pub git_branch: Option<String>,
+    /// 扫描时工作区是否 dirty。旧协议帧缺字段回落 `false`。
+    #[serde(default)]
+    pub git_dirty: bool,
 }
 
 /// `SetTodoStatus` 期望的**已存储**逻辑状态。注意"进行中"(派发到某个
@@ -438,7 +451,7 @@ pub enum Request {
     ListBookmarks {
         project_id: Option<i64>,
     },
-    /// 保存一次代码健康度扫描的落盘结果（一个项目只保留最新一次）。
+    /// 保存一次代码健康度扫描的落盘结果（最新一份 + 历史快照）。
     SaveCodeHealthReport {
         project_id: i64,
         report_json: String,
@@ -446,10 +459,24 @@ pub enum Request {
         total_functions: u64,
         critical_functions: u64,
         overall_tier: String,
+        /// 报告 schema 版本；旧客户端不传时回落 0。
+        #[serde(default)]
+        schema_version: u32,
+        #[serde(default)]
+        git_head: Option<String>,
+        #[serde(default)]
+        git_branch: Option<String>,
+        #[serde(default)]
+        git_dirty: bool,
     },
     /// 查询某项目上次代码健康度扫描结果；`None` = 还没扫描过。
     GetCodeHealthReport {
         project_id: i64,
+    },
+    /// 列出某项目最近 N 份报告快照（按时间倒序）。`limit` 上限由服务端钳制。
+    ListCodeHealthReports {
+        project_id: i64,
+        limit: u32,
     },
     /// `dozer-app` 预览面板变化时推送最新上下文；`context: None` 表示当前
     /// 无活动文本预览。`dozerd` 侧纯内存缓存，同一 `project_id` 后写覆盖
@@ -660,6 +687,10 @@ pub enum Reply {
     /// `GetCodeHealthReport` 应答。`None` = 这个项目还没扫描过。
     CodeHealthReport {
         report: Option<CodeHealthReportInfo>,
+    },
+    /// `ListCodeHealthReports` 应答（按时间倒序）。
+    CodeHealthReports {
+        reports: Vec<CodeHealthReportInfo>,
     },
     /// `ListConversations` 应答。
     Conversations {
@@ -1364,9 +1395,35 @@ mod tests {
             total_functions: 10,
             critical_functions: 1,
             overall_tier: "watch".into(),
+            schema_version: 2,
+            git_head: Some("abc123".into()),
+            git_branch: Some("main".into()),
+            git_dirty: false,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"type\":\"save_code_health_report\""));
+    }
+
+    #[test]
+    fn old_save_code_health_report_without_git_metadata_decodes_defaults() {
+        // 旧客户端不传 schema_version/git_* 字段，必须能解出默认值。
+        let old = r#"{"type":"save_code_health_report","project_id":1,"report_json":"{}","total_loc":1,"total_functions":2,"critical_functions":0,"overall_tier":"watch"}"#;
+        let req: Request = decode_line(old).unwrap();
+        match req {
+            Request::SaveCodeHealthReport {
+                schema_version,
+                git_head,
+                git_branch,
+                git_dirty,
+                ..
+            } => {
+                assert_eq!(schema_version, 0);
+                assert_eq!(git_head, None);
+                assert_eq!(git_branch, None);
+                assert!(!git_dirty);
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
@@ -1375,6 +1432,21 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let back: Request = serde_json::from_str(&json).unwrap();
         assert_eq!(req, back);
+    }
+
+    #[test]
+    fn list_code_health_reports_round_trips() {
+        let req = Request::ListCodeHealthReports {
+            project_id: 7,
+            limit: 2,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: Request = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+
+        let reply = Reply::CodeHealthReports { reports: vec![] };
+        let json = serde_json::to_string(&reply).unwrap();
+        assert!(json.contains("\"type\":\"code_health_reports\""));
     }
 
     #[test]
@@ -1394,10 +1466,24 @@ mod tests {
             overall_tier: "critical".into(),
             report_json: "{\"functions\":[]}".into(),
             scanned_at_ms: 1_700_000_000_000,
+            schema_version: 2,
+            git_head: Some("abc".into()),
+            git_branch: Some("main".into()),
+            git_dirty: true,
         };
         let json = serde_json::to_string(&info).unwrap();
         let back: CodeHealthReportInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(info, back);
+    }
+
+    #[test]
+    fn old_code_health_report_info_without_new_fields_decodes_defaults() {
+        // 旧 daemon 发来的 CodeHealthReportInfo 无 schema_version/git 字段。
+        let old = r#"{"total_loc":1,"total_functions":2,"critical_functions":0,"overall_tier":"watch","report_json":"{}","scanned_at_ms":1}"#;
+        let info: CodeHealthReportInfo = serde_json::from_str(old).unwrap();
+        assert_eq!(info.schema_version, 0);
+        assert_eq!(info.git_head, None);
+        assert!(!info.git_dirty);
     }
 
     #[test]

@@ -607,6 +607,10 @@ async fn handle_conn(
                             total_functions,
                             critical_functions,
                             overall_tier,
+                            schema_version,
+                            git_head,
+                            git_branch,
+                            git_dirty,
                         } => {
                             let info = dozer_core::protocol::CodeHealthReportInfo {
                                 total_loc,
@@ -615,6 +619,10 @@ async fn handle_conn(
                                 overall_tier,
                                 report_json,
                                 scanned_at_ms: 0, // store 内部会用自己的 now_ms() 覆盖
+                                schema_version,
+                                git_head,
+                                git_branch,
+                                git_dirty,
                             };
                             match code_health.save(project_id, &info) {
                                 Ok(()) => Reply::Ok,
@@ -628,6 +636,14 @@ async fn handle_conn(
                                 Ok(report) => Reply::CodeHealthReport { report },
                                 Err(e) => Reply::Error {
                                     message: format!("查询代码健康度报告失败: {e}"),
+                                },
+                            }
+                        }
+                        Request::ListCodeHealthReports { project_id, limit } => {
+                            match code_health.list(project_id, limit) {
+                                Ok(reports) => Reply::CodeHealthReports { reports },
+                                Err(e) => Reply::Error {
+                                    message: format!("查询代码健康度历史失败: {e}"),
                                 },
                             }
                         }

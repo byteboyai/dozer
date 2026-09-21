@@ -246,20 +246,20 @@ impl Client {
     pub async fn save_code_health_report(
         &self,
         project_id: i64,
-        report_json: String,
-        total_loc: u64,
-        total_functions: u64,
-        critical_functions: u64,
-        overall_tier: String,
+        info: &CodeHealthReportInfo,
     ) -> Result<()> {
         match self
             .roundtrip(&Request::SaveCodeHealthReport {
                 project_id,
-                report_json,
-                total_loc,
-                total_functions,
-                critical_functions,
-                overall_tier,
+                report_json: info.report_json.clone(),
+                total_loc: info.total_loc,
+                total_functions: info.total_functions,
+                critical_functions: info.critical_functions,
+                overall_tier: info.overall_tier.clone(),
+                schema_version: info.schema_version,
+                git_head: info.git_head.clone(),
+                git_branch: info.git_branch.clone(),
+                git_dirty: info.git_dirty,
             })
             .await?
         {
@@ -278,6 +278,22 @@ impl Client {
             .await?
         {
             Reply::CodeHealthReport { report } => Ok(report),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// 列出某项目最近 N 份报告快照（时间倒序）。
+    pub async fn list_code_health_reports(
+        &self,
+        project_id: i64,
+        limit: u32,
+    ) -> Result<Vec<CodeHealthReportInfo>> {
+        match self
+            .roundtrip(&Request::ListCodeHealthReports { project_id, limit })
+            .await?
+        {
+            Reply::CodeHealthReports { reports } => Ok(reports),
             Reply::Error { message } => Err(anyhow::anyhow!(message)),
             other => bail!("意外应答: {other:?}"),
         }
