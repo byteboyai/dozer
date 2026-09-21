@@ -617,6 +617,59 @@ impl App {
             Message::TextInputMenuSelectAll => {
                 self.text_input_menu = None;
             }
+            // 文本编辑器右键菜单"打开":与输入框右键菜单(`TextInputMenuOpen`)
+            // 互斥关掉别的浮层;macOS 走原生 NSMenu 同步阻塞返回选中项,非
+            // macOS 存 `editor_context_menu` 状态由 iced 弹层渲染。
+            Message::PreviewEditorContextMenuOpen { kind, tab_id } => {
+                self.files.close_context_menu();
+                self.text_input_menu = None;
+                #[cfg(target_os = "macos")]
+                {
+                    let (x, y) = self.files.last_right_click();
+                    let items = crate::app::preview_editor_menu_items(kind, tab_id);
+                    if let Some(msg) =
+                        crate::chrome::native_menu::show_align_no_icon_left(items, (x, y))
+                    {
+                        // 选中项回吐成普通顶层消息,重新走 `app.update` 落到
+                        // 下面 `PreviewEditorCopy/Cut/Paste/Format` 等分支(同
+                        // `ContextMenuOpen` 用 `emit` 回吐的既有回路)。
+                        self.update(msg);
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    // 与其它右键菜单互斥:关掉文件树/预览 tab/输入框/数据库/
+                    // 项目链接菜单,只留本菜单(同 `TextInputMenuOpen` 口径)。
+                    self.files.close_context_menu();
+                    self.text_input_menu = None;
+                    self.project_link_menu = None;
+                    self.database_source_menu = None;
+                    let (x, y) = self.files.last_right_click();
+                    self.editor_context_menu =
+                        Some(crate::app::state::EditorContextMenu { x, y, kind, tab_id });
+                }
+            }
+            // 编辑器右键"复制/剪切/粘贴":复用 iced `text_editor` 原生剪贴板逻辑
+            // ——把 ⌘C/⌘X/⌘V 合成键盘事件、作用到被右键的 `CodeView`(其焦点 id
+            // 经 `preview_editor_focus_id` 取出)。macOS 经 `pending_native_menu_edit_key`
+            // 在本帧后由 main.rs 合成;非 macOS 经 `menu_edit_key` 命中 + 焦点补到
+            // `editor_context_menu_focus_id` 那条合成键路径。没有原生编辑器的 tab
+            // (表格/webview/占位)焦点 id 为 `None`,剪贴板动作自然落空。
+            Message::PreviewEditorCopy { kind, tab_id } => {
+                self.editor_clipboard_action(kind, tab_id, 'c');
+            }
+            Message::PreviewEditorCut { kind, tab_id } => {
+                self.editor_clipboard_action(kind, tab_id, 'x');
+            }
+            Message::PreviewEditorPaste { kind, tab_id } => {
+                self.editor_clipboard_action(kind, tab_id, 'v');
+            }
+            // 编辑器右键"格式化代码":一期仓库未集成 formatter,留占位 no-op
+            // (用户确认"先留占位项")。保留消息 + 菜单项,将来接 formatter 直接
+            // 在此落地。
+            Message::PreviewEditorFormat { .. } => {
+                self.editor_context_menu = None;
+            }
             Message::Hover(id, h) => {
                 self.set_hover(id, h);
             }
@@ -4445,6 +4498,67 @@ impl App {
             );
         // 常规右键菜单就地向下/向上弹即可,这里输入框多用在面板内容区,直接
         // 以光标为左上锚弹出(必要时可在下方再夹窗口高度,留待需要时加)。
+        container(list)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_y(iced_widget::core::alignment::Vertical::Top)
+            .padding(Padding {
+                top: menu.y,
+                left: menu.x,
+                right: 0.0,
+                bottom: 0.0,
+            })
+            .into()
+    }
+
+    /// 文本编辑器右键菜单(非 macOS 的 iced 弹层版),纯数据组装。与
+    /// `text_input_menu_popup` 同款外壳/对齐,但项是 复制/剪切/粘贴/分隔线/
+    /// 搜索代码/格式化代码,各自发编辑器专属消息(`PreviewEditorCopy/Cut/
+    /// Paste`/`PreviewFindOpen`/`PreviewEditorFormat`)。macOS 走原生 NSMenu、
+    /// 不渲染此弹层(`editor_context_menu` 恒为 `None`,这里直接返回空)。
+    pub(crate) fn editor_context_menu_popup<'a>(
+        &self,
+    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+        let menu = match &self.editor_context_menu {
+            Some(m) => m,
+            None => return column![].into(),
+        };
+        let kind = menu.kind;
+        let tab_id = menu.tab_id;
+        let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = vec![
+            crate::chrome::menu::item(
+                Some(icons::IconKind::Copy),
+                "复制",
+                Message::PreviewEditorCopy { kind, tab_id },
+            ),
+            crate::chrome::menu::item(
+                Some(icons::IconKind::Scissors),
+                "剪切",
+                Message::PreviewEditorCut { kind, tab_id },
+            ),
+            crate::chrome::menu::item(
+                Some(icons::IconKind::ClipboardPaste),
+                "粘贴",
+                Message::PreviewEditorPaste { kind, tab_id },
+            ),
+            crate::chrome::menu::separator(),
+            crate::chrome::menu::item(
+                Some(icons::IconKind::Search),
+                "搜索代码",
+                Message::PreviewFindOpen(kind),
+            ),
+            crate::chrome::menu::item(
+                Some(icons::IconKind::LayoutList),
+                "格式化代码",
+                Message::PreviewEditorFormat { kind, tab_id },
+            ),
+        ];
+
+        let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+            crate::chrome::menu::shell_frosted(
+                items,
+                Length::Fixed(byteui::theme::geometry::menu_item_width()),
+            );
         container(list)
             .width(Length::Fill)
             .height(Length::Fill)

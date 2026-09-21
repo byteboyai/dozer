@@ -174,6 +174,19 @@ impl PreviewPane {
             .position(|t| t.kind == TabKind::File(path.to_path_buf()))
     }
 
+    /// 取某个预览 tab 内部原生 `CodeView` 的 iced 焦点 id——编辑器右键菜单
+    /// 的"复制/剪切/粘贴"要合成 ⌘C/⌘X/⌘V 键盘事件、且事件必须作用于这个
+    /// 编辑器,靠的就是先把焦点拨到这个 id(见 `App::preview_editor_focus_id`
+    /// 与 `pending_native_menu_edit_key` 的用法)。没有原生编辑器(表格/webview
+    /// 档 / 占位 tab)返回 `None`,调用方据此取消菜单的剪贴板动作。
+    pub fn editor_focus_id(&self, tab_id: usize) -> Option<iced_widget::core::widget::Id> {
+        self.tabs
+            .iter()
+            .find(|t| t.id == tab_id)
+            .and_then(|t| t.editor.as_ref())
+            .map(|e| e.focus_id())
+    }
+
     pub fn open_path(&mut self, path: PathBuf) -> usize {
         // 同一文件已开则切过去,不重复开 tab（验收反馈）。
         if let Some(idx) = self.find_existing_file_tab(&path) {

@@ -1016,9 +1016,18 @@ pub(crate) fn preview_pane_for<'a>(
                 }
             }
             content = content.push(
-                container(editor.view().map(move |ev| editor_msg(tab_id, ev)))
-                    .width(Length::Fill)
-                    .height(Length::Fill),
+                MouseArea::new(
+                    container(editor.view().map(move |ev| editor_msg(tab_id, ev)))
+                        .width(Length::Fill)
+                        .height(Length::Fill),
+                )
+                .on_right_press(Message::PreviewEditorContextMenuOpen {
+                    kind: match kind {
+                        PreviewPaneKind::Files => PanelKind::Files,
+                        PreviewPaneKind::Project => PanelKind::Project,
+                    },
+                    tab_id,
+                }),
             );
         } else if let Some(tabular) = &active_tab.tabular {
             // 表格 tab:iced 原生渲染 Tabular Viewer(虚拟化网格 + sheet 切换
@@ -1077,9 +1086,20 @@ pub(crate) fn preview_pane_for<'a>(
                     if raw_text && let Some(editor) = &active_tab.editor {
                         // 复用与上面 `editor` 分支逐字一致的 Element 构造。
                         content = content.push(
-                            container(editor.view().map(move |ev| editor_msg(tab_id, ev)))
-                                .width(Length::Fill)
-                                .height(Length::Fill),
+                            MouseArea::new(
+                                container(editor.view().map(move |ev| editor_msg(tab_id, ev)))
+                                    .width(Length::Fill)
+                                    .height(Length::Fill),
+                            )
+                            .on_right_press(
+                                Message::PreviewEditorContextMenuOpen {
+                                    kind: match kind {
+                                        PreviewPaneKind::Files => PanelKind::Files,
+                                        PreviewPaneKind::Project => PanelKind::Project,
+                                    },
+                                    tab_id,
+                                },
+                            ),
                         );
                     }
                 }

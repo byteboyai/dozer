@@ -382,6 +382,42 @@ pub enum Message {
     /// File-Find 条的「替换为」输入框每键落定(只写 `FindState::replacement`
     /// 草稿,不触发任何替换;真正动作在点「替…」按钮时发生)。
     PreviewFindReplacement(PanelKind, String),
+    /// 文本编辑器右键菜单"打开":携带被右键的预览 tab 的面板种类(Files/
+    /// Project)与 tab id,定位该 tab 的 `CodeView`。坐标复用
+    /// `files.last_right_click`(main.rs 任意右键都会先写入,见
+    /// `TabContextMenuOpen` 同款口径)。macOS 走原生 NSMenu,非 macOS 走
+    /// iced 弹层(同 `TextInputMenuOpen` 的双轨)。
+    PreviewEditorContextMenuOpen {
+        kind: PanelKind,
+        tab_id: usize,
+    },
+    /// 编辑器右键菜单"复制":经 `pending_native_menu_edit_key` 合成 ⌘C 复用
+    /// iced `text_editor` 原生剪贴板逻辑(macOS);非 macOS 走 `menu_edit_key`
+    /// 命中 + `text_input_menu_target_id` 风格的焦点+合成键路径。携带面板
+    /// 种类 + tab id 以便定位被右键编辑器的焦点 id。
+    PreviewEditorCopy {
+        kind: PanelKind,
+        tab_id: usize,
+    },
+    /// 编辑器右键菜单"剪切":语义同 `PreviewEditorCopy`,合成 ⌘X。
+    PreviewEditorCut {
+        kind: PanelKind,
+        tab_id: usize,
+    },
+    /// 编辑器右键菜单"粘贴":语义同 `PreviewEditorCopy`,合成 ⌘V。
+    PreviewEditorPaste {
+        kind: PanelKind,
+        tab_id: usize,
+    },
+    /// 编辑器右键菜单"格式化代码":一期仓库未集成任何代码 formatter,留占位
+    /// no-op(用户确认:"先留占位项")。保留消息 + 菜单项,将来接 formatter 时
+    /// 直接在此落地,无需再动菜单装配。`kind`/`tab_id` 字段目前未被读取(纯
+    /// 占位清菜单),特标注避免误报 dead_code。
+    #[allow(dead_code)]
+    PreviewEditorFormat {
+        kind: PanelKind,
+        tab_id: usize,
+    },
     /// File-Find 条「替换当前」:把本轮 `current` 指着的那一处清掉换成替换框
     /// 文本。照 Enter/⌘S 外的普通打字语义,只改**原生 buffer 并标脏**等待用户
     /// ⌘S 落盘——替换不隐式写盘([CLAUDE.md 裁决]预览优先渲染/不可逆动作留给

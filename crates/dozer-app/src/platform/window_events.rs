@@ -1806,6 +1806,9 @@ pub(crate) fn menu_edit_key(message: &Message) -> Option<char> {
         Message::TextInputMenuCopy => Some('c'),
         Message::TextInputMenuPaste => Some('v'),
         Message::TextInputMenuSelectAll => Some('a'),
+        Message::PreviewEditorCut { .. } => Some('x'),
+        Message::PreviewEditorCopy { .. } => Some('c'),
+        Message::PreviewEditorPaste { .. } => Some('v'),
         _ => None,
     }
 }
@@ -3320,7 +3323,13 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 // 不抢走输入框焦点;合成前再用 `focusable::focus` 补一次,
                 // 双保险保证作用于被右键的那个输入。
                 if let Some(ch) = messages.iter().find_map(menu_edit_key) {
-                    if let Some(id) = app.text_input_menu_target_id() {
+                    // 输入框右键菜单与文本编辑器右键菜单(非 macOS iced 弹层)
+                    // 都会命中这里:焦点优先补到被右键的输入,其次补到被右键的
+                    // 原生 `CodeView`,保证合成的 ⌘C/⌘X/⌘V 作用到正确目标。
+                    let focus_id = app
+                        .text_input_menu_target_id()
+                        .or_else(|| app.editor_context_menu_focus_id());
+                    if let Some(id) = focus_id {
                         let mut op =
                             iced_winit::core::widget::operation::focusable::focus::<()>(id);
                         crate::runtime::run_operate(&mut interface, renderer, &mut op);

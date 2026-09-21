@@ -76,6 +76,18 @@ pub struct TextInputTarget {
     pub secure: bool,
 }
 
+/// 非 macOS 下文本编辑器右键菜单(iced 弹层)的浮层状态:屏幕坐标 +
+/// 被右键 tab 的面板种类与 tab id。macOS 走原生 NSMenu、不存这份状态。
+/// 语义对齐 `TextInputMenu`(输入框右键菜单),只是作用目标从输入框换成
+/// 原生 `CodeView`。坐标复用 `files.last_right_click`。
+#[derive(Debug, Clone)]
+pub struct EditorContextMenu {
+    pub x: f32,
+    pub y: f32,
+    pub kind: crate::app::PanelKind,
+    pub tab_id: usize,
+}
+
 /// 所有需要"悬停平滑过渡动画"的按钮的统一标识。把顶栏右侧按钮
 /// (`TopbarButton`)、图标栏按钮(`RailButton`)收进同一个
 /// 枚举,这样它们能共用一套 `hover_anims` 状态机与同一条自驱 redraw 定时

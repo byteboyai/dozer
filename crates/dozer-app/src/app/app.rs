@@ -140,6 +140,71 @@ pub(crate) fn text_input_menu_items(
     ]
 }
 
+/// 文本编辑器右键菜单(原生 NSMenu 版)的纯数据组装:复制 / 剪切 / 粘贴 /
+/// 分隔线 / 搜索代码 / 格式化代码。与输入框右键菜单(`text_input_menu_items`)
+/// 同款"图标 + BODY 文字",但多了搜索/格式化两项、且走编辑器专属消息
+/// (`PreviewEditorCopy/Cut/Paste`/`PreviewEditorFormat`/`PreviewFindOpen`)——
+/// 复制/剪切/粘贴经 `pending_native_menu_edit_key` 合成 ⌘C/⌘X/⌘V 复用 iced
+/// `text_editor` 原生剪贴板逻辑(见 `menu_edit_key` 与 `app/update.rs` 对应分支);
+/// "搜索代码"打开编辑器 Find 条(⌘F 同款);"格式化代码"一期无 formatter,留
+/// 占位 no-op。仅 macOS 编译。
+#[cfg(target_os = "macos")]
+pub(crate) fn preview_editor_menu_items(
+    kind: PanelKind,
+    tab_id: usize,
+) -> Vec<crate::chrome::native_menu::Item<Message>> {
+    use crate::chrome::native_menu::Item;
+    let body = byteui::theme::color::current().body;
+    let copy = Message::PreviewEditorCopy { kind, tab_id };
+    let cut = Message::PreviewEditorCut { kind, tab_id };
+    let paste = Message::PreviewEditorPaste { kind, tab_id };
+    let search = Message::PreviewFindOpen(kind);
+    let format = Message::PreviewEditorFormat { kind, tab_id };
+    vec![
+        Item::Entry {
+            icon: Some(icons::IconKind::Copy),
+            icon_color: None,
+            label: "复制".into(),
+            color: body,
+            enabled: true,
+            msg: copy,
+        },
+        Item::Entry {
+            icon: Some(icons::IconKind::Scissors),
+            icon_color: None,
+            label: "剪切".into(),
+            color: body,
+            enabled: true,
+            msg: cut,
+        },
+        Item::Entry {
+            icon: Some(icons::IconKind::ClipboardPaste),
+            icon_color: None,
+            label: "粘贴".into(),
+            color: body,
+            enabled: true,
+            msg: paste,
+        },
+        Item::Separator,
+        Item::Entry {
+            icon: Some(icons::IconKind::Search),
+            icon_color: None,
+            label: "搜索代码".into(),
+            color: body,
+            enabled: true,
+            msg: search,
+        },
+        Item::Entry {
+            icon: Some(icons::IconKind::LayoutList),
+            icon_color: None,
+            label: "格式化代码".into(),
+            color: body,
+            enabled: true,
+            msg: format,
+        },
+    ]
+}
+
 /// `database_source_context_menu_popup` 的原生菜单版本,纯数据组装——数据源
 /// 未展开时"刷新"置灰(同旧版 `item_locked` 语义)。仅 macOS 编译。
 #[cfg(target_os = "macos")]
@@ -377,6 +442,9 @@ pub struct App {
     /// 通用输入框右键菜单浮层状态(屏幕空间单例)。`TextInputMenuOpen` 时
     /// 写入、`TextInputMenuClose`/动作后清空。同一时刻最多挂一个。
     pub(crate) text_input_menu: Option<TextInputMenu>,
+    /// 非 macOS 下文本编辑器右键菜单(iced 弹层)浮层状态。macOS 走原生
+    /// NSMenu、不存这份状态(见 `EditorContextMenu` 文档)。
+    pub(crate) editor_context_menu: Option<EditorContextMenu>,
     /// mac 原生菜单选中剪切/复制/粘贴/全选后,要合成的 `⌘+x/c/v/a` 字符 +
     /// 目标输入 id——`native_menu::show` 同步阻塞返回时那一帧的
     /// `UserInterface` 已经不在了,main.rs 在 `dispatch` 循环之后另起一次
@@ -762,6 +830,7 @@ impl App {
             category_context_menu: None,
             category_picker: None,
             text_input_menu: None,
+            editor_context_menu: None,
             database_source_menu: None,
             pending_text_input_focus: None,
             pending_native_menu_edit_key: None,
@@ -2344,6 +2413,59 @@ impl App {
     /// 用它把焦点再补一次到被右键的输入(保证作用于它而不是别的)。
     pub fn text_input_menu_target_id(&self) -> Option<iced_widget::core::widget::Id> {
         self.text_input_menu.as_ref().map(|m| m.target.id.clone())
+    }
+
+    /// 同 `text_input_menu_target_id`,但针对文本编辑器右键菜单(非 macOS 的
+    /// iced 弹层路径:合成 ⌘C/⌘X/⌘V 前把焦点补到被右键的 `CodeView`)。macOS
+    /// 走 `pending_native_menu_edit_key`,不读这里。
+    pub fn editor_context_menu_focus_id(&self) -> Option<iced_widget::core::widget::Id> {
+        let menu = self.editor_context_menu.as_ref()?;
+        let ws = self.active_workspace()?;
+        let pane = match menu.kind {
+            PanelKind::Files => &ws.preview,
+            PanelKind::Project => &ws.project_preview,
+            _ => return None,
+        };
+        pane.editor_focus_id(menu.tab_id)
+    }
+
+    /// 取被右键预览 tab 的 `CodeView` 焦点 id(macOS 合成 ⌘C/⌘X/⌘V 用)。见
+    /// `PreviewPane::editor_focus_id` 文档:表格/webview/占位 tab 无原生编辑器,
+    /// 返回 `None`,调用方据此跳过剪贴板动作。
+    pub fn preview_editor_focus_id(
+        &self,
+        kind: PanelKind,
+        tab_id: usize,
+    ) -> Option<iced_widget::core::widget::Id> {
+        let ws = self.active_workspace()?;
+        let pane = match kind {
+            PanelKind::Files => &ws.preview,
+            PanelKind::Project => &ws.project_preview,
+            _ => return None,
+        };
+        pane.editor_focus_id(tab_id)
+    }
+
+    /// 编辑器右键"复制/剪切/粘贴"的统一落点:`ch` 是 `'c'/'x'/'v'` 之一。先关掉
+    /// iced 弹层(非 macOS),再取出被右键 `CodeView` 焦点 id:macOS 把
+    /// `(ch, focus_id)` 写入 `pending_native_menu_edit_key`,由 main.rs 在本帧后
+    /// 合成对应 ⌘ 键事件、作用到该编辑器(复用 iced `text_editor` 原生剪贴板逻辑,
+    /// 见 `menu_edit_key` 与 `window_events.rs` 合成键回路);非 macOS 把焦点补到
+    /// 编辑器、交给 `menu_edit_key` 命中 + 合成键路径。无原生编辑器时焦点 id 为
+    /// `None`,剪贴板动作自然落空。
+    pub(crate) fn editor_clipboard_action(&mut self, kind: PanelKind, tab_id: usize, ch: char) {
+        self.editor_context_menu = None;
+        let Some(fid) = self.preview_editor_focus_id(kind, tab_id) else {
+            return;
+        };
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.pending_text_input_focus = Some(fid);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            self.pending_native_menu_edit_key = Some((ch, fid));
+        }
     }
 
     /// Project 面板链接行右键菜单是否打开(main.rs Esc 键路由用)。
