@@ -166,7 +166,14 @@ pub fn view<'a>(
                         .into(),
                     )
                 } else if root_is_hovered {
-                    Some(byteui::theme::color::current().tab_hover.into())
+                    // hover 底透明度与下方行循环同源(0.3)。
+                    Some(
+                        Color {
+                            a: 0.3,
+                            ..byteui::theme::color::current().tab_hover
+                        }
+                        .into(),
+                    )
                 } else {
                     None
                 },
@@ -406,7 +413,16 @@ pub fn view<'a>(
                                 .into(),
                             )
                         } else if is_hovered {
-                            Some(byteui::theme::color::current().tab_hover.into())
+                            // hover 底加透明度(0.3,与选中态 cream 同一档):
+                            // 实底 `tab_hover` 在文件树里偏重、压住下方行,半透明
+                            // 只做"光标掠过"的轻提示(2026-09 用户反馈)。
+                            Some(
+                                Color {
+                                    a: 0.3,
+                                    ..byteui::theme::color::current().tab_hover
+                                }
+                                .into(),
+                            )
                         } else {
                             None
                         },
