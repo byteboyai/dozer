@@ -2929,9 +2929,15 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                 };
 
                             // 项目名称编辑框(Stage 6):渲染在 `PanelKind::
-                            // Project`,同款每帧查真实焦点态。
+                            // Project`,同款每帧查真实焦点态。Project 面板
+                            // 可被拖到左右任一栏(见 `rail_cross_apply`),
+                            // 两侧都要查——只查 `left_view()` 时,面板挂右栏
+                            // 的聚焦态永远为假,键盘放行闸门不触发,输入的
+                            // 字符会同时落进 PTY(agent 输入框)。
                             let name_edit_focused =
-                                if matches!(app.left_view(), crate::app::PanelKind::Project) {
+                                if matches!(app.left_view(), crate::app::PanelKind::Project)
+                                    || app.right_view == crate::app::PanelKind::Project
+                                {
                                     crate::runtime::run_operate(
                                         &mut interface,
                                         renderer,
@@ -2943,9 +2949,12 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                 };
 
                             // 项目描述编辑框:同 `name_edit_focused`,渲染在
-                            // `PanelKind::Project`,每帧查真实焦点态。
+                            // `PanelKind::Project`,每帧查真实焦点态,两侧都查
+                            // (同上面的既有处理)。
                             let description_edit_focused =
-                                if matches!(app.left_view(), crate::app::PanelKind::Project) {
+                                if matches!(app.left_view(), crate::app::PanelKind::Project)
+                                    || app.right_view == crate::app::PanelKind::Project
+                                {
                                     crate::runtime::run_operate(
                                         &mut interface,
                                         renderer,
