@@ -1,6 +1,7 @@
 //! 预览域状态结构:PreviewTab/TabKind/FindState/PreviewPane 等。
 
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use super::*;
 
@@ -103,15 +104,34 @@ pub enum JsonTreeState {
     Ready(Box<crate::json_tree::JsonTreeView>),
 }
 
+/// 预览面板空白页(`TabKind::Blank`)对应的项目根目录简介。`path` 即 `Workspace::
+/// project.path`,留一份方便 view 比对——`apply_pending_blank_info` 拿到
+/// `PreviewBlankInfoLoaded` 时若 `info.path != ws.project.path` 就丢弃
+/// (用户中途切了项目,旧结果已失配)。`size_bytes`/`file_count` 走
+/// `extensions::project::compute_blank_info`,与"用量徽章"共用
+/// `DISK_USAGE_EXCLUDE`(`target/`/`.git/`/`node_modules` 等不计)。`created`/
+/// `modified` 来自 `fs::metadata(root)`,平台不支持时为 `None`。
+#[derive(Debug, Clone)]
+pub struct BlankPaneInfo {
+    pub path: PathBuf,
+    pub size_bytes: u64,
+    pub file_count: u64,
+    pub created: Option<SystemTime>,
+    pub modified: Option<SystemTime>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TabKind {
     File(PathBuf),
-    /// 预览面板固定的"空白"占位 tab(内容区显示 Dozer 品牌标,见
-    /// `workspace.rs::preview_pane_for`)——恒为 tab 列表的**第 0 项**、不可
-    /// 关闭、不可拖换位,`active_idx()==0` 即代表"当前没有可预览文件、停在
-    /// 空白页"这个落点。不进 `desired_webviews()` 期望清单,没有 wry 页面,
-    /// 纯 iced 原生渲染。这套形态对齐 SSH/数据库面板 tab 条最前面那个固定
-    /// "空白"占位 tab(`app.rs::ssh_tab_bar`/`extensions::database`)。
+    /// 预览面板的"空白"占位 tab:内容区显示项目根目录简介卡(Folder icon +
+    /// 名称、位置、大小、创建/修改时间,见 `workspace.rs::preview_pane_for`)——
+    /// **可被关闭**(与文件 tab 一视同仁,见 `PreviewPane::close`),前提是还有
+    /// 兄弟 tab 可当落点;若关完列表为空,`close` 会立即补回一个新 Blank(`next_id`
+    /// 续号),所以面板永远不会停在空 list 这种不合法状态。**不可拖换位**
+    /// (`reorder` 仍然把 index 0 当作锚点)——它在用户视觉上是"项目根"的代表,
+    /// 不能被拖到第二位。这套形态对齐 SSH/数据库面板 tab 条最前面那个固定
+    /// "空白"占位 tab(`app.rs::ssh_tab_bar`/`extensions::database`)。不进
+    /// `desired_webviews()` 期望清单,没有 wry 页面,纯 iced 原生渲染。
     Blank,
 }
 
@@ -262,13 +282,24 @@ pub struct PreviewPane {
     pub(crate) pending_tabular_loads: Vec<(usize, PathBuf)>,
     /// 同 `pending_tabular_loads`,但针对 JSON 树查看器(见 `JsonTreeState`)。
     pub(crate) pending_json_tree_loads: Vec<(usize, PathBuf)>,
+    /// 空白页信息卡:激活 tab 为 `TabKind::Blank` 时,`apply_pending_blank_info`
+    /// 异步跑出来的项目根目录简介。`None` 表示还没拉;view 层用 `—` 占位。
+    /// `clear_all`/`PreviewTabSwitch` 路径会同步置回 `None`(项目切换后
+    /// `path` 变化,旧结果失配)。
+    pub(crate) blank_info: Option<BlankPaneInfo>,
+    /// 防重复 spawn 的幂等位:空白页拉信息时由 `apply_pending_blank_info`
+    /// 在 `handle.spawn` **之前**置 true,`PreviewBlankInfoLoaded` 到达时清回
+    /// false。必须先置再 spawn,否则同帧 `user_event`/`window_event` 各扫到
+    /// 一次,会起两份后台任务。
+    pub(crate) blank_info_in_flight: bool,
 }
 
 impl Default for PreviewPane {
     fn default() -> Self {
         // 面板恒定携带一个第 0 项的 `TabKind::Blank` 占位 tab(见该变体文档):
         // 从没有过 tab 的初始态、以及项目切换清空后,都停在它上面。`next_id`
-        // 从占位 tab 的 id 之后续,同一个 `PreviewPane` 生命周期内 id 不重复。
+        // 从占位 tab 的 id 之后续,同一个 `PreviewPane` 生命周期内 id 不重复
+        // ——`close` 关掉最后一个 Blank 后补回的"新 Blank"也用 `next_id` 续号。
         Self {
             tabs: vec![placeholder_tab(0)],
             active: 0,
@@ -281,6 +312,8 @@ impl Default for PreviewPane {
             pending_webview_find_clear: None,
             pending_tabular_loads: Vec::new(),
             pending_json_tree_loads: Vec::new(),
+            blank_info: None,
+            blank_info_in_flight: false,
         }
     }
 }

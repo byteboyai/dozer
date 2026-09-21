@@ -307,6 +307,17 @@ pub enum Message {
         usize,
         Result<(String, u64, bool), String>,
     ),
+    /// 空白页信息卡后台扫描结果:由 `apply_pending_blank_info`
+    /// (`platform/window_events.rs`)在 `PreviewPane` 空白 tab 激活且
+    /// `blank_info` 为空时,通过 `tokio::task::spawn_blocking` 跑
+    /// `extensions::project::compute_blank_info` 后回灌。`project_id` 路由
+    /// 到正确的 workspace(用户中途切项目则 `info.path != ws.project.path`,
+    /// handler 直接丢弃,见 `Message::PreviewBlankInfoLoaded` handler)。
+    PreviewBlankInfoLoaded(
+        crate::app::layout::ProjectId,
+        PanelKind,
+        crate::preview::BlankPaneInfo,
+    ),
     /// 只读大文件档 ⌘F:打开搜索条,锁定 `usize`(`PreviewTab.id`)。
     PreviewLargeFileSearchOpen(PanelKind, usize),
     PreviewLargeFileSearchClose(PanelKind),

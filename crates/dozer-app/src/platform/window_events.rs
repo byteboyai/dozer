@@ -1786,6 +1786,72 @@ impl Runner {
             }
         }
     }
+
+    /// 空白页信息卡后台扫描钩子:`PreviewPane::blank_info` 空、active tab 为
+    /// `TabKind::Blank`、项目已加载时,起一次 `tokio::task::spawn_blocking`
+    /// 跑 `compute_blank_info`,结果通过 `proxy` 回灌
+    /// `Message::PreviewBlankInfoLoaded`。每个 pane(Files/Project)各一次,
+    /// 但各自走自己的 `blank_info` 槽,不互踩。**先置 `blank_info_in_flight`,
+    /// 再 `handle.spawn`**——同帧 `user_event` + `window_event` 各扫到一次,
+    /// 若 spawn 先于置位会起两份任务。
+    pub(crate) fn apply_pending_blank_info(&mut self) {
+        let Self::Ready { app, proxy, .. } = self else {
+            return;
+        };
+        let handle = app.handle.clone();
+        // `proxy` 是 `EventLoopProxy<Message>`(非 `Copy`),每次 spawn 前都得
+        // 克隆一份新的 clone 喂给 async move 闭包——否则第二次循环
+        // (Project panel) 第一次 spawn 时就已经把 outer proxy 移走了。
+        for kind in [PanelKind::Files, PanelKind::Project] {
+            // 单次只读扫:把决策所需的字段全部拷出来,后续可变借用 `active_workspace_mut`
+            // 才不会和这些只读借用冲突。
+            let Some((project_id, root)) = (|| {
+                let ws = app.active_workspace()?;
+                let project = ws.project.as_ref()?;
+                let pane = match kind {
+                    PanelKind::Project => &ws.project_preview,
+                    _ => &ws.preview,
+                };
+                if pane.blank_info.is_some() || pane.blank_info_in_flight {
+                    return None;
+                }
+                let active_is_blank = pane
+                    .tabs
+                    .get(pane.active)
+                    .is_some_and(|t| matches!(t.kind, crate::preview::TabKind::Blank));
+                if !active_is_blank {
+                    return None;
+                }
+                let project_id = app.active_project_id()?;
+                Some((project_id, std::path::PathBuf::from(&project.path)))
+            })() else {
+                continue;
+            };
+            // 幂等位先置:挡住同帧二次扫描,handler 抵达时再清回 false。
+            let ws = match app.active_workspace_mut() {
+                Some(ws) => ws,
+                None => continue,
+            };
+            let pane = match kind {
+                PanelKind::Project => &mut ws.project_preview,
+                _ => &mut ws.preview,
+            };
+            pane.blank_info_in_flight = true;
+            let panel_kind = kind;
+            let proxy = proxy.clone();
+            handle.spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::extensions::project::compute_blank_info(&root)
+                })
+                .await;
+                if let Ok(info) = result {
+                    let _ = proxy.send_event(Message::PreviewBlankInfoLoaded(
+                        project_id, panel_kind, info,
+                    ));
+                }
+            });
+        }
+    }
 }
 
 /// 从 main.rs 迁移(main.rs 瘦身补做,原 impl ApplicationHandler 依赖它们)。
@@ -2139,6 +2205,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.apply_pending_focus();
         self.apply_pending_zoom_toggle();
         self.apply_pending_preview_find();
+        self.apply_pending_blank_info();
         self.sync_search_overlay(event_loop);
         self.sync_file_history_overlay(event_loop);
         self.sync_project_create_overlay(event_loop);
@@ -3409,6 +3476,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.apply_pending_focus();
         self.apply_pending_zoom_toggle();
         self.apply_pending_preview_find();
+        self.apply_pending_blank_info();
         self.sync_search_overlay(event_loop);
         self.sync_file_history_overlay(event_loop);
         self.sync_project_create_overlay(event_loop);

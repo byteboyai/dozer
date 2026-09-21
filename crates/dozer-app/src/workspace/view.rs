@@ -9,7 +9,7 @@ use crate::chrome::tab_widget::{
 };
 use crate::extensions::conversations;
 use crate::menu_spec::{MenuSpec, MenuSpecItem};
-use crate::preview::{PreviewPane, TabKind};
+use crate::preview::{PreviewPane, PreviewTab, TabKind};
 use crate::theme;
 use crate::theme::terminal_font;
 use byteui::interaction::icons;
@@ -626,9 +626,189 @@ pub(crate) fn project_preview_pane<'a>(
     preview_pane_for(app, ws, PreviewPaneKind::Project, width, outer)
 }
 
+/// 空白页(`TabKind::Blank`)的 Finder "Get Info" 风格信息卡:folder icon +
+/// 项目名(大号奶油色),下方四行 dim label / cream value —— 位置 / 大小 /
+/// 创建时间 / 修改时间。`preview.blank_info` 为 `None` 时四行 value 都画
+/// `—` 占位(后台还在跑)。无项目(`ws.project` 为 `None`,启动初帧 / 切项目
+/// 中间)只画头部,不画 stats,避免"位置: —"这种半成品。
+fn preview_blank_info_card<'a>(
+    ws: &'a Workspace,
+    preview: &'a PreviewPane,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let theme_colors = byteui::theme::color::current();
+    let header = row![
+        icons::view(icons::IconKind::Folder, 96.0, theme_colors.dim),
+        text(ws.project.as_ref().map(|p| p.name.as_str()).unwrap_or(""))
+            .size(byteui::theme::font::title())
+            .color(theme_colors.cream),
+    ]
+    .spacing(20)
+    .align_y(iced_widget::core::Alignment::Center);
+
+    let Some(project) = ws.project.as_ref() else {
+        return container(
+            column![header]
+                .spacing(0)
+                .align_x(iced_widget::core::Alignment::Center),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .into();
+    };
+
+    let info = preview.blank_info.as_ref();
+    let size_value = info.map_or("—".to_string(), |i| {
+        format!(
+            "{} 字节,共 {} 个项目",
+            with_thousands_separator(i.size_bytes),
+            with_thousands_separator(i.file_count)
+        )
+    });
+    let created_value = info
+        .and_then(|i| i.created)
+        .map(format_time_cn)
+        .unwrap_or_else(|| "—".to_string());
+    let modified_value = info
+        .and_then(|i| i.modified)
+        .map(format_time_cn)
+        .unwrap_or_else(|| "—".to_string());
+
+    let dim = theme_colors.dim;
+    let cream = theme_colors.cream;
+    let body_font = byteui::theme::font::body();
+    // 不抽 label/value 闭包:`text` 返回 `Text<'a>` 含生命周期,把 `&str` 闭包
+    // 返回 `Text<'b>` 会撞 iced 的 invariant 约束(报错点就是这个),就地写
+    // 反而短。
+    let stats = column![
+        row![
+            text("位置:").size(body_font).color(dim),
+            text(project.path.clone()).size(body_font).color(cream)
+        ]
+        .spacing(8),
+        row![
+            text("大小:").size(body_font).color(dim),
+            text(size_value).size(body_font).color(cream)
+        ]
+        .spacing(8),
+        row![
+            text("创建时间:").size(body_font).color(dim),
+            text(created_value).size(body_font).color(cream)
+        ]
+        .spacing(8),
+        row![
+            text("修改时间:").size(body_font).color(dim),
+            text(modified_value).size(body_font).color(cream)
+        ]
+        .spacing(8),
+    ]
+    .spacing(8)
+    .align_x(iced_widget::core::Alignment::Center);
+
+    let card = column![header, stats]
+        .spacing(28)
+        .align_x(iced_widget::core::Alignment::Center);
+
+    container(card)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .into()
+}
+
+/// `n` 插入千位分隔符(中文惯例就是半角逗号,与英文一致)。`23456` →
+/// `"23,456"`;`0` → `"0"`。纯展示,不损失精度。
+fn with_thousands_separator(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().rev().enumerate() {
+        if i != 0 && i % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out.chars().rev().collect()
+}
+
+/// SystemTime → 中文 `"YYYY年M月D日 星期X HH:MM"` 形式(无秒)。Howard
+/// Hinnant 的 `civil_from_days` 同款算法(见 `extensions/git_log.rs::1283`,
+/// 那里只输出 `YYYY-MM-DD HH:MM:SS`,这里改成中文 + 加星期)。失败(平台不
+/// 支持 / 1970 之前)时回退 `"未知"`。
+fn format_time_cn(t: std::time::SystemTime) -> String {
+    let dur = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let total_secs = dur.as_secs();
+    let days = (total_secs / 86_400) as i64;
+    let secs_of_day = total_secs % 86_400;
+    let (h, m, _) = (
+        secs_of_day / 3600,
+        (secs_of_day / 60) % 60,
+        secs_of_day % 60,
+    );
+    let (y, mo, d) = civil_from_days(days);
+    // 1970-01-01 是星期四,加天数 mod 7 拿到 0..6,offset = 周一 = 0
+    let weekday = (((days + 3) % 7) + 7) % 7;
+    let weekday_cn = [
+        "星期一",
+        "星期二",
+        "星期三",
+        "星期四",
+        "星期五",
+        "星期六",
+        "星期日",
+    ][weekday as usize];
+    format!(
+        "{y}年{mo}月{d}日 {weekday_cn} {h:02}:{m:02}",
+        y = y,
+        mo = mo,
+        d = d,
+        weekday_cn = weekday_cn,
+        h = h,
+        m = m,
+    )
+}
+
+/// Howard Hinnant 的 `civil_from_days`:Unix epoch 起的天数 → (年, 月, 日)。
+/// 范围覆盖 1970..=2100,足够文件系统时间戳用。与 `git_log.rs` 的同名函数
+/// 同源(那个是模块私有,这里复制一份给空白页信息卡用)。
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
+}
+
+/// 预览 tab 的渲染标题。`TabKind::Blank` 的占位 tab 返回当前项目根名
+/// (`ws.project.name`),而不是数据层 `placeholder_tab` 写死的 `"空白"`,这样
+/// 切项目时标题自然跟着 `ws.project.name` 走,不需要回写 tab 字段。没项目
+/// (启动初帧 / 切项目中间帧)时回退 `tab.title`,即原 `"空白"`,保留原语义。
+/// 宽度预算与实际渲染共用同一份 helper,避免选错宽度导致标题裁切。
+fn preview_tab_display_title(ws: &Workspace, tab: &PreviewTab) -> String {
+    if matches!(tab.kind, crate::preview::TabKind::Blank)
+        && let Some(p) = ws.project.as_ref()
+    {
+        return p.name.clone();
+    }
+    tab.title.clone()
+}
+
 /// 预览 pane 的共同渲染(Files 预览与 Project 面板右配对复用同一套 tab
 /// 栏/原生编辑器/占位文案逻辑,只是状态取自 `ws.preview` 还是
 /// `ws.project_preview`、消息与前缀路由到哪套)不同。
+///
+/// **空白页 tab(`TabKind::Blank`)的标题显示项目根名**:数据层
+/// `placeholder_tab` 的 title 仍写死 `"空白"`(语义保留,model 不依赖
+/// workspace 状态);view 在渲染时统一通过 [`preview_tab_display_title`]
+/// 替换,这样 `PreviewPane::clear_all`/`adopt_project` 切换项目时,
+/// 标题会自然跟着 `ws.project.name` 走,不需要回写 tab 字段。宽度估计
+/// 和实际渲染共用同一份 helper,避免选错宽度导致标题裁切。
 pub(crate) fn preview_pane_for<'a>(
     app: &'a App,
     ws: &'a Workspace,
@@ -702,7 +882,7 @@ pub(crate) fn preview_pane_for<'a>(
     let widths: Vec<f32> = preview
         .tabs()
         .iter()
-        .map(|t| preview_tab_display_width(&t.title))
+        .map(|t| preview_tab_display_width(&preview_tab_display_title(ws, t)))
         .collect();
     let window = tab_window(
         &widths,
@@ -722,11 +902,12 @@ pub(crate) fn preview_pane_for<'a>(
             let close_hover_t = app.hover_progress(close_hover(idx));
             // 就地可写的原生 tab 有未保存改动:标题后缀 ` *`(2026-09-06)。宽度
             // 预算仍按 `tab.title`(不带星)估,最坏多一个字符略挤,不换行折叠。
-            let display_title = if tab.editor.is_some() && tab.dirty {
-                format!("{} *", tab.title)
-            } else {
-                tab.title.clone()
-            };
+            // 空白页 tab(`TabKind::Blank`)的标题走 [`preview_tab_display_title`]
+            // 替换成项目根名(见该函数文档),宽度预算与渲染共用同一个 helper。
+            let mut display_title = preview_tab_display_title(ws, tab);
+            if tab.editor.is_some() && tab.dirty {
+                display_title.push_str(" *");
+            }
             // index 0 的 `Blank` 占位 tab 不可关闭:它上面的 × 点击等同于
             // "选中空白页"(不真关),与 SSH/数据库面板 tab 条最前面那个固定
             // "空白"占位(`app.rs::ssh_tab_bar` 的 `on_close: SelectBlankTab`)
@@ -753,7 +934,11 @@ pub(crate) fn preview_pane_for<'a>(
                 prefix: None,
                 suffix: None,
                 on_select: select_msg(idx),
-                on_close: if is_placeholder {
+                // Blank 占位 tab 的 ×:有兄弟 tab 时是真关(用户腾位);
+                // 单独存在时是 select(等价 no-op,数据层 `close` 关完会立刻
+                // 自动补回一个 Blank,净效果为空,但点击 × 不会有"列表瞬空再补"
+                // 的视觉跳动)。文件 tab 一律真关。
+                on_close: if is_placeholder && preview.tabs().len() == 1 {
                     select_msg(idx)
                 } else {
                     close_msg(idx)
@@ -1123,20 +1308,14 @@ pub(crate) fn preview_pane_for<'a>(
                 48.0,
             ));
         } else if active_tab.kind == TabKind::Blank {
-            // 关到最后一个 tab 后自动补的空白占位:没有 wry 页面,内容区
-            // 纯 iced 原生渲染,居中放 Dozer 品牌标(`IconKind::Dozer`,此前
-            // 一直没有调用点,见该枚举成员的注释)。
-            content = content.push(
-                container(icons::view(
-                    icons::IconKind::Dozer,
-                    96.0,
-                    byteui::theme::color::current().dim,
-                ))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(iced_widget::core::alignment::Horizontal::Center)
-                .align_y(iced_widget::core::alignment::Vertical::Center),
-            );
+            // 空白占位 tab:居中放 Finder "Get Info" 风格的项目根简介卡
+            // (folder icon + 名称头 + 位置/大小/创建/修改四行)。`blank_info`
+            // 是后台异步跑的(见 `apply_pending_blank_info` 与
+            // `Message::PreviewBlankInfoLoaded` handler),首帧会是 `None`,
+            // 用 `—` 占位,数据回来再渲染真实值。无项目(`ws.project` 为
+            // `None`)时只画头部,不画 stats——避免给空指针编出"位置: —"
+            // 这种半成品。
+            content = content.push(preview_blank_info_card(ws, preview));
         }
         // webview(flyfish)档 Find 条:渲染在内容区顶部,给已被 `preview_desired`
         // 下推的 webview 矩形让出固定高度的那一条。复用原生 Find 条(隐藏替换),

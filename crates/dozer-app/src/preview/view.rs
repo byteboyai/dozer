@@ -7,8 +7,10 @@ use std::path::PathBuf;
 
 use super::*;
 
-/// 构造一个固定的第 0 项 `TabKind::Blank` 占位 tab(不可关闭)。`Default`
-/// 与 `clear_all`(项目切换)都靠它把面板复位成"只剩空白页"这个恒定形态。
+/// 构造一个 `TabKind::Blank` 占位 tab。**可被关掉**(`close(0)` 在有兄弟
+/// tab 时真关;没兄弟时关完自动补一个新的,见 [`PreviewPane::close`]),所以
+/// "id 0" 不再是不变量。`Default` 与 `clear_all`(项目切换)都靠它把面板
+/// 复位成"只剩空白页"这个恒定形态。
 pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
     PreviewTab {
         id,
@@ -474,19 +476,31 @@ impl PreviewPane {
         self.active = 0;
         // 整个 pane 换主人/清空:Find 必然失配,直接丢。
         self.find = None;
+        // 空白页信息卡也丢——项目根路径变了,旧结果失配;`apply_pending_blank_info`
+        // 会在新项目上重新 spawn 一次。
+        self.blank_info = None;
+        self.blank_info_in_flight = false;
     }
 
-    /// 关掉一个 tab。index 0 的 `Blank` 占位不可关闭(点击它只会选中,见
-    /// 渲染侧;这里是数据层的兜底,越界/关占位都是 no-op)。关掉最后一个
-    /// 文件 tab 后,落点自动回到 index 0 的空白占位(浏览器"关到只剩新标签页"
-    /// 那种体验)。
+    /// 关掉一个 tab。越界是 no-op。`TabKind::Blank`(index 0)与文件 tab 一视同仁
+    /// ——**可以关**,前提是列表里还有别的 tab(用户关闭 Blank 是为了腾出位);当
+    /// 关掉后列表为空,**自动补回一个全新的 Blank**(`next_id` 续号,id 不复用),
+    /// 模拟浏览器"关到只剩新标签页"的体验,而不是让面板停在空 list 这种不合法
+    /// 状态。`active` 同步收敛:关后空 → `0`(新 Blank);否则沿用旧逻辑——
+    /// 越界压到末位、`idx < active` 左移一格。`close` 触发的"激活换到不同文件"
+    /// 顺路清掉失配的 Find。
     pub fn close(&mut self, idx: usize) {
-        // 占位 tab 不关;越界也是 no-op。
-        if idx == 0 || idx >= self.tabs.len() {
+        if idx >= self.tabs.len() {
             return;
         }
         self.tabs.remove(idx);
-        if self.active >= self.tabs.len() {
+        if self.tabs.is_empty() {
+            // 关到只剩空气 → 自动补一个 Blank 占位,id 用 `next_id` 续号
+            // (新 Blank 与被删的 Blank id 不同,不影响旧 Find 会话比对)。
+            self.tabs.push(placeholder_tab(self.next_id));
+            self.next_id += 1;
+            self.active = 0;
+        } else if self.active >= self.tabs.len() {
             self.active = self.tabs.len().saturating_sub(1);
         } else if idx < self.active {
             self.active -= 1;
@@ -2560,5 +2574,94 @@ mod tests {
             "退回文本编辑器后不该进 webview 池"
         );
         std::fs::remove_file(p).ok();
+    }
+
+    // ========== Blank 占位 tab 关闭 / 自动补回语义(2026-09-21 用户口径)==========
+    // Blank 不再是不可关闭的固定锚点——有兄弟 tab 时真关,关完列表空时自动
+    // 补回一个新 Blank(`next_id` 续号)。这俩测试守住这个不变量。
+
+    fn push_file(pane: &mut PreviewPane, path: &str) -> usize {
+        pane.push_tab(TabKind::File(PathBuf::from(path)), path.into())
+    }
+
+    /// 有兄弟 tab 时,`close(0)` 真把 Blank 删掉,列表里只剩文件 tab,
+    /// `active` 自然收敛到 0(原来 idx 1 的文件)。
+    #[test]
+    fn close_blank_with_siblings_drops_blank_and_keeps_active_sane() {
+        let mut p = PreviewPane::default();
+        // 默认 active=0 (Blank);开两个文件 tab。
+        let _ = push_file(&mut p, "/tmp/a.rs");
+        let _ = push_file(&mut p, "/tmp/b.rs");
+        assert_eq!(p.tabs().len(), 3);
+        assert!(matches!(p.tabs()[0].kind, TabKind::Blank));
+        p.select(2); // 切到 b.rs,确保 active 不再指着 Blank,关 Blank 不应改 active 指向
+        assert_eq!(p.active_idx(), 2);
+
+        p.close(0);
+        assert_eq!(p.tabs().len(), 2, "Blank 真关,剩两个文件 tab");
+        assert!(
+            !matches!(p.tabs()[0].kind, TabKind::Blank),
+            "关后 index 0 应该是文件,不再是 Blank"
+        );
+        // active 原本是 2,关掉 idx=0 后所有索引 -1,变成 1。
+        assert_eq!(p.active_idx(), 1, "active 因 idx<active 收敛到 1");
+    }
+
+    /// 列表里只剩 Blank 时 `close(0)` 把它删掉,然后**自动补回一个 Blank**
+    /// ——`next_id` 续号(新 Blank id != 0),`active = 0`。这是"关到只剩新
+    /// 标签页"那种体验的数据层兜底。
+    #[test]
+    fn close_blank_when_only_blank_recreates_a_fresh_one() {
+        let mut p = PreviewPane::default();
+        assert_eq!(p.tabs().len(), 1);
+        let original_id = p.tabs()[0].id;
+        let original_next_id = p.next_id;
+
+        p.close(0);
+        assert_eq!(p.tabs().len(), 1, "关完必须自动补回,不能让列表停在空中");
+        assert!(
+            matches!(p.tabs()[0].kind, TabKind::Blank),
+            "补回的仍是 Blank"
+        );
+        assert_eq!(
+            p.tabs()[0].id,
+            original_next_id,
+            "新 Blank 用 next_id 续号,不复用旧 id"
+        );
+        assert_ne!(
+            p.tabs()[0].id,
+            original_id,
+            "新 Blank id 必须递增,不能等于被关掉的 Blank id"
+        );
+        assert_eq!(p.next_id, original_next_id + 1, "next_id 也递增");
+        assert_eq!(p.active_idx(), 0);
+    }
+
+    /// 关掉列表中间的文件 tab 时 `active` 收敛:被关项左侧 active 不动、
+    /// 右侧 -1。覆盖 `close` 的另一条 `else if` 分支。
+    #[test]
+    fn close_middle_file_tab_shifts_active_left() {
+        let mut p = PreviewPane::default();
+        let _ = push_file(&mut p, "/tmp/a.rs");
+        let _ = push_file(&mut p, "/tmp/b.rs");
+        let _ = push_file(&mut p, "/tmp/c.rs");
+        p.select(2); // active = 2 (b.rs)
+        p.close(1); // 关 a.rs
+        // tabs 变成 [Blank, b.rs, c.rs];active 2 > idx=1 ⇒ active -= 1 ⇒ 1。
+        assert_eq!(p.tabs().len(), 3);
+        assert_eq!(p.active_idx(), 1, "active 从 2 收到 1(原 b.rs)");
+    }
+
+    /// 越界关闭是 no-op:`PreviewCloseTab(idx)` 来自右键菜单关闭后位置可能
+    /// 漂移,要稳。
+    #[test]
+    fn close_out_of_range_is_noop() {
+        let mut p = PreviewPane::default();
+        let _ = push_file(&mut p, "/tmp/a.rs");
+        let tabs_before = p.tabs().len();
+        let active_before = p.active_idx();
+        p.close(99);
+        assert_eq!(p.tabs().len(), tabs_before);
+        assert_eq!(p.active_idx(), active_before);
     }
 }

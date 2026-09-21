@@ -924,6 +924,30 @@ impl App {
                     pane.apply_more_loaded(tab_id, result);
                 });
             }
+            // 空白页信息卡回灌:路由到 spawn 时记录的项目(用户中途切项目则
+            // `info.path != ws.project.path` → 直接丢)。同框 `blank_info_in_flight`
+            // 先清回 false,再做 stale guard(active tab 已不是 Blank 也丢)。
+            Message::PreviewBlankInfoLoaded(project_id, kind, info) => {
+                self.with_project(project_id, move |ws, _io| {
+                    let pane = match kind {
+                        PanelKind::Project => &mut ws.project_preview,
+                        _ => &mut ws.preview,
+                    };
+                    pane.blank_info_in_flight = false;
+                    let current_root = ws.project.as_ref().map(|p| p.path.as_str());
+                    if !current_root.is_some_and(|r| r == info.path.to_string_lossy().as_ref()) {
+                        return;
+                    }
+                    let active_is_blank = pane
+                        .tabs
+                        .get(pane.active)
+                        .is_some_and(|t| matches!(t.kind, crate::preview::TabKind::Blank));
+                    if !active_is_blank {
+                        return;
+                    }
+                    pane.blank_info = Some(info);
+                });
+            }
             Message::PreviewLargeFileSearchOpen(kind, tab_id) => {
                 self.with_focused_project(move |ws, _io| match kind {
                     PanelKind::Project => ws.project_preview.open_large_file_search(tab_id),

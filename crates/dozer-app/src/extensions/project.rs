@@ -409,6 +409,61 @@ pub fn dir_size_excluding(root: &std::path::Path, exclude: &[&str]) -> u64 {
     total
 }
 
+/// 空白页(`PreviewPane::blank_info`)用的项目根目录简介:递归求总字节数
+/// + 文件计数 + `fs::metadata(root)` 拿 ctime/mtime。
+///
+/// 复用 `[DISK_USAGE_EXCLUDE]`,与"用量徽章"统计口径一致——`target/`、
+/// `.git/`、`node_modules` 等不计入。
+///
+/// 读不到的子项静默跳过,不破坏外层结果:大仓库上难免有 `EACCES` / 死链,
+/// 中断会让卡片永久卡在"计算中"。
+///
+/// `created` / `modified` 是平台 syscall,macOS 全支持;某些 sandboxed
+/// 环境会回 `Err`,此时对应字段为 `None`,view 用 `—` 占位。
+pub fn compute_blank_info(root: &std::path::Path) -> crate::preview::BlankPaneInfo {
+    let (size_bytes, file_count) = dir_size_and_count(root, &DISK_USAGE_EXCLUDE);
+    let (created, modified) = match std::fs::metadata(root) {
+        Ok(md) => (md.created().ok(), md.modified().ok()),
+        Err(_) => (None, None),
+    };
+    crate::preview::BlankPaneInfo {
+        path: root.to_path_buf(),
+        size_bytes,
+        file_count,
+        created,
+        modified,
+    }
+}
+
+/// 递归求总字节数 + 文件计数。`dir_size_excluding` 的近亲,但要同时给
+/// 出两份数。命名上跟 `dir_size_excluding` 解耦避免返回值签名膨胀,本函数
+/// 是空白页专用,后者(`dir_size_excluding`)的 u64 调用点不动。
+fn dir_size_and_count(root: &std::path::Path, exclude: &[&str]) -> (u64, u64) {
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return (0, 0);
+    };
+    let mut total_size = 0u64;
+    let mut total_count = 0u64;
+    for entry in rd.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            if exclude.contains(&name.as_str()) {
+                continue;
+            }
+            let (s, c) = dir_size_and_count(&entry.path(), exclude);
+            total_size += s;
+            total_count += c;
+        } else if let Ok(meta) = entry.metadata() {
+            total_size += meta.len();
+            total_count += 1;
+        }
+    }
+    (total_size, total_count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1133,5 +1188,42 @@ mod tests {
             |_| {},
         );
         assert_eq!(ws_state.delete_pending, None);
+    }
+
+    /// 空白页信息卡:递归时跳过 `DISK_USAGE_EXCLUDE`(`target/`/`.git/`/
+    /// `node_modules` 等),只算真实项目内容。构造 tempdir 写 3 个文件——1
+    /// 个普通,2 个分别落在 `target/` 与 `.git/`,断言 size/count 只统计
+    /// 普通那一个。
+    #[test]
+    fn compute_blank_info_excludes_git_target_node_modules() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("a.txt"), b"hi").expect("write a.txt"); // 2B
+        std::fs::create_dir(dir.path().join("target")).expect("mkdir target");
+        std::fs::write(dir.path().join("target").join("junk"), b"xxxxxx").expect("write junk"); // 6B
+        std::fs::create_dir_all(dir.path().join(".git").join("objects")).expect("mkdir .git");
+        std::fs::write(dir.path().join(".git").join("HEAD"), b"junk").expect("write HEAD");
+        // 嵌套不计入但要确认递归子树仍被正确剪枝:
+        std::fs::create_dir_all(dir.path().join("node_modules").join("pkg"))
+            .expect("mkdir node_modules");
+        std::fs::write(
+            dir.path().join("node_modules").join("pkg").join("index.js"),
+            b"xxxxxx",
+        )
+        .expect("write");
+
+        let info = compute_blank_info(dir.path());
+        assert_eq!(info.path, dir.path());
+        assert_eq!(info.size_bytes, 2, "只 a.txt 该计入");
+        assert_eq!(info.file_count, 1, "只 a.txt 该计入");
+    }
+
+    /// 空白页信息卡:不存在路径不应 panic,view 端对应渲染 "—"。
+    #[test]
+    fn compute_blank_info_missing_root_returns_zeros() {
+        let info = compute_blank_info(std::path::Path::new("/definitely/not/here/please"));
+        assert_eq!(info.size_bytes, 0);
+        assert_eq!(info.file_count, 0);
+        assert!(info.created.is_none());
+        assert!(info.modified.is_none());
     }
 }
