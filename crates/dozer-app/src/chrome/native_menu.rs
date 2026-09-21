@@ -285,7 +285,32 @@ fn icon_image(kind: IconKind, color: Color, size_px: u32) -> Retained<NSImage> {
 /// 一点——和现有 `crate::chrome::menu.rs` 弹层用的 `last_right_click()` 是同一份
 /// 逻辑坐标,不需要转换成屏幕坐标(`popUpMenuPositioningItem:atLocation:inView:`
 /// 的 `atLocation:` 就是"目标 view 自己坐标系里的一点")。
+///
+/// 无图标项的文字**让出图标列**(与既有口径一致):tab 溢出菜单靠这条固定
+/// 列落"选中项前置 `>`",无图标行文字与图标行文字同列对齐。文件树/文件预览
+/// 右键菜单要的相反口径(无图标项文字顶到图标列左缘)请用
+/// [`show_align_no_icon_left`]。
 pub fn show<Msg: Clone>(items: Vec<Item<Msg>>, view_pos: (f32, f32)) -> Option<Msg> {
+    show_impl(items, view_pos, false)
+}
+
+/// [`show`] 的文件树/文件预览右键菜单变体:无图标项(复制路径/用外部软件
+/// 打开/从磁盘重新加载等纯文字工具项)不再让出图标列,文字直接顶到图标列
+/// 左缘,与带图标项的图标**左对齐**(2026-09-21 用户口径);带图标的项不受
+/// 影响。tab 溢出菜单等"无图标行必须与图标行文字同列"的菜单继续走
+/// [`show`],不能换用本入口(选中行的 `>` 占着图标列)。
+pub fn show_align_no_icon_left<Msg: Clone>(
+    items: Vec<Item<Msg>>,
+    view_pos: (f32, f32),
+) -> Option<Msg> {
+    show_impl(items, view_pos, true)
+}
+
+fn show_impl<Msg: Clone>(
+    items: Vec<Item<Msg>>,
+    view_pos: (f32, f32),
+    align_no_icon_left: bool,
+) -> Option<Msg> {
     if items.is_empty() {
         return None;
     }
@@ -362,6 +387,7 @@ pub fn show<Msg: Clone>(items: Vec<Item<Msg>>, view_pos: (f32, f32)) -> Option<M
                     enabled,
                     icon.map(|k| icon_image(k, icon_color, icon_px)),
                     idx,
+                    align_no_icon_left,
                 );
                 ns_item.setView(Some(&row_view));
                 menu.addItem(&ns_item);
@@ -490,6 +516,7 @@ mod menu_item_view {
             enabled: bool,
             icon: Option<Retained<NSImage>>,
             index: usize,
+            align_no_icon_left: bool,
         ) -> Retained<Self> {
             let font_size = byteui::theme::font::label() as f64;
             let (row_width, pad_h) = super::row_geometry();
@@ -545,12 +572,16 @@ mod menu_item_view {
             this.addTrackingArea(&tracking);
 
             let mut x = pad_h;
-            // 无论该行是否真的有图标,都给图标列预留 `icon_px + gap` 宽位,
-            // 让文字起点恒等于 `pad_h + icon_px + gap`(macOS 原生菜单同款:
-            // 图标是固定左列,无图标的项文字也对齐到同一列)。tab 溢出菜单
+            // 该行真有图标,或菜单要求无图标行也让出图标列时,给图标列预留
+            // `icon_px + gap` 宽位,让文字起点恒等于 `pad_h + icon_px + gap`
+            // (macOS 原生菜单同款:图标是固定左列)。tab 溢出菜单(`show`)
             // 借此把"选中项前置 `>`"落进这个固定列,未选中行不画图标、文字
-            // 仍与选中行对齐,不会出现选中行被箭头右推错位。
-            x += icon_px + gap;
+            // 仍与选中行对齐,不会出现选中行被箭头右推错位。文件树/文件预览
+            // 右键菜单(`show_align_no_icon_left`)的无图标项则不预留——文字
+            // 顶到图标列左缘,与带图标项的图标左对齐(2026-09-21 用户口径)。
+            if icon.is_some() || !align_no_icon_left {
+                x += icon_px + gap;
+            }
             if let Some(icon) = icon {
                 let icon_y = (row_height - icon_px) / 2.0;
                 let image_view = NSImageView::initWithFrame(

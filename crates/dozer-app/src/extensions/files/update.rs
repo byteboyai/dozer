@@ -66,7 +66,9 @@ pub fn update(
                     ws_state.git_is_repo,
                     external_apps,
                 );
-                if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
+                if let Some(msg) =
+                    crate::chrome::native_menu::show_align_no_icon_left(items, (x, y))
+                {
                     // 不能直接递归调用本函数(`update`)——`OpenSearch`/
                     // `CopyPath` 这两个菜单项产出的消息是"内核拦截处理"的
                     // (打开搜索弹窗要跨到 `search::Message`,写系统剪贴板
@@ -113,7 +115,9 @@ pub fn update(
                 // 消息(`TabReloadFromDisk` 也是 app 层拦截)。
                 let is_git_repo = ws_state.git_is_repo;
                 let items = tab_context_menu_items(kind, &path, is_git_repo, external_apps);
-                if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
+                if let Some(msg) =
+                    crate::chrome::native_menu::show_align_no_icon_left(items, (x, y))
+                {
                     emit(msg);
                 }
             }

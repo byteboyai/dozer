@@ -453,8 +453,10 @@ where
 /// 各自的 tab 列表映射成 `(index, title, active)` 三元组;当前 tab(选中行)
 /// 用 CREAM 文字 + 标题前固定图标列里的 `>`(`chevron-right`,CREAM)标识,
 /// 其余行 BODY 且不画 `>`(2026-09 用户反馈:没选中的项不要显示箭头)。文字
-/// 对齐靠渲染端 `MenuItemView` **无条件**预留固定图标列,无论该行是否真有
-/// 图标,文字起点都钉在同一 x——不画箭头的行也不会错位。不含关闭按钮/
+/// 对齐靠渲染端 `MenuItemView` 为本菜单(走 `show` 默认口径)**无条件**预留
+/// 固定图标列,无论该行是否真有图标,文字起点都钉在同一 x——不画箭头的行
+/// 也不会错位(文件树/文件预览右键菜单的"无图标项顶到图标列左缘"是另一条
+/// 口径,走 `show_align_no_icon_left`,与本菜单无关)。不含关闭按钮/
 /// 状态点/hover(原生 NSMenu 是整行单击模型,见"迁移但去掉关闭按钮"的裁决),
 /// 仅 macOS 编译。
 #[cfg(target_os = "macos")]
@@ -470,10 +472,11 @@ pub(crate) fn tab_overflow_items<Msg: Clone>(
             let color = if *active { cream } else { body };
             // 只有选中行带 `>` 图标(CREAM),未选中行 `icon: None` 不画箭头
             // (2026-09 用户反馈:没选中的项不要显示 `>`)。文字对齐靠原生渲染
-            // 端 `MenuItemView` **无条件**预留固定图标列(宽度恒为
-            // `icon_px + gap`),无论该行是否真有图标,文字起点都钉在同一 x——
-            // 因此不画箭头的行不会把文字右推错位;iced 端 `tab_overflow_menu`
-            // 走同一口径(固定 `chevron_w` 列,未选中行塞 `Space`)。
+            // 端 `MenuItemView` 为 `show` 默认口径**无条件**预留固定图标列
+            // (宽度恒为 `icon_px + gap`),无论该行是否真有图标,文字起点都钉
+            // 在同一 x——因此不画箭头的行不会把文字右推错位;iced 端
+            // `tab_overflow_menu` 走同一口径(固定 `chevron_w` 列,未选中行塞
+            // `Space`)。
             let (icon, icon_color) = if *active {
                 (Some(icons::IconKind::ChevronRight), Some(cream))
             } else {
