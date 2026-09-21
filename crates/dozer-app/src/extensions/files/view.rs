@@ -1017,6 +1017,109 @@ pub fn context_menu_popup<'a>(
         .into()
 }
 
+/// 预览 tab 页签右键菜单内容——与文件树右键(`context_menu_spec`)共用
+/// 底层的 `MenuSpec` 数据类型,但走一套"只针对单个已打开文件 tab"的精简
+/// 列表:顶部 = 回滚 / 历史(仅 git 仓库文件才有,同文件树顶部组);中部 =
+/// 一条分隔线;底部 = 复制绝对路径 / 复制相对路径 / 用外部软件打开 / 从磁盘
+/// 重新加载。三个分组之间用分隔线隔开(同 `context_menu_spec` 的三段式)。
+/// 没有目录语义(已打开的 tab 必是文件),故不带新建/粘贴/删除/重命名。
+pub(crate) fn tab_context_menu_spec(
+    path: &Path,
+    is_git_repo: bool,
+    external_apps: &crate::external_apps::ExternalAppsConfig,
+) -> MenuSpec<Message> {
+    let target = path.to_path_buf();
+    let open_app_name = external_apps.lookup_for_path(&target).map(str::to_string);
+    let open_label = match &open_app_name {
+        Some(name) => format!("用 {name} 打开"),
+        None => "用外部软件打开".to_string(),
+    };
+
+    // 顶部操作组:仅 git 仓库文件才有回滚/历史(与文件树顶部组同一口径)。
+    let mut top: Vec<MenuSpecItem<Message>> = Vec::new();
+    if is_git_repo {
+        top.push(MenuSpecItem::entry(
+            Some(icons::IconKind::Undo2),
+            "回滚",
+            Message::FileHistoryRollbackPrevious(target.clone()),
+        ));
+        top.push(MenuSpecItem::entry(
+            Some(icons::IconKind::FileClock),
+            "历史",
+            Message::FileHistoryOpen(target.clone()),
+        ));
+    }
+
+    // 底部工具组:纯文字(无图标),与文件树底部同款。
+    let bottom: Vec<MenuSpecItem<Message>> = vec![
+        MenuSpecItem::entry(
+            None,
+            "复制绝对路径",
+            Message::CopyPath(target.clone(), PathKind::Absolute),
+        ),
+        MenuSpecItem::entry(
+            None,
+            "复制相对路径",
+            Message::CopyPath(target.clone(), PathKind::Relative),
+        ),
+        MenuSpecItem::entry(
+            None,
+            &open_label,
+            Message::OpenWithDefault(target.clone(), open_app_name),
+        ),
+        MenuSpecItem::entry(
+            None,
+            "从磁盘重新加载",
+            Message::TabReloadFromDisk(target.clone()),
+        ),
+    ];
+
+    let mut items = Vec::new();
+    let has_top = !top.is_empty();
+    items.extend(top);
+    if has_top {
+        items.push(MenuSpecItem::separator());
+    }
+    items.push(MenuSpecItem::separator());
+    items.extend(bottom);
+    items
+}
+
+/// 预览 tab 页签右键菜单的 native(NSMenu)条目,与 `context_menu_items` 同款:
+/// 由 `tab_context_menu_spec` 组好数据再 `to_native` 转译,供 macOS 原生菜单
+/// 使用。
+pub(crate) fn tab_context_menu_items(
+    path: &Path,
+    is_git_repo: bool,
+    external_apps: &crate::external_apps::ExternalAppsConfig,
+) -> Vec<crate::chrome::native_menu::Item<Message>> {
+    crate::menu_spec::to_native(tab_context_menu_spec(path, is_git_repo, external_apps))
+}
+
+/// 预览 tab 页签右键菜单浮层本体(非 macOS 的 iced 兜底,与 `context_menu_popup`
+/// 同款手算像素定位)。macOS 走原生 NSMenu,这条路径不进。
+pub fn tab_context_menu_popup<'a>(
+    app_state: &'a AppState,
+    ws_state: &'a WorkspaceState,
+    external_apps: &'a crate::external_apps::ExternalAppsConfig,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let Some(menu) = app_state.tab_context_menu() else {
+        return column![].into();
+    };
+    let spec = tab_context_menu_spec(&menu.path, ws_state.git_is_repo, external_apps);
+    let list = crate::menu_spec::to_iced(spec, Length::Shrink);
+    container(list)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(Padding {
+            top: menu.y,
+            left: menu.x,
+            right: 0.0,
+            bottom: 0.0,
+        })
+        .into()
+}
+
 /// 删除确认框:居中浮层,显示目标文件名 + 确认/取消两个按钮。
 pub fn delete_confirm_popup(
     ws_state: &WorkspaceState,

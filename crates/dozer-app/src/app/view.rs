@@ -149,6 +149,22 @@ impl App {
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
+        } else if self.files.tab_context_menu_is_some() {
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::Files(files::Message::TabContextMenuClose));
+            stack![
+                base,
+                dismiss,
+                files::tab_context_menu_popup(&self.files, &ws.files, &self.external_apps)
+                    .map(Message::Files)
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
         } else if ws.files.branch_picker_is_open() {
             // 分支切换弹层:窗口级浮层。下层铺一块透明 `MouseArea` 承接
             // "点弹层外的任何地方收起"(与右键菜单同款 dismiss 约定),弹层

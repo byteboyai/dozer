@@ -732,6 +732,19 @@ pub(crate) fn preview_pane_for<'a>(
             // "空白"占位(`app.rs::ssh_tab_bar` 的 `on_close: SelectBlankTab`)
             // 完全同一套做法——数据层 `PreviewPane::close(0)` 另有兜底 no-op。
             let is_placeholder = matches!(tab.kind, crate::preview::TabKind::Blank);
+            // 页签右键菜单:仅对真实文件 tab(`TabKind::File`,排除 index 0 的
+            // `Blank` 占位)生效——占位 tab 没对应文件,没有可操作的右键目标。
+            // 这里用循环变量里的 `tab`(PreviewTab)取路径,必须在下面
+            // `let tab = panel_tab(...)` 把它遮蔽之前拿到(`last_right_click` 已由
+            // main.rs 右键钳制填充,坐标不另传)。
+            let tab_path = match &tab.kind {
+                crate::preview::TabKind::File(p) => Some(p.clone()),
+                _ => None,
+            };
+            let panel_kind = match kind {
+                PreviewPaneKind::Project => crate::app::PanelKind::Project,
+                _ => crate::app::PanelKind::Files,
+            };
             let tab = panel_tab(PanelTabArgs {
                 title: display_title,
                 active,
@@ -756,6 +769,14 @@ pub(crate) fn preview_pane_for<'a>(
                 group: tab_group,
                 index: idx,
             });
+            if let Some(tab_path) = tab_path {
+                area = area.on_right_press(Message::Files(
+                    crate::extensions::files::Message::TabContextMenuOpen {
+                        kind: panel_kind,
+                        path: tab_path,
+                    },
+                ));
+            }
             if armed {
                 area = area.interaction(mouse::Interaction::Grabbing);
             }

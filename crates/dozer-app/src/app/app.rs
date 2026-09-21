@@ -2313,6 +2313,7 @@ impl App {
     /// 项目树右键菜单是否打开(main.rs Esc 键路由用)。
     pub fn context_menu_open(&self) -> bool {
         self.files.context_menu_is_some()
+            || self.files.tab_context_menu_is_some()
             || self.project_link_menu.is_some()
             || self.text_input_menu.is_some()
             || self.database_source_menu.is_some()
@@ -2812,10 +2813,21 @@ impl App {
             };
             // Files 右键菜单/Project 链接右键菜单/Conversations agent
             // 筛选下拉——同款"面板内浮层盖住 webview"场景,按当前面板种类
-            // 分别判断(见 `webview_hidden_by_panel_popup` 文档)。
+            // 分别判断(见 `webview_hidden_by_panel_popup` 文档)。预览 tab 右键
+            // 菜单同样盖住 webview,按菜单所属面板(`tab_context_menu.kind`)命中。
+            let tab_menu_covers_this = self.files.tab_context_menu().is_some_and(|m| {
+                matches!(
+                    (m.kind, kind),
+                    (crate::app::PanelKind::Files, crate::app::PanelKind::Files)
+                        | (
+                            crate::app::PanelKind::Project,
+                            crate::app::PanelKind::Project
+                        )
+                )
+            });
             let panel_popup_open = webview_hidden_by_panel_popup(
                 kind,
-                self.files.context_menu_is_some(),
+                self.files.context_menu_is_some() || tab_menu_covers_this,
                 self.project_link_menu.is_some(),
                 ws.conversations.agent_picker_open(),
             );

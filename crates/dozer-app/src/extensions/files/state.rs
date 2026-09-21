@@ -158,11 +158,26 @@ pub struct GitInfo {
     pub branches: Vec<String>,
 }
 
+/// 预览 tab 页签右键菜单浮层状态(屏幕空间单例,不随项目切换各自保留)。
+/// 与 `ContextMenu`(文件树行右键)互斥——两者不能同挂(见
+/// `Message::TabContextMenuOpen` 的清理约定)。`kind` 记下菜单来自哪个预览
+/// 面板(Files/Project),供 webview 隐藏判断按面板种类命中(同 `context_menu`
+/// 既有的"面板内浮层盖住 webview"场景);`path` 是 tab 对应文件的绝对路径,
+/// 作为各菜单项的右键目标。
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TabContextMenu {
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) kind: crate::app::PanelKind,
+    pub(crate) path: PathBuf,
+}
+
 /// 挂在 App 上的右键菜单浮层状态(屏幕空间单例,不随项目切换各自保留)。
 /// 对应现有 `App` 上 `context_menu`/`last_right_click` 两个字段。
 #[derive(Default)]
 pub struct AppState {
     pub(crate) context_menu: Option<ContextMenu>,
+    pub(crate) tab_context_menu: Option<TabContextMenu>,
     pub(crate) last_right_click: (f32, f32),
 }
 
@@ -194,6 +209,24 @@ pub enum Message {
         is_dir: bool,
     },
     ContextMenuClose,
+    /// 预览 tab 页签右键"打开菜单":携带该 tab 对应的文件绝对路径与所在预览
+    /// 面板种类(Files/Project)。具体坐标复用 `AppState::last_right_click`
+    /// (main.rs 右键钳制后的落点),不另行传参。预处理先互斥关掉文件树右键
+    /// 菜单与分支切换弹层(`close_context_menu` 已一并清 tab 菜单),避免两个
+    /// 浮层同时挂着。
+    TabContextMenuOpen {
+        kind: crate::app::PanelKind,
+        path: PathBuf,
+    },
+    /// 预览 tab 页签右键菜单的关闭(dismiss)。与 `ContextMenuClose` 同口径,
+    /// 由 `close_context_menu()` 统一清掉两类菜单。
+    TabContextMenuClose,
+    /// 预览 tab 右键"从磁盘重新加载":内核/app 拦截,不进 `files::update`——
+    /// 由 `app/update.rs` 在 Files/Project 两个预览面板里按路径找出对应 tab,
+    /// 调 `PreviewPane::bump_reload` 重建编辑器/推进 webview 的 `reload_nonce`
+    /// 让 webview 重新 `load_url` 读盘最新内容(见 `preview.rs::PreviewPane::
+    /// bump_reload` 文档)。携带该 tab 文件的绝对路径。
+    TabReloadFromDisk(PathBuf),
     /// 右键"查看此文件历史":内核拦截,不进 `update`——由内核解析出仓库
     /// 相对路径、组出 `file_history::FileHistoryTarget`,写入
     /// `App::file_history` 并异步跑 `file_history::build`(见
@@ -901,10 +934,22 @@ impl AppState {
     pub fn context_menu_is_some(&self) -> bool {
         self.context_menu.is_some()
     }
+    /// 预览 tab 页签右键菜单是否打开(内核 Esc 键路由 / webview 隐藏判断用)。
+    pub fn tab_context_menu_is_some(&self) -> bool {
+        self.tab_context_menu.is_some()
+    }
+    /// 渲染用:返回当前打开的预览 tab 右键菜单(坐标/面板/路径),`None` 表示
+    /// 未打开。非 macOS 的 iced 浮层才读它;macOS 走原生 NSMenu 不读。
+    pub fn tab_context_menu(&self) -> Option<&TabContextMenu> {
+        self.tab_context_menu.as_ref()
+    }
     /// 关掉文件树右键菜单(供其它浮层打开时互斥清理,见 `App::update` 的
     /// `PreviewTabContextMenu` 分支——避免两者同时挂着导致 dismiss 串味)。
+    /// 顺带关掉预览 tab 右键菜单:两者同属"文件相关右键浮层",互斥清理统一
+    /// 在这一个入口收口,各菜单项动作走 `close_context_menu()` 即一并 dismiss。
     pub fn close_context_menu(&mut self) {
         self.context_menu = None;
+        self.tab_context_menu = None;
     }
     /// 最近一次右键落点坐标(屏幕空间,已由 main.rs 钳制在窗口内)。
     /// 预览 tab 右键菜单复用同一份坐标,避免再写一套捕获逻辑。

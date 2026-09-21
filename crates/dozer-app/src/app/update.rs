@@ -1584,6 +1584,29 @@ impl App {
                 | files::Message::FileDropDone(project_id, ..)),
             ) => self.files_project_message(project_id, msg),
 
+            Message::Files(files::Message::TabReloadFromDisk(path)) => {
+                // 预览 tab 右键"从磁盘重新加载":先收起菜单,再在两个预览面板里
+                // 按路径找出对应 tab,调 `PreviewPane::bump_reload` 重建编辑器/
+                // 推进 webview 的 `reload_nonce` 让 webview 重新 `load_url` 读盘
+                // 最新内容(原生 editor 档重读磁盘、wry 档换 URL 重载,见
+                // `preview.rs::PreviewPane::bump_reload` 文档)。路径同时命中两
+                // 个面板的概率极低(同一项目),找到即止。
+                self.files.close_context_menu();
+                let Some(project_id) = self.active_project_id else {
+                    return;
+                };
+                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+                    return;
+                };
+                if let Some(id) = ws.preview.find_existing_file_tab(&path) {
+                    ws.preview.bump_reload(id);
+                    return;
+                }
+                if let Some(id) = ws.project_preview.find_existing_file_tab(&path) {
+                    ws.project_preview.bump_reload(id);
+                }
+            }
+
             Message::Files(files::Message::ToolbarHover(target, hovered)) => {
                 // 文件树工具行 icon 按钮的 hover:本面板不挂 App 的 hover 动画
                 // 表,把进入/离开转发成 `HoverId` 由内核统一驱动动画进度。

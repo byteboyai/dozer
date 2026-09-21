@@ -46,6 +46,9 @@ pub fn update(
             // 与分支切换弹层互斥:开右键菜单时收起分支弹层,避免两个浮层
             // 同时挂着(同 `PreviewTabContextMenu` 关文件树右键菜单的约定)。
             ws_state.branch_picker_open = false;
+            // 与预览 tab 右键菜单互斥:开文件树菜单时收起 tab 菜单,二者同为
+            // 文件相关右键浮层,不能同挂(见 `TabContextMenuOpen` 的清理约定)。
+            app_state.tab_context_menu = None;
             #[cfg(target_os = "macos")]
             {
                 let (x, y) = app_state.last_right_click;
@@ -89,9 +92,43 @@ pub fn update(
         }
         Message::ContextMenuClose => {
             app_state.context_menu = None;
+            app_state.tab_context_menu = None;
+        }
+        Message::TabContextMenuOpen { kind, path } => {
+            // 与文件树右键菜单/分支切换弹层互斥:开 tab 菜单时一并收起两者
+            // (`close_context_menu` 清文件树菜单 + tab 菜单本身;branch 单独清),
+            // 避免两个浮层同挂导致 dismiss 串味。
+            ws_state.branch_picker_open = false;
+            app_state.close_context_menu();
+            let (x, y) = app_state.last_right_click;
+            #[cfg(target_os = "macos")]
+            {
+                // `kind` 仅在非 macOS 的 iced 兜底里写入菜单状态;macOS 用不到,
+                // 先消费掉避免未用变量告警。
+                let _ = kind;
+                // 与文件树右键菜单同款:macOS 走原生 NSMenu,条目点击后由
+                // `native_menu::show` 回吐消息,经 `emit` 送回内核顶层——
+                // 同 `ContextMenuOpen` 的既有回路,才能命中 `OpenWithDefault`/
+                // `CopyPath`/`FileHistoryOpen` 等需要顶层 `App::update` 拦截的
+                // 消息(`TabReloadFromDisk` 也是 app 层拦截)。
+                let is_git_repo = ws_state.git_is_repo;
+                let items = tab_context_menu_items(&path, is_git_repo, external_apps);
+                if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
+                    emit(msg);
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                app_state.tab_context_menu =
+                    Some(crate::extensions::files::state::TabContextMenu { x, y, kind, path });
+            }
+        }
+        Message::TabContextMenuClose => {
+            app_state.context_menu = None;
+            app_state.tab_context_menu = None;
         }
         Message::OpenWithDefault(path, app_name) => {
-            app_state.context_menu = None;
+            app_state.close_context_menu();
             // 与预览工具栏原"用外部软件打开"按钮(`App::update` 里被移除的
             // `Message::PreviewOpenExternal`)同口径:`spawn()` 失败(App 名字
             // 拼错/系统没装)只记日志,不弹 toast。`app_name` 为 `None` 退回
@@ -572,6 +609,11 @@ pub fn update(
             });
             ws_state.move_focus_pending = true;
         }
+        // `TabReloadFromDisk` 由 app 层(`App::update`)拦截处理:在 Files/
+        // Project 两个预览面板按路径找 tab 调 `PreviewPane::bump_reload`,不进
+        // `files::update`。这里留空臂保持 match 穷尽(同 `CopyPath` 在 app 层
+        // 写剪贴板的既定分工)。
+        Message::TabReloadFromDisk(_) => {}
     }
 }
 
