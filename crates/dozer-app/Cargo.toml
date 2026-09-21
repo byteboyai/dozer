@@ -1,6 +1,6 @@
 [package]
 name = "dozer-app"
-version = "0.5.181"
+version = "0.5.182"
 edition.workspace = true
 
 [[bin]]
