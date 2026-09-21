@@ -76,6 +76,24 @@ impl Session {
         let mut cmd = CommandBuilder::new(&spec.command);
         cmd.args(&spec.args);
         cmd.cwd(&spec.cwd);
+        // dozerd 自己常常是被外层 claude 会话（比如开发时在 Claude Code 里
+        // `cargo run -p dozer-app`）拉起的子进程，这层 CLAUDE_CODE_* 身份标记会
+        // 原样继承进 PTY。会话 shell 里手动跑的 claude 一旦看到
+        // CLAUDE_CODE_CHILD_SESSION，就会把自己误认成外层会话的子会话直接关掉
+        // transcript saving。dozer 的 PTY 会话本身就是独立顶层会话（归属靠上面
+        // 的 DOZER_SESSION_ID），不该继承这层标记。
+        for key in [
+            "CLAUDECODE",
+            "CLAUDE_CODE_CHILD_SESSION",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "CLAUDE_CODE_EXECPATH",
+            "CLAUDE_CODE_SESSION_ATTENDED",
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_CODE_MESSAGING_SOCKET",
+            "CLAUDE_CODE_MESSAGING_TOKEN",
+        ] {
+            cmd.env_remove(key);
+        }
         cmd.env("DOZER_SESSION_ID", &id);
         // zsh 会话注入 OSC 7/133 发射端（spec P1e D2；失败仅降级不阻断 spawn）
         if crate::shell_integration::should_inject(&spec.command) {
@@ -358,6 +376,29 @@ mod tests {
         let s = Session::spawn(spec("echo zd=[$ZDOTDIR]; sleep 5")).unwrap();
         assert!(wait_contains(&s, b"zd=[]").await, "非 zsh 不注入 ZDOTDIR");
         let _ = s.kill();
+    }
+
+    #[tokio::test]
+    async fn spawn_strips_inherited_claude_code_child_session_marker() {
+        // dozerd 若是被外层 claude 会话拉起的子进程,这个标记会原样出现在
+        // dozerd 自己的进程 env 里；CommandBuilder 默认继承父进程 env，
+        // 得显式 env_remove 掉，否则会话 shell 里手动跑的 claude 会把自己
+        // 误认成外层会话的子会话，关掉 transcript saving。
+        unsafe {
+            std::env::set_var("CLAUDE_CODE_CHILD_SESSION", "1");
+        }
+        let spawned = Session::spawn(spec(
+            "printf 'cc=%s' \"${CLAUDE_CODE_CHILD_SESSION:-unset}\"",
+        ));
+        unsafe {
+            std::env::remove_var("CLAUDE_CODE_CHILD_SESSION");
+        }
+        let s = spawned.unwrap();
+        assert!(
+            wait_contains(&s, b"cc=unset").await,
+            "spawn 应该把继承到的 CLAUDE_CODE_CHILD_SESSION 从子进程 env 里剔除"
+        );
+        s.kill().unwrap();
     }
 
     #[tokio::test]
