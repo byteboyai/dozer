@@ -121,7 +121,7 @@ pub(crate) fn agent_list_pane<'a>(
                         byteui::theme::icon_size::row(),
                         agent_dot_color(agent),
                     ),
-                    lh(text(format!("{}（{}）", agent.label(), idxs.len()))
+                    lh(text(format!("{}（{}）", agent.display_label(), idxs.len()))
                         .size(byteui::theme::font::caption())
                         .color(byteui::theme::color::current().dim)),
                 ]
@@ -1757,9 +1757,10 @@ pub(crate) fn relative_time_text(modified_ms: u64, now_ms: u64) -> String {
 /// agent 选择菜单选中的 agent → 要自动键入 PTY 的 CLI 命令名。`Unknown`
 /// 不该从选择菜单产生(选项只有 Claude/CodeBuddy/OpenCode/纯 Shell 四选
 /// 一,纯 Shell 走 `launch: None`,不经过这个函数),但函数保持穷尽
-/// match,防止未来枚举新增变体时静默漏写。已知变体的 CLI 名字与
-/// `AgentKind::label()` 逐字节一致(`label()` 本身就是给这三个变体返回
-/// 小写 CLI 名),这里直接复用而不重复一份映射表,避免两处拼写分叉。
+/// match,防止未来枚举新增变体时静默漏写。CLI 命令名取
+/// `AgentKind::label()`,**不要**误用 `display_label()`——后者是品牌
+/// 展示名(大小写/空格自由),如 Kilo 的展示名是 "Kilo Code" 但 CLI
+/// 是 "kilocode",二者不能混。
 pub(crate) fn agent_cli_command(agent: AgentKind) -> Option<&'static str> {
     match agent {
         AgentKind::Unknown => None,
