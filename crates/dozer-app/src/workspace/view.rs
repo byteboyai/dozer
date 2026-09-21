@@ -287,7 +287,7 @@ pub(crate) fn agent_picker_spec() -> MenuSpec<Message> {
         ("Claude", PickerLaunch::Agent(Some(AgentKind::Claude))),
         ("CodeBuddy", PickerLaunch::Agent(Some(AgentKind::Codebuddy))),
         ("Codex", PickerLaunch::Agent(Some(AgentKind::Codex))),
-        ("Kilo", PickerLaunch::Agent(Some(AgentKind::Kilo))),
+        ("Kilo Code", PickerLaunch::Agent(Some(AgentKind::Kilo))),
         ("OpenCode", PickerLaunch::Agent(Some(AgentKind::Opencode))),
         ("v8agent", PickerLaunch::Agent(Some(AgentKind::V8agent))),
     ];
@@ -317,7 +317,7 @@ pub(crate) fn agent_picker_spec() -> MenuSpec<Message> {
 
 /// Agent 选择菜单浮层:固定挂在窗口右上角("＋"按钮下方——该按钮
 /// 就在最靠右的 Agent 面板头部,近似等于窗口右上角),八个选项按标签
-/// 首字母顺序排列:Claude/CodeBuddy/Codex/Git Shell/Kilo/OpenCode/
+/// 首字母顺序排列:Claude/CodeBuddy/Codex/Git Shell/Kilo Code/OpenCode/
 /// v8agent/OS Shell(验收反馈,2026-08-21;此前是手写的固定顺序,不便
 /// 找到目标 agent)。跟项目树右键菜单(`context_menu_popup`)同款按钮
 /// 样式,但不需要像素坐标定位——同 `delete_confirm_popup` 一样固定
@@ -636,9 +636,18 @@ fn preview_blank_info_card<'a>(
     preview: &'a PreviewPane,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let theme_colors = byteui::theme::color::current();
+    // 头部名称取**项目根目录 basename**(`path.file_name()`)而不是
+    // `ProjectInfo::name`(用户给项目起的"显示名",如 "Dozer AI Coder"):
+    // 空白页想表达"打开的是哪个目录",与 `ws.preview_blank_info_card` 其它
+    // 字段(位置/大小/创建/修改)语义自洽。无项目时回退到 `name` 占位
+    // (不太可能触发——`active_is_blank` 与项目加载在 `apply_pending_blank_info`
+    // 那一侧就已经过滤过了)。
+    let header_label = project_root_dir_name(ws)
+        .or_else(|| ws.project.as_ref().map(|p| p.name.clone()))
+        .unwrap_or_default();
     let header = row![
         icons::view(icons::IconKind::Folder, 96.0, theme_colors.dim),
-        text(ws.project.as_ref().map(|p| p.name.as_str()).unwrap_or(""))
+        text(header_label)
             .size(byteui::theme::font::title())
             .color(theme_colors.cream),
     ]
@@ -785,16 +794,30 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
 }
 
-/// 预览 tab 的渲染标题。`TabKind::Blank` 的占位 tab 返回当前项目根名
-/// (`ws.project.name`),而不是数据层 `placeholder_tab` 写死的 `"空白"`,这样
-/// 切项目时标题自然跟着 `ws.project.name` 走,不需要回写 tab 字段。没项目
-/// (启动初帧 / 切项目中间帧)时回退 `tab.title`,即原 `"空白"`,保留原语义。
-/// 宽度预算与实际渲染共用同一份 helper,避免选错宽度导致标题裁切。
-fn preview_tab_display_title(ws: &Workspace, tab: &PreviewTab) -> String {
+/// 当前项目根目录的 basename(`ws.project.path` 的最后一段路径分量)。
+/// 与 `ProjectInfo::name`(用户创建项目时给的"显示名"——`"Dozer AI Coder"`
+/// 这种)刻意区分:空白页 / 文件 tab 标题想表达的是"打开的是哪个目录",
+/// `name` 偏品牌文案的语义,不该混。拿不到文件名(尾部是 `..`/`/` 等)
+/// 回退到 `path.display()` 完整字符串。无项目时返回 `None`。
+pub(crate) fn project_root_dir_name(ws: &Workspace) -> Option<String> {
+    let project = ws.project.as_ref()?;
+    let path = std::path::Path::new(&project.path);
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .or_else(|| Some(path.display().to_string()))
+}
+
+/// 预览 tab 的渲染标题。`TabKind::Blank` 的占位 tab 返回当前项目根目录的
+/// basename(见 [`project_root_dir_name`])——而不是数据层 `placeholder_tab`
+/// 写死的 `"空白"` 或 `ProjectInfo::name` 这种"显示名"。切项目时标题自然跟
+/// 着 `ws.project.path` 走,不需要回写 tab 字段。没项目(启动初帧 / 切项目中
+/// 间帧)时回退 `tab.title`,即原 `"空白"`,保留原语义。宽度预算与实际渲染
+/// 共用同一份 helper,避免选错宽度导致标题裁切。
+pub(crate) fn preview_tab_display_title(ws: &Workspace, tab: &PreviewTab) -> String {
     if matches!(tab.kind, crate::preview::TabKind::Blank)
-        && let Some(p) = ws.project.as_ref()
+        && let Some(root) = project_root_dir_name(ws)
     {
-        return p.name.clone();
+        return root;
     }
     tab.title.clone()
 }
@@ -803,12 +826,12 @@ fn preview_tab_display_title(ws: &Workspace, tab: &PreviewTab) -> String {
 /// 栏/原生编辑器/占位文案逻辑,只是状态取自 `ws.preview` 还是
 /// `ws.project_preview`、消息与前缀路由到哪套)不同。
 ///
-/// **空白页 tab(`TabKind::Blank`)的标题显示项目根名**:数据层
+/// **空白页 tab(`TabKind::Blank`)的标题显示项目根目录 basename**:数据层
 /// `placeholder_tab` 的 title 仍写死 `"空白"`(语义保留,model 不依赖
 /// workspace 状态);view 在渲染时统一通过 [`preview_tab_display_title`]
 /// 替换,这样 `PreviewPane::clear_all`/`adopt_project` 切换项目时,
-/// 标题会自然跟着 `ws.project.name` 走,不需要回写 tab 字段。宽度估计
-/// 和实际渲染共用同一份 helper,避免选错宽度导致标题裁切。
+/// 标题会自然跟着 `ws.project.path` 的 basename 走,不需要回写 tab 字段。
+/// 宽度估计和实际渲染共用同一份 helper,避免选错宽度导致标题裁切。
 pub(crate) fn preview_pane_for<'a>(
     app: &'a App,
     ws: &'a Workspace,

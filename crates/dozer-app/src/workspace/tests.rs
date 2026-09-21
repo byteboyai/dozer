@@ -731,7 +731,7 @@ fn agent_cli_command_maps_known_agents_and_none_for_unknown() {
     assert_eq!(agent_cli_command(AgentKind::Codebuddy), Some("codebuddy"));
     assert_eq!(agent_cli_command(AgentKind::Opencode), Some("opencode"));
     assert_eq!(agent_cli_command(AgentKind::Codex), Some("codex"));
-    assert_eq!(agent_cli_command(AgentKind::Kilo), Some("kilo"));
+    assert_eq!(agent_cli_command(AgentKind::Kilo), Some("kilocode"));
     assert_eq!(agent_cli_command(AgentKind::V8agent), Some("v8agent"));
     assert_eq!(agent_cli_command(AgentKind::Unknown), None);
 }
@@ -757,7 +757,7 @@ fn picker_launch_command_maps_selection_to_initial_command() {
     );
     assert_eq!(
         picker_launch_command(PickerLaunch::Agent(Some(AgentKind::Kilo))),
-        Some("kilo".to_string())
+        Some("kilocode".to_string())
     );
     assert_eq!(
         picker_launch_command(PickerLaunch::Agent(Some(AgentKind::V8agent))),

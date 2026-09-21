@@ -39,7 +39,7 @@ impl AgentKind {
             AgentKind::Codebuddy => "codebuddy",
             AgentKind::Opencode => "opencode",
             AgentKind::Codex => "codex",
-            AgentKind::Kilo => "kilo",
+            AgentKind::Kilo => "kilocode",
             AgentKind::V8agent => "v8agent",
         }
     }
@@ -1308,7 +1308,7 @@ mod tests {
         assert_eq!(AgentKind::Codebuddy.label(), "codebuddy");
         assert_eq!(AgentKind::Opencode.label(), "opencode");
         assert_eq!(AgentKind::Codex.label(), "codex");
-        assert_eq!(AgentKind::Kilo.label(), "kilo");
+        assert_eq!(AgentKind::Kilo.label(), "kilocode");
     }
 
     #[test]
