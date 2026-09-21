@@ -15,7 +15,9 @@ pub(crate) use view::{content_pane, list_pane};
 
 pub(crate) mod view_model;
 
-use dozer_codehealth::{GitSnapshot, ProjectReport, ReportDiff};
+use dozer_codehealth::{
+    ArchitectureDiffOutcome, GitSnapshot, ImpactScope, ProjectReport, ReportDiff,
+};
 
 /// 面板右侧分类导航的四个分类：总览 / 结构复杂度 / UI 一致性 / 扫描范围。
 /// 左侧内容区按当前选中分类切换展示（见 `view.rs`）。spec「信息架构与 UI」。
@@ -63,6 +65,11 @@ pub struct PanelState {
     /// 上一份可解析快照（用于差异比较）。
     pub previous_report: Option<ProjectReport>,
     pub diff: Option<ReportDiff>,
+    /// 架构节点/边/环的差异（与 Finding 差异独立）。`NoBaseline` 表示首次
+    /// 扫描或旧快照无架构字段，UI 不得把所有现存边渲染成“本轮新增”。
+    pub architecture_diff: ArchitectureDiffOutcome,
+    /// 本轮变更影响范围（直接依赖方 + 间接影响），无种子时为空。
+    pub impact: ImpactScope,
     pub hotspots: Vec<HotspotView>,
     pub git: Option<GitSnapshot>,
     pub scanned_at_ms: Option<u64>,
@@ -95,6 +102,14 @@ impl WorkspaceState {
 
     pub fn diff(&self) -> Option<&ReportDiff> {
         self.panel.diff.as_ref()
+    }
+
+    pub fn architecture_diff(&self) -> &ArchitectureDiffOutcome {
+        &self.panel.architecture_diff
+    }
+
+    pub fn impact(&self) -> &ImpactScope {
+        &self.panel.impact
     }
 
     pub fn hotspots(&self) -> &[HotspotView] {
@@ -310,6 +325,16 @@ mod tests {
             WorkspaceState::default().category(),
             CodeHealthCategory::Overview
         );
+    }
+
+    #[test]
+    fn default_panel_has_no_architecture_baseline_and_empty_impact() {
+        let ws = WorkspaceState::default();
+        assert!(matches!(
+            ws.architecture_diff(),
+            dozer_codehealth::ArchitectureDiffOutcome::NoBaseline
+        ));
+        assert!(ws.impact().is_empty());
     }
 
     #[test]

@@ -4,6 +4,7 @@
 
 pub mod architecture;
 mod architecture_analysis;
+mod architecture_diff;
 mod cargo_architecture;
 mod diff;
 mod discovery;
@@ -20,6 +21,10 @@ pub use architecture::{
 };
 pub use architecture_analysis::{
     ArchitectureAnalysis, analyze_architecture, edge_kind_is_internal, node_kind_is_internal,
+};
+pub use architecture_diff::{
+    ArchitectureDiff, ArchitectureDiffOutcome, ImpactInput, ImpactNode, ImpactScope,
+    architecture_diff, edge_endpoints, impact_scope,
 };
 pub use cargo_architecture::{
     CargoArchitecture, CargoGraph, cargo_report_fragment, extract_cargo_architecture, find_manifest,

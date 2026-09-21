@@ -61,6 +61,38 @@ pub fn recent_churn(project_root: &Path) -> Option<HashMap<String, usize>> {
     Some(map)
 }
 
+/// 当前 Git dirty（未提交改动 + 新增未跟踪）文件路径，相对项目根、`/` 分隔。
+/// Git 不可用/失败返回空列表（影响范围退化为仅看图变化，不让扫描失败）。
+pub fn dirty_paths(project_root: &Path) -> Vec<String> {
+    let out = match Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .current_dir(project_root)
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+    let mut paths: Vec<String> = Vec::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        // porcelain 格式：`XY <path>`，重命名时 `XY <old> -> <new>`。
+        if line.len() < 4 {
+            continue;
+        }
+        let rest = &line[3..];
+        let path = match rest.split_once(" -> ") {
+            Some((_, new)) => new,
+            None => rest,
+        };
+        let path = path.trim().trim_matches('"');
+        if !path.is_empty() {
+            paths.push(path.replace('\\', "/"));
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
 /// 一条热点视图：一条当前发现 + 它的变化类别 + 近期修改次数 + 指标增量。
 #[derive(Debug, Clone, PartialEq)]
 pub struct HotspotView {
@@ -322,6 +354,41 @@ mod tests {
     fn recent_churn_none_outside_git_repo() {
         let dir = tempfile::tempdir().unwrap();
         assert!(recent_churn(dir.path()).is_none());
+    }
+
+    #[test]
+    fn dirty_paths_empty_outside_git_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(dirty_paths(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn dirty_paths_lists_modified_and_untracked() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let git = |args: &[&str]| {
+            let st = Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .unwrap();
+            assert!(st.status.success(), "git {args:?} failed");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(repo.join("tracked.rs"), "fn a() {}").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "c1"]);
+
+        std::fs::write(repo.join("tracked.rs"), "fn a() {}\nfn b() {}").unwrap();
+        std::fs::write(repo.join("new.rs"), "fn c() {}").unwrap();
+
+        let dirty = dirty_paths(repo);
+        assert!(dirty.contains(&"tracked.rs".to_string()));
+        assert!(dirty.contains(&"new.rs".to_string()));
     }
 
     #[test]

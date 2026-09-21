@@ -6,7 +6,10 @@
 //! Git + 保存错误），差异与热点在 blocking 任务里算（spec Task 6）。
 
 use super::{Message, PanelState};
-use dozer_codehealth::{ProjectReport, diff_reports};
+use dozer_codehealth::{
+    ArchitectureDiffOutcome, ImpactInput, ImpactScope, ProjectReport, architecture_diff,
+    diff_reports, impact_scope,
+};
 use dozer_core::protocol::CodeHealthReportInfo;
 use std::path::{Path, PathBuf};
 
@@ -60,16 +63,63 @@ fn finish_panel(
         None => (None, Vec::new()),
     };
 
+    // 架构差异与影响范围：与 Finding 差异独立。无上一份 schema v3 架构报告时
+    // 结果显式 NoBaseline（UI 不把所有现存边渲染成新增）。影响种子 = Git dirty
+    // 文件 + 本轮变化边的端点；深度取自项目配置，默认 3。
+    let (architecture_diff, impact) = match &report {
+        Some(cur) => {
+            let prev_arch = previous.as_ref().map(|p| &p.architecture);
+            let outcome = architecture_diff(prev_arch, &cur.architecture);
+
+            let dirty = super::git_hotspots::dirty_paths(project_path);
+            let changed_nodes: Vec<String> = match &outcome {
+                ArchitectureDiffOutcome::Compared(d) => {
+                    let changed_edge_ids: std::collections::HashSet<&str> = d
+                        .added_edges
+                        .iter()
+                        .chain(d.removed_edges.iter())
+                        .map(String::as_str)
+                        .collect();
+                    let changed_edges: Vec<_> = cur
+                        .architecture
+                        .edges
+                        .iter()
+                        .filter(|e| changed_edge_ids.contains(e.id.as_str()))
+                        .cloned()
+                        .collect();
+                    dozer_codehealth::edge_endpoints(&changed_edges)
+                }
+                ArchitectureDiffOutcome::NoBaseline => Vec::new(),
+            };
+
+            let cfg = dozer_codehealth::load_project_config(project_path);
+            let scope = impact_scope(ImpactInput {
+                report: &cur.architecture,
+                dirty_paths: &dirty,
+                changed_nodes: &changed_nodes,
+                depth: cfg.architecture.impact_depth,
+                max_visited: MAX_IMPACT_VISITED,
+            });
+            (outcome, scope)
+        }
+        None => (ArchitectureDiffOutcome::NoBaseline, ImpactScope::default()),
+    };
+
     PanelState {
         report,
         previous_report: previous,
         diff,
+        architecture_diff,
+        impact,
         hotspots,
         git,
         scanned_at_ms,
         save_error,
     }
 }
+
+/// 影响范围 BFS 的访问节点上限，防止异常大图拖慢 UI（spec「影响范围」）。
+const MAX_IMPACT_VISITED: usize = 2000;
 
 /// 面板打开时调用：只读落盘缓存（最新 + 上一份），不触发扫描（spec：手动触发）。
 pub fn spawn_load_cached(
