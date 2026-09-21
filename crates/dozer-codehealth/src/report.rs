@@ -584,7 +584,10 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
         other => other,
     };
 
-    let architecture = crate::architecture::ArchitectureReport {
+    // 图分析：写回 fan-in/out 与 layer，检测循环与三类架构发现（spec「图分析
+    // 与健康规则」）。配置错误可定位记录，并使架构/扫描状态为 Partial。
+    let config_errors = crate::discovery::validate_architecture_config(&config.architecture);
+    let report_for_analysis = crate::architecture::ArchitectureReport {
         status: status_from_cargo,
         nodes: arch_nodes,
         edges: arch_edges,
@@ -592,6 +595,36 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
         unresolved_edges: module_graph.unresolved_edges,
         errors: arch_error.into_iter().collect(),
     };
+    let analysis = crate::architecture_analysis::analyze_architecture(
+        &report_for_analysis,
+        &config.architecture,
+    );
+    let mut arch_errors = report_for_analysis.errors;
+    arch_errors.extend(analysis.config_errors);
+    arch_errors.extend(config_errors);
+    arch_errors.sort();
+    arch_errors.dedup();
+
+    let architecture = crate::architecture::ArchitectureReport {
+        status: if arch_errors.is_empty() {
+            report_for_analysis.status
+        } else if report_for_analysis.status
+            == crate::architecture::ArchitectureStatus::NotApplicable
+        {
+            // 仅有配置错误、没有任何图数据时，不应把“无分析”升级为 Partial；
+            // 保持 NotApplicable 但保留错误文案（spec 空状态语义）。
+            crate::architecture::ArchitectureStatus::NotApplicable
+        } else {
+            crate::architecture::ArchitectureStatus::Partial
+        },
+        nodes: analysis.nodes,
+        edges: report_for_analysis.edges,
+        cycles: analysis.cycles,
+        unresolved_edges: report_for_analysis.unresolved_edges,
+        errors: arch_errors,
+    };
+
+    findings.extend(analysis.findings);
 
     let status = if skipped.iter().any(|s| {
         matches!(
@@ -946,6 +979,82 @@ mod v2_tests {
         assert_eq!(edge.evidence[0].line, 1);
         assert!(edge.evidence[0].snippet.contains("crate::foo::Bar"));
         assert_eq!(arch.unresolved_edges, 0);
+    }
+
+    #[test]
+    fn scan_detects_module_cycle_and_emits_finding() {
+        // a::x 与 a::y 互相 use → 一个 2 节点 SCC，产生一条 architecture 发现。
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = [\"a\"]\n").unwrap();
+        fs::create_dir_all(root.join("a/src")).unwrap();
+        fs::write(
+            root.join("a/Cargo.toml"),
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::write(root.join("a/src/lib.rs"), "mod x;\nmod y;\n").unwrap();
+        fs::write(root.join("a/src/x.rs"), "use crate::y::Y;\npub struct X;\n").unwrap();
+        fs::write(root.join("a/src/y.rs"), "use crate::x::X;\npub struct Y;\n").unwrap();
+
+        let report = scan_project(root).unwrap();
+        assert_eq!(report.architecture.cycles.len(), 1, "应检测到 1 个环");
+        let cycle = &report.architecture.cycles[0];
+        assert_eq!(
+            cycle.node_ids,
+            vec![
+                crate::architecture::module_node_id("a", "x"),
+                crate::architecture::module_node_id("a", "y"),
+            ]
+        );
+        let cycle_findings = report
+            .findings
+            .iter()
+            .filter(|f| f.rule_id == rule_ids::ARCHITECTURE_CYCLE)
+            .count();
+        assert_eq!(cycle_findings, 1);
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.category == FindingCategory::Architecture)
+        );
+    }
+
+    #[test]
+    fn invalid_architecture_config_surfaces_errors_as_partial() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = [\"a\"]\n").unwrap();
+        fs::create_dir_all(root.join("a/src")).unwrap();
+        fs::write(
+            root.join("a/Cargo.toml"),
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::write(root.join("a/src/lib.rs"), "pub fn f() {}\n").unwrap();
+        fs::create_dir_all(root.join(".dozer")).unwrap();
+        fs::write(
+            root.join(".dozer/code-health.toml"),
+            "[architecture]\nmax_fan_out = 10\ncritical_fan_out = 5\n",
+        )
+        .unwrap();
+
+        let report = scan_project(root).unwrap();
+        assert!(
+            report
+                .architecture
+                .errors
+                .iter()
+                .any(|e| e.contains("critical_fan_out")),
+            "配置错误应可定位：{:?}",
+            report.architecture.errors
+        );
+        assert_eq!(
+            report.architecture.status,
+            crate::architecture::ArchitectureStatus::Partial
+        );
+        assert_eq!(report.scan.status, ScanStatus::Partial);
     }
 
     #[test]

@@ -8,6 +8,7 @@ use crate::scan_metadata::{LanguageSummary, SkipReason, SkippedFile};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// 内置始终跳过的构建/缓存目录（无论 `.gitignore` 是否列出都排除）。
@@ -36,6 +37,103 @@ pub struct ProjectConfig {
     pub exclude: Vec<String>,
     /// 标记为“生成文件”的 glob——被排除出分析，并记录 `SkipReason::Generated`。
     pub generated: Vec<String>,
+    /// 架构分析配置（阈值、影响深度、分层边界）。
+    pub architecture: ArchitectureConfig,
+}
+
+/// 架构分析配置（spec「声明项目边界」）。全部可选，缺省用默认阈值且不分层。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct ArchitectureConfig {
+    /// 扇出进入 Watch 的阈值。
+    pub max_fan_out: usize,
+    /// 扇出进入 Critical 的阈值。
+    pub critical_fan_out: usize,
+    /// 影响范围 BFS 最大深度（默认 3）。
+    pub impact_depth: usize,
+    /// 分层规则，按声明顺序匹配，首个命中生效。
+    pub layers: Vec<LayerConfig>,
+}
+
+impl Default for ArchitectureConfig {
+    fn default() -> Self {
+        Self {
+            max_fan_out: DEFAULT_MAX_FAN_OUT,
+            critical_fan_out: DEFAULT_CRITICAL_FAN_OUT,
+            impact_depth: DEFAULT_IMPACT_DEPTH,
+            layers: Vec::new(),
+        }
+    }
+}
+
+/// 默认扇出阈值（spec「依赖枢纽」）。
+pub const DEFAULT_MAX_FAN_OUT: usize = 8;
+/// 默认 Critical 扇出阈值。
+pub const DEFAULT_CRITICAL_FAN_OUT: usize = 15;
+/// 默认影响范围深度。
+pub const DEFAULT_IMPACT_DEPTH: usize = 3;
+
+/// 一条分层规则。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct LayerConfig {
+    /// layer 名（节点 `layer` 字段用它；违规证据里展示）。
+    pub name: String,
+    /// 匹配该 layer 的节点 glob（`crate::module` 形式，见 spec 示例）。
+    pub r#match: Vec<String>,
+    /// 允许本 layer 依赖的其它 layer 名。
+    pub may_depend_on: Vec<String>,
+}
+
+/// 校验架构配置，返回可定位的错误列表（spec「错误处理」：无效规则忽略、记录
+/// 错误、状态 `Partial`）。空名、空 match、无法编译的 glob、未知 layer 引用都
+/// 视为错误。
+pub fn validate_architecture_config(config: &ArchitectureConfig) -> Vec<String> {
+    let mut errors = Vec::new();
+    if config.max_fan_out == 0 {
+        errors.push("architecture.max_fan_out 必须大于 0".into());
+    }
+    if config.critical_fan_out < config.max_fan_out {
+        errors.push(format!(
+            "architecture.critical_fan_out ({}) 不能小于 max_fan_out ({})",
+            config.critical_fan_out, config.max_fan_out
+        ));
+    }
+    if config.impact_depth == 0 {
+        errors.push("architecture.impact_depth 必须大于 0".into());
+    }
+
+    let mut known_layers: BTreeSet<&str> = BTreeSet::new();
+    for (i, layer) in config.layers.iter().enumerate() {
+        if layer.name.trim().is_empty() {
+            errors.push(format!("architecture.layers[{i}].name 不能为空"));
+        } else if !known_layers.insert(layer.name.as_str()) {
+            errors.push(format!(
+                "architecture.layers[{i}] 重复的 layer 名：{}",
+                layer.name
+            ));
+        }
+        if layer.r#match.is_empty() {
+            errors.push(format!("architecture.layers[{i}].match 不能为空"));
+        }
+        for pat in &layer.r#match {
+            if Glob::new(pat).is_err() {
+                errors.push(format!("architecture.layers[{i}].match 无效 glob：{pat}"));
+            }
+        }
+    }
+    // 未知 layer 引用：`may_depend_on` 指向未声明的 layer。
+    for (i, layer) in config.layers.iter().enumerate() {
+        for dep in &layer.may_depend_on {
+            if !known_layers.contains(dep.as_str()) {
+                errors.push(format!(
+                    "architecture.layers[{i}] ({}) 引用了未知 layer：{dep}",
+                    layer.name
+                ));
+            }
+        }
+    }
+    errors
 }
 
 /// 读取 `.dozer/code-health.toml`；文件不存在或解析失败返回空配置。
@@ -350,5 +448,132 @@ mod tests {
         let cfg = load_project_config(dir.path());
         assert!(cfg.exclude.is_empty());
         assert!(cfg.generated.is_empty());
+    }
+
+    #[test]
+    fn architecture_config_defaults_are_spec_thresholds() {
+        let cfg = ArchitectureConfig::default();
+        assert_eq!(cfg.max_fan_out, DEFAULT_MAX_FAN_OUT);
+        assert_eq!(cfg.max_fan_out, 8);
+        assert_eq!(cfg.critical_fan_out, DEFAULT_CRITICAL_FAN_OUT);
+        assert_eq!(cfg.critical_fan_out, 15);
+        assert_eq!(cfg.impact_depth, DEFAULT_IMPACT_DEPTH);
+        assert_eq!(cfg.impact_depth, 3);
+        assert!(cfg.layers.is_empty());
+    }
+
+    #[test]
+    fn parses_architecture_config_from_toml() {
+        let toml = r#"
+[architecture]
+max_fan_out = 4
+critical_fan_out = 9
+impact_depth = 5
+
+[[architecture.layers]]
+name = "ui"
+match = ["crates/dozer-app::app/**"]
+may_depend_on = ["application", "shared"]
+
+[[architecture.layers]]
+name = "application"
+match = ["crates/dozer-core/**"]
+may_depend_on = ["shared"]
+
+[[architecture.layers]]
+name = "shared"
+match = ["crates/dozer-shared/**"]
+may_depend_on = []
+"#;
+        let cfg: ProjectConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.architecture.max_fan_out, 4);
+        assert_eq!(cfg.architecture.critical_fan_out, 9);
+        assert_eq!(cfg.architecture.impact_depth, 5);
+        assert_eq!(cfg.architecture.layers.len(), 3);
+        assert_eq!(cfg.architecture.layers[0].name, "ui");
+        assert_eq!(
+            cfg.architecture.layers[0].may_depend_on,
+            vec!["application", "shared"]
+        );
+        assert!(validate_architecture_config(&cfg.architecture).is_empty());
+    }
+
+    #[test]
+    fn architecture_config_missing_section_uses_defaults() {
+        let cfg: ProjectConfig = toml::from_str("exclude = [\"x/**\"]\n").unwrap();
+        assert_eq!(cfg.architecture.max_fan_out, DEFAULT_MAX_FAN_OUT);
+        assert!(cfg.architecture.layers.is_empty());
+    }
+
+    #[test]
+    fn validate_reports_unknown_layer_reference() {
+        let cfg = ArchitectureConfig {
+            layers: vec![LayerConfig {
+                name: "ui".into(),
+                r#match: vec!["crates/app/**".into()],
+                may_depend_on: vec!["nope".into()],
+            }],
+            ..ArchitectureConfig::default()
+        };
+        let errors = validate_architecture_config(&cfg);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("未知 layer"));
+    }
+
+    #[test]
+    fn validate_reports_invalid_glob_and_empty_match() {
+        let cfg = ArchitectureConfig {
+            layers: vec![LayerConfig {
+                name: "ui".into(),
+                r#match: vec!["[".into()],
+                may_depend_on: vec![],
+            }],
+            ..ArchitectureConfig::default()
+        };
+        let errors = validate_architecture_config(&cfg);
+        assert!(errors.iter().any(|e| e.contains("无效 glob")));
+
+        let cfg = ArchitectureConfig {
+            layers: vec![LayerConfig {
+                name: "ui".into(),
+                r#match: vec![],
+                may_depend_on: vec![],
+            }],
+            ..ArchitectureConfig::default()
+        };
+        let errors = validate_architecture_config(&cfg);
+        assert!(errors.iter().any(|e| e.contains("match 不能为空")));
+    }
+
+    #[test]
+    fn validate_reports_threshold_misconfiguration() {
+        let cfg = ArchitectureConfig {
+            max_fan_out: 10,
+            critical_fan_out: 5,
+            ..ArchitectureConfig::default()
+        };
+        let errors = validate_architecture_config(&cfg);
+        assert!(errors.iter().any(|e| e.contains("critical_fan_out")));
+    }
+
+    #[test]
+    fn validate_reports_duplicate_layer_names() {
+        let cfg = ArchitectureConfig {
+            layers: vec![
+                LayerConfig {
+                    name: "ui".into(),
+                    r#match: vec!["a/**".into()],
+                    may_depend_on: vec![],
+                },
+                LayerConfig {
+                    name: "ui".into(),
+                    r#match: vec!["b/**".into()],
+                    may_depend_on: vec![],
+                },
+            ],
+            ..ArchitectureConfig::default()
+        };
+        let errors = validate_architecture_config(&cfg);
+        assert!(errors.iter().any(|e| e.contains("重复的 layer 名")));
     }
 }

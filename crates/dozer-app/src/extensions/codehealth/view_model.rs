@@ -224,6 +224,24 @@ pub fn analyze_finding_text(
         dozer_codehealth::FindingEvidence::EventHandlers { count } => {
             lines.push(format!("证据：事件回调 {count} 个"));
         }
+        dozer_codehealth::FindingEvidence::ArchitectureCycle { node_ids } => {
+            lines.push(format!("证据：循环依赖，涉及 {} 个模块", node_ids.len()));
+            for id in node_ids {
+                lines.push(format!("  - {id}"));
+            }
+        }
+        dozer_codehealth::FindingEvidence::ArchitectureHub { node_id, fan_out } => {
+            lines.push(format!("证据：依赖枢纽 {node_id}，扇出 {fan_out}"));
+        }
+        dozer_codehealth::FindingEvidence::ArchitectureBoundary {
+            edge_id,
+            from_layer,
+            to_layer,
+        } => {
+            lines.push(format!(
+                "证据：越层依赖 {from_layer} → {to_layer}（边 {edge_id}）"
+            ));
+        }
     }
     if let Some(c) = change {
         lines.push(format!("变化：{}", change_label_text(c)));

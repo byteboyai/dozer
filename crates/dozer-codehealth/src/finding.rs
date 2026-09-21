@@ -19,6 +19,8 @@ use std::path::Path;
 pub enum FindingCategory {
     Structure,
     UiConsistency,
+    /// 架构风险：依赖环、依赖枢纽、分层边界违规（spec「统一发现与差异」）。
+    Architecture,
 }
 
 /// 发现项严重度。统一外壳只保留真正构成问题的两档（Watch/Critical）；
@@ -67,6 +69,21 @@ pub enum FindingEvidence {
     Duplicate {
         occurrences: usize,
     },
+    /// 架构：依赖环（强连通分量或自环）。环内节点 ID 稳定排序。
+    ArchitectureCycle {
+        node_ids: Vec<String>,
+    },
+    /// 架构：依赖枢纽（扇出超阈值）。
+    ArchitectureHub {
+        node_id: String,
+        fan_out: usize,
+    },
+    /// 架构：分层边界违规（from 依赖了 may_depend_on 之外的 layer）。
+    ArchitectureBoundary {
+        edge_id: String,
+        from_layer: String,
+        to_layer: String,
+    },
 }
 
 impl FindingEvidence {
@@ -80,6 +97,11 @@ impl FindingEvidence {
             FindingEvidence::EventHandlers { count } => Some(*count as i64),
             FindingEvidence::Duplicate { occurrences } => Some(*occurrences as i64),
             FindingEvidence::Literal { .. } => None,
+            // hub 的线性指标是扇出；cycle / boundary 没有单一可比数值，返回
+            // `None`（跨扫描只按 ID 存在性判定新增/已解决，spec「统一发现与差异」）。
+            FindingEvidence::ArchitectureHub { fan_out, .. } => Some(*fan_out as i64),
+            FindingEvidence::ArchitectureCycle { .. }
+            | FindingEvidence::ArchitectureBoundary { .. } => None,
         }
     }
 }
@@ -111,6 +133,9 @@ pub mod rule_ids {
     pub const NESTING_DEPTH: &str = "ui/nesting_depth";
     pub const EVENT_HANDLER_DENSITY: &str = "ui/event_handler_density";
     pub const DUPLICATE_STRUCTURE: &str = "ui/duplicate_structure";
+    pub const ARCHITECTURE_CYCLE: &str = "architecture/dependency_cycle";
+    pub const ARCHITECTURE_HIGH_FAN_OUT: &str = "architecture/high_fan_out";
+    pub const ARCHITECTURE_LAYER_VIOLATION: &str = "architecture/layer_violation";
 }
 
 /// 把相对路径规范化为 ID 用字符串：统一 `/` 分隔、去掉前导 `./`。
@@ -234,6 +259,46 @@ mod tests {
             }
             .metric_value(),
             None
+        );
+    }
+
+    #[test]
+    fn architecture_hub_metric_is_fan_out() {
+        assert_eq!(
+            FindingEvidence::ArchitectureHub {
+                node_id: "module:a".into(),
+                fan_out: 12,
+            }
+            .metric_value(),
+            Some(12)
+        );
+    }
+
+    #[test]
+    fn architecture_cycle_and_boundary_have_no_metric() {
+        assert_eq!(
+            FindingEvidence::ArchitectureCycle {
+                node_ids: vec!["module:a".into(), "module:b".into()],
+            }
+            .metric_value(),
+            None
+        );
+        assert_eq!(
+            FindingEvidence::ArchitectureBoundary {
+                edge_id: "edge:module_use:module:a:module:b".into(),
+                from_layer: "ui".into(),
+                to_layer: "domain".into(),
+            }
+            .metric_value(),
+            None
+        );
+    }
+
+    #[test]
+    fn architecture_category_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&FindingCategory::Architecture).unwrap(),
+            "\"architecture\""
         );
     }
 }

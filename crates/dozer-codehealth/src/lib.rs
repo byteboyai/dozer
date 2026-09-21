@@ -3,6 +3,7 @@
 //! 纯函数库，不依赖 iced/UDS 协议。
 
 pub mod architecture;
+mod architecture_analysis;
 mod cargo_architecture;
 mod diff;
 mod discovery;
@@ -17,11 +18,18 @@ pub use architecture::{
     ArchitectureEdge, ArchitectureEdgeKind, ArchitectureEvidence, ArchitectureNode,
     ArchitectureNodeKind, ArchitectureReport, ArchitectureStatus, DependencyCycle,
 };
+pub use architecture_analysis::{
+    ArchitectureAnalysis, analyze_architecture, edge_kind_is_internal, node_kind_is_internal,
+};
 pub use cargo_architecture::{
     CargoArchitecture, CargoGraph, cargo_report_fragment, extract_cargo_architecture, find_manifest,
 };
 pub use diff::{FindingChange, ReportDiff, diff_reports};
-pub use discovery::{Discovery, ProjectConfig, discover, load_project_config};
+pub use discovery::{
+    ArchitectureConfig, DEFAULT_CRITICAL_FAN_OUT, DEFAULT_IMPACT_DEPTH, DEFAULT_MAX_FAN_OUT,
+    Discovery, LayerConfig, ProjectConfig, discover, load_project_config,
+    validate_architecture_config,
+};
 pub use finding::{
     Applicability, Finding, FindingCategory, FindingEvidence, FindingSeverity,
     normalize_path_for_id, rule_ids, stable_finding_id,
