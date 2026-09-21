@@ -872,7 +872,14 @@ pub(crate) fn preview_pane_for<'a>(
         );
     } else {
         let active_tab = &preview.tabs()[preview.active_idx()];
-        if let Some(editor) = &active_tab.editor {
+        // JSON/JSONL tab 同时挂着原生 editor(`editor: Some`,RawText 视图要
+        // 复用它)与 `json_tree`,`editor` 分支若先命中就会把树视图整个盖住
+        // (2026-09-21 用户报告 `.json5` 没走 json viewer)。故这里显式排除
+        // 带 `json_tree` 的 tab,把渲染权交给下方 `else if let Some(json_tree)`
+        // 那支——它在 Tree 模式画树、RawText 模式再回落到同一个 editor。
+        if let Some(editor) = &active_tab.editor
+            && active_tab.json_tree.is_none()
+        {
             // 原生 tab:激活 tab 有原生 editor 时,直接在 iced 里渲染它(语法
             // 高亮/行号/ByteBoy2077 配色),put 下 content。`editor` 为 `None`
             // 的 wry 路由 tab 不 push 任何 iced 元素——那片区域由 main.rs 定位
