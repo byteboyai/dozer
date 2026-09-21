@@ -66,6 +66,9 @@ pub fn review_entries_from_turns(turns: &[TurnRecord]) -> Vec<ReviewEntry> {
             "human" => out.push(ReviewEntry::Human {
                 text: t.content.clone(),
             }),
+            // Codex 的用量记录(见 dozerd parse.rs::parse_codex_shaped_chunk)
+            // 没有正文,只用于用量求和,不该出现在时间线里。
+            "token_usage" => {}
             "tool_result" => {
                 let entry = ToolResultEntry {
                     content: t.content.clone(),
@@ -573,6 +576,48 @@ mod tests {
                 is_error: false,
             }]
         );
+    }
+
+    #[test]
+    fn review_entries_from_turns_skips_token_usage_rows() {
+        use dozer_core::protocol::TurnRecord;
+        // Codex 的用量行(见 dozerd parse.rs::parse_codex_shaped_chunk)不是
+        // 给人看的内容,只用于 dozerd 那边的 token 求和——审阅时间线必须
+        // 跳过它,否则会插入一堆没有正文的空 AiTurn 气泡(role 既不是
+        // "human" 也不是 "tool_result" 时,既有的兜底分支会把任何角色都
+        // 当成 ai 文本处理)。
+        let turns = vec![
+            TurnRecord {
+                turn_index: 0,
+                role: "human".into(),
+                content: "你好".into(),
+                ..Default::default()
+            },
+            TurnRecord {
+                turn_index: 1,
+                role: "ai".into(),
+                content: "回复".into(),
+                ..Default::default()
+            },
+            TurnRecord {
+                turn_index: 2,
+                role: "token_usage".into(),
+                content: String::new(),
+                tokens_in: 100,
+                tokens_out: 20,
+                ..Default::default()
+            },
+        ];
+        let entries = review_entries_from_turns(&turns);
+        assert_eq!(
+            entries.len(),
+            2,
+            "用量行不应该产生第三个条目(也不该被折叠进 AiTurn 覆盖掉正文)"
+        );
+        match &entries[1] {
+            ReviewEntry::AiTurn { text, .. } => assert_eq!(text, "回复"),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
