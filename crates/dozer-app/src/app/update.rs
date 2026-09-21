@@ -203,6 +203,9 @@ impl App {
             Message::CodeHealth(codehealth::Message::OpenLocation(path, line)) => {
                 self.code_health_open_location(path, line);
             }
+            Message::CodeHealth(codehealth::Message::AnalyzeFinding(id)) => {
+                self.code_health_analyze_finding(id);
+            }
             Message::CodeHealth(codehealth::Message::ScanRequested) => {
                 self.with_focused_project(|ws, io| {
                     codehealth::update(&mut ws.codehealth, codehealth::Message::ScanRequested);
@@ -3595,12 +3598,64 @@ impl App {
     /// 代码健康度面板"点击函数跳转"入口：确保 Files 面板可见，再打开该
     /// 文件并跳到目标行。`panel_select` 在已选中同一面板时会触发"收起/
     /// 展开"的 toggle 副作用（见 `panel_select` 文档），这里先判断避免
-    /// 误触。
+    /// 误触。发现项的路径是相对项目根的规范化路径，这里解析成绝对路径。
     pub(crate) fn code_health_open_location(&mut self, path: PathBuf, line: usize) {
         if self.right_view != PanelKind::Files {
             self.panel_select(PanelKind::Files);
         }
-        self.preview_open_path_at(path, Some(line));
+        let resolved = if path.is_absolute() {
+            path
+        } else {
+            self.active_workspace()
+                .and_then(|ws| ws.active_project_path())
+                .map(|root| root.join(&path))
+                .unwrap_or(path)
+        };
+        self.preview_open_path_at(resolved, Some(line));
+    }
+
+    /// 代码健康度"交给 Agent 分析"：按 finding ID 从当前报告解析发现，生成
+    /// 只读诊断上下文，送入当前 agent 会话输入区（不自动发送，用户仍需主动
+    /// 回车）。报告更新后找不到 ID 时降级为无操作（不伪造发现）。
+    pub(crate) fn code_health_analyze_finding(&mut self, id: String) {
+        // 先只读解析出诊断文本（不可变借用，离开块即释放）。
+        let text = {
+            let Some(ws) = self.active_workspace() else {
+                return;
+            };
+            let Some(report) = ws.codehealth.report() else {
+                return;
+            };
+            let Some(finding) = report.findings.iter().find(|f| f.id == id) else {
+                return;
+            };
+            let change = ws.codehealth.diff().map(|d| {
+                if d.new.iter().any(|x| x.id == id) {
+                    dozer_codehealth::FindingChange::New
+                } else if d.worsened.iter().any(|x| x.id == id) {
+                    dozer_codehealth::FindingChange::Worsened
+                } else if d.improved.iter().any(|x| x.id == id) {
+                    dozer_codehealth::FindingChange::Improved
+                } else {
+                    dozer_codehealth::FindingChange::Persisting
+                }
+            });
+            let reasons: Vec<String> = ws
+                .codehealth
+                .hotspots()
+                .iter()
+                .find(|h| h.finding.id == id)
+                .map(codehealth::view_model::hotspot_reasons)
+                .unwrap_or_default();
+            let scope = codehealth::view_model::scope_summary(&ws.codehealth);
+            codehealth::view_model::analyze_finding_text(finding, change, &reasons, scope.as_ref())
+        };
+
+        // 送入当前会话输入区（无换行 → 不自动发送）。
+        let bytes = text.into_bytes();
+        self.with_focused_project(move |ws, io| {
+            ws.send_input(io, bytes);
+        });
     }
 
     pub(crate) fn preview_select_tab(&mut self, idx: usize) {
