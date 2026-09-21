@@ -104,8 +104,8 @@ pub fn view<'a>(
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| root.display().to_string());
-        // 根目录名称颜色跟着 git 状态走(与树行同款 `tree_state_color`),
-        // 图标恒为灰(`DIM`),不再用 CREAM 高亮。
+        // 根目录名称颜色跟着 git 状态走(与树行同款 `tree_state_color`);
+        // 图标平时为灰(`DIM`),选中时随整行转 `cream`(见下方选中态)。
         let root_state = ws_state
             .dir_statuses
             .get(root)
@@ -117,42 +117,90 @@ pub fn view<'a>(
         // 得在这里单独补上同一套"命中即高亮 + 悬停上报"逻辑,否则永远拖不
         // 到根目录(2026-09 用户实测反馈)。
         let root_is_drop_target = ws_state.drag_hover.contains(root);
-        let root_header = container(
-            row![
-                icons::view(
-                    icons::IconKind::FolderOpenDot,
-                    byteui::theme::icon_size::row(),
-                    byteui::theme::color::current().dim
-                ),
-                text(name)
-                    .size(byteui::theme::font::body())
-                    .color(root_color),
-            ]
-            .spacing(6)
-            .align_y(iced_widget::core::Alignment::Center),
+        // 根目录行与普通树行同等对待:选中态(cream 半透明底)/悬停态
+        // (`tab_hover` 底)都要有——此前只有拖拽落点的金框,点/划过根目录
+        // 完全没有反馈(2026-09 用户反馈)。判定口径与下方行循环逐字一致:
+        // 选中取 `tree_selected`、悬停取 `tree_hover`。
+        let root_is_selected = ws_state.tree_selected.as_deref() == Some(root);
+        let root_is_hovered =
+            !ws_state.tree_drag_confirmed() && ws_state.tree_hover.as_deref() == Some(root);
+        let root_icon_color = if root_is_selected {
+            byteui::theme::color::current().cream
+        } else {
+            byteui::theme::color::current().dim
+        };
+        let root_name_color = if root_is_selected {
+            byteui::theme::color::current().cream
+        } else {
+            root_color
+        };
+        let root_header = button(
+            container(
+                row![
+                    icons::view(
+                        icons::IconKind::FolderOpenDot,
+                        byteui::theme::icon_size::row(),
+                        root_icon_color
+                    ),
+                    text(name)
+                        .size(byteui::theme::font::body())
+                        .color(root_name_color),
+                ]
+                .spacing(6)
+                .align_y(iced_widget::core::Alignment::Center),
+            )
+            .width(Length::Fill)
+            .padding([0, 0]),
         )
         .width(Length::Fill)
-        .padding([0, 0])
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            border: if root_is_drop_target {
-                Border {
-                    color: byteui::theme::color::current().gold,
-                    width: 1.0,
+        .style(move |_t, _s: button::Status| {
+            // 与下方行循环的 `row_btn` 样式逐字同源:选中 cream 半透明底 /
+            // 悬停 `tab_hover` 底 / 拖拽落点金框,圆角 6px。
+            button::Style {
+                background: if root_is_selected {
+                    Some(
+                        Color {
+                            a: 0.3,
+                            ..byteui::theme::color::current().cream
+                        }
+                        .into(),
+                    )
+                } else if root_is_hovered {
+                    Some(byteui::theme::color::current().tab_hover.into())
+                } else {
+                    None
+                },
+                text_color: if root_is_selected {
+                    byteui::theme::color::current().cream
+                } else {
+                    byteui::theme::color::current().body
+                },
+                border: Border {
+                    color: if root_is_drop_target {
+                        byteui::theme::color::current().gold
+                    } else {
+                        Color::TRANSPARENT
+                    },
+                    width: if root_is_drop_target { 1.0 } else { 0.0 },
                     radius: 6.0.into(),
-                }
-            } else {
-                Border {
-                    color: Color::TRANSPARENT,
-                    width: 0.0,
-                    radius: 0.0.into(),
-                }
-            },
-            ..container::Style::default()
+                },
+                ..button::Style::default()
+            }
         });
-        let mut root_area = MouseArea::new(root_header).on_right_press(Message::ContextMenuOpen {
-            path: root.to_path_buf(),
-            is_dir: true,
-        });
+        let root_path = root.to_path_buf();
+        let mut root_area = MouseArea::new(root_header)
+            .on_press(Message::TreeRowPress {
+                path: root_path.clone(),
+                is_dir: true,
+            })
+            .on_right_press(Message::ContextMenuOpen {
+                path: root.to_path_buf(),
+                is_dir: true,
+            })
+            // 悬停底:与普通行同款 on_enter/on_exit 上报(根目录此前没有,
+            // 划过无反馈)。
+            .on_enter(Message::TreeRowHover(Some(root_path.clone())))
+            .on_exit(Message::TreeRowHover(None));
         // 只在拖拽已确认(`Dragging`,越过距离+时长两道阈值)时才挂
         // `on_move`——`Pending` 期间必须完全没有反应,见 `TreeDragPhase`
         // 文档("点一下就进入拖拽态"的根因)。
