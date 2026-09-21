@@ -292,7 +292,7 @@ fn parse_claude_shaped_chunk(
     out
 }
 
-fn join_codebuddy_text_blocks(blocks: &[Value], kind: &str) -> String {
+fn join_text_blocks_by_kind(blocks: &[Value], kind: &str) -> String {
     let mut text = String::new();
     for b in blocks {
         if b.get("type").and_then(|t| t.as_str()) == Some(kind)
@@ -344,7 +344,7 @@ fn parse_codebuddy_shaped_chunk(
                     .unwrap_or(0);
                 match v.get("role").and_then(|r| r.as_str()) {
                     Some("user") => {
-                        let content = join_codebuddy_text_blocks(blocks, "input_text");
+                        let content = join_text_blocks_by_kind(blocks, "input_text");
                         if content.is_empty() || is_synthetic_wrapper_content(&content) {
                             continue;
                         }
@@ -364,7 +364,7 @@ fn parse_codebuddy_shaped_chunk(
                         out.push(ParsedTurn {
                             message_key,
                             role: "ai".into(),
-                            content: join_codebuddy_text_blocks(blocks, "output_text"),
+                            content: join_text_blocks_by_kind(blocks, "output_text"),
                             ts,
                             tokens_in,
                             tokens_out,
@@ -454,6 +454,164 @@ fn parse_codebuddy_shaped_chunk(
     out
 }
 
+/// Howard Hinnant 的公开 days_from_civil 算法——`dozer-app` 的
+/// `usage/aggregate.rs::civil_from_days` 是它的逆运算(那边是"天数→年月日"
+/// 给图表标签用,这边是"年月日→天数"给时间戳解析用),两边各自私有实现,
+/// `dozerd`/`dozer-app` 之间没有共享的日期工具模块,不做跨 crate 复用。
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u64;
+    let mp = ((m as i64 + 9) % 12) as u64;
+    let doy = (153 * mp + 2) / 5 + d as u64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe as i64 - 719_468
+}
+
+/// Codex 的 timestamp 字段(如 `"2026-09-21T02:50:44.008Z"`)→ epoch 毫秒。
+/// 定长解析,不引入 chrono/time(见 Global Constraints)。格式跟实测样本
+/// (`~/.codex/sessions/**/rollout-*.jsonl`)完全一致:固定 UTC、毫秒精度、
+/// `Z` 结尾;只要有一处不匹配就整体返回 `None`,不做宽松容错——时间戳解析
+/// 失败只影响这一行的排序展示,不值得为极端形状维护正则级别的解析器。
+fn parse_codex_timestamp_ms(s: &str) -> Option<u64> {
+    let b = s.as_bytes();
+    if b.len() != 24
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || b[10] != b'T'
+        || b[13] != b':'
+        || b[16] != b':'
+        || b[19] != b'.'
+        || b[23] != b'Z'
+    {
+        return None;
+    }
+    let year: i64 = s.get(0..4)?.parse().ok()?;
+    let month: u32 = s.get(5..7)?.parse().ok()?;
+    let day: u32 = s.get(8..10)?.parse().ok()?;
+    let hour: u64 = s.get(11..13)?.parse().ok()?;
+    let minute: u64 = s.get(14..16)?.parse().ok()?;
+    let second: u64 = s.get(17..19)?.parse().ok()?;
+    let millis: u64 = s.get(20..23)?.parse().ok()?;
+    let days = days_from_civil(year, month, day);
+    let day_ms = u64::try_from(days).ok()?.checked_mul(86_400_000)?;
+    let time_ms = hour * 3_600_000 + minute * 60_000 + second * 1_000 + millis;
+    Some(day_ms + time_ms)
+}
+
+/// Codex rollout transcript(`session_meta`/`event_msg`/`response_item`/
+/// `turn_context`/`token_usage_record`,顶层 `type` + 嵌套 `payload`,跟
+/// Claude/Codebuddy 的扁平结构完全不同,见 spike 记录
+/// `docs/superpowers/specs/2026-08-07-codex-spike-findings.md`)→
+/// `ParsedTurn`。v1 范围只摘"人类/AI 文本"(`response_item`/
+/// `payload.type:"message"`,role user/assistant,developer 角色是 CLI 注入
+/// 的系统提示片段,跳过)和"token 用量"(`token_usage_record`,产出一条独立
+/// 的 `role:"token_usage"` 行,不含正文)。`reasoning`/`custom_tool_call`/
+/// `custom_tool_call_output`/`session_meta`/`event_msg`/`world_state`/
+/// `turn_context` 等行本计划不解析,原样跳过(同 Claude 侧对未知行类型的
+/// 既有策略)。
+fn parse_codex_shaped_chunk(
+    text: &str,
+    conversation_id: &str,
+    starting_turn_index: i64,
+) -> Vec<ParsedTurn> {
+    let mut out = Vec::new();
+    let mut turn_index = starting_turn_index;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let top_type = v.get("type").and_then(|t| t.as_str());
+        let ts = v
+            .get("timestamp")
+            .and_then(|t| t.as_str())
+            .and_then(parse_codex_timestamp_ms);
+        let Some(payload) = v.get("payload") else {
+            continue;
+        };
+        match top_type {
+            Some("response_item")
+                if payload.get("type").and_then(|t| t.as_str()) == Some("message") =>
+            {
+                let role = payload.get("role").and_then(|r| r.as_str());
+                let Some(blocks) = payload.get("content").and_then(|c| c.as_array()) else {
+                    continue;
+                };
+                let message_key = payload
+                    .get("id")
+                    .and_then(|i| i.as_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| fallback_key(conversation_id, turn_index));
+                match role {
+                    Some("user") => {
+                        let content = join_text_blocks_by_kind(blocks, "input_text");
+                        if content.is_empty() {
+                            continue;
+                        }
+                        out.push(ParsedTurn {
+                            message_key,
+                            role: "human".into(),
+                            content,
+                            ts,
+                            raw_json: line.to_string(),
+                            ..Default::default()
+                        });
+                        turn_index += 1;
+                    }
+                    Some("assistant") => {
+                        out.push(ParsedTurn {
+                            message_key,
+                            role: "ai".into(),
+                            content: join_text_blocks_by_kind(blocks, "output_text"),
+                            ts,
+                            raw_json: line.to_string(),
+                            ..Default::default()
+                        });
+                        turn_index += 1;
+                    }
+                    // "developer" 是 Codex CLI 自己注入的系统提示片段(等价
+                    // 于 Claude 的 isMeta 消息),不是真实用户发言,不摄取。
+                    _ => {}
+                }
+            }
+            Some("token_usage_record") => {
+                let Some(usage) = payload.get("usage") else {
+                    continue;
+                };
+                let field = |k: &str| usage.get(k).and_then(|n| n.as_u64()).unwrap_or(0);
+                let input_tokens = field("input_tokens");
+                let cached_input_tokens = field("cached_input_tokens");
+                let message_key = payload
+                    .get("response_id")
+                    .and_then(|i| i.as_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| fallback_key(conversation_id, turn_index));
+                out.push(ParsedTurn {
+                    message_key,
+                    role: "token_usage".into(),
+                    // input_tokens 已经把 cached_input_tokens 算在内(见
+                    // Global Constraints),减掉才符合 tokens_in/
+                    // tokens_cache_read 互不重叠、直接相加的既有展示公式。
+                    tokens_in: input_tokens.saturating_sub(cached_input_tokens),
+                    tokens_out: field("output_tokens"),
+                    tokens_cache_read: cached_input_tokens,
+                    tokens_cache_write: field("cache_write_input_tokens"),
+                    ts,
+                    raw_json: line.to_string(),
+                    ..Default::default()
+                });
+                turn_index += 1;
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// 按 agent 分派解析一段(必为完整行)transcript 文本。`starting_turn_index`
 /// 是这段文本第一条产出的 `ParsedTurn` 应该编到的 `turn_index`(调用方从
 /// `conversations`/`conversation_turns` 已有数据算出,续接编号,不重置)。
@@ -476,7 +634,7 @@ pub fn parse_chunk(
         AgentKind::Codebuddy => {
             parse_codebuddy_shaped_chunk(text, conversation_id, starting_turn_index)
         }
-        AgentKind::Codex => Vec::new(),
+        AgentKind::Codex => parse_codex_shaped_chunk(text, conversation_id, starting_turn_index),
     }
 }
 
@@ -510,8 +668,9 @@ pub fn extract_turn_trace_detail(raw_json: &str, agent: AgentKind) -> TurnTraceD
         | AgentKind::Kilo
         | AgentKind::Unknown
         | AgentKind::V8agent => extract_claude_trace_detail(&v),
-        // Codex 目前完全不摄取(parse_chunk 分派到空 Vec),没有 raw_json
-        // 可读。
+        // Codex 现在摄取人类/AI 文本 + 用量(见 parse_codex_shaped_chunk),
+        // 但结构化工具调用/思考文本不在 v1 范围内,读时补全维持全空
+        // ——跟"有 raw_json 但选择不解析"是两回事,不是没有数据可读。
         AgentKind::Codex => TurnTraceDetail::default(),
     }
 }
@@ -572,7 +731,7 @@ fn extract_codebuddy_trace_detail(v: &Value) -> TurnTraceDetail {
                 .and_then(|c| c.as_array())
                 .cloned()
                 .unwrap_or_default();
-            let text = join_codebuddy_text_blocks(&blocks, "reasoning_text");
+            let text = join_text_blocks_by_kind(&blocks, "reasoning_text");
             TurnTraceDetail {
                 thinking_text: if text.is_empty() { None } else { Some(text) },
                 tool_calls: Vec::new(),
@@ -858,6 +1017,81 @@ mod tests {
         assert_ne!(turns[0].message_key, "conv1:0");
         assert_ne!(turns[1].message_key, "conv1:1");
         assert!(turns[0].ts.is_some());
+    }
+
+    #[test]
+    fn codex_parses_real_shaped_fixture_sample_with_usage() {
+        let text = include_str!("../../../dozer-hook/fixtures/codex-transcript-sample.jsonl");
+        let turns = parse_chunk(AgentKind::Codex, text, "conv1", 0);
+        assert_eq!(
+            turns.len(),
+            3,
+            "1 用户消息 + 1 assistant 回复 + 1 用量行;developer/session_meta/\
+             turn_context/event_msg 等不摄取"
+        );
+        assert_eq!(turns[0].role, "human");
+        assert_eq!(turns[0].content, "reply with exactly one word: hello");
+        assert_eq!(turns[1].role, "ai");
+        assert_eq!(turns[1].content, "hello");
+        assert_eq!(turns[2].role, "token_usage");
+        assert_eq!(turns[2].content, "");
+        // input_tokens(14768)已经把 cached_input_tokens(12160)算在内
+        // (OpenAI Responses API 语义,跟 Claude 相反),摄取时要减掉缓存
+        // 命中部分,不然会跟 tokens_cache_read 重复计入。
+        assert_eq!(turns[2].tokens_in, 14768 - 12160);
+        assert_eq!(turns[2].tokens_out, 5);
+        assert_eq!(turns[2].tokens_cache_read, 12160);
+        assert_eq!(turns[2].tokens_cache_write, 0);
+        assert!(turns[0].ts.is_some(), "timestamp 字符串应该被解析成毫秒");
+        assert_ne!(
+            turns[0].message_key, "conv1:0",
+            "应该取 payload.id,不退化成 fallback_key"
+        );
+    }
+
+    #[test]
+    fn codex_sums_usage_across_multiple_api_calls_within_one_turn() {
+        // 一次逻辑回合内可能有好几次模型 API 调用(工具调用往返),每次都
+        // 各自产出一条 token_usage_record;`usage` 字段是每次调用自己的
+        // 增量花费,不是累计值——两条用量行应该各自摘出一条 ParsedTurn,
+        // 求和交给 dozerd 的 SUM 查询,这里只验证"没有被错误合并/覆盖"。
+        let text = concat!(
+            "{\"timestamp\":\"2026-09-21T00:00:00.000Z\",\"type\":\"response_item\",",
+            "\"payload\":{\"type\":\"message\",\"id\":\"m1\",\"role\":\"assistant\",",
+            "\"content\":[{\"type\":\"output_text\",\"text\":\"第一步\"}]}}\n",
+            "{\"timestamp\":\"2026-09-21T00:00:01.000Z\",\"type\":\"token_usage_record\",",
+            "\"payload\":{\"response_id\":\"r1\",\"usage\":{\"input_tokens\":100,",
+            "\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"output_tokens\":10,",
+            "\"reasoning_output_tokens\":0,\"total_tokens\":110}}}\n",
+            "{\"timestamp\":\"2026-09-21T00:00:02.000Z\",\"type\":\"response_item\",",
+            "\"payload\":{\"type\":\"message\",\"id\":\"m2\",\"role\":\"assistant\",",
+            "\"content\":[{\"type\":\"output_text\",\"text\":\"第二步\"}]}}\n",
+            "{\"timestamp\":\"2026-09-21T00:00:03.000Z\",\"type\":\"token_usage_record\",",
+            "\"payload\":{\"response_id\":\"r2\",\"usage\":{\"input_tokens\":50,",
+            "\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"output_tokens\":5,",
+            "\"reasoning_output_tokens\":0,\"total_tokens\":55}}}\n",
+        );
+        let turns = parse_chunk(AgentKind::Codex, text, "conv1", 0);
+        assert_eq!(turns.len(), 4);
+        let usage_turns: Vec<_> = turns.iter().filter(|t| t.role == "token_usage").collect();
+        assert_eq!(usage_turns.len(), 2);
+        assert_eq!(usage_turns[0].tokens_in, 100);
+        assert_eq!(usage_turns[1].tokens_in, 50);
+        assert_ne!(
+            usage_turns[0].message_key, usage_turns[1].message_key,
+            "两次调用各有独立 response_id,不能共用 message_key 互相覆盖"
+        );
+    }
+
+    #[test]
+    fn codex_timestamp_parses_iso8601_to_epoch_millis() {
+        let text = concat!(
+            "{\"timestamp\":\"1970-01-01T00:00:00.000Z\",\"type\":\"response_item\",",
+            "\"payload\":{\"type\":\"message\",\"id\":\"m1\",\"role\":\"user\",",
+            "\"content\":[{\"type\":\"input_text\",\"text\":\"hi\"}]}}\n",
+        );
+        let turns = parse_chunk(AgentKind::Codex, text, "conv1", 0);
+        assert_eq!(turns[0].ts, Some(0));
     }
 
     #[test]
