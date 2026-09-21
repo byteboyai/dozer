@@ -514,6 +514,20 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
         }
     }
 
+    // 架构图：先取 Cargo workspace（module 图在后续任务里合并到同一份报告）。
+    // 提取失败可降级，不影响结构复杂度等其它结果。
+    let cargo = crate::cargo_architecture::extract_cargo_architecture(root);
+    let (arch_status, arch_nodes, arch_edges, arch_error) =
+        crate::cargo_architecture::cargo_report_fragment(&cargo);
+    let architecture = crate::architecture::ArchitectureReport {
+        status: arch_status,
+        nodes: arch_nodes,
+        edges: arch_edges,
+        cycles: Vec::new(),
+        unresolved_edges: 0,
+        errors: arch_error.into_iter().collect(),
+    };
+
     let status = if skipped.iter().any(|s| {
         matches!(
             s.reason,
@@ -521,7 +535,8 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
                 | crate::scan_metadata::SkipReason::ReadFailed
                 | crate::scan_metadata::SkipReason::ParseFailed
         )
-    }) {
+    }) || !architecture.errors.is_empty()
+    {
         ScanStatus::Partial
     } else {
         ScanStatus::Complete
@@ -548,8 +563,7 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
         scan,
         git: None,
         findings,
-        // 架构图由后续任务（Cargo/module 图构建）填充；此处保持“不适用”。
-        architecture: crate::architecture::ArchitectureReport::not_applicable(),
+        architecture,
         total_loc,
         total_functions,
         critical_functions,
@@ -784,6 +798,65 @@ mod v2_tests {
         assert_eq!(report.schema_version, SCHEMA_VERSION);
         assert_eq!(report.schema_version, 3);
         assert_eq!(report.scan.status, ScanStatus::Complete);
+    }
+
+    #[test]
+    fn scan_without_cargo_manifest_is_not_applicable() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.rs"), "fn ok() {}").unwrap();
+        let report = scan_project(dir.path()).unwrap();
+        assert_eq!(
+            report.architecture.status,
+            crate::architecture::ArchitectureStatus::NotApplicable
+        );
+        assert!(!report.architecture.has_data());
+        assert!(report.architecture.errors.is_empty());
+        // module 图（后续任务）尚未加入，故此处自然没有节点。
+        assert_eq!(report.scan.status, ScanStatus::Complete);
+    }
+
+    #[test]
+    fn scan_with_cargo_workspace_populates_architecture() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = [\"a\"]\n").unwrap();
+        fs::create_dir_all(root.join("a/src")).unwrap();
+        fs::write(
+            root.join("a/Cargo.toml"),
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::write(root.join("a/src/lib.rs"), "pub fn f() {}\n").unwrap();
+        let report = scan_project(root).unwrap();
+        assert_eq!(
+            report.architecture.status,
+            crate::architecture::ArchitectureStatus::Complete
+        );
+        assert!(
+            report
+                .architecture
+                .nodes
+                .iter()
+                .any(|n| n.id == crate::architecture::crate_node_id("a"))
+        );
+    }
+
+    #[test]
+    fn broken_cargo_manifest_degrades_to_partial_with_error() {
+        // 有 Cargo.toml 但内容非法 → cargo metadata 失败：架构状态 Partial、
+        // 记录错误，其它分析（结构复杂度）仍照常产出，不整次扫描失败。
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("Cargo.toml"), "this is not toml = = =\n").unwrap();
+        fs::write(root.join("a.rs"), "fn ok() {}\n").unwrap();
+        let report = scan_project(root).unwrap();
+        assert_eq!(
+            report.architecture.status,
+            crate::architecture::ArchitectureStatus::Partial
+        );
+        assert!(!report.architecture.errors.is_empty());
+        assert_eq!(report.scan.status, ScanStatus::Partial);
+        assert_eq!(report.total_functions, 1, "其它分析不受影响");
     }
 
     #[test]

@@ -12,6 +12,7 @@ ast-grep-language = "0.45.3"
 ignore = "0.4"
 globset = "0.4"
 toml = "0.9"
+cargo_metadata.workspace = true
 
 [dev-dependencies]
 tempfile = "3.27.0"

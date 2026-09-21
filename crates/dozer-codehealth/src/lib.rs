@@ -3,6 +3,7 @@
 //! 纯函数库，不依赖 iced/UDS 协议。
 
 pub mod architecture;
+mod cargo_architecture;
 mod diff;
 mod discovery;
 mod finding;
@@ -14,6 +15,9 @@ mod ui_metrics;
 pub use architecture::{
     ArchitectureEdge, ArchitectureEdgeKind, ArchitectureEvidence, ArchitectureNode,
     ArchitectureNodeKind, ArchitectureReport, ArchitectureStatus, DependencyCycle,
+};
+pub use cargo_architecture::{
+    CargoArchitecture, CargoGraph, cargo_report_fragment, extract_cargo_architecture, find_manifest,
 };
 pub use diff::{FindingChange, ReportDiff, diff_reports};
 pub use discovery::{Discovery, ProjectConfig, discover, load_project_config};

@@ -48,7 +48,7 @@ pub enum ArchitectureNodeKind {
 }
 
 /// 架构边种类。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArchitectureEdgeKind {
     /// Cargo.toml 中声明的 workspace member 依赖。
@@ -133,6 +133,10 @@ pub struct ArchitectureReport {
     /// 无法可靠解析的 use/依赖数量（只计数，不猜测目标）。
     #[serde(default)]
     pub unresolved_edges: usize,
+    /// 可定位的架构分析错误（Cargo metadata 失败、配置无效、图截断等）。
+    /// 有非空错误时状态应为 `Partial`；旧 JSON 缺字段时回落空列表。
+    #[serde(default)]
+    pub errors: Vec<String>,
 }
 
 impl ArchitectureReport {
@@ -253,11 +257,7 @@ mod tests {
                 external: false,
             }],
             edges: vec![ArchitectureEdge {
-                id: edge_id(
-                    ArchitectureEdgeKind::ModuleUse,
-                    "module:a",
-                    "module:b",
-                ),
+                id: edge_id(ArchitectureEdgeKind::ModuleUse, "module:a", "module:b"),
                 from: "module:a".into(),
                 to: "module:b".into(),
                 kind: ArchitectureEdgeKind::ModuleUse,
@@ -273,6 +273,7 @@ mod tests {
                 edge_ids: vec!["edge:module_use:module:a:module:b".into()],
             }],
             unresolved_edges: 2,
+            errors: vec!["cargo metadata 失败：boom".into()],
         };
         let json = serde_json::to_string(&report).unwrap();
         let back: ArchitectureReport = serde_json::from_str(&json).unwrap();
