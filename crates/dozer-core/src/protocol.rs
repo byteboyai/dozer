@@ -24,17 +24,16 @@ pub enum AgentKind {
     Codebuddy,
     Opencode,
     Codex,
-    Kilo,
     V8agent,
 }
 
 impl AgentKind {
     /// 展示用短标签（对话历史副行、GUI 角标）。同时也是启动器菜单键入
-    /// 的 CLI 命令名——三家均已核实与官方命令名一致（见计划 Global
+    /// 的 CLI 命令名——四家均已核实与官方命令名一致（见计划 Global
     /// Constraints）。与 `display_label()` 的差异：用户能看见的展示名
     /// 走 `display_label()`(品牌大小写/有空格),命令键入/对账走
-    /// `label()`(全小写 CLI 名)——如 `Kilo` 的展示是 "Kilo Code"、命令
-    /// 是 "kilocode"。
+    /// `label()`(全小写 CLI 名)——如 `Claude` 的展示是 "Claude"、命令
+    /// 是 "claude"。
     pub fn label(&self) -> &'static str {
         match self {
             AgentKind::Unknown => "shell",
@@ -42,14 +41,13 @@ impl AgentKind {
             AgentKind::Codebuddy => "codebuddy",
             AgentKind::Opencode => "opencode",
             AgentKind::Codex => "codex",
-            AgentKind::Kilo => "kilocode",
             AgentKind::V8agent => "v8agent",
         }
     }
 
     /// 用户可见的展示名（Agent 面板分组头等品牌位），与 `label()`
-    /// 的 CLI 命令名区分开——Kilo 的品牌是 "Kilo Code"，但实际命令行
-    /// 是 `kilocode`，二者不能混用。改动这里要同步去改
+    /// 的 CLI 命令名区分开——如 `Claude` 的品牌是 "Claude"，但实际命令行
+    /// 是 `claude`，二者不能混用。改动这里要同步去改
     /// `dozer-app::workspace::view::agent_picker_spec` 的字面量菜单。
     pub fn display_label(&self) -> &'static str {
         match self {
@@ -58,7 +56,6 @@ impl AgentKind {
             AgentKind::Codebuddy => "CodeBuddy",
             AgentKind::Opencode => "OpenCode",
             AgentKind::Codex => "Codex",
-            AgentKind::Kilo => "Kilo Code",
             AgentKind::V8agent => "v8agent",
         }
     }
@@ -1202,7 +1199,6 @@ mod tests {
             serde_json::to_string(&AgentKind::Codex).unwrap(),
             "\"codex\""
         );
-        assert_eq!(serde_json::to_string(&AgentKind::Kilo).unwrap(), "\"kilo\"");
         assert_eq!(
             serde_json::from_str::<AgentKind>("\"claude\"").unwrap(),
             AgentKind::Claude
@@ -1327,7 +1323,6 @@ mod tests {
         assert_eq!(AgentKind::Codebuddy.label(), "codebuddy");
         assert_eq!(AgentKind::Opencode.label(), "opencode");
         assert_eq!(AgentKind::Codex.label(), "codex");
-        assert_eq!(AgentKind::Kilo.label(), "kilocode");
     }
 
     #[test]

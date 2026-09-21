@@ -541,11 +541,6 @@ fn should_summarize_on_close_false_for_unsupported_agents_or_dead_or_ssh() {
         &TabBackend::Daemon
     ));
     assert!(!should_summarize_on_close(
-        AgentKind::Kilo,
-        true,
-        &TabBackend::Daemon
-    ));
-    assert!(!should_summarize_on_close(
         AgentKind::Unknown,
         true,
         &TabBackend::Daemon
@@ -668,24 +663,19 @@ fn group_tabs_by_agent_mixed_fixed_order_no_empty_groups() {
 }
 
 #[test]
-fn group_tabs_by_agent_includes_codex_kilo_and_v8agent() {
+fn group_tabs_by_agent_includes_codex_and_v8agent() {
     // 回归测试:`ORDER` 曾经只有 4 个 AgentKind(Claude/Codebuddy/
-    // Opencode/Unknown),Codex/Kilo/V8agent 的会话会被 filter_map
+    // Opencode/Unknown),Codex/V8agent 的会话会被 filter_map
     // 静默丢弃——tab 标题栏能正确识别出 agent 种类,但 Agent 侧栏
     // 面板完全不显示这些会话,面板直接留空。
     let rt = tokio::runtime::Runtime::new().unwrap();
     let tabs = vec![
         make_test_tab(&rt, "a", AgentKind::V8agent),
         make_test_tab(&rt, "b", AgentKind::Codex),
-        make_test_tab(&rt, "c", AgentKind::Kilo),
     ];
     assert_eq!(
         group_tabs_by_agent(&tabs),
-        vec![
-            (AgentKind::Codex, vec![1]),
-            (AgentKind::Kilo, vec![2]),
-            (AgentKind::V8agent, vec![0]),
-        ]
+        vec![(AgentKind::Codex, vec![1]), (AgentKind::V8agent, vec![0]),]
     );
 }
 
@@ -696,7 +686,6 @@ fn agent_dot_color_maps_each_kind_and_avoids_gold() {
         (AgentKind::Codebuddy, byteui::theme::color::current().purple),
         (AgentKind::Opencode, byteui::theme::color::current().green),
         (AgentKind::Codex, byteui::theme::color::current().orange),
-        (AgentKind::Kilo, byteui::theme::color::current().blue),
         (AgentKind::V8agent, byteui::theme::color::current().lime),
         (AgentKind::Unknown, byteui::theme::color::current().dim),
     ];
@@ -716,10 +705,9 @@ fn agent_icon_maps_each_kind_to_brand_icon() {
     assert_eq!(agent_icon(AgentKind::Claude), IconKind::Claude);
     assert_eq!(agent_icon(AgentKind::Codebuddy), IconKind::Codebuddy);
     assert_eq!(agent_icon(AgentKind::Opencode), IconKind::Opencode);
-    // Codex/Kilo/V8agent 暂无确认可用的品牌素材，回落通用 Bot 图标
+    // Codex/V8agent 暂无确认可用的品牌素材，回落通用 Bot 图标
     // （见计划 Task 3 说明，非占位符——spec §8/§6 明确允许的兜底）。
     assert_eq!(agent_icon(AgentKind::Codex), IconKind::Bot);
-    assert_eq!(agent_icon(AgentKind::Kilo), IconKind::Bot);
     assert_eq!(agent_icon(AgentKind::V8agent), IconKind::Bot);
     // Unknown 同样回落 Bot 图标。
     assert_eq!(agent_icon(AgentKind::Unknown), IconKind::Bot);
@@ -731,7 +719,6 @@ fn agent_cli_command_maps_known_agents_and_none_for_unknown() {
     assert_eq!(agent_cli_command(AgentKind::Codebuddy), Some("codebuddy"));
     assert_eq!(agent_cli_command(AgentKind::Opencode), Some("opencode"));
     assert_eq!(agent_cli_command(AgentKind::Codex), Some("codex"));
-    assert_eq!(agent_cli_command(AgentKind::Kilo), Some("kilocode"));
     assert_eq!(agent_cli_command(AgentKind::V8agent), Some("v8agent"));
     assert_eq!(agent_cli_command(AgentKind::Unknown), None);
 }
@@ -754,10 +741,6 @@ fn picker_launch_command_maps_selection_to_initial_command() {
     assert_eq!(
         picker_launch_command(PickerLaunch::Agent(Some(AgentKind::Codex))),
         Some("codex".to_string())
-    );
-    assert_eq!(
-        picker_launch_command(PickerLaunch::Agent(Some(AgentKind::Kilo))),
-        Some("kilocode".to_string())
     );
     assert_eq!(
         picker_launch_command(PickerLaunch::Agent(Some(AgentKind::V8agent))),
@@ -787,13 +770,12 @@ fn hook_install_target_covers_only_agents_wired_up_in_dozer_hook() {
         hook_install_target(AgentKind::Opencode),
         Some(HookInstallTarget::Opencode)
     );
-    // Kilo/V8agent 在 `dozer-hook::install::settings_path_for` 里没有专属
-    // 分支，会落回 Claude 的 settings.json 路径——绝不能对它们调用安装
-    // 逻辑，否则会把 "kilo"/"v8agent" 的 hook 命令误写进 Claude 的配置，
-    // 顶掉真正的 claude hook 条目。Unknown 同理，从不该触发安装。V8agent
-    // 不属于这里(它走 socket 直连上报，见 hook_install_target 上方文档
-    // 注释)，只是恰好也该返回 None——跟 Kilo 是两个不同的理由。
-    for agent in [AgentKind::Kilo, AgentKind::V8agent, AgentKind::Unknown] {
+    // V8agent 不在 `dozer-hook::install::settings_path_for` 的覆盖范围,
+    // 绝不能对它调用安装逻辑——否则会把 "v8agent" 的 hook 命令误写进
+    // Claude 的 settings.json,顶掉真正的 claude hook 条目。V8agent 走
+    // socket 直连上报(见 hook_install_target 上方文档注释),返回 None
+    // 是正确行为。Unknown 同理,从不该触发安装。
+    for agent in [AgentKind::V8agent, AgentKind::Unknown] {
         assert_eq!(hook_install_target(agent), None, "{agent:?}");
     }
 }
@@ -814,10 +796,10 @@ fn mcp_install_target_covers_four_config_capable_agents() {
 }
 
 #[test]
-fn mcp_install_target_excludes_v8agent_kilo_unknown() {
-    // V8agent 走硬编码自动挂载(不读配置文件),Kilo 无 MCP 支持,
-    // Unknown 是纯 shell——三者都不该有配置文件路径。
-    for agent in [AgentKind::V8agent, AgentKind::Kilo, AgentKind::Unknown] {
+fn mcp_install_target_excludes_v8agent_unknown() {
+    // V8agent 走硬编码自动挂载(不读配置文件),Unknown 是纯 shell——
+    // 两者都不该有配置文件路径。
+    for agent in [AgentKind::V8agent, AgentKind::Unknown] {
         assert!(
             dozer_mcp::install::config_path_for(agent.label()).is_none(),
             "{agent:?} 不该有 mcp 配置文件路径"
@@ -873,19 +855,19 @@ fn ensure_hook_installed_writes_opencode_plugin() {
 }
 
 #[test]
-fn ensure_hook_installed_is_noop_for_kilo_v8agent_and_unknown() {
-    // 回归 hook_install_target 的排除名单：这三者不该产生任何文件写入。
+fn ensure_hook_installed_is_noop_for_v8agent_and_unknown() {
+    // 回归 hook_install_target 的排除名单：这两者不该产生任何文件写入。
     // 用 Claude 的 settings 路径当探针——如果实现退化成 catch-all 调用
-    // `install::run_at`，这里会意外产生一个把 "kilo" 写进去的
+    // `install::run_at`，这里会意外产生一个把 "v8agent" 写进去的
     // settings.json。
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
     unsafe { std::env::set_var("DOZER_CLAUDE_SETTINGS", path.to_str().unwrap()) };
-    for agent in [AgentKind::Kilo, AgentKind::V8agent, AgentKind::Unknown] {
+    for agent in [AgentKind::V8agent, AgentKind::Unknown] {
         ensure_hook_installed(agent);
     }
     unsafe { std::env::remove_var("DOZER_CLAUDE_SETTINGS") };
-    assert!(!path.exists(), "Kilo/V8agent/Unknown 不该写任何 hook 配置");
+    assert!(!path.exists(), "V8agent/Unknown 不该写任何 hook 配置");
 }
 
 fn write_temp_file(name: &str, content: &str) -> (tempfile::TempDir, PathBuf) {
@@ -1042,10 +1024,10 @@ fn blur_inputs_keep_native_preview_editor_skips_pending_unfocus() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn agent_picker_items_has_nine_rows_matching_old_picker() {
-    // 六个 agent + 1 条分隔线 + 两个 shell(Git Shell/纯 Shell)= 9 行,
-    // 对应旧版文档说的"八个选项"(不含分隔线本身)。
-    assert_eq!(agent_picker_items().len(), 9);
+fn agent_picker_items_has_eight_rows_matching_old_picker() {
+    // 五个 agent + 1 条分隔线 + 两个 shell(Git Shell/纯 Shell)= 8 行,
+    // 对应文档说的"七个选项"(不含分隔线本身)。
+    assert_eq!(agent_picker_items().len(), 8);
 }
 
 #[cfg(target_os = "macos")]
@@ -1053,7 +1035,7 @@ fn agent_picker_items_has_nine_rows_matching_old_picker() {
 fn agent_picker_items_separator_splits_agents_from_shells() {
     let items = agent_picker_items();
     assert!(matches!(
-        items[6],
+        items[5],
         crate::chrome::native_menu::Item::Separator
     ));
     let launches: Vec<PickerLaunch> = items
@@ -1066,9 +1048,9 @@ fn agent_picker_items_separator_splits_agents_from_shells() {
             _ => None,
         })
         .collect();
-    assert_eq!(launches.len(), 8, "六个 agent + 两个 shell,不含分隔线");
-    assert_eq!(launches[6], PickerLaunch::Git);
-    assert_eq!(launches[7], PickerLaunch::Agent(None));
+    assert_eq!(launches.len(), 7, "五个 agent + 两个 shell,不含分隔线");
+    assert_eq!(launches[5], PickerLaunch::Git);
+    assert_eq!(launches[6], PickerLaunch::Agent(None));
 }
 
 /// 空白页 / Blank tab 标题 / 卡片头部应取**项目根目录 basename**,不是

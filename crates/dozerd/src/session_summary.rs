@@ -18,7 +18,6 @@ fn agent_from_str(s: &str) -> AgentKind {
         "codebuddy" => AgentKind::Codebuddy,
         "opencode" => AgentKind::Opencode,
         "codex" => AgentKind::Codex,
-        "kilo" => AgentKind::Kilo,
         "v8agent" => AgentKind::V8agent,
         _ => AgentKind::Unknown,
     }

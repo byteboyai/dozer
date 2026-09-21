@@ -5,7 +5,7 @@ Dozer 是一个跑在 macOS 上的桌面应用,它不是又一个 AI Agent,而�
 ## 运行环境
 
 - macOS。
-- 一个已经装好的 agent CLI —— 目前 Dozer 认识 Claude Code、CodeBuddy、Codex、Kilo、OpenCode、v8agent 六种(哪些能拿到 hook/MCP 自动接入见下文与 [Agent 会话](agents.md))。没有装任何 agent CLI 也能用 Dozer,只是终端面板里只能开纯 Shell。
+- 一个已经装好的 agent CLI —— 目前 Dozer 认识 Claude Code、CodeBuddy、Codex、OpenCode、v8agent 五种(哪些能拿到 hook/MCP 自动接入见下文与 [Agent 会话](agents.md))。没有装任何 agent CLI 也能用 Dozer,只是终端面板里只能开纯 Shell。
 
 ## 启动
 

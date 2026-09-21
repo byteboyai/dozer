@@ -26,7 +26,7 @@ dozer-mcp uninstall <agent>  # 撤销注册
 | Codex | `~/.codex/config.toml`(用无损编辑,保留你原有的注释和格式) |
 | OpenCode | `~/.config/opencode/opencode.json` |
 
-Kilo、v8agent 目前没有对应的 MCP 注册支持。
+v8agent 目前没有对应的 MCP 注册支持。
 
 ## 提供的两个工具
 

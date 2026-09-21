@@ -56,19 +56,18 @@ pub(crate) fn load_more_button<'a>(
 pub(crate) const CONVERSATION_DETAIL_PAGE_SIZE: u32 = 200;
 
 /// 按 `AgentKind` 把会话 tab 分组,固定顺序 Claude → Codebuddy → Opencode
-/// → Codex → Kilo → V8agent → Unknown(与 `conversation_agents_present`
+/// → Codex → V8agent → Unknown(与 `conversation_agents_present`
 /// 同一份顺序),只返回非空分组(没有该 agent 的会话就不出现,面板不留空
 /// 分组占位)。组内保持 `tabs` 原有顺序(tab 打开顺序)。返回下标而非
 /// 引用——渲染时既要下标发 `Message::SelectTab(idx)`,又要用下标回查
 /// `ws.tabs[idx]` 取展示字段,直接存下标比存 `&SessionTab` 省一次生命
 /// 周期纠缠。
 pub(crate) fn group_tabs_by_agent(tabs: &[SessionTab]) -> Vec<(AgentKind, Vec<usize>)> {
-    const ORDER: [AgentKind; 7] = [
+    const ORDER: [AgentKind; 6] = [
         AgentKind::Claude,
         AgentKind::Codebuddy,
         AgentKind::Opencode,
         AgentKind::Codex,
-        AgentKind::Kilo,
         AgentKind::V8agent,
         AgentKind::Unknown,
     ];
@@ -283,11 +282,10 @@ pub(crate) fn agent_picker_items() -> Vec<crate::chrome::native_menu::Item<Messa
 /// Agent 选择器菜单内容——native(`agent_picker_items`)和 iced fallback
 /// (`agent_picker_popup`)共用同一份数据，只在这里组装一次。
 pub(crate) fn agent_picker_spec() -> MenuSpec<Message> {
-    let agents: [(&str, PickerLaunch); 6] = [
+    let agents: [(&str, PickerLaunch); 5] = [
         ("Claude", PickerLaunch::Agent(Some(AgentKind::Claude))),
         ("CodeBuddy", PickerLaunch::Agent(Some(AgentKind::Codebuddy))),
         ("Codex", PickerLaunch::Agent(Some(AgentKind::Codex))),
-        ("Kilo Code", PickerLaunch::Agent(Some(AgentKind::Kilo))),
         ("OpenCode", PickerLaunch::Agent(Some(AgentKind::Opencode))),
         ("v8agent", PickerLaunch::Agent(Some(AgentKind::V8agent))),
     ];
@@ -316,8 +314,8 @@ pub(crate) fn agent_picker_spec() -> MenuSpec<Message> {
 }
 
 /// Agent 选择菜单浮层:固定挂在窗口右上角("＋"按钮下方——该按钮
-/// 就在最靠右的 Agent 面板头部,近似等于窗口右上角),八个选项按标签
-/// 首字母顺序排列:Claude/CodeBuddy/Codex/Git Shell/Kilo Code/OpenCode/
+/// 就在最靠右的 Agent 面板头部,近似等于窗口右上角),七个选项按标签
+/// 首字母顺序排列:Claude/CodeBuddy/Codex/Git Shell/OpenCode/
 /// v8agent/OS Shell(验收反馈,2026-08-21;此前是手写的固定顺序,不便
 /// 找到目标 agent)。跟项目树右键菜单(`context_menu_popup`)同款按钮
 /// 样式,但不需要像素坐标定位——同 `delete_confirm_popup` 一样固定
@@ -1759,8 +1757,8 @@ pub(crate) fn relative_time_text(modified_ms: u64, now_ms: u64) -> String {
 /// 一,纯 Shell 走 `launch: None`,不经过这个函数),但函数保持穷尽
 /// match,防止未来枚举新增变体时静默漏写。CLI 命令名取
 /// `AgentKind::label()`,**不要**误用 `display_label()`——后者是品牌
-/// 展示名(大小写/空格自由),如 Kilo 的展示名是 "Kilo Code" 但 CLI
-/// 是 "kilocode",二者不能混。
+/// 展示名(大小写/空格自由),如 Claude 的展示名是 "Claude" 但 CLI
+/// 是 "claude",二者不能混。
 pub(crate) fn agent_cli_command(agent: AgentKind) -> Option<&'static str> {
     match agent {
         AgentKind::Unknown => None,

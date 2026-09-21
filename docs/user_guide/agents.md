@@ -4,12 +4,11 @@ Dozer 本身**不接任何模型 API**,也没有内置的聊天面板。你在 D
 
 ## 支持哪些 agent
 
-Dozer 认识六种 agent CLI,加两种"纯终端"选项,一共八个启动器选项(按标签首字母排序):
+Dozer 认识五种 agent CLI,加两种"纯终端"选项,一共七个启动器选项(按标签首字母排序):
 
 - **Claude**(Claude Code)
 - **CodeBuddy**
 - **Codex**
-- **Kilo**
 - **OpenCode**
 - **v8agent**
 - **Git Shell**——开一个终端并自动敲入 `git status`
@@ -29,7 +28,7 @@ Dozer 认识六种 agent CLI,加两种"纯终端"选项,一共八个启动器选
 
 Dozer 会尝试给 agent 装一个轻量级钩子(`dozer-hook`),让它在自己的生命周期节点(开始跑、等你输入、一轮结束……)把事件报给 `dozerd`,驱动出你在 UI 上看到的状态点(空闲/运行中/等待输入/一轮结束)。
 
-hook 目前接了 **Claude、CodeBuddy、Codex**(直接写进各自的 settings 配置)和 **OpenCode**(写一个插件文件)。**Kilo 没有可用的 hook 机制,接不了**;**v8agent** 走的是另一条路——它自己的 CLI 会带着 `DOZER_SESSION_ID` 直接向 socket 上报,不需要 hook。
+hook 目前接了 **Claude、CodeBuddy、Codex**(直接写进各自的 settings 配置)和 **OpenCode**(写一个插件文件)。**v8agent** 走的是另一条路——它自己的 CLI 会带着 `DOZER_SESSION_ID` 直接向 socket 上报,不需要 hook。
 
 ## MCP:让 agent 知道你在看什么
 
@@ -38,11 +37,11 @@ Dozer 同时会给支持的 agent 注册一个只读的 `dozer` MCP server(见 [
 - 查到你当前在 Dozer 预览面板里看的文件路径和光标/选中范围。
 - 主动提交一段这次会话的标题+摘要,回填到 Dozer 的历史对话列表里。
 
-MCP 注册目前支持 **Claude**(写 `~/.claude.json`)、**CodeBuddy**(写 `~/.codebuddy/.mcp.json`)、**Codex**(写 `~/.codex/config.toml`,用无损编辑保留你原有的注释)、**OpenCode**(写 `~/.config/opencode/opencode.json`)。Kilo/v8agent 同样不支持。
+MCP 注册目前支持 **Claude**(写 `~/.claude.json`)、**CodeBuddy**(写 `~/.codebuddy/.mcp.json`)、**Codex**(写 `~/.codex/config.toml`,用无损编辑保留你原有的注释)、**OpenCode**(写 `~/.config/opencode/opencode.json`)。v8agent 同样不支持。
 
 ## 会话状态胶囊
 
-终端标签和顶栏项目点上看到的颜色状态,来自 hook 上报驱动的状态机:空闲(Idle)、运行中(Running)、等待你输入(AwaitingInput)、一轮结束(TurnEnded)。如果一个会话完全没收到过 hook 事件(比如 Kilo,或者你选的是纯 Shell),状态点会保持灰色的"未知"。
+终端标签和顶栏项目点上看到的颜色状态,来自 hook 上报驱动的状态机:空闲(Idle)、运行中(Running)、等待你输入(AwaitingInput)、一轮结束(TurnEnded)。如果一个会话完全没收到过 hook 事件(比如你选的是纯 Shell),状态点会保持灰色的"未知"。
 
 
 ## 会话存活

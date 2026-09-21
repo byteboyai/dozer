@@ -1,6 +1,6 @@
 //! 四家已确认支持 MCP 的 agent 的安装器：幂等 JSON/TOML 补丁，只碰自己
-//! 写的 `dozer` 条目，仿 `dozer-hook/src/install.rs` 的手法。Qoder/Kilo/
-//! V8agent 不在这次范围（见设计文档"非目标"）。
+//! 写的 `dozer` 条目，仿 `dozer-hook/src/install.rs` 的手法。V8agent
+//! 不在这次范围（见设计文档"非目标"）。
 
 use std::path::{Path, PathBuf};
 
@@ -407,7 +407,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // 未支持的 agent 名不该落到任何默认路径去改文件,直接报错码。
         assert_eq!(
-            run_at_with_exe(&dir.path().join("x"), "kilo", true, "/x/dozer-mcp"),
+            run_at_with_exe(&dir.path().join("x"), "v8agent", true, "/x/dozer-mcp"),
             2
         );
     }

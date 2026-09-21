@@ -672,7 +672,7 @@ pub fn parse_chunk(
     starting_turn_index: i64,
 ) -> Vec<ParsedTurn> {
     match agent {
-        AgentKind::Claude | AgentKind::Opencode | AgentKind::Kilo | AgentKind::Unknown => {
+        AgentKind::Claude | AgentKind::Opencode | AgentKind::Unknown => {
             parse_claude_shaped_chunk(text, conversation_id, starting_turn_index, &MUTATING_TOOLS)
         }
         AgentKind::V8agent => parse_claude_shaped_chunk(
@@ -710,14 +710,12 @@ pub fn extract_turn_trace_detail(raw_json: &str, agent: AgentKind) -> TurnTraceD
     };
     match agent {
         AgentKind::Codebuddy => extract_codebuddy_trace_detail(&v),
-        // Claude/Opencode/Kilo/Unknown/V8agent 摄取时都走
+        // Claude/Opencode/Unknown/V8agent 摄取时都走
         // parse_claude_shaped_chunk(parse_chunk 的分派,parse.rs 上方),
         // 读时解析沿用同一分派。
-        AgentKind::Claude
-        | AgentKind::Opencode
-        | AgentKind::Kilo
-        | AgentKind::Unknown
-        | AgentKind::V8agent => extract_claude_trace_detail(&v),
+        AgentKind::Claude | AgentKind::Opencode | AgentKind::Unknown | AgentKind::V8agent => {
+            extract_claude_trace_detail(&v)
+        }
         // Codex 现在摄取人类/AI 文本 + 用量(见 parse_codex_shaped_chunk),
         // 但结构化工具调用/思考文本不在 v1 范围内,读时补全维持全空
         // ——跟"有 raw_json 但选择不解析"是两回事,不是没有数据可读。

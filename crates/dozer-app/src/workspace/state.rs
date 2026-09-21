@@ -2553,8 +2553,8 @@ pub(crate) fn agent_card_refresh_plan(
     // 直接读得到,不需要单独分支。mode 恒 None(OpenCode 没有
     // permissionMode 等价字段,同 Codebuddy)。Codex 现在也能从 `turn_context`
     // 行里提取到 model(见 `transcript::latest_model_mode_and_activity`),
-    // mode 恒 None(同 Codebuddy)。Kilo 等其余 agent 仍不在这道门禁里:
-    // 它们的合成 transcript 还没有 model 字段,加了也读不到值。
+    // mode 恒 None(同 Codebuddy)。V8agent 仍不在这道门禁里:
+    // 它的合成 transcript 还没有 model 字段,加了也读不到值。
     let needs_model_mode = matches!(
         agent,
         AgentKind::Claude
@@ -2564,8 +2564,8 @@ pub(crate) fn agent_card_refresh_plan(
             | AgentKind::Codex
     );
     // "当前工作内容"兜底摘要的门禁比 model/mode 宽——只要 transcript
-    // schema 能被 `parse_transcript` 解出人类/AI 文本就值得读(Opencode/
-    // Kilo 的合成 transcript 是 Claude 形状,真有内容,只是没写 model/mode
+    // schema 能被 `parse_transcript` 解出人类/AI 文本就值得读(Opencode
+    // 的合成 transcript 是 Claude 形状,真有内容,只是没写 model/mode
     // 字段而已;V8agent 的 transcript 现在也走同一条 Claude 形状解析路径,
     // 见 dozerd `transcripts/parse.rs` 的 `parse_chunk` 分派)。Codex 现在也能
     // 从 `response_item` 行里提取到 activity(见

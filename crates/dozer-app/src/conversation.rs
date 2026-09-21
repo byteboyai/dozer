@@ -25,7 +25,7 @@ impl ConversationMeta {
 
 /// 会话列表一行(2026-08-27,取代按回合分组的 `TurnGroupRow`)。有总结用
 /// 总结的标题/全文,没有降级用 `ConversationSummary.title`(旧数据/纯
-/// shell/SSH/Codex/Kilo)。`summary` 存全文不截断——列表渲染时截断成
+/// shell/SSH/Codex)。`summary` 存全文不截断——列表渲染时截断成
 /// 预览,详情页直接整段展示,不为详情页单独发一次查询。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionRow {

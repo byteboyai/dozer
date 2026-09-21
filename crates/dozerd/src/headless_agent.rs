@@ -120,7 +120,7 @@ fn bare_program_name(agent: AgentKind) -> Option<&'static str> {
         AgentKind::Codebuddy => Some("codebuddy"),
         AgentKind::Opencode => Some("opencode"),
         AgentKind::V8agent => Some("v8agent"),
-        AgentKind::Unknown | AgentKind::Codex | AgentKind::Kilo => None,
+        AgentKind::Unknown | AgentKind::Codex => None,
     }
 }
 
@@ -223,7 +223,7 @@ fn build_command(
             let stdin_text = format!("{}\n\n{}", instruction_text(), turns_text);
             Some((cmd, Some(stdin_text.into_bytes())))
         }
-        AgentKind::Unknown | AgentKind::Codex | AgentKind::Kilo => None,
+        AgentKind::Unknown | AgentKind::Codex => None,
     }
 }
 
@@ -275,7 +275,7 @@ fn build_task_command(
                 .env("V8AGENT_ONESHOT", "1");
             Some((cmd, Some(prompt.as_bytes().to_vec())))
         }
-        AgentKind::Unknown | AgentKind::Codex | AgentKind::Kilo => None,
+        AgentKind::Unknown | AgentKind::Codex => None,
     }
 }
 
@@ -548,7 +548,6 @@ mod tests {
     #[test]
     fn unsupported_kinds_return_none() {
         assert!(build_command(AgentKind::Codex, "codex", "x").is_none());
-        assert!(build_command(AgentKind::Kilo, "kilo", "x").is_none());
         assert!(build_command(AgentKind::Unknown, "unknown", "x").is_none());
     }
 

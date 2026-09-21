@@ -265,7 +265,7 @@ pub(crate) fn cache_trend(
     })
 }
 
-/// 展示固定顺序（含 V8agent，CLAUDE.md：新功能默认覆盖它，不能像 Kilo
+/// 展示固定顺序（含 V8agent，CLAUDE.md：新功能默认覆盖它，不能像 Unknown
 /// 那样被漏掉）。2026-09-05 起把原先三份拷贝收拢成这一份常量，供下面
 /// 各 `agent_*_share` 与 `agents_present` 共用，避免动一处漏一处的旧坑。
 pub(crate) const AGENT_ORDER: [AgentKind; 5] = [
@@ -378,7 +378,7 @@ pub(crate) fn behavior_series(
 }
 
 /// 项目里实际出现过的 agent,顺序固定(共用上面的 `AGENT_ORDER`,含 V8agent
-/// ——新功能默认覆盖它,不能像 Kilo 那样被漏掉)。供右侧筛选栏用:传入
+/// ——新功能默认覆盖它,不能像 Unknown 那样被漏掉)。供右侧筛选栏用:传入
 /// 未经筛选的全量 `rows`,这样切换到某个 agent 之后,列表本身不会跟着收缩到
 /// 只剩它自己。
 pub fn agents_present(rows: &[(ConversationMeta, ConversationUsage)]) -> Vec<AgentKind> {

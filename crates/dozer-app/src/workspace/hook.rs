@@ -45,11 +45,10 @@ pub(crate) fn should_answer_dynamic_color(
 /// 已接入 `dozer-hook` 安装器的 agent 集合。刻意穷尽 match 而不是拿
 /// `agent.label()` 当 catch-all 参数：`install::settings_path_for` 对未识别
 /// 的 agent 名一律落回 Claude 的 `settings.json`路径，如果不显式排除
-/// Kilo/V8agent，误调用会把 "kilo"/"v8agent" 的 hook 命令写进 Claude 的
-/// settings.json，顶掉真正的 claude hook 条目。两者排除的原因不同：Kilo
-/// 是真实缺口(没有任何 hook 上报机制)；V8agent 走的是完全不同的路子——
-/// `v8agent-cli` 在 `DOZER_SESSION_ID` 存在时直接通过 UDS socket 上报
-/// `Request::HookEvent`(见 `dozer-core::protocol`),不依赖这套"往
+/// V8agent，误调用会把 "v8agent" 的 hook 命令写进 Claude 的
+/// settings.json，顶掉真正的 claude hook 条目。V8agent 走的是完全不同的
+/// 路子——`v8agent-cli` 在 `DOZER_SESSION_ID` 存在时直接通过 UDS socket
+/// 上报 `Request::HookEvent`(见 `dozer-core::protocol`),不依赖这套"往
 /// agent 自己的配置文件里写 hook 命令"的安装机制，所以这里返回 `None`
 /// 对 V8agent 而言是正确行为，不是待办事项(spec
 /// `docs/superpowers/specs/2026-08-24-v8agent-integration-design.md`)。
@@ -65,7 +64,7 @@ pub(crate) fn hook_install_target(agent: AgentKind) -> Option<HookInstallTarget>
             Some(HookInstallTarget::Settings)
         }
         AgentKind::Opencode => Some(HookInstallTarget::Opencode),
-        AgentKind::Unknown | AgentKind::Kilo | AgentKind::V8agent => None,
+        AgentKind::Unknown | AgentKind::V8agent => None,
     }
 }
 
@@ -242,7 +241,6 @@ pub(crate) fn agent_dot_color(agent: AgentKind) -> Color {
         AgentKind::Codebuddy => byteui::theme::color::current().purple,
         AgentKind::Opencode => byteui::theme::color::current().green,
         AgentKind::Codex => byteui::theme::color::current().orange,
-        AgentKind::Kilo => byteui::theme::color::current().blue,
         AgentKind::V8agent => byteui::theme::color::current().lime,
         AgentKind::Unknown => byteui::theme::color::current().dim,
     }
@@ -256,9 +254,7 @@ pub(crate) fn agent_icon(agent: AgentKind) -> IconKind {
         AgentKind::Codebuddy => IconKind::Codebuddy,
         AgentKind::Opencode => IconKind::Opencode,
         // 暂无确认可用的品牌素材，回落通用图标（spec §8/§6 明确允许）。
-        AgentKind::Codex | AgentKind::Kilo | AgentKind::V8agent | AgentKind::Unknown => {
-            IconKind::Bot
-        }
+        AgentKind::Codex | AgentKind::V8agent | AgentKind::Unknown => IconKind::Bot,
     }
 }
 

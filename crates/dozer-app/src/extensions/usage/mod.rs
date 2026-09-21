@@ -412,11 +412,10 @@ mod tests {
 
     #[test]
     fn daily_totals_ignores_agents_without_dedicated_bucket() {
-        // Kilo 目前仍不产出可统计的用量数据(2026-09-21 起 Codex 已经被
-        // AGENT_ORDER 收录,不再属于这一类——见 daily_totals_by_agent_
-        // includes_codex),跟 Unknown 一样被忽略,不能 panic,也不产生
-        // 任何一天的记录(没有任何可展示的 agent,图表应该整体不渲染)。
-        let rows = vec![(meta_at(AgentKind::Kilo, 0), usage_with_tokens(99))];
+        // Unknown 不产出可统计的用量数据,跟任何没被 AGENT_ORDER 收录的
+        // agent 一样被忽略,不能 panic,也不产生任何一天的记录(没有任何
+        // 可展示的 agent,图表应该整体不渲染)。
+        let rows = vec![(meta_at(AgentKind::Unknown, 0), usage_with_tokens(99))];
         let days = daily_totals_by_agent(&rows);
         assert!(days.is_empty(), "没有任何已知 agent 有数据时不该产出天记录");
     }
@@ -463,7 +462,7 @@ mod tests {
         );
     }
 
-    /// V8agent(用户自研 agent)默认要被用量统计覆盖,不能像 Kilo 那样
+    /// V8agent(用户自研 agent)默认要被用量统计覆盖,不能像 Unknown 那样
     /// 被排除——2026-08-27 之前 `ORDER` 常量漏了它,饼图/图例里完全不出现
     /// 这家的用量,是真实 bug 不是刻意范围收窄。
     #[test]
@@ -532,7 +531,7 @@ mod tests {
 
     #[test]
     fn agents_present_ignores_agents_without_dedicated_bucket() {
-        let rows = vec![(meta(AgentKind::Kilo, "a"), usage_with_tokens(1))];
+        let rows = vec![(meta(AgentKind::Unknown, "a"), usage_with_tokens(1))];
         assert_eq!(agents_present(&rows), Vec::new());
     }
 
