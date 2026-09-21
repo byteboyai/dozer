@@ -839,7 +839,8 @@ pub fn context_menu_items(
 /// 结构(2026-09-18 调整):
 /// - 文件夹:顶部 = 搜索 / 新建文件 / 新建文件夹(三者紧贴,组前无分隔线);
 ///   中间 = 复制 / 粘贴(仅目录) / 删除 / 重命名(非根才有);底部 = 复制绝对
-///   路径 / 复制相对路径 / 用外部软件打开 / 从磁盘重新加载。
+///   路径 / 复制相对路径 / 用外部软件打开(目录为"在Finder中打开") /
+///   从磁盘重新加载。
 /// - 文件:顶部 = 回滚(undo-2) / 历史(file-clock),仅 git 仓库文件才有;
 ///   中间 = 复制 / 删除 / 重命名(文件不显示"粘贴"——粘贴是"粘贴进目标
 ///   目录",对文件无语义);底部同文件夹。
@@ -860,9 +861,16 @@ pub(crate) fn context_menu_spec(
     // 菜单项文案与打开动作都按扩展名查一次配置:有配置显示"用 {app} 打开"
     // 并指定 App,查不到显示"用外部软件打开"、退回系统默认。和预览工具栏
     // 同款(见 `App::external_apps`),把结果同时喂给 label 与 `OpenWithDefault`
-    // 消息,handler 不再重复查。
-    let open_app_name = external_apps.lookup_for_path(&target).map(str::to_string);
+    // 消息,handler 不再重复查。目录不走查表:文案固定"在Finder中打开",
+    // 动作固定 `open <dir>`(macOS 上即用 Finder 打开),避免目录名恰好
+    // 带扩展名后缀时被配置误命中、`open -a` 到无关 App。
+    let open_app_name = if is_dir {
+        None
+    } else {
+        external_apps.lookup_for_path(&target).map(str::to_string)
+    };
     let open_label = match &open_app_name {
+        _ if is_dir => "在Finder中打开".to_string(),
         Some(name) => format!("用 {name} 打开"),
         None => "用外部软件打开".to_string(),
     };
