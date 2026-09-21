@@ -16,6 +16,10 @@ pub struct RawLiteralFinding {
 pub struct DuplicateCluster {
     pub occurrences: Vec<(PathBuf, usize)>,
     pub node_count: usize,
+    /// 结构指纹（`structural_fingerprint` 输出），作为跨扫描稳定身份的签名。
+    /// 旧 JSON 无此字段时回落空串（`#[serde(default)]`），不影响旧报告读取。
+    #[serde(default)]
+    pub signature: String,
 }
 
 /// spec「颜色硬编码」：`0` Healthy，`1..=15` Watch，`>15` Critical。
@@ -333,6 +337,7 @@ pub fn clusters_from_registry(
         .filter(|(_, locs)| locs.len() >= 3)
         .map(|(fp, occurrences)| DuplicateCluster {
             node_count: fp.len(),
+            signature: fp,
             occurrences,
         })
         .collect();
