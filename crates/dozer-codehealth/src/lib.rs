@@ -8,6 +8,7 @@ mod diff;
 mod discovery;
 mod finding;
 mod function_metric;
+mod module_architecture;
 mod report;
 mod scan_metadata;
 mod ui_metrics;
@@ -26,6 +27,10 @@ pub use finding::{
     normalize_path_for_id, rule_ids, stable_finding_id,
 };
 pub use function_metric::{FunctionMetric, Severity, functions_in_source, severity_for};
+pub use module_architecture::{
+    CrateRoots, FileModule, ModuleGraph, UsePath, build_module_graph, module_segments_for_file,
+    qualified_module_name, uses_in_file,
+};
 pub use report::{
     FileMetric, HealthTier, ProjectReport, density_tier, file_metric, scale_tier, scan_project,
 };

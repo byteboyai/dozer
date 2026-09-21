@@ -392,6 +392,11 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
     let mut font_findings = Vec::new();
     let mut duplicate_registry: HashMap<String, Vec<(PathBuf, usize)>> = HashMap::new();
     let mut iced_detected = false;
+    // module 图：复用同一次解析的 AST 收集 use，不再二次解析（spec 性能约束）。
+    let mut module_files: Vec<(
+        crate::module_architecture::FileModule,
+        Vec<crate::module_architecture::UsePath>,
+    )> = Vec::new();
 
     for rel in &disc.rust_files {
         let abs = root.join(rel);
@@ -442,6 +447,12 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
         ));
         font_findings.extend(ui_metrics::find_font_findings(&root_node, &patterns, rel));
         ui_metrics::find_duplicate_clusters(&root_node, rel, &mut duplicate_registry);
+
+        // 同一次解析顺带提取 use（module 图），避免二次 parse。
+        module_files.push((
+            crate::module_architecture::FileModule { path: rel.clone() },
+            crate::module_architecture::uses_in_file(&root_node),
+        ));
     }
 
     let total_functions = all_functions.len();
@@ -514,17 +525,71 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
         }
     }
 
-    // 架构图：先取 Cargo workspace（module 图在后续任务里合并到同一份报告）。
+    // 架构图：Cargo workspace + module 图（module 复用上面的 AST，见扫描循环）。
     // 提取失败可降级，不影响结构复杂度等其它结果。
     let cargo = crate::cargo_architecture::extract_cargo_architecture(root);
-    let (arch_status, arch_nodes, arch_edges, arch_error) =
+    let (cargo_status, cargo_nodes, cargo_edges, arch_error) =
         crate::cargo_architecture::cargo_report_fragment(&cargo);
+
+    // module 图：crate → src 目录来自 Cargo；workspace crate 名集合用于解析跨
+    // crate use。
+    let mut workspace_crates = std::collections::BTreeSet::new();
+    let mut crate_roots = Vec::new();
+    if let crate::cargo_architecture::CargoArchitecture::Ok(graph) = &cargo {
+        for (name, src) in &graph.member_src_dirs {
+            workspace_crates.insert(name.clone());
+            crate_roots.push(crate::module_architecture::CrateRoots::conventional(
+                name.clone(),
+                src.clone(),
+            ));
+        }
+    }
+    let module_graph = crate::module_architecture::build_module_graph(
+        &module_files,
+        &crate_roots,
+        &workspace_crates,
+    );
+
+    // 合并节点：按 id 去重（crate 节点来自 Cargo，module 节点来自 module 图）。
+    let mut arch_nodes: Vec<crate::architecture::ArchitectureNode> = cargo_nodes;
+    {
+        let mut seen: std::collections::HashSet<String> =
+            arch_nodes.iter().map(|n| n.id.clone()).collect();
+        for node in module_graph.nodes {
+            if seen.insert(node.id.clone()) {
+                arch_nodes.push(node);
+            }
+        }
+    }
+    let mut arch_edges = cargo_edges;
+    arch_edges.extend(module_graph.edges);
+    let arch_edges: Vec<_> = {
+        let mut seen = std::collections::HashSet::new();
+        arch_edges
+            .into_iter()
+            .filter(|e| seen.insert(e.id.clone()))
+            .collect()
+    };
+
+    // 状态：Cargo 缺省 NotApplicable，但有 module 数据时升级为 Partial；失败保持
+    // Partial 并记录错误。
+    let status_from_cargo = match cargo_status {
+        crate::architecture::ArchitectureStatus::NotApplicable => {
+            if !arch_nodes.is_empty() || !arch_edges.is_empty() {
+                crate::architecture::ArchitectureStatus::Partial
+            } else {
+                crate::architecture::ArchitectureStatus::NotApplicable
+            }
+        }
+        other => other,
+    };
+
     let architecture = crate::architecture::ArchitectureReport {
-        status: arch_status,
+        status: status_from_cargo,
         nodes: arch_nodes,
         edges: arch_edges,
         cycles: Vec::new(),
-        unresolved_edges: 0,
+        unresolved_edges: module_graph.unresolved_edges,
         errors: arch_error.into_iter().collect(),
     };
 
@@ -839,6 +904,66 @@ mod v2_tests {
                 .iter()
                 .any(|n| n.id == crate::architecture::crate_node_id("a"))
         );
+    }
+
+    #[test]
+    fn scan_populates_module_graph_from_shared_ast() {
+        // 一个 workspace member 里有子 module，lib.rs `use crate::foo::Bar;`：
+        // 扫描应产出 crate→module 的 ModuleUse 边，且 module 节点挂在 crate 下。
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = [\"a\"]\n").unwrap();
+        fs::create_dir_all(root.join("a/src")).unwrap();
+        fs::write(
+            root.join("a/Cargo.toml"),
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("a/src/lib.rs"),
+            "use crate::foo::Bar;\npub fn f() {}\n",
+        )
+        .unwrap();
+        fs::write(root.join("a/src/foo.rs"), "pub struct Bar;\n").unwrap();
+
+        let report = scan_project(root).unwrap();
+        let arch = &report.architecture;
+        let foo_id = crate::architecture::module_node_id("a", "foo");
+        assert!(
+            arch.nodes.iter().any(|n| n.id == foo_id),
+            "module 节点应存在：{:?}",
+            arch.nodes.iter().map(|n| &n.id).collect::<Vec<_>>()
+        );
+        let edge = arch
+            .edges
+            .iter()
+            .find(|e| {
+                e.kind == crate::architecture::ArchitectureEdgeKind::ModuleUse
+                    && e.from == crate::architecture::module_node_id("a", "")
+                    && e.to == foo_id
+            })
+            .expect("crate → foo ModuleUse 边");
+        assert_eq!(edge.evidence[0].line, 1);
+        assert!(edge.evidence[0].snippet.contains("crate::foo::Bar"));
+        assert_eq!(arch.unresolved_edges, 0);
+    }
+
+    #[test]
+    fn scan_without_cargo_manifest_has_not_applicable_architecture() {
+        // 非 Cargo 项目：没有 workspace ⇒ 拿不到 crate 边界与 src 根，module 图无
+        // 法建立。状态保持 NotApplicable，且不得凭空造节点（否则会被当成“架构健康”）。
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("lib.rs"), "mod foo;\n").unwrap();
+        fs::create_dir_all(root.join("foo")).unwrap();
+        fs::write(root.join("foo/mod.rs"), "pub struct Bar;\n").unwrap();
+        let report = scan_project(root).unwrap();
+        assert!(report.architecture.nodes.is_empty());
+        assert_eq!(
+            report.architecture.status,
+            crate::architecture::ArchitectureStatus::NotApplicable
+        );
+        assert!(!report.architecture.has_data());
     }
 
     #[test]

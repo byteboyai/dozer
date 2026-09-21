@@ -40,6 +40,9 @@ pub struct CargoGraph {
     pub workspace_root: PathBuf,
     /// 项目根内的 workspace member 数量（不含 external）。
     pub member_count: usize,
+    /// member package name → `src` 目录（相对项目根的规范化路径），供 module 图
+    /// 把文件路径映射回 crate。取不到时缺省。
+    pub member_src_dirs: BTreeMap<String, PathBuf>,
 }
 
 /// 项目根里用于查找 workspace 的候选 manifest 相对路径。
@@ -120,6 +123,7 @@ pub fn graph_from_metadata(root: &Path, metadata: &Metadata) -> CargoGraph {
     // 除非同名，此时消歧后缀也只用于同名的那几个）。
     let mut member_name_to_id: BTreeMap<String, String> = BTreeMap::new();
     let mut nodes: Vec<ArchitectureNode> = Vec::new();
+    let mut member_src_dirs: BTreeMap<String, PathBuf> = BTreeMap::new();
     let mut member_packages: Vec<&Package> = metadata
         .packages
         .iter()
@@ -141,6 +145,9 @@ pub fn graph_from_metadata(root: &Path, metadata: &Metadata) -> CargoGraph {
             pkg.name.clone()
         };
         member_name_to_id.insert(pkg.name.clone(), id.clone());
+        if let Some(src) = package_src_dir(root, pkg) {
+            member_src_dirs.entry(pkg.name.clone()).or_insert(src);
+        }
         nodes.push(ArchitectureNode {
             id,
             kind: ArchitectureNodeKind::Crate,
@@ -249,7 +256,32 @@ pub fn graph_from_metadata(root: &Path, metadata: &Metadata) -> CargoGraph {
         edges,
         workspace_root,
         member_count,
+        member_src_dirs,
     }
+}
+
+/// 一个 member package 的 `src` 目录（相对项目根）。取所有 target 里最浅的
+/// `src` 目录：`src/lib.rs`/`src/main.rs` → `src`，`src/bin/x.rs` → `src`。
+fn package_src_dir(root: &Path, pkg: &Package) -> Option<PathBuf> {
+    let mut best: Option<PathBuf> = None;
+    for target in &pkg.targets {
+        let src_path = target.src_path.as_std_path();
+        // 从文件所在目录向上找到名为 `src` 的目录（crate 约定的源码根）。
+        let mut dir = src_path.parent();
+        while let Some(d) = dir {
+            if d.file_name().map(|n| n == "src").unwrap_or(false) {
+                let rel = rel_path(root, d);
+                best = Some(match best {
+                    // 取最浅（段数最少）的 src 目录。
+                    Some(prev) if prev.components().count() <= rel.components().count() => prev,
+                    _ => rel,
+                });
+                break;
+            }
+            dir = d.parent();
+        }
+    }
+    best
 }
 
 /// 依赖声明的短片段：`name`、rename、optional、target-specific 都保留在文本里，
