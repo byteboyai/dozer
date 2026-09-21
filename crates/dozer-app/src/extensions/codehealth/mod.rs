@@ -199,6 +199,7 @@ mod tests {
             },
             git: None,
             findings: vec![],
+            architecture: dozer_codehealth::ArchitectureReport::not_applicable(),
             total_loc: 100,
             total_functions: 5,
             critical_functions: 1,

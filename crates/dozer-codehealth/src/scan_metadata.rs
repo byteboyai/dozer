@@ -7,9 +7,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// 报告 schema 版本。首版带版本号取 2；读取旧 JSON 时 `#[serde(default)]`
-/// 回落为 1（见 `schema_version_or_one` 与 `ProjectReport` 的字段定义）。
-pub const SCHEMA_VERSION: u32 = 2;
+/// 报告 schema 版本。v2 加入扫描范围与统一发现项；v3 加入架构图
+/// （`architecture` 字段）。读取旧 JSON 时 `#[serde(default)]` 回落为 1
+/// （见 `schema_version_or_one` 与 `ProjectReport` 的字段定义）。
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// 扫描完整度：完整 / 部分完成（个别文件失败但仍继续）/ 失败。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

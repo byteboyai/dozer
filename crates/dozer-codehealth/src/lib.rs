@@ -2,6 +2,7 @@
 //! 面板使用（spec docs/superpowers/specs/2026-09-20-code-health-panel-design.md）。
 //! 纯函数库，不依赖 iced/UDS 协议。
 
+pub mod architecture;
 mod diff;
 mod discovery;
 mod finding;
@@ -10,6 +11,10 @@ mod report;
 mod scan_metadata;
 mod ui_metrics;
 
+pub use architecture::{
+    ArchitectureEdge, ArchitectureEdgeKind, ArchitectureEvidence, ArchitectureNode,
+    ArchitectureNodeKind, ArchitectureReport, ArchitectureStatus, DependencyCycle,
+};
 pub use diff::{FindingChange, ReportDiff, diff_reports};
 pub use discovery::{Discovery, ProjectConfig, discover, load_project_config};
 pub use finding::{

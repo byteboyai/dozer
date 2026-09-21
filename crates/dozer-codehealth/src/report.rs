@@ -64,6 +64,10 @@ pub struct ProjectReport {
     /// 旧 JSON 缺字段时回落空列表。
     #[serde(default)]
     pub findings: Vec<Finding>,
+    /// 架构图（schema v3）。旧 JSON 缺字段时回落“不适用”空报告，绝不能
+    /// 被解读为“架构健康”（spec「旧报告不得被解读为健康」）。
+    #[serde(default)]
+    pub architecture: crate::architecture::ArchitectureReport,
 
     // —— 以下为 legacy 字段，迁移期保留，后续由 findings 聚合替代 ——
     pub total_loc: usize,
@@ -350,6 +354,7 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
             },
             git: None,
             findings: Vec::new(),
+            architecture: crate::architecture::ArchitectureReport::not_applicable(),
             total_loc: 0,
             total_functions: 0,
             critical_functions: 0,
@@ -543,6 +548,8 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
         scan,
         git: None,
         findings,
+        // 架构图由后续任务（Cargo/module 图构建）填充；此处保持“不适用”。
+        architecture: crate::architecture::ArchitectureReport::not_applicable(),
         total_loc,
         total_functions,
         critical_functions,
@@ -770,11 +777,12 @@ mod v2_tests {
     use std::fs;
 
     #[test]
-    fn scan_project_reports_schema_version_two() {
+    fn scan_project_reports_current_schema_version() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("a.rs"), "fn ok() {}").unwrap();
         let report = scan_project(dir.path()).unwrap();
-        assert_eq!(report.schema_version, 2);
+        assert_eq!(report.schema_version, SCHEMA_VERSION);
+        assert_eq!(report.schema_version, 3);
         assert_eq!(report.scan.status, ScanStatus::Complete);
     }
 
@@ -822,8 +830,29 @@ mod v2_tests {
         let json = serde_json::to_string(&report).unwrap();
         let back: ProjectReport = serde_json::from_str(&json).unwrap();
         assert_eq!(back, report);
-        assert_eq!(back.schema_version, 2);
+        assert_eq!(back.schema_version, SCHEMA_VERSION);
         assert!(back.findings.iter().all(|f| !f.id.is_empty()));
+    }
+
+    #[test]
+    fn v2_json_without_architecture_reads_as_not_applicable() {
+        // schema v2 报告没有架构字段；读取后必须回落“不适用”空报告，
+        // 且 schema_version 保持原样（不假装是 v3、更不能被解读为架构健康）。
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.rs"), "fn ok() {}").unwrap();
+        let report = scan_project(dir.path()).unwrap();
+        let mut json: serde_json::Value = serde_json::to_value(&report).unwrap();
+        let obj = json.as_object_mut().unwrap();
+        obj.remove("architecture");
+        obj.insert("schema_version".into(), serde_json::json!(2));
+        let v2_json = serde_json::to_string(&json).unwrap();
+        let back: ProjectReport = serde_json::from_str(&v2_json).unwrap();
+        assert_eq!(back.schema_version, 2);
+        assert_eq!(
+            back.architecture.status,
+            crate::architecture::ArchitectureStatus::NotApplicable
+        );
+        assert!(!back.architecture.has_data());
     }
 
     #[test]
@@ -948,7 +977,7 @@ mod scan_scope_tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("readme.md"), "# hi").unwrap();
         let report = scan_project(dir.path()).unwrap();
-        assert_eq!(report.schema_version, 2);
+        assert_eq!(report.schema_version, SCHEMA_VERSION);
         assert_eq!(report.scan.status, ScanStatus::Complete);
         assert_eq!(report.scan.analyzed_files, 0);
         assert!(report.findings.is_empty());

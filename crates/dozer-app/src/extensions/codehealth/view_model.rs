@@ -296,6 +296,7 @@ mod tests {
             },
             git: None,
             findings,
+            architecture: dozer_codehealth::ArchitectureReport::not_applicable(),
             total_loc: loc,
             total_functions: functions,
             critical_functions: 0,
