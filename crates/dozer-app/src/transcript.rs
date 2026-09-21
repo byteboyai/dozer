@@ -133,10 +133,12 @@ pub fn review_entries_from_turns(turns: &[TurnRecord]) -> Vec<ReviewEntry> {
 }
 
 /// 从 transcript 尾部提取最后一次出现的 model id / permissionMode(后
-/// 出现的覆盖先出现的,只关心最新值)。model 兼认两种互斥的行形状:
-/// Claude(`message.model`)和 Codebuddy(顶层 `providerData.model`,字段名
+/// 出现的覆盖先出现的,只关心最新值)。model 兼认三种互斥的行形状:
+/// Claude(`message.model`)、Codebuddy(顶层 `providerData.model`,字段名
 /// 核对自 `crates/dozer-hook/fixtures/codebuddy-transcript-sample.jsonl`
-/// 真实样本)——同一份 transcript 只会是其中一种形状,两条路径共存不冲突,
+/// 真实样本)和 Codex(独立 `turn_context` 行的 `payload.model`,字段名
+/// 核对自 2026-09-21 实读本机 `~/.codex/sessions/**/rollout-*.jsonl`)
+/// ——同一份 transcript 只会是其中一种形状,三条路径共存不冲突,
 /// 不需要按 `agent` 分派。`permissionMode` 只有 Claude 形状(`user`/
 /// `assistant`/`permission-mode` 三种行的顶层)才有,Codebuddy 没有等价
 /// 字段,不提取,`mode` 对 Codebuddy 恒 `None`(Agent 卡片视图据此不渲染
@@ -151,8 +153,10 @@ pub fn review_entries_from_turns(turns: &[TurnRecord]) -> Vec<ReviewEntry> {
 /// **只认人类发言,不认 AI 回复**(用户实测反馈:两者都认时,回合结束
 /// 后"最后一行"常是 AI 的收尾总结,看不出这一轮到底在做什么——人类的
 /// 原始请求比 AI 的总结更能说明"当前在干什么")。识别 Claude 形状
-/// (`type:"user"`,`message.content` 是字符串)和 CodeBuddy 形状
-/// (`type:"message"`+`role:"user"`,`content[].type:"input_text"`)的
+/// (`type:"user"`,`message.content` 是字符串)、CodeBuddy 形状
+/// (`type:"message"`+`role:"user"`,`content[].type:"input_text"`)和
+/// Codex 形状(`type:"response_item"`+`payload.type:"message"`+
+/// `payload.role:"user"`)的
 /// 人类发言文本,取最后一条、截到 60 字符——卡片一行放不下长句,截断
 /// 比换行/溢出更可控,不需要精确到字。
 pub fn latest_model_mode_and_activity(
@@ -177,7 +181,13 @@ pub fn latest_model_mode_and_activity(
             .get("providerData")
             .and_then(|p| p.get("model"))
             .and_then(|s| s.as_str());
-        if let Some(m) = claude_model.or(codebuddy_model) {
+        // Codex 形状:model 不挂在消息行上,是独立的 `turn_context` 行
+        // (顶层 `type:"turn_context"`),嵌套在 `payload.model`。
+        let codex_model = (v.get("type").and_then(|t| t.as_str()) == Some("turn_context"))
+            .then(|| v.get("payload").and_then(|p| p.get("model")))
+            .flatten()
+            .and_then(|s| s.as_str());
+        if let Some(m) = claude_model.or(codebuddy_model).or(codex_model) {
             model = Some(m.to_string());
         }
         if let Some(pm) = v.get("permissionMode").and_then(|s| s.as_str()) {
@@ -209,6 +219,21 @@ fn extract_line_activity(v: &Value) -> Option<String> {
                 return None;
             }
             let blocks = v.get("content").and_then(|c| c.as_array())?;
+            join_text_blocks(blocks, "input_text")
+        }
+        // Codex 形状:`response_item`/`payload.type:"message"`,人类发言
+        // 是 `payload.role:"user"`(还有 "developer"/"assistant" 两种角色,
+        // "developer" 是 CLI 自己注入的系统提示片段,不算真实用户发言,
+        // 不提取)。
+        Some("response_item") => {
+            let payload = v.get("payload")?;
+            if payload.get("type").and_then(|t| t.as_str()) != Some("message") {
+                return None;
+            }
+            if payload.get("role").and_then(|r| r.as_str()) != Some("user") {
+                return None;
+            }
+            let blocks = payload.get("content").and_then(|c| c.as_array())?;
             join_text_blocks(blocks, "input_text")
         }
         _ => None,
@@ -590,6 +615,38 @@ mod tests {
         let (model, mode, _activity) = latest_model_mode_and_activity(jsonl);
         assert_eq!(model.as_deref(), Some("glm-5.2"));
         assert_eq!(mode, None);
+    }
+
+    #[test]
+    fn latest_model_and_mode_reads_codex_turn_context_model() {
+        // Codex 形状:model 不在消息行上,而是独立的 `turn_context` 行,
+        // 顶层 `type`,嵌套在 `payload.model`——跟 Claude(`message.model`)/
+        // Codebuddy(顶层 `providerData.model`)都不同。字段路径核对自
+        // 2026-09-21 实读本机 `~/.codex/sessions/**/rollout-*.jsonl`。
+        // Codex 没有 permissionMode 等价字段,mode 应保持 None。
+        let jsonl = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"model_provider\":\"openai\"}}\n",
+            "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-6-astra\"}}\n",
+        );
+        let (model, mode, _activity) = latest_model_mode_and_activity(jsonl);
+        assert_eq!(model.as_deref(), Some("gpt-6-astra"));
+        assert_eq!(mode, None);
+    }
+
+    #[test]
+    fn activity_reads_codex_shaped_last_human_message_and_skips_developer_role() {
+        // Codex 的 `response_item`/`payload.type:"message"` 里,`role` 除了
+        // user/assistant 还有 "developer"(CLI 自己注入的系统提示片段,
+        // 等价于 Claude 的 isMeta 消息)——activity 只认 role:"user",
+        // "developer" 即使排在后面也不该盖掉真实用户发言。
+        let jsonl = concat!(
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",",
+            "\"content\":[{\"type\":\"input_text\",\"text\":\"修一下光标问题\"}]}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"developer\",",
+            "\"content\":[{\"type\":\"input_text\",\"text\":\"系统提示词片段\"}]}}\n",
+        );
+        let (_model, _mode, activity) = latest_model_mode_and_activity(jsonl);
+        assert_eq!(activity.as_deref(), Some("修一下光标问题"));
     }
 
     #[test]

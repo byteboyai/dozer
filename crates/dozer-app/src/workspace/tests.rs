@@ -125,9 +125,9 @@ fn agent_card_refresh_plan_decides_by_agent_and_cwd() {
     );
     assert_eq!(
         agent_card_refresh_plan(dozer_core::protocol::AgentKind::Codex, &root, Some(&root)),
-        (false, false, false),
-        "Codex 的 transcript 恒解不出内容(parse_transcript 空 Vec),\
-             model/mode/activity 都不值得读"
+        (true, true, false),
+        "Codex 现在也能从 turn_context/response_item 行提取 model/activity\
+             (mode 恒 None——Codex 没有 permissionMode 等价字段)"
     );
     assert_eq!(
         agent_card_refresh_plan(dozer_core::protocol::AgentKind::V8agent, &root, Some(&root)),
@@ -1069,4 +1069,65 @@ fn agent_picker_items_separator_splits_agents_from_shells() {
     assert_eq!(launches.len(), 8, "六个 agent + 两个 shell,不含分隔线");
     assert_eq!(launches[6], PickerLaunch::Git);
     assert_eq!(launches[7], PickerLaunch::Agent(None));
+}
+
+/// 空白页 / Blank tab 标题 / 卡片头部应取**项目根目录 basename**,不是
+/// `ProjectInfo::name`(用户给项目起的"显示名",如 "Dozer AI Coder"):
+/// 用户在 UI 上看到的是"打开的目录",与卡片其它字段(位置/大小/创建/
+/// 修改)语义自洽。
+#[test]
+fn project_root_dir_name_uses_path_basename_not_display_name() {
+    let mut ws = Workspace::empty_for_project_placeholder();
+    ws.project = Some(ProjectInfo {
+        id: 7,
+        // 用户给项目起的名字是 "Dozer AI Coder",根目录实际叫 `byteboy`。
+        path: "/Users/me/byteboy".to_string(),
+        name: "Dozer AI Coder".to_string(),
+        last_active_ms: 0,
+        created_ms: 0,
+        updated_ms: 0,
+    });
+    assert_eq!(
+        project_root_dir_name(&ws).as_deref(),
+        Some("byteboy"),
+        "应返回 path.basename,不是显示名"
+    );
+}
+
+/// `Workspace::project == None` 时 helper 返回 `None`,view 端拿到 None
+/// 才回退到 `tab.title = "空白"`,不要硬塞个空字符串。
+#[test]
+fn project_root_dir_name_none_when_no_project() {
+    let ws = Workspace::empty_for_project_placeholder();
+    assert!(ws.project.is_none());
+    assert_eq!(project_root_dir_name(&ws), None);
+}
+
+/// Blank tab 标题在有项目时显示根目录 basename(`byteboy`),不是
+/// `name`("Dozer AI Coder")。这条契约守住 view 的核心显示语义。
+#[test]
+fn preview_tab_display_title_blank_uses_root_dir_basename() {
+    let mut ws = Workspace::empty_for_project_placeholder();
+    ws.project = Some(ProjectInfo {
+        id: 7,
+        path: "/Users/me/byteboy".to_string(),
+        name: "Dozer AI Coder".to_string(),
+        last_active_ms: 0,
+        created_ms: 0,
+        updated_ms: 0,
+    });
+    let title = preview_tab_display_title(&ws, ws.preview.tabs().first().unwrap());
+    assert_eq!(
+        title, "byteboy",
+        "Blank tab 标题 = 根目录 basename,与显示名脱钩"
+    );
+}
+
+/// 无项目时回退 `tab.title`(数据层 `placeholder_tab` 写死的 "空白"),
+/// 不让 UI 拿到空字符串或裸 None。
+#[test]
+fn preview_tab_display_title_blank_falls_back_to_placeholder_text() {
+    let ws = Workspace::empty_for_project_placeholder();
+    let title = preview_tab_display_title(&ws, ws.preview.tabs().first().unwrap());
+    assert_eq!(title, "空白", "无项目 → 维持原 \"空白\" 文案");
 }
