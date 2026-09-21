@@ -1,14 +1,14 @@
-//! 代码健康度面板渲染：健康卡片（等级徽章 + 规模/密度双分档 + 扫描按钮）
-//! + 问题列表（只列 Watch/Critical、按严重度+复杂度排序的扁平排行榜，
-//! 2026-09-20 UI 优化起不再按文件分组）。单块可滚动内容，不像
-//! `usage`/`conversations`/`agent` 那样有独立的 list pane + 分栏
-//! （spec「UI 设计」：两块 UI 堆叠展示，不做三个独立视图）。
+//! 代码健康度面板渲染。2026-09-20 改为参照用量面板的左右分栏结构：右侧
+//! 分类导航（Rust 代码健康度 / UI 代码健康度），左侧内容区按当前分类切换
+//! 展示 Rust 结构复杂度结果（健康卡片 + 问题排行榜）或 UI 一致性结果
+//! （颜色/边距/字体/嵌套深度/回调密度/重复结构六个子区块）。
 
-use super::{Message, WorkspaceState};
+use super::{CodeHealthCategory, Message, WorkspaceState};
+use byteui::interaction::icons;
 use byteui::theme::color::ColorTokens;
 use dozer_codehealth::{FunctionMetric, HealthTier, ProjectReport, Severity};
-use iced_widget::core::{Element, Length};
-use iced_widget::{Column, button, column, container, mouse_area, row, scrollable, text};
+use iced_widget::core::{Border, Color, Element, Length};
+use iced_widget::{Column, button, column, container, mouse_area, row, scrollable, space, text};
 
 fn tier_color(tier: HealthTier, tokens: &ColorTokens) -> iced_widget::core::Color {
     match tier {
@@ -54,7 +54,6 @@ fn density_summary(report: &ProjectReport) -> String {
 
 fn health_card(
     report: &ProjectReport,
-    scanned_at_ms: Option<u64>,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let tokens = byteui::theme::color::current();
     let badge_color = tier_color(report.overall_tier, &tokens);
@@ -62,10 +61,6 @@ fn health_card(
         "核心代码 {} 行，{} 个函数存在明显结构问题",
         report.total_loc, report.critical_functions
     );
-    let scanned_at = match scanned_at_ms {
-        Some(ms) => format!("上次扫描：{}", format_ms(ms)),
-        None => "尚未扫描".to_string(),
-    };
     column![
         row![
             text(tier_label(report.overall_tier))
@@ -83,14 +78,27 @@ fn health_card(
                 .color(tier_color(report.density_tier, &tokens)),
         ]
         .spacing(12),
-        row![
-            text(scanned_at).size(12).color(tokens.dim),
-            button(text("扫描").size(13)).on_press(Message::ScanRequested),
-        ]
-        .spacing(12),
     ]
     .spacing(8)
     .padding(16)
+    .into()
+}
+
+/// 内容区顶部固定一行：上次扫描时间 + 扫描按钮（两分类共用，不随分类切换）。
+fn scan_header(
+    scanned_at_ms: Option<u64>,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let tokens = byteui::theme::color::current();
+    let scanned_at = match scanned_at_ms {
+        Some(ms) => format!("上次扫描：{}", format_ms(ms)),
+        None => "尚未扫描".to_string(),
+    };
+    row![
+        text(scanned_at).size(12).color(tokens.dim),
+        button(text("扫描").size(13)).on_press(Message::ScanRequested),
+    ]
+    .spacing(12)
+    .padding([12, 16])
     .into()
 }
 
@@ -182,7 +190,7 @@ fn problem_row<'a>(
         .into()
 }
 
-fn problem_list(
+fn problem_list_content(
     report: &ProjectReport,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let tokens = byteui::theme::color::current();
@@ -200,7 +208,7 @@ fn problem_list(
     for f in ranked {
         col = col.push(problem_row(f, tokens));
     }
-    scrollable(col.padding(16)).into()
+    col.padding(16).into()
 }
 
 fn raw_literal_findings_section(
@@ -379,51 +387,162 @@ fn error_banner<'a>(
         .into()
 }
 
+fn rust_content(
+    report: &ProjectReport,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    column![health_card(report), problem_list_content(report)].into()
+}
+
+fn category_content(
+    category: CodeHealthCategory,
+    report: &ProjectReport,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    match category {
+        CodeHealthCategory::Rust => rust_content(report),
+        CodeHealthCategory::Ui => ui_consistency_section(report),
+    }
+}
+
+/// 右侧分类导航单个按钮，字段对应用量面板 `agent_filter_button`（去掉计数与
+/// 每类专属色）：图标 + 名称，选中态 CARD 底 + GOLD 1px 描边。
+fn category_button(
+    category: CodeHealthCategory,
+    current: CodeHealthCategory,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let active = category == current;
+    let c = byteui::theme::color::current();
+    let fg = if active { c.cream } else { c.dim };
+    let icon = match category {
+        CodeHealthCategory::Rust => icons::IconKind::FileCode,
+        CodeHealthCategory::Ui => icons::IconKind::LayoutList,
+    };
+    let icon_color = if active { c.gold } else { c.dim };
+    button(
+        row![
+            icons::view(icon, byteui::theme::icon_size::row(), icon_color),
+            text(category.label())
+                .size(byteui::theme::font::body())
+                .color(fg),
+            space::Space::new()
+                .width(Length::Fill)
+                .height(Length::Shrink),
+        ]
+        .spacing(8)
+        .align_y(iced_widget::core::Alignment::Center),
+    )
+    .on_press(Message::CategorySet(category))
+    .width(Length::Fill)
+    .padding([8, 10])
+    .style(move |_t: &iced_widget::Theme, _s| button::Style {
+        background: if active {
+            Some(byteui::theme::color::current().card.into())
+        } else {
+            None
+        },
+        text_color: fg,
+        border: Border {
+            color: if active {
+                byteui::theme::color::current().gold
+            } else {
+                Color::TRANSPARENT
+            },
+            width: if active { 1.0 } else { 0.0 },
+            radius: 6.0.into(),
+        },
+        ..button::Style::default()
+    })
+    .into()
+}
+
+/// 面板列表侧：分类导航（Rust 代码健康度 / UI 代码健康度），同用量面板的
+/// `agent_filter_sidebar` 一样是独立子面板（头 + 竖排导航）。
+pub fn list_pane(
+    ws_state: &WorkspaceState,
+    width: Length,
+    outer: Border,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let header = container(crate::chrome::homespace::home_panel_head(
+        icons::IconKind::SquareActivity,
+        "代码健康度",
+    ))
+    .padding(iced_widget::core::Padding {
+        top: 12.0,
+        right: 12.0,
+        bottom: 8.0,
+        left: 12.0,
+    });
+
+    let current = ws_state.category();
+    let mut nav = column![].spacing(4).padding(iced_widget::core::Padding {
+        top: 0.0,
+        right: 8.0,
+        bottom: 12.0,
+        left: 8.0,
+    });
+    nav = nav.push(category_button(CodeHealthCategory::Rust, current));
+    nav = nav.push(category_button(CodeHealthCategory::Ui, current));
+
+    container(column![header, nav])
+        .width(width)
+        .height(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(byteui::theme::color::current().bg.into()),
+            border: outer,
+            ..container::Style::default()
+        })
+        .into()
+}
+
 pub fn content_pane(
     ws_state: &WorkspaceState,
     width: Length,
+    outer: Border,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let tokens = byteui::theme::color::current();
     let error = ws_state.scan_error().map(|e| error_banner(e, &tokens));
 
-    if ws_state.scanning() {
-        // 扫描中：若已有上一次结果，仍展示它（不清空），只在顶部叠一条
-        // "扫描中…"提示——比整块换成 loading 占位更不容易让用户以为数据
-        // 丢了；若从没扫描过（`report()` 为 `None`），只显示 loading 提示。
-        let scanning_text = text("扫描中…").size(14).color(tokens.body);
-        return match ws_state.report() {
-            Some(report) => container(column![
-                scanning_text,
-                health_card(report, ws_state.scanned_at_ms()),
-                problem_list(report),
-            ])
-            .width(width)
-            .into(),
-            None => container(column![scanning_text]).width(width).into(),
+    let body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        if ws_state.scanning() {
+            // 扫描中：若已有上一次结果，仍展示它（不清空），只在顶部叠一条
+            // "扫描中…"提示——比整块换成 loading 占位更不容易让用户以为数据
+            // 丢了；若从没扫描过（`report()` 为 `None`），只显示 loading 提示。
+            let scanning_text = text("扫描中…").size(14).color(tokens.body);
+            match ws_state.report() {
+                Some(report) => {
+                    column![scanning_text, category_content(ws_state.category(), report),].into()
+                }
+                None => container(scanning_text).into(),
+            }
+        } else if let Some(report) = ws_state.report() {
+            let mut col = column![scan_header(ws_state.scanned_at_ms())];
+            if let Some(err) = error {
+                col = col.push(err);
+            }
+            col = col.push(category_content(ws_state.category(), report));
+            col.spacing(8).into()
+        } else {
+            let mut col = column![
+                text("这个项目还没有可分析的 Rust 代码，或者还没有扫描过。")
+                    .size(14)
+                    .color(tokens.body),
+                button(text("扫描")).on_press(Message::ScanRequested),
+            ]
+            .spacing(12);
+            if let Some(err) = error {
+                col = col.push(err);
+            }
+            container(col.padding(16)).into()
         };
-    }
 
-    let Some(report) = ws_state.report() else {
-        let mut col = column![
-            text("这个项目还没有可分析的 Rust 代码，或者还没有扫描过。")
-                .size(14)
-                .color(tokens.body),
-            button(text("扫描")).on_press(Message::ScanRequested),
-        ]
-        .spacing(12);
-        if let Some(err) = error {
-            col = col.push(err);
-        }
-        return container(col.padding(16)).width(width).into();
-    };
-
-    let mut col = column![health_card(report, ws_state.scanned_at_ms())];
-    if let Some(err) = error {
-        col = col.push(err);
-    }
-    col = col.push(problem_list(report));
-    col = col.push(ui_consistency_section(report));
-    container(col).width(width).into()
+    container(scrollable(body))
+        .width(width)
+        .height(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(byteui::theme::color::current().panel.into()),
+            border: outer,
+            ..container::Style::default()
+        })
+        .into()
 }
 
 #[cfg(test)]

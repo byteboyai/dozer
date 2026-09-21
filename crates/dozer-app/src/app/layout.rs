@@ -111,6 +111,9 @@ pub struct PanelDims {
     /// 剩下的。语义同 `agent_split`(默认"内容在前、列表在后",见
     /// `Divider::UsageSplit`)。
     pub usage_split: f32,
+    /// 代码健康度面板配对:分类导航(右侧栏)占右面板区宽度的比例,检测结果
+    /// 内容(左)拿剩下的。语义同 `usage_split`(默认"内容在前、列表在后")。
+    pub codehealth_split: f32,
 }
 
 /// 每项目尺寸的默认值(数值来源统一从这取,迁走的 `ShellLayout::default()`
@@ -139,6 +142,7 @@ pub(crate) fn default_panel_dims() -> PanelDims {
         browser_bookmarks_split: byteui::theme::geometry::default_split_ratio(),
         database_split: byteui::theme::geometry::default_split_ratio(),
         usage_split: byteui::theme::geometry::default_split_ratio(),
+        codehealth_split: byteui::theme::geometry::default_split_ratio(),
     }
 }
 
@@ -245,6 +249,7 @@ pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
         browser_bookmarks_split: clamp_split(d.browser_bookmarks_split),
         database_split: clamp_split(d.database_split),
         usage_split: clamp_split(d.usage_split),
+        codehealth_split: clamp_split(d.codehealth_split),
     }
 }
 
@@ -274,6 +279,9 @@ pub enum Divider {
     /// Agent/Conversations 的互斥右栏轮换,所以单独开一个 divider 而不是
     /// 塞进 `RightPairSplit` 的 `kind` 分支。
     UsageSplit,
+    /// 代码健康度面板内部的分隔线:左边检测结果内容,右边分类导航。语义同
+    /// `UsageSplit`("内容在前、列表在后")。
+    CodeHealthSplit,
     RightPairSplit,
 }
 
@@ -543,8 +551,7 @@ pub(crate) fn pair_split_ratio(dims: &PanelDims, kind: PanelKind) -> Option<f32>
         PanelKind::Agent => Some(dims.agent_split),
         PanelKind::Conversations => Some(dims.conversations_split),
         PanelKind::Usage => Some(dims.usage_split),
-        // CodeHealth 单块内容、无 list pane，不参与分栏 → 无 split 字段。
-        PanelKind::CodeHealth => None,
+        PanelKind::CodeHealth => Some(dims.codehealth_split),
     }
 }
 
@@ -591,8 +598,10 @@ pub(crate) fn with_pair_split_ratio(dims: PanelDims, kind: PanelKind, ratio: f32
             usage_split: ratio,
             ..dims
         },
-        // CodeHealth 无分栏，写入侧原样返回（没有任何 split 字段可写）。
-        PanelKind::CodeHealth => dims,
+        PanelKind::CodeHealth => PanelDims {
+            codehealth_split: ratio,
+            ..dims
+        },
     }
 }
 
@@ -824,6 +833,29 @@ pub(crate) fn apply_column_drag(
                     usage_list_collapsed: false,
                     ..state.dims
                 }
+            }
+        }
+        Divider::CodeHealthSplit => {
+            let side = state.layout.rail_layout.side_of(PanelKind::CodeHealth);
+            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
+            if pair_w <= 0.0 {
+                return state.dims;
+            }
+            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
+                byteui::theme::geometry::min_split_ratio(),
+                byteui::theme::geometry::max_split_ratio(),
+            );
+            let mirrored = side != PanelKind::CodeHealth.default_side();
+            // 代码健康度面板默认"内容在前、分类导航在后"(同 Usage,
+            // `default_list_first = false`)。
+            let ratio = if list_rendered_first(false, mirrored) {
+                raw_ratio
+            } else {
+                1.0 - raw_ratio
+            };
+            PanelDims {
+                codehealth_split: ratio,
+                ..state.dims
             }
         }
         Divider::TodoSplit => {

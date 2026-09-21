@@ -1247,10 +1247,50 @@ pub(crate) fn panel_body<'a>(
             }
         }
         PanelKind::CodeHealth => {
-            // 单块内容、无 list pane、无分栏：整条内容交还给
-            // `codehealth::content_pane`，背景/外框由外层 `right_panel_area`
-            // 的 zone 容器统一套。
-            codehealth::content_pane(&ws.codehealth, Length::Fill).map(Message::CodeHealth)
+            // 2026-09-20 改为两栏：左边检测结果内容，右边分类导航（Rust / UI
+            // 代码健康度）。同 Usage 面板的"内容在前、列表在后"分栏模式。
+            let (list_portion, content_portion) = split_portions(app.dims.codehealth_split);
+            let content_pane = codehealth::content_pane(
+                &ws.codehealth,
+                Length::FillPortion(content_portion),
+                zone_pane_border(zone, lc),
+            )
+            .map(Message::CodeHealth);
+            let list_pane = codehealth::list_pane(
+                &ws.codehealth,
+                Length::FillPortion(list_portion),
+                zone_pane_border(zone, rc),
+            )
+            .map(Message::CodeHealth);
+            let content_bg = byteui::theme::color::current().panel;
+            let list_bg = byteui::theme::color::current().bg;
+            if app.panel_mirrored(PanelKind::CodeHealth) {
+                row![
+                    list_pane,
+                    divider_bar(
+                        Divider::CodeHealthSplit,
+                        list_bg,
+                        content_bg,
+                        Message::ColumnDragStart(Divider::CodeHealthSplit),
+                    ),
+                    content_pane,
+                ]
+                .width(Length::Fill)
+                .into()
+            } else {
+                row![
+                    content_pane,
+                    divider_bar(
+                        Divider::CodeHealthSplit,
+                        content_bg,
+                        list_bg,
+                        Message::ColumnDragStart(Divider::CodeHealthSplit),
+                    ),
+                    list_pane,
+                ]
+                .width(Length::Fill)
+                .into()
+            }
         }
     }
 }

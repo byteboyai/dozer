@@ -209,6 +209,11 @@ impl App {
                     ws.spawn_codehealth_scan(io);
                 });
             }
+            Message::CodeHealth(msg) => {
+                self.with_focused_project(|ws, _io| {
+                    codehealth::update(&mut ws.codehealth, msg);
+                });
+            }
             Message::SelectTab(idx) => self.select_tab(idx),
             Message::SelectTabNoDrag(idx) => self.select_tab_no_drag(idx),
             Message::CloseTab(idx) => {

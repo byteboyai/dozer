@@ -7,9 +7,27 @@ mod aggregate;
 pub(crate) use aggregate::*;
 
 mod view;
-pub(crate) use view::content_pane;
+pub(crate) use view::{content_pane, list_pane};
 
 use dozer_codehealth::ProjectReport;
+
+/// 面板右侧分类导航的两个分类：Rust 代码结构复杂度 vs UI 一致性复杂度。
+/// 左侧内容区按当前选中分类切换显示对应的检测结果（见 `view.rs`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CodeHealthCategory {
+    #[default]
+    Rust,
+    Ui,
+}
+
+impl CodeHealthCategory {
+    pub fn label(self) -> &'static str {
+        match self {
+            CodeHealthCategory::Rust => "Rust 代码健康度",
+            CodeHealthCategory::Ui => "UI 代码健康度",
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct WorkspaceState {
@@ -20,6 +38,8 @@ pub struct WorkspaceState {
     /// "扫描"都会清掉（spec「错误处理」："扫描失败，请重试"，保留上一次
     /// 成功结果的同时要能看到这次失败了）。
     scan_error: Option<String>,
+    /// 右侧分类导航当前选中的分类（默认 Rust）。
+    category: CodeHealthCategory,
 }
 
 impl WorkspaceState {
@@ -38,6 +58,10 @@ impl WorkspaceState {
     pub fn scan_error(&self) -> Option<&str> {
         self.scan_error.as_deref()
     }
+
+    pub fn category(&self) -> CodeHealthCategory {
+        self.category
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +73,8 @@ pub enum Message {
     Scanned(i64, Result<ProjectReport, String>),
     /// 点"扫描"按钮。
     ScanRequested,
+    /// 右侧分类导航点击：切换到对应分类（Rust 代码健康度 / UI 代码健康度）。
+    CategorySet(CodeHealthCategory),
     /// 问题列表点击某函数：文件路径 + 目标行(1-based)。由内核（`app/update.rs`
     /// 的 `Message::CodeHealth` 分发处）拦截转成顶层 `Message::CodeHealthOpenLocation`，
     /// 不进入本模块自己的 `update`（同 `usage::Message::ToggleListCollapse`
@@ -77,6 +103,9 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
         Message::ScanRequested => {
             ws_state.scanning = true;
             ws_state.scan_error = None;
+        }
+        Message::CategorySet(category) => {
+            ws_state.category = category;
         }
         Message::OpenLocation(..) => {
             unreachable!("由内核拦截处理,见 codehealth::Message::OpenLocation 文档")
@@ -184,5 +213,22 @@ mod tests {
         update(&mut ws, Message::Scanned(1, Err("扫描失败".into())));
         update(&mut ws, Message::Scanned(1, Ok(sample_report())));
         assert_eq!(ws.scan_error(), None);
+    }
+
+    #[test]
+    fn category_defaults_to_rust() {
+        assert_eq!(
+            WorkspaceState::default().category(),
+            CodeHealthCategory::Rust
+        );
+    }
+
+    #[test]
+    fn category_set_switches_category() {
+        let mut ws = WorkspaceState::default();
+        update(&mut ws, Message::CategorySet(CodeHealthCategory::Ui));
+        assert_eq!(ws.category(), CodeHealthCategory::Ui);
+        update(&mut ws, Message::CategorySet(CodeHealthCategory::Rust));
+        assert_eq!(ws.category(), CodeHealthCategory::Rust);
     }
 }

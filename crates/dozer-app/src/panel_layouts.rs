@@ -69,6 +69,9 @@ fn legacy_global_dims(layout_path: &Path) -> PanelDims {
                 .get("database_split")
                 .and_then(num)
                 .unwrap_or(byteui::theme::geometry::default_split_ratio()),
+            // 代码健康度面板两栏分栏是这版才加的能力,旧版全局 layout.json
+            // 里不存在这个字段,恒退回默认比例。
+            codehealth_split: byteui::theme::geometry::default_split_ratio(),
         })
         .unwrap_or_default()
 }
