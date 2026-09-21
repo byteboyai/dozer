@@ -1119,6 +1119,18 @@ impl PreviewPane {
             .and_then(|t| t.json_tree.as_mut())
     }
 
+    /// JSON 首屏加载失败(文件内容不是合法 JSON/JSON5)时清掉该 tab 的
+    /// `json_tree` 状态,让 tab 退回纯原生文本编辑器:渲染层 `json_tree` 为
+    /// `None` 时不再走树分支,`editor` 那支照常渲染(JSON 本就是原生编辑器
+    /// 候选,`editor` 独立于树加载存在)。找不到 tab / 本就无树都是 no-op。
+    /// 与 [`json_tree_state_mut`](Self::json_tree_state_mut) 相反——那里把
+    /// `Loading` 变 `Ready`,这里把整支拿掉。
+    pub fn clear_json_tree(&mut self, tab_id: usize) {
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+            tab.json_tree = None;
+        }
+    }
+
     /// 取走(清空)JSON 树的后台加载队列。语义与 `take_pending_tabular_loads`
     /// 完全对齐(见其文档):每次 `open_path` 后立即取走,不跨调用攒着。
     pub fn take_pending_json_tree_loads(&mut self) -> Vec<(usize, PathBuf)> {
@@ -2512,6 +2524,27 @@ mod tests {
         assert!(
             pane.desired_webviews().is_empty(),
             "json tab 不该进 webview 池"
+        );
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn clear_json_tree_drops_tree_and_keeps_editor() {
+        // 内容不是合法 JSON 时,`JsonTreeLoaded` 失败分支会清掉 json_tree,让
+        // tab 退回纯文本编辑器(见 `clear_json_tree`)。editor 独立于树加载,
+        // 清树后仍在;tab 因此重新回到"被原生编辑器认领"的形态,不进 webview 池。
+        let p = std::env::temp_dir().join(format!("json_bad_{}.json", std::process::id()));
+        std::fs::write(&p, "{ not valid json !! }").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(p.clone());
+        assert!(pane.tabs()[pane.active_idx()].json_tree.is_some());
+        pane.clear_json_tree(id);
+        let tab = &pane.tabs()[pane.active_idx()];
+        assert!(tab.json_tree.is_none(), "清树后 json_tree 应为 None");
+        assert!(tab.editor.is_some(), "清树不该动 editor");
+        assert!(
+            pane.desired_webviews().is_empty(),
+            "退回文本编辑器后不该进 webview 池"
         );
         std::fs::remove_file(p).ok();
     }

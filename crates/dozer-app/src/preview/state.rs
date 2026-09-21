@@ -30,7 +30,9 @@ pub struct PreviewTab {
     /// 二选一)。**与 `editor`/`tabular` 不同,JSON 不是"独占认领"——它是双
     /// 视图**:`editor` 仍然有值(原生代码编辑器作为 RawText 半边),`json_tree`
     /// 同时有值提供 Tree 半边。因此 webview 池判据仍不能被 JSON 认领(见
-    /// `desired_webviews`)。`Some` 从打开那一刻起恒定,不随加载完成与否改变。
+    /// `desired_webviews`)。打开那一刻必为 `Some`;唯一的例外是首屏加载失败
+    /// (文件内容不是合法 JSON/JSON5)时被 `PreviewPane::clear_json_tree` 清成
+    /// `None`,退回纯文本编辑器(2026-09-21 用户口径)。
     pub json_tree: Option<JsonTreeState>,
     /// 原生可编辑 tab 的"buffer 与磁盘不一致"标记:用户就地改过、还没 ⌘S 保存
     /// (或右键"刷新"/项目切换丢弃归零)为 `true`。`Blank`/`webview` tab 恒
