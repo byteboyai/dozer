@@ -6,7 +6,7 @@ pub mod scan;
 use anyhow::{Context, Result};
 use dozer_core::protocol::AgentKind;
 use rusqlite::{Connection, OptionalExtension, params};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -19,6 +19,36 @@ pub fn conversation_id_for_path(file_path: &Path) -> Option<String> {
         .file_stem()
         .and_then(|s| s.to_str())
         .map(String::from)
+}
+
+/// 读 Codex rollout 文件头部的 `session_meta` 行,取出这个会话的项目 cwd。
+/// Codex 不按项目建目录(见 `dozer_core::agent_paths::codex_sessions_dir_in`
+/// 注释),项目归属只有这一个来源,所以"摄取时落库"(`ingest_session`)和
+/// "按项目发现文件"(`scan::discover_project_transcript_files_in`)两条路都
+/// 得靠它。
+///
+/// 只读文件头几行(`session_meta` 实测恒为第一行,留点余量),不为了拿 cwd 把
+/// 十几 MB 的 rollout 整份读一遍;也刻意**不**走 `parsed_offset` 增量窗口——
+/// 续摄取时 `session_meta` 早就不在窗口里了。
+pub(crate) fn codex_session_cwd(file_path: &Path) -> Option<String> {
+    const MAX_HEAD_LINES: usize = 8;
+    let file = std::fs::File::open(file_path).ok()?;
+    for line in std::io::BufReader::new(file).lines().take(MAX_HEAD_LINES) {
+        let Ok(line) = line else {
+            return None;
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) == Some("session_meta") {
+            return v
+                .get("payload")
+                .and_then(|p| p.get("cwd"))
+                .and_then(|c| c.as_str())
+                .map(str::to_string);
+        }
+    }
+    None
 }
 
 fn now_ms() -> u64 {
@@ -52,6 +82,26 @@ fn agent_from_str(s: &str) -> AgentKind {
     }
 }
 
+/// `list_conversations_in` 两个查询分支(按 `dir` 的四家 / 按 `cwd` 的 Codex)
+/// 共用的 SELECT 列表与行映射——列顺序两边必须一致,合成一份常量避免漂移。
+const CONVERSATION_SUMMARY_COLUMNS: &str =
+    "conversation_id, agent_kind, file_path, title, first_ts, last_ts, turn_count";
+
+fn conversation_summary_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<dozer_core::protocol::ConversationSummary> {
+    let agent_kind: String = row.get(1)?;
+    Ok(dozer_core::protocol::ConversationSummary {
+        conversation_id: row.get(0)?,
+        agent: agent_from_str(&agent_kind),
+        file_path: row.get(2)?,
+        title: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+        first_ts: row.get(4)?,
+        last_ts: row.get(5)?,
+        turn_count: row.get(6)?,
+    })
+}
+
 pub struct TranscriptStore {
     conn: Mutex<Connection>,
 }
@@ -73,7 +123,8 @@ impl TranscriptStore {
                 last_ts INTEGER NOT NULL,
                 turn_count INTEGER NOT NULL DEFAULT 0,
                 parsed_offset INTEGER NOT NULL DEFAULT 0,
-                file_size_at_parse INTEGER NOT NULL DEFAULT 0
+                file_size_at_parse INTEGER NOT NULL DEFAULT 0,
+                cwd TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_conversations_dir ON conversations(dir);
             CREATE TABLE IF NOT EXISTS conversation_turns (
@@ -116,6 +167,58 @@ impl TranscriptStore {
             )
             .context("迁移 is_error 列")?;
         }
+        // Codex 的项目归属列(老库同样要单独补)。其余四家的 `dir` 就是它们
+        // 各自的项目存储目录,天然能按项目查;Codex 的目录按日期建
+        // (`~/.codex/sessions/YYYY/MM/DD/`,见
+        // `dozer_core::agent_paths::codex_sessions_dir_in` 注释),`dir` 里没有
+        // 项目信息,只能把 `session_meta.payload.cwd` 单独存一列,查询侧按它
+        // 过滤(`list_conversations_in`)。
+        let has_cwd: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('conversations') WHERE name = 'cwd'")?
+            .exists([])?;
+        if !has_cwd {
+            conn.execute("ALTER TABLE conversations ADD COLUMN cwd TEXT", [])
+                .context("迁移 cwd 列")?;
+        }
+        // 索引建在 ALTER 之后:写进上面那段批量 CREATE 里的话,老库(还没补出
+        // cwd 列)会直接报 "no such column: cwd"。
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_conversations_cwd ON conversations(cwd)",
+        )
+        .context("建 cwd 索引")?;
+        // 一次性数据修复(user_version 0 → 1):Codex 解析器是 2026-09-21 才
+        // 落地的,在那之前 `parse_chunk` 对 Codex 恒返回空 Vec,但 dozerd 已经
+        // 按常规流程把线上 Codex 会话整份"消费"过一遍——`parsed_offset` 推到
+        // 了接近 EOF,而增量摄取只读 offset 之后的字节,这些会话于是永久停在
+        // 0 回合(实测线上库 3 条:11 MB 的文件 unread 只剩 2 KB)。这里把
+        // offset 归零、连带删掉旧回合重解析一次。
+        //
+        // 必须连 `conversation_turns` 一起删,不能只归零 offset:Codex 的
+        // message 大多没有 `payload.id`(实测 43 份 rollout:234 条 user 消息
+        // 里 213 条没有),`message_key` 走 `fallback_key`=`{会话id}:{序号}`,
+        // 而序号从"库里已有回合的最大序号+1"起算——留着旧回合再从头解析,
+        // 同一批消息会拿到新序号、UPSERT 撞不上主键,直接翻倍。
+        //
+        // `file_path <> ''` 是为了放过 `record_task_turns` 建的 headless 任务
+        // 占位行(那种行没有真实 transcript 文件,`file_path` 恒为空串,删了
+        // 就再也补不回来)。
+        let user_version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap_or(0);
+        if user_version < 1 {
+            conn.execute_batch(
+                "DELETE FROM conversation_turns WHERE conversation_id IN (
+                     SELECT conversation_id FROM conversations
+                     WHERE agent_kind = 'codex' AND file_path <> ''
+                 );
+                 UPDATE conversations
+                    SET parsed_offset = 0, turn_count = 0, title = NULL
+                  WHERE agent_kind = 'codex' AND file_path <> '';",
+            )
+            .context("重置 Codex 摄取进度")?;
+            conn.execute_batch("PRAGMA user_version = 1")
+                .context("写 user_version")?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -134,6 +237,13 @@ impl TranscriptStore {
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
         let file_path_str = file_path.to_string_lossy().into_owned();
+        // Codex 的项目归属只写在文件头 `session_meta.payload.cwd` 里,单独存一
+        // 列供按项目查询;其余四家的 `dir` 本身就是项目存储目录,留 NULL。
+        // 放在取 DB 锁之前做——这是一次文件 IO,不该占着锁。
+        let cwd = match agent {
+            AgentKind::Codex => codex_session_cwd(file_path),
+            _ => None,
+        };
 
         let file_size = std::fs::metadata(file_path)
             .with_context(|| format!("读取文件元信息失败: {}", file_path.display()))?
@@ -238,14 +348,15 @@ impl TranscriptStore {
         tx.execute(
             "INSERT INTO conversations
              (conversation_id, agent_kind, dir, file_path, title, first_ts, last_ts,
-              turn_count, parsed_offset, file_size_at_parse)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
+              turn_count, parsed_offset, file_size_at_parse, cwd)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
              ON CONFLICT(conversation_id) DO UPDATE SET
                 dir=excluded.dir, file_path=excluded.file_path,
                 title=COALESCE(conversations.title, excluded.title),
                 last_ts=excluded.last_ts, turn_count=excluded.turn_count,
                 parsed_offset=excluded.parsed_offset,
-                file_size_at_parse=excluded.file_size_at_parse",
+                file_size_at_parse=excluded.file_size_at_parse,
+                cwd=COALESCE(excluded.cwd, conversations.cwd)",
             params![
                 conversation_id,
                 agent_to_str(agent),
@@ -257,6 +368,7 @@ impl TranscriptStore {
                 turn_count,
                 new_parsed_offset,
                 file_size,
+                cwd,
             ],
         )?;
         tx.commit()?;
@@ -390,8 +502,8 @@ impl TranscriptStore {
 
     /// 生产入口,内部用 `dozer_core::agent_paths::home_dir()`。按项目根目录
     /// `cwd` 算出的三家 agent 存储目录，删掉这些目录下已摄取的
-    /// conversations 与对应 conversation_turns。返回被删的 conversations
-    /// 行数(三家加总)。
+    /// conversations 与对应 conversation_turns;Codex 不按项目建目录,单独按
+    /// `cwd` 列删。返回被删的 conversations 行数(各家加总)。
     pub fn delete_project_transcripts(&self, cwd: &str) -> Result<u32> {
         self.delete_project_transcripts_in(&dozer_core::agent_paths::home_dir(), cwd)
     }
@@ -421,6 +533,20 @@ impl TranscriptStore {
             let affected = tx.execute("DELETE FROM conversations WHERE dir = ?1", [&d])?;
             deleted = deleted.saturating_add(affected as u32);
         }
+        // Codex 按 cwd 删,不按 dir:它的 `dir` 是日期目录
+        // (`~/.codex/sessions/YYYY/MM/DD/`),同一目录下混着所有项目的会话,
+        // 按 dir 删会把别的项目一起清掉。
+        tx.execute(
+            "DELETE FROM conversation_turns WHERE conversation_id IN
+             (SELECT conversation_id FROM conversations
+              WHERE agent_kind = 'codex' AND cwd = ?1)",
+            [cwd],
+        )?;
+        let affected = tx.execute(
+            "DELETE FROM conversations WHERE agent_kind = 'codex' AND cwd = ?1",
+            [cwd],
+        )?;
+        deleted = deleted.saturating_add(affected as u32);
         tx.commit()?;
         Ok(deleted)
     }
@@ -456,68 +582,60 @@ impl TranscriptStore {
             v8agent_project_dir_in,
         };
         let cwd_path = Path::new(cwd);
-        let candidate_dirs: Vec<(AgentKind, String)> = match agent {
-            Some(a) => {
+        let conn = self.conn.lock().expect("db lock");
+        let mut out = Vec::new();
+
+        // 按 `dir` 查的四家:它们的 `dir` 本身就是各自的项目存储目录,天然
+        // 能按项目过滤。Codex 不在这里——它的 `dir` 是日期目录
+        // (`~/.codex/sessions/YYYY/MM/DD/`),项目归属存在 `cwd` 列,走下面
+        // 独立的按 cwd 分支(见 `agent_paths::codex_sessions_dir_in` 注释)。
+        let dir_agents = [
+            AgentKind::Claude,
+            AgentKind::Codebuddy,
+            AgentKind::Opencode,
+            AgentKind::V8agent,
+        ];
+        let dir_candidates: Vec<(AgentKind, String)> = dir_agents
+            .iter()
+            .filter(|a| agent.is_none() || agent == Some(**a))
+            .map(|a| {
                 let dir = match a {
                     AgentKind::Claude => claude_project_dir_in(home, cwd_path),
                     AgentKind::Codebuddy => codebuddy_project_dir_in(home, cwd_path),
                     AgentKind::Opencode => opencode_project_dir_in(home, cwd_path),
                     AgentKind::V8agent => v8agent_project_dir_in(home, cwd_path),
-                    _ => return Ok(Vec::new()),
+                    _ => unreachable!("dir_agents 只有四家"),
                 };
-                vec![(a, dir.to_string_lossy().into_owned())]
-            }
-            None => vec![
-                (
-                    AgentKind::Claude,
-                    claude_project_dir_in(home, cwd_path)
-                        .to_string_lossy()
-                        .into_owned(),
-                ),
-                (
-                    AgentKind::Codebuddy,
-                    codebuddy_project_dir_in(home, cwd_path)
-                        .to_string_lossy()
-                        .into_owned(),
-                ),
-                (
-                    AgentKind::Opencode,
-                    opencode_project_dir_in(home, cwd_path)
-                        .to_string_lossy()
-                        .into_owned(),
-                ),
-                (
-                    AgentKind::V8agent,
-                    v8agent_project_dir_in(home, cwd_path)
-                        .to_string_lossy()
-                        .into_owned(),
-                ),
-            ],
-        };
-
-        let conn = self.conn.lock().expect("db lock");
-        let mut out = Vec::new();
-        for (_, dir) in &candidate_dirs {
-            let mut stmt = conn.prepare(
-                "SELECT conversation_id, agent_kind, file_path, title, first_ts, last_ts, turn_count
-                 FROM conversations WHERE dir = ?1 ORDER BY last_ts DESC",
-            )?;
-            let rows = stmt.query_map([dir], |row| {
-                let agent_kind: String = row.get(1)?;
-                Ok(dozer_core::protocol::ConversationSummary {
-                    conversation_id: row.get(0)?,
-                    agent: agent_from_str(&agent_kind),
-                    file_path: row.get(2)?,
-                    title: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
-                    first_ts: row.get(4)?,
-                    last_ts: row.get(5)?,
-                    turn_count: row.get(6)?,
-                })
-            })?;
+                (*a, dir.to_string_lossy().into_owned())
+            })
+            .collect();
+        for (_, dir) in &dir_candidates {
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {CONVERSATION_SUMMARY_COLUMNS}
+                 FROM conversations WHERE dir = ?1 ORDER BY last_ts DESC"
+            ))?;
+            let rows = stmt.query_map([dir], conversation_summary_from_row)?;
             for r in rows {
                 out.push(r?);
             }
         }
+
+        // Codex 按 `cwd` 查:`agent_kind = 'codex'` 固定,再限定项目 cwd。上面
+        // 的 `dir_candidates` 已把 agent==Some(其余四家)时该不该查 Codex 的
+        // 情况排除干净,这里只需判断"要不要查 Codex":None(全部)或显式 Codex。
+        let want_codex = agent.is_none() || agent == Some(AgentKind::Codex);
+        if want_codex {
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {CONVERSATION_SUMMARY_COLUMNS}
+                 FROM conversations
+                 WHERE agent_kind = 'codex' AND cwd = ?1 ORDER BY last_ts DESC"
+            ))?;
+            let rows = stmt.query_map([cwd], conversation_summary_from_row)?;
+            for r in rows {
+                out.push(r?);
+            }
+        }
+
         out.sort_by_key(|c| std::cmp::Reverse(c.last_ts));
         let start = (offset as usize).min(out.len());
         let end = (start + limit as usize).min(out.len());
@@ -879,6 +997,46 @@ mod tests {
         assert_eq!(v8agent_only[0].agent, AgentKind::V8agent);
     }
 
+    /// 回归测试：`list_conversations_in` 曾经没有 Codex 的按 cwd 查询分支
+    /// （`Some(Codex)` 落进 `_ => return Ok(Vec::new())`，`None` 分支只有四家
+    /// 的 dir 候选，压根不碰 `cwd` 列），导致哪怕 `conversations` 表里已有
+    /// 带 cwd 的真实 codex 数据，按项目查询也永远查不到。
+    #[test]
+    fn list_conversations_includes_codex_by_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        // Codex 不按项目建目录,直接放临时目录模拟——`ingest_session` 读文件头
+        // `session_meta.payload.cwd` 落库,查询侧按 cwd 过滤,跟文件放哪无关。
+        let f = fixture(
+            tmp.path(),
+            "rollout-1.jsonl",
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"/proj/a\"}}\n",
+                "{\"timestamp\":\"2026-09-21T02:50:44.030Z\",\"type\":\"response_item\",",
+                "\"payload\":{\"type\":\"message\",\"id\":\"m1\",\"role\":\"user\",",
+                "\"content\":[{\"type\":\"input_text\",\"text\":\"codex 对话\"}]}}\n",
+            ),
+        );
+        store.ingest_session(AgentKind::Codex, &f).unwrap();
+
+        let a = store
+            .list_conversations_in(home.path(), "/proj/a", None, 10, 0)
+            .unwrap();
+        assert!(a.iter().any(|c| c.agent == AgentKind::Codex));
+
+        let b = store
+            .list_conversations_in(home.path(), "/proj/b", None, 10, 0)
+            .unwrap();
+        assert!(!b.iter().any(|c| c.agent == AgentKind::Codex));
+
+        let codex_only = store
+            .list_conversations_in(home.path(), "/proj/a", Some(AgentKind::Codex), 10, 0)
+            .unwrap();
+        assert_eq!(codex_only.len(), 1);
+        assert_eq!(codex_only[0].agent, AgentKind::Codex);
+    }
+
     #[test]
     fn list_conversations_respects_limit_and_offset() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1059,6 +1217,46 @@ mod tests {
         assert_eq!(
             store
                 .list_conversations_in(home.path(), cwd_other, None, 100, 0)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    /// Codex 删除按 cwd 不按 dir(它的 dir 是日期目录,同目录混着所有项目),
+    /// 删一个项目不能把同日期目录下别的项目的 Codex 会话一起清掉。
+    #[test]
+    fn delete_project_transcripts_in_removes_codex_by_cwd_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let codex_a = fixture(
+            tmp.path(),
+            "rollout-a.jsonl",
+            "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"/proj/a\"}}\n",
+        );
+        let codex_b = fixture(
+            tmp.path(),
+            "rollout-b.jsonl",
+            "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"/proj/b\"}}\n",
+        );
+        store.ingest_session(AgentKind::Codex, &codex_a).unwrap();
+        store.ingest_session(AgentKind::Codex, &codex_b).unwrap();
+
+        let deleted = store
+            .delete_project_transcripts_in(home.path(), "/proj/a")
+            .unwrap();
+        assert_eq!(deleted, 1);
+        assert_eq!(
+            store
+                .list_conversations_in(home.path(), "/proj/a", None, 100, 0)
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            store
+                .list_conversations_in(home.path(), "/proj/b", None, 100, 0)
                 .unwrap()
                 .len(),
             1

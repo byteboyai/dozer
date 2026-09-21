@@ -307,6 +307,53 @@ fn join_text_blocks_by_kind(blocks: &[Value], kind: &str) -> String {
     text
 }
 
+/// Codex CLI 注入到 `role:"user"` 消息里的合成 content 块:环境上下文、用户
+/// 指令、推荐插件、回合中断通知、`# AGENTS.md instructions` 项目指令、图片
+/// 占位标记——都不是用户真正打的字。
+///
+/// 跟 `is_synthetic_wrapper_content` 的区别是**粒度**:那个判"整条消息",
+/// Codex 这些是按块跟真实用户文本混在同一条消息里的。实测本机 43 份真实
+/// rollout(234 条 user 消息):`<environment_context>` 有 11 次落在第二个块、
+/// 第一个块是 `# AGENTS.md instructions`;`<image ...>`/`</image>` 与用户真实
+/// 文字同处一条消息。所以必须**逐块**剔除、保留剩余真实文本,只有全部块都
+/// 是合成时整条消息才丢弃(同一批数据:58/234 条整条丢弃,其余 176 条留下
+/// 的都是用户真实输入)。按整条消息判前缀会同时漏掉那 11 条、并误杀带图片
+/// 的真实消息。
+///
+/// `dozer-app/src/transcript.rs::extract_line_activity` 的 Codex 分支维护同
+/// 一份前缀表(agent card 的 activity 也读这些文件;两侧解析器按既有做法
+/// 不跨 crate 复用,同 `days_from_civil`/`civil_from_days`),改这里要同步改
+/// 那边。
+pub(crate) fn is_synthetic_codex_block(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed.starts_with("<environment_context")
+        || trimmed.starts_with("<user_instructions")
+        || trimmed.starts_with("<recommended_plugins")
+        || trimmed.starts_with("<turn_aborted")
+        || trimmed.starts_with("<image ")
+        || trimmed.starts_with("<image>")
+        || trimmed.starts_with("</image")
+        || trimmed.starts_with("# AGENTS.md instructions")
+}
+
+/// `join_text_blocks_by_kind` 的 Codex 版:先按块剔掉 CLI 注入的合成块,再
+/// 拼接(为什么必须按块见 `is_synthetic_codex_block`)。
+fn join_real_codex_text_blocks(blocks: &[Value], kind: &str) -> String {
+    let mut text = String::new();
+    for b in blocks {
+        if b.get("type").and_then(|t| t.as_str()) == Some(kind)
+            && let Some(t) = b.get("text").and_then(|t| t.as_str())
+            && !is_synthetic_codex_block(t)
+        {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(t);
+        }
+    }
+    text
+}
+
 fn parse_codebuddy_shaped_chunk(
     text: &str,
     conversation_id: &str,
@@ -548,7 +595,10 @@ fn parse_codex_shaped_chunk(
                     .unwrap_or_else(|| fallback_key(conversation_id, turn_index));
                 match role {
                     Some("user") => {
-                        let content = join_text_blocks_by_kind(blocks, "input_text");
+                        // 逐块剔除 CLI 注入的合成块(环境上下文/AGENTS.md 指令/
+                        // 图片占位等);剩下的全是合成块时整条丢弃,否则会污染
+                        // "首条人类消息当标题"的推导和用量面板的回合计数。
+                        let content = join_real_codex_text_blocks(blocks, "input_text");
                         if content.is_empty() {
                             continue;
                         }

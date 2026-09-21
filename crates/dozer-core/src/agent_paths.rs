@@ -80,6 +80,22 @@ pub fn v8agent_project_dir_in(home: &Path, cwd: &Path) -> PathBuf {
     project_dir_in(home, ".v8agent", cwd)
 }
 
+/// Codex 的 transcript 存储根目录。**故意没有** `codex_project_dir_in`:
+/// Codex 不按项目建目录,而是 `sessions/YYYY/MM/DD/rollout-*.jsonl` 按日期
+/// 三层嵌套(实测本机 43 份 rollout 全是这个布局,见 spike 记录
+/// `docs/superpowers/specs/2026-08-07-codex-spike-findings.md`),项目归属只
+/// 写在每份文件头部 `session_meta.payload.cwd` 里。所以"按项目查 Codex 会话"
+/// 算不出目录,只能靠摄取时把 cwd 落进 `conversations.cwd` 列、查询侧按 cwd
+/// 过滤(dozerd `transcripts/mod.rs::list_conversations_in`)。
+pub fn codex_sessions_dir() -> PathBuf {
+    codex_sessions_dir_in(&home_dir())
+}
+
+/// `home` 显式传入版本,测试用(不碰 `HOME` 环境变量)。
+pub fn codex_sessions_dir_in(home: &Path) -> PathBuf {
+    home.join(".codex").join("sessions")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,5 +143,14 @@ mod tests {
     fn v8agent_dir_uses_claude_style_encoding_under_its_own_root() {
         let d = v8agent_project_dir(Path::new("/a/b/c"));
         assert!(d.to_string_lossy().ends_with("/.v8agent/projects/-a-b-c"));
+    }
+
+    /// Codex 的存储根不参与 `project_key` 编码(它压根没有"项目子目录"这一
+    /// 层,会话按日期嵌套)。锁定这个形状,免得以后有人顺手补一个
+    /// `codex_project_dir_in`、算出一个磁盘上根本不存在的目录当查询键。
+    #[test]
+    fn codex_sessions_dir_is_a_flat_root_without_project_key() {
+        let d = codex_sessions_dir_in(Path::new("/home/u"));
+        assert_eq!(d, PathBuf::from("/home/u/.codex/sessions"));
     }
 }
