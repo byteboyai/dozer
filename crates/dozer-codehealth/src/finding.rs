@@ -53,10 +53,20 @@ pub enum FindingEvidence {
         widget_nesting_depth: usize,
         event_handler_count: usize,
     },
+    NestingDepth {
+        depth: usize,
+    },
+    EventHandlers {
+        count: usize,
+    },
     /// 字面量硬编码（颜色/边距/字体）：代码片段即身份，没有数值指标。
-    Literal { snippet: String },
+    Literal {
+        snippet: String,
+    },
     /// 组件化重复结构：同结构出现次数。
-    Duplicate { occurrences: usize },
+    Duplicate {
+        occurrences: usize,
+    },
 }
 
 impl FindingEvidence {
@@ -66,6 +76,8 @@ impl FindingEvidence {
             FindingEvidence::Structure {
                 complexity_signal, ..
             } => Some(*complexity_signal as i64),
+            FindingEvidence::NestingDepth { depth } => Some(*depth as i64),
+            FindingEvidence::EventHandlers { count } => Some(*count as i64),
             FindingEvidence::Duplicate { occurrences } => Some(*occurrences as i64),
             FindingEvidence::Literal { .. } => None,
         }
@@ -207,6 +219,14 @@ mod tests {
         assert_eq!(
             FindingEvidence::Duplicate { occurrences: 7 }.metric_value(),
             Some(7)
+        );
+        assert_eq!(
+            FindingEvidence::NestingDepth { depth: 5 }.metric_value(),
+            Some(5)
+        );
+        assert_eq!(
+            FindingEvidence::EventHandlers { count: 8 }.metric_value(),
+            Some(8)
         );
         assert_eq!(
             FindingEvidence::Literal {

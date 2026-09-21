@@ -134,17 +134,46 @@ impl CodeHealthStore {
     /// 读取最新一份报告（从快照表取，schema/git 元数据齐全）。
     pub fn get(&self, project_id: i64) -> Result<Option<CodeHealthReportInfo>> {
         let conn = self.conn.lock().expect("db lock");
-        conn.query_row(
-            "SELECT total_loc, total_functions, critical_functions, overall_tier,
+        let snapshot = conn
+            .query_row(
+                "SELECT total_loc, total_functions, critical_functions, overall_tier,
                     report_json, scanned_at_ms, schema_version, git_head,
                     git_branch, git_dirty
              FROM code_health_report_snapshots WHERE project_id = ?1
              ORDER BY scanned_at_ms DESC, id DESC LIMIT 1",
+                [project_id],
+                map_info_row,
+            )
+            .optional()
+            .context("查询代码健康度快照")?;
+        if snapshot.is_some() {
+            return Ok(snapshot);
+        }
+
+        // 升级前只有 `code_health_reports` 最新行。首次重新扫描前仍须展示它，
+        // 否则升级会把已有报告误显示成“尚未扫描”。
+        conn.query_row(
+            "SELECT total_loc, total_functions, critical_functions, overall_tier,
+                    report_json, scanned_at_ms
+             FROM code_health_reports WHERE project_id = ?1",
             [project_id],
-            map_info_row,
+            |row| {
+                Ok(CodeHealthReportInfo {
+                    total_loc: row.get::<_, i64>(0)? as u64,
+                    total_functions: row.get::<_, i64>(1)? as u64,
+                    critical_functions: row.get::<_, i64>(2)? as u64,
+                    overall_tier: row.get(3)?,
+                    report_json: row.get(4)?,
+                    scanned_at_ms: row.get::<_, i64>(5)? as u64,
+                    schema_version: 0,
+                    git_head: None,
+                    git_branch: None,
+                    git_dirty: false,
+                })
+            },
         )
         .optional()
-        .context("查询代码健康度报告")
+        .context("查询旧版代码健康度报告")
     }
 
     /// 读取最近 `limit` 份快照（按时间倒序）。`limit` 上限钳制到
@@ -316,5 +345,33 @@ mod tests {
         let store = CodeHealthStore::new(&db).unwrap();
         store.save(1, &info(42)).unwrap();
         assert_eq!(store.get(1).unwrap().unwrap().total_loc, 42);
+    }
+
+    #[test]
+    fn old_latest_report_is_read_before_first_new_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("old-with-report.db");
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE code_health_reports (
+                    project_id INTEGER PRIMARY KEY,
+                    total_loc INTEGER NOT NULL,
+                    total_functions INTEGER NOT NULL,
+                    critical_functions INTEGER NOT NULL,
+                    overall_tier TEXT NOT NULL,
+                    report_json TEXT NOT NULL,
+                    scanned_at_ms INTEGER NOT NULL
+                 );
+                 INSERT INTO code_health_reports VALUES
+                    (7, 123, 9, 2, 'Watch', '{\"total_loc\":123}', 456);",
+            )
+            .unwrap();
+        }
+        let store = CodeHealthStore::new(&db).unwrap();
+        let got = store.get(7).unwrap().expect("旧报告仍应可读");
+        assert_eq!(got.total_loc, 123);
+        assert_eq!(got.scanned_at_ms, 456);
+        assert_eq!(got.schema_version, 0);
     }
 }

@@ -127,8 +127,9 @@ pub fn spawn_scan(
             .await
             .ok()
             .unwrap_or_default();
+        // 新报告尚未保存，倒序历史的第 0 项就是本次扫描应比较的直接前驱。
         let previous = history
-            .get(1)
+            .first()
             .and_then(|info| parse_report(&info.report_json));
 
         let scan_path = project_path.clone();
@@ -136,6 +137,9 @@ pub fn spawn_scan(
         let scanned = tokio::task::spawn_blocking(move || {
             let mut report =
                 dozer_codehealth::scan_project(&scan_path).map_err(|e| e.to_string())?;
+            if report.scan.status == dozer_codehealth::ScanStatus::Failed {
+                return Err("扫描失败：项目路径不可用".to_string());
+            }
             report.git = super::git_hotspots::git_snapshot(&scan_path);
             let panel = finish_panel(&scan_path, Some((report, None)), prev_for_scan, None);
             Ok::<PanelState, String>(panel)

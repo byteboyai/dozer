@@ -1610,6 +1610,27 @@ impl App {
                 }
             }
 
+            Message::Files(files::Message::TabContextMenuCloseTab(_kind, path)) => {
+                // 预览 tab 右键"关闭":先收起菜单,再在两个预览面板里按路径定位
+                // 出对应 tab,调 `PreviewPane::close` 把它关掉(原生 editor 档释放
+                // 编辑器、wry 档回收 webview,见 `preview.rs::PreviewPane::close`
+                // 文档)。路径同时命中两个面板的概率极低(同一项目),找到即止。
+                self.files.close_context_menu();
+                let Some(project_id) = self.active_project_id else {
+                    return;
+                };
+                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+                    return;
+                };
+                if let Some(idx) = ws.preview.find_existing_file_tab(&path) {
+                    ws.preview.close(idx);
+                    return;
+                }
+                if let Some(idx) = ws.project_preview.find_existing_file_tab(&path) {
+                    ws.project_preview.close(idx);
+                }
+            }
+
             Message::Files(files::Message::ToolbarHover(target, hovered)) => {
                 // 文件树工具行 icon 按钮的 hover:本面板不挂 App 的 hover 动画
                 // 表,把进入/离开转发成 `HoverId` 由内核统一驱动动画进度。

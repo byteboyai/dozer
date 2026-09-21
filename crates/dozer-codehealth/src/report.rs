@@ -175,7 +175,7 @@ fn build_findings(inputs: &FindingInputs<'_>) -> Vec<Finding> {
             rule_ids::STRUCTURE_COMPLEXITY,
             &f.file,
             Some(&f.name),
-            &f.name,
+            &f.identity,
         );
         out.push(Finding {
             id,
@@ -203,8 +203,14 @@ fn build_findings(inputs: &FindingInputs<'_>) -> Vec<Finding> {
         (font_findings, rule_ids::FONT_HARDCODE, font_tier),
     ] {
         let severity = tier_to_finding_severity(tier);
+        let mut occurrences = std::collections::HashMap::<(&Path, &str), usize>::new();
         for lit in findings {
-            let id = stable_finding_id(rule, &lit.file, None, &lit.snippet);
+            let ordinal = occurrences
+                .entry((lit.file.as_path(), lit.snippet.as_str()))
+                .and_modify(|n| *n += 1)
+                .or_insert(0);
+            let signature = format!("{}#{ordinal}", lit.snippet);
+            let id = stable_finding_id(rule, &lit.file, None, &signature);
             out.push(Finding {
                 id,
                 rule_id: rule.to_string(),
@@ -228,7 +234,7 @@ fn build_findings(inputs: &FindingInputs<'_>) -> Vec<Finding> {
         .filter(|f| nesting_depth_tier(f.widget_nesting_depth) != HealthTier::Healthy)
     {
         let severity = tier_to_finding_severity(nesting_depth_tier(f.widget_nesting_depth));
-        let id = stable_finding_id(rule_ids::NESTING_DEPTH, &f.file, Some(&f.name), &f.name);
+        let id = stable_finding_id(rule_ids::NESTING_DEPTH, &f.file, Some(&f.name), &f.identity);
         out.push(Finding {
             id,
             rule_id: rule_ids::NESTING_DEPTH.to_string(),
@@ -238,11 +244,8 @@ fn build_findings(inputs: &FindingInputs<'_>) -> Vec<Finding> {
             start_line: f.start_line,
             symbol: Some(f.name.clone()),
             title: format!("{} 组件嵌套深度 {}", f.name, f.widget_nesting_depth),
-            evidence: FindingEvidence::Structure {
-                complexity_signal: f.complexity_signal,
-                loc: f.loc,
-                widget_nesting_depth: f.widget_nesting_depth,
-                event_handler_count: f.event_handler_count,
+            evidence: FindingEvidence::NestingDepth {
+                depth: f.widget_nesting_depth,
             },
             applicability: Applicability::Applicable,
         });
@@ -258,7 +261,7 @@ fn build_findings(inputs: &FindingInputs<'_>) -> Vec<Finding> {
             rule_ids::EVENT_HANDLER_DENSITY,
             &f.file,
             Some(&f.name),
-            &f.name,
+            &f.identity,
         );
         out.push(Finding {
             id,
@@ -269,11 +272,8 @@ fn build_findings(inputs: &FindingInputs<'_>) -> Vec<Finding> {
             start_line: f.start_line,
             symbol: Some(f.name.clone()),
             title: format!("{} 回调数 {}", f.name, f.event_handler_count),
-            evidence: FindingEvidence::Structure {
-                complexity_signal: f.complexity_signal,
-                loc: f.loc,
-                widget_nesting_depth: f.widget_nesting_depth,
-                event_handler_count: f.event_handler_count,
+            evidence: FindingEvidence::EventHandlers {
+                count: f.event_handler_count,
             },
             applicability: Applicability::Applicable,
         });
@@ -386,6 +386,7 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
     let mut spacing_findings = Vec::new();
     let mut font_findings = Vec::new();
     let mut duplicate_registry: HashMap<String, Vec<(PathBuf, usize)>> = HashMap::new();
+    let mut iced_detected = false;
 
     for rel in &disc.rust_files {
         let abs = root.join(rel);
@@ -410,7 +411,6 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
             }
         };
 
-        total_loc += src.lines().count();
         let ast = SupportLang::Rust.ast_grep(&src);
         let root_node = ast.root();
         // tree-sitter 出错恢复仍产出带 ERROR 节点的树；有 ERROR 节点即视为
@@ -424,6 +424,9 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
         }
 
         analyzed_files += 1;
+        total_loc += src.lines().count();
+        iced_detected |=
+            src.contains("iced_widget") || src.contains("use iced::") || src.contains("iced::");
         // 同一棵 AST 同时喂结构复杂度与 UI 规则，避免重复解析（spec 性能约束）。
         all_functions.extend(crate::function_metric::functions_in_source(
             &root_node, rel, &patterns,
@@ -487,7 +490,7 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
     .max()
     .unwrap();
 
-    let findings = build_findings(&FindingInputs {
+    let mut findings = build_findings(&FindingInputs {
         functions: &functions,
         color_findings: &color_findings,
         color_tier: color_t,
@@ -497,6 +500,14 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
         font_tier: font_t,
         duplicate_clusters: &duplicate_clusters,
     });
+    if !iced_detected {
+        for finding in findings
+            .iter_mut()
+            .filter(|f| f.category == FindingCategory::UiConsistency)
+        {
+            finding.applicability = Applicability::NotApplicable;
+        }
+    }
 
     let status = if skipped.iter().any(|s| {
         matches!(
@@ -511,16 +522,20 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
         ScanStatus::Complete
     };
 
-    let discovered_files = analyzed_files + skipped.len();
     let scan = ScanMetadata {
         started_at_ms: started,
         duration_ms: now_ms().saturating_sub(started),
         status,
-        discovered_files,
+        discovered_files: disc.discovered_count,
         analyzed_files,
         excluded_files: disc.excluded_count,
         skipped_files: skipped,
         languages: disc.languages,
+        frameworks: if iced_detected {
+            vec!["iced".to_string()]
+        } else {
+            Vec::new()
+        },
     };
 
     Ok(ProjectReport {
@@ -570,6 +585,7 @@ mod tests {
     fn file_metric_flags_on_critical_function() {
         let f = FunctionMetric {
             name: "x".into(),
+            identity: "x".into(),
             file: PathBuf::from("a.rs"),
             start_line: 1,
             end_line: 2,
@@ -826,6 +842,63 @@ mod v2_tests {
         assert_eq!(structure_findings.len(), 1);
         assert_eq!(structure_findings[0].evidence.metric_value(), Some(41));
         assert_eq!(structure_findings[0].severity, FindingSeverity::Critical);
+    }
+
+    #[test]
+    fn repeated_identical_literals_have_unique_stable_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("ui.rs"),
+            "fn view() { a.padding(8); b.padding(8); }",
+        )
+        .unwrap();
+        let first = scan_project(dir.path()).unwrap();
+        let second = scan_project(dir.path()).unwrap();
+        let ids = |report: &ProjectReport| {
+            report
+                .findings
+                .iter()
+                .filter(|f| f.rule_id == rule_ids::SPACING_HARDCODE)
+                .map(|f| f.id.clone())
+                .collect::<Vec<_>>()
+        };
+        let first_ids = ids(&first);
+        assert_eq!(first_ids.len(), 2);
+        assert_ne!(first_ids[0], first_ids[1]);
+        assert_eq!(first_ids, ids(&second));
+        let diff = crate::diff_reports(&first.findings, &second.findings);
+        assert_eq!(diff.new_count(), 0);
+    }
+
+    #[test]
+    fn iced_applicability_requires_detected_framework() {
+        let plain = tempfile::tempdir().unwrap();
+        fs::write(plain.path().join("plain.rs"), "fn view() { a.padding(8); }").unwrap();
+        let plain_report = scan_project(plain.path()).unwrap();
+        assert!(plain_report.scan.frameworks.is_empty());
+        assert!(
+            plain_report
+                .findings
+                .iter()
+                .filter(|f| f.category == FindingCategory::UiConsistency)
+                .all(|f| f.applicability == Applicability::NotApplicable)
+        );
+
+        let iced = tempfile::tempdir().unwrap();
+        fs::write(
+            iced.path().join("iced.rs"),
+            "use iced_widget::button; fn view() { a.padding(8); }",
+        )
+        .unwrap();
+        let iced_report = scan_project(iced.path()).unwrap();
+        assert_eq!(iced_report.scan.frameworks, vec!["iced"]);
+        assert!(
+            iced_report
+                .findings
+                .iter()
+                .filter(|f| f.category == FindingCategory::UiConsistency)
+                .all(|f| f.applicability == Applicability::Applicable)
+        );
     }
 }
 

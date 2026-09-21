@@ -204,4 +204,23 @@ mod tests {
         assert_eq!(diff.worsened_count(), 0);
         assert_eq!(diff.improved_count(), 0);
     }
+
+    #[test]
+    fn nesting_and_handler_rules_compare_their_own_metrics() {
+        let mut nesting_prev = finding("nest", 99);
+        nesting_prev.evidence = FindingEvidence::NestingDepth { depth: 3 };
+        let mut nesting_cur = nesting_prev.clone();
+        nesting_cur.evidence = FindingEvidence::NestingDepth { depth: 5 };
+
+        let mut handler_prev = finding("handlers", 99);
+        handler_prev.evidence = FindingEvidence::EventHandlers { count: 6 };
+        let mut handler_cur = handler_prev.clone();
+        handler_cur.evidence = FindingEvidence::EventHandlers { count: 4 };
+
+        let diff = diff_reports(&[nesting_prev, handler_prev], &[nesting_cur, handler_cur]);
+        assert_eq!(diff.worsened_count(), 1);
+        assert_eq!(diff.worsened[0].id, "nest");
+        assert_eq!(diff.improved_count(), 1);
+        assert_eq!(diff.improved[0].id, "handlers");
+    }
 }

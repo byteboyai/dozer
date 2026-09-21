@@ -166,11 +166,7 @@ pub fn scope_summary(ws: &WorkspaceState) -> Option<ScopeSummary> {
 /// UI 一致性检测是否适用于当前项目：只有语义分析了 Rust（可能用 iced）才
 /// 适用；未识别到 Rust/iced 时返回 `false`，渲染层显示“不适用”而非“健康”。
 pub fn ui_consistency_applicable(report: &ProjectReport) -> bool {
-    report
-        .scan
-        .languages
-        .iter()
-        .any(|l| l.language == "rust" && l.analyzed && l.files > 0)
+    report.scan.frameworks.iter().any(|f| f == "iced")
 }
 
 /// 空状态分类（spec「空状态拆成」）。渲染层据此选文案，不把几种情况合并。
@@ -221,6 +217,12 @@ pub fn analyze_finding_text(
         }
         dozer_codehealth::FindingEvidence::Duplicate { occurrences } => {
             lines.push(format!("证据：同结构出现 {occurrences} 次"));
+        }
+        dozer_codehealth::FindingEvidence::NestingDepth { depth } => {
+            lines.push(format!("证据：组件树嵌套深度 {depth}"));
+        }
+        dozer_codehealth::FindingEvidence::EventHandlers { count } => {
+            lines.push(format!("证据：事件回调 {count} 个"));
         }
     }
     if let Some(c) = change {
@@ -384,7 +386,8 @@ mod tests {
 
     #[test]
     fn ui_consistency_applicable_with_rust() {
-        let r = report_with(0, 0, vec![]);
+        let mut r = report_with(0, 0, vec![]);
+        r.scan.frameworks = vec!["iced".into()];
         assert!(ui_consistency_applicable(&r));
     }
 

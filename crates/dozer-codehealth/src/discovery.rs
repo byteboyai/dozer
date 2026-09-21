@@ -50,6 +50,8 @@ pub fn load_project_config(root: &Path) -> ProjectConfig {
 /// 一次文件遍历的结果。
 #[derive(Debug, Default)]
 pub struct Discovery {
+    /// 内置构建目录剪枝后、其它 ignore 规则生效前看到的文件总数。
+    pub discovered_count: usize,
     /// 需要语义分析的文件（相对项目根的规范化路径）。
     pub rust_files: Vec<PathBuf>,
     /// 语言统计（含仅统计、不做结构分析的非 Rust 语言）。
@@ -134,6 +136,7 @@ pub fn discover(root: &Path, config: &ProjectConfig) -> Discovery {
     });
 
     let mut lang_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut filtered_seen = 0usize;
 
     for result in builder.build() {
         let Ok(entry) = result else {
@@ -142,6 +145,7 @@ pub fn discover(root: &Path, config: &ProjectConfig) -> Discovery {
         if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
             continue;
         }
+        filtered_seen += 1;
         let path = entry.path();
         let Ok(rel) = path.strip_prefix(root) else {
             continue;
@@ -177,6 +181,8 @@ pub fn discover(root: &Path, config: &ProjectConfig) -> Discovery {
     }
 
     out.rust_files.sort();
+    out.discovered_count = count_files_before_ignore(root);
+    out.excluded_count += out.discovered_count.saturating_sub(filtered_seen);
 
     // 语言统计：Rust 语义分析 + 其它语言仅统计。
     let mut languages: Vec<LanguageSummary> = lang_counts
@@ -196,6 +202,26 @@ pub fn discover(root: &Path, config: &ProjectConfig) -> Discovery {
     out.languages = languages;
 
     out
+}
+
+/// 第二次轻量遍历只用来统计被 `.gitignore`/`.ignore`/隐藏规则剪掉的文件。
+/// 内置大型构建目录仍然剪枝，避免为了一个计数遍历 target/node_modules。
+fn count_files_before_ignore(root: &Path) -> usize {
+    let mut builder = ignore::WalkBuilder::new(root);
+    builder.standard_filters(false);
+    builder.filter_entry(|entry| {
+        !(entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
+            && entry
+                .file_name()
+                .to_str()
+                .map(|n| BUILTIN_IGNORE_DIRS.contains(&n))
+                .unwrap_or(false))
+    });
+    builder
+        .build()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .count()
 }
 
 fn build_globset(patterns: &[String]) -> GlobSet {
@@ -222,6 +248,11 @@ mod tests {
         let cfg = ProjectConfig::default();
         let d = discover(dir.path(), &cfg);
         assert_eq!(d.rust_files, vec![PathBuf::from("kept.rs")]);
+        assert_eq!(d.discovered_count, 3, "包含 .gitignore 本身");
+        assert_eq!(
+            d.excluded_count, 2,
+            "ignored.rs 与隐藏规则排除的 .gitignore 本身均应计数"
+        );
     }
 
     #[test]

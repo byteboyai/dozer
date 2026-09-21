@@ -76,6 +76,9 @@ pub struct ScanMetadata {
     pub skipped_files: Vec<SkippedFile>,
     /// 语言统计摘要。
     pub languages: Vec<LanguageSummary>,
+    /// 扫描中实际识别到的 UI 框架标识，如 `"iced"`。
+    #[serde(default)]
+    pub frameworks: Vec<String>,
 }
 
 /// 扫描时的 Git 基准信息。由应用层（`codehealth::git_hotspots`）在扫描前
@@ -147,6 +150,7 @@ mod tests {
                 files: 8,
                 analyzed: true,
             }],
+            frameworks: vec!["iced".into()],
         };
         let json = serde_json::to_string(&meta).unwrap();
         let back: ScanMetadata = serde_json::from_str(&json).unwrap();

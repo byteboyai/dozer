@@ -12,6 +12,9 @@ pub enum Severity {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FunctionMetric {
     pub name: String,
+    /// 跨扫描身份使用的限定名（模块/impl/trait + 函数名）。
+    #[serde(default)]
+    pub identity: String,
     pub file: PathBuf,
     pub start_line: usize,
     pub end_line: usize,
@@ -48,6 +51,34 @@ fn complexity_signal_of<D: Doc>(node: &ast_grep_core::Node<'_, D>) -> usize {
         .count()
 }
 
+fn function_identity<D: Doc>(node: &ast_grep_core::Node<'_, D>, name: &str) -> String {
+    let mut owners = Vec::new();
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        match parent.kind().as_ref() {
+            "impl_item" => {
+                if let Some(owner) = parent.field("type") {
+                    let trait_name = parent
+                        .field("trait")
+                        .map(|t| format!("{} for ", t.text()))
+                        .unwrap_or_default();
+                    owners.push(format!("impl {trait_name}{}", owner.text()));
+                }
+            }
+            "trait_item" | "mod_item" => {
+                if let Some(owner) = parent.field("name") {
+                    owners.push(owner.text().to_string());
+                }
+            }
+            _ => {}
+        }
+        current = parent.parent();
+    }
+    owners.reverse();
+    owners.push(name.to_string());
+    owners.join("::")
+}
+
 /// 从**已经解析好的** AST 根节点提取函数级指标。调用方（`scan_project`）负责
 /// 只解析一次源码并把根节点传进来，同一棵树同时供结构复杂度与 UI 规则复用
 /// （spec 性能约束「同一源文件只解析一次 AST」）。
@@ -68,6 +99,7 @@ pub fn functions_in_source<D: Doc>(
             let complexity_signal = complexity_signal_of(&f);
             let fn_source = f.text();
             FunctionMetric {
+                identity: function_identity(&f, &name),
                 name,
                 file: file.to_path_buf(),
                 start_line,
@@ -146,6 +178,16 @@ mod tests {
         assert_eq!(metrics.len(), 2);
         assert_eq!(metrics[0].name, "one");
         assert_eq!(metrics[1].name, "two");
+    }
+
+    #[test]
+    fn identity_distinguishes_same_method_name_in_different_impls() {
+        let src = "struct A; struct B; impl A { fn new() {} } impl B { fn new() {} }";
+        let metrics = metrics_of(src, Path::new("same.rs"));
+        assert_eq!(metrics.len(), 2);
+        assert_ne!(metrics[0].identity, metrics[1].identity);
+        assert!(metrics.iter().any(|m| m.identity.contains("impl A::new")));
+        assert!(metrics.iter().any(|m| m.identity.contains("impl B::new")));
     }
 
     #[test]

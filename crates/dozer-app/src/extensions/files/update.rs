@@ -112,7 +112,7 @@ pub fn update(
                 // `CopyPath`/`FileHistoryOpen` 等需要顶层 `App::update` 拦截的
                 // 消息(`TabReloadFromDisk` 也是 app 层拦截)。
                 let is_git_repo = ws_state.git_is_repo;
-                let items = tab_context_menu_items(&path, is_git_repo, external_apps);
+                let items = tab_context_menu_items(kind, &path, is_git_repo, external_apps);
                 if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
                     emit(msg);
                 }
@@ -614,6 +614,11 @@ pub fn update(
         // `files::update`。这里留空臂保持 match 穷尽(同 `CopyPath` 在 app 层
         // 写剪贴板的既定分工)。
         Message::TabReloadFromDisk(_) => {}
+        // `TabContextMenuCloseTab` 由 app 层(`App::update`)拦截处理:在 Files/
+        // Project 两个预览面板按路径找 tab 调 `PreviewPane::close`,不进
+        // `files::update`。这里留空臂保持 match 穷尽(同 `TabReloadFromDisk` 的
+        // app 层拦截口径)。
+        Message::TabContextMenuCloseTab(_, _) => {}
     }
 }
 

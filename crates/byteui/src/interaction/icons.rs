@@ -191,6 +191,9 @@ pub enum IconKind {
     CircleArrowLeft,
     /// 浏览器面板"前进"导航按钮图标(Lucide circle-arrow-right)。
     CircleArrowRight,
+    /// 预览 tab 右键菜单"关闭"图标(Lucide circle-x:圆环 + 中心叉,语义聚焦
+    /// "关闭这个 tab"),2026-09-21 起用于预览 tab 右键菜单顶部"关闭"项。
+    CircleX,
     /// 浏览器面板"刷新"导航按钮图标(Lucide rotate-cw)。
     RotateCw,
     /// 文件预览面板右上角"收起文件树"按钮图标:文件树位于**左侧** zone 时,
@@ -312,6 +315,7 @@ impl IconKind {
             IconKind::CircleArrowRight => {
                 include_bytes!("../../assets/icons/circle-arrow-right.svg")
             }
+            IconKind::CircleX => include_bytes!("../../assets/icons/circle-x.svg"),
             IconKind::RotateCw => include_bytes!("../../assets/icons/rotate-cw.svg"),
             IconKind::PanelLeftClose => {
                 include_bytes!("../../assets/icons/panel-left-close.svg")

@@ -221,6 +221,12 @@ pub enum Message {
     /// 预览 tab 页签右键菜单的关闭(dismiss)。与 `ContextMenuClose` 同口径,
     /// 由 `close_context_menu()` 统一清掉两类菜单。
     TabContextMenuClose,
+    /// 预览 tab 右键菜单"关闭":关掉右键目标所对应的那个预览 tab。携带该 tab
+    /// 所在预览面板种类(Files/Project)与其文件的绝对路径——`app/update.rs`
+    /// 在两个预览面板里按路径定位 tab、调 `PreviewPane::close` 关掉它(见
+    /// `preview.rs::PreviewPane::close` 文档)。`kind` 决定优先命中哪个面板,
+    /// 与 `TabContextMenuOpen` 同一口径。
+    TabContextMenuCloseTab(crate::app::PanelKind, PathBuf),
     /// 预览 tab 右键"从磁盘重新加载":内核/app 拦截,不进 `files::update`——
     /// 由 `app/update.rs` 在 Files/Project 两个预览面板里按路径找出对应 tab,
     /// 调 `PreviewPane::bump_reload` 重建编辑器/推进 webview 的 `reload_nonce`
