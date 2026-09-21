@@ -477,7 +477,13 @@ async fn code_health_report_history_roundtrip() {
 
     // 还没扫描过 → None / 空列表。
     assert_eq!(client.get_code_health_report(1).await.unwrap(), None);
-    assert!(client.list_code_health_reports(1, 10).await.unwrap().is_empty());
+    assert!(
+        client
+            .list_code_health_reports(1, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     let mk = |loc: u64| CodeHealthReportInfo {
         total_loc: loc,

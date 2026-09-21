@@ -808,11 +808,12 @@ impl Workspace {
             return;
         };
         let project_id = p.id;
+        let project_path = PathBuf::from(&p.path);
         let proxy = io.proxy.clone();
         let emit = move |m| {
             let _ = proxy.send_event(Message::CodeHealth(m));
         };
-        codehealth::spawn_load_cached(project_id, &io.client, &io.handle, emit);
+        codehealth::spawn_load_cached(project_id, project_path, &io.client, &io.handle, emit);
     }
 
     /// 点"扫描"按钮：本地跑 `dozer_codehealth::scan_project`（CPU/IO 密集，
