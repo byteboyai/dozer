@@ -16,7 +16,7 @@ use crate::architecture::{
     ArchitectureEdge, ArchitectureEdgeKind, ArchitectureEvidence, ArchitectureNode,
     ArchitectureNodeKind, ArchitectureStatus, crate_node_id, edge_id, external_node_id,
 };
-use cargo_metadata::{Metadata, MetadataCommand, Package};
+use cargo_metadata::{Metadata, MetadataCommand, Package, TargetKind};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -43,6 +43,8 @@ pub struct CargoGraph {
     /// member package name → `src` 目录（相对项目根的规范化路径），供 module 图
     /// 把文件路径映射回 crate。取不到时缺省。
     pub member_src_dirs: BTreeMap<String, PathBuf>,
+    /// Cargo 声明的实际 target 根，支持自定义 lib/bin 路径与多 target package。
+    pub member_roots: Vec<crate::module_architecture::CrateRoots>,
 }
 
 /// 项目根里用于查找 workspace 的候选 manifest 相对路径。
@@ -124,6 +126,7 @@ pub fn graph_from_metadata(root: &Path, metadata: &Metadata) -> CargoGraph {
     let mut member_name_to_id: BTreeMap<String, String> = BTreeMap::new();
     let mut nodes: Vec<ArchitectureNode> = Vec::new();
     let mut member_src_dirs: BTreeMap<String, PathBuf> = BTreeMap::new();
+    let mut member_roots = Vec::new();
     let mut member_packages: Vec<&Package> = metadata
         .packages
         .iter()
@@ -148,6 +151,7 @@ pub fn graph_from_metadata(root: &Path, metadata: &Metadata) -> CargoGraph {
         if let Some(src) = package_src_dir(root, pkg) {
             member_src_dirs.entry(pkg.name.clone()).or_insert(src);
         }
+        member_roots.push(crate_roots_from_package(root, pkg));
         nodes.push(ArchitectureNode {
             id,
             kind: ArchitectureNodeKind::Crate,
@@ -199,6 +203,8 @@ pub fn graph_from_metadata(root: &Path, metadata: &Metadata) -> CargoGraph {
                         path: manifest_rel.clone(),
                         line: 1,
                         snippet: snippet.clone(),
+                        is_reexport: false,
+                        condition: dep.target.as_ref().map(ToString::to_string),
                     });
             } else {
                 // 直接第三方依赖 → external 节点（默认 UI 不展示）。
@@ -229,6 +235,8 @@ pub fn graph_from_metadata(root: &Path, metadata: &Metadata) -> CargoGraph {
                         path: manifest_rel.clone(),
                         line: 1,
                         snippet,
+                        is_reexport: false,
+                        condition: dep.target.as_ref().map(ToString::to_string),
                     });
             }
         }
@@ -257,7 +265,62 @@ pub fn graph_from_metadata(root: &Path, metadata: &Metadata) -> CargoGraph {
         workspace_root,
         member_count,
         member_src_dirs,
+        member_roots,
     }
+}
+
+fn crate_roots_from_package(root: &Path, pkg: &Package) -> crate::module_architecture::CrateRoots {
+    let mut targets = Vec::new();
+    for target in &pkg.targets {
+        let root_file = rel_path(root, target.src_path.as_std_path());
+        let is_library = target.kind.iter().any(|k| {
+            matches!(
+                k,
+                TargetKind::Lib
+                    | TargetKind::RLib
+                    | TargetKind::DyLib
+                    | TargetKind::CDyLib
+                    | TargetKind::StaticLib
+                    | TargetKind::ProcMacro
+            )
+        });
+        let module_prefix = if is_library {
+            Vec::new()
+        } else {
+            vec![target_kind_label(target.kind.first()), target.name.clone()]
+        };
+        targets.push(crate::module_architecture::TargetRoot {
+            source_dir: root_file.parent().unwrap_or(Path::new("")).to_path_buf(),
+            root_file,
+            module_prefix,
+        });
+    }
+    crate::module_architecture::CrateRoots {
+        crate_name: pkg.name.clone(),
+        targets,
+        dependency_aliases: pkg
+            .dependencies
+            .iter()
+            .map(|dep| {
+                (
+                    dep.rename.as_deref().unwrap_or(&dep.name).replace('-', "_"),
+                    dep.name.clone(),
+                )
+            })
+            .collect(),
+    }
+}
+
+fn target_kind_label(kind: Option<&TargetKind>) -> String {
+    match kind {
+        Some(TargetKind::Bin) => "bin",
+        Some(TargetKind::Example) => "example",
+        Some(TargetKind::Test) => "test",
+        Some(TargetKind::Bench) => "bench",
+        Some(TargetKind::CustomBuild) => "build",
+        _ => "target",
+    }
+    .to_string()
 }
 
 /// 一个 member package 的 `src` 目录（相对项目根）。取所有 target 里最浅的

@@ -107,7 +107,7 @@ pub fn analyze_architecture(
 
     // 依赖环发现：每个 cycle 一条。
     for cycle in &cycles {
-        findings.push(cycle_finding(cycle, &nodes, &index_of));
+        findings.push(cycle_finding(cycle, &nodes, &internal_edges));
     }
 
     // 依赖枢纽发现：fan_out 超阈值。
@@ -115,8 +115,18 @@ pub fn analyze_architecture(
         if node.external {
             continue;
         }
-        if node.fan_out >= config.max_fan_out {
-            let severity = if node.fan_out >= config.critical_fan_out {
+        let watch_threshold = if config.max_fan_out == 0 {
+            crate::discovery::DEFAULT_MAX_FAN_OUT
+        } else {
+            config.max_fan_out
+        };
+        let critical_threshold = if config.critical_fan_out < watch_threshold {
+            crate::discovery::DEFAULT_CRITICAL_FAN_OUT.max(watch_threshold)
+        } else {
+            config.critical_fan_out
+        };
+        if node.fan_out >= watch_threshold {
+            let severity = if node.fan_out >= critical_threshold {
                 FindingSeverity::Critical
             } else {
                 FindingSeverity::Watch
@@ -178,12 +188,16 @@ fn assign_layers(
         let mut builder = GlobSetBuilder::new();
         let mut ok = false;
         for pat in &layer.r#match {
-            match Glob::new(pat) {
-                Ok(g) => {
-                    builder.add(g);
-                    ok = true;
+            for candidate in normalized_layer_patterns(pat) {
+                match Glob::new(&candidate) {
+                    Ok(g) => {
+                        builder.add(g);
+                        ok = true;
+                    }
+                    Err(_) => {
+                        errors.push(format!("architecture.layers[{i}].match 无效 glob：{pat}"))
+                    }
                 }
-                Err(_) => errors.push(format!("architecture.layers[{i}].match 无效 glob：{pat}")),
             }
         }
         if ok && let Ok(set) = builder.build() {
@@ -196,14 +210,43 @@ fn assign_layers(
         if node.external {
             continue;
         }
-        for (layer, globset) in &compiled {
-            if matches_node(globset, node) {
-                out.insert(node.id.clone(), layer.name.clone());
-                break; // 首个命中生效
+        let matches: Vec<_> = compiled
+            .iter()
+            .filter(|(_, globset)| matches_node(globset, node))
+            .map(|(layer, _)| layer.name.as_str())
+            .collect();
+        if let Some(first) = matches.first() {
+            out.insert(node.id.clone(), (*first).to_string());
+            if matches.len() > 1 {
+                errors.push(format!(
+                    "节点 {} 同时匹配多个 layer：{}",
+                    node.qualified_name,
+                    matches.join(", ")
+                ));
             }
         }
     }
     (out, errors)
+}
+
+fn normalized_layer_patterns(pattern: &str) -> Vec<String> {
+    let mut out = vec![pattern.to_string()];
+    if let Some(rest) = pattern.strip_prefix("crates/")
+        && let Some((crate_path, modules)) = rest.split_once("::")
+        && let Some(crate_name) = crate_path.rsplit('/').next()
+    {
+        out.push(format!(
+            "{}::{}",
+            crate_name,
+            modules.replace("/**", "::*").replace('/', "::")
+        ));
+        out.push(format!(
+            "module:{}::{}",
+            crate_name,
+            modules.replace("/**", "::*").replace('/', "::")
+        ));
+    }
+    out
 }
 
 /// 一个节点的 layer glob 匹配：qualified name（`crate::a::b`）与文件路径两种
@@ -285,14 +328,22 @@ fn detect_cycles(edges: &[&ArchitectureEdge], internal: &BTreeSet<&str>) -> Vec<
 fn cycle_finding(
     cycle: &DependencyCycle,
     nodes: &[ArchitectureNode],
-    _index_of: &HashMap<&str, usize>,
+    edges: &[&ArchitectureEdge],
 ) -> Finding {
     // 环内节点按 ID 排序后取第一个作为 symbol 与回退路径。
     let anchor = cycle.node_ids.first();
-    let (path, line) = anchor
-        .and_then(|id| nodes.iter().find(|n| &n.id == id))
-        .and_then(|n| n.path.clone())
-        .map(|p| (p, 1))
+    let (path, line) = edges
+        .iter()
+        .filter(|e| cycle.edge_ids.contains(&e.id))
+        .flat_map(|e| e.evidence.iter())
+        .min()
+        .map(|e| (e.path.clone(), e.line))
+        .or_else(|| {
+            anchor
+                .and_then(|id| nodes.iter().find(|n| &n.id == id))
+                .and_then(|n| n.path.clone())
+                .map(|p| (p, 1))
+        })
         .unwrap_or_else(|| (PathBuf::from("<architecture>"), 1));
     let symbol = anchor.cloned();
     let signature = cycle.node_ids.join("|");
@@ -512,6 +563,30 @@ mod tests {
     }
 
     #[test]
+    fn cycle_finding_points_to_dependency_evidence() {
+        let mut ab = edge("module:a", "module:b");
+        ab.evidence.push(crate::architecture::ArchitectureEvidence {
+            path: PathBuf::from("src/a.rs"),
+            line: 17,
+            snippet: "use crate::b;".into(),
+            is_reexport: false,
+            condition: None,
+        });
+        let r = report(
+            vec![node("module:a"), node("module:b")],
+            vec![ab, edge("module:b", "module:a")],
+        );
+        let analysis = analyze_architecture(&r, &ArchitectureConfig::default());
+        let finding = analysis
+            .findings
+            .iter()
+            .find(|f| f.rule_id == rule_ids::ARCHITECTURE_CYCLE)
+            .unwrap();
+        assert_eq!(finding.path, PathBuf::from("src/a.rs"));
+        assert_eq!(finding.start_line, 17);
+    }
+
+    #[test]
     fn detects_self_loop() {
         let r = report(vec![node("module:a")], vec![edge("module:a", "module:a")]);
         let analysis = analyze_architecture(&r, &ArchitectureConfig::default());
@@ -711,6 +786,42 @@ mod tests {
                 .iter()
                 .all(|f| f.rule_id != rule_ids::ARCHITECTURE_LAYER_VIOLATION)
         );
+    }
+
+    #[test]
+    fn invalid_zero_hub_threshold_falls_back_instead_of_flagging_every_node() {
+        let cfg = ArchitectureConfig {
+            max_fan_out: 0,
+            critical_fan_out: 0,
+            ..ArchitectureConfig::default()
+        };
+        let r = report(
+            vec![node("module:a"), node("module:b")],
+            vec![edge("module:a", "module:b")],
+        );
+        let analysis = analyze_architecture(&r, &cfg);
+        assert!(
+            analysis
+                .findings
+                .iter()
+                .all(|f| f.rule_id != rule_ids::ARCHITECTURE_HIGH_FAN_OUT)
+        );
+    }
+
+    #[test]
+    fn spec_style_layer_pattern_matches_module_qualified_name() {
+        let cfg = ArchitectureConfig {
+            layers: vec![LayerConfig {
+                name: "ui".into(),
+                r#match: vec!["crates/dozer-app::extensions/**".into()],
+                may_depend_on: vec![],
+            }],
+            ..ArchitectureConfig::default()
+        };
+        let mut n = node("module:dozer-app::extensions::files");
+        n.qualified_name = "dozer-app::extensions::files".into();
+        let analysis = analyze_architecture(&report(vec![n], vec![]), &cfg);
+        assert_eq!(analysis.nodes[0].layer.as_deref(), Some("ui"));
     }
 
     #[test]

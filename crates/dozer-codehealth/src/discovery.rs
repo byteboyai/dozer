@@ -39,6 +39,9 @@ pub struct ProjectConfig {
     pub generated: Vec<String>,
     /// 架构分析配置（阈值、影响深度、分层边界）。
     pub architecture: ArchitectureConfig,
+    /// 配置文件语法错误。serde 不读取该字段，由加载器填入。
+    #[serde(skip)]
+    pub config_errors: Vec<String>,
 }
 
 /// 架构分析配置（spec「声明项目边界」）。全部可选，缺省用默认阈值且不分层。
@@ -142,7 +145,13 @@ pub fn load_project_config(root: &Path) -> ProjectConfig {
     let Ok(text) = std::fs::read_to_string(&path) else {
         return ProjectConfig::default();
     };
-    toml::from_str::<ProjectConfig>(&text).unwrap_or_default()
+    match toml::from_str::<ProjectConfig>(&text) {
+        Ok(config) => config,
+        Err(error) => ProjectConfig {
+            config_errors: vec![format!(".dozer/code-health.toml 解析失败：{error}")],
+            ..ProjectConfig::default()
+        },
+    }
 }
 
 /// 一次文件遍历的结果。
@@ -448,6 +457,20 @@ mod tests {
         let cfg = load_project_config(dir.path());
         assert!(cfg.exclude.is_empty());
         assert!(cfg.generated.is_empty());
+    }
+
+    #[test]
+    fn malformed_config_is_reported_instead_of_silently_defaulted() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".dozer")).unwrap();
+        std::fs::write(
+            dir.path().join(".dozer/code-health.toml"),
+            "[architecture\n",
+        )
+        .unwrap();
+        let config = load_project_config(dir.path());
+        assert_eq!(config.config_errors.len(), 1);
+        assert!(config.config_errors[0].contains("解析失败"));
     }
 
     #[test]

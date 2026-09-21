@@ -24,7 +24,7 @@ pub use architecture_analysis::{
 };
 pub use architecture_diff::{
     ArchitectureDiff, ArchitectureDiffOutcome, ImpactInput, ImpactNode, ImpactScope,
-    architecture_diff, edge_endpoints, impact_scope,
+    architecture_diff, changed_edge_endpoints, edge_endpoints, impact_scope,
 };
 pub use cargo_architecture::{
     CargoArchitecture, CargoGraph, cargo_report_fragment, extract_cargo_architecture, find_manifest,

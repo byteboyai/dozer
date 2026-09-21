@@ -74,22 +74,17 @@ fn finish_panel(
             let dirty = super::git_hotspots::dirty_paths(project_path);
             let changed_nodes: Vec<String> = match &outcome {
                 ArchitectureDiffOutcome::Compared(d) => {
-                    let changed_edge_ids: std::collections::HashSet<&str> = d
-                        .added_edges
-                        .iter()
-                        .chain(d.removed_edges.iter())
-                        .map(String::as_str)
-                        .collect();
-                    let changed_edges: Vec<_> = cur
-                        .architecture
-                        .edges
-                        .iter()
-                        .filter(|e| changed_edge_ids.contains(e.id.as_str()))
-                        .cloned()
-                        .collect();
-                    dozer_codehealth::edge_endpoints(&changed_edges)
+                    previous.as_ref().map_or_else(Vec::new, |previous| {
+                        dozer_codehealth::changed_edge_endpoints(
+                            &previous.architecture,
+                            &cur.architecture,
+                            d,
+                        )
+                    })
                 }
-                ArchitectureDiffOutcome::NoBaseline => Vec::new(),
+                ArchitectureDiffOutcome::NoBaseline | ArchitectureDiffOutcome::Unavailable => {
+                    Vec::new()
+                }
             };
 
             let cfg = dozer_codehealth::load_project_config(project_path);

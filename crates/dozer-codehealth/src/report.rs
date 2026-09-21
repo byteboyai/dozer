@@ -397,6 +397,7 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
         crate::module_architecture::FileModule,
         Vec<crate::module_architecture::UsePath>,
     )> = Vec::new();
+    let mut module_declarations = std::collections::BTreeMap::new();
 
     for rel in &disc.rust_files {
         let abs = root.join(rel);
@@ -453,6 +454,10 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
             crate::module_architecture::FileModule { path: rel.clone() },
             crate::module_architecture::uses_in_file(&root_node),
         ));
+        module_declarations.insert(
+            rel.clone(),
+            crate::module_architecture::module_declarations_in_file(&root_node),
+        );
     }
 
     let total_functions = all_functions.len();
@@ -528,7 +533,7 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
     // 架构图：Cargo workspace + module 图（module 复用上面的 AST，见扫描循环）。
     // 提取失败可降级，不影响结构复杂度等其它结果。
     let cargo = crate::cargo_architecture::extract_cargo_architecture(root);
-    let (cargo_status, cargo_nodes, cargo_edges, arch_error) =
+    let (cargo_status, mut cargo_nodes, cargo_edges, arch_error) =
         crate::cargo_architecture::cargo_report_fragment(&cargo);
 
     // module 图：crate → src 目录来自 Cargo；workspace crate 名集合用于解析跨
@@ -536,19 +541,70 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
     let mut workspace_crates = std::collections::BTreeSet::new();
     let mut crate_roots = Vec::new();
     if let crate::cargo_architecture::CargoArchitecture::Ok(graph) = &cargo {
-        for (name, src) in &graph.member_src_dirs {
-            workspace_crates.insert(name.clone());
-            crate_roots.push(crate::module_architecture::CrateRoots::conventional(
-                name.clone(),
-                src.clone(),
-            ));
-        }
+        workspace_crates.extend(graph.member_roots.iter().map(|r| r.crate_name.clone()));
+        crate_roots.extend(graph.member_roots.clone());
+    } else if !module_files.is_empty() {
+        // 非 Cargo Rust 项目也提供 module 图：选 lib.rs/main.rs；都没有时用首个
+        // Rust 文件作为 synthetic crate root，并明确保持 Partial。
+        let project_name = root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|n| !n.is_empty())
+            .unwrap_or("project")
+            .to_string();
+        let paths: std::collections::BTreeSet<_> =
+            module_files.iter().map(|(f, _)| f.path.clone()).collect();
+        let roots: Vec<_> = ["lib.rs", "main.rs"]
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .filter(|p| paths.contains(p))
+            .collect();
+        let roots = if roots.is_empty() {
+            paths.iter().next().cloned().into_iter().collect()
+        } else {
+            roots
+        };
+        workspace_crates.insert(project_name.clone());
+        crate_roots.push(crate::module_architecture::CrateRoots {
+            crate_name: project_name,
+            targets: roots
+                .into_iter()
+                .map(|root_file| crate::module_architecture::TargetRoot {
+                    source_dir: root_file
+                        .parent()
+                        .unwrap_or(std::path::Path::new(""))
+                        .to_path_buf(),
+                    root_file,
+                    module_prefix: Vec::new(),
+                })
+                .collect(),
+            dependency_aliases: std::collections::BTreeMap::new(),
+        });
     }
-    let module_graph = crate::module_architecture::build_module_graph(
+    let module_graph = crate::module_architecture::build_module_graph_with_declarations(
         &module_files,
+        &module_declarations,
         &crate_roots,
         &workspace_crates,
     );
+    for roots in &crate_roots {
+        let id = crate::architecture::crate_node_id(&roots.crate_name);
+        if !cargo_nodes.iter().any(|n| n.id == id) {
+            cargo_nodes.push(crate::architecture::ArchitectureNode {
+                id,
+                kind: crate::architecture::ArchitectureNodeKind::Crate,
+                name: roots.crate_name.clone(),
+                qualified_name: roots.crate_name.clone(),
+                path: roots.targets.first().map(|t| t.root_file.clone()),
+                parent_id: None,
+                loc: 0,
+                fan_in: 0,
+                fan_out: 0,
+                layer: None,
+                external: false,
+            });
+        }
+    }
 
     // 合并节点：按 id 去重（crate 节点来自 Cargo，module 节点来自 module 图）。
     let mut arch_nodes: Vec<crate::architecture::ArchitectureNode> = cargo_nodes;
@@ -600,6 +656,7 @@ pub fn scan_project(root: &Path) -> anyhow::Result<ProjectReport> {
         &config.architecture,
     );
     let mut arch_errors = report_for_analysis.errors;
+    arch_errors.extend(config.config_errors.clone());
     arch_errors.extend(analysis.config_errors);
     arch_errors.extend(config_errors);
     arch_errors.sort();
@@ -899,17 +956,16 @@ mod v2_tests {
     }
 
     #[test]
-    fn scan_without_cargo_manifest_is_not_applicable() {
+    fn scan_without_cargo_manifest_builds_partial_synthetic_graph() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("a.rs"), "fn ok() {}").unwrap();
         let report = scan_project(dir.path()).unwrap();
         assert_eq!(
             report.architecture.status,
-            crate::architecture::ArchitectureStatus::NotApplicable
+            crate::architecture::ArchitectureStatus::Partial
         );
-        assert!(!report.architecture.has_data());
+        assert!(report.architecture.has_data());
         assert!(report.architecture.errors.is_empty());
-        // module 图（后续任务）尚未加入，故此处自然没有节点。
         assert_eq!(report.scan.status, ScanStatus::Complete);
     }
 
@@ -954,7 +1010,7 @@ mod v2_tests {
         .unwrap();
         fs::write(
             root.join("a/src/lib.rs"),
-            "use crate::foo::Bar;\npub fn f() {}\n",
+            "mod foo;\nuse crate::foo::Bar;\npub fn f() {}\n",
         )
         .unwrap();
         fs::write(root.join("a/src/foo.rs"), "pub struct Bar;\n").unwrap();
@@ -976,9 +1032,39 @@ mod v2_tests {
                     && e.to == foo_id
             })
             .expect("crate → foo ModuleUse 边");
-        assert_eq!(edge.evidence[0].line, 1);
+        assert_eq!(edge.evidence[0].line, 2);
         assert!(edge.evidence[0].snippet.contains("crate::foo::Bar"));
         assert_eq!(arch.unresolved_edges, 0);
+    }
+
+    #[test]
+    fn scan_uses_custom_cargo_target_root_and_ignores_orphan_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname='custom-root'\nversion='0.1.0'\nedition='2021'\n[lib]\npath='source/root.rs'\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("source")).unwrap();
+        fs::write(root.join("source/root.rs"), "mod child;\n").unwrap();
+        fs::write(root.join("source/child.rs"), "pub struct Child;\n").unwrap();
+        fs::write(root.join("source/orphan.rs"), "pub struct Orphan;\n").unwrap();
+        let report = scan_project(root).unwrap();
+        assert!(
+            report
+                .architecture
+                .nodes
+                .iter()
+                .any(|n| n.id == crate::architecture::module_node_id("custom-root", "child"))
+        );
+        assert!(
+            !report
+                .architecture
+                .nodes
+                .iter()
+                .any(|n| n.id == crate::architecture::module_node_id("custom-root", "orphan"))
+        );
     }
 
     #[test]
@@ -1058,21 +1144,25 @@ mod v2_tests {
     }
 
     #[test]
-    fn scan_without_cargo_manifest_has_not_applicable_architecture() {
-        // 非 Cargo 项目：没有 workspace ⇒ 拿不到 crate 边界与 src 根，module 图无
-        // 法建立。状态保持 NotApplicable，且不得凭空造节点（否则会被当成“架构健康”）。
+    fn scan_without_cargo_manifest_builds_module_graph() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         fs::write(root.join("lib.rs"), "mod foo;\n").unwrap();
         fs::create_dir_all(root.join("foo")).unwrap();
         fs::write(root.join("foo/mod.rs"), "pub struct Bar;\n").unwrap();
         let report = scan_project(root).unwrap();
-        assert!(report.architecture.nodes.is_empty());
+        assert!(report.architecture.has_data());
         assert_eq!(
             report.architecture.status,
-            crate::architecture::ArchitectureStatus::NotApplicable
+            crate::architecture::ArchitectureStatus::Partial
         );
-        assert!(!report.architecture.has_data());
+        assert!(
+            report
+                .architecture
+                .nodes
+                .iter()
+                .any(|n| n.id.contains("::foo"))
+        );
     }
 
     #[test]

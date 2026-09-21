@@ -40,6 +40,8 @@ pub enum ArchitectureDiffOutcome {
     /// 没有可用的上一份 schema v3 架构报告，无法给出变化。
     #[default]
     NoBaseline,
+    /// 当前架构扫描不可用，不能把缺失数据解释为删除或已解决。
+    Unavailable,
     /// 与上一份报告比较得到的变化（可能为空）。
     Compared(ArchitectureDiff),
 }
@@ -48,6 +50,7 @@ impl ArchitectureDiffOutcome {
     pub fn diff(&self) -> Option<&ArchitectureDiff> {
         match self {
             ArchitectureDiffOutcome::NoBaseline => None,
+            ArchitectureDiffOutcome::Unavailable => None,
             ArchitectureDiffOutcome::Compared(d) => Some(d),
         }
     }
@@ -62,6 +65,9 @@ pub fn architecture_diff(
     let Some(prev) = previous.filter(|p| p.has_data()) else {
         return ArchitectureDiffOutcome::NoBaseline;
     };
+    if !current.has_data() && current.status != crate::architecture::ArchitectureStatus::Complete {
+        return ArchitectureDiffOutcome::Unavailable;
+    }
 
     let prev_nodes: BTreeSet<&str> = prev.nodes.iter().map(|n| n.id.as_str()).collect();
     let cur_nodes: BTreeSet<&str> = current.nodes.iter().map(|n| n.id.as_str()).collect();
@@ -233,7 +239,7 @@ fn collect_seeds(
     let dirty: BTreeSet<&str> = dirty_paths.iter().map(|s| s.as_str()).collect();
 
     // 文件路径 → 节点：精确匹配节点声明文件（module 的 .rs / crate 的 manifest）。
-    let mut nodes_by_path: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut nodes_by_path: BTreeMap<String, Vec<&str>> = BTreeMap::new();
     for node in &report.nodes {
         if node.external {
             continue;
@@ -243,7 +249,7 @@ fn collect_seeds(
         nodes_by_path.entry(key).or_default().push(&node.id);
     }
     for path in &dirty {
-        if let Some(ids) = nodes_by_path.get(path) {
+        if let Some(ids) = nodes_by_path.get(*path) {
             seeds.extend(ids.iter().map(|s| s.to_string()));
         }
     }
@@ -257,8 +263,12 @@ fn collect_seeds(
 }
 
 /// 归一化路径为 `/` 分隔、去前导 `./`，与 Git dirty 路径同口径。
-fn normalize_path(path: &Path) -> &str {
-    path.to_str().unwrap_or_default()
+fn normalize_path(path: &Path) -> String {
+    let mut value = path.to_string_lossy().replace('\\', "/");
+    while let Some(rest) = value.strip_prefix("./") {
+        value = rest.to_string();
+    }
+    value
 }
 
 /// 从一组边的两个端点提取节点 ID（用于把边变化转成变化节点种子）。
@@ -269,6 +279,30 @@ pub fn edge_endpoints(edges: &[ArchitectureEdge]) -> Vec<String> {
         set.insert(edge.to.clone());
     }
     set.into_iter().collect()
+}
+
+/// 架构差异中所有新增/删除边的端点。删除边必须从上一份报告读取。
+pub fn changed_edge_endpoints(
+    previous: &ArchitectureReport,
+    current: &ArchitectureReport,
+    diff: &ArchitectureDiff,
+) -> Vec<String> {
+    let added: HashSet<&str> = diff.added_edges.iter().map(String::as_str).collect();
+    let removed: HashSet<&str> = diff.removed_edges.iter().map(String::as_str).collect();
+    let mut edges: Vec<_> = current
+        .edges
+        .iter()
+        .filter(|edge| added.contains(edge.id.as_str()))
+        .cloned()
+        .collect();
+    edges.extend(
+        previous
+            .edges
+            .iter()
+            .filter(|edge| removed.contains(edge.id.as_str()))
+            .cloned(),
+    );
+    edge_endpoints(&edges)
 }
 
 #[cfg(test)]
@@ -327,6 +361,34 @@ mod tests {
         assert_eq!(
             architecture_diff(Some(&empty), &cur),
             ArchitectureDiffOutcome::NoBaseline
+        );
+    }
+
+    #[test]
+    fn unavailable_current_scan_does_not_report_everything_removed() {
+        let prev = report(vec![node("module:a", None)], vec![]);
+        let current = ArchitectureReport::default();
+        assert_eq!(
+            architecture_diff(Some(&prev), &current),
+            ArchitectureDiffOutcome::Unavailable
+        );
+    }
+
+    #[test]
+    fn removed_edge_endpoints_are_read_from_previous_report() {
+        let removed = edge("module:a", "module:b");
+        let previous = report(
+            vec![node("module:a", None), node("module:b", None)],
+            vec![removed.clone()],
+        );
+        let current = report(vec![node("module:a", None), node("module:b", None)], vec![]);
+        let diff = ArchitectureDiff {
+            removed_edges: vec![removed.id],
+            ..ArchitectureDiff::default()
+        };
+        assert_eq!(
+            changed_edge_endpoints(&previous, &current, &diff),
+            vec!["module:a".to_string(), "module:b".to_string()]
         );
     }
 

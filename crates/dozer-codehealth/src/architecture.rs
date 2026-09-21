@@ -66,6 +66,12 @@ pub struct ArchitectureEvidence {
     pub line: usize,
     /// 短片段（use 语句或依赖声明文本）。
     pub snippet: String,
+    /// `pub use` 形成的 re-export，而非普通内部引用。
+    #[serde(default)]
+    pub is_reexport: bool,
+    /// 条件编译属性（如 `#[cfg(feature = "x")]`）。`None` 表示无条件关系。
+    #[serde(default)]
+    pub condition: Option<String>,
 }
 
 /// 一个架构节点。`id` 为稳定标识（见模块头）。
@@ -265,6 +271,8 @@ mod tests {
                     path: PathBuf::from("src/a.rs"),
                     line: 3,
                     snippet: "use crate::b;".into(),
+                    is_reexport: false,
+                    condition: None,
                 }],
             }],
             cycles: vec![DependencyCycle {
