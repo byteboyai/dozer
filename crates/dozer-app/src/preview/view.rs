@@ -39,6 +39,7 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         pending_restore: None,
         load_started: None,
         pending_view: None,
+        pending_tabular: None,
         web_revision: 0,
         web_selection: None,
         web_selected_text: None,
@@ -404,6 +405,7 @@ impl PreviewPane {
             pending_restore: None,
             load_started: None,
             pending_view: None,
+            pending_tabular: None,
             web_revision: 0,
             web_selection: None,
             web_selected_text: None,
@@ -476,6 +478,7 @@ impl PreviewPane {
             pending_restore: None,
             load_started: None,
             pending_view: None,
+            pending_tabular: None,
             web_revision: 0,
             web_selection: None,
             web_selected_text: None,
@@ -549,6 +552,7 @@ impl PreviewPane {
             pending_restore: None,
             load_started: None,
             pending_view: None,
+            pending_tabular: None,
             web_revision: 0,
             web_selection: None,
             web_selected_text: None,
@@ -1477,10 +1481,8 @@ impl PreviewPane {
         &mut self,
         tab_id: usize,
         result: Result<crate::tabular::TabularView, String>,
-    ) {
-        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
-            return;
-        };
+    ) -> Option<usize> {
+        let tab = self.tabs.iter_mut().find(|tab| tab.id == tab_id)?;
         match result {
             Ok(view) => {
                 tab.tabular = Some(TabularState::Ready(view));
@@ -1491,7 +1493,32 @@ impl PreviewPane {
                 let _ = tab
                     .backend_state
                     .try_transition(BackendState::Failed(PreviewError::new(message, true)));
+                return None;
             }
+        }
+        // 应用持久化的 sheet / 滚动锚点;若目标 sheet 不是当前已加载的,
+        // 返回它让调用方触发一次懒加载。
+        let (sheet, row, col) = tab.pending_tabular.take()?;
+        if let Some(TabularState::Ready(view)) = tab.tabular.as_mut() {
+            view.scroll_row = row;
+            view.scroll_col = col;
+            if sheet == view.active_sheet {
+                return None;
+            }
+        }
+        Some(sheet)
+    }
+
+    /// 记录启动恢复的表格视图状态,加载完成后应用一次。
+    pub fn set_pending_tabular(
+        &mut self,
+        tab_id: usize,
+        sheet: usize,
+        scroll_row: usize,
+        scroll_col: usize,
+    ) {
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+            tab.pending_tabular = Some((sheet, scroll_row, scroll_col));
         }
     }
 

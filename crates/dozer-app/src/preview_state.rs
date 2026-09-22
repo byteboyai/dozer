@@ -16,6 +16,14 @@ use crate::preview::{FoldRange, PreviewMode, TextPosition, TextRange};
 /// 当前 schema 版本。
 pub const PREVIEW_STATE_VERSION: u32 = 1;
 
+/// 表格 tab 的持久视图状态(active sheet + 逻辑滚动锚点,不持久化像素)。
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PersistedTabular {
+    pub sheet: usize,
+    pub scroll_row: usize,
+    pub scroll_col: usize,
+}
+
 /// 一个持久化的预览 tab 描述符。Phase A 只填 `path`/`mode`/`active` 三项,
 /// 其余字段允许缺省,留给 Phase C 恢复光标/选区/滚动/折叠。
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -41,6 +49,9 @@ pub struct PersistedPreviewTab {
     #[serde(default)]
     pub revision: u64,
     pub active: bool,
+    /// 表格 tab 的 sheet / 滚动锚点。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tabular: Option<PersistedTabular>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -200,6 +211,7 @@ mod tests {
                     }],
                     revision: 4,
                     active: true,
+                    tabular: None,
                 },
             ],
             active_path: Some(PathBuf::from("/repo/README.md")),
@@ -224,6 +236,31 @@ mod tests {
         assert_eq!(state.tabs[0].mode, None);
         assert_eq!(state.tabs[0].revision, 0);
         assert!(state.tabs[0].folds.is_empty());
+        assert_eq!(state.tabs[0].tabular, None);
+    }
+
+    #[test]
+    fn tabular_view_state_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("preview_state.json");
+        let state = PreviewState {
+            version: PREVIEW_STATE_VERSION,
+            tabs: vec![PersistedPreviewTab {
+                path: PathBuf::from("/repo/data.csv"),
+                mode: Some(PreviewMode::Tabular),
+                tabular: Some(PersistedTabular {
+                    sheet: 2,
+                    scroll_row: 120,
+                    scroll_col: 3,
+                }),
+                active: true,
+                ..Default::default()
+            }],
+            active_path: Some(PathBuf::from("/repo/data.csv")),
+            paths: Vec::new(),
+        };
+        save_to(&path, &state).unwrap();
+        assert_eq!(load_from(&path), state);
     }
 
     #[test]

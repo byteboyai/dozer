@@ -1191,12 +1191,24 @@ impl Workspace {
             // 选区只在非空时持久化;滚动锚点取可见起始行。
             let selection = tab.web_selection.filter(|r| r.start != r.end);
             let cursor = tab.web_selection.map(|r| r.end);
+            // 表格 tab:持久化 active sheet + 逻辑滚动锚点。
+            let tabular = match &tab.tabular {
+                Some(crate::preview::TabularState::Ready(view)) => {
+                    Some(preview_state::PersistedTabular {
+                        sheet: view.active_sheet,
+                        scroll_row: view.scroll_row,
+                        scroll_col: view.scroll_col,
+                    })
+                }
+                _ => None,
+            };
             tabs.push(preview_state::PersistedPreviewTab {
                 path: p.clone(),
                 mode: tab.current_mode(),
                 cursor,
                 selection,
                 scroll_anchor: tab.web_viewport.map(|(from, _)| from as u64),
+                tabular,
                 active: is_active,
                 ..Default::default()
             });
@@ -1339,6 +1351,10 @@ impl Workspace {
                 persisted.selection,
                 persisted.scroll_anchor.map(|v| v as u32),
             );
+            if let Some(t) = persisted.tabular {
+                self.preview
+                    .set_pending_tabular(id, t.sheet, t.scroll_row, t.scroll_col);
+            }
             first_id.get_or_insert(id);
             if is_active {
                 active_id = Some(id);

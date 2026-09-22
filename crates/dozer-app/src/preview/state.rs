@@ -91,6 +91,9 @@ pub struct PreviewTab {
         Option<crate::preview::TextRange>,
         Option<u32>,
     )>,
+    /// 启动恢复的表格视图状态 `(sheet, scroll_row, scroll_col)`,表格加载完成
+    /// 后应用一次。
+    pub pending_tabular: Option<(usize, usize, usize)>,
     /// CodeMirror host 的轻量镜像；正文仍由 WebView 持有，Rust 只保留 Agent、
     /// 保存和过期事件校验所需状态。
     pub web_revision: u64,

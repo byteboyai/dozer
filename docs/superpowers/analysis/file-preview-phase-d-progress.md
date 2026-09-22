@@ -40,6 +40,10 @@
 - tab 栏新增「网格 / 原文」切换按钮(`tab_tabular_mode_button` +
   `Message::PreviewTabularTextModeToggle`)。
 - 测试:backend `current_mode`;view:CSV 原文产出 editor spec。
+- **表格持久化**:`PersistedPreviewTab.tabular`(sheet/scroll_row/scroll_col)
+  随 tab 存盘;恢复时 `set_pending_tabular`,表格加载完成后应用滚动锚点,并在
+  active sheet 非首个时触发一次懒加载(`Message::TabularLoaded` →
+  `SelectSheet`)。测试:round-trip。
 
 ## 未完成(受 GUI 验收与"迁移前不删除"原则约束)
 

@@ -1632,16 +1632,27 @@ impl App {
                 });
             }
             Message::TabularLoaded(project_id, kind, tab_id, result) => {
-                self.with_project(project_id, move |ws, _io| {
-                    let pane = if kind == PanelKind::Project {
-                        &mut ws.project_preview
-                    } else {
-                        &mut ws.preview
-                    };
+                self.with_project(project_id, move |ws, io| {
                     if let Err(error) = &result {
                         tracing::warn!(%error, "表格首次加载失败");
                     }
-                    pane.finish_tabular_load(tab_id, result);
+                    let sheet_to_select = {
+                        let pane = if kind == PanelKind::Project {
+                            &mut ws.project_preview
+                        } else {
+                            &mut ws.preview
+                        };
+                        pane.finish_tabular_load(tab_id, result)
+                    };
+                    // 恢复的 active sheet 不是首个 → 触发一次懒加载。
+                    if let Some(sheet) = sheet_to_select {
+                        ws.preview_pane_tabular_action(
+                            kind,
+                            tab_id,
+                            crate::tabular::Action::SelectSheet(sheet),
+                            io,
+                        );
+                    }
                 });
             }
             Message::TabularSheetLoaded(project_id, kind, tab_id, sheet_index, result) => {
