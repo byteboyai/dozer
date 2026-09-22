@@ -1295,22 +1295,26 @@ impl Workspace {
     }
 
     /// 项目打开/启动恢复时,认回上次持久化的预览 tab(仅文件类;已被删除/
-    /// 移动的文件静默跳过,不报错占位)。恢复出的表格 tab 全部走异步加载
-    /// (见 `crate::tabular` 模块文档)——上次会话开着好几个大表格也不会
-    /// 挨个卡住启动过程,而是并行丢进后台线程。
+    /// 移动的文件静默跳过,不报错占位)。
+    ///
+    /// **Phase C Task 5**:所有 tab 先建立 `Suspended` 壳(不读盘、不建
+    /// viewer、不建 WebView);首屏后**只物化当前项目当前文件**,其余等用户
+    /// 切到/打开时再 [`Self::load_preview_tab`]。这样历史大文件 tab 再多,启动
+    /// 工作量也不随 tab 数线性增长。
     pub(crate) fn restore_preview_state(&mut self, io: &ShellIo) {
         let Some(project) = &self.project else {
             return;
         };
         let state = preview_state::load(project.id);
+        let active_path = state.active_path.clone();
         let mut active_id = None;
+        let mut first_id = None;
         for persisted in state.tabs {
             let path = persisted.path;
             if !path.is_file() {
                 continue;
             }
-            let is_active = state
-                .active_path
+            let is_active = active_path
                 .as_deref()
                 .map(|active| active == path.as_path())
                 .unwrap_or(persisted.active);
@@ -1318,35 +1322,115 @@ impl Workspace {
                 .lock()
                 .expect("allowed_files 锁")
                 .insert(path.clone());
-            let id = self.preview.open_path(path);
-            if let Some(
-                mode @ (crate::preview::PreviewMode::Tree
-                | crate::preview::PreviewMode::Text
-                | crate::preview::PreviewMode::Streamed),
-            ) = persisted.mode
-            {
-                self.preview.restore_json_mode(id, mode);
-            }
-            if persisted.mode == Some(crate::preview::PreviewMode::Source)
-                && let Some(idx) = self.preview.tabs().iter().position(|tab| tab.id == id)
-                && self.preview.tabs()[idx]
-                    .route
-                    .as_ref()
-                    .is_some_and(|route| route.supports(crate::preview::PreviewMode::Source))
-                && let Err(error) = self.preview.enter_code_mode(idx)
-            {
-                tracing::warn!(%error, "恢复预览源码模式失败，回退到渲染模式");
-            }
+            let id = self.preview.push_shell_tab(path, persisted.mode);
+            first_id.get_or_insert(id);
             if is_active {
                 active_id = Some(id);
             }
         }
-        self.spawn_pending_tabular_loads(PanelKind::Files, io);
-        self.spawn_pending_json_tree_loads(PanelKind::Files, io);
-        if let Some(id) = active_id
-            && let Some(idx) = self.preview.tabs().iter().position(|t| t.id == id)
+        // 只排队当前项目当前文件;没有 active 时退而物化第一个,保证首屏有内容。
+        let to_load = active_id.or(first_id);
+        if let Some(id) = to_load {
+            if let Some(idx) = self.preview.tabs().iter().position(|t| t.id == id) {
+                self.preview.select(idx);
+            }
+            self.load_preview_tab(PanelKind::Files, id, io);
+        }
+    }
+
+    /// 物化一个 `Suspended` 预览壳(Phase C Task 5):按 route 分派到对应的
+    /// 加载路径。幂等——非 Suspended 的 tab 直接返回。按 CodeMirror 场景,
+    /// 内容由 editor WebView 自取,这里只需把状态推进到 Ready。
+    pub(crate) fn load_preview_tab(&mut self, kind: PanelKind, tab_id: usize, io: &ShellIo) {
+        let Some(project_id) = self.project_id() else {
+            return;
+        };
+        let pane = if kind == PanelKind::Project {
+            &mut self.project_preview
+        } else {
+            &mut self.preview
+        };
+        if !pane.is_suspended(tab_id) {
+            return;
+        }
+        let idx = match pane.tabs().iter().position(|t| t.id == tab_id) {
+            Some(i) => i,
+            None => return,
+        };
+        let route_kind = pane.tabs()[idx].route.as_ref().map(|r| r.kind);
+        let mode = pane.tabs()[idx].route.as_ref().map(|r| r.default_mode);
+        let path = match &pane.tabs()[idx].kind {
+            TabKind::File(p) => p.clone(),
+            _ => return,
+        };
+        let codemirror = pane.tabs()[idx].uses_codemirror();
+
+        match route_kind {
+            // CodeMirror:WebView 自己按 allowlist 读内容,直接 Loading→Ready。
+            Some(crate::preview::PreviewKind::Code) if codemirror => {
+                pane.begin_shell_load(tab_id);
+                pane.finish_shell_load(tab_id);
+            }
+            // 老 iced editor;JSON/Streamed 额外挂 json_tree。
+            Some(crate::preview::PreviewKind::Code)
+            | Some(crate::preview::PreviewKind::Json)
+            | Some(crate::preview::PreviewKind::Streamed) => {
+                pane.begin_shell_load(tab_id);
+                if matches!(
+                    route_kind,
+                    Some(crate::preview::PreviewKind::Json)
+                        | Some(crate::preview::PreviewKind::Streamed)
+                ) {
+                    pane.set_json_tree_loading(tab_id, path.clone());
+                }
+                pane.set_tab_loading(tab_id, true);
+                let proxy = io.proxy.clone();
+                let load_path = path.clone();
+                io.handle.spawn(async move {
+                    let result = tokio::task::spawn_blocking(move || {
+                        crate::preview::read_and_build_native_editor(&load_path)
+                            .map(crate::preview::NativeEditorLoadHandle::new)
+                            .map_err(|e| e.to_string())
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+                    let _ =
+                        proxy.send_event(Message::PreviewFileLoaded(project_id, tab_id, result));
+                });
+            }
+            Some(crate::preview::PreviewKind::Tabular) => {
+                pane.begin_shell_load(tab_id);
+                pane.set_tabular_loading(tab_id, path.clone());
+            }
+            // 渲染/外部/不支持:交给对应 WebView 或 fallback,直接就绪。
+            Some(crate::preview::PreviewKind::Rendered)
+            | Some(crate::preview::PreviewKind::External)
+            | Some(crate::preview::PreviewKind::Unsupported) => {
+                pane.begin_shell_load(tab_id);
+                pane.finish_shell_load(tab_id);
+            }
+            None => {}
+        }
+
+        // 侧载的后台任务(表格/JSON 树)由 Workspace 自己 spawn。
+        self.spawn_pending_tabular_loads(kind, io);
+        self.spawn_pending_json_tree_loads(kind, io);
+
+        // Rendered 的 Source 持久模式:物化后切到源码视图(老 iced editor;
+        // Markdown/HTML 的 CodeMirror source 留待 Phase D)。
+        if mode == Some(crate::preview::PreviewMode::Source)
+            && route_kind == Some(crate::preview::PreviewKind::Rendered)
         {
-            self.preview.select(idx);
+            let pane = if kind == PanelKind::Project {
+                &mut self.project_preview
+            } else {
+                &mut self.preview
+            };
+            if let Some(idx) = pane.tabs().iter().position(|t| t.id == tab_id)
+                && let Err(error) = pane.enter_code_mode(idx)
+            {
+                tracing::warn!(%error, "恢复预览源码模式失败，回退到渲染模式");
+            }
         }
     }
 

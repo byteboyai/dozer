@@ -3740,6 +3740,12 @@ impl App {
             if let Some(idx) = ws.preview.find_existing_file_tab(&path) {
                 // 同一文件已开则切过去,不重复开/重复读盘。
                 ws.preview.select(idx);
+                // 命中的是只恢复了壳的 tab:物化它。
+                if let Some(tab_id) = ws.preview.tabs().get(idx).map(|t| t.id)
+                    && ws.preview.is_suspended(tab_id)
+                {
+                    ws.load_preview_tab(PanelKind::Files, tab_id, io);
+                }
                 if let Some(line) = target_line
                     && let Some(tab) = ws.preview.tabs_mut().get_mut(idx)
                 {
@@ -3884,6 +3890,12 @@ impl App {
         let avail_w = self.preview_tab_bar_avail_px(PanelKind::Files);
         self.with_focused_project(|ws, io| {
             ws.preview.select(idx);
+            // Phase C Task 5:切到只恢复了壳的 tab 时物化它(其余 tab 保持 Suspended)。
+            if let Some(tab_id) = ws.preview.tabs().get(idx).map(|t| t.id)
+                && ws.preview.is_suspended(tab_id)
+            {
+                ws.load_preview_tab(PanelKind::Files, tab_id, io);
+            }
             if idx < ws.preview.tabs().len() {
                 let widths: Vec<f32> = ws
                     .preview

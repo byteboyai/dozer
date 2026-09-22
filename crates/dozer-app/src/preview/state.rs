@@ -88,7 +88,10 @@ impl PreviewTab {
     /// 状态机明确选择 Flyfish fallback。Phase D 落地正式 External/Unsupported
     /// 页面后再移除该兼容分支。
     pub fn hosts_webview(&self) -> bool {
-        if self.loading || !matches!(self.kind, TabKind::File(_)) {
+        if self.loading
+            || matches!(self.backend_state, BackendState::Suspended)
+            || !matches!(self.kind, TabKind::File(_))
+        {
             return false;
         }
         self.backend.as_ref().is_some_and(|backend| {

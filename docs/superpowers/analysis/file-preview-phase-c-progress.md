@@ -46,23 +46,35 @@
 - 测试:round-trip、缺失/损坏/未知版本、空正文、磁盘未变恢复、磁盘变更冲突、
   文件缺失冲突、清理无残留、原子写无临时残留、真实 `profile_file` 集成。
 
+### Task 5:Suspended tab 恢复(已接线)
+- `restore_preview_state` 现在**只建 Suspended 壳**(`push_shell_tab`:route/
+  backend 定好,但不读盘、不建 viewer/WebView),首屏只物化**当前项目当前
+  文件**;没有 active 时物化第一个。历史 tab 再多,启动工作量不随 tab 数线性
+  增长。
+- `hosts_webview` 排除 `Suspended`;切 tab(`preview_select_tab`)/重新打开已
+  存在的壳(`preview_open_path_at`)时经 `Workspace::load_preview_tab` 按 route
+  物化:CodeMirror 直接 Ready(正文由 host 自取);老 iced/JSON/Streamed 走
+  异步读盘 + `apply_native_load`;Tabular 走后台加载;渲染/外部直接就绪。
+- 持久 mode 只在该 route 支持时覆盖默认值(Json Tree/Text 已同步到 backend)。
+- 测试:壳 Suspended 且不进 WebView 池、物化 Loading→Ready 幂等、持久 mode
+  覆盖与失效回退。
+
 ## 仍未完成(需接热点文件/运行期,建议在无并行改动时做)
 
 1. **Task 3 Windowed Viewer**:把 `file_policy`/`large_text` 接进 `PreviewTab`/
    runtime —— Rust 读窗口、CodeMirror 只持窗口、全局行号基数、边界加载、
    Agent reveal 未加载行。需要改 `view.rs`/`runtime.rs`/editor 协议(增加
    windowed 模式与 `set_window`)。
-2. **Task 5 Suspended 恢复**:扩展 `preview_state` schema、启动只恢复壳、并发 1、
-   懒加载。需改 `workspace/state.rs`/`view.rs`。
-3. **Task 6 接线**:把 `recovery.rs` 接进脏 tab 的防抖写、启动恢复、保存后清理。
-4. **Task 7 安全启动与运行时反馈**:启动进行/完成标记、失败计数、ready latency。
-5. 把 `file_policy` 的只读/窗口化结论回写到 `PreviewBackend`/路由(`router.rs`),
+2. **Task 6 接线**:把 `recovery.rs` 接进脏 tab 的防抖写、启动恢复、保存后清理。
+3. **Task 7 安全启动与运行时反馈**:启动进行/完成标记、失败计数、ready latency。
+4. 把 `file_policy` 的只读/窗口化结论回写到 `PreviewBackend`/路由(`router.rs`),
    让大文件不再无脑进 CodeMirror 整载。
+5. 恢复时把持久化的 cursor/selection/scroll anchor 应用到编辑器视图。
 
 ## 验证
 
 - `cargo check -p dozer-app --all-targets`(默认与 `--features codemirror`):通过。
-- `cargo test -p dozer-app`:默认 **1242 passed / 0 failed**、feature **1213+
-  passed / 0 failed**(并行工作已修掉先前的 icon 既有失败;另有 1 ignored)。
-  新增:`file_policy` 9、`large_text` 10、`resources` 11、`recovery` 11。
+- `cargo test -p dozer-app`:默认 **1244 passed / 0 failed**、feature **1226
+  passed / 0 failed**(另有 1 ignored)。
+  新增:`file_policy` 9、`large_text` 10、`resources` 11、`recovery` 11、shell 2。
 - `cargo fmt --check`、`cargo clippy` 干净(仅既有 `file_history.rs` warning)。

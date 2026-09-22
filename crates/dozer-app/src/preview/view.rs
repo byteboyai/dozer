@@ -415,6 +415,113 @@ impl PreviewPane {
         id
     }
 
+    /// 追加一个"只恢复 tab 壳、内容未加载"的 `Suspended` 文件 tab(启动恢复
+    /// 用,Phase C Task 5)。route/backend 在创建时就定好,但**不建任何 viewer、
+    /// 不读盘**;真正切到/打开它时再由 `Workspace::load_preview_tab` 物化。
+    /// 返回 id,且**不改 active**(恢复顺序由调用方决定)。
+    pub fn push_shell_tab(&mut self, path: PathBuf, mode: Option<PreviewMode>) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
+        let title = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+        let (route, mut backend, _) = route_and_backend(&path, &self.capabilities);
+        // 用户持久化的 mode 只在该 route 支持时覆盖默认值。
+        let route = match mode {
+            Some(m) if route.supports(m) => PreviewRoute {
+                default_mode: m,
+                reason: RouteReason::PersistedMode,
+                ..route
+            },
+            _ => route,
+        };
+        // Json backend 的 Tree/Text 模式跟着 route 默认值走(from_route 时是
+        // 按未覆盖的默认值构造的,这里补一次)。
+        if let PreviewBackend::Json(json) = &mut backend {
+            json.mode = match route.default_mode {
+                PreviewMode::Text => JsonMode::Text,
+                _ => JsonMode::Tree,
+            };
+        }
+        let tab = PreviewTab {
+            id,
+            kind: TabKind::File(path),
+            title,
+            reload_nonce: 0,
+            editor: None,
+            tabular: None,
+            json_tree: None,
+            dirty: false,
+            loaded_bytes: 0,
+            total_bytes: 0,
+            truncated: false,
+            loading: false,
+            pending_jump_line: None,
+            route: Some(route),
+            backend: Some(backend),
+            backend_state: BackendState::Suspended,
+            web_revision: 0,
+            web_selection: None,
+            web_selected_text: None,
+            web_viewport: None,
+            web_error: None,
+        };
+        self.tabs.push(tab);
+        id
+    }
+
+    /// 某个 tab 是否还停在 `Suspended`(只恢复了壳,未物化)。
+    pub fn is_suspended(&self, tab_id: usize) -> bool {
+        self.tabs
+            .iter()
+            .find(|t| t.id == tab_id)
+            .is_some_and(|t| matches!(t.backend_state, BackendState::Suspended))
+    }
+
+    /// 物化一个 Suspended 壳:标记为 `Loading`(Suspended→Loading 合法)。
+    /// 返回 false 表示该 tab 不存在或已不是 Suspended(幂等保护)。
+    pub fn begin_shell_load(&mut self, tab_id: usize) -> bool {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return false;
+        };
+        if !matches!(tab.backend_state, BackendState::Suspended) {
+            return false;
+        }
+        let _ = tab.backend_state.try_transition(BackendState::Loading);
+        true
+    }
+
+    /// 物化完成(Loading→Ready),或同步可立即就绪的 shell 直接置 Ready。
+    pub fn finish_shell_load(&mut self, tab_id: usize) {
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+            let _ = tab.backend_state.try_transition(BackendState::Ready);
+        }
+    }
+
+    /// 物化时把 tab 标为 iced 异步读盘中(`loading=true`,供渲染/期望清单判据)。
+    pub fn set_tab_loading(&mut self, tab_id: usize, loading: bool) {
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+            tab.loading = loading;
+        }
+    }
+
+    /// 物化 JSON/Streamed shell:登记 json_tree 后台加载并置 Loading 态。
+    pub fn set_json_tree_loading(&mut self, tab_id: usize, path: PathBuf) {
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+            tab.json_tree = Some(JsonTreeState::Loading);
+        }
+        self.pending_json_tree_loads.push((tab_id, path));
+    }
+
+    /// 物化 Tabular shell:登记表格后台加载并置 Loading 态。
+    pub fn set_tabular_loading(&mut self, tab_id: usize, path: PathBuf) {
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+            tab.tabular = Some(TabularState::Loading);
+        }
+        self.pending_tabular_loads.push((tab_id, path));
+    }
+
     /// 异步读盘+构造结果回灌:按 `tab_id` 定位(用户可能在结果回来前关掉/
     /// 切走这个 tab,找不到就静默丢弃)。成功则把已经在后台线程构造好的
     /// `CodeView` 取出装进 tab(`NativeEditorLoadHandle::take` 只应在这里
@@ -1406,6 +1513,9 @@ impl PreviewPane {
         }
     }
 
+    /// 恢复 JSON/Streamed tab 的持久 mode。壳恢复已由 `push_shell_tab` 直接落到
+    /// backend 上,这里保留给"已 Ready 的树"场景(暂无调用方)。
+    #[allow(dead_code)]
     pub fn restore_json_mode(&mut self, tab_id: usize, mode: PreviewMode) {
         let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
             return;
@@ -3202,5 +3312,66 @@ mod tests {
 
         std::fs::remove_file(&clean).ok();
         std::fs::remove_file(&dirty).ok();
+    }
+
+    /// Phase C Task 5:Suspended 壳不进 WebView 池,物化后转 Loading→Ready。
+    #[test]
+    fn shell_tab_is_suspended_and_hidden_from_webview_pool() {
+        let path = std::env::temp_dir().join(format!("shell_{}.rs", std::process::id()));
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+
+        let mut pane = PreviewPane::default();
+        let id = pane.push_shell_tab(path.clone(), None);
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(matches!(tab.backend_state, BackendState::Suspended));
+        assert!(!tab.hosts_webview(), "Suspended 壳不建 WebView");
+        assert!(pane.desired_webviews().iter().all(|s| s.id != id));
+        assert!(
+            pane.desired_editor_webviews(1, crate::app::PanelKind::Files)
+                .iter()
+                .all(|s| s.id != id),
+            "未 Ready 的壳不产出 editor spec"
+        );
+        assert!(pane.is_suspended(id));
+
+        assert!(pane.begin_shell_load(id));
+        assert!(!pane.is_suspended(id));
+        assert!(!pane.begin_shell_load(id), "非 Suspended 时幂等返回 false");
+        pane.finish_shell_load(id);
+        assert!(matches!(
+            pane.tabs()
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap()
+                .backend_state,
+            BackendState::Ready
+        ));
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 壳恢复时,持久化 mode 只在该 route 支持时覆盖默认值。
+    #[test]
+    fn shell_tab_applies_supported_persisted_mode() {
+        let json = std::env::temp_dir().join(format!("shell_mode_{}.json", std::process::id()));
+        std::fs::write(&json, "{\"a\":1}\n").unwrap();
+        let mut pane = PreviewPane::default();
+
+        let id = pane.push_shell_tab(json.clone(), Some(PreviewMode::Text));
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert_eq!(tab.route.as_ref().unwrap().default_mode, PreviewMode::Text);
+        assert!(matches!(
+            tab.backend,
+            Some(PreviewBackend::Json(JsonBackend {
+                mode: JsonMode::Text
+            }))
+        ));
+
+        // 失效 mode(Code 不被 Json 支持)→ 落回默认 Tree。
+        let id2 = pane.push_shell_tab(json.clone(), Some(PreviewMode::Code));
+        let tab2 = pane.tabs().iter().find(|t| t.id == id2).unwrap();
+        assert_eq!(tab2.route.as_ref().unwrap().default_mode, PreviewMode::Tree);
+
+        std::fs::remove_file(&json).ok();
     }
 }
