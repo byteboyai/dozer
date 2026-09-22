@@ -3626,6 +3626,15 @@ mod tests {
                 .iter()
                 .all(|s| s.id != id)
         );
+        assert!(
+            !pane
+                .tabs()
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap()
+                .uses_editor_host(),
+            "Tree 模式不算 editor host(否则渲染层会跳过 json_tree 导致黑屏)"
+        );
 
         // 切到 Text:模拟树就绪 + 模式同步后的状态。
         if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == id) {

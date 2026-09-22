@@ -154,16 +154,18 @@ impl PreviewTab {
             && matches!(self.backend, Some(PreviewBackend::Code(_)))
     }
 
-    /// 是否走 CodeMirror 编辑 host(含窗口化只读)。Rendered 的 **Source** 模式
-    /// 与 JSON/Streamed 的 Text 模式在 feature 打开时也走 editor host(替代老
-    /// iced 源码/文本视图)。JSON Tree 仍由原生 `json_tree` 承载。
+    /// 是否走 CodeMirror 编辑 host(含窗口化只读)。Rendered 的 **Source** 模式、
+    /// JSON/Streamed 的 **Text** 模式在 feature 打开时走 editor host(替代老 iced
+    /// 文本视图);JSON 的 Tree/Streamed 视图仍由原生 `json_tree` 承载(此时
+    /// 返回 false)。
     pub fn uses_editor_host(&self) -> bool {
         if !codemirror_enabled() {
             return false;
         }
         match &self.backend {
             Some(PreviewBackend::Code(_)) => true,
-            Some(PreviewBackend::Json(_)) | Some(PreviewBackend::Streamed(_)) => true,
+            Some(PreviewBackend::Json(json)) => json.mode == JsonMode::Text,
+            Some(PreviewBackend::Streamed(streamed)) => streamed.mode == PreviewMode::Text,
             Some(PreviewBackend::Rendered(r)) => r.mode == RenderedMode::Source,
             // CSV/TSV 的"原文"模式由 editor host 承载(网格仍原生)。
             Some(PreviewBackend::Tabular(t)) => t.mode == TabularMode::Text,

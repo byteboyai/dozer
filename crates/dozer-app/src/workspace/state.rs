@@ -1444,7 +1444,7 @@ impl Workspace {
             // Streamed 视图仍走原生 `json_tree`(挂在 tab 上后台加载)。
             Some(crate::preview::PreviewKind::Json)
             | Some(crate::preview::PreviewKind::Streamed)
-                if editor_host =>
+                if crate::preview::codemirror_enabled() =>
             {
                 pane.begin_shell_load(tab_id);
                 pane.set_json_tree_loading(tab_id, path.clone());
