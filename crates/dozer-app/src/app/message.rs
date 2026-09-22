@@ -670,6 +670,9 @@ pub enum Message {
         usize,
         Result<std::sync::Arc<crate::preview::LineIndex>, String>,
     ),
+    /// 脏 tab 的 recovery snapshot 已成功落盘 → 标记 `recovery_written`(脏 tab
+    /// 允许休眠的前提)。
+    PreviewRecoveryWritten(i64, PanelKind, usize),
     /// 顶栏设置齿轮:打开设置弹窗(独立原生窗口,主题 + Git 账户)。
     SettingsOpen,
     /// 设置弹窗内部消息,转发给 `extensions::settings::update`。

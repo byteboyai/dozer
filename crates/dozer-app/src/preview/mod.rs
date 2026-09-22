@@ -15,6 +15,7 @@ mod native_editor;
 mod recovery;
 mod resources;
 mod router;
+mod startup;
 mod state;
 mod text_save;
 mod view;
@@ -42,5 +43,7 @@ pub(crate) use large_text::*;
 pub(crate) use recovery::*;
 #[allow(unused_imports)]
 pub(crate) use resources::*;
+#[allow(unused_imports)]
+pub(crate) use startup::*;
 #[allow(unused_imports)]
 pub(crate) use webview_protocol::*;

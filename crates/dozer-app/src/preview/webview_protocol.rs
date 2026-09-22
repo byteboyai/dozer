@@ -85,6 +85,12 @@ pub enum EditorEvent {
         revision: u64,
         text: String,
     },
+    /// 编辑器防抖上报的脏正文快照(用于 dirty recovery)。`text` 有大小上限,
+    /// 由 JS 侧只在真正变脏时按节流发送。
+    Snapshot {
+        revision: u64,
+        text: String,
+    },
     FocusChanged {
         focused: bool,
     },
@@ -425,6 +431,19 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
         assert_eq!(v["payload"]["kind"], "set_window");
         assert_eq!(v["payload"]["start_line"], 1001);
+    }
+
+    #[test]
+    fn parses_snapshot_event() {
+        let env =
+            parse_event(&raw(r#"{"kind":"snapshot","revision":6,"text":"dirty\n"}"#)).unwrap();
+        assert_eq!(
+            env.payload,
+            EditorEvent::Snapshot {
+                revision: 6,
+                text: "dirty\n".into()
+            }
+        );
     }
 
     #[test]

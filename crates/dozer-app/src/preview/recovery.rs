@@ -80,6 +80,15 @@ pub enum RecoveryResolution {
     ConflictMissingFile,
 }
 
+/// 由文件路径派生的**稳定** recovery key:tab_id 重启后会变,但同一文件的
+/// recovery 必须能被下次启动按路径找回。
+pub fn path_key(path: &Path) -> usize {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    path.to_string_lossy().hash(&mut h);
+    h.finish() as usize
+}
+
 /// 默认恢复目录:`<config_dir>/preview_recovery/`。
 pub fn recovery_dir() -> PathBuf {
     dozer_core::paths::config_dir().join("preview_recovery")

@@ -37,10 +37,6 @@ use tokio::sync::mpsc;
 
 use super::*;
 
-/// 窗口化 viewer 每次推给 CodeMirror 的窗口大小(以目标行为中心的前后行数)。
-const WINDOW_BEFORE: u32 = 1000;
-const WINDOW_AFTER: u32 = 2000;
-
 /// `Stub` → `Loaded` 促成的中间产物:一个项目的完整恢复素材,且**可以跨线程
 /// 搬运**。
 ///
@@ -262,6 +258,9 @@ pub struct ShellIo {
     /// 启动时探测一次的客户端能力快照(见 `crate::capabilities`)。Workspace
     /// 侧的预览路由/预算从这里读取,不再自己探测硬件。
     pub(crate) capabilities: Arc<crate::capabilities::ClientCapabilities>,
+    /// 安全启动(Phase C Task 7):上次启动未完成时,只恢复预览 tab 壳、
+    /// 不自动加载文件。
+    pub(crate) safe_startup: bool,
     /// 终端网格尺寸快照(新建会话时让新 PTY 一开始就匹配 pane 实际大小)。
     pub(crate) cols: u16,
     pub(crate) rows: u16,
@@ -1333,6 +1332,11 @@ impl Workspace {
             }
         }
         // 只排队当前项目当前文件;没有 active 时退而物化第一个,保证首屏有内容。
+        // 安全启动下**不自动物化**任何文件(只留壳),避免上次未完成的启动循环。
+        if io.safe_startup {
+            tracing::warn!("安全启动:预览 tab 仅恢复壳,不自动加载");
+            return;
+        }
         let to_load = active_id.or(first_id);
         if let Some(id) = to_load {
             if let Some(idx) = self.preview.tabs().iter().position(|t| t.id == id) {
@@ -1368,6 +1372,23 @@ impl Workspace {
             _ => return,
         };
         let editor_host = pane.tabs()[idx].uses_editor_host();
+
+        // 物化开始时刻(ready latency 观测)+ dirty recovery 检查。
+        if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == tab_id) {
+            tab.load_started = Some(std::time::Instant::now());
+            if !tab.windowed {
+                let key = crate::preview::path_key(&path);
+                if let Some((manifest, text)) =
+                    crate::preview::read_snapshot(&crate::preview::recovery_dir(), project_id, key)
+                    && crate::preview::classify_recovery(
+                        &manifest,
+                        crate::preview::profile_file(&path).ok().as_ref(),
+                    ) == crate::preview::RecoveryResolution::Restore
+                {
+                    tab.pending_restore = Some(text);
+                }
+            }
+        }
 
         match route_kind {
             // CodeMirror(含窗口化只读):editor WebView 自取内容/由 Rust 推窗口,
@@ -1437,51 +1458,6 @@ impl Workspace {
                 tracing::warn!(%error, "恢复预览源码模式失败，回退到渲染模式");
             }
         }
-    }
-
-    /// 给窗口化 viewer 推一个以 `center_line`(全局 1-based)为中心的窗口:
-    /// 用 tab 上的稀疏索引定位,读**有界**窗口,排队 `SetWindow` 由
-    /// `window_events` 注入。返回是否真的推了(tab 不是窗口化/索引未就绪则 false)。
-    pub(crate) fn queue_windowed_view(
-        &mut self,
-        kind: PanelKind,
-        tab_id: usize,
-        center_line: u32,
-    ) -> bool {
-        let pane = if kind == PanelKind::Project {
-            &mut self.project_preview
-        } else {
-            &mut self.preview
-        };
-        let command = {
-            let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
-                return false;
-            };
-            let Some(index) = tab.window_index.as_ref() else {
-                return false;
-            };
-            let TabKind::File(path) = &tab.kind else {
-                return false;
-            };
-            let window = match crate::preview::read_window(
-                path,
-                index,
-                center_line,
-                WINDOW_BEFORE,
-                WINDOW_AFTER,
-            ) {
-                Ok(w) => w,
-                Err(_) => return false,
-            };
-            crate::preview::EditorCommand::SetWindow {
-                text: window.text,
-                start_line: window.start_line,
-                total_lines: index.total_lines(),
-                revision: tab.web_revision,
-            }
-        };
-        pane.queue_editor_command(tab_id, command);
-        true
     }
 
     /// 保证"项目打开时至少有一个终端 tab"这条不变式:启动恢复、关闭最后

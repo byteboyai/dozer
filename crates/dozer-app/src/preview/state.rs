@@ -77,6 +77,13 @@ pub struct PreviewTab {
     /// 窗口化 viewer 的稀疏行索引(由后台任务建立后回填);用于按行跳转/加载
     /// 相邻窗口。非窗口化 tab 恒 `None`。
     pub window_index: Option<std::sync::Arc<crate::preview::LineIndex>>,
+    /// 脏内容的 recovery snapshot 是否已落盘(允许休眠脏 tab 的前提)。
+    pub recovery_written: bool,
+    /// 启动恢复时从 recovery 读回的正文;editor `ready` 后经 `SetDocument` 推回,
+    /// 并重新标脏。
+    pub pending_restore: Option<String>,
+    /// 本次物化开始时刻(用于 ready latency 观测;不记文件内容)。
+    pub load_started: Option<std::time::Instant>,
     /// CodeMirror host 的轻量镜像；正文仍由 WebView 持有，Rust 只保留 Agent、
     /// 保存和过期事件校验所需状态。
     pub web_revision: u64,

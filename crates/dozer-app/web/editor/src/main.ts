@@ -274,6 +274,7 @@ function buildExtensions(): Extension[] {
           length: update.state.doc.length,
           changes,
         });
+        scheduleSnapshot();
       }
       if (update.selectionSet) emitSelection();
       if (update.viewportChanged || update.geometryChanged) {
@@ -282,6 +283,7 @@ function buildExtensions(): Extension[] {
       }
       if (update.focusChanged) {
         post({ kind: 'focus_changed', focused: update.view.hasFocus });
+        if (!update.view.hasFocus) sendSnapshot();
       }
     }),
   ];
@@ -295,6 +297,23 @@ saveHandler = () => {
   if (windowed) return; // 窗口化只读
   post({ kind: 'save_requested', revision, text: view.state.doc.toString() });
 };
+
+// 脏正文 recovery 快照:编辑后 1.5s 防抖上报一次;失焦时立即补一次。窗口化
+// 只读、无脏内容,不参与。
+let snapshotTimer: number | undefined;
+let lastSnapshotRevision = 0;
+function sendSnapshot(): void {
+  if (windowed) return;
+  snapshotTimer = undefined;
+  if (revision === lastSnapshotRevision) return;
+  lastSnapshotRevision = revision;
+  post({ kind: 'snapshot', revision, text: view.state.doc.toString() });
+}
+function scheduleSnapshot(): void {
+  if (windowed) return;
+  if (snapshotTimer !== undefined) window.clearTimeout(snapshotTimer);
+  snapshotTimer = window.setTimeout(sendSnapshot, 1500);
+}
 
 function applyCommand(raw: string): void {
   let parsed: unknown;

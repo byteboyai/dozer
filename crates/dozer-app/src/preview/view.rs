@@ -7,6 +7,10 @@ use std::path::PathBuf;
 
 use super::*;
 
+/// 窗口化 viewer 每次推给 CodeMirror 的窗口大小(以目标行为中心的前后行数)。
+pub const WINDOW_BEFORE: u32 = 1000;
+pub const WINDOW_AFTER: u32 = 2000;
+
 /// 构造一个 `TabKind::Blank` 占位 tab。**可被关掉**(`close(0)` 在有兄弟
 /// tab 时真关;没兄弟时关完自动补一个新的,见 [`PreviewPane::close`]),所以
 /// "id 0" 不再是不变量。`Default` 与 `clear_all`(项目切换)都靠它把面板
@@ -31,6 +35,9 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         backend_state: BackendState::Ready,
         windowed: false,
         window_index: None,
+        recovery_written: false,
+        pending_restore: None,
+        load_started: None,
         web_revision: 0,
         web_selection: None,
         web_selected_text: None,
@@ -141,6 +148,41 @@ impl Operation<()> for CaptureFindFocus {
 }
 
 impl PreviewPane {
+    /// 给窗口化 viewer 推一个以 `center_line`(全局 1-based)为中心的窗口:
+    /// 用 tab 上的稀疏索引定位,读**有界**窗口,排队 `SetWindow` 由
+    /// `window_events` 注入。返回是否真的推了(不是窗口化/索引未就绪则 false)。
+    pub fn queue_windowed_view(&mut self, tab_id: usize, center_line: u32) -> bool {
+        let command = {
+            let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+                return false;
+            };
+            let Some(index) = tab.window_index.as_ref() else {
+                return false;
+            };
+            let TabKind::File(path) = &tab.kind else {
+                return false;
+            };
+            let window = match crate::preview::read_window(
+                path,
+                index,
+                center_line,
+                WINDOW_BEFORE,
+                WINDOW_AFTER,
+            ) {
+                Ok(w) => w,
+                Err(_) => return false,
+            };
+            crate::preview::EditorCommand::SetWindow {
+                text: window.text,
+                start_line: window.start_line,
+                total_lines: index.total_lines(),
+                revision: tab.web_revision,
+            }
+        };
+        self.queue_editor_command(tab_id, command);
+        true
+    }
+
     pub fn tabs(&self) -> &[PreviewTab] {
         &self.tabs
     }
@@ -355,6 +397,9 @@ impl PreviewPane {
             backend_state,
             windowed,
             window_index: None,
+            recovery_written: false,
+            pending_restore: None,
+            load_started: None,
             web_revision: 0,
             web_selection: None,
             web_selected_text: None,
@@ -423,6 +468,9 @@ impl PreviewPane {
             backend_state: BackendState::Loading,
             windowed,
             window_index: None,
+            recovery_written: false,
+            pending_restore: None,
+            load_started: None,
             web_revision: 0,
             web_selection: None,
             web_selected_text: None,
@@ -485,6 +533,9 @@ impl PreviewPane {
             backend_state: BackendState::Suspended,
             windowed,
             window_index: None,
+            recovery_written: false,
+            pending_restore: None,
+            load_started: None,
             web_revision: 0,
             web_selection: None,
             web_selected_text: None,

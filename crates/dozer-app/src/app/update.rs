@@ -53,6 +53,8 @@ impl App {
                     // 窗口化 viewer:待建立行索引 / 待推送相邻窗口。
                     let mut build_index: Option<(usize, PathBuf)> = None;
                     let mut window_request: Option<(usize, u32)> = None;
+                    // recovery 恢复:ready 后回推正文 + 重新标脏。
+                    let mut pending_restore_cmd: Option<(usize, String, u64)> = None;
                     {
                         let Some(tab) = pane
                             .tabs_mut()
@@ -83,6 +85,26 @@ impl App {
                                 if tab.uses_windowed_editor() && tab.window_index.is_none() {
                                     build_index = Some((tab.id, path.clone()));
                                 }
+                                // ready latency 观测(不记文件内容)。
+                                if let Some(started) = tab.load_started.take() {
+                                    tracing::info!(
+                                        panel = ?binding.panel,
+                                        tab_id = tab.id,
+                                        ready_ms = started.elapsed().as_millis() as u64,
+                                        "预览 tab ready"
+                                    );
+                                }
+                                // recovery 恢复:回推正文并重新标脏。
+                                if let Some(text) = tab.pending_restore.take() {
+                                    tab.dirty = true;
+                                    tab.recovery_written = true;
+                                    pending_restore_cmd = Some((tab.id, text, tab.web_revision));
+                                }
+                                // 加载成功:清零该文件连续失败计数。
+                                crate::preview::reset_failure_to(
+                                    &crate::preview::failures_path(),
+                                    path,
+                                );
                                 context_changed = true;
                             }
                             EditorEvent::SelectionChanged {
@@ -119,10 +141,72 @@ impl App {
                                     return;
                                 }
                                 match crate::preview::save_text_atomic(path, &text) {
-                                    Ok(()) => tab.dirty = false,
+                                    Ok(()) => {
+                                        tab.dirty = false;
+                                        tab.recovery_written = false;
+                                        // 正常保存:清掉该文件的 recovery snapshot。
+                                        let project_id = binding.project_id;
+                                        let restore_path = path.clone();
+                                        io.handle.spawn(async move {
+                                            let _ = tokio::task::spawn_blocking(move || {
+                                                crate::preview::clear_snapshot(
+                                                    &crate::preview::recovery_dir(),
+                                                    project_id,
+                                                    crate::preview::path_key(&restore_path),
+                                                );
+                                            })
+                                            .await;
+                                        });
+                                    }
                                     Err(error) => {
                                         tab.web_error = Some(format!("保存失败: {error}"))
                                     }
+                                }
+                            }
+                            EditorEvent::Snapshot { revision, text } => {
+                                // 防抖脏快照:原子写 recovery。仅在 revision 不回退
+                                // 时接受,避免过期快照覆盖新内容。
+                                if revision >= tab.web_revision {
+                                    tab.web_revision = revision;
+                                    let project_id = binding.project_id;
+                                    let panel = binding.panel;
+                                    let tab_id = tab.id;
+                                    let snap_path = path.clone();
+                                    let proxy = io.proxy.clone();
+                                    io.handle.spawn(async move {
+                                        let ok = tokio::task::spawn_blocking(move || {
+                                            let Ok(profile) =
+                                                crate::preview::profile_file(&snap_path)
+                                            else {
+                                                return false;
+                                            };
+                                            let manifest =
+                                                crate::preview::RecoveryManifest::from_profile(
+                                                    snap_path.clone(),
+                                                    &profile,
+                                                    revision,
+                                                    None,
+                                                    None,
+                                                    None,
+                                                );
+                                            crate::preview::write_snapshot(
+                                                &crate::preview::recovery_dir(),
+                                                project_id,
+                                                crate::preview::path_key(&snap_path),
+                                                &manifest,
+                                                &text,
+                                            )
+                                            .is_ok()
+                                        })
+                                        .await
+                                        .unwrap_or(false);
+                                        if ok {
+                                            let _ =
+                                                proxy.send_event(Message::PreviewRecoveryWritten(
+                                                    project_id, panel, tab_id,
+                                                ));
+                                        }
+                                    });
                                 }
                             }
                             EditorEvent::ViewState { selection, .. } => {
@@ -139,10 +223,23 @@ impl App {
                                 message,
                                 recoverable,
                             } => {
-                                tab.web_error = Some(message.clone());
+                                // 连续失败计数:达到阈值后提示降级(纯文本/
+                                // 外部打开),而不是无限自动重试。
+                                let count = crate::preview::bump_failure_to(
+                                    &crate::preview::failures_path(),
+                                    path,
+                                );
+                                let detail = if count >= crate::preview::FAILURE_THRESHOLD {
+                                    format!(
+                                        "{message}(已连续失败 {count} 次,请改用纯文本/外部打开)"
+                                    )
+                                } else {
+                                    message.clone()
+                                };
+                                tab.web_error = Some(detail.clone());
                                 let _ = tab.backend_state.try_transition(
                                     crate::preview::BackendState::Failed(
-                                        crate::preview::PreviewError::new(message, recoverable),
+                                        crate::preview::PreviewError::new(detail, recoverable),
                                     ),
                                 );
                             }
@@ -173,7 +270,18 @@ impl App {
                         });
                     }
                     if let Some((tab_id, anchor_line)) = window_request {
-                        ws.queue_windowed_view(binding.panel, tab_id, anchor_line);
+                        pane.queue_windowed_view(tab_id, anchor_line);
+                    }
+                    if let Some((tab_id, text, revision)) = pending_restore_cmd {
+                        pane.queue_editor_command(
+                            tab_id,
+                            crate::preview::EditorCommand::SetDocument {
+                                text,
+                                revision,
+                                language: crate::preview::extension_to_syntax(&binding.path),
+                                read_only: false,
+                            },
+                        );
                     }
                     if context_changed {
                         // 第二段链路(dozer-app → dozerd)自带 250ms 防抖;这里
@@ -186,30 +294,21 @@ impl App {
                 self.with_project(project_id, move |ws, _io| {
                     match result {
                         Ok(index) => {
+                            let pane = if panel == PanelKind::Project {
+                                &mut ws.project_preview
+                            } else {
+                                &mut ws.preview
+                            };
                             let mut jump = None;
-                            {
-                                let pane = if panel == PanelKind::Project {
-                                    &mut ws.project_preview
-                                } else {
-                                    &mut ws.preview
-                                };
-                                if let Some(tab) =
-                                    pane.tabs_mut().iter_mut().find(|t| t.id == tab_id)
-                                {
-                                    tab.window_index = Some(index);
-                                    jump = tab.pending_jump_line.take().map(|l| l as u32);
-                                }
+                            if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == tab_id) {
+                                tab.window_index = Some(index);
+                                jump = tab.pending_jump_line.take().map(|l| l as u32);
                             }
                             // 索引就绪:推初始窗口(有跳转诉求就以目标行为中心,
                             // 窗口就位后再 reveal)。
                             let center = jump.unwrap_or(1);
-                            ws.queue_windowed_view(panel, tab_id, center);
+                            pane.queue_windowed_view(tab_id, center);
                             if let Some(line) = jump {
-                                let pane = if panel == PanelKind::Project {
-                                    &mut ws.project_preview
-                                } else {
-                                    &mut ws.preview
-                                };
                                 pane.queue_editor_command(
                                     tab_id,
                                     crate::preview::EditorCommand::RevealPosition {
@@ -229,6 +328,18 @@ impl App {
                                 tab.web_error = Some(format!("建立行索引失败: {error}"));
                             }
                         }
+                    }
+                });
+            }
+            Message::PreviewRecoveryWritten(project_id, panel, tab_id) => {
+                self.with_project(project_id, move |ws, _io| {
+                    let pane = if panel == PanelKind::Project {
+                        &mut ws.project_preview
+                    } else {
+                        &mut ws.preview
+                    };
+                    if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == tab_id) {
+                        tab.recovery_written = true;
                     }
                 });
             }

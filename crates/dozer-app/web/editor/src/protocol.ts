@@ -43,6 +43,7 @@ export type EditorEvent =
       changes: { from: number; to: number; insert: string }[];
     }
   | { kind: 'save_requested'; revision: number; text: string }
+  | { kind: 'snapshot'; revision: number; text: string }
   | { kind: 'focus_changed'; focused: boolean }
   | { kind: 'viewport_changed'; from_line: number; to_line: number }
   | {

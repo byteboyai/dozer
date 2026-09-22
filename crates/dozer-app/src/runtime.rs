@@ -85,10 +85,24 @@ pub(crate) async fn build_app(
         "客户端能力快照已就绪"
     );
 
-    match ensure_daemon(&client).await {
-        Ok(()) => App::bootstrap(client, handle, proxy, capabilities).await,
-        Err(message) => App::with_daemon_error(client, handle, proxy, message, capabilities),
+    // 安全启动(Phase C Task 7):上次启动若没走完(in_progress 标记残留),
+    // 本次只恢复 tab 壳、不自动加载问题文件,避免启动死循环。先写 in_progress,
+    // 启动序列走完再写 done。
+    let marker = crate::preview::marker_path();
+    let safe_startup = crate::preview::was_interrupted_from(&marker);
+    if safe_startup {
+        tracing::warn!("检测到上次启动未完成,进入安全启动(仅恢复 tab 壳)");
     }
+    let _ = crate::preview::write_status_to(&marker, crate::preview::STATUS_IN_PROGRESS);
+
+    let app = match ensure_daemon(&client).await {
+        Ok(()) => App::bootstrap(client, handle, proxy, capabilities, safe_startup).await,
+        Err(message) => {
+            App::with_daemon_error(client, handle, proxy, message, capabilities, safe_startup)
+        }
+    };
+    let _ = crate::preview::write_status_to(&marker, crate::preview::STATUS_DONE);
+    app
 }
 
 /// 执行一次 `operation` 遍历(程序化聚焦/滚动/每帧真实焦点镜像查询)。

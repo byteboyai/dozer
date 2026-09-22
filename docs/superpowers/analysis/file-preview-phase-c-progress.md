@@ -86,19 +86,35 @@
   在索引就绪后先装窗口再 `reveal_position`(命令按队列顺序注入)。
 - `hosts_webview` 对窗口化 tab 返回 false(走 editor host,不另起 Flyfish)。
 
+### Task 6:Dirty recovery snapshot —— 接线(editor 路径)
+- 前端:编辑器对脏正文做 1.5s 防抖上报 `snapshot { revision, text }`,失焦时
+  立即补一次;窗口化只读不参与。
+- Rust:`Snapshot` 事件 → `spawn_blocking` 用 `profile_file` 建 manifest 并
+  `write_snapshot` 原子落盘(路径派生稳定 key),成功回 `Message::PreviewRecoveryWritten`
+  置 `tab.recovery_written`;`SaveRequested` 成功 → `clear_snapshot`;
+  启动物化时若 recovery 存在且磁盘未变(`classify_recovery == Restore`),把正文
+  缓存在 `tab.pending_restore`,editor `ready` 后经 `SetDocument` 回推并**重新
+  标脏**;磁盘已变则进入冲突(不静默覆盖)。
+
+### Task 7:安全启动与运行时反馈
+- `preview/startup.rs`:启动进行/完成标记(原子写)+ 单文件连续失败计数
+  (按路径,`FAILURE_THRESHOLD=3`)。
+- `runtime::build_app` 启动先写 `in_progress`、完成后写 `done`;读到上次残留
+  `in_progress` 即进入**安全启动**(`safe_startup`),`restore_preview_state`
+  只恢复 tab 壳、不自动加载任何文件。
+- editor `ready` 记 ready latency(仅毫秒/面板/tab,不含内容);加载成功清零
+  失败计数,失败累加并在达阈值时于 `web_error` 提示改用纯文本/外部打开。
+
 ## 仍未完成
 
-1. **Task 6 接线**:把 `recovery.rs` 接进脏 tab 的防抖快照、启动恢复、保存后
-   清理(需要 editor host 新增"周期上报正文"事件或保存/失焦时快照)。
-2. **Task 7 安全启动与运行时反馈**:启动进行/完成标记、失败计数、ready latency。
-3. Windowed 的折叠/全文搜索明确禁用(已只读、无保存);恢复时把持久化的
-   cursor/selection/scroll anchor 应用到编辑器视图。
+1. 失败降级的 UI 入口(纯文本只读 / 外部打开按钮)——计数与阈值已就绪。
+2. 恢复时把持久化的 cursor/selection/scroll anchor 应用到编辑器视图。
 
 ## 验证
 
 - `cargo check`/`build -p dozer-app --all-targets`(默认与 `--features codemirror`):
   通过(链接成功)。
-- `cargo test -p dozer-app`:默认 **1248 passed / 0 failed**、feature **1231
+- `cargo test -p dozer-app`:默认 **1254 passed / 0 failed**、feature **1236
   passed / 0 failed**(另有 1 ignored)。
 - 前端:`tsc --noEmit`、`npm test`(6 passed)、`npm run build` 通过(产物已更新)。
 - `cargo fmt --check`、`cargo clippy` 干净(仅既有 `file_history.rs` warning)。
