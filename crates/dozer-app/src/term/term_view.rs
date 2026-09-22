@@ -421,9 +421,7 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
                 if delta == 0 {
                     return None;
                 }
-                Some(
-                    canvas::Action::publish(Message::TermScroll(self.target, delta)).and_capture(),
-                )
+                Some(canvas::Action::publish(Message::TermScroll(self.target, delta)).and_capture())
             }
             mouse::Event::CursorMoved { .. } if state.dragging => {
                 // 拖拽中允许移出画布：用全局位置减 bounds 原点，交给

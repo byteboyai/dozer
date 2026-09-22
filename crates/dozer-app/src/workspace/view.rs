@@ -630,11 +630,12 @@ pub(crate) fn project_preview_pane<'a>(
 
 /// 空白页(`TabKind::Blank`)的 Finder "Get Info" 风格信息卡:folder icon +
 /// 项目名(2 倍 title 字号,奶油色),下方四行 dim label / cream value ——
-/// 位置 / 大小 / 创建时间 / 修改时间。四行 `:` 严格垂直对齐,锚点 x = 头部
-/// 项目名文本最左(即 icon_size + row.spacing);通过 label 段固定宽 + 文字
-/// 右对齐 + stats 列左 padding 实现。`preview.blank_info` 为 `None` 时四行
-/// value 都画 `—` 占位(后台还在跑)。无项目(`ws.project` 为 `None`,启动
-/// 初帧 / 切项目中间)只画头部,不画 stats,避免"位置: —"这种半成品。
+/// 位置 / 大小 / 创建时间 / 修改时间。四行 label 段固定宽 + 右对齐,`:` 严格
+/// 垂直对齐于 `stats_padding_left + label_colon_w` 那条竖线;头部 icon 装进
+/// 同宽的槽位(`icon_slot_w`)右对齐,右缘也压在这条竖线上。`preview.blank_info`
+/// 为 `None` 时四行 value 都画 `—` 占位(后台还在跑)。无项目(`ws.project`
+/// 为 `None`,启动初帧 / 切项目中间)只画头部,不画 stats,避免"位置: —"
+/// 这种半成品。
 fn preview_blank_info_card<'a>(
     ws: &'a Workspace,
     preview: &'a PreviewPane,
@@ -649,13 +650,30 @@ fn preview_blank_info_card<'a>(
     let header_label = project_root_dir_name(ws)
         .or_else(|| ws.project.as_ref().map(|p| p.name.clone()))
         .unwrap_or_default();
+    // 四行 stats 的两条对齐锚线(`:` 竖线 + 行首 padding)在 header 之前就定
+    // 好,因为头部 icon 要借同一条 `:` 竖线右对齐(见下面的 `icon_slot_w`)。
+    // `label_colon_w=96` 容下"修改时间:"(5 CJK + 冒号 @body_font 14,实测约
+    // 90px):之前用 80 时 `创建时间:`/`修改时间:` 被 iced 强行换行成
+    // "创建时\n间:" / "修改时\n间:",丑且吞了 `:`,已修。
+    let label_colon_w: f32 = 96.0;
+    let stats_padding_left: f32 = 16.0;
+    // icon 槽位宽 = stats 的行首 padding + label 列宽,槽位内右对齐 → icon
+    // 右缘正好落在四行 label 的 `:` 那条竖线上。icon 比原来小一档(96 → 64),
+    // 不再压过 2 倍 title 的项目名,也不会撑得整张卡头重脚轻。
+    let icon_slot_w: f32 = stats_padding_left + label_colon_w;
     // 头部 icon 用 Lucide `folder-dot`(一个底角圆点暗示"当前位置/选中"
     // 的语义,比纯 folder 更贴合空白页"信息卡"语境);文件夹名字号直接
     // ×2(从 title() 16 → 32),与下方 body() 14 拉开视觉主次。
-    let icon_size: f32 = 96.0;
+    let icon_size: f32 = 64.0;
     let header_spacing: f32 = 20.0;
     let header = row![
-        icons::view(icons::IconKind::FolderDot, icon_size, theme_colors.dim),
+        container(icons::view(
+            icons::IconKind::FolderDot,
+            icon_size,
+            theme_colors.dim
+        ))
+        .width(Length::Fixed(icon_slot_w))
+        .align_x(iced_widget::core::alignment::Horizontal::Right),
         text(header_label)
             .size(byteui::theme::font::title() * 2)
             .color(theme_colors.cream),
@@ -700,15 +718,9 @@ fn preview_blank_info_card<'a>(
     // 返回 `Text<'b>` 会撞 iced 的 invariant 约束(报错点就是这个),就地写
     // 反而短。
     // `:` 对齐方案:每个 label 段包进 width(Fixed(label_colon_w)) + 右对齐
-    // 的 container,于是该行 `:` 落在 `label_colon_w` 框右边界。stats column
-    // 用 `stats_padding_left` 横向推一下整组,定位锚点 ≈ icon 右边再留一格
-    // ——既不像 header 文字(在 icon+spacing 之后)那么靠右,也不贴到 icon 上
-    // ——视觉上让四行与 header 形成"半对齐"节奏,而不是死磕同一像素。
-    // `label_colon_w=96` 容下"修改时间:"(5 CJK + 冒号 @body_font 14,实测
-    // 约 90px):之前用 80 时 `创建时间:`/`修改时间:` 被 iced 强行换行成
-    // "创建时\n间:" / "修改时\n间:",丑且吞了 `:`,已修。
-    let label_colon_w: f32 = 96.0;
-    let stats_padding_left: f32 = 16.0;
+    // 的 container,于是该行 `:` 落在 `label_colon_w` 框右边界;stats column
+    // 再用 `stats_padding_left` 把整组横向推 16px,这条竖线才落到头部 icon
+    // 的右缘上——两条锚线由上面的 `icon_slot_w` 绑成同一条。
     let stats = column![
         row![
             container(text("位置:").size(body_font).color(dim))
