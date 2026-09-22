@@ -1954,7 +1954,7 @@ mod tests {
         assert!(p.large_file_search.is_none());
     }
 
-    #[cfg(not(feature = "codemirror"))]
+    #[cfg(any())] // 老 iced editor 已退役,历史测试停用
     #[test]
     fn bump_reload_rebuilds_native_editor_without_bumping_nonce() {
         let path =
@@ -1987,7 +1987,7 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
-    #[cfg(not(feature = "codemirror"))]
+    #[cfg(any())] // 老 iced editor 已退役,历史测试停用
     #[test]
     fn opening_native_editor_tab_sets_pending_focus() {
         // 官方 `text_editor` 的焦点是真实 iced 焦点树的一部分,构造时不能
@@ -2019,7 +2019,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "codemirror"))]
+    #[cfg(any())] // 老 iced editor 已退役,历史测试停用
     #[test]
     fn active_tab_is_native_only_when_active_editor_holds_codeview() {
         let mut p = PreviewPane::default();
@@ -2042,7 +2042,7 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
-    #[cfg(not(feature = "codemirror"))]
+    #[cfg(any())] // 老 iced editor 已退役,历史测试停用
     #[test]
     fn open_path_builds_native_editor_for_whitelisted_extension_only() {
         let dir = std::env::temp_dir();
@@ -2080,7 +2080,7 @@ mod tests {
         std::fs::remove_file(&png_path).ok();
     }
 
-    #[cfg(not(feature = "codemirror"))]
+    #[cfg(any())] // 老 iced editor 已退役,历史测试停用
     #[test]
     fn oversized_edit_tier_file_stays_native_but_becomes_read_only() {
         // 2026-09-19 起(大文件编辑器性能优化)不再有"超过阈值就退回 wry 只读
@@ -2474,7 +2474,7 @@ mod tests {
 
     // feature 开启时 `.rs` tab 走 CodeMirror,外部变化会推进其 reload_nonce
     // (见 `external_change_reloads_clean_...`),这条 iced-原生语义的断言不再成立。
-    #[cfg(not(feature = "codemirror"))]
+    #[cfg(any())] // 老 iced editor 已退役,历史测试停用
     #[test]
     fn reload_webviews_for_hits_matching_webview_tabs_only() {
         let mut p = PreviewPane::default();
@@ -2534,7 +2534,7 @@ mod tests {
 
     /// 切主题后 `reload_all_webviews_for_theme` 推进所有 wry 文件 tab 的
     /// nonce(逼它们按新 theme 重新导航),但不碰原生 editor tab。
-    #[cfg(not(feature = "codemirror"))]
+    #[cfg(any())] // 老 iced editor 已退役,历史测试停用
     #[test]
     fn reload_all_webviews_for_theme_bumps_only_wry_file_tabs() {
         let mut p = PreviewPane::default();
@@ -2563,7 +2563,7 @@ mod tests {
         std::fs::remove_file(&rs_path).ok();
     }
 
-    #[cfg(not(feature = "codemirror"))]
+    #[cfg(any())] // 老 iced editor 已退役,历史测试停用
     #[test]
     fn select_reloads_webview_tab_on_switch_but_not_same_or_native() {
         let mut p = PreviewPane::default();
@@ -2723,7 +2723,7 @@ mod tests {
         assert_eq!(encode_component("你"), "%E4%BD%A0");
     }
 
-    #[cfg(not(feature = "codemirror"))]
+    #[cfg(any())] // 老 iced editor 已退役,历史测试停用
     #[test]
     fn dirty_marker_lifecycle_for_native_tab() {
         // 原生可写 tab 就地编辑:编辑事件标脏 → ⌘S 落盘清脏(mark/clear 按 id)。
@@ -2763,7 +2763,7 @@ mod tests {
         assert!(!p.tabs()[1].dirty, "非原生 tab 不该被标脏");
     }
 
-    #[cfg(not(feature = "codemirror"))]
+    #[cfg(any())] // 老 iced editor 已退役,历史测试停用
     #[test]
     fn bump_reload_discards_pending_dirty_for_native_tab() {
         // 右键"刷新"重建原生 editor 会丢弃未保存改动 → 脏标记一并清零(保存
@@ -2883,7 +2883,7 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "codemirror"))]
+    #[cfg(any())] // 老 iced editor 已退役,历史测试停用
     #[test]
     fn open_find_binds_to_active_tab_native_or_webview() {
         let tmp = |name: &str| {
@@ -2950,7 +2950,7 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "codemirror"))]
+    #[cfg(any())] // 老 iced editor 已退役,历史测试停用
     #[test]
     fn open_find_same_tab_keeps_query_and_cursor_on_nav() {
         let path = std::env::temp_dir().join(format!("find_nav_{}.rs", std::process::id()));
@@ -3012,7 +3012,7 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
-    #[cfg(not(feature = "codemirror"))]
+    #[cfg(any())] // 老 iced editor 已退役,历史测试停用
     #[test]
     fn find_go_wraps_across_multiple_matches() {
         let path = std::env::temp_dir().join(format!("find_wrap_{}.rs", std::process::id()));
@@ -3092,7 +3092,7 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
-    #[cfg(not(feature = "codemirror"))]
+    #[cfg(any())] // 老 iced editor 已退役,历史测试停用
     #[test]
     fn clear_all_and_close_native_drop_find() {
         let tmp = |name: &str, content: &str| {
@@ -3130,7 +3130,7 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "codemirror"))]
+    #[cfg(any())] // 老 iced editor 已退役,历史测试停用
     #[test]
     fn replace_all_rewrites_buffer_marks_dirty_and_refreshes_count() {
         let tmp = std::env::temp_dir().join(format!("pane_replace_all_{}.rs", std::process::id()));
@@ -3161,7 +3161,7 @@ mod tests {
         std::fs::remove_file(tmp).ok();
     }
 
-    #[cfg(not(feature = "codemirror"))]
+    #[cfg(any())] // 老 iced editor 已退役,历史测试停用
     #[test]
     fn replace_current_targets_only_the_locked_occurrence_then_advances() {
         let tmp = std::env::temp_dir().join(format!("pane_replace_cur_{}.rs", std::process::id()));
@@ -3325,7 +3325,6 @@ mod tests {
 
     /// Phase B 垂直切片:feature 开启时 Code tab 不再构造 iced CodeView，
     /// 而是产出带可信 host binding 的 editor WebView spec。
-    #[cfg(feature = "codemirror")]
     #[test]
     fn code_tab_routes_to_bound_editor_webview_when_feature_is_enabled() {
         let path = std::env::temp_dir().join(format!(
@@ -3406,7 +3405,6 @@ mod tests {
 
     /// 外部文件变化:干净的 CodeMirror tab 自动重载(推进 reload_nonce →
     /// URL 换 `_r=`),脏 tab 不自动重载、置冲突提示。
-    #[cfg(feature = "codemirror")]
     #[test]
     fn external_change_reloads_clean_and_flags_dirty_codemirror_tab() {
         let dir = std::env::temp_dir();
@@ -3523,7 +3521,6 @@ mod tests {
 
     /// feature 打开时,窗口化 Code tab 走**窗口化 editor host**(URL 带
     /// `windowed=1`),且不再另起 Flyfish webview。
-    #[cfg(feature = "codemirror")]
     #[test]
     fn windowed_code_tab_uses_windowed_editor_host() {
         let dir = std::env::temp_dir().join(format!("dozer_windowed_host_{}", std::process::id()));
@@ -3550,7 +3547,6 @@ mod tests {
 
     /// feature 打开时,Markdown 切到 Source 模式由 CodeMirror editor host 承载,
     /// 不再走老 iced 源码视图、也不再另起 Flyfish webview。
-    #[cfg(feature = "codemirror")]
     #[test]
     fn markdown_source_mode_uses_editor_host() {
         let path = std::env::temp_dir().join(format!("md_source_{}.md", std::process::id()));
@@ -3576,7 +3572,6 @@ mod tests {
     }
 
     /// feature 打开时,JSON 的 Text 模式由 CodeMirror editor host 承载(lang=json)。
-    #[cfg(feature = "codemirror")]
     #[test]
     fn json_text_mode_uses_editor_host() {
         let path = std::env::temp_dir().join(format!("json_text_{}.json", std::process::id()));
@@ -3669,7 +3664,6 @@ mod tests {
     }
 
     /// feature 打开时,CSV 的"原文"模式由 CodeMirror editor host 承载。
-    #[cfg(feature = "codemirror")]
     #[test]
     fn csv_text_mode_uses_editor_host() {
         let path = std::env::temp_dir().join(format!("csv_text_{}.csv", std::process::id()));

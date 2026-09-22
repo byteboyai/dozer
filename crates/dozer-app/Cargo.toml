@@ -8,11 +8,8 @@ name = "dozer"
 path = "src/main.rs"
 
 [features]
-# CodeMirror editor host 默认开启;`--no-default-features` 回退到老 iced 编辑器
-# (Phase D 删除阶段的回退点)。严格 JSON 的 Tree 由常开的 vanilla-jsoneditor host
-# 承载(见 code_host::json_editor_enabled);JSONL/超大 JSON 由原生 streamed 承载。
-default = ["codemirror"]
-codemirror = []
+# 无 feature:CodeMirror editor host 常开(老 iced `CodeView` 已退役)。
+default = []
 
 [dependencies]
 dozer-core = { path = "../dozer-core" }

@@ -126,10 +126,9 @@ pub fn json_editor_enabled() -> bool {
     true
 }
 
-/// 开发开关:是否用 CodeMirror host 承载 Code tab。默认关闭,保证行为与
-/// 迁移前一致;`cargo build -p dozer-app --features codemirror` 打开。
+/// CodeMirror editor host 已转默认常开(老 iced `CodeView` 已退役)。
 pub fn codemirror_enabled() -> bool {
-    cfg!(feature = "codemirror")
+    true
 }
 
 /// 路径逐段编码:保留 `/` 分隔符,其余按 RFC3986 严格编码(与 flyfish
