@@ -2361,7 +2361,9 @@ impl Workspace {
             } else {
                 &self.preview
             };
-            pane.tabs().get(idx).is_some_and(|t| t.editor.is_some())
+            pane.tabs()
+                .get(idx)
+                .is_some_and(|t| t.editor.is_some() || t.uses_rendered_source_editor())
         };
         if in_code_mode {
             self.preview_pane_save_at(kind, idx);

@@ -115,8 +115,8 @@ impl PreviewTab {
             return false;
         }
         // 窗口化只读走 editor host(与 CodeMirror 同一 WebView 通道),不再另起
-        // Flyfish webview。
-        if self.uses_windowed_editor() {
+        // Flyfish webview。Markdown/HTML 的 Source 模式同理。
+        if self.uses_windowed_editor() || self.uses_rendered_source_editor() {
             return false;
         }
         self.backend.as_ref().is_some_and(|backend| {
@@ -151,14 +151,26 @@ impl PreviewTab {
             && matches!(self.backend, Some(PreviewBackend::Code(_)))
     }
 
-    /// 是否走 CodeMirror 编辑 host(含窗口化只读)。
+    /// 是否走 CodeMirror 编辑 host(含窗口化只读)。Rendered 的 **Source** 模式
+    /// 在 feature 打开时也走 editor host(替代老 iced 源码视图)。
     pub fn uses_editor_host(&self) -> bool {
-        codemirror_enabled() && matches!(self.backend, Some(PreviewBackend::Code(_)))
+        codemirror_enabled()
+            && match &self.backend {
+                Some(PreviewBackend::Code(_)) => true,
+                Some(PreviewBackend::Rendered(r)) => r.mode == RenderedMode::Source,
+                _ => false,
+            }
     }
 
     /// 是否走窗口化只读 editor host(大文件)。
     pub fn uses_windowed_editor(&self) -> bool {
         self.uses_editor_host() && self.windowed
+    }
+
+    /// Rendered(Markdown/HTML)在 feature 下切到 Source 源码模式 → 由 editor
+    /// host 承载,Flyfish webview 须让位。
+    pub fn uses_rendered_source_editor(&self) -> bool {
+        self.uses_editor_host() && matches!(self.backend, Some(PreviewBackend::Rendered(_)))
     }
 
     /// debug/test 下断言 backend 描述与旧 adapter 字段一致:任何迁移漏点

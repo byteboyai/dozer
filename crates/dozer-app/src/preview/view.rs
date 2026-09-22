@@ -516,6 +516,13 @@ impl PreviewPane {
                 _ => JsonMode::Tree,
             };
         }
+        // Rendered(Markdown/HTML)的 Source 持久模式同样补一次。
+        if let PreviewBackend::Rendered(rendered) = &mut backend {
+            rendered.mode = match route.default_mode {
+                PreviewMode::Source => RenderedMode::Source,
+                _ => RenderedMode::Rendered,
+            };
+        }
         let windowed = path_is_windowed(&path, &self.capabilities);
         let tab = PreviewTab {
             id,
@@ -870,14 +877,23 @@ impl PreviewPane {
                 let TabKind::File(path) = &tab.kind else {
                     return None;
                 };
-                let PreviewBackend::Code(code) = tab.backend.as_ref()? else {
-                    return None;
-                };
                 if tab.loading || !tab.backend_state.is_ready() || tab.editor.is_some() {
                     return None;
                 }
+                // 语言与只读先从 backend 推出:Code(可含窗口化只读)或
+                // Rendered 的 Source 模式(Markdown/HTML 源码)。
+                // 只读从 backend 推出:Code(可含窗口化只读)只读;Rendered 的
+                // Source 模式(Markdown/HTML 源码)可编辑。语言由 `url()` 按扩展名给。
+                let read_only = match tab.backend.as_ref()? {
+                    PreviewBackend::Code(code) => {
+                        tab.windowed || matches!(code.mode, CodeMode::ReadOnly)
+                    }
+                    PreviewBackend::Rendered(rendered) if rendered.mode == RenderedMode::Source => {
+                        false
+                    }
+                    _ => return None,
+                };
                 let binding = EditorHostBinding::new(project_id, panel, tab.id, path.clone());
-                let read_only = tab.windowed || matches!(code.mode, CodeMode::ReadOnly);
                 let mut url = binding.url(scheme_query_value(), read_only);
                 if tab.windowed {
                     // 窗口化只读:正文由 Rust 经 set_window 推送,host 不自行拉取。
@@ -1689,6 +1705,18 @@ impl PreviewPane {
     /// 透传给调用方(`Workspace::preview_pane_toggle_render_mode`)写面板
     /// error,这里不生成错误文案。
     pub fn enter_code_mode(&mut self, idx: usize) -> std::io::Result<()> {
+        // feature 打开:Markdown/HTML 的 Source 模式由 CodeMirror editor host
+        // 承载,不再构造 iced `CodeView`;只翻转 backend mode。
+        if codemirror_enabled() {
+            if let Some(tab) = self.tabs.get_mut(idx) {
+                if let Some(PreviewBackend::Rendered(rendered)) = tab.backend.as_mut() {
+                    rendered.mode = RenderedMode::Source;
+                }
+                let _ = tab.backend_state.try_transition(BackendState::Ready);
+                tab.debug_assert_backend_consistent();
+            }
+            return Ok(());
+        }
         let Some(tab) = self.tabs.get(idx) else {
             return Ok(());
         };
@@ -3514,5 +3542,32 @@ mod tests {
             .expect("应产出 editor spec");
         assert!(spec.url.contains("windowed=1"));
         assert!(spec.url.contains("ro=1"));
+    }
+
+    /// feature 打开时,Markdown 切到 Source 模式由 CodeMirror editor host 承载,
+    /// 不再走老 iced 源码视图、也不再另起 Flyfish webview。
+    #[cfg(feature = "codemirror")]
+    #[test]
+    fn markdown_source_mode_uses_editor_host() {
+        let path = std::env::temp_dir().join(format!("md_source_{}.md", std::process::id()));
+        std::fs::write(&path, "# hi\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        let idx = pane.tabs().iter().position(|t| t.id == id).unwrap();
+        pane.enter_code_mode(idx).unwrap();
+
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.uses_rendered_source_editor());
+        assert!(!tab.hosts_webview(), "Source 模式不吃 Flyfish webview");
+        assert!(tab.editor.is_none(), "feature 下不再构造 iced CodeView");
+        let spec = pane
+            .desired_editor_webviews(1, crate::app::PanelKind::Files)
+            .into_iter()
+            .find(|s| s.id == id)
+            .expect("应产出 editor spec");
+        assert!(spec.url.contains("lang=markdown"));
+        assert!(!spec.url.contains("windowed=1"));
+
+        std::fs::remove_file(&path).ok();
     }
 }
