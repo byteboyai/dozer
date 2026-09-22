@@ -152,14 +152,18 @@ impl PreviewTab {
     }
 
     /// 是否走 CodeMirror 编辑 host(含窗口化只读)。Rendered 的 **Source** 模式
-    /// 在 feature 打开时也走 editor host(替代老 iced 源码视图)。
+    /// 与 JSON/Streamed 的 Text 模式在 feature 打开时也走 editor host(替代老
+    /// iced 源码/文本视图)。JSON Tree 仍由原生 `json_tree` 承载。
     pub fn uses_editor_host(&self) -> bool {
-        codemirror_enabled()
-            && match &self.backend {
-                Some(PreviewBackend::Code(_)) => true,
-                Some(PreviewBackend::Rendered(r)) => r.mode == RenderedMode::Source,
-                _ => false,
-            }
+        if !codemirror_enabled() {
+            return false;
+        }
+        match &self.backend {
+            Some(PreviewBackend::Code(_)) => true,
+            Some(PreviewBackend::Json(_)) | Some(PreviewBackend::Streamed(_)) => true,
+            Some(PreviewBackend::Rendered(r)) => r.mode == RenderedMode::Source,
+            _ => false,
+        }
     }
 
     /// 是否走窗口化只读 editor host(大文件)。

@@ -455,6 +455,8 @@ pub(crate) fn extension_to_syntax(path: &std::path::Path) -> String {
         // 这样 `//` / `/* */` 注释与尾逗号都能正确着色;`.jsonc` 同理。
         // 严格 `.json` 仍走 bundle 自带的 `JSON` 语法(不认注释,符合 JSON 规范)。
         "json" => "json",
+        // JSON Lines / NDJSON:每行是 JSON 文本,文本视图按 json 高亮更贴近。
+        "jsonl" | "ndjson" => "json",
         "jsonc" | "json5" => "jsonc",
         "yaml" | "yml" => "yaml",
         "toml" => "toml",

@@ -1410,6 +1410,16 @@ impl Workspace {
                 pane.begin_shell_load(tab_id);
                 pane.finish_shell_load(tab_id);
             }
+            // JSON/Streamed 在 feature 下:文本视图由 editor host 承载,Tree/
+            // Streamed 视图仍走原生 `json_tree`(挂在 tab 上后台加载)。
+            Some(crate::preview::PreviewKind::Json)
+            | Some(crate::preview::PreviewKind::Streamed)
+                if editor_host =>
+            {
+                pane.begin_shell_load(tab_id);
+                pane.set_json_tree_loading(tab_id, path.clone());
+                pane.finish_shell_load(tab_id);
+            }
             // 老 iced editor;JSON/Streamed 额外挂 json_tree。
             Some(crate::preview::PreviewKind::Code)
             | Some(crate::preview::PreviewKind::Json)

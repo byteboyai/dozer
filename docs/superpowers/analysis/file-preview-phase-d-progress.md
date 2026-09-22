@@ -18,27 +18,34 @@
 - 测试:Markdown 切 Source → editor host + `lang=markdown`、不吃 Flyfish。
 - 默认(无 feature)行为不变,仍走老 iced 源码视图。
 
-## 未完成(受 GUI 验收与"迁移前不删除"原则约束,需人工确认后再做)
+### Task 5(第一步):普通 JSON/JSONL 的 Text 模式接入 CodeMirror
+按计划"先让普通 JSON Text 使用 CodeMirror JSON language;自研 Tree 暂不删除":
+- `uses_editor_host()` 覆盖 `Json`/`Streamed`;feature 下 JSON/JSONL 的 **Text**
+  模式由 editor host(`lang=json`)承载,**Tree/Streamed 视图仍走原生
+  `json_tree`**(不删除)。
+- `is_native_editor_candidate` 与 `push_tab` 在 feature 下不再为 JSON 构造 iced
+  editor;`load_preview_tab` 的 JSON/Streamed 分支改为挂 `json_tree` 后台加载 +
+  editor host Ready。
+- `desired_editor_webviews` 仅在 JSON 处于 Text 模式时产出 editor spec(Tree 模式
+  不产出,由原生树渲染)。
+- `extension_to_syntax` 增加 `jsonl/ndjson → json`,让 JSONL 文本视图也有 JSON 高亮。
+- 测试:JSON Text 模式产出 `lang=json` spec;3 个旧语义测试按 feature 门控。
 
-1. **Task 2 剩余**:editor/rendered/json WebView 的 macOS 上下文菜单走 NSMenu
-   (现用 WKWebView 系统原生菜单,见 Phase B 文档的取舍说明);"使用系统默认
-   应用打开"已具备(Phase C 的错误横幅按钮),但未知/损坏/加密格式的**正式
-   fallback 页面**未做。
-2. **Task 3 `vanilla-jsoneditor`** 接入(Tree/Text、path select、revision 复用
-   通用 envelope)——需要新前端包与 `dozer://json-editor/` host。
-3. **Task 4 Streamed JSON** 抽取与重构。
-4. **Task 5 删除自研普通 JSON tree**、**Task 7 删除老 iced `CodeView`**:按总规格
-   "旧实现只有在替代能力通过验收后才删除"。二者都要求 `codemirror` feature
-   转默认开启并在真机完成人工验收,当前 feature 仍默认关闭,故**不删除**。
-5. **Task 6 Tabular 接入统一 backend**:路由/backend 描述已具备(Task A),
-   Agent 上下文与资源登记待补。
-6. **Task 8** 最终路由矩阵全量验收 + 旧 spec 状态更新。
+## 未完成(受 GUI 验收与"迁移前不删除"原则约束)
+
+1. **Task 2 剩余**:NSMenu 上下文菜单(取舍见 Phase B 文档);Unsupported/损坏/
+   加密格式的正式 fallback 页面。
+2. **Task 3 `vanilla-jsoneditor`** 接入;Task 4 Streamed JSON 重构。
+3. **Task 5 其余 / Task 7 删除**自研普通 JSON Tree 与老 iced `CodeView`:要求
+   `codemirror` 转默认开启 + 真机全量验收。当前 feature 仍默认关闭,故**不删除**。
+4. **Task 6 Tabular**:路由/backend 已具备;CSV/TSV 原文 CodeMirror 模式、Agent
+   sheet/cell 上下文、sheet/滚动锚点持久化待补。
+5. **Task 8** 路由矩阵全量验收 + 旧 spec 状态更新。
 
 ## 验证
 
 - `cargo check/build -p dozer-app --all-targets`(默认与 `--features codemirror`):
   通过。
-- `cargo test -p dozer-app`:默认 **1254 passed / 0 failed**、feature **1238
+- `cargo test -p dozer-app`:默认 **1254 passed / 0 failed**、feature **1235
   passed / 0 failed**(另有 1 ignored)。
 - `cargo fmt --check`、`cargo clippy` 干净(仅既有 `file_history.rs` warning)。
-- 前端未改动(无需重建)。

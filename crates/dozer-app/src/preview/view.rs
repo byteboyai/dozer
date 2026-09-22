@@ -87,10 +87,9 @@ pub(crate) fn path_is_windowed(
 pub(crate) fn is_native_editor_candidate(path: &std::path::Path) -> bool {
     let (route, _, _) = route_and_backend(path, &crate::capabilities::current());
     match route.kind {
-        // feature 打开后 Code tab(含窗口化只读)统一走 editor host:普通文件
-        // 由 host 自取正文,窗口化文件由 Rust 经 set_window 推窗口。
-        PreviewKind::Code => !codemirror_enabled(),
-        PreviewKind::Json | PreviewKind::Streamed => true,
+        // feature 打开后 Code/JSON/Streamed 的文本视图统一走 editor host:
+        // 普通文件由 host 自取正文,窗口化由 Rust 推窗口,JSON Tree 仍原生。
+        PreviewKind::Code | PreviewKind::Json | PreviewKind::Streamed => !codemirror_enabled(),
         _ => false,
     }
 }
@@ -314,8 +313,11 @@ impl PreviewPane {
         let native_load = match &kind {
             TabKind::File(path)
                 if route.as_ref().is_some_and(|route| {
-                    matches!(route.kind, PreviewKind::Json | PreviewKind::Streamed)
-                        || (route.kind == PreviewKind::Code && !codemirror_enabled())
+                    !codemirror_enabled()
+                        && matches!(
+                            route.kind,
+                            PreviewKind::Code | PreviewKind::Json | PreviewKind::Streamed
+                        )
                 }) =>
             {
                 read_and_build_native_editor(path).ok()
@@ -890,6 +892,12 @@ impl PreviewPane {
                     }
                     PreviewBackend::Rendered(rendered) if rendered.mode == RenderedMode::Source => {
                         false
+                    }
+                    // JSON/Streamed 的 Text 模式(feature 下由 editor host 承载;
+                    // Tree/Streamed 视图仍走原生 json_tree)。
+                    PreviewBackend::Json(json) if json.mode == JsonMode::Text => tab.windowed,
+                    PreviewBackend::Streamed(streamed) if streamed.mode == PreviewMode::Text => {
+                        tab.windowed
                     }
                     _ => return None,
                 };
@@ -2010,6 +2018,7 @@ mod tests {
         std::fs::remove_file(&png_path).ok();
     }
 
+    #[cfg(not(feature = "codemirror"))]
     #[test]
     fn oversized_edit_tier_file_stays_native_but_becomes_read_only() {
         // 2026-09-19 起(大文件编辑器性能优化)不再有"超过阈值就退回 wry 只读
@@ -3118,6 +3127,7 @@ mod tests {
         std::fs::remove_file(tmp).ok();
     }
 
+    #[cfg(not(feature = "codemirror"))]
     #[test]
     fn open_json_file_populates_both_editor_and_json_tree() {
         // JSON 是双视图:原生代码编辑器(RawText 半边)与 JSON 树(Tree 半边)
@@ -3177,6 +3187,7 @@ mod tests {
         std::fs::remove_file(p).ok();
     }
 
+    #[cfg(not(feature = "codemirror"))]
     #[test]
     fn failed_json_tree_load_drops_tree_and_keeps_editor() {
         // 内容不是合法 JSON 时,加载失败分支会清掉 json_tree,让
@@ -3567,6 +3578,42 @@ mod tests {
             .expect("应产出 editor spec");
         assert!(spec.url.contains("lang=markdown"));
         assert!(!spec.url.contains("windowed=1"));
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// feature 打开时,JSON 的 Text 模式由 CodeMirror editor host 承载(lang=json)。
+    #[cfg(feature = "codemirror")]
+    #[test]
+    fn json_text_mode_uses_editor_host() {
+        let path = std::env::temp_dir().join(format!("json_text_{}.json", std::process::id()));
+        std::fs::write(&path, "{\"a\":1}\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+
+        // 默认 Tree:不产出 editor spec(由原生 json_tree 承载)。
+        assert!(
+            pane.desired_editor_webviews(1, crate::app::PanelKind::Files)
+                .iter()
+                .all(|s| s.id != id)
+        );
+
+        // 切到 Text:模拟树就绪 + 模式同步后的状态。
+        if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == id) {
+            tab.backend_state = BackendState::Ready;
+            tab.json_tree = None;
+            if let Some(PreviewBackend::Json(json)) = tab.backend.as_mut() {
+                json.mode = JsonMode::Text;
+            }
+        }
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.uses_editor_host());
+        let spec = pane
+            .desired_editor_webviews(1, crate::app::PanelKind::Files)
+            .into_iter()
+            .find(|s| s.id == id)
+            .expect("Text 模式应产出 editor spec");
+        assert!(spec.url.contains("lang=json"));
 
         std::fs::remove_file(&path).ok();
     }
