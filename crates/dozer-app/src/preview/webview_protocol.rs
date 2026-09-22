@@ -312,6 +312,53 @@ pub fn parse_event(raw: &str) -> Result<WebviewEnvelope<EditorEvent>, ProtocolEr
     })
 }
 
+/// JSON host(vanilla-jsoneditor)的事件。与 `EditorEvent` 共用 envelope,只
+/// 扩展自己的命令/事件名。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum JsonEvent {
+    Ready {
+        read_only: bool,
+        language: String,
+    },
+    /// 树编辑后的当前文本(可能较大,由 JS 侧节流)。
+    DocumentChanged {
+        revision: u64,
+        text: String,
+    },
+    Failed {
+        message: String,
+        recoverable: bool,
+    },
+}
+
+/// 解析一条 JSON host 事件。与 [`parse_event`] 同规则(超大/非法/未知不 panic)。
+pub fn parse_json_event(raw: &str) -> Result<WebviewEnvelope<JsonEvent>, ProtocolError> {
+    if raw.len() > MAX_MESSAGE_BYTES {
+        return Err(ProtocolError::TooLarge { bytes: raw.len() });
+    }
+    let env: WebviewEnvelope<serde_json::Value> =
+        serde_json::from_str(raw).map_err(|e| ProtocolError::BadJson(e.to_string()))?;
+    let kind = env
+        .payload
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_default();
+    let payload: JsonEvent = serde_json::from_value(env.payload)
+        .map_err(|_| ProtocolError::UnknownPayload(kind.clone()))?;
+    Ok(WebviewEnvelope {
+        protocol_version: env.protocol_version,
+        project_id: env.project_id,
+        panel: env.panel,
+        tab_id: env.tab_id,
+        document_id: env.document_id,
+        revision: env.revision,
+        request_id: env.request_id,
+        payload,
+    })
+}
+
 /// 编码一条 Rust -> 编辑器的命令为 envelope JSON,供 `evaluate_script` 注入。
 pub fn encode_command(
     project_id: i64,
@@ -453,6 +500,33 @@ mod tests {
     fn parses_find_request_event() {
         let env = parse_event(&raw(r#"{"kind":"find_request"}"#)).unwrap();
         assert_eq!(env.payload, EditorEvent::FindRequest);
+    }
+
+    #[test]
+    fn parses_json_host_events() {
+        let ready = parse_json_event(&raw(
+            r#"{"kind":"ready","read_only":true,"language":"json"}"#,
+        ))
+        .unwrap();
+        assert_eq!(
+            ready.payload,
+            JsonEvent::Ready {
+                read_only: true,
+                language: "json".into()
+            }
+        );
+        let changed = parse_json_event(&raw(
+            r#"{"kind":"document_changed","revision":2,"text":"{}"}"#,
+        ))
+        .unwrap();
+        assert!(matches!(
+            changed.payload,
+            JsonEvent::DocumentChanged { revision: 2, .. }
+        ));
+        assert!(matches!(
+            parse_json_event(&raw(r#"{"kind":"evil"}"#)),
+            Err(ProtocolError::UnknownPayload(_))
+        ));
     }
 
     #[test]

@@ -291,7 +291,7 @@ pub(crate) fn sync_webview_pool(
     // flyfish 切成 editor（或反向）时必须重建，不能只 load_url。
     pool.retain(|id, (_, loaded_url)| {
         desired_hosts.get(id).is_some_and(|expects_editor| {
-            *expects_editor == crate::preview::is_editor_url(loaded_url)
+            *expects_editor == crate::preview::is_host_url(loaded_url)
         })
     });
 
@@ -330,6 +330,7 @@ pub(crate) fn sync_webview_pool(
                 let nav_proxy = proxy.clone();
                 let webview_id = spec.id;
                 let editor_binding = spec.editor_binding.clone();
+                let is_json_host = crate::preview::is_json_editor_url(&spec.url);
                 // 常驻注入脚本:焦点/拖拽/缩放三件套(所有 webview);浏览器
                 // 面板(`report_title`)额外附一段"页面标题回报":把
                 // `window.__dozer_webview` 记成本 webview 的 id,页面
@@ -449,27 +450,47 @@ pub(crate) fn sync_webview_pool(
                             }
                             _ => {
                                 if let Some(binding) = editor_binding.as_ref() {
-                                    match crate::preview::parse_event(body) {
-                                        Ok(event) => {
-                                            let expected = crate::preview::HostBinding::new(
-                                                binding.project_id,
-                                                binding.panel,
-                                                binding.tab_id,
-                                                binding.document_id(),
-                                            );
-                                            if let Err(error) = event.validate(&expected) {
-                                                tracing::warn!(%error, "拒绝无效 editor IPC");
-                                            } else {
-                                                let _ = ipc_proxy.send_event(
-                                                    Message::EditorWebviewEvent(
-                                                        binding.clone(),
-                                                        event,
-                                                    ),
-                                                );
+                                    let expected = crate::preview::HostBinding::new(
+                                        binding.project_id,
+                                        binding.panel,
+                                        binding.tab_id,
+                                        binding.document_id(),
+                                    );
+                                    if is_json_host {
+                                        match crate::preview::parse_json_event(body) {
+                                            Ok(event) => {
+                                                if let Err(error) = event.validate(&expected) {
+                                                    tracing::warn!(%error, "拒绝无效 json-editor IPC");
+                                                } else {
+                                                    let _ = ipc_proxy.send_event(
+                                                        Message::JsonEditorEvent(
+                                                            binding.clone(),
+                                                            event,
+                                                        ),
+                                                    );
+                                                }
+                                            }
+                                            Err(error) => {
+                                                tracing::warn!(%error, "无法解析 json-editor IPC");
                                             }
                                         }
-                                        Err(error) => {
-                                            tracing::warn!(%error, "无法解析 editor IPC");
+                                    } else {
+                                        match crate::preview::parse_event(body) {
+                                            Ok(event) => {
+                                                if let Err(error) = event.validate(&expected) {
+                                                    tracing::warn!(%error, "拒绝无效 editor IPC");
+                                                } else {
+                                                    let _ = ipc_proxy.send_event(
+                                                        Message::EditorWebviewEvent(
+                                                            binding.clone(),
+                                                            event,
+                                                        ),
+                                                    );
+                                                }
+                                            }
+                                            Err(error) => {
+                                                tracing::warn!(%error, "无法解析 editor IPC");
+                                            }
                                         }
                                     }
                                 } else {

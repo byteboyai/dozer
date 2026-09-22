@@ -928,6 +928,37 @@ impl PreviewPane {
             .collect()
     }
 
+    /// 严格 JSON 的 Tree 视图(对照期 feature)的 json-editor webview 期望清单。
+    pub fn desired_json_webviews(
+        &self,
+        project_id: i64,
+        panel: crate::app::PanelKind,
+    ) -> Vec<WebviewSpec> {
+        if !json_editor_enabled() {
+            return Vec::new();
+        }
+        self.tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, tab)| {
+                if !tab.uses_json_editor() || tab.loading || !tab.backend_state.is_ready() {
+                    return None;
+                }
+                let TabKind::File(path) = &tab.kind else {
+                    return None;
+                };
+                let binding = EditorHostBinding::new(project_id, panel, tab.id, path.clone());
+                // Tree 视为查看态(编辑走 Text 模式 CodeMirror)。
+                Some(WebviewSpec {
+                    id: tab.id,
+                    url: binding.json_url(scheme_query_value(), true),
+                    visible: idx == self.active,
+                    editor_binding: Some(binding),
+                })
+            })
+            .collect()
+    }
+
     /// 按 `PreviewTab.id` 把某个原生 tab 标脏(当且仅当其编辑器收到过"改正文"
     /// 的 Action 时由 Workspace 转发层调用;见 `preview_tab_editor_event`)。
     /// tab 不存在/非原生时 no-op。
@@ -3652,6 +3683,32 @@ mod tests {
             .find(|s| s.id == id)
             .expect("Text 模式应产出 editor spec");
         assert!(spec.url.contains("lang=json"));
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// json-editor feature:严格 JSON 的 Tree 视图产出 `dozer://json-editor/` spec。
+    #[cfg(feature = "json-editor")]
+    #[test]
+    fn json_tree_uses_json_editor_host_when_feature_on() {
+        let path = std::env::temp_dir().join(format!("json_host_{}.json", std::process::id()));
+        std::fs::write(&path, "{\"a\":1}\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        // 默认 Tree + json-editor feature → 使用 json host。
+        if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == id) {
+            tab.backend_state = BackendState::Ready;
+        }
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.uses_json_editor());
+        assert!(!tab.uses_editor_host());
+        let spec = pane
+            .desired_json_webviews(1, crate::app::PanelKind::Files)
+            .into_iter()
+            .find(|s| s.id == id)
+            .expect("Tree 应产出 json-editor spec");
+        assert!(crate::preview::is_json_editor_url(&spec.url));
+        assert!(spec.url.contains("ro=1"), "Tree 为查看态");
 
         std::fs::remove_file(&path).ok();
     }

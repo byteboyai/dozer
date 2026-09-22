@@ -70,6 +70,17 @@
 - **尚未接线**:路由默认 Tree 仍走自研 `json_tree`;待把严格 JSON Tree 切到
   本 host 并通过对照后再删自研树(见未完成)。
 
+### Task 3(第二步,对照期接线,默认关闭)
+- 新增默认关闭的 feature `json-editor`。开启后:严格 JSON 的 **Tree** 视图改由
+  `dozer://json-editor/` host 承载(只读查看态),Text 仍是 CodeMirror;**关闭时
+  行为与现在一致**(原生 `json_tree`)。
+- `PreviewTab::uses_json_editor()`(Tree + feature);`desired_json_webviews()`
+  产出 json-editor spec;`preview_desired` 合并;runtime 按 `is_host_url`
+  区分 host/flyfish,json host IPC 走 `parse_json_event` → `Message::JsonEditorEvent`;
+  渲染层在使用 json host 时跳过原生树。
+- 自带测试:`tsc` + build;Rust `parse_json_event`、`uses_json_editor`/spec、
+  命名空间/CSP/URL。
+
 ## 未完成(受 GUI 验收与"迁移前不删除"原则约束)
 1. **Task 2 剩余**:NSMenu 上下文菜单(取舍见 Phase B 文档);Unsupported/损坏/
    加密格式的正式 fallback 页面。

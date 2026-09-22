@@ -667,6 +667,11 @@ pub enum Message {
         crate::preview::EditorHostBinding,
         crate::preview::WebviewEnvelope<crate::preview::EditorEvent>,
     ),
+    /// JSON host(vanilla-jsoneditor)发回的事件(对照期 feature)。
+    JsonEditorEvent(
+        crate::preview::EditorHostBinding,
+        crate::preview::WebviewEnvelope<crate::preview::JsonEvent>,
+    ),
     /// 窗口化 viewer 的稀疏行索引建立完成(后台线程 → UI 线程)。成功后由
     /// App 推送初始窗口(必要时先 reveal 到目标行)。
     PreviewWindowIndex(

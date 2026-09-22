@@ -184,6 +184,18 @@ impl PreviewTab {
         self.uses_editor_host() && matches!(self.backend, Some(PreviewBackend::Rendered(_)))
     }
 
+    /// 严格 JSON 的 Tree 视图是否改用 vanilla-jsoneditor host(对照期 feature)。
+    pub fn uses_json_editor(&self) -> bool {
+        json_editor_enabled()
+            && matches!(
+                self.backend,
+                Some(PreviewBackend::Json(JsonBackend {
+                    mode: JsonMode::Tree,
+                    ..
+                }))
+            )
+    }
+
     /// debug/test 下断言 backend 描述与旧 adapter 字段一致:任何迁移漏点
     /// (新代码只读 backend 但旧字段没同步)都应立即暴露,而不是静默分叉。
     ///

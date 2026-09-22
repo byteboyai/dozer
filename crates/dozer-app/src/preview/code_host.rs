@@ -115,6 +115,17 @@ pub fn is_json_editor_url(url: &str) -> bool {
     url.starts_with(JSON_EDITOR_URL_PREFIX)
 }
 
+/// URL 是否是任一内部 host(CodeMirror / JSON),用于运行期区分"host WebView"
+/// 与 Flyfish WebView(注入脚本/IPC 路由不同)。
+pub fn is_host_url(url: &str) -> bool {
+    is_editor_url(url) || is_json_editor_url(url)
+}
+
+/// 对照期开关:严格 JSON 的 Tree 视图是否改用 vanilla-jsoneditor host。
+pub fn json_editor_enabled() -> bool {
+    cfg!(feature = "json-editor")
+}
+
 /// 开发开关:是否用 CodeMirror host 承载 Code tab。默认关闭,保证行为与
 /// 迁移前一致;`cargo build -p dozer-app --features codemirror` 打开。
 pub fn codemirror_enabled() -> bool {

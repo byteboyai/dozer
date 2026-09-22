@@ -3124,6 +3124,18 @@ impl App {
                     ),
                     _ => {}
                 }
+                // 对照期:严格 JSON Tree 的 vanilla-jsoneditor host。
+                match kind {
+                    PanelKind::Files => specs.extend(
+                        ws.preview
+                            .desired_json_webviews(project.id, PanelKind::Files),
+                    ),
+                    PanelKind::Project => specs.extend(
+                        ws.project_preview
+                            .desired_json_webviews(project.id, PanelKind::Project),
+                    ),
+                    _ => {}
+                }
             }
             // tab 栏"溢出下拉"(V 按钮)向下弹,原生浮层会被本侧 webview
             // 盖住(webview 恒在 iced 内容之上)——按该侧对应的

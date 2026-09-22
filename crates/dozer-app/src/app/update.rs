@@ -338,6 +338,42 @@ impl App {
                     }
                 });
             }
+            Message::JsonEditorEvent(binding, event) => {
+                self.with_project(binding.project_id, move |ws, _io| {
+                    let pane = if binding.panel == PanelKind::Project {
+                        &mut ws.project_preview
+                    } else {
+                        &mut ws.preview
+                    };
+                    if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == binding.tab_id) {
+                        use crate::preview::JsonEvent;
+                        match event.payload {
+                            JsonEvent::Ready { .. } => {
+                                tab.web_error = None;
+                                let _ = tab
+                                    .backend_state
+                                    .try_transition(crate::preview::BackendState::Ready);
+                            }
+                            JsonEvent::DocumentChanged { revision, .. } => {
+                                if revision >= tab.web_revision {
+                                    tab.web_revision = revision;
+                                }
+                            }
+                            JsonEvent::Failed {
+                                message,
+                                recoverable,
+                            } => {
+                                tab.web_error = Some(message.clone());
+                                let _ = tab.backend_state.try_transition(
+                                    crate::preview::BackendState::Failed(
+                                        crate::preview::PreviewError::new(message, recoverable),
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                });
+            }
             Message::PreviewWindowIndex(project_id, panel, tab_id, result) => {
                 self.with_project(project_id, move |ws, _io| {
                     match result {

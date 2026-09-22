@@ -1391,6 +1391,7 @@ pub(crate) fn preview_pane_for<'a>(
             }
         } else if let Some(json_tree) = &active_tab.json_tree
             && !active_tab.uses_editor_host()
+            && !active_tab.uses_json_editor()
         {
             // JSON/JSONL tab:双视图。Tree 模式下画树(消息映射到
             // `Message::JsonTreeAction`,带 `tab_id` + `PanelKind`);RawText
