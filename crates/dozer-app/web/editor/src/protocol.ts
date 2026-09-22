@@ -23,6 +23,9 @@ export interface FoldRange {
   to_line: number;
 }
 
+/** 窗口化 viewer 请求相邻窗口的方向。 */
+export type WindowEdge = 'top' | 'bottom';
+
 /** 编辑器栈 -> Rust 的事件。 */
 export type EditorEvent =
   | { kind: 'ready'; read_only: boolean; language: string }
@@ -49,6 +52,7 @@ export type EditorEvent =
       top_line: number;
       folds: FoldRange[];
     }
+  | { kind: 'window_request'; edge: WindowEdge; anchor_line: number }
   | { kind: 'failed'; message: string; recoverable: boolean };
 
 /** Rust -> 编辑器的具名命令(禁止执行任意 JS)。 */
@@ -59,6 +63,13 @@ export type EditorCommand =
       revision: number;
       language: string;
       read_only: boolean;
+    }
+  | {
+      kind: 'set_window';
+      text: string;
+      start_line: number;
+      total_lines: number;
+      revision: number;
     }
   | { kind: 'reveal_position'; line: number; column: number }
   | { kind: 'select_range'; start: Position; end: Position }
@@ -147,6 +158,13 @@ export function decodeCommand(payload: unknown): EditorCommand | null {
         typeof c.revision === 'number' &&
         typeof c.language === 'string' &&
         typeof c.read_only === 'boolean'
+        ? (c as unknown as EditorCommand)
+        : null;
+    case 'set_window':
+      return typeof c.text === 'string' &&
+        typeof c.start_line === 'number' &&
+        typeof c.total_lines === 'number' &&
+        typeof c.revision === 'number'
         ? (c as unknown as EditorCommand)
         : null;
     case 'reveal_position':

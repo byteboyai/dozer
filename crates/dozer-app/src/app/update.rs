@@ -50,6 +50,9 @@ impl App {
                     // 是否需要把上下文(路径/光标/选区/可见行/revision)推给
                     // dozerd:选区/可见范围/就绪变化都算。
                     let mut context_changed = false;
+                    // 窗口化 viewer:待建立行索引 / 待推送相邻窗口。
+                    let mut build_index: Option<(usize, PathBuf)> = None;
+                    let mut window_request: Option<(usize, u32)> = None;
                     {
                         let Some(tab) = pane
                             .tabs_mut()
@@ -74,6 +77,11 @@ impl App {
                                     .try_transition(crate::preview::BackendState::Ready);
                                 if let Some(line) = tab.pending_jump_line.take() {
                                     pending_reveal = Some((tab.id, line as u32));
+                                }
+                                // 窗口化:首次就绪时后台建立稀疏索引(索引建好
+                                // 后再推初始窗口)。
+                                if tab.uses_windowed_editor() && tab.window_index.is_none() {
+                                    build_index = Some((tab.id, path.clone()));
                                 }
                                 context_changed = true;
                             }
@@ -122,6 +130,11 @@ impl App {
                                 tab.web_selection = selection;
                                 context_changed = true;
                             }
+                            EditorEvent::WindowRequest { anchor_line, .. } => {
+                                // 窗口化 viewer 请求相邻窗口:记下目标锚点行,
+                                // tab 借用结束后在 pane 上排队装窗口。
+                                window_request = Some((tab.id, anchor_line));
+                            }
                             EditorEvent::Failed {
                                 message,
                                 recoverable,
@@ -142,10 +155,80 @@ impl App {
                             crate::preview::EditorCommand::RevealPosition { line, column: 1 },
                         );
                     }
+                    if let Some((tab_id, path)) = build_index {
+                        let project_id = binding.project_id;
+                        let panel = binding.panel;
+                        let proxy = io.proxy.clone();
+                        io.handle.spawn(async move {
+                            let result = tokio::task::spawn_blocking(move || {
+                                crate::preview::LineIndex::build(&path, 1000, 0)
+                                    .map(std::sync::Arc::new)
+                                    .map_err(|e| e.to_string())
+                            })
+                            .await
+                            .unwrap_or_else(|e| Err(e.to_string()));
+                            let _ = proxy.send_event(Message::PreviewWindowIndex(
+                                project_id, panel, tab_id, result,
+                            ));
+                        });
+                    }
+                    if let Some((tab_id, anchor_line)) = window_request {
+                        ws.queue_windowed_view(binding.panel, tab_id, anchor_line);
+                    }
                     if context_changed {
                         // 第二段链路(dozer-app → dozerd)自带 250ms 防抖;这里
                         // 只管触发,不假设复用 editor→app 那段的节流。
                         ws.spawn_preview_context_push(io);
+                    }
+                });
+            }
+            Message::PreviewWindowIndex(project_id, panel, tab_id, result) => {
+                self.with_project(project_id, move |ws, _io| {
+                    match result {
+                        Ok(index) => {
+                            let mut jump = None;
+                            {
+                                let pane = if panel == PanelKind::Project {
+                                    &mut ws.project_preview
+                                } else {
+                                    &mut ws.preview
+                                };
+                                if let Some(tab) =
+                                    pane.tabs_mut().iter_mut().find(|t| t.id == tab_id)
+                                {
+                                    tab.window_index = Some(index);
+                                    jump = tab.pending_jump_line.take().map(|l| l as u32);
+                                }
+                            }
+                            // 索引就绪:推初始窗口(有跳转诉求就以目标行为中心,
+                            // 窗口就位后再 reveal)。
+                            let center = jump.unwrap_or(1);
+                            ws.queue_windowed_view(panel, tab_id, center);
+                            if let Some(line) = jump {
+                                let pane = if panel == PanelKind::Project {
+                                    &mut ws.project_preview
+                                } else {
+                                    &mut ws.preview
+                                };
+                                pane.queue_editor_command(
+                                    tab_id,
+                                    crate::preview::EditorCommand::RevealPosition {
+                                        line,
+                                        column: 1,
+                                    },
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            let pane = if panel == PanelKind::Project {
+                                &mut ws.project_preview
+                            } else {
+                                &mut ws.preview
+                            };
+                            if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == tab_id) {
+                                tab.web_error = Some(format!("建立行索引失败: {error}"));
+                            }
+                        }
                     }
                 });
             }

@@ -98,10 +98,25 @@ pub enum EditorEvent {
         top_line: u32,
         folds: Vec<FoldRange>,
     },
+    /// 窗口化 viewer 滚到持有窗口边界,请求相邻窗口。`edge` 表示用户靠近
+    /// 窗口的哪一端;`anchor_line` 是当前窗口内的全局行号。Rust 用稀疏索引
+    /// 读相邻窗口后回 `SetWindow`。
+    WindowRequest {
+        edge: WindowEdge,
+        anchor_line: u32,
+    },
     Failed {
         message: String,
         recoverable: bool,
     },
+}
+
+/// 窗口化 viewer 请求的相邻窗口方向。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowEdge {
+    Top,
+    Bottom,
 }
 
 /// CodeMirror change set 的单条增量(offset 域,JS 侧坐标)。
@@ -121,6 +136,14 @@ pub enum EditorCommand {
         revision: u64,
         language: String,
         read_only: bool,
+    },
+    /// 窗口化只读 viewer:把文档替换为某个全局行区间的内容,`start_line` 是
+    /// 窗口首行的全局行号(用于全局行号显示与坐标换算),`total_lines` 供状态栏。
+    SetWindow {
+        text: String,
+        start_line: u32,
+        total_lines: u32,
+        revision: u64,
     },
     RevealPosition {
         line: u32,
@@ -369,6 +392,39 @@ mod tests {
         ))
         .unwrap();
         assert!(matches!(vs.payload, EditorEvent::ViewState { .. }));
+
+        let wr = parse_event(&raw(
+            r#"{"kind":"window_request","edge":"bottom","anchor_line":900}"#,
+        ))
+        .unwrap();
+        assert_eq!(
+            wr.payload,
+            EditorEvent::WindowRequest {
+                edge: WindowEdge::Bottom,
+                anchor_line: 900
+            }
+        );
+    }
+
+    #[test]
+    fn encodes_set_window_command() {
+        let s = encode_command(
+            1,
+            PanelKind::Files,
+            2,
+            "p1-t2",
+            3,
+            None,
+            EditorCommand::SetWindow {
+                text: "a\nb\n".into(),
+                start_line: 1001,
+                total_lines: 500_000,
+                revision: 3,
+            },
+        );
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["payload"]["kind"], "set_window");
+        assert_eq!(v["payload"]["start_line"], 1001);
     }
 
     #[test]

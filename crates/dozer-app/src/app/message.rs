@@ -662,6 +662,14 @@ pub enum Message {
         crate::preview::EditorHostBinding,
         crate::preview::WebviewEnvelope<crate::preview::EditorEvent>,
     ),
+    /// 窗口化 viewer 的稀疏行索引建立完成(后台线程 → UI 线程)。成功后由
+    /// App 推送初始窗口(必要时先 reveal 到目标行)。
+    PreviewWindowIndex(
+        i64,
+        PanelKind,
+        usize,
+        Result<std::sync::Arc<crate::preview::LineIndex>, String>,
+    ),
     /// 顶栏设置齿轮:打开设置弹窗(独立原生窗口,主题 + Git 账户)。
     SettingsOpen,
     /// 设置弹窗内部消息,转发给 `extensions::settings::update`。

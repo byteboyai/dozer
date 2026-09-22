@@ -70,21 +70,35 @@
   协同,让窗口化文件在 feature 打开时**仍走老 iced 分块只读**,不整载进
   CodeMirror WebView(窗口化专用 viewer 留待后续)。
 
+### Task 3:Windowed Viewer(已接线)
+- **协议**:`EditorCommand::SetWindow { text, start_line, total_lines, revision }`
+  与 `EditorEvent::WindowRequest { edge, anchor_line }`(`WindowEdge`);前后端
+  镜像 + 解析/编码测试。
+- **前端**(`web/editor`):URL `windowed=1` 进入窗口化只读模式 —— 不自行拉取
+  正文;`set_window` 替换为窗口内容并用 `lineNumbers({formatNumber})` 显示
+  **全局行号基数**;选区/viewport 事件换算成全局 1-based 行号对外;滚到持有
+  窗口边界时(节流 400ms)发 `window_request`;`replace_range`/⌘S 恒拒绝。
+- **Rust**:`PreviewTab.window_index`(稀疏索引)+ `uses_windowed_editor()`;
+  `desired_editor_webviews` 对窗口化 tab 产出带 `windowed=1` 的 editor spec;
+  editor `Ready` 后后台建 `LineIndex` → `Message::PreviewWindowIndex` → 推初始
+  窗口(`Workspace::queue_windowed_view`,以目标行/首行为中心,`WINDOW_BEFORE=1000`
+  /`WINDOW_AFTER=2000` 读有界窗口);`WindowRequest` 回推相邻窗口;Agent jump
+  在索引就绪后先装窗口再 `reveal_position`(命令按队列顺序注入)。
+- `hosts_webview` 对窗口化 tab 返回 false(走 editor host,不另起 Flyfish)。
+
 ## 仍未完成
 
-1. **Task 3 Windowed 专用 viewer**:Rust 读窗口、CodeMirror 只持窗口、全局
-   行号基数、边界加载、Agent reveal 未加载行。需要 editor 协议加 windowed 模式
-   与 `set_window`(含前端改动与重建 bundle)。
-2. **Task 6 接线**:把 `recovery.rs` 接进脏 tab 的防抖快照、启动恢复、保存后清理
-   (需要 editor host 新增"周期上报正文"事件或保存/失焦时快照)。
-3. **Task 7 安全启动与运行时反馈**:启动进行/完成标记、失败计数、ready latency。
-4. 恢复时把持久化的 cursor/selection/scroll anchor 应用到编辑器视图。
+1. **Task 6 接线**:把 `recovery.rs` 接进脏 tab 的防抖快照、启动恢复、保存后
+   清理(需要 editor host 新增"周期上报正文"事件或保存/失焦时快照)。
+2. **Task 7 安全启动与运行时反馈**:启动进行/完成标记、失败计数、ready latency。
+3. Windowed 的折叠/全文搜索明确禁用(已只读、无保存);恢复时把持久化的
+   cursor/selection/scroll anchor 应用到编辑器视图。
 
 ## 验证
 
-- `cargo check -p dozer-app --all-targets`(默认与 `--features codemirror`):通过。
-- `cargo test -p dozer-app`:默认 **1247 passed / 0 failed**、feature **1229
+- `cargo check`/`build -p dozer-app --all-targets`(默认与 `--features codemirror`):
+  通过(链接成功)。
+- `cargo test -p dozer-app`:默认 **1248 passed / 0 failed**、feature **1231
   passed / 0 failed**(另有 1 ignored)。
-  新增:`file_policy` 9、`large_text` 10、`resources` 11、`recovery` 11、file_profile
-  +2、view 壳/窗口化 +3。
+- 前端:`tsc --noEmit`、`npm test`(6 passed)、`npm run build` 通过(产物已更新)。
 - `cargo fmt --check`、`cargo clippy` 干净(仅既有 `file_history.rs` warning)。

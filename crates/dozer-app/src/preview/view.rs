@@ -30,6 +30,7 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         backend: None,
         backend_state: BackendState::Ready,
         windowed: false,
+        window_index: None,
         web_revision: 0,
         web_selection: None,
         web_selected_text: None,
@@ -78,12 +79,9 @@ pub(crate) fn path_is_windowed(
 pub(crate) fn is_native_editor_candidate(path: &std::path::Path) -> bool {
     let (route, _, _) = route_and_backend(path, &crate::capabilities::current());
     match route.kind {
-        // feature 打开后 Code tab 由 editor WebView 自己按 allowlist URL
-        // 读取正文；但 `file_policy` 判定窗口化(超大/超长行)的文件仍走老
-        // iced 分块只读,避免整载进 WebView。
-        PreviewKind::Code => {
-            !codemirror_enabled() || path_is_windowed(path, &crate::capabilities::current())
-        }
+        // feature 打开后 Code tab(含窗口化只读)统一走 editor host:普通文件
+        // 由 host 自取正文,窗口化文件由 Rust 经 set_window 推窗口。
+        PreviewKind::Code => !codemirror_enabled(),
         PreviewKind::Json | PreviewKind::Streamed => true,
         _ => false,
     }
@@ -274,9 +272,7 @@ impl PreviewPane {
             TabKind::File(path)
                 if route.as_ref().is_some_and(|route| {
                     matches!(route.kind, PreviewKind::Json | PreviewKind::Streamed)
-                        || (route.kind == PreviewKind::Code
-                            && (!codemirror_enabled()
-                                || path_is_windowed(path, &self.capabilities)))
+                        || (route.kind == PreviewKind::Code && !codemirror_enabled())
                 }) =>
             {
                 read_and_build_native_editor(path).ok()
@@ -358,6 +354,7 @@ impl PreviewPane {
             backend,
             backend_state,
             windowed,
+            window_index: None,
             web_revision: 0,
             web_selection: None,
             web_selected_text: None,
@@ -425,6 +422,7 @@ impl PreviewPane {
             backend,
             backend_state: BackendState::Loading,
             windowed,
+            window_index: None,
             web_revision: 0,
             web_selection: None,
             web_selected_text: None,
@@ -486,6 +484,7 @@ impl PreviewPane {
             backend: Some(backend),
             backend_state: BackendState::Suspended,
             windowed,
+            window_index: None,
             web_revision: 0,
             web_selection: None,
             web_selected_text: None,
@@ -810,12 +809,14 @@ impl PreviewPane {
                     return None;
                 }
                 let binding = EditorHostBinding::new(project_id, panel, tab.id, path.clone());
-                let mut url = binding.url(
-                    scheme_query_value(),
-                    matches!(code.mode, CodeMode::ReadOnly),
-                );
+                let read_only = tab.windowed || matches!(code.mode, CodeMode::ReadOnly);
+                let mut url = binding.url(scheme_query_value(), read_only);
+                if tab.windowed {
+                    // 窗口化只读:正文由 Rust 经 set_window 推送,host 不自行拉取。
+                    url.push_str("&windowed=1");
+                }
                 // 外部变更/右键刷新的重载:换 URL 逼 WebView 重新导航拉取最新
-                // 内容(与 flyfish 的 `_r=` 同一手法)。
+                // 内容(与 flyfish 的 `_r=` 同一手法)。窗口化 tab 的重载会重推窗口。
                 if tab.reload_nonce > 0 {
                     url.push_str(&format!("&_r={}", tab.reload_nonce));
                 }
@@ -3401,7 +3402,7 @@ mod tests {
     }
 
     /// `file_policy` 窗口化的文件(超长首行)被判只读,且 `path_is_windowed`
-    /// 为真(据此在 feature 打开时把它挡在 CodeMirror 之外)。
+    /// 为真。
     #[test]
     fn windowed_sparse_file_is_read_only_and_windowed() {
         let dir = std::env::temp_dir().join(format!("dozer_windowed_{}", std::process::id()));
@@ -3418,5 +3419,32 @@ mod tests {
             PreviewBackend::Code(code) => assert_eq!(code.mode, CodeMode::ReadOnly),
             other => panic!("应是 Code,得到 {other:?}"),
         }
+    }
+
+    /// feature 打开时,窗口化 Code tab 走**窗口化 editor host**(URL 带
+    /// `windowed=1`),且不再另起 Flyfish webview。
+    #[cfg(feature = "codemirror")]
+    #[test]
+    fn windowed_code_tab_uses_windowed_editor_host() {
+        let dir = std::env::temp_dir().join(format!("dozer_windowed_host_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("huge_line.rs");
+        let f = std::fs::File::create(&path).unwrap();
+        f.set_len(10 * 1024 * 1024).unwrap();
+        drop(f);
+
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.windowed);
+        assert!(tab.uses_windowed_editor());
+        assert!(!tab.hosts_webview(), "窗口化不吃 Flyfish webview");
+        let spec = pane
+            .desired_editor_webviews(1, crate::app::PanelKind::Files)
+            .into_iter()
+            .find(|s| s.id == id)
+            .expect("应产出 editor spec");
+        assert!(spec.url.contains("windowed=1"));
+        assert!(spec.url.contains("ro=1"));
     }
 }

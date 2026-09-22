@@ -37,6 +37,10 @@ use tokio::sync::mpsc;
 
 use super::*;
 
+/// 窗口化 viewer 每次推给 CodeMirror 的窗口大小(以目标行为中心的前后行数)。
+const WINDOW_BEFORE: u32 = 1000;
+const WINDOW_AFTER: u32 = 2000;
+
 /// `Stub` → `Loaded` 促成的中间产物:一个项目的完整恢复素材,且**可以跨线程
 /// 搬运**。
 ///
@@ -1363,11 +1367,12 @@ impl Workspace {
             TabKind::File(p) => p.clone(),
             _ => return,
         };
-        let codemirror = pane.tabs()[idx].uses_codemirror();
+        let editor_host = pane.tabs()[idx].uses_editor_host();
 
         match route_kind {
-            // CodeMirror:WebView 自己按 allowlist 读内容,直接 Loading→Ready。
-            Some(crate::preview::PreviewKind::Code) if codemirror => {
+            // CodeMirror(含窗口化只读):editor WebView 自取内容/由 Rust 推窗口,
+            // 直接 Loading→Ready。
+            Some(crate::preview::PreviewKind::Code) if editor_host => {
                 pane.begin_shell_load(tab_id);
                 pane.finish_shell_load(tab_id);
             }
@@ -1434,9 +1439,53 @@ impl Workspace {
         }
     }
 
+    /// 给窗口化 viewer 推一个以 `center_line`(全局 1-based)为中心的窗口:
+    /// 用 tab 上的稀疏索引定位,读**有界**窗口,排队 `SetWindow` 由
+    /// `window_events` 注入。返回是否真的推了(tab 不是窗口化/索引未就绪则 false)。
+    pub(crate) fn queue_windowed_view(
+        &mut self,
+        kind: PanelKind,
+        tab_id: usize,
+        center_line: u32,
+    ) -> bool {
+        let pane = if kind == PanelKind::Project {
+            &mut self.project_preview
+        } else {
+            &mut self.preview
+        };
+        let command = {
+            let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
+                return false;
+            };
+            let Some(index) = tab.window_index.as_ref() else {
+                return false;
+            };
+            let TabKind::File(path) = &tab.kind else {
+                return false;
+            };
+            let window = match crate::preview::read_window(
+                path,
+                index,
+                center_line,
+                WINDOW_BEFORE,
+                WINDOW_AFTER,
+            ) {
+                Ok(w) => w,
+                Err(_) => return false,
+            };
+            crate::preview::EditorCommand::SetWindow {
+                text: window.text,
+                start_line: window.start_line,
+                total_lines: index.total_lines(),
+                revision: tab.web_revision,
+            }
+        };
+        pane.queue_editor_command(tab_id, command);
+        true
+    }
+
     /// 保证"项目打开时至少有一个终端 tab"这条不变式:启动恢复、关闭最后
     /// 一个 tab、切换/打开项目后都要检查一次。
-    ///
     /// `self.project.is_some()` 这道闸门现在纯属**防御**:P2a 之后
     /// `Workspace` 恒有归属项目(会话必须归属项目,见 `spawn_new_tab` 的
     /// `expect` 与 `Client::create` 的 `project_id`),`None` 只可能出现在

@@ -76,11 +76,32 @@ const scheme = params.get('theme') === 'light' ? 'light' : 'dark';
 const filePath = params.get('p') ?? '';
 const initialReadOnly = params.get('ro') === '1';
 const languageToken = params.get('lang') ?? 'txt';
+// 窗口化只读 viewer(Phase C Task 3):正文由 Rust 经 set_window 推送,不自行
+// 拉取;只持有全局行区间 [windowBase, windowBase+lines-1]。
+const windowed = params.get('windowed') === '1';
+let windowBase = 1;
+let windowTotal = 0;
+let windowHeldEnd = 0;
+let lastWindowRequest = 0;
+let applyingWindow = false;
 
 document.documentElement.setAttribute('data-theme', scheme);
 
 const languageCompartment = new Compartment();
 const readOnlyCompartment = new Compartment();
+const lineNumberCompartment = new Compartment();
+
+function globalLineFormatter(lineNumber: number): string {
+  return String(windowBase + lineNumber - 1);
+}
+
+function toGlobalLine(localLine: number): number {
+  return windowed ? windowBase + localLine - 1 : localLine;
+}
+
+function toLocalLine(globalLine: number): number {
+  return windowed ? globalLine - windowBase + 1 : globalLine;
+}
 
 let revision = 1;
 let view: EditorView;
@@ -105,12 +126,13 @@ function post(event: EditorEvent, requestId: string | null = null): void {
 
 function offsetToPosition(offset: number): Position {
   const line = view.state.doc.lineAt(offset);
-  return { line: line.number, column: offset - line.from + 1 };
+  // 对外坐标:窗口化时换算成全局 1-based 行号。
+  return { line: toGlobalLine(line.number), column: offset - line.from + 1 };
 }
 
 function positionToOffset(pos: Position): number {
   const total = view.state.doc.lines;
-  const lineNo = Math.min(Math.max(pos.line, 1), total);
+  const lineNo = Math.min(Math.max(toLocalLine(pos.line), 1), total);
   const line = view.state.doc.line(lineNo);
   const column = Math.min(Math.max(pos.column, 1), line.length + 1);
   return line.from + (column - 1);
@@ -166,14 +188,32 @@ const emitViewport = throttle(() => {
   const { from, to } = view.viewport;
   post({
     kind: 'viewport_changed',
-    from_line: view.state.doc.lineAt(from).number,
-    to_line: view.state.doc.lineAt(to).number,
+    from_line: toGlobalLine(view.state.doc.lineAt(from).number),
+    to_line: toGlobalLine(view.state.doc.lineAt(to).number),
   });
 }, 120);
 
+/** 窗口化时滚到持有窗口边界 → 请求相邻窗口(节流 + 去重)。 */
+function maybeRequestWindow(): void {
+  if (!windowed || applyingWindow || windowTotal === 0) return;
+  const now = Date.now();
+  if (now - lastWindowRequest < 400) return;
+  const { from, to } = view.viewport;
+  const firstLocal = view.state.doc.lineAt(from).number;
+  const lastLocal = view.state.doc.lineAt(to).number;
+  const lines = view.state.doc.lines;
+  if (lastLocal >= lines - 1 && windowHeldEnd < windowTotal) {
+    lastWindowRequest = now;
+    post({ kind: 'window_request', edge: 'bottom', anchor_line: toGlobalLine(lastLocal) });
+  } else if (firstLocal <= 1 && windowBase > 1) {
+    lastWindowRequest = now;
+    post({ kind: 'window_request', edge: 'top', anchor_line: toGlobalLine(firstLocal) });
+  }
+}
+
 function buildExtensions(): Extension[] {
   return [
-    lineNumbers(),
+    lineNumberCompartment.of(windowed ? lineNumbers({ formatNumber: globalLineFormatter }) : lineNumbers()),
     highlightActiveLineGutter(),
     highlightSpecialChars(),
     history(),
@@ -236,7 +276,10 @@ function buildExtensions(): Extension[] {
         });
       }
       if (update.selectionSet) emitSelection();
-      if (update.viewportChanged || update.geometryChanged) emitViewport();
+      if (update.viewportChanged || update.geometryChanged) {
+        emitViewport();
+        maybeRequestWindow();
+      }
       if (update.focusChanged) {
         post({ kind: 'focus_changed', focused: update.view.hasFocus });
       }
@@ -249,6 +292,7 @@ function readOnlyExtensions(readOnly: boolean): Extension {
 }
 
 saveHandler = () => {
+  if (windowed) return; // 窗口化只读
   post({ kind: 'save_requested', revision, text: view.state.doc.toString() });
 };
 
@@ -278,6 +322,19 @@ function applyCommand(raw: string): void {
       );
       break;
     }
+    case 'set_window': {
+      revision = cmd.revision;
+      windowBase = cmd.start_line;
+      windowTotal = cmd.total_lines;
+      applyingWindow = true;
+      view.setState(
+        EditorState.create({ doc: cmd.text, extensions: buildExtensions() }),
+      );
+      windowHeldEnd = windowBase + view.state.doc.lines - 1;
+      applyingWindow = false;
+      emitViewport();
+      break;
+    }
     case 'reveal_position': {
       const offset = positionToOffset({ line: cmd.line, column: cmd.column });
       view.dispatch({
@@ -297,7 +354,8 @@ function applyCommand(raw: string): void {
       break;
     }
     case 'replace_range': {
-      if (!isRange(cmd) || cmd.revision !== revision) break;
+      // 窗口化恒只读,拒绝任何写入。
+      if (windowed || !isRange(cmd) || cmd.revision !== revision) break;
       const from = positionToOffset(cmd.start);
       const to = positionToOffset(cmd.end);
       view.dispatch({ changes: { from, to, insert: cmd.text } });
@@ -342,15 +400,17 @@ function applyCommand(raw: string): void {
 
 async function boot(): Promise<void> {
   let text = '';
-  try {
-    const res = await fetch('__file__' + encodePathForFetch(filePath));
-    if (res.ok) {
-      text = await res.text();
-    } else {
-      post({ kind: 'failed', message: `读取文件失败: ${res.status}`, recoverable: true });
+  if (!windowed) {
+    try {
+      const res = await fetch('__file__' + encodePathForFetch(filePath));
+      if (res.ok) {
+        text = await res.text();
+      } else {
+        post({ kind: 'failed', message: `读取文件失败: ${res.status}`, recoverable: true });
+      }
+    } catch (err) {
+      post({ kind: 'failed', message: `读取文件异常: ${String(err)}`, recoverable: true });
     }
-  } catch (err) {
-    post({ kind: 'failed', message: `读取文件异常: ${String(err)}`, recoverable: true });
   }
 
   view = new EditorView({
