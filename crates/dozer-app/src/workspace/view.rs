@@ -701,15 +701,14 @@ fn preview_blank_info_card<'a>(
     // 反而短。
     // `:` 对齐方案:每个 label 段包进 width(Fixed(label_colon_w)) + 右对齐
     // 的 container,于是该行 `:` 落在 `label_colon_w` 框右边界。stats column
-    // 加左 padding `stats_padding_left`,使 `:` 真实 x = stats column 起点 +
-    // padding_left + label_colon_w = icon_size + header_spacing,正好是头部
-    // 项目名(如 "anrong_fincalc")的最左像素 —— 实现"四个 `:` 与上方文件
-    // 夹名左对齐"。card column 用 `align_x(Start)` 让 header 与 stats 起点
-    // 相同(= card 最左),这样上式锚点不被 column 居中算法搅乱;外层 container
-    // 仍居中,视觉上整张卡还在屏幕中央。`label_colon_w=80` 足够容下"创建
-    // 时间:"(最长 label,~63px @body_font 14)。
-    let label_colon_w: f32 = 80.0;
-    let stats_padding_left = icon_size + header_spacing - label_colon_w;
+    // 用 `stats_padding_left` 横向推一下整组,定位锚点 ≈ icon 右边再留一格
+    // ——既不像 header 文字(在 icon+spacing 之后)那么靠右,也不贴到 icon 上
+    // ——视觉上让四行与 header 形成"半对齐"节奏,而不是死磕同一像素。
+    // `label_colon_w=96` 容下"修改时间:"(5 CJK + 冒号 @body_font 14,实测
+    // 约 90px):之前用 80 时 `创建时间:`/`修改时间:` 被 iced 强行换行成
+    // "创建时\n间:" / "修改时\n间:",丑且吞了 `:`,已修。
+    let label_colon_w: f32 = 96.0;
+    let stats_padding_left: f32 = 16.0;
     let stats = column![
         row![
             container(text("位置:").size(body_font).color(dim))

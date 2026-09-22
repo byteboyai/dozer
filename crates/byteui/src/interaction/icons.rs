@@ -161,10 +161,18 @@ pub enum IconKind {
     Dozer,
     /// Agent 品牌标(着色用 `currentColor`,由调用方按 agent 指定主题色)。
     /// 来源:Claude/CodeBuddy 取自 Simple Icons,OpenCode 取自其官网 favicon 并
-    /// 归一化到 24×24。均为品牌标识,非 Lucide;仅供 Agent 身份识别。
+    /// 归一化到 24×24;Codex 取自其官网品牌 logo(渐变压缩为单色 silhouette);
+    /// Aider/Goose 按其品牌识别(2×3 方块 / 展翅剪影)自绘。均为品牌标识,
+    /// 非 Lucide;仅供 Agent 身份识别。
     Claude,
     Codebuddy,
     Opencode,
+    /// Aider(2×3 方块品牌标)。
+    Aider,
+    /// Codex(8 角星品牌标 —— 官网渐变 logo 的单色 silhouette 化)。
+    Codex,
+    /// Goose(展翅飞翔剪影品牌标)。
+    Goose,
     /// footbar CPU 段前缀图标(Lucide square-activity:圆角方框 + 折线,表活跃度)。
     SquareActivity,
     /// footbar Proxy 段前分隔图标(Lucide square-radical:方括号根号,代代理/路由)。
@@ -301,6 +309,9 @@ impl IconKind {
             IconKind::Claude => include_bytes!("../../assets/icons/claude.svg"),
             IconKind::Codebuddy => include_bytes!("../../assets/icons/codebuddy.svg"),
             IconKind::Opencode => include_bytes!("../../assets/icons/opencode.svg"),
+            IconKind::Aider => include_bytes!("../../assets/icons/aider.svg"),
+            IconKind::Codex => include_bytes!("../../assets/icons/codex.svg"),
+            IconKind::Goose => include_bytes!("../../assets/icons/goose.svg"),
             IconKind::SquareActivity => include_bytes!("../../assets/icons/square-activity.svg"),
             IconKind::SquareRadical => include_bytes!("../../assets/icons/square-radical.svg"),
             IconKind::SquareTerminal => include_bytes!("../../assets/icons/square-terminal.svg"),

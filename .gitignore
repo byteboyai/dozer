@@ -6,3 +6,4 @@
 .dozer/
 .worktrees
 examples/
+.aider*

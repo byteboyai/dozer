@@ -275,12 +275,11 @@ pub(crate) fn agent_icon(agent: AgentKind) -> IconKind {
         AgentKind::Claude => IconKind::Claude,
         AgentKind::Codebuddy => IconKind::Codebuddy,
         AgentKind::Opencode => IconKind::Opencode,
+        AgentKind::Aider => IconKind::Aider,
+        AgentKind::Codex => IconKind::Codex,
+        AgentKind::Goose => IconKind::Goose,
         // 暂无确认可用的品牌素材，回落通用图标（spec §8/§6 明确允许）。
-        AgentKind::Codex
-        | AgentKind::Goose
-        | AgentKind::Aider
-        | AgentKind::V8agent
-        | AgentKind::Unknown => IconKind::Bot,
+        AgentKind::V8agent | AgentKind::Unknown => IconKind::Bot,
     }
 }
 
