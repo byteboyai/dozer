@@ -1297,6 +1297,18 @@ pub(crate) fn preview_pane_for<'a>(
                     .height(Length::Fixed(crate::preview::PREVIEW_FIND_BAR_HEIGHT)),
             );
         }
+        // 窗口化大文件整文件搜索条:窗口化 CodeMirror tab 的 ⌘F/⌘R 由 host JS
+        // 拦截发 `find_request`,Rust 开这条 session,查询走
+        // `large_text::stream_search`(整文件,不只搜持有窗口)。窗口化 host
+        // 同样是原生 webview,条渲染时必须显式把它的矩形下推一个条高让位。
+        if let Some(session) = preview.large_file_search_state() {
+            let bar = preview_large_file_search_bar_widget(preview, kind, session.tab_id);
+            content = content.push(
+                container(bar)
+                    .width(Length::Fill)
+                    .height(Length::Fixed(crate::preview::PREVIEW_FIND_BAR_HEIGHT)),
+            );
+        }
     }
 
     let base: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
@@ -1627,6 +1639,74 @@ pub(crate) fn preview_find_bar_widget<'a>(
 /// `stack![base, ...]` 里拼(同 `terminal::term_tab_overflow_popup` 文档
 /// 解释的理由——`anchor`/`window_size` 是全窗口坐标系,嵌在 `preview_pane_for`
 /// 自己的局部布局里换算位置会跟真实点击位置对不上)。
+/// 窗口化大文件整文件搜索条的渲染:查询框 + n/m 计数 + 上一条/下一条 +
+/// 关闭。与 `preview_find_bar_widget` 不同,整文件流式扫描只做「找到并跳转」,
+/// 没有大小写开关/替换行。`tab_id` 是 session 锁定的窗口化 CodeMirror tab。
+pub(crate) fn preview_large_file_search_bar_widget<'a>(
+    preview: &'a PreviewPane,
+    kind: PreviewPaneKind,
+    tab_id: usize,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let Some(session) = preview.large_file_search_state() else {
+        return iced_widget::Space::new().into();
+    };
+    let panel = match kind {
+        PreviewPaneKind::Files => PanelKind::Files,
+        PreviewPaneKind::Project => PanelKind::Project,
+    };
+    let colors = byteui::theme::color::current();
+    let query_for_submit = session.query.clone();
+    let count_label = text(format!(
+        "{}/{}",
+        if session.hits.is_empty() {
+            0
+        } else {
+            session.current + 1
+        },
+        session.hits.len()
+    ))
+    .size(byteui::theme::font::body())
+    .color(colors.dim);
+    let input = byteui::form::input_text::view(
+        "搜索文件内容…",
+        &session.query,
+        false,
+        Some(crate::preview::large_file_search_field_id(panel)),
+        !session.query.is_empty(),
+        Some(Message::PreviewLargeFileSearchSubmit(
+            panel,
+            tab_id,
+            query_for_submit,
+        )),
+        false,
+        move |s: String| Message::PreviewLargeFileSearchSubmit(panel, tab_id, s),
+    );
+    let row_el = row![
+        input,
+        count_label,
+        button(text("↑")).on_press(Message::PreviewLargeFileSearchGo(panel, false)),
+        button(text("↓")).on_press(Message::PreviewLargeFileSearchGo(panel, true)),
+        button(text("×")).on_press(Message::PreviewLargeFileSearchClose(panel)),
+    ]
+    .spacing(6)
+    .align_y(iced_widget::core::alignment::Alignment::Center);
+    container(row_el)
+        .width(Length::Fill)
+        .padding(8)
+        .style(
+            move |_t: &iced_widget::Theme| iced_widget::container::Style {
+                background: Some(colors.card.into()),
+                border: iced_widget::core::Border {
+                    color: colors.border,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..iced_widget::container::Style::default()
+            },
+        )
+        .into()
+}
+
 pub(crate) fn preview_tab_overflow_popup<'a>(
     app: &'a App,
     ws: &'a Workspace,

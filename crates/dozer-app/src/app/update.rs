@@ -1007,59 +1007,6 @@ impl App {
             Message::TextInputMenuSelectAll => {
                 self.text_input_menu = None;
             }
-            // 文本编辑器右键菜单"打开":与输入框右键菜单(`TextInputMenuOpen`)
-            // 互斥关掉别的浮层;macOS 走原生 NSMenu 同步阻塞返回选中项,非
-            // macOS 存 `editor_context_menu` 状态由 iced 弹层渲染。
-            Message::PreviewEditorContextMenuOpen { kind, tab_id } => {
-                self.files.close_context_menu();
-                self.text_input_menu = None;
-                #[cfg(target_os = "macos")]
-                {
-                    let (x, y) = self.files.last_right_click();
-                    let items = crate::app::preview_editor_menu_items(kind, tab_id);
-                    if let Some(msg) =
-                        crate::chrome::native_menu::show_align_no_icon_left(items, (x, y))
-                    {
-                        // 选中项回吐成普通顶层消息,重新走 `app.update` 落到
-                        // 下面 `PreviewEditorCopy/Cut/Paste/Format` 等分支(同
-                        // `ContextMenuOpen` 用 `emit` 回吐的既有回路)。
-                        self.update(msg);
-                    }
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    // 与其它右键菜单互斥:关掉文件树/预览 tab/输入框/数据库/
-                    // 项目链接菜单,只留本菜单(同 `TextInputMenuOpen` 口径)。
-                    self.files.close_context_menu();
-                    self.text_input_menu = None;
-                    self.project_link_menu = None;
-                    self.database_source_menu = None;
-                    let (x, y) = self.files.last_right_click();
-                    self.editor_context_menu =
-                        Some(crate::app::state::EditorContextMenu { x, y, kind, tab_id });
-                }
-            }
-            // 编辑器右键"复制/剪切/粘贴":复用 iced `text_editor` 原生剪贴板逻辑
-            // ——把 ⌘C/⌘X/⌘V 合成键盘事件、作用到被右键的 `CodeView`(其焦点 id
-            // 经 `preview_editor_focus_id` 取出)。macOS 经 `pending_native_menu_edit_key`
-            // 在本帧后由 main.rs 合成;非 macOS 经 `menu_edit_key` 命中 + 焦点补到
-            // `editor_context_menu_focus_id` 那条合成键路径。没有原生编辑器的 tab
-            // (表格/webview/占位)焦点 id 为 `None`,剪贴板动作自然落空。
-            Message::PreviewEditorCopy { kind, tab_id } => {
-                self.editor_clipboard_action(kind, tab_id, 'c');
-            }
-            Message::PreviewEditorCut { kind, tab_id } => {
-                self.editor_clipboard_action(kind, tab_id, 'x');
-            }
-            Message::PreviewEditorPaste { kind, tab_id } => {
-                self.editor_clipboard_action(kind, tab_id, 'v');
-            }
-            // 编辑器右键"格式化代码":一期仓库未集成 formatter,留占位 no-op
-            // (用户确认"先留占位项")。保留消息 + 菜单项,将来接 formatter 直接
-            // 在此落地。
-            Message::PreviewEditorFormat { .. } => {
-                self.editor_context_menu = None;
-            }
             Message::Hover(id, h) => {
                 self.set_hover(id, h);
             }
@@ -1299,21 +1246,6 @@ impl App {
             }
             Message::TermPaste(target, text) => self.term_paste(target, text),
             Message::PreviewOpenPath(path) => self.preview_open_path(path),
-            Message::PreviewFileLoaded(project_id, tab_id, result) => {
-                self.with_project(project_id, move |ws, _io| {
-                    ws.preview.apply_native_load(tab_id, result);
-                });
-            }
-            Message::PreviewLoadMore(kind, tab_id) => self.preview_load_more(kind, tab_id),
-            Message::PreviewMoreLoaded(project_id, kind, tab_id, result) => {
-                self.with_project(project_id, move |ws, _io| {
-                    let pane = match kind {
-                        PanelKind::Project => &mut ws.project_preview,
-                        _ => &mut ws.preview,
-                    };
-                    pane.apply_more_loaded(tab_id, result);
-                });
-            }
             // 空白页信息卡回灌:路由到 spawn 时记录的项目(用户中途切项目则
             // `info.path != ws.project.path` → 直接丢)。同框 `blank_info_in_flight`
             // 先清回 false,再做 stale guard(active tab 已不是 Blank 也丢)。
@@ -1338,12 +1270,6 @@ impl App {
                     pane.blank_info = Some(info);
                 });
             }
-            Message::PreviewLargeFileSearchOpen(kind, tab_id) => {
-                self.with_focused_project(move |ws, _io| match kind {
-                    PanelKind::Project => ws.project_preview.open_large_file_search(tab_id),
-                    _ => ws.preview.open_large_file_search(tab_id),
-                });
-            }
             Message::PreviewLargeFileSearchClose(kind) => {
                 self.with_focused_project(move |ws, _io| match kind {
                     PanelKind::Project => ws.project_preview.close_large_file_search(),
@@ -1365,7 +1291,6 @@ impl App {
                     let crate::preview::TabKind::File(path) = tab.kind.clone() else {
                         return;
                     };
-                    let windowed = tab.uses_windowed_editor();
                     if let Some(session) = pane.large_file_search.as_mut() {
                         session.query = query.clone();
                         session.running = true;
@@ -1373,36 +1298,24 @@ impl App {
                     let proxy = io.proxy.clone();
                     io.handle.spawn(async move {
                         let result = tokio::task::spawn_blocking(move || {
-                            if windowed {
-                                // 窗口化:在整文件上流式搜索(不只搜持有窗口)。
-                                crate::preview::stream_search(
-                                    &path,
-                                    &query,
-                                    crate::preview::SearchOptions::default(),
-                                )
-                                .map(|outcome| {
-                                    outcome
-                                        .hits
-                                        .into_iter()
-                                        .map(|h| crate::extensions::search::SearchHit {
-                                            path: path.clone(),
-                                            line_no: h.line as u64,
-                                            line_text: h.text,
-                                        })
-                                        .collect::<Vec<_>>()
-                                })
-                                .map_err(|e| e.to_string())
-                            } else {
-                                let scope = crate::extensions::search::Scope::File(path);
-                                crate::extensions::search::search_scope(&scope, &query).map(
-                                    |by_file| {
-                                        by_file
-                                            .into_iter()
-                                            .flat_map(|(_, hits)| hits)
-                                            .collect::<Vec<_>>()
-                                    },
-                                )
-                            }
+                            // 窗口化:在整文件上流式搜索(不只搜持有窗口)。
+                            crate::preview::stream_search(
+                                &path,
+                                &query,
+                                crate::preview::SearchOptions::default(),
+                            )
+                            .map(|outcome| {
+                                outcome
+                                    .hits
+                                    .into_iter()
+                                    .map(|h| crate::extensions::search::SearchHit {
+                                        path: path.clone(),
+                                        line_no: h.line as u64,
+                                        line_text: h.text,
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .map_err(|e| e.to_string())
                         })
                         .await
                         .unwrap_or_else(|e| Err(e.to_string()));
@@ -1444,31 +1357,16 @@ impl App {
                         _ => &mut ws.preview_error,
                     };
                     // 窗口化只读:命中在未加载区,先装窗口再全局 reveal。
-                    let windowed = pane
-                        .tabs()
-                        .iter()
-                        .find(|t| t.id == session.tab_id)
-                        .is_some_and(|t| t.uses_windowed_editor());
-                    if windowed {
-                        let line = hit.line_no.max(1) as u32;
-                        pane.queue_windowed_view(session.tab_id, line);
-                        pane.queue_editor_command(
-                            session.tab_id,
-                            crate::preview::EditorCommand::RevealPosition { line, column: 1 },
-                        );
-                        *error_slot = None;
-                        if let Some(s) = pane.large_file_search.as_mut() {
-                            s.current = next;
-                        }
-                        return;
+                    let line = hit.line_no.max(1) as u32;
+                    pane.queue_windowed_view(session.tab_id, line);
+                    pane.queue_editor_command(
+                        session.tab_id,
+                        crate::preview::EditorCommand::RevealPosition { line, column: 1 },
+                    );
+                    *error_slot = None;
+                    if let Some(s) = pane.large_file_search.as_mut() {
+                        s.current = next;
                     }
-                    let Some(_tab) = pane.tabs_mut().iter_mut().find(|t| t.id == session.tab_id)
-                    else {
-                        return;
-                    };
-                    // 老 iced 只读大文件档已退役:命中无法内嵌跳转。
-                    *error_slot =
-                        Some("命中内容无法在当前视图内跳转,请用「原文」或外部打开".to_string());
                 });
             }
             Message::PreviewSelectTab(idx) => self.preview_select_tab(idx),
@@ -1536,9 +1434,6 @@ impl App {
                     ws.preview_pane_toggle_render_mode(PanelKind::Files, idx);
                 });
             }
-            Message::PreviewEditorEvent(_tab_id, _action) => {
-                // main.rs 直接调 `App::preview_tab_editor_event`,不经过这里。
-            }
             Message::PreviewSaveActive(kind) => {
                 self.with_focused_project(move |ws, _io| ws.preview_pane_save_active(kind));
             }
@@ -1560,47 +1455,51 @@ impl App {
             }
             Message::PreviewFindOpen(kind) => {
                 self.with_focused_project(move |ws, _io| {
-                    let pane = match kind {
-                        PanelKind::Project => &ws.project_preview,
-                        _ => &ws.preview,
+                    // 窗口化 CodeMirror tab:普通 Find 只搜持有窗口没意义,改为
+                    // 打开整文件流式搜索条(与 host `find_request` 同一条 session)。
+                    let windowed_id = {
+                        let pane = match kind {
+                            PanelKind::Project => &ws.project_preview,
+                            _ => &ws.preview,
+                        };
+                        let idx = pane.active_idx();
+                        pane.tabs()
+                            .get(idx)
+                            .filter(|t| t.uses_windowed_editor())
+                            .map(|t| t.id)
                     };
-                    // 老 iced 只读档已退役;只读分流改为看 CodeMirror 窗口化。
-                    let active_is_read_only = false;
-                    if active_is_read_only {
-                        let tab_id = pane.tabs().get(pane.active_idx()).map(|t| t.id);
-                        if let Some(tab_id) = tab_id {
-                            match kind {
-                                PanelKind::Project => {
-                                    ws.project_preview.open_large_file_search(tab_id)
-                                }
-                                _ => ws.preview.open_large_file_search(tab_id),
-                            }
-                        }
+                    if let Some(tab_id) = windowed_id {
+                        let pane = match kind {
+                            PanelKind::Project => &mut ws.project_preview,
+                            _ => &mut ws.preview,
+                        };
+                        pane.open_large_file_search(tab_id);
                     } else {
                         ws.preview_find_open(kind);
                     }
                 });
             }
             Message::PreviewFindOpenWithReplace(kind) => {
-                // 只读大文件档没有"替换"概念,同样分流到大文件搜索条(忽略
+                // 窗口化大文件没有"替换"概念,同样分流到整文件搜索条(忽略
                 // "默认展开替换行"这个语义,大文件搜索条本来就没有替换行)。
                 self.with_focused_project(move |ws, _io| {
-                    let pane = match kind {
-                        PanelKind::Project => &ws.project_preview,
-                        _ => &ws.preview,
+                    let windowed_id = {
+                        let pane = match kind {
+                            PanelKind::Project => &ws.project_preview,
+                            _ => &ws.preview,
+                        };
+                        let idx = pane.active_idx();
+                        pane.tabs()
+                            .get(idx)
+                            .filter(|t| t.uses_windowed_editor())
+                            .map(|t| t.id)
                     };
-                    // 老 iced 只读档已退役;只读分流改为看 CodeMirror 窗口化。
-                    let active_is_read_only = false;
-                    if active_is_read_only {
-                        let tab_id = pane.tabs().get(pane.active_idx()).map(|t| t.id);
-                        if let Some(tab_id) = tab_id {
-                            match kind {
-                                PanelKind::Project => {
-                                    ws.project_preview.open_large_file_search(tab_id)
-                                }
-                                _ => ws.preview.open_large_file_search(tab_id),
-                            }
-                        }
+                    if let Some(tab_id) = windowed_id {
+                        let pane = match kind {
+                            PanelKind::Project => &mut ws.project_preview,
+                            _ => &mut ws.preview,
+                        };
+                        pane.open_large_file_search(tab_id);
                     } else {
                         ws.preview_find_open_with_replace(kind);
                     }
@@ -1721,11 +1620,6 @@ impl App {
                 });
             }
             Message::ProjectPreviewOpenPath(path) => self.project_preview_open_path(path),
-            Message::ProjectPreviewFileLoaded(project_id, tab_id, result) => {
-                self.with_project(project_id, move |ws, _io| {
-                    ws.project_preview.apply_native_load(tab_id, result);
-                });
-            }
             Message::ProjectPreviewSelectTab(idx) => self.project_preview_select_tab(idx),
             Message::ProjectPreviewCloseTab(idx) => {
                 self.with_focused_project(|ws, _io| {
@@ -1787,10 +1681,6 @@ impl App {
                 self.with_focused_project(|ws, _io| {
                     ws.project_preview_tab_overflow_anchor = None;
                 });
-            }
-            Message::ProjectPreviewEditorEvent(_tab_id, _event) => {
-                // 与 `PreviewEditorEvent` 同口径:到达 `App::update` 说明未走
-                // main.rs 的 Task 桥接器,直接忽略。
             }
             Message::Browser(browser::Message::BookmarksLoaded(pid, bookmarks)) => {
                 self.browser_bookmarks_loaded(pid, bookmarks)
@@ -4287,9 +4177,6 @@ impl App {
         });
     }
 
-    /// 老 iced 只读分块档"加载更多"已退役(大文件改走 Windowed viewer)。
-    pub(crate) fn preview_load_more(&mut self, _kind: PanelKind, _tab_id: usize) {}
-
     /// 项目信息面板切入时调用:确保项目根目录有一份 `README.md`(没有就按
     /// 项目名 + 描述生成,已有则原样保留),然后**一律**在右侧配套预览窗打
     /// 开这份 README(首次切进来就让它展示项目文档)。
@@ -4913,67 +4800,6 @@ impl App {
             );
         // 常规右键菜单就地向下/向上弹即可,这里输入框多用在面板内容区,直接
         // 以光标为左上锚弹出(必要时可在下方再夹窗口高度,留待需要时加)。
-        container(list)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_y(iced_widget::core::alignment::Vertical::Top)
-            .padding(Padding {
-                top: menu.y,
-                left: menu.x,
-                right: 0.0,
-                bottom: 0.0,
-            })
-            .into()
-    }
-
-    /// 文本编辑器右键菜单(非 macOS 的 iced 弹层版),纯数据组装。与
-    /// `text_input_menu_popup` 同款外壳/对齐,但项是 复制/剪切/粘贴/分隔线/
-    /// 搜索代码/格式化代码,各自发编辑器专属消息(`PreviewEditorCopy/Cut/
-    /// Paste`/`PreviewFindOpen`/`PreviewEditorFormat`)。macOS 走原生 NSMenu、
-    /// 不渲染此弹层(`editor_context_menu` 恒为 `None`,这里直接返回空)。
-    pub(crate) fn editor_context_menu_popup<'a>(
-        &self,
-    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-        let menu = match &self.editor_context_menu {
-            Some(m) => m,
-            None => return column![].into(),
-        };
-        let kind = menu.kind;
-        let tab_id = menu.tab_id;
-        let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = vec![
-            crate::chrome::menu::item(
-                Some(icons::IconKind::Copy),
-                "复制",
-                Message::PreviewEditorCopy { kind, tab_id },
-            ),
-            crate::chrome::menu::item(
-                Some(icons::IconKind::Scissors),
-                "剪切",
-                Message::PreviewEditorCut { kind, tab_id },
-            ),
-            crate::chrome::menu::item(
-                Some(icons::IconKind::ClipboardPaste),
-                "粘贴",
-                Message::PreviewEditorPaste { kind, tab_id },
-            ),
-            crate::chrome::menu::separator(),
-            crate::chrome::menu::item(
-                Some(icons::IconKind::Search),
-                "搜索代码",
-                Message::PreviewFindOpen(kind),
-            ),
-            crate::chrome::menu::item(
-                Some(icons::IconKind::LayoutList),
-                "格式化代码",
-                Message::PreviewEditorFormat { kind, tab_id },
-            ),
-        ];
-
-        let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-            crate::chrome::menu::shell_frosted(
-                items,
-                Length::Fixed(byteui::theme::geometry::menu_item_width()),
-            );
         container(list)
             .width(Length::Fill)
             .height(Length::Fill)

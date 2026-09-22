@@ -227,20 +227,6 @@ impl App {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
-        } else if self.editor_context_menu.is_some() {
-            let dismiss = MouseArea::new(
-                container(column![])
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            )
-            .on_press(Message::PreviewEditorFormat {
-                kind: PanelKind::Files,
-                tab_id: 0,
-            });
-            stack![base, dismiss, self.editor_context_menu_popup()]
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
         } else if self.database_source_menu.is_some() {
             let dismiss = MouseArea::new(
                 container(column![])

@@ -281,28 +281,6 @@ pub enum Message {
     /// 会话恢复;预览面板本身已不再有"打开文件…"按钮或地址栏)。
     PreviewOpenPath(PathBuf),
     /// Files 面板原生编辑器异步读盘+构造结果回灌。`ProjectId` 按打开时所属
-    /// 项目路由(见 `App::with_project` 文档,不能假设用户没有切走项目),
-    /// `usize` 是 `PreviewTab.id`。携带的是已经在后台线程构造好的
-    /// `NativeEditorLoadHandle`(不是纯数据)——`CodeView::new` 本身是
-    /// `Send`、不要求在 UI 线程上做,见
-    /// `docs/superpowers/plans/2026-09-19-large-file-editor-performance.md`
-    /// Task 1"对 Task 3 的影响"与该类型自己的文档。
-    PreviewFileLoaded(crate::app::layout::ProjectId, usize, Result<(), String>),
-    /// "加载更多"横幅点击:续读下一段。`PanelKind` 区分 Files/Project,
-    /// `usize` 是 `PreviewTab.id`。
-    PreviewLoadMore(PanelKind, usize),
-    /// 续读结果回灌,语义同 `PreviewFileLoaded`。`PanelKind` 决定回填
-    /// `ws.preview` 还是 `ws.project_preview`(与 `PreviewFileLoaded`/
-    /// `ProjectPreviewFileLoaded` 用两条独立消息不同,这里两个面板共用一条
-    /// 消息——`(String, u64, bool)` 是普通值类型,`Clone`/`Debug` 都天然成
-    /// 立,不像 `NativeEditorLoadHandle` 那样需要为不可 `Clone` 的
-    /// `CodeView` 绕一层,没有理由拆两条)。
-    PreviewMoreLoaded(
-        crate::app::layout::ProjectId,
-        PanelKind,
-        usize,
-        Result<(String, u64, bool), String>,
-    ),
     /// 空白页信息卡后台扫描结果:由 `apply_pending_blank_info`
     /// (`platform/window_events.rs`)在 `PreviewPane` 空白 tab 激活且
     /// `blank_info` 为空时,通过 `tokio::task::spawn_blocking` 跑
@@ -314,8 +292,8 @@ pub enum Message {
         PanelKind,
         crate::preview::BlankPaneInfo,
     ),
-    /// 只读大文件档 ⌘F:打开搜索条,锁定 `usize`(`PreviewTab.id`)。
-    PreviewLargeFileSearchOpen(PanelKind, usize),
+    /// 窗口化大文件 ⌘F:打开整文件流式搜索条,锁定 `usize`(`PreviewTab.id`),
+    /// 由 host `find_request` 经 `open_large_file_search` 直接打开。
     PreviewLargeFileSearchClose(PanelKind),
     /// 查询框回车/点搜索:`String` 是本次提交的 query。
     PreviewLargeFileSearchSubmit(PanelKind, usize, String),
@@ -326,10 +304,7 @@ pub enum Message {
         usize,
         Result<Vec<crate::extensions::search::SearchHit>, String>,
     ),
-    /// 上一条/下一条命中(`bool` = 是否前进)。命中若在已加载范围内
-    /// (`line_no <= 当前 CodeView 行数`)直接跳转光标;否则置
-    /// `preview_error`/`project_preview_error` 提示"超出已加载范围"
-    /// (复用现有错误提示横幅,不新增一套错误 UI)。
+    /// 上一条/下一条命中(`bool` = 是否前进)。
     PreviewLargeFileSearchGo(PanelKind, bool),
     /// 预览:用系统默认应用打开某个文件 tab(失败时的外部打开 fallback)。
     /// 路径取自当前 tab 并再次校验存在,不隐式执行文件本身。
@@ -344,11 +319,6 @@ pub enum Message {
     /// 画)——`usize` 是 vec 位置,交给 `Workspace::preview_pane_toggle_render_mode`
     /// 落盘 + 切渲染路径。Files 预览面板。
     PreviewToggleRenderMode(usize),
-    /// 原生预览 tab 的 `text_editor::Action`,`usize` 是 `PreviewTab.id`。由
-    /// `main.rs` 的 dispatch 直接转发给 `App::preview_tab_editor_event`(剪贴
-    /// 板由 iced 运行时自己处理,不需要像 vendored `iced-code-editor` 那样手动
-    /// 拆 `Task` 桥接)。
-    PreviewEditorEvent(usize, iced_widget::text_editor::Action),
     /// 原生预览就地可写后的 ⌘S:把 `kind` 指向面板(`Files`/`Project`)当前激活
     /// 原生 tab 的改动保存到磁盘(仅脏的原生 tab 动作;见
     /// `Workspace::preview_pane_save_active`)。携带 `PanelKind`(可由 main.rs
@@ -394,42 +364,6 @@ pub enum Message {
     /// File-Find 条的「替换为」输入框每键落定(只写 `FindState::replacement`
     /// 草稿,不触发任何替换;真正动作在点「替…」按钮时发生)。
     PreviewFindReplacement(PanelKind, String),
-    /// 文本编辑器右键菜单"打开":携带被右键的预览 tab 的面板种类(Files/
-    /// Project)与 tab id,定位该 tab 的 `CodeView`。坐标复用
-    /// `files.last_right_click`(main.rs 任意右键都会先写入,见
-    /// `TabContextMenuOpen` 同款口径)。macOS 走原生 NSMenu,非 macOS 走
-    /// iced 弹层(同 `TextInputMenuOpen` 的双轨)。
-    PreviewEditorContextMenuOpen {
-        kind: PanelKind,
-        tab_id: usize,
-    },
-    /// 编辑器右键菜单"复制":经 `pending_native_menu_edit_key` 合成 ⌘C 复用
-    /// iced `text_editor` 原生剪贴板逻辑(macOS);非 macOS 走 `menu_edit_key`
-    /// 命中 + `text_input_menu_target_id` 风格的焦点+合成键路径。携带面板
-    /// 种类 + tab id 以便定位被右键编辑器的焦点 id。
-    PreviewEditorCopy {
-        kind: PanelKind,
-        tab_id: usize,
-    },
-    /// 编辑器右键菜单"剪切":语义同 `PreviewEditorCopy`,合成 ⌘X。
-    PreviewEditorCut {
-        kind: PanelKind,
-        tab_id: usize,
-    },
-    /// 编辑器右键菜单"粘贴":语义同 `PreviewEditorCopy`,合成 ⌘V。
-    PreviewEditorPaste {
-        kind: PanelKind,
-        tab_id: usize,
-    },
-    /// 编辑器右键菜单"格式化代码":一期仓库未集成任何代码 formatter,留占位
-    /// no-op(用户确认:"先留占位项")。保留消息 + 菜单项,将来接 formatter 时
-    /// 直接在此落地,无需再动菜单装配。`kind`/`tab_id` 字段目前未被读取(纯
-    /// 占位清菜单),特标注避免误报 dead_code。
-    #[allow(dead_code)]
-    PreviewEditorFormat {
-        kind: PanelKind,
-        tab_id: usize,
-    },
     /// File-Find 条「替换当前」:把本轮 `current` 指着的那一处清掉换成替换框
     /// 文本。照 Enter/⌘S 外的普通打字语义,只改**原生 buffer 并标脏**等待用户
     /// ⌘S 落盘——替换不隐式写盘([CLAUDE.md 裁决]预览优先渲染/不可逆动作留给
@@ -497,9 +431,6 @@ pub enum Message {
     ),
     /// Project 面板右配对预览:打开本地文件为新 tab,语义同 `PreviewOpenPath`。
     ProjectPreviewOpenPath(PathBuf),
-    /// Project 面板右配对预览:异步读盘+构造结果回灌,语义同 `PreviewFileLoaded`
-    /// (两面板各自的 `PreviewPane` 是完全独立的状态,不共用一条消息)。
-    ProjectPreviewFileLoaded(crate::app::layout::ProjectId, usize, Result<(), String>),
     /// Project 面板右配对预览:切换 tab(vec 位置)。
     ProjectPreviewSelectTab(usize),
     /// Project 面板右配对预览:关闭 tab(vec 位置)。
@@ -511,9 +442,6 @@ pub enum Message {
     ProjectPreviewTabOverflowToggle,
     /// Project 面板右配对预览 tab 栏溢出下拉:点击外部关闭。
     ProjectPreviewTabOverflowDismiss,
-    /// Project 面板右配对预览的原生 `text_editor::Action`，语义同
-    /// `PreviewEditorEvent`。
-    ProjectPreviewEditorEvent(usize, iced_widget::text_editor::Action),
     /// 浏览器面板的全部消息,内核只转发不解读——见
     /// `extensions::browser::Message`。
     Browser(browser::Message),

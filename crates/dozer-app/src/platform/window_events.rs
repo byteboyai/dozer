@@ -1521,18 +1521,6 @@ impl Runner {
             app.blur_preview_editors();
         }
         match message {
-            // 原生预览 tab 的官方 `text_editor` `Action`:剪贴板读写由 iced
-            // 运行时经 `Widget::update` 拿到的 `Clipboard` 直接处理,不需要
-            // 像 vendored `iced-code-editor` 那样拆 `Task` 桥接。`Files`/
-            // `Project` 两个预览面板分两套消息,分别直呼对应转发方法。
-            Message::PreviewEditorEvent(tab_id, action) => {
-                app.preview_tab_editor_event(tab_id, action);
-                window.request_redraw();
-            }
-            Message::ProjectPreviewEditorEvent(tab_id, action) => {
-                app.project_preview_tab_editor_event(tab_id, action);
-                window.request_redraw();
-            }
             // 顶栏"＋"与项目栏"打开项目…"共用的唯一打开入口:rfd 模态选中
             // 后一律落成**新增页签**(`ProjectTabOpen`)。此前项目栏那颗按钮
             // 另有一条 `ProjectPickFolder`→`ProjectOpen` 的就地改写路径,
@@ -1919,9 +1907,6 @@ pub(crate) fn menu_edit_key(message: &Message) -> Option<char> {
         Message::TextInputMenuCopy => Some('c'),
         Message::TextInputMenuPaste => Some('v'),
         Message::TextInputMenuSelectAll => Some('a'),
-        Message::PreviewEditorCut { .. } => Some('x'),
-        Message::PreviewEditorCopy { .. } => Some('c'),
-        Message::PreviewEditorPaste { .. } => Some('v'),
         _ => None,
     }
 }
@@ -3437,14 +3422,10 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 // 帧序:菜单是上一帧右键弹出的(那时已把焦点经
                 // `focusable::focus` 移到被右键的输入),这里点菜单项本身
                 // 不抢走输入框焦点;合成前再用 `focusable::focus` 补一次,
-                // 双保险保证作用于被右键的那个输入。
+                // 输入框右键菜单命中这里:焦点补到被右键的输入,保证合成的
+                // ⌘C/⌘X/⌘V 作用到正确目标。
                 if let Some(ch) = messages.iter().find_map(menu_edit_key) {
-                    // 输入框右键菜单与文本编辑器右键菜单(非 macOS iced 弹层)
-                    // 都会命中这里:焦点优先补到被右键的输入,其次补到被右键的
-                    // 原生 `CodeView`,保证合成的 ⌘C/⌘X/⌘V 作用到正确目标。
-                    let focus_id = app
-                        .text_input_menu_target_id()
-                        .or_else(|| app.editor_context_menu_focus_id());
+                    let focus_id = app.text_input_menu_target_id();
                     if let Some(id) = focus_id {
                         let mut op =
                             iced_winit::core::widget::operation::focusable::focus::<()>(id);

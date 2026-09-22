@@ -94,6 +94,20 @@ pub(crate) fn find_field_id(kind: crate::app::PanelKind) -> iced_widget::core::w
     }
 }
 
+/// 窗口化大文件整文件搜索条查询框的稳定 `widget::Id`,与 `find_field_id`
+/// 同款(两个面板各一,避免 iced 焦点树同 id 撞车)。也复用为「本条打开时是否
+/// 需要程序化聚焦」的判据来源。
+pub(crate) fn large_file_search_field_id(
+    kind: crate::app::PanelKind,
+) -> iced_widget::core::widget::Id {
+    match kind {
+        crate::app::PanelKind::Project => {
+            iced_widget::core::widget::Id::new("preview-large-file-search-project")
+        }
+        _ => iced_widget::core::widget::Id::new("preview-large-file-search-files"),
+    }
+}
+
 static FIND_FOCUSED_FILES: std::sync::LazyLock<std::sync::Mutex<bool>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(false));
 static FIND_FOCUSED_PROJECT: std::sync::LazyLock<std::sync::Mutex<bool>> =
@@ -234,11 +248,6 @@ impl PreviewPane {
         self.tabs
             .iter()
             .position(|t| t.kind == TabKind::File(path.to_path_buf()))
-    }
-
-    /// 老 iced editor 已退役:不再有原生编辑器焦点 id(右键菜单剪贴板动作自然取消)。
-    pub fn editor_focus_id(&self, _tab_id: usize) -> Option<iced_widget::core::widget::Id> {
-        None
     }
 
     pub fn open_path(&mut self, path: PathBuf) -> usize {
@@ -487,22 +496,10 @@ impl PreviewPane {
         }
     }
 
-    /// 异步读盘+构造结果回灌:按 `tab_id` 定位(用户可能在结果回来前关掉/
-    /// 切走这个 tab,找不到就静默丢弃)。成功则把已经在后台线程构造好的
-    /// `CodeView` 取出装进 tab(`NativeEditorLoadHandle::take` 只应在这里
-    /// 调用一次)并置一次性聚焦位(同步路径 `push_tab` 原有行为);失败则
-    /// 保持 `editor: None`(该 tab 落回 webview/flyfish 兜底,`loading` 已
-    /// 置假,`desired_webviews()` 会在下一帧自然把它纳入期望清单)。
-    pub fn apply_native_load(&mut self, _tab_id: usize, _result: Result<(), String>) {
-        // 老 iced editor 已退役;该消息不再产生。
-    }
-
-    /// "加载更多"异步续读结果回灌:老 iced 只读大文件档已退役,no-op。
-    pub fn apply_more_loaded(
-        &mut self,
-        _tab_id: usize,
-        _result: Result<(String, u64, bool), String>,
-    ) {
+    /// 只读访问器,供渲染层判断要不要画窗口化大文件搜索条(同 `find_state`
+    /// 的既有写法)。
+    pub fn large_file_search_state(&self) -> Option<&LargeFileSearch> {
+        self.large_file_search.as_ref()
     }
 
     /// 打开只读大文件档搜索条,锁定 `tab_id`。已开着且锁的是同一个 tab 则

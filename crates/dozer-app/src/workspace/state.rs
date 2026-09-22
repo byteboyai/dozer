@@ -684,26 +684,6 @@ impl Workspace {
             .or_else(|| self.ssh_tabs.iter_mut().find(|t| t.tab_id == tab_id))
     }
 
-    /// 转发 `text_editor::Action` 到某个原生预览 tab(按 `tab_id` 定位,不是
-    /// "固定某个面板当前激活的那个"——一个项目可以同时开好几个原生预览 tab,
-    /// 只有事件来源的那一个该收到)。tab 不存在或不是原生 tab 时静默 no-op。
-    /// 事件类别是"会改写正文的 `Action::Edit`"(插字/退格/删除/粘贴/Enter/IME
-    /// paste)时,顺手把该 tab 标脏(2026-09-06 原生预览就地可写,dirty 由这个
-    /// 事件位推进,fallback 仍由 Pane 层的 save/刷新/项目切换按相同字段读写)。
-    pub(crate) fn preview_tab_editor_event(&mut self, _tab_id: usize, _action: EditorAction) {
-        // 老 iced editor 已退役;编辑事件由 CodeMirror host 经 IPC 处理。
-    }
-
-    /// 转发 `text_editor::Action` 到 Project 面板右配对预览的某个原生 tab,
-    /// 语义同 `preview_tab_editor_event`,状态取自 `ws.project_preview`。
-    pub(crate) fn project_preview_tab_editor_event(
-        &mut self,
-        _tab_id: usize,
-        _action: EditorAction,
-    ) {
-        // 老 iced editor 已退役。
-    }
-
     /// 把键盘/IME 字节直接写给当前激活 tab 对应的 daemon 会话。异步写
     /// 交给 tokio（`self.handle.spawn`），绝不在 UI 线程 `block_on`。
     pub(crate) fn send_input(&self, io: &ShellIo, bytes: Vec<u8>) {
@@ -2353,6 +2333,18 @@ impl Workspace {
             &self.preview
         };
         pane.find_state().is_some_and(|f| f.is_webview)
+    }
+
+    /// `kind` 面板当前是否开着窗口化大文件整文件搜索条(锁在某个
+    /// `uses_windowed_editor` 的 CodeMirror tab 上)。窗口化 host 也是原生
+    /// webview,条渲染时同样要把 webview 矩形下推让位。
+    pub fn preview_large_file_search_bar_open(&self, kind: PanelKind) -> bool {
+        let pane = if kind == PanelKind::Project {
+            &self.project_preview
+        } else {
+            &self.preview
+        };
+        pane.large_file_search.is_some()
     }
 
     /// 每帧渲染循环把 `preview::take_find_focused(kind)` 查到的真实焦点态
