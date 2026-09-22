@@ -8,16 +8,11 @@ name = "dozer"
 path = "src/main.rs"
 
 [features]
-# CodeMirror editor host 已通过真机验收(查看/编辑/保存/搜索/折叠/中文 IME/
-# 大文件窗口/JSON Text/CSV 原文/md source),现**默认开启**。保留 feature 名以便
-# `--no-default-features` 回退到老 iced 编辑器(Phase D 删除阶段的回退点)。
-# CodeMirror editor host 与 vanilla-jsoneditor(严格 JSON Tree)均通过真机对照,
-# 现默认开启。`--no-default-features` 仍回退到老 iced 编辑器(Phase D 删除阶段的
-# 回退点)。JSONL/超大 JSON 的 streamed 能力仍由自研 `json_tree` 承载。
-default = ["codemirror", "json-editor"]
+# CodeMirror editor host 默认开启;`--no-default-features` 回退到老 iced 编辑器
+# (Phase D 删除阶段的回退点)。严格 JSON 的 Tree 由常开的 vanilla-jsoneditor host
+# 承载(见 code_host::json_editor_enabled);JSONL/超大 JSON 由原生 streamed 承载。
+default = ["codemirror"]
 codemirror = []
-# 严格 JSON 的 Tree 视图改用 `dozer://json-editor/`(vanilla-jsoneditor)。
-json-editor = []
 
 [dependencies]
 dozer-core = { path = "../dozer-core" }
@@ -105,9 +100,6 @@ ignore = "0.4"
 calamine = { version = "0.36", features = ["dates"] }
 csv = "1"
 sonic-rs = "0.5.10"
-# json5：.json5/.jsonc 一次性规范化为标准 JSON 后再交给 sonic-rs 做树视图
-# 的惰性按需解码(JSON5 是配置格式、无 SIMD 解析器,json5-rs ~225MiB/s 已是最快)。
-json5 = "1"
 
 [dev-dependencies]
 tempfile = "3"

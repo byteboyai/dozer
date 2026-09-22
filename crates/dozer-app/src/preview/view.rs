@@ -357,11 +357,13 @@ impl PreviewPane {
         // JSON/JSONL:在原生代码编辑器之外**额外**挂一个树查看器(双视图,
         // 不排斥 editor)。同 tabular,只登记"正在加载",`(id, path)` 交给
         // 调用方 `take_pending_json_tree_loads()` 取走 spawn 后台加载。
+        // JSONL/NDJSON(Streamed)挂原生树;严格 JSON 走 vanilla-jsoneditor host,
+        // JSONC/JSON5 走 CodeMirror 文本,都不再需要原生普通树。
         let json_tree = match &kind {
             TabKind::File(path)
-                if route.as_ref().is_some_and(|route| {
-                    matches!(route.kind, PreviewKind::Json | PreviewKind::Streamed)
-                }) =>
+                if route
+                    .as_ref()
+                    .is_some_and(|route| route.kind == PreviewKind::Streamed) =>
             {
                 self.pending_json_tree_loads.push((id, path.clone()));
                 Some(JsonTreeState::Loading)
@@ -446,9 +448,9 @@ impl PreviewPane {
         };
         let json_tree = match &kind {
             TabKind::File(path)
-                if route.as_ref().is_some_and(|route| {
-                    matches!(route.kind, PreviewKind::Json | PreviewKind::Streamed)
-                }) =>
+                if route
+                    .as_ref()
+                    .is_some_and(|route| route.kind == PreviewKind::Streamed) =>
             {
                 self.pending_json_tree_loads.push((id, path.clone()));
                 Some(JsonTreeState::Loading)
@@ -3187,53 +3189,6 @@ mod tests {
         std::fs::remove_file(tmp).ok();
     }
 
-    #[cfg(not(feature = "codemirror"))]
-    #[test]
-    fn open_json_file_populates_both_editor_and_json_tree() {
-        // JSON 是双视图:原生代码编辑器(RawText 半边)与 JSON 树(Tree 半边)
-        // 同时存在,切换按钮在两者间选。不同于 tabular 的"独占认领"。
-        let p = std::env::temp_dir().join(format!("json_route_{}.json", std::process::id()));
-        std::fs::write(&p, "{}").unwrap();
-        let mut pane = PreviewPane::default();
-        pane.open_path(p.clone());
-        let tab = &pane.tabs()[pane.active_idx()];
-        assert!(
-            tab.editor.is_some(),
-            "JSON 应该仍然进原生代码编辑器(双视图之一)"
-        );
-        assert!(
-            matches!(tab.json_tree, Some(JsonTreeState::Loading)),
-            "JSON tab 应该同时进入 json_tree 的 Loading 态"
-        );
-        assert!(matches!(tab.backend_state, BackendState::Loading));
-        std::fs::remove_file(p).ok();
-    }
-
-    #[test]
-    fn json_mode_and_backend_state_stay_synchronized() {
-        let p = std::env::temp_dir().join(format!("json_mode_{}.json", std::process::id()));
-        std::fs::write(&p, "{\"a\":1}").unwrap();
-        let mut pane = PreviewPane::default();
-        let id = pane.open_path(p.clone());
-        let view = crate::json_tree::load(&p).unwrap();
-        pane.finish_json_tree_load(id, Ok(view));
-        assert!(matches!(
-            pane.tabs()[pane.active_idx()].backend_state,
-            BackendState::Ready
-        ));
-
-        pane.json_tree_mut(id)
-            .unwrap()
-            .apply(crate::json_tree::Action::ToggleViewMode);
-        pane.sync_json_backend_mode(id);
-        assert_eq!(
-            pane.tabs()[pane.active_idx()].current_mode(),
-            Some(PreviewMode::Text)
-        );
-
-        std::fs::remove_file(p).ok();
-    }
-
     #[test]
     fn json_tab_is_excluded_from_webview_pool() {
         let p = std::env::temp_dir().join(format!("json_webview_{}.json", std::process::id()));
@@ -3243,28 +3198,6 @@ mod tests {
         assert!(
             pane.desired_webviews().is_empty(),
             "json tab 不该进 webview 池"
-        );
-        std::fs::remove_file(p).ok();
-    }
-
-    #[cfg(not(feature = "codemirror"))]
-    #[test]
-    fn failed_json_tree_load_drops_tree_and_keeps_editor() {
-        // 内容不是合法 JSON 时,加载失败分支会清掉 json_tree,让
-        // tab 退回纯文本编辑器。editor 独立于树加载,
-        // 清树后仍在;tab 因此重新回到"被原生编辑器认领"的形态,不进 webview 池。
-        let p = std::env::temp_dir().join(format!("json_bad_{}.json", std::process::id()));
-        std::fs::write(&p, "{ not valid json !! }").unwrap();
-        let mut pane = PreviewPane::default();
-        let id = pane.open_path(p.clone());
-        assert!(pane.tabs()[pane.active_idx()].json_tree.is_some());
-        pane.finish_json_tree_load(id, Err("invalid json".into()));
-        let tab = &pane.tabs()[pane.active_idx()];
-        assert!(tab.json_tree.is_none(), "清树后 json_tree 应为 None");
-        assert!(tab.editor.is_some(), "清树不该动 editor");
-        assert!(
-            pane.desired_webviews().is_empty(),
-            "退回文本编辑器后不该进 webview 池"
         );
         std::fs::remove_file(p).ok();
     }
@@ -3688,7 +3621,6 @@ mod tests {
     }
 
     /// json-editor feature:严格 JSON 的 Tree 视图产出 `dozer://json-editor/` spec。
-    #[cfg(feature = "json-editor")]
     #[test]
     fn json_tree_uses_json_editor_host_when_feature_on() {
         let path = std::env::temp_dir().join(format!("json_host_{}.json", std::process::id()));
@@ -3713,10 +3645,9 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
-    /// JSONC/JSON5 含注释,vanilla-jsoneditor 不解析 → 保留原生树(不用 json host)。
-    #[cfg(feature = "json-editor")]
+    /// JSONC/JSON5 含注释,vanilla-jsoneditor 不解析 → 走 CodeMirror 文本,不用 json host。
     #[test]
-    fn jsonc_json5_keep_native_tree() {
+    fn jsonc_json5_go_to_text_not_json_host() {
         for ext in ["json5", "jsonc"] {
             let path = std::env::temp_dir().join(format!("j_{}_{}.{ext}", std::process::id(), ext));
             std::fs::write(&path, "{ // c\n \"a\":1\n}\n").unwrap();
@@ -3727,6 +3658,7 @@ mod tests {
             }
             let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
             assert!(!tab.uses_json_editor(), "{ext} 不应走 json host");
+            assert!(tab.json_tree.is_none(), "{ext} 不再挂原生普通树");
             assert!(
                 pane.desired_json_webviews(1, crate::app::PanelKind::Files)
                     .iter()

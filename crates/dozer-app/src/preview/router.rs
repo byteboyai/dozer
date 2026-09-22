@@ -205,7 +205,15 @@ fn default_modes(path: &Path, kind: PreviewKind) -> (PreviewMode, Vec<PreviewMod
                 (PreviewMode::Rendered, Vec::new())
             }
         }
-        PreviewKind::Json => (PreviewMode::Tree, vec![PreviewMode::Text]),
+        PreviewKind::Json => {
+            // 严格 `.json` 树/文本双视图;JSONC/JSON5(含注释)只给 CodeMirror
+            // 文本(vanilla-jsoneditor 不解析注释;自研普通树已退役)。
+            if json_extension(path).as_str() == "json" {
+                (PreviewMode::Tree, vec![PreviewMode::Text])
+            } else {
+                (PreviewMode::Text, Vec::new())
+            }
+        }
         PreviewKind::Tabular => {
             if is_csv_like(path) {
                 (PreviewMode::Tabular, vec![PreviewMode::Text])

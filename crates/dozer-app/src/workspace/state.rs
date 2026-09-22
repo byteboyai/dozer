@@ -1440,26 +1440,20 @@ impl Workspace {
                 pane.begin_shell_load(tab_id);
                 pane.finish_shell_load(tab_id);
             }
-            // JSON/Streamed 在 feature 下:文本视图由 editor host 承载,Tree/
-            // Streamed 视图仍走原生 `json_tree`(挂在 tab 上后台加载)。
-            Some(crate::preview::PreviewKind::Json)
-            | Some(crate::preview::PreviewKind::Streamed)
-                if crate::preview::codemirror_enabled() =>
-            {
+            // JSONL/NDJSON(Streamed):原生 streamed 树;严格 JSON 走
+            // vanilla-jsoneditor host,JSONC/JSON5 走 CodeMirror 文本,都不需要
+            // 原生普通树。
+            Some(crate::preview::PreviewKind::Streamed) if crate::preview::codemirror_enabled() => {
                 pane.begin_shell_load(tab_id);
                 pane.set_json_tree_loading(tab_id, path.clone());
                 pane.finish_shell_load(tab_id);
             }
-            // 老 iced editor;JSON/Streamed 额外挂 json_tree。
+            // 老 iced editor(feature 关闭时);Streamed 额外挂原生树。
             Some(crate::preview::PreviewKind::Code)
             | Some(crate::preview::PreviewKind::Json)
             | Some(crate::preview::PreviewKind::Streamed) => {
                 pane.begin_shell_load(tab_id);
-                if matches!(
-                    route_kind,
-                    Some(crate::preview::PreviewKind::Json)
-                        | Some(crate::preview::PreviewKind::Streamed)
-                ) {
+                if route_kind == Some(crate::preview::PreviewKind::Streamed) {
                     pane.set_json_tree_loading(tab_id, path.clone());
                 }
                 pane.set_tab_loading(tab_id, true);

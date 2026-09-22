@@ -121,9 +121,9 @@ pub fn is_host_url(url: &str) -> bool {
     is_editor_url(url) || is_json_editor_url(url)
 }
 
-/// 对照期开关:严格 JSON 的 Tree 视图是否改用 vanilla-jsoneditor host。
+/// 严格 JSON 的 Tree 视图由 vanilla-jsoneditor host 承载(常开)。
 pub fn json_editor_enabled() -> bool {
-    cfg!(feature = "json-editor")
+    true
 }
 
 /// 开发开关:是否用 CodeMirror host 承载 Code tab。默认关闭,保证行为与

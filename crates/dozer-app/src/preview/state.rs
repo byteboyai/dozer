@@ -124,7 +124,10 @@ impl PreviewTab {
         }
         self.backend.as_ref().is_some_and(|backend| {
             backend.hosts_webview()
-                || (self.editor.is_none()
+                // 兼容兜底(仅 Code):原生编辑器读盘失败且非 CodeMirror 时退回
+                // Flyfish。JSON/Streamed/Tabular 有各自的原生/host 视图,不适用。
+                || (matches!(backend, PreviewBackend::Code(_))
+                    && self.editor.is_none()
                     && self.tabular.is_none()
                     && self.json_tree.is_none()
                     && (!self.uses_codemirror()
