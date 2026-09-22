@@ -185,15 +185,24 @@ impl PreviewTab {
     }
 
     /// 严格 JSON 的 Tree 视图是否改用 vanilla-jsoneditor host(对照期 feature)。
+    /// **只限 `.json`**:JSONC/JSON5 含注释,vanilla-jsoneditor 不解析,仍走原生树。
     pub fn uses_json_editor(&self) -> bool {
-        json_editor_enabled()
-            && matches!(
-                self.backend,
-                Some(PreviewBackend::Json(JsonBackend {
-                    mode: JsonMode::Tree,
-                    ..
-                }))
-            )
+        if !json_editor_enabled() {
+            return false;
+        }
+        if !matches!(
+            self.backend,
+            Some(PreviewBackend::Json(JsonBackend {
+                mode: JsonMode::Tree,
+                ..
+            }))
+        ) {
+            return false;
+        }
+        matches!(&self.kind, TabKind::File(p)
+            if p.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("json")))
     }
 
     /// debug/test 下断言 backend 描述与旧 adapter 字段一致:任何迁移漏点

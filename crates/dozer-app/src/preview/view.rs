@@ -3713,6 +3713,29 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
+    /// JSONC/JSON5 含注释,vanilla-jsoneditor 不解析 → 保留原生树(不用 json host)。
+    #[cfg(feature = "json-editor")]
+    #[test]
+    fn jsonc_json5_keep_native_tree() {
+        for ext in ["json5", "jsonc"] {
+            let path = std::env::temp_dir().join(format!("j_{}_{}.{ext}", std::process::id(), ext));
+            std::fs::write(&path, "{ // c\n \"a\":1\n}\n").unwrap();
+            let mut pane = PreviewPane::default();
+            let id = pane.open_path(path.clone());
+            if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == id) {
+                tab.backend_state = BackendState::Ready;
+            }
+            let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+            assert!(!tab.uses_json_editor(), "{ext} 不应走 json host");
+            assert!(
+                pane.desired_json_webviews(1, crate::app::PanelKind::Files)
+                    .iter()
+                    .all(|s| s.id != id)
+            );
+            std::fs::remove_file(&path).ok();
+        }
+    }
+
     /// feature 打开时,CSV 的"原文"模式由 CodeMirror editor host 承载。
     #[cfg(feature = "codemirror")]
     #[test]
