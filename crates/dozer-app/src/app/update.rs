@@ -44,70 +44,86 @@ impl App {
                     } else {
                         &mut ws.preview
                     };
-                    let Some(tab) = pane
-                        .tabs_mut()
-                        .iter_mut()
-                        .find(|tab| tab.id == binding.tab_id)
-                    else {
-                        return;
-                    };
-                    let crate::preview::TabKind::File(path) = &tab.kind else {
-                        return;
-                    };
-                    if path != &binding.path || event.revision < tab.web_revision {
-                        return;
+                    // `Ready` 时若该 tab 有"打开后跳转到某行"的诉求(代码健康度
+                    // 面板),取出来在 tab 借用结束后排队一条 reveal 命令。
+                    let mut pending_reveal: Option<(usize, u32)> = None;
+                    {
+                        let Some(tab) = pane
+                            .tabs_mut()
+                            .iter_mut()
+                            .find(|tab| tab.id == binding.tab_id)
+                        else {
+                            return;
+                        };
+                        let crate::preview::TabKind::File(path) = &tab.kind else {
+                            return;
+                        };
+                        if path != &binding.path || event.revision < tab.web_revision {
+                            return;
+                        }
+                        use crate::preview::EditorEvent;
+                        match event.payload {
+                            EditorEvent::Ready { .. } => {
+                                tab.web_revision = event.revision;
+                                tab.web_error = None;
+                                let _ = tab
+                                    .backend_state
+                                    .try_transition(crate::preview::BackendState::Ready);
+                                if let Some(line) = tab.pending_jump_line.take() {
+                                    pending_reveal = Some((tab.id, line as u32));
+                                }
+                            }
+                            EditorEvent::SelectionChanged { anchor, head, .. } => {
+                                tab.web_revision = event.revision;
+                                tab.web_selection = Some(crate::preview::TextRange {
+                                    start: anchor,
+                                    end: head,
+                                });
+                            }
+                            EditorEvent::ViewportChanged { from_line, to_line } => {
+                                tab.web_revision = event.revision;
+                                tab.web_viewport = Some((from_line, to_line));
+                            }
+                            EditorEvent::DocumentChanged { revision, .. } => {
+                                if revision == event.revision && revision >= tab.web_revision {
+                                    tab.web_revision = revision;
+                                    tab.dirty = true;
+                                }
+                            }
+                            EditorEvent::SaveRequested { revision, text } => {
+                                if revision != event.revision || revision != tab.web_revision {
+                                    return;
+                                }
+                                match crate::preview::save_text_atomic(path, &text) {
+                                    Ok(()) => tab.dirty = false,
+                                    Err(error) => {
+                                        tab.web_error = Some(format!("保存失败: {error}"))
+                                    }
+                                }
+                            }
+                            EditorEvent::ViewState { selection, .. } => {
+                                tab.web_revision = event.revision;
+                                tab.web_selection = selection;
+                            }
+                            EditorEvent::Failed {
+                                message,
+                                recoverable,
+                            } => {
+                                tab.web_error = Some(message.clone());
+                                let _ = tab.backend_state.try_transition(
+                                    crate::preview::BackendState::Failed(
+                                        crate::preview::PreviewError::new(message, recoverable),
+                                    ),
+                                );
+                            }
+                            EditorEvent::FocusChanged { .. } => {}
+                        }
                     }
-                    use crate::preview::EditorEvent;
-                    match event.payload {
-                        EditorEvent::Ready { .. } => {
-                            tab.web_revision = event.revision;
-                            tab.web_error = None;
-                            let _ = tab
-                                .backend_state
-                                .try_transition(crate::preview::BackendState::Ready);
-                        }
-                        EditorEvent::SelectionChanged { anchor, head, .. } => {
-                            tab.web_revision = event.revision;
-                            tab.web_selection = Some(crate::preview::TextRange {
-                                start: anchor,
-                                end: head,
-                            });
-                        }
-                        EditorEvent::ViewportChanged { from_line, to_line } => {
-                            tab.web_revision = event.revision;
-                            tab.web_viewport = Some((from_line, to_line));
-                        }
-                        EditorEvent::DocumentChanged { revision, .. } => {
-                            if revision == event.revision && revision >= tab.web_revision {
-                                tab.web_revision = revision;
-                                tab.dirty = true;
-                            }
-                        }
-                        EditorEvent::SaveRequested { revision, text } => {
-                            if revision != event.revision || revision != tab.web_revision {
-                                return;
-                            }
-                            match crate::preview::save_text_atomic(path, &text) {
-                                Ok(()) => tab.dirty = false,
-                                Err(error) => tab.web_error = Some(format!("保存失败: {error}")),
-                            }
-                        }
-                        EditorEvent::ViewState { selection, .. } => {
-                            tab.web_revision = event.revision;
-                            tab.web_selection = selection;
-                        }
-                        EditorEvent::Failed {
-                            message,
-                            recoverable,
-                        } => {
-                            tab.web_error = Some(message.clone());
-                            let _ = tab.backend_state.try_transition(
-                                crate::preview::BackendState::Failed(
-                                    crate::preview::PreviewError::new(message, recoverable),
-                                ),
-                            );
-                        }
-                        EditorEvent::FocusChanged { .. } => {}
+                    if let Some((tab_id, line)) = pending_reveal {
+                        pane.queue_editor_command(
+                            tab_id,
+                            crate::preview::EditorCommand::RevealPosition { line, column: 1 },
+                        );
                     }
                 });
             }
@@ -3739,10 +3755,15 @@ impl App {
                         proxy.send_event(Message::PreviewFileLoaded(project_id, tab_id, result));
                 });
             } else {
-                ws.preview.open_path(path.clone());
-                // 非原生编辑器候选(webview/表格类)无法跳转光标,target_line
-                // 静默忽略——这类文件本来就不会是代码健康度面板的分析对象
-                // (只扫 .rs),实践中不会走到这条分支。
+                let id = ws.preview.open_path(path.clone());
+                // CodeMirror tab 在 host `ready` 后由 `EditorWebviewEvent`
+                // 排队 reveal;webview/表格类仍无法跳转光标,target_line 忽略。
+                if let Some(line) = target_line
+                    && let Some(tab) = ws.preview.tabs_mut().iter_mut().find(|t| t.id == id)
+                    && tab.uses_codemirror()
+                {
+                    tab.pending_jump_line = Some(line);
+                }
             }
             ws.spawn_pending_tabular_loads(PanelKind::Files, io);
             ws.spawn_pending_json_tree_loads(PanelKind::Files, io);

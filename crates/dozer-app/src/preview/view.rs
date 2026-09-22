@@ -1266,8 +1266,6 @@ impl PreviewPane {
     /// 排队一个待下发给 CodeMirror editor webview 的命令(`tab_id`, 命令)。
     /// 只有 `uses_codemirror()` 的 tab 会被 `window_events` 真正注入,其余
     /// (老 iced editor / webview)在派发时按 binding 过滤掉。
-    // Phase B:队列/派发已通,Agent 入口(Task 6)与 jump-to-line 接线随后接入。
-    #[allow(dead_code)]
     pub fn queue_editor_command(&mut self, tab_id: usize, command: EditorCommand) {
         self.pending_editor_commands.push((tab_id, command));
     }
