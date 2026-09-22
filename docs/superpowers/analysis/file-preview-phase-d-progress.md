@@ -81,6 +81,14 @@
 - 自带测试:`tsc` + build;Rust `parse_json_event`、`uses_json_editor`/spec、
   命名空间/CSP/URL。
 
+### 默认开启与安全边界
+- `json-editor` 已转**默认开启**(`default = ["codemirror","json-editor"]`):
+  严格 `.json` 的 Tree 走 vanilla-jsoneditor;`--no-default-features` 仍回退老
+  iced 编辑器。
+- 修正:JSONC/JSON5 含注释,vanilla-jsoneditor 不解析 → `uses_json_editor`
+  **只限 `.json` 扩展名**,JSONC/JSON5 仍走原生树(避免回归);JSONL/NDJSON 走
+  原生 streamed。
+
 ## 未完成(受 GUI 验收与"迁移前不删除"原则约束)
 1. **Task 2 剩余**:NSMenu 上下文菜单(取舍见 Phase B 文档);Unsupported/损坏/
    加密格式的正式 fallback 页面。
