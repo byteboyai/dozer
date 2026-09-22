@@ -105,16 +105,27 @@
 - editor `ready` 记 ready latency(仅毫秒/面板/tab,不含内容);加载成功清零
   失败计数,失败累加并在达阈值时于 `web_error` 提示改用纯文本/外部打开。
 
+### 收尾项(已完成)
+- **Windowed 整文件搜索**:窗口化 ⌘F/⌘R 由 JS 拦截并发 `find_request`;Rust
+  打开大文件搜索条,提交查询走 `large_text::stream_search`(**整文件**,不只
+  搜持有窗口),命中跳转先 `queue_windowed_view` 装窗再全局 `reveal_position`。
+- **外部打开 fallback**:预览错误横幅加「在系统应用中打开」按钮
+  (`Message::PreviewOpenExternal`),路径取自当前 tab 并校验存在,`open` 交给
+  系统默认应用,不隐式执行文件本身。
+- **视图状态恢复**:持久化 cursor/selection/scroll_anchor(`spawn_preview_state_save`
+  从 CodeMirror 镜像字段写入);启动物化后 `set_pending_view`,editor `ready`
+  时应用(选区优先,其次光标,再次滚动锚点)。
+
 ## 仍未完成
 
-1. 失败降级的 UI 入口(纯文本只读 / 外部打开按钮)——计数与阈值已就绪。
-2. 恢复时把持久化的 cursor/selection/scroll anchor 应用到编辑器视图。
+1. 真机 WKWebView 运行期人工验收(窗口滚动/行号基数、⌘F 整文件搜索、recovery
+   往返、安全启动);以及把持久 scroll anchor 更精确地还原为像素锚点。
 
 ## 验证
 
 - `cargo check`/`build -p dozer-app --all-targets`(默认与 `--features codemirror`):
   通过(链接成功)。
-- `cargo test -p dozer-app`:默认 **1254 passed / 0 failed**、feature **1236
+- `cargo test -p dozer-app`:默认 **1254 passed / 0 failed**、feature **1237
   passed / 0 failed**(另有 1 ignored)。
 - 前端:`tsc --noEmit`、`npm test`(6 passed)、`npm run build` 通过(产物已更新)。
 - `cargo fmt --check`、`cargo clippy` 干净(仅既有 `file_history.rs` warning)。

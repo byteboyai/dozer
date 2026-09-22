@@ -240,6 +240,11 @@ function buildExtensions(): Extension[] {
         key: 'Mod-f',
         preventDefault: true,
         run: (v) => {
+          if (windowed) {
+            // 窗口化:只搜持有窗口没意义,交给 Rust 在整文件上流式搜索。
+            post({ kind: 'find_request' });
+            return true;
+          }
           openSearchPanel(v);
           return true;
         },
@@ -248,6 +253,10 @@ function buildExtensions(): Extension[] {
         key: 'Mod-r',
         preventDefault: true,
         run: (v) => {
+          if (windowed) {
+            post({ kind: 'find_request' });
+            return true;
+          }
           openSearchPanel(v);
           return true;
         },

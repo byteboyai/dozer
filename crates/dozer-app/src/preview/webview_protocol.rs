@@ -104,13 +104,16 @@ pub enum EditorEvent {
         top_line: u32,
         folds: Vec<FoldRange>,
     },
-    /// 窗口化 viewer 滚到持有窗口边界,请求相邻窗口。`edge` 表示用户靠近
+    /// 窗口化 viewer 请求相邻窗口。`edge` 表示用户靠近
     /// 窗口的哪一端;`anchor_line` 是当前窗口内的全局行号。Rust 用稀疏索引
     /// 读相邻窗口后回 `SetWindow`。
     WindowRequest {
         edge: WindowEdge,
         anchor_line: u32,
     },
+    /// 窗口化 viewer 的 ⌘F:请求在**整文件**上做流式搜索(而不是只搜持有
+    /// 窗口)。Rust 打开大文件搜索条并跑 `large_text::stream_search`。
+    FindRequest,
     Failed {
         message: String,
         recoverable: bool,
@@ -444,6 +447,12 @@ mod tests {
                 text: "dirty\n".into()
             }
         );
+    }
+
+    #[test]
+    fn parses_find_request_event() {
+        let env = parse_event(&raw(r#"{"kind":"find_request"}"#)).unwrap();
+        assert_eq!(env.payload, EditorEvent::FindRequest);
     }
 
     #[test]

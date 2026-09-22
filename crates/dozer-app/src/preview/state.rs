@@ -84,6 +84,13 @@ pub struct PreviewTab {
     pub pending_restore: Option<String>,
     /// 本次物化开始时刻(用于 ready latency 观测;不记文件内容)。
     pub load_started: Option<std::time::Instant>,
+    /// 启动恢复的视图状态(cursor / selection / scroll top_line),editor `ready`
+    /// 后应用一次。
+    pub pending_view: Option<(
+        Option<crate::preview::TextPosition>,
+        Option<crate::preview::TextRange>,
+        Option<u32>,
+    )>,
     /// CodeMirror host 的轻量镜像；正文仍由 WebView 持有，Rust 只保留 Agent、
     /// 保存和过期事件校验所需状态。
     pub web_revision: u64,

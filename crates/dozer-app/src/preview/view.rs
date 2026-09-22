@@ -38,6 +38,7 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         recovery_written: false,
         pending_restore: None,
         load_started: None,
+        pending_view: None,
         web_revision: 0,
         web_selection: None,
         web_selected_text: None,
@@ -400,6 +401,7 @@ impl PreviewPane {
             recovery_written: false,
             pending_restore: None,
             load_started: None,
+            pending_view: None,
             web_revision: 0,
             web_selection: None,
             web_selected_text: None,
@@ -471,6 +473,7 @@ impl PreviewPane {
             recovery_written: false,
             pending_restore: None,
             load_started: None,
+            pending_view: None,
             web_revision: 0,
             web_selection: None,
             web_selected_text: None,
@@ -536,6 +539,7 @@ impl PreviewPane {
             recovery_written: false,
             pending_restore: None,
             load_started: None,
+            pending_view: None,
             web_revision: 0,
             web_selection: None,
             web_selected_text: None,
@@ -595,6 +599,19 @@ impl PreviewPane {
             tab.tabular = Some(TabularState::Loading);
         }
         self.pending_tabular_loads.push((tab_id, path));
+    }
+
+    /// 记录启动恢复的视图状态,editor `ready` 后应用一次。
+    pub fn set_pending_view(
+        &mut self,
+        tab_id: usize,
+        cursor: Option<crate::preview::TextPosition>,
+        selection: Option<crate::preview::TextRange>,
+        top_line: Option<u32>,
+    ) {
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+            tab.pending_view = Some((cursor, selection, top_line));
+        }
     }
 
     /// 异步读盘+构造结果回灌:按 `tab_id` 定位(用户可能在结果回来前关掉/

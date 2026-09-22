@@ -1144,6 +1144,20 @@ pub(crate) fn preview_pane_for<'a>(
         content = content.push(lh(text(format!("⚠ {err}"))
             .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().red)));
+        // 失败时的外部打开 fallback:路径取自当前文件 tab(不隐式执行文件本身)。
+        if let Some(tab) = preview.tabs().get(preview.active_idx())
+            && matches!(tab.kind, crate::preview::TabKind::File(_))
+        {
+            let tab_id = tab.id;
+            let panel = match kind {
+                PreviewPaneKind::Files => PanelKind::Files,
+                PreviewPaneKind::Project => PanelKind::Project,
+            };
+            content = content.push(
+                iced_widget::button(text("在系统应用中打开").size(byteui::theme::font::body()))
+                    .on_press(Message::PreviewOpenExternal(panel, tab_id)),
+            );
+        }
     }
 
     // `PreviewPane` 恒定携带第 0 项 `TabKind::Blank` 占位(见 `PreviewPane::

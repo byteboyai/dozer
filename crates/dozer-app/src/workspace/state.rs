@@ -1187,9 +1187,16 @@ impl Workspace {
             if is_active {
                 active_path = Some(p.clone());
             }
+            // CodeMirror tab 的镜像视图状态:光标取选区末端(无选区即光标点),
+            // 选区只在非空时持久化;滚动锚点取可见起始行。
+            let selection = tab.web_selection.filter(|r| r.start != r.end);
+            let cursor = tab.web_selection.map(|r| r.end);
             tabs.push(preview_state::PersistedPreviewTab {
                 path: p.clone(),
                 mode: tab.current_mode(),
+                cursor,
+                selection,
+                scroll_anchor: tab.web_viewport.map(|(from, _)| from as u64),
                 active: is_active,
                 ..Default::default()
             });
@@ -1326,6 +1333,12 @@ impl Workspace {
                 .expect("allowed_files 锁")
                 .insert(path.clone());
             let id = self.preview.push_shell_tab(path, persisted.mode);
+            self.preview.set_pending_view(
+                id,
+                persisted.cursor,
+                persisted.selection,
+                persisted.scroll_anchor.map(|v| v as u32),
+            );
             first_id.get_or_insert(id);
             if is_active {
                 active_id = Some(id);

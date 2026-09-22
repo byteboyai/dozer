@@ -335,6 +335,9 @@ pub enum Message {
     /// `preview_error`/`project_preview_error` 提示"超出已加载范围"
     /// (复用现有错误提示横幅,不新增一套错误 UI)。
     PreviewLargeFileSearchGo(PanelKind, bool),
+    /// 预览:用系统默认应用打开某个文件 tab(失败时的外部打开 fallback)。
+    /// 路径取自当前 tab 并再次校验存在,不隐式执行文件本身。
+    PreviewOpenExternal(PanelKind, usize),
     /// 预览:切换 tab(vec 位置).
     PreviewSelectTab(usize),
     /// 预览:关闭 tab(vec 位置).

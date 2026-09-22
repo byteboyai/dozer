@@ -55,6 +55,10 @@ impl App {
                     let mut window_request: Option<(usize, u32)> = None;
                     // recovery 恢复:ready 后回推正文 + 重新标脏。
                     let mut pending_restore_cmd: Option<(usize, String, u64)> = None;
+                    // 视图状态恢复:ready 后应用一次 cursor/selection/top-line。
+                    let mut pending_view_cmd: Option<(usize, crate::preview::EditorCommand)> = None;
+                    // 窗口化 ⌘F:打开整文件搜索条。
+                    let mut find_request: Option<usize> = None;
                     {
                         let Some(tab) = pane
                             .tabs_mut()
@@ -99,6 +103,33 @@ impl App {
                                     tab.dirty = true;
                                     tab.recovery_written = true;
                                     pending_restore_cmd = Some((tab.id, text, tab.web_revision));
+                                }
+                                // 视图状态恢复(cursor/selection/scroll)。
+                                if let Some((cursor, selection, top)) = tab.pending_view.take() {
+                                    let cmd = match (selection, cursor, top) {
+                                        (Some(sel), _, _) if sel.start != sel.end => {
+                                            Some(crate::preview::EditorCommand::SelectRange {
+                                                start: sel.start,
+                                                end: sel.end,
+                                            })
+                                        }
+                                        (_, Some(c), _) => {
+                                            Some(crate::preview::EditorCommand::RevealPosition {
+                                                line: c.line,
+                                                column: c.column,
+                                            })
+                                        }
+                                        (_, _, Some(t)) => {
+                                            Some(crate::preview::EditorCommand::RevealPosition {
+                                                line: t,
+                                                column: 1,
+                                            })
+                                        }
+                                        _ => None,
+                                    };
+                                    if let Some(cmd) = cmd {
+                                        pending_view_cmd = Some((tab.id, cmd));
+                                    }
                                 }
                                 // 加载成功:清零该文件连续失败计数。
                                 crate::preview::reset_failure_to(
@@ -219,6 +250,9 @@ impl App {
                                 // tab 借用结束后在 pane 上排队装窗口。
                                 window_request = Some((tab.id, anchor_line));
                             }
+                            EditorEvent::FindRequest => {
+                                find_request = Some(tab.id);
+                            }
                             EditorEvent::Failed {
                                 message,
                                 recoverable,
@@ -282,6 +316,12 @@ impl App {
                                 read_only: false,
                             },
                         );
+                    }
+                    if let Some((tab_id, cmd)) = pending_view_cmd {
+                        pane.queue_editor_command(tab_id, cmd);
+                    }
+                    if let Some(tab_id) = find_request {
+                        pane.open_large_file_search(tab_id);
                     }
                     if context_changed {
                         // 第二段链路(dozer-app → dozerd)自带 250ms 防抖;这里
@@ -1281,20 +1321,44 @@ impl App {
                     let crate::preview::TabKind::File(path) = tab.kind.clone() else {
                         return;
                     };
+                    let windowed = tab.uses_windowed_editor();
                     if let Some(session) = pane.large_file_search.as_mut() {
                         session.query = query.clone();
                         session.running = true;
                     }
                     let proxy = io.proxy.clone();
                     io.handle.spawn(async move {
-                        let scope = crate::extensions::search::Scope::File(path);
                         let result = tokio::task::spawn_blocking(move || {
-                            crate::extensions::search::search_scope(&scope, &query).map(|by_file| {
-                                by_file
-                                    .into_iter()
-                                    .flat_map(|(_, hits)| hits)
-                                    .collect::<Vec<_>>()
-                            })
+                            if windowed {
+                                // 窗口化:在整文件上流式搜索(不只搜持有窗口)。
+                                crate::preview::stream_search(
+                                    &path,
+                                    &query,
+                                    crate::preview::SearchOptions::default(),
+                                )
+                                .map(|outcome| {
+                                    outcome
+                                        .hits
+                                        .into_iter()
+                                        .map(|h| crate::extensions::search::SearchHit {
+                                            path: path.clone(),
+                                            line_no: h.line as u64,
+                                            line_text: h.text,
+                                        })
+                                        .collect::<Vec<_>>()
+                                })
+                                .map_err(|e| e.to_string())
+                            } else {
+                                let scope = crate::extensions::search::Scope::File(path);
+                                crate::extensions::search::search_scope(&scope, &query).map(
+                                    |by_file| {
+                                        by_file
+                                            .into_iter()
+                                            .flat_map(|(_, hits)| hits)
+                                            .collect::<Vec<_>>()
+                                    },
+                                )
+                            }
                         })
                         .await
                         .unwrap_or_else(|e| Err(e.to_string()));
@@ -1331,6 +1395,29 @@ impl App {
                         (session.current + session.hits.len() - 1) % session.hits.len()
                     };
                     let hit = session.hits[next].clone();
+                    let error_slot = match kind {
+                        PanelKind::Project => &mut ws.project_preview_error,
+                        _ => &mut ws.preview_error,
+                    };
+                    // 窗口化只读:命中在未加载区,先装窗口再全局 reveal。
+                    let windowed = pane
+                        .tabs()
+                        .iter()
+                        .find(|t| t.id == session.tab_id)
+                        .is_some_and(|t| t.uses_windowed_editor());
+                    if windowed {
+                        let line = hit.line_no.max(1) as u32;
+                        pane.queue_windowed_view(session.tab_id, line);
+                        pane.queue_editor_command(
+                            session.tab_id,
+                            crate::preview::EditorCommand::RevealPosition { line, column: 1 },
+                        );
+                        *error_slot = None;
+                        if let Some(s) = pane.large_file_search.as_mut() {
+                            s.current = next;
+                        }
+                        return;
+                    }
                     let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == session.tab_id)
                     else {
                         return;
@@ -1339,10 +1426,6 @@ impl App {
                         return;
                     };
                     let target_line = (hit.line_no.saturating_sub(1)) as usize;
-                    let error_slot = match kind {
-                        PanelKind::Project => &mut ws.project_preview_error,
-                        _ => &mut ws.preview_error,
-                    };
                     if target_line < editor.content_line_count() {
                         editor.move_cursor_to((target_line, 0));
                         *error_slot = None;
@@ -1356,6 +1439,31 @@ impl App {
                 });
             }
             Message::PreviewSelectTab(idx) => self.preview_select_tab(idx),
+            Message::PreviewOpenExternal(kind, tab_id) => {
+                self.with_focused_project(move |ws, _io| {
+                    let pane = match kind {
+                        PanelKind::Project => &ws.project_preview,
+                        _ => &ws.preview,
+                    };
+                    let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
+                        return;
+                    };
+                    let crate::preview::TabKind::File(path) = &tab.kind else {
+                        return;
+                    };
+                    if !path.is_file() {
+                        return;
+                    }
+                    // 只交给系统默认应用打开,不隐式执行文件本身。
+                    #[cfg(target_os = "macos")]
+                    let program = "open";
+                    #[cfg(not(target_os = "macos"))]
+                    let program = "xdg-open";
+                    if let Err(e) = std::process::Command::new(program).arg(path).spawn() {
+                        tracing::warn!(%e, "外部打开失败");
+                    }
+                });
+            }
             Message::PreviewCloseTab(idx) => {
                 self.with_focused_project(|ws, io| {
                     // 关闭前静默保存该 tab 的就地改动(仅当它是脏的原生 tab 才

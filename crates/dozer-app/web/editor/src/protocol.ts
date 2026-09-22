@@ -54,6 +54,7 @@ export type EditorEvent =
       folds: FoldRange[];
     }
   | { kind: 'window_request'; edge: WindowEdge; anchor_line: number }
+  | { kind: 'find_request' }
   | { kind: 'failed'; message: string; recoverable: boolean };
 
 /** Rust -> 编辑器的具名命令(禁止执行任意 JS)。 */
