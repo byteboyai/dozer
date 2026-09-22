@@ -84,6 +84,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "aider-adapter-spike"
+version = "0.1.0"
+
+[[package]]
 name = "alacritty_terminal"
 version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1877,7 +1881,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "dozer-app"
-version = "0.5.185"
+version = "0.5.189"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -1982,6 +1986,7 @@ name = "dozer-hook"
 version = "0.1.0"
 dependencies = [
  "dozer-core",
+ "libc",
  "serde_json",
  "tempfile",
 ]
