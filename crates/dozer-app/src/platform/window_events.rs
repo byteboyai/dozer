@@ -1027,6 +1027,10 @@ impl Runner {
         if *webview_project != app.active_project_id() {
             webviews.clear();
             browser_webviews.clear();
+            crate::preview::global_manager()
+                .lock()
+                .expect("preview resource manager lock")
+                .clear();
             *webview_project = app.active_project_id();
         }
 

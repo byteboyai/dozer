@@ -84,6 +84,13 @@ let windowTotal = 0;
 let windowHeldEnd = 0;
 let lastWindowRequest = 0;
 let applyingWindow = false;
+let globalScrollbar: HTMLInputElement | null = null;
+
+function updateGlobalScrollbar(): void {
+  if (!globalScrollbar || windowTotal <= 0) return;
+  globalScrollbar.max = String(Math.max(1, windowTotal));
+  globalScrollbar.value = String(Math.min(Math.max(windowBase, 1), windowTotal));
+}
 
 document.documentElement.setAttribute('data-theme', scheme);
 
@@ -360,6 +367,7 @@ function applyCommand(raw: string): void {
       );
       windowHeldEnd = windowBase + view.state.doc.lines - 1;
       applyingWindow = false;
+      updateGlobalScrollbar();
       emitViewport();
       break;
     }
@@ -445,6 +453,25 @@ async function boot(): Promise<void> {
     state: EditorState.create({ doc: text, extensions: buildExtensions() }),
     parent: document.getElementById('editor')!,
   });
+
+  if (windowed) {
+    const editorRoot = document.getElementById('editor')!;
+    globalScrollbar = document.createElement('input');
+    globalScrollbar.type = 'range';
+    globalScrollbar.className = 'windowed-global-scrollbar';
+    globalScrollbar.min = '1';
+    globalScrollbar.step = '1';
+    globalScrollbar.setAttribute('aria-label', '全局文件滚动位置');
+    globalScrollbar.addEventListener('input', () => {
+      const line = Number(globalScrollbar?.value ?? 1);
+      if (Number.isFinite(line)) {
+        lastWindowRequest = Date.now();
+        post({ kind: 'window_request', edge: 'bottom', anchor_line: Math.max(1, Math.round(line)) });
+      }
+    });
+    editorRoot.appendChild(globalScrollbar);
+    updateGlobalScrollbar();
+  }
 
   post({
     kind: 'ready',

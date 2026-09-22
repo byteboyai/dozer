@@ -7,11 +7,12 @@
 //! **内存预算与重型 WebView 数必须同时满足**,数量不是内存预算的替代品。
 //! 不可淘汰:active、saving、agent 写入中、以及**无 recovery 的脏 tab**。
 
-// Phase C 建立的策略/资源/流式模块,消费方(Windowed viewer、资源接线)接入前
-// 部分 API 暂未被非测试代码调用;显式允许,避免 dead_code 噪声。
+// 资源管理器已接入 runtime 的 webview 池预算;诊断/按 key 取用等 API 目前仅
+// 单测与后续诊断页使用,显式允许 dead_code 噪声。
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 use crate::capabilities::ResourceBudgets;
 
@@ -90,6 +91,14 @@ pub struct ResourceManager {
     clock: u64,
 }
 
+static GLOBAL_MANAGER: OnceLock<Mutex<ResourceManager>> = OnceLock::new();
+
+/// 进程级共享资源管理器。所有项目和预览面板共用同一份预算。
+pub fn global_manager() -> &'static Mutex<ResourceManager> {
+    GLOBAL_MANAGER
+        .get_or_init(|| Mutex::new(ResourceManager::new(crate::capabilities::current().budgets)))
+}
+
 impl ResourceManager {
     pub fn new(budgets: ResourceBudgets) -> Self {
         Self {
@@ -133,6 +142,20 @@ impl ResourceManager {
 
     pub fn get_mut(&mut self, key: ViewerKey) -> Option<&mut ViewerRegistration> {
         self.registrations.get_mut(&key)
+    }
+
+    pub fn contains(&self, key: ViewerKey) -> bool {
+        self.registrations.contains_key(&key)
+    }
+
+    /// 删除某项目当前帧已经不再驻留的 viewer。
+    pub fn prune_project(&mut self, project_id: i64, keep: &std::collections::HashSet<usize>) {
+        self.registrations
+            .retain(|(project, tab), _| *project != project_id || keep.contains(tab));
+    }
+
+    pub fn clear(&mut self) {
+        self.registrations.clear();
     }
 
     pub fn set_active(&mut self, key: ViewerKey, active: bool) {

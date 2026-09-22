@@ -210,6 +210,79 @@ pub(crate) fn sync_webview_pool(
     proxy: winit::event_loop::EventLoopProxy<Message>,
     report_title: bool,
 ) {
+    // CodeMirror editor host 在真正创建 WKWebView 之前 reserve；不足时先
+    // 释放本池中 manager 指定的候选，再重试，避免编辑器 tab 累积把机器拖垮。
+    let mut approved = Vec::with_capacity(specs.len());
+    let mut manager = crate::preview::global_manager()
+        .lock()
+        .expect("preview resource manager lock");
+    let mut keep = std::collections::HashSet::new();
+    let current_project = specs
+        .iter()
+        .find_map(|(s, _)| s.editor_binding.as_ref().map(|b| b.project_id));
+    for (spec, bounds) in specs {
+        let Some(binding) = spec.editor_binding.as_ref() else {
+            approved.push((spec, bounds));
+            continue;
+        };
+        let key = (binding.project_id, binding.tab_id);
+        keep.insert(binding.tab_id);
+        if !manager.contains(key) {
+            let bytes = std::fs::metadata(&binding.path)
+                .map(|m| m.len().saturating_mul(2).saturating_add(1024 * 1024))
+                .unwrap_or(1024 * 1024)
+                .min(manager.budgets().single_editor_bytes);
+            let reservation =
+                manager.try_reserve(bytes, true, current_project.unwrap_or(binding.project_id));
+            if let crate::preview::Reservation::NeedEviction(keys) = reservation {
+                for (project, tab) in keys {
+                    let marker = format!("proj={project}");
+                    let tab_marker = format!("tab={tab}");
+                    let ids: Vec<usize> = pool
+                        .iter()
+                        .filter(|(_, (_, url))| url.contains(&marker) && url.contains(&tab_marker))
+                        .map(|(id, _)| *id)
+                        .collect();
+                    for id in ids {
+                        pool.remove(&id);
+                    }
+                    manager.release((project, tab));
+                }
+            }
+            if !matches!(
+                manager.try_reserve(bytes, true, binding.project_id),
+                crate::preview::Reservation::Granted
+            ) {
+                tracing::warn!(
+                    project_id = binding.project_id,
+                    tab_id = binding.tab_id,
+                    "preview resource budget denied editor webview"
+                );
+                continue;
+            }
+            manager.register(crate::preview::ViewerRegistration {
+                project_id: binding.project_id,
+                tab_id: binding.tab_id,
+                estimated_bytes: bytes,
+                heavy_webview: true,
+                active: spec.visible,
+                dirty: false,
+                has_recovery: false,
+                saving: false,
+                agent_writing: false,
+                last_accessed: 0,
+            });
+        } else {
+            manager.set_active(key, spec.visible);
+            manager.touch(key);
+        }
+        approved.push((spec, bounds));
+    }
+    if let Some(project_id) = current_project {
+        manager.prune_project(project_id, &keep);
+    }
+    drop(manager);
+    let specs = approved;
     let desired_hosts: std::collections::HashMap<usize, bool> = specs
         .iter()
         .map(|(spec, _)| (spec.id, spec.editor_binding.is_some()))

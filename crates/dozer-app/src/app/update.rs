@@ -203,6 +203,9 @@ impl App {
                                     let panel = binding.panel;
                                     let tab_id = tab.id;
                                     let snap_path = path.clone();
+                                    let recovery_cursor = tab.web_selection.map(|range| range.end);
+                                    let recovery_selection = tab.web_selection;
+                                    let recovery_top_line = tab.web_viewport.map(|(from, _)| from);
                                     let proxy = io.proxy.clone();
                                     io.handle.spawn(async move {
                                         let ok = tokio::task::spawn_blocking(move || {
@@ -216,9 +219,9 @@ impl App {
                                                     snap_path.clone(),
                                                     &profile,
                                                     revision,
-                                                    None,
-                                                    None,
-                                                    None,
+                                                    recovery_cursor,
+                                                    recovery_selection,
+                                                    recovery_top_line,
                                                 );
                                             crate::preview::write_snapshot(
                                                 &crate::preview::recovery_dir(),
@@ -292,9 +295,14 @@ impl App {
                         let proxy = io.proxy.clone();
                         io.handle.spawn(async move {
                             let result = tokio::task::spawn_blocking(move || {
-                                crate::preview::LineIndex::build(&path, 1000, 0)
-                                    .map(std::sync::Arc::new)
-                                    .map_err(|e| e.to_string())
+                                crate::preview::LineIndex::build_cancellable(&path, 1000, 0, || {
+                                    false
+                                })
+                                .and_then(|index| {
+                                    index.ok_or_else(|| std::io::Error::other("index cancelled"))
+                                })
+                                .map(std::sync::Arc::new)
+                                .map_err(|e| e.to_string())
                             })
                             .await
                             .unwrap_or_else(|e| Err(e.to_string()));

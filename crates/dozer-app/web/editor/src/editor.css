@@ -24,6 +24,30 @@ html[data-theme='light'] body {
   height: 100%;
 }
 
+#editor {
+  position: relative;
+}
+
+/* 窗口化文件的 CodeMirror 原生滚动条只代表当前窗口；这个独立 range
+   映射到整文件行号，拖动可直接跳到任意位置。 */
+.windowed-global-scrollbar {
+  position: absolute;
+  z-index: 5;
+  top: 4px;
+  right: 1px;
+  width: 12px;
+  height: calc(100% - 8px);
+  writing-mode: vertical-lr;
+  direction: rtl;
+  appearance: slider-vertical;
+  accent-color: rgba(255, 229, 180, 0.55);
+  opacity: 0.72;
+}
+
+html[data-theme='light'] .windowed-global-scrollbar {
+  accent-color: rgba(0, 0, 0, 0.42);
+}
+
 * {
   scrollbar-width: thin;
 }
