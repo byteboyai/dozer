@@ -46,10 +46,15 @@ pub(crate) fn route_and_backend(
     let profile = profile_file(path).unwrap_or_else(|_| analyze(&[], None, 0, None));
     let route = classify_preview(path, &profile, capabilities, None);
     let total = profile.size_bytes;
-    let read_only = matches!(
-        classify_size(total, capabilities.budgets.full_file_load_bytes),
-        SizeTier::FullLoadReadOnly | SizeTier::ChunkedReadOnly
-    );
+    // 只读档:大小分档(整读/分块)之外,**非 UTF-8 或二进制内容**也强制只读
+    // ——CodeMirror host 用 `fetch().text()` 解码会丢字节,编辑再保存会损坏原文。
+    let non_text = matches!(profile.utf8, Utf8Status::Invalid)
+        || matches!(profile.content_kind, ContentKind::Binary);
+    let read_only = non_text
+        || matches!(
+            classify_size(total, capabilities.budgets.full_file_load_bytes),
+            SizeTier::FullLoadReadOnly | SizeTier::ChunkedReadOnly
+        );
     let backend = PreviewBackend::from_route(&route, path, read_only);
     // 同步路径(表格/webview/渲染)创建即 Ready;原生编辑器异步路径的调用方
     // 会用 `insert_loading_tab` 把状态置为 Loading。
@@ -3060,5 +3065,29 @@ mod tests {
             EditorCommand::RevealPosition { line: 12, .. }
         ));
         assert!(pane.take_pending_editor_commands().is_empty());
+    }
+
+    /// 非 UTF-8 / 二进制内容的代码文件强制只读(避免 CodeMirror 解码后保存
+    /// 损坏原文);普通 UTF-8 小文件仍可编辑。
+    #[test]
+    fn non_utf8_code_file_is_read_only() {
+        let dir = std::env::temp_dir();
+        let bad = dir.join(format!("non_utf8_{}.rs", std::process::id()));
+        std::fs::write(&bad, b"fn main() {}\n\xFF\xFE not utf8").unwrap();
+        let (_, backend, _) = route_and_backend(&bad, &crate::capabilities::current());
+        match backend {
+            PreviewBackend::Code(code) => assert_eq!(code.mode, CodeMode::ReadOnly),
+            other => panic!("应是 Code,得到 {other:?}"),
+        }
+        std::fs::remove_file(&bad).ok();
+
+        let good = dir.join(format!("utf8_{}.rs", std::process::id()));
+        std::fs::write(&good, "fn main() {}\n").unwrap();
+        let (_, backend, _) = route_and_backend(&good, &crate::capabilities::current());
+        match backend {
+            PreviewBackend::Code(code) => assert_eq!(code.mode, CodeMode::Editable),
+            other => panic!("应是 Code,得到 {other:?}"),
+        }
+        std::fs::remove_file(&good).ok();
     }
 }

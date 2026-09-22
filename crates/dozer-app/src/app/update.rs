@@ -1164,7 +1164,8 @@ impl App {
                     // 关 tab 后位置全变，旧 first 可能越界——归零防御（P1L T5）。
                     ws.preview_tab_first = 0;
                     ws.spawn_preview_state_save(io);
-                    ws.spawn_preview_context_push(io);
+                    // 关闭:上下文多半变了,立即 flush,不等防抖窗口。
+                    ws.flush_preview_context_push(io);
                 });
             }
             Message::PreviewToggleRenderMode(idx) => {
@@ -3885,7 +3886,8 @@ impl App {
                 ws.preview_tab_overflow_anchor = None;
             }
             ws.spawn_preview_state_save(io);
-            ws.spawn_preview_context_push(io);
+            // 切换 tab:上下文立即变,flush 到 dozerd 不等防抖。
+            ws.flush_preview_context_push(io);
         });
         if arming {
             self.tab_drag = Some(TabDrag {

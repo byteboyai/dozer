@@ -98,22 +98,38 @@
   - `dozerd`/`dozer-client` 无需改动(上下文不透明透传)。
   - **App 侧 Agent 命令入口**:`preview_editor_reveal/select/replace`;`replace`
     要求 `expected_revision == tab.web_revision`,失配拒绝(不排队)。
+- **上下文即时 flush**:把 push 拆成 `enqueue_preview_context_push(io, delay)`;
+  `spawn_preview_context_push`=250ms 防抖,新增 `flush_preview_context_push`=0。
+  tab 切换(`preview_select_tab`)、关闭(`PreviewCloseTab`)、失焦
+  (`blur_preview_editors`)改走 flush,不再等防抖窗口。
+- **非 UTF-8/二进制内容强制只读**:`route_and_backend` 的只读判据加入
+  `profile.utf8 == Invalid || content_kind == Binary` —— CodeMirror host 的
+  `fetch().text()` 会丢字节,置只读避免编辑后保存损坏原文(backend Code mode
+  → ReadOnly → editor URL `ro=1`)。
 
 ## 仍未完成(后续 Task 4–7)
 
-1. tab 切换/失焦/关闭时把 `app → dozerd` 那段**提前 flush**(当前统一走 250ms
-   防抖;即时性属增强,需要把 push 拆成带 delay 的 helper)。
-2. 非 UTF-8 文件只读化(当前 editor host 对非 UTF-8 走 `text()` lossy 解码)。
-3. editor 的 macOS 上下文菜单走 NSMenu(Task 2 剩余)。
-4. 大文件预算/休眠唤醒、失败后外部打开 fallback,以及 Task 5/7 的完整
-   搜索/折叠/导航与旧 editor 移除验收(旧 editor 删除属 Phase D)。
+1. **非 macOS 无内置查找条/剪贴板差异**、以及 editor 的"外部打开"入口(当前
+   非 UTF-8 只做只读,未给外部打开按钮)。
+2. 大文件预算/休眠唤醒与失败后外部打开 fallback。
+3. Task 5/7 的完整验收:拖动到底/折叠/搜索(In-editor 已具备,需人工验收)、
+   IME、路由矩阵;旧 iced editor 删除属 Phase D。
+
+## NSMenu 上下文菜单(有意不实现)
+
+计划 Task 2 要求 editor webview 的上下文菜单走 NSMenu。实为**不必**:WKWebView
+的右键菜单本身就是 macOS 原生菜单、天然渲染在 webview 之上(不受"webview 盖住
+iced 浮层"问题影响),且提供可用的剪切/复制/粘贴。反过来,自定义 NSMenu 的
+粘贴只能走 JS `document.execCommand('paste')`,而 WKWebView **禁止**无用户手势
+的 JS 粘贴 —— 自建菜单会把原本可用的粘贴弄坏。结论:editor webview 保留系统
+默认原生菜单;若将来要加"在系统应用中打开"等自定义项,再单独做该平台任务。
 
 ## 验证
 
 - `cargo check --workspace --all-targets` 默认与 `--features codemirror`:通过。
-- `cargo test -p dozer-app` 默认 **1196 passed**、`--features codemirror` **1179
+- `cargo test -p dozer-app` 默认 **1197 passed**、`--features codemirror` **1180
   passed**;两者都只剩改动前已存在的 `agent_icon_maps_each_kind_to_brand_icon`
   一项失败(另有 1 ignored)。`dozer-core` 71 passed、`dozer-mcp` 14 passed。
-- `cargo fmt --check` 通过;`cargo clippy --workspace --all-targets` 仅剩既有
-  `file_history.rs` / `spike/*` warning。
+- `cargo fmt --check` 通过;`cargo clippy` 仅剩既有 `file_history.rs` / `spike/*`
+  warning。
 - 前端:`npm run typecheck`、`npm test`(6 passed)、`npm run build`:通过。

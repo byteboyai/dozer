@@ -1214,6 +1214,18 @@ impl Workspace {
     /// 这次推送根本无处可去。占位很快会被真 `Workspace` 换掉,后者的
     /// `bootstrap` 里会补一次推送,所以这里静默返回不会留下空窗。
     pub(crate) fn spawn_preview_context_push(&mut self, io: &ShellIo) {
+        self.enqueue_preview_context_push(io, 250);
+    }
+
+    /// 立即推送(不做 trailing-edge 防抖):tab 切换/失焦/关闭等"上下文确实
+    /// 变了、且接下来可能长时间不再变"的时刻,不能等 250ms 防抖窗口。它仍走
+    /// nonce 机制——立即那次自增 nonce 后,先前排队中的防抖任务会因 nonce 过期
+    /// 而跳过,不会把旧值覆盖回来。
+    pub(crate) fn flush_preview_context_push(&mut self, io: &ShellIo) {
+        self.enqueue_preview_context_push(io, 0);
+    }
+
+    fn enqueue_preview_context_push(&mut self, io: &ShellIo, delay_ms: u64) {
         let Some(project) = &self.project else {
             return;
         };
@@ -1271,7 +1283,7 @@ impl Workspace {
         let flag = self.preview_context_nonce.clone();
         let client = io.client.clone();
         io.handle.spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             if flag.load(std::sync::atomic::Ordering::SeqCst) != nonce {
                 return; // 被更晚的一次变化取代
             }

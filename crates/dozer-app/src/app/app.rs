@@ -2093,8 +2093,12 @@ impl App {
     /// MouseInput` 那次 `blur_inputs()`,原生预览编辑器不会自己让出焦点
     /// （见 `Workspace::blur_preview_editors` 的说明），得单独补一次。
     pub fn blur_preview_editors(&mut self) {
+        let io = self.shell_io();
         if let Some(ws) = self.active_workspace_mut() {
             ws.blur_preview_editors();
+            // 失焦:把当前上下文立即 flush 给 dozerd,不让最后一次选停留
+            // 在防抖窗口里。
+            ws.flush_preview_context_push(&io);
         }
     }
 
