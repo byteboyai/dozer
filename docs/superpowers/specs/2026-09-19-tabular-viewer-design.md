@@ -1,5 +1,11 @@
 # Tabular Viewer 设计
 
+> **状态（2026-09-22）：查看器算法保留，架构层由新总规格接管。** Tabular 的
+> 虚拟化网格、流式/封顶加载仍有效；路由、tab 生命周期、能力预算、恢复、Agent
+> 上下文与 CSV/TSV 原文模式统一以
+> [`2026-09-22-file-preview-architecture-redesign.md`](./2026-09-22-file-preview-architecture-redesign.md)
+> 为准。
+
 ## 背景与动机
 
 当前文件预览对表格类数据文件没有专用渲染路径：

@@ -1,5 +1,11 @@
 # JSON Preview（Tree Viewer）设计
 
+> **状态（2026-09-22）：架构层已被取代。** 普通 JSON、JSONL/NDJSON、
+> CodeMirror Text、资源预算与 viewer 生命周期的后续方向统一以
+> [`2026-09-22-file-preview-architecture-redesign.md`](./2026-09-22-file-preview-architecture-redesign.md)
+> 为准。本文件继续记录现有自研 JSON Tree 的实现背景与算法，供迁移
+> Streamed JSON 能力时参考；不得再把其中的旧路由/双持有状态当作目标架构。
+
 ## 背景与动机
 
 当前 `.json`/`.jsonl`/`.ndjson` 落在 `preview::is_editable_extension` 的原生代码编辑器路径（`crates/dozer-app/src/preview/native_editor.rs`），JSON 语法高亮的纯文本展示——没有结构化折叠、没有类型标注、超大文件（数十万行的单个 JSON blob 或百万行 jsonl 导出）打开会全量读进 `CodeView` 缓冲区，没有任何封顶/虚拟化。

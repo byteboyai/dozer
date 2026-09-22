@@ -1,6 +1,7 @@
 //! 预览域状态结构:PreviewTab/TabKind/FindState/PreviewPane 等。
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use super::*;
@@ -61,6 +62,70 @@ pub struct PreviewTab {
     /// `take()` 消费掉。已经打开且 `editor` 已就绪的 tab 不走这个字段，
     /// 直接同步调用 `CodeView::move_cursor_to`。
     pub pending_jump_line: Option<usize>,
+    /// Phase A 统一路由结果(含可展示 reason)。`Blank` 占位 tab 没有文件,
+    /// 为 `None`;其余文件 tab 在**创建那一刻**就带上,是唯一的路由真相源。
+    pub route: Option<PreviewRoute>,
+    /// Phase A 统一 backend 描述。与 `route` 同生同灭;实际 viewer 句柄在
+    /// 迁移期仍由上面的 `editor`/`tabular`/`json_tree` 字段持有(adapter)。
+    pub backend: Option<PreviewBackend>,
+    /// backend 生命周期状态。迁移期与旧的 `loading` 字段并存,`loading` 仍是
+    /// 渲染侧的实际判据(行为不变),本字段用于状态机与后续阶段。
+    pub backend_state: BackendState,
+}
+
+impl PreviewTab {
+    /// 该 tab 在 Phase A 是否需要 Flyfish wry webview。
+    ///
+    /// WebView 生命周期只读统一 backend；旧 viewer `Option` 不再参与正常
+    /// 路由。唯一例外是原生加载进入 `Failed` 后，为保持 Phase A 用户行为不变，
+    /// 状态机明确选择 Flyfish fallback。Phase D 落地正式 External/Unsupported
+    /// 页面后再移除该兼容分支。
+    pub fn hosts_webview(&self) -> bool {
+        if self.loading || !matches!(self.kind, TabKind::File(_)) {
+            return false;
+        }
+        self.backend.as_ref().is_some_and(|backend| {
+            backend.hosts_webview()
+                || (matches!(self.backend_state, BackendState::Failed(_))
+                    && self.editor.is_none()
+                    && self.tabular.is_none()
+                    && self.json_tree.is_none())
+        })
+    }
+
+    pub fn current_mode(&self) -> Option<PreviewMode> {
+        self.backend.as_ref().map(PreviewBackend::current_mode)
+    }
+
+    /// debug/test 下断言 backend 描述与旧 adapter 字段一致:任何迁移漏点
+    /// (新代码只读 backend 但旧字段没同步)都应立即暴露,而不是静默分叉。
+    ///
+    /// 只在**创建完成那一刻**调用。用户在 Markdown tab 上手动切到源码模式
+    /// 后 `editor` 会被填上,那一刻 backend 仍是 Rendered(有意为之),不参与
+    /// 这里的创建期一致性检查。
+    pub fn debug_assert_backend_consistent(&self) {
+        #[cfg(debug_assertions)]
+        {
+            let (Some(route), Some(backend)) = (self.route.as_ref(), self.backend.as_ref()) else {
+                return;
+            };
+            debug_assert_eq!(
+                route.kind,
+                backend.kind(),
+                "route.kind 与 backend 描述必须一致 (tab {:?})",
+                self.title
+            );
+            let has_native_viewer =
+                self.editor.is_some() || self.tabular.is_some() || self.json_tree.is_some();
+            if has_native_viewer {
+                debug_assert!(
+                    !self.hosts_webview(),
+                    "持有原生 viewer 的 backend 不应再 host webview (tab {:?})",
+                    self.title
+                );
+            }
+        }
+    }
 }
 
 impl std::fmt::Debug for PreviewTab {
@@ -79,23 +144,24 @@ impl std::fmt::Debug for PreviewTab {
             .field("tabular", &self.tabular.is_some())
             .field("json_tree", &self.json_tree.is_some())
             .field("pending_jump_line", &self.pending_jump_line)
+            .field("route", &self.route)
+            .field("backend", &self.backend)
+            .field("backend_state", &self.backend_state)
             .finish()
     }
 }
 
 /// 表格 tab 的加载态。`Loading` = 首次打开该文件、或懒加载某个 sheet 期间
 /// 在后台线程跑(见 `crate::tabular::load`/`load_sheet`),完成后经
-/// `Message::TabularLoaded` 落回 `Ready`。加载失败时(极少见:文件在打开
-/// 那一刻被删/损坏)保留 `Loading`,不额外建一个 `Failed` 变体——那种情况下
-/// 用户能做的唯一有意义动作是关掉这个 tab 重开,持续显示 loading 转圈比
-/// 静默切回空白/报内部错误码更不容易让人误以为"文件是空的"。
+/// `Message::TabularLoaded` 落回 `Ready`；失败由统一 `BackendState::Failed`
+/// 承载并提供重试/外部打开降级，不会无限停留在 Loading。
 pub enum TabularState {
     Loading,
     Ready(crate::tabular::TabularView),
 }
 
-/// JSON tab 的树查看器加载态——与 `TabularState` 同构(同样"加载失败保留
-/// Loading、不建 Failed 变体以免误导用户以为文件是空的")。`Ready` 里
+/// JSON tab 的树查看器加载态。失败时清掉树并优先退回原文编辑器，同时由统一
+/// backend 状态记录最终 Ready/Failed。`Ready` 里
 /// `Box<JsonTreeView>`:该结构体本身 ≥256 字节(内含 `Vec<u8>`/`PathBuf`/
 /// 多个集合),不装箱会让 `Loading` 变体和它之间出现明显的枚举尺寸差
 /// (clippy::large_enum_variant);每个 tab 只存一份,装箱开销可忽略。
@@ -240,6 +306,10 @@ pub struct PreviewPane {
     pub(crate) tabs: Vec<PreviewTab>,
     pub(crate) active: usize,
     pub(crate) next_id: usize,
+    /// 全局客户端能力快照(启动探测一次)。`Default` 取当前安装值;Workspace
+    /// 装配时会用 `ShellIo` 里那份显式覆盖(见 `Workspace::from_restore`),
+    /// 保证同一进程内所有预览路由读的是同一份预算。
+    pub(crate) capabilities: Arc<crate::capabilities::ClientCapabilities>,
     /// 新建原生编辑器 tab 时置位的一次性程序化聚焦标记——`CodeView` 的焦点
     /// 是真实 iced 焦点树的一部分,构造时不能直接拿到,要等下一帧
     /// `UserInterface::build` 之后由 main.rs 用 `operation::focusable::focus`
@@ -304,6 +374,7 @@ impl Default for PreviewPane {
             tabs: vec![placeholder_tab(0)],
             active: 0,
             next_id: 1,
+            capabilities: crate::capabilities::current(),
             pending_editor_focus: false,
             pending_find_focus: false,
             pending_editor_reveal_focus: false,

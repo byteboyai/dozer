@@ -308,6 +308,9 @@ pub struct App {
     pub(crate) client: Client,
     pub(crate) handle: Handle,
     pub(crate) proxy: EventLoopProxy<Message>,
+    /// 启动时**只探测一次**的客户端能力快照(硬件 + 预算 + 档位)。业务模块
+    /// 一律从这里经 `shell_io()` 取用,不得再调用 sysinfo(见 `capabilities`)。
+    pub(crate) capabilities: Arc<crate::capabilities::ClientCapabilities>,
     /// 关 tab/丢弃过期促成结果时发往 daemon 的 kill/总结请求句柄——退出前
     /// `wait_for_pending_exit_tasks` 要等它们跑完,不然请求可能因为 tokio
     /// runtime 随进程退出被中途丢弃,daemon 侧会话仍是 `alive`,下次启动
@@ -720,8 +723,13 @@ impl App {
     /// 页签靠它算出各自的后台活动指示点(见 [`stub_activity`])。一次协议往返
     /// 换"重启后后台页签的状态点不是空白",而且**不促成**任何 `Workspace`,
     /// 懒加载策略原样保留。
-    pub async fn bootstrap(client: Client, handle: Handle, proxy: EventLoopProxy<Message>) -> Self {
-        let mut app = Self::new_shell(client, handle, proxy, None);
+    pub async fn bootstrap(
+        client: Client,
+        handle: Handle,
+        proxy: EventLoopProxy<Message>,
+        capabilities: Arc<crate::capabilities::ClientCapabilities>,
+    ) -> Self {
+        let mut app = Self::new_shell(client, handle, proxy, None, capabilities);
         let io = app.shell_io();
         // daemon 不再记"活跃项目"(P2a Task 1-3 删掉了这个概念),开着哪些
         // 项目改由 GUI 侧的 open_projects.json 记(Task 4/6 写,这里读回)。
@@ -775,8 +783,9 @@ impl App {
         handle: Handle,
         proxy: EventLoopProxy<Message>,
         message: String,
+        capabilities: Arc<crate::capabilities::ClientCapabilities>,
     ) -> Self {
-        Self::new_shell(client, handle, proxy, Some(message))
+        Self::new_shell(client, handle, proxy, Some(message), capabilities)
     }
 
     /// 两个构造函数共用的"只有外壳、一个项目都没打开"的起点。
@@ -785,6 +794,7 @@ impl App {
         handle: Handle,
         proxy: EventLoopProxy<Message>,
         daemon_error: Option<String>,
+        capabilities: Arc<crate::capabilities::ClientCapabilities>,
     ) -> Self {
         let shell_layout = layout::load();
         let panel_layouts = panel_layouts::load();
@@ -792,6 +802,7 @@ impl App {
             client,
             handle,
             proxy,
+            capabilities,
             pending_exit_tasks: Arc::new(Mutex::new(Vec::new())),
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
@@ -866,6 +877,7 @@ impl App {
             client: self.client.clone(),
             handle: self.handle.clone(),
             proxy: self.proxy.clone(),
+            capabilities: self.capabilities.clone(),
             cols: self.cols,
             rows: self.rows,
             pending_exit_tasks: self.pending_exit_tasks.clone(),

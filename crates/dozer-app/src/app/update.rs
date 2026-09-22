@@ -1197,13 +1197,10 @@ impl App {
                     } else {
                         &mut ws.preview
                     };
-                    let Ok(view) = result else {
-                        tracing::warn!("表格首次加载失败,tab 停留在 Loading");
-                        return;
-                    };
-                    if let Some(slot) = pane.tabular_state_mut(tab_id) {
-                        *slot = crate::preview::TabularState::Ready(view);
+                    if let Err(error) = &result {
+                        tracing::warn!(%error, "表格首次加载失败");
                     }
+                    pane.finish_tabular_load(tab_id, result);
                 });
             }
             Message::TabularSheetLoaded(project_id, kind, tab_id, sheet_index, result) => {
@@ -1232,18 +1229,10 @@ impl App {
                     } else {
                         &mut ws.preview
                     };
-                    let Ok(view) = result else {
-                        // 文件内容不是合法 JSON/JSON5(jsonl 的逐行错误已在
-                        // 各 root 里,不会走到这)——树视图无从谈起,退回原生
-                        // 文本编辑器:清掉 `json_tree`,渲染层改走 `editor`
-                        // 分支(2026-09-21 用户口径)。
-                        tracing::warn!("JSON 首次加载失败,退回文本编辑器");
-                        pane.clear_json_tree(tab_id);
-                        return;
-                    };
-                    if let Some(slot) = pane.json_tree_state_mut(tab_id) {
-                        *slot = crate::preview::JsonTreeState::Ready(Box::new(view));
+                    if let Err(error) = &result {
+                        tracing::warn!(%error, "JSON 首次加载失败,退回文本编辑器");
                     }
+                    pane.finish_json_tree_load(tab_id, result);
                 });
             }
             Message::JsonNodeLoaded(project_id, kind, tab_id, path, root_index, result) => {

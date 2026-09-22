@@ -1,5 +1,11 @@
 # 大文本文件（GB 级）打开性能优化设计
 
+> **状态（2026-09-22）：架构层已被取代。** 大文件阈值、CodeMirror 降级、
+> 窗口化、跨项目累计资源预算与启动恢复统一以
+> [`2026-09-22-file-preview-architecture-redesign.md`](./2026-09-22-file-preview-architecture-redesign.md)
+> 为准。本文件保留为老 iced `CodeView` 的性能调查与历史实现记录，迁移完成前
+> 现有代码仍需维护，但不得继续扩展成未来方案。
+
 ## 背景与动机
 
 代码编辑器（`crates/dozer-app/src/code_editor/`，包装 iced 官方 `iced_widget::text_editor::TextEditor`）打开文件时，`CodeView::new` 调 `text_editor::Content::with_text(text)`，底层 `cosmic_text::Buffer::set_text` 在**尚未设置视口高度**（`height_opt == None`）时就无条件调用 `shape_until_scroll`，导致 shaping 窗口退化成 `[0, ∞)`——**把整份文档一次性 shape 完**，同步阻塞 UI 线程。这是 iced/cosmic-text 内部行为，不是 Dozer 自己写的逻辑。

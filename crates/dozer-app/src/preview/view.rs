@@ -26,7 +26,30 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         truncated: false,
         loading: false,
         pending_jump_line: None,
+        route: None,
+        backend: None,
+        backend_state: BackendState::Ready,
     }
+}
+
+/// 为文件 tab 计算 Phase A 的唯一 route/backend 描述。画像是**有界采样**
+/// (头/尾各至多 64KiB);文件读不到(测试里的假路径、权限问题)时退回空画像,
+/// 不影响按扩展名路由。
+pub(crate) fn route_and_backend(
+    path: &std::path::Path,
+    capabilities: &crate::capabilities::ClientCapabilities,
+) -> (PreviewRoute, PreviewBackend, BackendState) {
+    let profile = profile_file(path).unwrap_or_else(|_| analyze(&[], None, 0, None));
+    let route = classify_preview(path, &profile, capabilities, None);
+    let total = profile.size_bytes;
+    let read_only = matches!(
+        classify_size(total, capabilities.budgets.full_file_load_bytes),
+        SizeTier::FullLoadReadOnly | SizeTier::ChunkedReadOnly
+    );
+    let backend = PreviewBackend::from_route(&route, path, read_only);
+    // 同步路径(表格/webview/渲染)创建即 Ready;原生编辑器异步路径的调用方
+    // 会用 `insert_loading_tab` 把状态置为 Loading。
+    (route, backend, BackendState::Ready)
 }
 
 /// `path` 是否会被打开为"原生编辑器候选"(即 `is_editable_extension &&
@@ -35,9 +58,11 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
 /// 用它决定走 `insert_loading_tab`(异步读盘+构造)还是原有 `open_path`
 /// (表格/webview 类,同步、本来就不慢)。
 pub(crate) fn is_native_editor_candidate(path: &std::path::Path) -> bool {
-    !crate::tabular::is_tabular_extension(path)
-        && is_editable_extension(path)
-        && !prefers_rendered_preview(path)
+    let (route, _, _) = route_and_backend(path, &crate::capabilities::current());
+    matches!(
+        route.kind,
+        PreviewKind::Code | PreviewKind::Json | PreviewKind::Streamed
+    )
 }
 
 /// Find 输入框的稳定 `widget::Id`。Files / Project 两个预览面板各渲染一根
@@ -214,10 +239,21 @@ impl PreviewPane {
     fn push_tab(&mut self, kind: TabKind, title: String) -> usize {
         let id = self.next_id;
         self.next_id += 1;
+        let (route, backend, backend_state) = match &kind {
+            TabKind::File(path) => {
+                let (route, backend, state) = route_and_backend(path, &self.capabilities);
+                (Some(route), Some(backend), state)
+            }
+            TabKind::Blank => (None, None, BackendState::Ready),
+        };
         let native_load = match &kind {
-            TabKind::File(path) if crate::tabular::is_tabular_extension(path) => None,
             TabKind::File(path)
-                if is_editable_extension(path) && !prefers_rendered_preview(path) =>
+                if route.as_ref().is_some_and(|route| {
+                    matches!(
+                        route.kind,
+                        PreviewKind::Code | PreviewKind::Json | PreviewKind::Streamed
+                    )
+                }) =>
             {
                 read_and_build_native_editor(path).ok()
             }
@@ -242,7 +278,11 @@ impl PreviewPane {
         // spawn 后台加载。`open_path` 复用已存在 tab 的分支不经过 `push_tab`,
         // 不会重复入队,不会对一个正在加载的 tab 触发第二次加载。
         let tabular = match &kind {
-            TabKind::File(path) if crate::tabular::is_tabular_extension(path) => {
+            TabKind::File(path)
+                if route
+                    .as_ref()
+                    .is_some_and(|route| route.kind == PreviewKind::Tabular) =>
+            {
                 self.pending_tabular_loads.push((id, path.clone()));
                 Some(TabularState::Loading)
             }
@@ -252,7 +292,11 @@ impl PreviewPane {
         // 不排斥 editor)。同 tabular,只登记"正在加载",`(id, path)` 交给
         // 调用方 `take_pending_json_tree_loads()` 取走 spawn 后台加载。
         let json_tree = match &kind {
-            TabKind::File(path) if crate::json_tree::is_json_tree_extension(path) => {
+            TabKind::File(path)
+                if route.as_ref().is_some_and(|route| {
+                    matches!(route.kind, PreviewKind::Json | PreviewKind::Streamed)
+                }) =>
+            {
                 self.pending_json_tree_loads.push((id, path.clone()));
                 Some(JsonTreeState::Loading)
             }
@@ -263,7 +307,12 @@ impl PreviewPane {
         if editor.is_some() {
             self.pending_editor_focus = true;
         }
-        self.tabs.push(PreviewTab {
+        let backend_state = if tabular.is_some() || json_tree.is_some() {
+            BackendState::Loading
+        } else {
+            backend_state
+        };
+        let tab = PreviewTab {
             id,
             kind,
             title,
@@ -277,7 +326,12 @@ impl PreviewPane {
             truncated,
             loading: false,
             pending_jump_line: None,
-        });
+            route,
+            backend,
+            backend_state,
+        };
+        tab.debug_assert_backend_consistent();
+        self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
         // 新 tab 成为激活者(可能顶掉旧 find tab)——清掉不再匹配的 Find
         // (譬如把搜索着的文件替换掉了,或有 Blank 顶到激活位)。对"同一文件复用
@@ -297,14 +351,25 @@ impl PreviewPane {
         // JSON 走的就是这条异步路径(`is_native_editor_candidate(json)==true`),
         // 所以 json_tree 的双视图登记必须在这里也做一遍——只在 `push_tab`
         // 登记会让用户从文件树打开 JSON(走异步路径)时拿不到树视图。
+        let (route, backend) = match &kind {
+            TabKind::File(path) => {
+                let (route, backend, _) = route_and_backend(path, &self.capabilities);
+                (Some(route), Some(backend))
+            }
+            TabKind::Blank => (None, None),
+        };
         let json_tree = match &kind {
-            TabKind::File(path) if crate::json_tree::is_json_tree_extension(path) => {
+            TabKind::File(path)
+                if route.as_ref().is_some_and(|route| {
+                    matches!(route.kind, PreviewKind::Json | PreviewKind::Streamed)
+                }) =>
+            {
                 self.pending_json_tree_loads.push((id, path.clone()));
                 Some(JsonTreeState::Loading)
             }
             _ => None,
         };
-        self.tabs.push(PreviewTab {
+        let tab = PreviewTab {
             id,
             kind,
             title,
@@ -318,7 +383,12 @@ impl PreviewPane {
             truncated: false,
             loading: true,
             pending_jump_line: None,
-        });
+            route,
+            backend,
+            backend_state: BackendState::Loading,
+        };
+        tab.debug_assert_backend_consistent();
+        self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
         self.cull_stale_find();
         id
@@ -339,6 +409,7 @@ impl PreviewPane {
             return;
         };
         tab.loading = false;
+        let mut loaded = false;
         if let Ok(handle) = result
             && let Some(load) = handle.take()
         {
@@ -347,6 +418,7 @@ impl PreviewPane {
             tab.total_bytes = load.total_bytes;
             tab.truncated = load.truncated;
             self.pending_editor_focus = true;
+            loaded = true;
             // 外部面板（代码健康度）请求的"打开后跳转定位"：编辑器刚填上，
             // 消费掉 pending 行号并把光标落过去（1-based → 0-based）。
             if let Some(line) = tab.pending_jump_line.take()
@@ -354,6 +426,20 @@ impl PreviewPane {
             {
                 editor.move_cursor_to((line.saturating_sub(1), 0));
             }
+        }
+        // backend 状态机与真实的成功/失败对齐:成功 -> Ready;失败保持
+        // editor: None 并标记 Failed(该 tab 会按旧行为落回 webview 兜底,
+        // 见 `hosts_webview` 的兜底子句)。
+        if loaded {
+            if !matches!(tab.json_tree, Some(JsonTreeState::Loading)) {
+                tab.backend_state.try_transition(BackendState::Ready);
+            }
+        } else {
+            tab.backend_state
+                .try_transition(BackendState::Failed(PreviewError::new(
+                    "原生编辑器加载失败",
+                    true,
+                )));
         }
     }
 
@@ -431,13 +517,7 @@ impl PreviewPane {
     pub fn active_webview_id(&self) -> Option<usize> {
         self.tabs
             .get(self.active)
-            .filter(|t| {
-                t.editor.is_none()
-                    && t.tabular.is_none()
-                    && t.json_tree.is_none()
-                    && !t.loading
-                    && matches!(t.kind, TabKind::File(_))
-            })
+            .filter(|t| t.hosts_webview())
             .map(|t| t.id)
     }
     /// 手动点 tab / 打开时切到已存在 tab。切到**另一个**文件 tab 时,若目标
@@ -449,14 +529,7 @@ impl PreviewPane {
         if idx >= self.tabs.len() || idx == self.active {
             return;
         }
-        let is_webview_file = matches!(
-            &self.tabs[idx].kind,
-            TabKind::File(_)
-                if self.tabs[idx].editor.is_none()
-                    && self.tabs[idx].tabular.is_none()
-                    && self.tabs[idx].json_tree.is_none()
-                    && !self.tabs[idx].loading
-        );
+        let is_webview_file = self.tabs[idx].hosts_webview();
         self.active = idx;
         if is_webview_file {
             let id = self.tabs[idx].id;
@@ -532,17 +605,13 @@ impl PreviewPane {
         self.cull_stale_find();
     }
 
-    /// webview 期望清单:每文件 tab 一个,仅激活者可见(设计 D2)。
+    /// webview 期望清单:每文件 tab 一个,仅激活者可见(设计 D2)。是否走
+    /// webview 由统一 backend 判定(见 `PreviewTab::hosts_webview`)。
     pub fn desired_webviews(&self) -> Vec<WebviewSpec> {
         self.tabs
             .iter()
             .enumerate()
-            .filter(|(_, tab)| {
-                tab.editor.is_none()
-                    && tab.tabular.is_none()
-                    && tab.json_tree.is_none()
-                    && !tab.loading
-            })
+            .filter(|(_, tab)| tab.hosts_webview())
             .filter_map(|(idx, tab)| {
                 // `Blank` 没有 wry 页面(内容区是纯 iced 渲染的 Dozer 品牌标),
                 // 不进期望清单——`sync_webview_pool` 据此不会为它创建 webview。
@@ -1114,6 +1183,28 @@ impl PreviewPane {
             .and_then(|t| t.tabular.as_mut())
     }
 
+    pub fn finish_tabular_load(
+        &mut self,
+        tab_id: usize,
+        result: Result<crate::tabular::TabularView, String>,
+    ) {
+        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+            return;
+        };
+        match result {
+            Ok(view) => {
+                tab.tabular = Some(TabularState::Ready(view));
+                let _ = tab.backend_state.try_transition(BackendState::Ready);
+            }
+            Err(message) => {
+                tab.tabular = None;
+                let _ = tab
+                    .backend_state
+                    .try_transition(BackendState::Failed(PreviewError::new(message, true)));
+            }
+        }
+    }
+
     /// 取走(清空)`push_tab` 攒下的、还没被 spawn 后台加载的表格 tab 队列。
     /// 调用方(`open_path` 的上层)应在每次调用 `open_path` 之后立即取走,
     /// 不要跨调用攒着——攒着会让后来居上的取用者对着不属于自己这次
@@ -1146,15 +1237,97 @@ impl PreviewPane {
             .and_then(|t| t.json_tree.as_mut())
     }
 
-    /// JSON 首屏加载失败(文件内容不是合法 JSON/JSON5)时清掉该 tab 的
-    /// `json_tree` 状态,让 tab 退回纯原生文本编辑器:渲染层 `json_tree` 为
-    /// `None` 时不再走树分支,`editor` 那支照常渲染(JSON 本就是原生编辑器
-    /// 候选,`editor` 独立于树加载存在)。找不到 tab / 本就无树都是 no-op。
-    /// 与 [`json_tree_state_mut`](Self::json_tree_state_mut) 相反——那里把
-    /// `Loading` 变 `Ready`,这里把整支拿掉。
-    pub fn clear_json_tree(&mut self, tab_id: usize) {
-        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
-            tab.json_tree = None;
+    pub fn finish_json_tree_load(
+        &mut self,
+        tab_id: usize,
+        result: Result<crate::json_tree::JsonTreeView, String>,
+    ) {
+        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+            return;
+        };
+        match result {
+            Ok(mut view) => {
+                if matches!(tab.current_mode(), Some(PreviewMode::Text)) {
+                    view.view_mode = crate::json_tree::ViewMode::RawText;
+                }
+                tab.json_tree = Some(JsonTreeState::Ready(Box::new(view)));
+                let _ = tab.backend_state.try_transition(BackendState::Ready);
+            }
+            Err(message) => {
+                tab.json_tree = None;
+                match tab.backend.as_mut() {
+                    Some(PreviewBackend::Json(json)) => json.mode = JsonMode::Text,
+                    Some(PreviewBackend::Streamed(streamed)) => {
+                        streamed.mode = PreviewMode::Text;
+                    }
+                    _ => {}
+                }
+                if tab.editor.is_some() {
+                    let _ = tab.backend_state.try_transition(BackendState::Ready);
+                } else if !tab.loading {
+                    let _ = tab
+                        .backend_state
+                        .try_transition(BackendState::Failed(PreviewError::new(message, true)));
+                }
+            }
+        }
+    }
+
+    pub fn sync_json_backend_mode(&mut self, tab_id: usize) {
+        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+            return;
+        };
+        let Some(JsonTreeState::Ready(view)) = tab.json_tree.as_ref() else {
+            return;
+        };
+        let mode = match view.view_mode {
+            crate::json_tree::ViewMode::Tree => PreviewMode::Tree,
+            crate::json_tree::ViewMode::RawText => PreviewMode::Text,
+        };
+        match tab.backend.as_mut() {
+            Some(PreviewBackend::Json(json)) => {
+                json.mode = if mode == PreviewMode::Text {
+                    JsonMode::Text
+                } else {
+                    JsonMode::Tree
+                };
+            }
+            Some(PreviewBackend::Streamed(streamed)) => {
+                streamed.mode = if mode == PreviewMode::Tree {
+                    PreviewMode::Streamed
+                } else {
+                    mode
+                };
+            }
+            _ => {}
+        }
+    }
+
+    pub fn restore_json_mode(&mut self, tab_id: usize, mode: PreviewMode) {
+        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+            return;
+        };
+        let Some(route) = tab.route.as_ref() else {
+            return;
+        };
+        if !route.supports(mode) {
+            return;
+        }
+        match tab.backend.as_mut() {
+            Some(PreviewBackend::Json(json)) => {
+                json.mode = match mode {
+                    PreviewMode::Text => JsonMode::Text,
+                    _ => JsonMode::Tree,
+                };
+            }
+            Some(PreviewBackend::Streamed(streamed)) => streamed.mode = mode,
+            _ => {}
+        }
+        if let Some(JsonTreeState::Ready(view)) = tab.json_tree.as_mut() {
+            view.view_mode = match mode {
+                PreviewMode::Text => crate::json_tree::ViewMode::RawText,
+                _ => crate::json_tree::ViewMode::Tree,
+            };
         }
     }
 
@@ -1214,6 +1387,10 @@ impl PreviewPane {
             tab.total_bytes = load.total_bytes;
             tab.truncated = load.truncated;
             tab.dirty = false;
+            if let Some(PreviewBackend::Rendered(rendered)) = tab.backend.as_mut() {
+                rendered.mode = RenderedMode::Source;
+            }
+            tab.debug_assert_backend_consistent();
         }
         Ok(())
     }
@@ -1225,6 +1402,10 @@ impl PreviewPane {
     pub fn exit_code_mode(&mut self, idx: usize) {
         if let Some(tab) = self.tabs.get_mut(idx) {
             tab.editor = None;
+            if let Some(PreviewBackend::Rendered(rendered)) = tab.backend.as_mut() {
+                rendered.mode = RenderedMode::Rendered;
+            }
+            tab.debug_assert_backend_consistent();
         }
     }
 
@@ -1242,7 +1423,7 @@ impl PreviewPane {
         let mut matched: Vec<usize> = self
             .tabs
             .iter()
-            .filter(|t| t.editor.is_none() && t.tabular.is_none() && t.json_tree.is_none())
+            .filter(|t| t.hosts_webview())
             .filter_map(|t| match &t.kind {
                 TabKind::File(path)
                     if changed.iter().any(|c| c == path)
@@ -1271,8 +1452,7 @@ impl PreviewPane {
         let ids: Vec<usize> = self
             .tabs
             .iter()
-            .filter(|t| t.editor.is_none() && t.tabular.is_none() && t.json_tree.is_none())
-            .filter(|t| matches!(t.kind, TabKind::File(_)))
+            .filter(|t| t.hosts_webview())
             .map(|t| t.id)
             .collect();
         for id in ids {
@@ -1786,12 +1966,20 @@ mod tests {
         let mut pane = PreviewPane::default();
         let id = pane.open_path(p.clone());
         assert!(pane.tabular_mut(id).is_none(), "加载完成前 apply 应 no-op");
+        assert!(matches!(
+            pane.tabs()[pane.active_idx()].backend_state,
+            BackendState::Loading
+        ));
         let loaded = crate::tabular::load(&p).expect("测试用 csv 应能正常解析");
-        *pane.tabular_state_mut(id).expect("tab 应存在") = TabularState::Ready(loaded);
+        pane.finish_tabular_load(id, Ok(loaded));
         assert!(
             pane.tabular_mut(id).is_some(),
             "Ready 之后 tabular_mut 应能拿到可变引用"
         );
+        assert!(matches!(
+            pane.tabs()[pane.active_idx()].backend_state,
+            BackendState::Ready
+        ));
         std::fs::remove_file(p).ok();
     }
 
@@ -2055,6 +2243,26 @@ mod tests {
         assert_eq!(id_again, id0, "同文件复用同一 tab");
         assert_eq!(p.tabs().len(), 3, "不新增 tab(含恒定占位)");
         assert_eq!(p.active_idx(), 1, "切回已开的那个 tab");
+    }
+
+    #[test]
+    fn rendered_source_toggle_keeps_backend_and_webview_state_in_sync() {
+        let path =
+            std::env::temp_dir().join(format!("preview_backend_mode_{}.md", std::process::id()));
+        std::fs::write(&path, "# title\n").unwrap();
+        let mut pane = PreviewPane::default();
+        pane.open_path(path.clone());
+
+        assert_eq!(pane.tabs()[1].current_mode(), Some(PreviewMode::Rendered));
+        assert!(pane.tabs()[1].hosts_webview());
+        pane.enter_code_mode(1).unwrap();
+        assert_eq!(pane.tabs()[1].current_mode(), Some(PreviewMode::Source));
+        assert!(!pane.tabs()[1].hosts_webview());
+        pane.exit_code_mode(1);
+        assert_eq!(pane.tabs()[1].current_mode(), Some(PreviewMode::Rendered));
+        assert!(pane.tabs()[1].hosts_webview());
+
+        std::fs::remove_file(path).ok();
     }
 
     #[test]
@@ -2539,6 +2747,32 @@ mod tests {
             matches!(tab.json_tree, Some(JsonTreeState::Loading)),
             "JSON tab 应该同时进入 json_tree 的 Loading 态"
         );
+        assert!(matches!(tab.backend_state, BackendState::Loading));
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn json_mode_and_backend_state_stay_synchronized() {
+        let p = std::env::temp_dir().join(format!("json_mode_{}.json", std::process::id()));
+        std::fs::write(&p, "{\"a\":1}").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(p.clone());
+        let view = crate::json_tree::load(&p).unwrap();
+        pane.finish_json_tree_load(id, Ok(view));
+        assert!(matches!(
+            pane.tabs()[pane.active_idx()].backend_state,
+            BackendState::Ready
+        ));
+
+        pane.json_tree_mut(id)
+            .unwrap()
+            .apply(crate::json_tree::Action::ToggleViewMode);
+        pane.sync_json_backend_mode(id);
+        assert_eq!(
+            pane.tabs()[pane.active_idx()].current_mode(),
+            Some(PreviewMode::Text)
+        );
+
         std::fs::remove_file(p).ok();
     }
 
@@ -2556,16 +2790,16 @@ mod tests {
     }
 
     #[test]
-    fn clear_json_tree_drops_tree_and_keeps_editor() {
-        // 内容不是合法 JSON 时,`JsonTreeLoaded` 失败分支会清掉 json_tree,让
-        // tab 退回纯文本编辑器(见 `clear_json_tree`)。editor 独立于树加载,
+    fn failed_json_tree_load_drops_tree_and_keeps_editor() {
+        // 内容不是合法 JSON 时,加载失败分支会清掉 json_tree,让
+        // tab 退回纯文本编辑器。editor 独立于树加载,
         // 清树后仍在;tab 因此重新回到"被原生编辑器认领"的形态,不进 webview 池。
         let p = std::env::temp_dir().join(format!("json_bad_{}.json", std::process::id()));
         std::fs::write(&p, "{ not valid json !! }").unwrap();
         let mut pane = PreviewPane::default();
         let id = pane.open_path(p.clone());
         assert!(pane.tabs()[pane.active_idx()].json_tree.is_some());
-        pane.clear_json_tree(id);
+        pane.finish_json_tree_load(id, Err("invalid json".into()));
         let tab = &pane.tabs()[pane.active_idx()];
         assert!(tab.json_tree.is_none(), "清树后 json_tree 应为 None");
         assert!(tab.editor.is_some(), "清树不该动 editor");
@@ -2663,5 +2897,37 @@ mod tests {
         p.close(99);
         assert_eq!(p.tabs().len(), tabs_before);
         assert_eq!(p.active_idx(), active_before);
+    }
+
+    /// Phase A 契约:每个新打开的文件 tab 都带唯一 route/backend/reason;
+    /// `Blank` 占位没有 backend。
+    #[test]
+    fn every_new_file_tab_carries_route_and_backend() {
+        let mut p = PreviewPane::default();
+        assert!(
+            p.tabs()[0].route.is_none() && p.tabs()[0].backend.is_none(),
+            "Blank 占位 tab 不应有 route/backend"
+        );
+        for path in [
+            "/tmp/a.rs",
+            "/tmp/readme.md",
+            "/tmp/data.json",
+            "/tmp/t.csv",
+        ] {
+            let _ = push_file(&mut p, path);
+        }
+        for tab in p
+            .tabs()
+            .iter()
+            .filter(|t| matches!(t.kind, TabKind::File(_)))
+        {
+            let route = tab.route.as_ref().expect("文件 tab 必须有 route");
+            let backend = tab.backend.as_ref().expect("文件 tab 必须有 backend");
+            assert_eq!(route.kind, backend.kind(), "route/backend kind 必须一致");
+            assert!(
+                !route.reason.to_string().is_empty(),
+                "路由必须带可展示 reason"
+            );
+        }
     }
 }

@@ -255,6 +255,9 @@ pub struct ShellIo {
     pub(crate) client: Client,
     pub(crate) handle: Handle,
     pub(crate) proxy: EventLoopProxy<Message>,
+    /// 启动时探测一次的客户端能力快照(见 `crate::capabilities`)。Workspace
+    /// 侧的预览路由/预算从这里读取,不再自己探测硬件。
+    pub(crate) capabilities: Arc<crate::capabilities::ClientCapabilities>,
     /// 终端网格尺寸快照(新建会话时让新 PTY 一开始就匹配 pane 实际大小)。
     pub(crate) cols: u16,
     pub(crate) rows: u16,
@@ -525,6 +528,9 @@ impl Workspace {
             allowed_files: allowed_files.unwrap_or_else(|| Arc::new(Mutex::new(HashSet::new()))),
             ..Self::empty_for_project_placeholder()
         };
+        // 预览面板共享同一份启动能力快照(见 `ShellIo::capabilities`)。
+        ws.preview.capabilities = io.capabilities.clone();
+        ws.project_preview.capabilities = io.capabilities.clone();
         // 与 ProjectOpened 同样异步补 git 分支/脏与对话列表（承诺"窗口起来
         // 后异步补"——此前只在用户主动打开项目时接线,启动恢复路径漏了,
         // 导致重开 app 后对话列表空白）。
@@ -1165,7 +1171,7 @@ impl Workspace {
         };
         let project_id = project.id;
         let active_idx = self.preview.active_idx();
-        let mut paths = Vec::new();
+        let mut tabs = Vec::new();
         let mut active_path = None;
         for (idx, tab) in self.preview.tabs().iter().enumerate() {
             // `Blank` 占位 tab(恒在 index 0 的那个)没有真实路径,不写进
@@ -1174,12 +1180,23 @@ impl Workspace {
             let TabKind::File(p) = &tab.kind else {
                 continue;
             };
-            paths.push(p.clone());
-            if idx == active_idx {
+            let is_active = idx == active_idx;
+            if is_active {
                 active_path = Some(p.clone());
             }
+            tabs.push(preview_state::PersistedPreviewTab {
+                path: p.clone(),
+                mode: tab.current_mode(),
+                active: is_active,
+                ..Default::default()
+            });
         }
-        let state = preview_state::PreviewState { paths, active_path };
+        let state = preview_state::PreviewState {
+            version: preview_state::PREVIEW_STATE_VERSION,
+            tabs,
+            active_path,
+            paths: Vec::new(),
+        };
         io.handle.spawn(async move {
             if let Err(e) = preview_state::save(project_id, &state) {
                 tracing::warn!("预览 tab 状态写盘失败: {e}");
@@ -1251,16 +1268,39 @@ impl Workspace {
         };
         let state = preview_state::load(project.id);
         let mut active_id = None;
-        for path in state.paths {
+        for persisted in state.tabs {
+            let path = persisted.path;
             if !path.is_file() {
                 continue;
             }
-            let is_active = state.active_path.as_deref() == Some(path.as_path());
+            let is_active = state
+                .active_path
+                .as_deref()
+                .map(|active| active == path.as_path())
+                .unwrap_or(persisted.active);
             self.allowed_files
                 .lock()
                 .expect("allowed_files 锁")
                 .insert(path.clone());
             let id = self.preview.open_path(path);
+            if let Some(
+                mode @ (crate::preview::PreviewMode::Tree
+                | crate::preview::PreviewMode::Text
+                | crate::preview::PreviewMode::Streamed),
+            ) = persisted.mode
+            {
+                self.preview.restore_json_mode(id, mode);
+            }
+            if persisted.mode == Some(crate::preview::PreviewMode::Source)
+                && let Some(idx) = self.preview.tabs().iter().position(|tab| tab.id == id)
+                && self.preview.tabs()[idx]
+                    .route
+                    .as_ref()
+                    .is_some_and(|route| route.supports(crate::preview::PreviewMode::Source))
+                && let Err(error) = self.preview.enter_code_mode(idx)
+            {
+                tracing::warn!(%error, "恢复预览源码模式失败，回退到渲染模式");
+            }
             if is_active {
                 active_id = Some(id);
             }
@@ -2058,10 +2098,11 @@ impl Workspace {
         } else {
             &mut self.preview
         };
-        let Some(request) = pane
+        let request = pane
             .json_tree_mut(tab_id)
-            .and_then(|view| view.apply(action))
-        else {
+            .and_then(|view| view.apply(action));
+        pane.sync_json_backend_mode(tab_id);
+        let Some(request) = request else {
             return;
         };
         let Some(source) = pane

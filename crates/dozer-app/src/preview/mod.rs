@@ -6,12 +6,18 @@
 //! 面板扩展化(`extensions::browser::Tabs`)搬走——文件预览面板从来没有
 //! 地址栏,这里只保留文件/验收两种 tab。
 
+mod backend;
+mod file_profile;
 mod native_editor;
+mod router;
 mod state;
 mod view;
 mod webview;
 
+pub(crate) use backend::*;
+pub(crate) use file_profile::*;
 pub(crate) use native_editor::*;
+pub(crate) use router::*;
 pub(crate) use state::*;
 pub(crate) use view::*;
 pub(crate) use webview::*;

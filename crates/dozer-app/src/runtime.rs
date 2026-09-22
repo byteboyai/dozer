@@ -63,9 +63,31 @@ pub(crate) async fn build_app(
     handle: tokio::runtime::Handle,
     proxy: winit::event_loop::EventLoopProxy<Message>,
 ) -> App {
+    // 全局客户端能力:整个进程**只探测一次**,安装进只读快照后由 App/Workspace
+    // 注入使用。这里输出一条结构化启动日志(只含硬件容量与预算,不含任何路径/
+    // 文件名等敏感信息)。
+    let capabilities = crate::capabilities::install(crate::capabilities::estimate_capabilities(
+        crate::capabilities::detect_hardware(),
+    ));
+    let caps = &capabilities;
+    tracing::info!(
+        total_memory_bytes = caps.hardware.total_memory_bytes,
+        available_memory_bytes = caps.hardware.available_memory_at_start_bytes,
+        physical_cpus = caps.hardware.physical_cpu_count,
+        logical_cpus = caps.hardware.logical_cpu_count,
+        tier = ?caps.tier,
+        single_editor_bytes = caps.budgets.single_editor_bytes,
+        total_preview_bytes = caps.budgets.total_preview_bytes,
+        json_tree_bytes = caps.budgets.json_tree_bytes,
+        full_file_load_bytes = caps.budgets.full_file_load_bytes,
+        max_heavy_webviews = caps.budgets.max_heavy_webviews,
+        background_parallelism = caps.budgets.background_parallelism,
+        "客户端能力快照已就绪"
+    );
+
     match ensure_daemon(&client).await {
-        Ok(()) => App::bootstrap(client, handle, proxy).await,
-        Err(message) => App::with_daemon_error(client, handle, proxy, message),
+        Ok(()) => App::bootstrap(client, handle, proxy, capabilities).await,
+        Err(message) => App::with_daemon_error(client, handle, proxy, message, capabilities),
     }
 }
 

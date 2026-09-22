@@ -8,23 +8,12 @@
 /// "分档策略与阈值"。
 pub(crate) const EDIT_MODE_MAX_BYTES: u64 = 20 * 1024 * 1024;
 
-/// 按机器可用内存动态算"只读·整读"档上限(纯函数,供 [`full_load_max_bytes`]
-/// 与单测复用):总内存 10% ÷ 3(读取+校验临时拷贝+常驻拷贝的峰值安全边际),
-/// 钳到 [256MB, 4GB]。
-pub(crate) fn full_load_max_bytes_for(total_ram_bytes: u64) -> u64 {
-    ((total_ram_bytes as f64 * 0.10 / 3.0) as u64).clamp(256 * 1024 * 1024, 4 * 1024 * 1024 * 1024)
-}
-
-/// 查询系统总内存并套 [`full_load_max_bytes_for`]。查询失败(极端环境)时
-/// 退化为 512MB 默认值,不 panic、不阻塞打开流程。
+/// 查询系统整读上限。**不再自己探测 sysinfo**——启动时只探测一次,这里读
+/// 注入的能力快照(见 `crate::capabilities`);快照缺失时 `current()` 会按需
+/// 探测一次并安装,不重复探测。数值公式见
+/// [`crate::capabilities::full_file_load_bytes_for`](行为与旧实现一字未变)。
 pub(crate) fn full_load_max_bytes() -> u64 {
-    let mut sys = sysinfo::System::new();
-    sys.refresh_memory();
-    let total = sys.total_memory();
-    if total == 0 {
-        return 512 * 1024 * 1024;
-    }
-    full_load_max_bytes_for(total)
+    crate::capabilities::current().budgets.full_file_load_bytes
 }
 
 /// 三档分类结果。
@@ -496,21 +485,21 @@ mod size_tier_tests {
     #[test]
     fn full_load_max_clamps_to_floor_on_small_machines() {
         // 4GB 机器:4×0.10/3 ≈ 137MB,应钳到 256MB 下限。
-        let max = full_load_max_bytes_for(4 * 1024 * 1024 * 1024);
+        let max = crate::capabilities::full_file_load_bytes_for(4 * 1024 * 1024 * 1024);
         assert_eq!(max, 256 * 1024 * 1024);
     }
 
     #[test]
     fn full_load_max_clamps_to_ceiling_on_huge_machines() {
         // 128GB 机器:128×0.10/3 ≈ 4.27GB,应钳到 4GB 上限。
-        let max = full_load_max_bytes_for(128 * 1024 * 1024 * 1024);
+        let max = crate::capabilities::full_file_load_bytes_for(128 * 1024 * 1024 * 1024);
         assert_eq!(max, 4 * 1024 * 1024 * 1024);
     }
 
     #[test]
     fn full_load_max_scales_between_clamps() {
         // 32GB 机器:32×0.10/3 ≈ 1.0667GB,应落在钳位区间内、非两端。
-        let max = full_load_max_bytes_for(32 * 1024 * 1024 * 1024);
+        let max = crate::capabilities::full_file_load_bytes_for(32 * 1024 * 1024 * 1024);
         assert!(max > 256 * 1024 * 1024 && max < 4 * 1024 * 1024 * 1024);
         // 32×1024³×0.10/3 = 1_145_324_612.26…,`as u64` 截断取整。
         assert_eq!(max, 1_145_324_612);
