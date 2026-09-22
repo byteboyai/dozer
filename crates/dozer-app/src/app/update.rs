@@ -1472,6 +1472,24 @@ impl App {
                     }
                 });
             }
+            Message::PreviewTabularTextModeToggle(kind, tab_id) => {
+                self.with_focused_project(move |ws, _io| {
+                    let pane = if kind == PanelKind::Project {
+                        &mut ws.project_preview
+                    } else {
+                        &mut ws.preview
+                    };
+                    if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == tab_id)
+                        && let Some(crate::preview::PreviewBackend::Tabular(tabular)) =
+                            tab.backend.as_mut()
+                    {
+                        tabular.mode = match tabular.mode {
+                            crate::preview::TabularMode::Grid => crate::preview::TabularMode::Text,
+                            crate::preview::TabularMode::Text => crate::preview::TabularMode::Grid,
+                        };
+                    }
+                });
+            }
             Message::PreviewCloseTab(idx) => {
                 self.with_focused_project(|ws, io| {
                     // 关闭前静默保存该 tab 的就地改动(仅当它是脏的原生 tab 才

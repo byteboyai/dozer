@@ -237,6 +237,12 @@ pub enum HoverId {
     /// `PreviewJsonTreeMode`(同一份 `preview_pane_for` 渲染,按
     /// `PreviewPaneKind` 区分)。
     ProjectPreviewJsonTreeMode,
+    /// 文件预览 tab 组最右侧"网格 / 原文"切换按钮(CSV/TSV 的 Tabular
+    /// 双视图):处理方式同 `PreviewJsonTreeMode`。
+    PreviewTabularMode,
+    /// Project 面板配对预览"网格 / 原文"切换按钮,处理方式同
+    /// `PreviewTabularMode`。
+    ProjectPreviewTabularMode,
     /// Todo 面板单个任务卡(按下标区分):hover 时填充 `CARD` 背景 + 金色描边
     /// (见 `extensions::todo::todo_card`,统一卡片样式)。
     TodoCard(usize),

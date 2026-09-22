@@ -5,7 +5,8 @@ use crate::app::{App, HoverId, Message, PanelKind, tab_divider};
 use crate::chrome::homespace::home_panel_head_with_actions;
 use crate::chrome::tab_widget::{
     PanelTabArgs, TabOverflowEntry, TabOverflowMenuArgs, panel_tab, tab_json_tree_mode_button,
-    tab_overflow_button, tab_overflow_menu, tab_render_mode_button, tab_window,
+    tab_overflow_button, tab_overflow_menu, tab_render_mode_button, tab_tabular_mode_button,
+    tab_window,
 };
 use crate::extensions::conversations;
 use crate::menu_spec::{MenuSpec, MenuSpecItem};
@@ -939,6 +940,10 @@ pub(crate) fn preview_pane_for<'a>(
         PreviewPaneKind::Files => HoverId::PreviewJsonTreeMode,
         PreviewPaneKind::Project => HoverId::ProjectPreviewJsonTreeMode,
     };
+    let tabular_mode_hover = move || match kind {
+        PreviewPaneKind::Files => HoverId::PreviewTabularMode,
+        PreviewPaneKind::Project => HoverId::ProjectPreviewTabularMode,
+    };
     let editor_msg = move |tab_id, ev| match kind {
         PreviewPaneKind::Files => Message::PreviewEditorEvent(tab_id, ev),
         PreviewPaneKind::Project => Message::ProjectPreviewEditorEvent(tab_id, ev),
@@ -1093,6 +1098,26 @@ pub(crate) fn preview_pane_for<'a>(
             move |hovered| Message::Hover(json_tree_mode_hover(), hovered),
         ))
     });
+    // CSV/TSV 的「网格 / 原文」切换:仅激活 tab 是 csv/tsv 的 Tabular 时出现。
+    // 切到原文(feature 下)由 CodeMirror editor host 承载,网格仍原生。
+    let tabular_mode_button: Option<
+        Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
+    > = preview.tabs().get(preview.active_idx()).and_then(|tab| {
+        let crate::preview::PreviewBackend::Tabular(tabular) = tab.backend.as_ref()? else {
+            return None;
+        };
+        if tabular.format == crate::preview::TabularFormat::Workbook {
+            return None;
+        }
+        let tab_id = tab.id;
+        let in_text = tabular.mode == crate::preview::TabularMode::Text;
+        Some(tab_tabular_mode_button(
+            in_text,
+            app.hover_progress(tabular_mode_hover()),
+            Message::PreviewTabularTextModeToggle(find_panel(), tab_id),
+            move |hovered| Message::Hover(tabular_mode_hover(), hovered),
+        ))
+    });
     let overflow_button = tab_overflow_button(
         preview.tabs().len(),
         app.hover_progress(overflow_hover()),
@@ -1134,6 +1159,9 @@ pub(crate) fn preview_pane_for<'a>(
         tab_bar_row = tab_bar_row.push(btn);
     }
     if let Some(btn) = json_tree_mode_button {
+        tab_bar_row = tab_bar_row.push(btn);
+    }
+    if let Some(btn) = tabular_mode_button {
         tab_bar_row = tab_bar_row.push(btn);
     }
     let tab_bar = tab_bar_row.push(collapse);
@@ -1330,7 +1358,9 @@ pub(crate) fn preview_pane_for<'a>(
                     tab_id,
                 }),
             );
-        } else if let Some(tabular) = &active_tab.tabular {
+        } else if let Some(tabular) = &active_tab.tabular
+            && !active_tab.uses_editor_host()
+        {
             // 表格 tab:iced 原生渲染 Tabular Viewer(虚拟化网格 + sheet 切换
             // 条),消息由 `grid::Action` 映射到 `Message::TabularAction`(带
             // `tab_id` + `PanelKind`,同 Find 条的手法)。首次打开的解析是
@@ -1359,7 +1389,9 @@ pub(crate) fn preview_pane_for<'a>(
                     ));
                 }
             }
-        } else if let Some(json_tree) = &active_tab.json_tree {
+        } else if let Some(json_tree) = &active_tab.json_tree
+            && !active_tab.uses_editor_host()
+        {
             // JSON/JSONL tab:双视图。Tree 模式下画树(消息映射到
             // `Message::JsonTreeAction`,带 `tab_id` + `PanelKind`);RawText
             // 模式下直接渲染该 tab 已有的原生代码编辑器(与上面 `editor` 分支

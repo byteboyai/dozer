@@ -899,6 +899,8 @@ impl PreviewPane {
                     PreviewBackend::Streamed(streamed) if streamed.mode == PreviewMode::Text => {
                         tab.windowed
                     }
+                    // CSV/TSV 原文模式:可编辑纯文本。
+                    PreviewBackend::Tabular(tabular) if tabular.mode == TabularMode::Text => false,
                     _ => return None,
                 };
                 let binding = EditorHostBinding::new(project_id, panel, tab.id, path.clone());
@@ -3614,6 +3616,42 @@ mod tests {
             .find(|s| s.id == id)
             .expect("Text 模式应产出 editor spec");
         assert!(spec.url.contains("lang=json"));
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// feature 打开时,CSV 的"原文"模式由 CodeMirror editor host 承载。
+    #[cfg(feature = "codemirror")]
+    #[test]
+    fn csv_text_mode_uses_editor_host() {
+        let path = std::env::temp_dir().join(format!("csv_text_{}.csv", std::process::id()));
+        std::fs::write(&path, "name,age\nann,3\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+
+        // 默认网格:不产出 editor spec。
+        assert!(
+            pane.desired_editor_webviews(1, crate::app::PanelKind::Files)
+                .iter()
+                .all(|s| s.id != id)
+        );
+
+        // 切原文:翻 backend mode + 就绪。
+        if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == id) {
+            tab.backend_state = BackendState::Ready;
+            if let Some(PreviewBackend::Tabular(tabular)) = tab.backend.as_mut() {
+                tabular.mode = TabularMode::Text;
+            }
+        }
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.uses_editor_host());
+        assert!(!tab.hosts_webview(), "表格原文不吃 Flyfish");
+        let spec = pane
+            .desired_editor_webviews(1, crate::app::PanelKind::Files)
+            .into_iter()
+            .find(|s| s.id == id)
+            .expect("原文模式应产出 editor spec");
+        assert!(spec.url.contains("lang=txt"));
 
         std::fs::remove_file(&path).ok();
     }

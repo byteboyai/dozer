@@ -31,6 +31,16 @@
 - `extension_to_syntax` 增加 `jsonl/ndjson → json`,让 JSONL 文本视图也有 JSON 高亮。
 - 测试:JSON Text 模式产出 `lang=json` spec;3 个旧语义测试按 feature 门控。
 
+### Task 6(部分):CSV/TSV 原文 CodeMirror 模式
+- `TabularBackend` 增 `mode: { Grid, Text }`;`current_mode()` 反映;持久化
+  `Text` 时从 route 落回 backend。
+- feature 下 CSV/TSV 切"原文"由 editor host 承载(网格仍原生;`uses_editor_host`
+  覆盖 Tabular Text,`desired_editor_webviews` 据此产出 spec,渲染层在
+  editor host 态跳过网格/树)。XLSX(Workbook)不提供原文切换。
+- tab 栏新增「网格 / 原文」切换按钮(`tab_tabular_mode_button` +
+  `Message::PreviewTabularTextModeToggle`)。
+- 测试:backend `current_mode`;view:CSV 原文产出 editor spec。
+
 ## 未完成(受 GUI 验收与"迁移前不删除"原则约束)
 
 1. **Task 2 剩余**:NSMenu 上下文菜单(取舍见 Phase B 文档);Unsupported/损坏/

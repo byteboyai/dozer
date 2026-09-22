@@ -1450,6 +1450,11 @@ impl Workspace {
             Some(crate::preview::PreviewKind::Tabular) => {
                 pane.begin_shell_load(tab_id);
                 pane.set_tabular_loading(tab_id, path.clone());
+                // CSV/TSV 原文模式:同时让 editor host 就绪(网格仍在后台加载,
+                // 便于切回)。
+                if editor_host {
+                    pane.finish_shell_load(tab_id);
+                }
             }
             // 渲染/外部/不支持:交给对应 WebView 或 fallback,直接就绪。
             Some(crate::preview::PreviewKind::Rendered)

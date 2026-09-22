@@ -133,6 +133,13 @@ pub enum JsonMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TabularBackend {
     pub format: TabularFormat,
+    pub mode: TabularMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabularMode {
+    Grid,
+    Text,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,6 +214,10 @@ impl PreviewBackend {
             }),
             PreviewKind::Tabular => PreviewBackend::Tabular(TabularBackend {
                 format: tabular_format(path),
+                mode: match route.default_mode {
+                    PreviewMode::Text => TabularMode::Text,
+                    _ => TabularMode::Grid,
+                },
             }),
             PreviewKind::Streamed => PreviewBackend::Streamed(StreamedBackend {
                 reason: route.reason,
@@ -262,7 +273,10 @@ impl PreviewBackend {
                 JsonMode::Tree => PreviewMode::Tree,
                 JsonMode::Text => PreviewMode::Text,
             },
-            Self::Tabular(_) => PreviewMode::Tabular,
+            Self::Tabular(tabular) => match tabular.mode {
+                TabularMode::Grid => PreviewMode::Tabular,
+                TabularMode::Text => PreviewMode::Text,
+            },
             Self::Streamed(streamed) => streamed.mode,
             Self::External(_) => PreviewMode::External,
             Self::Unsupported(_) => PreviewMode::Unsupported,
@@ -399,6 +413,21 @@ mod tests {
             panic!()
         };
         assert_eq!(x.format, TabularFormat::Workbook);
+    }
+
+    #[test]
+    fn tabular_text_mode_from_persisted() {
+        let profile = analyze(b"a,b\n1,2\n", None, 8, None);
+        let p = PathBuf::from("a.csv");
+        let route = classify_preview(&p, &profile, &caps(), Some(PreviewMode::Text));
+        let b = PreviewBackend::from_route(&route, &p, false);
+        assert_eq!(b.current_mode(), PreviewMode::Text);
+        // 默认(Grid)仍是 Tabular。
+        let route2 = classify_preview(&p, &profile, &caps(), None);
+        assert_eq!(
+            PreviewBackend::from_route(&route2, &p, false).current_mode(),
+            PreviewMode::Tabular
+        );
     }
 
     #[test]

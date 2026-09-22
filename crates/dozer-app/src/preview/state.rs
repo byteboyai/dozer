@@ -162,6 +162,8 @@ impl PreviewTab {
             Some(PreviewBackend::Code(_)) => true,
             Some(PreviewBackend::Json(_)) | Some(PreviewBackend::Streamed(_)) => true,
             Some(PreviewBackend::Rendered(r)) => r.mode == RenderedMode::Source,
+            // CSV/TSV 的"原文"模式由 editor host 承载(网格仍原生)。
+            Some(PreviewBackend::Tabular(t)) => t.mode == TabularMode::Text,
             _ => false,
         }
     }

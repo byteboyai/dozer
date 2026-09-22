@@ -439,6 +439,36 @@ pub(crate) fn tab_json_tree_mode_button<'a, M: Clone + 'a>(
     )
 }
 
+/// 表格(CSV/TSV)tab 的「网格 / 原文」切换按钮:网格下显示 `FileCode`
+/// (点它看原文),原文下显示 `Table`(点它回网格)。视觉/尺寸与
+/// `tab_json_tree_mode_button` 一致;`hover_t`/`on_hover` 由调用方接专属
+/// `HoverId`(见 `HoverId::PreviewTabularMode`)。
+pub(crate) fn tab_tabular_mode_button<'a, M: Clone + 'a>(
+    in_text: bool,
+    hover_t: f32,
+    on_press: M,
+    on_hover: impl Fn(bool) -> M + 'a,
+) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
+    let (icon, tooltip) = if in_text {
+        (icons::IconKind::Table, "查看表格")
+    } else {
+        (icons::IconKind::FileCode, "查看原文")
+    };
+    icons::icon_button_entry(
+        icon,
+        byteui::theme::icon_size::row(),
+        false,
+        false,
+        hover_t,
+        false,
+        byteui::theme::icon_size::row() + 6.0,
+        true,
+        on_press,
+        on_hover,
+        tooltip,
+    )
+}
+
 /// 悬浮下拉里的一行,对应该 tab 组里的**某个 tab**(V 菜单列的是组内全部
 /// tab,不局限于当前横向被裁掉的)。`prefix` 与横向 tab 用同一个已经建好的
 /// `Element`(状态点/图标/无),`active` 只决定标题文字颜色(CREAM,同
