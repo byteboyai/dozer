@@ -31,6 +31,7 @@ export type EditorEvent =
       anchor: Position;
       head: Position;
       cursor: Position;
+      selected_text: string | null;
     }
   | {
       kind: 'document_changed';

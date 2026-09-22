@@ -73,6 +73,8 @@ pub enum EditorEvent {
         anchor: TextPosition,
         head: TextPosition,
         cursor: TextPosition,
+        #[serde(default)]
+        selected_text: Option<String>,
     },
     DocumentChanged {
         revision: u64,

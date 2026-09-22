@@ -1819,8 +1819,10 @@ impl Runner {
         let Self::Ready { app, webviews, .. } = self else {
             return;
         };
+        let available_webview_ids: std::collections::HashSet<usize> =
+            webviews.keys().copied().collect();
         for kind in [PanelKind::Files, PanelKind::Project] {
-            for (webview_id, js) in app.take_preview_editor_scripts(kind) {
+            for (webview_id, js) in app.take_preview_editor_scripts(kind, &available_webview_ids) {
                 if let Some((view, _)) = webviews.get(&webview_id) {
                     let _ = view.evaluate_script(&js);
                 }

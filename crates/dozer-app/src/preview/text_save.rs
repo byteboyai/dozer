@@ -69,15 +69,41 @@ pub fn save_text_atomic(path: &Path, text: &str) -> std::io::Result<()> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "dozer-save".to_string());
-    let tmp = dir.join(format!(".{file_name}.dozer-tmp-{}", std::process::id()));
-
-    let write_result = (|| -> std::io::Result<()> {
-        let mut file = std::fs::File::create(&tmp)?;
-        file.write_all(&bytes)?;
-        file.flush()?;
-        file.sync_all()?;
-        Ok(())
-    })();
+    let mut tmp = None;
+    let mut write_result = Err(std::io::Error::other("无法创建保存临时文件"));
+    for attempt in 0..16u32 {
+        let candidate = dir.join(format!(
+            ".{file_name}.dozer-tmp-{}-{attempt}",
+            std::process::id()
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(mut file) => {
+                tmp = Some(candidate);
+                write_result = (|| -> std::io::Result<()> {
+                    file.write_all(&bytes)?;
+                    file.flush()?;
+                    file.sync_all()?;
+                    Ok(())
+                })();
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                write_result = Err(error);
+                break;
+            }
+        }
+    }
+    let tmp = tmp.unwrap_or_else(|| {
+        dir.join(format!(
+            ".{file_name}.dozer-tmp-{}-exhausted",
+            std::process::id()
+        ))
+    });
     if let Err(e) = write_result {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);

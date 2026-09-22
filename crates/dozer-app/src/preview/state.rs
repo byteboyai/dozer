@@ -75,6 +75,7 @@ pub struct PreviewTab {
     /// 保存和过期事件校验所需状态。
     pub web_revision: u64,
     pub web_selection: Option<crate::preview::TextRange>,
+    pub web_selected_text: Option<String>,
     pub web_viewport: Option<(u32, u32)>,
     pub web_error: Option<String>,
 }
@@ -172,6 +173,7 @@ impl std::fmt::Debug for PreviewTab {
             .field("backend_state", &self.backend_state)
             .field("web_revision", &self.web_revision)
             .field("web_selection", &self.web_selection)
+            .field("web_selected_text", &self.web_selected_text)
             .field("web_viewport", &self.web_viewport)
             .field("web_error", &self.web_error)
             .finish()

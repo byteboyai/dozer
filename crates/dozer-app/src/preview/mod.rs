@@ -8,8 +8,11 @@
 
 mod backend;
 mod code_host;
+mod file_policy;
 mod file_profile;
+mod large_text;
 mod native_editor;
+mod resources;
 mod router;
 mod state;
 mod text_save;
@@ -25,9 +28,16 @@ pub(crate) use state::*;
 pub(crate) use text_save::*;
 pub(crate) use view::*;
 pub(crate) use webview::*;
-// `code_host` / `webview_protocol` 是 Phase B 新增的通用契约模块,当前只在
-// 本模块内(及各自单测)使用;host 运行时接线完成后再对外 re-export。
+// `code_host` / `webview_protocol`(Phase B 契约)与 `file_policy` /
+// `large_text` / `resources`(Phase C 策略/资源)当前只在各自单测与后续接线
+// 使用;对外 re-export 待消费方接入。
 #[allow(unused_imports)]
 pub(crate) use code_host::*;
+#[allow(unused_imports)]
+pub(crate) use file_policy::*;
+#[allow(unused_imports)]
+pub(crate) use large_text::*;
+#[allow(unused_imports)]
+pub(crate) use resources::*;
 #[allow(unused_imports)]
 pub(crate) use webview_protocol::*;

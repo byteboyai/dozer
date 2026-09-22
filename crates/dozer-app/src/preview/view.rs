@@ -31,6 +31,7 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         backend_state: BackendState::Ready,
         web_revision: 0,
         web_selection: None,
+        web_selected_text: None,
         web_viewport: None,
         web_error: None,
     }
@@ -341,6 +342,7 @@ impl PreviewPane {
             backend_state,
             web_revision: 0,
             web_selection: None,
+            web_selected_text: None,
             web_viewport: None,
             web_error: None,
         };
@@ -402,6 +404,7 @@ impl PreviewPane {
             backend_state: BackendState::Loading,
             web_revision: 0,
             web_selection: None,
+            web_selected_text: None,
             web_viewport: None,
             web_error: None,
         };
@@ -1282,8 +1285,36 @@ impl PreviewPane {
     }
 
     /// 取走(消费式)待下发的 editor 命令队列。
+    #[cfg(test)]
     pub fn take_pending_editor_commands(&mut self) -> Vec<(usize, EditorCommand)> {
         std::mem::take(&mut self.pending_editor_commands)
+    }
+
+    /// 只取当前已有 WebView 句柄对应的命令；其余命令保留，等待池完成创建
+    /// 或重建后下一帧重试。
+    pub fn take_pending_editor_commands_for(
+        &mut self,
+        available_webview_ids: &std::collections::HashSet<usize>,
+        project_id: i64,
+        panel: crate::app::PanelKind,
+    ) -> Vec<(usize, EditorCommand)> {
+        let pending = std::mem::take(&mut self.pending_editor_commands);
+        let mut ready = Vec::new();
+        for (tab_id, command) in pending {
+            let webview_id = crate::preview::EditorHostBinding::new(
+                project_id,
+                panel,
+                tab_id,
+                std::path::PathBuf::new(),
+            )
+            .webview_id();
+            if available_webview_ids.contains(&webview_id) {
+                ready.push((tab_id, command));
+            } else {
+                self.pending_editor_commands.push((tab_id, command));
+            }
+        }
+        ready
     }
 
     /// 按 tab id 取该 tab 的 JSON 树可变引用。tab 不存在、该 tab 不是 JSON、
@@ -1437,6 +1468,14 @@ impl PreviewPane {
             }
         } else if tab.tabular.is_none() {
             tab.reload_nonce += 1;
+            if tab.uses_codemirror() {
+                // 新 WebView 内部 revision 从 1 重新开始；清掉 Rust 镜像，
+                // 让下一条 ready/selection 事件不会被旧 revision 拒绝。
+                tab.web_revision = 0;
+                tab.web_selection = None;
+                tab.web_selected_text = None;
+                tab.web_viewport = None;
+            }
         }
     }
 
@@ -1513,6 +1552,10 @@ impl PreviewPane {
                 tab.web_error = Some("文件已在外部修改,未自动重载以免覆盖你的改动".into());
             } else {
                 tab.reload_nonce += 1;
+                tab.web_revision = 0;
+                tab.web_selection = None;
+                tab.web_selected_text = None;
+                tab.web_viewport = None;
                 tab.web_error = None;
             }
         }
@@ -1548,7 +1591,7 @@ impl PreviewPane {
         let ids: Vec<usize> = self
             .tabs
             .iter()
-            .filter(|t| t.hosts_webview())
+            .filter(|t| t.hosts_webview() || t.uses_codemirror())
             .map(|t| t.id)
             .collect();
         for id in ids {
@@ -2188,6 +2231,7 @@ mod tests {
 
     /// 切主题后 `reload_all_webviews_for_theme` 推进所有 wry 文件 tab 的
     /// nonce(逼它们按新 theme 重新导航),但不碰原生 editor tab。
+    #[cfg(not(feature = "codemirror"))]
     #[test]
     fn reload_all_webviews_for_theme_bumps_only_wry_file_tabs() {
         let mut p = PreviewPane::default();

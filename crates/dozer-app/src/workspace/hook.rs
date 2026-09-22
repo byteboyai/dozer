@@ -322,6 +322,7 @@ pub(crate) fn preview_context_from_editor_state(
 pub(crate) fn preview_context_from_web_state(
     path: &str,
     selection: Option<crate::preview::TextRange>,
+    selected_text: Option<String>,
     viewport: Option<(u32, u32)>,
     revision: u64,
     now_ms: u64,
@@ -360,6 +361,7 @@ pub(crate) fn preview_context_from_web_state(
         has_selection,
         updated_at_ms: now_ms,
         revision,
+        selected_text,
         visible_start_line,
         visible_end_line,
         ..Default::default()

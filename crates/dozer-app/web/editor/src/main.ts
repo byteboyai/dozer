@@ -70,7 +70,10 @@ const binding: Binding = {
   document_id: params.get('doc') ?? '',
 };
 const scheme = params.get('theme') === 'light' ? 'light' : 'dark';
-const filePath = decodeURIComponent(params.get('p') ?? '');
+// URLSearchParams 已经完成一次百分号解码；不要再次 decodeURIComponent，
+// 否则文件名含有字面量 `%` 时会抛异常。fetch URL 由分段编码重建，
+// 确保 `#`、`?`、`%` 等字符不会被当作 fragment/query。
+const filePath = params.get('p') ?? '';
 const initialReadOnly = params.get('ro') === '1';
 const languageToken = params.get('lang') ?? 'txt';
 
@@ -118,6 +121,10 @@ function currentRange(): Range {
   return { start: offsetToPosition(sel.anchor), end: offsetToPosition(sel.head) };
 }
 
+function encodePathForFetch(path: string): string {
+  return path.split('/').map((segment) => encodeURIComponent(segment)).join('/');
+}
+
 function throttle<T extends (...args: never[]) => void>(fn: T, ms: number): T {
   let last = 0;
   let timer: number | undefined;
@@ -151,6 +158,7 @@ const emitSelection = throttle(() => {
     anchor: offsetToPosition(sel.anchor),
     head: offsetToPosition(sel.head),
     cursor: offsetToPosition(sel.head),
+    selected_text: sel.empty ? null : view.state.sliceDoc(sel.from, sel.to),
   });
 }, 80);
 
@@ -335,7 +343,7 @@ function applyCommand(raw: string): void {
 async function boot(): Promise<void> {
   let text = '';
   try {
-    const res = await fetch('__file__' + encodeURI(filePath));
+    const res = await fetch('__file__' + encodePathForFetch(filePath));
     if (res.ok) {
       text = await res.text();
     } else {

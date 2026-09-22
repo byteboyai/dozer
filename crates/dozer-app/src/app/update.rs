@@ -77,11 +77,21 @@ impl App {
                                 }
                                 context_changed = true;
                             }
-                            EditorEvent::SelectionChanged { anchor, head, .. } => {
+                            EditorEvent::SelectionChanged {
+                                anchor,
+                                head,
+                                selected_text,
+                                ..
+                            } => {
                                 tab.web_revision = event.revision;
                                 tab.web_selection = Some(crate::preview::TextRange {
                                     start: anchor,
                                     end: head,
+                                });
+                                tab.web_selected_text = selected_text.map(|text| {
+                                    text.chars()
+                                        .take(dozer_core::protocol::PREVIEW_SELECTED_TEXT_MAX_CHARS)
+                                        .collect()
                                 });
                                 context_changed = true;
                             }

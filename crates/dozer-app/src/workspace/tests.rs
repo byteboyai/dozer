@@ -233,12 +233,14 @@ fn preview_context_from_web_state_maps_selection_and_viewport() {
     let ctx = preview_context_from_web_state(
         "/repo/a.rs",
         Some(range),
+        Some("selected\ntext".into()),
         Some((10, 40)),
         9,
         1_700_000_000_000,
     );
     assert_eq!(ctx.path, "/repo/a.rs");
     assert_eq!((ctx.start_line, ctx.start_col), (3, 2));
+    assert_eq!(ctx.selected_text.as_deref(), Some("selected\ntext"));
     assert_eq!((ctx.end_line, ctx.end_col), (5, 4));
     assert!(ctx.has_selection);
     assert_eq!(ctx.revision, 9);
@@ -256,14 +258,14 @@ fn preview_context_from_web_state_cursor_only_and_missing_viewport() {
         start: TextPosition { line: 7, column: 1 },
         end: TextPosition { line: 7, column: 1 },
     };
-    let ctx = preview_context_from_web_state("/repo/a.rs", Some(cursor), None, 0, 1);
+    let ctx = preview_context_from_web_state("/repo/a.rs", Some(cursor), None, None, 0, 1);
     assert_eq!((ctx.start_line, ctx.start_col), (7, 1));
     assert_eq!((ctx.end_line, ctx.end_col), (7, 1));
     assert!(!ctx.has_selection, "start==end 视为光标无选区");
     assert_eq!(ctx.visible_start_line, None);
 
     // 完全没有位置信息时给 1-based 最小合法位置,不出现 0 行。
-    let ctx = preview_context_from_web_state("/repo/a.rs", None, None, 0, 1);
+    let ctx = preview_context_from_web_state("/repo/a.rs", None, None, None, 0, 1);
     assert_eq!((ctx.start_line, ctx.start_col), (1, 1));
 }
 
@@ -776,11 +778,15 @@ fn agent_icon_maps_each_kind_to_brand_icon() {
     assert_eq!(agent_icon(AgentKind::Claude), IconKind::Claude);
     assert_eq!(agent_icon(AgentKind::Codebuddy), IconKind::Codebuddy);
     assert_eq!(agent_icon(AgentKind::Opencode), IconKind::Opencode);
-    // Codex/Goose/Aider/V8agent 暂无确认可用的品牌素材，回落通用 Bot 图标
-    // （见计划 Task 3 说明，非占位符——spec §8/§6 明确允许的兜底）。
-    assert_eq!(agent_icon(AgentKind::Codex), IconKind::Bot);
-    assert_eq!(agent_icon(AgentKind::Goose), IconKind::Bot);
-    assert_eq!(agent_icon(AgentKind::Aider), IconKind::Bot);
+    assert_eq!(agent_icon(AgentKind::Codex), IconKind::Codex);
+    assert_eq!(agent_icon(AgentKind::Aider), IconKind::Aider);
+    assert_eq!(
+        agent_icon(AgentKind::Goose),
+        match byteui::theme::color::current_scheme() {
+            byteui::theme::color::ColorScheme::Light => IconKind::GooseLight,
+            byteui::theme::color::ColorScheme::Dark => IconKind::GooseDark,
+        }
+    );
     assert_eq!(agent_icon(AgentKind::V8agent), IconKind::Bot);
     // Unknown 同样回落 Bot 图标。
     assert_eq!(agent_icon(AgentKind::Unknown), IconKind::Bot);

@@ -1262,6 +1262,7 @@ impl Workspace {
                         preview_context_from_web_state(
                             &path_str,
                             tab.web_selection,
+                            tab.web_selected_text.clone(),
                             tab.web_viewport,
                             tab.web_revision,
                             now_ms,

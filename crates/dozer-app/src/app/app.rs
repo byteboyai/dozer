@@ -1018,7 +1018,11 @@ impl App {
     /// 构建本帧待注入 CodeMirror editor webview 的脚本清单 `(webview_id, js)`。
     /// 只对确实走 CodeMirror(`uses_codemirror`)的 tab 生成;命令带上 Rust
     /// 可信 binding 与 tab 当前镜像 revision,注入 `window.__dozer.dispatch`。
-    pub fn take_preview_editor_scripts(&mut self, kind: PanelKind) -> Vec<(usize, String)> {
+    pub fn take_preview_editor_scripts(
+        &mut self,
+        kind: PanelKind,
+        available_webview_ids: &std::collections::HashSet<usize>,
+    ) -> Vec<(usize, String)> {
         let Some(ws) = self.active_workspace_mut() else {
             return Vec::new();
         };
@@ -1029,7 +1033,8 @@ impl App {
             PanelKind::Project => &mut ws.project_preview,
             _ => &mut ws.preview,
         };
-        let pending = pane.take_pending_editor_commands();
+        let pending =
+            pane.take_pending_editor_commands_for(available_webview_ids, project_id, kind);
         let mut out = Vec::new();
         for (tab_id, command) in pending {
             let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
