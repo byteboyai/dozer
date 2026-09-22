@@ -427,6 +427,60 @@ mod tests {
             );
         }
     }
+
+    /// 提交的 CodeMirror 产物必须齐全(防止忘记 `npm run build` 就提交)。
+    #[test]
+    fn editor_bundle_assets_are_present() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/editor"));
+        for f in [
+            "index.html",
+            "editor.js",
+            "editor.css",
+            "fonts/JetBrainsMono.ttf",
+        ] {
+            let p = root.join(f);
+            assert!(p.is_file(), "缺少 editor 产物 {f}: {}", p.display());
+            assert!(
+                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 0,
+                "editor 产物为空: {f}"
+            );
+        }
+    }
+
+    /// 严格 CSP + 无网络:首页不得引用任何外部 URL,且带 `default-src 'none'`。
+    #[test]
+    fn editor_index_has_strict_csp_and_no_external_refs() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/editor"));
+        let html = std::fs::read_to_string(root.join("index.html")).expect("读 index.html");
+        assert!(
+            html.contains("Content-Security-Policy"),
+            "index.html 必须声明 CSP"
+        );
+        assert!(
+            html.contains("default-src 'none'"),
+            "CSP 必须以 default-src 'none' 起步"
+        );
+        assert!(html.contains("script-src 'self'"), "脚本仅 self");
+        assert!(html.contains("connect-src 'self'"), "仅允许同源 fetch");
+        assert!(
+            !html.contains("http://") && !html.contains("https://"),
+            "editor 首页不得引用外部 URL(离线约束)"
+        );
+        assert!(html.contains("editor.js") && html.contains("editor.css"));
+    }
+
+    /// 打包产物不得泄漏本机绝对路径或 sourcemap 引用。
+    #[test]
+    fn editor_js_has_no_absolute_paths_or_sourcemap() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/editor"));
+        let js = std::fs::read_to_string(root.join("editor.js")).expect("读 editor.js");
+        assert!(!js.contains("sourceMappingURL"), "不应有 sourcemap 引用");
+        assert!(
+            !js.contains(env!("CARGO_MANIFEST_DIR")),
+            "不应含源码树绝对路径"
+        );
+        assert!(!js.contains("/Users/"), "不应含用户绝对路径");
+    }
 }
 
 pub mod clipboard_image;

@@ -675,12 +675,18 @@ impl PreviewPane {
                     return None;
                 }
                 let binding = EditorHostBinding::new(project_id, panel, tab.id, path.clone());
+                let mut url = binding.url(
+                    scheme_query_value(),
+                    matches!(code.mode, CodeMode::ReadOnly),
+                );
+                // 外部变更/右键刷新的重载:换 URL 逼 WebView 重新导航拉取最新
+                // 内容(与 flyfish 的 `_r=` 同一手法)。
+                if tab.reload_nonce > 0 {
+                    url.push_str(&format!("&_r={}", tab.reload_nonce));
+                }
                 Some(WebviewSpec {
                     id: tab.id,
-                    url: binding.url(
-                        scheme_query_value(),
-                        matches!(code.mode, CodeMode::ReadOnly),
-                    ),
+                    url,
                     visible: idx == self.active,
                     editor_binding: Some(binding),
                 })
@@ -1486,6 +1492,30 @@ impl PreviewPane {
         if changed.is_empty() {
             return;
         }
+        // CodeMirror tab:clean 自动重载(推进 `reload_nonce` 换 URL 逼 WebView
+        // 重新拉取);**脏** tab 不自动重载,否则会覆盖用户未保存的改动——改为
+        // 置冲突状态,由用户决定刷新/另存。
+        for tab in self.tabs.iter_mut() {
+            if !tab.uses_codemirror() {
+                continue;
+            }
+            let TabKind::File(path) = &tab.kind else {
+                continue;
+            };
+            let hit = changed.iter().any(|c| c == path)
+                || std::fs::canonicalize(path)
+                    .map(|p| changed.iter().any(|c| c == &p))
+                    .unwrap_or(false);
+            if !hit {
+                continue;
+            }
+            if tab.dirty {
+                tab.web_error = Some("文件已在外部修改,未自动重载以免覆盖你的改动".into());
+            } else {
+                tab.reload_nonce += 1;
+                tab.web_error = None;
+            }
+        }
         let mut matched: Vec<usize> = self
             .tabs
             .iter()
@@ -2096,6 +2126,9 @@ mod tests {
         p.bump_reload(9999);
     }
 
+    // feature 开启时 `.rs` tab 走 CodeMirror,外部变化会推进其 reload_nonce
+    // (见 `external_change_reloads_clean_...`),这条 iced-原生语义的断言不再成立。
+    #[cfg(not(feature = "codemirror"))]
     #[test]
     fn reload_webviews_for_hits_matching_webview_tabs_only() {
         let mut p = PreviewPane::default();
@@ -3089,5 +3122,41 @@ mod tests {
             other => panic!("应是 Code,得到 {other:?}"),
         }
         std::fs::remove_file(&good).ok();
+    }
+
+    /// 外部文件变化:干净的 CodeMirror tab 自动重载(推进 reload_nonce →
+    /// URL 换 `_r=`),脏 tab 不自动重载、置冲突提示。
+    #[cfg(feature = "codemirror")]
+    #[test]
+    fn external_change_reloads_clean_and_flags_dirty_codemirror_tab() {
+        let dir = std::env::temp_dir();
+        let clean = dir.join(format!("ext_clean_{}.rs", std::process::id()));
+        let dirty = dir.join(format!("ext_dirty_{}.rs", std::process::id()));
+        std::fs::write(&clean, "fn main() {}\n").unwrap();
+        std::fs::write(&dirty, "fn main() {}\n").unwrap();
+
+        let mut pane = PreviewPane::default();
+        let clean_id = pane.open_path(clean.clone());
+        let dirty_id = pane.open_path(dirty.clone());
+        // 模拟用户在脏 tab 上敲过字(生产路径由 DocumentChanged 事件置位)。
+        if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == dirty_id) {
+            tab.dirty = true;
+        }
+
+        pane.reload_webviews_for(&[clean.clone(), dirty.clone()]);
+
+        let clean_tab = pane.tabs().iter().find(|t| t.id == clean_id).unwrap();
+        assert_eq!(clean_tab.reload_nonce, 1, "干净 tab 自动重载");
+        assert!(clean_tab.web_error.is_none());
+        let dirty_tab = pane.tabs().iter().find(|t| t.id == dirty_id).unwrap();
+        assert_eq!(dirty_tab.reload_nonce, 0, "脏 tab 不自动重载");
+        assert!(dirty_tab.web_error.is_some(), "脏 tab 进入冲突提示");
+
+        let specs = pane.desired_editor_webviews(1, crate::app::PanelKind::Files);
+        let clean_spec = specs.iter().find(|s| s.id == clean_id).unwrap();
+        assert!(clean_spec.url.contains("&_r=1"), "重载 URL 带 nonce");
+
+        std::fs::remove_file(&clean).ok();
+        std::fs::remove_file(&dirty).ok();
     }
 }

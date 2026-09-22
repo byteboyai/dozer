@@ -106,14 +106,21 @@
   `profile.utf8 == Invalid || content_kind == Binary` —— CodeMirror host 的
   `fetch().text()` 会丢字节,置只读避免编辑后保存损坏原文(backend Code mode
   → ReadOnly → editor URL `ro=1`)。
+- **外部文件变化**:`reload_webviews_for` 现也处理 CodeMirror tab —— 干净的
+  推进 `reload_nonce`(editor URL 追加 `_r=`,逼 WebView 重新拉取);**脏** tab
+  不自动重载,置 `web_error` 冲突提示,避免覆盖用户改动。
+- **产物/安全回归测试**:`assets.rs` 增测提交的 `index.html`/`editor.js`/
+  `editor.css`/字体齐全、CSP 严格(`default-src 'none'`/`script-src 'self'`/
+  `connect-src 'self'`)、首页无外部 URL、`editor.js` 无 sourcemap/绝对路径。
 
 ## 仍未完成(后续 Task 4–7)
 
-1. **非 macOS 无内置查找条/剪贴板差异**、以及 editor 的"外部打开"入口(当前
-   非 UTF-8 只做只读,未给外部打开按钮)。
-2. 大文件预算/休眠唤醒与失败后外部打开 fallback。
-3. Task 5/7 的完整验收:拖动到底/折叠/搜索(In-editor 已具备,需人工验收)、
-   IME、路由矩阵;旧 iced editor 删除属 Phase D。
+1. **非 UTF-8 的"外部打开"入口**(当前只做只读,未给按钮)与大文件预算/休眠
+   唤醒(计划主要归 Phase C)。
+2. 失败后外部打开 fallback(现 CodeMirror `Failed` 会经 `hosts_webview` 兜底到
+   Flyfish 显示)。
+3. Tab 5/7 人工验收:拖动到底/折叠/搜索/IME/路由矩阵;旧 iced editor 删除属
+   Phase D。
 
 ## NSMenu 上下文菜单(有意不实现)
 
@@ -127,7 +134,7 @@ iced 浮层"问题影响),且提供可用的剪切/复制/粘贴。反过来,自
 ## 验证
 
 - `cargo check --workspace --all-targets` 默认与 `--features codemirror`:通过。
-- `cargo test -p dozer-app` 默认 **1197 passed**、`--features codemirror` **1180
+- `cargo test -p dozer-app` 默认 **1200 passed**、`--features codemirror` **1183
   passed**;两者都只剩改动前已存在的 `agent_icon_maps_each_kind_to_brand_icon`
   一项失败(另有 1 ignored)。`dozer-core` 71 passed、`dozer-mcp` 14 passed。
 - `cargo fmt --check` 通过;`cargo clippy` 仅剩既有 `file_history.rs` / `spike/*`
