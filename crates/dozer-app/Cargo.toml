@@ -8,9 +8,10 @@ name = "dozer"
 path = "src/main.rs"
 
 [features]
-default = []
-# 开发开关(Phase B):用 CodeMirror editor host 承载 Code tab。默认关闭,
-# 保持旧 iced editor 的既有行为;开启后源码/纯文本走 dozer://editor/ host。
+# CodeMirror editor host 已通过真机验收(查看/编辑/保存/搜索/折叠/中文 IME/
+# 大文件窗口/JSON Text/CSV 原文/md source),现**默认开启**。保留 feature 名以便
+# `--no-default-features` 回退到老 iced 编辑器(Phase D 删除阶段的回退点)。
+default = ["codemirror"]
 codemirror = []
 
 [dependencies]
