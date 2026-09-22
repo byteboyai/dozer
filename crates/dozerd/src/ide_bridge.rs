@@ -239,6 +239,7 @@ mod mapping_tests {
             end_col: 3,
             has_selection: false,
             updated_at_ms: 1_700_000_000_000,
+            ..Default::default()
         }
     }
 
@@ -398,6 +399,7 @@ mod rpc_tests {
             end_col: 1,
             has_selection: false,
             updated_at_ms: 0,
+            ..Default::default()
         }
     }
 

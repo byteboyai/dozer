@@ -1060,6 +1060,113 @@ impl App {
         out
     }
 
+    /// 找到某个 pane 里处于"CodeMirror 且 Ready"的 tab(Agent 命令入口的前置
+    /// 校验)。非 CodeMirror/未就绪返回 false。
+    fn codemirror_tab_ready(pane: &crate::preview::PreviewPane, tab_id: usize) -> bool {
+        pane.tabs()
+            .iter()
+            .find(|t| t.id == tab_id)
+            .is_some_and(|t| t.uses_codemirror() && t.backend_state.is_ready())
+    }
+
+    /// Agent 侧入口:让某个 CodeMirror tab 跳转到指定行(1-based)。返回是否
+    /// 受理(非 CodeMirror / 未就绪则拒绝)。
+    // 读 MCP 暂无写工具;Phase C 的 Agent 唤醒/跳转会调用这些入口。
+    #[allow(dead_code)]
+    pub fn preview_editor_reveal(
+        &mut self,
+        kind: PanelKind,
+        tab_id: usize,
+        line: u32,
+        column: u32,
+    ) -> bool {
+        let Some(ws) = self.active_workspace_mut() else {
+            return false;
+        };
+        let pane = match kind {
+            PanelKind::Project => &mut ws.project_preview,
+            _ => &mut ws.preview,
+        };
+        if !Self::codemirror_tab_ready(pane, tab_id) {
+            return false;
+        }
+        pane.queue_editor_command(
+            tab_id,
+            crate::preview::EditorCommand::RevealPosition { line, column },
+        );
+        true
+    }
+
+    /// Agent 侧入口:选中某个 CodeMirror tab 的一段(1-based,含端)。
+    #[allow(dead_code)]
+    pub fn preview_editor_select(
+        &mut self,
+        kind: PanelKind,
+        tab_id: usize,
+        start: crate::preview::TextPosition,
+        end: crate::preview::TextPosition,
+    ) -> bool {
+        let Some(ws) = self.active_workspace_mut() else {
+            return false;
+        };
+        let pane = match kind {
+            PanelKind::Project => &mut ws.project_preview,
+            _ => &mut ws.preview,
+        };
+        if !Self::codemirror_tab_ready(pane, tab_id) {
+            return false;
+        }
+        pane.queue_editor_command(
+            tab_id,
+            crate::preview::EditorCommand::SelectRange { start, end },
+        );
+        true
+    }
+
+    /// Agent 侧入口:局部替换某个 CodeMirror tab 的一段。`expected_revision`
+    /// 必须等于该 tab 当前镜像 revision,否则**拒绝**(不排队),避免覆盖用户
+    /// 在 Agent 读取上下文之后的新输入。
+    #[allow(dead_code)]
+    pub fn preview_editor_replace(
+        &mut self,
+        kind: PanelKind,
+        tab_id: usize,
+        start: crate::preview::TextPosition,
+        end: crate::preview::TextPosition,
+        text: String,
+        expected_revision: u64,
+    ) -> bool {
+        let Some(ws) = self.active_workspace_mut() else {
+            return false;
+        };
+        let pane = match kind {
+            PanelKind::Project => &mut ws.project_preview,
+            _ => &mut ws.preview,
+        };
+        let accepted = pane
+            .tabs()
+            .iter()
+            .find(|t| t.id == tab_id)
+            .is_some_and(|t| {
+                t.uses_codemirror()
+                    && t.backend_state.is_ready()
+                    && t.web_revision == expected_revision
+            });
+        if !accepted {
+            return false;
+        }
+        pane.queue_editor_command(
+            tab_id,
+            crate::preview::EditorCommand::ReplaceRange {
+                start,
+                end,
+                text,
+                revision: expected_revision,
+            },
+        );
+        true
+    }
+
     /// `Stub` → `Loaded` 的促成:两步走。
     ///
     /// 1. **同步**把槽位换成 [`Workspace::loading_for_project`] 的"加载中"占位

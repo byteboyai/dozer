@@ -12,8 +12,10 @@
 > 已落地。首个运行时垂直切片也已接通：`codemirror` feature 开启后 Code route
 > 不再构造 iced CodeView，`desired_webviews` 会生成带 Rust 可信 binding 的 editor
 > spec，runtime 创建 WebView、校验并派发 IPC，App 镜像 revision/selection/viewport/
-> dirty 并处理保存；feature 关闭仍走原 iced 路径。Task 4–7 的完整生命周期、
-> Agent/daemon 链路和最终迁移仍未完成，不能把本切片视作 Phase B 整体验收通过。
+> dirty 并处理保存；feature 关闭仍走原 iced 路径。Task 6 主体(PreviewContext 扩展
+> + 四 crate 同步 + MCP 输出 + App 侧 reveal/select/replace 入口)已落地。仍未完成:
+> tab 切换 flush、非 UTF-8 只读、NSMenu 上下文菜单、大文件/外部 fallback 与
+> Task 5/7 的最终验收。不能把当前切片视作 Phase B 整体验收通过。
 
 ## Task 1：前端工程与离线产物
 

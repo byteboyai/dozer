@@ -81,6 +81,14 @@ impl DozerMcpServer {
                         // 新鲜度:这份上下文是什么时候推上来的(Unix 毫秒)。
                         // dozerd 可能比 GUI 活得久,调用方得能自己判断陈旧。
                         "updated_at_ms": ctx.updated_at_ms,
+                        // Phase B 扩展:revision/mode/只读/选区文本(有上限)与
+                        // 可见行范围;后端不提供时为 null。
+                        "revision": ctx.revision,
+                        "mode": ctx.mode,
+                        "read_only": ctx.read_only,
+                        "selected_text": ctx.selected_text,
+                        "visible_start_line": ctx.visible_start_line,
+                        "visible_end_line": ctx.visible_end_line,
                         "reason": null,
                     }),
                     None => json!({
@@ -91,6 +99,12 @@ impl DozerMcpServer {
                         "end_col": null,
                         "has_selection": null,
                         "updated_at_ms": null,
+                        "revision": null,
+                        "mode": null,
+                        "read_only": null,
+                        "selected_text": null,
+                        "visible_start_line": null,
+                        "visible_end_line": null,
                         "reason": "no_active_preview",
                     }),
                 };

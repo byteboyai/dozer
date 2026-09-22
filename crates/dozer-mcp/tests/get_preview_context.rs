@@ -84,6 +84,7 @@ async fn get_preview_context_returns_pushed_value_for_resolved_project() {
         end_col: 5,
         has_selection: false,
         updated_at_ms: 1_700_000_000_000,
+        ..Default::default()
     };
     client
         .update_preview_context(1, Some(ctx.clone()))
@@ -185,6 +186,7 @@ async fn tool_json_payload_carries_context_fields_and_timestamp() {
                 end_col: 4,
                 has_selection: true,
                 updated_at_ms: 1_700_000_000_000,
+                ..Default::default()
             }),
         )
         .await

@@ -1230,15 +1230,38 @@ impl Workspace {
                 let TabKind::File(path) = &tab.kind else {
                     return None;
                 };
-                let editor = tab.editor.as_ref()?;
                 let path_str = path.to_string_lossy().into_owned();
-                Some(preview_context_from_editor_state(
-                    &path_str,
-                    editor.has_selection(),
-                    editor.cursor_position(),
-                    editor.selection_range(),
-                    now_ms,
-                ))
+                // 两套后端:老 iced `CodeView`(editor)与 CodeMirror host
+                // (uses_codemirror,正文在 WebView,这里只读镜像字段)。其余
+                // (渲染/表格/webview)不提供文本上下文。
+                let (mut ctx, read_only) = if let Some(editor) = tab.editor.as_ref() {
+                    (
+                        preview_context_from_editor_state(
+                            &path_str,
+                            editor.has_selection(),
+                            editor.cursor_position(),
+                            editor.selection_range(),
+                            now_ms,
+                        ),
+                        editor.is_read_only(),
+                    )
+                } else if tab.uses_codemirror() {
+                    (
+                        preview_context_from_web_state(
+                            &path_str,
+                            tab.web_selection,
+                            tab.web_viewport,
+                            tab.web_revision,
+                            now_ms,
+                        ),
+                        tab.backend_read_only(),
+                    )
+                } else {
+                    return None;
+                };
+                ctx.mode = tab.current_mode().map(|m| mode_token(m).to_string());
+                ctx.read_only = read_only;
+                Some(ctx)
             });
 
         let nonce = self

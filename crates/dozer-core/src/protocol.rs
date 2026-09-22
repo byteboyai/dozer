@@ -168,9 +168,16 @@ pub struct UsagePayload {
     pub tokens_cache_write: u64,
 }
 
+/// `PreviewContext.selected_text` 的上限(字符数)。选区可能很大,上下文不
+/// 默认发送整文件;超出即截断并保留头部。
+pub const PREVIEW_SELECTED_TEXT_MAX_CHARS: usize = 4096;
+
 /// 预览面板当前上下文：文件路径 + 光标/选区（1-indexed，见 spec
 /// "1-indexed 行列" 一节）。无选区时 `start == end` 为光标位置。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// Phase B 起新增 `revision`/`mode`/`read_only`/`selected_text`/可见行范围等
+/// 可选字段;**全部带 serde 默认值**,旧客户端/旧 JSON 仍可解码(缺字段取默认)。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct PreviewContext {
     pub path: String,
     pub start_line: u32,
@@ -182,6 +189,42 @@ pub struct PreviewContext {
     /// （GUI 已退出但 dozerd 还活着、或用户几小时没碰过预览面板）和刚刚
     /// 更新的值长得一模一样，调 MCP tool 的 agent 无从判断新鲜度。
     pub updated_at_ms: u64,
+    /// 编辑器文档 revision(CodeMirror host 的变更计数;非文本后端为 0)。
+    #[serde(default)]
+    pub revision: u64,
+    /// 预览 mode(`code`/`rendered`/`source`/`tree`/`text`/`streamed`/...)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// 当前后端是否只读。
+    #[serde(default)]
+    pub read_only: bool,
+    /// 选区文本(有上限,见 [`PREVIEW_SELECTED_TEXT_MAX_CHARS`]);无选区为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_text: Option<String>,
+    /// 可见起始行(1-based);后端不提供可见范围时为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_start_line: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_end_line: Option<u32>,
+}
+
+impl PreviewContext {
+    /// 截断到上限并写入选区文本(空串视为无选区)。
+    pub fn set_selected_text(&mut self, text: Option<String>) {
+        self.selected_text = text.and_then(|t| {
+            if t.is_empty() {
+                return None;
+            }
+            let mut out = String::new();
+            for (i, ch) in t.chars().enumerate() {
+                if i >= PREVIEW_SELECTED_TEXT_MAX_CHARS {
+                    break;
+                }
+                out.push(ch);
+            }
+            Some(out)
+        });
+    }
 }
 
 /// 项目（甲方资产域的根；P1g）。id 为 dozerd SQLite 主键。
@@ -1559,6 +1602,7 @@ mod tests {
             end_col: 1,
             has_selection: true,
             updated_at_ms: 1_700_000_000_000,
+            ..Default::default()
         };
         let req = Request::UpdatePreviewContext {
             project_id: 7,
@@ -1581,6 +1625,60 @@ mod tests {
         let reply = Reply::PreviewContext { context: Some(ctx) };
         let line = encode_line(&reply);
         assert_eq!(decode_line::<Reply>(&line).unwrap(), reply);
+    }
+
+    #[test]
+    fn old_preview_context_json_decodes_with_new_field_defaults() {
+        // Phase B 之前的 JSON 没有 revision/mode/read_only/... 字段,解码时
+        // 必须取默认值,不能报错。
+        let legacy = r#"{"path":"/repo/a.rs","start_line":2,"start_col":1,"end_line":2,"end_col":5,"has_selection":false,"updated_at_ms":1700000000000}"#;
+        let ctx: PreviewContext = serde_json::from_str(legacy).unwrap();
+        assert_eq!(ctx.path, "/repo/a.rs");
+        assert_eq!(ctx.revision, 0);
+        assert_eq!(ctx.mode, None);
+        assert!(!ctx.read_only);
+        assert_eq!(ctx.selected_text, None);
+        assert_eq!(ctx.visible_start_line, None);
+    }
+
+    #[test]
+    fn extended_preview_context_round_trips_via_protocol() {
+        let mut ctx = PreviewContext {
+            path: "/repo/a.rs".into(),
+            start_line: 3,
+            start_col: 1,
+            end_line: 5,
+            end_col: 2,
+            has_selection: true,
+            updated_at_ms: 42,
+            revision: 7,
+            mode: Some("code".into()),
+            read_only: true,
+            visible_start_line: Some(1),
+            visible_end_line: Some(40),
+            ..Default::default()
+        };
+        ctx.set_selected_text(Some("hello".into()));
+        let req = Request::UpdatePreviewContext {
+            project_id: 1,
+            context: Some(ctx.clone()),
+        };
+        let line = encode_line(&req);
+        assert_eq!(decode_line::<Request>(&line).unwrap(), req);
+    }
+
+    #[test]
+    fn selected_text_is_capped_and_empty_is_none() {
+        let mut ctx = PreviewContext::default();
+        ctx.set_selected_text(Some(String::new()));
+        assert_eq!(ctx.selected_text, None, "空选区视为无选区");
+
+        let long = "x".repeat(PREVIEW_SELECTED_TEXT_MAX_CHARS + 500);
+        ctx.set_selected_text(Some(long));
+        assert_eq!(
+            ctx.selected_text.as_ref().unwrap().chars().count(),
+            PREVIEW_SELECTED_TEXT_MAX_CHARS
+        );
     }
 
     #[test]

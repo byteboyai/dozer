@@ -51,6 +51,7 @@ mod tests {
             end_col: 1,
             has_selection: false,
             updated_at_ms: 1000,
+            ..Default::default()
         }
     }
 

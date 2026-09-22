@@ -38,7 +38,7 @@ impl App {
     pub fn update(&mut self, message: Message) {
         match message {
             Message::EditorWebviewEvent(binding, event) => {
-                self.with_project(binding.project_id, move |ws, _io| {
+                self.with_project(binding.project_id, move |ws, io| {
                     let pane = if binding.panel == PanelKind::Project {
                         &mut ws.project_preview
                     } else {
@@ -47,6 +47,9 @@ impl App {
                     // `Ready` 时若该 tab 有"打开后跳转到某行"的诉求(代码健康度
                     // 面板),取出来在 tab 借用结束后排队一条 reveal 命令。
                     let mut pending_reveal: Option<(usize, u32)> = None;
+                    // 是否需要把上下文(路径/光标/选区/可见行/revision)推给
+                    // dozerd:选区/可见范围/就绪变化都算。
+                    let mut context_changed = false;
                     {
                         let Some(tab) = pane
                             .tabs_mut()
@@ -72,6 +75,7 @@ impl App {
                                 if let Some(line) = tab.pending_jump_line.take() {
                                     pending_reveal = Some((tab.id, line as u32));
                                 }
+                                context_changed = true;
                             }
                             EditorEvent::SelectionChanged { anchor, head, .. } => {
                                 tab.web_revision = event.revision;
@@ -79,10 +83,12 @@ impl App {
                                     start: anchor,
                                     end: head,
                                 });
+                                context_changed = true;
                             }
                             EditorEvent::ViewportChanged { from_line, to_line } => {
                                 tab.web_revision = event.revision;
                                 tab.web_viewport = Some((from_line, to_line));
+                                context_changed = true;
                             }
                             EditorEvent::DocumentChanged { revision, .. } => {
                                 if revision == event.revision && revision >= tab.web_revision {
@@ -104,6 +110,7 @@ impl App {
                             EditorEvent::ViewState { selection, .. } => {
                                 tab.web_revision = event.revision;
                                 tab.web_selection = selection;
+                                context_changed = true;
                             }
                             EditorEvent::Failed {
                                 message,
@@ -124,6 +131,11 @@ impl App {
                             tab_id,
                             crate::preview::EditorCommand::RevealPosition { line, column: 1 },
                         );
+                    }
+                    if context_changed {
+                        // 第二段链路(dozer-app → dozerd)自带 250ms 防抖;这里
+                        // 只管触发,不假设复用 editor→app 那段的节流。
+                        ws.spawn_preview_context_push(io);
                     }
                 });
             }

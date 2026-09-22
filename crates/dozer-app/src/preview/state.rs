@@ -104,6 +104,18 @@ impl PreviewTab {
         self.backend.as_ref().map(PreviewBackend::current_mode)
     }
 
+    /// 后端是否只读(Code backend 的 `ReadOnly` 档;其余后端如 Tree/渲染按
+    /// 各自语义,这里对非 Code 返回 false)。
+    pub fn backend_read_only(&self) -> bool {
+        matches!(
+            self.backend,
+            Some(PreviewBackend::Code(CodeBackend {
+                mode: CodeMode::ReadOnly,
+                ..
+            }))
+        )
+    }
+
     pub fn uses_codemirror(&self) -> bool {
         codemirror_enabled() && matches!(self.backend, Some(PreviewBackend::Code(_)))
     }

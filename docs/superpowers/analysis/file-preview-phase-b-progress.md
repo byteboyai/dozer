@@ -82,23 +82,38 @@
   自动接线随后接入**。
 - `scripts/build-macos-app.sh` 增拷 `assets/editor` → `Contents/Resources/editor`
   (与 `assets_root` 的兄弟目录约定一致),否则打包态 editor 预览 404。
+- **代码健康度 jump-to-line**:`pending_jump_line` 在 editor `ready` 后经命令队列
+  自动 `reveal_position`。
+- **Task 6 — PreviewContext 全链路(主体)**:
+  - `dozer_core::protocol::PreviewContext` 扩展 `revision` / `mode` / `read_only`
+    / `selected_text`(上限 `PREVIEW_SELECTED_TEXT_MAX_CHARS=4096`, `set_selected_text`
+    截断)/ `visible_start_line` / `visible_end_line`;**全部带 serde 默认值**,
+    旧 JSON/旧客户端仍可解码(有回归测试)。
+  - `dozer-app` 的 `spawn_preview_context_push` 现同时覆盖老 iced editor 与
+    CodeMirror tab(`preview_context_from_web_state` 把镜像的 1-based 选区/可见行
+    转成上下文),并填 `mode`/`read_only`。CodeMirror 的 selection/viewport/ready
+    事件会触发这段推送(经既有 250ms trailing 防抖)。
+  - `dozer-mcp` 的 `get_preview_context` 输出新增这些字段(有预览/无预览两条
+    JSON 形状都补齐,`null` 占位)。
+  - `dozerd`/`dozer-client` 无需改动(上下文不透明透传)。
+  - **App 侧 Agent 命令入口**:`preview_editor_reveal/select/replace`;`replace`
+    要求 `expected_revision == tab.web_revision`,失配拒绝(不排队)。
 
 ## 仍未完成(后续 Task 4–7)
 
-1. 接上命令队列的**调用方**:Agent reveal/select/replace(Task 6)与代码健康度
-   `pending_jump_line` 在 editor `ready` 后自动 reveal。
-2. selection/viewport 推到 daemon/MCP `PreviewContext`；增加节流、tab 切换/关闭
-   flush、selected text 上限和 revision 冲突测试。
-3. 非 UTF-8 文件只读化(当前 editor host 对非 UTF-8 走 `text()` lossy 解码)。
-4. 完成大文件预算/休眠唤醒、失败后外部打开 fallback，以及 Task 5/6/7 的完整
-   搜索、折叠、导航与旧 editor 移除验收。
+1. tab 切换/失焦/关闭时把 `app → dozerd` 那段**提前 flush**(当前统一走 250ms
+   防抖;即时性属增强,需要把 push 拆成带 delay 的 helper)。
+2. 非 UTF-8 文件只读化(当前 editor host 对非 UTF-8 走 `text()` lossy 解码)。
+3. editor 的 macOS 上下文菜单走 NSMenu(Task 2 剩余)。
+4. 大文件预算/休眠唤醒、失败后外部打开 fallback,以及 Task 5/7 的完整
+   搜索/折叠/导航与旧 editor 移除验收(旧 editor 删除属 Phase D)。
 
 ## 验证
 
-- `cargo check -p dozer-app` 默认与 `--features codemirror`:通过。
-- `cargo test -p dozer-app` 默认 **1193 passed**、`--features codemirror` **1176
+- `cargo check --workspace --all-targets` 默认与 `--features codemirror`:通过。
+- `cargo test -p dozer-app` 默认 **1196 passed**、`--features codemirror` **1179
   passed**;两者都只剩改动前已存在的 `agent_icon_maps_each_kind_to_brand_icon`
-  一项失败(另有 1 ignored)。
-- `cargo fmt --check`、`cargo clippy -p dozer-app --all-targets`:仅剩既有
-  `file_history.rs` warning。
+  一项失败(另有 1 ignored)。`dozer-core` 71 passed、`dozer-mcp` 14 passed。
+- `cargo fmt --check` 通过;`cargo clippy --workspace --all-targets` 仅剩既有
+  `file_history.rs` / `spike/*` warning。
 - 前端:`npm run typecheck`、`npm test`(6 passed)、`npm run build`:通过。

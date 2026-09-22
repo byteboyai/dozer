@@ -223,6 +223,68 @@ fn preview_context_from_selection_uses_1_indexed_range() {
     assert_eq!(ctx.updated_at_ms, 1_700_000_000_000);
 }
 
+#[test]
+fn preview_context_from_web_state_maps_selection_and_viewport() {
+    use crate::preview::{TextPosition, TextRange};
+    let range = TextRange {
+        start: TextPosition { line: 3, column: 2 },
+        end: TextPosition { line: 5, column: 4 },
+    };
+    let ctx = preview_context_from_web_state(
+        "/repo/a.rs",
+        Some(range),
+        Some((10, 40)),
+        9,
+        1_700_000_000_000,
+    );
+    assert_eq!(ctx.path, "/repo/a.rs");
+    assert_eq!((ctx.start_line, ctx.start_col), (3, 2));
+    assert_eq!((ctx.end_line, ctx.end_col), (5, 4));
+    assert!(ctx.has_selection);
+    assert_eq!(ctx.revision, 9);
+    assert_eq!(
+        (ctx.visible_start_line, ctx.visible_end_line),
+        (Some(10), Some(40))
+    );
+    assert_eq!(ctx.updated_at_ms, 1_700_000_000_000);
+}
+
+#[test]
+fn preview_context_from_web_state_cursor_only_and_missing_viewport() {
+    use crate::preview::{TextPosition, TextRange};
+    let cursor = TextRange {
+        start: TextPosition { line: 7, column: 1 },
+        end: TextPosition { line: 7, column: 1 },
+    };
+    let ctx = preview_context_from_web_state("/repo/a.rs", Some(cursor), None, 0, 1);
+    assert_eq!((ctx.start_line, ctx.start_col), (7, 1));
+    assert_eq!((ctx.end_line, ctx.end_col), (7, 1));
+    assert!(!ctx.has_selection, "start==end 视为光标无选区");
+    assert_eq!(ctx.visible_start_line, None);
+
+    // 完全没有位置信息时给 1-based 最小合法位置,不出现 0 行。
+    let ctx = preview_context_from_web_state("/repo/a.rs", None, None, 0, 1);
+    assert_eq!((ctx.start_line, ctx.start_col), (1, 1));
+}
+
+#[test]
+fn mode_token_covers_all_modes() {
+    use crate::preview::PreviewMode;
+    for mode in [
+        PreviewMode::Code,
+        PreviewMode::Rendered,
+        PreviewMode::Source,
+        PreviewMode::Tree,
+        PreviewMode::Text,
+        PreviewMode::Tabular,
+        PreviewMode::Streamed,
+        PreviewMode::External,
+        PreviewMode::Unsupported,
+    ] {
+        assert!(!mode_token(mode).is_empty(), "{mode:?}");
+    }
+}
+
 /// 促成期占位的**核心不变式**:同步换上的那一刻就必须已知归属项目。
 ///
 /// 促成是异步的,这份占位会在消息环里存活若干毫秒,而且它就是当前聚焦

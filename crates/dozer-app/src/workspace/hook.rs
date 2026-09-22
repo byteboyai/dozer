@@ -311,6 +311,74 @@ pub(crate) fn preview_context_from_editor_state(
         end_col: end.1 as u32 + 1,
         has_selection,
         updated_at_ms: now_ms,
+        ..Default::default()
+    }
+}
+
+/// 由 CodeMirror host 镜像出的(路径, 1-based 选区, 可见行范围, revision,
+/// 时间)组装 1-based `PreviewContext`。选区 `start==end` 视为无选区(光标)。
+/// 选区文本不在这里取(host 侧才持有正文);可见行范围给 Agent 判断"当前
+/// 在看哪一屏"。
+pub(crate) fn preview_context_from_web_state(
+    path: &str,
+    selection: Option<crate::preview::TextRange>,
+    viewport: Option<(u32, u32)>,
+    revision: u64,
+    now_ms: u64,
+) -> dozer_core::protocol::PreviewContext {
+    let (start_line, start_col, end_line, end_col, has_selection) = match selection {
+        Some(range) => (
+            range.start.line,
+            range.start.column,
+            range.end.line,
+            range.end.column,
+            range.start != range.end,
+        ),
+        None => (1, 1, 1, 1, false),
+    };
+    // 1-based 最小合法位置兜底,避免 0 行。
+    let (start_line, start_col) = if start_line == 0 {
+        (1, 1)
+    } else {
+        (start_line, start_col)
+    };
+    let (end_line, end_col) = if end_line == 0 {
+        (1, 1)
+    } else {
+        (end_line, end_col)
+    };
+    let (visible_start_line, visible_end_line) = match viewport {
+        Some((a, b)) => (Some(a), Some(b)),
+        None => (None, None),
+    };
+    dozer_core::protocol::PreviewContext {
+        path: path.to_string(),
+        start_line,
+        start_col,
+        end_line,
+        end_col,
+        has_selection,
+        updated_at_ms: now_ms,
+        revision,
+        visible_start_line,
+        visible_end_line,
+        ..Default::default()
+    }
+}
+
+/// `PreviewMode` → `PreviewContext.mode` 的稳定 token。
+pub(crate) fn mode_token(mode: crate::preview::PreviewMode) -> &'static str {
+    use crate::preview::PreviewMode;
+    match mode {
+        PreviewMode::Code => "code",
+        PreviewMode::Rendered => "rendered",
+        PreviewMode::Source => "source",
+        PreviewMode::Tree => "tree",
+        PreviewMode::Text => "text",
+        PreviewMode::Tabular => "tabular",
+        PreviewMode::Streamed => "streamed",
+        PreviewMode::External => "external",
+        PreviewMode::Unsupported => "unsupported",
     }
 }
 
