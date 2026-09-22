@@ -12,6 +12,7 @@ mod file_policy;
 mod file_profile;
 mod large_text;
 mod native_editor;
+mod recovery;
 mod resources;
 mod router;
 mod state;
@@ -37,6 +38,8 @@ pub(crate) use code_host::*;
 pub(crate) use file_policy::*;
 #[allow(unused_imports)]
 pub(crate) use large_text::*;
+#[allow(unused_imports)]
+pub(crate) use recovery::*;
 #[allow(unused_imports)]
 pub(crate) use resources::*;
 #[allow(unused_imports)]

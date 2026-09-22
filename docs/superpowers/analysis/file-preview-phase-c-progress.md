@@ -36,6 +36,16 @@
 - `diagnostics()` 诊断快照。测试:预算/名额、不可淘汰跳过、脏有无 recovery、
   淘汰顺序、LRU、超大单件拒绝、release 幂等、重复登记不叠加。
 
+### Task 6:Dirty recovery snapshot `preview/recovery.rs`(纯逻辑)
+- 版本化 `RecoveryManifest`(path / 基准 mtime+len / editor revision / encoding /
+  line-ending / cursor / selection / top_line)+ 正文快照,写到
+  `<config_dir>/preview_recovery/`;`write_snapshot` 临时文件 + rename 原子写。
+- `read_snapshot` 缺文件/损坏/未知版本一律 `None`(不 panic);
+  `clear_snapshot` 正常保存后清理;`classify_recovery` 对照磁盘 → Restore /
+  ConflictDiskChanged / ConflictMissingFile。
+- 测试:round-trip、缺失/损坏/未知版本、空正文、磁盘未变恢复、磁盘变更冲突、
+  文件缺失冲突、清理无残留、原子写无临时残留、真实 `profile_file` 集成。
+
 ## 仍未完成(需接热点文件/运行期,建议在无并行改动时做)
 
 1. **Task 3 Windowed Viewer**:把 `file_policy`/`large_text` 接进 `PreviewTab`/
@@ -44,8 +54,7 @@
    windowed 模式与 `set_window`)。
 2. **Task 5 Suspended 恢复**:扩展 `preview_state` schema、启动只恢复壳、并发 1、
    懒加载。需改 `workspace/state.rs`/`view.rs`。
-3. **Task 6 Dirty recovery snapshot** `preview/recovery.rs`:版本化 manifest、
-   防抖原子写、启动恢复/冲突/清理。可作为独立纯模块先做,再接 `PreviewTab`。
+3. **Task 6 接线**:把 `recovery.rs` 接进脏 tab 的防抖写、启动恢复、保存后清理。
 4. **Task 7 安全启动与运行时反馈**:启动进行/完成标记、失败计数、ready latency。
 5. 把 `file_policy` 的只读/窗口化结论回写到 `PreviewBackend`/路由(`router.rs`),
    让大文件不再无脑进 CodeMirror 整载。
@@ -53,7 +62,7 @@
 ## 验证
 
 - `cargo check -p dozer-app --all-targets`(默认与 `--features codemirror`):通过。
-- `cargo test -p dozer-app`:默认 **1231 passed / 0 failed**、feature **1213
+- `cargo test -p dozer-app`:默认 **1242 passed / 0 failed**、feature **1213+
   passed / 0 failed**(并行工作已修掉先前的 icon 既有失败;另有 1 ignored)。
-  新增:`file_policy` 9、`large_text` 10、`resources` 11。
+  新增:`file_policy` 9、`large_text` 10、`resources` 11、`recovery` 11。
 - `cargo fmt --check`、`cargo clippy` 干净(仅既有 `file_history.rs` warning)。
