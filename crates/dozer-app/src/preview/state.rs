@@ -71,6 +71,9 @@ pub struct PreviewTab {
     /// backend 生命周期状态。迁移期与旧的 `loading` 字段并存,`loading` 仍是
     /// 渲染侧的实际判据(行为不变),本字段用于状态机与后续阶段。
     pub backend_state: BackendState,
+    /// `file_policy` 判定该文件应窗口化(超预算/超 128MiB/超长行)。窗口化
+    /// 专用 viewer 未落地前,这类文件不吃 CodeMirror 整载。
+    pub windowed: bool,
     /// CodeMirror host 的轻量镜像；正文仍由 WebView 持有，Rust 只保留 Agent、
     /// 保存和过期事件校验所需状态。
     pub web_revision: u64,
@@ -121,7 +124,9 @@ impl PreviewTab {
     }
 
     pub fn uses_codemirror(&self) -> bool {
-        codemirror_enabled() && matches!(self.backend, Some(PreviewBackend::Code(_)))
+        codemirror_enabled()
+            && !self.windowed
+            && matches!(self.backend, Some(PreviewBackend::Code(_)))
     }
 
     /// debug/test 下断言 backend 描述与旧 adapter 字段一致:任何迁移漏点

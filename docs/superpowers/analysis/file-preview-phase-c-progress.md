@@ -59,22 +59,32 @@
 - 测试:壳 Suspended 且不进 WebView 池、物化 Loading→Ready 幂等、持久 mode
   覆盖与失效回退。
 
-## 仍未完成(需接热点文件/运行期,建议在无并行改动时做)
+### 长单行探测 + `file_policy` 接线
+- `file_profile::profile_file` 增加**有界首行探测**:采样窗(64KiB)内无换行且
+  文件更大时,最多再读 6MiB 探首行长度 —— 否则 Phase C 的"关 wrap(>100KiB)/
+  关高亮(>1MiB)/强制窗口化(>5MiB)"单行规则永远触发不了。探到的是首行下界。
+- `route_and_backend` 的只读判据改用 `file_policy`:非 EditableCode(超 30MiB/
+  超预算)或非文本 → 只读。
+- `PreviewTab.windowed`(由 `path_is_windowed` 定)+ `uses_codemirror()` 排除
+  窗口化文件;`is_native_editor_candidate`/`push_tab`/`desired_editor_webviews`
+  协同,让窗口化文件在 feature 打开时**仍走老 iced 分块只读**,不整载进
+  CodeMirror WebView(窗口化专用 viewer 留待后续)。
 
-1. **Task 3 Windowed Viewer**:把 `file_policy`/`large_text` 接进 `PreviewTab`/
-   runtime —— Rust 读窗口、CodeMirror 只持窗口、全局行号基数、边界加载、
-   Agent reveal 未加载行。需要改 `view.rs`/`runtime.rs`/editor 协议(增加
-   windowed 模式与 `set_window`)。
-2. **Task 6 接线**:把 `recovery.rs` 接进脏 tab 的防抖写、启动恢复、保存后清理。
+## 仍未完成
+
+1. **Task 3 Windowed 专用 viewer**:Rust 读窗口、CodeMirror 只持窗口、全局
+   行号基数、边界加载、Agent reveal 未加载行。需要 editor 协议加 windowed 模式
+   与 `set_window`(含前端改动与重建 bundle)。
+2. **Task 6 接线**:把 `recovery.rs` 接进脏 tab 的防抖快照、启动恢复、保存后清理
+   (需要 editor host 新增"周期上报正文"事件或保存/失焦时快照)。
 3. **Task 7 安全启动与运行时反馈**:启动进行/完成标记、失败计数、ready latency。
-4. 把 `file_policy` 的只读/窗口化结论回写到 `PreviewBackend`/路由(`router.rs`),
-   让大文件不再无脑进 CodeMirror 整载。
-5. 恢复时把持久化的 cursor/selection/scroll anchor 应用到编辑器视图。
+4. 恢复时把持久化的 cursor/selection/scroll anchor 应用到编辑器视图。
 
 ## 验证
 
 - `cargo check -p dozer-app --all-targets`(默认与 `--features codemirror`):通过。
-- `cargo test -p dozer-app`:默认 **1244 passed / 0 failed**、feature **1226
+- `cargo test -p dozer-app`:默认 **1247 passed / 0 failed**、feature **1229
   passed / 0 failed**(另有 1 ignored)。
-  新增:`file_policy` 9、`large_text` 10、`resources` 11、`recovery` 11、shell 2。
+  新增:`file_policy` 9、`large_text` 10、`resources` 11、`recovery` 11、file_profile
+  +2、view 壳/窗口化 +3。
 - `cargo fmt --check`、`cargo clippy` 干净(仅既有 `file_history.rs` warning)。

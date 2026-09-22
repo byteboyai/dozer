@@ -109,7 +109,42 @@ pub fn profile_file(path: &Path) -> std::io::Result<FileProfile> {
         Some(t)
     };
 
-    Ok(analyze(&head, tail.as_deref(), size, modified))
+    let mut profile = analyze(&head, tail.as_deref(), size, modified);
+    // 长单行检测:采样窗口只有 64KiB,若窗口内没有任何换行且文件更大,首个
+    // 采样窗整段都是同一行 —— 它至少 64KiB,可能远超 <=64KiB 的样本长度。
+    // 此时再**有界**探一次首行长度(最多 FIRST_LINE_PROBE_CAP),让 Phase C
+    // 的"关 wrap / 关高亮 / 强制窗口化"单行规则能真正触发。探到的长度是首行
+    // 的下界;首行不长但后面某行很长的极端文件按"采样即最长"近似处理。
+    if !head.contains(&b'\n')
+        && (size as usize) > head.len()
+        && let Ok(len) = first_line_len(path, size)
+    {
+        profile.sampled_max_line_bytes = profile.sampled_max_line_bytes.max(len as usize);
+    }
+    Ok(profile)
+}
+
+/// 首行探测的硬上限:只在这种病态(首 64KiB 无换行)文件上多读,且最多这么多。
+const FIRST_LINE_PROBE_CAP: u64 = 6 * 1024 * 1024;
+
+/// 从文件头读至多 [`FIRST_LINE_PROBE_CAP`] 字节,返回第一个 `\n` 前的字节数;
+/// 没找到则返回读到的字节数(即首行长度 >= 该值,可能被上限截断)。
+fn first_line_len(path: &Path, size: u64) -> std::io::Result<u64> {
+    let mut file = std::fs::File::open(path)?;
+    let cap = FIRST_LINE_PROBE_CAP.min(size) as usize;
+    let mut buf = vec![0u8; cap];
+    let mut filled = 0usize;
+    while filled < cap {
+        let n = file.read(&mut buf[filled..])?;
+        if n == 0 {
+            break;
+        }
+        filled += n;
+    }
+    match buf[..filled].iter().position(|&b| b == b'\n') {
+        Some(i) => Ok(i as u64),
+        None => Ok(filled as u64),
+    }
 }
 
 /// 纯分析函数:输入采样字节,产出画像(单测直接构造字节,不碰磁盘)。
@@ -433,5 +468,31 @@ mod tests {
         let prof = analyze(b"one\ntwo\n", None, 8, None);
         assert_eq!(prof.content_kind, ContentKind::Text);
         assert_eq!(prof.sampled_line_count, Some(2));
+    }
+
+    #[test]
+    fn long_first_line_is_probed_beyond_sample_window() {
+        // 首行 200KiB(> 64KiB 采样窗,> 100KiB wrap 阈值):探到真实长度。
+        let line = "a".repeat(200 * 1024);
+        let path = tmp("longline", format!("{line}\nshort\n").as_bytes());
+        let prof = profile_file(&path).unwrap();
+        assert!(
+            prof.sampled_max_line_bytes >= 200 * 1024,
+            "got {}",
+            prof.sampled_max_line_bytes
+        );
+    }
+
+    #[test]
+    fn sparse_huge_no_newline_reaches_probe_cap() {
+        // 稀疏 10MiB 无换行文件:首行长度探到 6MiB 上限(> 5MiB 强制窗口化)。
+        let dir = std::env::temp_dir().join(format!("dozer_profile_sparse_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big_line.bin");
+        let f = std::fs::File::create(&path).unwrap();
+        f.set_len(10 * 1024 * 1024).unwrap();
+        drop(f);
+        let prof = profile_file(&path).unwrap();
+        assert_eq!(prof.sampled_max_line_bytes, FIRST_LINE_PROBE_CAP as usize);
     }
 }

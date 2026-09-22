@@ -29,6 +29,7 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         route: None,
         backend: None,
         backend_state: BackendState::Ready,
+        windowed: false,
         web_revision: 0,
         web_selection: None,
         web_selected_text: None,
@@ -46,20 +47,27 @@ pub(crate) fn route_and_backend(
 ) -> (PreviewRoute, PreviewBackend, BackendState) {
     let profile = profile_file(path).unwrap_or_else(|_| analyze(&[], None, 0, None));
     let route = classify_preview(path, &profile, capabilities, None);
-    let total = profile.size_bytes;
-    // 只读档:大小分档(整读/分块)之外,**非 UTF-8 或二进制内容**也强制只读
-    // ——CodeMirror host 用 `fetch().text()` 解码会丢字节,编辑再保存会损坏原文。
+    // 只读档:非 UTF-8/二进制(CodeMirror fetch().text() 会丢字节)或
+    // `file_policy` 判定非 EditableCode(超 30MiB / 超预算)一律只读。
     let non_text = matches!(profile.utf8, Utf8Status::Invalid)
         || matches!(profile.content_kind, ContentKind::Binary);
-    let read_only = non_text
-        || matches!(
-            classify_size(total, capabilities.budgets.full_file_load_bytes),
-            SizeTier::FullLoadReadOnly | SizeTier::ChunkedReadOnly
-        );
+    let policy = decide_text_policy(&profile, &capabilities.budgets);
+    let read_only = non_text || policy.policy != TextFilePolicy::EditableCode;
     let backend = PreviewBackend::from_route(&route, path, read_only);
     // 同步路径(表格/webview/渲染)创建即 Ready;原生编辑器异步路径的调用方
     // 会用 `insert_loading_tab` 把状态置为 Loading。
     (route, backend, BackendState::Ready)
+}
+
+/// 该文件是否应按 `file_policy` 走**窗口化**(超预算 / 超 128MiB / 超长行)。
+/// 窗口化专用 viewer 尚未落地,Phase C 期间在 feature 打开时仍走老的 iced
+/// 分块只读,避免把超大文件整载进 CodeMirror WebView。
+pub(crate) fn path_is_windowed(
+    path: &std::path::Path,
+    capabilities: &crate::capabilities::ClientCapabilities,
+) -> bool {
+    let profile = profile_file(path).unwrap_or_else(|_| analyze(&[], None, 0, None));
+    decide_text_policy(&profile, &capabilities.budgets).is_windowed()
 }
 
 /// `path` 是否会被打开为"原生编辑器候选"(即 `is_editable_extension &&
@@ -71,8 +79,11 @@ pub(crate) fn is_native_editor_candidate(path: &std::path::Path) -> bool {
     let (route, _, _) = route_and_backend(path, &crate::capabilities::current());
     match route.kind {
         // feature 打开后 Code tab 由 editor WebView 自己按 allowlist URL
-        // 读取正文，不再异步构造一份隐藏的 iced CodeView。
-        PreviewKind::Code => !codemirror_enabled(),
+        // 读取正文；但 `file_policy` 判定窗口化(超大/超长行)的文件仍走老
+        // iced 分块只读,避免整载进 WebView。
+        PreviewKind::Code => {
+            !codemirror_enabled() || path_is_windowed(path, &crate::capabilities::current())
+        }
         PreviewKind::Json | PreviewKind::Streamed => true,
         _ => false,
     }
@@ -263,7 +274,9 @@ impl PreviewPane {
             TabKind::File(path)
                 if route.as_ref().is_some_and(|route| {
                     matches!(route.kind, PreviewKind::Json | PreviewKind::Streamed)
-                        || (route.kind == PreviewKind::Code && !codemirror_enabled())
+                        || (route.kind == PreviewKind::Code
+                            && (!codemirror_enabled()
+                                || path_is_windowed(path, &self.capabilities)))
                 }) =>
             {
                 read_and_build_native_editor(path).ok()
@@ -323,6 +336,10 @@ impl PreviewPane {
         } else {
             backend_state
         };
+        let windowed = match &kind {
+            TabKind::File(path) => path_is_windowed(path, &self.capabilities),
+            TabKind::Blank => false,
+        };
         let tab = PreviewTab {
             id,
             kind,
@@ -340,6 +357,7 @@ impl PreviewPane {
             route,
             backend,
             backend_state,
+            windowed,
             web_revision: 0,
             web_selection: None,
             web_selected_text: None,
@@ -374,6 +392,10 @@ impl PreviewPane {
             }
             TabKind::Blank => (None, None),
         };
+        let windowed = match &kind {
+            TabKind::File(path) => path_is_windowed(path, &self.capabilities),
+            TabKind::Blank => false,
+        };
         let json_tree = match &kind {
             TabKind::File(path)
                 if route.as_ref().is_some_and(|route| {
@@ -402,6 +424,7 @@ impl PreviewPane {
             route,
             backend,
             backend_state: BackendState::Loading,
+            windowed,
             web_revision: 0,
             web_selection: None,
             web_selected_text: None,
@@ -444,6 +467,7 @@ impl PreviewPane {
                 _ => JsonMode::Tree,
             };
         }
+        let windowed = path_is_windowed(&path, &self.capabilities);
         let tab = PreviewTab {
             id,
             kind: TabKind::File(path),
@@ -461,6 +485,7 @@ impl PreviewPane {
             route: Some(route),
             backend: Some(backend),
             backend_state: BackendState::Suspended,
+            windowed,
             web_revision: 0,
             web_selection: None,
             web_selected_text: None,
@@ -781,7 +806,7 @@ impl PreviewPane {
                 let PreviewBackend::Code(code) = tab.backend.as_ref()? else {
                     return None;
                 };
-                if tab.loading || !tab.backend_state.is_ready() {
+                if tab.loading || !tab.backend_state.is_ready() || tab.editor.is_some() {
                     return None;
                 }
                 let binding = EditorHostBinding::new(project_id, panel, tab.id, path.clone());
@@ -3373,5 +3398,25 @@ mod tests {
         assert_eq!(tab2.route.as_ref().unwrap().default_mode, PreviewMode::Tree);
 
         std::fs::remove_file(&json).ok();
+    }
+
+    /// `file_policy` 窗口化的文件(超长首行)被判只读,且 `path_is_windowed`
+    /// 为真(据此在 feature 打开时把它挡在 CodeMirror 之外)。
+    #[test]
+    fn windowed_sparse_file_is_read_only_and_windowed() {
+        let dir = std::env::temp_dir().join(format!("dozer_windowed_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("huge_line.rs");
+        let f = std::fs::File::create(&path).unwrap();
+        f.set_len(10 * 1024 * 1024).unwrap();
+        drop(f);
+
+        let caps = crate::capabilities::current();
+        assert!(path_is_windowed(&path, &caps));
+        let (_, backend, _) = route_and_backend(&path, &caps);
+        match backend {
+            PreviewBackend::Code(code) => assert_eq!(code.mode, CodeMode::ReadOnly),
+            other => panic!("应是 Code,得到 {other:?}"),
+        }
     }
 }
