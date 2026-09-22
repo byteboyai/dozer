@@ -409,6 +409,7 @@ pub(crate) fn review_webview_spec(review: Option<&ReviewView>) -> Vec<crate::pre
         id: 0,
         url: format!("dozer://review-trace/host.html?_r={}", rv.nonce),
         visible: true,
+        editor_binding: None,
     }]
 }
 
@@ -1164,6 +1165,7 @@ pub(crate) fn preview_pane_for<'a>(
         // 那支——它在 Tree 模式画树、RawText 模式再回落到同一个 editor。
         if let Some(editor) = &active_tab.editor
             && active_tab.json_tree.is_none()
+            && !active_tab.uses_codemirror()
         {
             // 原生 tab:激活 tab 有原生 editor 时,直接在 iced 里渲染它(语法
             // 高亮/行号/ByteBoy2077 配色),put 下 content。`editor` 为 `None`

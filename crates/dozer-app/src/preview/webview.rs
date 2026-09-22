@@ -9,6 +9,7 @@ pub struct WebviewSpec {
     pub id: usize,
     pub url: String,
     pub visible: bool,
+    pub editor_binding: Option<EditorHostBinding>,
 }
 
 /// RFC3986 严格百分号编码:unreserved(字母/数字/`-._~`)之外全部 %XX。

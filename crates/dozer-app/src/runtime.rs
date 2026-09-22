@@ -196,8 +196,17 @@ pub(crate) fn sync_webview_pool(
     proxy: winit::event_loop::EventLoopProxy<Message>,
     report_title: bool,
 ) {
-    let desired_ids: std::collections::HashSet<usize> = specs.iter().map(|(s, _)| s.id).collect();
-    pool.retain(|id, _| desired_ids.contains(id));
+    let desired_hosts: std::collections::HashMap<usize, bool> = specs
+        .iter()
+        .map(|(spec, _)| (spec.id, spec.editor_binding.is_some()))
+        .collect();
+    // IPC handler 捕获了创建时的 editor binding，因此同一个池 key 从
+    // flyfish 切成 editor（或反向）时必须重建，不能只 load_url。
+    pool.retain(|id, (_, loaded_url)| {
+        desired_hosts.get(id).is_some_and(|expects_editor| {
+            *expects_editor == crate::preview::is_editor_url(loaded_url)
+        })
+    });
 
     for (spec, bounds) in specs {
         match pool.get_mut(&spec.id) {
@@ -233,6 +242,7 @@ pub(crate) fn sync_webview_pool(
                 let ipc_proxy = proxy.clone();
                 let nav_proxy = proxy.clone();
                 let webview_id = spec.id;
+                let editor_binding = spec.editor_binding.clone();
                 // 常驻注入脚本:焦点/拖拽/缩放三件套(所有 webview);浏览器
                 // 面板(`report_title`)额外附一段"页面标题回报":把
                 // `window.__dozer_webview` 记成本 webview 的 id,页面
@@ -253,23 +263,25 @@ pub(crate) fn sync_webview_pool(
                 //   或失败时再退回 `navigator.clipboard`。`Cmd+Meta` 双键
                 //   都按,保证两套快捷键一致触发。用 `e.code` 判断,避免
                 //   键盘布局差异影响 `e.key`。
-                script.push_str(
-                    "(function(){var s=document.createElement('style');s.textContent=\"html,body,body *{cursor:text!important}a,a *,button,*[role='link'],*[role='button'],summary,*[onclick],label[for]{cursor:pointer!important}\";(document.head||document.documentElement).appendChild(s);document.addEventListener('keydown',function(e){if((e.ctrlKey||e.metaKey)&&e.code==='KeyC'){e.preventDefault();var ok=false;try{ok=document.execCommand('copy')}catch(_){}if(!ok){var g=window.getSelection&&window.getSelection();if(g&&g.toString()){try{navigator.clipboard.writeText(g.toString()).then(function(){},function(){})}catch(_){}}}}});})();",
-                );
-                // ⌘F 页内查找:webview 聚焦时按键被它吃掉、到不了 winit,也
-                // 不会像原生编辑器那样走应用层 Find 条。这里在捕获阶段拦截
-                // ⌘F(以及兼容 Ctrl+F),优先聚焦**页面自带的搜索框**——flyfish
-                // 预览的工具栏搜索输入框(native `type=search`)藏在
-                // `<flyfish-file-viewer>` 的 shadow root 里,所以要递归穿透
-                // shadow DOM 找;找得到就 focus+全选并 IPC 通知宿主把
-                // WKWebView 设为 first responder(否则输入落不进页面输入框),
-                // 找不到就 IPC 通知宿主退回 WKWebView 原生查找条
-                // (`findString:`)。用 `e.code==='KeyF'` 判键位,避免键盘布局
-                // 影响 `e.key`;`preventDefault` 挡住 WKWebView 对 ⌘F 的默认
-                // 处理(避免与页面输入的焦点争夺)。
-                script.push_str(
-                    "(function(){function _dozPick(root){var best=null;function walk(n){if(!n||n.nodeType!==1&&n.nodeType!==9&&n.nodeType!==11)return;var list=n.querySelectorAll?n.querySelectorAll('input[type=search]'):[];for(var i=0;i<list.length;i++){var el=list[i];if(el.disabled||el.readOnly)continue;if(!best)best=el;}if(!best){var any=n.querySelectorAll?n.querySelectorAll('input[type=text],input:not([type])'):[];for(var j=0;j<any.length;j++){var a=any[j];if(a.disabled||a.readOnly)continue;var box=a.closest&&(a.closest('[role=search]')||a.closest('.file-viewer-web-search')||a.closest('form[role=search]'));if(box){best=a;break;}}}var hosts=n.querySelectorAll?n.querySelectorAll('*'):[];for(var k=0;k<hosts.length;k++){var sr=hosts[k].shadowRoot;if(sr)walk(sr);}}walk(root||document);return best;}document.addEventListener('keydown',function(e){if((e.metaKey||e.ctrlKey)&&e.code==='KeyF'){e.preventDefault();var box=_dozPick(document);if(box){try{box.focus();if(box.select)box.select();}catch(_){}window.ipc.postMessage('find_page');}else{window.ipc.postMessage('find_native');}}},true);})();",
-                );
+                if editor_binding.is_none() {
+                    script.push_str(
+                        "(function(){var s=document.createElement('style');s.textContent=\"html,body,body *{cursor:text!important}a,a *,button,*[role='link'],*[role='button'],summary,*[onclick],label[for]{cursor:pointer!important}\";(document.head||document.documentElement).appendChild(s);document.addEventListener('keydown',function(e){if((e.ctrlKey||e.metaKey)&&e.code==='KeyC'){e.preventDefault();var ok=false;try{ok=document.execCommand('copy')}catch(_){}if(!ok){var g=window.getSelection&&window.getSelection();if(g&&g.toString()){try{navigator.clipboard.writeText(g.toString()).then(function(){},function(){})}catch(_){}}}}});})();",
+                    );
+                    // ⌘F 页内查找:webview 聚焦时按键被它吃掉、到不了 winit,也
+                    // 不会像原生编辑器那样走应用层 Find 条。这里在捕获阶段拦截
+                    // ⌘F(以及兼容 Ctrl+F),优先聚焦**页面自带的搜索框**——flyfish
+                    // 预览的工具栏搜索输入框(native `type=search`)藏在
+                    // `<flyfish-file-viewer>` 的 shadow root 里,所以要递归穿透
+                    // shadow DOM 找;找得到就 focus+全选并 IPC 通知宿主把
+                    // WKWebView 设为 first responder(否则输入落不进页面输入框),
+                    // 找不到就 IPC 通知宿主退回 WKWebView 原生查找条
+                    // (`findString:`)。用 `e.code==='KeyF'` 判键位,避免键盘布局
+                    // 影响 `e.key`;`preventDefault` 挡住 WKWebView 对 ⌘F 的默认
+                    // 处理(避免与页面输入的焦点争夺)。
+                    script.push_str(
+                        "(function(){function _dozPick(root){var best=null;function walk(n){if(!n||n.nodeType!==1&&n.nodeType!==9&&n.nodeType!==11)return;var list=n.querySelectorAll?n.querySelectorAll('input[type=search]'):[];for(var i=0;i<list.length;i++){var el=list[i];if(el.disabled||el.readOnly)continue;if(!best)best=el;}if(!best){var any=n.querySelectorAll?n.querySelectorAll('input[type=text],input:not([type])'):[];for(var j=0;j<any.length;j++){var a=any[j];if(a.disabled||a.readOnly)continue;var box=a.closest&&(a.closest('[role=search]')||a.closest('.file-viewer-web-search')||a.closest('form[role=search]'));if(box){best=a;break;}}}var hosts=n.querySelectorAll?n.querySelectorAll('*'):[];for(var k=0;k<hosts.length;k++){var sr=hosts[k].shadowRoot;if(sr)walk(sr);}}walk(root||document);return best;}document.addEventListener('keydown',function(e){if((e.metaKey||e.ctrlKey)&&e.code==='KeyF'){e.preventDefault();var box=_dozPick(document);if(box){try{box.focus();if(box.select)box.select();}catch(_){}window.ipc.postMessage('find_page');}else{window.ipc.postMessage('find_native');}}},true);})();",
+                    );
+                }
                 if report_title {
                     script.push_str("window.__dozer_webview=");
                     script.push_str(webview_id.to_string().as_str());
@@ -315,6 +327,9 @@ pub(crate) fn sync_webview_pool(
                             "zoom_reset" => {
                                 let _ = ipc_proxy.send_event(Message::ZoomReset);
                             }
+                            "focus" => {
+                                let _ = ipc_proxy.send_event(Message::WebViewFocused);
+                            }
                             // ⌘F 页内查找:JS 找到并聚焦了页面自带搜索框
                             // (`find_page`),或没找到、要退回原生查找条
                             // (`find_native`)。二者的原生副作用(设 first
@@ -346,7 +361,33 @@ pub(crate) fn sync_webview_pool(
                                 }
                             }
                             _ => {
-                                let _ = ipc_proxy.send_event(Message::WebViewFocused);
+                                if let Some(binding) = editor_binding.as_ref() {
+                                    match crate::preview::parse_event(body) {
+                                        Ok(event) => {
+                                            let expected = crate::preview::HostBinding::new(
+                                                binding.project_id,
+                                                binding.panel,
+                                                binding.tab_id,
+                                                binding.document_id(),
+                                            );
+                                            if let Err(error) = event.validate(&expected) {
+                                                tracing::warn!(%error, "拒绝无效 editor IPC");
+                                            } else {
+                                                let _ = ipc_proxy.send_event(
+                                                    Message::EditorWebviewEvent(
+                                                        binding.clone(),
+                                                        event,
+                                                    ),
+                                                );
+                                            }
+                                        }
+                                        Err(error) => {
+                                            tracing::warn!(%error, "无法解析 editor IPC");
+                                        }
+                                    }
+                                } else {
+                                    let _ = ipc_proxy.send_event(Message::WebViewFocused);
+                                }
                             }
                         }
                     });

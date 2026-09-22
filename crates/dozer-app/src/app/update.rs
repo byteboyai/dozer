@@ -37,6 +37,80 @@ use super::*;
 impl App {
     pub fn update(&mut self, message: Message) {
         match message {
+            Message::EditorWebviewEvent(binding, event) => {
+                self.with_project(binding.project_id, move |ws, _io| {
+                    let pane = if binding.panel == PanelKind::Project {
+                        &mut ws.project_preview
+                    } else {
+                        &mut ws.preview
+                    };
+                    let Some(tab) = pane
+                        .tabs_mut()
+                        .iter_mut()
+                        .find(|tab| tab.id == binding.tab_id)
+                    else {
+                        return;
+                    };
+                    let crate::preview::TabKind::File(path) = &tab.kind else {
+                        return;
+                    };
+                    if path != &binding.path || event.revision < tab.web_revision {
+                        return;
+                    }
+                    use crate::preview::EditorEvent;
+                    match event.payload {
+                        EditorEvent::Ready { .. } => {
+                            tab.web_revision = event.revision;
+                            tab.web_error = None;
+                            let _ = tab
+                                .backend_state
+                                .try_transition(crate::preview::BackendState::Ready);
+                        }
+                        EditorEvent::SelectionChanged { anchor, head, .. } => {
+                            tab.web_revision = event.revision;
+                            tab.web_selection = Some(crate::preview::TextRange {
+                                start: anchor,
+                                end: head,
+                            });
+                        }
+                        EditorEvent::ViewportChanged { from_line, to_line } => {
+                            tab.web_revision = event.revision;
+                            tab.web_viewport = Some((from_line, to_line));
+                        }
+                        EditorEvent::DocumentChanged { revision, .. } => {
+                            if revision == event.revision && revision >= tab.web_revision {
+                                tab.web_revision = revision;
+                                tab.dirty = true;
+                            }
+                        }
+                        EditorEvent::SaveRequested { revision, text } => {
+                            if revision != event.revision || revision != tab.web_revision {
+                                return;
+                            }
+                            match crate::preview::save_text_atomic(path, &text) {
+                                Ok(()) => tab.dirty = false,
+                                Err(error) => tab.web_error = Some(format!("保存失败: {error}")),
+                            }
+                        }
+                        EditorEvent::ViewState { selection, .. } => {
+                            tab.web_revision = event.revision;
+                            tab.web_selection = selection;
+                        }
+                        EditorEvent::Failed {
+                            message,
+                            recoverable,
+                        } => {
+                            tab.web_error = Some(message.clone());
+                            let _ = tab.backend_state.try_transition(
+                                crate::preview::BackendState::Failed(
+                                    crate::preview::PreviewError::new(message, recoverable),
+                                ),
+                            );
+                        }
+                        EditorEvent::FocusChanged { .. } => {}
+                    }
+                });
+            }
             Message::TermInput(target, bytes) => self.term_input(target, bytes),
             Message::TermImePreedit(target, text) => {
                 if target == self.keyboard_term_target() {

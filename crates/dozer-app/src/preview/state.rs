@@ -71,6 +71,12 @@ pub struct PreviewTab {
     /// backend 生命周期状态。迁移期与旧的 `loading` 字段并存,`loading` 仍是
     /// 渲染侧的实际判据(行为不变),本字段用于状态机与后续阶段。
     pub backend_state: BackendState,
+    /// CodeMirror host 的轻量镜像；正文仍由 WebView 持有，Rust 只保留 Agent、
+    /// 保存和过期事件校验所需状态。
+    pub web_revision: u64,
+    pub web_selection: Option<crate::preview::TextRange>,
+    pub web_viewport: Option<(u32, u32)>,
+    pub web_error: Option<String>,
 }
 
 impl PreviewTab {
@@ -86,15 +92,20 @@ impl PreviewTab {
         }
         self.backend.as_ref().is_some_and(|backend| {
             backend.hosts_webview()
-                || (matches!(self.backend_state, BackendState::Failed(_))
-                    && self.editor.is_none()
+                || (self.editor.is_none()
                     && self.tabular.is_none()
-                    && self.json_tree.is_none())
+                    && self.json_tree.is_none()
+                    && (!self.uses_codemirror()
+                        || matches!(self.backend_state, BackendState::Failed(_))))
         })
     }
 
     pub fn current_mode(&self) -> Option<PreviewMode> {
         self.backend.as_ref().map(PreviewBackend::current_mode)
+    }
+
+    pub fn uses_codemirror(&self) -> bool {
+        codemirror_enabled() && matches!(self.backend, Some(PreviewBackend::Code(_)))
     }
 
     /// debug/test 下断言 backend 描述与旧 adapter 字段一致:任何迁移漏点
@@ -147,6 +158,10 @@ impl std::fmt::Debug for PreviewTab {
             .field("route", &self.route)
             .field("backend", &self.backend)
             .field("backend_state", &self.backend_state)
+            .field("web_revision", &self.web_revision)
+            .field("web_selection", &self.web_selection)
+            .field("web_viewport", &self.web_viewport)
+            .field("web_error", &self.web_error)
             .finish()
     }
 }

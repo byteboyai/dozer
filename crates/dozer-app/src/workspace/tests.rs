@@ -975,6 +975,7 @@ fn write_temp_file(name: &str, content: &str) -> (tempfile::TempDir, PathBuf) {
     (dir, path)
 }
 
+#[cfg(not(feature = "codemirror"))]
 #[test]
 fn active_preview_tab_has_native_editor_reflects_active_tab_kind() {
     let (_dir_rs, rs_path) = write_temp_file("a.rs", "fn main() {}");
@@ -998,6 +999,7 @@ fn active_preview_tab_has_native_editor_reflects_active_tab_kind() {
     );
 }
 
+#[cfg(not(feature = "codemirror"))]
 #[test]
 fn active_preview_tab_has_native_editor_checks_project_preview_independently() {
     let (_dir_rs, rs_path) = write_temp_file("a.rs", "fn main() {}");
@@ -1018,6 +1020,7 @@ fn active_preview_tab_has_native_editor_checks_project_preview_independently() {
     );
 }
 
+#[cfg(not(feature = "codemirror"))]
 #[test]
 fn preview_pane_undo_active_reverts_edit_and_marks_dirty() {
     use iced_widget::text_editor::{Action, Edit, Motion};
@@ -1051,6 +1054,7 @@ fn preview_pane_undo_active_reverts_edit_and_marks_dirty() {
     assert_eq!(ws.preview.editor_mut(id).unwrap().text(), "ab");
 }
 
+#[cfg(not(feature = "codemirror"))]
 #[test]
 fn preview_pane_redo_active_reapplies_undone_edit_and_marks_dirty() {
     use iced_widget::text_editor::{Action, Edit, Motion};
@@ -1097,6 +1101,7 @@ fn blur_preview_editors_sets_pending_unfocus_flag() {
     assert!(!ws.take_editor_unfocus_pending(), "消费式:取走后应复位");
 }
 
+#[cfg(not(feature = "codemirror"))]
 #[test]
 fn blur_inputs_keep_native_preview_editor_skips_pending_unfocus() {
     let (_dir, path) = write_temp_file("a.txt", "hi");

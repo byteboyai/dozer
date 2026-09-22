@@ -12,6 +12,7 @@ mod file_profile;
 mod native_editor;
 mod router;
 mod state;
+mod text_save;
 mod view;
 mod webview;
 mod webview_protocol;
@@ -21,6 +22,7 @@ pub(crate) use file_profile::*;
 pub(crate) use native_editor::*;
 pub(crate) use router::*;
 pub(crate) use state::*;
+pub(crate) use text_save::*;
 pub(crate) use view::*;
 pub(crate) use webview::*;
 // `code_host` / `webview_protocol` 是 Phase B 新增的通用契约模块,当前只在

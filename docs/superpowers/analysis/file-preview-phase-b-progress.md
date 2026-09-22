@@ -52,37 +52,44 @@
 - `crates/dozer-app/Cargo.toml`:`[features] codemirror = []`(开发开关,
   默认关闭 → 用户可见行为不变)。
 
-## 刻意未接线(下一轮)
+## 已接通的运行时垂直切片
 
-运行时的深度接线会改到多个**热点共享文件**(`preview/view.rs`、
-`preview/state.rs`、`app/update.rs`、`runtime.rs`、`platform/window_events.rs`),
-本轮为保证不与其他并行改动冲突、并保持树常绿,未落地。具体步骤:
+- feature 开启时 `PreviewKind::Code` 不再进入异步 iced editor load；同步创建
+  轻量 tab，正文由 editor host 经白名单 scheme 读取。JSON/Streamed 仍保留
+  原路径，feature 关闭行为不变。
+- App 按 project/panel 为 Code tab 生成 `EditorHostBinding` 与 editor
+  `WebviewSpec`；Files/Project 继续使用现有 pool id 偏移。
+- runtime 创建 WebView 时捕获 Rust 可信 binding，解析、校验 envelope 后才派发
+  `EditorWebviewEvent`；同 pool key 的 host 类型变化会重建 WebView，避免复用旧
+  IPC closure。editor 不注入会抢占 CodeMirror Cmd/Ctrl-C、Cmd/Ctrl-F 的通用脚本。
+- `PreviewTab` 镜像 revision、selection、viewport 与错误；App 处理 ready、change、
+  save、view state 与 failed，并拒绝 binding/path 不匹配、revision 回退或 payload/
+  envelope revision 不一致的事件。
+- iced 渲染层不再重复绘制 CodeMirror tab。
+- **原子保存**(`preview/text_save.rs`):`save_text_atomic` 读原文件约定 → 编码
+  → 同目录临时文件 → `flush`+`sync_all` → `rename` 覆盖;保持 UTF-8 BOM 与原
+  换行约定(原文件以 CRLF 为主则写回 CRLF;`fetch().text()` 会丢 BOM,保存时
+  按原件补回)。`SaveRequested` 已改走它,失败只置 `web_error`、保留 dirty。
+- `hosts_webview` 增加旧行为兜底子句(非 CodeMirror tab 在读盘失败等情况下仍
+  退回 Flyfish),避免 feature 关闭时同步 push_tab 失败路径出现空白页。
 
-1. **pane 绑定元数据**:给 `PreviewPane` 加 `project_id: Option<i64>` 与
-   `panel: PanelKind`,`Workspace::from_restore` 注入(Files/Project 各一份)。
-2. **路由开关**:`is_native_editor_candidate` 与 `push_tab` 的 native_load 分支
-   在 `codemirror_enabled()` 时跳过老 iced editor(`PreviewKind::Code`)。
-3. **desired_webviews**:`backend.kind()==Code && codemirror_enabled()` 的文件 tab
-   产出 `EditorHostBinding::url(...)` 的 `WebviewSpec`(`hosts_webview` 在
-   `editor.is_none()` 时已为真,无需改)。
-4. **runtime 分流**:`sync_webview_pool` 按 `is_editor_url(&spec.url)` 走不同
-   builder:editor host 不注入 flyfish 脚本,IPC 只把 body 作为
-   `Message::EditorIpc(webview_id, body)` 回传。
-5. **IPC 派发**:`App::update` 处理 `EditorIpc`:`parse_event` → 反解
-   `(panel, tab_id)` → 按 tab 建 `HostBinding` → `validate`;`SaveRequested`
-   走原子保存(同目录临时文件 + rename,保持 BOM/换行),清 dirty;
-   `SelectionChanged`/`ViewportChanged` 节流后推 `preview_context`;
-   `Failed` 落 `BackendState::Failed` 并给外部打开 fallback。
-6. **Rust→编辑器**:`Message::EditorCommand { panel, tab_id, command }` →
-   在事件环里 `evaluate_script("window.__dozer.dispatch(<envelope>)")`。
-7. **Task 5/6/7**:折叠/reveal/select 全链路、`PreviewContext` 四 crate 扩展、
-   路由切换验收。
+## 仍未完成(后续 Task 4–7)
+
+1. Rust→编辑器命令要接入事件环的 `evaluate_script`，完成 Agent reveal/select/
+   replace、外部 reload 和视图状态恢复(`EditorCommand`/`encode_command` 已就绪,
+   缺派发)。
+2. selection/viewport 推到 daemon/MCP `PreviewContext`；增加节流、tab 切换/关闭
+   flush、selected text 上限和 revision 冲突测试。
+3. 非 UTF-8 文件只读化(当前 editor host 对非 UTF-8 走 `text()` lossy 解码)。
+4. 完成大文件预算/休眠唤醒、失败后外部打开 fallback，以及 Task 5/6/7 的完整
+   搜索、折叠、导航与旧 editor 移除验收。
 
 ## 验证
 
-- `cargo check -p dozer-app --all-targets`、`--features codemirror`:通过。
-- `cargo test -p dozer-app`:1185 passed,唯一失败为改动前既有的
-  `agent_icon_maps_each_kind_to_brand_icon`。
+- `cargo check -p dozer-app` 默认与 `--features codemirror`:通过。
+- `cargo test -p dozer-app` 默认 **1191 passed**、`--features codemirror` **1174
+  passed**;两者都只剩改动前已存在的 `agent_icon_maps_each_kind_to_brand_icon`
+  一项失败(另有 1 ignored)。
 - `cargo fmt --check`、`cargo clippy -p dozer-app --all-targets`:仅剩既有
   `file_history.rs` warning。
-- 前端:`npm run typecheck`、`npm test`(6 passed)、`npm run build` 均通过。
+- 前端:`npm run typecheck`、`npm test`(6 passed)、`npm run build`:通过。

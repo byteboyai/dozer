@@ -241,6 +241,7 @@ impl Tabs {
                 id: tab.id,
                 url: tab.url.clone(),
                 visible: idx == self.active,
+                editor_binding: None,
             })
             .collect()
     }

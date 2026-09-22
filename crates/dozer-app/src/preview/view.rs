@@ -29,6 +29,10 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         route: None,
         backend: None,
         backend_state: BackendState::Ready,
+        web_revision: 0,
+        web_selection: None,
+        web_viewport: None,
+        web_error: None,
     }
 }
 
@@ -59,10 +63,13 @@ pub(crate) fn route_and_backend(
 /// (表格/webview 类,同步、本来就不慢)。
 pub(crate) fn is_native_editor_candidate(path: &std::path::Path) -> bool {
     let (route, _, _) = route_and_backend(path, &crate::capabilities::current());
-    matches!(
-        route.kind,
-        PreviewKind::Code | PreviewKind::Json | PreviewKind::Streamed
-    )
+    match route.kind {
+        // feature 打开后 Code tab 由 editor WebView 自己按 allowlist URL
+        // 读取正文，不再异步构造一份隐藏的 iced CodeView。
+        PreviewKind::Code => !codemirror_enabled(),
+        PreviewKind::Json | PreviewKind::Streamed => true,
+        _ => false,
+    }
 }
 
 /// Find 输入框的稳定 `widget::Id`。Files / Project 两个预览面板各渲染一根
@@ -249,10 +256,8 @@ impl PreviewPane {
         let native_load = match &kind {
             TabKind::File(path)
                 if route.as_ref().is_some_and(|route| {
-                    matches!(
-                        route.kind,
-                        PreviewKind::Code | PreviewKind::Json | PreviewKind::Streamed
-                    )
+                    matches!(route.kind, PreviewKind::Json | PreviewKind::Streamed)
+                        || (route.kind == PreviewKind::Code && !codemirror_enabled())
                 }) =>
             {
                 read_and_build_native_editor(path).ok()
@@ -329,6 +334,10 @@ impl PreviewPane {
             route,
             backend,
             backend_state,
+            web_revision: 0,
+            web_selection: None,
+            web_viewport: None,
+            web_error: None,
         };
         tab.debug_assert_backend_consistent();
         self.tabs.push(tab);
@@ -386,6 +395,10 @@ impl PreviewPane {
             route,
             backend,
             backend_state: BackendState::Loading,
+            web_revision: 0,
+            web_selection: None,
+            web_viewport: None,
+            web_error: None,
         };
         tab.debug_assert_backend_consistent();
         self.tabs.push(tab);
@@ -629,6 +642,42 @@ impl PreviewPane {
                     id: tab.id,
                     url: u,
                     visible: idx == self.active,
+                    editor_binding: None,
+                })
+            })
+            .collect()
+    }
+
+    pub fn desired_editor_webviews(
+        &self,
+        project_id: i64,
+        panel: crate::app::PanelKind,
+    ) -> Vec<WebviewSpec> {
+        if !codemirror_enabled() {
+            return Vec::new();
+        }
+        self.tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, tab)| {
+                let TabKind::File(path) = &tab.kind else {
+                    return None;
+                };
+                let PreviewBackend::Code(code) = tab.backend.as_ref()? else {
+                    return None;
+                };
+                if tab.loading || !tab.backend_state.is_ready() {
+                    return None;
+                }
+                let binding = EditorHostBinding::new(project_id, panel, tab.id, path.clone());
+                Some(WebviewSpec {
+                    id: tab.id,
+                    url: binding.url(
+                        scheme_query_value(),
+                        matches!(code.mode, CodeMode::ReadOnly),
+                    ),
+                    visible: idx == self.active,
+                    editor_binding: Some(binding),
                 })
             })
             .collect()
@@ -1513,6 +1562,7 @@ mod tests {
         assert!(p.large_file_search.is_none());
     }
 
+    #[cfg(not(feature = "codemirror"))]
     #[test]
     fn bump_reload_rebuilds_native_editor_without_bumping_nonce() {
         let path =
@@ -1545,6 +1595,7 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
+    #[cfg(not(feature = "codemirror"))]
     #[test]
     fn opening_native_editor_tab_sets_pending_focus() {
         // 官方 `text_editor` 的焦点是真实 iced 焦点树的一部分,构造时不能
@@ -1576,6 +1627,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "codemirror"))]
     #[test]
     fn active_tab_is_native_only_when_active_editor_holds_codeview() {
         let mut p = PreviewPane::default();
@@ -1598,6 +1650,7 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
+    #[cfg(not(feature = "codemirror"))]
     #[test]
     fn open_path_builds_native_editor_for_whitelisted_extension_only() {
         let dir = std::env::temp_dir();
@@ -2113,6 +2166,7 @@ mod tests {
         std::fs::remove_file(&rs_path).ok();
     }
 
+    #[cfg(not(feature = "codemirror"))]
     #[test]
     fn select_reloads_webview_tab_on_switch_but_not_same_or_native() {
         let mut p = PreviewPane::default();
@@ -2272,6 +2326,7 @@ mod tests {
         assert_eq!(encode_component("你"), "%E4%BD%A0");
     }
 
+    #[cfg(not(feature = "codemirror"))]
     #[test]
     fn dirty_marker_lifecycle_for_native_tab() {
         // 原生可写 tab 就地编辑:编辑事件标脏 → ⌘S 落盘清脏(mark/clear 按 id)。
@@ -2311,6 +2366,7 @@ mod tests {
         assert!(!p.tabs()[1].dirty, "非原生 tab 不该被标脏");
     }
 
+    #[cfg(not(feature = "codemirror"))]
     #[test]
     fn bump_reload_discards_pending_dirty_for_native_tab() {
         // 右键"刷新"重建原生 editor 会丢弃未保存改动 → 脏标记一并清零(保存
@@ -2430,6 +2486,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "codemirror"))]
     #[test]
     fn open_find_binds_to_active_tab_native_or_webview() {
         let tmp = |name: &str| {
@@ -2496,6 +2553,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "codemirror"))]
     #[test]
     fn open_find_same_tab_keeps_query_and_cursor_on_nav() {
         let path = std::env::temp_dir().join(format!("find_nav_{}.rs", std::process::id()));
@@ -2557,6 +2615,7 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
+    #[cfg(not(feature = "codemirror"))]
     #[test]
     fn find_go_wraps_across_multiple_matches() {
         let path = std::env::temp_dir().join(format!("find_wrap_{}.rs", std::process::id()));
@@ -2636,6 +2695,7 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
+    #[cfg(not(feature = "codemirror"))]
     #[test]
     fn clear_all_and_close_native_drop_find() {
         let tmp = |name: &str, content: &str| {
@@ -2673,6 +2733,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "codemirror"))]
     #[test]
     fn replace_all_rewrites_buffer_marks_dirty_and_refreshes_count() {
         let tmp = std::env::temp_dir().join(format!("pane_replace_all_{}.rs", std::process::id()));
@@ -2703,6 +2764,7 @@ mod tests {
         std::fs::remove_file(tmp).ok();
     }
 
+    #[cfg(not(feature = "codemirror"))]
     #[test]
     fn replace_current_targets_only_the_locked_occurrence_then_advances() {
         let tmp = std::env::temp_dir().join(format!("pane_replace_cur_{}.rs", std::process::id()));
@@ -2929,5 +2991,40 @@ mod tests {
                 "路由必须带可展示 reason"
             );
         }
+    }
+
+    /// Phase B 垂直切片:feature 开启时 Code tab 不再构造 iced CodeView，
+    /// 而是产出带可信 host binding 的 editor WebView spec。
+    #[cfg(feature = "codemirror")]
+    #[test]
+    fn code_tab_routes_to_bound_editor_webview_when_feature_is_enabled() {
+        let path = std::env::temp_dir().join(format!(
+            "codemirror_vertical_slice_{}.rs",
+            std::process::id()
+        ));
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+
+        let mut pane = PreviewPane::default();
+        let tab_id = pane.open_path(path.clone());
+        let tab = &pane.tabs()[pane.active_idx()];
+        assert!(matches!(tab.backend, Some(PreviewBackend::Code(_))));
+        assert!(
+            tab.editor.is_none(),
+            "feature 开启后不应再构造 iced CodeView"
+        );
+
+        let specs = pane.desired_editor_webviews(42, crate::app::PanelKind::Files);
+        assert_eq!(specs.len(), 1);
+        let spec = &specs[0];
+        assert_eq!(spec.id, tab_id);
+        assert!(spec.visible);
+        assert!(is_editor_url(&spec.url));
+        let binding = spec.editor_binding.as_ref().expect("必须携带 host binding");
+        assert_eq!(binding.project_id, 42);
+        assert_eq!(binding.panel, crate::app::PanelKind::Files);
+        assert_eq!(binding.tab_id, tab_id);
+        assert_eq!(binding.path, path);
+
+        std::fs::remove_file(path).ok();
     }
 }

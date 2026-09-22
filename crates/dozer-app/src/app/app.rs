@@ -2924,7 +2924,7 @@ impl App {
                 Side::Left => self.left_view,
                 Side::Right => self.right_view,
             };
-            let (specs, id_offset): (Vec<WebviewSpec>, usize) = match kind {
+            let (mut specs, id_offset): (Vec<WebviewSpec>, usize) = match kind {
                 PanelKind::Files => (ws.preview.desired_webviews(), 0),
                 PanelKind::Project => (
                     ws.project_preview.desired_webviews(),
@@ -2936,6 +2936,19 @@ impl App {
                 ),
                 _ => continue,
             };
+            if let Some(project) = &ws.project {
+                match kind {
+                    PanelKind::Files => specs.extend(
+                        ws.preview
+                            .desired_editor_webviews(project.id, PanelKind::Files),
+                    ),
+                    PanelKind::Project => specs.extend(
+                        ws.project_preview
+                            .desired_editor_webviews(project.id, PanelKind::Project),
+                    ),
+                    _ => {}
+                }
+            }
             // tab 栏"溢出下拉"(V 按钮)向下弹,原生浮层会被本侧 webview
             // 盖住(webview 恒在 iced 内容之上)——按该侧对应的
             // `*_tab_overflow_anchor` 是否展开,同 `app_modal_open` 一并

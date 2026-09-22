@@ -656,6 +656,12 @@ pub enum Message {
     /// 退回调 WKWebView 原生 `findString:withConfiguration:completionHandler:`
     /// 弹出 macOS 系统查找条。`usize` 是 webview 池 key。见 `runtime.rs`。
     WebViewFindNative(usize),
+    /// CodeMirror host 发回的已校验协议事件。binding 由 Rust 创建 WebView 时
+    /// 捕获，不采信 JS 自报路径。
+    EditorWebviewEvent(
+        crate::preview::EditorHostBinding,
+        crate::preview::WebviewEnvelope<crate::preview::EditorEvent>,
+    ),
     /// 顶栏设置齿轮:打开设置弹窗(独立原生窗口,主题 + Git 账户)。
     SettingsOpen,
     /// 设置弹窗内部消息,转发给 `extensions::settings::update`。
