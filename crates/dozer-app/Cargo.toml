@@ -11,10 +11,12 @@ path = "src/main.rs"
 # CodeMirror editor host 已通过真机验收(查看/编辑/保存/搜索/折叠/中文 IME/
 # 大文件窗口/JSON Text/CSV 原文/md source),现**默认开启**。保留 feature 名以便
 # `--no-default-features` 回退到老 iced 编辑器(Phase D 删除阶段的回退点)。
-default = ["codemirror"]
+# CodeMirror editor host 与 vanilla-jsoneditor(严格 JSON Tree)均通过真机对照,
+# 现默认开启。`--no-default-features` 仍回退到老 iced 编辑器(Phase D 删除阶段的
+# 回退点)。JSONL/超大 JSON 的 streamed 能力仍由自研 `json_tree` 承载。
+default = ["codemirror", "json-editor"]
 codemirror = []
-# 对照期开关:严格 JSON 的 Tree 视图改用 `dozer://json-editor/`(vanilla-jsoneditor)。
-# 默认关闭 → 仍用自研 `json_tree`;通过功能对照后再转默认并删自研树。
+# 严格 JSON 的 Tree 视图改用 `dozer://json-editor/`(vanilla-jsoneditor)。
 json-editor = []
 
 [dependencies]
