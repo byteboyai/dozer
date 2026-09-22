@@ -59,8 +59,10 @@ impl EditorHostBinding {
     /// editor host 页面 URL。路径逐段百分号编码(保留 `/`);`theme` 跟随全局
     /// 配色方案,`ro` / `lang` 给首屏直接渲染用,Rust 侧仍会以绑定为准校验。
     pub fn url(&self, theme: &str, read_only: bool) -> String {
+        // `fs`/`lh`:终端同款等宽字号与行高倍数(基准值,不含全局 scale——
+        // WebView 的 pageZoom 已承担缩放),让编辑器与 PTY 观感一致。
         format!(
-            "{EDITOR_URL_PREFIX}index.html?p={}&theme={}&ro={}&doc={}&proj={}&panel={}&tab={}&lang={}",
+            "{EDITOR_URL_PREFIX}index.html?p={}&theme={}&ro={}&doc={}&proj={}&panel={}&tab={}&lang={}&fs={}&lh={}",
             encode_path(&self.path),
             theme,
             if read_only { 1 } else { 0 },
@@ -69,6 +71,8 @@ impl EditorHostBinding {
             self.panel_token(),
             self.tab_id,
             super::extension_to_syntax(&self.path),
+            crate::theme::terminal_font::size(),
+            crate::theme::terminal_font::line_height_factor(),
         )
     }
 }

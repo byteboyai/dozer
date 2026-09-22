@@ -131,6 +131,32 @@ function post(event: EditorEvent, requestId: string | null = null): void {
   }
 }
 
+function postRaw(body: string): void {
+  const ipc = (window as unknown as { ipc?: { postMessage: (s: string) => void } }).ipc;
+  ipc?.postMessage(body);
+}
+
+// 全局 UI 缩放:Ctrl/Cmd + `=`/`+`/`-`/`1`。webview 聚焦时按键到不了 winit
+// (全局缩放在那里处理),这里在捕获阶段拦下并转发宿主——与 flyfish 注入脚本
+// 同一约定。否则编辑器聚焦后 Ctrl++/- 无效。
+document.addEventListener(
+  'keydown',
+  (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    if (e.code === 'Equal' || e.key === '+' || e.key === '=') {
+      e.preventDefault();
+      postRaw('zoom_in');
+    } else if (e.code === 'Minus' || e.key === '-') {
+      e.preventDefault();
+      postRaw('zoom_out');
+    } else if (e.code === 'Digit1' || e.key === '1') {
+      e.preventDefault();
+      postRaw('zoom_reset');
+    }
+  },
+  true,
+);
+
 function offsetToPosition(offset: number): Position {
   const line = view.state.doc.lineAt(offset);
   // 对外坐标:窗口化时换算成全局 1-based 行号。

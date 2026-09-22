@@ -87,6 +87,11 @@ function highlight(p: Palette): HighlightStyle {
 }
 
 function baseTheme(p: Palette): Extension {
+  // 与 PTY 终端一致的字号/行高(由 Rust 经 URL `fs`/`lh` 传入,基准值不含
+  // 全局 scale——WebView pageZoom 负责缩放)。
+  const params = new URLSearchParams(location.search);
+  const fontSize = Number(params.get('fs')) || 14;
+  const lineHeight = Number(params.get('lh')) || 1.2;
   return EditorView.theme(
     {
       '&': {
@@ -96,8 +101,8 @@ function baseTheme(p: Palette): Extension {
       },
       '.cm-scroller': {
         fontFamily: 'JetBrains Mono, ui-monospace, SFMono-Regular, monospace',
-        fontSize: '13px',
-        lineHeight: '1.5',
+        fontSize: `${fontSize}px`,
+        lineHeight: String(lineHeight),
       },
       '.cm-content': { caretColor: p.cursor },
       '.cm-cursor, .cm-dropCursor': { borderLeftColor: p.cursor },
