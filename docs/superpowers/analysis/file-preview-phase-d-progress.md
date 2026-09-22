@@ -106,3 +106,24 @@
 - `cargo test -p dozer-app`:默认 **1254 passed / 0 failed**、feature **1235
   passed / 0 failed**(另有 1 ignored)。
 - `cargo fmt --check`、`cargo clippy` 干净(仅既有 `file_history.rs` warning)。
+
+## 2026-09-22 补充:老 iced editor 物理删除 + 消息/菜单清理 + 窗口化搜索条接线
+
+- `086bb38d` **物理删除**老 iced `CodeView`(运行时已无构造路径的死代码清理):
+  删 `code_editor/{mod,highlighter}.rs`、`native_editor` 收敛为路由纯函数、
+  `PreviewTab` 去 editor 字段、workspace/app 清 iced 分支、移除 `syntect`/
+  `two-face`。`cargo test -p dozer-app` **1193 passed**(legacy iced 测试经
+  `cfg(any())` 停用,数量由 1254 降至此)。
+- `5b8190b9` **消息/菜单清理**:删除无构造路径的 iced 专属消息与处理
+  (`PreviewFileLoaded/LoadMore/MoreLoaded`、`PreviewEditorEvent`、
+  `ProjectPreviewEditorEvent/FileLoaded`、`PreviewEditorContextMenuOpen/Copy/
+  Cut/Paste/Format`)及其 NSMenu/iced 弹层装配、`editor_context_menu` 状态、
+  clipboard/focus-id 接线;顺带删除失效的 `apply_native_load` 等方法。
+- **修复窗口化整文件搜索回归**:此前搜索条的渲染随 iced editor 分支一并被删,
+  窗口化 ⌘F/⌘R(host `find_request`)会开出一个不可见的 session。现补回
+  `large_file_search_state` 访问器并新增 `preview_large_file_search_bar_widget`
+  (查询框 + n/m + 上/下 + 关闭),`PreviewFindOpen/WithReplace` 亦按
+  `uses_windowed_editor` 分流到该条;`preview_desired` 在条打开时把 editor
+  webview 矩形下推一个条高让位。
+- 仍待:窗口化搜索条的 Esc 关闭/程序化聚焦(host webview 持焦点,键不进 Rust
+  预览闸门);Task 6 Tabular 原文/上下文;Task 8 路由矩阵真机验收。
