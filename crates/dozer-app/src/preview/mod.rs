@@ -7,12 +7,14 @@
 //! 地址栏,这里只保留文件/验收两种 tab。
 
 mod backend;
+mod code_host;
 mod file_profile;
 mod native_editor;
 mod router;
 mod state;
 mod view;
 mod webview;
+mod webview_protocol;
 
 pub(crate) use backend::*;
 pub(crate) use file_profile::*;
@@ -21,3 +23,9 @@ pub(crate) use router::*;
 pub(crate) use state::*;
 pub(crate) use view::*;
 pub(crate) use webview::*;
+// `code_host` / `webview_protocol` 是 Phase B 新增的通用契约模块,当前只在
+// 本模块内(及各自单测)使用;host 运行时接线完成后再对外 re-export。
+#[allow(unused_imports)]
+pub(crate) use code_host::*;
+#[allow(unused_imports)]
+pub(crate) use webview_protocol::*;

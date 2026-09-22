@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <!-- 严格 CSP:脚本/样式/字体仅 self,禁网络、frame、任意导航、任意脚本
+         执行与任意连接。CodeMirror 会动态注入内联 style,故 style-src 需
+         'unsafe-inline'(仅样式,不含脚本)。 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dozer Editor</title>
+    <link rel="stylesheet" href="editor.css" />
+  </head>
+  <body>
+    <div id="editor"></div>
+    <script src="editor.js"></script>
+  </body>
+</html>

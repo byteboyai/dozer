@@ -95,9 +95,60 @@ fn mime_for(path: &Path) -> &'static str {
         "pdf" => "application/pdf",
         "woff2" => "font/woff2",
         "woff" => "font/woff",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
         "txt" => "text/plain",
         _ => "application/octet-stream",
     }
+}
+
+/// vendored 静态资源服务:逐段百分号解码 + 拒绝路径穿越(编码形态也拦得住),
+/// 从 `root` 下读文件。flyfish 与 editor 两个命名空间共用。
+fn serve_vendored(root: &Path, encoded_path: &str) -> ProtocolReply {
+    let mut full = root.to_path_buf();
+    for seg in encoded_path.split('/') {
+        let Some(seg) = percent_decode(seg) else {
+            return not_found();
+        };
+        if seg.is_empty() || seg == ".." || seg == "." || seg.contains('/') || seg.contains('\0') {
+            return not_found();
+        }
+        full.push(seg);
+    }
+    match std::fs::read(&full) {
+        Ok(body) => ProtocolReply {
+            status: 200,
+            mime: mime_for(&full),
+            body,
+        },
+        Err(_) => not_found(),
+    }
+}
+
+/// 本地文件端点 `__file__/<百分号编码的绝对路径>`:仅白名单内路径可读。
+fn serve_allowlisted_file(encoded: &str, allowed: &HashSet<PathBuf>) -> ProtocolReply {
+    let Some(decoded) = percent_decode(encoded) else {
+        return not_found();
+    };
+    let file = PathBuf::from(decoded);
+    if !allowed.contains(&file) {
+        return not_found();
+    }
+    match std::fs::read(&file) {
+        Ok(body) => ProtocolReply {
+            status: 200,
+            mime: mime_for(&file),
+            body,
+        },
+        Err(_) => not_found(),
+    }
+}
+
+/// editor host 静态资源根 = flyfish 根的兄弟目录 `editor`(dev 与打包态同构:
+/// `<assets>/flyfish` → `<assets>/editor` / `Resources/flyfish` →
+/// `Resources/editor`)。
+fn editor_root_for(flyfish_root: &Path) -> PathBuf {
+    flyfish_root.with_file_name("editor")
 }
 
 pub fn handle_protocol(
@@ -106,7 +157,7 @@ pub fn handle_protocol(
     review_data: Option<&str>,
     uri: &str,
 ) -> ProtocolReply {
-    // 剥离 scheme 与 query;只服务 flyfish/review-trace 两个命名空间。
+    // 剥离 scheme 与 query;只服务 flyfish/review-trace/editor 三个命名空间。
     let Some(rest) = uri.strip_prefix("dozer://") else {
         return not_found();
     };
@@ -134,49 +185,25 @@ pub fn handle_protocol(
         };
     }
 
+    // editor host:页面/脚本/样式/字体从 editor 根服务;`__file__/<abs>` 复用
+    // 同一份白名单读取当前预览文件。JS 不能自报任意路径(不入白名单即 404)。
+    if let Some(path) = rest.strip_prefix("editor/") {
+        if let Some(encoded) = path.strip_prefix("__file__") {
+            return serve_allowlisted_file(encoded, allowed);
+        }
+        return serve_vendored(&editor_root_for(assets_root), path);
+    }
+
     let Some(path) = rest.strip_prefix("flyfish/") else {
         return not_found();
     };
 
     // 本地文件端点:__file__/<百分号编码的绝对路径>(编码保留 '/')。
     if let Some(encoded) = path.strip_prefix("__file__") {
-        let Some(decoded) = percent_decode(encoded) else {
-            return not_found();
-        };
-        let file = PathBuf::from(decoded);
-        if !allowed.contains(&file) {
-            return not_found();
-        }
-        return match std::fs::read(&file) {
-            Ok(body) => ProtocolReply {
-                status: 200,
-                mime: mime_for(&file),
-                body,
-            },
-            Err(_) => not_found(),
-        };
+        return serve_allowlisted_file(encoded, allowed);
     }
 
-    // vendored 资产:先逐段解码,再拒绝路径穿越——编码形态也拦得住:
-    // %2e%2e 解码成 '..' 后才比较;%2F 解码出的 '/' 直接判拒。
-    let mut full = assets_root.to_path_buf();
-    for seg in path.split('/') {
-        let Some(seg) = percent_decode(seg) else {
-            return not_found();
-        };
-        if seg.is_empty() || seg == ".." || seg == "." || seg.contains('/') || seg.contains('\0') {
-            return not_found();
-        }
-        full.push(seg);
-    }
-    match std::fs::read(&full) {
-        Ok(body) => ProtocolReply {
-            status: 200,
-            mime: mime_for(&full),
-            body,
-        },
-        Err(_) => not_found(),
-    }
+    serve_vendored(assets_root, path)
 }
 
 #[cfg(test)]
@@ -341,6 +368,64 @@ mod tests {
         assert_eq!(percent_decode("%E4%BD%A0").as_deref(), Some("你"));
         assert_eq!(percent_decode("plain").as_deref(), Some("plain"));
         assert!(percent_decode("%GG").is_none());
+    }
+
+    /// 构造 `dir/flyfish` 根 + 兄弟 `dir/editor` 根(与真实 dev/打包态同构)。
+    fn scratch_editor() -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("dozer-assets-editor-{}", std::process::id()));
+        let flyfish = dir.join("flyfish");
+        let editor = dir.join("editor");
+        let _ = fs::create_dir_all(&editor);
+        fs::write(editor.join("index.html"), b"<!doctype html>").unwrap();
+        fs::write(editor.join("editor.js"), b"js").unwrap();
+        (flyfish, editor)
+    }
+
+    #[test]
+    fn serves_editor_host_and_assets() {
+        let (flyfish, _editor) = scratch_editor();
+        let r = handle_protocol(
+            &flyfish,
+            &HashSet::new(),
+            None,
+            "dozer://editor/index.html?v=1",
+        );
+        assert_eq!((r.status, r.mime), (200, "text/html"));
+        let r = handle_protocol(&flyfish, &HashSet::new(), None, "dozer://editor/editor.js");
+        assert_eq!((r.status, r.mime), (200, "text/javascript"));
+    }
+
+    #[test]
+    fn editor_file_endpoint_requires_allowlist() {
+        let (flyfish, editor) = scratch_editor();
+        let f = editor.join("victim.rs");
+        fs::write(&f, b"fn main() {}").unwrap();
+        let uri = format!("dozer://editor/__file__{}", f.to_string_lossy());
+        assert_eq!(
+            handle_protocol(&flyfish, &HashSet::new(), None, &uri).status,
+            404
+        );
+        let mut allowed = HashSet::new();
+        allowed.insert(f.clone());
+        let r = handle_protocol(&flyfish, &allowed, None, &uri);
+        assert_eq!(r.status, 200);
+        assert_eq!(r.body, b"fn main() {}");
+    }
+
+    #[test]
+    fn editor_rejects_traversal_and_unknown() {
+        let (flyfish, _editor) = scratch_editor();
+        for uri in [
+            "dozer://editor/../flyfish/host.html",
+            "dozer://editor/%2e%2e/etc/passwd",
+            "dozer://editor/nope.js",
+        ] {
+            assert_eq!(
+                handle_protocol(&flyfish, &HashSet::new(), None, uri).status,
+                404,
+                "{uri}"
+            );
+        }
     }
 }
 

@@ -1,0 +1,48 @@
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('fonts/JetBrainsMono.ttf') format('truetype');
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: block;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: #0a0e16;
+  overflow: hidden;
+}
+
+html[data-theme='light'],
+html[data-theme='light'] body {
+  background: #fef2e4;
+}
+
+#editor,
+.cm-editor {
+  height: 100%;
+}
+
+* {
+  scrollbar-width: thin;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 229, 180, 0.3);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 229, 180, 0.5);
+}
+html[data-theme='light'] ::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.24);
+}

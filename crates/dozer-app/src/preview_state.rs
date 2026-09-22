@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::preview::PreviewMode;
+use crate::preview::{FoldRange, PreviewMode, TextPosition, TextRange};
 
 /// 当前 schema 版本。
 pub const PREVIEW_STATE_VERSION: u32 = 1;
@@ -41,27 +41,6 @@ pub struct PersistedPreviewTab {
     #[serde(default)]
     pub revision: u64,
     pub active: bool,
-}
-
-/// 文本位置(1-based,与对外协议一致)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TextPosition {
-    pub line: u32,
-    pub column: u32,
-}
-
-/// 文本选区。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TextRange {
-    pub start: TextPosition,
-    pub end: TextPosition,
-}
-
-/// 折叠区(行范围)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FoldRange {
-    pub from_line: u32,
-    pub to_line: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

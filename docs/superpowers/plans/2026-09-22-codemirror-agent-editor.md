@@ -8,6 +8,11 @@
 **Spec/Master:** `../specs/2026-09-22-file-preview-architecture-redesign.md`、
 `2026-09-22-file-preview-architecture-redesign.md`。
 
+> 进度(2026-09-22):Task 1 主体、Task 3 主体、Task 2 的 scheme/CSP/host 描述
+> 已落地(离线 CodeMirror 前端包 + `dozer://editor/` scheme + 通用消息 envelope
+> + `codemirror` feature 开关,默认关闭)。**运行时深度接线与 Task 4–7 未开始**,
+> 见 `../analysis/file-preview-phase-b-progress.md` 的"刻意未接线"清单。
+
 ## Task 1：前端工程与离线产物
 
 **Files:**

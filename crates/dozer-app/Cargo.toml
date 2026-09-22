@@ -7,6 +7,12 @@ edition.workspace = true
 name = "dozer"
 path = "src/main.rs"
 
+[features]
+default = []
+# 开发开关(Phase B):用 CodeMirror editor host 承载 Code tab。默认关闭,
+# 保持旧 iced editor 的既有行为;开启后源码/纯文本走 dozer://editor/ host。
+codemirror = []
+
 [dependencies]
 dozer-core = { path = "../dozer-core" }
 dozer-client = { path = "../dozer-client" }

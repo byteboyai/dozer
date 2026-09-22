@@ -7,3 +7,6 @@
 .worktrees
 examples/
 .aider*
+
+# CodeMirror editor frontend deps (built assets under assets/editor are committed)
+crates/dozer-app/web/editor/node_modules/
