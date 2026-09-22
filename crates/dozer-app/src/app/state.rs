@@ -227,6 +227,16 @@ pub enum HoverId {
     /// Project 面板配对预览"预览/代码切换"按钮,处理方式同 `PreviewRenderMode`
     /// (同一份 `preview_pane_for` 渲染,按 `PreviewPaneKind` 区分)。
     ProjectPreviewRenderMode,
+    /// 文件预览 tab 组最右侧"树 / 原始文本"切换按钮(`FileCode`/`ListTree`,
+    /// 仅 JSON/JSONL tab 有):处理方式同 `PreviewRenderMode`(见
+    /// `tab_widget::tab_json_tree_mode_button`,调用点
+    /// `workspace::preview_pane_for`)。与 `PreviewRenderMode` 互斥——
+    /// JSON/JSONL 不是 `wry_toggle_eligible`,两者不会同时出现。
+    PreviewJsonTreeMode,
+    /// Project 面板配对预览"树 / 原始文本"切换按钮,处理方式同
+    /// `PreviewJsonTreeMode`(同一份 `preview_pane_for` 渲染,按
+    /// `PreviewPaneKind` 区分)。
+    ProjectPreviewJsonTreeMode,
     /// Todo 面板单个任务卡(按下标区分):hover 时填充 `CARD` 背景 + 金色描边
     /// (见 `extensions::todo::todo_card`,统一卡片样式)。
     TodoCard(usize),

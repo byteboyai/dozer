@@ -404,6 +404,41 @@ pub(crate) fn tab_render_mode_button<'a, M: Clone + 'a>(
     )
 }
 
+/// JSON/JSONL tab 的「树 / 原始文本」切换按钮:只对当前选中 tab 出的那一个
+/// (同 `tab_render_mode_button` 的口径,调用方判断该 tab 是否有 `json_tree`),
+/// 由 `workspace::preview_pane_for` 渲染在 tab 组最右侧。`in_raw_text` 决定
+/// 图标与提示——树视图下显示 `FileCode`(点它到原始文本),原始文本下显示
+/// `ListTree`(点它回树)。2026-09-22 起从 `json_tree::view` 的独立头部行挪到
+/// 这里:与 `.md`/`.html` 的「预览/代码」切换按钮保持同一处、同一视觉
+/// (验收口径:两种双视图切换都在 tab 栏上)。套 `icon_button_entry` 标准
+/// 图标按钮,尺寸与 `tab_render_mode_button` 逐像素一致。`hover_t`/`on_hover`
+/// 由调用方接自己那组专属 `HoverId`(见 `HoverId::PreviewJsonTreeMode`)。
+pub(crate) fn tab_json_tree_mode_button<'a, M: Clone + 'a>(
+    in_raw_text: bool,
+    hover_t: f32,
+    on_press: M,
+    on_hover: impl Fn(bool) -> M + 'a,
+) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
+    let (icon, tooltip) = if in_raw_text {
+        (icons::IconKind::ListTree, "查看 Tree")
+    } else {
+        (icons::IconKind::FileCode, "查看原始文本")
+    };
+    icons::icon_button_entry(
+        icon,
+        byteui::theme::icon_size::row(),
+        false,
+        false,
+        hover_t,
+        false,
+        byteui::theme::icon_size::row() + 6.0,
+        true,
+        on_press,
+        on_hover,
+        tooltip,
+    )
+}
+
 /// 悬浮下拉里的一行,对应该 tab 组里的**某个 tab**(V 菜单列的是组内全部
 /// tab,不局限于当前横向被裁掉的)。`prefix` 与横向 tab 用同一个已经建好的
 /// `Element`(状态点/图标/无),`active` 只决定标题文字颜色(CREAM,同

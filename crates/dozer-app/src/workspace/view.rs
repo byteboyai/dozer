@@ -4,8 +4,8 @@
 use crate::app::{App, HoverId, Message, PanelKind, tab_divider};
 use crate::chrome::homespace::home_panel_head_with_actions;
 use crate::chrome::tab_widget::{
-    PanelTabArgs, TabOverflowEntry, TabOverflowMenuArgs, panel_tab, tab_overflow_button,
-    tab_overflow_menu, tab_render_mode_button, tab_window,
+    PanelTabArgs, TabOverflowEntry, TabOverflowMenuArgs, panel_tab, tab_json_tree_mode_button,
+    tab_overflow_button, tab_overflow_menu, tab_render_mode_button, tab_window,
 };
 use crate::extensions::conversations;
 use crate::menu_spec::{MenuSpec, MenuSpecItem};
@@ -922,6 +922,10 @@ pub(crate) fn preview_pane_for<'a>(
         PreviewPaneKind::Files => HoverId::PreviewRenderMode,
         PreviewPaneKind::Project => HoverId::ProjectPreviewRenderMode,
     };
+    let json_tree_mode_hover = move || match kind {
+        PreviewPaneKind::Files => HoverId::PreviewJsonTreeMode,
+        PreviewPaneKind::Project => HoverId::ProjectPreviewJsonTreeMode,
+    };
     let editor_msg = move |tab_id, ev| match kind {
         PreviewPaneKind::Files => Message::PreviewEditorEvent(tab_id, ev),
         PreviewPaneKind::Project => Message::ProjectPreviewEditorEvent(tab_id, ev),
@@ -1050,6 +1054,32 @@ pub(crate) fn preview_pane_for<'a>(
             )
         })
     });
+    // JSON/JSONL tab 的「树 / 原始文本」切换按钮:与上面 `.md`/`.html` 的
+    // 「预览/代码」按钮同一处(只对当前选中 tab 出一个),仅当激活 tab 挂着
+    // 已就绪的 `json_tree` 时出现。2026-09-22 从 `json_tree::view` 自己的
+    // 头部行挪来——验收口径是两种双视图切换都长在 tab 栏上。图标随模式换:
+    // 树视图显示 `FileCode`(点它看原始文本),原始文本显示 `ListTree`(点它
+    // 回树)。原始文本态可能没有可复用的原生 `editor`(JSON 若读盘失败),
+    // 此时仍给按钮——切回树视图是唯一有内容的出口。
+    let json_tree_mode_button: Option<
+        Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
+    > = preview.tabs().get(preview.active_idx()).and_then(|tab| {
+        let crate::preview::JsonTreeState::Ready(view) = tab.json_tree.as_ref()? else {
+            return None;
+        };
+        let tab_id = tab.id;
+        let in_raw_text = view.view_mode == crate::json_tree::ViewMode::RawText;
+        Some(tab_json_tree_mode_button(
+            in_raw_text,
+            app.hover_progress(json_tree_mode_hover()),
+            Message::JsonTreeAction(
+                find_panel(),
+                tab_id,
+                crate::json_tree::Action::ToggleViewMode,
+            ),
+            move |hovered| Message::Hover(json_tree_mode_hover(), hovered),
+        ))
+    });
     let overflow_button = tab_overflow_button(
         preview.tabs().len(),
         app.hover_progress(overflow_hover()),
@@ -1088,6 +1118,9 @@ pub(crate) fn preview_pane_for<'a>(
     }
     tab_bar_row = tab_bar_row.push(clipped);
     if let Some(btn) = render_mode_button {
+        tab_bar_row = tab_bar_row.push(btn);
+    }
+    if let Some(btn) = json_tree_mode_button {
         tab_bar_row = tab_bar_row.push(btn);
     }
     let tab_bar = tab_bar_row.push(collapse);
@@ -1301,30 +1334,26 @@ pub(crate) fn preview_pane_for<'a>(
         } else if let Some(json_tree) = &active_tab.json_tree {
             // JSON/JSONL tab:双视图。Tree 模式下画树(消息映射到
             // `Message::JsonTreeAction`,带 `tab_id` + `PanelKind`);RawText
-            // 模式下复用上面 `editor` 那支完全一样的渲染方式画原生代码编辑器
-            // ——`json_tree::view()` 在 RawText 态只返回顶部的模式切换头,
-            // 不画树,所以这里先 push 头、再 push 编辑器主体。首次加载是后台
-            // 线程跑的,没跑完时 `JsonTreeState::Loading`,画统一 loading 占位。
+            // 模式下直接渲染该 tab 已有的原生代码编辑器(与上面 `editor` 分支
+            // 逐字一致,复用同一份已加载状态,不重新解析文件)。「树 / 原始
+            // 文本」切换按钮不在这里——2026-09-22 起画在 tab 栏上,与 `.md` 的
+            // 「预览/代码」切换同处(见上方 `json_tree_mode_button`),所以
+            // `json_tree::view()` 只剩树主体。首次加载是后台线程跑的,没跑完时
+            // `JsonTreeState::Loading`,画统一 loading 占位。
             let tab_id = active_tab.id;
             let panel = find_panel();
             match json_tree {
                 crate::preview::JsonTreeState::Ready(view) => {
-                    let raw_text = view.view_mode == crate::json_tree::ViewMode::RawText;
-                    // 头部(切换控件)+ Tree 模式下的树主体都在这个 Element 里。
-                    content = content.push(
-                        container(
-                            view.view()
-                                .map(move |act| Message::JsonTreeAction(panel, tab_id, act)),
-                        )
-                        .width(Length::Fill)
-                        .height(if raw_text {
-                            Length::Shrink
-                        } else {
-                            Length::Fill
-                        }),
-                    );
-                    if raw_text && let Some(editor) = &active_tab.editor {
-                        // 复用与上面 `editor` 分支逐字一致的 Element 构造。
+                    if view.view_mode == crate::json_tree::ViewMode::Tree {
+                        content = content.push(
+                            container(
+                                view.view()
+                                    .map(move |act| Message::JsonTreeAction(panel, tab_id, act)),
+                            )
+                            .width(Length::Fill)
+                            .height(Length::Fill),
+                        );
+                    } else if let Some(editor) = &active_tab.editor {
                         content = content.push(
                             MouseArea::new(
                                 container(editor.view().map(move |ev| editor_msg(tab_id, ev)))

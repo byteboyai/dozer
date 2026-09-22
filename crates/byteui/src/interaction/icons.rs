@@ -227,6 +227,11 @@ pub enum IconKind {
     /// 历史),2026-09-18 起替换原 `History` 的"查看此文件历史"项,语义更聚焦
     /// "历史"本身(其余历史面板仍用 `History`)。
     FileClock,
+    /// 预览 tab 栏"查看 Tree"切换按钮(Lucide list-tree:左侧缩进的项目符号
+    /// 树 + 右侧文本行,表"树形结构视图"),JSON/JSONL tab 处于原始文本态时
+    /// 显示,点它切回 `json_tree` 树视图(见 `tab_widget::tab_json_tree_mode_button`)。
+    /// 与 `FolderTree`(文件系统目录树)语义区分:这里指的是**数据**的语法树。
+    ListTree,
 }
 
 impl IconKind {
@@ -351,6 +356,7 @@ impl IconKind {
             IconKind::PanelRightOpen => include_bytes!("../../assets/icons/panel-right-open.svg"),
             IconKind::Undo2 => include_bytes!("../../assets/icons/undo-2.svg"),
             IconKind::FileClock => include_bytes!("../../assets/icons/file-clock.svg"),
+            IconKind::ListTree => include_bytes!("../../assets/icons/list-tree.svg"),
         }
     }
 }
