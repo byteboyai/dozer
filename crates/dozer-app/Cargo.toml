@@ -1,6 +1,6 @@
 [package]
 name = "dozer-app"
-version = "0.5.190"
+version = "0.5.194"
 edition.workspace = true
 
 [[bin]]
@@ -115,3 +115,20 @@ tiny-skia = { version = "=0.11.4", features = ["png"] }
 # `setCornerRadius` 编译期直接报"方法不存在"),显式声明成直接依赖并开
 # `CALayer` feature 才能用;`Cargo.lock` 里已有同版本(0.3.2),pin 一致。
 objc2-quartz-core = { version = "=0.3.2", features = ["CALayer"] }
+# 预览 webview 的 ⌘F 兜底:页面内没有可聚焦的搜索框时,调 WKWebView 原生
+# `findString:withConfiguration:completionHandler:` 弹出 macOS 系统查找条。
+# 该 API 在 objc2-web-kit 里被 `WKFindConfiguration`+`WKFindResult`+`block2`
+# 三个 feature 门控,wry 只开了 `WKWebView` 没开这两个,所以显式声明成直接
+# 依赖并补全 feature(版本 0.3.2 与 wry 传递依赖一致,Cargo.lock 无新增)。
+objc2-web-kit = { version = "=0.3.2", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "objc2-app-kit",
+    "block2",
+    "WKWebView",
+    "WKFindConfiguration",
+    "WKFindResult",
+] }
+# 预览 webview 原生查找条的 completion handler 用 `RcBlock` 构造(nil block
+# 也要一个真实 block 对象)。版本与 objc2-web-kit 传递依赖一致。
+block2 = "0.6"

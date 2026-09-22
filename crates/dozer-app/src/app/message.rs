@@ -646,6 +646,16 @@ pub enum Message {
     /// winit 的根本 `MouseInput{Released}` 收不到,`TabDragEnd` 就永不触发,
     /// 拖拽状态会残留、变成"松开还能继续拖"。这条消息统一兜底清掉。
     WebViewMouseUp,
+    /// 预览/浏览器 webview 聚焦时按 ⌘F,JS 已找到并聚焦页面自带搜索框
+    /// (`input[type=search]` 等)。宿主需把该 webview 设为 first responder
+    /// (WKWebView 成为 first responder 后输入才会落进页面输入框)。`usize`
+    /// 是 webview 池 key(预览池含 Project 偏移)。见 `runtime.rs` 注入 JS
+    /// 的 ⌘F 分支。
+    WebViewFindFocus(usize),
+    /// 预览/浏览器 webview 聚焦时按 ⌘F,但页面里没有可聚焦的搜索框。宿主
+    /// 退回调 WKWebView 原生 `findString:withConfiguration:completionHandler:`
+    /// 弹出 macOS 系统查找条。`usize` 是 webview 池 key。见 `runtime.rs`。
+    WebViewFindNative(usize),
     /// 顶栏设置齿轮:打开设置弹窗(独立原生窗口,主题 + Git 账户)。
     SettingsOpen,
     /// 设置弹窗内部消息,转发给 `extensions::settings::update`。

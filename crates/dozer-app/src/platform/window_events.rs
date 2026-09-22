@@ -1449,6 +1449,7 @@ impl Runner {
             current_focus,
             clipboard,
             browser_webviews,
+            webviews,
             ..
         } = self
         else {
@@ -1652,6 +1653,29 @@ impl Runner {
                             let _ = view.reload();
                         }
                     }
+                }
+            }
+            // ⌘F 页内查找:注入 JS 已在页面(含 shadow DOM)里找到并聚焦了
+            // 自带搜索框。这里只需把该 webview 设为 first responder——JS 的
+            // `focus()` 只把 DOM 焦点移过去,WKWebView 本身不是 first
+            // responder 时键盘输入仍落不进页面输入框。句柄只活在事件环,
+            // 按 id 去预览/浏览器两个池里找回。
+            Message::WebViewFindFocus(id) => {
+                if let Some((view, _)) = webviews.get(&id).or_else(|| browser_webviews.get(&id)) {
+                    let _ = view.focus();
+                }
+            }
+            // ⌘F 页内查找兜底:页面里没有可聚焦的搜索框(如 flyfish 关了
+            // 工具栏),退回调 WKWebView 原生 `findString:` 弹系统查找条。
+            // wry 不暴露这个 API,得经 `WebViewExtMacOS::webview()` 拿回
+            // 内层 `WryWebView`(WKWebView 子类)直接调 objc2。
+            Message::WebViewFindNative(id) => {
+                let view = webviews
+                    .get(&id)
+                    .map(|(v, _)| v)
+                    .or_else(|| browser_webviews.get(&id).map(|(v, _)| v));
+                if let Some(view) = view {
+                    show_native_find(view);
                 }
             }
             // 新增任务框已迁 iced 原生 `text_editor`(Stage 4),点击命中
@@ -3483,3 +3507,34 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_settings_overlay(event_loop);
     }
 }
+
+/// 在给定 webview 上弹出 macOS 原生查找条(WKWebView `findString:`)。用于
+/// 预览 webview 聚焦时按 ⌘F、但页面里没有可聚焦搜索框的兜底路径。
+///
+/// 传空串查询是 WKWebView 的既定用法:它让系统把查找栏显示出来并置空,交给
+/// 用户后续键入(`WKWebView` 本身不接收键盘,真正处理输入的是系统查找栏)。
+/// `configuration` 只设 `wraps=true`(到头回绕),`caseSensitive`/`backwards`
+/// 保持默认(不区分大小写、向后)。`completion_handler` 为 nil block,结果
+/// 不消费。全部是 AppKit 主线程 UI 调用,而 `dispatch` 本就跑在事件环主线程。
+#[cfg(target_os = "macos")]
+fn show_native_find(view: &wry::WebView) {
+    use objc2::MainThreadMarker;
+    use objc2_foundation::NSString;
+    use objc2_web_kit::{WKFindConfiguration, WKFindResult};
+    use wry::WebViewExtMacOS;
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let wk = view.webview();
+    let query = NSString::from_str("");
+    unsafe {
+        let config = WKFindConfiguration::new(mtm);
+        config.setWraps(true);
+        let handler = block2::RcBlock::new(|_result: std::ptr::NonNull<WKFindResult>| {});
+        wk.findString_withConfiguration_completionHandler(&query, Some(&config), &handler);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn show_native_find(_view: &wry::WebView) {}

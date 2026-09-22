@@ -2291,6 +2291,10 @@ impl App {
             // 鼠标在子 webview 上松开(见 `WebViewMouseUp` 文档):一并结束页签
             // 拖拽,避免"松开还能继续拖"。
             Message::WebViewMouseUp => self.end_tab_drag(),
+            // ⌘F 页内查找(见两条消息的文档):原生副作用(设 first
+            // responder / 调 WKWebView `findString:`)都在 main.rs 的
+            // `dispatch` 里对 webview 句柄执行,`App::update` 无需处理。
+            Message::WebViewFindFocus(_) | Message::WebViewFindNative(_) => {}
         }
     }
 

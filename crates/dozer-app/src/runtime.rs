@@ -234,6 +234,20 @@ pub(crate) fn sync_webview_pool(
                 script.push_str(
                     "(function(){var s=document.createElement('style');s.textContent=\"html,body,body *{cursor:text!important}a,a *,button,*[role='link'],*[role='button'],summary,*[onclick],label[for]{cursor:pointer!important}\";(document.head||document.documentElement).appendChild(s);document.addEventListener('keydown',function(e){if((e.ctrlKey||e.metaKey)&&e.code==='KeyC'){e.preventDefault();var ok=false;try{ok=document.execCommand('copy')}catch(_){}if(!ok){var g=window.getSelection&&window.getSelection();if(g&&g.toString()){try{navigator.clipboard.writeText(g.toString()).then(function(){},function(){})}catch(_){}}}}});})();",
                 );
+                // ⌘F 页内查找:webview 聚焦时按键被它吃掉、到不了 winit,也
+                // 不会像原生编辑器那样走应用层 Find 条。这里在捕获阶段拦截
+                // ⌘F(以及兼容 Ctrl+F),优先聚焦**页面自带的搜索框**——flyfish
+                // 预览的工具栏搜索输入框(native `type=search`)藏在
+                // `<flyfish-file-viewer>` 的 shadow root 里,所以要递归穿透
+                // shadow DOM 找;找得到就 focus+全选并 IPC 通知宿主把
+                // WKWebView 设为 first responder(否则输入落不进页面输入框),
+                // 找不到就 IPC 通知宿主退回 WKWebView 原生查找条
+                // (`findString:`)。用 `e.code==='KeyF'` 判键位,避免键盘布局
+                // 影响 `e.key`;`preventDefault` 挡住 WKWebView 对 ⌘F 的默认
+                // 处理(避免与页面输入的焦点争夺)。
+                script.push_str(
+                    "(function(){function _dozPick(root){var best=null;function walk(n){if(!n||n.nodeType!==1&&n.nodeType!==9&&n.nodeType!==11)return;var list=n.querySelectorAll?n.querySelectorAll('input[type=search]'):[];for(var i=0;i<list.length;i++){var el=list[i];if(el.disabled||el.readOnly)continue;if(!best)best=el;}if(!best){var any=n.querySelectorAll?n.querySelectorAll('input[type=text],input:not([type])'):[];for(var j=0;j<any.length;j++){var a=any[j];if(a.disabled||a.readOnly)continue;var box=a.closest&&(a.closest('[role=search]')||a.closest('.file-viewer-web-search')||a.closest('form[role=search]'));if(box){best=a;break;}}}var hosts=n.querySelectorAll?n.querySelectorAll('*'):[];for(var k=0;k<hosts.length;k++){var sr=hosts[k].shadowRoot;if(sr)walk(sr);}}walk(root||document);return best;}document.addEventListener('keydown',function(e){if((e.metaKey||e.ctrlKey)&&e.code==='KeyF'){e.preventDefault();var box=_dozPick(document);if(box){try{box.focus();if(box.select)box.select();}catch(_){}window.ipc.postMessage('find_page');}else{window.ipc.postMessage('find_native');}}},true);})();",
+                );
                 if report_title {
                     script.push_str("window.__dozer_webview=");
                     script.push_str(webview_id.to_string().as_str());
@@ -278,6 +292,22 @@ pub(crate) fn sync_webview_pool(
                             }
                             "zoom_reset" => {
                                 let _ = ipc_proxy.send_event(Message::ZoomReset);
+                            }
+                            // ⌘F 页内查找:JS 找到并聚焦了页面自带搜索框
+                            // (`find_page`),或没找到、要退回原生查找条
+                            // (`find_native`)。二者的原生副作用(设 first
+                            // responder / 调 WKWebView `findString:`)都要落到
+                            // 持有 webview 句柄的事件环里,所以带 webview id
+                            // 送回主循环,由 `dispatch` 在 `webviews`/
+                            // `browser_webviews` 池里找回句柄执行(同
+                            // `WebViewFocused`/`BrowserNav` 的"句柄只活在
+                            // 事件分发环"手法)。
+                            "find_page" => {
+                                let _ = ipc_proxy.send_event(Message::WebViewFindFocus(webview_id));
+                            }
+                            "find_native" => {
+                                let _ =
+                                    ipc_proxy.send_event(Message::WebViewFindNative(webview_id));
                             }
                             // 浏览器面板报回页面 HTML 标题:`title:<id>:<title>`。
                             // `splitn(2, ':')` 只拆第一个冒号,标题里再带冒号

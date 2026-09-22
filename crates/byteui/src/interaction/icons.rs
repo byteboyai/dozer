@@ -159,20 +159,23 @@ pub enum IconKind {
     /// 没有调用点,2026-08-23 起用在文件预览/项目预览关到最后一个 tab 后
     /// 自动补的空白占位 tab 内容区(见 `workspace.rs::preview_pane_for`)。
     Dozer,
-    /// Agent 品牌标(着色用 `currentColor`,由调用方按 agent 指定主题色)。
+    /// Agent 品牌标。Codex 与 Aider 保留素材原色,其余图标使用
+    /// `currentColor`,由调用方按 agent 指定主题色。
     /// 来源:Claude/CodeBuddy 取自 Simple Icons,OpenCode 取自其官网 favicon 并
-    /// 归一化到 24×24;Codex 取自其官网品牌 logo(渐变压缩为单色 silhouette);
-    /// Aider/Goose 按其品牌识别(2×3 方块 / 展翅剪影)自绘。均为品牌标识,
+    /// 归一化到 24×24;Codex 使用原始蓝紫渐变品牌 logo;
+    /// Aider 使用官网 logo 的绿色发光字母 a,Goose 使用其明暗主题展翅剪影素材。均为品牌标识,
     /// 非 Lucide;仅供 Agent 身份识别。
     Claude,
     Codebuddy,
     Opencode,
-    /// Aider(2×3 方块品牌标)。
+    /// Aider(官网 logo 中提取的绿色发光字母 a)。
     Aider,
-    /// Codex(8 角星品牌标 —— 官网渐变 logo 的单色 silhouette 化)。
+    /// Codex(官网蓝紫渐变品牌标)。
     Codex,
-    /// Goose(展翅飞翔剪影品牌标)。
-    Goose,
+    /// Goose(浅色主题用黑色展翅剪影)。
+    GooseLight,
+    /// Goose(深色主题用白色展翅剪影)。
+    GooseDark,
     /// footbar CPU 段前缀图标(Lucide square-activity:圆角方框 + 折线,表活跃度)。
     SquareActivity,
     /// footbar Proxy 段前分隔图标(Lucide square-radical:方括号根号,代代理/路由)。
@@ -311,7 +314,8 @@ impl IconKind {
             IconKind::Opencode => include_bytes!("../../assets/icons/opencode.svg"),
             IconKind::Aider => include_bytes!("../../assets/icons/aider.svg"),
             IconKind::Codex => include_bytes!("../../assets/icons/codex.svg"),
-            IconKind::Goose => include_bytes!("../../assets/icons/goose.svg"),
+            IconKind::GooseLight => include_bytes!("../../assets/icons/goose-light.svg"),
+            IconKind::GooseDark => include_bytes!("../../assets/icons/goose-dark.svg"),
             IconKind::SquareActivity => include_bytes!("../../assets/icons/square-activity.svg"),
             IconKind::SquareRadical => include_bytes!("../../assets/icons/square-radical.svg"),
             IconKind::SquareTerminal => include_bytes!("../../assets/icons/square-terminal.svg"),
@@ -351,10 +355,17 @@ pub fn view<'a, Message: 'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 调用方传入的 `size` 应为 `icon_size` 的 token（已含全局 scale），
     // 本函数是纯渲染入口，不再二次乘 scale。
+    let color = match kind {
+        // 这些品牌素材自带官方配色；Iced 的 SVG `color` 是整图滤镜，传入
+        // agent 分类色会覆盖 Codex 蓝色渐变、Aider 绿色和 Goose 明暗色。
+        IconKind::Codex | IconKind::Aider | IconKind::GooseLight | IconKind::GooseDark => None,
+        _ => Some(color),
+    };
+
     svg(svg::Handle::from_memory(kind.bytes()))
         .width(Length::Fixed(size))
         .height(Length::Fixed(size))
-        .style(move |_theme: &iced_widget::Theme, _status| svg::Style { color: Some(color) })
+        .style(move |_theme: &iced_widget::Theme, _status| svg::Style { color })
         .into()
 }
 

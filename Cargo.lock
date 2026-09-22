@@ -1881,11 +1881,12 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "dozer-app"
-version = "0.5.190"
+version = "0.5.194"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
  "arboard",
+ "block2 0.6.2",
  "byteui",
  "calamine",
  "csv",
@@ -1912,6 +1913,7 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "objc2-quartz-core 0.3.2",
+ "objc2-web-kit",
  "png 0.17.16",
  "raw-window-handle",
  "reqwest",

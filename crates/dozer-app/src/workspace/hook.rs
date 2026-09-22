@@ -269,7 +269,8 @@ pub(crate) fn agent_dot_color(agent: AgentKind) -> Color {
 }
 
 /// agent → 品牌图标(新建 agent 菜单用)。颜色由调用方按 `agent_dot_color`
-/// 同款语义传入,使图标色与圆点色一致,避免引入新配色维度。
+/// 同款语义传入,使图标色与圆点色一致;自带原色的品牌图会忽略该着色。
+/// Goose 根据当前明暗主题选择黑色或白色剪影。
 pub(crate) fn agent_icon(agent: AgentKind) -> IconKind {
     match agent {
         AgentKind::Claude => IconKind::Claude,
@@ -277,7 +278,10 @@ pub(crate) fn agent_icon(agent: AgentKind) -> IconKind {
         AgentKind::Opencode => IconKind::Opencode,
         AgentKind::Aider => IconKind::Aider,
         AgentKind::Codex => IconKind::Codex,
-        AgentKind::Goose => IconKind::Goose,
+        AgentKind::Goose => match byteui::theme::color::current_scheme() {
+            byteui::theme::color::ColorScheme::Light => IconKind::GooseLight,
+            byteui::theme::color::ColorScheme::Dark => IconKind::GooseDark,
+        },
         // 暂无确认可用的品牌素材，回落通用图标（spec §8/§6 明确允许）。
         AgentKind::V8agent | AgentKind::Unknown => IconKind::Bot,
     }
