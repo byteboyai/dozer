@@ -89,6 +89,7 @@ impl DozerMcpServer {
                         "selected_text": ctx.selected_text,
                         "visible_start_line": ctx.visible_start_line,
                         "visible_end_line": ctx.visible_end_line,
+                        "tabular": ctx.tabular,
                         "reason": null,
                     }),
                     None => json!({
@@ -105,6 +106,7 @@ impl DozerMcpServer {
                         "selected_text": null,
                         "visible_start_line": null,
                         "visible_end_line": null,
+                        "tabular": null,
                         "reason": "no_active_preview",
                     }),
                 };

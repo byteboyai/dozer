@@ -1279,7 +1279,7 @@ impl Workspace {
                         ),
                         editor.is_read_only(),
                     )
-                } else if tab.uses_codemirror() {
+                } else if tab.uses_editor_host() {
                     (
                         preview_context_from_web_state(
                             &path_str,
@@ -1291,6 +1291,20 @@ impl Workspace {
                         ),
                         tab.backend_read_only(),
                     )
+                } else if let Some(crate::preview::TabularState::Ready(view)) = tab.tabular.as_ref()
+                {
+                    // 表格预览:给出当前 sheet 与逻辑滚动锚点。
+                    let mut c = dozer_core::protocol::PreviewContext {
+                        path: path_str.clone(),
+                        updated_at_ms: now_ms,
+                        ..Default::default()
+                    };
+                    c.tabular = Some(dozer_core::protocol::PreviewTabularContext {
+                        sheet: view.active_sheet,
+                        scroll_row: view.scroll_row as u32,
+                        scroll_col: view.scroll_col as u32,
+                    });
+                    (c, false)
                 } else {
                     return None;
                 };

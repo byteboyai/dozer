@@ -45,8 +45,18 @@
   active sheet 非首个时触发一次懒加载(`Message::TabularLoaded` →
   `SelectSheet`)。测试:round-trip。
 
-## 未完成(受 GUI 验收与"迁移前不删除"原则约束)
+### Agent 表格上下文(Phase D Task 6 剩余)
+- `dozer_core::protocol::PreviewContext` 增可选 `tabular: Option<PreviewTabularContext>`
+  (`sheet` / `scroll_row` / `scroll_col`),**带 serde 默认值**(旧 JSON/客户端
+  仍可解码;有回归测试)。
+- `dozer-app` 的 `spawn_preview_context_push` 覆盖表格:活动表格 tab 就绪时推
+  当前 sheet 与逻辑滚动锚点;文本类改用 `uses_editor_host()` 判断(JSON/CSV
+  原文/窗口化也推选区与可见行)。
+- `dozer-mcp` 的 `get_preview_context` 输出新增 `tabular` 字段(有/无预览两条
+  JSON 都补齐,无预览为 null)。
+- `dozerd`/`dozer-client` 无需改动(不透明透传)。
 
+## 未完成(受 GUI 验收与"迁移前不删除"原则约束)
 1. **Task 2 剩余**:NSMenu 上下文菜单(取舍见 Phase B 文档);Unsupported/损坏/
    加密格式的正式 fallback 页面。
 2. **Task 3 `vanilla-jsoneditor`** 接入;Task 4 Streamed JSON 重构。

@@ -206,6 +206,18 @@ pub struct PreviewContext {
     pub visible_start_line: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visible_end_line: Option<u32>,
+    /// 表格(Tabular)预览的上下文:当前 sheet 与逻辑滚动锚点,供 Agent 感知
+    /// 用户在看哪张表、哪一段。非表格后端为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tabular: Option<PreviewTabularContext>,
+}
+
+/// 表格预览上下文(Phase D Task 6):当前 sheet 与逻辑滚动锚点。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PreviewTabularContext {
+    pub sheet: usize,
+    pub scroll_row: u32,
+    pub scroll_col: u32,
 }
 
 impl PreviewContext {
@@ -1679,6 +1691,31 @@ mod tests {
             ctx.selected_text.as_ref().unwrap().chars().count(),
             PREVIEW_SELECTED_TEXT_MAX_CHARS
         );
+    }
+
+    #[test]
+    fn tabular_context_round_trips_and_defaults_none() {
+        // 旧 JSON 无 tabular 字段 → None(向后兼容)。
+        let legacy = r#"{"path":"/r/a.csv","start_line":1,"start_col":1,"end_line":1,"end_col":1,"has_selection":false,"updated_at_ms":1}"#;
+        let parsed: PreviewContext = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.tabular, None);
+
+        let ctx = PreviewContext {
+            path: "/r/a.csv".into(),
+            updated_at_ms: 1,
+            tabular: Some(PreviewTabularContext {
+                sheet: 2,
+                scroll_row: 120,
+                scroll_col: 3,
+            }),
+            ..Default::default()
+        };
+        let req = Request::UpdatePreviewContext {
+            project_id: 1,
+            context: Some(ctx),
+        };
+        let line = encode_line(&req);
+        assert_eq!(decode_line::<Request>(&line).unwrap(), req);
     }
 
     #[test]
