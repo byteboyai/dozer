@@ -663,19 +663,24 @@ fn group_tabs_by_agent_mixed_fixed_order_no_empty_groups() {
 }
 
 #[test]
-fn group_tabs_by_agent_includes_codex_and_v8agent() {
+fn group_tabs_by_agent_includes_codex_goose_and_v8agent() {
     // 回归测试:`ORDER` 曾经只有 4 个 AgentKind(Claude/Codebuddy/
-    // Opencode/Unknown),Codex/V8agent 的会话会被 filter_map
+    // Opencode/Unknown),Codex/Goose/V8agent 的会话会被 filter_map
     // 静默丢弃——tab 标题栏能正确识别出 agent 种类,但 Agent 侧栏
     // 面板完全不显示这些会话,面板直接留空。
     let rt = tokio::runtime::Runtime::new().unwrap();
     let tabs = vec![
         make_test_tab(&rt, "a", AgentKind::V8agent),
         make_test_tab(&rt, "b", AgentKind::Codex),
+        make_test_tab(&rt, "c", AgentKind::Goose),
     ];
     assert_eq!(
         group_tabs_by_agent(&tabs),
-        vec![(AgentKind::Codex, vec![1]), (AgentKind::V8agent, vec![0]),]
+        vec![
+            (AgentKind::Codex, vec![1]),
+            (AgentKind::Goose, vec![2]),
+            (AgentKind::V8agent, vec![0]),
+        ]
     );
 }
 
@@ -686,6 +691,7 @@ fn agent_dot_color_maps_each_kind_and_avoids_gold() {
         (AgentKind::Codebuddy, byteui::theme::color::current().purple),
         (AgentKind::Opencode, byteui::theme::color::current().green),
         (AgentKind::Codex, byteui::theme::color::current().orange),
+        (AgentKind::Goose, byteui::theme::color::current().blue),
         (AgentKind::V8agent, byteui::theme::color::current().lime),
         (AgentKind::Unknown, byteui::theme::color::current().dim),
     ];
@@ -705,9 +711,10 @@ fn agent_icon_maps_each_kind_to_brand_icon() {
     assert_eq!(agent_icon(AgentKind::Claude), IconKind::Claude);
     assert_eq!(agent_icon(AgentKind::Codebuddy), IconKind::Codebuddy);
     assert_eq!(agent_icon(AgentKind::Opencode), IconKind::Opencode);
-    // Codex/V8agent 暂无确认可用的品牌素材，回落通用 Bot 图标
+    // Codex/Goose/V8agent 暂无确认可用的品牌素材，回落通用 Bot 图标
     // （见计划 Task 3 说明，非占位符——spec §8/§6 明确允许的兜底）。
     assert_eq!(agent_icon(AgentKind::Codex), IconKind::Bot);
+    assert_eq!(agent_icon(AgentKind::Goose), IconKind::Bot);
     assert_eq!(agent_icon(AgentKind::V8agent), IconKind::Bot);
     // Unknown 同样回落 Bot 图标。
     assert_eq!(agent_icon(AgentKind::Unknown), IconKind::Bot);
@@ -719,6 +726,7 @@ fn agent_cli_command_maps_known_agents_and_none_for_unknown() {
     assert_eq!(agent_cli_command(AgentKind::Codebuddy), Some("codebuddy"));
     assert_eq!(agent_cli_command(AgentKind::Opencode), Some("opencode"));
     assert_eq!(agent_cli_command(AgentKind::Codex), Some("codex"));
+    assert_eq!(agent_cli_command(AgentKind::Goose), Some("goose session"));
     assert_eq!(agent_cli_command(AgentKind::V8agent), Some("v8agent"));
     assert_eq!(agent_cli_command(AgentKind::Unknown), None);
 }
@@ -741,6 +749,10 @@ fn picker_launch_command_maps_selection_to_initial_command() {
     assert_eq!(
         picker_launch_command(PickerLaunch::Agent(Some(AgentKind::Codex))),
         Some("codex".to_string())
+    );
+    assert_eq!(
+        picker_launch_command(PickerLaunch::Agent(Some(AgentKind::Goose))),
+        Some("goose session".to_string())
     );
     assert_eq!(
         picker_launch_command(PickerLaunch::Agent(Some(AgentKind::V8agent))),
@@ -770,6 +782,11 @@ fn hook_install_target_covers_only_agents_wired_up_in_dozer_hook() {
         hook_install_target(AgentKind::Opencode),
         Some(HookInstallTarget::Opencode)
     );
+    assert_eq!(
+        hook_install_target(AgentKind::Goose),
+        Some(HookInstallTarget::GoosePlugin),
+        "Goose 走用户级 Open Plugins 目录专用安装器"
+    );
     // V8agent 不在 `dozer-hook::install::settings_path_for` 的覆盖范围,
     // 绝不能对它调用安装逻辑——否则会把 "v8agent" 的 hook 命令误写进
     // Claude 的 settings.json,顶掉真正的 claude hook 条目。V8agent 走
@@ -796,10 +813,10 @@ fn mcp_install_target_covers_four_config_capable_agents() {
 }
 
 #[test]
-fn mcp_install_target_excludes_v8agent_unknown() {
-    // V8agent 走硬编码自动挂载(不读配置文件),Unknown 是纯 shell——
-    // 两者都不该有配置文件路径。
-    for agent in [AgentKind::V8agent, AgentKind::Unknown] {
+fn mcp_install_target_excludes_v8agent_goose_unknown() {
+    // V8agent 走硬编码自动挂载(不读配置文件),Goose 首期不挂 Dozer MCP
+    // (见 spec D8),Unknown 是纯 shell——三者都不该有配置文件路径。
+    for agent in [AgentKind::V8agent, AgentKind::Goose, AgentKind::Unknown] {
         assert!(
             dozer_mcp::install::config_path_for(agent.label()).is_none(),
             "{agent:?} 不该有 mcp 配置文件路径"
@@ -851,6 +868,24 @@ fn ensure_hook_installed_writes_opencode_plugin() {
             .join("dozer-lib")
             .join("dozer-translate.ts")
             .exists()
+    );
+}
+
+#[test]
+fn ensure_hook_installed_writes_goose_plugin_with_sibling_exe_path() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("DOZER_GOOSE_PLUGINS_DIR", dir.path().to_str().unwrap()) };
+    ensure_hook_installed(AgentKind::Goose);
+    unsafe { std::env::remove_var("DOZER_GOOSE_PLUGINS_DIR") };
+    let hooks_json = dir.path().join("dozer/hooks/hooks.json");
+    assert!(hooks_json.exists(), "Goose 应生成 hooks/hooks.json");
+    let raw = std::fs::read_to_string(&hooks_json).unwrap();
+    // hook command 必须指向 sibling 的 `dozer-hook` 二进制(不是 dozer-app
+    // 自己),且路径被单引号包裹以容忍空格(2026-08 线上事故同款根因)。
+    assert!(raw.contains("dozer-hook"), "{raw}");
+    assert!(
+        raw.contains("'") && raw.contains(" goose "),
+        "command 应形如 '<exe>' goose <Event>: {raw}"
     );
 }
 
@@ -1024,10 +1059,10 @@ fn blur_inputs_keep_native_preview_editor_skips_pending_unfocus() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn agent_picker_items_has_eight_rows_matching_old_picker() {
-    // 五个 agent + 1 条分隔线 + 两个 shell(Git Shell/纯 Shell)= 8 行,
-    // 对应文档说的"七个选项"(不含分隔线本身)。
-    assert_eq!(agent_picker_items().len(), 8);
+fn agent_picker_items_has_nine_rows_matching_old_picker() {
+    // 六个 agent + 1 条分隔线 + 两个 shell(Git Shell/纯 Shell)= 9 行,
+    // 对应文档说的"八个选项"(不含分隔线本身)。
+    assert_eq!(agent_picker_items().len(), 9);
 }
 
 #[cfg(target_os = "macos")]
@@ -1035,7 +1070,7 @@ fn agent_picker_items_has_eight_rows_matching_old_picker() {
 fn agent_picker_items_separator_splits_agents_from_shells() {
     let items = agent_picker_items();
     assert!(matches!(
-        items[5],
+        items[6],
         crate::chrome::native_menu::Item::Separator
     ));
     let launches: Vec<PickerLaunch> = items
@@ -1048,9 +1083,9 @@ fn agent_picker_items_separator_splits_agents_from_shells() {
             _ => None,
         })
         .collect();
-    assert_eq!(launches.len(), 7, "五个 agent + 两个 shell,不含分隔线");
-    assert_eq!(launches[5], PickerLaunch::Git);
-    assert_eq!(launches[6], PickerLaunch::Agent(None));
+    assert_eq!(launches.len(), 8, "六个 agent + 两个 shell,不含分隔线");
+    assert_eq!(launches[6], PickerLaunch::Git);
+    assert_eq!(launches[7], PickerLaunch::Agent(None));
 }
 
 /// 空白页 / Blank tab 标题 / 卡片头部应取**项目根目录 basename**,不是

@@ -26,7 +26,11 @@ pub(crate) fn should_summarize_on_close(
         && matches!(backend, TabBackend::Daemon)
         && matches!(
             agent,
-            AgentKind::Claude | AgentKind::Codebuddy | AgentKind::Opencode | AgentKind::V8agent
+            AgentKind::Claude
+                | AgentKind::Codebuddy
+                | AgentKind::Opencode
+                | AgentKind::V8agent
+                | AgentKind::Goose
         )
 }
 
@@ -56,6 +60,7 @@ pub(crate) fn should_answer_dynamic_color(
 pub(crate) enum HookInstallTarget {
     Settings,
     Opencode,
+    GoosePlugin,
 }
 
 pub(crate) fn hook_install_target(agent: AgentKind) -> Option<HookInstallTarget> {
@@ -64,6 +69,10 @@ pub(crate) fn hook_install_target(agent: AgentKind) -> Option<HookInstallTarget>
             Some(HookInstallTarget::Settings)
         }
         AgentKind::Opencode => Some(HookInstallTarget::Opencode),
+        // Goose 走用户级 Open Plugins 目录(`~/.agents/plugins/dozer`),由
+        // 专用安装器 `dozer_hook::goose_install` 生成 plugin.json + hooks.json,
+        // 不写 Claude 的 settings.json(见 `goose_install` 模块注释)。
+        AgentKind::Goose => Some(HookInstallTarget::GoosePlugin),
         AgentKind::Unknown | AgentKind::V8agent => None,
     }
 }
@@ -113,6 +122,13 @@ pub(crate) fn ensure_hook_installed(agent: AgentKind) {
         HookInstallTarget::Opencode => {
             let _ = dozer_hook::opencode_install::run_at_with_exe(
                 &dozer_hook::opencode_install::plugins_dir(),
+                true,
+                &exe,
+            );
+        }
+        HookInstallTarget::GoosePlugin => {
+            let _ = dozer_hook::goose_install::run_at_with_exe(
+                &dozer_hook::goose_install::plugins_dir(),
                 true,
                 &exe,
             );
@@ -241,6 +257,7 @@ pub(crate) fn agent_dot_color(agent: AgentKind) -> Color {
         AgentKind::Codebuddy => byteui::theme::color::current().purple,
         AgentKind::Opencode => byteui::theme::color::current().green,
         AgentKind::Codex => byteui::theme::color::current().orange,
+        AgentKind::Goose => byteui::theme::color::current().blue,
         AgentKind::V8agent => byteui::theme::color::current().lime,
         AgentKind::Unknown => byteui::theme::color::current().dim,
     }
@@ -254,7 +271,9 @@ pub(crate) fn agent_icon(agent: AgentKind) -> IconKind {
         AgentKind::Codebuddy => IconKind::Codebuddy,
         AgentKind::Opencode => IconKind::Opencode,
         // 暂无确认可用的品牌素材，回落通用图标（spec §8/§6 明确允许）。
-        AgentKind::Codex | AgentKind::V8agent | AgentKind::Unknown => IconKind::Bot,
+        AgentKind::Codex | AgentKind::Goose | AgentKind::V8agent | AgentKind::Unknown => {
+            IconKind::Bot
+        }
     }
 }
 

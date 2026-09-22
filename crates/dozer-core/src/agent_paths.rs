@@ -80,6 +80,18 @@ pub fn v8agent_project_dir_in(home: &Path, cwd: &Path) -> PathBuf {
     project_dir_in(home, ".v8agent", cwd)
 }
 
+/// Goose 的 hook journal 存储目录:`~/.dozer/agents/goose/projects/<cwd-key>/`
+/// 下,每个 Dozer 会话一份 `<dozer-session-id>.jsonl`(见 spec D4)。这是
+/// Dozer 自有的 journal,不读也不写 Goose 自己的 `sessions.db`。
+pub fn goose_project_dir(cwd: &Path) -> PathBuf {
+    goose_project_dir_in(&home_dir(), cwd)
+}
+
+/// `home` 显式传入版本,测试用(不碰 `HOME` 环境变量)。
+pub fn goose_project_dir_in(home: &Path, cwd: &Path) -> PathBuf {
+    project_dir_in(home, ".dozer/agents/goose", cwd)
+}
+
 /// Codex 的 transcript 存储根目录。**故意没有** `codex_project_dir_in`:
 /// Codex 不按项目建目录,而是 `sessions/YYYY/MM/DD/rollout-*.jsonl` 按日期
 /// 三层嵌套(实测本机 43 份 rollout 全是这个布局,见 spike 记录
@@ -143,6 +155,15 @@ mod tests {
     fn v8agent_dir_uses_claude_style_encoding_under_its_own_root() {
         let d = v8agent_project_dir(Path::new("/a/b/c"));
         assert!(d.to_string_lossy().ends_with("/.v8agent/projects/-a-b-c"));
+    }
+
+    #[test]
+    fn goose_project_dir_lives_under_dozer_data_dir() {
+        let d = goose_project_dir_in(Path::new("/home/u"), Path::new("/a/b/c"));
+        assert_eq!(
+            d,
+            PathBuf::from("/home/u/.dozer/agents/goose/projects/-a-b-c")
+        );
     }
 
     /// Codex 的存储根不参与 `project_key` 编码(它压根没有"项目子目录"这一

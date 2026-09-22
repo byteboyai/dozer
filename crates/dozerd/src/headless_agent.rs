@@ -119,6 +119,7 @@ fn bare_program_name(agent: AgentKind) -> Option<&'static str> {
         AgentKind::Claude => Some("claude"),
         AgentKind::Codebuddy => Some("codebuddy"),
         AgentKind::Opencode => Some("opencode"),
+        AgentKind::Goose => Some("goose"),
         AgentKind::V8agent => Some("v8agent"),
         AgentKind::Unknown | AgentKind::Codex => None,
     }
@@ -223,6 +224,20 @@ fn build_command(
             let stdin_text = format!("{}\n\n{}", instruction_text(), turns_text);
             Some((cmd, Some(stdin_text.into_bytes())))
         }
+        AgentKind::Goose => {
+            // `goose run --no-session --quiet --text <prompt>` 一次性总结(见
+            // spec D7):`--no-session` 不建可见会话,`--quiet` 只输出模型回复
+            // (配合 `extract_summary` 从 stdout 抠分隔符 JSON)。移除
+            // `DOZER_SESSION_ID`,避免总结任务触发 hook 记录出多余的 transcript。
+            let mut cmd = tokio::process::Command::new(program);
+            cmd.arg("run")
+                .arg("--no-session")
+                .arg("--quiet")
+                .arg("--text")
+                .arg(format!("{}\n\n{}", instruction_text(), turns_text));
+            cmd.env_remove("DOZER_SESSION_ID");
+            Some((cmd, None))
+        }
         AgentKind::Unknown | AgentKind::Codex => None,
     }
 }
@@ -274,6 +289,19 @@ fn build_task_command(
                 .env("DOZER_SESSION_ID", session_id)
                 .env("V8AGENT_ONESHOT", "1");
             Some((cmd, Some(prompt.as_bytes().to_vec())))
+        }
+        AgentKind::Goose => {
+            // Todo 派发(见 spec D7):在项目 cwd 下 `goose run --quiet --text
+            // <prompt>`,保留 `DOZER_SESSION_ID` 让 hooks 能记录执行状态和
+            // transcript。没有 `--no-session`——任务处理要能被 Dozer 感知。
+            let mut cmd = tokio::process::Command::new(program);
+            cmd.current_dir(project_dir)
+                .env("DOZER_SESSION_ID", session_id)
+                .arg("run")
+                .arg("--quiet")
+                .arg("--text")
+                .arg(prompt);
+            Some((cmd, None))
         }
         AgentKind::Unknown | AgentKind::Codex => None,
     }
@@ -684,5 +712,68 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err, HeadlessError::Timeout);
+    }
+
+    #[test]
+    fn bare_program_name_maps_goose_to_goose() {
+        assert_eq!(bare_program_name(AgentKind::Goose), Some("goose"));
+    }
+
+    #[test]
+    fn build_command_goose_summary_uses_run_no_session_quiet_text_and_clears_session() {
+        let (cmd, stdin) = build_command(AgentKind::Goose, "goose", "内容").unwrap();
+        assert_eq!(stdin, None, "Goose 总结走 --text 参数,不写 stdin");
+        let args: Vec<String> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            &args[..4],
+            &["run", "--no-session", "--quiet", "--text"],
+            "总结命令是 goose run --no-session --quiet --text <prompt>(spec D7)"
+        );
+        assert_eq!(args.len(), 5, "第 5 个参数是拼接的 prompt 文本");
+        let cleared = cmd
+            .as_std()
+            .get_envs()
+            .any(|(k, v)| k.to_str() == Some("DOZER_SESSION_ID") && v.is_none());
+        assert!(cleared, "总结场景应移除 DOZER_SESSION_ID");
+    }
+
+    #[test]
+    fn build_task_command_goose_keeps_session_env_and_sets_cwd() {
+        let (cmd, _) = build_task_command(
+            AgentKind::Goose,
+            "goose",
+            Path::new("/tmp/probe-dir"),
+            "sess-1",
+            "prompt",
+        )
+        .unwrap();
+        assert_eq!(
+            cmd.as_std().get_current_dir(),
+            Some(Path::new("/tmp/probe-dir"))
+        );
+        let envs: std::collections::HashMap<_, _> = cmd
+            .as_std()
+            .get_envs()
+            .filter_map(|(k, v)| Some((k.to_str()?.to_string(), v?.to_str()?.to_string())))
+            .collect();
+        assert_eq!(
+            envs.get("DOZER_SESSION_ID"),
+            Some(&"sess-1".to_string()),
+            "Todo 派发保留 DOZER_SESSION_ID 让 hooks 记录状态"
+        );
+        let args: Vec<String> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            &args[..3],
+            &["run", "--quiet", "--text"],
+            "Todo 命令不含 --no-session(spec D7)"
+        );
     }
 }

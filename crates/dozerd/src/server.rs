@@ -388,7 +388,11 @@ fn kill_remaining_live_sessions(registry: &SessionRegistry) {
 pub fn agent_state_for(event: &str) -> Option<dozer_core::protocol::AgentState> {
     use dozer_core::protocol::AgentState::*;
     match event {
-        "UserPromptSubmit" | "PreToolUse" | "PostToolUse" => Some(Running),
+        // `PostToolUseFailure`/`AfterFileEdit` 是 Goose 的原生事件名(其余
+        // 四家经 dozer-hook 翻译层已折叠进 `PostToolUse` 等),这里直接纳入
+        // Running——Goose 走通用状态映射(见 spec D6)。
+        "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "PostToolUseFailure"
+        | "AfterFileEdit" => Some(Running),
         "Notification" => Some(AwaitingInput),
         "Stop" => Some(TurnEnded),
         "SessionStart" | "SessionEnd" => Some(Idle),
@@ -1045,6 +1049,16 @@ mod tests {
         assert_eq!(agent_state_for("SessionStart"), Some(Idle));
         assert_eq!(agent_state_for("SessionEnd"), Some(Idle));
         assert_eq!(agent_state_for("SomethingNew"), None);
+    }
+
+    #[test]
+    fn agent_state_mapping_goose_events_run_and_never_await_input() {
+        use dozer_core::protocol::AgentState::*;
+        // Goose 没有独立稳定的"等待用户批准"事件,不能把 PreToolUse 猜成
+        // AwaitingInput(它也会在自动批准模式下触发,见 spec D6)。
+        assert_eq!(agent_state_for("PostToolUseFailure"), Some(Running));
+        assert_eq!(agent_state_for("AfterFileEdit"), Some(Running));
+        assert_ne!(agent_state_for("PreToolUse"), Some(AwaitingInput));
     }
 
     #[test]

@@ -1,9 +1,10 @@
 mod codebuddy;
 mod codex;
+mod goose;
 mod opencode;
 
 use dozer_core::protocol::{AgentKind, Request, encode_line};
-use dozer_hook::{install, opencode_install};
+use dozer_hook::{goose_install, install, opencode_install};
 use std::io::{Read, Write};
 use std::time::Duration;
 
@@ -18,6 +19,9 @@ fn main() {
                     true,
                 ));
             }
+            if agent == "goose" {
+                std::process::exit(goose_install::run_at(&goose_install::plugins_dir(), true));
+            }
             std::process::exit(install::run_at(
                 &install::settings_path_for(&agent),
                 &agent,
@@ -31,6 +35,9 @@ fn main() {
                     &opencode_install::plugins_dir(),
                     false,
                 ));
+            }
+            if agent == "goose" {
+                std::process::exit(goose_install::run_at(&goose_install::plugins_dir(), false));
             }
             std::process::exit(install::run_at(
                 &install::settings_path_for(&agent),
@@ -56,6 +63,7 @@ fn parse_agent(arg: &str) -> AgentKind {
         "codebuddy" => AgentKind::Codebuddy,
         "opencode" => AgentKind::Opencode,
         "codex" => AgentKind::Codex,
+        "goose" => AgentKind::Goose,
         _ => AgentKind::Unknown,
     }
 }
@@ -121,6 +129,23 @@ fn forward(agent: AgentKind, event_arg: Option<&str>) {
             && let Err(e) = opencode::append_transcript_line(&cwd, &session_id, &line)
         {
             eprintln!("opencode transcript 落盘失败（已忽略，不影响转发）: {e}");
+        }
+    }
+    if agent == AgentKind::Goose {
+        // Goose hook 事件是 Goose 的原生 JSON,不是 Dozer 可摄取的 transcript
+        // 形状。这里先把它落盘成 Dozer 自有 journal(见 `goose` 模块),再把
+        // journal 绝对路径补进 `transcript_path`,复用 dozerd 的
+        // `maybe_ingest_from_hook_data` 增量摄取。cwd 取 hook 进程自己的当前
+        // 工作目录(Goose 用 `sh -c` 起 hook,继承会话工作目录,见 spec D3)。
+        let Ok(cwd) = std::env::current_dir() else {
+            return;
+        };
+        let path = goose::write_journal(&cwd, &session_id, &event, ts_ms, &data);
+        if let Some(obj) = data.as_object_mut() {
+            obj.insert(
+                "transcript_path".to_string(),
+                serde_json::Value::String(path.to_string_lossy().into_owned()),
+            );
         }
     }
     let req = Request::HookEvent {
@@ -189,6 +214,11 @@ mod tests {
     #[test]
     fn parse_agent_recognizes_codex() {
         assert_eq!(parse_agent("codex"), AgentKind::Codex);
+    }
+
+    #[test]
+    fn parse_agent_recognizes_goose() {
+        assert_eq!(parse_agent("goose"), AgentKind::Goose);
     }
 
     #[test]

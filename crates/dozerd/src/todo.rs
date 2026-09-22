@@ -41,6 +41,7 @@ fn agent_from_label(s: &str) -> Option<dozer_core::protocol::AgentKind> {
         "claude" => Some(AgentKind::Claude),
         "codebuddy" => Some(AgentKind::Codebuddy),
         "opencode" => Some(AgentKind::Opencode),
+        "goose" => Some(AgentKind::Goose),
         "v8agent" => Some(AgentKind::V8agent),
         _ => None,
     }

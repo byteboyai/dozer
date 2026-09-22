@@ -65,6 +65,7 @@ fn agent_to_str(a: AgentKind) -> &'static str {
         AgentKind::Codebuddy => "codebuddy",
         AgentKind::Opencode => "opencode",
         AgentKind::Codex => "codex",
+        AgentKind::Goose => "goose",
         AgentKind::V8agent => "v8agent",
     }
 }
@@ -75,6 +76,7 @@ fn agent_from_str(s: &str) -> AgentKind {
         "codebuddy" => AgentKind::Codebuddy,
         "opencode" => AgentKind::Opencode,
         "codex" => AgentKind::Codex,
+        "goose" => AgentKind::Goose,
         "v8agent" => AgentKind::V8agent,
         _ => AgentKind::Unknown,
     }
@@ -509,13 +511,15 @@ impl TranscriptStore {
     /// `home` 显式传入版本，测试用。
     pub fn delete_project_transcripts_in(&self, home: &Path, cwd: &str) -> Result<u32> {
         use dozer_core::agent_paths::{
-            claude_project_dir_in, codebuddy_project_dir_in, opencode_project_dir_in,
+            claude_project_dir_in, codebuddy_project_dir_in, goose_project_dir_in,
+            opencode_project_dir_in,
         };
         let cwd_path = Path::new(cwd);
         let dirs = [
             claude_project_dir_in(home, cwd_path),
             codebuddy_project_dir_in(home, cwd_path),
             opencode_project_dir_in(home, cwd_path),
+            goose_project_dir_in(home, cwd_path),
         ];
 
         let mut conn = self.conn.lock().expect("db lock");
@@ -576,14 +580,14 @@ impl TranscriptStore {
         offset: u32,
     ) -> Result<Vec<dozer_core::protocol::ConversationSummary>> {
         use dozer_core::agent_paths::{
-            claude_project_dir_in, codebuddy_project_dir_in, opencode_project_dir_in,
-            v8agent_project_dir_in,
+            claude_project_dir_in, codebuddy_project_dir_in, goose_project_dir_in,
+            opencode_project_dir_in, v8agent_project_dir_in,
         };
         let cwd_path = Path::new(cwd);
         let conn = self.conn.lock().expect("db lock");
         let mut out = Vec::new();
 
-        // 按 `dir` 查的四家:它们的 `dir` 本身就是各自的项目存储目录,天然
+        // 按 `dir` 查的五家:它们的 `dir` 本身就是各自的项目存储目录,天然
         // 能按项目过滤。Codex 不在这里——它的 `dir` 是日期目录
         // (`~/.codex/sessions/YYYY/MM/DD/`),项目归属存在 `cwd` 列,走下面
         // 独立的按 cwd 分支(见 `agent_paths::codex_sessions_dir_in` 注释)。
@@ -591,6 +595,7 @@ impl TranscriptStore {
             AgentKind::Claude,
             AgentKind::Codebuddy,
             AgentKind::Opencode,
+            AgentKind::Goose,
             AgentKind::V8agent,
         ];
         let dir_candidates: Vec<(AgentKind, String)> = dir_agents
@@ -601,8 +606,9 @@ impl TranscriptStore {
                     AgentKind::Claude => claude_project_dir_in(home, cwd_path),
                     AgentKind::Codebuddy => codebuddy_project_dir_in(home, cwd_path),
                     AgentKind::Opencode => opencode_project_dir_in(home, cwd_path),
+                    AgentKind::Goose => goose_project_dir_in(home, cwd_path),
                     AgentKind::V8agent => v8agent_project_dir_in(home, cwd_path),
-                    _ => unreachable!("dir_agents 只有四家"),
+                    _ => unreachable!("dir_agents 只有五家"),
                 };
                 (*a, dir.to_string_lossy().into_owned())
             })
@@ -993,6 +999,36 @@ mod tests {
             .unwrap();
         assert_eq!(v8agent_only.len(), 1);
         assert_eq!(v8agent_only[0].agent, AgentKind::V8agent);
+    }
+
+    /// Goose 的 transcript 是按项目建目录的 journal
+    /// (`~/.dozer/agents/goose/projects/<cwd-key>/<session>.jsonl`),应像
+    /// 其余四家按 `dir` 查询一样被 `list_conversations_in` 命中。
+    #[test]
+    fn list_conversations_includes_goose_by_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let cwd = std::path::Path::new("/proj");
+        let goose_dir = dozer_core::agent_paths::goose_project_dir_in(home.path(), cwd);
+        std::fs::create_dir_all(&goose_dir).unwrap();
+        let f = fixture(
+            &goose_dir,
+            "ds.jsonl",
+            "{\"schema_version\":1,\"type\":\"goose_hook\",\"event\":\"UserPromptSubmit\",\"ts_ms\":1,\"dozer_session_id\":\"ds\",\"payload\":{\"message\":\"goose 对话\"}}\n",
+        );
+        store.ingest_session(AgentKind::Goose, &f).unwrap();
+
+        let all = store
+            .list_conversations_in(home.path(), "/proj", None, 10, 0)
+            .unwrap();
+        assert!(all.iter().any(|c| c.agent == AgentKind::Goose));
+
+        let goose_only = store
+            .list_conversations_in(home.path(), "/proj", Some(AgentKind::Goose), 10, 0)
+            .unwrap();
+        assert_eq!(goose_only.len(), 1);
+        assert_eq!(goose_only[0].agent, AgentKind::Goose);
     }
 
     /// 回归测试：`list_conversations_in` 曾经没有 Codex 的按 cwd 查询分支

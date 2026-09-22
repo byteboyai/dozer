@@ -662,6 +662,182 @@ fn parse_codex_shaped_chunk(
     out
 }
 
+/// Goose hook journal(`dozer-hook/src/goose.rs` 落盘的 schema v1 行:
+/// `{"schema_version":1,"type":"goose_hook","event":..,"ts_ms":..,
+/// "dozer_session_id":..,"goose_session_id":..,"payload":{...}}`)→
+/// `ParsedTurn`。只认 `type:"goose_hook"` 的行,`payload` 是 Goose 原生
+/// hook 事件 JSON(字段见官方 hooks 文档)。事件映射见 spec D5:
+///
+/// - `UserPromptSubmit` → `human`(取 `payload.message`)
+/// - `PreToolUse` → `ai` 工具调用(记 `tool_name`/`tool_input`/`tool_call_id`)
+/// - `PostToolUse` → `tool_result` 成功(`is_error=false`)
+/// - `PostToolUseFailure` → `tool_result` 失败(`is_error=true`)
+/// - `AfterFileEdit` → `ai` 文件修改(路径取 `matcher_context`,恒
+///   `mutating_tool_calls=1`)
+/// - `Stop` → `ai`(取 `last_assistant_message`,为空则不产出 turn)
+///
+/// 生命周期(`SessionStart`/`SessionEnd`)与未知事件不产出 turn。未知
+/// `schema_version` 跳过(记录 warning),不 panic——未来 schema 演进时
+/// 旧 parser 只降级为"读不到",不崩溃。
+fn parse_goose_hook_chunk(
+    text: &str,
+    conversation_id: &str,
+    starting_turn_index: i64,
+) -> Vec<ParsedTurn> {
+    let mut out = Vec::new();
+    let mut turn_index = starting_turn_index;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) != Some("goose_hook") {
+            continue;
+        }
+        if v.get("schema_version").and_then(|n| n.as_u64()) != Some(1) {
+            tracing::warn!("goose hook journal 未知 schema_version,跳过该行");
+            continue;
+        }
+        let Some(event) = v.get("event").and_then(|e| e.as_str()) else {
+            continue;
+        };
+        let ts = v.get("ts_ms").and_then(|n| n.as_u64());
+        let Some(payload) = v.get("payload") else {
+            continue;
+        };
+        let fallback = || fallback_key(conversation_id, turn_index);
+        match event {
+            "UserPromptSubmit" => {
+                let Some(content) = payload.get("message").and_then(|m| m.as_str()) else {
+                    continue;
+                };
+                let content = content.trim().to_string();
+                if content.is_empty() {
+                    continue;
+                }
+                out.push(ParsedTurn {
+                    message_key: fallback(),
+                    role: "human".into(),
+                    content,
+                    ts,
+                    raw_json: line.to_string(),
+                    ..Default::default()
+                });
+                turn_index += 1;
+            }
+            "PreToolUse" => {
+                let tool_name = payload
+                    .get("tool_name")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("工具");
+                let tool_input = payload.get("tool_input").cloned().unwrap_or(Value::Null);
+                let message_key = payload
+                    .get("tool_call_id")
+                    .and_then(|i| i.as_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(fallback);
+                out.push(ParsedTurn {
+                    message_key,
+                    role: "ai".into(),
+                    content: String::new(),
+                    tools_summary: vec![tool_summary(tool_name, &tool_input)],
+                    tool_calls: 1,
+                    ts,
+                    raw_json: line.to_string(),
+                    ..Default::default()
+                });
+                turn_index += 1;
+            }
+            "PostToolUse" | "PostToolUseFailure" => {
+                let is_error = event == "PostToolUseFailure";
+                let tool_name = payload
+                    .get("tool_name")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("工具");
+                let content = if is_error {
+                    format!("工具执行失败: {tool_name}")
+                } else {
+                    format!("工具执行成功: {tool_name}")
+                };
+                out.push(ParsedTurn {
+                    message_key: fallback(),
+                    role: "tool_result".into(),
+                    content,
+                    is_error,
+                    ts,
+                    raw_json: line.to_string(),
+                    ..Default::default()
+                });
+                turn_index += 1;
+            }
+            "AfterFileEdit" => {
+                let tool_name = payload
+                    .get("tool_name")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("file_edit");
+                // matcher_context 是编辑的文件路径(官方 hooks 文档明确)。
+                let path = payload
+                    .get("matcher_context")
+                    .and_then(|p| p.as_str())
+                    .map(str::to_string);
+                let mut files_touched = Vec::new();
+                if let Some(p) = &path {
+                    files_touched.push(p.clone());
+                }
+                let summary = match &path {
+                    Some(p) => {
+                        let base = std::path::Path::new(p)
+                            .file_name()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| p.clone());
+                        format!("{tool_name} {base}")
+                    }
+                    None => tool_name.to_string(),
+                };
+                out.push(ParsedTurn {
+                    message_key: fallback(),
+                    role: "ai".into(),
+                    content: String::new(),
+                    tools_summary: vec![summary],
+                    tool_calls: 1,
+                    mutating_tool_calls: 1,
+                    files_touched,
+                    ts,
+                    raw_json: line.to_string(),
+                    ..Default::default()
+                });
+                turn_index += 1;
+            }
+            "Stop" => {
+                let Some(content) = payload
+                    .get("last_assistant_message")
+                    .and_then(|m| m.as_str())
+                else {
+                    continue;
+                };
+                let content = content.trim().to_string();
+                if content.is_empty() {
+                    continue;
+                }
+                out.push(ParsedTurn {
+                    message_key: fallback(),
+                    role: "ai".into(),
+                    content,
+                    ts,
+                    raw_json: line.to_string(),
+                    ..Default::default()
+                });
+                turn_index += 1;
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// 按 agent 分派解析一段(必为完整行)transcript 文本。`starting_turn_index`
 /// 是这段文本第一条产出的 `ParsedTurn` 应该编到的 `turn_index`(调用方从
 /// `conversations`/`conversation_turns` 已有数据算出,续接编号,不重置)。
@@ -685,6 +861,7 @@ pub fn parse_chunk(
             parse_codebuddy_shaped_chunk(text, conversation_id, starting_turn_index)
         }
         AgentKind::Codex => parse_codex_shaped_chunk(text, conversation_id, starting_turn_index),
+        AgentKind::Goose => parse_goose_hook_chunk(text, conversation_id, starting_turn_index),
     }
 }
 
@@ -720,6 +897,9 @@ pub fn extract_turn_trace_detail(raw_json: &str, agent: AgentKind) -> TurnTraceD
         // 但结构化工具调用/思考文本不在 v1 范围内,读时补全维持全空
         // ——跟"有 raw_json 但选择不解析"是两回事,不是没有数据可读。
         AgentKind::Codex => TurnTraceDetail::default(),
+        // Goose 的 PreToolUse 行携带 tool_name/tool_input,读时补出结构化
+        // 工具调用明细(其余 Goose 行无结构化内容,回全空)。
+        AgentKind::Goose => extract_goose_trace_detail(&v),
     }
 }
 
@@ -801,6 +981,32 @@ fn extract_codebuddy_trace_detail(v: &Value) -> TurnTraceDetail {
             }
         }
         _ => TurnTraceDetail::default(),
+    }
+}
+
+/// Goose journal 行的读时结构化工具调用明细:只在 `PreToolUse` 行上产出
+/// 一个 `ToolCallInfo`(summary 复用通用 `tool_summary`、`input_json` 是
+/// `tool_input` 的 pretty JSON)。其余 Goose 行没有结构化内容,回全空。
+fn extract_goose_trace_detail(v: &Value) -> TurnTraceDetail {
+    if v.get("type").and_then(|t| t.as_str()) != Some("goose_hook")
+        || v.get("event").and_then(|e| e.as_str()) != Some("PreToolUse")
+    {
+        return TurnTraceDetail::default();
+    }
+    let Some(payload) = v.get("payload") else {
+        return TurnTraceDetail::default();
+    };
+    let name = payload
+        .get("tool_name")
+        .and_then(|t| t.as_str())
+        .unwrap_or("工具");
+    let input = payload.get("tool_input").cloned().unwrap_or(Value::Null);
+    TurnTraceDetail {
+        thinking_text: None,
+        tool_calls: vec![ToolCallInfo {
+            summary: tool_summary(name, &input),
+            input_json: input_json_of(&input),
+        }],
     }
 }
 
@@ -1293,5 +1499,97 @@ mod trace_detail_tests {
     fn extract_trace_detail_unhandled_agent_returns_empty() {
         let detail = extract_turn_trace_detail(r#"{"type":"whatever"}"#, AgentKind::Codex);
         assert_eq!(detail, TurnTraceDetail::default());
+    }
+
+    // —— Goose journal parser ——
+
+    #[test]
+    fn goose_parses_human_tool_and_stop_turns() {
+        let text = concat!(
+            "{\"schema_version\":1,\"type\":\"goose_hook\",\"event\":\"SessionStart\",\"ts_ms\":1,\"dozer_session_id\":\"ds\",\"payload\":{\"session_id\":\"g-1\"}}\n",
+            "{\"schema_version\":1,\"type\":\"goose_hook\",\"event\":\"UserPromptSubmit\",\"ts_ms\":2,\"dozer_session_id\":\"ds\",\"payload\":{\"message\":\"帮我修一下\"}}\n",
+            "{\"schema_version\":1,\"type\":\"goose_hook\",\"event\":\"PreToolUse\",\"ts_ms\":3,\"dozer_session_id\":\"ds\",\"payload\":{\"tool_name\":\"developer__shell\",\"tool_call_id\":\"tc-1\",\"tool_input\":{\"command\":\"cargo test\"}}}\n",
+            "{\"schema_version\":1,\"type\":\"goose_hook\",\"event\":\"PostToolUse\",\"ts_ms\":4,\"dozer_session_id\":\"ds\",\"payload\":{\"tool_name\":\"developer__shell\"}}\n",
+            "{\"schema_version\":1,\"type\":\"goose_hook\",\"event\":\"Stop\",\"ts_ms\":5,\"dozer_session_id\":\"ds\",\"payload\":{\"last_assistant_message\":\"修好了\"}}\n",
+        );
+        let turns = parse_chunk(AgentKind::Goose, text, "conv1", 0);
+        // SessionStart 不产出 turn。
+        assert_eq!(turns.len(), 4);
+        assert_eq!(turns[0].role, "human");
+        assert_eq!(turns[0].content, "帮我修一下");
+        assert_eq!(turns[1].role, "ai");
+        assert_eq!(turns[1].tool_calls, 1);
+        assert_eq!(turns[1].tools_summary, vec!["developer__shell cargo test"]);
+        assert_eq!(turns[2].role, "tool_result");
+        assert!(!turns[2].is_error);
+        assert_eq!(turns[3].role, "ai");
+        assert_eq!(turns[3].content, "修好了");
+    }
+
+    #[test]
+    fn goose_post_tool_use_failure_sets_is_error() {
+        let text = "{\"schema_version\":1,\"type\":\"goose_hook\",\"event\":\"PostToolUseFailure\",\"ts_ms\":4,\"dozer_session_id\":\"ds\",\"payload\":{\"tool_name\":\"developer__shell\"}}\n";
+        let turns = parse_chunk(AgentKind::Goose, text, "conv1", 0);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].role, "tool_result");
+        assert!(turns[0].is_error);
+        assert!(turns[0].content.contains("失败"));
+    }
+
+    #[test]
+    fn goose_after_file_edit_sets_mutating_and_files_touched() {
+        let text = "{\"schema_version\":1,\"type\":\"goose_hook\",\"event\":\"AfterFileEdit\",\"ts_ms\":5,\"dozer_session_id\":\"ds\",\"payload\":{\"tool_name\":\"developer__edit\",\"matcher_context\":\"/proj/src/main.rs\"}}\n";
+        let turns = parse_chunk(AgentKind::Goose, text, "conv1", 0);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].role, "ai");
+        assert_eq!(turns[0].mutating_tool_calls, 1);
+        assert_eq!(turns[0].files_touched, vec!["/proj/src/main.rs"]);
+    }
+
+    #[test]
+    fn goose_stop_with_empty_message_produces_no_turn() {
+        let text = "{\"schema_version\":1,\"type\":\"goose_hook\",\"event\":\"Stop\",\"ts_ms\":5,\"dozer_session_id\":\"ds\",\"payload\":{}}\n";
+        let turns = parse_chunk(AgentKind::Goose, text, "conv1", 0);
+        assert!(turns.is_empty());
+    }
+
+    #[test]
+    fn goose_skips_unknown_schema_version_and_unknown_events() {
+        let text = concat!(
+            "{\"schema_version\":2,\"type\":\"goose_hook\",\"event\":\"UserPromptSubmit\",\"ts_ms\":1,\"dozer_session_id\":\"ds\",\"payload\":{\"message\":\"未来版本\"}}\n",
+            "{\"schema_version\":1,\"type\":\"goose_hook\",\"event\":\"SessionEnd\",\"ts_ms\":2,\"dozer_session_id\":\"ds\",\"payload\":{}}\n",
+            "{\"type\":\"some_other_shape\"}\n",
+            "not-json\n",
+        );
+        let turns = parse_chunk(AgentKind::Goose, text, "conv1", 0);
+        assert!(
+            turns.is_empty(),
+            "未知 schema 版本/生命周期事件/畸形行都不产出 turn"
+        );
+    }
+
+    #[test]
+    fn goose_pre_tool_use_trace_detail_keeps_tool_name_and_input() {
+        let raw = "{\"schema_version\":1,\"type\":\"goose_hook\",\"event\":\"PreToolUse\",\"ts_ms\":3,\"dozer_session_id\":\"ds\",\"payload\":{\"tool_name\":\"developer__shell\",\"tool_call_id\":\"tc-1\",\"tool_input\":{\"command\":\"cargo test\"}}}";
+        let detail = extract_turn_trace_detail(raw, AgentKind::Goose);
+        assert_eq!(detail.thinking_text, None);
+        assert_eq!(detail.tool_calls.len(), 1);
+        assert_eq!(detail.tool_calls[0].summary, "developer__shell cargo test");
+        assert!(
+            detail.tool_calls[0]
+                .input_json
+                .as_deref()
+                .unwrap()
+                .contains("cargo test")
+        );
+    }
+
+    #[test]
+    fn goose_trace_detail_non_pretooluse_returns_empty() {
+        let raw = "{\"schema_version\":1,\"type\":\"goose_hook\",\"event\":\"UserPromptSubmit\",\"ts_ms\":2,\"dozer_session_id\":\"ds\",\"payload\":{\"message\":\"hi\"}}";
+        assert_eq!(
+            extract_turn_trace_detail(raw, AgentKind::Goose),
+            TurnTraceDetail::default()
+        );
     }
 }

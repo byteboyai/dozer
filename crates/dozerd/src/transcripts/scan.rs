@@ -1,4 +1,4 @@
-//! 启动回填用的目录发现:扫描四家按项目建目录的 agent 的存储根目录下所有
+//! 启动回填用的目录发现:扫描五家按项目建目录的 agent 的存储根目录下所有
 //! 项目子目录,外加 Codex 的按日期目录,列出全部 `.jsonl` 文件。跟
 //! `dozer_core::agent_paths` 的方向相反——那边是"已知 cwd → 算出该项目的
 //! 存储目录"(单项目查询用),这里是"不知道有哪些项目 → 枚举存储根目录下所有
@@ -6,16 +6,17 @@
 //! `session_meta.payload.cwd` 逐个判断。
 
 use dozer_core::agent_paths::{
-    claude_project_dir_in, codebuddy_project_dir_in, codex_sessions_dir_in, home_dir,
-    opencode_project_dir_in, v8agent_project_dir_in,
+    claude_project_dir_in, codebuddy_project_dir_in, codex_sessions_dir_in, goose_project_dir_in,
+    home_dir, opencode_project_dir_in, v8agent_project_dir_in,
 };
 use dozer_core::protocol::AgentKind;
 use std::path::PathBuf;
 
-const AGENT_ROOTS: [(AgentKind, &str); 4] = [
+const AGENT_ROOTS: [(AgentKind, &str); 5] = [
     (AgentKind::Claude, ".claude"),
     (AgentKind::Codebuddy, ".codebuddy"),
     (AgentKind::Opencode, ".dozer/agents/opencode"),
+    (AgentKind::Goose, ".dozer/agents/goose"),
     (AgentKind::V8agent, ".v8agent"),
 ];
 
@@ -99,6 +100,7 @@ pub fn discover_project_transcript_files_in(
         (AgentKind::Claude, claude_project_dir_in(home, cwd)),
         (AgentKind::Codebuddy, codebuddy_project_dir_in(home, cwd)),
         (AgentKind::Opencode, opencode_project_dir_in(home, cwd)),
+        (AgentKind::Goose, goose_project_dir_in(home, cwd)),
         (AgentKind::V8agent, v8agent_project_dir_in(home, cwd)),
     ] {
         for f in jsonl_files_in(&dir) {
@@ -203,6 +205,35 @@ mod tests {
         let found = discover_project_transcript_files_in(home.path(), cwd);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].0, AgentKind::V8agent);
+    }
+
+    #[test]
+    fn discover_all_transcript_files_in_includes_goose() {
+        let home = tempfile::tempdir().unwrap();
+        let goose_dir = dozer_core::agent_paths::goose_project_dir_in(
+            home.path(),
+            std::path::Path::new("/proj/a"),
+        );
+        std::fs::create_dir_all(&goose_dir).unwrap();
+        std::fs::write(goose_dir.join("ds.jsonl"), "{}").unwrap();
+
+        let mut found = discover_all_transcript_files_in(home.path());
+        found.sort_by_key(|(_, p)| p.to_string_lossy().into_owned());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, AgentKind::Goose);
+    }
+
+    #[test]
+    fn discover_project_transcript_files_in_includes_goose_by_dir() {
+        let home = tempfile::tempdir().unwrap();
+        let cwd = std::path::Path::new("/proj/a");
+        let goose_dir = dozer_core::agent_paths::goose_project_dir_in(home.path(), cwd);
+        std::fs::create_dir_all(&goose_dir).unwrap();
+        std::fs::write(goose_dir.join("ds.jsonl"), "{}").unwrap();
+
+        let found = discover_project_transcript_files_in(home.path(), cwd);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, AgentKind::Goose);
     }
 
     /// Codex 不按项目建目录(sessions 按日期三层嵌套),`discover_all_*` 必须

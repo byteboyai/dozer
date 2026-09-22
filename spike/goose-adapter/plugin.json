@@ -1,0 +1,5 @@
+{
+  "name": "dozer-spike",
+  "version": "0.1.0",
+  "description": "Spike plugin to capture raw goose hook payloads"
+}
