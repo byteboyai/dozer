@@ -944,10 +944,6 @@ pub(crate) fn preview_pane_for<'a>(
         PreviewPaneKind::Files => HoverId::PreviewTabularMode,
         PreviewPaneKind::Project => HoverId::ProjectPreviewTabularMode,
     };
-    let editor_msg = move |tab_id, ev| match kind {
-        PreviewPaneKind::Files => Message::PreviewEditorEvent(tab_id, ev),
-        PreviewPaneKind::Project => Message::ProjectPreviewEditorEvent(tab_id, ev),
-    };
     // Find 条与编辑器共享同一份"按面板选消息/悬停态"手法。消息统一走带
     // `PanelKind` 的顶层 `Message::PreviewFind*`(同 `PreviewSaveActive`,一条
     // 消息两面板通吃,Files/Project 由 `PanelKind` 区分)。
@@ -982,7 +978,7 @@ pub(crate) fn preview_pane_for<'a>(
             // 空白页 tab(`TabKind::Blank`)的标题走 [`preview_tab_display_title`]
             // 替换成项目根名(见该函数文档),宽度预算与渲染共用同一个 helper。
             let mut display_title = preview_tab_display_title(ws, tab);
-            if tab.editor.is_some() && tab.dirty {
+            if tab.dirty {
                 display_title.push_str(" *");
             }
             // index 0 的 `Blank` 占位 tab 不可关闭:它上面的 × 点击等同于
@@ -1065,7 +1061,7 @@ pub(crate) fn preview_pane_for<'a>(
         };
         eligible.then(|| {
             tab_render_mode_button(
-                tab.editor.is_some(),
+                tab.uses_rendered_source_editor(),
                 app.hover_progress(render_mode_hover()),
                 toggle_msg(preview.active_idx()),
                 move |hovered| Message::Hover(render_mode_hover(), hovered),
@@ -1200,165 +1196,7 @@ pub(crate) fn preview_pane_for<'a>(
         );
     } else {
         let active_tab = &preview.tabs()[preview.active_idx()];
-        // JSON/JSONL tab 同时挂着原生 editor(`editor: Some`,RawText 视图要
-        // 复用它)与 `json_tree`,`editor` 分支若先命中就会把树视图整个盖住
-        // (2026-09-21 用户报告 `.json5` 没走 json viewer)。故这里显式排除
-        // 带 `json_tree` 的 tab,把渲染权交给下方 `else if let Some(json_tree)`
-        // 那支——它在 Tree 模式画树、RawText 模式再回落到同一个 editor。
-        if let Some(editor) = &active_tab.editor
-            && active_tab.json_tree.is_none()
-            && !active_tab.uses_codemirror()
-        {
-            // 原生 tab:激活 tab 有原生 editor 时,直接在 iced 里渲染它(语法
-            // 高亮/行号/ByteBoy2077 配色),put 下 content。`editor` 为 `None`
-            // 的 wry 路由 tab 不 push 任何 iced 元素——那片区域由 main.rs 定位
-            // 的 wry webview 子视图负责渲染,现状不变。
-            let tab_id = active_tab.id;
-            // 文件内 Find 条:锁着当前激活原生 tab 的会话存在时,在 tab_bar 分隔线
-            // 之下、编辑器之上渲染输入框(框内右侧内嵌 Aa 大小写开关)+ n/m 计数 +
-            // ↑ 上一个 / ↓ 下一命中。
-            // 切走文件时 `PreviewPane` 已 cull 掉失配会话,条随之一并消失——既然
-            // open/lifecycle 保证 `find` 总锁着激活原生 tab、此处又只在激活 tab 是
-            // 原生时进入,读数即可,不必再校 tab 归属。
-            if editor.is_read_only() {
-                // 只读大文件档:⌘F 已在 `Message::PreviewFindOpen` 分流到
-                // `large_file_search`(见 Task 5),这里画对应的搜索条而不是
-                // 下面的普通 Find 条——大文件搜索走磁盘流式扫描,没有"替换"
-                // 概念,条更简单(查询框 + n/m 计数 + 上一条/下一条 + 关闭)。
-                if let Some(session) = preview.large_file_search_state() {
-                    let colors = byteui::theme::color::current();
-                    let panel = find_panel();
-                    let query_for_submit = session.query.clone();
-                    let count_label = text(format!(
-                        "{}/{}",
-                        if session.hits.is_empty() {
-                            0
-                        } else {
-                            session.current + 1
-                        },
-                        session.hits.len()
-                    ))
-                    .size(byteui::theme::font::body())
-                    .color(colors.dim);
-                    let input = byteui::form::input_text::view(
-                        "搜索文件内容…",
-                        &session.query,
-                        false,
-                        None,
-                        !session.query.is_empty(),
-                        Some(Message::PreviewLargeFileSearchSubmit(
-                            panel,
-                            tab_id,
-                            query_for_submit,
-                        )),
-                        false,
-                        move |s: String| Message::PreviewLargeFileSearchSubmit(panel, tab_id, s),
-                    );
-                    let row_el = row![
-                        input,
-                        count_label,
-                        button(text("↑")).on_press(Message::PreviewLargeFileSearchGo(panel, false)),
-                        button(text("↓")).on_press(Message::PreviewLargeFileSearchGo(panel, true)),
-                        button(text("×")).on_press(Message::PreviewLargeFileSearchClose(panel)),
-                    ]
-                    .spacing(6)
-                    .align_y(iced_widget::core::alignment::Alignment::Center);
-                    content = content.push(container(row_el).padding(8).style(
-                        move |_t: &iced_widget::Theme| iced_widget::container::Style {
-                            background: Some(colors.card.into()),
-                            border: iced_widget::core::Border {
-                                color: colors.border,
-                                width: 1.0,
-                                radius: 8.0.into(),
-                            },
-                            ..iced_widget::container::Style::default()
-                        },
-                    ));
-                }
-            } else if let Some(_find) = preview.find_state() {
-                content = content.push(preview_find_bar_widget(app, preview, kind, true));
-            }
-            // 只读大文件档提示:整读/分块两档只读文件(`native_editor::
-            // SizeTier`)在编辑器上方加一条横幅——整读档只报大小,分块档还
-            // 报"仅加载前 X MB"并给"加载更多"按钮续读下一段(Task 4)。
-            if editor.is_read_only() {
-                let colors = byteui::theme::color::current();
-                // 搜索入口:鼠标点击等价于 ⌘F(见 `Message::PreviewFindOpen`
-                // 对只读态的分流),给不知道快捷键的用户一个可点的入口
-                // (人工验收清单"⌘F(或点击搜索入口)")。搜索条已经开着(锁的
-                // 就是这个 tab)时不重复画按钮。
-                let search_already_open = preview
-                    .large_file_search_state()
-                    .is_some_and(|s| s.tab_id == tab_id);
-                let search_button = (!search_already_open).then(|| {
-                    button(
-                        text("搜索")
-                            .size(byteui::theme::font::body())
-                            .color(colors.cyan),
-                    )
-                    .on_press(Message::PreviewLargeFileSearchOpen(find_panel(), tab_id))
-                    .padding([4, 10])
-                });
-                if active_tab.truncated {
-                    let mut banner = row![
-                        text(format!(
-                            "只读 · 文件过大 · 仅加载前 {:.1}MB,共 {:.1}MB",
-                            active_tab.loaded_bytes as f64 / (1024.0 * 1024.0),
-                            active_tab.total_bytes as f64 / (1024.0 * 1024.0)
-                        ))
-                        .size(byteui::theme::font::body())
-                        .color(colors.dim),
-                        iced_widget::space::horizontal(),
-                    ]
-                    .spacing(8)
-                    .align_y(iced_widget::core::Alignment::Center);
-                    if let Some(btn) = search_button {
-                        banner = banner.push(btn);
-                    }
-                    banner = banner.push(
-                        button(
-                            text("加载更多")
-                                .size(byteui::theme::font::body())
-                                .color(colors.gold),
-                        )
-                        .on_press(Message::PreviewLoadMore(find_panel(), tab_id))
-                        .padding([4, 10])
-                        .style(crate::dialog::action_button_style(colors.gold)),
-                    );
-                    content = content.push(container(banner).padding([4, 8]));
-                } else {
-                    let mut banner = row![
-                        text(format!(
-                            "只读 · 文件过大({:.1}MB)",
-                            active_tab.total_bytes as f64 / (1024.0 * 1024.0)
-                        ))
-                        .size(byteui::theme::font::body())
-                        .color(colors.dim),
-                        iced_widget::space::horizontal(),
-                    ]
-                    .spacing(8)
-                    .align_y(iced_widget::core::Alignment::Center);
-                    if let Some(btn) = search_button {
-                        banner = banner.push(btn);
-                    }
-                    content = content.push(container(banner).padding([4, 8]));
-                }
-            }
-            content = content.push(
-                MouseArea::new(
-                    container(editor.view().map(move |ev| editor_msg(tab_id, ev)))
-                        .width(Length::Fill)
-                        .height(Length::Fill),
-                )
-                .on_right_press(Message::PreviewEditorContextMenuOpen {
-                    kind: match kind {
-                        PreviewPaneKind::Files => PanelKind::Files,
-                        PreviewPaneKind::Project => PanelKind::Project,
-                    },
-                    tab_id,
-                }),
-            );
-        } else if let Some(tabular) = &active_tab.tabular
+        if let Some(tabular) = &active_tab.tabular
             && !active_tab.uses_editor_host()
         {
             // 表格 tab:iced 原生渲染 Tabular Viewer(虚拟化网格 + sheet 切换
@@ -1413,23 +1251,6 @@ pub(crate) fn preview_pane_for<'a>(
                             )
                             .width(Length::Fill)
                             .height(Length::Fill),
-                        );
-                    } else if let Some(editor) = &active_tab.editor {
-                        content = content.push(
-                            MouseArea::new(
-                                container(editor.view().map(move |ev| editor_msg(tab_id, ev)))
-                                    .width(Length::Fill)
-                                    .height(Length::Fill),
-                            )
-                            .on_right_press(
-                                Message::PreviewEditorContextMenuOpen {
-                                    kind: match kind {
-                                        PreviewPaneKind::Files => PanelKind::Files,
-                                        PreviewPaneKind::Project => PanelKind::Project,
-                                    },
-                                    tab_id,
-                                },
-                            ),
                         );
                     }
                 }

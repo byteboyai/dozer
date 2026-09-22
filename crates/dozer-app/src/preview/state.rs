@@ -15,11 +15,6 @@ pub struct PreviewTab {
     /// 重新 `load_url`(同 URL 不会重载,flyfish 的 WKWebView 会一直显示
     /// 保存前的旧内容)。
     pub reload_nonce: u64,
-    /// 仅白名单扩展名(`is_editable_extension`)的文件 tab 有值。非空即代表这个
-    /// tab 走原生渲染路径,`desired_webviews()` 据此把它从 wry 期望清单里排除。
-    /// `CodeView` 没有实现 `Clone`/`PartialEq`,这也是 `PreviewTab` 摘掉这两个
-    /// derive 的原因(见下方手写的 `Debug`)。
-    pub editor: Option<crate::code_editor::CodeView>,
     /// 表格类文件(`tabular::is_tabular_extension`)的文件 tab 有值,非空即代表
     /// 这个 tab 走 Tabular Viewer 原生渲染(网格)。与 `editor` 互斥:同一 tab
     /// 要么代码编辑器、要么表格、要么 webview,三者取其一。表格加载是异步的
@@ -122,17 +117,9 @@ impl PreviewTab {
         if self.uses_windowed_editor() || self.uses_rendered_source_editor() {
             return false;
         }
-        self.backend.as_ref().is_some_and(|backend| {
-            backend.hosts_webview()
-                // 兼容兜底(仅 Code):原生编辑器读盘失败且非 CodeMirror 时退回
-                // Flyfish。JSON/Streamed/Tabular 有各自的原生/host 视图,不适用。
-                || (matches!(backend, PreviewBackend::Code(_))
-                    && self.editor.is_none()
-                    && self.tabular.is_none()
-                    && self.json_tree.is_none()
-                    && (!self.uses_codemirror()
-                        || matches!(self.backend_state, BackendState::Failed(_))))
-        })
+        self.backend
+            .as_ref()
+            .is_some_and(|backend| backend.hosts_webview())
     }
 
     pub fn current_mode(&self) -> Option<PreviewMode> {
@@ -226,8 +213,7 @@ impl PreviewTab {
                 "route.kind 与 backend 描述必须一致 (tab {:?})",
                 self.title
             );
-            let has_native_viewer =
-                self.editor.is_some() || self.tabular.is_some() || self.json_tree.is_some();
+            let has_native_viewer = self.tabular.is_some() || self.json_tree.is_some();
             if has_native_viewer {
                 debug_assert!(
                     !self.hosts_webview(),
@@ -251,7 +237,6 @@ impl std::fmt::Debug for PreviewTab {
             .field("total_bytes", &self.total_bytes)
             .field("truncated", &self.truncated)
             .field("loading", &self.loading)
-            .field("editor", &self.editor.is_some())
             .field("tabular", &self.tabular.is_some())
             .field("json_tree", &self.json_tree.is_some())
             .field("pending_jump_line", &self.pending_jump_line)

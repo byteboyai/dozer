@@ -21,7 +21,6 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         kind: TabKind::Blank,
         title: "空白".into(),
         reload_nonce: 0,
-        editor: None,
         tabular: None,
         json_tree: None,
         dirty: false,
@@ -78,21 +77,6 @@ pub(crate) fn path_is_windowed(
 ) -> bool {
     let profile = profile_file(path).unwrap_or_else(|_| analyze(&[], None, 0, None));
     decide_text_policy(&profile, &capabilities.budgets).is_windowed()
-}
-
-/// `path` 是否会被打开为"原生编辑器候选"(即 `is_editable_extension &&
-/// !prefers_rendered_preview`,与 `push_tab` 里挑 `read_and_build_native_editor`
-/// 分支的判据完全一致)。`App::preview_open_path`/`project_preview_open_path`
-/// 用它决定走 `insert_loading_tab`(异步读盘+构造)还是原有 `open_path`
-/// (表格/webview 类,同步、本来就不慢)。
-pub(crate) fn is_native_editor_candidate(path: &std::path::Path) -> bool {
-    let (route, _, _) = route_and_backend(path, &crate::capabilities::current());
-    match route.kind {
-        // feature 打开后 Code/JSON/Streamed 的文本视图统一走 editor host:
-        // 普通文件由 host 自取正文,窗口化由 Rust 推窗口,JSON Tree 仍原生。
-        PreviewKind::Code | PreviewKind::Json | PreviewKind::Streamed => !codemirror_enabled(),
-        _ => false,
-    }
 }
 
 /// Find 输入框的稳定 `widget::Id`。Files / Project 两个预览面板各渲染一根
@@ -219,16 +203,9 @@ impl PreviewPane {
         std::mem::take(&mut self.pending_editor_reveal_focus)
     }
 
-    /// 当前锁定 Find 会话的那个 tab 的原生编辑器 `focus_id`——
-    /// `take_pending_editor_reveal_focus` 为真时 main.rs 用它跑
-    /// `FocusAlso` 操作。没有 Find 会话/该 tab 没有原生编辑器都返回 `None`。
+    /// 老 iced editor 已退役:不再有原生编辑器焦点 id。
     pub fn find_editor_focus_id(&self) -> Option<iced_widget::core::widget::Id> {
-        let tab_id = self.find.as_ref()?.tab_id;
-        self.tabs
-            .iter()
-            .find(|t| t.id == tab_id)
-            .and_then(|t| t.editor.as_ref())
-            .map(|e| e.focus_id())
+        None
     }
 
     /// Find 条关闭(⌘F 第二下 / × / Esc)后焦点归回其下的代码编辑器——复用
@@ -239,23 +216,16 @@ impl PreviewPane {
         self.pending_find_focus = false;
     }
 
-    /// 当前激活 tab 若走原生渲染,返回其编辑器的 `widget::Id`(供
-    /// `operation::focusable::focus` 定位)。
+    /// 老 iced editor 已退役:不再有原生编辑器焦点 id。
     pub fn active_editor_focus_id(&self) -> Option<iced_widget::core::widget::Id> {
-        self.tabs
-            .get(self.active)
-            .and_then(|t| t.editor.as_ref())
-            .map(|e| e.focus_id())
+        None
     }
 
-    /// 当前激活 tab 是否为原生可编辑的 `CodeView`(有真实 iced `text_editor`,
-    /// 点其内容区那帧会 self-focus 出光标)。main.rs 据此判断这次左键按下该
-    /// 不该把预览编辑器一起 `blur`(否则点到编辑器本身就会把刚自聚焦出的光标
-    /// 同一帧抬掉——"点代码预览无法获得光标")。
+    /// 当前激活 tab 是否为原生可编辑渲染(仅剩 Tabular 网格)。
     pub fn active_tab_is_native(&self) -> bool {
         self.tabs
             .get(self.active)
-            .is_some_and(|t| t.editor.is_some() || t.tabular.is_some())
+            .is_some_and(|t| t.tabular.is_some())
     }
 
     /// 同一文件已开的 tab 下标(供 `open_path` 与 `App::preview_open_path`
@@ -266,17 +236,9 @@ impl PreviewPane {
             .position(|t| t.kind == TabKind::File(path.to_path_buf()))
     }
 
-    /// 取某个预览 tab 内部原生 `CodeView` 的 iced 焦点 id——编辑器右键菜单
-    /// 的"复制/剪切/粘贴"要合成 ⌘C/⌘X/⌘V 键盘事件、且事件必须作用于这个
-    /// 编辑器,靠的就是先把焦点拨到这个 id(见 `App::preview_editor_focus_id`
-    /// 与 `pending_native_menu_edit_key` 的用法)。没有原生编辑器(表格/webview
-    /// 档 / 占位 tab)返回 `None`,调用方据此取消菜单的剪贴板动作。
-    pub fn editor_focus_id(&self, tab_id: usize) -> Option<iced_widget::core::widget::Id> {
-        self.tabs
-            .iter()
-            .find(|t| t.id == tab_id)
-            .and_then(|t| t.editor.as_ref())
-            .map(|e| e.focus_id())
+    /// 老 iced editor 已退役:不再有原生编辑器焦点 id(右键菜单剪贴板动作自然取消)。
+    pub fn editor_focus_id(&self, _tab_id: usize) -> Option<iced_widget::core::widget::Id> {
+        None
     }
 
     pub fn open_path(&mut self, path: PathBuf) -> usize {
@@ -311,29 +273,8 @@ impl PreviewPane {
             }
             TabKind::Blank => (None, None, BackendState::Ready),
         };
-        let native_load = match &kind {
-            TabKind::File(path)
-                if route.as_ref().is_some_and(|route| {
-                    !codemirror_enabled()
-                        && matches!(
-                            route.kind,
-                            PreviewKind::Code | PreviewKind::Json | PreviewKind::Streamed
-                        )
-                }) =>
-            {
-                read_and_build_native_editor(path).ok()
-            }
-            _ => None,
-        };
-        let (editor, loaded_bytes, total_bytes, truncated) = match native_load {
-            Some(load) => (
-                Some(load.view),
-                load.loaded_bytes,
-                load.total_bytes,
-                load.truncated,
-            ),
-            None => (None, 0, 0, false),
-        };
+        // 老 iced editor 已退役:不再同步读盘构造 CodeView。
+        let (loaded_bytes, total_bytes, truncated) = (0u64, 0u64, false);
         // 表格类文件委托 Tabular Viewer(与 editor 互斥)。实际解析是异步的
         // (calamine/csv 对大文件可能要跑一阵,不能卡在这个同步方法里,见
         // `crate::tabular` 模块文档的"够数即停"性能策略)——这里只登记
@@ -371,10 +312,6 @@ impl PreviewPane {
             _ => None,
         };
         // 新建原生编辑器 tab:键盘事件无需先点击一次即可直达编辑器(见
-        // `pending_editor_focus` 文档)。
-        if editor.is_some() {
-            self.pending_editor_focus = true;
-        }
         let backend_state = if tabular.is_some() || json_tree.is_some() {
             BackendState::Loading
         } else {
@@ -389,7 +326,6 @@ impl PreviewPane {
             kind,
             title,
             reload_nonce: 0,
-            editor,
             tabular,
             json_tree,
             dirty: false,
@@ -420,76 +356,6 @@ impl PreviewPane {
         // 新 tab 成为激活者(可能顶掉旧 find tab)——清掉不再匹配的 Find
         // (譬如把搜索着的文件替换掉了,或有 Blank 顶到激活位)。对"同一文件复用
         // 已存在 tab"的 `open_path` 路径,`push_tab` 不跑,见其自行 cull。
-        self.cull_stale_find();
-        id
-    }
-
-    /// 追加一个"原生编辑器候选、但内容尚未读到"的占位 tab,立即返回 `id`——
-    /// 供调用方(`App::preview_open_path`)紧接着 spawn 异步读盘+构造任务,
-    /// 完成后用 `apply_native_load` 回填。`title`/`pending_editor_focus`/
-    /// `cull_stale_find` 等副作用与 `push_tab` 对齐(新 tab 成为激活者、清
-    /// stale find)。
-    pub fn insert_loading_tab(&mut self, kind: TabKind, title: String) -> usize {
-        let id = self.next_id;
-        self.next_id += 1;
-        // JSON 走的就是这条异步路径(`is_native_editor_candidate(json)==true`),
-        // 所以 json_tree 的双视图登记必须在这里也做一遍——只在 `push_tab`
-        // 登记会让用户从文件树打开 JSON(走异步路径)时拿不到树视图。
-        let (route, backend) = match &kind {
-            TabKind::File(path) => {
-                let (route, backend, _) = route_and_backend(path, &self.capabilities);
-                (Some(route), Some(backend))
-            }
-            TabKind::Blank => (None, None),
-        };
-        let windowed = match &kind {
-            TabKind::File(path) => path_is_windowed(path, &self.capabilities),
-            TabKind::Blank => false,
-        };
-        let json_tree = match &kind {
-            TabKind::File(path)
-                if route
-                    .as_ref()
-                    .is_some_and(|route| route.kind == PreviewKind::Streamed) =>
-            {
-                self.pending_json_tree_loads.push((id, path.clone()));
-                Some(JsonTreeState::Loading)
-            }
-            _ => None,
-        };
-        let tab = PreviewTab {
-            id,
-            kind,
-            title,
-            reload_nonce: 0,
-            editor: None,
-            tabular: None,
-            json_tree,
-            dirty: false,
-            loaded_bytes: 0,
-            total_bytes: 0,
-            truncated: false,
-            loading: true,
-            pending_jump_line: None,
-            route,
-            backend,
-            backend_state: BackendState::Loading,
-            windowed,
-            window_index: None,
-            recovery_written: false,
-            pending_restore: None,
-            load_started: None,
-            pending_view: None,
-            pending_tabular: None,
-            web_revision: 0,
-            web_selection: None,
-            web_selected_text: None,
-            web_viewport: None,
-            web_error: None,
-        };
-        tab.debug_assert_backend_consistent();
-        self.tabs.push(tab);
-        self.active = self.tabs.len() - 1;
         self.cull_stale_find();
         id
     }
@@ -536,7 +402,6 @@ impl PreviewPane {
             kind: TabKind::File(path),
             title,
             reload_nonce: 0,
-            editor: None,
             tabular: None,
             json_tree: None,
             dirty: false,
@@ -593,13 +458,6 @@ impl PreviewPane {
         }
     }
 
-    /// 物化时把 tab 标为 iced 异步读盘中(`loading=true`,供渲染/期望清单判据)。
-    pub fn set_tab_loading(&mut self, tab_id: usize, loading: bool) {
-        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
-            tab.loading = loading;
-        }
-    }
-
     /// 物化 JSON/Streamed shell:登记 json_tree 后台加载并置 Loading 态。
     pub fn set_json_tree_loading(&mut self, tab_id: usize, path: PathBuf) {
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
@@ -635,67 +493,16 @@ impl PreviewPane {
     /// 调用一次)并置一次性聚焦位(同步路径 `push_tab` 原有行为);失败则
     /// 保持 `editor: None`(该 tab 落回 webview/flyfish 兜底,`loading` 已
     /// 置假,`desired_webviews()` 会在下一帧自然把它纳入期望清单)。
-    pub fn apply_native_load(
-        &mut self,
-        tab_id: usize,
-        result: Result<native_editor::NativeEditorLoadHandle, String>,
-    ) {
-        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
-            return;
-        };
-        tab.loading = false;
-        let mut loaded = false;
-        if let Ok(handle) = result
-            && let Some(load) = handle.take()
-        {
-            tab.editor = Some(load.view);
-            tab.loaded_bytes = load.loaded_bytes;
-            tab.total_bytes = load.total_bytes;
-            tab.truncated = load.truncated;
-            self.pending_editor_focus = true;
-            loaded = true;
-            // 外部面板（代码健康度）请求的"打开后跳转定位"：编辑器刚填上，
-            // 消费掉 pending 行号并把光标落过去（1-based → 0-based）。
-            if let Some(line) = tab.pending_jump_line.take()
-                && let Some(editor) = tab.editor.as_mut()
-            {
-                editor.move_cursor_to((line.saturating_sub(1), 0));
-            }
-        }
-        // backend 状态机与真实的成功/失败对齐:成功 -> Ready;失败保持
-        // editor: None 并标记 Failed(该 tab 会按旧行为落回 webview 兜底,
-        // 见 `hosts_webview` 的兜底子句)。
-        if loaded {
-            if !matches!(tab.json_tree, Some(JsonTreeState::Loading)) {
-                tab.backend_state.try_transition(BackendState::Ready);
-            }
-        } else {
-            tab.backend_state
-                .try_transition(BackendState::Failed(PreviewError::new(
-                    "原生编辑器加载失败",
-                    true,
-                )));
-        }
+    pub fn apply_native_load(&mut self, _tab_id: usize, _result: Result<(), String>) {
+        // 老 iced editor 已退役;该消息不再产生。
     }
 
-    /// "加载更多"异步续读结果回灌:tab 已不存在/没有 `editor`(结果回来前
-    /// 用户关掉了 tab,或该 tab 根本不是原生编辑器)则 no-op。
+    /// "加载更多"异步续读结果回灌:老 iced 只读大文件档已退役,no-op。
     pub fn apply_more_loaded(
         &mut self,
-        tab_id: usize,
-        result: Result<(String, u64, bool), String>,
+        _tab_id: usize,
+        _result: Result<(String, u64, bool), String>,
     ) {
-        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
-            return;
-        };
-        let Ok((more_text, new_loaded, truncated)) = result else {
-            return;
-        };
-        if let Some(editor) = &mut tab.editor {
-            editor.append_text(&more_text);
-        }
-        tab.loaded_bytes = new_loaded;
-        tab.truncated = truncated;
     }
 
     /// 打开只读大文件档搜索条,锁定 `tab_id`。已开着且锁的是同一个 tab 则
@@ -717,12 +524,6 @@ impl PreviewPane {
 
     pub fn close_large_file_search(&mut self) {
         self.large_file_search = None;
-    }
-
-    /// 只读访问器,供渲染层判断要不要画大文件搜索条(同 `find_state` 的既有
-    /// 写法)。
-    pub fn large_file_search_state(&self) -> Option<&LargeFileSearch> {
-        self.large_file_search.as_ref()
     }
 
     /// 异步搜索结果回灌:会话已被关闭,或已换锁到别的 tab(用户在结果回来
@@ -885,7 +686,7 @@ impl PreviewPane {
                 let TabKind::File(path) = &tab.kind else {
                     return None;
                 };
-                if tab.loading || !tab.backend_state.is_ready() || tab.editor.is_some() {
+                if tab.loading || !tab.backend_state.is_ready() {
                     return None;
                 }
                 // 语言与只读先从 backend 推出:Code(可含窗口化只读)或
@@ -961,23 +762,9 @@ impl PreviewPane {
             .collect()
     }
 
-    /// 按 `PreviewTab.id` 把某个原生 tab 标脏(当且仅当其编辑器收到过"改正文"
-    /// 的 Action 时由 Workspace 转发层调用;见 `preview_tab_editor_event`)。
-    /// tab 不存在/非原生时 no-op。
-    pub fn mark_dirty_by_id(&mut self, tab_id: usize) {
-        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id)
-            && tab.editor.is_some()
-        {
-            tab.dirty = true;
-        }
-    }
-
-    /// 按 `PreviewTab.id` 清除脏标记(⌘S 成功落盘后调用)。
-    pub fn clear_dirty_by_id(&mut self, tab_id: usize) {
-        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
-            tab.dirty = false;
-        }
-    }
+    /// 老 iced editor 已退役:不再有原生标脏入口(CodeMirror 的脏由 web 事件维护)。
+    #[cfg(test)]
+    pub fn mark_dirty_by_id(&mut self, _tab_id: usize) {}
 
     /// Find 条目当前是否显示(至少打开过一次且没被生命周期/手动关掉)。
     pub fn find_bar_open(&self) -> bool {
@@ -1002,36 +789,9 @@ impl PreviewPane {
     /// `webview_pool_id` 是调用方(`Workspace::preview_find_open` 已用
     /// `active_preview_webview_id(kind)` 算好的、含 Project 偏移的池 key)传
     /// 进来的——只有激活 tab 正好是 webview 时才会被用到,原生档忽略它。
-    pub fn open_find_on_active(&mut self, replace_open: bool, webview_pool_id: Option<usize>) {
-        // 优先:激活 tab 是原生 editor → 原生 Find 会话。
-        if let Some(active_id) = self
-            .tabs
-            .get(self.active)
-            .filter(|t| t.editor.is_some())
-            .map(|t| t.id)
-        {
-            if self.find.as_ref().is_some_and(|f| f.tab_id == active_id) {
-                if let Some(f) = self.find.as_mut() {
-                    f.replace_open = replace_open;
-                }
-            } else {
-                self.find = Some(FindState {
-                    tab_id: active_id,
-                    query: String::new(),
-                    current: 0,
-                    count: 0,
-                    case_sensitive: false,
-                    replacement: String::new(),
-                    replace_open,
-                    query_focused: false,
-                    is_webview: false,
-                    pending_webview_exec: None,
-                    webview_pool_id: None,
-                });
-            }
-            return;
-        }
-        // 其次:激活 tab 是 flyfish webview(无原生 editor、是文件、未在读盘
+    pub fn open_find_on_active(&mut self, _replace_open: bool, webview_pool_id: Option<usize>) {
+        // 老 iced 原生 Find 会话已退役;只剩 flyfish webview 档。
+        // 激活 tab 是 flyfish webview(无原生 editor、是文件、未在读盘
         // 中)→ webview Find 会话。锁 webview 池 key,强制收起替换行(无替换)。
         let Some(active_id) = self.active_webview_id() else {
             return;
@@ -1131,51 +891,11 @@ impl PreviewPane {
         // webview(flyfish)档:只把 query 落进状态、挂一次待下发的搜索动作,
         // 真正的命中清点交给 flyfish API(`apply_pending_preview_find` 注入
         // `searchDocument`),不在这里碰 `CodeView`(webview tab 没有原生 editor)。
-        if self.find.as_ref().is_some_and(|f| f.is_webview) {
-            if let Some(s) = self.find.as_mut() {
-                s.query = query;
-                s.pending_webview_exec = Some(WebviewFindAction::Search);
-            }
-            return;
-        }
-        let Some(tab_id) = self.find.as_ref().map(|f| f.tab_id) else {
-            return;
-        };
-        // 先放 query 进状态(下一段要读它重算)。
-        if let Some(state) = self.find.as_mut() {
-            state.query = query;
-        }
-        // 现算命中:清点并选第 1 个整段。
-        let matches = {
-            let Some(editor) = self
-                .tabs
-                .iter()
-                .find(|t| t.id == tab_id)
-                .and_then(|t| t.editor.as_ref())
-            else {
-                return;
-            };
-            editor.find_matches_all(
-                &self.find.as_ref().unwrap().query,
-                self.find.as_ref().unwrap().case_sensitive,
-            )
-        };
-        let count = matches.len();
-        let first = matches.first().copied();
-        // 写回 count/current。
-        if let Some(state) = self.find.as_mut() {
-            state.count = count;
-            state.current = 0;
-        }
-        // 有命中就把第 1 个整段选中([s,e)、光标落末缘),没命中/空 query 不留选区。
-        if let Some((start, end)) = first
-            && let Some(editor) = self.editor_mut(tab_id)
+        if let Some(s) = self.find.as_mut()
+            && s.is_webview
         {
-            editor.select_range(start, end);
-            // 编辑器此刻没有真 iced 焦点(Find 输入框才有),选区不会被原生
-            // `text_editor` 画出来——武装补聚焦标记,见 `pending_editor_reveal_
-            // focus` 文档。
-            self.pending_editor_reveal_focus = true;
+            s.query = query;
+            s.pending_webview_exec = Some(WebviewFindAction::Search);
         }
     }
 
@@ -1194,84 +914,14 @@ impl PreviewPane {
         // webview(flyfish)档:翻命中只挂一次待下发的 `Next`/`Prev` 动作,真正
         // 的跳转高亮交给 `apply_pending_preview_find` 注入
         // `nextSearchResult`/`previousSearchResult`;不在这里用 `CodeView` 现算。
-        if self.find.as_ref().is_some_and(|f| f.is_webview) {
-            if let Some(s) = self.find.as_mut() {
-                s.pending_webview_exec = Some(if next {
-                    WebviewFindAction::Next
-                } else {
-                    WebviewFindAction::Prev
-                });
-            }
-            return;
-        }
-        let Some(state) = self.find.as_ref() else {
-            return;
-        };
-        let empty_query = state.query.is_empty();
-        let tab_id = state.tab_id;
-        let (hits, caret) = {
-            let Some(editor) = self
-                .tabs
-                .iter()
-                .find(|t| t.id == tab_id)
-                .and_then(|t| t.editor.as_ref())
-            else {
-                return;
-            };
-            if empty_query {
-                return;
-            }
-            let q = self.find.as_ref().unwrap().query.clone();
-            let cs = self.find.as_ref().unwrap().case_sensitive;
-            (editor.find_matches_all(&q, cs), editor.cursor_position())
-        };
-        let n = hits.len();
-        if n == 0 {
-            if let Some(s) = self.find.as_mut() {
-                s.count = 0;
-            }
-            return;
-        }
-        // 纵坐标比较:命中与光标都在同一份字节布局里,字典序(line,col)即文件序。
-        let le = |a: (usize, usize), b: (usize, usize)| a.0 < b.0 || (a.0 == b.0 && a.1 <= b.1);
-        let lt = |a: (usize, usize), b: (usize, usize)| a.0 < b.0 || (a.0 == b.0 && a.1 < b.1);
-        // 「当前命中」:光标落在这段 [s,e) 里(s 含 e 不含)。不命中任何段时,取
-        // 「最后一段起点不晚于光标」者——即光标右边还有个更近的段不算;光标压过
-        // 所有段末尾时是最后一个。全段起点都在光标之后=> `None`,视"在一切之前"。
-        let anchor = hits
-            .iter()
-            .position(|(s, e)| le(*s, caret) && lt(caret, *e))
-            .or_else(|| hits.iter().rposition(|(s, _)| le(*s, caret)));
-        let idx = match anchor {
-            Some(a) => {
-                if next {
-                    (a + 1) % n
-                } else {
-                    (a + n - 1) % n
-                }
-            }
-            None => {
-                if next {
-                    0
-                } else {
-                    n - 1
-                }
-            }
-        };
-        let (start, end) = hits[idx];
-        if let Some(s) = self.find.as_mut() {
-            s.count = n;
-            s.current = idx;
-        }
-        if let Some(editor) = self.editor_mut(tab_id) {
-            if next {
-                editor.select_range(start, end);
+        if let Some(s) = self.find.as_mut()
+            && s.is_webview
+        {
+            s.pending_webview_exec = Some(if next {
+                WebviewFindAction::Next
             } else {
-                editor.select_range_backward(start, end);
-            }
-            // 同 `find_type`:补聚焦标记,让原生 `text_editor` 画出这次跳转
-            // 选中的命中(见 `pending_editor_reveal_focus` 文档)。
-            self.pending_editor_reveal_focus = true;
+                WebviewFindAction::Prev
+            });
         }
     }
 
@@ -1280,31 +930,8 @@ impl PreviewPane {
     /// 不移动光标(改动发生在用户聚焦编辑器处,不该被 yank)。供 Workspace 编辑
     /// 事件转发层每收到一个 Edit Action 调用;非锁定 tab/未开条是 no-op。
     pub fn find_refresh_after_edit(&mut self, edited_tab_id: usize) {
-        if !self
-            .find
-            .as_ref()
-            .is_some_and(|f| f.tab_id == edited_tab_id)
-        {
-            return;
-        }
-        let tab_id = edited_tab_id;
-        let count = self
-            .tabs
-            .iter()
-            .find(|t| t.id == tab_id)
-            .and_then(|t| t.editor.as_ref())
-            .map(|e| {
-                e.find_matches_all(
-                    &self.find.as_ref().unwrap().query,
-                    self.find.as_ref().unwrap().case_sensitive,
-                )
-                .len()
-            })
-            .unwrap_or(0);
-        if let Some(s) = self.find.as_mut() {
-            s.count = count;
-            s.current = usize::min(s.current, count.saturating_sub(1));
-        }
+        let _ = edited_tab_id;
+        // 老 iced 原生 Find 已退役;webview 档无需按 buffer 重算计数。
     }
 
     /// 翻转大小写敏感开关(`true`=逐字严格,`false`=ASCII 大小写折叠)。只改
@@ -1361,30 +988,8 @@ impl PreviewPane {
     /// 否。替换完按新 buffer 刷新 `count/current`。空 query / 没条 / 0 命中 no-op,
     /// 返回 `false`。
     pub fn replace_all(&mut self) -> bool {
-        let Some((tab_id, query, cs, repl)) = self.find.as_ref().map(|f| {
-            (
-                f.tab_id,
-                f.query.clone(),
-                f.case_sensitive,
-                f.replacement.clone(),
-            )
-        }) else {
-            return false;
-        };
-        if query.is_empty() {
-            return false;
-        }
-        let replaced = self
-            .editor_mut(tab_id)
-            .map(|editor| editor.replace_all(&query, cs, &repl))
-            .unwrap_or(0);
-        if replaced == 0 {
-            return false;
-        }
-        self.mark_dirty_by_id(tab_id);
-        // 重算之后可能有残留命中(尤其 replacement 又重现 query),count 忠实反映。
-        self.find_refresh_after_edit(tab_id);
-        true
+        // 老 iced 原生替换已退役;webview(flyfish)档没有替换概念。
+        false
     }
 
     /// 「替换当前命中」:把 `find_state().current` 指着的那一处替换掉(第 `nth`
@@ -1394,52 +999,8 @@ impl PreviewPane {
     /// 一路往下逐个处理;简单同字符替换时光标就卡在被换处以便继续替换)。空 query /
     /// 无命中 / 目标已是文件尾(替换后不再有该 query)都会安全 no-op 返回 `false`。
     pub fn replace_current(&mut self) -> bool {
-        let Some((tab_id, query, cs, repl, n)) = self.find.as_ref().map(|f| {
-            (
-                f.tab_id,
-                f.query.clone(),
-                f.case_sensitive,
-                f.replacement.clone(),
-                f.current,
-            )
-        }) else {
-            return false;
-        };
-        if query.is_empty() {
-            return false;
-        }
-        // 被替换命中的起点坐标(换完 buffer 重建会丢光标,靠它把焦点落回原位再
-        // 让 find_go 续next)。前缀在此之前的字节原样保留,坐标在简单替换中仍成立。
-        let lost_start = {
-            let Some(editor) = self
-                .tabs
-                .iter()
-                .find(|t| t.id == tab_id)
-                .and_then(|t| t.editor.as_ref())
-            else {
-                return false;
-            };
-            let all = editor.find_matches_all(&query, cs);
-            let idx = n.min(all.len().saturating_sub(1));
-            all.get(idx).map(|&(start, _)| start)
-        };
-        let did = self
-            .editor_mut(tab_id)
-            .map(|editor| editor.replace_nth(n, &query, cs, &repl))
-            .unwrap_or(false);
-        if !did {
-            return false;
-        }
-        self.mark_dirty_by_id(tab_id);
-        // 光标复位到被换处附近,再走一次「下一个」续递。
-        if let Some(start) = lost_start
-            && let Some(editor) = self.editor_mut(tab_id)
-        {
-            editor.move_cursor_to(start);
-        }
-        self.find_refresh_after_edit(tab_id);
-        self.find_go(true);
-        true
+        // 老 iced 原生 Find/替换已退役;webview(flyfish)档本就没有替换概念。
+        false
     }
 
     /// 内部:激活 tab / 关闭/清空导致激活的原生 tab 变了时,清掉不再匹配的 Find。
@@ -1454,15 +1015,13 @@ impl PreviewPane {
                 return false;
             };
             if f.is_webview {
-                // webview 档:激活 tab 必须还是同一块 webview(无原生 editor)。
+                // webview 档:激活 tab 必须还是同一块 webview。
                 t.id == f.tab_id
-                    && t.editor.is_none()
                     && t.tabular.is_none()
                     && !t.loading
                     && matches!(t.kind, TabKind::File(_))
             } else {
-                // 原生 editor 档:激活 tab 必须是有 editor 且 id 匹配。
-                matches!(t, _ if t.editor.is_some() && t.id == f.tab_id)
+                false
             }
         });
         if !keep {
@@ -1471,16 +1030,6 @@ impl PreviewPane {
             }
             self.find = None;
         }
-    }
-
-    /// 按 tab id 取该 tab 的原生 editor 可变引用。tab 不存在或该 tab 走 wry
-    /// 路径(没有 editor)都返回 `None`。main.rs 把 `Message::PreviewEditorEvent`
-    /// 转发的 `Action` 用它路由给正确的 tab。
-    pub fn editor_mut(&mut self, tab_id: usize) -> Option<&mut crate::code_editor::CodeView> {
-        self.tabs
-            .iter_mut()
-            .find(|t| t.id == tab_id)
-            .and_then(|t| t.editor.as_mut())
     }
 
     /// 按 tab id 取该 tab 的 Tabular Viewer 可变引用。tab 不存在、该 tab 不是
@@ -1652,9 +1201,7 @@ impl PreviewPane {
                     }
                     _ => {}
                 }
-                if tab.editor.is_some() {
-                    let _ = tab.backend_state.try_transition(BackendState::Ready);
-                } else if !tab.loading {
+                if !tab.loading {
                     let _ = tab
                         .backend_state
                         .try_transition(BackendState::Failed(PreviewError::new(message, true)));
@@ -1738,25 +1285,7 @@ impl PreviewPane {
         let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
             return;
         };
-        if tab.editor.is_some() {
-            // 原生 tab:只读态没有光标/undo 历史值得跨重建保留,直接读盘换新
-            // 实例比"原地更新缓冲区"更简单可靠。读取失败保留旧 editor 不动
-            // (比闪成空白/丢内容更安全的降级)。`Blank` tab 恒 `editor: None`
-            // (见 `push_tab`),这个分支实际到不了,`else` 只是满足穷尽性。
-            let TabKind::File(path) = &tab.kind else {
-                return;
-            };
-            if let Ok(load) = read_and_build_native_editor(path) {
-                tab.editor = Some(load.view);
-                tab.loaded_bytes = load.loaded_bytes;
-                tab.total_bytes = load.total_bytes;
-                tab.truncated = load.truncated;
-                // 读盘重建 = 重载/刷新:buffer 回到磁盘态,原先的就地改动(若有)
-                // 一并丢弃,脏标记清零(可写后"刷新"会丢未保存改动——右键刷新前
-                // 是否弹确认由调用方 handler 决定,清空这里是为了状态自洽)。
-                tab.dirty = false;
-            }
-        } else if tab.tabular.is_none() {
+        if tab.tabular.is_none() {
             tab.reload_nonce += 1;
             if tab.uses_codemirror() {
                 // 新 WebView 内部 revision 从 1 重新开始；清掉 Rust 镜像，
@@ -1775,46 +1304,21 @@ impl PreviewPane {
     /// 透传给调用方(`Workspace::preview_pane_toggle_render_mode`)写面板
     /// error,这里不生成错误文案。
     pub fn enter_code_mode(&mut self, idx: usize) -> std::io::Result<()> {
-        // feature 打开:Markdown/HTML 的 Source 模式由 CodeMirror editor host
-        // 承载,不再构造 iced `CodeView`;只翻转 backend mode。
-        if codemirror_enabled() {
-            if let Some(tab) = self.tabs.get_mut(idx) {
-                if let Some(PreviewBackend::Rendered(rendered)) = tab.backend.as_mut() {
-                    rendered.mode = RenderedMode::Source;
-                }
-                let _ = tab.backend_state.try_transition(BackendState::Ready);
-                tab.debug_assert_backend_consistent();
-            }
-            return Ok(());
-        }
-        let Some(tab) = self.tabs.get(idx) else {
-            return Ok(());
-        };
-        let TabKind::File(path) = &tab.kind else {
-            return Ok(());
-        };
-        let load = read_and_build_native_editor(path)?;
+        // Markdown/HTML 的 Source 模式由 CodeMirror editor host 承载,只翻转
+        // backend mode(老 iced CodeView 已退役)。
         if let Some(tab) = self.tabs.get_mut(idx) {
-            tab.editor = Some(load.view);
-            tab.loaded_bytes = load.loaded_bytes;
-            tab.total_bytes = load.total_bytes;
-            tab.truncated = load.truncated;
-            tab.dirty = false;
             if let Some(PreviewBackend::Rendered(rendered)) = tab.backend.as_mut() {
                 rendered.mode = RenderedMode::Source;
             }
+            let _ = tab.backend_state.try_transition(BackendState::Ready);
             tab.debug_assert_backend_consistent();
         }
         Ok(())
     }
 
-    /// 代码→预览:清空该 tab 的原生 editor,转回 wry/flyfish 渲染。调用方
-    /// 负责在此之前先把脏改动落盘(`Workspace::preview_pane_toggle_render_mode`
-    /// 里先 `preview_pane_save_at` 再调这个)——这里只做状态切换,不碰磁盘。
-    /// 下标越界是 no-op。
+    /// 代码→预览:转回 wry/flyfish 渲染。下标越界是 no-op。
     pub fn exit_code_mode(&mut self, idx: usize) {
         if let Some(tab) = self.tabs.get_mut(idx) {
-            tab.editor = None;
             if let Some(PreviewBackend::Rendered(rendered)) = tab.backend.as_mut() {
                 rendered.mode = RenderedMode::Rendered;
             }
@@ -2012,7 +1516,7 @@ mod tests {
     fn opening_webview_tab_does_not_set_pending_focus() {
         let mut p = PreviewPane::default();
         p.open_path(PathBuf::from("/tmp/no_focus_test.png"));
-        assert!(p.tabs()[1].editor.is_none());
+        assert!(!p.tabs()[1].uses_editor_host());
         assert!(
             !p.take_pending_editor_focus(),
             ".png 走 wry,没有原生 editor,不该置聚焦位"
@@ -2055,9 +1559,9 @@ mod tests {
         p.open_path(rs_path.clone());
         p.open_path(png_path.clone());
 
-        assert!(p.tabs()[1].editor.is_some(), ".rs 扩展名应构造原生 editor");
+        assert!(p.tabs()[1].uses_editor_host(), ".rs 扩展名应走 editor host");
         assert!(
-            p.tabs()[2].editor.is_none(),
+            !p.tabs()[2].uses_editor_host(),
             ".png 扩展名不应构造原生 editor,继续走 wry"
         );
 
@@ -2142,7 +1646,7 @@ mod tests {
         p.open_path(md_path.clone());
 
         assert!(
-            p.tabs()[1].editor.is_none(),
+            !p.tabs()[1].uses_editor_host(),
             ".md 默认预览应走 flyfish 渲染,不建原生只读 editor"
         );
         assert!(
@@ -2171,7 +1675,7 @@ mod tests {
         p.open_path(html_path.clone());
 
         assert!(
-            p.tabs()[1].editor.is_none(),
+            !p.tabs()[1].uses_editor_host(),
             ".html 默认预览应走 wry 渲染,不建原生只读 editor"
         );
         assert!(
@@ -2370,7 +1874,7 @@ mod tests {
             matches!(tab.tabular, Some(TabularState::Loading)),
             "csv tab 应先进入 Loading 态,而不是同步构造好 TabularView"
         );
-        assert!(tab.editor.is_none(), "csv 不应再进代码编辑器");
+        assert!(!tab.uses_editor_host(), "csv 不应再进文本编辑器");
         assert!(
             pane.desired_webviews().is_empty(),
             "tabular tab(哪怕还在加载)不该进 webview 池"
@@ -2758,7 +2262,7 @@ mod tests {
         // .png 走 wry(editor.is_none());对 id 标脏应被 mark_dirty_by_id 拒掉。
         let mut p = PreviewPane::default();
         let id = p.open_path(PathBuf::from("/tmp/no_dirty_mark.png"));
-        assert!(p.tabs()[1].editor.is_none());
+        assert!(!p.tabs()[1].uses_editor_host());
         p.mark_dirty_by_id(id);
         assert!(!p.tabs()[1].dirty, "非原生 tab 不该被标脏");
     }
@@ -2788,101 +2292,6 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
-    /// 防漂移锚:编辑器语法高亮的 token 颜色必须锚定到终端 16 色面板与终端
-    /// 默认前景,而不是一套独立的十六进制魔数。字符串=Green、关键字=Cyan、
-    /// 注释=BrightBlack、类型=Blue、函数=BrightBlue、默认前/后景=终端本色。
-    fn syntax_token(theme: &syntect::highlighting::Theme, scope: &str) -> Option<(u8, u8, u8)> {
-        use std::str::FromStr;
-        let sel =
-            syntect::highlighting::ScopeSelectors::from_str(scope).expect("测试 scope 必须合法");
-        theme
-            .scopes
-            .iter()
-            .find(|item| item.scope == sel)
-            .and_then(|item| item.style.foreground)
-            .map(|c| (c.r, c.g, c.b))
-    }
-
-    #[test]
-    fn dozer_syntax_theme_anchored_to_terminal_palette() {
-        // 显式指定 Dark:主题按方案预计算,断言就不受其它测试线程改全局
-        // scheme 的影响(term_model 的用例会来回 set_scheme)。
-        use byteui::theme::color::ColorScheme;
-        let t = dozer_syntax_theme(ColorScheme::Dark);
-        assert_eq!(
-            syntax_token(&t, "string").expect("未命中 string"),
-            crate::term::term_model::ansi16_color_for(ColorScheme::Dark, 2).unwrap(),
-            "字符串应锚定终端 Green"
-        );
-        assert_eq!(
-            syntax_token(&t, "keyword").expect("未命中 keyword"),
-            crate::term::term_model::ansi16_color_for(ColorScheme::Dark, 6).unwrap(),
-            "关键字应锚定终端 Cyan"
-        );
-        assert_eq!(
-            syntax_token(&t, "comment").expect("未命中 comment"),
-            crate::term::term_model::ansi16_color_for(ColorScheme::Dark, 8).unwrap(),
-            "注释应锚定终端 BrightBlack"
-        );
-        assert_eq!(
-            syntax_token(&t, "entity.name.type").expect("未命中类型"),
-            crate::term::term_model::ansi16_color_for(ColorScheme::Dark, 4).unwrap(),
-            "类型应锚定终端 Blue"
-        );
-        assert_eq!(
-            syntax_token(&t, "entity.name.function").expect("未命中函数"),
-            crate::term::term_model::ansi16_color_for(ColorScheme::Dark, 12).unwrap(),
-            "函数应锚定终端 BrightBlue"
-        );
-        assert_eq!(
-            syntax_token(&t, "operator").expect("未命中 operator"),
-            crate::term::term_model::default_fg_rgb_for(ColorScheme::Dark),
-            "运算符应锚定终端默认前景"
-        );
-        assert!(
-            syntax_token(&t, "string.regexp")
-                .map(|(_, g, _)| g)
-                .expect("未命中 regexp")
-                != 0xd9,
-            "regexp 不应使用甲方金 #F2D94E"
-        );
-    }
-
-    /// 浅色主题必须带来一套**不同**的 token 色,而不是沿用深色那套
-    /// (否则「随主题自动切换」名存实亡)。同时两侧都仍锚定到各自方案的终端色板。
-    #[test]
-    fn dozer_syntax_theme_light_scheme_differs_and_stays_anchored() {
-        use byteui::theme::color::ColorScheme;
-
-        let dark = dozer_syntax_theme(ColorScheme::Dark);
-        let light = dozer_syntax_theme(ColorScheme::Light);
-
-        assert_ne!(
-            syntax_token(&dark, "keyword"),
-            syntax_token(&light, "keyword"),
-            "关键字颜色必须随深/浅方案变化"
-        );
-        assert_eq!(
-            syntax_token(&light, "string").expect("未命中 string"),
-            crate::term::term_model::ansi16_color_for(ColorScheme::Light, 2).unwrap(),
-            "浅色下字符串仍须锚定浅色终端 Green"
-        );
-    }
-
-    /// 语法主题**不持有背景**:编辑器背景已透明(见 `code_editor::editor_style`),
-    /// 面板底色透上来。主题再塞一个背景色只会是一份进不了渲染、还容易与面板
-    /// 实际底色打架的死数据。
-    #[test]
-    fn dozer_syntax_theme_has_no_background() {
-        use byteui::theme::color::ColorScheme;
-        for scheme in [ColorScheme::Dark, ColorScheme::Light] {
-            assert!(
-                dozer_syntax_theme(scheme).settings.background.is_none(),
-                "语法主题不该自带背景色({scheme:?})"
-            );
-        }
-    }
-
     #[cfg(any())] // 老 iced editor 已退役,历史测试停用
     #[test]
     fn open_find_binds_to_active_tab_native_or_webview() {
@@ -2906,7 +2315,7 @@ mod tests {
         created.push(web.clone());
         p.open_path(web.clone());
         assert!(
-            p.tabs()[p.active_idx()].editor.is_none(),
+            !p.tabs()[p.active_idx()].uses_editor_host(),
             "非原生扩展(.xyz)不该有 editor"
         );
         p.open_find_on_active(false, None);
@@ -3114,7 +2523,7 @@ mod tests {
         p.close(id);
         assert!(!p.find_bar_open());
         assert!(
-            p.tabs()[p.active_idx()].editor.is_none(),
+            !p.tabs()[p.active_idx()].uses_editor_host(),
             "关到空后应回 Blank 占位"
         );
 
@@ -3337,11 +2746,6 @@ mod tests {
         let tab_id = pane.open_path(path.clone());
         let tab = &pane.tabs()[pane.active_idx()];
         assert!(matches!(tab.backend, Some(PreviewBackend::Code(_))));
-        assert!(
-            tab.editor.is_none(),
-            "feature 开启后不应再构造 iced CodeView"
-        );
-
         let specs = pane.desired_editor_webviews(42, crate::app::PanelKind::Files);
         assert_eq!(specs.len(), 1);
         let spec = &specs[0];
@@ -3559,7 +2963,6 @@ mod tests {
         let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
         assert!(tab.uses_rendered_source_editor());
         assert!(!tab.hosts_webview(), "Source 模式不吃 Flyfish webview");
-        assert!(tab.editor.is_none(), "feature 下不再构造 iced CodeView");
         let spec = pane
             .desired_editor_webviews(1, crate::app::PanelKind::Files)
             .into_iter()

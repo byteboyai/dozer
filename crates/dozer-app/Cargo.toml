@@ -29,13 +29,6 @@ iced_winit = "0.14"
 iced_wgpu = { version = "0.14", default-features = true }
 iced_widget = { version = "0.14", features = ["wgpu", "canvas", "svg", "markdown", "highlighter", "image"] }
 iced_renderer = "0.14"
-# 构造 Dozer 自己的 syntect 语法高亮器(`code_editor::highlighter`)——不用
-# `iced_highlighter` 自带的 5 个内置主题,自己实现 `text::Highlighter` trait
-# 才能把 ByteBoy2077 配色(锚定终端 16 色面板)灌进语法高亮,syntect 版本要与
-# `two-face`(提供比 syntect 自带默认集更全的语法集)内部依赖的版本一致,
-# 由 cargo 解析统一(见 Cargo.lock,两者都锁定 5.3.0)。
-syntect = "5.3"
-two-face = { version = "0.4", default-features = false, features = ["syntect-default-fancy"] }
 winit = "0.30"
 raw-window-handle = "0.6"
 objc2 = "0.6"

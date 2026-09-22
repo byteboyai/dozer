@@ -690,26 +690,18 @@ impl Workspace {
     /// 事件类别是"会改写正文的 `Action::Edit`"(插字/退格/删除/粘贴/Enter/IME
     /// paste)时,顺手把该 tab 标脏(2026-09-06 原生预览就地可写,dirty 由这个
     /// 事件位推进,fallback 仍由 Pane 层的 save/刷新/项目切换按相同字段读写)。
-    pub(crate) fn preview_tab_editor_event(&mut self, tab_id: usize, action: EditorAction) {
-        if let Some(editor) = self.preview.editor_mut(tab_id) {
-            let is_edit = matches!(action, EditorAction::Edit(_));
-            editor.perform(action);
-            if is_edit {
-                self.preview.mark_dirty_by_id(tab_id);
-            }
-        }
+    pub(crate) fn preview_tab_editor_event(&mut self, _tab_id: usize, _action: EditorAction) {
+        // 老 iced editor 已退役;编辑事件由 CodeMirror host 经 IPC 处理。
     }
 
     /// 转发 `text_editor::Action` 到 Project 面板右配对预览的某个原生 tab,
     /// 语义同 `preview_tab_editor_event`,状态取自 `ws.project_preview`。
-    pub(crate) fn project_preview_tab_editor_event(&mut self, tab_id: usize, action: EditorAction) {
-        if let Some(editor) = self.project_preview.editor_mut(tab_id) {
-            let is_edit = matches!(action, EditorAction::Edit(_));
-            editor.perform(action);
-            if is_edit {
-                self.project_preview.mark_dirty_by_id(tab_id);
-            }
-        }
+    pub(crate) fn project_preview_tab_editor_event(
+        &mut self,
+        _tab_id: usize,
+        _action: EditorAction,
+    ) {
+        // 老 iced editor 已退役。
     }
 
     /// 把键盘/IME 字节直接写给当前激活 tab 对应的 daemon 会话。异步写
@@ -1267,19 +1259,8 @@ impl Workspace {
                 let path_str = path.to_string_lossy().into_owned();
                 // 两套后端:老 iced `CodeView`(editor)与 CodeMirror host
                 // (uses_codemirror,正文在 WebView,这里只读镜像字段)。其余
-                // (渲染/表格/webview)不提供文本上下文。
-                let (mut ctx, read_only) = if let Some(editor) = tab.editor.as_ref() {
-                    (
-                        preview_context_from_editor_state(
-                            &path_str,
-                            editor.has_selection(),
-                            editor.cursor_position(),
-                            editor.selection_range(),
-                            now_ms,
-                        ),
-                        editor.is_read_only(),
-                    )
-                } else if tab.uses_editor_host() {
+                // CodeMirror/JSON host(镜像字段)或表格;其余不提供文本上下文。
+                let (mut ctx, read_only) = if tab.uses_editor_host() {
                     (
                         preview_context_from_web_state(
                             &path_str,
@@ -1448,28 +1429,17 @@ impl Workspace {
                 pane.set_json_tree_loading(tab_id, path.clone());
                 pane.finish_shell_load(tab_id);
             }
-            // 老 iced editor(feature 关闭时);Streamed 额外挂原生树。
+            // 普通 JSON:严格 .json 走 vanilla-jsoneditor host,JSONC/JSON5 走
+            // CodeMirror 文本,直接 Loading→Ready。
+            Some(crate::preview::PreviewKind::Json) => {
+                pane.begin_shell_load(tab_id);
+                pane.finish_shell_load(tab_id);
+            }
+            // 其余 Code/Streamed 到 editor host / streamed:直接就绪。
             Some(crate::preview::PreviewKind::Code)
-            | Some(crate::preview::PreviewKind::Json)
             | Some(crate::preview::PreviewKind::Streamed) => {
                 pane.begin_shell_load(tab_id);
-                if route_kind == Some(crate::preview::PreviewKind::Streamed) {
-                    pane.set_json_tree_loading(tab_id, path.clone());
-                }
-                pane.set_tab_loading(tab_id, true);
-                let proxy = io.proxy.clone();
-                let load_path = path.clone();
-                io.handle.spawn(async move {
-                    let result = tokio::task::spawn_blocking(move || {
-                        crate::preview::read_and_build_native_editor(&load_path)
-                            .map(crate::preview::NativeEditorLoadHandle::new)
-                            .map_err(|e| e.to_string())
-                    })
-                    .await
-                    .unwrap_or_else(|e| Err(e.to_string()));
-                    let _ =
-                        proxy.send_event(Message::PreviewFileLoaded(project_id, tab_id, result));
-                });
+                pane.finish_shell_load(tab_id);
             }
             Some(crate::preview::PreviewKind::Tabular) => {
                 pane.begin_shell_load(tab_id);
@@ -2106,7 +2076,7 @@ impl Workspace {
         };
         pane.tabs()
             .get(pane.active_idx())
-            .is_some_and(|t| t.editor.is_some())
+            .is_some_and(|t| t.tabular.is_some())
     }
 
     /// 把 `kind` 面板**当前激活原生 tab** 的 CodeView `perform` 一条应用层
@@ -2116,69 +2086,15 @@ impl Workspace {
     /// 用户当前光标、替换现选区,撤销/脏标记照常,与 widget 自发 Action 走
     /// 同一条 perform 管线(见 code_editor 模块)。目标 tab 非原生/无编辑器
     /// 一律 no-op。
-    pub fn preview_pane_active_editor_event(&mut self, kind: PanelKind, action: EditorAction) {
-        let pane = match kind {
-            PanelKind::Project => &mut self.project_preview,
-            _ => &mut self.preview,
-        };
-        let tab_id = match pane.tabs().get(pane.active_idx()) {
-            Some(t) if t.editor.is_some() => t.id,
-            _ => return,
-        };
-        if let Some(editor) = pane.editor_mut(tab_id) {
-            editor.perform(action);
-        }
+    pub fn preview_pane_active_editor_event(&mut self, _kind: PanelKind, _action: EditorAction) {
+        // 老 iced editor 已退役。
     }
 
-    /// ⌘Z:把 `kind` 面板**当前激活原生 tab** 的编辑器回退一条编辑命令
-    /// (`CodeView::undo`——官方 `text_editor` 无 undo API,历史是应用层整文本
-    /// 快照栈,见 code_editor 模块"已知取舍")。真的发生了回退时顺手把该 tab
-    /// 标脏:回退同样改变了 buffer、与磁盘不再一致,未保存前必须维持脏标记
-    /// (不比对磁盘文本——`PreviewTab` 只存布尔 `dirty`,不做内容比对)。
-    /// 目标非原生/无编辑器/栈空时 no-op。
-    pub fn preview_pane_undo_active(&mut self, kind: PanelKind) {
-        let pane = if kind == PanelKind::Project {
-            &mut self.project_preview
-        } else {
-            &mut self.preview
-        };
-        let Some(tab_id) = pane
-            .tabs()
-            .get(pane.active_idx())
-            .filter(|t| t.editor.is_some())
-            .map(|t| t.id)
-        else {
-            return;
-        };
-        if let Some(editor) = pane.editor_mut(tab_id)
-            && editor.undo()
-        {
-            pane.mark_dirty_by_id(tab_id);
-        }
-    }
+    /// ⌘Z:老 iced editor 已退役(undo 由 CodeMirror host 内部 history 处理)。
+    pub fn preview_pane_undo_active(&mut self, _kind: PanelKind) {}
 
-    /// ⌘⇧Z:重做 `PreviewUndoActive` 撤掉的最后一条编辑(`CodeView::redo`),
-    /// 发生重做时同样标脏(语义同 `preview_pane_undo_active`)。
-    pub fn preview_pane_redo_active(&mut self, kind: PanelKind) {
-        let pane = if kind == PanelKind::Project {
-            &mut self.project_preview
-        } else {
-            &mut self.preview
-        };
-        let Some(tab_id) = pane
-            .tabs()
-            .get(pane.active_idx())
-            .filter(|t| t.editor.is_some())
-            .map(|t| t.id)
-        else {
-            return;
-        };
-        if let Some(editor) = pane.editor_mut(tab_id)
-            && editor.redo()
-        {
-            pane.mark_dirty_by_id(tab_id);
-        }
-    }
+    /// ⌘⇧Z:老 iced editor 已退役(redo 由 CodeMirror host 内部 history 处理)。
+    pub fn preview_pane_redo_active(&mut self, _kind: PanelKind) {}
     /// ⌘S:把 `kind` 面板**当前激活原生 tab** 的就地改动保存到磁盘,语义同
     /// `preview_pane_save_at`——除了定位固定取"当前激活 tab"。
     pub fn preview_pane_save_active(&mut self, kind: PanelKind) {
@@ -2331,60 +2247,8 @@ impl Workspace {
     /// 私有 `fn`)是因为 `app.rs::update` 的 `PreviewCloseTab`/
     /// `ProjectPreviewCloseTab` 分支(Step 8)要直接调它做关闭前静默保存。
     pub(crate) fn preview_pane_save_at(&mut self, kind: PanelKind, idx: usize) {
-        let project = kind == PanelKind::Project;
-        let (tab_id, path) = {
-            let pane = if project {
-                &self.project_preview
-            } else {
-                &self.preview
-            };
-            let Some(tab) = pane.tabs().get(idx) else {
-                return;
-            };
-            // 仅脏的**原生** tab 值得落盘;不脏不动磁盘(省得住人保存也触发
-            // 外部监听/无谓 mtime),webview / Blank 没有就地 buffer。
-            if !tab.dirty || tab.editor.is_none() {
-                return;
-            }
-            let TabKind::File(p) = &tab.kind else {
-                return;
-            };
-            (tab.id, p.clone())
-        };
-        // 取当前文本:结束上面的不可变借后,再作一次短暂可变借拿到 buffer 全量。
-        let text = {
-            let pane = if project {
-                &mut self.project_preview
-            } else {
-                &mut self.preview
-            };
-            match pane.editor_mut(tab_id) {
-                Some(e) => e.text(),
-                None => return,
-            }
-        };
-        match std::fs::write(&path, text) {
-            Ok(()) => {
-                // 落盘成功:按先前那段的 `dirty==true` 前提清脏;fail 写该面板 error。
-                let pane = if project {
-                    &mut self.project_preview
-                } else {
-                    &mut self.preview
-                };
-                pane.clear_dirty_by_id(tab_id);
-                // 落盘成功:若该 tab 上开着文件内 Find 会话,按最新文本重算命中与
-                // 当前定位(编辑把命中行推走/删除后,陈旧索引会导致 ⌘G 跳到错位)。
-                pane.find_refresh_after_edit(tab_id);
-            }
-            Err(e) => {
-                let err = Some(format!("保存失败: {e}"));
-                if project {
-                    self.project_preview_error = err;
-                } else {
-                    self.preview_error = err;
-                }
-            }
-        }
+        let _ = (kind, idx);
+        // CodeMirror 的保存由 host 经 IPC 处理;老 iced 就地保存已退役。
     }
 
     /// 切换 `kind` 面板某个 tab 的预览/代码渲染模式(仅对 `wry_toggle_eligible`
@@ -2402,7 +2266,7 @@ impl Workspace {
             };
             pane.tabs()
                 .get(idx)
-                .is_some_and(|t| t.editor.is_some() || t.uses_rendered_source_editor())
+                .is_some_and(|t| t.uses_rendered_source_editor())
         };
         if in_code_mode {
             self.preview_pane_save_at(kind, idx);

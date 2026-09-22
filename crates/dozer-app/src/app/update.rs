@@ -1462,24 +1462,13 @@ impl App {
                         }
                         return;
                     }
-                    let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == session.tab_id)
+                    let Some(_tab) = pane.tabs_mut().iter_mut().find(|t| t.id == session.tab_id)
                     else {
                         return;
                     };
-                    let Some(editor) = tab.editor.as_mut() else {
-                        return;
-                    };
-                    let target_line = (hit.line_no.saturating_sub(1)) as usize;
-                    if target_line < editor.content_line_count() {
-                        editor.move_cursor_to((target_line, 0));
-                        *error_slot = None;
-                        if let Some(s) = pane.large_file_search.as_mut() {
-                            s.current = next;
-                        }
-                    } else {
-                        *error_slot =
-                            Some("命中内容超出已加载范围,点击「加载更多」后再试".to_string());
-                    }
+                    // 老 iced 只读大文件档已退役:命中无法内嵌跳转。
+                    *error_slot =
+                        Some("命中内容无法在当前视图内跳转,请用「原文」或外部打开".to_string());
                 });
             }
             Message::PreviewSelectTab(idx) => self.preview_select_tab(idx),
@@ -1575,11 +1564,8 @@ impl App {
                         PanelKind::Project => &ws.project_preview,
                         _ => &ws.preview,
                     };
-                    let active_is_read_only = pane
-                        .tabs()
-                        .get(pane.active_idx())
-                        .and_then(|t| t.editor.as_ref())
-                        .is_some_and(|e| e.is_read_only());
+                    // 老 iced 只读档已退役;只读分流改为看 CodeMirror 窗口化。
+                    let active_is_read_only = false;
                     if active_is_read_only {
                         let tab_id = pane.tabs().get(pane.active_idx()).map(|t| t.id);
                         if let Some(tab_id) = tab_id {
@@ -1603,11 +1589,8 @@ impl App {
                         PanelKind::Project => &ws.project_preview,
                         _ => &ws.preview,
                     };
-                    let active_is_read_only = pane
-                        .tabs()
-                        .get(pane.active_idx())
-                        .and_then(|t| t.editor.as_ref())
-                        .is_some_and(|e| e.is_read_only());
+                    // 老 iced 只读档已退役;只读分流改为看 CodeMirror 窗口化。
+                    let active_is_read_only = false;
                     if active_is_read_only {
                         let tab_id = pane.tabs().get(pane.active_idx()).map(|t| t.id);
                         if let Some(tab_id) = tab_id {
@@ -4079,16 +4062,10 @@ impl App {
         });
     }
 
-    /// 打开文件预览:非原生编辑器候选(webview/表格类)照旧走同步
-    /// `PreviewPane::open_path`,不慢不用异步。原生编辑器候选
-    /// (`preview::is_native_editor_candidate`)——即用户从文件树打开任意
-    /// 大小文件的常见路径——先同步插入一个 `loading` 占位 tab,再
-    /// `spawn_blocking` 到后台线程完成"读盘 + 三档分类 + `CodeView::new`"
-    /// (2026-09-19 大文件编辑器性能优化:`CodeView::new` 本身是 `Send`、
-    /// 不要求在 UI 线程上做,见该计划 Task 1"对 Task 3 的影响",所以整个
-    /// 耗时链条——包括真实的字体 shaping——都不在这里阻塞)。构造好的
-    /// `CodeView` 包一层 `NativeEditorLoadHandle` 传回 `Message::
-    /// PreviewFileLoaded`,由 `apply_native_load` 取出装进 tab。
+    /// 打开文件预览:统一走 `PreviewPane::open_path` 按路由得到 editor host /
+    /// JSON host / tabular / webview 后端。老 iced 原生编辑器候选的
+    /// `insert_loading_tab` + 后台 `read_and_build_native_editor` 异步构造
+    /// 路径已随 Phase D 退役。
     pub(crate) fn preview_open_path(&mut self, path: PathBuf) {
         self.preview_open_path_at(path, None);
     }
@@ -4097,9 +4074,9 @@ impl App {
         // 同 `preview_select_tab`:`preview_tab_bar_avail_px` 要 `&self`,
         // 得在 `with_focused_project` 的 `&mut self` 借用之前先算好。
         let avail_w = self.preview_tab_bar_avail_px(PanelKind::Files);
-        let Some(project_id) = self.active_project_id else {
+        if self.active_project_id.is_none() {
             return;
-        };
+        }
         self.with_focused_project(move |ws, io| {
             if !path.is_file() {
                 ws.preview_error = Some(format!("文件不存在或不可读: {}", path.display()));
@@ -4124,47 +4101,15 @@ impl App {
                 if let Some(line) = target_line
                     && let Some(tab) = ws.preview.tabs_mut().get_mut(idx)
                 {
-                    if let Some(editor) = tab.editor.as_mut() {
-                        // `FunctionMetric.start_line` 是 1-based,`CodeView`
-                        // 光标是 0-based,转一次。
-                        editor.move_cursor_to((line.saturating_sub(1), 0));
-                    } else {
-                        tab.pending_jump_line = Some(line);
-                    }
-                }
-            } else if crate::preview::is_native_editor_candidate(&path) {
-                let title = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| path.to_string_lossy().into_owned());
-                let tab_id = ws
-                    .preview
-                    .insert_loading_tab(crate::preview::TabKind::File(path.clone()), title);
-                if let Some(line) = target_line
-                    && let Some(tab) = ws.preview.tabs_mut().iter_mut().find(|t| t.id == tab_id)
-                {
                     tab.pending_jump_line = Some(line);
                 }
-                let proxy = io.proxy.clone();
-                let load_path = path.clone();
-                io.handle.spawn(async move {
-                    let result = tokio::task::spawn_blocking(move || {
-                        crate::preview::read_and_build_native_editor(&load_path)
-                            .map(crate::preview::NativeEditorLoadHandle::new)
-                            .map_err(|e| e.to_string())
-                    })
-                    .await
-                    .unwrap_or_else(|e| Err(e.to_string()));
-                    let _ =
-                        proxy.send_event(Message::PreviewFileLoaded(project_id, tab_id, result));
-                });
             } else {
                 let id = ws.preview.open_path(path.clone());
                 // CodeMirror tab 在 host `ready` 后由 `EditorWebviewEvent`
                 // 排队 reveal;webview/表格类仍无法跳转光标,target_line 忽略。
                 if let Some(line) = target_line
                     && let Some(tab) = ws.preview.tabs_mut().iter_mut().find(|t| t.id == id)
-                    && tab.uses_codemirror()
+                    && tab.uses_editor_host()
                 {
                     tab.pending_jump_line = Some(line);
                 }
@@ -4301,9 +4246,9 @@ impl App {
     /// 避免与 Files 预览那份持久化 `preview_state` 互相覆盖。
     pub(crate) fn project_preview_open_path(&mut self, path: PathBuf) {
         let avail_w = self.preview_tab_bar_avail_px(PanelKind::Project);
-        let Some(project_id) = self.active_project_id else {
+        if self.active_project_id.is_none() {
             return;
-        };
+        }
         self.with_focused_project(move |ws, io| {
             if !path.is_file() {
                 ws.project_preview_error = Some(format!("文件不存在或不可读: {}", path.display()));
@@ -4318,28 +4263,6 @@ impl App {
 
             if let Some(idx) = ws.project_preview.find_existing_file_tab(&path) {
                 ws.project_preview.select(idx);
-            } else if crate::preview::is_native_editor_candidate(&path) {
-                let title = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| path.to_string_lossy().into_owned());
-                let tab_id = ws
-                    .project_preview
-                    .insert_loading_tab(crate::preview::TabKind::File(path.clone()), title);
-                let proxy = io.proxy.clone();
-                let load_path = path.clone();
-                io.handle.spawn(async move {
-                    let result = tokio::task::spawn_blocking(move || {
-                        crate::preview::read_and_build_native_editor(&load_path)
-                            .map(crate::preview::NativeEditorLoadHandle::new)
-                            .map_err(|e| e.to_string())
-                    })
-                    .await
-                    .unwrap_or_else(|e| Err(e.to_string()));
-                    let _ = proxy.send_event(Message::ProjectPreviewFileLoaded(
-                        project_id, tab_id, result,
-                    ));
-                });
             } else {
                 ws.project_preview.open_path(path.clone());
             }
@@ -4364,39 +4287,8 @@ impl App {
         });
     }
 
-    /// 只读分块档"加载更多"横幅点击:从当前已加载字节数续读下一段(大小同
-    /// 首屏的整读上限 `full_load_max_bytes()`),异步读盘不阻塞 UI 线程。
-    /// `kind` 决定从 `ws.preview` 还是 `ws.project_preview` 找 tab。
-    pub(crate) fn preview_load_more(&mut self, kind: PanelKind, tab_id: usize) {
-        let Some(project_id) = self.active_project_id else {
-            return;
-        };
-        self.with_focused_project(move |ws, io| {
-            let pane = match kind {
-                PanelKind::Project => &ws.project_preview,
-                _ => &ws.preview,
-            };
-            let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
-                return;
-            };
-            let crate::preview::TabKind::File(path) = tab.kind.clone() else {
-                return;
-            };
-            let start = tab.loaded_bytes;
-            let proxy = io.proxy.clone();
-            io.handle.spawn(async move {
-                let max_extra = crate::preview::full_load_max_bytes();
-                let result = tokio::task::spawn_blocking(move || {
-                    crate::preview::read_more_bytes(&path, start, max_extra)
-                        .map_err(|e| e.to_string())
-                })
-                .await
-                .unwrap_or_else(|e| Err(e.to_string()));
-                let _ =
-                    proxy.send_event(Message::PreviewMoreLoaded(project_id, kind, tab_id, result));
-            });
-        });
-    }
+    /// 老 iced 只读分块档"加载更多"已退役(大文件改走 Windowed viewer)。
+    pub(crate) fn preview_load_more(&mut self, _kind: PanelKind, _tab_id: usize) {}
 
     /// 项目信息面板切入时调用:确保项目根目录有一份 `README.md`(没有就按
     /// 项目名 + 描述生成,已有则原样保留),然后**一律**在右侧配套预览窗打

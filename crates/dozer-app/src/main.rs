@@ -2,7 +2,6 @@ mod app;
 mod assets;
 mod capabilities;
 mod chrome;
-mod code_editor;
 mod conversation;
 mod delivery;
 mod dialog;

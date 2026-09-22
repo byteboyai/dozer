@@ -287,11 +287,7 @@ pub enum Message {
     /// `Send`、不要求在 UI 线程上做,见
     /// `docs/superpowers/plans/2026-09-19-large-file-editor-performance.md`
     /// Task 1"对 Task 3 的影响"与该类型自己的文档。
-    PreviewFileLoaded(
-        crate::app::layout::ProjectId,
-        usize,
-        Result<crate::preview::NativeEditorLoadHandle, String>,
-    ),
+    PreviewFileLoaded(crate::app::layout::ProjectId, usize, Result<(), String>),
     /// "加载更多"横幅点击:续读下一段。`PanelKind` 区分 Files/Project,
     /// `usize` 是 `PreviewTab.id`。
     PreviewLoadMore(PanelKind, usize),
@@ -503,11 +499,7 @@ pub enum Message {
     ProjectPreviewOpenPath(PathBuf),
     /// Project 面板右配对预览:异步读盘+构造结果回灌,语义同 `PreviewFileLoaded`
     /// (两面板各自的 `PreviewPane` 是完全独立的状态,不共用一条消息)。
-    ProjectPreviewFileLoaded(
-        crate::app::layout::ProjectId,
-        usize,
-        Result<crate::preview::NativeEditorLoadHandle, String>,
-    ),
+    ProjectPreviewFileLoaded(crate::app::layout::ProjectId, usize, Result<(), String>),
     /// Project 面板右配对预览:切换 tab(vec 位置)。
     ProjectPreviewSelectTab(usize),
     /// Project 面板右配对预览:关闭 tab(vec 位置)。

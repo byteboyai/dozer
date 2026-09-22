@@ -94,20 +94,9 @@ pub(crate) fn default_fg_rgb() -> (u8, u8, u8) {
     default_fg()
 }
 
-/// 指定配色方案下的终端默认前景色。语法高亮主题要按**目标方案**取色
-/// （而不是"调用这一刻的全局方案"），这样浅/深两份主题可以各自预计算并
-/// 缓存，不会因为缓存时机撞上另一种方案而永久错色。
-pub(crate) fn default_fg_rgb_for(scheme: ColorScheme) -> (u8, u8, u8) {
-    default_fg_for(scheme)
-}
-
 /// 指定配色方案下的 ANSI 16 色第 `idx` 项（`0..16`，下标即 `NamedColor`）。
-/// 供预览编辑器按目标方案预计算语法高亮主题时取用（见
-/// `preview::dozer_syntax_theme`）。越界返回 `None`。
-///
-/// 只保留"按方案取色"这一种形态：语法主题按方案缓存，绝不能读"调用这一刻
-/// 的全局方案"，否则第一次高亮时的方案会把另一方案永久冻错（见
-/// `code_editor::highlighter` 的模块文档）。
+/// 越界返回 `None`。老 iced 语法高亮主题退役后,仅剩本模块测试在用。
+#[cfg(test)]
 pub(crate) fn ansi16_color_for(scheme: ColorScheme, idx: usize) -> Option<(u8, u8, u8)> {
     ansi16_for(scheme).get(idx).copied()
 }

@@ -288,9 +288,9 @@ pub(crate) fn agent_icon(agent: AgentKind) -> IconKind {
 }
 
 /// 由(路径, 是否有选区, 0-indexed 光标位置, 0-indexed 选区范围, 当前时间)
-/// 组装 1-indexed 的 `PreviewContext`。抽成纯函数是为了不依赖真实
-/// `CodeEditor`/`PreviewPane` 就能单测坐标转换这一层逻辑——`now_ms` 由调
-/// 用方传进来而不是在这里读 `SystemTime::now()`,正是为了保住这份纯度。
+/// 组装 1-indexed 的 `PreviewContext`。老 iced editor 退役后仅剩测试在用,
+/// 保留它是为了继续验证 1-indexed 坐标转换这一层纯逻辑。
+#[cfg(test)]
 pub(crate) fn preview_context_from_editor_state(
     path: &str,
     has_selection: bool,
