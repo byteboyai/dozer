@@ -5,6 +5,7 @@
 // 拉取(Rust 只对白名单放行)。
 
 import { createJSONEditor, type Content } from 'vanilla-jsoneditor';
+import './theme.css';
 
 const PROTOCOL_VERSION = 1;
 
@@ -26,6 +27,7 @@ const scheme = params.get('theme') === 'light' ? 'light' : 'dark';
 const filePath = params.get('p') ?? '';
 const initialReadOnly = params.get('ro') === '1';
 
+document.documentElement.dataset.theme = scheme;
 if (scheme === 'dark') {
   document.documentElement.classList.add('jse-theme-dark');
   document.body.classList.add('jse-theme-dark');
@@ -70,7 +72,8 @@ function mountEditor(content: Content): void {
       mode: 'tree',
       readOnly: initialReadOnly,
       mainMenuBar: false,
-      navigationBar: false,
+      // 导航栏承载搜索框(Ctrl+F)与当前路径;关闭它搜索功能会一并消失。
+      navigationBar: true,
       statusBar: true,
       onChange: onEditorChange,
       onError: (err: unknown) => post({ kind: 'failed', message: String(err), recoverable: true }),

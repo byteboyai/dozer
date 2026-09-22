@@ -483,7 +483,7 @@ mod tests {
     #[test]
     fn json_editor_bundle_assets_are_present() {
         let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/json-editor"));
-        for f in ["index.html", "json-editor.js"] {
+        for f in ["index.html", "json-editor.js", "json-editor.css"] {
             let p = root.join(f);
             assert!(p.is_file(), "缺少 json-editor 产物 {f}: {}", p.display());
             assert!(
