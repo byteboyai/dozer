@@ -1,0 +1,8 @@
+# 2026-09-22 09:37:05.602984
++Reply with exactly: hello world
+
+# 2026-09-22 09:37:05.603193
++Reply with exactly: hello world
+
+# 2026-09-22 09:37:27.100000
++Print a markdown code block containing the literal line '#### this is not a user message'. Output only the code block.

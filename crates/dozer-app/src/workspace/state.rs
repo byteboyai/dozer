@@ -1349,7 +1349,13 @@ impl Workspace {
                     {
                         return;
                     }
-                    if let Some(cmd) = picker_launch_command(launch) {
+                    let hook_exe = dozer_hook_binary_path(
+                        &std::env::current_exe()
+                            .unwrap_or_else(|_| std::path::PathBuf::from("dozer")),
+                    )
+                    .to_string_lossy()
+                    .into_owned();
+                    if let Some(cmd) = picker_launch_command(launch, &hook_exe) {
                         let bytes = format!("{cmd}\n").into_bytes();
                         if let Err(e) = client.write(&session_id, &bytes).await {
                             tracing::warn!("自动键入初始命令失败: {e}");

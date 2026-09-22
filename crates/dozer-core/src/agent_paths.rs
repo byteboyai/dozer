@@ -92,6 +92,49 @@ pub fn goose_project_dir_in(home: &Path, cwd: &Path) -> PathBuf {
     project_dir_in(home, ".dozer/agents/goose", cwd)
 }
 
+/// Aider 一个 Dozer 会话的四条路径(见 spec D2)。`chat_history`/`input_history`
+/// 喂给 aider CLI,`canonical` 是 Dozer 自有 transcript(唯一进 dozerd parser),
+/// `bridge_state` 是同步 cursor/已输出 hash/schema version。四条都是相邻
+/// `PathBuf`,用具名结构体承载而不是四个位置参数,避免调用方顺序传错。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AiderSessionPaths {
+    pub chat_history: PathBuf,
+    pub input_history: PathBuf,
+    pub canonical: PathBuf,
+    pub bridge_state: PathBuf,
+}
+
+pub fn aider_project_dir(cwd: &Path) -> PathBuf {
+    aider_project_dir_in(&home_dir(), cwd)
+}
+
+/// `home` 显式传入版本,测试用(不碰 `HOME` 环境变量)。
+pub fn aider_project_dir_in(home: &Path, cwd: &Path) -> PathBuf {
+    project_dir_in(home, ".dozer/agents/aider", cwd)
+}
+
+/// Aider session ID 校验:只接受 Dozer 现有安全字符集(字母数字 + `-`,覆盖
+/// UUID 与 `task-<id>-<ts>` 形态)。任何 `/`、`\`、`.`(含 `..`)、NUL、空格
+/// 或空串都会被拒绝——`aider_session_paths` 用它防止路径穿越(见 spec §6)。
+pub fn validate_aider_session_id(id: &str) -> bool {
+    !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+/// 由 `home`/`cwd`/`session_id` 算出 Aider 会话的四条路径。session_id 非法
+/// (路径分隔符/`..`/NUL/空串)返回 `None`,不 panic。
+pub fn aider_session_paths(home: &Path, cwd: &Path, session_id: &str) -> Option<AiderSessionPaths> {
+    if !validate_aider_session_id(session_id) {
+        return None;
+    }
+    let dir = aider_project_dir_in(home, cwd);
+    Some(AiderSessionPaths {
+        chat_history: dir.join(format!("{session_id}.chat.md")),
+        input_history: dir.join(format!("{session_id}.input.history")),
+        canonical: dir.join(format!("{session_id}.jsonl")),
+        bridge_state: dir.join(format!("{session_id}.bridge.json")),
+    })
+}
+
 /// Codex 的 transcript 存储根目录。**故意没有** `codex_project_dir_in`:
 /// Codex 不按项目建目录,而是 `sessions/YYYY/MM/DD/rollout-*.jsonl` 按日期
 /// 三层嵌套(实测本机 43 份 rollout 全是这个布局,见 spike 记录
@@ -164,6 +207,40 @@ mod tests {
             d,
             PathBuf::from("/home/u/.dozer/agents/goose/projects/-a-b-c")
         );
+    }
+
+    #[test]
+    fn aider_session_paths_build_four_paths_under_project_dir() {
+        let p = aider_session_paths(Path::new("/home/u"), Path::new("/a/b/c"), "sess-1").unwrap();
+        let dir = PathBuf::from("/home/u/.dozer/agents/aider/projects/-a-b-c");
+        assert_eq!(p.chat_history, dir.join("sess-1.chat.md"));
+        assert_eq!(p.input_history, dir.join("sess-1.input.history"));
+        assert_eq!(p.canonical, dir.join("sess-1.jsonl"));
+        assert_eq!(p.bridge_state, dir.join("sess-1.bridge.json"));
+    }
+
+    #[test]
+    fn validate_aider_session_id_accepts_uuid_and_task_forms() {
+        assert!(validate_aider_session_id(
+            "3f2cf51f-9d1e-4c3b-8f0a-1b2c3d4e5f6a"
+        ));
+        assert!(validate_aider_session_id("task-42-1790030000000"));
+    }
+
+    #[test]
+    fn validate_aider_session_id_rejects_unsafe_forms() {
+        assert!(!validate_aider_session_id(""));
+        assert!(!validate_aider_session_id("../etc/passwd"));
+        assert!(!validate_aider_session_id("a/b"));
+        assert!(!validate_aider_session_id("a\\b"));
+        assert!(!validate_aider_session_id("a..b"));
+        assert!(!validate_aider_session_id("a b"));
+        assert!(!validate_aider_session_id("a\u{0}b"));
+    }
+
+    #[test]
+    fn aider_session_paths_rejects_unsafe_session_id() {
+        assert!(aider_session_paths(Path::new("/home/u"), Path::new("/a"), "../x").is_none());
     }
 
     /// Codex 的存储根不参与 `project_key` 编码(它压根没有"项目子目录"这一

@@ -23,6 +23,13 @@ async fn send_req(sock: &std::path::Path, req: &Request) -> Reply {
     decode_line(&line).expect("valid reply")
 }
 
+async fn list_state(sock: &std::path::Path) -> AgentState {
+    match send_req(sock, &Request::ListSessions).await {
+        Reply::Sessions { sessions } => sessions[0].agent_state,
+        other => panic!("{other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn hook_event_reaches_attached_client_and_list() {
     let sock = std::env::temp_dir().join(format!("dozerd-hook-{}.sock", uuid::Uuid::new_v4()));
@@ -597,4 +604,96 @@ async fn list_conversations_with_summaries_joins_correctly() {
         .find(|(c, _)| c.conversation_id == "c2")
         .unwrap();
     assert!(c2.1.is_none());
+}
+
+/// Aider launcher 风格的事件序列：SessionStart→Idle、UserPromptSubmit→Running、
+/// Stop→TurnEnded、SessionEnd→Idle，全程不产生 AwaitingInput（Aider 没有公开
+/// 的"等待批准"事件，见 spec D6）。
+#[tokio::test]
+async fn aider_hook_sequence_drives_state_machine() {
+    let sock = std::env::temp_dir().join(format!("dozerd-aider-{}.sock", uuid::Uuid::new_v4()));
+    let registry = Arc::new(SessionRegistry::new());
+    tokio::spawn({
+        let sock = sock.clone();
+        let registry = registry.clone();
+        let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
+        async move {
+            dozerd::server::serve(
+                &sock,
+                ide_lock_dir.path().to_path_buf(),
+                registry,
+                test_projects(),
+                test_bookmarks(),
+                test_code_health(),
+                test_transcripts(),
+                test_session_summaries(),
+                test_backfill_registry(),
+                test_todos(),
+                test_categories(),
+                dozerd::task_poller::new_in_flight(),
+            )
+            .await
+        }
+    });
+    for _ in 0..100 {
+        if sock.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let created = match send_req(
+        &sock,
+        &Request::CreateSession {
+            name: "aider".into(),
+            command: "/bin/sh".into(),
+            args: vec!["-c".into(), "sleep 5".into()],
+            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+            cols: 80,
+            rows: 24,
+            project_id: 1,
+        },
+    )
+    .await
+    {
+        Reply::Created { session } => session,
+        other => panic!("{other:?}"),
+    };
+    let id = created.id.clone();
+    let aider = dozer_core::protocol::AgentKind::Aider;
+
+    let hook = |event: &str| Request::HookEvent {
+        session_id: id.clone(),
+        agent: aider,
+        event: event.to_string(),
+        ts_ms: 1,
+        data: serde_json::Value::Null,
+    };
+
+    assert!(matches!(
+        send_req(&sock, &hook("SessionStart")).await,
+        Reply::Ok
+    ));
+    assert_eq!(list_state(&sock).await, AgentState::Idle);
+
+    assert!(matches!(
+        send_req(&sock, &hook("UserPromptSubmit")).await,
+        Reply::Ok
+    ));
+    assert_eq!(list_state(&sock).await, AgentState::Running);
+    assert_ne!(AgentState::Running, AgentState::AwaitingInput);
+
+    assert!(matches!(send_req(&sock, &hook("Stop")).await, Reply::Ok));
+    assert_eq!(list_state(&sock).await, AgentState::TurnEnded);
+
+    // 迟到/重复 Stop 幂等(仍 TurnEnded,不 panic)。
+    assert!(matches!(send_req(&sock, &hook("Stop")).await, Reply::Ok));
+    assert_eq!(list_state(&sock).await, AgentState::TurnEnded);
+
+    // SessionEnd 最终覆盖 TurnEnded → Idle。
+    assert!(matches!(
+        send_req(&sock, &hook("SessionEnd")).await,
+        Reply::Ok
+    ));
+    assert_eq!(list_state(&sock).await, AgentState::Idle);
 }

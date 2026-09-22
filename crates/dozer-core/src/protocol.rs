@@ -25,12 +25,13 @@ pub enum AgentKind {
     Opencode,
     Codex,
     Goose,
+    Aider,
     V8agent,
 }
 
 impl AgentKind {
     /// 展示用短标签（对话历史副行、GUI 角标）。同时也是启动器菜单键入
-    /// 的 CLI 命令名——五家均已核实与官方命令名一致（见计划 Global
+    /// 的 CLI 命令名——六家均已核实与官方命令名一致（见计划 Global
     /// Constraints）。与 `display_label()` 的差异：用户能看见的展示名
     /// 走 `display_label()`(品牌大小写/有空格),命令键入/对账走
     /// `label()`(全小写 CLI 名)——如 `Claude` 的展示是 "Claude"、命令
@@ -43,6 +44,7 @@ impl AgentKind {
             AgentKind::Opencode => "opencode",
             AgentKind::Codex => "codex",
             AgentKind::Goose => "goose",
+            AgentKind::Aider => "aider",
             AgentKind::V8agent => "v8agent",
         }
     }
@@ -59,6 +61,7 @@ impl AgentKind {
             AgentKind::Opencode => "OpenCode",
             AgentKind::Codex => "Codex",
             AgentKind::Goose => "Goose",
+            AgentKind::Aider => "Aider",
             AgentKind::V8agent => "v8agent",
         }
     }
@@ -1207,12 +1210,20 @@ mod tests {
             "\"goose\""
         );
         assert_eq!(
+            serde_json::to_string(&AgentKind::Aider).unwrap(),
+            "\"aider\""
+        );
+        assert_eq!(
             serde_json::from_str::<AgentKind>("\"claude\"").unwrap(),
             AgentKind::Claude
         );
         assert_eq!(
             serde_json::from_str::<AgentKind>("\"goose\"").unwrap(),
             AgentKind::Goose
+        );
+        assert_eq!(
+            serde_json::from_str::<AgentKind>("\"aider\"").unwrap(),
+            AgentKind::Aider
         );
     }
 
@@ -1336,6 +1347,8 @@ mod tests {
         assert_eq!(AgentKind::Codex.label(), "codex");
         assert_eq!(AgentKind::Goose.label(), "goose");
         assert_eq!(AgentKind::Goose.display_label(), "Goose");
+        assert_eq!(AgentKind::Aider.label(), "aider");
+        assert_eq!(AgentKind::Aider.display_label(), "Aider");
     }
 
     #[test]

@@ -120,6 +120,7 @@ fn bare_program_name(agent: AgentKind) -> Option<&'static str> {
         AgentKind::Codebuddy => Some("codebuddy"),
         AgentKind::Opencode => Some("opencode"),
         AgentKind::Goose => Some("goose"),
+        AgentKind::Aider => Some("aider"),
         AgentKind::V8agent => Some("v8agent"),
         AgentKind::Unknown | AgentKind::Codex => None,
     }
@@ -238,6 +239,25 @@ fn build_command(
             cmd.env_remove("DOZER_SESSION_ID");
             Some((cmd, None))
         }
+        AgentKind::Aider => {
+            // `aider --message <prompt> --no-stream --no-pretty --no-auto-commits`
+            // 一次性总结(见 spec D7)。移除全部 Dozer bridge/notification 环境
+            // 变量,避免总结被 launcher bridge 重复落库。stdout 含固定文本
+            // banner,由 `extract_summary` 前先过 `clean_aider_stdout`。
+            let mut cmd = tokio::process::Command::new(program);
+            cmd.arg("--message")
+                .arg(format!("{}\n\n{}", instruction_text(), turns_text))
+                .arg("--no-stream")
+                .arg("--no-pretty")
+                .arg("--no-auto-commits");
+            cmd.env_remove("DOZER_SESSION_ID");
+            cmd.env_remove("AIDER_NOTIFICATIONS_COMMAND");
+            cmd.env_remove("DOZER_AIDER_CHAT_HISTORY");
+            cmd.env_remove("DOZER_AIDER_INPUT_HISTORY");
+            cmd.env_remove("DOZER_AIDER_CANONICAL_TRANSCRIPT");
+            cmd.env_remove("DOZER_AIDER_BRIDGE_STATE");
+            Some((cmd, None))
+        }
         AgentKind::Unknown | AgentKind::Codex => None,
     }
 }
@@ -303,6 +323,27 @@ fn build_task_command(
                 .arg(prompt);
             Some((cmd, None))
         }
+        AgentKind::Aider => {
+            // Todo 派发(见 spec D7):项目 cwd 下 `aider --message <prompt>
+            // --yes-always --no-stream --no-pretty`,保留用户默认 auto-commit
+            // 行为(不额外传 --auto-commits/--no-auto-commits)。移除 bridge/
+            // notification 环境变量,避免同一结果由 stdout 和 history 重复落库
+            // ——`record_task_turns` 是 Todo 唯一落库路径。
+            let mut cmd = tokio::process::Command::new(program);
+            cmd.current_dir(project_dir)
+                .env("DOZER_SESSION_ID", session_id)
+                .arg("--message")
+                .arg(prompt)
+                .arg("--yes-always")
+                .arg("--no-stream")
+                .arg("--no-pretty");
+            cmd.env_remove("AIDER_NOTIFICATIONS_COMMAND");
+            cmd.env_remove("DOZER_AIDER_CHAT_HISTORY");
+            cmd.env_remove("DOZER_AIDER_INPUT_HISTORY");
+            cmd.env_remove("DOZER_AIDER_CANONICAL_TRANSCRIPT");
+            cmd.env_remove("DOZER_AIDER_BRIDGE_STATE");
+            Some((cmd, None))
+        }
         AgentKind::Unknown | AgentKind::Codex => None,
     }
 }
@@ -314,6 +355,7 @@ async fn run_and_extract(
     mut cmd: tokio::process::Command,
     stdin_bytes: Option<Vec<u8>>,
     timeout: Duration,
+    clean: bool,
 ) -> Result<(String, String), HeadlessError> {
     use std::process::Stdio;
     cmd.stdin(if stdin_bytes.is_some() {
@@ -337,7 +379,32 @@ async fn run_and_extract(
         .map_err(|_| HeadlessError::Timeout)?
         .map_err(|e| HeadlessError::Spawn(e.to_string()))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = if clean {
+        clean_aider_stdout(&stdout)
+    } else {
+        stdout.into_owned()
+    };
     extract_summary(&stdout)
+}
+
+/// Aider `--message` 的 stdout 在模型回复前后混有固定文本 banner(实测
+/// `Aider v0.86.2`/`Model: ...`/`Git repo: ...`/`Repo-map: ...`/`Tokens: X
+/// sent, Y received.`)。只按固定行前缀匹配剥掉这些行,不碰模型回复本身,也
+/// **不**匹配 ANSI 颜色/光标序列或模型名(见 spec D7——那些是易变的非协议)。
+pub fn clean_aider_stdout(raw: &str) -> String {
+    raw.lines()
+        .filter(|l| {
+            let t = l.trim();
+            !(t.starts_with("Aider v")
+                || t.starts_with("Model:")
+                || t.starts_with("Git repo:")
+                || t.starts_with("Repo-map:")
+                || t.starts_with("Tokens:"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 /// 对外唯一入口:`turns` 是该会话已摄取的完整回合记录(人类+AI 都在内,
@@ -360,7 +427,13 @@ pub async fn summarize_headless(
     let Some((cmd, stdin_bytes)) = build_command(agent, &program, &turns_text) else {
         return Err(HeadlessError::Unsupported);
     };
-    run_and_extract(cmd, stdin_bytes, HEADLESS_TIMEOUT).await
+    run_and_extract(
+        cmd,
+        stdin_bytes,
+        HEADLESS_TIMEOUT,
+        agent == AgentKind::Aider,
+    )
+    .await
 }
 
 /// 与 `run_and_extract` 并列,但不做分隔符提取——原样返回完整 stdout(容
@@ -487,7 +560,7 @@ mod tests {
             )
             .into_bytes(),
         );
-        let (title, summary) = run_and_extract(cmd, stdin, Duration::from_secs(5))
+        let (title, summary) = run_and_extract(cmd, stdin, Duration::from_secs(5), false)
             .await
             .unwrap();
         assert_eq!(title, "t");
@@ -498,14 +571,14 @@ mod tests {
     async fn run_and_extract_times_out_on_slow_process() {
         let mut cmd = tokio::process::Command::new("sh");
         cmd.arg("-c").arg("sleep 5");
-        let result = run_and_extract(cmd, None, Duration::from_millis(100)).await;
+        let result = run_and_extract(cmd, None, Duration::from_millis(100), false).await;
         assert_eq!(result, Err(HeadlessError::Timeout));
     }
 
     #[tokio::test]
     async fn run_and_extract_reports_spawn_failure_for_missing_binary() {
         let cmd = tokio::process::Command::new("this-binary-does-not-exist-xyz");
-        let result = run_and_extract(cmd, None, Duration::from_secs(5)).await;
+        let result = run_and_extract(cmd, None, Duration::from_secs(5), false).await;
         assert!(matches!(result, Err(HeadlessError::Spawn(_))));
     }
 
@@ -775,5 +848,68 @@ mod tests {
             &["run", "--quiet", "--text"],
             "Todo 命令不含 --no-session(spec D7)"
         );
+    }
+
+    #[test]
+    fn bare_program_name_maps_aider_to_aider() {
+        assert_eq!(bare_program_name(AgentKind::Aider), Some("aider"));
+    }
+
+    #[test]
+    fn build_command_aider_summary_uses_message_flags_and_clears_bridge_env() {
+        let (cmd, stdin) = build_command(AgentKind::Aider, "aider", "内容").unwrap();
+        assert_eq!(stdin, None, "Aider 总结走 --message 参数");
+        let args: Vec<String> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args[0], "--message");
+        assert!(args.contains(&"--no-stream".to_string()));
+        assert!(args.contains(&"--no-pretty".to_string()));
+        assert!(args.contains(&"--no-auto-commits".to_string()));
+        let cleared = cmd
+            .as_std()
+            .get_envs()
+            .any(|(k, v)| k.to_str() == Some("DOZER_SESSION_ID") && v.is_none());
+        assert!(cleared, "总结场景移除 DOZER_SESSION_ID");
+        let bridge_env_cleared = cmd
+            .as_std()
+            .get_envs()
+            .any(|(k, v)| k.to_str() == Some("DOZER_AIDER_CHAT_HISTORY") && v.is_none());
+        assert!(bridge_env_cleared, "总结场景移除 bridge env,避免重复落库");
+    }
+
+    #[test]
+    fn build_task_command_aider_uses_yes_always_and_keeps_cwd() {
+        let (cmd, _) = build_task_command(
+            AgentKind::Aider,
+            "aider",
+            Path::new("/tmp/probe-dir"),
+            "sess-1",
+            "prompt",
+        )
+        .unwrap();
+        assert_eq!(
+            cmd.as_std().get_current_dir(),
+            Some(Path::new("/tmp/probe-dir"))
+        );
+        let args: Vec<String> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args[0], "--message");
+        assert!(args.contains(&"--yes-always".to_string()));
+        // 不强制覆盖用户 auto-commit 设置。
+        assert!(!args.contains(&"--no-auto-commits".to_string()));
+        assert!(!args.contains(&"--auto-commits".to_string()));
+    }
+
+    #[test]
+    fn clean_aider_stdout_strips_banner_lines_only() {
+        let raw = "Aider v0.86.2\nModel: openai/deepseek-v3 with whole edit format\nGit repo: none\nRepo-map: disabled\n\nhello world\n\nTokens: 555 sent, 2 received.\n";
+        let cleaned = clean_aider_stdout(raw);
+        assert_eq!(cleaned, "hello world");
     }
 }

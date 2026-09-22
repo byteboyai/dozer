@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 dozer-core = { path = "../dozer-core" }
 serde_json.workspace = true
+libc.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

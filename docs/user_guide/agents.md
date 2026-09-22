@@ -4,8 +4,9 @@ Dozer 本身**不接任何模型 API**,也没有内置的聊天面板。你在 D
 
 ## 支持哪些 agent
 
-Dozer 认识六种 agent CLI,加两种"纯终端"选项,一共八个启动器选项(按标签首字母排序):
+Dozer 认识七种 agent CLI,加两种"纯终端"选项,一共九个启动器选项(按标签首字母排序):
 
+- **Aider**
 - **Claude**(Claude Code)
 - **CodeBuddy**
 - **Codex**
@@ -16,6 +17,8 @@ Dozer 认识六种 agent CLI,加两种"纯终端"选项,一共八个启动器选
 - **纯 Shell**——就是一个空终端,什么都不敲
 
 Goose 首期限制:**token 用量**显示为未知/零(官方 hook 没有稳定的 usage 字段)、**不导入** Dozer 之外启动的 Goose 历史会话、**不含** ACP 原生 UI(权限弹窗/流式消息)。Goose CLI 的安装与配置是你自己的前置条件,Dozer 只安装它自己的 hook。
+
+Aider 首期限制:**不挂 Dozer MCP**、**不统计 token/工具调用/文件修改数**(Aider chat history 没有这些稳定结构化字段,显示"暂无数据"而非伪造数字)。Aider 由 Dozer 自带的 launcher 拉起,会**覆盖该会话的 notification command**(写入 Dozer 自己的 history 文件、不修改你的 `.aider.conf.yml`;直接启动 Aider 时完全不受影响)。Aider 的安装与 model/provider/git 配置都是你的前置条件。
 
 ## 启动一个会话
 
@@ -31,7 +34,7 @@ Goose 首期限制:**token 用量**显示为未知/零(官方 hook 没有稳定�
 
 Dozer 会尝试给 agent 装一个轻量级钩子(`dozer-hook`),让它在自己的生命周期节点(开始跑、等你输入、一轮结束……)把事件报给 `dozerd`,驱动出你在 UI 上看到的状态点(空闲/运行中/等待输入/一轮结束)。
 
-hook 目前接了 **Claude、CodeBuddy、Codex**(直接写进各自的 settings 配置)、**OpenCode**(写一个插件文件)和 **Goose**(写用户级 Open Plugins 的 `~/.agents/plugins/dozer/` 目录)。**v8agent** 走的是另一条路——它自己的 CLI 会带着 `DOZER_SESSION_ID` 直接向 socket 上报,不需要 hook。
+hook 目前接了 **Claude、CodeBuddy、Codex**(直接写进各自的 settings 配置)、**OpenCode**(写一个插件文件)和 **Goose**(写用户级 Open Plugins 的 `~/.agents/plugins/dozer/` 目录)。**Aider** 走 launcher bridge(每次启动注入 history/notification 参数,不写配置文件)。**v8agent** 走的是另一条路——它自己的 CLI 会带着 `DOZER_SESSION_ID` 直接向 socket 上报,不需要 hook。
 
 ## MCP:让 agent 知道你在看什么
 
@@ -40,7 +43,7 @@ Dozer 同时会给支持的 agent 注册一个只读的 `dozer` MCP server(见 [
 - 查到你当前在 Dozer 预览面板里看的文件路径和光标/选中范围。
 - 主动提交一段这次会话的标题+摘要,回填到 Dozer 的历史对话列表里。
 
-MCP 注册目前支持 **Claude**(写 `~/.claude.json`)、**CodeBuddy**(写 `~/.codebuddy/.mcp.json`)、**Codex**(写 `~/.codex/config.toml`,用无损编辑保留你原有的注释)、**OpenCode**(写 `~/.config/opencode/opencode.json`)。Goose 首期不挂 Dozer MCP(见设计文档 D8),v8agent 同样不支持。
+MCP 注册目前支持 **Claude**(写 `~/.claude.json`)、**CodeBuddy**(写 `~/.codebuddy/.mcp.json`)、**Codex**(写 `~/.codex/config.toml`,用无损编辑保留你原有的注释)、**OpenCode**(写 `~/.config/opencode/opencode.json`)。Goose/Aider 首期不挂 Dozer MCP(见设计文档 D8),v8agent 同样不支持。
 
 ## 会话状态胶囊
 

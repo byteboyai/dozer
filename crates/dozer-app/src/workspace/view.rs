@@ -56,19 +56,20 @@ pub(crate) fn load_more_button<'a>(
 pub(crate) const CONVERSATION_DETAIL_PAGE_SIZE: u32 = 200;
 
 /// 按 `AgentKind` 把会话 tab 分组,固定顺序 Claude → Codebuddy → Opencode
-/// → Codex → Goose → V8agent → Unknown(与 `conversation_agents_present`
+/// → Codex → Goose → Aider → V8agent → Unknown(与 `conversation_agents_present`
 /// 同一份顺序),只返回非空分组(没有该 agent 的会话就不出现,面板不留空
 /// 分组占位)。组内保持 `tabs` 原有顺序(tab 打开顺序)。返回下标而非
 /// 引用——渲染时既要下标发 `Message::SelectTab(idx)`,又要用下标回查
 /// `ws.tabs[idx]` 取展示字段,直接存下标比存 `&SessionTab` 省一次生命
 /// 周期纠缠。
 pub(crate) fn group_tabs_by_agent(tabs: &[SessionTab]) -> Vec<(AgentKind, Vec<usize>)> {
-    const ORDER: [AgentKind; 7] = [
+    const ORDER: [AgentKind; 8] = [
         AgentKind::Claude,
         AgentKind::Codebuddy,
         AgentKind::Opencode,
         AgentKind::Codex,
         AgentKind::Goose,
+        AgentKind::Aider,
         AgentKind::V8agent,
         AgentKind::Unknown,
     ];
@@ -271,8 +272,8 @@ pub(crate) fn agent_picker_toggle_button<'a>(
     )
 }
 
-/// `agent_picker_popup` 的原生菜单版本,纯数据组装——八个选项与旧版完全
-/// 一致(六 agent + 分隔线 + Git Shell/OS Shell),agent 图标用各自专属色
+/// `agent_picker_popup` 的原生菜单版本,纯数据组装——九个选项与旧版完全
+/// 一致(七 agent + 分隔线 + Git Shell/OS Shell),agent 图标用各自专属色
 /// (`agent_dot_color`)、文字用 BODY。仅 macOS 编译,非 mac 平台继续走
 /// `agent_picker_popup` 的 iced 弹层。
 #[cfg(target_os = "macos")]
@@ -283,7 +284,8 @@ pub(crate) fn agent_picker_items() -> Vec<crate::chrome::native_menu::Item<Messa
 /// Agent 选择器菜单内容——native(`agent_picker_items`)和 iced fallback
 /// (`agent_picker_popup`)共用同一份数据，只在这里组装一次。
 pub(crate) fn agent_picker_spec() -> MenuSpec<Message> {
-    let agents: [(&str, PickerLaunch); 6] = [
+    let agents: [(&str, PickerLaunch); 7] = [
+        ("Aider", PickerLaunch::Agent(Some(AgentKind::Aider))),
         ("Claude", PickerLaunch::Agent(Some(AgentKind::Claude))),
         ("CodeBuddy", PickerLaunch::Agent(Some(AgentKind::Codebuddy))),
         ("Codex", PickerLaunch::Agent(Some(AgentKind::Codex))),
@@ -316,8 +318,8 @@ pub(crate) fn agent_picker_spec() -> MenuSpec<Message> {
 }
 
 /// Agent 选择菜单浮层:固定挂在窗口右上角("＋"按钮下方——该按钮
-/// 就在最靠右的 Agent 面板头部,近似等于窗口右上角),八个选项按标签
-/// 首字母顺序排列:Claude/CodeBuddy/Codex/Goose/Git Shell/OpenCode/
+/// 就在最靠右的 Agent 面板头部,近似等于窗口右上角),九个选项按标签
+/// 首字母顺序排列:Aider/Claude/CodeBuddy/Codex/Goose/Git Shell/OpenCode/
 /// v8agent/OS Shell(验收反馈,2026-08-21;此前是手写的固定顺序,不便
 /// 找到目标 agent)。跟项目树右键菜单(`context_menu_popup`)同款按钮
 /// 样式,但不需要像素坐标定位——同 `delete_confirm_popup` 一样固定
@@ -627,10 +629,12 @@ pub(crate) fn project_preview_pane<'a>(
 }
 
 /// 空白页(`TabKind::Blank`)的 Finder "Get Info" 风格信息卡:folder icon +
-/// 项目名(大号奶油色),下方四行 dim label / cream value —— 位置 / 大小 /
-/// 创建时间 / 修改时间。`preview.blank_info` 为 `None` 时四行 value 都画
-/// `—` 占位(后台还在跑)。无项目(`ws.project` 为 `None`,启动初帧 / 切项目
-/// 中间)只画头部,不画 stats,避免"位置: —"这种半成品。
+/// 项目名(2 倍 title 字号,奶油色),下方四行 dim label / cream value ——
+/// 位置 / 大小 / 创建时间 / 修改时间。四行 `:` 严格垂直对齐,锚点 x = 头部
+/// 项目名文本最左(即 icon_size + row.spacing);通过 label 段固定宽 + 文字
+/// 右对齐 + stats 列左 padding 实现。`preview.blank_info` 为 `None` 时四行
+/// value 都画 `—` 占位(后台还在跑)。无项目(`ws.project` 为 `None`,启动
+/// 初帧 / 切项目中间)只画头部,不画 stats,避免"位置: —"这种半成品。
 fn preview_blank_info_card<'a>(
     ws: &'a Workspace,
     preview: &'a PreviewPane,
@@ -645,20 +649,25 @@ fn preview_blank_info_card<'a>(
     let header_label = project_root_dir_name(ws)
         .or_else(|| ws.project.as_ref().map(|p| p.name.clone()))
         .unwrap_or_default();
+    // 头部 icon 用 Lucide `folder-dot`(一个底角圆点暗示"当前位置/选中"
+    // 的语义,比纯 folder 更贴合空白页"信息卡"语境);文件夹名字号直接
+    // ×2(从 title() 16 → 32),与下方 body() 14 拉开视觉主次。
+    let icon_size: f32 = 96.0;
+    let header_spacing: f32 = 20.0;
     let header = row![
-        icons::view(icons::IconKind::Folder, 96.0, theme_colors.dim),
+        icons::view(icons::IconKind::FolderDot, icon_size, theme_colors.dim),
         text(header_label)
-            .size(byteui::theme::font::title())
+            .size(byteui::theme::font::title() * 2)
             .color(theme_colors.cream),
     ]
-    .spacing(20)
+    .spacing(header_spacing)
     .align_y(iced_widget::core::Alignment::Center);
 
     let Some(project) = ws.project.as_ref() else {
         return container(
             column![header]
                 .spacing(0)
-                .align_x(iced_widget::core::Alignment::Center),
+                .align_x(iced_widget::core::Alignment::Start),
         )
         .width(Length::Fill)
         .height(Length::Fill)
@@ -690,34 +699,58 @@ fn preview_blank_info_card<'a>(
     // 不抽 label/value 闭包:`text` 返回 `Text<'a>` 含生命周期,把 `&str` 闭包
     // 返回 `Text<'b>` 会撞 iced 的 invariant 约束(报错点就是这个),就地写
     // 反而短。
+    // `:` 对齐方案:每个 label 段包进 width(Fixed(label_colon_w)) + 右对齐
+    // 的 container,于是该行 `:` 落在 `label_colon_w` 框右边界。stats column
+    // 加左 padding `stats_padding_left`,使 `:` 真实 x = stats column 起点 +
+    // padding_left + label_colon_w = icon_size + header_spacing,正好是头部
+    // 项目名(如 "anrong_fincalc")的最左像素 —— 实现"四个 `:` 与上方文件
+    // 夹名左对齐"。card column 用 `align_x(Start)` 让 header 与 stats 起点
+    // 相同(= card 最左),这样上式锚点不被 column 居中算法搅乱;外层 container
+    // 仍居中,视觉上整张卡还在屏幕中央。`label_colon_w=80` 足够容下"创建
+    // 时间:"(最长 label,~63px @body_font 14)。
+    let label_colon_w: f32 = 80.0;
+    let stats_padding_left = icon_size + header_spacing - label_colon_w;
     let stats = column![
         row![
-            text("位置:").size(body_font).color(dim),
-            text(project.path.clone()).size(body_font).color(cream)
+            container(text("位置:").size(body_font).color(dim))
+                .width(Length::Fixed(label_colon_w))
+                .align_x(iced_widget::core::alignment::Horizontal::Right),
+            text(project.path.clone()).size(body_font).color(cream),
         ]
         .spacing(8),
         row![
-            text("大小:").size(body_font).color(dim),
-            text(size_value).size(body_font).color(cream)
+            container(text("大小:").size(body_font).color(dim))
+                .width(Length::Fixed(label_colon_w))
+                .align_x(iced_widget::core::alignment::Horizontal::Right),
+            text(size_value).size(body_font).color(cream),
         ]
         .spacing(8),
         row![
-            text("创建时间:").size(body_font).color(dim),
-            text(created_value).size(body_font).color(cream)
+            container(text("创建时间:").size(body_font).color(dim))
+                .width(Length::Fixed(label_colon_w))
+                .align_x(iced_widget::core::alignment::Horizontal::Right),
+            text(created_value).size(body_font).color(cream),
         ]
         .spacing(8),
         row![
-            text("修改时间:").size(body_font).color(dim),
-            text(modified_value).size(body_font).color(cream)
+            container(text("修改时间:").size(body_font).color(dim))
+                .width(Length::Fixed(label_colon_w))
+                .align_x(iced_widget::core::alignment::Horizontal::Right),
+            text(modified_value).size(body_font).color(cream),
         ]
         .spacing(8),
     ]
     .spacing(8)
-    .align_x(iced_widget::core::Alignment::Center);
+    .padding(Padding {
+        top: 0.0,
+        bottom: 0.0,
+        left: stats_padding_left,
+        right: 0.0,
+    });
 
     let card = column![header, stats]
         .spacing(28)
-        .align_x(iced_widget::core::Alignment::Center);
+        .align_x(iced_widget::core::Alignment::Start);
 
     container(card)
         .width(Length::Fill)
@@ -1754,20 +1787,30 @@ pub(crate) fn relative_time_text(modified_ms: u64, now_ms: u64) -> String {
     }
 }
 
-/// agent 选择菜单选中的 agent → 要自动键入 PTY 的 CLI 命令名。`Unknown`
+/// 把一段(可能是绝对路径、可能带空格/单引号)安全地包进 `sh -c` 的单引号。
+/// 供 Aider launcher 命令使用——app bundle 路径 `/Applications/Dozer AI
+/// Coder.app/...` 含空格,不转义会断词。
+pub(crate) fn sh_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// agent 选择菜单选中的 agent → 要自动键入 PTY 的 CLI 命令。`Unknown`
 /// 不该从选择菜单产生(选项是各家 agent + 纯 Shell/Git Shell,纯 Shell 走
 /// `launch: None`,不经过这个函数),但函数保持穷尽 match,防止未来枚举
-/// 新增变体时静默漏写。**不能**一律取 `AgentKind::label()`:Goose 的交互
-/// 命令需要子命令(`goose session`,见 spec D1),跟其余四家"裸命令名即
-/// 可启动"不同,必须显式映射。
-pub(crate) fn agent_cli_command(agent: AgentKind) -> Option<&'static str> {
+/// 新增变体时静默漏写。**不能**一律取 `AgentKind::label()`:
+/// - Goose 的交互命令需要子命令(`goose session`,见 spec D1)。
+/// - Aider 走 `dozer-hook launch aider`(launcher bridge,见 spec D1)——命令
+///   里必须带 sibling `dozer-hook` 的绝对路径,所以本函数返回 `Option<String>`
+///   而不是静态 `&str`,`hook_exe` 由调用方(有 `current_exe()` 的上下文)传入。
+pub(crate) fn agent_launch_command(agent: AgentKind, hook_exe: &str) -> Option<String> {
     match agent {
         AgentKind::Unknown => None,
-        AgentKind::Claude => Some("claude"),
-        AgentKind::Codebuddy => Some("codebuddy"),
-        AgentKind::Opencode => Some("opencode"),
-        AgentKind::Codex => Some("codex"),
-        AgentKind::Goose => Some("goose session"),
-        AgentKind::V8agent => Some("v8agent"),
+        AgentKind::Claude => Some("claude".into()),
+        AgentKind::Codebuddy => Some("codebuddy".into()),
+        AgentKind::Opencode => Some("opencode".into()),
+        AgentKind::Codex => Some("codex".into()),
+        AgentKind::Goose => Some("goose session".into()),
+        AgentKind::Aider => Some(format!("{} launch aider", sh_single_quote(hook_exe))),
+        AgentKind::V8agent => Some("v8agent".into()),
     }
 }

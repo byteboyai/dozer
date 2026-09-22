@@ -3,10 +3,9 @@ mod codex;
 mod goose;
 mod opencode;
 
-use dozer_core::protocol::{AgentKind, Request, encode_line};
+use dozer_core::protocol::AgentKind;
 use dozer_hook::{goose_install, install, opencode_install};
-use std::io::{Read, Write};
-use std::time::Duration;
+use std::io::Read;
 
 fn main() {
     let arg1 = std::env::args().nth(1);
@@ -44,6 +43,24 @@ fn main() {
                 &agent,
                 false,
             ))
+        }
+        Some("launch") => {
+            // dozer-hook launch aider [-- <extra args>]
+            let mut args: Vec<String> = std::env::args().skip(2).collect();
+            if args.first().map(String::as_str) == Some("aider") {
+                args.remove(0);
+                if args.first().map(String::as_str) == Some("--") {
+                    args.remove(0);
+                }
+                std::process::exit(dozer_hook::aider_launcher::launch(&args));
+            }
+            eprintln!("dozer-hook launch: 只支持 aider");
+            std::process::exit(1);
+        }
+        Some("aider") => {
+            // dozer-hook aider Stop —— notification command,恒退出 0。
+            dozer_hook::aider_launcher::handle_stop();
+            std::process::exit(0);
         }
         Some(agent_arg) => {
             let agent = parse_agent(agent_arg);
@@ -148,21 +165,7 @@ fn forward(agent: AgentKind, event_arg: Option<&str>) {
             );
         }
     }
-    let req = Request::HookEvent {
-        session_id,
-        agent,
-        event,
-        ts_ms,
-        data,
-    };
-
-    let Ok(mut stream) = std::os::unix::net::UnixStream::connect(dozer_core::paths::socket_path())
-    else {
-        return;
-    };
-    let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
-    let _ = stream.write_all(encode_line(&req).as_bytes());
-    // 单向语义：不读应答，发完即走
+    dozer_hook::forward::send_hook_event(agent, &session_id, &event, ts_ms, &data);
 }
 
 #[cfg(test)]

@@ -838,6 +838,70 @@ fn parse_goose_hook_chunk(
     out
 }
 
+/// Aider canonical transcript(dozer-hook bridge 落盘的 schema v1 行:
+/// `{"schema_version":1,"type":"aider_message","message_id":..,"role":"human"|"ai",
+/// "content":..,"ts_ms":..}`)→`ParsedTurn`。只认 `type:"aider_message"` 的行;
+/// `role:"human"` → human、`role:"ai"` → ai,`message_key` 取 `message_id`。
+/// 工具/mutation/files/thinking/token 字段全零——Aider chat history 没有这些
+/// 稳定结构化字段,不伪造(见 spec D6)。未知 schema/role/畸形行跳过,不 panic。
+fn parse_aider_chunk(
+    text: &str,
+    conversation_id: &str,
+    starting_turn_index: i64,
+) -> Vec<ParsedTurn> {
+    let mut out = Vec::new();
+    let mut turn_index = starting_turn_index;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) != Some("aider_message") {
+            continue;
+        }
+        if v.get("schema_version").and_then(|n| n.as_u64()) != Some(1) {
+            tracing::warn!("aider canonical 未知 schema_version,跳过该行");
+            continue;
+        }
+        let Some(role) = v.get("role").and_then(|r| r.as_str()) else {
+            continue;
+        };
+        let role = match role {
+            "human" => "human",
+            "ai" => "ai",
+            _ => continue,
+        };
+        let content = v
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if content.is_empty() {
+            continue;
+        }
+        let message_key = v
+            .get("message_id")
+            .and_then(|m| m.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| fallback_key(conversation_id, turn_index));
+        let ts = v.get("ts_ms").and_then(|n| n.as_u64());
+        out.push(ParsedTurn {
+            message_key,
+            role: role.into(),
+            content,
+            ts,
+            raw_json: line.to_string(),
+            ..Default::default()
+        });
+        turn_index += 1;
+    }
+    out
+}
+
 /// 按 agent 分派解析一段(必为完整行)transcript 文本。`starting_turn_index`
 /// 是这段文本第一条产出的 `ParsedTurn` 应该编到的 `turn_index`(调用方从
 /// `conversations`/`conversation_turns` 已有数据算出,续接编号,不重置)。
@@ -862,6 +926,7 @@ pub fn parse_chunk(
         }
         AgentKind::Codex => parse_codex_shaped_chunk(text, conversation_id, starting_turn_index),
         AgentKind::Goose => parse_goose_hook_chunk(text, conversation_id, starting_turn_index),
+        AgentKind::Aider => parse_aider_chunk(text, conversation_id, starting_turn_index),
     }
 }
 
@@ -900,6 +965,9 @@ pub fn extract_turn_trace_detail(raw_json: &str, agent: AgentKind) -> TurnTraceD
         // Goose 的 PreToolUse 行携带 tool_name/tool_input,读时补出结构化
         // 工具调用明细(其余 Goose 行无结构化内容,回全空)。
         AgentKind::Goose => extract_goose_trace_detail(&v),
+        // Aider canonical 行只有 human/ai 文本,没有结构化工具/思考字段,
+        // 读时补全维持全空(见 parse_aider_chunk)。
+        AgentKind::Aider => TurnTraceDetail::default(),
     }
 }
 
@@ -1589,6 +1657,52 @@ mod trace_detail_tests {
         let raw = "{\"schema_version\":1,\"type\":\"goose_hook\",\"event\":\"UserPromptSubmit\",\"ts_ms\":2,\"dozer_session_id\":\"ds\",\"payload\":{\"message\":\"hi\"}}";
         assert_eq!(
             extract_turn_trace_detail(raw, AgentKind::Goose),
+            TurnTraceDetail::default()
+        );
+    }
+
+    // —— Aider canonical parser ——
+
+    #[test]
+    fn aider_parses_human_and_ai_with_stable_message_key() {
+        let text = concat!(
+            "{\"schema_version\":1,\"type\":\"aider_message\",\"message_id\":\"abc\",\"role\":\"human\",\"content\":\"请修复测试\",\"ts_ms\":1}\n",
+            "{\"schema_version\":1,\"type\":\"aider_message\",\"message_id\":\"def\",\"role\":\"ai\",\"content\":\"已修复\",\"ts_ms\":2}\n",
+        );
+        let turns = parse_chunk(AgentKind::Aider, text, "conv1", 0);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].role, "human");
+        assert_eq!(turns[0].content, "请修复测试");
+        assert_eq!(turns[0].message_key, "abc", "message_key 取 message_id");
+        assert_eq!(turns[0].ts, Some(1));
+        assert_eq!(turns[1].role, "ai");
+        assert_eq!(turns[1].message_key, "def");
+        // 工具/mutation/files/thinking/token 全零。
+        assert_eq!(turns[1].tool_calls, 0);
+        assert_eq!(turns[1].mutating_tool_calls, 0);
+        assert!(turns[1].files_touched.is_empty());
+        assert_eq!(turns[1].tokens_in, 0);
+    }
+
+    #[test]
+    fn aider_skips_unknown_schema_role_and_malformed_lines() {
+        let text = concat!(
+            "{\"schema_version\":2,\"type\":\"aider_message\",\"message_id\":\"x\",\"role\":\"human\",\"content\":\"未来版本\"}\n",
+            "{\"schema_version\":1,\"type\":\"aider_message\",\"message_id\":\"y\",\"role\":\"tool\",\"content\":\"未知角色\"}\n",
+            "{\"schema_version\":1,\"type\":\"aider_message\",\"message_id\":\"z\",\"role\":\"human\",\"content\":\"   \"}\n",
+            "not-json\n",
+            "{\"schema_version\":1,\"type\":\"aider_message\",\"message_id\":\"ok\",\"role\":\"human\",\"content\":\"真实\"}\n",
+        );
+        let turns = parse_chunk(AgentKind::Aider, text, "conv1", 0);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].message_key, "ok");
+    }
+
+    #[test]
+    fn aider_trace_detail_returns_empty() {
+        let raw = "{\"schema_version\":1,\"type\":\"aider_message\",\"message_id\":\"x\",\"role\":\"ai\",\"content\":\"hi\"}";
+        assert_eq!(
+            extract_turn_trace_detail(raw, AgentKind::Aider),
             TurnTraceDetail::default()
         );
     }

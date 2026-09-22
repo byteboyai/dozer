@@ -31,6 +31,7 @@ pub(crate) fn should_summarize_on_close(
                 | AgentKind::Opencode
                 | AgentKind::V8agent
                 | AgentKind::Goose
+                | AgentKind::Aider
         )
 }
 
@@ -73,7 +74,9 @@ pub(crate) fn hook_install_target(agent: AgentKind) -> Option<HookInstallTarget>
         // 专用安装器 `dozer_hook::goose_install` 生成 plugin.json + hooks.json,
         // 不写 Claude 的 settings.json(见 `goose_install` 模块注释)。
         AgentKind::Goose => Some(HookInstallTarget::GoosePlugin),
-        AgentKind::Unknown | AgentKind::V8agent => None,
+        // Aider 没有 hook 安装器——它的 bridge 参数由 launcher 每次启动注入
+        // (`launch aider`),不写任何配置文件(见 spec D1)。
+        AgentKind::Unknown | AgentKind::Aider | AgentKind::V8agent => None,
     }
 }
 
@@ -154,12 +157,13 @@ pub(crate) fn ensure_mcp_installed(agent: AgentKind) {
 }
 
 /// picker 选择项 → attach 成功后自动键入 PTY 的初始命令。`Agent(Some(a))`
-/// 复用 `agent_cli_command`(键入 agent CLI);`Agent(None)` 不键入(纯 Shell);
-/// `Git` 键入 `git status`——新开的 shell 已在项目根,直接看仓库状态。
-/// 抽成纯函数是为了能 headless 单测(同 `agent_cli_command` 的惯例)。
-pub(crate) fn picker_launch_command(launch: PickerLaunch) -> Option<String> {
+/// 复用 `agent_launch_command`(键入 agent CLI;Aider 需要 `hook_exe` 绝对路径
+/// 拼出 launcher 命令);`Agent(None)` 不键入(纯 Shell);`Git` 键入
+/// `git status`——新开的 shell 已在项目根,直接看仓库状态。抽成纯函数是为了
+/// 能 headless 单测(同 `agent_launch_command` 的惯例)。
+pub(crate) fn picker_launch_command(launch: PickerLaunch, hook_exe: &str) -> Option<String> {
     match launch {
-        PickerLaunch::Agent(Some(agent)) => agent_cli_command(agent).map(str::to_owned),
+        PickerLaunch::Agent(Some(agent)) => agent_launch_command(agent, hook_exe),
         PickerLaunch::Agent(None) => None,
         PickerLaunch::Git => Some("git status".to_string()),
     }
@@ -258,6 +262,7 @@ pub(crate) fn agent_dot_color(agent: AgentKind) -> Color {
         AgentKind::Opencode => byteui::theme::color::current().green,
         AgentKind::Codex => byteui::theme::color::current().orange,
         AgentKind::Goose => byteui::theme::color::current().blue,
+        AgentKind::Aider => byteui::theme::color::current().magenta,
         AgentKind::V8agent => byteui::theme::color::current().lime,
         AgentKind::Unknown => byteui::theme::color::current().dim,
     }
@@ -271,9 +276,11 @@ pub(crate) fn agent_icon(agent: AgentKind) -> IconKind {
         AgentKind::Codebuddy => IconKind::Codebuddy,
         AgentKind::Opencode => IconKind::Opencode,
         // 暂无确认可用的品牌素材，回落通用图标（spec §8/§6 明确允许）。
-        AgentKind::Codex | AgentKind::Goose | AgentKind::V8agent | AgentKind::Unknown => {
-            IconKind::Bot
-        }
+        AgentKind::Codex
+        | AgentKind::Goose
+        | AgentKind::Aider
+        | AgentKind::V8agent
+        | AgentKind::Unknown => IconKind::Bot,
     }
 }
 
