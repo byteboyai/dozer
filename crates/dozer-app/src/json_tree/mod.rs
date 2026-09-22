@@ -238,13 +238,30 @@ impl JsonTreeView {
 }
 
 pub fn is_json_tree_extension(path: &Path) -> bool {
+    is_streamed_extension(path) || is_ordinary_json_extension(path)
+}
+
+/// 流式扩展名(JSONL/NDJSON):每行一个独立 root,走 streamed 路径。
+pub fn is_streamed_extension(path: &Path) -> bool {
     matches!(
         path.extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase()
             .as_str(),
-        "json" | "jsonl" | "ndjson" | "json5" | "jsonc"
+        "jsonl" | "ndjson"
+    )
+}
+
+/// 普通单文档 JSON 扩展名(含 JSON5/JSONC,它们由 `load_json` 解析)。
+pub fn is_ordinary_json_extension(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
+        "json" | "json5" | "jsonc"
     )
 }
 
@@ -356,6 +373,23 @@ mod tests {
         }
         for p in ["/tmp/a.md", "/tmp/a.csv", "/tmp/a.json7", "/tmp/a.geojson"] {
             assert!(!is_json_tree_extension(Path::new(p)), "{p}");
+        }
+    }
+
+    #[test]
+    fn streamed_and_ordinary_classification_is_exclusive() {
+        for p in ["/tmp/a.jsonl", "/tmp/a.ndjson", "/tmp/A.NDJSON"] {
+            assert!(is_streamed_extension(Path::new(p)), "{p}");
+            assert!(!is_ordinary_json_extension(Path::new(p)), "{p}");
+        }
+        for p in [
+            "/tmp/a.json",
+            "/tmp/a.json5",
+            "/tmp/a.jsonc",
+            "/tmp/A.JSON5",
+        ] {
+            assert!(is_ordinary_json_extension(Path::new(p)), "{p}");
+            assert!(!is_streamed_extension(Path::new(p)), "{p}");
         }
     }
 }
