@@ -12,15 +12,18 @@
 //! 供(将来)确需只读展示的场景;分派逻辑不变:只读时滤掉 `Action::Edit`。
 //!
 //! 已知取舍(用户已确认接受):
-//! - 右侧纯指示滚动条靠应用层累加 `Action::Scroll{lines}` 镜像滚动位置——
+//! - 右侧滚动条靠应用层累加 `Action::Scroll{lines}` 镜像滚动位置——
 //!   `iced_core::text::Editor` trait 没有暴露读取真实滚动偏移的公开 API,
 //!   只能近似反映"滚到哪",顶到末尾时整条 thumb 不到底,纯视觉瑕疵,不影响编辑。
+//!   点击/拖拽滚动条也走这条镜像:鼠标 y 先换算成目标 `scroll_lines`,再对当前
+//!   镜像求差发 `Action::Scroll`(实现见 [`StripGeom`]/[`Scrollstrip`])。
 //! - 光标/选区的逻辑坐标(`cursor_position`/`selection_range`,供 MCP
 //!   `get_preview_context` 报行号给 agent)不走这个滚动镜像,直接读
 //!   `Content::cursor()` 的 `Position{line,column}`,精确无漂移风险。
 //! - 官方 `text_editor` 没有内置可拖拽滚动条 UI(只能滚轮/触控板滚动),
 //!   也没有内置右键菜单——后者正是移除的目的(vendored 版本的内部右键菜单
-//!   就是上面那个 panic 的根源)。
+//!   就是上面那个 panic 的根源)。可拖拽滚动条因此是本模块自绘的右侧窄条
+//!   ([`Scrollstrip`]),不依赖官方 widget。
 //! - 字号/行高按 `theme::terminal_font` 现算现用(每次 `view()` 都从全局
 //!   `icon_size::scale()` 重新推导),不像 vendored 版本需要显式
 //!   `set_font_size`/`set_layout_metrics` 再手动 `resync`——Ctrl ± 缩放
@@ -38,7 +41,7 @@ pub mod highlighter;
 
 use iced_widget::canvas;
 use iced_widget::core::widget::Id as WidgetId;
-use iced_widget::core::{Color, Element, Length, Pixels, Point, Rectangle, Size, mouse};
+use iced_widget::core::{Color, Element, Event, Length, Pixels, Point, Rectangle, Size, mouse};
 use iced_widget::text_editor::{self, Action, Edit};
 use std::sync::Arc;
 
@@ -702,11 +705,80 @@ fn editor_style(_theme: &iced_widget::Theme, _status: text_editor::Status) -> te
     }
 }
 
-/// 纯指示型滚动条(不可拖,风格对齐拉列表的 `byteui` 统一 thumb):
-/// `text_editor` 没有公开 API 读真实滚动偏移,只能靠应用层镜像的
-/// `scroll_lines` 积分近似;文件长到开始滚动时显现,否则轨道透明留白。
-/// 视觉瑕疵(只能反映"已滚多少",顶到末尾整 thumb 不到底)由镜像近似导致,
-/// 见模块文档"已知取舍",用户已确认接受。
+/// 代码编辑器滚动条几何——`draw`(画 thumb)与 `update`(拖拽命中)共用
+/// 同一份换算,避免"画一条、命中另一条"的位置漂移(与 `term_view.rs` 的
+/// `ScrollbarGeom`、`json_tree/tree.rs` 的 `Metrics` 同一手法)。一条公式
+/// 同时决定:可视行数、thumb 高、thumb 顶 y 与滚动行数之间的一对一映射。
+///
+/// 映射的"总量"取 `line_count`(与 `CodeView::scroll_lines` 镜像的 clamp
+/// 上界 `line_count()-1` 基本对齐,差一行是已知近似,见模块文档"已知取舍")。
+/// thumb 顶 y 在 `[0, h - thumb_h]` 上线性映射 `scroll_lines ∈ [0, line_count]`。
+struct StripGeom {
+    /// 可视行数(画布高 / 行高),<=0 或 >= 总行数时滚动条不显现。
+    visible: f32,
+    total: f32,
+    h: f32,
+    thumb_w: f32,
+    rail_w: f32,
+    thumb_h: f32,
+}
+
+impl StripGeom {
+    fn new(line_count: usize, line_height: f32, bounds: Rectangle) -> Self {
+        let visible = bounds.height / line_height;
+        let total = line_count as f32;
+        let thumb_w = byteui::theme::geometry::scrollbar_thumb_width();
+        let rail_w = byteui::theme::geometry::scrollbar_width();
+        // thumb 高度按"可视区/总内容"缩放,给个最小高度免得细到看不见。
+        let thumb_h = if total > 0.0 {
+            (bounds.height * (visible / total)).max(thumb_w * 1.5)
+        } else {
+            0.0
+        };
+        StripGeom {
+            visible,
+            total,
+            h: bounds.height,
+            thumb_w,
+            rail_w,
+            thumb_h,
+        }
+    }
+
+    /// 内容是否纵向溢出到需要滚动条(没溢出就不画、不响应拖拽)。
+    fn visible(&self) -> bool {
+        self.visible > 0.0 && self.total > self.visible
+    }
+
+    /// `scroll_lines` → thumb 顶部 y(与 `draw` 同源公式)。
+    fn thumb_top(&self, scroll_lines: f32) -> f32 {
+        let usable = (self.h - self.thumb_h).max(0.0);
+        (scroll_lines / self.total.max(1.0) * usable).clamp(0.0, usable)
+    }
+
+    /// 轨道内某 y → 目标 `scroll_lines`。以光标为 thumb 中心(`y - thumb_h/2`),
+    /// 点哪跳哪,结果钳在 `[0, total]` 后取整(负值/越界由调用方再按镜像上界
+    /// clamp)。
+    fn scroll_lines_at(&self, y: f32) -> f32 {
+        if self.total <= 0.0 {
+            return 0.0;
+        }
+        let usable = (self.h - self.thumb_h).max(0.0);
+        if usable <= 0.0 {
+            return 0.0;
+        }
+        let top = (y - self.thumb_h / 2.0).clamp(0.0, usable);
+        (top / usable * self.total).clamp(0.0, self.total).round()
+    }
+}
+
+/// 可拖拽滚动条(风格对齐 `byteui` 统一 thumb):`text_editor` 没有公开 API
+/// 读真实滚动偏移,只能靠应用层镜像的 `scroll_lines` 积分近似;文件长到开始
+/// 滚动时显现,否则轨道透明留白。拖拽/点击不读真实偏移,而是把鼠标 y 换算成
+/// 目标 `scroll_lines`,再对当前镜像求差、作为 [`Action::Scroll`] 发回
+/// `CodeView::perform`(与滚轮同一条管线)——因此不会比镜像本身更准,但"点击/
+/// 拖动滚动条能滚"的交互完整。视觉瑕疵(顶到末尾整 thumb 差一点到底)由
+/// 镜像近似导致,见模块文档"已知取舍"。
 struct Scrollstrip {
     line_count: usize,
     /// 镜像出来的滚动起点(行,含小数)。
@@ -714,8 +786,67 @@ struct Scrollstrip {
     line_height: f32,
 }
 
-impl<Message> canvas::Program<Message> for Scrollstrip {
-    type State = ();
+/// 滚动条拖拽的 `State`:`dragging` 标记左键按在条上未松开;`drag_target` 是
+/// 上一次已发出的目标滚动行,拖拽增量以它为基准累加——不依赖 `scroll_lines`
+/// 镜像同帧同步(消息回环前镜像还是旧值),避免移动事件成串时重复计差。
+#[derive(Default)]
+struct StripState {
+    dragging: bool,
+    drag_target: f32,
+}
+
+impl canvas::Program<Action, iced_widget::Theme, iced_renderer::Renderer> for Scrollstrip {
+    type State = StripState;
+
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: &Event,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<Action>> {
+        let Event::Mouse(mouse_event) = event else {
+            return None;
+        };
+        let geom = StripGeom::new(self.line_count, self.line_height, bounds);
+        match mouse_event {
+            mouse::Event::ButtonPressed(mouse::Button::Left) => {
+                if !geom.visible() {
+                    return None;
+                }
+                let pos = _cursor.position_in(bounds)?;
+                state.dragging = true;
+                // 起拖以当前镜像位置为基准:点哪跳哪,先把第一段位移发出去。
+                let target = geom.scroll_lines_at(pos.y);
+                let delta = (target - self.scroll_lines).round() as i32;
+                state.drag_target = target;
+                if delta == 0 {
+                    return Some(canvas::Action::capture());
+                }
+                Some(canvas::Action::publish(Action::Scroll { lines: delta }).and_capture())
+            }
+            mouse::Event::CursorMoved { .. } if state.dragging => {
+                if !geom.visible() {
+                    return None;
+                }
+                // 允许移出画布(上下越界由 `scroll_lines_at` 钳到两端),用全局 y
+                // 减 bounds.y 得轨道内相对位置。
+                let pos = _cursor.position()?;
+                let target = geom.scroll_lines_at(pos.y - bounds.y);
+                let delta = (target - state.drag_target).round() as i32;
+                if delta == 0 {
+                    return Some(canvas::Action::capture());
+                }
+                state.drag_target = target;
+                Some(canvas::Action::publish(Action::Scroll { lines: delta }).and_capture())
+            }
+            mouse::Event::ButtonReleased(mouse::Button::Left) if state.dragging => {
+                state.dragging = false;
+                Some(canvas::Action::capture())
+            }
+            _ => None,
+        }
+    }
 
     fn draw(
         &self,
@@ -725,39 +856,42 @@ impl<Message> canvas::Program<Message> for Scrollstrip {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
-        let visible = bounds.height / self.line_height;
-        // 内容没超过一屏,不需要滚动条;或根本没行数,直接一片空。
-        if visible <= 0.0 || (self.line_count as f32) <= visible {
+        let geom = StripGeom::new(self.line_count, self.line_height, bounds);
+        if !geom.visible() {
             return Vec::new();
         }
 
         let mut frame = canvas::Frame::new(renderer, bounds.size());
-
-        let thumb_w = byteui::theme::geometry::scrollbar_thumb_width();
-        let rail_w = byteui::theme::geometry::scrollbar_width();
         let gold = byteui::theme::color::current().tab_active_border;
 
-        // thumb 高度按"可视区/总内容"缩放,给个最小高度免得细到看不见。
-        let total = self.line_count as f32;
-        let ratio = visible / total;
-        let thumb_h = (bounds.height * ratio).max(thumb_w * 1.5);
-
-        // 顶到末尾还滚得动一点就 clamp 住,别跑出轨道。
-        let progress = self.scroll_lines / total.max(1.0);
-        let top = progress * (bounds.height - thumb_h);
-
+        let top = geom.thumb_top(self.scroll_lines);
         // 圆角(半径 = 半宽 → 胶囊),风格对齐 `byteui` 拉列表里统一滚动条的
         // thumb(同样 `scroller_width` 取半做圆角)。
-        let radius = (thumb_w / 2.0).into();
-        let x = (rail_w - thumb_w) / 2.0;
+        let radius = (geom.thumb_w / 2.0).into();
+        let x = (geom.rail_w - geom.thumb_w) / 2.0;
         let path = canvas::Path::rounded_rectangle(
             Point::new(x, top),
-            Size::new(thumb_w, thumb_h),
+            Size::new(geom.thumb_w, geom.thumb_h),
             radius,
         );
         frame.fill(&path, gold);
 
         vec![frame.into_geometry()]
+    }
+
+    fn mouse_interaction(
+        &self,
+        state: &Self::State,
+        _bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        if state.dragging {
+            mouse::Interaction::Grabbing
+        } else if cursor.is_over(_bounds) {
+            mouse::Interaction::Grab
+        } else {
+            mouse::Interaction::default()
+        }
     }
 }
 
@@ -978,6 +1112,43 @@ mod tests {
 
         view.perform(Action::Scroll { lines: -100 });
         assert_eq!(view.scroll_lines, 0.0);
+    }
+
+    #[test]
+    fn strip_geom_only_visible_when_content_overflows() {
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 100.0,
+        };
+        // 100px 高 / 10px 行高 = 10 可视行。行数不超过一屏不画条、不响应拖拽。
+        assert!(!StripGeom::new(10, 10.0, bounds).visible());
+        assert!(StripGeom::new(11, 10.0, bounds).visible());
+    }
+
+    #[test]
+    fn strip_geom_scroll_y_roundtrips_through_thumb_top() {
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 100.0,
+        };
+        // 10 可视行,总 100 行:thumb 高 = 100 * 10/100 = 10px,可用轨道 90px。
+        let geom = StripGeom::new(100, 10.0, bounds);
+        assert!(geom.visible());
+        for scroll in [0.0f32, 10.0, 45.0, 90.0] {
+            let top = geom.thumb_top(scroll);
+            let back = geom.scroll_lines_at(top + geom.thumb_h / 2.0);
+            assert!(
+                (back - scroll).abs() <= 1.0,
+                "scroll {scroll} 往返得 {back}"
+            );
+        }
+        // 两端钳制:y=0(顶)滚到 0;y=底部滚到 total(再被 perform 按镜像上界 clamp)。
+        assert_eq!(geom.scroll_lines_at(0.0), 0.0);
+        assert_eq!(geom.scroll_lines_at(bounds.height), geom.total);
     }
 
     #[test]
