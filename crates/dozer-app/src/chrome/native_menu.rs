@@ -44,9 +44,9 @@ impl<Msg> Item<Msg> {
 }
 
 /// 把内嵌 Lucide SVG(`IconKind::bytes()`)按给定颜色栅格化成
-/// `size_px × size_px` 的位图——渲染出来的 alpha 通道当遮罩,RGB 统一替换
-/// 成 `color`(同 iced 侧 `svg::Style{color}` 的着色语义,忽略 SVG 自身
-/// 颜色)。纯函数,不碰 AppKit,可在任何线程/CI 里跑。
+/// `size_px × size_px` 的位图——普通符号图标把 alpha 通道当遮罩、RGB 统一
+/// 替换成 `color`;自带官方配色的品牌图标保留 SVG 原色。纯函数,不碰
+/// AppKit,可在任何线程/CI 里跑。
 fn render_icon_pixmap(kind: IconKind, color: Color, size_px: u32) -> tiny_skia::Pixmap {
     let opt = usvg::Options::default();
     let tree = usvg::Tree::from_data(kind.bytes(), &opt).expect("内嵌 Lucide SVG 资源必须能解析");
@@ -58,6 +58,9 @@ fn render_icon_pixmap(kind: IconKind, color: Color, size_px: u32) -> tiny_skia::
         tiny_skia::Transform::from_scale(scale, scale),
         &mut pixmap.as_mut(),
     );
+    if kind.preserves_original_color() {
+        return pixmap;
+    }
     let (r, g, b) = (
         (color.r * 255.0).round() as u8,
         (color.g * 255.0).round() as u8,

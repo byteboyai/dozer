@@ -230,6 +230,15 @@ pub enum IconKind {
 }
 
 impl IconKind {
+    /// 品牌素材是否自带必须保留的官方配色。返回 `true` 时渲染器不能再
+    /// 施加调用方颜色滤镜。
+    pub const fn preserves_original_color(self) -> bool {
+        matches!(
+            self,
+            Self::Codex | Self::Aider | Self::GooseLight | Self::GooseDark
+        )
+    }
+
     /// 内嵌 SVG 原始字节。`pub` 供 `dozer-app::native_menu` 等跨 crate 消费
     /// 方在运行时把同一份 Lucide SVG 栅格化成原生菜单图标(用 resvg/usvg),
     /// 与 iced 侧 `view()` 的渲染共享同一份资源与着色语义。
@@ -355,12 +364,8 @@ pub fn view<'a, Message: 'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 调用方传入的 `size` 应为 `icon_size` 的 token（已含全局 scale），
     // 本函数是纯渲染入口，不再二次乘 scale。
-    let color = match kind {
-        // 这些品牌素材自带官方配色；Iced 的 SVG `color` 是整图滤镜，传入
-        // agent 分类色会覆盖 Codex 蓝色渐变、Aider 绿色和 Goose 明暗色。
-        IconKind::Codex | IconKind::Aider | IconKind::GooseLight | IconKind::GooseDark => None,
-        _ => Some(color),
-    };
+    // Iced 的 SVG `color` 是整图滤镜，不能用于自带官方配色的品牌素材。
+    let color = (!kind.preserves_original_color()).then_some(color);
 
     svg(svg::Handle::from_memory(kind.bytes()))
         .width(Length::Fixed(size))
