@@ -250,6 +250,79 @@ struct InteractionState {
     residual: f32,
     /// 左键按下且未松开（拖选进行中）。
     dragging: bool,
+    /// 左键按在滚动条轨道上且未松开（拖拽滚动条进行中，与 `dragging` 互斥）。
+    scrollbar_dragging: bool,
+}
+
+/// 终端滚动条几何，`draw` 与 `update`（拖拽命中）共用同一份换算——只有
+/// 一份公式，拖拽命中的 thumb 位置与绘制不会各算一套而漂移（同
+/// `json_tree/tree.rs` 的 `Metrics` 手法）。
+struct ScrollbarGeom {
+    /// 滚屏历史行数（0 = 无 scrollback，不画条、不响应拖拽）。
+    history: f32,
+    /// 总内容行数 = history + 视口行数。
+    total: f32,
+    /// 画布高度。
+    h: f32,
+    /// 轨道宽度。
+    bar_w: f32,
+    /// 滑块（thumb）宽度。
+    thumb_w: f32,
+    /// 轨道左缘 x（右对齐 `bar_w`）。
+    track_x: f32,
+    /// 滑块（thumb）高度。
+    thumb_h: f32,
+}
+
+impl ScrollbarGeom {
+    fn new(model: &TerminalModel, bounds: Rectangle) -> Self {
+        let history = model.history_len() as f32;
+        let rows = model.grid_dims().1 as f32;
+        let h = bounds.height;
+        let bar_w = byteui::theme::geometry::scrollbar_width();
+        let thumb_w = byteui::theme::geometry::scrollbar_thumb_width();
+        let total = history + rows;
+        // thumb 高度 = 视口在总量中的占比，最小 12px 保证可抓取。
+        let thumb_h = if total > 0.0 {
+            (rows / total * h).max(12.0)
+        } else {
+            0.0
+        };
+        ScrollbarGeom {
+            history,
+            total,
+            h,
+            bar_w,
+            thumb_w,
+            track_x: bounds.width - bar_w,
+            thumb_h,
+        }
+    }
+
+    /// 是否有 scrollback 历史（决定是否画条、是否响应拖拽）。
+    fn visible(&self) -> bool {
+        self.history > 0.0
+    }
+
+    /// 当前 `display_offset` → thumb 顶部 y（与 `draw` 同源公式）。
+    fn thumb_top(&self, offset: usize) -> f32 {
+        let usable = (self.h - self.thumb_h).max(0.0);
+        ((self.history - offset as f32) / self.total * self.h).min(usable)
+    }
+
+    /// 轨道内某 y → 目标 `display_offset`（历史行数，0 = 底部实时）。
+    /// thumb 顶部对齐到「y 减去半个 thumb 高」，点哪拖到哪，钳在
+    /// `[0, history]`。
+    fn offset_at(&self, y: f32) -> usize {
+        if self.history <= 0.0 || self.total <= 0.0 {
+            return 0;
+        }
+        let usable = (self.h - self.thumb_h).max(0.0);
+        let top = (y - self.thumb_h / 2.0).clamp(0.0, usable);
+        (self.history - top / self.h * self.total)
+            .round()
+            .clamp(0.0, self.history) as usize
+    }
 }
 
 /// 画布内像素坐标 → 网格格坐标 `(col, row, right_half)`，钳制在
@@ -308,6 +381,22 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
             }
             mouse::Event::ButtonPressed(mouse::Button::Left) => {
                 let pos = cursor.position_in(bounds)?;
+                // 按在滚动条轨道上 → 起拖拽滚动条（点哪跳哪），而不是起
+                // 文本拖选。滚动条有 scrollback 历史才可见/可点，没有历史
+                // 时整条不画，落回普通文本选中。
+                let geom = ScrollbarGeom::new(self.model, bounds);
+                if geom.visible() && pos.x >= geom.track_x {
+                    state.scrollbar_dragging = true;
+                    let target = geom.offset_at(pos.y);
+                    let delta = target as i32 - self.model.display_offset() as i32;
+                    if delta == 0 {
+                        return None;
+                    }
+                    return Some(
+                        canvas::Action::publish(Message::TermScroll(self.target, delta))
+                            .and_capture(),
+                    );
+                }
                 state.dragging = true;
                 let (cols, rows) = self.model.grid_dims();
                 let (col, row, right) = cell_at(pos, cols, rows);
@@ -319,6 +408,21 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
                         right,
                     })
                     .and_capture(),
+                )
+            }
+            mouse::Event::CursorMoved { .. } if state.scrollbar_dragging => {
+                // 拖拽滚动条：允许移出画布（上下越界由 `offset_at` 钳到
+                // 历史两端），用全局 y 减 bounds.y 得到轨道内相对位置。
+                let pos = cursor.position()?;
+                let rel_y = pos.y - bounds.y;
+                let geom = ScrollbarGeom::new(self.model, bounds);
+                let target = geom.offset_at(rel_y);
+                let delta = target as i32 - self.model.display_offset() as i32;
+                if delta == 0 {
+                    return None;
+                }
+                Some(
+                    canvas::Action::publish(Message::TermScroll(self.target, delta)).and_capture(),
                 )
             }
             mouse::Event::CursorMoved { .. } if state.dragging => {
@@ -334,6 +438,10 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
                     row,
                     right,
                 }))
+            }
+            mouse::Event::ButtonReleased(mouse::Button::Left) if state.scrollbar_dragging => {
+                state.scrollbar_dragging = false;
+                None
             }
             mouse::Event::ButtonReleased(mouse::Button::Left) if state.dragging => {
                 state.dragging = false;
@@ -470,25 +578,24 @@ impl canvas::Program<Message, iced_widget::Theme, iced_renderer::Renderer> for T
             }
         }
 
-        // 滚动指示条：仅回看历史时出现在右缘（实时跟随输出时不占视觉）。
-        // 内容总量 = 历史 + 视口；thumb 位置/高度按视口在总量中的窗口映射。
-        if offset > 0 {
-            let history = self.model.history_len() as f32;
-            let rows = lines.len() as f32;
-            let total = history + rows;
-            let h = bounds.height;
+        // 滚动指示条：只要有 scrollback 历史就常驻右缘（实时跟随输出时
+        // thumb 停在底部），可在轨道上拖拽（见 `update` 的
+        // `scrollbar_dragging`）。内容总量 = 历史 + 视口；thumb 位置/高度
+        // 按视口在总量中的窗口映射，几何与拖拽命中共用 `ScrollbarGeom`。
+        let geom = ScrollbarGeom::new(self.model, bounds);
+        if geom.visible() {
+            let thumb_top = geom.thumb_top(offset);
             // 复用全应用统一滚动条配置(见 `byteui::interaction::scrollbar`):轨道宽度
             // `scrollbar_width`,滑块(thumb)宽度 `scrollbar_thumb_width` 并居
             // 中,滑块颜色甲方金 `#dcc9a3`(`byteui::theme::color::current().tab_active_border`)。
-            let bar_w = byteui::theme::geometry::scrollbar_width();
-            let thumb_w = byteui::theme::geometry::scrollbar_thumb_width();
-            let track_x = bounds.width - bar_w;
-            let thumb_h = (rows / total * h).max(12.0);
-            let thumb_top = ((history - offset as f32) / total * h).min(h - thumb_h);
-            frame.fill_rectangle(Point::new(track_x, 0.0), Size::new(bar_w, h), tokens.border);
             frame.fill_rectangle(
-                Point::new(track_x + (bar_w - thumb_w) / 2.0, thumb_top),
-                Size::new(thumb_w, thumb_h),
+                Point::new(geom.track_x, 0.0),
+                Size::new(geom.bar_w, geom.h),
+                tokens.border,
+            );
+            frame.fill_rectangle(
+                Point::new(geom.track_x + (geom.bar_w - geom.thumb_w) / 2.0, thumb_top),
+                Size::new(geom.thumb_w, geom.thumb_h),
                 tokens.tab_active_border,
             );
         }
@@ -529,6 +636,51 @@ mod tests {
         let mut t = TerminalModel::new(cols, 4);
         let _ = t.feed(input);
         t.visible_lines()[0].clone()
+    }
+
+    #[test]
+    fn scrollbar_geom_maps_offset_and_y_consistently() {
+        // 造一个 4 行视口 + 16 行历史(超过视口高度)的模型,给个 100px 高的
+        // 画布。历史行数远超视口时 thumb 高度被钳到最小 12px。
+        let mut t = TerminalModel::new(20, 4);
+        for i in 0..20 {
+            let _ = t.feed(format!("l{i}\n").as_bytes());
+        }
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 400.0,
+            height: 100.0,
+        };
+        let geom = ScrollbarGeom::new(&t, bounds);
+        assert!(geom.visible(), "有 scrollback 就该有滚动条");
+        assert_eq!(geom.history, t.history_len() as f32);
+
+        // offset ↔ thumb_top ↔ offset 往返:任意 offset 经 thumb_top 再
+        // offset_at 应回到自身附近(round 引入 ≤1 的误差)。
+        for offset in [0usize, 1, 4, 8, 16] {
+            let top = geom.thumb_top(offset);
+            let back = geom.offset_at(top + geom.thumb_h / 2.0);
+            let diff = (back as i64 - offset as i64).abs();
+            assert!(diff <= 1, "offset {offset} 往返得 {back}");
+        }
+        // 两端钳制:y=0(最顶)应滚到历史顶部 history;y=底部应滚回 0。
+        assert_eq!(geom.offset_at(0.0), t.history_len());
+        assert_eq!(geom.offset_at(bounds.height), 0);
+    }
+
+    #[test]
+    fn scrollbar_geom_invisible_without_history() {
+        let t = TerminalModel::new(20, 4);
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 400.0,
+            height: 100.0,
+        };
+        let geom = ScrollbarGeom::new(&t, bounds);
+        assert!(!geom.visible(), "无历史不画滚动条");
+        assert_eq!(geom.offset_at(50.0), 0, "无历史时拖拽落回 0");
     }
 
     #[test]
