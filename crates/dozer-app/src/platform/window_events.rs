@@ -1811,6 +1811,23 @@ impl Runner {
         }
     }
 
+    /// CodeMirror editor webview 的待下发命令:每帧取走 App 的 editor 命令
+    /// 队列(`Agent reveal/select`、外部 reload 等),按 Rust 可信 binding 组装
+    /// envelope,`evaluate_script` 注入 `window.__dozer.dispatch(...)`——句柄只
+    /// 在这里拿得到,同 `apply_pending_preview_find` 的"派发完消息后轮询"节奏。
+    pub(crate) fn apply_pending_editor_commands(&mut self) {
+        let Self::Ready { app, webviews, .. } = self else {
+            return;
+        };
+        for kind in [PanelKind::Files, PanelKind::Project] {
+            for (webview_id, js) in app.take_preview_editor_scripts(kind) {
+                if let Some((view, _)) = webviews.get(&webview_id) {
+                    let _ = view.evaluate_script(&js);
+                }
+            }
+        }
+    }
+
     /// 空白页信息卡后台扫描钩子:`PreviewPane::blank_info` 空、active tab 为
     /// `TabKind::Blank`、项目已加载时,起一次 `tokio::task::spawn_blocking`
     /// 跑 `compute_blank_info`,结果通过 `proxy` 回灌
@@ -2229,6 +2246,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.apply_pending_focus();
         self.apply_pending_zoom_toggle();
         self.apply_pending_preview_find();
+        self.apply_pending_editor_commands();
         self.apply_pending_blank_info();
         self.sync_search_overlay(event_loop);
         self.sync_file_history_overlay(event_loop);
@@ -2293,6 +2311,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             self.apply_pending_focus();
             self.apply_pending_zoom_toggle();
             self.apply_pending_preview_find();
+            self.apply_pending_editor_commands();
             self.sync_search_overlay(event_loop);
             return;
         }
@@ -3500,6 +3519,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.apply_pending_focus();
         self.apply_pending_zoom_toggle();
         self.apply_pending_preview_find();
+        self.apply_pending_editor_commands();
         self.apply_pending_blank_info();
         self.sync_search_overlay(event_loop);
         self.sync_file_history_overlay(event_loop);

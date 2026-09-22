@@ -304,6 +304,14 @@ pub fn encode_command(
     serde_json::to_string(&env).unwrap_or_else(|_| "{}".to_string())
 }
 
+/// 把 `encode_command` 产出的 envelope JSON 包成可 `evaluate_script` 注入的
+/// JS 片段。`__dozer.dispatch` 尚未就绪(页面还没 boot 完)时静默跳过,
+/// 不抛错、不 panic。
+pub fn dispatch_script(envelope_json: &str) -> String {
+    let literal = serde_json::to_string(envelope_json).unwrap_or_else(|_| "\"{}\"".to_string());
+    format!("window.__dozer&&window.__dozer.dispatch&&window.__dozer.dispatch({literal});")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,5 +461,20 @@ mod tests {
     #[test]
     fn protocol_error_is_displayable() {
         assert!(!ProtocolError::BadJson("x".into()).to_string().is_empty());
+    }
+
+    #[test]
+    fn dispatch_script_escapes_envelope_and_is_defensive() {
+        let js = dispatch_script(r#"{"a":"b\"c"}"#);
+        assert!(
+            js.starts_with("window.__dozer&&window.__dozer.dispatch&&window.__dozer.dispatch(")
+        );
+        assert!(js.ends_with(");"));
+        // 内层 JSON 字符串被转义成一个合法 JS 字符串字面量。
+        let start = js.find('(').unwrap() + 1;
+        let end = js.rfind(')').unwrap();
+        let literal = &js[start..end];
+        let parsed: serde_json::Value = serde_json::from_str(literal).unwrap();
+        assert_eq!(parsed, serde_json::json!(r#"{"a":"b\"c"}"#));
     }
 }

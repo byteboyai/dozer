@@ -1263,6 +1263,20 @@ impl PreviewPane {
         std::mem::take(&mut self.pending_tabular_loads)
     }
 
+    /// 排队一个待下发给 CodeMirror editor webview 的命令(`tab_id`, 命令)。
+    /// 只有 `uses_codemirror()` 的 tab 会被 `window_events` 真正注入,其余
+    /// (老 iced editor / webview)在派发时按 binding 过滤掉。
+    // Phase B:队列/派发已通,Agent 入口(Task 6)与 jump-to-line 接线随后接入。
+    #[allow(dead_code)]
+    pub fn queue_editor_command(&mut self, tab_id: usize, command: EditorCommand) {
+        self.pending_editor_commands.push((tab_id, command));
+    }
+
+    /// 取走(消费式)待下发的 editor 命令队列。
+    pub fn take_pending_editor_commands(&mut self) -> Vec<(usize, EditorCommand)> {
+        std::mem::take(&mut self.pending_editor_commands)
+    }
+
     /// 按 tab id 取该 tab 的 JSON 树可变引用。tab 不存在、该 tab 不是 JSON、
     /// 或树还在后台加载中(`JsonTreeState::Loading`)都返回 `None`(展开/滚动
     /// 这类交互在数据到位前没有意义)。语义与 `tabular_mut` 完全对齐。
@@ -3026,5 +3040,27 @@ mod tests {
         assert_eq!(binding.path, path);
 
         std::fs::remove_file(path).ok();
+    }
+
+    /// editor 命令队列:排队后一次性取走,再取为空。
+    #[test]
+    fn editor_command_queue_round_trips() {
+        let mut pane = PreviewPane::default();
+        pane.queue_editor_command(3, EditorCommand::Focus);
+        pane.queue_editor_command(
+            7,
+            EditorCommand::RevealPosition {
+                line: 12,
+                column: 2,
+            },
+        );
+        let taken = pane.take_pending_editor_commands();
+        assert_eq!(taken.len(), 2);
+        assert_eq!(taken[0].0, 3);
+        assert!(matches!(
+            taken[1].1,
+            EditorCommand::RevealPosition { line: 12, .. }
+        ));
+        assert!(pane.take_pending_editor_commands().is_empty());
     }
 }

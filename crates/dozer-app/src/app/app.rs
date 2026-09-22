@@ -1015,6 +1015,51 @@ impl App {
         }
     }
 
+    /// 构建本帧待注入 CodeMirror editor webview 的脚本清单 `(webview_id, js)`。
+    /// 只对确实走 CodeMirror(`uses_codemirror`)的 tab 生成;命令带上 Rust
+    /// 可信 binding 与 tab 当前镜像 revision,注入 `window.__dozer.dispatch`。
+    pub fn take_preview_editor_scripts(&mut self, kind: PanelKind) -> Vec<(usize, String)> {
+        let Some(ws) = self.active_workspace_mut() else {
+            return Vec::new();
+        };
+        let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
+            return Vec::new();
+        };
+        let pane = match kind {
+            PanelKind::Project => &mut ws.project_preview,
+            _ => &mut ws.preview,
+        };
+        let pending = pane.take_pending_editor_commands();
+        let mut out = Vec::new();
+        for (tab_id, command) in pending {
+            let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
+                continue;
+            };
+            if !tab.uses_codemirror() {
+                continue;
+            }
+            let crate::preview::TabKind::File(path) = &tab.kind else {
+                continue;
+            };
+            let binding =
+                crate::preview::EditorHostBinding::new(project_id, kind, tab_id, path.clone());
+            let envelope = crate::preview::encode_command(
+                project_id,
+                kind,
+                tab_id,
+                &binding.document_id(),
+                tab.web_revision,
+                None,
+                command,
+            );
+            out.push((
+                binding.webview_id(),
+                crate::preview::dispatch_script(&envelope),
+            ));
+        }
+        out
+    }
+
     /// `Stub` → `Loaded` 的促成:两步走。
     ///
     /// 1. **同步**把槽位换成 [`Workspace::loading_for_project`] 的"加载中"占位

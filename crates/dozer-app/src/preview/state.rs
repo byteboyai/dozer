@@ -367,6 +367,10 @@ pub struct PreviewPane {
     pub(crate) pending_tabular_loads: Vec<(usize, PathBuf)>,
     /// 同 `pending_tabular_loads`,但针对 JSON 树查看器(见 `JsonTreeState`)。
     pub(crate) pending_json_tree_loads: Vec<(usize, PathBuf)>,
+    /// 待下发给 CodeMirror editor webview 的命令队列(`tab_id`, 命令)。
+    /// `window_events` 每帧(同 `apply_pending_preview_find` 节奏)取走并
+    /// `evaluate_script` 注入;Agent reveal/select 与外部 reload 用它。
+    pub(crate) pending_editor_commands: Vec<(usize, EditorCommand)>,
     /// 空白页信息卡:激活 tab 为 `TabKind::Blank` 时,`apply_pending_blank_info`
     /// 异步跑出来的项目根目录简介。`None` 表示还没拉;view 层用 `—` 占位。
     /// `clear_all`/`PreviewTabSwitch` 路径会同步置回 `None`(项目切换后
@@ -398,6 +402,7 @@ impl Default for PreviewPane {
             pending_webview_find_clear: None,
             pending_tabular_loads: Vec::new(),
             pending_json_tree_loads: Vec::new(),
+            pending_editor_commands: Vec::new(),
             blank_info: None,
             blank_info_in_flight: false,
         }

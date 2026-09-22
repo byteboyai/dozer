@@ -72,12 +72,21 @@
   按原件补回)。`SaveRequested` 已改走它,失败只置 `web_error`、保留 dirty。
 - `hosts_webview` 增加旧行为兜底子句(非 CodeMirror tab 在读盘失败等情况下仍
   退回 Flyfish),避免 feature 关闭时同步 push_tab 失败路径出现空白页。
+- **Rust→编辑器命令派发(骨架)**:`PreviewPane` 增待下发命令队列
+  (`queue_editor_command`/`take_pending_editor_commands`);`App::
+  take_preview_editor_scripts(kind)` 按 Rust 可信 binding + tab 镜像 revision
+  组装 `encode_command` envelope 并包成 `window.__dozer.dispatch(...)` 注入脚本
+  (`webview_protocol::dispatch_script`,防御 `__dozer` 未就绪);`window_events::
+  apply_pending_editor_commands` 在每帧(同 `apply_pending_preview_find` 节奏)
+  经持有句柄的 `evaluate_script` 下发。**Agent 入口(Task 6)与 jump-to-line
+  自动接线随后接入**。
+- `scripts/build-macos-app.sh` 增拷 `assets/editor` → `Contents/Resources/editor`
+  (与 `assets_root` 的兄弟目录约定一致),否则打包态 editor 预览 404。
 
 ## 仍未完成(后续 Task 4–7)
 
-1. Rust→编辑器命令要接入事件环的 `evaluate_script`，完成 Agent reveal/select/
-   replace、外部 reload 和视图状态恢复(`EditorCommand`/`encode_command` 已就绪,
-   缺派发)。
+1. 接上命令队列的**调用方**:Agent reveal/select/replace(Task 6)与代码健康度
+   `pending_jump_line` 在 editor `ready` 后自动 reveal。
 2. selection/viewport 推到 daemon/MCP `PreviewContext`；增加节流、tab 切换/关闭
    flush、selected text 上限和 revision 冲突测试。
 3. 非 UTF-8 文件只读化(当前 editor host 对非 UTF-8 走 `text()` lossy 解码)。
@@ -87,7 +96,7 @@
 ## 验证
 
 - `cargo check -p dozer-app` 默认与 `--features codemirror`:通过。
-- `cargo test -p dozer-app` 默认 **1191 passed**、`--features codemirror` **1174
+- `cargo test -p dozer-app` 默认 **1193 passed**、`--features codemirror` **1176
   passed**;两者都只剩改动前已存在的 `agent_icon_maps_each_kind_to_brand_icon`
   一项失败(另有 1 ignored)。
 - `cargo fmt --check`、`cargo clippy -p dozer-app --all-targets`:仅剩既有

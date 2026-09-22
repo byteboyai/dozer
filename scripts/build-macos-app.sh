@@ -100,6 +100,10 @@ cp "$PACKAGING_DIR/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
 # dozer 的 `assets::assets_root()` 在打包态从 `Contents/Resources/flyfish`
 # 读(dev 态才回退源码树),漏拷会导致分发后的文件预览 404。
 cp -R "$ROOT_DIR/crates/dozer-app/assets/flyfish" "$APP_DIR/Contents/Resources/flyfish"
+# CodeMirror editor host 静态资源(Phase B)。`assets::handle_protocol` 的
+# `dozer://editor/` 命名空间从 flyfish 根的**兄弟目录** `Contents/Resources/
+# editor` 读(dev 态同构:assets/editor),必须一并打包,否则 editor 预览 404。
+cp -R "$ROOT_DIR/crates/dozer-app/assets/editor" "$APP_DIR/Contents/Resources/editor"
 
 # cargo 链接期只对裸二进制做了 ad-hoc 签名(`codesign -dv` 显示
 # `Info.plist=not bound`),装进 bundle 后这个签名并不覆盖 Info.plist/资源,
