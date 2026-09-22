@@ -878,21 +878,6 @@ impl canvas::Program<Action, iced_widget::Theme, iced_renderer::Renderer> for Sc
 
         vec![frame.into_geometry()]
     }
-
-    fn mouse_interaction(
-        &self,
-        state: &Self::State,
-        _bounds: Rectangle,
-        cursor: mouse::Cursor,
-    ) -> mouse::Interaction {
-        if state.dragging {
-            mouse::Interaction::Grabbing
-        } else if cursor.is_over(_bounds) {
-            mouse::Interaction::Grab
-        } else {
-            mouse::Interaction::default()
-        }
-    }
 }
 
 #[cfg(test)]
