@@ -275,7 +275,15 @@ impl<'a> canvas::Program<Action> for TreeCanvas<'a> {
                 Some(canvas::Action::publish(Action::Scroll { dy }))
             }
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                let cursor = cursor.position()?;
+                // `cursor.position()` 是**窗口绝对坐标**,而 `chevron_hit_at`
+                // 里的行高/缩进都是 canvas 局部坐标(从 0 起)。直接用绝对
+                // 坐标会把 `bounds.y`(本 widget 嵌套得很深,通常是几百像素)
+                // 当成"已滚过的行",命中判断整段错位——最直观的症状是
+                // 第 233 行 `cursor.y > bounds.height` 几乎恒真,点击一律
+                // 被拒,树永远展不开(2026-09-22 用户报告:只看得到根节点)。
+                // `position_in(bounds)` 做 `p - (bounds.x, bounds.y)` 归一到
+                // 局部坐标,与下面 `m.indent`/`m.row_height` 同一坐标系。
+                let cursor = cursor.position_in(bounds)?;
                 let (root_index, path) = self.chevron_hit_at(cursor, bounds, &m)?;
                 Some(canvas::Action::publish(Action::ToggleExpand {
                     root_index,
