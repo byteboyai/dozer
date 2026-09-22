@@ -1,0 +1,19 @@
+{
+  "name": "dozer-json-editor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dozer JSON tree/text host (vanilla-jsoneditor), offline bundle.",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "vanilla-jsoneditor": "3.13.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3",
+    "@types/node": "24"
+  }
+}

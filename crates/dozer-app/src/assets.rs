@@ -151,6 +151,12 @@ fn editor_root_for(flyfish_root: &Path) -> PathBuf {
     flyfish_root.with_file_name("editor")
 }
 
+/// JSON tree/text host(vanilla-jsoneditor)静态资源根 = flyfish 根的兄弟目录
+/// `json-editor`。
+fn json_editor_root_for(flyfish_root: &Path) -> PathBuf {
+    flyfish_root.with_file_name("json-editor")
+}
+
 pub fn handle_protocol(
     assets_root: &Path,
     allowed: &HashSet<PathBuf>,
@@ -192,6 +198,14 @@ pub fn handle_protocol(
             return serve_allowlisted_file(encoded, allowed);
         }
         return serve_vendored(&editor_root_for(assets_root), path);
+    }
+
+    // JSON host(vanilla-jsoneditor):同 editor,独立 CSP/命名空间。
+    if let Some(path) = rest.strip_prefix("json-editor/") {
+        if let Some(encoded) = path.strip_prefix("__file__") {
+            return serve_allowlisted_file(encoded, allowed);
+        }
+        return serve_vendored(&json_editor_root_for(assets_root), path);
     }
 
     let Some(path) = rest.strip_prefix("flyfish/") else {
@@ -426,6 +440,60 @@ mod tests {
                 "{uri}"
             );
         }
+    }
+
+    /// JSON host 命名空间:从 `json-editor` 兄弟根服务,拒绝穿越。
+    #[test]
+    fn serves_json_editor_namespace() {
+        let dir = std::env::temp_dir().join(format!("dozer-assets-json-{}", std::process::id()));
+        let flyfish = dir.join("flyfish");
+        let json_editor = dir.join("json-editor");
+        let _ = fs::create_dir_all(&json_editor);
+        fs::write(json_editor.join("index.html"), b"<!doctype html>").unwrap();
+        fs::write(json_editor.join("json-editor.js"), b"js").unwrap();
+
+        let r = handle_protocol(
+            &flyfish,
+            &HashSet::new(),
+            None,
+            "dozer://json-editor/index.html",
+        );
+        assert_eq!((r.status, r.mime), (200, "text/html"));
+        let r = handle_protocol(
+            &flyfish,
+            &HashSet::new(),
+            None,
+            "dozer://json-editor/json-editor.js",
+        );
+        assert_eq!(r.status, 200);
+        for uri in [
+            "dozer://json-editor/../flyfish/host.html",
+            "dozer://json-editor/%2e%2e/etc/passwd",
+            "dozer://json-editor/nope.js",
+        ] {
+            assert_eq!(
+                handle_protocol(&flyfish, &HashSet::new(), None, uri).status,
+                404,
+                "{uri}"
+            );
+        }
+    }
+
+    /// 提交的 JSON host 产物必须齐全。
+    #[test]
+    fn json_editor_bundle_assets_are_present() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/json-editor"));
+        for f in ["index.html", "json-editor.js"] {
+            let p = root.join(f);
+            assert!(p.is_file(), "缺少 json-editor 产物 {f}: {}", p.display());
+            assert!(
+                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 0,
+                "json-editor 产物为空: {f}"
+            );
+        }
+        let html = std::fs::read_to_string(root.join("index.html")).unwrap();
+        assert!(html.contains("default-src 'none'"));
+        assert!(!html.contains("http://") && !html.contains("https://"));
     }
 
     /// 提交的 CodeMirror 产物必须齐全(防止忘记 `npm run build` 就提交)。

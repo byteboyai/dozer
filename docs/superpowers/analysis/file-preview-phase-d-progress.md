@@ -56,6 +56,20 @@
   JSON 都补齐,无预览为 null)。
 - `dozerd`/`dozer-client` 无需改动(不透明透传)。
 
+### Task 3(第一步):vanilla-jsoneditor host 与 `dozer://json-editor/`
+- 新增独立前端包 `crates/dozer-app/web/json-editor/`(vanilla-jsoneditor 3.13.0,
+  esbuild 离线打包到已提交的 `assets/json-editor/`:index.html 严格 CSP +
+  json-editor.js,无 CDN、无 sourcemap、无绝对路径)。
+- host 复用通用 envelope;支持 Tree/Text、只读、主题(`jse-theme-dark`),
+  事件 ready/document_changed/failed,命令 set_document/set_read_only/focus。
+- `assets.rs` 增 `dozer://json-editor/` 命名空间(从 flyfish 根的兄弟目录
+  `json-editor` 服务,复用白名单 `__file__`,拒绝编码路径穿越);`code_host.rs`
+  增 `JSON_EDITOR_URL_PREFIX` / `is_json_editor_url` / `EditorHostBinding::json_url`;
+  打包脚本增拷 `assets/json-editor`。
+- 测试:命名空间服务/穿越拒绝、产物齐全+CSP、URL 区分 editor。
+- **尚未接线**:路由默认 Tree 仍走自研 `json_tree`;待把严格 JSON Tree 切到
+  本 host 并通过对照后再删自研树(见未完成)。
+
 ## 未完成(受 GUI 验收与"迁移前不删除"原则约束)
 1. **Task 2 剩余**:NSMenu 上下文菜单(取舍见 Phase B 文档);Unsupported/损坏/
    加密格式的正式 fallback 页面。

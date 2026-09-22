@@ -16,6 +16,9 @@ use crate::app::{PROJECT_PREVIEW_ID_OFFSET, PanelKind};
 /// flyfish webview 分流(不同注入脚本/IPC 路由)。
 pub const EDITOR_URL_PREFIX: &str = "dozer://editor/";
 
+/// JSON host(vanilla-jsoneditor)页面 URL 前缀。
+pub const JSON_EDITOR_URL_PREFIX: &str = "dozer://json-editor/";
+
 /// 一个 editor webview 的归属绑定。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditorHostBinding {
@@ -75,6 +78,21 @@ impl EditorHostBinding {
             crate::theme::terminal_font::line_height_factor(),
         )
     }
+
+    /// JSON host(vanilla-jsoneditor)URL:tree/text 由命令驱动,主题经 class,
+    /// 不需要 lang/fs。
+    pub fn json_url(&self, theme: &str, read_only: bool) -> String {
+        format!(
+            "{JSON_EDITOR_URL_PREFIX}index.html?p={}&theme={}&ro={}&doc={}&proj={}&panel={}&tab={}",
+            encode_path(&self.path),
+            theme,
+            if read_only { 1 } else { 0 },
+            super::encode_component(&self.document_id()),
+            self.project_id,
+            self.panel_token(),
+            self.tab_id,
+        )
+    }
 }
 
 /// 把 webview 池 key 反解成 `(panel, tab_id)`(IPC 回来时按 id 找绑定用)。
@@ -90,6 +108,11 @@ pub fn panel_and_tab_from_webview_id(id: usize) -> (PanelKind, usize) {
 /// URL 是否是 editor host(而不是 flyfish)。
 pub fn is_editor_url(url: &str) -> bool {
     url.starts_with(EDITOR_URL_PREFIX)
+}
+
+/// URL 是否是 JSON tree/text host。
+pub fn is_json_editor_url(url: &str) -> bool {
+    url.starts_with(JSON_EDITOR_URL_PREFIX)
 }
 
 /// 开发开关:是否用 CodeMirror host 承载 Code tab。默认关闭,保证行为与
@@ -160,5 +183,16 @@ mod tests {
     #[test]
     fn flyfish_url_is_not_editor_url() {
         assert!(!is_editor_url("dozer://flyfish/host.html?p=/x"));
+    }
+
+    #[test]
+    fn json_editor_url_is_distinct() {
+        let b = binding(PanelKind::Files, 3);
+        let url = b.json_url("dark", true);
+        assert!(is_json_editor_url(&url));
+        assert!(!is_editor_url(&url));
+        assert!(url.contains("dozer://json-editor/index.html"));
+        assert!(url.contains("ro=1"));
+        assert!(url.contains("doc=p7-t3"));
     }
 }

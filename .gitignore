@@ -10,3 +10,6 @@ examples/
 
 # CodeMirror editor frontend deps (built assets under assets/editor are committed)
 crates/dozer-app/web/editor/node_modules/
+
+# vanilla-jsoneditor host deps (built assets under assets/json-editor are committed)
+crates/dozer-app/web/json-editor/node_modules/

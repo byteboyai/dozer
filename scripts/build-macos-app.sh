@@ -104,6 +104,9 @@ cp -R "$ROOT_DIR/crates/dozer-app/assets/flyfish" "$APP_DIR/Contents/Resources/f
 # `dozer://editor/` 命名空间从 flyfish 根的**兄弟目录** `Contents/Resources/
 # editor` 读(dev 态同构:assets/editor),必须一并打包,否则 editor 预览 404。
 cp -R "$ROOT_DIR/crates/dozer-app/assets/editor" "$APP_DIR/Contents/Resources/editor"
+# JSON tree/text host(vanilla-jsoneditor)。`dozer://json-editor/` 从 flyfish 根的
+# 兄弟目录 `Contents/Resources/json-editor` 读。
+cp -R "$ROOT_DIR/crates/dozer-app/assets/json-editor" "$APP_DIR/Contents/Resources/json-editor"
 
 # cargo 链接期只对裸二进制做了 ad-hoc 签名(`codesign -dv` 显示
 # `Info.plist=not bound`),装进 bundle 后这个签名并不覆盖 Info.plist/资源,
