@@ -242,6 +242,10 @@ impl PreviewTabularContext {
     }
 }
 
+/// T13:一条下行预览命令的等待上限(毫秒)。超时后调用方收到
+/// `PreviewCommandOutcome::Timeout`,不无限等待。
+pub const PREVIEW_COMMAND_TIMEOUT_MS: u64 = 2000;
+
 /// T13:daemon → app 预览命令的目标定位。先按 tab(含面板),否则按项目内路径。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "by", rename_all = "snake_case")]
@@ -682,6 +686,15 @@ pub enum Request {
     RunPreviewCommand {
         command: PreviewCommand,
     },
+    /// T13:app 轮询取走某项目待处理的预览命令(dozerd 队列 → app)。
+    TakePendingPreviewCommands {
+        project_id: i64,
+    },
+    /// T13:app 把某条命令的终态回报给 dozerd(投递给等待中的
+    /// `RunPreviewCommand` 调用方)。
+    ReportPreviewCommandOutcome {
+        outcome: PreviewCommandOutcome,
+    },
     /// `dozer-mcp` 的写工具提交一份会话总结;`dozerd` 只做"session_id 是否
     /// 存在于 registry"的存在性检查,不做权限校验(与 `Write`/`HookEvent`
     /// 同等信任本机调用方)。主键 `session_id`,重复提交后到覆盖先到。
@@ -911,6 +924,10 @@ pub enum Reply {
     /// `request_id`,app 不在线/超时由 daemon 判定后回 `Timeout`。
     PreviewCommandResult {
         outcome: PreviewCommandOutcome,
+    },
+    /// T13:`TakePendingPreviewCommands` 的应答(可能为空)。
+    PendingPreviewCommands {
+        commands: Vec<PreviewCommand>,
     },
     /// `GetSessionSummary` 应答。
     SessionSummary {

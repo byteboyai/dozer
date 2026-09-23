@@ -498,6 +498,19 @@ impl App {
                     }
                 });
             }
+            Message::PreviewCommandsFetched(project_id, commands) => {
+                self.with_project(project_id, move |ws, io| {
+                    for cmd in commands {
+                        let outcome = ws.apply_preview_command(&cmd);
+                        let client = io.client.clone();
+                        io.handle.spawn(async move {
+                            if let Err(e) = client.report_preview_command_outcome(outcome).await {
+                                tracing::warn!(%e, "回报预览命令结果失败");
+                            }
+                        });
+                    }
+                });
+            }
             Message::PreviewWindowIndex(project_id, panel, tab_id, result) => {
                 self.with_project(project_id, move |ws, _io| {
                     match result {

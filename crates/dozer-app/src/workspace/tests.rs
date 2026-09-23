@@ -1284,3 +1284,47 @@ fn preview_tab_display_title_blank_falls_back_to_placeholder_text() {
     let title = preview_tab_display_title(&ws, ws.preview.tabs().first().unwrap());
     assert_eq!(title, "空白", "无项目 → 维持原 \"空白\" 文案");
 }
+
+/// T13:Workspace::apply_preview_command 按 target(Path/Tab)路由到对应 pane,
+/// 并返回确定终态。
+#[test]
+fn apply_preview_command_routes_by_path_and_tab() {
+    use dozer_core::protocol::{
+        PreviewCommand, PreviewCommandAction, PreviewCommandOutcome, PreviewCommandTarget,
+    };
+    let (_d, rs) = write_temp_file("t13_nav.rs", "fn main() {}\n");
+    let mut ws = Workspace::empty_for_project_placeholder();
+    ws.preview.open_path(rs.clone());
+    let mk = |target| PreviewCommand {
+        request_id: "r".into(),
+        project_id: 1,
+        target,
+        action: PreviewCommandAction::Reveal { line: 1, column: 1 },
+        expected_revision: None,
+    };
+    let out = ws.apply_preview_command(&mk(PreviewCommandTarget::Path {
+        path: rs.to_string_lossy().into_owned(),
+    }));
+    assert!(
+        matches!(out, PreviewCommandOutcome::Accepted { .. }),
+        "{out:?}"
+    );
+
+    let out = ws.apply_preview_command(&mk(PreviewCommandTarget::Path {
+        path: "/definitely/not/here.rs".into(),
+    }));
+    assert!(
+        matches!(out, PreviewCommandOutcome::NotFound { .. }),
+        "{out:?}"
+    );
+
+    // Tab target:缺省面板按 files 处理;未知 tab id → NotFound。
+    let out = ws.apply_preview_command(&mk(PreviewCommandTarget::Tab {
+        panel: "files".into(),
+        tab_id: 9999,
+    }));
+    assert!(
+        matches!(out, PreviewCommandOutcome::NotFound { .. }),
+        "{out:?}"
+    );
+}

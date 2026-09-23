@@ -3,7 +3,9 @@
 //! 文档"session → project 解析"一节)。
 
 use dozer_client::Client;
-use dozer_core::protocol::PreviewContext;
+use dozer_core::protocol::{
+    PreviewCommand, PreviewCommandAction, PreviewCommandTarget, PreviewContext,
+};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{ErrorData as McpError, ServiceExt, tool, tool_router, transport::stdio};
@@ -50,6 +52,19 @@ pub struct ToggleTodoParams {
 pub struct EditTodoTextParams {
     pub id: i64,
     pub text: String,
+}
+
+/// T13:`preview_navigate` 参数。给 `path` + 起止(只给 line/column 是 reveal,
+/// 再给 end_line/end_column 就是 select,均 1-based)。
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct PreviewNavigateParams {
+    pub path: String,
+    pub line: u32,
+    pub column: u32,
+    #[serde(default)]
+    pub end_line: Option<u32>,
+    #[serde(default)]
+    pub end_column: Option<u32>,
 }
 
 #[tool_router(server_handler)]
@@ -114,6 +129,54 @@ impl DozerMcpServer {
             }
             Err(e) => Err(McpError::internal_error(format!("{e}"), None)),
         }
+    }
+
+    #[tool(
+        description = "让 Dozer 预览滚动/选中到指定文件的某段代码(只读导航,不写入)。line/column 为 1-based;再给 end_line/end_column 则选中范围。"
+    )]
+    pub async fn preview_navigate(
+        &self,
+        Parameters(p): Parameters<PreviewNavigateParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let project_id = self
+            .resolve_project_id()
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        let action = match (p.end_line, p.end_column) {
+            (Some(end_line), Some(end_column)) => PreviewCommandAction::Select {
+                start_line: p.line,
+                start_column: p.column,
+                end_line,
+                end_column,
+            },
+            _ => PreviewCommandAction::Reveal {
+                line: p.line,
+                column: p.column,
+            },
+        };
+        let request_id = format!(
+            "nav-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        );
+        let command = PreviewCommand {
+            request_id,
+            project_id,
+            target: PreviewCommandTarget::Path { path: p.path },
+            action,
+            expected_revision: None,
+        };
+        let outcome = self
+            .client
+            .run_preview_command(command)
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        let value = serde_json::to_value(&outcome)
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        Ok(CallToolResult::structured(value))
     }
 
     #[tool(

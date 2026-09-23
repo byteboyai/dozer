@@ -3,8 +3,8 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use dozer_core::protocol::{
     AgentKind, AgentState, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
-    CodeHealthReportInfo, ConversationSummary, PreviewContext, ProjectInfo, Reply, Request,
-    SessionInfo, SessionSummaryPayload, TodoInfo, TurnRecord, UsagePayload, decode_line,
+    CodeHealthReportInfo, ConversationSummary, PreviewCommand, PreviewContext, ProjectInfo, Reply,
+    Request, SessionInfo, SessionSummaryPayload, TodoInfo, TurnRecord, UsagePayload, decode_line,
     encode_line,
 };
 use std::path::PathBuf;
@@ -655,6 +655,48 @@ impl Client {
             .await?
         {
             Reply::PreviewContext { context } => Ok(context),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// T13:提交一条预览命令,等待终态(app 处理或超时)。
+    pub async fn run_preview_command(
+        &self,
+        command: PreviewCommand,
+    ) -> Result<dozer_core::protocol::PreviewCommandOutcome> {
+        match self
+            .roundtrip(&Request::RunPreviewCommand { command })
+            .await?
+        {
+            Reply::PreviewCommandResult { outcome } => Ok(outcome),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// T13:app 取走某项目待处理的预览命令。
+    pub async fn take_pending_preview_commands(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<PreviewCommand>> {
+        match self
+            .roundtrip(&Request::TakePendingPreviewCommands { project_id })
+            .await?
+        {
+            Reply::PendingPreviewCommands { commands } => Ok(commands),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// T13:app 回报某条预览命令的终态。
+    pub async fn report_preview_command_outcome(
+        &self,
+        outcome: dozer_core::protocol::PreviewCommandOutcome,
+    ) -> Result<()> {
+        match self
+            .roundtrip(&Request::ReportPreviewCommandOutcome { outcome })
+            .await?
+        {
+            Reply::Ok => Ok(()),
             other => bail!("意外应答: {other:?}"),
         }
     }

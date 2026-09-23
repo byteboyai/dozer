@@ -4,6 +4,7 @@ pub mod code_health;
 pub mod default_agent_config;
 pub mod headless_agent;
 pub mod ide_bridge;
+pub mod preview_commands;
 pub mod preview_context;
 pub mod projects;
 pub mod registry;

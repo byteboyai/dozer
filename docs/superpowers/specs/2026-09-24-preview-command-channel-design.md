@@ -15,19 +15,20 @@ select / reveal_cell),并在 revision 匹配时做受守卫的写入(replace)。
   接受;绝不猜 revision 增量。
 - 命令必须有**确定终态**,不允许无限等待。
 
-## 2. 传输拓扑
+## 2. 传输拓扑(已实现:poll 式)
 
 ```
-dozer-mcp ── Request::RunPreviewCommand ──▶ dozerd ──▶ (在线 app 的控制连接)
-                                                  ◀── Reply::PreviewCommandResult
+dozer-mcp ── Request::RunPreviewCommand ──▶ dozerd ──(队列 + waiter)──▶ 回 Reply
+dozer-app ── Request::TakePendingPreviewCommands(project) ──▶ dozerd 取走队列
+dozer-app ── Request::ReportPreviewCommandOutcome ──▶ dozerd 投递给 waiter
 ```
 
-- app 与 dozerd 已有一条常驻控制连接(预览上下文推送同源)。dozerd 需要在该
-  连接上**双向**推送命令帧(app 侧读循环分派到 `Message::PreviewCommandReceived`)。
-- 多 app 实例:目前一个 dozerd 服务一个 GUI;若未来多个,按 `project_id` +
-  连接注册顺序选择,并在 spec 修订时补充。
-- app 不在线:dozerd 立即回 `PreviewCommandOutcome::Timeout`(而非挂起)。
-- app 退出/断连/tab 关闭:该 app 所有 in-flight 命令回 `Timeout`/`NotFound`。
+- app 与 dozerd 仍是**短连接 request/reply**(每次调用新建连接);不引入常驻控制
+  连接。app 侧由后台轮询任务(约 400ms,只在聚焦项目存在时请求)取待处理命令。
+- 多 app 实例:目前一个 dozerd 服务一个 GUI;按 `project_id` 分队列。
+- app 不在线 / 超时:dozerd 在 `RunPreviewCommand` 上 `timeout(PREVIEW_COMMAND_TIMEOUT_MS)`
+  后回 `PreviewCommandOutcome::Timeout`,并 `forget` 掉队列里同 id 的命令。
+- app 退出/tab 关闭:命令在 app 侧定位不到 tab → `NotFound`;超时 → `Timeout`。
 
 ## 3. 消息形状(已实现)
 

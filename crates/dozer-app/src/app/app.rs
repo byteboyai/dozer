@@ -254,6 +254,11 @@ pub struct App {
     /// runtime 随进程退出被中途丢弃,daemon 侧会话仍是 `alive`,下次启动
     /// 又被恢复出来。见 `ShellIo::track_exit_critical`。
     pub(crate) pending_exit_tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    /// T13:后台预览命令轮询任务读取的"当前聚焦项目 id"(0 = 无)。聚焦变化时
+    /// 由 `with_focused_project` 更新。
+    pub(crate) preview_poll_project: Arc<std::sync::atomic::AtomicI64>,
+    /// T13:轮询任务一次性启动标记(幂等)。
+    pub(crate) preview_poll_started: Arc<std::sync::atomic::AtomicBool>,
     /// 当前终端网格尺寸,随 `PaneResized` 更新;新建 tab 时也用这份
     /// 尺寸,保证新会话从一开始就跟 pane 实际大小匹配。
     pub(crate) cols: u16,
@@ -750,6 +755,8 @@ impl App {
             capabilities,
             safe_startup,
             pending_exit_tasks: Arc::new(Mutex::new(Vec::new())),
+            preview_poll_project: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            preview_poll_started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
             ssh_cols: DEFAULT_COLS,
@@ -813,6 +820,11 @@ impl App {
         // 启动 footbar 采样任务(fire-and-forget):runtime drop 时任务自然取消。
         let io = shell.shell_io();
         footbar::spawn_sampler(&io);
+        crate::workspace::spawn_preview_command_poller(
+            &io,
+            shell.preview_poll_project.clone(),
+            shell.preview_poll_started.clone(),
+        );
         shell
     }
 
@@ -1198,6 +1210,11 @@ impl App {
     /// 更短、看起来更像默认选项的那个偏偏是用错了会串项目的那个。名字必须
     /// 一眼看出差别,不能靠读文档才知道选哪个。
     pub(crate) fn with_focused_project(&mut self, f: impl FnOnce(&mut Workspace, &ShellIo)) {
+        // T13:记录当前聚焦项目,供预览命令轮询任务读取。
+        self.preview_poll_project.store(
+            self.active_project_id.unwrap_or(0),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let io = self.shell_io();
         let Some(ws) = self.active_workspace_mut() else {
             return;

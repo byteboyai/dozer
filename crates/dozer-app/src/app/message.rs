@@ -583,6 +583,9 @@ pub enum Message {
         crate::preview::HostBinding,
         crate::preview::WebviewEnvelope<crate::preview::FlyfishEvent>,
     ),
+    /// T13:后台轮询取回的待处理预览命令(project_id, 命令列表)。处理后逐条
+    /// 回报终态给 dozerd。
+    PreviewCommandsFetched(i64, Vec<dozer_core::protocol::PreviewCommand>),
     /// 窗口化 viewer 的稀疏行索引建立完成(后台线程 → UI 线程)。成功后由
     /// App 推送初始窗口(必要时先 reveal 到目标行)。
     PreviewWindowIndex(

@@ -82,6 +82,7 @@ pub async fn serve(
     in_flight: crate::task_poller::InFlight,
 ) -> Result<()> {
     let preview_contexts = Arc::new(PreviewContextStore::new());
+    let preview_commands = Arc::new(crate::preview_commands::PreviewCommandBus::new());
     // 清扫是同步阻塞 IO(遍历目录+读文件),挪到阻塞线程池执行,不卡住
     // 当前 executor 线程——`serve()` 起监听前先等它跑完,保证不会跟紧接着
     // 写的新锁文件产生"锁文件刚写就被当陈旧清掉"的竞态。
@@ -117,6 +118,7 @@ pub async fn serve(
                 let bookmarks = bookmarks.clone();
                 let code_health = code_health.clone();
                 let preview_contexts = preview_contexts.clone();
+                let preview_commands = preview_commands.clone();
                 let ide_bridge = ide_bridge.clone();
                 let transcripts = transcripts.clone();
                 let session_summaries = session_summaries.clone();
@@ -134,6 +136,7 @@ pub async fn serve(
                         bookmarks,
                         code_health,
                         preview_contexts,
+                        preview_commands,
                         ide_bridge,
                         transcripts,
                         session_summaries,
@@ -408,6 +411,7 @@ async fn handle_conn(
     bookmarks: Arc<crate::bookmarks::BookmarkStore>,
     code_health: Arc<crate::code_health::CodeHealthStore>,
     preview_contexts: Arc<PreviewContextStore>,
+    preview_commands: Arc<crate::preview_commands::PreviewCommandBus>,
     ide_bridge: Arc<IdeBridgeRegistry>,
     transcripts: Arc<crate::transcripts::TranscriptStore>,
     session_summaries: Arc<crate::session_summary::SessionSummaryStore>,
@@ -825,15 +829,39 @@ async fn handle_conn(
                         Request::GetPreviewContext { project_id } => Reply::PreviewContext {
                             context: preview_contexts.get(project_id),
                         },
-                        // T13:daemon → app 的下行命令通道尚未接线(需要 app 常驻
-                        // 控制连接 + in-flight 登记 + 超时)。先返回确定失败,
-                        // 不挂起调用方。
-                        Request::RunPreviewCommand { command } => Reply::PreviewCommandResult {
-                            outcome: dozer_core::protocol::PreviewCommandOutcome::InternalError {
-                                request_id: command.request_id,
-                                detail: "预览命令通道尚未接线(见 wrap-up T13)".into(),
-                            },
-                        },
+                        // T13:下行预览命令。入队并等待 app 回传终态;app 不在线或
+                        // 超过超时时间则回 Timeout(不无限挂起)。
+                        Request::RunPreviewCommand { command } => {
+                            let request_id = command.request_id.clone();
+                            let rx = preview_commands.enqueue(command);
+                            match tokio::time::timeout(
+                                std::time::Duration::from_millis(
+                                    dozer_core::protocol::PREVIEW_COMMAND_TIMEOUT_MS,
+                                ),
+                                rx,
+                            )
+                            .await
+                            {
+                                Ok(Ok(outcome)) => Reply::PreviewCommandResult { outcome },
+                                _ => {
+                                    preview_commands.forget(&request_id);
+                                    Reply::PreviewCommandResult {
+                                        outcome: dozer_core::protocol::PreviewCommandOutcome::Timeout {
+                                            request_id,
+                                        },
+                                    }
+                                }
+                            }
+                        }
+                        Request::TakePendingPreviewCommands { project_id } => {
+                            Reply::PendingPreviewCommands {
+                                commands: preview_commands.take(project_id),
+                            }
+                        }
+                        Request::ReportPreviewCommandOutcome { outcome } => {
+                            preview_commands.report(outcome);
+                            Reply::Ok
+                        }
                         Request::ListConversations { cwd, agent, limit, offset } => {
                             match transcripts.list_conversations(&cwd, agent, limit, offset) {
                                 Ok(conversations) => Reply::Conversations { conversations },

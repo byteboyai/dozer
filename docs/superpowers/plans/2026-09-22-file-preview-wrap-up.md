@@ -384,15 +384,17 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
       (`docs/superpowers/specs/2026-09-24-preview-command-channel-design.md`)
 - [x] 命令结果必须区分 accepted、not found、stale revision、unsupported backend、
       load denied、timeout、internal error(`PreviewCommandOutcome`)。
-- [~] app 退出或 tab 关闭时，待处理命令收到确定失败，不能无限等待。(协议已定
-      `Timeout`/`NotFound`;dozerd 侧 in-flight 登记与断连清理待接线。)
+- [x] app 退出或 tab 关闭时，待处理命令收到确定失败，不能无限等待。(dozerd
+      `RunPreviewCommand` 超时回 `Timeout` 并 `forget` 队列;app 定位不到 tab →
+      `NotFound`。)
 
 ### T13b. 只读导航
 
 - [x] 先暴露 reveal/select；它们是导航操作，不与 replace 一起被写权限阻塞
       (`apply_preview_command`:reveal/select 只看 backend 是否支持)。
 - [~] suspended tab：reserve → load → ready → 执行；期间同 tab 命令按 request id
-      排队并可取消。(未加载 sheet 返回 `LoadDenied`;排队/取消/物化重放待接线。)
+      排队并可取消。(命令经轮询下发到已存在的 tab;未加载 sheet → `LoadDenied`;
+      suspended tab 物化重放与 request id 排队/取消仍未做。)
 - [ ] 折叠区目标先展开最小包含范围。(host 已有 unfold 原语,命令路径未接。)
 
 ### T13c. revision-guarded replace
@@ -405,8 +407,8 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
 
 **自动化:** dozer-core serde、dozer-client、dozerd 路由、MCP tool、app handler 的
 端到端 round-trip；断线、超时、旧 tab id、revision 冲突和重复 request id。
-(dozer-core serde round-trip 与 app handler 纯逻辑已测;dozer-client/dozerd/MCP
-端到端与断线/超时/重复 id 未做。)
+(dozer-core serde、dozerd 命令总线(入队/取走/回报/超时 forget)、app handler
+Path/Tab 路由已测;dozer-client/MCP 无 live 端到端,断线/重复 request id 未做。)
 
 ---
 

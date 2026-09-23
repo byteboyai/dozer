@@ -28,6 +28,35 @@ use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 use iced_widget::text;
 use iced_widget::text_editor::Action as EditorAction;
+
+/// T13:后台预览命令轮询驱动。每隔一段时间向 dozerd 取当前聚焦项目待处理的
+/// 预览命令,取到就发 `Message::PreviewCommandsFetched`。只在聚焦项目存在时
+/// 真的请求;幂等(同一进程只启动一次)。
+pub(crate) fn spawn_preview_command_poller(
+    io: &ShellIo,
+    project: std::sync::Arc<std::sync::atomic::AtomicI64>,
+    started: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    if started.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let client = io.client.clone();
+    let proxy = io.proxy.clone();
+    io.handle.spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            let pid = project.load(std::sync::atomic::Ordering::Relaxed);
+            if pid <= 0 {
+                continue;
+            }
+            if let Ok(commands) = client.take_pending_preview_commands(pid).await
+                && !commands.is_empty()
+            {
+                let _ = proxy.send_event(Message::PreviewCommandsFetched(pid, commands));
+            }
+        }
+    });
+}
 use iced_winit::winit::event_loop::EventLoopProxy;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -2202,6 +2231,50 @@ impl Workspace {
                     crate::preview::path_key(&path),
                 );
             });
+        }
+    }
+
+    /// T13:按命令 target 定位 tab(panel/tab 或 path),交给对应 pane 的
+    /// `apply_preview_command`,返回终态。
+    pub fn apply_preview_command(
+        &mut self,
+        cmd: &dozer_core::protocol::PreviewCommand,
+    ) -> dozer_core::protocol::PreviewCommandOutcome {
+        use dozer_core::protocol::{PreviewCommandOutcome, PreviewCommandTarget};
+        match &cmd.target {
+            PreviewCommandTarget::Tab { panel, tab_id } => {
+                let pane = if panel == "project" {
+                    &mut self.project_preview
+                } else {
+                    &mut self.preview
+                };
+                pane.apply_preview_command(*tab_id, cmd)
+            }
+            PreviewCommandTarget::Path { path } => {
+                let want = std::path::Path::new(path);
+                let in_files = self
+                    .preview
+                    .tabs()
+                    .iter()
+                    .find(|t| matches!(&t.kind, TabKind::File(p) if p == want))
+                    .map(|t| t.id);
+                if let Some(id) = in_files {
+                    return self.preview.apply_preview_command(id, cmd);
+                }
+                let in_project = self
+                    .project_preview
+                    .tabs()
+                    .iter()
+                    .find(|t| matches!(&t.kind, TabKind::File(p) if p == want))
+                    .map(|t| t.id);
+                if let Some(id) = in_project {
+                    return self.project_preview.apply_preview_command(id, cmd);
+                }
+                PreviewCommandOutcome::NotFound {
+                    request_id: cmd.request_id.clone(),
+                    detail: "找不到该路径对应的预览 tab".into(),
+                }
+            }
         }
     }
 
