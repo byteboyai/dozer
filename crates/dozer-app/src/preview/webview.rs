@@ -60,21 +60,16 @@ pub(crate) fn scheme_query_value() -> &'static str {
     }
 }
 
-/// html/htm 走真实 `file://` URL 直接加载,不经 flyfish——flyfish 的渲染
-/// 器把 html/htm 也归进它自己的通用文本/源码管线(不是当网页渲染),给它
-/// 加 `prefers_rendered_preview` 只是换个地方显示源码,达不到"像 md 一样
-/// 渲染出效果"的目的(核心原则见 CLAUDE.md:预览应该让用户看到 AI 产出的
-/// 实际效果)。让 wry 直接加载文件本身的 `file://` URL,WKWebView 按普通
-/// 网页处理,相对路径引用的 css/js/图片按文件所在目录自然解析,不用额外
-/// 起服务。`p`(每段路径分量分别编码,保留 `/` 分隔符,不能直接套
-/// `encode_component` 整段编码——那会把 `/` 也转义掉,破坏 URL 结构)。
-pub(crate) fn file_url(path: &std::path::Path) -> String {
-    let encoded_segments: Vec<String> = path
-        .to_string_lossy()
-        .split('/')
-        .map(encode_component)
-        .collect();
-    format!("file://{}", encoded_segments.join("/"))
+/// HTML/HTM 的隔离 host URL:不再直接 `file://` 加载,改走 `dozer://html/host.html`,
+/// 由 host 把绑定文件放进**无脚本 sandbox iframe** 渲染,相对资源经
+/// `dozer://html/__file__` 白名单(已打开文件所在目录子树)解析。详见
+/// `assets::serve_html_file` 与内嵌 `html_host.html`。
+pub(crate) fn html_url(path: &std::path::Path) -> String {
+    format!(
+        "dozer://html/host.html?p={}&theme={}",
+        encode_component(&path.to_string_lossy()),
+        scheme_query_value()
+    )
 }
 
 /// `TabKind::File` → wry 期望加载的 URL,按扩展名分派两条渲染路径。
@@ -86,7 +81,7 @@ pub(crate) fn preview_url(path: &std::path::Path) -> String {
         .to_ascii_lowercase()
         .as_str()
     {
-        "html" | "htm" => file_url(path),
+        "html" | "htm" => html_url(path),
         _ => flyfish_url(path),
     }
 }

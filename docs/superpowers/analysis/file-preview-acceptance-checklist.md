@@ -84,7 +84,7 @@ echo "$d"
 | `cfg.json5` | CodeMirror(jsonc) | 注释 / 尾逗号着色,可编辑 | 不变 | |
 | `rows.jsonl` | **CodeMirror Text(json)** | 当普通文本查看(与 json5 同路;**无**「树/文本」切换) | Streamed 树(T8) | |
 | `t.csv` | Tabular 网格 | 网格显示;tab 栏可切「网格 / 原文」 | 不变 | |
-| `doc.md` / `page.html` | Rendered + 可切 Source | 渲染;切 Source 进 CodeMirror | 不变(HTML 走隔离 host,T7) | |
+| `doc.md` / `page.html` | Rendered + 可切 Source | 渲染;切 Source 进 CodeMirror | HTML 走 `dozer://html/` 隔离 host(T7) | |
 | 图片 / PDF | Rendered(Flyfish) | 正常渲染 | 不变 | |
 | `archive.zip` | External → 统一 fallback 页(T1) | 显示类型/路径/原因 + 外部打开;不内嵌 | 不变 | |
 | `broken.zip` | External → 统一 fallback 页(T1) | 不崩溃;外部打开可用 | 不变 | |
@@ -178,7 +178,8 @@ echo "$d"
   文本查看),**没有** Streamed viewer;真正的 Streamed JSON backend 是 T8 的
   新增能力(不再描述为旧 `json_tree` adapter 的延续——该 adapter 已删除)。
 - 表格无 reveal cell/range,Agent 无“选中单元格”(T12)。
-- HTML 仍直接 `file://` 加载;Flyfish IPC 未迁 envelope;未接资源管理器(T7/T9)。
+- HTML 已走 `dozer://html/` 隔离 host(无脚本 sandbox iframe,T7);Flyfish IPC 未迁
+  envelope;未接资源管理器(T9)。
 - 窗口化搜索条无 Esc 关闭 / 程序化聚焦(末尾备注)。
 - scroll anchor 仍是逻辑锚点,未精确还原像素(T11)。
 - 非法 UTF-8 / UTF-16 展示已有只读提示且保存恒拒绝(T6);**仍**可能经过

@@ -246,15 +246,18 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
 
 ## T7. HTML 隔离 host
 
-- [ ] HTML/HTM 不再直接加载 `file://`；新增 `dozer://html/` 隔离 host 或等价
-      sandboxed 页面。
-- [ ] HTML host 只允许读取当前绑定文件及明确允许的相对资源；禁止访问 editor/
-      json-editor IPC。
-- [ ] CSP 默认无网络、无任意脚本；如产品需要脚本预览，必须作为显式危险 mode，
-      不纳入本次默认路径。
-- [ ] Source 模式继续使用 CodeMirror，切换 mode 不同时驻留两套重型 viewer。
+- [x] HTML/HTM 不再直接加载 `file://`；新增 `dozer://html/` 隔离 host 或等价
+      sandboxed 页面(`preview_url` → `dozer://html/host.html`;内嵌 `html_host.html`)。
+- [x] HTML host 只允许读取当前绑定文件及明确允许的相对资源；禁止访问 editor/
+      json-editor IPC。(`assets::serve_html_file` 只放行已打开文件所在目录子树;
+      `dozer://html` 与 `dozer://editor` 是不同 origin,跨命名空间 fetch 被 CORS 拦。)
+- [x] CSP 默认无网络、无任意脚本；如产品需要脚本预览，必须作为显式危险 mode，
+      不纳入本次默认路径。(`default-src 'none'` + 无脚本 sandbox iframe。)
+- [x] Source 模式继续使用 CodeMirror，切换 mode 不同时驻留两套重型 viewer
+      (Source 仍走 editor host;HTML 预览走 html host)。
 
 **自动化:** 路径穿越、跨文件读取、editor envelope 注入均失败；离线 HTML 正常。
+(穿越/越界/白名单已单测;editor envelope 注入需真机 WebView 验证,未做。)
 
 **回退点:** 保留旧 `file://` 行为的独立提交，仅用于紧急回退。
 

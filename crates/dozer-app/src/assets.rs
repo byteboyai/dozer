@@ -161,6 +161,43 @@ fn editor_root_for(flyfish_root: &Path) -> PathBuf {
     flyfish_root.with_file_name("editor")
 }
 
+/// T7:`dozer://html/__file__/<abs>` 的读取闸门。比 editor 的"精确文件白名单"
+/// 宽一点:允许**已打开文件所在目录子树**(相对资源 css/js/图片要能加载),
+/// 但不允许跨出这些目录,且拒绝任何 `..` 分量 + 再 canonicalize 复核(防符号
+/// 链接逃逸)。`allowed` 是应用维护的"用户显式打开过的文件"集合。
+fn serve_html_file(encoded: &str, allowed: &HashSet<PathBuf>) -> ProtocolReply {
+    let Some(decoded) = percent_decode(encoded) else {
+        return not_found();
+    };
+    if decoded.split('/').any(|c| c == "..") {
+        return not_found();
+    }
+    let file = PathBuf::from(&decoded);
+    let exact = allowed.contains(&file);
+    let under_root = |target: &Path| -> bool {
+        allowed.iter().any(|a| {
+            a.parent()
+                .and_then(|root| std::fs::canonicalize(root).ok())
+                .is_some_and(|root| target.starts_with(&root))
+        })
+    };
+    let canon = match std::fs::canonicalize(&file) {
+        Ok(c) => c,
+        Err(_) => return not_found(),
+    };
+    if !exact && !under_root(&canon) {
+        return not_found();
+    }
+    match std::fs::read(&file) {
+        Ok(body) => ProtocolReply {
+            status: 200,
+            mime: mime_for(&file),
+            body,
+        },
+        Err(_) => not_found(),
+    }
+}
+
 /// JSON tree/text host(vanilla-jsoneditor)静态资源根 = flyfish 根的兄弟目录
 /// `json-editor`。
 fn json_editor_root_for(flyfish_root: &Path) -> PathBuf {
@@ -216,6 +253,22 @@ pub fn handle_protocol(
             return serve_allowlisted_file(encoded, allowed);
         }
         return serve_vendored(&json_editor_root_for(assets_root), path);
+    }
+
+    // T7:HTML 隔离 host。页面编译期内嵌;`__file__` 走 `serve_html_file`
+    // (允许已打开文件所在目录子树,供相对资源)。
+    if let Some(path) = rest.strip_prefix("html/") {
+        if path == "host.html" {
+            return ProtocolReply {
+                status: 200,
+                mime: "text/html",
+                body: include_str!("html_host.html").as_bytes().to_vec(),
+            };
+        }
+        if let Some(encoded) = path.strip_prefix("__file__") {
+            return serve_html_file(encoded, allowed);
+        }
+        return not_found();
     }
 
     let Some(path) = rest.strip_prefix("flyfish/") else {
@@ -597,6 +650,72 @@ mod tests {
             "不应含源码树绝对路径"
         );
         assert!(!js.contains("/Users/"), "不应含用户绝对路径");
+    }
+
+    /// T7:HTML host 页面可服务,且 CSP 为无网络/无任意脚本起步(sandbox iframe)。
+    #[test]
+    fn serves_html_host_with_sandbox_and_strict_csp() {
+        let root = scratch();
+        let r = handle_protocol(&root, &HashSet::new(), None, "dozer://html/host.html");
+        assert_eq!((r.status, r.mime), (200, "text/html"));
+        let html = String::from_utf8(r.body).unwrap();
+        assert!(html.contains("default-src 'none'"));
+        assert!(html.contains("sandbox"), "iframe 必须 sandbox(禁脚本)");
+        assert!(
+            !html.contains("http://") && !html.contains("https://"),
+            "host 不得引用外部 URL"
+        );
+    }
+
+    /// T7:`dozer://html/__file__` 允许已打开文件所在目录子树,但拒绝越界/穿越。
+    #[test]
+    fn html_file_endpoint_scopes_to_opened_file_dirs() {
+        let root = std::env::temp_dir().join(format!("dozer-html-test-{}", std::process::id()));
+        let proj = root.join("proj");
+        let sub = proj.join("assets");
+        std::fs::create_dir_all(&sub).unwrap();
+        let index = proj.join("index.html");
+        let css = sub.join("site.css");
+        let secret = root.join("outside.txt");
+        std::fs::write(&index, b"<html>").unwrap();
+        std::fs::write(&css, b"body{}").unwrap();
+        std::fs::write(&secret, b"secret").unwrap();
+
+        let mut allowed = HashSet::new();
+        allowed.insert(index.clone());
+
+        let uri = |p: &Path| format!("dozer://html/__file__{}", p.to_string_lossy());
+        // 已打开文件本身:可读。
+        assert_eq!(
+            handle_protocol(&root, &allowed, None, &uri(&index)).status,
+            200
+        );
+        // 同项目子树内的相对资源:可读。
+        assert_eq!(
+            handle_protocol(&root, &allowed, None, &uri(&css)).status,
+            200
+        );
+        // 目录之外:404。
+        assert_eq!(
+            handle_protocol(&root, &allowed, None, &uri(&secret)).status,
+            404
+        );
+        // 穿越:404。
+        assert_eq!(
+            handle_protocol(
+                &root,
+                &allowed,
+                None,
+                "dozer://html/__file__/proj/../outside.txt"
+            )
+            .status,
+            404
+        );
+        // 未打开任何文件:404。
+        assert_eq!(
+            handle_protocol(&root, &HashSet::new(), None, &uri(&css)).status,
+            404
+        );
     }
 }
 

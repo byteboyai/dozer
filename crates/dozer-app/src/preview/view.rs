@@ -834,8 +834,8 @@ impl PreviewPane {
                 };
                 let mut u = preview_url(path);
                 if tab.reload_nonce > 0 {
-                    // flyfish URL 已经带 `?p=...` 查询串,html 的 file:// URL
-                    // 还没有——按 URL 是否已有查询串决定用 `&` 还是 `?` 起头。
+                    // flyfish 与 html host 的 URL 都已带 `?p=...` 查询串;按 URL
+                    // 是否已有查询串决定用 `&` 还是 `?` 起头(防御性)。
                     let sep = if u.contains('?') { '&' } else { '?' };
                     u.push_str(&format!("{sep}_r={}", tab.reload_nonce));
                 }
@@ -1978,34 +1978,22 @@ mod tests {
         );
         let specs = p.desired_webviews();
         assert_eq!(specs.len(), 1, ".html 现在应进 wry 期望清单");
-        assert_eq!(
-            specs[0].url,
-            format!("file://{}", html_path.to_string_lossy()),
-            ".html 应该直接加载 file:// URL,不经 flyfish(flyfish 只会把它当源码显示)"
+        assert!(
+            specs[0].url.starts_with("dozer://html/host.html?"),
+            ".html 应走隔离 host(不再直接 file://),got {}",
+            specs[0].url
         );
 
         std::fs::remove_file(&html_path).ok();
     }
 
     #[test]
-    fn file_url_percent_encodes_each_path_segment_but_keeps_slashes() {
-        assert_eq!(
-            file_url(std::path::Path::new("/tmp/a b/c.html")),
-            "file:///tmp/a%20b/c.html"
-        );
-    }
-
-    #[test]
-    fn preview_url_dispatches_html_to_file_url_and_others_to_flyfish() {
-        assert_eq!(
-            preview_url(std::path::Path::new("/tmp/page.html")),
-            "file:///tmp/page.html"
-        );
-        assert_eq!(
-            preview_url(std::path::Path::new("/tmp/page.HTM")),
-            "file:///tmp/page.HTM",
-            "扩展名判定大小写不敏感"
-        );
+    fn preview_url_dispatches_html_to_isolated_host_and_others_to_flyfish() {
+        let html = preview_url(std::path::Path::new("/tmp/page.html"));
+        assert!(html.starts_with("dozer://html/host.html?"), "got {html}");
+        assert!(html.contains("p=%2Ftmp%2Fpage.html"), "got {html}");
+        let htm = preview_url(std::path::Path::new("/tmp/page.HTM"));
+        assert!(htm.starts_with("dozer://html/host.html?"), "大小写不敏感");
         assert_eq!(
             preview_url(std::path::Path::new("/tmp/notes.md")),
             flyfish_url(std::path::Path::new("/tmp/notes.md")),
@@ -2060,15 +2048,13 @@ mod tests {
     }
 
     #[test]
-    fn bump_reload_uses_question_mark_separator_for_file_url_html() {
+    fn bump_reload_appends_reload_param_to_html_host_url() {
         let mut p = PreviewPane::default();
         let id0 = p.open_path(PathBuf::from("/tmp/a.html"));
         p.bump_reload(id0);
-        assert_eq!(
-            p.desired_webviews()[0].url,
-            "file:///tmp/a.html?_r=1",
-            "file:// URL 本身没有查询串,重载参数要用 ? 起头而不是 &"
-        );
+        let url = &p.desired_webviews()[0].url;
+        assert!(url.starts_with("dozer://html/host.html?"), "got {url}");
+        assert!(url.ends_with("&_r=1"), "已有查询串,重载参数用 & : {url}");
     }
 
     #[test]
