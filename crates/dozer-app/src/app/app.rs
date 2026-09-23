@@ -986,7 +986,12 @@ impl App {
             let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
                 continue;
             };
-            if !tab.uses_codemirror() {
+            // 命令目标是 CodeMirror **host**，不等同于普通整文件
+            // `uses_codemirror()`：窗口化大文件也复用同一个 host，只是正文
+            // 不由页面 fetch，而由 Rust 经 `SetWindow` 分块推送。
+            // 这里若用 `uses_codemirror()`，它对 `windowed` 明确返回 false，
+            // 首个 SetWindow 会在取出队列后被静默丢弃，页面便只剩行号 1。
+            if !tab.uses_editor_host() {
                 continue;
             }
             let crate::preview::TabKind::File(path) = &tab.kind else {
