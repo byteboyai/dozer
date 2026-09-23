@@ -20,7 +20,7 @@ use crate::term::term_view;
 use crate::term::terminal;
 use crate::theme;
 use crate::workspace::{
-    PreviewPaneKind, Workspace, agent_close_confirm_popup, agent_list_pane, agent_picker_popup,
+    PreviewPaneKind, Workspace, agent_list_pane, agent_picker_popup,
     dot_color, no_project_placeholder, preview_pane, preview_tab_overflow_popup,
     project_preview_pane, review_content_pane, split_portions, tab_display_width, tab_title,
 };
@@ -300,19 +300,6 @@ impl App {
                 base,
                 dismiss,
                 ssh::host_form(draft, status, self.window_size.0).map(Message::Ssh)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        } else if ws.pending_close_tab.is_some() {
-            // 关 Agent 面板 tab 确认框:目标会话 Running/AwaitingInput 时才进
-            // 这里(分流见 `app::update` `Message::CloseTab`)。窗口级 overlay,
-            // 点遮罩=取消。
-            let dismiss = crate::dialog::scrim(Message::TermTabCloseCancel);
-            stack![
-                base,
-                dismiss,
-                agent_close_confirm_popup(ws, self.window_size.0)
             ]
             .width(Length::Fill)
             .height(Length::Fill)

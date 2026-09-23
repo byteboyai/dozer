@@ -1356,24 +1356,8 @@ pub fn view<'a>(
     base.into()
 }
 
-/// 删除主机的确认对话框:居中卡片,列出要删的主机名,确认(红)才执行
-/// `DeleteHost`,取消/遮罩只清待确认态。视觉参照文件树面板的
-/// `delete_confirm_popup`(CARD 底 + 圆角描边 + 取消/确认两个圆角按钮)。
-/// 窗口级 overlay,由 `app.rs` 挂载(见其调用点注释),`pub` 是为了让那边
-/// 能调到。
-pub fn delete_confirm_popup<'a>(
-    ws_state: &'a WorkspaceState,
-    host_id: &'a str,
-    window_width: f32,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    match delete_confirm_spec(ws_state, host_id) {
-        Some(spec) => crate::dialog::confirm(spec, window_width),
-        None => column![].into(),
-    }
-}
-
-/// 删除主机确认框的内容描述——宿主(`platform::confirm_overlay`)与旧的
-/// in-window 渲染都取这一份,保证文案/消息不因迁移而分叉。
+/// 删除主机确认框的内容描述——宿主(`platform::confirm_overlay`)取这一份
+/// 渲染,保证文案/消息不因迁移而分叉。
 pub(crate) fn delete_confirm_spec(
     ws_state: &WorkspaceState,
     host_id: &str,

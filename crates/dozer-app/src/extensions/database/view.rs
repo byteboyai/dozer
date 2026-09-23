@@ -572,25 +572,9 @@ pub fn view<'a>(
     base.into()
 }
 
-/// 删除数据源确认框:居中浮层,列出要删的数据源名,确认(红)才执行
-/// `DeleteSource`,取消/遮罩只清待确认态。视觉照抄 `ssh.rs::
-/// delete_confirm_popup`(CARD 底 + 圆角描边 + 取消/确认两个圆角按钮)。
-/// 窗口级 overlay,由 `app.rs` 挂载(见其调用点注释),`pub` 是为了让那边
-/// 能调到。
-pub fn delete_confirm_popup<'a>(
-    ws_state: &'a WorkspaceState,
-    source_id: &'a str,
-    window_width: f32,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    match delete_confirm_spec(ws_state, source_id) {
-        Some(spec) => crate::dialog::confirm(spec, window_width),
-        None => column![].into(),
-    }
-}
-
-/// 删除数据源确认框的内容描述——宿主(`platform::confirm_overlay`)与旧的
-/// in-window 渲染都取这一份。仅当 `source_id` 能在当前数据源列表里定位到
-/// (或至少存在一条待确认删除)时返回 `Some`。
+/// 删除数据源确认框的内容描述——宿主(`platform::confirm_overlay`)取这一
+/// 份渲染。仅当 `source_id` 能在当前数据源列表里定位到(或至少存在一条待
+/// 确认删除)时返回 `Some`。
 pub(crate) fn delete_confirm_spec(
     ws_state: &WorkspaceState,
     source_id: &str,

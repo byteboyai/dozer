@@ -1216,20 +1216,8 @@ pub fn tab_context_menu_popup<'a>(
         .into()
 }
 
-/// 删除确认框:居中浮层,显示目标文件名 + 确认/取消两个按钮。
-pub fn delete_confirm_popup(
-    ws_state: &WorkspaceState,
-    window_width: f32,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let Some(spec) = delete_confirm_spec(ws_state) else {
-        return column![].into();
-    };
-    crate::dialog::confirm(spec, window_width)
-}
-
-/// 删除确认框的内容描述——宿主(`platform::confirm_overlay`)与旧的
-/// in-window 渲染都取这一份,保证文案/消息不因迁移而分叉。`None` 表示
-/// 当前没有待确认的删除。
+/// 删除确认框的内容描述——宿主(`platform::confirm_overlay`)取这一份渲染,
+/// 保证文案/消息不因迁移而分叉。`None` 表示当前没有待确认的删除。
 pub(crate) fn delete_confirm_spec(ws_state: &WorkspaceState) -> Option<crate::dialog::ConfirmDialog<Message>> {
     let (path, is_dir) = ws_state.tree_delete_confirm.as_ref()?;
     let name = path

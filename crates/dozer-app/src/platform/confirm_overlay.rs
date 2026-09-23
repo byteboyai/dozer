@@ -204,6 +204,9 @@ pub(crate) fn desired_confirm(
     {
         return Some((ConfirmTrigger::SshDelete, map_ssh_spec(spec)));
     }
+    if let Some(spec) = crate::workspace::agent_close_confirm_spec(ws) {
+        return Some((ConfirmTrigger::AgentTabClose, spec));
+    }
     None
 }
 
