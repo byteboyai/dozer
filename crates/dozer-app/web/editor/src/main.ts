@@ -85,11 +85,29 @@ let windowHeldEnd = 0;
 let lastWindowRequest = 0;
 let applyingWindow = false;
 let globalScrollbar: HTMLInputElement | null = null;
+let truncationBanner: HTMLDivElement | null = null;
 
 function updateGlobalScrollbar(): void {
   if (!globalScrollbar || windowTotal <= 0) return;
   globalScrollbar.max = String(Math.max(1, windowTotal));
   globalScrollbar.value = String(Math.min(Math.max(windowBase, 1), windowTotal));
+}
+
+/** 超长单行导致窗口被字节上限截断时,在顶部显示一条提示;否则移除。 */
+function updateTruncationBanner(truncated: boolean): void {
+  const editorRoot = document.getElementById('editor');
+  if (!editorRoot) return;
+  if (truncated) {
+    if (!truncationBanner) {
+      truncationBanner = document.createElement('div');
+      truncationBanner.className = 'windowed-truncation-banner';
+      truncationBanner.textContent = '本行过长,仅显示开头部分';
+      editorRoot.appendChild(truncationBanner);
+    }
+  } else if (truncationBanner) {
+    truncationBanner.remove();
+    truncationBanner = null;
+  }
 }
 
 document.documentElement.setAttribute('data-theme', scheme);
@@ -433,6 +451,7 @@ function applyCommand(raw: string): void {
       windowHeldEnd = windowBase + view.state.doc.lines - 1;
       applyingWindow = false;
       updateGlobalScrollbar();
+      updateTruncationBanner(cmd.truncated === true);
       emitViewport();
       break;
     }

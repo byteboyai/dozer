@@ -265,20 +265,44 @@ impl LineIndex {
 }
 
 /// 有界窗口:目标行附近的一段(带全局起始行号)。
+///
+/// `truncated` 表示窗口因**字节上限**被截断:单行过长时只保留该行前若干个
+/// 字节,后续内容不再包含(展示端应给出"本行过长,已截断"提示,避免把
+/// 整条超长行推进 WebView 导致空白/卡死)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextWindow {
     pub start_line: u32,
     pub end_line: u32,
     pub text: String,
+    pub truncated: bool,
 }
 
-/// 读取目标行附近的有界窗口 `[center-before, center+after]`(钳到合法行范围)。
+/// 窗口正文的默认字节上限。按行限幅(WINDOW_BEFORE/AFTER)对"几千行但每行很
+/// 短"的文件足够,但对**单行本身就有数百 MB**的病态文件失效——按行取窗口会把
+/// 整行读进来。这里再按字节兜一层:窗口内累计正文不超过该值,超长单行只保留
+/// 前若干字节并标记截断。
+pub const WINDOW_MAX_BYTES: usize = 512 * 1024;
+
+/// 读取目标行附近的有界窗口 `[center-before, center+after]`(钳到合法行范围),
+/// 并再受 [`WINDOW_MAX_BYTES`] 字节上限约束。
 pub fn read_window(
     path: &Path,
     index: &LineIndex,
     center_line: u32,
     before: u32,
     after: u32,
+) -> std::io::Result<TextWindow> {
+    read_window_capped(path, index, center_line, before, after, WINDOW_MAX_BYTES)
+}
+
+/// 同 [`read_window`],显式指定字节上限(测试与特殊调用方用)。
+pub fn read_window_capped(
+    path: &Path,
+    index: &LineIndex,
+    center_line: u32,
+    before: u32,
+    after: u32,
+    max_bytes: usize,
 ) -> std::io::Result<TextWindow> {
     let total = index.total_lines().max(1);
     let start_line = center_line.saturating_sub(before).max(1);
@@ -290,10 +314,20 @@ pub fn read_window(
     let mut text = String::new();
     let mut buf = Vec::new();
     let mut line = start_line;
+    let mut truncated = false;
     while line <= end_line {
         buf.clear();
         let n = reader.read_until(b'\n', &mut buf)?;
         if n == 0 {
+            break;
+        }
+        if text.len() + buf.len() > max_bytes {
+            // 预算内还能放下多少:尽量补齐到上限,只保留该行前缀。
+            let room = max_bytes.saturating_sub(text.len());
+            if room > 0 {
+                text.push_str(&String::from_utf8_lossy(&buf[..room]));
+            }
+            truncated = true;
             break;
         }
         text.push_str(&String::from_utf8_lossy(&buf));
@@ -303,6 +337,7 @@ pub fn read_window(
         start_line,
         end_line: line.saturating_sub(1).max(start_line),
         text,
+        truncated,
     })
 }
 
@@ -431,6 +466,7 @@ mod tests {
         assert_eq!(w.end_line, 12);
         assert!(w.text.starts_with("line-8\n"));
         assert!(w.text.contains("line-12\n"));
+        assert!(!w.truncated);
     }
 
     #[test]
@@ -441,6 +477,35 @@ mod tests {
         assert_eq!(w.start_line, 1);
         assert_eq!(w.end_line, 3);
         assert_eq!(w.text, "one\ntwo\nthree\n");
+        assert!(!w.truncated);
+    }
+
+    #[test]
+    fn read_window_truncates_giant_single_line_by_bytes() {
+        // 单行 1MiB(远超上限):窗口只保留前 max_bytes 字节并标记截断,
+        // 不能把整行读进来(病态 huge.txt / long_line.rs 的空白根因)。
+        let line = "a".repeat(1024 * 1024);
+        let p = tmp("giantline", line.as_bytes());
+        let idx = LineIndex::build(&p, 1000, 1).unwrap();
+        assert_eq!(idx.total_lines(), 1);
+        let w = read_window_capped(&p, &idx, 1, 1000, 2000, 4096).unwrap();
+        assert_eq!(w.text.len(), 4096);
+        assert!(w.truncated);
+    }
+
+    #[test]
+    fn read_window_stops_at_byte_budget_across_lines() {
+        // 多行累计超预算:装到放不下为止,后续行不再包含,标记截断。
+        let mut content = String::new();
+        for i in 1..=100 {
+            content.push_str(&format!("line-{i:04}\n"));
+        }
+        let p = tmp("budget", content.as_bytes());
+        let idx = LineIndex::build(&p, 1000, 1).unwrap();
+        let w = read_window_capped(&p, &idx, 1, 0, 100, 50).unwrap();
+        assert!(w.truncated);
+        assert!(w.text.len() <= 50);
+        assert!(w.end_line < 100);
     }
 
     #[test]

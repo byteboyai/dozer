@@ -176,6 +176,7 @@ impl PreviewPane {
                 start_line: window.start_line,
                 total_lines: index.total_lines(),
                 revision: tab.web_revision,
+                truncated: window.truncated,
             }
         };
         self.queue_editor_command(tab_id, command);

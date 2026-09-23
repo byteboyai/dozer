@@ -72,6 +72,7 @@ export type EditorCommand =
       start_line: number;
       total_lines: number;
       revision: number;
+      truncated?: boolean;
     }
   | { kind: 'reveal_position'; line: number; column: number }
   | { kind: 'select_range'; start: Position; end: Position }

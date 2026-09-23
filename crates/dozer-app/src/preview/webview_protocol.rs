@@ -148,11 +148,14 @@ pub enum EditorCommand {
     },
     /// 窗口化只读 viewer:把文档替换为某个全局行区间的内容,`start_line` 是
     /// 窗口首行的全局行号(用于全局行号显示与坐标换算),`total_lines` 供状态栏。
+    /// `truncated` 表示窗口因字节上限被截断(超长单行只含前缀),展示端提示。
     SetWindow {
         text: String,
         start_line: u32,
         total_lines: u32,
         revision: u64,
+        #[serde(default)]
+        truncated: bool,
     },
     RevealPosition {
         line: u32,
@@ -480,11 +483,13 @@ mod tests {
                 start_line: 1001,
                 total_lines: 500_000,
                 revision: 3,
+                truncated: false,
             },
         );
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
         assert_eq!(v["payload"]["kind"], "set_window");
         assert_eq!(v["payload"]["start_line"], 1001);
+        assert_eq!(v["payload"]["truncated"], false);
     }
 
     /// 关闭脏 tab 前下发的"用当前 buffer 保存一次"命令,payload 只是一个
