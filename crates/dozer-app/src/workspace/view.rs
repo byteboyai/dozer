@@ -1216,7 +1216,11 @@ pub(crate) fn preview_pane_for<'a>(
                     // 专用文案。`loading_hint` 自带 `center_x/center_y(Fill)`,
                     // 不需要再包一层容器。
                     content = content.push(
-                        preview_loading_view(&active_tab.load_state).unwrap_or_else(|| {
+                        preview_loading_view(
+                            &active_tab.load_state,
+                            active_tab.load_observe.as_ref(),
+                        )
+                        .unwrap_or_else(|| {
                             byteui::feedback::math_curve::loading_hint(
                                 byteui::feedback::math_curve::Curve::RoseThree,
                                 "正在打开表格…",
@@ -1230,7 +1234,9 @@ pub(crate) fn preview_pane_for<'a>(
             // T1:External / Unsupported(及 Failed)统一 fallback 页——不再
             // 依赖 Flyfish 偶然兜底或空白。失败优先于 loading:终态不能被动画盖住。
             content = content.push(page);
-        } else if let Some(loading) = preview_loading_view(&active_tab.load_state) {
+        } else if let Some(loading) =
+            preview_loading_view(&active_tab.load_state, active_tab.load_observe.as_ref())
+        {
             // T2:有阶段在途(Profiling/CreatingHost/Reading/Indexing/…)时显示
             // 统一 loading。原生 WebView 在 `preview_desired` 里因
             // `backend_state != Ready` 而不产出 spec(或不置 visible),所以
@@ -1827,9 +1833,17 @@ pub(crate) fn agent_launch_command(agent: AgentKind, hook_exe: &str) -> Option<S
 /// (最多 ~100ms 一次),这里只负责渲染,不主动扫描文件(plan T1/§3)。
 ///
 /// `size=48.0`、`Curve::RoseThree` 与其余既有调用点(用量/搜索/表格等)一致。
+///
+/// T11 bullet 4:视图组装即"动画开始画";在此写回首帧时刻(经由 `observe` 的
+/// 共享单元),用于区分"动画没机会画"与"后台任务本身慢"。
 fn preview_loading_view<'a>(
     load_state: &crate::preview::PreviewLoadState,
+    observe: Option<&crate::preview::LoadObservation>,
 ) -> Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> {
+    // 走到这里说明本帧确实要渲染 loading 动画:记首帧(按当前世代,旧世代忽略)。
+    if let Some(observe) = observe {
+        observe.mark_first_frame(load_state.generation);
+    }
     let label = load_state.stage.label()?;
     let hint = byteui::feedback::math_curve::loading_hint(
         byteui::feedback::math_curve::Curve::RoseThree,

@@ -100,34 +100,50 @@ impl App {
                                 // host `ready`。非在途(已 finish/被更晚加载替换)
                                 // 的迟到 ready 不改阶段、不建索引,避免旧 host 的
                                 // 结果把新 loading 或就绪态带偏。
-                                if tab.load_state.is_active() {
-                                    if tab.uses_windowed_editor() {
-                                        // T4:窗口化 host 的 `ready` 只代表 host JS
-                                        // 初始化完成(空 doc),正文要等首个 SetWindow。
-                                        // 保持 `Loading`,推进到 `Indexing`(索引建好
-                                        // 后推首窗,收 `window_applied` ACK 才 finish)。
-                                        tab.load_state
-                                            .advance(crate::preview::PreviewLoadStage::Indexing);
-                                        if tab.window_index().is_none() {
-                                            build_index = Some((
-                                                tab.id,
-                                                path.clone(),
-                                                tab.web_revision,
-                                                tab.task_cancel_token(),
-                                            ));
-                                        }
-                                        // 窗口化不需要 recovery/视图恢复(只读、正文由
-                                        // SetWindow 决定),也不走下面的 pending_reveal。
-                                    } else {
-                                        // T5:非窗口化 host 的 `ready` 仅代表 host JS
-                                        // 初始化完成——正文由 host 自行 fetch,待其回
-                                        // `document_loaded` 才 finish。此处保持 Loading,
-                                        // 推进到 `Reading`(host 会显示 loading,正文
-                                        // 未挂上前不 finish)。
-                                        tab.load_state
-                                            .advance(crate::preview::PreviewLoadStage::Reading);
-                                    }
-                                }
+                                 if tab.load_state.is_active() {
+                                     if tab.uses_windowed_editor() {
+                                         // T4:窗口化 host 的 `ready` 只代表 host JS
+                                         // 初始化完成(空 doc),正文要等首个 SetWindow。
+                                         // 保持 `Loading`,推进到 `Indexing`(索引建好
+                                         // 后推首窗,收 `window_applied` ACK 才 finish)。
+                                         tab.load_state
+                                             .advance(crate::preview::PreviewLoadStage::Indexing);
+                                         // T11:arm `Indexing` 看门狗(建索引 + 首窗)。
+                                         io.arm_load_timeout(
+                                             binding.project_id,
+                                             binding.panel,
+                                             tab.id,
+                                             tab.load_state.generation,
+                                             crate::preview::PreviewLoadStage::Indexing,
+                                         );
+                                         if tab.window_index().is_none() {
+                                             build_index = Some((
+                                                 tab.id,
+                                                 path.clone(),
+                                                 tab.web_revision,
+                                                 tab.task_cancel_token(),
+                                             ));
+                                         }
+                                         // 窗口化不需要 recovery/视图恢复(只读、正文由
+                                         // SetWindow 决定),也不走下面的 pending_reveal。
+                                     } else {
+                                         // T5:非窗口化 host 的 `ready` 仅代表 host JS
+                                         // 初始化完成——正文由 host 自行 fetch,待其回
+                                         // `document_loaded` 才 finish。此处保持 Loading,
+                                         // 推进到 `Reading`(host 会显示 loading,正文
+                                         // 未挂上前不 finish)。
+                                         tab.load_state
+                                             .advance(crate::preview::PreviewLoadStage::Reading);
+                                         // T11:arm `Reading` 看门狗(等 document_loaded)。
+                                         io.arm_load_timeout(
+                                             binding.project_id,
+                                             binding.panel,
+                                             tab.id,
+                                             tab.load_state.generation,
+                                             crate::preview::PreviewLoadStage::Reading,
+                                         );
+                                     }
+                                 }
                                 context_changed = true;
                             }
                             EditorEvent::DocumentLoaded {
@@ -168,13 +184,19 @@ impl App {
                                     if let Some(line) = tab.pending_jump_line.take() {
                                         pending_reveal = Some((tab.id, line as u32));
                                     }
-                                    // ready latency 观测(不记文件内容)。
-                                    if let Some(started) = tab.load_started.take() {
+                                    // T11 bullet 3/4:ready 观测(不记文件内容)。
+                                    if let Some(observe) = tab.load_observe.take() {
+                                        let ready_ms = observe.elapsed_ms();
+                                        let first_frame_ms = observe.first_frame_offset_ms();
                                         tracing::info!(
                                             panel = ?binding.panel,
                                             tab_id = tab.id,
-                                            ready_ms = started.elapsed().as_millis() as u64,
-                                            "预览 tab ready"
+                                            generation = observe.generation,
+                                            ready_ms,
+                                            first_frame_ms = ?first_frame_ms,
+                                            first_frame_to_ready_ms = first_frame_ms
+                                                .map(|f| ready_ms.saturating_sub(f)),
+                                            "预览 tab ready(三段延迟)"
                                         );
                                     }
                                     // recovery 恢复:回推正文并重新标脏。
@@ -682,7 +704,20 @@ impl App {
                 });
             }
             Message::PreviewWindowIndex(project_id, panel, tab_id, result) => {
-                self.with_project(project_id, move |ws, _io| {
+                self.with_project(project_id, move |ws, io| {
+                    // T11 bullet 3:结构化日志(读取字节 + 行数,不记正文)。
+                    match &result {
+                        Ok(index) => tracing::debug!(
+                            panel = ?panel,
+                            tab_id,
+                            bytes = index.file_len(),
+                            total_lines = index.total_lines(),
+                            "大文件行索引建立完成"
+                        ),
+                        Err(error) => {
+                            tracing::warn!(panel = ?panel, tab_id, %error, "大文件行索引建立失败")
+                        }
+                    }
                     match result {
                         Ok(index) => {
                             let pane = if panel == PanelKind::Project {
@@ -706,6 +741,14 @@ impl App {
                                 // 才 finish(此前 host 保持 hidden/loading)。
                                 let generation = pane.load_generation(tab_id);
                                 pane.advance_load(
+                                    tab_id,
+                                    generation,
+                                    crate::preview::PreviewLoadStage::LoadingWindow,
+                                );
+                                // T11:arm `LoadingWindow` 看门狗(等 window_applied)。
+                                io.arm_load_timeout(
+                                    project_id,
+                                    panel,
                                     tab_id,
                                     generation,
                                     crate::preview::PreviewLoadStage::LoadingWindow,
@@ -802,17 +845,13 @@ impl App {
                                     })
                                     .unwrap_or((false, false));
                                 if rendered_host {
-                                    let proxy = io.proxy.clone();
-                                    let handle = io.handle.clone();
-                                    handle.spawn(async move {
-                                        tokio::time::sleep(
-                                            crate::preview::PREVIEW_HOST_READY_TIMEOUT,
-                                        )
-                                        .await;
-                                        let _ = proxy.send_event(Message::PreviewHostTimeout(
-                                            project_id, panel, tab_id, generation,
-                                        ));
-                                    });
+                                    io.arm_load_timeout(
+                                        project_id,
+                                        panel,
+                                        tab_id,
+                                        generation,
+                                        crate::preview::PreviewLoadStage::CreatingHost,
+                                    );
                                 }
                                 if needs_reserve {
                                     // 等 `sync_webview_pool` 回灌 `granted` 再进
@@ -823,8 +862,24 @@ impl App {
                                         generation,
                                         crate::preview::PreviewLoadStage::Reserving,
                                     );
+                                    // T11:等预算最长也有个上限;若 `granted` 迟迟不来
+                                    // 则超时进入可重试 Failed(而非永久 Reserving)。
+                                    io.arm_load_timeout(
+                                        project_id,
+                                        panel,
+                                        tab_id,
+                                        generation,
+                                        crate::preview::PreviewLoadStage::Reserving,
+                                    );
                                 } else {
                                     pane.advance_load(
+                                        tab_id,
+                                        generation,
+                                        crate::preview::PreviewLoadStage::CreatingHost,
+                                    );
+                                    io.arm_load_timeout(
+                                        project_id,
+                                        panel,
                                         tab_id,
                                         generation,
                                         crate::preview::PreviewLoadStage::CreatingHost,
@@ -845,26 +900,29 @@ impl App {
                     ws.spawn_pending_tabular_loads(panel, io);
                 });
             }
-            Message::PreviewHostTimeout(project_id, panel, tab_id, generation) => {
+            Message::PreviewLoadTimeout(project_id, panel, tab_id, generation, stage) => {
                 self.with_project(project_id, move |ws, _io| {
                     let pane = if panel == PanelKind::Project {
                         &mut ws.project_preview
                     } else {
                         &mut ws.preview
                     };
-                    // 只有仍在该 generation 且仍在 Loading 的 Rendered host 才超时
-                    // (generation 不符 → 已重开/被替换,静默丢弃)。
-                    let still_rendered = pane
-                        .tabs()
-                        .iter()
-                        .find(|t| t.id == tab_id)
-                        .is_some_and(|t| t.load_state.is_active() && t.hosts_webview());
-                    if still_rendered {
+                    // T11:只有仍在该 generation **且仍停在同 stage**的加载才判超时。
+                    // stage 不符说明已推进到下一阶段(会有新的超时接管),generation
+                    // 不符说明已重开/被替换——两者都静默丢弃,避免迟到超时误杀。
+                    if pane.load_timeout_matches(tab_id, generation, stage) {
+                        tracing::warn!(
+                            panel = ?panel,
+                            tab_id,
+                            generation,
+                            stage = ?stage,
+                            "预览加载阶段超时,进入可重试失败"
+                        );
                         pane.fail_load(
                             tab_id,
                             generation,
                             crate::preview::PreviewError::new(
-                                "预览渲染超时,请重试".to_string(),
+                                "预览加载超时,请重试".to_string(),
                                 true,
                             ),
                         );
@@ -2045,8 +2103,19 @@ impl App {
                 }
             }
             Message::PreviewToggleRenderMode(idx) => {
-                self.with_focused_project(|ws, _io| {
-                    ws.preview_pane_toggle_render_mode(PanelKind::Files, idx);
+                self.with_focused_project(|ws, io| {
+                    if let Some((tab_id, generation)) =
+                        ws.preview_pane_toggle_render_mode(PanelKind::Files, idx)
+                        && let Some(project_id) = ws.project.as_ref().map(|p| p.id)
+                    {
+                        io.arm_load_timeout(
+                            project_id,
+                            PanelKind::Files,
+                            tab_id,
+                            generation,
+                            crate::preview::PreviewLoadStage::SwitchingMode,
+                        );
+                    }
                 });
             }
             Message::PreviewSaveActive(kind) => {
@@ -2167,10 +2236,22 @@ impl App {
             Message::TabularLoaded(project_id, kind, tab_id, generation, result) => {
                 self.with_project(project_id, move |ws, io| {
                     // T11:取消是正常结束,不当作解析失败告警。
-                    if let Err(error) = &result
-                        && error != crate::tabular::TABULAR_CANCELLED
-                    {
-                        tracing::warn!(%error, "表格首次加载失败");
+                    match &result {
+                        Err(error) if error == crate::tabular::TABULAR_CANCELLED => {
+                            tracing::debug!(panel = ?kind, tab_id, generation, "表格加载已取消");
+                        }
+                        Err(error) => {
+                            tracing::warn!(panel = ?kind, tab_id, generation, %error, "表格首次加载失败");
+                        }
+                        Ok(view) => {
+                            tracing::debug!(
+                                panel = ?kind,
+                                tab_id,
+                                generation,
+                                sheets = view.sheet_names.len(),
+                                "表格首次加载完成"
+                            );
+                        }
                     }
                     let sheet_to_select = {
                         let pane = if kind == PanelKind::Project {
@@ -2232,8 +2313,19 @@ impl App {
                 }
             }
             Message::ProjectPreviewToggleRenderMode(idx) => {
-                self.with_focused_project(|ws, _io| {
-                    ws.preview_pane_toggle_render_mode(PanelKind::Project, idx);
+                self.with_focused_project(|ws, io| {
+                    if let Some((tab_id, generation)) =
+                        ws.preview_pane_toggle_render_mode(PanelKind::Project, idx)
+                        && let Some(project_id) = ws.project.as_ref().map(|p| p.id)
+                    {
+                        io.arm_load_timeout(
+                            project_id,
+                            PanelKind::Project,
+                            tab_id,
+                            generation,
+                            crate::preview::PreviewLoadStage::SwitchingMode,
+                        );
+                    }
                 });
             }
             Message::ProjectPreviewTabOverflowToggle => {

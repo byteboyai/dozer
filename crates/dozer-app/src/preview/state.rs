@@ -50,8 +50,9 @@ pub struct PreviewTab {
     /// 启动恢复时从 recovery 读回的正文;editor `ready` 后经 `SetDocument` 推回,
     /// 并重新标脏。
     pub pending_restore: Option<String>,
-    /// 本次物化开始时刻(用于 ready latency 观测;不记文件内容)。
-    pub load_started: Option<std::time::Instant>,
+    /// T11 bullet 4:本次加载的三段延迟观测(`loading_started → first_frame →
+    /// ready`;不记文件内容)。
+    pub load_observe: Option<crate::preview::LoadObservation>,
     /// 启动恢复/淘汰恢复的完整视图状态(cursor/selection/top_line/folds),
     /// editor `ready` 后经一次 `RestoreViewState` 应用。
     pub pending_view: Option<ViewStateRestore>,

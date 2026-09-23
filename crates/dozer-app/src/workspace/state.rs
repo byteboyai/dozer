@@ -311,6 +311,27 @@ impl ShellIo {
             pending.push(task);
         }
     }
+
+    /// T11 bullet 3:为某个加载阶段 arm 一个看门狗超时。睡 `stage_timeout(stage)`
+    /// 后回灌 [`Message::PreviewLoadTimeout`],由处理器按 generation + stage 校验
+    /// 决定是否判失败(推进到下一阶段会 arm 新的超时,旧的自然失配被丢弃)。
+    pub(crate) fn arm_load_timeout(
+        &self,
+        project_id: ProjectId,
+        kind: PanelKind,
+        tab_id: usize,
+        generation: u64,
+        stage: crate::preview::PreviewLoadStage,
+    ) {
+        let proxy = self.proxy.clone();
+        let duration = crate::preview::stage_timeout(stage);
+        self.handle.spawn(async move {
+            tokio::time::sleep(duration).await;
+            let _ = proxy.send_event(Message::PreviewLoadTimeout(
+                project_id, kind, tab_id, generation, stage,
+            ));
+        });
+    }
 }
 
 pub struct Workspace {
@@ -1435,10 +1456,8 @@ impl Workspace {
         let editor_host = pane.tabs()[idx].uses_editor_host();
         let windowed = pane.tabs()[idx].windowed;
 
-        // 物化开始时刻(ready latency 观测)。
-        if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == tab_id) {
-            tab.load_started = Some(std::time::Instant::now());
-        }
+        // T11:三段延迟观测由 `begin_load` 创建(`loading_started → first_frame →
+        // ready`),这里不再单独记起始时刻。
 
         // T2/T10:物化一条已存在的壳(retry / 启动恢复 / 选中 Suspended)。host 类
         // 路由**不在此处 finish**:先进入 `Reserving`(editor/JSON 等需占预算的
@@ -1492,14 +1511,9 @@ impl Workspace {
             // arm host-ready 超时(T8 bullet 5),避免外链/网络卡死无限动画。
             Some(crate::preview::PreviewKind::Rendered) => {
                 if let Some(generation) = begin_only(pane, Stage::CreatingHost) {
-                    let proxy = io.proxy.clone();
-                    let handle = io.handle.clone();
-                    handle.spawn(async move {
-                        tokio::time::sleep(crate::preview::PREVIEW_HOST_READY_TIMEOUT).await;
-                        let _ = proxy.send_event(crate::app::Message::PreviewHostTimeout(
-                            project_id, kind, tab_id, generation,
-                        ));
-                    });
+                    // T8/T11:Rendered host 可能因外链/资源卡死,arm 一个
+                    // `CreatingHost` 看门狗,超时进入可重试 Failed。
+                    io.arm_load_timeout(project_id, kind, tab_id, generation, Stage::CreatingHost);
                     Some(generation)
                 } else {
                     None
@@ -2513,7 +2527,15 @@ impl Workspace {
     /// 代码→预览:先 `preview_pane_save_at` 静默落盘(不脏则内部直接
     /// no-op),再 `exit_code_mode` 转回渲染。预览→代码:直接
     /// `enter_code_mode` 读盘建原生编辑器,失败写对应面板 error。
-    pub(crate) fn preview_pane_toggle_render_mode(&mut self, kind: PanelKind, idx: usize) {
+    ///
+    /// 返回 `Some((tab_id, generation))`(进入 `SwitchingMode` + Loading 的 tab),
+    /// 供调用方 arm [`PreviewLoadStage::SwitchingMode`] 看门狗;无切换/出错返回
+    /// `None`。
+    pub(crate) fn preview_pane_toggle_render_mode(
+        &mut self,
+        kind: PanelKind,
+        idx: usize,
+    ) -> Option<(usize, u64)> {
         let project = kind == PanelKind::Project;
         let in_code_mode = {
             let pane = if project {
@@ -2546,8 +2568,19 @@ impl Workspace {
                 } else {
                     self.preview_error = err;
                 }
+                return None;
             }
         }
+        // T11:切换进入 `SwitchingMode` 且仍在 Loading 时,取 tab_id/generation
+        // 供上层 arm 看门狗(等目标 host 首帧)。
+        let pane = if project {
+            &self.project_preview
+        } else {
+            &self.preview
+        };
+        let tab = pane.tabs().get(idx)?;
+        (tab.load_state.stage == crate::preview::PreviewLoadStage::SwitchingMode)
+            .then_some((tab.id, tab.load_state.generation))
     }
 
     /// 把 `kind` 面板的 Find 命令转发给面板执行。四种都只需要分面板取到变引用

@@ -19,10 +19,30 @@
 
 use std::time::Instant;
 
-/// T8 bullet 5:Rendered(Flyfish/隔离 HTML)host 从 `CreatingHost` 起,等待
-/// `document_loaded` 的最长时间。超时后进入可重试 Failed(不永久转圈),覆盖
-/// 外链/相对资源/网络卡住的场景。本地文件默认离线,正常渲染远快于此。
-pub const PREVIEW_HOST_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+/// T11 bullet 3:每个阶段的看门狗时长。超时进入可重试 Failed(不永久转圈)。
+/// (取代早期单一的 `PREVIEW_HOST_READY_TIMEOUT`——那时从 `CreatingHost` 到最终
+/// ACK 只有一个总时长;现在按阶段分别计时,`CreatingHost` 覆盖 host 启动 + 首批
+/// 正文等待,`Reading`/`Indexing`/`LoadingWindow` 各管各的。)
+/// 各阶段"合理"的含义:
+///
+/// - `Reserving`/`CreatingHost`:等资源预算 + host 进程/子视图起来,通常亚秒级,
+///   但首次创建 WebView 池可能稍慢,给足余量。
+/// - `Reading`/`Parsing`/`Indexing`/`LoadingWindow`:本地文件 IO + 解析/建索引,
+///   与文件大小相关;大文件慢是正常的,这里给的是"卡死"上限而非"慢"上限。
+/// - `Searching`:整文件搜索,用户可主动取消,时长放宽。
+///
+/// `SwitchingMode`/`Profiling` 沿用与 `Reading` 同档(短任务,卡住即异常)。
+pub fn stage_timeout(stage: PreviewLoadStage) -> std::time::Duration {
+    use std::time::Duration;
+    match stage {
+        PreviewLoadStage::Idle => Duration::from_secs(0),
+        PreviewLoadStage::Reserving | PreviewLoadStage::CreatingHost => Duration::from_secs(15),
+        PreviewLoadStage::Profiling | PreviewLoadStage::SwitchingMode => Duration::from_secs(15),
+        PreviewLoadStage::Reading | PreviewLoadStage::LoadingWindow => Duration::from_secs(20),
+        PreviewLoadStage::Parsing | PreviewLoadStage::Indexing => Duration::from_secs(60),
+        PreviewLoadStage::Searching => Duration::from_secs(120),
+    }
+}
 
 /// 一次预览加载所处的阶段。`Idle` 表示当前没有加载在途。
 ///
@@ -83,6 +103,91 @@ impl PreviewLoadStage {
 pub struct PreviewLoadProgress {
     pub completed: u64,
     pub total: Option<u64>,
+}
+
+/// T11 bullet 4:一次加载的三段延迟观测。
+///
+/// - `started`:`begin_load` 那一刻(加载开始)。
+/// - `first_frame`:loading 动画**真的画了一帧**的时刻(视图组装时写回;未画到
+///   就结束时为 `None`——即"动画没机会画",说明加载快得连一帧都没显示)。
+/// - ready:加载结束(`finish`/`fail`)。
+///
+/// 由 `first_frame` 有无区分两类慢:无 → 加载瞬间完成,慢的是"没机会画";
+/// 有 → 动画已显示,慢的是"后台任务本身慢"。
+#[derive(Debug, Clone)]
+pub struct LoadObservation {
+    pub started: Instant,
+    /// 首帧渲染时刻的共享单元(epoch 毫秒;0 表示尚未渲染)。视图层只有 `&` 访问,
+    /// 故用 `Arc<AtomicU64>` 写回,不要求 `&mut`。
+    first_frame_ms: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// 本次加载的世代,防止上一世代的视图写回污染新观测。
+    pub generation: u64,
+}
+
+impl LoadObservation {
+    /// 新建一次观测并重置首帧标记。
+    pub fn new(generation: u64) -> Self {
+        Self {
+            started: Instant::now(),
+            first_frame_ms: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            generation,
+        }
+    }
+
+    /// 视图组装时调用:若本世代尚未记录首帧,记下当前(epoch 毫秒)。
+    /// 世代不符(视图仍在画旧世代)则忽略。
+    pub fn mark_first_frame(&self, generation: u64) {
+        use std::sync::atomic::Ordering;
+        if generation != self.generation {
+            return;
+        }
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        // 只在首次(0)写入,后续帧不覆盖。
+        let _ =
+            self.first_frame_ms
+                .compare_exchange(0, now_ms, Ordering::Relaxed, Ordering::Relaxed);
+    }
+
+    /// 首帧相对加载开始的毫秒偏移;未画到首帧返回 `None`。
+    pub fn first_frame_offset_ms(&self) -> Option<u64> {
+        let ms = self
+            .first_frame_ms
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if ms == 0 {
+            return None;
+        }
+        let started_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+            .saturating_sub(self.started.elapsed().as_millis() as u64);
+        Some(ms.saturating_sub(started_ms))
+    }
+
+    /// 自加载开始以来的总等待毫秒。
+    pub fn elapsed_ms(&self) -> u64 {
+        self.started.elapsed().as_millis() as u64
+    }
+}
+
+/// T11 bullet 5:一个 tab 当前 loading 任务的可观测快照(诊断用)。
+/// 只含状态/计数/时长,不含文件正文。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadDiagnostic {
+    pub tab_id: usize,
+    /// 文件名(仅 basename,不含完整路径/正文)。
+    pub label: String,
+    pub stage: PreviewLoadStage,
+    pub generation: u64,
+    /// 自本次加载开始的毫秒数;`Idle` 时为 0。
+    pub elapsed_ms: u64,
+    /// 首帧是否已经画过(区分"动画没机会画"与"后台慢")。
+    pub first_frame_drawn: bool,
+    /// 后台长任务的取消信号是否已置位。
+    pub cancellation_requested: bool,
 }
 
 /// 一个 tab 的 loading 生命周期状态。
@@ -202,6 +307,28 @@ mod tests {
         assert_eq!(state.generation, 4, "finish 推进世代作废旧结果");
         assert!(!state.accepts(3), "结束后旧世代回调被拒");
         assert!(!state.is_active());
+    }
+
+    /// T11 bullet 3:每个在途阶段都有非零超时;`Idle` 为零(从不 arm)。
+    #[test]
+    fn every_active_stage_has_nonzero_timeout() {
+        for stage in [
+            PreviewLoadStage::Profiling,
+            PreviewLoadStage::Reserving,
+            PreviewLoadStage::CreatingHost,
+            PreviewLoadStage::Reading,
+            PreviewLoadStage::Indexing,
+            PreviewLoadStage::LoadingWindow,
+            PreviewLoadStage::Parsing,
+            PreviewLoadStage::Searching,
+            PreviewLoadStage::SwitchingMode,
+        ] {
+            assert!(
+                !stage_timeout(stage).is_zero(),
+                "{stage:?} 必须有非零看门狗超时"
+            );
+        }
+        assert!(stage_timeout(PreviewLoadStage::Idle).is_zero());
     }
 
     #[test]

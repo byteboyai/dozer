@@ -36,7 +36,7 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         load_state: PreviewLoadState::default(),
         recovery_written: false,
         pending_restore: None,
-        load_started: None,
+        load_observe: None,
         pending_view: None,
         pending_tabular: None,
         web_revision: 0,
@@ -560,7 +560,7 @@ impl PreviewPane {
             load_state,
             recovery_written: false,
             pending_restore: None,
-            load_started: None,
+            load_observe: None,
             pending_view: None,
             pending_tabular: None,
             web_revision: 0,
@@ -648,7 +648,7 @@ impl PreviewPane {
             load_state: PreviewLoadState::default(),
             recovery_written: false,
             pending_restore: None,
-            load_started: None,
+            load_observe: None,
             pending_view: None,
             pending_tabular: None,
             web_revision: 0,
@@ -816,6 +816,10 @@ impl PreviewPane {
         let _ = tab.backend_state.try_transition(BackendState::Loading);
         let generation = tab.load_state.generation.wrapping_add(1);
         tab.load_state = PreviewLoadState::starting(generation, stage);
+        // T11 bullet 4:开一次三段延迟观测(首帧由视图组装时写回)。
+        tab.load_observe = Some(crate::preview::LoadObservation::new(generation));
+        // T11 bullet 3:结构化日志(只记阶段/世代,不记正文)。
+        tracing::debug!(tab_id, generation, stage = ?stage, "预览加载开始");
         Some(generation)
     }
 
@@ -837,8 +841,33 @@ impl PreviewPane {
         if !tab.load_state.accepts(generation) {
             return false;
         }
+        let from = tab.load_state.stage;
         tab.load_state.advance(stage);
+        // T11 bullet 3:阶段推进日志(含已等待毫秒,不记正文)。
+        tracing::debug!(
+            tab_id,
+            generation,
+            from = ?from,
+            to = ?stage,
+            elapsed_ms = tab.load_state.elapsed().as_millis() as u64,
+            "预览加载阶段推进"
+        );
         true
+    }
+
+    /// T11 bullet 3:某个已 arm 的看门狗超时是否仍应生效——tab 仍停在**同
+    /// generation 且同 stage**。stage 不符说明已推进到下一阶段(新超时接管),
+    /// generation 不符说明已重开/被替换,两者都应丢弃迟到的旧超时。
+    pub fn load_timeout_matches(
+        &self,
+        tab_id: usize,
+        generation: u64,
+        stage: PreviewLoadStage,
+    ) -> bool {
+        self.tabs
+            .iter()
+            .find(|t| t.id == tab_id)
+            .is_some_and(|t| t.load_state.accepts(generation) && t.load_state.stage == stage)
     }
 
     /// 结束加载(首个可用画面已就绪)。generation 过期返回 false。
@@ -868,6 +897,16 @@ impl PreviewPane {
         }
         tab.runtime = PreviewRuntime::None;
         tab.web_error = Some(error.message.clone());
+        // T11 bullet 3:失败原因 + 已等待毫秒(不记正文)。
+        tracing::warn!(
+            tab_id,
+            generation,
+            stage = ?tab.load_state.stage,
+            elapsed_ms = tab.load_state.elapsed().as_millis() as u64,
+            reason = %error.message,
+            retryable = error.retryable,
+            "预览加载失败"
+        );
         let _ = tab
             .backend_state
             .try_transition(BackendState::Failed(error));
@@ -890,6 +929,14 @@ impl PreviewPane {
         if !tab.load_state.is_active() {
             return false;
         }
+        // T11 bullet 3:取消原因(阶段 + 已等待毫秒)。
+        tracing::debug!(
+            tab_id,
+            generation = tab.load_state.generation,
+            stage = ?tab.load_state.stage,
+            elapsed_ms = tab.load_state.elapsed().as_millis() as u64,
+            "预览加载取消"
+        );
         tab.load_state.cancel();
         if matches!(tab.backend_state, BackendState::Loading) {
             let _ = tab.backend_state.try_transition(BackendState::Suspended);
@@ -907,6 +954,54 @@ impl PreviewPane {
             .find(|t| t.id == tab_id)
             .map(|t| t.load_state.stage)
             .unwrap_or(PreviewLoadStage::Idle)
+    }
+
+    /// T11 bullet 5:所有 tab 当前 loading 任务的可观测快照(诊断用)。只含
+    /// stage/generation/elapsed/cancellation,不含正文;`Idle` 的 tab 跳过。
+    ///
+    /// 诊断页尚未建 UI(见 plan T11 bullet 5 的轻量落法):当前由测试与
+    /// [`Self::log_load_diagnostics`] 消费。
+    #[allow(dead_code)]
+    pub fn load_diagnostics(&self) -> Vec<crate::preview::LoadDiagnostic> {
+        use std::sync::atomic::Ordering;
+        self.tabs
+            .iter()
+            .filter(|t| t.load_state.is_active())
+            .map(|t| crate::preview::LoadDiagnostic {
+                tab_id: t.id,
+                label: t.title.clone(),
+                stage: t.load_state.stage,
+                generation: t.load_state.generation,
+                elapsed_ms: t.load_state.elapsed().as_millis() as u64,
+                first_frame_drawn: t
+                    .load_observe
+                    .as_ref()
+                    .is_some_and(|o| o.first_frame_offset_ms().is_some()),
+                cancellation_requested: t.task_cancel.load(Ordering::Relaxed),
+            })
+            .collect()
+    }
+
+    /// T11 bullet 5:把当前 loading 诊断快照写成一条结构化日志(无 UI 依赖的
+    /// "诊断页"轻量形态;调用方可按需在 debug 场景触发)。
+    ///
+    /// 当前无 UI 触发入口(见 [`Self::load_diagnostics`] 说明),显式允许
+    /// dead_code。
+    #[allow(dead_code)]
+    pub fn log_load_diagnostics(&self, panel: &str) {
+        for diag in self.load_diagnostics() {
+            tracing::info!(
+                panel,
+                tab_id = diag.tab_id,
+                label = %diag.label,
+                stage = ?diag.stage,
+                generation = diag.generation,
+                elapsed_ms = diag.elapsed_ms,
+                first_frame_drawn = diag.first_frame_drawn,
+                cancellation_requested = diag.cancellation_requested,
+                "预览加载诊断"
+            );
+        }
     }
 
     /// 物化一个 Suspended 壳(或从 Failed 重试):标记为 `Loading`。返回 false
@@ -5272,6 +5367,91 @@ mod tests {
         assert!(!pane.finish_load(id, generation));
         // 无在途加载时 cancel 为 no-op。
         assert!(!pane.cancel_load(id));
+    }
+
+    /// T11 bullet 3:超时只在同 generation 且同 stage 时生效;推进阶段或换世代
+    /// 后,迟到的旧超时必须被拒(否则会误杀已推进的加载)。
+    #[test]
+    fn load_timeout_matches_only_same_generation_and_stage() {
+        let mut pane = PreviewPane::default();
+        let id = pane.push_shell_tab(PathBuf::from("/tmp/a.rs"), None);
+        let generation = pane.begin_load(id, PreviewLoadStage::CreatingHost).unwrap();
+        assert!(pane.load_timeout_matches(id, generation, PreviewLoadStage::CreatingHost));
+        // stage 不符(已推进)→ 拒绝。
+        assert!(!pane.load_timeout_matches(id, generation, PreviewLoadStage::Reading));
+        // generation 不符(已重开)→ 拒绝。
+        assert!(!pane.load_timeout_matches(id, generation + 1, PreviewLoadStage::CreatingHost));
+        // 推进到 Reading 后,Reading 的超时匹配,CreatingHost 的不再匹配。
+        assert!(pane.advance_load(id, generation, PreviewLoadStage::Reading));
+        assert!(pane.load_timeout_matches(id, generation, PreviewLoadStage::Reading));
+        assert!(!pane.load_timeout_matches(id, generation, PreviewLoadStage::CreatingHost));
+        // 未知 tab_id → 拒绝。
+        assert!(!pane.load_timeout_matches(id + 999, generation, PreviewLoadStage::Reading));
+    }
+
+    /// T11 bullet 5:诊断快照只含在途 tab,字段反映真实 stage/generation,
+    /// 首帧/取消状态可观测。
+    #[test]
+    fn load_diagnostics_reports_active_loads_only() {
+        let mut pane = PreviewPane::default();
+        let idle_id = pane.push_shell_tab(PathBuf::from("/tmp/idle.rs"), None);
+        let active_id = pane.push_shell_tab(PathBuf::from("/tmp/active.rs"), None);
+        let generation = pane
+            .begin_load(active_id, PreviewLoadStage::Indexing)
+            .unwrap();
+        let diags = pane.load_diagnostics();
+        assert_eq!(diags.len(), 1, "只有在途 tab 出现在诊断里");
+        let d = &diags[0];
+        assert_eq!(d.tab_id, active_id);
+        assert_eq!(d.stage, PreviewLoadStage::Indexing);
+        assert_eq!(d.generation, generation);
+        assert!(!d.first_frame_drawn);
+        assert!(!d.cancellation_requested);
+        // 取消后该 tab 退出在途 → 不再出现在诊断里。
+        assert!(pane.cancel_load(active_id));
+        assert!(pane.load_diagnostics().is_empty());
+        // idle_id 从未加载,也从未出现在诊断里。
+        assert!(!pane.load_diagnostics().iter().any(|d| d.tab_id == idle_id));
+    }
+
+    /// T11 bullet 4/5:视图组装写回首帧后,诊断如实反映 first_frame_drawn。
+    #[test]
+    fn mark_first_frame_reflects_in_diagnostics() {
+        let mut pane = PreviewPane::default();
+        let id = pane.push_shell_tab(PathBuf::from("/tmp/a.rs"), None);
+        let generation = pane.begin_load(id, PreviewLoadStage::Reading).unwrap();
+        // 模拟视图组装时写回首帧(带当前 generation)。
+        pane.tabs()
+            .iter()
+            .find(|t| t.id == id)
+            .and_then(|t| t.load_observe.as_ref())
+            .unwrap()
+            .mark_first_frame(generation);
+        let d = pane
+            .load_diagnostics()
+            .into_iter()
+            .find(|d| d.tab_id == id)
+            .unwrap();
+        assert!(d.first_frame_drawn);
+        // 世代不符的写回被忽略。
+        let mut pane2 = PreviewPane::default();
+        let id2 = pane2.push_shell_tab(PathBuf::from("/tmp/b.rs"), None);
+        let gen2 = pane2.begin_load(id2, PreviewLoadStage::Reading).unwrap();
+        pane2
+            .tabs()
+            .iter()
+            .find(|t| t.id == id2)
+            .and_then(|t| t.load_observe.as_ref())
+            .unwrap()
+            .mark_first_frame(gen2 + 99);
+        assert!(
+            !pane2
+                .load_diagnostics()
+                .into_iter()
+                .find(|d| d.tab_id == id2)
+                .unwrap()
+                .first_frame_drawn
+        );
     }
 
     /// T3:`open_path_provisional` 建壳即停在 `Profiling` + `Loading`,返回

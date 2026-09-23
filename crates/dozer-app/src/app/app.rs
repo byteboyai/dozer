@@ -1238,6 +1238,9 @@ impl App {
         if outcome.evicted.is_empty() && outcome.denied.is_empty() && outcome.granted.is_empty() {
             return;
         }
+        // T11:reserve 获批 → `grant_reserve` 把 tab 从 `Reserving` 推进到
+        // `CreatingHost`,此时 arm 一个 `CreatingHost` 看门狗(等 host 就绪)。
+        let io = self.shell_io();
         for ((project, panel, tab_id), generation) in &outcome.granted {
             if let Some(ws) = loaded_workspace_mut(&mut self.projects, *project) {
                 let pane = if *panel == PanelKind::Project {
@@ -1245,7 +1248,15 @@ impl App {
                 } else {
                     &mut ws.preview
                 };
-                pane.grant_reserve(*tab_id, *generation);
+                if pane.grant_reserve(*tab_id, *generation) {
+                    io.arm_load_timeout(
+                        *project,
+                        *panel,
+                        *tab_id,
+                        *generation,
+                        crate::preview::PreviewLoadStage::CreatingHost,
+                    );
+                }
             }
         }
         for (project, panel, tab_id) in &outcome.evicted {
@@ -1272,7 +1283,6 @@ impl App {
                 );
             }
         }
-        let io = self.shell_io();
         if let Some(ws) = self.active_workspace_mut() {
             ws.spawn_preview_state_save(&io);
         }

@@ -611,10 +611,17 @@ pub enum Message {
         u64,
         Result<crate::preview::FileProfile, String>,
     ),
-    /// T8 bullet 5:Rendered(Flyfish/隔离 HTML)host 在 `PREVIEW_HOST_READY_TIMEOUT`
-    /// 内未回传 `document_loaded` 时触发,把仍处于该 generation 的 tab 置为可重试
-    /// Failed,避免外链/资源卡死导致永久 Loading。
-    PreviewHostTimeout(ProjectId, PanelKind, usize, u64),
+    /// T8/T11:某个加载阶段的看门狗超时。携带 arm 时的 `stage`;处理时只有 tab
+    /// 仍停在同 `generation` **且同 stage**(说明既没重开也没推进到下一阶段)
+    /// 才判失败,避免迟到的旧超时误杀已推进的加载。时长见
+    /// `preview::loading::stage_timeout`。
+    PreviewLoadTimeout(
+        ProjectId,
+        PanelKind,
+        usize,
+        u64,
+        crate::preview::PreviewLoadStage,
+    ),
     /// 窗口化 viewer 的稀疏行索引建立完成(后台线程 → UI 线程)。成功后由
     /// App 推送初始窗口(必要时先 reveal 到目标行)。
     PreviewWindowIndex(
