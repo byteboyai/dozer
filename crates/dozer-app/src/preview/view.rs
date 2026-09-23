@@ -429,13 +429,27 @@ impl PreviewPane {
             .is_some_and(|t| matches!(t.backend_state, BackendState::Suspended))
     }
 
-    /// 物化一个 Suspended 壳:标记为 `Loading`(Suspended→Loading 合法)。
-    /// 返回 false 表示该 tab 不存在或已不是 Suspended(幂等保护)。
+    /// 某个 tab 是否可被物化:未物化的壳(`Suspended`)或加载失败后的重试
+    /// (`Failed`)。`load_preview_tab` 用它做幂等闸门。
+    pub fn is_pending_load(&self, tab_id: usize) -> bool {
+        self.tabs.iter().find(|t| t.id == tab_id).is_some_and(|t| {
+            matches!(
+                t.backend_state,
+                BackendState::Suspended | BackendState::Failed(_)
+            )
+        })
+    }
+
+    /// 物化一个 Suspended 壳(或从 Failed 重试):标记为 `Loading`。返回 false
+    /// 表示该 tab 不存在或当前不是可物化态(幂等保护)。
     pub fn begin_shell_load(&mut self, tab_id: usize) -> bool {
         let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
             return false;
         };
-        if !matches!(tab.backend_state, BackendState::Suspended) {
+        if !matches!(
+            tab.backend_state,
+            BackendState::Suspended | BackendState::Failed(_)
+        ) {
             return false;
         }
         let _ = tab.backend_state.try_transition(BackendState::Loading);
@@ -1241,6 +1255,31 @@ impl PreviewPane {
             }
             tab.debug_assert_backend_consistent();
         }
+    }
+
+    /// T1 fallback 页的"以纯文本只读尝试":把该 tab 的 backend 强制改成只读
+    /// Code(editor host 承载),清窗口化/错误态并置 `Ready`。下标越界或不是
+    /// 文件 tab 返回 false。
+    ///
+    /// route 保持原样(它记录"为什么落到这里"),只覆盖 backend——这是用户
+    /// 显式选择的退路,有意让 route.kind 与 backend.kind 分叉。
+    pub fn force_plain_text(&mut self, tab_id: usize) -> bool {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return false;
+        };
+        let TabKind::File(path) = &tab.kind else {
+            return false;
+        };
+        let language = crate::preview::native_editor::extension_to_syntax(path);
+        tab.backend = Some(PreviewBackend::Code(CodeBackend {
+            mode: CodeMode::ReadOnly,
+            language,
+        }));
+        tab.web_error = None;
+        tab.web_revision = 0;
+        let _ = tab.backend_state.try_transition(BackendState::Loading);
+        let _ = tab.backend_state.try_transition(BackendState::Ready);
+        true
     }
 
     /// 外部文件系统变化后,按变更路径集跟进预览:只重载**走 wry 的 webview**
@@ -3051,5 +3090,78 @@ mod tests {
         assert!(spec.url.contains("lang=txt"));
 
         std::fs::remove_file(&path).ok();
+    }
+
+    /// T1:压缩包 / 未知二进制 tab 不再 host Flyfish webview(改由 iced fallback
+    /// 页承载),因此也不进 `desired_webviews` 期望清单。
+    #[test]
+    fn external_and_unsupported_tabs_do_not_host_webview() {
+        let dir = std::env::temp_dir().join(format!("dozer_fb_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let zip = dir.join("a.zip");
+        std::fs::write(&zip, b"PK\x03\x04stub").unwrap();
+        let bin = dir.join("unknown.binblob");
+        std::fs::write(&bin, b"\x00\x01\x02\xff").unwrap();
+
+        let mut pane = PreviewPane::default();
+        let z = pane.open_path(zip.clone());
+        let b = pane.open_path(bin.clone());
+        for id in [z, b] {
+            let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+            assert!(!tab.hosts_webview(), "fallback 类 tab 不吃 Flyfish");
+        }
+        assert!(
+            pane.desired_webviews()
+                .iter()
+                .all(|s| s.id != z && s.id != b),
+            "fallback 类 tab 不进 webview 期望清单"
+        );
+
+        std::fs::remove_file(&zip).ok();
+        std::fs::remove_file(&bin).ok();
+    }
+
+    /// T1:fallback 页的「以纯文本只读尝试」把 backend 强制成只读 Code。
+    #[test]
+    fn force_plain_text_switches_backend_to_readonly_code() {
+        let dir = std::env::temp_dir().join(format!("dozer_fpt_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("unknown.binblob");
+        std::fs::write(&bin, b"\x00\x01\x02\xff").unwrap();
+
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(bin.clone());
+        assert!(pane.force_plain_text(id));
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(matches!(
+            tab.backend,
+            Some(PreviewBackend::Code(CodeBackend {
+                mode: CodeMode::ReadOnly,
+                ..
+            }))
+        ));
+        assert!(tab.uses_editor_host());
+        assert!(tab.backend_state.is_ready());
+        assert!(!tab.hosts_webview());
+
+        std::fs::remove_file(&bin).ok();
+    }
+
+    /// T1:`begin_shell_load` 现在也接受 Failed→Loading(重试),但 Ready 仍拒绝。
+    #[test]
+    fn begin_shell_load_allows_retry_from_failed_only() {
+        let mut pane = PreviewPane::default();
+        let id = pane.push_shell_tab(PathBuf::from("/tmp/a.rs"), None);
+        assert!(pane.is_pending_load(id));
+        assert!(pane.begin_shell_load(id), "Suspended 可物化");
+        pane.finish_shell_load(id);
+        assert!(!pane.is_pending_load(id));
+        assert!(!pane.begin_shell_load(id), "Ready 不可再物化");
+        // Failed → 可重试。
+        if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == id) {
+            tab.backend_state = BackendState::Failed(PreviewError::new("x", true));
+        }
+        assert!(pane.is_pending_load(id));
+        assert!(pane.begin_shell_load(id), "Failed 可重试");
     }
 }

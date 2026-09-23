@@ -1362,7 +1362,7 @@ impl Workspace {
         } else {
             &mut self.preview
         };
-        if !pane.is_suspended(tab_id) {
+        if !pane.is_pending_load(tab_id) {
             return;
         }
         let idx = match pane.tabs().iter().position(|t| t.id == tab_id) {
@@ -2074,6 +2074,84 @@ impl Workspace {
             self.preview.active_idx()
         };
         self.preview_pane_save_at(kind, idx);
+    }
+
+    /// T1 fallback 页的「重试」:把 Failed tab 退回 Loading 后走正常物化路径
+    /// (CodeMirror/JSON 直接 Ready;Rendered 重新导航 Flyfish;Tabular 重新
+    /// spawn 后台解析)。非 Failed tab 是 no-op。
+    pub fn preview_retry(&mut self, kind: PanelKind, tab_id: usize, io: &ShellIo) {
+        {
+            let pane = if kind == PanelKind::Project {
+                &mut self.project_preview
+            } else {
+                &mut self.preview
+            };
+            if !pane.is_pending_load(tab_id) {
+                return;
+            }
+        }
+        self.load_preview_tab(kind, tab_id, io);
+    }
+
+    /// T1 fallback 页的「以纯文本只读尝试」:把该 tab backend 强制成只读 Code
+    /// 并置 Ready;若该文件按 `file_policy` 应窗口化,附带建一次稀疏行索引,
+    /// 让窗口化 host 能滚动。
+    pub fn preview_plain_text_open(&mut self, kind: PanelKind, tab_id: usize, io: &ShellIo) {
+        let windowed = {
+            let pane = if kind == PanelKind::Project {
+                &self.project_preview
+            } else {
+                &self.preview
+            };
+            pane.tabs()
+                .iter()
+                .find(|t| t.id == tab_id)
+                .is_some_and(|t| t.windowed && matches!(t.kind, crate::preview::TabKind::File(_)))
+        };
+        let pane = if kind == PanelKind::Project {
+            &mut self.project_preview
+        } else {
+            &mut self.preview
+        };
+        if !pane.force_plain_text(tab_id) {
+            return;
+        }
+        if windowed {
+            self.preview_spawn_window_index(kind, tab_id, io);
+        }
+    }
+
+    /// 为窗口化 tab 建稀疏行索引(后台),完成后经 `PreviewWindowIndex` 回填
+    /// (同 `app/update.rs` 里窗口化索引的生成点)。
+    fn preview_spawn_window_index(&mut self, kind: PanelKind, tab_id: usize, io: &ShellIo) {
+        let Some(project_id) = self.project_id() else {
+            return;
+        };
+        let path = {
+            let pane = if kind == PanelKind::Project {
+                &self.project_preview
+            } else {
+                &self.preview
+            };
+            match pane.tabs().iter().find(|t| t.id == tab_id).map(|t| &t.kind) {
+                Some(crate::preview::TabKind::File(p)) => p.clone(),
+                _ => return,
+            }
+        };
+        let proxy = io.proxy.clone();
+        io.handle.spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                crate::preview::LineIndex::build_cancellable(&path, 1000, 0, || false)
+                    .and_then(|index| index.ok_or_else(|| std::io::Error::other("index cancelled")))
+                    .map(std::sync::Arc::new)
+                    .map_err(|e| e.to_string())
+            })
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
+            let _ = proxy.send_event(Message::PreviewWindowIndex(
+                project_id, kind, tab_id, result,
+            ));
+        });
     }
 
     /// 把 `kind` 面板刚 `open_path`/`push_tab` 攒下的待加载表格 tab 全部

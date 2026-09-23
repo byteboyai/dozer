@@ -231,20 +231,16 @@ impl PreviewBackend {
         }
     }
 
-    /// 该 backend 在 Phase A 是否需要一个 Flyfish wry webview。与改动前
-    /// `desired_webviews` 的判据逐项对齐:渲染类、以及压缩包/未知二进制的
-    /// **兜底**都靠 Flyfish 显示;Code/Json/Tabular 走原生渲染。
-    ///
-    /// Phase D 落地"未知/压缩包 -> External/Unsupported 的正式 fallback"后,
-    /// External/Unsupported 将不再 host webview。
+    /// 该 backend 是否需要 Flyfish wry webview。渲染类走 Flyfish;T1 起
+    /// `External`/`Unsupported` **不再** host webview——它们改由 iced 统一
+    /// fallback 页呈现(外部打开 / 纯文本退路 / 重试)。
     pub fn hosts_webview(&self) -> bool {
         matches!(
             self,
             PreviewBackend::Rendered(RenderedBackend {
                 mode: RenderedMode::Rendered,
                 ..
-            }) | PreviewBackend::External(_)
-                | PreviewBackend::Unsupported(_)
+            })
         )
     }
 
@@ -268,26 +264,30 @@ impl PreviewBackend {
             Self::Unsupported(_) => PreviewMode::Unsupported,
         }
     }
+}
 
-    /// 失败态可用的能力描述(Phase A 仅描述,UI 接入后续 phase):
-    /// 可重试、可转纯文本只读、可外部打开。
-    pub fn failure_fallbacks(&self) -> FailureFallbacks {
-        FailureFallbacks {
-            retry: true,
-            plain_text_read_only: matches!(
-                self,
-                PreviewBackend::Rendered(_)
-                    | PreviewBackend::External(_)
-                    | PreviewBackend::Unsupported(_)
-            ),
-            external_open: true,
-        }
+/// Failed、External、Unsupported **共用**的一套动作生成逻辑(T1):三个页面
+/// 都从这里取"有哪些动作",避免各处漂移。
+///
+/// - `retry`:仅 `Failed { retryable: true }` 出现。
+/// - `plain_text_read_only`:内容探测为文本、且当前不是已可编辑的 Code 时出现
+///   (压缩包 / 未知二进制不给这条退路)。
+/// - `external_open`:文件 tab 总能交给系统默认应用打开。
+pub fn fallback_actions(
+    backend: &PreviewBackend,
+    state: &BackendState,
+    content_is_text: bool,
+) -> FallbackActions {
+    FallbackActions {
+        retry: matches!(state, BackendState::Failed(error) if error.retryable),
+        plain_text_read_only: content_is_text && !matches!(backend, PreviewBackend::Code(_)),
+        external_open: true,
     }
 }
 
-/// Failed 状态下的可选动作描述。
+/// fallback 页 / Failed 提示上的可用动作。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FailureFallbacks {
+pub struct FallbackActions {
     pub retry: bool,
     pub plain_text_read_only: bool,
     pub external_open: bool,
@@ -342,15 +342,15 @@ mod tests {
     }
 
     #[test]
-    fn webview_hosting_matches_legacy_predicate() {
+    fn webview_hosting_matches_current_dispatch() {
         assert!(!backend("main.rs", b"x").hosts_webview());
         assert!(backend("README.md", b"x").hosts_webview());
         assert!(!backend("a.json", b"{}").hosts_webview());
         assert!(!backend("a.csv", b"a,b").hosts_webview());
         assert!(!backend("a.jsonl", b"{}").hosts_webview());
-        // 压缩包与未知二进制在 Phase A 仍靠 Flyfish 兜底。
-        assert!(backend("a.zip", b"PK").hosts_webview());
-        assert!(backend("mystery.bin", b"\0\0\0").hosts_webview());
+        // T1:压缩包与未知二进制改由 iced fallback 页承载,不再 host webview。
+        assert!(!backend("a.zip", b"PK").hosts_webview());
+        assert!(!backend("mystery.bin", b"\0\0\0").hosts_webview());
     }
 
     #[test]
@@ -440,10 +440,25 @@ mod tests {
     }
 
     #[test]
-    fn failed_state_exposes_external_open_fallback() {
-        let b = backend("mystery.bin", b"\0\0");
-        let fb = b.failure_fallbacks();
-        assert!(fb.retry);
-        assert!(fb.external_open);
+    fn fallback_actions_are_table_driven() {
+        // 重试只在可重试 Failed 出现。
+        let bin = backend("mystery.bin", b"\0\0");
+        let failed_retryable = BackendState::Failed(PreviewError::new("boom", true));
+        let a = fallback_actions(&bin, &failed_retryable, false);
+        assert!(a.retry);
+        assert!(a.external_open);
+        assert!(!a.plain_text_read_only, "二进制不给纯文本退路");
+
+        let failed_permanent = BackendState::Failed(PreviewError::new("boom", false));
+        assert!(!fallback_actions(&bin, &failed_permanent, false).retry);
+
+        // 文本内容:External/Unsupported 也提供纯文本只读退路。
+        let zip = backend("a.zip", b"PK");
+        let ready = BackendState::Ready;
+        assert!(fallback_actions(&zip, &ready, true).plain_text_read_only);
+
+        // Code backend 已是文本,不再重复给纯文本退路。
+        let code = backend("main.rs", b"x");
+        assert!(!fallback_actions(&code, &ready, true).plain_text_read_only);
     }
 }

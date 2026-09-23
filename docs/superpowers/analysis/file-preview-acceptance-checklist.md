@@ -86,11 +86,11 @@ echo "$d"
 | `t.csv` | Tabular 网格 | 网格显示;tab 栏可切「网格 / 原文」 | 不变 | |
 | `doc.md` / `page.html` | Rendered + 可切 Source | 渲染;切 Source 进 CodeMirror | 不变(HTML 走隔离 host,T7) | |
 | 图片 / PDF | Rendered(Flyfish) | 正常渲染 | 不变 | |
-| `archive.zip` | External + Flyfish 兜底 | 记录有效 ZIP 的实际显示 | 统一 fallback 页 + 外部打开(T1) | |
-| `broken.zip` | External + Flyfish 兜底 | 不崩溃;记录错误 / 空态 / 外部打开动作 | fallback 页 + 重试/外部打开(T1) | |
+| `archive.zip` | External → 统一 fallback 页(T1) | 显示类型/路径/原因 + 外部打开;不内嵌 | 不变 | |
+| `broken.zip` | External → 统一 fallback 页(T1) | 不崩溃;外部打开可用 | 不变 | |
 | `README_NO_EXT` | CodeMirror(内容探测为文本,T5) | 能查看 / 可编辑 | 不变 | |
 | `Makefile` / `Dockerfile` / `LICENSE` / `.env` | CodeMirror(文件名规则,T5) | 能查看 / 可编辑 | 不变 | |
-| `unknown.binblob` | Unsupported + Flyfish 兜底 | 不崩溃、不显示为可编辑文本 | fallback 页(禁纯文本,T1) | |
+| `unknown.binblob` | Unsupported → 统一 fallback 页(T1) | 不崩溃、不显示为可编辑文本;**无**纯文本退路 | 不变 | |
 | `icon.svg` | Rendered(Flyfish 图像) | 图像正常;tab 栏可切 CodeMirror XML 源码(T5) | 不变 | |
 | `utf16le.rs` | CodeMirror **只读** | 不可编辑、不崩溃;合法 UTF-16 已解码为正确文字 | 字节安全只读(T6) | |
 | `non_utf8.rs` / `invalid_utf8.rs` | CodeMirror **只读** | 不可编辑、不崩溃;有损文字只记录 | 字节安全只读 / T1(T6) | |
@@ -166,10 +166,9 @@ echo "$d"
 以下项**尚未实现**,检测时按“记录 / 不阻塞”处理,详见
 `2026-09-22-file-preview-wrap-up.md`:
 
-- 压缩包 / 损坏 / 加密格式落 Flyfish 兼容兜底,而非正式「外部打开」页(T1);
-  普通 Failed 态已有通用「在系统应用中打开」按钮,但尚无完整 fallback 页面。
-- 未知 UTF-8 文本、`Makefile` / `Dockerfile` / `LICENSE` 仍走 Flyfish,未进 Code
-  (T5)。
+- 普通 Failed 态已有通用「在系统应用中打开」按钮;T1 起压缩包 / 未知二进制改走
+  统一 fallback 页(类型/路径/原因 + 重试/纯文本只读/外部打开),不再 host Flyfish。
+- 未知 UTF-8 文本、`Makefile` / `Dockerfile` / `LICENSE` 已进 Code(T5);
 - 脏 tab 外部变更只有冲突提示,无“保留我的 / 重载”选择(T10)。
 - Agent 写操作(reveal/select/replace)无 daemon/MCP 调用入口(T13);休眠 tab
   的 Agent 唤醒未接线。
@@ -182,8 +181,6 @@ echo "$d"
 - scroll anchor 仍是逻辑锚点,未精确还原像素(T11)。
 - 非法 UTF-8 当前虽强制只读,仍可能经过 `fetch().text()` 有损解码;“不崩溃”可
   通过,出现乱码/替换字符只记录且不算新增回归,字节安全退路由 T6 收口。
-- 未知二进制、压缩包目前仍是 `PreviewKind::Unsupported/External` 但继续 host
-  Flyfish webview;T1 落地后改为统一 fallback 页(`hosts_webview()` 返回 false)。
 
 ## 10. 结论记录
 

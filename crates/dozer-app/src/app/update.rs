@@ -1449,6 +1449,16 @@ impl App {
                     }
                 });
             }
+            Message::PreviewRetry(kind, tab_id) => {
+                self.with_focused_project(move |ws, io| {
+                    ws.preview_retry(kind, tab_id, io);
+                });
+            }
+            Message::PreviewPlainTextOpen(kind, tab_id) => {
+                self.with_focused_project(move |ws, io| {
+                    ws.preview_plain_text_open(kind, tab_id, io);
+                });
+            }
             Message::PreviewTabularTextModeToggle(kind, tab_id) => {
                 self.with_focused_project(move |ws, _io| {
                     let pane = if kind == PanelKind::Project {

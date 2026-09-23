@@ -309,6 +309,10 @@ pub enum Message {
     /// 预览:用系统默认应用打开某个文件 tab(失败时的外部打开 fallback)。
     /// 路径取自当前 tab 并再次校验存在,不隐式执行文件本身。
     PreviewOpenExternal(PanelKind, usize),
+    /// 预览 fallback 页(T1):重试加载某个 Failed 的文件 tab。
+    PreviewRetry(PanelKind, usize),
+    /// 预览 fallback 页(T1):以纯文本只读方式尝试打开某个文件 tab。
+    PreviewPlainTextOpen(PanelKind, usize),
     /// 预览:CSV/TSV 的「网格 / 原文」切换(切原文时 feature 下走 CodeMirror)。
     PreviewTabularTextModeToggle(PanelKind, usize),
     /// 预览:切换 tab(vec 位置).

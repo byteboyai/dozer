@@ -124,6 +124,9 @@ pub struct PreviewRoute {
     pub default_mode: PreviewMode,
     pub alternate_modes: Vec<PreviewMode>,
     pub reason: RouteReason,
+    /// 内容画像是否为文本(空文件算文本)。供 fallback 页判断"以纯文本只读
+    /// 尝试"这条退路是否安全出现——二进制/压缩包不提供。
+    pub content_is_text: bool,
 }
 
 impl PreviewRoute {
@@ -157,6 +160,7 @@ pub fn classify_preview(
         default_mode,
         alternate_modes,
         reason,
+        content_is_text: matches!(profile.content_kind, ContentKind::Text | ContentKind::Empty),
     }
 }
 

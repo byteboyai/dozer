@@ -1193,6 +1193,10 @@ pub(crate) fn preview_pane_for<'a>(
                     ));
                 }
             }
+        } else if let Some(page) = preview_fallback_page(kind, active_tab) {
+            // T1:External / Unsupported(及无内嵌 viewer 的 Failed)统一
+            // fallback 页——不再依赖 Flyfish 偶然兜底或空白。
+            content = content.push(page);
         } else if active_tab.loading {
             // 原生编辑器候选正在后台线程异步读盘+构造(见 `App::
             // preview_open_path`/`PreviewPane::insert_loading_tab`)——这段
@@ -1734,4 +1738,112 @@ pub(crate) fn agent_launch_command(agent: AgentKind, hook_exe: &str) -> Option<S
         AgentKind::Aider => Some(format!("{} launch aider", sh_single_quote(hook_exe))),
         AgentKind::V8agent => Some("v8agent".into()),
     }
+}
+
+/// T1:External / Unsupported(以及没有内嵌 viewer 的 Failed)统一的 fallback
+/// 页。展示文件类型/路径/route reason/失败原因与安全提示,并按
+/// `preview::fallback_actions` 给出可用动作(重试 / 纯文本只读 / 外部打开)。
+/// 返回 `None` 表示该 tab 不该走这页。
+///
+/// 为什么 Failed 只在"无内嵌 viewer"时才走这页:`Rendered` 失败态仍由 Flyfish
+/// webview 渲染(原生子视图恒在 iced 之上),画了也会被盖住;这类保留顶部错误条。
+fn preview_fallback_page<'a>(
+    kind: PreviewPaneKind,
+    tab: &'a PreviewTab,
+) -> Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> {
+    let backend = tab.backend.as_ref()?;
+    let is_ext = matches!(
+        backend,
+        crate::preview::PreviewBackend::External(_)
+            | crate::preview::PreviewBackend::Unsupported(_)
+    );
+    let show_failed = tab.backend_state.is_failed()
+        && !tab.hosts_webview()
+        && !tab.uses_editor_host()
+        && !tab.uses_json_editor();
+    if !(is_ext || show_failed) {
+        return None;
+    }
+    let panel = match kind {
+        PreviewPaneKind::Project => PanelKind::Project,
+        _ => PanelKind::Files,
+    };
+    let tab_id = tab.id;
+    let content_is_text = tab.route.as_ref().is_some_and(|r| r.content_is_text);
+    let actions = crate::preview::fallback_actions(backend, &tab.backend_state, content_is_text);
+    let reason = tab
+        .route
+        .as_ref()
+        .map(|r| r.reason.to_string())
+        .unwrap_or_default();
+    let path = match &tab.kind {
+        TabKind::File(p) => p.to_string_lossy().into_owned(),
+        _ => String::new(),
+    };
+    let failure = tab.web_error.clone().or_else(|| match &tab.backend_state {
+        crate::preview::BackendState::Failed(e) => Some(e.message.clone()),
+        _ => None,
+    });
+
+    let colors = byteui::theme::color::current();
+    let body = byteui::theme::font::body();
+    let caption = byteui::theme::font::caption_sm();
+    let mut col = column![
+        text(tab.title.clone())
+            .size(byteui::theme::font::title())
+            .color(colors.cream),
+        text("无法在 Dozer 内嵌预览该文件")
+            .size(body)
+            .color(colors.dim),
+    ]
+    .spacing(8)
+    .align_x(iced_widget::core::Alignment::Start);
+    if !path.is_empty() {
+        col = col.push(text(path).size(caption).color(colors.dim));
+    }
+    if !reason.is_empty() {
+        col = col.push(
+            text(format!("路由:{reason}"))
+                .size(caption)
+                .color(colors.dim),
+        );
+    }
+    if let Some(err) = failure {
+        col = col.push(text(format!("原因:{err}")).size(caption).color(colors.red));
+    }
+    col = col.push(
+        text("出于安全考虑,Dozer 不会在此内嵌执行或解码该文件。")
+            .size(caption)
+            .color(colors.dim),
+    );
+
+    let mut actions_row = row![]
+        .spacing(8)
+        .align_y(iced_widget::core::Alignment::Center);
+    if actions.retry {
+        actions_row = actions_row
+            .push(button(text("重试").size(body)).on_press(Message::PreviewRetry(panel, tab_id)));
+    }
+    if actions.plain_text_read_only {
+        actions_row = actions_row.push(
+            button(text("以纯文本只读尝试").size(body))
+                .on_press(Message::PreviewPlainTextOpen(panel, tab_id)),
+        );
+    }
+    if actions.external_open {
+        actions_row = actions_row.push(
+            button(text("在系统应用中打开").size(body))
+                .on_press(Message::PreviewOpenExternal(panel, tab_id)),
+        );
+    }
+    col = col.push(actions_row);
+
+    Some(
+        container(col)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(iced_widget::core::alignment::Horizontal::Center)
+            .align_y(iced_widget::core::alignment::Vertical::Center)
+            .into(),
+    )
 }

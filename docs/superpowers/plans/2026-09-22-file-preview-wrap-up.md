@@ -71,16 +71,18 @@ viewer 状态与资源生命周期只有一份真相，恢复不丢数据，大�
 
 **目的:** 任何无法安全内嵌的文件都显示明确页面，不再依赖 Flyfish 偶然兜底或空白。
 
-- [ ] `PreviewBackend::hosts_webview()` 对 `External` / `Unsupported` 返回 false。
-- [ ] iced 渲染层增加统一 fallback 页面，显示文件类型、路径摘要、route reason、
+- [x] `PreviewBackend::hosts_webview()` 对 `External` / `Unsupported` 返回 false。
+- [x] iced 渲染层增加统一 fallback 页面，显示文件类型、路径摘要、route reason、
       failure reason 和安全提示。
-- [ ] 页面动作按能力显示：
+- [x] 页面动作按能力显示：
   - “在系统应用中打开”：复用 `Message::PreviewOpenExternal`；
-  - “以纯文本只读尝试”：只在内容探测允许时出现；
+  - “以纯文本只读尝试”：只在内容探测允许时出现(`route.content_is_text`；
+    二进制/压缩包不给)；
   - “重试”：仅对 retryable Failed 状态出现。
-- [ ] 压缩包、加密/损坏文件、未知二进制和无安全内部退路的资源进入该页面。
-- [ ] 普通文本仅因超预算时必须进入 Windowed，不得被统一送去 External。
-- [ ] Failed、External、Unsupported 使用同一套动作生成逻辑，避免三个页面漂移。
+- [x] 压缩包、加密/损坏文件、未知二进制和无安全内部退路的资源进入该页面。
+- [x] 普通文本仅因超预算时必须进入 Windowed，不得被统一送去 External。
+- [x] Failed、External、Unsupported 使用同一套动作生成逻辑，避免三个页面漂移
+      (`preview::fallback_actions`)。
 
 **自动化:** router/backend/fallback action 表驱动测试；路径不存在、权限失败、损坏
 压缩包不 panic。
@@ -187,8 +189,7 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
   - `.env` 及明确允许的变体 → plaintext/properties。
 - [x] 不使用“所有 dotfile 都是文本”的宽泛规则；含 NUL/明显二进制内容必须走安全
       fallback。
-- [ ] 未知 UTF-8 文本路由到 Code；未知二进制路由到 T1 页面。（路由已落地：
-      文本→Code、二进制→`Unsupported`；T1 页面待 T1。）
+- [x] 未知 UTF-8 文本路由到 Code；未知二进制路由到 T1 页面。
 - [x] 空文件按可编辑纯文本处理，除非扩展名命中专用 viewer。
 - [x] SVG 默认图像渲染，并提供 CodeMirror XML 源码模式。
 - [ ] route reason 能区分文件名规则、扩展名规则、内容探测、预算降级和用户 mode。
