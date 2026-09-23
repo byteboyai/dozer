@@ -182,6 +182,23 @@ impl PreviewPane {
         true
     }
 
+    /// 应用后台建好的稀疏索引:仅当索引 revision 与 tab 当前 `web_revision`
+    /// 一致时接受(文件已变则旧索引必须失效,不得套到新内容上)。返回是否接受。
+    pub fn apply_window_index(
+        &mut self,
+        tab_id: usize,
+        index: std::sync::Arc<crate::preview::LineIndex>,
+    ) -> bool {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return false;
+        };
+        if index.revision() != tab.web_revision {
+            return false;
+        }
+        tab.window_index = Some(index);
+        true
+    }
+
     pub fn tabs(&self) -> &[PreviewTab] {
         &self.tabs
     }
@@ -1327,6 +1344,29 @@ impl PreviewPane {
                 tab.web_viewport = None;
                 tab.web_error = None;
             }
+        }
+        // 窗口化 tab:`uses_codemirror()` 为 false(窗口化排除),单独处理。
+        // 文件变了就**失效旧索引**(清 `window_index` + `web_revision` 归零,
+        // 让在途/旧的 `PreviewWindowIndex` 结果因 revision 不符被拒),并推进
+        // `reload_nonce` 让窗口重新导航。旧索引绝不能套到新内容上(T14)。
+        for tab in self.tabs.iter_mut() {
+            if !tab.uses_windowed_editor() {
+                continue;
+            }
+            let TabKind::File(path) = &tab.kind else {
+                continue;
+            };
+            let hit = changed.iter().any(|c| c == path)
+                || std::fs::canonicalize(path)
+                    .map(|p| changed.iter().any(|c| c == &p))
+                    .unwrap_or(false);
+            if !hit {
+                continue;
+            }
+            tab.window_index = None;
+            tab.web_revision = 0;
+            tab.reload_nonce += 1;
+            tab.web_error = None;
         }
         let mut matched: Vec<usize> = self
             .tabs
@@ -2872,6 +2912,79 @@ mod tests {
         let id = pane.open_path(path.clone());
         let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
         assert!(tab.can_save());
+        std::fs::remove_file(&path).ok();
+    }
+
+    fn windowed_fixture(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("{name}_{}.rs", std::process::id()));
+        // 7MiB 单行 > FORCE_WINDOWED_LINE_BYTES(5MiB)。
+        std::fs::write(&path, "a".repeat(7 * 1024 * 1024)).unwrap();
+        path
+    }
+
+    /// T14:窗口化 tab 走 editor host(SetWindow 派发判据),索引就绪后
+    /// `queue_windowed_view` 真的排入一条 `SetWindow` 命令(正文 + 截断提示
+    /// 都由它下发),URL 带 `windowed=1`。
+    #[test]
+    fn windowed_tab_enqueues_set_window_command() {
+        let path = windowed_fixture("t14_windowed_cmd");
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.uses_windowed_editor());
+        // 建索引 revision 0(新 tab 的 web_revision 默认 0),应用后推窗口。
+        let idx = LineIndex::build(&path, 1000, 0).unwrap();
+        assert!(pane.apply_window_index(id, std::sync::Arc::new(idx)));
+        assert!(pane.queue_windowed_view(id, 1));
+        let cmds = pane.take_pending_editor_commands();
+        assert!(
+            cmds.iter()
+                .any(|(tid, c)| *tid == id && matches!(c, EditorCommand::SetWindow { .. })),
+            "窗口化应排出 SetWindow 命令"
+        );
+        let spec = pane
+            .desired_editor_webviews(1, crate::app::PanelKind::Files)
+            .into_iter()
+            .find(|s| s.id == id)
+            .expect("窗口化应产出 editor spec");
+        assert!(spec.url.contains("windowed=1"));
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// T14:索引 revision 与 tab 当前 revision 不符时必须拒绝(旧索引不得套
+    /// 到新内容上)。
+    #[test]
+    fn apply_window_index_rejects_stale_revision() {
+        let path = windowed_fixture("t14_stale_idx");
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        let stale = LineIndex::build(&path, 1000, 99).unwrap();
+        assert!(!pane.apply_window_index(id, std::sync::Arc::new(stale)));
+        assert!(
+            pane.tabs()
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap()
+                .window_index
+                .is_none()
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// T14:外部变更命中窗口化 tab 时,旧索引失效(清空 + revision 归零)、
+    /// 推进 reload。
+    #[test]
+    fn reload_invalidates_windowed_index() {
+        let path = windowed_fixture("t14_reload_inval");
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        let idx = LineIndex::build(&path, 1000, 0).unwrap();
+        assert!(pane.apply_window_index(id, std::sync::Arc::new(idx)));
+        pane.reload_webviews_for(std::slice::from_ref(&path));
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.window_index.is_none(), "旧索引应失效");
+        assert_eq!(tab.web_revision, 0);
+        assert_eq!(tab.reload_nonce, 1, "应推进 reload 重新导航");
         std::fs::remove_file(&path).ok();
     }
 

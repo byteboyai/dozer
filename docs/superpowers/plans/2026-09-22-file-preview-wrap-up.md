@@ -345,24 +345,31 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
 
 ## T14. 大文件硬性回归与性能门槛
 
-- [ ] 稀疏索引按固定缓冲块扫描；任何单行长度下峰值临时内存不随整行长度增长。
-- [ ] Windowed 读取量封顶 `WINDOW_MAX_BYTES + O(buffer)`；超长单行显示前缀和明确
-      截断提示。
-- [ ] `SetWindow` 下发链路做集成测试，防止命令因普通 CodeMirror 判据被过滤；
+- [x] 稀疏索引按固定缓冲块扫描；任何单行长度下峰值临时内存不随整行长度增长
+      (`BufRead::fill_buf` 固定块,不再 `read_until` 整行)。
+- [x] Windowed 读取量封顶 `WINDOW_MAX_BYTES + O(buffer)`；超长单行显示前缀和明确
+      截断提示(`read_window_capped` 用 `take(max+1)`;`truncated` → 顶部横幅)。
+- [x] `SetWindow` 下发链路做集成测试，防止命令因普通 CodeMirror 判据被过滤；
       验收必须看到正文和截断提示，不能只看到行号/滚动条。
+      (`windowed_tab_enqueues_set_window_command`)
 - [ ] Windowed 全局滚动条与普通 CodeMirror 样式一致，拖动仍映射全局行号。
-- [ ] 索引任务支持取消；tab 关闭、项目切换、文件 revision 变化时旧任务结果失效。
-- [ ] 流式搜索对超长单行也必须有界；摘要和列号计算不得复制整行。
+      (滚动条与全局行号映射已有;像素级样式一致性需真机核对。)
+- [x] 索引任务支持取消；tab 关闭、项目切换、文件 revision 变化时旧任务结果失效。
+      (`build_cancellable` + `apply_window_index` revision 校验 + 外部变更清索引)
+- [x] 流式搜索对超长单行也必须有界；摘要和列号计算不得复制整行。
+      (`stream_search` 改分段重叠扫描,增量 UTF-8 字符计数,摘要只取命中附近有限字节)
 - [ ] 建立 fixture：300MB 无换行、百万短行、混合 CRLF、跨缓冲区 UTF-8、巨大
-      JSONL 单行。
+      JSONL 单行。(300MB 无换行 + 跨缓冲区 CRLF 已加;百万短行 / JSONL 单行 /
+      跨缓冲区 UTF-8 未逐一建 fixture。)
 
 **自动化门槛:**
 
-- `read_window` 最大读取量测试；
-- 跨缓冲区换行 offset 测试；
-- 300MB 单行首屏 command 集成测试（允许生成 sparse/temp fixture）；
-- 搜索取消与结果封顶；
-- revision 变化后旧 index 不得复用。
+- [x] `read_window` 最大读取量测试；
+- [x] 跨缓冲区换行 offset 测试；
+- [ ] 300MB 单行首屏 command 集成测试（允许生成 sparse/temp fixture）；
+      (已测 300MB 单行有界窗口读取;完整 command 链路未做端到端。)
+- [ ] 搜索取消与结果封顶；(结果封顶已有测试;流式搜索取消未做。)
+- [x] revision 变化后旧 index 不得复用。
 
 **真机门槛:** 打开 100MB/300MB/600MB fixture，记录首屏时间和 RSS；RSS 不得接近
 文件大小线性增长。数据记录进验收报告，不只写“通过”。

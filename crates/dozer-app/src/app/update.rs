@@ -51,7 +51,7 @@ impl App {
                     // dozerd:选区/可见范围/就绪变化都算。
                     let mut context_changed = false;
                     // 窗口化 viewer:待建立行索引 / 待推送相邻窗口。
-                    let mut build_index: Option<(usize, PathBuf)> = None;
+                    let mut build_index: Option<(usize, PathBuf, u64)> = None;
                     let mut window_request: Option<(usize, u32)> = None;
                     // recovery 恢复:ready 后回推正文 + 重新标脏。
                     let mut pending_restore_cmd: Option<(usize, String, u64)> = None;
@@ -92,7 +92,7 @@ impl App {
                                 // 窗口化:首次就绪时后台建立稀疏索引(索引建好
                                 // 后再推初始窗口)。
                                 if tab.uses_windowed_editor() && tab.window_index.is_none() {
-                                    build_index = Some((tab.id, path.clone()));
+                                    build_index = Some((tab.id, path.clone(), tab.web_revision));
                                 }
                                 // ready latency 观测(不记文件内容)。
                                 if let Some(started) = tab.load_started.take() {
@@ -312,15 +312,18 @@ impl App {
                             crate::preview::EditorCommand::RevealPosition { line, column: 1 },
                         );
                     }
-                    if let Some((tab_id, path)) = build_index {
+                    if let Some((tab_id, path, revision)) = build_index {
                         let project_id = binding.project_id;
                         let panel = binding.panel;
                         let proxy = io.proxy.clone();
                         io.handle.spawn(async move {
                             let result = tokio::task::spawn_blocking(move || {
-                                crate::preview::LineIndex::build_cancellable(&path, 1000, 0, || {
-                                    false
-                                })
+                                crate::preview::LineIndex::build_cancellable(
+                                    &path,
+                                    1000,
+                                    revision,
+                                    || false,
+                                )
                                 .and_then(|index| {
                                     index.ok_or_else(|| std::io::Error::other("index cancelled"))
                                 })
@@ -425,23 +428,28 @@ impl App {
                             } else {
                                 &mut ws.preview
                             };
-                            let mut jump = None;
-                            if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == tab_id) {
-                                tab.window_index = Some(index);
-                                jump = tab.pending_jump_line.take().map(|l| l as u32);
-                            }
-                            // 索引就绪:推初始窗口(有跳转诉求就以目标行为中心,
-                            // 窗口就位后再 reveal)。
-                            let center = jump.unwrap_or(1);
-                            pane.queue_windowed_view(tab_id, center);
-                            if let Some(line) = jump {
-                                pane.queue_editor_command(
-                                    tab_id,
-                                    crate::preview::EditorCommand::RevealPosition {
-                                        line,
-                                        column: 1,
-                                    },
-                                );
+                            // 过期索引(文件 revision 已变)必须丢弃,不得套到
+                            // 新内容上——见 `PreviewPane::apply_window_index`。
+                            if pane.apply_window_index(tab_id, index) {
+                                let jump = pane
+                                    .tabs_mut()
+                                    .iter_mut()
+                                    .find(|t| t.id == tab_id)
+                                    .and_then(|t| t.pending_jump_line.take())
+                                    .map(|l| l as u32);
+                                // 索引就绪:推初始窗口(有跳转诉求就以目标行为中心,
+                                // 窗口就位后再 reveal)。
+                                let center = jump.unwrap_or(1);
+                                pane.queue_windowed_view(tab_id, center);
+                                if let Some(line) = jump {
+                                    pane.queue_editor_command(
+                                        tab_id,
+                                        crate::preview::EditorCommand::RevealPosition {
+                                            line,
+                                            column: 1,
+                                        },
+                                    );
+                                }
                             }
                         }
                         Err(error) => {

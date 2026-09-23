@@ -55,15 +55,24 @@ pub struct SearchOutcome {
     pub lines_scanned: u64,
 }
 
-/// 逐行流式搜索。文件不会被整体读入内存;读取出错原样透传。
+/// 分段扫描的单段字节数。超长单行被切成多段,用 `needle.len()-1` 字节重叠
+/// 避免跨段漏配——任何单行长度下峰值临时内存都不随整行长度增长。
+const SEARCH_SEGMENT_BYTES: usize = 256 * 1024;
+
+/// 逐行流式搜索,**内存有界**:不把整行读入内存(旧实现的
+/// `BufRead::split` 遇到 300MB 无换行单行会整行分配)。超长单行按
+/// [`SEARCH_SEGMENT_BYTES`] 分段,段间以 `needle.len()-1` 字节重叠避免跨段
+/// 漏配;列号用增量 UTF-8 字符计数(continuation byte 不计数),摘要只取命中
+/// 附近有限字节,均不复制整行。读取出错原样透传。
+///
+/// 大小写不敏感时对**段缓冲**做 ASCII 折叠(字节长度不变,故列/摘要仍基于
+/// 原字节);非 ASCII 的大小写折叠不参与匹配(罕见,查询多来自单行输入框)。
 pub fn stream_search(
     path: &Path,
     query: &str,
     opts: SearchOptions,
 ) -> std::io::Result<SearchOutcome> {
     let mut hits = Vec::new();
-    let mut total: u64 = 0;
-    let mut lines_scanned: u64 = 0;
     if query.is_empty() {
         return Ok(SearchOutcome {
             hits,
@@ -72,44 +81,86 @@ pub fn stream_search(
             lines_scanned: 0,
         });
     }
-    let needle = if opts.case_sensitive {
-        query.to_string()
+    let needle: Vec<u8> = if opts.case_sensitive {
+        query.as_bytes().to_vec()
     } else {
-        query.to_lowercase()
+        query.bytes().map(|b| b.to_ascii_lowercase()).collect()
     };
+    let nlen = needle.len();
+    let finder = memchr::memmem::Finder::new(&needle);
 
     let file = std::fs::File::open(path)?;
-    let reader = BufReader::new(file);
-    for (idx, line) in reader.split(b'\n').enumerate() {
-        let raw = line?;
-        lines_scanned = idx as u64 + 1;
-        let line_no = (idx + 1) as u32;
-        // 去掉行尾 \r(CRLF),列/摘要都基于去 \r 后的内容。
-        let bytes = raw.strip_suffix(b"\r").unwrap_or(&raw);
-        let text = String::from_utf8_lossy(bytes);
-        let hay = if opts.case_sensitive {
-            text.to_string()
+    let mut reader = BufReader::with_capacity(SEARCH_SEGMENT_BYTES, file);
+
+    let mut total: u64 = 0;
+    let mut max_line: u64 = 1;
+    // 当前 `combined` 起点(即 overlap 起点)的行状态。
+    let mut base_line: u64 = 1;
+    let mut base_chars: u64 = 0;
+    let mut overlap: Vec<u8> = Vec::new();
+
+    loop {
+        let buf = reader.fill_buf()?;
+        if buf.is_empty() {
+            break;
+        }
+        let overlap_len = overlap.len();
+        // combined = overlap + 本段(命中可能跨段边界)。
+        let combined: Vec<u8> = if overlap.is_empty() {
+            buf.to_vec()
         } else {
-            text.to_lowercase()
+            let mut v = Vec::with_capacity(overlap_len + buf.len());
+            v.extend_from_slice(&overlap);
+            v.extend_from_slice(buf);
+            v
         };
-        let mut from = 0usize;
-        while let Some(pos) = hay[from..].find(&needle) {
-            let byte_pos = from + pos;
+        let n = buf.len();
+        reader.consume(n);
+
+        // 折叠缓冲(仅不敏感时构建);ASCII 折叠不改变字节长度/字符计数。
+        let hay: Option<Vec<u8>> = if opts.case_sensitive {
+            None
+        } else {
+            let mut h = combined.clone();
+            h.make_ascii_lowercase();
+            Some(h)
+        };
+        let search_bytes: &[u8] = hay.as_deref().unwrap_or(&combined);
+
+        // (A) 先算下一段起点(base_pos)处的行状态,供下一段作为 base。
+        let keep = nlen.saturating_sub(1).min(combined.len());
+        let base_pos = combined.len() - keep;
+        let (new_line, new_chars, seen_max) =
+            advance_line_state(base_line, base_chars, &combined[..base_pos]);
+        max_line = max_line.max(seen_max);
+
+        // (B) 找本段新出现的命中,并在扫描到命中处时推进行/列计数。
+        let mut line = base_line;
+        let mut chars = base_chars;
+        let mut cursor = 0usize;
+        for m in finder.find_iter(search_bytes) {
+            // 完全落在 overlap 内的命中上一段已报过,跳过(避免重复)。
+            if m + nlen <= overlap_len {
+                continue;
+            }
+            advance_line_state_into(&mut line, &mut chars, &combined[cursor..m]);
+            cursor = m;
             total += 1;
             if hits.len() < opts.max_hits {
-                let column = text[..byte_pos].chars().count() as u32 + 1;
                 hits.push(SearchHit {
-                    line: line_no,
-                    column,
-                    text: summarize(&text, byte_pos, opts.max_preview_chars),
+                    line: line as u32,
+                    column: chars as u32 + 1,
+                    text: summarize_bytes(&combined, m, nlen, opts.max_preview_chars),
                 });
             }
-            // 前进到下个字符边界,避免零宽/重叠死循环。
-            from = byte_pos + needle.len().max(1);
-            if from > hay.len() {
-                break;
-            }
         }
+        max_line = max_line.max(line);
+
+        // 段尾重叠保留;base 状态已算好。
+        overlap.clear();
+        overlap.extend_from_slice(&combined[base_pos..]);
+        base_line = new_line;
+        base_chars = new_chars;
     }
 
     let truncated = total > hits.len() as u64;
@@ -117,27 +168,63 @@ pub fn stream_search(
         hits,
         total_matches: total,
         truncated,
-        lines_scanned,
+        lines_scanned: max_line,
     })
 }
 
-/// 命中附近的有限摘要(以命中处为中心,裁剪并加省略号)。
-fn summarize(text: &str, byte_pos: usize, max_chars: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    // byte_pos 对应的字符下标。
-    let char_pos = text[..byte_pos].chars().count();
-    if chars.len() <= max_chars {
-        return text.trim_end().to_string();
+/// 在 `bytes` 上推进行/字符计数:遇到 `\n` 换行归零,其余按 UTF-8 首字节
+/// (非 continuation)计一个字符。返回(新行号, 新行内字符数, 期间最大行号)。
+fn advance_line_state(mut line: u64, mut chars: u64, bytes: &[u8]) -> (u64, u64, u64) {
+    let mut max_line = line;
+    for &b in bytes {
+        if b == b'\n' {
+            line += 1;
+            chars = 0;
+            max_line = line;
+        } else if b & 0xC0 != 0x80 {
+            chars += 1;
+        }
     }
+    (line, chars, max_line)
+}
+
+/// 同 [`advance_line_state`],但不需要最大行号(命中扫描路径用)。
+fn advance_line_state_into(line: &mut u64, chars: &mut u64, bytes: &[u8]) {
+    for &b in bytes {
+        if b == b'\n' {
+            *line += 1;
+            *chars = 0;
+        } else if b & 0xC0 != 0x80 {
+            *chars += 1;
+        }
+    }
+}
+
+/// 命中附近的有限摘要(只取命中周围有限字节,不复制整行)。以命中处为中心按
+/// 字符裁剪并加省略号。
+fn summarize_bytes(bytes: &[u8], start: usize, needle_len: usize, max_chars: usize) -> String {
+    let radius = max_chars.saturating_mul(2).max(16);
+    let mut lo = start.saturating_sub(radius);
+    while lo > 0 && lo < bytes.len() && bytes[lo] & 0xC0 == 0x80 {
+        lo += 1;
+    }
+    let hi = (start + needle_len + radius).min(bytes.len());
+    let slice = String::from_utf8_lossy(&bytes[lo..hi]);
+    let trimmed = slice.trim_end();
+    let chars: Vec<char> = trimmed.chars().collect();
+    if chars.len() <= max_chars {
+        return trimmed.to_string();
+    }
+    let hit_char = String::from_utf8_lossy(&bytes[lo..start]).chars().count();
     let half = max_chars / 2;
-    let start = char_pos.saturating_sub(half);
-    let end = (start + max_chars).min(chars.len());
+    let cs = hit_char.saturating_sub(half);
+    let ce = (cs + max_chars).min(chars.len());
     let mut out = String::new();
-    if start > 0 {
+    if cs > 0 {
         out.push('…');
     }
-    out.extend(&chars[start..end]);
-    if end < chars.len() {
+    out.extend(&chars[cs..ce]);
+    if ce < chars.len() {
         out.push('…');
     }
     out
@@ -552,5 +639,106 @@ mod tests {
         let p = tmp("cancel", content.as_bytes());
         let built = LineIndex::build_cancellable(&p, 10, 1, || true).unwrap();
         assert!(built.is_none(), "取消后应返回 None");
+    }
+
+    #[test]
+    fn index_offsets_survive_buffer_boundaries_and_crlf() {
+        // 内容 > 8KiB(BufReader 默认缓冲区),多行跨缓冲区边界;offset 必须
+        // 逐行精确,CRLF 也不影响。
+        let mut content = String::new();
+        for i in 1..=2000u32 {
+            content.push_str(&format!("line-{i:05}\r\n"));
+        }
+        assert!(content.len() > 16 * 1024);
+        let p = tmp("crossbuf", content.as_bytes());
+        let idx = LineIndex::build(&p, 50, 3).unwrap();
+        assert_eq!(idx.total_lines(), 2000);
+        let mut expected = 0u64;
+        for (i, line) in content
+            .as_bytes()
+            .split_inclusive(|&b| b == b'\n')
+            .enumerate()
+        {
+            assert_eq!(
+                idx.offset_for_line(&p, i as u32 + 1).unwrap(),
+                expected,
+                "行 {} offset 不符",
+                i + 1
+            );
+            expected += line.len() as u64;
+        }
+    }
+
+    #[test]
+    fn stream_search_finds_match_across_segment_boundary_in_huge_line() {
+        // 单行长度是段大小的 ~2 倍,命中词正好横跨段边界;分段有界扫描必须
+        // 不漏配(旧实现会整行读入,本次改为段间重叠)。
+        let seg = SEARCH_SEGMENT_BYTES;
+        let mut line = vec![b'a'; seg * 2];
+        let needle = b"NEEDLE";
+        let at = seg - 3; // 横跨第一段末尾与第二段开头
+        line[at..at + needle.len()].copy_from_slice(needle);
+        line.push(b'\n');
+        let p = tmp("crossseg", &line);
+        let out = stream_search(
+            &p,
+            "NEEDLE",
+            SearchOptions {
+                case_sensitive: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(out.total_matches, 1);
+        assert_eq!(out.hits[0].line, 1);
+        assert_eq!(out.hits[0].column, (at as u32) + 1, "列 = 命中前字符数 + 1");
+    }
+
+    #[test]
+    fn stream_search_handles_long_single_line_bounded() {
+        // 无换行超长单行:命中在很后面,列号仍精确,且有界扫描不会整行驻留
+        // (本测试以"能完成 + 列正确"为准;内存上界由分段实现保证)。
+        let mut line = vec![b'x'; SEARCH_SEGMENT_BYTES + 4096];
+        line.extend_from_slice(b"target");
+        let p = tmp("longline_search", &line);
+        let out = stream_search(
+            &p,
+            "target",
+            SearchOptions {
+                case_sensitive: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(out.total_matches, 1);
+        assert_eq!(
+            out.hits[0].column,
+            (SEARCH_SEGMENT_BYTES + 4096) as u32 + 1,
+            "列 = 命中前字符数 + 1"
+        );
+    }
+
+    #[test]
+    fn read_window_on_300mb_single_line_is_bounded() {
+        // 300MB 稀疏单行(全 NUL,稀疏文件,读取便宜):窗口读取量封顶在
+        // WINDOW_MAX_BYTES 附近,绝不整行驻留。索引扫描也应完成。
+        let dir = std::env::temp_dir().join(format!("dozer_large_300m_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("huge.bin");
+        let f = std::fs::File::create(&p).unwrap();
+        f.set_len(300 * 1024 * 1024).unwrap();
+        drop(f);
+
+        let idx = LineIndex::build(&p, 1000, 1).unwrap();
+        assert_eq!(idx.total_lines(), 1, "无换行 → 单行");
+        let w = read_window(&p, &idx, 1, 1000, 2000).unwrap();
+        assert!(w.truncated, "超长单行应标记截断");
+        assert!(
+            w.text.len() <= WINDOW_MAX_BYTES,
+            "窗口正文不得超过字节上限,实得 {}",
+            w.text.len()
+        );
+
+        std::fs::remove_file(&p).ok();
     }
 }

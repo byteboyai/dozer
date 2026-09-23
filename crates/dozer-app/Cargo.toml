@@ -84,6 +84,9 @@ sysinfo = "0.32"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.17"
 ignore = "0.4"
+# memchr：大文件窗口化"整文件搜索"的分段有界扫描(超长单行不能整行读入,
+# 见 preview/large_text.rs::stream_search)。已是 grep-searcher 的传递依赖。
+memchr = "2"
 # calamine：表格预览(Tabular Viewer)解析 .xls/.xlsx/.ods,`dates` feature
 # 打开 chrono 日期值供单元格日期格式化(见 tabular::data_to_string)。
 # csv：.csv/.tsv 的流式解析(引号/转义/参差行由它处理)。
