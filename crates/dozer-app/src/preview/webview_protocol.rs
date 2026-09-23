@@ -114,6 +114,13 @@ pub enum EditorEvent {
     /// 窗口化 viewer 的 ⌘F:请求在**整文件**上做流式搜索(而不是只搜持有
     /// 窗口)。Rust 打开大文件搜索条并跑 `large_text::stream_search`。
     FindRequest,
+    /// T4:窗口化 viewer 已把某一 `SetWindow` 的正文真正挂上(`setState` +
+    /// 全局滚动条更新完成),回报窗口首行的全局行号。Rust 以此作为窗口化
+    /// 加载的 Ready 边界:此前 host 保持 hidden/loading,收到本 ACK 才可见并
+    /// `finish_load`,避免出现"空 CodeMirror + 行号 1 + 全局滚动条"中间态。
+    WindowApplied {
+        start_line: u32,
+    },
     Failed {
         message: String,
         recoverable: bool,
@@ -527,6 +534,10 @@ mod tests {
                 anchor_line: 900
             }
         );
+
+        // T4:窗口化首窗 ACK。
+        let wa = parse_event(&raw(r#"{"kind":"window_applied","start_line":1234}"#)).unwrap();
+        assert_eq!(wa.payload, EditorEvent::WindowApplied { start_line: 1234 });
     }
 
     #[test]

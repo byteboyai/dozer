@@ -59,6 +59,8 @@ impl App {
                     let mut pending_view_cmd: Option<(usize, crate::preview::EditorCommand)> = None;
                     // 窗口化 ⌘F:打开整文件搜索条。
                     let mut find_request: Option<usize> = None;
+                    // T4:窗口化收到 `window_applied`(正文已挂上)→ 结束加载。
+                    let mut window_applied: Option<usize> = None;
                     // 关闭前保存:host 回 `save_requested` 落盘成功后,若这条
                     // tab 正等"保存后关闭",记下 id 在 tab 借用结束后关闭。
                     let mut close_after_save: Option<usize> = None;
@@ -83,53 +85,64 @@ impl App {
                             EditorEvent::Ready { .. } => {
                                 tab.web_revision = event.revision;
                                 tab.web_error = None;
-                                let _ = tab
-                                    .backend_state
-                                    .try_transition(crate::preview::BackendState::Ready);
-                                if let Some(line) = tab.pending_jump_line.take() {
-                                    pending_reveal = Some((tab.id, line as u32));
-                                }
-                                // 窗口化:首次就绪时后台建立稀疏索引(索引建好
-                                // 后再推初始窗口)。
-                                if tab.uses_windowed_editor() && tab.window_index().is_none() {
-                                    build_index = Some((tab.id, path.clone(), tab.web_revision));
-                                }
-                                // ready latency 观测(不记文件内容)。
-                                if let Some(started) = tab.load_started.take() {
-                                    tracing::info!(
-                                        panel = ?binding.panel,
-                                        tab_id = tab.id,
-                                        ready_ms = started.elapsed().as_millis() as u64,
-                                        "预览 tab ready"
-                                    );
-                                }
-                                // recovery 恢复:回推正文并重新标脏。
-                                if let Some(text) = tab.pending_restore.take() {
-                                    tab.dirty = true;
-                                    tab.recovery_written = true;
-                                    pending_restore_cmd = Some((tab.id, text, tab.web_revision));
-                                }
-                                // 视图状态恢复(T11):一次 RestoreViewState 应用
-                                // folds → selection/cursor → scroll(顺序由 host
-                                // 保证);空快照不发命令。
-                                if let Some(state) = tab.pending_view.take()
-                                    && !state.is_empty()
-                                {
-                                    pending_view_cmd = Some((
-                                        tab.id,
-                                        crate::preview::EditorCommand::RestoreViewState {
-                                            cursor: state.cursor,
-                                            selection: state.selection,
-                                            top_line: state.top_line,
-                                            folds: state.folds,
-                                        },
-                                    ));
-                                }
                                 // 加载成功:清零该文件连续失败计数。
                                 crate::preview::reset_failure_to(
                                     &crate::preview::failures_path(),
                                     path,
                                 );
+                                if tab.uses_windowed_editor() {
+                                    // T4:窗口化 host 的 `ready` 只代表 host JS
+                                    // 初始化完成(空 doc),正文要等首个 SetWindow。
+                                    // 保持 `Loading`,推进到 `Indexing`(索引建好
+                                    // 后推首窗,收 `window_applied` ACK 才 finish)。
+                                    tab.load_state
+                                        .advance(crate::preview::PreviewLoadStage::Indexing);
+                                    if tab.window_index().is_none() {
+                                        build_index =
+                                            Some((tab.id, path.clone(), tab.web_revision));
+                                    }
+                                    // 窗口化不需要 recovery/视图恢复(只读、正文由
+                                    // SetWindow 决定),也不走下面的 pending_reveal。
+                                } else {
+                                    let _ = tab
+                                        .backend_state
+                                        .try_transition(crate::preview::BackendState::Ready);
+                                    if let Some(line) = tab.pending_jump_line.take() {
+                                        pending_reveal = Some((tab.id, line as u32));
+                                    }
+                                    // ready latency 观测(不记文件内容)。
+                                    if let Some(started) = tab.load_started.take() {
+                                        tracing::info!(
+                                            panel = ?binding.panel,
+                                            tab_id = tab.id,
+                                            ready_ms = started.elapsed().as_millis() as u64,
+                                            "预览 tab ready"
+                                        );
+                                    }
+                                    // recovery 恢复:回推正文并重新标脏。
+                                    if let Some(text) = tab.pending_restore.take() {
+                                        tab.dirty = true;
+                                        tab.recovery_written = true;
+                                        pending_restore_cmd =
+                                            Some((tab.id, text, tab.web_revision));
+                                    }
+                                    // 视图状态恢复(T11):一次 RestoreViewState 应用
+                                    // folds → selection/cursor → scroll(顺序由 host
+                                    // 保证);空快照不发命令。
+                                    if let Some(state) = tab.pending_view.take()
+                                        && !state.is_empty()
+                                    {
+                                        pending_view_cmd = Some((
+                                            tab.id,
+                                            crate::preview::EditorCommand::RestoreViewState {
+                                                cursor: state.cursor,
+                                                selection: state.selection,
+                                                top_line: state.top_line,
+                                                folds: state.folds,
+                                            },
+                                        ));
+                                    }
+                                }
                                 context_changed = true;
                             }
                             EditorEvent::SelectionChanged {
@@ -304,6 +317,13 @@ impl App {
                                 // tab 借用结束后在 pane 上排队装窗口。
                                 window_request = Some((tab.id, anchor_line));
                             }
+                            EditorEvent::WindowApplied { start_line: _ } => {
+                                // T4:窗口化首窗(或相邻窗口)正文已挂上 → 结束
+                                // 加载,host 变可见。generation 由 tab 当前的
+                                // load_state 决定,借用结束后再调 `finish_load`。
+                                window_applied = Some(tab.id);
+                                context_changed = true;
+                            }
                             EditorEvent::FindRequest => {
                                 find_request = Some(tab.id);
                             }
@@ -367,6 +387,12 @@ impl App {
                     }
                     if let Some((tab_id, anchor_line)) = window_request {
                         pane.queue_windowed_view(tab_id, anchor_line);
+                    }
+                    // T4:窗口正文已挂上 → 结束加载(host 变可见)。用 tab 当前
+                    // generation 结束精确的这一次加载。
+                    if let Some(tab_id) = window_applied {
+                        let generation = pane.load_generation(tab_id);
+                        pane.finish_load(tab_id, generation);
                     }
                     if let Some((tab_id, text, revision)) = pending_restore_cmd {
                         pane.queue_editor_command(
@@ -532,6 +558,14 @@ impl App {
                                 // 索引就绪:推初始窗口(有跳转诉求就以目标行为中心,
                                 // 窗口就位后再 reveal)。
                                 let center = jump.unwrap_or(1);
+                                // T4:进入 LoadingWindow,等 host 回 `window_applied`
+                                // 才 finish(此前 host 保持 hidden/loading)。
+                                let generation = pane.load_generation(tab_id);
+                                pane.advance_load(
+                                    tab_id,
+                                    generation,
+                                    crate::preview::PreviewLoadStage::LoadingWindow,
+                                );
                                 pane.queue_windowed_view(tab_id, center);
                                 if let Some(line) = jump {
                                     pane.queue_editor_command(
@@ -583,12 +617,14 @@ impl App {
                             if !windowed && !is_tabular {
                                 pane.finish_load(tab_id, generation);
                             } else if windowed {
-                                // T4:窗口化在这一步起推进 CreatingHost/Indexing;
-                                // 索引建好(T3 现有 spawn)后经 PreviewWindowIndex 推首窗。
+                                // T4:窗口化 route 确定后保持 Loading,推进到
+                                // `CreatingHost`(host 预创建为 hidden)。后续
+                                // host `ready` → `Indexing` → 首窗 → `window_applied`
+                                // 才 finish。
                                 pane.advance_load(
                                     tab_id,
                                     generation,
-                                    crate::preview::PreviewLoadStage::Indexing,
+                                    crate::preview::PreviewLoadStage::CreatingHost,
                                 );
                             }
                         }

@@ -512,6 +512,9 @@ function applyCommand(raw: string): void {
       updateGlobalScrollbar();
       updateTruncationBanner(cmd.truncated === true);
       emitViewport();
+      // T4:正文已真正挂上 → 回报 Rust 作为窗口化 Ready 边界(收到前 host 保
+      // 持 hidden/loading,不会先露出空编辑器)。
+      post({ kind: 'window_applied', start_line: cmd.start_line });
       break;
     }
     case 'reveal_position': {

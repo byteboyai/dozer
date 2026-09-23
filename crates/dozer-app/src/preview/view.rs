@@ -1166,7 +1166,12 @@ impl PreviewPane {
                 let TabKind::File(path) = &tab.kind else {
                     return None;
                 };
-                if !tab.backend_state.is_ready() {
+                // T4:窗口化 tab 在 `Loading` 期就预创建 host(hidden),让它能
+                // 完成 boot → 建索引 → 收首窗,避免 `ready` 空编辑器可见;非窗口
+                // 化仍要 `is_ready()` 才挂载。
+                let windowed_loading =
+                    tab.windowed && matches!(tab.backend_state, BackendState::Loading);
+                if !tab.backend_state.is_ready() && !windowed_loading {
                     return None;
                 }
                 // 语言与只读先从 backend 推出:Code(可含窗口化只读)或
@@ -1212,7 +1217,9 @@ impl PreviewPane {
                 Some(WebviewSpec {
                     id: tab.id,
                     url,
-                    visible: idx == self.active,
+                    // T4:窗口化首窗 ACK 前 host 只预创建不显示(避免空编辑器可见);
+                    // 其余 ready 且激活者可见。
+                    visible: tab.backend_state.is_ready() && idx == self.active,
                     editor_binding: Some(binding),
                 })
             })
@@ -4512,6 +4519,79 @@ mod tests {
         let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
         assert!(tab.windowed);
         assert!(matches!(tab.runtime, PreviewRuntime::Windowed(_)));
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// T4:窗口化 tab 在 `Loading` 期就**预创建 host(hidden)**,避免 `ready`
+    /// 空编辑器先露面;`finish_load` 后才可见。
+    #[test]
+    fn windowed_tab_precreates_hidden_host_until_ready() {
+        let path = windowed_fixture("t4_hidden_host");
+        let mut pane = PreviewPane::default();
+        let (id, generation) = pane.open_path_provisional(path.clone());
+        let generation = generation.unwrap();
+        assert!(pane.apply_profile(id, generation, &profile_file(&path).unwrap()));
+        assert!(pane.tabs().iter().find(|t| t.id == id).unwrap().windowed);
+        // Loading + 窗口化:应出现在 editor 期望清单里,但 **hidden**(不显示)。
+        let specs = pane.desired_editor_webviews(1, crate::app::PanelKind::Files);
+        let spec = specs
+            .iter()
+            .find(|s| s.id == id)
+            .expect("窗口化应预创建 host");
+        assert!(!spec.visible, "首窗 ACK 前保持 hidden");
+        assert!(spec.url.contains("windowed=1"));
+        // 结束加载(模拟收到 window_applied)→ 可见。
+        pane.finish_load(id, generation);
+        let specs = pane.desired_editor_webviews(1, crate::app::PanelKind::Files);
+        let spec = specs.iter().find(|s| s.id == id).unwrap();
+        assert!(spec.visible, "finish 后活跃窗口化 tab 可见");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// T4:窗口化加载阶段序列 `Profiling → CreatingHost → Indexing → LoadingWindow`,
+    /// 直到 `window_applied`(finish)才回到 Idle。
+    #[test]
+    fn windowed_load_stage_sequence_reaches_loading_window_before_ready() {
+        let path = windowed_fixture("t4_stage_seq");
+        let mut pane = PreviewPane::default();
+        let (id, generation) = pane.open_path_provisional(path.clone());
+        let generation = generation.unwrap();
+        assert_eq!(pane.load_stage(id), PreviewLoadStage::Profiling);
+        assert!(pane.apply_profile(id, generation, &profile_file(&path).unwrap()));
+        // 画像落定:窗口化推进 CreatingHost(仍在 Loading)。
+        assert!(pane.advance_load(id, generation, PreviewLoadStage::CreatingHost));
+        assert!(matches!(
+            pane.tabs()
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap()
+                .backend_state,
+            BackendState::Loading
+        ));
+        // host ready → Indexing。
+        assert!(pane.advance_load(id, generation, PreviewLoadStage::Indexing));
+        // 索引就绪 → LoadingWindow(推首窗,等 ACK)。
+        assert!(pane.advance_load(id, generation, PreviewLoadStage::LoadingWindow));
+        assert!(
+            !pane
+                .tabs()
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap()
+                .backend_state
+                .is_ready()
+        );
+        // 收到 window_applied → finish。
+        assert!(pane.finish_load(id, generation));
+        assert_eq!(pane.load_stage(id), PreviewLoadStage::Idle);
+        assert!(
+            pane.tabs()
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap()
+                .backend_state
+                .is_ready()
+        );
         std::fs::remove_file(&path).ok();
     }
 
