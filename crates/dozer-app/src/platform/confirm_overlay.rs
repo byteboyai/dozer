@@ -199,7 +199,29 @@ pub(crate) fn desired_confirm(
     {
         return Some((ConfirmTrigger::DatabaseDelete, map_database_spec(spec)));
     }
+    if let Some(host_id) = ws.ssh.delete_confirm()
+        && let Some(spec) = crate::extensions::ssh::delete_confirm_spec(&ws.ssh, host_id)
+    {
+        return Some((ConfirmTrigger::SshDelete, map_ssh_spec(spec)));
+    }
     None
+}
+
+/// 把 SSH 扩展的 `ConfirmDialog<ssh::Message>` 提升到 app 级。
+fn map_ssh_spec(
+    spec: dialog::ConfirmDialog<crate::extensions::ssh::Message>,
+) -> dialog::ConfirmDialog<Message> {
+    dialog::ConfirmDialog {
+        icon: spec.icon,
+        title: spec.title,
+        description: spec.description,
+        cancel_label: spec.cancel_label,
+        cancel_msg: Message::Ssh(spec.cancel_msg),
+        confirm_label: spec.confirm_label,
+        confirm_msg: Message::Ssh(spec.confirm_msg),
+        confirm_color: spec.confirm_color,
+        content_spacing: spec.content_spacing,
+    }
 }
 
 /// 把 Database 扩展的 `ConfirmDialog<database::Message>` 提升到 app 级。

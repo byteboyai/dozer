@@ -1366,26 +1366,35 @@ pub fn delete_confirm_popup<'a>(
     host_id: &'a str,
     window_width: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    match delete_confirm_spec(ws_state, host_id) {
+        Some(spec) => crate::dialog::confirm(spec, window_width),
+        None => column![].into(),
+    }
+}
+
+/// 删除主机确认框的内容描述——宿主(`platform::confirm_overlay`)与旧的
+/// in-window 渲染都取这一份,保证文案/消息不因迁移而分叉。
+pub(crate) fn delete_confirm_spec(
+    ws_state: &WorkspaceState,
+    host_id: &str,
+) -> Option<crate::dialog::ConfirmDialog<Message>> {
     let name = ws_state
         .hosts()
         .iter()
         .find(|h| h.id == host_id)
         .map(|h| h.name.as_str())
         .unwrap_or(host_id);
-    crate::dialog::confirm(
-        crate::dialog::ConfirmDialog {
-            icon: None,
-            title: format!("删除主机 \"{name}\"?"),
-            description: "这会永久删除这台主机的连接记录。".to_string(),
-            cancel_label: "取消".to_string(),
-            cancel_msg: Message::DeleteHostCancel,
-            confirm_label: "删除".to_string(),
-            confirm_msg: Message::DeleteHost(host_id.to_string()),
-            confirm_color: byteui::theme::color::current().red,
-            content_spacing: 8.0,
-        },
-        window_width,
-    )
+    Some(crate::dialog::ConfirmDialog {
+        icon: None,
+        title: format!("删除主机 \"{name}\"?"),
+        description: "这会永久删除这台主机的连接记录。".to_string(),
+        cancel_label: "取消".to_string(),
+        cancel_msg: Message::DeleteHostCancel,
+        confirm_label: "删除".to_string(),
+        confirm_msg: Message::DeleteHost(host_id.to_string()),
+        confirm_color: byteui::theme::color::current().red,
+        content_spacing: 8.0,
+    })
 }
 
 /// 主机面板底部 footer-bar:1px `BORDER` 分隔线 + `padding([6, 8])` 容器,
@@ -1476,6 +1485,19 @@ mod tests {
             username: "deploy".into(),
             auth: AuthMethod::Password,
         }
+    }
+
+    #[test]
+    fn delete_confirm_spec_uses_host_name_and_targets_id() {
+        let mut ws_state = WorkspaceState::default();
+        ws_state.hosts = vec![host("h1")];
+        ws_state.delete_confirm = Some("h1".into());
+        let spec = delete_confirm_spec(&ws_state, "h1").expect("spec present");
+        assert_eq!(spec.title, "删除主机 \"test-h1\"?");
+        assert!(matches!(
+            spec.confirm_msg,
+            Message::DeleteHost(id) if id == "h1"
+        ));
     }
 
     #[test]

@@ -287,20 +287,6 @@ impl App {
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
-        } else if ws.ssh.delete_confirm().is_some() {
-            // 主机面板「删除主机」确认框:窗口级 overlay,同上。两个主机
-            // 弹窗互斥优先级(同一时刻只显示一个):待确认删除 > 新增/编辑
-            // 表单。
-            let host_id = ws.ssh.delete_confirm().unwrap();
-            let dismiss = crate::dialog::scrim(Message::Ssh(ssh::Message::DeleteHostCancel));
-            stack![
-                base,
-                dismiss,
-                ssh::delete_confirm_popup(&ws.ssh, host_id, self.window_size.0).map(Message::Ssh)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
         } else if ws.ssh.editing().is_some() {
             // 主机面板「添加/编辑主机」表单:窗口级 overlay,同上。
             let draft = ws.ssh.editing().unwrap();
