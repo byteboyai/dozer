@@ -580,6 +580,12 @@ pub fn update(
                 Err(err) => {
                     state.loaded_diff = None;
                     state.diff_load_error = Some(err);
+                    // 同 `SelectCommit`/`SelectFile`:内容不可用意味着 webview
+                    // 即将被 `desired_webviews()` 判定为不需要而销毁,旧的
+                    // "已 ready"/"已送达" 状态不能带到下一次成功加载后重新
+                    // 挂载的新实例上。
+                    state.diff_webview_ready = false;
+                    state.diff_sent_for = None;
                 }
             }
             None
