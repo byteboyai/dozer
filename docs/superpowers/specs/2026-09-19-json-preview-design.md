@@ -1,10 +1,16 @@
 # JSON Preview（Tree Viewer）设计
 
-> **状态（2026-09-22）：架构层已被取代。** 普通 JSON、JSONL/NDJSON、
-> CodeMirror Text、资源预算与 viewer 生命周期的后续方向统一以
+> **状态（2026-09-23）：架构层已被取代，自研实现已删除。** 普通 JSON Tree 现由
+> `vanilla-jsoneditor`（`dozer://json-editor/` host）承载；JSONL/NDJSON 与
+> json5/jsonc 同路，走 CodeMirror 文本（无树）；自研 `json_tree` 模块（本文件的
+> `sonic-rs` on-demand 树）与 `syntect` 已随文件预览收敛删除，`sonic-rs` 直接依赖
+> 也已移除。真正的 Streamed JSON backend 是
+> [`2026-09-22-file-preview-wrap-up.md`](../plans/2026-09-22-file-preview-wrap-up.md)
+> 的 T8 **新增能力**，不再是本文件旧 tree adapter 的延续。
+>
+> 后续方向统一以
 > [`2026-09-22-file-preview-architecture-redesign.md`](./2026-09-22-file-preview-architecture-redesign.md)
-> 为准。本文件继续记录现有自研 JSON Tree 的实现背景与算法，供迁移
-> Streamed JSON 能力时参考；不得再把其中的旧路由/双持有状态当作目标架构。
+> 为准。本文件仅存档历史设计背景，不得再把其中的旧路由/双持有状态当作目标架构。
 
 ## 背景与动机
 

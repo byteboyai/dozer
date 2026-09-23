@@ -1,5 +1,11 @@
 # JSON Preview (Tree Viewer) Implementation Plan
 
+> **状态（2026-09-23）：本计划已作废，其实现（自研 `json_tree` + `sonic-rs`）已删除。**
+> 普通 JSON Tree 现由 `vanilla-jsoneditor` host 承载；JSONL/NDJSON 走 CodeMirror
+> 文本。真正的 Streamed JSON backend 见
+> [`2026-09-22-file-preview-wrap-up.md`](./2026-09-22-file-preview-wrap-up.md) T8。
+> 本文件仅存档历史，不得据其推断当前代码。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a read-only, tree-based JSON/JSONL preview to `dozer-app`'s Preview module, fast enough to open at the 1GB scale, following the async-loading/streaming/capped-and-virtualized principles established by the Tabular (Excel/CSV) Viewer.

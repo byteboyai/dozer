@@ -43,3 +43,12 @@ cargo clippy --all-targets && cargo fmt
 - 新增/改造 icon 按钮、tab 类 UI 时优先复用统一组件（`icons::icon_button_entry`/`tabs::tab_core`），不要重新手写一套 `MouseArea`+`on_enter`/`on_exit` 接线；确需自定义（形状/交互模式明显不同）要在 plan 里说明理由，不是绝对禁止。
 - 新增/改造函数参数 ≥7 个、且有多个同类型参数相邻（顺序传错编译器发现不了，如连续几个 `&str`/`bool`/同一消息类型）时，优先用具名字段的参数结构体替代位置参数（Rust Design Patterns: Builder），不要无脑加 `#[allow(clippy::too_many_arguments)]` 了事；结构体带闭包字段时用结构体自身的泛型参数承载（不要 `Box<dyn Fn>`），保持零成本。参数虽多但天然同质、不易传错的情况（如四个方向 padding、RGBA 四值）不受此约束。
 - **字体统一：只有 code editor 和 pty 终端用 JetBrains Mono（`assets::fonts::code_font()`），其余所有场景（UI 文本、表格预览、面板等）一律用系统默认字体（`Font::default()`），不得给非代码/终端场景上等宽代码字体。** 非 ASCII 文本（如中文）的正确渲染靠 `Shaping::Advanced`（做字体回退到系统 CJK 字体），与主字体无关——`Shaping::Basic` 明确不做回退，会让中文变方块/空白，任何用 canvas `fill_text` 或自绘文本的地方都不能用 `Basic`。
+- **文件预览（File Preview）路由与查看器**（见 `docs/superpowers/plans/2026-09-22-file-preview-wrap-up.md`）：
+  - CodeMirror 与 vanilla-jsoneditor 常开；老 iced `CodeView`、自研普通 JSON 树与 `syntect` 已删除，永不回归。
+  - `preview/router.rs::classify_preview` 是唯一路由决策点。文件名注册表（`Dockerfile`/`Makefile`/`LICENSE*`/`.env`/`.gitignore`…）优先于扩展名，但仍受内容安全检查约束；未知 UTF-8 文本进 Code，未知二进制落 `Unsupported` fallback，空文件按可编辑纯文本。
+  - JSON 家族统一 `PreviewKind::Json`：严格 `.json` 走 vanilla-jsoneditor Tree/Text 双视图，json5/jsonc/jsonl/ndjson 只给 CodeMirror 文本（无树）。
+  - **非 UTF-8 / UTF-16 / 二进制**：只读展示，保存恒拒绝（`PreviewTab::can_save` / `save_gate`）；`encoding_lossy` 文件顶部有只读提示（`lossy=1`）。非法编码绝不允许经 `fetch().text()` 解码后回写原文件。
+  - **External/Unsupported 不 host webview**，由 `workspace/view.rs::preview_fallback_page` 统一 fallback 页承载（类型/路径/原因 + 重试/纯文本只读/外部打开，动作由 `preview::fallback_actions` 生成）。
+  - **大文件（windowed）**：窗口正文封顶 `WINDOW_MAX_BYTES`（`read_window_capped` 用 `take(max+1)`）；稀疏索引/流式搜索按固定块分段、段间重叠，超长单行**不得整行分配**（禁止 `BufRead::split`/`read_until` 整行）；`SetWindow` 派发判据是 `uses_editor_host()`，不是 `uses_codemirror()`；外部变更会失效旧索引（`apply_window_index` 校验 revision）。
+  - **WebView 恒在 iced 之上**：预览内任何 iced 条（Find 条、窗口化搜索条、T10 冲突条）都必须由 `App::preview_desired` 显式把 webview 矩形下推条高，否则会被原生子视图盖住。
+  - **T10 磁盘冲突**：脏 tab 遇外部修改进入显式冲突态（保留我的修改 / 重载磁盘·二次确认）；保存前 `save_gate` 再校验磁盘 mtime，避免提示后又变被静默覆盖。

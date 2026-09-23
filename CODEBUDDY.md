@@ -65,6 +65,15 @@ scripts/build-macos-app.sh [debug|release]   # 打 Dozer.app 包（debug 默认 
 - **mac 先发但架构留门**：不引入 Swift/AppKit 专属能力；核心不依赖 Node/Python。
 - **一期范围以规格 §3"一期范围裁剪"为准**；显式未决项（规格 §8）不得擅自定死。
 - **主题 ByteBoy2077**：bg `#0a0e16`、金 `#F2D94E`（甲方动作专属）、奶油文字 `#FFE5B4`、青 `#47DEF0`、绿 `#1AD585`。配色常量在 `dozer-app/src/theme.rs`。
+- **文件预览（File Preview）路由与查看器**（见 `docs/superpowers/plans/2026-09-22-file-preview-wrap-up.md`）：
+  - CodeMirror 与 vanilla-jsoneditor 常开；老 iced `CodeView`、自研普通 JSON 树与 `syntect` 已删除，永不回归。
+  - `preview/router.rs::classify_preview` 是唯一路由决策点。文件名注册表（`Dockerfile`/`Makefile`/`LICENSE*`/`.env`/`.gitignore`…）优先于扩展名，但仍受内容安全检查约束；未知 UTF-8 文本进 Code，未知二进制落 `Unsupported` fallback，空文件按可编辑纯文本。
+  - JSON 家族统一 `PreviewKind::Json`：严格 `.json` 走 vanilla-jsoneditor Tree/Text 双视图，json5/jsonc/jsonl/ndjson 只给 CodeMirror 文本（无树）。
+  - **非 UTF-8 / UTF-16 / 二进制**：只读展示，保存恒拒绝（`PreviewTab::can_save` / `save_gate`）；`encoding_lossy` 文件顶部有只读提示（`lossy=1`）。非法编码绝不允许经 `fetch().text()` 解码后回写原文件。
+  - **External/Unsupported 不 host webview**，由 `workspace/view.rs::preview_fallback_page` 统一 fallback 页承载（类型/路径/原因 + 重试/纯文本只读/外部打开）。
+  - **大文件（windowed）**：窗口正文封顶 `WINDOW_MAX_BYTES`；稀疏索引/流式搜索按固定块分段、段间重叠，超长单行**不得整行分配**（禁止 `BufRead::split`/`read_until` 整行）；`SetWindow` 派发判据是 `uses_editor_host()`；外部变更会失效旧索引。
+  - **WebView 恒在 iced 之上**：预览内的 iced 条（Find 条、窗口化搜索条、T10 冲突条）都必须由 `App::preview_desired` 显式把 webview 矩形下推条高。
+  - **T10 磁盘冲突**：脏 tab 遇外部修改进入显式冲突态（保留我的修改 / 重载磁盘·二次确认）；保存前 `save_gate` 再校验磁盘 mtime。
 
 ## 路径约定（`dozer-core/src/paths.rs`）
 

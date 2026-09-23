@@ -92,7 +92,6 @@ memchr = "2"
 # csv：.csv/.tsv 的流式解析(引号/转义/参差行由它处理)。
 calamine = { version = "0.36", features = ["dates"] }
 csv = "1"
-sonic-rs = "0.5.10"
 
 [dev-dependencies]
 tempfile = "3"

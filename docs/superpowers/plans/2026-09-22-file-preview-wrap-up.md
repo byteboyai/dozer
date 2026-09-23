@@ -382,20 +382,24 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
 
 ## T15. 文档、依赖、打包与最终验收
 
-- [ ] 更新旧 JSON 计划：普通 JSON Tree 已由 vanilla-jsoneditor 替代；Streamed
+- [x] 更新旧 JSON 计划：普通 JSON Tree 已由 vanilla-jsoneditor 替代；Streamed
       JSON 是 T8 新实现，不再描述为旧 tree adapter 延续。
-- [ ] 更新 `CLAUDE.md`/`CODEBUDDY.md` 中编辑器、路由、runtime、资源与大文件约束。
-- [ ] 核对 macOS 打包包含 editor/json-editor/flyfish/html host 资源与字体；全部离线，
-      无 CDN、无 404。
-- [ ] 核对第三方许可证；运行 `cargo udeps` 或人工确认无残留直接依赖。
+- [x] 更新 `CLAUDE.md`/`CODEBUDDY.md` 中编辑器、路由、runtime、资源与大文件约束
+      (新增「文件预览路由与查看器」小节)。
+- [~] 核对 macOS 打包包含 editor/json-editor/flyfish/html host 资源与字体；全部离线，
+      无 CDN、无 404。(editor/json-editor/flyfish 已在包内;html host 是 T7 未做;
+      字体为二进制内嵌;web 产物无运行时外链。)
+- [x] 核对第三方许可证；运行 `cargo udeps` 或人工确认无残留直接依赖。
+      (`cargo machete` 干净;已移除因删除自研 JSON 树而失效的 `sonic-rs` 直接依赖。)
 - [ ] 更新人工验收清单到最终目标状态，删除迁移期“预期失败”。
-- [ ] 执行：
+- [~] 执行：
   - `cargo fmt --check`
   - `cargo test -p dozer-app`
   - `cargo test --workspace`
   - `cargo clippy --workspace --all-targets`
   - editor/json-editor 的 typecheck、test、build
   - release macOS app smoke test
+  (fmt/test/clippy(dozer-app)/editor 已过;workspace 全量/release smoke 未跑。)
 - [ ] 按清单完整真机验收，保存路由矩阵、资源诊断、性能数据和失败截图。
 - [ ] 更新总计划完成定义和所有 phase progress；未通过项不得用“已知限制”改名后勾选。
 
