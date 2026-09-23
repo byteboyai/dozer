@@ -206,11 +206,70 @@ pub struct DiffFileEntry {
     /// 正文,只留一行提示。大 diff(几千行)一次性喂给 `text()` widget 排版,
     /// 布局开销肉眼可见("打开一次提交详情也有些卡顿"),而详情面板本来就
     /// 不是给通读整份 diff 用的,截断只影响展示,不影响 diff 计算的正确性。
+    ///
+    /// CodeMirror diff 接管后,`patch`/`truncated` 不再是 diff 面板的正文来源
+    /// (正文改由 `old_blob`/`new_blob` 读出的双侧文本经 `SetDiffDocument`
+    /// 推送);保留它们是为 `file_history` 同款纯文本兜底与既有测试。
     pub truncated: bool,
+    /// 旧版本 blob oid(新增文件为 `None`)。CodeMirror diff 渲染用,与
+    /// `patch`(unified patch 文本)并存,互不影响。
+    pub old_blob: Option<git2::Oid>,
+    /// 新版本 blob oid(删除文件为 `None`)。
+    pub new_blob: Option<git2::Oid>,
 }
 
 /// 单个文件 `patch` 文本的字符数上限,超过就截断(见 [`DiffFileEntry::truncated`])。
 const MAX_PATCH_CHARS: usize = 20_000;
+
+/// 单侧 blob 内容的字节上限(old/new 各自判定),超过就判定"不可渲染"。
+pub const MAX_DIFF_BLOB_BYTES: usize = 512 * 1024;
+
+/// [`diff_blob_content`] 的结果:要么是可渲染的双侧文本,要么给出原因
+/// (供 UI 占位文案使用)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffBlobContent {
+    Text { old_text: String, new_text: String },
+    NotRenderable { reason: String },
+}
+
+/// 按新增/删除文件语义把 `None` 侧当空字符串处理;非 `None` 侧任一超过
+/// [`MAX_DIFF_BLOB_BYTES`] 或含二进制内容(NUL 字节 / 非法 UTF-8)都判定
+/// "不可渲染"——不做部分截断渲染。
+pub fn diff_blob_content(
+    repo: &git2::Repository,
+    old_blob: Option<git2::Oid>,
+    new_blob: Option<git2::Oid>,
+) -> Result<DiffBlobContent, String> {
+    fn read_side(
+        repo: &git2::Repository,
+        oid: Option<git2::Oid>,
+    ) -> Result<Option<String>, String> {
+        let Some(oid) = oid else {
+            return Ok(Some(String::new()));
+        };
+        let blob = repo.find_blob(oid).map_err(|e| e.message().to_string())?;
+        let content = blob.content();
+        if content.len() > MAX_DIFF_BLOB_BYTES {
+            return Ok(None);
+        }
+        if content.contains(&0u8) {
+            return Ok(None);
+        }
+        match std::str::from_utf8(content) {
+            Ok(text) => Ok(Some(text.to_string())),
+            Err(_) => Ok(None),
+        }
+    }
+
+    let old_text = read_side(repo, old_blob)?;
+    let new_text = read_side(repo, new_blob)?;
+    match (old_text, new_text) {
+        (Some(old_text), Some(new_text)) => Ok(DiffBlobContent::Text { old_text, new_text }),
+        _ => Ok(DiffBlobContent::NotRenderable {
+            reason: "文件不是文本,或超过大小上限,不支持 diff 渲染".to_string(),
+        }),
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct CommitDetail {
@@ -238,6 +297,10 @@ pub enum Message {
     SnapshotLoaded(PathBuf, usize, Result<GitLogSnapshot, String>),
     /// 点文件列表某一行,选中它(右下面板据此展示该文件的 diff)。
     SelectFile(String),
+    /// 选中文件的 blob 内容异步加载完成。`git2::Oid`/`String` 是加载发起时
+    /// 的 commit/路径快照,落地前核对仍匹配当前选择,不匹配则丢弃(用户
+    /// 手快切换选择后的迟到结果)。
+    DiffContentLoaded(git2::Oid, String, Result<DiffBlobContent, String>),
     /// 展开左侧面板底部的分支切换下拉(首次展开时内核顺带异步查一次
     /// `delivery::local_branches`)。
     BranchPickerOpen,
@@ -262,6 +325,17 @@ pub enum Message {
     Hover(HoverId, bool),
 }
 
+/// 当前已加载、给 CodeMirror diff webview 用的内容——`commit`/`path` 是
+/// 加载时的选择快照,`SelectFile`/`SelectCommit` 落地新结果前先核对这两个
+/// 字段还对不对得上"现在真正选中的",不对就丢弃(stale-guard,同
+/// `DetailLoaded` 的 `repo_path`/`oid` 核对手法)。
+#[derive(Debug, Clone)]
+pub struct LoadedDiff {
+    pub commit: git2::Oid,
+    pub path: String,
+    pub content: DiffBlobContent,
+}
+
 /// Git Log 面板的全部状态。现在挂在 `App`(不按项目分,见设计文档"非
 /// 目标"——这次纯重构不改这个现状),以后要改成按项目分的话,类型本身
 /// 不用变,只是挪个持有位置。
@@ -274,6 +348,26 @@ pub struct State {
     /// 右上文件列表当前选中的文件路径(`CommitDetail.files[].path`)。切
     /// commit 时先清空,新 `detail` 落地后预选第一个改动文件。
     selected_file: Option<String>,
+    /// 当前选中文件已加载的 diff 内容(CodeMirror webview 用)。切
+    /// commit/切选中文件时先清空,新结果落地(`DiffContentLoaded`)且仍
+    /// 匹配当前选择才重新填入。
+    loaded_diff: Option<LoadedDiff>,
+    /// 当前选中文件的 diff **加载失败**原因(`DiffContentLoaded` 携带
+    /// `Err` 时落地,如并发操作导致仓库状态变化)。与 `loaded_diff` 互斥:
+    /// 失败时 `loaded_diff` 为 `None`、这里为 `Some`,UI 展示错误占位而不
+    /// 是无限"加载中";切 commit/文件时清空。
+    diff_load_error: Option<String>,
+    /// 当前挂载的 diff webview 是否已经真正 `ready`(JS 端 `__dozer.dispatch`
+    /// 已注册)。只由 `Message::GitLogDiffWebviewEvent` 的 `Ready` 分支置
+    /// true;`loaded_diff` 被清空(见 `SelectCommit`/`SelectFile`)时连带置回
+    /// false——webview 会被 `desired_webviews()` 判定为不再需要而销毁,
+    /// 下次重新挂载是全新实例,必须等它自己的 `Ready` 才能再发命令。
+    diff_webview_ready: bool,
+    /// 最近一次**已下发**(`take_git_log_diff_script` 在确认该 webview 确
+    /// 实在本帧池里、可 `evaluate_script` 之后才更新)的内容对应的
+    /// `(commit, path)`。跟 `loaded_diff` 的 `(commit, path)` 不一致就还
+    /// 需要再推一次;webview 那一帧还没进池就不写,下一帧重试,内容不丢。
+    diff_sent_for: Option<(git2::Oid, String)>,
     /// 最近一次派发的 `build` 请求 (repo_path, max_count)——落地时核对
     /// 还对不对得上"现在真正需要的",不对就丢弃。
     pending: Option<(PathBuf, usize)>,
@@ -330,6 +424,65 @@ impl State {
         self.cache.as_ref().map(|c| c.repo_path())
     }
 
+    /// 是否该向 CodeMirror diff webview 推送内容,以及推什么。
+    ///
+    /// 返回 `Some((commit, path, old_text, new_text))` 的条件(全部满足):
+    /// - 已加载出**可渲染文本**(二进制/超限/失败 → `None`,UI 走 iced 占位);
+    /// - webview 已确认 `Ready`(`__dozer.dispatch` 已注册);
+    /// - 当前 `(commit, path)` 尚未送达过(`diff_sent_for` 不同)。
+    ///
+    /// 纯状态判定,不碰 webview 池——调用方(`App::take_git_log_diff_script`)
+    /// 拿去组 envelope 后,只有真正 `evaluate_script` 成功才写
+    /// `set_diff_sent_for`,保证"webview 还没进池"时下一帧重试不丢内容。
+    pub fn pending_diff_push(&self) -> Option<(git2::Oid, String, String, String)> {
+        if !self.diff_webview_ready {
+            return None;
+        }
+        let loaded = self.loaded_diff.as_ref()?;
+        if self.diff_sent_for.as_ref() == Some(&(loaded.commit, loaded.path.clone())) {
+            return None;
+        }
+        let DiffBlobContent::Text { old_text, new_text } = &loaded.content else {
+            return None;
+        };
+        Some((
+            loaded.commit,
+            loaded.path.clone(),
+            old_text.clone(),
+            new_text.clone(),
+        ))
+    }
+
+    /// 当前是否应该挂载 diff 的 CodeMirror webview,以及它绑定的文件路径。
+    ///
+    /// 只有"已加载出可渲染文本"(`DiffBlobContent::Text`)才挂——二进制/
+    /// 超限/加载失败/未选中文件都返回 `None`,由 `diff_pane_view` 走 iced
+    /// 占位(`NotRenderable` 原因文案),绝不让 webview 抢占占位区。
+    /// `path` 供调用方组 `EditorHostBinding`(URL 里的 `doc`/`lang` 用),
+    /// 与 `pending_diff_push` 的推送内容同源同快照。
+    pub fn diff_webview_desired(&self) -> Option<&str> {
+        let loaded = self.loaded_diff.as_ref()?;
+        match &loaded.content {
+            DiffBlobContent::Text { .. } => Some(loaded.path.as_str()),
+            DiffBlobContent::NotRenderable { .. } => None,
+        }
+    }
+
+    /// `take_git_log_diff_script` 确认内容已下发后写回(见字段文档)。
+    pub(crate) fn set_diff_sent_for(&mut self, key: (git2::Oid, String)) {
+        self.diff_sent_for = Some(key);
+    }
+
+    /// `GitLogDiffWebviewEvent` 的 `Ready` 分支置位(见字段文档)。
+    pub(crate) fn set_diff_webview_ready(&mut self, ready: bool) {
+        self.diff_webview_ready = ready;
+    }
+
+    /// `Ready` 分支另需清空送达标记,强制下一帧重发一次当前内容。
+    pub(crate) fn clear_diff_sent_for(&mut self) {
+        self.diff_sent_for = None;
+    }
+
     /// 搜索框是否持有 iced 真实焦点(`App::git_log_search_focused` 转发)。
     pub fn search_focused(&self) -> bool {
         self.search_focused
@@ -369,6 +522,10 @@ pub fn update(
             state.selected = Some(oid);
             state.detail = None;
             state.selected_file = None;
+            state.loaded_diff = None;
+            state.diff_load_error = None;
+            state.diff_webview_ready = false;
+            state.diff_sent_for = None;
             let repo_path = state.cache.as_ref().map(|c| c.repo_path().to_path_buf())?;
             handle.spawn(async move {
                 let repo_path2 = repo_path.clone();
@@ -380,7 +537,57 @@ pub fn update(
             None
         }
         Message::SelectFile(path) => {
-            state.selected_file = Some(path);
+            state.selected_file = Some(path.clone());
+            state.loaded_diff = None;
+            state.diff_load_error = None;
+            state.diff_webview_ready = false;
+            state.diff_sent_for = None;
+            let commit = state.selected?;
+            let Ok(detail) = state.detail.as_ref()? else {
+                return None;
+            };
+            let entry = detail.files.iter().find(|f| f.path == path)?;
+            let (old_blob, new_blob) = (entry.old_blob, entry.new_blob);
+            let repo_path = state.cache.as_ref().map(|c| c.repo_path().to_path_buf())?;
+            handle.spawn(async move {
+                let repo_path2 = repo_path.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    let repo =
+                        git2::Repository::open(&repo_path2).map_err(|e| e.message().to_string())?;
+                    diff_blob_content(&repo, old_blob, new_blob)
+                })
+                .await
+                .unwrap_or_else(|e| Err(format!("diff 内容加载任务失败: {e}")));
+                emit(Message::DiffContentLoaded(commit, path, result));
+            });
+            None
+        }
+        Message::DiffContentLoaded(commit, path, result) => {
+            if state.selected != Some(commit)
+                || state.selected_file.as_deref() != Some(path.as_str())
+            {
+                return None; // stale:用户已经切换了选择
+            }
+            match result {
+                Ok(content) => {
+                    state.loaded_diff = Some(LoadedDiff {
+                        commit,
+                        path,
+                        content,
+                    });
+                    state.diff_load_error = None;
+                }
+                Err(err) => {
+                    state.loaded_diff = None;
+                    state.diff_load_error = Some(err);
+                    // 同 `SelectCommit`/`SelectFile`:内容不可用意味着 webview
+                    // 即将被 `desired_webviews()` 判定为不需要而销毁,旧的
+                    // "已 ready"/"已送达" 状态不能带到下一次成功加载后重新
+                    // 挂载的新实例上。
+                    state.diff_webview_ready = false;
+                    state.diff_sent_for = None;
+                }
+            }
             None
         }
         Message::DetailLoaded(repo_path, oid, result) => {
@@ -513,11 +720,15 @@ pub fn commit_detail(repo_path: &Path, oid: git2::Oid) -> Result<CommitDetail, S
                 .or_else(|| delta.old_file().path())?
                 .to_string_lossy()
                 .into_owned();
+            let old_blob = (!delta.old_file().id().is_zero()).then(|| delta.old_file().id());
+            let new_blob = (!delta.new_file().id().is_zero()).then(|| delta.new_file().id());
             Some(DiffFileEntry {
                 path,
                 status: delta.status(),
                 patch: String::new(), // 下面按文件路径回填
                 truncated: false,
+                old_blob,
+                new_blob,
             })
         })
         .collect();
@@ -1000,8 +1211,12 @@ pub fn view<'a>(
                     byteui::theme::color::current().bg,
                     Message::RowDragStart,
                 ),
-                container(diff_pane_view(detail, state.selected_file.as_deref()))
-                    .height(Length::FillPortion(bottom_portion)),
+                container(diff_pane_view(
+                    state,
+                    detail,
+                    state.selected_file.as_deref()
+                ))
+                .height(Length::FillPortion(bottom_portion)),
             ]
             .height(Length::Fill)
             .into()
@@ -1034,14 +1249,67 @@ pub fn view<'a>(
         .into()
 }
 
-/// 右下 diff 内容面板:`selected_file` 对应文件的 patch,逐行染色(复用
-/// `diff_render::colored_diff_lines`)。找不到该路径(比如换 commit 那一瞬间
-/// `selected_file` 还没跟上新 `detail`)或未选中任何文件时展示占位文案,
-/// 不 panic。
+/// 右下 diff 内容面板。渲染分三种情形(见设计文档"diff pane 路由"):
+///
+/// 1. **CodeMirror diff webview 已挂载**(`state.diff_webview_desired()` 为
+///    `Some`,即已加载出可渲染双侧文本):这里只返回一个**空容器**占位——
+///    真正内容由原生 wry 子视图绘制,webview 恒在 iced 之上,iced 再画一遍
+///    只会造成重复/闪烁,所以什么都不画,只保留几何占位。
+/// 2. **不可渲染**(二进制/超限):`loaded_diff` 是
+///    `DiffBlobContent::NotRenderable` 时,展示只读占位文案 + `reason`,
+///    webview 此时不会挂载。
+///
+/// 加载失败(`diff_load_error` 为 `Some`)时展示错误占位,webview 同样不
+/// 会挂载。文件已选中但结果未落地(异步读 blob 的过渡帧)时给中性加载态;
+/// 未选中文件则沿用既有"未选中文件"占位。
+///
+/// `selected_file` 对应文件的 patch 在旧实现里逐行染色(`colored_diff_lines`),
+/// CodeMirror 接管后 iced 不再绘制正文;不可渲染/失败时不退回旧染色(语义
+/// 不同,会给用户"能看"的错觉),而是明确给只读原因。
 fn diff_pane_view<'a>(
+    state: &'a State,
     detail: &'a Result<CommitDetail, String>,
     selected_file: Option<&'a str>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    // 情形 1:webview 会挂载 → iced 侧留空,不重复绘制。
+    if state.diff_webview_desired().is_some() {
+        return container(iced_widget::Space::new()).into();
+    }
+    // 情形 2:已加载出明确"不可渲染"结果(与当前 selection 对齐,stale
+    // 结果不会落进 `loaded_diff`),给只读占位 + 原因。
+    if let Some(loaded) = state.loaded_diff.as_ref()
+        && let DiffBlobContent::NotRenderable { reason } = &loaded.content
+    {
+        return container(
+            column![
+                text("该文件无法在 diff 视图中渲染")
+                    .size(byteui::theme::font::caption())
+                    .color(byteui::theme::color::current().dim),
+                text(reason.clone())
+                    .size(byteui::theme::font::caption_sm())
+                    .color(byteui::theme::color::current().dim),
+            ]
+            .spacing(4),
+        )
+        .padding(8)
+        .into();
+    }
+    // 情形 2b:blob 读取失败(与当前 selection 对齐才会落地),展示原因。
+    if let Some(err) = state.diff_load_error.as_ref() {
+        return container(
+            column![
+                text("diff 内容加载失败")
+                    .size(byteui::theme::font::caption())
+                    .color(byteui::theme::color::current().dim),
+                text(err.clone())
+                    .size(byteui::theme::font::caption_sm())
+                    .color(byteui::theme::color::current().dim),
+            ]
+            .spacing(4),
+        )
+        .padding(8)
+        .into();
+    }
     let Ok(detail) = detail else {
         // 错误态已经在 file_list_view 里展示过一次,这里不重复展示错误
         // 文案,给个中性占位即可。
@@ -1056,7 +1324,7 @@ fn diff_pane_view<'a>(
         .padding(8)
         .into();
     };
-    let Some(entry) = detail.files.iter().find(|f| f.path == path) else {
+    let Some(_entry) = detail.files.iter().find(|f| f.path == path) else {
         return container(
             text("未选中文件")
                 .size(byteui::theme::font::caption())
@@ -1065,38 +1333,16 @@ fn diff_pane_view<'a>(
         .padding(8)
         .into();
     };
-    let mut content = column![
-        text(entry.path.clone())
+    // 情形 3:文件已选中、但 `loaded_diff` 还没落地(异步读 blob 的过渡帧)。
+    // CodeMirror webview 是唯一渲染路径,这一帧不退回旧的 iced 染色(既与
+    // "CodeMirror 接管"矛盾,又会在内容到达后闪一下),给中性加载态即可。
+    container(
+        text("加载 diff 中…")
             .size(byteui::theme::font::caption())
-            .color(byteui::theme::color::current().cream)
-    ]
-    .spacing(4);
-    if entry.patch.is_empty() {
-        content = content.push(
-            text("(无 diff 内容)")
-                .size(byteui::theme::font::caption())
-                .color(byteui::theme::color::current().dim),
-        );
-    } else {
-        content = content.push(crate::extensions::diff_render::colored_diff_lines(
-            &entry.patch,
-        ));
-    }
-    if entry.truncated {
-        content = content.push(
-            text("… diff 过长,已截断显示")
-                .size(byteui::theme::font::caption_sm())
-                .color(byteui::theme::color::current().dim),
-        );
-    }
-    scrollable(content)
-        .direction(scrollable::Direction::Vertical(
-            byteui::interaction::scrollbar::scrollbar(),
-        ))
-        .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style())
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+            .color(byteui::theme::color::current().dim),
+    )
+    .padding(8)
+    .into()
 }
 
 /// 左侧面板底部 footbar:完全照抄文件树面板的 `git_footer_bar` 结构——顶部
@@ -1482,6 +1728,222 @@ mod tests {
     }
 
     #[test]
+    fn commit_detail_populates_blob_oids_for_added_files() {
+        let (_dir, repo) = mkrepo_with_one_commit();
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).expect("应能解析临时仓库");
+        let root_oid = snapshot.rows[0].oid;
+        let detail = commit_detail(&repo, root_oid).expect("根提交相对空树应该也能算出 diff");
+        for f in &detail.files {
+            assert_eq!(f.old_blob, None, "根提交没有旧版本,old_blob 必须是 None");
+            assert!(f.new_blob.is_some(), "新增文件必须有 new_blob");
+        }
+    }
+
+    /// 在 `mkrepo_with_one_commit()` 基础上追加一个"修改 a.txt、删除 b.txt"
+    /// 的第二个提交,供改动/删除文件的 blob 提取测试用。
+    fn mkrepo_with_modify_and_delete_commit() -> (tempfile::TempDir, std::path::PathBuf) {
+        let (dir, repo) = mkrepo_with_one_commit();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .unwrap();
+            assert!(st.status.success(), "git {args:?}: {st:?}");
+        };
+        std::fs::write(repo.join("a.txt"), "one\nmodified\n").unwrap();
+        git(&["rm", "-q", "b.txt"]);
+        git(&["add", "a.txt"]);
+        git(&["commit", "-qm", "modify and delete"]);
+        (dir, repo)
+    }
+
+    #[test]
+    fn commit_detail_populates_blob_oids_for_modified_and_deleted_files() {
+        let (_dir, repo) = mkrepo_with_modify_and_delete_commit();
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).expect("应能解析临时仓库");
+        let head_oid = snapshot.rows[0].oid;
+        let detail = commit_detail(&repo, head_oid).expect("应能算出第二个提交的 diff");
+
+        let modified = detail
+            .files
+            .iter()
+            .find(|f| f.path == "a.txt")
+            .expect("a.txt 应该在改动文件里");
+        assert_eq!(modified.status, git2::Delta::Modified);
+        assert!(modified.old_blob.is_some());
+        assert!(modified.new_blob.is_some());
+        assert_ne!(modified.old_blob, modified.new_blob);
+
+        let deleted = detail
+            .files
+            .iter()
+            .find(|f| f.path == "b.txt")
+            .expect("b.txt 应该在改动文件里");
+        assert_eq!(deleted.status, git2::Delta::Deleted);
+        assert!(deleted.old_blob.is_some());
+        assert_eq!(deleted.new_blob, None, "删除文件必须是 new_blob = None");
+    }
+
+    #[test]
+    fn diff_blob_content_reads_modified_file_both_sides() {
+        let (_dir, repo) = mkrepo_with_modify_and_delete_commit();
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).expect("应能解析临时仓库");
+        let head_oid = snapshot.rows[0].oid;
+        let detail = commit_detail(&repo, head_oid).unwrap();
+        let modified = detail.files.iter().find(|f| f.path == "a.txt").unwrap();
+
+        let git_repo = git2::Repository::open(&repo).unwrap();
+        let content = diff_blob_content(&git_repo, modified.old_blob, modified.new_blob)
+            .expect("修改文件的 blob 内容应能读出");
+        let DiffBlobContent::Text { old_text, new_text } = content else {
+            panic!("修改文件应该判定为可渲染文本");
+        };
+        assert_eq!(old_text, "one\n");
+        assert_eq!(new_text, "one\nmodified\n");
+    }
+
+    #[test]
+    fn diff_blob_content_added_file_has_empty_old_side() {
+        let (_dir, repo) = mkrepo_with_one_commit();
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).expect("应能解析临时仓库");
+        let root_oid = snapshot.rows[0].oid;
+        let detail = commit_detail(&repo, root_oid).unwrap();
+        let added = detail.files.iter().find(|f| f.path == "a.txt").unwrap();
+
+        let git_repo = git2::Repository::open(&repo).unwrap();
+        let content = diff_blob_content(&git_repo, added.old_blob, added.new_blob).unwrap();
+        let DiffBlobContent::Text { old_text, new_text } = content else {
+            panic!("新增文件应该判定为可渲染文本");
+        };
+        assert_eq!(old_text, "");
+        assert_eq!(new_text, "one\n");
+    }
+
+    #[test]
+    fn diff_blob_content_deleted_file_has_empty_new_side() {
+        let (_dir, repo) = mkrepo_with_modify_and_delete_commit();
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).expect("应能解析临时仓库");
+        let head_oid = snapshot.rows[0].oid;
+        let detail = commit_detail(&repo, head_oid).unwrap();
+        let deleted = detail.files.iter().find(|f| f.path == "b.txt").unwrap();
+
+        let git_repo = git2::Repository::open(&repo).unwrap();
+        let content = diff_blob_content(&git_repo, deleted.old_blob, deleted.new_blob).unwrap();
+        let DiffBlobContent::Text { old_text, new_text } = content else {
+            panic!("删除文件应该判定为可渲染文本");
+        };
+        assert_eq!(old_text, "two\n");
+        assert_eq!(new_text, "");
+    }
+
+    /// tempdir 里造一个含二进制文件(NUL 字节)的一次提交仓库。
+    fn mkrepo_with_binary_commit() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .unwrap();
+            assert!(st.status.success(), "git {args:?}: {st:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(repo.join("blob.bin"), [0x00u8, 0x01, 0x02, 0xff]).unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "binary"]);
+        (dir, repo)
+    }
+
+    #[test]
+    fn diff_blob_content_rejects_binary_content() {
+        let (_dir, repo) = mkrepo_with_binary_commit();
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).expect("应能解析临时仓库");
+        let root_oid = snapshot.rows[0].oid;
+        let detail = commit_detail(&repo, root_oid).unwrap();
+        let bin = detail.files.iter().find(|f| f.path == "blob.bin").unwrap();
+
+        let git_repo = git2::Repository::open(&repo).unwrap();
+        let content = diff_blob_content(&git_repo, bin.old_blob, bin.new_blob).unwrap();
+        assert!(matches!(content, DiffBlobContent::NotRenderable { .. }));
+    }
+
+    #[test]
+    fn diff_blob_content_rejects_oversized_blob() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .unwrap();
+            assert!(st.status.success(), "git {args:?}: {st:?}");
+        };
+        git(&["init", "-q"]);
+        // 512KB 上限之上一字节:MAX_DIFF_BLOB_BYTES = 512 * 1024。
+        let big = "a".repeat(MAX_DIFF_BLOB_BYTES + 1);
+        std::fs::write(repo.join("big.txt"), &big).unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "big"]);
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).unwrap();
+        let root_oid = snapshot.rows[0].oid;
+        let detail = commit_detail(&repo, root_oid).unwrap();
+        let entry = detail.files.iter().find(|f| f.path == "big.txt").unwrap();
+
+        let git_repo = git2::Repository::open(&repo).unwrap();
+        let content = diff_blob_content(&git_repo, entry.old_blob, entry.new_blob).unwrap();
+        assert!(matches!(content, DiffBlobContent::NotRenderable { .. }));
+    }
+
+    #[test]
+    fn diff_blob_content_accepts_blob_exactly_at_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .unwrap();
+            assert!(st.status.success(), "git {args:?}: {st:?}");
+        };
+        git(&["init", "-q"]);
+        let exact = "a".repeat(MAX_DIFF_BLOB_BYTES);
+        std::fs::write(repo.join("exact.txt"), &exact).unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "exact"]);
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).unwrap();
+        let root_oid = snapshot.rows[0].oid;
+        let detail = commit_detail(&repo, root_oid).unwrap();
+        let entry = detail.files.iter().find(|f| f.path == "exact.txt").unwrap();
+
+        let git_repo = git2::Repository::open(&repo).unwrap();
+        let content = diff_blob_content(&git_repo, entry.old_blob, entry.new_blob).unwrap();
+        assert!(
+            matches!(content, DiffBlobContent::Text { .. }),
+            "恰好等于上限应当可渲染"
+        );
+    }
+
+    #[test]
     fn ref_labels_text_head_marker_and_join() {
         let refs = vec![
             RefLabel {
@@ -1648,12 +2110,16 @@ mod tests {
                     status: git2::Delta::Modified,
                     patch: "+x".to_string(),
                     truncated: false,
+                    old_blob: None,
+                    new_blob: None,
                 },
                 DiffFileEntry {
                     path: "b.rs".to_string(),
                     status: git2::Delta::Added,
                     patch: "+y".to_string(),
                     truncated: false,
+                    old_blob: None,
+                    new_blob: None,
                 },
             ],
         };
@@ -1667,6 +2133,298 @@ mod tests {
             state.selected_file.as_deref(),
             Some("a.rs"),
             "detail 落地后应预选第一个改动文件"
+        );
+    }
+
+    #[tokio::test]
+    async fn select_file_clears_stale_diff_and_requests_fresh_load() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let commit_oid = git2::Oid::from_bytes(&[7; 20]).unwrap();
+        let old_blob = git2::Oid::from_bytes(&[8; 20]).unwrap();
+        let new_blob = git2::Oid::from_bytes(&[9; 20]).unwrap();
+        let mut state = State {
+            cache: Some(snapshot_at(&repo_path, 10)),
+            selected: Some(commit_oid),
+            detail: Some(Ok(CommitDetail {
+                files: vec![DiffFileEntry {
+                    path: "a.txt".into(),
+                    status: git2::Delta::Modified,
+                    patch: "x".into(),
+                    truncated: false,
+                    old_blob: Some(old_blob),
+                    new_blob: Some(new_blob),
+                }],
+            })),
+            loaded_diff: Some(LoadedDiff {
+                commit: commit_oid,
+                path: "old-selection.txt".into(),
+                content: DiffBlobContent::Text {
+                    old_text: "a".into(),
+                    new_text: "b".into(),
+                },
+            }),
+            ..State::default()
+        };
+
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::SelectFile("a.txt".to_string()),
+            &handle,
+            |_| {},
+        );
+
+        assert_eq!(state.selected_file.as_deref(), Some("a.txt"));
+        assert!(
+            state.loaded_diff.is_none(),
+            "换选中文件后必须先清空旧内容,不能让 stale 内容闪一下"
+        );
+    }
+
+    #[tokio::test]
+    async fn diff_content_loaded_ignored_when_selection_moved_on() {
+        let commit_a = git2::Oid::from_bytes(&[11; 20]).unwrap();
+        let mut state = State {
+            selected: Some(commit_a),
+            selected_file: Some("b.txt".to_string()), // 用户已经切到 b.txt
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        // 一条迟到的 a.txt 结果(用户点过 a.txt 但已经切走了)。
+        update(
+            &mut state,
+            Message::DiffContentLoaded(
+                commit_a,
+                "a.txt".to_string(),
+                Ok(DiffBlobContent::Text {
+                    old_text: "x".into(),
+                    new_text: "y".into(),
+                }),
+            ),
+            &handle,
+            |_| {},
+        );
+        assert!(
+            state.loaded_diff.is_none(),
+            "stale 结果(commit/path 跟当前选中对不上)必须被丢弃"
+        );
+    }
+
+    #[tokio::test]
+    async fn diff_content_loaded_applied_when_selection_still_matches() {
+        let commit_a = git2::Oid::from_bytes(&[12; 20]).unwrap();
+        let mut state = State {
+            selected: Some(commit_a),
+            selected_file: Some("a.txt".to_string()),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::DiffContentLoaded(
+                commit_a,
+                "a.txt".to_string(),
+                Ok(DiffBlobContent::Text {
+                    old_text: "x".into(),
+                    new_text: "y".into(),
+                }),
+            ),
+            &handle,
+            |_| {},
+        );
+        let loaded = state
+            .loaded_diff
+            .as_ref()
+            .expect("匹配当前选择的结果应该落地");
+        assert_eq!(loaded.commit, commit_a);
+        assert_eq!(loaded.path, "a.txt");
+        assert!(matches!(loaded.content, DiffBlobContent::Text { .. }));
+    }
+
+    fn loaded_text_state(
+        commit: git2::Oid,
+        path: &str,
+        old_text: &str,
+        new_text: &str,
+        ready: bool,
+    ) -> State {
+        State {
+            loaded_diff: Some(LoadedDiff {
+                commit,
+                path: path.to_string(),
+                content: DiffBlobContent::Text {
+                    old_text: old_text.to_string(),
+                    new_text: new_text.to_string(),
+                },
+            }),
+            diff_webview_ready: ready,
+            ..State::default()
+        }
+    }
+
+    #[test]
+    fn pending_diff_push_requires_ready_webview() {
+        let commit = git2::Oid::from_bytes(&[7; 20]).unwrap();
+        let state = loaded_text_state(commit, "a.txt", "old", "new", false);
+        assert!(
+            state.pending_diff_push().is_none(),
+            "webview 未 Ready(diff_webview_ready=false)时不推送"
+        );
+    }
+
+    #[test]
+    fn pending_diff_push_returns_text_once_ready() {
+        let commit = git2::Oid::from_bytes(&[7; 20]).unwrap();
+        let state = loaded_text_state(commit, "a.txt", "old", "new", true);
+        let push = state.pending_diff_push().expect("Ready 且未送达应产出推送");
+        assert_eq!(push.0, commit);
+        assert_eq!(push.1, "a.txt");
+        assert_eq!(push.2, "old");
+        assert_eq!(push.3, "new");
+    }
+
+    #[test]
+    fn pending_diff_push_suppressed_after_sent() {
+        let commit = git2::Oid::from_bytes(&[7; 20]).unwrap();
+        let mut state = loaded_text_state(commit, "a.txt", "old", "new", true);
+        assert!(state.pending_diff_push().is_some());
+        // 模拟 `take_git_log_diff_script` 下发后写回送达标记。
+        state.set_diff_sent_for((commit, "a.txt".to_string()));
+        assert!(
+            state.pending_diff_push().is_none(),
+            "同一 (commit, path) 已送达后不再重复推送"
+        );
+    }
+
+    #[test]
+    fn pending_diff_push_resends_when_selection_changes() {
+        let commit = git2::Oid::from_bytes(&[7; 20]).unwrap();
+        let mut state = loaded_text_state(commit, "a.txt", "old", "new", true);
+        state.set_diff_sent_for((commit, "a.txt".to_string()));
+        // 换文件(同一 commit 内):新 path 对应新内容,应再次产出推送。
+        state.loaded_diff = Some(LoadedDiff {
+            commit,
+            path: "b.txt".to_string(),
+            content: DiffBlobContent::Text {
+                old_text: "x".into(),
+                new_text: "z".into(),
+            },
+        });
+        let push = state.pending_diff_push().expect("换文件后应再次推送新内容");
+        assert_eq!(push.1, "b.txt");
+        assert_eq!(push.3, "z");
+    }
+
+    #[test]
+    fn pending_diff_push_skips_not_renderable() {
+        let commit = git2::Oid::from_bytes(&[7; 20]).unwrap();
+        let state = State {
+            loaded_diff: Some(LoadedDiff {
+                commit,
+                path: "bin.dat".to_string(),
+                content: DiffBlobContent::NotRenderable {
+                    reason: "二进制".to_string(),
+                },
+            }),
+            diff_webview_ready: true,
+            ..State::default()
+        };
+        assert!(
+            state.pending_diff_push().is_none(),
+            "不可渲染内容不推 CodeMirror(UI 走 iced 占位)"
+        );
+    }
+
+    #[test]
+    fn pending_diff_push_none_without_loaded_diff() {
+        let state = State {
+            diff_webview_ready: true,
+            ..State::default()
+        };
+        assert!(state.pending_diff_push().is_none());
+    }
+
+    #[test]
+    fn diff_webview_desired_only_for_renderable_text() {
+        let commit = git2::Oid::from_bytes(&[7; 20]).unwrap();
+        let text = loaded_text_state(commit, "a.txt", "old", "new", false);
+        assert_eq!(text.diff_webview_desired(), Some("a.txt"));
+
+        let bin = State {
+            loaded_diff: Some(LoadedDiff {
+                commit,
+                path: "bin.dat".to_string(),
+                content: DiffBlobContent::NotRenderable {
+                    reason: "二进制".to_string(),
+                },
+            }),
+            ..State::default()
+        };
+        assert_eq!(
+            bin.diff_webview_desired(),
+            None,
+            "不可渲染内容不挂 CodeMirror webview"
+        );
+
+        assert_eq!(State::default().diff_webview_desired(), None);
+    }
+
+    #[tokio::test]
+    async fn diff_content_loaded_error_sets_load_error_and_clears_content() {
+        let commit = git2::Oid::from_bytes(&[13; 20]).unwrap();
+        let mut state = State {
+            selected: Some(commit),
+            selected_file: Some("a.txt".to_string()),
+            loaded_diff: Some(LoadedDiff {
+                commit,
+                path: "a.txt".to_string(),
+                content: DiffBlobContent::Text {
+                    old_text: "stale".into(),
+                    new_text: "stale".into(),
+                },
+            }),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::DiffContentLoaded(commit, "a.txt".to_string(), Err("boom".to_string())),
+            &handle,
+            |_| {},
+        );
+        assert!(state.loaded_diff.is_none(), "失败后旧内容必须清空");
+        assert_eq!(state.diff_load_error.as_deref(), Some("boom"));
+    }
+
+    #[tokio::test]
+    async fn select_file_clears_previous_load_error() {
+        let commit = git2::Oid::from_bytes(&[14; 20]).unwrap();
+        let mut state = State {
+            selected: Some(commit),
+            selected_file: Some("a.txt".to_string()),
+            detail: Some(Ok(CommitDetail {
+                files: vec![DiffFileEntry {
+                    path: "b.txt".into(),
+                    status: git2::Delta::Modified,
+                    patch: String::new(),
+                    truncated: false,
+                    old_blob: None,
+                    new_blob: None,
+                }],
+            })),
+            diff_load_error: Some("boom".to_string()),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::SelectFile("b.txt".to_string()),
+            &handle,
+            |_| {},
+        );
+        assert_eq!(
+            state.diff_load_error, None,
+            "换文件后必须先清空上一条错误,不能带着旧错误进新选择"
         );
     }
 

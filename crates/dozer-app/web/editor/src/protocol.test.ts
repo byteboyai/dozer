@@ -81,6 +81,37 @@ test('decodeCommand accepts known commands', () => {
   assert.equal(save?.kind, 'save_document');
 });
 
+test('decodeCommand accepts set_diff_document with all fields', () => {
+  const decoded = decodeCommand({
+    kind: 'set_diff_document',
+    old_text: 'old\n',
+    new_text: 'new\n',
+    language: 'rust',
+    revision: 5,
+    read_only: true,
+  });
+  assert.deepStrictEqual(decoded, {
+    kind: 'set_diff_document',
+    old_text: 'old\n',
+    new_text: 'new\n',
+    language: 'rust',
+    revision: 5,
+    read_only: true,
+  });
+});
+
+test('decodeCommand rejects set_diff_document missing a required field', () => {
+  const decoded = decodeCommand({
+    kind: 'set_diff_document',
+    old_text: 'old\n',
+    new_text: 'new\n',
+    language: 'rust',
+    revision: 5,
+    // read_only intentionally missing
+  });
+  assert.strictEqual(decoded, null);
+});
+
 test('decodeCommand rejects malformed and unknown commands', () => {
   assert.equal(decodeCommand(null), null);
   assert.equal(decodeCommand({ kind: 'evil' }), null);

@@ -625,6 +625,10 @@ pub(crate) const PROJECT_PREVIEW_ID_OFFSET: usize = 1_000_000;
 /// PREVIEW_ID_OFFSET` 起)互不相撞。
 pub(crate) const CONVERSATION_REVIEW_ID_OFFSET: usize = 2_000_000;
 
+/// Git Log 面板 diff webview 的固定单槽位 id(不是池的偏移起点——这个面板
+/// 没有 tab 概念,任意时刻最多一个 diff webview,直接用这个常量本身当 id)。
+pub(crate) const GIT_LOG_DIFF_ID_OFFSET: usize = 3_000_000;
+
 /// `wait_for_pending_exit_tasks` 允许在飞的关 tab 收尾请求跑完的总预算。
 /// 本地 UDS 往返通常亚毫秒级,留 2 秒是给 daemon 偶尔卡顿的余量,而不是
 /// 期望真正用满——超时后放弃等待,不能让退出被一个卡死的 daemon 拖住。
@@ -1026,6 +1030,59 @@ impl App {
             ));
         }
         out
+    }
+
+    /// Git Log diff webview 的待注入脚本(0 或 1 条)。与
+    /// `take_preview_editor_scripts` 分开:diff 面板不是 tab 模型,内容经
+    /// `EditorCommand::SetDiffDocument` 推送,绑定是固定的
+    /// `EditorHostBinding::diff_url`(project_id/tab_id 恒 0)。
+    ///
+    /// 只有内容**已加载**、**当前 webview 已 Ready**、**且尚未送达**
+    /// (`diff_sent_for` 与当前 `(commit, path)` 不一致)时才产出,送达后
+    /// 写回 `diff_sent_for`。webview 还没进池(
+    /// `available_webview_ids` 不含其 id)就什么都不做、不写标记,下一帧
+    /// 重试,内容不会丢。
+    pub fn take_git_log_diff_script(
+        &mut self,
+        available_webview_ids: &std::collections::HashSet<usize>,
+    ) -> Vec<(usize, String)> {
+        // 内容/Ready/去重三道判定都在 `State::pending_diff_push`(纯状态,
+        // 可单测);不可渲染(二进制/超限)在这里回落 `None`,UI 由 iced
+        // 占位文案承载,webview 压根不该挂载。
+        let Some((commit, path_str, old_text, new_text)) = self.git_log.pending_diff_push() else {
+            return Vec::new();
+        };
+        let path = std::path::PathBuf::from(&path_str);
+        let binding = crate::preview::EditorHostBinding::new(
+            0,
+            crate::app::PanelKind::GitLog,
+            0,
+            path.clone(),
+        );
+        let webview_id = binding.webview_id();
+        // webview 还没进池(挂载帧与推送帧可能错开):什么都不做、不写
+        // 送达标记,下一帧重试——内容不会丢。
+        if !available_webview_ids.contains(&webview_id) {
+            return Vec::new();
+        }
+        let command = crate::preview::EditorCommand::SetDiffDocument {
+            old_text,
+            new_text,
+            language: crate::preview::extension_to_syntax(&path),
+            revision: 0,
+            read_only: true,
+        };
+        let envelope = crate::preview::encode_command(
+            0,
+            crate::app::PanelKind::GitLog,
+            0,
+            &binding.document_id(),
+            0,
+            None,
+            command,
+        );
+        self.git_log.set_diff_sent_for((commit, path_str));
+        vec![(webview_id, crate::preview::dispatch_script(&envelope))]
     }
 
     /// 找到某个 pane 里处于"CodeMirror 且 Ready"的 tab(Agent 命令入口的前置
@@ -3103,6 +3160,44 @@ impl App {
                 Side::Left => self.left_view,
                 Side::Right => self.right_view,
             };
+            // Git Log 右下 diff pane 的原生 CodeMirror webview:固定单槽
+            // (`GIT_LOG_DIFF_ID_OFFSET`)、不经 tab 模型,内容由
+            // `SetDiffDocument` 命令推送。只有"已加载可渲染文本"才挂
+            // (`diff_webview_desired`);二进制/超限/未选中走 iced 占位。
+            if kind == PanelKind::GitLog {
+                if let Some(path) = self.git_log.diff_webview_desired() {
+                    let bounds = webview_geometry::git_log_diff_pane_bounds_for(
+                        side,
+                        window_width,
+                        window_height,
+                        &self.shell_state(),
+                    );
+                    // 面板不可见(该侧收起 / 被另一侧放大覆盖)时几何函数返回
+                    // 零尺寸矩形——此时不产出 spec,免得给不可见的 pane 也创建
+                    // 一个常驻 webview(spec §"数据流"第 4 步要求"side 可见"
+                    // 才产出;`sync_webview_pool` 只看 spec 是否在列表内,不会
+                    // 因为零矩形而跳过创建)。
+                    if bounds.2 > 0.0 && bounds.3 > 0.0 {
+                        let binding = crate::preview::EditorHostBinding::new(
+                            0,
+                            PanelKind::GitLog,
+                            0,
+                            std::path::PathBuf::from(path),
+                        );
+                        let spec = WebviewSpec {
+                            id: crate::app::GIT_LOG_DIFF_ID_OFFSET,
+                            url: binding.diff_url(crate::preview::scheme_query_value()),
+                            visible: !app_modal_open,
+                            editor_binding: Some(binding),
+                            // Git Log diff 是固定单槽 webview、不走 tab 的
+                            // `Reserving`/`CreatingHost` 加载阶段,故无世代。
+                            loading_generation: None,
+                        };
+                        out.push((spec, bounds));
+                    }
+                }
+                continue;
+            }
             let (mut specs, id_offset): (Vec<WebviewSpec>, usize) = match kind {
                 PanelKind::Files => (ws.preview.desired_webviews(), 0),
                 PanelKind::Project => (

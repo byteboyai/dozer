@@ -44,6 +44,7 @@ import {
   foldEffect,
   unfoldEffect,
 } from '@codemirror/language';
+import { unifiedMergeView } from '@codemirror/merge';
 import {
   PROTOCOL_VERSION,
   decodeCommand,
@@ -84,6 +85,9 @@ const lossy = params.get('lossy') === '1';
 // T6:UTF-16(读取时已转码):只读展示并说明原因。
 const utf16 = params.get('enc') === 'utf16';
 const languageToken = params.get('lang') ?? 'txt';
+// diff 模式(Git Log 内联 diff):正文由 Rust 经 set_diff_document 推送,
+// 不 fetch 文件;无编辑语义(不 save、不 snapshot、不上报 document_changed)。
+const diffMode = params.get('mode') === 'diff';
 // 窗口化只读 viewer(Phase C Task 3):正文由 Rust 经 set_window 推送,不自行
 // 拉取;只持有全局行区间 [windowBase, windowBase+lines-1]。
 const windowed = params.get('windowed') === '1';
@@ -451,8 +455,52 @@ function readOnlyExtensions(readOnly: boolean): Extension {
   return readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [];
 }
 
+/** diff 模式下 `unifiedMergeView` 的扩展集合:doc 为"新"文本,original 为
+ *  "旧"文本;关掉 accept/reject 控件(只读,不给用户改 diff 的入口)与
+ *  "未变区段折叠"(Git Log 要看整份 diff),保留变更高亮与 gutter 标记。 */
+function diffMergeExtension(original: string): Extension {
+  return unifiedMergeView({
+    original,
+    highlightChanges: true,
+    gutter: true,
+    mergeControls: false,
+    collapseUnchanged: undefined,
+    syntaxHighlightDeletions: true,
+  });
+}
+
+/** diff 模式的扩展栈:只读、无 history(无编辑)、语言走后续 reconfigure。
+ *  与普通编辑器共用行号/gutter/滚动基础,但不接保存、快照、窗口化找回。 */
+function buildDiffExtensions(oldText: string, language: string, readOnly: boolean): Extension[] {
+  return [
+    lineNumbers(),
+    highlightSpecialChars(),
+    drawSelection(),
+    dropCursor(),
+    EditorState.allowMultipleSelections.of(true),
+    foldGutter(),
+    keymap.of([...defaultKeymap, ...foldKeymap]),
+    diffMergeExtension(oldText),
+    readOnlyCompartment.of(readOnlyExtensions(readOnly)),
+    languageCompartment.of(languageFor(language) ?? []),
+    themeFor(scheme),
+    EditorView.updateListener.of((update) => {
+      // 只读 diff:不做 document_changed / snapshot 上报;仅同步 viewport
+      // (Rust 侧不一定用,但保持与普通 host 一致的最小事件面)。
+      if (update.viewportChanged || update.geometryChanged) {
+        const { from, to } = update.view.viewport;
+        post({
+          kind: 'viewport_changed',
+          from_line: update.view.state.doc.lineAt(from).number,
+          to_line: update.view.state.doc.lineAt(to).number,
+        });
+      }
+    }),
+  ];
+}
+
 saveHandler = () => {
-  if (windowed || lossy || view.state.readOnly) return; // 只读:不落盘
+  if (diffMode || windowed || lossy || view.state.readOnly) return; // 只读:不落盘
   post({ kind: 'save_requested', revision, text: view.state.doc.toString() });
 };
 
@@ -461,14 +509,14 @@ saveHandler = () => {
 let snapshotTimer: number | undefined;
 let lastSnapshotRevision = 0;
 function sendSnapshot(): void {
-  if (windowed) return;
+  if (diffMode || windowed) return;
   snapshotTimer = undefined;
   if (revision === lastSnapshotRevision) return;
   lastSnapshotRevision = revision;
   post({ kind: 'snapshot', revision, text: view.state.doc.toString() });
 }
 function scheduleSnapshot(): void {
-  if (windowed) return;
+  if (diffMode || windowed) return;
   if (snapshotTimer !== undefined) window.clearTimeout(snapshotTimer);
   snapshotTimer = window.setTimeout(sendSnapshot, 1500);
 }
@@ -495,6 +543,18 @@ function applyCommand(raw: string): void {
             languageCompartment.of(languageFor(cmd.language) ?? []),
             readOnlyCompartment.of(readOnlyExtensions(cmd.read_only)),
           ],
+        }),
+      );
+      break;
+    }
+    case 'set_diff_document': {
+      revision = cmd.revision;
+      // 每次换文件都是"新 doc + 新 original",整份重建最干净(不留旧 diff
+      // 装饰);webview 实例本身不重建,由 Rust 侧的固定单槽负责。
+      view.setState(
+        EditorState.create({
+          doc: cmd.new_text,
+          extensions: buildDiffExtensions(cmd.old_text, cmd.language, cmd.read_only),
         }),
       );
       break;
@@ -632,8 +692,15 @@ async function boot(): Promise<void> {
   // 用 `document_loaded`(带 revision/bytes/error)作为非窗口化 tab 的 Ready 边界,
   // 而不会把"host 起了但正文还没到/读取失败"误判为已就绪(旧实现 fetch 失败时
   // 仍会补一个 `ready`,把 Failed 态拉回)。
+  //
+  // diff 模式(Git Log 内联 diff)正文由 Rust 经 set_diff_document 推送,既不在
+  // 这里 fetch,也不发 `document_loaded`(URL 亦不带 `p=`);窗口化同理。
   view = new EditorView({
-    state: EditorState.create({ extensions: buildExtensions() }),
+    state: EditorState.create({
+      extensions: diffMode
+        ? buildDiffExtensions('', languageToken, initialReadOnly)
+        : buildExtensions(),
+    }),
     parent: document.getElementById('editor')!,
   });
 
@@ -674,7 +741,7 @@ async function boot(): Promise<void> {
     language: languageToken,
   });
 
-  if (!windowed) {
+  if (!windowed && !diffMode) {
     let text = '';
     let bytes = 0;
     let error: string | null = null;

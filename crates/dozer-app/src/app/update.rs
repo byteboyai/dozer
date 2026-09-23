@@ -37,6 +37,18 @@ use super::*;
 impl App {
     pub fn update(&mut self, message: Message) {
         match message {
+            Message::GitLogDiffWebviewEvent(_binding, event) => {
+                if matches!(event.payload, crate::preview::EditorEvent::Ready { .. }) {
+                    // 真正的推送发生在 `App::take_git_log_diff_script`(每帧轮询,
+                    // 见下),这里只翻状态:webview 刚确认 `__dozer.dispatch`
+                    // 已注册,`diff_sent_for` 清空强制下一帧重发一次当前内容
+                    // (覆盖"webview 被销毁重建,新实例第一次 ready"的场景)。
+                    self.git_log.set_diff_webview_ready(true);
+                    self.git_log.clear_diff_sent_for();
+                }
+                // 其余事件(selection_changed/viewport_changed/...):diff 面板
+                // 恒只读、不需要 Agent 跳转/保存,忽略即可。
+            }
             Message::EditorWebviewEvent(binding, event) => {
                 self.with_project(binding.project_id, move |ws, io| {
                     let pane = if binding.panel == PanelKind::Project {

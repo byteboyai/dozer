@@ -76,6 +76,14 @@ export type EditorCommand =
       revision: number;
       truncated?: boolean;
     }
+  | {
+      kind: 'set_diff_document';
+      old_text: string;
+      new_text: string;
+      language: string;
+      revision: number;
+      read_only: boolean;
+    }
   | { kind: 'reveal_position'; line: number; column: number }
   | { kind: 'select_range'; start: Position; end: Position }
   | {
@@ -179,6 +187,14 @@ export function decodeCommand(payload: unknown): EditorCommand | null {
         typeof c.start_line === 'number' &&
         typeof c.total_lines === 'number' &&
         typeof c.revision === 'number'
+        ? (c as unknown as EditorCommand)
+        : null;
+    case 'set_diff_document':
+      return typeof c.old_text === 'string' &&
+        typeof c.new_text === 'string' &&
+        typeof c.language === 'string' &&
+        typeof c.revision === 'number' &&
+        typeof c.read_only === 'boolean'
         ? (c as unknown as EditorCommand)
         : null;
     case 'reveal_position':

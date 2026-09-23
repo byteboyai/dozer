@@ -174,6 +174,17 @@ pub enum EditorCommand {
         #[serde(default)]
         truncated: bool,
     },
+    /// Git Log diff pane 专用:CodeMirror `unifiedMergeView` 需要旧/新两份
+    /// 完整文档自己跑 diff 算法,不是 unified patch 文本。恒只读
+    /// (`read_only` 字段仍保留是为了和其它命令的字段形状一致,当前唯一
+    /// 调用方 `runtime.rs` 恒传 `true`)。
+    SetDiffDocument {
+        old_text: String,
+        new_text: String,
+        language: String,
+        revision: u64,
+        read_only: bool,
+    },
     RevealPosition {
         line: u32,
         column: u32,
@@ -282,6 +293,7 @@ impl HostBinding {
     fn panel_token(&self) -> &'static str {
         match self.panel {
             PanelKind::Project => "project",
+            PanelKind::GitLog => "gitlog",
             _ => "files",
         }
     }
@@ -479,6 +491,7 @@ pub fn encode_command(
         project_id,
         panel: match panel {
             PanelKind::Project => "project".to_string(),
+            PanelKind::GitLog => "gitlog".to_string(),
             _ => "files".to_string(),
         },
         tab_id,
@@ -667,6 +680,45 @@ mod tests {
         assert_eq!(v["payload"]["kind"], "set_window");
         assert_eq!(v["payload"]["start_line"], 1001);
         assert_eq!(v["payload"]["truncated"], false);
+    }
+
+    #[test]
+    fn encodes_set_diff_document_command() {
+        let s = encode_command(
+            0,
+            PanelKind::GitLog,
+            0,
+            "gitlog-diff",
+            9,
+            None,
+            EditorCommand::SetDiffDocument {
+                old_text: "old\n".into(),
+                new_text: "new\n".into(),
+                language: "rust".into(),
+                revision: 9,
+                read_only: true,
+            },
+        );
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["payload"]["kind"], "set_diff_document");
+        assert_eq!(v["payload"]["old_text"], "old\n");
+        assert_eq!(v["payload"]["new_text"], "new\n");
+        assert_eq!(v["payload"]["read_only"], true);
+        assert_eq!(v["panel"], "gitlog");
+    }
+
+    #[test]
+    fn set_diff_document_round_trips() {
+        let cmd = EditorCommand::SetDiffDocument {
+            old_text: "a\nb\n".into(),
+            new_text: "a\nc\n".into(),
+            language: "python".into(),
+            revision: 3,
+            read_only: true,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: EditorCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cmd);
     }
 
     /// 关闭脏 tab 前下发的"用当前 buffer 保存一次"命令,payload 只是一个
@@ -859,6 +911,27 @@ mod tests {
         assert_eq!(v["panel"], "project");
         assert_eq!(v["payload"]["kind"], "reveal_position");
         assert_eq!(v["request_id"], "req-1");
+    }
+
+    #[test]
+    fn host_binding_panel_token_covers_gitlog() {
+        let b = HostBinding::new(0, PanelKind::GitLog, 0, "gitlog-diff".into());
+        // 不能直接调用私有 `panel_token()`,靠 `validate()` 间接验证:一条
+        // 携带 `panel: "gitlog"` 的 envelope 必须通过校验。
+        let env = WebviewEnvelope {
+            protocol_version: PROTOCOL_VERSION,
+            project_id: 0,
+            panel: "gitlog".to_string(),
+            tab_id: 0,
+            document_id: "gitlog-diff".to_string(),
+            revision: 0,
+            request_id: None,
+            payload: EditorEvent::Ready {
+                read_only: true,
+                language: "rust".to_string(),
+            },
+        };
+        assert!(env.validate(&b).is_ok());
     }
 
     #[test]
