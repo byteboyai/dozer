@@ -1220,20 +1220,9 @@ pub(crate) fn preview_pane_for<'a>(
                 }
             }
         } else if let Some(page) = preview_fallback_page(kind, active_tab) {
-            // T1:External / Unsupported(及无内嵌 viewer 的 Failed)统一
-            // fallback 页——不再依赖 Flyfish 偶然兜底或空白。
+            // T1:External / Unsupported(及 Failed)统一 fallback 页——不再
+            // 依赖 Flyfish 偶然兜底或空白。
             content = content.push(page);
-        } else if active_tab.loading {
-            // 原生编辑器候选正在后台线程异步读盘+构造(见 `App::
-            // preview_open_path`/`PreviewPane::insert_loading_tab`)——这段
-            // 时间不阻塞 UI 线程,画个居中 loading 动画占位(与表格/搜索/
-            // 数据库等其它异步加载场景同一套 `loading_hint`),结果回来后
-            // `apply_native_load` 会把这个分支换成上面 `editor` 那支。
-            content = content.push(byteui::feedback::math_curve::loading_hint(
-                byteui::feedback::math_curve::Curve::RoseThree,
-                "正在打开文件…",
-                48.0,
-            ));
         } else if active_tab.kind == TabKind::Blank {
             // 空白占位 tab:居中放 Finder "Get Info" 风格的项目根简介卡
             // (folder icon + 名称头 + 位置/大小/创建/修改四行)。`blank_info`

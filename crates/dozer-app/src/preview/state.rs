@@ -24,32 +24,18 @@ pub struct PreviewTab {
     /// `false`。2026-09-06 原生预览不再只读,有了就地编辑就必须能显式挂脏并兜底,
     /// 否则用户会无声丢改动(见 workspace.rs 关闭/切换前的确认)。
     pub dirty: bool,
-    /// 只读大文件档(`FullLoadReadOnly`/`ChunkedReadOnly`)已载入的字节数;
-    /// 编辑档/非文件 tab 恒为 0(无意义,不展示)。
-    pub loaded_bytes: u64,
-    /// 打开时 `fs::metadata` 测到的文件总字节数;语义同上,非只读大文件 tab
-    /// 恒为 0。
-    pub total_bytes: u64,
-    /// 原生编辑器正在异步读盘中(`PreviewPane::insert_loading_tab` 置真,
-    /// `apply_native_load` 收到结果后置假)。为真时 `runtime` 为空,但这个 tab
-    /// **不**应该被当成"该文件没有原生编辑器"误判进 webview 池——
-    /// `desired_webviews()`/`active_webview_id()`/`select()` 等判据要额外排除
-    /// `loading` 为真的 tab。
-    pub loading: bool,
     /// 由外部面板（目前只有代码健康度面板）请求的"打开后立即跳转到这一
-    /// 行"——`Some` 只在"这个 tab 刚被新建、还在 `loading` 中"的窗口期内
-    /// 有意义，`apply_native_load` 收到结果、把 `editor` 填上的那一刻立刻
-    /// `take()` 消费掉。已经打开且 `editor` 已就绪的 tab 不走这个字段，
-    /// 直接同步调用 `CodeView::move_cursor_to`。
+    /// 行"——`Some` 只在"这个 tab 刚被新建、还没就绪"的窗口期内有意义，收到
+    /// editor `ready`、窗口/正文推给 host 的那一刻立刻 `take()` 消费掉。
+    /// 已经打开且已就绪的 tab不走这个字段，直接排队 `RevealPosition`。
     pub pending_jump_line: Option<usize>,
     /// Phase A 统一路由结果(含可展示 reason)。`Blank` 占位 tab 没有文件,
     /// 为 `None`;其余文件 tab 在**创建那一刻**就带上,是唯一的路由真相源。
     pub route: Option<PreviewRoute>,
-    /// Phase A 统一 backend 描述。与 `route` 同生同灭;实际 viewer 句柄在
-    /// 迁移期仍由上面的 `editor`/`tabular`/`json_tree` 字段持有(adapter)。
+    /// 统一 backend 描述(只回答"该用什么看",无运行时句柄)。与 `route`
+    /// 同生同灭;运行时加载状态在 `runtime` + `backend_state`。
     pub backend: Option<PreviewBackend>,
-    /// backend 生命周期状态。迁移期与旧的 `loading` 字段并存,`loading` 仍是
-    /// 渲染侧的实际判据(行为不变),本字段用于状态机与后续阶段。
+    /// backend 生命周期状态(加载态/就绪/失败的唯一真相)。
     pub backend_state: BackendState,
     /// `file_policy` 判定该文件应窗口化(超预算/超 128MiB/超长行)。窗口化
     /// 专用 viewer 未落地前,这类文件不吃 CodeMirror 整载。
@@ -97,8 +83,7 @@ impl PreviewTab {
     /// 状态机明确选择 Flyfish fallback。Phase D 落地正式 External/Unsupported
     /// 页面后再移除该兼容分支。
     pub fn hosts_webview(&self) -> bool {
-        if self.loading
-            || matches!(self.backend_state, BackendState::Suspended)
+        if matches!(self.backend_state, BackendState::Suspended)
             // T3/Failed:加载失败不再 host Flyfish,让统一 fallback 页(或
             // 错误条)真正可见,不被残留的原生子视图盖住。
             || self.backend_state.is_failed()
@@ -349,9 +334,6 @@ impl std::fmt::Debug for PreviewTab {
             .field("title", &self.title)
             .field("reload_nonce", &self.reload_nonce)
             .field("dirty", &self.dirty)
-            .field("loaded_bytes", &self.loaded_bytes)
-            .field("total_bytes", &self.total_bytes)
-            .field("loading", &self.loading)
             .field("runtime", &self.runtime_kind())
             .field("pending_jump_line", &self.pending_jump_line)
             .field("route", &self.route)

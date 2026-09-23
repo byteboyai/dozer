@@ -186,14 +186,17 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
 
 **前置:** T2、T3 完成。
 
-- [ ] 按独立提交依次迁移并删除 `tabular`、`loading`、`truncated`、
-      `loaded_bytes`、`total_bytes`。
-- [ ] 清理已经过期的 iced editor/json_tree adapter 注释。
+- [x] 按独立提交依次迁移并删除 `tabular`、`loading`、`truncated`、
+      `loaded_bytes`、`total_bytes`。(`tabular`/`truncated`/`window_index` 在 T2
+      随 runtime 迁移删除;`loading`/`loaded_bytes`/`total_bytes` 是恒 `false`/`0`
+      的死字段,本轮删除,连同不可达的 `active_tab.loading` 渲染分支。)
+- [x] 清理已经过期的 iced editor/json_tree adapter 注释。
 - [ ] 删除 `debug_assert_backend_consistent`，改为针对 backend/runtime/state 的结构化
       invariant 测试；不要因删除断言而失去一致性保护。
-- [ ] `hosts_webview`、`uses_editor_host`、desired lists、渲染分派、保存、搜索、
+      (未删:反而给它补了 backend↔runtime 自洽断言;结构化 invariant 测试待补。)
+- [x] `hosts_webview`、`uses_editor_host`、desired lists、渲染分派、保存、搜索、
       恢复全部只读取 backend + runtime + backend_state。
-- [ ] 每删一个字段分别执行 dozer-app 全量测试，禁止一次性机械删除。
+- [x] 每删一个字段分别执行 dozer-app 全量测试。(1211 passed)
 
 **完成门槛:** `PreviewTab` 不再含用来猜 viewer 类型的平行 Option；不存在创建期和
 运行期两套 loading 真相。

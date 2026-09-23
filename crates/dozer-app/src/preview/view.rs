@@ -28,9 +28,6 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         reload_nonce: 0,
         runtime: PreviewRuntime::None,
         dirty: false,
-        loaded_bytes: 0,
-        total_bytes: 0,
-        loading: false,
         pending_jump_line: None,
         route: None,
         backend: None,
@@ -68,8 +65,8 @@ pub(crate) fn route_and_backend(
     let policy = decide_text_policy(&profile, &capabilities.budgets);
     let read_only = non_text || policy.policy != TextFilePolicy::EditableCode;
     let backend = PreviewBackend::from_route(&route, path, read_only);
-    // 同步路径(表格/webview/渲染)创建即 Ready;原生编辑器异步路径的调用方
-    // 会用 `insert_loading_tab` 把状态置为 Loading。
+    // 创建即 Ready;表格的异步解析在 `push_tab`/`load_preview_tab` 里另行置
+    // Loading(T2 runtime)。
     (route, backend, BackendState::Ready)
 }
 
@@ -372,10 +369,8 @@ impl PreviewPane {
 
     /// 追加一个真实 tab(占位 `Blank` 恒在 index 0,这里只用来加 `File`)。
     /// 文件 tab 一律追加在末尾,占位 tab 永远留在最前面,形态对齐 SSH/数据库
-    /// 面板 tab 条最前面那个固定"空白"占位。**这是同步路径**——阻塞调用方
-    /// 线程读盘+构造,供测试 fixture 与内部小文件场景(README 自动预览等)
-    /// 用;用户从文件树打开任意大小文件走 `App::preview_open_path` 的异步路径
-    /// (`insert_loading_tab` + `apply_native_load`,见下方),不经过这里。
+    /// 面板 tab 条最前面那个固定"空白"占位。这是唯一的新建文件 tab 路径:
+    /// 同步建壳(不读盘),内容由 editor/Flyfish host 或后台任务异步加载。
     fn push_tab(&mut self, kind: TabKind, title: String) -> usize {
         let id = self.next_id;
         self.next_id += 1;
@@ -387,7 +382,6 @@ impl PreviewPane {
             TabKind::Blank => (None, None, BackendState::Ready),
         };
         // 老 iced editor 已退役:不再同步读盘构造 CodeView。
-        let (loaded_bytes, total_bytes) = (0u64, 0u64);
         // 表格类文件委托 Tabular Viewer(与 editor 互斥)。实际解析是异步的
         // (calamine/csv 对大文件可能要跑一阵,不能卡在这个同步方法里,见
         // `crate::tabular` 模块文档的"够数即停"性能策略)——这里只登记
@@ -429,9 +423,6 @@ impl PreviewPane {
             reload_nonce: 0,
             runtime,
             dirty: false,
-            loaded_bytes,
-            total_bytes,
-            loading: false,
             pending_jump_line: None,
             route,
             backend,
@@ -510,9 +501,6 @@ impl PreviewPane {
             reload_nonce: 0,
             runtime,
             dirty: false,
-            loaded_bytes: 0,
-            total_bytes: 0,
-            loading: false,
             pending_jump_line: None,
             route: Some(route),
             backend: Some(backend),
@@ -879,7 +867,7 @@ impl PreviewPane {
                 let TabKind::File(path) = &tab.kind else {
                     return None;
                 };
-                if tab.loading || !tab.backend_state.is_ready() {
+                if !tab.backend_state.is_ready() {
                     return None;
                 }
                 // 语言与只读先从 backend 推出:Code(可含窗口化只读)或
@@ -941,7 +929,7 @@ impl PreviewPane {
             .iter()
             .enumerate()
             .filter_map(|(idx, tab)| {
-                if !tab.uses_json_editor() || tab.loading || !tab.backend_state.is_ready() {
+                if !tab.uses_json_editor() || !tab.backend_state.is_ready() {
                     return None;
                 }
                 let TabKind::File(path) = &tab.kind else {
@@ -1215,7 +1203,6 @@ impl PreviewPane {
                 // webview 档:激活 tab 必须还是同一块 webview。
                 t.id == f.tab_id
                     && t.tabular_state().is_none()
-                    && !t.loading
                     && matches!(t.kind, TabKind::File(_))
             } else {
                 false
