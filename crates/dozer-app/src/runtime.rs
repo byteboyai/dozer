@@ -521,6 +521,14 @@ pub(crate) fn sync_webview_pool(
                                             Ok(event) => {
                                                 if let Err(error) = event.validate(&expected) {
                                                     tracing::warn!(%error, "拒绝无效 editor IPC");
+                                                } else if binding.panel
+                                                    == crate::app::PanelKind::GitLog
+                                                {
+                                                    let _ = ipc_proxy.send_event(
+                                                        Message::GitLogDiffWebviewEvent(
+                                                            expected, event,
+                                                        ),
+                                                    );
                                                 } else {
                                                     let _ = ipc_proxy.send_event(
                                                         Message::EditorWebviewEvent(

@@ -1823,6 +1823,13 @@ impl Runner {
                 }
             }
         }
+        // Git Log diff webview(单固定槽,不在 PreviewPane tab 模型里):
+        // 内容经 `SetDiffDocument` 推送,与上面的预览命令同一注入节奏。
+        for (webview_id, js) in app.take_git_log_diff_script(&available_webview_ids) {
+            if let Some((view, _)) = webviews.get(&webview_id) {
+                let _ = view.evaluate_script(&js);
+            }
+        }
     }
 
     /// 空白页信息卡后台扫描钩子:`PreviewPane::blank_info` 空、active tab 为

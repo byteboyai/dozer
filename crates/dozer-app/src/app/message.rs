@@ -572,6 +572,17 @@ pub enum Message {
         crate::preview::EditorHostBinding,
         crate::preview::WebviewEnvelope<crate::preview::EditorEvent>,
     ),
+    /// Git Log diff webview 发回的已校验协议事件。走独立分支而不是
+    /// `EditorWebviewEvent`,因为那个 handler 硬编码假设 `ws.preview`/
+    /// `ws.project_preview` 的 tab 模型(`PreviewTab`/`TabKind::File`)——
+    /// git log 面板没有 tab,直接命中会要么找不到 tab 静默丢弃事件,要么
+    /// (更糟)撞上 Files 预览恰好也是 tab_id=0 的 tab。绑定用轻量
+    /// `HostBinding`(不需要 `EditorHostBinding.path`,git log 状态通过
+    /// `App::git_log` 直接访问,不经路径查找)。
+    GitLogDiffWebviewEvent(
+        crate::preview::HostBinding,
+        crate::preview::WebviewEnvelope<crate::preview::EditorEvent>,
+    ),
     /// JSON host(vanilla-jsoneditor)发回的事件(对照期 feature)。
     JsonEditorEvent(
         crate::preview::EditorHostBinding,

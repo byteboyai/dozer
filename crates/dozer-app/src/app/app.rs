@@ -1032,6 +1032,59 @@ impl App {
         out
     }
 
+    /// Git Log diff webview 的待注入脚本(0 或 1 条)。与
+    /// `take_preview_editor_scripts` 分开:diff 面板不是 tab 模型,内容经
+    /// `EditorCommand::SetDiffDocument` 推送,绑定是固定的
+    /// `EditorHostBinding::diff_url`(project_id/tab_id 恒 0)。
+    ///
+    /// 只有内容**已加载**、**当前 webview 已 Ready**、**且尚未送达**
+    /// (`diff_sent_for` 与当前 `(commit, path)` 不一致)时才产出,送达后
+    /// 写回 `diff_sent_for`。webview 还没进池(
+    /// `available_webview_ids` 不含其 id)就什么都不做、不写标记,下一帧
+    /// 重试,内容不会丢。
+    pub fn take_git_log_diff_script(
+        &mut self,
+        available_webview_ids: &std::collections::HashSet<usize>,
+    ) -> Vec<(usize, String)> {
+        // 内容/Ready/去重三道判定都在 `State::pending_diff_push`(纯状态,
+        // 可单测);不可渲染(二进制/超限)在这里回落 `None`,UI 由 iced
+        // 占位文案承载,webview 压根不该挂载。
+        let Some((commit, path_str, old_text, new_text)) = self.git_log.pending_diff_push() else {
+            return Vec::new();
+        };
+        let path = std::path::PathBuf::from(&path_str);
+        let binding = crate::preview::EditorHostBinding::new(
+            0,
+            crate::app::PanelKind::GitLog,
+            0,
+            path.clone(),
+        );
+        let webview_id = binding.webview_id();
+        // webview 还没进池(挂载帧与推送帧可能错开):什么都不做、不写
+        // 送达标记,下一帧重试——内容不会丢。
+        if !available_webview_ids.contains(&webview_id) {
+            return Vec::new();
+        }
+        let command = crate::preview::EditorCommand::SetDiffDocument {
+            old_text,
+            new_text,
+            language: crate::preview::extension_to_syntax(&path),
+            revision: 0,
+            read_only: true,
+        };
+        let envelope = crate::preview::encode_command(
+            0,
+            crate::app::PanelKind::GitLog,
+            0,
+            &binding.document_id(),
+            0,
+            None,
+            command,
+        );
+        self.git_log.set_diff_sent_for((commit, path_str));
+        vec![(webview_id, crate::preview::dispatch_script(&envelope))]
+    }
+
     /// 找到某个 pane 里处于"CodeMirror 且 Ready"的 tab(Agent 命令入口的前置
     /// 校验)。非 CodeMirror/未就绪返回 false。
     fn codemirror_tab_ready(pane: &crate::preview::PreviewPane, tab_id: usize) -> bool {
