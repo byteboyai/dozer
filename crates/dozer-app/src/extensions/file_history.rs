@@ -346,6 +346,46 @@ pub fn diff_against_current(
     Ok(patch)
 }
 
+/// `oid` 对应提交树里 `file_path` 的历史内容 vs 磁盘上 `repo_path.join(
+/// file_path)` 的实时内容。跟 `git_log::diff_blob_content`(两个 commit 之间)
+/// 的关键差异:new 侧永远来自磁盘,不是另一个 blob;old 侧若该提交树里没有
+/// 这个路径(历史记录本身是一次删除),按空字符串处理,不报错——这不是
+/// 异常情况,是"文件历史"列表天然会包含的一种记录(`build()` 的 pathspec
+/// 过滤只看"这次提交碰过这个路径",删除也算碰过)。
+#[allow(dead_code)] // T2 接入(见 docs/superpowers/plans/2026-09-23-file-history-codemirror-diff.md)。
+pub fn diff_blob_content_against_workdir(
+    repo: &git2::Repository,
+    repo_path: &Path,
+    file_path: &Path,
+    oid: git2::Oid,
+) -> Result<crate::extensions::git_log::DiffBlobContent, String> {
+    use crate::extensions::git_log::{DiffBlobContent, classify_diff_bytes};
+
+    let commit = repo.find_commit(oid).map_err(|e| e.message().to_string())?;
+    let tree = commit.tree().map_err(|e| e.message().to_string())?;
+    let old_text = match tree.get_path(file_path) {
+        Ok(entry) => {
+            let obj = entry.to_object(repo).map_err(|e| e.message().to_string())?;
+            match obj.as_blob() {
+                Some(blob) => classify_diff_bytes(blob.content()),
+                None => None, // 路径是目录/子模块,不是文件——判不可渲染。
+            }
+        }
+        Err(_) => Some(String::new()), // 该提交树里没有这个路径:删除类历史记录。
+    };
+    let new_text = match std::fs::read(repo_path.join(file_path)) {
+        Ok(bytes) => classify_diff_bytes(&bytes),
+        Err(_) => None, // 磁盘文件已不存在/不可读。
+    };
+    match (old_text, new_text) {
+        (Some(old_text), Some(new_text)) => Ok(DiffBlobContent::Text { old_text, new_text }),
+        _ => Ok(DiffBlobContent::NotRenderable {
+            reason: "文件不是文本、超过大小上限,或磁盘文件当前不存在,不支持 CodeMirror 渲染"
+                .to_string(),
+        }),
+    }
+}
+
 /// 取 `oid` 对应提交树里 `file_path` 的 blob 字节,写入
 /// `repo_path.join(file_path)`。不碰 git 索引,不 `git add`,是纯粹的文件
 /// 系统写入——回滚后 git status 会显示这是一处未提交改动,交给用户/agent
@@ -673,6 +713,69 @@ mod tests {
             repo_path: PathBuf::from("/tmp/dozer-file-history-test-repo"),
             file_path: PathBuf::from("a.txt"),
         }
+    }
+
+    /// `mkrepo()` 的 c1/c2/c3 之上追加 c4:删除 `a.txt`。
+    fn mkrepo_with_delete_commit() -> (tempfile::TempDir, PathBuf) {
+        let (dir, repo) = mkrepo();
+        git(&repo, &["rm", "-q", "a.txt"]);
+        git(&repo, &["commit", "-qm", "c4: delete a.txt"]);
+        (dir, repo)
+    }
+
+    #[test]
+    fn diff_blob_content_against_workdir_reads_historical_and_current() {
+        let (_dir, repo) = mkrepo();
+        let git_repo = git2::Repository::open(&repo).unwrap();
+        let snapshot = build(&repo, Path::new("a.txt"), 10).unwrap();
+        let c1_oid = snapshot.entries[1].oid; // c1: a.txt == "one\n"
+        // 磁盘当前内容是 c3 之后的 "two\n"。
+        let content =
+            diff_blob_content_against_workdir(&git_repo, &repo, Path::new("a.txt"), c1_oid)
+                .expect("应能读出历史版本与磁盘当前内容");
+        let crate::extensions::git_log::DiffBlobContent::Text { old_text, new_text } = content
+        else {
+            panic!("正常改动文件应判定为可渲染文本");
+        };
+        assert_eq!(old_text, "one\n");
+        assert_eq!(new_text, "two\n");
+    }
+
+    #[test]
+    fn diff_blob_content_against_workdir_empty_old_side_for_deletion_commit() {
+        let (_dir, repo) = mkrepo_with_delete_commit();
+        // 删除后又重新创建同名文件:此时"c4 那次提交"在它的树里没有这个
+        // 路径(旧侧为空),但磁盘上文件在(新侧有内容)——正是"删除类历史
+        // 记录"里可渲染的那一种。
+        std::fs::write(repo.join("a.txt"), "reborn\n").unwrap();
+        let git_repo = git2::Repository::open(&repo).unwrap();
+        let snapshot = build(&repo, Path::new("a.txt"), 10).unwrap();
+        let c4_oid = snapshot.entries[0].oid; // c4: 删除 a.txt,该提交树里没有这个路径
+        let content =
+            diff_blob_content_against_workdir(&git_repo, &repo, Path::new("a.txt"), c4_oid)
+                .expect("删除类历史记录不应报错");
+        let crate::extensions::git_log::DiffBlobContent::Text { old_text, new_text } = content
+        else {
+            panic!("应判定为可渲染文本(旧侧为空)");
+        };
+        assert_eq!(old_text, "", "该提交树里没有这个路径,旧侧按空字符串处理");
+        assert_eq!(new_text, "reborn\n");
+    }
+
+    #[test]
+    fn diff_blob_content_against_workdir_not_renderable_when_disk_file_missing() {
+        let (_dir, repo) = mkrepo();
+        let git_repo = git2::Repository::open(&repo).unwrap();
+        let snapshot = build(&repo, Path::new("a.txt"), 10).unwrap();
+        let c1_oid = snapshot.entries[1].oid;
+        std::fs::remove_file(repo.join("a.txt")).unwrap();
+        let content =
+            diff_blob_content_against_workdir(&git_repo, &repo, Path::new("a.txt"), c1_oid)
+                .expect("磁盘文件缺失不应报错,应判定为不可渲染");
+        assert!(matches!(
+            content,
+            crate::extensions::git_log::DiffBlobContent::NotRenderable { .. }
+        ));
     }
 
     fn fake_oid(byte: u8) -> git2::Oid {
