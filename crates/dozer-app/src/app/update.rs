@@ -689,7 +689,15 @@ impl App {
                                 .map(|t| (t.tabular_state().is_some(), t.hosts_any_webview()))
                                 .unwrap_or((false, false));
                             if is_tabular {
-                                // 表格:等 TabularLoaded。
+                                // 表格:进入 `Parsing`,等后台解析出的首个可显示
+                                // sheet(TabularLoaded)才 finish(T7 bullet 2)。
+                                // CSV/TSV 原文模式另有 editor host,由 `load_preview_tab`
+                                // 的恢复路径处理;正常打开路径这里不再 finish。
+                                pane.advance_load(
+                                    tab_id,
+                                    generation,
+                                    crate::preview::PreviewLoadStage::Parsing,
+                                );
                             } else if !hosts_host {
                                 // 无 host 的 fallback 页:直接就绪。
                                 pane.finish_load(tab_id, generation);
@@ -1909,7 +1917,7 @@ impl App {
                     ws.preview_pane_tabular_action(kind, tab_id, action, io);
                 });
             }
-            Message::TabularLoaded(project_id, kind, tab_id, result) => {
+            Message::TabularLoaded(project_id, kind, tab_id, generation, result) => {
                 self.with_project(project_id, move |ws, io| {
                     if let Err(error) = &result {
                         tracing::warn!(%error, "表格首次加载失败");
@@ -1920,7 +1928,7 @@ impl App {
                         } else {
                             &mut ws.preview
                         };
-                        pane.finish_tabular_load(tab_id, result)
+                        pane.finish_tabular_load(tab_id, generation, result)
                     };
                     // 恢复的 active sheet 不是首个 → 触发一次懒加载。
                     if let Some(sheet) = sheet_to_select {

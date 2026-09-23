@@ -1730,12 +1730,18 @@ impl PreviewPane {
             .and_then(|t| t.tabular_state_mut())
     }
 
+    /// `generation` 是启动后台解析时捕获的世代;与当前 `load_state` 不匹配
+    /// (tab 已关闭重开 / 重试)时丢弃旧结果,不回填(T7 取消不回填旧 sheet)。
     pub fn finish_tabular_load(
         &mut self,
         tab_id: usize,
+        generation: u64,
         result: Result<crate::tabular::TabularView, String>,
     ) -> Option<usize> {
         let tab = self.tabs.iter_mut().find(|tab| tab.id == tab_id)?;
+        if !tab.load_state.accepts(generation) {
+            return None;
+        }
         match result {
             Ok(view) => {
                 tab.runtime = PreviewRuntime::Tabular(TabularState::Ready(view));
@@ -1746,9 +1752,12 @@ impl PreviewPane {
                 let _ = tab
                     .backend_state
                     .try_transition(BackendState::Failed(PreviewError::new(message, true)));
+                tab.load_state.finish();
                 return None;
             }
         }
+        // 首个可显示 sheet 就绪:结束 loading,网格接管(T7 bullet 2)。
+        tab.load_state.finish();
         // 应用持久化的 sheet / 滚动锚点;若目标 sheet 不是当前已加载的,
         // 返回它让调用方触发一次懒加载。
         let (sheet, row, col) = tab.pending_tabular.take()?;
@@ -2623,7 +2632,8 @@ mod tests {
             BackendState::Loading
         ));
         let loaded = crate::tabular::load(&p).expect("测试用 csv 应能正常解析");
-        pane.finish_tabular_load(id, Ok(loaded));
+        let generation = pane.load_generation(id);
+        pane.finish_tabular_load(id, generation, Ok(loaded));
         assert!(
             pane.tabular_mut(id).is_some(),
             "Ready 之后 tabular_mut 应能拿到可变引用"
@@ -2632,6 +2642,33 @@ mod tests {
             pane.tabs()[pane.active_idx()].backend_state,
             BackendState::Ready
         ));
+        std::fs::remove_file(p).ok();
+    }
+
+    /// T7 bullet 4:后台解析结果携带的 generation 与启动时不一致(期间 tab
+    /// 被重开/重试,世代已推进)时必须丢弃,不得把旧 sheet 回填进新世代的 tab。
+    #[test]
+    fn stale_generation_tabular_load_result_is_dropped() {
+        let p = std::env::temp_dir().join(format!("tabular_stale_{}.csv", std::process::id()));
+        std::fs::write(&p, "a,b\n1,2\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(p.clone());
+        let stale_generation = pane.load_generation(id);
+        // 模拟重试:世代推进,旧后台任务随后才回来。
+        let _ = pane.begin_load(id, crate::preview::PreviewLoadStage::Parsing);
+        let loaded = crate::tabular::load(&p).expect("测试用 csv 应能正常解析");
+        assert!(
+            pane.finish_tabular_load(id, stale_generation, Ok(loaded))
+                .is_none(),
+            "过期世代的结果不得回填"
+        );
+        let still_loading = pane.tabs().iter().find(|t| t.id == id).is_some_and(|t| {
+            matches!(
+                t.tabular_state(),
+                Some(crate::preview::TabularState::Loading)
+            )
+        });
+        assert!(still_loading, "tab 应仍在加载新世代,不被旧结果置为 Ready");
         std::fs::remove_file(p).ok();
     }
 
@@ -3858,7 +3895,11 @@ mod tests {
         let csv_id = pane.open_path(csv.clone());
         // 表格先就绪。
         let view = crate::tabular::load(&csv).unwrap();
-        assert!(pane.finish_tabular_load(csv_id, Ok(view)).is_none());
+        let csv_generation = pane.load_generation(csv_id);
+        assert!(
+            pane.finish_tabular_load(csv_id, csv_generation, Ok(view))
+                .is_none()
+        );
 
         // NotFound。
         assert!(matches!(
@@ -3958,7 +3999,8 @@ mod tests {
         let mut pane = PreviewPane::default();
         let id = pane.open_path(path.clone());
         let view = crate::tabular::load(&path).expect("csv 应能解析");
-        assert!(pane.finish_tabular_load(id, Ok(view)).is_none());
+        let generation = pane.load_generation(id);
+        assert!(pane.finish_tabular_load(id, generation, Ok(view)).is_none());
         assert!(pane.reveal_tabular_cell(id, 0, 2, 1).is_none());
         let v = pane
             .tabs()

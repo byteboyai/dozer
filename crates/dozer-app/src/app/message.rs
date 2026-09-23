@@ -398,10 +398,13 @@ pub enum Message {
     /// (异步结果可能晚于用户切走项目才回来,不能假设"当前聚焦的就是它",
     /// 同 `database::Message` 的既有做法);`PanelKind`+`usize`(`PreviewTab.id`)
     /// 定位具体哪个面板的哪个 tab。
+    /// `u64` 是启动后台解析时的 `PreviewLoadState.generation`;回灌时经
+    /// `accepts` 校验,tab 关闭/重开/重试后到达的旧结果被丢弃(T7 取消不回填)。
     TabularLoaded(
         ProjectId,
         PanelKind,
         usize,
+        u64,
         Result<crate::tabular::TabularView, String>,
     ),
     /// 表格 tab 懒加载某个 sheet 完成(用户切到一个还没加载过的 sheet 触发,

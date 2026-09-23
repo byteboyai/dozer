@@ -2361,10 +2361,20 @@ impl Workspace {
             &mut self.preview
         };
         for (tab_id, path) in pane.take_pending_tabular_loads() {
+            // 捕获启动时的 generation:tab 关闭/重开/重试后到达的旧结果按此丢弃
+            // (T7 取消不回填旧 sheet)。
+            let generation = pane
+                .tabs()
+                .iter()
+                .find(|t| t.id == tab_id)
+                .map(|t| t.load_state.generation)
+                .unwrap_or(0);
             let proxy = io.proxy.clone();
             io.handle.spawn_blocking(move || {
                 let result = crate::tabular::load(&path);
-                let _ = proxy.send_event(Message::TabularLoaded(project_id, kind, tab_id, result));
+                let _ = proxy.send_event(Message::TabularLoaded(
+                    project_id, kind, tab_id, generation, result,
+                ));
             });
         }
     }
