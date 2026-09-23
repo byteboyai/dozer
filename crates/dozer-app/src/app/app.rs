@@ -3120,25 +3120,32 @@ impl App {
             // (`diff_webview_desired`);二进制/超限/未选中走 iced 占位。
             if kind == PanelKind::GitLog {
                 if let Some(path) = self.git_log.diff_webview_desired() {
-                    let binding = crate::preview::EditorHostBinding::new(
-                        0,
-                        PanelKind::GitLog,
-                        0,
-                        std::path::PathBuf::from(path),
-                    );
-                    let spec = WebviewSpec {
-                        id: crate::app::GIT_LOG_DIFF_ID_OFFSET,
-                        url: binding.diff_url(crate::preview::scheme_query_value()),
-                        visible: !app_modal_open,
-                        editor_binding: Some(binding),
-                    };
                     let bounds = webview_geometry::git_log_diff_pane_bounds_for(
                         side,
                         window_width,
                         window_height,
                         &self.shell_state(),
                     );
-                    out.push((spec, bounds));
+                    // 面板不可见(该侧收起 / 被另一侧放大覆盖)时几何函数返回
+                    // 零尺寸矩形——此时不产出 spec,免得给不可见的 pane 也创建
+                    // 一个常驻 webview(spec §"数据流"第 4 步要求"side 可见"
+                    // 才产出;`sync_webview_pool` 只看 spec 是否在列表内,不会
+                    // 因为零矩形而跳过创建)。
+                    if bounds.2 > 0.0 && bounds.3 > 0.0 {
+                        let binding = crate::preview::EditorHostBinding::new(
+                            0,
+                            PanelKind::GitLog,
+                            0,
+                            std::path::PathBuf::from(path),
+                        );
+                        let spec = WebviewSpec {
+                            id: crate::app::GIT_LOG_DIFF_ID_OFFSET,
+                            url: binding.diff_url(crate::preview::scheme_query_value()),
+                            visible: !app_modal_open,
+                            editor_binding: Some(binding),
+                        };
+                        out.push((spec, bounds));
+                    }
                 }
                 continue;
             }
