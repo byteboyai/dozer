@@ -451,23 +451,24 @@ Path/Tab 路由已测;dozer-client/MCP 无 live 端到端,断线/重复 request 
       JSON 是 T8 新实现，不再描述为旧 tree adapter 延续。
 - [x] 更新 `CLAUDE.md`/`CODEBUDDY.md` 中编辑器、路由、runtime、资源与大文件约束
       (新增「文件预览路由与查看器」小节)。
-- [~] 核对 macOS 打包包含 editor/json-editor/flyfish/html host 资源与字体；全部离线，
-      无 CDN、无 404。(editor/json-editor/flyfish 已在包内;html host 是 T7 未做;
-      字体为二进制内嵌;web 产物无运行时外链。)
+- [x] 核对 macOS 打包包含 editor/json-editor/flyfish/html host 资源与字体；全部离线，
+      无 CDN、无 404。(editor/json-editor/flyfish + T7 html host 均在包内;字体为
+      二进制内嵌;web 产物无运行时外链。)
 - [x] 核对第三方许可证；运行 `cargo udeps` 或人工确认无残留直接依赖。
       (`cargo machete` 干净;已移除因删除自研 JSON 树而失效的 `sonic-rs` 直接依赖。)
-- [ ] 更新人工验收清单到最终目标状态，删除迁移期“预期失败”。
-- [~] 执行：
+- [x] 更新人工验收清单到最终目标状态，删除迁移期“预期失败”。
+- [x] 执行：
   - `cargo fmt --check`
   - `cargo test -p dozer-app`
   - `cargo test --workspace`
   - `cargo clippy --workspace --all-targets`
   - editor/json-editor 的 typecheck、test、build
   - release macOS app smoke test
-  (fmt / dozer-app / workspace test / workspace clippy / editor+json-editor 构建均已过;
-  仅 release macOS app 真机 smoke 未做。)
+  (全部通过;release app 构建为 0.5.215 并本地安装/启动。)
 - [ ] 按清单完整真机验收，保存路由矩阵、资源诊断、性能数据和失败截图。
-- [ ] 更新总计划完成定义和所有 phase progress；未通过项不得用“已知限制”改名后勾选。
+      (需人工;自动化层已覆盖的部分见各任务注释。)
+- [~] 更新总计划完成定义和所有 phase progress；未通过项不得用“已知限制”改名后勾选。
+      (见文末「当前状态(2026-09-24)」逐条标注 done/partial/未做。)
 
 ---
 
@@ -516,3 +517,50 @@ T14 大文件门槛贯穿 T2/T3/T8，最终阻断发布
     不会产生接近文件大小的正文常驻增量。
 11. 所有 WebView 资源离线打包、安全域隔离、协议可校验；release 包 smoke test 通过。
 12. 自动化、人工路由矩阵、资源诊断和性能记录全部通过并归档。
+
+---
+
+## 当前状态(2026-09-24)
+
+逐条对照上文「完成定义」,**每项都按代码里的真实情况标注**,不用"已知限制"改名充数:
+
+1. **fixture 不出现空白** — 完成。External/Unsupported → T1 统一 fallback 页;
+   未知文本进 Code;二进制安全降级;HTML 走隔离 host;Streamed/Windowed 有界读取。
+2. **backend/runtime/lifecycle 单一真相** — 完成。`PreviewRuntime` + 删除平行
+   迁移字段(T2/T4),`debug_assert` 与结构化 invariant 测试并存。
+3. **跨项目预算 + 真实 suspend/evict** — **partial**。成本模型、统一
+   `(project,panel,tab)` 键、tab 侧 `suspend_tab`/`mark_reserve_denied` 已就位;
+   完整 6 步淘汰闭环(含视图状态序列化)未接线(依赖 T11)。
+4. **启动只物化当前 tab** — 完成(Suspended 壳 + 按需 `load_preview_tab`)。
+5. **脏内容/外部变化/recovery/revision 冲突不静默丢数据** — 大体完成:T10 冲突态 +
+   `save_gate` revision 复校验 + 保存恒拒绝只读/有损。**未做**:异常退出后
+   recovery 与磁盘冲突时进入同一 Conflict UI。
+6. **cursor/selection/scroll/folds/Tabular 恢复闭环** — 逻辑层完成(T11:一次
+   `RestoreViewState`,folds→selection→scroll 固定顺序;Tabular sheet/row/col)。
+   **partial**:淘汰前 `SerializeViewState` 请求 + 超时未接;像素/行内偏移未做。
+7. **Agent 读上下文 + 导航 + revision 守卫写入** — 完成到协议/传输层:T13 命令通道
+   (dozerd 队列 + app 轮询 + MCP `preview_navigate`)、reveal/select/replace 的
+   outcome。**partial**:suspended 物化重放、request id 排队/取消、replace 范围回执。
+8. **JSONL/NDJSON 真实 Streamed backend** — 完成到 backend/路由/资源接入(复用
+   窗口化有界行视图、搜索、行索引、Agent context)。**partial**:逐行结构化错误节点/
+   展开节点、超大 `.json` 预算降级。
+9. **非 UTF-8 字节安全** — 完成。只读 + `encoding_lossy` 提示 + `can_save`/
+   `save_gate` 恒拒绝;二进制伪装落 fallback。**未做**:完整十六进制 byte-viewer(计划
+   允许"T1 外部打开"替代)。
+10. **超大文件/超长单行有界** — 完成。`WINDOW_MAX_BYTES` 封顶、fill_buf 定块扫描、
+   分段重叠搜索(i64 不整行分配)、稀疏索引 revision 失效。**未做**:300MB 单行首屏
+   的完整 command 端到端集成测试、流式搜索取消。
+11. **WebView 离线/隔离/协议可校验 + release smoke** — 完成。`dozer://` 三个 host +
+   html 隔离 host 全部离线;editor/json/flyfish 入站 envelope 校验;
+   release 0.5.215 构建并安装启动。
+12. **自动化 + 人工矩阵 + 资源诊断 + 性能记录归档** — **partial**。自动化
+   (`cargo test --workspace`、clippy、editor/json-editor 构建)全绿;真机路由矩阵 /
+   RSS 性能记录需人工,尚未归档。
+
+### 尚未做的显式缺口(汇总)
+
+- T3 完整淘汰闭环 + T11 淘汰前序列化(互相依赖)。
+- T12/T13 suspended tab 的 reserve→物化→重放 + request id 排队/取消。
+- T8 逐行错误节点/展开节点;超大 `.json` 预算降级。
+- T13 折叠区导航先展开;replace 实际范围回执。
+- 全部真机验收项(路由矩阵、RSS、失败截图)。

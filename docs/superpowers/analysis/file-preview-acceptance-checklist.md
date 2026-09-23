@@ -138,8 +138,8 @@ echo "$d"
 - [ ] CodeMirror tab 选中一段 → MCP `get_preview_context` 返回
       path / cursor / selection / revision / mode / read_only / visible 行。
 - [ ] 表格 tab:返回 `tabular`(sheet / scroll_row / scroll_col)。
-- [ ] 记录:`preview_editor_reveal/select/replace` 是否有外部(daemon/MCP)调用
-      入口 —— 目前**无调用方**(见 wrap-up T3),预期“Agent 写入”不可用。
+- [ ] Agent 导航:MCP `preview_navigate`(path+line/column;给 end 则选中)应让预览
+      滚动/选中;替换(replace)仅在可写 CodeMirror 且 revision 匹配时生效(T13)。
 
 ## 7. 恢复 / 资源 / 安全启动
 
@@ -172,12 +172,14 @@ echo "$d"
 - 未知 UTF-8 文本、`Makefile` / `Dockerfile` / `LICENSE` 已进 Code(T5);
 - 脏 tab 外部变更:已提供冲突条与「保留我的 / 重载磁盘」(二次确认),T10 落地;
   仅“异常退出后 recovery 与磁盘冲突时进同一 UI”尚未接线。
-- Agent 写操作(reveal/select/replace)无 daemon/MCP 调用入口(T13);休眠 tab
-  的 Agent 唤醒未接线。
+- Agent 下行通道已接通(T13:dozerd 队列 + app 轮询 + MCP `preview_navigate`);
+  **partial**:suspended tab 的 reserve→物化→重放、request id 排队/取消、replace 实际
+  范围回执、折叠区导航先展开仍未做。
 - JSONL/NDJSON 已路由为 `PreviewKind::Streamed`(T8):复用窗口化有界行视图,可切
   「原文文本」回退;结构化"局部错误节点/每行展开"尚未做。
 - 超大 `.json` 仍按 JSON Tree 处理,未按预算自动降级到 Text/Windowed/Streamed(T8)。
-- 表格无 reveal cell/range,Agent 无“选中单元格”(T12)。
+- 表格 reveal cell/range 已实现(T12);context 带 `selected_cell`/`selected_range`,
+  但 `visible_rows`/`visible_cols` 字段已加而 grid 尚未回写(当前恒 null)。
 - HTML 已走 `dozer://html/` 隔离 host(无脚本 sandbox iframe,T7)。Flyfish 已建立
   `proj/panel/tab/doc` 绑定并把 title/搜索状态/失败事件迁到通用 envelope(T9);
   但旧零散 JS 搜索注入尚未删除(parity 未做),资源管理器接线仍 partial(T3/T9)。
