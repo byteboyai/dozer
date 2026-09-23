@@ -9,9 +9,9 @@
   <key>CFBundleIdentifier</key>
   <string>com.byteboy.dozer</string>
 	<key>CFBundleVersion</key>
-<string>247</string>
+<string>248</string>
 	<key>CFBundleShortVersionString</key>
-<string>0.5.217</string>
+<string>0.5.218</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleExecutable</key>
