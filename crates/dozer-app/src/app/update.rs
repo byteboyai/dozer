@@ -346,6 +346,11 @@ impl App {
                     }
                     // "保存后关闭":落盘完成(或过期丢弃)后真正移除 tab,
                     // 收尾与同步关闭路径一致(重置 first / 存状态 / flush 上下文)。
+                    // 已知缺口:这条路径没有调用 `App::dehover_after_tab_close`
+                    // (在 `with_project` 闭包内拿不到 `self.hover_anims`)——
+                    // 若被延迟关闭的这个 tab 恰好正被悬停,会重现该方法文档
+                    // 描述的孤儿 hover 值问题,只是触发条件更窄(得先撞上脏
+                    // CodeMirror tab 关闭走异步保存这条分支)。
                     if let Some(tab_id) = close_after_save
                         && pane.take_pending_close(tab_id)
                     {
@@ -637,6 +642,7 @@ impl App {
             Message::SelectTab(idx) => self.select_tab(idx),
             Message::SelectTabNoDrag(idx) => self.select_tab_no_drag(idx),
             Message::CloseTab(idx) => {
+                let mut closed_old_len = None;
                 self.with_focused_project(|ws, io| {
                     // 目标会话仍在 Running/AwaitingInput → 先弹确认框,不直接
                     // 关(避免误关正在跑/等输入的 agent 会话)。其它状态(IDle/
@@ -650,18 +656,39 @@ impl App {
                     if confirm_needed {
                         ws.pending_close_tab = Some(idx);
                     } else {
+                        closed_old_len = Some(ws.tabs.len());
                         ws.close_tab(io, idx);
                         ws.ensure_project_terminal(io);
                     }
                 });
+                // 见 `App::dehover_after_tab_close` 文档:关掉的 tab 若正被
+                // 悬停,残留的 hover 记录会被将来复用同一下标的新 tab 继承。
+                if let Some(old_len) = closed_old_len {
+                    self.dehover_after_tab_close(
+                        HoverId::TermTabItem,
+                        HoverId::TermTabClose,
+                        idx,
+                        old_len,
+                    );
+                }
             }
             Message::TermTabCloseConfirm => {
+                let mut closed = None;
                 self.with_focused_project(|ws, io| {
                     if let Some(idx) = ws.pending_close_tab.take() {
+                        closed = Some((idx, ws.tabs.len()));
                         ws.close_tab(io, idx);
                         ws.ensure_project_terminal(io);
                     }
                 });
+                if let Some((idx, old_len)) = closed {
+                    self.dehover_after_tab_close(
+                        HoverId::TermTabItem,
+                        HoverId::TermTabClose,
+                        idx,
+                        old_len,
+                    );
+                }
             }
             Message::TermTabCloseCancel => {
                 self.with_focused_project(|ws, _io| {
@@ -1441,6 +1468,7 @@ impl App {
                 });
             }
             Message::PreviewCloseTab(idx) => {
+                let mut closed_old_len = None;
                 self.with_focused_project(|ws, io| {
                     // 关闭前静默保存该 tab 的就地改动。老 iced editor 走
                     // `preview_pane_save_at` 就地落盘;CodeMirror tab 的正文
@@ -1451,6 +1479,7 @@ impl App {
                         return;
                     }
                     ws.preview_pane_save_at(PanelKind::Files, idx);
+                    closed_old_len = Some(ws.preview.tabs().len());
                     ws.preview.close(idx);
                     // 关 tab 后位置全变，旧 first 可能越界——归零防御（P1L T5）。
                     ws.preview_tab_first = 0;
@@ -1458,6 +1487,16 @@ impl App {
                     // 关闭:上下文多半变了,立即 flush,不等防抖窗口。
                     ws.flush_preview_context_push(io);
                 });
+                // 见 `App::dehover_after_tab_close` 文档:关掉的 tab 若正被
+                // 悬停,残留的 hover 记录会被将来复用同一下标的新 tab 继承。
+                if let Some(old_len) = closed_old_len {
+                    self.dehover_after_tab_close(
+                        HoverId::PreviewTabItem,
+                        HoverId::PreviewTabClose,
+                        idx,
+                        old_len,
+                    );
+                }
             }
             Message::PreviewToggleRenderMode(idx) => {
                 self.with_focused_project(|ws, _io| {
@@ -1620,6 +1659,7 @@ impl App {
             Message::ProjectPreviewOpenPath(path) => self.project_preview_open_path(path),
             Message::ProjectPreviewSelectTab(idx) => self.project_preview_select_tab(idx),
             Message::ProjectPreviewCloseTab(idx) => {
+                let mut closed_old_len = None;
                 self.with_focused_project(|ws, _io| {
                     // 关闭前静默保存,语义同 `PreviewCloseTab`:CodeMirror tab
                     // 下发 `SaveDocument` 等回落盘再关,其余就地 `save_at` 后关。
@@ -1627,9 +1667,20 @@ impl App {
                         return;
                     }
                     ws.preview_pane_save_at(PanelKind::Project, idx);
+                    closed_old_len = Some(ws.project_preview.tabs().len());
                     ws.project_preview.close(idx);
                     ws.project_preview_tab_first = 0;
                 });
+                // 见 `App::dehover_after_tab_close` 文档:关掉的 tab 若正被
+                // 悬停,残留的 hover 记录会被将来复用同一下标的新 tab 继承。
+                if let Some(old_len) = closed_old_len {
+                    self.dehover_after_tab_close(
+                        HoverId::ProjectPreviewTabItem,
+                        HoverId::ProjectPreviewTabClose,
+                        idx,
+                        old_len,
+                    );
+                }
             }
             Message::ProjectPreviewToggleRenderMode(idx) => {
                 self.with_focused_project(|ws, _io| {

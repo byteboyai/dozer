@@ -10,7 +10,7 @@
 // 部分 API 暂未被非测试代码调用;显式允许,避免 dead_code 噪声。
 #![allow(dead_code)]
 
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 /// 一条搜索命中(1-based 行列)。
@@ -181,23 +181,43 @@ impl LineIndex {
         let mut entries = Vec::new();
         let mut offset: u64 = 0;
         let mut line: u32 = 1;
-        let mut buf = Vec::new();
+        let mut at_line_start = true;
+        let mut saw_byte = false;
         loop {
             if should_cancel() {
                 return Ok(None);
             }
-            buf.clear();
-            let n = reader.read_until(b'\n', &mut buf)?;
-            if n == 0 {
+            let buf = reader.fill_buf()?;
+            if buf.is_empty() {
                 break;
             }
-            if line == 1 || (line - 1).is_multiple_of(every) {
-                entries.push(IndexEntry { line, offset });
+            for (i, &byte) in buf.iter().enumerate() {
+                if at_line_start {
+                    if line == 1 || (line - 1).is_multiple_of(every) {
+                        entries.push(IndexEntry {
+                            line,
+                            offset: offset + i as u64,
+                        });
+                    }
+                    at_line_start = false;
+                }
+                saw_byte = true;
+                if byte == b'\n' {
+                    line = line.saturating_add(1);
+                    at_line_start = true;
+                }
             }
+            let n = buf.len();
+            reader.consume(n);
             offset += n as u64;
-            line += 1;
         }
-        let total_lines = if file_len == 0 { 0 } else { line - 1 };
+        let total_lines = if !saw_byte {
+            0
+        } else if at_line_start {
+            line.saturating_sub(1)
+        } else {
+            line
+        };
         Ok(Some(Self {
             every,
             entries,
@@ -248,17 +268,25 @@ impl LineIndex {
         let mut file = std::fs::File::open(path)?;
         file.seek(SeekFrom::Start(start.offset))?;
         let mut reader = BufReader::new(file);
-        let mut buf = Vec::new();
         let mut current = start.line;
         let mut offset = start.offset;
         while current < line {
-            buf.clear();
-            let n = reader.read_until(b'\n', &mut buf)?;
-            if n == 0 {
+            let buf = reader.fill_buf()?;
+            if buf.is_empty() {
                 break;
             }
-            offset += n as u64;
-            current += 1;
+            let mut consumed = 0usize;
+            for &byte in buf {
+                consumed += 1;
+                if byte == b'\n' {
+                    current += 1;
+                    if current == line {
+                        break;
+                    }
+                }
+            }
+            reader.consume(consumed);
+            offset += consumed as u64;
         }
         Ok(offset)
     }
@@ -310,32 +338,39 @@ pub fn read_window_capped(
     let offset = index.offset_for_line(path, start_line)?;
     let mut file = std::fs::File::open(path)?;
     file.seek(SeekFrom::Start(offset))?;
-    let mut reader = BufReader::new(file);
-    let mut text = String::new();
-    let mut buf = Vec::new();
-    let mut line = start_line;
-    let mut truncated = false;
-    while line <= end_line {
-        buf.clear();
-        let n = reader.read_until(b'\n', &mut buf)?;
-        if n == 0 {
-            break;
-        }
-        if text.len() + buf.len() > max_bytes {
-            // 预算内还能放下多少:尽量补齐到上限,只保留该行前缀。
-            let room = max_bytes.saturating_sub(text.len());
-            if room > 0 {
-                text.push_str(&String::from_utf8_lossy(&buf[..room]));
+    // 只读“字节上限 + 1”。不能用 `read_until`:单行 300MB 时它会在
+    // 我们有机会裁剪前就先分配并读入整行。
+    let mut bytes = Vec::with_capacity(max_bytes.saturating_add(1));
+    file.take(max_bytes.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)?;
+
+    let wanted_lines = end_line.saturating_sub(start_line).saturating_add(1) as usize;
+    let mut complete_lines = 0usize;
+    let mut desired_end = None;
+    for (i, &byte) in bytes.iter().enumerate() {
+        if byte == b'\n' {
+            complete_lines += 1;
+            if complete_lines == wanted_lines {
+                desired_end = Some(i + 1);
+                break;
             }
-            truncated = true;
-            break;
         }
-        text.push_str(&String::from_utf8_lossy(&buf));
-        line += 1;
     }
+    let over_budget = bytes.len() > max_bytes;
+    let take = desired_end.unwrap_or(bytes.len().min(max_bytes));
+    let truncated = desired_end.is_none() && over_budget;
+    let displayed_lines = if take == 0 {
+        0
+    } else {
+        bytes[..take].iter().filter(|&&b| b == b'\n').count()
+            + usize::from(bytes[take - 1] != b'\n')
+    };
+    let text = String::from_utf8_lossy(&bytes[..take]).into_owned();
     Ok(TextWindow {
         start_line,
-        end_line: line.saturating_sub(1).max(start_line),
+        end_line: start_line
+            .saturating_add(displayed_lines.saturating_sub(1) as u32)
+            .max(start_line),
         text,
         truncated,
     })

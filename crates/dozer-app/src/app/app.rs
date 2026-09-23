@@ -1543,6 +1543,36 @@ impl App {
         }
     }
 
+    /// tab 被**关闭**(而非拖拽换位)后,清理 index-keyed hover 记录:
+    /// `hover_anims`/`hover_tooltip_starts` 两张表各调一次
+    /// [`shift_index_keys_after_close`]。不做这一步会重现 2026-09 用户反馈
+    /// ("tab 组 hover 效果鼠标移开后常卡住,多见于最右侧 tab")——被关掉那个
+    /// 下标的 `MouseArea` 随 tab 一起从树上消失,不会再收到 `on_exit`,若它
+    /// 当时正被悬停,`hover_anims` 里的目标值(1.0)就孤儿般留在原下标上；
+    /// 之后新开的 tab 一旦追加到末尾、编号恰好落在这个被空出的旧下标上
+    /// (最常见的情形——新 tab 总是排在当前最大下标),渲染时按新 tab 的下标
+    /// 查 `hover_progress` 就会直接读到这个从未真正悬停过的陈旧值,外观上
+    /// 就是"最右侧新 tab 一出现就带着高亮/关闭按钮"。`rekey_hover_range`
+    /// (上面)解的是拖拽换位场景,这个解的是关闭场景,两者都基于同一套
+    /// "index-keyed 键必须跟着下标语义走"的问题,但语义不同——拖拽是整体
+    /// 顺移,关闭是"丢弃一个、其后全部左移一位",不能共用同一个函数。
+    pub(crate) fn dehover_after_tab_close(
+        &mut self,
+        item_f: fn(usize) -> HoverId,
+        close_f: fn(usize) -> HoverId,
+        closed_idx: usize,
+        old_len: usize,
+    ) {
+        shift_index_keys_after_close(&mut self.hover_anims, item_f, close_f, closed_idx, old_len);
+        shift_index_keys_after_close(
+            &mut self.hover_tooltip_starts,
+            item_f,
+            close_f,
+            closed_idx,
+            old_len,
+        );
+    }
+
     /// 当前激活 tab 的选区文本（⌘C 复制用）。
     pub fn active_selection_text(&self) -> Option<String> {
         self.active_workspace()?.active_selection_text()
@@ -3148,6 +3178,31 @@ impl App {
     }
 }
 
+/// [`App::dehover_after_tab_close`] 的纯函数内核:把 `map`(`hover_anims`或
+/// `hover_tooltip_starts`)里 `closed_idx` 自己的两个键整个丢弃(那个 tab
+/// 已经不存在,不该有任何残留),再把 `(closed_idx, old_len)` 区间里剩余的
+/// 键各自左移一位,跟上其余 tab 关闭后的新下标。拆成不依赖 `App`/`HashMap`
+/// 具体值类型的独立函数,是为了绕开"`App` 没有测试用构造器"的既有限制
+/// (同 `rekey_hover_range` 一直没有直接单测的缺口)——这份核心逻辑本身可以
+/// 拿一个裸 `HashMap` 直接单测。
+pub(crate) fn shift_index_keys_after_close<V>(
+    map: &mut std::collections::HashMap<HoverId, V>,
+    item_f: fn(usize) -> HoverId,
+    close_f: fn(usize) -> HoverId,
+    closed_idx: usize,
+    old_len: usize,
+) {
+    map.remove(&item_f(closed_idx));
+    map.remove(&close_f(closed_idx));
+    for i in (closed_idx + 1)..old_len {
+        for f in [item_f, close_f] {
+            if let Some(v) = map.remove(&f(i)) {
+                map.insert(f(i - 1), v);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3185,6 +3240,64 @@ mod tests {
             (0.0, 0.0),
             (TAB_DRAG_CONFIRM_THRESHOLD_PX + 1.0, 0.0)
         ));
+    }
+
+    /// 2026-09 用户反馈的根因防回归测试:被关掉的 tab 若正被悬停,它自己的
+    /// 两个键(标题 + 关闭按钮)必须整个消失,不能挪去任何位置——否则会被
+    /// 将来复用同一下标的新 tab 意外继承("从未真正悬停过却带着高亮")。
+    #[test]
+    fn shift_index_keys_after_close_drops_the_closed_tabs_own_hover_entirely() {
+        let mut map: HashMap<HoverId, f32> = HashMap::new();
+        map.insert(HoverId::PreviewTabItem(1), 1.0);
+        map.insert(HoverId::PreviewTabClose(1), 1.0);
+        shift_index_keys_after_close(
+            &mut map,
+            HoverId::PreviewTabItem,
+            HoverId::PreviewTabClose,
+            1,
+            2,
+        );
+        assert!(map.is_empty());
+    }
+
+    /// 关掉下标 1、原本 3 个 tab:下标 0 的键原样不动,下标 2 的键(其后
+    /// 唯一剩下的)左移到下标 1——跟上剩余 tab 关闭后的新下标语义。
+    #[test]
+    fn shift_index_keys_after_close_shifts_higher_indices_down_by_one() {
+        let mut map: HashMap<HoverId, f32> = HashMap::new();
+        map.insert(HoverId::PreviewTabItem(0), 0.4);
+        map.insert(HoverId::PreviewTabItem(2), 1.0);
+        map.insert(HoverId::PreviewTabClose(2), 1.0);
+        shift_index_keys_after_close(
+            &mut map,
+            HoverId::PreviewTabItem,
+            HoverId::PreviewTabClose,
+            1,
+            3,
+        );
+        assert_eq!(map.get(&HoverId::PreviewTabItem(0)), Some(&0.4));
+        assert_eq!(map.get(&HoverId::PreviewTabItem(1)), Some(&1.0));
+        assert_eq!(map.get(&HoverId::PreviewTabClose(1)), Some(&1.0));
+        assert!(!map.contains_key(&HoverId::PreviewTabItem(2)));
+        assert!(!map.contains_key(&HoverId::PreviewTabClose(2)));
+    }
+
+    /// 关掉最右侧(最后一个)tab 时,`(closed_idx+1)..old_len` 是空区间,
+    /// 除了丢弃它自己的键之外不该动其它任何键——防止越界或误伤前面的键。
+    #[test]
+    fn shift_index_keys_after_close_noop_for_indices_before_closed_when_closing_the_last_tab() {
+        let mut map: HashMap<HoverId, f32> = HashMap::new();
+        map.insert(HoverId::PreviewTabItem(0), 0.7);
+        map.insert(HoverId::PreviewTabItem(1), 1.0);
+        shift_index_keys_after_close(
+            &mut map,
+            HoverId::PreviewTabItem,
+            HoverId::PreviewTabClose,
+            1,
+            2,
+        );
+        assert_eq!(map.get(&HoverId::PreviewTabItem(0)), Some(&0.7));
+        assert!(!map.contains_key(&HoverId::PreviewTabItem(1)));
     }
 
     /// `tree_drag_past_threshold` 同款三条用例(同 `tab_drag_past_threshold`
