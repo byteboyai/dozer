@@ -3039,6 +3039,20 @@ impl App {
                     ),
                     _ => {}
                 }
+                // T9:Flyfish host 的稳定绑定(project/panel/tab/document)写进
+                // URL,host 事件经 envelope 回传时由 Rust 校验归属,JS 不能自报。
+                for s in &mut specs {
+                    if s.url.starts_with("dozer://flyfish/") {
+                        let doc = format!("p{}-t{}", project.id, s.id);
+                        s.url.push_str(&format!(
+                            "&proj={}&panel={}&tab={}&doc={}",
+                            project.id,
+                            crate::preview::panel_token(kind),
+                            s.id,
+                            crate::preview::encode_component(&doc),
+                        ));
+                    }
+                }
             }
             // tab 栏"溢出下拉"(V 按钮)向下弹,原生浮层会被本侧 webview
             // 盖住(webview 恒在 iced 内容之上)——按该侧对应的

@@ -379,6 +379,48 @@ pub fn parse_json_event(raw: &str) -> Result<WebviewEnvelope<JsonEvent>, Protoco
     })
 }
 
+/// Flyfish 渲染 host 的事件(T9)。与 `EditorEvent`/`JsonEvent` 共用 envelope,
+/// 但保留自己的 payload enum——不与 editor 命令混用。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FlyfishEvent {
+    /// host 脚本初始化完成(元素已插入)。
+    Ready,
+    /// 渲染失败(读盘/解码错误、资源 404)。
+    Failed { message: String, recoverable: bool },
+    /// 文档标题(展示在 tab 上)。
+    Title { title: String },
+    /// 页内搜索状态(当前序号 / 命中总数)。
+    SearchState { current: usize, total: usize },
+}
+
+/// 解析一条 Flyfish host 事件。与 [`parse_event`] 同规则(超大/非法/未知不 panic)。
+pub fn parse_flyfish_event(raw: &str) -> Result<WebviewEnvelope<FlyfishEvent>, ProtocolError> {
+    if raw.len() > MAX_MESSAGE_BYTES {
+        return Err(ProtocolError::TooLarge { bytes: raw.len() });
+    }
+    let env: WebviewEnvelope<serde_json::Value> =
+        serde_json::from_str(raw).map_err(|e| ProtocolError::BadJson(e.to_string()))?;
+    let kind = env
+        .payload
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_default();
+    let payload: FlyfishEvent = serde_json::from_value(env.payload)
+        .map_err(|_| ProtocolError::UnknownPayload(kind.clone()))?;
+    Ok(WebviewEnvelope {
+        protocol_version: env.protocol_version,
+        project_id: env.project_id,
+        panel: env.panel,
+        tab_id: env.tab_id,
+        document_id: env.document_id,
+        revision: env.revision,
+        request_id: env.request_id,
+        payload,
+    })
+}
+
 /// 编码一条 Rust -> 编辑器的命令为 envelope JSON,供 `evaluate_script` 注入。
 pub fn encode_command(
     project_id: i64,
@@ -714,5 +756,63 @@ mod tests {
         let literal = &js[start..end];
         let parsed: serde_json::Value = serde_json::from_str(literal).unwrap();
         assert_eq!(parsed, serde_json::json!(r#"{"a":"b\"c"}"#));
+    }
+
+    /// T9:flyfish envelope 解析 + 归属校验(版本/项目/面板/tab/文档)。
+    #[test]
+    fn parses_and_validates_flyfish_events() {
+        let raw = r#"{"protocol_version":1,"project_id":7,"panel":"files","tab_id":3,"document_id":"p7-t3","revision":0,"request_id":null,"payload":{"kind":"failed","message":"boom","recoverable":true}}"#;
+        let env = parse_flyfish_event(raw).unwrap();
+        assert_eq!(
+            env.payload,
+            FlyfishEvent::Failed {
+                message: "boom".into(),
+                recoverable: true
+            }
+        );
+        let good = HostBinding::new(7, PanelKind::Files, 3, "p7-t3".into());
+        assert!(env.validate(&good).is_ok());
+        // 自报别的 project/tab/doc 一律拒绝。
+        assert!(
+            env.validate(&HostBinding::new(8, PanelKind::Files, 3, "p7-t3".into()))
+                .is_err()
+        );
+        assert!(
+            env.validate(&HostBinding::new(7, PanelKind::Project, 3, "p7-t3".into()))
+                .is_err()
+        );
+        assert!(
+            env.validate(&HostBinding::new(7, PanelKind::Files, 4, "p7-t4".into()))
+                .is_err()
+        );
+
+        // 其它 kind。
+        for (raw, want) in [
+            (r#"{"kind":"ready"}"#, FlyfishEvent::Ready),
+            (
+                r#"{"kind":"title","title":"hi"}"#,
+                FlyfishEvent::Title { title: "hi".into() },
+            ),
+            (
+                r#"{"kind":"search_state","current":1,"total":9}"#,
+                FlyfishEvent::SearchState {
+                    current: 1,
+                    total: 9,
+                },
+            ),
+        ] {
+            let full = format!(
+                r#"{{"protocol_version":1,"project_id":1,"panel":"files","tab_id":1,"document_id":"d","payload":{raw}}}"#
+            );
+            assert_eq!(parse_flyfish_event(&full).unwrap().payload, want);
+        }
+
+        // 未知 kind / 非 JSON 报错且不 panic。
+        let bad = r#"{"protocol_version":1,"payload":{"kind":"nope"}}"#;
+        assert!(matches!(
+            parse_flyfish_event(bad),
+            Err(ProtocolError::UnknownPayload(_))
+        ));
+        assert!(parse_flyfish_event("not json").is_err());
     }
 }

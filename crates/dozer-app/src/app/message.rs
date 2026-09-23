@@ -577,6 +577,12 @@ pub enum Message {
         crate::preview::EditorHostBinding,
         crate::preview::WebviewEnvelope<crate::preview::JsonEvent>,
     ),
+    /// T9:Flyfish 渲染 host 发回的已校验事件(ready/failed/title/search_state)。
+    /// binding 由 Rust 从 webview URL 解析,不采信 JS 自报归属。
+    FlyfishEvent(
+        crate::preview::HostBinding,
+        crate::preview::WebviewEnvelope<crate::preview::FlyfishEvent>,
+    ),
     /// 窗口化 viewer 的稀疏行索引建立完成(后台线程 → UI 线程)。成功后由
     /// App 推送初始窗口(必要时先 reveal 到目标行)。
     PreviewWindowIndex(

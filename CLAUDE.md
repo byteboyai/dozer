@@ -36,7 +36,7 @@ cargo clippy --all-targets && cargo fmt
 
 - **核心原则：Dozer 方便用户预览 AI 的工作结果,用户应尽可能通过 AI 修改产物,而不是自己直接改产物。** 预览类功能(文件预览、Preview WebView 等)优先做"渲染/查看"而非"编辑";如果确实需要提供直接编辑入口,要能说明为什么这个场景绕不开用户亲自动手,不能默认给。
 - boy CLI 已废弃，永不回归；agent 启动/模型托管/doctor 全归 dozerd。`crates/legacy-boy` 已删除（2026-08-12）——删除时 dozerd 尚未实际迁入 `config`/`process`/`doctor` 这三块，旧实现只留在 git 历史（删除前的最后一次提交）里，之后要做这几块时得从那份历史重新参考，不是已经迁完。
-- GUI 只用 iced 0.14 生态；预览 WebView 走 wry 子视图叠加，webview 恒在 GPU 内容之上——凡是需要盖住它的原生浮层（如 Usage 面板全屏态）都要显式隐藏 webview，不能指望层级自然遮挡。**⌘K 命令面板未实现**（规格 §3 已裁掉一期范围，顶栏曾有的纯视觉占位搜索框已于后续迭代移除，见 `app.rs` 中该处的移除说明注释）；「⌘K 打开时隐藏预览」这条早期设计陈述作废，不要再引用它。
+- GUI 只用 iced 0.14 生态；预览 WebView 走 wry 子视图叠加，webview 恒在 GPU 内容之上。旧模式（浮层仍在主窗口内以 iced `stack!` 实现，如 tab 溢出下拉、Files/Project 右键菜单、输入框右键菜单）不能指望层级自然遮挡，必须由 `App::preview_desired` 按各自展开状态显式把 webview 矩形隐藏/下推。**新增浮层不要再走这条老路**：`search_modal`/`file_history` 已于 2026-09-18 迁移为独立原生子窗口（见 `platform/overlay_window.rs` 共享机制），作为独立 OS 窗口天然叠在 webview 之上，不需要任何显式隐藏逻辑——新的浮层/弹窗默认套这套独立窗口机制，只有明确说明理由时才退回旧的"iced 内浮层 + 显式隐藏 webview"模式。**⌘K 命令面板未实现**（规格 §3 已裁掉一期范围，顶栏曾有的纯视觉占位搜索框已于后续迭代移除，见 `app.rs` 中该处的移除说明注释）；「⌘K 打开时隐藏预览」这条早期设计陈述作废，不要再引用它。
 - mac 先发但架构留门：不引入 Swift/AppKit 专属能力；核心不依赖 Node/Python。
 - 一期范围以规格 §3"一期范围裁剪"为准；显式未决项（规格 §8）不得擅自定死。
 - 主题 ByteBoy2077：bg `#0a0e16`、金 `#F2D94E`（甲方动作专属）、奶油文字 `#FFE5B4`、青 `#47DEF0`、绿 `#1AD585`。
@@ -50,6 +50,7 @@ cargo clippy --all-targets && cargo fmt
   - **非 UTF-8 / UTF-16 / 二进制**：只读展示，保存恒拒绝（`PreviewTab::can_save` / `save_gate`）；`encoding_lossy` 文件顶部有只读提示（`lossy=1`）。非法编码绝不允许经 `fetch().text()` 解码后回写原文件。
   - **External/Unsupported 不 host webview**，由 `workspace/view.rs::preview_fallback_page` 统一 fallback 页承载（类型/路径/原因 + 重试/纯文本只读/外部打开，动作由 `preview::fallback_actions` 生成）。
   - **HTML/HTM 走 `dozer://html/` 隔离 host**（不经 `file://`）：绑定文件放进无脚本 sandbox iframe，CSP 无网络；相对资源只放行「已打开文件所在目录子树」（`assets::serve_html_file`）。
+  - **Flyfish host 事件走通用 envelope**（T9）：URL 带 `proj/panel/tab/doc` 绑定，host 经 `window.__dozerFlyfishPost` 回传 `FlyfishEvent`（ready/failed/title/search_state），Rust 侧 `HostBinding` 校验归属；渲染失败回落 T1 页。
   - **大文件（windowed）**：窗口正文封顶 `WINDOW_MAX_BYTES`（`read_window_capped` 用 `take(max+1)`）；稀疏索引/流式搜索按固定块分段、段间重叠，超长单行**不得整行分配**（禁止 `BufRead::split`/`read_until` 整行）；`SetWindow` 派发判据是 `uses_editor_host()`，不是 `uses_codemirror()`；外部变更会失效旧索引（`apply_window_index` 校验 revision）。
   - **WebView 恒在 iced 之上**：预览内任何 iced 条（Find 条、窗口化搜索条、T10 冲突条）都必须由 `App::preview_desired` 显式把 webview 矩形下推条高，否则会被原生子视图盖住。
   - **T10 磁盘冲突**：脏 tab 遇外部修改进入显式冲突态（保留我的修改 / 重载磁盘·二次确认）；保存前 `save_gate` 再校验磁盘 mtime，避免提示后又变被静默覆盖。

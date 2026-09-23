@@ -2,6 +2,7 @@
 //! file_url/preview_url。
 
 use super::*;
+use crate::app::PanelKind;
 
 /// main.rs 同步 webview 的期望清单项。
 #[derive(Debug, Clone, PartialEq)]
@@ -70,6 +71,35 @@ pub(crate) fn html_url(path: &std::path::Path) -> String {
         encode_component(&path.to_string_lossy()),
         scheme_query_value()
     )
+}
+
+/// T9:从 Flyfish host URL 的查询串解析归属绑定(`proj`/`panel`/`tab`/`doc`),
+/// 供 host 回传 envelope 时校验归属。非 flyfish URL 或缺字段返回 `None`。
+pub(crate) fn flyfish_binding_from_url(url: &str) -> Option<HostBinding> {
+    if !url.starts_with("dozer://flyfish/") {
+        return None;
+    }
+    let query = url.split_once('?')?.1;
+    let mut proj = None;
+    let mut panel = None;
+    let mut tab = None;
+    let mut doc = None;
+    for pair in query.split('&') {
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        match k {
+            "proj" => proj = v.parse::<i64>().ok(),
+            "panel" => panel = Some(v.to_string()),
+            "tab" => tab = v.parse::<usize>().ok(),
+            "doc" => doc = crate::assets::percent_decode(v),
+            _ => {}
+        }
+    }
+    let panel = match panel.as_deref() {
+        Some("project") => PanelKind::Project,
+        Some("files") => PanelKind::Files,
+        _ => return None,
+    };
+    Some(HostBinding::new(proj?, panel, tab?, doc?))
 }
 
 /// `TabKind::File` → wry 期望加载的 URL,按扩展名分派两条渲染路径。

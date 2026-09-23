@@ -337,6 +337,9 @@ pub(crate) fn sync_webview_pool(
                 let webview_id = spec.id;
                 let editor_binding = spec.editor_binding.clone();
                 let is_json_host = crate::preview::is_json_editor_url(&spec.url);
+                // T9:Flyfish host 的绑定从 URL 查询串解析(proj/panel/tab/doc),
+                // host 回传的 envelope 据此校验归属。
+                let flyfish_binding = crate::preview::flyfish_binding_from_url(&spec.url);
                 // 常驻注入脚本:焦点/拖拽/缩放三件套(所有 webview);浏览器
                 // 面板(`report_title`)额外附一段"页面标题回报":把
                 // `window.__dozer_webview` 记成本 webview 的 id,页面
@@ -455,7 +458,26 @@ pub(crate) fn sync_webview_pool(
                                 }
                             }
                             _ => {
-                                if let Some(binding) = editor_binding.as_ref() {
+                                // T9:Flyfish host 回传的 envelope(JSON,以 `{` 起)。
+                                let looks_like_envelope = body.starts_with('{');
+                                if let Some(binding) = flyfish_binding.as_ref()
+                                    && looks_like_envelope
+                                {
+                                    match crate::preview::parse_flyfish_event(body) {
+                                        Ok(event) => {
+                                            if let Err(error) = event.validate(binding) {
+                                                tracing::warn!(%error, "拒绝无效 flyfish IPC");
+                                            } else {
+                                                let _ = ipc_proxy.send_event(
+                                                    Message::FlyfishEvent(binding.clone(), event),
+                                                );
+                                            }
+                                        }
+                                        Err(error) => {
+                                            tracing::warn!(%error, "无法解析 flyfish IPC");
+                                        }
+                                    }
+                                } else if let Some(binding) = editor_binding.as_ref() {
                                     let expected = crate::preview::HostBinding::new(
                                         binding.project_id,
                                         binding.panel,

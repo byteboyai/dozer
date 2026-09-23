@@ -57,5 +57,52 @@
   }
   document.body.appendChild(el);
 </script>
+<script>
+  // T9:Flyfish host → Rust 的统一 envelope 桥。project/panel/tab/doc 由 Rust 写进
+  // URL 查询串,Rust 侧据此校验归属(JS 不能自报)。事件只走这个具名通道,
+  // 与 editor/json-editor 的 payload 分开。
+  (function () {
+    var q = new URLSearchParams(location.search);
+    function envelope(payload) {
+      return JSON.stringify({
+        protocol_version: 1,
+        project_id: Number(q.get('proj') || 0) || 0,
+        panel: q.get('panel') || 'files',
+        tab_id: Number(q.get('tab') || 0) || 0,
+        document_id: q.get('doc') || '',
+        revision: 0,
+        request_id: null,
+        payload: payload,
+      });
+    }
+    function post(payload) {
+      try {
+        window.ipc.postMessage(envelope(payload));
+      } catch (_) {}
+    }
+    // 供后续注入脚本(Rust 侧)复用同一通道回传搜索状态等。
+    window.__dozerFlyfishPost = post;
+    post({ kind: 'ready' });
+    // 标题变化 → tab 标题(替换旧的 title:<id>:<title> 字符串通道)。
+    var last = '';
+    function sendTitle() {
+      if (document.title !== last) {
+        last = document.title;
+        post({ kind: 'title', title: String(document.title || '') });
+      }
+    }
+    if (document.readyState === 'complete') sendTitle();
+    else document.addEventListener('DOMContentLoaded', sendTitle);
+    new MutationObserver(sendTitle).observe(document.documentElement || document, {
+      childList: true,
+      subtree: true,
+      attributeFilter: ['title'],
+    });
+    // 渲染失败:尽量把 viewer 元素的 error 事件中继为 failed envelope。
+    el.addEventListener('error', function (e) {
+      post({ kind: 'failed', message: (e && e.message) || '预览渲染失败', recoverable: true });
+    });
+  })();
+</script>
 </body>
 </html>

@@ -178,8 +178,9 @@ echo "$d"
   「原文文本」回退;结构化"局部错误节点/每行展开"尚未做。
 - 超大 `.json` 仍按 JSON Tree 处理,未按预算自动降级到 Text/Windowed/Streamed(T8)。
 - 表格无 reveal cell/range,Agent 无“选中单元格”(T12)。
-- HTML 已走 `dozer://html/` 隔离 host(无脚本 sandbox iframe,T7);Flyfish IPC 未迁
-  envelope;未接资源管理器(T9)。
+- HTML 已走 `dozer://html/` 隔离 host(无脚本 sandbox iframe,T7)。Flyfish 已建立
+  `proj/panel/tab/doc` 绑定并把 title/搜索状态/失败事件迁到通用 envelope(T9);
+  但旧零散 JS 搜索注入尚未删除(parity 未做),资源管理器接线仍 partial(T3/T9)。
 - 窗口化搜索条无 Esc 关闭 / 程序化聚焦(末尾备注)。
 - scroll anchor 仍是逻辑锚点,未精确还原像素(T11)。
 - 非法 UTF-8 / UTF-16 展示已有只读提示且保存恒拒绝(T6);**仍**可能经过

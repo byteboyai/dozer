@@ -72,6 +72,7 @@ scripts/build-macos-app.sh [debug|release]   # 打 Dozer.app 包（debug 默认 
   - **非 UTF-8 / UTF-16 / 二进制**：只读展示，保存恒拒绝（`PreviewTab::can_save` / `save_gate`）；`encoding_lossy` 文件顶部有只读提示（`lossy=1`）。非法编码绝不允许经 `fetch().text()` 解码后回写原文件。
   - **External/Unsupported 不 host webview**，由 `workspace/view.rs::preview_fallback_page` 统一 fallback 页承载（类型/路径/原因 + 重试/纯文本只读/外部打开）。
   - **HTML/HTM 走 `dozer://html/` 隔离 host**（不经 `file://`）：绑定文件放进无脚本 sandbox iframe，CSP 无网络；相对资源只放行「已打开文件所在目录子树」（`assets::serve_html_file`）。
+  - **Flyfish host 事件走通用 envelope**（T9）：URL 带 `proj/panel/tab/doc` 绑定，host 经 `window.__dozerFlyfishPost` 回传 `FlyfishEvent`（ready/failed/title/search_state），Rust 侧 `HostBinding` 校验归属；渲染失败回落 T1 页。
   - **大文件（windowed）**：窗口正文封顶 `WINDOW_MAX_BYTES`；稀疏索引/流式搜索按固定块分段、段间重叠，超长单行**不得整行分配**（禁止 `BufRead::split`/`read_until` 整行）；`SetWindow` 派发判据是 `uses_editor_host()`；外部变更会失效旧索引。
   - **WebView 恒在 iced 之上**：预览内的 iced 条（Find 条、窗口化搜索条、T10 冲突条）都必须由 `App::preview_desired` 显式把 webview 矩形下推条高。
   - **T10 磁盘冲突**：脏 tab 遇外部修改进入显式冲突态（保留我的修改 / 重载磁盘·二次确认）；保存前 `save_gate` 再校验磁盘 mtime。

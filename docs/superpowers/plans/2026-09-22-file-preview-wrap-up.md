@@ -298,15 +298,20 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
 
 ## T9. Flyfish IPC envelope 与资源收敛
 
-- [ ] 为 Flyfish 建立稳定的 project/panel/tab/document binding。
-- [ ] title、搜索、状态和失败事件迁移到通用 `WebviewEnvelope`；保留 Flyfish 自己的
-      payload enum，不与 editor command 混用。
-- [ ] 所有入站事件校验 protocol version、project、panel、tab、document。
-- [ ] 接入 T3 资源 reserve/suspend/destroy；Failed 回落 T1 页面。
-- [ ] 删除旧零散 JS 搜索注入前，完成新旧功能对照测试。
+- [x] 为 Flyfish 建立稳定的 project/panel/tab/document binding
+      (URL 查询串 `proj`/`panel`/`tab`/`doc`;`flyfish_binding_from_url` 解析)。
+- [x] title、搜索、状态和失败事件迁移到通用 `WebviewEnvelope`；保留 Flyfish 自己的
+      payload enum，不与 editor command 混用(`FlyfishEvent { Ready, Failed, Title,
+      SearchState }`;host 桥 `window.__dozerFlyfishPost`)。
+- [x] 所有入站事件校验 protocol version、project、panel、tab、document
+      (`WebviewEnvelope::validate`;runtime IPC 分支解析并 `Message::FlyfishEvent`)。
+- [~] 接入 T3 资源 reserve/suspend/destroy；Failed 回落 T1 页面。(Failed → backend
+      Failed → T1 fallback 页 已接;reserve/suspend/destroy 仍随 T3 partial。)
+- [~] 删除旧零散 JS 搜索注入前，完成新旧功能对照测试。(新 `search_state` envelope
+      通道就位;host 尚未主动回传、旧注入仍在 → parity 未做,故未删旧。)
 
 **范围控制:** T7 HTML 隔离与本任务分开提交；安全域和 IPC 迁移不可揉成一个不可
-回退的大提交。
+回退的大提交。(已分开提交。)
 
 ---
 

@@ -2046,6 +2046,25 @@ mod tests {
     }
 
     #[test]
+    fn flyfish_binding_from_url_parses_query_and_rejects_non_flyfish() {
+        let url =
+            "dozer://flyfish/host.html?p=%2Fa.md&theme=dark&proj=7&panel=project&tab=3&doc=p7-t3";
+        assert_eq!(
+            flyfish_binding_from_url(url),
+            Some(HostBinding::new(
+                7,
+                crate::app::PanelKind::Project,
+                3,
+                "p7-t3".into()
+            ))
+        );
+        // 缺绑定字段 → None。
+        assert!(flyfish_binding_from_url("dozer://flyfish/host.html?p=x").is_none());
+        // 非 flyfish URL → None。
+        assert!(flyfish_binding_from_url("dozer://html/host.html?proj=1").is_none());
+    }
+
+    #[test]
     fn code_class_extensions_route_to_native_text_editor_preview() {
         // 2026-09-05:js/json「等代码类」文件都应由 text editor 预览,而不是
         // 落进 flyfish 当不可预览的兜底。判据单一来源=语法能力(`extension_to_syntax`

@@ -447,6 +447,57 @@ impl App {
                     }
                 });
             }
+            Message::FlyfishEvent(binding, event) => {
+                self.with_project(binding.project_id, move |ws, _io| {
+                    use crate::preview::FlyfishEvent;
+                    // 搜索状态:只在本次 webview Find 会话正锁定该 tab 时回填。
+                    if let FlyfishEvent::SearchState { current, total } = event.payload {
+                        let pane = if binding.panel == PanelKind::Project {
+                            &mut ws.project_preview
+                        } else {
+                            &mut ws.preview
+                        };
+                        let matches = pane
+                            .find_state()
+                            .is_some_and(|f| f.is_webview && f.tab_id == binding.tab_id);
+                        if matches {
+                            ws.preview_find_set_webview_state(binding.panel, current, total);
+                        }
+                        return;
+                    }
+                    let pane = if binding.panel == PanelKind::Project {
+                        &mut ws.project_preview
+                    } else {
+                        &mut ws.preview
+                    };
+                    if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == binding.tab_id) {
+                        match event.payload {
+                            FlyfishEvent::Ready => {
+                                tab.web_error = None;
+                            }
+                            FlyfishEvent::Title { title } => {
+                                if !title.is_empty() {
+                                    tab.title = title;
+                                }
+                            }
+                            FlyfishEvent::Failed {
+                                message,
+                                recoverable,
+                            } => {
+                                // T9:渲染失败回落统一 Failed 终态(T1 fallback 页)。
+                                tab.runtime = crate::preview::PreviewRuntime::None;
+                                tab.web_error = Some(message.clone());
+                                let _ = tab.backend_state.try_transition(
+                                    crate::preview::BackendState::Failed(
+                                        crate::preview::PreviewError::new(message, recoverable),
+                                    ),
+                                );
+                            }
+                            FlyfishEvent::SearchState { .. } => {}
+                        }
+                    }
+                });
+            }
             Message::PreviewWindowIndex(project_id, panel, tab_id, result) => {
                 self.with_project(project_id, move |ws, _io| {
                     match result {
