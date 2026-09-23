@@ -91,7 +91,7 @@ impl App {
                                 }
                                 // 窗口化:首次就绪时后台建立稀疏索引(索引建好
                                 // 后再推初始窗口)。
-                                if tab.uses_windowed_editor() && tab.window_index.is_none() {
+                                if tab.uses_windowed_editor() && tab.window_index().is_none() {
                                     build_index = Some((tab.id, path.clone(), tab.web_revision));
                                 }
                                 // ready latency 观测(不记文件内容)。

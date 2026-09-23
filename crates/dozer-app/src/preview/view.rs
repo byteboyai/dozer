@@ -26,18 +26,16 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         kind: TabKind::Blank,
         title: "空白".into(),
         reload_nonce: 0,
-        tabular: None,
+        runtime: PreviewRuntime::None,
         dirty: false,
         loaded_bytes: 0,
         total_bytes: 0,
-        truncated: false,
         loading: false,
         pending_jump_line: None,
         route: None,
         backend: None,
         backend_state: BackendState::Ready,
         windowed: false,
-        window_index: None,
         recovery_written: false,
         pending_restore: None,
         load_started: None,
@@ -158,11 +156,11 @@ impl PreviewPane {
     /// 用 tab 上的稀疏索引定位,读**有界**窗口,排队 `SetWindow` 由
     /// `window_events` 注入。返回是否真的推了(不是窗口化/索引未就绪则 false)。
     pub fn queue_windowed_view(&mut self, tab_id: usize, center_line: u32) -> bool {
-        let command = {
+        let (command, start_line, truncated) = {
             let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
                 return false;
             };
-            let Some(index) = tab.window_index.as_ref() else {
+            let Some(index) = tab.window_index() else {
                 return false;
             };
             let TabKind::File(path) = &tab.kind else {
@@ -178,15 +176,26 @@ impl PreviewPane {
                 Ok(w) => w,
                 Err(_) => return false,
             };
-            crate::preview::EditorCommand::SetWindow {
-                text: window.text,
-                start_line: window.start_line,
-                total_lines: index.total_lines(),
-                revision: tab.web_revision,
-                truncated: window.truncated,
-            }
+            (
+                crate::preview::EditorCommand::SetWindow {
+                    text: window.text,
+                    start_line: window.start_line,
+                    total_lines: index.total_lines(),
+                    revision: tab.web_revision,
+                    truncated: window.truncated,
+                },
+                window.start_line,
+                window.truncated,
+            )
         };
         self.queue_editor_command(tab_id, command);
+        // 记录最近窗口元数据(T2 runtime)。
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id)
+            && let Some(rt) = tab.window_runtime_mut()
+        {
+            rt.window_start_line = start_line;
+            rt.truncated = truncated;
+        }
         true
     }
 
@@ -203,7 +212,13 @@ impl PreviewPane {
         if index.revision() != tab.web_revision {
             return false;
         }
-        tab.window_index = Some(index);
+        if !matches!(tab.runtime, PreviewRuntime::Windowed(_)) {
+            tab.runtime = PreviewRuntime::Windowed(WindowedRuntime::default());
+        }
+        if let Some(rt) = tab.window_runtime_mut() {
+            rt.index = Some(index);
+            rt.error = None;
+        }
         true
     }
 
@@ -328,7 +343,7 @@ impl PreviewPane {
     pub fn active_tab_is_native(&self) -> bool {
         self.tabs
             .get(self.active)
-            .is_some_and(|t| t.tabular.is_some())
+            .is_some_and(|t| t.tabular_state().is_some())
     }
 
     /// 同一文件已开的 tab 下标(供 `open_path` 与 `App::preview_open_path`
@@ -372,7 +387,7 @@ impl PreviewPane {
             TabKind::Blank => (None, None, BackendState::Ready),
         };
         // 老 iced editor 已退役:不再同步读盘构造 CodeView。
-        let (loaded_bytes, total_bytes, truncated) = (0u64, 0u64, false);
+        let (loaded_bytes, total_bytes) = (0u64, 0u64);
         // 表格类文件委托 Tabular Viewer(与 editor 互斥)。实际解析是异步的
         // (calamine/csv 对大文件可能要跑一阵,不能卡在这个同步方法里,见
         // `crate::tabular` 模块文档的"够数即停"性能策略)——这里只登记
@@ -382,44 +397,46 @@ impl PreviewPane {
         // 在 `push_tab` 返回之后立即 `take_pending_tabular_loads()` 取走并
         // spawn 后台加载。`open_path` 复用已存在 tab 的分支不经过 `push_tab`,
         // 不会重复入队,不会对一个正在加载的 tab 触发第二次加载。
-        let tabular = match &kind {
-            TabKind::File(path)
-                if route
-                    .as_ref()
-                    .is_some_and(|route| route.kind == PreviewKind::Tabular) =>
-            {
-                self.pending_tabular_loads.push((id, path.clone()));
-                Some(TabularState::Loading)
-            }
-            _ => None,
-        };
-        // 新建原生编辑器 tab:键盘事件无需先点击一次即可直达编辑器(见
-        let backend_state = if tabular.is_some() {
-            BackendState::Loading
-        } else {
-            backend_state
-        };
+        let mut is_tabular = false;
+        if let TabKind::File(path) = &kind
+            && route
+                .as_ref()
+                .is_some_and(|r| r.kind == PreviewKind::Tabular)
+        {
+            self.pending_tabular_loads.push((id, path.clone()));
+            is_tabular = true;
+        }
         let windowed = match &kind {
             TabKind::File(path) => path_is_windowed(path, &self.capabilities),
             TabKind::Blank => false,
+        };
+        let runtime = if is_tabular {
+            PreviewRuntime::Tabular(TabularState::Loading)
+        } else if windowed {
+            PreviewRuntime::Windowed(WindowedRuntime::default())
+        } else {
+            PreviewRuntime::None
+        };
+        let backend_state = if is_tabular {
+            BackendState::Loading
+        } else {
+            backend_state
         };
         let tab = PreviewTab {
             id,
             kind,
             title,
             reload_nonce: 0,
-            tabular,
+            runtime,
             dirty: false,
             loaded_bytes,
             total_bytes,
-            truncated,
             loading: false,
             pending_jump_line: None,
             route,
             backend,
             backend_state,
             windowed,
-            window_index: None,
             recovery_written: false,
             pending_restore: None,
             load_started: None,
@@ -481,23 +498,26 @@ impl PreviewPane {
             };
         }
         let windowed = path_is_windowed(&path, &self.capabilities);
+        let runtime = if windowed {
+            PreviewRuntime::Windowed(WindowedRuntime::default())
+        } else {
+            PreviewRuntime::None
+        };
         let tab = PreviewTab {
             id,
             kind: TabKind::File(path),
             title,
             reload_nonce: 0,
-            tabular: None,
+            runtime,
             dirty: false,
             loaded_bytes: 0,
             total_bytes: 0,
-            truncated: false,
             loading: false,
             pending_jump_line: None,
             route: Some(route),
             backend: Some(backend),
             backend_state: BackendState::Suspended,
             windowed,
-            window_index: None,
             recovery_written: false,
             pending_restore: None,
             load_started: None,
@@ -561,7 +581,7 @@ impl PreviewPane {
     /// 物化 Tabular shell:登记表格后台加载并置 Loading 态。
     pub fn set_tabular_loading(&mut self, tab_id: usize, path: PathBuf) {
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
-            tab.tabular = Some(TabularState::Loading);
+            tab.runtime = PreviewRuntime::Tabular(TabularState::Loading);
         }
         self.pending_tabular_loads.push((tab_id, path));
     }
@@ -1153,7 +1173,7 @@ impl PreviewPane {
             if f.is_webview {
                 // webview 档:激活 tab 必须还是同一块 webview。
                 t.id == f.tab_id
-                    && t.tabular.is_none()
+                    && t.tabular_state().is_none()
                     && !t.loading
                     && matches!(t.kind, TabKind::File(_))
             } else {
@@ -1177,11 +1197,7 @@ impl PreviewPane {
         self.tabs
             .iter_mut()
             .find(|t| t.id == tab_id)
-            .and_then(|t| t.tabular.as_mut())
-            .and_then(|t| match t {
-                TabularState::Ready(view) => Some(view),
-                TabularState::Loading => None,
-            })
+            .and_then(|t| t.tabular_view_mut())
     }
 
     /// 按 tab id 取出该 tab 的 `TabularState` 可变引用,供加载完成/懒加载
@@ -1192,7 +1208,7 @@ impl PreviewPane {
         self.tabs
             .iter_mut()
             .find(|t| t.id == tab_id)
-            .and_then(|t| t.tabular.as_mut())
+            .and_then(|t| t.tabular_state_mut())
     }
 
     pub fn finish_tabular_load(
@@ -1203,11 +1219,11 @@ impl PreviewPane {
         let tab = self.tabs.iter_mut().find(|tab| tab.id == tab_id)?;
         match result {
             Ok(view) => {
-                tab.tabular = Some(TabularState::Ready(view));
+                tab.runtime = PreviewRuntime::Tabular(TabularState::Ready(view));
                 let _ = tab.backend_state.try_transition(BackendState::Ready);
             }
             Err(message) => {
-                tab.tabular = None;
+                tab.runtime = PreviewRuntime::None;
                 let _ = tab
                     .backend_state
                     .try_transition(BackendState::Failed(PreviewError::new(message, true)));
@@ -1217,7 +1233,7 @@ impl PreviewPane {
         // 应用持久化的 sheet / 滚动锚点;若目标 sheet 不是当前已加载的,
         // 返回它让调用方触发一次懒加载。
         let (sheet, row, col) = tab.pending_tabular.take()?;
-        if let Some(TabularState::Ready(view)) = tab.tabular.as_mut() {
+        if let Some(view) = tab.tabular_view_mut() {
             view.scroll_row = row;
             view.scroll_col = col;
             if sheet == view.active_sheet {
@@ -1318,7 +1334,7 @@ impl PreviewPane {
         let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
             return;
         };
-        if tab.tabular.is_none() {
+        if !matches!(tab.runtime, PreviewRuntime::Tabular(_)) {
             tab.reload_nonce += 1;
             if tab.uses_codemirror() {
                 // 新 WebView 内部 revision 从 1 重新开始；清掉 Rust 镜像，
@@ -1427,7 +1443,7 @@ impl PreviewPane {
             }
         }
         // 窗口化 tab:`uses_codemirror()` 为 false(窗口化排除),单独处理。
-        // 文件变了就**失效旧索引**(清 `window_index` + `web_revision` 归零,
+        // 文件变了就**失效旧索引**(清 runtime 索引 + `web_revision` 归零,
         // 让在途/旧的 `PreviewWindowIndex` 结果因 revision 不符被拒),并推进
         // `reload_nonce` 让窗口重新导航。旧索引绝不能套到新内容上(T14)。
         for tab in self.tabs.iter_mut() {
@@ -1444,7 +1460,12 @@ impl PreviewPane {
             if !hit {
                 continue;
             }
-            tab.window_index = None;
+            if let Some(rt) = tab.window_runtime_mut() {
+                rt.index = None;
+                rt.window_start_line = 1;
+                rt.truncated = false;
+                rt.error = None;
+            }
             tab.web_revision = 0;
             tab.reload_nonce += 1;
             tab.web_error = None;
@@ -1957,7 +1978,7 @@ mod tests {
         // 打开这一刻还没跑后台线程,tab 先落在 Loading——真正解析是异步的
         // (见 `crate::tabular` 模块文档的"够数即停"性能策略)。
         assert!(
-            matches!(tab.tabular, Some(TabularState::Loading)),
+            matches!(tab.runtime, PreviewRuntime::Tabular(TabularState::Loading)),
             "csv tab 应先进入 Loading 态,而不是同步构造好 TabularView"
         );
         assert!(!tab.uses_editor_host(), "csv 不应再进文本编辑器");
@@ -3032,6 +3053,41 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
+    /// T2:runtime 容器反映 viewer 种类——代码 tab `None`、表格 `Tabular`、
+    /// 大文件 `Windowed`;且 runtime resident 时不吃 Flyfish webview。
+    #[test]
+    fn runtime_container_reflects_viewer_kind() {
+        let dir = std::env::temp_dir().join(format!("t2_runtime_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rs = dir.join("a.rs");
+        std::fs::write(&rs, "fn main(){}\n").unwrap();
+        let csv = dir.join("a.csv");
+        std::fs::write(&csv, "a,b\n1,2\n").unwrap();
+        let huge = dir.join("huge.rs");
+        std::fs::write(&huge, "a".repeat(7 * 1024 * 1024)).unwrap();
+
+        let mut pane = PreviewPane::default();
+        let rs_id = pane.open_path(rs.clone());
+        assert!(matches!(
+            pane.tabs().iter().find(|t| t.id == rs_id).unwrap().runtime,
+            PreviewRuntime::None
+        ));
+        let csv_id = pane.open_path(csv.clone());
+        assert!(matches!(
+            pane.tabs().iter().find(|t| t.id == csv_id).unwrap().runtime,
+            PreviewRuntime::Tabular(TabularState::Loading)
+        ));
+        let huge_id = pane.open_path(huge.clone());
+        let t = pane.tabs().iter().find(|t| t.id == huge_id).unwrap();
+        assert!(matches!(t.runtime, PreviewRuntime::Windowed(_)));
+        assert!(t.runtime.is_resident());
+        assert!(!t.hosts_webview(), "窗口化/表格 resident 时不吃 Flyfish");
+
+        for f in [rs, csv, huge] {
+            std::fs::remove_file(f).ok();
+        }
+    }
+
     /// T14:索引 revision 与 tab 当前 revision 不符时必须拒绝(旧索引不得套
     /// 到新内容上)。
     #[test]
@@ -3046,7 +3102,7 @@ mod tests {
                 .iter()
                 .find(|t| t.id == id)
                 .unwrap()
-                .window_index
+                .window_index()
                 .is_none()
         );
         std::fs::remove_file(&path).ok();
@@ -3063,7 +3119,7 @@ mod tests {
         assert!(pane.apply_window_index(id, std::sync::Arc::new(idx)));
         pane.reload_webviews_for(std::slice::from_ref(&path));
         let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
-        assert!(tab.window_index.is_none(), "旧索引应失效");
+        assert!(tab.window_index().is_none(), "旧索引应失效");
         assert_eq!(tab.web_revision, 0);
         assert_eq!(tab.reload_nonce, 1, "应推进 reload 重新导航");
         std::fs::remove_file(&path).ok();

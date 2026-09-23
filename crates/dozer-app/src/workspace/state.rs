@@ -1164,14 +1164,14 @@ impl Workspace {
             let selection = tab.web_selection.filter(|r| r.start != r.end);
             let cursor = tab.web_selection.map(|r| r.end);
             // 表格 tab:持久化 active sheet + 逻辑滚动锚点。
-            let tabular = match &tab.tabular {
-                Some(crate::preview::TabularState::Ready(view)) => {
-                    Some(preview_state::PersistedTabular {
-                        sheet: view.active_sheet,
-                        scroll_row: view.scroll_row,
-                        scroll_col: view.scroll_col,
-                    })
-                }
+            let tabular = match &tab.runtime {
+                crate::preview::PreviewRuntime::Tabular(crate::preview::TabularState::Ready(
+                    view,
+                )) => Some(preview_state::PersistedTabular {
+                    sheet: view.active_sheet,
+                    scroll_row: view.scroll_row,
+                    scroll_col: view.scroll_col,
+                }),
                 _ => None,
             };
             tabs.push(preview_state::PersistedPreviewTab {
@@ -1252,8 +1252,7 @@ impl Workspace {
                         ),
                         tab.backend_read_only(),
                     )
-                } else if let Some(crate::preview::TabularState::Ready(view)) = tab.tabular.as_ref()
-                {
+                } else if let Some(view) = tab.tabular_view() {
                     // 表格预览:给出当前 sheet 与逻辑滚动锚点。
                     let mut c = dozer_core::protocol::PreviewContext {
                         path: path_str.clone(),
@@ -2046,7 +2045,7 @@ impl Workspace {
         };
         pane.tabs()
             .get(pane.active_idx())
-            .is_some_and(|t| t.tabular.is_some())
+            .is_some_and(|t| t.tabular_state().is_some())
     }
 
     /// 把 `kind` 面板**当前激活原生 tab** 的 CodeView `perform` 一条应用层

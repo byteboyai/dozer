@@ -1188,7 +1188,7 @@ pub(crate) fn preview_pane_for<'a>(
         );
     } else {
         let active_tab = &preview.tabs()[preview.active_idx()];
-        if let Some(tabular) = &active_tab.tabular
+        if let Some(tabular) = active_tab.tabular_state()
             && !active_tab.uses_editor_host()
         {
             // 表格 tab:iced 原生渲染 Tabular Viewer(虚拟化网格 + sheet 切换

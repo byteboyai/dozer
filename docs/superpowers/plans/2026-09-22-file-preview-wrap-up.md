@@ -97,7 +97,7 @@ viewer 状态与资源生命周期只有一份真相，恢复不丢数据，大�
 
 **目的:** 在删除迁移字段之前，为真实 viewer 句柄和加载状态建立唯一归属。
 
-- [ ] 设计并落地运行时容器，推荐形态：
+- [x] 设计并落地运行时容器，推荐形态：
 
   ```rust
   enum PreviewRuntime {
@@ -109,18 +109,28 @@ viewer 状态与资源生命周期只有一份真相，恢复不丢数据，大�
 
   WebView 句柄仍由平台 pool 持有，但 tab 必须持有可判定其 desired/resident 状态的
   runtime metadata。也可采用 `BackendState<T>`，但不得同时保留两套权威状态。
-- [ ] 明确每个 backend 的 `Suspended → Queued → Loading → Ready/Failed` 转换、
-      runtime 创建/销毁点和错误承载位置。
-- [ ] 将 Tabular 的 Loading/Ready/Error 数据迁入 runtime；渲染层不再直接猜
-      `tabular.is_some()`。
-- [ ] 将 Windowed 的 index、当前窗口范围、截断状态和加载错误归入 runtime。
-- [ ] 定义 WebView backend 的 resident metadata：host 类型、estimated bytes、
+- [~] 明确每个 backend 的 `Suspended → Queued → Loading → Ready/Failed` 转换、
+      runtime 创建/销毁点和错误承载位置。(BackendState 状态机与
+      `begin_shell_load`/`finish_shell_load`/`failed` 转换已有;runtime 在
+      `push_tab`/`push_shell_tab` 创建、失败由 `backend_state` 与
+      `WindowedRuntime::error` 承载。逐 backend 文档化仍待补。)
+- [x] 将 Tabular 的 Loading/Ready/Error 数据迁入 runtime；渲染层不再直接猜
+      `tabular.is_some()`(`PreviewRuntime::Tabular` + `tabular_state/view` 访问器)。
+- [x] 将 Windowed 的 index、当前窗口范围、截断状态和加载错误归入 runtime
+      (`WindowedRuntime` + `window_index()` 访问器;`PreviewTab` 去掉
+      `window_index`/`truncated` 字段)。
+- [~] 定义 WebView backend 的 resident metadata：host 类型、estimated bytes、
       visible/active、document revision，不把真实 `wry::WebView` 塞进业务状态。
-- [ ] backend 描述只回答“该用什么看”，runtime 只回答“当前加载到什么状态”；
-      两者职责写入模块文档和测试。
+      (host 类型由 backend 表达;revision/selection/viewport 由 `web_*` 镜像;
+      estimated bytes / 显式 resident metadata 仍待补。)
+- [x] backend 描述只回答“该用什么看”，runtime 只回答“当前加载到什么状态”；
+      两者职责写入模块文档和测试(`PreviewRuntime` 模块文档 +
+      `runtime_container_reflects_viewer_kind`)。
 
 **自动化:** 各 backend 的合法/非法状态迁移；Suspended 不产生 desired viewer；
 Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
+(状态机/Suspended/重试测试已在;`debug_assert_backend_consistent` 增补 backend↔runtime
+自洽断言。)
 
 **完成门槛:** T2 完成前不得开始删除 `PreviewTab::tabular/loading`。
 

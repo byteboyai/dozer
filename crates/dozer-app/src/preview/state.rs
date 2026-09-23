@@ -15,13 +15,10 @@ pub struct PreviewTab {
     /// 重新 `load_url`(同 URL 不会重载,flyfish 的 WKWebView 会一直显示
     /// 保存前的旧内容)。
     pub reload_nonce: u64,
-    /// 表格类文件(`tabular::is_tabular_extension`)的文件 tab 有值,非空即代表
-    /// 这个 tab 走 Tabular Viewer 原生渲染(网格)。与 `editor` 互斥:同一 tab
-    /// 要么代码编辑器、要么表格、要么 webview,三者取其一。表格加载是异步的
-    /// (见 `TabularState` 文档),`Some` 在"是不是表格 tab"这个问题上从打开
-    /// 那一刻起就恒定,不随加载有没有完成而改变——所有原有 `tabular.is_some()
-    /// /is_none()` 判断("这个 tab 是不是已被表格/编辑器认领")因此不用改。
-    pub tabular: Option<TabularState>,
+    /// 该 tab 的**运行时状态容器**(T2):backend 只回答"该用什么看",本字段
+    /// 回答"当前加载到什么状态"(表格加载/就绪、窗口化索引/窗口/截断)。
+    /// 与 backend 描述分开,是 viewer 运行时对象的唯一归属。
+    pub runtime: PreviewRuntime,
     /// 原生可编辑 tab 的"buffer 与磁盘不一致"标记:用户就地改过、还没 ⌘S 保存
     /// (或右键"刷新"/项目切换丢弃归零)为 `true`。`Blank`/`webview` tab 恒
     /// `false`。2026-09-06 原生预览不再只读,有了就地编辑就必须能显式挂脏并兜底,
@@ -33,14 +30,11 @@ pub struct PreviewTab {
     /// 打开时 `fs::metadata` 测到的文件总字节数;语义同上,非只读大文件 tab
     /// 恒为 0。
     pub total_bytes: u64,
-    /// 是否被截断(`ChunkedReadOnly` 档为真;其余恒假)。UI 据此渲染"仅加载
-    /// 前 X MB"横幅 + "加载更多"按钮。
-    pub truncated: bool,
     /// 原生编辑器正在异步读盘中(`PreviewPane::insert_loading_tab` 置真,
-    /// `apply_native_load` 收到结果后置假)。为真时 `editor`/`tabular` 均
-    /// `None`,但这个 tab **不**应该被当成"该文件没有原生编辑器"误判进
-    /// webview 池——`desired_webviews()`/`active_webview_id()`/`select()` 等
-    /// 判据要额外排除 `loading` 为真的 tab。
+    /// `apply_native_load` 收到结果后置假)。为真时 `runtime` 为空,但这个 tab
+    /// **不**应该被当成"该文件没有原生编辑器"误判进 webview 池——
+    /// `desired_webviews()`/`active_webview_id()`/`select()` 等判据要额外排除
+    /// `loading` 为真的 tab。
     pub loading: bool,
     /// 由外部面板（目前只有代码健康度面板）请求的"打开后立即跳转到这一
     /// 行"——`Some` 只在"这个 tab 刚被新建、还在 `loading` 中"的窗口期内
@@ -60,9 +54,6 @@ pub struct PreviewTab {
     /// `file_policy` 判定该文件应窗口化(超预算/超 128MiB/超长行)。窗口化
     /// 专用 viewer 未落地前,这类文件不吃 CodeMirror 整载。
     pub windowed: bool,
-    /// 窗口化 viewer 的稀疏行索引(由后台任务建立后回填);用于按行跳转/加载
-    /// 相邻窗口。非窗口化 tab 恒 `None`。
-    pub window_index: Option<std::sync::Arc<crate::preview::LineIndex>>,
     /// 脏内容的 recovery snapshot 是否已落盘(允许休眠脏 tab 的前提)。
     pub recovery_written: bool,
     /// 启动恢复时从 recovery 读回的正文;editor `ready` 后经 `SetDocument` 推回,
@@ -242,6 +233,66 @@ impl PreviewTab {
                 .is_some_and(|e| e.eq_ignore_ascii_case("json")))
     }
 
+    /// 运行时容器种类(仅用于 Debug 输出,避免打印整个 TabularView)。
+    pub fn runtime_kind(&self) -> &'static str {
+        match self.runtime {
+            PreviewRuntime::None => "none",
+            PreviewRuntime::Tabular(TabularState::Loading) => "tabular:loading",
+            PreviewRuntime::Tabular(TabularState::Ready(_)) => "tabular:ready",
+            PreviewRuntime::Windowed(_) => "windowed",
+        }
+    }
+
+    /// 取表格加载态/就绪态(`TabularState`)。
+    pub fn tabular_state(&self) -> Option<&TabularState> {
+        match &self.runtime {
+            PreviewRuntime::Tabular(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn tabular_state_mut(&mut self) -> Option<&mut TabularState> {
+        match &mut self.runtime {
+            PreviewRuntime::Tabular(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    /// 取已就绪的表格网格视图。
+    pub fn tabular_view(&self) -> Option<&crate::tabular::TabularView> {
+        match &self.runtime {
+            PreviewRuntime::Tabular(TabularState::Ready(view)) => Some(view),
+            _ => None,
+        }
+    }
+
+    pub fn tabular_view_mut(&mut self) -> Option<&mut crate::tabular::TabularView> {
+        match &mut self.runtime {
+            PreviewRuntime::Tabular(TabularState::Ready(view)) => Some(view),
+            _ => None,
+        }
+    }
+
+    /// 取窗口化运行时元数据。
+    pub fn window_runtime(&self) -> Option<&WindowedRuntime> {
+        match &self.runtime {
+            PreviewRuntime::Windowed(w) => Some(w),
+            _ => None,
+        }
+    }
+
+    pub fn window_runtime_mut(&mut self) -> Option<&mut WindowedRuntime> {
+        match &mut self.runtime {
+            PreviewRuntime::Windowed(w) => Some(w),
+            _ => None,
+        }
+    }
+
+    /// 窗口化稀疏行索引(就绪后才有)。
+    pub fn window_index(&self) -> Option<&Arc<crate::preview::LineIndex>> {
+        self.window_runtime().and_then(|w| w.index.as_ref())
+    }
+
     /// debug/test 下断言 backend 描述与旧 adapter 字段一致:任何迁移漏点
     /// (新代码只读 backend 但旧字段没同步)都应立即暴露,而不是静默分叉。
     ///
@@ -260,13 +311,28 @@ impl PreviewTab {
                 "route.kind 与 backend 描述必须一致 (tab {:?})",
                 self.title
             );
-            let has_native_viewer = self.tabular.is_some();
+            let has_native_viewer = self.runtime.is_resident();
             if has_native_viewer {
                 debug_assert!(
                     !self.hosts_webview(),
                     "持有原生 viewer 的 backend 不应再 host webview (tab {:?})",
                     self.title
                 );
+            }
+            // T2:backend 描述与 runtime 容器必须自洽——表格 backend 必须挂
+            // Tabular runtime;Code backend 不得挂 Tabular runtime。
+            match backend.kind() {
+                PreviewKind::Tabular => debug_assert!(
+                    matches!(self.runtime, PreviewRuntime::Tabular(_)),
+                    "Tabular backend 必须挂 Tabular runtime (tab {:?})",
+                    self.title
+                ),
+                PreviewKind::Code => debug_assert!(
+                    !matches!(self.runtime, PreviewRuntime::Tabular(_)),
+                    "Code backend 不应挂 Tabular runtime (tab {:?})",
+                    self.title
+                ),
+                _ => {}
             }
         }
     }
@@ -282,9 +348,8 @@ impl std::fmt::Debug for PreviewTab {
             .field("dirty", &self.dirty)
             .field("loaded_bytes", &self.loaded_bytes)
             .field("total_bytes", &self.total_bytes)
-            .field("truncated", &self.truncated)
             .field("loading", &self.loading)
-            .field("tabular", &self.tabular.is_some())
+            .field("runtime", &self.runtime_kind())
             .field("pending_jump_line", &self.pending_jump_line)
             .field("route", &self.route)
             .field("backend", &self.backend)
@@ -317,6 +382,49 @@ pub enum SaveGate {
 pub enum TabularState {
     Loading,
     Ready(crate::tabular::TabularView),
+}
+
+/// 一个 tab 的**运行时状态容器**(T2)。
+///
+/// 职责边界:backend(见 `backend.rs`)只回答"该用什么看"(路由描述,无句柄);
+/// runtime 只回答"当前加载到什么状态"。两者是唯一真相,不得再用平行 `Option`
+/// 字段猜 viewer 类型。
+///
+/// 真实 `wry::WebView` 句柄仍由平台 pool 持有,不进业务状态;需要 resident
+/// metadata(host 类型/可见性/document revision)时读 `backend` +
+/// `backend_state` + tab 上的 `web_*` 镜像字段。
+pub enum PreviewRuntime {
+    /// 没有运行时对象:CodeMirror / vanilla-jsoneditor / Flyfish / External /
+    /// Unsupported 的"加载到什么状态"由 `backend_state` 与 `web_*` 镜像表达。
+    None,
+    /// 表格:首次解析 / 懒加载 sheet 的加载态,或已就绪的网格视图。
+    Tabular(TabularState),
+    /// 窗口化只读大文件:稀疏行索引与窗口元数据。
+    Windowed(WindowedRuntime),
+}
+
+impl PreviewRuntime {
+    /// 是否持有一个"原生 viewer"(表格网格 / 窗口化索引)。持有时不应再 host
+    /// Flyfish webview(见 `PreviewTab::hosts_webview` 与一致性断言)。
+    pub fn is_resident(&self) -> bool {
+        matches!(
+            self,
+            PreviewRuntime::Tabular(_) | PreviewRuntime::Windowed(_)
+        )
+    }
+}
+
+/// 窗口化只读 viewer 的运行时元数据(T2 从 `PreviewTab` 的散落字段归入)。
+#[derive(Debug, Clone, Default)]
+pub struct WindowedRuntime {
+    /// 稀疏行索引(后台建好后回填);外部变更/重载会清空使其失效。
+    pub index: Option<Arc<crate::preview::LineIndex>>,
+    /// 最近一次读取窗口的全局起始行(诊断/恢复用)。
+    pub window_start_line: u32,
+    /// 最近一次读取的窗口是否因字节上限被截断(超长单行)。
+    pub truncated: bool,
+    /// 索引/窗口加载错误(局部,不等同 backend `Failed`)。
+    pub error: Option<String>,
 }
 
 /// 预览面板空白页(`TabKind::Blank`)对应的项目根目录简介。`path` 即 `Workspace::
