@@ -62,6 +62,17 @@ pub struct FileHistoryTarget {
     pub file_path: PathBuf,
 }
 
+/// 当前已加载、给 CodeMirror diff webview 用的内容——`oid` 是加载时的选中
+/// 版本快照,新结果落地前先核对还对不对得上"现在真正选中的",不对就丢弃
+/// (同 `DiffLoaded` 的 target 核对手法,但这里额外要核对 `oid` 本身,因为
+/// `DiffLoaded`/`DiffContentLoaded` 都只按 `(repo_path, file_path)` 核对
+/// 目标,不看 `oid`——两条并行的加载各自要自己的 oid 匹配)。
+#[derive(Debug, Clone)]
+pub struct LoadedDiff {
+    pub oid: git2::Oid,
+    pub content: crate::extensions::git_log::DiffBlobContent,
+}
+
 /// 弹窗全部状态。整体以 `Option<State>` 挂在顶层 `App`(同
 /// `project_link_menu` 的既有模式)——`None` 表示弹窗未打开。
 #[derive(Default)]
@@ -74,6 +85,16 @@ pub struct State {
     diff_cache: HashMap<git2::Oid, Result<String, String>>,
     rollback_pending: Option<git2::Oid>,
     rollback_error: Option<String>,
+    /// 当前选中版本已加载的 diff 内容(CodeMirror webview 用),与
+    /// `diff_cache`(patch 文本,给 `colored_diff_lines` 用)并存。
+    loaded_diff: Option<LoadedDiff>,
+    /// 当前挂载的 diff webview 是否已确认 `ready`。`loaded_diff` 被清空时
+    /// (换选中 / 回滚成功)连带置回 false——webview 即将因内容不可渲染或
+    /// 即将重新加载而可能被摘掉/换绑,旧的 ready 状态不能带到下一份内容。
+    diff_webview_ready: bool,
+    /// 最近一次**确认送达** webview 的内容对应的 `oid`。跟 `loaded_diff`
+    /// 的 `oid` 不一致就还需要再推一次。
+    diff_sent_for: Option<git2::Oid>,
 }
 
 impl State {
@@ -103,6 +124,29 @@ impl State {
         self.diff_cache.get(&oid)
     }
 
+    pub fn loaded_diff(&self) -> Option<&LoadedDiff> {
+        self.loaded_diff.as_ref()
+    }
+
+    pub fn diff_webview_ready(&self) -> bool {
+        self.diff_webview_ready
+    }
+
+    pub fn diff_sent_for(&self) -> Option<git2::Oid> {
+        self.diff_sent_for
+    }
+
+    pub(crate) fn set_diff_sent_for(&mut self, oid: git2::Oid) {
+        self.diff_sent_for = Some(oid);
+    }
+
+    pub(crate) fn set_diff_webview_ready(&mut self, ready: bool) {
+        self.diff_webview_ready = ready;
+        if ready {
+            self.diff_sent_for = None; // 强制下一帧重发一次当前内容。
+        }
+    }
+
     pub fn rollback_pending(&self) -> Option<git2::Oid> {
         self.rollback_pending
     }
@@ -124,6 +168,15 @@ pub enum Message {
     /// 文件的历史列表完全可能包含同一个 commit(比如一次全仓格式化提交),
     /// 若不核对目标,晚到达的旧文件 diff 会被错插进新文件的缓存里。
     DiffLoaded(PathBuf, PathBuf, git2::Oid, Result<String, String>),
+    /// 选中版本的 blob/磁盘内容异步加载完成(CodeMirror 用,跟
+    /// `DiffLoaded`——patch 文本、给 `colored_diff_lines` 用——并行、各自
+    /// 独立缓存)。`(PathBuf, PathBuf)` 同 `DiffLoaded` 的目标核对手法。
+    DiffContentLoaded(
+        PathBuf,
+        PathBuf,
+        git2::Oid,
+        Result<crate::extensions::git_log::DiffBlobContent, String>,
+    ),
     RollbackRequest(git2::Oid),
     RollbackDone(git2::Oid, Result<(), String>),
 }
@@ -135,8 +188,12 @@ pub fn update(
     state: &mut Option<State>,
     msg: Message,
     handle: &tokio::runtime::Handle,
-    emit: impl Fn(Message) + Send + 'static,
+    emit: impl Fn(Message) + Send + Sync + 'static,
 ) {
+    // 一个消息可能同时触发"patch 文本"和"CodeMirror 内容"两条异步加载,
+    // 各要一份 `emit`;`emit` 本身不是 `Clone`,包一层 `Arc` 让两条
+    // `spawn_blocking` 各自的 async 块都能持有一份引用计数。
+    let emit = std::sync::Arc::new(emit);
     match msg {
         Message::Close => {
             *state = None;
@@ -155,16 +212,23 @@ pub fn update(
             if let Some(oid) = first_oid {
                 s.selected = Some(oid);
                 let target = s.target.as_ref().expect("刚核对过 target 非空");
-                spawn_diff(target, oid, handle, emit);
+                spawn_diff(target, oid, handle, &emit);
+                spawn_diff_content(target, oid, handle, &emit);
             }
         }
         Message::SelectCommit(oid) => {
             let Some(s) = state else { return };
             s.selected = Some(oid);
+            s.loaded_diff = None;
+            s.diff_webview_ready = false;
+            s.diff_sent_for = None;
             if !s.diff_cache.contains_key(&oid)
                 && let Some(target) = &s.target
             {
-                spawn_diff(target, oid, handle, emit);
+                spawn_diff(target, oid, handle, &emit);
+            }
+            if let Some(target) = &s.target {
+                spawn_diff_content(target, oid, handle, &emit);
             }
         }
         Message::DiffLoaded(repo_path, file_path, oid, result) => {
@@ -174,6 +238,20 @@ pub fn update(
                 return; // 已经不是当前目标,丢弃(见上面 `DiffLoaded` 文档)。
             }
             s.diff_cache.insert(oid, result);
+        }
+        Message::DiffContentLoaded(repo_path, file_path, oid, result) => {
+            let Some(s) = state else { return };
+            let Some(target) = &s.target else { return };
+            if target.repo_path != repo_path || target.file_path != file_path {
+                return; // 目标已切换,丢弃(同 DiffLoaded)。
+            }
+            if s.selected != Some(oid) {
+                return; // 用户已经切到别的版本,这是一条迟到的结果。
+            }
+            s.loaded_diff = match result {
+                Ok(content) => Some(LoadedDiff { oid, content }),
+                Err(_) => None,
+            };
         }
         Message::RollbackRequest(oid) => {
             let Some(s) = state else { return };
@@ -201,10 +279,14 @@ pub fn update(
                     // diff(都是"某提交 vs 回滚前的工作区内容")全部失效,
                     // 不能只清掉被回滚到的这一个 oid。
                     s.diff_cache.clear();
+                    s.loaded_diff = None;
+                    s.diff_webview_ready = false;
+                    s.diff_sent_for = None;
                     if let Some(target) = &s.target
                         && let Some(selected) = s.selected
                     {
-                        spawn_diff(target, selected, handle, emit);
+                        spawn_diff(target, selected, handle, &emit);
+                        spawn_diff_content(target, selected, handle, &emit);
                     }
                 }
                 Err(err) => {
@@ -215,14 +297,17 @@ pub fn update(
     }
 }
 
-fn spawn_diff(
+fn spawn_diff<E>(
     target: &FileHistoryTarget,
     oid: git2::Oid,
     handle: &tokio::runtime::Handle,
-    emit: impl Fn(Message) + Send + 'static,
-) {
+    emit: &std::sync::Arc<E>,
+) where
+    E: Fn(Message) + Send + Sync + 'static,
+{
     let repo_path = target.repo_path.clone();
     let file_path = target.file_path.clone();
+    let emit = emit.clone();
     handle.spawn(async move {
         let repo_path2 = repo_path.clone();
         let file_path2 = file_path.clone();
@@ -232,6 +317,32 @@ fn spawn_diff(
         .await
         .unwrap_or_else(|e| Err(format!("diff 加载任务失败: {e}")));
         emit(Message::DiffLoaded(repo_path, file_path, oid, result));
+    });
+}
+
+fn spawn_diff_content<E>(
+    target: &FileHistoryTarget,
+    oid: git2::Oid,
+    handle: &tokio::runtime::Handle,
+    emit: &std::sync::Arc<E>,
+) where
+    E: Fn(Message) + Send + Sync + 'static,
+{
+    let repo_path = target.repo_path.clone();
+    let file_path = target.file_path.clone();
+    let emit = emit.clone();
+    handle.spawn(async move {
+        let repo_path2 = repo_path.clone();
+        let file_path2 = file_path.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let repo = git2::Repository::open(&repo_path2).map_err(|e| e.message().to_string())?;
+            diff_blob_content_against_workdir(&repo, &repo_path2, &file_path2, oid)
+        })
+        .await
+        .unwrap_or_else(|e| Err(format!("diff 内容加载任务失败: {e}")));
+        emit(Message::DiffContentLoaded(
+            repo_path, file_path, oid, result,
+        ));
     });
 }
 
@@ -352,7 +463,6 @@ pub fn diff_against_current(
 /// 这个路径(历史记录本身是一次删除),按空字符串处理,不报错——这不是
 /// 异常情况,是"文件历史"列表天然会包含的一种记录(`build()` 的 pathspec
 /// 过滤只看"这次提交碰过这个路径",删除也算碰过)。
-#[allow(dead_code)] // T2 接入(见 docs/superpowers/plans/2026-09-23-file-history-codemirror-diff.md)。
 pub fn diff_blob_content_against_workdir(
     repo: &git2::Repository,
     repo_path: &Path,
@@ -1069,6 +1179,155 @@ mod tests {
         assert!(
             s.diff_for(other_oid).is_none(),
             "回滚后其它提交的旧缓存也该失效,不能只清被回滚到的那一个"
+        );
+    }
+
+    #[tokio::test]
+    async fn diff_content_loaded_ignored_when_target_no_longer_matches() {
+        let mut state = Some(State::new(target()));
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::DiffContentLoaded(
+                PathBuf::from("/tmp/some-other-repo"),
+                target().file_path,
+                fake_oid(1),
+                Ok(crate::extensions::git_log::DiffBlobContent::Text {
+                    old_text: "a".into(),
+                    new_text: "b".into(),
+                }),
+            ),
+            &handle,
+            |_| {},
+        );
+        assert!(
+            state.as_ref().unwrap().loaded_diff().is_none(),
+            "repo_path 对不上目标,结果应被丢弃"
+        );
+    }
+
+    #[tokio::test]
+    async fn diff_content_loaded_applied_when_target_matches() {
+        let mut state = Some(State::new(target()));
+        if let Some(s) = &mut state {
+            s.selected = Some(fake_oid(1)); // 迟到结果核对:必须是当前选中项。
+        }
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::DiffContentLoaded(
+                target().repo_path,
+                target().file_path,
+                fake_oid(1),
+                Ok(crate::extensions::git_log::DiffBlobContent::Text {
+                    old_text: "a".into(),
+                    new_text: "b".into(),
+                }),
+            ),
+            &handle,
+            |_| {},
+        );
+        let loaded = state
+            .as_ref()
+            .unwrap()
+            .loaded_diff()
+            .expect("目标匹配的结果应该落地");
+        assert_eq!(loaded.oid, fake_oid(1));
+        assert!(matches!(
+            loaded.content,
+            crate::extensions::git_log::DiffBlobContent::Text { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn diff_content_loaded_ignored_when_oid_no_longer_selected() {
+        let mut state = Some(State::new(target()));
+        if let Some(s) = &mut state {
+            s.selected = Some(fake_oid(2)); // 用户已切到别的版本。
+        }
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::DiffContentLoaded(
+                target().repo_path,
+                target().file_path,
+                fake_oid(1),
+                Ok(crate::extensions::git_log::DiffBlobContent::Text {
+                    old_text: "a".into(),
+                    new_text: "b".into(),
+                }),
+            ),
+            &handle,
+            |_| {},
+        );
+        assert!(
+            state.as_ref().unwrap().loaded_diff().is_none(),
+            "oid 已不是当前选中项,迟到的结果应丢弃"
+        );
+    }
+
+    #[tokio::test]
+    async fn select_commit_clears_stale_loaded_diff() {
+        let mut state = Some(State::new(target()));
+        if let Some(s) = &mut state {
+            s.loaded_diff = Some(LoadedDiff {
+                oid: fake_oid(9),
+                content: crate::extensions::git_log::DiffBlobContent::Text {
+                    old_text: "old".into(),
+                    new_text: "old".into(),
+                },
+            });
+        }
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::SelectCommit(fake_oid(2)),
+            &handle,
+            |_| {},
+        );
+        assert!(
+            state.as_ref().unwrap().loaded_diff().is_none(),
+            "换选中提交后必须先清空旧内容"
+        );
+    }
+
+    #[tokio::test]
+    async fn rollback_done_success_clears_loaded_diff() {
+        let mut state = Some(State::new(target()));
+        if let Some(s) = &mut state {
+            s.selected = Some(fake_oid(3));
+            s.loaded_diff = Some(LoadedDiff {
+                oid: fake_oid(3),
+                content: crate::extensions::git_log::DiffBlobContent::Text {
+                    old_text: "old".into(),
+                    new_text: "old".into(),
+                },
+            });
+        }
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::RollbackDone(fake_oid(3), Ok(())),
+            &handle,
+            |_| {},
+        );
+        assert!(
+            state.as_ref().unwrap().loaded_diff().is_none(),
+            "回滚成功后磁盘内容已变,旧的 CodeMirror 内容必须清空、等待重新加载"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_diff_webview_ready_resets_sent_oid() {
+        let mut state = Some(State::new(target()));
+        let s = state.as_mut().unwrap();
+        s.set_diff_sent_for(fake_oid(1));
+        assert_eq!(s.diff_sent_for(), Some(fake_oid(1)));
+        s.set_diff_webview_ready(true);
+        assert!(s.diff_webview_ready());
+        assert!(
+            s.diff_sent_for().is_none(),
+            "webview 确认 ready 后要强制下一帧重发一次当前内容"
         );
     }
 }
