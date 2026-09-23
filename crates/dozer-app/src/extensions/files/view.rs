@@ -1096,7 +1096,7 @@ pub fn context_menu_popup<'a>(
 /// 底层的 `MenuSpec` 数据类型,但走一套"只针对单个已打开文件 tab"的精简
 /// 列表:顶部第一项恒为"关闭"(circle-x,见 `TabContextMenuCloseTab`),与下方
 /// 操作组用分隔线隔开;其下 = 回滚 / 历史(仅 git 仓库文件才有,同文件树顶部
-/// 组);中部 = 一条分隔线;底部 = 复制绝对路径 / 复制文件名称 / 复制相对路径
+/// 组);中部 = 一条分隔线;底部 = 复制文件名称 / 复制相对路径 / 复制绝对路径
 /// / 用外部软件打开 / 从磁盘重新加载。分组之间用分隔线隔开(同
 /// `context_menu_spec` 的三段式)。
 /// 没有目录语义(已打开的 tab 必是文件),故不带新建/粘贴/删除/重命名。
@@ -1142,13 +1142,8 @@ pub(crate) fn tab_context_menu_spec(
         items.push(MenuSpecItem::separator());
     }
 
-    // 主操作组:复制绝对/名称/相对路径等纯文字工具项,与文件树底部同款。
+    // 主操作组:复制名称/相对/绝对路径等纯文字工具项,与文件树底部同款。
     let bottom: Vec<MenuSpecItem<Message>> = vec![
-        MenuSpecItem::entry(
-            None,
-            "复制绝对路径",
-            Message::CopyPath(target.clone(), PathKind::Absolute),
-        ),
         MenuSpecItem::entry(
             None,
             "复制文件名称",
@@ -1158,6 +1153,11 @@ pub(crate) fn tab_context_menu_spec(
             None,
             "复制相对路径",
             Message::CopyPath(target.clone(), PathKind::Relative),
+        ),
+        MenuSpecItem::entry(
+            None,
+            "复制绝对路径",
+            Message::CopyPath(target.clone(), PathKind::Absolute),
         ),
         MenuSpecItem::entry(
             None,
