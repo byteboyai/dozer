@@ -4,6 +4,7 @@
 //! 输入,所以没有 IME/原生右键菜单挂靠、没有查询框自动聚焦这些机制,
 //! 比 `SearchOverlay` 更简单。
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use iced_wgpu::wgpu;
@@ -28,6 +29,31 @@ fn card_logical_size(window_width: f32, window_height: f32) -> LogicalSize<f32> 
     LogicalSize::new(window_width * 0.75, window_height * 0.8)
 }
 
+/// diff 区域(`file_history::diff_area_view` 的 `content` 子树)在弹窗卡片
+/// **自身逻辑坐标系**里的矩形(卡片就是这扇独立窗口的整个客户区,不需要
+/// 再加窗口偏移)。跟 `file_history_card` 的实际布局逐项对应:外层
+/// `padding(16)`;`title` 一行(`font::subtitle()`,`spacing(12)` 在其后);
+/// `body` 是 `row![list(固定 240 宽), spacing(12), diff_area]`;
+/// `diff_area_view` 内部是 `column![header, content].spacing(8)`,`header`
+/// 一行(`font::label()`)。跟 `git_log` 那份计划的 diff pane 几何算法同一种
+/// "近似值,人工验收阶段微调"精度承诺——`rollback_error` 有值时会在
+/// `content` 之后再压一行文案,那种情况下这个矩形会比实际渲染区域略高,
+/// 已知的已接受偏差,不在这个函数里处理。
+fn diff_area_bounds(card_logical: LogicalSize<f32>) -> (f32, f32, f32, f32) {
+    let pad = 16.0;
+    let title_h = byteui::theme::font::subtitle() as f32 * 1.2;
+    let header_h = byteui::theme::font::label() as f32 * 1.2;
+    let list_w = 240.0;
+    let row_spacing = 12.0;
+    let col_spacing = 8.0;
+
+    let x = pad + list_w + row_spacing;
+    let y = pad + title_h + row_spacing + header_h + col_spacing;
+    let w = (card_logical.width - x - pad).max(0.0);
+    let h = (card_logical.height - y - pad).max(0.0);
+    (x, y, w, h)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SyncAction {
     Open,
@@ -49,6 +75,10 @@ pub(crate) struct FileHistoryOverlay {
     focus: FocusTracker,
     cursor: mouse::Cursor,
     modifiers: ModifiersState,
+    /// diff webview 单槽位(不是池——这个弹窗任意时刻最多展示一个 diff)。
+    /// `String` 是当前已加载的 URL(导航去重,同主窗口 webview 池的既有
+    /// 手法)。`None` = 未挂载(未选中版本 / 内容不可渲染 / 尚未加载完)。
+    diff_webview: Option<(wry::WebView, String)>,
 }
 
 impl FileHistoryOverlay {
@@ -93,6 +123,7 @@ impl FileHistoryOverlay {
             focus: FocusTracker::default(),
             cursor: mouse::Cursor::Unavailable,
             modifiers: ModifiersState::default(),
+            diff_webview: None,
         }
     }
 
@@ -155,6 +186,155 @@ impl FileHistoryOverlay {
             .renderer
             .present(None, frame.texture.format(), &view, &self.gpu.viewport);
         frame.present();
+    }
+
+    /// 每帧调用:按 `app.file_history` 当前状态决定 diff webview 的存在/
+    /// URL/矩形,并在 webview 已确认 ready 且有未送达内容时推一次
+    /// `SetDiffDocument`。不复用主窗口 `sync_webview_pool`(见本计划顶部
+    /// "Architecture"——那套的 IPC 路由按 `binding.panel` 分支,且池 key
+    /// 空间是主窗口专属的,生搬到这扇独立窗口上要么错路由要么要新增
+    /// `PanelKind` 变体,两者都不值当,这个槽位本来就只服务一个 webview)。
+    pub(crate) fn sync_diff_webview(
+        &mut self,
+        app: &mut App,
+        allowed_files: Arc<std::sync::Mutex<std::collections::HashSet<PathBuf>>>,
+        proxy: winit::event_loop::EventLoopProxy<Message>,
+    ) {
+        let desired = app.file_history.as_ref().and_then(|s| {
+            let loaded = s.loaded_diff()?;
+            let crate::extensions::git_log::DiffBlobContent::Text { .. } = &loaded.content else {
+                return None;
+            };
+            let target = s.target()?;
+            Some((target.file_path.clone(), loaded.oid))
+        });
+
+        let Some((file_path, _oid)) = desired else {
+            self.diff_webview = None;
+            return;
+        };
+
+        let binding =
+            crate::preview::EditorHostBinding::new(0, crate::app::PanelKind::Files, 0, file_path);
+        let url = binding.diff_url(crate::preview::scheme_query_value());
+        let logical_size: LogicalSize<f32> = self
+            .window
+            .inner_size()
+            .to_logical(self.window.scale_factor());
+        let card_logical = card_logical_size(logical_size.width, logical_size.height);
+        let (x, y, w, h) = diff_area_bounds(card_logical);
+        let bounds = wry::Rect {
+            position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
+            size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
+        };
+
+        match &mut self.diff_webview {
+            Some((view, loaded_url)) => {
+                if *loaded_url != url {
+                    let _ = view.load_url(&url);
+                    *loaded_url = url;
+                }
+                let _ = view.set_bounds(bounds);
+            }
+            None => {
+                let root = crate::assets::assets_root();
+                let ipc_proxy = proxy;
+                let expected_binding = binding.clone();
+                let built = wry::WebViewBuilder::new()
+                    .with_url(&url)
+                    .with_bounds(bounds)
+                    .with_visible(true)
+                    .with_custom_protocol("dozer".into(), move |_id, request| {
+                        let allowed = allowed_files.lock().expect("allowed_files 锁");
+                        let reply = crate::assets::handle_protocol(
+                            &root,
+                            &allowed,
+                            None,
+                            &request.uri().to_string(),
+                        );
+                        wry::http::Response::builder()
+                            .status(reply.status)
+                            .header("Content-Type", reply.mime)
+                            .body(std::borrow::Cow::Owned(reply.body))
+                            .unwrap()
+                    })
+                    .with_ipc_handler(move |req| {
+                        let body = req.body().as_str();
+                        let expected = crate::preview::HostBinding::new(
+                            expected_binding.project_id,
+                            expected_binding.panel,
+                            expected_binding.tab_id,
+                            expected_binding.document_id(),
+                        );
+                        match crate::preview::parse_event(body) {
+                            Ok(event) => {
+                                if let Err(error) = event.validate(&expected) {
+                                    tracing::warn!(%error, "拒绝无效 file-history diff IPC");
+                                } else {
+                                    let _ = ipc_proxy.send_event(
+                                        Message::FileHistoryDiffWebviewEvent(expected, event),
+                                    );
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, "无法解析 file-history diff IPC");
+                            }
+                        }
+                    })
+                    .build_as_child(&self.window);
+                match built {
+                    Ok(view) => self.diff_webview = Some((view, url)),
+                    Err(e) => tracing::warn!("文件历史 diff webview 创建失败: {e}"),
+                }
+            }
+        }
+
+        // 内容推送:webview 已 ready 且当前内容还没送达才推。
+        let push: Option<(git2::Oid, String)> = {
+            let Some(s) = app.file_history.as_ref() else {
+                return;
+            };
+            if !s.diff_webview_ready() {
+                return;
+            }
+            let Some(loaded) = s.loaded_diff() else {
+                return;
+            };
+            if s.diff_sent_for() == Some(loaded.oid) {
+                return;
+            }
+            let crate::extensions::git_log::DiffBlobContent::Text { old_text, new_text } =
+                &loaded.content
+            else {
+                return;
+            };
+            let language = crate::preview::extension_to_syntax(std::path::Path::new(&binding.path));
+            let cmd = crate::preview::EditorCommand::SetDiffDocument {
+                old_text: old_text.clone(),
+                new_text: new_text.clone(),
+                language: language.to_string(),
+                revision: 0,
+                read_only: true,
+            };
+            let script = crate::preview::dispatch_script(&crate::preview::encode_command(
+                binding.project_id,
+                binding.panel,
+                binding.tab_id,
+                &binding.document_id(),
+                0,
+                None,
+                cmd,
+            ));
+            Some((loaded.oid, script))
+        };
+        if let Some((oid, script)) = push
+            && let Some((view, _)) = &self.diff_webview
+        {
+            let _ = view.evaluate_script(&script);
+            if let Some(s) = app.file_history.as_mut() {
+                s.set_diff_sent_for(oid);
+            }
+        }
     }
 
     /// 喂一个原始 winit 事件进这扇窗口自己的 iced 管线。同

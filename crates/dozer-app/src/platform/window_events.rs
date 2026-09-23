@@ -1265,13 +1265,16 @@ impl Runner {
             file_history_overlay::SyncAction::Noop => {}
         }
         let Self::Ready {
+            app,
             file_history_overlay,
+            proxy,
             ..
         } = self
         else {
             return;
         };
         if let Some(overlay) = file_history_overlay {
+            overlay.sync_diff_webview(app, app.allowed_files(), proxy.clone());
             overlay.request_redraw();
         }
     }
