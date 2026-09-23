@@ -37,6 +37,7 @@ use winit::{
 
 use crate::app::{App, Message, PanelKind};
 use crate::extensions;
+use crate::platform::confirm_overlay;
 use crate::platform::file_history_overlay;
 use crate::platform::project_create_overlay;
 use crate::platform::search_overlay;
@@ -197,6 +198,10 @@ pub(crate) enum Runner {
         /// `sync_settings_overlay` 按 `app.settings.is_some()` 单向驱动
         /// 开/关,与其余三类互斥。
         settings_overlay: Option<settings_overlay::SettingsOverlay>,
+        /// 通用 confirm 弹窗的独立窗口宿主(五个 confirm 形态消费方共用)。
+        /// 生命周期由 `sync_confirm_overlay` 按
+        /// `confirm_overlay::desired_confirm` 单向驱动开/关,与其余四类互斥。
+        confirm_overlay: Option<confirm_overlay::ConfirmOverlay>,
     },
 }
 
@@ -218,6 +223,7 @@ pub(crate) enum OverlayKind {
     FileHistory,
     ProjectCreate,
     Settings,
+    Confirm,
 }
 
 impl Runner {
@@ -1125,6 +1131,7 @@ impl Runner {
             file_history_overlay,
             project_create_overlay,
             settings_overlay,
+            confirm_overlay,
             ..
         } = self
         else {
@@ -1141,6 +1148,9 @@ impl Runner {
         }
         if keep != OverlayKind::Settings {
             *settings_overlay = None;
+        }
+        if keep != OverlayKind::Confirm {
+            *confirm_overlay = None;
         }
     }
 
@@ -1403,6 +1413,60 @@ impl Runner {
             return;
         };
         if let Some(overlay) = settings_overlay {
+            overlay.request_redraw();
+        }
+    }
+
+    /// 按 `confirm_overlay::desired_confirm` 算出的"此刻该显示哪个 confirm
+    /// 弹窗"(至多一个)驱动窗口开/关。与其余 `sync_*_overlay` 不同,这里
+    /// 比较的是 `ConfirmTrigger` 判别标签而不是内容相等——`Message` 枚举没
+    /// 有派生 `PartialEq`,也没有必要:同一个 trigger 在弹窗存活期间内容不
+    /// 会变(如已经显示的删除确认不会因为用户操作别的东西而改文案),不需要
+    /// 每帧重建 spec 做深比较。
+    fn sync_confirm_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let desired = {
+            let Self::Ready { app, .. } = self else {
+                return;
+            };
+            confirm_overlay::desired_confirm(app.active_workspace())
+        };
+        let current_trigger = match self {
+            Self::Ready { confirm_overlay, .. } => confirm_overlay.as_ref().map(|o| o.trigger()),
+            _ => return,
+        };
+        match (desired, current_trigger) {
+            (Some((trigger, _)), Some(open)) if trigger == open => {
+                // 同一个弹窗仍在显示,什么都不做。
+            }
+            (Some((trigger, spec)), _) => {
+                self.close_other_overlays(OverlayKind::Confirm);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    confirm_overlay: slot,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *slot = Some(confirm_overlay::ConfirmOverlay::open(
+                    window, adapter, device, queue, instance, trigger, spec, el,
+                ));
+            }
+            (None, _) => {
+                let Self::Ready { confirm_overlay, .. } = self else {
+                    return;
+                };
+                *confirm_overlay = None;
+            }
+        }
+        let Self::Ready { confirm_overlay, .. } = self else {
+            return;
+        };
+        if let Some(overlay) = confirm_overlay {
             overlay.request_redraw();
         }
     }
@@ -2227,6 +2291,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 file_history_overlay: None,
                 project_create_overlay: None,
                 settings_overlay: None,
+                confirm_overlay: None,
             };
         }
     }
@@ -2253,6 +2318,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_file_history_overlay(event_loop);
         self.sync_project_create_overlay(event_loop);
         self.sync_settings_overlay(event_loop);
+        self.sync_confirm_overlay(event_loop);
     }
 
     fn window_event(
@@ -2418,6 +2484,42 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             return;
         }
 
+        // confirm overlay 窗口自己那份 `WindowId` 的事件,同 search/
+        // settings overlay 早退分支的手法。
+        if let Self::Ready {
+            confirm_overlay,
+            modifiers,
+            ..
+        } = self
+            && let Some(overlay) = confirm_overlay
+            && window_id == overlay.window_id()
+        {
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw();
+            } else if matches!(event, WindowEvent::CloseRequested) {
+                // 关闭窗口本身不代表业务状态清空——若不发 cancel 消息,
+                // 下一帧 `sync_confirm_overlay` 会发现 `desired` 仍是
+                // `Some`(业务状态没变)又把它重新建出来,所以这里必须真
+                // 发一条 cancel 消息,让触发条件本身归位。
+                let cancel = overlay.cancel_message();
+                self.dispatch(cancel);
+            } else if let WindowEvent::Focused(focused) = event {
+                // 合成 Focused(false) 不计为失焦(见 FocusTracker 文档)。
+                let should_close = overlay.handle_focus(focused);
+                if should_close {
+                    let cancel = overlay.cancel_message();
+                    self.dispatch(cancel);
+                }
+            } else {
+                let messages = overlay.handle_input(&event, *modifiers);
+                for message in messages {
+                    self.dispatch(message);
+                }
+            }
+            self.sync_confirm_overlay(event_loop);
+            return;
+        }
+
         // `consumed == true`:已经被应用级快捷键接管(见
         // `on_window_event` 顶部文档),下面不能再把同一个原始事件转换
         // 喂给 iced 标准管线,否则会重复处理(⌘S 这类字母快捷键会在
@@ -2448,6 +2550,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 file_history_overlay,
                 project_create_overlay,
                 settings_overlay,
+                confirm_overlay,
                 ..
             } = self
             else {
@@ -3340,6 +3443,16 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             app.window_size.1,
                         );
                     }
+                    if let Some(overlay) = confirm_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                        );
+                    }
                     // bounds 同步由本函数末尾的 sync_previews 统一执行
                 }
                 WindowEvent::CloseRequested => {
@@ -3348,6 +3461,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     *file_history_overlay = None; // 同上,图干净。
                     *project_create_overlay = None; // 图干净,Drop 本身就会释放。
                     *settings_overlay = None; // 图干净,Drop 本身就会释放。
+                    *confirm_overlay = None; // 图干净,Drop 本身就会释放。
                     // 同步写盘,不用 `spawn_shell_layout_save` 的异步路径——
                     // 进程马上退出,spawn 的 tokio 任务不保证跑得完。
                     app.persist_window_size_on_exit();
@@ -3525,6 +3639,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_file_history_overlay(event_loop);
         self.sync_project_create_overlay(event_loop);
         self.sync_settings_overlay(event_loop);
+        self.sync_confirm_overlay(event_loop);
     }
 }
 
