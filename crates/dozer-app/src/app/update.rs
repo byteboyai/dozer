@@ -90,27 +90,33 @@ impl App {
                                     &crate::preview::failures_path(),
                                     path,
                                 );
-                                if tab.uses_windowed_editor() {
-                                    // T4:窗口化 host 的 `ready` 只代表 host JS
-                                    // 初始化完成(空 doc),正文要等首个 SetWindow。
-                                    // 保持 `Loading`,推进到 `Indexing`(索引建好
-                                    // 后推首窗,收 `window_applied` ACK 才 finish)。
-                                    tab.load_state
-                                        .advance(crate::preview::PreviewLoadStage::Indexing);
-                                    if tab.window_index().is_none() {
-                                        build_index =
-                                            Some((tab.id, path.clone(), tab.web_revision));
+                                // T10 bullet 4:只有仍在该次加载(在途)时才接受
+                                // host `ready`。非在途(已 finish/被更晚加载替换)
+                                // 的迟到 ready 不改阶段、不建索引,避免旧 host 的
+                                // 结果把新 loading 或就绪态带偏。
+                                if tab.load_state.is_active() {
+                                    if tab.uses_windowed_editor() {
+                                        // T4:窗口化 host 的 `ready` 只代表 host JS
+                                        // 初始化完成(空 doc),正文要等首个 SetWindow。
+                                        // 保持 `Loading`,推进到 `Indexing`(索引建好
+                                        // 后推首窗,收 `window_applied` ACK 才 finish)。
+                                        tab.load_state
+                                            .advance(crate::preview::PreviewLoadStage::Indexing);
+                                        if tab.window_index().is_none() {
+                                            build_index =
+                                                Some((tab.id, path.clone(), tab.web_revision));
+                                        }
+                                        // 窗口化不需要 recovery/视图恢复(只读、正文由
+                                        // SetWindow 决定),也不走下面的 pending_reveal。
+                                    } else {
+                                        // T5:非窗口化 host 的 `ready` 仅代表 host JS
+                                        // 初始化完成——正文由 host 自行 fetch,待其回
+                                        // `document_loaded` 才 finish。此处保持 Loading,
+                                        // 推进到 `Reading`(host 会显示 loading,正文
+                                        // 未挂上前不 finish)。
+                                        tab.load_state
+                                            .advance(crate::preview::PreviewLoadStage::Reading);
                                     }
-                                    // 窗口化不需要 recovery/视图恢复(只读、正文由
-                                    // SetWindow 决定),也不走下面的 pending_reveal。
-                                } else {
-                                    // T5:非窗口化 host 的 `ready` 仅代表 host JS
-                                    // 初始化完成——正文由 host 自行 fetch,待其回
-                                    // `document_loaded` 才 finish。此处保持 Loading,
-                                    // 推进到 `Reading`(host 会显示 loading,正文
-                                    // 未挂上前不 finish)。
-                                    tab.load_state
-                                        .advance(crate::preview::PreviewLoadStage::Reading);
                                 }
                                 context_changed = true;
                             }
@@ -122,7 +128,13 @@ impl App {
                                 // T5:非窗口化正文落地(或读取失败)的终态判定。
                                 // 窗口化 tab 不走本事件(其正文由 SetWindow 决定)。
                                 tab.web_revision = event.revision;
-                                if let Some(message) = error {
+                                // T10 bullet 4:非在途(已 finish/被更晚加载替换)的
+                                // 迟到 `document_loaded` 不得结束新 loading 或把就绪
+                                // tab 重新置态。此处仍更新 revision(下方已按 revision
+                                // 去回归),但不改阶段/终态。
+                                let ack_active = tab.load_state.is_active();
+                                if ack_active {
+                                    if let Some(message) = error {
                                     tab.web_error = Some(message.clone());
                                     let _ = tab.backend_state.try_transition(
                                         crate::preview::BackendState::Failed(
@@ -177,6 +189,7 @@ impl App {
                                                 folds: state.folds,
                                             },
                                         ));
+                                    }
                                     }
                                 }
                                 context_changed = true;
@@ -386,8 +399,11 @@ impl App {
                                         crate::preview::PreviewError::new(detail, recoverable),
                                     ),
                                 );
-                                // T5:host 明确失败 → 结束本次 loading。
-                                tab.load_state.finish();
+                                // T5:host 明确失败 → 结束本次 loading。T10:非在途
+                                // (迟到失败)不改世代,避免误作废新加载。
+                                if tab.load_state.is_active() {
+                                    tab.load_state.finish();
+                                }
                             }
                             EditorEvent::FocusChanged { .. } => {}
                         }
@@ -429,8 +445,17 @@ impl App {
                     // T4:窗口正文已挂上 → 结束加载(host 变可见)。用 tab 当前
                     // generation 结束精确的这一次加载。
                     if let Some(tab_id) = window_applied {
-                        let generation = pane.load_generation(tab_id);
-                        pane.finish_load(tab_id, generation);
+                        // T10 bullet 4:仅在该 tab 仍有加载在途时接受首窗 ACK,避免
+                        // 迟到 `window_applied` 结束已被重试/替换的新加载。
+                        let active = pane
+                            .tabs()
+                            .iter()
+                            .find(|t| t.id == tab_id)
+                            .is_some_and(|t| t.load_state.is_active());
+                        if active {
+                            let generation = pane.load_generation(tab_id);
+                            pane.finish_load(tab_id, generation);
+                        }
                     }
                     if let Some((tab_id, text, revision)) = pending_restore_cmd {
                         pane.queue_editor_command(
@@ -495,6 +520,10 @@ impl App {
                                 bytes: _,
                                 error,
                             } => {
+                                // T10 bullet 4:非在途(迟到)的 ACK 不结束新加载。
+                                if !tab.load_state.is_active() {
+                                    return;
+                                }
                                 if let Some(message) = error {
                                     tab.web_error = Some(message.clone());
                                     let _ = tab.backend_state.try_transition(
@@ -529,8 +558,10 @@ impl App {
                                         crate::preview::PreviewError::new(message, recoverable),
                                     ),
                                 );
-                                // T5/T6:host 失败 → 结束加载。
-                                tab.load_state.finish();
+                                // T5/T6:host 失败 → 结束加载。T10:非在途不改世代。
+                                if tab.load_state.is_active() {
+                                    tab.load_state.finish();
+                                }
                             }
                         }
                     }
@@ -569,6 +600,10 @@ impl App {
                                 tab.web_error = None;
                             }
                             FlyfishEvent::DocumentLoaded { error, .. } => {
+                                // T10 bullet 4:非在途(迟到)的 ACK 不结束新加载。
+                                if !tab.load_state.is_active() {
+                                    return;
+                                }
                                 if let Some(message) = error {
                                     // host 报告正文加载失败:回落统一 Failed 终态
                                     // (`hosts_webview` 随后为 false → 原生子视图
@@ -608,7 +643,10 @@ impl App {
                                         crate::preview::PreviewError::new(message, recoverable),
                                     ),
                                 );
-                                tab.load_state.finish();
+                                // T10:非在途不改世代。
+                                if tab.load_state.is_active() {
+                                    tab.load_state.finish();
+                                }
                             }
                             FlyfishEvent::SearchState { .. } => {}
                         }
@@ -723,20 +761,31 @@ impl App {
                                 // 无 host 的 fallback 页:直接就绪。
                                 pane.finish_load(tab_id, generation);
                             } else {
-                                // 窗口化与非窗口化 host 都保持 Loading,推进到
-                                // `CreatingHost`;后续 host 信号才 finish
+                                // 窗口化与非窗口化 host 都保持 Loading。T10:先进入
+                                // `Reserving` 等待资源预算;reserve 获批由
+                                // `apply_preview_pool_evictions` 的 `granted` 台账推进到
+                                // `CreatingHost`,之后 host 信号才 finish
                                 // (窗口化:ready→Indexing→首窗→window_applied;
                                 // 非窗口化:ready→Reading→document_loaded)。
+                                //
+                                // 无编辑器 host 的渲染类(Rendered/Flyfish/HTML)不参与
+                                // reserve,直接就绪到 `CreatingHost`。
                                 //
                                 // T8 bullet 5:Rendered(Flyfish/隔离 HTML)host 可能
                                 // 因外链/相对资源/网络卡住,arm 一个 host-ready 超时,
                                 // 超时后进入可重试 Failed,不永久转圈。其余 host 的
                                 // 分阶段超时归 T11。
-                                let rendered_host = pane
+                                let (rendered_host, needs_reserve) = pane
                                     .tabs()
                                     .iter()
                                     .find(|t| t.id == tab_id)
-                                    .is_some_and(|t| t.hosts_webview());
+                                    .map(|t| {
+                                        (
+                                            t.hosts_webview(),
+                                            t.uses_editor_host() || t.uses_json_editor(),
+                                        )
+                                    })
+                                    .unwrap_or((false, false));
                                 if rendered_host {
                                     let proxy = io.proxy.clone();
                                     let handle = io.handle.clone();
@@ -750,11 +799,22 @@ impl App {
                                         ));
                                     });
                                 }
-                                pane.advance_load(
-                                    tab_id,
-                                    generation,
-                                    crate::preview::PreviewLoadStage::CreatingHost,
-                                );
+                                if needs_reserve {
+                                    // 等 `sync_webview_pool` 回灌 `granted` 再进
+                                    // `CreatingHost`;届时若 host 已就绪,`grant_reserve`
+                                    // 为 no-op(非 `Reserving`)。
+                                    pane.advance_load(
+                                        tab_id,
+                                        generation,
+                                        crate::preview::PreviewLoadStage::Reserving,
+                                    );
+                                } else {
+                                    pane.advance_load(
+                                        tab_id,
+                                        generation,
+                                        crate::preview::PreviewLoadStage::CreatingHost,
+                                    );
+                                }
                             }
                         }
                         Err(error) => {
@@ -805,6 +865,44 @@ impl App {
                     };
                     if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == tab_id) {
                         tab.recovery_written = true;
+                    }
+                });
+            }
+            Message::PreviewRecoveryRead(project_id, panel, tab_id, generation, restore) => {
+                self.with_project(project_id, move |ws, _io| {
+                    let pane = if panel == PanelKind::Project {
+                        &mut ws.project_preview
+                    } else {
+                        &mut ws.preview
+                    };
+                    let Some(text) = restore else {
+                        return;
+                    };
+                    // 通常加载仍在途 → 记入 pending_restore,由 DocumentLoaded 消费;
+                    // 若 recovery 读比 host 就绪还慢,由本方法就地生成恢复指令。
+                    if let Some((tab_id, text, revision)) =
+                        pane.apply_recovery_restore(tab_id, generation, text)
+                    {
+                        let language = pane
+                            .tabs()
+                            .iter()
+                            .find(|t| t.id == tab_id)
+                            .and_then(|t| match &t.kind {
+                                crate::preview::TabKind::File(p) => {
+                                    Some(crate::preview::extension_to_syntax(p))
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or_default();
+                        pane.queue_editor_command(
+                            tab_id,
+                            crate::preview::EditorCommand::SetDocument {
+                                text,
+                                revision,
+                                language,
+                                read_only: false,
+                            },
+                        );
                     }
                 });
             }

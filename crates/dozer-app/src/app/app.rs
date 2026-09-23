@@ -1222,16 +1222,31 @@ impl App {
         f(ws, &io);
     }
 
-    /// T3:`sync_webview_pool` 报告的被淘汰 / reserve 被拒 viewer,真正迁移对应
-    /// tab 到 `Suspended`(淘汰,保留 route/backend 与视图镜像)或 `Failed`
-    /// (reserve 被拒,显示可解释占位)。这是"资源淘汰必须改变应用状态、不能只
-    /// 删池句柄"的落点,避免下一帧重新 desired 造成销毁/重建抖动。
+    /// T3/T10:`sync_webview_pool` 报告的 reserve 获批 / 被淘汰 / 被拒 viewer,
+    /// 真正迁移对应 tab:
+    /// - `granted`:该 host 仍在 `Reserving` 等待预算 → 推进到 `CreatingHost`
+    ///   (世代校验),让 host 开始 boot,就绪后经 ACK 收尾。
+    /// - `evicted`:迁到 `Suspended`(淘汰,保留 route/backend 与视图镜像)。
+    /// - `denied`:迁到 `Failed`(显示可解释占位),并作废该世代,不再无限动画。
+    ///
+    /// 这是"资源淘汰必须改变应用状态、不能只删池句柄"的落点,避免下一帧重新
+    /// desired 造成销毁/重建抖动。
     pub(crate) fn apply_preview_pool_evictions(
         &mut self,
         outcome: crate::runtime::PoolSyncOutcome,
     ) {
-        if outcome.evicted.is_empty() && outcome.denied.is_empty() {
+        if outcome.evicted.is_empty() && outcome.denied.is_empty() && outcome.granted.is_empty() {
             return;
+        }
+        for ((project, panel, tab_id), generation) in &outcome.granted {
+            if let Some(ws) = loaded_workspace_mut(&mut self.projects, *project) {
+                let pane = if *panel == PanelKind::Project {
+                    &mut ws.project_preview
+                } else {
+                    &mut ws.preview
+                };
+                pane.grant_reserve(*tab_id, *generation);
+            }
         }
         for (project, panel, tab_id) in &outcome.evicted {
             if let Some(ws) = loaded_workspace_mut(&mut self.projects, *project) {
@@ -1243,14 +1258,18 @@ impl App {
                 pane.suspend_tab(*tab_id);
             }
         }
-        for (project, panel, tab_id) in &outcome.denied {
+        for ((project, panel, tab_id), generation) in &outcome.denied {
             if let Some(ws) = loaded_workspace_mut(&mut self.projects, *project) {
                 let pane = if *panel == PanelKind::Project {
                     &mut ws.project_preview
                 } else {
                     &mut ws.preview
                 };
-                pane.mark_reserve_denied(*tab_id, "预览资源预算不足(可关闭其它大文件后重试)");
+                pane.mark_reserve_denied(
+                    *tab_id,
+                    *generation,
+                    "预览资源预算不足(可关闭其它大文件后重试)",
+                );
             }
         }
         let io = self.shell_io();

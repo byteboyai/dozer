@@ -1433,69 +1433,114 @@ impl Workspace {
             _ => return,
         };
         let editor_host = pane.tabs()[idx].uses_editor_host();
+        let windowed = pane.tabs()[idx].windowed;
 
-        // 物化开始时刻(ready latency 观测)+ dirty recovery 检查。
+        // 物化开始时刻(ready latency 观测)。
         if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == tab_id) {
             tab.load_started = Some(std::time::Instant::now());
-            if !tab.windowed {
-                let key = crate::preview::path_key(&path);
-                if let Some((manifest, text)) =
-                    crate::preview::read_snapshot(&crate::preview::recovery_dir(), project_id, key)
-                    && crate::preview::classify_recovery(
-                        &manifest,
-                        crate::preview::profile_file(&path).ok().as_ref(),
-                    ) == crate::preview::RecoveryResolution::Restore
-                {
-                    tab.pending_restore = Some(text);
-                }
-            }
         }
 
-        // T2:用统一阶段 API 表达"起步 → 就绪"。当前这些路由仍是**同步**物化
-        // (内容由 host 自取或窗口化推送,T3 才把读取/索引真正挪到后台),所以
-        // 立即 begin→finish;阶段名用于语义与后续接线,不影响终态。
+        // T2/T10:物化一条已存在的壳(retry / 启动恢复 / 选中 Suspended)。host 类
+        // 路由**不在此处 finish**:先进入 `Reserving`(editor/JSON 等需占预算的
+        // host,等 `sync_webview_pool` 回灌 `granted` 再进 `CreatingHost`)或
+        // `CreatingHost`(渲染 host,等自身 `document_loaded`/`window_applied`),
+        // 由后续 ACK 结束加载;这样"Loading 动画"如实反映 host 尚未可见,而不是
+        // 建壳即 Ready 却被空白原生子视图盖住。纯 iced/fallback 路由无 host 可等,
+        // 直接 finish(T10 bullet 3:选中 Suspended 进入对应 stage)。
         use crate::preview::PreviewLoadStage as Stage;
-        let begin_finish = |pane: &mut crate::preview::PreviewPane, stage: Stage| {
-            if let Some(generation) = pane.begin_load(tab_id, stage) {
-                pane.finish_load(tab_id, generation);
-            }
+        let begin_only = |pane: &mut crate::preview::PreviewPane, stage: Stage| -> Option<u64> {
+            pane.begin_load(tab_id, stage)
         };
-        match route_kind {
+        // host 类路由是否需要占资源预算(editor/JSON),还是无 host(fallback)。
+        let needs_reserve_route = pane
+            .tabs()
+            .iter()
+            .find(|t| t.id == tab_id)
+            .is_some_and(|t| t.uses_editor_host() || t.uses_json_editor());
+        let load_generation: Option<u64> = match route_kind {
             // CodeMirror(含窗口化只读):editor WebView 自取内容/由 Rust 推窗口。
             Some(crate::preview::PreviewKind::Code) if editor_host => {
-                begin_finish(pane, Stage::CreatingHost);
+                begin_only(pane, Stage::Reserving)
             }
             // JSON 家族:严格 .json 走 vanilla-jsoneditor host,JSONC/JSON5 走
             // CodeMirror 文本。
             Some(crate::preview::PreviewKind::Json) => {
-                begin_finish(pane, Stage::Parsing);
-            }
-            // 流式 JSONL/NDJSON(T8):editor host(Streamed 窗口化只读 / Text)。
-            Some(crate::preview::PreviewKind::Streamed) => {
-                begin_finish(pane, Stage::CreatingHost);
-            }
-            // 其余 Code 到 editor host。
-            Some(crate::preview::PreviewKind::Code) => {
-                begin_finish(pane, Stage::CreatingHost);
-            }
-            Some(crate::preview::PreviewKind::Tabular) => {
-                // 首次解析:进入 `Parsing`,网格后台加载完成前保持 Loading。
-                if let Some(generation) = pane.begin_load(tab_id, Stage::Parsing) {
-                    pane.set_tabular_loading(tab_id, path.clone());
-                    // CSV/TSV 原文模式:同时让 editor host 就绪(网格仍在后台加载,
-                    // 便于切回)。
-                    if editor_host {
-                        pane.finish_load(tab_id, generation);
-                    }
+                if needs_reserve_route {
+                    begin_only(pane, Stage::Reserving)
+                } else {
+                    begin_only(pane, Stage::Parsing)
                 }
             }
-            // 渲染/外部/不支持:交给对应 WebView 或 fallback,直接就绪。
-            Some(crate::preview::PreviewKind::Rendered)
-            | Some(crate::preview::PreviewKind::External)
-            | Some(crate::preview::PreviewKind::Unsupported) => {
-                begin_finish(pane, Stage::CreatingHost);
+            // 流式 JSONL/NDJSON(T8):editor host(Streamed 窗口化只读 / Text)。
+            Some(crate::preview::PreviewKind::Streamed) => begin_only(pane, Stage::Reserving),
+            // 其余 Code 到 editor host。
+            Some(crate::preview::PreviewKind::Code) => begin_only(pane, Stage::Reserving),
+            Some(crate::preview::PreviewKind::Tabular) => {
+                // 首次解析:进入 `Parsing`,网格后台加载完成前保持 Loading。
+                if let Some(generation) = begin_only(pane, Stage::Parsing) {
+                    pane.set_tabular_loading(tab_id, path.clone());
+                    // CSV/TSV 原文模式:同时让 editor host 就绪(网格仍在后台加载,
+                    // 便于切回)。原文 host 需占预算,故回到 `Reserving` 等 grant,
+                    // 而非直接 finish。
+                    if editor_host {
+                        pane.advance_load(tab_id, generation, Stage::Reserving);
+                    }
+                }
+                None
             }
-            None => {}
+            // 渲染:交给 Flyfish/隔离 HTML host,等其 `document_loaded` 才 finish。
+            // arm host-ready 超时(T8 bullet 5),避免外链/网络卡死无限动画。
+            Some(crate::preview::PreviewKind::Rendered) => {
+                if let Some(generation) = begin_only(pane, Stage::CreatingHost) {
+                    let proxy = io.proxy.clone();
+                    let handle = io.handle.clone();
+                    handle.spawn(async move {
+                        tokio::time::sleep(crate::preview::PREVIEW_HOST_READY_TIMEOUT).await;
+                        let _ = proxy.send_event(crate::app::Message::PreviewHostTimeout(
+                            project_id, kind, tab_id, generation,
+                        ));
+                    });
+                    Some(generation)
+                } else {
+                    None
+                }
+            }
+            // 外部/不支持:无 host,由 fallback 页承载,直接就绪。
+            Some(crate::preview::PreviewKind::External)
+            | Some(crate::preview::PreviewKind::Unsupported) => {
+                if let Some(generation) = begin_only(pane, Stage::CreatingHost) {
+                    pane.finish_load(tab_id, generation);
+                }
+                None
+            }
+            None => None,
+        };
+
+        // T10 bullet 3:dirty recovery 读取 + 磁盘冲突分类挪到后台。只有非窗口化
+        // (窗口化正文只读、不走 recovery)且确有在途加载时才去读;结果经
+        // `PreviewRecoveryRead` 回灌,世代校验后再落 `pending_restore`。
+        if !windowed && let Some(generation) = load_generation {
+            let key = crate::preview::path_key(&path);
+            let recovery_dir = crate::preview::recovery_dir();
+            let path_for_read = path.clone();
+            let proxy = io.proxy.clone();
+            let handle = io.handle.clone();
+            let panel = kind;
+            handle.spawn(async move {
+                let restore = tokio::task::spawn_blocking(move || {
+                    let (manifest, text) =
+                        crate::preview::read_snapshot(&recovery_dir, project_id, key)?;
+                    let disk = crate::preview::profile_file(&path_for_read).ok();
+                    (crate::preview::classify_recovery(&manifest, disk.as_ref())
+                        == crate::preview::RecoveryResolution::Restore)
+                        .then_some(text)
+                })
+                .await
+                .unwrap_or(None);
+                let _ = proxy.send_event(crate::app::Message::PreviewRecoveryRead(
+                    project_id, panel, tab_id, generation, restore,
+                ));
+            });
         }
 
         // 侧载的后台任务(表格)由 Workspace 自己 spawn。

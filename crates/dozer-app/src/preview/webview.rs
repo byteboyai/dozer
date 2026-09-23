@@ -11,6 +11,11 @@ pub struct WebviewSpec {
     pub url: String,
     pub visible: bool,
     pub editor_binding: Option<EditorHostBinding>,
+    /// T10:该 host 若在 `Reserving` 阶段等待预算,携带其 loading `generation`。
+    /// `sync_webview_pool` 在 reserve 被批准时把 `(key, generation)` 回灌给
+    /// 调用方,由 `apply_preview_pool_outcome` 世代校验后推进到 `CreatingHost`;
+    /// 仅 host 类(editor/JSON)且在途加载时为 `Some`。
+    pub loading_generation: Option<u64>,
 }
 
 /// RFC3986 严格百分号编码:unreserved(字母/数字/`-._~`)之外全部 %XX。

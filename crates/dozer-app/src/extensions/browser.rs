@@ -242,6 +242,8 @@ impl Tabs {
                 url: tab.url.clone(),
                 visible: idx == self.active,
                 editor_binding: None,
+                // 浏览器 webview 不参与预览资源 reserve。
+                loading_generation: None,
             })
             .collect()
     }

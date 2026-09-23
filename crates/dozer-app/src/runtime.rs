@@ -207,7 +207,12 @@ impl<T> iced_winit::core::widget::Operation<T> for UnfocusTargets {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct PoolSyncOutcome {
     pub evicted: Vec<crate::preview::ViewerKey>,
-    pub denied: Vec<crate::preview::ViewerKey>,
+    /// T10:本次**新建**且 reserve 被批准的 host,携带其 loading `generation`,
+    /// 由调用方推进该 tab 从 `Reserving` 到 `CreatingHost`(世代校验)。
+    pub granted: Vec<(crate::preview::ViewerKey, u64)>,
+    /// T10:reserve 被拒的 host,携带其 loading `generation`,由调用方把该
+    /// tab 迁到可解释的 Failed 终态并作废该世代(不再无限动画)。
+    pub denied: Vec<(crate::preview::ViewerKey, u64)>,
 }
 
 pub(crate) fn sync_webview_pool(
@@ -236,6 +241,8 @@ pub(crate) fn sync_webview_pool(
             continue;
         };
         let key = (binding.project_id, binding.panel, binding.tab_id);
+        // T10:host 若在 `Reserving` 等待预算,携带其 loading 世代回灌调用方。
+        let loading_generation = spec.loading_generation;
         keep.insert((binding.panel, binding.tab_id));
         if !manager.contains(key) {
             let bytes = std::fs::metadata(&binding.path)
@@ -274,9 +281,10 @@ pub(crate) fn sync_webview_pool(
                     tab_id = binding.tab_id,
                     "preview resource budget denied editor webview"
                 );
-                outcome
-                    .denied
-                    .push((binding.project_id, binding.panel, binding.tab_id));
+                outcome.denied.push((
+                    (binding.project_id, binding.panel, binding.tab_id),
+                    loading_generation.unwrap_or(0),
+                ));
                 continue;
             }
             manager.register(crate::preview::ViewerRegistration {
@@ -292,6 +300,10 @@ pub(crate) fn sync_webview_pool(
                 agent_writing: false,
                 last_accessed: 0,
             });
+            // T10:新 host 获批,回灌世代让 tab 从 `Reserving` 进入 `CreatingHost`。
+            if let Some(generation) = loading_generation {
+                outcome.granted.push((key, generation));
+            }
         } else {
             manager.set_active(key, spec.visible);
             manager.touch(key);

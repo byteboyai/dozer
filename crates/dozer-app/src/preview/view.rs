@@ -704,14 +704,23 @@ impl PreviewPane {
         true
     }
 
-    /// T3:reserve 被拒时给 tab 一个可解释的终态(Failed,可重试),由统一
+    /// T3/T10:reserve 被拒时给 tab 一个可解释的终态(Failed,可重试),由统一
     /// fallback 页/错误条呈现,而不是静默空白或无限 loading。
-    /// (T3 闭环的 app 侧接线未完成前,仅测试使用;见 wrap-up T3。)
-    #[allow(dead_code)]
-    pub fn mark_reserve_denied(&mut self, tab_id: usize, reason: impl Into<String>) -> bool {
+    ///
+    /// `generation` 为该 tab 等待预算时的 loading 世代:只有仍匹配当前加载
+    /// 才处理(旧世代被拒不得结束新加载),并作废该世代使在途 host 结果失效。
+    pub fn mark_reserve_denied(
+        &mut self,
+        tab_id: usize,
+        generation: u64,
+        reason: impl Into<String>,
+    ) -> bool {
         let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
             return false;
         };
+        if !tab.load_state.accepts(generation) {
+            return false;
+        }
         let reason = reason.into();
         tab.runtime = PreviewRuntime::None;
         tab.web_error = Some(reason.clone());
@@ -719,6 +728,58 @@ impl PreviewPane {
         let _ = tab
             .backend_state
             .try_transition(BackendState::Failed(PreviewError::new(reason, true)));
+        // 结束本次加载(回到 Idle 并推进世代),避免 fallback 页背后还有在途
+        // host 结果能"结束新 loading"(T10 bullet 4)。
+        tab.load_state.finish();
+        true
+    }
+
+    /// T10 bullet 3:后台 recovery 读取结果落回 tab。`generation` 为物化时的
+    /// load 世代:
+    ///
+    /// - 若该次加载仍在途(`accepts(generation)`),记进 `pending_restore`,由
+    ///   `DocumentLoaded` 消费(与同步路径一致)。
+    /// - 若 host 已就绪(世代已随 finish 推进),且 tab 非窗口化、尚未脏,则**立即**
+    ///   返回一份 `(tab_id, text, revision)` 恢复指令,由调用方排队 `SetDocument`
+    ///   并标脏——覆盖"recovery 读比 host 就绪还慢"的竞态。
+    /// - 其余情况(过期/已脏/窗口化)丢弃,返回 `None`。
+    pub fn apply_recovery_restore(
+        &mut self,
+        tab_id: usize,
+        generation: u64,
+        text: String,
+    ) -> Option<(usize, String, u64)> {
+        let tab = self.tabs.iter_mut().find(|t| t.id == tab_id)?;
+        if tab.windowed || tab.dirty {
+            return None;
+        }
+        if tab.load_state.accepts(generation) {
+            tab.pending_restore = Some(text);
+            return None;
+        }
+        // 世代已推进(finish/cancel)且不是"更晚的新加载"(generation 只差 1 为
+        // 本次 finish)。更晚的加载会是 generation+2 及以上,交由新加载处理。
+        if tab.load_state.generation != generation.wrapping_add(1) {
+            return None;
+        }
+        tab.dirty = true;
+        tab.recovery_written = true;
+        Some((tab.id, text, tab.web_revision))
+    }
+
+    /// T10:reserve 获批,把仍在 `Reserving` 等待的 host 推进到 `CreatingHost`。
+    /// generation 过期(旧请求)返回 `false`。非 `Reserving` 阶段是 no-op 返回
+    /// `false`(例如 host 早已就绪),不算错误。
+    pub fn grant_reserve(&mut self, tab_id: usize, generation: u64) -> bool {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return false;
+        };
+        if !tab.load_state.accepts(generation)
+            || tab.load_state.stage != PreviewLoadStage::Reserving
+        {
+            return false;
+        }
+        tab.load_state.advance(PreviewLoadStage::CreatingHost);
         true
     }
 
@@ -1247,6 +1308,8 @@ impl PreviewPane {
                     // 原生子视图盖住 iced loading。
                     visible: tab.backend_state.is_ready() && idx == self.active,
                     editor_binding: None,
+                    // Rendered(Flyfish/HTML)host 不走资源 reserve,无需回灌。
+                    loading_generation: None,
                 })
             })
             .collect()
@@ -1322,6 +1385,9 @@ impl PreviewPane {
                     // 其余 ready 且激活者可见。
                     visible: tab.backend_state.is_ready() && idx == self.active,
                     editor_binding: Some(binding),
+                    // T10:在途加载时携带世代,reserve 批准后据此推进到
+                    // `CreatingHost`;已就绪/非加载态的 host 无需回灌。
+                    loading_generation: loading.then_some(tab.load_state.generation),
                 })
             })
             .collect()
@@ -1357,6 +1423,8 @@ impl PreviewPane {
                     // 非 Ready 预创建但 hidden。
                     visible: tab.backend_state.is_ready() && idx == self.active,
                     editor_binding: Some(binding),
+                    // T10:同 editor host,加载在途时携带世代供 reserve 回灌。
+                    loading_generation: loading.then_some(tab.load_state.generation),
                 })
             })
             .collect()
@@ -4284,14 +4352,148 @@ mod tests {
         assert!(pane.is_suspended(id));
         assert!(!pane.suspend_tab(id), "已 Suspended 是幂等 no-op");
 
-        // reserve 被拒:可重试 Failed 终态,不吃 webview。
-        assert!(pane.mark_reserve_denied(id, "预览资源预算不足"));
+        // reserve 被拒:可重试 Failed 终态,不吃 webview。世代取 tab 当前值。
+        let generation = pane
+            .tabs()
+            .iter()
+            .find(|t| t.id == id)
+            .map(|t| t.load_state.generation)
+            .unwrap();
+        assert!(pane.mark_reserve_denied(id, generation, "预览资源预算不足"));
         let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
         assert!(tab.backend_state.is_failed());
         assert!(tab.web_error.is_some());
         assert!(!tab.hosts_webview(), "Failed 不再 host Flyfish");
         assert!(pane.is_pending_load(id), "Failed 可重试");
 
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// T10:`grant_reserve` 只在 tab 仍处于 `Reserving` 且世代匹配时才推进到
+    /// `CreatingHost`;非 `Reserving`(如已就绪)与过期世代都是 no-op。
+    #[test]
+    fn grant_reserve_advances_only_from_reserving_and_gates_generation() {
+        let path = std::env::temp_dir().join(format!("t10_grant_{}.rs", std::process::id()));
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.push_shell_tab(path.clone(), None);
+        let generation = pane
+            .begin_load(id, PreviewLoadStage::Reserving)
+            .expect("壳可物化");
+
+        // 过期世代:拒绝。
+        assert!(!pane.grant_reserve(id, generation + 99));
+        assert_eq!(
+            pane.load_stage(id),
+            PreviewLoadStage::Reserving,
+            "过期 grant 不得推进阶段"
+        );
+        // 当前世代:推进到 CreatingHost。
+        assert!(pane.grant_reserve(id, generation));
+        assert_eq!(pane.load_stage(id), PreviewLoadStage::CreatingHost);
+        // 再次 grant:非 Reserving,no-op。
+        assert!(!pane.grant_reserve(id, generation));
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// T10:reserve 被拒时按**世代**处理:过期世代的 denied 不得改动新加载。
+    #[test]
+    fn mark_reserve_denied_is_generation_gated() {
+        let path = std::env::temp_dir().join(format!("t10_denied_{}.rs", std::process::id()));
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        let generation = pane
+            .begin_load(id, PreviewLoadStage::Reserving)
+            .expect("可物化");
+        // 过期世代:拒绝,不改状态。
+        assert!(!pane.mark_reserve_denied(id, generation + 5, "预算不足"));
+        assert!(
+            pane.tabs()
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap()
+                .load_state
+                .accepts(generation),
+            "过期 denied 不得结束当前加载"
+        );
+        // 当前世代:进入 Failed(可重试),并作废该世代。
+        assert!(pane.mark_reserve_denied(id, generation, "预算不足"));
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.backend_state.is_failed());
+        assert!(!tab.load_state.is_active(), "denied 不得留下无限 loading");
+        assert!(pane.is_pending_load(id), "Failed 可重试");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// T10:后台 recovery 结果——加载在途时记入 `pending_restore`;host 已就绪
+    /// (世代随 finish 推进)时就地返回恢复指令并标脏;更晚的新加载则丢弃。
+    #[test]
+    fn apply_recovery_restore_gates_on_loading_generation() {
+        let path = std::env::temp_dir().join(format!("t10_recovery_{}.rs", std::process::id()));
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.push_shell_tab(path.clone(), None);
+        let generation = pane
+            .begin_load(id, PreviewLoadStage::Reserving)
+            .expect("壳可物化");
+
+        // 在途:记入 pending_restore,返回 None(由 DocumentLoaded 消费)。
+        assert!(
+            pane.apply_recovery_restore(id, generation, "restored".to_string())
+                .is_none()
+        );
+        assert_eq!(
+            pane.tabs()
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap()
+                .pending_restore
+                .as_deref(),
+            Some("restored")
+        );
+
+        // 模拟 host 就绪:finish 推进世代。
+        assert!(pane.finish_load(id, generation));
+        // 清掉在途时写下的 pending_restore,验证"慢读"就地恢复分支。
+        if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == id) {
+            tab.pending_restore = None;
+        }
+        let cmd = pane.apply_recovery_restore(id, generation, "late".to_string());
+        let (cmd_id, text, _rev) = cmd.expect("finish 后慢读应就地恢复");
+        assert_eq!(cmd_id, id);
+        assert_eq!(text, "late");
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.dirty);
+        assert!(tab.recovery_written);
+
+        // 更晚的新加载(世代差 ≥2):丢弃。
+        let newer = pane
+            .begin_load(id, PreviewLoadStage::Reserving)
+            .expect("Ready 可重载");
+        assert!(
+            pane.apply_recovery_restore(id, newer.wrapping_add(3), "should-drop".to_string())
+                .is_none()
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// T10:加载在途的 editor host 其 spec 携带 loading 世代,供 reserve 回灌。
+    #[test]
+    fn desired_editor_webviews_carries_loading_generation() {
+        let path = std::env::temp_dir().join(format!("t10_spec_gen_{}.rs", std::process::id()));
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.push_shell_tab(path.clone(), None);
+        let generation = pane
+            .begin_load(id, PreviewLoadStage::Reserving)
+            .expect("壳可物化");
+        let spec = pane
+            .desired_editor_webviews(1, crate::app::PanelKind::Files)
+            .into_iter()
+            .find(|s| s.id == id)
+            .expect("Loading editor host 应预创建 hidden");
+        assert_eq!(spec.loading_generation, Some(generation));
         std::fs::remove_file(&path).ok();
     }
 
@@ -4506,6 +4708,42 @@ mod tests {
             BackendState::Ready
         ));
 
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// T10 bullet 5(安全启动回归):恢复壳本身**不启动任何加载**——`load_state`
+    /// 停在 `Idle`,不产出任何 webview spec。真正加载只能由用户主动打开/选中
+    /// (`load_preview_tab`)触发,避免"安全启动又自动跑起来"的循环。
+    #[test]
+    fn shell_restore_starts_no_load_until_activated() {
+        let path = std::env::temp_dir().join(format!("t10_safe_{}.rs", std::process::id()));
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.push_shell_tab(path.clone(), None);
+
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(matches!(tab.backend_state, BackendState::Suspended));
+        assert_eq!(tab.load_state.stage, PreviewLoadStage::Idle);
+        assert!(!tab.load_state.is_active());
+        assert!(pane.desired_webviews().iter().all(|s| s.id != id));
+        assert!(
+            pane.desired_editor_webviews(1, crate::app::PanelKind::Files)
+                .iter()
+                .all(|s| s.id != id),
+            "安全启动只恢复壳,不预创建 host"
+        );
+
+        // 用户主动物化后才离开 Idle。
+        let generation = pane.begin_load(id, PreviewLoadStage::Reserving).unwrap();
+        assert!(
+            pane.tabs()
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap()
+                .load_state
+                .is_active()
+        );
+        assert!(pane.grant_reserve(id, generation));
         std::fs::remove_file(&path).ok();
     }
 

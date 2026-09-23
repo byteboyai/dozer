@@ -626,6 +626,10 @@ pub enum Message {
     /// 脏 tab 的 recovery snapshot 已成功落盘 → 标记 `recovery_written`(脏 tab
     /// 允许休眠的前提)。
     PreviewRecoveryWritten(i64, PanelKind, usize),
+    /// T10 bullet 3:recovery 快照读取 + 磁盘冲突分类在 `spawn_blocking` 完成后
+    /// 回灌(后台线程 → UI 线程)。`generation` 为物化时的 load 世代,过期丢弃;
+    /// `Some(text)` 表示可恢复(磁盘未变、快照存在),`None` 表示无需恢复。
+    PreviewRecoveryRead(ProjectId, PanelKind, usize, u64, Option<String>),
     /// 顶栏设置齿轮:打开设置弹窗(独立原生窗口,主题 + Git 账户)。
     SettingsOpen,
     /// 设置弹窗内部消息,转发给 `extensions::settings::update`。
