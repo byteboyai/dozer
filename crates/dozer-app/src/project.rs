@@ -4,11 +4,12 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
-/// 复制路径展示形式：绝对路径 vs 相对项目根目录。
+/// 复制路径展示形式：绝对路径 vs 相对项目根目录 vs 仅文件/目录名（含后缀）。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PathKind {
     Absolute,
     Relative,
+    Name,
 }
 
 /// 文件树里恒不显示的目录/文件名。
@@ -387,7 +388,8 @@ pub fn is_single_path_component(name: &str) -> bool {
 
 /// 路径的展示字符串：绝对路径原样；相对路径去掉 `project_root` 前缀，
 /// 若不在 `project_root` 之下（理论上树里的项恒在其下，此分支是防御性
-/// 兜底）就退化成绝对路径。
+/// 兜底）就退化成绝对路径；名字取最后一段（文件含后缀，目录即目录名），
+/// 取不到最后一段（如根路径 `/`）退化成原样。
 pub fn path_string(kind: PathKind, path: &Path, project_root: &Path) -> String {
     match kind {
         PathKind::Absolute => path.display().to_string(),
@@ -395,6 +397,10 @@ pub fn path_string(kind: PathKind, path: &Path, project_root: &Path) -> String {
             .strip_prefix(project_root)
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| path.display().to_string()),
+        PathKind::Name => path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string()),
     }
 }
 
@@ -711,6 +717,15 @@ mod tests {
         let root = Path::new("/repo");
         let p = Path::new("/other/file.rs");
         assert_eq!(path_string(PathKind::Relative, p, root), "/other/file.rs");
+    }
+
+    #[test]
+    fn path_string_name_is_last_component_with_extension() {
+        let root = Path::new("/repo");
+        let file = Path::new("/repo/src/main.rs");
+        let dir = Path::new("/repo/src");
+        assert_eq!(path_string(PathKind::Name, file, root), "main.rs");
+        assert_eq!(path_string(PathKind::Name, dir, root), "src");
     }
 
     fn mktree() -> tempfile::TempDir {

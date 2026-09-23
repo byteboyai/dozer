@@ -698,7 +698,8 @@ fn preview_blank_info_card<'a>(
     let info = preview.blank_info.as_ref();
     let size_value = info.map_or("—".to_string(), |i| {
         format!(
-            "{} 字节,共 {} 个项目",
+            "{} (磁盘上 {} 字节),共 {} 个项目",
+            format_human_size(i.size_bytes),
             with_thousands_separator(i.size_bytes),
             with_thousands_separator(i.file_count)
         )
@@ -784,6 +785,31 @@ fn with_thousands_separator(n: u64) -> String {
         out.push(c);
     }
     out.chars().rev().collect()
+}
+
+/// 字节数转成 KB/MB/GB 可读串:`0`~`1023` → `"N B"`;`1024` → `"1KB"`;
+/// `10240` → `"10KB"`;`1536` → `"1.5KB"`;`1.2GB` 保留一位小数。整除整单位
+/// 时不显示小数,避免 `"10.0KB"` 这类啰嗦写法。纯展示,精度足够项目大小
+/// 展示用;精确字节数由调用方另以括号补出。
+fn format_human_size(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+    let b = bytes as f64;
+    let (v, unit) = if b >= GB {
+        (b / GB, "GB")
+    } else if b >= MB {
+        (b / MB, "MB")
+    } else if b >= KB {
+        (b / KB, "KB")
+    } else {
+        return format!("{bytes} B");
+    };
+    if (v.round() - v).abs() < 0.05 {
+        format!("{}{}", v as i64, unit)
+    } else {
+        format!("{:.1}{}", v, unit)
+    }
 }
 
 /// SystemTime → 中文 `"YYYY年M月D日 星期X HH:MM"` 形式(无秒)。Howard

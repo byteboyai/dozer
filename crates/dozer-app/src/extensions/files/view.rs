@@ -903,15 +903,15 @@ pub fn context_menu_items(
 /// 结构(2026-09-18 调整):
 /// - 文件夹:顶部 = 搜索 / 新建文件 / 新建文件夹(三者紧贴,组前无分隔线);
 ///   中间 = 复制 / 粘贴(仅目录) / 删除 / 重命名(非根才有);底部 = 复制绝对
-///   路径 / 复制相对路径 / 用外部软件打开(目录为"在Finder中打开") /
-///   从磁盘重新加载。
+///   路径 / 复制目录名称(文件为"复制文件名称") / 复制相对路径 / 用外部软件
+///   打开(目录为"在Finder中打开") / 从磁盘重新加载。
 /// - 文件:顶部 = 回滚(undo-2) / 历史(file-clock),仅 git 仓库文件才有;
 ///   中间 = 复制 / 删除 / 重命名(文件不显示"粘贴"——粘贴是"粘贴进目标
 ///   目录",对文件无语义);底部同文件夹。
 /// - 三组之间用分隔线隔开;顶部组为空(非 git 文件)时不画组前分隔线,避免
-///   悬空一条线。底部四项按设计纯文字:复制路径两项本就无图标,"用外部软件打开"
-///   /"从磁盘重新加载" 的 FolderOpen/RefreshCw 图标也在此去掉,与
-///   顶部带图标的操作项区分开。
+///   悬空一条线。底部五项按设计纯文字:复制路径/名称三项本就无图标,"用
+///   外部软件打开"/"从磁盘重新加载" 的 FolderOpen/RefreshCw 图标也在此
+///   去掉,与顶部带图标的操作项区分开。
 pub(crate) fn context_menu_spec(
     target: &Path,
     is_dir: bool,
@@ -1005,12 +1005,23 @@ pub(crate) fn context_menu_spec(
         ));
     }
 
-    // 底部工具组:纯文字(无图标)。
+    // 底部工具组:纯文字(无图标)。"复制目录名称"/"复制文件名称"按目标类型
+    // 二选一,复制最后一段名字(文件含后缀)。
+    let name_label = if is_dir {
+        "复制目录名称"
+    } else {
+        "复制文件名称"
+    };
     let bottom: Vec<MenuSpecItem<Message>> = vec![
         MenuSpecItem::entry(
             None,
             "复制绝对路径",
             Message::CopyPath(target.clone(), PathKind::Absolute),
+        ),
+        MenuSpecItem::entry(
+            None,
+            name_label,
+            Message::CopyPath(target.clone(), PathKind::Name),
         ),
         MenuSpecItem::entry(
             None,
@@ -1085,8 +1096,9 @@ pub fn context_menu_popup<'a>(
 /// 底层的 `MenuSpec` 数据类型,但走一套"只针对单个已打开文件 tab"的精简
 /// 列表:顶部第一项恒为"关闭"(circle-x,见 `TabContextMenuCloseTab`),与下方
 /// 操作组用分隔线隔开;其下 = 回滚 / 历史(仅 git 仓库文件才有,同文件树顶部
-/// 组);中部 = 一条分隔线;底部 = 复制绝对路径 / 复制相对路径 / 用外部软件打开
-/// / 从磁盘重新加载。分组之间用分隔线隔开(同 `context_menu_spec` 的三段式)。
+/// 组);中部 = 一条分隔线;底部 = 复制绝对路径 / 复制文件名称 / 复制相对路径
+/// / 用外部软件打开 / 从磁盘重新加载。分组之间用分隔线隔开(同
+/// `context_menu_spec` 的三段式)。
 /// 没有目录语义(已打开的 tab 必是文件),故不带新建/粘贴/删除/重命名。
 pub(crate) fn tab_context_menu_spec(
     kind: crate::app::PanelKind,
@@ -1130,12 +1142,17 @@ pub(crate) fn tab_context_menu_spec(
         items.push(MenuSpecItem::separator());
     }
 
-    // 主操作组:复制绝对/相对路径等纯文字工具项,与文件树底部同款。
+    // 主操作组:复制绝对/名称/相对路径等纯文字工具项,与文件树底部同款。
     let bottom: Vec<MenuSpecItem<Message>> = vec![
         MenuSpecItem::entry(
             None,
             "复制绝对路径",
             Message::CopyPath(target.clone(), PathKind::Absolute),
+        ),
+        MenuSpecItem::entry(
+            None,
+            "复制文件名称",
+            Message::CopyPath(target.clone(), PathKind::Name),
         ),
         MenuSpecItem::entry(
             None,
