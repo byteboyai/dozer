@@ -1,20 +1,23 @@
-//! 单一预览路由(文件预览重构 Phase A)。
+//! 单一预览路由(文件预览重构 Phase A + T5)。
 //!
-//! `classify_preview` 是"这个文件该用哪个 backend 看"的唯一决策点。Phase A
-//! 的目标是**用一份可解释的路由替换散落在各处的 `is_editable_extension` /
-//! `prefers_rendered_preview` / `is_tabular_extension` / `is_json_tree_extension`
-//! 组合判断**,并让每个新 tab 都带上 `PreviewRoute`(含可展示的 reason)。
+//! `classify_preview` 是"这个文件该用哪个 backend 看"的唯一决策点。用一份
+//! 可解释的路由替换散落在各处的 `is_editable_extension` /
+//! `prefers_rendered_preview` / `is_tabular_extension` 组合判断,并让每个新
+//! tab 都带上 `PreviewRoute`(含可展示的 reason)。
 //!
-//! 迁移期约定:路由结果**刻意与改动前的行为逐项一致**(见本仓 `preview/view.rs`
-//! 的既有单测)。规格里 `未知文本 -> Code`、`未知二进制 -> External/Unsupported`、
-//! `Makefile/Dockerfile -> Code` 等目标形态留到真实迁移阶段(Phase 4),本阶段
-//! 不改用户可见行为。
+//! T5 起路由**不再是 Phase A 的逐项对齐**:文件名注册表(`Dockerfile`/
+//! `Makefile`/`LICENSE*`/`.env`/`.gitignore`/`.dockerignore`)优先于扩展名
+//! fallback(仍受内容安全检查约束);未知 UTF-8 文本进 Code、未知二进制落
+//! 安全 fallback、空文件按可编辑纯文本;`.svg` 默认图像渲染并提供 XML 源码
+//! 切换。`RouteReason` 区分文件名规则/扩展名规则/内容探测/用户 mode。
 
 use std::fmt;
 use std::path::Path;
 
 use super::file_profile::{ContentKind, FileProfile};
-use super::native_editor::{is_editable_extension, prefers_rendered_preview, wry_toggle_eligible};
+use super::native_editor::{
+    filename_code_rule, is_editable_extension, prefers_rendered_preview, wry_toggle_eligible,
+};
 
 /// 后端大类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,19 +78,22 @@ pub enum RouteReason {
     TabularExtension,
     /// 普通 JSON 扩展名认领(含 json5/jsonc/jsonl/ndjson)。
     JsonTreeExtension,
-    /// Markdown/HTML 等"可渲染但也可切源码"的扩展名。
+    /// Markdown/HTML/SVG 等"可渲染但也可切源码"的扩展名。
     RenderedExtension(&'static str),
     /// 语法高亮器认识的代码扩展名。
     CodeExtension,
+    /// 文件名注册表认领(`Dockerfile`/`Makefile`/`LICENSE*`/`.env`/`.gitignore`
+    /// 等;T5)。`&str` 是命中的规则名,供诊断。
+    FilenameRule(&'static str),
     /// 已知的媒体/文档类型(图片/PDF/Office)。
     KnownMediaExtension,
-    /// 压缩包类,Phase A 仍走 Flyfish 兜底,目标形态是外部打开。
+    /// 压缩包类,T1 起走统一外部打开 fallback 页。
     ArchiveFallback,
-    /// 未知扩展名且内容像二进制,Phase A 仍走 Flyfish 兜底。
+    /// 未知扩展名且内容像二进制 → 安全 fallback(T1 页)。
     ContentBinaryFallback,
-    /// 未知扩展名但内容像文本,Phase A 仍走 Flyfish 兜底(目标:Code)。
-    ContentTextFallback,
-    /// 空文件。
+    /// 未知扩展名但内容探测为文本 → Code(T5)。
+    ContentTextProbe,
+    /// 空文件(按可编辑纯文本处理,除非扩展名命中专用 viewer)。
     EmptyFile,
     /// 用户持久化的 mode 覆盖了默认值。
     PersistedMode,
@@ -100,10 +106,11 @@ impl fmt::Display for RouteReason {
             Self::JsonTreeExtension => write!(f, "JSON 树扩展名"),
             Self::RenderedExtension(e) => write!(f, "渲染扩展名 .{e}"),
             Self::CodeExtension => write!(f, "代码扩展名"),
+            Self::FilenameRule(rule) => write!(f, "文件名规则 {rule}"),
             Self::KnownMediaExtension => write!(f, "媒体/文档扩展名"),
-            Self::ArchiveFallback => write!(f, "压缩包(flyfish 兜底)"),
-            Self::ContentBinaryFallback => write!(f, "未知二进制(flyfish 兜底)"),
-            Self::ContentTextFallback => write!(f, "未知文本(flyfish 兜底)"),
+            Self::ArchiveFallback => write!(f, "压缩包"),
+            Self::ContentBinaryFallback => write!(f, "未知二进制"),
+            Self::ContentTextProbe => write!(f, "未知文本(内容探测)"),
             Self::EmptyFile => write!(f, "空文件"),
             Self::PersistedMode => write!(f, "用户持久化模式"),
         }
@@ -153,8 +160,17 @@ pub fn classify_preview(
     }
 }
 
-/// Phase A 逐项对齐改动前行为的 kind 判定。
+/// 路由 kind 判定(T5:文件名注册表优先、未知文本进 Code、未知二进制安全
+/// fallback、空文件按可编辑纯文本)。
 fn classify_kind(path: &Path, profile: &FileProfile) -> (PreviewKind, RouteReason) {
+    // 文件名注册表优先于扩展名 fallback,但仍受内容安全检查约束:命中规则
+    // 但内容含 NUL/二进制时不得当作文本打开,落安全 fallback。
+    if let Some((rule, _syntax)) = filename_code_rule(path) {
+        if profile.content_kind == ContentKind::Binary {
+            return (PreviewKind::Unsupported, RouteReason::ContentBinaryFallback);
+        }
+        return (PreviewKind::Code, RouteReason::FilenameRule(rule));
+    }
     if crate::tabular::is_tabular_extension(path) {
         return (PreviewKind::Tabular, RouteReason::TabularExtension);
     }
@@ -173,17 +189,18 @@ fn classify_kind(path: &Path, profile: &FileProfile) -> (PreviewKind, RouteReaso
         return (PreviewKind::Code, RouteReason::CodeExtension);
     }
     if is_archive_extension(path) {
-        // Phase A:压缩包仍走 Flyfish webview 兜底,目标形态是外部打开。
+        // T1:压缩包走统一外部打开 fallback 页。
         return (PreviewKind::External, RouteReason::ArchiveFallback);
     }
     if is_known_media_extension(path) {
         return (PreviewKind::Rendered, RouteReason::KnownMediaExtension);
     }
-    // 未知扩展名/无扩展名:沿用改动前"未知一律进 Flyfish"的行为。
+    // 未知扩展名/无扩展名:按内容探测决定——文本进 Code,二进制落安全 fallback,
+    // 空文件按可编辑纯文本(除非扩展名已命中上面的专用 viewer)。
     match profile.content_kind {
-        ContentKind::Empty => (PreviewKind::Rendered, RouteReason::EmptyFile),
+        ContentKind::Empty => (PreviewKind::Code, RouteReason::EmptyFile),
         ContentKind::Binary => (PreviewKind::Unsupported, RouteReason::ContentBinaryFallback),
-        ContentKind::Text => (PreviewKind::Rendered, RouteReason::ContentTextFallback),
+        ContentKind::Text => (PreviewKind::Code, RouteReason::ContentTextProbe),
     }
 }
 
@@ -239,8 +256,9 @@ fn is_csv_like(path: &Path) -> bool {
     matches!(json_extension(path).as_str(), "csv" | "tsv")
 }
 
-/// 已知媒体/文档扩展名:图片、PDF、Office、音频、视频、字体。Phase A 与
-/// 改动前一致,统一走 Flyfish 渲染。
+/// 已知媒体/文档扩展名:图片、PDF、Office、音频、视频、字体。统一走 Flyfish
+/// 渲染。`.svg` 不在其列——它由 `prefers_rendered_preview` 认领以提供 XML
+/// 源码切换(T5)。
 pub fn is_known_media_extension(path: &Path) -> bool {
     matches!(
         json_extension(path).as_str(),
@@ -253,7 +271,6 @@ pub fn is_known_media_extension(path: &Path) -> bool {
             | "ico"
             | "tif"
             | "tiff"
-            | "svg"
             | "pdf"
             | "doc"
             | "docx"
@@ -318,7 +335,9 @@ mod tests {
 
     #[test]
     fn gitignore_has_no_extension_but_routes_to_code() {
-        assert_eq!(route(".gitignore", b"target/\n").kind, PreviewKind::Code);
+        let r = route(".gitignore", b"target/\n");
+        assert_eq!(r.kind, PreviewKind::Code);
+        assert_eq!(r.reason, RouteReason::FilenameRule("ignore"));
     }
 
     #[test]
@@ -403,28 +422,89 @@ mod tests {
     }
 
     #[test]
-    fn unknown_text_is_rendered_fallback_for_phase_a() {
-        // Phase A 契约:未知文本暂仍走 Flyfish(与改动前一致);目标形态
-        // (Phase 4)是 Code。
+    fn unknown_text_routes_to_code_by_content_probe() {
         let r = route("mystery.weird", b"just some text\n");
-        assert_eq!(r.kind, PreviewKind::Rendered);
-        assert_eq!(r.reason, RouteReason::ContentTextFallback);
+        assert_eq!(r.kind, PreviewKind::Code);
+        assert_eq!(r.default_mode, PreviewMode::Code);
+        assert_eq!(r.reason, RouteReason::ContentTextProbe);
     }
 
     #[test]
-    fn empty_file_routes_to_rendered() {
+    fn empty_file_routes_to_editable_code() {
         let r = route("empty.xyz", b"");
-        assert_eq!(r.kind, PreviewKind::Rendered);
+        assert_eq!(r.kind, PreviewKind::Code);
         assert_eq!(r.reason, RouteReason::EmptyFile);
     }
 
     #[test]
-    fn legacy_no_extension_names_stay_flyfish_until_migration() {
-        // 与 `is_editable_extension_rejects_unknown_and_binary_like` 对齐:
-        // Makefile/LICENSE 变更前不进 Code。
-        for p in ["Makefile", "LICENSE"] {
-            assert_eq!(route(p, b"all:\n").kind, PreviewKind::Rendered, "{p}");
+    fn empty_file_with_dedicated_viewer_extension_keeps_viewer() {
+        assert_eq!(route("empty.json", b"").kind, PreviewKind::Json);
+        assert_eq!(route("empty.csv", b"").kind, PreviewKind::Tabular);
+        assert_eq!(route("empty.md", b"").kind, PreviewKind::Rendered);
+    }
+
+    #[test]
+    fn filename_registry_routes_to_code() {
+        for (p, rule) in [
+            ("Dockerfile", "dockerfile"),
+            ("Makefile", "makefile"),
+            ("GNUmakefile", "makefile"),
+            ("LICENSE", "license"),
+            ("LICENSE.md", "license"),
+            ("NOTICE", "license"),
+            (".env", "env"),
+            (".env.local", "env"),
+            (".gitignore", "ignore"),
+            (".dockerignore", "ignore"),
+        ] {
+            let r = route(p, b"all:\n\t@echo ok\n");
+            assert_eq!(r.kind, PreviewKind::Code, "{p}");
+            assert_eq!(r.default_mode, PreviewMode::Code, "{p}");
+            assert_eq!(r.reason, RouteReason::FilenameRule(rule), "{p}");
         }
+    }
+
+    #[test]
+    fn filename_registry_still_subject_to_binary_check() {
+        // 名叫 Dockerfile 但内容含 NUL:不得当文本打开。
+        let r = route("Dockerfile", b"FROM scratch\0binary");
+        assert_eq!(r.kind, PreviewKind::Unsupported);
+        assert_eq!(r.reason, RouteReason::ContentBinaryFallback);
+    }
+
+    #[test]
+    fn svg_renders_by_default_with_xml_source_alternate() {
+        let r = route("icon.svg", b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n");
+        assert_eq!(r.kind, PreviewKind::Rendered);
+        assert_eq!(r.default_mode, PreviewMode::Rendered);
+        assert_eq!(r.alternate_modes, vec![PreviewMode::Source]);
+        assert_eq!(r.reason, RouteReason::RenderedExtension("rendered"));
+    }
+
+    #[test]
+    fn filename_rules_are_case_insensitive() {
+        assert_eq!(
+            route("DOCKERFILE", b"FROM x\n").reason,
+            RouteReason::FilenameRule("dockerfile")
+        );
+        assert_eq!(
+            route("makefile", b"all:\n").reason,
+            RouteReason::FilenameRule("makefile")
+        );
+        assert_eq!(
+            route("License", b"text\n").reason,
+            RouteReason::FilenameRule("license")
+        );
+    }
+
+    #[test]
+    fn double_extensions_use_last_extension() {
+        // 名称含点:归档用最后一段 `.gz`,代码用最后一段 `.js`。
+        assert_eq!(
+            route("backup.tar.gz", b"\x1f\x8b").kind,
+            PreviewKind::External
+        );
+        assert_eq!(route("app.min.js", b"var x=1;\n").kind, PreviewKind::Code);
     }
 
     #[test]

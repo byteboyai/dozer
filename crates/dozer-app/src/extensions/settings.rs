@@ -3,6 +3,7 @@
 //! 渲染宿主是独立原生窗口 `platform::settings_overlay::SettingsOverlay`。
 
 use crate::git_accounts::{self, GitAccountsState, GitProvider};
+use byteui::interaction::icons;
 use byteui::theme::color::ColorScheme;
 use iced_widget::core::{Alignment, Element, Length};
 use iced_widget::{Space, button, column, container, row, text};
@@ -62,6 +63,11 @@ pub struct State {
     /// connect task)。
     connect_tasks: HashMap<GitProvider, tokio::task::AbortHandle>,
     pub advanced: AdvancedState,
+    /// 右上角关闭图标按钮的悬停态——本弹窗渲染在独立原生窗口
+    /// (`SettingsOverlay`),不接入 `App` 的全局 `hover_anims` 定时动画表
+    /// (那套动画的自驱 redraw 只唤醒主窗口),所以这里退化成瞬时二值而非
+    /// 平滑过渡,复用 `icon_button_entry` 本身的 hover 着色逻辑即可。
+    close_hover: bool,
 }
 
 impl State {
@@ -85,6 +91,7 @@ impl State {
             suppress_next_blur: false,
             connect_tasks: HashMap::new(),
             advanced: advanced_state_for_daemon(daemon_error),
+            close_hover: false,
         }
     }
 
@@ -110,6 +117,7 @@ fn advanced_state_for_daemon(daemon_error: Option<&str>) -> AdvancedState {
 #[derive(Debug, Clone)]
 pub enum Message {
     Close,
+    CloseHover(bool),
     ThemeSelected(ColorScheme),
     ConnectClicked(GitProvider),
     TokenChanged(GitProvider, String),
@@ -132,6 +140,10 @@ pub enum Message {
 /// apply_field_message` 的既有拆分手法)。
 fn apply_sync_message(state: &mut State, msg: &Message) -> bool {
     match msg {
+        Message::CloseHover(hovered) => {
+            state.close_hover = *hovered;
+            true
+        }
         Message::ThemeSelected(scheme) => {
             byteui::theme::color::set_scheme(*scheme);
             byteui::theme::color::persist_scheme(&crate::theme::color_theme_path());
@@ -580,11 +592,25 @@ pub fn settings_card(
     .on_press(Message::Close)
     .padding([6, 12])
     .style(crate::dialog::action_button_style(colors.dim));
+    let close_icon = icons::icon_button_entry(
+        icons::IconKind::X,
+        byteui::theme::icon_size::row(),
+        false,
+        false,
+        if state.close_hover { 1.0 } else { 0.0 },
+        false,
+        byteui::theme::geometry::tab_button_size(),
+        true,
+        Message::Close,
+        Message::CloseHover,
+        "关闭",
+    );
 
     let advanced_title = text("高级")
         .size(byteui::theme::font::subtitle())
         .color(colors.cream);
     let content = column![
+        row![Space::new().width(Length::Fill), close_icon],
         theme_title,
         scheme_row("深色 · ByteBoy2077", ColorScheme::Dark, current),
         scheme_row("浅色 · ByteBoy2077-Light", ColorScheme::Light, current),
@@ -621,6 +647,7 @@ mod tests {
             suppress_next_blur: false,
             connect_tasks: HashMap::new(),
             advanced: AdvancedState::Idle { error: None },
+            close_hover: false,
         }
     }
 

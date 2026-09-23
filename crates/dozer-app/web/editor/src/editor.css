@@ -33,19 +33,52 @@ html[data-theme='light'] body {
 .windowed-global-scrollbar {
   position: absolute;
   z-index: 5;
-  top: 4px;
-  right: 1px;
-  width: 12px;
-  height: calc(100% - 8px);
+  top: 0;
+  right: 0;
+  width: 10px;
+  height: 100%;
   writing-mode: vertical-lr;
   direction: rtl;
-  appearance: slider-vertical;
-  accent-color: rgba(255, 229, 180, 0.55);
-  opacity: 0.72;
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  cursor: default;
 }
 
-html[data-theme='light'] .windowed-global-scrollbar {
-  accent-color: rgba(0, 0, 0, 0.42);
+.windowed-global-scrollbar::-webkit-slider-runnable-track {
+  width: 10px;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+
+/* 和下方 CodeMirror `::-webkit-scrollbar-thumb` 使用完全相同的视觉参数。
+   range 仍负责全局行号映射，只去掉 WKWebView 默认的灰色 slider 外观。 */
+.windowed-global-scrollbar::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 10px;
+  height: 36px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-color: rgba(255, 229, 180, 0.3);
+  background-clip: content-box;
+}
+
+.windowed-global-scrollbar:hover::-webkit-slider-thumb {
+  background-color: rgba(255, 229, 180, 0.5);
+}
+
+html[data-theme='light'] .windowed-global-scrollbar::-webkit-slider-thumb {
+  background-color: rgba(0, 0, 0, 0.24);
+}
+
+html[data-theme='light'] .windowed-global-scrollbar:hover::-webkit-slider-thumb {
+  background-color: rgba(0, 0, 0, 0.4);
 }
 
 /* 超长单行被字节上限截断时的顶部提示条。 */

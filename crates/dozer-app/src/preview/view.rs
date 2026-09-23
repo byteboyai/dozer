@@ -1657,9 +1657,11 @@ mod tests {
     #[test]
     fn image_pdf_and_binary_exts_stay_out_of_native_editor() {
         // 图片/PDF/富媒体/压缩包不属于"代码类",必须继续留给 flyfish(或其兜底),
-        // 绝不能因语法判据脱节被误塞进原生文本编辑器。
+        // 绝不能因语法判据脱节被误塞进原生文本编辑器。`.svg` 不在此列:它虽被
+        // 当作 XML 源码可编辑(T5),但默认仍由 `prefers_rendered_preview` 拉去
+        // 图像渲染,不会默认进文本编辑器(见下一测试)。
         for ext in [
-            "png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "pdf", "zip", "mp4",
+            "png", "jpg", "jpeg", "gif", "webp", "avif", "pdf", "zip", "mp4",
         ] {
             assert!(
                 !is_editable_extension(std::path::Path::new(&format!("/tmp/a.{ext}"))),
@@ -1670,14 +1672,14 @@ mod tests {
 
     #[test]
     fn markdown_and_html_still_editable_but_default_preview_is_rendered() {
-        // is_editable_extension 变宽(语法判据)后,md/html 必须仍被
+        // is_editable_extension 变宽(语法判据)后,md/html/svg 必须仍被
         // prefers_rendered_preview 拉去渲染预览而不是落到原生,避免回归。
-        assert!(is_editable_extension(std::path::Path::new("/tmp/a.md")));
-        assert!(is_editable_extension(std::path::Path::new("/tmp/a.html")));
-        assert!(prefers_rendered_preview(std::path::Path::new("/tmp/a.md")));
-        assert!(prefers_rendered_preview(std::path::Path::new(
-            "/tmp/a.html"
-        )));
+        for ext in ["md", "html", "svg"] {
+            let path = format!("/tmp/a.{ext}");
+            let p = std::path::Path::new(&path);
+            assert!(is_editable_extension(p), ".{ext} 有源码语法");
+            assert!(prefers_rendered_preview(p), ".{ext} 默认渲染");
+        }
     }
 
     #[test]

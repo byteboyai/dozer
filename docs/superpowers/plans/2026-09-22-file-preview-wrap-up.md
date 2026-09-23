@@ -179,21 +179,23 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
 
 ## T5. 路由补全与安全内容探测
 
-- [ ] 文件名注册表优先于扩展名 fallback，但仍受内容安全检查约束：
+- [x] 文件名注册表优先于扩展名 fallback，但仍受内容安全检查约束：
   - `Dockerfile` → dockerfile；
   - `Makefile` / `GNUmakefile` → makefile；
   - `LICENSE*` / `NOTICE*` → plaintext；
   - `.gitignore` / `.dockerignore` → plaintext；
   - `.env` 及明确允许的变体 → plaintext/properties。
-- [ ] 不使用“所有 dotfile 都是文本”的宽泛规则；含 NUL/明显二进制内容必须走安全
+- [x] 不使用“所有 dotfile 都是文本”的宽泛规则；含 NUL/明显二进制内容必须走安全
       fallback。
-- [ ] 未知 UTF-8 文本路由到 Code；未知二进制路由到 T1 页面。
-- [ ] 空文件按可编辑纯文本处理，除非扩展名命中专用 viewer。
-- [ ] SVG 默认图像渲染，并提供 CodeMirror XML 源码模式。
+- [ ] 未知 UTF-8 文本路由到 Code；未知二进制路由到 T1 页面。（路由已落地：
+      文本→Code、二进制→`Unsupported`；T1 页面待 T1。）
+- [x] 空文件按可编辑纯文本处理，除非扩展名命中专用 viewer。
+- [x] SVG 默认图像渲染，并提供 CodeMirror XML 源码模式。
 - [ ] route reason 能区分文件名规则、扩展名规则、内容探测、预算降级和用户 mode。
-
-**自动化:** router 表覆盖验收清单 §2 所有 fixture，并加入文件名正确但内容含 NUL、
-大小写变体和双扩展名案例。
+      （文件名/扩展名/内容探测/用户 mode 已区分；预算降级由 `file_policy`/
+      `windowed` 单独表达，未进入 `RouteReason`。）
+- [x] 自动化:router 表覆盖验收清单 §2 所有 fixture，并加入文件名正确但内容含 NUL、
+      大小写变体和双扩展名案例。
 
 ---
 

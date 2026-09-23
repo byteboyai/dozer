@@ -88,10 +88,10 @@ echo "$d"
 | 图片 / PDF | Rendered(Flyfish) | 正常渲染 | 不变 | |
 | `archive.zip` | External + Flyfish 兜底 | 记录有效 ZIP 的实际显示 | 统一 fallback 页 + 外部打开(T1) | |
 | `broken.zip` | External + Flyfish 兜底 | 不崩溃;记录错误 / 空态 / 外部打开动作 | fallback 页 + 重试/外部打开(T1) | |
-| `README_NO_EXT` | Flyfish(未知文本兜底) | 能查看 | Code(内容探测为文本,T5) | |
-| `Makefile` / `Dockerfile` / `LICENSE` / `.env` | Flyfish(无扩展名兜底) | 记录实际行为 | Code(文件名规则,T5) | |
+| `README_NO_EXT` | CodeMirror(内容探测为文本,T5) | 能查看 / 可编辑 | 不变 | |
+| `Makefile` / `Dockerfile` / `LICENSE` / `.env` | CodeMirror(文件名规则,T5) | 能查看 / 可编辑 | 不变 | |
 | `unknown.binblob` | Unsupported + Flyfish 兜底 | 不崩溃、不显示为可编辑文本 | fallback 页(禁纯文本,T1) | |
-| `icon.svg` | Rendered(Flyfish 图像) | 图像正常 | 图像 + 可切 CodeMirror XML 源码(T5) | |
+| `icon.svg` | Rendered(Flyfish 图像) | 图像正常;tab 栏可切 CodeMirror XML 源码(T5) | 不变 | |
 | `utf16le.rs` | CodeMirror **只读** | 不可编辑、不崩溃;合法 UTF-16 已解码为正确文字 | 字节安全只读(T6) | |
 | `non_utf8.rs` / `invalid_utf8.rs` | CodeMirror **只读** | 不可编辑、不崩溃;有损文字只记录 | 字节安全只读 / T1(T6) | |
 | `binary_spoof.rs` | CodeMirror **只读**或安全 fallback | 不崩溃、不允许有损保存;记录实际降级 | 保持只读/安全 fallback(T6) | |

@@ -232,6 +232,8 @@ pub enum IconKind {
     /// 显示,点它切回 `json_tree` 树视图(见 `tab_widget::tab_json_tree_mode_button`)。
     /// 与 `FolderTree`(文件系统目录树)语义区分:这里指的是**数据**的语法树。
     ListTree,
+    /// 弹窗右上角关闭按钮(Lucide x:一对交叉斜线)。
+    X,
 }
 
 impl IconKind {
@@ -357,6 +359,7 @@ impl IconKind {
             IconKind::Undo2 => include_bytes!("../../assets/icons/undo-2.svg"),
             IconKind::FileClock => include_bytes!("../../assets/icons/file-clock.svg"),
             IconKind::ListTree => include_bytes!("../../assets/icons/list-tree.svg"),
+            IconKind::X => include_bytes!("../../assets/icons/x.svg"),
         }
     }
 }
