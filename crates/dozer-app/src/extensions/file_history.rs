@@ -678,37 +678,64 @@ fn diff_area_view<'a>(
     .spacing(8)
     .align_y(iced_widget::core::Alignment::Center);
 
-    let content: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = match state
-        .diff_for(oid)
-    {
-        None => byteui::feedback::math_curve::loading_hint(
-            byteui::feedback::math_curve::Curve::RoseThree,
-            "加载中…",
-            48.0,
-        ),
-        Some(Err(err)) => container(
-            text(err.clone())
-                .size(byteui::theme::font::caption())
-                .color(byteui::theme::color::current().red),
-        )
-        .padding(8)
-        .into(),
-        Some(Ok(patch)) if patch.is_empty() => container(
-            text("内容相同")
-                .size(byteui::theme::font::caption())
-                .color(byteui::theme::color::current().dim),
-        )
-        .padding(8)
-        .into(),
-        Some(Ok(patch)) => scrollable(crate::extensions::diff_render::colored_diff_lines(patch))
-            .direction(scrollable::Direction::Vertical(
-                byteui::interaction::scrollbar::scrollbar(),
-            ))
-            .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style())
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
-    };
+    let content: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        match state.loaded_diff() {
+            Some(loaded)
+                if loaded.oid == oid
+                    && matches!(
+                        loaded.content,
+                        crate::extensions::git_log::DiffBlobContent::Text { .. }
+                    ) =>
+            {
+                // CodeMirror 常开:留一块空区域给 Task 3 挂的 webview 合成
+                // (同 git-log-diff 计划 Task 7 的手法)。
+                container(iced_widget::Space::new())
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
+            }
+            Some(loaded) if loaded.oid == oid => {
+                // 已加载但判定不可渲染(二进制/超限/磁盘文件缺失)。
+                container(
+                    text("(二进制文件、超出大小上限,或磁盘文件当前不存在,不支持预览)")
+                        .size(byteui::theme::font::caption())
+                        .color(byteui::theme::color::current().dim),
+                )
+                .padding(8)
+                .into()
+            }
+            _ => match state.diff_for(oid) {
+                None => byteui::feedback::math_curve::loading_hint(
+                    byteui::feedback::math_curve::Curve::RoseThree,
+                    "加载中…",
+                    48.0,
+                ),
+                Some(Err(err)) => container(
+                    text(err.clone())
+                        .size(byteui::theme::font::caption())
+                        .color(byteui::theme::color::current().red),
+                )
+                .padding(8)
+                .into(),
+                Some(Ok(patch)) if patch.is_empty() => container(
+                    text("内容相同")
+                        .size(byteui::theme::font::caption())
+                        .color(byteui::theme::color::current().dim),
+                )
+                .padding(8)
+                .into(),
+                Some(Ok(patch)) => {
+                    scrollable(crate::extensions::diff_render::colored_diff_lines(patch))
+                        .direction(scrollable::Direction::Vertical(
+                            byteui::interaction::scrollbar::scrollbar(),
+                        ))
+                        .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style())
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .into()
+                }
+            },
+        };
 
     let mut col = column![header, content]
         .spacing(8)
