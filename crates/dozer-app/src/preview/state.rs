@@ -47,13 +47,9 @@ pub struct PreviewTab {
     pub pending_restore: Option<String>,
     /// 本次物化开始时刻(用于 ready latency 观测;不记文件内容)。
     pub load_started: Option<std::time::Instant>,
-    /// 启动恢复的视图状态(cursor / selection / scroll top_line),editor `ready`
-    /// 后应用一次。
-    pub pending_view: Option<(
-        Option<crate::preview::TextPosition>,
-        Option<crate::preview::TextRange>,
-        Option<u32>,
-    )>,
+    /// 启动恢复/淘汰恢复的完整视图状态(cursor/selection/top_line/folds),
+    /// editor `ready` 后经一次 `RestoreViewState` 应用。
+    pub pending_view: Option<ViewStateRestore>,
     /// 启动恢复的表格视图状态 `(sheet, scroll_row, scroll_col)`,表格加载完成
     /// 后应用一次。
     pub pending_tabular: Option<(usize, usize, usize)>,
@@ -63,6 +59,10 @@ pub struct PreviewTab {
     pub web_selection: Option<crate::preview::TextRange>,
     pub web_selected_text: Option<String>,
     pub web_viewport: Option<(u32, u32)>,
+    /// T11:最近一次 `view_state` 事件的完整镜像(cursor/selection/top_line/
+    /// folds),用于持久化与资源淘汰前序列化;比 `web_selection`/`web_viewport`
+    /// 更全(含 top_line/folds)。
+    pub web_view_state: Option<ViewStateRestore>,
     pub web_error: Option<String>,
     /// T10:脏 tab 的磁盘文件被外部修改——`Some(mtime)` 是检测到冲突时的磁盘
     /// 修改时间。为 `Some` 时该 tab 进入显式冲突态,保存被拒,直到用户选择
@@ -410,6 +410,26 @@ pub struct WindowedRuntime {
     pub truncated: bool,
     /// 索引/窗口加载错误(局部,不等同 backend `Failed`)。
     pub error: Option<String>,
+}
+
+/// T11:一次完整视图状态快照(cursor / selection / top_line / folds)。持久化、
+/// 资源淘汰前序列化、物化后恢复共用同一形状,保证三者字段一致。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ViewStateRestore {
+    pub cursor: Option<crate::preview::TextPosition>,
+    pub selection: Option<crate::preview::TextRange>,
+    pub top_line: Option<u32>,
+    pub folds: Vec<crate::preview::FoldRange>,
+}
+
+impl ViewStateRestore {
+    /// 是否为空(无 cursor/selection/top_line/folds)→ 无需恢复命令。
+    pub fn is_empty(&self) -> bool {
+        self.cursor.is_none()
+            && self.selection.is_none()
+            && self.top_line.is_none()
+            && self.folds.is_empty()
+    }
 }
 
 /// 预览面板空白页(`TabKind::Blank`)对应的项目根目录简介。`path` 即 `Workspace::

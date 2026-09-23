@@ -316,19 +316,24 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
 
 **目的:** 先闭合逻辑状态，再考虑像素级增强。
 
-- [ ] `EditorEvent::ViewState` 完整保存 cursor、selection、top line、folds；当前不能
-      只消费 selection。
-- [ ] `PreviewTab` runtime mirror、`preview_state` 持久化和恢复命令字段一致。
-- [ ] Suspended/evicted 前请求一次 `SerializeViewState`，设置超时；失败时至少保留
-      最近一次节流镜像。
-- [ ] 恢复顺序固定：set document/window → folds → selection/cursor → scroll。
-- [ ] Windowed 只恢复全局行锚点，不持久化局部文档 offset。
-- [ ] Tabular 恢复 sheet/row/column。
+- [x] `EditorEvent::ViewState` 完整保存 cursor、selection、top line、folds
+      (`PreviewTab::web_view_state` 完整镜像;不再只消费 selection)。
+- [x] `PreviewTab` runtime mirror、`preview_state` 持久化和恢复命令字段一致
+      (`ViewStateRestore` 一个形状贯穿镜像/持久化/`RestoreViewState`;持久化
+      `folds` 字段接线)。
+- [~] Suspended/evicted 前请求一次 `SerializeViewState`，设置超时；失败时至少保留
+      最近一次节流镜像。(`SerializeViewState` 命令与 host 处理已有,并已让它回
+      真实 folds;但淘汰闭环尚未接线调用,超时未做。)
+- [x] 恢复顺序固定：set document/window → folds → selection/cursor → scroll
+      (host `restore_view_state` 内固定顺序;Ready 时在 SetDocument 之后下发)。
+- [x] Windowed 只恢复全局行锚点，不持久化局部文档 offset。
+- [x] Tabular 恢复 sheet/row/column。
 - [ ] 完成逻辑恢复后，再增加可选像素/行内偏移，使重启位置更贴近原视图；像素恢复
-      不得成为 cursor/folds 基础闭环的前置。
+      不得成为 cursor/folds 基础闭环的前置。(可选增强,未做。)
 
 **自动化:** 普通 CodeMirror、折叠区内 cursor、Windowed、Tabular、被资源淘汰后
-重新物化五类 round-trip。
+重新物化五类 round-trip。(协议 serde、persistence folds round-trip、pending_view
+形状已测;五类真机 round-trip 未做。)
 
 ---
 

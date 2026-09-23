@@ -42,6 +42,7 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         web_selection: None,
         web_selected_text: None,
         web_viewport: None,
+        web_view_state: None,
         web_error: None,
         conflict: None,
         conflict_reload_armed: false,
@@ -437,6 +438,7 @@ impl PreviewPane {
             web_selection: None,
             web_selected_text: None,
             web_viewport: None,
+            web_view_state: None,
             web_error: None,
             conflict: None,
             conflict_reload_armed: false,
@@ -515,6 +517,7 @@ impl PreviewPane {
             web_selection: None,
             web_selected_text: None,
             web_viewport: None,
+            web_view_state: None,
             web_error: None,
             conflict: None,
             conflict_reload_armed: false,
@@ -616,15 +619,9 @@ impl PreviewPane {
     }
 
     /// 记录启动恢复的视图状态,editor `ready` 后应用一次。
-    pub fn set_pending_view(
-        &mut self,
-        tab_id: usize,
-        cursor: Option<crate::preview::TextPosition>,
-        selection: Option<crate::preview::TextRange>,
-        top_line: Option<u32>,
-    ) {
+    pub fn set_pending_view(&mut self, tab_id: usize, state: ViewStateRestore) {
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
-            tab.pending_view = Some((cursor, selection, top_line));
+            tab.pending_view = Some(state);
         }
     }
 
@@ -3114,6 +3111,41 @@ mod tests {
         for f in [rs, csv, huge] {
             std::fs::remove_file(f).ok();
         }
+    }
+
+    /// T11:set_pending_view 保存完整快照(cursor/selection/top_line/folds),
+    /// 空快照 is_empty。
+    #[test]
+    fn pending_view_state_carries_folds_and_top_line() {
+        let path = std::env::temp_dir().join(format!("t11_view_{}.rs", std::process::id()));
+        std::fs::write(&path, "fn main(){}\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        pane.set_pending_view(
+            id,
+            ViewStateRestore {
+                cursor: Some(TextPosition { line: 2, column: 3 }),
+                selection: None,
+                top_line: Some(5),
+                folds: vec![FoldRange {
+                    from_line: 1,
+                    to_line: 2,
+                }],
+            },
+        );
+        let pv = pane
+            .tabs()
+            .iter()
+            .find(|t| t.id == id)
+            .unwrap()
+            .pending_view
+            .as_ref()
+            .unwrap();
+        assert!(!pv.is_empty());
+        assert_eq!(pv.top_line, Some(5));
+        assert_eq!(pv.folds.len(), 1);
+        assert!(ViewStateRestore::default().is_empty());
+        std::fs::remove_file(&path).ok();
     }
 
     /// T3:`suspend_tab` 释放 runtime 并退回 Suspended 壳;`mark_reserve_denied`

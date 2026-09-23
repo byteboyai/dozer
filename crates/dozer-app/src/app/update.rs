@@ -109,32 +109,21 @@ impl App {
                                     tab.recovery_written = true;
                                     pending_restore_cmd = Some((tab.id, text, tab.web_revision));
                                 }
-                                // 视图状态恢复(cursor/selection/scroll)。
-                                if let Some((cursor, selection, top)) = tab.pending_view.take() {
-                                    let cmd = match (selection, cursor, top) {
-                                        (Some(sel), _, _) if sel.start != sel.end => {
-                                            Some(crate::preview::EditorCommand::SelectRange {
-                                                start: sel.start,
-                                                end: sel.end,
-                                            })
-                                        }
-                                        (_, Some(c), _) => {
-                                            Some(crate::preview::EditorCommand::RevealPosition {
-                                                line: c.line,
-                                                column: c.column,
-                                            })
-                                        }
-                                        (_, _, Some(t)) => {
-                                            Some(crate::preview::EditorCommand::RevealPosition {
-                                                line: t,
-                                                column: 1,
-                                            })
-                                        }
-                                        _ => None,
-                                    };
-                                    if let Some(cmd) = cmd {
-                                        pending_view_cmd = Some((tab.id, cmd));
-                                    }
+                                // 视图状态恢复(T11):一次 RestoreViewState 应用
+                                // folds → selection/cursor → scroll(顺序由 host
+                                // 保证);空快照不发命令。
+                                if let Some(state) = tab.pending_view.take()
+                                    && !state.is_empty()
+                                {
+                                    pending_view_cmd = Some((
+                                        tab.id,
+                                        crate::preview::EditorCommand::RestoreViewState {
+                                            cursor: state.cursor,
+                                            selection: state.selection,
+                                            top_line: state.top_line,
+                                            folds: state.folds,
+                                        },
+                                    ));
                                 }
                                 // 加载成功:清零该文件连续失败计数。
                                 crate::preview::reset_failure_to(
@@ -289,9 +278,25 @@ impl App {
                                     });
                                 }
                             }
-                            EditorEvent::ViewState { selection, .. } => {
+                            EditorEvent::ViewState {
+                                cursor,
+                                selection,
+                                top_line,
+                                folds,
+                            } => {
                                 tab.web_revision = event.revision;
                                 tab.web_selection = selection;
+                                // T11:完整镜像,供持久化与淘汰前序列化。
+                                tab.web_view_state = Some(crate::preview::ViewStateRestore {
+                                    cursor: Some(cursor),
+                                    selection,
+                                    top_line: Some(top_line),
+                                    folds,
+                                });
+                                if top_line > 0 {
+                                    let to = tab.web_viewport.map(|(_, to)| to).unwrap_or(top_line);
+                                    tab.web_viewport = Some((top_line, to));
+                                }
                                 context_changed = true;
                             }
                             EditorEvent::WindowRequest { anchor_line, .. } => {

@@ -1159,10 +1159,23 @@ impl Workspace {
             if is_active {
                 active_path = Some(p.clone());
             }
-            // CodeMirror tab 的镜像视图状态:光标取选区末端(无选区即光标点),
-            // 选区只在非空时持久化;滚动锚点取可见起始行。
-            let selection = tab.web_selection.filter(|r| r.start != r.end);
-            let cursor = tab.web_selection.map(|r| r.end);
+            // CodeMirror tab 的镜像视图状态(T11):优先用完整 `web_view_state`
+            // 镜像(cursor/selection/top_line/folds),没有则退回 web_selection/
+            // web_viewport 兼容路径。
+            let (cursor, selection, scroll_anchor, folds) = match &tab.web_view_state {
+                Some(vs) => (
+                    vs.cursor,
+                    vs.selection.filter(|r| r.start != r.end),
+                    vs.top_line.map(|t| t as u64),
+                    vs.folds.clone(),
+                ),
+                None => (
+                    tab.web_selection.map(|r| r.end),
+                    tab.web_selection.filter(|r| r.start != r.end),
+                    tab.web_viewport.map(|(from, _)| from as u64),
+                    Vec::new(),
+                ),
+            };
             // 表格 tab:持久化 active sheet + 逻辑滚动锚点。
             let tabular = match &tab.runtime {
                 crate::preview::PreviewRuntime::Tabular(crate::preview::TabularState::Ready(
@@ -1179,7 +1192,8 @@ impl Workspace {
                 mode: tab.current_mode(),
                 cursor,
                 selection,
-                scroll_anchor: tab.web_viewport.map(|(from, _)| from as u64),
+                scroll_anchor,
+                folds,
                 tabular,
                 active: is_active,
                 ..Default::default()
@@ -1321,9 +1335,12 @@ impl Workspace {
             let id = self.preview.push_shell_tab(path, persisted.mode);
             self.preview.set_pending_view(
                 id,
-                persisted.cursor,
-                persisted.selection,
-                persisted.scroll_anchor.map(|v| v as u32),
+                crate::preview::ViewStateRestore {
+                    cursor: persisted.cursor,
+                    selection: persisted.selection,
+                    top_line: persisted.scroll_anchor.map(|v| v as u32),
+                    folds: persisted.folds,
+                },
             );
             if let Some(t) = persisted.tabular {
                 self.preview

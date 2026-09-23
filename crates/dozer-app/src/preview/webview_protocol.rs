@@ -182,6 +182,19 @@ pub enum EditorCommand {
     SerializeViewState {
         request_id: String,
     },
+    /// T11:一次恢复完整视图状态。顺序固定由 host 保证:先展开/重折 folds,再
+    /// 落 selection/cursor,最后滚到 top_line。窗口化只送全局 `top_line`(不送
+    /// 局部 offset),`folds` 为空。
+    RestoreViewState {
+        #[serde(default)]
+        cursor: Option<TextPosition>,
+        #[serde(default)]
+        selection: Option<TextRange>,
+        #[serde(default)]
+        top_line: Option<u32>,
+        #[serde(default)]
+        folds: Vec<FoldRange>,
+    },
     /// 让 host 用**当前 buffer**发起一次保存(等价用户按 ⌘S):host 收到后
     /// 走 `saveHandler` → 回 `save_requested`。用于关闭 dirty tab 前先把
     /// 磁盘内容补齐(Rust 侧不持有全文,必须经由 host 落盘)。
@@ -455,6 +468,11 @@ mod tests {
         ))
         .unwrap();
         assert!(matches!(vs.payload, EditorEvent::ViewState { .. }));
+        // T11:view_state 必须完整携带 folds,不能丢。
+        assert!(matches!(
+            vs.payload,
+            EditorEvent::ViewState { folds, top_line: 1, .. } if folds.len() == 1
+        ));
 
         let wr = parse_event(&raw(
             r#"{"kind":"window_request","edge":"bottom","anchor_line":900}"#,
@@ -465,6 +483,39 @@ mod tests {
             EditorEvent::WindowRequest {
                 edge: WindowEdge::Bottom,
                 anchor_line: 900
+            }
+        );
+    }
+
+    #[test]
+    fn restore_view_state_command_round_trips_with_defaults() {
+        // 全字段。
+        let cmd = EditorCommand::RestoreViewState {
+            cursor: Some(TextPosition { line: 5, column: 2 }),
+            selection: Some(TextRange {
+                start: TextPosition { line: 1, column: 1 },
+                end: TextPosition { line: 5, column: 2 },
+            }),
+            top_line: Some(3),
+            folds: vec![FoldRange {
+                from_line: 3,
+                to_line: 9,
+            }],
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: EditorCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cmd);
+
+        // 缺省字段(仅 kind + folds)也要能解析为默认。
+        let minimal: EditorCommand =
+            serde_json::from_str(r#"{"kind":"restore_view_state","folds":[]}"#).unwrap();
+        assert_eq!(
+            minimal,
+            EditorCommand::RestoreViewState {
+                cursor: None,
+                selection: None,
+                top_line: None,
+                folds: Vec::new(),
             }
         );
     }

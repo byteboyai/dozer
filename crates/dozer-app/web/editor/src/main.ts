@@ -8,7 +8,7 @@
 // - 文档内容由本 host 自行从 `dozer://editor/__file__<path>` 拉取(Rust 侧
 //   只对白名单内路径放行),避免启动时把全文经 IPC 推一遍。
 
-import { EditorState, Compartment, type Extension } from '@codemirror/state';
+import { EditorState, Compartment, type Extension, type StateEffect } from '@codemirror/state';
 import {
   EditorView,
   keymap,
@@ -40,6 +40,9 @@ import {
   foldGutter,
   foldKeymap,
   indentOnInput,
+  foldedRanges,
+  foldEffect,
+  unfoldEffect,
 } from '@codemirror/language';
 import {
   PROTOCOL_VERSION,
@@ -48,6 +51,7 @@ import {
   isRange,
   type Envelope,
   type EditorEvent,
+  type FoldRange,
   type Position,
   type Range,
 } from './protocol';
@@ -235,6 +239,57 @@ function positionToOffset(pos: Position): number {
 function currentRange(): Range {
   const sel = view.state.selection.main;
   return { start: offsetToPosition(sel.anchor), end: offsetToPosition(sel.head) };
+}
+
+/** T11:导出当前折叠区(行范围)。 */
+function currentFolds(): FoldRange[] {
+  const out: FoldRange[] = [];
+  foldedRanges(view.state).between(0, view.state.doc.length, (from, to) => {
+    out.push({
+      from_line: view.state.doc.lineAt(from).number,
+      to_line: view.state.doc.lineAt(to).number,
+    });
+  });
+  return out;
+}
+
+/** T11:按固定顺序恢复视图状态——folds → selection/cursor → scroll。 */
+function restoreViewState(cmd: {
+  cursor: Position | null;
+  selection: Range | null;
+  top_line: number | null;
+  folds: FoldRange[];
+}): void {
+  const clampLine = (n: number) => Math.min(Math.max(n, 1), view.state.doc.lines);
+  // 1) folds:先全展开,再按保存范围折叠。
+  const unfold: StateEffect<unknown>[] = [];
+  foldedRanges(view.state).between(0, view.state.doc.length, (from, to) => {
+    unfold.push(unfoldEffect.of({ from, to }));
+  });
+  if (unfold.length > 0) view.dispatch({ effects: unfold });
+  if (cmd.folds.length > 0) {
+    const refold: StateEffect<unknown>[] = [];
+    for (const f of cmd.folds) {
+      const from = view.state.doc.line(clampLine(f.from_line)).from;
+      const to = view.state.doc.line(clampLine(f.to_line)).to;
+      if (to > from) refold.push(foldEffect.of({ from, to }));
+    }
+    if (refold.length > 0) view.dispatch({ effects: refold });
+  }
+  // 2) selection / cursor。
+  if (cmd.selection) {
+    const anchor = positionToOffset(cmd.selection.start);
+    const head = positionToOffset(cmd.selection.end);
+    view.dispatch({ selection: { anchor, head } });
+  } else if (cmd.cursor) {
+    const offset = positionToOffset(cmd.cursor);
+    view.dispatch({ selection: { anchor: offset } });
+  }
+  // 3) scroll(最后;窗口化时按全局行号换算)。
+  if (cmd.top_line !== null) {
+    const offset = view.state.doc.line(clampLine(toLocalLine(cmd.top_line))).from;
+    view.dispatch({ effects: EditorView.scrollIntoView(offset, { y: 'start' }) });
+  }
 }
 
 function encodePathForFetch(path: string): string {
@@ -511,10 +566,19 @@ function applyCommand(raw: string): void {
           cursor: offsetToPosition(sel.head),
           selection: sel.empty ? null : currentRange(),
           top_line: topLine,
-          folds: [],
+          folds: currentFolds(),
         },
         cmd.request_id,
       );
+      break;
+    }
+    case 'restore_view_state': {
+      restoreViewState({
+        cursor: cmd.cursor ?? null,
+        selection: cmd.selection ?? null,
+        top_line: cmd.top_line ?? null,
+        folds: cmd.folds ?? [],
+      });
       break;
     }
     case 'save_document': {

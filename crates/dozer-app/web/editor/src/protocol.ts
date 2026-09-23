@@ -87,6 +87,13 @@ export type EditorCommand =
   | { kind: 'set_read_only'; read_only: boolean }
   | { kind: 'focus' }
   | { kind: 'serialize_view_state'; request_id: string }
+  | {
+      kind: 'restore_view_state';
+      cursor: Position | null;
+      selection: Range | null;
+      top_line: number | null;
+      folds: FoldRange[];
+    }
   | { kind: 'save_document' };
 
 /** 三端 host 共用的 envelope。 */
@@ -193,6 +200,11 @@ export function decodeCommand(payload: unknown): EditorCommand | null {
       return c as unknown as EditorCommand;
     case 'serialize_view_state':
       return typeof c.request_id === 'string'
+        ? (c as unknown as EditorCommand)
+        : null;
+    case 'restore_view_state':
+      // 宽容:各字段可缺省;至少 folds 是数组。
+      return Array.isArray(c.folds)
         ? (c as unknown as EditorCommand)
         : null;
     case 'save_document':
