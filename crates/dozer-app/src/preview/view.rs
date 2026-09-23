@@ -48,7 +48,13 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         conflict: None,
         conflict_reload_armed: false,
         conflict_baseline: None,
+        task_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
+}
+
+/// T11:一份全新的后台任务取消信号(未置位)。tab 建壳/重试时用。
+fn fresh_task_cancel() -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))
 }
 
 /// 为文件 tab 计算 Phase A 的唯一 route/backend 描述。画像是**有界采样**
@@ -326,6 +332,8 @@ impl PreviewPane {
         tab.conflict_baseline = None;
         tab.dirty = false;
         tab.recovery_written = false;
+        // T11:重载前取消在途后台任务(索引/解析),随后 `load_preview_tab` 起新任务。
+        tab.cancel_background();
         tab.reload_nonce += 1;
         tab.web_revision = 0;
         tab.web_selection = None;
@@ -564,6 +572,7 @@ impl PreviewPane {
             conflict: None,
             conflict_reload_armed: false,
             conflict_baseline: None,
+            task_cancel: fresh_task_cancel(),
         };
         tab.debug_assert_backend_consistent();
         self.tabs.push(tab);
@@ -651,6 +660,7 @@ impl PreviewPane {
             conflict: None,
             conflict_reload_armed: false,
             conflict_baseline: None,
+            task_cancel: fresh_task_cancel(),
         };
         self.tabs.push(tab);
         id
@@ -689,6 +699,8 @@ impl PreviewPane {
         {
             return false;
         }
+        // T11:淘汰即取消在途后台任务(索引/解析),重新物化时再起新任务。
+        tab.cancel_background();
         tab.runtime = PreviewRuntime::None;
         // T11:淘汰前没有时间做一次 `SerializeViewState` 往返,直接把最近一次
         // 节流镜像落成 `pending_view`,重新物化时经 `RestoreViewState` 还原
@@ -798,6 +810,8 @@ impl PreviewPane {
     /// 把耗时工作交给后台任务(plan T3)。
     pub fn begin_load(&mut self, tab_id: usize, stage: PreviewLoadStage) -> Option<u64> {
         let tab = self.tabs.iter_mut().find(|t| t.id == tab_id)?;
+        // T11:新一次加载换一份全新的取消信号,避免沿用上一轮(可能已被取消)的信号。
+        tab.cancel_background();
         // 先推进 BackendState(同态 Loading→Loading 合法,no-op)。
         let _ = tab.backend_state.try_transition(BackendState::Loading);
         let generation = tab.load_state.generation.wrapping_add(1);
@@ -871,6 +885,8 @@ impl PreviewPane {
         let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
             return false;
         };
+        // T11:先置位后台任务取消信号(索引/解析/recovery 尽早退出),再走状态机。
+        tab.cancel_background();
         if !tab.load_state.is_active() {
             return false;
         }
@@ -1163,6 +1179,10 @@ impl PreviewPane {
     /// pane 要换主人,旧项目的文件 tab 全丢弃,但"空白占位恒在第 0 项"这条
     /// 不变式不因换项目而破——落回空白页,而不是一个没有占位 tab 的空列表。
     pub fn clear_all(&mut self) {
+        // T11:清空(项目切换/关闭)即取消所有 tab 的在途后台任务。
+        for tab in self.tabs.iter_mut() {
+            tab.cancel_background();
+        }
         self.tabs.clear();
         self.tabs.push(placeholder_tab(self.next_id));
         self.next_id += 1;
@@ -1236,6 +1256,8 @@ impl PreviewPane {
         if idx >= self.tabs.len() {
             return;
         }
+        // T11:关闭即取消该 tab 在途后台任务(索引/解析/recovery),避免白算。
+        self.tabs[idx].cancel_background();
         let removed_id = self.tabs[idx].id;
         self.tabs.remove(idx);
         // 该 tab 若还在"保存后关闭"等待列表里,一并清掉(重复关闭路径兜底)。
@@ -2044,6 +2066,8 @@ impl PreviewPane {
             return;
         };
         if !matches!(tab.runtime, PreviewRuntime::Tabular(_)) {
+            // T11:重载前取消在途后台任务。
+            tab.cancel_background();
             tab.reload_nonce += 1;
             if tab.uses_codemirror() {
                 // 新 WebView 内部 revision 从 1 重新开始；清掉 Rust 镜像，
@@ -2197,6 +2221,8 @@ impl PreviewPane {
                 rt.truncated = false;
                 rt.error = None;
             }
+            // T11:外部变更 → 取消在途索引构建,重载后再起新任务。
+            tab.cancel_background();
             tab.web_revision = 0;
             tab.reload_nonce += 1;
             tab.web_error = None;

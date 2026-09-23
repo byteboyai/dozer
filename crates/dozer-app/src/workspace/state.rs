@@ -1526,10 +1526,25 @@ impl Workspace {
             let proxy = io.proxy.clone();
             let handle = io.handle.clone();
             let panel = kind;
+            // T11:recovery 读取也纳入取消(tab 关闭/重开即弃结果)。
+            let cancel = self
+                .preview
+                .tabs()
+                .iter()
+                .find(|t| t.id == tab_id)
+                .map(|t| t.task_cancel_token())
+                .unwrap_or_else(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
             handle.spawn(async move {
                 let restore = tokio::task::spawn_blocking(move || {
+                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        return None;
+                    }
                     let (manifest, text) =
                         crate::preview::read_snapshot(&recovery_dir, project_id, key)?;
+                    // 读完再查一次:长读期间被取消则不回灌。
+                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        return None;
+                    }
                     let disk = crate::preview::profile_file(&path_for_read).ok();
                     (crate::preview::classify_recovery(&manifest, disk.as_ref())
                         == crate::preview::RecoveryResolution::Restore)
@@ -2364,21 +2379,28 @@ impl Workspace {
         let Some(project_id) = self.project_id() else {
             return;
         };
-        let path = {
-            let pane = if kind == PanelKind::Project {
-                &self.project_preview
-            } else {
-                &self.preview
-            };
-            match pane.tabs().iter().find(|t| t.id == tab_id).map(|t| &t.kind) {
-                Some(crate::preview::TabKind::File(p)) => p.clone(),
-                _ => return,
-            }
+        let pane = if kind == PanelKind::Project {
+            &self.project_preview
+        } else {
+            &self.preview
         };
+        let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
+            return;
+        };
+        let crate::preview::TabKind::File(path) = &tab.kind else {
+            return;
+        };
+        let path = path.clone();
+        // T11:捕获该 tab 的取消信号,tab 关闭/reload/切 mode 时置位即尽早退出。
+        let cancel = tab.task_cancel_token();
         let proxy = io.proxy.clone();
         io.handle.spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
-                crate::preview::LineIndex::build_cancellable(&path, 1000, 0, || false)
+                let cancelled = {
+                    let cancel = cancel.clone();
+                    move || cancel.load(std::sync::atomic::Ordering::Relaxed)
+                };
+                crate::preview::LineIndex::build_cancellable(&path, 1000, 0, cancelled)
                     .and_then(|index| index.ok_or_else(|| std::io::Error::other("index cancelled")))
                     .map(std::sync::Arc::new)
                     .map_err(|e| e.to_string())
@@ -2408,15 +2430,18 @@ impl Workspace {
         for (tab_id, path) in pane.take_pending_tabular_loads() {
             // 捕获启动时的 generation:tab 关闭/重开/重试后到达的旧结果按此丢弃
             // (T7 取消不回填旧 sheet)。
-            let generation = pane
-                .tabs()
-                .iter()
-                .find(|t| t.id == tab_id)
-                .map(|t| t.load_state.generation)
-                .unwrap_or(0);
+            let (generation, cancel) = match pane.tabs().iter().find(|t| t.id == tab_id) {
+                Some(tab) => (tab.load_state.generation, tab.task_cancel_token()),
+                None => (
+                    0,
+                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                ),
+            };
             let proxy = io.proxy.clone();
             io.handle.spawn_blocking(move || {
-                let result = crate::tabular::load(&path);
+                // T11:表格解析按批次检查取消,tab 关闭/重试即尽早退出。
+                let cancelled = move || cancel.load(std::sync::atomic::Ordering::Relaxed);
+                let result = crate::tabular::load_cancellable(&path, cancelled);
                 let _ = proxy.send_event(Message::TabularLoaded(
                     project_id, kind, tab_id, generation, result,
                 ));
@@ -2448,9 +2473,18 @@ impl Workspace {
         let Some(request) = pane.tabular_mut(tab_id).and_then(|view| view.apply(action)) else {
             return;
         };
+        // T11:sheet 懒加载同样可取消(tab 关闭/切换即弃)。
+        let cancel = pane
+            .tabs()
+            .iter()
+            .find(|t| t.id == tab_id)
+            .map(|t| t.task_cancel_token())
+            .unwrap_or_else(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
         let proxy = io.proxy.clone();
         io.handle.spawn_blocking(move || {
-            let result = crate::tabular::load_sheet(&request.path, &request.name);
+            let cancelled = move || cancel.load(std::sync::atomic::Ordering::Relaxed);
+            let result =
+                crate::tabular::load_sheet_cancellable(&request.path, &request.name, cancelled);
             let _ = proxy.send_event(Message::TabularSheetLoaded(
                 project_id,
                 kind,

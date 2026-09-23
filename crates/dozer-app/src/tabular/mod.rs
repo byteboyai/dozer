@@ -26,6 +26,13 @@ pub use grid::Action;
 /// 加载器一旦读满这个数就不再继续解析文件剩余部分(见模块文档)。
 pub const MAX_TABULAR_ROWS: usize = 100_000;
 
+/// T11:表格加载被取消时返回的固定消息。调用方按 `Err` 内容识别并静默丢弃
+/// (取消是正常结束,不显示为解析失败)。
+pub const TABULAR_CANCELLED: &str = "tabular load cancelled";
+
+/// T11:检查取消的批次间隔(每读这么多行/单元格查一次信号),兼顾响应与开销。
+const CANCEL_CHECK_ROWS: usize = 4096;
+
 /// 表格类数据文件,预览时委托 Tabular Viewer(而非代码编辑器 / flyfish)。
 pub fn is_tabular_extension(path: &Path) -> bool {
     matches!(
@@ -286,15 +293,32 @@ fn format_excel_datetime(dt: &calamine::ExcelDateTime) -> String {
 
 /// 按扩展名加载表格文件的第一个 sheet(其余 sheet 懒加载,见模块文档)。
 /// `.xlsx`/`.xls`/`.ods` 走 Calamine,`.csv`/`.tsv` 走 `csv` crate 流式解析。
+///
+/// T11:生产路径一律走 [`load_cancellable`],本包装仅供测试(不想为取消
+/// 桩件搭脚手架)使用。
+#[allow(dead_code)]
 pub fn load(path: &Path) -> Result<TabularView, String> {
+    load_cancellable(path, || false)
+}
+
+/// T11:同 [`load`],但按批次检查 `should_cancel`;置位返回
+/// [`TabularLoadError::Cancelled`] 的可读消息(调用方按取消丢弃,不报错)。
+pub fn load_cancellable(
+    path: &Path,
+    should_cancel: impl Fn() -> bool,
+) -> Result<TabularView, String> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
     match ext.as_str() {
-        "xlsx" | "xls" | "ods" => load_calamine_first_sheet(path),
-        "csv" | "tsv" => load_delimited(path, if ext == "tsv" { b'\t' } else { b',' }),
+        "xlsx" | "xls" | "ods" => load_calamine_first_sheet(path, &should_cancel),
+        "csv" | "tsv" => load_delimited(
+            path,
+            if ext == "tsv" { b'\t' } else { b',' },
+            &should_cancel,
+        ),
         _ => Err(format!("非表格文件: {ext}")),
     }
 }
@@ -310,18 +334,33 @@ pub fn load(path: &Path) -> Result<TabularView, String> {
 /// sheet 切换是低频的显式点击(不在滚动/渲染热路径上),且已经走异步+
 /// loading 动画,多花的时间只是这次切换慢一点,不会卡 UI。工作簿元数据
 /// 本身通常远小于被封顶的行数据,重复解析的开销有上限。
+///
+/// T11:生产路径一律走 [`load_sheet_cancellable`],本包装仅供测试使用。
+#[allow(dead_code)]
 pub fn load_sheet(path: &Path, name: &str) -> Result<Sheet, String> {
-    let mut workbook = calamine::open_workbook_auto(path).map_err(|e| e.to_string())?;
-    sheet_from_workbook(&mut workbook, name)
+    load_sheet_cancellable(path, name, || false)
 }
 
-fn load_calamine_first_sheet(path: &Path) -> Result<TabularView, String> {
+/// T11:同 [`load_sheet`],按批次检查 `should_cancel`,命中返回 [`TABULAR_CANCELLED`]。
+pub fn load_sheet_cancellable(
+    path: &Path,
+    name: &str,
+    should_cancel: impl Fn() -> bool,
+) -> Result<Sheet, String> {
+    let mut workbook = calamine::open_workbook_auto(path).map_err(|e| e.to_string())?;
+    sheet_from_workbook(&mut workbook, name, &should_cancel)
+}
+
+fn load_calamine_first_sheet(
+    path: &Path,
+    should_cancel: &dyn Fn() -> bool,
+) -> Result<TabularView, String> {
     use calamine::Reader;
     let mut workbook = calamine::open_workbook_auto(path).map_err(|e| e.to_string())?;
     let sheet_names = workbook.sheet_names();
     let mut sheets: Vec<Option<Sheet>> = (0..sheet_names.len()).map(|_| None).collect();
     if let Some(first) = sheet_names.first() {
-        sheets[0] = Some(sheet_from_workbook(&mut workbook, first)?);
+        sheets[0] = Some(sheet_from_workbook(&mut workbook, first, should_cancel)?);
     }
     Ok(TabularView::new(path.to_path_buf(), sheet_names, sheets))
 }
@@ -335,12 +374,18 @@ fn load_calamine_first_sheet(path: &Path) -> Result<TabularView, String> {
 fn sheet_from_workbook<RS: std::io::Read + std::io::Seek>(
     workbook: &mut calamine::Sheets<RS>,
     name: &str,
+    should_cancel: &dyn Fn() -> bool,
 ) -> Result<Sheet, String> {
     use calamine::{Reader, Sheets};
     match workbook {
-        Sheets::Xlsx(xlsx) => sheet_from_xlsx_stream(xlsx, name),
+        Sheets::Xlsx(xlsx) => sheet_from_xlsx_stream(xlsx, name, should_cancel),
         _ => {
+            // 退路(worksheet_range 一次性物化)无法中途取消,读完后补查一次,
+            // 已取消则不返回结果。
             let range = workbook.worksheet_range(name).map_err(|e| e.to_string())?;
+            if should_cancel() {
+                return Err(TABULAR_CANCELLED.to_string());
+            }
             Ok(sheet_from_range(range))
         }
     }
@@ -349,6 +394,7 @@ fn sheet_from_workbook<RS: std::io::Read + std::io::Seek>(
 fn sheet_from_xlsx_stream<RS: std::io::Read + std::io::Seek>(
     xlsx: &mut calamine::Xlsx<RS>,
     name: &str,
+    should_cancel: &dyn Fn() -> bool,
 ) -> Result<Sheet, String> {
     let mut reader = xlsx
         .worksheet_cells_reader(name)
@@ -356,7 +402,13 @@ fn sheet_from_xlsx_stream<RS: std::io::Read + std::io::Seek>(
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut col_count = 0usize;
     let mut truncated = false;
+    let mut seen = 0usize;
     while let Some(cell) = reader.next_cell().map_err(|e| e.to_string())? {
+        // T11:按单元格批次检查取消,命中即提前退出(不返回部分结果)。
+        seen += 1;
+        if seen.is_multiple_of(CANCEL_CHECK_ROWS) && should_cancel() {
+            return Err(TABULAR_CANCELLED.to_string());
+        }
         let (row, col) = cell.get_position();
         let (row, col) = (row as usize, col as usize);
         if row >= MAX_TABULAR_ROWS {
@@ -405,7 +457,11 @@ fn sheet_from_range(range: calamine::Range<calamine::Data>) -> Sheet {
     }
 }
 
-fn load_delimited(path: &Path, delimiter: u8) -> Result<TabularView, String> {
+fn load_delimited(
+    path: &Path,
+    delimiter: u8,
+    should_cancel: &dyn Fn() -> bool,
+) -> Result<TabularView, String> {
     let mut rdr = csv::ReaderBuilder::new()
         .delimiter(delimiter)
         .flexible(true) // 允许参差行(每行列数不一)
@@ -419,6 +475,10 @@ fn load_delimited(path: &Path, delimiter: u8) -> Result<TabularView, String> {
         if rows.len() >= MAX_TABULAR_ROWS {
             truncated = true;
             break; // 够数即停,不再读/解析文件剩余部分(模块文档)。
+        }
+        // T11:按行批次检查取消。
+        if rows.len().is_multiple_of(CANCEL_CHECK_ROWS) && should_cancel() {
+            return Err(TABULAR_CANCELLED.to_string());
         }
         let record = record.map_err(|e| e.to_string())?;
         let cells: Vec<String> = record.iter().map(str::to_string).collect();
@@ -488,6 +548,25 @@ mod tests {
         // 0.604166... 天 = 14:30:00,时长格式(如 [hh]:mm:ss)不该带纪元日期。
         let dt = ExcelDateTime::new(0.604_166_666_666_666_6, ExcelDateTimeType::TimeDelta, false);
         assert_eq!(format_excel_datetime(&dt), "14:30:00");
+    }
+
+    #[test]
+    fn load_cancellable_reports_cancellation_for_delimited() {
+        // 造一个超过单个取消检查批次(4096 行)的 csv,取消信号一旦置位即应
+        // 提前退出并返回 TABULAR_CANCELLED(而不是完整解析)。
+        let dir = std::env::temp_dir().join("dozer_tabular_cancel_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("many.csv");
+        let mut f = std::fs::File::create(&path).unwrap();
+        for i in 0..(CANCEL_CHECK_ROWS * 2) {
+            writeln!(f, "{i},x").unwrap();
+        }
+        drop(f);
+        let err = load_cancellable(&path, || true).unwrap_err();
+        assert_eq!(err, TABULAR_CANCELLED);
+        // 未取消时正常解析。
+        assert!(load_cancellable(&path, || false).is_ok());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

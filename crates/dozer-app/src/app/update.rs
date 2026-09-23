@@ -51,7 +51,13 @@ impl App {
                     // dozerd:选区/可见范围/就绪变化都算。
                     let mut context_changed = false;
                     // 窗口化 viewer:待建立行索引 / 待推送相邻窗口。
-                    let mut build_index: Option<(usize, PathBuf, u64)> = None;
+                    // T11:元组末项为该 tab 的后台任务取消信号(索引构建按 chunk 检查)。
+                    let mut build_index: Option<(
+                        usize,
+                        PathBuf,
+                        u64,
+                        std::sync::Arc<std::sync::atomic::AtomicBool>,
+                    )> = None;
                     let mut window_request: Option<(usize, u32)> = None;
                     // recovery 恢复:ready 后回推正文 + 重新标脏。
                     let mut pending_restore_cmd: Option<(usize, String, u64)> = None;
@@ -103,8 +109,12 @@ impl App {
                                         tab.load_state
                                             .advance(crate::preview::PreviewLoadStage::Indexing);
                                         if tab.window_index().is_none() {
-                                            build_index =
-                                                Some((tab.id, path.clone(), tab.web_revision));
+                                            build_index = Some((
+                                                tab.id,
+                                                path.clone(),
+                                                tab.web_revision,
+                                                tab.task_cancel_token(),
+                                            ));
                                         }
                                         // 窗口化不需要 recovery/视图恢复(只读、正文由
                                         // SetWindow 决定),也不走下面的 pending_reveal。
@@ -414,17 +424,22 @@ impl App {
                             crate::preview::EditorCommand::RevealPosition { line, column: 1 },
                         );
                     }
-                    if let Some((tab_id, path, revision)) = build_index {
+                    if let Some((tab_id, path, revision, cancel)) = build_index {
                         let project_id = binding.project_id;
                         let panel = binding.panel;
                         let proxy = io.proxy.clone();
                         io.handle.spawn(async move {
                             let result = tokio::task::spawn_blocking(move || {
+                                // T11:按 chunk 检查取消信号(置位即提前返回 `Ok(None)`)。
+                                let cancelled = {
+                                    let cancel = cancel.clone();
+                                    move || cancel.load(std::sync::atomic::Ordering::Relaxed)
+                                };
                                 crate::preview::LineIndex::build_cancellable(
                                     &path,
                                     1000,
                                     revision,
-                                    || false,
+                                    cancelled,
                                 )
                                 .and_then(|index| {
                                     index.ok_or_else(|| std::io::Error::other("index cancelled"))
@@ -2151,7 +2166,10 @@ impl App {
             }
             Message::TabularLoaded(project_id, kind, tab_id, generation, result) => {
                 self.with_project(project_id, move |ws, io| {
-                    if let Err(error) = &result {
+                    // T11:取消是正常结束,不当作解析失败告警。
+                    if let Err(error) = &result
+                        && error != crate::tabular::TABULAR_CANCELLED
+                    {
                         tracing::warn!(%error, "表格首次加载失败");
                     }
                     let sheet_to_select = {

@@ -2297,6 +2297,23 @@ impl App {
         }
     }
 
+    /// T11:退出前置位所有预览 tab 的后台任务取消信号(索引/解析/recovery),
+    /// 让在飞线程尽早退出,而不是让进程 drop tokio runtime 后它们变成孤儿
+    /// (drop 不保证 join 在跑的 `spawn_blocking`)。
+    pub fn cancel_all_preview_background(&mut self) {
+        for slot in self.projects.values_mut() {
+            if let WorkspaceSlot::Loaded(ws) = slot {
+                for pane in [&mut ws.preview, &mut ws.project_preview] {
+                    for tab in pane.tabs_mut().iter_mut() {
+                        tab.cancel_background();
+                    }
+                    // 大文件搜索会话也一并取消(其信号独立于 tab)。
+                    pane.close_large_file_search();
+                }
+            }
+        }
+    }
+
     /// 退出前等"关 tab 时发往 daemon 的 kill/总结请求"真正跑完(main.rs 在
     /// `WindowEvent::CloseRequested` 时调用,`event_loop.exit()` 之前)。
     ///

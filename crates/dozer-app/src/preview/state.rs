@@ -78,6 +78,12 @@ pub struct PreviewTab {
     /// T10:用户「保留我的修改」后记下的磁盘 mtime 基线;下次保存覆盖前再次
     /// 校验磁盘是否又变了(变了则重新进入冲突态)。
     pub conflict_baseline: Option<SystemTime>,
+    /// T11:该 tab 在途后台长任务(窗口化索引构建 / 表格解析 / recovery 读取)
+    /// 的共享取消信号。任务 `spawn` 前经 [`PreviewTab::task_cancel_token`] 取走
+    /// 一份 `Arc` 捕获进 `spawn_blocking`,按 chunk/批次检查;tab 关闭 / reload /
+    /// 切 mode / suspend / 重试 / 项目关闭时经 [`PreviewTab::cancel_background`]
+    /// 置位并换新,确保旧任务尽快退出、新任务不被误取消。
+    pub task_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl PreviewTab {
@@ -181,6 +187,23 @@ impl PreviewTab {
         self.conflict = Some(mtime.unwrap_or(std::time::UNIX_EPOCH));
         self.conflict_reload_armed = false;
         true
+    }
+
+    /// T11:取一份当前后台任务取消信号(捕获进 `spawn_blocking`)。任务按
+    /// chunk/批次读它,置位后尽快退出。
+    pub fn task_cancel_token(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        self.task_cancel.clone()
+    }
+
+    /// T11:作废当前在途后台任务(索引/解析/recovery),并换一份全新的未置位信号,
+    /// 确保随后启动的新任务不被上一轮的取消误伤。返回是否确有在途任务在跑
+    /// (仅当加载仍在途且未处于 Idle 时算)。
+    pub fn cancel_background(&mut self) -> bool {
+        let had = self.load_state.is_active();
+        self.task_cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.task_cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        had
     }
 
     pub fn uses_codemirror(&self) -> bool {
