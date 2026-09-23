@@ -39,18 +39,49 @@
           }
           return base + html;
         }
+        // T8:HTML host → Rust 的统一 envelope 桥。项目/面板/tab/doc 由 Rust 写进
+        // URL 查询串,host 原样带回给 Rust 校验归属(JS 不能自报)。事件只走这个
+        // 具名通道,与 flyfish/editor/json-editor 的 payload 分开。
+        function envelope(payload) {
+          return JSON.stringify({
+            protocol_version: 1,
+            project_id: Number(q.get('proj') || 0) || 0,
+            panel: q.get('panel') || 'files',
+            tab_id: Number(q.get('tab') || 0) || 0,
+            document_id: q.get('doc') || '',
+            revision: 0,
+            request_id: null,
+            payload: payload,
+          });
+        }
+        function post(payload) {
+          try {
+            window.ipc.postMessage(envelope(payload));
+          } catch (_) {}
+        }
+        post({ kind: 'ready' });
+        // 正文可见边界:iframe `load` 在 srcdoc 文档(含相对资源)加载完成后触发。
+        // Rust 侧收到 `document_loaded` 才把这个原生子视图设为可见并结束 loading。
+        // 注意:静态 iframe 挂载时会先为 about:blank 触发一次 `load`,必须在真正
+        // 写入 `srcdoc` 之后才认(否则会在空白文档上提前宣告就绪)。
+        var docSet = false;
+        frame.addEventListener('load', function () {
+          if (docSet) post({ kind: 'document_loaded' });
+        });
         fetch(fileUrl)
           .then(function (r) {
             if (!r.ok) throw new Error('HTTP ' + r.status);
             return r.text();
           })
           .then(function (text) {
+            docSet = true;
             frame.srcdoc = withBase(text);
           })
           .catch(function (err) {
             frame.hidden = true;
             msg.hidden = false;
             msg.textContent = '无法读取 HTML 文件: ' + String(err);
+            post({ kind: 'failed', message: '无法读取 HTML 文件: ' + String(err), recoverable: true });
           });
       })();
     </script>

@@ -562,14 +562,34 @@ impl App {
                     if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == binding.tab_id) {
                         match event.payload {
                             FlyfishEvent::Ready => {
+                                // T8:`ready` 只代表 host 脚本初始化完成,不代表
+                                // 正文已渲染。清错误、保持 Loading,等
+                                // `document_loaded` 才可见 + finish(否则会露出
+                                // 空白原生子视图盖住 iced loading)。
                                 tab.web_error = None;
-                                // T5/T8:Rendered(Flyfish/隔离 HTML)host 首帧就绪
-                                // → 置 Ready 并 finish 加载(初始加载 / Source→
-                                // Rendered 切换均经此)。
-                                let _ = tab
-                                    .backend_state
-                                    .try_transition(crate::preview::BackendState::Ready);
-                                tab.load_state.finish();
+                            }
+                            FlyfishEvent::DocumentLoaded { error, .. } => {
+                                if let Some(message) = error {
+                                    // host 报告正文加载失败:回落统一 Failed 终态
+                                    // (`hosts_webview` 随后为 false → 原生子视图
+                                    // 从 desired pool 移除,fallback 页不被盖住)。
+                                    tab.runtime = crate::preview::PreviewRuntime::None;
+                                    tab.web_error = Some(message.clone());
+                                    let _ = tab.backend_state.try_transition(
+                                        crate::preview::BackendState::Failed(
+                                            crate::preview::PreviewError::new(message, true),
+                                        ),
+                                    );
+                                    tab.load_state.finish();
+                                } else {
+                                    // T8:正文首帧就绪 → 置 Ready 并 finish 加载
+                                    // (初始加载 / Source→Rendered 切换均经此)。
+                                    tab.web_error = None;
+                                    let _ = tab
+                                        .backend_state
+                                        .try_transition(crate::preview::BackendState::Ready);
+                                    tab.load_state.finish();
+                                }
                             }
                             FlyfishEvent::Title { title } => {
                                 if !title.is_empty() {
@@ -588,6 +608,7 @@ impl App {
                                         crate::preview::PreviewError::new(message, recoverable),
                                     ),
                                 );
+                                tab.load_state.finish();
                             }
                             FlyfishEvent::SearchState { .. } => {}
                         }
@@ -706,6 +727,29 @@ impl App {
                                 // `CreatingHost`;后续 host 信号才 finish
                                 // (窗口化:ready→Indexing→首窗→window_applied;
                                 // 非窗口化:ready→Reading→document_loaded)。
+                                //
+                                // T8 bullet 5:Rendered(Flyfish/隔离 HTML)host 可能
+                                // 因外链/相对资源/网络卡住,arm 一个 host-ready 超时,
+                                // 超时后进入可重试 Failed,不永久转圈。其余 host 的
+                                // 分阶段超时归 T11。
+                                let rendered_host = pane
+                                    .tabs()
+                                    .iter()
+                                    .find(|t| t.id == tab_id)
+                                    .is_some_and(|t| t.hosts_webview());
+                                if rendered_host {
+                                    let proxy = io.proxy.clone();
+                                    let handle = io.handle.clone();
+                                    handle.spawn(async move {
+                                        tokio::time::sleep(
+                                            crate::preview::PREVIEW_HOST_READY_TIMEOUT,
+                                        )
+                                        .await;
+                                        let _ = proxy.send_event(Message::PreviewHostTimeout(
+                                            project_id, panel, tab_id, generation,
+                                        ));
+                                    });
+                                }
                                 pane.advance_load(
                                     tab_id,
                                     generation,
@@ -724,6 +768,32 @@ impl App {
                     // 画像可能把临时非表格 route 改判为表格:此时才入队,需立即
                     // spawn(建壳时已入队的由调用方 `preview_open_path` 那侧已 spawn)。
                     ws.spawn_pending_tabular_loads(panel, io);
+                });
+            }
+            Message::PreviewHostTimeout(project_id, panel, tab_id, generation) => {
+                self.with_project(project_id, move |ws, _io| {
+                    let pane = if panel == PanelKind::Project {
+                        &mut ws.project_preview
+                    } else {
+                        &mut ws.preview
+                    };
+                    // 只有仍在该 generation 且仍在 Loading 的 Rendered host 才超时
+                    // (generation 不符 → 已重开/被替换,静默丢弃)。
+                    let still_rendered = pane
+                        .tabs()
+                        .iter()
+                        .find(|t| t.id == tab_id)
+                        .is_some_and(|t| t.load_state.is_active() && t.hosts_webview());
+                    if still_rendered {
+                        pane.fail_load(
+                            tab_id,
+                            generation,
+                            crate::preview::PreviewError::new(
+                                "预览渲染超时,请重试".to_string(),
+                                true,
+                            ),
+                        );
+                    }
                 });
             }
             Message::PreviewRecoveryWritten(project_id, panel, tab_id) => {

@@ -82,7 +82,17 @@
     }
     // 供后续注入脚本(Rust 侧)复用同一通道回传搜索状态等。
     window.__dozerFlyfishPost = post;
+    // T8:`ready` 只代表 host 脚本初始化完成(viewer 元素已插入),**不代表正
+    // 文已渲染**。正文就绪经 `document_loaded`(Flyfish 的公开 `load()` API
+    // resolve 时,即 `load-complete` 之后)回传;Rust 侧只在收到它之后才把
+    // 这个原生子视图设为可见并结束 loading,避免空白/半构造视图盖住 iced 动画。
     post({ kind: 'ready' });
+    Promise.resolve()
+      .then(function () { return el.load(); })
+      .then(function () { post({ kind: 'document_loaded' }); })
+      .catch(function (e) {
+        post({ kind: 'failed', message: (e && e.message) || '预览渲染失败', recoverable: true });
+      });
     // 标题变化 → tab 标题(替换旧的 title:<id>:<title> 字符串通道)。
     var last = '';
     function sendTitle() {

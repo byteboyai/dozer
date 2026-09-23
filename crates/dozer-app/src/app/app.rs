@@ -3096,7 +3096,7 @@ impl App {
                 // T9:Flyfish host 的稳定绑定(project/panel/tab/document)写进
                 // URL,host 事件经 envelope 回传时由 Rust 校验归属,JS 不能自报。
                 for s in &mut specs {
-                    if s.url.starts_with("dozer://flyfish/") {
+                    if s.url.starts_with("dozer://flyfish/") || s.url.starts_with("dozer://html/") {
                         let doc = format!("p{}-t{}", project.id, s.id);
                         s.url.push_str(&format!(
                             "&proj={}&panel={}&tab={}&doc={}",

@@ -414,8 +414,21 @@ pub fn parse_json_event(raw: &str) -> Result<WebviewEnvelope<JsonEvent>, Protoco
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FlyfishEvent {
-    /// host 脚本初始化完成(元素已插入)。
+    /// host 脚本初始化完成(元素已插入)。**不代表正文已渲染**;仅用于清除
+    /// 错误并保持 loading,等 [`FlyfishEvent::DocumentLoaded`] 才结束加载。
     Ready,
+    /// 正文已完成渲染(Flyfish host:`load()` 完成;HTML host:iframe `load`)。
+    /// Rust 收到后才把原生子视图设为可见并 finish(T8)。`revision` 目前恒 0
+    /// (host 不自报版本),`bytes` 为 0(host 不统计字节数,仅作占位以便与
+    /// editor/json host 的事件形态对齐)。
+    DocumentLoaded {
+        #[serde(default)]
+        revision: u64,
+        #[serde(default)]
+        bytes: u64,
+        #[serde(default)]
+        error: Option<String>,
+    },
     /// 渲染失败(读盘/解码错误、资源 404)。
     Failed { message: String, recoverable: bool },
     /// 文档标题(展示在 tab 上)。
@@ -908,6 +921,22 @@ mod tests {
                 FlyfishEvent::SearchState {
                     current: 1,
                     total: 9,
+                },
+            ),
+            (
+                r#"{"kind":"document_loaded"}"#,
+                FlyfishEvent::DocumentLoaded {
+                    revision: 0,
+                    bytes: 0,
+                    error: None,
+                },
+            ),
+            (
+                r#"{"kind":"document_loaded","error":"boom"}"#,
+                FlyfishEvent::DocumentLoaded {
+                    revision: 0,
+                    bytes: 0,
+                    error: Some("boom".into()),
                 },
             ),
         ] {

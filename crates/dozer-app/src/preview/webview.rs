@@ -73,10 +73,11 @@ pub(crate) fn html_url(path: &std::path::Path) -> String {
     )
 }
 
-/// T9:从 Flyfish host URL 的查询串解析归属绑定(`proj`/`panel`/`tab`/`doc`),
-/// 供 host 回传 envelope 时校验归属。非 flyfish URL 或缺字段返回 `None`。
+/// T9/T8:从 Rendered host(Flyfish 或隔离 HTML)URL 的查询串解析归属绑定
+/// (`proj`/`panel`/`tab`/`doc`),供 host 回传 envelope 时校验归属。非 Rendered
+/// host URL 或缺字段返回 `None`。
 pub(crate) fn flyfish_binding_from_url(url: &str) -> Option<HostBinding> {
-    if !url.starts_with("dozer://flyfish/") {
+    if !url.starts_with("dozer://flyfish/") && !url.starts_with("dozer://html/") {
         return None;
     }
     let query = url.split_once('?')?.1;
@@ -113,5 +114,28 @@ pub(crate) fn preview_url(path: &std::path::Path) -> String {
     {
         "html" | "htm" => html_url(path),
         _ => flyfish_url(path),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binding_parses_both_rendered_hosts() {
+        let q = "?p=x&proj=3&panel=files&tab=7&doc=p3-t7";
+        let flyfish = flyfish_binding_from_url(&format!("dozer://flyfish/host.html{q}"));
+        assert!(flyfish.is_some());
+        // T8:隔离 HTML host 与 Flyfish 共用同一 envelope 绑定解析。
+        let html = flyfish_binding_from_url(&format!("dozer://html/host.html{q}"));
+        assert_eq!(html.map(|b| b.tab_id), Some(7));
+    }
+
+    #[test]
+    fn binding_ignores_other_hosts_and_incomplete_queries() {
+        assert!(
+            flyfish_binding_from_url("dozer://editor/x?proj=1&panel=files&tab=2&doc=d").is_none()
+        );
+        assert!(flyfish_binding_from_url("dozer://flyfish/host.html?p=x").is_none());
     }
 }

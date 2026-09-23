@@ -19,6 +19,11 @@
 
 use std::time::Instant;
 
+/// T8 bullet 5:Rendered(Flyfish/隔离 HTML)host 从 `CreatingHost` 起,等待
+/// `document_loaded` 的最长时间。超时后进入可重试 Failed(不永久转圈),覆盖
+/// 外链/相对资源/网络卡住的场景。本地文件默认离线,正常渲染远快于此。
+pub const PREVIEW_HOST_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// 一次预览加载所处的阶段。`Idle` 表示当前没有加载在途。
 ///
 /// 阶段只描述"在等什么",不携带 viewer 句柄;真实 viewer 仍由
