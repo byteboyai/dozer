@@ -127,6 +127,7 @@ fn scrim_layer<'a, Msg: 'a>() -> Element<'a, Msg, iced_widget::Theme, iced_rende
 /// `confirm()` 的入参——字段数≥7 且 `title`/`description` 两个相邻同类型
 /// `String` 传错顺序编译器发现不了，按 CLAUDE.md 关键裁决用具名字段结构体
 /// 代替位置参数。
+#[derive(Clone)]
 pub struct ConfirmDialog<Msg> {
     /// 标题前的可选图标（无图标传 `None`，如文件/主机/数据源删除确认）。
     pub icon: Option<IconKind>,
@@ -240,5 +241,23 @@ mod confirm_tests {
         };
         assert_eq!(spec.title, "删除文件 \"a.txt\"?");
         assert_eq!(spec.confirm_msg, TestMsg::Confirm);
+    }
+
+    #[test]
+    fn confirm_dialog_is_cloneable() {
+        let spec = ConfirmDialog {
+            icon: None,
+            title: "标题".to_string(),
+            description: "说明".to_string(),
+            cancel_label: "取消".to_string(),
+            cancel_msg: TestMsg::Cancel,
+            confirm_label: "确认".to_string(),
+            confirm_msg: TestMsg::Confirm,
+            confirm_color: byteui::theme::color::current().red,
+            content_spacing: 8.0,
+        };
+        let cloned = spec.clone();
+        assert_eq!(cloned.title, spec.title);
+        assert_eq!(cloned.confirm_msg, spec.confirm_msg);
     }
 }
