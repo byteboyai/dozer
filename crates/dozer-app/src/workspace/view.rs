@@ -1210,19 +1210,31 @@ pub(crate) fn preview_pane_for<'a>(
                     );
                 }
                 crate::preview::TabularState::Loading => {
-                    // `loading_hint` 自带 `center_x/center_y(Fill)`,不需要
-                    // 再包一层容器(同其余既有调用点)。
-                    content = content.push(byteui::feedback::math_curve::loading_hint(
-                        byteui::feedback::math_curve::Curve::RoseThree,
-                        "正在打开表格…",
-                        48.0,
-                    ));
+                    // T1:统一走 `preview_loading_view`,文案随阶段(表格首解为
+                    // `Parsing`,懒加载 sheet 也复用该走法);无阶段时回落到表格
+                    // 专用文案。`loading_hint` 自带 `center_x/center_y(Fill)`,
+                    // 不需要再包一层容器。
+                    content = content.push(
+                        preview_loading_view(&active_tab.load_state).unwrap_or_else(|| {
+                            byteui::feedback::math_curve::loading_hint(
+                                byteui::feedback::math_curve::Curve::RoseThree,
+                                "正在打开表格…",
+                                48.0,
+                            )
+                        }),
+                    );
                 }
             }
         } else if let Some(page) = preview_fallback_page(kind, active_tab) {
             // T1:External / Unsupported(及 Failed)统一 fallback 页——不再
-            // 依赖 Flyfish 偶然兜底或空白。
+            // 依赖 Flyfish 偶然兜底或空白。失败优先于 loading:终态不能被动画盖住。
             content = content.push(page);
+        } else if let Some(loading) = preview_loading_view(&active_tab.load_state) {
+            // T2:有阶段在途(Profiling/CreatingHost/Reading/Indexing/…)时显示
+            // 统一 loading。原生 WebView 在 `preview_desired` 里因
+            // `backend_state != Ready` 而不产出 spec(或不置 visible),所以
+            // 动画不会被原生子视图遮挡(plan 不变量)。
+            content = content.push(loading);
         } else if active_tab.kind == TabKind::Blank {
             // 空白占位 tab:居中放 Finder "Get Info" 风格的项目根简介卡
             // (folder icon + 名称头 + 位置/大小/创建/修改四行)。`blank_info`
@@ -1773,6 +1785,41 @@ pub(crate) fn agent_launch_command(agent: AgentKind, hook_exe: &str) -> Option<S
 ///
 /// 为什么 Failed 只在"无内嵌 viewer"时才走这页:`Rendered` 失败态仍由 Flyfish
 /// webview 渲染(原生子视图恒在 iced 之上),画了也会被盖住;这类保留顶部错误条。
+/// T1:文件预览的统一 loading 视图。按当前加载阶段取文案,用 math_curve
+/// `loading_hint` 画自驱动动画;阶段为 `Idle` 时返回 `None`(调用方画别的)。
+///
+/// 有进度时在动画下方追加一行已完成计数——`progress` 由调用方**限频**更新
+/// (最多 ~100ms 一次),这里只负责渲染,不主动扫描文件(plan T1/§3)。
+///
+/// `size=48.0`、`Curve::RoseThree` 与其余既有调用点(用量/搜索/表格等)一致。
+fn preview_loading_view<'a>(
+    load_state: &crate::preview::PreviewLoadState,
+) -> Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> {
+    let label = load_state.stage.label()?;
+    let hint = byteui::feedback::math_curve::loading_hint(
+        byteui::feedback::math_curve::Curve::RoseThree,
+        label,
+        48.0,
+    );
+    let Some(progress) = load_state.progress else {
+        return Some(hint);
+    };
+    let progress_text = match progress.total {
+        Some(total) => format!("{}/{}", progress.completed, total),
+        None => format!("{}", progress.completed),
+    };
+    Some(
+        column![
+            hint,
+            text(progress_text)
+                .size(byteui::theme::font::caption_sm())
+                .color(byteui::theme::color::current().dim),
+        ]
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .into(),
+    )
+}
+
 fn preview_fallback_page<'a>(
     kind: PreviewPaneKind,
     tab: &'a PreviewTab,

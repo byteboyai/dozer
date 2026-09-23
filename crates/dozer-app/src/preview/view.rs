@@ -33,6 +33,7 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         backend: None,
         backend_state: BackendState::Ready,
         windowed: false,
+        load_state: PreviewLoadState::default(),
         recovery_written: false,
         pending_restore: None,
         load_started: None,
@@ -429,6 +430,7 @@ impl PreviewPane {
             backend,
             backend_state,
             windowed,
+            load_state: PreviewLoadState::default(),
             recovery_written: false,
             pending_restore: None,
             load_started: None,
@@ -515,6 +517,7 @@ impl PreviewPane {
             backend: Some(backend),
             backend_state: BackendState::Suspended,
             windowed,
+            load_state: PreviewLoadState::default(),
             recovery_written: false,
             pending_restore: None,
             load_started: None,
@@ -600,27 +603,148 @@ impl PreviewPane {
         true
     }
 
-    /// 物化一个 Suspended 壳(或从 Failed 重试):标记为 `Loading`。返回 false
-    /// 表示该 tab 不存在或当前不是可物化态(幂等保护)。
-    pub fn begin_shell_load(&mut self, tab_id: usize) -> bool {
+    // ── T2:统一 loading 转换 API ─────────────────────────────────────────
+    //
+    // 约定(见 plan T2):
+    // - 只有 generation 匹配的 advance/finish/fail 才能改动 tab,防旧结果串台。
+    // - `begin_load` 只做状态转换、立即返回;绝不在内部做 I/O 或等待。
+    // - `finish_load` 只能在"首个可用画面已准备好"后调用,不是"任务已 spawn"。
+    // - `fail_load` 进入统一 Failed/fallback,并清理运行时 viewer。
+    // - `cancel_load` 是正常结束(关闭/刷新/切 mode),不显示错误。
+
+    /// 开始一次加载,返回新 `generation`。仅当 tab 存在且处于可物化态
+    /// (`Suspended`/`Failed`/`Ready`→重新加载)时推进状态并返回 `Some(gen)`;
+    /// 否则返回 `None`(幂等保护)。调用方拿到 `gen` 后应立即返回事件循环,
+    /// 把耗时工作交给后台任务(plan T3)。
+    pub fn begin_load(&mut self, tab_id: usize, stage: PreviewLoadStage) -> Option<u64> {
+        let tab = self.tabs.iter_mut().find(|t| t.id == tab_id)?;
+        // 先推进 BackendState(同态 Loading→Loading 合法,no-op)。
+        let _ = tab.backend_state.try_transition(BackendState::Loading);
+        let generation = tab.load_state.generation.wrapping_add(1);
+        tab.load_state = PreviewLoadState::starting(generation, stage);
+        Some(generation)
+    }
+
+    /// 推进到下一阶段(不改 generation)。generation 过期或阶段为 `Idle` 时
+    /// 返回 false,不改动状态。
+    ///
+    /// T2 建立 API;真正"多阶段异步"的接线在 T3–T11(Windowed/JSON/搜索等)。
+    /// 迁移期仅测试使用,故显式允许 dead_code(同 `backend.rs` 做法)。
+    #[allow(dead_code)]
+    pub fn advance_load(
+        &mut self,
+        tab_id: usize,
+        generation: u64,
+        stage: PreviewLoadStage,
+    ) -> bool {
         let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
             return false;
         };
-        if !matches!(
-            tab.backend_state,
-            BackendState::Suspended | BackendState::Failed(_)
-        ) {
+        if !tab.load_state.accepts(generation) {
             return false;
         }
-        let _ = tab.backend_state.try_transition(BackendState::Loading);
+        tab.load_state.advance(stage);
         true
     }
 
-    /// 物化完成(Loading→Ready),或同步可立即就绪的 shell 直接置 Ready。
-    pub fn finish_shell_load(&mut self, tab_id: usize) {
-        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
-            let _ = tab.backend_state.try_transition(BackendState::Ready);
+    /// 结束加载(首个可用画面已就绪)。generation 过期返回 false。
+    pub fn finish_load(&mut self, tab_id: usize, generation: u64) -> bool {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return false;
+        };
+        if !tab.load_state.accepts(generation) {
+            return false;
         }
+        let _ = tab.backend_state.try_transition(BackendState::Ready);
+        tab.load_state.finish();
+        true
+    }
+
+    /// 加载失败:进入统一 Failed 终态(可解释、可重试),清运行时 viewer。
+    /// generation 过期返回 false(旧任务的失败不得结束新加载)。
+    ///
+    /// T2 建立 API;后台失败回灌接线在 T3–T11。迁移期仅测试使用。
+    #[allow(dead_code)]
+    pub fn fail_load(&mut self, tab_id: usize, generation: u64, error: PreviewError) -> bool {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return false;
+        };
+        if !tab.load_state.accepts(generation) {
+            return false;
+        }
+        tab.runtime = PreviewRuntime::None;
+        tab.web_error = Some(error.message.clone());
+        let _ = tab
+            .backend_state
+            .try_transition(BackendState::Failed(error));
+        tab.load_state.finish();
+        true
+    }
+
+    /// 取消在途加载(关闭/刷新/切 mode/项目切换)。取消是正常结束:回到
+    /// `Idle` 并作废结果,不置 Failed。若还在 `Loading`,退回 `Suspended` 以便
+    /// 下次选中重新物化。
+    ///
+    /// T2 建立 API;关闭/刷新/切 mode 的接线在 T11。迁移期仅测试使用。
+    #[allow(dead_code)]
+    pub fn cancel_load(&mut self, tab_id: usize) -> bool {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return false;
+        };
+        if !tab.load_state.is_active() {
+            return false;
+        }
+        tab.load_state.cancel();
+        if matches!(tab.backend_state, BackendState::Loading) {
+            let _ = tab.backend_state.try_transition(BackendState::Suspended);
+        }
+        true
+    }
+
+    /// 该 tab 当前的 loading 阶段(诊断/渲染用)。不存在返回 `Idle`。
+    ///
+    /// T2 建立 API;诊断页(T11)与局部 loading 接线前迁移期仅测试使用。
+    #[allow(dead_code)]
+    pub fn load_stage(&self, tab_id: usize) -> PreviewLoadStage {
+        self.tabs
+            .iter()
+            .find(|t| t.id == tab_id)
+            .map(|t| t.load_state.stage)
+            .unwrap_or(PreviewLoadStage::Idle)
+    }
+
+    /// 物化一个 Suspended 壳(或从 Failed 重试):标记为 `Loading`。返回 false
+    /// 表示该 tab 不存在或当前不是可物化态(幂等保护)。
+    ///
+    /// T2 起内部委托 [`PreviewPane::begin_load`](阶段取 `CreatingHost`);保留
+    /// 此方法给尚未迁移到显式阶段的调用点(plan:逐步淘汰)。`load_preview_tab`
+    /// 已改用显式阶段 API,故当前仅测试引用。
+    #[allow(dead_code)]
+    pub fn begin_shell_load(&mut self, tab_id: usize) -> bool {
+        let materializable = self.tabs.iter().find(|t| t.id == tab_id).is_some_and(|t| {
+            matches!(
+                t.backend_state,
+                BackendState::Suspended | BackendState::Failed(_)
+            )
+        });
+        if !materializable {
+            return false;
+        }
+        self.begin_load(tab_id, PreviewLoadStage::CreatingHost)
+            .is_some()
+    }
+
+    /// 物化完成(Loading→Ready),或同步可立即就绪的 shell 直接置 Ready。
+    ///
+    /// T2 起内部委托 [`PreviewPane::finish_load`];因同步路径没有独立后台任务,
+    /// 直接用当前 generation 结束。当前仅测试引用(见 `begin_shell_load`)。
+    #[allow(dead_code)]
+    pub fn finish_shell_load(&mut self, tab_id: usize) {
+        let generation = match self.tabs.iter().find(|t| t.id == tab_id) {
+            Some(tab) => tab.load_state.generation,
+            None => return,
+        };
+        self.finish_load(tab_id, generation);
     }
 
     /// 物化 Tabular shell:登记表格后台加载并置 Loading 态。
@@ -4087,5 +4211,82 @@ mod tests {
         }
         assert!(pane.is_pending_load(id));
         assert!(pane.begin_shell_load(id), "Failed 可重试");
+    }
+
+    /// T2:`begin_load` 推进 generation,`advance_load` 只在世代匹配时改阶段。
+    #[test]
+    fn begin_and_advance_load_track_generation() {
+        let mut pane = PreviewPane::default();
+        let id = pane.push_shell_tab(PathBuf::from("/tmp/a.rs"), None);
+        let gen1 = pane.begin_load(id, PreviewLoadStage::Profiling).unwrap();
+        assert_eq!(pane.load_stage(id), PreviewLoadStage::Profiling);
+        assert!(pane.advance_load(id, gen1, PreviewLoadStage::Reading));
+        assert_eq!(pane.load_stage(id), PreviewLoadStage::Reading);
+        // 旧世代不能推进。
+        assert!(!pane.advance_load(id, gen1 + 99, PreviewLoadStage::Indexing));
+        assert_eq!(pane.load_stage(id), PreviewLoadStage::Reading);
+        // 再次 begin 得到新世代。
+        let gen2 = pane.begin_load(id, PreviewLoadStage::CreatingHost).unwrap();
+        assert_ne!(gen1, gen2);
+        assert!(
+            !pane.advance_load(id, gen1, PreviewLoadStage::Parsing),
+            "旧世代失效"
+        );
+        assert!(pane.advance_load(id, gen2, PreviewLoadStage::Parsing));
+    }
+
+    /// T2:`finish_load` 只在世代匹配时置 Ready;过期 finish 不改状态。
+    #[test]
+    fn finish_load_is_generation_gated() {
+        let mut pane = PreviewPane::default();
+        let id = pane.push_shell_tab(PathBuf::from("/tmp/a.rs"), None);
+        let generation = pane.begin_load(id, PreviewLoadStage::Reading).unwrap();
+        assert!(!pane.finish_load(id, generation + 1), "过期 finish 被拒");
+        assert_eq!(pane.load_stage(id), PreviewLoadStage::Reading);
+        assert!(pane.finish_load(id, generation));
+        assert_eq!(pane.load_stage(id), PreviewLoadStage::Idle);
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.backend_state.is_ready());
+        // 重复 finish 不会把 Idle 再改坏。
+        assert!(
+            !pane.finish_load(id, generation),
+            "已结束的世代再次 finish 被拒"
+        );
+    }
+
+    /// T2:`fail_load` 进入可解释 Failed(带错误信息),过期失败被丢弃。
+    #[test]
+    fn fail_load_sets_failed_and_rejects_stale() {
+        let mut pane = PreviewPane::default();
+        let id = pane.push_shell_tab(PathBuf::from("/tmp/a.rs"), None);
+        let generation = pane.begin_load(id, PreviewLoadStage::Indexing).unwrap();
+        assert!(
+            !pane.fail_load(id, generation + 1, PreviewError::new("old", true)),
+            "旧失败被拒"
+        );
+        assert!(pane.fail_load(id, generation, PreviewError::new("boom", true)));
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.backend_state.is_failed());
+        assert_eq!(tab.web_error.as_deref(), Some("boom"));
+        assert_eq!(pane.load_stage(id), PreviewLoadStage::Idle);
+        // 失败后可重试:重新 begin 拿到新世代。
+        let generation2 = pane.begin_load(id, PreviewLoadStage::Profiling).unwrap();
+        assert!(pane.advance_load(id, generation2, PreviewLoadStage::Reading));
+    }
+
+    /// T2:取消是正常结束——回 Idle、作废在途结果、不留错误,并退回可物化。
+    #[test]
+    fn cancel_load_is_normal_end() {
+        let mut pane = PreviewPane::default();
+        let id = pane.push_shell_tab(PathBuf::from("/tmp/a.rs"), None);
+        let generation = pane.begin_load(id, PreviewLoadStage::Searching).unwrap();
+        assert!(pane.cancel_load(id));
+        assert_eq!(pane.load_stage(id), PreviewLoadStage::Idle);
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.web_error.is_none(), "取消不显示错误");
+        // 取消后原世代的 finish 被拒(不会误结束后续加载)。
+        assert!(!pane.finish_load(id, generation));
+        // 无在途加载时 cancel 为 no-op。
+        assert!(!pane.cancel_load(id));
     }
 }

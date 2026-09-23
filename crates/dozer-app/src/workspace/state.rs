@@ -1451,44 +1451,49 @@ impl Workspace {
             }
         }
 
+        // T2:用统一阶段 API 表达"起步 → 就绪"。当前这些路由仍是**同步**物化
+        // (内容由 host 自取或窗口化推送,T3 才把读取/索引真正挪到后台),所以
+        // 立即 begin→finish;阶段名用于语义与后续接线,不影响终态。
+        use crate::preview::PreviewLoadStage as Stage;
+        let begin_finish = |pane: &mut crate::preview::PreviewPane, stage: Stage| {
+            if let Some(generation) = pane.begin_load(tab_id, stage) {
+                pane.finish_load(tab_id, generation);
+            }
+        };
         match route_kind {
-            // CodeMirror(含窗口化只读):editor WebView 自取内容/由 Rust 推窗口,
-            // 直接 Loading→Ready。
+            // CodeMirror(含窗口化只读):editor WebView 自取内容/由 Rust 推窗口。
             Some(crate::preview::PreviewKind::Code) if editor_host => {
-                pane.begin_shell_load(tab_id);
-                pane.finish_shell_load(tab_id);
+                begin_finish(pane, Stage::CreatingHost);
             }
             // JSON 家族:严格 .json 走 vanilla-jsoneditor host,JSONC/JSON5 走
-            // CodeMirror 文本,直接 Loading→Ready。
+            // CodeMirror 文本。
             Some(crate::preview::PreviewKind::Json) => {
-                pane.begin_shell_load(tab_id);
-                pane.finish_shell_load(tab_id);
+                begin_finish(pane, Stage::Parsing);
             }
             // 流式 JSONL/NDJSON(T8):editor host(Streamed 窗口化只读 / Text)。
             Some(crate::preview::PreviewKind::Streamed) => {
-                pane.begin_shell_load(tab_id);
-                pane.finish_shell_load(tab_id);
+                begin_finish(pane, Stage::CreatingHost);
             }
-            // 其余 Code 到 editor host:直接就绪。
+            // 其余 Code 到 editor host。
             Some(crate::preview::PreviewKind::Code) => {
-                pane.begin_shell_load(tab_id);
-                pane.finish_shell_load(tab_id);
+                begin_finish(pane, Stage::CreatingHost);
             }
             Some(crate::preview::PreviewKind::Tabular) => {
-                pane.begin_shell_load(tab_id);
-                pane.set_tabular_loading(tab_id, path.clone());
-                // CSV/TSV 原文模式:同时让 editor host 就绪(网格仍在后台加载,
-                // 便于切回)。
-                if editor_host {
-                    pane.finish_shell_load(tab_id);
+                // 首次解析:进入 `Parsing`,网格后台加载完成前保持 Loading。
+                if let Some(generation) = pane.begin_load(tab_id, Stage::Parsing) {
+                    pane.set_tabular_loading(tab_id, path.clone());
+                    // CSV/TSV 原文模式:同时让 editor host 就绪(网格仍在后台加载,
+                    // 便于切回)。
+                    if editor_host {
+                        pane.finish_load(tab_id, generation);
+                    }
                 }
             }
             // 渲染/外部/不支持:交给对应 WebView 或 fallback,直接就绪。
             Some(crate::preview::PreviewKind::Rendered)
             | Some(crate::preview::PreviewKind::External)
             | Some(crate::preview::PreviewKind::Unsupported) => {
-                pane.begin_shell_load(tab_id);
-                pane.finish_shell_load(tab_id);
+                begin_finish(pane, Stage::CreatingHost);
             }
             None => {}
         }

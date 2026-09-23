@@ -40,6 +40,11 @@ pub struct PreviewTab {
     /// `file_policy` 判定该文件应窗口化(超预算/超 128MiB/超长行)。窗口化
     /// 专用 viewer 未落地前,这类文件不吃 CodeMirror 整载。
     pub windowed: bool,
+    /// T2:统一 loading 生命周期(阶段 + 世代 + 起始时刻 + 可选进度)。取代
+    /// 零散地把 `BackendState` 在 Loading/Ready 间弹,以及 `load_started` 只记
+    /// 时间不表达阶段的旧做法。`BackendState::Loading` 仍表示"尚无首个可用画面",
+    /// 具体文案由 `load_state.stage` 决定。
+    pub load_state: PreviewLoadState,
     /// 脏内容的 recovery snapshot 是否已落盘(允许休眠脏 tab 的前提)。
     pub recovery_written: bool,
     /// 启动恢复时从 recovery 读回的正文;editor `ready` 后经 `SetDocument` 推回,
@@ -347,6 +352,7 @@ impl std::fmt::Debug for PreviewTab {
             .field("route", &self.route)
             .field("backend", &self.backend)
             .field("backend_state", &self.backend_state)
+            .field("load_stage", &self.load_state.stage)
             .field("web_revision", &self.web_revision)
             .field("web_selection", &self.web_selection)
             .field("web_selected_text", &self.web_selected_text)

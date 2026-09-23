@@ -11,6 +11,7 @@ mod code_host;
 mod file_policy;
 mod file_profile;
 mod large_text;
+mod loading;
 mod native_editor;
 mod recovery;
 mod resources;
@@ -24,6 +25,7 @@ mod webview_protocol;
 
 pub(crate) use backend::*;
 pub(crate) use file_profile::*;
+pub(crate) use loading::*;
 pub(crate) use native_editor::*;
 pub(crate) use router::*;
 pub(crate) use state::*;
