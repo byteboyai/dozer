@@ -555,6 +555,47 @@ impl PreviewPane {
         })
     }
 
+    /// T3:释放某文件 tab 的运行时 viewer(索引/表格网格/镜像),退回 Suspended
+    /// 壳。route/backend 保留,下次选中会重新物化(窗口化索引随之重建)。这是
+    /// 资源淘汰闭环里"销毁 runtime/WebView"那一步的 tab 侧原语。返回是否动作。
+    /// (T3 闭环的 app 侧接线未完成前,仅测试使用;见 wrap-up T3。)
+    #[allow(dead_code)]
+    pub fn suspend_tab(&mut self, tab_id: usize) -> bool {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return false;
+        };
+        if !matches!(tab.kind, TabKind::File(_))
+            || matches!(tab.backend_state, BackendState::Suspended)
+        {
+            return false;
+        }
+        tab.runtime = PreviewRuntime::None;
+        tab.web_revision = 0;
+        tab.web_selection = None;
+        tab.web_selected_text = None;
+        tab.web_viewport = None;
+        let _ = tab.backend_state.try_transition(BackendState::Suspended);
+        true
+    }
+
+    /// T3:reserve 被拒时给 tab 一个可解释的终态(Failed,可重试),由统一
+    /// fallback 页/错误条呈现,而不是静默空白或无限 loading。
+    /// (T3 闭环的 app 侧接线未完成前,仅测试使用;见 wrap-up T3。)
+    #[allow(dead_code)]
+    pub fn mark_reserve_denied(&mut self, tab_id: usize, reason: impl Into<String>) -> bool {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return false;
+        };
+        let reason = reason.into();
+        tab.runtime = PreviewRuntime::None;
+        tab.web_error = Some(reason.clone());
+        let _ = tab.backend_state.try_transition(BackendState::Loading);
+        let _ = tab
+            .backend_state
+            .try_transition(BackendState::Failed(PreviewError::new(reason, true)));
+        true
+    }
+
     /// 物化一个 Suspended 壳(或从 Failed 重试):标记为 `Loading`。返回 false
     /// 表示该 tab 不存在或当前不是可物化态(幂等保护)。
     pub fn begin_shell_load(&mut self, tab_id: usize) -> bool {
@@ -3086,6 +3127,38 @@ mod tests {
         for f in [rs, csv, huge] {
             std::fs::remove_file(f).ok();
         }
+    }
+
+    /// T3:`suspend_tab` 释放 runtime 并退回 Suspended 壳;`mark_reserve_denied`
+    /// 给出可重试 Failed 终态且不再 host webview。
+    #[test]
+    fn suspend_and_reserve_denied_lifecycle() {
+        let path = windowed_fixture("t3_suspend");
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        let idx = LineIndex::build(&path, 1000, 0).unwrap();
+        assert!(pane.apply_window_index(id, std::sync::Arc::new(idx)));
+        assert!(matches!(
+            pane.tabs().iter().find(|t| t.id == id).unwrap().runtime,
+            PreviewRuntime::Windowed(_)
+        ));
+        // 淘汰:释放 runtime → Suspended。
+        assert!(pane.suspend_tab(id));
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(matches!(tab.runtime, PreviewRuntime::None));
+        assert!(tab.window_index().is_none());
+        assert!(pane.is_suspended(id));
+        assert!(!pane.suspend_tab(id), "已 Suspended 是幂等 no-op");
+
+        // reserve 被拒:可重试 Failed 终态,不吃 webview。
+        assert!(pane.mark_reserve_denied(id, "预览资源预算不足"));
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.backend_state.is_failed());
+        assert!(tab.web_error.is_some());
+        assert!(!tab.hosts_webview(), "Failed 不再 host Flyfish");
+        assert!(pane.is_pending_load(id), "Failed 可重试");
+
+        std::fs::remove_file(&path).ok();
     }
 
     /// T14:索引 revision 与 tab 当前 revision 不符时必须拒绝(旧索引不得套

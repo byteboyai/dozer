@@ -1794,10 +1794,9 @@ fn preview_fallback_page<'a>(
         crate::preview::PreviewBackend::External(_)
             | crate::preview::PreviewBackend::Unsupported(_)
     );
-    let show_failed = tab.backend_state.is_failed()
-        && !tab.hosts_webview()
-        && !tab.uses_editor_host()
-        && !tab.uses_json_editor();
+    // Failed 一律走这一页(hosts_webview/editor/json host 都已在非 Ready 时
+    // 不产出 viewer,原生子视图不会盖住它)。详见 T1/T3。
+    let show_failed = tab.backend_state.is_failed();
     if !(is_ext || show_failed) {
         return None;
     }

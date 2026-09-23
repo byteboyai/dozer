@@ -28,6 +28,15 @@ pub struct EditorHostBinding {
     pub path: PathBuf,
 }
 
+/// `PanelKind` → webview URL 里的 `panel=` token(Files 与 Project 两个预览面板
+/// 共用同一个编辑器 host,靠它区分)。资源淘汰按 URL 里的 `panel=`/`tab=` 定位。
+pub fn panel_token(panel: PanelKind) -> &'static str {
+    match panel {
+        PanelKind::Project => "project",
+        _ => "files",
+    }
+}
+
 impl EditorHostBinding {
     pub fn new(project_id: i64, panel: PanelKind, tab_id: usize, path: PathBuf) -> Self {
         Self {
@@ -45,10 +54,7 @@ impl EditorHostBinding {
     }
 
     pub fn panel_token(&self) -> &'static str {
-        match self.panel {
-            PanelKind::Project => "project",
-            _ => "files",
-        }
+        panel_token(self.panel)
     }
 
     /// webview 池 key(= 本地 id + 面板偏移,与 flyfish 预览一致)。

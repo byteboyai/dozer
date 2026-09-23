@@ -225,8 +225,8 @@ pub(crate) fn sync_webview_pool(
             approved.push((spec, bounds));
             continue;
         };
-        let key = (binding.project_id, binding.tab_id);
-        keep.insert(binding.tab_id);
+        let key = (binding.project_id, binding.panel, binding.tab_id);
+        keep.insert((binding.panel, binding.tab_id));
         if !manager.contains(key) {
             let bytes = std::fs::metadata(&binding.path)
                 .map(|m| m.len().saturating_mul(2).saturating_add(1024 * 1024))
@@ -235,18 +235,23 @@ pub(crate) fn sync_webview_pool(
             let reservation =
                 manager.try_reserve(bytes, true, current_project.unwrap_or(binding.project_id));
             if let crate::preview::Reservation::NeedEviction(keys) = reservation {
-                for (project, tab) in keys {
+                for (project, panel, tab) in keys {
                     let marker = format!("proj={project}");
+                    let panel_marker = format!("panel={}", crate::preview::panel_token(panel));
                     let tab_marker = format!("tab={tab}");
                     let ids: Vec<usize> = pool
                         .iter()
-                        .filter(|(_, (_, url))| url.contains(&marker) && url.contains(&tab_marker))
+                        .filter(|(_, (_, url))| {
+                            url.contains(&marker)
+                                && url.contains(&panel_marker)
+                                && url.contains(&tab_marker)
+                        })
                         .map(|(id, _)| *id)
                         .collect();
                     for id in ids {
                         pool.remove(&id);
                     }
-                    manager.release((project, tab));
+                    manager.release((project, panel, tab));
                 }
             }
             if !matches!(
@@ -262,6 +267,7 @@ pub(crate) fn sync_webview_pool(
             }
             manager.register(crate::preview::ViewerRegistration {
                 project_id: binding.project_id,
+                panel: binding.panel,
                 tab_id: binding.tab_id,
                 estimated_bytes: bytes,
                 heavy_webview: true,

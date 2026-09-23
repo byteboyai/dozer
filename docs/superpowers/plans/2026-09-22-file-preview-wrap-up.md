@@ -140,32 +140,43 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
 
 **目的:** 达成原设计的跨项目总预算，而不是只维护一张与实际对象可能脱节的登记表。
 
-- [ ] 为 CodeMirror、vanilla-jsoneditor、Flyfish、Tabular、Windowed 分别定义
-      估算成本与是否占 heavy WebView 名额。
-- [ ] 所有 viewer 使用统一 `(project_id, panel, tab_id)` 资源键，避免 Files 与
-      Project 面板同 tab id 冲突。
-- [ ] reserve、register、touch、dirty、has_recovery、saving、agent_writing、active
-      在真实生命周期事件中更新。
-- [ ] `NeedEviction` 通过 app 消息执行：
+- [x] 为 CodeMirror、vanilla-jsoneditor、Flyfish、Tabular、Windowed 分别定义
+      估算成本与是否占 heavy WebView 名额(`preview::estimate_cost` +
+      `ViewerCost`;窗口化常驻固定不随文件增长)。
+- [x] 所有 viewer 使用统一 `(project_id, panel, tab_id)` 资源键，避免 Files 与
+      Project 面板同 tab id 冲突(`ViewerKey`/`ViewerRegistration` 加 `panel`;
+      runtime.rs 编辑器 host 接线与 URL `panel=` 定位同步)。
+- [~] reserve、register、touch、dirty、has_recovery、saving、agent_writing、active
+      在真实生命周期事件中更新。(编辑器 host 的 register/touch/active 已接;
+      dirty/recovery/saving/agent_writing 尚未逐事件更新。)
+- [~] `NeedEviction` 通过 app 消息执行：
   1. 校验候选仍可淘汰；
   2. 请求序列化视图状态；
   3. 脏 tab 确认 recovery 已成功；
   4. 销毁 runtime/WebView；
   5. 将 backend state 迁为 Suspended；
   6. 最后 release 预算。
+  (编辑器 host 路径已做"释放候选 + release";完整 6 步(尤其第 2 步视图状态序列化)
+  依赖 T11,未接线。tab 侧原语 `suspend_tab` 已就位。)
 - [ ] 禁止在 `sync_webview_pool` 中只删除 pool 句柄却保持 tab Ready；否则下一帧会
-      重新 desired，产生销毁/重建抖动。
-- [ ] reserve denied 时显示可解释占位，不得静默不创建导致空白。
-- [ ] 切换到 Suspended tab 时重新 reserve；成功后物化，失败时保持壳并显示原因。
-- [ ] 增加资源诊断快照：各 viewer 成本、总预算、heavy 数、最后访问、不可淘汰原因。
+      重新 desired，产生销毁/重建抖动。(现路径仍是删句柄 + release,未迁 tab 为
+      Suspended;待与上面 6 步一起改。)
+- [~] reserve denied 时显示可解释占位，不得静默不创建导致空白。
+      (`PreviewTab::mark_reserve_denied` 原语 + Failed 不再 host webview 已就位;
+      runtime.rs 的 deny 分支尚未调用它。)
+- [x] 切换到 Suspended tab 时重新 reserve；成功后物化，失败时保持壳并显示原因。
+      (`is_pending_load` + `load_preview_tab`;物化路径已在。)
+- [~] 增加资源诊断快照：各 viewer 成本、总预算、heavy 数、最后访问、不可淘汰原因。
+      (`ResourceDiagnostics` 已有 resident/bytes/heavy/budget;逐 viewer 明细与
+      不可淘汰原因待补。)
 
 **自动化:**
 
-- 多项目淘汰顺序：后台干净 → 当前项目非活动干净 → 有 recovery 的脏 tab；
-- active/saving/agent_writing/无 recovery 的脏 tab 不可淘汰；
-- 连续多帧不反复销毁/重建同一 tab；
-- Files/Project 相同本地 tab id 不冲突；
-- Tabular/Flyfish 同样计入预算。
+- [x] 多项目淘汰顺序：后台干净 → 当前项目非活动干净 → 有 recovery 的脏 tab；
+- [x] active/saving/agent_writing/无 recovery 的脏 tab 不可淘汰；
+- [ ] 连续多帧不反复销毁/重建同一 tab；(待 6 步闭环接线)
+- [x] Files/Project 相同本地 tab id 不冲突；
+- [~] Tabular/Flyfish 同样计入预算。(成本模型已定义;F/Tabular 的 register 接线待补。)
 
 **真机:** 验收清单 §7，多项目各打开若干重型文件，观察诊断与 RSS。
 

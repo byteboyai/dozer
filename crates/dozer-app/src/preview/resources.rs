@@ -16,13 +16,16 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::capabilities::ResourceBudgets;
 
-/// viewer 归属键(项目 + tab)。
-pub type ViewerKey = (i64, usize);
+/// viewer 归属键(项目 + 面板 + tab)。**必须含面板**:Files 与 Project 两个
+/// 预览面板各有独立的 `tab_id` 空间,只用 `(project_id, tab_id)` 会让两边同号
+/// tab 互相顶掉预算/Touch(T3)。
+pub type ViewerKey = (i64, crate::app::PanelKind, usize);
 
 /// 一个驻留 viewer 的登记信息(纯数据,由调用方在创建/销毁 viewer 时维护)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ViewerRegistration {
     pub project_id: i64,
+    pub panel: crate::app::PanelKind,
     pub tab_id: usize,
     pub estimated_bytes: u64,
     /// 是否占用一个"重型 WebView"名额(CodeMirror/Flyfish)。
@@ -38,9 +41,10 @@ pub struct ViewerRegistration {
 }
 
 impl ViewerRegistration {
-    pub fn new(project_id: i64, tab_id: usize) -> Self {
+    pub fn new(project_id: i64, panel: crate::app::PanelKind, tab_id: usize) -> Self {
         Self {
             project_id,
+            panel,
             tab_id,
             estimated_bytes: 0,
             heavy_webview: false,
@@ -54,7 +58,7 @@ impl ViewerRegistration {
     }
 
     pub fn key(&self) -> ViewerKey {
-        (self.project_id, self.tab_id)
+        (self.project_id, self.panel, self.tab_id)
     }
 
     /// 是否可以被淘汰。active / saving / agent 写入 / 无 recovery 的脏 tab 不可。
@@ -72,6 +76,62 @@ pub enum Reservation {
     NeedEviction(Vec<ViewerKey>),
     /// 无论如何都放不下(含淘汰后仍超,或没有任何可淘汰者)。
     Denied { reason: String },
+}
+
+/// 一个 viewer 的估算成本与是否占重型 WebView 名额(T3)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ViewerCost {
+    pub estimated_bytes: u64,
+    pub heavy_webview: bool,
+}
+
+/// 窗口化 viewer 的常驻估算(稀疏索引 + 有界窗口),**不随文件大小增长**。
+pub const WINDOWED_RESIDENT_BYTES: u64 = 4 * 1024 * 1024;
+
+/// 按 backend 种类 + 是否窗口化估算一个 tab 的成本(T3):
+/// - 窗口化:常驻只有稀疏索引 + 有界窗口,不随文件线性增长;
+/// - CodeMirror / vanilla-jsoneditor(Tree)/ Flyfish 渲染:重型 WebView,按文件大小估;
+/// - Markdown/HTML 的 Source 模式(若由 CodeMirror 承载)也算重型;
+/// - Tabular 网格:iced 原生(不占重型名额),按文件大小估;
+/// - External/Unsupported:无 viewer,0 成本。
+pub fn estimate_cost(
+    backend: Option<&crate::preview::PreviewBackend>,
+    windowed: bool,
+    file_size: u64,
+) -> ViewerCost {
+    use crate::preview::PreviewBackend;
+    let Some(backend) = backend else {
+        return ViewerCost {
+            estimated_bytes: 0,
+            heavy_webview: false,
+        };
+    };
+    match backend {
+        PreviewBackend::Code(_) => ViewerCost {
+            estimated_bytes: if windowed {
+                WINDOWED_RESIDENT_BYTES
+            } else {
+                file_size
+            },
+            heavy_webview: true,
+        },
+        PreviewBackend::Json(_) => ViewerCost {
+            estimated_bytes: file_size,
+            heavy_webview: true,
+        },
+        PreviewBackend::Rendered(rendered) => ViewerCost {
+            estimated_bytes: file_size,
+            heavy_webview: matches!(rendered.mode, crate::preview::RenderedMode::Rendered),
+        },
+        PreviewBackend::Tabular(_) => ViewerCost {
+            estimated_bytes: file_size,
+            heavy_webview: false,
+        },
+        PreviewBackend::External(_) | PreviewBackend::Unsupported(_) => ViewerCost {
+            estimated_bytes: 0,
+            heavy_webview: false,
+        },
+    }
 }
 
 /// 诊断快照。
@@ -149,9 +209,14 @@ impl ResourceManager {
     }
 
     /// 删除某项目当前帧已经不再驻留的 viewer。
-    pub fn prune_project(&mut self, project_id: i64, keep: &std::collections::HashSet<usize>) {
-        self.registrations
-            .retain(|(project, tab), _| *project != project_id || keep.contains(tab));
+    pub fn prune_project(
+        &mut self,
+        project_id: i64,
+        keep: &std::collections::HashSet<(crate::app::PanelKind, usize)>,
+    ) {
+        self.registrations.retain(|(project, panel, tab), _| {
+            *project != project_id || keep.contains(&(*panel, *tab))
+        });
     }
 
     pub fn clear(&mut self) {
@@ -276,6 +341,7 @@ impl ResourceManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::PanelKind;
 
     fn budgets() -> ResourceBudgets {
         ResourceBudgets {
@@ -288,11 +354,15 @@ mod tests {
         }
     }
 
+    fn k(project: i64, tab: usize) -> ViewerKey {
+        (project, PanelKind::Files, tab)
+    }
+
     fn reg(project: i64, tab: usize, bytes: u64, heavy: bool) -> ViewerRegistration {
         ViewerRegistration {
             estimated_bytes: bytes,
             heavy_webview: heavy,
-            ..ViewerRegistration::new(project, tab)
+            ..ViewerRegistration::new(project, PanelKind::Files, tab)
         }
     }
 
@@ -309,6 +379,21 @@ mod tests {
     }
 
     #[test]
+    fn same_tab_id_across_panels_does_not_collide() {
+        // T3:Files 与 Project 面板各有 tab_id 空间,同号不得互相顶掉。
+        let mut m = ResourceManager::new(budgets());
+        m.register(reg(1, 1, 40, true));
+        let mut project = ViewerRegistration::new(1, PanelKind::Project, 1);
+        project.estimated_bytes = 30;
+        project.heavy_webview = true;
+        m.register(project);
+        assert_eq!(m.total_resident_bytes(), 70);
+        assert_eq!(m.diagnostics().resident_count, 2);
+        m.release((1, PanelKind::Files, 1));
+        assert_eq!(m.total_resident_bytes(), 30, "只释放 Files 那份");
+    }
+
+    #[test]
     fn reserve_within_budget_is_granted() {
         let m = ResourceManager::new(budgets());
         assert_eq!(m.try_reserve(50, true, 1), Reservation::Granted);
@@ -321,7 +406,7 @@ mod tests {
         // 40 + 70 = 110 > 100 → 需要淘汰 40。
         assert_eq!(
             m.try_reserve(70, false, 1),
-            Reservation::NeedEviction(vec![(1, 1)])
+            Reservation::NeedEviction(vec![k(1, 1)])
         );
     }
 
@@ -363,10 +448,10 @@ mod tests {
         ));
 
         // 补上 recovery 后即可淘汰。
-        m.get_mut((2, 1)).unwrap().has_recovery = true;
+        m.get_mut(k(2, 1)).unwrap().has_recovery = true;
         assert_eq!(
             m.try_reserve(70, false, 1),
-            Reservation::NeedEviction(vec![(2, 1)])
+            Reservation::NeedEviction(vec![k(2, 1)])
         );
     }
 
@@ -390,7 +475,7 @@ mod tests {
 
         let order = m.eviction_order(1);
         // 期望:后台干净(3,1) → 后台脏(2,1) → 当前干净(1,2) → 当前脏(1,9)。
-        assert_eq!(order, vec![(3, 1), (2, 1), (1, 2), (1, 9)]);
+        assert_eq!(order, vec![k(3, 1), k(2, 1), k(1, 2), k(1, 9)]);
     }
 
     #[test]
@@ -398,8 +483,8 @@ mod tests {
         let mut m = ResourceManager::new(budgets());
         m.register(reg(2, 1, 10, false));
         m.register(reg(2, 2, 10, false));
-        m.touch((2, 1)); // 1 比 2 更新 → 先淘汰 2。
-        assert_eq!(m.eviction_order(1), vec![(2, 2), (2, 1)]);
+        m.touch(k(2, 1)); // 1 比 2 更新 → 先淘汰 2。
+        assert_eq!(m.eviction_order(1), vec![k(2, 2), k(2, 1)]);
     }
 
     #[test]
@@ -415,8 +500,8 @@ mod tests {
     fn release_frees_budget_and_is_idempotent() {
         let mut m = ResourceManager::new(budgets());
         m.register(reg(1, 1, 40, true));
-        m.release((1, 1));
-        m.release((1, 1));
+        m.release(k(1, 1));
+        m.release(k(1, 1));
         assert_eq!(m.total_resident_bytes(), 0);
         assert_eq!(m.heavy_webviews(), 0);
     }
@@ -428,5 +513,32 @@ mod tests {
         m.register(reg(1, 1, 30, true));
         assert_eq!(m.total_resident_bytes(), 30);
         assert_eq!(m.diagnostics().resident_count, 1);
+    }
+
+    #[test]
+    fn estimate_cost_classifies_backends() {
+        use crate::preview::PreviewBackend;
+        // 窗口化:常驻固定,不随文件增长,重型。
+        let windowed = estimate_cost(
+            Some(&PreviewBackend::Code(crate::preview::CodeBackend {
+                mode: crate::preview::CodeMode::ReadOnly,
+                language: "rust".into(),
+            })),
+            true,
+            500 * 1024 * 1024,
+        );
+        assert_eq!(windowed.estimated_bytes, WINDOWED_RESIDENT_BYTES);
+        assert!(windowed.heavy_webview);
+        // External/Unsupported:无 viewer,0 成本。
+        let ext = PreviewBackend::External(crate::preview::ExternalBackend {
+            reason: crate::preview::RouteReason::ArchiveFallback,
+        });
+        assert_eq!(
+            estimate_cost(Some(&ext), false, 1234),
+            ViewerCost {
+                estimated_bytes: 0,
+                heavy_webview: false
+            }
+        );
     }
 }

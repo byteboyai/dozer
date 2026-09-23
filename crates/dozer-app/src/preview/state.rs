@@ -99,6 +99,9 @@ impl PreviewTab {
     pub fn hosts_webview(&self) -> bool {
         if self.loading
             || matches!(self.backend_state, BackendState::Suspended)
+            // T3/Failed:加载失败不再 host Flyfish,让统一 fallback 页(或
+            // 错误条)真正可见,不被残留的原生子视图盖住。
+            || self.backend_state.is_failed()
             || !matches!(self.kind, TabKind::File(_))
         {
             return false;
