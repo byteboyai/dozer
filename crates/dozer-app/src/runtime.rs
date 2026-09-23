@@ -201,6 +201,15 @@ impl<T> iced_winit::core::widget::Operation<T> for UnfocusTargets {
 /// 左栏、`Project` 在右栏)同时出现在同一个池里,各自摆在各自的位置。
 /// 见 spec "webview 面板的镜像 bounds(2026-08-19 Stage 4a 审阅后修订)"
 /// 一节。
+/// `sync_webview_pool` 的结果:哪些驻留 viewer 被淘汰 / reserve 被拒。调用方
+/// (持 `App`)据此把对应 tab 迁移到 `Suspended`/`Failed`,避免"只删池句柄却
+/// 保持 Ready"导致的逐帧重建抖动(T3)。
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct PoolSyncOutcome {
+    pub evicted: Vec<crate::preview::ViewerKey>,
+    pub denied: Vec<crate::preview::ViewerKey>,
+}
+
 pub(crate) fn sync_webview_pool(
     window: &winit::window::Window,
     pool: &mut std::collections::HashMap<usize, (wry::WebView, String)>,
@@ -209,7 +218,8 @@ pub(crate) fn sync_webview_pool(
     review_snapshot: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     proxy: winit::event_loop::EventLoopProxy<Message>,
     report_title: bool,
-) {
+) -> PoolSyncOutcome {
+    let mut outcome = PoolSyncOutcome::default();
     // CodeMirror editor host 在真正创建 WKWebView 之前 reserve；不足时先
     // 释放本池中 manager 指定的候选，再重试，避免编辑器 tab 累积把机器拖垮。
     let mut approved = Vec::with_capacity(specs.len());
@@ -252,6 +262,7 @@ pub(crate) fn sync_webview_pool(
                         pool.remove(&id);
                     }
                     manager.release((project, panel, tab));
+                    outcome.evicted.push((project, panel, tab));
                 }
             }
             if !matches!(
@@ -263,6 +274,9 @@ pub(crate) fn sync_webview_pool(
                     tab_id = binding.tab_id,
                     "preview resource budget denied editor webview"
                 );
+                outcome
+                    .denied
+                    .push((binding.project_id, binding.panel, binding.tab_id));
                 continue;
             }
             manager.register(crate::preview::ViewerRegistration {
@@ -590,4 +604,5 @@ pub(crate) fn sync_webview_pool(
             }
         }
     }
+    outcome
 }

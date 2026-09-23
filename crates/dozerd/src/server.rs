@@ -833,24 +833,33 @@ async fn handle_conn(
                         // 超过超时时间则回 Timeout(不无限挂起)。
                         Request::RunPreviewCommand { command } => {
                             let request_id = command.request_id.clone();
-                            let rx = preview_commands.enqueue(command);
-                            match tokio::time::timeout(
-                                std::time::Duration::from_millis(
-                                    dozer_core::protocol::PREVIEW_COMMAND_TIMEOUT_MS,
-                                ),
-                                rx,
-                            )
-                            .await
-                            {
-                                Ok(Ok(outcome)) => Reply::PreviewCommandResult { outcome },
-                                _ => {
-                                    preview_commands.forget(&request_id);
-                                    Reply::PreviewCommandResult {
-                                        outcome: dozer_core::protocol::PreviewCommandOutcome::Timeout {
+                            match preview_commands.enqueue(command) {
+                                Err(detail) => Reply::PreviewCommandResult {
+                                    outcome:
+                                        dozer_core::protocol::PreviewCommandOutcome::InternalError {
                                             request_id,
+                                            detail,
                                         },
+                                },
+                                Ok(rx) => match tokio::time::timeout(
+                                    std::time::Duration::from_millis(
+                                        dozer_core::protocol::PREVIEW_COMMAND_TIMEOUT_MS,
+                                    ),
+                                    rx,
+                                )
+                                .await
+                                {
+                                    Ok(Ok(outcome)) => Reply::PreviewCommandResult { outcome },
+                                    _ => {
+                                        preview_commands.forget(&request_id);
+                                        Reply::PreviewCommandResult {
+                                            outcome:
+                                                dozer_core::protocol::PreviewCommandOutcome::Timeout {
+                                                    request_id,
+                                                },
+                                        }
                                     }
-                                }
+                                },
                             }
                         }
                         Request::TakePendingPreviewCommands { project_id } => {

@@ -568,6 +568,12 @@ impl PreviewPane {
             return false;
         }
         tab.runtime = PreviewRuntime::None;
+        // T11:淘汰前没有时间做一次 `SerializeViewState` 往返,直接把最近一次
+        // 节流镜像落成 `pending_view`,重新物化时经 `RestoreViewState` 还原
+        // (cursor/selection/top_line/folds)。
+        if let Some(mirror) = tab.web_view_state.clone() {
+            tab.pending_view = Some(mirror);
+        }
         tab.web_revision = 0;
         tab.web_selection = None;
         tab.web_selected_text = None;
@@ -3539,6 +3545,33 @@ mod tests {
         assert_eq!(pv.top_line, Some(5));
         assert_eq!(pv.folds.len(), 1);
         assert!(ViewStateRestore::default().is_empty());
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// T11/T3:淘汰(suspend)时把最近的视图镜像带进 `pending_view`,重新物化时
+    /// 经 `RestoreViewState` 还原(同一会话内的淘汰→恢复 round-trip)。
+    #[test]
+    fn suspend_carries_view_state_mirror_into_pending_view() {
+        let path = std::env::temp_dir().join(format!("t11_suspend_{}.rs", std::process::id()));
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        let idx = pane.tabs().iter().position(|t| t.id == id).unwrap();
+        pane.tabs_mut()[idx].web_view_state = Some(ViewStateRestore {
+            cursor: Some(TextPosition { line: 2, column: 1 }),
+            selection: None,
+            top_line: Some(9),
+            folds: vec![FoldRange {
+                from_line: 1,
+                to_line: 2,
+            }],
+        });
+        assert!(pane.suspend_tab(id));
+        assert!(pane.is_pending_load(id), "淘汰后应回到可物化态");
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        let pv = tab.pending_view.as_ref().expect("镜像应转成 pending_view");
+        assert_eq!(pv.top_line, Some(9));
+        assert_eq!(pv.folds.len(), 1);
         std::fs::remove_file(&path).ok();
     }
 

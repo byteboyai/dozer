@@ -1049,7 +1049,7 @@ impl Runner {
         // webview 照常显示,右键菜单会被它盖住。
         // `preview_desired` 已经按左右两侧各自算好矩形,直接喂给
         // `sync_webview_pool`(`Files`/`Project` 可分居两侧同时活跃)。
-        crate::runtime::sync_webview_pool(
+        let preview_pool_outcome = crate::runtime::sync_webview_pool(
             window.as_ref(),
             webviews,
             app.preview_desired(logical_w, logical_h)
@@ -1071,6 +1071,9 @@ impl Runner {
             // 预览 webview 不需要回报页面标题,只有浏览器面板要。
             false,
         );
+        // T3:把被淘汰 / reserve 被拒的 tab 真正迁到 Suspended/Failed,避免
+        // 下一帧又重新 desired(销毁/重建抖动)。
+        app.apply_preview_pool_evictions(preview_pool_outcome);
         // 首页右栏浏览器(`home_browser`)占的是右面板区,不是工作区的左
         // 面板预览区,所以单独算一套边界(见 `home_browser_bounds`);工作区
         // 浏览器 2026-08-11 曾短暂迁到右面板,同日已按用户要求移回左面板区

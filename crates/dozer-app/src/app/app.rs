@@ -1222,6 +1222,43 @@ impl App {
         f(ws, &io);
     }
 
+    /// T3:`sync_webview_pool` 报告的被淘汰 / reserve 被拒 viewer,真正迁移对应
+    /// tab 到 `Suspended`(淘汰,保留 route/backend 与视图镜像)或 `Failed`
+    /// (reserve 被拒,显示可解释占位)。这是"资源淘汰必须改变应用状态、不能只
+    /// 删池句柄"的落点,避免下一帧重新 desired 造成销毁/重建抖动。
+    pub(crate) fn apply_preview_pool_evictions(
+        &mut self,
+        outcome: crate::runtime::PoolSyncOutcome,
+    ) {
+        if outcome.evicted.is_empty() && outcome.denied.is_empty() {
+            return;
+        }
+        for (project, panel, tab_id) in &outcome.evicted {
+            if let Some(ws) = loaded_workspace_mut(&mut self.projects, *project) {
+                let pane = if *panel == PanelKind::Project {
+                    &mut ws.project_preview
+                } else {
+                    &mut ws.preview
+                };
+                pane.suspend_tab(*tab_id);
+            }
+        }
+        for (project, panel, tab_id) in &outcome.denied {
+            if let Some(ws) = loaded_workspace_mut(&mut self.projects, *project) {
+                let pane = if *panel == PanelKind::Project {
+                    &mut ws.project_preview
+                } else {
+                    &mut ws.preview
+                };
+                pane.mark_reserve_denied(*tab_id, "预览资源预算不足(可关闭其它大文件后重试)");
+            }
+        }
+        let io = self.shell_io();
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.spawn_preview_state_save(&io);
+        }
+    }
+
     /// `update()` 里"这条异步结果属于**某个指定项目**"的统一入口:按
     /// `project_id` 直接投递到对应槽位,与"此刻聚焦的是谁"完全无关。
     ///

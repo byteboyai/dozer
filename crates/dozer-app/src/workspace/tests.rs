@@ -1285,13 +1285,10 @@ fn preview_tab_display_title_blank_falls_back_to_placeholder_text() {
     assert_eq!(title, "空白", "无项目 → 维持原 \"空白\" 文案");
 }
 
-/// T13:Workspace::apply_preview_command 按 target(Path/Tab)路由到对应 pane,
-/// 并返回确定终态。
+/// T13:resolve_preview_command_target 按 target 解析到 (panel, tab_id)。
 #[test]
-fn apply_preview_command_routes_by_path_and_tab() {
-    use dozer_core::protocol::{
-        PreviewCommand, PreviewCommandAction, PreviewCommandOutcome, PreviewCommandTarget,
-    };
+fn resolve_preview_command_target_by_path_and_tab() {
+    use dozer_core::protocol::{PreviewCommand, PreviewCommandAction, PreviewCommandTarget};
     let (_d, rs) = write_temp_file("t13_nav.rs", "fn main() {}\n");
     let mut ws = Workspace::empty_for_project_placeholder();
     ws.preview.open_path(rs.clone());
@@ -1302,29 +1299,23 @@ fn apply_preview_command_routes_by_path_and_tab() {
         action: PreviewCommandAction::Reveal { line: 1, column: 1 },
         expected_revision: None,
     };
-    let out = ws.apply_preview_command(&mk(PreviewCommandTarget::Path {
+    let loc = ws.resolve_preview_command_target(&mk(PreviewCommandTarget::Path {
         path: rs.to_string_lossy().into_owned(),
     }));
+    assert!(matches!(loc, Some((PanelKind::Files, _))), "{loc:?}");
+
     assert!(
-        matches!(out, PreviewCommandOutcome::Accepted { .. }),
-        "{out:?}"
+        ws.resolve_preview_command_target(&mk(PreviewCommandTarget::Path {
+            path: "/definitely/not/here.rs".into(),
+        }))
+        .is_none()
     );
 
-    let out = ws.apply_preview_command(&mk(PreviewCommandTarget::Path {
-        path: "/definitely/not/here.rs".into(),
-    }));
-    assert!(
-        matches!(out, PreviewCommandOutcome::NotFound { .. }),
-        "{out:?}"
-    );
-
-    // Tab target:缺省面板按 files 处理;未知 tab id → NotFound。
-    let out = ws.apply_preview_command(&mk(PreviewCommandTarget::Tab {
-        panel: "files".into(),
-        tab_id: 9999,
-    }));
-    assert!(
-        matches!(out, PreviewCommandOutcome::NotFound { .. }),
-        "{out:?}"
+    assert_eq!(
+        ws.resolve_preview_command_target(&mk(PreviewCommandTarget::Tab {
+            panel: "project".into(),
+            tab_id: 42,
+        })),
+        Some((PanelKind::Project, 42))
     );
 }

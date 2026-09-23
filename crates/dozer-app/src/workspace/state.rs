@@ -2234,45 +2234,75 @@ impl Workspace {
         }
     }
 
-    /// T13:按命令 target 定位 tab(panel/tab 或 path),交给对应 pane 的
-    /// `apply_preview_command`,返回终态。
+    /// T13:按命令 target 定位 tab(panel/tab 或 path),必要时先物化 Suspended
+    /// 壳(reserve→load→ready),再交给对应 pane 的 `apply_preview_command`,
+    /// 返回终态。
     pub fn apply_preview_command(
         &mut self,
         cmd: &dozer_core::protocol::PreviewCommand,
+        io: &ShellIo,
     ) -> dozer_core::protocol::PreviewCommandOutcome {
-        use dozer_core::protocol::{PreviewCommandOutcome, PreviewCommandTarget};
+        use dozer_core::protocol::PreviewCommandOutcome;
+        let Some((panel_kind, tab_id)) = self.resolve_preview_command_target(cmd) else {
+            return PreviewCommandOutcome::NotFound {
+                request_id: cmd.request_id.clone(),
+                detail: "找不到该路径对应的预览 tab".into(),
+            };
+        };
+        // Suspended 壳:先物化(T3 的 reserve→load→ready),再执行一次性命令。
+        let suspended = {
+            let pane = if panel_kind == PanelKind::Project {
+                &self.project_preview
+            } else {
+                &self.preview
+            };
+            pane.is_pending_load(tab_id)
+        };
+        if suspended {
+            self.load_preview_tab(panel_kind, tab_id, io);
+        }
+        let pane = if panel_kind == PanelKind::Project {
+            &mut self.project_preview
+        } else {
+            &mut self.preview
+        };
+        pane.apply_preview_command(tab_id, cmd)
+    }
+
+    /// T13:解析预览命令目标为 `(panel, tab_id)`。Tab 目标直接用其面板;
+    /// Path 目标在 Files/Project 两个 pane 里按路径找(先 Files)。找不到返回
+    /// `None`(纯函数,便于单测)。
+    pub fn resolve_preview_command_target(
+        &self,
+        cmd: &dozer_core::protocol::PreviewCommand,
+    ) -> Option<(PanelKind, usize)> {
+        use dozer_core::protocol::PreviewCommandTarget;
         match &cmd.target {
-            PreviewCommandTarget::Tab { panel, tab_id } => {
-                let pane = if panel == "project" {
-                    &mut self.project_preview
+            PreviewCommandTarget::Tab { panel, tab_id } => Some((
+                if panel == "project" {
+                    PanelKind::Project
                 } else {
-                    &mut self.preview
-                };
-                pane.apply_preview_command(*tab_id, cmd)
-            }
+                    PanelKind::Files
+                },
+                *tab_id,
+            )),
             PreviewCommandTarget::Path { path } => {
                 let want = std::path::Path::new(path);
-                let in_files = self
+                if let Some(id) = self
                     .preview
                     .tabs()
                     .iter()
                     .find(|t| matches!(&t.kind, TabKind::File(p) if p == want))
-                    .map(|t| t.id);
-                if let Some(id) = in_files {
-                    return self.preview.apply_preview_command(id, cmd);
-                }
-                let in_project = self
-                    .project_preview
-                    .tabs()
-                    .iter()
-                    .find(|t| matches!(&t.kind, TabKind::File(p) if p == want))
-                    .map(|t| t.id);
-                if let Some(id) = in_project {
-                    return self.project_preview.apply_preview_command(id, cmd);
-                }
-                PreviewCommandOutcome::NotFound {
-                    request_id: cmd.request_id.clone(),
-                    detail: "找不到该路径对应的预览 tab".into(),
+                    .map(|t| t.id)
+                {
+                    Some((PanelKind::Files, id))
+                } else {
+                    self.project_preview
+                        .tabs()
+                        .iter()
+                        .find(|t| matches!(&t.kind, TabKind::File(p) if p == want))
+                        .map(|t| t.id)
+                        .map(|id| (PanelKind::Project, id))
                 }
             }
         }

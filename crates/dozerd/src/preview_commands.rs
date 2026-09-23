@@ -23,20 +23,27 @@ impl PreviewCommandBus {
         Self::default()
     }
 
-    /// 入队命令并为它的 `request_id` 注册 waiter,返回接收端。
-    pub fn enqueue(&self, command: PreviewCommand) -> oneshot::Receiver<PreviewCommandOutcome> {
+    /// 入队命令并为它的 `request_id` 注册 waiter,返回接收端。**重复 request id
+    /// 直接拒绝**(`Err`)——否则新 waiter 会顶掉旧 waiter,旧调用方永远等不到。
+    pub fn enqueue(
+        &self,
+        command: PreviewCommand,
+    ) -> Result<oneshot::Receiver<PreviewCommandOutcome>, String> {
         let (tx, rx) = oneshot::channel();
-        self.waiters
-            .lock()
-            .expect("preview waiters")
-            .insert(command.request_id.clone(), tx);
+        {
+            let mut waiters = self.waiters.lock().expect("preview waiters");
+            if waiters.contains_key(&command.request_id) {
+                return Err(format!("重复的 request_id: {}", command.request_id));
+            }
+            waiters.insert(command.request_id.clone(), tx);
+        }
         self.queues
             .lock()
             .expect("preview queues")
             .entry(command.project_id)
             .or_default()
             .push_back(command);
-        rx
+        Ok(rx)
     }
 
     /// app 取走某项目全部待处理命令。
@@ -97,7 +104,7 @@ mod tests {
     #[test]
     fn enqueue_take_and_report_round_trip() {
         let bus = PreviewCommandBus::new();
-        let mut rx = bus.enqueue(cmd("r1", 7));
+        let mut rx = bus.enqueue(cmd("r1", 7)).unwrap();
         let taken = bus.take(7);
         assert_eq!(taken.len(), 1);
         assert_eq!(taken[0].request_id, "r1");
@@ -114,8 +121,8 @@ mod tests {
     #[test]
     fn queues_are_per_project() {
         let bus = PreviewCommandBus::new();
-        let _a = bus.enqueue(cmd("a", 1));
-        let _b = bus.enqueue(cmd("b", 2));
+        let _a = bus.enqueue(cmd("a", 1)).unwrap();
+        let _b = bus.enqueue(cmd("b", 2)).unwrap();
         assert_eq!(bus.take(1).len(), 1);
         assert_eq!(bus.take(2).len(), 1);
     }
@@ -123,7 +130,7 @@ mod tests {
     #[test]
     fn forget_removes_waiter_and_queued_command() {
         let bus = PreviewCommandBus::new();
-        let _rx = bus.enqueue(cmd("r", 3));
+        let _rx = bus.enqueue(cmd("r", 3)).unwrap();
         bus.forget("r");
         assert!(bus.take(3).is_empty(), "已忘掉的命令不应再被 app 取到");
         assert!(!bus.report(PreviewCommandOutcome::Timeout {
@@ -137,5 +144,12 @@ mod tests {
         assert!(!bus.report(PreviewCommandOutcome::Timeout {
             request_id: "nope".into()
         }));
+    }
+
+    #[test]
+    fn duplicate_request_id_is_rejected() {
+        let bus = PreviewCommandBus::new();
+        let _ = bus.enqueue(cmd("dup", 1)).unwrap();
+        assert!(bus.enqueue(cmd("dup", 1)).is_err(), "重复 id 必须拒绝");
     }
 }

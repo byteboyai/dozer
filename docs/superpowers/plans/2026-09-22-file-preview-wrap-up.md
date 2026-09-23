@@ -156,16 +156,19 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
   4. 销毁 runtime/WebView；
   5. 将 backend state 迁为 Suspended；
   6. 最后 release 预算。
-  (编辑器 host 路径已做"释放候选 + release";完整 6 步(尤其第 2 步视图状态序列化)
-  依赖 T11,未接线。tab 侧原语 `suspend_tab` 已就位。)
-- [ ] 禁止在 `sync_webview_pool` 中只删除 pool 句柄却保持 tab Ready；否则下一帧会
-      重新 desired，产生销毁/重建抖动。(现路径仍是删句柄 + release,未迁 tab 为
-      Suspended;待与上面 6 步一起改。)
-- [~] reserve denied 时显示可解释占位，不得静默不创建导致空白。
-      (`PreviewTab::mark_reserve_denied` 原语 + Failed 不再 host webview 已就位;
-      runtime.rs 的 deny 分支尚未调用它。)
+  (已接线:`sync_webview_pool` 返回 `PoolSyncOutcome{evicted,denied}`,
+  `App::apply_preview_pool_evictions` 把被淘汰 tab `suspend_tab`(释放 runtime)、
+  被拒 tab `mark_reserve_denied`;淘汰前用**最近视图镜像**落成 `pending_view`
+  (第 2 步的等价回退,不做往返)。仍未做:脏 tab 的 recovery 确认(第 3 步)、
+  显式 `SerializeViewState` 往返 + 超时。)
+- [x] 禁止在 `sync_webview_pool` 中只删除 pool 句柄却保持 tab Ready；否则下一帧会
+      重新 desired，产生销毁/重建抖动。(淘汰/被拒都会迁 tab 状态,Suspended/
+      Failed 不再 host webview → 不重复 desired。)
+- [x] reserve denied 时显示可解释占位，不得静默不创建导致空白。
+      (`Runtime` 返回 denied key → `App::apply_preview_pool_evictions` 调
+      `PreviewTab::mark_reserve_denied` → Failed → T1 fallback 页。)
 - [x] 切换到 Suspended tab 时重新 reserve；成功后物化，失败时保持壳并显示原因。
-      (`is_pending_load` + `load_preview_tab`;物化路径已在。)
+      (`is_pending_load` + `load_preview_tab`;T13 命令也会先物化 Suspended 壳。)
 - [~] 增加资源诊断快照：各 viewer 成本、总预算、heavy 数、最后访问、不可淘汰原因。
       (`ResourceDiagnostics` 已有 resident/bytes/heavy/budget;逐 viewer 明细与
       不可淘汰原因待补。)
@@ -342,8 +345,9 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
       (`ViewStateRestore` 一个形状贯穿镜像/持久化/`RestoreViewState`;持久化
       `folds` 字段接线)。
 - [~] Suspended/evicted 前请求一次 `SerializeViewState`，设置超时；失败时至少保留
-      最近一次节流镜像。(`SerializeViewState` 命令与 host 处理已有,并已让它回
-      真实 folds;但淘汰闭环尚未接线调用,超时未做。)
+      最近一次节流镜像。(采用"最少打扰"路径:淘汰时**直接用最近镜像**落成
+      `pending_view`(`suspend_tab`),不做往返/超时;显式 `SerializeViewState`
+      请求 + 超时仍未做。)
 - [x] 恢复顺序固定：set document/window → folds → selection/cursor → scroll
       (host `restore_view_state` 内固定顺序;Ready 时在 SetDocument 之后下发)。
 - [x] Windowed 只恢复全局行锚点，不持久化局部文档 offset。
@@ -366,9 +370,9 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
       (`TabularView::reveal_cell/reveal_range` 钳位 + `PreviewPane::reveal_tabular_*`;
       未加载 sheet 返回 `SheetLoadRequest`)。
 - [x] XLSX 保持原生虚拟化 grid，不转换为全量 DOM。
-- [~] suspended Tabular 收到导航命令时按 T3 规则先 reserve/物化，再执行一次性命令。
-      (reveal 对未加载 sheet 返回请求;Suspended tab 唤醒 + 一次性命令重放待
-      T13 通道接线。)
+- [x] suspended Tabular 收到导航命令时按 T3 规则先 reserve/物化，再执行一次性命令。
+      (`Workspace::apply_preview_command` 定位到 `is_pending_load` 的 tab 时先
+      `load_preview_tab` 再应用。)
 
 **自动化:** protocol round-trip、越界钳制、sheet 不存在、suspended 唤醒。
 (前三项已测;suspended 唤醒未测。)
@@ -393,8 +397,8 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
 - [x] 先暴露 reveal/select；它们是导航操作，不与 replace 一起被写权限阻塞
       (`apply_preview_command`:reveal/select 只看 backend 是否支持)。
 - [~] suspended tab：reserve → load → ready → 执行；期间同 tab 命令按 request id
-      排队并可取消。(命令经轮询下发到已存在的 tab;未加载 sheet → `LoadDenied`;
-      suspended tab 物化重放与 request id 排队/取消仍未做。)
+      排队并可取消。(已接线:定位到 Suspended 壳先 `load_preview_tab` 再执行;
+      重复 request id 在 dozerd 总线被拒。仍未做:同 tab 命令排队/取消语义。)
 - [ ] 折叠区目标先展开最小包含范围。(host 已有 unfold 原语,命令路径未接。)
 
 ### T13c. revision-guarded replace
@@ -528,19 +532,23 @@ T14 大文件门槛贯穿 T2/T3/T8，最终阻断发布
    未知文本进 Code;二进制安全降级;HTML 走隔离 host;Streamed/Windowed 有界读取。
 2. **backend/runtime/lifecycle 单一真相** — 完成。`PreviewRuntime` + 删除平行
    迁移字段(T2/T4),`debug_assert` 与结构化 invariant 测试并存。
-3. **跨项目预算 + 真实 suspend/evict** — **partial**。成本模型、统一
-   `(project,panel,tab)` 键、tab 侧 `suspend_tab`/`mark_reserve_denied` 已就位;
-   完整 6 步淘汰闭环(含视图状态序列化)未接线(依赖 T11)。
+3. **跨项目预算 + 真实 suspend/evict** — 基本完成。成本模型、统一
+   `(project,panel,tab)` 键、`sync_webview_pool` 返回 `PoolSyncOutcome`,app 把
+   被淘汰 tab 真正迁 Suspended、被拒 tab 迁 Failed(占位页);淘汰前用最近视图镜像
+   落 `pending_view`。**partial**:脏 tab 的 recovery 确认、显式
+   `SerializeViewState` 往返 + 超时、逐 viewer 诊断明细未做。
 4. **启动只物化当前 tab** — 完成(Suspended 壳 + 按需 `load_preview_tab`)。
 5. **脏内容/外部变化/recovery/revision 冲突不静默丢数据** — 大体完成:T10 冲突态 +
    `save_gate` revision 复校验 + 保存恒拒绝只读/有损。**未做**:异常退出后
    recovery 与磁盘冲突时进入同一 Conflict UI。
 6. **cursor/selection/scroll/folds/Tabular 恢复闭环** — 逻辑层完成(T11:一次
-   `RestoreViewState`,folds→selection→scroll 固定顺序;Tabular sheet/row/col)。
-   **partial**:淘汰前 `SerializeViewState` 请求 + 超时未接;像素/行内偏移未做。
+   `RestoreViewState`,folds→selection→scroll 固定顺序;Tabular sheet/row/col;
+   淘汰时用最近镜像落 `pending_view`,重新物化还原)。**partial**:显式
+   `SerializeViewState` 往返 + 超时;像素/行内偏移。
 7. **Agent 读上下文 + 导航 + revision 守卫写入** — 完成到协议/传输层:T13 命令通道
    (dozerd 队列 + app 轮询 + MCP `preview_navigate`)、reveal/select/replace 的
-   outcome。**partial**:suspended 物化重放、request id 排队/取消、replace 范围回执。
+   outcome;Suspended 壳会被先物化再执行,重复 request id 被拒。**partial**:
+   同 tab 命令排队/取消、replace 范围回执、折叠区导航先展开。
 8. **JSONL/NDJSON 真实 Streamed backend** — 完成到 backend/路由/资源接入(复用
    窗口化有界行视图、搜索、行索引、Agent context)。**partial**:逐行结构化错误节点/
    展开节点、超大 `.json` 预算降级。
@@ -559,8 +567,7 @@ T14 大文件门槛贯穿 T2/T3/T8，最终阻断发布
 
 ### 尚未做的显式缺口(汇总)
 
-- T3 完整淘汰闭环 + T11 淘汰前序列化(互相依赖)。
-- T12/T13 suspended tab 的 reserve→物化→重放 + request id 排队/取消。
-- T8 逐行错误节点/展开节点;超大 `.json` 预算降级。
-- T13 折叠区导航先展开;replace 实际范围回执。
+- T3 脏 tab recovery 确认、显式 `SerializeViewState` 往返/超时、逐 viewer 诊断明细。
+- T13 同 tab 命令排队/取消;折叠区导航先展开;replace 实际范围回执;像素级视图恢复。
+- T8 逐行错误节点/展开节点;超大 `.json` 预算降级;JSONL 加载取消。
 - 全部真机验收项(路由矩阵、RSS、失败截图)。

@@ -501,7 +501,7 @@ impl App {
             Message::PreviewCommandsFetched(project_id, commands) => {
                 self.with_project(project_id, move |ws, io| {
                     for cmd in commands {
-                        let outcome = ws.apply_preview_command(&cmd);
+                        let outcome = ws.apply_preview_command(&cmd, io);
                         let client = io.client.clone();
                         io.handle.spawn(async move {
                             if let Err(e) = client.report_preview_command_outcome(outcome).await {
