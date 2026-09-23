@@ -215,18 +215,10 @@ pub enum HoverId {
     /// Project 面板配对预览"预览/代码切换"按钮,处理方式同 `PreviewRenderMode`
     /// (同一份 `preview_pane_for` 渲染,按 `PreviewPaneKind` 区分)。
     ProjectPreviewRenderMode,
-    /// 文件预览 tab 组最右侧"树 / 原始文本"切换按钮(`FileCode`/`ListTree`,
-    /// 仅 JSON/JSONL tab 有):处理方式同 `PreviewRenderMode`(见
-    /// `tab_widget::tab_json_tree_mode_button`,调用点
-    /// `workspace::preview_pane_for`)。与 `PreviewRenderMode` 互斥——
-    /// JSON/JSONL 不是 `wry_toggle_eligible`,两者不会同时出现。
-    PreviewJsonTreeMode,
-    /// Project 面板配对预览"树 / 原始文本"切换按钮,处理方式同
-    /// `PreviewJsonTreeMode`(同一份 `preview_pane_for` 渲染,按
-    /// `PreviewPaneKind` 区分)。
-    ProjectPreviewJsonTreeMode,
     /// 文件预览 tab 组最右侧"网格 / 原文"切换按钮(CSV/TSV 的 Tabular
-    /// 双视图):处理方式同 `PreviewJsonTreeMode`。
+    /// 双视图):处理方式同 `PreviewRenderMode`(见
+    /// `tab_widget::tab_tabular_mode_button`,调用点
+    /// `workspace::preview_pane_for`)。
     PreviewTabularMode,
     /// Project 面板配对预览"网格 / 原文"切换按钮,处理方式同
     /// `PreviewTabularMode`。

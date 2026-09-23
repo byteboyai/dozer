@@ -22,7 +22,6 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         title: "空白".into(),
         reload_nonce: 0,
         tabular: None,
-        json_tree: None,
         dirty: false,
         loaded_bytes: 0,
         total_bytes: 0,
@@ -305,24 +304,8 @@ impl PreviewPane {
             }
             _ => None,
         };
-        // JSON/JSONL:在原生代码编辑器之外**额外**挂一个树查看器(双视图,
-        // 不排斥 editor)。同 tabular,只登记"正在加载",`(id, path)` 交给
-        // 调用方 `take_pending_json_tree_loads()` 取走 spawn 后台加载。
-        // JSONL/NDJSON(Streamed)挂原生树;严格 JSON 走 vanilla-jsoneditor host,
-        // JSONC/JSON5 走 CodeMirror 文本,都不再需要原生普通树。
-        let json_tree = match &kind {
-            TabKind::File(path)
-                if route
-                    .as_ref()
-                    .is_some_and(|route| route.kind == PreviewKind::Streamed) =>
-            {
-                self.pending_json_tree_loads.push((id, path.clone()));
-                Some(JsonTreeState::Loading)
-            }
-            _ => None,
-        };
         // 新建原生编辑器 tab:键盘事件无需先点击一次即可直达编辑器(见
-        let backend_state = if tabular.is_some() || json_tree.is_some() {
+        let backend_state = if tabular.is_some() {
             BackendState::Loading
         } else {
             backend_state
@@ -337,7 +320,6 @@ impl PreviewPane {
             title,
             reload_nonce: 0,
             tabular,
-            json_tree,
             dirty: false,
             loaded_bytes,
             total_bytes,
@@ -413,7 +395,6 @@ impl PreviewPane {
             title,
             reload_nonce: 0,
             tabular: None,
-            json_tree: None,
             dirty: false,
             loaded_bytes: 0,
             total_bytes: 0,
@@ -466,14 +447,6 @@ impl PreviewPane {
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
             let _ = tab.backend_state.try_transition(BackendState::Ready);
         }
-    }
-
-    /// 物化 JSON/Streamed shell:登记 json_tree 后台加载并置 Loading 态。
-    pub fn set_json_tree_loading(&mut self, tab_id: usize, path: PathBuf) {
-        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
-            tab.json_tree = Some(JsonTreeState::Loading);
-        }
-        self.pending_json_tree_loads.push((tab_id, path));
     }
 
     /// 物化 Tabular shell:登记表格后台加载并置 Loading 态。
@@ -750,12 +723,9 @@ impl PreviewPane {
                     PreviewBackend::Rendered(rendered) if rendered.mode == RenderedMode::Source => {
                         false
                     }
-                    // JSON/Streamed 的 Text 模式(feature 下由 editor host 承载;
-                    // Tree/Streamed 视图仍走原生 json_tree)。
+                    // JSON 的 Text 模式(feature 下由 editor host 承载;
+                    // Tree 视图走 vanilla-jsoneditor host)。
                     PreviewBackend::Json(json) if json.mode == JsonMode::Text => tab.windowed,
-                    PreviewBackend::Streamed(streamed) if streamed.mode == PreviewMode::Text => {
-                        tab.windowed
-                    }
                     // CSV/TSV 原文模式:可编辑纯文本。
                     PreviewBackend::Tabular(tabular) if tabular.mode == TabularMode::Text => false,
                     _ => return None,
@@ -1203,94 +1173,7 @@ impl PreviewPane {
         ready
     }
 
-    /// 按 tab id 取该 tab 的 JSON 树可变引用。tab 不存在、该 tab 不是 JSON、
-    /// 或树还在后台加载中(`JsonTreeState::Loading`)都返回 `None`(展开/滚动
-    /// 这类交互在数据到位前没有意义)。语义与 `tabular_mut` 完全对齐。
-    pub fn json_tree_mut(&mut self, tab_id: usize) -> Option<&mut crate::json_tree::JsonTreeView> {
-        self.tabs
-            .iter_mut()
-            .find(|t| t.id == tab_id)
-            .and_then(|t| t.json_tree.as_mut())
-            .and_then(|t| match t {
-                JsonTreeState::Ready(view) => Some(view.as_mut()),
-                JsonTreeState::Loading => None,
-            })
-    }
-
-    /// 按 tab id 取出该 tab 的 `JsonTreeState` 可变引用,供加载完成回填使用
-    /// (要把 `Loading` 变成 `Ready`)。语义与 `tabular_state_mut` 对齐。
-    pub fn json_tree_state_mut(&mut self, tab_id: usize) -> Option<&mut JsonTreeState> {
-        self.tabs
-            .iter_mut()
-            .find(|t| t.id == tab_id)
-            .and_then(|t| t.json_tree.as_mut())
-    }
-
-    pub fn finish_json_tree_load(
-        &mut self,
-        tab_id: usize,
-        result: Result<crate::json_tree::JsonTreeView, String>,
-    ) {
-        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
-            return;
-        };
-        match result {
-            Ok(mut view) => {
-                if matches!(tab.current_mode(), Some(PreviewMode::Text)) {
-                    view.view_mode = crate::json_tree::ViewMode::RawText;
-                }
-                tab.json_tree = Some(JsonTreeState::Ready(Box::new(view)));
-                let _ = tab.backend_state.try_transition(BackendState::Ready);
-            }
-            Err(message) => {
-                tab.json_tree = None;
-                match tab.backend.as_mut() {
-                    Some(PreviewBackend::Json(json)) => json.mode = JsonMode::Text,
-                    Some(PreviewBackend::Streamed(streamed)) => {
-                        streamed.mode = PreviewMode::Text;
-                    }
-                    _ => {}
-                }
-                if !tab.loading {
-                    let _ = tab
-                        .backend_state
-                        .try_transition(BackendState::Failed(PreviewError::new(message, true)));
-                }
-            }
-        }
-    }
-
-    pub fn sync_json_backend_mode(&mut self, tab_id: usize) {
-        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
-            return;
-        };
-        let Some(JsonTreeState::Ready(view)) = tab.json_tree.as_ref() else {
-            return;
-        };
-        let mode = match view.view_mode {
-            crate::json_tree::ViewMode::Tree => PreviewMode::Tree,
-            crate::json_tree::ViewMode::RawText => PreviewMode::Text,
-        };
-        match tab.backend.as_mut() {
-            Some(PreviewBackend::Json(json)) => {
-                json.mode = if mode == PreviewMode::Text {
-                    JsonMode::Text
-                } else {
-                    JsonMode::Tree
-                };
-            }
-            Some(PreviewBackend::Streamed(streamed)) => {
-                streamed.mode = if mode == PreviewMode::Tree {
-                    PreviewMode::Streamed
-                } else {
-                    mode
-                };
-            }
-            _ => {}
-        }
-    }
-
-    /// 恢复 JSON/Streamed tab 的持久 mode。壳恢复已由 `push_shell_tab` 直接落到
+    /// 恢复 JSON tab 的持久 mode。壳恢复已由 `push_shell_tab` 直接落到
     /// backend 上,这里保留给"已 Ready 的树"场景(暂无调用方)。
     #[allow(dead_code)]
     pub fn restore_json_mode(&mut self, tab_id: usize, mode: PreviewMode) {
@@ -1303,28 +1186,12 @@ impl PreviewPane {
         if !route.supports(mode) {
             return;
         }
-        match tab.backend.as_mut() {
-            Some(PreviewBackend::Json(json)) => {
-                json.mode = match mode {
-                    PreviewMode::Text => JsonMode::Text,
-                    _ => JsonMode::Tree,
-                };
-            }
-            Some(PreviewBackend::Streamed(streamed)) => streamed.mode = mode,
-            _ => {}
-        }
-        if let Some(JsonTreeState::Ready(view)) = tab.json_tree.as_mut() {
-            view.view_mode = match mode {
-                PreviewMode::Text => crate::json_tree::ViewMode::RawText,
-                _ => crate::json_tree::ViewMode::Tree,
+        if let Some(PreviewBackend::Json(json)) = tab.backend.as_mut() {
+            json.mode = match mode {
+                PreviewMode::Text => JsonMode::Text,
+                _ => JsonMode::Tree,
             };
         }
-    }
-
-    /// 取走(清空)JSON 树的后台加载队列。语义与 `take_pending_tabular_loads`
-    /// 完全对齐(见其文档):每次 `open_path` 后立即取走,不跨调用攒着。
-    pub fn take_pending_json_tree_loads(&mut self) -> Vec<(usize, PathBuf)> {
-        std::mem::take(&mut self.pending_json_tree_loads)
     }
 
     /// 编辑保存后调用:按 `PreviewTab.id` 找到对应 tab,推进 reload。原生
@@ -3067,7 +2934,7 @@ mod tests {
         let mut pane = PreviewPane::default();
         let id = pane.open_path(path.clone());
 
-        // 默认 Tree:不产出 editor spec(由原生 json_tree 承载)。
+        // 默认 Tree:不产出 editor spec(由 vanilla-jsoneditor host 承载)。
         assert!(
             pane.desired_editor_webviews(1, crate::app::PanelKind::Files)
                 .iter()
@@ -3080,13 +2947,12 @@ mod tests {
                 .find(|t| t.id == id)
                 .unwrap()
                 .uses_editor_host(),
-            "Tree 模式不算 editor host(否则渲染层会跳过 json_tree 导致黑屏)"
+            "Tree 模式不算 editor host"
         );
 
-        // 切到 Text:模拟树就绪 + 模式同步后的状态。
+        // 切到 Text。
         if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == id) {
             tab.backend_state = BackendState::Ready;
-            tab.json_tree = None;
             if let Some(PreviewBackend::Json(json)) = tab.backend.as_mut() {
                 json.mode = JsonMode::Text;
             }
@@ -3141,7 +3007,6 @@ mod tests {
             }
             let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
             assert!(!tab.uses_json_editor(), "{ext} 不应走 json host");
-            assert!(tab.json_tree.is_none(), "{ext} 不再挂原生普通树");
             assert!(
                 pane.desired_json_webviews(1, crate::app::PanelKind::Files)
                     .iter()

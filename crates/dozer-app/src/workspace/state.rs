@@ -1401,23 +1401,14 @@ impl Workspace {
                 pane.begin_shell_load(tab_id);
                 pane.finish_shell_load(tab_id);
             }
-            // JSONL/NDJSON(Streamed):原生 streamed 树;严格 JSON 走
-            // vanilla-jsoneditor host,JSONC/JSON5 走 CodeMirror 文本,都不需要
-            // 原生普通树。
-            Some(crate::preview::PreviewKind::Streamed) if crate::preview::codemirror_enabled() => {
-                pane.begin_shell_load(tab_id);
-                pane.set_json_tree_loading(tab_id, path.clone());
-                pane.finish_shell_load(tab_id);
-            }
-            // 普通 JSON:严格 .json 走 vanilla-jsoneditor host,JSONC/JSON5 走
-            // CodeMirror 文本,直接 Loading→Ready。
+            // JSON 家族:严格 .json 走 vanilla-jsoneditor host,JSONC/JSON5/
+            // JSONL/NDJSON 走 CodeMirror 文本,直接 Loading→Ready。
             Some(crate::preview::PreviewKind::Json) => {
                 pane.begin_shell_load(tab_id);
                 pane.finish_shell_load(tab_id);
             }
-            // 其余 Code/Streamed 到 editor host / streamed:直接就绪。
-            Some(crate::preview::PreviewKind::Code)
-            | Some(crate::preview::PreviewKind::Streamed) => {
+            // 其余 Code 到 editor host:直接就绪。
+            Some(crate::preview::PreviewKind::Code) => {
                 pane.begin_shell_load(tab_id);
                 pane.finish_shell_load(tab_id);
             }
@@ -1440,9 +1431,8 @@ impl Workspace {
             None => {}
         }
 
-        // 侧载的后台任务(表格/JSON 树)由 Workspace 自己 spawn。
+        // 侧载的后台任务(表格)由 Workspace 自己 spawn。
         self.spawn_pending_tabular_loads(kind, io);
-        self.spawn_pending_json_tree_loads(kind, io);
 
         // Rendered 的 Source 持久模式:物化后切到源码视图(老 iced editor;
         // Markdown/HTML 的 CodeMirror source 留待 Phase D)。
@@ -2109,26 +2099,6 @@ impl Workspace {
         }
     }
 
-    /// JSON 树版本的 `spawn_pending_tabular_loads`:把待加载 JSON tab spawn 到
-    /// 后台,完成后经 `Message::JsonTreeLoaded` 回填。语义完全对齐,见其文档。
-    pub fn spawn_pending_json_tree_loads(&mut self, kind: PanelKind, io: &ShellIo) {
-        let Some(project_id) = self.project_id() else {
-            return;
-        };
-        let pane = if kind == PanelKind::Project {
-            &mut self.project_preview
-        } else {
-            &mut self.preview
-        };
-        for (tab_id, path) in pane.take_pending_json_tree_loads() {
-            let proxy = io.proxy.clone();
-            io.handle.spawn_blocking(move || {
-                let result = crate::json_tree::load(&path);
-                let _ = proxy.send_event(Message::JsonTreeLoaded(project_id, kind, tab_id, result));
-            });
-        }
-    }
-
     /// 表格预览 tab 的交互动作(滚动/sheet 切换):按 `tab_id` 定位对应 tab 的
     /// `TabularView` 并 `apply`。tab 不存在 / 该 tab 不是表格 / 还在加载中都
     /// no-op。切到一个还没加载过的 sheet 时,`apply` 会返回
@@ -2161,58 +2131,6 @@ impl Workspace {
                 kind,
                 tab_id,
                 request.index,
-                result,
-            ));
-        });
-    }
-
-    /// JSON 树预览 tab 的交互动作(滚动/展开折叠/切视图模式):按 `tab_id`
-    /// 定位对应 tab 的 `JsonTreeView` 并 `apply`。tab 不存在 / 不是 JSON /
-    /// 还在加载中都 no-op。点开一个还没解码的节点时,`apply` 返回
-    /// `NodeExpandRequest`——这里负责把它 spawn 到后台解码,完成后经
-    /// `Message::JsonNodeLoaded` 回填(路由方式同 `JsonTreeLoaded`)。
-    ///
-    /// 后台闭包需要的是 `ExpandBytesSource`(而非活着的 view 引用,理由见
-    /// `json_tree::expand` 文档):两次 `json_tree_mut` 各自只借一小段,先
-    /// `apply` 拿到请求,再取 `expand_source_for(request.root_index)` 得到
-    /// 一个可 move 进闭包的独立值,避免把 `&mut pane` 借进 `spawn_blocking`。
-    pub fn preview_pane_json_tree_action(
-        &mut self,
-        kind: PanelKind,
-        tab_id: usize,
-        action: crate::json_tree::Action,
-        io: &ShellIo,
-    ) {
-        let Some(project_id) = self.project_id() else {
-            return;
-        };
-        let pane = if kind == PanelKind::Project {
-            &mut self.project_preview
-        } else {
-            &mut self.preview
-        };
-        let request = pane
-            .json_tree_mut(tab_id)
-            .and_then(|view| view.apply(action));
-        pane.sync_json_backend_mode(tab_id);
-        let Some(request) = request else {
-            return;
-        };
-        let Some(source) = pane
-            .json_tree_mut(tab_id)
-            .map(|view| view.expand_source_for(request.root_index))
-        else {
-            return;
-        };
-        let proxy = io.proxy.clone();
-        io.handle.spawn_blocking(move || {
-            let result = crate::json_tree::expand(&source, &request.path);
-            let _ = proxy.send_event(Message::JsonNodeLoaded(
-                project_id,
-                kind,
-                tab_id,
-                request.path.clone(),
-                request.root_index,
                 result,
             ));
         });

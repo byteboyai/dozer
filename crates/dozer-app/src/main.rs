@@ -11,7 +11,6 @@ mod external_apps;
 mod frosted;
 mod git_accounts;
 mod git_watch;
-mod json_tree;
 mod keymap;
 mod layout;
 mod menu_spec;

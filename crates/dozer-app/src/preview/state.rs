@@ -22,15 +22,6 @@ pub struct PreviewTab {
     /// 那一刻起就恒定,不随加载有没有完成而改变——所有原有 `tabular.is_some()
     /// /is_none()` 判断("这个 tab 是不是已被表格/编辑器认领")因此不用改。
     pub tabular: Option<TabularState>,
-    /// JSON/JSONL 文件的文件 tab 有值,非空即代表这个 tab 额外走 JSON 树查看器
-    /// (在原生代码编辑器之外多给一个只读 Tree 视图,二者用 tab 顶部切换按钮
-    /// 二选一)。**与 `editor`/`tabular` 不同,JSON 不是"独占认领"——它是双
-    /// 视图**:`editor` 仍然有值(原生代码编辑器作为 RawText 半边),`json_tree`
-    /// 同时有值提供 Tree 半边。因此 webview 池判据仍不能被 JSON 认领(见
-    /// `desired_webviews`)。打开那一刻必为 `Some`;唯一的例外是首屏加载失败
-    /// (文件内容不是合法 JSON/JSON5)时被 `PreviewPane::clear_json_tree` 清成
-    /// `None`,退回纯文本编辑器(2026-09-21 用户口径)。
-    pub json_tree: Option<JsonTreeState>,
     /// 原生可编辑 tab 的"buffer 与磁盘不一致"标记:用户就地改过、还没 ⌘S 保存
     /// (或右键"刷新"/项目切换丢弃归零)为 `true`。`Blank`/`webview` tab 恒
     /// `false`。2026-09-06 原生预览不再只读,有了就地编辑就必须能显式挂脏并兜底,
@@ -145,9 +136,9 @@ impl PreviewTab {
     }
 
     /// 是否走 CodeMirror 编辑 host(含窗口化只读)。Rendered 的 **Source** 模式、
-    /// JSON/Streamed 的 **Text** 模式在 feature 打开时走 editor host(替代老 iced
-    /// 文本视图);JSON 的 Tree/Streamed 视图仍由原生 `json_tree` 承载(此时
-    /// 返回 false)。
+    /// JSON(含 JSONC/JSON5/JSONL/NDJSON)的 **Text** 模式在 feature 打开时走
+    /// editor host;JSON 的 Tree 视图由 vanilla-jsoneditor host 承载(此时返回
+    /// false)。
     pub fn uses_editor_host(&self) -> bool {
         if !codemirror_enabled() {
             return false;
@@ -155,7 +146,6 @@ impl PreviewTab {
         match &self.backend {
             Some(PreviewBackend::Code(_)) => true,
             Some(PreviewBackend::Json(json)) => json.mode == JsonMode::Text,
-            Some(PreviewBackend::Streamed(streamed)) => streamed.mode == PreviewMode::Text,
             Some(PreviewBackend::Rendered(r)) => r.mode == RenderedMode::Source,
             // CSV/TSV 的"原文"模式由 editor host 承载(网格仍原生)。
             Some(PreviewBackend::Tabular(t)) => t.mode == TabularMode::Text,
@@ -213,7 +203,7 @@ impl PreviewTab {
                 "route.kind 与 backend 描述必须一致 (tab {:?})",
                 self.title
             );
-            let has_native_viewer = self.tabular.is_some() || self.json_tree.is_some();
+            let has_native_viewer = self.tabular.is_some();
             if has_native_viewer {
                 debug_assert!(
                     !self.hosts_webview(),
@@ -238,7 +228,6 @@ impl std::fmt::Debug for PreviewTab {
             .field("truncated", &self.truncated)
             .field("loading", &self.loading)
             .field("tabular", &self.tabular.is_some())
-            .field("json_tree", &self.json_tree.is_some())
             .field("pending_jump_line", &self.pending_jump_line)
             .field("route", &self.route)
             .field("backend", &self.backend)
@@ -259,16 +248,6 @@ impl std::fmt::Debug for PreviewTab {
 pub enum TabularState {
     Loading,
     Ready(crate::tabular::TabularView),
-}
-
-/// JSON tab 的树查看器加载态。失败时清掉树并优先退回原文编辑器，同时由统一
-/// backend 状态记录最终 Ready/Failed。`Ready` 里
-/// `Box<JsonTreeView>`:该结构体本身 ≥256 字节(内含 `Vec<u8>`/`PathBuf`/
-/// 多个集合),不装箱会让 `Loading` 变体和它之间出现明显的枚举尺寸差
-/// (clippy::large_enum_variant);每个 tab 只存一份,装箱开销可忽略。
-pub enum JsonTreeState {
-    Loading,
-    Ready(Box<crate::json_tree::JsonTreeView>),
 }
 
 /// 预览面板空白页(`TabKind::Blank`)对应的项目根目录简介。`path` 即 `Workspace::
@@ -451,8 +430,6 @@ pub struct PreviewPane {
     /// 返回后立即 `take_pending_tabular_loads()` 取走清空,不应该攒着不取
     /// (见 `PreviewPane::take_pending_tabular_loads` 文档)。
     pub(crate) pending_tabular_loads: Vec<(usize, PathBuf)>,
-    /// 同 `pending_tabular_loads`,但针对 JSON 树查看器(见 `JsonTreeState`)。
-    pub(crate) pending_json_tree_loads: Vec<(usize, PathBuf)>,
     /// 待下发给 CodeMirror editor webview 的命令队列(`tab_id`, 命令)。
     /// `window_events` 每帧(同 `apply_pending_preview_find` 节奏)取走并
     /// `evaluate_script` 注入;Agent reveal/select 与外部 reload 用它。
@@ -493,7 +470,6 @@ impl Default for PreviewPane {
             large_file_search: None,
             pending_webview_find_clear: None,
             pending_tabular_loads: Vec::new(),
-            pending_json_tree_loads: Vec::new(),
             pending_editor_commands: Vec::new(),
             pending_close: Vec::new(),
             blank_info: None,

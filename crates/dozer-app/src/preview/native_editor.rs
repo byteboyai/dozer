@@ -40,6 +40,19 @@ pub(crate) fn prefers_rendered_preview(path: &std::path::Path) -> bool {
     )
 }
 
+/// JSON 家族扩展名(严格 json 与 json5/jsonc/jsonl/ndjson)。路由据此归入
+/// `PreviewKind::Json`;其中严格 `.json` 给 Tree/Text 双视图,其余只给文本。
+pub(crate) fn is_json_family_extension(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
+        "json" | "json5" | "jsonc" | "jsonl" | "ndjson"
+    )
+}
+
 /// tab 上"预览/代码"切换按钮该不该出现:只对"文本可编辑、但默认走渲染"的
 /// 文件出现(目前即 `.md`/`.markdown`/`.html`/`.htm`)。
 pub fn wry_toggle_eligible(path: &std::path::Path) -> bool {

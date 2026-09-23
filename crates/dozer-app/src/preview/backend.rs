@@ -149,13 +149,6 @@ pub enum TabularFormat {
     Workbook,
 }
 
-/// 流式/窗口化 backend 描述(JSONL/NDJSON)。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StreamedBackend {
-    pub reason: RouteReason,
-    pub mode: PreviewMode,
-}
-
 /// 外部打开 backend 描述。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalBackend {
@@ -176,7 +169,6 @@ pub enum PreviewBackend {
     Rendered(RenderedBackend),
     Json(JsonBackend),
     Tabular(TabularBackend),
-    Streamed(StreamedBackend),
     External(ExternalBackend),
     Unsupported(UnsupportedBackend),
 }
@@ -219,10 +211,6 @@ impl PreviewBackend {
                     _ => TabularMode::Grid,
                 },
             }),
-            PreviewKind::Streamed => PreviewBackend::Streamed(StreamedBackend {
-                reason: route.reason,
-                mode: route.default_mode,
-            }),
             PreviewKind::External => PreviewBackend::External(ExternalBackend {
                 reason: route.reason,
             }),
@@ -238,7 +226,6 @@ impl PreviewBackend {
             PreviewBackend::Rendered(_) => PreviewKind::Rendered,
             PreviewBackend::Json(_) => PreviewKind::Json,
             PreviewBackend::Tabular(_) => PreviewKind::Tabular,
-            PreviewBackend::Streamed(_) => PreviewKind::Streamed,
             PreviewBackend::External(_) => PreviewKind::External,
             PreviewBackend::Unsupported(_) => PreviewKind::Unsupported,
         }
@@ -246,7 +233,7 @@ impl PreviewBackend {
 
     /// 该 backend 在 Phase A 是否需要一个 Flyfish wry webview。与改动前
     /// `desired_webviews` 的判据逐项对齐:渲染类、以及压缩包/未知二进制的
-    /// **兜底**都靠 Flyfish 显示;Code/Json/Tabular/Streamed 走原生渲染。
+    /// **兜底**都靠 Flyfish 显示;Code/Json/Tabular 走原生渲染。
     ///
     /// Phase D 落地"未知/压缩包 -> External/Unsupported 的正式 fallback"后,
     /// External/Unsupported 将不再 host webview。
@@ -277,7 +264,6 @@ impl PreviewBackend {
                 TabularMode::Grid => PreviewMode::Tabular,
                 TabularMode::Text => PreviewMode::Text,
             },
-            Self::Streamed(streamed) => streamed.mode,
             Self::External(_) => PreviewMode::External,
             Self::Unsupported(_) => PreviewMode::Unsupported,
         }
@@ -351,7 +337,7 @@ mod tests {
         assert_eq!(backend("README.md", b"x").kind(), PreviewKind::Rendered);
         assert_eq!(backend("a.json", b"{}").kind(), PreviewKind::Json);
         assert_eq!(backend("a.csv", b"a,b").kind(), PreviewKind::Tabular);
-        assert_eq!(backend("a.jsonl", b"{}").kind(), PreviewKind::Streamed);
+        assert_eq!(backend("a.jsonl", b"{}").kind(), PreviewKind::Json);
         assert_eq!(backend("a.zip", b"PK").kind(), PreviewKind::External);
     }
 

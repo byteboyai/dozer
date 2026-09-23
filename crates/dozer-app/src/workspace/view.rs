@@ -4,9 +4,8 @@
 use crate::app::{App, HoverId, Message, PanelKind, tab_divider};
 use crate::chrome::homespace::home_panel_head_with_actions;
 use crate::chrome::tab_widget::{
-    PanelTabArgs, TabOverflowEntry, TabOverflowMenuArgs, panel_tab, tab_json_tree_mode_button,
-    tab_overflow_button, tab_overflow_menu, tab_render_mode_button, tab_tabular_mode_button,
-    tab_window,
+    PanelTabArgs, TabOverflowEntry, TabOverflowMenuArgs, panel_tab, tab_overflow_button,
+    tab_overflow_menu, tab_render_mode_button, tab_tabular_mode_button, tab_window,
 };
 use crate::extensions::conversations;
 use crate::menu_spec::{MenuSpec, MenuSpecItem};
@@ -936,10 +935,6 @@ pub(crate) fn preview_pane_for<'a>(
         PreviewPaneKind::Files => HoverId::PreviewRenderMode,
         PreviewPaneKind::Project => HoverId::ProjectPreviewRenderMode,
     };
-    let json_tree_mode_hover = move || match kind {
-        PreviewPaneKind::Files => HoverId::PreviewJsonTreeMode,
-        PreviewPaneKind::Project => HoverId::ProjectPreviewJsonTreeMode,
-    };
     let tabular_mode_hover = move || match kind {
         PreviewPaneKind::Files => HoverId::PreviewTabularMode,
         PreviewPaneKind::Project => HoverId::ProjectPreviewTabularMode,
@@ -1068,32 +1063,6 @@ pub(crate) fn preview_pane_for<'a>(
             )
         })
     });
-    // JSON/JSONL tab 的「树 / 原始文本」切换按钮:与上面 `.md`/`.html` 的
-    // 「预览/代码」按钮同一处(只对当前选中 tab 出一个),仅当激活 tab 挂着
-    // 已就绪的 `json_tree` 时出现。2026-09-22 从 `json_tree::view` 自己的
-    // 头部行挪来——验收口径是两种双视图切换都长在 tab 栏上。图标随模式换:
-    // 树视图显示 `FileCode`(点它看原始文本),原始文本显示 `ListTree`(点它
-    // 回树)。原始文本态可能没有可复用的原生 `editor`(JSON 若读盘失败),
-    // 此时仍给按钮——切回树视图是唯一有内容的出口。
-    let json_tree_mode_button: Option<
-        Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
-    > = preview.tabs().get(preview.active_idx()).and_then(|tab| {
-        let crate::preview::JsonTreeState::Ready(view) = tab.json_tree.as_ref()? else {
-            return None;
-        };
-        let tab_id = tab.id;
-        let in_raw_text = view.view_mode == crate::json_tree::ViewMode::RawText;
-        Some(tab_json_tree_mode_button(
-            in_raw_text,
-            app.hover_progress(json_tree_mode_hover()),
-            Message::JsonTreeAction(
-                find_panel(),
-                tab_id,
-                crate::json_tree::Action::ToggleViewMode,
-            ),
-            move |hovered| Message::Hover(json_tree_mode_hover(), hovered),
-        ))
-    });
     // CSV/TSV 的「网格 / 原文」切换:仅激活 tab 是 csv/tsv 的 Tabular 时出现。
     // 切到原文(feature 下)由 CodeMirror editor host 承载,网格仍原生。
     let tabular_mode_button: Option<
@@ -1152,9 +1121,6 @@ pub(crate) fn preview_pane_for<'a>(
     }
     tab_bar_row = tab_bar_row.push(clipped);
     if let Some(btn) = render_mode_button {
-        tab_bar_row = tab_bar_row.push(btn);
-    }
-    if let Some(btn) = json_tree_mode_button {
         tab_bar_row = tab_bar_row.push(btn);
     }
     if let Some(btn) = tabular_mode_button {
@@ -1223,41 +1189,6 @@ pub(crate) fn preview_pane_for<'a>(
                     content = content.push(byteui::feedback::math_curve::loading_hint(
                         byteui::feedback::math_curve::Curve::RoseThree,
                         "正在打开表格…",
-                        48.0,
-                    ));
-                }
-            }
-        } else if let Some(json_tree) = &active_tab.json_tree
-            && !active_tab.uses_editor_host()
-            && !active_tab.uses_json_editor()
-        {
-            // JSON/JSONL tab:双视图。Tree 模式下画树(消息映射到
-            // `Message::JsonTreeAction`,带 `tab_id` + `PanelKind`);RawText
-            // 模式下直接渲染该 tab 已有的原生代码编辑器(与上面 `editor` 分支
-            // 逐字一致,复用同一份已加载状态,不重新解析文件)。「树 / 原始
-            // 文本」切换按钮不在这里——2026-09-22 起画在 tab 栏上,与 `.md` 的
-            // 「预览/代码」切换同处(见上方 `json_tree_mode_button`),所以
-            // `json_tree::view()` 只剩树主体。首次加载是后台线程跑的,没跑完时
-            // `JsonTreeState::Loading`,画统一 loading 占位。
-            let tab_id = active_tab.id;
-            let panel = find_panel();
-            match json_tree {
-                crate::preview::JsonTreeState::Ready(view) => {
-                    if view.view_mode == crate::json_tree::ViewMode::Tree {
-                        content = content.push(
-                            container(
-                                view.view()
-                                    .map(move |act| Message::JsonTreeAction(panel, tab_id, act)),
-                            )
-                            .width(Length::Fill)
-                            .height(Length::Fill),
-                        );
-                    }
-                }
-                crate::preview::JsonTreeState::Loading => {
-                    content = content.push(byteui::feedback::math_curve::loading_hint(
-                        byteui::feedback::math_curve::Curve::RoseThree,
-                        "正在打开 JSON…",
                         48.0,
                     ));
                 }

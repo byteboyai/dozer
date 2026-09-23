@@ -27,8 +27,6 @@ pub enum PreviewKind {
     Json,
     /// 表格(CSV/TSV/XLSX/...)。
     Tabular,
-    /// 流式/窗口化查看(JSONL/NDJSON)。
-    Streamed,
     /// 交给外部应用/系统默认应用打开。
     External,
     /// 无内部 viewer,给出可解释降级。
@@ -48,7 +46,6 @@ pub enum PreviewMode {
     /// JSON/表格的原文文本模式。
     Text,
     Tabular,
-    Streamed,
     External,
     Unsupported,
 }
@@ -64,7 +61,6 @@ impl PreviewMode {
             "tree" => Some(Self::Tree),
             "text" => Some(Self::Text),
             "tabular" => Some(Self::Tabular),
-            "streamed" => Some(Self::Streamed),
             "external" => Some(Self::External),
             "unsupported" => Some(Self::Unsupported),
             _ => None,
@@ -77,10 +73,8 @@ impl PreviewMode {
 pub enum RouteReason {
     /// 表格扩展名认领。
     TabularExtension,
-    /// 普通 JSON 扩展名认领。
+    /// 普通 JSON 扩展名认领(含 json5/jsonc/jsonl/ndjson)。
     JsonTreeExtension,
-    /// JSONL/NDJSON 流式扩展名认领。
-    StreamedJsonExtension,
     /// Markdown/HTML 等"可渲染但也可切源码"的扩展名。
     RenderedExtension(&'static str),
     /// 语法高亮器认识的代码扩展名。
@@ -104,7 +98,6 @@ impl fmt::Display for RouteReason {
         match self {
             Self::TabularExtension => write!(f, "表格扩展名"),
             Self::JsonTreeExtension => write!(f, "JSON 树扩展名"),
-            Self::StreamedJsonExtension => write!(f, "JSONL/NDJSON 流式"),
             Self::RenderedExtension(e) => write!(f, "渲染扩展名 .{e}"),
             Self::CodeExtension => write!(f, "代码扩展名"),
             Self::KnownMediaExtension => write!(f, "媒体/文档扩展名"),
@@ -165,11 +158,10 @@ fn classify_kind(path: &Path, profile: &FileProfile) -> (PreviewKind, RouteReaso
     if crate::tabular::is_tabular_extension(path) {
         return (PreviewKind::Tabular, RouteReason::TabularExtension);
     }
-    if crate::json_tree::is_json_tree_extension(path) {
-        return match json_extension(path).as_str() {
-            "jsonl" | "ndjson" => (PreviewKind::Streamed, RouteReason::StreamedJsonExtension),
-            _ => (PreviewKind::Json, RouteReason::JsonTreeExtension),
-        };
+    if crate::preview::native_editor::is_json_family_extension(path) {
+        // JSON 家族统一走 `PreviewKind::Json`:严格 `.json` 给 Tree/Text 双视图,
+        // json5/jsonc/jsonl/ndjson 一律只给 CodeMirror 文本(见 `default_modes`)。
+        return (PreviewKind::Json, RouteReason::JsonTreeExtension);
     }
     if prefers_rendered_preview(path) {
         return (
@@ -206,8 +198,8 @@ fn default_modes(path: &Path, kind: PreviewKind) -> (PreviewMode, Vec<PreviewMod
             }
         }
         PreviewKind::Json => {
-            // 严格 `.json` 树/文本双视图;JSONC/JSON5(含注释)只给 CodeMirror
-            // 文本(vanilla-jsoneditor 不解析注释;自研普通树已退役)。
+            // 严格 `.json` 树/文本双视图;JSONC/JSON5/JSONL/NDJSON 只给 CodeMirror
+            // 文本(vanilla-jsoneditor 不解析注释;JSONL 逐行 JSON 也不是单个文档)。
             if json_extension(path).as_str() == "json" {
                 (PreviewMode::Tree, vec![PreviewMode::Text])
             } else {
@@ -221,7 +213,6 @@ fn default_modes(path: &Path, kind: PreviewKind) -> (PreviewMode, Vec<PreviewMod
                 (PreviewMode::Tabular, Vec::new())
             }
         }
-        PreviewKind::Streamed => (PreviewMode::Streamed, vec![PreviewMode::Text]),
         PreviewKind::External => (PreviewMode::External, Vec::new()),
         PreviewKind::Unsupported => (PreviewMode::Unsupported, Vec::new()),
     }
@@ -369,17 +360,21 @@ mod tests {
         assert_eq!(r.default_mode, PreviewMode::Tree);
         assert_eq!(r.alternate_modes, vec![PreviewMode::Text]);
 
-        for p in ["config.jsonc", "app.json5"] {
-            assert_eq!(route(p, b"{}\n").kind, PreviewKind::Json, "{p}");
+        for p in ["config.jsonc", "app.json5", "events.jsonl", "rows.ndjson"] {
+            let r = route(p, b"{}\n");
+            assert_eq!(r.kind, PreviewKind::Json, "{p}");
+            assert_eq!(r.default_mode, PreviewMode::Text, "{p}");
         }
     }
 
     #[test]
-    fn jsonl_and_ndjson_are_streamed() {
+    fn jsonl_and_ndjson_are_text_like_json5() {
         for p in ["events.jsonl", "rows.ndjson"] {
             let r = route(p, b"{}\n{}\n");
-            assert_eq!(r.kind, PreviewKind::Streamed, "{p}");
-            assert_eq!(r.default_mode, PreviewMode::Streamed, "{p}");
+            assert_eq!(r.kind, PreviewKind::Json, "{p}");
+            assert_eq!(r.default_mode, PreviewMode::Text, "{p}");
+            assert!(r.alternate_modes.is_empty(), "{p}");
+            assert_eq!(r.reason, RouteReason::JsonTreeExtension, "{p}");
         }
     }
 
