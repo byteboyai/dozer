@@ -68,7 +68,7 @@ scripts/build-macos-app.sh [debug|release]   # 打 Dozer.app 包（debug 默认 
 - **文件预览（File Preview）路由与查看器**（见 `docs/superpowers/plans/2026-09-22-file-preview-wrap-up.md`）：
   - CodeMirror 与 vanilla-jsoneditor 常开；老 iced `CodeView`、自研普通 JSON 树与 `syntect` 已删除，永不回归。
   - `preview/router.rs::classify_preview` 是唯一路由决策点。文件名注册表（`Dockerfile`/`Makefile`/`LICENSE*`/`.env`/`.gitignore`…）优先于扩展名，但仍受内容安全检查约束；未知 UTF-8 文本进 Code，未知二进制落 `Unsupported` fallback，空文件按可编辑纯文本。
-  - JSON 家族统一 `PreviewKind::Json`：严格 `.json` 走 vanilla-jsoneditor Tree/Text 双视图，json5/jsonc/jsonl/ndjson 只给 CodeMirror 文本（无树）。
+  - JSON 家族：严格 `.json` 走 vanilla-jsoneditor Tree/Text 双视图，json5/jsonc 只给 CodeMirror 文本（无树）；JSONL/NDJSON 走 `PreviewKind::Streamed`（T8，复用窗口化有界行视图，可切「原文文本」）。
   - **非 UTF-8 / UTF-16 / 二进制**：只读展示，保存恒拒绝（`PreviewTab::can_save` / `save_gate`）；`encoding_lossy` 文件顶部有只读提示（`lossy=1`）。非法编码绝不允许经 `fetch().text()` 解码后回写原文件。
   - **External/Unsupported 不 host webview**，由 `workspace/view.rs::preview_fallback_page` 统一 fallback 页承载（类型/路径/原因 + 重试/纯文本只读/外部打开）。
   - **HTML/HTM 走 `dozer://html/` 隔离 host**（不经 `file://`）：绑定文件放进无脚本 sandbox iframe，CSP 无网络；相对资源只放行「已打开文件所在目录子树」（`assets::serve_html_file`）。

@@ -267,19 +267,30 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
 
 **注意:** 这是新增能力，不是“移除旧 json_tree adapter”。
 
-- [ ] 增加 `PreviewKind::Streamed`、`PreviewMode::Streamed`、
-      `PreviewBackend::Streamed(StreamedBackend)` 及持久化宽容解析。
-- [ ] JSONL/NDJSON 默认迁移到 Streamed；保留“原文文本”可选 mode，作为迁移回退。
-- [ ] Rust 逐行解析，每行独立 root；坏行产生局部错误节点，不使整个文件失败。
-- [ ] 展示层必须虚拟化，只持有可见窗口和有限展开节点；禁止整文件 DOM/JSON tree。
-- [ ] 接入 T2 runtime 与 T3 资源生命周期。
-- [ ] 接入 Rust 全文件搜索、稀疏行索引、结果跳转、全局行号和 Agent context。
-- [ ] 超大单行 JSON 受字节预算限制，显示截断/解析失败说明，不全量分配 DOM。
+- [x] 增加 `PreviewKind::Streamed`、`PreviewMode::Streamed`、
+      `PreviewBackend::Streamed(StreamedBackend)` 及持久化宽容解析
+      (`StreamedMode { Streamed, Text }`;`from_persisted("streamed")`)。
+- [x] JSONL/NDJSON 默认迁移到 Streamed；保留“原文文本”可选 mode，作为迁移回退
+      (默认 `Streamed`,alternate `Text`)。
+- [~] Rust 逐行解析，每行独立 root；坏行产生局部错误节点，不使整个文件失败。
+      (展示复用窗口化行视图,**坏行只显示、不使整个文件失败**;结构化"局部错误
+      节点"未做。)
+- [~] 展示层必须虚拟化，只持有可见窗口和有限展开节点；禁止整文件 DOM/JSON tree。
+      (复用 windowed 有界窗口 → 只持有可见窗口;每行展开节点未做。)
+- [~] 接入 T2 runtime 与 T3 资源生命周期。(runtime 走 `PreviewRuntime::Windowed`,
+      `estimate_cost` 覆盖 Streamed;`register` 仍随 T3 partial。)
+- [x] 接入 Rust 全文件搜索、稀疏行索引、结果跳转、全局行号和 Agent context
+      (Streamed 走 `uses_windowed_editor`,复用 `LineIndex`/`read_window`/
+      `stream_search`/全局行号/context 推送)。
+- [~] 超大单行 JSON 受字节预算限制，显示截断/解析失败说明，不全量分配 DOM。
+      (`WINDOW_MAX_BYTES` 截断 + 横幅已覆盖超长单行;JSON 解析失败说明未做。)
 - [ ] 普通超大 `.json` 根据画像和 JSON Tree 预算决定 Tree、Text/Windowed 或
-      Streamed，不默认把任意巨型 JSON 送入 vanilla-jsoneditor。
+      Streamed，不默认把任意巨型 JSON 送入 vanilla-jsoneditor。(未做。)
 
 **自动化:** 正常 JSONL、空行、坏行、CRLF、UTF-8、多 MB 单行、百万行、取消加载；
 文本回退 mode round-trip。
+(路由/backend/mode/文本回退 round-trip 已测;大文件/多 MB 单行/百万行复用既有
+`large_text` 测试,取消加载未做。)
 
 **真机:** `rows.jsonl`、大 JSONL、坏行 JSONL 的首屏、搜索、跳转、RSS。
 

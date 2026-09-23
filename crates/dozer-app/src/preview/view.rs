@@ -490,6 +490,13 @@ impl PreviewPane {
                 _ => RenderedMode::Rendered,
             };
         }
+        // 流式 JSONL/NDJSON(T8)的 Streamed/Text 持久模式同样补一次。
+        if let PreviewBackend::Streamed(streamed) = &mut backend {
+            streamed.mode = match route.default_mode {
+                PreviewMode::Text => StreamedMode::Text,
+                _ => StreamedMode::Streamed,
+            };
+        }
         let windowed = path_is_windowed(&path, &self.capabilities);
         let runtime = if windowed {
             PreviewRuntime::Windowed(WindowedRuntime::default())
@@ -881,6 +888,10 @@ impl PreviewPane {
                     // JSON 的 Text 模式(feature 下由 editor host 承载;
                     // Tree 视图走 vanilla-jsoneditor host)。
                     PreviewBackend::Json(json) if json.mode == JsonMode::Text => tab.windowed,
+                    // 流式 JSONL/NDJSON:Streamed(默认)只读,Text 回退可编辑。
+                    PreviewBackend::Streamed(streamed) => {
+                        matches!(streamed.mode, StreamedMode::Streamed) || tab.windowed
+                    }
                     // CSV/TSV 原文模式:可编辑纯文本。
                     PreviewBackend::Tabular(tabular) if tabular.mode == TabularMode::Text => false,
                     _ => return None,
@@ -1955,6 +1966,39 @@ mod tests {
         );
 
         std::fs::remove_file(&md_path).ok();
+    }
+
+    /// T8:JSONL 默认走 Streamed backend(editor host,只读),持久化 Text 回退
+    /// 可编辑。
+    #[test]
+    fn streamed_jsonl_uses_editor_host_and_text_fallback() {
+        let path = std::env::temp_dir().join(format!("t8_rows_{}.jsonl", std::process::id()));
+        std::fs::write(&path, "{\"a\":1}\n{\"a\":2}\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(matches!(tab.backend, Some(PreviewBackend::Streamed(_))));
+        assert_eq!(tab.current_mode(), Some(PreviewMode::Streamed));
+        assert!(tab.uses_editor_host(), "Streamed 由 editor host 承载");
+        assert!(!tab.hosts_webview());
+        assert!(tab.backend_read_only(), "Streamed 默认只读");
+        let spec = pane
+            .desired_editor_webviews(1, crate::app::PanelKind::Files)
+            .into_iter()
+            .find(|s| s.id == id)
+            .expect("Streamed 应产出 editor spec");
+        assert!(spec.url.contains("lang=json"));
+        assert!(spec.url.contains("ro=1"));
+
+        // 持久化 Text 回退:可编辑。
+        let idx = pane.tabs().iter().position(|t| t.id == id).unwrap();
+        if let Some(PreviewBackend::Streamed(s)) = pane.tabs_mut()[idx].backend.as_mut() {
+            s.mode = StreamedMode::Text;
+        }
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert_eq!(tab.current_mode(), Some(PreviewMode::Text));
+        assert!(!tab.backend_read_only(), "Text 回退可编辑");
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

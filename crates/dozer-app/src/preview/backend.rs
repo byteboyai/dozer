@@ -129,6 +129,20 @@ pub enum JsonMode {
     Text,
 }
 
+/// 流式 JSONL/NDJSON backend 描述(T8)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamedBackend {
+    pub mode: StreamedMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamedMode {
+    /// 逐行虚拟化视图(默认)。
+    Streamed,
+    /// 原文文本(迁移回退)。
+    Text,
+}
+
 /// 表格 backend 描述。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TabularBackend {
@@ -168,6 +182,7 @@ pub enum PreviewBackend {
     Code(CodeBackend),
     Rendered(RenderedBackend),
     Json(JsonBackend),
+    Streamed(StreamedBackend),
     Tabular(TabularBackend),
     External(ExternalBackend),
     Unsupported(UnsupportedBackend),
@@ -204,6 +219,12 @@ impl PreviewBackend {
                     _ => JsonMode::Tree,
                 },
             }),
+            PreviewKind::Streamed => PreviewBackend::Streamed(StreamedBackend {
+                mode: match route.default_mode {
+                    PreviewMode::Text => StreamedMode::Text,
+                    _ => StreamedMode::Streamed,
+                },
+            }),
             PreviewKind::Tabular => PreviewBackend::Tabular(TabularBackend {
                 format: tabular_format(path),
                 mode: match route.default_mode {
@@ -225,6 +246,7 @@ impl PreviewBackend {
             PreviewBackend::Code(_) => PreviewKind::Code,
             PreviewBackend::Rendered(_) => PreviewKind::Rendered,
             PreviewBackend::Json(_) => PreviewKind::Json,
+            PreviewBackend::Streamed(_) => PreviewKind::Streamed,
             PreviewBackend::Tabular(_) => PreviewKind::Tabular,
             PreviewBackend::External(_) => PreviewKind::External,
             PreviewBackend::Unsupported(_) => PreviewKind::Unsupported,
@@ -255,6 +277,10 @@ impl PreviewBackend {
             Self::Json(json) => match json.mode {
                 JsonMode::Tree => PreviewMode::Tree,
                 JsonMode::Text => PreviewMode::Text,
+            },
+            Self::Streamed(streamed) => match streamed.mode {
+                StreamedMode::Streamed => PreviewMode::Streamed,
+                StreamedMode::Text => PreviewMode::Text,
             },
             Self::Tabular(tabular) => match tabular.mode {
                 TabularMode::Grid => PreviewMode::Tabular,
@@ -337,8 +363,24 @@ mod tests {
         assert_eq!(backend("README.md", b"x").kind(), PreviewKind::Rendered);
         assert_eq!(backend("a.json", b"{}").kind(), PreviewKind::Json);
         assert_eq!(backend("a.csv", b"a,b").kind(), PreviewKind::Tabular);
-        assert_eq!(backend("a.jsonl", b"{}").kind(), PreviewKind::Json);
+        assert_eq!(backend("a.jsonl", b"{}").kind(), PreviewKind::Streamed);
         assert_eq!(backend("a.zip", b"PK").kind(), PreviewKind::External);
+    }
+
+    /// T8:JSONL backend 默认 Streamed,持久化 Text 可回退。
+    #[test]
+    fn streamed_backend_defaults_and_persisted_text() {
+        use crate::preview::router::classify_preview;
+        let profile = analyze(b"{}\n{}\n", None, 6, None);
+        let p = PathBuf::from("rows.jsonl");
+        let route = classify_preview(&p, &profile, &caps(), None);
+        let b = PreviewBackend::from_route(&route, &p, false);
+        assert_eq!(b.current_mode(), PreviewMode::Streamed);
+        assert!(!b.hosts_webview());
+
+        let route_text = classify_preview(&p, &profile, &caps(), Some(PreviewMode::Text));
+        let b_text = PreviewBackend::from_route(&route_text, &p, false);
+        assert_eq!(b_text.current_mode(), PreviewMode::Text);
     }
 
     #[test]

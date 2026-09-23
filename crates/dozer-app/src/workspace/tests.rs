@@ -278,6 +278,7 @@ fn mode_token_covers_all_modes() {
         PreviewMode::Source,
         PreviewMode::Tree,
         PreviewMode::Text,
+        PreviewMode::Streamed,
         PreviewMode::Tabular,
         PreviewMode::External,
         PreviewMode::Unsupported,

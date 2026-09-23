@@ -63,8 +63,9 @@ pub(crate) fn filename_code_rule(path: &std::path::Path) -> Option<(&'static str
     None
 }
 
-/// JSON 家族扩展名(严格 json 与 json5/jsonc/jsonl/ndjson)。路由据此归入
+/// JSON 家族扩展名(严格 json 与 json5/jsonc)。路由据此归入
 /// `PreviewKind::Json`;其中严格 `.json` 给 Tree/Text 双视图,其余只给文本。
+/// JSONL/NDJSON 不在此列——它们走 `PreviewKind::Streamed`(T8)。
 pub(crate) fn is_json_family_extension(path: &std::path::Path) -> bool {
     matches!(
         path.extension()
@@ -72,7 +73,20 @@ pub(crate) fn is_json_family_extension(path: &std::path::Path) -> bool {
             .unwrap_or("")
             .to_ascii_lowercase()
             .as_str(),
-        "json" | "json5" | "jsonc" | "jsonl" | "ndjson"
+        "json" | "json5" | "jsonc"
+    )
+}
+
+/// JSON Lines / NDJSON 扩展名(T8):每行一个独立 JSON root,路由到
+/// `PreviewKind::Streamed`。
+pub(crate) fn is_json_lines_extension(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
+        "jsonl" | "ndjson"
     )
 }
 

@@ -377,6 +377,7 @@ pub(crate) fn mode_token(mode: crate::preview::PreviewMode) -> &'static str {
         PreviewMode::Source => "source",
         PreviewMode::Tree => "tree",
         PreviewMode::Text => "text",
+        PreviewMode::Streamed => "streamed",
         PreviewMode::Tabular => "tabular",
         PreviewMode::External => "external",
         PreviewMode::Unsupported => "unsupported",

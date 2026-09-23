@@ -1429,9 +1429,14 @@ impl Workspace {
                 pane.begin_shell_load(tab_id);
                 pane.finish_shell_load(tab_id);
             }
-            // JSON 家族:严格 .json 走 vanilla-jsoneditor host,JSONC/JSON5/
-            // JSONL/NDJSON 走 CodeMirror 文本,直接 Loading→Ready。
+            // JSON 家族:严格 .json 走 vanilla-jsoneditor host,JSONC/JSON5 走
+            // CodeMirror 文本,直接 Loading→Ready。
             Some(crate::preview::PreviewKind::Json) => {
+                pane.begin_shell_load(tab_id);
+                pane.finish_shell_load(tab_id);
+            }
+            // 流式 JSONL/NDJSON(T8):editor host(Streamed 窗口化只读 / Text)。
+            Some(crate::preview::PreviewKind::Streamed) => {
                 pane.begin_shell_load(tab_id);
                 pane.finish_shell_load(tab_id);
             }

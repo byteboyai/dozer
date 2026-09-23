@@ -119,6 +119,14 @@ pub fn estimate_cost(
             estimated_bytes: file_size,
             heavy_webview: true,
         },
+        PreviewBackend::Streamed(_) => ViewerCost {
+            estimated_bytes: if windowed {
+                WINDOWED_RESIDENT_BYTES
+            } else {
+                file_size
+            },
+            heavy_webview: true,
+        },
         PreviewBackend::Rendered(rendered) => ViewerCost {
             estimated_bytes: file_size,
             heavy_webview: matches!(rendered.mode, crate::preview::RenderedMode::Rendered),

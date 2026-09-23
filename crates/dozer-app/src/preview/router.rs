@@ -28,6 +28,8 @@ pub enum PreviewKind {
     Rendered,
     /// 结构化 JSON(普通 Tree + Text)。
     Json,
+    /// 流式 JSON Lines / NDJSON(T8):逐行独立 root,虚拟化窗口,可切原文文本。
+    Streamed,
     /// 表格(CSV/TSV/XLSX/...)。
     Tabular,
     /// 交给外部应用/系统默认应用打开。
@@ -48,6 +50,8 @@ pub enum PreviewMode {
     Tree,
     /// JSON/表格的原文文本模式。
     Text,
+    /// 流式 JSONL/NDJSON(T8):逐行 root 的虚拟化视图。
+    Streamed,
     Tabular,
     External,
     Unsupported,
@@ -63,6 +67,7 @@ impl PreviewMode {
             "source" => Some(Self::Source),
             "tree" => Some(Self::Tree),
             "text" => Some(Self::Text),
+            "streamed" => Some(Self::Streamed),
             "tabular" => Some(Self::Tabular),
             "external" => Some(Self::External),
             "unsupported" => Some(Self::Unsupported),
@@ -78,6 +83,8 @@ pub enum RouteReason {
     TabularExtension,
     /// 普通 JSON 扩展名认领(含 json5/jsonc/jsonl/ndjson)。
     JsonTreeExtension,
+    /// JSON Lines / NDJSON 扩展名认领(T8,流式)。
+    JsonLinesExtension,
     /// Markdown/HTML/SVG 等"可渲染但也可切源码"的扩展名。
     RenderedExtension(&'static str),
     /// 语法高亮器认识的代码扩展名。
@@ -104,6 +111,7 @@ impl fmt::Display for RouteReason {
         match self {
             Self::TabularExtension => write!(f, "表格扩展名"),
             Self::JsonTreeExtension => write!(f, "JSON 树扩展名"),
+            Self::JsonLinesExtension => write!(f, "JSON Lines 扩展名"),
             Self::RenderedExtension(e) => write!(f, "渲染扩展名 .{e}"),
             Self::CodeExtension => write!(f, "代码扩展名"),
             Self::FilenameRule(rule) => write!(f, "文件名规则 {rule}"),
@@ -189,6 +197,10 @@ fn classify_kind(path: &Path, profile: &FileProfile) -> (PreviewKind, RouteReaso
     if crate::tabular::is_tabular_extension(path) {
         return (PreviewKind::Tabular, RouteReason::TabularExtension);
     }
+    if crate::preview::native_editor::is_json_lines_extension(path) {
+        // JSONL/NDJSON:逐行一个独立 JSON root(T8),走流式 backend。
+        return (PreviewKind::Streamed, RouteReason::JsonLinesExtension);
+    }
     if crate::preview::native_editor::is_json_family_extension(path) {
         // JSON 家族统一走 `PreviewKind::Json`:严格 `.json` 给 Tree/Text 双视图,
         // json5/jsonc/jsonl/ndjson 一律只给 CodeMirror 文本(见 `default_modes`)。
@@ -243,6 +255,10 @@ fn default_modes(path: &Path, kind: PreviewKind) -> (PreviewMode, Vec<PreviewMod
             } else {
                 (PreviewMode::Text, Vec::new())
             }
+        }
+        PreviewKind::Streamed => {
+            // 默认流式;保留"原文文本"作为迁移回退 mode。
+            (PreviewMode::Streamed, vec![PreviewMode::Text])
         }
         PreviewKind::Tabular => {
             if is_csv_like(path) {
@@ -400,7 +416,7 @@ mod tests {
         assert_eq!(r.default_mode, PreviewMode::Tree);
         assert_eq!(r.alternate_modes, vec![PreviewMode::Text]);
 
-        for p in ["config.jsonc", "app.json5", "events.jsonl", "rows.ndjson"] {
+        for p in ["config.jsonc", "app.json5"] {
             let r = route(p, b"{}\n");
             assert_eq!(r.kind, PreviewKind::Json, "{p}");
             assert_eq!(r.default_mode, PreviewMode::Text, "{p}");
@@ -408,13 +424,14 @@ mod tests {
     }
 
     #[test]
-    fn jsonl_and_ndjson_are_text_like_json5() {
+    fn jsonl_and_ndjson_route_to_streamed_with_text_fallback() {
+        // T8:JSONL/NDJSON 走流式 backend;保留"原文文本"作为迁移回退 mode。
         for p in ["events.jsonl", "rows.ndjson"] {
             let r = route(p, b"{}\n{}\n");
-            assert_eq!(r.kind, PreviewKind::Json, "{p}");
-            assert_eq!(r.default_mode, PreviewMode::Text, "{p}");
-            assert!(r.alternate_modes.is_empty(), "{p}");
-            assert_eq!(r.reason, RouteReason::JsonTreeExtension, "{p}");
+            assert_eq!(r.kind, PreviewKind::Streamed, "{p}");
+            assert_eq!(r.default_mode, PreviewMode::Streamed, "{p}");
+            assert_eq!(r.alternate_modes, vec![PreviewMode::Text], "{p}");
+            assert_eq!(r.reason, RouteReason::JsonLinesExtension, "{p}");
         }
     }
 

@@ -108,13 +108,18 @@ impl PreviewTab {
     /// 后端是否只读(Code backend 的 `ReadOnly` 档;其余后端如 Tree/渲染按
     /// 各自语义,这里对非 Code 返回 false)。
     pub fn backend_read_only(&self) -> bool {
-        matches!(
-            self.backend,
+        match self.backend {
             Some(PreviewBackend::Code(CodeBackend {
                 mode: CodeMode::ReadOnly,
                 ..
-            }))
-        )
+            })) => true,
+            // 流式视图只读(逐行虚拟化,不做就地编辑);Text 回退可编辑。
+            Some(PreviewBackend::Streamed(StreamedBackend {
+                mode: StreamedMode::Streamed,
+                ..
+            })) => true,
+            _ => false,
+        }
     }
 
     /// T6:该 tab 是否允许把 editor host 的正文写回磁盘。只读档 / 窗口化 /
@@ -182,6 +187,9 @@ impl PreviewTab {
         match &self.backend {
             Some(PreviewBackend::Code(_)) => true,
             Some(PreviewBackend::Json(json)) => json.mode == JsonMode::Text,
+            // 流式 JSONL/NDJSON(两种 mode)都由 code editor host 承载(T8):
+            // Streamed 走窗口化只读,Text 走普通文本。
+            Some(PreviewBackend::Streamed(_)) => true,
             Some(PreviewBackend::Rendered(r)) => r.mode == RenderedMode::Source,
             // CSV/TSV 的"原文"模式由 editor host 承载(网格仍原生)。
             Some(PreviewBackend::Tabular(t)) => t.mode == TabularMode::Text,

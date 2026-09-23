@@ -82,7 +82,7 @@ echo "$d"
 | `bom_crlf.txt` | CodeMirror | 保存后 BOM 与 CRLF 保留 | 不变 | |
 | `ok.json` | JSON Tree(可切 Text) | tab 栏可切「树 / 文本」 | 不变(vanilla-jsoneditor) | |
 | `cfg.json5` | CodeMirror(jsonc) | 注释 / 尾逗号着色,可编辑 | 不变 | |
-| `rows.jsonl` | **CodeMirror Text(json)** | 当普通文本查看(与 json5 同路;**无**「树/文本」切换) | Streamed 树(T8) | |
+| `rows.jsonl` | Streamed(T8) | 逐行流式视图(窗口化只读);tab 栏可切「原文文本」 | 局部错误节点/展开(T8 剩余) | |
 | `t.csv` | Tabular 网格 | 网格显示;tab 栏可切「网格 / 原文」 | 不变 | |
 | `doc.md` / `page.html` | Rendered + 可切 Source | 渲染;切 Source 进 CodeMirror | HTML 走 `dozer://html/` 隔离 host(T7) | |
 | 图片 / PDF | Rendered(Flyfish) | 正常渲染 | 不变 | |
@@ -174,9 +174,9 @@ echo "$d"
   仅“异常退出后 recovery 与磁盘冲突时进同一 UI”尚未接线。
 - Agent 写操作(reveal/select/replace)无 daemon/MCP 调用入口(T13);休眠 tab
   的 Agent 唤醒未接线。
-- JSONL/NDJSON 当前路由为 `PreviewKind::Json + Text`(与 json5 同路,CodeMirror
-  文本查看),**没有** Streamed viewer;真正的 Streamed JSON backend 是 T8 的
-  新增能力(不再描述为旧 `json_tree` adapter 的延续——该 adapter 已删除)。
+- JSONL/NDJSON 已路由为 `PreviewKind::Streamed`(T8):复用窗口化有界行视图,可切
+  「原文文本」回退;结构化"局部错误节点/每行展开"尚未做。
+- 超大 `.json` 仍按 JSON Tree 处理,未按预算自动降级到 Text/Windowed/Streamed(T8)。
 - 表格无 reveal cell/range,Agent 无“选中单元格”(T12)。
 - HTML 已走 `dozer://html/` 隔离 host(无脚本 sandbox iframe,T7);Flyfish IPC 未迁
   envelope;未接资源管理器(T9)。
