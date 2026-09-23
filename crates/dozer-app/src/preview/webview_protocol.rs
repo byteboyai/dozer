@@ -157,6 +157,17 @@ pub enum EditorCommand {
         #[serde(default)]
         truncated: bool,
     },
+    /// Git Log diff pane 专用:CodeMirror `unifiedMergeView` 需要旧/新两份
+    /// 完整文档自己跑 diff 算法,不是 unified patch 文本。恒只读
+    /// (`read_only` 字段仍保留是为了和其它命令的字段形状一致,当前唯一
+    /// 调用方 `runtime.rs` 恒传 `true`)。
+    SetDiffDocument {
+        old_text: String,
+        new_text: String,
+        language: String,
+        revision: u64,
+        read_only: bool,
+    },
     RevealPosition {
         line: u32,
         column: u32,
@@ -583,6 +594,45 @@ mod tests {
         assert_eq!(v["payload"]["kind"], "set_window");
         assert_eq!(v["payload"]["start_line"], 1001);
         assert_eq!(v["payload"]["truncated"], false);
+    }
+
+    #[test]
+    fn encodes_set_diff_document_command() {
+        let s = encode_command(
+            0,
+            PanelKind::GitLog,
+            0,
+            "gitlog-diff",
+            9,
+            None,
+            EditorCommand::SetDiffDocument {
+                old_text: "old\n".into(),
+                new_text: "new\n".into(),
+                language: "rust".into(),
+                revision: 9,
+                read_only: true,
+            },
+        );
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["payload"]["kind"], "set_diff_document");
+        assert_eq!(v["payload"]["old_text"], "old\n");
+        assert_eq!(v["payload"]["new_text"], "new\n");
+        assert_eq!(v["payload"]["read_only"], true);
+        assert_eq!(v["panel"], "gitlog");
+    }
+
+    #[test]
+    fn set_diff_document_round_trips() {
+        let cmd = EditorCommand::SetDiffDocument {
+            old_text: "a\nb\n".into(),
+            new_text: "a\nc\n".into(),
+            language: "python".into(),
+            revision: 3,
+            read_only: true,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: EditorCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cmd);
     }
 
     /// 关闭脏 tab 前下发的"用当前 buffer 保存一次"命令,payload 只是一个
