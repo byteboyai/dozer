@@ -557,6 +557,54 @@ impl App {
                     }
                 });
             }
+            Message::PreviewProfiled(project_id, panel, tab_id, generation, result) => {
+                self.with_project(project_id, move |ws, io| {
+                    let pane = if panel == PanelKind::Project {
+                        &mut ws.project_preview
+                    } else {
+                        &mut ws.preview
+                    };
+                    match result {
+                        Ok(profile) => {
+                            if !pane.apply_profile(tab_id, generation, &profile) {
+                                // generation 已过期(tab 关闭/重开/被替换):丢弃。
+                                return;
+                            }
+                            // 画像落定:表格继续走它自己的后台解析(TabularLoaded
+                            // 结束);窗口化继续走索引 + 首窗(T4,PreviewWindowIndex
+                            // 期间保持 Loading);其余(viewer 为纯 WebView/host,
+                            // 由 editor `Ready` 事件确认画面)现在即可挂 host。
+                            let (windowed, is_tabular) = pane
+                                .tabs()
+                                .iter()
+                                .find(|t| t.id == tab_id)
+                                .map(|t| (t.windowed, t.tabular_state().is_some()))
+                                .unwrap_or((false, false));
+                            if !windowed && !is_tabular {
+                                pane.finish_load(tab_id, generation);
+                            } else if windowed {
+                                // T4:窗口化在这一步起推进 CreatingHost/Indexing;
+                                // 索引建好(T3 现有 spawn)后经 PreviewWindowIndex 推首窗。
+                                pane.advance_load(
+                                    tab_id,
+                                    generation,
+                                    crate::preview::PreviewLoadStage::Indexing,
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            pane.fail_load(
+                                tab_id,
+                                generation,
+                                crate::preview::PreviewError::new(error, true),
+                            );
+                        }
+                    }
+                    // 画像可能把临时非表格 route 改判为表格:此时才入队,需立即
+                    // spawn(建壳时已入队的由调用方 `preview_open_path` 那侧已 spawn)。
+                    ws.spawn_pending_tabular_loads(panel, io);
+                });
+            }
             Message::PreviewRecoveryWritten(project_id, panel, tab_id) => {
                 self.with_project(project_id, move |ws, _io| {
                     let pane = if panel == PanelKind::Project {
@@ -4135,6 +4183,31 @@ impl App {
         });
     }
 
+    /// T3:把一个文件 tab 的画像(`profile_file`,有界采样 + 病态长首行探测)
+    /// 丢到 `spawn_blocking` 后台线程跑,UI 线程不做任何文件 I/O。完成后经
+    /// [`Message::PreviewProfiled`] 回灌,按 `project_id` 路由 + `generation`
+    /// 闸门丢弃过期结果。`EventLoopProxy` 发送失败(App 已退出)= 任务自然结束。
+    fn spawn_preview_profile(
+        ws: &Workspace,
+        io: &crate::workspace::ShellIo,
+        panel: PanelKind,
+        tab_id: usize,
+        generation: u64,
+        path: &std::path::Path,
+    ) {
+        let Some(project_id) = ws.project_id() else {
+            return;
+        };
+        let path = path.to_path_buf();
+        let proxy = io.proxy.clone();
+        io.handle.spawn_blocking(move || {
+            let result = crate::preview::profile_file(&path).map_err(|e| e.to_string());
+            let _ = proxy.send_event(Message::PreviewProfiled(
+                project_id, panel, tab_id, generation, result,
+            ));
+        });
+    }
+
     /// 打开文件预览:统一走 `PreviewPane::open_path` 按路由得到 editor host /
     /// JSON host / tabular / webview 后端。老 iced 原生编辑器候选的
     /// `insert_loading_tab` + 后台 `read_and_build_native_editor` 异步构造
@@ -4177,7 +4250,8 @@ impl App {
                     tab.pending_jump_line = Some(line);
                 }
             } else {
-                let id = ws.preview.open_path(path.clone());
+                // T3:UI 线程不读盘——建临时 route 壳(Profiling),画像丢后台。
+                let (id, generation) = ws.preview.open_path_provisional(path.clone());
                 // CodeMirror tab 在 host `ready` 后由 `EditorWebviewEvent`
                 // 排队 reveal;webview/表格类仍无法跳转光标,target_line 忽略。
                 if let Some(line) = target_line
@@ -4185,6 +4259,9 @@ impl App {
                     && tab.uses_editor_host()
                 {
                     tab.pending_jump_line = Some(line);
+                }
+                if let Some(generation) = generation {
+                    Self::spawn_preview_profile(ws, io, PanelKind::Files, id, generation, &path);
                 }
             }
             ws.spawn_pending_tabular_loads(PanelKind::Files, io);
@@ -4336,7 +4413,11 @@ impl App {
             if let Some(idx) = ws.project_preview.find_existing_file_tab(&path) {
                 ws.project_preview.select(idx);
             } else {
-                ws.project_preview.open_path(path.clone());
+                // T3:同 Files 预览——建临时 route 壳,画像丢后台。
+                let (id, generation) = ws.project_preview.open_path_provisional(path.clone());
+                if let Some(generation) = generation {
+                    Self::spawn_preview_profile(ws, io, PanelKind::Project, id, generation, &path);
+                }
             }
             ws.spawn_pending_tabular_loads(PanelKind::Project, io);
             // 新 tab 落在末尾(或复用已开文件原位),用 `tab_window_reveal`

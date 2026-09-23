@@ -59,17 +59,42 @@ pub(crate) fn route_and_backend(
     capabilities: &crate::capabilities::ClientCapabilities,
 ) -> (PreviewRoute, PreviewBackend, BackendState) {
     let profile = profile_file(path).unwrap_or_else(|_| analyze(&[], None, 0, None));
-    let route = classify_preview(path, &profile, capabilities, None);
+    let (route, backend, read_only) = route_and_backend_from_profile(path, &profile, capabilities);
+    let _ = read_only;
+    // 创建即 Ready;表格的异步解析在 `push_tab`/`load_preview_tab` 里另行置
+    // Loading(T2 runtime)。
+    (route, backend, BackendState::Ready)
+}
+
+/// **无 I/O** 的临时路由:用空画像(仅按扩展名/文件名注册表)算 route/backend。
+/// 生产打开路径先据此建壳、立即返回(UI 线程不做文件 I/O),后台 `profile_file`
+/// 完成后经 [`route_and_backend_from_profile`] 精修 `read_only`/窗口化/编码
+/// (T3)。对绝大多数按扩展名就能定 kind 的文件,临时 route 与最终 route 一致;
+/// 只有"未知扩展名/文件名注册表 + 内容探针"这类依赖内容的判定会随后修正。
+pub(crate) fn route_and_backend_provisional(
+    path: &std::path::Path,
+    capabilities: &crate::capabilities::ClientCapabilities,
+) -> (PreviewRoute, PreviewBackend, bool) {
+    let profile = analyze(&[], None, 0, None);
+    route_and_backend_from_profile(path, &profile, capabilities)
+}
+
+/// 由画像计算 route/backend/read_only(纯函数,不碰磁盘)。`read_only` 表示
+/// 该 Code backend 是否只读(非 UTF-8/二进制或超预算)。
+pub(crate) fn route_and_backend_from_profile(
+    path: &std::path::Path,
+    profile: &FileProfile,
+    capabilities: &crate::capabilities::ClientCapabilities,
+) -> (PreviewRoute, PreviewBackend, bool) {
+    let route = classify_preview(path, profile, capabilities, None);
     // 只读档:非 UTF-8/二进制(CodeMirror fetch().text() 会丢字节)或
     // `file_policy` 判定非 EditableCode(超 30MiB / 超预算)一律只读。
     let non_text = matches!(profile.utf8, Utf8Status::Invalid)
         || matches!(profile.content_kind, ContentKind::Binary);
-    let policy = decide_text_policy(&profile, &capabilities.budgets);
+    let policy = decide_text_policy(profile, &capabilities.budgets);
     let read_only = non_text || policy.policy != TextFilePolicy::EditableCode;
     let backend = PreviewBackend::from_route(&route, path, read_only);
-    // 创建即 Ready;表格的异步解析在 `push_tab`/`load_preview_tab` 里另行置
-    // Loading(T2 runtime)。
-    (route, backend, BackendState::Ready)
+    (route, backend, read_only)
 }
 
 /// 该文件是否应按 `file_policy` 走**窗口化**(超预算 / 超 128MiB / 超长行)。
@@ -80,7 +105,28 @@ pub(crate) fn path_is_windowed(
     capabilities: &crate::capabilities::ClientCapabilities,
 ) -> bool {
     let profile = profile_file(path).unwrap_or_else(|_| analyze(&[], None, 0, None));
-    decide_text_policy(&profile, &capabilities.budgets).is_windowed()
+    path_is_windowed_profiled(&profile, capabilities)
+}
+
+/// 由画像判定窗口化(纯函数,不碰磁盘)。T3 后台画像回灌后用它重算。
+pub(crate) fn path_is_windowed_profiled(
+    profile: &FileProfile,
+    capabilities: &crate::capabilities::ClientCapabilities,
+) -> bool {
+    decide_text_policy(profile, &capabilities.budgets).is_windowed()
+}
+
+/// 新建文件 tab 时的 route 来源(T3):
+/// - [`TabRoute::SyncProfile`]:老的同步 `profile_file`(测试与遗留调用点);
+/// - [`TabRoute::Provisional`]:无 I/O 的临时 route,后台画像后再精修。
+///
+/// 生产打开路径已全部迁到 `Provisional`(见 `App::preview_open_path*`),故
+/// `SyncProfile` 分支只在测试中构造;与 `open_path`/`push_tab` 一并保留。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+enum TabRoute {
+    SyncProfile,
+    Provisional,
 }
 
 /// Find 输入框的稳定 `widget::Id`。Files / Project 两个预览面板各渲染一根
@@ -353,6 +399,11 @@ impl PreviewPane {
             .position(|t| t.kind == TabKind::File(path.to_path_buf()))
     }
 
+    /// 同步打开(建壳即 Ready,走 `profile_file` 同步画像)。
+    ///
+    /// T3 起生产打开路径改用 [`PreviewPane::open_path_provisional`](UI 线程
+    /// 不读盘);此同步版本保留给测试与"必须立即拿到 Ready tab"的遗留调用点。
+    #[allow(dead_code)]
     pub fn open_path(&mut self, path: PathBuf) -> usize {
         // 同一文件已开则切过去,不重复开 tab（验收反馈）。
         if let Some(idx) = self.find_existing_file_tab(&path) {
@@ -369,16 +420,62 @@ impl PreviewPane {
         self.push_tab(TabKind::File(path), title)
     }
 
+    /// T3:**不读盘**地打开一个文件 tab:按扩展名建临时 route 壳、置
+    /// `BackendState::Loading` + `PreviewLoadStage::Profiling`,立即返回
+    /// `(tab_id, generation)`。调用方随后在后台 `spawn_blocking(profile_file)`,
+    /// 结果经 [`PreviewPane::apply_profile`] 精修。UI 线程不做任何文件 I/O。
+    ///
+    /// 同一文件已开则直接复用、返回其现有 generation(不重新画像),此时调用方
+    /// 不应再派发 profile 任务(见 `App::preview_open_path` 的分支)。
+    pub fn open_path_provisional(&mut self, path: PathBuf) -> (usize, Option<u64>) {
+        if let Some(idx) = self.find_existing_file_tab(&path) {
+            let id = self.tabs[idx].id;
+            self.active = idx;
+            self.cull_stale_find();
+            return (id, None);
+        }
+        let title = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+        let id = self.push_tab_with(TabKind::File(path), title, TabRoute::Provisional);
+        (id, Some(self.load_generation(id)))
+    }
+
+    /// 该 tab 当前 load generation(不存在返回 0)。供调用方 spawn 后台任务时
+    /// 记下,结果回灌时做 generation 闸门。
+    pub fn load_generation(&self, tab_id: usize) -> u64 {
+        self.tabs
+            .iter()
+            .find(|t| t.id == tab_id)
+            .map(|t| t.load_state.generation)
+            .unwrap_or(0)
+    }
+
     /// 追加一个真实 tab(占位 `Blank` 恒在 index 0,这里只用来加 `File`)。
     /// 文件 tab 一律追加在末尾,占位 tab 永远留在最前面,形态对齐 SSH/数据库
     /// 面板 tab 条最前面那个固定"空白"占位。这是唯一的新建文件 tab 路径:
     /// 同步建壳(不读盘),内容由 editor/Flyfish host 或后台任务异步加载。
+    #[allow(dead_code)]
     fn push_tab(&mut self, kind: TabKind, title: String) -> usize {
+        self.push_tab_with(kind, title, TabRoute::SyncProfile)
+    }
+
+    /// `push_tab` 的路由来源选择:[`TabRoute::SyncProfile`] 走老的同步
+    /// `profile_file`(测试与遗留调用点,建完即 Ready);[`TabRoute::Provisional`]
+    /// 走无 I/O 的临时 route 且停在 `Profiling`(生产异步打开路径,T3)。
+    fn push_tab_with(&mut self, kind: TabKind, title: String, route_src: TabRoute) -> usize {
         let id = self.next_id;
         self.next_id += 1;
         let (route, backend, backend_state) = match &kind {
             TabKind::File(path) => {
-                let (route, backend, state) = route_and_backend(path, &self.capabilities);
+                let (route, backend, state) = match route_src {
+                    TabRoute::SyncProfile => route_and_backend(path, &self.capabilities),
+                    TabRoute::Provisional => {
+                        let (r, b, _ro) = route_and_backend_provisional(path, &self.capabilities);
+                        (r, b, BackendState::Loading)
+                    }
+                };
                 (Some(route), Some(backend), state)
             }
             TabKind::Blank => (None, None, BackendState::Ready),
@@ -402,9 +499,13 @@ impl PreviewPane {
             self.pending_tabular_loads.push((id, path.clone()));
             is_tabular = true;
         }
-        let windowed = match &kind {
-            TabKind::File(path) => path_is_windowed(path, &self.capabilities),
-            TabKind::Blank => false,
+        // 临时 route 阶段不做窗口化 I/O 探测(尺寸未知 → 先按非窗口化);真正的
+        // 窗口化判定在 `apply_profile` 里用画像重算(T3)。
+        let windowed = match (&kind, route_src) {
+            (TabKind::File(path), TabRoute::SyncProfile) => {
+                path_is_windowed(path, &self.capabilities)
+            }
+            _ => false,
         };
         let runtime = if is_tabular {
             PreviewRuntime::Tabular(TabularState::Loading)
@@ -418,6 +519,14 @@ impl PreviewPane {
         } else {
             backend_state
         };
+        // 生产异步路径:壳一建好就停在 `Profiling`(generation 1),后台画像
+        // 结果回灌后推进阶段;同步路径保持 `Idle`(老行为,建完即 Ready)。
+        let load_state = match (&kind, route_src) {
+            (TabKind::File(_), TabRoute::Provisional) => {
+                PreviewLoadState::starting(1, PreviewLoadStage::Profiling)
+            }
+            _ => PreviewLoadState::default(),
+        };
         let tab = PreviewTab {
             id,
             kind,
@@ -430,7 +539,7 @@ impl PreviewPane {
             backend,
             backend_state,
             windowed,
-            load_state: PreviewLoadState::default(),
+            load_state,
             recovery_written: false,
             pending_restore: None,
             load_started: None,
@@ -732,6 +841,62 @@ impl PreviewPane {
         }
         self.begin_load(tab_id, PreviewLoadStage::CreatingHost)
             .is_some()
+    }
+
+    /// T3:后台画像完成,精修临时 route 的壳。generation 过期(旧任务)返回
+    /// false,不改动状态。
+    ///
+    /// 用画像重算 `(route, backend, read_only)` 与窗口化,覆盖建壳时的临时
+    /// 扩展名判定。表格类文件此时才把 `(id, path)` 记进 `pending_tabular_loads`
+    /// (临时 route 已按 `.csv`/`.xlsx` 判为表格的,建壳时已入队,这里不重复;
+    /// 只处理"临时判非表格、画像后改判表格"的罕见内容探测场景)。
+    ///
+    /// 注意:本方法只推进 route/backend/窗口化,**不结束加载**——真正的
+    /// `finish_load` 由后续 viewer/host 就绪事件(T4 起)或同步就绪分支负责。
+    pub fn apply_profile(&mut self, tab_id: usize, generation: u64, profile: &FileProfile) -> bool {
+        let capabilities = self.capabilities.clone();
+        // 先在不可变借用下取路径,避免与后面对 `self.pending_tabular_loads` 的
+        // 可变借用冲突。
+        let path = match self.tabs.iter().find(|t| t.id == tab_id) {
+            Some(tab)
+                if tab.load_state.accepts(generation) && matches!(tab.kind, TabKind::File(_)) =>
+            {
+                match &tab.kind {
+                    TabKind::File(p) => p.clone(),
+                    TabKind::Blank => return false,
+                }
+            }
+            _ => return false,
+        };
+        let (route, backend, _read_only) =
+            route_and_backend_from_profile(&path, profile, &capabilities);
+        let windowed = path_is_windowed_profiled(profile, &capabilities);
+        let is_tabular = route.kind == PreviewKind::Tabular;
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return false;
+        };
+        let was_tabular = tab
+            .route
+            .as_ref()
+            .is_some_and(|r| r.kind == PreviewKind::Tabular);
+        tab.route = Some(route);
+        tab.backend = Some(backend);
+        tab.windowed = windowed;
+        // 画像后改判为表格(建壳时未入队)→ 现在入队并置 Loading。
+        let newly_tabular = is_tabular && !was_tabular;
+        if newly_tabular {
+            tab.runtime = PreviewRuntime::Tabular(TabularState::Loading);
+        } else if is_tabular {
+            // 建壳时已入队并置 Loading,保持。
+        } else if windowed {
+            tab.runtime = PreviewRuntime::Windowed(WindowedRuntime::default());
+        } else {
+            tab.runtime = PreviewRuntime::None;
+        }
+        if newly_tabular {
+            self.pending_tabular_loads.push((tab_id, path));
+        }
+        true
     }
 
     /// 物化完成(Loading→Ready),或同步可立即就绪的 shell 直接置 Ready。
@@ -4288,5 +4453,100 @@ mod tests {
         assert!(!pane.finish_load(id, generation));
         // 无在途加载时 cancel 为 no-op。
         assert!(!pane.cancel_load(id));
+    }
+
+    /// T3:`open_path_provisional` 建壳即停在 `Profiling` + `Loading`,返回
+    /// 首个世代;同一文件复用已开 tab 时不再返回世代(调用方不重复派发画像)。
+    #[test]
+    fn open_path_provisional_starts_profiling_and_reuses() {
+        let mut pane = PreviewPane::default();
+        let (id, generation) = pane.open_path_provisional(PathBuf::from("/tmp/t3_a.rs"));
+        assert_eq!(generation, Some(1));
+        assert_eq!(pane.load_stage(id), PreviewLoadStage::Profiling);
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(matches!(tab.backend_state, BackendState::Loading));
+        assert!(!tab.hosts_webview(), "Loading 期不得挂 webview");
+        // 复用已开文件:同 id,不再返回世代。
+        let (id2, generation2) = pane.open_path_provisional(PathBuf::from("/tmp/t3_a.rs"));
+        assert_eq!(id2, id);
+        assert_eq!(generation2, None);
+    }
+
+    /// T3:后台画像回灌精修 route/后端世代闸门——过期画像(世代不符)必须被
+    /// 丢弃;匹配的画像把临时壳推进到与画像一致的 route。
+    #[test]
+    fn apply_profile_is_generation_gated_and_refines_route() {
+        let mut pane = PreviewPane::default();
+        let (id, generation) = pane.open_path_provisional(PathBuf::from("/tmp/t3_b.rs"));
+        let generation = generation.unwrap();
+        // 过期世代:拒绝。
+        assert!(!pane.apply_profile(
+            id,
+            generation + 1,
+            &analyze(b"fn main(){}\n", None, 11, None)
+        ));
+        // 匹配世代:用真实画像精修(小可编辑文本 → Code,可编辑)。
+        assert!(pane.apply_profile(id, generation, &analyze(b"fn main(){}\n", None, 11, None)));
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert_eq!(tab.route.as_ref().unwrap().kind, PreviewKind::Code);
+        assert!(!tab.windowed);
+        assert!(
+            tab.backend_state.is_ready() || matches!(tab.backend_state, BackendState::Loading),
+            "apply_profile 只改 route,不改 Loading(tab 结束由调用方 finish)"
+        );
+    }
+
+    /// T3:临时 route(尺寸未知)按非窗口化;真实画像回灌后大文件**升级为
+    /// 窗口化**,runtime 换成 `Windowed`。
+    #[test]
+    fn apply_profile_upgrades_to_windowed() {
+        let path = windowed_fixture("t3_upgrade_windowed");
+        let mut pane = PreviewPane::default();
+        let (id, generation) = pane.open_path_provisional(path.clone());
+        let generation = generation.unwrap();
+        // 建壳阶段:不读盘 → 非窗口化。
+        assert!(!pane.tabs().iter().find(|t| t.id == id).unwrap().windowed);
+        // 回灌真实画像:超长单行 → 窗口化。
+        let profile = profile_file(&path).unwrap();
+        assert!(pane.apply_profile(id, generation, &profile));
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.windowed);
+        assert!(matches!(tab.runtime, PreviewRuntime::Windowed(_)));
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// T3:未知扩展名 + 二进制内容——临时 route 无法按扩展名判定(落空画像
+    /// `Empty` → Code),真实画像回灌后**改判 Unsupported**(安全 fallback)。
+    #[test]
+    fn apply_profile_unknown_binary_becomes_unsupported() {
+        let mut pane = PreviewPane::default();
+        let (id, generation) = pane.open_path_provisional(PathBuf::from("/tmp/t3_unknown.binxyz"));
+        let generation = generation.unwrap();
+        assert_eq!(
+            pane.tabs()
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap()
+                .route
+                .as_ref()
+                .unwrap()
+                .kind,
+            PreviewKind::Code,
+            "临时 route 对未知扩展名按空内容(Empty)判 Code"
+        );
+        // 带 NUL 的二进制内容。
+        let profile = analyze(b"\x00\x01\x02rubbish", None, 10, None);
+        assert!(pane.apply_profile(id, generation, &profile));
+        assert_eq!(
+            pane.tabs()
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap()
+                .route
+                .as_ref()
+                .unwrap()
+                .kind,
+            PreviewKind::Unsupported
+        );
     }
 }

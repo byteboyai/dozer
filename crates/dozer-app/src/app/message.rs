@@ -586,6 +586,18 @@ pub enum Message {
     /// T13:后台轮询取回的待处理预览命令(project_id, 命令列表)。处理后逐条
     /// 回报终态给 dozerd。
     PreviewCommandsFetched(i64, Vec<dozer_core::protocol::PreviewCommand>),
+    /// T3:文件 tab 的后台画像(`spawn_blocking(profile_file)`)完成回灌
+    /// (后台线程 → UI 线程)。`project_id` 按项目路由(异步结果可能晚于用户
+    /// 切走项目才回来,同 `TabularLoaded`);`PanelKind`+`tab_id` 定位面板/tab;
+    /// `generation` 是建壳时记下的 load generation,用于丢弃过期结果(用户在
+    /// 画像期间关闭/重开/tab 已被替换)。
+    PreviewProfiled(
+        ProjectId,
+        PanelKind,
+        usize,
+        u64,
+        Result<crate::preview::FileProfile, String>,
+    ),
     /// 窗口化 viewer 的稀疏行索引建立完成(后台线程 → UI 线程)。成功后由
     /// App 推送初始窗口(必要时先 reveal 到目标行)。
     PreviewWindowIndex(
