@@ -359,27 +359,34 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
 
 ### T13a. 独立协议设计
 
-- [ ] 先形成 daemon → app 命令通道小型 spec，明确：app 注册/重连、多 app 实例
+- [x] 先形成 daemon → app 命令通道小型 spec，明确：app 注册/重连、多 app 实例
       选择、project/tab 定位、request id、reply、超时、取消、权限和版本兼容。
-- [ ] 命令结果必须区分 accepted、not found、stale revision、unsupported backend、
-      load denied、timeout、internal error。
-- [ ] app 退出或 tab 关闭时，待处理命令收到确定失败，不能无限等待。
+      (`docs/superpowers/specs/2026-09-24-preview-command-channel-design.md`)
+- [x] 命令结果必须区分 accepted、not found、stale revision、unsupported backend、
+      load denied、timeout、internal error(`PreviewCommandOutcome`)。
+- [~] app 退出或 tab 关闭时，待处理命令收到确定失败，不能无限等待。(协议已定
+      `Timeout`/`NotFound`;dozerd 侧 in-flight 登记与断连清理待接线。)
 
 ### T13b. 只读导航
 
-- [ ] 先暴露 reveal/select；它们是导航操作，不与 replace 一起被写权限阻塞。
-- [ ] suspended tab：reserve → load → ready → 执行；期间同 tab 命令按 request id
-      排队并可取消。
-- [ ] 折叠区目标先展开最小包含范围。
+- [x] 先暴露 reveal/select；它们是导航操作，不与 replace 一起被写权限阻塞
+      (`apply_preview_command`:reveal/select 只看 backend 是否支持)。
+- [~] suspended tab：reserve → load → ready → 执行；期间同 tab 命令按 request id
+      排队并可取消。(未加载 sheet 返回 `LoadDenied`;排队/取消/物化重放待接线。)
+- [ ] 折叠区目标先展开最小包含范围。(host 已有 unfold 原语,命令路径未接。)
 
 ### T13c. revision-guarded replace
 
-- [ ] replace 仅支持可写 CodeMirror，必须携带 `expected_revision`。
-- [ ] app 执行前再次比较当前 revision；失配拒绝并返回 current revision。
-- [ ] 成功返回新 revision 和实际替换范围；不得由 daemon 猜测 revision 增量。
+- [x] replace 仅支持可写 CodeMirror，必须携带 `expected_revision`。
+- [x] app 执行前再次比较当前 revision；失配拒绝并返回 current revision
+      (`StaleRevision { current_revision }`)。
+- [~] 成功返回新 revision 和实际替换范围；不得由 daemon 猜测 revision 增量。
+      (排队 `ReplaceRange { revision }`;「实际替换范围」待 host 回执。)
 
 **自动化:** dozer-core serde、dozer-client、dozerd 路由、MCP tool、app handler 的
 端到端 round-trip；断线、超时、旧 tab id、revision 冲突和重复 request id。
+(dozer-core serde round-trip 与 app handler 纯逻辑已测;dozer-client/dozerd/MCP
+端到端与断线/超时/重复 id 未做。)
 
 ---
 

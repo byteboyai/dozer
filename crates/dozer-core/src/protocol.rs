@@ -242,6 +242,91 @@ impl PreviewTabularContext {
     }
 }
 
+/// T13:daemon → app 预览命令的目标定位。先按 tab(含面板),否则按项目内路径。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "by", rename_all = "snake_case")]
+pub enum PreviewCommandTarget {
+    /// 按 tab 定位;`panel` 为 `"files"` / `"project"`。
+    Tab { panel: String, tab_id: usize },
+    /// 按项目内文件路径定位(取该路径当前激活的 tab)。
+    Path { path: String },
+}
+
+/// T13:预览命令动作。reveal/select/reveal_cell 是只读导航(不受写权限阻塞);
+/// replace 仅支持可写 CodeMirror 且必须带 `expected_revision`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PreviewCommandAction {
+    /// 滚动并定位光标(1-based)。
+    Reveal { line: u32, column: u32 },
+    /// 选中范围(1-based,含端点)。
+    Select {
+        start_line: u32,
+        start_column: u32,
+        end_line: u32,
+        end_column: u32,
+    },
+    /// 表格单元格 reveal(0-based sheet/row/col)。
+    RevealCell { sheet: usize, row: u32, col: u32 },
+    /// 替换范围(仅可写 CodeMirror;必须带 `expected_revision`)。
+    Replace {
+        start_line: u32,
+        start_column: u32,
+        end_line: u32,
+        end_column: u32,
+        text: String,
+    },
+}
+
+/// T13:一条下行预览命令。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PreviewCommand {
+    pub request_id: String,
+    pub project_id: i64,
+    pub target: PreviewCommandTarget,
+    pub action: PreviewCommandAction,
+    /// replace 必填(期望的文档 revision);其余动作忽略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<u64>,
+}
+
+/// T13:命令结果(确定终态,区分所有失败类别,不无限等待)。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum PreviewCommandOutcome {
+    /// 已接受并执行(导航立即生效;replace 已落 editor buffer 待保存)。
+    Accepted { request_id: String },
+    /// 目标 tab / 文件不存在(或已关闭)。
+    NotFound { request_id: String, detail: String },
+    /// replace 的 `expected_revision` 与当前不一致;返回当前 revision。
+    StaleRevision {
+        request_id: String,
+        current_revision: u64,
+    },
+    /// 目标 backend 不支持该动作(如对图片 reveal、对只读 tab replace)。
+    UnsupportedBackend { request_id: String, detail: String },
+    /// 资源预算拒绝加载(suspended 唤醒失败)。
+    LoadDenied { request_id: String, detail: String },
+    /// app 不在线 / 处理超时(由 daemon 判定)。
+    Timeout { request_id: String },
+    /// 其它内部错误。
+    InternalError { request_id: String, detail: String },
+}
+
+impl PreviewCommandOutcome {
+    pub fn request_id(&self) -> &str {
+        match self {
+            Self::Accepted { request_id }
+            | Self::NotFound { request_id, .. }
+            | Self::StaleRevision { request_id, .. }
+            | Self::UnsupportedBackend { request_id, .. }
+            | Self::LoadDenied { request_id, .. }
+            | Self::Timeout { request_id }
+            | Self::InternalError { request_id, .. } => request_id,
+        }
+    }
+}
+
 impl PreviewContext {
     /// 截断到上限并写入选区文本(空串视为无选区)。
     pub fn set_selected_text(&mut self, text: Option<String>) {
@@ -588,6 +673,15 @@ pub enum Request {
     GetPreviewContext {
         project_id: i64,
     },
+    /// T13:daemon → app 的下行预览命令(导航 / revision 守卫的写入)。dozerd 只
+    /// 转发给在线的 app;app 处理后回 `Reply::PreviewCommandResult`。app 不在线
+    /// 或超时由 dozerd 判定并回 `PreviewCommandOutcome::Timeout`。
+    ///
+    /// 权限:与本机其它写工具同信任级(不额外鉴权),但 **replace 必须携带
+    /// `expected_revision`**,失配一律拒绝,绝不猜增量。
+    RunPreviewCommand {
+        command: PreviewCommand,
+    },
     /// `dozer-mcp` 的写工具提交一份会话总结;`dozerd` 只做"session_id 是否
     /// 存在于 registry"的存在性检查,不做权限校验(与 `Write`/`HookEvent`
     /// 同等信任本机调用方)。主键 `session_id`,重复提交后到覆盖先到。
@@ -812,6 +906,11 @@ pub enum Reply {
     /// 或该 `project_id` 从未收到过推送。
     PreviewContext {
         context: Option<PreviewContext>,
+    },
+    /// T13:`RunPreviewCommand` 的应答。无论成功失败都回一条,携带同一
+    /// `request_id`,app 不在线/超时由 daemon 判定后回 `Timeout`。
+    PreviewCommandResult {
+        outcome: PreviewCommandOutcome,
     },
     /// `GetSessionSummary` 应答。
     SessionSummary {
@@ -1767,6 +1866,87 @@ mod tests {
         );
         // 非单点范围 → selected_cell_from_range 为 None(单点范围才推导)。
         assert_eq!(ctx.selected_cell_from_range(), None);
+    }
+
+    #[test]
+    fn preview_command_round_trips_and_outcomes_cover_categories() {
+        // 只读导航命令:不带 expected_revision。
+        let cmd = PreviewCommand {
+            request_id: "r1".into(),
+            project_id: 3,
+            target: PreviewCommandTarget::Tab {
+                panel: "files".into(),
+                tab_id: 7,
+            },
+            action: PreviewCommandAction::Reveal {
+                line: 12,
+                column: 4,
+            },
+            expected_revision: None,
+        };
+        let req = Request::RunPreviewCommand {
+            command: cmd.clone(),
+        };
+        let line = encode_line(&req);
+        assert_eq!(decode_line::<Request>(&line).unwrap(), req);
+
+        // replace 带 expected_revision,经 Reply 回 outcome。
+        let rep = Reply::PreviewCommandResult {
+            outcome: PreviewCommandOutcome::StaleRevision {
+                request_id: "r2".into(),
+                current_revision: 9,
+            },
+        };
+        let line = encode_line(&rep);
+        assert_eq!(decode_line::<Reply>(&line).unwrap(), rep);
+
+        // 所有 outcome 类别都能 round-trip,且 request_id 可取出。
+        for outcome in [
+            PreviewCommandOutcome::Accepted {
+                request_id: "x".into(),
+            },
+            PreviewCommandOutcome::NotFound {
+                request_id: "x".into(),
+                detail: "gone".into(),
+            },
+            PreviewCommandOutcome::StaleRevision {
+                request_id: "x".into(),
+                current_revision: 2,
+            },
+            PreviewCommandOutcome::UnsupportedBackend {
+                request_id: "x".into(),
+                detail: "image".into(),
+            },
+            PreviewCommandOutcome::LoadDenied {
+                request_id: "x".into(),
+                detail: "budget".into(),
+            },
+            PreviewCommandOutcome::Timeout {
+                request_id: "x".into(),
+            },
+            PreviewCommandOutcome::InternalError {
+                request_id: "x".into(),
+                detail: "boom".into(),
+            },
+        ] {
+            assert_eq!(outcome.request_id(), "x");
+            let json = serde_json::to_string(&outcome).unwrap();
+            assert_eq!(
+                serde_json::from_str::<PreviewCommandOutcome>(&json).unwrap(),
+                outcome
+            );
+        }
+
+        // 缺省 expected_revision 的 JSON 可解码。
+        let minimal: PreviewCommand = serde_json::from_str(
+            r#"{"request_id":"m","project_id":1,"target":{"by":"path","path":"/p/a.rs"},"action":{"kind":"reveal","line":1,"column":1}}"#,
+        )
+        .unwrap();
+        assert_eq!(minimal.expected_revision, None);
+        assert!(matches!(
+            minimal.action,
+            PreviewCommandAction::Reveal { line: 1, column: 1 }
+        ));
     }
 
     #[test]

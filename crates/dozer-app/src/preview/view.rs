@@ -1260,6 +1260,135 @@ impl PreviewPane {
             .and_then(|v| v.reveal_range(sheet, r1, c1, r2, c2))
     }
 
+    /// T13:在一个 tab 上应用一条 Agent 下行预览命令,返回确定终态。只读导航
+    /// (reveal/select/reveal_cell)不受写权限阻塞;replace 仅可写 CodeMirror 且
+    /// 必须带匹配的 `expected_revision`。tab 定位由调用方(Workspace)按
+    /// panel/path 解析后传入 `tab_id`。
+    #[allow(dead_code)] // T13:T13b/T13c 的下行通道接线前,仅测试使用。
+    pub fn apply_preview_command(
+        &mut self,
+        tab_id: usize,
+        cmd: &dozer_core::protocol::PreviewCommand,
+    ) -> dozer_core::protocol::PreviewCommandOutcome {
+        use dozer_core::protocol::{PreviewCommandAction as A, PreviewCommandOutcome as O};
+        let rid = cmd.request_id.clone();
+        let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+            return O::NotFound {
+                request_id: rid,
+                detail: "tab 不存在".into(),
+            };
+        };
+        let is_editor = tab.uses_editor_host();
+        let is_tabular = tab.tabular_view().is_some();
+        let not_writable = tab.backend_read_only() || !tab.can_save();
+        let revision = tab.web_revision;
+
+        match &cmd.action {
+            A::Reveal { line, column } => {
+                if !is_editor {
+                    return O::UnsupportedBackend {
+                        request_id: rid,
+                        detail: "该 tab 无文本编辑器".into(),
+                    };
+                }
+                self.queue_editor_command(
+                    tab_id,
+                    EditorCommand::RevealPosition {
+                        line: *line,
+                        column: *column,
+                    },
+                );
+                O::Accepted { request_id: rid }
+            }
+            A::Select {
+                start_line,
+                start_column,
+                end_line,
+                end_column,
+            } => {
+                if !is_editor {
+                    return O::UnsupportedBackend {
+                        request_id: rid,
+                        detail: "该 tab 无文本编辑器".into(),
+                    };
+                }
+                self.queue_editor_command(
+                    tab_id,
+                    EditorCommand::SelectRange {
+                        start: TextPosition {
+                            line: *start_line,
+                            column: *start_column,
+                        },
+                        end: TextPosition {
+                            line: *end_line,
+                            column: *end_column,
+                        },
+                    },
+                );
+                O::Accepted { request_id: rid }
+            }
+            A::RevealCell { sheet, row, col } => {
+                if !is_tabular {
+                    return O::UnsupportedBackend {
+                        request_id: rid,
+                        detail: "该 tab 不是表格".into(),
+                    };
+                }
+                let request =
+                    self.reveal_tabular_cell(tab_id, *sheet, *row as usize, *col as usize);
+                if request.is_some() {
+                    return O::LoadDenied {
+                        request_id: rid,
+                        detail: "目标 sheet 尚未加载".into(),
+                    };
+                }
+                O::Accepted { request_id: rid }
+            }
+            A::Replace {
+                start_line,
+                start_column,
+                end_line,
+                end_column,
+                text,
+            } => {
+                if not_writable {
+                    return O::UnsupportedBackend {
+                        request_id: rid,
+                        detail: "只读或不可写 backend".into(),
+                    };
+                }
+                let Some(expected) = cmd.expected_revision else {
+                    return O::InternalError {
+                        request_id: rid,
+                        detail: "replace 必须携带 expected_revision".into(),
+                    };
+                };
+                if expected != revision {
+                    return O::StaleRevision {
+                        request_id: rid,
+                        current_revision: revision,
+                    };
+                }
+                self.queue_editor_command(
+                    tab_id,
+                    EditorCommand::ReplaceRange {
+                        start: TextPosition {
+                            line: *start_line,
+                            column: *start_column,
+                        },
+                        end: TextPosition {
+                            line: *end_line,
+                            column: *end_column,
+                        },
+                        text: text.clone(),
+                        revision: expected,
+                    },
+                );
+                O::Accepted { request_id: rid }
+            }
+        }
+    }
+
     /// 按 tab id 取出该 tab 的 `TabularState` 可变引用,供加载完成/懒加载
     /// sheet 完成的回填使用(`Message::TabularLoaded`/`TabularSheetLoaded`
     /// 的处理函数)。与 `tabular_mut` 不同,这个不区分 `Loading`/`Ready`——
@@ -3146,6 +3275,127 @@ mod tests {
         for f in [rs, csv, huge] {
             std::fs::remove_file(f).ok();
         }
+    }
+
+    /// T13:apply_preview_command 的只读导航与 revision 守卫写入。
+    #[test]
+    fn apply_preview_command_navigation_and_replace_guard() {
+        use dozer_core::protocol::{
+            PreviewCommand, PreviewCommandAction, PreviewCommandOutcome, PreviewCommandTarget,
+        };
+        let mk = |action, expected_revision| PreviewCommand {
+            request_id: "r".into(),
+            project_id: 1,
+            target: PreviewCommandTarget::Tab {
+                panel: "files".into(),
+                tab_id: 0,
+            },
+            action,
+            expected_revision,
+        };
+
+        let dir = std::env::temp_dir().join(format!("t13_cmd_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rs = dir.join("a.rs");
+        std::fs::write(&rs, "fn main(){}\n").unwrap();
+        let csv = dir.join("a.csv");
+        std::fs::write(&csv, "a,b\n1,2\n").unwrap();
+
+        let mut pane = PreviewPane::default();
+        let rs_id = pane.open_path(rs.clone());
+        let csv_id = pane.open_path(csv.clone());
+        // 表格先就绪。
+        let view = crate::tabular::load(&csv).unwrap();
+        assert!(pane.finish_tabular_load(csv_id, Ok(view)).is_none());
+
+        // NotFound。
+        assert!(matches!(
+            pane.apply_preview_command(
+                9999,
+                &mk(PreviewCommandAction::Reveal { line: 1, column: 1 }, None)
+            ),
+            PreviewCommandOutcome::NotFound { .. }
+        ));
+        // Reveal on Code → Accepted + 排队。
+        let out = pane.apply_preview_command(
+            rs_id,
+            &mk(PreviewCommandAction::Reveal { line: 2, column: 1 }, None),
+        );
+        assert!(matches!(out, PreviewCommandOutcome::Accepted { .. }));
+        assert!(pane.take_pending_editor_commands().iter().any(|(id, c)| {
+            *id == rs_id && matches!(c, EditorCommand::RevealPosition { line: 2, .. })
+        }));
+        // Reveal on 表格网格 → UnsupportedBackend。
+        assert!(matches!(
+            pane.apply_preview_command(
+                csv_id,
+                &mk(PreviewCommandAction::Reveal { line: 1, column: 1 }, None)
+            ),
+            PreviewCommandOutcome::UnsupportedBackend { .. }
+        ));
+        // RevealCell on 表格 → Accepted。
+        assert!(matches!(
+            pane.apply_preview_command(
+                csv_id,
+                &mk(
+                    PreviewCommandAction::RevealCell {
+                        sheet: 0,
+                        row: 1,
+                        col: 1
+                    },
+                    None
+                )
+            ),
+            PreviewCommandOutcome::Accepted { .. }
+        ));
+
+        let replace = |expected| {
+            mk(
+                PreviewCommandAction::Replace {
+                    start_line: 1,
+                    start_column: 1,
+                    end_line: 1,
+                    end_column: 4,
+                    text: "xxx".into(),
+                },
+                expected,
+            )
+        };
+        // replace 缺 expected → InternalError。
+        assert!(matches!(
+            pane.apply_preview_command(rs_id, &replace(None)),
+            PreviewCommandOutcome::InternalError { .. }
+        ));
+        // revision 失配 → StaleRevision(当前 0)。
+        assert!(matches!(
+            pane.apply_preview_command(rs_id, &replace(Some(7))),
+            PreviewCommandOutcome::StaleRevision {
+                current_revision: 0,
+                ..
+            }
+        ));
+        // revision 匹配 → Accepted + 排队 ReplaceRange。
+        assert!(matches!(
+            pane.apply_preview_command(rs_id, &replace(Some(0))),
+            PreviewCommandOutcome::Accepted { .. }
+        ));
+        assert!(
+            pane.take_pending_editor_commands()
+                .iter()
+                .any(|(id, c)| { *id == rs_id && matches!(c, EditorCommand::ReplaceRange { .. }) })
+        );
+        // 只读 tab(窗口化)replace → UnsupportedBackend。
+        let huge = dir.join("huge.rs");
+        std::fs::write(&huge, "a".repeat(7 * 1024 * 1024)).unwrap();
+        let huge_id = pane.open_path(huge.clone());
+        assert!(matches!(
+            pane.apply_preview_command(huge_id, &replace(Some(0))),
+            PreviewCommandOutcome::UnsupportedBackend { .. }
+        ));
+
+        std::fs::remove_file(&rs).ok();
+        std::fs::remove_file(&csv).ok();
+        std::fs::remove_file(&huge).ok();
     }
 
     /// T12:reveal_tabular_cell 在已就绪的表格 tab 上写入滚动 + 选中。
