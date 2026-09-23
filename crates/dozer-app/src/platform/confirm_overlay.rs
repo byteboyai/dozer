@@ -194,7 +194,29 @@ pub(crate) fn desired_confirm(
     if let Some(spec) = crate::extensions::files::delete_confirm_spec(&ws.files) {
         return Some((ConfirmTrigger::FilesDelete, map_files_spec(spec)));
     }
+    if let Some(source_id) = ws.database.delete_confirm()
+        && let Some(spec) = crate::extensions::database::delete_confirm_spec(&ws.database, source_id)
+    {
+        return Some((ConfirmTrigger::DatabaseDelete, map_database_spec(spec)));
+    }
     None
+}
+
+/// 把 Database 扩展的 `ConfirmDialog<database::Message>` 提升到 app 级。
+fn map_database_spec(
+    spec: dialog::ConfirmDialog<crate::extensions::database::Message>,
+) -> dialog::ConfirmDialog<Message> {
+    dialog::ConfirmDialog {
+        icon: spec.icon,
+        title: spec.title,
+        description: spec.description,
+        cancel_label: spec.cancel_label,
+        cancel_msg: Message::Database(spec.cancel_msg),
+        confirm_label: spec.confirm_label,
+        confirm_msg: Message::Database(spec.confirm_msg),
+        confirm_color: spec.confirm_color,
+        content_spacing: spec.content_spacing,
+    }
 }
 
 /// 把 Files 扩展的 `ConfirmDialog<files::Message>` 提升到 app 级——同

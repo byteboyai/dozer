@@ -257,22 +257,6 @@ impl App {
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
-        } else if ws.database.delete_confirm().is_some() {
-            // 数据库面板「删除数据源」确认框:窗口级 overlay,同上。三个
-            // 数据库弹窗互斥优先级(同一时刻只显示一个):待确认删除 >
-            // 新增/编辑表单 > 驱动管理。
-            let source_id = ws.database.delete_confirm().unwrap();
-            let dismiss =
-                crate::dialog::scrim(Message::Database(database::Message::DeleteSourceCancel));
-            stack![
-                base,
-                dismiss,
-                database::delete_confirm_popup(&ws.database, source_id, self.window_size.0)
-                    .map(Message::Database)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
         } else if ws.database.editing().is_some() {
             // 数据库面板「新增/编辑数据源」表单:窗口级 overlay,同上。
             let draft = ws.database.editing().unwrap();

@@ -147,6 +147,20 @@ mod tests {
     }
 
     #[test]
+    fn delete_confirm_spec_uses_source_name_and_targets_id() {
+        let mut ws_state = WorkspaceState::default();
+        ws_state.sources = vec![ds("abc", DriverKind::Postgres)];
+        ws_state.delete_confirm = Some("abc".into());
+        let spec = delete_confirm_spec(&ws_state, "abc").expect("spec present");
+        assert_eq!(spec.title, "删除数据源 \"test-abc\"?");
+        assert!(matches!(
+            spec.confirm_msg,
+            Message::DeleteSource(id) if id == "abc"
+        ));
+        assert!(matches!(spec.cancel_msg, Message::DeleteSourceCancel));
+    }
+
+    #[test]
     fn app_state_load_missing_file_returns_default() {
         // config_dir() 指向真实用户目录,这里只验证"文件不存在"分支不 panic
         // 且落到全启用默认值——不清真实用户配置,不需要临时目录隔离(同

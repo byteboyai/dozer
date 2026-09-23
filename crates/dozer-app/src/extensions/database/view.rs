@@ -582,26 +582,36 @@ pub fn delete_confirm_popup<'a>(
     source_id: &'a str,
     window_width: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    match delete_confirm_spec(ws_state, source_id) {
+        Some(spec) => crate::dialog::confirm(spec, window_width),
+        None => column![].into(),
+    }
+}
+
+/// 删除数据源确认框的内容描述——宿主(`platform::confirm_overlay`)与旧的
+/// in-window 渲染都取这一份。仅当 `source_id` 能在当前数据源列表里定位到
+/// (或至少存在一条待确认删除)时返回 `Some`。
+pub(crate) fn delete_confirm_spec(
+    ws_state: &WorkspaceState,
+    source_id: &str,
+) -> Option<crate::dialog::ConfirmDialog<Message>> {
     let name = ws_state
         .sources()
         .iter()
         .find(|s| s.id == source_id)
         .map(|s| s.name.to_string())
         .unwrap_or_else(|| source_id.to_string());
-    crate::dialog::confirm(
-        crate::dialog::ConfirmDialog {
-            icon: None,
-            title: format!("删除数据源 \"{name}\"?"),
-            description: "这会永久删除这条连接记录及其保存的密码。".to_string(),
-            cancel_label: "取消".to_string(),
-            cancel_msg: Message::DeleteSourceCancel,
-            confirm_label: "删除".to_string(),
-            confirm_msg: Message::DeleteSource(source_id.to_string()),
-            confirm_color: byteui::theme::color::current().red,
-            content_spacing: 8.0,
-        },
-        window_width,
-    )
+    Some(crate::dialog::ConfirmDialog {
+        icon: None,
+        title: format!("删除数据源 \"{name}\"?"),
+        description: "这会永久删除这条连接记录及其保存的密码。".to_string(),
+        cancel_label: "取消".to_string(),
+        cancel_msg: Message::DeleteSourceCancel,
+        confirm_label: "删除".to_string(),
+        confirm_msg: Message::DeleteSource(source_id.to_string()),
+        confirm_color: byteui::theme::color::current().red,
+        content_spacing: 8.0,
+    })
 }
 
 /// 数据库面板底部 footer-bar:1px `BORDER` 分隔线 + `padding([6, 8])` 容器,
