@@ -3,7 +3,37 @@
 > 对应计划:`docs/superpowers/plans/2026-09-22-preview-viewer-consolidation.md`。
 > 2026-09-22。
 
-## 已完成(本轮,additive、不删除任何旧实现)
+## 0. 当前事实快照(2026-09-23,以代码为准)
+
+下面几节是**历史记录**(记录当时"尚未删除任何旧实现"的中间态),其中提到的
+`json_tree` 字段 / Streamed adapter 已全部删除,**不要据此推断当前代码**。当前:
+
+- `PreviewBackend`(路由描述,**无运行时句柄**):
+  ```
+  enum PreviewBackend {
+      Code(CodeBackend { mode: Editable|ReadOnly, language: String }),
+      Rendered(RenderedBackend { renderer: Flyfish|IsolatedHtml,
+                                 mode: Rendered|Source, source_language: Option<String> }),
+      Json(JsonBackend { mode: Tree|Text }),
+      Tabular(TabularBackend { format: Csv|Tsv|Workbook, mode: Grid|Text }),
+      External(ExternalBackend { reason: RouteReason }),
+      Unsupported(UnsupportedBackend { reason: RouteReason }),
+  }
+  ```
+- `BackendState`: `Suspended | Queued | Loading | Ready | Failed(PreviewError { message, retryable })`;
+  合法转换见 `BackendState::can_transition_to`。
+- `PreviewTab` 字段(迁移期):`id, kind, title, reload_nonce, tabular, dirty,
+  loaded_bytes, total_bytes, truncated, loading, pending_jump_line, route,
+  backend, backend_state, windowed, window_index, recovery_written,
+  pending_restore, load_started, pending_view, pending_tabular, web_revision,
+  web_selection, web_selected_text, web_viewport, web_error`。
+  **没有** `editor`(老 iced 已删)也**没有** `json_tree`(自研树已删)。
+- JSONL/NDJSON:`PreviewKind::Json + JsonMode::Text`,由 CodeMirror 文本查看;
+  代码中**不存在** `PreviewKind::Streamed` / `PreviewBackend::Streamed`。
+- `ResourceManager`:已有预算与淘汰顺序算法,尚未接 Flyfish/Tabular 的完整
+  生命周期(见 wrap-up T3)。
+
+## 1. 历史记录(2026-09-22,additive、不删除任何旧实现)
 
 ### Task 1(部分):Rendered 的 Source 模式接入 CodeMirror host
 - `PreviewTab::uses_editor_host()` 现覆盖 `Rendered { mode: Source }`:
@@ -87,7 +117,8 @@
   iced 编辑器。
 - 修正:JSONC/JSON5 含注释,vanilla-jsoneditor 不解析 → `uses_json_editor`
   **只限 `.json` 扩展名**,JSONC/JSON5 仍走原生树(避免回归);JSONL/NDJSON 走
-  原生 streamed。
+  原生 streamed。**(已作废:自研树与 Streamed adapter 随后整体删除;JSONC/
+  JSON5/JSONL/NDJSON 现全部走 CodeMirror 文本,见 §0 快照。)**
 
 ## 未完成(受 GUI 验收与"迁移前不删除"原则约束)
 1. **Task 2 剩余**:NSMenu 上下文菜单(取舍见 Phase B 文档);Unsupported/损坏/

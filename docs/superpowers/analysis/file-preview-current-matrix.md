@@ -6,6 +6,12 @@
 > 对应计划:`docs/superpowers/plans/2026-09-22-file-preview-foundation.md`
 > Task 1。本文件只描述**改动前**的现状;Phase A 已落地的 `route/backend`
 > 描述见 `crates/dozer-app/src/preview/{router,backend,file_profile}.rs`。
+>
+> ⚠️ **历史基线,非当前事实(2026-09-23)**:本文件描述的 `editor` /
+> `json_tree` 字段、`pending_json_tree_loads`、自研 JSON 树与 Streamed adapter
+> **已全部删除**。当前字段/类型快照见
+> `file-preview-phase-d-progress.md` §0,切勿据本文件推断当前代码;§2 的
+> 组合矩阵与 §6 的目标表仅作迁移期对照。
 
 ## 1. 两条 pane 的完整调用链
 
@@ -140,12 +146,11 @@ JSONC/JSON5、JSONL/NDJSON、CSV/TSV/XLSX、图片(PNG/SVG)、PDF、压缩包、
 
 | 规格目标 | Phase A 现状 | 目标 phase |
 |---|---|---|
-| 未知 UTF-8 文本 → Code | 未知文本仍走 Flyfish 兜底 | Phase 4 |
-| 未知二进制 → External/Unsupported | `Unsupported` 描述但仍是 Flyfish webview 兜底 | Phase D |
-| 压缩包 → 外部打开 | `External` 描述但仍是 Flyfish webview 兜底 | Phase D |
-| `Makefile`/`Dockerfile`/`LICENSE` → Code | 与旧行为一致仍走 Flyfish | Phase 4 |
-| SVG → 图像 + CodeMirror XML | `Rendered`(Flyfish 图像),暂无源码切换 | Phase 4 |
+| 未知 UTF-8 文本 → Code | 未知文本仍走 Flyfish 兜底 | T5 |
+| 未知二进制 → External/Unsupported | `Unsupported` 描述但仍是 Flyfish webview 兜底 | T1 |
+| 压缩包 → 外部打开 | `External` 描述但仍是 Flyfish webview 兜底 | T1 |
+| `Makefile`/`Dockerfile`/`LICENSE` → Code | 与旧行为一致仍走 Flyfish | T5 |
+| SVG → 图像 + CodeMirror XML | `Rendered`(Flyfish 图像),暂无源码切换 | T5 |
 
 `PreviewBackend::hosts_webview()` 对 `External`/`Unsupported` 返回 `true`
-正是这份兜底的编码;Phase D 落地正式 fallback 后改为 `false` 并删除对应
-adapter。
+正是这份兜底的编码；T1 落地正式 fallback 后改为 `false`。

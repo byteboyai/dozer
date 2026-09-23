@@ -8,6 +8,10 @@
 > 关联:`docs/superpowers/plans/2026-09-22-file-preview-architecture-redesign.md`
 > (总计划)、`file-preview-phase-{b,c,d}-progress.md`、
 > `2026-09-22-file-preview-wrap-up.md`(未完成收尾计划)。
+>
+> **读表约定(迁移期)**:每行标注 **当前预期 / 目标预期** 两种。检测时按
+> **当前预期**判"是否回归";**目标预期**是 wrap-up 计划(T1/T5/T6/T8…)落地后
+> 的形态,尚未实现时按"已知缺口"§9 处理,不计入回归。
 
 ## 0. 环境与构建
 
@@ -71,29 +75,29 @@ echo "$d"
 
 ## 2. 路由矩阵(逐个打开,记录实际后端)
 
-| 文件 | 期望后端 | 期望行为 | 结果 |
-|---|---|---|---|
-| `a.rs` / `a.py` | CodeMirror | 行号 / 语法高亮 / 可编辑 / ⌘S 保存 | |
-| `cn.txt` | CodeMirror | 中文正常显示,非方块/空白 | |
-| `bom_crlf.txt` | CodeMirror | 保存后 BOM 与 CRLF 保留 | |
-| `ok.json` | JSON Tree(可切 Text) | tab 栏可切「树 / 文本」 | |
-| `cfg.json5` | CodeMirror(jsonc) | 注释 / 尾逗号着色,可编辑 | |
-| `rows.jsonl` | Streamed 树 | 每行一个 root,可展开 | |
-| `t.csv` | Tabular 网格 | 网格显示;tab 栏可切「网格 / 原文」 | |
-| `doc.md` / `page.html` | Rendered + 可切 Source | 渲染;切 Source 进 CodeMirror | |
-| 图片 / PDF | Rendered(Flyfish) | 正常渲染 | |
-| `archive.zip` | External 描述 + Flyfish 兼容兜底(当前) | 记录有效 ZIP 的实际显示;正式 fallback 页是 T1 目标 | |
-| `broken.zip` | External 描述 + Flyfish 兼容兜底(当前) | 不崩溃;记录错误 / 空态 / 外部打开动作,对照 T1 | |
-| `README_NO_EXT` | Flyfish(当前 Phase A 契约) | 能查看;T8 后应改为 Code | |
-| `Makefile` / `Dockerfile` / `LICENSE` / `.env` | Flyfish(当前) | 记录实际行为;T8 后应按文件名规则进入 Code | |
-| `unknown.binblob` | Unsupported 描述 + Flyfish 兼容兜底(当前) | 不崩溃、不显示为可编辑文本;对照 T1 | |
-| `icon.svg` | Rendered(Flyfish) | 图像正常;源码切换是 T8 目标 | |
-| `utf16le.rs` | CodeMirror **只读**(当前) | 不可编辑、不崩溃;记录文字是否正确 | |
-| `non_utf8.rs` / `invalid_utf8.rs` | CodeMirror **只读**(当前有损路径) | 不可编辑、不崩溃;记录乱码/替换字符,字节安全显示留待 T9 | |
-| `binary_spoof.rs` | CodeMirror **只读**或安全 fallback | 不崩溃、不允许有损保存;记录实际降级 | |
-| `long_line_plain.rs` | CodeMirror **只读纯文本** | 关闭换行 / 高亮 / 折叠,不要求全局滚动条 | |
-| `long_line.rs` | Windowed **只读** | 全局行号基数、可滚到任意行 | |
-| `huge.txt` | Windowed **只读** | 打开不卡死、不全量读内存 | |
+| 文件 | 期望后端(当前) | 期望行为(当前) | 目标后端(wrap-up) | 结果 |
+|---|---|---|---|---|
+| `a.rs` / `a.py` | CodeMirror | 行号 / 语法高亮 / 可编辑 / ⌘S 保存 | 不变 | |
+| `cn.txt` | CodeMirror | 中文正常显示,非方块/空白 | 不变 | |
+| `bom_crlf.txt` | CodeMirror | 保存后 BOM 与 CRLF 保留 | 不变 | |
+| `ok.json` | JSON Tree(可切 Text) | tab 栏可切「树 / 文本」 | 不变(vanilla-jsoneditor) | |
+| `cfg.json5` | CodeMirror(jsonc) | 注释 / 尾逗号着色,可编辑 | 不变 | |
+| `rows.jsonl` | **CodeMirror Text(json)** | 当普通文本查看(与 json5 同路;**无**「树/文本」切换) | Streamed 树(T8) | |
+| `t.csv` | Tabular 网格 | 网格显示;tab 栏可切「网格 / 原文」 | 不变 | |
+| `doc.md` / `page.html` | Rendered + 可切 Source | 渲染;切 Source 进 CodeMirror | 不变(HTML 走隔离 host,T7) | |
+| 图片 / PDF | Rendered(Flyfish) | 正常渲染 | 不变 | |
+| `archive.zip` | External + Flyfish 兜底 | 记录有效 ZIP 的实际显示 | 统一 fallback 页 + 外部打开(T1) | |
+| `broken.zip` | External + Flyfish 兜底 | 不崩溃;记录错误 / 空态 / 外部打开动作 | fallback 页 + 重试/外部打开(T1) | |
+| `README_NO_EXT` | Flyfish(未知文本兜底) | 能查看 | Code(内容探测为文本,T5) | |
+| `Makefile` / `Dockerfile` / `LICENSE` / `.env` | Flyfish(无扩展名兜底) | 记录实际行为 | Code(文件名规则,T5) | |
+| `unknown.binblob` | Unsupported + Flyfish 兜底 | 不崩溃、不显示为可编辑文本 | fallback 页(禁纯文本,T1) | |
+| `icon.svg` | Rendered(Flyfish 图像) | 图像正常 | 图像 + 可切 CodeMirror XML 源码(T5) | |
+| `utf16le.rs` | CodeMirror **只读** | 不可编辑、不崩溃;合法 UTF-16 已解码为正确文字 | 字节安全只读(T6) | |
+| `non_utf8.rs` / `invalid_utf8.rs` | CodeMirror **只读** | 不可编辑、不崩溃;有损文字只记录 | 字节安全只读 / T1(T6) | |
+| `binary_spoof.rs` | CodeMirror **只读**或安全 fallback | 不崩溃、不允许有损保存;记录实际降级 | 保持只读/安全 fallback(T6) | |
+| `long_line_plain.rs` | CodeMirror **只读纯文本** | 关闭换行 / 高亮 / 折叠,不要求全局滚动条 | 不变 | |
+| `long_line.rs` | Windowed **只读** | 全局行号基数、可滚到任意行 | 不变 | |
+| `huge.txt` | Windowed **只读** | 打开不卡死、不全量读内存 | 不变 | |
 
 ## 3. 编辑器能力(CodeMirror tab)
 
@@ -164,18 +168,22 @@ echo "$d"
 
 - 压缩包 / 损坏 / 加密格式落 Flyfish 兼容兜底,而非正式「外部打开」页(T1);
   普通 Failed 态已有通用「在系统应用中打开」按钮,但尚无完整 fallback 页面。
-- 未知 UTF-8 文本、`Makefile` / `Dockerfile` / `LICENSE` 仍走 Flyfish,未进 Code(T8)。
-- 脏 tab 外部变更只有冲突提示,无“保留我的 / 重载”选择(T4)。
-- Agent 写操作(reveal/select/replace)无 daemon/MCP 调用入口(T3);休眠 tab
+- 未知 UTF-8 文本、`Makefile` / `Dockerfile` / `LICENSE` 仍走 Flyfish,未进 Code
+  (T5)。
+- 脏 tab 外部变更只有冲突提示,无“保留我的 / 重载”选择(T10)。
+- Agent 写操作(reveal/select/replace)无 daemon/MCP 调用入口(T13);休眠 tab
   的 Agent 唤醒未接线。
-- Streamed JSON 已有统一 backend 描述与生命周期状态,但运行时仍借用旧
-  `json_tree` adapter/viewer,且未接资源预算 / Rust 搜索 / 稀疏定位(T6)。
-- 表格无 reveal cell/range,Agent 无“选中单元格”(T7)。
-- HTML 仍直接 `file://` 加载;Flyfish IPC 未迁 envelope;未接资源管理器(T5)。
+- JSONL/NDJSON 当前路由为 `PreviewKind::Json + Text`(与 json5 同路,CodeMirror
+  文本查看),**没有** Streamed viewer;真正的 Streamed JSON backend 是 T8 的
+  新增能力(不再描述为旧 `json_tree` adapter 的延续——该 adapter 已删除)。
+- 表格无 reveal cell/range,Agent 无“选中单元格”(T12)。
+- HTML 仍直接 `file://` 加载;Flyfish IPC 未迁 envelope;未接资源管理器(T7/T9)。
 - 窗口化搜索条无 Esc 关闭 / 程序化聚焦(末尾备注)。
-- scroll anchor 仍是逻辑锚点,未精确还原像素(T10)。
+- scroll anchor 仍是逻辑锚点,未精确还原像素(T11)。
 - 非法 UTF-8 当前虽强制只读,仍可能经过 `fetch().text()` 有损解码;“不崩溃”可
-  通过,出现乱码/替换字符只记录且不算新增回归,字节安全退路由 T9 收口。
+  通过,出现乱码/替换字符只记录且不算新增回归,字节安全退路由 T6 收口。
+- 未知二进制、压缩包目前仍是 `PreviewKind::Unsupported/External` 但继续 host
+  Flyfish webview;T1 落地后改为统一 fallback 页(`hosts_webview()` 返回 false)。
 
 ## 10. 结论记录
 
