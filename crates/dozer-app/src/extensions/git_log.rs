@@ -290,6 +290,10 @@ pub enum Message {
     SnapshotLoaded(PathBuf, usize, Result<GitLogSnapshot, String>),
     /// 点文件列表某一行,选中它(右下面板据此展示该文件的 diff)。
     SelectFile(String),
+    /// 选中文件的 blob 内容异步加载完成。`git2::Oid`/`String` 是加载发起时
+    /// 的 commit/路径快照,落地前核对仍匹配当前选择,不匹配则丢弃(用户
+    /// 手快切换选择后的迟到结果)。
+    DiffContentLoaded(git2::Oid, String, Result<DiffBlobContent, String>),
     /// 展开左侧面板底部的分支切换下拉(首次展开时内核顺带异步查一次
     /// `delivery::local_branches`)。
     BranchPickerOpen,
@@ -314,6 +318,17 @@ pub enum Message {
     Hover(HoverId, bool),
 }
 
+/// 当前已加载、给 CodeMirror diff webview 用的内容——`commit`/`path` 是
+/// 加载时的选择快照,`SelectFile`/`SelectCommit` 落地新结果前先核对这两个
+/// 字段还对不对得上"现在真正选中的",不对就丢弃(stale-guard,同
+/// `DetailLoaded` 的 `repo_path`/`oid` 核对手法)。
+#[derive(Debug, Clone)]
+pub struct LoadedDiff {
+    pub commit: git2::Oid,
+    pub path: String,
+    pub content: DiffBlobContent,
+}
+
 /// Git Log 面板的全部状态。现在挂在 `App`(不按项目分,见设计文档"非
 /// 目标"——这次纯重构不改这个现状),以后要改成按项目分的话,类型本身
 /// 不用变,只是挪个持有位置。
@@ -326,6 +341,10 @@ pub struct State {
     /// 右上文件列表当前选中的文件路径(`CommitDetail.files[].path`)。切
     /// commit 时先清空,新 `detail` 落地后预选第一个改动文件。
     selected_file: Option<String>,
+    /// 当前选中文件已加载的 diff 内容(CodeMirror webview 用)。切
+    /// commit/切选中文件时先清空,新结果落地(`DiffContentLoaded`)且仍
+    /// 匹配当前选择才重新填入。
+    loaded_diff: Option<LoadedDiff>,
     /// 最近一次派发的 `build` 请求 (repo_path, max_count)——落地时核对
     /// 还对不对得上"现在真正需要的",不对就丢弃。
     pending: Option<(PathBuf, usize)>,
@@ -382,6 +401,12 @@ impl State {
         self.cache.as_ref().map(|c| c.repo_path())
     }
 
+    /// 当前已加载、可交给 CodeMirror diff webview 渲染的内容(`None` = 未
+    /// 选中文件 / 内容还在加载 / 不可渲染 / 加载失败)。
+    pub fn loaded_diff(&self) -> Option<&LoadedDiff> {
+        self.loaded_diff.as_ref()
+    }
+
     /// 搜索框是否持有 iced 真实焦点(`App::git_log_search_focused` 转发)。
     pub fn search_focused(&self) -> bool {
         self.search_focused
@@ -421,6 +446,7 @@ pub fn update(
             state.selected = Some(oid);
             state.detail = None;
             state.selected_file = None;
+            state.loaded_diff = None;
             let repo_path = state.cache.as_ref().map(|c| c.repo_path().to_path_buf())?;
             handle.spawn(async move {
                 let repo_path2 = repo_path.clone();
@@ -432,7 +458,45 @@ pub fn update(
             None
         }
         Message::SelectFile(path) => {
-            state.selected_file = Some(path);
+            state.selected_file = Some(path.clone());
+            state.loaded_diff = None;
+            let Some(commit) = state.selected else {
+                return None;
+            };
+            let Some(Ok(detail)) = state.detail.as_ref() else {
+                return None;
+            };
+            let Some(entry) = detail.files.iter().find(|f| f.path == path) else {
+                return None;
+            };
+            let (old_blob, new_blob) = (entry.old_blob, entry.new_blob);
+            let repo_path = state.cache.as_ref().map(|c| c.repo_path().to_path_buf())?;
+            handle.spawn(async move {
+                let repo_path2 = repo_path.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    let repo =
+                        git2::Repository::open(&repo_path2).map_err(|e| e.message().to_string())?;
+                    diff_blob_content(&repo, old_blob, new_blob)
+                })
+                .await
+                .unwrap_or_else(|e| Err(format!("diff 内容加载任务失败: {e}")));
+                emit(Message::DiffContentLoaded(commit, path, result));
+            });
+            None
+        }
+        Message::DiffContentLoaded(commit, path, result) => {
+            if state.selected != Some(commit) || state.selected_file.as_deref() != Some(path.as_str())
+            {
+                return None; // stale:用户已经切换了选择
+            }
+            state.loaded_diff = match result {
+                Ok(content) => Some(LoadedDiff {
+                    commit,
+                    path,
+                    content,
+                }),
+                Err(_) => None,
+            };
             None
         }
         Message::DetailLoaded(repo_path, oid, result) => {
@@ -1944,6 +2008,111 @@ mod tests {
             Some("a.rs"),
             "detail 落地后应预选第一个改动文件"
         );
+    }
+
+    #[tokio::test]
+    async fn select_file_clears_stale_diff_and_requests_fresh_load() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let commit_oid = git2::Oid::from_bytes(&[7; 20]).unwrap();
+        let old_blob = git2::Oid::from_bytes(&[8; 20]).unwrap();
+        let new_blob = git2::Oid::from_bytes(&[9; 20]).unwrap();
+        let mut state = State {
+            cache: Some(snapshot_at(&repo_path, 10)),
+            selected: Some(commit_oid),
+            detail: Some(Ok(CommitDetail {
+                files: vec![DiffFileEntry {
+                    path: "a.txt".into(),
+                    status: git2::Delta::Modified,
+                    patch: "x".into(),
+                    truncated: false,
+                    old_blob: Some(old_blob),
+                    new_blob: Some(new_blob),
+                }],
+            })),
+            loaded_diff: Some(LoadedDiff {
+                commit: commit_oid,
+                path: "old-selection.txt".into(),
+                content: DiffBlobContent::Text {
+                    old_text: "a".into(),
+                    new_text: "b".into(),
+                },
+            }),
+            ..State::default()
+        };
+
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::SelectFile("a.txt".to_string()),
+            &handle,
+            |_| {},
+        );
+
+        assert_eq!(state.selected_file.as_deref(), Some("a.txt"));
+        assert!(
+            state.loaded_diff.is_none(),
+            "换选中文件后必须先清空旧内容,不能让 stale 内容闪一下"
+        );
+    }
+
+    #[tokio::test]
+    async fn diff_content_loaded_ignored_when_selection_moved_on() {
+        let commit_a = git2::Oid::from_bytes(&[11; 20]).unwrap();
+        let mut state = State {
+            selected: Some(commit_a),
+            selected_file: Some("b.txt".to_string()), // 用户已经切到 b.txt
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        // 一条迟到的 a.txt 结果(用户点过 a.txt 但已经切走了)。
+        update(
+            &mut state,
+            Message::DiffContentLoaded(
+                commit_a,
+                "a.txt".to_string(),
+                Ok(DiffBlobContent::Text {
+                    old_text: "x".into(),
+                    new_text: "y".into(),
+                }),
+            ),
+            &handle,
+            |_| {},
+        );
+        assert!(
+            state.loaded_diff.is_none(),
+            "stale 结果(commit/path 跟当前选中对不上)必须被丢弃"
+        );
+    }
+
+    #[tokio::test]
+    async fn diff_content_loaded_applied_when_selection_still_matches() {
+        let commit_a = git2::Oid::from_bytes(&[12; 20]).unwrap();
+        let mut state = State {
+            selected: Some(commit_a),
+            selected_file: Some("a.txt".to_string()),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::DiffContentLoaded(
+                commit_a,
+                "a.txt".to_string(),
+                Ok(DiffBlobContent::Text {
+                    old_text: "x".into(),
+                    new_text: "y".into(),
+                }),
+            ),
+            &handle,
+            |_| {},
+        );
+        let loaded = state
+            .loaded_diff
+            .as_ref()
+            .expect("匹配当前选择的结果应该落地");
+        assert_eq!(loaded.commit, commit_a);
+        assert_eq!(loaded.path, "a.txt");
+        assert!(matches!(loaded.content, DiffBlobContent::Text { .. }));
     }
 
     #[tokio::test]
