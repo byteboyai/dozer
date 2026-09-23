@@ -206,9 +206,13 @@ pub struct DiffFileEntry {
     /// 正文,只留一行提示。大 diff(几千行)一次性喂给 `text()` widget 排版,
     /// 布局开销肉眼可见("打开一次提交详情也有些卡顿"),而详情面板本来就
     /// 不是给通读整份 diff 用的,截断只影响展示,不影响 diff 计算的正确性。
+    ///
+    /// CodeMirror diff 接管后,`patch`/`truncated` 不再是 diff 面板的正文来源
+    /// (正文改由 `old_blob`/`new_blob` 读出的双侧文本经 `SetDiffDocument`
+    /// 推送);保留它们是为 `file_history` 同款纯文本兜底与既有测试。
     pub truncated: bool,
     /// 旧版本 blob oid(新增文件为 `None`)。CodeMirror diff 渲染用,与
-    /// `patch`(unified patch 文本,给 `colored_diff_lines` 用)并存,互不影响。
+    /// `patch`(unified patch 文本)并存,互不影响。
     pub old_blob: Option<git2::Oid>,
     /// 新版本 blob oid(删除文件为 `None`)。
     pub new_blob: Option<git2::Oid>,
@@ -262,7 +266,7 @@ pub fn diff_blob_content(
     match (old_text, new_text) {
         (Some(old_text), Some(new_text)) => Ok(DiffBlobContent::Text { old_text, new_text }),
         _ => Ok(DiffBlobContent::NotRenderable {
-            reason: "文件不是文本,或超过大小上限,不支持 CodeMirror 渲染".to_string(),
+            reason: "文件不是文本,或超过大小上限,不支持 diff 渲染".to_string(),
         }),
     }
 }
@@ -348,6 +352,11 @@ pub struct State {
     /// commit/切选中文件时先清空,新结果落地(`DiffContentLoaded`)且仍
     /// 匹配当前选择才重新填入。
     loaded_diff: Option<LoadedDiff>,
+    /// 当前选中文件的 diff **加载失败**原因(`DiffContentLoaded` 携带
+    /// `Err` 时落地,如并发操作导致仓库状态变化)。与 `loaded_diff` 互斥:
+    /// 失败时 `loaded_diff` 为 `None`、这里为 `Some`,UI 展示错误占位而不
+    /// 是无限"加载中";切 commit/文件时清空。
+    diff_load_error: Option<String>,
     /// 当前挂载的 diff webview 是否已经真正 `ready`(JS 端 `__dozer.dispatch`
     /// 已注册)。只由 `Message::GitLogDiffWebviewEvent` 的 `Ready` 分支置
     /// true;`loaded_diff` 被清空(见 `SelectCommit`/`SelectFile`)时连带置回
@@ -514,6 +523,7 @@ pub fn update(
             state.detail = None;
             state.selected_file = None;
             state.loaded_diff = None;
+            state.diff_load_error = None;
             state.diff_webview_ready = false;
             state.diff_sent_for = None;
             let repo_path = state.cache.as_ref().map(|c| c.repo_path().to_path_buf())?;
@@ -529,6 +539,7 @@ pub fn update(
         Message::SelectFile(path) => {
             state.selected_file = Some(path.clone());
             state.loaded_diff = None;
+            state.diff_load_error = None;
             state.diff_webview_ready = false;
             state.diff_sent_for = None;
             let commit = state.selected?;
@@ -557,14 +568,20 @@ pub fn update(
             {
                 return None; // stale:用户已经切换了选择
             }
-            state.loaded_diff = match result {
-                Ok(content) => Some(LoadedDiff {
-                    commit,
-                    path,
-                    content,
-                }),
-                Err(_) => None,
-            };
+            match result {
+                Ok(content) => {
+                    state.loaded_diff = Some(LoadedDiff {
+                        commit,
+                        path,
+                        content,
+                    });
+                    state.diff_load_error = None;
+                }
+                Err(err) => {
+                    state.loaded_diff = None;
+                    state.diff_load_error = Some(err);
+                }
+            }
             None
         }
         Message::DetailLoaded(repo_path, oid, result) => {
@@ -1188,8 +1205,12 @@ pub fn view<'a>(
                     byteui::theme::color::current().bg,
                     Message::RowDragStart,
                 ),
-                container(diff_pane_view(detail, state.selected_file.as_deref()))
-                    .height(Length::FillPortion(bottom_portion)),
+                container(diff_pane_view(
+                    state,
+                    detail,
+                    state.selected_file.as_deref()
+                ))
+                .height(Length::FillPortion(bottom_portion)),
             ]
             .height(Length::Fill)
             .into()
@@ -1222,14 +1243,67 @@ pub fn view<'a>(
         .into()
 }
 
-/// 右下 diff 内容面板:`selected_file` 对应文件的 patch,逐行染色(复用
-/// `diff_render::colored_diff_lines`)。找不到该路径(比如换 commit 那一瞬间
-/// `selected_file` 还没跟上新 `detail`)或未选中任何文件时展示占位文案,
-/// 不 panic。
+/// 右下 diff 内容面板。渲染分三种情形(见设计文档"diff pane 路由"):
+///
+/// 1. **CodeMirror diff webview 已挂载**(`state.diff_webview_desired()` 为
+///    `Some`,即已加载出可渲染双侧文本):这里只返回一个**空容器**占位——
+///    真正内容由原生 wry 子视图绘制,webview 恒在 iced 之上,iced 再画一遍
+///    只会造成重复/闪烁,所以什么都不画,只保留几何占位。
+/// 2. **不可渲染**(二进制/超限):`loaded_diff` 是
+///    `DiffBlobContent::NotRenderable` 时,展示只读占位文案 + `reason`,
+///    webview 此时不会挂载。
+///
+/// 加载失败(`diff_load_error` 为 `Some`)时展示错误占位,webview 同样不
+/// 会挂载。文件已选中但结果未落地(异步读 blob 的过渡帧)时给中性加载态;
+/// 未选中文件则沿用既有"未选中文件"占位。
+///
+/// `selected_file` 对应文件的 patch 在旧实现里逐行染色(`colored_diff_lines`),
+/// CodeMirror 接管后 iced 不再绘制正文;不可渲染/失败时不退回旧染色(语义
+/// 不同,会给用户"能看"的错觉),而是明确给只读原因。
 fn diff_pane_view<'a>(
+    state: &'a State,
     detail: &'a Result<CommitDetail, String>,
     selected_file: Option<&'a str>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    // 情形 1:webview 会挂载 → iced 侧留空,不重复绘制。
+    if state.diff_webview_desired().is_some() {
+        return container(iced_widget::Space::new()).into();
+    }
+    // 情形 2:已加载出明确"不可渲染"结果(与当前 selection 对齐,stale
+    // 结果不会落进 `loaded_diff`),给只读占位 + 原因。
+    if let Some(loaded) = state.loaded_diff.as_ref()
+        && let DiffBlobContent::NotRenderable { reason } = &loaded.content
+    {
+        return container(
+            column![
+                text("该文件无法在 diff 视图中渲染")
+                    .size(byteui::theme::font::caption())
+                    .color(byteui::theme::color::current().dim),
+                text(reason.clone())
+                    .size(byteui::theme::font::caption_sm())
+                    .color(byteui::theme::color::current().dim),
+            ]
+            .spacing(4),
+        )
+        .padding(8)
+        .into();
+    }
+    // 情形 2b:blob 读取失败(与当前 selection 对齐才会落地),展示原因。
+    if let Some(err) = state.diff_load_error.as_ref() {
+        return container(
+            column![
+                text("diff 内容加载失败")
+                    .size(byteui::theme::font::caption())
+                    .color(byteui::theme::color::current().dim),
+                text(err.clone())
+                    .size(byteui::theme::font::caption_sm())
+                    .color(byteui::theme::color::current().dim),
+            ]
+            .spacing(4),
+        )
+        .padding(8)
+        .into();
+    }
     let Ok(detail) = detail else {
         // 错误态已经在 file_list_view 里展示过一次,这里不重复展示错误
         // 文案,给个中性占位即可。
@@ -1244,7 +1318,7 @@ fn diff_pane_view<'a>(
         .padding(8)
         .into();
     };
-    let Some(entry) = detail.files.iter().find(|f| f.path == path) else {
+    let Some(_entry) = detail.files.iter().find(|f| f.path == path) else {
         return container(
             text("未选中文件")
                 .size(byteui::theme::font::caption())
@@ -1253,38 +1327,16 @@ fn diff_pane_view<'a>(
         .padding(8)
         .into();
     };
-    let mut content = column![
-        text(entry.path.clone())
+    // 情形 3:文件已选中、但 `loaded_diff` 还没落地(异步读 blob 的过渡帧)。
+    // CodeMirror webview 是唯一渲染路径,这一帧不退回旧的 iced 染色(既与
+    // "CodeMirror 接管"矛盾,又会在内容到达后闪一下),给中性加载态即可。
+    container(
+        text("加载 diff 中…")
             .size(byteui::theme::font::caption())
-            .color(byteui::theme::color::current().cream)
-    ]
-    .spacing(4);
-    if entry.patch.is_empty() {
-        content = content.push(
-            text("(无 diff 内容)")
-                .size(byteui::theme::font::caption())
-                .color(byteui::theme::color::current().dim),
-        );
-    } else {
-        content = content.push(crate::extensions::diff_render::colored_diff_lines(
-            &entry.patch,
-        ));
-    }
-    if entry.truncated {
-        content = content.push(
-            text("… diff 过长,已截断显示")
-                .size(byteui::theme::font::caption_sm())
-                .color(byteui::theme::color::current().dim),
-        );
-    }
-    scrollable(content)
-        .direction(scrollable::Direction::Vertical(
-            byteui::interaction::scrollbar::scrollbar(),
-        ))
-        .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style())
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+            .color(byteui::theme::color::current().dim),
+    )
+    .padding(8)
+    .into()
 }
 
 /// 左侧面板底部 footbar:完全照抄文件树面板的 `git_footer_bar` 结构——顶部
@@ -2309,6 +2361,65 @@ mod tests {
         );
 
         assert_eq!(State::default().diff_webview_desired(), None);
+    }
+
+    #[tokio::test]
+    async fn diff_content_loaded_error_sets_load_error_and_clears_content() {
+        let commit = git2::Oid::from_bytes(&[13; 20]).unwrap();
+        let mut state = State {
+            selected: Some(commit),
+            selected_file: Some("a.txt".to_string()),
+            loaded_diff: Some(LoadedDiff {
+                commit,
+                path: "a.txt".to_string(),
+                content: DiffBlobContent::Text {
+                    old_text: "stale".into(),
+                    new_text: "stale".into(),
+                },
+            }),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::DiffContentLoaded(commit, "a.txt".to_string(), Err("boom".to_string())),
+            &handle,
+            |_| {},
+        );
+        assert!(state.loaded_diff.is_none(), "失败后旧内容必须清空");
+        assert_eq!(state.diff_load_error.as_deref(), Some("boom"));
+    }
+
+    #[tokio::test]
+    async fn select_file_clears_previous_load_error() {
+        let commit = git2::Oid::from_bytes(&[14; 20]).unwrap();
+        let mut state = State {
+            selected: Some(commit),
+            selected_file: Some("a.txt".to_string()),
+            detail: Some(Ok(CommitDetail {
+                files: vec![DiffFileEntry {
+                    path: "b.txt".into(),
+                    status: git2::Delta::Modified,
+                    patch: String::new(),
+                    truncated: false,
+                    old_blob: None,
+                    new_blob: None,
+                }],
+            })),
+            diff_load_error: Some("boom".to_string()),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut state,
+            Message::SelectFile("b.txt".to_string()),
+            &handle,
+            |_| {},
+        );
+        assert_eq!(
+            state.diff_load_error, None,
+            "换文件后必须先清空上一条错误,不能带着旧错误进新选择"
+        );
     }
 
     #[tokio::test]
