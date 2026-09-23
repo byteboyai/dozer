@@ -3418,6 +3418,47 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// T12 自动化:Flyfish 渲染 host 的首个可用画面边界——`Loading` 期即便该 tab
+    /// 是激活 tab 也 **不可见**(不覆盖 loading 动画),Flyfish `document_loaded`
+    /// ACK(`finish_load`)后才可见。对齐 CodeMirror/JSON 的同类边界测试。
+    #[test]
+    fn flyfish_host_hidden_until_document_loaded() {
+        let dir = std::env::temp_dir().join(format!("t8_flyfish_visible_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("doc.md");
+        std::fs::write(&path, "# hi\n").unwrap();
+
+        let mut pane = PreviewPane::default();
+        let (id, generation) = pane.open_path_provisional(path.clone());
+        let generation = generation.expect("Rendered 走加载管线,应有首个世代");
+        assert!(pane.apply_profile(id, generation, &profile_file(&path).unwrap()));
+        // 推进到 CreatingHost(等待 Flyfish host)。
+        assert!(pane.advance_load(id, generation, PreviewLoadStage::CreatingHost));
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.hosts_webview(), "Rendered tab 应 host Flyfish webview");
+
+        // Loading 期(激活 tab)Flyfish spec 存在但不可见 —— 不覆盖 loading 动画。
+        let specs = pane.desired_webviews();
+        let spec = specs
+            .iter()
+            .find(|s| s.id == id)
+            .expect("Rendered 应产出 Flyfish webview spec");
+        assert!(!spec.visible, "document_loaded 前 Flyfish 必须 hidden");
+
+        // Flyfish `document_loaded` ACK → finish → Ready,方可可见。
+        assert!(pane.finish_load(id, generation));
+        let specs = pane.desired_webviews();
+        let spec = specs.iter().find(|s| s.id == id).unwrap();
+        assert!(spec.visible, "document_loaded 后 Flyfish 可见");
+        assert!(
+            spec.loading_generation.is_none(),
+            "就绪后不再携带 loading 世代"
+        );
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn encode_component_is_rfc3986_strict() {
         assert_eq!(encode_component("aZ09-._~"), "aZ09-._~");
@@ -5351,6 +5392,65 @@ mod tests {
         // 失败后可重试:重新 begin 拿到新世代。
         let generation2 = pane.begin_load(id, PreviewLoadStage::Profiling).unwrap();
         assert!(pane.advance_load(id, generation2, PreviewLoadStage::Reading));
+    }
+
+    /// T12 自动化:表驱动覆盖**每个在途阶段**在 `PreviewPane` 上的失败路径。
+    /// 对每个 stage:失败进入可解释 Failed、回 Idle、过期失败被拒、失败后可重试。
+    #[test]
+    fn stage_failure_table() {
+        let stages: Vec<PreviewLoadStage> = PreviewLoadStage::active_stages().collect();
+        assert_eq!(
+            stages.len(),
+            PreviewLoadStage::ALL.len() - 1,
+            "覆盖全部在途阶段"
+        );
+        for (i, stage) in stages.into_iter().enumerate() {
+            let mut pane = PreviewPane::default();
+            let id = pane.push_shell_tab(PathBuf::from(format!("/tmp/s{i}.rs")), None);
+            let generation = pane.begin_load(id, stage).unwrap();
+            assert_eq!(pane.load_stage(id), stage, "{stage:?} 进入阶段");
+
+            // 过期失败(旧世代)被拒,状态不变。
+            assert!(
+                !pane.fail_load(id, generation + 1, PreviewError::new("stale", true)),
+                "{stage:?} 旧世代失败被拒"
+            );
+            assert_eq!(pane.load_stage(id), stage, "{stage:?} 状态不被过期失败改动");
+
+            // 匹配失败 → Failed + 回 Idle。
+            assert!(pane.fail_load(id, generation, PreviewError::new("boom", true)));
+            assert_eq!(pane.load_stage(id), PreviewLoadStage::Idle);
+            let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+            assert!(tab.backend_state.is_failed(), "{stage:?} 进入 Failed");
+            assert_eq!(tab.web_error.as_deref(), Some("boom"));
+
+            // 失败后可重试:新世代、可继续。
+            let generation2 = pane.begin_load(id, PreviewLoadStage::Profiling).unwrap();
+            assert_ne!(generation2, generation, "{stage:?} 重试拿到新世代");
+            assert!(pane.advance_load(id, generation2, PreviewLoadStage::Reading));
+            assert!(pane.cancel_load(id), "{stage:?} 重试后可再次结束");
+        }
+    }
+
+    /// T12 自动化:表驱动覆盖**每个在途阶段**的取消路径:取消回 Idle、不留错误、
+    /// 原世代终止回调被拒、可再次加载。
+    #[test]
+    fn stage_cancel_table() {
+        for (i, stage) in PreviewLoadStage::active_stages().enumerate() {
+            let mut pane = PreviewPane::default();
+            let id = pane.push_shell_tab(PathBuf::from(format!("/tmp/c{i}.rs")), None);
+            let generation = pane.begin_load(id, stage).unwrap();
+            assert!(pane.cancel_load(id), "{stage:?} 可取消");
+            assert_eq!(pane.load_stage(id), PreviewLoadStage::Idle);
+            let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+            assert!(tab.web_error.is_none(), "{stage:?} 取消无错误");
+            assert!(
+                !pane.finish_load(id, generation),
+                "{stage:?} 原世代 finish 被拒"
+            );
+            // 取消后可再次加载。
+            assert!(pane.begin_load(id, PreviewLoadStage::Profiling).is_some());
+        }
     }
 
     /// T2:取消是正常结束——回 Idle、作废在途结果、不留错误,并退回可物化。

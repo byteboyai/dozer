@@ -2002,3 +2002,52 @@ fn preview_conflict_bar_widget<'a>(
     .padding([4, 8])
     .into()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::preview::{LoadObservation, PreviewLoadStage, PreviewLoadState};
+
+    /// T12 自动化:统一 loading 视图对**每个在途阶段**都产出动画(`Some`),
+    /// `Idle` 产出 `None`(交给调用方画正文)。这就是"动画在加载期间存在、
+    /// 完成后退出"的渲染层判据。
+    #[test]
+    fn loading_view_present_for_every_active_stage_absent_at_idle() {
+        for stage in PreviewLoadStage::active_stages() {
+            let state = PreviewLoadState::starting(1, stage);
+            assert!(
+                preview_loading_view(&state, None).is_some(),
+                "{stage:?} 应产出 loading 视图"
+            );
+        }
+        let idle = PreviewLoadState::default();
+        assert!(
+            preview_loading_view(&idle, None).is_none(),
+            "Idle 不应产出 loading 视图"
+        );
+    }
+
+    /// T11 bullet 4 / T12:视图组装即画首帧——`preview_loading_view` 会对匹配
+    /// 世代的 `LoadObservation` 写回 first frame;世代不符则忽略。
+    #[test]
+    fn loading_view_marks_first_frame_for_matching_generation() {
+        let state = PreviewLoadState::starting(5, PreviewLoadStage::Reading);
+        let observe = LoadObservation::new(5);
+        assert!(
+            preview_loading_view(&state, Some(&observe)).is_some(),
+            "在途阶段产出视图"
+        );
+        assert!(
+            observe.first_frame_offset_ms().is_some(),
+            "匹配世代写回首帧"
+        );
+
+        // 视图仍在画旧世代(observe 属于别的 generation)→ 不写回。
+        let stale = LoadObservation::new(9);
+        let _ = preview_loading_view(&state, Some(&stale));
+        assert!(
+            stale.first_frame_offset_ms().is_none(),
+            "世代不符不应写回首帧"
+        );
+    }
+}

@@ -1087,4 +1087,50 @@ mod tests {
         let p = spec.point(0.0, 1.0);
         assert!(p.x < 50.0, "expected left-edge x < 50, got {}", p.x);
     }
+
+    /// T12 自动化:自驱动动画必须**对每个 RedrawRequested 都请求下一次重绘**,
+    /// 否则动画只画一帧就停(对应验收"任务执行期间 UI 至少产生多次 redraw")。
+    /// 这里连喂多个 `RedrawRequested`,逐次断言都请求了 `NextFrame`。
+    #[test]
+    fn animated_loader_requests_redraw_on_every_redraw_event() {
+        let loader = AnimatedLoader {
+            curve: Curve::RoseThree,
+            color: Color::WHITE,
+        };
+        let mut state = AnimatedState::default();
+        let program = &loader;
+        for i in 0..5 {
+            let event = canvas::Event::Window(window::Event::RedrawRequested(
+                iced_widget::core::time::Instant::now(),
+            ));
+            let Some(action) = canvas::Program::<()>::update(
+                program,
+                &mut state,
+                &event,
+                Rectangle::new(Point::ORIGIN, iced_widget::core::Size::new(48.0, 48.0)),
+                mouse::Cursor::Unavailable,
+            ) else {
+                panic!("第 {i} 次 RedrawRequested 未产生 Action");
+            };
+            let (message, redraw, _status) = action.into_inner();
+            assert!(message.is_none(), "动画不应发布消息");
+            assert_eq!(
+                redraw,
+                window::RedrawRequest::NextFrame,
+                "第 {i} 次 RedrawRequested 未请求重绘"
+            );
+        }
+        // 非重绘事件不触发重绘(动画只由重绘事件自维持,不被其它输入驱动)。
+        let cursor_event = canvas::Event::Mouse(mouse::Event::CursorMoved {
+            position: Point::ORIGIN,
+        });
+        let action = canvas::Program::<()>::update(
+            program,
+            &mut state,
+            &cursor_event,
+            Rectangle::new(Point::ORIGIN, iced_widget::core::Size::new(48.0, 48.0)),
+            mouse::Cursor::Unavailable,
+        );
+        assert!(action.is_none(), "非重绘事件不应请求重绘");
+    }
 }

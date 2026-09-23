@@ -1319,3 +1319,85 @@ fn resolve_preview_command_target_by_path_and_tab() {
         Some((PanelKind::Project, 42))
     );
 }
+
+/// T12 自动化(UI handler 审计约束):UI 事件处理路径**不得直接**调用大文件
+/// 读取 / 索引 / 解析 / 全文搜索的同步阻塞入口;这些只能出现在后台 task 里
+/// (`tokio::task::spawn_blocking` / `io.handle.spawn` 闭包内)。
+///
+/// 做法:对每个"UI handler 源文件"做静态扫描,任一被禁入口出现在函数体里时,
+/// 断言其**同一个函数**内、调用点之前存在 spawn 包装。这样有人日后把
+/// `LineIndex::build_cancellable` 之类直接塞进 handler 会立刻红灯,而不是等到
+/// 真机上 UI 卡顿。
+///
+/// 本测试只做词法检查(不引入 parser 依赖),覆盖 plan T12 第一条约束的意图。
+#[test]
+fn ui_handlers_do_not_call_blocking_preview_entry_points() {
+    // UI handler 源文件(相对 crate 根)。新增 UI 路径时在此登记。
+    const UI_HANDLER_FILES: &[&str] = &[
+        "src/app/update.rs",
+        "src/app/app.rs",
+        "src/app/view.rs",
+        "src/app/state.rs",
+        "src/workspace/state.rs",
+        "src/workspace/view.rs",
+    ];
+    // 被禁的同步阻塞入口(大文件读取 / 索引 / 解析 / 搜索 / 恢复快照)。
+    const BLOCKING_ENTRY_POINTS: &[&str] = &[
+        "LineIndex::build(",
+        "LineIndex::build_cancellable(",
+        "read_window(",
+        "read_window_capped(",
+        "stream_search_cancellable(",
+        "read_snapshot(",
+        "tabular::load(",
+        "tabular::load_cancellable(",
+        "tabular::load_sheet(",
+        "tabular::load_sheet_cancellable(",
+    ];
+    // 允许阻塞入口出现的后台包装标记。
+    const SPAWN_MARKERS: &[&str] = &["spawn_blocking", "handle.spawn", ".spawn("];
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut audited = 0usize;
+    for file in UI_HANDLER_FILES {
+        let path = root.join(file);
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("读取 UI handler 源文件失败 {file}: {e}"));
+
+        for entry in BLOCKING_ENTRY_POINTS {
+            let mut from = 0usize;
+            while let Some(rel) = source[from..].find(entry) {
+                let at = from + rel;
+                from = at + entry.len();
+
+                // 该调用点所在函数的起点(最近的、行首级别的 `fn ` 前)。
+                let fn_start = source[..at].rfind("\nfn ").or_else(|| {
+                    // 函数可能带缩进(如 impl 内);找最近的行首 `fn `。
+                    source[..at]
+                        .match_indices("\n")
+                        .filter(|(i, _)| {
+                            let rest = &source[i + 1..];
+                            let trimmed = rest.trim_start();
+                            (trimmed.starts_with("fn ")
+                                || trimmed.starts_with("async fn ")
+                                || trimmed.starts_with("pub fn ")
+                                || trimmed.starts_with("pub async fn "))
+                                && rest.len() - trimmed.len() < 8
+                        })
+                        .map(|(i, _)| i)
+                        .last()
+                });
+                let fn_start = fn_start.unwrap_or(0);
+                let within = &source[fn_start..at];
+                let wrapped = SPAWN_MARKERS.iter().any(|m| within.contains(m));
+                assert!(
+                    wrapped,
+                    "{file}:`{entry}` 出现在 UI handler 函数体的直接路径上(调用点前无 spawn 包装)。\
+                     阻塞入口必须放进 spawn_blocking / io.handle.spawn。"
+                );
+                audited += 1;
+            }
+        }
+    }
+    assert!(audited > 0, "审计未命中任何调用点,词法规则可能已失效");
+}

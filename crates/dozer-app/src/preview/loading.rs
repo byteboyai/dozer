@@ -73,6 +73,26 @@ pub enum PreviewLoadStage {
 }
 
 impl PreviewLoadStage {
+    /// 全部阶段(含 `Idle`)的唯一枚举来源,供表驱动测试遍历,避免测试各自
+    /// 手抄一份列表而与枚举漂移。
+    pub const ALL: [PreviewLoadStage; 10] = [
+        PreviewLoadStage::Idle,
+        PreviewLoadStage::Profiling,
+        PreviewLoadStage::Reserving,
+        PreviewLoadStage::CreatingHost,
+        PreviewLoadStage::Reading,
+        PreviewLoadStage::Indexing,
+        PreviewLoadStage::LoadingWindow,
+        PreviewLoadStage::Parsing,
+        PreviewLoadStage::Searching,
+        PreviewLoadStage::SwitchingMode,
+    ];
+
+    /// 在途阶段(`Idle` 之外),派生自 [`Self::ALL`]。
+    pub fn active_stages() -> impl Iterator<Item = PreviewLoadStage> {
+        Self::ALL.into_iter().filter(|s| s.is_active())
+    }
+
     /// 该阶段的用户可见文案。`Idle` 不产生 loading 文案(返回 `None`)。
     ///
     /// 映射集中在此,保证各 viewer 调用同一套文案、不漂移(plan T1)。
@@ -265,17 +285,7 @@ mod tests {
     /// plan T1:每个 stage 映射到非空文案;`Idle` 不产生 loading 文案。
     #[test]
     fn every_active_stage_has_non_empty_label() {
-        for stage in [
-            PreviewLoadStage::Profiling,
-            PreviewLoadStage::Reserving,
-            PreviewLoadStage::CreatingHost,
-            PreviewLoadStage::Reading,
-            PreviewLoadStage::Indexing,
-            PreviewLoadStage::LoadingWindow,
-            PreviewLoadStage::Parsing,
-            PreviewLoadStage::Searching,
-            PreviewLoadStage::SwitchingMode,
-        ] {
+        for stage in PreviewLoadStage::active_stages() {
             let label = stage.label().unwrap_or("");
             assert!(!label.is_empty(), "{stage:?} 必须有非空文案");
             assert!(stage.is_active(), "{stage:?} 应为在途阶段");
@@ -312,17 +322,7 @@ mod tests {
     /// T11 bullet 3:每个在途阶段都有非零超时;`Idle` 为零(从不 arm)。
     #[test]
     fn every_active_stage_has_nonzero_timeout() {
-        for stage in [
-            PreviewLoadStage::Profiling,
-            PreviewLoadStage::Reserving,
-            PreviewLoadStage::CreatingHost,
-            PreviewLoadStage::Reading,
-            PreviewLoadStage::Indexing,
-            PreviewLoadStage::LoadingWindow,
-            PreviewLoadStage::Parsing,
-            PreviewLoadStage::Searching,
-            PreviewLoadStage::SwitchingMode,
-        ] {
+        for stage in PreviewLoadStage::active_stages() {
             assert!(
                 !stage_timeout(stage).is_zero(),
                 "{stage:?} 必须有非零看门狗超时"
@@ -338,5 +338,94 @@ mod tests {
         assert_eq!(state.stage, PreviewLoadStage::Idle);
         assert_eq!(state.generation, 11);
         assert!(!state.accepts(10));
+    }
+
+    /// T12 自动化:表驱动覆盖**每个在途阶段**的完整生命周期。对每个 stage 逐项
+    /// 断言:进入即 active 且 generation 匹配、advance 保持世代、成功/失败/取消
+    /// 三条终态路径各自回到 Idle 并作废旧世代、重试拿到新世代。
+    #[test]
+    fn stage_lifecycle_table() {
+        // (起始世代, 目标阶段, 该阶段之后要推进到的下一阶段)
+        struct Case {
+            generation: u64,
+            stage: PreviewLoadStage,
+            next: PreviewLoadStage,
+        }
+        let cases: Vec<Case> = PreviewLoadStage::active_stages()
+            .enumerate()
+            .map(|(i, stage)| Case {
+                generation: 100 + i as u64,
+                stage,
+                // 用阶段自身作为"推进目标"已足够:关键是 advance 不换世代;
+                // 额外选一个不同阶段验证阶段真的变了。
+                next: if stage == PreviewLoadStage::Reading {
+                    PreviewLoadStage::Indexing
+                } else {
+                    PreviewLoadStage::Reading
+                },
+            })
+            .collect();
+
+        for case in &cases {
+            // 进入。
+            let state = PreviewLoadState::starting(case.generation, case.stage);
+            assert!(state.is_active(), "{:?} 进入即 active", case.stage);
+            assert_eq!(state.stage, case.stage);
+            assert!(state.accepts(case.generation));
+            assert!(
+                !state.accepts(case.generation.wrapping_sub(1)),
+                "旧世代被拒"
+            );
+
+            // advance:换阶段、留世代、仍 active。
+            let mut advanced = state.clone();
+            advanced.advance(case.next);
+            assert_eq!(advanced.stage, case.next);
+            assert_eq!(advanced.generation, case.generation, "advance 不改世代");
+            assert!(advanced.is_active());
+            assert!(advanced.accepts(case.generation));
+
+            // 成功终态:finish → Idle + 新世代 + 旧回调被拒。
+            let mut ok = advanced.clone();
+            ok.finish();
+            assert_eq!(
+                ok.stage,
+                PreviewLoadStage::Idle,
+                "{:?} finish → Idle",
+                case.stage
+            );
+            assert!(!ok.is_active());
+            assert_eq!(ok.generation, case.generation + 1);
+            assert!(!ok.accepts(case.generation), "成功后旧世代失效");
+
+            // 取消终态:同 finish(取消是正常结束)。
+            let mut cancelled = advanced.clone();
+            cancelled.cancel();
+            assert_eq!(cancelled.stage, PreviewLoadStage::Idle);
+            assert_eq!(cancelled.generation, case.generation + 1);
+
+            // 失败终态由 `PreviewPane::fail_load` 表达(纯状态层没有错误字段),
+            // 在 view.rs 的表驱动测试 `stage_failure_table` 中覆盖;此处仅确认
+            // 失败前的推进仍保持 active。
+            assert!(advanced.is_active(), "失败前的推进仍 active");
+        }
+
+        assert_eq!(
+            cases.len(),
+            PreviewLoadStage::ALL.len() - 1,
+            "覆盖全部在途阶段"
+        );
+    }
+
+    /// T12 自动化:世代回绕(wrapping)不会让旧回调误命中。`generation` 用
+    /// `wrapping_add`,只关注"变了"而非单调。
+    #[test]
+    fn generation_wraps_without_reaccepting_old() {
+        let mut state = PreviewLoadState::starting(u64::MAX, PreviewLoadStage::Reading);
+        assert!(state.accepts(u64::MAX));
+        state.finish();
+        assert_eq!(state.generation, 0, "u64::MAX 之后回绕到 0");
+        assert!(!state.accepts(u64::MAX), "回绕后不再接受旧世代");
+        assert!(state.accepts(0));
     }
 }
