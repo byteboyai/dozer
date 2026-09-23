@@ -3114,6 +3114,34 @@ impl App {
                 Side::Left => self.left_view,
                 Side::Right => self.right_view,
             };
+            // Git Log 右下 diff pane 的原生 CodeMirror webview:固定单槽
+            // (`GIT_LOG_DIFF_ID_OFFSET`)、不经 tab 模型,内容由
+            // `SetDiffDocument` 命令推送。只有"已加载可渲染文本"才挂
+            // (`diff_webview_desired`);二进制/超限/未选中走 iced 占位。
+            if kind == PanelKind::GitLog {
+                if let Some(path) = self.git_log.diff_webview_desired() {
+                    let binding = crate::preview::EditorHostBinding::new(
+                        0,
+                        PanelKind::GitLog,
+                        0,
+                        std::path::PathBuf::from(path),
+                    );
+                    let spec = WebviewSpec {
+                        id: crate::app::GIT_LOG_DIFF_ID_OFFSET,
+                        url: binding.diff_url(crate::preview::scheme_query_value()),
+                        visible: !app_modal_open,
+                        editor_binding: Some(binding),
+                    };
+                    let bounds = webview_geometry::git_log_diff_pane_bounds_for(
+                        side,
+                        window_width,
+                        window_height,
+                        &self.shell_state(),
+                    );
+                    out.push((spec, bounds));
+                }
+                continue;
+            }
             let (mut specs, id_offset): (Vec<WebviewSpec>, usize) = match kind {
                 PanelKind::Files => (ws.preview.desired_webviews(), 0),
                 PanelKind::Project => (

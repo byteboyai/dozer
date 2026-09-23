@@ -369,6 +369,132 @@ pub fn left_files_tree_bounds_for(
     (x, y, w, h)
 }
 
+/// Git Log 面板右下 diff pane 在窗口坐标系里的矩形(上/左/宽/高,逻辑
+/// 像素),供 main.rs 摆放 diff 的 CodeMirror 原生 wry webview 用。
+///
+/// 与 `preview_content_bounds_for` 同谱系(zone/镜像/放大态处理一致),但
+/// 这个 pane 不是"配对里的 content 列"那么简单——它嵌在 Git Log 自己
+/// 两层配对里。第一层:面板 body 是 `row![左(提交列表) | 分隔线 | 右(文件
+/// 列表+diff)]`,按 `git_log_split` 分左右,`mirrored` 时交换渲染顺序。
+/// 第二层:右侧那一列再按 `git_log_file_diff_split` 上下分,固定头部
+/// (`git_log_diff_header_h_px`)与横向分割线(`divider_width`)不参与权重
+/// 分配,余下高度按 top:bottom portion 分。所以横向起点/宽度用
+/// `git_log_split`(内容列),纵向起点/高度用 `git_log_file_diff_split` 的下
+/// portion,二者不可混用。
+///
+/// 不可摆放(该侧收起 / 不是 GitLog / 放大的是另一侧)时返回零尺寸矩形。
+pub fn git_log_diff_pane_bounds_for(
+    side: Side,
+    window_width: f32,
+    window_height: f32,
+    state: &ShellState,
+) -> (f32, f32, f32, f32) {
+    let zero = || (0.0, 0.0, 0.0, 0.0);
+    let kind = match side {
+        Side::Left => state.left_view,
+        Side::Right => state.right_view,
+    };
+    let collapsed = match side {
+        Side::Left => state.left_collapsed,
+        Side::Right => state.right_collapsed,
+    };
+    if collapsed || kind != PanelKind::GitLog {
+        return zero();
+    }
+    let p = theme::region::project_pane();
+    let divider = byteui::theme::geometry::divider_width();
+    let mirrored =
+        state.layout.rail_layout.side_of(PanelKind::GitLog) != PanelKind::GitLog.default_side();
+
+    // 计算给定"面板 body 外框(区)矩形"下的 diff pane 矩形。放大态与非放大
+    // 态只差这个输入矩形,分块逻辑共用。横向口径与 `preview_content_bounds_for`
+    // 完全一致(用 `pair_content_width(区宽)` 作为可分配的配对宽后按 split 分),
+    // 纵向额外按 `git_log_file_diff_split` 再上下分一次、并扣掉固定头部与
+    // 横向分割线。
+    let compute = |inx: f32, iny: f32, inw: f32, inh: f32| -> (f32, f32, f32, f32) {
+        // 横向:row![list | divider | content] 按 git_log_split 分。`pair_w`
+        // 传"扣过中间固定分隔线之后的可分配内容宽"(`FillPortion` 在扣掉分隔
+        // 线后才按权重分),同 `preview_content_bounds_for` 用 `pair_x0_and_width`
+        // (内部 `pair_content_width`)的口径;x 再补 project_pane 左 padding。
+        let pair_w = pair_content_width(inw);
+        let cols = pair_columns(pair_w, state.dims.git_log_split, mirrored);
+        let x = inx + p.padding.left + cols.content_x;
+        let w = cols.content_w.max(0.0);
+
+        // 纵向:body 顶起 padding.top,content 列 = 固定头部 + 上 portion +
+        // 横向分割线 + 下 portion。整列高 = body 高 - 上下 padding。
+        let ph = (inh - p.padding.top - p.padding.bottom).max(0.0);
+        let header_h = theme::geometry::git_log_diff_header_h_px();
+        let remaining = (ph - header_h - divider).max(0.0);
+        let (top_portion, bottom_portion) =
+            crate::workspace::split_portions(state.dims.git_log_file_diff_split);
+        let total = (top_portion + bottom_portion) as f32;
+        let bottom_h = if total > 0.0 {
+            remaining * bottom_portion as f32 / total
+        } else {
+            0.0
+        };
+        let top_h = (remaining - bottom_h).max(0.0);
+        let y = iny + p.padding.top + header_h + top_h + divider;
+        let h = bottom_h.max(0.0);
+
+        (x, y, w, h)
+    };
+
+    if let Some(maximized) = state.maximized {
+        let showing_side = match maximized {
+            MaximizedPane::Left => Side::Left,
+            MaximizedPane::Right => Side::Right,
+        };
+        if side != showing_side {
+            return zero();
+        }
+        let m = match side {
+            Side::Left => theme::region::left_zone().margin,
+            Side::Right => theme::region::right_zone().margin,
+        };
+        let (x0, avail_w) = maximized_box_x_range(window_width);
+        let inx = x0 + m.left;
+        let inw = (avail_w - m.left - m.right).max(0.0);
+        let iny = byteui::theme::geometry::top_bar_height()
+            + byteui::theme::geometry::maximize_overlay_padding()
+            + m.top;
+        let inh = (maximized_box_height(window_height)
+            - byteui::theme::geometry::maximize_overlay_padding()
+            - byteui::theme::geometry::status_bar_height()
+            - m.top
+            - m.bottom)
+            .max(0.0);
+        return compute(inx, iny, inw, inh);
+    }
+
+    let m = match side {
+        Side::Left => theme::region::left_zone().margin,
+        Side::Right => theme::region::right_zone().margin,
+    };
+    // GitLog body 是**区内的一个整体**(`row![list | divider | content]` 直接
+    // 就是面板内容),区宽即 body 外框——横向起点从面板区左沿量起(左栏 =
+    // 图标栏宽;右栏 = 窗口宽 - 图标栏 - 右区),同 `pair_x0_and_width` 第一值。
+    let zone_x0 = match side {
+        Side::Left => byteui::theme::geometry::icon_rail_width(),
+        Side::Right => {
+            window_width
+                - byteui::theme::geometry::icon_rail_width()
+                - right_zone_width(window_width, state)
+        }
+    };
+    let zone_raw_w = match side {
+        Side::Left => left_zone_width(window_width, state),
+        Side::Right => right_zone_width(window_width, state),
+    };
+    let inx = zone_x0 + m.left;
+    let iny = byteui::theme::geometry::top_bar_height() + m.top;
+    let inw = (zone_raw_w - m.left - m.right).max(0.0);
+    let inh =
+        (window_height - iny - m.bottom - byteui::theme::geometry::status_bar_height()).max(0.0);
+    compute(inx, iny, inw, inh)
+}
+
 /// 逻辑 x 是否落在左侧文件预览内容区列内。焦点路由用:点击落在
 /// 该列 → 键盘交给 webview;落在别处 → 交回窗口(终端)。
 ///
@@ -1033,5 +1159,101 @@ mod tests {
         let far_right =
             byteui::theme::geometry::icon_rail_width() + left_zone_width(1440.0, &state) + 100.0;
         assert!(is_in_preview_column(far_right, 1440.0, &state).is_none());
+    }
+
+    fn git_log_test_state() -> ShellState {
+        ShellState {
+            left_view: PanelKind::GitLog,
+            ..test_state()
+        }
+    }
+
+    /// diff pane 的横向起点应落在"内容列"(git_log 右侧那一列)内:起点大于
+    /// 面板区内扣掉左列 + 分隔线之后的位置,宽度为正且小于面板区宽。
+    #[test]
+    fn git_log_diff_pane_is_in_right_column() {
+        let state = git_log_test_state();
+        let (x, y, w, h) = git_log_diff_pane_bounds_for(Side::Left, 1440.0, 900.0, &state);
+        let p = theme::region::project_pane();
+        let m = theme::region::left_zone().margin;
+        let left_w = left_zone_width(1440.0, &state);
+        let zone_inner_w = left_w - m.left - m.right;
+        let pair_w = pair_content_width(zone_inner_w);
+        let cols = pair_columns(pair_w, state.dims.git_log_split, false);
+        // x = 图标栏 + margin.left + padding.left + content_x
+        let expected_x =
+            byteui::theme::geometry::icon_rail_width() + m.left + p.padding.left + cols.content_x;
+        assert!((x - expected_x).abs() < 0.5, "x={x} expected≈{expected_x}");
+        assert!(w > 100.0 && w < zone_inner_w, "w={w}");
+        assert!(h > 0.0 && y + h < 900.0, "y={y} h={h}");
+    }
+
+    /// 纵向:diff pane 的顶应当在文件列表(上 portion)与横向分割线之下——即
+    /// 至少低于 body 顶 + 头部高度。且下 portion 越小,起点越高。
+    #[test]
+    fn git_log_diff_pane_starts_below_header_and_tracks_split() {
+        let state = git_log_test_state();
+        let (_, y_default, _, h_default) =
+            git_log_diff_pane_bounds_for(Side::Left, 1440.0, 900.0, &state);
+        let top = byteui::theme::geometry::top_bar_height()
+            + theme::region::left_zone().margin.top
+            + theme::region::project_pane().padding.top;
+        assert!(
+            y_default > top + theme::geometry::git_log_diff_header_h_px(),
+            "diff 顶应在头部之下: y={y_default}"
+        );
+        let more_diff = ShellState {
+            dims: PanelDims {
+                git_log_file_diff_split: 0.2,
+                ..PanelDims::default()
+            },
+            ..git_log_test_state()
+        };
+        let (_, y_more, _, h_more) =
+            git_log_diff_pane_bounds_for(Side::Left, 1440.0, 900.0, &more_diff);
+        assert!(
+            y_more <= y_default && h_more >= h_default,
+            "下 portion 给得更大时 diff 应更高: y={y_more} h={h_more} vs y={y_default} h={h_default}"
+        );
+    }
+
+    #[test]
+    fn git_log_diff_pane_zero_when_not_git_log_or_collapsed() {
+        let files = test_state();
+        assert_eq!(
+            git_log_diff_pane_bounds_for(Side::Left, 1440.0, 900.0, &files),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+        let collapsed = ShellState {
+            left_collapsed: true,
+            ..git_log_test_state()
+        };
+        assert_eq!(
+            git_log_diff_pane_bounds_for(Side::Left, 1440.0, 900.0, &collapsed),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+    }
+
+    /// GitLog 镜像(挪到右栏)时 diff pane 的横向起点应与左栏同款公式
+    /// (内容列在 pair 里的位置随镜像翻转)。
+    #[test]
+    fn git_log_diff_pane_mirrored_uses_content_column() {
+        let state = ShellState {
+            right_view: PanelKind::GitLog,
+            left_view: PanelKind::Files,
+            ..test_state()
+        };
+        let (x, _y, w, _h) = git_log_diff_pane_bounds_for(Side::Right, 1440.0, 900.0, &state);
+        let m = theme::region::right_zone().margin;
+        let right_raw = right_zone_width(1440.0, &state);
+        let (zone_x0, _) = pair_x0_and_width(Side::Right, 1440.0, &state);
+        let p = theme::region::project_pane();
+        let pair_w = pair_content_width(right_raw - m.left - m.right);
+        let mirrored =
+            state.layout.rail_layout.side_of(PanelKind::GitLog) != PanelKind::GitLog.default_side();
+        let cols = pair_columns(pair_w, state.dims.git_log_split, mirrored);
+        let expected_x = zone_x0 + m.left + p.padding.left + cols.content_x;
+        assert!((x - expected_x).abs() < 0.5, "x={x} expected≈{expected_x}");
+        assert!(w > 100.0, "w={w}");
     }
 }

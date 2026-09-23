@@ -444,6 +444,21 @@ impl State {
         ))
     }
 
+    /// 当前是否应该挂载 diff 的 CodeMirror webview,以及它绑定的文件路径。
+    ///
+    /// 只有"已加载出可渲染文本"(`DiffBlobContent::Text`)才挂——二进制/
+    /// 超限/加载失败/未选中文件都返回 `None`,由 `diff_pane_view` 走 iced
+    /// 占位(`NotRenderable` 原因文案),绝不让 webview 抢占占位区。
+    /// `path` 供调用方组 `EditorHostBinding`(URL 里的 `doc`/`lang` 用),
+    /// 与 `pending_diff_push` 的推送内容同源同快照。
+    pub fn diff_webview_desired(&self) -> Option<&str> {
+        let loaded = self.loaded_diff.as_ref()?;
+        match &loaded.content {
+            DiffBlobContent::Text { .. } => Some(loaded.path.as_str()),
+            DiffBlobContent::NotRenderable { .. } => None,
+        }
+    }
+
     /// `take_git_log_diff_script` 确认内容已下发后写回(见字段文档)。
     pub(crate) fn set_diff_sent_for(&mut self, key: (git2::Oid, String)) {
         self.diff_sent_for = Some(key);
@@ -2269,6 +2284,31 @@ mod tests {
             ..State::default()
         };
         assert!(state.pending_diff_push().is_none());
+    }
+
+    #[test]
+    fn diff_webview_desired_only_for_renderable_text() {
+        let commit = git2::Oid::from_bytes(&[7; 20]).unwrap();
+        let text = loaded_text_state(commit, "a.txt", "old", "new", false);
+        assert_eq!(text.diff_webview_desired(), Some("a.txt"));
+
+        let bin = State {
+            loaded_diff: Some(LoadedDiff {
+                commit,
+                path: "bin.dat".to_string(),
+                content: DiffBlobContent::NotRenderable {
+                    reason: "二进制".to_string(),
+                },
+            }),
+            ..State::default()
+        };
+        assert_eq!(
+            bin.diff_webview_desired(),
+            None,
+            "不可渲染内容不挂 CodeMirror webview"
+        );
+
+        assert_eq!(State::default().diff_webview_desired(), None);
     }
 
     #[tokio::test]
