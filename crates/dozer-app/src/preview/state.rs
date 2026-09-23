@@ -457,6 +457,12 @@ pub struct PreviewPane {
     /// `window_events` 每帧(同 `apply_pending_preview_find` 节奏)取走并
     /// `evaluate_script` 注入;Agent reveal/select 与外部 reload 用它。
     pub(crate) pending_editor_commands: Vec<(usize, EditorCommand)>,
+    /// "保存后再关闭"的 CodeMirror tab id 列表。Rust 侧不持有编辑器全文,
+    /// 关闭 dirty tab 不能直接落盘,得先向 host 下发 `SaveDocument`,待
+    /// host 回 `save_requested` 真正落盘后再移除 tab。`pending_editor_commands`
+    /// 里对应的那条 `SaveDocument` 已在关 tab 那一刻排队,本列表只记"这条
+    /// tab 的保存回来后要把 tab 关掉"。
+    pub(crate) pending_close: Vec<usize>,
     /// 空白页信息卡:激活 tab 为 `TabKind::Blank` 时,`apply_pending_blank_info`
     /// 异步跑出来的项目根目录简介。`None` 表示还没拉;view 层用 `—` 占位。
     /// `clear_all`/`PreviewTabSwitch` 路径会同步置回 `None`(项目切换后
@@ -489,6 +495,7 @@ impl Default for PreviewPane {
             pending_tabular_loads: Vec::new(),
             pending_json_tree_loads: Vec::new(),
             pending_editor_commands: Vec::new(),
+            pending_close: Vec::new(),
             blank_info: None,
             blank_info_in_flight: false,
         }

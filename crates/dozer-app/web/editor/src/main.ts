@@ -157,6 +157,45 @@ document.addEventListener(
   true,
 );
 
+// 复制 / 剪切 / 粘贴:WKWebView 成为 first responder 后键盘事件被它吃掉、到
+// 不了 winit,而本项目没有原生 Edit 菜单,AppKit 因此不会把 ⌘C/⌘X/⌘V 转成
+// `copy:`/`cut:`/`paste:` 原生命令——依赖这些 DOM 剪贴板事件的 CodeMirror
+// (它的 defaultKeymap 不接管剪贴板,全靠 `copy`/`paste` DOM 事件)拿不到任何
+// 事件,复制粘贴直接失效。这里在捕获阶段显式处理:
+// - 复制/剪切用 `document.execCommand(...)`(用户按键手势,WKWebView 放行),
+//   选中内容由 CodeMirror 的选区决定;
+// - 粘贴读 `navigator.clipboard.readText()`,异步拿到后经一个 CodeMirror
+//   transaction 替换当前选区(`replaceSelection`),保持 undo 历史与
+//   `document_changed` 上报一致。
+document.addEventListener(
+  'keydown',
+  (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    if (e.code === 'KeyC' || (e.code === 'KeyX' && !view.state.readOnly)) {
+      e.preventDefault();
+      try {
+        document.execCommand(e.code === 'KeyC' ? 'copy' : 'cut');
+      } catch {
+        /* 剪贴板被拒时静默,不阻断编辑 */
+      }
+    } else if (e.code === 'KeyV' && !view.state.readOnly) {
+      e.preventDefault();
+      void pasteFromClipboard();
+    }
+  },
+  true,
+);
+
+async function pasteFromClipboard(): Promise<void> {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (!text) return;
+    view.dispatch(view.state.replaceSelection(text));
+  } catch {
+    /* 无剪贴板权限/无文本表示(如图片)时静默 */
+  }
+}
+
 function offsetToPosition(offset: number): Position {
   const line = view.state.doc.lineAt(offset);
   // 对外坐标:窗口化时换算成全局 1-based 行号。
@@ -453,6 +492,12 @@ function applyCommand(raw: string): void {
         },
         cmd.request_id,
       );
+      break;
+    }
+    case 'save_document': {
+      // Rust 侧关闭 dirty tab 前下发:复用 ⌘S 的落盘链路,回
+      // `save_requested`。窗口化只读无脏内容,忽略。
+      saveHandler?.();
       break;
     }
   }

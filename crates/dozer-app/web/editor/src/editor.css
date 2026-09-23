@@ -48,9 +48,9 @@ html[data-theme='light'] .windowed-global-scrollbar {
   accent-color: rgba(0, 0, 0, 0.42);
 }
 
-* {
-  scrollbar-width: thin;
-}
+/* 不要用标准属性 `scrollbar-width`——WKWebView 一旦看到它就用系统 overlay
+   滚动条并忽略下面的 `::-webkit-scrollbar`,导致长行只能滚却看不到横向滚动条。
+   宽度/高度由 `::-webkit-scrollbar` 给出(窄条)。 */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;

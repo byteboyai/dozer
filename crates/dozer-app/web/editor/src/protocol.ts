@@ -85,7 +85,8 @@ export type EditorCommand =
   | { kind: 'open_find'; query?: string; replace?: boolean }
   | { kind: 'set_read_only'; read_only: boolean }
   | { kind: 'focus' }
-  | { kind: 'serialize_view_state'; request_id: string };
+  | { kind: 'serialize_view_state'; request_id: string }
+  | { kind: 'save_document' };
 
 /** 三端 host 共用的 envelope。 */
 export interface Envelope<P = unknown> {
@@ -193,6 +194,8 @@ export function decodeCommand(payload: unknown): EditorCommand | null {
       return typeof c.request_id === 'string'
         ? (c as unknown as EditorCommand)
         : null;
+    case 'save_document':
+      return c as unknown as EditorCommand;
     default:
       return null;
   }

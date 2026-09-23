@@ -553,21 +553,18 @@ impl PreviewPane {
             .filter(|t| t.hosts_webview())
             .map(|t| t.id)
     }
-    /// 手动点 tab / 打开时切到已存在 tab。切到**另一个**文件 tab 时,若目标
-    /// 走 wry 路径(没有原生 editor)则顺手推进 `reload_nonce`,让 webview
-    /// 切回来时重新 `load_url` 读到磁盘最新内容(同右键"刷新"的机制)。原生
-    /// editor tab 不动——它重载会重建实例、丢滚动/只读态,按品鉴保留(用户在
-    /// 别处手动确认过:原生 tab 切回不自动重载)。点当前已激活 tab 是 no-op。
+    /// 手动点 tab / 打开时切到已存在 tab。**只切 `active`**:webview 是常驻
+    /// 池、切走只 `set_visible(false)`、切回只 `set_visible(true)`,页面不重载,
+    /// 因此滚动位置/查找高亮等页内状态得以保留(用户口径:markdown 等渲染型
+    /// 预览切回 tab 应停在原滚动位置,不该跳回文件顶部)。磁盘最新内容仍由
+    /// 外部变化监听(`reload_webviews_for`)与右键"刷新"(`bump_reload`)负责,
+    /// 与原生 editor tab"切回不自动重载、保住滚动"同一品鉴口径。点当前已激活
+    /// tab 是 no-op。
     pub fn select(&mut self, idx: usize) {
         if idx >= self.tabs.len() || idx == self.active {
             return;
         }
-        let is_webview_file = self.tabs[idx].hosts_webview();
         self.active = idx;
-        if is_webview_file {
-            let id = self.tabs[idx].id;
-            self.bump_reload(id);
-        }
         self.cull_stale_find();
     }
 
@@ -586,6 +583,56 @@ impl PreviewPane {
         // 会在新项目上重新 spawn 一次。
         self.blank_info = None;
         self.blank_info_in_flight = false;
+        // 清空后旧 tab 全没了,"保存后关闭"等待列表随之作废(其对应的
+        // `SaveDocument` 命令也已在清空时失去 host,回不来)。
+        self.pending_close.clear();
+    }
+
+    /// 按 tab id 关闭(等价 `close` 的下标版本)。找不到该 id 是 no-op。
+    /// 用于"保存后再关闭"的回调——那时下标可能已因别的关 tab 而漂移,id 稳定。
+    pub fn close_by_id(&mut self, tab_id: usize) {
+        if let Some(idx) = self.tabs.iter().position(|t| t.id == tab_id) {
+            self.close(idx);
+        }
+    }
+
+    /// 关闭前的保存分流:目标 tab 是**脏的 CodeMirror 编辑器**时,Rust 侧
+    /// 不持有全文,不能像老 iced editor 那样就地写盘。改为向 host 下发
+    /// `SaveDocument`(host 用当前 buffer 回 `save_requested`,见
+    /// `EditorEvent::SaveRequested` 的落盘 + 完成关闭逻辑),把 tab id 记进
+    /// `pending_close`,等保存回来再真正移除。返回是否走了这条异步路径
+    /// (`true` 时调用方**不要**再 `close`)。非 CodeMirror / 不脏的 tab 返回
+    /// `false`,调用方维持原同步关闭路径。
+    pub fn request_save_before_close_if_dirty(&mut self, idx: usize) -> bool {
+        let Some(tab) = self.tabs.get(idx) else {
+            return false;
+        };
+        if !tab.dirty || !tab.uses_codemirror() {
+            return false;
+        }
+        let tab_id = tab.id;
+        self.pending_editor_commands
+            .push((tab_id, EditorCommand::SaveDocument));
+        if !self.pending_close.contains(&tab_id) {
+            self.pending_close.push(tab_id);
+        }
+        true
+    }
+
+    /// 某 tab 是否在"保存后关闭"等待列表里(不消费)。
+    pub fn has_pending_close(&self, tab_id: usize) -> bool {
+        self.pending_close.contains(&tab_id)
+    }
+
+    /// 某 tab 的保存是否回来并需要完成关闭:取走(消费式)则返回 `true`,
+    /// 调用方随后 `close_by_id`。`SaveRequested` 落盘后用。
+    pub fn take_pending_close(&mut self, tab_id: usize) -> bool {
+        if let Some(pos) = self.pending_close.iter().position(|id| *id == tab_id) {
+            self.pending_close.remove(pos);
+            true
+        } else {
+            false
+        }
     }
 
     /// 关掉一个 tab。越界是 no-op。`TabKind::Blank`(index 0)与文件 tab 一视同仁
@@ -599,7 +646,12 @@ impl PreviewPane {
         if idx >= self.tabs.len() {
             return;
         }
+        let removed_id = self.tabs[idx].id;
         self.tabs.remove(idx);
+        // 该 tab 若还在"保存后关闭"等待列表里,一并清掉(重复关闭路径兜底)。
+        if let Some(pos) = self.pending_close.iter().position(|id| *id == removed_id) {
+            self.pending_close.remove(pos);
+        }
         if self.tabs.is_empty() {
             // 关到只剩空气 → 自动补一个 Blank 占位,id 用 `next_id` 续号
             // (新 Blank 与被删的 Blank id 不同,不影响旧 Find 会话比对)。
@@ -2064,65 +2116,40 @@ mod tests {
         std::fs::remove_file(&rs_path).ok();
     }
 
-    #[cfg(any())] // 老 iced editor 已退役,历史测试停用
     #[test]
-    fn select_reloads_webview_tab_on_switch_but_not_same_or_native() {
+    fn select_switches_active_without_reloading_webview_tabs() {
         let mut p = PreviewPane::default();
-        let id0 = p.open_path(PathBuf::from("/tmp/a.md")); // webview(.md 走渲染预览)
-        let id1 = p.open_path(PathBuf::from("/tmp/b.md")); // webview
+        let _id0 = p.open_path(PathBuf::from("/tmp/a.md")); // webview(.md 走渲染预览)
+        let _id1 = p.open_path(PathBuf::from("/tmp/b.md")); // webview
         // 下标 0 是 Blank 占位,a.md=1、b.md=2。
         assert_eq!(p.active_idx(), 2);
 
-        // 切到另一个 webview tab:推进 reload_nonce,切回时换 URL 重载。
+        // 切到另一个 webview tab:只改 active,URL 不带 `_r=`(不重载 → 保滚动)。
         p.select(1);
+        assert_eq!(p.active_idx(), 1);
         assert_eq!(
             p.desired_webviews()[0].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&theme=dark&ln=1&_r=1",
-            "切到异 tab 的 webview 要自动推进 reload_nonce"
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&theme=dark&ln=1",
+            "切到异 tab 的 webview 不该推进 reload_nonce(保滚动位置)"
         );
         assert_eq!(
             p.desired_webviews()[1].url,
             "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&theme=dark&ln=1",
             "非目标 tab 不受影响"
         );
+        assert_eq!(p.tabs()[1].reload_nonce, 0);
+        assert_eq!(p.tabs()[2].reload_nonce, 0);
 
-        // 点当前已激活的 tab:no-op,不再多推进一次。
+        // 反复切换彼此仍是 no-op,reload_nonce 始终为 0。
+        p.select(2);
         p.select(1);
-        assert_eq!(
-            p.desired_webviews()[0].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&theme=dark&ln=1&_r=1",
-            "重复选同一 tab 不改 reload_nonce"
-        );
+        assert_eq!(p.tabs()[1].reload_nonce, 0);
+        assert_eq!(p.tabs()[2].reload_nonce, 0);
 
-        // 原生 editor tab 切换不重载:重开一个走原生路径的文件(whitelisted
-        // 非渲染扩展,读盘建 editor),其 reload_nonce 保持 0。
-        let rs_path =
-            std::env::temp_dir().join(format!("preview_select_test_{}.rs", std::process::id()));
-        std::fs::write(&rs_path, "fn main() {}").unwrap();
-        let _id_rs = p.open_path(rs_path.clone());
-        assert_eq!(p.active_idx(), 3);
-        assert!(p.tabs()[3].editor.is_some(), "c.rs 应是原生 editor tab");
-        p.select(2); // 切回 b.md(webview)
-        assert_eq!(
-            p.desired_webviews()[0].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&theme=dark&ln=1&_r=1",
-            "再切回 webview 推进一次 reload"
-        );
-        p.select(3); // 切回 c.rs(原生)
-        assert_eq!(
-            p.tabs()[3].reload_nonce,
-            0,
-            "原生 editor tab 切回不自动重载,保住滚动/只读态"
-        );
-        std::fs::remove_file(&rs_path).ok();
-
-        // 越界/原生切片语义:切到越界下标是 no-op。
+        // 越界下标是 no-op。
         let before = p.active_idx();
         p.select(99);
         assert_eq!(p.active_idx(), before);
-
-        // id0/id1 仍在,避免未使用告警。
-        let _ = (id0, id1);
     }
 
     #[test]
@@ -2695,6 +2722,66 @@ mod tests {
         p.close(99);
         assert_eq!(p.tabs().len(), tabs_before);
         assert_eq!(p.active_idx(), active_before);
+    }
+
+    /// 关闭脏 CodeMirror tab:Rust 不持有全文,必须走"下发 SaveDocument →
+    /// 等 host 回 save_requested → 再关"的异步路径(不能就地关)。
+    #[test]
+    fn dirty_codemirror_close_defers_and_queues_save_document() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("cm_close_{}.rs", std::process::id()));
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+
+        let mut p = PreviewPane::default();
+        let id = p.open_path(path.clone());
+        if let Some(tab) = p.tabs_mut().iter_mut().find(|t| t.id == id) {
+            tab.dirty = true;
+        }
+        let len_before = p.tabs().len();
+        let idx = p.tabs().iter().position(|t| t.id == id).unwrap();
+
+        assert!(
+            p.request_save_before_close_if_dirty(idx),
+            "脏 CodeMirror tab 应走异步保存路径"
+        );
+        assert!(p.has_pending_close(id), "应登记等待关闭");
+        assert!(
+            p.tabs().iter().any(|t| t.id == id),
+            "异步路径下调用方不应立刻 close"
+        );
+        // 队列里应有一条 SaveDocument。
+        let cmds = p.take_pending_editor_commands();
+        assert!(
+            cmds.iter()
+                .any(|(tid, c)| { *tid == id && matches!(c, EditorCommand::SaveDocument) })
+        );
+
+        // 保存回来 → 消费 pending_close 并真正移除。
+        assert!(p.take_pending_close(id));
+        assert!(!p.has_pending_close(id), "取走应复位");
+        p.close_by_id(id);
+        assert!(p.tabs().len() < len_before, "tab 应已被移除");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 不脏 / 非 CodeMirror 的 tab:走原同步关闭路径(返回 `false`)。
+    #[test]
+    fn clean_tab_close_uses_sync_path() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("cm_clean_{}.rs", std::process::id()));
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+
+        let mut p = PreviewPane::default();
+        let id = p.open_path(path.clone());
+        let idx = p.tabs().iter().position(|t| t.id == id).unwrap();
+        assert!(
+            !p.request_save_before_close_if_dirty(idx),
+            "干净 tab 不该走异步保存路径"
+        );
+        assert!(!p.has_pending_close(id));
+
+        std::fs::remove_file(&path).ok();
     }
 
     /// Phase A 契约:每个新打开的文件 tab 都带唯一 route/backend/reason;

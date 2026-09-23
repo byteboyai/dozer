@@ -75,7 +75,7 @@ impl EditorHostBinding {
             self.tab_id,
             super::extension_to_syntax(&self.path),
             crate::theme::terminal_font::size(),
-            crate::theme::terminal_font::line_height_factor(),
+            crate::theme::terminal_font::editor_line_height_factor(),
         )
     }
 

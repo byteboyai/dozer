@@ -179,6 +179,10 @@ pub enum EditorCommand {
     SerializeViewState {
         request_id: String,
     },
+    /// 让 host 用**当前 buffer**发起一次保存(等价用户按 ⌘S):host 收到后
+    /// 走 `saveHandler` → 回 `save_requested`。用于关闭 dirty tab 前先把
+    /// 磁盘内容补齐(Rust 侧不持有全文,必须经由 host 落盘)。
+    SaveDocument,
 }
 
 /// 解析/校验错误。调用方只做日志/丢弃,不 panic。
@@ -481,6 +485,24 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
         assert_eq!(v["payload"]["kind"], "set_window");
         assert_eq!(v["payload"]["start_line"], 1001);
+    }
+
+    /// 关闭脏 tab 前下发的"用当前 buffer 保存一次"命令,payload 只是一个
+    /// 无参 `save_document`(正文由 host 自己持有)。
+    #[test]
+    fn encodes_save_document_command() {
+        let s = encode_command(
+            1,
+            PanelKind::Files,
+            2,
+            "p1-t2",
+            7,
+            None,
+            EditorCommand::SaveDocument,
+        );
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["payload"]["kind"], "save_document");
+        assert_eq!(v["revision"], 7);
     }
 
     #[test]

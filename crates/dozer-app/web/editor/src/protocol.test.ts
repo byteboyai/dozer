@@ -76,6 +76,9 @@ test('decodeCommand accepts known commands', () => {
 
   const find = decodeCommand({ kind: 'open_find', query: 'foo', replace: true });
   assert.equal(find?.kind, 'open_find');
+
+  const save = decodeCommand({ kind: 'save_document' });
+  assert.equal(save?.kind, 'save_document');
 });
 
 test('decodeCommand rejects malformed and unknown commands', () => {

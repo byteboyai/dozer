@@ -18,8 +18,11 @@ const RAW: &str = include_str!("../../assets/theme/terminal.json");
 struct TerminalFont {
     /// 终端字号（逻辑像素）。
     size: f32,
-    /// 行高倍数（相对字号），1.0 = 无额外行距。
+    /// 终端 pane 行高倍数（相对字号），1.0 = 无额外行距。
     line_height_factor: f32,
+    /// CodeMirror 编辑器行高倍数（相对字号）。独立于终端：编辑区排版
+    /// 更疏朗，终端保持紧凑。
+    editor_line_height_factor: f32,
 }
 
 fn load(raw: &str) -> TerminalFont {
@@ -38,6 +41,11 @@ pub fn line_height_factor() -> f32 {
     FONT.line_height_factor
 }
 
+/// CodeMirror 编辑器行高倍数（相对字号）。
+pub fn editor_line_height_factor() -> f32 {
+    FONT.editor_line_height_factor
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -48,6 +56,7 @@ mod tests {
     fn matches_rustrover_editor_font() {
         assert_eq!(size(), 14.0);
         assert_eq!(line_height_factor(), 1.2);
+        assert_eq!(editor_line_height_factor(), 1.6);
     }
 
     #[test]

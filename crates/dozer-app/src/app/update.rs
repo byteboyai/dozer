@@ -59,6 +59,11 @@ impl App {
                     let mut pending_view_cmd: Option<(usize, crate::preview::EditorCommand)> = None;
                     // 窗口化 ⌘F:打开整文件搜索条。
                     let mut find_request: Option<usize> = None;
+                    // 关闭前保存:host 回 `save_requested` 落盘成功后,若这条
+                    // tab 正等"保存后关闭",记下 id 在 tab 借用结束后关闭。
+                    let mut close_after_save: Option<usize> = None;
+                    // 先(在可变借出 tab 之前)探测本 tab 是否在等"保存后关闭"。
+                    let want_close = pane.has_pending_close(binding.tab_id);
                     {
                         let Some(tab) = pane
                             .tabs_mut()
@@ -168,30 +173,38 @@ impl App {
                                 }
                             }
                             EditorEvent::SaveRequested { revision, text } => {
-                                if revision != event.revision || revision != tab.web_revision {
+                                // 关闭前保存的 tab:不管 revision 是否对齐,落盘
+                                // 尝试完都必须完成关闭,否则 tab 卡在等待里永远
+                                // 关不掉。`want_close` 在借出 tab 之前已探明。
+                                if revision == event.revision && revision == tab.web_revision {
+                                    match crate::preview::save_text_atomic(path, &text) {
+                                        Ok(()) => {
+                                            tab.dirty = false;
+                                            tab.recovery_written = false;
+                                            // 正常保存:清掉该文件的 recovery snapshot。
+                                            let project_id = binding.project_id;
+                                            let restore_path = path.clone();
+                                            io.handle.spawn(async move {
+                                                let _ = tokio::task::spawn_blocking(move || {
+                                                    crate::preview::clear_snapshot(
+                                                        &crate::preview::recovery_dir(),
+                                                        project_id,
+                                                        crate::preview::path_key(&restore_path),
+                                                    );
+                                                })
+                                                .await;
+                                            });
+                                        }
+                                        Err(error) => {
+                                            tab.web_error = Some(format!("保存失败: {error}"))
+                                        }
+                                    }
+                                } else if !want_close {
+                                    // 非关闭场景下的过期保存:与旧行为一致,丢弃。
                                     return;
                                 }
-                                match crate::preview::save_text_atomic(path, &text) {
-                                    Ok(()) => {
-                                        tab.dirty = false;
-                                        tab.recovery_written = false;
-                                        // 正常保存:清掉该文件的 recovery snapshot。
-                                        let project_id = binding.project_id;
-                                        let restore_path = path.clone();
-                                        io.handle.spawn(async move {
-                                            let _ = tokio::task::spawn_blocking(move || {
-                                                crate::preview::clear_snapshot(
-                                                    &crate::preview::recovery_dir(),
-                                                    project_id,
-                                                    crate::preview::path_key(&restore_path),
-                                                );
-                                            })
-                                            .await;
-                                        });
-                                    }
-                                    Err(error) => {
-                                        tab.web_error = Some(format!("保存失败: {error}"))
-                                    }
+                                if want_close {
+                                    close_after_save = Some(tab.id);
                                 }
                             }
                             EditorEvent::Snapshot { revision, text } => {
@@ -330,6 +343,20 @@ impl App {
                     }
                     if let Some(tab_id) = find_request {
                         pane.open_large_file_search(tab_id);
+                    }
+                    // "保存后关闭":落盘完成(或过期丢弃)后真正移除 tab,
+                    // 收尾与同步关闭路径一致(重置 first / 存状态 / flush 上下文)。
+                    if let Some(tab_id) = close_after_save
+                        && pane.take_pending_close(tab_id)
+                    {
+                        pane.close_by_id(tab_id);
+                        if binding.panel == PanelKind::Project {
+                            ws.project_preview_tab_first = 0;
+                        } else {
+                            ws.preview_tab_first = 0;
+                        }
+                        ws.spawn_preview_state_save(io);
+                        ws.flush_preview_context_push(io);
                     }
                     if context_changed {
                         // 第二段链路(dozer-app → dozerd)自带 250ms 防抖;这里
@@ -1415,11 +1442,14 @@ impl App {
             }
             Message::PreviewCloseTab(idx) => {
                 self.with_focused_project(|ws, io| {
-                    // 关闭前静默保存该 tab 的就地改动(仅当它是脏的原生 tab 才
-                    // 动作;不脏/走 wry 的 tab 内部直接 no-op)——复用
-                    // `preview_pane_save_at` 的落盘 + 清脏 + 面板 error 管线,抵掉
-                    // 关闭即丢改动。顺序:先 `save_at`(取的是关闭前的下标 + buffer)
-                    // 再 `close`。
+                    // 关闭前静默保存该 tab 的就地改动。老 iced editor 走
+                    // `preview_pane_save_at` 就地落盘;CodeMirror tab 的正文
+                    // 活在 webview 里,Rust 不持有,改为下发 `SaveDocument`,
+                    // 等 host 回 `save_requested` 落盘后再关(见该分支的
+                    // `take_pending_close`)。此路径下这里**不**立刻 close。
+                    if ws.preview.request_save_before_close_if_dirty(idx) {
+                        return;
+                    }
                     ws.preview_pane_save_at(PanelKind::Files, idx);
                     ws.preview.close(idx);
                     // 关 tab 后位置全变，旧 first 可能越界——归零防御（P1L T5）。
@@ -1623,7 +1653,11 @@ impl App {
             Message::ProjectPreviewSelectTab(idx) => self.project_preview_select_tab(idx),
             Message::ProjectPreviewCloseTab(idx) => {
                 self.with_focused_project(|ws, _io| {
-                    // 关闭前静默保存,语义同 `PreviewCloseTab`(先 `save_at` 再 close)。
+                    // 关闭前静默保存,语义同 `PreviewCloseTab`:CodeMirror tab
+                    // 下发 `SaveDocument` 等回落盘再关,其余就地 `save_at` 后关。
+                    if ws.project_preview.request_save_before_close_if_dirty(idx) {
+                        return;
+                    }
                     ws.preview_pane_save_at(PanelKind::Project, idx);
                     ws.project_preview.close(idx);
                     ws.project_preview_tab_first = 0;
