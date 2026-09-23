@@ -114,19 +114,36 @@ function applyCommand(raw: string): void {
 (window as unknown as { __dozer?: unknown }).__dozer = { dispatch: applyCommand };
 
 async function boot(): Promise<void> {
-  let text = '';
+  // 先宣告 host JS 就绪(T6:`ready` 只代表脚本初始化,不代表正文可见)。
+  post({ kind: 'ready', read_only: initialReadOnly, language: 'json' });
+  let text: string | null = null;
+  let error: string | null = null;
   try {
     const res = await fetch('__file__' + encodePathForFetch(filePath));
     if (res.ok) {
       text = await res.text();
     } else {
-      post({ kind: 'failed', message: `读取文件失败: ${res.status}`, recoverable: true });
+      error = `读取文件失败: ${res.status}`;
     }
   } catch (err) {
-    post({ kind: 'failed', message: `读取文件异常: ${String(err)}`, recoverable: true });
+    error = `读取文件异常: ${String(err)}`;
   }
-  mountEditor({ text });
-  post({ kind: 'ready', read_only: initialReadOnly, language: 'json' });
+  if (error === null) {
+    // Tree 视图要求合法 JSON:先显式解析,把非法 JSON 作为 `document_loaded.error`
+    // 上报(而不是挂载后由 vanilla-jsoneditor 同步 `onError`)——否则 `failed`
+    // 之后紧跟的成功 `document_loaded` 会覆盖错误态。
+    try {
+      JSON.parse(text ?? '');
+    } catch (err) {
+      error = `JSON 解析失败: ${String(err)}`;
+    }
+  }
+  if (error === null) {
+    mountEditor({ text: text ?? '' });
+    post({ kind: 'document_loaded', revision, bytes: (text ?? '').length, error: null });
+  } else {
+    post({ kind: 'document_loaded', revision, bytes: 0, error });
+  }
 }
 
 void boot();

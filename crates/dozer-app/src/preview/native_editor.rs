@@ -77,6 +77,14 @@ pub(crate) fn is_json_family_extension(path: &std::path::Path) -> bool {
     )
 }
 
+/// 严格 `.json` 扩展名(唯一支持 Tree 视图的 JSON 家族成员,T6)。json5/jsonc
+/// 含注释、vanilla-jsoneditor 不解析,只给 CodeMirror 文本。
+pub(crate) fn is_strict_json_extension(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+}
+
 /// JSON Lines / NDJSON 扩展名(T8):每行一个独立 JSON root,路由到
 /// `PreviewKind::Streamed`。
 pub(crate) fn is_json_lines_extension(path: &std::path::Path) -> bool {

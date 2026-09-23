@@ -93,7 +93,17 @@ pub(crate) fn route_and_backend_from_profile(
         || matches!(profile.content_kind, ContentKind::Binary);
     let policy = decide_text_policy(profile, &capabilities.budgets);
     let read_only = non_text || policy.policy != TextFilePolicy::EditableCode;
-    let backend = PreviewBackend::from_route(&route, path, read_only);
+    let mut backend = PreviewBackend::from_route(&route, path, read_only);
+    // T6:严格 `.json` 超 `json_tree_bytes` 预算时**不进 vanilla-jsoneditor**——
+    // Tree 视图会让主线程/WebView 长时间解析超大文档,反而比文本更慢更不稳。
+    // 改走 CodeMirror Text(超大再经上面 policy 判为窗口化只读)。
+    if matches!(route.kind, PreviewKind::Json)
+        && crate::preview::native_editor::is_strict_json_extension(path)
+        && profile.size_bytes > capabilities.budgets.json_tree_bytes
+        && let PreviewBackend::Json(json) = &mut backend
+    {
+        json.mode = JsonMode::Text;
+    }
     (route, backend, read_only)
 }
 
@@ -1816,6 +1826,11 @@ impl PreviewPane {
 
     /// 恢复 JSON tab 的持久 mode。壳恢复已由 `push_shell_tab` 直接落到
     /// backend 上,这里保留给"已 Ready 的树"场景(暂无调用方)。
+    ///
+    /// T6:发生 mode 变更时(当前唯一路径就是本方法,暂无调用方)走
+    /// `SwitchingMode` + `Loading` 并推进 generation——目标 host 的首帧
+    /// (`document_loaded`:Tree→JSON host,Text→editor host)确认前不 finish,
+    /// 旧 host 的迟到结果按 generation 丢弃。mode 未变时是 no-op。
     #[allow(dead_code)]
     pub fn restore_json_mode(&mut self, tab_id: usize, mode: PreviewMode) {
         let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
@@ -1827,12 +1842,23 @@ impl PreviewPane {
         if !route.supports(mode) {
             return;
         }
-        if let Some(PreviewBackend::Json(json)) = tab.backend.as_mut() {
-            json.mode = match mode {
-                PreviewMode::Text => JsonMode::Text,
-                _ => JsonMode::Tree,
-            };
+        let target = match mode {
+            PreviewMode::Text => JsonMode::Text,
+            _ => JsonMode::Tree,
+        };
+        let changed =
+            matches!(&tab.backend, Some(PreviewBackend::Json(json)) if json.mode != target);
+        if !changed {
+            return;
         }
+        if let Some(PreviewBackend::Json(json)) = tab.backend.as_mut() {
+            json.mode = target;
+        }
+        let generation = tab.load_state.generation.wrapping_add(1);
+        tab.load_state = PreviewLoadState::starting(generation, PreviewLoadStage::SwitchingMode);
+        let _ = tab.backend_state.try_transition(BackendState::Loading);
+        tab.web_revision = 0;
+        tab.debug_assert_backend_consistent();
     }
 
     /// 编辑保存后调用:按 `PreviewTab.id` 找到对应 tab,推进 reload。原生
@@ -4412,6 +4438,138 @@ mod tests {
             .expect("Tree 应产出 json-editor spec");
         assert!(crate::preview::is_json_editor_url(&spec.url));
         assert!(spec.url.contains("ro=1"), "Tree 为查看态");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// T6:JSON Tree 在 `Loading` 期预创建 json host 但 **hidden**,`document_loaded`
+    /// 才可见(避免空白树/半构造 DOM 盖住 loading)。
+    #[test]
+    fn json_tree_host_hidden_until_document_loaded() {
+        let path = std::env::temp_dir().join(format!("t6_tree_hidden_{}.json", std::process::id()));
+        std::fs::write(&path, "{\"a\":1}\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let (id, generation) = pane.open_path_provisional(path.clone());
+        let generation = generation.unwrap();
+        assert!(pane.apply_profile(id, generation, &profile_file(&path).unwrap()));
+        pane.advance_load(id, generation, PreviewLoadStage::CreatingHost);
+
+        // Loading 期:host 已预创建但 hidden。
+        let spec = pane
+            .desired_json_webviews(1, crate::app::PanelKind::Files)
+            .into_iter()
+            .find(|s| s.id == id)
+            .expect("Loading 期应预创建 Tree host");
+        assert!(!spec.visible, "未 ready 的 Tree host 必须 hidden");
+
+        // ready 只推进到 Reading(仍 Loading),document_loaded 才 finish。
+        let tab = pane.tabs_mut().iter_mut().find(|t| t.id == id).unwrap();
+        tab.web_error = None;
+        assert_eq!(pane.load_stage(id), PreviewLoadStage::CreatingHost);
+        assert!(pane.finish_load(id, generation));
+        assert!(
+            pane.tabs()
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap()
+                .backend_state
+                .is_ready()
+        );
+        let spec = pane
+            .desired_json_webviews(1, crate::app::PanelKind::Files)
+            .into_iter()
+            .find(|s| s.id == id)
+            .expect("ready 后仍应有 Tree host");
+        assert!(spec.visible, "ready 后激活 Tree host 应可见");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// T6:严格 `.json` 超 `json_tree_bytes` 预算 → 不进 vanilla-jsoneditor,
+    /// 降级为 CodeMirror Text。
+    #[test]
+    fn oversized_json_degrades_to_text_mode() {
+        let path = std::env::temp_dir().join(format!("t6_big_{}.json", std::process::id()));
+        std::fs::write(&path, "{\"a\":1}\n").unwrap();
+        let mut pane = PreviewPane::default();
+        // 预算调到 0,任何非空 json 都超预算。
+        let mut caps = *pane.capabilities;
+        caps.budgets.json_tree_bytes = 0;
+        pane.capabilities = std::sync::Arc::new(caps);
+        let id = pane.open_path(path.clone());
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(
+            matches!(
+                &tab.backend,
+                Some(PreviewBackend::Json(json)) if json.mode == JsonMode::Text
+            ),
+            "超预算 json 应降级为 Text"
+        );
+        assert!(!tab.uses_json_editor());
+        assert!(tab.uses_editor_host());
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// T6:Tree↔Text(mode 变更)走 `SwitchingMode` + Loading,generation 推进,
+    /// 目标 host 首帧确认前不 finish。mode 未变是 no-op。
+    #[test]
+    fn restore_json_mode_switches_via_switching_mode() {
+        let path = std::env::temp_dir().join(format!("t6_switch_{}.json", std::process::id()));
+        std::fs::write(&path, "{\"a\":1}\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == id) {
+            tab.backend_state = BackendState::Ready;
+            tab.load_state.finish();
+        }
+        let gen_before = pane
+            .tabs()
+            .iter()
+            .find(|t| t.id == id)
+            .unwrap()
+            .load_state
+            .generation;
+
+        // Tree(default)→ Text:进入 SwitchingMode + Loading。
+        pane.restore_json_mode(id, PreviewMode::Text);
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(matches!(
+            &tab.backend,
+            Some(PreviewBackend::Json(json)) if json.mode == JsonMode::Text
+        ));
+        assert_eq!(pane.load_stage(id), PreviewLoadStage::SwitchingMode);
+        assert!(
+            matches!(tab.backend_state, BackendState::Loading),
+            "切换期间保持 Loading"
+        );
+        assert_eq!(
+            tab.load_state.generation,
+            gen_before + 1,
+            "generation 应推进"
+        );
+
+        // 旧 generation 的 finish 被丢弃,不结束新 loading。
+        assert!(!pane.finish_load(id, gen_before));
+        assert_eq!(pane.load_stage(id), PreviewLoadStage::SwitchingMode);
+
+        // mode 未变是 no-op(generation 不动)。
+        let gen_now = pane
+            .tabs()
+            .iter()
+            .find(|t| t.id == id)
+            .unwrap()
+            .load_state
+            .generation;
+        pane.restore_json_mode(id, PreviewMode::Text);
+        assert_eq!(
+            pane.tabs()
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap()
+                .load_state
+                .generation,
+            gen_now
+        );
 
         std::fs::remove_file(&path).ok();
     }

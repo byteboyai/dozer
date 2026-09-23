@@ -362,6 +362,15 @@ pub enum JsonEvent {
         read_only: bool,
         language: String,
     },
+    /// T6:vanilla-jsoneditor 首帧**真正挂上**(解析完成、DOM 可显示)后上报;
+    /// `ready` 只表示 host JS 初始化完成。读取/解析失败时 `error` 非空。
+    /// Rust 收到本事件才对 JSON Tree tab `finish_load`(成功)或置 `Failed`。
+    DocumentLoaded {
+        revision: u64,
+        bytes: u64,
+        #[serde(default)]
+        error: Option<String>,
+    },
     /// 树编辑后的当前文本(可能较大,由 JS 侧节流)。
     DocumentChanged {
         revision: u64,
@@ -709,6 +718,45 @@ mod tests {
             parse_json_event(&raw(r#"{"kind":"evil"}"#)),
             Err(ProtocolError::UnknownPayload(_))
         ));
+    }
+
+    /// T6:JSON host `document_loaded` 携带 revision/bytes/error(error 可省略)。
+    #[test]
+    fn parses_json_document_loaded() {
+        let ok = parse_json_event(&raw(
+            r#"{"kind":"document_loaded","revision":1,"bytes":64,"error":null}"#,
+        ))
+        .unwrap();
+        assert_eq!(
+            ok.payload,
+            JsonEvent::DocumentLoaded {
+                revision: 1,
+                bytes: 64,
+                error: None
+            }
+        );
+        let err = parse_json_event(&raw(
+            r#"{"kind":"document_loaded","revision":2,"bytes":0,"error":"读取文件失败: 404"}"#,
+        ))
+        .unwrap();
+        assert!(matches!(
+            err.payload,
+            JsonEvent::DocumentLoaded {
+                revision: 2,
+                error: Some(_),
+                ..
+            }
+        ));
+        let no_err =
+            parse_json_event(&raw(r#"{"kind":"document_loaded","revision":3,"bytes":7}"#)).unwrap();
+        assert_eq!(
+            no_err.payload,
+            JsonEvent::DocumentLoaded {
+                revision: 3,
+                bytes: 7,
+                error: None
+            }
+        );
     }
 
     #[test]

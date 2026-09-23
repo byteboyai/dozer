@@ -487,11 +487,32 @@ impl App {
                         match event.payload {
                             JsonEvent::Ready { .. } => {
                                 tab.web_error = None;
-                                let _ = tab
-                                    .backend_state
-                                    .try_transition(crate::preview::BackendState::Ready);
-                                // T5/T6:JSON host 首帧就绪 → 结束加载。
-                                tab.load_state.finish();
+                                // T6:`ready` 只代表 host JS 就绪,不代表正文可见;
+                                // 加载在这个阶段保持 Loading,等 `document_loaded`。
+                            }
+                            JsonEvent::DocumentLoaded {
+                                revision,
+                                bytes: _,
+                                error,
+                            } => {
+                                if let Some(message) = error {
+                                    tab.web_error = Some(message.clone());
+                                    let _ = tab.backend_state.try_transition(
+                                        crate::preview::BackendState::Failed(
+                                            crate::preview::PreviewError::new(message, true),
+                                        ),
+                                    );
+                                    tab.load_state.finish();
+                                } else {
+                                    if revision >= tab.web_revision {
+                                        tab.web_revision = revision;
+                                    }
+                                    let _ = tab
+                                        .backend_state
+                                        .try_transition(crate::preview::BackendState::Ready);
+                                    // T6:JSON host 正文真正挂上 → 结束加载。
+                                    tab.load_state.finish();
+                                }
                             }
                             JsonEvent::DocumentChanged { revision, .. } => {
                                 if revision >= tab.web_revision {
