@@ -63,7 +63,7 @@ webview 挡住、部分或完全不可见——brainstorming 中用户确认这�
 |---|---|---|---|
 | 1 | `ws.files.tree_delete_confirm_is_some()` | `files::delete_confirm_popup` | confirm |
 | 2 | `ws.files.pending_move_is_some()` | `files::move_confirm_popup` | 定制(确认+目标选择器) |
-| 3 | `ws.project_panel.delete_pending.is_some()` | `project::project_delete_confirm_popup` | 定制(输入项目名确认) |
+| 3 | `ws.project_panel.delete_pending.is_some()` | `project::project_delete_confirm_popup` | 定制(三选一单选确认,无文本输入) |
 | 4 | `ws.project_panel.scaffold_run.is_some()` | `project::scaffold_progress_popup` | 定制,阻塞(`scrim_blocking`,不可取消) |
 | 5 | `ws.database.delete_confirm().is_some()` | `database::delete_confirm_popup` | confirm |
 | 6 | `ws.database.editing().is_some()` | `database::source_form` | 定制(表单,需 IME) |
@@ -194,15 +194,15 @@ confirm()` 拼 `Element`,改成把这些字段装进 `ConfirmDialog` 返回给�
 `handle_input`,需要 IME 的额外 `set_ime_allowed(true)`,需要原生右键
 菜单的额外挂靠/归还 `install_content_view`):
 
-| 弹窗 | 新文件 | 需要 IME/原生菜单 |
-|---|---|---|
-| Files 移动确认 | `platform/files_move_overlay.rs` | 否 |
-| Project 删除确认 | `platform/project_delete_overlay.rs` | 是(项目名输入框) |
-| Project 修复进度 | `platform/project_scaffold_overlay.rs` | 否(无输入,`scrim_blocking` 语义原样保留:不接受 Esc/失焦关闭) |
-| Database 数据源表单 | `platform/database_source_overlay.rs` | 是 |
-| Database 驱动管理 | `platform/database_drivers_overlay.rs` | 否 |
-| SSH 主机表单 | `platform/ssh_host_overlay.rs` | 是 |
-| Todo 详情 | `platform/todo_detail_overlay.rs` | 是 |
+| 弹窗 | 新文件 | 需要 IME/原生菜单 | 失焦关闭 |
+|---|---|---|---|
+| Files 移动确认 | `platform/files_move_overlay.rs` | 是(新文件名可能是中文) | **不接失焦关闭**——"到目录"旁的浏览按钮(`Message::MoveDirBrowse`,`window_events.rs:1566`)会同步弹出原生 `rfd` 目录选择器,那会让本窗口收到一次真实 `Focused(false)`,若照常触发失焦即关闭会把正在填的移动表单整个关掉,同 `ProjectCreateOverlay` 的既有考量 |
+| Project 删除确认 | `platform/project_delete_overlay.rs` | 否(纯三选一单选,已读函数体确认无文本输入) | 简单失焦即关闭 |
+| Project 修复进度 | `platform/project_scaffold_overlay.rs` | 否(无输入) | `scrim_blocking` 语义原样保留:不接受 Esc/点击/失焦关闭,只有内容里"关闭"按钮(全部步骤完成后才可点)能关 |
+| Database 数据源表单 | `platform/database_source_overlay.rs` | 是 | 简单失焦即关闭(已核实表单内无 `rfd::` 调用,不会有嵌套原生选择器) |
+| Database 驱动管理 | `platform/database_drivers_overlay.rs` | 否 | 简单失焦即关闭 |
+| SSH 主机表单 | `platform/ssh_host_overlay.rs` | 是 | 简单失焦即关闭(已核实表单内无 `rfd::` 调用) |
+| Todo 详情 | `platform/todo_detail_overlay.rs` | 是 | 简单失焦即关闭 |
 
 各自的 `State`/`Message`/`update` 不动。视图函数如果现在接收
 `window_width: f32` 做比例缩放(如 `*_popup(state, window_size.0)`),
@@ -303,9 +303,11 @@ pub(crate) enum OverlayKind {
    `ConfirmOverlay`——每个都是提取一个 `*_confirm_spec` + 删旧
    `stack!` 分支的小改动,边际成本低。
 3. **七个定制宿主逐个迁移**:每个独立成一个任务/分支,建议顺序上不需要
-   IME 的先做(Database 驱动管理、Files 移动确认),需要 IME/原生菜单
-   挂靠的后做(Database/SSH 表单、Project 删除确认、Todo 详情)——
-   复用同一套"要不要接 IME/原生菜单"的经验,减少重复踩坑。
+   IME 的先做(Database 驱动管理、Project 修复进度、Project 删除确认),
+   需要 IME/原生菜单挂靠的后做(Database/SSH 表单、Todo 详情),Files
+   移动确认单独放在需要 IME 的这一组里最先做——它虽然需要 IME,但额外
+   带有"不接失焦关闭"这个后三者都不需要的特殊考量(见上表),先做完能让
+   这个例外尽早被验证。
 4. **最终清理**:12 个全部迁完后,删 `app/view.rs` 对应分支、删被替换的
    旧视图函数、按最终 grep 结果决定 `dialog::scrim`/`scrim_blocking`
    是否可删。
