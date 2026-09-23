@@ -76,6 +76,13 @@
   .md-list { margin: 0 0 10px; padding-left: 20px; }
   .md-list:last-child { margin-bottom: 0; }
   .md-list li { margin-bottom: 3px; }
+  .md-table { margin: 0 0 10px; border-collapse: collapse; max-width: 100%; font-size: 12px; }
+  .md-table:last-child { margin-bottom: 0; }
+  .md-table th, .md-table td {
+    border: 1px solid var(--line); padding: 5px 10px; text-align: left; vertical-align: top;
+  }
+  .md-table th { background: #10151f; font-weight: 600; color: var(--cream); }
+  .md-table td { color: var(--cream); overflow-wrap: anywhere; }
   .md-code-block {
     margin: 0 0 10px; padding: 8px 10px; background: #10151f;
     border: 1px solid var(--line); border-radius: 6px; overflow-x: auto;
@@ -189,8 +196,8 @@ function renderAvatarIcon(svg, color) {
 // 极简 markdown → 安全 HTML(无依赖,不接 CDN——wry 自定义协议页面不
 // 兜底外部脚本失败,离线优先)。文本先整体转义再拼标签,标签只由本函数
 // 生成,不会把用户/模型文本里的尖括号当成真标签解释,规避 XSS。只覆盖
-// agent 回复里常见的子集:标题/粗体/斜体/行内代码/代码块/有序无序列表,
-// 不追求 CommonMark 全量兼容。
+// agent 回复里常见的子集:标题/粗体/斜体/行内代码/代码块/有序无序列表/GFM
+// 表格,不追求 CommonMark 全量兼容。
 function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -258,6 +265,54 @@ function renderMarkdown(text) {
       h.innerHTML = renderInlineMarkdown(heading[2]);
       frag.appendChild(h);
       i++;
+      continue;
+    }
+
+    // GFM 表格:首行以 | 开头、第二行是 |---|---| 形式的分隔行才算表,
+    // 避免把普通文本里的竖线误判成表格。行内单元格复用行内渲染(粗体/
+    // 行内代码等照常生效),全部经 escapeHtml 转义,无 XSS 面。
+    if (
+      /^\s*\|/.test(line) &&
+      i + 1 < lines.length &&
+      /^\s*\|(\s*:?-+:?\s*\|)+\s*$/.test(lines[i + 1])
+    ) {
+      flushPara();
+      const rows = [];
+      while (i < lines.length && /^\s*\|/.test(lines[i])) {
+        rows.push(
+          lines[i]
+            .trim()
+            .replace(/^\|/, "")
+            .replace(/\|$/, "")
+            .split("|")
+            .map(function (c) { return c.trim(); })
+        );
+        i++;
+      }
+      // rows[0] = 表头,rows[1] = 分隔行(已由上面的判据保证存在),其余为正文。
+      const table = document.createElement("table");
+      table.className = "md-table";
+      const thead = document.createElement("thead");
+      const headTr = document.createElement("tr");
+      rows[0].forEach(function (c) {
+        const th = document.createElement("th");
+        th.innerHTML = renderInlineMarkdown(c);
+        headTr.appendChild(th);
+      });
+      thead.appendChild(headTr);
+      table.appendChild(thead);
+      const tbody = document.createElement("tbody");
+      rows.slice(2).forEach(function (cells) {
+        const tr = document.createElement("tr");
+        cells.forEach(function (c) {
+          const td = document.createElement("td");
+          td.innerHTML = renderInlineMarkdown(c);
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      frag.appendChild(table);
       continue;
     }
 
