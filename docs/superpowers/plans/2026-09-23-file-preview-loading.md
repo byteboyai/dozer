@@ -312,12 +312,12 @@ Profiling → Reserving → CreatingHost → Indexing → LoadingWindow → Read
 
 ### 自动化
 
-- [ ] 状态机表驱动测试覆盖所有 stage、成功、失败、取消、重试和过期 generation。
-- [ ] WebView desired/visible 测试：Loading 不可见，document/window ACK 后可见。
-- [ ] 慢 worker 测试：任务执行期间 UI 至少产生多次 redraw，完成后动画退出。
-- [ ] UI handler 审计测试/约束：不得直接调用大文件读取、索引和解析入口。
-- [ ] Windowed、JSON、Tabular、Flyfish 的首个可用画面边界测试。
-- [ ] `cargo test -p dozer-app`、workspace test、clippy、fmt 和前端 test/build 全部通过。
+- [x] 状态机表驱动测试覆盖所有 stage、成功、失败、取消、重试和过期 generation。
+- [x] WebView desired/visible 测试：Loading 不可见，document/window ACK 后可见。
+- [x] 慢 worker 测试：任务执行期间 UI 至少产生多次 redraw，完成后动画退出。
+- [x] UI handler 审计测试/约束：不得直接调用大文件读取、索引和解析入口。
+- [x] Windowed、JSON、Tabular、Flyfish 的首个可用画面边界测试。
+- [x] `cargo test -p dozer-app`、workspace test、clippy、fmt 和前端 test/build 全部通过。
 
 ### 真机
 
