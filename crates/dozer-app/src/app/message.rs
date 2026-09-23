@@ -297,12 +297,22 @@ pub enum Message {
     PreviewLargeFileSearchClose(PanelKind),
     /// 查询框回车/点搜索:`String` 是本次提交的 query。
     PreviewLargeFileSearchSubmit(PanelKind, usize, String),
-    /// 异步结果回灌,语义同 `PreviewMoreLoaded`。
+    /// 异步结果回灌(T9):`u64` 为发起查询时的 generation,过期结果被丢弃。
     PreviewLargeFileSearchResults(
         crate::app::layout::ProjectId,
         PanelKind,
         usize,
-        Result<Vec<crate::extensions::search::SearchHit>, String>,
+        u64,
+        Result<crate::preview::SearchOutcome, String>,
+    ),
+    /// 搜索进度回灌(T9,已限频):`u64` 是 generation,后两个是已扫描/总字节。
+    PreviewLargeFileSearchProgress(
+        crate::app::layout::ProjectId,
+        PanelKind,
+        usize,
+        u64,
+        u64,
+        u64,
     ),
     /// 上一条/下一条命中(`bool` = 是否前进)。
     PreviewLargeFileSearchGo(PanelKind, bool),

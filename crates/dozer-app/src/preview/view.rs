@@ -945,7 +945,7 @@ impl PreviewPane {
 
     /// 打开只读大文件档搜索条,锁定 `tab_id`。已开着且锁的是同一个 tab 则
     /// no-op(保留已输入的 query,同 `FindState` 既有语义);换 tab 重开会
-    /// 丢旧会话(`query`/`hits` 清空)。
+    /// 丢旧会话(`query`/`hits`/错误清空)并作废在途查询。
     pub fn open_large_file_search(&mut self, tab_id: usize) {
         if self
             .large_file_search
@@ -954,33 +954,121 @@ impl PreviewPane {
         {
             return;
         }
+        if let Some(old) = self.large_file_search.as_mut() {
+            old.cancel_inflight();
+        }
         self.large_file_search = Some(LargeFileSearch {
             tab_id,
             ..Default::default()
         });
     }
 
+    /// 关闭搜索条:作废在途查询(置位共享取消信号)后丢弃会话。
     pub fn close_large_file_search(&mut self) {
+        if let Some(session) = self.large_file_search.as_mut() {
+            session.cancel_inflight();
+        }
         self.large_file_search = None;
     }
 
-    /// 异步搜索结果回灌:会话已被关闭,或已换锁到别的 tab(用户在结果回来
-    /// 前又做了别的操作)时静默丢弃。
+    /// 启动一次查询:作废旧 generation,清错误,`running = true`,返回本查询的
+    /// generation 与共享取消句柄(调用方捕获进 `spawn_blocking`,回灌时用
+    /// generation 校验)。会话已关闭/未锁到该 tab 返回 `None`。
+    pub fn start_large_file_search(
+        &mut self,
+        tab_id: usize,
+        query: String,
+    ) -> Option<(u64, std::sync::Arc<std::sync::atomic::AtomicBool>)> {
+        let session = self.large_file_search.as_mut()?;
+        if session.tab_id != tab_id {
+            return None;
+        }
+        session.cancel_inflight();
+        session.generation = session.generation.wrapping_add(1);
+        session.query = query;
+        session.running = true;
+        session.hits.clear();
+        session.current = 0;
+        session.total_matches = 0;
+        session.truncated = false;
+        session.progress = None;
+        Some((session.generation, session.cancel.clone()))
+    }
+
+    /// 提交查询时查询为空:立即取消在途查询并清掉 loading(T9 bullet 5),
+    /// 会话保留(仍开着条)。返回是否命中会话。
+    pub fn clear_large_file_search(&mut self, tab_id: usize) -> bool {
+        let Some(session) = self.large_file_search.as_mut() else {
+            return false;
+        };
+        if session.tab_id != tab_id {
+            return false;
+        }
+        session.cancel_inflight();
+        session.generation = session.generation.wrapping_add(1);
+        session.query.clear();
+        session.running = false;
+        session.hits.clear();
+        session.current = 0;
+        session.total_matches = 0;
+        session.truncated = false;
+        session.progress = None;
+        true
+    }
+
+    /// 进度回灌(限频已由发送方保证)。generation 不符或已关闭则丢弃。
+    pub fn set_large_file_search_progress(
+        &mut self,
+        tab_id: usize,
+        generation: u64,
+        progress: crate::preview::PreviewLoadProgress,
+    ) {
+        if let Some(session) = self.large_file_search.as_mut()
+            && session.tab_id == tab_id
+            && session.generation == generation
+            && session.running
+        {
+            session.progress = Some(progress);
+        }
+    }
+
+    /// 异步搜索结果回灌:会话已关闭 / 已换锁别的 tab / generation 过期(用户
+    /// 又提交了新查询)时静默丢弃。`Ok` 携带总数与截断位(T9 bullet 4:
+    /// 命中列表封顶但总数仍统计)。
     pub fn set_large_file_search_results(
         &mut self,
         tab_id: usize,
-        result: Result<Vec<crate::extensions::search::SearchHit>, String>,
+        generation: u64,
+        result: Result<crate::preview::SearchOutcome, String>,
     ) {
         let Some(session) = self.large_file_search.as_mut() else {
             return;
         };
-        if session.tab_id != tab_id {
+        if session.tab_id != tab_id || session.generation != generation {
             return;
         }
         session.running = false;
-        if let Ok(hits) = result {
-            session.hits = hits;
-            session.current = 0;
+        session.progress = None;
+        match result {
+            Ok(outcome) => {
+                session.hits = outcome
+                    .hits
+                    .into_iter()
+                    .map(|h| crate::extensions::search::SearchHit {
+                        path: PathBuf::new(),
+                        line_no: h.line as u64,
+                        line_text: h.text,
+                    })
+                    .collect();
+                session.total_matches = outcome.total_matches;
+                session.truncated = outcome.truncated;
+                session.current = 0;
+                session.error = None;
+            }
+            // 局部错误:只标在搜索条上,不把整个 preview 置 Failed(T9 bullet 5)。
+            Err(error) => {
+                session.error = Some(error);
+            }
         }
     }
 
@@ -1541,6 +1629,15 @@ impl PreviewPane {
             }
             self.find = None;
         }
+        // T9:窗口化搜索会话锁定的 tab 已关闭/换项目时,作废在途查询并丢弃
+        // 会话(不给已消失的 tab 继续扫盘)。
+        let stale_search = self
+            .large_file_search
+            .as_ref()
+            .is_some_and(|s| !self.tabs.iter().any(|t| t.id == s.tab_id));
+        if stale_search {
+            self.close_large_file_search();
+        }
     }
 
     /// 按 tab id 取该 tab 的 Tabular Viewer 可变引用。tab 不存在、该 tab 不是
@@ -2095,6 +2192,15 @@ mod tests {
         assert!(p.large_file_search.is_none());
     }
 
+    fn outcome(hits: Vec<crate::preview::SearchHit>, total: u64, truncated: bool) -> SearchOutcome {
+        SearchOutcome {
+            hits,
+            total_matches: total,
+            truncated,
+            lines_scanned: total.max(1),
+        }
+    }
+
     #[test]
     fn large_file_search_results_fill_hits_and_reset_current() {
         let mut p = PreviewPane::default();
@@ -2103,16 +2209,21 @@ mod tests {
             "x.log".into(),
         );
         p.open_large_file_search(id);
-        let hits = vec![crate::extensions::search::SearchHit {
-            path: "/tmp/x.log".into(),
-            line_no: 42,
-            line_text: "needle here".into(),
+        let (generation, _cancel) = p.start_large_file_search(id, "needle".into()).unwrap();
+        let hits = vec![crate::preview::SearchHit {
+            line: 42,
+            column: 3,
+            text: "needle here".into(),
         }];
-        p.set_large_file_search_results(id, Ok(hits.clone()));
+        p.set_large_file_search_results(id, generation, Ok(outcome(hits, 7, true)));
         let s = p.large_file_search.as_ref().unwrap();
-        assert_eq!(s.hits, hits);
+        assert_eq!(s.hits.len(), 1);
+        assert_eq!(s.hits[0].line_no, 42);
+        assert_eq!(s.total_matches, 7);
+        assert!(s.truncated);
         assert_eq!(s.current, 0);
         assert!(!s.running);
+        assert!(s.error.is_none());
     }
 
     #[test]
@@ -2124,9 +2235,85 @@ mod tests {
             "x.log".into(),
         );
         p.open_large_file_search(id);
+        let (generation, _) = p.start_large_file_search(id, "needle".into()).unwrap();
         p.close_large_file_search();
-        p.set_large_file_search_results(id, Ok(vec![])); // 不应 panic,也不应重新打开条
+        p.set_large_file_search_results(id, generation, Ok(outcome(vec![], 0, false))); // 不应 panic,也不应重新打开条
         assert!(p.large_file_search.is_none());
+    }
+
+    #[test]
+    fn large_file_search_stale_generation_is_dropped() {
+        // 快速连续输入:旧查询的结果在 generation 已前进后到达,必须丢弃,
+        // 不能覆盖新查询。
+        let mut p = PreviewPane::default();
+        let id = p.push_tab(
+            TabKind::File(std::path::PathBuf::from("/tmp/x.log")),
+            "x.log".into(),
+        );
+        p.open_large_file_search(id);
+        let (old_gen, _) = p.start_large_file_search(id, "old".into()).unwrap();
+        let (new_gen, _) = p.start_large_file_search(id, "new".into()).unwrap();
+        assert_ne!(old_gen, new_gen);
+        let stale = vec![crate::preview::SearchHit {
+            line: 1,
+            column: 1,
+            text: "old hit".into(),
+        }];
+        p.set_large_file_search_results(id, old_gen, Ok(outcome(stale, 1, false)));
+        let s = p.large_file_search.as_ref().unwrap();
+        assert!(s.hits.is_empty(), "过期 generation 的结果必须被丢弃");
+        assert!(s.running, "旧结果不应结束新查询的 running");
+        p.set_large_file_search_results(id, new_gen, Ok(outcome(vec![], 2, false)));
+        assert!(!p.large_file_search.as_ref().unwrap().running);
+    }
+
+    #[test]
+    fn large_file_search_new_query_cancels_previous_flag() {
+        let mut p = PreviewPane::default();
+        let id = p.push_tab(
+            TabKind::File(std::path::PathBuf::from("/tmp/x.log")),
+            "x.log".into(),
+        );
+        p.open_large_file_search(id);
+        let (_, first_cancel) = p.start_large_file_search(id, "a".into()).unwrap();
+        assert!(!first_cancel.load(std::sync::atomic::Ordering::Relaxed));
+        let (_, second_cancel) = p.start_large_file_search(id, "b".into()).unwrap();
+        assert!(
+            first_cancel.load(std::sync::atomic::Ordering::Relaxed),
+            "新查询必须置位旧查询的取消信号"
+        );
+        assert!(!second_cancel.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[test]
+    fn large_file_search_empty_query_clears_loading() {
+        let mut p = PreviewPane::default();
+        let id = p.push_tab(
+            TabKind::File(std::path::PathBuf::from("/tmp/x.log")),
+            "x.log".into(),
+        );
+        p.open_large_file_search(id);
+        let (_, cancel) = p.start_large_file_search(id, "a".into()).unwrap();
+        assert!(p.clear_large_file_search(id));
+        let s = p.large_file_search.as_ref().unwrap();
+        assert!(!s.running);
+        assert!(s.hits.is_empty());
+        assert!(cancel.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[test]
+    fn large_file_search_failure_is_local_not_failed_state() {
+        let mut p = PreviewPane::default();
+        let id = p.push_tab(
+            TabKind::File(std::path::PathBuf::from("/tmp/x.log")),
+            "x.log".into(),
+        );
+        p.open_large_file_search(id);
+        let (generation, _) = p.start_large_file_search(id, "a".into()).unwrap();
+        p.set_large_file_search_results(id, generation, Err("读盘失败".into()));
+        let s = p.large_file_search.as_ref().unwrap();
+        assert_eq!(s.error.as_deref(), Some("读盘失败"));
+        assert!(!s.running);
     }
 
     #[cfg(any())] // 老 iced editor 已退役,历史测试停用

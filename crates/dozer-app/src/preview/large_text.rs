@@ -72,15 +72,40 @@ pub fn stream_search(
     query: &str,
     opts: SearchOptions,
 ) -> std::io::Result<SearchOutcome> {
+    stream_search_cancellable(path, query, opts, || false, |_| {})
+        .map(|o| o.expect("not cancelled"))
+}
+
+/// 搜索进度(仅供 UI 展示,限频回灌)。`completed`/`total` 都是字节。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchProgress {
+    pub completed: u64,
+    pub total: u64,
+    pub lines_scanned: u64,
+}
+
+/// [`stream_search`] 的可取消 + 进度版本(T9)。每读完一个
+/// [`SEARCH_SEGMENT_BYTES`] 段检查一次 `should_cancel`,命中返回
+/// `Ok(None)`(正常取消,不是错误);每段结束调一次 `on_progress`(调用方
+/// 自行限频)。扫描循环与 [`stream_search`] 完全一致,仍是**内存有界**的
+/// 定长分段,不对超长单行整行分配。
+pub fn stream_search_cancellable(
+    path: &Path,
+    query: &str,
+    opts: SearchOptions,
+    should_cancel: impl Fn() -> bool,
+    mut on_progress: impl FnMut(SearchProgress),
+) -> std::io::Result<Option<SearchOutcome>> {
     let mut hits = Vec::new();
     if query.is_empty() {
-        return Ok(SearchOutcome {
+        return Ok(Some(SearchOutcome {
             hits,
             total_matches: 0,
             truncated: false,
             lines_scanned: 0,
-        });
+        }));
     }
+    let file_len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     let needle: Vec<u8> = if opts.case_sensitive {
         query.as_bytes().to_vec()
     } else {
@@ -98,8 +123,13 @@ pub fn stream_search(
     let mut base_line: u64 = 1;
     let mut base_chars: u64 = 0;
     let mut overlap: Vec<u8> = Vec::new();
+    let mut read_bytes: u64 = 0;
 
     loop {
+        // T9:每段读满前检查取消(新查询/关闭 tab 会置位,立即放弃本任务)。
+        if should_cancel() {
+            return Ok(None);
+        }
         let buf = reader.fill_buf()?;
         if buf.is_empty() {
             break;
@@ -161,15 +191,23 @@ pub fn stream_search(
         overlap.extend_from_slice(&combined[base_pos..]);
         base_line = new_line;
         base_chars = new_chars;
+
+        // 进度回调(字节 = 已消费的 n,不含 overlap 重复部分)。
+        read_bytes = read_bytes.saturating_add(n as u64);
+        on_progress(SearchProgress {
+            completed: read_bytes.min(file_len),
+            total: file_len,
+            lines_scanned: max_line,
+        });
     }
 
     let truncated = total > hits.len() as u64;
-    Ok(SearchOutcome {
+    Ok(Some(SearchOutcome {
         hits,
         total_matches: total,
         truncated,
         lines_scanned: max_line,
-    })
+    }))
 }
 
 /// 在 `bytes` 上推进行/字符计数:遇到 `\n` 换行归零,其余按 UTF-8 首字节
@@ -716,6 +754,53 @@ mod tests {
             (SEARCH_SEGMENT_BYTES + 4096) as u32 + 1,
             "列 = 命中前字符数 + 1"
         );
+    }
+
+    #[test]
+    fn stream_search_cancellable_stops_early() {
+        // 取消谓词一开始就为真:应立即返回 `Ok(None)`,不产出结果。
+        let mut content = vec![b'a'; SEARCH_SEGMENT_BYTES * 3];
+        content[..5].copy_from_slice(b"first");
+        let p = tmp("cancel_early", &content);
+        let out = stream_search_cancellable(&p, "first", SearchOptions::default(), || true, |_| {})
+            .unwrap();
+        assert!(out.is_none(), "取消应立即返回 Ok(None)");
+    }
+
+    #[test]
+    fn stream_search_cancellable_reports_progress() {
+        // 多段文件:进度回调至少触发一次,completed 单调不减且不超 total。
+        let content = vec![b'z'; SEARCH_SEGMENT_BYTES * 3];
+        let p = tmp("progress", &content);
+        let mut seen: Vec<SearchProgress> = Vec::new();
+        let out = stream_search_cancellable(
+            &p,
+            "nomatch",
+            SearchOptions::default(),
+            || false,
+            |prog| seen.push(prog),
+        )
+        .unwrap()
+        .expect("未取消");
+        assert!(!seen.is_empty(), "多段文件应至少回灌一次进度");
+        let mut last = 0u64;
+        for prog in &seen {
+            assert!(prog.completed >= last, "completed 应单调不减");
+            assert!(prog.completed <= prog.total, "completed 不得超过 total");
+            last = prog.completed;
+        }
+        assert_eq!(out.total_matches, 0);
+    }
+
+    #[test]
+    fn stream_search_cancellable_matches_plain_when_not_cancelled() {
+        let p = tmp("parity", b"alpha\nbeta alpha\ngamma\n");
+        let plain = stream_search(&p, "alpha", SearchOptions::default()).unwrap();
+        let cancelled =
+            stream_search_cancellable(&p, "alpha", SearchOptions::default(), || false, |_| {})
+                .unwrap()
+                .expect("未取消");
+        assert_eq!(plain, cancelled, "未取消时结果应与 stream_search 一致");
     }
 
     #[test]

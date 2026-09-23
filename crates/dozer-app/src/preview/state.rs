@@ -578,16 +578,61 @@ pub(crate) const PREVIEW_FIND_BAR_HEIGHT: f32 = 44.0;
 pub(crate) const PREVIEW_CONFLICT_BAR_HEIGHT: f32 = 44.0;
 
 /// 只读大文件档的搜索会话——⌘F 在这类 tab 上不打开 `FindState`(内存线性
-/// 扫描,大文件上代价不可接受),而是打开这个,复用
-/// `extensions::search::search_scope` 的磁盘流式扫描。`line_no` 是 1-based
-/// (grep_searcher 惯例,见 `SearchHit` 文档)。
-#[derive(Debug, Clone, Default)]
+/// 扫描,大文件上代价不可接受),而是打开这个,走
+/// `preview::large_text::stream_search` 的磁盘流式扫描。`line_no` 是 1-based
+/// (见 `SearchHit` 文档)。
+///
+/// T9:一次查询携带 `generation`;新提交/关闭会置位 `cancel`(共享给后台
+/// `spawn_blocking` 任务)并作废旧 generation,只有匹配的结果才允许回灌,
+/// 避免"快速连续输入时旧结果覆盖新结果"。
+#[derive(Debug, Clone)]
 pub struct LargeFileSearch {
     pub tab_id: usize,
     pub query: String,
     pub hits: Vec<crate::extensions::search::SearchHit>,
     pub current: usize,
+    /// 是否有查询在途(搜索条据此显示小尺寸 math_curve loading)。
     pub running: bool,
+    /// 本次查询的 generation;异步结果必须与当前值一致才被接受。
+    pub generation: u64,
+    /// 整个文件的匹配总数(可能远大于 `hits.len()`;≥ 上限即被截断)。
+    pub total_matches: u64,
+    /// 命中列表是否因上限被截断。
+    pub truncated: bool,
+    /// 搜索失败信息(局部错误,不把整个 preview 置 Failed)。
+    pub error: Option<String>,
+    /// 已扫描字节/总字节(展示用;`total == 0` 表示未知)。
+    pub progress: Option<crate::preview::PreviewLoadProgress>,
+    /// 取消信号:置位后后台任务在下一个分段检查点退出。`Arc` 与任务共享。
+    pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Default for LargeFileSearch {
+    fn default() -> Self {
+        Self {
+            tab_id: 0,
+            query: String::new(),
+            hits: Vec::new(),
+            current: 0,
+            running: false,
+            generation: 0,
+            total_matches: 0,
+            truncated: false,
+            error: None,
+            progress: None,
+            cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+}
+
+impl LargeFileSearch {
+    /// 作废在途查询:置位取消并清掉错误(新查询即将开始时调用)。
+    pub fn cancel_inflight(&mut self) {
+        self.cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.error = None;
+    }
 }
 
 pub struct PreviewPane {

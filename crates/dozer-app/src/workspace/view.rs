@@ -1629,17 +1629,51 @@ pub(crate) fn preview_large_file_search_bar_widget<'a>(
     };
     let colors = byteui::theme::color::current();
     let query_for_submit = session.query.clone();
-    let count_label = text(format!(
-        "{}/{}",
-        if session.hits.is_empty() {
+    // T9 bullet 1:搜索在途时只在**搜索条**内显示一个小尺寸 math_curve +
+    // "搜索中…"(正文窗口保持可见可滚),不占用/遮挡内容区。
+    let status_label = if session.running {
+        let mut label = String::from("搜索中…");
+        if let Some(p) = session.progress
+            && let Some(total) = p.total
+            && total > 0
+        {
+            let pct = (p.completed.saturating_mul(100) / total).min(100);
+            label = format!("搜索中… {pct}%");
+        }
+        text(label)
+            .size(byteui::theme::font::body())
+            .color(colors.dim)
+    } else if let Some(error) = &session.error {
+        text(format!("搜索失败:{error}"))
+            .size(byteui::theme::font::body())
+            .color(colors.gold)
+    } else {
+        // 命中计数:截断时总数标注为 `total_matches+`(命中列表封顶但总数仍
+        // 统计,T9 bullet 4)。
+        let shown = if session.hits.is_empty() {
             0
         } else {
             session.current + 1
-        },
-        session.hits.len()
-    ))
-    .size(byteui::theme::font::body())
-    .color(colors.dim);
+        };
+        let total = if session.truncated {
+            format!("{}+", session.total_matches)
+        } else {
+            session.total_matches.to_string()
+        };
+        text(format!("{shown}/{total}"))
+            .size(byteui::theme::font::body())
+            .color(colors.dim)
+    };
+    let mut status_row = row![]
+        .spacing(6)
+        .align_y(iced_widget::core::alignment::Alignment::Center);
+    if session.running {
+        status_row = status_row.push(byteui::feedback::math_curve::view_animated::<Message>(
+            byteui::feedback::math_curve::Curve::RoseThree,
+            16.0,
+        ));
+    }
+    status_row = status_row.push(status_label);
     let input = byteui::form::input_text::view(
         "搜索文件内容…",
         &session.query,
@@ -1656,7 +1690,7 @@ pub(crate) fn preview_large_file_search_bar_widget<'a>(
     );
     let row_el = row![
         input,
-        count_label,
+        status_row,
         button(text("↑")).on_press(Message::PreviewLargeFileSearchGo(panel, false)),
         button(text("↓")).on_press(Message::PreviewLargeFileSearchGo(panel, true)),
         button(text("×")).on_press(Message::PreviewLargeFileSearchClose(panel)),

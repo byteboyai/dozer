@@ -1688,53 +1688,117 @@ impl App {
                         PanelKind::Project => &mut ws.project_preview,
                         _ => &mut ws.preview,
                     };
+                    // T9 bullet 5:空查询立即取消在途查询并清 loading,不派任务。
+                    if query.trim().is_empty() {
+                        pane.clear_large_file_search(tab_id);
+                        return;
+                    }
                     let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
                         return;
                     };
                     let crate::preview::TabKind::File(path) = tab.kind.clone() else {
                         return;
                     };
-                    if let Some(session) = pane.large_file_search.as_mut() {
-                        session.query = query.clone();
-                        session.running = true;
-                    }
+                    // T9 bullet 2:作废旧 generation(置位共享取消信号),新查询
+                    // 的 generation + 取消句柄捕获进后台任务。
+                    let Some((generation, cancel)) =
+                        pane.start_large_file_search(tab_id, query.clone())
+                    else {
+                        return;
+                    };
                     let proxy = io.proxy.clone();
+                    let progress_proxy = io.proxy.clone();
                     io.handle.spawn(async move {
                         let result = tokio::task::spawn_blocking(move || {
+                            // 进度限频:最快每 100ms 回灌一次(命中与进度都
+                            // 封顶,长文件扫描不至于把 UI 事件队列打爆)。
+                            let mut last = std::time::Instant::now()
+                                .checked_sub(std::time::Duration::from_secs(1))
+                                .unwrap_or_else(std::time::Instant::now);
+                            let should_cancel = {
+                                let cancel = cancel.clone();
+                                move || cancel.load(std::sync::atomic::Ordering::Relaxed)
+                            };
                             // 窗口化:在整文件上流式搜索(不只搜持有窗口)。
-                            crate::preview::stream_search(
+                            crate::preview::stream_search_cancellable(
                                 &path,
                                 &query,
                                 crate::preview::SearchOptions::default(),
+                                should_cancel,
+                                move |p| {
+                                    let now = std::time::Instant::now();
+                                    if now.duration_since(last)
+                                        < std::time::Duration::from_millis(100)
+                                    {
+                                        return;
+                                    }
+                                    last = now;
+                                    let _ = progress_proxy.send_event(
+                                        Message::PreviewLargeFileSearchProgress(
+                                            project_id,
+                                            kind,
+                                            tab_id,
+                                            generation,
+                                            p.completed,
+                                            p.total,
+                                        ),
+                                    );
+                                },
                             )
-                            .map(|outcome| {
-                                outcome
-                                    .hits
-                                    .into_iter()
-                                    .map(|h| crate::extensions::search::SearchHit {
-                                        path: path.clone(),
-                                        line_no: h.line as u64,
-                                        line_text: h.text,
-                                    })
-                                    .collect::<Vec<_>>()
-                            })
                             .map_err(|e| e.to_string())
                         })
                         .await
                         .unwrap_or_else(|e| Err(e.to_string()));
+                        // 取消返回 `Ok(None)`:任务已被新查询/关闭作废,结果与
+                        // generation 都过期,直接丢弃(T9 bullet 2)。
+                        let message = match result {
+                            Ok(Some(outcome)) => Ok(outcome),
+                            // 取消(`Ok(None)`):已被新查询/关闭作废,静默丢弃。
+                            Ok(None) => return,
+                            Err(error) => Err(error),
+                        };
                         let _ = proxy.send_event(Message::PreviewLargeFileSearchResults(
-                            project_id, kind, tab_id, result,
+                            project_id, kind, tab_id, generation, message,
                         ));
                     });
                 });
             }
-            Message::PreviewLargeFileSearchResults(project_id, kind, tab_id, result) => {
+            Message::PreviewLargeFileSearchResults(
+                project_id,
+                kind,
+                tab_id,
+                generation,
+                result,
+            ) => {
                 self.with_project(project_id, move |ws, _io| {
                     let pane = match kind {
                         PanelKind::Project => &mut ws.project_preview,
                         _ => &mut ws.preview,
                     };
-                    pane.set_large_file_search_results(tab_id, result);
+                    pane.set_large_file_search_results(tab_id, generation, result);
+                });
+            }
+            Message::PreviewLargeFileSearchProgress(
+                project_id,
+                kind,
+                tab_id,
+                generation,
+                completed,
+                total,
+            ) => {
+                self.with_project(project_id, move |ws, _io| {
+                    let pane = match kind {
+                        PanelKind::Project => &mut ws.project_preview,
+                        _ => &mut ws.preview,
+                    };
+                    pane.set_large_file_search_progress(
+                        tab_id,
+                        generation,
+                        crate::preview::PreviewLoadProgress {
+                            completed,
+                            total: (total > 0).then_some(total),
+                        },
+                    );
                 });
             }
             Message::PreviewLargeFileSearchGo(kind, forward) => {
