@@ -212,12 +212,34 @@ pub struct PreviewContext {
     pub tabular: Option<PreviewTabularContext>,
 }
 
-/// 表格预览上下文(Phase D Task 6):当前 sheet 与逻辑滚动锚点。
+/// 表格预览上下文(Phase D Task 6 + T12):当前 sheet、逻辑滚动锚点、选中
+/// 单元格/范围与可见行列。新增字段均带 serde 默认,旧客户端可解码。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct PreviewTabularContext {
     pub sheet: usize,
     pub scroll_row: u32,
     pub scroll_col: u32,
+    /// 可见数据行区间(0-based,含端点);未知为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_rows: Option<(u32, u32)>,
+    /// 可见数据列区间(0-based,含端点);未知为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_cols: Option<(u32, u32)>,
+    /// 选中的单个单元格(0-based row/col);无选中为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_cell: Option<(u32, u32)>,
+    /// 选中范围(0-based,含端点 `(r1,c1,r2,c2)`);无选中为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_range: Option<(u32, u32, u32, u32)>,
+}
+
+impl PreviewTabularContext {
+    /// 从选中范围推导单元格选中(r1==r2 && c1==c2 时为单元格)。
+    pub fn selected_cell_from_range(&self) -> Option<(u32, u32)> {
+        self.selected_range
+            .filter(|(r1, c1, r2, c2)| r1 == r2 && c1 == c2)
+            .map(|(r1, c1, _, _)| (r1, c1))
+    }
 }
 
 impl PreviewContext {
@@ -1707,6 +1729,7 @@ mod tests {
                 sheet: 2,
                 scroll_row: 120,
                 scroll_col: 3,
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -1716,6 +1739,34 @@ mod tests {
         };
         let line = encode_line(&req);
         assert_eq!(decode_line::<Request>(&line).unwrap(), req);
+    }
+
+    #[test]
+    fn tabular_context_extended_fields_round_trip_and_default() {
+        // T12:选中单元格/范围 + 可见行列;缺省字段旧 JSON 可解码。
+        let legacy = r#"{"sheet":1,"scroll_row":2,"scroll_col":3}"#;
+        let parsed: PreviewTabularContext = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.selected_cell, None);
+        assert_eq!(parsed.selected_range, None);
+        assert_eq!(parsed.visible_rows, None);
+        assert_eq!(parsed.visible_cols, None);
+
+        let ctx = PreviewTabularContext {
+            sheet: 1,
+            scroll_row: 2,
+            scroll_col: 3,
+            visible_rows: Some((0, 40)),
+            visible_cols: Some((0, 8)),
+            selected_range: Some((2, 3, 5, 6)),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&ctx).unwrap();
+        assert_eq!(
+            serde_json::from_str::<PreviewTabularContext>(&json).unwrap(),
+            ctx
+        );
+        // 非单点范围 → selected_cell_from_range 为 None(单点范围才推导)。
+        assert_eq!(ctx.selected_cell_from_range(), None);
     }
 
     #[test]

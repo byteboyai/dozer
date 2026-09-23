@@ -1267,7 +1267,16 @@ impl Workspace {
                         tab.backend_read_only(),
                     )
                 } else if let Some(view) = tab.tabular_view() {
-                    // 表格预览:给出当前 sheet 与逻辑滚动锚点。
+                    // 表格预览:sheet、逻辑滚动锚点、选中单元格/范围(T12)。
+                    let (selected_cell, selected_range) = match view.selection {
+                        Some((r1, c1, r2, c2)) if r1 == r2 && c1 == c2 => {
+                            (Some((r1 as u32, c1 as u32)), None)
+                        }
+                        Some((r1, c1, r2, c2)) => {
+                            (None, Some((r1 as u32, c1 as u32, r2 as u32, c2 as u32)))
+                        }
+                        None => (None, None),
+                    };
                     let mut c = dozer_core::protocol::PreviewContext {
                         path: path_str.clone(),
                         updated_at_ms: now_ms,
@@ -1277,6 +1286,9 @@ impl Workspace {
                         sheet: view.active_sheet,
                         scroll_row: view.scroll_row as u32,
                         scroll_col: view.scroll_col as u32,
+                        selected_cell,
+                        selected_range,
+                        ..Default::default()
                     });
                     (c, false)
                 } else {

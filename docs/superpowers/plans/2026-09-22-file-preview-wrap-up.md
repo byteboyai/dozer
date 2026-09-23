@@ -339,12 +339,19 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
 
 ## T12. Tabular Agent context 与导航
 
-- [ ] `PreviewTabularContext` 增加选中单元格/范围和可见行列；serde 字段带默认值。
-- [ ] app 实现 reveal cell/range：先切 sheet，再滚动并选中。
-- [ ] XLSX 保持原生虚拟化 grid，不转换为全量 DOM。
-- [ ] suspended Tabular 收到导航命令时按 T3 规则先 reserve/物化，再执行一次性命令。
+- [x] `PreviewTabularContext` 增加选中单元格/范围和可见行列；serde 字段带默认值
+      (`selected_cell`/`selected_range`/`visible_rows`/`visible_cols`,旧 JSON 可解码)。
+      (visible_rows/cols 字段已加,但 grid 尚未回写可见窗口,当前恒 None。)
+- [x] app 实现 reveal cell/range：先切 sheet，再滚动并选中
+      (`TabularView::reveal_cell/reveal_range` 钳位 + `PreviewPane::reveal_tabular_*`;
+      未加载 sheet 返回 `SheetLoadRequest`)。
+- [x] XLSX 保持原生虚拟化 grid，不转换为全量 DOM。
+- [~] suspended Tabular 收到导航命令时按 T3 规则先 reserve/物化，再执行一次性命令。
+      (reveal 对未加载 sheet 返回请求;Suspended tab 唤醒 + 一次性命令重放待
+      T13 通道接线。)
 
 **自动化:** protocol round-trip、越界钳制、sheet 不存在、suspended 唤醒。
+(前三项已测;suspended 唤醒未测。)
 
 ---
 

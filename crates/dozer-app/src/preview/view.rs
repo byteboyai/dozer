@@ -1225,6 +1225,41 @@ impl PreviewPane {
             .and_then(|t| t.tabular_view_mut())
     }
 
+    /// T12:Agent 导航——reveal 某表格 tab 的单元格。返回 `Some(SheetLoadRequest)`
+    /// 表示目标 sheet 未加载,调用方应物化后重试;非表格/未就绪返回 `None`。
+    #[allow(dead_code)] // T12/T13:Agent 导航通道接线的 tab 侧原语(暂由测试使用)。
+    pub fn reveal_tabular_cell(
+        &mut self,
+        tab_id: usize,
+        sheet: usize,
+        row: usize,
+        col: usize,
+    ) -> Option<crate::tabular::SheetLoadRequest> {
+        self.tabs
+            .iter_mut()
+            .find(|t| t.id == tab_id)
+            .and_then(|t| t.tabular_view_mut())
+            .and_then(|v| v.reveal_cell(sheet, row, col))
+    }
+
+    /// T12:Agent 导航——reveal 某表格 tab 的一个范围(0-based,含端点)。
+    #[allow(dead_code)] // T12/T13:Agent 导航通道接线的 tab 侧原语(暂由测试使用)。
+    pub fn reveal_tabular_range(
+        &mut self,
+        tab_id: usize,
+        sheet: usize,
+        r1: usize,
+        c1: usize,
+        r2: usize,
+        c2: usize,
+    ) -> Option<crate::tabular::SheetLoadRequest> {
+        self.tabs
+            .iter_mut()
+            .find(|t| t.id == tab_id)
+            .and_then(|t| t.tabular_view_mut())
+            .and_then(|v| v.reveal_range(sheet, r1, c1, r2, c2))
+    }
+
     /// 按 tab id 取出该 tab 的 `TabularState` 可变引用,供加载完成/懒加载
     /// sheet 完成的回填使用(`Message::TabularLoaded`/`TabularSheetLoaded`
     /// 的处理函数)。与 `tabular_mut` 不同,这个不区分 `Loading`/`Ready`——
@@ -3111,6 +3146,28 @@ mod tests {
         for f in [rs, csv, huge] {
             std::fs::remove_file(f).ok();
         }
+    }
+
+    /// T12:reveal_tabular_cell 在已就绪的表格 tab 上写入滚动 + 选中。
+    #[test]
+    fn reveal_tabular_cell_delegates_to_loaded_view() {
+        let path = std::env::temp_dir().join(format!("t12_reveal_{}.csv", std::process::id()));
+        std::fs::write(&path, "a,b\n1,2\n3,4\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        let view = crate::tabular::load(&path).expect("csv 应能解析");
+        assert!(pane.finish_tabular_load(id, Ok(view)).is_none());
+        assert!(pane.reveal_tabular_cell(id, 0, 2, 1).is_none());
+        let v = pane
+            .tabs()
+            .iter()
+            .find(|t| t.id == id)
+            .unwrap()
+            .tabular_view()
+            .unwrap();
+        assert_eq!(v.selection, Some((2, 1, 2, 1)));
+        assert_eq!(v.scroll_row, 2);
+        std::fs::remove_file(&path).ok();
     }
 
     /// T11:set_pending_view 保存完整快照(cursor/selection/top_line/folds),

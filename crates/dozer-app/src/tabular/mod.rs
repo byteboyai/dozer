@@ -56,6 +56,9 @@ pub struct TabularView {
     /// widget 读取;滚动由 `Action::Scroll` 经 `apply` 回写并钳位。
     pub scroll_row: usize,
     pub scroll_col: usize,
+    /// T12:当前选中范围 `(r1, c1, r2, c2)`(0-based,含端点;单点为四值相等)。
+    /// `None` 表示无选中。Agent reveal 会写入它;网格鼠标选择(UI)未接线。
+    pub selection: Option<(usize, usize, usize, usize)>,
     /// 已经 spawn 出去、还没等到 `apply_sheet_loaded` 回填的 sheet 下标。
     /// 防止用户在一次加载跑完之前来回切走再切回同一个未加载 sheet,
     /// 对着同一份大文件重复 spawn 后台加载(见 `apply` 的 `SelectSheet`
@@ -110,6 +113,7 @@ impl TabularView {
             active_sheet: 0,
             scroll_row: 0,
             scroll_col: 0,
+            selection: None,
             loading_sheets: std::collections::HashSet::new(),
         }
     }
@@ -118,6 +122,71 @@ impl TabularView {
     /// `apply` 的边界检查),或该 sheet 尚未加载完成。
     pub fn active_sheet(&self) -> Option<&Sheet> {
         self.sheets.get(self.active_sheet).and_then(|s| s.as_ref())
+    }
+
+    /// T12:切到 `sheet`(越界钳到合法),未加载则返回后台加载请求(调用方物化
+    /// 后重试一次)。`sheet` 数为 0 时 no-op。
+    #[allow(dead_code)] // T12:Agent reveal 内部原语(暂由测试使用)。
+    fn select_sheet(&mut self, sheet: usize) -> Option<SheetLoadRequest> {
+        if self.sheets.is_empty() {
+            return None;
+        }
+        let idx = sheet.min(self.sheets.len() - 1);
+        if idx == self.active_sheet {
+            return None;
+        }
+        self.apply(Action::SelectSheet(idx))
+    }
+
+    /// T12:Agent 导航——切到 `sheet`、滚动到 `row/col`(越界钳到数据范围)并
+    /// 选中该单元格。目标 sheet 未加载时返回 `SheetLoadRequest`。
+    #[allow(dead_code)] // T12:Agent reveal(暂由测试使用)。
+    pub fn reveal_cell(
+        &mut self,
+        sheet: usize,
+        row: usize,
+        col: usize,
+    ) -> Option<SheetLoadRequest> {
+        let request = self.select_sheet(sheet);
+        if let Some(s) = self.active_sheet() {
+            if s.total_rows == 0 || s.col_count == 0 {
+                self.selection = None;
+                return request;
+            }
+            let r = row.min(s.total_rows - 1);
+            let c = col.min(s.col_count - 1);
+            self.scroll_row = r;
+            self.scroll_col = c;
+            self.selection = Some((r, c, r, c));
+        }
+        request
+    }
+
+    /// T12:Agent 导航——选中一个范围(0-based,含端点;自动归一化并钳位)。
+    #[allow(dead_code)] // T12:Agent reveal(暂由测试使用)。
+    pub fn reveal_range(
+        &mut self,
+        sheet: usize,
+        r1: usize,
+        c1: usize,
+        r2: usize,
+        c2: usize,
+    ) -> Option<SheetLoadRequest> {
+        let request = self.select_sheet(sheet);
+        if let Some(s) = self.active_sheet() {
+            if s.total_rows == 0 || s.col_count == 0 {
+                self.selection = None;
+                return request;
+            }
+            let (maxr, maxc) = (s.total_rows - 1, s.col_count - 1);
+            let (ar, ac, br, bc) = (r1.min(maxr), c1.min(maxc), r2.min(maxr), c2.min(maxc));
+            let (sr, er) = (ar.min(br), ar.max(br));
+            let (sc, ec) = (ac.min(bc), ac.max(bc));
+            self.scroll_row = sr;
+            self.scroll_col = sc;
+            self.selection = Some((sr, sc, er, ec));
+        }
+        request
     }
 
     /// 处理一条交互动作,纯状态转换(可单测,不做任何 IO)。滚动钳到
@@ -626,5 +695,51 @@ mod tests {
         let p = dir.path().join("x.md");
         std::fs::write(&p, "# hi").unwrap();
         assert!(load(&p).is_err());
+    }
+
+    /// T12:reveal_cell 越界钳位、切 sheet、写选中;空 sheet 清选中。
+    #[test]
+    fn reveal_cell_clamps_and_selects() {
+        let v_sheets = vec![Some(stub_sheet(10, 4)), Some(stub_sheet(3, 2))];
+        let mut v = view_with_sheets(v_sheets);
+        // 越界 row/col 钳到数据范围。
+        assert!(v.reveal_cell(0, 999, 999).is_none());
+        assert_eq!(v.scroll_row, 9);
+        assert_eq!(v.scroll_col, 3);
+        assert_eq!(v.selection, Some((9, 3, 9, 3)));
+        // 切 sheet(已加载)→ active_sheet 变。
+        assert!(v.reveal_cell(1, 1, 1).is_none());
+        assert_eq!(v.active_sheet, 1);
+        assert_eq!(v.selection, Some((1, 1, 1, 1)));
+        // sheet 下标越界 → 钳到最后一个。
+        assert!(v.reveal_cell(9, 0, 0).is_none());
+        assert_eq!(v.active_sheet, 1);
+    }
+
+    /// T12:reveal_range 归一化端点为左上/右下并钳位。
+    #[test]
+    fn reveal_range_normalizes_and_clamps() {
+        let mut v = view_with_sheets(vec![Some(stub_sheet(10, 5))]);
+        assert!(v.reveal_range(0, 7, 4, 2, 1).is_none());
+        assert_eq!(v.selection, Some((2, 1, 7, 4)));
+        assert_eq!(v.scroll_row, 2);
+        assert_eq!(v.scroll_col, 1);
+    }
+
+    /// T12:目标 sheet 未加载 → 返回加载请求(由上层物化后重试)。
+    #[test]
+    fn reveal_cell_requests_unloaded_sheet() {
+        let mut v = view_with_sheets(vec![Some(stub_sheet(5, 2)), None]);
+        let req = v.reveal_cell(1, 1, 1);
+        assert!(req.is_some(), "未加载 sheet 应返回请求");
+        assert_eq!(req.unwrap().index, 1);
+    }
+
+    /// T12:空 sheet 不写选中。
+    #[test]
+    fn reveal_cell_on_empty_sheet_clears_selection() {
+        let mut v = view_with_sheets(vec![Some(stub_sheet(0, 0))]);
+        assert!(v.reveal_cell(0, 3, 3).is_none());
+        assert_eq!(v.selection, None);
     }
 }
