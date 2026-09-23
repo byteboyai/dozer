@@ -92,9 +92,9 @@ echo "$d"
 | `Makefile` / `Dockerfile` / `LICENSE` / `.env` | CodeMirror(文件名规则,T5) | 能查看 / 可编辑 | 不变 | |
 | `unknown.binblob` | Unsupported → 统一 fallback 页(T1) | 不崩溃、不显示为可编辑文本;**无**纯文本退路 | 不变 | |
 | `icon.svg` | Rendered(Flyfish 图像) | 图像正常;tab 栏可切 CodeMirror XML 源码(T5) | 不变 | |
-| `utf16le.rs` | CodeMirror **只读** | 不可编辑、不崩溃;合法 UTF-16 已解码为正确文字 | 字节安全只读(T6) | |
-| `non_utf8.rs` / `invalid_utf8.rs` | CodeMirror **只读** | 不可编辑、不崩溃;有损文字只记录 | 字节安全只读 / T1(T6) | |
-| `binary_spoof.rs` | CodeMirror **只读**或安全 fallback | 不崩溃、不允许有损保存;记录实际降级 | 保持只读/安全 fallback(T6) | |
+| `utf16le.rs` | CodeMirror **只读** + 编码提示(T6) | 合法 UTF-16 已解码为正确文字;顶部提示 "UTF-16 只读",⌘S 被拒 | 不变 | |
+| `non_utf8.rs` / `invalid_utf8.rs` | CodeMirror **只读** + 有损提示(T6) | 有损文字只读;顶部提示只读原因,⌘S 被拒,磁盘 hash 不变 | 字节安全只读 | |
+| `binary_spoof.rs` | Unsupported → 统一 fallback 页(T6) | 内容二进制凌驾源码扩展名;不显示为可编辑文本,不崩溃 | 不变 | |
 | `long_line_plain.rs` | CodeMirror **只读纯文本** | 关闭换行 / 高亮 / 折叠,不要求全局滚动条 | 不变 | |
 | `long_line.rs` | Windowed **只读** | 全局行号基数、可滚到任意行 | 不变 | |
 | `huge.txt` | Windowed **只读** | 打开不卡死、不全量读内存 | 不变 | |
@@ -179,8 +179,9 @@ echo "$d"
 - HTML 仍直接 `file://` 加载;Flyfish IPC 未迁 envelope;未接资源管理器(T7/T9)。
 - 窗口化搜索条无 Esc 关闭 / 程序化聚焦(末尾备注)。
 - scroll anchor 仍是逻辑锚点,未精确还原像素(T11)。
-- 非法 UTF-8 当前虽强制只读,仍可能经过 `fetch().text()` 有损解码;“不崩溃”可
-  通过,出现乱码/替换字符只记录且不算新增回归,字节安全退路由 T6 收口。
+- 非法 UTF-8 / UTF-16 展示已有只读提示且保存恒拒绝(T6);**仍**可能经过
+  `fetch().text()` 解码,所以显示的是替换字符(有损),但不会写回原文件。
+  完整 byte-safe 十六进制查看器未做(计划允许"T1 外部打开"或只读展示二选一)。
 
 ## 10. 结论记录
 

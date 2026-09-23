@@ -202,15 +202,20 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
 
 ## T6. 非 UTF-8 与字节安全退路
 
-- [ ] 区分 UTF-8、带 BOM UTF-16LE/BE、非法 UTF-8、二进制伪装文本。
-- [ ] 合法 UTF-16 可解码只读展示；若暂不支持无损保存，UI 必须明确只读原因。
-- [ ] 非法编码不得进入 `fetch().text()` 后再保存；提供 byte-safe 只读查看器或 T1
-      外部打开。byte-safe viewer 可以是十六进制 + 文本侧栏，不要求先做完整编辑器。
-- [ ] 有损展示必须带明显提示，保存命令恒拒绝。
-- [ ] 文件画像采样不能把“源码扩展名”凌驾于二进制检测结果之上。
+- [x] 区分 UTF-8、带 BOM UTF-16LE/BE、非法 UTF-8、二进制伪装文本
+      (`FileProfile` encoding/content_kind + `is_lossy_text`;route 带
+      `encoding_lossy`/`encoding_utf16`)。
+- [x] 合法 UTF-16 可解码只读展示；若暂不支持无损保存，UI 必须明确只读原因
+      (editor URL `enc=utf16` → 顶部只读提示)。
+- [x] 非法编码不得进入 `fetch().text()` 后再保存；提供 byte-safe 只读查看器或 T1
+      外部打开。(采用:有损文本只读展示 + 保存恒拒绝;二进制伪装落 T1 页。)
+- [x] 有损展示必须带明显提示，保存命令恒拒绝(`lossy=1` 顶部提示;
+      `PreviewTab::can_save` 守卫 + host `saveHandler` 双重拒绝)。
+- [x] 文件画像采样不能把“源码扩展名”凌驾于二进制检测结果之上(binary 判定提前)。
 
 **自动化:** `utf16le.rs`、`non_utf8.rs`、`invalid_utf8.rs`、`binary_spoof.rs`；
-断言原始文件 hash 在查看、搜索、误触 ⌘S 后不变。
+断言原始文件 hash 在查看、搜索、误触 ⌘S 后不变。(路由/只读/`can_save` 断言已加;
+保存拒绝由 `can_save` 单测覆盖,未做端到端 hash fixture。)
 
 ---
 

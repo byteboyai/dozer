@@ -14,7 +14,7 @@
 use std::fmt;
 use std::path::Path;
 
-use super::file_profile::{ContentKind, FileProfile};
+use super::file_profile::{ContentKind, FileProfile, TextEncoding};
 use super::native_editor::{
     filename_code_rule, is_editable_extension, prefers_rendered_preview, wry_toggle_eligible,
 };
@@ -127,6 +127,12 @@ pub struct PreviewRoute {
     /// 内容画像是否为文本(空文件算文本)。供 fallback 页判断"以纯文本只读
     /// 尝试"这条退路是否安全出现——二进制/压缩包不提供。
     pub content_is_text: bool,
+    /// 内容是否为"有损文本"(非法 UTF-8,CodeMirror 解码已丢字节)。这类 tab
+    /// 只读展示、保存恒拒绝,并在编辑器顶部提示(T6)。
+    pub encoding_lossy: bool,
+    /// 内容是否为带 BOM 的 UTF-16(读取时已转码成 UTF-8 只读展示)。保存同样
+    /// 拒绝(回写会改变原编码);UI 明确只读原因(T6)。
+    pub encoding_utf16: bool,
 }
 
 impl PreviewRoute {
@@ -161,6 +167,11 @@ pub fn classify_preview(
         alternate_modes,
         reason,
         content_is_text: matches!(profile.content_kind, ContentKind::Text | ContentKind::Empty),
+        encoding_lossy: profile.is_lossy_text(),
+        encoding_utf16: matches!(
+            profile.encoding,
+            TextEncoding::Utf16Le | TextEncoding::Utf16Be
+        ),
     }
 }
 
@@ -189,9 +200,6 @@ fn classify_kind(path: &Path, profile: &FileProfile) -> (PreviewKind, RouteReaso
             RouteReason::RenderedExtension(rendered_ext(path)),
         );
     }
-    if is_editable_extension(path) {
-        return (PreviewKind::Code, RouteReason::CodeExtension);
-    }
     if is_archive_extension(path) {
         // T1:压缩包走统一外部打开 fallback 页。
         return (PreviewKind::External, RouteReason::ArchiveFallback);
@@ -199,8 +207,17 @@ fn classify_kind(path: &Path, profile: &FileProfile) -> (PreviewKind, RouteReaso
     if is_known_media_extension(path) {
         return (PreviewKind::Rendered, RouteReason::KnownMediaExtension);
     }
-    // 未知扩展名/无扩展名:按内容探测决定——文本进 Code,二进制落安全 fallback,
-    // 空文件按可编辑纯文本(除非扩展名已命中上面的专用 viewer)。
+    // T6:内容二进制检测**不得**被源码扩展名凌驾——`.rs` 里塞 NUL 也落安全
+    // fallback,而不是当可编辑文本打开。媒体/压缩包已在上方按扩展名认领,不受此
+    // 影响。
+    if profile.content_kind == ContentKind::Binary {
+        return (PreviewKind::Unsupported, RouteReason::ContentBinaryFallback);
+    }
+    if is_editable_extension(path) {
+        return (PreviewKind::Code, RouteReason::CodeExtension);
+    }
+    // 未知扩展名/无扩展名:按内容探测决定——文本进 Code,空文件按可编辑纯文本
+    // (除非扩展名已命中上面的专用 viewer)。
     match profile.content_kind {
         ContentKind::Empty => (PreviewKind::Code, RouteReason::EmptyFile),
         ContentKind::Binary => (PreviewKind::Unsupported, RouteReason::ContentBinaryFallback),
@@ -499,6 +516,17 @@ mod tests {
             route("License", b"text\n").reason,
             RouteReason::FilenameRule("license")
         );
+    }
+
+    #[test]
+    fn lossy_invalid_utf8_is_flagged_on_route() {
+        // 非法 UTF-8:内容像文本但解码有损 → encoding_lossy。
+        assert!(route("x.rs", b"fn main(){}\n\xff").encoding_lossy);
+        assert!(!route("y.rs", b"fn main(){}\n").encoding_lossy);
+        // 可解码的 UTF-16 不算有损,而是标 encoding_utf16。
+        let u16 = route("z.rs", b"\xff\xfeh\x00i\x00");
+        assert!(!u16.encoding_lossy);
+        assert!(u16.encoding_utf16);
     }
 
     #[test]

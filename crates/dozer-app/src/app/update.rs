@@ -176,7 +176,17 @@ impl App {
                                 // 关闭前保存的 tab:不管 revision 是否对齐,落盘
                                 // 尝试完都必须完成关闭,否则 tab 卡在等待里永远
                                 // 关不掉。`want_close` 在借出 tab 之前已探明。
-                                if revision == event.revision && revision == tab.web_revision {
+                                //
+                                // T6:只读 / 窗口化 / 有损编码(非 UTF-8)tab 恒
+                                // 拒绝写盘——CodeMirror 的 `fetch().text()` 可能
+                                // 已用替换字符吞掉原始字节,回写会破坏原文件。
+                                if !tab.can_save() {
+                                    tab.web_error = Some(
+                                        "该文件为只读/非 UTF-8 文本,已禁用保存以免破坏原文件"
+                                            .into(),
+                                    );
+                                } else if revision == event.revision && revision == tab.web_revision
+                                {
                                     match crate::preview::save_text_atomic(path, &text) {
                                         Ok(()) => {
                                             tab.dirty = false;

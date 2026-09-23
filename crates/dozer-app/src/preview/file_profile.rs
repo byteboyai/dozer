@@ -79,6 +79,17 @@ impl FileProfile {
             has_bom: false,
         }
     }
+
+    /// 是否为"有损文本":内容像文本,但不是可无损往返的 UTF-8/UTF-16 合法编码
+    /// (目前即无 BOM 的非法 UTF-8)。这类文件只读展示,保存必须拒绝——CodeMirror
+    /// 的 `fetch().text()` 已用替换字符吞掉原始字节,回写会破坏文件(T6)。
+    ///
+    /// UTF-8 BOM(`utf8 == Valid`)与可解码的 UTF-16(带 BOM)都**不**算有损。
+    pub fn is_lossy_text(&self) -> bool {
+        self.content_kind == ContentKind::Text
+            && self.utf8 == Utf8Status::Invalid
+            && !matches!(self.encoding, TextEncoding::Utf16Le | TextEncoding::Utf16Be)
+    }
 }
 
 /// 画像一个文件。只做有界 I/O;读取失败(不存在/权限)原样透传。

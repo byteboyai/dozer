@@ -750,6 +750,13 @@ impl PreviewPane {
                     // 窗口化只读:正文由 Rust 经 set_window 推送,host 不自行拉取。
                     url.push_str("&windowed=1");
                 }
+                if tab.route.as_ref().is_some_and(|r| r.encoding_lossy) {
+                    // T6:非 UTF-8 有损文本,host 顶部显示只读提示、禁用保存。
+                    url.push_str("&lossy=1");
+                } else if tab.route.as_ref().is_some_and(|r| r.encoding_utf16) {
+                    // T6:UTF-16(已转码只读展示),提示只读原因。
+                    url.push_str("&enc=utf16");
+                }
                 // 外部变更/右键刷新的重载:换 URL 逼 WebView 重新导航拉取最新
                 // 内容(与 flyfish 的 `_r=` 同一手法)。窗口化 tab 的重载会重推窗口。
                 if tab.reload_nonce > 0 {
@@ -2800,6 +2807,74 @@ mod tests {
         std::fs::remove_file(&good).ok();
     }
 
+    /// T6:内容含 NUL 二进制时,源码扩展名不得凌驾——路由落安全 fallback。
+    #[test]
+    fn binary_content_overrides_code_extension_to_fallback() {
+        let dir = std::env::temp_dir();
+        let spoof = dir.join(format!("binary_spoof_{}.rs", std::process::id()));
+        std::fs::write(&spoof, b"fn\0main\n").unwrap();
+        let (route, backend, _) = route_and_backend(&spoof, &crate::capabilities::current());
+        assert_eq!(route.kind, crate::preview::PreviewKind::Unsupported);
+        assert_eq!(backend.kind(), crate::preview::PreviewKind::Unsupported);
+        std::fs::remove_file(&spoof).ok();
+    }
+
+    /// T6:非法 UTF-8(有损)代码 tab 只读、标 `encoding_lossy`、`can_save` 为
+    /// false,editor URL 带 `lossy=1`(host 顶部提示 + 禁用保存)。
+    #[test]
+    fn lossy_utf8_tab_is_read_only_flagged_and_unsaveable() {
+        let path = std::env::temp_dir().join(format!("lossy_{}.rs", std::process::id()));
+        std::fs::write(&path, b"fn main() {}\n\xFF\xFE not utf8").unwrap();
+
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.route.as_ref().unwrap().encoding_lossy);
+        assert!(tab.backend_read_only());
+        assert!(!tab.can_save(), "有损只读 tab 不允许保存");
+        let spec = pane
+            .desired_editor_webviews(1, crate::app::PanelKind::Files)
+            .into_iter()
+            .find(|s| s.id == id)
+            .expect("应产出 editor spec");
+        assert!(spec.url.contains("lossy=1"));
+        assert!(spec.url.contains("ro=1"));
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// T6:UTF-16 tab 只读、URL 提示编码原因。
+    #[test]
+    fn utf16_tab_is_read_only_with_encoding_notice() {
+        let path = std::env::temp_dir().join(format!("u16_{}.rs", std::process::id()));
+        std::fs::write(&path, b"\xFF\xFEb\x00a\x00d\x00\n\x00").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.route.as_ref().unwrap().encoding_utf16);
+        assert!(!tab.route.as_ref().unwrap().encoding_lossy);
+        assert!(!tab.can_save());
+        let spec = pane
+            .desired_editor_webviews(1, crate::app::PanelKind::Files)
+            .into_iter()
+            .find(|s| s.id == id)
+            .expect("应产出 editor spec");
+        assert!(spec.url.contains("enc=utf16"));
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// T6:普通可编辑 UTF-8 小文件 `can_save` 为 true(对照有损只读)。
+    #[test]
+    fn editable_utf8_tab_can_save() {
+        let path = std::env::temp_dir().join(format!("editable_{}.rs", std::process::id()));
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.can_save());
+        std::fs::remove_file(&path).ok();
+    }
+
     /// 外部文件变化:干净的 CodeMirror tab 自动重载(推进 reload_nonce →
     /// URL 换 `_r=`),脏 tab 不自动重载、置冲突提示。
     #[test]
@@ -2903,9 +2978,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("dozer_windowed_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("huge_line.rs");
-        let f = std::fs::File::create(&path).unwrap();
-        f.set_len(10 * 1024 * 1024).unwrap();
-        drop(f);
+        // 10MiB 单行文本(> FORCE_WINDOWED_LINE_BYTES)。不能用 set_len 的稀疏
+        // 全 NUL 文件——T6 起内容二进制会盖过源码扩展名,被当作 fallback。
+        std::fs::write(&path, "a".repeat(10 * 1024 * 1024)).unwrap();
 
         let caps = crate::capabilities::current();
         assert!(path_is_windowed(&path, &caps));
@@ -2923,9 +2998,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("dozer_windowed_host_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("huge_line.rs");
-        let f = std::fs::File::create(&path).unwrap();
-        f.set_len(10 * 1024 * 1024).unwrap();
-        drop(f);
+        std::fs::write(&path, "a".repeat(10 * 1024 * 1024)).unwrap();
 
         let mut pane = PreviewPane::default();
         let id = pane.open_path(path.clone());

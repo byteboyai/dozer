@@ -75,6 +75,10 @@ const scheme = params.get('theme') === 'light' ? 'light' : 'dark';
 // 确保 `#`、`?`、`%` 等字符不会被当作 fragment/query。
 const filePath = params.get('p') ?? '';
 const initialReadOnly = params.get('ro') === '1';
+// T6:非 UTF-8 有损文本——只读展示,保存被禁用(Rust 侧也会拒绝兜底)。
+const lossy = params.get('lossy') === '1';
+// T6:UTF-16(读取时已转码):只读展示并说明原因。
+const utf16 = params.get('enc') === 'utf16';
 const languageToken = params.get('lang') ?? 'txt';
 // 窗口化只读 viewer(Phase C Task 3):正文由 Rust 经 set_window 推送,不自行
 // 拉取;只持有全局行区间 [windowBase, windowBase+lines-1]。
@@ -393,7 +397,7 @@ function readOnlyExtensions(readOnly: boolean): Extension {
 }
 
 saveHandler = () => {
-  if (windowed) return; // 窗口化只读
+  if (windowed || lossy || view.state.readOnly) return; // 只读:不落盘
   post({ kind: 'save_requested', revision, text: view.state.doc.toString() });
 };
 
@@ -543,6 +547,18 @@ async function boot(): Promise<void> {
     state: EditorState.create({ doc: text, extensions: buildExtensions() }),
     parent: document.getElementById('editor')!,
   });
+
+  // T6:非 UTF-8 / UTF-16 只读:顶部常驻提示,说明只读原因(保存由
+  // saveHandler / Rust 双重拒绝)。
+  if (lossy || utf16) {
+    const editorRoot = document.getElementById('editor')!;
+    const banner = document.createElement('div');
+    banner.className = 'windowed-truncation-banner';
+    banner.textContent = lossy
+      ? '该文件不是有效的 UTF-8 文本,仅只读显示;保存已禁用以免破坏原文件'
+      : '该文件是 UTF-16 编码,已转码为只读文本;保存已禁用以免改变原编码';
+    editorRoot.appendChild(banner);
+  }
 
   if (windowed) {
     const editorRoot = document.getElementById('editor')!;

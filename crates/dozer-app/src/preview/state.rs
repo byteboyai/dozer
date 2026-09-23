@@ -129,6 +129,15 @@ impl PreviewTab {
         )
     }
 
+    /// T6:该 tab 是否允许把 editor host 的正文写回磁盘。只读档 / 窗口化 /
+    /// 有损编码(非法 UTF-8,`fetch().text()` 已丢字节)恒拒绝,防止把关
+    /// 替换字符的文本覆盖原文件。
+    pub fn can_save(&self) -> bool {
+        !self.windowed
+            && !self.backend_read_only()
+            && !self.route.as_ref().is_some_and(|r| r.encoding_lossy)
+    }
+
     pub fn uses_codemirror(&self) -> bool {
         codemirror_enabled()
             && !self.windowed
