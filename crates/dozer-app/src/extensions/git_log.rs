@@ -207,10 +207,62 @@ pub struct DiffFileEntry {
     /// 布局开销肉眼可见("打开一次提交详情也有些卡顿"),而详情面板本来就
     /// 不是给通读整份 diff 用的,截断只影响展示,不影响 diff 计算的正确性。
     pub truncated: bool,
+    /// 旧版本 blob oid(新增文件为 `None`)。CodeMirror diff 渲染用,与
+    /// `patch`(unified patch 文本,给 `colored_diff_lines` 用)并存,互不影响。
+    pub old_blob: Option<git2::Oid>,
+    /// 新版本 blob oid(删除文件为 `None`)。
+    pub new_blob: Option<git2::Oid>,
 }
 
 /// 单个文件 `patch` 文本的字符数上限,超过就截断(见 [`DiffFileEntry::truncated`])。
 const MAX_PATCH_CHARS: usize = 20_000;
+
+/// 单侧 blob 内容的字节上限(old/new 各自判定),超过就判定"不可渲染"。
+pub const MAX_DIFF_BLOB_BYTES: usize = 512 * 1024;
+
+/// [`diff_blob_content`] 的结果:要么是可渲染的双侧文本,要么给出原因
+/// (供 UI 占位文案使用)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffBlobContent {
+    Text { old_text: String, new_text: String },
+    NotRenderable { reason: String },
+}
+
+/// 按新增/删除文件语义把 `None` 侧当空字符串处理;非 `None` 侧任一超过
+/// [`MAX_DIFF_BLOB_BYTES`] 或含二进制内容(NUL 字节 / 非法 UTF-8)都判定
+/// "不可渲染"——不做部分截断渲染。
+pub fn diff_blob_content(
+    repo: &git2::Repository,
+    old_blob: Option<git2::Oid>,
+    new_blob: Option<git2::Oid>,
+) -> Result<DiffBlobContent, String> {
+    fn read_side(repo: &git2::Repository, oid: Option<git2::Oid>) -> Result<Option<String>, String> {
+        let Some(oid) = oid else {
+            return Ok(Some(String::new()));
+        };
+        let blob = repo.find_blob(oid).map_err(|e| e.message().to_string())?;
+        let content = blob.content();
+        if content.len() > MAX_DIFF_BLOB_BYTES {
+            return Ok(None);
+        }
+        if content.contains(&0u8) {
+            return Ok(None);
+        }
+        match std::str::from_utf8(content) {
+            Ok(text) => Ok(Some(text.to_string())),
+            Err(_) => Ok(None),
+        }
+    }
+
+    let old_text = read_side(repo, old_blob)?;
+    let new_text = read_side(repo, new_blob)?;
+    match (old_text, new_text) {
+        (Some(old_text), Some(new_text)) => Ok(DiffBlobContent::Text { old_text, new_text }),
+        _ => Ok(DiffBlobContent::NotRenderable {
+            reason: "文件不是文本,或超过大小上限,不支持 CodeMirror 渲染".to_string(),
+        }),
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct CommitDetail {
@@ -513,11 +565,15 @@ pub fn commit_detail(repo_path: &Path, oid: git2::Oid) -> Result<CommitDetail, S
                 .or_else(|| delta.old_file().path())?
                 .to_string_lossy()
                 .into_owned();
+            let old_blob = (!delta.old_file().id().is_zero()).then(|| delta.old_file().id());
+            let new_blob = (!delta.new_file().id().is_zero()).then(|| delta.new_file().id());
             Some(DiffFileEntry {
                 path,
                 status: delta.status(),
                 patch: String::new(), // 下面按文件路径回填
                 truncated: false,
+                old_blob,
+                new_blob,
             })
         })
         .collect();
@@ -1482,6 +1538,222 @@ mod tests {
     }
 
     #[test]
+    fn commit_detail_populates_blob_oids_for_added_files() {
+        let (_dir, repo) = mkrepo_with_one_commit();
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).expect("应能解析临时仓库");
+        let root_oid = snapshot.rows[0].oid;
+        let detail = commit_detail(&repo, root_oid).expect("根提交相对空树应该也能算出 diff");
+        for f in &detail.files {
+            assert_eq!(f.old_blob, None, "根提交没有旧版本,old_blob 必须是 None");
+            assert!(f.new_blob.is_some(), "新增文件必须有 new_blob");
+        }
+    }
+
+    /// 在 `mkrepo_with_one_commit()` 基础上追加一个"修改 a.txt、删除 b.txt"
+    /// 的第二个提交,供改动/删除文件的 blob 提取测试用。
+    fn mkrepo_with_modify_and_delete_commit() -> (tempfile::TempDir, std::path::PathBuf) {
+        let (dir, repo) = mkrepo_with_one_commit();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .unwrap();
+            assert!(st.status.success(), "git {args:?}: {st:?}");
+        };
+        std::fs::write(repo.join("a.txt"), "one\nmodified\n").unwrap();
+        git(&["rm", "-q", "b.txt"]);
+        git(&["add", "a.txt"]);
+        git(&["commit", "-qm", "modify and delete"]);
+        (dir, repo)
+    }
+
+    #[test]
+    fn commit_detail_populates_blob_oids_for_modified_and_deleted_files() {
+        let (_dir, repo) = mkrepo_with_modify_and_delete_commit();
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).expect("应能解析临时仓库");
+        let head_oid = snapshot.rows[0].oid;
+        let detail = commit_detail(&repo, head_oid).expect("应能算出第二个提交的 diff");
+
+        let modified = detail
+            .files
+            .iter()
+            .find(|f| f.path == "a.txt")
+            .expect("a.txt 应该在改动文件里");
+        assert_eq!(modified.status, git2::Delta::Modified);
+        assert!(modified.old_blob.is_some());
+        assert!(modified.new_blob.is_some());
+        assert_ne!(modified.old_blob, modified.new_blob);
+
+        let deleted = detail
+            .files
+            .iter()
+            .find(|f| f.path == "b.txt")
+            .expect("b.txt 应该在改动文件里");
+        assert_eq!(deleted.status, git2::Delta::Deleted);
+        assert!(deleted.old_blob.is_some());
+        assert_eq!(deleted.new_blob, None, "删除文件必须是 new_blob = None");
+    }
+
+    #[test]
+    fn diff_blob_content_reads_modified_file_both_sides() {
+        let (_dir, repo) = mkrepo_with_modify_and_delete_commit();
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).expect("应能解析临时仓库");
+        let head_oid = snapshot.rows[0].oid;
+        let detail = commit_detail(&repo, head_oid).unwrap();
+        let modified = detail.files.iter().find(|f| f.path == "a.txt").unwrap();
+
+        let git_repo = git2::Repository::open(&repo).unwrap();
+        let content = diff_blob_content(&git_repo, modified.old_blob, modified.new_blob)
+            .expect("修改文件的 blob 内容应能读出");
+        let DiffBlobContent::Text { old_text, new_text } = content else {
+            panic!("修改文件应该判定为可渲染文本");
+        };
+        assert_eq!(old_text, "one\n");
+        assert_eq!(new_text, "one\nmodified\n");
+    }
+
+    #[test]
+    fn diff_blob_content_added_file_has_empty_old_side() {
+        let (_dir, repo) = mkrepo_with_one_commit();
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).expect("应能解析临时仓库");
+        let root_oid = snapshot.rows[0].oid;
+        let detail = commit_detail(&repo, root_oid).unwrap();
+        let added = detail.files.iter().find(|f| f.path == "a.txt").unwrap();
+
+        let git_repo = git2::Repository::open(&repo).unwrap();
+        let content = diff_blob_content(&git_repo, added.old_blob, added.new_blob).unwrap();
+        let DiffBlobContent::Text { old_text, new_text } = content else {
+            panic!("新增文件应该判定为可渲染文本");
+        };
+        assert_eq!(old_text, "");
+        assert_eq!(new_text, "one\n");
+    }
+
+    #[test]
+    fn diff_blob_content_deleted_file_has_empty_new_side() {
+        let (_dir, repo) = mkrepo_with_modify_and_delete_commit();
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).expect("应能解析临时仓库");
+        let head_oid = snapshot.rows[0].oid;
+        let detail = commit_detail(&repo, head_oid).unwrap();
+        let deleted = detail.files.iter().find(|f| f.path == "b.txt").unwrap();
+
+        let git_repo = git2::Repository::open(&repo).unwrap();
+        let content = diff_blob_content(&git_repo, deleted.old_blob, deleted.new_blob).unwrap();
+        let DiffBlobContent::Text { old_text, new_text } = content else {
+            panic!("删除文件应该判定为可渲染文本");
+        };
+        assert_eq!(old_text, "two\n");
+        assert_eq!(new_text, "");
+    }
+
+    /// tempdir 里造一个含二进制文件(NUL 字节)的一次提交仓库。
+    fn mkrepo_with_binary_commit() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .unwrap();
+            assert!(st.status.success(), "git {args:?}: {st:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(repo.join("blob.bin"), [0x00u8, 0x01, 0x02, 0xff]).unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "binary"]);
+        (dir, repo)
+    }
+
+    #[test]
+    fn diff_blob_content_rejects_binary_content() {
+        let (_dir, repo) = mkrepo_with_binary_commit();
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).expect("应能解析临时仓库");
+        let root_oid = snapshot.rows[0].oid;
+        let detail = commit_detail(&repo, root_oid).unwrap();
+        let bin = detail.files.iter().find(|f| f.path == "blob.bin").unwrap();
+
+        let git_repo = git2::Repository::open(&repo).unwrap();
+        let content = diff_blob_content(&git_repo, bin.old_blob, bin.new_blob).unwrap();
+        assert!(matches!(content, DiffBlobContent::NotRenderable { .. }));
+    }
+
+    #[test]
+    fn diff_blob_content_rejects_oversized_blob() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .unwrap();
+            assert!(st.status.success(), "git {args:?}: {st:?}");
+        };
+        git(&["init", "-q"]);
+        // 512KB 上限之上一字节:MAX_DIFF_BLOB_BYTES = 512 * 1024。
+        let big = "a".repeat(MAX_DIFF_BLOB_BYTES + 1);
+        std::fs::write(repo.join("big.txt"), &big).unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "big"]);
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).unwrap();
+        let root_oid = snapshot.rows[0].oid;
+        let detail = commit_detail(&repo, root_oid).unwrap();
+        let entry = detail.files.iter().find(|f| f.path == "big.txt").unwrap();
+
+        let git_repo = git2::Repository::open(&repo).unwrap();
+        let content = diff_blob_content(&git_repo, entry.old_blob, entry.new_blob).unwrap();
+        assert!(matches!(content, DiffBlobContent::NotRenderable { .. }));
+    }
+
+    #[test]
+    fn diff_blob_content_accepts_blob_exactly_at_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .unwrap();
+            assert!(st.status.success(), "git {args:?}: {st:?}");
+        };
+        git(&["init", "-q"]);
+        let exact = "a".repeat(MAX_DIFF_BLOB_BYTES);
+        std::fs::write(repo.join("exact.txt"), &exact).unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "exact"]);
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).unwrap();
+        let root_oid = snapshot.rows[0].oid;
+        let detail = commit_detail(&repo, root_oid).unwrap();
+        let entry = detail.files.iter().find(|f| f.path == "exact.txt").unwrap();
+
+        let git_repo = git2::Repository::open(&repo).unwrap();
+        let content = diff_blob_content(&git_repo, entry.old_blob, entry.new_blob).unwrap();
+        assert!(
+            matches!(content, DiffBlobContent::Text { .. }),
+            "恰好等于上限应当可渲染"
+        );
+    }
+
+    #[test]
     fn ref_labels_text_head_marker_and_join() {
         let refs = vec![
             RefLabel {
@@ -1648,12 +1920,16 @@ mod tests {
                     status: git2::Delta::Modified,
                     patch: "+x".to_string(),
                     truncated: false,
+                    old_blob: None,
+                    new_blob: None,
                 },
                 DiffFileEntry {
                     path: "b.rs".to_string(),
                     status: git2::Delta::Added,
                     patch: "+y".to_string(),
                     truncated: false,
+                    old_blob: None,
+                    new_blob: None,
                 },
             ],
         };
