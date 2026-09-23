@@ -79,6 +79,11 @@ pub(crate) struct FileHistoryOverlay {
     /// `String` 是当前已加载的 URL(导航去重,同主窗口 webview 池的既有
     /// 手法)。`None` = 未挂载(未选中版本 / 内容不可渲染 / 尚未加载完)。
     diff_webview: Option<(wry::WebView, String)>,
+    /// `diff_webview` 最近一次 `set_bounds`/创建时用的矩形(卡片逻辑坐标
+    /// 系里的 x/y/w/h)。`sync_diff_webview` 每帧都可能被调用(键入、IPC
+    /// 回包、redraw 请求都会触发),矩形没变时跳过原生 `set_bounds` 调用,
+    /// 不在没必要的时候反复触发原生窗口尺寸/位置更新。
+    diff_webview_bounds: Option<(f32, f32, f32, f32)>,
 }
 
 impl FileHistoryOverlay {
@@ -124,6 +129,7 @@ impl FileHistoryOverlay {
             cursor: mouse::Cursor::Unavailable,
             modifiers: ModifiersState::default(),
             diff_webview: None,
+            diff_webview_bounds: None,
         }
     }
 
@@ -211,6 +217,7 @@ impl FileHistoryOverlay {
 
         let Some((file_path, _oid)) = desired else {
             self.diff_webview = None;
+            self.diff_webview_bounds = None;
             return;
         };
 
@@ -234,7 +241,11 @@ impl FileHistoryOverlay {
                     let _ = view.load_url(&url);
                     *loaded_url = url;
                 }
-                let _ = view.set_bounds(bounds);
+                let current_bounds = (x, y, w, h);
+                if self.diff_webview_bounds != Some(current_bounds) {
+                    let _ = view.set_bounds(bounds);
+                    self.diff_webview_bounds = Some(current_bounds);
+                }
             }
             None => {
                 let root = crate::assets::assets_root();
@@ -283,30 +294,31 @@ impl FileHistoryOverlay {
                     })
                     .build_as_child(&self.window);
                 match built {
-                    Ok(view) => self.diff_webview = Some((view, url)),
+                    Ok(view) => {
+                        self.diff_webview = Some((view, url));
+                        self.diff_webview_bounds = Some((x, y, w, h));
+                    }
                     Err(e) => tracing::warn!("文件历史 diff webview 创建失败: {e}"),
                 }
             }
         }
 
-        // 内容推送:webview 已 ready 且当前内容还没送达才推。
-        let push: Option<(git2::Oid, String)> = {
-            let Some(s) = app.file_history.as_ref() else {
-                return;
-            };
+        // 内容推送:webview 已 ready 且当前内容还没送达才推。包一层闭包,让
+        // 内部的早退 `return None` 只跳出这段计算,不会意外跳出整个
+        // `sync_diff_webview`(万一以后有人在这段之后追加清理/日志代码)。
+        let push: Option<(git2::Oid, String)> = (|| {
+            let s = app.file_history.as_ref()?;
             if !s.diff_webview_ready() {
-                return;
+                return None;
             }
-            let Some(loaded) = s.loaded_diff() else {
-                return;
-            };
+            let loaded = s.loaded_diff()?;
             if s.diff_sent_for() == Some(loaded.oid) {
-                return;
+                return None;
             }
             let crate::extensions::git_log::DiffBlobContent::Text { old_text, new_text } =
                 &loaded.content
             else {
-                return;
+                return None;
             };
             let language = crate::preview::extension_to_syntax(std::path::Path::new(&binding.path));
             let cmd = crate::preview::EditorCommand::SetDiffDocument {
@@ -326,7 +338,7 @@ impl FileHistoryOverlay {
                 cmd,
             ));
             Some((loaded.oid, script))
-        };
+        })();
         if let Some((oid, script)) = push
             && let Some((view, _)) = &self.diff_webview
         {
