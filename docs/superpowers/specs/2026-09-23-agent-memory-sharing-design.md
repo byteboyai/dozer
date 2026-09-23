@@ -211,18 +211,26 @@ impl MemoryStore {
   (需要在写实现计划前读一遍 `crates/dozer-app/src/extensions/project/`
   当前状态确认)。
 
-### `dozerd::server::serve` 参数膨胀问题(顺带改)
+### `dozerd::server::serve`/`handle_conn` 参数膨胀问题(顺带改)
 
-`crates/dozerd/src/server.rs::serve` 当前已有 12 个位置参数(`registry`/
-`projects`/`bookmarks`/`code_health`/`transcripts`/`session_summaries`/
-`backfill_registry`/`todos`/`categories`/`ide_lock_dir`/`in_flight`/
-`socket`),其中多个是相邻同类型的 `Arc<XStore>`,已经超过 CLAUDE.md 里"≥7
-个参数、多个同类型相邻"要触发具名字段参数结构体这条裁决的阈值。本设计要新增
-第 13 个(`Arc<MemoryStore>`),**不能**再无脑往参数列表后面加一个——实现计划
-里需要把这些 `Arc<XStore>` 归到一个具名字段的 `Stores` 结构体(或类似命名),
-`socket`/`ide_lock_dir`/`in_flight` 这几个非 store 性质的参数是否一并归进去,
-留给实现计划阶段判断,但至少所有 `Arc<XStore>` 必须归一个结构体,不能继续
-平铺。这算是本设计顺手清理的既有代码问题,不是范围蔓延。
+复查后订正一处此前写得不够准确的表述:`crates/dozerd/src/server.rs::serve`
+(12 个位置参数)和它内部真正做请求分发匹配的 `handle_conn`(16 个位置参数,
+新 `write_memory`/`list_memories`/`get_memory` 请求实际落地要改的是这一个,
+不是 `serve` 本身)里的 `Arc<XStore>` 参数,严格讲**不是** CLAUDE.md 参数裁决
+第一句"多个同类型参数相邻、顺序传错编译器发现不了"针对的那种情况——`Arc<
+TodoStore>`/`Arc<CategoryStore>` 等互相是不同的具体类型,位置传错了 Rust 类型
+检查会直接报错,不属于"编译器发现不了"。真正的问题是纯粹的可维护性:两个
+函数已经堆到 12/16 个位置参数,新增记忆功能还要再加一个 `Arc<MemoryStore>`,
+参数列表会变成 13/17 个,调用点(`serve` 内 `tokio::spawn` 处以及所有测试里
+`dozerd::server::serve(...)` 的调用,如 `crates/dozer-mcp/tests/todo_tools.rs`
+的 `start_daemon`)一长串位置参数已经很难对着读。本设计仍然建议在接入
+`MemoryStore` 之前,把两个函数共用的那批 `Arc<XStore>` 归到一个
+`#[derive(Clone)] pub struct Stores { .. }` 里(`serve`/`handle_conn` 各自
+额外的非 store 参数——`socket`/`ide_lock_dir`/`in_flight`/
+`preview_contexts`/`preview_commands`/`ide_bridge`/`draining`/
+`shutdown_signal`——具体怎么归类留给实现计划判断),但这是出于"参数表已经
+很长、还要再变长"的工程判断,不是在执行 CLAUDE.md 那条同类型裁决——引用
+理由已更正,结论(接入前先重构)不变。
 
 ## 错误处理
 
