@@ -272,6 +272,7 @@ impl HostBinding {
     fn panel_token(&self) -> &'static str {
         match self.panel {
             PanelKind::Project => "project",
+            PanelKind::GitLog => "gitlog",
             _ => "files",
         }
     }
@@ -447,6 +448,7 @@ pub fn encode_command(
         project_id,
         panel: match panel {
             PanelKind::Project => "project".to_string(),
+            PanelKind::GitLog => "gitlog".to_string(),
             _ => "files".to_string(),
         },
         tab_id,
@@ -786,6 +788,27 @@ mod tests {
         assert_eq!(v["panel"], "project");
         assert_eq!(v["payload"]["kind"], "reveal_position");
         assert_eq!(v["request_id"], "req-1");
+    }
+
+    #[test]
+    fn host_binding_panel_token_covers_gitlog() {
+        let b = HostBinding::new(0, PanelKind::GitLog, 0, "gitlog-diff".into());
+        // 不能直接调用私有 `panel_token()`,靠 `validate()` 间接验证:一条
+        // 携带 `panel: "gitlog"` 的 envelope 必须通过校验。
+        let env = WebviewEnvelope {
+            protocol_version: PROTOCOL_VERSION,
+            project_id: 0,
+            panel: "gitlog".to_string(),
+            tab_id: 0,
+            document_id: "gitlog-diff".to_string(),
+            revision: 0,
+            request_id: None,
+            payload: EditorEvent::Ready {
+                read_only: true,
+                language: "rust".to_string(),
+            },
+        };
+        assert!(env.validate(&b).is_ok());
     }
 
     #[test]

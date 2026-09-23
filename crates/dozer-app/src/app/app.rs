@@ -625,6 +625,10 @@ pub(crate) const PROJECT_PREVIEW_ID_OFFSET: usize = 1_000_000;
 /// PREVIEW_ID_OFFSET` 起)互不相撞。
 pub(crate) const CONVERSATION_REVIEW_ID_OFFSET: usize = 2_000_000;
 
+/// Git Log 面板 diff webview 的固定单槽位 id(不是池的偏移起点——这个面板
+/// 没有 tab 概念,任意时刻最多一个 diff webview,直接用这个常量本身当 id)。
+pub(crate) const GIT_LOG_DIFF_ID_OFFSET: usize = 3_000_000;
+
 /// `wait_for_pending_exit_tasks` 允许在飞的关 tab 收尾请求跑完的总预算。
 /// 本地 UDS 往返通常亚毫秒级,留 2 秒是给 daemon 偶尔卡顿的余量,而不是
 /// 期望真正用满——超时后放弃等待,不能让退出被一个卡死的 daemon 拖住。
