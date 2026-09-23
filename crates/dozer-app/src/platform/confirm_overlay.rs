@@ -191,7 +191,28 @@ pub(crate) fn desired_confirm(
             map_todo_spec(crate::extensions::todo::clear_confirm_spec()),
         ));
     }
+    if let Some(spec) = crate::extensions::files::delete_confirm_spec(&ws.files) {
+        return Some((ConfirmTrigger::FilesDelete, map_files_spec(spec)));
+    }
     None
+}
+
+/// 把 Files 扩展的 `ConfirmDialog<files::Message>` 提升到 app 级——同
+/// `map_todo_spec`,边界处包 `Message::Files`。
+fn map_files_spec(
+    spec: dialog::ConfirmDialog<crate::extensions::files::Message>,
+) -> dialog::ConfirmDialog<Message> {
+    dialog::ConfirmDialog {
+        icon: spec.icon,
+        title: spec.title,
+        description: spec.description,
+        cancel_label: spec.cancel_label,
+        cancel_msg: Message::Files(spec.cancel_msg),
+        confirm_label: spec.confirm_label,
+        confirm_msg: Message::Files(spec.confirm_msg),
+        confirm_color: spec.confirm_color,
+        content_spacing: spec.content_spacing,
+    }
 }
 
 /// 把 Todo 扩展的 `ConfirmDialog<todo::Message>` 提升到 app 级

@@ -113,17 +113,7 @@ impl App {
         ];
         let base = column![top, body];
 
-        let popped = if ws.files.tree_delete_confirm_is_some() {
-            let dismiss = crate::dialog::scrim(Message::Files(files::Message::DeleteCancel));
-            stack![
-                base,
-                dismiss,
-                files::delete_confirm_popup(&ws.files, self.window_size.0).map(Message::Files)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        } else if ws.files.pending_move_is_some() {
+        let popped = if ws.files.pending_move_is_some() {
             let dismiss = crate::dialog::scrim(Message::Files(files::Message::MoveCancel));
             stack![
                 base,

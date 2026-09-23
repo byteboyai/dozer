@@ -1221,28 +1221,33 @@ pub fn delete_confirm_popup(
     ws_state: &WorkspaceState,
     window_width: f32,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let Some((path, is_dir)) = &ws_state.tree_delete_confirm else {
+    let Some(spec) = delete_confirm_spec(ws_state) else {
         return column![].into();
     };
+    crate::dialog::confirm(spec, window_width)
+}
+
+/// 删除确认框的内容描述——宿主(`platform::confirm_overlay`)与旧的
+/// in-window 渲染都取这一份,保证文案/消息不因迁移而分叉。`None` 表示
+/// 当前没有待确认的删除。
+pub(crate) fn delete_confirm_spec(ws_state: &WorkspaceState) -> Option<crate::dialog::ConfirmDialog<Message>> {
+    let (path, is_dir) = ws_state.tree_delete_confirm.as_ref()?;
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string());
     let kind = if *is_dir { "文件夹" } else { "文件" };
-    crate::dialog::confirm(
-        crate::dialog::ConfirmDialog {
-            icon: None,
-            title: format!("删除{kind} \"{name}\"?"),
-            description: "会移入系统回收站,可从回收站找回。".to_string(),
-            cancel_label: "取消".to_string(),
-            cancel_msg: Message::DeleteCancel,
-            confirm_label: "删除".to_string(),
-            confirm_msg: Message::DeleteConfirm,
-            confirm_color: byteui::theme::color::current().red,
-            content_spacing: 8.0,
-        },
-        window_width,
-    )
+    Some(crate::dialog::ConfirmDialog {
+        icon: None,
+        title: format!("删除{kind} \"{name}\"?"),
+        description: "会移入系统回收站,可从回收站找回。".to_string(),
+        cancel_label: "取消".to_string(),
+        cancel_msg: Message::DeleteCancel,
+        confirm_label: "删除".to_string(),
+        confirm_msg: Message::DeleteConfirm,
+        confirm_color: byteui::theme::color::current().red,
+        content_spacing: 8.0,
+    })
 }
 
 /// 拖拽移动确认框:居中浮层,视觉模板同 `delete_confirm_popup`(卡片 +
