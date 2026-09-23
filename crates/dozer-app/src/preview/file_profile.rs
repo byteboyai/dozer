@@ -220,6 +220,42 @@ fn is_utf16(e: TextEncoding) -> bool {
     matches!(e, TextEncoding::Utf16Le | TextEncoding::Utf16Be)
 }
 
+/// 把以 UTF-16(LE/BE,带 BOM)编码的整份字节解码成 UTF-8 `String`。
+///
+/// 预览读路径专用:CodeMirror host 用 `fetch(...).text()` 固定按 UTF-8 解码,
+/// 直接喂原始 UTF-16 字节会乱码。这里在服务端先转成 UTF-8 文本(与
+/// [`detect_encoding`] 的判定保持一致:BOM 存在即视为 UTF-16)。
+///
+/// 返回 `None` 表示不是可识别的 UTF-16(无 BOM,或落单的尾部半字),调用方应
+/// 原样返回原始字节。含未配对代理项时用替换字符兜底,不 panic。
+///
+/// 注:带 `FF FE` / `FE FF` 开头但实为非法 UTF-16 的刻意构造文件(验收清单
+/// `non_utf8.rs`)无法在结构上与此区分,按 UTF-16 解码后仍是不可读字符——这类
+/// 字节安全显示留待 T9,不在本函数职责内。
+pub fn decode_utf16_to_utf8(bytes: &[u8]) -> Option<String> {
+    let (le, body) = if bytes.starts_with(&[0xFF, 0xFE]) {
+        (true, &bytes[2..])
+    } else if bytes.starts_with(&[0xFE, 0xFF]) {
+        (false, &bytes[2..])
+    } else {
+        return None;
+    };
+    if !body.len().is_multiple_of(2) {
+        return None;
+    }
+    let units: Vec<u16> = body
+        .chunks_exact(2)
+        .map(|pair| {
+            if le {
+                u16::from_le_bytes([pair[0], pair[1]])
+            } else {
+                u16::from_be_bytes([pair[0], pair[1]])
+            }
+        })
+        .collect();
+    Some(String::from_utf16_lossy(&units))
+}
+
 /// 识别编码与前导 BOM 长度。无 BOM(含空文件)一律按 UTF-8/0。
 fn detect_encoding(head: &[u8]) -> (TextEncoding, usize) {
     if head.starts_with(&[0xEF, 0xBB, 0xBF]) {
@@ -461,6 +497,36 @@ mod tests {
         assert_eq!(prof.encoding, TextEncoding::Utf16Le);
         assert_eq!(prof.content_kind, ContentKind::Text);
         assert_eq!(prof.utf8, Utf8Status::Invalid);
+    }
+
+    #[test]
+    fn decode_utf16_le_with_bom() {
+        let bytes = b"\xFF\xFEh\x00i\x00 \x00\x2d\x4e";
+        assert_eq!(decode_utf16_to_utf8(bytes).as_deref(), Some("hi 中"));
+    }
+
+    #[test]
+    fn decode_utf16_be_with_bom() {
+        let bytes = b"\xFE\xFF\x00h\x00i\x4e\x2d";
+        assert_eq!(decode_utf16_to_utf8(bytes).as_deref(), Some("hi中"));
+    }
+
+    #[test]
+    fn decode_utf16_requires_bom() {
+        assert!(decode_utf16_to_utf8(b"plain utf-8").is_none());
+    }
+
+    #[test]
+    fn decode_utf16_rejects_odd_length() {
+        // 落单的尾字节:不是干净 UTF-16,退回原字节(交给 T9 字节安全路径)。
+        assert!(decode_utf16_to_utf8(b"\xFF\xFEh\x00i").is_none());
+    }
+
+    #[test]
+    fn decode_utf16_astral_pair() {
+        // U+1F600 的代理对 D83D DE00(Little Endian)。
+        let bytes = b"\xFF\xFE\x3D\xD8\x00\xDE";
+        assert_eq!(decode_utf16_to_utf8(bytes).as_deref(), Some("😀"));
     }
 
     #[test]

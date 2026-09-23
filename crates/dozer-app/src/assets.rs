@@ -135,11 +135,21 @@ fn serve_allowlisted_file(encoded: &str, allowed: &HashSet<PathBuf>) -> Protocol
         return not_found();
     }
     match std::fs::read(&file) {
-        Ok(body) => ProtocolReply {
-            status: 200,
-            mime: mime_for(&file),
-            body,
-        },
+        Ok(body) => {
+            // UTF-16 文本(带 BOM)先转成 UTF-8:WebView 的 `fetch().text()`
+            // 固定按 UTF-8 解码,喂原始 UTF-16 字节会整篇乱码(2026-09 用户
+            // 报告 utf16le.rs 打开乱码)。转码只影响显示;该文件因 utf8:Invalid
+            // 已按只读处理,不涉及保存回写。
+            let body = match crate::preview::decode_utf16_to_utf8(&body) {
+                Some(text) => text.into_bytes(),
+                None => body,
+            };
+            ProtocolReply {
+                status: 200,
+                mime: mime_for(&file),
+                body,
+            }
+        }
         Err(_) => not_found(),
     }
 }
@@ -339,6 +349,45 @@ mod tests {
         let r = handle_protocol(&root, &allowed, None, &uri);
         assert_eq!((r.status, r.mime), (200, "text/markdown"));
         assert_eq!(r.body, b"# hi");
+    }
+
+    #[test]
+    fn file_endpoint_transcodes_utf16_to_utf8() {
+        let root = scratch();
+        let f = root.join("utf16le.rs");
+        // UTF-16LE + BOM:"hi\n"
+        fs::write(&f, b"\xFF\xFEh\x00i\x00\n\x00").unwrap();
+        let uri = format!("dozer://editor/__file__{}", f.to_string_lossy());
+        let mut allowed = HashSet::new();
+        allowed.insert(f.clone());
+        let r = handle_protocol(&root, &allowed, None, &uri);
+        assert_eq!(r.status, 200);
+        assert_eq!(r.body, b"hi\n", "UTF-16 应转成 UTF-8 文本");
+    }
+
+    #[test]
+    fn file_endpoint_leaves_utf8_untouched() {
+        let root = scratch();
+        let f = root.join("plain.rs");
+        fs::write(&f, b"fn main() {}\n").unwrap();
+        let uri = format!("dozer://editor/__file__{}", f.to_string_lossy());
+        let mut allowed = HashSet::new();
+        allowed.insert(f.clone());
+        let r = handle_protocol(&root, &allowed, None, &uri);
+        assert_eq!(r.body, b"fn main() {}\n");
+    }
+
+    #[test]
+    fn file_endpoint_passes_odd_length_utf16_through() {
+        // 奇数长度(落单尾字节)不是干净 UTF-16,原样透传(字节安全留待 T9)。
+        let root = scratch();
+        let f = root.join("odd.rs");
+        fs::write(&f, b"\xFF\xFEh\x00i").unwrap();
+        let uri = format!("dozer://editor/__file__{}", f.to_string_lossy());
+        let mut allowed = HashSet::new();
+        allowed.insert(f.clone());
+        let r = handle_protocol(&root, &allowed, None, &uri);
+        assert_eq!(r.body, b"\xFF\xFEh\x00i", "非偶数长度 UTF-16 应原样透传");
     }
 
     #[test]
