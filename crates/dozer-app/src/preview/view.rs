@@ -3923,6 +3923,22 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
+    /// T4:tab 已关闭后,迟到的索引结果必须被丢弃(不得凭空重建 runtime)。
+    #[test]
+    fn apply_window_index_after_tab_close_is_dropped() {
+        let path = windowed_fixture("t4_close_drop");
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        let idx = LineIndex::build(&path, 1000, 0).unwrap();
+        pane.close_by_id(id);
+        assert!(
+            !pane.apply_window_index(id, std::sync::Arc::new(idx)),
+            "关闭后索引应被丢弃"
+        );
+        assert!(pane.tabs().iter().all(|t| t.id != id));
+        std::fs::remove_file(&path).ok();
+    }
+
     /// T14:外部变更命中窗口化 tab 时,旧索引失效(清空 + revision 归零)、
     /// 推进 reload。
     #[test]
