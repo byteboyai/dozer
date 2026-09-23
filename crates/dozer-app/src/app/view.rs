@@ -438,18 +438,6 @@ impl App {
                     .height(Length::Fill)
                     .into(),
             }
-        } else if ws.todo.clear_confirm_open() {
-            // Todo"清空列表"确认弹窗:窗口级 overlay,与其它 Todo 浮层同款
-            // "点遮罩即收起"约定。
-            let dismiss = crate::dialog::scrim(Message::Todo(todo::Message::ClearListCancel));
-            stack![
-                base,
-                dismiss,
-                todo::clear_confirm_popup(&ws.todo, self.window_size.0).map(Message::Todo)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
         } else if ws.todo.detail_popup_open() {
             // 任务详情弹窗:窗口级 overlay,原生渲染(不走 wry webview)。
             // 点弹层外任意处经 dismiss 收起,与其它 Todo 浮层同款约定。

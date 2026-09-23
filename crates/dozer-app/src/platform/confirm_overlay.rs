@@ -180,10 +180,35 @@ impl ConfirmOverlay {
 }
 
 /// 按 `if/else if` 优先级链算出"此刻该显示哪个 confirm 弹窗"(至多一个)。
-/// Task 3 起逐个把 `else if` 换成真实触发条件——现在还没有任何消费方接入
-/// 通用宿主,诚实返回 `None`,不是"以后再实现"的占位符。
+/// 优先级顺序决定互斥弹窗重叠时谁胜出,逐个 `else if` 追加消费方。
 pub(crate) fn desired_confirm(
-    _ws: Option<&crate::workspace::Workspace>,
+    ws: Option<&crate::workspace::Workspace>,
 ) -> Option<(ConfirmTrigger, dialog::ConfirmDialog<Message>)> {
+    let ws = ws?;
+    if ws.todo.clear_confirm_open() {
+        return Some((
+            ConfirmTrigger::TodoClear,
+            map_todo_spec(crate::extensions::todo::clear_confirm_spec()),
+        ));
+    }
     None
+}
+
+/// 把 Todo 扩展的 `ConfirmDialog<todo::Message>` 提升到 app 级
+/// `ConfirmDialog<Message>`(与旧的 in-window 分支 `.map(Message::Todo)`
+/// 等价)。通用宿主只认 app 级 `Message`,各消费方自己负责在边界处包一层。
+fn map_todo_spec(
+    spec: dialog::ConfirmDialog<crate::extensions::todo::Message>,
+) -> dialog::ConfirmDialog<Message> {
+    dialog::ConfirmDialog {
+        icon: spec.icon,
+        title: spec.title,
+        description: spec.description,
+        cancel_label: spec.cancel_label,
+        cancel_msg: Message::Todo(spec.cancel_msg),
+        confirm_label: spec.confirm_label,
+        confirm_msg: Message::Todo(spec.confirm_msg),
+        confirm_color: spec.confirm_color,
+        content_spacing: spec.content_spacing,
+    }
 }

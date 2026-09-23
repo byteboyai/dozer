@@ -435,26 +435,22 @@ pub(crate) fn todo_clear_footer_bar<'a>(
 /// `icons::IconKind::ListTodo`(同 `home_panel_head` 头部图标),不用
 /// footbar 按钮的 `Trash`——图标标的是"这是 Todo 面板的弹窗",危险语义已
 /// 由红色"清空"按钮本身表达,不需要标题图标重复。
-pub fn clear_confirm_popup(
-    _ws_state: &WorkspaceState,
-    window_width: f32,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    crate::dialog::confirm(
-        crate::dialog::ConfirmDialog {
-            icon: Some(icons::IconKind::ListTodo),
-            title: "清空列表".to_string(),
-            description: "这会清空当前项目的全部任务,操作不可撤销。".to_string(),
-            cancel_label: "取消".to_string(),
-            cancel_msg: Message::ClearListCancel,
-            confirm_label: "清空".to_string(),
-            confirm_msg: Message::ClearListConfirm,
-            confirm_color: byteui::theme::color::current().red,
-            // 原 `clear_confirm_popup` 的 `column.spacing(12)`，其它三处弹窗
-            // 是 8，这里原样保留 12，不随 `confirm()` 默认值归一。
-            content_spacing: 12.0,
-        },
-        window_width,
-    )
+/// "清空列表"确认弹窗的内容描述——宿主(`platform::confirm_overlay`)取这
+/// 一份渲染,保证文案/消息不因迁移而分叉。
+pub(crate) fn clear_confirm_spec() -> crate::dialog::ConfirmDialog<Message> {
+    crate::dialog::ConfirmDialog {
+        icon: Some(icons::IconKind::ListTodo),
+        title: "清空列表".to_string(),
+        description: "这会清空当前项目的全部任务,操作不可撤销。".to_string(),
+        cancel_label: "取消".to_string(),
+        cancel_msg: Message::ClearListCancel,
+        confirm_label: "清空".to_string(),
+        confirm_msg: Message::ClearListConfirm,
+        confirm_color: byteui::theme::color::current().red,
+        // 原 `clear_confirm_popup` 的 `column.spacing(12)`，其它三处弹窗
+        // 是 8，这里原样保留 12，不随 `confirm()` 默认值归一。
+        content_spacing: 12.0,
+    }
 }
 
 /// 顶部搜索框:真正的 `byteui::form::input_text`,形状与 Files 搜索框
@@ -1866,4 +1862,20 @@ pub(crate) fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
+}
+
+#[cfg(test)]
+mod clear_confirm_tests {
+    use super::*;
+
+    #[test]
+    fn clear_confirm_spec_carries_cancel_and_confirm_messages() {
+        let spec = clear_confirm_spec();
+        assert_eq!(spec.title, "清空列表");
+        assert_eq!(spec.confirm_label, "清空");
+        assert_eq!(spec.cancel_label, "取消");
+        assert!(matches!(spec.confirm_msg, Message::ClearListConfirm));
+        assert!(matches!(spec.cancel_msg, Message::ClearListCancel));
+        assert_eq!(spec.content_spacing, 12.0);
+    }
 }
