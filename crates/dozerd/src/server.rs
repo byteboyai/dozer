@@ -825,6 +825,15 @@ async fn handle_conn(
                         Request::GetPreviewContext { project_id } => Reply::PreviewContext {
                             context: preview_contexts.get(project_id),
                         },
+                        // T13:daemon → app 的下行命令通道尚未接线(需要 app 常驻
+                        // 控制连接 + in-flight 登记 + 超时)。先返回确定失败,
+                        // 不挂起调用方。
+                        Request::RunPreviewCommand { command } => Reply::PreviewCommandResult {
+                            outcome: dozer_core::protocol::PreviewCommandOutcome::InternalError {
+                                request_id: command.request_id,
+                                detail: "预览命令通道尚未接线(见 wrap-up T13)".into(),
+                            },
+                        },
                         Request::ListConversations { cwd, agent, limit, offset } => {
                             match transcripts.list_conversations(&cwd, agent, limit, offset) {
                                 Ok(conversations) => Reply::Conversations { conversations },

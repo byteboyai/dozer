@@ -3277,6 +3277,44 @@ mod tests {
         }
     }
 
+    /// T2/T4:backend 描述、runtime 容器、route 三者对每个新 tab 都自洽
+    /// (结构化 invariant 测试,替代只靠 debug_assert)。
+    #[test]
+    fn backend_runtime_route_are_consistent_per_tab() {
+        let dir = std::env::temp_dir().join(format!("t4_invariant_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cases = [
+            ("a.rs", "fn main(){}\n", PreviewKind::Code),
+            ("a.csv", "a,b\n1,2\n", PreviewKind::Tabular),
+            ("a.zip", "PK\x03\x04", PreviewKind::External),
+            ("mystery.binblob", "\x00\x01\x02", PreviewKind::Unsupported),
+            ("data.json", "{\"a\":1}\n", PreviewKind::Json),
+        ];
+        let mut pane = PreviewPane::default();
+        for (name, content, kind) in cases {
+            let p = dir.join(name);
+            std::fs::write(&p, content).unwrap();
+            let id = pane.open_path(p.clone());
+            let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+            assert_eq!(tab.route.as_ref().unwrap().kind, kind, "{name} route");
+            assert_eq!(tab.backend.as_ref().unwrap().kind(), kind, "{name} backend");
+            // runtime 一致:表格 → Tabular;其余 → None/Windowed(非 Tabular)。
+            if kind == PreviewKind::Tabular {
+                assert!(matches!(tab.runtime, PreviewRuntime::Tabular(_)), "{name}");
+            } else {
+                assert!(
+                    !matches!(tab.runtime, PreviewRuntime::Tabular(_)),
+                    "{name} 不应挂 Tabular runtime"
+                );
+            }
+            // resident runtime 时不得 host webview。
+            if tab.runtime.is_resident() {
+                assert!(!tab.hosts_webview(), "{name} resident 不应 host webview");
+            }
+            std::fs::remove_file(&p).ok();
+        }
+    }
+
     /// T13:apply_preview_command 的只读导航与 revision 守卫写入。
     #[test]
     fn apply_preview_command_navigation_and_replace_guard() {

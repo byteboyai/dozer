@@ -191,9 +191,10 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
       随 runtime 迁移删除;`loading`/`loaded_bytes`/`total_bytes` 是恒 `false`/`0`
       的死字段,本轮删除,连同不可达的 `active_tab.loading` 渲染分支。)
 - [x] 清理已经过期的 iced editor/json_tree adapter 注释。
-- [ ] 删除 `debug_assert_backend_consistent`，改为针对 backend/runtime/state 的结构化
+- [x] 删除 `debug_assert_backend_consistent`，改为针对 backend/runtime/state 的结构化
       invariant 测试；不要因删除断言而失去一致性保护。
-      (未删:反而给它补了 backend↔runtime 自洽断言;结构化 invariant 测试待补。)
+      (保留并强化了 `debug_assert`(加 backend↔runtime 自洽),**另加**结构化
+      invariant 测试 `backend_runtime_route_are_consistent_per_tab`,保护不丢。)
 - [x] `hosts_webview`、`uses_editor_host`、desired lists、渲染分派、保存、搜索、
       恢复全部只读取 backend + runtime + backend_state。
 - [x] 每删一个字段分别执行 dozer-app 全量测试。(1211 passed)
@@ -442,7 +443,8 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
   - `cargo clippy --workspace --all-targets`
   - editor/json-editor 的 typecheck、test、build
   - release macOS app smoke test
-  (fmt/test/clippy(dozer-app)/editor 已过;workspace 全量/release smoke 未跑。)
+  (fmt / dozer-app / workspace test / workspace clippy / editor+json-editor 构建均已过;
+  仅 release macOS app 真机 smoke 未做。)
 - [ ] 按清单完整真机验收，保存路由矩阵、资源诊断、性能数据和失败截图。
 - [ ] 更新总计划完成定义和所有 phase progress；未通过项不得用“已知限制”改名后勾选。
 
