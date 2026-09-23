@@ -177,41 +177,64 @@ impl App {
                                 // 尝试完都必须完成关闭,否则 tab 卡在等待里永远
                                 // 关不掉。`want_close` 在借出 tab 之前已探明。
                                 //
-                                // T6:只读 / 窗口化 / 有损编码(非 UTF-8)tab 恒
-                                // 拒绝写盘——CodeMirror 的 `fetch().text()` 可能
-                                // 已用替换字符吞掉原始字节,回写会破坏原文件。
-                                if !tab.can_save() {
-                                    tab.web_error = Some(
-                                        "该文件为只读/非 UTF-8 文本,已禁用保存以免破坏原文件"
-                                            .into(),
-                                    );
-                                } else if revision == event.revision && revision == tab.web_revision
-                                {
-                                    match crate::preview::save_text_atomic(path, &text) {
-                                        Ok(()) => {
-                                            tab.dirty = false;
-                                            tab.recovery_written = false;
-                                            // 正常保存:清掉该文件的 recovery snapshot。
-                                            let project_id = binding.project_id;
-                                            let restore_path = path.clone();
-                                            io.handle.spawn(async move {
-                                                let _ = tokio::task::spawn_blocking(move || {
-                                                    crate::preview::clear_snapshot(
-                                                        &crate::preview::recovery_dir(),
-                                                        project_id,
-                                                        crate::preview::path_key(&restore_path),
-                                                    );
-                                                })
-                                                .await;
-                                            });
-                                        }
-                                        Err(error) => {
-                                            tab.web_error = Some(format!("保存失败: {error}"))
+                                // 先克隆路径,结束对 `tab.kind` 的不可变借用,
+                                // 才能调 `tab.save_gate()`(需要 &mut)。
+                                let save_path = path.clone();
+                                // T6/T10:只读 / 有损编码 / 未处理的磁盘冲突一律
+                                // 拒绝写盘;冲突需用户先选择保留或重载。
+                                match tab.save_gate() {
+                                    crate::preview::SaveGate::ReadOnly => {
+                                        tab.web_error = Some(
+                                            "该文件为只读/非 UTF-8 文本,已禁用保存以免破坏原文件"
+                                                .into(),
+                                        );
+                                    }
+                                    crate::preview::SaveGate::Conflict => {
+                                        tab.web_error = Some(
+                                            "磁盘文件已被外部修改,请先选择「保留我的修改」或「重载磁盘」。"
+                                                .into(),
+                                        );
+                                    }
+                                    crate::preview::SaveGate::Allow => {
+                                        if revision == event.revision
+                                            && revision == tab.web_revision
+                                        {
+                                            match crate::preview::save_text_atomic(
+                                                &save_path,
+                                                &text,
+                                            ) {
+                                                Ok(()) => {
+                                                    tab.dirty = false;
+                                                    tab.recovery_written = false;
+                                                    tab.conflict_baseline = None;
+                                                    // 正常保存:清掉该文件的 recovery snapshot。
+                                                    let project_id = binding.project_id;
+                                                    let restore_path = save_path.clone();
+                                                    io.handle.spawn(async move {
+                                                        let _ = tokio::task::spawn_blocking(
+                                                            move || {
+                                                                crate::preview::clear_snapshot(
+                                                                    &crate::preview::recovery_dir(),
+                                                                    project_id,
+                                                                    crate::preview::path_key(
+                                                                        &restore_path,
+                                                                    ),
+                                                                );
+                                                            },
+                                                        )
+                                                        .await;
+                                                    });
+                                                }
+                                                Err(error) => {
+                                                    tab.web_error =
+                                                        Some(format!("保存失败: {error}"))
+                                                }
+                                            }
+                                        } else if !want_close {
+                                            // 非关闭场景下的过期保存:与旧行为一致,丢弃。
+                                            return;
                                         }
                                     }
-                                } else if !want_close {
-                                    // 非关闭场景下的过期保存:与旧行为一致,丢弃。
-                                    return;
                                 }
                                 if want_close {
                                     close_after_save = Some(tab.id);
@@ -1475,6 +1498,16 @@ impl App {
             Message::PreviewPlainTextOpen(kind, tab_id) => {
                 self.with_focused_project(move |ws, io| {
                     ws.preview_plain_text_open(kind, tab_id, io);
+                });
+            }
+            Message::PreviewConflictKeep(kind, tab_id) => {
+                self.with_focused_project(move |ws, _io| {
+                    ws.preview_conflict_keep(kind, tab_id);
+                });
+            }
+            Message::PreviewConflictReload(kind, tab_id) => {
+                self.with_focused_project(move |ws, io| {
+                    ws.preview_conflict_reload(kind, tab_id, io);
                 });
             }
             Message::PreviewTabularTextModeToggle(kind, tab_id) => {

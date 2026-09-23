@@ -2121,6 +2121,57 @@ impl Workspace {
         }
     }
 
+    /// T10:该面板是否有激活的磁盘冲突(渲染/几何让位用)。
+    pub fn preview_conflict_active(&self, kind: PanelKind) -> bool {
+        let pane = if kind == PanelKind::Project {
+            &self.project_preview
+        } else {
+            &self.preview
+        };
+        pane.active_conflict().is_some()
+    }
+
+    /// T10:「保留我的修改」——清冲突态,以当前磁盘 mtime 为保存基线。
+    pub fn preview_conflict_keep(&mut self, kind: PanelKind, tab_id: usize) {
+        let pane = if kind == PanelKind::Project {
+            &mut self.project_preview
+        } else {
+            &mut self.preview
+        };
+        pane.keep_conflict_changes(tab_id);
+    }
+
+    /// T10:「重载磁盘(丢弃我的修改)」——第一次点击进入二次确认,再点一次才
+    /// 真正丢弃:清冲突/清 dirty/推进 reload/复位 revision,并删除 recovery 快照。
+    pub fn preview_conflict_reload(&mut self, kind: PanelKind, tab_id: usize, io: &ShellIo) {
+        let pane = if kind == PanelKind::Project {
+            &mut self.project_preview
+        } else {
+            &mut self.preview
+        };
+        let armed = pane
+            .tabs()
+            .iter()
+            .find(|t| t.id == tab_id)
+            .is_some_and(|t| t.conflict_reload_armed);
+        if !armed {
+            pane.arm_conflict_reload(tab_id);
+            return;
+        }
+        let Some(path) = pane.discard_conflict_and_reload(tab_id) else {
+            return;
+        };
+        if let Some(project_id) = self.project_id() {
+            io.handle.spawn_blocking(move || {
+                crate::preview::clear_snapshot(
+                    &crate::preview::recovery_dir(),
+                    project_id,
+                    crate::preview::path_key(&path),
+                );
+            });
+        }
+    }
+
     /// 为窗口化 tab 建稀疏行索引(后台),完成后经 `PreviewWindowIndex` 回填
     /// (同 `app/update.rs` 里窗口化索引的生成点)。
     fn preview_spawn_window_index(&mut self, kind: PanelKind, tab_id: usize, io: &ShellIo) {

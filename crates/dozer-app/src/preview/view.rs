@@ -11,6 +11,11 @@ use super::*;
 pub const WINDOW_BEFORE: u32 = 1000;
 pub const WINDOW_AFTER: u32 = 2000;
 
+/// 读文件的 mtime(取不到则 `None`)。T10 冲突检测/保存前校验共用。
+pub(crate) fn disk_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
 /// 构造一个 `TabKind::Blank` 占位 tab。**可被关掉**(`close(0)` 在有兄弟
 /// tab 时真关;没兄弟时关完自动补一个新的,见 [`PreviewPane::close`]),所以
 /// "id 0" 不再是不变量。`Default` 与 `clear_all`(项目切换)都靠它把面板
@@ -43,6 +48,9 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         web_selected_text: None,
         web_viewport: None,
         web_error: None,
+        conflict: None,
+        conflict_reload_armed: false,
+        conflict_baseline: None,
     }
 }
 
@@ -197,6 +205,70 @@ impl PreviewPane {
         }
         tab.window_index = Some(index);
         true
+    }
+
+    /// T10:「保留我的修改」:清冲突态,以当前磁盘 mtime 作保存基线(下次保存
+    /// 覆盖前会再校验磁盘是否又变了)。返回是否有冲突被清除。
+    pub fn keep_conflict_changes(&mut self, tab_id: usize) -> bool {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return false;
+        };
+        if tab.conflict.is_none() {
+            return false;
+        }
+        let TabKind::File(path) = &tab.kind else {
+            return false;
+        };
+        tab.conflict_baseline = Some(disk_mtime(path).unwrap_or(std::time::UNIX_EPOCH));
+        tab.conflict = None;
+        tab.conflict_reload_armed = false;
+        tab.web_error = None;
+        true
+    }
+
+    /// T10:「重载磁盘」第一次点击 → 进入二次确认。返回 true 表示这次只是
+    /// 置位(需再点一次),false 表示该 tab 无冲突/不存在。
+    pub fn arm_conflict_reload(&mut self, tab_id: usize) -> bool {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return false;
+        };
+        if tab.conflict.is_none() {
+            return false;
+        }
+        tab.conflict_reload_armed = true;
+        true
+    }
+
+    /// T10:「重载磁盘(丢弃我的修改)」清冲突、清 dirty、增加 reload nonce、
+    /// 复位 revision 基线(磁盘内容将重新拉取)。返回被丢弃 tab 的路径,供
+    /// 调用方清理 recovery 快照。
+    pub fn discard_conflict_and_reload(&mut self, tab_id: usize) -> Option<PathBuf> {
+        let tab = self.tabs.iter_mut().find(|t| t.id == tab_id)?;
+        if tab.conflict.is_none() {
+            return None;
+        }
+        let path = match &tab.kind {
+            TabKind::File(p) => p.clone(),
+            _ => return None,
+        };
+        tab.conflict = None;
+        tab.conflict_reload_armed = false;
+        tab.conflict_baseline = None;
+        tab.dirty = false;
+        tab.recovery_written = false;
+        tab.reload_nonce += 1;
+        tab.web_revision = 0;
+        tab.web_selection = None;
+        tab.web_selected_text = None;
+        tab.web_viewport = None;
+        tab.web_error = None;
+        Some(path)
+    }
+
+    /// T10:是否有激活 tab 正处冲突态(供渲染层决定是否画冲突条)。
+    pub fn active_conflict(&self) -> Option<(usize, bool)> {
+        let tab = self.tabs.get(self.active)?;
+        tab.conflict.map(|_| (tab.id, tab.conflict_reload_armed))
     }
 
     pub fn tabs(&self) -> &[PreviewTab] {
@@ -358,6 +430,9 @@ impl PreviewPane {
             web_selected_text: None,
             web_viewport: None,
             web_error: None,
+            conflict: None,
+            conflict_reload_armed: false,
+            conflict_baseline: None,
         };
         tab.debug_assert_backend_consistent();
         self.tabs.push(tab);
@@ -433,6 +508,9 @@ impl PreviewPane {
             web_selected_text: None,
             web_viewport: None,
             web_error: None,
+            conflict: None,
+            conflict_reload_armed: false,
+            conflict_baseline: None,
         };
         self.tabs.push(tab);
         id
@@ -1335,7 +1413,10 @@ impl PreviewPane {
                 continue;
             }
             if tab.dirty {
-                tab.web_error = Some("文件已在外部修改,未自动重载以免覆盖你的改动".into());
+                // T10:进入显式冲突态(不只是写一条错误),由用户选择保留/重载。
+                let _ = tab.mark_disk_conflict();
+                tab.web_error =
+                    Some("磁盘文件已被外部修改,请选择「保留我的修改」或「重载磁盘」。".into());
             } else {
                 tab.reload_nonce += 1;
                 tab.web_revision = 0;
@@ -2985,6 +3066,88 @@ mod tests {
         assert!(tab.window_index.is_none(), "旧索引应失效");
         assert_eq!(tab.web_revision, 0);
         assert_eq!(tab.reload_nonce, 1, "应推进 reload 重新导航");
+        std::fs::remove_file(&path).ok();
+    }
+
+    fn tab_mark_conflict(pane: &mut PreviewPane, id: usize) -> bool {
+        pane.tabs_mut()
+            .iter_mut()
+            .find(|t| t.id == id)
+            .is_some_and(|t| t.mark_disk_conflict())
+    }
+
+    fn dirty_tab_conflict_fixture(name: &str) -> (PreviewPane, usize, PathBuf) {
+        let path = std::env::temp_dir().join(format!("{name}_{}.rs", std::process::id()));
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == id) {
+            tab.dirty = true;
+        }
+        (pane, id, path)
+    }
+
+    /// T10:仅脏文件 tab 进入显式冲突态;「保留我的修改」清冲突并允许保存。
+    #[test]
+    fn conflict_keep_clears_and_allows_save() {
+        let (mut pane, id, path) = dirty_tab_conflict_fixture("t10_keep");
+        assert!(tab_mark_conflict(&mut pane, id));
+        assert!(pane.active_conflict().is_some(), "应进入显式冲突态");
+        assert!(pane.keep_conflict_changes(id));
+        assert!(pane.active_conflict().is_none());
+        let tab = pane.tabs_mut().iter_mut().find(|t| t.id == id).unwrap();
+        assert_eq!(tab.save_gate(), SaveGate::Allow);
+        assert!(tab.dirty, "保留我的修改后仍保持脏");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// T10:冲突未处理 → 保存闸门拒绝;「保留」后磁盘又变 → 重新进入冲突并拒绝。
+    #[test]
+    fn conflict_save_gate_blocks_and_rechecks_disk() {
+        let (mut pane, id, path) = dirty_tab_conflict_fixture("t10_gate");
+        assert!(tab_mark_conflict(&mut pane, id));
+        {
+            let tab = pane.tabs_mut().iter_mut().find(|t| t.id == id).unwrap();
+            assert_eq!(tab.save_gate(), SaveGate::Conflict);
+        }
+        // 保留后把基线设成一个必然不匹配的旧 mtime → 再保存应重新置冲突。
+        assert!(pane.keep_conflict_changes(id));
+        {
+            let tab = pane.tabs_mut().iter_mut().find(|t| t.id == id).unwrap();
+            tab.conflict_baseline = Some(std::time::UNIX_EPOCH);
+            assert_eq!(tab.save_gate(), SaveGate::Conflict);
+            assert!(tab.conflict.is_some(), "磁盘又变应重新进入冲突态");
+        }
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// T10:「重载磁盘」需二次确认;确认后清冲突/清 dirty/推进 reload,并返回路径。
+    #[test]
+    fn conflict_reload_arms_then_discards() {
+        let (mut pane, id, path) = dirty_tab_conflict_fixture("t10_reload");
+        assert!(tab_mark_conflict(&mut pane, id));
+        assert!(pane.arm_conflict_reload(id), "第一次点击仅置二次确认");
+        assert_eq!(pane.active_conflict(), Some((id, true)));
+        let returned = pane.discard_conflict_and_reload(id);
+        assert_eq!(returned.as_deref(), Some(path.as_path()));
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.conflict.is_none());
+        assert!(!tab.conflict_reload_armed);
+        assert!(!tab.dirty);
+        assert_eq!(tab.reload_nonce, 1);
+        assert_eq!(tab.web_revision, 0);
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// T10:干净 tab 不会被标冲突(外部变更自动重载路径不受影响)。
+    #[test]
+    fn clean_tab_is_not_flagged_conflict() {
+        let path = std::env::temp_dir().join(format!("t10_clean_{}.rs", std::process::id()));
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        assert!(!tab_mark_conflict(&mut pane, id));
+        assert!(pane.active_conflict().is_none());
         std::fs::remove_file(&path).ok();
     }
 

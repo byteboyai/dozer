@@ -313,6 +313,11 @@ pub enum Message {
     PreviewRetry(PanelKind, usize),
     /// 预览 fallback 页(T1):以纯文本只读方式尝试打开某个文件 tab。
     PreviewPlainTextOpen(PanelKind, usize),
+    /// 预览冲突(T10):「保留我的修改」——清冲突态,继续以 editor buffer 为准。
+    PreviewConflictKeep(PanelKind, usize),
+    /// 预览冲突(T10):「重载磁盘(丢弃我的修改)」——第一次点击进入二次确认,
+    /// 再点一次才真正丢弃。
+    PreviewConflictReload(PanelKind, usize),
     /// 预览:CSV/TSV 的「网格 / 原文」切换(切原文时 feature 下走 CodeMirror)。
     PreviewTabularTextModeToggle(PanelKind, usize),
     /// 预览:切换 tab(vec 位置).

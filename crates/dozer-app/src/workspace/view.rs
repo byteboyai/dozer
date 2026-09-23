@@ -1244,6 +1244,17 @@ pub(crate) fn preview_pane_for<'a>(
                     .height(Length::Fixed(crate::preview::PREVIEW_FIND_BAR_HEIGHT)),
             );
         }
+        // T10 冲突条:激活 CodeMirror tab 处于磁盘冲突态时,内容区顶部显示
+        // 「保留我的修改 / 重载磁盘」两键。webview 由 `preview_desired` 下推
+        // 一条高度让位(原生子视图不听 iced 绘制顺序)。
+        if let Some((conflict_tab_id, armed)) = preview.active_conflict() {
+            let bar = preview_conflict_bar_widget(find_panel(), conflict_tab_id, armed);
+            content = content.push(
+                container(bar)
+                    .width(Length::Fill)
+                    .height(Length::Fixed(crate::preview::PREVIEW_CONFLICT_BAR_HEIGHT)),
+            );
+        }
     }
 
     let base: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
@@ -1846,4 +1857,38 @@ fn preview_fallback_page<'a>(
             .align_y(iced_widget::core::alignment::Vertical::Center)
             .into(),
     )
+}
+
+/// T10:激活 CodeMirror tab 的磁盘冲突条——提示 + 「保留我的修改」/「重载磁盘」
+/// 两键。`armed` 为真时重载键变成二次确认文案(再点一次才丢弃改动)。
+fn preview_conflict_bar_widget<'a>(
+    panel: PanelKind,
+    tab_id: usize,
+    armed: bool,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let colors = byteui::theme::color::current();
+    let body = byteui::theme::font::body();
+    let keep = iced_widget::button(text("保留我的修改").size(body))
+        .on_press(Message::PreviewConflictKeep(panel, tab_id));
+    let reload_label = if armed {
+        "确认重载磁盘(丢弃我的修改)"
+    } else {
+        "重载磁盘"
+    };
+    let reload = iced_widget::button(text(reload_label).size(body))
+        .on_press(Message::PreviewConflictReload(panel, tab_id));
+    container(
+        row![
+            text("磁盘文件已被外部修改").size(body).color(colors.red),
+            iced_widget::space::horizontal(),
+            keep,
+            reload,
+        ]
+        .spacing(8)
+        .align_y(iced_widget::core::Alignment::Center),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .padding([4, 8])
+    .into()
 }

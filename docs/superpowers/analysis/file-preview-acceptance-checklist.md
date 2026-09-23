@@ -108,8 +108,9 @@ echo "$d"
 - [ ] 中文 IME 组合、候选、提交正常。
 - [ ] 输入 / 删除 / Enter / Tab / 剪贴板(⌘C/⌘X/⌘V)/ undo(⌘Z)/ redo(⌘⇧Z)。
 - [ ] ⌘S 保存成功、dirty 星号清除;保存后磁盘内容与 BOM/换行约定一致。
-- [ ] 外部修改文件:干净 tab 自动重载;脏 tab 出现冲突提示(记录是否**没有**
-      “保留我的 / 重载磁盘”选择动作 —— 目前仅提示,见 wrap-up T4)。
+- [ ] 外部修改文件:干净 tab 自动重载;脏 tab 出现冲突条(「保留我的修改」/
+      「重载磁盘」,重载需再点一次确认)。保留后若磁盘又变,保存被拒并重新提示
+      (wrap-up T10)。
 - [ ] 主题深 / 浅切换,编辑器跟色;JetBrains Mono + 中文回退正确。
 - [ ] 编辑器聚焦时 ⌘`=` / ⌘`-` / ⌘`1`(或 Ctrl 版)缩放 UI。
 
@@ -169,7 +170,8 @@ echo "$d"
 - 普通 Failed 态已有通用「在系统应用中打开」按钮;T1 起压缩包 / 未知二进制改走
   统一 fallback 页(类型/路径/原因 + 重试/纯文本只读/外部打开),不再 host Flyfish。
 - 未知 UTF-8 文本、`Makefile` / `Dockerfile` / `LICENSE` 已进 Code(T5);
-- 脏 tab 外部变更只有冲突提示,无“保留我的 / 重载”选择(T10)。
+- 脏 tab 外部变更:已提供冲突条与「保留我的 / 重载磁盘」(二次确认),T10 落地;
+  仅“异常退出后 recovery 与磁盘冲突时进同一 UI”尚未接线。
 - Agent 写操作(reveal/select/replace)无 daemon/MCP 调用入口(T13);休眠 tab
   的 Agent 唤醒未接线。
 - JSONL/NDJSON 当前路由为 `PreviewKind::Json + Text`(与 json5 同路,CodeMirror

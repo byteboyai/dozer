@@ -2764,6 +2764,15 @@ impl App {
             .unwrap_or(false)
     }
 
+    /// T10 冲突条是否压在 `kind` 面板的 editor webview 之上。语义同
+    /// `preview_find_bar_over_webview`:让 `preview_desired` 把 webview 矩形
+    /// 下推一个条高,给 iced 冲突条让位。
+    pub fn preview_conflict_bar_over_webview(&self, kind: PanelKind) -> bool {
+        self.active_workspace()
+            .map(|ws| ws.preview_conflict_active(kind))
+            .unwrap_or(false)
+    }
+
     /// 取走 `kind` 面板 webview(flyfish)档 Find 待下发动作 + 查询词 + 大小写
     /// 开关,供 `window_events::apply_pending_preview_find` 注入 flyfish JS。
     pub fn take_preview_webview_find(
@@ -3071,6 +3080,7 @@ impl App {
             // 给 iced 那一条让位(同 `App::preview_find_bar_over_webview` 文档)。
             if self.preview_find_bar_over_webview(kind)
                 || self.preview_large_file_search_bar_open(kind)
+                || self.preview_conflict_bar_over_webview(kind)
             {
                 let h = crate::preview::PREVIEW_FIND_BAR_HEIGHT;
                 bounds.1 += h;

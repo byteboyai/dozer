@@ -273,14 +273,18 @@ Ready 缺 runtime 时 debug/test 失败；失败重试能重新进入 Loading。
 
 ## T10. 脏 tab 外部变更冲突处理
 
-- [ ] 脏 tab 检测到磁盘变化后进入显式 Conflict 状态，不只写一条 `web_error`。
-- [ ] 提供“保留我的修改”和“重载磁盘（丢弃我的修改）”。丢弃动作需要二次确认。
-- [ ] “保留”继续以 editor buffer/recovery 为权威；下一次保存覆盖前再次校验磁盘
-      revision，避免提示后磁盘又变化。
-- [ ] “重载”删除对应 recovery、清 dirty、增加 reload nonce，并重置 revision 基线。
+- [x] 脏 tab 检测到磁盘变化后进入显式 Conflict 状态，不只写一条 `web_error`
+      (`PreviewTab::conflict` + `mark_disk_conflict`)。
+- [x] 提供“保留我的修改”和“重载磁盘（丢弃我的修改）”。丢弃动作需要二次确认
+      (`arm_conflict_reload` → `discard_conflict_and_reload`)。
+- [x] “保留”继续以 editor buffer/recovery 为权威；下一次保存覆盖前再次校验磁盘
+      revision，避免提示后磁盘又变化(`PreviewTab::save_gate` 重新置冲突并拒绝)。
+- [x] “重载”删除对应 recovery、清 dirty、增加 reload nonce，并重置 revision 基线。
 - [ ] app 异常退出后若 recovery 与磁盘 revision 冲突，恢复时进入相同 Conflict UI。
+      (未做;启动恢复仍是 recovery 优先,未与磁盘 mtime 对比。)
 
 **自动化:** 干净自动重载、脏保留、脏丢弃、冲突后二次外部修改、恢复时冲突。
+(干净自动重载/脏保留/脏丢弃/二次外部修改已有测试;恢复时冲突未做。)
 
 ---
 

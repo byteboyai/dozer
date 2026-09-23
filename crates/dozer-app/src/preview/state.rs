@@ -87,6 +87,15 @@ pub struct PreviewTab {
     pub web_selected_text: Option<String>,
     pub web_viewport: Option<(u32, u32)>,
     pub web_error: Option<String>,
+    /// T10:脏 tab 的磁盘文件被外部修改——`Some(mtime)` 是检测到冲突时的磁盘
+    /// 修改时间。为 `Some` 时该 tab 进入显式冲突态,保存被拒,直到用户选择
+    /// 「保留我的修改」或「重载磁盘」。
+    pub conflict: Option<SystemTime>,
+    /// T10:「重载磁盘」的二次确认;第一次点击置真,再点一次才真正丢弃改动。
+    pub conflict_reload_armed: bool,
+    /// T10:用户「保留我的修改」后记下的磁盘 mtime 基线;下次保存覆盖前再次
+    /// 校验磁盘是否又变了(变了则重新进入冲突态)。
+    pub conflict_baseline: Option<SystemTime>,
 }
 
 impl PreviewTab {
@@ -136,6 +145,45 @@ impl PreviewTab {
         !self.windowed
             && !self.backend_read_only()
             && !self.route.as_ref().is_some_and(|r| r.encoding_lossy)
+    }
+
+    /// T10 保存闸门:综合只读/有损(T6)与磁盘冲突判定。
+    pub fn save_gate(&mut self) -> SaveGate {
+        if !self.can_save() {
+            return SaveGate::ReadOnly;
+        }
+        let TabKind::File(path) = &self.kind else {
+            return SaveGate::Allow;
+        };
+        if self.conflict.is_some() {
+            return SaveGate::Conflict;
+        }
+        // 已「保留我的修改」但磁盘自那以后又变了:重新进入冲突态并拒绝保存,
+        // 避免在提示之后的新外部修改被静默覆盖(T10)。
+        if let Some(baseline) = self.conflict_baseline {
+            let current = super::disk_mtime(path).unwrap_or(std::time::UNIX_EPOCH);
+            if current != baseline {
+                self.conflict = Some(current);
+                self.conflict_reload_armed = false;
+                return SaveGate::Conflict;
+            }
+        }
+        SaveGate::Allow
+    }
+
+    /// T10:把该 tab 标记为"脏 + 磁盘已变"的显式冲突态,记录当前磁盘 mtime 供
+    /// 保存前再次校验。非文件 tab 或干净 tab 不动作。
+    pub fn mark_disk_conflict(&mut self) -> bool {
+        if !self.dirty {
+            return false;
+        }
+        let mtime = match &self.kind {
+            TabKind::File(p) => super::disk_mtime(p),
+            _ => return false,
+        };
+        self.conflict = Some(mtime.unwrap_or(std::time::UNIX_EPOCH));
+        self.conflict_reload_armed = false;
+        true
     }
 
     pub fn uses_codemirror(&self) -> bool {
@@ -246,8 +294,20 @@ impl std::fmt::Debug for PreviewTab {
             .field("web_selected_text", &self.web_selected_text)
             .field("web_viewport", &self.web_viewport)
             .field("web_error", &self.web_error)
+            .field("conflict", &self.conflict.is_some())
             .finish()
     }
+}
+
+/// T10 保存闸门判定结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveGate {
+    /// 可以写盘。
+    Allow,
+    /// 只读 / 窗口化 / 有损编码(T6),拒绝。
+    ReadOnly,
+    /// 存在未处理的磁盘冲突,拒绝并提示用户选择。
+    Conflict,
 }
 
 /// 表格 tab 的加载态。`Loading` = 首次打开该文件、或懒加载某个 sheet 期间
@@ -377,6 +437,10 @@ pub struct FindState {
 /// 渲染(见 `App::preview_find_bar_over_webview` 与 `crate::app::App::
 /// preview_desired`)。原生 editor 档 find 不盖 webview,那条路不读这个常量。
 pub(crate) const PREVIEW_FIND_BAR_HEIGHT: f32 = 44.0;
+
+/// T10 冲突条占的纵向高度(逻辑像素)。与 Find 条同款:webview 是原生子视图、
+/// 不听 iced 绘制顺序,画冲突条时必须显式把 webview 矩形下推这一高度。
+pub(crate) const PREVIEW_CONFLICT_BAR_HEIGHT: f32 = 44.0;
 
 /// 只读大文件档的搜索会话——⌘F 在这类 tab 上不打开 `FindState`(内存线性
 /// 扫描,大文件上代价不可接受),而是打开这个,复用
