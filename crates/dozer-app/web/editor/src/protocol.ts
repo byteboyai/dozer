@@ -29,6 +29,7 @@ export type WindowEdge = 'top' | 'bottom';
 /** 编辑器栈 -> Rust 的事件。 */
 export type EditorEvent =
   | { kind: 'ready'; read_only: boolean; language: string }
+  | { kind: 'document_loaded'; revision: number; bytes: number; error: string | null }
   | {
       kind: 'selection_changed';
       anchor: Position;
@@ -86,6 +87,7 @@ export type EditorCommand =
     }
   | { kind: 'open_find'; query?: string; replace?: boolean }
   | { kind: 'set_read_only'; read_only: boolean }
+  | { kind: 'reload_document' }
   | { kind: 'focus' }
   | { kind: 'serialize_view_state'; request_id: string }
   | {

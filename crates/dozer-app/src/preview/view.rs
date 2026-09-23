@@ -1144,7 +1144,10 @@ impl PreviewPane {
                 Some(WebviewSpec {
                     id: tab.id,
                     url: u,
-                    visible: idx == self.active,
+                    // T5/T8:非 Ready(Failed 已排除;此处是 Loading/SwitchingMode)
+                    // 的 host 预创建但 **hidden**,等 `ready` 才可见,避免露出空白
+                    // 原生子视图盖住 iced loading。
+                    visible: tab.backend_state.is_ready() && idx == self.active,
                     editor_binding: None,
                 })
             })
@@ -1166,12 +1169,12 @@ impl PreviewPane {
                 let TabKind::File(path) = &tab.kind else {
                     return None;
                 };
-                // T4:窗口化 tab 在 `Loading` 期就预创建 host(hidden),让它能
-                // 完成 boot → 建索引 → 收首窗,避免 `ready` 空编辑器可见;非窗口
-                // 化仍要 `is_ready()` 才挂载。
-                let windowed_loading =
-                    tab.windowed && matches!(tab.backend_state, BackendState::Loading);
-                if !tab.backend_state.is_ready() && !windowed_loading {
+                // T4/T5:加载中的 editor host 也**预创建为 hidden**,让它能完成
+                // boot → 建索引/读正文,再经 ACK(`window_applied`/`document_loaded`)
+                // 才 finish 可见。否则 host 永远不 boot → 死锁(等不到 ready)。
+                // Terminal 态(Failed/Suspended/Queued)仍不挂载。
+                let loading = matches!(tab.backend_state, BackendState::Loading);
+                if !tab.backend_state.is_ready() && !loading {
                     return None;
                 }
                 // 语言与只读先从 backend 推出:Code(可含窗口化只读)或
@@ -1239,7 +1242,10 @@ impl PreviewPane {
             .iter()
             .enumerate()
             .filter_map(|(idx, tab)| {
-                if !tab.uses_json_editor() || !tab.backend_state.is_ready() {
+                // T5/T6:加载中的 JSON Tree host 也预创建(hidden),等 `ready`
+                // 才 finish 可见;否则 host 永远不 boot → 死锁。
+                let loading = matches!(tab.backend_state, BackendState::Loading);
+                if !tab.uses_json_editor() || (!tab.backend_state.is_ready() && !loading) {
                     return None;
                 }
                 let TabKind::File(path) = &tab.kind else {
@@ -1250,7 +1256,8 @@ impl PreviewPane {
                 Some(WebviewSpec {
                     id: tab.id,
                     url: binding.json_url(scheme_query_value(), true),
-                    visible: idx == self.active,
+                    // 非 Ready 预创建但 hidden。
+                    visible: tab.backend_state.is_ready() && idx == self.active,
                     editor_binding: Some(binding),
                 })
             })
@@ -1855,24 +1862,39 @@ impl PreviewPane {
     /// 透传给调用方(`Workspace::preview_pane_toggle_render_mode`)写面板
     /// error,这里不生成错误文案。
     pub fn enter_code_mode(&mut self, idx: usize) -> std::io::Result<()> {
-        // Markdown/HTML 的 Source 模式由 CodeMirror editor host 承载,只翻转
+        // Markdown/HTML 的 Source 模式由 CodeMirror editor host 承载,翻转
         // backend mode(老 iced CodeView 已退役)。
+        //
+        // T5:模式切换走 `SwitchingMode` 阶段并保持 Loading —— 目标 host
+        // (editor)的首帧(`document_loaded`)确认前不 finish,避免先露出空编辑器。
+        // 旧 viewer 在切换瞬间被替换为 loading 动画(允许"显示 loading")。
         if let Some(tab) = self.tabs.get_mut(idx) {
             if let Some(PreviewBackend::Rendered(rendered)) = tab.backend.as_mut() {
                 rendered.mode = RenderedMode::Source;
             }
-            let _ = tab.backend_state.try_transition(BackendState::Ready);
+            let generation = tab.load_state.generation.wrapping_add(1);
+            tab.load_state =
+                PreviewLoadState::starting(generation, PreviewLoadStage::SwitchingMode);
+            let _ = tab.backend_state.try_transition(BackendState::Loading);
+            tab.web_revision = 0;
             tab.debug_assert_backend_consistent();
         }
         Ok(())
     }
 
     /// 代码→预览:转回 wry/flyfish 渲染。下标越界是 no-op。
+    ///
+    /// T5:同样走 `SwitchingMode` + Loading,等 Flyfish host 的 `ready` 才 finish。
     pub fn exit_code_mode(&mut self, idx: usize) {
         if let Some(tab) = self.tabs.get_mut(idx) {
             if let Some(PreviewBackend::Rendered(rendered)) = tab.backend.as_mut() {
                 rendered.mode = RenderedMode::Rendered;
             }
+            let generation = tab.load_state.generation.wrapping_add(1);
+            tab.load_state =
+                PreviewLoadState::starting(generation, PreviewLoadStage::SwitchingMode);
+            let _ = tab.backend_state.try_transition(BackendState::Loading);
+            tab.web_revision = 0;
             tab.debug_assert_backend_consistent();
         }
     }
@@ -1913,9 +1935,13 @@ impl PreviewPane {
         if changed.is_empty() {
             return;
         }
-        // CodeMirror tab:clean 自动重载(推进 `reload_nonce` 换 URL 逼 WebView
-        // 重新拉取);**脏** tab 不自动重载,否则会覆盖用户未保存的改动——改为
-        // 置冲突状态,由用户决定刷新/另存。
+        // CodeMirror tab:clean 自动重载;**脏** tab 不自动重载,否则会覆盖用户
+        // 未保存的改动——改为置冲突状态,由用户决定刷新/另存。
+        //
+        // T5:clean 重载走 in-place `ReloadDocument`(host 重新 fetch 并替换 doc),
+        // 不再推进 `reload_nonce` 换 URL 重新导航——旧正文一直可见到新内容挂上,
+        // 不闪空白。仍推进一个 generation 作废在途加载结果。
+        let mut reload_ids: Vec<usize> = Vec::new();
         for tab in self.tabs.iter_mut() {
             if !tab.uses_codemirror() {
                 continue;
@@ -1936,13 +1962,16 @@ impl PreviewPane {
                 tab.web_error =
                     Some("磁盘文件已被外部修改,请选择「保留我的修改」或「重载磁盘」。".into());
             } else {
-                tab.reload_nonce += 1;
                 tab.web_revision = 0;
                 tab.web_selection = None;
                 tab.web_selected_text = None;
                 tab.web_viewport = None;
                 tab.web_error = None;
+                reload_ids.push(tab.id);
             }
+        }
+        for tab_id in reload_ids {
+            self.queue_editor_command(tab_id, EditorCommand::ReloadDocument);
         }
         // 窗口化 tab:`uses_codemirror()` 为 false(窗口化排除),单独处理。
         // 文件变了就**失效旧索引**(清 runtime 索引 + `web_revision` 归零,
@@ -2835,11 +2864,119 @@ mod tests {
         pane.enter_code_mode(1).unwrap();
         assert_eq!(pane.tabs()[1].current_mode(), Some(PreviewMode::Source));
         assert!(!pane.tabs()[1].hosts_webview());
+        // T5:切到 Source 走 `SwitchingMode` + Loading,等 editor host 首帧。
+        assert!(matches!(
+            pane.tabs()[1].backend_state,
+            BackendState::Loading
+        ));
+        assert_eq!(
+            pane.tabs()[1].load_state.stage,
+            PreviewLoadStage::SwitchingMode
+        );
         pane.exit_code_mode(1);
         assert_eq!(pane.tabs()[1].current_mode(), Some(PreviewMode::Rendered));
         assert!(pane.tabs()[1].hosts_webview());
+        // T5:切回 Rendered 同样 SwitchingMode + Loading,等 Flyfish `ready`。
+        assert!(matches!(
+            pane.tabs()[1].backend_state,
+            BackendState::Loading
+        ));
+        assert_eq!(
+            pane.tabs()[1].load_state.stage,
+            PreviewLoadStage::SwitchingMode
+        );
 
         std::fs::remove_file(path).ok();
+    }
+
+    /// T5:`hosts_any_webview` 覆盖三类 host(Flyfish 渲染 / CodeMirror / JSON
+    /// Tree),Unsupported/External/表格为 false。
+    #[test]
+    fn hosts_any_webview_covers_all_host_kinds() {
+        let dir = std::env::temp_dir().join(format!("t5_hosts_any_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mk = |name: &str, content: &str| {
+            let p = dir.join(name);
+            std::fs::write(&p, content).unwrap();
+            p
+        };
+        let code = mk("a.rs", "fn main() {}\n");
+        let md = mk("a.md", "# hi\n");
+        let json = mk("a.json", "{\"a\":1}\n");
+        let unsupported = mk("a.bin", "\u{0}\u{1}\u{2}");
+
+        let mut pane = PreviewPane::default();
+        for p in [&code, &md, &json] {
+            let (id, generation) = pane.open_path_provisional(p.clone());
+            let generation = generation.unwrap();
+            assert!(pane.apply_profile(id, generation, &profile_file(p).unwrap()));
+            assert!(
+                pane.tabs()
+                    .iter()
+                    .find(|t| t.id == id)
+                    .unwrap()
+                    .hosts_any_webview(),
+                "{} 应有 host",
+                p.display()
+            );
+        }
+        // 二进制未知类型 → Unsupported,无 host。
+        let (id, generation) = pane.open_path_provisional(unsupported.clone());
+        let generation = generation.unwrap();
+        assert!(pane.apply_profile(id, generation, &profile_file(&unsupported).unwrap()));
+        assert!(
+            !pane
+                .tabs()
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap()
+                .hosts_any_webview(),
+            "Unsupported 不应有 host"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// T5:非窗口化 editor host 在 `Loading` 期预创建但 **hidden**,`document_loaded`
+    /// 才 finish 可见;`ready` 阶段本身不 finish(避免"host 起了但正文未到")。
+    #[test]
+    fn non_windowed_host_hidden_until_document_loaded() {
+        let dir = std::env::temp_dir().join(format!("t5_doc_loaded_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("note.txt");
+        std::fs::write(&path, "hello\n").unwrap();
+
+        let mut pane = PreviewPane::default();
+        let (id, generation) = pane.open_path_provisional(path.clone());
+        let generation = generation.unwrap();
+        assert_eq!(pane.load_stage(id), PreviewLoadStage::Profiling);
+        assert!(pane.apply_profile(id, generation, &profile_file(&path).unwrap()));
+
+        // 画像落定后(app 处理器推进 CreatingHost);host 预创建(hidden),未 finish。
+        assert!(pane.advance_load(id, generation, PreviewLoadStage::CreatingHost));
+        let specs = pane.desired_editor_webviews(1, crate::app::PanelKind::Files);
+        let spec = specs
+            .iter()
+            .find(|s| s.id == id)
+            .expect("Loading 期应预创建 host");
+        assert!(!spec.visible, "document_loaded 前必须 hidden");
+        assert!(!spec.url.contains("windowed=1"));
+        // host `ready`(仍 Loading,Reading)→ 仍 hidden;`document_loaded` 才 finish。
+        assert!(pane.advance_load(id, generation, PreviewLoadStage::Reading));
+        let specs = pane.desired_editor_webviews(1, crate::app::PanelKind::Files);
+        assert!(
+            !specs.iter().find(|s| s.id == id).unwrap().visible,
+            "reading 阶段仍应 hidden"
+        );
+        assert!(pane.finish_load(id, generation));
+        let specs = pane.desired_editor_webviews(1, crate::app::PanelKind::Files);
+        assert!(
+            specs.iter().find(|s| s.id == id).unwrap().visible,
+            "finish 后可见"
+        );
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -4038,8 +4175,9 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
-    /// 外部文件变化:干净的 CodeMirror tab 自动重载(推进 reload_nonce →
-    /// URL 换 `_r=`),脏 tab 不自动重载、置冲突提示。
+    /// 外部文件变化:干净的 CodeMirror tab 自动**就地**重载(T5:下发
+    /// `ReloadDocument`,不换 URL 重新导航,旧内容保持可见),脏 tab 不自动
+    /// 重载、置冲突提示。
     #[test]
     fn external_change_reloads_clean_and_flags_dirty_codemirror_tab() {
         let dir = std::env::temp_dir();
@@ -4059,15 +4197,22 @@ mod tests {
         pane.reload_webviews_for(&[clean.clone(), dirty.clone()]);
 
         let clean_tab = pane.tabs().iter().find(|t| t.id == clean_id).unwrap();
-        assert_eq!(clean_tab.reload_nonce, 1, "干净 tab 自动重载");
+        assert_eq!(
+            clean_tab.reload_nonce, 0,
+            "T5:干净 tab 走 in-place 重载,不换 URL"
+        );
         assert!(clean_tab.web_error.is_none());
         let dirty_tab = pane.tabs().iter().find(|t| t.id == dirty_id).unwrap();
         assert_eq!(dirty_tab.reload_nonce, 0, "脏 tab 不自动重载");
         assert!(dirty_tab.web_error.is_some(), "脏 tab 进入冲突提示");
 
-        let specs = pane.desired_editor_webviews(1, crate::app::PanelKind::Files);
-        let clean_spec = specs.iter().find(|s| s.id == clean_id).unwrap();
-        assert!(clean_spec.url.contains("&_r=1"), "重载 URL 带 nonce");
+        // 干净 tab 应收到一条 `ReloadDocument` 命令。
+        let cmds = pane.take_pending_editor_commands();
+        assert!(
+            cmds.iter()
+                .any(|(id, c)| *id == clean_id && matches!(c, EditorCommand::ReloadDocument)),
+            "干净 tab 应下发 ReloadDocument: {cmds:?}"
+        );
 
         std::fs::remove_file(&clean).ok();
         std::fs::remove_file(&dirty).ok();

@@ -106,6 +106,14 @@ impl PreviewTab {
             .is_some_and(|backend| backend.hosts_webview())
     }
 
+    /// 该 tab 是否由**任一** WebView host 承载( Flyfish 渲染 / CodeMirror editor /
+    /// vanilla-jsoneditor Tree )。用于"加载是否需要等 host 信号"的判定:凡有
+    /// host 就不该在画像后立即 finish,须等 host 的 `ready`/`document_loaded`
+    /// (T5/T6/T8)。纯 iced fallback(Unsupported/External/表格)返回 false。
+    pub fn hosts_any_webview(&self) -> bool {
+        self.hosts_webview() || self.uses_editor_host() || self.uses_json_editor()
+    }
+
     pub fn current_mode(&self) -> Option<PreviewMode> {
         self.backend.as_ref().map(PreviewBackend::current_mode)
     }

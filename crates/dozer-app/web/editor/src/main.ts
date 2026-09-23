@@ -590,28 +590,50 @@ function applyCommand(raw: string): void {
       saveHandler?.();
       break;
     }
+    case 'reload_document': {
+      // T5:磁盘外部变更后**就地**重载(重新 fetch,不重新导航)。旧正文一直
+      // 可见,直到新内容挂上才回 `document_loaded`。
+      if (!windowed) void reloadDocument();
+      break;
+    }
   }
+}
+
+/** T5:重新拉取磁盘内容并就地替换 doc(保留滚动/焦点尽量不动)。 */
+async function reloadDocument(): Promise<void> {
+  let text = '';
+  let bytes = 0;
+  let error: string | null = null;
+  try {
+    const res = await fetch('__file__' + encodePathForFetch(filePath));
+    if (res.ok) {
+      text = await res.text();
+      bytes = new TextEncoder().encode(text).length;
+    } else {
+      error = `读取文件失败: ${res.status}`;
+    }
+  } catch (err) {
+    error = `读取文件异常: ${String(err)}`;
+  }
+  if (error === null) {
+    revision += 1;
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: text },
+    });
+  }
+  post({ kind: 'document_loaded', revision, bytes, error });
 }
 
 (window as unknown as { __dozer?: unknown }).__dozer = { dispatch: applyCommand };
 
 async function boot(): Promise<void> {
-  let text = '';
-  if (!windowed) {
-    try {
-      const res = await fetch('__file__' + encodePathForFetch(filePath));
-      if (res.ok) {
-        text = await res.text();
-      } else {
-        post({ kind: 'failed', message: `读取文件失败: ${res.status}`, recoverable: true });
-      }
-    } catch (err) {
-      post({ kind: 'failed', message: `读取文件异常: ${String(err)}`, recoverable: true });
-    }
-  }
-
+  // T5:先以**空正文**建 view 并 immediate 上报 `ready`——`ready` 只表示 host JS
+  // 初始化完成,正文是否可见由随后的 `document_loaded` 表达。这样 Rust 侧可以
+  // 用 `document_loaded`(带 revision/bytes/error)作为非窗口化 tab 的 Ready 边界,
+  // 而不会把"host 起了但正文还没到/读取失败"误判为已就绪(旧实现 fetch 失败时
+  // 仍会补一个 `ready`,把 Failed 态拉回)。
   view = new EditorView({
-    state: EditorState.create({ doc: text, extensions: buildExtensions() }),
+    state: EditorState.create({ extensions: buildExtensions() }),
     parent: document.getElementById('editor')!,
   });
 
@@ -651,6 +673,31 @@ async function boot(): Promise<void> {
     read_only: initialReadOnly,
     language: languageToken,
   });
+
+  if (!windowed) {
+    let text = '';
+    let bytes = 0;
+    let error: string | null = null;
+    try {
+      const res = await fetch('__file__' + encodePathForFetch(filePath));
+      if (res.ok) {
+        text = await res.text();
+        bytes = new TextEncoder().encode(text).length;
+      } else {
+        error = `读取文件失败: ${res.status}`;
+      }
+    } catch (err) {
+      error = `读取文件异常: ${String(err)}`;
+    }
+    if (error === null) {
+      // 正文真正挂上后再上报 `document_loaded`(Rust 以此 finish 加载并显示)。
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: text },
+      });
+    }
+    post({ kind: 'document_loaded', revision, bytes, error });
+  }
+
   emitViewport();
   view.focus();
 }

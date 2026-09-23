@@ -104,9 +104,45 @@ impl App {
                                     // 窗口化不需要 recovery/视图恢复(只读、正文由
                                     // SetWindow 决定),也不走下面的 pending_reveal。
                                 } else {
+                                    // T5:非窗口化 host 的 `ready` 仅代表 host JS
+                                    // 初始化完成——正文由 host 自行 fetch,待其回
+                                    // `document_loaded` 才 finish。此处保持 Loading,
+                                    // 推进到 `Reading`(host 会显示 loading,正文
+                                    // 未挂上前不 finish)。
+                                    tab.load_state
+                                        .advance(crate::preview::PreviewLoadStage::Reading);
+                                }
+                                context_changed = true;
+                            }
+                            EditorEvent::DocumentLoaded {
+                                revision: doc_rev,
+                                bytes: _,
+                                error,
+                            } => {
+                                // T5:非窗口化正文落地(或读取失败)的终态判定。
+                                // 窗口化 tab 不走本事件(其正文由 SetWindow 决定)。
+                                tab.web_revision = event.revision;
+                                if let Some(message) = error {
+                                    tab.web_error = Some(message.clone());
+                                    let _ = tab.backend_state.try_transition(
+                                        crate::preview::BackendState::Failed(
+                                            crate::preview::PreviewError::new(message, true),
+                                        ),
+                                    );
+                                    // 结束本次 loading(回到 Idle 并作废在途结果)。
+                                    tab.load_state.finish();
+                                } else if !tab.uses_windowed_editor() && doc_rev == event.revision {
+                                    tab.web_error = None;
+                                    // 加载成功:清零该文件连续失败计数。
+                                    crate::preview::reset_failure_to(
+                                        &crate::preview::failures_path(),
+                                        path,
+                                    );
                                     let _ = tab
                                         .backend_state
                                         .try_transition(crate::preview::BackendState::Ready);
+                                    // 正文可见 → 结束本次 loading。
+                                    tab.load_state.finish();
                                     if let Some(line) = tab.pending_jump_line.take() {
                                         pending_reveal = Some((tab.id, line as u32));
                                     }
@@ -350,6 +386,8 @@ impl App {
                                         crate::preview::PreviewError::new(detail, recoverable),
                                     ),
                                 );
+                                // T5:host 明确失败 → 结束本次 loading。
+                                tab.load_state.finish();
                             }
                             EditorEvent::FocusChanged { .. } => {}
                         }
@@ -452,6 +490,8 @@ impl App {
                                 let _ = tab
                                     .backend_state
                                     .try_transition(crate::preview::BackendState::Ready);
+                                // T5/T6:JSON host 首帧就绪 → 结束加载。
+                                tab.load_state.finish();
                             }
                             JsonEvent::DocumentChanged { revision, .. } => {
                                 if revision >= tab.web_revision {
@@ -468,6 +508,8 @@ impl App {
                                         crate::preview::PreviewError::new(message, recoverable),
                                     ),
                                 );
+                                // T5/T6:host 失败 → 结束加载。
+                                tab.load_state.finish();
                             }
                         }
                     }
@@ -500,6 +542,13 @@ impl App {
                         match event.payload {
                             FlyfishEvent::Ready => {
                                 tab.web_error = None;
+                                // T5/T8:Rendered(Flyfish/隔离 HTML)host 首帧就绪
+                                // → 置 Ready 并 finish 加载(初始加载 / Source→
+                                // Rendered 切换均经此)。
+                                let _ = tab
+                                    .backend_state
+                                    .try_transition(crate::preview::BackendState::Ready);
+                                tab.load_state.finish();
                             }
                             FlyfishEvent::Title { title } => {
                                 if !title.is_empty() {
@@ -606,21 +655,28 @@ impl App {
                             }
                             // 画像落定:表格继续走它自己的后台解析(TabularLoaded
                             // 结束);窗口化继续走索引 + 首窗(T4,PreviewWindowIndex
-                            // 期间保持 Loading);其余(viewer 为纯 WebView/host,
-                            // 由 editor `Ready` 事件确认画面)现在即可挂 host。
-                            let (windowed, is_tabular) = pane
+                            // 期间保持 Loading);其余 host(CodeMirror/JSON/Flyfish)
+                            // 一律推进到 `CreatingHost`,等 host 自己的
+                            // `document_loaded` / 渲染完成信号才 finish(T5/T6/T8)。
+                            //
+                            // 例外:纯 iced 承载、无 host 的场景(Unsupported/External
+                            // 走 fallback 页)没有 host 可等,直接 finish。
+                            let (is_tabular, hosts_host) = pane
                                 .tabs()
                                 .iter()
                                 .find(|t| t.id == tab_id)
-                                .map(|t| (t.windowed, t.tabular_state().is_some()))
+                                .map(|t| (t.tabular_state().is_some(), t.hosts_any_webview()))
                                 .unwrap_or((false, false));
-                            if !windowed && !is_tabular {
+                            if is_tabular {
+                                // 表格:等 TabularLoaded。
+                            } else if !hosts_host {
+                                // 无 host 的 fallback 页:直接就绪。
                                 pane.finish_load(tab_id, generation);
-                            } else if windowed {
-                                // T4:窗口化 route 确定后保持 Loading,推进到
-                                // `CreatingHost`(host 预创建为 hidden)。后续
-                                // host `ready` → `Indexing` → 首窗 → `window_applied`
-                                // 才 finish。
+                            } else {
+                                // 窗口化与非窗口化 host 都保持 Loading,推进到
+                                // `CreatingHost`;后续 host 信号才 finish
+                                // (窗口化:ready→Indexing→首窗→window_applied;
+                                // 非窗口化:ready→Reading→document_loaded)。
                                 pane.advance_load(
                                     tab_id,
                                     generation,

@@ -69,6 +69,16 @@ pub enum EditorEvent {
         read_only: bool,
         language: String,
     },
+    /// T5:非窗口化 editor host 的正文**真正挂上**(或读取失败)之后上报——
+    /// `ready` 只代表 host JS 初始化完成,不能代表正文已可见。携带当时的
+    /// revision、正文字节数;读取失败时 `error` 非空,由 Rust 决定终态。
+    /// Rust 收到本事件才对非窗口化 tab `finish_load`(成功)或置 `Failed`(失败)。
+    DocumentLoaded {
+        revision: u64,
+        bytes: u64,
+        #[serde(default)]
+        error: Option<String>,
+    },
     SelectionChanged {
         anchor: TextPosition,
         head: TextPosition,
@@ -206,6 +216,10 @@ pub enum EditorCommand {
     /// 走 `saveHandler` → 回 `save_requested`。用于关闭 dirty tab 前先把
     /// 磁盘内容补齐(Rust 侧不持有全文,必须经由 host 落盘)。
     SaveDocument,
+    /// T5:磁盘外部变更后**就地**重载正文(host 重新 fetch 文件并替换 doc,
+    /// 尽量保留滚动/焦点),成功后回 `document_loaded`。相比推进 `reload_nonce`
+    /// 换 URL 重新导航,这条路径不会先闪成空白——旧内容一直可见到新内容挂上。
+    ReloadDocument,
 }
 
 /// 解析/校验错误。调用方只做日志/丢弃,不 panic。
@@ -538,6 +552,43 @@ mod tests {
         // T4:窗口化首窗 ACK。
         let wa = parse_event(&raw(r#"{"kind":"window_applied","start_line":1234}"#)).unwrap();
         assert_eq!(wa.payload, EditorEvent::WindowApplied { start_line: 1234 });
+    }
+
+    /// T5:非窗口化 `document_loaded` 携带 revision/bytes/error(`error` 缺省为
+    /// `None`,兼容不带该字段的 host)。
+    #[test]
+    fn parses_document_loaded() {
+        let ok = parse_event(&raw(
+            r#"{"kind":"document_loaded","revision":3,"bytes":128,"error":null}"#,
+        ))
+        .unwrap();
+        assert_eq!(
+            ok.payload,
+            EditorEvent::DocumentLoaded {
+                revision: 3,
+                bytes: 128,
+                error: None
+            }
+        );
+        let err = parse_event(&raw(
+            r#"{"kind":"document_loaded","revision":1,"bytes":0,"error":"读取文件失败: 404"}"#,
+        ))
+        .unwrap();
+        assert!(matches!(
+            err.payload,
+            EditorEvent::DocumentLoaded { error: Some(_), .. }
+        ));
+        // `error` 字段可省略(默认 None)。
+        let no_err =
+            parse_event(&raw(r#"{"kind":"document_loaded","revision":2,"bytes":1}"#)).unwrap();
+        assert_eq!(
+            no_err.payload,
+            EditorEvent::DocumentLoaded {
+                revision: 2,
+                bytes: 1,
+                error: None
+            }
+        );
     }
 
     #[test]
