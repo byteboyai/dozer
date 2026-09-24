@@ -273,6 +273,11 @@ pub fn view<'a>(
         &ws_state.expanded_link_dirs,
         &ws_state.selected_link,
     ));
+    content = content.push(memory_section(
+        &ws_state.memories,
+        ws_state.memory_create_draft.as_ref(),
+        now_ms(),
+    ));
 
     if let Some(err) = &ws_state.error {
         content = content.push(
@@ -717,8 +722,127 @@ fn shorten_path(p: &str) -> String {
     format!("{head}…{tail}")
 }
 
-fn links_section<'a>(
-    title: &'static str,
+/// 当前 Unix 毫秒时间戳,供记忆列表的相对时间显示用;取不到系统时间时
+/// 退化为 0(`relative_time_text` 会算成"很久以前",不 panic)。
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// 共享记忆区:标题行 + 可选的新建表单 + 列表。列表行点击进详情是 Task 9,
+/// 本任务先用 `Message::Noop` 占位(Task 9 会换成 `Message::MemoryDetailOpen`),
+/// 见计划 Task 8 Step 4 的说明。
+fn memory_section<'a>(
+    memories: &'a [dozer_core::protocol::MemoryInfo],
+    draft: Option<&'a MemoryDraft>,
+    now_ms: u64,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let mut col = column![].spacing(6).width(Length::Fill);
+    col = col.push(
+        row![
+            text("共享记忆")
+                .size(byteui::theme::font::body())
+                .color(byteui::theme::color::current().body),
+            iced_widget::Space::new().width(Length::Fill),
+            button(text("+").size(byteui::theme::font::body()))
+                .on_press(Message::MemoryCreateStart),
+        ]
+        .align_y(iced_widget::core::Alignment::Center),
+    );
+
+    if let Some(draft) = draft {
+        col = col.push(
+            column![
+                byteui::form::input_text::view(
+                    "标题",
+                    &draft.title,
+                    false,
+                    None,
+                    false,
+                    None,
+                    false,
+                    Message::MemoryCreateTitleInput,
+                ),
+                byteui::form::input_text::view(
+                    "分类(user/feedback/project/reference)",
+                    &draft.kind,
+                    false,
+                    None,
+                    false,
+                    None,
+                    false,
+                    Message::MemoryCreateKindInput,
+                ),
+                byteui::form::input_text::view(
+                    "一句话摘要",
+                    &draft.description,
+                    false,
+                    None,
+                    false,
+                    None,
+                    false,
+                    Message::MemoryCreateDescriptionInput,
+                ),
+                byteui::form::input_text::view(
+                    "正文",
+                    &draft.body,
+                    false,
+                    None,
+                    false,
+                    None,
+                    false,
+                    Message::MemoryCreateBodyInput,
+                ),
+                row![
+                    button(text("保存")).on_press(Message::MemoryCreateSubmit),
+                    button(text("取消")).on_press(Message::MemoryCreateCancel),
+                ]
+                .spacing(8),
+            ]
+            .spacing(4),
+        );
+    }
+
+    for m in memories {
+        let updated_line = format!(
+            "上次由 {} 于 {} 更新",
+            m.updated_by,
+            crate::workspace::relative_time_text(m.updated_ms, now_ms)
+        );
+        col = col.push(
+            button(
+                column![
+                    row![
+                        text(m.title.clone())
+                            .size(byteui::theme::font::body())
+                            .color(byteui::theme::color::current().body),
+                        text(format!(" [{}]", m.kind))
+                            .size(byteui::theme::font::caption())
+                            .color(byteui::theme::color::current().dim),
+                    ],
+                    text(m.description.clone())
+                        .size(byteui::theme::font::caption())
+                        .color(byteui::theme::color::current().dim),
+                    text(updated_line)
+                        .size(byteui::theme::font::caption_sm())
+                        .color(byteui::theme::color::current().dim),
+                ]
+                .spacing(2),
+            )
+            .on_press(Message::Noop)
+            .style(move |_t, _s| iced_widget::button::Style {
+                text_color: byteui::theme::color::current().body,
+                ..iced_widget::button::Style::default()
+            }),
+        );
+    }
+
+    col.into()
+}
+
+fn links_section<'a>(    title: &'static str,
     target: links::LinkTarget,
     toolbar_target: ProjectToolbarTarget,
     hover_t: f32,

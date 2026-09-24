@@ -73,6 +73,18 @@ impl ScaffoldRunState {
     }
 }
 
+/// 新建共享记忆的表单草稿。四个字段分别对应 `write_memory` 的入参,
+/// 用具名结构体而不是四个散落的 `String` 局部变量,避免以后传参时顺序
+/// 传错(`title`/`kind`/`description` 三个 `String` 相邻,属于 CLAUDE.md
+/// 参数结构体裁决要规避的形状)。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MemoryDraft {
+    pub title: String,
+    pub kind: String,
+    pub description: String,
+    pub body: String,
+}
+
 /// 挂在每个 Workspace 上的项目信息面板状态。
 #[derive(Default)]
 pub struct WorkspaceState {
@@ -106,6 +118,10 @@ pub struct WorkspaceState {
     /// 用来整行高亮——参考文件树 `files::WorkspaceState::tree_selected`。
     /// `None`=无选中(新开项目默认)。
     selected_link: Option<PathBuf>,
+    /// 共享记忆列表(不含正文),`RequestMemoriesRefresh` 拉取后写入。
+    memories: Vec<dozer_core::protocol::MemoryInfo>,
+    /// 新建记忆的表单草稿(`None` = 表单未打开)。
+    memory_create_draft: Option<MemoryDraft>,
     error: Option<String>,
     pub(crate) scaffold_run: Option<ScaffoldRunState>,
     pub(crate) delete_pending: Option<delete::DeleteScope>,
@@ -368,6 +384,23 @@ pub enum Message {
     SummaryBackfillProgress(i64, u32, u32),
     /// 弹窗"关闭"按钮(全部完成才可点)。
     ScaffoldPopupClose,
+    /// 共享记忆列表拉取结果。
+    MemoriesLoaded(Vec<dozer_core::protocol::MemoryInfo>),
+    /// 打开"新建记忆"表单。
+    MemoryCreateStart,
+    /// 新建表单四个字段的输入变化。
+    MemoryCreateTitleInput(String),
+    MemoryCreateKindInput(String),
+    MemoryCreateDescriptionInput(String),
+    MemoryCreateBodyInput(String),
+    /// 提交新建表单。
+    MemoryCreateSubmit,
+    /// 取消新建。
+    MemoryCreateCancel,
+    /// 一次写操作(新建/编辑,Task 9 也会复用这个变体)完成后的结果——
+    /// 成功与否都触发一次列表刷新,同 Todo 面板 `Message::Mutated` 的既有
+    /// 先例。
+    MemoryMutated(Result<(), String>),
 }
 
 /// 磁盘占用统计的排除名单——跟 `crates/dozer-app/src/project.rs::HIDDEN`

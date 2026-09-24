@@ -208,6 +208,66 @@ pub fn update(
                 ws_state.scaffold_run = None;
             }
         }
+        Message::MemoriesLoaded(memories) => ws_state.memories = memories,
+        Message::MemoryCreateStart => {
+            ws_state.memory_create_draft = Some(MemoryDraft::default());
+        }
+        Message::MemoryCreateCancel => {
+            ws_state.memory_create_draft = None;
+        }
+        Message::MemoryCreateTitleInput(v) => {
+            if let Some(d) = &mut ws_state.memory_create_draft {
+                d.title = v;
+            }
+        }
+        Message::MemoryCreateKindInput(v) => {
+            if let Some(d) = &mut ws_state.memory_create_draft {
+                d.kind = v;
+            }
+        }
+        Message::MemoryCreateDescriptionInput(v) => {
+            if let Some(d) = &mut ws_state.memory_create_draft {
+                d.description = v;
+            }
+        }
+        Message::MemoryCreateBodyInput(v) => {
+            if let Some(d) = &mut ws_state.memory_create_draft {
+                d.body = v;
+            }
+        }
+        Message::MemoryCreateSubmit => {
+            let Some(draft) = ws_state.memory_create_draft.take() else {
+                return;
+            };
+            let client = client.clone();
+            handle.spawn(async move {
+                let res = client
+                    .write_memory(
+                        project_id,
+                        &draft.title,
+                        &draft.kind,
+                        &draft.description,
+                        &draft.body,
+                        "user",
+                    )
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string());
+                emit(Message::MemoryMutated(res));
+            });
+        }
+        Message::MemoryMutated(res) => {
+            if let Err(e) = res {
+                ws_state.error = Some(format!("保存记忆失败: {e}"));
+            } else {
+                ws_state.error = None;
+            }
+            let client = client.clone();
+            handle.spawn(async move {
+                let memories = client.list_memories(project_id).await.unwrap_or_default();
+                emit(Message::MemoriesLoaded(memories));
+            });
+        }
     }
 }
 
@@ -233,6 +293,22 @@ pub fn spawn_scaffold_run(
         .await;
         let _ = client.backfill_project_transcripts(&cwd).await;
         emit(Message::ScaffoldDone);
+    });
+}
+
+/// 拉取某项目的共享记忆列表首屏数据,完成后 `emit(Message::MemoriesLoaded)`。
+/// 打开/切入 Project 面板时触发一次(同 Todo 面板的 `request_todos_refresh`
+/// 时机);之后的刷新走 `Message::MemoryMutated` 分支。
+pub fn request_memories_refresh(
+    project_id: i64,
+    client: &dozer_client::Client,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    let client = client.clone();
+    handle.spawn(async move {
+        let memories = client.list_memories(project_id).await.unwrap_or_default();
+        emit(Message::MemoriesLoaded(memories));
     });
 }
 

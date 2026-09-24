@@ -4521,7 +4521,18 @@ impl App {
                         );
                     }
                 }),
-                PanelKind::Project => self.ensure_project_readme_and_reveal(),
+                PanelKind::Project => {
+                    self.ensure_project_readme_and_reveal();
+                    if let Some(project_id) = self.active_project_id {
+                        let client = self.client.clone();
+                        let handle = self.handle.clone();
+                        let proxy = self.proxy.clone();
+                        let emit = move |m: project::Message| {
+                            let _ = proxy.send_event(Message::Project(m));
+                        };
+                        project::request_memories_refresh(project_id, &client, &handle, emit);
+                    }
+                }
                 PanelKind::Ssh => self.with_focused_project(|ws, _io| {
                     if let Some(project) = ws.project.as_ref() {
                         ssh::reload_from_disk(&mut ws.ssh, std::path::Path::new(&project.path));
