@@ -47,6 +47,7 @@ use crate::platform::project_create_overlay;
 use crate::platform::project_scaffold_overlay;
 use crate::platform::search_overlay;
 use crate::platform::settings_overlay;
+use crate::platform::ssh_host_overlay;
 use crate::preview;
 use crate::theme;
 
@@ -224,9 +225,12 @@ pub(crate) enum Runner {
         /// `project_panel.scaffold_run.is_some()` 单向驱动。`scrim_blocking`
         /// 语义:不接失焦/Esc/关窗关闭(见模块文档)。
         project_scaffold_overlay: Option<project_scaffold_overlay::ProjectScaffoldOverlay>,
+        /// SSH「添加/编辑主机」表单的独立窗口宿主,生命周期由
+        /// `sync_ssh_host_overlay` 按当前工作区 `ssh.editing()` 单向驱动。
+        /// 需 IME + 失焦即关闭。
+        ssh_host_overlay: Option<ssh_host_overlay::SshHostOverlay>,
     },
 }
-
 /// 点击/消息后决定键盘焦点归谁:预览 webview、浏览器 webview(各自
 /// ⌘C 走原生复制)或窗口(终端)。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -250,6 +254,7 @@ pub(crate) enum OverlayKind {
     DatabaseSource,
     FilesMove,
     ProjectScaffold,
+    SshHost,
 }
 
 impl Runner {
@@ -1162,6 +1167,7 @@ impl Runner {
             database_source_overlay,
             files_move_overlay,
             project_scaffold_overlay,
+            ssh_host_overlay,
             ..
         } = self
         else {
@@ -1193,6 +1199,9 @@ impl Runner {
         }
         if keep != OverlayKind::ProjectScaffold {
             *project_scaffold_overlay = None;
+        }
+        if keep != OverlayKind::SshHost {
+            *ssh_host_overlay = None;
         }
     }
 
@@ -1759,6 +1768,64 @@ impl Runner {
             return;
         };
         if let Some(overlay) = project_scaffold_overlay {
+            overlay.request_redraw();
+        }
+    }
+
+    /// SSH「添加/编辑主机」表单:开关条件是当前工作区
+    /// `ssh.editing().is_some()`,三段 `match SyncAction` 模式。
+    fn sync_ssh_host_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let action = {
+            let Self::Ready {
+                app,
+                ssh_host_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            let open = app
+                .active_workspace()
+                .is_some_and(|ws| ws.ssh.editing().is_some());
+            ssh_host_overlay::sync_action(open, ssh_host_overlay.is_some())
+        };
+        match action {
+            ssh_host_overlay::SyncAction::Open => {
+                self.close_other_overlays(OverlayKind::SshHost);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    ssh_host_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *ssh_host_overlay = Some(ssh_host_overlay::SshHostOverlay::open(
+                    window, adapter, device, queue, instance, el,
+                ));
+            }
+            ssh_host_overlay::SyncAction::Close => {
+                let Self::Ready {
+                    ssh_host_overlay, ..
+                } = self
+                else {
+                    return;
+                };
+                *ssh_host_overlay = None;
+            }
+            ssh_host_overlay::SyncAction::Noop => {}
+        }
+        let Self::Ready {
+            ssh_host_overlay, ..
+        } = self
+        else {
+            return;
+        };
+        if let Some(overlay) = ssh_host_overlay {
             overlay.request_redraw();
         }
     }
@@ -2588,6 +2655,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 database_source_overlay: None,
                 files_move_overlay: None,
                 project_scaffold_overlay: None,
+                ssh_host_overlay: None,
             };
         }
     }
@@ -2619,6 +2687,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_database_source_overlay(event_loop);
         self.sync_files_move_overlay(event_loop);
         self.sync_project_scaffold_overlay(event_loop);
+        self.sync_ssh_host_overlay(event_loop);
     }
 
     fn window_event(
@@ -2936,6 +3005,33 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             return;
         }
 
+        // SSH「添加/编辑主机」窗口自己那份 `WindowId` 的事件。
+        if let Self::Ready {
+            app,
+            ssh_host_overlay,
+            ..
+        } = self
+            && let Some(overlay) = ssh_host_overlay
+            && window_id == overlay.window_id()
+        {
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app);
+            } else if matches!(event, WindowEvent::CloseRequested) {
+                self.dispatch(Message::Ssh(extensions::ssh::Message::DraftCancel));
+            } else if let WindowEvent::Focused(focused) = event {
+                // 表单内无原生选择器,失焦即关闭(同 settings overlay)。
+                if overlay.handle_focus(focused) {
+                    self.dispatch(Message::Ssh(extensions::ssh::Message::DraftCancel));
+                }
+            } else {
+                for message in overlay.handle_input(app, &event) {
+                    self.dispatch(message);
+                }
+            }
+            self.sync_ssh_host_overlay(event_loop);
+            return;
+        }
+
         // `consumed == true`:已经被应用级快捷键接管(见
         // `on_window_event` 顶部文档),下面不能再把同一个原始事件转换
         // 喂给 iced 标准管线,否则会重复处理(⌘S 这类字母快捷键会在
@@ -2971,6 +3067,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 database_source_overlay,
                 files_move_overlay,
                 project_scaffold_overlay,
+                ssh_host_overlay,
                 ..
             } = self
             else {
@@ -3913,6 +4010,16 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             window.scale_factor(),
                         );
                     }
+                    if let Some(overlay) = ssh_host_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                        );
+                    }
                     // bounds 同步由本函数末尾的 sync_previews 统一执行
                 }
                 WindowEvent::CloseRequested => {
@@ -3926,6 +4033,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     *database_source_overlay = None; // 图干净,Drop 本身就会释放。
                     *files_move_overlay = None; // 图干净,Drop 本身就会释放。
                     *project_scaffold_overlay = None; // 图干净,Drop 本身就会释放。
+                    *ssh_host_overlay = None; // 图干净,Drop 本身就会释放。
                     // 同步写盘,不用 `spawn_shell_layout_save` 的异步路径——
                     // 进程马上退出,spawn 的 tokio 任务不保证跑得完。
                     app.persist_window_size_on_exit();
@@ -4108,6 +4216,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_database_source_overlay(event_loop);
         self.sync_files_move_overlay(event_loop);
         self.sync_project_scaffold_overlay(event_loop);
+        self.sync_ssh_host_overlay(event_loop);
     }
 }
 

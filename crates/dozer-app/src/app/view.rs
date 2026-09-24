@@ -233,23 +233,6 @@ impl App {
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
-        } else if ws.ssh.editing().is_some() {
-            // 主机面板「添加/编辑主机」表单:窗口级 overlay,同上。
-            let draft = ws.ssh.editing().unwrap();
-            let status = draft
-                .id
-                .as_deref()
-                .map(|id| ws.ssh.test_status(id))
-                .unwrap_or(&ssh::TestStatus::Idle);
-            let dismiss = crate::dialog::scrim(Message::Ssh(ssh::Message::DraftCancel));
-            stack![
-                base,
-                dismiss,
-                ssh::host_form(draft, status, self.window_size.0).map(Message::Ssh)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
         } else if ws.agent_picker_open {
             let dismiss = MouseArea::new(
                 container(column![])
