@@ -1,5 +1,5 @@
-//! 文档/Agent 记忆虚拟链接:数据模型、发现算法、`.dozer/links.json` 存取。
-//! 见设计文档"虚拟链接(文档 + Agent 记忆)"一节。
+//! 项目文档虚拟链接:数据模型、发现算法、`.dozer/links.json` 存取。
+//! 见设计文档"虚拟链接(项目文档)"一节。
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LinkTarget {
     Docs,
-    Memory,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -25,7 +24,6 @@ pub struct LinkEntry {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct LinksState {
     pub docs: Vec<LinkEntry>,
-    pub memory: Vec<LinkEntry>,
     /// 用户手动移除过的路径(`LinkRemove` 写入)。`merge_rediscovered` 重新
     /// 扫盘时跳过这里面的路径——否则一个被移除的自动发现条目,只要文件
     /// 还在磁盘上,下次"修复项目"就会把它加回来,等于删除操作形同虚设。
@@ -38,14 +36,12 @@ impl LinksState {
     pub fn list(&self, target: LinkTarget) -> &[LinkEntry] {
         match target {
             LinkTarget::Docs => &self.docs,
-            LinkTarget::Memory => &self.memory,
         }
     }
 
     pub fn list_mut(&mut self, target: LinkTarget) -> &mut Vec<LinkEntry> {
         match target {
             LinkTarget::Docs => &mut self.docs,
-            LinkTarget::Memory => &mut self.memory,
         }
     }
 }
@@ -74,18 +70,10 @@ pub fn save(repo: &Path, state: &LinksState) -> std::io::Result<()> {
 const DOC_FILE_PREFIXES: [&str; 4] = ["readme", "changelog", "contributing", "license"];
 const DOC_DIR_NAMES: [&str; 4] = ["docs", "doc", "design", "documentation"];
 
-/// Agent 记忆自动搜集的**项目根目录内**文件(忽略大小写精确匹配)。这些是
-/// agent 写在仓库里的指令/记忆文件,不算项目文档,归到 Agent 记忆区。
-const MEMORY_FILE_NAMES: [&str; 3] = ["claude.md", "codebudy.md", "agents.md"];
-
-/// Agent 记忆自动搜集的**项目根目录内**目录(忽略大小写精确匹配)。
-const MEMORY_DIR_NAMES: [&str; 3] = [".claude", ".codebudy", ".cursor"];
-
 /// 首次发现:根目录直接子项(不递归)。文件名(忽略大小写)以
 /// `readme`/`changelog`/`contributing`/`license` 开头,或目录名(忽略大小写)
-/// 精确匹配 `docs`/`doc`/`design`/`documentation`。agent 指令文件
-/// (claude.md/codebudy.md/agents.md)不属于文档,归到 Agent 记忆(见
-/// `discover_memory`)。结果顺序:文件在前、目录在后,组内按名排序。
+/// 精确匹配 `docs`/`doc`/`design`/`documentation`。结果顺序:文件在前、
+/// 目录在后,组内按名排序。
 pub fn discover_docs(repo: &Path) -> Vec<LinkEntry> {
     let Ok(rd) = std::fs::read_dir(repo) else {
         return Vec::new();
@@ -119,69 +107,10 @@ pub fn discover_docs(repo: &Path) -> Vec<LinkEntry> {
         .collect()
 }
 
-/// 首次发现,分两块:
-///
-/// 1. **项目根目录内**的 agent 指令/记忆文件与目录——文件精确匹配
-///    `claude.md`/`codebudy.md`/`agents.md`,目录精确匹配
-///    `.claude`/`.codebudy`/`.cursor`(均忽略大小写)。
-/// 2. **仓库外**的三个 agent 存储目录:`claude_project_dir/memory`、
-///    `codebuddy_project_dir`、`opencode_project_dir`,存在的才收进结果(不存在
-///    的静默跳过,不算错误)。
-///
-/// 结果顺序:仓库外目录在前,随后项目根文件、项目根目录,组内按名排序。
-pub fn discover_memory(repo: &Path) -> Vec<LinkEntry> {
-    discover_memory_in(&dozer_core::agent_paths::home_dir(), repo)
-}
-
-fn discover_memory_in(home: &Path, repo: &Path) -> Vec<LinkEntry> {
-    let mut entries: Vec<LinkEntry> = Vec::new();
-
-    let home_candidates = [
-        dozer_core::agent_paths::claude_project_dir_in(home, repo).join("memory"),
-        dozer_core::agent_paths::codebuddy_project_dir_in(home, repo),
-        dozer_core::agent_paths::opencode_project_dir_in(home, repo),
-    ];
-    for path in home_candidates.into_iter().filter(|p| p.is_dir()) {
-        entries.push(LinkEntry {
-            path,
-            kind: LinkKind::Dir,
-        });
-    }
-
-    if let Ok(rd) = std::fs::read_dir(repo) {
-        let mut files: Vec<(String, PathBuf)> = Vec::new();
-        let mut dirs: Vec<(String, PathBuf)> = Vec::new();
-        for entry in rd.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let lower = name.to_lowercase();
-            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            if is_dir {
-                if MEMORY_DIR_NAMES.contains(&lower.as_str()) {
-                    dirs.push((name, entry.path()));
-                }
-            } else if MEMORY_FILE_NAMES.contains(&lower.as_str()) {
-                files.push((name, entry.path()));
-            }
-        }
-        files.sort_by(|a, b| a.0.cmp(&b.0));
-        dirs.sort_by(|a, b| a.0.cmp(&b.0));
-        entries.extend(files.into_iter().map(|(_, path)| LinkEntry {
-            path,
-            kind: LinkKind::File,
-        }));
-        entries.extend(dirs.into_iter().map(|(_, path)| LinkEntry {
-            path,
-            kind: LinkKind::Dir,
-        }));
-    }
-
-    entries
-}
-
-/// 重新跑一次 `discover_docs`/`discover_memory`,把 `state` 里还没有、也没被
-/// 用户手动移除过(`state.dismissed`)的新路径追加进去——已有条目和用户的
-/// 移除决定都不受影响。返回新增的条数(docs+memory 加总),供"修复项目"
-/// 报告用了多少新发现。**不落盘**,调用方负责在需要时 `save`。
+/// 重新跑一次 `discover_docs`,把 `state` 里还没有、也没被用户手动移除过
+/// (`state.dismissed`)的新路径追加进去——已有条目和用户的移除决定都不受
+/// 影响。返回新增的条数,供"修复项目"报告用了多少新发现。**不落盘**,
+/// 调用方负责在需要时 `save`。
 pub fn merge_rediscovered(repo: &Path, state: &mut LinksState) -> usize {
     let mut added = 0usize;
     for entry in discover_docs(repo) {
@@ -192,18 +121,10 @@ pub fn merge_rediscovered(repo: &Path, state: &mut LinksState) -> usize {
             added += 1;
         }
     }
-    for entry in discover_memory(repo) {
-        if !state.dismissed.contains(&entry.path)
-            && !state.memory.iter().any(|e| e.path == entry.path)
-        {
-            state.memory.push(entry);
-            added += 1;
-        }
-    }
     added
 }
 
-/// `load` 返回 `None`(文件不存在,首次打开)时跑两个 `discover_*` 拼出初始
+/// `load` 返回 `None`(文件不存在,首次打开)时跑 `discover_docs` 拼出初始
 /// `LinksState` 并立即 `save`;返回 `Some(state)` 直接用,不再跑发现。
 pub fn load_or_discover(repo: &Path) -> LinksState {
     if let Some(state) = load(repo) {
@@ -211,7 +132,6 @@ pub fn load_or_discover(repo: &Path) -> LinksState {
     }
     let state = LinksState {
         docs: discover_docs(repo),
-        memory: discover_memory(repo),
         dismissed: Vec::new(),
     };
     let _ = save(repo, &state);
@@ -259,7 +179,6 @@ mod tests {
                 path: PathBuf::from("/repo/README.md"),
                 kind: LinkKind::File,
             }],
-            memory: vec![],
             dismissed: vec![],
         };
         save(dir.path(), &state).unwrap();
@@ -323,54 +242,6 @@ mod tests {
     }
 
     #[test]
-    fn discover_memory_finds_existing_agent_dirs() {
-        let home = tempfile::tempdir().unwrap();
-        let repo = PathBuf::from("/repo/x");
-        let claude_memory =
-            dozer_core::agent_paths::claude_project_dir_in(home.path(), &repo).join("memory");
-        std::fs::create_dir_all(&claude_memory).unwrap();
-        let found = discover_memory_in(home.path(), &repo);
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].path, claude_memory);
-        assert_eq!(found[0].kind, LinkKind::Dir);
-    }
-
-    #[test]
-    fn discover_memory_finds_project_root_agent_files_and_dirs() {
-        let home = tempfile::tempdir().unwrap();
-        let repo = tempfile::tempdir().unwrap();
-        std::fs::write(repo.path().join("CLAUDE.md"), "").unwrap();
-        std::fs::write(repo.path().join("codebudy.md"), "").unwrap();
-        std::fs::write(repo.path().join("AGENTS.md"), "").unwrap();
-        std::fs::create_dir(repo.path().join(".claude")).unwrap();
-        std::fs::create_dir(repo.path().join(".codebudy")).unwrap();
-        std::fs::create_dir(repo.path().join(".cursor")).unwrap();
-        let found = discover_memory_in(home.path(), repo.path());
-        // 3 个文件 + 3 个目录
-        assert_eq!(found.len(), 6);
-        // 文件在前、目录在后,组内按名排序。
-        assert_eq!(found[0].path, repo.path().join("AGENTS.md"));
-        assert_eq!(found[0].kind, LinkKind::File);
-        assert_eq!(found[1].path, repo.path().join("CLAUDE.md"));
-        assert_eq!(found[1].kind, LinkKind::File);
-        assert_eq!(found[2].path, repo.path().join("codebudy.md"));
-        assert_eq!(found[2].kind, LinkKind::File);
-        assert_eq!(found[3].path, repo.path().join(".claude"));
-        assert_eq!(found[3].kind, LinkKind::Dir);
-        assert_eq!(found[4].path, repo.path().join(".codebudy"));
-        assert_eq!(found[4].kind, LinkKind::Dir);
-        assert_eq!(found[5].path, repo.path().join(".cursor"));
-        assert_eq!(found[5].kind, LinkKind::Dir);
-    }
-
-    #[test]
-    fn discover_memory_none_when_nothing_exists() {
-        let home = tempfile::tempdir().unwrap();
-        let repo = tempfile::tempdir().unwrap();
-        assert!(discover_memory_in(home.path(), repo.path()).is_empty());
-    }
-
-    #[test]
     fn load_or_discover_runs_discovery_when_no_file() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("README.md"), "").unwrap();
@@ -388,7 +259,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let manual = LinksState {
             docs: vec![],
-            memory: vec![],
             dismissed: vec![],
         };
         save(dir.path(), &manual).unwrap();
@@ -419,7 +289,6 @@ mod tests {
         let readme_path = dir.path().join("README.md");
         let mut state = LinksState {
             docs: vec![],
-            memory: vec![],
             dismissed: vec![readme_path],
         };
         // README 还在磁盘上,但用户已经手动移除过——不应该被重新加回来。
@@ -431,23 +300,20 @@ mod tests {
     #[test]
     fn merge_rediscovered_finds_new_file_added_after_initial_discovery() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("README.md"), "").unwrap();
+        std::fs::write(dir.path().join("CHANGELOG.md"), "").unwrap();
         let mut state = LinksState {
             docs: vec![LinkEntry {
                 path: dir.path().join("README.md"),
                 kind: LinkKind::File,
             }],
-            memory: vec![],
             dismissed: vec![],
         };
-        // 项目根目录后来多了一个 AGENTS.md(Agent 记忆),应该被发现补进来。
-        std::fs::write(dir.path().join("AGENTS.md"), "").unwrap();
+        // 项目根目录后来多了一个 CHANGELOG.md,应该被发现补进来。
+        std::fs::write(dir.path().join("README.md"), "").unwrap();
         let added = merge_rediscovered(dir.path(), &mut state);
         assert_eq!(added, 1);
-        assert_eq!(state.memory.len(), 1);
-        assert_eq!(state.memory[0].path, dir.path().join("AGENTS.md"));
-        // docs 没变。
-        assert_eq!(state.docs.len(), 1);
+        assert_eq!(state.docs.len(), 2);
+        assert!(state.docs.iter().any(|e| e.path == dir.path().join("CHANGELOG.md")));
     }
 
     #[test]

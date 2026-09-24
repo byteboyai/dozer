@@ -2979,7 +2979,6 @@ impl App {
                 // `Message::Files(files::Message::ToolbarHover(..))` 的既有先例)。
                 let id = match target {
                     project::ProjectToolbarTarget::Docs => HoverId::ProjectDocsAdd,
-                    project::ProjectToolbarTarget::Memory => HoverId::ProjectMemoryAdd,
                     project::ProjectToolbarTarget::Remote => HoverId::ProjectRemoteAdd,
                 };
                 self.set_hover(id, hovered);

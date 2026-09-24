@@ -125,8 +125,6 @@ pub enum HoverId {
     /// Project 面板「项目文档」标题行"＋"按钮,处理方式同 `AgentPickerToggle`
     /// (见 `extensions::project::view`)。
     ProjectDocsAdd,
-    /// Project 面板「Agent 记忆」标题行"＋"按钮,处理方式同 `AgentPickerToggle`。
-    ProjectMemoryAdd,
     /// Project 面板「Git 远程仓库」标题行"＋"按钮:功能未接入前的纯视觉占位
     /// (`interactive` 为假,点击无动作),hover 动画处理方式同
     /// `AgentPickerToggle`。

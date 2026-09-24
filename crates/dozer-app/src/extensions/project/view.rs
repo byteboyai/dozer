@@ -8,14 +8,13 @@ use std::path::PathBuf;
 
 use super::*;
 
-/// 面板头部三颗"＋"按钮(Git 远程仓库 / 项目文档 / Agent 记忆)的 hover 动画
+/// 面板头部两颗"＋"按钮(Git 远程仓库 / 项目文档)的 hover 动画
 /// 进度,由调用方(`app/view.rs`)从 `App::hover_progress` 取值后传入——本面板
-/// 只有 `WorkspaceState`,不挂内核的 hover 动画表。三个同类型 `f32` 相邻,
+/// 只有 `WorkspaceState`,不挂内核的 hover 动画表。同类型 `f32` 相邻,
 /// 用具名字段的结构体传递,避免位置参数顺序传错(见 `CLAUDE.md` 参数结构体
 /// 裁决)。
 pub struct ProjectPaneHover {
     pub docs_add: f32,
-    pub memory_add: f32,
     pub remote_add: f32,
 }
 
@@ -270,15 +269,6 @@ pub fn view<'a>(
         links::LinkTarget::Docs,
         ProjectToolbarTarget::Docs,
         hover.docs_add,
-        &ws_state.links,
-        &ws_state.expanded_link_dirs,
-        &ws_state.selected_link,
-    ));
-    content = content.push(links_section(
-        "Agent 记忆",
-        links::LinkTarget::Memory,
-        ProjectToolbarTarget::Memory,
-        hover.memory_add,
         &ws_state.links,
         &ws_state.expanded_link_dirs,
         &ws_state.selected_link,
@@ -738,7 +728,6 @@ fn links_section<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let tooltip = match target {
         links::LinkTarget::Docs => "添加文档",
-        links::LinkTarget::Memory => "添加记忆",
     };
     let mut col = column![].spacing(6);
     col = col.push(

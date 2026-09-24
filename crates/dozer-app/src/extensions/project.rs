@@ -15,8 +15,8 @@ use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
 use std::path::PathBuf;
 
-/// 单个同步 scaffold 步骤(缓存目录/README/git 仓库/项目文档与 Agent
-/// 记忆)在弹窗里的实时状态。`ScaffoldStepResult` 只有终态,这里补一层
+/// 单个同步 scaffold 步骤(缓存目录/README/git 仓库/项目文档)
+/// 在弹窗里的实时状态。`ScaffoldStepResult` 只有终态,这里补一层
 /// pending/running。
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScaffoldStepState {
@@ -97,11 +97,11 @@ pub struct WorkspaceState {
     /// 描述编辑框是否持有 iced 内部真实焦点,每帧由 `CaptureDescriptionEditFocus`
     /// 写入(同 `name_edit_focused`,供 main.rs 原生输入路由闸门放行)。
     description_edit_focused: bool,
-    /// 文档/Agent 记忆虚拟链接。
+    /// 项目文档虚拟链接。
     links: links::LinksState,
     /// 已展开状态目录 → 其子项列表(就地展开/收起)。
     expanded_link_dirs: std::collections::HashMap<PathBuf, Vec<links::DirRow>>,
-    /// 链接区(项目文档 / Agent 记忆)当前选中项路径。单击文件(`OpenLink`)/
+    /// 链接区(项目文档)当前选中项路径。单击文件(`OpenLink`)/
     /// 目录(`LinkDirToggle`)/展开子项、右击行(`LinkContextMenu`)都会选中,
     /// 用来整行高亮——参考文件树 `files::WorkspaceState::tree_selected`。
     /// `None`=无选中(新开项目默认)。
@@ -265,7 +265,6 @@ impl Operation<()> for CaptureDescriptionEditFocus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectToolbarTarget {
     Docs,
-    Memory,
     Remote,
 }
 
@@ -325,7 +324,7 @@ pub enum Message {
     },
     /// 内核拦截处理,见 `files::Message::OpenFile` 文档同款写法。
     OpenLink(PathBuf),
-    /// 仅选中(不展开、不打开):用于「项目文档 / Agent 记忆」里已展开目录的
+    /// 仅选中(不展开、不打开):用于「项目文档」里已展开目录的
     /// 子目录项——它们是只读单层展示,单击只高亮、不触发二次展开(展开已在
     /// 父级目录 `LinkDirToggle` 完成)。进 `update` 直接写 `selected_link`。
     LinkSelect {
@@ -799,9 +798,9 @@ mod tests {
     #[test]
     fn link_remove_deletes_and_writes_disk() {
         let mut ws = new_ws();
-        ws.links.memory.push(links::LinkEntry {
-            path: PathBuf::from("/home/.claude/memory"),
-            kind: links::LinkKind::Dir,
+        ws.links.docs.push(links::LinkEntry {
+            path: PathBuf::from("/repo/README.md"),
+            kind: links::LinkKind::File,
         });
         let repo = tempfile::tempdir().unwrap();
         links::save(repo.path(), &ws.links).unwrap();
@@ -809,7 +808,7 @@ mod tests {
         update(
             &mut ws,
             Message::LinkRemove {
-                target: links::LinkTarget::Memory,
+                target: links::LinkTarget::Docs,
                 index: 0,
             },
             1,
@@ -819,8 +818,8 @@ mod tests {
             rt.handle(),
             |_| {},
         );
-        assert!(ws.links.memory.is_empty());
-        assert!(links::load(repo.path()).unwrap().memory.is_empty());
+        assert!(ws.links.docs.is_empty());
+        assert!(links::load(repo.path()).unwrap().docs.is_empty());
     }
 
     #[test]
