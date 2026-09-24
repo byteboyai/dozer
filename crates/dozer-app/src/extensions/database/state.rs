@@ -36,7 +36,7 @@ impl DriverKind {
 }
 
 /// 新增/编辑数据源表单里"数据源类型"select 的一个选项:驱动 + 预先算好的
-/// 展示文案(可能带"(已禁用)"后缀,见 `source_form`)。
+/// 展示文案(可能带"(已禁用)"后缀,见 `database_source_card`)。
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DriverOption {
     pub(crate) driver: DriverKind,

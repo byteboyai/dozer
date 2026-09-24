@@ -536,8 +536,10 @@ impl WorkspaceState {
         self.search_focused = false;
     }
 
-    /// 供内核判断"删除确认浮层该不该显示"(`App::view()` 顶层互斥浮层
-    /// 判断链用,见设计文档 §5)。
+    /// 供测试断言"删除确认状态是否存在"(生产侧已改由
+    /// `platform::confirm_overlay` 的 `desired_confirm` 读取
+    /// `tree_delete_confirm` 本体,不再经此访问器)。
+    #[cfg(test)]
     pub fn tree_delete_confirm_is_some(&self) -> bool {
         self.tree_delete_confirm.is_some()
     }

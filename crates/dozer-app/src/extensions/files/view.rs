@@ -1216,43 +1216,37 @@ pub fn tab_context_menu_popup<'a>(
         .into()
 }
 
-/// 删除确认框:居中浮层,显示目标文件名 + 确认/取消两个按钮。
-pub fn delete_confirm_popup(
+/// 删除确认框的内容描述——宿主(`platform::confirm_overlay`)取这一份渲染,
+/// 保证文案/消息不因迁移而分叉。`None` 表示当前没有待确认的删除。
+pub(crate) fn delete_confirm_spec(
     ws_state: &WorkspaceState,
-    window_width: f32,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let Some((path, is_dir)) = &ws_state.tree_delete_confirm else {
-        return column![].into();
-    };
+) -> Option<crate::dialog::ConfirmDialog<Message>> {
+    let (path, is_dir) = ws_state.tree_delete_confirm.as_ref()?;
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string());
     let kind = if *is_dir { "文件夹" } else { "文件" };
-    crate::dialog::confirm(
-        crate::dialog::ConfirmDialog {
-            icon: None,
-            title: format!("删除{kind} \"{name}\"?"),
-            description: "会移入系统回收站,可从回收站找回。".to_string(),
-            cancel_label: "取消".to_string(),
-            cancel_msg: Message::DeleteCancel,
-            confirm_label: "删除".to_string(),
-            confirm_msg: Message::DeleteConfirm,
-            confirm_color: byteui::theme::color::current().red,
-            content_spacing: 8.0,
-        },
-        window_width,
-    )
+    Some(crate::dialog::ConfirmDialog {
+        icon: None,
+        title: format!("删除{kind} \"{name}\"?"),
+        description: "会移入系统回收站,可从回收站找回。".to_string(),
+        cancel_label: "取消".to_string(),
+        cancel_msg: Message::DeleteCancel,
+        confirm_label: "删除".to_string(),
+        confirm_msg: Message::DeleteConfirm,
+        confirm_color: byteui::theme::color::current().red,
+        content_spacing: 8.0,
+    })
 }
 
-/// 拖拽移动确认框:居中浮层,视觉模板同 `delete_confirm_popup`(卡片 +
-/// 取消/确认按钮)。多出"新名称"/"到目录"两个真正的 `iced_widget::
-/// text_input`(复用 `byteui::form::input_text::view`),用户可在确认前
-/// 改文件名/改目标目录——2026-09 用户实测反馈:拖拽移动不该悄无声息直接
-/// 改路径,得让用户确认,见 `PendingMove` 文档。
-pub fn move_confirm_popup(
+/// 拖拽移动确认框的内容(卡片本体):由独立原生窗口宿主
+/// `platform::files_move_overlay` 渲染。多出"新名称"/"到目录"两个真正的
+/// `iced_widget::text_input`(复用 `byteui::form::input_text::view`),用户
+/// 可在确认前改文件名/改目标目录——2026-09 用户实测反馈:拖拽移动不该悄无
+/// 声息直接改路径,得让用户确认,见 `PendingMove` 文档。
+pub fn files_move_card(
     ws_state: &WorkspaceState,
-    window_width: f32,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(pending) = &ws_state.pending_move else {
         return column![].into();
@@ -1363,11 +1357,11 @@ pub fn move_confirm_popup(
         .align_y(iced_widget::core::Alignment::Center),
     ));
 
-    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定)——此前没给
-    // 显式宽度,靠内容(新名称/到目录两个输入框各自的固定宽度)撑开。
+    // 宽度撑满宿主窗口(整窗逻辑尺寸由 `files_move_overlay::card_logical_size`
+    // 给定)——此前在主窗口内靠 `dialog::width`(整窗 1/3)。
     let dialog = container(body)
         .padding(16)
-        .width(crate::dialog::width(window_width))
+        .width(Length::Fill)
         .style(crate::dialog::card_style);
 
     container(dialog)

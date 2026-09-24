@@ -37,10 +37,19 @@ use winit::{
 
 use crate::app::{App, Message, PanelKind};
 use crate::extensions;
+use crate::extensions::files;
+use crate::platform::confirm_overlay;
+use crate::platform::database_drivers_overlay;
+use crate::platform::database_source_overlay;
 use crate::platform::file_history_overlay;
+use crate::platform::files_move_overlay;
 use crate::platform::project_create_overlay;
+use crate::platform::project_delete_overlay;
+use crate::platform::project_scaffold_overlay;
 use crate::platform::search_overlay;
 use crate::platform::settings_overlay;
+use crate::platform::ssh_host_overlay;
+use crate::platform::todo_detail_overlay;
 use crate::preview;
 use crate::theme;
 
@@ -197,9 +206,41 @@ pub(crate) enum Runner {
         /// `sync_settings_overlay` 按 `app.settings.is_some()` 单向驱动
         /// 开/关,与其余三类互斥。
         settings_overlay: Option<settings_overlay::SettingsOverlay>,
+        /// 通用 confirm 弹窗的独立窗口宿主(五个 confirm 形态消费方共用)。
+        /// 生命周期由 `sync_confirm_overlay` 按
+        /// `confirm_overlay::desired_confirm` 单向驱动开/关,与其余四类互斥。
+        confirm_overlay: Option<confirm_overlay::ConfirmOverlay>,
+        /// 数据库「管理驱动」弹窗的独立窗口宿主,生命周期由
+        /// `sync_database_drivers_overlay` 按 `app.database.drivers_popup_open()`
+        /// 单向驱动。
+        database_drivers_overlay: Option<database_drivers_overlay::DatabaseDriversOverlay>,
+        /// 数据库「新增/编辑数据源」表单的独立窗口宿主,生命周期由
+        /// `sync_database_source_overlay` 按当前工作区
+        /// `database.editing()` 单向驱动。需 IME + 失焦即关闭。
+        database_source_overlay: Option<database_source_overlay::DatabaseSourceOverlay>,
+        /// 文件树"拖拽移动"确认弹窗的独立窗口宿主,生命周期由
+        /// `sync_files_move_overlay` 按当前工作区 `files.pending_move_is_some()`
+        /// 单向驱动。不接失焦关闭(见模块文档)。
+        files_move_overlay: Option<files_move_overlay::FilesMoveOverlay>,
+        /// Project「修复项目」进度弹窗的独立窗口宿主,生命周期由
+        /// `sync_project_scaffold_overlay` 按当前工作区
+        /// `project_panel.scaffold_run.is_some()` 单向驱动。`scrim_blocking`
+        /// 语义:不接失焦/Esc/关窗关闭(见模块文档)。
+        project_scaffold_overlay: Option<project_scaffold_overlay::ProjectScaffoldOverlay>,
+        /// Project「删除项目」三选一确认的独立窗口宿主,生命周期由
+        /// `sync_project_delete_overlay` 按当前工作区
+        /// `project_panel.delete_pending` 单向驱动。失焦即关闭。
+        project_delete_overlay: Option<project_delete_overlay::ProjectDeleteOverlay>,
+        /// SSH「添加/编辑主机」表单的独立窗口宿主,生命周期由
+        /// `sync_ssh_host_overlay` 按当前工作区 `ssh.editing()` 单向驱动。
+        /// 需 IME + 失焦即关闭。
+        ssh_host_overlay: Option<ssh_host_overlay::SshHostOverlay>,
+        /// Todo 任务详情弹窗的独立窗口宿主,生命周期由
+        /// `sync_todo_detail_overlay` 按当前工作区 `todo.detail_popup_open()`
+        /// 单向驱动。需 IME + 失焦即关闭。
+        todo_detail_overlay: Option<todo_detail_overlay::TodoDetailOverlay>,
     },
 }
-
 /// 点击/消息后决定键盘焦点归谁:预览 webview、浏览器 webview(各自
 /// ⌘C 走原生复制)或窗口(终端)。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -218,6 +259,14 @@ pub(crate) enum OverlayKind {
     FileHistory,
     ProjectCreate,
     Settings,
+    Confirm,
+    DatabaseDrivers,
+    DatabaseSource,
+    FilesMove,
+    ProjectScaffold,
+    ProjectDelete,
+    SshHost,
+    TodoDetail,
 }
 
 impl Runner {
@@ -1119,28 +1168,97 @@ impl Runner {
     /// 文档。现状代码里"旧弹窗状态没真正清空、被高优先级弹窗遮住之后又
     /// 冒出来"是已确认的真实漂移(见 spec「架构」第 2 节),独立窗口没有
     /// `App::view()` 那种渲染优先级兜底,必须显式互斥。
+    /// 摘掉除 `keep` 外的其余弹窗窗口。除 `project_scaffold_overlay`(见
+    /// 下方单独注释)外,每一个被摘掉的弹窗都要先发一条它自己的取消/关闭
+    /// 消息,不能只摘窗口——只摘窗口不清对应的业务状态(`ws.database.
+    /// editing()`/`ws.ssh.editing()`/`delete_confirm()` 等仍是 `Some`),
+    /// 下一帧那个弹窗自己的 `sync_*_overlay` 会发现触发条件仍成立,把刚被
+    /// 摘掉的窗口重新建出来,和这次新开的弹窗打架——轻则同帧内闪一下,重则
+    /// (表单类)把用户正在填的草稿标记为"待重开"后又在下一帧因为某个偶然
+    /// 时序被真正清掉。收集消息要在这段字段解构的可变借用结束之后再统一
+    /// `dispatch`,不能在借用存续期间调用 `self.dispatch`。
     fn close_other_overlays(&mut self, keep: OverlayKind) {
-        let Self::Ready {
-            search_overlay,
-            file_history_overlay,
-            project_create_overlay,
-            settings_overlay,
-            ..
-        } = self
-        else {
-            return;
-        };
-        if keep != OverlayKind::Search {
-            *search_overlay = None;
+        let mut cancels: Vec<Message> = Vec::new();
+        {
+            let Self::Ready {
+                search_overlay,
+                file_history_overlay,
+                project_create_overlay,
+                settings_overlay,
+                confirm_overlay,
+                database_drivers_overlay,
+                database_source_overlay,
+                files_move_overlay,
+                project_scaffold_overlay,
+                project_delete_overlay,
+                ssh_host_overlay,
+                todo_detail_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            if keep != OverlayKind::Search {
+                *search_overlay = None;
+            }
+            if keep != OverlayKind::FileHistory {
+                *file_history_overlay = None;
+            }
+            if keep != OverlayKind::ProjectCreate {
+                *project_create_overlay = None;
+            }
+            if keep != OverlayKind::Settings {
+                *settings_overlay = None;
+            }
+            if keep != OverlayKind::Confirm
+                && let Some(overlay) = confirm_overlay.take()
+            {
+                cancels.push(overlay.cancel_message());
+            }
+            if keep != OverlayKind::DatabaseDrivers
+                && let Some(overlay) = database_drivers_overlay.take()
+            {
+                cancels.push(overlay.cancel_message());
+            }
+            if keep != OverlayKind::DatabaseSource
+                && let Some(overlay) = database_source_overlay.take()
+            {
+                cancels.push(overlay.cancel_message());
+            }
+            if keep != OverlayKind::FilesMove
+                && let Some(overlay) = files_move_overlay.take()
+            {
+                cancels.push(overlay.cancel_message());
+            }
+            // `project_scaffold_overlay` 设计上不可取消("scrim_blocking",
+            // 只有全部步骤完成后的"关闭"按钮能关,见设计文档「架构」第 2
+            // 节表格)——它没有、也不应该有一条"取消"消息,这里保留摘窗口
+            // 不发消息的原样行为。已知这本身跟"进行中不许中途打断"这条语义
+            // 目前只做到了"这扇窗口自己不接受 Esc/点击/失焦关闭",还没有
+            // 做到"运行期间阻止其它弹窗抢占"——是否要让它在运行期间拒绝被
+            // `close_other_overlays` 摘掉,是一个需要单独决策的产品问题,
+            // 未在这次改动里处理。
+            if keep != OverlayKind::ProjectScaffold {
+                *project_scaffold_overlay = None;
+            }
+            if keep != OverlayKind::ProjectDelete
+                && let Some(overlay) = project_delete_overlay.take()
+            {
+                cancels.push(overlay.cancel_message());
+            }
+            if keep != OverlayKind::SshHost
+                && let Some(overlay) = ssh_host_overlay.take()
+            {
+                cancels.push(overlay.cancel_message());
+            }
+            if keep != OverlayKind::TodoDetail
+                && let Some(overlay) = todo_detail_overlay.take()
+            {
+                cancels.push(overlay.cancel_message());
+            }
         }
-        if keep != OverlayKind::FileHistory {
-            *file_history_overlay = None;
-        }
-        if keep != OverlayKind::ProjectCreate {
-            *project_create_overlay = None;
-        }
-        if keep != OverlayKind::Settings {
-            *settings_overlay = None;
+        for msg in cancels {
+            self.dispatch(msg);
         }
     }
 
@@ -1403,6 +1521,488 @@ impl Runner {
             return;
         };
         if let Some(overlay) = settings_overlay {
+            overlay.request_redraw();
+        }
+    }
+
+    /// 按 `confirm_overlay::desired_confirm` 算出的"此刻该显示哪个 confirm
+    /// 弹窗"(至多一个)驱动窗口开/关。与其余 `sync_*_overlay` 不同,这里
+    /// 比较的是 `ConfirmTrigger` 判别标签而不是内容相等——`Message` 枚举没
+    /// 有派生 `PartialEq`,也没有必要:同一个 trigger 在弹窗存活期间内容不
+    /// 会变(如已经显示的删除确认不会因为用户操作别的东西而改文案),不需要
+    /// 每帧重建 spec 做深比较。
+    fn sync_confirm_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let desired = {
+            let Self::Ready { app, .. } = self else {
+                return;
+            };
+            confirm_overlay::desired_confirm(app.active_workspace())
+        };
+        let current_trigger = match self {
+            Self::Ready {
+                confirm_overlay, ..
+            } => confirm_overlay.as_ref().map(|o| o.trigger()),
+            _ => return,
+        };
+        match (desired, current_trigger) {
+            (Some((trigger, _)), Some(open)) if trigger == open => {
+                // 同一个弹窗仍在显示,什么都不做。
+            }
+            (Some((trigger, spec)), _) => {
+                self.close_other_overlays(OverlayKind::Confirm);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    confirm_overlay: slot,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *slot = Some(confirm_overlay::ConfirmOverlay::open(
+                    window, adapter, device, queue, instance, trigger, spec, el,
+                ));
+            }
+            (None, _) => {
+                let Self::Ready {
+                    confirm_overlay, ..
+                } = self
+                else {
+                    return;
+                };
+                *confirm_overlay = None;
+            }
+        }
+        let Self::Ready {
+            confirm_overlay, ..
+        } = self
+        else {
+            return;
+        };
+        if let Some(overlay) = confirm_overlay {
+            overlay.request_redraw();
+        }
+    }
+
+    /// 数据库「管理驱动」弹窗:开关条件是 `app.database.drivers_popup_open()`
+    /// 布尔值,照抄 `sync_settings_overlay` 的三段 `match SyncAction` 模式。
+    fn sync_database_drivers_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let action = {
+            let Self::Ready {
+                app,
+                database_drivers_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            database_drivers_overlay::sync_action(
+                app.database.drivers_popup_open(),
+                database_drivers_overlay.is_some(),
+            )
+        };
+        match action {
+            database_drivers_overlay::SyncAction::Open => {
+                self.close_other_overlays(OverlayKind::DatabaseDrivers);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    database_drivers_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *database_drivers_overlay =
+                    Some(database_drivers_overlay::DatabaseDriversOverlay::open(
+                        window, adapter, device, queue, instance, el,
+                    ));
+            }
+            database_drivers_overlay::SyncAction::Close => {
+                let Self::Ready {
+                    database_drivers_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *database_drivers_overlay = None;
+            }
+            database_drivers_overlay::SyncAction::Noop => {}
+        }
+        let Self::Ready {
+            database_drivers_overlay,
+            ..
+        } = self
+        else {
+            return;
+        };
+        if let Some(overlay) = database_drivers_overlay {
+            overlay.request_redraw();
+        }
+    }
+
+    /// 数据库「新增/编辑数据源」表单:开关条件是当前工作区
+    /// `database.editing().is_some()`,三段 `match SyncAction` 模式。
+    fn sync_database_source_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let action = {
+            let Self::Ready {
+                app,
+                database_source_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            let open = app
+                .active_workspace()
+                .is_some_and(|ws| ws.database.editing().is_some());
+            database_source_overlay::sync_action(open, database_source_overlay.is_some())
+        };
+        match action {
+            database_source_overlay::SyncAction::Open => {
+                self.close_other_overlays(OverlayKind::DatabaseSource);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    database_source_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *database_source_overlay =
+                    Some(database_source_overlay::DatabaseSourceOverlay::open(
+                        window, adapter, device, queue, instance, el,
+                    ));
+            }
+            database_source_overlay::SyncAction::Close => {
+                let Self::Ready {
+                    database_source_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *database_source_overlay = None;
+            }
+            database_source_overlay::SyncAction::Noop => {}
+        }
+        let Self::Ready {
+            database_source_overlay,
+            ..
+        } = self
+        else {
+            return;
+        };
+        if let Some(overlay) = database_source_overlay {
+            overlay.request_redraw();
+        }
+    }
+
+    /// 文件树"拖拽移动"确认弹窗:开关条件是当前工作区
+    /// `files.pending_move_is_some()`,三段 `match SyncAction` 模式。
+    fn sync_files_move_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let action = {
+            let Self::Ready {
+                app,
+                files_move_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            let open = app
+                .active_workspace()
+                .map(|ws| ws.files.pending_move_is_some())
+                .unwrap_or(false);
+            files_move_overlay::sync_action(open, files_move_overlay.is_some())
+        };
+        match action {
+            files_move_overlay::SyncAction::Open => {
+                self.close_other_overlays(OverlayKind::FilesMove);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    files_move_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *files_move_overlay = Some(files_move_overlay::FilesMoveOverlay::open(
+                    window, adapter, device, queue, instance, el,
+                ));
+            }
+            files_move_overlay::SyncAction::Close => {
+                let Self::Ready {
+                    files_move_overlay, ..
+                } = self
+                else {
+                    return;
+                };
+                *files_move_overlay = None;
+            }
+            files_move_overlay::SyncAction::Noop => {}
+        }
+        let Self::Ready {
+            files_move_overlay, ..
+        } = self
+        else {
+            return;
+        };
+        if let Some(overlay) = files_move_overlay {
+            overlay.request_redraw();
+        }
+    }
+
+    /// Project「修复项目」进度弹窗:开关条件是当前工作区
+    /// `project_panel.scaffold_run.is_some()`,三段 `match SyncAction` 模式。
+    fn sync_project_scaffold_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let action = {
+            let Self::Ready {
+                app,
+                project_scaffold_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            let open = app
+                .active_workspace()
+                .is_some_and(|ws| ws.project_panel.scaffold_run.is_some());
+            project_scaffold_overlay::sync_action(open, project_scaffold_overlay.is_some())
+        };
+        match action {
+            project_scaffold_overlay::SyncAction::Open => {
+                self.close_other_overlays(OverlayKind::ProjectScaffold);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    project_scaffold_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *project_scaffold_overlay =
+                    Some(project_scaffold_overlay::ProjectScaffoldOverlay::open(
+                        window, adapter, device, queue, instance, el,
+                    ));
+            }
+            project_scaffold_overlay::SyncAction::Close => {
+                let Self::Ready {
+                    project_scaffold_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *project_scaffold_overlay = None;
+            }
+            project_scaffold_overlay::SyncAction::Noop => {}
+        }
+        let Self::Ready {
+            project_scaffold_overlay,
+            ..
+        } = self
+        else {
+            return;
+        };
+        if let Some(overlay) = project_scaffold_overlay {
+            overlay.request_redraw();
+        }
+    }
+
+    /// SSH「添加/编辑主机」表单:开关条件是当前工作区
+    /// `ssh.editing().is_some()`,三段 `match SyncAction` 模式。
+    fn sync_ssh_host_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let action = {
+            let Self::Ready {
+                app,
+                ssh_host_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            let open = app
+                .active_workspace()
+                .is_some_and(|ws| ws.ssh.editing().is_some());
+            ssh_host_overlay::sync_action(open, ssh_host_overlay.is_some())
+        };
+        match action {
+            ssh_host_overlay::SyncAction::Open => {
+                self.close_other_overlays(OverlayKind::SshHost);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    ssh_host_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *ssh_host_overlay = Some(ssh_host_overlay::SshHostOverlay::open(
+                    window, adapter, device, queue, instance, el,
+                ));
+            }
+            ssh_host_overlay::SyncAction::Close => {
+                let Self::Ready {
+                    ssh_host_overlay, ..
+                } = self
+                else {
+                    return;
+                };
+                *ssh_host_overlay = None;
+            }
+            ssh_host_overlay::SyncAction::Noop => {}
+        }
+        let Self::Ready {
+            ssh_host_overlay, ..
+        } = self
+        else {
+            return;
+        };
+        if let Some(overlay) = ssh_host_overlay {
+            overlay.request_redraw();
+        }
+    }
+
+    /// Project「删除项目」三选一确认:开关条件是当前工作区
+    /// `project_panel.delete_pending.is_some()`,三段 `match SyncAction` 模式。
+    fn sync_project_delete_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let action = {
+            let Self::Ready {
+                app,
+                project_delete_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            let open = app
+                .active_workspace()
+                .is_some_and(|ws| ws.project_panel.delete_pending.is_some());
+            project_delete_overlay::sync_action(open, project_delete_overlay.is_some())
+        };
+        match action {
+            project_delete_overlay::SyncAction::Open => {
+                self.close_other_overlays(OverlayKind::ProjectDelete);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    project_delete_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *project_delete_overlay = Some(project_delete_overlay::ProjectDeleteOverlay::open(
+                    window, adapter, device, queue, instance, el,
+                ));
+            }
+            project_delete_overlay::SyncAction::Close => {
+                let Self::Ready {
+                    project_delete_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *project_delete_overlay = None;
+            }
+            project_delete_overlay::SyncAction::Noop => {}
+        }
+        let Self::Ready {
+            project_delete_overlay,
+            ..
+        } = self
+        else {
+            return;
+        };
+        if let Some(overlay) = project_delete_overlay {
+            overlay.request_redraw();
+        }
+    }
+
+    /// Todo 任务详情弹窗:开关条件是当前工作区
+    /// `todo.detail_popup_open()`,三段 `match SyncAction` 模式。
+    fn sync_todo_detail_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let action = {
+            let Self::Ready {
+                app,
+                todo_detail_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            let open = app
+                .active_workspace()
+                .is_some_and(|ws| ws.todo.detail_popup_open());
+            todo_detail_overlay::sync_action(open, todo_detail_overlay.is_some())
+        };
+        match action {
+            todo_detail_overlay::SyncAction::Open => {
+                self.close_other_overlays(OverlayKind::TodoDetail);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    todo_detail_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *todo_detail_overlay = Some(todo_detail_overlay::TodoDetailOverlay::open(
+                    window, adapter, device, queue, instance, el,
+                ));
+            }
+            todo_detail_overlay::SyncAction::Close => {
+                let Self::Ready {
+                    todo_detail_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *todo_detail_overlay = None;
+            }
+            todo_detail_overlay::SyncAction::Noop => {}
+        }
+        let Self::Ready {
+            todo_detail_overlay,
+            ..
+        } = self
+        else {
+            return;
+        };
+        if let Some(overlay) = todo_detail_overlay {
             overlay.request_redraw();
         }
     }
@@ -2227,6 +2827,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 file_history_overlay: None,
                 project_create_overlay: None,
                 settings_overlay: None,
+                confirm_overlay: None,
+                database_drivers_overlay: None,
+                database_source_overlay: None,
+                files_move_overlay: None,
+                project_scaffold_overlay: None,
+                project_delete_overlay: None,
+                ssh_host_overlay: None,
+                todo_detail_overlay: None,
             };
         }
     }
@@ -2253,6 +2861,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_file_history_overlay(event_loop);
         self.sync_project_create_overlay(event_loop);
         self.sync_settings_overlay(event_loop);
+        self.sync_confirm_overlay(event_loop);
+        self.sync_database_drivers_overlay(event_loop);
+        self.sync_database_source_overlay(event_loop);
+        self.sync_files_move_overlay(event_loop);
+        self.sync_project_scaffold_overlay(event_loop);
+        self.sync_ssh_host_overlay(event_loop);
+        self.sync_project_delete_overlay(event_loop);
+        self.sync_todo_detail_overlay(event_loop);
     }
 
     fn window_event(
@@ -2418,6 +3034,240 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             return;
         }
 
+        // confirm overlay 窗口自己那份 `WindowId` 的事件,同 search/
+        // settings overlay 早退分支的手法。
+        if let Self::Ready {
+            confirm_overlay, ..
+        } = self
+            && let Some(overlay) = confirm_overlay
+            && window_id == overlay.window_id()
+        {
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw();
+            } else if matches!(event, WindowEvent::CloseRequested) {
+                // 关闭窗口本身不代表业务状态清空——若不发 cancel 消息,
+                // 下一帧 `sync_confirm_overlay` 会发现 `desired` 仍是
+                // `Some`(业务状态没变)又把它重新建出来,所以这里必须真
+                // 发一条 cancel 消息,让触发条件本身归位。
+                let cancel = overlay.cancel_message();
+                self.dispatch(cancel);
+            } else if let WindowEvent::Focused(focused) = event {
+                // 合成 Focused(false) 不计为失焦(见 FocusTracker 文档)。
+                let should_close = overlay.handle_focus(focused);
+                if should_close {
+                    let cancel = overlay.cancel_message();
+                    self.dispatch(cancel);
+                }
+            } else {
+                let messages = overlay.handle_input(&event);
+                for message in messages {
+                    self.dispatch(message);
+                }
+            }
+            self.sync_confirm_overlay(event_loop);
+            return;
+        }
+
+        // 数据库「管理驱动」窗口自己那份 `WindowId` 的事件。
+        if let Self::Ready {
+            app,
+            database_drivers_overlay,
+            ..
+        } = self
+            && let Some(overlay) = database_drivers_overlay
+            && window_id == overlay.window_id()
+        {
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app);
+            } else if matches!(event, WindowEvent::CloseRequested) {
+                self.dispatch(Message::Database(
+                    extensions::database::Message::DriversPopupToggle,
+                ));
+            } else if let WindowEvent::Focused(focused) = event {
+                // 无文本输入、无原生选择器,失焦即关闭不需要吞例外。
+                if overlay.handle_focus(focused) {
+                    self.dispatch(Message::Database(
+                        extensions::database::Message::DriversPopupToggle,
+                    ));
+                }
+            } else {
+                for message in overlay.handle_input(app, &event) {
+                    self.dispatch(message);
+                }
+            }
+            self.sync_database_drivers_overlay(event_loop);
+            return;
+        }
+
+        // 数据库「新增/编辑数据源」窗口自己那份 `WindowId` 的事件。
+        if let Self::Ready {
+            app,
+            database_source_overlay,
+            ..
+        } = self
+            && let Some(overlay) = database_source_overlay
+            && window_id == overlay.window_id()
+        {
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app);
+            } else if matches!(event, WindowEvent::CloseRequested) {
+                self.dispatch(Message::Database(
+                    extensions::database::Message::DraftCancel,
+                ));
+            } else if let WindowEvent::Focused(focused) = event {
+                // 表单内无原生选择器,失焦即关闭(同 settings overlay)。
+                if overlay.handle_focus(focused) {
+                    self.dispatch(Message::Database(
+                        extensions::database::Message::DraftCancel,
+                    ));
+                }
+            } else {
+                for message in overlay.handle_input(app, &event) {
+                    self.dispatch(message);
+                }
+            }
+            self.sync_database_source_overlay(event_loop);
+            return;
+        }
+
+        // 文件树"拖拽移动"确认窗口自己那份 `WindowId` 的事件。
+        if let Self::Ready {
+            app,
+            files_move_overlay,
+            ..
+        } = self
+            && let Some(overlay) = files_move_overlay
+            && window_id == overlay.window_id()
+        {
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app);
+            } else if matches!(event, WindowEvent::CloseRequested) {
+                self.dispatch(Message::Files(files::Message::MoveCancel));
+            } else {
+                // 故意不处理 `WindowEvent::Focused`——本窗口不做失焦关闭:
+                // "到目录"旁的 `...` 浏览按钮会同步弹出原生 rfd 目录选择器,
+                // 那会让本窗口瞬间失焦,若照搬失焦关闭会在用户选目录过程中
+                // 把整个移动表单误关掉(同 `project_create_overlay` 分支的
+                // 既有考量)。Esc 键的关闭由 `handle_input` 内部拦截,走普通
+                // 消息返回路径,不需要这里特殊处理。
+                for message in overlay.handle_input(app, &event) {
+                    self.dispatch(message);
+                }
+            }
+            self.sync_files_move_overlay(event_loop);
+            return;
+        }
+
+        // Project「修复项目」进度窗口自己那份 `WindowId` 的事件。
+        if let Self::Ready {
+            app,
+            project_scaffold_overlay,
+            ..
+        } = self
+            && let Some(overlay) = project_scaffold_overlay
+            && window_id == overlay.window_id()
+        {
+            // `scrim_blocking` 语义:故意不处理 `WindowEvent::Focused` 与
+            // `CloseRequested`——进行中不允许 Esc/失焦/点原生关闭按钮关窗,
+            // 两者都落进 `else` 兜底交给 `handle_input`,而它对这些事件本
+            // 就不产生任何消息(iced 侧没有 widget 响应),效果即"什么都不
+            // 做"。唯一能关闭的路径是内容里 `done` 后才可点的"关闭"按钮,
+            // 经 `handle_input` 返回 `ScaffoldPopupClose` 消息。
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app);
+            } else {
+                for message in overlay.handle_input(app, &event) {
+                    self.dispatch(message);
+                }
+            }
+            self.sync_project_scaffold_overlay(event_loop);
+            return;
+        }
+
+        // Project「删除项目」三选一确认窗口自己那份 `WindowId` 的事件。
+        if let Self::Ready {
+            app,
+            project_delete_overlay,
+            ..
+        } = self
+            && let Some(overlay) = project_delete_overlay
+            && window_id == overlay.window_id()
+        {
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app);
+            } else if matches!(event, WindowEvent::CloseRequested) {
+                self.dispatch(Message::Project(
+                    crate::extensions::project::Message::DeleteProjectCancel,
+                ));
+            } else if let WindowEvent::Focused(focused) = event {
+                if overlay.handle_focus(focused) {
+                    self.dispatch(Message::Project(
+                        crate::extensions::project::Message::DeleteProjectCancel,
+                    ));
+                }
+            } else {
+                for message in overlay.handle_input(app, &event) {
+                    self.dispatch(message);
+                }
+            }
+            self.sync_project_delete_overlay(event_loop);
+            return;
+        }
+
+        // SSH「添加/编辑主机」窗口自己那份 `WindowId` 的事件。
+        if let Self::Ready {
+            app,
+            ssh_host_overlay,
+            ..
+        } = self
+            && let Some(overlay) = ssh_host_overlay
+            && window_id == overlay.window_id()
+        {
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app);
+            } else if matches!(event, WindowEvent::CloseRequested) {
+                self.dispatch(Message::Ssh(extensions::ssh::Message::DraftCancel));
+            } else if let WindowEvent::Focused(focused) = event {
+                // 表单内无原生选择器,失焦即关闭(同 settings overlay)。
+                if overlay.handle_focus(focused) {
+                    self.dispatch(Message::Ssh(extensions::ssh::Message::DraftCancel));
+                }
+            } else {
+                for message in overlay.handle_input(app, &event) {
+                    self.dispatch(message);
+                }
+            }
+            self.sync_ssh_host_overlay(event_loop);
+            return;
+        }
+
+        // Todo 任务详情弹窗窗口自己那份 `WindowId` 的事件。
+        if let Self::Ready {
+            app,
+            todo_detail_overlay,
+            ..
+        } = self
+            && let Some(overlay) = todo_detail_overlay
+            && window_id == overlay.window_id()
+        {
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app);
+            } else if matches!(event, WindowEvent::CloseRequested) {
+                self.dispatch(Message::Todo(crate::extensions::todo::Message::DetailClose));
+            } else if let WindowEvent::Focused(focused) = event {
+                // 弹窗内无原生选择器,失焦即关闭(同 settings overlay)。
+                if overlay.handle_focus(focused) {
+                    self.dispatch(Message::Todo(crate::extensions::todo::Message::DetailClose));
+                }
+            } else {
+                for message in overlay.handle_input(app, &event) {
+                    self.dispatch(message);
+                }
+            }
+            self.sync_todo_detail_overlay(event_loop);
+            return;
+        }
+
         // `consumed == true`:已经被应用级快捷键接管(见
         // `on_window_event` 顶部文档),下面不能再把同一个原始事件转换
         // 喂给 iced 标准管线,否则会重复处理(⌘S 这类字母快捷键会在
@@ -2448,6 +3298,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 file_history_overlay,
                 project_create_overlay,
                 settings_overlay,
+                confirm_overlay,
+                database_drivers_overlay,
+                database_source_overlay,
+                files_move_overlay,
+                project_scaffold_overlay,
+                project_delete_overlay,
+                ssh_host_overlay,
+                todo_detail_overlay,
                 ..
             } = self
             else {
@@ -3340,6 +4198,86 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             app.window_size.1,
                         );
                     }
+                    if let Some(overlay) = confirm_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                        );
+                    }
+                    if let Some(overlay) = database_drivers_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                        );
+                    }
+                    if let Some(overlay) = database_source_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                        );
+                    }
+                    if let Some(overlay) = files_move_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                        );
+                    }
+                    if let Some(overlay) = project_scaffold_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                        );
+                    }
+                    if let Some(overlay) = ssh_host_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                        );
+                    }
+                    if let Some(overlay) = project_delete_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                        );
+                    }
+                    if let Some(overlay) = todo_detail_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                        );
+                    }
                     // bounds 同步由本函数末尾的 sync_previews 统一执行
                 }
                 WindowEvent::CloseRequested => {
@@ -3348,6 +4286,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     *file_history_overlay = None; // 同上,图干净。
                     *project_create_overlay = None; // 图干净,Drop 本身就会释放。
                     *settings_overlay = None; // 图干净,Drop 本身就会释放。
+                    *confirm_overlay = None; // 图干净,Drop 本身就会释放。
+                    *database_drivers_overlay = None; // 图干净,Drop 本身就会释放。
+                    *database_source_overlay = None; // 图干净,Drop 本身就会释放。
+                    *files_move_overlay = None; // 图干净,Drop 本身就会释放。
+                    *project_scaffold_overlay = None; // 图干净,Drop 本身就会释放。
+                    *project_delete_overlay = None; // 图干净,Drop 本身就会释放。
+                    *ssh_host_overlay = None; // 图干净,Drop 本身就会释放。
+                    *todo_detail_overlay = None; // 图干净,Drop 本身就会释放。
                     // 同步写盘,不用 `spawn_shell_layout_save` 的异步路径——
                     // 进程马上退出,spawn 的 tokio 任务不保证跑得完。
                     app.persist_window_size_on_exit();
@@ -3525,6 +4471,14 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_file_history_overlay(event_loop);
         self.sync_project_create_overlay(event_loop);
         self.sync_settings_overlay(event_loop);
+        self.sync_confirm_overlay(event_loop);
+        self.sync_database_drivers_overlay(event_loop);
+        self.sync_database_source_overlay(event_loop);
+        self.sync_files_move_overlay(event_loop);
+        self.sync_project_scaffold_overlay(event_loop);
+        self.sync_ssh_host_overlay(event_loop);
+        self.sync_project_delete_overlay(event_loop);
+        self.sync_todo_detail_overlay(event_loop);
     }
 }
 

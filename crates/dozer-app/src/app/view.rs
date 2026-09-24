@@ -20,9 +20,9 @@ use crate::term::term_view;
 use crate::term::terminal;
 use crate::theme;
 use crate::workspace::{
-    PreviewPaneKind, Workspace, agent_close_confirm_popup, agent_list_pane, agent_picker_popup,
-    dot_color, no_project_placeholder, preview_pane, preview_tab_overflow_popup,
-    project_preview_pane, review_content_pane, split_portions, tab_display_width, tab_title,
+    PreviewPaneKind, Workspace, agent_list_pane, agent_picker_popup, dot_color,
+    no_project_placeholder, preview_pane, preview_tab_overflow_popup, project_preview_pane,
+    review_content_pane, split_portions, tab_display_width, tab_title,
 };
 use byteui::interaction::icons;
 use dozer_core::protocol::{AgentKind, AgentState, SessionInfo};
@@ -113,27 +113,7 @@ impl App {
         ];
         let base = column![top, body];
 
-        let popped = if ws.files.tree_delete_confirm_is_some() {
-            let dismiss = crate::dialog::scrim(Message::Files(files::Message::DeleteCancel));
-            stack![
-                base,
-                dismiss,
-                files::delete_confirm_popup(&ws.files, self.window_size.0).map(Message::Files)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        } else if ws.files.pending_move_is_some() {
-            let dismiss = crate::dialog::scrim(Message::Files(files::Message::MoveCancel));
-            stack![
-                base,
-                dismiss,
-                files::move_confirm_popup(&ws.files, self.window_size.0).map(Message::Files)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        } else if self.files.context_menu_is_some() {
+        let popped = if self.files.context_menu_is_some() {
             let dismiss = MouseArea::new(
                 container(column![])
                     .width(Length::Fill)
@@ -238,125 +218,6 @@ impl App {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
-        } else if ws.project_panel.delete_pending.is_some() {
-            // 项目面板「删除项目」确认框:窗口级 overlay,同其它面板弹窗
-            // 的既有口径(2026-09-15 起——此前是 panel-level `stack!`,只在
-            // 本面板宽度范围内居中,不是整个软件窗体)。
-            let dismiss =
-                crate::dialog::scrim(Message::Project(project::Message::DeleteProjectCancel));
-            stack![
-                base,
-                dismiss,
-                project::project_delete_confirm_popup(&ws.project_panel, self.window_size.0)
-                    .map(Message::Project)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        } else if ws.project_panel.scaffold_run.is_some() {
-            // 项目面板「修复项目」进度弹窗:窗口级 overlay。进行中不可通过
-            // 点遮罩关闭(`scrim_blocking` 不挂 `on_press`),同 panel-level
-            // 版本的既有约定(spec"弹窗可取消性"一节)。
-            let scrim = crate::dialog::scrim_blocking();
-            stack![
-                base,
-                scrim,
-                project::scaffold_progress_popup(&ws.project_panel, self.window_size.0)
-                    .map(Message::Project)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        } else if ws.database.delete_confirm().is_some() {
-            // 数据库面板「删除数据源」确认框:窗口级 overlay,同上。三个
-            // 数据库弹窗互斥优先级(同一时刻只显示一个):待确认删除 >
-            // 新增/编辑表单 > 驱动管理。
-            let source_id = ws.database.delete_confirm().unwrap();
-            let dismiss =
-                crate::dialog::scrim(Message::Database(database::Message::DeleteSourceCancel));
-            stack![
-                base,
-                dismiss,
-                database::delete_confirm_popup(&ws.database, source_id, self.window_size.0)
-                    .map(Message::Database)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        } else if ws.database.editing().is_some() {
-            // 数据库面板「新增/编辑数据源」表单:窗口级 overlay,同上。
-            let draft = ws.database.editing().unwrap();
-            let dismiss = crate::dialog::scrim(Message::Database(database::Message::DraftCancel));
-            stack![
-                base,
-                dismiss,
-                database::source_form(
-                    draft,
-                    &self.database,
-                    ws.database.draft_test_status(),
-                    self.window_size.0,
-                )
-                .map(Message::Database)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        } else if self.database.drivers_popup_open() {
-            // 数据库面板「管理驱动」弹窗:窗口级 overlay,同上。
-            let dismiss =
-                crate::dialog::scrim(Message::Database(database::Message::DriversPopupToggle));
-            stack![
-                base,
-                dismiss,
-                database::drivers_popup(&self.database, self.window_size.0).map(Message::Database)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        } else if ws.ssh.delete_confirm().is_some() {
-            // 主机面板「删除主机」确认框:窗口级 overlay,同上。两个主机
-            // 弹窗互斥优先级(同一时刻只显示一个):待确认删除 > 新增/编辑
-            // 表单。
-            let host_id = ws.ssh.delete_confirm().unwrap();
-            let dismiss = crate::dialog::scrim(Message::Ssh(ssh::Message::DeleteHostCancel));
-            stack![
-                base,
-                dismiss,
-                ssh::delete_confirm_popup(&ws.ssh, host_id, self.window_size.0).map(Message::Ssh)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        } else if ws.ssh.editing().is_some() {
-            // 主机面板「添加/编辑主机」表单:窗口级 overlay,同上。
-            let draft = ws.ssh.editing().unwrap();
-            let status = draft
-                .id
-                .as_deref()
-                .map(|id| ws.ssh.test_status(id))
-                .unwrap_or(&ssh::TestStatus::Idle);
-            let dismiss = crate::dialog::scrim(Message::Ssh(ssh::Message::DraftCancel));
-            stack![
-                base,
-                dismiss,
-                ssh::host_form(draft, status, self.window_size.0).map(Message::Ssh)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        } else if ws.pending_close_tab.is_some() {
-            // 关 Agent 面板 tab 确认框:目标会话 Running/AwaitingInput 时才进
-            // 这里(分流见 `app::update` `Message::CloseTab`)。窗口级 overlay,
-            // 点遮罩=取消。
-            let dismiss = crate::dialog::scrim(Message::TermTabCloseCancel);
-            stack![
-                base,
-                dismiss,
-                agent_close_confirm_popup(ws, self.window_size.0)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
         } else if ws.agent_picker_open {
             let dismiss = MouseArea::new(
                 container(column![])
@@ -438,26 +299,6 @@ impl App {
                     .height(Length::Fill)
                     .into(),
             }
-        } else if ws.todo.clear_confirm_open() {
-            // Todo"清空列表"确认弹窗:窗口级 overlay,与其它 Todo 浮层同款
-            // "点遮罩即收起"约定。
-            let dismiss = crate::dialog::scrim(Message::Todo(todo::Message::ClearListCancel));
-            stack![
-                base,
-                dismiss,
-                todo::clear_confirm_popup(&ws.todo, self.window_size.0).map(Message::Todo)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        } else if ws.todo.detail_popup_open() {
-            // 任务详情弹窗:窗口级 overlay,原生渲染(不走 wry webview)。
-            // 点弹层外任意处经 dismiss 收起,与其它 Todo 浮层同款约定。
-            let dismiss = crate::dialog::scrim(Message::Todo(todo::Message::DetailClose));
-            stack![base, dismiss, self.todo_detail_popup()]
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
         } else if ws.todo.status_filter_popup_open() {
             // 搜索框左前"状态"筛选浮层:窗口级 overlay。点弹层外任意处经
             // dismiss 收起(与右键菜单/分支切换同款约定),弹层本体的每一项

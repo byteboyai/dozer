@@ -177,7 +177,7 @@ pub fn shell<'a, Msg: 'a>(
 }
 
 /// `shell()` 的磨砂版:在面板上叠一层 [`crate::frosted::noise_layer`]
-/// 噪点贴图模拟磨砂玻璃颗粒(`dialog::scrim` 的遮罩磨砂用的是同一张贴图)。
+/// 噪点贴图模拟磨砂玻璃颗粒。
 /// **只用于内容不会逐帧重绘的静态弹层**——多出的 `Stack` 非 base 层每次
 /// 都要重新构建/重绘一遍,静态弹层只在打开/关闭或离散 hover 状态切换时
 /// 重绘一次,这份开销可忽略;但像 `tab_widget::tab_overflow_menu` 那样

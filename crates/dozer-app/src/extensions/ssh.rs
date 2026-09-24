@@ -7,6 +7,7 @@
 use crate::app::{App, HoverId, ssh_tab_hover_key};
 use byteui::interaction::icons;
 use iced_widget::core::Element;
+use iced_widget::core::Length;
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -1013,16 +1014,15 @@ impl iced_widget::core::widget::Operation<()> for CaptureFormFocus {
     }
 }
 
-/// 新增/编辑主机弹窗:窗口级居中浮层,视觉模板同 `delete_confirm_popup`
+/// 新增/编辑主机弹窗的内容(卡片本体):由独立原生窗口宿主
+/// `platform::ssh_host_overlay` 渲染。视觉模板同 `delete_confirm_popup`
 /// (CARD 底 + 圆角描边 + 标题图标)。标题图标用面板自己的
 /// `icons::IconKind::Server`(同 `home_panel_head` 头部图标),不用 footer
 /// 按钮的 `SquarePlus`——同 Todo「清空列表」/数据库面板弹窗的既有口径:
-/// 标题图标标的是"这是哪个面板的弹窗",不重复按钮本身的动作语义。`pub`
-/// 是为了让 `app.rs` 的窗口级 overlay 能调到。
-pub fn host_form<'a>(
+/// 标题图标标的是"这是哪个面板的弹窗",不重复按钮本身的动作语义。
+pub fn ssh_host_card<'a>(
     draft: &'a SshHostDraft,
     status: &'a TestStatus,
-    window_width: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let title_text = if draft.id.is_some() {
         "编辑主机"
@@ -1254,14 +1254,12 @@ pub fn host_form<'a>(
 
     // 边框/底色统一成原生预览"文件内搜索"风格(`find_field_shell`/`find_rows`
     // 外层组合的既有配色):底色 card、边框普通态 `colors.border`(不再恒描
-    // 金)——2026-09-11 需求,同步 `database.rs::source_form` 的改法。宽度从
-    // `Fill`(此前内联挂在主机列表下方,撑满面板宽度)改成 `dialog::width`
-    // (整窗 1/3,2026-09-15 统一约定,取代中间态的写死 420px)——现在是
-    // 窗口级居中弹窗(见函数文档),撑满宽度会让输入框铺满整个窗口,不像
-    // "普通弹窗"。
+    // 金)——2026-09-11 需求,同步 `database::view::database_source_card` 的改法。
+    // 宽度撑满宿主窗口(整窗逻辑尺寸由 `ssh_host_overlay::card_logical_size`
+    // 给定)。
     let dialog = container(col)
         .padding(12)
-        .width(crate::dialog::width(window_width))
+        .width(Length::Fill)
         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
             background: Some(byteui::theme::color::current().card.into()),
             border: iced_widget::core::Border {
@@ -1356,36 +1354,29 @@ pub fn view<'a>(
     base.into()
 }
 
-/// 删除主机的确认对话框:居中卡片,列出要删的主机名,确认(红)才执行
-/// `DeleteHost`,取消/遮罩只清待确认态。视觉参照文件树面板的
-/// `delete_confirm_popup`(CARD 底 + 圆角描边 + 取消/确认两个圆角按钮)。
-/// 窗口级 overlay,由 `app.rs` 挂载(见其调用点注释),`pub` 是为了让那边
-/// 能调到。
-pub fn delete_confirm_popup<'a>(
-    ws_state: &'a WorkspaceState,
-    host_id: &'a str,
-    window_width: f32,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+/// 删除主机确认框的内容描述——宿主(`platform::confirm_overlay`)取这一份
+/// 渲染,保证文案/消息不因迁移而分叉。
+pub(crate) fn delete_confirm_spec(
+    ws_state: &WorkspaceState,
+    host_id: &str,
+) -> Option<crate::dialog::ConfirmDialog<Message>> {
     let name = ws_state
         .hosts()
         .iter()
         .find(|h| h.id == host_id)
         .map(|h| h.name.as_str())
         .unwrap_or(host_id);
-    crate::dialog::confirm(
-        crate::dialog::ConfirmDialog {
-            icon: None,
-            title: format!("删除主机 \"{name}\"?"),
-            description: "这会永久删除这台主机的连接记录。".to_string(),
-            cancel_label: "取消".to_string(),
-            cancel_msg: Message::DeleteHostCancel,
-            confirm_label: "删除".to_string(),
-            confirm_msg: Message::DeleteHost(host_id.to_string()),
-            confirm_color: byteui::theme::color::current().red,
-            content_spacing: 8.0,
-        },
-        window_width,
-    )
+    Some(crate::dialog::ConfirmDialog {
+        icon: None,
+        title: format!("删除主机 \"{name}\"?"),
+        description: "这会永久删除这台主机的连接记录。".to_string(),
+        cancel_label: "取消".to_string(),
+        cancel_msg: Message::DeleteHostCancel,
+        confirm_label: "删除".to_string(),
+        confirm_msg: Message::DeleteHost(host_id.to_string()),
+        confirm_color: byteui::theme::color::current().red,
+        content_spacing: 8.0,
+    })
 }
 
 /// 主机面板底部 footer-bar:1px `BORDER` 分隔线 + `padding([6, 8])` 容器,
@@ -1476,6 +1467,19 @@ mod tests {
             username: "deploy".into(),
             auth: AuthMethod::Password,
         }
+    }
+
+    #[test]
+    fn delete_confirm_spec_uses_host_name_and_targets_id() {
+        let mut ws_state = WorkspaceState::default();
+        ws_state.hosts = vec![host("h1")];
+        ws_state.delete_confirm = Some("h1".into());
+        let spec = delete_confirm_spec(&ws_state, "h1").expect("spec present");
+        assert_eq!(spec.title, "删除主机 \"test-h1\"?");
+        assert!(matches!(
+            spec.confirm_msg,
+            Message::DeleteHost(id) if id == "h1"
+        ));
     }
 
     #[test]

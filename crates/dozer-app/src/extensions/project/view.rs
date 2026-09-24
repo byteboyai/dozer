@@ -509,13 +509,12 @@ fn scaffold_backfill_row(
     .into()
 }
 
-/// "修复项目"进度弹窗:视觉模板同 `project_delete_confirm_popup`(卡片 +
-/// 底部按钮)。进行中时"关闭"按钮不可点(`on_press_maybe`),全部完成
-/// (`ScaffoldRunState::all_done`)才激活。窗口级 overlay,由 `app.rs`
-/// 挂载(见其调用点注释),`pub` 是为了让那边能调到。
-pub fn scaffold_progress_popup(
+/// "修复项目"进度弹窗的内容(卡片本体):由独立原生窗口宿主
+/// `platform::project_scaffold_overlay` 渲染。进行中时"关闭"按钮不可点
+/// (`on_press_maybe`),全部完成(`ScaffoldRunState::all_done`)才激活。
+/// `scrim_blocking` 语义由宿主保留(进行中不可 Esc/失焦/关窗)。
+pub fn project_scaffold_card(
     ws_state: &WorkspaceState,
-    window_width: f32,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(run) = &ws_state.scaffold_run else {
         return container(column![]).into();
@@ -563,11 +562,10 @@ pub fn scaffold_progress_popup(
     ]
     .spacing(14);
 
-    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定)——此前固定
-    // 360px,窗口变宽变窄时弹窗大小不跟着变,跟其它弹窗的写死像素值互相
-    // 不一致。
+    // 宽度撑满宿主窗口(整窗逻辑尺寸由
+    // `project_scaffold_overlay::card_logical_size` 给定)。
     let dialog = container(card)
-        .width(crate::dialog::width(window_width))
+        .width(Length::Fill)
         .padding(16)
         .style(crate::dialog::card_style);
 
@@ -587,11 +585,10 @@ pub fn scaffold_progress_popup(
 /// (卡片 + 取消/确认按钮)。单选行复用 `ssh.rs::radio_dot` 的视觉语言
 /// (选中态 GOLD 实心描边,未选中态空心 BORDER 描边)——ssh 的 `radio_dot`
 /// 绑定在 `ssh::Message` 上、跨模块复用不了类型,这里就地画一份同样的视觉。
-/// 窗口级 overlay,由 `app.rs` 挂载(见其调用点注释),`pub` 是为了让那边
-/// 能调到。
-pub fn project_delete_confirm_popup(
+/// 窗口级 overlay,由 `platform::project_delete_overlay` 的独立原生窗口
+/// 宿主渲染(见其调用点注释),`pub` 是为了让那边能调到。
+pub fn project_delete_card(
     ws_state: &WorkspaceState,
-    window_width: f32,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let selected = ws_state
         .delete_pending
@@ -700,9 +697,9 @@ pub fn project_delete_confirm_popup(
         ]
         .spacing(12),
     )
-    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定)——此前没给
-    // 显式宽度,靠内容(三行单选文案)撑开,窗口变宽变窄时弹窗大小不跟着变。
-    .width(crate::dialog::width(window_width))
+    // 宽度撑满宿主窗口(整窗逻辑尺寸由 `project_delete_overlay::card_logical_size`
+    // 给定)。
+    .width(Length::Fill)
     .padding(16)
     .style(crate::dialog::card_style);
 

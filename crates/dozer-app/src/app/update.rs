@@ -30,7 +30,7 @@ use crate::workspace::{
 use byteui::interaction::icons;
 use dozer_core::protocol::{AgentKind, AgentState, BookmarkInfo, ProjectInfo};
 use iced_widget::core::{Border, Element, Length, Padding};
-use iced_widget::{button, column, container, row, text};
+use iced_widget::{button, column, container, text};
 use std::path::PathBuf;
 
 use super::*;
@@ -1186,7 +1186,7 @@ impl App {
                         )
                     });
                     if confirm_needed {
-                        ws.pending_close_tab = Some(idx);
+                        ws.pending_close_tab = ws.tabs.get(idx).map(|t| t.info.id.clone());
                     } else {
                         closed_old_len = Some(ws.tabs.len());
                         ws.close_tab(io, idx);
@@ -1207,7 +1207,14 @@ impl App {
             Message::TermTabCloseConfirm => {
                 let mut closed = None;
                 self.with_focused_project(|ws, io| {
-                    if let Some(idx) = ws.pending_close_tab.take() {
+                    // 按 id 现查当前下标,不信打开确认框那一刻存的下标——
+                    // 弹窗展示期间主窗口仍可交互,tab 列表可能已经变了
+                    // (见 `pending_close_tab` 字段文档)。查不到说明这个
+                    // 会话已经通过别的路径被关掉,安全地什么都不做,好过
+                    // 用陈旧下标关掉列表里当前占着那个位置的另一个会话。
+                    if let Some(id) = ws.pending_close_tab.take()
+                        && let Some(idx) = ws.tabs.iter().position(|t| t.info.id == id)
+                    {
                         closed = Some((idx, ws.tabs.len()));
                         ws.close_tab(io, idx);
                         ws.ensure_project_terminal(io);
@@ -5321,103 +5328,6 @@ impl App {
                 right: 0.0,
                 bottom: 0.0,
             })
-            .into()
-    }
-
-    /// 任务详情弹窗:原生 iced 渲染(不复用会话面板的 webview trace——
-    /// 那套渲染实际内容在 `dozer://review-trace/host.html` 里,任务详情
-    /// 只需要看人类/agent 往来文本,不需要工具调用折叠/trace 可视化,
-    /// 塞进一个跟随光标定位、随时开合的原生弹窗里没有必要也不合适)。
-    pub(crate) fn todo_detail_popup<'a>(
-        &self,
-    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-        let Some(ws) = self.active_workspace() else {
-            return column![].into();
-        };
-        let Some(idx) = ws.todo.detail_open_idx() else {
-            return column![].into();
-        };
-        let Some(item) = ws.todo.items().get(idx) else {
-            return column![].into();
-        };
-
-        let header = column![
-            text(item.text.clone()).size(byteui::theme::font::subtitle()),
-            text(
-                item.assigned_agent
-                    .map(|a| format!("指派给:{}", a.label()))
-                    .unwrap_or_else(|| "未指派".to_string())
-            )
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().dim),
-        ]
-        .spacing(4);
-
-        let mut turns_col = column![].spacing(8);
-        for turn in ws.todo.detail_turns() {
-            let label = if turn.role == "human" {
-                "你".to_string()
-            } else {
-                item.assigned_agent
-                    .map(|a| a.label().to_string())
-                    .unwrap_or_else(|| "AI".to_string())
-            };
-            turns_col = turns_col.push(
-                column![
-                    text(label)
-                        .size(byteui::theme::font::caption())
-                        .color(byteui::theme::color::current().gold),
-                    text(turn.content.clone())
-                        .size(byteui::theme::font::body())
-                        .width(Length::Fill),
-                ]
-                .spacing(2),
-            );
-        }
-        let turns_scroll = iced_widget::Scrollable::new(turns_col)
-            .width(Length::Fill)
-            .height(Length::Fixed(320.0))
-            .direction(iced_widget::scrollable::Direction::Vertical(
-                byteui::interaction::scrollbar::scrollbar(),
-            ))
-            .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style());
-
-        let reply_box = container(byteui::form::input_text::view(
-            "回复...",
-            ws.todo.detail_reply_draft(),
-            false,
-            Some(todo::detail_reply_field_id()),
-            false,
-            None,
-            false,
-            |s| Message::Todo(todo::Message::DetailReplyInput(s)),
-        ))
-        .width(Length::Fill);
-        let submit_label = if ws.todo.detail_processing() {
-            "处理中…"
-        } else {
-            "处理"
-        };
-        let submit = button(text(submit_label))
-            .on_press_maybe(
-                (!ws.todo.detail_processing())
-                    .then_some(Message::Todo(todo::Message::DetailReplySubmit)),
-            )
-            .padding([6, 12]);
-
-        // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定),取代此前
-        // 写死的 480px。
-        let card = column![header, turns_scroll, row![reply_box, submit].spacing(8)]
-            .spacing(12)
-            .padding(16)
-            .width(crate::dialog::width(self.window_size.0));
-        let card = container(card).style(crate::dialog::card_style);
-
-        container(card)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_x(iced_widget::core::alignment::Horizontal::Center)
-            .align_y(iced_widget::core::alignment::Vertical::Center)
             .into()
     }
 

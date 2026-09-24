@@ -1396,6 +1396,17 @@ mod tests {
         assert!(!ws_state.tree_delete_confirm_is_some());
     }
 
+    #[test]
+    fn delete_confirm_spec_reflects_pending_target() {
+        let mut ws_state = ws_with_tree(std::env::temp_dir());
+        assert!(delete_confirm_spec(&ws_state).is_none());
+        ws_state.tree_delete_confirm = Some((PathBuf::from("/tmp/报告.pdf"), false));
+        let spec = delete_confirm_spec(&ws_state).expect("spec present");
+        assert_eq!(spec.title, "删除文件 \"报告.pdf\"?");
+        assert!(matches!(spec.confirm_msg, Message::DeleteConfirm));
+        assert!(matches!(spec.cancel_msg, Message::DeleteCancel));
+    }
+
     #[tokio::test]
     async fn op_done_err_sets_tree_error_ok_refreshes() {
         let dir = tempfile::tempdir().unwrap();

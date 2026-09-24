@@ -1,12 +1,21 @@
 //! 独立原生窗口共用的建窗样板 + 居中定位算法——从 `search_overlay.rs`
 //! 抽出,供 `search_overlay.rs`/`file_history_overlay.rs`(以及未来消费方)
-//! 共用。
+//! 共用。`open_overlay`/`reposition_overlay` 是 `2026-09-23-standard-
+//! dialog-overlay-design.md` 迁移的 8 个模态卡片宿主共用的建窗口+建 GPU
+//! 管线、以及 resize/主窗口移动跟随两段胶水(这两段在那 8 个消费方的
+//! `open`/`reposition` 方法体里逐字重复,唯一变量是各自的
+//! `card_logical_size()`/窗口 tag)。IME/原生右键菜单挂靠仍由各消费方
+//! 自己在拿到 `open_overlay` 返回的 `window` 后按需调用——不是每个消费方
+//! 都需要,不塞进这个共用函数。
 
 use std::sync::Arc;
 
+use iced_wgpu::wgpu;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowLevel};
+
+use crate::platform::overlay_gpu::OverlayGpu;
 
 /// 主窗口外框物理位置 + 物理尺寸 + scale + 卡片逻辑尺寸 → overlay 应放的
 /// 物理位置与物理尺寸(居中于主窗口)。纯函数,不碰真实 `Window`,方便测试。
@@ -55,6 +64,58 @@ pub(crate) fn open_child_window(
     let window = Arc::new(el.create_window(attrs).expect("create overlay window"));
     window.focus_window();
     window
+}
+
+/// `open` 方法体里"建居中子窗口 + 建这扇窗口自己的 wgpu 渲染管线"那两步
+/// 在 8 个模态卡片宿主之间逐字重复的部分。调用方自己的 `open` 只需要传
+/// 各自的 `card_logical_size()`/窗口 tag,再按需对返回的 `window` 调
+/// `set_ime_allowed`/`install_content_view`、拼自己结构体里其余字段。
+/// 8 个参数但两两不同类型(`Arc<Window>`/`&Adapter`/`&Device`/`&Queue`/
+/// `&Instance`/`LogicalSize`/`&str`/`&ActiveEventLoop`),传错顺序编译器
+/// 会直接报错而非静默接受——不属于 CLAUDE.md 那条"具名字段参数结构体"
+/// 规则要防的"相邻同类型参数传反"场景,不加 `#[allow]`,留下这条
+/// `too_many_arguments` warning(同各消费方自己的 `open` 现状一致)。
+pub(crate) fn open_overlay(
+    main_window: &Arc<Window>,
+    adapter: &wgpu::Adapter,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    instance: &wgpu::Instance,
+    card_logical: LogicalSize<f32>,
+    tag: &str,
+    el: &ActiveEventLoop,
+) -> (Arc<Window>, OverlayGpu) {
+    let scale = main_window.scale_factor();
+    let (pos, size) = centered_overlay_bounds(
+        main_window
+            .outer_position()
+            .unwrap_or(PhysicalPosition::new(0, 0)),
+        main_window.inner_size(),
+        scale,
+        card_logical,
+    );
+    let window = open_child_window(main_window, pos, size, tag, el);
+    let gpu = OverlayGpu::open(&window, instance, adapter, device, queue, size, scale);
+    (window, gpu)
+}
+
+/// `reposition` 方法体在 8 个模态卡片宿主之间逐字重复的部分——唯一变量
+/// 是各自的 `card_logical_size()`。
+pub(crate) fn reposition_overlay(
+    window: &Window,
+    gpu: &mut OverlayGpu,
+    device: &wgpu::Device,
+    main_outer_pos: PhysicalPosition<i32>,
+    main_inner_size: PhysicalSize<u32>,
+    scale: f64,
+    card_logical: LogicalSize<f32>,
+) {
+    let (pos, size) = centered_overlay_bounds(main_outer_pos, main_inner_size, scale, card_logical);
+    window.set_outer_position(pos);
+    if window.inner_size() != size {
+        let _ = window.request_inner_size(size);
+        gpu.reconfigure(device, size, scale);
+    }
 }
 
 #[cfg(test)]

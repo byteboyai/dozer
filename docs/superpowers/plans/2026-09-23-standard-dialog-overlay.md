@@ -106,7 +106,7 @@ winit(独立子窗口),wgpu(每扇窗口独立 `OverlayGpu` 渲染管线)。
   已经是 `Clone`)——后续任务的 `ConfirmOverlay::redraw` 需要
   `self.spec.clone()`。
 
-- [ ] **Step 1: 加派生**
+- [x] **Step 1: 加派生**
 
 在 `crates/dozer-app/src/dialog.rs:130` 之前加一行:
 
@@ -115,13 +115,13 @@ winit(独立子窗口),wgpu(每扇窗口独立 `OverlayGpu` 渲染管线)。
 pub struct ConfirmDialog<Msg> {
 ```
 
-- [ ] **Step 2: 编译验证**
+- [x] **Step 2: 编译验证**
 
 Run: `cd crates/dozer-app && RUSTC_WRAPPER= cargo build -p dozer-app 2>&1 | tail -30`
 Expected: 无新增错误/警告(纯派生,`Msg`/`Color`/`String`/`f32`/`Option<IconKind>`
 均已是 `Clone`)。
 
-- [ ] **Step 3: 补一个最小单测**
+- [x] **Step 3: 补一个最小单测**
 
 在 `crates/dozer-app/src/dialog.rs` 的 `mod confirm_tests` 里加:
 
@@ -149,12 +149,12 @@ fn confirm_dialog_is_cloneable() {
 `mod confirm_tests` 现有的 `#[derive(Debug, Clone, PartialEq)] enum TestMsg`
 ——确认已经带 `Clone`,若没有则补上)。
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 Run: `cd crates/dozer-app && RUSTC_WRAPPER= cargo test -p dozer-app dialog:: 2>&1 | tail -20`
 Expected: `confirm_dialog_is_cloneable` 通过。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add crates/dozer-app/src/dialog.rs
@@ -208,7 +208,7 @@ git commit -m "feat(dialog): derive Clone on ConfirmDialog for overlay host reus
     占位——**不是"以后再实现"的占位符**,是"目前没有任何已迁移的
     trigger"这一诚实状态,Task 3 起逐步替换)。
 
-- [ ] **Step 1: 加 `platform/mod.rs` 模块声明**
+- [x] **Step 1: 加 `platform/mod.rs` 模块声明**
 
 在 `crates/dozer-app/src/platform/mod.rs` 里找到 `mod settings_overlay;`
 这一行,紧邻加一行:
@@ -222,7 +222,7 @@ mod confirm_overlay;
 re-export,`ConfirmOverlay`/`ConfirmTrigger` 只在 `window_events.rs` 内部
 用,不需要 re-export。）
 
-- [ ] **Step 2: 写 `confirm_overlay.rs`**
+- [x] **Step 2: 写 `confirm_overlay.rs`**
 
 ```rust
 //! 通用"标题+说明+取消/确认"弹窗的独立原生窗口宿主。设计见
@@ -407,7 +407,7 @@ impl ConfirmOverlay {
 消费方都用不到(无文本输入、无鼠标悬停态视觉),所以比 `SettingsOverlay`
 更简单,不是遗漏。）
 
-- [ ] **Step 3: `OverlayKind` 加 `Confirm` 变体**
+- [x] **Step 3: `OverlayKind` 加 `Confirm` 变体**
 
 `crates/dozer-app/src/platform/window_events.rs:216-221`:
 
@@ -422,7 +422,7 @@ pub(crate) enum OverlayKind {
 }
 ```
 
-- [ ] **Step 4: `close_other_overlays` 加一行**
+- [x] **Step 4: `close_other_overlays` 加一行**
 
 在现有函数体(`:1119-1142`)的解构里加 `confirm_overlay,`,末尾加:
 
@@ -432,7 +432,7 @@ if keep != OverlayKind::Confirm {
 }
 ```
 
-- [ ] **Step 5: `Runner::Ready` 加字段**
+- [x] **Step 5: `Runner::Ready` 加字段**
 
 在 `settings_overlay: Option<settings_overlay::SettingsOverlay>,`
 (`:199`)之后加:
@@ -447,7 +447,7 @@ confirm_overlay: Option<confirm_overlay::ConfirmOverlay>,
 文件顶部 `use crate::platform::settings_overlay;` 附近加
 `use crate::platform::confirm_overlay;`。
 
-- [ ] **Step 6: 加 `sync_confirm_overlay`**
+- [x] **Step 6: 加 `sync_confirm_overlay`**
 
 紧邻 `sync_settings_overlay`(`:1345-1405`)之后加:
 
@@ -502,7 +502,7 @@ fn sync_confirm_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
 }
 ```
 
-- [ ] **Step 7: `window_event` 新增分流分支**
+- [x] **Step 7: `window_event` 新增分流分支**
 
 紧邻 settings 分支(`:2377-2409`)之前或之后加(顺序无所谓,互斥机制保证
 至多一个 `Option` 是 `Some`):
@@ -596,7 +596,7 @@ pub(crate) fn cancel_message(&self) -> Message {
 方法,删掉本 Step 最初那段手搓合成事件的写法——按最终这版实现,不要
 按中间那版。）
 
-- [ ] **Step 8: `Ready` 构造 + dispatch 后调用点 + resize/close 处理**
+- [x] **Step 8: `Ready` 构造 + dispatch 后调用点 + resize/close 处理**
 
 - 构造处(`:2219` 附近)加:`confirm_overlay: None,`
 - 四处现有 `self.sync_settings_overlay(event_loop);` 调用点
@@ -611,7 +611,7 @@ pub(crate) fn cancel_message(&self) -> Message {
   `if let Some(overlay) = confirm_overlay { ... } *confirm_overlay = None;`
   同款收尾
 
-- [ ] **Step 9: 加 `desired_confirm` 占位实现**
+- [x] **Step 9: 加 `desired_confirm` 占位实现**
 
 在 `confirm_overlay.rs` 末尾加:
 
@@ -626,13 +626,13 @@ pub(crate) fn desired_confirm(
 }
 ```
 
-- [ ] **Step 10: 编译验证**
+- [x] **Step 10: 编译验证**
 
 Run: `cd crates/dozer-app && RUSTC_WRAPPER= cargo build -p dozer-app 2>&1 | tail -40`
 Expected: 编译通过,`unused_variables`/`dead_code` 警告若出现在
 `ConfirmOverlay` 尚未使用的方法上属预期(Task 3 起会用到),不是错误。
 
-- [ ] **Step 11: `close_other_overlays` 互斥单测扩展**
+- [x] **Step 11: `close_other_overlays` 互斥单测扩展**
 
 找到 `window_events.rs` 里现有的 `close_other_overlays` 穷举式单测(参照
 `search_overlay`/`file_history_overlay` 那几个 `sync_action` 测试所在的
@@ -656,7 +656,7 @@ fn close_other_overlays_confirm_closes_the_rest() {
 充数,要么写出真断言,要么在本任务的提交信息里注明"互斥测试延后到
 Task 3"。）
 
-- [ ] **Step 12: 提交**
+- [x] **Step 12: 提交**
 
 ```bash
 git add crates/dozer-app/src/platform/confirm_overlay.rs \
@@ -682,7 +682,7 @@ git commit -m "feat(overlay): scaffold generic ConfirmOverlay host (no consumers
 - Produces:`todo::clear_confirm_spec(&WorkspaceState) ->
   dialog::ConfirmDialog<crate::app::Message>`。
 
-- [ ] **Step 1: 改造 `clear_confirm_popup` → `clear_confirm_spec`**
+- [x] **Step 1: 改造 `clear_confirm_popup` → `clear_confirm_spec`**
 
 `crates/dozer-app/src/extensions/todo/view.rs:438-458` 原函数:
 
@@ -731,7 +731,7 @@ pub fn clear_confirm_spec(
 }
 ```
 
-- [ ] **Step 2: `desired_confirm` 加分支**
+- [x] **Step 2: `desired_confirm` 加分支**
 
 `crates/dozer-app/src/platform/confirm_overlay.rs` 的 `desired_confirm`
 函数体从 `None` 改成:
@@ -752,7 +752,7 @@ pub(crate) fn desired_confirm(
 }
 ```
 
-- [ ] **Step 3: 删除 `app/view.rs` 里的旧 `stack!` 分支**
+- [x] **Step 3: 删除 `app/view.rs` 里的旧 `stack!` 分支**
 
 `crates/dozer-app/src/app/view.rs:441-452`:
 
@@ -776,7 +776,7 @@ pub(crate) fn desired_confirm(
 相邻分支的 `} else if ws.todo.detail_popup_open() {` 与其上一个分支的
 结尾 `}`,让链条直接从上一个分支跳到 `detail_popup_open` 分支)。
 
-- [ ] **Step 4: 编译 + 现有 todo 测试验证**
+- [x] **Step 4: 编译 + 现有 todo 测试验证**
 
 Run: `cd crates/dozer-app && RUSTC_WRAPPER= cargo build -p dozer-app 2>&1 | tail -40`
 Run: `cd crates/dozer-app && RUSTC_WRAPPER= cargo test -p dozer-app extensions::todo 2>&1 | tail -40`
@@ -787,7 +787,7 @@ Expected: 编译通过;`clear_confirm_spec` 若有既有测试引用旧函数名
 Run: `grep -rn "clear_confirm_popup" crates/dozer-app/src/`
 Expected: 无匹配(除了本次改掉的这一处历史记录外,不应该还有其它调用点)。
 
-- [ ] **Step 5: 回补 Task 2 Step 11 的互斥测试**
+- [x] **Step 5: 回补 Task 2 Step 11 的互斥测试**
 
 现在有了真实的 `ConfirmOverlay::open` 调用路径,补上 Task 2 Step 11 留下
 的 `close_other_overlays_confirm_closes_the_rest` 测试——参照文件里其它
@@ -795,7 +795,7 @@ Expected: 无匹配(除了本次改掉的这一处历史记录外,不应该还�
 (不是本计划猜测的写法,以仓库现有代码为准)构造 `Runner::Ready` 假值,
 断言 `keep = OverlayKind::Confirm` 时其余四个变 `None`。
 
-- [ ] **Step 6: 人工验证**
+- [x] **Step 6: 人工验证**
 
 ```bash
 cd crates/dozer-app && RUSTC_WRAPPER= cargo build -p dozer-app --bin dozer 2>&1 | tail -20
@@ -812,7 +812,7 @@ cd crates/dozer-app && RUSTC_WRAPPER= cargo build -p dozer-app --bin dozer 2>&1 
 6. 打开这个确认框后再触发 Settings(⌘,)→ Todo 确认框应该被自动关闭,
    只剩 Settings 窗口(互斥验证)。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add crates/dozer-app/src/extensions/todo/view.rs \
@@ -835,7 +835,7 @@ git commit -m "feat(overlay): migrate Todo clear-confirm to ConfirmOverlay"
 - Produces:`files::view::delete_confirm_spec(&WorkspaceState) ->
   dialog::ConfirmDialog<crate::app::Message>`。
 
-- [ ] **Step 1: 改造**
+- [x] **Step 1: 改造**
 
 `crates/dozer-app/src/extensions/files/view.rs:1220-1246` 原函数改成:
 
@@ -870,7 +870,7 @@ pub fn delete_confirm_spec(
 自然衔接。`todo::clear_confirm_open()` 是布尔判断,没有内部 payload,
 保持原样返回 `ConfirmDialog` 即可,两种形状都合理,不强求统一签名。）
 
-- [ ] **Step 2: `desired_confirm` 优先级链最前面加 Files 分支**
+- [x] **Step 2: `desired_confirm` 优先级链最前面加 Files 分支**
 
 ```rust
 pub(crate) fn desired_confirm(
@@ -893,7 +893,7 @@ pub(crate) fn desired_confirm(
 （顺序对齐现状 `app/view.rs` 的 `if/else if` 链——files-delete 排在
 todo-clear 之前,与 Task 5-7 的顺序对应表见 Task 2 架构小节。）
 
-- [ ] **Step 3: 删除 `app/view.rs:116-125` 旧分支**
+- [x] **Step 3: 删除 `app/view.rs:116-125` 旧分支**
 
 ```rust
         let popped = if ws.files.tree_delete_confirm_is_some() {
@@ -914,7 +914,7 @@ todo-clear 之前,与 Task 5-7 的顺序对应表见 Task 2 架构小节。）
 新的链首(`let popped = if ws.files.pending_move_is_some() {`,原样保留
 这一分支,只是从 `else if` 降格成链首的 `if`)。
 
-- [ ] **Step 4: 编译 + 验证**
+- [x] **Step 4: 编译 + 验证**
 
 Run: `grep -rn "delete_confirm_popup" crates/dozer-app/src/extensions/files/`
 Expected: 无匹配。
@@ -926,7 +926,7 @@ Run: `cd crates/dozer-app && RUSTC_WRAPPER= cargo test -p dozer-app extensions::
 (开一个自动关另一个,理论上两者不会同时触发,但可以先开 Todo 确认、
 再触发 Files 删除,验证前者被关掉)。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add crates/dozer-app/src/extensions/files/view.rs \
@@ -951,7 +951,7 @@ git commit -m "feat(overlay): migrate Files delete-confirm to ConfirmOverlay"
   拿到 `Some(id)` 才会调这个函数,签名保持既有的"外部已经判断过"这个
   约定,与 `delete_confirm_popup` 原签名一致)。
 
-- [ ] **Step 1: 改造**
+- [x] **Step 1: 改造**
 
 ```rust
 pub fn delete_confirm_spec(
@@ -980,7 +980,7 @@ pub fn delete_confirm_spec(
 }
 ```
 
-- [ ] **Step 2: `desired_confirm` 加分支(排在 Files 之后、SSH 之前)**
+- [x] **Step 2: `desired_confirm` 加分支(排在 Files 之后、SSH 之前)**
 
 ```rust
 } else if let Some(source_id) = ws.database.delete_confirm() {
@@ -994,7 +994,7 @@ pub fn delete_confirm_spec(
 (与 `app/view.rs` 现状优先级一致:files-delete > database-delete >
 ssh-delete(Task 6)> agent-tab-close(Task 7)> todo-clear)。
 
-- [ ] **Step 3: 删除 `app/view.rs:270-285` 旧分支**
+- [x] **Step 3: 删除 `app/view.rs:270-285` 旧分支**
 
 ```rust
         } else if ws.database.delete_confirm().is_some() {
@@ -1018,13 +1018,13 @@ ssh-delete(Task 6)> agent-tab-close(Task 7)> todo-clear)。
 
 删掉 `} else if ws.database.delete_confirm().is_some() { ... }` 整段。
 
-- [ ] **Step 4: 编译 + 验证**
+- [x] **Step 4: 编译 + 验证**
 
 同 Task 4 Step 4 模式:`grep -rn "delete_confirm_popup"
 crates/dozer-app/src/extensions/database/` 应无匹配;build + test +
 `cargo run` 人工验证(Database 面板删除一个数据源)。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add crates/dozer-app/src/extensions/database/view.rs \
@@ -1042,7 +1042,7 @@ git commit -m "feat(overlay): migrate Database delete-confirm to ConfirmOverlay"
 - Modify: `crates/dozer-app/src/platform/confirm_overlay.rs`
 - Modify: `crates/dozer-app/src/app/view.rs:316-329`
 
-- [ ] **Step 1: 改造**
+- [x] **Step 1: 改造**
 
 ```rust
 pub fn delete_confirm_spec(
@@ -1073,7 +1073,7 @@ pub fn delete_confirm_spec(
 （`.to_string()` 提前是因为原函数借用 `ws_state` 返回 `&str`,新签名
 不再返回借用类型,直接拥有权更简单。）
 
-- [ ] **Step 2: `desired_confirm` 加分支(排在 database-delete 之后、
+- [x] **Step 2: `desired_confirm` 加分支(排在 database-delete 之后、
   agent-tab-close 之前)**
 
 ```rust
@@ -1084,7 +1084,7 @@ pub fn delete_confirm_spec(
     ))
 ```
 
-- [ ] **Step 3: 删除 `app/view.rs:316-329` 旧分支**
+- [x] **Step 3: 删除 `app/view.rs:316-329` 旧分支**
 
 ```rust
         } else if ws.ssh.delete_confirm().is_some() {
@@ -1104,9 +1104,9 @@ pub fn delete_confirm_spec(
         } else if ws.ssh.editing().is_some() {
 ```
 
-- [ ] **Step 4: 编译 + 验证**(同 Task 4/5 模式,针对 SSH 面板)
+- [x] **Step 4: 编译 + 验证**(同 Task 4/5 模式,针对 SSH 面板)
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add crates/dozer-app/src/extensions/ssh.rs \
@@ -1124,7 +1124,7 @@ git commit -m "feat(overlay): migrate SSH delete-confirm to ConfirmOverlay"
 - Modify: `crates/dozer-app/src/platform/confirm_overlay.rs`
 - Modify: `crates/dozer-app/src/app/view.rs:347-359`
 
-- [ ] **Step 1: 改造**
+- [x] **Step 1: 改造**
 
 `workspace/view.rs:364-390` 原函数(见前文引用,完整内容已在 brainstorming
 阶段确认过)改成:
@@ -1160,7 +1160,7 @@ Files(...)` 那层包装。以 `workspace/view.rs` 文件顶部实际的
 `use` 语句为准确认这一点,若发现该文件其实也有局部 `Message` 别名,则
 按 Task 4-6 的写法加 `crate::app::Message` 全限定。）
 
-- [ ] **Step 2: `desired_confirm` 加分支(排在 ssh-delete 之后、
+- [x] **Step 2: `desired_confirm` 加分支(排在 ssh-delete 之后、
   todo-clear 之前——最后一个)**
 
 ```rust
@@ -1168,7 +1168,7 @@ Files(...)` 那层包装。以 `workspace/view.rs` 文件顶部实际的
     Some((ConfirmTrigger::AgentTabClose, spec))
 ```
 
-- [ ] **Step 3: 删除 `app/view.rs:347-359` 旧分支**
+- [x] **Step 3: 删除 `app/view.rs:347-359` 旧分支**
 
 ```rust
         } else if ws.pending_close_tab.is_some() {
@@ -1187,7 +1187,7 @@ Files(...)` 那层包装。以 `workspace/view.rs` 文件顶部实际的
         } else if ws.agent_picker_open {
 ```
 
-- [ ] **Step 4: 编译 + 验证**
+- [x] **Step 4: 编译 + 验证**
 
 Run: `grep -rn "agent_close_confirm_popup" crates/dozer-app/src/`
 Expected: 无匹配。
@@ -1196,7 +1196,7 @@ Expected: 无匹配。
 确认框出现。至此 5 个 confirm 形态弹窗全部迁完,`ConfirmOverlay` 通用
 宿主验证完成。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add crates/dozer-app/src/workspace/view.rs \
@@ -1229,7 +1229,7 @@ git commit -m "feat(overlay): migrate agent-tab-close-confirm to ConfirmOverlay"
   `open`/`reposition`/`redraw`/`handle_input`/`handle_focus`/`window_id`/
   `request_redraw`,签名对齐 `SettingsOverlay`。
 
-- [ ] **Step 1: 改造视图函数**
+- [x] **Step 1: 改造视图函数**
 
 `database/view.rs` 里的 `drivers_popup`(`:16-`)函数签名从
 
@@ -1253,7 +1253,7 @@ pub fn database_drivers_card<'a>(
 ——具体位置以函数体实际最外层容器为准,原则同 `settings_card`/
 `file_history_card` 当初的调整:独立窗口本身已经是量好的画布。
 
-- [ ] **Step 2: 写 `database_drivers_overlay.rs`**
+- [x] **Step 2: 写 `database_drivers_overlay.rs`**
 
 ```rust
 //! 数据库「管理驱动」弹窗的独立原生窗口宿主。设计见
@@ -1442,7 +1442,7 @@ impl DatabaseDriversOverlay {
 `Option`,也不需要额外访问器,`platform/` 下的文件与 `App` 同 crate,
 `pub(crate)` 可直接访问,`&app.database` 直接用即可。）
 
-- [ ] **Step 3: `OverlayKind`/`close_other_overlays`/`Ready`/`sync_*`/
+- [x] **Step 3: `OverlayKind`/`close_other_overlays`/`Ready`/`sync_*`/
   `window_event`/`Resized`/`CloseRequested` 接线**
 
 完全照抄 Task 2 Step 3-8 的模式,把 `Confirm`/`confirm_overlay`/
@@ -1452,7 +1452,7 @@ impl DatabaseDriversOverlay {
 判别哪一个 trigger,直接照抄 `sync_settings_overlay` 的三段 `match
 SyncAction` 模式,不是 `ConfirmOverlay` 那种"5 选 1"模式)。
 
-- [ ] **Step 4: 删除 `app/view.rs:304-315` 旧分支**
+- [x] **Step 4: 删除 `app/view.rs:304-315` 旧分支**
 
 ```rust
         } else if self.database.drivers_popup_open() {
@@ -1470,7 +1470,7 @@ SyncAction` 模式,不是 `ConfirmOverlay` 那种"5 选 1"模式)。
         } else if ws.ssh.delete_confirm().is_some() {
 ```
 
-- [ ] **Step 5: 编译 + 人工验证**
+- [x] **Step 5: 编译 + 人工验证**
 
 Run: `grep -rn "fn drivers_popup\b" crates/dozer-app/src/` → 应无匹配
 (已改名 `database_drivers_card`)。
@@ -1478,7 +1478,7 @@ Run: `grep -rn "fn drivers_popup\b" crates/dozer-app/src/` → 应无匹配
 `cargo build` + `cargo run` 验证:Database 面板"管理驱动"按钮 → 独立
 窗口弹出;webview 显示中打开不被遮挡;Esc 关闭。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add crates/dozer-app/src/platform/database_drivers_overlay.rs \
@@ -1513,14 +1513,14 @@ git commit -m "feat(overlay): migrate Database drivers panel to independent wind
   外层容器改 `Length::Fill`)
 - Modify: `crates/dozer-app/src/app/view.rs:126-135`(删旧分支)
 
-- [ ] **Step 1: 改造视图函数**
+- [x] **Step 1: 改造视图函数**
 
 `files/view.rs` 的 `move_confirm_popup`(`:1253-`)改名
 `files_move_card`,签名去掉 `window_width: f32` 参数,函数体内部
 `column![...]`/`container(...)` 最外层的宽度约束(若原来靠调用方套了
 `Length::Fixed`,以实际代码为准)统一改 `Length::Fill`。
 
-- [ ] **Step 2: 写 `files_move_overlay.rs`**
+- [x] **Step 2: 写 `files_move_overlay.rs`**
 
 结构同 Task 8 的 `DatabaseDriversOverlay`,但:
 - 需要 `window.set_ime_allowed(true)`(`open` 里,`OverlayGpu::open`
@@ -1729,13 +1729,13 @@ impl Drop for FilesMoveOverlay {
 }
 ```
 
-- [ ] **Step 3: `window_event` 分流分支不处理 `Focused`**
+- [x] **Step 3: `window_event` 分流分支不处理 `Focused`**
 
 照抄 `window_events.rs:2355-2361` 里 `project_create_overlay` 分支
 对 `WindowEvent::Focused` 的处理方式(不匹配这个变体,落进 `else` 分支
 一起交给 `handle_input` 的普通消息路径,注释说明原因同该处现有注释)。
 
-- [ ] **Step 4: 删除 `app/view.rs:126-135` 旧分支**
+- [x] **Step 4: 删除 `app/view.rs:126-135` 旧分支**
 
 ```rust
         } else if ws.files.pending_move_is_some() {
@@ -1751,13 +1751,13 @@ impl Drop for FilesMoveOverlay {
         } else if self.files.context_menu_is_some() {
 ```
 
-- [ ] **Step 5: 编译 + 人工验证**
+- [x] **Step 5: 编译 + 人工验证**
 
 `cargo build` + `cargo run`:文件树拖拽移动一个文件 → 独立窗口弹出;
 点"…"浏览按钮 → 原生目录选择器弹出且**不关闭移动表单窗口**;选完目录
 后表单窗口仍在,回填目录;中文文件名输入正常;Esc 关闭。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add crates/dozer-app/src/platform/files_move_overlay.rs \
@@ -1787,13 +1787,13 @@ git commit -m "feat(overlay): migrate Files move-confirm to independent window"
   (`scaffold_progress_popup` → `project_scaffold_card`)
 - Modify: `crates/dozer-app/src/app/view.rs:256-269`(删旧分支)
 
-- [ ] **Step 1: 改造视图函数**
+- [x] **Step 1: 改造视图函数**
 
 `scaffold_progress_popup`(`:516-`)改名 `project_scaffold_card`,签名去
 `window_width`,外层容器改 `Length::Fill`。内部"关闭"按钮的
 `on_press_maybe`(`done` 时才激活)逻辑不变。
 
-- [ ] **Step 2: 写 `project_scaffold_overlay.rs`**
+- [x] **Step 2: 写 `project_scaffold_overlay.rs`**
 
 ```rust
 //! Project「修复项目」进度弹窗的独立原生窗口宿主。设计见
@@ -1980,7 +1980,7 @@ handle_input(...)); }` 兜底,`handle_input` 对这两类事件本就不产生�
 `interface.update`,但没有任何 widget 会响应,不会产生消息),效果就是
 "什么都不做",不需要额外拦截。
 
-- [ ] **Step 3: 删除 `app/view.rs:256-269` 旧分支**
+- [x] **Step 3: 删除 `app/view.rs:256-269` 旧分支**
 
 ```rust
         } else if ws.project_panel.scaffold_run.is_some() {
@@ -2000,13 +2000,13 @@ handle_input(...)); }` 兜底,`handle_input` 对这两类事件本就不产生�
         } else if ws.database.delete_confirm().is_some() {
 ```
 
-- [ ] **Step 4: 编译 + 人工验证**
+- [x] **Step 4: 编译 + 人工验证**
 
 `cargo build` + `cargo run`:触发"修复项目" → 独立窗口弹出,进行中
 Esc/点原生关闭按钮均无效,全部步骤完成后"关闭"按钮可点、点击后窗口
 关闭。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add crates/dozer-app/src/platform/project_scaffold_overlay.rs \
@@ -2036,13 +2036,13 @@ git commit -m "feat(overlay): migrate Project scaffold-progress to independent w
 src/extensions/database/`——brainstorming 阶段已核实**没有**,本表单
 可以用简单失焦即关闭,不需要 Task 9 那种"不接失焦"的例外)。
 
-- [ ] **Step 1: 改造视图函数**
+- [x] **Step 1: 改造视图函数**
 
 `source_form`(`:242-`)改名 `database_source_card`,签名去
 `window_width`,外层 `Length::Fill`。签名保留 `draft`/`app_state`/
 `test_status` 三个既有参数(不含 `window_width`)。
 
-- [ ] **Step 2: 写 `database_source_overlay.rs`**
+- [x] **Step 2: 写 `database_source_overlay.rs`**
 
 ```rust
 //! Database「新增/编辑数据源」表单的独立原生窗口宿主。设计见
@@ -2267,7 +2267,7 @@ impl Drop for DatabaseSourceOverlay {
 ——见 Task 8 的确认,与 `DatabaseDriversOverlay` 用同一种直接字段访问,
 不需要额外访问器。）
 
-- [ ] **Step 3: 删除 `app/view.rs:286-303` 旧分支**
+- [x] **Step 3: 删除 `app/view.rs:286-303` 旧分支**
 
 ```rust
         } else if ws.database.editing().is_some() {
@@ -2291,12 +2291,12 @@ impl Drop for DatabaseSourceOverlay {
         } else if self.database.drivers_popup_open() {
 ```
 
-- [ ] **Step 4: 编译 + 人工验证**
+- [x] **Step 4: 编译 + 人工验证**
 
 `cargo build` + `cargo run`:新增数据源 → 独立窗口表单弹出;中文名称
 输入 + 候选词正常;右键粘贴正常;Esc 关闭;webview 显示中打开不被遮挡。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add crates/dozer-app/src/platform/database_source_overlay.rs \
@@ -2324,7 +2324,7 @@ git commit -m "feat(overlay): migrate Database source form to independent window
 菜单挂靠(brainstorming 已核实 SSH 表单无 `rfd::` 调用,不需要 Task 9
 那种"不接失焦"的例外)。
 
-- [ ] **Step 1: 改造视图函数**
+- [x] **Step 1: 改造视图函数**
 
 `ssh.rs` 里的 `host_form`(`:1022-`)函数签名从
 
@@ -2348,7 +2348,7 @@ pub fn ssh_host_card<'a>(
 函数体内部最外层容器的宽度约束改 `Length::Fill`(具体位置以函数体实际
 最外层 `container(...)`/`column![...]` 为准)。
 
-- [ ] **Step 2: 写 `ssh_host_overlay.rs`**
+- [x] **Step 2: 写 `ssh_host_overlay.rs`**
 
 ```rust
 //! SSH「添加/编辑主机」表单的独立原生窗口宿主。设计见
@@ -2564,7 +2564,7 @@ impl Drop for SshHostOverlay {
 }
 ```
 
-- [ ] **Step 3: 删除 `app/view.rs:330-346` 旧分支**
+- [x] **Step 3: 删除 `app/view.rs:330-346` 旧分支**
 
 ```rust
         } else if ws.ssh.editing().is_some() {
@@ -2587,13 +2587,13 @@ impl Drop for SshHostOverlay {
         } else if ws.pending_close_tab.is_some() {
 ```
 
-- [ ] **Step 4: 编译 + 人工验证**
+- [x] **Step 4: 编译 + 人工验证**
 
 `cargo build` + `cargo run`:SSH 面板新增/编辑主机 → 独立窗口表单弹出;
 中文主机名称输入 + 候选词正常;右键粘贴正常;Esc 关闭;webview 显示中
 打开不被遮挡。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add crates/dozer-app/src/platform/ssh_host_overlay.rs \
@@ -2624,7 +2624,7 @@ git commit -m "feat(overlay): migrate SSH host form to independent window"
   (`project_delete_confirm_popup` → `project_delete_card`)
 - Modify: `crates/dozer-app/src/app/view.rs:241-255`(删旧分支)
 
-- [ ] **Step 1: 改造视图函数**
+- [x] **Step 1: 改造视图函数**
 
 `project/view.rs` 的 `project_delete_confirm_popup`(`:592-`)函数签名从
 
@@ -2645,7 +2645,7 @@ pub fn project_delete_card(
 
 函数体内部最外层容器宽度约束改 `Length::Fill`。
 
-- [ ] **Step 2: 写 `project_delete_overlay.rs`**
+- [x] **Step 2: 写 `project_delete_overlay.rs`**
 
 ```rust
 //! Project「删除项目」三选一确认弹窗的独立原生窗口宿主。设计见
@@ -2833,7 +2833,7 @@ impl ProjectDeleteOverlay {
 }
 ```
 
-- [ ] **Step 3: 删除 `app/view.rs:241-255` 旧分支**
+- [x] **Step 3: 删除 `app/view.rs:241-255` 旧分支**
 
 ```rust
         } else if ws.project_panel.delete_pending.is_some() {
@@ -2854,12 +2854,12 @@ impl ProjectDeleteOverlay {
         } else if ws.project_panel.scaffold_run.is_some() {
 ```
 
-- [ ] **Step 4: 编译 + 人工验证**
+- [x] **Step 4: 编译 + 人工验证**
 
 `cargo build` + `cargo run`:项目面板"删除项目" → 独立窗口三选一确认框
 弹出;三个单选项可正常切换;Esc 关闭;webview 显示中打开不被遮挡。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add crates/dozer-app/src/platform/project_delete_overlay.rs \
@@ -2896,7 +2896,7 @@ return; }` 那一步)保持一致,不要把这个方法留在 `App` 上单独特
 菜单挂靠(任务详情含标题/备注文本编辑,brainstorming 已核实 Todo 扩展
 无 `rfd::` 调用)。
 
-- [ ] **Step 1: 拆出自由函数**
+- [x] **Step 1: 拆出自由函数**
 
 `app/update.rs:4706-` 的 `pub(crate) fn todo_detail_popup<'a>(&self)
 -> Element<'a, Message, ...>` 函数体里,把 `let Some(ws) =
@@ -2924,7 +2924,7 @@ pub fn todo_detail_card(ws: &Workspace) -> Element<'_, Message, iced_widget::The
 `use` 了本函数体所需的大部分类型;若缺失,按报错逐个补 `use`)。
 `app/update.rs` 原方法整个删除。
 
-- [ ] **Step 2: 写 `todo_detail_overlay.rs`**
+- [x] **Step 2: 写 `todo_detail_overlay.rs`**
 
 ```rust
 //! Todo 任务详情弹窗的独立原生窗口宿主。设计见
@@ -3124,7 +3124,7 @@ impl Drop for TodoDetailOverlay {
 }
 ```
 
-- [ ] **Step 3: 删除 `app/view.rs:453-460` 旧分支**
+- [x] **Step 3: 删除 `app/view.rs:453-460` 旧分支**
 
 ```rust
         } else if ws.todo.detail_popup_open() {
@@ -3138,7 +3138,7 @@ impl Drop for TodoDetailOverlay {
         } else if ws.todo.status_filter_popup_open() {
 ```
 
-- [ ] **Step 4: 编译 + 人工验证**
+- [x] **Step 4: 编译 + 人工验证**
 
 Run: `grep -rn "fn todo_detail_popup" crates/dozer-app/src/`
 Expected: 无匹配。
@@ -3146,7 +3146,7 @@ Expected: 无匹配。
 `cargo build` + `cargo run`:点开一个任务详情 → 独立窗口弹出;中文
 备注编辑 + IME 正常;Esc 关闭;webview 显示中打开不被遮挡。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add crates/dozer-app/src/platform/todo_detail_overlay.rs \
@@ -3171,7 +3171,7 @@ git commit -m "feat(overlay): migrate Todo detail popup to independent window"
   不需要改动,补注释说明"12 个模态卡片弹窗已迁独立窗口,不参与这里的
   隐藏判断"防止未来误加)
 
-- [ ] **Step 1: 确认 12 个旧分支已全部清空**
+- [x] **Step 1: 确认 12 个旧分支已全部清空**
 
 ```bash
 grep -n "crate::dialog::scrim(" crates/dozer-app/src/app/view.rs
@@ -3180,7 +3180,7 @@ grep -n "crate::dialog::scrim(" crates/dozer-app/src/app/view.rs
 Expected: 0 处匹配(12 个全部迁完;若仍有匹配,说明前面某个 Task 漏做,
 回去补上,不要在这里绕过)。
 
-- [ ] **Step 2: 检查 `dialog::scrim`/`scrim_blocking` 是否还有调用点**
+- [x] **Step 2: 检查 `dialog::scrim`/`scrim_blocking` 是否还有调用点**
 
 ```bash
 grep -rn "dialog::scrim\b\|dialog::scrim_blocking\b" crates/dozer-app/src/
@@ -3192,7 +3192,7 @@ grep -rn "dialog::scrim\b\|dialog::scrim_blocking\b" crates/dozer-app/src/
 下拉其实也在用 `scrim` 而不是 `MouseArea`,盘点阶段的启发式判断有漏网),
 保留这两个函数,在提交信息里注明具体是哪个调用点导致保留。
 
-- [ ] **Step 3: 全量验证**
+- [x] **Step 3: 全量验证**
 
 ```bash
 cd crates/dozer-app && RUSTC_WRAPPER= cargo build -p dozer-app 2>&1 | tail -60
@@ -3205,7 +3205,7 @@ Expected:build/clippy 无新增警告或错误(与迁移前基线比对,只允�
 函数因为签名改变而产生的、已经在对应 Task 里处理过的"变化);全部既有
 测试通过。
 
-- [ ] **Step 4: 完整人工回归清单**
+- [x] **Step 4: 完整人工回归清单**
 
 `cargo run -p dozer-app` 逐一走一遍全部 12 个弹窗(每个:打开、内容正确、
 webview 显示中打开不被遮挡、Esc 或对应关闭方式生效、与至少另一个弹窗
@@ -3216,7 +3216,7 @@ webview 显示中打开不被遮挡、Esc 或对应关闭方式生效、与至�
 - 应用退出(`CloseRequested`)时若某个弹窗开着,确认不会遗留孤儿窗口/
   崩溃。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add crates/dozer-app/src/dialog.rs crates/dozer-app/src/app/app.rs \

@@ -7,16 +7,14 @@ use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrolla
 
 use super::*;
 
-/// 驱动管理弹窗:窗口级居中浮层,视觉模板同 `delete_confirm_popup`(CARD
-/// 底 + 圆角描边 + 标题图标)。此前走 `crate::chrome::menu::shell_frosted`(右键
-/// 菜单同款外壳)、内联挂在数据源列表下方,不居中也没有遮罩——改成跟本面板
-/// 其它弹窗一致的普通弹窗(2026-09-15)。每行一个 checkbox 前置位的条目
-/// (启用的打 ✓),点按切换启用/禁用,不关弹窗。窗口级 overlay,由
-/// `app.rs` 挂载(见其调用点注释),`pub` 是为了让那边能调到。
-pub fn drivers_popup<'a>(
-    app_state: &'a AppState,
-    window_width: f32,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+/// 驱动管理弹窗:独立原生窗口的卡片内容,视觉模板同 `delete_confirm_popup`
+/// (CARD 底 + 圆角描边 + 标题图标)。此前走独立窗口(2026-09-23 起,见
+/// `platform::database_drivers_overlay`),卡片填满窗口本身(不再套居中
+/// 容器、不再按主窗口宽度算 `dialog::width`)。每行一个 checkbox 前置位的
+/// 条目(启用的打 ✓),点按切换启用/禁用,不关弹窗。
+pub fn database_drivers_card(
+    app_state: &AppState,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let title = row![
         icons::view(
             icons::IconKind::Database,
@@ -33,7 +31,7 @@ pub fn drivers_popup<'a>(
     let mut items_col = column![].spacing(2);
     for driver in DriverKind::ALL {
         let enabled = app_state.is_enabled(driver);
-        let checkbox: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        let checkbox: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
             text(if enabled { "✓" } else { " " })
                 .size(byteui::theme::font::body())
                 .into();
@@ -56,7 +54,7 @@ pub fn drivers_popup<'a>(
         byteui::theme::color::current().dim,
     ));
 
-    let dialog = container(
+    container(
         column![
             title,
             text("勾选的驱动才会出现在「新增数据源」的驱动下拉里。")
@@ -68,17 +66,10 @@ pub fn drivers_popup<'a>(
         .spacing(10),
     )
     .padding(16)
-    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定),取代此前
-    // 写死的 280px。
-    .width(crate::dialog::width(window_width))
-    .style(crate::dialog::card_style);
-
-    container(dialog)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(iced_widget::core::alignment::Horizontal::Center)
-        .align_y(iced_widget::core::alignment::Vertical::Center)
-        .into()
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(crate::dialog::card_style)
+    .into()
 }
 
 /// 数据源根节点图标:关系型驱动统一用 `Database`(圆柱),MongoDB 用
@@ -232,18 +223,17 @@ pub(crate) fn source_tree_node<'a>(
     }
 }
 
-/// 新增/编辑数据源弹窗:窗口级居中浮层,视觉模板同 `delete_confirm_popup`
+/// 新增/编辑数据源弹窗的内容(卡片本体):由独立原生窗口宿主
+/// `platform::database_source_overlay` 渲染。视觉模板同 `delete_confirm_popup`
 /// (CARD 底 + 圆角描边 + 标题图标)。SQLite 只留"文件路径"一栏,其它驱动
 /// 列出 host/port/database/username/password。标题图标用面板自己的
 /// `icons::IconKind::Database`(同 `home_panel_head` 头部图标),不用
 /// footer 按钮的 `SquarePlus`——同 Todo「清空列表」弹窗的既有口径:标题
-/// 图标标的是"这是哪个面板的弹窗",不重复按钮本身的动作语义。`pub` 是
-/// 为了让 `app.rs` 的窗口级 overlay 能调到。
-pub fn source_form<'a>(
+/// 图标标的是"这是哪个面板的弹窗",不重复按钮本身的动作语义。
+pub fn database_source_card<'a>(
     draft: &'a DataSourceDraft,
     app_state: &'a AppState,
     test_status: &'a TestStatus,
-    window_width: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let title_text = if draft.id.is_some() {
         "编辑数据源"
@@ -478,13 +468,11 @@ pub fn source_form<'a>(
     // 边框/底色统一成原生预览"文件内搜索"风格(`find_field_shell`/`find_rows`
     // 外层组合的既有配色):底色 card、边框普通态 `colors.border`(不再恒描
     // 金)——2026-09-11 需求,数据库/主机新增表单跟文件内搜索输入框对齐。
-    // 宽度从 `Fill`(此前内联挂在数据源列表下方,撑满面板宽度)改成
-    // `dialog::width`(整窗 1/3,2026-09-15 统一约定,取代中间态的写死
-    // 420px)——现在是窗口级居中弹窗(见函数文档),撑满宽度会让输入框
-    // 铺满整个窗口,不像"普通弹窗"。
+    // 宽度撑满宿主窗口(整窗逻辑尺寸由
+    // `database_source_overlay::card_logical_size` 给定)。
     let dialog = container(col)
         .padding(12)
-        .width(crate::dialog::width(window_width))
+        .width(Length::Fill)
         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
             background: Some(byteui::theme::color::current().card.into()),
             border: iced_widget::core::Border {
@@ -564,44 +552,37 @@ pub fn view<'a>(
 
     // 「删除数据源」确认框 / 「新增/编辑数据源」表单 / 「管理驱动」**不**
     // 在这里叠(此前的 panel-level `stack!` 只在本面板的 `width` 范围内
-    // 居中,而不是整个软件窗体——2026-09-15 改为窗口级 overlay,由
-    // `app.rs` 顶层 `popped` 分支挂载,同 `todo::clear_confirm_popup` 的
-    // 既有口径,见 `delete_confirm_popup`/`source_form`/`drivers_popup`
-    // 文档。三者互斥优先级(app.rs 侧 if/else if 链保证同一时刻只显示
-    // 一个):待确认删除 > 新增/编辑表单 > 驱动管理。
+    // 居中,而不是整个软件窗体——2026-09-15 改为窗口级 overlay)。现已全部
+    // 迁到独立原生子窗口:删除确认见 `platform::confirm_overlay`,数据源
+    // 表单、驱动管理见各自的 `platform::*_overlay`。三者互斥由
+    // `platform::window_events` 的 `close_other_overlays` 保证。
     base.into()
 }
 
-/// 删除数据源确认框:居中浮层,列出要删的数据源名,确认(红)才执行
-/// `DeleteSource`,取消/遮罩只清待确认态。视觉照抄 `ssh.rs::
-/// delete_confirm_popup`(CARD 底 + 圆角描边 + 取消/确认两个圆角按钮)。
-/// 窗口级 overlay,由 `app.rs` 挂载(见其调用点注释),`pub` 是为了让那边
-/// 能调到。
-pub fn delete_confirm_popup<'a>(
-    ws_state: &'a WorkspaceState,
-    source_id: &'a str,
-    window_width: f32,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+/// 删除数据源确认框的内容描述——宿主(`platform::confirm_overlay`)取这一
+/// 份渲染。仅当 `source_id` 能在当前数据源列表里定位到(或至少存在一条待
+/// 确认删除)时返回 `Some`。
+pub(crate) fn delete_confirm_spec(
+    ws_state: &WorkspaceState,
+    source_id: &str,
+) -> Option<crate::dialog::ConfirmDialog<Message>> {
     let name = ws_state
         .sources()
         .iter()
         .find(|s| s.id == source_id)
         .map(|s| s.name.to_string())
         .unwrap_or_else(|| source_id.to_string());
-    crate::dialog::confirm(
-        crate::dialog::ConfirmDialog {
-            icon: None,
-            title: format!("删除数据源 \"{name}\"?"),
-            description: "这会永久删除这条连接记录及其保存的密码。".to_string(),
-            cancel_label: "取消".to_string(),
-            cancel_msg: Message::DeleteSourceCancel,
-            confirm_label: "删除".to_string(),
-            confirm_msg: Message::DeleteSource(source_id.to_string()),
-            confirm_color: byteui::theme::color::current().red,
-            content_spacing: 8.0,
-        },
-        window_width,
-    )
+    Some(crate::dialog::ConfirmDialog {
+        icon: None,
+        title: format!("删除数据源 \"{name}\"?"),
+        description: "这会永久删除这条连接记录及其保存的密码。".to_string(),
+        cancel_label: "取消".to_string(),
+        cancel_msg: Message::DeleteSourceCancel,
+        confirm_label: "删除".to_string(),
+        confirm_msg: Message::DeleteSource(source_id.to_string()),
+        confirm_color: byteui::theme::color::current().red,
+        content_spacing: 8.0,
+    })
 }
 
 /// 数据库面板底部 footer-bar:1px `BORDER` 分隔线 + `padding([6, 8])` 容器,

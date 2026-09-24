@@ -447,10 +447,14 @@ pub struct Workspace {
     /// 位置的下拉,不像项目树右键菜单需要跟随点击坐标。
     pub(crate) agent_picker_open: bool,
     /// 关 Agent 面板 tab 前的待确认状态:目标会话处于 Running/AwaitingInput
-    /// 时,先把要关的下标存这里并弹确认框,确认后才真正 `close_tab`。关闭
-    /// 期间遮罩挡住 base 交互,下标不会被重排/越界(见 `app::update`
-    /// `Message::CloseTab` 的分流)。
-    pub(crate) pending_close_tab: Option<usize>,
+    /// 时,先把要关的会话存这里并弹确认框,确认后才真正 `close_tab`。存
+    /// `SessionInfo.id`(稳定标识)而不是当时的下标——这个确认框迁到独立
+    /// 原生窗口后,主窗口在弹窗展示期间仍可交互(不再有遮罩挡住 base
+    /// 交互),用户可以在确认前拖动/关闭别的 tab,下标会变;`update` 里
+    /// `Message::TermTabCloseConfirm` 落地时要按这个 id 现查当前下标,
+    /// 不能直接复用打开确认框那一刻的下标,否则可能关掉“确认框标题里
+    /// 写的那个会话”以外的另一个会话。
+    pub(crate) pending_close_tab: Option<String>,
     /// 消息驱动(非鼠标点击)把焦点拨离预览编辑器时置位——官方 `text_editor`
     /// 的焦点是真实 iced 焦点树的一部分,不能像 vendored `iced-code-editor`
     /// 那样直接对某个实例调 `lose_focus()`,改成一次性位,main.rs 下一帧用
