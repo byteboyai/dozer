@@ -739,9 +739,8 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// 共享记忆区:标题行 + 可选的新建表单 + 列表。列表行点击进详情是 Task 9,
-/// 本任务先用 `Message::Noop` 占位(Task 9 会换成 `Message::MemoryDetailOpen`),
-/// 见计划 Task 8 Step 4 的说明。
+/// 共享记忆区:标题行 + 可选的新建表单 + 列表。列表行点击进详情
+/// (`Message::MemoryDetailOpen`)。
 fn memory_section<'a>(
     memories: &'a [dozer_core::protocol::MemoryInfo],
     draft: Option<&'a MemoryDraft>,

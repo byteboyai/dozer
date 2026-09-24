@@ -325,7 +325,7 @@ pub fn update(
             };
             let client = client.clone();
             handle.spawn(async move {
-                let res = client
+                match client
                     .write_memory(
                         project_id,
                         &draft.title,
@@ -335,9 +335,18 @@ pub fn update(
                         "user",
                     )
                     .await
-                    .map(|_| ())
-                    .map_err(|e| e.to_string());
-                emit(Message::MemoryMutated(res));
+                {
+                    Ok(detail) => {
+                        // 编辑成功后重拉详情(带历史),覆盖 `MemoryMutated`
+                        // 只刷新列表的局限——否则详情面板会停在编辑前的内容,
+                        // 必须退回列表再点进去才看得到新值。
+                        if let Ok(fresh) = client.get_memory(project_id, detail.id).await {
+                            emit(Message::MemoryDetailLoaded(fresh));
+                        }
+                        emit(Message::MemoryMutated(Ok(())));
+                    }
+                    Err(e) => emit(Message::MemoryMutated(Err(e.to_string()))),
+                }
             });
         }
         Message::MemoryDeleteRequest(id) => {

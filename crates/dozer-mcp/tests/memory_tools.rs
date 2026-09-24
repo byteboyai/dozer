@@ -138,4 +138,23 @@ async fn tools_error_when_session_id_unresolvable() {
         .await
         .expect_err("session_id 不存在时 list_memories 应该报错");
     assert!(format!("{err}").contains("不存在于 dozerd"));
+
+    let err = server
+        .write_memory(Parameters(WriteMemoryParams {
+            title: "x".into(),
+            body: "y".into(),
+            kind: "project".into(),
+            description: "".into(),
+        }))
+        .await
+        .expect_err("session_id 不存在时 write_memory 应该报错");
+    assert!(format!("{err}").contains("不存在于 dozerd"));
+
+    let err = server
+        .get_memory(Parameters(GetMemoryParams {
+            title_or_id: "x".into(),
+        }))
+        .await
+        .expect_err("session_id 不存在时 get_memory 应该报错");
+    assert!(format!("{err}").contains("不存在于 dozerd"));
 }

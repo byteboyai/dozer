@@ -2143,6 +2143,10 @@ mod tests {
 
     #[test]
     fn memory_protocol_types_roundtrip() {
+        let list_req = Request::ListMemories { project_id: 1 };
+        let line = encode_line(&list_req);
+        assert_eq!(decode_line::<Request>(&line).unwrap(), list_req);
+
         let write_req = Request::WriteMemory {
             project_id: 1,
             title: "标题A".into(),
