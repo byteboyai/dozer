@@ -313,7 +313,12 @@ mod tests {
         let added = merge_rediscovered(dir.path(), &mut state);
         assert_eq!(added, 1);
         assert_eq!(state.docs.len(), 2);
-        assert!(state.docs.iter().any(|e| e.path == dir.path().join("CHANGELOG.md")));
+        assert!(
+            state
+                .docs
+                .iter()
+                .any(|e| e.path == dir.path().join("CHANGELOG.md"))
+        );
     }
 
     #[test]

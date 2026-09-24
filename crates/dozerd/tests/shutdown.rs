@@ -280,4 +280,3 @@ fn test_memories() -> std::sync::Arc<dozerd::memory::MemoryStore> {
     let db = std::env::temp_dir().join(format!("dozerd-mem-{}.db", uuid::Uuid::new_v4()));
     std::sync::Arc::new(dozerd::memory::MemoryStore::new(&db).unwrap())
 }
-

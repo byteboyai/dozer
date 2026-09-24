@@ -1,8 +1,9 @@
 # Dozer V2 开源生态调研
 
-> 调研日期：2026-09-24（§3.7-§4.11 为同日第二轮补充调研）  
+> 调研日期：2026-09-24（§3.7-§4.13 为同日第二轮补充调研）
 > 目标：围绕《Dozer V2 架构分析》验证产品定位与工程路线，并识别可以借鉴、集成或直接依赖的开源项目。  
 > 范围：优先采用项目官方仓库、官方文档和协议规范；活跃度与 API 状态以选型时再次核验为准。第二轮全部项目均已用 `gh api` 核实 stargazers/license/language/最近 push 时间，避免复述未经验证的网络摘要。
+> 代码复核：59 个仓库的当前源码证据、旧报告修正和去留裁决见 [`../analysis/dozer-v2-逐仓代码复核.md`](../analysis/dozer-v2-逐仓代码复核.md)。本文件负责生态全景，代码复核报告负责最终采用优先级；两者冲突时以后者为准。
 
 ## 1. 结论先行
 
@@ -200,13 +201,13 @@ Dozer 还应避免其中风险较高的方向：
 
 | 项目 | 路线 | 最值得参考 | 主要限制/反例 | 详细分析 |
 |---|---|---|---|---|
-| [Kooky](https://github.com/iAmCorey/kooky) | SwiftUI + libghostty，原生 macOS Agent 终端 | 独立轻量 hook、surface id 路由、OSC 7/133、tool call 配对、session resume、运行时状态不落盘 | 平台与 libghostty 绑定；没有平台级插件和工作流 | [代码级分析](../analysis/kooky-分析.md) |
-| [Orca](https://github.com/stablyai/orca) | Electron 调度台 + PTY daemon + worktree + relay | daemon 持有 PTY、多客户端 attach、执行宿主抽象、远程 relay、App 可被 Agent 操作 | 产品面过宽，Node daemon 为性能和终端保真承担较大成本 | [代码级分析](../analysis/orca-分析.md) |
-| [Workmux](https://github.com/raine/workmux) | Rust CLI/TUI，复用 tmux/Zellij/WezTerm/kitty | multiplexer trait、worktree 生命周期、hook 语义合并、状态 reconciliation、sandbox、测试密度 | 会话能力受外部 multiplexer 上限约束，没有统一原生 PTY 模型 | [代码级分析](../analysis/workmux-分析.md) |
-| [T3 Code](https://github.com/pingdotgg/t3code) | Web/desktop/mobile 共用 server，结构化 Agent 协议优先 | Agent app-server/ACP 优先、远程四层模型、server 自更新、连接状态机、checkpoint/review | 调研时真正落地的 Provider 少于 README 宣称范围；验收只到 diff/review | [代码级分析](../analysis/t3code-分析.md) |
-| [Garcon](https://github.com/cfal/garcon) | Bun/Svelte 自托管多 Agent UI | 七类 CLI 的结构化子进程管道、permission 双向闭环、worktree/diff staging、跨 Agent transcript 转移 | PR 支持偏只读；“跨 Agent 迁移”是文字重放；许可证有附加条款 | [代码级分析](../analysis/garcon-分析.md) |
-| [Agent Deck](https://github.com/asheshgoplani/agent-deck) | Go/Bubble Tea + tmux 的多 Agent 会话牌桌 | 原生 session fork 委托、一次性启动指令、共享 MCP 进程代理、JSON-RPC id 重写、子进程收尸 | Provider 巨对象是反例；依赖 tmux；部分抽象边界形成较晚 | [代码级分析](../analysis/agent-deck-分析.md) |
-| [Claude Squad](https://github.com/smtg-ai/claude-squad) | Go/Bubble Tea + tmux + worktree | Pause/Resume：保留分支、释放 worktree、恢复时重建；轻量多 Agent UX | 纯终端文本匹配状态、单文件非原子存储、缺少 sandbox，适合作为降级反例 | [代码级分析](../analysis/claude-squad-分析.md) |
+| [Kooky](https://github.com/iAmCorey/kooky) | SwiftUI + libghostty，原生 macOS Agent 终端 | 独立轻量 hook、surface id 路由、OSC 7/133、tool call 配对、session resume、运行时状态不落盘 | 平台与 libghostty 绑定；没有平台级插件和工作流 | [代码级分析](../analysis/dozer-v2-逐仓代码复核.md#126-kooky) |
+| [Orca](https://github.com/stablyai/orca) | Electron 调度台 + PTY daemon + worktree + relay | daemon 持有 PTY、多客户端 attach、执行宿主抽象、远程 relay、App 可被 Agent 操作 | 产品面过宽，Node daemon 为性能和终端保真承担较大成本 | [代码级分析](../analysis/dozer-v2-逐仓代码复核.md#128-orca) |
+| [Workmux](https://github.com/raine/workmux) | Rust CLI/TUI，复用 tmux/Zellij/WezTerm/kitty | multiplexer trait、worktree 生命周期、hook 语义合并、状态 reconciliation、sandbox、测试密度 | 会话能力受外部 multiplexer 上限约束，没有统一原生 PTY 模型 | [代码级分析](../analysis/dozer-v2-逐仓代码复核.md#1211-workmux) |
+| [T3 Code](https://github.com/pingdotgg/t3code) | Web/desktop/mobile 共用 server，结构化 Agent 协议优先 | Agent app-server/ACP 优先、远程四层模型、server 自更新、连接状态机、checkpoint/review | 调研时真正落地的 Provider 少于 README 宣称范围；验收只到 diff/review | [代码级分析](../analysis/dozer-v2-逐仓代码复核.md#1210-t3code) |
+| [Garcon](https://github.com/cfal/garcon) | Bun/Svelte 自托管多 Agent UI | 七类 CLI 的结构化子进程管道、permission 双向闭环、worktree/diff staging、跨 Agent transcript 转移 | PR 支持偏只读；“跨 Agent 迁移”是文字重放；许可证有附加条款 | [代码级分析](../analysis/dozer-v2-逐仓代码复核.md#123-garcon) |
+| [Agent Deck](https://github.com/asheshgoplani/agent-deck) | Go/Bubble Tea + tmux 的多 Agent 会话牌桌 | 原生 session fork 委托、一次性启动指令、共享 MCP 进程代理、JSON-RPC id 重写、子进程收尸 | Provider 巨对象是反例；依赖 tmux；部分抽象边界形成较晚 | [代码级分析](../analysis/dozer-v2-逐仓代码复核.md#121-agent-deck) |
+| [Claude Squad](https://github.com/smtg-ai/claude-squad) | Go/Bubble Tea + tmux + worktree | Pause/Resume：保留分支、释放 worktree、恢复时重建；轻量多 Agent UX | 纯终端文本匹配状态、单文件非原子存储、缺少 sandbox，适合作为降级反例 | [代码级分析](../analysis/dozer-v2-逐仓代码复核.md#122-claude-squad) |
 
 这组项目形成了几个强共识：
 
@@ -223,10 +224,10 @@ Dozer 还应避免其中风险较高的方向：
 
 | 项目 | 路线 | 最值得参考 | 对 Dozer 的边界提醒 | 详细分析 |
 |---|---|---|---|---|
-| [jcode](https://github.com/1jehuang/jcode) | 全 Rust、自研模型循环/TUI/记忆/swarm | 按破坏半径的四级命令风险、语义记忆图、上下文压缩、Agent 间变更感知、CI 棘轮护栏 | 深度治理来自“自己是执行者”；Dozer 经外部 Agent hook 能获得的控制力更弱 | [代码级分析](../analysis/jcode-分析.md) |
-| [SeekCode](https://github.com/kafkazhang/seek_code) | 小型 Electron Agent | 强制危险命令审批、出网白名单、工作记忆固定注入、克制的 fan-out/fan-in | 小规模可行方案，适合 P0/P1；正则安全判断不能视为完整沙箱 | [代码级分析](../analysis/seek_code-分析.md) |
-| [Goose](https://github.com/aaif-goose/goose) | Rust Agent core + Electron/Node UI + MCP/ACP | 多路 `ToolInspector`、MCP extension manager、统一 Provider registry、SQLite session、压缩优先记忆、Open Plugins hooks | 支持 MCP 不等于治理 MCP；stdio 扩展没有天然隔离，安全能力必须另建 | [代码级分析](../analysis/goose-分析.md) |
-| [OpenCode](https://github.com/anomalyco/opencode) | Bun/TypeScript 主流 Agent 平台 | HTTP/OpenAPI+SSE 控制面、细粒度阻塞式权限、SQLite schema 演进、ACP、受限递归 subagent | Provider 接口本身不难，供应商私有怪癖才是长期成本；Dozer 不应进入模型 Provider 维护战 | [代码级分析](../analysis/opencode-分析.md) |
+| [jcode](https://github.com/1jehuang/jcode) | 全 Rust、自研模型循环/TUI/记忆/swarm | 按破坏半径的四级命令风险、语义记忆图、上下文压缩、Agent 间变更感知、CI 棘轮护栏 | 深度治理来自“自己是执行者”；Dozer 经外部 Agent hook 能获得的控制力更弱 | [代码级分析](../analysis/dozer-v2-逐仓代码复核.md#125-jcode) |
+| [SeekCode](https://github.com/kafkazhang/seek_code) | 小型 Electron Agent | 强制危险命令审批、出网白名单、工作记忆固定注入、克制的 fan-out/fan-in | 小规模可行方案，适合 P0/P1；正则安全判断不能视为完整沙箱 | [代码级分析](../analysis/dozer-v2-逐仓代码复核.md#129-seek_code) |
+| [Goose](https://github.com/aaif-goose/goose) | Rust Agent core + Electron/Node UI + MCP/ACP | 多路 `ToolInspector`、MCP extension manager、统一 Provider registry、SQLite session、压缩优先记忆、Open Plugins hooks | 支持 MCP 不等于治理 MCP；stdio 扩展没有天然隔离，安全能力必须另建 | [代码级分析](../analysis/dozer-v2-逐仓代码复核.md#124-goose) |
+| [OpenCode](https://github.com/anomalyco/opencode) | Bun/TypeScript 主流 Agent 平台 | HTTP/OpenAPI+SSE 控制面、细粒度阻塞式权限、SQLite schema 演进、ACP、受限递归 subagent | Provider 接口本身不难，供应商私有怪癖才是长期成本；Dozer 不应进入模型 Provider 维护战 | [代码级分析](../analysis/dozer-v2-逐仓代码复核.md#127-opencode) |
 
 这组项目帮助 Dozer 明确四项治理设计：
 
@@ -497,7 +498,28 @@ Webview/插件默认被当作不可信方，每条 IPC 都必须显式声明 cap
 
 **不建议引入 Temporal 本身**：它需要一个独立的 Temporal Service 集群，与 Dozer "本地优先、单机可用" 的定位冲突，纯粹是为了单机场景引入分布式系统的运维成本。正确用法是照抄它"event history 重放 + 声明式 Activity 重试 + signal 打断"这三个机制的思路，用 SQLite append-only 事件表在 `dozerd` 里自己实现一个轻量版本，这也与 §3.5.3 已经得出的"DAG 图只是视图，真正权威数据是 append-only run events"结论完全一致。
 
-### 4.12 MCP Gateway 生态现状：仍然碎片化，没有可以直接采用的成熟实现
+### 4.12 规格与变更工件：OpenSpec 上游项目
+
+[Fission-AI/OpenSpec](https://github.com/Fission-AI/OpenSpec) 是 [openspec-cn/openspec](https://github.com/openspec-cn/openspec) 的上游项目，应作为 Dozer 后续协议兼容与代码复核的主研究对象；中文仓库用于中文体验、本地化文档和国内社区生态参考，不应被当作独立的规范源。
+
+OpenSpec 的价值不是替代 Dozer Workflow Kernel，而是把原本容易遗失在 Agent 对话中的意图沉淀为仓库内可版本控制的变更工件。其标准链路为 `proposal → specs → design → tasks → apply → verify → archive`，并通过 artifact dependency graph 表达哪些动作当前可执行，而不是把所有项目强制塞进固定阶段状态机。这与 Dozer 的 Goal、Task、Run、Check、Acceptance 可以形成如下映射：
+
+| OpenSpec 工件/动作 | Dozer V2 概念 | 集成约束 |
+|---|---|---|
+| Change | Goal / ChangeSet | 导入后分配稳定 ID，保留源路径和版本 provenance |
+| `proposal.md` | Goal 的动机、目标和范围 | 作为可读工件，不直接充当运行状态 |
+| `specs/` | Acceptance Criteria / Check 定义 | 可生成检查项，但不得自动等同于验收通过 |
+| `design.md` | Plan / Architecture Decision | 进入 Memory 与审计索引，保留修改历史 |
+| `tasks.md` | Task 定义和人类可读进度投影 | Dozer Event Store 才是执行状态真相源 |
+| `apply` | Run / Execution | 由 Dozer 绑定 Agent、worktree、环境、权限和预算 |
+| `verify` | Check / Evaluation | 产出证据；不能替代 Dozer 的人工或策略验收 |
+| `archive` | Delivery 归档与规格演进 | 应在 Dozer Acceptance 门禁通过后触发 |
+
+OpenSpec 还提供并行 Change、delta spec、归档同步和可定制 schema。这些机制分别对应 Dozer 的并行 worktree、规格演进历史和插件自定义工作流，适合实现为 `OpenSpecPlugin` 或更通用的 `SpecProvider`：插件负责解析/生成 `openspec/` 目录和双向同步；Host 继续负责 Agent 运行、容器、权限、Token、Artifact、Check 与 Acceptance。
+
+边界上必须保持克制：OpenSpec 是文件工件工作流，不提供 PTY/session/worktree/environment 生命周期，也不提供 Dozer 所需的统一事件、成本、安全和交付证据模型。其 `verify` 和归档流程允许警告后继续，不能成为 Dozer 的权威验收机制。推荐评级为 **A-：重点做适配器与代码复核，不作为 Rust Host 直接依赖**；首个 spike 应验证 `OpenSpec Change → Dozer Goal/Task → Worktree Run → Evidence/Acceptance → OpenSpec archive` 的完整往返。
+
+### 4.13 MCP Gateway 生态现状：仍然碎片化，没有可以直接采用的成熟实现
 
 `docs/dozer-v2开源生态调研.md` §5.3 已建议 Dozer 自建 MCP Gateway 而非依赖外部项目；第二轮调研核实了具体现状，这个判断被进一步坐实。检索到的候选实现成熟度差异很大：
 
@@ -679,6 +701,8 @@ dozer-host (iced)
 - [anomalyco/opencode](https://github.com/anomalyco/opencode)
 - [BloopAI/vibe-kanban](https://github.com/BloopAI/vibe-kanban)
 - [stravu/crystal](https://github.com/stravu/crystal)
+- [Fission-AI/OpenSpec](https://github.com/Fission-AI/OpenSpec)
+- [openspec-cn/openspec](https://github.com/openspec-cn/openspec)（中文本地化跟踪）
 
 ### 插件与协议
 
@@ -721,7 +745,7 @@ dozer-host (iced)
 
 因此，下一步最有价值的工作不是继续横向增加面板，而是完成三个纵向切片：**Todo 进程插件、Task–Worktree 运行时、统一 Run/Event/Artifact 审计链**。这三项成立后，容器、Laya、Browser Test、Memory 和 Code Health 才能以一致方式接入，而不是再次长进 Host。
 
-### 10.1 第二轮补充调研的结论（§3.7、§4.8-§4.12）
+### 10.1 第二轮补充调研的结论（§3.7、§4.8-§4.13）
 
 不改变上述最终判断，但把两处最薄弱的环节补上了具体参照：
 

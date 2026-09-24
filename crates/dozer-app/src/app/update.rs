@@ -2996,6 +2996,7 @@ impl App {
                 let id = match target {
                     project::ProjectToolbarTarget::Docs => HoverId::ProjectDocsAdd,
                     project::ProjectToolbarTarget::Remote => HoverId::ProjectRemoteAdd,
+                    project::ProjectToolbarTarget::Memory => HoverId::ProjectMemoryAdd,
                 };
                 self.set_hover(id, hovered);
             }

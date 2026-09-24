@@ -16,6 +16,7 @@ use super::*;
 pub struct ProjectPaneHover {
     pub docs_add: f32,
     pub remote_add: f32,
+    pub memory_add: f32,
 }
 
 /// 面板主入口——`project` 为 `None` 时内核不会真正走到这里
@@ -283,6 +284,7 @@ pub fn view<'a>(
         None => memory_section(
             &ws_state.memories,
             ws_state.memory_create_draft.as_ref(),
+            hover.memory_add,
             now_ms(),
         ),
     });
@@ -739,23 +741,42 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// 共享记忆区:标题行 + 可选的新建表单 + 列表。列表行点击进详情
-/// (`Message::MemoryDetailOpen`)。
+/// 共享记忆区:标题行(样式对齐「项目文档」的 `links_section`:CircleSmall
+/// 图标 + cream 标签 + `icon_button_entry` 的"＋"按钮)+ 可选的新建表单 +
+/// 列表。列表行点击进详情(`Message::MemoryDetailOpen`)。
 fn memory_section<'a>(
     memories: &'a [dozer_core::protocol::MemoryInfo],
     draft: Option<&'a MemoryDraft>,
+    hover_t: f32,
     now_ms: u64,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![].spacing(6).width(Length::Fill);
     col = col.push(
         row![
+            icons::view(
+                icons::IconKind::CircleSmall,
+                byteui::theme::icon_size::row(),
+                byteui::theme::color::current().cream
+            ),
             text("共享记忆")
-                .size(byteui::theme::font::body())
-                .color(byteui::theme::color::current().body),
-            iced_widget::Space::new().width(Length::Fill),
-            button(text("+").size(byteui::theme::font::body()))
-                .on_press(Message::MemoryCreateStart),
+                .size(byteui::theme::font::label())
+                .color(byteui::theme::color::current().cream),
+            iced_widget::space::horizontal(),
+            icons::icon_button_entry(
+                icons::IconKind::Plus,
+                byteui::theme::icon_size::row(),
+                false,
+                false,
+                hover_t,
+                false,
+                byteui::theme::geometry::tab_button_size(),
+                true,
+                Message::MemoryCreateStart,
+                |hovered| Message::ToolbarHover(ProjectToolbarTarget::Memory, hovered),
+                "新建记忆",
+            ),
         ]
+        .spacing(6)
         .align_y(iced_widget::core::Alignment::Center),
     );
 
@@ -950,19 +971,18 @@ fn memory_detail_view<'a>(
     );
     for h in &detail.history {
         let when = crate::workspace::relative_time_text(h.changed_ms, now_ms);
-        col = col.push(
-            row![
-                text(format!("{when} · {} · {}", h.changed_by, h.change_kind))
-                    .size(byteui::theme::font::caption())
-                    .color(byteui::theme::color::current().dim),
-            ],
-        );
+        col = col.push(row![
+            text(format!("{when} · {} · {}", h.changed_by, h.change_kind))
+                .size(byteui::theme::font::caption())
+                .color(byteui::theme::color::current().dim),
+        ]);
     }
 
     col.into()
 }
 
-fn links_section<'a>(    title: &'static str,
+fn links_section<'a>(
+    title: &'static str,
     target: links::LinkTarget,
     toolbar_target: ProjectToolbarTarget,
     hover_t: f32,

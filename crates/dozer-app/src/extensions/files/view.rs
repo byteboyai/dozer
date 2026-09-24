@@ -902,8 +902,8 @@ pub fn context_menu_items(
 ///
 /// 结构(2026-09-18 调整):
 /// - 文件夹:顶部 = 搜索 / 新建文件 / 新建文件夹(三者紧贴,组前无分隔线);
-///   中间 = 复制 / 粘贴(仅目录) / 删除 / 重命名(非根才有);底部 = 复制绝对
-///   路径 / 复制目录名称(文件为"复制文件名称") / 复制相对路径 / 用外部软件
+///   中间 = 复制 / 粘贴(仅目录) / 删除 / 重命名(非根才有);底部 = 复制目录
+///   名称(文件为"复制文件名称") / 复制相对路径 / 复制绝对路径 / 用外部软件
 ///   打开(目录为"在Finder中打开") / 从磁盘重新加载。
 /// - 文件:顶部 = 回滚(undo-2) / 历史(file-clock),仅 git 仓库文件才有;
 ///   中间 = 复制 / 删除 / 重命名(文件不显示"粘贴"——粘贴是"粘贴进目标
@@ -1015,11 +1015,6 @@ pub(crate) fn context_menu_spec(
     let bottom: Vec<MenuSpecItem<Message>> = vec![
         MenuSpecItem::entry(
             None,
-            "复制绝对路径",
-            Message::CopyPath(target.clone(), PathKind::Absolute),
-        ),
-        MenuSpecItem::entry(
-            None,
             name_label,
             Message::CopyPath(target.clone(), PathKind::Name),
         ),
@@ -1027,6 +1022,11 @@ pub(crate) fn context_menu_spec(
             None,
             "复制相对路径",
             Message::CopyPath(target.clone(), PathKind::Relative),
+        ),
+        MenuSpecItem::entry(
+            None,
+            "复制绝对路径",
+            Message::CopyPath(target.clone(), PathKind::Absolute),
         ),
         MenuSpecItem::entry(
             None,

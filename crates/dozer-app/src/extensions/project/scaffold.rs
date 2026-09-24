@@ -177,10 +177,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let results = run_sync_steps(tmp.path(), false);
         let labels: Vec<&str> = results.iter().map(|(l, _)| l.as_str()).collect();
-        assert_eq!(
-            labels,
-            vec!["缓存目录", "README", "git 仓库", "项目文档"]
-        );
+        assert_eq!(labels, vec!["缓存目录", "README", "git 仓库", "项目文档"]);
     }
 
     #[test]
@@ -208,7 +205,10 @@ mod tests {
         std::fs::write(tmp.path().join("README.md"), "").unwrap();
         // 首次打开:`load_or_discover` 已经把 README 全量发现并落盘,
         // `merge_rediscovered` 找不到任何新东西。
-        assert_eq!(ensure_project_docs(tmp.path()), ScaffoldStepResult::AlreadyOk);
+        assert_eq!(
+            ensure_project_docs(tmp.path()),
+            ScaffoldStepResult::AlreadyOk
+        );
     }
 
     #[test]

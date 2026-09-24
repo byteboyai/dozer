@@ -4,8 +4,9 @@
 
 | 文档 | 项目 | 一句话 |
 |------|------|--------|
-| [kooky-分析.md](./kooky-分析.md) | [iAmCorey/kooky](https://github.com/iAmCorey/kooky) — Swift/macOS,libghostty 上的 AI 终端 | "更懂 agent 的终端",深度在渲染与原生体验 |
-| [orca-分析.md](./orca-分析.md) | [stablyai/orca](https://github.com/stablyai/orca) — Electron 跨平台 agent 编排器 | "agent 的调度台",深度在编排、远程与分发 |
+| [dozer-v2架构分析.md](../dozer-v2/dozer-v2架构分析.md) | Dozer V2 产品与架构 | 微内核 Host、插件 App、MCP 能力网络与 Vibe Coding 闭环 |
+| [dozer-v2开源生态调研.md](../dozer-v2/dozer-v2开源生态调研.md) | Dozer V2 开源生态 | 同类项目、局部参考、依赖候选与工程验证路线 |
+| [dozer-v2-逐仓代码复核.md](./dozer-v2-逐仓代码复核.md) | Dozer V2 逐仓代码复核 | 59 个仓库的源码证据、V2 价值与去留裁决 |
 
 ## 两个项目共同验证的"标准件"
 

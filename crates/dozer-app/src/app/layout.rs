@@ -1165,18 +1165,18 @@ pub fn terminal_pane_pixel_size(
     }
     if state.maximized == Some(MaximizedPane::Right) {
         let (_x0, avail_w) = maximized_box_x_range(window_width);
-        let (_list_w, content_w) =
-            pair_list_content_width(pair_content_width(avail_w), state.dims.agent_split);
-        let pane_width = (content_w - byteui::theme::geometry::chrome_width_px()).max(0.0);
+        let pane_width =
+            (terminal_content_width(avail_w, state) - byteui::theme::geometry::chrome_width_px())
+                .max(0.0);
         let pane_height = (maximized_box_height(window_height)
             - byteui::theme::geometry::chrome_height_px())
         .max(0.0);
         return (pane_width, pane_height);
     }
     let right_w = right_zone_width(window_width, state);
-    let (_list_w, content_w) =
-        pair_list_content_width(pair_content_width(right_w), state.dims.agent_split);
-    let pane_width = (content_w - byteui::theme::geometry::chrome_width_px()).max(0.0);
+    let pane_width = (terminal_content_width(right_w, state)
+        - byteui::theme::geometry::chrome_width_px())
+    .max(0.0);
     // `right_zone` 上下 margin:终端是 iced 布局(自动 inset),但其 PTY 网格
     // 尺寸靠这里算,必须同步扣掉上下 margin,否则字符网格比实际渲染区高。
     //
@@ -1196,6 +1196,20 @@ pub fn terminal_pane_pixel_size(
         - m.bottom)
         .max(0.0);
     (pane_width, pane_height)
+}
+
+/// Agent 配对里终端侧的可用宽度(不含 chrome):列表收起时终端以
+/// `Length::Fill` 占满整个 zone(见 `right_panel_area` 的 `PanelKind::Agent`
+/// 收起分支),不按 `agent_split` 分;未收起才按 split 分出内容侧。几何与
+/// 渲染共用这一份判定,否则"收起列表"后渲染区变宽、PTY 网格还按旧 split
+/// 宽度算,右侧留出一截 PTY 不知道的空白(2026-09-24 用户反馈)。
+fn terminal_content_width(zone_w: f32, state: &ShellState) -> f32 {
+    let pair_w = pair_content_width(zone_w);
+    if state.dims.agent_list_collapsed {
+        pair_w
+    } else {
+        pair_list_content_width(pair_w, state.dims.agent_split).1
+    }
 }
 
 /// 窗口整体逻辑像素尺寸 → SSH 面板内嵌终端 pane 的可用像素尺寸。
@@ -1218,7 +1232,14 @@ pub fn ssh_terminal_pane_pixel_size(
         return (0.0, 0.0);
     }
     let pair_w = pair_content_width(left_w);
-    let (_list_w, content_w) = pair_list_content_width(pair_w, state.dims.ssh_split);
+    // 列表收起时终端以 `Length::Fill` 占满整个 zone(见 `left_panel_area` 的
+    // `PanelKind::Ssh` 收起分支),不按 `ssh_split` 分——同
+    // `terminal_content_width` 的口径。
+    let content_w = if state.dims.ssh_list_collapsed {
+        pair_w
+    } else {
+        pair_list_content_width(pair_w, state.dims.ssh_split).1
+    };
     let pane_width = (content_w - byteui::theme::geometry::chrome_width_px()).max(0.0);
     // `chrome_height_px()`(tab 栏 + padding + spacing 的估算)与
     // `terminal_pane_pixel_size` 同源;两边现在都不扣 `status_bar_height()`

@@ -99,7 +99,9 @@ impl MemoryStore {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?)),
             )
             .optional()?;
-        let Some((title, kind, description, body, created_ms, created_by, updated_ms, updated_by)) = row else {
+        let Some((title, kind, description, body, created_ms, created_by, updated_ms, updated_by)) =
+            row
+        else {
             return Err(id_not_found(id));
         };
         let history = history_query(&conn, project_id, id, 20)?;
@@ -136,7 +138,11 @@ impl MemoryStore {
                 |r| r.get(0),
             )
             .optional()?;
-        let change_kind = if existing_id.is_some() { "updated" } else { "created" };
+        let change_kind = if existing_id.is_some() {
+            "updated"
+        } else {
+            "created"
+        };
         let sql = "INSERT INTO memories
                 (project_id, title, kind, description, body, created_ms, created_by, updated_ms, updated_by)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?6, ?7)
@@ -157,7 +163,17 @@ impl MemoryStore {
                 (memory_id, project_id, changed_ms, changed_by, change_kind,
                  title_snapshot, kind_snapshot, description_snapshot, body_snapshot)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![id, project_id, now, actor, change_kind, title, kind, description, body],
+            params![
+                id,
+                project_id,
+                now,
+                actor,
+                change_kind,
+                title,
+                kind,
+                description,
+                body
+            ],
         )?;
         Ok(MemoryDetail {
             id,
@@ -198,7 +214,12 @@ impl MemoryStore {
         Ok(())
     }
 
-    pub fn history(&self, project_id: i64, memory_id: i64, limit: i64) -> Result<Vec<MemoryHistoryEntry>> {
+    pub fn history(
+        &self,
+        project_id: i64,
+        memory_id: i64,
+        limit: i64,
+    ) -> Result<Vec<MemoryHistoryEntry>> {
         let conn = self.conn.lock().expect("db lock");
         history_query(&conn, project_id, memory_id, limit)
     }
@@ -289,21 +310,33 @@ mod tests {
     #[test]
     fn empty_title_is_a_valid_independent_key() {
         let (_dir, store) = store();
-        let a = store.write(1, "", "project", "", "空标题的内容", "claude").unwrap();
-        let b = store.write(1, "标题B", "project", "", "另一条", "claude").unwrap();
+        let a = store
+            .write(1, "", "project", "", "空标题的内容", "claude")
+            .unwrap();
+        let b = store
+            .write(1, "标题B", "project", "", "另一条", "claude")
+            .unwrap();
         assert_ne!(a.id, b.id);
         assert_eq!(store.list(1).unwrap().len(), 2);
         // 空标题第二次写入应该更新同一条(和非空标题的 upsert 语义一致),
         // 不会因为标题是空串就退化成每次都新建。
-        let a2 = store.write(1, "", "project", "", "空标题改了", "claude").unwrap();
+        let a2 = store
+            .write(1, "", "project", "", "空标题改了", "claude")
+            .unwrap();
         assert_eq!(a2.id, a.id);
-        assert_eq!(store.list(1).unwrap().len(), 2, "空标题的 upsert 不应产生第三行");
+        assert_eq!(
+            store.list(1).unwrap().len(),
+            2,
+            "空标题的 upsert 不应产生第三行"
+        );
     }
 
     #[test]
     fn delete_removes_row_but_history_survives() {
         let (_dir, store) = store();
-        let created = store.write(1, "标题A", "project", "d", "v1", "claude").unwrap();
+        let created = store
+            .write(1, "标题A", "project", "d", "v1", "claude")
+            .unwrap();
         store.delete(1, created.id, "user").unwrap();
 
         assert!(store.list(1).unwrap().is_empty());
@@ -319,12 +352,19 @@ mod tests {
     #[test]
     fn projects_are_isolated_for_title_get_and_delete() {
         let (_dir, store) = store();
-        let a = store.write(1, "同名", "project", "", "项目1的内容", "claude").unwrap();
-        let b = store.write(2, "同名", "project", "", "项目2的内容", "claude").unwrap();
+        let a = store
+            .write(1, "同名", "project", "", "项目1的内容", "claude")
+            .unwrap();
+        let b = store
+            .write(2, "同名", "project", "", "项目2的内容", "claude")
+            .unwrap();
         assert_ne!(a.id, b.id, "不同 project 下同标题不冲突");
 
         assert!(store.get(2, a.id).is_err(), "不能跨项目读到别的项目的记忆");
-        assert!(store.delete(2, a.id, "user").is_err(), "不能跨项目删掉别的项目的记忆");
+        assert!(
+            store.delete(2, a.id, "user").is_err(),
+            "不能跨项目删掉别的项目的记忆"
+        );
 
         // 确认没有被误删。
         assert_eq!(store.get(1, a.id).unwrap().body, "项目1的内容");
@@ -340,8 +380,12 @@ mod tests {
     #[test]
     fn list_orders_by_updated_ms_desc() {
         let (_dir, store) = store();
-        let a = store.write(1, "先写的", "project", "", "v", "claude").unwrap();
-        let b = store.write(1, "后写的", "project", "", "v", "claude").unwrap();
+        let a = store
+            .write(1, "先写的", "project", "", "v", "claude")
+            .unwrap();
+        let b = store
+            .write(1, "后写的", "project", "", "v", "claude")
+            .unwrap();
         let listed = store.list(1).unwrap();
         assert_eq!(listed[0].id, b.id, "最近更新的排最前");
         assert_eq!(listed[1].id, a.id);

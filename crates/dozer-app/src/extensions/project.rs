@@ -289,6 +289,8 @@ impl Operation<()> for CaptureDescriptionEditFocus {
 pub enum ProjectToolbarTarget {
     Docs,
     Remote,
+    /// 「共享记忆」标题行"＋"按钮(新建记忆)。
+    Memory,
 }
 
 /// 组合 git 刷新结果里跟 Project 有关的部分(`branch`/`dirty`/`remote_url`)、

@@ -2,9 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## 项目现实（2026-07-15 起）
+## 项目现实（2026-07-15 起，定位于 2026-09-24 修订）
 
-本仓库是 **Dozer** —— 站在用户（甲方）一侧的、agent 中立的 AI 治理与验收层（macOS 先发，Rust workspace）。
+本仓库是 **Dozer** —— 站在用户（甲方）一侧、agent 中立的 **vibe coding 全流程治理与验收层**（macOS 先发，Rust workspace）——面向更懂技术的委托人，覆盖从任务编排、多 agent 并行执行、上下文共享，到过程审计、结果验收的完整闭环。治理与验收始终是核心身份，不因覆盖全流程而降级为众多能力之一；范围从"仅验收最终产物"扩大到"全流程治理"是本次修订的实质变化，agent 中立性不变。具体落点（是否/如何插件化、Workflow Kernel 等数据模型改造）尚未立项，见 `docs/dozer-v2/dozer-v2架构分析.md`（初步分析，非已批准规格）。
 权威文档：
 
 - 规格（唯一需求真相源）：`docs/superpowers/specs/2026-07-14-dozer-phase1-design.md`

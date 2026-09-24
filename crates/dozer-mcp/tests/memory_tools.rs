@@ -25,7 +25,9 @@ async fn start_daemon() -> (std::path::PathBuf, CleanupGuard) {
         bookmarks: Arc::new(dozerd::bookmarks::BookmarkStore::new(&db).unwrap()),
         code_health: Arc::new(dozerd::code_health::CodeHealthStore::new(&db).unwrap()),
         transcripts: Arc::new(dozerd::transcripts::TranscriptStore::open(&db).unwrap()),
-        session_summaries: Arc::new(dozerd::session_summary::SessionSummaryStore::open(&db).unwrap()),
+        session_summaries: Arc::new(
+            dozerd::session_summary::SessionSummaryStore::open(&db).unwrap(),
+        ),
         backfill_registry: Arc::new(dozerd::session_summary_backfill::BackfillRegistry::new()),
         todos: Arc::new(dozerd::todo::TodoStore::new(&db).unwrap()),
         categories: Arc::new(dozerd::todo_category::CategoryStore::new(&db).unwrap()),
@@ -54,7 +56,15 @@ async fn start_daemon() -> (std::path::PathBuf, CleanupGuard) {
 async fn session_with_project(sock: &std::path::Path, project_id: i64) -> String {
     let client = Client::new(sock.to_path_buf());
     let session = client
-        .create("mem-test", "/bin/sh", &["-c".into(), "cat".into()], "/tmp", 80, 24, project_id)
+        .create(
+            "mem-test",
+            "/bin/sh",
+            &["-c".into(), "cat".into()],
+            "/tmp",
+            80,
+            24,
+            project_id,
+        )
         .await
         .expect("建会话");
     session.id
@@ -118,7 +128,11 @@ async fn write_memory_twice_same_title_updates_not_duplicates() {
         .await
         .expect("list_memories 应该成功");
     let list_json = list_result.structured_content.expect("应有结构化结果");
-    assert_eq!(list_json["memories"].as_array().unwrap().len(), 1, "同名应该是更新不是新增");
+    assert_eq!(
+        list_json["memories"].as_array().unwrap().len(),
+        1,
+        "同名应该是更新不是新增"
+    );
 }
 
 #[tokio::test]

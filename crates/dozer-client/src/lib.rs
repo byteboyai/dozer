@@ -354,8 +354,14 @@ impl Client {
         }
     }
 
-    pub async fn list_memories(&self, project_id: i64) -> Result<Vec<dozer_core::protocol::MemoryInfo>> {
-        match self.roundtrip(&Request::ListMemories { project_id }).await? {
+    pub async fn list_memories(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<dozer_core::protocol::MemoryInfo>> {
+        match self
+            .roundtrip(&Request::ListMemories { project_id })
+            .await?
+        {
             Reply::Memories { memories } => Ok(memories),
             Reply::Error { message } => Err(anyhow::anyhow!(message)),
             other => bail!("意外应答: {other:?}"),
@@ -388,8 +394,15 @@ impl Client {
         }
     }
 
-    pub async fn get_memory(&self, project_id: i64, id: i64) -> Result<dozer_core::protocol::MemoryDetail> {
-        match self.roundtrip(&Request::GetMemory { project_id, id }).await? {
+    pub async fn get_memory(
+        &self,
+        project_id: i64,
+        id: i64,
+    ) -> Result<dozer_core::protocol::MemoryDetail> {
+        match self
+            .roundtrip(&Request::GetMemory { project_id, id })
+            .await?
+        {
             Reply::MemoryDetail { detail } => Ok(detail),
             Reply::Error { message } => Err(anyhow::anyhow!(message)),
             other => bail!("意外应答: {other:?}"),

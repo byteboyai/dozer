@@ -129,6 +129,9 @@ pub enum HoverId {
     /// (`interactive` 为假,点击无动作),hover 动画处理方式同
     /// `AgentPickerToggle`。
     ProjectRemoteAdd,
+    /// Project 面板「共享记忆」标题行"＋"按钮,处理方式同 `AgentPickerToggle`
+    /// (见 `extensions::project::view`)。
+    ProjectMemoryAdd,
     /// 文件树搜索提交按钮(`FolderSearch`):静止 DIM,hover 过渡到 GOLD
     /// (见 `extensions/files.rs` 的搜索按钮)。
     FilesSearchSubmit,

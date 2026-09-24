@@ -761,6 +761,7 @@ pub(crate) fn panel_body<'a>(
                     project::ProjectPaneHover {
                         docs_add: app.hover_progress(HoverId::ProjectDocsAdd),
                         remote_add: app.hover_progress(HoverId::ProjectRemoteAdd),
+                        memory_add: app.hover_progress(HoverId::ProjectMemoryAdd),
                     },
                 )
                 .map(Message::Project);

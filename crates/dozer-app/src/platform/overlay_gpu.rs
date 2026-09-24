@@ -19,7 +19,7 @@ use iced_wgpu::graphics::{Shell, Viewport};
 use iced_wgpu::{Engine, Renderer, wgpu};
 use iced_winit::Clipboard;
 use iced_winit::conversion;
-use iced_winit::core::{Element, Event, Font, Pixels, Size, mouse};
+use iced_winit::core::{Color, Element, Event, Font, Pixels, Size, mouse};
 use iced_winit::runtime::user_interface::{self, UserInterface};
 use winit::event::WindowEvent;
 use winit::keyboard::ModifiersState;
@@ -72,7 +72,13 @@ impl OverlayGpu {
                 width: size.width.max(1),
                 height: size.height.max(1),
                 present_mode: wgpu::PresentMode::AutoVsync,
-                alpha_mode: wgpu::CompositeAlphaMode::Auto,
+                // `Auto`在 Metal 后端会落到 `Opaque`(能力表只有
+                // `[Opaque, PostMultiplied]`,`Auto` 走 wgpu-core 的兜底顺序
+                // 优先选 `Opaque`),这会让 `CAMetalLayer.opaque = true`,
+                // 合成时完全无视 alpha 通道——即使把内容清成
+                // `Color::TRANSPARENT` 也只会显示纯黑而不是透明。显式指定
+                // `PostMultiplied` 才能让窗口真正透明。
+                alpha_mode: wgpu::CompositeAlphaMode::PostMultiplied,
                 view_formats: vec![],
                 desired_maximum_frame_latency: 2,
             },
@@ -120,7 +126,9 @@ impl OverlayGpu {
                 width: size.width.max(1),
                 height: size.height.max(1),
                 present_mode: wgpu::PresentMode::AutoVsync,
-                alpha_mode: wgpu::CompositeAlphaMode::Auto,
+                // 同 `open()`——见那边的注释,`reconfigure` 必须用一样的
+                // `alpha_mode`,否则 resize 之后又退回不透明。
+                alpha_mode: wgpu::CompositeAlphaMode::PostMultiplied,
                 view_formats: vec![],
                 desired_maximum_frame_latency: 2,
             },
@@ -166,8 +174,18 @@ impl OverlayGpu {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        self.renderer
-            .present(None, frame.texture.format(), &view, &self.viewport);
+        // `None`(`wgpu::LoadOp::Load`)不清空 surface——若这一帧的内容
+        // 没有画满整扇窗口(如 `ConfirmOverlay` 的卡片高度按内容
+        // shrink-fit,矮于固定 420×200 逻辑像素的窗口),未画到的区域会
+        // 露出上一帧/未初始化纹理的内容,在这些透明弹窗窗口上表现为一块
+        // 黑色矩形而不是透明。显式清成透明色,让内容之外的区域始终正确
+        // 透出主窗口/webview 内容。
+        self.renderer.present(
+            Some(Color::TRANSPARENT),
+            frame.texture.format(),
+            &view,
+            &self.viewport,
+        );
         frame.present();
     }
 

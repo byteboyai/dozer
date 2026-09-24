@@ -289,7 +289,12 @@ impl DozerMcpServer {
     )]
     pub async fn write_memory(
         &self,
-        Parameters(WriteMemoryParams { title, body, kind, description }): Parameters<WriteMemoryParams>,
+        Parameters(WriteMemoryParams {
+            title,
+            body,
+            kind,
+            description,
+        }): Parameters<WriteMemoryParams>,
     ) -> Result<CallToolResult, McpError> {
         let (project_id, agent) = self
             .resolve_project_and_agent()
@@ -297,7 +302,14 @@ impl DozerMcpServer {
             .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
         let detail = self
             .client
-            .write_memory(project_id, &title, &kind, &description, &body, agent.label())
+            .write_memory(
+                project_id,
+                &title,
+                &kind,
+                &description,
+                &body,
+                agent.label(),
+            )
             .await
             .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
         Ok(CallToolResult::structured(json!({
@@ -309,7 +321,9 @@ impl DozerMcpServer {
         })))
     }
 
-    #[tool(description = "列出当前项目的共享记忆(标题/分类/摘要/最后更新方,不含正文)。读记忆前先调这个,别猜有没有同名条目。")]
+    #[tool(
+        description = "列出当前项目的共享记忆(标题/分类/摘要/最后更新方,不含正文)。读记忆前先调这个,别猜有没有同名条目。"
+    )]
     pub async fn list_memories(
         &self,
         Parameters(NoParams {}): Parameters<NoParams>,
@@ -338,7 +352,9 @@ impl DozerMcpServer {
         Ok(CallToolResult::structured(json!({ "memories": value })))
     }
 
-    #[tool(description = "查一条共享记忆的完整正文。title_or_id 可以传标题(和 list_memories 里看到的一致)或数字 id;传标题时会先内部查一遍 list_memories 做匹配。")]
+    #[tool(
+        description = "查一条共享记忆的完整正文。title_or_id 可以传标题(和 list_memories 里看到的一致)或数字 id;传标题时会先内部查一遍 list_memories 做匹配。"
+    )]
     pub async fn get_memory(
         &self,
         Parameters(GetMemoryParams { title_or_id }): Parameters<GetMemoryParams>,
@@ -358,7 +374,9 @@ impl DozerMcpServer {
             memories
                 .into_iter()
                 .find(|m| m.title == title_or_id)
-                .ok_or_else(|| McpError::internal_error(format!("未找到标题为 {title_or_id} 的记忆"), None))?
+                .ok_or_else(|| {
+                    McpError::internal_error(format!("未找到标题为 {title_or_id} 的记忆"), None)
+                })?
                 .id
         };
         let detail = self
@@ -407,7 +425,9 @@ impl DozerMcpServer {
     /// session_id → (project_id, agent) 的解析逻辑。`agent` 用于
     /// `write_memory` 的 `actor` 归属;`list_todos`/`add_todo` 等既有
     /// 调用方不需要 `agent`,解构时用 `_` 丢弃即可。
-    async fn resolve_project_and_agent(&self) -> anyhow::Result<(i64, dozer_core::protocol::AgentKind)> {
+    async fn resolve_project_and_agent(
+        &self,
+    ) -> anyhow::Result<(i64, dozer_core::protocol::AgentKind)> {
         let sessions = self
             .client
             .list()
