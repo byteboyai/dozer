@@ -43,6 +43,7 @@ use crate::platform::database_drivers_overlay;
 use crate::platform::file_history_overlay;
 use crate::platform::files_move_overlay;
 use crate::platform::project_create_overlay;
+use crate::platform::project_scaffold_overlay;
 use crate::platform::search_overlay;
 use crate::platform::settings_overlay;
 use crate::preview;
@@ -213,6 +214,11 @@ pub(crate) enum Runner {
         /// `sync_files_move_overlay` 按当前工作区 `files.pending_move_is_some()`
         /// 单向驱动。不接失焦关闭(见模块文档)。
         files_move_overlay: Option<files_move_overlay::FilesMoveOverlay>,
+        /// Project「修复项目」进度弹窗的独立窗口宿主,生命周期由
+        /// `sync_project_scaffold_overlay` 按当前工作区
+        /// `project_panel.scaffold_run.is_some()` 单向驱动。`scrim_blocking`
+        /// 语义:不接失焦/Esc/关窗关闭(见模块文档)。
+        project_scaffold_overlay: Option<project_scaffold_overlay::ProjectScaffoldOverlay>,
     },
 }
 
@@ -237,6 +243,7 @@ pub(crate) enum OverlayKind {
     Confirm,
     DatabaseDrivers,
     FilesMove,
+    ProjectScaffold,
 }
 
 impl Runner {
@@ -1147,6 +1154,7 @@ impl Runner {
             confirm_overlay,
             database_drivers_overlay,
             files_move_overlay,
+            project_scaffold_overlay,
             ..
         } = self
         else {
@@ -1172,6 +1180,9 @@ impl Runner {
         }
         if keep != OverlayKind::FilesMove {
             *files_move_overlay = None;
+        }
+        if keep != OverlayKind::ProjectScaffold {
+            *project_scaffold_overlay = None;
         }
     }
 
@@ -1616,6 +1627,67 @@ impl Runner {
             return;
         };
         if let Some(overlay) = files_move_overlay {
+            overlay.request_redraw();
+        }
+    }
+
+    /// Project「修复项目」进度弹窗:开关条件是当前工作区
+    /// `project_panel.scaffold_run.is_some()`,三段 `match SyncAction` 模式。
+    fn sync_project_scaffold_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let action = {
+            let Self::Ready {
+                app,
+                project_scaffold_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            let open = app
+                .active_workspace()
+                .is_some_and(|ws| ws.project_panel.scaffold_run.is_some());
+            project_scaffold_overlay::sync_action(open, project_scaffold_overlay.is_some())
+        };
+        match action {
+            project_scaffold_overlay::SyncAction::Open => {
+                self.close_other_overlays(OverlayKind::ProjectScaffold);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    project_scaffold_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *project_scaffold_overlay =
+                    Some(project_scaffold_overlay::ProjectScaffoldOverlay::open(
+                        window, adapter, device, queue, instance, el,
+                    ));
+            }
+            project_scaffold_overlay::SyncAction::Close => {
+                let Self::Ready {
+                    project_scaffold_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *project_scaffold_overlay = None;
+            }
+            project_scaffold_overlay::SyncAction::Noop => {}
+        }
+        let Self::Ready {
+            project_scaffold_overlay,
+            ..
+        } = self
+        else {
+            return;
+        };
+        if let Some(overlay) = project_scaffold_overlay {
             overlay.request_redraw();
         }
     }
@@ -2443,6 +2515,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 confirm_overlay: None,
                 database_drivers_overlay: None,
                 files_move_overlay: None,
+                project_scaffold_overlay: None,
             };
         }
     }
@@ -2472,6 +2545,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_confirm_overlay(event_loop);
         self.sync_database_drivers_overlay(event_loop);
         self.sync_files_move_overlay(event_loop);
+        self.sync_project_scaffold_overlay(event_loop);
     }
 
     fn window_event(
@@ -2732,6 +2806,32 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             return;
         }
 
+        // Project「修复项目」进度窗口自己那份 `WindowId` 的事件。
+        if let Self::Ready {
+            app,
+            project_scaffold_overlay,
+            ..
+        } = self
+            && let Some(overlay) = project_scaffold_overlay
+            && window_id == overlay.window_id()
+        {
+            // `scrim_blocking` 语义:故意不处理 `WindowEvent::Focused` 与
+            // `CloseRequested`——进行中不允许 Esc/失焦/点原生关闭按钮关窗,
+            // 两者都落进 `else` 兜底交给 `handle_input`,而它对这些事件本
+            // 就不产生任何消息(iced 侧没有 widget 响应),效果即"什么都不
+            // 做"。唯一能关闭的路径是内容里 `done` 后才可点的"关闭"按钮,
+            // 经 `handle_input` 返回 `ScaffoldPopupClose` 消息。
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app);
+            } else {
+                for message in overlay.handle_input(app, &event) {
+                    self.dispatch(message);
+                }
+            }
+            self.sync_project_scaffold_overlay(event_loop);
+            return;
+        }
+
         // `consumed == true`:已经被应用级快捷键接管(见
         // `on_window_event` 顶部文档),下面不能再把同一个原始事件转换
         // 喂给 iced 标准管线,否则会重复处理(⌘S 这类字母快捷键会在
@@ -2765,6 +2865,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 confirm_overlay,
                 database_drivers_overlay,
                 files_move_overlay,
+                project_scaffold_overlay,
                 ..
             } = self
             else {
@@ -3687,6 +3788,16 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             window.scale_factor(),
                         );
                     }
+                    if let Some(overlay) = project_scaffold_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                        );
+                    }
                     // bounds 同步由本函数末尾的 sync_previews 统一执行
                 }
                 WindowEvent::CloseRequested => {
@@ -3698,6 +3809,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     *confirm_overlay = None; // 图干净,Drop 本身就会释放。
                     *database_drivers_overlay = None; // 图干净,Drop 本身就会释放。
                     *files_move_overlay = None; // 图干净,Drop 本身就会释放。
+                    *project_scaffold_overlay = None; // 图干净,Drop 本身就会释放。
                     // 同步写盘,不用 `spawn_shell_layout_save` 的异步路径——
                     // 进程马上退出,spawn 的 tokio 任务不保证跑得完。
                     app.persist_window_size_on_exit();
@@ -3878,6 +3990,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_confirm_overlay(event_loop);
         self.sync_database_drivers_overlay(event_loop);
         self.sync_files_move_overlay(event_loop);
+        self.sync_project_scaffold_overlay(event_loop);
     }
 }
 

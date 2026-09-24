@@ -233,20 +233,6 @@ impl App {
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
-        } else if ws.project_panel.scaffold_run.is_some() {
-            // 项目面板「修复项目」进度弹窗:窗口级 overlay。进行中不可通过
-            // 点遮罩关闭(`scrim_blocking` 不挂 `on_press`),同 panel-level
-            // 版本的既有约定(spec"弹窗可取消性"一节)。
-            let scrim = crate::dialog::scrim_blocking();
-            stack![
-                base,
-                scrim,
-                project::scaffold_progress_popup(&ws.project_panel, self.window_size.0)
-                    .map(Message::Project)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
         } else if ws.database.editing().is_some() {
             // 数据库面板「新增/编辑数据源」表单:窗口级 overlay,同上。
             let draft = ws.database.editing().unwrap();
