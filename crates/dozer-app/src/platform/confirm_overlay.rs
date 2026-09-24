@@ -8,7 +8,8 @@
 use std::sync::Arc;
 
 use iced_wgpu::wgpu;
-use iced_winit::core::mouse;
+use iced_winit::conversion;
+use iced_winit::core::{Event, mouse};
 use iced_winit::runtime::user_interface::UserInterface;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::WindowEvent;
@@ -46,6 +47,10 @@ pub(crate) struct ConfirmOverlay {
     focus: FocusTracker,
     trigger: ConfirmTrigger,
     spec: dialog::ConfirmDialog<Message>,
+    /// 同 `ssh_host_overlay` 等所有会接收鼠标输入的宿主——没有这个字段
+    /// `redraw`/`handle_input` 只能传 `mouse::Cursor::Unavailable`,iced
+    /// 就永远算不出鼠标落在哪个按钮上,`Confirm`/`Cancel` 按钮点了没反应。
+    cursor: mouse::Cursor,
 }
 
 impl ConfirmOverlay {
@@ -95,6 +100,7 @@ impl ConfirmOverlay {
             focus: FocusTracker::default(),
             trigger,
             spec,
+            cursor: mouse::Cursor::Unavailable,
         }
     }
 
@@ -125,7 +131,7 @@ impl ConfirmOverlay {
         );
         let _ = interface.update(
             &[],
-            mouse::Cursor::Unavailable,
+            self.cursor,
             &mut self.gpu.renderer,
             &mut self.gpu.clipboard,
             &mut Vec::new(),
@@ -134,7 +140,7 @@ impl ConfirmOverlay {
             &mut self.gpu.renderer,
             &iced_winit::core::Theme::Dark,
             &iced_winit::core::renderer::Style::default(),
-            mouse::Cursor::Unavailable,
+            self.cursor,
         );
         self.gpu.cache = interface.into_cache();
 
@@ -152,14 +158,18 @@ impl ConfirmOverlay {
     }
 
     /// Esc 与失焦统一发送 `spec.cancel_msg`——五个消费方共用同一条关闭
-    /// 路径,不需要逐个判断"这是哪个弹窗、该发哪条 Cancel 消息"。
+    /// 路径,不需要逐个判断"这是哪个弹窗、该发哪条 Cancel 消息"。除此之外
+    /// 的输入(鼠标移动/点击)要真正喂给 iced,`Confirm`/`Cancel` 按钮才能
+    /// 点得动——同 `ssh_host_overlay::handle_input` 的转换+派发手法。
     pub(crate) fn handle_input(
         &mut self,
         event: &WindowEvent,
         modifiers: ModifiersState,
     ) -> Vec<Message> {
         if let WindowEvent::KeyboardInput {
-            event: key_event, ..
+            event: key_event,
+            is_synthetic: false,
+            ..
         } = event
             && key_event.state == winit::event::ElementState::Pressed
             && key_event.logical_key
@@ -167,8 +177,36 @@ impl ConfirmOverlay {
         {
             return vec![self.spec.cancel_msg.clone()];
         }
-        let _ = modifiers;
-        Vec::new()
+        if let WindowEvent::CursorMoved { position, .. } = event {
+            self.cursor = mouse::Cursor::Available(conversion::cursor_position(
+                *position,
+                self.gpu.viewport.scale_factor(),
+            ));
+        }
+        let Some(iced_event) =
+            conversion::window_event(event.clone(), self.gpu.viewport.scale_factor(), modifiers)
+        else {
+            return Vec::new();
+        };
+        let events: [Event; 1] = [iced_event];
+        let card = dialog::confirm(self.spec.clone(), card_logical_size().width);
+        let mut interface = UserInterface::build(
+            card,
+            self.gpu.viewport.logical_size(),
+            std::mem::take(&mut self.gpu.cache),
+            &mut self.gpu.renderer,
+        );
+        let mut messages = Vec::new();
+        let _ = interface.update(
+            &events,
+            self.cursor,
+            &mut self.gpu.renderer,
+            &mut self.gpu.clipboard,
+            &mut messages,
+        );
+        self.gpu.cache = interface.into_cache();
+        self.window.request_redraw();
+        messages
     }
 
     /// 返回 `true` 表示应该关闭——与 `search_overlay`/`file_history_overlay`
