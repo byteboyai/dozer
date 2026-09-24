@@ -2,19 +2,12 @@
 //!
 //! 之前各面板各写一份"CARD 底 + 描边 + 遮罩"(文件树删除/移动确认、
 //! 项目删除/修复进度、SSH 删主机确认、搜索弹窗、Todo 详情),描边色统一
-//! 用中性 `BORDER`、圆角在 6/8 之间漂移、遮罩有的补了半透明 `SCRIM`
-//! 有的干脆透明——视觉与"弹窗该有的分量感"逐处不一致。现在把外壳原语
-//! 收拢成共享的两件套:
+//! 用中性 `BORDER`、圆角在 6/8 之间漂移——视觉与"弹窗该有的分量感"逐处
+//! 不一致。现在把外壳原语收拢成共享的几件套:
 //!
 //! - `card_style`: 弹窗卡片本体的容器样式(`theme::region::dialog()`——
 //!   CARD 底 + 金色 `GOLD` 描边,呼应放大态浮层同款"金色描边盒",见
 //!   `theme::region::maximize_overlay`)。
-//! - `scrim`: 满窗遮罩,`SCRIM` 半透明底上叠一层
-//!   [`crate::frosted::noise_layer`] 磨砂噪点贴图(同右键菜单
-//!   `menu::shell_frosted` 的做法),挂 `on_press` 可点击关闭。弹窗都是
-//!   打开/关闭才重绘一次的静态浮层,噪点层的重绘开销可忽略,同
-//!   `shell_frosted` 文档的理由。(2026-09 弹窗独立窗口化后主窗口内已不再
-//!   叠遮罩;`scrim` 保留给仍需在主窗口内遮罩的调用点。)
 //! - `actions`: 弹窗底部"取消/确认"这类操作按钮行的统一落位——靠右下角
 //!   纯按钮的收尾操作行;像 Todo 详情"回复框+提交"那种输入控件占满宽度
 //!   的行不适用,继续各自布局。
@@ -28,11 +21,15 @@
 //!   project_footer_bar`)背景走面板底色 `bg` 而非弹窗卡片 `card`,没法直接
 //!   复用 `action_button_style`,但描边规则复用同一个
 //!   `action_button_border_color`。
+//!
+//! (2026-09 弹窗独立窗口化后,12 个模态卡片弹窗全部迁到各自的独立原生
+//! 窗口(见 `platform::*_overlay`),主窗口内不再叠遮罩;原先的
+//! `scrim`/`scrim_layer` 满窗遮罩原语已无调用点,删除。)
 
 use crate::theme;
 use byteui::interaction::icons::IconKind;
 use iced_widget::core::{Border, Color, Element, Length, alignment::Horizontal};
-use iced_widget::{MouseArea, Row, Stack, button, column, container, row, text};
+use iced_widget::{Row, button, column, container, row, text};
 
 /// 弹窗默认宽度:整个软件窗体宽度(`App::window_size.0`,逻辑像素)的
 /// 1/3——2026-09-15 统一约定,取代此前各弹窗各写一个固定像素值(360/420/
@@ -52,13 +49,6 @@ pub fn card_style(_t: &iced_widget::Theme) -> container::Style {
         border: region.border.unwrap_or_default(),
         ..container::Style::default()
     }
-}
-
-/// 满窗磨砂遮罩:`SCRIM` 半透明底 + 噪点贴图,点击回传 `on_dismiss`。
-pub fn scrim<'a, Msg: 'a + Clone>(
-    on_dismiss: Msg,
-) -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {
-    MouseArea::new(scrim_layer()).on_press(on_dismiss).into()
 }
 
 /// 弹窗底部操作按钮行:靠右下角对齐(取消在左、确认在右的相对顺序不变,
@@ -97,23 +87,6 @@ pub fn action_button_style(
         },
         ..button::Style::default()
     }
-}
-
-fn scrim_layer<'a, Msg: 'a>() -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {
-    Stack::new()
-        .push(
-            container(column![])
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .style(|_t: &iced_widget::Theme| container::Style {
-                    background: Some(byteui::theme::color::current().scrim.into()),
-                    ..container::Style::default()
-                }),
-        )
-        .push(crate::frosted::noise_layer())
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
 }
 
 /// `confirm()` 的入参——字段数≥7 且 `title`/`description` 两个相邻同类型

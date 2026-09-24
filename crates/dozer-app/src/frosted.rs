@@ -1,11 +1,10 @@
-//! 磨砂噪点贴图共享原语——`menu::shell_frosted`(右键菜单静态弹层)与
-//! `dialog::scrim`(弹窗遮罩)共用同一张噪点贴图,原先各自
-//! `include_bytes!`/`LazyLock` 一份、图片被独立解码两次,现在抽出来共享。
-//! 贴图本身的选型理由(暖白 `#FFE5B4`、`FilterMethod::Nearest` 保颗粒感)
-//! 见资源本身用途——两个调用点都是**离散开关的静态浮层**(打开/关闭或
-//! hover 状态切换时才重绘一次),这份开销可忽略;像 `tab_widget::
-//! tab_overflow_menu` 那样带 `hover_t` 缓动动画、逐帧重绘的弹层不适用,
-//! 继续用不带噪点的版本。
+//! 磨砂噪点贴图共享原语——`menu::shell_frosted`(右键菜单静态弹层)等
+//! 静态浮层共用同一张噪点贴图,原先各自 `include_bytes!`/`LazyLock` 一份、
+//! 图片被独立解码两次,现在抽出来共享。贴图本身的选型理由(暖白
+//! `#FFE5B4`、`FilterMethod::Nearest` 保颗粒感)见资源本身用途——这些
+//! 调用点都是**离散开关的静态浮层**(打开/关闭或 hover 状态切换时才重绘
+//! 一次),这份开销可忽略;像 `tab_widget::tab_overflow_menu` 那样带
+//! `hover_t` 缓动动画、逐帧重绘的弹层不适用,继续用不带噪点的版本。
 
 use iced_widget::core::{ContentFit, Element, Length};
 use iced_widget::image;

@@ -3152,7 +3152,10 @@ impl App {
         // 单例、不区分左右哪一侧,按"两侧都可能被盖住"从宽处理——比如
         // 文件树搜索框右键时,菜单向下弹出恰好压在下方的预览 webview 上。
         // search 弹窗已迁独立原生窗口、file_history 也已迁独立窗口
-        // (2026-09-18),都不需要再为它们隐藏 webview。
+        // (2026-09-18),都不需要再为它们隐藏 webview。12 个模态卡片弹窗
+        // (5 个 confirm + 7 个定制宿主)也已全部迁到独立原生窗口
+        // (2026-09-23,见 `platform::*_overlay`),同样不参与这里的隐藏
+        // 判断——不要为它们再加分支。
         let app_modal_open = self.text_input_menu.is_some();
         let mut out = Vec::new();
         for side in [Side::Left, Side::Right] {
@@ -3319,9 +3322,11 @@ impl App {
     ) -> Vec<(WebviewSpec, (f32, f32, f32, f32))> {
         // 地址栏右键"剪切/复制/粘贴"菜单向下弹出,恰好压在下方的浏览器
         // webview 内容区上;file_history 已迁独立窗口(2026-09-18),不参与
-        // 这里的显式隐藏。原生 wry 子视图不听 iced 绘制顺序摆布,
-        // 必须显式 visible=false 才能真正藏起来。首页(`home_browser`)和
-        // 工作区内(`ws.browser`)两条分支共用这一个判断。
+        // 这里的显式隐藏;12 个模态卡片弹窗也已全部迁独立窗口
+        // (2026-09-23,见 `platform::*_overlay`),同样不参与。原生 wry
+        // 子视图不听 iced 绘制顺序摆布,必须显式 visible=false 才能真正藏
+        // 起来。首页(`home_browser`)和工作区内(`ws.browser`)两条分支共用
+        // 这一个判断。
         let app_modal_open = self.text_input_menu.is_some();
         // 首页右栏恒为全局浏览器(`home_browser`),与 `left_view` 无关——
         // 进首页就让它成为浏览器 webview 池的唯一来源,否则默认 URL 的 tab
