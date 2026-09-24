@@ -273,11 +273,19 @@ pub fn view<'a>(
         &ws_state.expanded_link_dirs,
         &ws_state.selected_link,
     ));
-    content = content.push(memory_section(
-        &ws_state.memories,
-        ws_state.memory_create_draft.as_ref(),
-        now_ms(),
-    ));
+    content = content.push(match &ws_state.memory_detail {
+        Some(detail) => memory_detail_view(
+            detail,
+            ws_state.memory_edit_draft.as_ref(),
+            ws_state.memory_delete_pending.is_some(),
+            now_ms(),
+        ),
+        None => memory_section(
+            &ws_state.memories,
+            ws_state.memory_create_draft.as_ref(),
+            now_ms(),
+        ),
+    });
 
     if let Some(err) = &ws_state.error {
         content = content.push(
@@ -831,11 +839,124 @@ fn memory_section<'a>(
                 ]
                 .spacing(2),
             )
-            .on_press(Message::Noop)
+            .on_press(Message::MemoryDetailOpen(m.id))
             .style(move |_t, _s| iced_widget::button::Style {
                 text_color: byteui::theme::color::current().body,
                 ..iced_widget::button::Style::default()
             }),
+        );
+    }
+
+    col.into()
+}
+
+/// 共享记忆详情面板:返回/编辑/删除 + 可选编辑表单/删除二次确认 +
+/// 历史时间线。
+fn memory_detail_view<'a>(
+    detail: &'a dozer_core::protocol::MemoryDetail,
+    edit_draft: Option<&'a MemoryDraft>,
+    delete_pending: bool,
+    now_ms: u64,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let mut col = column![].spacing(8).padding(8).width(Length::Fill);
+
+    col = col.push(
+        row![
+            button(text("← 返回")).on_press(Message::MemoryDetailClose),
+            iced_widget::Space::new().width(Length::Fill),
+            button(text("编辑")).on_press(Message::MemoryEditStart),
+            button(text("删除")).on_press(Message::MemoryDeleteRequest(detail.id)),
+        ]
+        .spacing(8)
+        .align_y(iced_widget::core::Alignment::Center),
+    );
+
+    if delete_pending {
+        col = col.push(
+            row![
+                text("确定删除这条记忆?历史记录会保留可查。")
+                    .color(byteui::theme::color::current().body),
+                button(text("确认删除")).on_press(Message::MemoryDeleteConfirm),
+                button(text("取消")).on_press(Message::MemoryDeleteCancel),
+            ]
+            .spacing(8)
+            .align_y(iced_widget::core::Alignment::Center),
+        );
+    }
+
+    if let Some(draft) = edit_draft {
+        col = col.push(
+            column![
+                byteui::form::input_text::view(
+                    "标题",
+                    &draft.title,
+                    false,
+                    None,
+                    false,
+                    None,
+                    false,
+                    Message::MemoryEditTitleInput,
+                ),
+                byteui::form::input_text::view(
+                    "分类",
+                    &draft.kind,
+                    false,
+                    None,
+                    false,
+                    None,
+                    false,
+                    Message::MemoryEditKindInput,
+                ),
+                byteui::form::input_text::view(
+                    "一句话摘要",
+                    &draft.description,
+                    false,
+                    None,
+                    false,
+                    None,
+                    false,
+                    Message::MemoryEditDescriptionInput,
+                ),
+                byteui::form::input_text::view(
+                    "正文",
+                    &draft.body,
+                    false,
+                    None,
+                    false,
+                    None,
+                    false,
+                    Message::MemoryEditBodyInput,
+                ),
+                row![
+                    button(text("保存")).on_press(Message::MemoryEditSubmit),
+                    button(text("取消")).on_press(Message::MemoryEditCancel),
+                ]
+                .spacing(8),
+            ]
+            .spacing(4),
+        );
+    } else {
+        col = col.push(text(detail.title.clone()).size(byteui::theme::font::title()));
+        col = col.push(
+            text(format!("[{}] {}", detail.kind, detail.description))
+                .color(byteui::theme::color::current().dim),
+        );
+        col = col.push(text(detail.body.clone()).color(byteui::theme::color::current().body));
+    }
+
+    col = col.push(
+        text("历史")
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().body),
+    );
+    for h in &detail.history {
+        let when = crate::workspace::relative_time_text(h.changed_ms, now_ms);
+        col = col.push(
+            row![
+                text(format!("{when} · {} · {}", h.changed_by, h.change_kind))
+                    .size(byteui::theme::font::caption())
+                    .color(byteui::theme::color::current().dim),
+            ],
         );
     }
 

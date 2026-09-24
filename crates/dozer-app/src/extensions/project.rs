@@ -122,6 +122,13 @@ pub struct WorkspaceState {
     memories: Vec<dozer_core::protocol::MemoryInfo>,
     /// 新建记忆的表单草稿(`None` = 表单未打开)。
     memory_create_draft: Option<MemoryDraft>,
+    /// 当前打开的记忆详情(`None` = 未打开详情面板)。
+    memory_detail: Option<dozer_core::protocol::MemoryDetail>,
+    /// 详情页的编辑草稿(`None` = 只读展示态,未进入编辑)。
+    memory_edit_draft: Option<MemoryDraft>,
+    /// 待删除确认的记忆 id(`None` = 未在确认删除)。同 `delete_pending`
+    /// 的既有先例(项目删除的二次确认),不用弹独立模态框。
+    memory_delete_pending: Option<i64>,
     error: Option<String>,
     pub(crate) scaffold_run: Option<ScaffoldRunState>,
     pub(crate) delete_pending: Option<delete::DeleteScope>,
@@ -401,6 +408,24 @@ pub enum Message {
     /// 成功与否都触发一次列表刷新,同 Todo 面板 `Message::Mutated` 的既有
     /// 先例。
     MemoryMutated(Result<(), String>),
+    /// 点列表行,打开详情(先设 loading 态,再异步拉正文)。
+    MemoryDetailOpen(i64),
+    /// 详情拉取完成。
+    MemoryDetailLoaded(dozer_core::protocol::MemoryDetail),
+    /// 关闭详情面板。
+    MemoryDetailClose,
+    /// 进入编辑态(用当前详情内容预填草稿)。
+    MemoryEditStart,
+    MemoryEditTitleInput(String),
+    MemoryEditKindInput(String),
+    MemoryEditDescriptionInput(String),
+    MemoryEditBodyInput(String),
+    MemoryEditSubmit,
+    MemoryEditCancel,
+    /// 点删除按钮,进入二次确认态。
+    MemoryDeleteRequest(i64),
+    MemoryDeleteCancel,
+    MemoryDeleteConfirm,
 }
 
 /// 磁盘占用统计的排除名单——跟 `crates/dozer-app/src/project.rs::HIDDEN`

@@ -268,6 +268,98 @@ pub fn update(
                 emit(Message::MemoriesLoaded(memories));
             });
         }
+        Message::MemoryDetailOpen(id) => {
+            ws_state.memory_detail = None;
+            ws_state.memory_edit_draft = None;
+            let client = client.clone();
+            handle.spawn(async move {
+                if let Ok(detail) = client.get_memory(project_id, id).await {
+                    emit(Message::MemoryDetailLoaded(detail));
+                }
+            });
+        }
+        Message::MemoryDetailLoaded(detail) => {
+            ws_state.memory_detail = Some(detail);
+        }
+        Message::MemoryDetailClose => {
+            ws_state.memory_detail = None;
+            ws_state.memory_edit_draft = None;
+            ws_state.memory_delete_pending = None;
+        }
+        Message::MemoryEditStart => {
+            if let Some(detail) = &ws_state.memory_detail {
+                ws_state.memory_edit_draft = Some(MemoryDraft {
+                    title: detail.title.clone(),
+                    kind: detail.kind.clone(),
+                    description: detail.description.clone(),
+                    body: detail.body.clone(),
+                });
+            }
+        }
+        Message::MemoryEditCancel => {
+            ws_state.memory_edit_draft = None;
+        }
+        Message::MemoryEditTitleInput(v) => {
+            if let Some(d) = &mut ws_state.memory_edit_draft {
+                d.title = v;
+            }
+        }
+        Message::MemoryEditKindInput(v) => {
+            if let Some(d) = &mut ws_state.memory_edit_draft {
+                d.kind = v;
+            }
+        }
+        Message::MemoryEditDescriptionInput(v) => {
+            if let Some(d) = &mut ws_state.memory_edit_draft {
+                d.description = v;
+            }
+        }
+        Message::MemoryEditBodyInput(v) => {
+            if let Some(d) = &mut ws_state.memory_edit_draft {
+                d.body = v;
+            }
+        }
+        Message::MemoryEditSubmit => {
+            let Some(draft) = ws_state.memory_edit_draft.take() else {
+                return;
+            };
+            let client = client.clone();
+            handle.spawn(async move {
+                let res = client
+                    .write_memory(
+                        project_id,
+                        &draft.title,
+                        &draft.kind,
+                        &draft.description,
+                        &draft.body,
+                        "user",
+                    )
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string());
+                emit(Message::MemoryMutated(res));
+            });
+        }
+        Message::MemoryDeleteRequest(id) => {
+            ws_state.memory_delete_pending = Some(id);
+        }
+        Message::MemoryDeleteCancel => {
+            ws_state.memory_delete_pending = None;
+        }
+        Message::MemoryDeleteConfirm => {
+            let Some(id) = ws_state.memory_delete_pending.take() else {
+                return;
+            };
+            ws_state.memory_detail = None;
+            let client = client.clone();
+            handle.spawn(async move {
+                let res = client
+                    .delete_memory(project_id, id, "user")
+                    .await
+                    .map_err(|e| e.to_string());
+                emit(Message::MemoryMutated(res));
+            });
+        }
     }
 }
 
