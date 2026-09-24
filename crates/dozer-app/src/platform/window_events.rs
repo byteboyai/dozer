@@ -3037,9 +3037,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         // confirm overlay 窗口自己那份 `WindowId` 的事件,同 search/
         // settings overlay 早退分支的手法。
         if let Self::Ready {
-            confirm_overlay,
-            modifiers,
-            ..
+            confirm_overlay, ..
         } = self
             && let Some(overlay) = confirm_overlay
             && window_id == overlay.window_id()
@@ -3061,7 +3059,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     self.dispatch(cancel);
                 }
             } else {
-                let messages = overlay.handle_input(&event, *modifiers);
+                let messages = overlay.handle_input(&event);
                 for message in messages {
                     self.dispatch(message);
                 }

@@ -1,16 +1,28 @@
 //! 独立原生窗口共用的 wgpu 渲染管线建立/重配置——从 `search_overlay.rs`
 //! 抽出,供 `search_overlay.rs`/`file_history_overlay.rs`(以及未来消费方)
-//! 共用。不含 view/redraw/input 逻辑,那些各消费方自己写(见
+//! 共用。原本不含 view/redraw/input 逻辑,各消费方自己写(见
 //! `docs/superpowers/specs/2026-09-18-overlay-window-shared-abstraction-
-//! design.md`「架构」第 1 节)。
+//! design.md`「架构」第 1 节)——`2026-09-23-standard-dialog-overlay-
+//! design.md` 迁移的 8 个"模态卡片"消费方(`ConfirmOverlay` 及 7 个定制
+//! 宿主)让这个取舍走到了头:它们的 `redraw`/`handle_input` 除了"内容是
+//! 什么"(各自的 `dialog::confirm`/`*_card` 调用)之外逐字相同。下面
+//! `redraw`/`dispatch`/`track_and_convert` 三个方法只收敛这段纯机械的
+//! 胶水(建 `UserInterface`→`update`/`draw`→存 cache→取帧/present;转换
+//! `WindowEvent`→iced `Event`、顺带追踪 cursor/modifiers),`content`
+//! 仍然是调用方自己拼的 `Element`——不是把"内容长什么样"也塞进来的泛型
+//! `OverlayWindow<Msg>`(第一份设计与这次迁移的 spec 都明确否决过那种
+//! 抽法,见两份文档各自的「架构」/「非目标」)。
 
 use std::sync::Arc;
 
 use iced_wgpu::graphics::{Shell, Viewport};
 use iced_wgpu::{Engine, Renderer, wgpu};
 use iced_winit::Clipboard;
-use iced_winit::core::{Font, Pixels, Size};
-use iced_winit::runtime::user_interface;
+use iced_winit::conversion;
+use iced_winit::core::{Element, Event, Font, Pixels, Size, mouse};
+use iced_winit::runtime::user_interface::{self, UserInterface};
+use winit::event::WindowEvent;
+use winit::keyboard::ModifiersState;
 use winit::window::Window;
 
 /// 独立原生窗口自己的一份渲染资源——不含 `Device`/`Queue`/`Adapter`/
@@ -113,5 +125,104 @@ impl OverlayGpu {
                 desired_maximum_frame_latency: 2,
             },
         );
+    }
+
+    /// `redraw` 方法体里"已经拿到这一帧的 `content`,要把它画出来"那一段
+    /// 在 8 个模态卡片宿主之间逐字重复的部分:建 `UserInterface` →空事件
+    /// `update`(只重算布局,不产生消息)→`draw`→存 cache→取帧→present。
+    /// 调用方自己的 `redraw` 只需要拼出 `content`(如
+    /// `dialog::confirm(self.spec.clone())`)再转调这个方法。
+    pub(crate) fn redraw<Message>(
+        &mut self,
+        window: &Window,
+        cursor: mouse::Cursor,
+        content: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>,
+    ) {
+        let mut interface = UserInterface::build(
+            content,
+            self.viewport.logical_size(),
+            std::mem::take(&mut self.cache),
+            &mut self.renderer,
+        );
+        let _ = interface.update(
+            &[],
+            cursor,
+            &mut self.renderer,
+            &mut self.clipboard,
+            &mut Vec::new(),
+        );
+        interface.draw(
+            &mut self.renderer,
+            &iced_winit::core::Theme::Dark,
+            &iced_winit::core::renderer::Style::default(),
+            cursor,
+        );
+        self.cache = interface.into_cache();
+
+        let Ok(frame) = self.surface.get_current_texture() else {
+            window.request_redraw();
+            return;
+        };
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.renderer
+            .present(None, frame.texture.format(), &view, &self.viewport);
+        frame.present();
+    }
+
+    /// `handle_input` 方法体里"已经拿到转换后的 iced 事件,要建
+    /// `UserInterface` 派发"那一段在 8 个模态卡片宿主之间逐字重复的
+    /// 部分:建界面→带事件 `update`(收集消息)→存 cache→请求重绘→
+    /// 返回消息。
+    pub(crate) fn dispatch<Message>(
+        &mut self,
+        window: &Window,
+        cursor: mouse::Cursor,
+        content: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>,
+        iced_event: Event,
+    ) -> Vec<Message> {
+        let events: [Event; 1] = [iced_event];
+        let mut interface = UserInterface::build(
+            content,
+            self.viewport.logical_size(),
+            std::mem::take(&mut self.cache),
+            &mut self.renderer,
+        );
+        let mut messages = Vec::new();
+        let _ = interface.update(
+            &events,
+            cursor,
+            &mut self.renderer,
+            &mut self.clipboard,
+            &mut messages,
+        );
+        self.cache = interface.into_cache();
+        window.request_redraw();
+        messages
+    }
+
+    /// `handle_input` 开头"追踪 modifiers/cursor、把 winit 事件转换成 iced
+    /// 事件"那一段在 8 个模态卡片宿主之间逐字重复的部分(不含 Esc 分支——
+    /// 各宿主的取消消息不同,`ProjectScaffoldOverlay` 干脆没有 Esc 分支,
+    /// 留给调用方自己处理)。返回 `None` 表示这个 winit 事件 iced 不关心
+    /// (如未映射的按键),调用方应直接返回空消息列表,不需要再建
+    /// `UserInterface`。
+    pub(crate) fn track_and_convert(
+        &self,
+        cursor: &mut mouse::Cursor,
+        modifiers: &mut ModifiersState,
+        event: &WindowEvent,
+    ) -> Option<Event> {
+        if let WindowEvent::ModifiersChanged(new_modifiers) = event {
+            *modifiers = new_modifiers.state();
+        }
+        if let WindowEvent::CursorMoved { position, .. } = event {
+            *cursor = mouse::Cursor::Available(conversion::cursor_position(
+                *position,
+                self.viewport.scale_factor(),
+            ));
+        }
+        conversion::window_event(event.clone(), self.viewport.scale_factor(), *modifiers)
     }
 }

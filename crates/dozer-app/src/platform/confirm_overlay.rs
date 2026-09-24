@@ -8,9 +8,7 @@
 use std::sync::Arc;
 
 use iced_wgpu::wgpu;
-use iced_winit::conversion;
-use iced_winit::core::{Event, mouse};
-use iced_winit::runtime::user_interface::UserInterface;
+use iced_winit::core::mouse;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
@@ -21,7 +19,7 @@ use crate::app::Message;
 use crate::dialog;
 use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{centered_overlay_bounds, open_child_window};
+use crate::platform::overlay_window::{open_overlay, reposition_overlay};
 
 /// 五个 confirm 形态弹窗的判别标签——只用来在 `sync_confirm_overlay` 里
 /// 判断"这次 desired 和已开的窗口是不是同一个弹窗",不需要 `Message`/
@@ -51,6 +49,10 @@ pub(crate) struct ConfirmOverlay {
     /// `redraw`/`handle_input` 只能传 `mouse::Cursor::Unavailable`,iced
     /// 就永远算不出鼠标落在哪个按钮上,`Confirm`/`Cancel` 按钮点了没反应。
     cursor: mouse::Cursor,
+    /// 同其余 7 个定制宿主——自己跟踪这扇窗口收到的
+    /// `WindowEvent::ModifiersChanged`,不依赖调用方传入的主窗口全局
+    /// modifiers 状态(这扇窗口拿到焦点时才是 Esc/快捷键该参照的那份)。
+    modifiers: ModifiersState,
 }
 
 impl ConfirmOverlay {
@@ -82,18 +84,16 @@ impl ConfirmOverlay {
         spec: dialog::ConfirmDialog<Message>,
         el: &ActiveEventLoop,
     ) -> ConfirmOverlay {
-        let scale = main_window.scale_factor();
-        let card_logical = card_logical_size();
-        let (pos, size) = centered_overlay_bounds(
-            main_window
-                .outer_position()
-                .unwrap_or(PhysicalPosition::new(0, 0)),
-            main_window.inner_size(),
-            scale,
-            card_logical,
+        let (window, gpu) = open_overlay(
+            main_window,
+            adapter,
+            device,
+            queue,
+            instance,
+            card_logical_size(),
+            "confirm",
+            el,
         );
-        let window = open_child_window(main_window, pos, size, "confirm", el);
-        let gpu = OverlayGpu::open(&window, instance, adapter, device, queue, size, scale);
         ConfirmOverlay {
             window,
             gpu,
@@ -101,6 +101,7 @@ impl ConfirmOverlay {
             trigger,
             spec,
             cursor: mouse::Cursor::Unavailable,
+            modifiers: ModifiersState::default(),
         }
     }
 
@@ -111,61 +112,28 @@ impl ConfirmOverlay {
         main_inner_size: PhysicalSize<u32>,
         scale: f64,
     ) {
-        let card_logical = card_logical_size();
-        let (pos, size) =
-            centered_overlay_bounds(main_outer_pos, main_inner_size, scale, card_logical);
-        self.window.set_outer_position(pos);
-        if self.window.inner_size() != size {
-            let _ = self.window.request_inner_size(size);
-            self.gpu.reconfigure(device, size, scale);
-        }
+        reposition_overlay(
+            &self.window,
+            &mut self.gpu,
+            device,
+            main_outer_pos,
+            main_inner_size,
+            scale,
+            card_logical_size(),
+        );
     }
 
     pub(crate) fn redraw(&mut self) {
         let card = dialog::confirm(self.spec.clone());
-        let mut interface = UserInterface::build(
-            card,
-            self.gpu.viewport.logical_size(),
-            std::mem::take(&mut self.gpu.cache),
-            &mut self.gpu.renderer,
-        );
-        let _ = interface.update(
-            &[],
-            self.cursor,
-            &mut self.gpu.renderer,
-            &mut self.gpu.clipboard,
-            &mut Vec::new(),
-        );
-        interface.draw(
-            &mut self.gpu.renderer,
-            &iced_winit::core::Theme::Dark,
-            &iced_winit::core::renderer::Style::default(),
-            self.cursor,
-        );
-        self.gpu.cache = interface.into_cache();
-
-        let Ok(frame) = self.gpu.surface.get_current_texture() else {
-            self.window.request_redraw();
-            return;
-        };
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        self.gpu
-            .renderer
-            .present(None, frame.texture.format(), &view, &self.gpu.viewport);
-        frame.present();
+        self.gpu.redraw(&self.window, self.cursor, card);
     }
 
     /// Esc 与失焦统一发送 `spec.cancel_msg`——五个消费方共用同一条关闭
     /// 路径,不需要逐个判断"这是哪个弹窗、该发哪条 Cancel 消息"。除此之外
     /// 的输入(鼠标移动/点击)要真正喂给 iced,`Confirm`/`Cancel` 按钮才能
-    /// 点得动——同 `ssh_host_overlay::handle_input` 的转换+派发手法。
-    pub(crate) fn handle_input(
-        &mut self,
-        event: &WindowEvent,
-        modifiers: ModifiersState,
-    ) -> Vec<Message> {
+    /// 点得动——同其余 7 个定制宿主共用的 `OverlayGpu::track_and_convert`/
+    /// `dispatch` 转换+派发手法。
+    pub(crate) fn handle_input(&mut self, event: &WindowEvent) -> Vec<Message> {
         if let WindowEvent::KeyboardInput {
             event: key_event,
             is_synthetic: false,
@@ -177,36 +145,15 @@ impl ConfirmOverlay {
         {
             return vec![self.spec.cancel_msg.clone()];
         }
-        if let WindowEvent::CursorMoved { position, .. } = event {
-            self.cursor = mouse::Cursor::Available(conversion::cursor_position(
-                *position,
-                self.gpu.viewport.scale_factor(),
-            ));
-        }
         let Some(iced_event) =
-            conversion::window_event(event.clone(), self.gpu.viewport.scale_factor(), modifiers)
+            self.gpu
+                .track_and_convert(&mut self.cursor, &mut self.modifiers, event)
         else {
             return Vec::new();
         };
-        let events: [Event; 1] = [iced_event];
         let card = dialog::confirm(self.spec.clone());
-        let mut interface = UserInterface::build(
-            card,
-            self.gpu.viewport.logical_size(),
-            std::mem::take(&mut self.gpu.cache),
-            &mut self.gpu.renderer,
-        );
-        let mut messages = Vec::new();
-        let _ = interface.update(
-            &events,
-            self.cursor,
-            &mut self.gpu.renderer,
-            &mut self.gpu.clipboard,
-            &mut messages,
-        );
-        self.gpu.cache = interface.into_cache();
-        self.window.request_redraw();
-        messages
+        self.gpu
+            .dispatch(&self.window, self.cursor, card, iced_event)
     }
 
     /// 返回 `true` 表示应该关闭——与 `search_overlay`/`file_history_overlay`
