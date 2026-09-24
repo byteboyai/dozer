@@ -358,18 +358,21 @@ pub(crate) fn agent_picker_popup(
 
 /// 关 Agent 面板 tab 前的确认弹窗:目标会话处于 Running/AwaitingInput 时才
 /// 弹(分流见 `app::update` `Message::CloseTab`)。窗口级 overlay,复用
-/// `crate::dialog::confirm` 骨架(同文件树删除/主机删除确认框)。`pending_close_tab`
-/// 存的是被点 × 的下标,这里按它取出标题写进文案——下标在弹窗存活期间不会被
-/// 重排(遮罩挡住 base 交互),取得到就取,取不到(极端竞态)兜底成"会话"。
+/// `crate::dialog::confirm` 骨架(同文件树删除/主机删除确认框)。
+/// `pending_close_tab` 存的是被点 × 那个会话的稳定 id(不是下标)——弹窗
+/// 迁到独立原生窗口后主窗口仍可交互,tab 列表在弹窗存活期间可能被重排/
+/// 增删,按 id 现查才能保证标题始终对应真正会被关掉的那个会话;查不到
+/// (会话已经通过别的路径关掉)兜底成"会话"。
 /// 关 Agent tab 确认框的内容描述——宿主(`platform::confirm_overlay`)取这一
 /// 份渲染。`None` 表示当前没有待确认的关闭。
 pub(crate) fn agent_close_confirm_spec(
     ws: &Workspace,
 ) -> Option<crate::dialog::ConfirmDialog<Message>> {
-    let idx = ws.pending_close_tab?;
+    let id = ws.pending_close_tab.as_ref()?;
     let title = ws
         .tabs
-        .get(idx)
+        .iter()
+        .find(|t| &t.info.id == id)
         .map(|t| crate::workspace::hook::tab_title(t.agent, t.cwd.as_deref(), &t.info.name))
         .unwrap_or_else(|| "会话".to_string());
     Some(crate::dialog::ConfirmDialog {

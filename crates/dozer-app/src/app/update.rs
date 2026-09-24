@@ -1186,7 +1186,7 @@ impl App {
                         )
                     });
                     if confirm_needed {
-                        ws.pending_close_tab = Some(idx);
+                        ws.pending_close_tab = ws.tabs.get(idx).map(|t| t.info.id.clone());
                     } else {
                         closed_old_len = Some(ws.tabs.len());
                         ws.close_tab(io, idx);
@@ -1207,7 +1207,14 @@ impl App {
             Message::TermTabCloseConfirm => {
                 let mut closed = None;
                 self.with_focused_project(|ws, io| {
-                    if let Some(idx) = ws.pending_close_tab.take() {
+                    // 按 id 现查当前下标,不信打开确认框那一刻存的下标——
+                    // 弹窗展示期间主窗口仍可交互,tab 列表可能已经变了
+                    // (见 `pending_close_tab` 字段文档)。查不到说明这个
+                    // 会话已经通过别的路径被关掉,安全地什么都不做,好过
+                    // 用陈旧下标关掉列表里当前占着那个位置的另一个会话。
+                    if let Some(id) = ws.pending_close_tab.take()
+                        && let Some(idx) = ws.tabs.iter().position(|t| t.info.id == id)
+                    {
                         closed = Some((idx, ws.tabs.len()));
                         ws.close_tab(io, idx);
                         ws.ensure_project_terminal(io);
