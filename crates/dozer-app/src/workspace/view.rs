@@ -363,7 +363,9 @@ pub(crate) fn agent_picker_popup(
 /// 重排(遮罩挡住 base 交互),取得到就取,取不到(极端竞态)兜底成"会话"。
 /// 关 Agent tab 确认框的内容描述——宿主(`platform::confirm_overlay`)取这一
 /// 份渲染。`None` 表示当前没有待确认的关闭。
-pub(crate) fn agent_close_confirm_spec(ws: &Workspace) -> Option<crate::dialog::ConfirmDialog<Message>> {
+pub(crate) fn agent_close_confirm_spec(
+    ws: &Workspace,
+) -> Option<crate::dialog::ConfirmDialog<Message>> {
     let idx = ws.pending_close_tab?;
     let title = ws
         .tabs

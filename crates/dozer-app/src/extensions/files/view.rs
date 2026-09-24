@@ -1218,7 +1218,9 @@ pub fn tab_context_menu_popup<'a>(
 
 /// 删除确认框的内容描述——宿主(`platform::confirm_overlay`)取这一份渲染,
 /// 保证文案/消息不因迁移而分叉。`None` 表示当前没有待确认的删除。
-pub(crate) fn delete_confirm_spec(ws_state: &WorkspaceState) -> Option<crate::dialog::ConfirmDialog<Message>> {
+pub(crate) fn delete_confirm_spec(
+    ws_state: &WorkspaceState,
+) -> Option<crate::dialog::ConfirmDialog<Message>> {
     let (path, is_dir) = ws_state.tree_delete_confirm.as_ref()?;
     let name = path
         .file_name()

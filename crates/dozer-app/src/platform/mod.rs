@@ -2,9 +2,10 @@
 //! 生交通灯居中、顶栏原生拖窗守卫、外部文件拖拽悬停位置追踪、文件/目录
 //! 选择。全部逻辑保持原样,只改模块归属。
 
+pub mod confirm_overlay;
+pub mod database_drivers_overlay;
 pub mod file_drag;
 pub mod file_history_overlay;
-pub mod confirm_overlay;
 pub mod overlay_focus;
 pub mod overlay_gpu;
 pub mod overlay_window;

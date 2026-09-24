@@ -38,6 +38,7 @@ use winit::{
 use crate::app::{App, Message, PanelKind};
 use crate::extensions;
 use crate::platform::confirm_overlay;
+use crate::platform::database_drivers_overlay;
 use crate::platform::file_history_overlay;
 use crate::platform::project_create_overlay;
 use crate::platform::search_overlay;
@@ -202,6 +203,10 @@ pub(crate) enum Runner {
         /// 生命周期由 `sync_confirm_overlay` 按
         /// `confirm_overlay::desired_confirm` 单向驱动开/关,与其余四类互斥。
         confirm_overlay: Option<confirm_overlay::ConfirmOverlay>,
+        /// 数据库「管理驱动」弹窗的独立窗口宿主,生命周期由
+        /// `sync_database_drivers_overlay` 按 `app.database.drivers_popup_open()`
+        /// 单向驱动。
+        database_drivers_overlay: Option<database_drivers_overlay::DatabaseDriversOverlay>,
     },
 }
 
@@ -224,6 +229,7 @@ pub(crate) enum OverlayKind {
     ProjectCreate,
     Settings,
     Confirm,
+    DatabaseDrivers,
 }
 
 impl Runner {
@@ -1132,6 +1138,7 @@ impl Runner {
             project_create_overlay,
             settings_overlay,
             confirm_overlay,
+            database_drivers_overlay,
             ..
         } = self
         else {
@@ -1151,6 +1158,9 @@ impl Runner {
         }
         if keep != OverlayKind::Confirm {
             *confirm_overlay = None;
+        }
+        if keep != OverlayKind::DatabaseDrivers {
+            *database_drivers_overlay = None;
         }
     }
 
@@ -1431,7 +1441,9 @@ impl Runner {
             confirm_overlay::desired_confirm(app.active_workspace())
         };
         let current_trigger = match self {
-            Self::Ready { confirm_overlay, .. } => confirm_overlay.as_ref().map(|o| o.trigger()),
+            Self::Ready {
+                confirm_overlay, ..
+            } => confirm_overlay.as_ref().map(|o| o.trigger()),
             _ => return,
         };
         match (desired, current_trigger) {
@@ -1457,16 +1469,83 @@ impl Runner {
                 ));
             }
             (None, _) => {
-                let Self::Ready { confirm_overlay, .. } = self else {
+                let Self::Ready {
+                    confirm_overlay, ..
+                } = self
+                else {
                     return;
                 };
                 *confirm_overlay = None;
             }
         }
-        let Self::Ready { confirm_overlay, .. } = self else {
+        let Self::Ready {
+            confirm_overlay, ..
+        } = self
+        else {
             return;
         };
         if let Some(overlay) = confirm_overlay {
+            overlay.request_redraw();
+        }
+    }
+
+    /// 数据库「管理驱动」弹窗:开关条件是 `app.database.drivers_popup_open()`
+    /// 布尔值,照抄 `sync_settings_overlay` 的三段 `match SyncAction` 模式。
+    fn sync_database_drivers_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let action = {
+            let Self::Ready {
+                app,
+                database_drivers_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            database_drivers_overlay::sync_action(
+                app.database.drivers_popup_open(),
+                database_drivers_overlay.is_some(),
+            )
+        };
+        match action {
+            database_drivers_overlay::SyncAction::Open => {
+                self.close_other_overlays(OverlayKind::DatabaseDrivers);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    database_drivers_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *database_drivers_overlay =
+                    Some(database_drivers_overlay::DatabaseDriversOverlay::open(
+                        window, adapter, device, queue, instance, el,
+                    ));
+            }
+            database_drivers_overlay::SyncAction::Close => {
+                let Self::Ready {
+                    database_drivers_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *database_drivers_overlay = None;
+            }
+            database_drivers_overlay::SyncAction::Noop => {}
+        }
+        let Self::Ready {
+            database_drivers_overlay,
+            ..
+        } = self
+        else {
+            return;
+        };
+        if let Some(overlay) = database_drivers_overlay {
             overlay.request_redraw();
         }
     }
@@ -2292,6 +2371,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 project_create_overlay: None,
                 settings_overlay: None,
                 confirm_overlay: None,
+                database_drivers_overlay: None,
             };
         }
     }
@@ -2319,6 +2399,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_project_create_overlay(event_loop);
         self.sync_settings_overlay(event_loop);
         self.sync_confirm_overlay(event_loop);
+        self.sync_database_drivers_overlay(event_loop);
     }
 
     fn window_event(
@@ -2520,6 +2601,37 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             return;
         }
 
+        // 数据库「管理驱动」窗口自己那份 `WindowId` 的事件。
+        if let Self::Ready {
+            app,
+            database_drivers_overlay,
+            ..
+        } = self
+            && let Some(overlay) = database_drivers_overlay
+            && window_id == overlay.window_id()
+        {
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app);
+            } else if matches!(event, WindowEvent::CloseRequested) {
+                self.dispatch(Message::Database(
+                    extensions::database::Message::DriversPopupToggle,
+                ));
+            } else if let WindowEvent::Focused(focused) = event {
+                // 无文本输入、无原生选择器,失焦即关闭不需要吞例外。
+                if overlay.handle_focus(focused) {
+                    self.dispatch(Message::Database(
+                        extensions::database::Message::DriversPopupToggle,
+                    ));
+                }
+            } else {
+                for message in overlay.handle_input(app, &event) {
+                    self.dispatch(message);
+                }
+            }
+            self.sync_database_drivers_overlay(event_loop);
+            return;
+        }
+
         // `consumed == true`:已经被应用级快捷键接管(见
         // `on_window_event` 顶部文档),下面不能再把同一个原始事件转换
         // 喂给 iced 标准管线,否则会重复处理(⌘S 这类字母快捷键会在
@@ -2551,6 +2663,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 project_create_overlay,
                 settings_overlay,
                 confirm_overlay,
+                database_drivers_overlay,
                 ..
             } = self
             else {
@@ -3453,6 +3566,16 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             window.scale_factor(),
                         );
                     }
+                    if let Some(overlay) = database_drivers_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                        );
+                    }
                     // bounds 同步由本函数末尾的 sync_previews 统一执行
                 }
                 WindowEvent::CloseRequested => {
@@ -3462,6 +3585,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     *project_create_overlay = None; // 图干净,Drop 本身就会释放。
                     *settings_overlay = None; // 图干净,Drop 本身就会释放。
                     *confirm_overlay = None; // 图干净,Drop 本身就会释放。
+                    *database_drivers_overlay = None; // 图干净,Drop 本身就会释放。
                     // 同步写盘,不用 `spawn_shell_layout_save` 的异步路径——
                     // 进程马上退出,spawn 的 tokio 任务不保证跑得完。
                     app.persist_window_size_on_exit();
@@ -3640,6 +3764,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_project_create_overlay(event_loop);
         self.sync_settings_overlay(event_loop);
         self.sync_confirm_overlay(event_loop);
+        self.sync_database_drivers_overlay(event_loop);
     }
 }
 

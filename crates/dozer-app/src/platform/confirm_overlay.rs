@@ -195,7 +195,8 @@ pub(crate) fn desired_confirm(
         return Some((ConfirmTrigger::FilesDelete, map_files_spec(spec)));
     }
     if let Some(source_id) = ws.database.delete_confirm()
-        && let Some(spec) = crate::extensions::database::delete_confirm_spec(&ws.database, source_id)
+        && let Some(spec) =
+            crate::extensions::database::delete_confirm_spec(&ws.database, source_id)
     {
         return Some((ConfirmTrigger::DatabaseDelete, map_database_spec(spec)));
     }

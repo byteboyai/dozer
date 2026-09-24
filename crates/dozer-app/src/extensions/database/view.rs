@@ -7,16 +7,14 @@ use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrolla
 
 use super::*;
 
-/// 驱动管理弹窗:窗口级居中浮层,视觉模板同 `delete_confirm_popup`(CARD
-/// 底 + 圆角描边 + 标题图标)。此前走 `crate::chrome::menu::shell_frosted`(右键
-/// 菜单同款外壳)、内联挂在数据源列表下方,不居中也没有遮罩——改成跟本面板
-/// 其它弹窗一致的普通弹窗(2026-09-15)。每行一个 checkbox 前置位的条目
-/// (启用的打 ✓),点按切换启用/禁用,不关弹窗。窗口级 overlay,由
-/// `app.rs` 挂载(见其调用点注释),`pub` 是为了让那边能调到。
-pub fn drivers_popup<'a>(
-    app_state: &'a AppState,
-    window_width: f32,
-) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+/// 驱动管理弹窗:独立原生窗口的卡片内容,视觉模板同 `delete_confirm_popup`
+/// (CARD 底 + 圆角描边 + 标题图标)。此前走独立窗口(2026-09-23 起,见
+/// `platform::database_drivers_overlay`),卡片填满窗口本身(不再套居中
+/// 容器、不再按主窗口宽度算 `dialog::width`)。每行一个 checkbox 前置位的
+/// 条目(启用的打 ✓),点按切换启用/禁用,不关弹窗。
+pub fn database_drivers_card(
+    app_state: &AppState,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let title = row![
         icons::view(
             icons::IconKind::Database,
@@ -33,7 +31,7 @@ pub fn drivers_popup<'a>(
     let mut items_col = column![].spacing(2);
     for driver in DriverKind::ALL {
         let enabled = app_state.is_enabled(driver);
-        let checkbox: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        let checkbox: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
             text(if enabled { "✓" } else { " " })
                 .size(byteui::theme::font::body())
                 .into();
@@ -56,7 +54,7 @@ pub fn drivers_popup<'a>(
         byteui::theme::color::current().dim,
     ));
 
-    let dialog = container(
+    container(
         column![
             title,
             text("勾选的驱动才会出现在「新增数据源」的驱动下拉里。")
@@ -68,17 +66,10 @@ pub fn drivers_popup<'a>(
         .spacing(10),
     )
     .padding(16)
-    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定),取代此前
-    // 写死的 280px。
-    .width(crate::dialog::width(window_width))
-    .style(crate::dialog::card_style);
-
-    container(dialog)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(iced_widget::core::alignment::Horizontal::Center)
-        .align_y(iced_widget::core::alignment::Vertical::Center)
-        .into()
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(crate::dialog::card_style)
+    .into()
 }
 
 /// 数据源根节点图标:关系型驱动统一用 `Database`(圆柱),MongoDB 用
@@ -564,11 +555,10 @@ pub fn view<'a>(
 
     // 「删除数据源」确认框 / 「新增/编辑数据源」表单 / 「管理驱动」**不**
     // 在这里叠(此前的 panel-level `stack!` 只在本面板的 `width` 范围内
-    // 居中,而不是整个软件窗体——2026-09-15 改为窗口级 overlay,由
-    // `app.rs` 顶层 `popped` 分支挂载,同 `todo::clear_confirm_popup` 的
-    // 既有口径,见 `delete_confirm_popup`/`source_form`/`drivers_popup`
-    // 文档。三者互斥优先级(app.rs 侧 if/else if 链保证同一时刻只显示
-    // 一个):待确认删除 > 新增/编辑表单 > 驱动管理。
+    // 居中,而不是整个软件窗体——2026-09-15 改为窗口级 overlay)。现已全部
+    // 迁到独立原生子窗口:删除确认见 `platform::confirm_overlay`,数据源
+    // 表单、驱动管理见各自的 `platform::*_overlay`。三者互斥由
+    // `platform::window_events` 的 `close_other_overlays` 保证。
     base.into()
 }
 

@@ -20,9 +20,9 @@ use crate::term::term_view;
 use crate::term::terminal;
 use crate::theme;
 use crate::workspace::{
-    PreviewPaneKind, Workspace, agent_list_pane, agent_picker_popup,
-    dot_color, no_project_placeholder, preview_pane, preview_tab_overflow_popup,
-    project_preview_pane, review_content_pane, split_portions, tab_display_width, tab_title,
+    PreviewPaneKind, Workspace, agent_list_pane, agent_picker_popup, dot_color,
+    no_project_placeholder, preview_pane, preview_tab_overflow_popup, project_preview_pane,
+    review_content_pane, split_portions, tab_display_width, tab_title,
 };
 use byteui::interaction::icons;
 use dozer_core::protocol::{AgentKind, AgentState, SessionInfo};
@@ -271,18 +271,6 @@ impl App {
                     self.window_size.0,
                 )
                 .map(Message::Database)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        } else if self.database.drivers_popup_open() {
-            // 数据库面板「管理驱动」弹窗:窗口级 overlay,同上。
-            let dismiss =
-                crate::dialog::scrim(Message::Database(database::Message::DriversPopupToggle));
-            stack![
-                base,
-                dismiss,
-                database::drivers_popup(&self.database, self.window_size.0).map(Message::Database)
             ]
             .width(Length::Fill)
             .height(Length::Fill)
