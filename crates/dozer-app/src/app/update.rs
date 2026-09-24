@@ -49,6 +49,14 @@ impl App {
                 // 其余事件(selection_changed/viewport_changed/...):diff 面板
                 // 恒只读、不需要 Agent 跳转/保存,忽略即可。
             }
+            Message::FileHistoryDiffWebviewEvent(_binding, event) => {
+                if matches!(event.payload, crate::preview::EditorEvent::Ready { .. })
+                    && let Some(s) = self.file_history.as_mut()
+                {
+                    s.set_diff_webview_ready(true);
+                }
+                // 其余事件忽略,同 GitLogDiffWebviewEvent 的处理。
+            }
             Message::EditorWebviewEvent(binding, event) => {
                 self.with_project(binding.project_id, move |ws, io| {
                     let pane = if binding.panel == PanelKind::Project {

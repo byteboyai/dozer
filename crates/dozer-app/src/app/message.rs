@@ -596,6 +596,14 @@ pub enum Message {
         crate::preview::HostBinding,
         crate::preview::WebviewEnvelope<crate::preview::EditorEvent>,
     ),
+    /// 文件历史弹窗 diff webview 发回的已校验协议事件。这扇窗口的 webview
+    /// 不进主窗口的 `webviews`/`browser_webviews` 池,绑定同样用轻量
+    /// `HostBinding`,不走 `EditorWebviewEvent` 的 tab 查找路径(这个弹窗
+    /// 没有 tab)。
+    FileHistoryDiffWebviewEvent(
+        crate::preview::HostBinding,
+        crate::preview::WebviewEnvelope<crate::preview::EditorEvent>,
+    ),
     /// JSON host(vanilla-jsoneditor)发回的事件(对照期 feature)。
     JsonEditorEvent(
         crate::preview::EditorHostBinding,

@@ -232,6 +232,20 @@ pub enum DiffBlobContent {
     NotRenderable { reason: String },
 }
 
+/// 给定原始字节,判断能否喂给 CodeMirror diff 渲染:超过
+/// [`MAX_DIFF_BLOB_BYTES`] 或含二进制内容(NUL 字节 / 非法 UTF-8)都判定
+/// "不可渲染"。`git_log`(commit vs commit)与 `file_history`(commit vs
+/// 磁盘实时内容)共用同一份判定,不允许出现第二份可能漂移的实现。
+pub(crate) fn classify_diff_bytes(bytes: &[u8]) -> Option<String> {
+    if bytes.len() > MAX_DIFF_BLOB_BYTES {
+        return None;
+    }
+    if bytes.contains(&0u8) {
+        return None;
+    }
+    std::str::from_utf8(bytes).ok().map(|s| s.to_string())
+}
+
 /// 按新增/删除文件语义把 `None` 侧当空字符串处理;非 `None` 侧任一超过
 /// [`MAX_DIFF_BLOB_BYTES`] 或含二进制内容(NUL 字节 / 非法 UTF-8)都判定
 /// "不可渲染"——不做部分截断渲染。
@@ -248,17 +262,7 @@ pub fn diff_blob_content(
             return Ok(Some(String::new()));
         };
         let blob = repo.find_blob(oid).map_err(|e| e.message().to_string())?;
-        let content = blob.content();
-        if content.len() > MAX_DIFF_BLOB_BYTES {
-            return Ok(None);
-        }
-        if content.contains(&0u8) {
-            return Ok(None);
-        }
-        match std::str::from_utf8(content) {
-            Ok(text) => Ok(Some(text.to_string())),
-            Err(_) => Ok(None),
-        }
+        Ok(classify_diff_bytes(blob.content()))
     }
 
     let old_text = read_side(repo, old_blob)?;
@@ -1941,6 +1945,19 @@ mod tests {
             matches!(content, DiffBlobContent::Text { .. }),
             "恰好等于上限应当可渲染"
         );
+    }
+
+    #[test]
+    fn classify_diff_bytes_matches_diff_blob_content_behavior() {
+        // 提取重构不应该改变行为:同一段字节,`classify_diff_bytes` 的结果
+        // 要跟通过 `diff_blob_content` 间接观察到的判定一致(正常文本/
+        // 二进制/超限三种)。
+        assert_eq!(classify_diff_bytes(b"hello\n"), Some("hello\n".to_string()));
+        assert_eq!(classify_diff_bytes(&[0x00, 0x01, 0x02]), None);
+        let big = vec![b'a'; MAX_DIFF_BLOB_BYTES + 1];
+        assert_eq!(classify_diff_bytes(&big), None);
+        let exact = vec![b'a'; MAX_DIFF_BLOB_BYTES];
+        assert!(classify_diff_bytes(&exact).is_some());
     }
 
     #[test]
