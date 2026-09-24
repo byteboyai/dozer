@@ -1240,14 +1240,13 @@ pub(crate) fn delete_confirm_spec(
     })
 }
 
-/// 拖拽移动确认框:居中浮层,视觉模板同 `delete_confirm_popup`(卡片 +
-/// 取消/确认按钮)。多出"新名称"/"到目录"两个真正的 `iced_widget::
-/// text_input`(复用 `byteui::form::input_text::view`),用户可在确认前
-/// 改文件名/改目标目录——2026-09 用户实测反馈:拖拽移动不该悄无声息直接
-/// 改路径,得让用户确认,见 `PendingMove` 文档。
-pub fn move_confirm_popup(
+/// 拖拽移动确认框的内容(卡片本体):由独立原生窗口宿主
+/// `platform::files_move_overlay` 渲染。多出"新名称"/"到目录"两个真正的
+/// `iced_widget::text_input`(复用 `byteui::form::input_text::view`),用户
+/// 可在确认前改文件名/改目标目录——2026-09 用户实测反馈:拖拽移动不该悄无
+/// 声息直接改路径,得让用户确认,见 `PendingMove` 文档。
+pub fn files_move_card(
     ws_state: &WorkspaceState,
-    window_width: f32,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(pending) = &ws_state.pending_move else {
         return column![].into();
@@ -1358,11 +1357,11 @@ pub fn move_confirm_popup(
         .align_y(iced_widget::core::Alignment::Center),
     ));
 
-    // 宽度改用 `dialog::width`(整窗 1/3,2026-09-15 统一约定)——此前没给
-    // 显式宽度,靠内容(新名称/到目录两个输入框各自的固定宽度)撑开。
+    // 宽度撑满宿主窗口(整窗逻辑尺寸由 `files_move_overlay::card_logical_size`
+    // 给定)——此前在主窗口内靠 `dialog::width`(整窗 1/3)。
     let dialog = container(body)
         .padding(16)
-        .width(crate::dialog::width(window_width))
+        .width(Length::Fill)
         .style(crate::dialog::card_style);
 
     container(dialog)

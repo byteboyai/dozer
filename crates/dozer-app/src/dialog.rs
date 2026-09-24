@@ -145,11 +145,11 @@ pub struct ConfirmDialog<Msg> {
     pub content_spacing: f32,
 }
 
-/// 标题 + 说明 + 取消/确认两按钮的确认弹窗骨架——`files::delete_confirm_popup`/
-/// `ssh::delete_confirm_popup`/`todo::clear_confirm_popup`/
-/// `database::delete_confirm_popup` 共用同一份组装，取代此前四处手写。
+/// 标题 + 说明 + 取消/确认两按钮的确认弹窗骨架——五处 confirm 弹窗
+/// (todo 清列表 / files 删除 / database 删数据源 / ssh 删主机 / workspace
+/// 关 Agent tab)共用同一份组装，取代此前多处手写。
 /// 只适用于"纯文字+两按钮"的简单确认框；带输入框/单选组等额外控件的弹窗
-/// (`files::move_confirm_popup`/`project::project_delete_confirm_popup`)
+/// (`files::files_move_card`/`project::project_delete_confirm_popup`)
 /// 不适用，继续各自实现。
 pub fn confirm<'a, Msg: 'a + Clone>(
     spec: ConfirmDialog<Msg>,
