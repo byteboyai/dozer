@@ -2,7 +2,7 @@
 //! `docs/superpowers/specs/2026-09-23-standard-dialog-overlay-design.md`
 //! 「架构」第 1 节。之所以能通用,是因为这一类弹窗的内容已经 100% 由同一个
 //! 纯数据结构 `dialog::ConfirmDialog<Message>` 描述——宿主只需要存住这份
-//! 数据,`redraw` 时调一次既有的 `dialog::confirm(spec.clone(), w)` 即可
+//! 数据,`redraw` 时调一次既有的 `dialog::confirm(spec.clone())` 即可
 //! 拿到 `Element`,不需要为"内容长什么样"引入 `Box<dyn Fn>` 或标志位。
 
 use std::sync::Arc;
@@ -122,7 +122,7 @@ impl ConfirmOverlay {
     }
 
     pub(crate) fn redraw(&mut self) {
-        let card = dialog::confirm(self.spec.clone(), card_logical_size().width);
+        let card = dialog::confirm(self.spec.clone());
         let mut interface = UserInterface::build(
             card,
             self.gpu.viewport.logical_size(),
@@ -189,7 +189,7 @@ impl ConfirmOverlay {
             return Vec::new();
         };
         let events: [Event; 1] = [iced_event];
-        let card = dialog::confirm(self.spec.clone(), card_logical_size().width);
+        let card = dialog::confirm(self.spec.clone());
         let mut interface = UserInterface::build(
             card,
             self.gpu.viewport.logical_size(),
@@ -218,17 +218,15 @@ impl ConfirmOverlay {
 }
 
 /// 按 `if/else if` 优先级链算出"此刻该显示哪个 confirm 弹窗"(至多一个)。
-/// 优先级顺序决定互斥弹窗重叠时谁胜出,逐个 `else if` 追加消费方。
+/// 优先级顺序决定互斥弹窗重叠时谁胜出,逐个 `else if` 追加消费方——必须
+/// 跟设计文档「架构」第 1 节 `desired_confirm_spec` 伪代码的顺序一致
+/// (files → database → ssh → agent-tab-close → todo-clear,todo 最后),
+/// 这是当年 `app/view.rs` 那条 `if/else if` 链本来的优先级,不是随意顺序:
+/// 这五个弹窗互斥展示,顺序决定"用户在别的面板还点了别的确认操作"时谁赢。
 pub(crate) fn desired_confirm(
     ws: Option<&crate::workspace::Workspace>,
 ) -> Option<(ConfirmTrigger, dialog::ConfirmDialog<Message>)> {
     let ws = ws?;
-    if ws.todo.clear_confirm_open() {
-        return Some((
-            ConfirmTrigger::TodoClear,
-            map_todo_spec(crate::extensions::todo::clear_confirm_spec()),
-        ));
-    }
     if let Some(spec) = crate::extensions::files::delete_confirm_spec(&ws.files) {
         return Some((ConfirmTrigger::FilesDelete, map_files_spec(spec)));
     }
@@ -245,6 +243,12 @@ pub(crate) fn desired_confirm(
     }
     if let Some(spec) = crate::workspace::agent_close_confirm_spec(ws) {
         return Some((ConfirmTrigger::AgentTabClose, spec));
+    }
+    if ws.todo.clear_confirm_open() {
+        return Some((
+            ConfirmTrigger::TodoClear,
+            map_todo_spec(crate::extensions::todo::clear_confirm_spec()),
+        ));
     }
     None
 }

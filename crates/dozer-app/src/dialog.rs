@@ -31,15 +31,6 @@ use byteui::interaction::icons::IconKind;
 use iced_widget::core::{Border, Color, Element, Length, alignment::Horizontal};
 use iced_widget::{Row, button, column, container, row, text};
 
-/// 弹窗默认宽度:整个软件窗体宽度(`App::window_size.0`,逻辑像素)的
-/// 1/3——2026-09-15 统一约定,取代此前各弹窗各写一个固定像素值(360/420/
-/// 280 不等,窗口变宽变窄时弹窗大小不跟着变)。调用方没有更细宽度诉求时
-/// 用这个默认值;字段特别多的表单(新增数据源/主机)如果 1/3 窗宽还是
-/// 太挤,可以在这个基础上另外调整,不强制所有弹窗都用同一个值。
-pub fn width(window_width: f32) -> Length {
-    Length::Fixed(window_width / 3.0)
-}
-
 /// 弹窗卡片容器样式:CARD 底 + 金色描边 + 圆角,取代各面板各自手写的
 /// `container::Style` 字面量。
 pub fn card_style(_t: &iced_widget::Theme) -> container::Style {
@@ -116,9 +107,15 @@ pub struct ConfirmDialog<Msg> {
 /// 只适用于"纯文字+两按钮"的简单确认框；带输入框/单选组等额外控件的弹窗
 /// (`files::files_move_card`/`project::project_delete_confirm_popup`)
 /// 不适用，继续各自实现。
+///
+/// 卡片宽度固定用 `Length::Fill`,不是 `width(window_width)`——唯一调用方
+/// `confirm_overlay.rs` 已经是弹窗独立窗口化之后的独立原生子窗口(固定
+/// 420×200 逻辑像素画布),不是当年"浮在整个主窗口 `Stack` 上"的那个语境,
+/// 卡片理应填满自己的宿主窗口(同 `settings_card`/`file_history_card` 这些
+/// 已迁移消费方的既有写法),而不是取主窗口宽度的 1/3——那样会在 420 宽的
+/// 窗口里画出一张 140 宽的卡片,四周留一圈空窗口。
 pub fn confirm<'a, Msg: 'a + Clone>(
     spec: ConfirmDialog<Msg>,
-    window_width: f32,
 ) -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {
     let title_row: Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> = match spec.icon {
         Some(icon) => row![
@@ -166,7 +163,7 @@ pub fn confirm<'a, Msg: 'a + Clone>(
         ]
         .spacing(spec.content_spacing),
     )
-    .width(width(window_width))
+    .width(Length::Fill)
     .padding(16)
     .style(card_style);
 
