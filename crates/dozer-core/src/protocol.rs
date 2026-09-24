@@ -829,6 +829,34 @@ pub enum Request {
         id: i64,
         human_reply: Option<String>,
     },
+    /// 列出某项目全部共享记忆(不含正文,列表用)。按 `updated_ms` 倒序。
+    ListMemories {
+        project_id: i64,
+    },
+    /// 按 `(project_id, title)` upsert:标题已存在则更新,否则新建。
+    /// `actor` 是 `AgentKind::as_str()` 或人工操作时的字面量 `"user"`,
+    /// 由调用方(`dozer-mcp`/`dozer-app`)决定,不在 `dozerd` 里推导。
+    WriteMemory {
+        project_id: i64,
+        title: String,
+        kind: String,
+        description: String,
+        body: String,
+        actor: String,
+    },
+    /// 查一条记忆的完整正文 + 最近历史。`id` 不属于 `project_id` 时视同
+    /// 不存在(项目隔离)。
+    GetMemory {
+        project_id: i64,
+        id: i64,
+    },
+    /// 人工删除一条记忆(`dozer-mcp` 不暴露对应工具,只有 `dozer-app` UI
+    /// 会发这个请求)。删除前的最后状态会被写进一条 `deleted` 历史。
+    DeleteMemory {
+        project_id: i64,
+        id: i64,
+        actor: String,
+    },
     /// 详情弹窗打开时一次性拿任务信息 + 关联会话的完整回合列表。
     /// `dispatch_session_id` 为 `None`(从未处理过)时 `turns` 返回空数组。
     GetTodoDetail {
@@ -997,6 +1025,14 @@ pub enum Reply {
     },
     Todo {
         todo: TodoInfo,
+    },
+    /// `ListMemories` 应答。
+    Memories {
+        memories: Vec<MemoryInfo>,
+    },
+    /// `WriteMemory`/`GetMemory` 应答。
+    MemoryDetail {
+        detail: MemoryDetail,
     },
     Categories {
         categories: Vec<CategoryInfo>,
@@ -2103,6 +2139,77 @@ mod tests {
         let line = encode_line(&list_reply);
         let decoded: Reply = decode_line(&line).unwrap();
         assert_eq!(list_reply, decoded);
+    }
+
+    #[test]
+    fn memory_protocol_types_roundtrip() {
+        let write_req = Request::WriteMemory {
+            project_id: 1,
+            title: "标题A".into(),
+            kind: "project".into(),
+            description: "一句话摘要".into(),
+            body: "正文内容".into(),
+            actor: "claude".into(),
+        };
+        let line = encode_line(&write_req);
+        assert_eq!(decode_line::<Request>(&line).unwrap(), write_req);
+
+        let get_req = Request::GetMemory {
+            project_id: 1,
+            id: 5,
+        };
+        let line = encode_line(&get_req);
+        assert_eq!(decode_line::<Request>(&line).unwrap(), get_req);
+
+        let delete_req = Request::DeleteMemory {
+            project_id: 1,
+            id: 5,
+            actor: "user".into(),
+        };
+        let line = encode_line(&delete_req);
+        assert_eq!(decode_line::<Request>(&line).unwrap(), delete_req);
+
+        let info = MemoryInfo {
+            id: 1,
+            project_id: 1,
+            title: "标题A".into(),
+            kind: "project".into(),
+            description: "desc".into(),
+            updated_ms: 1_700_000_000_000,
+            updated_by: "claude".into(),
+        };
+        let list_reply = Reply::Memories {
+            memories: vec![info],
+        };
+        let line = encode_line(&list_reply);
+        assert_eq!(decode_line::<Reply>(&line).unwrap(), list_reply);
+
+        let detail = MemoryDetail {
+            id: 1,
+            project_id: 1,
+            title: "标题A".into(),
+            kind: "project".into(),
+            description: "desc".into(),
+            body: "正文".into(),
+            created_ms: 1_700_000_000_000,
+            created_by: "claude".into(),
+            updated_ms: 1_700_000_001_000,
+            updated_by: "user".into(),
+            history: vec![MemoryHistoryEntry {
+                id: 1,
+                memory_id: 1,
+                changed_ms: 1_700_000_001_000,
+                changed_by: "user".into(),
+                change_kind: "updated".into(),
+                title: "标题A".into(),
+                kind: "project".into(),
+                description: "desc".into(),
+                body: "正文".into(),
+            }],
+        };
+        let detail_reply = Reply::MemoryDetail { detail };
+        let line = encode_line(&detail_reply);
+        assert_eq!(decode_line::<Reply>(&line).unwrap(), detail_reply);
     }
 
     #[test]
