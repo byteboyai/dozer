@@ -277,12 +277,19 @@ pub(crate) const AGENT_ORDER: [AgentKind; 5] = [
 ];
 
 /// 整个项目范围按 agent 归总某会话级标量（`per_row` 从每条会话取一个数）。
-/// 只返回总和 > 0 的 agent，不产生全零占位记录、不改变 `AGENT_ORDER` 顺序
-/// ——四种统计饼图共用同一套口径与起止，图例顺序始终对齐。
+/// 只返回总和 > 0、且占该口径大盘 ≥1% 的 agent，不产生全零占位记录、
+/// 不改变 `AGENT_ORDER` 顺序——四种统计饼图共用同一套口径与起止，图例
+/// 顺序始终对齐。占比不足 1% 的 agent 会污染饼图/图例（一圈几乎看不见
+/// 的色块、一行 `0%`），2026-09-24 用户要求直接从统计里剔除。判定用
+/// 整数运算 `total * 100 >= grand_total`，避免浮点边界误差。
 pub(crate) fn agent_metric_share(
     rows: &[(ConversationMeta, ConversationUsage)],
     per_row: impl Fn(&ConversationUsage) -> u64,
 ) -> Vec<(AgentKind, u64)> {
+    let grand_total: u64 = rows.iter().map(|(_, u)| per_row(u)).sum();
+    if grand_total == 0 {
+        return Vec::new();
+    }
     AGENT_ORDER
         .into_iter()
         .filter_map(|kind| {
@@ -291,7 +298,7 @@ pub(crate) fn agent_metric_share(
                 .filter(|(meta, _)| meta.agent == kind)
                 .map(|(_, u)| per_row(u))
                 .sum();
-            (total > 0).then_some((kind, total))
+            (total > 0 && total.saturating_mul(100) >= grand_total).then_some((kind, total))
         })
         .collect()
 }

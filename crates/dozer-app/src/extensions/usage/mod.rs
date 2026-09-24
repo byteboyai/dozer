@@ -462,6 +462,29 @@ mod tests {
         );
     }
 
+    /// 占比不足 1% 的 agent 不参与统计(2026-09-24 用户要求):饼图/图例里
+    /// 一圈几乎看不见的色块、一行 `0%` 没有意义,直接从份额口径里剔除。
+    /// 恰好等于 1%(`total*100 >= grand_total`)的仍保留,边界取闭。
+    #[test]
+    fn agent_metric_share_drops_agents_under_one_percent() {
+        let rows = vec![
+            (meta(AgentKind::Claude, "a"), usage_with_tokens(1000)),
+            // 1/1000 = 0.1%,剔除。
+            (meta(AgentKind::Codebuddy, "b"), usage_with_tokens(1)),
+        ];
+        assert_eq!(agent_token_share(&rows), vec![(AgentKind::Claude, 1000)]);
+
+        // 恰好 1%（10/1000）保留。
+        let boundary = vec![
+            (meta(AgentKind::Claude, "a"), usage_with_tokens(990)),
+            (meta(AgentKind::Codebuddy, "b"), usage_with_tokens(10)),
+        ];
+        assert_eq!(
+            agent_token_share(&boundary),
+            vec![(AgentKind::Claude, 990), (AgentKind::Codebuddy, 10)]
+        );
+    }
+
     /// V8agent(用户自研 agent)默认要被用量统计覆盖,不能像 Unknown 那样
     /// 被排除——2026-08-27 之前 `ORDER` 常量漏了它,饼图/图例里完全不出现
     /// 这家的用量,是真实 bug 不是刻意范围收窄。
