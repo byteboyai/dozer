@@ -218,21 +218,6 @@ impl App {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
-        } else if ws.project_panel.delete_pending.is_some() {
-            // 项目面板「删除项目」确认框:窗口级 overlay,同其它面板弹窗
-            // 的既有口径(2026-09-15 起——此前是 panel-level `stack!`,只在
-            // 本面板宽度范围内居中,不是整个软件窗体)。
-            let dismiss =
-                crate::dialog::scrim(Message::Project(project::Message::DeleteProjectCancel));
-            stack![
-                base,
-                dismiss,
-                project::project_delete_confirm_popup(&ws.project_panel, self.window_size.0)
-                    .map(Message::Project)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
         } else if ws.agent_picker_open {
             let dismiss = MouseArea::new(
                 container(column![])

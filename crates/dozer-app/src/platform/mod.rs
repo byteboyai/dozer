@@ -13,6 +13,7 @@ pub mod overlay_gpu;
 pub mod overlay_window;
 pub mod picker;
 pub mod project_create_overlay;
+pub mod project_delete_overlay;
 pub mod project_scaffold_overlay;
 pub mod search_overlay;
 pub mod settings_overlay;
