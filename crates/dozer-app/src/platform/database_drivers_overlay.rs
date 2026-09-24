@@ -60,6 +60,13 @@ impl DatabaseDriversOverlay {
         self.window.request_redraw();
     }
 
+    /// `close_other_overlays` 摘掉这扇窗口前要用它发一条关闭消息,道理同
+    /// `DatabaseSourceOverlay::cancel_message`——这个弹窗是布尔态而非草稿
+    /// 表单,"取消"就是把 `drivers_popup_open` 拨回 `false`。
+    pub(crate) fn cancel_message(&self) -> Message {
+        Message::Database(database::Message::DriversPopupToggle)
+    }
+
     pub(crate) fn open(
         main_window: &Arc<Window>,
         adapter: &wgpu::Adapter,

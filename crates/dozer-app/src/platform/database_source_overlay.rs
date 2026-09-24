@@ -61,6 +61,14 @@ impl DatabaseSourceOverlay {
         self.window.request_redraw();
     }
 
+    /// `close_other_overlays` 摘掉这扇窗口前要用它发一条取消消息——不然
+    /// 只摘窗口不清业务状态,`ws.database.editing()` 还是 `Some`,下一帧
+    /// 同款 `sync_database_source_overlay` 会发现触发条件仍成立又把窗口
+    /// 建回来,跟被摘掉的另一个弹窗打架(同 Escape 分支发的消息)。
+    pub(crate) fn cancel_message(&self) -> Message {
+        Message::Database(database::Message::DraftCancel)
+    }
+
     pub(crate) fn open(
         main_window: &Arc<Window>,
         adapter: &wgpu::Adapter,

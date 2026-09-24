@@ -58,6 +58,12 @@ impl ProjectDeleteOverlay {
         self.window.request_redraw();
     }
 
+    /// `close_other_overlays` 摘掉这扇窗口前要用它发一条取消消息,道理同
+    /// `DatabaseSourceOverlay::cancel_message`。
+    pub(crate) fn cancel_message(&self) -> Message {
+        Message::Project(project::Message::DeleteProjectCancel)
+    }
+
     pub(crate) fn open(
         main_window: &Arc<Window>,
         adapter: &wgpu::Adapter,

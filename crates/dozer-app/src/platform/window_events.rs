@@ -1168,60 +1168,97 @@ impl Runner {
     /// 文档。现状代码里"旧弹窗状态没真正清空、被高优先级弹窗遮住之后又
     /// 冒出来"是已确认的真实漂移(见 spec「架构」第 2 节),独立窗口没有
     /// `App::view()` 那种渲染优先级兜底,必须显式互斥。
+    /// 摘掉除 `keep` 外的其余弹窗窗口。除 `project_scaffold_overlay`(见
+    /// 下方单独注释)外,每一个被摘掉的弹窗都要先发一条它自己的取消/关闭
+    /// 消息,不能只摘窗口——只摘窗口不清对应的业务状态(`ws.database.
+    /// editing()`/`ws.ssh.editing()`/`delete_confirm()` 等仍是 `Some`),
+    /// 下一帧那个弹窗自己的 `sync_*_overlay` 会发现触发条件仍成立,把刚被
+    /// 摘掉的窗口重新建出来,和这次新开的弹窗打架——轻则同帧内闪一下,重则
+    /// (表单类)把用户正在填的草稿标记为"待重开"后又在下一帧因为某个偶然
+    /// 时序被真正清掉。收集消息要在这段字段解构的可变借用结束之后再统一
+    /// `dispatch`,不能在借用存续期间调用 `self.dispatch`。
     fn close_other_overlays(&mut self, keep: OverlayKind) {
-        let Self::Ready {
-            search_overlay,
-            file_history_overlay,
-            project_create_overlay,
-            settings_overlay,
-            confirm_overlay,
-            database_drivers_overlay,
-            database_source_overlay,
-            files_move_overlay,
-            project_scaffold_overlay,
-            project_delete_overlay,
-            ssh_host_overlay,
-            todo_detail_overlay,
-            ..
-        } = self
-        else {
-            return;
-        };
-        if keep != OverlayKind::Search {
-            *search_overlay = None;
+        let mut cancels: Vec<Message> = Vec::new();
+        {
+            let Self::Ready {
+                search_overlay,
+                file_history_overlay,
+                project_create_overlay,
+                settings_overlay,
+                confirm_overlay,
+                database_drivers_overlay,
+                database_source_overlay,
+                files_move_overlay,
+                project_scaffold_overlay,
+                project_delete_overlay,
+                ssh_host_overlay,
+                todo_detail_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            if keep != OverlayKind::Search {
+                *search_overlay = None;
+            }
+            if keep != OverlayKind::FileHistory {
+                *file_history_overlay = None;
+            }
+            if keep != OverlayKind::ProjectCreate {
+                *project_create_overlay = None;
+            }
+            if keep != OverlayKind::Settings {
+                *settings_overlay = None;
+            }
+            if keep != OverlayKind::Confirm
+                && let Some(overlay) = confirm_overlay.take()
+            {
+                cancels.push(overlay.cancel_message());
+            }
+            if keep != OverlayKind::DatabaseDrivers
+                && let Some(overlay) = database_drivers_overlay.take()
+            {
+                cancels.push(overlay.cancel_message());
+            }
+            if keep != OverlayKind::DatabaseSource
+                && let Some(overlay) = database_source_overlay.take()
+            {
+                cancels.push(overlay.cancel_message());
+            }
+            if keep != OverlayKind::FilesMove
+                && let Some(overlay) = files_move_overlay.take()
+            {
+                cancels.push(overlay.cancel_message());
+            }
+            // `project_scaffold_overlay` 设计上不可取消("scrim_blocking",
+            // 只有全部步骤完成后的"关闭"按钮能关,见设计文档「架构」第 2
+            // 节表格)——它没有、也不应该有一条"取消"消息,这里保留摘窗口
+            // 不发消息的原样行为。已知这本身跟"进行中不许中途打断"这条语义
+            // 目前只做到了"这扇窗口自己不接受 Esc/点击/失焦关闭",还没有
+            // 做到"运行期间阻止其它弹窗抢占"——是否要让它在运行期间拒绝被
+            // `close_other_overlays` 摘掉,是一个需要单独决策的产品问题,
+            // 未在这次改动里处理。
+            if keep != OverlayKind::ProjectScaffold {
+                *project_scaffold_overlay = None;
+            }
+            if keep != OverlayKind::ProjectDelete
+                && let Some(overlay) = project_delete_overlay.take()
+            {
+                cancels.push(overlay.cancel_message());
+            }
+            if keep != OverlayKind::SshHost
+                && let Some(overlay) = ssh_host_overlay.take()
+            {
+                cancels.push(overlay.cancel_message());
+            }
+            if keep != OverlayKind::TodoDetail
+                && let Some(overlay) = todo_detail_overlay.take()
+            {
+                cancels.push(overlay.cancel_message());
+            }
         }
-        if keep != OverlayKind::FileHistory {
-            *file_history_overlay = None;
-        }
-        if keep != OverlayKind::ProjectCreate {
-            *project_create_overlay = None;
-        }
-        if keep != OverlayKind::Settings {
-            *settings_overlay = None;
-        }
-        if keep != OverlayKind::Confirm {
-            *confirm_overlay = None;
-        }
-        if keep != OverlayKind::DatabaseDrivers {
-            *database_drivers_overlay = None;
-        }
-        if keep != OverlayKind::DatabaseSource {
-            *database_source_overlay = None;
-        }
-        if keep != OverlayKind::FilesMove {
-            *files_move_overlay = None;
-        }
-        if keep != OverlayKind::ProjectScaffold {
-            *project_scaffold_overlay = None;
-        }
-        if keep != OverlayKind::ProjectDelete {
-            *project_delete_overlay = None;
-        }
-        if keep != OverlayKind::SshHost {
-            *ssh_host_overlay = None;
-        }
-        if keep != OverlayKind::TodoDetail {
-            *todo_detail_overlay = None;
+        for msg in cancels {
+            self.dispatch(msg);
         }
     }
 
