@@ -354,6 +354,63 @@ impl Client {
         }
     }
 
+    pub async fn list_memories(&self, project_id: i64) -> Result<Vec<dozer_core::protocol::MemoryInfo>> {
+        match self.roundtrip(&Request::ListMemories { project_id }).await? {
+            Reply::Memories { memories } => Ok(memories),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn write_memory(
+        &self,
+        project_id: i64,
+        title: &str,
+        kind: &str,
+        description: &str,
+        body: &str,
+        actor: &str,
+    ) -> Result<dozer_core::protocol::MemoryDetail> {
+        match self
+            .roundtrip(&Request::WriteMemory {
+                project_id,
+                title: title.into(),
+                kind: kind.into(),
+                description: description.into(),
+                body: body.into(),
+                actor: actor.into(),
+            })
+            .await?
+        {
+            Reply::MemoryDetail { detail } => Ok(detail),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn get_memory(&self, project_id: i64, id: i64) -> Result<dozer_core::protocol::MemoryDetail> {
+        match self.roundtrip(&Request::GetMemory { project_id, id }).await? {
+            Reply::MemoryDetail { detail } => Ok(detail),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn delete_memory(&self, project_id: i64, id: i64, actor: &str) -> Result<()> {
+        match self
+            .roundtrip(&Request::DeleteMemory {
+                project_id,
+                id,
+                actor: actor.into(),
+            })
+            .await?
+        {
+            Reply::Ok => Ok(()),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
     pub async fn set_todo_plan_date(&self, id: i64, plan_date: Option<&str>) -> Result<TodoInfo> {
         match self
             .roundtrip(&Request::SetTodoPlanDate {

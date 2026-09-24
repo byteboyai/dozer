@@ -23,6 +23,10 @@ fn id_not_found(id: i64) -> anyhow::Error {
     anyhow::anyhow!("记忆不存在: id={id}")
 }
 
+/// `get` 的行形状:(title, kind, description, body, created_ms, created_by,
+/// updated_ms, updated_by)。抽成别名避免 clippy `type_complexity`。
+type MemoryRow = (String, String, String, String, i64, String, i64, String);
+
 impl MemoryStore {
     pub fn new(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
@@ -87,7 +91,7 @@ impl MemoryStore {
 
     pub fn get(&self, project_id: i64, id: i64) -> Result<MemoryDetail> {
         let conn = self.conn.lock().expect("db lock");
-        let row: Option<(String, String, String, String, i64, String, i64, String)> = conn
+        let row: Option<MemoryRow> = conn
             .query_row(
                 "SELECT title, kind, description, body, created_ms, created_by, updated_ms, updated_by
                  FROM memories WHERE id = ?1 AND project_id = ?2",
