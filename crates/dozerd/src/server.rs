@@ -66,21 +66,44 @@ async fn process_todo_now(
     }
 }
 
+/// `serve`/`handle_conn` 共用的存储句柄集合,归到一个具名字段结构体里
+/// (而不是继续平铺成十几个位置参数)——纯可维护性考虑:各 `Arc<XStore>`
+/// 本身是互不相同的具体类型,位置传错本来就会被 Rust 类型检查拦下,不属于
+/// CLAUDE.md"同类型相邻、编译器发现不了"那条裁决针对的情况,这里单纯是
+/// 参数表已经太长。全部字段都是 `Arc<..>`,派生 `Clone` 零成本。
+#[derive(Clone)]
+pub struct Stores {
+    pub registry: std::sync::Arc<SessionRegistry>,
+    pub projects: std::sync::Arc<crate::projects::ProjectStore>,
+    pub bookmarks: std::sync::Arc<crate::bookmarks::BookmarkStore>,
+    pub code_health: std::sync::Arc<crate::code_health::CodeHealthStore>,
+    pub transcripts: std::sync::Arc<crate::transcripts::TranscriptStore>,
+    pub session_summaries: std::sync::Arc<crate::session_summary::SessionSummaryStore>,
+    pub backfill_registry: std::sync::Arc<crate::session_summary_backfill::BackfillRegistry>,
+    pub todos: std::sync::Arc<crate::todo::TodoStore>,
+    pub categories: std::sync::Arc<crate::todo_category::CategoryStore>,
+    pub memories: std::sync::Arc<crate::memory::MemoryStore>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn serve(
     socket: &Path,
     ide_lock_dir: PathBuf,
-    registry: Arc<SessionRegistry>,
-    projects: Arc<crate::projects::ProjectStore>,
-    bookmarks: Arc<crate::bookmarks::BookmarkStore>,
-    code_health: Arc<crate::code_health::CodeHealthStore>,
-    transcripts: Arc<crate::transcripts::TranscriptStore>,
-    session_summaries: Arc<crate::session_summary::SessionSummaryStore>,
-    backfill_registry: Arc<crate::session_summary_backfill::BackfillRegistry>,
-    todos: Arc<crate::todo::TodoStore>,
-    categories: Arc<crate::todo_category::CategoryStore>,
+    stores: Stores,
     in_flight: crate::task_poller::InFlight,
 ) -> Result<()> {
+    let Stores {
+        registry,
+        projects,
+        bookmarks,
+        code_health,
+        transcripts,
+        session_summaries,
+        backfill_registry,
+        todos,
+        categories,
+        memories,
+    } = stores;
     let preview_contexts = Arc::new(PreviewContextStore::new());
     let preview_commands = Arc::new(crate::preview_commands::PreviewCommandBus::new());
     // 清扫是同步阻塞 IO(遍历目录+读文件),挪到阻塞线程池执行,不卡住
@@ -103,6 +126,18 @@ pub async fn serve(
     tracing::info!(socket = %socket.display(), "dozerd 监听中");
     let draining = Arc::new(AtomicBool::new(false));
     let shutdown_signal = Arc::new(Notify::new());
+    let stores = Stores {
+        registry,
+        projects,
+        bookmarks,
+        code_health,
+        transcripts,
+        session_summaries,
+        backfill_registry,
+        todos,
+        categories,
+        memories,
+    };
     loop {
         tokio::select! {
             accepted = listener.accept() => {
@@ -113,36 +148,20 @@ pub async fn serve(
                         continue;
                     }
                 };
-                let registry = registry.clone();
-                let projects = projects.clone();
-                let bookmarks = bookmarks.clone();
-                let code_health = code_health.clone();
+                let stores = stores.clone();
                 let preview_contexts = preview_contexts.clone();
                 let preview_commands = preview_commands.clone();
                 let ide_bridge = ide_bridge.clone();
-                let transcripts = transcripts.clone();
-                let session_summaries = session_summaries.clone();
-                let backfill_registry = backfill_registry.clone();
-                let todos = todos.clone();
-                let categories = categories.clone();
                 let in_flight = in_flight.clone();
                 let draining = draining.clone();
                 let shutdown_signal = shutdown_signal.clone();
                 tokio::spawn(async move {
                     if let Err(e) = handle_conn(
                         stream,
-                        registry,
-                        projects,
-                        bookmarks,
-                        code_health,
+                        stores,
                         preview_contexts,
                         preview_commands,
                         ide_bridge,
-                        transcripts,
-                        session_summaries,
-                        backfill_registry,
-                        todos.clone(),
-                        categories.clone(),
                         in_flight,
                         draining,
                         shutdown_signal,
@@ -406,22 +425,26 @@ pub fn agent_state_for(event: &str) -> Option<dozer_core::protocol::AgentState> 
 #[allow(clippy::too_many_arguments)]
 async fn handle_conn(
     stream: UnixStream,
-    registry: Arc<SessionRegistry>,
-    projects: Arc<crate::projects::ProjectStore>,
-    bookmarks: Arc<crate::bookmarks::BookmarkStore>,
-    code_health: Arc<crate::code_health::CodeHealthStore>,
+    stores: Stores,
     preview_contexts: Arc<PreviewContextStore>,
     preview_commands: Arc<crate::preview_commands::PreviewCommandBus>,
     ide_bridge: Arc<IdeBridgeRegistry>,
-    transcripts: Arc<crate::transcripts::TranscriptStore>,
-    session_summaries: Arc<crate::session_summary::SessionSummaryStore>,
-    backfill_registry: Arc<crate::session_summary_backfill::BackfillRegistry>,
-    todos: Arc<crate::todo::TodoStore>,
-    categories: Arc<crate::todo_category::CategoryStore>,
     in_flight: crate::task_poller::InFlight,
     draining: Arc<AtomicBool>,
     shutdown_signal: Arc<Notify>,
 ) -> Result<()> {
+    let Stores {
+        registry,
+        projects,
+        bookmarks,
+        code_health,
+        transcripts,
+        session_summaries,
+        backfill_registry,
+        todos,
+        categories,
+        memories,
+    } = stores;
     let (r, mut w) = stream.into_split();
     let mut lines = BufReader::new(r).lines();
     // attach 状态：订阅 + 会话 id
@@ -748,6 +771,39 @@ async fn handle_conn(
                                 message: format!("设置任务状态失败: {e}"),
                             },
                         },
+                        Request::ListMemories { project_id } => match memories.list(project_id) {
+                            Ok(memories) => Reply::Memories { memories },
+                            Err(e) => Reply::Error {
+                                message: format!("列共享记忆失败: {e}"),
+                            },
+                        },
+                        Request::WriteMemory {
+                            project_id,
+                            title,
+                            kind,
+                            description,
+                            body,
+                            actor,
+                        } => match memories.write(project_id, &title, &kind, &description, &body, &actor) {
+                            Ok(detail) => Reply::MemoryDetail { detail },
+                            Err(e) => Reply::Error {
+                                message: format!("写共享记忆失败: {e}"),
+                            },
+                        },
+                        Request::GetMemory { project_id, id } => match memories.get(project_id, id) {
+                            Ok(detail) => Reply::MemoryDetail { detail },
+                            Err(e) => Reply::Error {
+                                message: format!("查共享记忆失败: {e}"),
+                            },
+                        },
+                        Request::DeleteMemory { project_id, id, actor } => {
+                            match memories.delete(project_id, id, &actor) {
+                                Ok(()) => Reply::Ok,
+                                Err(e) => Reply::Error {
+                                    message: format!("删共享记忆失败: {e}"),
+                                },
+                            }
+                        }
                         Request::ListCategories { project_id } => {
                             match categories.list(project_id) {
                                 Ok(categories) => Reply::Categories { categories },
@@ -1145,19 +1201,25 @@ mod tests {
             session_summaries: std::sync::Arc<crate::session_summary::SessionSummaryStore>,
             todos: std::sync::Arc<crate::todo::TodoStore>,
             categories: std::sync::Arc<crate::todo_category::CategoryStore>,
+            memories: std::sync::Arc<crate::memory::MemoryStore>,
         ) {
             let fut = crate::server::serve(
                 socket,
                 ide_lock_dir,
-                registry,
-                projects,
-                bookmarks,
-                code_health,
-                transcripts,
-                session_summaries,
-                std::sync::Arc::new(crate::session_summary_backfill::BackfillRegistry::new()),
-                todos,
-                categories,
+                Stores {
+                    registry,
+                    projects,
+                    bookmarks,
+                    code_health,
+                    transcripts,
+                    session_summaries,
+                    backfill_registry: std::sync::Arc::new(
+                        crate::session_summary_backfill::BackfillRegistry::new(),
+                    ),
+                    todos,
+                    categories,
+                    memories,
+                },
                 crate::task_poller::new_in_flight(),
             );
             std::mem::drop(fut);

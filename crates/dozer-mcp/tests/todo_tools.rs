@@ -31,21 +31,25 @@ async fn start_daemon() -> (std::path::PathBuf, CleanupGuard) {
     let backfill_registry = Arc::new(dozerd::session_summary_backfill::BackfillRegistry::new());
     let todos = Arc::new(dozerd::todo::TodoStore::new(&db).unwrap());
     let categories = Arc::new(dozerd::todo_category::CategoryStore::new(&db).unwrap());
+    let memories = Arc::new(dozerd::memory::MemoryStore::new(&db).unwrap());
     let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
     let s = sock.clone();
     tokio::spawn(async move {
         dozerd::server::serve(
             &s,
             ide_lock_dir.path().to_path_buf(),
-            registry,
-            projects,
-            bookmarks,
-            code_health,
-            transcripts,
-            session_summaries,
-            backfill_registry,
-            todos,
-            categories,
+            dozerd::server::Stores {
+                registry,
+                projects,
+                bookmarks,
+                code_health,
+                transcripts,
+                session_summaries,
+                backfill_registry,
+                todos,
+                categories,
+                memories,
+            },
             dozerd::task_poller::new_in_flight(),
         )
         .await

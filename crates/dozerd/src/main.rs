@@ -98,6 +98,9 @@ async fn main() -> Result<()> {
     let categories = Arc::new(dozerd::todo_category::CategoryStore::new(
         &dozer_core::paths::state_dir().join("dozer.db"),
     )?);
+    let memories = Arc::new(dozerd::memory::MemoryStore::new(
+        &dozer_core::paths::state_dir().join("dozer.db"),
+    )?);
     let in_flight = dozerd::task_poller::new_in_flight();
     dozerd::task_poller::spawn(
         todos.clone(),
@@ -115,15 +118,18 @@ async fn main() -> Result<()> {
     let serve = dozerd::server::serve(
         &socket,
         dozerd::ide_bridge::lock_dir(),
-        registry,
-        projects,
-        bookmarks,
-        code_health,
-        transcripts,
-        session_summaries,
-        backfill_registry,
-        todos,
-        categories,
+        dozerd::server::Stores {
+            registry,
+            projects,
+            bookmarks,
+            code_health,
+            transcripts,
+            session_summaries,
+            backfill_registry,
+            todos,
+            categories,
+            memories,
+        },
         in_flight,
     );
     tokio::select! {

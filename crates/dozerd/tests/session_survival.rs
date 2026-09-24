@@ -62,15 +62,18 @@ async fn session_survives_client_disconnect() {
             dozerd::server::serve(
                 &sock,
                 ide_lock_dir.path().to_path_buf(),
-                registry,
-                test_projects(),
-                test_bookmarks(),
-                test_code_health(),
-                test_transcripts(),
-                test_session_summaries(),
-                test_backfill_registry(),
-                test_todos(),
-                test_categories(),
+                dozerd::server::Stores {
+                    registry,
+                    projects: test_projects(),
+                    bookmarks: test_bookmarks(),
+                    code_health: test_code_health(),
+                    transcripts: test_transcripts(),
+                    session_summaries: test_session_summaries(),
+                    backfill_registry: test_backfill_registry(),
+                    todos: test_todos(),
+                    categories: test_categories(),
+                    memories: test_memories(),
+                },
                 dozerd::task_poller::new_in_flight(),
             )
             .await
@@ -199,15 +202,18 @@ async fn unknown_session_returns_error_reply() {
             dozerd::server::serve(
                 &sock,
                 ide_lock_dir.path().to_path_buf(),
-                registry,
-                test_projects(),
-                test_bookmarks(),
-                test_code_health(),
-                test_transcripts(),
-                test_session_summaries(),
-                test_backfill_registry(),
-                test_todos(),
-                test_categories(),
+                dozerd::server::Stores {
+                    registry,
+                    projects: test_projects(),
+                    bookmarks: test_bookmarks(),
+                    code_health: test_code_health(),
+                    transcripts: test_transcripts(),
+                    session_summaries: test_session_summaries(),
+                    backfill_registry: test_backfill_registry(),
+                    todos: test_todos(),
+                    categories: test_categories(),
+                    memories: test_memories(),
+                },
                 dozerd::task_poller::new_in_flight(),
             )
             .await
@@ -246,15 +252,18 @@ async fn attach_delivers_marker_exactly_once() {
             dozerd::server::serve(
                 &sock,
                 ide_lock_dir.path().to_path_buf(),
-                registry,
-                test_projects(),
-                test_bookmarks(),
-                test_code_health(),
-                test_transcripts(),
-                test_session_summaries(),
-                test_backfill_registry(),
-                test_todos(),
-                test_categories(),
+                dozerd::server::Stores {
+                    registry,
+                    projects: test_projects(),
+                    bookmarks: test_bookmarks(),
+                    code_health: test_code_health(),
+                    transcripts: test_transcripts(),
+                    session_summaries: test_session_summaries(),
+                    backfill_registry: test_backfill_registry(),
+                    todos: test_todos(),
+                    categories: test_categories(),
+                    memories: test_memories(),
+                },
                 dozerd::task_poller::new_in_flight(),
             )
             .await
@@ -329,15 +338,18 @@ async fn attach_from_offset_resumes_within_window() {
             dozerd::server::serve(
                 &sock,
                 ide_lock_dir.path().to_path_buf(),
-                registry,
-                test_projects(),
-                test_bookmarks(),
-                test_code_health(),
-                test_transcripts(),
-                test_session_summaries(),
-                test_backfill_registry(),
-                test_todos(),
-                test_categories(),
+                dozerd::server::Stores {
+                    registry,
+                    projects: test_projects(),
+                    bookmarks: test_bookmarks(),
+                    code_health: test_code_health(),
+                    transcripts: test_transcripts(),
+                    session_summaries: test_session_summaries(),
+                    backfill_registry: test_backfill_registry(),
+                    todos: test_todos(),
+                    categories: test_categories(),
+                    memories: test_memories(),
+                },
                 dozerd::task_poller::new_in_flight(),
             )
             .await
@@ -441,15 +453,18 @@ async fn attach_stream_offset_invariant_under_load() {
             dozerd::server::serve(
                 &sock,
                 ide_lock_dir.path().to_path_buf(),
-                registry,
-                test_projects(),
-                test_bookmarks(),
-                test_code_health(),
-                test_transcripts(),
-                test_session_summaries(),
-                test_backfill_registry(),
-                test_todos(),
-                test_categories(),
+                dozerd::server::Stores {
+                    registry,
+                    projects: test_projects(),
+                    bookmarks: test_bookmarks(),
+                    code_health: test_code_health(),
+                    transcripts: test_transcripts(),
+                    session_summaries: test_session_summaries(),
+                    backfill_registry: test_backfill_registry(),
+                    todos: test_todos(),
+                    categories: test_categories(),
+                    memories: test_memories(),
+                },
                 dozerd::task_poller::new_in_flight(),
             )
             .await
@@ -540,15 +555,18 @@ async fn attach_from_offset_out_of_window_falls_back_to_full_snapshot() {
             dozerd::server::serve(
                 &sock,
                 ide_lock_dir.path().to_path_buf(),
-                registry,
-                test_projects(),
-                test_bookmarks(),
-                test_code_health(),
-                test_transcripts(),
-                test_session_summaries(),
-                test_backfill_registry(),
-                test_todos(),
-                test_categories(),
+                dozerd::server::Stores {
+                    registry,
+                    projects: test_projects(),
+                    bookmarks: test_bookmarks(),
+                    code_health: test_code_health(),
+                    transcripts: test_transcripts(),
+                    session_summaries: test_session_summaries(),
+                    backfill_registry: test_backfill_registry(),
+                    todos: test_todos(),
+                    categories: test_categories(),
+                    memories: test_memories(),
+                },
                 dozerd::task_poller::new_in_flight(),
             )
             .await
@@ -653,3 +671,9 @@ fn test_categories() -> std::sync::Arc<dozerd::todo_category::CategoryStore> {
     let db = std::env::temp_dir().join(format!("dozerd-cat-{}.db", uuid::Uuid::new_v4()));
     std::sync::Arc::new(dozerd::todo_category::CategoryStore::new(&db).unwrap())
 }
+
+fn test_memories() -> std::sync::Arc<dozerd::memory::MemoryStore> {
+    let db = std::env::temp_dir().join(format!("dozerd-mem-{}.db", uuid::Uuid::new_v4()));
+    std::sync::Arc::new(dozerd::memory::MemoryStore::new(&db).unwrap())
+}
+

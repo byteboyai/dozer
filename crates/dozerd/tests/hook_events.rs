@@ -42,15 +42,18 @@ async fn hook_event_reaches_attached_client_and_list() {
             dozerd::server::serve(
                 &sock,
                 ide_lock_dir.path().to_path_buf(),
-                registry,
-                test_projects(),
-                test_bookmarks(),
-                test_code_health(),
-                test_transcripts(),
-                test_session_summaries(),
-                test_backfill_registry(),
-                test_todos(),
-                test_categories(),
+                dozerd::server::Stores {
+                    registry,
+                    projects: test_projects(),
+                    bookmarks: test_bookmarks(),
+                    code_health: test_code_health(),
+                    transcripts: test_transcripts(),
+                    session_summaries: test_session_summaries(),
+                    backfill_registry: test_backfill_registry(),
+                    todos: test_todos(),
+                    categories: test_categories(),
+                    memories: test_memories(),
+                },
                 dozerd::task_poller::new_in_flight(),
             )
             .await
@@ -209,6 +212,12 @@ fn test_categories() -> std::sync::Arc<dozerd::todo_category::CategoryStore> {
     let db = std::env::temp_dir().join(format!("dozerd-cat-{}.db", uuid::Uuid::new_v4()));
     std::sync::Arc::new(dozerd::todo_category::CategoryStore::new(&db).unwrap())
 }
+
+fn test_memories() -> std::sync::Arc<dozerd::memory::MemoryStore> {
+    let db = std::env::temp_dir().join(format!("dozerd-mem-{}.db", uuid::Uuid::new_v4()));
+    std::sync::Arc::new(dozerd::memory::MemoryStore::new(&db).unwrap())
+}
+
 #[tokio::test]
 async fn project_open_and_list_roundtrip() {
     let sock = std::env::temp_dir().join(format!("dozerd-proj-{}.sock", uuid::Uuid::new_v4()));
@@ -252,15 +261,18 @@ async fn project_open_and_list_roundtrip() {
             dozerd::server::serve(
                 &sock,
                 ide_lock_dir.path().to_path_buf(),
-                registry,
-                projects,
-                bookmarks,
-                code_health,
-                transcripts,
-                session_summaries,
-                backfill_registry,
-                todos,
-                categories,
+                dozerd::server::Stores {
+                    registry,
+                    projects,
+                    bookmarks,
+                    code_health,
+                    transcripts,
+                    session_summaries,
+                    backfill_registry,
+                    todos,
+                    categories,
+                    memories: test_memories(),
+                },
                 dozerd::task_poller::new_in_flight(),
             )
             .await
@@ -311,15 +323,18 @@ async fn record_and_get_session_summary_roundtrip() {
             dozerd::server::serve(
                 &sock,
                 ide_lock_dir.path().to_path_buf(),
-                registry,
-                projects,
-                bookmarks,
-                code_health,
-                transcripts,
-                session_summaries,
-                backfill_registry,
-                todos,
-                categories,
+                dozerd::server::Stores {
+                    registry,
+                    projects,
+                    bookmarks,
+                    code_health,
+                    transcripts,
+                    session_summaries,
+                    backfill_registry,
+                    todos,
+                    categories,
+                    memories: test_memories(),
+                },
                 dozerd::task_poller::new_in_flight(),
             )
             .await
@@ -409,15 +424,18 @@ async fn close_with_summary_kills_session_after_ai_summary_recorded() {
             dozerd::server::serve(
                 &sock,
                 ide_lock_dir.path().to_path_buf(),
-                registry,
-                projects,
-                bookmarks,
-                code_health,
-                transcripts,
-                session_summaries,
-                backfill_registry,
-                todos,
-                categories,
+                dozerd::server::Stores {
+                    registry,
+                    projects,
+                    bookmarks,
+                    code_health,
+                    transcripts,
+                    session_summaries,
+                    backfill_registry,
+                    todos,
+                    categories,
+                    memories: test_memories(),
+                },
                 dozerd::task_poller::new_in_flight(),
             )
             .await
@@ -515,15 +533,18 @@ async fn list_conversations_with_summaries_joins_correctly() {
             dozerd::server::serve(
                 &sock,
                 ide_lock_dir.path().to_path_buf(),
-                registry,
-                test_projects(),
-                test_bookmarks(),
-                test_code_health(),
-                transcripts,
-                session_summaries,
-                backfill_registry,
-                todos,
-                categories,
+                dozerd::server::Stores {
+                    registry,
+                    projects: test_projects(),
+                    bookmarks: test_bookmarks(),
+                    code_health: test_code_health(),
+                    transcripts,
+                    session_summaries,
+                    backfill_registry,
+                    todos,
+                    categories,
+                    memories: test_memories(),
+                },
                 dozerd::task_poller::new_in_flight(),
             )
             .await
@@ -621,15 +642,18 @@ async fn aider_hook_sequence_drives_state_machine() {
             dozerd::server::serve(
                 &sock,
                 ide_lock_dir.path().to_path_buf(),
-                registry,
-                test_projects(),
-                test_bookmarks(),
-                test_code_health(),
-                test_transcripts(),
-                test_session_summaries(),
-                test_backfill_registry(),
-                test_todos(),
-                test_categories(),
+                dozerd::server::Stores {
+                    registry,
+                    projects: test_projects(),
+                    bookmarks: test_bookmarks(),
+                    code_health: test_code_health(),
+                    transcripts: test_transcripts(),
+                    session_summaries: test_session_summaries(),
+                    backfill_registry: test_backfill_registry(),
+                    todos: test_todos(),
+                    categories: test_categories(),
+                    memories: test_memories(),
+                },
                 dozerd::task_poller::new_in_flight(),
             )
             .await
