@@ -49,6 +49,7 @@ use crate::platform::project_scaffold_overlay;
 use crate::platform::search_overlay;
 use crate::platform::settings_overlay;
 use crate::platform::ssh_host_overlay;
+use crate::platform::todo_detail_overlay;
 use crate::preview;
 use crate::theme;
 
@@ -234,6 +235,10 @@ pub(crate) enum Runner {
         /// `sync_ssh_host_overlay` 按当前工作区 `ssh.editing()` 单向驱动。
         /// 需 IME + 失焦即关闭。
         ssh_host_overlay: Option<ssh_host_overlay::SshHostOverlay>,
+        /// Todo 任务详情弹窗的独立窗口宿主,生命周期由
+        /// `sync_todo_detail_overlay` 按当前工作区 `todo.detail_popup_open()`
+        /// 单向驱动。需 IME + 失焦即关闭。
+        todo_detail_overlay: Option<todo_detail_overlay::TodoDetailOverlay>,
     },
 }
 /// 点击/消息后决定键盘焦点归谁:预览 webview、浏览器 webview(各自
@@ -261,6 +266,7 @@ pub(crate) enum OverlayKind {
     ProjectScaffold,
     ProjectDelete,
     SshHost,
+    TodoDetail,
 }
 
 impl Runner {
@@ -1175,6 +1181,7 @@ impl Runner {
             project_scaffold_overlay,
             project_delete_overlay,
             ssh_host_overlay,
+            todo_detail_overlay,
             ..
         } = self
         else {
@@ -1212,6 +1219,9 @@ impl Runner {
         }
         if keep != OverlayKind::SshHost {
             *ssh_host_overlay = None;
+        }
+        if keep != OverlayKind::TodoDetail {
+            *todo_detail_overlay = None;
         }
     }
 
@@ -1896,6 +1906,66 @@ impl Runner {
             return;
         };
         if let Some(overlay) = project_delete_overlay {
+            overlay.request_redraw();
+        }
+    }
+
+    /// Todo 任务详情弹窗:开关条件是当前工作区
+    /// `todo.detail_popup_open()`,三段 `match SyncAction` 模式。
+    fn sync_todo_detail_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let action = {
+            let Self::Ready {
+                app,
+                todo_detail_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            let open = app
+                .active_workspace()
+                .is_some_and(|ws| ws.todo.detail_popup_open());
+            todo_detail_overlay::sync_action(open, todo_detail_overlay.is_some())
+        };
+        match action {
+            todo_detail_overlay::SyncAction::Open => {
+                self.close_other_overlays(OverlayKind::TodoDetail);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    todo_detail_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *todo_detail_overlay = Some(todo_detail_overlay::TodoDetailOverlay::open(
+                    window, adapter, device, queue, instance, el,
+                ));
+            }
+            todo_detail_overlay::SyncAction::Close => {
+                let Self::Ready {
+                    todo_detail_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *todo_detail_overlay = None;
+            }
+            todo_detail_overlay::SyncAction::Noop => {}
+        }
+        let Self::Ready {
+            todo_detail_overlay,
+            ..
+        } = self
+        else {
+            return;
+        };
+        if let Some(overlay) = todo_detail_overlay {
             overlay.request_redraw();
         }
     }
@@ -2727,6 +2797,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 project_scaffold_overlay: None,
                 project_delete_overlay: None,
                 ssh_host_overlay: None,
+                todo_detail_overlay: None,
             };
         }
     }
@@ -2760,6 +2831,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_project_scaffold_overlay(event_loop);
         self.sync_ssh_host_overlay(event_loop);
         self.sync_project_delete_overlay(event_loop);
+        self.sync_todo_detail_overlay(event_loop);
     }
 
     fn window_event(
@@ -3134,6 +3206,33 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             return;
         }
 
+        // Todo 任务详情弹窗窗口自己那份 `WindowId` 的事件。
+        if let Self::Ready {
+            app,
+            todo_detail_overlay,
+            ..
+        } = self
+            && let Some(overlay) = todo_detail_overlay
+            && window_id == overlay.window_id()
+        {
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app);
+            } else if matches!(event, WindowEvent::CloseRequested) {
+                self.dispatch(Message::Todo(crate::extensions::todo::Message::DetailClose));
+            } else if let WindowEvent::Focused(focused) = event {
+                // 弹窗内无原生选择器,失焦即关闭(同 settings overlay)。
+                if overlay.handle_focus(focused) {
+                    self.dispatch(Message::Todo(crate::extensions::todo::Message::DetailClose));
+                }
+            } else {
+                for message in overlay.handle_input(app, &event) {
+                    self.dispatch(message);
+                }
+            }
+            self.sync_todo_detail_overlay(event_loop);
+            return;
+        }
+
         // `consumed == true`:已经被应用级快捷键接管(见
         // `on_window_event` 顶部文档),下面不能再把同一个原始事件转换
         // 喂给 iced 标准管线,否则会重复处理(⌘S 这类字母快捷键会在
@@ -3171,6 +3270,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 project_scaffold_overlay,
                 project_delete_overlay,
                 ssh_host_overlay,
+                todo_detail_overlay,
                 ..
             } = self
             else {
@@ -4133,6 +4233,16 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             window.scale_factor(),
                         );
                     }
+                    if let Some(overlay) = todo_detail_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                        );
+                    }
                     // bounds 同步由本函数末尾的 sync_previews 统一执行
                 }
                 WindowEvent::CloseRequested => {
@@ -4148,6 +4258,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     *project_scaffold_overlay = None; // 图干净,Drop 本身就会释放。
                     *project_delete_overlay = None; // 图干净,Drop 本身就会释放。
                     *ssh_host_overlay = None; // 图干净,Drop 本身就会释放。
+                    *todo_detail_overlay = None; // 图干净,Drop 本身就会释放。
                     // 同步写盘,不用 `spawn_shell_layout_save` 的异步路径——
                     // 进程马上退出,spawn 的 tokio 任务不保证跑得完。
                     app.persist_window_size_on_exit();
@@ -4332,6 +4443,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_project_scaffold_overlay(event_loop);
         self.sync_ssh_host_overlay(event_loop);
         self.sync_project_delete_overlay(event_loop);
+        self.sync_todo_detail_overlay(event_loop);
     }
 }
 

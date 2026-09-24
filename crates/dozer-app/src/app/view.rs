@@ -299,14 +299,6 @@ impl App {
                     .height(Length::Fill)
                     .into(),
             }
-        } else if ws.todo.detail_popup_open() {
-            // 任务详情弹窗:窗口级 overlay,原生渲染(不走 wry webview)。
-            // 点弹层外任意处经 dismiss 收起,与其它 Todo 浮层同款约定。
-            let dismiss = crate::dialog::scrim(Message::Todo(todo::Message::DetailClose));
-            stack![base, dismiss, self.todo_detail_popup()]
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
         } else if ws.todo.status_filter_popup_open() {
             // 搜索框左前"状态"筛选浮层:窗口级 overlay。点弹层外任意处经
             // dismiss 收起(与右键菜单/分支切换同款约定),弹层本体的每一项

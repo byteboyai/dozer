@@ -1879,3 +1879,95 @@ mod clear_confirm_tests {
         assert_eq!(spec.content_spacing, 12.0);
     }
 }
+
+/// 任务详情弹窗的卡片本体:由独立原生窗口宿主
+/// `platform::todo_detail_overlay` 渲染。原生 iced 渲染(不复用会话面板的
+/// webview trace——那套渲染实际内容在 `dozer://review-trace/host.html` 里,
+/// 任务详情只需要看人类/agent 往来文本,不需要工具调用折叠/trace 可视化,
+/// 塞进一个跟随光标定位、随时开合的原生弹窗里没有必要也不合适)。
+/// 宽度撑满宿主窗口(整窗逻辑尺寸由 `todo_detail_overlay::card_logical_size`
+/// 给定)。
+pub fn todo_detail_card(
+    ws: &Workspace,
+) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let Some(idx) = ws.todo.detail_open_idx() else {
+        return column![].into();
+    };
+    let Some(item) = ws.todo.items().get(idx) else {
+        return column![].into();
+    };
+
+    let header = column![
+        text(item.text.clone()).size(byteui::theme::font::subtitle()),
+        text(
+            item.assigned_agent
+                .map(|a| format!("指派给:{}", a.label()))
+                .unwrap_or_else(|| "未指派".to_string())
+        )
+        .size(byteui::theme::font::body())
+        .color(byteui::theme::color::current().dim),
+    ]
+    .spacing(4);
+
+    let mut turns_col = column![].spacing(8);
+    for turn in ws.todo.detail_turns() {
+        let label = if turn.role == "human" {
+            "你".to_string()
+        } else {
+            item.assigned_agent
+                .map(|a| a.label().to_string())
+                .unwrap_or_else(|| "AI".to_string())
+        };
+        turns_col = turns_col.push(
+            column![
+                text(label)
+                    .size(byteui::theme::font::caption())
+                    .color(byteui::theme::color::current().gold),
+                text(turn.content.clone())
+                    .size(byteui::theme::font::body())
+                    .width(Length::Fill),
+            ]
+            .spacing(2),
+        );
+    }
+    let turns_scroll = iced_widget::Scrollable::new(turns_col)
+        .width(Length::Fill)
+        .height(Length::Fixed(320.0))
+        .direction(iced_widget::scrollable::Direction::Vertical(
+            byteui::interaction::scrollbar::scrollbar(),
+        ))
+        .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style());
+
+    let reply_box = container(byteui::form::input_text::view(
+        "回复...",
+        ws.todo.detail_reply_draft(),
+        false,
+        Some(detail_reply_field_id()),
+        false,
+        None,
+        false,
+        |s| Message::DetailReplyInput(s),
+    ))
+    .width(Length::Fill);
+    let submit_label = if ws.todo.detail_processing() {
+        "处理中…"
+    } else {
+        "处理"
+    };
+    let submit = button(text(submit_label))
+        .on_press_maybe((!ws.todo.detail_processing()).then_some(Message::DetailReplySubmit))
+        .padding([6, 12]);
+
+    let card = column![header, turns_scroll, row![reply_box, submit].spacing(8)]
+        .spacing(12)
+        .padding(16)
+        .width(Length::Fill);
+    let card = container(card).style(crate::dialog::card_style);
+
+    container(card)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .into()
+}
