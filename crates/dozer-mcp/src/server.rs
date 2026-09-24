@@ -54,6 +54,19 @@ pub struct EditTodoTextParams {
     pub text: String,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WriteMemoryParams {
+    pub title: String,
+    pub body: String,
+    pub kind: String,
+    pub description: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct GetMemoryParams {
+    pub title_or_id: String,
+}
+
 /// T13:`preview_navigate` 参数。给 `path` + 起止(只给 line/column 是 reveal,
 /// 再给 end_line/end_column 就是 select,均 1-based)。
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -138,8 +151,8 @@ impl DozerMcpServer {
         &self,
         Parameters(p): Parameters<PreviewNavigateParams>,
     ) -> Result<CallToolResult, McpError> {
-        let project_id = self
-            .resolve_project_id()
+        let (project_id, _agent) = self
+            .resolve_project_and_agent()
             .await
             .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
         let action = match (p.end_line, p.end_column) {
@@ -204,8 +217,8 @@ impl DozerMcpServer {
         &self,
         Parameters(NoParams {}): Parameters<NoParams>,
     ) -> Result<CallToolResult, McpError> {
-        let project_id = self
-            .resolve_project_id()
+        let (project_id, _agent) = self
+            .resolve_project_and_agent()
             .await
             .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
         let todos = self
@@ -227,8 +240,8 @@ impl DozerMcpServer {
         &self,
         Parameters(AddTodoParams { text }): Parameters<AddTodoParams>,
     ) -> Result<CallToolResult, McpError> {
-        let project_id = self
-            .resolve_project_id()
+        let (project_id, _agent) = self
+            .resolve_project_and_agent()
             .await
             .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
         let todo = self
@@ -270,6 +283,103 @@ impl DozerMcpServer {
             json!({ "id": todo.id, "text": todo.text, "done": todo.done }),
         ))
     }
+
+    #[tool(
+        description = "记忆优先读写这里,不要用你自己本地的记忆机制。按标题在项目内 upsert:标题已存在就更新,不存在就新建。写入前建议先调 list_memories 看看有没有同名条目可以更新,避免重复记忆。kind 建议用 user/feedback/project/reference 之一,但不强制。"
+    )]
+    pub async fn write_memory(
+        &self,
+        Parameters(WriteMemoryParams { title, body, kind, description }): Parameters<WriteMemoryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let (project_id, agent) = self
+            .resolve_project_and_agent()
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        let detail = self
+            .client
+            .write_memory(project_id, &title, &kind, &description, &body, agent.label())
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        Ok(CallToolResult::structured(json!({
+            "id": detail.id,
+            "title": detail.title,
+            "kind": detail.kind,
+            "description": detail.description,
+            "updated_by": detail.updated_by,
+        })))
+    }
+
+    #[tool(description = "列出当前项目的共享记忆(标题/分类/摘要/最后更新方,不含正文)。读记忆前先调这个,别猜有没有同名条目。")]
+    pub async fn list_memories(
+        &self,
+        Parameters(NoParams {}): Parameters<NoParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let (project_id, _agent) = self
+            .resolve_project_and_agent()
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        let memories = self
+            .client
+            .list_memories(project_id)
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        let value = json!(
+            memories
+                .into_iter()
+                .map(|m| json!({
+                    "id": m.id,
+                    "title": m.title,
+                    "kind": m.kind,
+                    "description": m.description,
+                    "updated_by": m.updated_by,
+                }))
+                .collect::<Vec<_>>()
+        );
+        Ok(CallToolResult::structured(json!({ "memories": value })))
+    }
+
+    #[tool(description = "查一条共享记忆的完整正文。title_or_id 可以传标题(和 list_memories 里看到的一致)或数字 id;传标题时会先内部查一遍 list_memories 做匹配。")]
+    pub async fn get_memory(
+        &self,
+        Parameters(GetMemoryParams { title_or_id }): Parameters<GetMemoryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let (project_id, _agent) = self
+            .resolve_project_and_agent()
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        let id = if let Ok(id) = title_or_id.parse::<i64>() {
+            id
+        } else {
+            let memories = self
+                .client
+                .list_memories(project_id)
+                .await
+                .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+            memories
+                .into_iter()
+                .find(|m| m.title == title_or_id)
+                .ok_or_else(|| McpError::internal_error(format!("未找到标题为 {title_or_id} 的记忆"), None))?
+                .id
+        };
+        let detail = self
+            .client
+            .get_memory(project_id, id)
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        Ok(CallToolResult::structured(json!({
+            "id": detail.id,
+            "title": detail.title,
+            "kind": detail.kind,
+            "description": detail.description,
+            "body": detail.body,
+            "updated_by": detail.updated_by,
+            "history": detail.history.iter().map(|h| json!({
+                "changed_ms": h.changed_ms,
+                "changed_by": h.changed_by,
+                "change_kind": h.change_kind,
+            })).collect::<Vec<_>>(),
+        })))
+    }
 }
 
 impl DozerMcpServer {
@@ -294,10 +404,10 @@ impl DozerMcpServer {
             .map_err(|e| anyhow::anyhow!("查询预览上下文失败: {e}"))
     }
 
-    /// session_id → project_id 的解析逻辑,`get_preview_context`(`fetch_
-    /// context`)已经有一份等价实现;Todo 工具的 4 个新方法里,需要按项目
-    /// 过滤的(`list_todos`/`add_todo`)也复用同一套,抽成独立方法避免重复。
-    async fn resolve_project_id(&self) -> anyhow::Result<i64> {
+    /// session_id → (project_id, agent) 的解析逻辑。`agent` 用于
+    /// `write_memory` 的 `actor` 归属;`list_todos`/`add_todo` 等既有
+    /// 调用方不需要 `agent`,解构时用 `_` 丢弃即可。
+    async fn resolve_project_and_agent(&self) -> anyhow::Result<(i64, dozer_core::protocol::AgentKind)> {
         let sessions = self
             .client
             .list()
@@ -307,9 +417,10 @@ impl DozerMcpServer {
             .iter()
             .find(|s| s.id == self.session_id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在于 dozerd"))?;
-        session
+        let project_id = session
             .project_id
-            .ok_or_else(|| anyhow::anyhow!("会话尚未归属任何项目"))
+            .ok_or_else(|| anyhow::anyhow!("会话尚未归属任何项目"))?;
+        Ok((project_id, session.agent))
     }
 
     /// 测试专用入口：绕开 MCP `Parameters`/`CallToolResult` 包装，直接跑
