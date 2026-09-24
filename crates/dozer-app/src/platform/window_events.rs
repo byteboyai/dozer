@@ -40,6 +40,7 @@ use crate::extensions;
 use crate::extensions::files;
 use crate::platform::confirm_overlay;
 use crate::platform::database_drivers_overlay;
+use crate::platform::database_source_overlay;
 use crate::platform::file_history_overlay;
 use crate::platform::files_move_overlay;
 use crate::platform::project_create_overlay;
@@ -210,6 +211,10 @@ pub(crate) enum Runner {
         /// `sync_database_drivers_overlay` 按 `app.database.drivers_popup_open()`
         /// 单向驱动。
         database_drivers_overlay: Option<database_drivers_overlay::DatabaseDriversOverlay>,
+        /// 数据库「新增/编辑数据源」表单的独立窗口宿主,生命周期由
+        /// `sync_database_source_overlay` 按当前工作区
+        /// `database.editing()` 单向驱动。需 IME + 失焦即关闭。
+        database_source_overlay: Option<database_source_overlay::DatabaseSourceOverlay>,
         /// 文件树"拖拽移动"确认弹窗的独立窗口宿主,生命周期由
         /// `sync_files_move_overlay` 按当前工作区 `files.pending_move_is_some()`
         /// 单向驱动。不接失焦关闭(见模块文档)。
@@ -242,6 +247,7 @@ pub(crate) enum OverlayKind {
     Settings,
     Confirm,
     DatabaseDrivers,
+    DatabaseSource,
     FilesMove,
     ProjectScaffold,
 }
@@ -1153,6 +1159,7 @@ impl Runner {
             settings_overlay,
             confirm_overlay,
             database_drivers_overlay,
+            database_source_overlay,
             files_move_overlay,
             project_scaffold_overlay,
             ..
@@ -1177,6 +1184,9 @@ impl Runner {
         }
         if keep != OverlayKind::DatabaseDrivers {
             *database_drivers_overlay = None;
+        }
+        if keep != OverlayKind::DatabaseSource {
+            *database_source_overlay = None;
         }
         if keep != OverlayKind::FilesMove {
             *files_move_overlay = None;
@@ -1568,6 +1578,67 @@ impl Runner {
             return;
         };
         if let Some(overlay) = database_drivers_overlay {
+            overlay.request_redraw();
+        }
+    }
+
+    /// 数据库「新增/编辑数据源」表单:开关条件是当前工作区
+    /// `database.editing().is_some()`,三段 `match SyncAction` 模式。
+    fn sync_database_source_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let action = {
+            let Self::Ready {
+                app,
+                database_source_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            let open = app
+                .active_workspace()
+                .is_some_and(|ws| ws.database.editing().is_some());
+            database_source_overlay::sync_action(open, database_source_overlay.is_some())
+        };
+        match action {
+            database_source_overlay::SyncAction::Open => {
+                self.close_other_overlays(OverlayKind::DatabaseSource);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    database_source_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *database_source_overlay =
+                    Some(database_source_overlay::DatabaseSourceOverlay::open(
+                        window, adapter, device, queue, instance, el,
+                    ));
+            }
+            database_source_overlay::SyncAction::Close => {
+                let Self::Ready {
+                    database_source_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *database_source_overlay = None;
+            }
+            database_source_overlay::SyncAction::Noop => {}
+        }
+        let Self::Ready {
+            database_source_overlay,
+            ..
+        } = self
+        else {
+            return;
+        };
+        if let Some(overlay) = database_source_overlay {
             overlay.request_redraw();
         }
     }
@@ -2514,6 +2585,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 settings_overlay: None,
                 confirm_overlay: None,
                 database_drivers_overlay: None,
+                database_source_overlay: None,
                 files_move_overlay: None,
                 project_scaffold_overlay: None,
             };
@@ -2544,6 +2616,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_settings_overlay(event_loop);
         self.sync_confirm_overlay(event_loop);
         self.sync_database_drivers_overlay(event_loop);
+        self.sync_database_source_overlay(event_loop);
         self.sync_files_move_overlay(event_loop);
         self.sync_project_scaffold_overlay(event_loop);
     }
@@ -2778,6 +2851,37 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             return;
         }
 
+        // 数据库「新增/编辑数据源」窗口自己那份 `WindowId` 的事件。
+        if let Self::Ready {
+            app,
+            database_source_overlay,
+            ..
+        } = self
+            && let Some(overlay) = database_source_overlay
+            && window_id == overlay.window_id()
+        {
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app);
+            } else if matches!(event, WindowEvent::CloseRequested) {
+                self.dispatch(Message::Database(
+                    extensions::database::Message::DraftCancel,
+                ));
+            } else if let WindowEvent::Focused(focused) = event {
+                // 表单内无原生选择器,失焦即关闭(同 settings overlay)。
+                if overlay.handle_focus(focused) {
+                    self.dispatch(Message::Database(
+                        extensions::database::Message::DraftCancel,
+                    ));
+                }
+            } else {
+                for message in overlay.handle_input(app, &event) {
+                    self.dispatch(message);
+                }
+            }
+            self.sync_database_source_overlay(event_loop);
+            return;
+        }
+
         // 文件树"拖拽移动"确认窗口自己那份 `WindowId` 的事件。
         if let Self::Ready {
             app,
@@ -2864,6 +2968,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 settings_overlay,
                 confirm_overlay,
                 database_drivers_overlay,
+                database_source_overlay,
                 files_move_overlay,
                 project_scaffold_overlay,
                 ..
@@ -3778,6 +3883,16 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             window.scale_factor(),
                         );
                     }
+                    if let Some(overlay) = database_source_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                        );
+                    }
                     if let Some(overlay) = files_move_overlay {
                         overlay.reposition(
                             device,
@@ -3808,6 +3923,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     *settings_overlay = None; // 图干净,Drop 本身就会释放。
                     *confirm_overlay = None; // 图干净,Drop 本身就会释放。
                     *database_drivers_overlay = None; // 图干净,Drop 本身就会释放。
+                    *database_source_overlay = None; // 图干净,Drop 本身就会释放。
                     *files_move_overlay = None; // 图干净,Drop 本身就会释放。
                     *project_scaffold_overlay = None; // 图干净,Drop 本身就会释放。
                     // 同步写盘,不用 `spawn_shell_layout_save` 的异步路径——
@@ -3989,6 +4105,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_settings_overlay(event_loop);
         self.sync_confirm_overlay(event_loop);
         self.sync_database_drivers_overlay(event_loop);
+        self.sync_database_source_overlay(event_loop);
         self.sync_files_move_overlay(event_loop);
         self.sync_project_scaffold_overlay(event_loop);
     }

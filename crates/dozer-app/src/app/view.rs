@@ -233,24 +233,6 @@ impl App {
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
-        } else if ws.database.editing().is_some() {
-            // 数据库面板「新增/编辑数据源」表单:窗口级 overlay,同上。
-            let draft = ws.database.editing().unwrap();
-            let dismiss = crate::dialog::scrim(Message::Database(database::Message::DraftCancel));
-            stack![
-                base,
-                dismiss,
-                database::source_form(
-                    draft,
-                    &self.database,
-                    ws.database.draft_test_status(),
-                    self.window_size.0,
-                )
-                .map(Message::Database)
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
         } else if ws.ssh.editing().is_some() {
             // 主机面板「添加/编辑主机」表单:窗口级 overlay,同上。
             let draft = ws.ssh.editing().unwrap();

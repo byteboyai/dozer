@@ -223,18 +223,17 @@ pub(crate) fn source_tree_node<'a>(
     }
 }
 
-/// 新增/编辑数据源弹窗:窗口级居中浮层,视觉模板同 `delete_confirm_popup`
+/// 新增/编辑数据源弹窗的内容(卡片本体):由独立原生窗口宿主
+/// `platform::database_source_overlay` 渲染。视觉模板同 `delete_confirm_popup`
 /// (CARD 底 + 圆角描边 + 标题图标)。SQLite 只留"文件路径"一栏,其它驱动
 /// 列出 host/port/database/username/password。标题图标用面板自己的
 /// `icons::IconKind::Database`(同 `home_panel_head` 头部图标),不用
 /// footer 按钮的 `SquarePlus`——同 Todo「清空列表」弹窗的既有口径:标题
-/// 图标标的是"这是哪个面板的弹窗",不重复按钮本身的动作语义。`pub` 是
-/// 为了让 `app.rs` 的窗口级 overlay 能调到。
-pub fn source_form<'a>(
+/// 图标标的是"这是哪个面板的弹窗",不重复按钮本身的动作语义。
+pub fn database_source_card<'a>(
     draft: &'a DataSourceDraft,
     app_state: &'a AppState,
     test_status: &'a TestStatus,
-    window_width: f32,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let title_text = if draft.id.is_some() {
         "编辑数据源"
@@ -469,13 +468,11 @@ pub fn source_form<'a>(
     // 边框/底色统一成原生预览"文件内搜索"风格(`find_field_shell`/`find_rows`
     // 外层组合的既有配色):底色 card、边框普通态 `colors.border`(不再恒描
     // 金)——2026-09-11 需求,数据库/主机新增表单跟文件内搜索输入框对齐。
-    // 宽度从 `Fill`(此前内联挂在数据源列表下方,撑满面板宽度)改成
-    // `dialog::width`(整窗 1/3,2026-09-15 统一约定,取代中间态的写死
-    // 420px)——现在是窗口级居中弹窗(见函数文档),撑满宽度会让输入框
-    // 铺满整个窗口,不像"普通弹窗"。
+    // 宽度撑满宿主窗口(整窗逻辑尺寸由
+    // `database_source_overlay::card_logical_size` 给定)。
     let dialog = container(col)
         .padding(12)
-        .width(crate::dialog::width(window_width))
+        .width(Length::Fill)
         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
             background: Some(byteui::theme::color::current().card.into()),
             border: iced_widget::core::Border {
