@@ -1564,9 +1564,20 @@ impl Workspace {
                         return None;
                     }
                     let disk = crate::preview::profile_file(&path_for_read).ok();
-                    (crate::preview::classify_recovery(&manifest, disk.as_ref())
-                        == crate::preview::RecoveryResolution::Restore)
-                        .then_some(text)
+                    if crate::preview::classify_recovery(&manifest, disk.as_ref())
+                        != crate::preview::RecoveryResolution::Restore
+                    {
+                        return None;
+                    }
+                    // 快照正文与磁盘一致 → 本就没有未保存改动,不是有效 recovery。
+                    // (老版本会在"打开即失焦"时为未修改文件写快照,这里兜底丢弃。)
+                    if std::fs::read_to_string(&path_for_read).ok().as_deref()
+                        == Some(text.as_str())
+                    {
+                        let _ = crate::preview::clear_snapshot(&recovery_dir, project_id, key);
+                        return None;
+                    }
+                    Some(text)
                 })
                 .await
                 .unwrap_or(None);
@@ -2585,6 +2596,37 @@ impl Workspace {
         let tab = pane.tabs().get(idx)?;
         (tab.load_state.stage == crate::preview::PreviewLoadStage::SwitchingMode)
             .then_some((tab.id, tab.load_state.generation))
+    }
+
+    /// 切换 `kind` 面板某个 JSON tab 的 Tree ⇄ Text 视图(严格 `.json` 的
+    /// "树/文本"双视图)。读取当前 backend mode 决定目标 mode,再交给
+    /// `PreviewPane::restore_json_mode`(其内部决定是否需要 `SwitchingMode`)。
+    /// 返回 `Some((tab_id, generation))` 供上层 arm 看门狗;非 JSON tab 返回
+    /// `None`。
+    pub(crate) fn preview_pane_toggle_json_mode(
+        &mut self,
+        kind: PanelKind,
+        tab_id: usize,
+    ) -> Option<(usize, u64)> {
+        let project = kind == PanelKind::Project;
+        let pane = if project {
+            &mut self.project_preview
+        } else {
+            &mut self.preview
+        };
+        let backend = pane
+            .tabs()
+            .iter()
+            .find(|t| t.id == tab_id)?
+            .backend
+            .as_ref()?;
+        let current = backend.current_mode();
+        let target = match current {
+            crate::preview::PreviewMode::Tree => crate::preview::PreviewMode::Text,
+            crate::preview::PreviewMode::Text => crate::preview::PreviewMode::Tree,
+            _ => return None,
+        };
+        pane.restore_json_mode(tab_id, target)
     }
 
     /// 把 `kind` 面板的 Find 命令转发给面板执行。四种都只需要分面板取到变引用

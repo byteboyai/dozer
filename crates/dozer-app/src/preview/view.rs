@@ -2115,23 +2115,22 @@ impl PreviewPane {
         ready
     }
 
-    /// 恢复 JSON tab 的持久 mode。壳恢复已由 `push_shell_tab` 直接落到
-    /// backend 上,这里保留给"已 Ready 的树"场景(暂无调用方)。
+    /// 切换/恢复 JSON tab 的 mode(Tree ⇄ Text)。壳恢复已由 `push_shell_tab`
+    /// 直接落到 backend 上;运行期切 Tree/Text 走本方法(由 tab 最右侧的
+    /// "树/文本"切换按钮触发)。
     ///
-    /// T6:发生 mode 变更时(当前唯一路径就是本方法,暂无调用方)走
-    /// `SwitchingMode` + `Loading` 并推进 generation——目标 host 的首帧
-    /// (`document_loaded`:Tree→JSON host,Text→editor host)确认前不 finish,
-    /// 旧 host 的迟到结果按 generation 丢弃。mode 未变时是 no-op。
-    #[allow(dead_code)]
-    pub fn restore_json_mode(&mut self, tab_id: usize, mode: PreviewMode) {
-        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
-            return;
-        };
-        let Some(route) = tab.route.as_ref() else {
-            return;
-        };
+    /// T6:发生 mode 变更时走 `SwitchingMode` + `Loading` 并推进 generation——
+    /// 目标 host 的首帧(`document_loaded`:Tree→JSON host,Text→editor host)
+    /// 确认前不 finish,旧 host 的迟到结果按 generation 丢弃。mode 未变
+    /// (或 route 不支持该 mode)返回 `None`。
+    ///
+    /// 返回 `Some((tab_id, generation))` 供上层 arm [`PreviewLoadStage::SwitchingMode`]
+    /// 看门狗。
+    pub fn restore_json_mode(&mut self, tab_id: usize, mode: PreviewMode) -> Option<(usize, u64)> {
+        let tab = self.tabs.iter_mut().find(|tab| tab.id == tab_id)?;
+        let route = tab.route.as_ref()?;
         if !route.supports(mode) {
-            return;
+            return None;
         }
         let target = match mode {
             PreviewMode::Text => JsonMode::Text,
@@ -2140,7 +2139,7 @@ impl PreviewPane {
         let changed =
             matches!(&tab.backend, Some(PreviewBackend::Json(json)) if json.mode != target);
         if !changed {
-            return;
+            return None;
         }
         if let Some(PreviewBackend::Json(json)) = tab.backend.as_mut() {
             json.mode = target;
@@ -2150,6 +2149,7 @@ impl PreviewPane {
         let _ = tab.backend_state.try_transition(BackendState::Loading);
         tab.web_revision = 0;
         tab.debug_assert_backend_consistent();
+        Some((tab.id, generation))
     }
 
     /// 编辑保存后调用:按 `PreviewTab.id` 找到对应 tab,推进 reload。原生
@@ -5159,8 +5159,9 @@ mod tests {
             .load_state
             .generation;
 
-        // Tree(default)→ Text:进入 SwitchingMode + Loading。
-        pane.restore_json_mode(id, PreviewMode::Text);
+        // Tree(default)→ Text:进入 SwitchingMode + Loading,返回 (tab_id, gen)。
+        let ret = pane.restore_json_mode(id, PreviewMode::Text);
+        assert_eq!(ret, Some((id, gen_before + 1)));
         let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
         assert!(matches!(
             &tab.backend,
@@ -5181,7 +5182,7 @@ mod tests {
         assert!(!pane.finish_load(id, gen_before));
         assert_eq!(pane.load_stage(id), PreviewLoadStage::SwitchingMode);
 
-        // mode 未变是 no-op(generation 不动)。
+        // mode 未变是 no-op(generation 不动,返回 None)。
         let gen_now = pane
             .tabs()
             .iter()
@@ -5189,7 +5190,7 @@ mod tests {
             .unwrap()
             .load_state
             .generation;
-        pane.restore_json_mode(id, PreviewMode::Text);
+        assert_eq!(pane.restore_json_mode(id, PreviewMode::Text), None);
         assert_eq!(
             pane.tabs()
                 .iter()
@@ -5200,6 +5201,26 @@ mod tests {
             gen_now
         );
 
+        // Text → Tree:同样走 SwitchingMode,返回新的 generation。
+        let ret = pane.restore_json_mode(id, PreviewMode::Tree);
+        assert_eq!(ret, Some((id, gen_now + 1)));
+        assert!(matches!(
+            &pane.tabs().iter().find(|t| t.id == id).unwrap().backend,
+            Some(PreviewBackend::Json(json)) if json.mode == JsonMode::Tree
+        ));
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// JSONC 不支持 Tree 视图(route.alternate_modes 为空)→ 切 Tree 返回
+    /// `None`(按钮不会画,这里兜底验证数据层拒绝)。
+    #[test]
+    fn restore_json_mode_rejects_unsupported_mode() {
+        let path = std::env::temp_dir().join(format!("t6_reject_{}.jsonc", std::process::id()));
+        std::fs::write(&path, "{ // c\n \"a\":1\n}\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(path.clone());
+        assert_eq!(pane.restore_json_mode(id, PreviewMode::Tree), None);
         std::fs::remove_file(&path).ok();
     }
 

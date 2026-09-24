@@ -2098,6 +2098,22 @@ impl App {
                     }
                 });
             }
+            Message::PreviewJsonModeToggle(kind, tab_id) => {
+                self.with_focused_project(move |ws, io| {
+                    if let Some((tab_id, generation)) =
+                        ws.preview_pane_toggle_json_mode(kind, tab_id)
+                        && let Some(project_id) = ws.project.as_ref().map(|p| p.id)
+                    {
+                        io.arm_load_timeout(
+                            project_id,
+                            kind,
+                            tab_id,
+                            generation,
+                            crate::preview::PreviewLoadStage::SwitchingMode,
+                        );
+                    }
+                });
+            }
             Message::PreviewCloseTab(idx) => {
                 let mut closed_old_len = None;
                 self.with_focused_project(|ws, io| {

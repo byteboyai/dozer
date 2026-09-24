@@ -143,6 +143,10 @@ function toLocalLine(globalLine: number): number {
 let revision = 1;
 let view: EditorView;
 let saveHandler: (() => void) | null = null;
+// 正文是否相对磁盘有未保存改动。载入/重载/保存后清零,用户编辑(含程序性
+// 替换)置位。只有 dirty 时才写 recovery 快照——否则"打开即失焦"会为未修改的
+// 文件写一份恢复快照,下次打开被恢复并误标脏(`*`)。
+let dirty = false;
 
 function post(event: EditorEvent, requestId: string | null = null): void {
   const env: Envelope<EditorEvent> = {
@@ -436,6 +440,7 @@ function buildExtensions(): Extension[] {
           length: update.state.doc.length,
           changes,
         });
+        dirty = true;
         scheduleSnapshot();
       }
       if (update.selectionSet) emitSelection();
@@ -502,15 +507,21 @@ function buildDiffExtensions(oldText: string, language: string, readOnly: boolea
 saveHandler = () => {
   if (diffMode || windowed || lossy || view.state.readOnly) return; // 只读:不落盘
   post({ kind: 'save_requested', revision, text: view.state.doc.toString() });
+  // 保存请求已发出:视作不再有本地未存改动(若 Rust 侧因磁盘冲突/只读回退拒绝,
+  // 会经 reload/SetDocument 重新同步并按需再标脏)。
+  dirty = false;
+  lastSnapshotRevision = revision;
 };
 
 // 脏正文 recovery 快照:编辑后 1.5s 防抖上报一次;失焦时立即补一次。窗口化
-// 只读、无脏内容,不参与。
+// 只读、无脏内容,不参与。**只有 dirty 时才写**——否则刚打开、未做任何修改的
+// 文件在失焦时也会写一份等于磁盘内容的快照,下次打开被当"恢复"而误标脏。
 let snapshotTimer: number | undefined;
 let lastSnapshotRevision = 0;
 function sendSnapshot(): void {
   if (diffMode || windowed) return;
   snapshotTimer = undefined;
+  if (!dirty) return;
   if (revision === lastSnapshotRevision) return;
   lastSnapshotRevision = revision;
   post({ kind: 'snapshot', revision, text: view.state.doc.toString() });
@@ -545,6 +556,8 @@ function applyCommand(raw: string): void {
           ],
         }),
       );
+      dirty = false;
+      lastSnapshotRevision = revision;
       break;
     }
     case 'set_diff_document': {
@@ -659,6 +672,24 @@ function applyCommand(raw: string): void {
   }
 }
 
+/** 载入磁盘正文:整体替换 doc 并把 undo 历史重置为空。
+ *
+ *  不能走 `view.dispatch({ changes })`——`history()` 从建 view 起就生效,把
+ *  初始(空)→全文这次程序性替换记进历史后,刚打开文件按 ⌘Z 会把整个文档
+ *  撤销清空。改为重建 EditorState(等价于 `set_document`),history 从零开始,
+ *  ⌘Z 在没有任何用户编辑前无事可撤。 */
+function loadDocumentText(text: string): void {
+  const extensions = windowed
+    ? buildExtensions()
+    : diffMode
+      ? buildDiffExtensions('', languageToken, initialReadOnly)
+      : buildExtensions();
+  view.setState(EditorState.create({ doc: text, extensions }));
+  // 正文刚与磁盘对齐:清 dirty 并让下次失焦不再补写"未修改"快照。
+  dirty = false;
+  lastSnapshotRevision = revision;
+}
+
 /** T5:重新拉取磁盘内容并就地替换 doc(保留滚动/焦点尽量不动)。 */
 async function reloadDocument(): Promise<void> {
   let text = '';
@@ -677,9 +708,7 @@ async function reloadDocument(): Promise<void> {
   }
   if (error === null) {
     revision += 1;
-    view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: text },
-    });
+    loadDocumentText(text);
   }
   post({ kind: 'document_loaded', revision, bytes, error });
 }
@@ -758,9 +787,8 @@ async function boot(): Promise<void> {
     }
     if (error === null) {
       // 正文真正挂上后再上报 `document_loaded`(Rust 以此 finish 加载并显示)。
-      view.dispatch({
-        changes: { from: 0, to: view.state.doc.length, insert: text },
-      });
+      // 用整体重建而非 dispatch change,避免初始载入被记进 undo 历史。
+      loadDocumentText(text);
     }
     post({ kind: 'document_loaded', revision, bytes, error });
   }

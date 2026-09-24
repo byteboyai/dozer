@@ -4,8 +4,9 @@
 use crate::app::{App, HoverId, Message, PanelKind, tab_divider};
 use crate::chrome::homespace::home_panel_head_with_actions;
 use crate::chrome::tab_widget::{
-    PanelTabArgs, TabOverflowEntry, TabOverflowMenuArgs, panel_tab, tab_overflow_button,
-    tab_overflow_menu, tab_render_mode_button, tab_tabular_mode_button, tab_window,
+    PanelTabArgs, TabOverflowEntry, TabOverflowMenuArgs, panel_tab, tab_json_mode_button,
+    tab_overflow_button, tab_overflow_menu, tab_render_mode_button, tab_tabular_mode_button,
+    tab_window,
 };
 use crate::extensions::conversations;
 use crate::menu_spec::{MenuSpec, MenuSpecItem};
@@ -965,6 +966,10 @@ pub(crate) fn preview_pane_for<'a>(
         PreviewPaneKind::Files => HoverId::PreviewTabularMode,
         PreviewPaneKind::Project => HoverId::ProjectPreviewTabularMode,
     };
+    let json_mode_hover = move || match kind {
+        PreviewPaneKind::Files => HoverId::PreviewJsonMode,
+        PreviewPaneKind::Project => HoverId::ProjectPreviewJsonMode,
+    };
     // Find 条与编辑器共享同一份"按面板选消息/悬停态"手法。消息统一走带
     // `PanelKind` 的顶层 `Message::PreviewFind*`(同 `PreviewSaveActive`,一条
     // 消息两面板通吃,Files/Project 由 `PanelKind` 区分)。
@@ -1109,6 +1114,36 @@ pub(crate) fn preview_pane_for<'a>(
             move |hovered| Message::Hover(tabular_mode_hover(), hovered),
         ))
     });
+    // 严格 `.json` 的「树 / 文本」切换:仅激活 tab 是 JSON 且 route 支持双视图
+    // (即严格 `.json`,Tree⇄Text)时出现。JSONC/JSON5/JSONL/NDJSON 只有文本,
+    // route.alternate_modes 为空,不会画按钮。
+    let json_mode_button: Option<
+        Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
+    > = preview.tabs().get(preview.active_idx()).and_then(|tab| {
+        if !matches!(
+            tab.backend.as_ref(),
+            Some(crate::preview::PreviewBackend::Json(_))
+        ) {
+            return None;
+        }
+        let route = tab.route.as_ref()?;
+        if !route.supports(crate::preview::PreviewMode::Tree)
+            || !route.supports(crate::preview::PreviewMode::Text)
+        {
+            return None;
+        }
+        let tab_id = tab.id;
+        let in_text = tab
+            .backend
+            .as_ref()
+            .is_some_and(|b| b.current_mode() == crate::preview::PreviewMode::Text);
+        Some(tab_json_mode_button(
+            in_text,
+            app.hover_progress(json_mode_hover()),
+            Message::PreviewJsonModeToggle(find_panel(), tab_id),
+            move |hovered| Message::Hover(json_mode_hover(), hovered),
+        ))
+    });
     let overflow_button = tab_overflow_button(
         preview.tabs().len(),
         app.hover_progress(overflow_hover()),
@@ -1150,6 +1185,9 @@ pub(crate) fn preview_pane_for<'a>(
         tab_bar_row = tab_bar_row.push(btn);
     }
     if let Some(btn) = tabular_mode_button {
+        tab_bar_row = tab_bar_row.push(btn);
+    }
+    if let Some(btn) = json_mode_button {
         tab_bar_row = tab_bar_row.push(btn);
     }
     let tab_bar = tab_bar_row.push(collapse);

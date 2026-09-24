@@ -330,6 +330,9 @@ pub enum Message {
     PreviewConflictReload(PanelKind, usize),
     /// 预览:CSV/TSV 的「网格 / 原文」切换(切原文时 feature 下走 CodeMirror)。
     PreviewTabularTextModeToggle(PanelKind, usize),
+    /// 预览:严格 `.json` 的「树 / 文本」视图切换(tab 最右侧按钮;切文本走
+    /// CodeMirror,切树走 vanilla-jsoneditor)。
+    PreviewJsonModeToggle(PanelKind, usize),
     /// 预览:切换 tab(vec 位置).
     PreviewSelectTab(usize),
     /// 预览:关闭 tab(vec 位置).
