@@ -4,6 +4,41 @@
 > 分析日期：2026-09-24。
 > 后续若进入实施，插件协议、权限模型、UI Surface 和迁移顺序仍需分别形成 spec 与 plan。
 
+## 0. 定位裁决（2026-09-24 追加，已定稿）
+
+本文档触发了一轮产品定位 brainstorming，结论已写入 `CLAUDE.md` 项目现实开头
+（[[dozer-vision]] memory 有完整讨论记录），**定位句本身已定稿**：
+
+> Dozer 是站在用户（甲方）一侧、agent 中立的 vibe coding 全流程治理与验收
+> 层——面向更懂技术的委托人，覆盖从任务编排、多 agent 并行执行、上下文
+> 共享，到过程审计、结果验收的完整闭环。
+
+三点已确认、对下文阅读有约束力：
+
+1. **治理/验收仍是核心身份，不因扩大范围而降级为众多平台能力之一。** 下文
+   §2.1 提出的"Dozer 是面向 Agent 工作流的开源 Workspace 平台；Todo、Code
+   Health、SSH 等是官方插件"这一表述，其"平台"框架容易读成治理只是插件之
+   一——**已被否决**，须按新定位重新理解：Workspace/插件生态（如果做）是
+   承载治理/验收能力的车身，不是把发动机换成众多平行部件之一。
+2. **agent 中立性不变**，用户群体比 Claude Desktop/Hermes 一类消费级产品
+   更懂技术，但仍是"委托人"、不亲自碰 AI 产出的代码本身。
+3. **"具体落点"（是否/如何插件化、§16 Workflow Kernel 等数据模型改造、
+   Execution Environment/容器抽象、Decision Service/Laya 集成……）尚未
+   立项，用户明确说"后面再谈"**。本文档下文仍是未批准的初步分析，其中
+   "插件化必要性证据不足、Workflow Kernel 必要性更高且独立于插件化成立"
+   的可行性判断也只是候选参考，不是结论。
+
+**2026-09-24 补充：** 已请另一 agent 完成第一轮开源生态调研
+（`docs/dozer-v2/dozer-v2开源生态调研.md`），随后本会话又补了一轮，
+新增验证了 Vibe Kanban（BloopAI，Rust/Apache-2.0，与 Dozer 同语言、
+已 sunsetting 但架构成熟度高）、Crystal（stravu，已被 Nimbalyst 取代，
+squash/rebase 会话模型仍值得参考）、dagger/container-use（容器化
+agent 沙箱，比 OpenHands/Coder/Daytona 更贴近"隔离单个 agent 执行"
+这个具体场景）、Zellij WASM 插件系统与 Tauri 2.0 ACL/Capability/Scope
+三层权限模型（比当前草案的扁平 capability 字符串列表更完整）。详见
+调研文档 §3.7、§4.8-§4.12；结论没有推翻既有判断，但补强了 ExecutionEnvironment
+和插件权限模型这两块的可行性证据。
+
 ## 一句话结论
 
 Dozer V2 不应只是把现有单体按目录拆成更多 crate，而应成为一个**稳定的 Workspace Host + 可独立开发和运行的能力插件 + Agent/MCP 语义编排层**：Host 长期可以继续使用 iced；第三方插件不依赖 iced/Rust ABI，通过版本化 Plugin Protocol 接入，以声明式 UI、WebView、外部窗口或无 UI 四种形态贡献能力。
