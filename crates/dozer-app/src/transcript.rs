@@ -38,13 +38,16 @@ pub enum ReviewEntry {
     /// 孤儿兜底:前面没有 `AiTurn` 的 `ToolResult`(理论边界情况,如导出
     /// 片段从工具结果行开始)。正常情况下 `ToolResult` 都会被折叠进
     /// 上面 `AiTurn::tool_results`,这个顶层变体只在没有归属对象时才用。
-    ToolResult { content: String, is_error: bool },
+    ToolResult { content: String, is_error: bool, call_id: Option<String> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ToolResultEntry {
     pub content: String,
     pub is_error: bool,
+    /// 这条结果对应的调用 id；拿不到时 None，前端回落下标近似。见
+    /// docs/superpowers/specs/2026-09-25-tool-call-result-pairing-design.md。
+    pub call_id: Option<String>,
 }
 
 /// dozerd 查询回来的回合明细 → 面板展示用的 `ReviewEntry`。顺序 fold 而
@@ -73,6 +76,7 @@ pub fn review_entries_from_turns(turns: &[TurnRecord]) -> Vec<ReviewEntry> {
                 let entry = ToolResultEntry {
                     content: t.content.clone(),
                     is_error: t.is_error,
+                    call_id: t.tool_result_call_id.clone(),
                 };
                 match out.last_mut() {
                     Some(ReviewEntry::AiTurn { tool_results, .. }) => {
@@ -81,6 +85,7 @@ pub fn review_entries_from_turns(turns: &[TurnRecord]) -> Vec<ReviewEntry> {
                     _ => out.push(ReviewEntry::ToolResult {
                         content: entry.content,
                         is_error: entry.is_error,
+                        call_id: entry.call_id,
                     }),
                 }
             }
@@ -289,6 +294,7 @@ mod tests {
             tool_calls: vec![ToolCallInfo {
                 summary: "Edit README.md".into(),
                 input_json: Some("{\"file_path\":\"README.md\"}".into()),
+                id: None,
             }],
             tool_results: Vec::new(),
             tokens_in: 12,
@@ -306,10 +312,11 @@ mod tests {
         let tool = ReviewEntry::ToolResult {
             content: "boom".into(),
             is_error: true,
+            call_id: None,
         };
         assert_eq!(
             serde_json::to_string(&tool).unwrap(),
-            r#"{"ToolResult":{"content":"boom","is_error":true}}"#
+            r#"{"ToolResult":{"content":"boom","is_error":true,"call_id":null}}"#
         );
     }
 
@@ -335,6 +342,7 @@ mod tests {
                 tool_calls: vec![ToolCallInfo {
                     summary: "Edit README.md".into(),
                     input_json: Some("{\"file_path\":\"README.md\"}".into()),
+                    id: None,
                 }],
                 thinking: true,
                 thinking_text: Some("先看看现有实现".into()),
@@ -344,6 +352,7 @@ mod tests {
                 tokens_out: 50,
                 tokens_cache_read: 5,
                 tokens_cache_write: 2,
+                tool_result_call_id: None,
             },
         ];
         let entries = review_entries_from_turns(&turns);
@@ -427,11 +436,13 @@ mod tests {
                     &vec![
                         ToolResultEntry {
                             content: "ok1".into(),
-                            is_error: false
+                            is_error: false,
+                            call_id: None
                         },
                         ToolResultEntry {
                             content: "boom".into(),
-                            is_error: true
+                            is_error: true,
+                            call_id: None
                         },
                     ]
                 );
@@ -447,7 +458,8 @@ mod tests {
                     tool_results,
                     &vec![ToolResultEntry {
                         content: "ok2".into(),
-                        is_error: false
+                        is_error: false,
+                        call_id: None
                     }]
                 );
             }
@@ -466,6 +478,7 @@ mod tests {
                 tool_calls: vec![ToolCallInfo {
                     summary: summary.into(),
                     input_json: None,
+                    id: None,
                 }],
                 thinking: false,
                 thinking_text: None,
@@ -555,6 +568,41 @@ mod tests {
     }
 
     #[test]
+    fn review_entries_from_turns_propagates_tool_result_call_id() {
+        use dozer_core::protocol::{ToolCallInfo, TurnRecord};
+        let turns = vec![
+            TurnRecord {
+                role: "ai".into(),
+                content: "done".into(),
+                tool_calls: vec![ToolCallInfo {
+                    summary: "Edit README.md".into(),
+                    input_json: None,
+                    id: Some("toolu_1".into()),
+                }],
+                ..Default::default()
+            },
+            TurnRecord {
+                role: "tool_result".into(),
+                content: "ok".into(),
+                tool_result_call_id: Some("toolu_1".into()),
+                ..Default::default()
+            },
+        ];
+        let entries = review_entries_from_turns(&turns);
+        match &entries[0] {
+            ReviewEntry::AiTurn {
+                tool_calls,
+                tool_results,
+                ..
+            } => {
+                assert_eq!(tool_calls[0].id.as_deref(), Some("toolu_1"));
+                assert_eq!(tool_results[0].call_id.as_deref(), Some("toolu_1"));
+            }
+            other => panic!("expected AiTurn, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn review_entries_from_turns_keeps_orphan_tool_result_at_top_level() {
         use dozer_core::protocol::TurnRecord;
         let turns = vec![TurnRecord {
@@ -574,6 +622,7 @@ mod tests {
             vec![ReviewEntry::ToolResult {
                 content: "ok output".into(),
                 is_error: false,
+                call_id: None,
             }]
         );
     }
