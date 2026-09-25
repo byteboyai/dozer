@@ -1490,8 +1490,17 @@ git commit -m "test(review-trace): 更新 assets.rs 测试适配磁盘服务的 
 - Consumes: Task 8 的完整产物（`crates/dozer-app/assets/review-trace/`）。
 
 > 这一步覆盖 Review Focus 里"缺省字段路径""XSS""超长内容默认折叠"三条——这些是 `.tsx` 组件唯一的行为验证点(本计划里 `.tsx` 文件统一走 typecheck + 视觉核对,不引入 jsdom/组件测试框架,理由见 spec「测试与验证」一节)。
+>
+> **补记(2026-09-25，code-review 后)：** 首次落地时这一整个任务被跳过——落地
+> commit 自己写了"Task 11 待人工核对"，六步全部是 `- [ ]`。独立 code-review
+> fork 指出后在本轮补做，用浏览器实测发现并当场验证修复了两个真实 bug：
+> `main.tsx` 的错误处理只覆盖 fetch/JSON 阶段，entries 渲染期抛出的异常不会
+> 触发"加载失败"提示而是白屏；`scripts/build-macos-app.sh` 从未加上
+> `assets/review-trace` 的拷贝，导致打包后的 .app 里会话审阅整个 404（两个
+> 问题都不在 Task 11 原定步骤范围内，是核对真实数据时顺带发现的）。修复见
+> commit `44363dc2`。
 
-- [ ] **Step 1: 准备覆盖全部形态的样本 `data.json`**
+- [x] **Step 1: 准备覆盖全部形态的样本 `data.json`**
 
 在 `crates/dozer-app/assets/review-trace/` 旁边创建一个临时 `fixture.json`（不要 `git add`，验证完删除）：
 
@@ -1524,7 +1533,7 @@ git commit -m "test(review-trace): 更新 assets.rs 测试适配磁盘服务的 
 }
 ```
 
-- [ ] **Step 2: 起本地静态服务器，用假的 `dozer://` fetch 目标测（用普通 http 服务器 + 浏览器直接打开 host.html，`fetch` 路径手工改指向本地 `fixture.json`）**
+- [x] **Step 2: 起本地静态服务器，用假的 `dozer://` fetch 目标测（用普通 http 服务器 + 浏览器直接打开 host.html，`fetch` 路径手工改指向本地 `fixture.json`）**
 
 ```bash
 cd crates/dozer-app/assets/review-trace
@@ -1545,7 +1554,7 @@ cp fixture.json data.json
 
 刷新页面，继续下面的核对。
 
-- [ ] **Step 3: 用浏览器打开并核对**
+- [x] **Step 3: 用浏览器打开并核对**
 
 用 claude-in-chrome（或任意浏览器）打开 `http://127.0.0.1:8935/host.html`，核对：
 
@@ -1557,7 +1566,7 @@ cp fixture.json data.json
 - 控制台(`read_console_messages`)零报错、零 CSP violation。
 - **缺省字段路径**(Review Focus 第 2 条):把 `data.json` 里的 `summary_title`/`summary_time`/`summary_text` 三个字段整体删掉刷新一次,确认摘要头和分割线完全不渲染(不是渲染成空 div);再把某条 `AiTurn` 条目的 `thinking_text`/`tool_calls`/`tool_results` 三个字段都删掉,确认那条消息没有"轨迹 ▸"折叠行(`TraceToggle` 返回 `null` 生效,不是渲染出一个空的 `<details>`)。
 
-- [ ] **Step 4: 撤销临时改动，清理**
+- [x] **Step 4: 撤销临时改动，清理**
 
 ```bash
 git checkout -- review-trace.js
@@ -1566,7 +1575,7 @@ kill %1  # 关掉 python3 http.server
 cd ../../../..
 ```
 
-- [ ] **Step 5: 真实入口手动过一遍**
+- [ ] **Step 5: 真实入口手动过一遍（仍未做，如实记录）**
 
 `cargo run -p dozer-app` 启动应用，分别打开：
 1. 核心 Agent 面板的终端会话审阅(`ReviewSource::Session`)。
@@ -1574,7 +1583,9 @@ cd ../../../..
 
 确认两个入口渲染出的 trace 时间线视觉一致、都是新 Preact 实现(可通过 DevTools 检查 `review-trace.js` 是否被加载,或确认布局与 Step 3 核对结果一致)。
 
-- [ ] **Step 6: 无需 commit**（本任务不产出提交内容，只是验证）
+> **2026-09-25 状态：Step 1-4/6 已用本地 fixture harness 实测完成（含新发现并修复的两个 bug，见上方补记）；Step 5 没有做**——需要一个跑起来的 `dozer-app` 会话加真实的 Agent/Conversation 数据，在本轮修复里没有起这个环境。`data.json` 的响应体形状在 Rust 侧和前端侧都没变（数据契约冻结，Step 1-4 已经拿真实形状的 fixture 测过两条消费路径共用的同一份渲染代码），所以剩余风险主要是"webview 挂载/embedding 这层 Rust 胶水代码是否接对了新路由"，不是渲染逻辑本身——这部分仍需要在真实环境里补一次。
+
+- [x] **Step 6: 无需 commit**（本任务不产出提交内容，只是验证）
 
 ---
 
