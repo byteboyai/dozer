@@ -11,11 +11,13 @@ export type AgentLabel =
 export interface ToolCall {
   summary: string;
   input_json?: string;
+  id?: string;
 }
 
 export interface ToolResult {
   content: string;
   is_error: boolean;
+  call_id?: string;
 }
 
 export interface AiTurnData {
