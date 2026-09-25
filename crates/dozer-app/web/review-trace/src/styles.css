@@ -23,7 +23,7 @@ html, body {
   height: 1px; background: var(--line); border: none; margin: 14px 0;
 }
 
-.msg { margin-bottom: 20px; max-width: 100%; }
+.msg { margin-bottom: 28px; max-width: 100%; }
 .msg-head {
   display: flex; align-items: center; gap: 6px;
   font-size: 11px; letter-spacing: .02em;
@@ -38,7 +38,7 @@ html, body {
 .msg.Human .avatar-dot { background: var(--gold); }
 .msg.Human .bubble { border-color: var(--gold); }
 
-.msg.AiTurn { margin: 0; }
+.msg.AiTurn { margin-left: 0; }
 .msg.AiTurn .msg-head { color: var(--cyan); justify-content: flex-start; }
 .msg.AiTurn .avatar-dot { background: var(--cyan); }
 .msg.AiTurn .bubble { border-color: var(--cyan); }
