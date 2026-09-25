@@ -9,6 +9,7 @@ import {
   type FileViewerThemeMode,
   type FileViewerZoomState,
 } from '@file-viewer/core';
+import { installMarkdownMediaLightbox } from '../../src/markdown/media-lightbox/index.ts';
 
 const markdownStyle = `
 .markdown-viewer{min-height:100%;padding:28px 16px 48px;background:var(--file-viewer-render-surface-background,#eef1f4);overflow:auto;box-sizing:border-box}
@@ -189,6 +190,14 @@ export default async function renderMarkdown(
   target.replaceChildren(createStyle(), root);
   await renderEmbeddedMermaid(article, context?.options?.theme);
 
+  // 灯箱只存在于 renderer 源码内:在 HTML 与 Mermaid 就绪后安装,unmount 时销毁。
+  // 传入 viewer(root)以便打开时锁滚动、关闭时恢复。
+  const lightbox = installMarkdownMediaLightbox({
+    viewer: root,
+    article,
+    theme: context?.options?.theme,
+  });
+
   const getZoomState = (): FileViewerZoomState => ({
     scale: zoom,
     label: `${Math.round(zoom * 100)}%`,
@@ -218,6 +227,7 @@ export default async function renderMarkdown(
   return {
     $el: target,
     unmount() {
+      lightbox.destroy();
       unregisterFileViewerZoomProvider(root);
       target.replaceChildren();
     },

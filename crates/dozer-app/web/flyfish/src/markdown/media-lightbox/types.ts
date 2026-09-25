@@ -9,7 +9,7 @@ export interface MediaDescriptor {
   /** 可访问名称,用于 dialog/aria-label;从 alt / aria-label / 标题派生。 */
   accessibleName: string;
   /** 源节点:普通图片是 <img>,Mermaid 是净化后的 <svg>。 */
-  source: HTMLElement;
+  source: Element;
   /**
    * 固有尺寸(未缩放像素)。位图在 naturalWidth/naturalHeight 就绪前为
    * null;调用方不得把未知当成 0。
