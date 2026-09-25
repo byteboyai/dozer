@@ -54,7 +54,7 @@ crates/dozer-app/web/review-trace/src/TraceToggle.test.ts   # 新增
 **Interfaces:**
 - Produces: `ToolCallInfo.id: Option<String>`、`TurnRecord.tool_result_call_id: Option<String>`、`TurnTraceDetail.tool_result_call_id: Option<String>`，供 Task 2-5 使用。
 
-- [ ] **Step 1: 写失败的测试**（`crates/dozerd/src/transcripts/parse.rs` 测试模块，`extract_claude_trace_detail_reads_thinking_text_and_tool_input` 测试下方）
+- [x] **Step 1: 写失败的测试**（`crates/dozerd/src/transcripts/parse.rs` 测试模块，`extract_claude_trace_detail_reads_thinking_text_and_tool_input` 测试下方）
 
 ```rust
 #[test]
@@ -90,7 +90,7 @@ fn turn_record_deserializes_old_json_missing_new_fields() {
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cargo test -p dozerd extract_claude_trace_detail_reads_tool_use_id
@@ -99,7 +99,7 @@ cargo test -p dozerd turn_record_deserializes_old_json_missing_new_fields
 
 Expected: 编译失败（`ToolCallInfo`/`TurnRecord` 还没有 `id`/`tool_result_call_id` 字段）。
 
-- [ ] **Step 3: 在 `crates/dozer-core/src/protocol.rs` 给 `ToolCallInfo` 加字段**
+- [x] **Step 3: 在 `crates/dozer-core/src/protocol.rs` 给 `ToolCallInfo` 加字段**
 
 找到：
 
@@ -127,7 +127,7 @@ pub struct ToolCallInfo {
 }
 ```
 
-- [ ] **Step 4: 给 `TurnRecord` 加字段**
+- [x] **Step 4: 给 `TurnRecord` 加字段**
 
 找到 `pub is_error: bool,` 那一行（`TurnRecord` 结构体内），在它后面加：
 
@@ -140,7 +140,7 @@ pub struct ToolCallInfo {
     pub tool_result_call_id: Option<String>,
 ```
 
-- [ ] **Step 5: 给 `TurnTraceDetail` 加字段**（`crates/dozerd/src/transcripts/parse.rs`）
+- [x] **Step 5: 给 `TurnTraceDetail` 加字段**（`crates/dozerd/src/transcripts/parse.rs`）
 
 找到：
 
@@ -164,7 +164,7 @@ pub struct TurnTraceDetail {
 }
 ```
 
-- [ ] **Step 6: 让 `extract_claude_trace_detail` 读 `tool_use.id`，并给所有构造 `TurnTraceDetail`/`ToolCallInfo` 的地方补上新字段**
+- [x] **Step 6: 让 `extract_claude_trace_detail` 读 `tool_use.id`，并给所有构造 `TurnTraceDetail`/`ToolCallInfo` 的地方补上新字段**
 
 修改 `extract_claude_trace_detail`（`Some("tool_use")` 分支）：
 
@@ -191,7 +191,7 @@ pub struct TurnTraceDetail {
     }
 ```
 
-- [ ] **Step 7: 修所有编译错误**
+- [x] **Step 7: 修所有编译错误**
 
 ```bash
 cargo check -p dozer-core -p dozerd -p dozer-app
@@ -199,7 +199,7 @@ cargo check -p dozer-core -p dozerd -p dozer-app
 
 Expected: 会报出所有构造 `ToolCallInfo { .. }`/`TurnTraceDetail { .. }` 时缺字段的位置（`extract_codebuddy_trace_detail`、`extract_goose_trace_detail` 等）；这两处按同样方式补 `id: None`（`extract_codebuddy_trace_detail`）或先留到 Task 3（`extract_goose_trace_detail`，本步先加 `id: None` 让它编译过，Task 3 再填真值）。逐个修到 `cargo check` 干净。
 
-- [ ] **Step 8: 运行测试确认通过**
+- [x] **Step 8: 运行测试确认通过**
 
 ```bash
 cargo test -p dozerd extract_claude_trace_detail_reads_tool_use_id
@@ -210,7 +210,7 @@ cargo test -p dozerd 2>&1 | tail -20
 
 Expected: 新增 3 个测试通过；`cargo test -p dozerd` 全量跑一遍确认没有回归（已有的 `extract_claude_trace_detail_*`/`parses_human_and_ai_turn_with_usage_and_tools` 等测试应该继续通过，因为都没断言过 `id`/`tool_result_call_id` 字段）。
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add crates/dozer-core/src/protocol.rs crates/dozerd/src/transcripts/parse.rs
@@ -228,7 +228,7 @@ git commit -m "feat(protocol): ToolCallInfo/TurnRecord 新增调用 id 字段，
 - Consumes: Task 1 的 `TurnTraceDetail.tool_result_call_id`。
 - Produces: `extract_claude_trace_detail` 在恰好一个 `tool_result` block 时填充 `tool_result_call_id`。
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 ```rust
 #[test]
@@ -269,7 +269,7 @@ fn extract_claude_trace_detail_tool_result_without_tool_use_id_field_gives_none(
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cargo test -p dozerd extract_claude_trace_detail_single_tool_result_block_gives_call_id
@@ -277,7 +277,7 @@ cargo test -p dozerd extract_claude_trace_detail_single_tool_result_block_gives_
 
 Expected: FAIL（`tool_result_call_id` 现在恒 `None`，第一个测试断言 `Some(..)` 会失败）。
 
-- [ ] **Step 3: 修改 `extract_claude_trace_detail`**
+- [x] **Step 3: 修改 `extract_claude_trace_detail`**
 
 完整替换成：
 
@@ -340,7 +340,7 @@ fn extract_claude_trace_detail(v: &Value) -> TurnTraceDetail {
 }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 ```bash
 cargo test -p dozerd extract_claude_trace_detail_
@@ -348,7 +348,7 @@ cargo test -p dozerd extract_claude_trace_detail_
 
 Expected: Task 1 + Task 2 新增的所有 `extract_claude_trace_detail_*` 测试全部 PASS。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozerd/src/transcripts/parse.rs
@@ -365,7 +365,7 @@ git commit -m "feat(protocol): Claude tool_result.tool_use_id 接入读时解析
 **Interfaces:**
 - Consumes: Task 1 的 `TurnTraceDetail.tool_result_call_id`。
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 ```rust
 #[test]
@@ -399,7 +399,7 @@ fn extract_goose_trace_detail_other_events_stay_default() {
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cargo test -p dozerd extract_goose_trace_detail_post_tool_use_reads_call_id
@@ -407,7 +407,7 @@ cargo test -p dozerd extract_goose_trace_detail_post_tool_use_reads_call_id
 
 Expected: FAIL（`extract_goose_trace_detail` 目前只处理 `PreToolUse`，其余事件一律返回 `default()`）。
 
-- [ ] **Step 3: 修改 `extract_goose_trace_detail`**
+- [x] **Step 3: 修改 `extract_goose_trace_detail`**
 
 完整替换成：
 
@@ -457,7 +457,7 @@ fn extract_goose_trace_detail(v: &Value) -> TurnTraceDetail {
 }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 ```bash
 cargo test -p dozerd extract_goose_trace_detail_
@@ -466,7 +466,7 @@ cargo test -p dozerd goose_
 
 Expected: 新增 4 个测试通过；已有的 `goose_pre_tool_use_trace_detail_keeps_tool_name_and_input`（如果存在同名或类似前缀的既有测试）等历史测试不受影响，继续通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozerd/src/transcripts/parse.rs
@@ -484,7 +484,7 @@ git commit -m "feat(protocol): Goose tool_call_id 接入读时解析（Pre/Post/
 - Consumes: Task 1-3 的 `TurnTraceDetail.tool_result_call_id`。
 - Produces: `get_conversation_turns` 返回的 `TurnRecord` 带上 `tool_calls[].id` 和 `tool_result_call_id`。
 
-- [ ] **Step 1: 写失败的测试**（`crates/dozerd/src/transcripts/mod.rs` 测试模块，紧跟
+- [x] **Step 1: 写失败的测试**（`crates/dozerd/src/transcripts/mod.rs` 测试模块，紧跟
   `get_conversation_turns_surfaces_thinking_text_and_tool_calls` 之后）
 
 ```rust
@@ -512,7 +512,7 @@ fn get_conversation_turns_surfaces_tool_call_and_result_ids() {
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cargo test -p dozerd get_conversation_turns_surfaces_tool_call_and_result_ids
@@ -520,7 +520,7 @@ cargo test -p dozerd get_conversation_turns_surfaces_tool_call_and_result_ids
 
 Expected: FAIL（`TurnRecord` 构造还没接上 `tool_result_call_id`）。
 
-- [ ] **Step 3: 修改 `get_conversation_turns`**
+- [x] **Step 3: 修改 `get_conversation_turns`**
 
 找到 `Ok(dozer_core::protocol::TurnRecord { ... })` 那段构造，在 `is_error` 之后加一行：
 
@@ -542,7 +542,7 @@ Expected: FAIL（`TurnRecord` 构造还没接上 `tool_result_call_id`）。
             })
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 ```bash
 cargo test -p dozerd get_conversation_turns_surfaces_tool_call_and_result_ids
@@ -551,7 +551,7 @@ cargo test -p dozerd 2>&1 | tail -10
 
 Expected: 新测试通过；`cargo test -p dozerd` 全量跑一遍无回归。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozerd/src/transcripts/mod.rs
@@ -569,7 +569,7 @@ git commit -m "feat(protocol): get_conversation_turns 透传调用/结果 id"
 - Consumes: Task 4 的 `TurnRecord.tool_result_call_id`（跨 crate，`dozer_core::protocol`）。
 - Produces: `ToolResultEntry.call_id: Option<String>`、`ReviewEntry::ToolResult.call_id: Option<String>`，供 Task 6 的 `data.json` 契约使用。
 
-- [ ] **Step 1: 修改 `ToolResultEntry` 和 `ReviewEntry::ToolResult`**
+- [x] **Step 1: 修改 `ToolResultEntry` 和 `ReviewEntry::ToolResult`**
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -588,7 +588,7 @@ pub struct ToolResultEntry {
     ToolResult { content: String, is_error: bool, call_id: Option<String> },
 ```
 
-- [ ] **Step 2: 修改 `review_entries_from_turns` 的折叠逻辑**
+- [x] **Step 2: 修改 `review_entries_from_turns` 的折叠逻辑**
 
 找到 `"tool_result" => { ... }` 分支，改成：
 
@@ -612,7 +612,7 @@ pub struct ToolResultEntry {
             }
 ```
 
-- [ ] **Step 3: 修编译错误**
+- [x] **Step 3: 修编译错误**
 
 ```bash
 cargo check -p dozer-app 2>&1 | grep "error\[" -A5
@@ -620,7 +620,7 @@ cargo check -p dozer-app 2>&1 | grep "error\[" -A5
 
 Expected: 报出这个文件测试模块里所有 `ToolCallInfo { .. }`/`ToolResultEntry { .. }`/`ReviewEntry::ToolResult { .. }` 缺字段的位置（大约 8 处，含 `tool_calls: vec![ToolCallInfo { .. }]` 和 `tool_results: vec![ToolResultEntry { .. }]` 两种写法）。逐个按"`ToolCallInfo` 补 `id: None`，`ToolResultEntry`/`ReviewEntry::ToolResult` 补 `call_id: None`"补齐，直到 `cargo check -p dozer-app` 干净。这些都是机械补字段，不涉及行为判断——编译器报哪一行就补哪一行。
 
-- [ ] **Step 4: 修一处会失败的精确 JSON 断言测试**（不是编译错误，是运行时断言，编译器发现不了）
+- [x] **Step 4: 修一处会失败的精确 JSON 断言测试**（不是编译错误，是运行时断言，编译器发现不了）
 
 找到这段序列化测试（大约在 `review_entries_from_turns_maps_ai_turn_with_thinking_and_tool_calls` 之前）：
 
@@ -651,7 +651,7 @@ Expected: 报出这个文件测试模块里所有 `ToolCallInfo { .. }`/`ToolRes
 
 （`call_id` 序列化成显式 `null` 而不是被省略——`ToolCallInfo.input_json`/`id` 这两个 `Option` 字段现有代码里也没用 `skip_serializing_if`，保持同一约定。）
 
-- [ ] **Step 5: 写一个端到端传播测试**（新增，放在 Step 4 改的那个测试模块里）
+- [x] **Step 5: 写一个端到端传播测试**（新增，放在 Step 4 改的那个测试模块里）
 
 ```rust
 #[test]
@@ -690,7 +690,7 @@ fn review_entries_from_turns_propagates_tool_result_call_id() {
 }
 ```
 
-- [ ] **Step 6: 运行测试确认通过**
+- [x] **Step 6: 运行测试确认通过**
 
 ```bash
 cargo test -p dozer-app transcript:: 2>&1 | tail -30
@@ -698,7 +698,7 @@ cargo test -p dozer-app transcript:: 2>&1 | tail -30
 
 Expected: 该模块全部测试（含 Step 4 改的和 Step 5 新增的）通过。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/dozer-app/src/transcript.rs
@@ -718,7 +718,7 @@ git commit -m "feat(review-trace): ToolResultEntry/ReviewEntry::ToolResult 透�
 - Consumes: `data.json` 新字段 `ToolCall.id?`/`ToolResult.call_id?`。
 - Produces: `TraceToggle` 组件行为不变的对外接口（`{ v: AiTurnData }`），内部配对逻辑升级。
 
-- [ ] **Step 1: 修改 `types.ts`**
+- [x] **Step 1: 修改 `types.ts`**
 
 ```ts
 export interface ToolCall {
@@ -734,7 +734,7 @@ export interface ToolResult {
 }
 ```
 
-- [ ] **Step 2: 写失败的测试**（`crates/dozer-app/web/review-trace/src/TraceToggle.test.ts`，新文件）
+- [x] **Step 2: 写失败的测试**（`crates/dozer-app/web/review-trace/src/TraceToggle.test.ts`，新文件）
 
 ```ts
 import test from 'node:test';
@@ -821,7 +821,7 @@ test('no ids anywhere: behaves exactly like the existing index-based pairing', (
 });
 ```
 
-- [ ] **Step 3: 运行测试确认失败**
+- [x] **Step 3: 运行测试确认失败**
 
 ```bash
 cd crates/dozer-app/web/review-trace
@@ -830,7 +830,7 @@ node --test src/TraceToggle.test.ts
 
 Expected: FAIL 或部分 FAIL（现在的实现是纯下标近似，前两个"id 配对"用例会因为 `call A`/`result A` 顺序不对而失败）。
 
-- [ ] **Step 4: 重写 `TraceToggle.tsx`**
+- [x] **Step 4: 重写 `TraceToggle.tsx`**
 
 ```tsx
 import { Fragment } from 'preact';
@@ -938,7 +938,7 @@ export function TraceToggle({ v }: { v: AiTurnData }) {
 }
 ```
 
-- [ ] **Step 5: 运行测试确认通过**
+- [x] **Step 5: 运行测试确认通过**
 
 ```bash
 node --test src/TraceToggle.test.ts
@@ -947,7 +947,7 @@ npm run typecheck
 
 Expected: 5 个新测试全部 PASS；typecheck 干净。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/dozer-app/web/review-trace/src/types.ts \
@@ -966,7 +966,7 @@ git commit -m "feat(review-trace): TraceToggle 按 id 精确配对，缺 id 时�
 **Interfaces:**
 - Consumes: Task 1-6 全部产出。
 
-- [ ] **Step 1: 前端全量检查 + 重新构建 bundle**
+- [x] **Step 1: 前端全量检查 + 重新构建 bundle**
 
 ```bash
 cd crates/dozer-app/web/review-trace
@@ -977,7 +977,7 @@ npm run build
 
 Expected: 三条命令全部通过；`npm run build` 打印 `built -> .../assets/review-trace`。
 
-- [ ] **Step 2: Rust 全量测试**
+- [x] **Step 2: Rust 全量测试**
 
 ```bash
 cd ../../../..
@@ -986,7 +986,7 @@ cargo test -p dozer-core -p dozerd -p dozer-app
 
 Expected: 全部通过，无回归。
 
-- [ ] **Step 3: 人工视觉核对（真实并行工具调用场景）**
+- [x] **Step 3: 人工视觉核对（真实并行工具调用场景）**
 
 准备一份带并行工具调用 id 的 fixture（`crates/dozer-app/assets/review-trace/data.json`，验证完删除，不要
 `git add`）：
@@ -1021,7 +1021,7 @@ Expected: 全部通过，无回归。
 `data.json`，`python3 -m http.server` 起服务，浏览器打开确认三个调用各自
 紧跟正确的结果，然后 `git checkout` 撤销 js 改动、删掉临时 `data.json`）。
 
-- [ ] **Step 4: 无需 commit**（本任务不产出提交内容，只是验证）
+- [x] **Step 4: 无需 commit**（本任务不产出提交内容，只是验证）
 
 ---
 
@@ -1033,7 +1033,7 @@ Expected: 全部通过，无回归。
 **Interfaces:**
 - Consumes: Task 1-7 全部产出。
 
-- [ ] **Step 1: 全 workspace 构建**
+- [x] **Step 1: 全 workspace 构建**
 
 ```bash
 cargo build
@@ -1041,7 +1041,7 @@ cargo build
 
 Expected: 编译通过，无新增警告。
 
-- [ ] **Step 2: clippy + fmt**
+- [x] **Step 2: clippy + fmt**
 
 ```bash
 cargo clippy --all-targets
@@ -1050,7 +1050,7 @@ cargo fmt --check
 
 Expected: 无新增警告；`fmt --check` 无差异（有差异就 `cargo fmt` 后重新 `git add` 提交）。
 
-- [ ] **Step 3: 确认没有遗漏的消费方**（对应 Global Constraints 里"已核实不需要改"的那条,收尾时再核一遍防止过程中有新代码引入依赖）
+- [x] **Step 3: 确认没有遗漏的消费方**（对应 Global Constraints 里"已核实不需要改"的那条,收尾时再核一遍防止过程中有新代码引入依赖）
 
 ```bash
 grep -rn "ToolCallInfo\|TurnRecord" crates/ --include="*.rs" | grep -v "target/"
@@ -1058,7 +1058,7 @@ grep -rn "ToolCallInfo\|TurnRecord" crates/ --include="*.rs" | grep -v "target/"
 
 Expected: 结果范围仍然只在 spec 里列出的那几个文件内，没有出现新的、这次改动漏处理的构造点。
 
-- [ ] **Step 4: 最终收尾 commit（如果 fmt/clippy 产生了改动）**
+- [x] **Step 4: 最终收尾 commit（如果 fmt/clippy 产生了改动）**
 
 ```bash
 git status --short
