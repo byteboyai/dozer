@@ -1,0 +1,21 @@
+{
+  "name": "dozer-review-trace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dozer 会话审阅 trace host（review_trace），Preact 离线打包，无 CDN/无运行时 Node。",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test src/*.test.ts"
+  },
+  "dependencies": {
+    "preact": "10.29.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "esbuild": "0.28.2",
+    "preact-render-to-string": "6.7.0",
+    "typescript": "5.9.3"
+  }
+}

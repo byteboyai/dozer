@@ -16,3 +16,6 @@ crates/dozer-app/web/json-editor/node_modules/
 
 # Flyfish renderer-text build deps (built bundle under assets/flyfish/renderers is committed)
 crates/dozer-app/web/flyfish/node_modules/
+
+# review-trace host deps (built assets under assets/review-trace are committed)
+crates/dozer-app/web/review-trace/node_modules/
