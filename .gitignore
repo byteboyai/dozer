@@ -19,3 +19,4 @@ crates/dozer-app/web/flyfish/node_modules/
 
 # review-trace host deps (built assets under assets/review-trace are committed)
 crates/dozer-app/web/review-trace/node_modules/
+.gstack/
