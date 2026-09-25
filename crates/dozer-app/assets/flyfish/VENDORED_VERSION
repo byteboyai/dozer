@@ -1,1 +1,3 @@
 2.2.2 (web-full, D5 精简: 仅 text/image/pdf 管线 + vendor/pdf; 原 170MB → 19MB)
+renderer-text: flyfish-dev/file-viewer v2.2.2 @ af2080ca10a2d415bd6d6877c36db5cb6f9d5567 (Apache-2.0)
+  local patch dozer-markdown-media-lightbox (源码与构建见 crates/dozer-app/web/flyfish)
