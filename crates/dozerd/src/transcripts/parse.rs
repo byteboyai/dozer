@@ -1074,31 +1074,51 @@ fn extract_codebuddy_trace_detail(v: &Value) -> TurnTraceDetail {
     }
 }
 
-/// Goose journal 行的读时结构化工具调用明细:只在 `PreToolUse` 行上产出
-/// 一个 `ToolCallInfo`(summary 复用通用 `tool_summary`、`input_json` 是
-/// `tool_input` 的 pretty JSON)。其余 Goose 行没有结构化内容,回全空。
+/// Goose journal 行的读时结构化工具调用明细:`PreToolUse` 行产出一个
+/// `ToolCallInfo`(summary 复用通用 `tool_summary`、`input_json` 是
+/// `tool_input` 的 pretty JSON、`id` 取 payload 的 `tool_call_id`);
+/// `PostToolUse`/`PostToolUseFailure` 行产出 `tool_result_call_id`。
+/// `tool_call_id` 在三个事件里是同一次调用的稳定标识(goose-docs.ai hooks
+/// 文档:"Stable identifier for one tool call...Correlates the events of a
+/// single call"),按事件类型分别喂给调用侧或结果侧。其余 Goose 行没有
+/// 结构化内容,回全空。
 fn extract_goose_trace_detail(v: &Value) -> TurnTraceDetail {
-    if v.get("type").and_then(|t| t.as_str()) != Some("goose_hook")
-        || v.get("event").and_then(|e| e.as_str()) != Some("PreToolUse")
-    {
+    if v.get("type").and_then(|t| t.as_str()) != Some("goose_hook") {
         return TurnTraceDetail::default();
     }
+    let Some(event) = v.get("event").and_then(|e| e.as_str()) else {
+        return TurnTraceDetail::default();
+    };
     let Some(payload) = v.get("payload") else {
         return TurnTraceDetail::default();
     };
-    let name = payload
-        .get("tool_name")
-        .and_then(|t| t.as_str())
-        .unwrap_or("工具");
-    let input = payload.get("tool_input").cloned().unwrap_or(Value::Null);
-    TurnTraceDetail {
-        thinking_text: None,
-        tool_calls: vec![ToolCallInfo {
-            summary: tool_summary(name, &input),
-            input_json: input_json_of(&input),
-            id: None,
-        }],
-        tool_result_call_id: None,
+    let call_id = payload
+        .get("tool_call_id")
+        .and_then(|i| i.as_str())
+        .map(str::to_string);
+    match event {
+        "PreToolUse" => {
+            let name = payload
+                .get("tool_name")
+                .and_then(|t| t.as_str())
+                .unwrap_or("工具");
+            let input = payload.get("tool_input").cloned().unwrap_or(Value::Null);
+            TurnTraceDetail {
+                thinking_text: None,
+                tool_calls: vec![ToolCallInfo {
+                    summary: tool_summary(name, &input),
+                    input_json: input_json_of(&input),
+                    id: call_id,
+                }],
+                tool_result_call_id: None,
+            }
+        }
+        "PostToolUse" | "PostToolUseFailure" => TurnTraceDetail {
+            thinking_text: None,
+            tool_calls: Vec::new(),
+            tool_result_call_id: call_id,
+        },
+        _ => TurnTraceDetail::default(),
     }
 }
 
@@ -1744,6 +1764,36 @@ mod trace_detail_tests {
                 .unwrap()
                 .contains("cargo test")
         );
+    }
+
+    #[test]
+    fn extract_goose_trace_detail_pre_tool_use_reads_call_id() {
+        let raw = r#"{"type":"goose_hook","event":"PreToolUse","payload":{"tool_call_id":"tc-1","tool_name":"developer__shell","tool_input":{"command":"cargo test"}}}"#;
+        let detail = extract_turn_trace_detail(raw, AgentKind::Goose);
+        assert_eq!(detail.tool_calls.len(), 1);
+        assert_eq!(detail.tool_calls[0].id.as_deref(), Some("tc-1"));
+    }
+
+    #[test]
+    fn extract_goose_trace_detail_post_tool_use_reads_call_id() {
+        let raw = r#"{"type":"goose_hook","event":"PostToolUse","payload":{"tool_call_id":"tc-1","tool_name":"developer__shell"}}"#;
+        let detail = extract_turn_trace_detail(raw, AgentKind::Goose);
+        assert_eq!(detail.tool_calls.len(), 0);
+        assert_eq!(detail.tool_result_call_id.as_deref(), Some("tc-1"));
+    }
+
+    #[test]
+    fn extract_goose_trace_detail_post_tool_use_failure_reads_call_id() {
+        let raw = r#"{"type":"goose_hook","event":"PostToolUseFailure","payload":{"tool_call_id":"tc-2","tool_name":"developer__shell"}}"#;
+        let detail = extract_turn_trace_detail(raw, AgentKind::Goose);
+        assert_eq!(detail.tool_result_call_id.as_deref(), Some("tc-2"));
+    }
+
+    #[test]
+    fn extract_goose_trace_detail_other_events_stay_default() {
+        let raw = r#"{"type":"goose_hook","event":"Stop","payload":{"last_assistant_message":"done"}}"#;
+        let detail = extract_turn_trace_detail(raw, AgentKind::Goose);
+        assert_eq!(detail, super::TurnTraceDetail::default());
     }
 
     #[test]
