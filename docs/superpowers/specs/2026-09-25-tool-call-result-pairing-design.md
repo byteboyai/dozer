@@ -40,10 +40,15 @@
      的 `id`。
    - Goose：`PreToolUse` hook payload 有 `tool_call_id`
      （`parse_goose_hook_chunk:737-740` 已经在用它当 `message_key`，只是没有
-     透传进 `ToolCallInfo`）；但 `PostToolUse`/`PostToolUseFailure`
-     （`parse.rs:754-769`）**当前完全没有读 `tool_call_id`**——payload 里到底
-     有没有这个字段待实现阶段用真实 fixture/官方 hooks 文档核实，见下面
-     "风险与开放问题"。
+     透传进 `ToolCallInfo`）；`PostToolUse`/`PostToolUseFailure`
+     （`parse.rs:754-769`）**当前完全没有读 `tool_call_id`**，但**官方文档
+     已确认这个字段同时存在于 `PreToolUse`/`PostToolUse`/
+     `PostToolUseFailure` 三个事件，且同一次调用取值相同**（
+     [goose-docs.ai hooks 文档](https://goose-docs.ai/docs/guides/context-engineering/hooks/)
+     原话："Stable identifier for one tool call, on `PreToolUse`,
+     `PreToolUseResult`, `PostToolUse`, and `PostToolUseFailure`.
+     Correlates the events of a single call"）——**不再是开放问题**，
+     `PostToolUse`/`PostToolUseFailure` 侧直接按同样方式提取即可。
    - CodeBuddy：`function_call`/`function_call_result` 各自有独立的顶层 `id`
      字段，互相不引用（`codebuddy_captures_function_call_and_result` 测试
      fixture 里 `fc1`/`fcr1`/`fcr2` 三个 id 互不相关）——**没有可用的配对信号,
@@ -70,9 +75,9 @@
    `tool_result` block 时才取它的 `tool_use_id`**，零个或多个都回落 `None`
    （见上面事实 4）。
 4. `parse.rs::extract_goose_trace_detail`：`PreToolUse` 的 `tool_call_id` 顺手
-   填进 `ToolCallInfo.id`；`PostToolUse`/`PostToolUseFailure` 侧的
-   `tool_result_call_id` 提取**先落到实现阶段验证**（见风险一节），验证成立
-   就同步做，不成立就只做调用侧（仍然是净改善，不是回退)。
+   填进 `ToolCallInfo.id`；`PostToolUse`/`PostToolUseFailure` 侧同样从 payload
+   读 `tool_call_id` 填进 `tool_result_call_id`（官方文档已确认三个事件共享
+   同一个值，见"关键架构事实"第 3 条）。
 5. `TurnTraceDetail` 结构体新增 `tool_result_call_id: Option<String>` 字段，
    `get_conversation_turns` 把它接进 `TurnRecord`。
 6. `dozer-app/src/transcript.rs`：
@@ -106,24 +111,22 @@
 - 不改变现有下标近似逻辑本身的实现（`TraceToggle.tsx` 里已经上线的
   `pairCount`/`Fragment` 那套），只是新增一个更精确的模式、按条件二选一。
 
-## 风险与开放问题（实现阶段需要验证，不是留到以后）
+## 风险与开放问题
 
-1. **Goose `PostToolUse`/`PostToolUseFailure` payload 是否带 `tool_call_id`
-   待验证。** `parse_goose_hook_chunk` 现在完全没读这个字段（不是"读了发现没有"
-   而是"没读过"）。实现第一步应该找一份真实 Goose hook journal 样本（或官方
-   hooks 文档）确认；确认有就在 `extract_goose_trace_detail` 里同步提取
-   `tool_result_call_id`，确认没有就只做 `tool_calls[].id`（Goose 侧
-   `tool_results` 仍回落下标近似，不是错误，是数据源本身的限制）。
+1. ~~Goose `PostToolUse`/`PostToolUseFailure` payload 是否带 `tool_call_id`~~
+   ——**已解决**：官方 hooks 文档确认存在，见"关键架构事实"第 3 条。
 2. **多 `tool_result` block 合并成一行的判定必须用真实 fixture 验证。**
    `extract_claude_trace_detail` 新增的"恰好一个 tool_result block 才给 id"
    规则要有测试锁住：零个、一个、两个 `tool_result` block 三种输入分别断言
    `tool_result_call_id` 是 `None`/`Some(id)`/`None`。
-3. **`ToolCallInfo`/`TurnRecord` 是跨 crate 共享的 wire 协议类型
-   （`dozer_core::protocol`）**，理论上除了 `dozer-app` 还可能被
-   `dozer-mcp`/`dozer-client` 引用到——新增字段是 `Option<String>` 且默认
-   `None`（不破坏现有序列化兼容性），但实现前应该跑一次
-   `grep -rn "ToolCallInfo\|TurnRecord" crates/` 确认没有遗漏的消费方需要
-   同步处理新字段。
+3. ~~`ToolCallInfo`/`TurnRecord` 是跨 crate 共享类型，可能有遗漏消费方~~——
+   **已解决**：`grep -rn "ToolCallInfo\|TurnRecord" crates/` 核实过，
+   `ToolCallInfo` 只在 `dozer-core`/`dozerd`/`dozer-app::transcript.rs` 三处
+   出现（本次要改的范围内）；`TurnRecord` 在 `dozerd`（session_summary.rs/
+   headless_agent.rs/task_processor.rs）、`dozer-app`（todo/state.rs）、
+   `dozer-client` 也有构造/传递，但全部通过 `..Default::default()`
+   struct-update 语法或只读透传，新增 `Option` 字段默认 `None`，**这些位置
+   不需要改代码**（`dozer-mcp` 不引用 `TurnRecord`/`ToolCallInfo`，无影响）。
 
 ## 测试策略
 
