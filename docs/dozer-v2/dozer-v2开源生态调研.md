@@ -304,7 +304,7 @@ Dozer 不应把差异化表述为“支持更多 Agent”。更持久的差异�
 | [Vibe Kanban](https://github.com/BloopAI/vibe-kanban) | Rust，Apache-2.0，28.2k star，活跃至今（**官方已宣布 sunsetting**，转社区维护） | Kanban 任务面板 + 每任务一 workspace（分支/终端/dev server）+ 内置浏览器预览 + diff 内联评论 + 10+ Agent 切换 + PR 生成/合并 | 全流程最接近 Dozer 的"目标→任务→执行→审阅→合并"闭环，且是 **Rust 实现**，crate 边界、worktree-per-workspace、PR 生成流程可直接读源码核对；npx 一条命令启动，值得对照其"降低试用门槛"的分发方式 | 它是单体 Web/Tauri 式应用，没有插件 runtime 和权限模型；sunsetting 状态提醒 Dozer 不能假设"功能覆盖全就等于产品能立住"，仍需回答差异化问题 |
 | [Crystal](https://github.com/stravu/crystal)（现由 [Nimbalyst](https://nimbalyst.com/crystal/) 延续） | TypeScript/Electron，MIT，3.1k star，**已停止更新（2026-02 起），仓库标注被 Nimbalyst 取代** | 多 Claude Code/Codex 会话并行 worktree、会话持久化可恢复、squash 多次 commit 后统一 rebase 回主分支 | "先在 worktree 里让 Agent 自由 commit，交付前 squash+rebase 成一次干净变更"这个 Git 生命周期值得写进 Dozer 的 Worktree Manager；会话持久化恢复的 UX 细节也可参考 | Electron 技术栈和已废弃状态；不要把 Crystal 当作活跃维护的参照实现，只取其已验证过的工作流设计 |
 
-此外，**Conductor（Melty Labs）** 是同一细分市场里认知度很高的 macOS 原生 App（每 Agent 一个隔离 worktree、可视化 dashboard、diff viewer），但**官方未开源**，只能作为竞品认知补充，不构成开源参照，不纳入 §9 仓库清单。
+此外，**Conductor（Melty Labs）** 是同一细分市场里认知度很高的 macOS 原生 App（每 Agent 一个隔离 worktree、可视化 dashboard、diff viewer），但**官方未开源**，只能作为竞品认知补充，不构成开源参照，不纳入 §10 仓库清单。
 
 这两个项目连同 §3.1-§3.3 已有条目一起，把"Kanban/Task 编排 + worktree 隔离 + 内联 diff 审阅 + PR 收尾"进一步坐实为 Vibe Coding 工具的标配而非差异化功能；Vibe Kanban 的 sunsetting 也提示一个具体风险：**光把这套标配做全，不足以构成长期产品护城河**，Dozer 仍要靠"治理/验收层 + 可扩展插件底座"这两条差异化路线站住脚，不能只对标"功能对齐"。
 
@@ -425,7 +425,7 @@ trait ExecutionEnvironment {
 - 它把"agent 的完整操作历史"作为一等产物（对应 Dozer 的 `CheckResult`/审计事件），而不只是最终 diff；
 - 通过 MCP 暴露而不是自己做 GUI，验证了 Dozer"Host 消费 ExecutionEnvironment Provider 的标准接口，不用吃下具体容器引擎"这条路线是可行的。
 
-建议列入 §7 P1 spike 的首选参照实现（比照读源码，而不是直接依赖 Go 二进制），并保留 OpenHands/Coder/Daytona 作为"更大规模远程 workspace 控制面"方向的补充参考。
+建议列入 §8 P1 spike 的首选参照实现（比照读源码，而不是直接依赖 Go 二进制），并保留 OpenHands/Coder/Daytona 作为"更大规模远程 workspace 控制面"方向的补充参考。
 
 ### 4.6 插件权限与能力模型：Tauri ACL 与 Deno 的分层设计更完整
 
@@ -447,7 +447,7 @@ Webview/插件默认被当作不可信方，每条 IPC 都必须显式声明 cap
 
 ### 4.7 Wasm 插件补充：Zellij 的 WASI 插件协议、wasmCloud 的 capability provider
 
-[Zellij](https://github.com/zellij-org/zellij)（Rust，MIT，35.5k star，高活跃）已经把 §4.2 讨论的"Wasm 插件"从设计变成了可读的生产代码：插件用 `wasmi` 解释器在隔离内存空间运行，Host 与插件之间用 Protocol Buffers 传递事件，插件按订阅模型只接收自己关心的事件类型，并有可配置的内存/栈资源上限。它的插件生命周期（加载→初始化→事件循环）和"插件不能直接访问 Host 或彼此内存，只能通过 WASI 受控访问系统资源"这两点，是比 Extism/Wasmtime 官方文档更具体的同语言（Rust）参考实现，建议 §7 P2 的 Wasm spike 直接对照读它的插件通信层源码，而不仅参考 Extism 的通用文档。
+[Zellij](https://github.com/zellij-org/zellij)（Rust，MIT，35.5k star，高活跃）已经把 §4.2 讨论的"Wasm 插件"从设计变成了可读的生产代码：插件用 `wasmi` 解释器在隔离内存空间运行，Host 与插件之间用 Protocol Buffers 传递事件，插件按订阅模型只接收自己关心的事件类型，并有可配置的内存/栈资源上限。它的插件生命周期（加载→初始化→事件循环）和"插件不能直接访问 Host 或彼此内存，只能通过 WASI 受控访问系统资源"这两点，是比 Extism/Wasmtime 官方文档更具体的同语言（Rust）参考实现，建议 §8 P2 的 Wasm spike 直接对照读它的插件通信层源码，而不仅参考 Extism 的通用文档。
 
 [wasmCloud](https://github.com/wasmCloud/wasmCloud)（Rust，Apache-2.0，CNCF 项目，2.4k star）验证了一个更进一步的模式："capability provider"——把网络、存储、消息队列等能力抽象成可替换的 provider，Wasm 组件通过标准接口声明依赖的能力，不直接链接具体实现。这与 Dozer《架构分析》§4.1 `PluginContext` 的能力接口设计思路一致，可以作为"插件声明依赖能力、Host 注入具体 Provider 实现"这一模式的命名参照，但 wasmCloud 本身面向分布式云原生场景，其 host/lattice/actor 运行时比 Dozer 单机 Host 需要的复杂得多，**只借鉴 capability provider 这个概念和命名，不引入其运行时**。
 
@@ -484,7 +484,7 @@ OpenSpec 还提供并行 Change、delta spec、归档同步和可定制 schema�
 
 ### 4.10 MCP Gateway 生态现状：仍然碎片化，没有可以直接采用的成熟实现
 
-`docs/dozer-v2开源生态调研.md` §5.3 已建议 Dozer 自建 MCP Gateway 而非依赖外部项目；第二轮调研核实了具体现状，这个判断被进一步坐实。检索到的候选实现成熟度差异很大：
+本文 §6.3 已建议 Dozer 自建 MCP Gateway 而非依赖外部项目；第二轮调研核实了具体现状，这个判断被进一步坐实。检索到的候选实现成熟度差异很大：
 
 | 项目 | 语言/许可证/star（2026-09-24 核实） | 状态 |
 |---|---|---|
@@ -818,6 +818,7 @@ dozer-host (iced)
 
 ### 执行、记忆、观测与浏览器
 
+- [ys-ll/uniterm](https://github.com/ys-ll/uniterm)
 - [OpenHands/OpenHands](https://github.com/OpenHands/OpenHands)
 - [coder/coder](https://github.com/coder/coder)
 - [daytonaio/daytona](https://github.com/daytonaio/daytona)
@@ -844,11 +845,12 @@ dozer-host (iced)
 
 因此，下一步最有价值的工作不是继续横向增加面板，而是完成三个纵向切片：**Todo 进程插件、Task–Worktree 运行时、统一 Run/Event/Artifact 审计链**。这三项成立后，容器、Laya、Browser Test、Memory 和 Code Health 才能以一致方式接入，而不是再次长进 Host。
 
-### 11.1 第二轮补充调研的结论（§3.7、§4.8-§4.13）
+### 11.1 补充调研的结论（§3.7、§4.5—§4.10、§5.4—§5.6）
 
 不改变上述最终判断，但把两处最薄弱的环节补上了具体参照：
 
 - **ExecutionEnvironment**：dagger/container-use 证明"容器化 agent 沙箱 + worktree 绑定 + MCP 暴露、不嵌入 Host"这条路线已经有可运行实现，应作为 P1 spike 的首选参照，优先级高于 OpenHands/Coder/Daytona 这类更重的远程 workspace 平台；
 - **插件权限模型**：现有 `[permissions]` 草案偏扁平，应改用 Tauri ACL 的 capability/permission/scope 三层结构，并采纳 Deno "deny 优先于 allow"的裁决顺序，这是一处应该在 P0 Plugin Protocol spike 之前就修正的设计缺口，成本很低；
 - **MCP Gateway**：核实后确认这个生态仍然碎片化（企业级 K8s 网关 或 个人实验项目两极分化，没有本地单机场景的成熟实现），坐实了 Dozer 应自建轻量 Gateway、不等生态成熟的判断；
+- **SSH／Database／远端资源面板**：uniTerm 证明多协议连接、SFTP、数据库、容器和 AI 终端可以形成完整的跨平台工作台；Dozer 应借鉴其连接管理和面板交互，但仍把这些能力拆成插件/Provider，并由 Host 统一权限、Secret、审计和 Artifact；
 - **Vibe Kanban 的 sunsetting** 是本轮最重要的产品警示：一个功能覆盖面已经和 Dozer 目标高度重合、Rust 实现、28k star 的项目主动停止维护，说明"把 Kanban+worktree+diff审阅+PR 这套标配做全"不足以构成可持续产品，Dozer 的治理/验收层定位和插件生态才是必须守住的差异化，不能满足于对齐这类项目的功能列表。
