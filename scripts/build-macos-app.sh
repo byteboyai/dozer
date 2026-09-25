@@ -107,6 +107,11 @@ cp -R "$ROOT_DIR/crates/dozer-app/assets/editor" "$APP_DIR/Contents/Resources/ed
 # JSON tree/text host(vanilla-jsoneditor)。`dozer://json-editor/` 从 flyfish 根的
 # 兄弟目录 `Contents/Resources/json-editor` 读。
 cp -R "$ROOT_DIR/crates/dozer-app/assets/json-editor" "$APP_DIR/Contents/Resources/json-editor"
+# 会话审阅 trace host(Preact,2026-09-25 起)。`dozer://review-trace/` 从
+# flyfish 根的兄弟目录 `Contents/Resources/review-trace` 读,漏拷会导致
+# 分发后核心 Agent 面板/对话面板的会话审阅整个 404(dev 态 `cargo run`
+# 走源码树回退,测不出这个漏拷)。
+cp -R "$ROOT_DIR/crates/dozer-app/assets/review-trace" "$APP_DIR/Contents/Resources/review-trace"
 
 # cargo 链接期只对裸二进制做了 ad-hoc 签名(`codesign -dv` 显示
 # `Info.plist=not bound`),装进 bundle 后这个签名并不覆盖 Info.plist/资源,

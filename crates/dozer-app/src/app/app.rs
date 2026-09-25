@@ -42,10 +42,11 @@ pub(crate) const DEFAULT_COLS: u16 = 80;
 
 pub(crate) const DEFAULT_ROWS: u16 = 24;
 
-/// `dozer://review-trace/data.json` 的响应体形状——`review_trace.html` 按
-/// 这个结构消费(`entries`/`agent_label`/`summary_title`/`summary_text`/
-/// `summary_time` 顶层字段)。总结区(标题/全文/时间)只在本会话详情里非空,
-/// 活会话 `None`。
+/// `dozer://review-trace/data.json` 的响应体形状——`crates/dozer-app/web/
+/// review-trace`(Preact host,2026-09-25 起)按这个结构消费
+/// (`entries`/`agent_label`/`summary_title`/`summary_text`/`summary_time`
+/// 顶层字段,对应该 crate 的 `src/types.ts::TraceData`)。总结区(标题/
+/// 全文/时间)只在本会话详情里非空,活会话 `None`。
 #[derive(serde::Serialize)]
 pub(crate) struct ReviewSnapshot<'a> {
     pub(crate) entries: &'a [ReviewEntry],
