@@ -161,6 +161,12 @@ fn editor_root_for(flyfish_root: &Path) -> PathBuf {
     flyfish_root.with_file_name("editor")
 }
 
+/// review-trace host(会话审阅 trace 时间线)静态资源根 = flyfish 根的
+/// 兄弟目录 `review-trace`。同 `editor_root_for`,dev 与打包态同构。
+fn review_trace_root_for(flyfish_root: &Path) -> PathBuf {
+    flyfish_root.with_file_name("review-trace")
+}
+
 /// T7:`dozer://html/__file__/<abs>` 的读取闸门。比 editor 的"精确文件白名单"
 /// 宽一点:允许**已打开文件所在目录子树**(相对资源 css/js/图片要能加载),
 /// 但不允许跨出这些目录,且拒绝任何 `..` 分量 + 再 canonicalize 复核(防符号
@@ -216,26 +222,22 @@ pub fn handle_protocol(
     };
     let rest = rest.split('?').next().unwrap_or(rest);
 
-    // 审阅面板 trace 页面(2026-08-21):页面本身是编译期内嵌的静态资源,
-    // 不走磁盘;数据端点回显调用方注入的当前审阅内容快照——没有快照
-    // (还没加载过审阅内容)时 404。
+    // 审阅面板 trace 页面(2026-09-25 起 Preact 离线打包产物,从磁盘服务,
+    // 同 editor/json-editor):数据端点回显调用方注入的当前审阅内容快照
+    // ——没有快照(还没加载过审阅内容)时 404,判断顺序在 serve_vendored
+    // 之前,不受影响。
     if let Some(path) = rest.strip_prefix("review-trace/") {
-        return match path {
-            "host.html" => ProtocolReply {
-                status: 200,
-                mime: "text/html",
-                body: include_str!("review_trace.html").as_bytes().to_vec(),
-            },
-            "data.json" => match review_data {
+        if path == "data.json" {
+            return match review_data {
                 Some(json) => ProtocolReply {
                     status: 200,
                     mime: "application/json",
                     body: json.as_bytes().to_vec(),
                 },
                 None => not_found(),
-            },
-            _ => not_found(),
-        };
+            };
+        }
+        return serve_vendored(&review_trace_root_for(assets_root), path);
     }
 
     // editor host:页面/脚本/样式/字体从 editor 根服务;`__file__/<abs>` 复用
