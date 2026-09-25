@@ -1116,6 +1116,7 @@ mod tests {
             tool_calls: vec![ToolCallInfo {
                 summary: "Edit README.md".into(),
                 input_json: Some("{\"file_path\":\"README.md\"}".into()),
+                id: None,
             }],
             thinking: true,
             thinking_text: Some("先看看现有实现".into()),
@@ -2272,6 +2273,7 @@ mod tests {
             thinking_text: None,
             ts: Some(1),
             is_error: false,
+            tool_result_call_id: None,
             tokens_in: 0,
             tokens_out: 0,
             tokens_cache_read: 0,
