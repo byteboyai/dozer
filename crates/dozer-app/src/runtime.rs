@@ -366,6 +366,10 @@ pub(crate) fn sync_webview_pool(
                 // T9:Flyfish host 的绑定从 URL 查询串解析(proj/panel/tab/doc),
                 // host 回传的 envelope 据此校验归属。
                 let flyfish_binding = crate::preview::flyfish_binding_from_url(&spec.url);
+                // `flyfish_binding_from_url` 同时覆盖 Flyfish 与隔离 HTML host；只有
+                // 前者暴露 `searchDocument` 等文档搜索 API。这个标记还用于把
+                // WebView 聚焦态的 Cmd/Ctrl+F 路由回 Dozer Find 条。
+                let is_flyfish_host = spec.url.starts_with("dozer://flyfish/");
                 // 常驻注入脚本:焦点/拖拽/缩放三件套(所有 webview);浏览器
                 // 面板(`report_title`)额外附一段"页面标题回报":把
                 // `window.__dozer_webview` 记成本 webview 的 id,页面
@@ -390,20 +394,20 @@ pub(crate) fn sync_webview_pool(
                     script.push_str(
                         "(function(){var s=document.createElement('style');s.textContent=\"html,body,body *{cursor:text!important}a,a *,button,*[role='link'],*[role='button'],summary,*[onclick],label[for]{cursor:pointer!important}\";(document.head||document.documentElement).appendChild(s);document.addEventListener('keydown',function(e){if((e.ctrlKey||e.metaKey)&&e.code==='KeyC'){e.preventDefault();var ok=false;try{ok=document.execCommand('copy')}catch(_){}if(!ok){var g=window.getSelection&&window.getSelection();if(g&&g.toString()){try{navigator.clipboard.writeText(g.toString()).then(function(){},function(){})}catch(_){}}}}});})();",
                     );
-                    // ⌘F 页内查找:webview 聚焦时按键被它吃掉、到不了 winit,也
-                    // 不会像原生编辑器那样走应用层 Find 条。这里在捕获阶段拦截
-                    // ⌘F(以及兼容 Ctrl+F),优先聚焦**页面自带的搜索框**——flyfish
-                    // 预览的工具栏搜索输入框(native `type=search`)藏在
-                    // `<flyfish-file-viewer>` 的 shadow root 里,所以要递归穿透
-                    // shadow DOM 找;找得到就 focus+全选并 IPC 通知宿主把
-                    // WKWebView 设为 first responder(否则输入落不进页面输入框),
-                    // 找不到就 IPC 通知宿主退回 WKWebView 原生查找条
-                    // (`findString:`)。用 `e.code==='KeyF'` 判键位,避免键盘布局
-                    // 影响 `e.key`;`preventDefault` 挡住 WKWebView 对 ⌘F 的默认
-                    // 处理(避免与页面输入的焦点争夺)。
-                    script.push_str(
-                        "(function(){function _dozPick(root){var best=null;function walk(n){if(!n||n.nodeType!==1&&n.nodeType!==9&&n.nodeType!==11)return;var list=n.querySelectorAll?n.querySelectorAll('input[type=search]'):[];for(var i=0;i<list.length;i++){var el=list[i];if(el.disabled||el.readOnly)continue;if(!best)best=el;}if(!best){var any=n.querySelectorAll?n.querySelectorAll('input[type=text],input:not([type])'):[];for(var j=0;j<any.length;j++){var a=any[j];if(a.disabled||a.readOnly)continue;var box=a.closest&&(a.closest('[role=search]')||a.closest('.file-viewer-web-search')||a.closest('form[role=search]'));if(box){best=a;break;}}}var hosts=n.querySelectorAll?n.querySelectorAll('*'):[];for(var k=0;k<hosts.length;k++){var sr=hosts[k].shadowRoot;if(sr)walk(sr);}}walk(root||document);return best;}document.addEventListener('keydown',function(e){if((e.metaKey||e.ctrlKey)&&e.code==='KeyF'){e.preventDefault();var box=_dozPick(document);if(box){try{box.focus();if(box.select)box.select();}catch(_){}window.ipc.postMessage('find_page');}else{window.ipc.postMessage('find_native');}}},true);})();",
-                    );
+                    if is_flyfish_host {
+                        // Flyfish host 明确关闭了自带 toolbar，因此页面内没有可聚焦
+                        // 的搜索框。WebView 聚焦时直接把 Cmd/Ctrl+F 交还给 Dozer，
+                        // 由统一 Find 条收 query，再调用 Flyfish `searchDocument`。
+                        script.push_str(
+                            "document.addEventListener('keydown',function(e){if((e.metaKey||e.ctrlKey)&&e.code==='KeyF'){e.preventDefault();e.stopPropagation();window.ipc.postMessage('find_preview');}},true);",
+                        );
+                    } else {
+                        // 浏览器/隔离 HTML 等普通页面仍优先使用页面自己的搜索框，
+                        // 找不到时退回平台原生页内查找。
+                        script.push_str(
+                            "(function(){function _dozPick(root){var best=null;function walk(n){if(!n||n.nodeType!==1&&n.nodeType!==9&&n.nodeType!==11)return;var list=n.querySelectorAll?n.querySelectorAll('input[type=search]'):[];for(var i=0;i<list.length;i++){var el=list[i];if(el.disabled||el.readOnly)continue;if(!best)best=el;}if(!best){var any=n.querySelectorAll?n.querySelectorAll('input[type=text],input:not([type])'):[];for(var j=0;j<any.length;j++){var a=any[j];if(a.disabled||a.readOnly)continue;var box=a.closest&&(a.closest('[role=search]')||a.closest('.file-viewer-web-search')||a.closest('form[role=search]'));if(box){best=a;break;}}}var hosts=n.querySelectorAll?n.querySelectorAll('*'):[];for(var k=0;k<hosts.length;k++){var sr=hosts[k].shadowRoot;if(sr)walk(sr);}}walk(root||document);return best;}document.addEventListener('keydown',function(e){if((e.metaKey||e.ctrlKey)&&e.code==='KeyF'){e.preventDefault();var box=_dozPick(document);if(box){try{box.focus();if(box.select)box.select();}catch(_){}window.ipc.postMessage('find_page');}else{window.ipc.postMessage('find_native');}}},true);})();",
+                        );
+                    }
                 }
                 if report_title {
                     script.push_str("window.__dozer_webview=");
@@ -452,6 +456,15 @@ pub(crate) fn sync_webview_pool(
                             }
                             "focus" => {
                                 let _ = ipc_proxy.send_event(Message::WebViewFocused);
+                            }
+                            // Flyfish WebView 获得 first responder 后，Cmd/Ctrl+F
+                            // 不会再到达 winit。直接进入现有 Dozer Find 状态机；
+                            // 查询和跳转随后仍由 Flyfish 搜索 API 执行。
+                            "find_preview" if is_flyfish_host => {
+                                if let Some(binding) = flyfish_binding.as_ref() {
+                                    let _ = ipc_proxy
+                                        .send_event(Message::PreviewFindOpen(binding.panel));
+                                }
                             }
                             // ⌘F 页内查找:JS 找到并聚焦了页面自带搜索框
                             // (`find_page`),或没找到、要退回原生查找条
