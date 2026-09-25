@@ -999,7 +999,7 @@ pub(crate) fn panel_body<'a>(
                 app,
                 &ws.conversations,
                 ws.todo.items(),
-                &ws.open_transcript_paths(),
+                ws.current_review_conversation_id().as_deref(),
                 Length::FillPortion(list_portion),
                 zone_pane_border(zone, rc),
             )

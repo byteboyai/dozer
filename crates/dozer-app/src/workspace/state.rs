@@ -150,6 +150,29 @@ pub(crate) fn review_should_refresh_on_turn(source: &ReviewSource, tab_id: usize
     matches!(source, ReviewSource::Session(id) if *id == tab_id)
 }
 
+/// 一份 `ReviewSource` 对应的 conversation_id。`Conversation` 本身就是
+/// id；`Session` 要反查该 tab 的 transcript 路径取 `file_stem()`，和对话
+/// 面板列表按 conversation_id 匹配行时用的是同一套路径解析规则
+/// (2026-08-27 起，session 的 transcript 文件名 stem 就是 conversation_id)。
+/// 抽成纯函数(不直接吃 `&Workspace`)方便 headless 单测——
+/// `Workspace::current_review_conversation_id` 只是签出字段喂给它的薄
+/// 封装。
+pub(crate) fn review_source_conversation_id<'a>(
+    source: &ReviewSource,
+    transcript_path_for_tab: impl FnOnce(usize) -> Option<&'a str>,
+) -> Option<String> {
+    match source {
+        ReviewSource::Conversation(id) => Some(id.clone()),
+        ReviewSource::Session(tab_id) => {
+            let path = transcript_path_for_tab(*tab_id)?;
+            std::path::Path::new(path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+        }
+    }
+}
+
 /// 会话审阅 tab 的内容（P1i）。
 pub struct ReviewView {
     pub source: ReviewSource,
@@ -874,12 +897,19 @@ impl Workspace {
         self.project.as_ref().map(|p| p.id)
     }
 
-    /// 打开着的会话 transcript 路径集合（UI 判"● 当前"用）。
-    pub fn open_transcript_paths(&self) -> Vec<String> {
-        self.tabs
-            .iter()
-            .filter_map(|t| t.transcript_path.clone())
-            .collect()
+    /// 审阅面板当前正在查看的那一条会话的 conversation_id（单一值——一次
+    /// 只有一条"当前"，不是"全部打开的 Agent tab"；2026-09-25 前的实现是
+    /// 后者，导致同时开几个 tab 就有几行同时被标"● 当前"，见对话面板列表
+    /// 走查)。核心判据是纯函数 [`review_source_conversation_id`]，这里只是
+    /// 签出 `self.review`/`self.tabs` 喂给它的薄封装。供对话面板列表判
+    /// "● 当前"用 (`extensions::conversations::view`)。
+    pub fn current_review_conversation_id(&self) -> Option<String> {
+        let review = self.review.as_ref()?;
+        review_source_conversation_id(&review.source, |tab_id| {
+            self.tabs
+                .get(tab_id)
+                .and_then(|t| t.transcript_path.as_deref())
+        })
     }
 
     /// 异步查回合明细 → ReviewLoaded（改走 dozerd；P1i/P1j/P2b 按源）。

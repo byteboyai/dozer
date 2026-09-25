@@ -413,15 +413,17 @@ fn agent_picker_view(
 /// 列表(标题+总结预览),按最后活跃时间倒序。点一行 → `SessionOpen` 驱动
 /// 内核加载右侧审阅内容。列表按 `conversation_visible_count` 客户端分页。
 ///
-/// `todo_items`/`open_transcript_paths` 由内核跨读传入(见设计文档"关键
+/// `todo_items`/`current_review_id` 由内核跨读传入(见设计文档"关键
 /// 语义确认"——这不是 extension 间耦合,`conversations` 模块本身不持有
 /// `todo::WorkspaceState`,只是内核在组装这次 `view` 调用时顺带传了两份
-/// 只读数据)。
+/// 只读数据)。`current_review_id` 是单一值(审阅面板当前正在看的那条),
+/// 不是"全部打开的 Agent tab"——2026-09-25 之前误用后者,导致同时开几个
+/// tab 就有几行同时标"● 当前"。
 pub fn view<'a>(
     app: &'a App,
     ws_state: &'a WorkspaceState,
     todo_items: &[TodoInfo],
-    open_transcript_paths: &[String],
+    current_review_id: Option<&str>,
     width: Length,
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -483,10 +485,7 @@ pub fn view<'a>(
     let mut cards = column![].spacing(region.gap);
     let visible = conversation_visible_count(ws_state.pages);
     for g in filtered.iter().take(visible) {
-        let current = crate::conversation::is_current_conversation_id(
-            &g.conversation_id,
-            open_transcript_paths,
-        );
+        let current = current_review_id == Some(g.conversation_id.as_str());
         let agent_label = g.agent.label();
         let task_suffix = g
             .task_id

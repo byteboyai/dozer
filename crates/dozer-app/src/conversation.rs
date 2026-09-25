@@ -57,15 +57,6 @@ impl SessionRow {
     }
 }
 
-/// 该会话是否是当前活会话(其 `conversation_id` 等于打开着的某个 transcript
-/// 文件名的 `file_stem()`)。纯函数,2026-08-27 取代按完整文件路径匹配的
-/// `is_current_conversation`。
-pub fn is_current_conversation_id(conversation_id: &str, open_transcripts: &[String]) -> bool {
-    open_transcripts.iter().any(|p| {
-        std::path::Path::new(p).file_stem().and_then(|s| s.to_str()) == Some(conversation_id)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,14 +127,5 @@ mod tests {
         assert_eq!(row.display_title, "原始标题");
         assert_eq!(row.summary, None);
         assert_eq!(row.summary_status, None);
-    }
-
-    #[test]
-    fn is_current_matches_open_transcript_by_file_stem() {
-        let opens = vec!["/t/a.jsonl".to_string(), "/t/b.jsonl".to_string()];
-        assert!(is_current_conversation_id("a", &opens));
-        assert!(is_current_conversation_id("b", &opens));
-        assert!(!is_current_conversation_id("c", &opens));
-        assert!(!is_current_conversation_id("", &opens));
     }
 }

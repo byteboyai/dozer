@@ -60,6 +60,33 @@ fn review_webview_spec_url_carries_nonce_and_is_visible() {
 }
 
 #[test]
+fn review_source_conversation_id_uses_conversation_source_directly() {
+    let source = ReviewSource::Conversation("abc".into());
+    assert_eq!(
+        review_source_conversation_id(&source, |_| None),
+        Some("abc".to_string())
+    );
+}
+
+#[test]
+fn review_source_conversation_id_derives_from_session_tab_transcript_stem() {
+    let source = ReviewSource::Session(2);
+    assert_eq!(
+        review_source_conversation_id(&source, |tab_id| {
+            assert_eq!(tab_id, 2);
+            Some("/h/.claude/projects/x/abc123.jsonl")
+        }),
+        Some("abc123".to_string())
+    );
+}
+
+#[test]
+fn review_source_conversation_id_none_when_session_tab_has_no_transcript() {
+    let source = ReviewSource::Session(0);
+    assert_eq!(review_source_conversation_id(&source, |_| None), None);
+}
+
+#[test]
 fn agent_card_refresh_plan_decides_by_agent_and_cwd() {
     let root = PathBuf::from("/repo");
     let elsewhere = PathBuf::from("/elsewhere");
