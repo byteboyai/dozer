@@ -181,6 +181,68 @@ describe('open/close', () => {
     // 正文原始 id 未被改动。
     assert.equal(harness.article.querySelector('marker')!.getAttribute('id'), 'm');
   });
+
+  test('binds an image that finishes loading after installation', async () => {
+    harness = buildHarness();
+    const img = fakeImage(harness.document, { alt: 'Later' }, null);
+    harness.article.append(img);
+    const handle = install();
+    assert.equal(handle.mediaCount(), 0);
+
+    Object.defineProperty(img, 'complete', { value: true, configurable: true });
+    Object.defineProperty(img, 'naturalWidth', { value: 640, configurable: true });
+    Object.defineProperty(img, 'naturalHeight', { value: 480, configurable: true });
+    img.dispatchEvent(new harness.window.Event('load'));
+
+    assert.equal(handle.mediaCount(), 1);
+    click(img);
+    assert.equal(handle.isOpen(), true);
+  });
+
+  test('linked image opens lightbox without navigating and link keyboard opens it', () => {
+    harness = buildHarness();
+    const link = harness.document.createElement('a');
+    link.href = 'https://example.invalid/target';
+    const img = fakeImage(harness.document, { alt: 'Linked' }, { width: 100, height: 80 });
+    link.append(img);
+    harness.article.append(link);
+    const handle = install();
+
+    const clickEvent = new harness.window.MouseEvent('click', { bubbles: true, cancelable: true });
+    const allowed = img.dispatchEvent(clickEvent);
+    assert.equal(allowed, false);
+    assert.equal(handle.isOpen(), true);
+    key(harness.document, 'Escape');
+
+    key(link, 'Enter');
+    assert.equal(handle.isOpen(), true);
+  });
+
+  test('stage uses one absolute coordinate system and explicit intrinsic size', () => {
+    harness = buildHarness();
+    const img = fakeImage(harness.document, {}, { width: 320, height: 200 });
+    harness.article.append(img);
+    install();
+    click(img);
+    const stage = harness.document.querySelector('.dozer-media-lightbox__stage') as HTMLElement;
+    assert.equal(stage.style.width, '320px');
+    assert.equal(stage.style.height, '200px');
+    assert.match(stage.style.transform, /^translate3d\(/);
+  });
+
+  test('double click toggles fit and 100%', () => {
+    harness = buildHarness();
+    const img = fakeImage(harness.document, {}, { width: 2000, height: 1000 });
+    harness.article.append(img);
+    install();
+    click(img);
+    const stage = harness.document.querySelector('.dozer-media-lightbox__stage')!;
+    const label = () => harness.document.querySelector('.dozer-media-lightbox__zoom')!.textContent;
+    stage.dispatchEvent(new harness.window.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+    assert.equal(label(), '100%');
+    stage.dispatchEvent(new harness.window.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+    assert.equal(label(), '100%'); // jsdom 的零视口下 fit 安全回退为 100%。
+  });
 });
 
 describe('keyboard/wheel controls', () => {

@@ -18,7 +18,6 @@ import {
 import { markdownMediaLightboxStyle, LIGHTBOX_STYLE_ID } from './styles.ts';
 import { rewriteSvgIds } from './svgIds.ts';
 import {
-  DEFAULT_FIT_INSETS,
   SCALE_FIT_MAX,
   SCALE_MAX,
   SCALE_MIN,
@@ -48,6 +47,7 @@ export interface LightboxHandle {
 const ZOOM_STEP = 1.25;
 const WHEEL_ZOOM_STEP = 1.1;
 const KEY_ZOOM_STEP = 1.25;
+const LIGHTBOX_FIT_INSETS: FitInsets = { top: 72, right: 24, bottom: 24, left: 24 };
 
 const ICONS = {
   close:
@@ -122,7 +122,7 @@ export const installMarkdownMediaLightbox = (options: InstallOptions): LightboxH
   const { viewer, article } = options;
   const documentRef = article.ownerDocument;
   const windowRef = documentRef.defaultView;
-  const fitInsets = options.fitInsets ?? DEFAULT_FIT_INSETS;
+  const fitInsets = options.fitInsets ?? LIGHTBOX_FIT_INSETS;
 
   if (!documentRef.getElementById(LIGHTBOX_STYLE_ID)) {
     const style = documentRef.createElement('style');
@@ -303,6 +303,9 @@ export const installMarkdownMediaLightbox = (options: InstallOptions): LightboxH
     documentRef.body.appendChild(overlay);
 
     contentSize = measureStageMedia(stageMedia, descriptor);
+    stage.style.width = `${contentSize.width}px`;
+    stage.style.height = `${contentSize.height}px`;
+    overlay.setAttribute('aria-label', `Media viewer: ${descriptor.accessibleName}`);
     state = { scale: 1, translation: { x: 0, y: 0 }, mode: 'fit' };
     fitToViewport();
 
@@ -382,6 +385,20 @@ export const installMarkdownMediaLightbox = (options: InstallOptions): LightboxH
     }
     if (isEditableTarget(event.target)) return;
 
+    if (event.key === 'Tab') {
+      const focusable = Array.from(
+        toolbar.querySelectorAll<HTMLButtonElement>('button:not([disabled])')
+      );
+      if (focusable.length === 0) return;
+      const current = focusable.indexOf(documentRef.activeElement as HTMLButtonElement);
+      const next = event.shiftKey
+        ? (current <= 0 ? focusable.length - 1 : current - 1)
+        : (current < 0 || current === focusable.length - 1 ? 0 : current + 1);
+      event.preventDefault();
+      focusable[next].focus();
+      return;
+    }
+
     const key = event.key;
     if (key === '+' || key === '=') {
       event.preventDefault();
@@ -410,8 +427,20 @@ export const installMarkdownMediaLightbox = (options: InstallOptions): LightboxH
 
   const onWheel = (event: WheelEvent) => {
     if (!active) return;
-    // 只有 Meta/Ctrl 修饰滚轮才缩放;普通滚轮交给画布(此处不 preventDefault)。
-    if (!(event.metaKey || event.ctrlKey)) return;
+    if (!(event.metaKey || event.ctrlKey)) {
+      // 普通滚轮平移画布；边界由几何层统一 clamp。
+      state = withClamp({
+        ...state,
+        translation: {
+          x: state.translation.x - event.deltaX,
+          y: state.translation.y - event.deltaY,
+        },
+        mode: 'manual',
+      });
+      event.preventDefault();
+      applyState();
+      return;
+    }
     event.preventDefault();
     const point = wheelPoint(event);
     const factor = event.deltaY < 0 ? WHEEL_ZOOM_STEP : 1 / WHEEL_ZOOM_STEP;
@@ -476,8 +505,28 @@ export const installMarkdownMediaLightbox = (options: InstallOptions): LightboxH
     }
   };
 
+  const onDoubleClick = (event: MouseEvent) => {
+    if (!active || !(event.target instanceof windowRef!.Element)) return;
+    if (!stage.contains(event.target)) return;
+    event.preventDefault();
+    if (state.mode === 'fit') {
+      setScaleCentered(1, 'manual');
+    } else {
+      fitToViewport();
+    }
+  };
+
   // 打开媒体:绑定点击与键盘 Enter/Space。
-  const openers: Array<{ el: Element; handler: (e: Event) => void; key: (e: KeyboardEvent) => void }> = [];
+  const openerListeners: Array<{
+    target: EventTarget;
+    type: 'click' | 'keydown';
+    listener: EventListener;
+  }> = [];
+  const pendingImages: Array<{
+    img: HTMLImageElement;
+    load: EventListener;
+    error: EventListener;
+  }> = [];
 
   const descriptorByElement = new Map<Element, MediaDescriptor>();
 
@@ -496,7 +545,8 @@ export const installMarkdownMediaLightbox = (options: InstallOptions): LightboxH
     el.setAttribute('data-dozer-lightbox-bound', 'true');
     // 图片位于 <a> 内时,不为 img 额外加 tabindex,避免嵌套交互元素的非法语义;
     // 复用外层链接的焦点。其余情况让媒体本身可聚焦。
-    const insideLink = Boolean((el as HTMLElement).closest?.('a[href]'));
+    const link = (el as HTMLElement).closest?.('a[href]') ?? null;
+    const insideLink = Boolean(link);
     if (!insideLink && !el.hasAttribute('tabindex')) {
       el.setAttribute('tabindex', '0');
     }
@@ -506,6 +556,9 @@ export const installMarkdownMediaLightbox = (options: InstallOptions): LightboxH
     const handler = (event: Event) => {
       const media = resolveDescriptor(el);
       if (!media) return;
+      // 链接包裹图片时，点图片打开灯箱，不继续执行链接导航。
+      event.preventDefault();
+      event.stopPropagation();
       open(media, el);
     };
     const key = (event: KeyboardEvent) => {
@@ -516,30 +569,51 @@ export const installMarkdownMediaLightbox = (options: InstallOptions): LightboxH
       open(media, el);
     };
     el.addEventListener('click', handler);
-    // Element 的 addEventListener 重载不含 keydown;媒体元素实际都是
-    // HTMLElement | SVGSVGElement,用 EventTarget 视角注册即可。
-    (el as unknown as EventTarget).addEventListener('keydown', key as EventListener);
-    openers.push({ el, handler, key });
+    openerListeners.push({ target: el, type: 'click', listener: handler });
+    const keyboardTarget = link ?? el;
+    keyboardTarget.addEventListener('keydown', key as EventListener);
+    openerListeners.push({ target: keyboardTarget, type: 'keydown', listener: key as EventListener });
+  };
+
+  const clearBindings = () => {
+    for (const { target, type, listener } of openerListeners) {
+      target.removeEventListener(type, listener);
+    }
+    openerListeners.length = 0;
+    for (const { img, load, error } of pendingImages) {
+      img.removeEventListener('load', load);
+      img.removeEventListener('error', error);
+    }
+    pendingImages.length = 0;
+    descriptorByElement.clear();
   };
 
   const refreshBindings = () => {
-    // 清空旧绑定。
-    for (const { el, handler, key } of openers) {
-      el.removeEventListener('click', handler);
-      (el as unknown as EventTarget).removeEventListener('keydown', key as EventListener);
-    }
-    openers.length = 0;
-    descriptorByElement.clear();
+    clearBindings();
 
     const media = collectMedia(article, documentRef);
     for (const descriptor of media) {
       descriptorByElement.set(descriptor.source, descriptor);
       bindOpener(descriptor.source, descriptor);
     }
-    return media.length;
+    currentMediaCount = media.length;
+
+    // 图片 load 不会触发 child-list mutation；为安装时尚未解码的图片显式补绑定。
+    for (const img of article.querySelectorAll<HTMLImageElement>(
+      'img:not([data-dozer-lightbox-skip])'
+    )) {
+      // complete=true + naturalWidth=0 是永久失败，不再等待不存在的第二次 error。
+      if (img.complete) continue;
+      const load: EventListener = () => refreshBindings();
+      const error: EventListener = () => refreshBindings();
+      img.addEventListener('load', load, { once: true });
+      img.addEventListener('error', error, { once: true });
+      pendingImages.push({ img, load, error });
+    }
   };
 
-  const mediaCount = refreshBindings();
+  let currentMediaCount = 0;
+  refreshBindings();
 
   let mutationObserver: MutationObserver | null = null;
 
@@ -555,6 +629,7 @@ export const installMarkdownMediaLightbox = (options: InstallOptions): LightboxH
   wrap.addEventListener('pointermove', onPointerMove);
   wrap.addEventListener('pointerup', onPointerUp);
   wrap.addEventListener('pointercancel', onPointerUp);
+  wrap.addEventListener('dblclick', onDoubleClick);
   closeBtn.addEventListener('click', () => close());
   zoomInBtn.addEventListener('click', () => setScaleCentered(state.scale * ZOOM_STEP, 'manual'));
   zoomOutBtn.addEventListener('click', () => setScaleCentered(state.scale / ZOOM_STEP, 'manual'));
@@ -565,12 +640,7 @@ export const installMarkdownMediaLightbox = (options: InstallOptions): LightboxH
     if (destroyed) return;
     destroyed = true;
     close();
-    for (const { el, handler, key } of openers) {
-      el.removeEventListener('click', handler);
-      (el as unknown as EventTarget).removeEventListener('keydown', key as EventListener);
-    }
-    openers.length = 0;
-    descriptorByElement.clear();
+    clearBindings();
     mutationObserver?.disconnect();
     mutationObserver = null;
     overlay.removeEventListener('pointerdown', onOverlayPointerDown);
@@ -579,12 +649,13 @@ export const installMarkdownMediaLightbox = (options: InstallOptions): LightboxH
     wrap.removeEventListener('pointermove', onPointerMove);
     wrap.removeEventListener('pointerup', onPointerUp);
     wrap.removeEventListener('pointercancel', onPointerUp);
+    wrap.removeEventListener('dblclick', onDoubleClick);
     overlay.remove();
   };
 
   return {
     destroy,
     isOpen: () => active,
-    mediaCount: () => mediaCount,
+    mediaCount: () => currentMediaCount,
   };
 };

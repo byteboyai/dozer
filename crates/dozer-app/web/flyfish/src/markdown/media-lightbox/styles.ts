@@ -14,11 +14,11 @@ export const markdownMediaLightboxStyle = `
 
 .dozer-media-lightbox{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;background:rgba(10,14,22,.92);color:#ffe5b4;-webkit-user-select:none;user-select:none;touch-action:none;overscroll-behavior:contain}
 .dozer-media-lightbox[hidden]{display:none}
-.dozer-media-lightbox__stage-wrap{position:absolute;inset:0;overflow:hidden;display:flex;align-items:center;justify-content:center}
-.dozer-media-lightbox__stage{transform-origin:0 0;will-change:transform;cursor:grab;display:flex;align-items:center;justify-content:center}
+.dozer-media-lightbox__stage-wrap{position:absolute;inset:0;overflow:hidden}
+.dozer-media-lightbox__stage{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform;cursor:grab}
 .dozer-media-lightbox__stage.is-dragging{cursor:grabbing}
 .dozer-media-lightbox__stage.is-zoomed{cursor:grab}
-.dozer-media-lightbox__media{display:block;max-width:none;max-height:none;pointer-events:none;-webkit-user-drag:none;user-select:none}
+.dozer-media-lightbox__media{display:block;width:100%;height:100%;max-width:none;max-height:none;pointer-events:none;-webkit-user-drag:none;user-select:none}
 .dozer-media-lightbox__media--image{background:#0a0e16}
 .dozer-media-lightbox__toolbar{position:absolute;top:16px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:6px;padding:6px;border-radius:999px;background:rgba(10,14,22,.82);border:1px solid rgba(255,229,180,.22);box-shadow:0 8px 28px rgba(0,0,0,.45);z-index:1}
 .dozer-media-lightbox__btn{appearance:none;border:0;background:transparent;color:#ffe5b4;width:34px;height:34px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px;line-height:1;padding:0}

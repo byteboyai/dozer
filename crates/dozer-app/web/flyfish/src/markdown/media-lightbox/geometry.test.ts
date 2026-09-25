@@ -202,7 +202,7 @@ describe('contentPointAt', () => {
 });
 
 describe('insets default', () => {
-  test('default insets are all zero', () => {
+  test('geometry default insets are neutral', () => {
     assert.deepEqual(DEFAULT_FIT_INSETS, { top: 0, right: 0, bottom: 0, left: 0 });
   });
 });
