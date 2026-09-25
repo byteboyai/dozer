@@ -482,6 +482,7 @@ impl TranscriptStore {
                 thinking_text: detail.thinking_text,
                 ts: row.get(4)?,
                 is_error: row.get::<_, i64>(5)? != 0,
+                tool_result_call_id: detail.tool_result_call_id,
                 tokens_in: row.get(8)?,
                 tokens_out: row.get(9)?,
                 tokens_cache_read: row.get(10)?,

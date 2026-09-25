@@ -938,6 +938,8 @@ pub fn parse_chunk(
 pub struct TurnTraceDetail {
     pub thinking_text: Option<String>,
     pub tool_calls: Vec<ToolCallInfo>,
+    /// role == "tool_result" 时对应的调用 id；见 `TurnRecord.tool_result_call_id`。
+    pub tool_result_call_id: Option<String>,
 }
 
 /// 从一行原始 JSONL(`raw_json`)按 `agent` 对应的形状提取真实思考文本和
@@ -1005,9 +1007,11 @@ fn extract_claude_trace_detail(v: &Value) -> TurnTraceDetail {
             Some("tool_use") => {
                 let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("工具");
                 let input = b.get("input").cloned().unwrap_or(Value::Null);
+                let id = b.get("id").and_then(|i| i.as_str()).map(str::to_string);
                 tool_calls.push(ToolCallInfo {
                     summary: tool_summary(name, &input),
                     input_json: input_json_of(&input),
+                    id,
                 });
             }
             _ => {}
@@ -1016,6 +1020,7 @@ fn extract_claude_trace_detail(v: &Value) -> TurnTraceDetail {
     TurnTraceDetail {
         thinking_text,
         tool_calls,
+        tool_result_call_id: None,
     }
 }
 
@@ -1031,6 +1036,7 @@ fn extract_codebuddy_trace_detail(v: &Value) -> TurnTraceDetail {
             TurnTraceDetail {
                 thinking_text: if text.is_empty() { None } else { Some(text) },
                 tool_calls: Vec::new(),
+                tool_result_call_id: None,
             }
         }
         Some("function_call") => {
@@ -1045,7 +1051,9 @@ fn extract_codebuddy_trace_detail(v: &Value) -> TurnTraceDetail {
                 tool_calls: vec![ToolCallInfo {
                     summary: tool_summary(name, &input),
                     input_json: input_json_of(&input),
+                    id: None,
                 }],
+                tool_result_call_id: None,
             }
         }
         _ => TurnTraceDetail::default(),
@@ -1074,7 +1082,9 @@ fn extract_goose_trace_detail(v: &Value) -> TurnTraceDetail {
         tool_calls: vec![ToolCallInfo {
             summary: tool_summary(name, &input),
             input_json: input_json_of(&input),
+            id: None,
         }],
+        tool_result_call_id: None,
     }
 }
 
@@ -1488,6 +1498,39 @@ mod trace_detail_tests {
         let input_json = detail.tool_calls[0].input_json.as_deref().unwrap();
         assert!(input_json.contains("README.md"));
         assert!(input_json.contains("old_string"));
+    }
+
+    #[test]
+    fn extract_claude_trace_detail_reads_tool_use_id() {
+        let raw = r#"{"type":"assistant","message":{"content":[
+            {"type":"tool_use","id":"toolu_01abc","name":"Edit","input":{"file_path":"README.md"}}
+        ]}}"#;
+        let detail = extract_turn_trace_detail(raw, AgentKind::Claude);
+        assert_eq!(detail.tool_calls.len(), 1);
+        assert_eq!(detail.tool_calls[0].id.as_deref(), Some("toolu_01abc"));
+    }
+
+    #[test]
+    fn extract_claude_trace_detail_tool_use_without_id_field_is_none() {
+        let raw = r#"{"type":"assistant","message":{"content":[
+            {"type":"tool_use","name":"Edit","input":{"file_path":"README.md"}}
+        ]}}"#;
+        let detail = extract_turn_trace_detail(raw, AgentKind::Claude);
+        assert_eq!(detail.tool_calls[0].id, None);
+    }
+
+    #[test]
+    fn turn_record_deserializes_old_json_missing_new_fields() {
+        // 老协议帧/老存量数据反序列化时没有 id/tool_result_call_id 这两个新
+        // 字段，必须靠 #[serde(default)] 兜底成 None，不能报错（Review Focus）。
+        let old_json =
+            r#"{"turn_index":0,"role":"ai","content":"hi","thinking":false,"is_error":false}"#;
+        let turn: dozer_core::protocol::TurnRecord = serde_json::from_str(old_json).unwrap();
+        assert_eq!(turn.tool_result_call_id, None);
+
+        let old_tool_call = r#"{"summary":"Edit README.md","input_json":null}"#;
+        let call: dozer_core::protocol::ToolCallInfo = serde_json::from_str(old_tool_call).unwrap();
+        assert_eq!(call.id, None);
     }
 
     #[test]

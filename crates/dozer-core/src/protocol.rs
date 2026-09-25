@@ -121,6 +121,12 @@ pub struct ConversationSummary {
 pub struct ToolCallInfo {
     pub summary: String,
     pub input_json: Option<String>,
+    /// 这次工具调用的稳定 id（Claude tool_use.id、Goose tool_call_id 等）；
+    /// 前端拿它和 tool_result 的 call_id 精确配对，agent/协议不提供 id 时
+    /// 为 None(2026-09-25 起，见
+    /// docs/superpowers/specs/2026-09-25-tool-call-result-pairing-design.md)。
+    #[serde(default)]
+    pub id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -141,6 +147,10 @@ pub struct TurnRecord {
     pub ts: Option<u64>,
     #[serde(default)]
     pub is_error: bool,
+    /// role == "tool_result" 时，这次结果对应的调用 id（读时解析补上，同
+    /// `ToolCallInfo.id` 语义，用于前端精确配对；其余角色恒 None）。
+    #[serde(default)]
+    pub tool_result_call_id: Option<String>,
     /// 本行(单次 API 调用)的 token 用量,跟 `UsagePayload` 同款四个字段
     /// 同名(2026-08-23 起补上,供审阅面板"轨迹"展示统计用)。`ai` 角色外
     /// 恒为 0。老协议帧缺该字段时回落 0,不是"确实为 0"。

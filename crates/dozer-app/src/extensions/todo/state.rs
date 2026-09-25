@@ -645,6 +645,7 @@ impl WorkspaceState {
             thinking_text: None,
             ts: None,
             is_error: false,
+            tool_result_call_id: None,
             tokens_in: 0,
             tokens_out: 0,
             tokens_cache_read: 0,
