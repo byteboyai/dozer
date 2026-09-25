@@ -300,18 +300,52 @@ mod tests {
         dir
     }
 
+    /// 提交的 review-trace 产物必须齐全(防止忘记 `npm run build` 就提交)。
     #[test]
-    fn review_trace_host_html_serves_embedded_page_regardless_of_review_data() {
-        let root = scratch();
-        let r = handle_protocol(
-            &root,
-            &HashSet::new(),
-            None,
-            "dozer://review-trace/host.html?_r=1",
+    fn review_trace_bundle_assets_are_present() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/review-trace"));
+        for f in ["host.html", "review-trace.js", "review-trace.css"] {
+            let p = root.join(f);
+            assert!(p.is_file(), "缺少 review-trace 产物 {f}: {}", p.display());
+            assert!(
+                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 0,
+                "review-trace 产物为空: {f}"
+            );
+        }
+    }
+
+    /// 严格 CSP + 无网络:host.html 不得引用任何外部 URL,且带 `default-src 'none'`。
+    #[test]
+    fn review_trace_host_has_strict_csp_and_no_external_refs() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/review-trace"));
+        let html = std::fs::read_to_string(root.join("host.html")).expect("读 host.html");
+        assert!(
+            html.contains("Content-Security-Policy"),
+            "host.html 必须声明 CSP"
         );
-        assert_eq!(r.status, 200);
-        assert_eq!(r.mime, "text/html");
-        assert!(!r.body.is_empty());
+        assert!(
+            html.contains("default-src 'none'"),
+            "CSP 必须以 default-src 'none' 起步"
+        );
+        assert!(html.contains("script-src 'self'"), "脚本仅 self");
+        assert!(html.contains("connect-src 'self'"), "仅允许同源 fetch");
+        assert!(
+            !html.contains("http://") && !html.contains("https://"),
+            "review-trace host.html 不得引用外部 URL(离线约束)"
+        );
+        assert!(html.contains("review-trace.js") && html.contains("review-trace.css"));
+    }
+
+    /// 打包产物不得泄漏本机绝对路径或 sourcemap 引用。
+    #[test]
+    fn review_trace_js_has_no_absolute_paths_or_sourcemap() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/review-trace"));
+        let js = std::fs::read_to_string(root.join("review-trace.js")).expect("读 review-trace.js");
+        assert!(!js.contains("sourceMappingURL"), "不应有 sourcemap 引用");
+        assert!(
+            !js.contains(env!("CARGO_MANIFEST_DIR")),
+            "不应含源码树绝对路径"
+        );
     }
 
     #[test]
