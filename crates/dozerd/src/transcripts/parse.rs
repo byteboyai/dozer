@@ -984,6 +984,7 @@ fn input_json_of(input: &Value) -> Option<String> {
 fn extract_claude_trace_detail(v: &Value) -> TurnTraceDetail {
     let mut thinking_text: Option<String> = None;
     let mut tool_calls = Vec::new();
+    let mut tool_result_ids: Vec<String> = Vec::new();
     let Some(blocks) = v
         .get("message")
         .and_then(|m| m.get("content"))
@@ -1014,13 +1015,26 @@ fn extract_claude_trace_detail(v: &Value) -> TurnTraceDetail {
                     id,
                 });
             }
+            Some("tool_result") => {
+                if let Some(id) = b.get("tool_use_id").and_then(|i| i.as_str()) {
+                    tool_result_ids.push(id.to_string());
+                }
+            }
             _ => {}
         }
     }
+    // 一行原始消息可能合并了多个 tool_result block(见
+    // parse_claude_shaped_chunk 的 tool_result 分支，把同一条消息里的多个
+    // block 拼成一个 ParsedTurn)——只有恰好一个时才能确定这行对应哪次调用，
+    // 零个/多个都回落 None，不瞎猜。
+    let tool_result_call_id = match tool_result_ids.as_slice() {
+        [id] => Some(id.clone()),
+        _ => None,
+    };
     TurnTraceDetail {
         thinking_text,
         tool_calls,
-        tool_result_call_id: None,
+        tool_result_call_id,
     }
 }
 
@@ -1531,6 +1545,43 @@ mod trace_detail_tests {
         let old_tool_call = r#"{"summary":"Edit README.md","input_json":null}"#;
         let call: dozer_core::protocol::ToolCallInfo = serde_json::from_str(old_tool_call).unwrap();
         assert_eq!(call.id, None);
+    }
+
+    #[test]
+    fn extract_claude_trace_detail_single_tool_result_block_gives_call_id() {
+        let raw = r#"{"type":"user","message":{"content":[
+            {"type":"tool_result","tool_use_id":"toolu_01abc","content":"ok"}
+        ]}}"#;
+        let detail = extract_turn_trace_detail(raw, AgentKind::Claude);
+        assert_eq!(detail.tool_result_call_id.as_deref(), Some("toolu_01abc"));
+    }
+
+    #[test]
+    fn extract_claude_trace_detail_no_tool_result_block_gives_none() {
+        let raw = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}"#;
+        let detail = extract_turn_trace_detail(raw, AgentKind::Claude);
+        assert_eq!(detail.tool_result_call_id, None);
+    }
+
+    #[test]
+    fn extract_claude_trace_detail_multiple_tool_result_blocks_merged_gives_none() {
+        // 一行里多个 tool_result block 合并(摄取时 parse_claude_shaped_chunk 会把
+        // 它们拼成一个 ParsedTurn)，没法归属到单一 id，必须回落 None。
+        let raw = r#"{"type":"user","message":{"content":[
+            {"type":"tool_result","tool_use_id":"t1","content":"a"},
+            {"type":"tool_result","tool_use_id":"t2","content":"b"}
+        ]}}"#;
+        let detail = extract_turn_trace_detail(raw, AgentKind::Claude);
+        assert_eq!(detail.tool_result_call_id, None);
+    }
+
+    #[test]
+    fn extract_claude_trace_detail_tool_result_without_tool_use_id_field_gives_none() {
+        let raw = r#"{"type":"user","message":{"content":[
+            {"type":"tool_result","content":"ok"}
+        ]}}"#;
+        let detail = extract_turn_trace_detail(raw, AgentKind::Claude);
+        assert_eq!(detail.tool_result_call_id, None);
     }
 
     #[test]
