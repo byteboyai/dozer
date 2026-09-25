@@ -9,9 +9,7 @@
 // 「值里出现 #oldId」的属性(marker-*、clip-path、mask、fill、stroke、filter、
 // href、xlink:href、style 等)。按 id 长度倒序替换,避免 `a` 命中 `ab`。
 
-const REFERENCE_ATTRIBUTES = [
-  'href',
-  'xlink:href',
+const URL_REFERENCE_ATTRIBUTES = [
   'marker-start',
   'marker-mid',
   'marker-end',
@@ -22,6 +20,8 @@ const REFERENCE_ATTRIBUTES = [
   'filter',
   'style',
 ];
+const FRAGMENT_REFERENCE_ATTRIBUTES = ['href', 'xlink:href'];
+const ID_LIST_ATTRIBUTES = ['aria-labelledby', 'aria-describedby'];
 
 export interface SvgIdRewriteResult {
   /** 被改写的 id 数量(便于断言)。 */
@@ -57,20 +57,53 @@ export const rewriteSvgIds = (root: Element, prefix: string): SvgIdRewriteResult
     if (id && idMap.has(id)) {
       el.setAttribute('id', idMap.get(id)!);
     }
-    for (const attr of REFERENCE_ATTRIBUTES) {
+    for (const attr of URL_REFERENCE_ATTRIBUTES) {
       if (!el.hasAttribute(attr)) continue;
       const value = el.getAttribute(attr) ?? '';
-      if (!value.includes('#')) continue;
       let next = value;
       for (const [oldId, newId] of ordered) {
-        // 只替换 `#oldId` 作为完整引用标识符出现的位置,避免 `#a` 命中 `#ab`。
-        next = next.replace(new RegExp(`#${escapeRegExp(oldId)}(?![\\w.-])`, 'g'), `#${newId}`);
+        // 这里只接受 url(#id)。不能泛化成任意 #id：fill="#fff"、stroke="#000"
+        // 是颜色，不是 fragment 引用；误改会让 Mermaid 大片回退成黑色。
+        next = next.replace(
+          new RegExp(`url\\(\\s*(["']?)#${escapeRegExp(oldId)}\\1\\s*\\)`, 'g'),
+          `url(#${newId})`
+        );
       }
       if (next !== value) {
         el.setAttribute(attr, next);
       }
     }
-    // style 属性里也可能有 url(#id),已含在 REFERENCE_ATTRIBUTES。
+    for (const attr of FRAGMENT_REFERENCE_ATTRIBUTES) {
+      const value = el.getAttribute(attr);
+      if (!value) continue;
+      const mapped = value.startsWith('#') ? idMap.get(value.slice(1)) : undefined;
+      if (mapped) el.setAttribute(attr, `#${mapped}`);
+    }
+    for (const attr of ID_LIST_ATTRIBUTES) {
+      const value = el.getAttribute(attr);
+      if (!value) continue;
+      el.setAttribute(
+        attr,
+        value.split(/\s+/).map(id => idMap.get(id) ?? id).join(' ')
+      );
+    }
+  }
+
+  // Mermaid 会在 SVG 内嵌 <style>。同步改写 url(#id) 与明确的 ID 选择器，
+  // 但绝不能把声明值里的十六进制颜色当成 ID。
+  for (const style of root.querySelectorAll('style')) {
+    let css = style.textContent ?? '';
+    for (const [oldId, newId] of ordered) {
+      css = css.replace(
+        new RegExp(`url\\(\\s*(["']?)#${escapeRegExp(oldId)}\\1\\s*\\)`, 'g'),
+        `url(#${newId})`
+      );
+      css = css.replace(
+        new RegExp(`(^|[},\\s])#${escapeRegExp(oldId)}(?=[\\s.{:[>+~,#])`, 'gm'),
+        `$1#${newId}`
+      );
+    }
+    style.textContent = css;
   }
 
   return { rewritten: idMap.size };

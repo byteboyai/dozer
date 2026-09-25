@@ -355,4 +355,28 @@ describe('rewriteSvgIds', () => {
     const { rewritten } = rewriteSvgIds(dom.window.document.querySelector('svg')!, 'p-');
     assert.equal(rewritten, 0);
   });
+
+  test('preserves hex colors while rewriting fragment, url and embedded CSS references', () => {
+    const dom = new JSDOM(
+      `<svg xmlns="http://www.w3.org/2000/svg" aria-labelledby="fff title">
+        <style>#fff { fill: #fff; stroke: #000 } #shape:hover { filter: url(#fx) }</style>
+        <defs><filter id="fx"></filter></defs>
+        <title id="title">Diagram</title>
+        <g id="fff" fill="#fff" stroke="#000"><path id="shape" filter="url(#fx)"/></g>
+        <use href="#shape"/>
+      </svg>`
+    );
+    const svg = dom.window.document.querySelector('svg')!;
+    rewriteSvgIds(svg, 'lb-');
+
+    const group = svg.querySelector('[id="lb-fff"]')!;
+    assert.equal(group.getAttribute('fill'), '#fff');
+    assert.equal(group.getAttribute('stroke'), '#000');
+    assert.equal(svg.querySelector('path')!.getAttribute('filter'), 'url(#lb-fx)');
+    assert.equal(svg.querySelector('use')!.getAttribute('href'), '#lb-shape');
+    assert.equal(svg.getAttribute('aria-labelledby'), 'lb-fff lb-title');
+    assert.match(svg.querySelector('style')!.textContent!, /#lb-fff\s*\{\s*fill:\s*#fff/);
+    assert.match(svg.querySelector('style')!.textContent!, /#lb-shape:hover/);
+    assert.match(svg.querySelector('style')!.textContent!, /url\(#lb-fx\)/);
+  });
 });
