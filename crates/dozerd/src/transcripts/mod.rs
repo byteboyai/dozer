@@ -1195,6 +1195,29 @@ mod tests {
     }
 
     #[test]
+    fn get_conversation_turns_surfaces_tool_call_and_result_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let text = concat!(
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":100,\"message\":{\"content\":[",
+            "{\"type\":\"tool_use\",\"id\":\"toolu_01abc\",\"name\":\"Edit\",",
+            "\"input\":{\"file_path\":\"README.md\"}},",
+            "{\"type\":\"text\",\"text\":\"改好了\"}]}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":200,\"message\":{\"role\":\"user\",",
+            "\"content\":[{\"tool_use_id\":\"toolu_01abc\",\"type\":\"tool_result\",",
+            "\"content\":\"done\"}]}}\n"
+        );
+        let file = fixture(tmp.path(), "s3.jsonl", text);
+        store.ingest_session(AgentKind::Claude, &file).unwrap();
+
+        let turns = store.get_conversation_turns("s3", -1, 10).unwrap();
+        let ai_turn = turns.iter().find(|t| t.role == "ai").unwrap();
+        assert_eq!(ai_turn.tool_calls[0].id.as_deref(), Some("toolu_01abc"));
+        let result_turn = turns.iter().find(|t| t.role == "tool_result").unwrap();
+        assert_eq!(result_turn.tool_result_call_id.as_deref(), Some("toolu_01abc"));
+    }
+
+    #[test]
     fn backfill_project_ingests_only_that_projects_transcripts() {
         let home = tempfile::tempdir().unwrap();
         let db_dir = tempfile::tempdir().unwrap();
