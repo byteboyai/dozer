@@ -15,7 +15,7 @@
 - 不改摄取路径：`parse_claude_shaped_chunk`/`parse_codebuddy_shaped_chunk`/`parse_goose_hook_chunk`/`parse_codex_shaped_chunk`/`parse_aider_chunk` 一律不动。
 - 不做数据库 schema 迁移、不做回填任务——读时解析不需要。
 - 不覆盖 CodeBuddy（`function_call`/`function_call_result` 各自独立 id，互不引用，没有可用信号）、Aider（不提取结构化工具调用）、Codex（读时解析 v1 范围外）——这三家继续吃已上线的下标近似，不在本次范围内造信号。
-- 新增字段一律 `Option<String>` + `#[serde(default)]`（Rust 侧）/`?: string`（TS 侧），不破坏现有序列化兼容性，不需要改 `dozer-mcp`/`dozer-client`/`dozerd::session_summary.rs`/`headless_agent.rs`/`task_processor.rs`/`dozer-app::todo/state.rs`（这些消费方都用 `..Default::default()` 或只读透传，已核实）。
+- 新增字段一律 `Option<String>` + `#[serde(default)]`（Rust 侧）/`?: string`（TS 侧），不破坏现有序列化兼容性，不需要改 `dozer-mcp`/`dozer-client`/`dozerd::session_summary.rs`/`headless_agent.rs`。**注意：`task_processor.rs`（测试 helper `turn()`）与 `dozer-app::todo/state.rs`（`push_optimistic_human_turn`）实际都用显式字段列表构造 `TurnRecord`，不是 `..Default::default()`——本次开发时两处都需要补一行新字段（如 `tool_result_call_id: None,`）才能编译通过，此前"已核实无需改"的判断是错的，下次加字段前应重新逐一确认这两处，不能直接沿用这条结论。**
 - Goose `tool_call_id` 在 `PreToolUse`/`PostToolUse`/`PostToolUseFailure` 三个事件里是同一个值（官方 hooks 文档已确认，见 spec），三处都要读。
 - Claude 侧一行 `raw_json` 可能合并了多个 `tool_result` block（`parse_claude_shaped_chunk` 摄取时会把同一条消息里的多个 block 拼接成一个 `ParsedTurn`）——只有恰好一个 block 时才能确定 `tool_use_id`，零个/多个都必须回落 `None`，不能瞎猜。
 - 前端配对："全部 `tool_calls` 都有 `id`" 才进精确配对模式，只要有一个缺 `id` 就整体回落下标近似（不做部分 id、部分下标的混合）；一个 `id` 对应多个 result 时按遇到顺序堆在那条 call 后面，不特殊处理；result 的 `call_id` 对不上任何 call 时追加在最后，不能丢。
