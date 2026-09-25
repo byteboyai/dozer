@@ -1214,7 +1214,10 @@ mod tests {
         let ai_turn = turns.iter().find(|t| t.role == "ai").unwrap();
         assert_eq!(ai_turn.tool_calls[0].id.as_deref(), Some("toolu_01abc"));
         let result_turn = turns.iter().find(|t| t.role == "tool_result").unwrap();
-        assert_eq!(result_turn.tool_result_call_id.as_deref(), Some("toolu_01abc"));
+        assert_eq!(
+            result_turn.tool_result_call_id.as_deref(),
+            Some("toolu_01abc")
+        );
     }
 
     #[test]

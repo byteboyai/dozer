@@ -1791,7 +1791,8 @@ mod trace_detail_tests {
 
     #[test]
     fn extract_goose_trace_detail_other_events_stay_default() {
-        let raw = r#"{"type":"goose_hook","event":"Stop","payload":{"last_assistant_message":"done"}}"#;
+        let raw =
+            r#"{"type":"goose_hook","event":"Stop","payload":{"last_assistant_message":"done"}}"#;
         let detail = extract_turn_trace_detail(raw, AgentKind::Goose);
         assert_eq!(detail, super::TurnTraceDetail::default());
     }

@@ -38,7 +38,11 @@ pub enum ReviewEntry {
     /// 孤儿兜底:前面没有 `AiTurn` 的 `ToolResult`(理论边界情况,如导出
     /// 片段从工具结果行开始)。正常情况下 `ToolResult` 都会被折叠进
     /// 上面 `AiTurn::tool_results`,这个顶层变体只在没有归属对象时才用。
-    ToolResult { content: String, is_error: bool, call_id: Option<String> },
+    ToolResult {
+        content: String,
+        is_error: bool,
+        call_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
