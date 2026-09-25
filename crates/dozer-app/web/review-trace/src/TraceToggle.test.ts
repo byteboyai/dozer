@@ -61,3 +61,12 @@ test('no ids anywhere: behaves exactly like the existing index-based pairing', (
   ];
   assert.deepEqual(sequence(calls, results), ['call A', 'result A', 'call B', 'result B']);
 });
+
+test('duplicate call id (malformed upstream data): only the first call claims the results, later duplicates render empty', () => {
+  const calls: ToolCall[] = [
+    { summary: 'call A first', id: 'a' },
+    { summary: 'call A second', id: 'a' },
+  ];
+  const results: ToolResult[] = [{ content: 'result A', is_error: false, call_id: 'a' }];
+  assert.deepEqual(sequence(calls, results), ['call A first', 'result A', 'call A second']);
+});

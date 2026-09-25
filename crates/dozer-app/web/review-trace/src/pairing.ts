@@ -20,22 +20,29 @@ export function pairByIndex(toolCalls: ToolCall[], toolResults: ToolResult[]): P
 // 多个 result 时按遇到顺序堆叠;call_id 对不上任何 call(或没有 call_id)的
 // result 单独追加一组，放在最后，不能丢。
 export function pairById(toolCalls: ToolCall[], toolResults: ToolResult[]): Pairing[] {
+  const callIds = new Set(toolCalls.map((c) => c.id as string));
   const resultsByCallId = new Map<string, ToolResult[]>();
   const unmatched: ToolResult[] = [];
   for (const result of toolResults) {
-    const matches = result.call_id && toolCalls.some((c) => c.id === result.call_id);
-    if (matches) {
-      const list = resultsByCallId.get(result.call_id as string) ?? [];
+    if (result.call_id && callIds.has(result.call_id)) {
+      const list = resultsByCallId.get(result.call_id) ?? [];
       list.push(result);
-      resultsByCallId.set(result.call_id as string, list);
+      resultsByCallId.set(result.call_id, list);
     } else {
       unmatched.push(result);
     }
   }
-  const pairs: Pairing[] = toolCalls.map((call) => ({
-    call,
-    results: resultsByCallId.get(call.id as string) ?? [],
-  }));
+  // id 理论上应唯一;若上游数据异常出现重复 id，只让第一个同 id 的
+  // call 领取结果，后续重名 call 给空列表——避免同一批结果被渲染多次。
+  const consumed = new Set<string>();
+  const pairs: Pairing[] = toolCalls.map((call) => {
+    const id = call.id as string;
+    if (consumed.has(id)) {
+      return { call, results: [] };
+    }
+    consumed.add(id);
+    return { call, results: resultsByCallId.get(id) ?? [] };
+  });
   if (unmatched.length > 0) {
     pairs.push({ results: unmatched });
   }
