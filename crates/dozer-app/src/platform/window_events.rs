@@ -91,10 +91,19 @@ fn apply_mouse_cursor(
     // 即悬停在某个可交互控件上(页签/关闭按钮/…),见
     // `install_topbar_drag_guard` 文档。
     #[cfg(target_os = "macos")]
-    crate::platform::window::TOPBAR_CONTROL_HOVERED.store(
-        mouse_interaction != mouse::Interaction::None,
-        std::sync::atomic::Ordering::Relaxed,
-    );
+    {
+        let hovered = mouse_interaction != mouse::Interaction::None;
+        static LAST_HOVERED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        if LAST_HOVERED.swap(hovered, std::sync::atomic::Ordering::Relaxed) != hovered {
+            tracing::warn!(
+                "[DIAG] TOPBAR_CONTROL_HOVERED changed to {hovered}, cursor={:?}, interaction={mouse_interaction:?}",
+                app.last_cursor
+            );
+        }
+        crate::platform::window::TOPBAR_CONTROL_HOVERED
+            .store(hovered, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -336,6 +345,11 @@ impl Runner {
         } = event
         {
             *left_mouse_down = *state == ElementState::Pressed;
+            tracing::warn!(
+                "[DIAG] left MouseInput state={:?} cursor_phys={:?}",
+                state,
+                cursor_phys
+            );
         }
 
         // 光标位置跟踪 + 点击焦点路由（验收反馈 2/失焦回正常态）:

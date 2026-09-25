@@ -1165,9 +1165,9 @@ pub fn terminal_pane_pixel_size(
     }
     if state.maximized == Some(MaximizedPane::Right) {
         let (_x0, avail_w) = maximized_box_x_range(window_width);
-        let pane_width =
-            (terminal_content_width(avail_w, state) - byteui::theme::geometry::chrome_width_px())
-                .max(0.0);
+        let pane_width = (terminal_content_width(avail_w, state)
+            - byteui::theme::geometry::chrome_width_px())
+        .max(0.0);
         let pane_height = (maximized_box_height(window_height)
             - byteui::theme::geometry::chrome_height_px())
         .max(0.0);

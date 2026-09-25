@@ -1,6 +1,6 @@
 # Dozer V2 开源生态调研
 
-> 调研日期：2026-09-24（§3.7-§4.13 为同日第二轮补充调研）
+> 调研日期：2026-09-25（在前两轮调研基础上补充 uniTerm，并按整体、基座和具体面板重新组织）
 > 目标：围绕《Dozer V2 架构分析》验证产品定位与工程路线，并识别可以借鉴、集成或直接依赖的开源项目。  
 > 范围：优先采用项目官方仓库、官方文档和协议规范；活跃度与 API 状态以选型时再次核验为准。第二轮全部项目均已用 `gh api` 核实 stargazers/license/language/最近 push 时间，避免复述未经验证的网络摘要。
 > 代码复核：59 个仓库的当前源码证据、旧报告修正和去留裁决见 [`../analysis/dozer-v2-逐仓代码复核.md`](../analysis/dozer-v2-逐仓代码复核.md)。本文件负责生态全景，代码复核报告负责最终采用优先级；两者冲突时以后者为准。
@@ -51,7 +51,20 @@ Dozer V2 的方向具备产品必要性和工程可行性，但不应被定义�
 | 治理 | 会话、Token、工具调用、代码质量、测试证据、权限与决策均可审计 |
 | 决策 | Laya 一类小模型作为可选决策 Provider，不进入 Host 可信核心 |
 
-## 3. 整体上与 Dozer 相似的项目
+### 2.1 本文组织方式
+
+后续项目不再仅按“相似项目/局部项目”平铺，而是按其对 Dozer 的作用域归类：
+
+| 分类 | 回答的问题 | 主要内容 |
+|---|---|---|
+| 整体技术可参考 | Dozer 作为一个产品和系统，整体可以向谁学习 | Agent 工作台、daemon、worktree、任务监督、交付闭环 |
+| 基座部分可参考 | Host、daemon、插件协议和横向运行能力如何实现 | 插件、权限、MCP Gateway、Execution Environment、Workflow、Decision |
+| 各具体面板可参考 | 某个官方面板的交互和领域能力可以向谁学习 | Project/Memory、Conversations、Usage、Browser、SSH/Environments、Database |
+| 依赖与适配器选型 | 哪些项目可以进入代码，哪些只能通过协议连接 | Rust 库、sidecar、CLI、外部 Provider |
+
+同一个项目可以出现在多个面板中，但每处只讨论与该面板相关的能力。例如 uniTerm 同时覆盖 SSH、文件传输、数据库和容器管理；本文分别给出各面板的借鉴结论，不因此把它视为 Dozer 的整体架构蓝本。
+
+## 3. 整体技术可参考：与 Dozer 相似的产品和系统
 
 ### 3.1 第一组：应持续跟踪的直接参照
 
@@ -295,7 +308,7 @@ Dozer 不应把差异化表述为“支持更多 Agent”。更持久的差异�
 
 这两个项目连同 §3.1-§3.3 已有条目一起，把"Kanban/Task 编排 + worktree 隔离 + 内联 diff 审阅 + PR 收尾"进一步坐实为 Vibe Coding 工具的标配而非差异化功能；Vibe Kanban 的 sunsetting 也提示一个具体风险：**光把这套标配做全，不足以构成长期产品护城河**，Dozer 仍要靠"治理/验收层 + 可扩展插件底座"这两条差异化路线站住脚，不能只对标"功能对齐"。
 
-## 4. 对某个部分具有参考价值的项目
+## 4. 基座部分可参考
 
 ### 4.1 插件清单、贡献点和兼容性：Zed
 
@@ -382,57 +395,7 @@ trait ExecutionEnvironment {
 
 容器只是 `DockerProvider`、`PodmanProvider`、`AppleContainerProvider` 中的一类实现；未来还可以有 `LocalProvider`、`SshProvider` 和 `RemoteSandboxProvider`。
 
-### 4.4 Memory：Basic Memory 与 Mem0
-
-[Basic Memory](https://github.com/basicmachines-co/basic-memory) 采用本地 Markdown、SQLite 索引、知识图谱和 MCP 工具，值得借鉴：
-
-- 人类可读、可编辑的知识资产；
-- 关系化检索与渐进式上下文发现；
-- MCP 工具明确标注只读、破坏性、幂等和开放世界等语义；
-- 记忆变更具有事件与历史语义。
-
-但 Dozer 不应直接复制其“文件为事实源”的全部假设。Dozer 需要把 task、run、decision、artifact、acceptance 等强结构对象保存在 SQLite 事实源中，再按需投影成 Markdown，避免文件编辑破坏工作流一致性。
-
-[Mem0](https://github.com/mem0ai/mem0) 的 MCP 工具形态——add/search/list/get/update/delete、entity 和 event——可作为 Agent Shared Memory API 的参考，但 Dozer 应坚持 local-first，并在 workspace、project、task、agent、user 五个 scope 上实施隔离。
-
-### 4.5 会话、Token 与 Agent 可观测性：Phoenix、Langfuse、OpenTelemetry
-
-[Arize Phoenix](https://github.com/Arize-ai/phoenix) 提供基于 OpenTelemetry/OpenInference 的 trace、dataset、experiment、evaluation 与 prompt 管理；[Langfuse](https://github.com/langfuse/langfuse) 提供 trace、evaluation、dataset、prompt management 和人工标注。两者证明 Dozer 的“对话审计”和“用量面板”应该建立在统一 trace/event schema 上，而不是分别解析日志。
-
-建议内部建立以下层次：
-
-```text
-Trace: 一次 Goal / Task / Agent Run
-  └─ Span: model call / tool call / command / browser step / human decision
-       ├─ Event: stdout、approval、retry、checkpoint、error
-       ├─ Usage: input/output/cache token、时间、金额、CPU/内存
-       └─ Artifact: diff、截图、trace、报告、提交、PR
-```
-
-[OpenTelemetry Rust](https://github.com/open-telemetry/opentelemetry-rust) 可作为导出层候选，但其不同 signal 的稳定度不完全一致。V2 应先稳定 Dozer 自己的领域事件 schema，以 `tracing` 做 Rust 内部埋点；OTLP exporter 作为可选适配器，不让产品数据模型依赖某个观测后端。
-
-### 4.6 浏览器测试与证据：Playwright MCP、Trace Viewer、Open Browser Use
-
-[Playwright MCP](https://github.com/microsoft/playwright/blob/main/docs/src/getting-started-mcp.md) 使用可访问性快照让 Agent 操作页面，并支持持久或隔离的浏览器 profile；[Playwright Trace Viewer](https://github.com/microsoft/playwright/blob/main/docs/src/trace-viewer.md) 能展示 action、截图时间线、DOM snapshot、console 和 network。
-
-这非常符合 Dozer Browser Test 模块所需的“可重放证据包”：
-
-- 测试步骤和自然语言意图；
-- 每步 DOM/可访问性快照；
-- screenshot 或 screencast；
-- console、network、下载和异常；
-- 关联 commit、task、agent run 与环境；
-- 最终 verdict 及人工接受记录。
-
-[Open Browser Use](https://github.com/open-browser-use/open-browser-use) 还提供一个值得借鉴的安全边界：长驻 Node/Playwright runtime 通过 owner-only Unix domain socket 暴露 JSON-RPC，Host 对能力进行门控，并可切换 WebExtension/CDP 后端。Dozer 的浏览器自动化应采用类似 broker/sidecar，而不是把 Node 和 Playwright 嵌入 Rust Host。
-
-选择顺序建议是：
-
-1. Playwright/Playwright MCP 作为确定性测试和证据采集主路径；
-2. Browser Use 或 Stagehand 类 AI 自动化作为高级 Provider；
-3. Host 只消费统一的 `BrowserAction`、`BrowserObservation` 和 artifact schema。
-
-### 4.7 小型决策模型：Laya
+### 4.4 小型决策模型：Laya
 
 [Laya](https://github.com/NandhaKishorM/laya) 是 Python/PyTorch 实现的小型 typed decision model，适合在容器中作为可选 Provider 运行。其官方说明同时表明，未针对具体任务微调时的 zero-shot 表现可能接近随机，因此它不能直接成为工作流裁决者。
 
@@ -452,7 +415,7 @@ Trace: 一次 Goal / Task / Agent Run
 - 通过 MCP 或专用 decision protocol 调用，不把 Python/PyTorch 链接进 Host；
 - 容器负责隔离依赖和资源，Host 负责授权、超时、审计和停止。
 
-### 4.8 执行环境补充：dagger/container-use 比通用远程开发平台更贴题
+### 4.5 执行环境补充：dagger/container-use 比通用远程开发平台更贴题
 
 [container-use](https://github.com/dagger/container-use)（Go，Apache-2.0，4k star，持续活跃）比 §4.3 的 OpenHands/Coder/Daytona 更接近 Dozer `ExecutionEnvironment` 的具体使用场景：它不是通用远程开发平台，而是专门解决"多个 coding agent 在同一台机器上安全并行工作"这一个问题——用 Dagger 容器化工具链，每个 agent 的环境同时绑定一个独立 git worktree/分支，人类可以随时 `container-use watch` 看到 agent 的完整命令历史，或直接进入某个 agent 的 sandbox 接管。它以 MCP server + CLI 形式暴露给 Claude Code、Cursor 等客户端，Host 侧不需要嵌入 Dagger 引擎本身。
 
@@ -464,7 +427,7 @@ Trace: 一次 Goal / Task / Agent Run
 
 建议列入 §7 P1 spike 的首选参照实现（比照读源码，而不是直接依赖 Go 二进制），并保留 OpenHands/Coder/Daytona 作为"更大规模远程 workspace 控制面"方向的补充参考。
 
-### 4.9 插件权限与能力模型：Tauri ACL 与 Deno 的分层设计更完整
+### 4.6 插件权限与能力模型：Tauri ACL 与 Deno 的分层设计更完整
 
 当前架构分析文档 §8.2/§9 的权限草案是一份扁平的 capability 字符串列表（`project.read`、`network`…）。两个已经在生产环境验证过的分层模型可以直接改进它：
 
@@ -482,13 +445,13 @@ Webview/插件默认被当作不可信方，每条 IPC 都必须显式声明 cap
 
 建议把 Dozer 的 manifest `[permissions]` 从当前的布尔/字符串列表，改为 Tauri 式三层结构（capability 归属、permission 命名空间化、scope 显式限定资源），并在 Permission Service 的判定顺序上采纳 Deno 的"deny 优先"规则。
 
-### 4.10 Wasm 插件补充：Zellij 的 WASI 插件协议、wasmCloud 的 capability provider
+### 4.7 Wasm 插件补充：Zellij 的 WASI 插件协议、wasmCloud 的 capability provider
 
 [Zellij](https://github.com/zellij-org/zellij)（Rust，MIT，35.5k star，高活跃）已经把 §4.2 讨论的"Wasm 插件"从设计变成了可读的生产代码：插件用 `wasmi` 解释器在隔离内存空间运行，Host 与插件之间用 Protocol Buffers 传递事件，插件按订阅模型只接收自己关心的事件类型，并有可配置的内存/栈资源上限。它的插件生命周期（加载→初始化→事件循环）和"插件不能直接访问 Host 或彼此内存，只能通过 WASI 受控访问系统资源"这两点，是比 Extism/Wasmtime 官方文档更具体的同语言（Rust）参考实现，建议 §7 P2 的 Wasm spike 直接对照读它的插件通信层源码，而不仅参考 Extism 的通用文档。
 
 [wasmCloud](https://github.com/wasmCloud/wasmCloud)（Rust，Apache-2.0，CNCF 项目，2.4k star）验证了一个更进一步的模式："capability provider"——把网络、存储、消息队列等能力抽象成可替换的 provider，Wasm 组件通过标准接口声明依赖的能力，不直接链接具体实现。这与 Dozer《架构分析》§4.1 `PluginContext` 的能力接口设计思路一致，可以作为"插件声明依赖能力、Host 注入具体 Provider 实现"这一模式的命名参照，但 wasmCloud 本身面向分布式云原生场景，其 host/lattice/actor 运行时比 Dozer 单机 Host 需要的复杂得多，**只借鉴 capability provider 这个概念和命名，不引入其运行时**。
 
-### 4.11 工作流持久执行参考：Temporal（仅借鉴设计，不作为依赖）
+### 4.8 工作流持久执行参考：Temporal（仅借鉴设计，不作为依赖）
 
 《架构分析》§16.2 给 Task/Execution/Delivery 设计的状态机，本质是一个需要在 daemon 崩溃、重启、Agent 掉线后仍能正确恢复的持久工作流。[Temporal](https://github.com/temporalio/sdk-rust)（Rust Core/SDK，MIT，持续活跃）是这一类问题最成熟的开源实现，它的几个机制值得直接对照设计 Dozer 的 Execution 持久化：
 
@@ -498,7 +461,7 @@ Webview/插件默认被当作不可信方，每条 IPC 都必须显式声明 cap
 
 **不建议引入 Temporal 本身**：它需要一个独立的 Temporal Service 集群，与 Dozer "本地优先、单机可用" 的定位冲突，纯粹是为了单机场景引入分布式系统的运维成本。正确用法是照抄它"event history 重放 + 声明式 Activity 重试 + signal 打断"这三个机制的思路，用 SQLite append-only 事件表在 `dozerd` 里自己实现一个轻量版本，这也与 §3.5.3 已经得出的"DAG 图只是视图，真正权威数据是 append-only run events"结论完全一致。
 
-### 4.12 规格与变更工件：OpenSpec 上游项目
+### 4.9 规格与变更工件：OpenSpec 上游项目
 
 [Fission-AI/OpenSpec](https://github.com/Fission-AI/OpenSpec) 是 [openspec-cn/openspec](https://github.com/openspec-cn/openspec) 的上游项目，应作为 Dozer 后续协议兼容与代码复核的主研究对象；中文仓库用于中文体验、本地化文档和国内社区生态参考，不应被当作独立的规范源。
 
@@ -519,7 +482,7 @@ OpenSpec 还提供并行 Change、delta spec、归档同步和可定制 schema�
 
 边界上必须保持克制：OpenSpec 是文件工件工作流，不提供 PTY/session/worktree/environment 生命周期，也不提供 Dozer 所需的统一事件、成本、安全和交付证据模型。其 `verify` 和归档流程允许警告后继续，不能成为 Dozer 的权威验收机制。推荐评级为 **A-：重点做适配器与代码复核，不作为 Rust Host 直接依赖**；首个 spike 应验证 `OpenSpec Change → Dozer Goal/Task → Worktree Run → Evidence/Acceptance → OpenSpec archive` 的完整往返。
 
-### 4.13 MCP Gateway 生态现状：仍然碎片化，没有可以直接采用的成熟实现
+### 4.10 MCP Gateway 生态现状：仍然碎片化，没有可以直接采用的成熟实现
 
 `docs/dozer-v2开源生态调研.md` §5.3 已建议 Dozer 自建 MCP Gateway 而非依赖外部项目；第二轮调研核实了具体现状，这个判断被进一步坐实。检索到的候选实现成熟度差异很大：
 
@@ -532,9 +495,145 @@ OpenSpec 还提供并行 Change、delta spec、归档同步和可定制 schema�
 
 没有一个项目是"本地优先、嵌入桌面 Host、面向单用户 workspace"的 MCP Gateway——现有实现要么面向企业多租户部署（IBM、Microsoft），要么是个人实验项目（Mikko、Jonfairbanks）。这验证了 Dozer 应该自己实现一个轻量 MCP Gateway（namespaced tool 注册 + 会话/项目身份注入 + 调用审计），而不是等待或依赖这个生态成熟；可以借鉴 IBM/mcp-context-forge 的 guardrail/registry 概念，但不作为依赖引入。[e2b-dev/awesome-mcp-gateways](https://github.com/e2b-dev/awesome-mcp-gateways) 可作为该生态的持续观察入口。
 
-## 5. 可以作为依赖库的项目
 
-### 5.1 近期建议
+## 5. 各具体面板可参考
+
+本节按 V2 信息架构中的具体页面和面板组织。不是每个面板都需要找到一个可照搬的开源应用；没有成熟直接参照时，应复用基座模型或组合多个项目的局部机制。
+
+| Dozer V2 页面/面板 | 首要参考 | 主要借鉴点 |
+|---|---|---|
+| Mission / Overview | Tidebreak、IfAI | 项目行动入口、运行/阻塞/待决策摘要 |
+| Tasks | Vibe Kanban、Ateam、OpenSpec | Task/worktree 生命周期、规格工件与状态投影 |
+| Runs / Executions | tty7、Orca、T3 Code | daemon session、结构化 Agent 事件、接管与恢复 |
+| Decision Inbox | IfAI、Tauri ACL、Laya | 审批登记、权限裁决、推荐与人工升级 |
+| Project Context / Memory | Basic Memory、Mem0、CleeCode | 分层上下文、来源、MCP Context Bridge |
+| Files / Changes | Pane、Workmux、CleeCode | worktree-aware diff、外部修改和未保存内容保护 |
+| Git / Integration | Arbor、Ateam、Claude Squad | 分支、暂停恢复、合并门禁和安全清理 |
+| SSH / Environments | uniTerm、tty7、SSHub、container-use | 连接管理、隧道、远端会话、容器资源 |
+| Database | uniTerm、AutoDev | 多数据源浏览、Schema、查询和安全边界 |
+| Browser | Playwright、Open Browser Use | 可访问性操作、trace、截图和网络证据 |
+| Deliveries / Acceptance | Tidebreak、OpenSpec、T3 Code | 规格、diff、检查证据和人工接受闭环 |
+| Conversations / Audit | Phoenix、Langfuse、Kooky | trace/event、原始记录、摘要和跳转 |
+| Usage | Phoenix、Langfuse、OpenTelemetry | Token、成本、延迟和跨维度统计 |
+| Code Health / Checks | Code Health 现有核心、Playwright | 标准 CheckResult、Finding、Artifact |
+| Plugins / Settings / Diagnostics | Zed、Tauri ACL、Deno | 安装状态、权限、贡献点和诊断 |
+
+### 5.1 Project Context／Memory 面板：Basic Memory 与 Mem0
+
+[Basic Memory](https://github.com/basicmachines-co/basic-memory) 采用本地 Markdown、SQLite 索引、知识图谱和 MCP 工具，值得借鉴：
+
+- 人类可读、可编辑的知识资产；
+- 关系化检索与渐进式上下文发现；
+- MCP 工具明确标注只读、破坏性、幂等和开放世界等语义；
+- 记忆变更具有事件与历史语义。
+
+但 Dozer 不应直接复制其“文件为事实源”的全部假设。Dozer 需要把 task、run、decision、artifact、acceptance 等强结构对象保存在 SQLite 事实源中，再按需投影成 Markdown，避免文件编辑破坏工作流一致性。
+
+[Mem0](https://github.com/mem0ai/mem0) 的 MCP 工具形态——add/search/list/get/update/delete、entity 和 event——可作为 Agent Shared Memory API 的参考，但 Dozer 应坚持 local-first，并在 workspace、project、task、agent、user 五个 scope 上实施隔离。
+
+### 5.2 Conversations／Usage 面板：Phoenix、Langfuse、OpenTelemetry
+
+[Arize Phoenix](https://github.com/Arize-ai/phoenix) 提供基于 OpenTelemetry/OpenInference 的 trace、dataset、experiment、evaluation 与 prompt 管理；[Langfuse](https://github.com/langfuse/langfuse) 提供 trace、evaluation、dataset、prompt management 和人工标注。两者证明 Dozer 的“对话审计”和“用量面板”应该建立在统一 trace/event schema 上，而不是分别解析日志。
+
+建议内部建立以下层次：
+
+```text
+Trace: 一次 Goal / Task / Agent Run
+  └─ Span: model call / tool call / command / browser step / human decision
+       ├─ Event: stdout、approval、retry、checkpoint、error
+       ├─ Usage: input/output/cache token、时间、金额、CPU/内存
+       └─ Artifact: diff、截图、trace、报告、提交、PR
+```
+
+[OpenTelemetry Rust](https://github.com/open-telemetry/opentelemetry-rust) 可作为导出层候选，但其不同 signal 的稳定度不完全一致。V2 应先稳定 Dozer 自己的领域事件 schema，以 `tracing` 做 Rust 内部埋点；OTLP exporter 作为可选适配器，不让产品数据模型依赖某个观测后端。
+
+### 5.3 Browser 面板：Playwright MCP、Trace Viewer、Open Browser Use
+
+[Playwright MCP](https://github.com/microsoft/playwright/blob/main/docs/src/getting-started-mcp.md) 使用可访问性快照让 Agent 操作页面，并支持持久或隔离的浏览器 profile；[Playwright Trace Viewer](https://github.com/microsoft/playwright/blob/main/docs/src/trace-viewer.md) 能展示 action、截图时间线、DOM snapshot、console 和 network。
+
+这非常符合 Dozer Browser Test 模块所需的“可重放证据包”：
+
+- 测试步骤和自然语言意图；
+- 每步 DOM/可访问性快照；
+- screenshot 或 screencast；
+- console、network、下载和异常；
+- 关联 commit、task、agent run 与环境；
+- 最终 verdict 及人工接受记录。
+
+[Open Browser Use](https://github.com/open-browser-use/open-browser-use) 还提供一个值得借鉴的安全边界：长驻 Node/Playwright runtime 通过 owner-only Unix domain socket 暴露 JSON-RPC，Host 对能力进行门控，并可切换 WebExtension/CDP 后端。Dozer 的浏览器自动化应采用类似 broker/sidecar，而不是把 Node 和 Playwright 嵌入 Rust Host。
+
+选择顺序建议是：
+
+1. Playwright/Playwright MCP 作为确定性测试和证据采集主路径；
+2. Browser Use 或 Stagehand 类 AI 自动化作为高级 Provider；
+3. Host 只消费统一的 `BrowserAction`、`BrowserObservation` 和 artifact schema。
+
+### 5.4 SSH／Environments 面板：uniTerm、tty7 与 container-use
+
+[uniTerm](https://github.com/ys-ll/uniterm) 是一个 Apache-2.0 的跨平台远程连接工作台，采用 Wails v3 + Go + Vue 3 + Pinia + Element Plus，终端使用 xterm.js。其公开能力覆盖 SSH、Telnet、Mosh、串口、Raw TCP、本地 Shell、SFTP/SCP/FTP/SMB/WebDAV/S3、RDP/VNC/SPICE/X11，以及 Kubernetes、Docker、Podman、nerdctl 等。它还把 AI 助手绑定到当前或指定终端，让 Agent 执行“计划—命令—观察—继续”的多轮循环。
+
+对 Dozer SSH／Environments 面板最有价值的参考包括：
+
+- Connection Manager 对连接进行分组、搜索、收藏和批量操作；
+- SSH 密码/密钥认证、jump host、端口转发和 keepalive 的产品入口；
+- Terminal、SFTP、数据库和容器复用同一个连接身份，而不是要求用户重复配置；
+- Tab、split pane、拖拽布局和跨 workspace 输入广播；
+- 本地及远端 Docker/Podman、Kubernetes resource、Pod logs/exec 与服务器指标统一呈现；
+- AI 可以锁定某个终端，也可以跟随当前活动终端，明确区分“会话身份”和“当前 UI 焦点”；
+- 不同操作采用 bypass、仅危险操作确认、危险及写入确认、全部确认等监督模式。
+
+uniTerm 与 tty7/container-use 的侧重点不同：
+
+| 项目 | 最适合参考的部分 |
+|---|---|
+| uniTerm | 多协议连接管理、SSH/SFTP/容器的统一交互、跨平台产品完整度 |
+| tty7 | daemon 持有 PTY、协议版本、多客户端 attach、本地与远端能力对称 |
+| container-use | Task worktree 与隔离执行环境绑定、命令历史和 Agent sandbox |
+
+Dozer 不应照搬 uniTerm 的边界：uniTerm 将大量协议能力集中在同一个 Wails 应用和 Go backend 中，而 Dozer V2 的 SSH、Database、Files 和 Container/Environment 应是独立插件或 Provider，共享 Host 提供的 Secret、Permission、Session、Artifact 和审计服务。其前端技术栈也不能作为 Dozer 从 iced 迁移到 Web UI 的理由。
+
+建议对 uniTerm 做进一步代码复核时重点阅读：
+
+1. `backend/session` 的会话抽象、断线重连和不同协议复用方式；
+2. SSH tunnel、jump host、credential 与测试连接的边界；
+3. SFTP/SCP 长连接、超时、外部编辑器文件监听与自动上传；
+4. `backend/container`、`backend/k8s` 如何统一本地和 SSH 远端资源；
+5. AI 命令执行模式如何表达风险和人工确认；
+6. 单实例、跨平台打包、自动升级与配置同步机制。
+
+### 5.5 Database 面板：uniTerm 与 AutoDev
+
+uniTerm 的 Database Client 覆盖 MySQL/MariaDB/TiDB、PostgreSQL/CockroachDB、Oracle、SQL Server、rqlite、Redis、MongoDB 和 Elasticsearch。仓库结构将数据库 session、SQL 执行、Schema introspection 和 DSN builder 放入 `backend/database`，前端提供数据库浏览、查询以及部分数据的树形或行内编辑。
+
+这对 Dozer `dozer-plugin-database` 的直接参考价值是：
+
+- 连接配置、Schema 浏览、查询编辑器和结果展示应共享稳定的数据源身份；
+- SQL、文档、KV 和搜索索引不是同一种数据模型，Provider API 应允许协议特有能力；
+- 数据库连接应能复用 SSH jump host，但 Secret 必须由 Host broker 管理；
+- 驱动或客户端缺失时应按单 Provider 降级，不能阻止 Host 和其他插件启动；
+- Oracle 等带额外授权约束的生态，需要明确“支持协议”不等于捆绑商业客户端或授权材料；
+- Redis/MongoDB/Elasticsearch 的树形浏览和行内编辑适合作为交互参考，但 Dozer 默认仍应只读。
+
+Dozer 需要在 uniTerm 的通用数据库客户端基础上增加 Agent 治理约束：
+
+- 数据源必须带 project、environment、read-only/read-write 和 sensitivity scope；
+- Schema 可以作为 Context Provider，但采集过程需要限流、脱敏和审计；
+- 查询要绑定 Task/Execution，结果可保存为 Artifact；
+- 默认限制结果行数、执行时长和成本；
+- 写操作和 DDL 必须展示目标环境、影响预览并经过显式授权；
+- 对事务提供 preview/commit/rollback 边界，Agent 不得把“SQL 已生成”误报为“变更已安全完成”。
+
+因此 uniTerm 的推荐等级是 **B：面板与 Provider 实现参考，不作为 Rust Host 依赖**。优先借鉴其协议覆盖矩阵、连接表单和资源浏览交互；Dozer 自己定义权限、审计、Artifact 和 Agent 工具契约。
+
+### 5.6 Files／资源浏览面板：uniTerm 的补充参考
+
+uniTerm 的双栏 SFTP 文件管理、SCP fallback、拖放上传下载、外部编辑器临时文件监听和自动上传，对 Dozer 的远端 Files Surface 有实际参考价值。尤其应关注“同一远端文件重复打开使用稳定临时路径”“文件监听不能叠加”“自动上传必须有超时和连接状态反馈”等工程细节。
+
+但 Dozer 的 Files 面板以 worktree-aware changes 和验收为主，不应因为参考 uniTerm 而扩张为全协议通用文件管理器。SFTP/SMB/WebDAV/S3 等能力更适合作为 SSH、Database 或独立资源插件贡献的 Surface，核心 Files 继续聚焦 Project/Worktree/Execution/Delivery 关联。
+
+## 6. 可以作为依赖库的项目
+
+### 6.1 近期建议
 
 | 库 | 用途 | 建议 | 理由与注意事项 |
 |---|---|---|---|
@@ -543,7 +642,7 @@ OpenSpec 还提供并行 Change、delta spec、归档同步和可定制 schema�
 | [`testcontainers-rs`](https://github.com/testcontainers/testcontainers-rs) | 容器 Provider 的集成测试 | **作为 dev-dependency 评估** | 适合验证 Docker/Podman 下的生命周期、网络、挂载和失败恢复；不是生产容器管理器 |
 | [`opentelemetry-rust`](https://github.com/open-telemetry/opentelemetry-rust) | trace/metric/log 导出 | **先做 exporter spike** | 生态标准明确，但部分 Rust signal 仍非 Stable；内部领域事件不应直接等同 OTel span |
 
-### 5.2 条件采用
+### 6.2 条件采用
 
 | 库 | 采用条件 | 当前建议 |
 |---|---|---|
@@ -552,7 +651,7 @@ OpenSpec 还提供并行 Change、delta spec、归档同步和可定制 schema�
 | [`extism`](https://github.com/extism/extism) | 社区确实需要跨语言、轻量、受限的逻辑插件 | 先做 parser/rule 插件 spike，评估包体、启动、调试、Host functions 和 ABI 升级 |
 | [`wasmtime`](https://github.com/bytecodealliance/wasmtime) | Extism 无法满足资源限制、component model 或深度 Host 控制 | 不在第一阶段直接引入；维护成本和编译成本与“微 Host”目标存在张力 |
 
-### 5.3 不建议作为 Host 依赖
+### 6.3 不建议作为 Host 依赖
 
 以下项目更适合作为外部 Provider、sidecar 或设计参考：
 
@@ -563,7 +662,7 @@ OpenSpec 还提供并行 Change、delta spec、归档同步和可定制 schema�
 - Daytona、Coder、OpenHands：对接其 API 或借鉴 runtime，不嵌入其控制面；
 - Apple container、Docker、Podman：通过 CLI/API adapter 使用，Dozer 不实现容器运行时。
 
-## 6. 对 Host 重构的直接影响
+## 7. 对 Host 重构的直接影响
 
 调研结果强化了“Host 继续使用 iced，但必须缩小职责”的判断。Host 应收敛为以下稳定能力：
 
@@ -595,7 +694,7 @@ dozer-host (iced)
 
 每个内建模块都应先通过与社区插件相同的协议运行。若内建插件拥有社区插件无法获得的隐式 Host API，插件体系最终会退化成“只能做小装饰”的二等生态。
 
-## 7. 建议的工程验证项目
+## 8. 建议的工程验证项目
 
 ### P0：先证明边界，而不是先迁移全部功能
 
@@ -656,7 +755,7 @@ dozer-host (iced)
    - 建立离线数据集评估准确率、成本、延迟和拒答阈值；
    - 达标后才允许进入低风险自动路由。
 
-## 8. 选型闸门
+## 9. 选型闸门
 
 任何新依赖或外部项目进入 Dozer 前，应回答：
 
@@ -671,7 +770,7 @@ dozer-host (iced)
 
 如果一个项目只提供某种实现，就将它放在 adapter 后；只有定义 Dozer 自己核心语义的代码，才进入 core。
 
-## 9. 建议持续跟踪的仓库清单
+## 10. 建议持续跟踪的仓库清单
 
 ### 产品与工作流
 
@@ -732,7 +831,7 @@ dozer-host (iced)
 - [NandhaKishorM/laya](https://github.com/NandhaKishorM/laya)
 - [temporalio/sdk-rust](https://github.com/temporalio/sdk-rust)
 
-## 10. 最终判断
+## 11. 最终判断
 
 这轮调研没有发现需要推翻 Dozer V2 初步设计的证据，反而强化了几项关键决策：
 
@@ -745,7 +844,7 @@ dozer-host (iced)
 
 因此，下一步最有价值的工作不是继续横向增加面板，而是完成三个纵向切片：**Todo 进程插件、Task–Worktree 运行时、统一 Run/Event/Artifact 审计链**。这三项成立后，容器、Laya、Browser Test、Memory 和 Code Health 才能以一致方式接入，而不是再次长进 Host。
 
-### 10.1 第二轮补充调研的结论（§3.7、§4.8-§4.13）
+### 11.1 第二轮补充调研的结论（§3.7、§4.8-§4.13）
 
 不改变上述最终判断，但把两处最薄弱的环节补上了具体参照：
 

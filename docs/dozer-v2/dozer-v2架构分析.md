@@ -512,6 +512,32 @@ iced Host
 └── External Surface：任意原生 UI/独立 App
 ```
 
+### 7.7 WebView Surface 前端技术选型的两条独立探索（2026-09-25 追加）
+
+在插件化落点尚未立项之前，本会话先针对"把 Todo/对话/用量这类面板迁成 WebUI 该选什么前端技术"做了两项轻量探索，结论记录于此供后续 §7.3 WebView Surface 与 §10 插件 SDK 设计时参考；**均为非正式спайк/调研，不是已批准的技术选型**。
+
+#### 7.7.1 Preact + esbuild 离线打包 spike：结论是可行
+
+沿用 `crates/dozer-app/web/editor`、`crates/dozer-app/web/json-editor` 已验证的"esbuild 离线 iife bundle、无 CDN、无运行时 Node、严格 CSP"模式，加一层 Preact（`jsx: 'automatic', jsxImportSource: 'preact'`，esbuild 原生支持，不需要 Vite/Babel），做了一个 Todo 列表 mock（增/切换完成/删除）验证可行性：
+
+- 构建：11ms，产物 `todo.js` 压缩后 **13.9 KiB**（未 gzip），比现有两个 WebView 宿主小一个数量级。
+- CSP：沿用 `default-src 'none'; script-src 'self'` 严格策略跑通，控制台全程零报错、零 CSP 违规。
+- 交互：`useState` 驱动的增/切换/删除三条状态路径全部验证通过。
+- **发现的真实坑**：mock 里图省事用裸 `<span onClick>` 做勾选框，Chrome 无障碍树完全看不到它（`find` 工具报告"未找到 checkbox 控件"）——真要做进正式面板必须用 `<input type="checkbox">` 或补 `role="checkbox"`/`aria-checked`/键盘操作，不能照抄这个 spike 的写法。
+
+结论：Preact + esbuild 在"离线、无 CDN、CSP 严格、体积敏感"这几条本仓库硬约束下没有障碍，可作为 §7.3 WebView Surface 的默认前端选型候选；spike 代码是一次性的，未进入 `crates/dozer-app/web/`。
+
+#### 7.7.2 组件库调研：Beautiful UI（beautifului.dev）——只做设计参考，不作为依赖
+
+调研了 Turbo Design Studio 的 [Beautiful UI](https://www.beautifului.dev/)，一套面向"AI 原生界面"的组件目录（21 类：Loading/Thinking/Streaming Text、Approval Card、Tool Chips、Task Rows、Chat、Prompt Bar、Recommendation Card、Context Cards、Diff Table、Records Table、Filter Table、Sidebar Nav、Search、Flowchart、Insight Cards、Code Block、Fine-tune Card、Selection Actions、Agent Screen 等）。
+
+- **技术栈**：Next.js + React + Tailwind CSS（页面实测 `className` 含 Tailwind 工具类），不是 shadcn，但同属"抄源码进项目"路数。
+- **可获取性**：无 GitHub 仓库、无 npm 包、`/docs` 返回 404、无定价页，落地只有邮件订阅"Notify me"——目前是候补名单/获客页性质，不是可直接安装的成品库。
+- **信息架构价值**：其组件分类与 §17-§18 计划新增的面板高度对应——Approval Card / Recommendation Card ≈ Decision Inbox（§17.3）、Diff Table ≈ Delivery/Acceptance 证据展示（§17.2）、Tool Chips / Task Rows / Thinking ≈ Runs/Execution Audit（§18.1 / §18.4）、Records Table / Filter Table ≈ Data Workspace 或 Files 面板（§18.11 / §18.8）、Context Cards ≈ Context Service 检索展示（§16.4）。
+- **技术上不兼容当前方向**：§7.7.1 验证可行的路线是 Preact + 纯 CSS + esbuild 离线打包，Beautiful UI 是 React + Tailwind，直接复用代码意味着要么新引入 Tailwind 构建链（当前两个 web/ bundle 均未使用 Tailwind），要么把组件逻辑手工翻译成 Preact，成本不小；且现阶段代码本身不可获取，无法评估实现质量。
+
+结论：**不纳入技术选型，仅作为 V2 新面板（Decision Inbox / Delivery / Runs / Data Workspace）的 UI 交互模式参考清单**，留到真正做这些面板视觉设计时对照，不等它开源/发包再考虑复用实现。
+
 ## 8. Plugin API 与协议原则
 
 ### 8.1 稳定 API，不暴露宿主对象

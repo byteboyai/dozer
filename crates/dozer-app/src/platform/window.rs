@@ -127,6 +127,7 @@ pub(crate) fn install_topbar_drag_guard(window: &winit::window::Window) {
 
     unsafe extern "C-unwind" fn mouse_down_can_move_window(_this: &AnyObject, _cmd: Sel) -> Bool {
         let hovered = TOPBAR_CONTROL_HOVERED.load(std::sync::atomic::Ordering::Relaxed);
+        tracing::warn!("[DIAG] mouseDownCanMoveWindow called, hovered={hovered}");
         Bool::new(!hovered)
     }
 
