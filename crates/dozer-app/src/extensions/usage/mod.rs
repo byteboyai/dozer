@@ -10,12 +10,10 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 mod aggregate;
-mod chart;
 mod protocol;
 mod view;
 
 pub(crate) use aggregate::*;
-pub(crate) use chart::*;
 pub(crate) use protocol::*;
 pub(crate) use view::*;
 
@@ -66,6 +64,43 @@ impl WorkspaceState {
     /// 时的行为(见 app.rs `PanelKind::Usage` 分支)。
     pub fn has_agent_filter(&self) -> bool {
         !self.loading && !self.rows.is_empty()
+    }
+}
+
+/// App 级(不按项目分,同 `git_log::State` 先例)内容侧 webview 推送状态:
+/// `ready`(JS `window.__dozer.dispatch` 已注册)+ `last_sent`(最近一次
+/// 真正 `evaluate_script` 成功的 payload)。纯状态,可单测,不碰 webview 池
+/// ——调用方(`App::take_usage_content_script`,Task 15)拿 `pending_push`
+/// 的结果去组 envelope,只有真正 `evaluate_script` 成功才调 `mark_sent`。
+#[derive(Default)]
+pub struct WebviewPushState {
+    ready: bool,
+    last_sent: Option<UsageViewPayload>,
+}
+
+impl WebviewPushState {
+    pub fn set_ready(&mut self, ready: bool) {
+        self.ready = ready;
+        if ready {
+            // 新实例(或重新确认 ready)一律强制重发一次当前内容,同
+            // `git_log::State::set_diff_webview_ready` 配
+            // `clear_diff_sent_for` 的先例。
+            self.last_sent = None;
+        }
+    }
+
+    pub fn pending_push(&self, desired: &UsageViewPayload) -> Option<UsageViewPayload> {
+        if !self.ready {
+            return None;
+        }
+        if self.last_sent.as_ref() == Some(desired) {
+            return None;
+        }
+        Some(desired.clone())
+    }
+
+    pub fn mark_sent(&mut self, payload: UsageViewPayload) {
+        self.last_sent = Some(payload);
     }
 }
 
@@ -202,51 +237,13 @@ fn count_git_commits_by_day(path: &std::path::Path) -> BTreeMap<i64, u64> {
     by_day
 }
 
-/// 面板内容侧:统计图表 + 顶部"用量"标题。原先跟 `list_pane`(agent 筛选栏)
-/// 挤在同一个 `view` 函数里手写 `row![content, sidebar]`,现在拆成独立的
-/// 列表/内容两个面板函数,接入跟 Database/Agent 面板一样的可拖拽 split +
-/// 收起机制(见 app.rs `PanelKind::Usage` 分支、`Divider::UsageSplit`)。
-/// `rows` 为空且 `loading` 为假时是"还没数据"的空态；`loading` 为真时是
-/// 刷新中占位态；两者互斥由 `update` 保证(`WorkspaceState::set_loading`
-/// 调用后、`Loaded` 落地时清掉)。
+/// 面板内容侧:顶部"用量"标题 + 加载态动画占位。四态图表内容已迁到
+/// `dozer://usage-content` Preact webview(见 `protocol.rs`)。`list_pane`
+/// (agent 筛选栏)仍原生 iced,接入跟 Database/Agent 面板一样的可拖拽
+/// split + 收起机制(见 app.rs `PanelKind::Usage` 分支、`Divider::UsageSplit`)。
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn nice_tick_step_rounds_to_1_2_5_family() {
-        // 7 / 4 = 1.75 → 落在 (1,2] 档,取 2。
-        assert_eq!(nice_tick_step(7, 4), 2);
-        // 42 / 4 = 10.5 → 数量级 10,余数 1.05 → (1,2] 档,取 2*10=20。
-        assert_eq!(nice_tick_step(42, 4), 20);
-        // 1 / 4 = 0.25 → 数量级 0.1,余数 2.5 → (2,5] 档,取 5*0.1 四舍五入为 1。
-        assert_eq!(nice_tick_step(1, 4), 1);
-    }
-
-    #[test]
-    fn grid_ticks_stops_at_max_and_never_empty() {
-        assert_eq!(grid_ticks(0), Vec::<u64>::new());
-        // step=2(见上一条用例),数到 <=7 为止:2,4,6。
-        assert_eq!(grid_ticks(7), vec![2, 4, 6]);
-        // 数据量很小时(max_total < step)也至少给一条线兜底。
-        assert_eq!(grid_ticks(1), vec![1]);
-    }
-
-    #[test]
-    fn format_count_three_tier_k_m_rounding() {
-        // 千以下原样。
-        assert_eq!(format_count(0_u64), "0");
-        assert_eq!(format_count(999_u64), "999");
-        // ≥1000 且 <1,000,000 → k,1 位小数。`1000` 直接进 `1.0k`,
-        // 不出现 `1000.0k` 的中间档(见函数注释)。
-        assert_eq!(format_count(1000_u64), "1.0k");
-        assert_eq!(format_count(1234_u64), "1.2k");
-        assert_eq!(format_count(123_456_u64), "123.5k");
-        assert_eq!(format_count(999_999_u64), "1000.0k");
-        // ≥1,000,000 → m,1 位小数。`1,000,000` 直接进 `1.0m`。
-        assert_eq!(format_count(1_000_000_u64), "1.0m");
-        assert_eq!(format_count(1_234_567_u64), "1.2m");
-    }
 
     fn sample_usage(files: &[&str]) -> ConversationUsage {
         ConversationUsage {
@@ -764,5 +761,84 @@ mod tests {
             vec![0, 0],
             "今天无活动但保留占位"
         );
+    }
+
+    fn payload_a() -> UsageViewPayload {
+        UsageViewPayload::AgentEmpty {
+            agent: AgentKind::Claude,
+        }
+    }
+
+    fn payload_b() -> UsageViewPayload {
+        UsageViewPayload::AgentEmpty {
+            agent: AgentKind::Codebuddy,
+        }
+    }
+
+    #[test]
+    fn pending_push_none_when_not_ready() {
+        let state = WebviewPushState::default();
+        assert!(state.pending_push(&payload_a()).is_none());
+    }
+
+    #[test]
+    fn pending_push_some_when_ready_and_never_sent() {
+        let mut state = WebviewPushState::default();
+        state.set_ready(true);
+        assert_eq!(state.pending_push(&payload_a()), Some(payload_a()));
+    }
+
+    #[test]
+    fn pending_push_none_once_marked_sent_and_desired_unchanged() {
+        let mut state = WebviewPushState::default();
+        state.set_ready(true);
+        state.mark_sent(payload_a());
+        assert!(state.pending_push(&payload_a()).is_none());
+    }
+
+    /// 对应本计划 Review Focus"多 agent 筛选切换的最新覆盖旧语义":desired
+    /// 在 A→B→A 之间反复横跳,每次跟上一次真正送达的不一样都要判定为待推,
+    /// 不能因为"A 以前发过一次"就误判成不用重发。
+    #[test]
+    fn pending_push_resends_when_desired_flips_back_to_a_previously_sent_value() {
+        let mut state = WebviewPushState::default();
+        state.set_ready(true);
+        state.mark_sent(payload_a());
+        assert_eq!(state.pending_push(&payload_b()), Some(payload_b()));
+        state.mark_sent(payload_b());
+        assert_eq!(
+            state.pending_push(&payload_a()),
+            Some(payload_a()),
+            "desired 变回 A(即便 A 是更早发过的值)也必须判定为待推"
+        );
+    }
+
+    /// 对应本计划 Review Focus"切换项目后 webview 显示旧项目数据":这里用
+    /// "desired 突然换成另一个 workspace 算出来的、从未出现过的 payload"模拟
+    /// 项目切换——`last_sent` 是 App 级单槽,不按项目分,天然不会因为
+    /// "这个项目以前没发过"而漏推。
+    #[test]
+    fn pending_push_treats_a_different_workspaces_payload_as_new() {
+        let mut state = WebviewPushState::default();
+        state.set_ready(true);
+        state.mark_sent(payload_a()); // 上一个显示这个 webview 的项目留下的内容
+        let other_project_payload = UsageViewPayload::Empty; // 切到的新项目,当前态
+        assert_eq!(
+            state.pending_push(&other_project_payload),
+            Some(UsageViewPayload::Empty)
+        );
+    }
+
+    #[test]
+    fn set_ready_true_clears_last_sent_forcing_a_resend() {
+        let mut state = WebviewPushState::default();
+        state.set_ready(true);
+        state.mark_sent(payload_a());
+        assert!(state.pending_push(&payload_a()).is_none());
+        // webview 被销毁重建(全新实例),重新 ready——即便 desired 没变,也要
+        // 强制重发一次,因为新实例的 JS 端状态是空的(同 git_log 的先例)。
+        state.set_ready(false);
+        state.set_ready(true);
+        assert_eq!(state.pending_push(&payload_a()), Some(payload_a()));
     }
 }
