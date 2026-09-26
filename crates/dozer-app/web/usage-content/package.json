@@ -1,0 +1,20 @@
+{
+  "name": "dozer-usage-content",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dozer 用量面板内容侧(usage-content),Preact 离线打包,无 CDN/无运行时 Node。",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test src/*.test.ts"
+  },
+  "dependencies": {
+    "preact": "10.29.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3"
+  }
+}
