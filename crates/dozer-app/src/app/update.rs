@@ -5132,6 +5132,7 @@ impl App {
                 summary_title: Some(summary_title),
                 summary_text,
                 summary_time: Some(relative_time_text(last_ts, now_ms)),
+                loaded_nonce: None,
             });
             ws.spawn_review_load_conversation(
                 io,

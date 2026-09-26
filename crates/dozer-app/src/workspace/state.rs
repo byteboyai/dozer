@@ -194,6 +194,11 @@ pub struct ReviewView {
     /// `SessionRow.last_ts` 算一次定格,不随详情页停留时长实时跳字
     /// (2026-08-28 新增)。
     pub summary_time: Option<String>,
+    /// 当前 `nonce` 对应的内容是否已经被 review-trace webview 报回
+    /// `ReviewTraceEvent::DocumentLoaded`——`None`/不等于 `nonce` 都算"未
+    /// loaded"。换审阅目标时 `nonce` 自增,这个字段不需要显式清空,天然因
+    /// 为不等于新 `nonce` 而回到"未 loaded"(见 `review_webview_spec`)。
+    pub loaded_nonce: Option<u64>,
 }
 
 /// UI → SSH 泵任务的写指令(`Workspace::spawn_ssh_tab` 消费)。

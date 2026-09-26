@@ -408,7 +408,7 @@ pub(crate) fn review_webview_spec(review: Option<&ReviewView>) -> Vec<crate::pre
     vec![crate::preview::WebviewSpec {
         id: 0,
         url: format!("dozer://review-trace/host.html?_r={}", rv.nonce),
-        visible: true,
+        visible: rv.loaded_nonce == Some(rv.nonce),
         editor_binding: None,
         loading_generation: None,
     }]

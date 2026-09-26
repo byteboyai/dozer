@@ -25,6 +25,7 @@ fn review_webview_spec_empty_on_error_or_empty_entries() {
         summary_title: None,
         summary_text: None,
         summary_time: None,
+        loaded_nonce: None,
     };
     assert_eq!(review_webview_spec(Some(&with_error)), Vec::new());
 
@@ -37,12 +38,13 @@ fn review_webview_spec_empty_on_error_or_empty_entries() {
         summary_title: None,
         summary_text: None,
         summary_time: None,
+        loaded_nonce: None,
     };
     assert_eq!(review_webview_spec(Some(&empty_entries)), Vec::new());
 }
 
 #[test]
-fn review_webview_spec_url_carries_nonce_and_is_visible() {
+fn review_webview_spec_url_carries_nonce_and_is_visible_when_loaded() {
     let rv = ReviewView {
         source: ReviewSource::Conversation("a".into()),
         entries: vec![ReviewEntry::Human { text: "hi".into() }],
@@ -52,11 +54,70 @@ fn review_webview_spec_url_carries_nonce_and_is_visible() {
         summary_title: None,
         summary_text: None,
         summary_time: None,
+        loaded_nonce: Some(7),
     };
     let specs = review_webview_spec(Some(&rv));
     assert_eq!(specs.len(), 1);
     assert_eq!(specs[0].url, "dozer://review-trace/host.html?_r=7");
     assert!(specs[0].visible);
+}
+
+#[test]
+fn review_webview_spec_hidden_until_loaded_nonce_matches() {
+    let rv = ReviewView {
+        source: ReviewSource::Conversation("c1".into()),
+        entries: vec![ReviewEntry::Human { text: "hi".into() }],
+        error: None,
+        agent: AgentKind::Claude,
+        nonce: 3,
+        summary_title: None,
+        summary_text: None,
+        summary_time: None,
+        loaded_nonce: None,
+    };
+    let specs = review_webview_spec(Some(&rv));
+    assert_eq!(
+        specs.len(),
+        1,
+        "有数据时仍应创建 webview(否则永远等不到 loaded 事件)"
+    );
+    assert!(!specs[0].visible, "loaded_nonce 未追上 nonce 时不可见");
+}
+
+#[test]
+fn review_webview_spec_visible_when_loaded_nonce_matches() {
+    let rv = ReviewView {
+        source: ReviewSource::Conversation("c1".into()),
+        entries: vec![ReviewEntry::Human { text: "hi".into() }],
+        error: None,
+        agent: AgentKind::Claude,
+        nonce: 3,
+        summary_title: None,
+        summary_text: None,
+        summary_time: None,
+        loaded_nonce: Some(3),
+    };
+    let specs = review_webview_spec(Some(&rv));
+    assert!(specs[0].visible);
+}
+
+/// 对应本计划 Review Focus"空清单分支与未 loaded 分支职责重叠":即便
+/// `loaded_nonce == nonce`(理论上不该跟"无数据"同时成立,但要防呆),
+/// `entries.is_empty()` 仍必须优先命中既有的"销毁 webview"分支。
+#[test]
+fn review_webview_spec_empty_entries_still_wins_over_loaded_nonce() {
+    let rv = ReviewView {
+        source: ReviewSource::Conversation("c1".into()),
+        entries: Vec::new(),
+        error: None,
+        agent: AgentKind::Claude,
+        nonce: 3,
+        summary_title: None,
+        summary_text: None,
+        summary_time: None,
+        loaded_nonce: Some(3),
+    };
+    assert_eq!(review_webview_spec(Some(&rv)), Vec::new());
 }
 
 #[test]
