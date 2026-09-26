@@ -714,7 +714,16 @@ impl App {
                                 }
                             }
                             FlyfishEvent::Title { title } => {
-                                if !title.is_empty() {
+                                // 文件预览 tab 的标题恒为文件名,不采用 flyfish
+                                // host 回传的页面默认标题(如 "Dozer Preview")——
+                                // 否则 flyfish 加载完会把 tab 标题覆盖成它自己的
+                                // 页面标题。从 tab 路径派生文件名覆盖;非文件 tab
+                                // (本 app 中 flyfish host 不存在此类)才回退用回传标题。
+                                if let crate::preview::TabKind::File(path) = &tab.kind {
+                                    if let Some(name) = path.file_name() {
+                                        tab.title = name.to_string_lossy().into_owned();
+                                    }
+                                } else if !title.is_empty() {
                                     tab.title = title;
                                 }
                             }
@@ -1113,6 +1122,12 @@ impl App {
                         &mut ws.conversations,
                         conversations::Message::SessionsRefreshed(project_id, result),
                     );
+                    if let Some(rv) = &mut ws.review
+                        && let ReviewSource::Conversation(cid) = &rv.source
+                        && let Some(row) = ws.conversations.sessions().and_then(|rows| rows.iter().find(|r| &r.conversation_id == cid)) {
+                        rv.summary_title = Some(row.display_title.clone());
+                        rv.summary_text = row.summary.clone();
+                    }
                 });
             }
             Message::Conversations(conversations::Message::SessionOpen(conversation_id, agent)) => {
@@ -2927,7 +2942,8 @@ impl App {
                 | project::Message::ScaffoldStepFinished(project_id, ..)
                 | project::Message::TranscriptBackfillStarted(project_id, ..)
                 | project::Message::TranscriptBackfillFinished(project_id, ..)
-                | project::Message::SummaryBackfillProgress(project_id, ..)),
+                | project::Message::SummaryBackfillProgress(project_id, ..)
+                | project::Message::SummaryBackfillFailed(project_id, ..)),
             ) => {
                 let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
                     return;
@@ -5189,7 +5205,7 @@ impl App {
     pub(crate) fn conversation_summary_generate(
         &mut self,
         conversation_id: String,
-        agent: AgentKind,
+        _agent: AgentKind,
     ) {
         let Some((project_id, cwd)) = self
             .active_workspace()
@@ -5210,6 +5226,7 @@ impl App {
                 Ok(id) => id,
                 Err(e) => {
                     tracing::warn!(error = %e, %cid, "提交总结任务失败");
+                    let _ = proxy.send_event(Message::DaemonError(format!("生成总结失败：{e}")));
                     return;
                 }
             };
@@ -5217,6 +5234,10 @@ impl App {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 match client.get_summary_job(job_id).await {
                     Ok(Some(job)) => {
+                        if job.status == SummaryJobStatus::Failed {
+                            let _ = proxy.send_event(Message::DaemonError(format!("生成总结失败：{}", job.error_detail.unwrap_or_else(|| "未知错误".into()))));
+                            return;
+                        }
                         if matches!(
                             job.status,
                             SummaryJobStatus::Succeeded
@@ -5228,10 +5249,12 @@ impl App {
                     }
                     Ok(None) => {
                         tracing::warn!(job_id, %cid, "总结任务不存在");
+                        let _ = proxy.send_event(Message::DaemonError("总结任务不存在，请重试".into()));
                         break;
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, job_id, %cid, "查询总结任务失败");
+                        let _ = proxy.send_event(Message::DaemonError(format!("查询总结失败：{e}")));
                         break;
                     }
                 }
@@ -5248,9 +5271,6 @@ impl App {
             let _ = proxy.send_event(Message::Conversations(
                 conversations::Message::SessionsRefreshed(project_id, result),
             ));
-            let _ = proxy.send_event(Message::Conversations(conversations::Message::SessionOpen(
-                cid, agent,
-            )));
         });
     }
 
