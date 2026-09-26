@@ -72,6 +72,20 @@ pub fn git_log_diff_header_h_px() -> f32 {
     byteui::theme::font::caption() as f32 * 1.2 + 6.0 + 1.0 + 4.0 + 4.0
 }
 
+/// 用量面板内容侧 webview 之上、面板头(图标+"用量"标题+收起按钮,继续
+/// 原生 iced 渲染)占用的固定高度(逻辑像素),已含全局 scale。
+/// `usage_content_pane_bounds_for` 用它算 webview 矩形的纵向起点——
+/// webview 只覆盖头部**以下**的内容区,不能把头部也盖住。
+///
+/// 复刻 `chrome/homespace.rs::home_panel_head_with_actions` 的固定堆栈
+/// （`column![head_row(固定高 tab_button_size()), 1px 分割线].spacing(4)`）
+/// 加 `content_pane` 外层 `column![head].spacing(12).padding(14)` 的
+/// `padding.top` 与到内容区的设计留白,不另起字面量。
+pub fn usage_content_chrome_top_px() -> f32 {
+    let head_h = byteui::theme::geometry::tab_button_size() + 4.0 + 1.0;
+    14.0 + head_h + 12.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,6 +118,18 @@ mod tests {
         assert!(near(
             git_log_diff_header_h_px(),
             12.0 * 1.2 + 6.0 + 1.0 + 4.0 + 4.0
+        ));
+    }
+
+    #[test]
+    fn usage_content_chrome_top_matches_composition() {
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+        // 14(column padding.top) + tab_button_size()(head_row 固定高) +
+        // 4.0(head 内部 spacing) + 1.0(head 内部 1px 分割线) +
+        // 12.0(标题到内容区的设计留白,对应 column 原 `.spacing(12)`)。
+        assert!(near(
+            usage_content_chrome_top_px(),
+            14.0 + byteui::theme::geometry::tab_button_size() + 4.0 + 1.0 + 12.0
         ));
     }
 }
