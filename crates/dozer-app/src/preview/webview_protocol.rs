@@ -476,6 +476,49 @@ pub fn parse_flyfish_event(raw: &str) -> Result<WebviewEnvelope<FlyfishEvent>, P
     })
 }
 
+/// review-trace(单槽、非 tab)host 报回的事件。只有一个变体——
+/// review-trace 的失败已经是页面内可见的错误文案(见
+/// `web/review-trace/src/main.tsx` 的 `RenderErrorBoundary`/`.catch`),
+/// Rust 不需要单独知道"是不是失败了"才决定要不要显示,成功/失败/渲染
+/// 异常三种终态都报同一个事件。不复用 `FlyfishEvent`(那个带
+/// `Title`/`SearchState`/`Failed{recoverable}`,review-trace 没有这些
+/// 交互,复用只会引入不必要的字段)。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReviewTraceEvent {
+    DocumentLoaded,
+}
+
+/// 解析一条 review-trace host 事件。与 [`parse_flyfish_event`] 同规则
+/// (超大/非法/未知不 panic)。
+pub fn parse_review_trace_event(
+    raw: &str,
+) -> Result<WebviewEnvelope<ReviewTraceEvent>, ProtocolError> {
+    if raw.len() > MAX_MESSAGE_BYTES {
+        return Err(ProtocolError::TooLarge { bytes: raw.len() });
+    }
+    let env: WebviewEnvelope<serde_json::Value> =
+        serde_json::from_str(raw).map_err(|e| ProtocolError::BadJson(e.to_string()))?;
+    let kind = env
+        .payload
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_default();
+    let payload: ReviewTraceEvent = serde_json::from_value(env.payload)
+        .map_err(|_| ProtocolError::UnknownPayload(kind.clone()))?;
+    Ok(WebviewEnvelope {
+        protocol_version: env.protocol_version,
+        project_id: env.project_id,
+        panel: env.panel,
+        tab_id: env.tab_id,
+        document_id: env.document_id,
+        revision: env.revision,
+        request_id: env.request_id,
+        payload,
+    })
+}
+
 /// 编码一条 Rust -> 编辑器的命令为 envelope JSON,供 `evaluate_script` 注入。
 pub fn encode_command(
     project_id: i64,
@@ -1026,5 +1069,34 @@ mod tests {
             Err(ProtocolError::UnknownPayload(_))
         ));
         assert!(parse_flyfish_event("not json").is_err());
+    }
+
+    #[test]
+    fn parse_review_trace_event_accepts_minimal_envelope() {
+        let raw = r#"{"protocol_version":1,"payload":{"kind":"document_loaded"}}"#;
+        let env = parse_review_trace_event(raw).expect("应解析成功");
+        assert_eq!(env.payload, ReviewTraceEvent::DocumentLoaded);
+        // 省略的信封字段(project_id/panel/tab_id/document_id/revision/
+        // request_id)全部落到 `#[serde(default)]`,不要求 JS 侧提供——
+        // review-trace 单槽非 tab,没有这些身份需要携带。
+        assert_eq!(env.project_id, 0);
+        assert_eq!(env.tab_id, 0);
+    }
+
+    #[test]
+    fn parse_review_trace_event_rejects_unknown_kind() {
+        let raw = r#"{"protocol_version":1,"payload":{"kind":"bogus"}}"#;
+        assert!(parse_review_trace_event(raw).is_err());
+    }
+
+    #[test]
+    fn parse_review_trace_event_rejects_oversized_message() {
+        let huge = "x".repeat(MAX_MESSAGE_BYTES + 1);
+        let raw =
+            format!(r#"{{"protocol_version":1,"payload":{{"kind":"document_loaded","pad":"{huge}"}}}}"#);
+        assert!(matches!(
+            parse_review_trace_event(&raw),
+            Err(ProtocolError::TooLarge { .. })
+        ));
     }
 }
