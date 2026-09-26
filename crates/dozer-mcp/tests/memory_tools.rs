@@ -28,6 +28,7 @@ async fn start_daemon() -> (std::path::PathBuf, CleanupGuard) {
         session_summaries: Arc::new(
             dozerd::session_summary::SessionSummaryStore::open(&db).unwrap(),
         ),
+        summary_jobs: Arc::new(dozerd::summary_jobs::SummaryJobStore::open(&db).unwrap()),
         backfill_registry: Arc::new(dozerd::session_summary_backfill::BackfillRegistry::new()),
         todos: Arc::new(dozerd::todo::TodoStore::new(&db).unwrap()),
         categories: Arc::new(dozerd::todo_category::CategoryStore::new(&db).unwrap()),

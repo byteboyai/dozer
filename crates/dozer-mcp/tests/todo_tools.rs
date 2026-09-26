@@ -28,6 +28,8 @@ async fn start_daemon() -> (std::path::PathBuf, CleanupGuard) {
     let transcripts = Arc::new(dozerd::transcripts::TranscriptStore::open(&db).unwrap());
     let session_summaries =
         Arc::new(dozerd::session_summary::SessionSummaryStore::open(&db).unwrap());
+    let summary_jobs =
+        Arc::new(dozerd::summary_jobs::SummaryJobStore::open(&db).unwrap());
     let backfill_registry = Arc::new(dozerd::session_summary_backfill::BackfillRegistry::new());
     let todos = Arc::new(dozerd::todo::TodoStore::new(&db).unwrap());
     let categories = Arc::new(dozerd::todo_category::CategoryStore::new(&db).unwrap());
@@ -45,6 +47,7 @@ async fn start_daemon() -> (std::path::PathBuf, CleanupGuard) {
                 code_health,
                 transcripts,
                 session_summaries,
+                summary_jobs,
                 backfill_registry,
                 todos,
                 categories,
