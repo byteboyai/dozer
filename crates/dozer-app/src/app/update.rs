@@ -1313,7 +1313,13 @@ impl App {
                         active_project_id,
                     );
                     if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
-                        self.update(msg);
+                        // 经事件循环代理回送选择结果,使其重新走 `Runner::dispatch`
+                        // ——rfd 文件夹选择器、剪贴板等原生副作用只在 `dispatch`
+                        // 拦截层启动。直接 `self.update(msg)` 会绕过该层,导致
+                        // 「打开项目」(`ProjectTabPickFolder`)静默失效(macOS 原生
+                        // 菜单同步返回、不经 iced 事件管线)。自洽型菜单项
+                        // (如「创建项目」)经 `dispatch` 同样正常。
+                        let _ = self.proxy.send_event(msg);
                     }
                 }
                 #[cfg(not(target_os = "macos"))]
