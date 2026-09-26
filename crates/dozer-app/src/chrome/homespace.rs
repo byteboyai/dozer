@@ -500,7 +500,17 @@ fn home_project_list_view(
             ..iced_widget::container::Style::default()
         });
     let panel_footbar: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        container(column![top_line, home_new_project_button()].spacing(4))
+        container(
+            column![
+                top_line,
+                row![
+                    home_footbar_button("打开项目", Message::ProjectTabPickFolder),
+                    home_footbar_button("创建项目", Message::ProjectCreateOpen),
+                ]
+                .spacing(8)
+            ]
+            .spacing(4),
+        )
             .width(Length::Fill)
             .padding([6, 8])
             .style(|_t: &iced_widget::Theme| container::Style {
@@ -603,22 +613,25 @@ fn home_project_list_view(
         .into()
 }
 
-/// 底部 footbar 里的「＋新增项目」按钮(甲方动作)。样式对齐全局统一按钮
-/// 规范(2026-09-15 起,见 `dialog::action_button_border_color` 文档):
-/// 面板底色实底(`card_bg`)+ 描边静止态 `border`、悬浮/按下态变
-/// `gold`(此前描边固定不响应 hover)+ 灰字 `dim`(此前用奶油字
-/// `cream`,普通按钮该用灰字,危险按钮才用红字)。字号用 `label`(13px,
-/// 同 `project_footer_bar` 的 `byteui::theme::font::label()`)。宽度改为
-/// footbar 行宽的一半、靠右对齐(此前 `width(Fill)` 撑满整行,视觉上比
-/// workspace 项目面板的功能按钮粗重;之后又短暂改成居中,2026-09-15 定为
-/// 右对齐)。
-fn home_new_project_button()
--> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+/// 底部 footbar 里的两个功能按钮(甲方动作):「打开项目」走文件夹选择器
+/// (`Message::ProjectTabPickFolder`,与 topbar「+」菜单的「打开项目」一致),
+/// 「创建项目」打开创建项目弹窗(`Message::ProjectCreateOpen`,与 topbar
+/// 「+」菜单的「创建项目」一致)。样式对齐全局统一按钮规范(2026-09-15 起,
+/// 见 `dialog::action_button_border_color` 文档):面板底色实底(`card_bg`)
+/// + 描边静止态 `border`、悬浮/按下态变 `gold`+ 灰字 `dim`。字号用 `label`
+/// (13px,同 `project_footer_bar` 的 `byteui::theme::font::label()`)。两个
+/// 按钮各占 footbar 行宽的一半、并排(`spacing(8)`),左「打开项目」右
+/// 「创建项目」(2026-09-26:拆成两个独立按钮,拆前「＋新建项目」其实是打开
+/// 文件夹,名不副实)。
+fn home_footbar_button(
+    label: &'static str,
+    msg: Message,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 按钮内容用 `container` 撑满 + `align_x(Center)` 居中标题文字——`button`
     // 的 `layout::padded` 不会把 Shrink 宽度的内容自动居中,只贴左上角(同
     // `extensions::project::footer_button_label` 的既有处理)。
     let label = container(
-        text("＋新建项目")
+        text(label)
             .size(theme::homespace_font::label())
             .color(theme::homespace_color::dim()),
     )
@@ -626,7 +639,7 @@ fn home_new_project_button()
     .align_x(iced_widget::core::alignment::Horizontal::Center);
 
     let btn = button(label)
-        .on_press(Message::ProjectTabPickFolder)
+        .on_press(msg)
         .padding([6, 8])
         .style(|_t: &iced_widget::Theme, s: button::Status| button::Style {
             background: Some(theme::homespace_color::card_bg().into()),
@@ -644,11 +657,7 @@ fn home_new_project_button()
             ..button::Style::default()
         });
 
-    row![
-        iced_widget::Space::new().width(Length::FillPortion(1)),
-        btn.width(Length::FillPortion(1)),
-    ]
-    .into()
+    btn.width(Length::Fill).into()
 }
 
 /// 首页左栏"Recents" pane(`HomeLeftView::Recents`):面板标题「最近」,
