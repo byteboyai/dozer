@@ -4,7 +4,8 @@
 > 不是已批准的实现规格。crate/模块/文件命名为基于两份文档描述的合理推演。
 > 整理日期：2026-09-24；2026-09-25 依据 `dozer-v2静态结构图-审核意见.md` 做结构重排与部分内容修订
 > （见文末「X. 审核意见采纳情况」，审核意见中与当前仓库实际不符的具体断言未采纳，仅采纳其指出的
-> 真实缺口）。也发布为 Claude Artifact（交互版，浅色卡片背景保证 Mermaid 图在深浅主题下都可读）：
+> 真实缺口）；2026-09-26 追加多语言（i18n）相关节点，对应架构分析 §19。也发布为 Claude Artifact
+> （交互版，浅色卡片背景保证 Mermaid 图在深浅主题下都可读）：
 > https://claude.ai/artifact/Q25RQ9iAWMJe2kyKZFFqjv （尚未同步本轮修订，以本文件为准）。
 
 细化到 package / crate / module / 文件级，并附数据库结构。两层拆分原则见架构分析 §4.2：
@@ -21,8 +22,8 @@
   Inbox、Todo、Project、Code Health……），描述其定位、现状文件、目标插件形态（如适用）与私有
   数据。同一 crate 的内容可能被拆到多个面板小节中引用，不再要求「一个 crate 一张图」。
 
-节点颜色约定（各图 `classDef`）：蓝 = 现状基本保留；金 = 既有 crate/bin，职责大幅演进；
-绿 = V2 全新 crate/模块；橙虚线 = 从现有 `extensions::*` 拆出的进程外插件，或待迁出的 legacy 模块。
+节点颜色约定（各图 `classDef`）：绿 = 现状基本保留；金 = 既有 crate/bin，职责大幅演进；
+蓝 = V2 全新 crate/模块（规划中）；橙虚线 = 从现有 `extensions::*` 拆出的进程外插件，或待迁出的 legacy 模块。
 **箭头语义提示：** 下方 Mermaid 图混合表达了「编译依赖」「进程间调用」「逻辑提供/基于」三类关系，
 统一拆成三张独立图（依赖图/部署拓扑图/运行时调用图）是审核意见 4.2 的合理建议，但本轮修订认为
 一次性重画代价较高、且当前阶段读者主要靠图例和随文说明消歧，故本版仅在容易引起误读的箭头旁加了
@@ -157,10 +158,10 @@ flowchart TB
   class dozerd,hostapp,mcp evolved
   class protocol,execenv,decision,runtime,sdk,devhost newcrate
   class p_codehealth,p_todo,p_ssh,p_usage,p_conv,p_browser,p_db,p_files,p_memory,p_gitlog extracted
-  classDef existing fill:#eef3ff,stroke:#5b7fd1,color:#1c1b17;
-  classDef evolved fill:#fff3d6,stroke:#a8690f,color:#1c1b17;
-  classDef newcrate fill:#eafbf2,stroke:#1f7a52,color:#1c1b17;
-  classDef extracted fill:#f8ece2,stroke:#a2481b,color:#1c1b17,stroke-dasharray: 3 2;
+  classDef existing fill:#bdf3d6,stroke:#0f7a45,color:#1c1b17;
+  classDef evolved fill:#ffe29a,stroke:#b45309,color:#1c1b17;
+  classDef newcrate fill:#cfe2ff,stroke:#1d4ed8,color:#1c1b17;
+  classDef extracted fill:#ffc9b3,stroke:#9c2b0e,color:#1c1b17,stroke-dasharray: 3 2;
 ```
 
 **两条不同的迁移顺序，含义不同（回应审核意见 4.4）：**
@@ -232,12 +233,12 @@ flowchart LR
   subgraph registry_mod["registry/（新增，§16.3，覆盖全部贡献类型）"]
     direction TB
     reg_contribution["contribution.rs：统一 ContributionId"]
-    reg_panel["panel_registry.rs：Panel/Page/Tab"]
-    reg_command["command_registry.rs：Command"]
+    reg_panel["panel_registry.rs：Panel/Page/Tab（展示名为 title_key+title_fallback 结构， 查表逻辑走 D 节 dozer-protocol::i18n，架构分析 §19.4）"]
+    reg_command["command_registry.rs：Command（展示名同样是 title_key+title_fallback）"]
     reg_other["其余贡献类型（Verifier、MCP tool/resource/prompt、 Background job、Data source、Context provider、Artifact renderer）暂共用 contribution.rs 的通用索引，未各自拆文件，见 §16.3 全量列表"]
   end
 
-  subgraph supervisor_mod["supervisor_client/（新增，§4.3；仅"请求 + 展示"，不持有插件生命周期权威）"]
+  subgraph supervisor_mod["supervisor_client/（新增，§4.3；仅「请求 + 展示」，不持有插件生命周期权威）"]
     direction TB
     sup_client["plugin_client.rs：向 dozerd 请求安装/启停/升级/重启"]
     sup_permission["permission_prompt.rs：展示 dozerd 下发的权限申请"]
@@ -272,8 +273,8 @@ flowchart LR
 
   class app_message,app_update,app_view,app_state,ws_state,ws_view,ws_hook,ch_rail,ch_tabs,ch_topbar,ch_menu,pf_window,pf_events,pf_overlay,pf_overlays_misc,th_geometry,th_homespace,th_byteui_ref,as_fonts,tm_view,tb_view,pv_router,pv_webview existing
   class sf_lifecycle,sf_declarative,sf_webview,sf_external,sf_none,reg_contribution,reg_panel,reg_command,reg_other,sup_client,sup_permission,ch_cdp newcrate
-  classDef existing fill:#eef3ff,stroke:#5b7fd1,color:#1c1b17;
-  classDef newcrate fill:#eafbf2,stroke:#1f7a52,color:#1c1b17;
+  classDef existing fill:#bdf3d6,stroke:#0f7a45,color:#1c1b17;
+  classDef newcrate fill:#cfe2ff,stroke:#1d4ed8,color:#1c1b17;
 ```
 
 **不再保留：** `extensions/{todo,codehealth,ssh,database,files,project,usage}/`（目录形式的领域
@@ -401,6 +402,7 @@ flowchart LR
     ps_git["Git Service（worktree_mod 之外的通用 Git 查询，如历史/blame）"]
     ps_notify["Notification Service"]
     ps_gateway_ctrl["MCP Gateway 控制面（身份/授权/工具注册表/审计/取消， 被 E 节 Gateway 调用，见 E 节回应 2.4 的部分）"]
+    ps_locale["Locale Setting（架构分析 §19.5）：Host 全局当前 active locale， 随 dozerd 重启保留，默认值来自系统语言探测兜底 en"]
   end
 
   subgraph storage_mod["storage/（新增：核心库）"]
@@ -436,11 +438,11 @@ flowchart LR
   legacy_mod -.->|"迁移进行中，§11.5 不批量搬"| storage_mod
 
   class sv_main,sv_server,sv_registry,pj_projects,ag_session,ag_headless,ag_default,ag_ring existing
-  class ag_store,ps_manifest,ps_handshake,ps_lifecycle,ps_heartbeat,ps_surface,wt_manager,wt_git,wt_reconcile,wt_owner,wk_goal,wk_task,wk_execution,wk_delivery,wk_check,wk_artifact,wk_decision,wk_acceptance,wk_state,wk_event,vr_runner,vr_command,vr_registry,bp_engine,bp_threshold,pm_capability,pm_permission,pm_scope,pm_broker,pm_secret,eb_bus,eb_sub,eb_backpressure,cx_project,cx_memory,cx_history,st_core,ps_storage,ps_job,ps_file,ps_git,ps_notify,ps_gateway_ctrl newcrate
+  class ag_store,ps_manifest,ps_handshake,ps_lifecycle,ps_heartbeat,ps_surface,wt_manager,wt_git,wt_reconcile,wt_owner,wk_goal,wk_task,wk_execution,wk_delivery,wk_check,wk_artifact,wk_decision,wk_acceptance,wk_state,wk_event,vr_runner,vr_command,vr_registry,bp_engine,bp_threshold,pm_capability,pm_permission,pm_scope,pm_broker,pm_secret,eb_bus,eb_sub,eb_backpressure,cx_project,cx_memory,cx_history,st_core,ps_storage,ps_job,ps_file,ps_git,ps_notify,ps_gateway_ctrl,ps_locale newcrate
   class lg_memory,lg_todo,lg_codehealth,lg_bookmarks,lg_summary,lg_transcripts,lg_ide,lg_poller legacy
-  classDef existing fill:#eef3ff,stroke:#5b7fd1,color:#1c1b17;
-  classDef newcrate fill:#eafbf2,stroke:#1f7a52,color:#1c1b17;
-  classDef legacy fill:#f8ece2,stroke:#a2481b,color:#1c1b17,stroke-dasharray: 3 2;
+  classDef existing fill:#bdf3d6,stroke:#0f7a45,color:#1c1b17;
+  classDef newcrate fill:#cfe2ff,stroke:#1d4ed8,color:#1c1b17;
+  classDef legacy fill:#ffc9b3,stroke:#9c2b0e,color:#1c1b17,stroke-dasharray: 3 2;
 ```
 
 **Workspace 对象的裁决（回应审核意见 3.1，明确说明而非无声省略）：** 架构分析 §16.2 把
@@ -466,6 +468,7 @@ flowchart LR
     pr_version["version.rs：协议版本协商"]
     pr_envelope["plugin_protocol.rs：manifest schema / 请求响应 envelope / 错误码"]
     pr_namespace["mcp_namespace.rs：MCP 工具命名空间"]
+    pr_i18n["i18n.rs（新增，架构分析 §19）：manifest [i18n] schema 解析、 title_key 按插件 id 命名空间化查表、fallback 规则； 只管人看 UI 文案，不覆盖 MCP tool/resource 描述"]
   end
 
   subgraph proto_permission["权限模型（架构分析 §9）"]
@@ -559,8 +562,8 @@ flowchart LR
 
   class mcp_main,mcp_install,mcp_server_rs existing
   class gw_registry,gw_identity,gw_audit,gw_timeout,gw_plugin_client,gw_offline,daemon_ctrl,plugin_ep newcrate
-  classDef existing fill:#eef3ff,stroke:#5b7fd1,color:#1c1b17;
-  classDef newcrate fill:#eafbf2,stroke:#1f7a52,color:#1c1b17;
+  classDef existing fill:#bdf3d6,stroke:#0f7a45,color:#1c1b17;
+  classDef newcrate fill:#cfe2ff,stroke:#1d4ed8,color:#1c1b17;
 ```
 
 **运行时调用顺序**（与审核意见 2.4 建议一致）：`Agent → dozer-mcp → dozerd`（身份/授权/工具
@@ -896,8 +899,8 @@ flowchart LR
 
   class ms_overview,ms_goal newcrate
   class kernel_ref existing
-  classDef newcrate fill:#eafbf2,stroke:#1f7a52,color:#1c1b17;
-  classDef existing fill:#eef3ff,stroke:#5b7fd1,color:#1c1b17;
+  classDef newcrate fill:#cfe2ff,stroke:#1d4ed8,color:#1c1b17;
+  classDef existing fill:#bdf3d6,stroke:#0f7a45,color:#1c1b17;
 ```
 
 ---
@@ -922,8 +925,8 @@ flowchart LR
 
   class dv_view,dv_evidence,dv_actions newcrate
   class kernel_ref2 existing
-  classDef newcrate fill:#eafbf2,stroke:#1f7a52,color:#1c1b17;
-  classDef existing fill:#eef3ff,stroke:#5b7fd1,color:#1c1b17;
+  classDef newcrate fill:#cfe2ff,stroke:#1d4ed8,color:#1c1b17;
+  classDef existing fill:#bdf3d6,stroke:#0f7a45,color:#1c1b17;
 ```
 
 ---
@@ -946,8 +949,8 @@ flowchart LR
 
   class di_inbox,di_card newcrate
   class decision_ref existing
-  classDef newcrate fill:#eafbf2,stroke:#1f7a52,color:#1c1b17;
-  classDef existing fill:#eef3ff,stroke:#5b7fd1,color:#1c1b17;
+  classDef newcrate fill:#cfe2ff,stroke:#1d4ed8,color:#1c1b17;
+  classDef existing fill:#bdf3d6,stroke:#0f7a45,color:#1c1b17;
 ```
 
 ---
@@ -973,8 +976,8 @@ flowchart LR
 
   class rn_view,rn_detail newcrate
   class session_ref existing
-  classDef newcrate fill:#eafbf2,stroke:#1f7a52,color:#1c1b17;
-  classDef existing fill:#eef3ff,stroke:#5b7fd1,color:#1c1b17;
+  classDef newcrate fill:#cfe2ff,stroke:#1d4ed8,color:#1c1b17;
+  classDef existing fill:#bdf3d6,stroke:#0f7a45,color:#1c1b17;
 ```
 
 ---
@@ -1030,7 +1033,7 @@ flowchart LR
   td_mcp -->|"调用"| task_api["dozerd：workflow_kernel/task.rs（唯一事实源，见 G 节）"]
 
   class task_api existing
-  classDef existing fill:#eef3ff,stroke:#5b7fd1,color:#1c1b17;
+  classDef existing fill:#bdf3d6,stroke:#0f7a45,color:#1c1b17;
 ```
 
 ---
@@ -1092,8 +1095,8 @@ flowchart LR
 
   class ch_manifest_file,ch_main,ch_rpc,ch_mcp,ch_job,ch_bridge,ch_storage,ch_check,ch_ui_entry,ch_ui_assets newcrate
   class codehealth_core_ref existing
-  classDef existing fill:#eef3ff,stroke:#5b7fd1,color:#1c1b17;
-  classDef newcrate fill:#eafbf2,stroke:#1f7a52,color:#1c1b17;
+  classDef existing fill:#bdf3d6,stroke:#0f7a45,color:#1c1b17;
+  classDef newcrate fill:#cfe2ff,stroke:#1d4ed8,color:#1c1b17;
 ```
 
 ---

@@ -195,6 +195,7 @@ Community Plugins
 7. 同一插件可在完整 Dozer、Plugin Dev Host 和独立 App 中复用。
 8. Agent 可以发现并组合安装后的插件能力。
 9. 核心 Host 长期保持小、稳定，新增领域功能通常不再修改 Host。
+10. Manifest 与 Contribution Registry 从 Phase 1 起就支持声明式 UI 文案翻译，Host 与官方插件至少覆盖英语、简体中文（§19）。
 
 ### 3.2 非目标
 
@@ -309,7 +310,7 @@ Plugin Runtime 负责：
 - Host 不重新链接。
 - 插件热重启。
 - 崩溃隔离。
-- 多语言实现。
+- 多语言实现（插件可用不同编程语言开发，与 §19 讨论的自然语言 UI 多语言是两回事）。
 - 独立版本和依赖树。
 - 安装后启用/禁用。
 
@@ -464,6 +465,11 @@ panels = ["code-health"]
 commands = ["code-health.scan"]
 mcp_tools = true
 
+[i18n]
+default_locale = "en"
+supported_locales = ["en", "zh-CN"]
+strings_dir = "locales/"
+
 [permissions]
 project_read = true
 project_write = false
@@ -472,6 +478,11 @@ process_spawn = false
 terminal = false
 secrets = []
 ```
+
+`[i18n]` 是可选字段（§19）：`strings_dir` 下每个 locale 一个扁平 key-value 资源文件（如
+`locales/en.json`、`locales/zh-CN.json`），供 `contributes` 里的 Panel/Command 标题在
+`title_key` 查不到或插件完全不提供 `[i18n]` 时退回字面量 `title_fallback`，不阻塞插件正常
+显示。
 
 ### 7.5 WebView 嵌入的已知难点
 
@@ -775,7 +786,8 @@ SSH 最后迁移，用来压力测试：
 | 进程化后状态分散 | 恢复和一致性复杂 | Host 管生命周期，插件拥有领域状态，事件带 revision |
 | 核心 daemon 继续领域膨胀 | 插件仍需修改内核 | namespaced service/plugin-owned storage |
 | WebView 数量增长 | 内存和窗口层级问题 | Surface 池化、后台 suspend、上限和诊断面板 |
-| 多语言 SDK 行为不一致 | 难以支持和调试 | 线协议为真相源，SDK 只做薄封装，统一 conformance tests |
+| 多语言 SDK 行为不一致（编程语言，非 §19 的自然语言 UI 多语言） | 难以支持和调试 | 线协议为真相源，SDK 只做薄封装，统一 conformance tests |
+| UI 文案翻译遗漏/不同步（§19 自然语言 i18n） | 中英文案缺失或过期，用户体验割裂 | 构建期校验 `default_locale` 与 `supported_locales` 的 key 集合是否对齐；缺失 key 一律退回 `title_fallback`，不空白 |
 | 插件权限虚设 | 用户资产和 Secret 风险 | Host 统一授权/审计，Bridge 默认拒绝 |
 | 原生动态库路线 | ABI、崩溃与供应链风险 | 第三方默认进程外，不承诺稳定 Rust ABI |
 | Host 自己实现容器能力 | 微内核膨胀、平台维护失控 | 只定义 Execution Environment，通过 provider 使用外部运行时 |
@@ -888,6 +900,11 @@ Rail 与顶层 Message 长期不应继续依赖硬编码的 `PanelKind` 穷举�
 - Artifact renderer。
 
 Host 以稳定的 `ContributionId` 管理贡献点，官方功能也通过同一机制注册，避免形成“社区插件一套、内建功能另一套”的双轨平台。
+
+Panel/Page/Tab/Command 的展示名不是裸字符串，而是 `title_key`（可选，指向插件 `[i18n]`
+资源里的 key）+ `title_fallback`（必填字面量）的结构（§19）：Host 渲染时按当前 locale 查
+`title_key`，查不到（或插件没提供 `[i18n]`）就退回 `title_fallback`，保证任何插件都能正常
+显示，只是不一定跟着切语言。
 
 ### 16.4 Host 横向运行能力
 
@@ -1343,7 +1360,76 @@ Project
 
 Agent/Worktree、Workflow Kernel 与 Delivery/Acceptance 在前期应视为平台能力；边界稳定后再判断其哪些 UI 或策略部分适合插件化。
 
-## 19. 核心战略总结
+## 19. 多语言（i18n）策略（2026-09-26 追加）
+
+产品明确要求 V2 至少支持英语、简体中文两种界面语言。这里的“多语言”专指**人看的 UI 文案**，
+与 §5.3、§13 提到的“插件可用多种编程语言实现”是两个不相关的概念，本节起统一按此含义使用。
+
+### 19.1 范围裁决
+
+覆盖：
+
+- Host chrome 文案（rail、topbar、settings 等 Micro Host 自带界面）。
+- 官方插件迁移插件化时的 UI 文案（面板标题、按钮、提示、错误信息）。
+- Command Palette 等 Contribution Registry 暴露给用户的命令名。
+- 第三方插件 Manifest 契约里“如何声明翻译”这一层（是否实际提供翻译由插件作者自行决定）。
+
+不覆盖：
+
+- MCP tool/resource/prompt 的 `description` 字段——面向 Agent/LLM，固定英文，翻译反而降低
+  调用准确率。
+- Agent 可读的日志、审计记录、Execution 事件。
+- 插件向 `dozerd` 上报的结构化错误码本身（错误码不翻译，只有把错误码渲染成人看提示文本的
+  那一层才走 i18n）。
+
+### 19.2 技术方案取舍
+
+| 方案 | 优点 | 缺点 |
+|------|------|------|
+| **扁平 key-value 资源文件（采纳）** | 任何语言（Rust/JS/外部进程）都能读；零构建步骤；契合当前 UI 文案以短标签为主的现状 | 无内置复数/性别语法，遇到计数敏感文案需手写规则 |
+| Mozilla Fluent（`.ftl`） | 复数、变量、性别等语言学特性完备；Rust（`fluent-bundle`）与 JS（`@fluent/bundle`）都有成熟实现 | 给 Host、SDK、每个插件生态引入新概念和依赖，对当前需求是过度设计 |
+| gettext（`.po`/`.mo`） | 工具链和翻译平台生态最成熟 | 更适合长文档/源码字符串抽取，不贴合“插件 manifest 声明式提供字符串表”的模式，还要求编译步骤 |
+
+采纳扁平 key-value：每个 locale 一个资源文件（`en.json`/`zh-CN.json`），值支持 `{var}` 占位符
+替换，不做复数语法。YAGNI——真出现复数/性别这类需求，再针对具体 key 升级实现，不影响协议
+"key → string" 的外部形状。
+
+### 19.3 Manifest 契约（对应 §7.4 示例）
+
+`[i18n]` 为可选字段：`default_locale`、`supported_locales`、`strings_dir`。`strings_dir`
+下每个 supported locale 一个扁平 JSON 资源文件。Host 与官方插件必须提供 `en` + `zh-CN`；
+第三方插件可以完全不提供 `[i18n]`，此时所有展示名退回各自的 `title_fallback` 字面量。
+
+### 19.4 Contribution Registry 集成（对应 §16.3）
+
+Panel/Page/Tab/Command 的展示名从裸字符串改为 `title_key`（可选）+ `title_fallback`
+（必填）。解析顺序：当前 locale 的 `title_key` → `default_locale` 的 `title_key` →
+`title_fallback`。任何一层缺失都不会导致 UI 空白。
+
+### 19.5 运行时归属
+
+Key 解析器放在协议契约层（对应静态结构图 D 节 `dozer-protocol`），因为 `dozerd`、
+`dozer-host`、`dozer-mcp` 与插件 SDK 都要用同一套解析规则；key 按插件 id 命名空间化，避免
+不同插件的 key 冲突。Host 自己只持有一份全局状态——“当前 active locale”，存在 `dozerd`
+Platform Services 侧（随 Host 重启保留），Settings 面板可切换，默认值来自系统语言探测，
+兜底 `en`。
+
+### 19.6 各 Surface 的实现边界（对应 §7.3）
+
+- **Declarative / Host 自身 UI**：直接调用协议契约层提供的 `t(key)` 查表。
+- **WebView（Surface B）**：Host 通过既有 envelope 机制告知当前 locale 及其变化，翻译资源
+  由插件自己的前端 bundle 加载渲染，Host 不替插件注入译文。
+- **External（Surface C）**：Host 通过启动参数/环境变量传递 locale，具体如何实现完全交给
+  插件自己，不强制统一运行时（与 Surface C“Host 不干预内部实现”的既有裁决一致）。
+- **None（Surface D）**：无 UI，不涉及。
+
+### 19.7 阶段落点
+
+从 Phase 1 起，Manifest schema 与 Contribution Registry 的 `title_key`/`title_fallback`
+结构就必须落地，避免后续因为“协议里没留字段”而做破坏性变更；具体翻译内容和全量 UI 覆盖可以
+晚于 Phase 1 逐步补齐，不阻塞其他阶段推进。
+
+## 20. 核心战略总结
 
 Dozer V2 的两条战略互相强化：
 
