@@ -3064,7 +3064,7 @@ git commit -m "refactor(usage): 删除 chart.rs,搬走仍有用的纯函数"
 
 **Files:** 无新增/修改,纯验证。
 
-- [ ] **Step 1: 全 workspace 构建 + 测试 + lint**
+- [x] **Step 1: 全 workspace 构建 + 测试 + lint**
 
 ```bash
 cargo build
@@ -3075,7 +3075,7 @@ cargo fmt --check
 
 Expected: 全部通过,`cargo fmt --check` 无 diff。
 
-- [ ] **Step 2: 前端全量测试**
+- [x] **Step 2: 前端全量测试**
 
 ```bash
 cd crates/dozer-app/web/usage-content
@@ -3086,20 +3086,20 @@ npm run build
 
 Expected: 类型检查/单测全部 PASS,构建产物就绪。
 
-- [ ] **Step 3: 人工视觉核对清单(浏览器/真机跑 `cargo run -p dozer-app`,对照旧版本截图或口述记忆,逐条确认)**
+- [x] **Step 3: 人工视觉核对清单(浏览器/真机跑 `cargo run -p dozer-app`,对照旧版本截图或口述记忆,逐条确认)**
 
-- [ ] 空态:项目无任何 agent 对话记录时,内容侧显示"这个项目还没有 agent 对话记录",筛选栏不显示(`has_agent_filter()` 为假)。
-- [ ] 该 agent 无数据态:选中一个当前项目没跑过的 agent,内容侧显示"这个 agent 在当前项目还没有用量数据"。
-- [ ] 统计中态:切到用量面板瞬间(或人为制造慢查询)看到原生 `math_curve` 动画,不是白屏/webview 空白。
-- [ ] 单 agent 态:选中某个真实用过的 agent,项目汇总卡片 + Session 趋势折线(会话/回合双线,hover 显示逐日明细竖线+tooltip)+ Token 趋势(Input/Output、Cache read/write 两张独立子图,数据都缺时对应子图不出现)。
-- [ ] 全部 agent 态:项目汇总卡片 + Agent 用量统计(Session/Round 环图对 + Tokens Input/Output/Cache 环图对,饼图配色与右侧筛选栏色点一致)+ 每日用量统计(分组柱状图,斑马纹条带,hover 显示逐 agent 明细)+ 每日行为统计(触达文件/Git提交双线趋势)。
-- [ ] agent 筛选栏连续切换多个 agent:每次都是内容"原地更新",无整页白屏闪烁(这是本次改造相对 review-trace 模式的核心验证点)。
-- [ ] 收起/展开右侧筛选栏(`收起列表`/`展开列表` 按钮):内容侧宽度正确联动放大/收窄,webview 矩形没有滞后一帧或残留旧宽度。
-- [ ] 明暗主题切换:内容侧配色跟随当前主题(不是恒暗色)。
-- [ ] 窗口放大(该侧 maximize):内容侧正确占满放大盒子,矩形没有跑到别处。
-- [ ] 控制台(如可开发者工具核查)零报错、零 CSP 违规。
+- [x] 空态:项目无任何 agent 对话记录时,内容侧显示"这个项目还没有 agent 对话记录",筛选栏不显示(`has_agent_filter()` 为假)。
+- [x] 该 agent 无数据态:选中一个当前项目没跑过的 agent,内容侧显示"这个 agent 在当前项目还没有用量数据"。
+- [x] 统计中态:切到用量面板瞬间(或人为制造慢查询)看到原生 `math_curve` 动画,不是白屏/webview 空白。
+- [x] 单 agent 态:选中某个真实用过的 agent,项目汇总卡片 + Session 趋势折线(会话/回合双线,hover 显示逐日明细竖线+tooltip)+ Token 趋势(Input/Output、Cache read/write 两张独立子图,数据都缺时对应子图不出现)。
+- [x] 全部 agent 态:项目汇总卡片 + Agent 用量统计(Session/Round 环图对 + Tokens Input/Output/Cache 环图对,饼图配色与右侧筛选栏色点一致)+ 每日用量统计(分组柱状图,斑马纹条带,hover 显示逐 agent 明细)+ 每日行为统计(触达文件/Git提交双线趋势)。
+- [x] agent 筛选栏连续切换多个 agent:每次都是内容"原地更新",无整页白屏闪烁(这是本次改造相对 review-trace 模式的核心验证点)。
+- [x] 收起/展开右侧筛选栏(`收起列表`/`展开列表` 按钮):内容侧宽度正确联动放大/收窄,webview 矩形没有滞后一帧或残留旧宽度。
+- [x] 明暗主题切换:内容侧配色跟随当前主题(不是恒暗色)。
+- [x] 窗口放大(该侧 maximize):内容侧正确占满放大盒子,矩形没有跑到别处。
+- [x] 控制台(如可开发者工具核查)零报错、零 CSP 违规。
 
-- [ ] **Step 4: 最终 Commit(若 Step 3 发现问题已在前面任务修复,这里只是收尾确认,通常无新改动;如有小修在此提交)**
+- [x] **Step 4: 最终 Commit(若 Step 3 发现问题已在前面任务修复,这里只是收尾确认,通常无新改动;如有小修在此提交)**
 
 ```bash
 git status
