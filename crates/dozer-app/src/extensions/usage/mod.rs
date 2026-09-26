@@ -11,10 +11,12 @@ use std::path::PathBuf;
 
 mod aggregate;
 mod chart;
+mod protocol;
 mod view;
 
 pub(crate) use aggregate::*;
 pub(crate) use chart::*;
+pub(crate) use protocol::*;
 pub(crate) use view::*;
 
 /// 挂在每个 Workspace 上的 Usage 面板状态,对应现有 `Workspace` 上
