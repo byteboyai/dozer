@@ -7,7 +7,7 @@ use crate::projects::ProjectStore;
 use crate::session_summary::SessionSummaryStore;
 use crate::todo::TodoStore;
 use crate::transcripts::TranscriptStore;
-use dozer_core::protocol::{SessionSummaryPayload, SummaryStatus, TodoInfo, TurnRecord};
+use dozer_core::protocol::{TodoInfo, TurnRecord};
 
 /// 待处理判定:不新增标记字段,直接看该任务关联会话最新一条回合的
 /// `role`。没有任何回合(刚指派/从未处理过)、或最新一条是 `"human"`
@@ -27,7 +27,7 @@ pub fn needs_processing(turns: &[TurnRecord]) -> bool {
 /// 人类再次点"处理")决定。
 pub async fn process_task(
     todos: &TodoStore,
-    session_summaries: &SessionSummaryStore,
+    _session_summaries: &SessionSummaryStore,
     transcripts: &TranscriptStore,
     projects: &ProjectStore,
     todo: &TodoInfo,
@@ -50,18 +50,9 @@ pub async fn process_task(
             todos
                 .set_dispatch_session(todo.id, &minted)
                 .map_err(|e| e.to_string())?;
-            session_summaries
-                .record(&SessionSummaryPayload {
-                    session_id: minted.clone(),
-                    agent_kind: agent,
-                    conversation_id: Some(minted.clone()),
-                    title: truncate_title(&todo.text),
-                    summary: String::new(),
-                    status: SummaryStatus::AiGenerated,
-                    created_ts_ms: now_ms(),
-                    task_id: Some(todo.id),
-                })
-                .map_err(|e| e.to_string())?;
+            // 不再创建"空摘要 = AiGenerated"的占位行(spec 2026-09-26 第 7
+            // 节:Todo 创建时移除该语义)。task 关联由 `task_id` 字段独立保留,
+            // 真正的总结在实际回合完成后走统一队列。
             minted
         }
     };
@@ -111,15 +102,6 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
-}
-
-fn truncate_title(s: &str) -> String {
-    if s.chars().count() <= 80 {
-        s.to_string()
-    } else {
-        let head: String = s.chars().take(80).collect();
-        format!("{head}…")
-    }
 }
 
 #[cfg(test)]

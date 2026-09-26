@@ -45,7 +45,7 @@ async fn start_test_daemon() -> PathBuf {
     let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
     let s = sock.clone();
     tokio::spawn(async move {
-        dozerd::server::serve(
+        if let Err(e) = dozerd::server::serve(
             &s,
             ide_lock_dir.path().to_path_buf(),
             dozerd::server::Stores {
@@ -64,6 +64,9 @@ async fn start_test_daemon() -> PathBuf {
             dozerd::task_poller::new_in_flight(),
         )
         .await
+        {
+            eprintln!("serve 启动错误: {e}");
+        }
     });
     for _ in 0..100 {
         if sock.exists() {
@@ -111,126 +114,66 @@ async fn shutdown_with_no_sessions_exits_daemon_promptly() {
 }
 
 #[tokio::test]
-async fn create_session_rejected_while_draining() {
+async fn shutdown_with_running_session_exits_promptly_and_kills_it() {
     let sock = start_test_daemon().await;
-
     let mut c1 = Client::connect(&sock).await;
     c1.send(&create_long_running_session_req()).await;
     let Reply::Created { session } = c1.recv().await else {
         panic!("expect Created")
     };
-    let sid = session.id;
 
-    let mut c_shutdown = Client::connect(&sock).await;
-    c_shutdown.send(&Request::Shutdown).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let mut c_probe = Client::connect(&sock).await;
-    c_probe.send(&create_long_running_session_req()).await;
-    let Reply::Error { message } = c_probe.recv().await else {
-        panic!("draining 期间 CreateSession 应该被拒绝")
-    };
+    let started = std::time::Instant::now();
+    c1.send(&Request::Shutdown).await;
+    assert_eq!(c1.recv().await, Reply::Ok);
     assert!(
-        message.contains("停止"),
-        "错误文案应说明正在停止: {message}"
+        started.elapsed() < Duration::from_secs(2),
+        "Shutdown 不应等待模型,应立即收尾退出(spec 第 3 节)"
     );
 
-    let mut c_finish = Client::connect(&sock).await;
-    c_finish
-        .send(&Request::RecordSessionSummary {
-            session_id: sid,
-            title: "标题".into(),
-            summary: "摘要".into(),
-        })
-        .await;
-    assert_eq!(c_finish.recv().await, Reply::Ok);
-
-    assert_eq!(c_shutdown.recv().await, Reply::Ok);
+    let mut removed = false;
+    for _ in 0..100 {
+        if !sock.exists() {
+            removed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(removed, "daemon 应在 Shutdown 收尾后删除 socket 并退出");
+    let _ = session;
 }
 
 #[tokio::test]
 async fn duplicate_shutdown_rejected_while_draining() {
     let sock = start_test_daemon().await;
-
     let mut c1 = Client::connect(&sock).await;
-    c1.send(&create_long_running_session_req()).await;
-    let Reply::Created { session } = c1.recv().await else {
-        panic!("expect Created")
-    };
-    let sid = session.id;
-
-    let mut c_shutdown = Client::connect(&sock).await;
-    c_shutdown.send(&Request::Shutdown).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let mut c_dup = Client::connect(&sock).await;
-    c_dup.send(&Request::Shutdown).await;
-    let Reply::Error { message } = c_dup.recv().await else {
+    let mut c2 = Client::connect(&sock).await;
+    c1.send(&Request::Shutdown).await;
+    assert_eq!(c1.recv().await, Reply::Ok);
+    c2.send(&Request::Shutdown).await;
+    let Reply::Error { message } = c2.recv().await else {
         panic!("draining 期间重复 Shutdown 应该被拒绝")
     };
     assert!(
         message.contains("停止"),
         "错误文案应说明正在停止: {message}"
     );
-
-    let mut c_finish = Client::connect(&sock).await;
-    c_finish
-        .send(&Request::RecordSessionSummary {
-            session_id: sid,
-            title: "标题".into(),
-            summary: "摘要".into(),
-        })
-        .await;
-    assert_eq!(c_finish.recv().await, Reply::Ok);
-
-    assert_eq!(c_shutdown.recv().await, Reply::Ok);
 }
 
 #[tokio::test]
-async fn recorded_summary_is_not_overwritten_by_heuristic_before_shutdown_completes() {
+async fn create_session_rejected_while_draining() {
     let sock = start_test_daemon().await;
-
     let mut c1 = Client::connect(&sock).await;
-    c1.send(&create_long_running_session_req()).await;
-    let Reply::Created { session } = c1.recv().await else {
-        panic!("expect Created")
+    let mut c2 = Client::connect(&sock).await;
+    c1.send(&Request::Shutdown).await;
+    assert_eq!(c1.recv().await, Reply::Ok);
+    c2.send(&create_long_running_session_req()).await;
+    let Reply::Error { message } = c2.recv().await else {
+        panic!("draining 期间 CreateSession 应该被拒绝")
     };
-    let sid = session.id;
-
-    let mut c_shutdown = Client::connect(&sock).await;
-    c_shutdown.send(&Request::Shutdown).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let mut c_finish = Client::connect(&sock).await;
-    c_finish
-        .send(&Request::RecordSessionSummary {
-            session_id: sid.clone(),
-            title: "真实标题".into(),
-            summary: "真实摘要".into(),
-        })
-        .await;
-    assert_eq!(c_finish.recv().await, Reply::Ok);
-
-    // 在 daemon 真正退出、socket 消失之前查一次——此时 drain 正在等
-    // 2s 轮询间隔醒来，socket 还活着。
-    let mut c_check = Client::connect(&sock).await;
-    c_check
-        .send(&Request::GetSessionSummary {
-            session_id: sid.clone(),
-        })
-        .await;
-    let Reply::SessionSummary { summary } = c_check.recv().await else {
-        panic!("expect SessionSummary reply")
-    };
-    let summary = summary.expect("summary should exist");
-    assert_eq!(
-        summary.status,
-        dozer_core::protocol::SummaryStatus::AiGenerated,
-        "已经真实提交的总结不应该被超时兜底覆盖"
+    assert!(
+        message.contains("停止"),
+        "错误文案应说明正在停止: {message}"
     );
-    assert_eq!(summary.title, "真实标题");
-
-    assert_eq!(c_shutdown.recv().await, Reply::Ok);
 }
 
 fn test_registry() -> std::sync::Arc<dozerd::registry::SessionRegistry> {

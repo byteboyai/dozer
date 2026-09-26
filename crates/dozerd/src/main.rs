@@ -118,6 +118,34 @@ async fn main() -> Result<()> {
         tracing::info!(count = files.len(), "启动回填:发现历史 transcript 文件");
         dozerd::backfill::backfill_all(&transcripts, files);
     }
+    // 总结调度服务 + worker:全局并发 1,串行消费持久化队列;启动时先把上次
+    // 进程中途退出遗留的 running 任务归位 queued。
+    let summary_service = std::sync::Arc::new(dozerd::summary_service::SummaryService {
+        jobs: summary_jobs.clone(),
+        transcripts: transcripts.clone(),
+        session_summaries: session_summaries.clone(),
+        scratch_root: dozer_core::paths::state_dir().join("summary-scratch"),
+    });
+    if let Err(e) = summary_service.recover_on_startup() {
+        tracing::warn!(error = %e, "总结任务重启恢复失败");
+    }
+    let summary_shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let service = summary_service.clone();
+        let flag = summary_shutdown.clone();
+        let scratch_root = dozer_core::paths::state_dir().join("summary-scratch");
+        tokio::spawn(async move {
+            service
+                .run_worker(flag, move |agent, config| {
+                    Box::new(dozerd::summary_pipeline::ProviderSummarizer {
+                        agent,
+                        config,
+                        cwd: scratch_root.clone(),
+                    })
+                })
+                .await;
+        });
+    }
     let serve = dozerd::server::serve(
         &socket,
         dozerd::ide_bridge::lock_dir(),
@@ -137,9 +165,13 @@ async fn main() -> Result<()> {
         in_flight,
     );
     tokio::select! {
-        r = serve => r?,
+        r = serve => {
+            summary_shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+            r?
+        }
         _ = tokio::signal::ctrl_c() => {
             tracing::info!("收到 Ctrl-C，退出");
+            summary_shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
             let _ = std::fs::remove_file(&socket);
         }
     }

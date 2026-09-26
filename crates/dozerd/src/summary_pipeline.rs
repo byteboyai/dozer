@@ -306,32 +306,34 @@ fn parse_final(stdout: &str) -> Result<FinalSummary, PipelineError> {
 
 /// 一次"抽取/归并"调用的抽象:注入 fake runner 可测控制流,真实实现调
 /// `summary_provider::invoke_summary_parts`。入参 instruction(指令)+
-/// data(数据),返回模型最终 stdout。
-pub trait Summarizer {
+/// data(数据),返回模型最终 stdout。future 为 `'static`(owned),trait 为
+/// `Send`,让 `Box<dyn Summarizer>` 能跨线程在 worker 里持有。
+pub trait Summarizer: Send {
     fn call(
         &mut self,
         instruction: &str,
         data: &str,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<String, PipelineError>> + Send + '_>,
+        Box<dyn std::future::Future<Output = Result<String, PipelineError>> + Send + 'static>,
     >;
 }
 
 /// 真实 summarizer:经 `summary_provider` 隔离调用,把 `SummaryInvokeError`
-/// 透传成 `PipelineError::Invoke`。
-pub struct ProviderSummarizer<'a> {
+/// 透传成 `PipelineError::Invoke`。`config` 持有 owned 副本,方便 worker 工厂
+/// 闭包返回 'static 的 trait 对象。
+pub struct ProviderSummarizer {
     pub agent: dozer_core::protocol::AgentKind,
-    pub config: &'a SummaryConfig,
+    pub config: SummaryConfig,
     pub cwd: std::path::PathBuf,
 }
 
-impl Summarizer for ProviderSummarizer<'_> {
+impl Summarizer for ProviderSummarizer {
     fn call(
         &mut self,
         instruction: &str,
         data: &str,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<String, PipelineError>> + Send + '_>,
+        Box<dyn std::future::Future<Output = Result<String, PipelineError>> + Send + 'static>,
     > {
         let agent = self.agent;
         let config = self.config.clone();
@@ -576,7 +578,7 @@ mod tests {
             instruction: &str,
             _data: &str,
         ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<String, PipelineError>> + Send + '_>,
+            Box<dyn std::future::Future<Output = Result<String, PipelineError>> + Send + 'static>,
         > {
             self.calls.push(instruction.to_string());
             let out = if instruction.contains("合并") {

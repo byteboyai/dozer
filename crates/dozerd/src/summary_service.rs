@@ -346,7 +346,7 @@ impl SummaryService {
         shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
         make_summarizer: F,
     ) where
-        F: Fn(AgentKind, &SummaryConfig) -> Box<dyn Summarizer + Send>,
+        F: Fn(AgentKind, SummaryConfig) -> Box<dyn Summarizer + Send>,
     {
         loop {
             if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
@@ -371,7 +371,7 @@ impl SummaryService {
                                 continue;
                             }
                         };
-                        let mut summarizer = make_summarizer(job.provider, &config);
+                        let mut summarizer = make_summarizer(job.provider, config.clone());
                         let _ = self.process_job(job_id, &config, summarizer.as_mut()).await;
                         self.bump_batch(job_id);
                     }
