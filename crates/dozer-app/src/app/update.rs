@@ -2935,8 +2935,12 @@ impl App {
                 // 显示"未总结"直到用户重开项目 tab 或触发别的回合结束刷新。
                 let refresh_conversations = matches!(
                     &msg,
-                    project::Message::SummaryBackfillProgress(_, completed, total)
-                        if completed >= total
+                    project::Message::SummaryBackfillProgress(
+                        _,
+                        completed,
+                        total,
+                        ..
+                    ) if completed >= total
                 );
                 let client = self.client.clone();
                 let handle = self.handle.clone();

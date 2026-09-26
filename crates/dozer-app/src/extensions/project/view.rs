@@ -491,10 +491,18 @@ fn scaffold_backfill_row(
             byteui::theme::color::current().green,
             "无需补".to_string(),
         ),
+        BackfillStepState::Done(p) if p.failed > 0 => (
+            "!".to_string(),
+            byteui::theme::color::current().red,
+            format!(
+                "成功 {} / 失败 {} / 跳过 {}",
+                p.succeeded, p.failed, p.skipped
+            ),
+        ),
         BackfillStepState::Done(p) => (
             "✓".to_string(),
             byteui::theme::color::current().green,
-            format!("{}/{}", p.completed, p.total),
+            format!("成功 {} / 跳过 {}", p.succeeded, p.skipped),
         ),
     };
     row![

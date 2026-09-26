@@ -29,11 +29,17 @@ pub enum ScaffoldStepState {
 pub struct BackfillProgress {
     pub completed: u32,
     pub total: u32,
+    /// 成功 / 失败 / 跳过计数(spec 2026-09-26 第 8 节:修复项目显示
+    /// "成功 X / 失败 Y / 跳过 Z")。旧 `completed/total` 仍作为"处理完
+    /// N/M"的总进度保留。
+    pub succeeded: u32,
+    pub failed: u32,
+    pub skipped: u32,
 }
 
-/// "补总结"聚合进度行的状态。`Done` 不区分成功/失败——补总结内部每条都有
-/// 自己的降级路径(headless 失败就走启发式,见 `dozerd` 侧),从这个面板的
-/// 视角看永远是"处理完了 N/M 条",没有整体失败态。
+/// "补总结"聚合进度行的状态。`Done` 现在区分成功/失败/跳过——不再像旧版
+/// 那样"每条都有降级路径、永远算处理完"(新版失败不写启发式,见 dozerd 侧
+/// summary_service)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackfillStepState {
     Pending,
@@ -388,9 +394,11 @@ pub enum Message {
     TranscriptBackfillStarted(i64),
     /// 同上,携带终态。
     TranscriptBackfillFinished(i64, scaffold::ScaffoldStepResult),
-    /// 补总结轮询到新的 `(completed, total)`。`completed >= total` 时
-    /// `update()` 把 `backfill` 置为 `Done`,否则 `Running`。
-    SummaryBackfillProgress(i64, u32, u32),
+    /// 补总结轮询到新的进度:携带 completed/total/succeeded/failed/skipped
+    /// (新版 V2 批次计数;completed 是 succeeded+failed+skipped+cancelled 的
+    /// 终态数)。completed 追平 total 时 update() 把 backfill 置为 Done。
+    #[allow(clippy::type_complexity)]
+    SummaryBackfillProgress(i64, u32, u32, u32, u32, u32),
     /// 弹窗"关闭"按钮(全部完成才可点)。
     ScaffoldPopupClose,
     /// 共享记忆列表拉取结果。
@@ -1095,7 +1103,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         update(
             &mut ws,
-            Message::SummaryBackfillProgress(1, 2, 5),
+            Message::SummaryBackfillProgress(1, 2, 5, 2, 0, 0),
             1,
             "名字",
             &test_repo_path(),
@@ -1107,13 +1115,16 @@ mod tests {
             ws.scaffold_run.as_ref().unwrap().backfill,
             BackfillStepState::Running(BackfillProgress {
                 completed: 2,
-                total: 5
+                total: 5,
+                succeeded: 2,
+                failed: 0,
+                skipped: 0,
             })
         );
 
         update(
             &mut ws,
-            Message::SummaryBackfillProgress(1, 5, 5),
+            Message::SummaryBackfillProgress(1, 5, 5, 5, 0, 0),
             1,
             "名字",
             &test_repo_path(),
@@ -1125,7 +1136,10 @@ mod tests {
             ws.scaffold_run.as_ref().unwrap().backfill,
             BackfillStepState::Done(BackfillProgress {
                 completed: 5,
-                total: 5
+                total: 5,
+                succeeded: 5,
+                failed: 0,
+                skipped: 0,
             })
         );
     }
@@ -1137,7 +1151,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         update(
             &mut ws,
-            Message::SummaryBackfillProgress(1, 0, 0),
+            Message::SummaryBackfillProgress(1, 0, 0, 0, 0, 0),
             1,
             "名字",
             &test_repo_path(),
@@ -1149,7 +1163,10 @@ mod tests {
             ws.scaffold_run.as_ref().unwrap().backfill,
             BackfillStepState::Done(BackfillProgress {
                 completed: 0,
-                total: 0
+                total: 0,
+                succeeded: 0,
+                failed: 0,
+                skipped: 0,
             })
         );
     }
@@ -1182,6 +1199,9 @@ mod tests {
         run.backfill = BackfillStepState::Done(BackfillProgress {
             completed: 0,
             total: 0,
+            succeeded: 0,
+            failed: 0,
+            skipped: 0,
         });
         ws.scaffold_run = Some(run);
         let rt = tokio::runtime::Runtime::new().unwrap();

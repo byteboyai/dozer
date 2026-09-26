@@ -193,9 +193,15 @@ pub fn update(
                 }
             }
         }
-        Message::SummaryBackfillProgress(_, completed, total) => {
+        Message::SummaryBackfillProgress(_, completed, total, succeeded, failed, skipped) => {
             if let Some(run) = &mut ws_state.scaffold_run {
-                let progress = BackfillProgress { completed, total };
+                let progress = BackfillProgress {
+                    completed,
+                    total,
+                    succeeded,
+                    failed,
+                    skipped,
+                };
                 run.backfill = if completed >= total {
                     BackfillStepState::Done(progress)
                 } else {
@@ -451,24 +457,45 @@ pub fn spawn_repair_run(
             backfill_result,
         ));
 
-        if let Err(e) = client.backfill_session_summaries(&cwd).await {
-            tracing::warn!(error = %e, "补总结请求发送失败,视为无需补");
-            emit(Message::SummaryBackfillProgress(project_id, 0, 0));
-            return;
-        }
+        // 总结步骤改用 V2 批次协议:提交批次 → 轮询批次状态,展示成功/失败/
+        // 跳过计数,不再用旧 0/0 进度掩盖失败(spec 2026-09-26 A7)。
+        let (batch_id, total) = match client.submit_summary_batch(&cwd, None, None).await {
+            Ok(pair) => pair,
+            Err(e) => {
+                tracing::warn!(error = %e, "提交总结批次失败");
+                emit(Message::SummaryBackfillProgress(project_id, 0, 0, 0, 0, 0));
+                return;
+            }
+        };
         loop {
             tokio::time::sleep(SUMMARY_BACKFILL_POLL_INTERVAL).await;
-            match client.get_session_summary_backfill_status(&cwd).await {
-                Ok((completed, total)) => {
+            match client.get_summary_batch(batch_id).await {
+                Ok(Some(batch)) => {
+                    let completed = batch
+                        .total
+                        .saturating_sub(batch.queued)
+                        .saturating_sub(batch.running);
                     emit(Message::SummaryBackfillProgress(
-                        project_id, completed, total,
+                        project_id,
+                        completed,
+                        batch.total,
+                        batch.succeeded,
+                        batch.failed,
+                        batch.skipped,
                     ));
-                    if completed >= total {
+                    if batch.queued == 0 && batch.running == 0 {
                         break;
                     }
                 }
+                Ok(None) => {
+                    tracing::warn!(batch_id, "批次不存在,停止轮询");
+                    emit(Message::SummaryBackfillProgress(
+                        project_id, 0, total, 0, 0, 0,
+                    ));
+                    break;
+                }
                 Err(e) => {
-                    tracing::warn!(error = %e, "查询补总结进度失败,停止轮询");
+                    tracing::warn!(error = %e, "查询总结批次失败,停止轮询");
                     break;
                 }
             }
