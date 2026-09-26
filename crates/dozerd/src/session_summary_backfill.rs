@@ -227,7 +227,7 @@ mod tests {
         registry.start("/p", 1);
         let conv = ConversationSummary {
             conversation_id: "conv-1".into(),
-            agent: AgentKind::Codex, // headless_agent 对 Codex 返回 Unsupported
+            agent: AgentKind::Unknown, // headless_agent 对 Unknown 返回 Unsupported
             file_path: "/x".into(),
             title: "t".into(),
             first_ts: 1,
@@ -240,7 +240,7 @@ mod tests {
             transcripts,
             session_summaries.clone(),
             registry.clone(),
-            AgentKind::Codex, // headless_agent 对 Codex 返回 Unsupported → 必走启发式兜底
+            AgentKind::Unknown, // headless_agent 对 Unknown 返回 Unsupported → 必走启发式兜底
         )
         .await;
         assert_eq!(

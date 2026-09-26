@@ -114,15 +114,16 @@ fn build_transcript_text(turns: &[TurnRecord]) -> String {
 
 /// 该 `AgentKind` 对应的 headless CLI 裸命令名(供 PATH 解析用)。`None`
 /// 表示没有对应的 headless 适配器。
-fn bare_program_name(agent: AgentKind) -> Option<&'static str> {
+pub(crate) fn bare_program_name(agent: AgentKind) -> Option<&'static str> {
     match agent {
         AgentKind::Claude => Some("claude"),
         AgentKind::Codebuddy => Some("codebuddy"),
         AgentKind::Opencode => Some("opencode"),
+        AgentKind::Codex => Some("codex"),
         AgentKind::Goose => Some("goose"),
         AgentKind::Aider => Some("aider"),
         AgentKind::V8agent => Some("v8agent"),
-        AgentKind::Unknown | AgentKind::Codex => None,
+        AgentKind::Unknown => None,
     }
 }
 
@@ -143,7 +144,7 @@ fn bare_program_name(agent: AgentKind) -> Option<&'static str> {
 /// 加在哪一个里。解析失败(shell 起不来、`command -v` 找不到)时返回
 /// `None`,调用方回退到裸命令名,保留原有"确实没装就 spawn 失败降级"的
 /// 行为,不引入新的失败模式。
-async fn resolve_binary_path(bin: &str) -> Option<String> {
+pub(crate) async fn resolve_binary_path(bin: &str) -> Option<String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
     let output = tokio::process::Command::new(&shell)
         .arg("-ilc")
@@ -190,7 +191,7 @@ pub fn extract_summary(stdout: &str) -> Result<(String, String), HeadlessError> 
 /// `bare_program_name` 裸命令名或 `resolve_binary_path` 解析出的绝对路径
 /// ——由调用方决定用哪个,这里只管拿它当 `Command::new` 的程序名。`None`
 /// 表示这个 `AgentKind` 没有 headless 适配器。
-fn build_command(
+pub(crate) fn build_command(
     agent: AgentKind,
     program: &str,
     turns_text: &str,
@@ -258,7 +259,20 @@ fn build_command(
             cmd.env_remove("DOZER_AIDER_BRIDGE_STATE");
             Some((cmd, None))
         }
-        AgentKind::Unknown | AgentKind::Codex => None,
+        AgentKind::Codex => {
+            // Codex CLI 一次性执行 + 只读沙箱。`exec` 子命令 + `--sandbox
+            // read-only` 是禁工具/只读隔离的官方契约(参数名/版本待 Task 8
+            // 真实验证,此处按已读文档约定落地,不宣称已 smoke)。
+            let mut cmd = tokio::process::Command::new(program);
+            cmd.arg("exec")
+                .arg("--sandbox")
+                .arg("read-only")
+                .arg("--skip-git-repo-check")
+                .arg(format!("{}\n\n{}", instruction_text(), turns_text));
+            cmd.env_remove("DOZER_SESSION_ID");
+            Some((cmd, None))
+        }
+        AgentKind::Unknown => None,
     }
 }
 
@@ -584,9 +598,8 @@ mod tests {
 
     #[tokio::test]
     async fn summarize_headless_returns_unsupported_for_kind_without_adapter() {
-        // Codex 目前没有 headless 适配器(Task 5 只补 CodeBuddy/OpenCode/
-        // V8agent,Codex 本来就不在覆盖范围内,见 spec 非目标)。
-        let result = summarize_headless(AgentKind::Codex, &[]).await;
+        // `Unknown` 是唯一没有 headless 适配器的 kind(Codex 已补适配器)。
+        let result = summarize_headless(AgentKind::Unknown, &[]).await;
         assert_eq!(result, Err(HeadlessError::Unsupported));
     }
 
@@ -648,8 +661,27 @@ mod tests {
 
     #[test]
     fn unsupported_kinds_return_none() {
-        assert!(build_command(AgentKind::Codex, "codex", "x").is_none());
         assert!(build_command(AgentKind::Unknown, "unknown", "x").is_none());
+    }
+
+    #[test]
+    fn codex_command_uses_exec_sandbox_read_only() {
+        let (cmd, stdin) = build_command(AgentKind::Codex, "codex", "内容").unwrap();
+        assert_eq!(stdin, None, "Codex 总结走 exec 参数,不写 stdin");
+        let args: Vec<String> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args[0], "exec");
+        assert_eq!(args[1], "--sandbox");
+        assert_eq!(args[2], "read-only");
+        assert!(args.contains(&"--skip-git-repo-check".to_string()));
+        let cleared = cmd
+            .as_std()
+            .get_envs()
+            .any(|(k, v)| k.to_str() == Some("DOZER_SESSION_ID") && v.is_none());
+        assert!(cleared, "总结场景移除 DOZER_SESSION_ID");
     }
 
     fn turn(role: &str, content: &str) -> TurnRecord {
