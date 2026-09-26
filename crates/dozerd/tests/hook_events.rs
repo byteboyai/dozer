@@ -49,6 +49,7 @@ async fn hook_event_reaches_attached_client_and_list() {
                     code_health: test_code_health(),
                     transcripts: test_transcripts(),
                     session_summaries: test_session_summaries(),
+                    summary_jobs: test_summary_jobs(),
                     backfill_registry: test_backfill_registry(),
                     todos: test_todos(),
                     categories: test_categories(),
@@ -201,6 +202,12 @@ fn test_backfill_registry() -> std::sync::Arc<dozerd::session_summary_backfill::
     std::sync::Arc::new(dozerd::session_summary_backfill::BackfillRegistry::new())
 }
 
+/// 规范总结任务存储（测试用；serve 需要）。
+fn test_summary_jobs() -> std::sync::Arc<dozerd::summary_jobs::SummaryJobStore> {
+    let db = std::env::temp_dir().join(format!("dozerd-sumjob-{}.db", uuid::Uuid::new_v4()));
+    std::sync::Arc::new(dozerd::summary_jobs::SummaryJobStore::open(&db).unwrap())
+}
+
 /// 每次调用建独立临时库的 Todo 存储（测试用；serve 需要）。
 fn test_todos() -> std::sync::Arc<dozerd::todo::TodoStore> {
     let db = std::env::temp_dir().join(format!("dozerd-test-{}.db", uuid::Uuid::new_v4()));
@@ -268,6 +275,7 @@ async fn project_open_and_list_roundtrip() {
                     code_health,
                     transcripts,
                     session_summaries,
+                    summary_jobs: test_summary_jobs(),
                     backfill_registry,
                     todos,
                     categories,
@@ -330,6 +338,7 @@ async fn record_and_get_session_summary_roundtrip() {
                     code_health,
                     transcripts,
                     session_summaries,
+                    summary_jobs: test_summary_jobs(),
                     backfill_registry,
                     todos,
                     categories,
@@ -431,6 +440,7 @@ async fn close_with_summary_kills_session_after_ai_summary_recorded() {
                     code_health,
                     transcripts,
                     session_summaries,
+                    summary_jobs: test_summary_jobs(),
                     backfill_registry,
                     todos,
                     categories,
@@ -540,6 +550,7 @@ async fn list_conversations_with_summaries_joins_correctly() {
                     code_health: test_code_health(),
                     transcripts,
                     session_summaries,
+                    summary_jobs: test_summary_jobs(),
                     backfill_registry,
                     todos,
                     categories,
@@ -649,6 +660,7 @@ async fn aider_hook_sequence_drives_state_machine() {
                     code_health: test_code_health(),
                     transcripts: test_transcripts(),
                     session_summaries: test_session_summaries(),
+                    summary_jobs: test_summary_jobs(),
                     backfill_registry: test_backfill_registry(),
                     todos: test_todos(),
                     categories: test_categories(),

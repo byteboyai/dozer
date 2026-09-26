@@ -55,6 +55,7 @@ async fn start_test_daemon() -> PathBuf {
                 code_health: test_code_health(),
                 transcripts: test_transcripts(),
                 session_summaries: test_session_summaries(),
+                summary_jobs: test_summary_jobs(),
                 backfill_registry: test_backfill_registry(),
                 todos: test_todos(),
                 categories: test_categories(),
@@ -264,6 +265,11 @@ fn test_session_summaries() -> std::sync::Arc<dozerd::session_summary::SessionSu
 
 fn test_backfill_registry() -> std::sync::Arc<dozerd::session_summary_backfill::BackfillRegistry> {
     std::sync::Arc::new(dozerd::session_summary_backfill::BackfillRegistry::new())
+}
+
+fn test_summary_jobs() -> std::sync::Arc<dozerd::summary_jobs::SummaryJobStore> {
+    let db = std::env::temp_dir().join(format!("dozerd-sumjob-{}.db", uuid::Uuid::new_v4()));
+    std::sync::Arc::new(dozerd::summary_jobs::SummaryJobStore::open(&db).unwrap())
 }
 
 fn test_todos() -> std::sync::Arc<dozerd::todo::TodoStore> {

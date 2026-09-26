@@ -492,6 +492,34 @@ impl TranscriptStore {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// 分页循环读取一个 conversation 的完整 transcript 快照(spec 2026-09-26
+    /// 第 6 节"固定读取快照"):内部按 `get_conversation_turns` 的 keyset 分页
+    /// 逐页拉取,直到取完或超过 `max_turns` 上限。上限不是截断语义,而是
+    /// "防御性熔断"——正常会话远达不到,一旦达到说明数据异常或调用方没把
+    /// 预算切成更小的块,报错而不是静默返回半截。
+    pub fn get_conversation_turns_all(
+        &self,
+        conversation_id: &str,
+        max_turns: u32,
+    ) -> Result<Vec<dozer_core::protocol::TurnRecord>> {
+        const PAGE: u32 = 512;
+        let mut all: Vec<dozer_core::protocol::TurnRecord> = Vec::new();
+        let mut after: i64 = -1;
+        loop {
+            let page = self.get_conversation_turns(conversation_id, after, PAGE)?;
+            if page.is_empty() {
+                return Ok(all);
+            }
+            after = page.last().map(|t| t.turn_index).unwrap_or(after);
+            all.extend(page);
+            if all.len() as u32 > max_turns {
+                anyhow::bail!(
+                    "conversation {conversation_id} 回合数超过上限 {max_turns},拒绝一次性整读"
+                );
+            }
+        }
+    }
+
     /// 按需回填单个项目的 agent transcript 历史(区别于 `crate::backfill::
     /// backfill_all` 的"daemon 启动全量回填")——`OpenProject` 之外的独立
     /// 请求(`Request::BackfillProjectTranscripts`,见 `server.rs`),供"新建

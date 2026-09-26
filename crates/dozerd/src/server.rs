@@ -79,6 +79,7 @@ pub struct Stores {
     pub code_health: std::sync::Arc<crate::code_health::CodeHealthStore>,
     pub transcripts: std::sync::Arc<crate::transcripts::TranscriptStore>,
     pub session_summaries: std::sync::Arc<crate::session_summary::SessionSummaryStore>,
+    pub summary_jobs: std::sync::Arc<crate::summary_jobs::SummaryJobStore>,
     pub backfill_registry: std::sync::Arc<crate::session_summary_backfill::BackfillRegistry>,
     pub todos: std::sync::Arc<crate::todo::TodoStore>,
     pub categories: std::sync::Arc<crate::todo_category::CategoryStore>,
@@ -99,6 +100,7 @@ pub async fn serve(
         code_health,
         transcripts,
         session_summaries,
+        summary_jobs,
         backfill_registry,
         todos,
         categories,
@@ -133,6 +135,7 @@ pub async fn serve(
         code_health,
         transcripts,
         session_summaries,
+        summary_jobs,
         backfill_registry,
         todos,
         categories,
@@ -440,6 +443,7 @@ async fn handle_conn(
         code_health,
         transcripts,
         session_summaries,
+        summary_jobs: _summary_jobs,
         backfill_registry,
         todos,
         categories,
@@ -1213,6 +1217,12 @@ mod tests {
                     code_health,
                     transcripts,
                     session_summaries,
+                    summary_jobs: std::sync::Arc::new(
+                        crate::summary_jobs::SummaryJobStore::open(
+                            &std::env::temp_dir().join("dozer-test-summary-jobs.db"),
+                        )
+                        .unwrap(),
+                    ),
                     backfill_registry: std::sync::Arc::new(
                         crate::session_summary_backfill::BackfillRegistry::new(),
                     ),

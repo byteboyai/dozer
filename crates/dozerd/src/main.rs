@@ -91,6 +91,9 @@ async fn main() -> Result<()> {
     let session_summaries = Arc::new(dozerd::session_summary::SessionSummaryStore::open(
         &dozer_core::paths::state_dir().join("dozer.db"),
     )?);
+    let summary_jobs = Arc::new(dozerd::summary_jobs::SummaryJobStore::open(
+        &dozer_core::paths::state_dir().join("dozer.db"),
+    )?);
     let backfill_registry = Arc::new(dozerd::session_summary_backfill::BackfillRegistry::new());
     let todos = Arc::new(dozerd::todo::TodoStore::new(
         &dozer_core::paths::state_dir().join("dozer.db"),
@@ -125,6 +128,7 @@ async fn main() -> Result<()> {
             code_health,
             transcripts,
             session_summaries,
+            summary_jobs,
             backfill_registry,
             todos,
             categories,
