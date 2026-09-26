@@ -67,9 +67,17 @@ const isDarkTheme = (documentRef: Document, theme?: FileViewerThemeMode) => {
   return Boolean(documentRef.defaultView?.matchMedia?.('(prefers-color-scheme: dark)').matches);
 };
 
-const sanitizeMermaidSvg = (documentRef: Document, svg: string) => {
+// mermaid（实测 11.17.2，11.15.0 尚无此问题）把 flowchart 节点 label 里的
+// `\n` 转成 HTML 风格、不自闭合的 `<br>`，而不是 XML 要求的 `<br/>`。下面
+// 严格按 `image/svg+xml`（XML）重新解析这段 svg 做安全清洗，未闭合的
+// `<br>` 会让整个解析直接抛 "Unexpected closing tag" —— 于是任何 label 里
+// 用了 `\n` 的图整张都渲染失败，不是只丢那一处换行。这里只归一化这一个
+// 已知不兼容点，不放宽后面的 XML 校验/清洗逻辑。
+const closeBareBrTags = (svg: string) => svg.replace(/<br(\s[^<>]*)?>/gi, (_, attrs) => `<br${attrs || ''}/>`);
+
+export const sanitizeMermaidSvg = (documentRef: Document, svg: string) => {
   const Parser = documentRef.defaultView?.DOMParser || DOMParser;
-  const parsed = new Parser().parseFromString(svg, 'image/svg+xml');
+  const parsed = new Parser().parseFromString(closeBareBrTags(svg), 'image/svg+xml');
   const parseError = parsed.querySelector('parsererror');
   if (parseError) {
     throw new Error(parseError.textContent || 'Unable to parse the Mermaid SVG.');

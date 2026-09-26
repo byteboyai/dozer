@@ -1,3 +1,7 @@
 2.2.2 (web-full, D5 精简: 仅 text/image/pdf 管线 + vendor/pdf; 原 170MB → 19MB)
 renderer-text: flyfish-dev/file-viewer v2.2.2 @ af2080ca10a2d415bd6d6877c36db5cb6f9d5567 (Apache-2.0)
   local patch dozer-markdown-media-lightbox (源码与构建见 crates/dozer-app/web/flyfish)
+  local patch dozer-mermaid-br-sanitize（2026-09-26）：mermaid 11.17.2 把 flowchart 节点
+  label 的 `\n` 转成不自闭合的 `<br>`，导致 markdown.ts::sanitizeMermaidSvg 的严格
+  `image/svg+xml` 重新解析直接抛错、整张图渲染失败；补一步在解析前把裸 `<br>` 归一化成
+  `<br/>`，见 upstream/renderer-text/markdown.ts 的 closeBareBrTags
