@@ -427,7 +427,11 @@ pub(crate) fn review_pane_state(rv: Option<&ReviewView>) -> ReviewPaneState {
     let Some(rv) = rv else {
         return ReviewPaneState::Empty;
     };
-    if rv.loaded_nonce == Some(rv.nonce) {
+    // error / 空 entries 两种情况下 `review_webview_spec` 会销毁 webview
+    // (永远等不到 `document_loaded`),`loaded_nonce` 永远是 None——必须归入
+    // Ready 让 `review_content` 显示"⚠ 错误" / "暂无对话"文案,否则会永久
+    // 卡在"加载中…"占位。这跟"根本没有数据"、"正在加载"是两回事。
+    if rv.error.is_some() || rv.entries.is_empty() || rv.loaded_nonce == Some(rv.nonce) {
         ReviewPaneState::Ready
     } else {
         ReviewPaneState::Loading
@@ -2167,6 +2171,25 @@ mod tests {
                 review_pane_state(Some(&rv(3, Some(3)))),
                 ReviewPaneState::Ready
             );
+        }
+
+        /// 首次加载失败:`review_webview_spec` 会销毁 webview(永远等不到
+        /// `document_loaded`),`loaded_nonce` 停在 None——必须走 Ready 让
+        /// `review_content` 显示"⚠ 错误"文案,不能永久卡在"加载中…"。
+        #[test]
+        fn error_is_ready_even_without_loaded_nonce() {
+            let mut r = rv(3, None);
+            r.error = Some("transcript 解析失败".into());
+            assert_eq!(review_pane_state(Some(&r)), ReviewPaneState::Ready);
+        }
+
+        /// 首次加载成功但会话为空:同样销毁 webview、无事件回传,必须走
+        /// Ready 显示"暂无对话",不能卡在"加载中…"。
+        #[test]
+        fn empty_entries_is_ready_even_without_loaded_nonce() {
+            let mut r = rv(3, None);
+            r.entries = Vec::new();
+            assert_eq!(review_pane_state(Some(&r)), ReviewPaneState::Ready);
         }
     }
 }
