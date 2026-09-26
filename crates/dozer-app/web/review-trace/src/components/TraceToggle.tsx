@@ -21,7 +21,6 @@ export function TraceToggle({ v }: { v: AiTurnData }) {
   // `:last-child` 消隐最后一项的 margin-bottom 和连接线定位都依赖这一点，
   // 所以用 Fragment 分组而不是外包一层 div。配对规则见 pairing.ts。
   const pairs = pairCallsAndResults(toolCalls, toolResults);
-  const firstResultPairIndex = pairs.findIndex((p) => p.results.length > 0);
 
   return (
     <details class="trace-toggle">
@@ -43,9 +42,6 @@ export function TraceToggle({ v }: { v: AiTurnData }) {
             ) : null}
             {pair.results.map((result, j) => (
               <div class={`trace-item tool-result${result.is_error ? ' error' : ''}`} key={j}>
-                {i === firstResultPairIndex && j === 0 ? (
-                  <div class="item-title">工具结果</div>
-                ) : null}
                 <ToolResultRow result={result} />
               </div>
             ))}

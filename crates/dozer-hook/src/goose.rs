@@ -149,6 +149,53 @@ mod tests {
         assert_eq!(v["event"], "PostToolUse", "截断仍保留事件元数据");
     }
 
+    /// 用真机捕获的一整段 goose 1.51.0 会话(见
+    /// `spike/goose-adapter` 的 capture 步骤,2026-09-26 补的验证)逐条
+    /// 走一遍 `build_journal_line`,确认 28 条真实事件(含缺 `tool_call_id`
+    /// 的 `AfterFileEdit`、`PostToolUseFailure`)都不 panic、都能正常提取
+    /// `event`/`goose_session_id`。真实 `tool_name` 是裸 `shell`/`tree`/
+    /// `write`,不是文档假设的 `developer__` 前缀——这里不断言具体前缀,
+    /// 因为 `build_journal_line` 本来就把 `tool_name` 当不透明字符串处理,
+    /// 不该依赖某个具体前缀才算正确。
+    #[test]
+    fn build_journal_line_handles_every_event_from_a_real_captured_session() {
+        let fixture = include_str!("../fixtures/goose/real-session-hook-events.jsonl");
+        let mut seen_events = std::collections::HashSet::new();
+        for (i, line) in fixture.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let payload: Value =
+                serde_json::from_str(line).unwrap_or_else(|e| panic!("行 {i} 解析失败: {e}"));
+            let event = payload
+                .get("event")
+                .and_then(|e| e.as_str())
+                .unwrap_or_else(|| panic!("行 {i} 缺 event 字段"))
+                .to_string();
+            let journal_line = build_journal_line(&event, 1_000 + i as u64, "dozer-sess", &payload);
+            let v: Value = serde_json::from_str(&journal_line)
+                .unwrap_or_else(|e| panic!("行 {i} 生成的 journal 行不是合法 JSON: {e}"));
+            assert_eq!(v["event"], event, "行 {i}");
+            assert_eq!(v["goose_session_id"], "20260926_2", "行 {i}");
+            seen_events.insert(event);
+        }
+        for expect in [
+            "SessionStart",
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "AfterFileEdit",
+            "Stop",
+        ] {
+            assert!(
+                seen_events.contains(expect),
+                "真实捕获里应该出现 {expect},实际: {seen_events:?}"
+            );
+        }
+    }
+
     #[test]
     fn append_journal_line_creates_dir_and_appends() {
         let dir = tempfile::tempdir().unwrap();

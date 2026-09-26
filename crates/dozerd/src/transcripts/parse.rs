@@ -1750,6 +1750,57 @@ mod trace_detail_tests {
         );
     }
 
+    /// 用真机捕获的一整段 goose 1.51.0 会话(28 条真实事件,`spike/
+    /// goose-adapter` 2026-09-26 补的验证捕获,原始事件见
+    /// `crates/dozer-hook/fixtures/goose/real-session-hook-events.jsonl`;
+    /// 这里手工包一层 journal envelope 而不是依赖 `dozer-hook` 的
+    /// `build_journal_line`——`dozerd` 不依赖 `dozer-hook`,`dozer-hook` 按
+    /// 设计要保持零依赖,这层重复是刻意的,不是遗漏)确认真实数据整段走
+    /// `parse_chunk` 不 panic,且各类事件都产出了预期角色的 turn——尤其是
+    /// 缺 `tool_call_id` 的 `AfterFileEdit`/`PostToolUseFailure`,以及裸
+    /// `tool_name`(真实是 `shell`/`tree`/`write`,不是文档假设的
+    /// `developer__` 前缀,验证 parser 确实不依赖这个前缀)。
+    #[test]
+    fn goose_parses_a_full_real_captured_session_without_panicking() {
+        const RAW: &str =
+            include_str!("../../../dozer-hook/fixtures/goose/real-session-hook-events.jsonl");
+        let mut journal = String::new();
+        for (i, line) in RAW.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let payload: Value = serde_json::from_str(line).expect("fixture 每行都应是合法 JSON");
+            let event = payload["event"].as_str().expect("fixture 每行都应有 event");
+            journal.push_str(&format!(
+                r#"{{"schema_version":1,"type":"goose_hook","event":"{event}","ts_ms":{ts},"dozer_session_id":"ds","payload":{payload}}}"#,
+                ts = 1_000 + i as u64,
+            ));
+            journal.push('\n');
+        }
+        let turns = parse_chunk(AgentKind::Goose, &journal, "conv1", 0);
+        // 28 条真实事件里 SessionStart 不产出 turn,其余 27 条(1 human +
+        // 12 PreToolUse + 12 PostToolUse/PostToolUseFailure + 1
+        // AfterFileEdit + 1 Stop)都应该产出。
+        assert_eq!(turns.len(), 27, "真实事件应逐条产出 turn,不该有静默丢失");
+        assert_eq!(turns[0].role, "human");
+        assert!(
+            turns
+                .iter()
+                .any(|t| t.role == "tool_result" && t.is_error),
+            "真实捕获里含一次 PostToolUseFailure,必须映射成 is_error 的 tool_result"
+        );
+        assert!(
+            turns.iter().any(|t| t.mutating_tool_calls == 1),
+            "真实捕获里含一次 AfterFileEdit,必须计入 mutating_tool_calls"
+        );
+        assert_eq!(
+            turns.last().unwrap().role,
+            "ai",
+            "最后一条是 Stop,应映射成 ai 角色的 last_assistant_message"
+        );
+    }
+
     #[test]
     fn goose_pre_tool_use_trace_detail_keeps_tool_name_and_input() {
         let raw = "{\"schema_version\":1,\"type\":\"goose_hook\",\"event\":\"PreToolUse\",\"ts_ms\":3,\"dozer_session_id\":\"ds\",\"payload\":{\"tool_name\":\"developer__shell\",\"tool_call_id\":\"tc-1\",\"tool_input\":{\"command\":\"cargo test\"}}}";
