@@ -209,4 +209,3 @@ pub(crate) fn agent_filter_button<'a>(
     })
     .into()
 }
-
