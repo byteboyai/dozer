@@ -533,6 +533,21 @@ pub(crate) fn sync_webview_pool(
                                             tracing::warn!(%error, "无法解析 usage-content IPC");
                                         }
                                     }
+                                } else if webview_id == crate::app::CONVERSATION_REVIEW_ID_OFFSET
+                                    && looks_like_envelope
+                                {
+                                    // review-trace 单槽非 tab,没有专属 binding,
+                                    // 按固定 webview id 识别(同 usage-content)。
+                                    match crate::preview::parse_review_trace_event(body) {
+                                        Ok(env) => {
+                                            let _ = ipc_proxy.send_event(
+                                                Message::ReviewTraceWebviewEvent(env.payload),
+                                            );
+                                        }
+                                        Err(error) => {
+                                            tracing::warn!(%error, "无法解析 review-trace IPC");
+                                        }
+                                    }
                                 } else if let Some(binding) = editor_binding.as_ref() {
                                     let expected = crate::preview::HostBinding::new(
                                         binding.project_id,
