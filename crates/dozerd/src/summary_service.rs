@@ -64,7 +64,9 @@ pub fn decide_summary_action(
         Some(result) => {
             // 有规范结果:revision 不匹配(输入更新)或 pipeline_version 旧 →
             // stale;否则跳过。
-            if result.source_revision != current_revision
+            if result.title.trim().is_empty()
+                || result.summary.trim().is_empty()
+                || result.source_revision != current_revision
                 || result.pipeline_version != PIPELINE_VERSION
             {
                 SummaryAction::Generate {
@@ -100,23 +102,24 @@ pub struct SubmitSpec {
 impl SummaryService {
     /// 提交单条总结任务。返回 job_id(新建或复用活动任务)。
     pub fn submit_single(&self, spec: &SubmitSpec) -> anyhow::Result<i64> {
+        static SUBMIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _lock = SUBMIT_LOCK.lock().expect("summary submit lock");
+        self.transcripts
+            .refresh_conversation(&spec.conversation_id)?;
         // 输入 revision:读当前 transcript 快照的 revision(缺失时为固定值)。
         let turns = self
             .transcripts
-            .get_conversation_turns_all(&spec.conversation_id, 100_000)
-            .unwrap_or_default();
+            .get_conversation_turns_all(&spec.conversation_id, 100_000)?;
         let revision = summary_snapshot::revision_of(&turns);
 
         // 活动任务复用:同 conversation + revision + provider 的 queued/
         // running 任务存在且非 force,直接返回它。
-        if !spec.force
-            && let Some(existing) = self.find_active_job(
-                &spec.conversation_id,
-                &revision,
-                PIPELINE_VERSION,
-                spec.provider,
-            )?
-        {
+        if let Some(existing) = self.find_active_job(
+            &spec.conversation_id,
+            &revision,
+            PIPELINE_VERSION,
+            spec.provider,
+        )? {
             return Ok(existing);
         }
 
@@ -132,25 +135,25 @@ impl SummaryService {
             generation,
             SummaryJobStatus::Queued,
         )?;
+        let config = self.config_for_provider(spec.provider, spec.requested_model.clone())?;
+        self.jobs
+            .save_artifact(job_id, "config", &serde_json::to_string(&config)?)?;
         Ok(job_id)
     }
 
     fn find_active_job(
         &self,
         conversation_id: &str,
-        revision: &str,
-        pipeline_version: &str,
-        provider: AgentKind,
+        _revision: &str,
+        _pipeline_version: &str,
+        _provider: AgentKind,
     ) -> anyhow::Result<Option<i64>> {
         let jobs = self.jobs.list_jobs_by_conversation(conversation_id)?;
         for j in jobs {
             if matches!(
                 j.status,
                 SummaryJobStatus::Queued | SummaryJobStatus::Running
-            ) && j.source_revision == revision
-                && j.pipeline_version == pipeline_version
-                && j.provider == provider
-            {
+            ) {
                 return Ok(Some(j.job_id));
             }
         }
@@ -160,6 +163,15 @@ impl SummaryService {
     /// 提交一批修复任务:按选择策略筛出需要总结的 conversation,创建 batch +
     /// 关联 job。返回 batch_id 与 job 数。
     pub fn submit_batch(&self, cwd: &str) -> anyhow::Result<(i64, u32)> {
+        self.submit_batch_with_provider(cwd, None, None)
+    }
+
+    pub fn submit_batch_with_provider(
+        &self,
+        cwd: &str,
+        provider: Option<AgentKind>,
+        model: Option<String>,
+    ) -> anyhow::Result<(i64, u32)> {
         let conversations = self
             .transcripts
             .list_conversations(cwd, None, u32::MAX, 0)
@@ -190,40 +202,49 @@ impl SummaryService {
             }
         }
 
-        let provider = self.resolve_provider_or_default()?;
         let batch_id = self.jobs.create_batch(cwd, "missing_or_stale")?;
+        let skipped = conversations.len().saturating_sub(selected.len()) as u32;
+        if selected.is_empty() {
+            self.jobs
+                .update_batch_counts(batch_id, skipped, 0, 0, 0, 0, 0, skipped)?;
+            return Ok((batch_id, skipped));
+        }
+        let config = match crate::summary_config::resolve_provider(provider, model) {
+            SummaryProviderResolution::Configured(cfg, _) => cfg,
+            SummaryProviderResolution::Required => anyhow::bail!(
+                "未配置总结器：请在 config.toml 的 [summary] 中设置 provider 和可选 model"
+            ),
+        };
         let mut queued = 0u32;
         for conversation_id in &selected {
             let spec = SubmitSpec {
                 conversation_id: conversation_id.clone(),
                 source_session_id: None,
                 trigger: SummaryTrigger::Backfill,
-                provider,
-                requested_model: None,
+                provider: config.provider,
+                requested_model: config.model.clone(),
                 force: false,
             };
             let job_id = self.submit_single(&spec)?;
             self.jobs.add_batch_job(batch_id, job_id)?;
             queued += 1;
         }
-        self.jobs
-            .update_batch_counts(batch_id, selected.len() as u32, queued, 0, 0, 0, 0, 0)?;
-        Ok((batch_id, selected.len() as u32))
+        self.jobs.update_batch_counts(
+            batch_id,
+            conversations.len() as u32,
+            queued,
+            0,
+            0,
+            0,
+            0,
+            skipped,
+        )?;
+        Ok((batch_id, conversations.len() as u32))
     }
 
     fn jobs_has_recent_failure(&self, conversation_id: &str) -> anyhow::Result<bool> {
         let jobs = self.jobs.list_jobs_by_conversation(conversation_id)?;
         Ok(jobs.iter().any(|j| j.status == SummaryJobStatus::Failed))
-    }
-
-    /// 解析 provider:UI 选择 → summary 配置 → default_agent;未配置返回错误。
-    fn resolve_provider_or_default(&self) -> anyhow::Result<AgentKind> {
-        match crate::summary_config::resolve_provider(None, None) {
-            SummaryProviderResolution::Configured(cfg, _) => Ok(cfg.provider),
-            SummaryProviderResolution::Required => {
-                anyhow::bail!("未配置 summary provider(需要 summary 配置或 default_agent)")
-            }
-        }
     }
 
     /// 重启恢复:把所有 running 归位 queued(worker 已随进程消失)。
@@ -240,38 +261,19 @@ impl SummaryService {
             .jobs
             .get_job(job_id)?
             .ok_or_else(|| anyhow::anyhow!("job {job_id} 不存在"))?;
-        let generation = self.jobs.next_generation(&job.conversation_id)?;
-        self.jobs.create_job(
-            &job.conversation_id,
-            job.source_session_id.as_deref(),
-            job.trigger,
-            job.provider,
-            job.requested_model.as_deref(),
-            &job.source_revision,
-            &job.pipeline_version,
-            generation,
-            SummaryJobStatus::Queued,
-        )
+        self.submit_single(&SubmitSpec {
+            conversation_id: job.conversation_id,
+            source_session_id: job.source_session_id,
+            trigger: job.trigger,
+            provider: job.provider,
+            requested_model: job.requested_model,
+            force: true,
+        })
     }
 
     /// 取消一个批次:把批次内 queued/running 的任务置 cancelled。
     pub fn cancel_batch(&self, batch_id: i64) -> anyhow::Result<()> {
-        let jobs = self.jobs.list_jobs_for_batch(batch_id)?;
-        for job in &jobs {
-            if matches!(
-                job.status,
-                SummaryJobStatus::Queued | SummaryJobStatus::Running
-            ) {
-                self.jobs.update_job_status(
-                    job.job_id,
-                    SummaryJobStatus::Cancelled,
-                    Some(SummaryErrorKind::Cancelled),
-                    Some("批次被取消"),
-                    None,
-                )?;
-            }
-        }
-        let _ = self.recount_batch(batch_id);
+        self.jobs.cancel_batch(batch_id)?;
         Ok(())
     }
 
@@ -289,9 +291,25 @@ impl SummaryService {
             .get_job(job_id)?
             .ok_or_else(|| anyhow::anyhow!("job {job_id} 不存在"))?;
 
-        let turns = self
-            .transcripts
-            .get_conversation_turns_all(&job.conversation_id, 100_000)?;
+        if matches!(
+            job.trigger,
+            SummaryTrigger::Close | SummaryTrigger::Shutdown | SummaryTrigger::NaturalExit
+        ) {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        self.transcripts
+            .refresh_conversation(&job.conversation_id)?;
+        let turns = match self.jobs.load_artifact(job_id, "snapshot")? {
+            Some(json) => serde_json::from_str(&json)?,
+            None => {
+                let turns = self
+                    .transcripts
+                    .get_conversation_turns_all(&job.conversation_id, 100_000)?;
+                self.jobs
+                    .save_artifact(job_id, "snapshot", &serde_json::to_string(&turns)?)?;
+                turns
+            }
+        };
         let current_revision = summary_snapshot::revision_of(&turns);
         if current_revision != job.source_revision {
             // 输入在任务创建后更新了:结果将带 stale 语义发布,但不声称完整。
@@ -303,8 +321,29 @@ impl SummaryService {
         }
 
         let mut budget = summary_pipeline::Budget::new();
-        let final_summary = summary_pipeline::run_pipeline(&turns, config, summarizer, &mut budget)
-            .await
+        let mut cached = summary_pipeline::CachedSummarizer {
+            inner: summarizer,
+            jobs: self.jobs.clone(),
+            job_id,
+        };
+        let cancelled = async {
+            loop {
+                if self
+                    .jobs
+                    .get_job(job_id)
+                    .ok()
+                    .flatten()
+                    .is_none_or(|j| j.status == SummaryJobStatus::Cancelled)
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        };
+        let final_summary = tokio::select! {
+            _ = cancelled => anyhow::bail!("总结任务已取消"),
+            result = summary_pipeline::run_pipeline(&turns, config, &mut cached, &mut budget) => result,
+        }
             .map_err(|e| {
                 let kind = pipeline_error_kind(&e);
                 let _ = self.jobs.update_job_status(
@@ -322,7 +361,7 @@ impl SummaryService {
             title: final_summary.title.clone(),
             summary: final_summary.summary.clone(),
             facts_json: serde_json::to_string(&final_summary.facts).ok(),
-            source_revision: job.source_revision.clone(),
+            source_revision: current_revision,
             pipeline_version: PIPELINE_VERSION.to_string(),
             provider: job.provider,
             requested_model: job.requested_model.clone(),
@@ -331,9 +370,13 @@ impl SummaryService {
             generated_at: now_ms(),
             source_job_id: job_id,
         };
-        self.jobs
+        let published = self
+            .jobs
             .record_result(&result, job.generation)
             .map_err(|e| anyhow::anyhow!("发布结果失败: {e}"))?;
+        if !published {
+            anyhow::bail!("总结任务已取消或被更新任务取代");
+        }
         self.jobs
             .update_job_status(job_id, SummaryJobStatus::Succeeded, None, None, None)?;
         Ok(final_summary)
@@ -355,24 +398,45 @@ impl SummaryService {
             match self.jobs.claim_next_queued() {
                 Ok(Some(job_id)) => {
                     if let Some(job) = self.jobs.get_job(job_id).unwrap_or(None) {
-                        let config = match self
-                            .config_for_provider(job.provider, job.requested_model.clone())
-                        {
-                            Ok(c) => c,
-                            Err(e) => {
-                                let _ = self.jobs.update_job_status(
-                                    job_id,
-                                    SummaryJobStatus::Failed,
-                                    Some(SummaryErrorKind::ConfigurationRequired),
-                                    Some(&e.to_string()),
-                                    None,
-                                );
-                                self.bump_batch(job_id);
-                                continue;
-                            }
-                        };
+                        let config =
+                            match self
+                                .jobs
+                                .load_artifact(job_id, "config")
+                                .and_then(|stored| match stored {
+                                    Some(json) => Ok(serde_json::from_str(&json)?),
+                                    None => self.config_for_provider(
+                                        job.provider,
+                                        job.requested_model.clone(),
+                                    ),
+                                }) {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    let _ = self.jobs.update_job_status(
+                                        job_id,
+                                        SummaryJobStatus::Failed,
+                                        Some(SummaryErrorKind::ConfigurationRequired),
+                                        Some(&e.to_string()),
+                                        None,
+                                    );
+                                    self.bump_batch(job_id);
+                                    continue;
+                                }
+                            };
                         let mut summarizer = make_summarizer(job.provider, config.clone());
-                        let _ = self.process_job(job_id, &config, summarizer.as_mut()).await;
+                        tokio::select! {
+                            result = self.process_job(job_id, &config, summarizer.as_mut()) => {
+                                if let Err(e) = result
+                                    && self.jobs.get_job(job_id).ok().flatten().is_some_and(|j| j.status == SummaryJobStatus::Running) {
+                                    let _ = self.jobs.update_job_status(job_id, SummaryJobStatus::Failed,
+                                        Some(SummaryErrorKind::StorageError), Some(&e.to_string()), None);
+                                }
+                            }
+                            _ = async {
+                                while !shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                                }
+                            } => { return; }
+                        }
                         self.bump_batch(job_id);
                     }
                 }
@@ -393,14 +457,23 @@ impl SummaryService {
         provider: AgentKind,
         requested_model: Option<String>,
     ) -> anyhow::Result<SummaryConfig> {
-        // 以 job 快照的 provider/model 为主,超时/预算用默认。
-        Ok(SummaryConfig {
-            provider,
-            model: requested_model,
-            call_timeout_secs: crate::summary_config::DEFAULT_CALL_TIMEOUT_SECS,
-            max_retries: crate::summary_config::DEFAULT_MAX_RETRIES,
-            input_budget_chars: crate::summary_config::DEFAULT_INPUT_BUDGET_CHARS,
-        })
+        let mut config = match crate::summary_config::resolve_provider(None, None) {
+            SummaryProviderResolution::Configured(cfg, _) => cfg,
+            _ => SummaryConfig {
+                provider,
+                model: None,
+                call_timeout_secs: crate::summary_config::DEFAULT_CALL_TIMEOUT_SECS,
+                max_retries: crate::summary_config::DEFAULT_MAX_RETRIES,
+                input_budget_chars: crate::summary_config::DEFAULT_INPUT_BUDGET_CHARS,
+            },
+        };
+        config.provider = provider;
+        config.model = requested_model;
+        anyhow::ensure!(
+            config.input_budget_chars > 0 && config.call_timeout_secs > 0,
+            "总结预算和超时必须大于零"
+        );
+        Ok(config)
     }
 
     fn bump_batch(&self, job_id: i64) {
@@ -424,9 +497,14 @@ impl SummaryService {
                 SummaryJobStatus::Cancelled => cancelled += 1,
             }
         }
-        let total = jobs.len() as u32;
+        let skipped = self
+            .jobs
+            .get_batch(batch_id)?
+            .map(|b| b.skipped)
+            .unwrap_or(0);
+        let total = jobs.len() as u32 + skipped;
         self.jobs.update_batch_counts(
-            batch_id, total, queued, running, succeeded, failed, cancelled, 0,
+            batch_id, total, queued, running, succeeded, failed, cancelled, skipped,
         )?;
         Ok(())
     }
@@ -564,7 +642,7 @@ mod tests {
 
     #[test]
     fn decide_skip_when_current_and_matching() {
-        let a = decide_summary_action(Some(&result("rev", "v1")), None, "rev", false);
+        let a = decide_summary_action(Some(&result("rev", PIPELINE_VERSION)), None, "rev", false);
         assert_eq!(a, SummaryAction::Skip);
     }
 

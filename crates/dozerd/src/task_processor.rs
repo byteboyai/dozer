@@ -32,6 +32,7 @@ pub async fn process_task(
     projects: &ProjectStore,
     todo: &TodoInfo,
     human_reply: Option<&str>,
+    summary_service: Option<&crate::summary_service::SummaryService>,
 ) -> Result<(), String> {
     let Some(agent) = todo.assigned_agent else {
         return Err("任务未指派 agent".into());
@@ -94,6 +95,20 @@ pub async fn process_task(
             &ai_content,
         )
         .map_err(|e| e.to_string())?;
+    if let Some(service) = summary_service
+        && let crate::summary_config::SummaryProviderResolution::Configured(config, _) =
+            crate::summary_config::resolve_provider(None, None)
+        && let Err(e) = service.submit_single(&crate::summary_service::SubmitSpec {
+            conversation_id: session_id,
+            source_session_id: None,
+            trigger: dozer_core::protocol::SummaryTrigger::NaturalExit,
+            provider: config.provider,
+            requested_model: config.model,
+            force: false,
+        })
+    {
+        tracing::warn!(error = %e, todo_id = todo.id, "Todo 完成后提交总结任务失败");
+    }
     Ok(())
 }
 
@@ -156,6 +171,7 @@ mod tests {
             &projects,
             &todo,
             None,
+            None,
         )
         .await
         .unwrap_err();
@@ -179,6 +195,7 @@ mod tests {
             &transcripts,
             &projects,
             &assigned,
+            None,
             None,
         )
         .await

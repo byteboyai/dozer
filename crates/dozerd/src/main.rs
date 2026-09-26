@@ -105,14 +105,6 @@ async fn main() -> Result<()> {
         &dozer_core::paths::state_dir().join("dozer.db"),
     )?);
     let in_flight = dozerd::task_poller::new_in_flight();
-    dozerd::task_poller::spawn(
-        todos.clone(),
-        categories.clone(),
-        session_summaries.clone(),
-        transcripts.clone(),
-        projects.clone(),
-        in_flight.clone(),
-    );
     {
         let files = dozerd::transcripts::scan::discover_all_transcript_files();
         tracing::info!(count = files.len(), "启动回填:发现历史 transcript 文件");
@@ -129,8 +121,17 @@ async fn main() -> Result<()> {
     if let Err(e) = summary_service.recover_on_startup() {
         tracing::warn!(error = %e, "总结任务重启恢复失败");
     }
+    dozerd::task_poller::spawn(
+        todos.clone(),
+        categories.clone(),
+        session_summaries.clone(),
+        transcripts.clone(),
+        projects.clone(),
+        in_flight.clone(),
+        summary_service.clone(),
+    );
     let summary_shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    {
+    let summary_worker = {
         let service = summary_service.clone();
         let flag = summary_shutdown.clone();
         let scratch_root = dozer_core::paths::state_dir().join("summary-scratch");
@@ -144,8 +145,8 @@ async fn main() -> Result<()> {
                     })
                 })
                 .await;
-        });
-    }
+        })
+    };
     let serve = dozerd::server::serve(
         &socket,
         dozerd::ide_bridge::lock_dir(),
@@ -175,5 +176,6 @@ async fn main() -> Result<()> {
             let _ = std::fs::remove_file(&socket);
         }
     }
+    let _ = summary_worker.await;
     Ok(())
 }

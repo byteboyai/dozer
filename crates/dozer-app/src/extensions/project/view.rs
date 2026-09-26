@@ -486,6 +486,11 @@ fn scaffold_backfill_row(
             byteui::theme::color::current().gold,
             format!("{}/{}", p.completed, p.total),
         ),
+        BackfillStepState::Failed(error) => (
+            "!".to_string(),
+            byteui::theme::color::current().red,
+            error.clone(),
+        ),
         BackfillStepState::Done(p) if p.total == 0 => (
             "✓".to_string(),
             byteui::theme::color::current().green,

@@ -40,11 +40,12 @@ pub struct BackfillProgress {
 /// "补总结"聚合进度行的状态。`Done` 现在区分成功/失败/跳过——不再像旧版
 /// 那样"每条都有降级路径、永远算处理完"(新版失败不写启发式,见 dozerd 侧
 /// summary_service)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackfillStepState {
     Pending,
     Running(BackfillProgress),
     Done(BackfillProgress),
+    Failed(String),
 }
 
 /// 一次"修复项目"弹窗跑的完整状态:4 个同步步骤 + 转录历史补录 + 补总结
@@ -75,7 +76,10 @@ impl ScaffoldRunState {
         self.steps
             .iter()
             .all(|(_, s)| matches!(s, ScaffoldStepState::Done(_)))
-            && matches!(self.backfill, BackfillStepState::Done(_))
+            && matches!(
+                self.backfill,
+                BackfillStepState::Done(_) | BackfillStepState::Failed(_)
+            )
     }
 }
 
@@ -399,6 +403,7 @@ pub enum Message {
     /// 终态数)。completed 追平 total 时 update() 把 backfill 置为 Done。
     #[allow(clippy::type_complexity)]
     SummaryBackfillProgress(i64, u32, u32, u32, u32, u32),
+    SummaryBackfillFailed(i64, String),
     /// 弹窗"关闭"按钮(全部完成才可点)。
     ScaffoldPopupClose,
     /// 共享记忆列表拉取结果。

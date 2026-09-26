@@ -33,7 +33,7 @@ struct RawRootConfig {
 }
 
 /// 已解析的 summary 配置。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SummaryConfig {
     pub provider: AgentKind,
     pub model: Option<String>,

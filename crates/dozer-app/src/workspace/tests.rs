@@ -687,7 +687,7 @@ fn should_summarize_on_close_true_for_four_supported_agents() {
 
 #[test]
 fn should_summarize_on_close_false_for_unsupported_agents_or_dead_or_ssh() {
-    assert!(!should_summarize_on_close(
+    assert!(should_summarize_on_close(
         AgentKind::Codex,
         true,
         &TabBackend::Daemon

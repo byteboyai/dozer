@@ -152,12 +152,10 @@ async fn reader_task_exits_when_receiver_dropped() {
         )
         .await
         .unwrap();
-    // `CreateSession` 会为 ide_bridge 起停监听 spawn 一个常驻的退出监听器
-    // 并持有 `s.subscribe()`（见 server.rs `Request::CreateSession` 分支），
-    // 因此空闲会话的基线订阅数恒为 1，而不是 0。
+    // `CreateSession` 为 IDE bridge 与自然退出总结分别持有一个订阅。
     let session = registry.get(&info.id).expect("session just created");
     let baseline = session.subscriber_count();
-    assert_eq!(baseline, 1, "CreateSession 的退出监听器应持有一个订阅");
+    assert_eq!(baseline, 2, "CreateSession 应持有两个退出监听订阅");
 
     for round in 0..20 {
         let (_snap, _next, rx) = c.attach(&info.id, 0).await.unwrap();

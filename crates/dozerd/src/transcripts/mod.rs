@@ -398,8 +398,8 @@ impl TranscriptStore {
         tx.execute(
             "INSERT INTO conversations
              (conversation_id, agent_kind, dir, file_path, title, first_ts, last_ts,
-              turn_count, parsed_offset, file_size_at_parse)
-             VALUES (?1,?2,?3,'',?4,?5,?5,0,0,0)
+              turn_count, parsed_offset, file_size_at_parse, cwd)
+             VALUES (?1,?2,?3,'',?4,?5,?5,0,0,0,?3)
              ON CONFLICT(conversation_id) DO NOTHING",
             params![
                 conversation_id,
@@ -497,6 +497,24 @@ impl TranscriptStore {
     /// 逐页拉取,直到取完或超过 `max_turns` 上限。上限不是截断语义,而是
     /// "防御性熔断"——正常会话远达不到,一旦达到说明数据异常或调用方没把
     /// 预算切成更小的块,报错而不是静默返回半截。
+    pub fn refresh_conversation(&self, conversation_id: &str) -> Result<()> {
+        let source: Option<(String, String)> = {
+            let conn = self.conn.lock().expect("db lock");
+            conn.query_row(
+                "SELECT agent_kind,file_path FROM conversations WHERE conversation_id=?1",
+                [conversation_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?
+        };
+        if let Some((agent, path)) = source
+            && Path::new(&path).is_file()
+        {
+            self.ingest_session(agent_from_str(&agent), Path::new(&path))?;
+        }
+        Ok(())
+    }
+
     pub fn get_conversation_turns_all(
         &self,
         conversation_id: &str,
@@ -671,6 +689,38 @@ impl TranscriptStore {
             let rows = stmt.query_map([cwd], conversation_summary_from_row)?;
             for r in rows {
                 out.push(r?);
+            }
+        }
+
+        // Headless Todo conversations have no transcript file and use their
+        // project cwd directly, regardless of which agent processed the task.
+        let mut task_sql = format!(
+            "SELECT {CONVERSATION_SUMMARY_COLUMNS} FROM conversations
+             WHERE file_path = '' AND cwd = ?1"
+        );
+        if agent.is_some() {
+            task_sql.push_str(" AND agent_kind = ?2");
+        }
+        task_sql.push_str(" ORDER BY last_ts DESC");
+        let mut stmt = conn.prepare(&task_sql)?;
+        if let Some(agent) = agent {
+            let rows = stmt.query_map(
+                params![cwd, agent_to_str(agent)],
+                conversation_summary_from_row,
+            )?;
+            for row in rows {
+                let row = row?;
+                if !out.iter().any(|c| c.conversation_id == row.conversation_id) {
+                    out.push(row);
+                }
+            }
+        } else {
+            let rows = stmt.query_map([cwd], conversation_summary_from_row)?;
+            for row in rows {
+                let row = row?;
+                if !out.iter().any(|c| c.conversation_id == row.conversation_id) {
+                    out.push(row);
+                }
             }
         }
 

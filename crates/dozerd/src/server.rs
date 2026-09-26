@@ -18,6 +18,7 @@ use tokio::sync::{Notify, broadcast};
 /// 拆成独立 async 函数是为了把"多条可能中途返回不同 Reply 的路径"收敛成
 /// 一个 `Reply`(handle_conn 里那个大的 `match req` 整体求值成 `Reply` 一个值,
 /// 不是逐个分支 `return`)。
+#[allow(clippy::too_many_arguments)]
 async fn process_todo_now(
     in_flight: &crate::task_poller::InFlight,
     todos: &Arc<crate::todo::TodoStore>,
@@ -26,6 +27,7 @@ async fn process_todo_now(
     projects: &Arc<crate::projects::ProjectStore>,
     id: i64,
     human_reply: Option<String>,
+    summary_service: &Arc<crate::summary_service::SummaryService>,
 ) -> Reply {
     let todo = match todos.get(id) {
         Ok(todo) => todo,
@@ -50,6 +52,7 @@ async fn process_todo_now(
         projects,
         &todo,
         human_reply.as_deref(),
+        Some(summary_service),
     )
     .await;
     in_flight.lock().expect("in_flight lock").remove(&id);
@@ -252,6 +255,50 @@ fn conversation_id_for_session(s: &crate::session::Session) -> Option<String> {
 /// `Request::Shutdown` 收尾:对 `registry` 里当前存活的每个会话,把"可总结"
 /// 的持久化成 summary job(不注入 prompt、不等 LLM),再统一 kill。下次启动
 /// 由 worker 恢复执行。纯 shell/无 transcript 会话不提交(无内容可总结)。
+fn enqueue_session_summary(
+    session: &crate::session::Session,
+    service: &crate::summary_service::SummaryService,
+    trigger: dozer_core::protocol::SummaryTrigger,
+) -> Result<()> {
+    let info = session.info();
+    let Some(cid) = conversation_id_for_session(session) else {
+        return Ok(());
+    };
+    if let Some(path) = &info.transcript_path {
+        service
+            .transcripts
+            .ingest_session(info.agent, Path::new(path))?;
+    }
+    let cfg = crate::summary_config::resolve_provider(None, None);
+    let (provider, model) = match &cfg {
+        crate::summary_config::SummaryProviderResolution::Configured(c, _) => {
+            (c.provider, c.model.clone())
+        }
+        _ => (dozer_core::protocol::AgentKind::Unknown, None),
+    };
+    let job_id = service.submit_single(&crate::summary_service::SubmitSpec {
+        conversation_id: cid,
+        source_session_id: Some(info.id),
+        trigger,
+        provider,
+        requested_model: model,
+        force: false,
+    })?;
+    if matches!(
+        cfg,
+        crate::summary_config::SummaryProviderResolution::Required
+    ) {
+        service.jobs.update_job_status(
+            job_id,
+            dozer_core::protocol::SummaryJobStatus::Failed,
+            Some(dozer_core::protocol::SummaryErrorKind::ConfigurationRequired),
+            Some("未配置总结器，请设置 config.toml 的 [summary].provider 后重试"),
+            None,
+        )?;
+    }
+    Ok(())
+}
+
 fn drain_all_sessions(
     registry: Arc<SessionRegistry>,
     summary_service: std::sync::Arc<crate::summary_service::SummaryService>,
@@ -267,28 +314,12 @@ fn drain_all_sessions(
         .collect();
     for id in ids {
         let Some(s) = registry.get(&id) else { continue };
-        let conversation_id = conversation_id_for_session(&s);
-        let Some(cid) = conversation_id else {
-            tracing::warn!(session_id = %id, "Shutdown 收尾:会话无 transcript,跳过总结任务");
-            continue;
-        };
-        match crate::summary_config::resolve_provider(None, None) {
-            crate::summary_config::SummaryProviderResolution::Configured(cfg, _) => {
-                let spec = crate::summary_service::SubmitSpec {
-                    conversation_id: cid,
-                    source_session_id: Some(id.clone()),
-                    trigger: dozer_core::protocol::SummaryTrigger::Shutdown,
-                    provider: cfg.provider,
-                    requested_model: cfg.model,
-                    force: false,
-                };
-                if let Err(e) = summary_service.submit_single(&spec) {
-                    tracing::warn!(error = %e, session_id = %id, "Shutdown 提交总结任务失败");
-                }
-            }
-            crate::summary_config::SummaryProviderResolution::Required => {
-                tracing::warn!(session_id = %id, "Shutdown 收尾:未配置 summary provider,跳过总结任务");
-            }
+        if let Err(e) = enqueue_session_summary(
+            &s,
+            &summary_service,
+            dozer_core::protocol::SummaryTrigger::Shutdown,
+        ) {
+            tracing::warn!(error = %e, session_id = %id, "Shutdown 提交总结任务失败");
         }
     }
     kill_remaining_live_sessions(&registry);
@@ -387,6 +418,23 @@ async fn handle_conn(
                             } else {
                                 match registry.create(SessionSpec { name, command, args, cwd: cwd.clone(), cols, rows, project_id }) {
                                     Ok(s) => {
+                                        // Independent of UI attachment and IDE-bridge startup.
+                                        let exit_session = s.clone();
+                                        let exit_service = summary_service.clone();
+                                        let mut summary_rx = s.subscribe();
+                                        tokio::spawn(async move {
+                                            loop {
+                                                match summary_rx.recv().await {
+                                                    Ok(SessionEvent::Exited { .. }) => break,
+                                                    Err(broadcast::error::RecvError::Closed) => break,
+                                                    _ => continue,
+                                                }
+                                            }
+                                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                                            if let Err(e) = enqueue_session_summary(&exit_session, &exit_service, dozer_core::protocol::SummaryTrigger::NaturalExit) {
+                                                tracing::warn!(error=%e, "自然退出总结提交失败");
+                                            }
+                                        });
                                         // `session_started` 失败(绑端口/写锁文件出错)时不会在
                                         // registry 里留下这次调用对应的记录——这种情况下绝不能
                                         // spawn 退出监听器,否则这个会话将来退出时会去 `session_ended`
@@ -663,6 +711,7 @@ async fn handle_conn(
                                 &projects,
                                 id,
                                 human_reply,
+                                &summary_service,
                             )
                             .await
                         }
@@ -883,9 +932,32 @@ async fn handle_conn(
                                         .iter()
                                         .map(|c| c.conversation_id.clone())
                                         .collect();
-                                    let summaries = session_summaries
+                                    let task_ids: std::collections::HashMap<String, i64> = projects
+                                        .list()
+                                        .unwrap_or_default()
+                                        .into_iter()
+                                        .filter(|p| p.path == cwd)
+                                        .flat_map(|p| todos.list(p.id).unwrap_or_default())
+                                        .filter_map(|t| {
+                                            t.dispatch_session_id.map(|cid| (cid, t.id))
+                                        })
+                                        .collect();
+                                    let mut summaries = session_summaries
                                         .get_many(&ids)
                                         .unwrap_or_default();
+                                    for (cid, result) in summary_jobs.get_results_many(&ids).unwrap_or_default() {
+                                        let old = summaries.get(&cid);
+                                        summaries.insert(cid.clone(), dozer_core::protocol::SessionSummaryPayload {
+                                            session_id: old.map(|s| s.session_id.clone()).unwrap_or_else(|| format!("summary:{}", result.source_job_id)),
+                                            agent_kind: result.provider, conversation_id: Some(cid.clone()),
+                                            title: result.title, summary: result.summary,
+                                            status: dozer_core::protocol::SummaryStatus::AiGenerated,
+                                            created_ts_ms: result.generated_at,
+                                            task_id: old
+                                                .and_then(|s| s.task_id)
+                                                .or_else(|| task_ids.get(&cid).copied()),
+                                        });
+                                    }
                                     let rows = conversations
                                         .into_iter()
                                         .map(|c| {
@@ -945,31 +1017,8 @@ async fn handle_conn(
                             match registry.get(&session_id) {
                                 None => Reply::Error { message: format!("会话不存在: {session_id}") },
                                 Some(s) => {
-                                    let conversation_id = conversation_id_for_session(&s);
-                                    // 关闭流程:持久化总结任务(不注入 prompt、不等 LLM),
-                                    // 然后立即 kill。有 transcript 才提交;无 transcript
-                                    // (纯 shell/agent 没配好 hook)记录可见原因。
-                                    if let Some(cid) = conversation_id.clone() {
-                                        match crate::summary_config::resolve_provider(None, None) {
-                                            crate::summary_config::SummaryProviderResolution::Configured(cfg, _) => {
-                                                let spec = crate::summary_service::SubmitSpec {
-                                                    conversation_id: cid,
-                                                    source_session_id: Some(session_id.clone()),
-                                                    trigger: dozer_core::protocol::SummaryTrigger::Close,
-                                                    provider: cfg.provider,
-                                                    requested_model: cfg.model,
-                                                    force: false,
-                                                };
-                                                if let Err(e) = summary_service.submit_single(&spec) {
-                                                    tracing::warn!(error = %e, %session_id, "提交关闭总结任务失败");
-                                                }
-                                            }
-                                            crate::summary_config::SummaryProviderResolution::Required => {
-                                                tracing::warn!(%session_id, "关闭会话但未配置 summary provider,跳过总结任务");
-                                            }
-                                        }
-                                    } else {
-                                        tracing::warn!(%session_id, "关闭会话但无 transcript,跳过总结任务");
+                                    if let Err(e) = enqueue_session_summary(&s, &summary_service, dozer_core::protocol::SummaryTrigger::Close) {
+                                        tracing::warn!(error=%e, %session_id, "提交关闭总结任务失败");
                                     }
                                     if let Err(e) = registry.kill(&session_id) {
                                         tracing::warn!(error = %e, %session_id, "关闭会话失败(可能已死亡)");
@@ -979,23 +1028,24 @@ async fn handle_conn(
                             }
                         }
                         Request::BackfillSessionSummaries { cwd } => {
-                            let missing = crate::session_summary_backfill::missing_summary_conversations(
-                                &transcripts,
-                                &session_summaries,
-                                &cwd,
-                            );
-                            let total = missing.len() as u32;
-                            backfill_registry.start(&cwd, total);
-                            let agent = crate::default_agent_config::load_default_agent();
-                            tokio::spawn(crate::session_summary_backfill::run_backfill(
-                                cwd.clone(),
-                                missing,
-                                transcripts.clone(),
-                                session_summaries.clone(),
-                                backfill_registry.clone(),
-                                agent,
-                            ));
-                            Reply::Ok
+                            match summary_service.submit_batch(&cwd) {
+                                Err(e) => Reply::Error { message: e.to_string() },
+                                Ok((batch_id, total)) => {
+                                    backfill_registry.start(&cwd, total);
+                                    let jobs = summary_jobs.clone();
+                                    let progress = backfill_registry.clone();
+                                    tokio::spawn(async move {
+                                        let mut completed = 0;
+                                        while let Ok(Some(batch)) = jobs.get_batch(batch_id) {
+                                            let done = batch.total - batch.queued - batch.running;
+                                            while completed < done { progress.increment(&cwd); completed += 1; }
+                                            if done == batch.total { break; }
+                                            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                                        }
+                                    });
+                                    Reply::Ok
+                                }
+                            }
                         }
                         Request::GetSessionSummaryBackfillStatus { cwd } => {
                             let progress = backfill_registry.get(&cwd).unwrap_or_default();
@@ -1041,8 +1091,7 @@ async fn handle_conn(
                             }
                         }
                         Request::SubmitSummaryBatch { cwd, provider, model } => {
-                            let _ = (provider, model);
-                            match summary_service.submit_batch(&cwd) {
+                            match summary_service.submit_batch_with_provider(&cwd, provider, model) {
                                 Ok((batch_id, total)) => {
                                     Reply::SummaryBatchSubmitted { batch_id, total }
                                 }

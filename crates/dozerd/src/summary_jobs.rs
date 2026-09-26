@@ -212,6 +212,16 @@ impl SummaryJobStore {
             );",
         )
         .context("建规范总结表")?;
+        let has_cancelled = conn
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('summary_batch_jobs') WHERE name='cancelled'",
+            )?
+            .exists([])?;
+        if !has_cancelled {
+            conn.execute_batch(
+                "ALTER TABLE summary_batch_jobs ADD COLUMN cancelled INTEGER NOT NULL DEFAULT 0;",
+            )?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -227,6 +237,16 @@ impl SummaryJobStore {
     ) -> Result<bool> {
         let mut conn = self.conn.lock().expect("db lock");
         let tx = conn.transaction().context("开事务")?;
+        let status: Option<String> = tx
+            .query_row(
+                "SELECT status FROM summary_jobs WHERE job_id=?1",
+                [result.source_job_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if status.as_deref() == Some("cancelled") {
+            return Ok(false);
+        }
         let existing: Option<i64> = tx
             .query_row(
                 "SELECT generation FROM conversation_summary_results WHERE conversation_id = ?1",
@@ -276,6 +296,7 @@ impl SummaryJobStore {
             ],
         )
         .context("写规范结果")?;
+        tx.execute("UPDATE summary_jobs SET status='succeeded',error_kind=NULL,error_detail=NULL WHERE job_id=?1", [result.source_job_id])?;
         tx.commit().context("提交结果事务")?;
         Ok(true)
     }
@@ -462,7 +483,7 @@ impl SummaryJobStore {
             "UPDATE summary_jobs
              SET status = ?1, error_kind = ?2, error_detail = ?3, phase = ?4,
                  updated_ts_ms = ?5
-             WHERE job_id = ?6",
+             WHERE job_id = ?6 AND status != 'cancelled'",
             rusqlite::params![
                 status_to_str(status),
                 error_kind.map(error_kind_to_str),
@@ -564,7 +585,7 @@ impl SummaryJobStore {
 
     pub fn get_batch(&self, batch_id: i64) -> Result<Option<SummaryBatchInfo>> {
         let conn = self.conn.lock().expect("db lock");
-        let row = conn
+        let mut row = conn
             .query_row(
                 "SELECT batch_id, cwd, strategy, total, queued, running, succeeded,
                         failed, cancelled, skipped, created_ts_ms, updated_ts_ms
@@ -588,7 +609,58 @@ impl SummaryJobStore {
                 },
             )
             .optional()?;
+        if let Some(ref mut batch) = row {
+            let mut stmt = conn.prepare(
+                "SELECT CASE WHEN b.cancelled=1 THEN 'cancelled' ELSE j.status END, count(*)
+                FROM summary_batch_jobs b JOIN summary_jobs j ON j.job_id=b.job_id
+                WHERE b.batch_id=?1 GROUP BY 1",
+            )?;
+            let counts = stmt
+                .query_map([batch_id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if !counts.is_empty() {
+                batch.queued = 0;
+                batch.running = 0;
+                batch.succeeded = 0;
+                batch.failed = 0;
+                batch.cancelled = 0;
+                for (status, n) in counts {
+                    match status.as_str() {
+                        "queued" => batch.queued = n,
+                        "running" => batch.running = n,
+                        "succeeded" => batch.succeeded = n,
+                        "failed" => batch.failed = n,
+                        "cancelled" => batch.cancelled = n,
+                        _ => {}
+                    }
+                }
+                batch.total = batch.queued
+                    + batch.running
+                    + batch.succeeded
+                    + batch.failed
+                    + batch.cancelled
+                    + batch.skipped;
+            }
+        }
         Ok(row)
+    }
+
+    pub fn cancel_batch(&self, batch_id: i64) -> Result<()> {
+        let mut conn = self.conn.lock().expect("db lock");
+        let tx = conn.transaction()?;
+        tx.execute(
+            "UPDATE summary_batch_jobs SET cancelled=1 WHERE batch_id=?1
+            AND job_id IN (SELECT job_id FROM summary_jobs WHERE status IN ('queued','running'))",
+            [batch_id],
+        )?;
+        tx.execute("UPDATE summary_jobs SET status='cancelled',error_kind='cancelled',error_detail='批次被取消'
+            WHERE trigger='backfill' AND status IN ('queued','running')
+            AND job_id IN (SELECT job_id FROM summary_batch_jobs WHERE batch_id=?1)
+            AND NOT EXISTS (SELECT 1 FROM summary_batch_jobs b WHERE b.job_id=summary_jobs.job_id AND b.cancelled=0)", [batch_id])?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// 更新批次计数(由调度层在 job 状态变迁时调用)。
@@ -806,8 +878,10 @@ mod tests {
         let batch = store.get_batch(bid).unwrap().unwrap();
         assert_eq!(batch.cwd, "/p");
         assert_eq!(batch.strategy, "missing_or_stale");
-        assert_eq!(batch.total, 3);
-        assert_eq!(batch.failed, 1);
+        // Stored counters may lag; the read must derive live state from jobs.
+        assert_eq!(batch.total, 1);
+        assert_eq!(batch.queued, 1);
+        assert_eq!(batch.failed, 0);
     }
 
     #[test]
@@ -825,6 +899,74 @@ mod tests {
             Some("v2")
         );
         assert!(store.load_artifact(1, "missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn shared_batches_observe_live_state_and_cancel_independently() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SummaryJobStore::open(&dir.path().join("t.db")).unwrap();
+        let job = store
+            .create_job(
+                "c",
+                None,
+                SummaryTrigger::Backfill,
+                AgentKind::Claude,
+                None,
+                "rev",
+                "v2",
+                1,
+                SummaryJobStatus::Running,
+            )
+            .unwrap();
+        let a = store.create_batch("/p", "repair").unwrap();
+        let b = store.create_batch("/p", "repair").unwrap();
+        store.add_batch_job(a, job).unwrap();
+        store.add_batch_job(b, job).unwrap();
+        assert_eq!(store.get_batch(b).unwrap().unwrap().running, 1);
+        store.cancel_batch(a).unwrap();
+        assert_eq!(
+            store.get_job(job).unwrap().unwrap().status,
+            SummaryJobStatus::Running
+        );
+        assert_eq!(store.get_batch(a).unwrap().unwrap().cancelled, 1);
+        store
+            .update_job_status(job, SummaryJobStatus::Succeeded, None, None, None)
+            .unwrap();
+        assert_eq!(store.get_batch(b).unwrap().unwrap().succeeded, 1);
+        assert_eq!(store.get_batch(a).unwrap().unwrap().cancelled, 1);
+    }
+
+    #[test]
+    fn cancelled_job_cannot_publish_or_become_successful() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SummaryJobStore::open(&dir.path().join("t.db")).unwrap();
+        let job = store
+            .create_job(
+                "c",
+                None,
+                SummaryTrigger::Backfill,
+                AgentKind::Claude,
+                None,
+                "rev",
+                "v2",
+                1,
+                SummaryJobStatus::Running,
+            )
+            .unwrap();
+        let batch = store.create_batch("/p", "repair").unwrap();
+        store.add_batch_job(batch, job).unwrap();
+        store.cancel_batch(batch).unwrap();
+        let mut summary = result("c", "取消后的结果");
+        summary.source_job_id = job;
+        assert!(!store.record_result(&summary, 1).unwrap());
+        store
+            .update_job_status(job, SummaryJobStatus::Succeeded, None, None, None)
+            .unwrap();
+        assert_eq!(
+            store.get_job(job).unwrap().unwrap().status,
+            SummaryJobStatus::Cancelled
+        );
+        assert!(store.get_result("c").unwrap().is_none());
     }
 
     fn payload(

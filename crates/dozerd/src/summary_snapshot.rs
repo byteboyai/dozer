@@ -8,7 +8,7 @@ use dozer_core::protocol::TurnRecord;
 
 /// 总结管线版本。改变分块/归并/抽取 prompt 等"影响产出版本"的算法时 +1,
 /// 旧 pipeline_version 的结果在下次修复时会被重新生成(计入"stale")。
-pub const PIPELINE_VERSION: &str = "v1";
+pub const PIPELINE_VERSION: &str = "v2";
 
 /// 把一段回合记录规范化成稳定文本:每行一个回合,字段用制表符分隔,顺序
 /// 固定(role → thinking → is_error → 工具调用摘要 → 正文)。隐藏 thinking

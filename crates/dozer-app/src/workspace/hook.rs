@@ -32,6 +32,7 @@ pub(crate) fn should_summarize_on_close(
                 | AgentKind::V8agent
                 | AgentKind::Goose
                 | AgentKind::Aider
+                | AgentKind::Codex
         )
 }
 

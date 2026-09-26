@@ -1124,7 +1124,11 @@ impl App {
                     );
                     if let Some(rv) = &mut ws.review
                         && let ReviewSource::Conversation(cid) = &rv.source
-                        && let Some(row) = ws.conversations.sessions().and_then(|rows| rows.iter().find(|r| &r.conversation_id == cid)) {
+                        && let Some(row) = ws
+                            .conversations
+                            .sessions()
+                            .and_then(|rows| rows.iter().find(|r| &r.conversation_id == cid))
+                    {
                         rv.summary_title = Some(row.display_title.clone());
                         rv.summary_text = row.summary.clone();
                     }
@@ -5235,7 +5239,10 @@ impl App {
                 match client.get_summary_job(job_id).await {
                     Ok(Some(job)) => {
                         if job.status == SummaryJobStatus::Failed {
-                            let _ = proxy.send_event(Message::DaemonError(format!("生成总结失败：{}", job.error_detail.unwrap_or_else(|| "未知错误".into()))));
+                            let _ = proxy.send_event(Message::DaemonError(format!(
+                                "生成总结失败：{}",
+                                job.error_detail.unwrap_or_else(|| "未知错误".into())
+                            )));
                             return;
                         }
                         if matches!(
@@ -5249,12 +5256,14 @@ impl App {
                     }
                     Ok(None) => {
                         tracing::warn!(job_id, %cid, "总结任务不存在");
-                        let _ = proxy.send_event(Message::DaemonError("总结任务不存在，请重试".into()));
+                        let _ =
+                            proxy.send_event(Message::DaemonError("总结任务不存在，请重试".into()));
                         break;
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, job_id, %cid, "查询总结任务失败");
-                        let _ = proxy.send_event(Message::DaemonError(format!("查询总结失败：{e}")));
+                        let _ =
+                            proxy.send_event(Message::DaemonError(format!("查询总结失败：{e}")));
                         break;
                     }
                 }

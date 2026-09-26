@@ -100,14 +100,16 @@ fn classify_failure(exit_code: i32, stderr: &str) -> SummaryInvokeError {
         || lower.contains("401")
         || lower.contains("not logged in")
     {
-        SummaryInvokeError::Authentication(tail)
+        SummaryInvokeError::Authentication("CLI 认证失败，请检查登录状态或 API key".into())
     } else if lower.contains("rate limit")
         || lower.contains("429")
         || lower.contains("too many requests")
     {
-        SummaryInvokeError::RateLimit(tail)
+        SummaryInvokeError::RateLimit("CLI 请求被限流，请稍后重试".into())
     } else {
-        SummaryInvokeError::NonzeroExit(exit_code, tail)
+        // CLI diagnostics can contain tokens, prompts and environment values.
+        // Persist an allowlisted diagnosis rather than unverifiable redaction.
+        SummaryInvokeError::NonzeroExit(exit_code, "CLI 非正常退出；请检查总结器配置".into())
     }
 }
 
@@ -126,12 +128,20 @@ fn stderr_tail(stderr: &str, max: usize) -> String {
 
 /// 有界读取一个 reader 直到 EOF 或上限,超上限截断标记。`R: AsyncRead`。
 async fn read_bounded<R: tokio::io::AsyncRead + Unpin>(reader: R, max: usize) -> String {
-    let mut reader = reader.take((max + 1) as u64);
+    let mut reader = reader;
     let mut buf = Vec::new();
-    let _ = reader.read_to_end(&mut buf).await;
+    let mut block = [0u8; 8192];
+    let mut truncated = false;
+    while let Ok(n) = reader.read(&mut block).await {
+        if n == 0 {
+            break;
+        }
+        let keep = n.min(max.saturating_sub(buf.len()));
+        buf.extend_from_slice(&block[..keep]);
+        truncated |= keep < n;
+    }
     let mut s = String::from_utf8_lossy(&buf).into_owned();
-    if buf.len() > max {
-        s.truncate(max);
+    if truncated {
         s.push_str("…[truncated]");
     }
     s
@@ -194,31 +204,68 @@ pub async fn invoke_summary_parts(
     config: &SummaryConfig,
     cwd: &Path,
 ) -> Result<String, SummaryInvokeError> {
-    let Some(bare) = crate::headless_agent::bare_program_name(agent) else {
-        return Err(SummaryInvokeError::UnsupportedCapability(
-            "该 agent 没有 headless 适配器".into(),
-        ));
-    };
-    let program = crate::headless_agent::resolve_binary_path(bare)
-        .await
-        .unwrap_or_else(|| bare.to_string());
-    let Some((cmd, stdin_bytes)) =
-        crate::headless_agent::build_command_parts(agent, &program, instruction, data)
-    else {
-        return Err(SummaryInvokeError::UnsupportedCapability(
-            "该 agent 没有 headless 总结适配器".into(),
-        ));
-    };
-    let (stdout, _stderr, code) = run_isolated_capture(
-        cmd,
-        stdin_bytes,
-        cwd,
-        Duration::from_secs(config.call_timeout_secs),
-        agent,
-    )
-    .await?;
-    let _ = code;
-    Ok(stdout)
+    // Include shell resolution and stdin/stdout handling in the same deadline.
+    tokio::time::timeout(Duration::from_secs(config.call_timeout_secs), async {
+        if provider_isolation(agent) != Some(Isolation::ReadOnly) {
+            return Err(SummaryInvokeError::UnsupportedCapability(format!(
+                "{} 尚未验证禁工具/只读总结能力，请选择 Claude 或 Codex",
+                agent.label()
+            )));
+        }
+        std::fs::create_dir_all(cwd).map_err(|e| SummaryInvokeError::Spawn(e.to_string()))?;
+        let scratch = tempfile::Builder::new()
+            .prefix("summary-")
+            .tempdir_in(cwd)
+            .map_err(|e| SummaryInvokeError::Spawn(e.to_string()))?;
+        let Some(bare) = crate::headless_agent::bare_program_name(agent) else {
+            return Err(SummaryInvokeError::UnsupportedCapability(
+                "该 agent 没有 headless 适配器".into(),
+            ));
+        };
+        let program = crate::headless_agent::resolve_binary_path(bare)
+            .await
+            .unwrap_or_else(|| bare.to_string());
+        let Some((mut cmd, stdin_bytes)) =
+            crate::headless_agent::build_command_parts(agent, &program, instruction, data)
+        else {
+            return Err(SummaryInvokeError::UnsupportedCapability(
+                "该 agent 没有 headless 总结适配器".into(),
+            ));
+        };
+        if agent == AgentKind::Claude {
+            cmd.arg("--tools")
+                .arg("")
+                .arg("--strict-mcp-config")
+                .arg("--mcp-config")
+                .arg("{\"mcpServers\":{}}");
+        }
+        if let Some(model) = &config.model {
+            cmd.arg("--model").arg(model);
+        }
+        let (stdout, _, _) = run_isolated_capture(
+            cmd,
+            stdin_bytes,
+            scratch.path(),
+            Duration::from_secs(config.call_timeout_secs),
+            agent,
+        )
+        .await?;
+        Ok(stdout)
+    })
+    .await
+    .map_err(|_| SummaryInvokeError::Timeout)?
+}
+
+// Drop runs on task cancellation and runtime shutdown as well as timeout. Keep
+// the original process-group id even after the leader has exited.
+struct ProcessGroup(u32);
+impl Drop for ProcessGroup {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(-(self.0 as i32), libc::SIGKILL);
+        }
+    }
 }
 
 /// 隔离执行一个已构造的命令:临时 cwd、清 env、deadline、有界并发读取
@@ -248,72 +295,51 @@ async fn run_isolated_capture(
     });
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    cmd.kill_on_drop(true);
     #[cfg(unix)]
     cmd.process_group(0);
 
     let mut child = cmd
         .spawn()
         .map_err(|e| SummaryInvokeError::Spawn(format!("spawn {} 失败: {e}", agent.label())))?;
-
-    // 写 stdin(有则),写完立即关闭,stdin 提前关闭由 write 返回错误体现。
-    if let Some(bytes) = stdin_bytes {
-        use tokio::io::AsyncWriteExt;
-        if let Some(mut stdin) = child.stdin.take()
-            && let Err(e) = stdin.write_all(&bytes).await
-        {
-            kill_process_group(&child);
-            let _ = child.start_kill();
-            return Err(SummaryInvokeError::NonzeroExit(
-                -1,
-                format!("写 stdin 失败: {e}"),
-            ));
-        }
-        // drop stdin 关闭管道。
-    }
-    drop(child.stdin.take());
-
-    let stdout_reader = child.stdout.take();
-    let stderr_reader = child.stderr.take();
-
-    let stdout_task = tokio::spawn(async move {
-        match stdout_reader {
-            Some(r) => read_bounded(r, MAX_OUTPUT_BYTES).await,
-            None => String::new(),
-        }
-    });
-    let stderr_task = tokio::spawn(async move {
-        match stderr_reader {
-            Some(r) => read_bounded(r, MAX_OUTPUT_BYTES).await,
-            None => String::new(),
-        }
-    });
-
-    let wait_result = tokio::time::timeout(timeout, child.wait()).await;
-
-    let status = match wait_result {
-        Ok(Ok(status)) => status,
-        Ok(Err(e)) => {
-            return Err(SummaryInvokeError::Spawn(format!(
-                "等待 {} 退出失败: {e}",
-                agent.label()
-            )));
-        }
+    let _group = ProcessGroup(child.id().expect("spawned child"));
+    let mut stdin = child.stdin.take();
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+    let io = async {
+        let write = async {
+            use tokio::io::AsyncWriteExt;
+            let result = match (stdin.as_mut(), stdin_bytes) {
+                (Some(input), Some(bytes)) => input.write_all(&bytes).await,
+                _ => Ok(()),
+            };
+            drop(stdin.take());
+            result
+        };
+        tokio::join!(
+            write,
+            read_bounded(stdout, MAX_OUTPUT_BYTES),
+            read_bounded(stderr, MAX_OUTPUT_BYTES),
+            child.wait()
+        )
+    };
+    let (write, stdout, stderr, status) = match tokio::time::timeout(timeout, io).await {
+        Ok(result) => result,
         Err(_) => {
-            // 超时:先杀整个进程组 + 回收(此时子进程退出、pipe 关闭),再去
-            // await stdout/stderr 残留输出。顺序不能反——先 await 输出 task
-            // 会在子进程仍持 pipe 写端时死等,超时退不出去。
             kill_process_group(&child);
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            let _ = stdout_task.await;
-            let _ = stderr_task.await;
+            let _ = child.kill().await;
             return Err(SummaryInvokeError::Timeout);
         }
     };
-
-    let stdout = stdout_task.await.unwrap_or_default();
-    let stderr = stderr_task.await.unwrap_or_default();
+    let status = status.map_err(|e| SummaryInvokeError::Spawn(e.to_string()))?;
     let code = status.code();
+    if !status.success() {
+        return Err(classify_failure(code.unwrap_or(-1), &stderr));
+    }
+    write.map_err(|e| SummaryInvokeError::NonzeroExit(-1, format!("写 stdin 失败: {e}")))?;
+    if stdout.ends_with("…[truncated]") {
+        return Err(SummaryInvokeError::InvalidOutput("模型输出超过限制".into()));
+    }
     Ok((stdout, stderr, code))
 }
 
@@ -355,6 +381,53 @@ async fn run_isolated(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn capture_checks_exit_even_with_valid_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.args([
+            "-c",
+            "echo '{\"title\":\"fake\",\"summary\":\"fake\"}'; echo '401 secret-token' >&2; exit 1",
+        ]);
+        let err = run_isolated_capture(
+            cmd,
+            None,
+            dir.path(),
+            Duration::from_secs(2),
+            AgentKind::Claude,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, SummaryInvokeError::Authentication(_)));
+        assert!(!format!("{err:?}").contains("secret-token"));
+    }
+
+    #[tokio::test]
+    async fn capture_deadline_includes_blocked_stdin() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.args(["-c", "sleep 30"]);
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            run_isolated_capture(
+                cmd,
+                Some(vec![b'x'; 1_000_000]),
+                dir.path(),
+                Duration::from_millis(100),
+                AgentKind::Claude,
+            ),
+        )
+        .await;
+        assert_eq!(result.unwrap().unwrap_err(), SummaryInvokeError::Timeout);
+    }
+
+    #[tokio::test]
+    async fn bounded_reader_drains_without_splitting_utf8() {
+        let input = "你".repeat(10_000);
+        let out = read_bounded(input.as_bytes(), 100).await;
+        assert!(out.ends_with("…[truncated]"));
+    }
 
     #[test]
     fn provider_isolation_maps_claude_and_codex_to_readonly() {

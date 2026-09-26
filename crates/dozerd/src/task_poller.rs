@@ -33,6 +33,7 @@ pub fn spawn(
     transcripts: Arc<TranscriptStore>,
     projects: Arc<ProjectStore>,
     in_flight: InFlight,
+    summary_service: Arc<crate::summary_service::SummaryService>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(POLL_INTERVAL);
@@ -45,6 +46,7 @@ pub fn spawn(
                 &transcripts,
                 &projects,
                 &in_flight,
+                Some(&summary_service),
             )
             .await;
         }
@@ -59,6 +61,7 @@ pub async fn tick_once(
     transcripts: &TranscriptStore,
     projects: &ProjectStore,
     in_flight: &InFlight,
+    summary_service: Option<&crate::summary_service::SummaryService>,
 ) {
     let Ok(enabled_categories) = categories.list_auto_poll_enabled_all() else {
         return;
@@ -91,6 +94,7 @@ pub async fn tick_once(
                 projects,
                 &todo,
                 None,
+                summary_service,
             )
             .await;
             in_flight.lock().expect("in_flight lock").remove(&todo.id);
@@ -129,6 +133,7 @@ mod tests {
             &transcripts,
             &projects,
             &in_flight,
+            None,
         )
         .await;
         assert!(in_flight.lock().unwrap().contains(&todo.id));
@@ -158,6 +163,7 @@ mod tests {
             &transcripts,
             &projects,
             &in_flight,
+            None,
         )
         .await;
         assert!(

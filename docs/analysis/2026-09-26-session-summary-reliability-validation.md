@@ -1,6 +1,20 @@
 # 会话总结可靠性与完整性修复 — 验证报告
 
-状态：部分完成。2026-09-26。
+状态：核心链路修复并通过自动化回归；真实长会话与完整 UI 配置体验仍待人工验收。2026-09-26。
+
+## 2026-09-26 审核后修复
+
+- 新版 `conversation_summary_results` 已合并进会话列表查询，生成后会话面板立即读取新版标题和摘要，并保留旧行的 `task_id`。
+- worker 会创建按 job 隔离的临时目录；目前仅允许已验证禁工具/只读能力的 Claude、Codex，其他 provider 明确返回 `unsupported_capability`。
+- stdin、stdout、stderr、进程退出与路径解析受同一 deadline 控制；非零退出必定失败，认证/限流分类不再持久化原始 stderr；取消或 daemon shutdown 会终止进程组。
+- 单块也执行最终 LLM 综合，摘要包含决策、验证与未完成事项；pipeline 升级为 v2，旧 v1 结果会被重新生成。
+- provider/model、超时、重试次数与输入预算随 job 持久化；瞬态错误会在总预算内退避重试。
+- 关闭、自然退出和 Shutdown 统一提交持久任务，并在冻结输入前重新摄取 transcript 尾部；Codex 纳入关闭总结。
+- 重复提交复用活动 job；共享 batch 独立取消并从 job 实时计算进度；取消任务不能发布结果。
+- “修复项目”和单条生成把提交、轮询、模型错误显示给用户，不再把失败渲染成绿色 0/0。
+- 新增真实 daemon/client 回归，验证新版结果能经会话面板查询返回、覆盖旧拼接并保留任务关联。
+
+本轮验证：`dozerd` 355 个测试、client/core/MCP 集成及 doc tests、`dozer-app` 1386 个测试全部通过。严格 clippy 被仓库既有且与本修复无关的 `preview_commands`、CodeHealth、Homespace 等告警阻断；本轮没有扩大范围修改这些模块。
 
 配套：[Spec](../superpowers/specs/2026-09-26-session-summary-reliability-design.md)、
 [Implementation Plan](../superpowers/plans/2026-09-26-session-summary-reliability.md)。
@@ -132,11 +146,9 @@ AI: 验证完成，probe_marker.txt 确实存在。
 ## 遗留限制（未验收项）
 
 1. **A3 真实长会话**：未用真实 LLM 跑超过 16k 字符的长会话核对事实覆盖。
-2. **A4 aider/v8agent 认证**：aider 的 gemini key 过期、v8agent 缺 `OPENAI_API_KEY`，未生成真实总结（其余 5 家 codex/claude/codebuddy/opencode/goose 已通过）。
-3. **Task 7 会话面板 UI**：会话详情的"生成/重试/重新生成"按钮、provider 配置组件、失败重试/取消 UI 未实现（修复项目总结步骤已切换 V2）。
-4. **自然退出**：agent 进程自然结束时的总结任务提交未在 daemon 退出统一处理（当前只有关闭/Shutdown 触发）。
-5. **chunk 粒度重用**：重启后已成功 chunk 的输出重用未实现（只做了 job 级 requeue）。
-6. **真实 UI 点击**：未从"修复项目"按钮真实点击走通全链路核对数据库结果/provider/revision。
+2. **Provider 隔离范围**：新版生产管线只启用具备已验证禁工具/只读能力的 Claude 与 Codex。旧 smoke 中其他 CLI 能输出 facts，但仅有临时目录隔离，因此当前会明确拒绝，待逐家补齐可靠隔离契约后再启用。
+3. **Task 7 UI 后续项**：会话详情已有“生成总结”及可见错误，修复项目已有成功/失败/跳过；provider 配置组件、失败列表的直接重试和取消按钮尚未实现。
+4. **真实 UI 点击**：新增真实 daemon/client 查询回归，但尚未从“修复项目”按钮人工点击核对窗口生命周期和视觉反馈。
 
 ## 回退说明
 

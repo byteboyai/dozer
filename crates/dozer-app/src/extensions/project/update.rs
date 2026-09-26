@@ -193,6 +193,11 @@ pub fn update(
                 }
             }
         }
+        Message::SummaryBackfillFailed(_, error) => {
+            if let Some(run) = &mut ws_state.scaffold_run {
+                run.backfill = BackfillStepState::Failed(error);
+            }
+        }
         Message::SummaryBackfillProgress(_, completed, total, succeeded, failed, skipped) => {
             if let Some(run) = &mut ws_state.scaffold_run {
                 let progress = BackfillProgress {
@@ -459,11 +464,11 @@ pub fn spawn_repair_run(
 
         // 总结步骤改用 V2 批次协议:提交批次 → 轮询批次状态,展示成功/失败/
         // 跳过计数,不再用旧 0/0 进度掩盖失败(spec 2026-09-26 A7)。
-        let (batch_id, total) = match client.submit_summary_batch(&cwd, None, None).await {
+        let (batch_id, _total) = match client.submit_summary_batch(&cwd, None, None).await {
             Ok(pair) => pair,
             Err(e) => {
                 tracing::warn!(error = %e, "提交总结批次失败");
-                emit(Message::SummaryBackfillProgress(project_id, 0, 0, 0, 0, 0));
+                emit(Message::SummaryBackfillFailed(project_id, e.to_string()));
                 return;
             }
         };
@@ -489,13 +494,15 @@ pub fn spawn_repair_run(
                 }
                 Ok(None) => {
                     tracing::warn!(batch_id, "批次不存在,停止轮询");
-                    emit(Message::SummaryBackfillProgress(
-                        project_id, 0, total, 0, 0, 0,
+                    emit(Message::SummaryBackfillFailed(
+                        project_id,
+                        "总结批次不存在，请重试".into(),
                     ));
                     break;
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "查询总结批次失败,停止轮询");
+                    emit(Message::SummaryBackfillFailed(project_id, e.to_string()));
                     break;
                 }
             }
