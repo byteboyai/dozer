@@ -145,6 +145,20 @@ pub struct DailyUsageChart {
     pub days: Vec<DailyUsageDay>,
 }
 
+/// `days` 里是否至少一天有非零值——趋势窗口若整段都是 0(目标 agent 最近
+/// 这段时间其实没活动),上层就不画这个趋势区,避免白框空难读。
+fn has_any_value(days: &[DaySeries]) -> bool {
+    days.iter().any(|d| d.values.iter().any(|&v| v > 0))
+}
+
+/// 某趋势窗口内所有天、所有子序列值的总和——用于把"标签 + 总量 + 天数"揉
+/// 成一行摘要式图例(如 `Input/Output(23.2m/15days)`),2026-09-16 用户要求
+/// 把 Token 趋势下两张子图各自的标题/图例收成这一种格式,不再分散成色点
+/// 图例 + 独立的"近 N 天"标注两处。
+fn trend_total(days: &[DaySeries]) -> u64 {
+    days.iter().flat_map(|d| d.values.iter().copied()).sum()
+}
+
 /// `view.rs::content_pane` 剩余四态(不含"统计中…",见上面 `UsageViewPayload`
 /// 文档)判定逻辑的纯函数版本,不碰 iced,直接产出要推给 webview 的
 /// payload。**调用方必须先确认 `!ws_state.loading()`**(`take_usage_content_
