@@ -84,10 +84,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aider-adapter-spike"
-version = "0.1.0"
-
-[[package]]
 name = "alacritty_terminal"
 version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7567,47 +7563,6 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
-]
-
-[[package]]
-name = "spike-code-analysis"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "ast-grep-core",
- "ast-grep-language",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "spike-iced-webview"
-version = "0.1.0"
-dependencies = [
- "futures",
- "iced_wgpu",
- "iced_widget",
- "iced_winit",
- "tracing-subscriber",
- "winit",
- "wry",
-]
-
-[[package]]
-name = "spike-ui-complexity"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "ast-grep-core",
- "ast-grep-language",
-]
-
-[[package]]
-name = "spike-webview-child"
-version = "0.1.0"
-dependencies = [
- "winit",
- "wry",
 ]
 
 [[package]]

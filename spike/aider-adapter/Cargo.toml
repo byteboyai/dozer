@@ -1,8 +1,0 @@
-[package]
-name = "aider-adapter-spike"
-version = "0.1.0"
-edition = "2024"
-publish = false
-
-# 一次性 spike：Aider contract 记录（见 README.md），不含可编译代码。
-# 占一个 workspace member 只是为了满足根 Cargo.toml 的 `spike/*` glob。
