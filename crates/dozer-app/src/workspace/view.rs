@@ -414,6 +414,26 @@ pub(crate) fn review_webview_spec(review: Option<&ReviewView>) -> Vec<crate::pre
     }]
 }
 
+/// `review_content_pane` 该渲染哪一态(空/loading/内容三态)。抽成纯函数
+/// 供 headless 单测——视图函数本身只管把结果画出来。
+#[derive(Debug, PartialEq)]
+pub(crate) enum ReviewPaneState {
+    Empty,
+    Loading,
+    Ready,
+}
+
+pub(crate) fn review_pane_state(rv: Option<&ReviewView>) -> ReviewPaneState {
+    let Some(rv) = rv else {
+        return ReviewPaneState::Empty;
+    };
+    if rv.loaded_nonce == Some(rv.nonce) {
+        ReviewPaneState::Ready
+    } else {
+        ReviewPaneState::Loading
+    }
+}
+
 /// 会话审阅内容面板(右面板区"对话"视图的内容侧):直接读 `ws.review`,
 /// 不经过 `ws.preview` 的 tab 系统——新外壳下审阅是独立面板,不再是
 /// 预览 tab 条里的一个 tab。
@@ -446,25 +466,42 @@ pub(crate) fn review_content_pane<'a>(
     .padding(theme::region::project_pane().padding);
     let mut content = column![header].spacing(region.gap);
 
-    if ws.review.is_some() {
-        let body = review_content(column![].spacing(region.gap), ws);
-        content = content.push(
-            Scrollable::new(body)
+    match review_pane_state(ws.review.as_ref()) {
+        ReviewPaneState::Empty => {
+            content = content.push(
+                container(lh(text("暂无审阅内容——点击左侧对话列表中的对话开始审阅")
+                    .size(byteui::theme::font::subtitle())
+                    .color(byteui::theme::color::current().dim)))
                 .width(Length::Fill)
-                .height(Length::Fill)
-                .direction(scrollable::Direction::Vertical(
-                    byteui::interaction::scrollbar::scrollbar(),
+                .height(Length::Fill),
+            );
+        }
+        ReviewPaneState::Loading => {
+            // 与 Empty 同结构(独占内容区、不渲染 Scrollable),只是文案换成
+            // "加载中",让 webview 隐藏期间这块区域有意义的提示而不是空的可
+            // 滚动区域(同用量面板"统计中…"分支的写法,视觉基调统一)。
+            content = content.push(
+                container(byteui::feedback::math_curve::loading_hint(
+                    byteui::feedback::math_curve::Curve::RoseThree,
+                    "加载中…",
+                    64.0,
                 ))
-                .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
-        );
-    } else {
-        content = content.push(
-            container(lh(text("暂无审阅内容——点击左侧对话列表中的对话开始审阅")
-                .size(byteui::theme::font::subtitle())
-                .color(byteui::theme::color::current().dim)))
-            .width(Length::Fill)
-            .height(Length::Fill),
-        );
+                .width(Length::Fill)
+                .height(Length::Fill),
+            );
+        }
+        ReviewPaneState::Ready => {
+            let body = review_content(column![].spacing(region.gap), ws);
+            content = content.push(
+                Scrollable::new(body)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .direction(scrollable::Direction::Vertical(
+                        byteui::interaction::scrollbar::scrollbar(),
+                    ))
+                    .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
+            );
+        }
     }
 
     container(content.padding(region.padding))
@@ -2086,5 +2123,50 @@ mod tests {
             stale.first_frame_offset_ms().is_none(),
             "世代不符不应写回首帧"
         );
+    }
+
+    mod review_pane_state_tests {
+        use super::*;
+        use crate::transcript::ReviewEntry;
+        use dozer_core::protocol::AgentKind;
+
+        fn rv(nonce: u64, loaded_nonce: Option<u64>) -> ReviewView {
+            ReviewView {
+                source: ReviewSource::Conversation("c1".into()),
+                entries: vec![ReviewEntry::Human { text: "hi".into() }],
+                error: None,
+                agent: AgentKind::Claude,
+                nonce,
+                summary_title: None,
+                summary_text: None,
+                summary_time: None,
+                loaded_nonce,
+            }
+        }
+
+        #[test]
+        fn none_is_empty() {
+            assert_eq!(review_pane_state(None), ReviewPaneState::Empty);
+        }
+
+        #[test]
+        fn unloaded_nonce_is_loading() {
+            assert_eq!(
+                review_pane_state(Some(&rv(3, None))),
+                ReviewPaneState::Loading
+            );
+            assert_eq!(
+                review_pane_state(Some(&rv(3, Some(2)))),
+                ReviewPaneState::Loading
+            );
+        }
+
+        #[test]
+        fn matching_nonce_is_ready() {
+            assert_eq!(
+                review_pane_state(Some(&rv(3, Some(3)))),
+                ReviewPaneState::Ready
+            );
+        }
     }
 }
