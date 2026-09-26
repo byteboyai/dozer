@@ -612,6 +612,10 @@ pub enum Message {
     /// (同 `usage::WebviewPushState` 不按项目分的理由一致),直接携带已解析
     /// 事件。
     UsageContentWebviewEvent(crate::extensions::usage::UsageWebviewEvent),
+    /// review-trace(会话审阅)webview 发回的已解析事件(目前只有
+    /// `document_loaded`)。不带 binding——`ws.review` 是"当前聚焦项目"的
+    /// 直接字段,不按 project_id/tab_id 路由,没有身份需要校验。
+    ReviewTraceWebviewEvent(crate::preview::ReviewTraceEvent),
     /// JSON host(vanilla-jsoneditor)发回的事件(对照期 feature)。
     JsonEditorEvent(
         crate::preview::EditorHostBinding,

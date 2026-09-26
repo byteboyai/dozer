@@ -34,6 +34,20 @@ use iced_widget::{button, column, container, text};
 use std::path::PathBuf;
 
 use super::*;
+
+/// review-trace webview 报回 `document_loaded` 后落地:"当前 nonce 的内容
+/// 已可显示"。抽成纯函数便于 headless 单测(构造完整 `App` 成本过高)。
+///
+/// `None`/不等于 `nonce` 都算"未 loaded";事件本身不携带"我是为哪个 nonce
+/// 报的"(协议从简,见 spec"风险与边界"),因此只能把 `loaded_nonce` 设成
+/// **事件到达那一刻的当前 nonce**——快速连切两次时,第一次的过期事件会提前
+/// 让新 nonce 追上(已知限制,不在本任务修复范围)。
+pub(crate) fn mark_review_loaded(review: &mut Option<crate::workspace::ReviewView>) {
+    if let Some(rv) = review {
+        rv.loaded_nonce = Some(rv.nonce);
+    }
+}
+
 impl App {
     pub fn update(&mut self, message: Message) {
         match message {
@@ -630,6 +644,12 @@ impl App {
                             }
                         }
                     }
+                });
+            }
+            Message::ReviewTraceWebviewEvent(event) => {
+                let crate::preview::ReviewTraceEvent::DocumentLoaded = event;
+                self.with_focused_project(|ws, _io| {
+                    mark_review_loaded(&mut ws.review);
                 });
             }
             Message::FlyfishEvent(binding, event) => {
@@ -5502,5 +5522,51 @@ impl App {
                 bottom: 0.0,
             })
             .into()
+    }
+}
+
+#[cfg(test)]
+mod review_trace_tests {
+    use super::*;
+    use crate::transcript::ReviewEntry;
+    use crate::workspace::ReviewSource;
+    use dozer_core::protocol::AgentKind;
+
+    fn review(nonce: u64, loaded_nonce: Option<u64>) -> crate::workspace::ReviewView {
+        crate::workspace::ReviewView {
+            source: ReviewSource::Conversation("c1".into()),
+            entries: vec![ReviewEntry::Human { text: "hi".into() }],
+            error: None,
+            agent: AgentKind::Claude,
+            nonce,
+            summary_title: None,
+            summary_text: None,
+            summary_time: None,
+            loaded_nonce,
+        }
+    }
+
+    #[test]
+    fn sets_loaded_nonce_to_current_nonce() {
+        let mut review = Some(review(5, None));
+        mark_review_loaded(&mut review);
+        assert_eq!(review.as_ref().unwrap().loaded_nonce, Some(5));
+    }
+
+    /// 对应 Review Focus"过期事件":事件到达时 nonce 已经自增,`loaded_nonce`
+    /// 只能追到**当前**值(6)而非事件本该对应的旧值——已知限制,事件不携带
+    /// nonce。这条测试记录该行为,避免未来被误当成未测疏漏。
+    #[test]
+    fn stale_event_still_advances_to_current_nonce_known_limitation() {
+        let mut review = Some(review(6, None));
+        mark_review_loaded(&mut review);
+        assert_eq!(review.as_ref().unwrap().loaded_nonce, Some(6));
+    }
+
+    #[test]
+    fn no_op_when_review_is_none() {
+        let mut review: Option<crate::workspace::ReviewView> = None;
+        mark_review_loaded(&mut review);
+        assert!(review.is_none());
     }
 }
