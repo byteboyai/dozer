@@ -2447,6 +2447,14 @@ impl Runner {
                 let _ = view.evaluate_script(&js);
             }
         }
+        // 用量面板内容侧 webview(单固定槽,不在 PreviewPane tab 模型里):
+        // 内容经声明式比较(`WebviewPushState::pending_push`)推送,与上面的
+        // Git Log diff 命令同一注入节奏。
+        for (webview_id, js) in app.take_usage_content_script(&available_webview_ids) {
+            if let Some((view, _)) = webviews.get(&webview_id) {
+                let _ = view.evaluate_script(&js);
+            }
+        }
     }
 
     /// 空白页信息卡后台扫描钩子:`PreviewPane::blank_info` 空、active tab 为

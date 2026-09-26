@@ -516,6 +516,23 @@ pub(crate) fn sync_webview_pool(
                                             tracing::warn!(%error, "无法解析 flyfish IPC");
                                         }
                                     }
+                                } else if webview_id == crate::app::USAGE_CONTENT_ID_OFFSET
+                                    && looks_like_envelope
+                                {
+                                    // usage-content 不是 CodeMirror/JSON/Flyfish
+                                    // 家族,不复用那三者任何一个 binding,直接按固定
+                                    // webview id 判断(单槽面板,没有 tab/document 身份
+                                    // 需要携带)。
+                                    match crate::extensions::usage::parse_usage_event(body) {
+                                        Ok(event) => {
+                                            let _ = ipc_proxy.send_event(
+                                                Message::UsageContentWebviewEvent(event),
+                                            );
+                                        }
+                                        Err(error) => {
+                                            tracing::warn!(%error, "无法解析 usage-content IPC");
+                                        }
+                                    }
                                 } else if let Some(binding) = editor_binding.as_ref() {
                                     let expected = crate::preview::HostBinding::new(
                                         binding.project_id,

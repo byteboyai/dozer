@@ -451,6 +451,9 @@ pub struct App {
     /// `extensions::git_log`。`App` 级共享、不按项目分(现状,纯重构不改,
     /// 见 `sync_git_log_to_active_project`)。
     pub(crate) git_log: git_log::State,
+    /// 用量面板内容侧 Preact webview 的推送判定状态(固定单槽、不按项目分,
+    /// 见 `extensions::usage::WebviewPushState`)。
+    pub(crate) usage_webview: crate::extensions::usage::WebviewPushState,
     /// 数据库面板 App 级状态(哪些驱动类型在"新增数据源"下拉里可选,
     /// 启动时读盘)——见 `extensions::database::AppState`。
     pub(crate) database: database::AppState,
@@ -629,6 +632,9 @@ pub(crate) const CONVERSATION_REVIEW_ID_OFFSET: usize = 2_000_000;
 /// Git Log 面板 diff webview 的固定单槽位 id(不是池的偏移起点——这个面板
 /// 没有 tab 概念,任意时刻最多一个 diff webview,直接用这个常量本身当 id)。
 pub(crate) const GIT_LOG_DIFF_ID_OFFSET: usize = 3_000_000;
+/// 用量面板内容侧 Preact webview 的固定槽 id(继承既有 1_000_000 递增序列,
+/// 固定单槽、不按项目分)。
+pub(crate) const USAGE_CONTENT_ID_OFFSET: usize = 4_000_000;
 
 /// `wait_for_pending_exit_tasks` 允许在飞的关 tab 收尾请求跑完的总预算。
 /// 本地 UDS 往返通常亚毫秒级,留 2 秒是给 daemon 偶尔卡顿的余量,而不是
@@ -818,6 +824,7 @@ impl App {
             home_right_view: homespace::HomeRightView::default(),
             home_browser: browser::State::with_initial_url("https://byteboy.ai"),
             git_log: git_log::State::default(),
+            usage_webview: crate::extensions::usage::WebviewPushState::default(),
             database: database::AppState::load(),
             footbar: footbar::AppState::default(),
             external_apps: external_apps::load(),
@@ -1083,6 +1090,41 @@ impl App {
             command,
         );
         self.git_log.set_diff_sent_for((commit, path_str));
+        vec![(webview_id, crate::preview::dispatch_script(&envelope))]
+    }
+
+    /// 用量面板内容侧待下发推送:每帧轮询"当前该显示什么"(`current_view_
+    /// payload`)与"上次真正送达的是什么"(`usage_webview.pending_push`)是否
+    /// 一致,不一致且 webview 已 ready 才组 envelope。与 `take_git_log_diff_
+    /// script` 同一节奏(`window_events.rs::apply_pending_editor_commands`
+    /// 消费,见 Task 16),但判定逻辑是"声明式比较当前值"而非"事件驱动",因为
+    /// 这个 webview 固定单槽、不按项目分——项目切换、agent 筛选切换都统一
+    /// 走"这一帧算出来的 desired 和上次不一样就推"这一条路径,不需要分别处理
+    /// 每种触发源。
+    pub fn take_usage_content_script(
+        &mut self,
+        available_webview_ids: &std::collections::HashSet<usize>,
+    ) -> Vec<(usize, String)> {
+        let webview_id = USAGE_CONTENT_ID_OFFSET;
+        if !available_webview_ids.contains(&webview_id) {
+            // webview 尚未进池/已被销毁:降级 ready,下次真正 ready 事件到达
+            // 前不再尝试推送(同 `pending_diff_push` 系列先例的"重试不丢内容"
+            // 语义,只是这里改用主动降级而不是等待外部信号)。
+            self.usage_webview.set_ready(false);
+            return Vec::new();
+        }
+        let Some(ws) = self.active_workspace() else {
+            return Vec::new();
+        };
+        if ws.usage.loading() {
+            return Vec::new();
+        }
+        let desired = crate::extensions::usage::current_view_payload(&ws.usage);
+        let Some(payload) = self.usage_webview.pending_push(&desired) else {
+            return Vec::new();
+        };
+        let envelope = crate::extensions::usage::encode_usage_push(payload.clone());
+        self.usage_webview.mark_sent(payload);
         vec![(webview_id, crate::preview::dispatch_script(&envelope))]
     }
 
@@ -3199,6 +3241,35 @@ impl App {
                         };
                         out.push((spec, bounds));
                     }
+                }
+                continue;
+            }
+            if kind == PanelKind::Usage {
+                // 统计中(`math_curve` 动画)时不挂载——原生 iced 继续播动画。
+                let content_desired = !ws.usage.loading();
+                // 无筛选栏数据 / 被手动收起,内容独占整条配对宽。
+                let list_visible =
+                    ws.usage.has_agent_filter() && !self.list_collapsed(PanelKind::Usage);
+                let bounds = crate::webview_geometry::usage_content_pane_bounds_for(
+                    side,
+                    window_width,
+                    window_height,
+                    &self.shell_state(),
+                    content_desired,
+                    list_visible,
+                );
+                if bounds.2 > 0.0 && bounds.3 > 0.0 {
+                    let spec = WebviewSpec {
+                        id: USAGE_CONTENT_ID_OFFSET,
+                        url: format!(
+                            "dozer://usage-content/host.html?theme={}",
+                            crate::preview::scheme_query_value()
+                        ),
+                        visible: !app_modal_open,
+                        editor_binding: None,
+                        loading_generation: None,
+                    };
+                    out.push((spec, bounds));
                 }
                 continue;
             }

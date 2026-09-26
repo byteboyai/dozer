@@ -2561,7 +2561,7 @@ git commit -m "feat(usage): 新增内容侧 webview 矩形几何计算"
 
 **为什么是 App 级而不是 `WorkspaceState` 里的字段**(同 `git_log::State` 的先例,见其文档注释"现在挂在 App(不按项目分)"):这个 webview 是**每侧一个固定单槽**,不按项目分——切换到另一个仍显示用量面板的项目 tab 时,同一个 webview 实例要显示新项目的数据。`last_sent` 若挂在 `WorkspaceState`(每项目一份),`desired` 换了个从没在这个 webview 里出现过的 workspace 时,该 workspace 自己的 `last_sent` 是 `None`,天然会判定"要推"——这个设计已经正确处理了这个真实边界(Review Focus 第二条),不需要额外的"workspace 切换"特判,但要写测试锁定这一点,不能只靠巧合。
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 ```rust
 // 追加到 crates/dozer-app/src/extensions/usage/mod.rs 的 `#[cfg(test)] mod tests` 块内
@@ -2645,7 +2645,7 @@ fn set_ready_true_clears_last_sent_forcing_a_resend() {
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cargo test -p dozer-app usage::tests
@@ -2653,7 +2653,7 @@ cargo test -p dozer-app usage::tests
 
 Expected: FAIL,`WebviewPushState` 未定义。
 
-- [ ] **Step 3: 实现 `WebviewPushState`**
+- [x] **Step 3: 实现 `WebviewPushState`**
 
 ```rust
 // 追加到 crates/dozer-app/src/extensions/usage/mod.rs
@@ -2695,7 +2695,7 @@ impl WebviewPushState {
 }
 ```
 
-- [ ] **Step 4: 新增 `Message::UsageContentWebviewEvent`**
+- [x] **Step 4: 新增 `Message::UsageContentWebviewEvent`**
 
 ```rust
 // crates/dozer-app/src/app/message.rs,`GitLogDiffWebviewEvent`/
@@ -2705,7 +2705,7 @@ impl WebviewPushState {
 UsageContentWebviewEvent(crate::extensions::usage::UsageWebviewEvent),
 ```
 
-- [ ] **Step 5: 运行测试确认通过**
+- [x] **Step 5: 运行测试确认通过**
 
 ```bash
 cargo test -p dozer-app usage::tests
@@ -2713,7 +2713,7 @@ cargo test -p dozer-app usage::tests
 
 Expected: 全部 PASS(既有 + 新增 6 个)。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/dozer-app/src/extensions/usage/mod.rs crates/dozer-app/src/app/message.rs
@@ -2734,7 +2734,7 @@ git commit -m "feat(usage): 新增 App 级 webview 推送判定状态与事件�
 
 > `chart.rs` 里的函数(`bar_chart`/`pie_chart`/`trend_line_chart` 等)在本任务改完后会暂时变成"没人调用"——这是预期的中间状态,Task 17 才删除 `chart.rs` 并把 `has_any_value`/`trend_total` 两个纯函数搬进 `protocol.rs`(Task 2 已经在用它们,`use super::*` 目前还能从 `chart.rs` 拿到)。中间状态如果 `cargo clippy` 报 `dead_code`,属于预期,不要在本任务里提前删 `chart.rs`——那样会让 Task 2 的 `has_any_value`/`trend_total` 引用失败,两个改动应该保持任务边界清晰、各自可独立 review。
 
-- [ ] **Step 1: 新增常量与 `App` 字段**
+- [x] **Step 1: 新增常量与 `App` 字段**
 
 ```rust
 // crates/dozer-app/src/app/app.rs,GIT_LOG_DIFF_ID_OFFSET 常量(app.rs:631)
@@ -2750,7 +2750,7 @@ pub(crate) usage_webview: crate::extensions::usage::WebviewPushState,
 
 若 `App` 有手写 `impl Default`/构造函数逐字段初始化(而非 `#[derive(Default)]` 覆盖到底),同步在那里补上 `usage_webview: Default::default(),`。
 
-- [ ] **Step 2: `preview_desired` 新增 `PanelKind::Usage` 分支**
+- [x] **Step 2: `preview_desired` 新增 `PanelKind::Usage` 分支**
 
 ```rust
 // crates/dozer-app/src/app/app.rs,`preview_desired` 内,`if kind ==
@@ -2788,7 +2788,7 @@ if kind == PanelKind::Usage {
 }
 ```
 
-- [ ] **Step 3: 新增 `App::take_usage_content_script`**
+- [x] **Step 3: 新增 `App::take_usage_content_script`**
 
 ```rust
 // crates/dozer-app/src/app/app.rs,`take_git_log_diff_script` 方法之后新增
@@ -2828,7 +2828,7 @@ pub fn take_usage_content_script(
 }
 ```
 
-- [ ] **Step 4: `content_pane` 让位给 webview(删掉四态 body 渲染,保留"统计中…"原生分支与面板头)**
+- [x] **Step 4: `content_pane` 让位给 webview(删掉四态 body 渲染,保留"统计中…"原生分支与面板头)**
 
 ```rust
 // crates/dozer-app/src/extensions/usage/view.rs::content_pane——把
@@ -2884,7 +2884,7 @@ pub fn content_pane<'a>(
 }
 ```
 
-- [ ] **Step 5: 编译确认(`cargo check`,预期出现 Task 17 才处理的 dead_code 警告,不阻塞)**
+- [x] **Step 5: 编译确认(`cargo check`,预期出现 Task 17 才处理的 dead_code 警告,不阻塞)**
 
 ```bash
 cargo check -p dozer-app
@@ -2892,7 +2892,7 @@ cargo check -p dozer-app
 
 Expected: 编译通过;`chart.rs` 里除 `has_any_value`/`trend_total` 外的函数出现 `never used` 警告(预期中的中间态,Task 17 处理)。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/dozer-app/src/app/app.rs crates/dozer-app/src/extensions/usage/view.rs
@@ -2913,7 +2913,7 @@ git commit -m "feat(usage): app.rs 接入内容侧 webview 挂载与推送轮询
 
 这是整条推送链路的最后一段:JS `ready` 上报 → `runtime.rs` IPC handler 解析 → `Message::UsageContentWebviewEvent` → `update.rs` 翻 `ready` 状态 → 下一帧 `window_events.rs` 消费 `take_usage_content_script` → `evaluate_script` 真正推送。
 
-- [ ] **Step 1: `update.rs` 处理 `UsageContentWebviewEvent`**
+- [x] **Step 1: `update.rs` 处理 `UsageContentWebviewEvent`**
 
 ```rust
 // crates/dozer-app/src/app/update.rs,`Message::GitLogDiffWebviewEvent`
@@ -2928,7 +2928,7 @@ Message::UsageContentWebviewEvent(event) => {
 }
 ```
 
-- [ ] **Step 2: `window_events.rs` 消费待推送脚本**
+- [x] **Step 2: `window_events.rs` 消费待推送脚本**
 
 ```rust
 // crates/dozer-app/src/platform/window_events.rs::apply_pending_editor_commands,
@@ -2943,7 +2943,7 @@ for (webview_id, js) in app.take_usage_content_script(&available_webview_ids) {
 }
 ```
 
-- [ ] **Step 3: `runtime.rs` IPC handler 识别 usage webview id、解析 `ready` 事件**
+- [x] **Step 3: `runtime.rs` IPC handler 识别 usage webview id、解析 `ready` 事件**
 
 ```rust
 // crates/dozer-app/src/runtime.rs,`with_ipc_handler` 闭包内 `_ => { ... }`
@@ -2967,7 +2967,7 @@ for (webview_id, js) in app.take_usage_content_script(&available_webview_ids) {
 
 > 插入点提醒:原有代码是 `if let Some(binding) = flyfish_binding.as_ref() && looks_like_envelope { ... } else if let Some(binding) = editor_binding.as_ref() { ... } else { ... 兜底 WebViewFocused }`——上面这段只是在第一个 `else if` 前面**再插一个 `else if`**,不改动前后两段既有分支的内容,`webview_id` 变量在这个闭包作用域内已经存在(同 `find_page`/`find_native` 分支已经在用它),不需要额外捕获。
 
-- [ ] **Step 4: 手动集成验证(暂无自动化 headless webview 测试,走真机)**
+- [x] **Step 4: 手动集成验证(暂无自动化 headless webview 测试,走真机)**
 
 ```bash
 cargo build -p dozer-app
@@ -2980,7 +2980,7 @@ cargo run -p dozer-app
 - 连续点击右侧 agent 筛选栏多个 agent,确认每次都是"内容原地更新"、没有整页闪烁。
 - 收起/展开右侧筛选栏,确认内容宽度正确联动。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/app/update.rs crates/dozer-app/src/platform/window_events.rs crates/dozer-app/src/runtime.rs
@@ -3001,7 +3001,7 @@ git commit -m "feat(usage): 接通 ready 事件回传与推送注入的完整闭
 
 `chart.rs` 997 行里唯二还有实际用处的纯函数是 `has_any_value`/`trend_total`(`protocol.rs` 的 `trend_chart`/`single_agent_token_trend` 已经在用,此前靠 `mod chart` 还没删、`use super::*` 能拿到)——本任务把这两个函数原样搬进 `protocol.rs`,再删掉整个 `chart.rs`,顺带清掉 `mod.rs` 里的模块声明。`format_count`/`nice_tick_step`/`grid_ticks`/`PIE_RADIUS`/`PIE_GAP_RAD`/`BAR_MAX_HEIGHT` 等其余内容在 Rust 侧不再需要——它们已经在 Task 4/7/8 里各自等价迁到 `format.ts`/`pieSlices.ts`/`GridLines.tsx`,前端拥有自己独立的实现与测试,不指望 Rust 那份继续存在。
 
-- [ ] **Step 1: 把 `has_any_value`/`trend_total` 搬进 `protocol.rs`**
+- [x] **Step 1: 把 `has_any_value`/`trend_total` 搬进 `protocol.rs`**
 
 ```rust
 // 追加到 crates/dozer-app/src/extensions/usage/protocol.rs,
@@ -3020,13 +3020,13 @@ fn trend_total(days: &[DaySeries]) -> u64 {
 }
 ```
 
-- [ ] **Step 2: 删除 `chart.rs`**
+- [x] **Step 2: 删除 `chart.rs`**
 
 ```bash
 git rm crates/dozer-app/src/extensions/usage/chart.rs
 ```
 
-- [ ] **Step 3: 修改 `mod.rs`,去掉 chart 模块声明**
+- [x] **Step 3: 修改 `mod.rs`,去掉 chart 模块声明**
 
 ```rust
 // crates/dozer-app/src/extensions/usage/mod.rs,删掉这两行:
@@ -3034,7 +3034,7 @@ git rm crates/dozer-app/src/extensions/usage/chart.rs
 // pub(crate) use chart::*;
 ```
 
-- [ ] **Step 4: 编译确认(此时不该再有任何 dead_code 警告,`view.rs` 若还残留对 `chart::*` 任何函数的引用会直接编译失败,能借此确认 Task 15 Step 4 删干净了)**
+- [x] **Step 4: 编译确认(此时不该再有任何 dead_code 警告,`view.rs` 若还残留对 `chart::*` 任何函数的引用会直接编译失败,能借此确认 Task 15 Step 4 删干净了)**
 
 ```bash
 cargo check -p dozer-app
@@ -3043,7 +3043,7 @@ cargo clippy -p dozer-app --all-targets
 
 Expected: 两者都无 `usage` 相关警告/错误。若 `view.rs` 报缺函数,回到 Task 15 Step 4 确认 `content_pane` 是否还有遗漏的 `chart::` 调用点未删干净。
 
-- [ ] **Step 5: 跑用量面板全部现有单测,确认聚合逻辑/协议逻辑均未受影响**
+- [x] **Step 5: 跑用量面板全部现有单测,确认聚合逻辑/协议逻辑均未受影响**
 
 ```bash
 cargo test -p dozer-app usage::
@@ -3051,7 +3051,7 @@ cargo test -p dozer-app usage::
 
 Expected: 全部 PASS(`aggregate.rs` 原有测试 + Task 2/13/14 新增测试)。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/dozer-app/src/extensions/usage/protocol.rs crates/dozer-app/src/extensions/usage/mod.rs

@@ -57,6 +57,14 @@ impl App {
                 }
                 // 其余事件忽略,同 GitLogDiffWebviewEvent 的处理。
             }
+            Message::UsageContentWebviewEvent(event) => {
+                if matches!(event, crate::extensions::usage::UsageWebviewEvent::Ready) {
+                    // `set_ready(true)` 内部已经清空 `last_sent`,强制下一帧重发
+                    // 一次当前内容(覆盖"webview 被销毁重建,新实例第一次 ready"的
+                    // 场景),不需要在这里再显式清一次。
+                    self.usage_webview.set_ready(true);
+                }
+            }
             Message::EditorWebviewEvent(binding, event) => {
                 self.with_project(binding.project_id, move |ws, io| {
                     let pane = if binding.panel == PanelKind::Project {
