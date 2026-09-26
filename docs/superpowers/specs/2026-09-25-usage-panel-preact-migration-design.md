@@ -28,13 +28,18 @@ trace 现状时已确认这个模式确实会闪，另开 loading 遮罩改造�
 
 **目标**：
 
-1. 把用量面板**内容侧整体**（`content_pane` 现有五态：统计中/空/该
+1. 把用量面板**内容侧整体**（`content_pane` 现有五态中的**四态**：空/该
    agent 无数据/单 agent 趋势/全部 agent 汇总，含项目汇总卡片、Agent
    份额环图/饼图、逐日行为柱状图、趋势折线图、tooltip）从手写 iced
    canvas 换成 Preact + esbuild 离线打包，新建
    `crates/dozer-app/web/usage-content/`，照抄 `web/review-trace` 已验证
    的构建模式（iife、无 sourcemap、`jsx: 'automatic'` +
-   `jsxImportSource: 'preact'`、无 CDN、无运行时 Node）。
+   `jsxImportSource: 'preact'`、无 CDN、无运行时 Node）。**"统计中…"这一态
+   不进 webview**（写实现计划时发现的修正）：它是 `byteui::feedback::
+   math_curve` 动画组件（ByteBoy2077 品牌化自绘曲线，多面板共用），不值得
+   为此单独重做一套等价动画；加载中时这个内容 webview 根本不挂载，原生
+   iced 继续画这个动画（同 Git Log diff pane"内容不可渲染时回落原生占位"
+   的既有先例）。
 2. **右侧 agent 筛选栏（`list_pane`）继续留在原生 iced 不动**——点击筛选
    仍由 iced `button` 触发 `Message::AgentFilterSet`，只是筛选结果不再
    驱动 iced 内容侧重绘，而是驱动一次到 webview 的指令推送。
