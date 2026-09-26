@@ -1092,8 +1092,9 @@ mod tests {
     #[test]
     fn parse_review_trace_event_rejects_oversized_message() {
         let huge = "x".repeat(MAX_MESSAGE_BYTES + 1);
-        let raw =
-            format!(r#"{{"protocol_version":1,"payload":{{"kind":"document_loaded","pad":"{huge}"}}}}"#);
+        let raw = format!(
+            r#"{{"protocol_version":1,"payload":{{"kind":"document_loaded","pad":"{huge}"}}}}"#
+        );
         assert!(matches!(
             parse_review_trace_event(&raw),
             Err(ProtocolError::TooLarge { .. })
