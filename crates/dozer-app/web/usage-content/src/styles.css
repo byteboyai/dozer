@@ -84,3 +84,13 @@ html, body {
   transform: translate(-50%, -100%); margin-top: -6px;
 }
 .usage-tooltip .day-label { font-size: 11px; color: var(--cream); margin-bottom: 4px; }
+
+.usage-chart-wrap { position: relative; height: 86px; }
+.usage-grid-line {
+  position: absolute; left: 26px; right: 0; height: 0;
+  border-top: 1px solid var(--border);
+}
+.usage-grid-label {
+  position: absolute; right: calc(100% + 4px); top: -6px;
+  font-size: 7px; color: var(--dim); white-space: nowrap;
+}
