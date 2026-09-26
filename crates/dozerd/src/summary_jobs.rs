@@ -475,6 +475,72 @@ impl SummaryJobStore {
         Ok(())
     }
 
+    /// 重启恢复:把所有 running 归位 queued(worker 随进程消失,任务不能停在
+    /// running)。
+    pub fn requeue_running(&self) -> Result<()> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "UPDATE summary_jobs SET status = 'queued', updated_ts_ms = ?1
+             WHERE status = 'running'",
+            [now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// 原子认领下一个 queued 任务(标记 running 并返回 job_id)。同一时刻只
+    /// 允许一个 worker 调用(全局并发 1),但事务保证即使多 worker 也不重复。
+    pub fn claim_next_queued(&self) -> Result<Option<i64>> {
+        let mut conn = self.conn.lock().expect("db lock");
+        let tx = conn.transaction()?;
+        let next: Option<i64> = tx
+            .query_row(
+                "SELECT job_id FROM summary_jobs WHERE status = 'queued'
+                 ORDER BY job_id ASC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(job_id) = next {
+            tx.execute(
+                "UPDATE summary_jobs SET status = 'running', updated_ts_ms = ?1
+                 WHERE job_id = ?2",
+                rusqlite::params![now_ms(), job_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(next)
+    }
+
+    /// 反查 job 所属 batch(可能属于多个,取最早一个)。
+    pub fn batch_for_job(&self, job_id: i64) -> Result<Option<i64>> {
+        let conn = self.conn.lock().expect("db lock");
+        let row = conn
+            .query_row(
+                "SELECT batch_id FROM summary_batch_jobs WHERE job_id = ?1
+                 ORDER BY batch_id ASC LIMIT 1",
+                [job_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// 列出一个 batch 的所有 job。
+    pub fn list_jobs_for_batch(&self, batch_id: i64) -> Result<Vec<SummaryJobInfo>> {
+        let conn = self.conn.lock().expect("db lock");
+        let mut stmt = conn.prepare(
+            "SELECT j.job_id, j.conversation_id, j.source_session_id, j.trigger, j.provider,
+                    j.requested_model, j.source_revision, j.pipeline_version, j.generation,
+                    j.status, j.attempt, j.error_kind, j.error_detail, j.created_ts_ms,
+                    j.updated_ts_ms, j.phase
+             FROM summary_jobs j
+             JOIN summary_batch_jobs b ON b.job_id = j.job_id
+             WHERE b.batch_id = ?1 ORDER BY j.job_id ASC",
+        )?;
+        let rows = stmt.query_map([batch_id], |r| self.map_job(r))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn create_batch(&self, cwd: &str, strategy: &str) -> Result<i64> {
         let now = now_ms();
         let conn = self.conn.lock().expect("db lock");

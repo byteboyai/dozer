@@ -19,6 +19,7 @@ pub mod summary_config;
 pub mod summary_jobs;
 pub mod summary_pipeline;
 pub mod summary_provider;
+pub mod summary_service;
 pub mod summary_snapshot;
 pub mod task_poller;
 pub mod task_processor;
