@@ -167,6 +167,12 @@ fn review_trace_root_for(flyfish_root: &Path) -> PathBuf {
     flyfish_root.with_file_name("review-trace")
 }
 
+/// usage-content host(用量面板内容侧图表)静态资源根 = flyfish 根的兄弟
+/// 目录 `usage-content`。同 `editor_root_for`/`review_trace_root_for`。
+fn usage_content_root_for(flyfish_root: &Path) -> PathBuf {
+    flyfish_root.with_file_name("usage-content")
+}
+
 /// T7:`dozer://html/__file__/<abs>` 的读取闸门。比 editor 的"精确文件白名单"
 /// 宽一点:允许**已打开文件所在目录子树**(相对资源 css/js/图片要能加载),
 /// 但不允许跨出这些目录,且拒绝任何 `..` 分量 + 再 canonicalize 复核(防符号
@@ -216,7 +222,8 @@ pub fn handle_protocol(
     review_data: Option<&str>,
     uri: &str,
 ) -> ProtocolReply {
-    // 剥离 scheme 与 query;只服务 flyfish/review-trace/editor 三个命名空间。
+    // 剥离 scheme 与 query;只服务 flyfish/review-trace/editor/json-editor/
+    // html/usage-content 这些命名空间。
     let Some(rest) = uri.strip_prefix("dozer://") else {
         return not_found();
     };
@@ -238,6 +245,12 @@ pub fn handle_protocol(
             };
         }
         return serve_vendored(&review_trace_root_for(assets_root), path);
+    }
+
+    // usage-content host(用量面板内容侧图表):没有 data.json 特判——数据
+    // 全靠 evaluate_script 推送,不走 fetch(见 protocol.rs)。
+    if let Some(path) = rest.strip_prefix("usage-content/") {
+        return serve_vendored(&usage_content_root_for(assets_root), path);
     }
 
     // editor host:页面/脚本/样式/字体从 editor 根服务;`__file__/<abs>` 复用
@@ -378,6 +391,57 @@ mod tests {
     fn review_trace_unknown_subpath_404() {
         let root = scratch();
         let r = handle_protocol(&root, &HashSet::new(), None, "dozer://review-trace/nope");
+        assert_eq!(r.status, 404);
+    }
+
+    /// 提交的 usage-content 产物必须齐全(防止忘记 `npm run build` 就提交)。
+    #[test]
+    fn usage_content_bundle_assets_are_present() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/usage-content"));
+        for f in ["host.html", "usage-content.js", "usage-content.css"] {
+            let p = root.join(f);
+            assert!(p.is_file(), "缺少 usage-content 产物 {f}: {}", p.display());
+            assert!(
+                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 0,
+                "usage-content 产物为空: {f}"
+            );
+        }
+    }
+
+    /// 严格 CSP、无 connect-src(没有 fetch 端点,数据全靠推送)、无网络。
+    #[test]
+    fn usage_content_host_has_strict_csp_and_no_external_refs() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/usage-content"));
+        let html = std::fs::read_to_string(root.join("host.html")).expect("读 host.html");
+        assert!(html.contains("default-src 'none'"));
+        assert!(html.contains("script-src 'self'"));
+        assert!(
+            !html.contains("connect-src"),
+            "usage-content 没有 fetch 端点,不应声明 connect-src"
+        );
+        assert!(!html.contains("http://") && !html.contains("https://"));
+        assert!(html.contains("usage-content.js") && html.contains("usage-content.css"));
+    }
+
+    #[test]
+    fn usage_content_serves_vendored_files() {
+        let root = scratch();
+        std::fs::create_dir_all(root.with_file_name("usage-content")).unwrap();
+        std::fs::write(
+            root.with_file_name("usage-content").join("host.html"),
+            b"<html>u</html>",
+        )
+        .unwrap();
+        let r = handle_protocol(&root, &HashSet::new(), None, "dozer://usage-content/host.html");
+        assert_eq!((r.status, r.mime), (200, "text/html"));
+        assert_eq!(r.body, b"<html>u</html>");
+    }
+
+    #[test]
+    fn usage_content_unknown_subpath_404() {
+        let root = scratch();
+        std::fs::create_dir_all(root.with_file_name("usage-content")).unwrap();
+        let r = handle_protocol(&root, &HashSet::new(), None, "dozer://usage-content/nope");
         assert_eq!(r.status, 404);
     }
 
