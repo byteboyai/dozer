@@ -89,6 +89,25 @@ pub struct Stores {
     pub memories: std::sync::Arc<crate::memory::MemoryStore>,
 }
 
+/// 探测 `socket` 路径背后是否还有活着的 dozerd 在监听。`UnixListener::bind`
+/// 对已存在的路径会直接报错，绑定前必须先删掉旧文件——但删之前得确认它
+/// 背后真的没人在听：一个已存在的 socket 文件不代表监听者已死，直接删掉
+/// 会把仍然存活的旧实例的监听地址生生撤下，造成"新实例其实没绑上、旧实例
+/// 还在但外部再也连不上"的悬空态（2026-09-26 真实事故：Settings 里点重启，
+/// 新进程绑定成功但没走 `Request::Shutdown` 就退出，留下死 socket，旧孤儿
+/// 进程仍活着却谁也连不上）。对无人监听的陈旧 socket 文件，connect 在
+/// macOS/Linux 上都会立即返回 `ECONNREFUSED`，不会挂起，超时只是防御性兜底。
+async fn socket_has_live_listener(socket: &Path) -> bool {
+    matches!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(300),
+            UnixStream::connect(socket),
+        )
+        .await,
+        Ok(Ok(_))
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn serve(
     socket: &Path,
@@ -122,6 +141,12 @@ pub async fn serve(
     }
     let ide_bridge = IdeBridgeRegistry::new(ide_lock_dir, preview_contexts.clone());
     if socket.exists() {
+        if socket_has_live_listener(socket).await {
+            anyhow::bail!(
+                "dozerd 已在运行（socket={}），拒绝重复启动",
+                socket.display()
+            );
+        }
         std::fs::remove_file(socket)?;
     }
     if let Some(parent) = socket.parent() {
@@ -1226,6 +1251,47 @@ async fn handle_conn(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn socket_has_live_listener_false_when_path_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("dozerd.sock");
+        assert!(!socket_has_live_listener(&socket).await);
+    }
+
+    #[tokio::test]
+    async fn socket_has_live_listener_false_for_stale_file() {
+        // 模拟"文件还在、监听者已死"的悬空态:留一个 socket 类型的文件
+        // 在路径上,但没有任何进程在 accept。connect 应该拿到
+        // ECONNREFUSED——但 listener 关闭在内核里生效有极短的异步窗口
+        // (全量并行跑测试时能观察到),所以用轮询代替单次断言,
+        // 跟本文件其余"等待某状态最终生效"的测试手法一致。
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("dozerd.sock");
+        {
+            let listener = UnixListener::bind(&socket).unwrap();
+            drop(listener);
+        }
+        assert!(socket.exists());
+        let mut alive = true;
+        for _ in 0..50 {
+            alive = socket_has_live_listener(&socket).await;
+            if !alive {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(!alive, "dropped listener 的 socket 文件不应该还有人在监听");
+    }
+
+    #[tokio::test]
+    async fn socket_has_live_listener_true_when_someone_is_listening() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("dozerd.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        assert!(socket_has_live_listener(&socket).await);
+        drop(listener);
+    }
 
     #[test]
     fn agent_state_mapping_matches_spec_d6() {
