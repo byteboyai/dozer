@@ -411,8 +411,15 @@ pub async fn run_pipeline(
     let mut facts: Vec<ChunkFacts> = Vec::with_capacity(chunks.len());
     let instruction = chunk_extract_instruction();
     for chunk in &chunks {
-        let stdout = call_with_retry(summarizer, &instruction, &chunk.text, config, budget).await?;
-        let chunk_facts = parse_chunk_facts(&stdout)?;
+        let chunk_facts = call_with_retry(
+            summarizer,
+            &instruction,
+            &chunk.text,
+            config,
+            budget,
+            parse_chunk_facts,
+        )
+        .await?;
         facts.push(chunk_facts);
     }
 
@@ -434,10 +441,16 @@ pub async fn run_pipeline(
             }
             let data =
                 serde_json::to_string(&[pair[0].clone(), pair[1].clone()]).unwrap_or_default();
-            let stdout =
-                call_with_retry(summarizer, &merge_instruction, &data, config, budget).await?;
             // 归并调用返回的是 facts,这里用宽松解析(复用 chunk facts 解析)。
-            let merged = parse_chunk_facts(&stdout)?;
+            let merged = call_with_retry(
+                summarizer,
+                &merge_instruction,
+                &data,
+                config,
+                budget,
+                parse_chunk_facts,
+            )
+            .await?;
             next.push(merged);
         }
         layer = next;
@@ -447,19 +460,31 @@ pub async fn run_pipeline(
     // 归并出 title/summary。
     let merge_instruction = merge_instruction();
     let data = serde_json::to_string(&layer).unwrap_or_default();
-    let stdout = call_with_retry(summarizer, &merge_instruction, &data, config, budget).await?;
-    let mut final_summary = parse_final(&stdout)?;
+    let mut final_summary = call_with_retry(
+        summarizer,
+        &merge_instruction,
+        &data,
+        config,
+        budget,
+        parse_final,
+    )
+    .await?;
     final_summary.facts.covered_turns = Some(covered);
     Ok(final_summary)
 }
 
-async fn call_with_retry(
+/// 调用 + 解析都计入重试:模型输出偶发的 JSON 语法错误(截断/未转义引号等)
+/// 与限流/超时一样,重试一次往往就好了——之前只重试 `Invoke` 传输层错误,
+/// 解析失败会直接判定整个 job 失败(2026-09-26 真实事故:单块 JSON 语法
+/// 错误导致本可正常归并的总结任务整体失败)。
+async fn call_with_retry<T>(
     summarizer: &mut dyn Summarizer,
     instruction: &str,
     data: &str,
     config: &SummaryConfig,
     budget: &mut Budget,
-) -> Result<String, PipelineError> {
+    parse: impl Fn(&str) -> Result<T, PipelineError>,
+) -> Result<T, PipelineError> {
     for attempt in 0..=config.max_retries {
         if !budget.charge() {
             return Err(PipelineError::BudgetExceeded);
@@ -469,19 +494,28 @@ async fn call_with_retry(
         let result = tokio::time::timeout(remaining, summarizer.call(instruction, data))
             .await
             .map_err(|_| PipelineError::BudgetExceeded)?;
-        match result {
-            Err(PipelineError::Invoke(ref e))
-                if e.is_transient() && attempt < config.max_retries =>
-            {
-                tokio::time::sleep(std::time::Duration::from_millis(
-                    250 * (1u64 << attempt.min(5)),
-                ))
-                .await;
+        let can_retry = attempt < config.max_retries;
+        let stdout = match result {
+            Err(PipelineError::Invoke(ref e)) if e.is_transient() && can_retry => {
+                backoff(attempt).await;
+                continue;
             }
-            result => return result,
+            result => result?,
+        };
+        match parse(&stdout) {
+            Ok(v) => return Ok(v),
+            Err(_) if can_retry => backoff(attempt).await,
+            Err(e) => return Err(e),
         }
     }
     unreachable!()
+}
+
+async fn backoff(attempt: u32) {
+    tokio::time::sleep(std::time::Duration::from_millis(
+        250 * (1u64 << attempt.min(5)),
+    ))
+    .await;
 }
 
 #[cfg(test)]
@@ -676,5 +710,89 @@ mod tests {
             fake.calls.iter().any(|p| p.contains("合并")),
             "应产生归并调用"
         );
+    }
+
+    /// 第一次调用返回语法错误的 JSON(模拟模型偶发输出未转义引号等问题),
+    /// 之后每次调用都返回合法输出——用于验证解析失败会重试而不是直接判死刑。
+    struct FlakySummarizer {
+        calls: u32,
+    }
+
+    impl FlakySummarizer {
+        fn new() -> Self {
+            Self { calls: 0 }
+        }
+    }
+
+    impl Summarizer for FlakySummarizer {
+        fn call(
+            &mut self,
+            instruction: &str,
+            _data: &str,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<String, PipelineError>> + Send + 'static>,
+        > {
+            self.calls += 1;
+            let is_first_call = self.calls == 1;
+            let out = if is_first_call {
+                // 缺右括号:合法 JSON 数组开头,但语法不完整。
+                "{\"goals\":[\"没写完".to_string()
+            } else if instruction.contains("合并") {
+                "{\"title\":\"标题\",\"summary\":\"摘要\",\"goals\":[],\"actions\":[],\"decisions\":[],\"results\":[],\"incomplete\":[]}".to_string()
+            } else {
+                "{\"goals\":[],\"actions\":[],\"decisions\":[],\"results\":[],\"incomplete\":[]}"
+                    .to_string()
+            };
+            Box::pin(async move { Ok(out) })
+        }
+    }
+
+    #[tokio::test]
+    async fn run_pipeline_retries_on_invalid_chunk_json() {
+        let turns = vec![turn("human", "改 README")];
+        let config = SummaryConfig {
+            provider: dozer_core::protocol::AgentKind::Claude,
+            model: None,
+            call_timeout_secs: 120,
+            max_retries: 2,
+            input_budget_chars: 1000,
+        };
+        let mut flaky = FlakySummarizer::new();
+        let mut budget = Budget::new();
+        let result = run_pipeline(&turns, &config, &mut flaky, &mut budget)
+            .await
+            .unwrap();
+        assert_eq!(result.title, "标题");
+        assert_eq!(flaky.calls, 3, "第一次抽取解析失败应重试一次,再加一次最终归并");
+    }
+
+    #[tokio::test]
+    async fn run_pipeline_gives_up_after_max_retries_on_invalid_json() {
+        struct AlwaysBrokenSummarizer;
+        impl Summarizer for AlwaysBrokenSummarizer {
+            fn call(
+                &mut self,
+                _instruction: &str,
+                _data: &str,
+            ) -> std::pin::Pin<
+                Box<dyn std::future::Future<Output = Result<String, PipelineError>> + Send + 'static>,
+            > {
+                Box::pin(async move { Ok("{\"goals\":[\"没写完".to_string()) })
+            }
+        }
+        let turns = vec![turn("human", "改 README")];
+        let config = SummaryConfig {
+            provider: dozer_core::protocol::AgentKind::Claude,
+            model: None,
+            call_timeout_secs: 120,
+            max_retries: 1,
+            input_budget_chars: 1000,
+        };
+        let mut broken = AlwaysBrokenSummarizer;
+        let mut budget = Budget::new();
+        let err = run_pipeline(&turns, &config, &mut broken, &mut budget)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, PipelineError::InvalidChunkOutput(_)));
     }
 }
