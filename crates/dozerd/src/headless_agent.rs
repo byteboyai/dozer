@@ -196,11 +196,23 @@ pub(crate) fn build_command(
     program: &str,
     turns_text: &str,
 ) -> Option<(tokio::process::Command, Option<Vec<u8>>)> {
+    build_command_parts(agent, program, &instruction_text(), turns_text)
+}
+
+/// 参数化版命令构造:pipeline 的分块抽取/归并需要自定义指令(不是总结指令),
+/// 复用同一套各家 CLI 契约——`instruction` 是指令部分,`data` 是数据部分
+/// (stdin 型 CLI 走 stdin,参数型 CLI 拼进参数)。
+pub(crate) fn build_command_parts(
+    agent: AgentKind,
+    program: &str,
+    instruction: &str,
+    data: &str,
+) -> Option<(tokio::process::Command, Option<Vec<u8>>)> {
     match agent {
         AgentKind::Claude => {
             let mut cmd = tokio::process::Command::new(program);
-            cmd.arg("-p").arg(instruction_text());
-            Some((cmd, Some(turns_text.as_bytes().to_vec())))
+            cmd.arg("-p").arg(instruction);
+            Some((cmd, Some(data.as_bytes().to_vec())))
         }
         AgentKind::Codebuddy => {
             let mut cmd = tokio::process::Command::new(program);
@@ -208,22 +220,21 @@ pub(crate) fn build_command(
             // 执行任何需要授权的操作(哪怕这里只是让它输出文字)的必需参数,
             // 不加会卡在授权确认上,headless 场景下无人能应答(spec
             // 2026-08-28 调研结论)。
-            cmd.arg("-p").arg(instruction_text()).arg("-y");
-            Some((cmd, Some(turns_text.as_bytes().to_vec())))
+            cmd.arg("-p").arg(instruction).arg("-y");
+            Some((cmd, Some(data.as_bytes().to_vec())))
         }
         AgentKind::Opencode => {
             let mut cmd = tokio::process::Command::new(program);
             // `run` 子命令没有独立 stdin 输入通道,拼接文本直接作为 message
             // 参数的一部分(spec 2026-08-28 调研结论)。
-            cmd.arg("run")
-                .arg(format!("{}\n\n{}", instruction_text(), turns_text));
+            cmd.arg("run").arg(format!("{instruction}\n\n{data}"));
             Some((cmd, None))
         }
         AgentKind::V8agent => {
             let mut cmd = tokio::process::Command::new(program);
             cmd.env("V8AGENT_ONESHOT", "1");
             cmd.env_remove("DOZER_SESSION_ID");
-            let stdin_text = format!("{}\n\n{}", instruction_text(), turns_text);
+            let stdin_text = format!("{instruction}\n\n{data}");
             Some((cmd, Some(stdin_text.into_bytes())))
         }
         AgentKind::Goose => {
@@ -236,7 +247,7 @@ pub(crate) fn build_command(
                 .arg("--no-session")
                 .arg("--quiet")
                 .arg("--text")
-                .arg(format!("{}\n\n{}", instruction_text(), turns_text));
+                .arg(format!("{instruction}\n\n{data}"));
             cmd.env_remove("DOZER_SESSION_ID");
             Some((cmd, None))
         }
@@ -247,7 +258,7 @@ pub(crate) fn build_command(
             // banner,由 `extract_summary` 前先过 `clean_aider_stdout`。
             let mut cmd = tokio::process::Command::new(program);
             cmd.arg("--message")
-                .arg(format!("{}\n\n{}", instruction_text(), turns_text))
+                .arg(format!("{instruction}\n\n{data}"))
                 .arg("--no-stream")
                 .arg("--no-pretty")
                 .arg("--no-auto-commits");
@@ -268,7 +279,7 @@ pub(crate) fn build_command(
                 .arg("--sandbox")
                 .arg("read-only")
                 .arg("--skip-git-repo-check")
-                .arg(format!("{}\n\n{}", instruction_text(), turns_text));
+                .arg(format!("{instruction}\n\n{data}"));
             cmd.env_remove("DOZER_SESSION_ID");
             Some((cmd, None))
         }

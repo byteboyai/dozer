@@ -17,6 +17,7 @@ pub mod session_summary_backfill;
 pub mod shell_integration;
 pub mod summary_config;
 pub mod summary_jobs;
+pub mod summary_pipeline;
 pub mod summary_provider;
 pub mod summary_snapshot;
 pub mod task_poller;

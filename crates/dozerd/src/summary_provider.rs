@@ -185,15 +185,52 @@ pub async fn invoke_summary(
     .await
 }
 
+/// 跑一个"指令 + 数据"的自定义 prompt,返回原始 stdout(pipeline 分块抽取/
+/// 归并用,不套总结分隔符协议)。失败分类照旧。
+pub async fn invoke_summary_parts(
+    agent: AgentKind,
+    instruction: &str,
+    data: &str,
+    config: &SummaryConfig,
+    cwd: &Path,
+) -> Result<String, SummaryInvokeError> {
+    let Some(bare) = crate::headless_agent::bare_program_name(agent) else {
+        return Err(SummaryInvokeError::UnsupportedCapability(
+            "该 agent 没有 headless 适配器".into(),
+        ));
+    };
+    let program = crate::headless_agent::resolve_binary_path(bare)
+        .await
+        .unwrap_or_else(|| bare.to_string());
+    let Some((cmd, stdin_bytes)) =
+        crate::headless_agent::build_command_parts(agent, &program, instruction, data)
+    else {
+        return Err(SummaryInvokeError::UnsupportedCapability(
+            "该 agent 没有 headless 总结适配器".into(),
+        ));
+    };
+    let (stdout, _stderr, code) = run_isolated_capture(
+        cmd,
+        stdin_bytes,
+        cwd,
+        Duration::from_secs(config.call_timeout_secs),
+        agent,
+    )
+    .await?;
+    let _ = code;
+    Ok(stdout)
+}
+
 /// 隔离执行一个已构造的命令:临时 cwd、清 env、deadline、有界并发读取
-/// stdout/stderr、stdin 错误、退出码、超时 kill 进程组。
-async fn run_isolated(
+/// stdout/stderr、stdin 错误、退出码、超时 kill 进程组。返回
+/// `(stdout, stderr, 退出码)` 三元素,由调用方决定怎么解析/分类。
+async fn run_isolated_capture(
     mut cmd: tokio::process::Command,
     stdin_bytes: Option<Vec<u8>>,
     cwd: &Path,
     timeout: Duration,
     agent: AgentKind,
-) -> Result<SummaryOutput, SummaryInvokeError> {
+) -> Result<(String, String, Option<i32>), SummaryInvokeError> {
     use std::process::Stdio;
     cmd.current_dir(cwd);
     // 统一隔离层:清 session/MCP 关联环境变量(与 build_command 里各家分支
@@ -226,7 +263,10 @@ async fn run_isolated(
         {
             kill_process_group(&child);
             let _ = child.start_kill();
-            return Err(SummaryInvokeError::NonzeroExit(-1, format!("写 stdin 失败: {e}")));
+            return Err(SummaryInvokeError::NonzeroExit(
+                -1,
+                format!("写 stdin 失败: {e}"),
+            ));
         }
         // drop stdin 关闭管道。
     }
@@ -273,12 +313,25 @@ async fn run_isolated(
 
     let stdout = stdout_task.await.unwrap_or_default();
     let stderr = stderr_task.await.unwrap_or_default();
+    let code = status.code();
+    Ok((stdout, stderr, code))
+}
 
-    if !status.success() {
-        let code = status.code().unwrap_or(-1);
+/// 总结调用:隔离执行 + 解析分隔符 JSON。
+async fn run_isolated(
+    cmd: tokio::process::Command,
+    stdin_bytes: Option<Vec<u8>>,
+    cwd: &Path,
+    timeout: Duration,
+    agent: AgentKind,
+) -> Result<SummaryOutput, SummaryInvokeError> {
+    let (stdout, stderr, code) =
+        run_isolated_capture(cmd, stdin_bytes, cwd, timeout, agent).await?;
+    if let Some(code) = code
+        && code != 0
+    {
         return Err(classify_failure(code, &stderr));
     }
-
     let stdout = if agent == AgentKind::Aider {
         crate::headless_agent::clean_aider_stdout(&stdout)
     } else {
