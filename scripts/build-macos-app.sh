@@ -112,6 +112,11 @@ cp -R "$ROOT_DIR/crates/dozer-app/assets/json-editor" "$APP_DIR/Contents/Resourc
 # 分发后核心 Agent 面板/对话面板的会话审阅整个 404(dev 态 `cargo run`
 # 走源码树回退,测不出这个漏拷)。
 cp -R "$ROOT_DIR/crates/dozer-app/assets/review-trace" "$APP_DIR/Contents/Resources/review-trace"
+# 用量面板内容侧图表 host。`dozer://usage-content/` 从 flyfish 根的兄弟
+# 目录 `Contents/Resources/usage-content` 读,漏拷会导致分发后用量面板
+# 整个 404 "not found"(2026-09-26 用户实测复现:只装了 flyfish/editor/
+# json-editor/review-trace 四者,独漏 usage-content)。
+cp -R "$ROOT_DIR/crates/dozer-app/assets/usage-content" "$APP_DIR/Contents/Resources/usage-content"
 
 # cargo 链接期只对裸二进制做了 ad-hoc 签名(`codesign -dv` 显示
 # `Info.plist=not bound`),装进 bundle 后这个签名并不覆盖 Info.plist/资源,
