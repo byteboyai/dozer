@@ -21,7 +21,7 @@ pub struct DozerMcpServer {
 pub struct NoParams {}
 
 const SUMMARY_TITLE_MAX_CHARS: usize = 200;
-const SUMMARY_TEXT_MAX_CHARS: usize = 8000;
+const SUMMARY_TEXT_MAX_CHARS: usize = 200;
 
 fn truncate_chars(s: String, max: usize) -> String {
     if s.chars().count() <= max {
@@ -193,7 +193,7 @@ impl DozerMcpServer {
     }
 
     #[tool(
-        description = "提交本次会话的总结:一个简短标题和一段摘要。仅在被要求总结当前会话时调用一次,不要在其他场景主动调用。"
+        description = "提交本次会话的总结:一个简短标题和不超过 200 字的摘要；涉及多个事件时使用编号分项列出，语言保持简练明确。仅在被要求总结当前会话时调用一次,不要在其他场景主动调用。"
     )]
     pub async fn submit_session_summary(
         &self,

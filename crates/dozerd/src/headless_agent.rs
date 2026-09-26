@@ -12,7 +12,7 @@ const SUMMARY_START_MARKER: &str = "<<<DOZER_SUMMARY_JSON>>>";
 const SUMMARY_END_MARKER: &str = "<<<END_DOZER_SUMMARY_JSON>>>";
 const HEADLESS_TIMEOUT: Duration = Duration::from_secs(90);
 const TITLE_MAX_CHARS: usize = 200;
-const SUMMARY_MAX_CHARS: usize = 8000;
+const SUMMARY_MAX_CHARS: usize = 200;
 /// 单条回合喂给 headless agent 前的截断上限,避免一条巨型工具输出/长回复
 /// 把整个 prompt 撑爆。
 const MAX_TURN_CHARS: usize = 4000;
@@ -47,7 +47,8 @@ pub enum HeadlessError {
 fn instruction_text() -> String {
     format!(
         "请阅读接下来这段对话记录(用户与 AI 的完整往来,包含 AI 实际做了\
-         什么),生成一个简短标题和一段摘要,总结这次会话完成的工作。只输出\
+         什么),生成一个简短标题和摘要,总结这次会话完成的工作。摘要正文不超过 200 字，\
+         涉及多个事件时使用编号分项列出，语言保持简练明确。只输出\
          下面这一段,不要输出任何其他内容:\n\
          {SUMMARY_START_MARKER}{{\"title\":\"...\",\"summary\":\"...\"}}{SUMMARY_END_MARKER}"
     )
@@ -181,10 +182,13 @@ pub fn extract_summary(stdout: &str) -> Result<(String, String), HeadlessError> 
     let json_str = stdout[after_start..after_start + end].trim();
     let parsed: SummaryJson =
         serde_json::from_str(json_str).map_err(|e| HeadlessError::InvalidJson(e.to_string()))?;
-    Ok((
-        truncate_chars(&parsed.title, TITLE_MAX_CHARS),
-        truncate_chars(&parsed.summary, SUMMARY_MAX_CHARS),
-    ))
+    let summary = if parsed.summary.chars().count() <= SUMMARY_MAX_CHARS {
+        parsed.summary
+    } else {
+        // `truncate_chars` 会追加一个省略号，因此正文预算预留一个字符。
+        truncate_chars(&parsed.summary, SUMMARY_MAX_CHARS.saturating_sub(1))
+    };
+    Ok((truncate_chars(&parsed.title, TITLE_MAX_CHARS), summary))
 }
 
 /// 按 agent 构造子进程命令 + (可选)要写进 stdin 的字节。`program` 是
@@ -537,6 +541,24 @@ mod tests {
         let (title, summary) = extract_summary(&stdout).unwrap();
         assert_eq!(title, "标题");
         assert_eq!(summary, "摘要");
+    }
+
+    #[test]
+    fn summary_instruction_contains_output_requirements() {
+        let instruction = instruction_text();
+        assert!(instruction.contains("不超过 200 字"));
+        assert!(instruction.contains("编号分项"));
+        assert!(instruction.contains("简练明确"));
+    }
+
+    #[test]
+    fn extracted_summary_is_limited_to_200_chars() {
+        let long_summary = "摘".repeat(SUMMARY_MAX_CHARS + 10);
+        let stdout = format!(
+            "{SUMMARY_START_MARKER}{{\"title\":\"标题\",\"summary\":\"{long_summary}\"}}{SUMMARY_END_MARKER}"
+        );
+        let (_, summary) = extract_summary(&stdout).unwrap();
+        assert_eq!(summary.chars().count(), SUMMARY_MAX_CHARS);
     }
 
     #[test]

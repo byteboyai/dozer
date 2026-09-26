@@ -135,7 +135,7 @@ async fn submit_session_summary_truncates_oversized_fields() {
         .unwrap()
         .unwrap();
     assert!(got.title.chars().count() <= 200);
-    assert!(got.summary.chars().count() <= 8000);
+    assert_eq!(got.summary.chars().count(), 200);
 }
 
 #[tokio::test]
