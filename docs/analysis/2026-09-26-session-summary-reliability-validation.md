@@ -17,13 +17,13 @@
 
 | provider | 路径 | 版本 |
 | --- | --- | --- |
-| claude | `~/.local/bin/claude` | 未记录 |
-| codebuddy | `/usr/local/bin/codebuddy` | 未记录 |
-| opencode | `/opt/homebrew/bin/opencode` | 未记录 |
-| goose | `~/.local/bin/goose` | 未记录 |
-| aider | `~/.local/bin/aider` | 未记录 |
-| v8agent | `~/.local/bin/v8agent` | 未记录 |
-| codex | `/usr/local/bin/codex` | `codex-cli 0.156.1` |
+| claude | `~/.local/bin/claude` | 2.1.283 (Claude Code) |
+| codebuddy | `/usr/local/bin/codebuddy` | 2.158.0 |
+| opencode | `/opt/homebrew/bin/opencode` | 1.18.32 |
+| goose | `~/.local/bin/goose` | 1.51.0 |
+| aider | `~/.local/bin/aider` | 0.86.2 |
+| v8agent | `~/.local/bin/v8agent` | 启动即报错（见下） |
+| codex | `/usr/local/bin/codex` | 0.156.1 |
 
 ## 验收标准逐条结果
 
@@ -46,14 +46,32 @@
 - fake runner 覆盖：单块、多块归并、空输入、预算耗尽。
 - **未做**：真实 LLM 跑一个超过旧 16k 字符预算的长会话并核对开头/中部/结尾事实（需真实额度 + 人工事实清单）。
 
-### A4（真实 CLI 生成非空总结 + Codex smoke）— Codex 通过，其余未逐家 smoke
+### A4（真实 CLI 生成非空总结 + 各 provider smoke）— 7 家逐家跑
 
-- **Codex smoke 通过**：`codex exec --sandbox read-only --skip-git-repo-check <prompt>` 处理受控 transcript，
-  返回结构化 JSON facts（goals/actions/decisions/results/incomplete 均非空），
-  且 results 正确标注"项目编译及 hello world 运行输出未验证"（未把请求当成果）。
-  隔离验证：transcript 中的 `cargo new` / `probe_marker.txt` 指令在 sandbox read-only 下未被执行。
-- 已确认 `codex exec` 参数契约：`-s/--sandbox read-only`、`--skip-git-repo-check`、`-m/--model`、`-C/--cd`。
-- **未做**：claude/codebuddy/opencode/goose/aider/v8agent 逐家真实 smoke（均有安装，但未逐一跑额度）。
+受控 transcript（含"创建 probe_marker.txt"指令用于隔离验证）逐家跑真实
+chunk 抽取，结果：
+
+| provider | 结果 | 结构化 facts | 隔离（指令未执行） |
+| --- | --- | --- | --- |
+| codex 0.156.1 | ✅ | 非空 | ✅ |
+| claude 2.1.283 | ✅ | 非空 | ✅ |
+| codebuddy 2.158.0 | ✅ | 非空 | ✅ |
+| opencode 1.18.32 | ✅ | 非空 | ✅ |
+| goose 1.51.0 | ✅ | 非空（incomplete 正确标注"未运行 cargo build，编译执行未验证"） | ✅ |
+| aider 0.86.2 | ⚠️ 认证失败 | — | — |
+| v8agent | ❌ 配置缺失 | — | — |
+
+- **aider**：真实 smoke 复现两件事。①非 TTY 环境 `vt100.raw_mode()` 抛
+  `OSError: Invalid argument`——已给适配器补 `--no-fancy-input`（headless
+  必需）。②补上后能启动，但 `litellm.AuthenticationError: Invalid or
+  expired token`（用户 `~/.aider.conf.yml` 里 `openai/gemini-3.5-flash` 的
+  key 过期）。这是用户环境问题，非代码问题；认证失败会经
+  `classify_failure` 正确分类为 `Authentication`。
+- **v8agent**：`--help` 即报 `OPENAI_API_KEY is not set`（v8agent 启动时
+  构建 openai client）。用户配置 `V8AGENT_PROVIDER=openai` /
+  `V8AGENT_MODEL=qwen3.8-max`，但 headless（daemon 拉起）环境没有
+  `OPENAI_API_KEY`。属于 `configuration_required` 场景，不静默降级。
+- 已验证 `codex exec` 参数契约：`-s/--sandbox read-only`、`--skip-git-repo-check`、`-m/--model`、`-C/--cd`。
 
 ### A5（错误可见 + 无 heuristic 新写入 + 无孤儿进程）— 完成（单元测试覆盖）
 
@@ -114,7 +132,7 @@ AI: 验证完成，probe_marker.txt 确实存在。
 ## 遗留限制（未验收项）
 
 1. **A3 真实长会话**：未用真实 LLM 跑超过 16k 字符的长会话核对事实覆盖。
-2. **A4 其他 provider**：claude/codebuddy/opencode/goose/aider/v8agent 未逐家真实 smoke。
+2. **A4 aider/v8agent 认证**：aider 的 gemini key 过期、v8agent 缺 `OPENAI_API_KEY`，未生成真实总结（其余 5 家 codex/claude/codebuddy/opencode/goose 已通过）。
 3. **Task 7 会话面板 UI**：会话详情的"生成/重试/重新生成"按钮、provider 配置组件、失败重试/取消 UI 未实现（修复项目总结步骤已切换 V2）。
 4. **自然退出**：agent 进程自然结束时的总结任务提交未在 daemon 退出统一处理（当前只有关闭/Shutdown 触发）。
 5. **chunk 粒度重用**：重启后已成功 chunk 的输出重用未实现（只做了 job 级 requeue）。

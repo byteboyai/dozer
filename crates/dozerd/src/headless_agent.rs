@@ -252,16 +252,21 @@ pub(crate) fn build_command_parts(
             Some((cmd, None))
         }
         AgentKind::Aider => {
-            // `aider --message <prompt> --no-stream --no-pretty --no-auto-commits`
-            // 一次性总结(见 spec D7)。移除全部 Dozer bridge/notification 环境
-            // 变量,避免总结被 launcher bridge 重复落库。stdout 含固定文本
-            // banner,由 `extract_summary` 前先过 `clean_aider_stdout`。
+            // `aider --message <prompt> --no-stream --no-pretty --no-auto-commits
+            // --no-fancy-input` 一次性总结(见 spec D7)。`--no-fancy-input` 是
+            // 非 TTY(headless)环境必需的——aider 的 fancy input 会 `raw_mode`
+            // + `loop.add_reader(stdin)`,stdin 是 pipe/null 时抛
+            // `OSError: Invalid argument`(2026-09-26 真实 smoke 复现)。移除
+            // 全部 Dozer bridge/notification 环境变量,避免总结被 launcher
+            // bridge 重复落库。stdout 含固定文本 banner,由 `extract_summary`
+            // 前先过 `clean_aider_stdout`。
             let mut cmd = tokio::process::Command::new(program);
             cmd.arg("--message")
                 .arg(format!("{instruction}\n\n{data}"))
                 .arg("--no-stream")
                 .arg("--no-pretty")
-                .arg("--no-auto-commits");
+                .arg("--no-auto-commits")
+                .arg("--no-fancy-input");
             cmd.env_remove("DOZER_SESSION_ID");
             cmd.env_remove("AIDER_NOTIFICATIONS_COMMAND");
             cmd.env_remove("DOZER_AIDER_CHAT_HISTORY");
@@ -911,6 +916,10 @@ mod tests {
         assert!(args.contains(&"--no-stream".to_string()));
         assert!(args.contains(&"--no-pretty".to_string()));
         assert!(args.contains(&"--no-auto-commits".to_string()));
+        assert!(
+            args.contains(&"--no-fancy-input".to_string()),
+            "非 TTY 环境必须 --no-fancy-input,否则 vt100 raw_mode 报 Invalid argument"
+        );
         let cleared = cmd
             .as_std()
             .get_envs()
