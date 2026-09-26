@@ -7,6 +7,8 @@
 | [dozer-v2架构分析.md](../dozer-v2/dozer-v2架构分析.md) | Dozer V2 产品与架构 | 微内核 Host、插件 App、MCP 能力网络与 Vibe Coding 闭环 |
 | [dozer-v2开源生态调研.md](../dozer-v2/dozer-v2开源生态调研.md) | Dozer V2 开源生态 | 同类项目、局部参考、依赖候选与工程验证路线 |
 | [dozer-v2-逐仓代码复核.md](./dozer-v2-逐仓代码复核.md) | Dozer V2 逐仓代码复核 | 59 个仓库的源码证据、V2 价值与去留裁决 |
+| [tidebreak静态结构图.md](./tidebreak静态结构图.md) | Tidebreak 静态结构图 | Rust crate 依赖、运行时边界、Code Mode 与沙箱拓扑 |
+| [daintree静态结构图.md](./daintree静态结构图.md) | Daintree 静态结构图 | Electron 多进程、项目/PTY 执行面与插件开发链 |
 
 ## 两个项目共同验证的"标准件"
 
