@@ -2346,7 +2346,7 @@ git commit -m "feat(usage): 新增用量面板内容侧 chrome 高度几何常�
 
 **结构**:与 `git_log_diff_pane_bounds_for`(chart.rs:386-496)同谱系(zone/镜像/放大态处理一致),但只有一层配对(内容|分隔线|筛选栏)而非 GitLog 的两层嵌套,且顺序与 GitLog 相反——"内容在前、列表在后"(同 `PanelDims::usage_split` 字段文档、`layout.rs:110-112`),`mirrored` 要取反(同 `preview_content_bounds_for` 里 `PanelKind::Conversations` 分支的处理手法,那也是"内容在前")。`content_desired` 为假(该侧 Usage 正在"统计中…",原生 iced 播动画)或 `list_visible` 为假(无筛选栏数据/被手动收起,内容独占整条配对宽)时的两条分支分别对应 Files 的 `files_tree_collapsed`/收起态处理。
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 ```rust
 // 追加到 crates/dozer-app/src/webview_geometry.rs 既有 `#[cfg(test)] mod
@@ -2409,7 +2409,7 @@ fn usage_content_y_starts_below_chrome_top() {
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cargo test -p dozer-app webview_geometry::tests::usage_content
@@ -2417,7 +2417,7 @@ cargo test -p dozer-app webview_geometry::tests::usage_content
 
 Expected: FAIL,`usage_content_pane_bounds_for` 未定义。
 
-- [ ] **Step 3: 实现**(紧接着 `git_log_diff_pane_bounds_for` 之后追加)
+- [x] **Step 3: 实现**(紧接着 `git_log_diff_pane_bounds_for` 之后追加)
 
 ```rust
 /// 用量面板内容侧 Preact webview 矩形(上/左/宽/高,逻辑像素),供 main.rs
@@ -2532,7 +2532,7 @@ pub fn usage_content_pane_bounds_for(
 }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 ```bash
 cargo test -p dozer-app webview_geometry
@@ -2540,7 +2540,7 @@ cargo test -p dozer-app webview_geometry
 
 Expected: 全部 PASS(含既有 `git_log_diff_pane_bounds_for` 相关测试,确认没有破坏)。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/webview_geometry.rs

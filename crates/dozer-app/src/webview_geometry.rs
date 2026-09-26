@@ -495,6 +495,117 @@ pub fn git_log_diff_pane_bounds_for(
     compute(inx, iny, inw, inh)
 }
 
+/// 用量面板内容侧 Preact webview 矩形(上/左/宽/高,逻辑像素),供 main.rs
+/// 摆放固定单槽的图表 webview 用。
+///
+/// 与 `git_log_diff_pane_bounds_for` 同谱系(zone/镜像/放大态处理一致),
+/// 但只有一层配对(内容|分隔线|筛选栏,"内容在前、列表在后",`mirrored`
+/// 要取反——同 `preview_content_bounds_for` 里 `PanelKind::Conversations`
+/// 分支的处理手法)而非 GitLog 那样的两层嵌套。内容顶部还要再扣掉面板头
+/// (图标+"用量"标题+收起按钮,继续留在原生 iced)的固定高度——webview
+/// 只覆盖头部**以下**的内容区,见 `theme::geometry::usage_content_chrome_top_px`。
+///
+/// `content_desired`:该侧当前是否该挂载这个 webview(`!ws_state.loading()`,
+/// 由调用方——`preview_desired`——算好传入,统计中时原生 iced 播放
+/// `math_curve` 动画,webview 不挂载)。`list_visible`:agent 筛选栏这一列
+/// 是否参与分栏(`ws_state.has_agent_filter() && !state.dims.usage_list_
+/// collapsed`,同样由调用方算好传入)——两者都依赖 workspace 业务数据,
+/// 本函数只吃 `&ShellState` 够不到。`list_visible` 为假时内容独占整条
+/// 配对宽,不经 `pair_columns` 分栏(同 `preview_content_bounds_for` 里
+/// `files_tree_collapsed`/`project_list_collapsed` 分支的处理手法)。
+///
+/// 不可摆放(`!content_desired` / 该侧收起 / 不是 Usage / 放大的是另一侧)
+/// 时返回零尺寸矩形。
+pub fn usage_content_pane_bounds_for(
+    side: Side,
+    window_width: f32,
+    window_height: f32,
+    state: &ShellState,
+    content_desired: bool,
+    list_visible: bool,
+) -> (f32, f32, f32, f32) {
+    let zero = || (0.0, 0.0, 0.0, 0.0);
+    let kind = match side {
+        Side::Left => state.left_view,
+        Side::Right => state.right_view,
+    };
+    let collapsed = match side {
+        Side::Left => state.left_collapsed,
+        Side::Right => state.right_collapsed,
+    };
+    if !content_desired || collapsed || kind != PanelKind::Usage {
+        return zero();
+    }
+    let mirrored =
+        state.layout.rail_layout.side_of(PanelKind::Usage) != PanelKind::Usage.default_side();
+    let chrome_top = theme::geometry::usage_content_chrome_top_px();
+
+    // 给定"面板区外框(区)矩形" → 内容矩形。放大态与非放大态只差这个输入
+    // 矩形,分块逻辑共用(同 `git_log_diff_pane_bounds_for` 的 `compute` 手法)。
+    let compute = |inx: f32, iny: f32, inw: f32, inh: f32| -> (f32, f32, f32, f32) {
+        let (x, w) = if list_visible {
+            let pair_w = pair_content_width(inw);
+            let cols = pair_columns(pair_w, state.dims.usage_split, !mirrored);
+            (inx + cols.content_x, cols.content_w.max(0.0))
+        } else {
+            (inx, inw.max(0.0))
+        };
+        let y = iny + chrome_top;
+        let h = (inh - chrome_top).max(0.0);
+        (x, y, w, h)
+    };
+
+    if let Some(maximized) = state.maximized {
+        let showing_side = match maximized {
+            MaximizedPane::Left => Side::Left,
+            MaximizedPane::Right => Side::Right,
+        };
+        if side != showing_side {
+            return zero();
+        }
+        let m = match side {
+            Side::Left => theme::region::left_zone().margin,
+            Side::Right => theme::region::right_zone().margin,
+        };
+        let (x0, avail_w) = maximized_box_x_range(window_width);
+        let inx = x0 + m.left;
+        let inw = (avail_w - m.left - m.right).max(0.0);
+        let iny = byteui::theme::geometry::top_bar_height()
+            + byteui::theme::geometry::maximize_overlay_padding()
+            + m.top;
+        let inh = (maximized_box_height(window_height)
+            - byteui::theme::geometry::maximize_overlay_padding()
+            - byteui::theme::geometry::status_bar_height()
+            - m.top
+            - m.bottom)
+            .max(0.0);
+        return compute(inx, iny, inw, inh);
+    }
+
+    let m = match side {
+        Side::Left => theme::region::left_zone().margin,
+        Side::Right => theme::region::right_zone().margin,
+    };
+    let zone_x0 = match side {
+        Side::Left => byteui::theme::geometry::icon_rail_width(),
+        Side::Right => {
+            window_width
+                - byteui::theme::geometry::icon_rail_width()
+                - right_zone_width(window_width, state)
+        }
+    };
+    let zone_raw_w = match side {
+        Side::Left => left_zone_width(window_width, state),
+        Side::Right => right_zone_width(window_width, state),
+    };
+    let inx = zone_x0 + m.left;
+    let iny = byteui::theme::geometry::top_bar_height() + m.top;
+    let inw = (zone_raw_w - m.left - m.right).max(0.0);
+    let inh =
+        (window_height - iny - m.bottom - byteui::theme::geometry::status_bar_height()).max(0.0);
+    compute(inx, iny, inw, inh)
+}
+
 /// 逻辑 x 是否落在左侧文件预览内容区列内。焦点路由用:点击落在
 /// 该列 → 键盘交给 webview;落在别处 → 交回窗口(终端)。
 ///
@@ -1255,5 +1366,65 @@ mod tests {
         let expected_x = zone_x0 + m.left + p.padding.left + cols.content_x;
         assert!((x - expected_x).abs() < 0.5, "x={x} expected≈{expected_x}");
         assert!(w > 100.0, "w={w}");
+    }
+
+    #[test]
+    fn usage_content_zero_when_content_not_desired() {
+        let state = ShellState {
+            left_view: PanelKind::Usage,
+            ..test_state()
+        };
+        let (_, _, w, h) =
+            usage_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, false, true);
+        assert_eq!((w, h), (0.0, 0.0));
+    }
+
+    #[test]
+    fn usage_content_zero_when_side_collapsed() {
+        let state = ShellState {
+            left_view: PanelKind::Usage,
+            left_collapsed: true,
+            ..test_state()
+        };
+        let (_, _, w, h) =
+            usage_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true, true);
+        assert_eq!((w, h), (0.0, 0.0));
+    }
+
+    #[test]
+    fn usage_content_zero_when_panel_kind_is_not_usage() {
+        let state = test_state(); // left_view: PanelKind::Files
+        let (_, _, w, h) =
+            usage_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true, true);
+        assert_eq!((w, h), (0.0, 0.0));
+    }
+
+    #[test]
+    fn usage_content_full_zone_width_when_list_not_visible() {
+        let state = ShellState {
+            left_view: PanelKind::Usage,
+            ..test_state()
+        };
+        let (_, _, w_split, _) =
+            usage_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true, true);
+        let (_, _, w_full, _) =
+            usage_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true, false);
+        assert!(
+            w_full > w_split,
+            "无筛选栏时内容应独占整条配对宽,比分栏时更宽:{w_full} vs {w_split}"
+        );
+    }
+
+    #[test]
+    fn usage_content_y_starts_below_chrome_top() {
+        let state = ShellState {
+            left_view: PanelKind::Usage,
+            ..test_state()
+        };
+        let (_, y, _, _) =
+            usage_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true, true);
+        let top_of_zone =
+            byteui::theme::geometry::top_bar_height() + theme::region::left_zone().margin.top;
+        assert!((y - top_of_zone - theme::geometry::usage_content_chrome_top_px()).abs() < 1.0);
     }
 }
