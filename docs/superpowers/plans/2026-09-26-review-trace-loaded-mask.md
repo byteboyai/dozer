@@ -52,7 +52,7 @@ crates/dozer-app/web/review-trace/src/main.tsx     # 修改:三种终态上报 d
 - Consumes: 既有 `WebviewEnvelope<T>`/`PROTOCOL_VERSION`/`MAX_MESSAGE_BYTES`/`ProtocolError`(同文件已有)。
 - Produces: `ReviewTraceEvent`(`pub`)、`parse_review_trace_event(raw: &str) -> Result<WebviewEnvelope<ReviewTraceEvent>, ProtocolError>`,供 Task 5(`runtime.rs`)使用。
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 ```rust
 // 追加到 crates/dozer-app/src/preview/webview_protocol.rs 的
@@ -86,7 +86,7 @@ fn parse_review_trace_event_rejects_oversized_message() {
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cargo test -p dozer-app webview_protocol::tests::parse_review_trace_event
@@ -94,7 +94,7 @@ cargo test -p dozer-app webview_protocol::tests::parse_review_trace_event
 
 Expected: FAIL,`ReviewTraceEvent`/`parse_review_trace_event` 未定义。
 
-- [ ] **Step 3: 实现**(紧接着 `parse_flyfish_event` 之后追加,逐行对照它的结构——size 检查/`kind` 预取用于错误信息/`serde_json::from_value` 转最终类型)
+- [x] **Step 3: 实现**(紧接着 `parse_flyfish_event` 之后追加,逐行对照它的结构——size 检查/`kind` 预取用于错误信息/`serde_json::from_value` 转最终类型)
 
 ```rust
 /// review-trace(单槽、非 tab)host 报回的事件。只有一个变体——
@@ -141,7 +141,7 @@ pub fn parse_review_trace_event(raw: &str) -> Result<WebviewEnvelope<ReviewTrace
 
 > 若 `ProtocolError::TooLarge`/`ProtocolError::UnknownPayload`/`ProtocolError::BadJson` 的具体字段名与既有 `parse_flyfish_event` 引用的不完全一致,以 `parse_flyfish_event` 现有实现(紧邻上方)实际引用的变体名为准照抄,不要凭空猜字段名。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 ```bash
 cargo test -p dozer-app webview_protocol::tests::parse_review_trace_event
@@ -149,7 +149,7 @@ cargo test -p dozer-app webview_protocol::tests::parse_review_trace_event
 
 Expected: 3 个测试全部 PASS。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/preview/webview_protocol.rs
@@ -168,7 +168,7 @@ git commit -m "feat(review-trace): 新增 loaded 遮罩事件协议 ReviewTraceE
 **Interfaces:**
 - Produces: `ReviewView::loaded_nonce: Option<u64>` 字段,`review_webview_spec` 新可见性判据,供 Task 3(事件落地)、Task 4(原生占位)使用。
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 ```rust
 // 追加到 crates/dozer-app/src/workspace/view.rs 的 `#[cfg(test)] mod tests`
@@ -228,7 +228,7 @@ fn review_webview_spec_empty_entries_still_wins_over_loaded_nonce() {
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cargo test -p dozer-app workspace::view::tests::review_webview_spec
@@ -236,7 +236,7 @@ cargo test -p dozer-app workspace::view::tests::review_webview_spec
 
 Expected: FAIL,`ReviewView` 缺 `loaded_nonce` 字段(既有测试构造点因为字段不匹配也会一并编译失败,属预期,Step 3 一起修)。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 ```rust
 // crates/dozer-app/src/workspace/state.rs::ReviewView,summary_time 字段
@@ -270,7 +270,7 @@ ws.review = Some(ReviewView {
 });
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 ```bash
 cargo test -p dozer-app workspace
@@ -278,7 +278,7 @@ cargo test -p dozer-app workspace
 
 Expected: 全部 PASS(含既有 `review_webview_spec_empty_when_no_review`/`review_webview_spec_empty_on_error_or_empty_entries`/`review_webview_spec_url_carries_nonce_and_is_visible`——最后这个既有测试断言"恒可见",本任务改了这个语义,需要同步更新它的断言而不是删掉,见下一步)。
 
-- [ ] **Step 5: 更新一个因语义变化而需要调整断言的既有测试**
+- [x] **Step 5: 更新一个因语义变化而需要调整断言的既有测试**
 
 ```rust
 // crates/dozer-app/src/workspace/tests.rs(或既有测试所在文件)里的
@@ -297,7 +297,7 @@ fn review_webview_spec_url_carries_nonce_and_is_visible_when_loaded() {
 }
 ```
 
-- [ ] **Step 6: 运行全部 workspace 测试确认通过**
+- [x] **Step 6: 运行全部 workspace 测试确认通过**
 
 ```bash
 cargo test -p dozer-app workspace
@@ -305,7 +305,7 @@ cargo test -p dozer-app workspace
 
 Expected: 全部 PASS。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/dozer-app/src/workspace/state.rs crates/dozer-app/src/workspace/view.rs crates/dozer-app/src/workspace/tests.rs crates/dozer-app/src/app/update.rs
@@ -326,7 +326,7 @@ git commit -m "feat(review-trace): ReviewView 新增 loaded_nonce,webview 默认
 
 > 不带 binding、不带 project_id 定位——`ws.review` 是"当前聚焦项目"的字段(同 `ReviewLoaded` 现状用 `self.with_project(project_id, ...)` 定位的方式不同,`ReviewView` 本身不按 project_id 路由,是 `Workspace` 的直接字段),消息落地时操作 `self.active_workspace_mut()`(或既有等价方法)拿到的那个 workspace,不需要额外携带项目身份。
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 ```rust
 // 追加到 crates/dozer-app/src/app/update.rs 的 `#[cfg(test)] mod tests`
@@ -402,7 +402,7 @@ fn review_trace_webview_event_no_op_when_review_is_none() {
 
 > `test_app_with_project()` 若不存在,改用 `update.rs`/`workspace/tests.rs` 里既有的"构造一个带活跃项目的 App"测试辅助函数(本 crate 测试里普遍存在类似辅助函数,实现时按实际命名替换,不要凭空发明一个新的构造路径)。
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cargo test -p dozer-app update::tests::review_trace_webview_event
@@ -410,7 +410,7 @@ cargo test -p dozer-app update::tests::review_trace_webview_event
 
 Expected: FAIL,`Message::ReviewTraceWebviewEvent` 未定义。
 
-- [ ] **Step 3: 新增 Message 变体**
+- [x] **Step 3: 新增 Message 变体**
 
 ```rust
 // crates/dozer-app/src/app/message.rs,`GitLogDiffWebviewEvent`/
@@ -420,7 +420,7 @@ Expected: FAIL,`Message::ReviewTraceWebviewEvent` 未定义。
 ReviewTraceWebviewEvent(crate::preview::ReviewTraceEvent),
 ```
 
-- [ ] **Step 4: update.rs 处理**
+- [x] **Step 4: update.rs 处理**
 
 ```rust
 // crates/dozer-app/src/app/update.rs,`Message::GitLogDiffWebviewEvent`
@@ -435,7 +435,7 @@ Message::ReviewTraceWebviewEvent(event) => {
 }
 ```
 
-- [ ] **Step 5: 运行测试确认通过**
+- [x] **Step 5: 运行测试确认通过**
 
 ```bash
 cargo test -p dozer-app update::tests::review_trace_webview_event
@@ -443,7 +443,7 @@ cargo test -p dozer-app update::tests::review_trace_webview_event
 
 Expected: 3 个测试全部 PASS。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/dozer-app/src/app/message.rs crates/dozer-app/src/app/update.rs
@@ -460,7 +460,7 @@ git commit -m "feat(review-trace): 新增 ReviewTraceWebviewEvent 消息与落�
 **Interfaces:**
 - Consumes: `ReviewView::loaded_nonce`(Task 2)。
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 ```rust
 // 追加到 crates/dozer-app/src/workspace/view.rs 的 `#[cfg(test)] mod tests`
@@ -524,7 +524,7 @@ mod review_pane_state_tests {
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cargo test -p dozer-app workspace::view::review_pane_state_tests
@@ -532,7 +532,7 @@ cargo test -p dozer-app workspace::view::review_pane_state_tests
 
 Expected: FAIL,`review_pane_state`/`ReviewPaneState` 未定义。
 
-- [ ] **Step 3: 实现纯函数 + 接入 `review_content_pane`**
+- [x] **Step 3: 实现纯函数 + 接入 `review_content_pane`**
 
 ```rust
 // crates/dozer-app/src/workspace/view.rs,review_content_pane 函数体内,
@@ -586,7 +586,7 @@ match review_pane_state(ws.review.as_ref()) {
 
 > `review_pane_state`/`ReviewPaneState` 定义本身放在 `#[cfg(test)]` 之外的正常模块作用域(上面 Step 1 示例把它跟测试放在一起只是为了展示,实现时把 `enum`/`fn` 挪到 `review_content_pane` 函数之前的正常位置,测试模块只保留 `#[cfg(test)] mod review_pane_state_tests`)。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 ```bash
 cargo test -p dozer-app workspace::view
@@ -594,7 +594,7 @@ cargo test -p dozer-app workspace::view
 
 Expected: 全部 PASS。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/workspace/view.rs
@@ -611,7 +611,7 @@ git commit -m "feat(review-trace): review_content_pane 增加原生 loading 占�
 **Interfaces:**
 - Consumes: `preview::parse_review_trace_event`(Task 1)、`Message::ReviewTraceWebviewEvent`(Task 3)、既有 `CONVERSATION_REVIEW_ID_OFFSET` 常量(`app.rs:630`)。
 
-- [ ] **Step 1: 实现**(`with_ipc_handler` 闭包内 `_ => { ... }` 分支,`if let Some(binding) = flyfish_binding.as_ref() && looks_like_envelope { ... }` 之后、`else if let Some(binding) = editor_binding.as_ref() { ... }` 之前插入一个 `else if`。review-trace 至今没有专属 binding——它落在这段代码现有的兜底 `else { WebViewFocused }` 里,因为迁移前后都是"只读渲染,不发事件回 Rust";这次要在兜底之前插一段专属识别,按固定 webview id 判断,不新增 binding 类型)
+- [x] **Step 1: 实现**(`with_ipc_handler` 闭包内 `_ => { ... }` 分支,`if let Some(binding) = flyfish_binding.as_ref() && looks_like_envelope { ... }` 之后、`else if let Some(binding) = editor_binding.as_ref() { ... }` 之前插入一个 `else if`。review-trace 至今没有专属 binding——它落在这段代码现有的兜底 `else { WebViewFocused }` 里,因为迁移前后都是"只读渲染,不发事件回 Rust";这次要在兜底之前插一段专属识别,按固定 webview id 判断,不新增 binding 类型)
 
 ```rust
 } else if webview_id == crate::app::CONVERSATION_REVIEW_ID_OFFSET && looks_like_envelope {
@@ -634,7 +634,7 @@ git commit -m "feat(review-trace): review_content_pane 增加原生 loading 占�
 > 变量在这个闭包作用域内已经存在(`find_page`/`find_native` 分支已经在
 > 用它),不需要额外捕获。
 
-- [ ] **Step 2: 编译确认**
+- [x] **Step 2: 编译确认**
 
 ```bash
 cargo check -p dozer-app
@@ -642,7 +642,7 @@ cargo check -p dozer-app
 
 Expected: 通过。
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add crates/dozer-app/src/runtime.rs
@@ -661,7 +661,7 @@ git commit -m "feat(review-trace): runtime.rs 接入 loaded 事件 IPC 路由"
 
 > 对应本计划 Review Focus 第二条:上报时机必须覆盖 fetch 成功、fetch 失败、Preact 渲染期异常(`RenderErrorBoundary` 捕获)三种情形,不能只挂在 fetch 的 `.then`/`.catch` 上——`RenderErrorBoundary` 捕获的是 `<Entry>`/`<SummaryHeader>` 渲染期抛出的异常,这条路径不经过那两个 fetch 回调。用一个 `useEffect` 挂在 `App` 组件里"data 或 error 任一个被设置"这个更上层的时机,能统一覆盖前两种;渲染异常发生在 `data` 已经被设置**之后**(拿到数据才会往下渲染 `Entry`),`useEffect([data, error])` 在 `data` 从 `null` 变为非 `null` 的那次提交仍会触发(异常发生在子组件渲染阶段,被 `RenderErrorBoundary` 挡在 `App` 自身提交完成之前,`App` 的 `useEffect` 不受影响),已经覆盖第三种情形,不需要再额外挂什么。
 
-- [ ] **Step 1: 修改 src/main.tsx**
+- [x] **Step 1: 修改 src/main.tsx**
 
 ```tsx
 import { Component, render, type ComponentChildren } from 'preact';
@@ -736,7 +736,7 @@ function App() {
 render(<App />, document.getElementById('timeline')!);
 ```
 
-- [ ] **Step 2: 构建**
+- [x] **Step 2: 构建**
 
 ```bash
 cd crates/dozer-app/web/review-trace
@@ -746,7 +746,7 @@ npm run build
 
 Expected: 无报错,产物更新。
 
-- [ ] **Step 3: 人工冒烟(本地起服务打开产物,控制台手动验证三种终态都触发上报)**
+- [x] **Step 3: 人工冒烟(本地起服务打开产物,控制台手动验证三种终态都触发上报)**
 
 ```bash
 python3 -m http.server 8899 --directory ../../assets/review-trace
@@ -759,7 +759,7 @@ python3 -m http.server 8899 --directory ../../assets/review-trace
 需要在真机(`cargo run -p dozer-app`)里打开一个真实审阅会话核对(见
 Task 7)。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/dozer-app/web/review-trace/src/main.tsx
@@ -772,7 +772,7 @@ git commit -m "feat(review-trace): main.tsx 三种终态上报 document_loaded"
 
 **Files:** 无新增/修改,纯验证。
 
-- [ ] **Step 1: 全 workspace 构建 + 测试 + lint**
+- [x] **Step 1: 全 workspace 构建 + 测试 + lint**
 
 ```bash
 cargo build
@@ -791,7 +791,7 @@ Expected: 全部通过。
 - [ ] 制造一次无快照场景(如有便捷方式)确认原有"暂无审阅内容"空态文案不受影响,不会被误判成"加载中"。
 - [ ] 控制台(如可开发者工具核查)零报错、零 CSP 违规。
 
-- [ ] **Step 3: 最终 Commit(若 Step 2 发现问题已在前面任务修复,这里只是收尾确认)**
+- [x] **Step 3: 最终 Commit(若 Step 2 发现问题已在前面任务修复,这里只是收尾确认)**
 
 ```bash
 git status
