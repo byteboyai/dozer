@@ -208,6 +208,17 @@ pub struct SummaryBatchInfo {
     pub updated_ts_ms: u64,
 }
 
+/// summary provider 解析结果(spec 2026-09-26 第 5 节)。`required` 为真表示
+/// 未配置(UI 应提示选择已安装总结器);`source` 取值 `ui`/`summary`/
+/// `default_agent`,供 UI 明示来源。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct SummaryProviderInfo {
+    pub provider: Option<AgentKind>,
+    pub model: Option<String>,
+    pub source: Option<String>,
+    pub required: bool,
+}
+
 /// 单个历史会话(=一份 agent transcript 文件)的索引摘要;由 dozerd 的
 /// `TranscriptStore` 摄取落库维护(spec 2026-08-20)。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -901,6 +912,57 @@ pub enum Request {
     GetSessionSummaryBackfillStatus {
         cwd: String,
     },
+    /// V2 总结协议:提交单条总结任务(持久队列),返回 `job_id`。`trigger`
+    /// 记录来源(关闭/修复/手动/退出)。`provider`/`model` 为 None 时由
+    /// daemon 按 summary 配置解析。
+    SubmitSummaryJob {
+        conversation_id: String,
+        #[serde(default)]
+        source_session_id: Option<String>,
+        trigger: SummaryTrigger,
+        #[serde(default)]
+        provider: Option<AgentKind>,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        force: bool,
+    },
+    /// 提交一批修复任务(按选择策略筛选缺失/legacy/stale/失败项),返回
+    /// `batch_id` 与选中数。
+    SubmitSummaryBatch {
+        cwd: String,
+        #[serde(default)]
+        provider: Option<AgentKind>,
+        #[serde(default)]
+        model: Option<String>,
+    },
+    /// 查询单条任务状态。
+    GetSummaryJob {
+        job_id: i64,
+    },
+    /// 查询批次状态。
+    GetSummaryBatch {
+        batch_id: i64,
+    },
+    /// 重试一条失败任务(新建 attempt,复用原 conversation/触发来源)。
+    RetrySummaryJob {
+        job_id: i64,
+    },
+    /// 取消批次(把批次内未完成的任务置 cancelled)。
+    CancelSummaryBatch {
+        batch_id: i64,
+    },
+    /// 查询 summary provider 解析结果(UI 展示"用哪个总结器/来源")。
+    GetSummaryProvider {
+        #[serde(default)]
+        ui_choice: Option<AgentKind>,
+        #[serde(default)]
+        ui_model: Option<String>,
+    },
+    /// 查询某 conversation 的规范总结结果(新版结果表)。
+    GetSummaryResult {
+        conversation_id: String,
+    },
     /// 列出某项目全部任务,`ORDER BY done, paused, rank` 排好序返回。
     ListTodos {
         project_id: i64,
@@ -1140,6 +1202,31 @@ pub enum Reply {
     BackfillStatus {
         total: u32,
         completed: u32,
+    },
+    /// V2:`SubmitSummaryJob` 应答。
+    SummaryJobSubmitted {
+        job_id: i64,
+    },
+    /// V2:`SubmitSummaryBatch` 应答。
+    SummaryBatchSubmitted {
+        batch_id: i64,
+        total: u32,
+    },
+    /// V2:`GetSummaryJob` 应答。`None` 表示 job 不存在。
+    SummaryJob {
+        job: Option<SummaryJobInfo>,
+    },
+    /// V2:`GetSummaryBatch` 应答。`None` 表示 batch 不存在。
+    SummaryBatch {
+        batch: Option<SummaryBatchInfo>,
+    },
+    /// V2:`GetSummaryProvider` 应答。
+    SummaryProvider {
+        info: SummaryProviderInfo,
+    },
+    /// V2:`GetSummaryResult` 应答。`None` 表示无规范结果。
+    SummaryResult {
+        result: Option<ConversationSummaryResult>,
     },
     Todos {
         todos: Vec<TodoInfo>,
@@ -1653,6 +1740,72 @@ mod tests {
         let line = encode_line(&req);
         let back: Request = decode_line(&line).unwrap();
         assert_eq!(req, back);
+    }
+
+    #[test]
+    fn v2_submit_summary_job_roundtrips_with_defaults() {
+        let req = Request::SubmitSummaryJob {
+            conversation_id: "c1".into(),
+            source_session_id: None,
+            trigger: SummaryTrigger::Manual,
+            provider: Some(AgentKind::Codex),
+            model: Some("gpt-5".into()),
+            force: false,
+        };
+        let line = encode_line(&req);
+        let back: Request = decode_line(&line).unwrap();
+        assert_eq!(req, back);
+
+        // 省略可选字段(旧客户端/老 JSON)应回落到默认值,不报错。
+        let minimal =
+            r#"{"type":"submit_summary_job","conversation_id":"c1","trigger":"backfill"}"#;
+        let decoded: Request = serde_json::from_str(minimal).unwrap();
+        match decoded {
+            Request::SubmitSummaryJob {
+                provider, force, ..
+            } => {
+                assert_eq!(provider, None);
+                assert!(!force);
+            }
+            other => panic!("应解码为 SubmitSummaryJob,得到 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn summary_trigger_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&SummaryTrigger::NaturalExit).unwrap(),
+            "\"natural_exit\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SummaryTrigger::Backfill).unwrap(),
+            "\"backfill\""
+        );
+    }
+
+    #[test]
+    fn summary_job_status_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&SummaryJobStatus::Queued).unwrap(),
+            "\"queued\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SummaryJobStatus::Succeeded).unwrap(),
+            "\"succeeded\""
+        );
+    }
+
+    #[test]
+    fn summary_provider_info_roundtrips() {
+        let info = SummaryProviderInfo {
+            provider: Some(AgentKind::Codex),
+            model: Some("gpt-5".into()),
+            source: Some("summary".into()),
+            required: false,
+        };
+        let line = serde_json::to_string(&info).unwrap();
+        let back: SummaryProviderInfo = serde_json::from_str(&line).unwrap();
+        assert_eq!(info, back);
     }
 
     #[test]

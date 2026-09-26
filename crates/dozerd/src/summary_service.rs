@@ -233,6 +233,48 @@ impl SummaryService {
         Ok(())
     }
 
+    /// 重试一条任务:读原 job,用其 conversation/trigger/provider 新建一个
+    /// attempt(新 generation、queued)。返回新 job_id。
+    pub fn retry_job(&self, job_id: i64) -> anyhow::Result<i64> {
+        let job = self
+            .jobs
+            .get_job(job_id)?
+            .ok_or_else(|| anyhow::anyhow!("job {job_id} 不存在"))?;
+        let generation = self.jobs.next_generation(&job.conversation_id)?;
+        self.jobs.create_job(
+            &job.conversation_id,
+            job.source_session_id.as_deref(),
+            job.trigger,
+            job.provider,
+            job.requested_model.as_deref(),
+            &job.source_revision,
+            &job.pipeline_version,
+            generation,
+            SummaryJobStatus::Queued,
+        )
+    }
+
+    /// 取消一个批次:把批次内 queued/running 的任务置 cancelled。
+    pub fn cancel_batch(&self, batch_id: i64) -> anyhow::Result<()> {
+        let jobs = self.jobs.list_jobs_for_batch(batch_id)?;
+        for job in &jobs {
+            if matches!(
+                job.status,
+                SummaryJobStatus::Queued | SummaryJobStatus::Running
+            ) {
+                self.jobs.update_job_status(
+                    job.job_id,
+                    SummaryJobStatus::Cancelled,
+                    Some(SummaryErrorKind::Cancelled),
+                    Some("批次被取消"),
+                    None,
+                )?;
+            }
+        }
+        let _ = self.recount_batch(batch_id);
+        Ok(())
+    }
+
     /// 执行一个 job:读 transcript → 跑 pipeline → CAS 发布结果。`summarizer`
     /// 注入(测试用 fake)。成功返回 `Some(FinalSummary)`,失败记录错误并返回
     /// `Err`。

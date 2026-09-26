@@ -443,12 +443,20 @@ async fn handle_conn(
         code_health,
         transcripts,
         session_summaries,
-        summary_jobs: _summary_jobs,
+        summary_jobs,
         backfill_registry,
         todos,
         categories,
         memories,
     } = stores;
+    // 总结调度服务:提交/查询走持久化表,状态在 SQLite 里,跨连接可见。每个
+    // 连接构造一份轻量句柄(只是 Arc 引用 + 一个 scratch 根路径)。
+    let summary_service = std::sync::Arc::new(crate::summary_service::SummaryService {
+        jobs: summary_jobs.clone(),
+        transcripts: transcripts.clone(),
+        session_summaries: session_summaries.clone(),
+        scratch_root: dozer_core::paths::state_dir().join("summary-scratch"),
+    });
     let (r, mut w) = stream.into_split();
     let mut lines = BufReader::new(r).lines();
     // attach 状态：订阅 + 会话 id
@@ -1076,6 +1084,114 @@ async fn handle_conn(
                             Reply::BackfillStatus {
                                 total: progress.total,
                                 completed: progress.completed,
+                            }
+                        }
+                        Request::SubmitSummaryJob {
+                            conversation_id,
+                            source_session_id,
+                            trigger,
+                            provider,
+                            model,
+                            force,
+                        } => {
+                            match crate::summary_config::resolve_provider(provider, model.clone())
+                            {
+                                crate::summary_config::SummaryProviderResolution::Required => {
+                                    Reply::Error {
+                                        message: "未配置 summary provider(需 summary 配置或 default_agent)".into(),
+                                    }
+                                }
+                                crate::summary_config::SummaryProviderResolution::Configured(
+                                    cfg,
+                                    _,
+                                ) => {
+                                    let spec = crate::summary_service::SubmitSpec {
+                                        conversation_id,
+                                        source_session_id,
+                                        trigger,
+                                        provider: cfg.provider,
+                                        requested_model: cfg.model.or(model),
+                                        force,
+                                    };
+                                    match summary_service.submit_single(&spec) {
+                                        Ok(job_id) => Reply::SummaryJobSubmitted { job_id },
+                                        Err(e) => Reply::Error {
+                                            message: format!("提交总结任务失败: {e}"),
+                                        },
+                                    }
+                                }
+                            }
+                        }
+                        Request::SubmitSummaryBatch { cwd, provider, model } => {
+                            let _ = (provider, model);
+                            match summary_service.submit_batch(&cwd) {
+                                Ok((batch_id, total)) => {
+                                    Reply::SummaryBatchSubmitted { batch_id, total }
+                                }
+                                Err(e) => Reply::Error { message: format!("提交批次失败: {e}") },
+                            }
+                        }
+                        Request::GetSummaryJob { job_id } => {
+                            match summary_service.jobs.get_job(job_id) {
+                                Ok(job) => Reply::SummaryJob { job },
+                                Err(e) => Reply::Error { message: format!("查询任务失败: {e}") },
+                            }
+                        }
+                        Request::GetSummaryBatch { batch_id } => {
+                            match summary_service.jobs.get_batch(batch_id) {
+                                Ok(batch) => Reply::SummaryBatch { batch },
+                                Err(e) => Reply::Error { message: format!("查询批次失败: {e}") },
+                            }
+                        }
+                        Request::RetrySummaryJob { job_id } => {
+                            match summary_service.retry_job(job_id) {
+                                Ok(new_id) => Reply::SummaryJobSubmitted { job_id: new_id },
+                                Err(e) => Reply::Error { message: format!("重试失败: {e}") },
+                            }
+                        }
+                        Request::CancelSummaryBatch { batch_id } => {
+                            match summary_service.cancel_batch(batch_id) {
+                                Ok(()) => Reply::Ok,
+                                Err(e) => Reply::Error { message: format!("取消失败: {e}") },
+                            }
+                        }
+                        Request::GetSummaryProvider { ui_choice, ui_model } => {
+                            let info = match crate::summary_config::resolve_provider(
+                                ui_choice, ui_model,
+                            ) {
+                                crate::summary_config::SummaryProviderResolution::Configured(
+                                    cfg,
+                                    src,
+                                ) => dozer_core::protocol::SummaryProviderInfo {
+                                    provider: Some(cfg.provider),
+                                    model: cfg.model,
+                                    source: Some(match src {
+                                        crate::summary_config::SummaryConfigSource::Ui => "ui",
+                                        crate::summary_config::SummaryConfigSource::Summary => {
+                                            "summary"
+                                        }
+                                        crate::summary_config::SummaryConfigSource::DefaultAgent => {
+                                            "default_agent"
+                                        }
+                                    }
+                                    .to_string()),
+                                    required: false,
+                                },
+                                crate::summary_config::SummaryProviderResolution::Required => {
+                                    dozer_core::protocol::SummaryProviderInfo {
+                                        provider: None,
+                                        model: None,
+                                        source: None,
+                                        required: true,
+                                    }
+                                }
+                            };
+                            Reply::SummaryProvider { info }
+                        }
+                        Request::GetSummaryResult { conversation_id } => {
+                            match summary_service.jobs.get_result(&conversation_id) {
+                                Ok(result) => Reply::SummaryResult { result },
+                                Err(e) => Reply::Error { message: format!("查询结果失败: {e}") },
                             }
                         }
                     },

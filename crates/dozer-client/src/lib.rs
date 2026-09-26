@@ -174,6 +174,130 @@ impl Client {
         }
     }
 
+    /// V2:提交单条总结任务,返回 job_id。
+    pub async fn submit_summary_job(
+        &self,
+        conversation_id: &str,
+        source_session_id: Option<&str>,
+        trigger: dozer_core::protocol::SummaryTrigger,
+        provider: Option<AgentKind>,
+        model: Option<&str>,
+        force: bool,
+    ) -> Result<i64> {
+        match self
+            .roundtrip(&Request::SubmitSummaryJob {
+                conversation_id: conversation_id.into(),
+                source_session_id: source_session_id.map(|s| s.into()),
+                trigger,
+                provider,
+                model: model.map(|s| s.into()),
+                force,
+            })
+            .await?
+        {
+            Reply::SummaryJobSubmitted { job_id } => Ok(job_id),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// V2:提交一批修复任务,返回 `(batch_id, 选中数)`。
+    pub async fn submit_summary_batch(
+        &self,
+        cwd: &str,
+        provider: Option<AgentKind>,
+        model: Option<&str>,
+    ) -> Result<(i64, u32)> {
+        match self
+            .roundtrip(&Request::SubmitSummaryBatch {
+                cwd: cwd.into(),
+                provider,
+                model: model.map(|s| s.into()),
+            })
+            .await?
+        {
+            Reply::SummaryBatchSubmitted { batch_id, total } => Ok((batch_id, total)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// V2:查询单条任务状态。
+    pub async fn get_summary_job(
+        &self,
+        job_id: i64,
+    ) -> Result<Option<dozer_core::protocol::SummaryJobInfo>> {
+        match self.roundtrip(&Request::GetSummaryJob { job_id }).await? {
+            Reply::SummaryJob { job } => Ok(job),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// V2:查询批次状态。
+    pub async fn get_summary_batch(
+        &self,
+        batch_id: i64,
+    ) -> Result<Option<dozer_core::protocol::SummaryBatchInfo>> {
+        match self
+            .roundtrip(&Request::GetSummaryBatch { batch_id })
+            .await?
+        {
+            Reply::SummaryBatch { batch } => Ok(batch),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// V2:重试失败任务,返回新 job_id。
+    pub async fn retry_summary_job(&self, job_id: i64) -> Result<i64> {
+        match self.roundtrip(&Request::RetrySummaryJob { job_id }).await? {
+            Reply::SummaryJobSubmitted { job_id } => Ok(job_id),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// V2:取消批次。
+    pub async fn cancel_summary_batch(&self, batch_id: i64) -> Result<()> {
+        match self
+            .roundtrip(&Request::CancelSummaryBatch { batch_id })
+            .await?
+        {
+            Reply::Ok => Ok(()),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// V2:查询 summary provider 解析结果。
+    pub async fn get_summary_provider(
+        &self,
+        ui_choice: Option<AgentKind>,
+        ui_model: Option<&str>,
+    ) -> Result<dozer_core::protocol::SummaryProviderInfo> {
+        match self
+            .roundtrip(&Request::GetSummaryProvider {
+                ui_choice,
+                ui_model: ui_model.map(|s| s.into()),
+            })
+            .await?
+        {
+            Reply::SummaryProvider { info } => Ok(info),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// V2:查询某 conversation 的规范总结结果。
+    pub async fn get_summary_result(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<dozer_core::protocol::ConversationSummaryResult>> {
+        match self
+            .roundtrip(&Request::GetSummaryResult {
+                conversation_id: conversation_id.into(),
+            })
+            .await?
+        {
+            Reply::SummaryResult { result } => Ok(result),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
     pub async fn open_project(&self, path: &str) -> Result<Option<ProjectInfo>> {
         match self
             .roundtrip(&Request::OpenProject { path: path.into() })
