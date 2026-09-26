@@ -28,7 +28,9 @@ use crate::workspace::{
     spawn_project_git_refresh, tab_display_width, tab_title,
 };
 use byteui::interaction::icons;
-use dozer_core::protocol::{AgentKind, AgentState, BookmarkInfo, ProjectInfo};
+use dozer_core::protocol::{
+    AgentKind, AgentState, BookmarkInfo, ProjectInfo, SummaryJobStatus, SummaryTrigger,
+};
 use iced_widget::core::{Border, Element, Length, Padding};
 use iced_widget::{button, column, container, text};
 use std::path::PathBuf;
@@ -1129,6 +1131,12 @@ impl App {
                         true,
                     );
                 });
+            }
+            Message::Conversations(conversations::Message::SummaryGenerate(
+                conversation_id,
+                agent,
+            )) => {
+                self.conversation_summary_generate(conversation_id, agent);
             }
             Message::Conversations(conversations::Message::Hover(id, h)) => self.set_hover(id, h),
             Message::Conversations(conversations::Message::TextInputMenuOpen(target)) => {
@@ -5171,6 +5179,78 @@ impl App {
                 CONVERSATION_DETAIL_PAGE_SIZE,
                 false,
             );
+        });
+    }
+
+    /// 会话详情面板"生成总结"按钮:对某 conversation 提交 V2 总结任务
+    /// (Manual + force),轮询到终态后刷新列表 + 重新打开详情(spec 2026-09-26
+    /// 第 8 节:会话详情提供生成/重试)。刷新与重开两条消息按序到达,主循环
+    /// 串行处理,`SessionsRefreshed` 先更新列表、`SessionOpen` 后用新 summary。
+    pub(crate) fn conversation_summary_generate(
+        &mut self,
+        conversation_id: String,
+        agent: AgentKind,
+    ) {
+        let Some((project_id, cwd)) = self
+            .active_workspace()
+            .and_then(|ws| ws.project.as_ref())
+            .map(|p| (p.id, p.path.clone()))
+        else {
+            return;
+        };
+        let client = self.client.clone();
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        let cid = conversation_id.clone();
+        handle.spawn(async move {
+            let job_id = match client
+                .submit_summary_job(&cid, None, SummaryTrigger::Manual, None, None, true)
+                .await
+            {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::warn!(error = %e, %cid, "提交总结任务失败");
+                    return;
+                }
+            };
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                match client.get_summary_job(job_id).await {
+                    Ok(Some(job)) => {
+                        if matches!(
+                            job.status,
+                            SummaryJobStatus::Succeeded
+                                | SummaryJobStatus::Failed
+                                | SummaryJobStatus::Cancelled
+                        ) {
+                            break;
+                        }
+                    }
+                    Ok(None) => {
+                        tracing::warn!(job_id, %cid, "总结任务不存在");
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, job_id, %cid, "查询总结任务失败");
+                        break;
+                    }
+                }
+            }
+            let result = client
+                .list_conversations_with_summaries(&cwd, None, 500, 0)
+                .await
+                .map(|rows| {
+                    rows.iter()
+                        .map(|(c, s)| crate::conversation::SessionRow::from_row(c, s.as_ref()))
+                        .collect()
+                })
+                .map_err(|e| e.to_string());
+            let _ = proxy.send_event(Message::Conversations(
+                conversations::Message::SessionsRefreshed(project_id, result),
+            ));
+            let _ = proxy.send_event(Message::Conversations(conversations::Message::SessionOpen(
+                cid, agent,
+            )));
         });
     }
 

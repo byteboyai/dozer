@@ -448,22 +448,39 @@ pub(crate) fn review_content_pane<'a>(
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::review_content_pane();
-    // 内容侧标题栏:左侧名字信息面板(会话/agent 态) + 右侧"收起/展开
-    // 列表列"按钮(与 Todo/Database/SSH/Agent 内容侧统一)。列表列收起后
-    // 本面板拿满配对宽度,按钮仍在此处可见以便恢复。
+    // 内容侧标题栏:左侧名字信息面板(会话/agent 态) + 右侧"生成总结"按钮
+    // (会话详情手动生成/重试,spec 2026-09-26 第 8 节)+ "收起/展开列表列"
+    // 按钮(与 Todo/Database/SSH/Agent 内容侧统一)。
+    let collapse_button = app.list_collapse_button(
+        PanelKind::Conversations,
+        app.list_collapsed(PanelKind::Conversations),
+        HoverId::ConversationsListCollapse,
+        "收起列表",
+        "展开列表",
+        Message::TogglePanelListCollapse(PanelKind::Conversations),
+        move |h| Message::Hover(HoverId::ConversationsListCollapse, h),
+    );
+    let actions: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        match ws.review.as_ref().map(|rv| (&rv.source, rv.agent)) {
+            Some((ReviewSource::Conversation(cid), agent)) => {
+                let generate = button(
+                    text("生成总结")
+                        .size(byteui::theme::font::label())
+                        .color(byteui::theme::color::current().cream),
+                )
+                .padding([4, 8])
+                .on_press(Message::Conversations(
+                    conversations::Message::SummaryGenerate(cid.clone(), agent),
+                ));
+                row![generate, collapse_button].spacing(6).into()
+            }
+            _ => collapse_button,
+        };
     let header = container(
         row![home_panel_head_with_actions(
             IconKind::BotMessageSquare,
             "会话",
-            Some(app.list_collapse_button(
-                PanelKind::Conversations,
-                app.list_collapsed(PanelKind::Conversations),
-                HoverId::ConversationsListCollapse,
-                "收起列表",
-                "展开列表",
-                Message::TogglePanelListCollapse(PanelKind::Conversations),
-                move |h| { Message::Hover(HoverId::ConversationsListCollapse, h) },
-            )),
+            Some(actions),
         )]
         .width(Length::Fill),
     )

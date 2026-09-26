@@ -161,6 +161,9 @@ pub enum Message {
     SessionOpen(String, AgentKind),
     /// 详情页"加载更多"追加下一页回合。同上,内核直接拦截处理。
     DetailLoadMore(String, i64),
+    /// 会话详情面板"生成总结"按钮:对某 conversation 提交 V2 总结任务
+    /// (Manual + force),随后轮询并刷新。内核直接拦截处理。
+    SummaryGenerate(String, AgentKind),
     /// 列表底部"更多..."翻页,纯客户端状态。
     ListMore,
     /// 搜索框草稿变化。
@@ -209,6 +212,7 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
         Message::AgentPickerClose => ws_state.agent_picker_open = false,
         Message::SessionOpen(..)
         | Message::DetailLoadMore(..)
+        | Message::SummaryGenerate(..)
         | Message::Hover(..)
         | Message::TextInputMenuOpen(..) => {
             unreachable!("由内核 App::update 直接拦截处理,不会转发到这里")
