@@ -94,3 +94,22 @@ html, body {
   position: absolute; right: calc(100% + 4px); top: -6px;
   font-size: 7px; color: var(--dim); white-space: nowrap;
 }
+
+.usage-grid-overlay { position: absolute; inset: 0; height: 86px; }
+.usage-bar-groups {
+  display: flex; justify-content: space-between; align-items: flex-end;
+  width: 100%; height: 102px; position: relative;
+}
+.usage-bar-groups-center { justify-content: center; gap: 8px; }
+.usage-day-band {
+  position: relative; padding: 0 4px; border-radius: 4px;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+  height: 102px;
+}
+.usage-day-band .usage-tooltip { display: none; bottom: 100%; left: 50%; }
+.usage-day-band:hover .usage-tooltip { display: block; }
+.usage-bar-row { display: flex; gap: 3px; align-items: flex-end; height: 86px; }
+.usage-bar-col { display: flex; flex-direction: column; align-items: center; gap: 2px; justify-content: flex-end; height: 100%; }
+.usage-bar-value { font-size: 8px; color: var(--dim); }
+.usage-bar { border-radius: 4px 4px 0 0; }
+.usage-day-label { font-size: 8px; color: var(--dim); margin-top: 4px; }
