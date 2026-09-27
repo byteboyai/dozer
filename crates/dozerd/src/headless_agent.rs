@@ -237,6 +237,9 @@ pub(crate) fn build_command_parts(
         AgentKind::V8agent => {
             let mut cmd = tokio::process::Command::new(program);
             cmd.env("V8AGENT_ONESHOT", "1");
+            // Transcripts are untrusted input. This mode omits every native,
+            // skill, memory, dispatch, and MCP tool from the model request.
+            cmd.env("V8AGENT_NO_TOOLS", "1");
             cmd.env_remove("DOZER_SESSION_ID");
             let stdin_text = format!("{instruction}\n\n{data}");
             Some((cmd, Some(stdin_text.into_bytes())))
@@ -679,6 +682,10 @@ mod tests {
         assert!(
             envs.iter()
                 .any(|(k, v)| *k == "V8AGENT_ONESHOT" && *v == Some(std::ffi::OsStr::new("1")))
+        );
+        assert!(
+            envs.iter()
+                .any(|(k, v)| *k == "V8AGENT_NO_TOOLS" && *v == Some(std::ffi::OsStr::new("1")))
         );
         // DOZER_SESSION_ID 显式清掉,避免 v8agent-cli 误挂载 dozer-mcp
         // (headless 总结走 stdout 解析,不需要 MCP,见 spec)。

@@ -504,8 +504,8 @@ fn home_project_list_view(
             column![
                 top_line,
                 row![
-                    home_footbar_button("打开项目", Message::ProjectTabPickFolder),
-                    home_footbar_button("创建项目", Message::ProjectCreateOpen),
+                    home_footbar_button(icons::IconKind::FolderOpenDot, "打开项目", Message::ProjectTabPickFolder),
+                    home_footbar_button(icons::IconKind::FolderPlus, "创建项目", Message::ProjectCreateOpen),
                 ]
                 .spacing(8)
             ]
@@ -624,16 +624,23 @@ fn home_project_list_view(
 /// 「创建项目」(2026-09-26:拆成两个独立按钮,拆前「＋新建项目」其实是打开
 /// 文件夹,名不副实)。
 fn home_footbar_button(
+    icon: icons::IconKind,
     label: &'static str,
     msg: Message,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 按钮内容用 `container` 撑满 + `align_x(Center)` 居中标题文字——`button`
     // 的 `layout::padded` 不会把 Shrink 宽度的内容自动居中,只贴左上角(同
-    // `extensions::project::footer_button_label` 的既有处理)。
+    // `extensions::project::footer_button_label` 的既有处理)。图标(Lucide,
+    // 与文字同色 `dim`)左置、文字紧跟其后,整体水平居中。
     let label = container(
-        text(label)
-            .size(theme::homespace_font::label())
-            .color(theme::homespace_color::dim()),
+        row![
+            icons::view(icon, byteui::theme::icon_size::row(), theme::homespace_color::dim()),
+            text(label)
+                .size(theme::homespace_font::label())
+                .color(theme::homespace_color::dim()),
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center),
     )
     .width(Length::Fill)
     .align_x(iced_widget::core::alignment::Horizontal::Center);

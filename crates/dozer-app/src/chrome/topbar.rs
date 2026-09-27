@@ -470,7 +470,7 @@ pub(crate) fn project_add_menu_spec(
         spec.push(MenuSpecItem::separator());
     }
     spec.push(MenuSpecItem::entry(
-        Some(icons::IconKind::SquarePlus),
+        Some(icons::IconKind::FolderOpenDot),
         "打开项目",
         Message::ProjectTabPickFolder,
     ));

@@ -1162,8 +1162,9 @@ async fn handle_conn(
                                         crate::summary_config::SummaryConfigSource::Summary => {
                                             "summary"
                                         }
-                                        crate::summary_config::SummaryConfigSource::DefaultAgent => {
-                                            "default_agent"
+                                        crate::summary_config::SummaryConfigSource::BuiltInDefault =>
+                                        {
+                                            "built_in_default"
                                         }
                                     }
                                     .to_string()),

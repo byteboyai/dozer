@@ -78,12 +78,11 @@ impl SummaryInvokeError {
 pub fn provider_isolation(agent: AgentKind) -> Option<Isolation> {
     match agent {
         AgentKind::Claude => Some(Isolation::ReadOnly),
-        AgentKind::Codex => Some(Isolation::ReadOnly),
+        AgentKind::Codex | AgentKind::V8agent => Some(Isolation::ReadOnly),
         AgentKind::Codebuddy
         | AgentKind::Opencode
         | AgentKind::Goose
-        | AgentKind::Aider
-        | AgentKind::V8agent => Some(Isolation::TempDirOnly),
+        | AgentKind::Aider => Some(Isolation::TempDirOnly),
         AgentKind::Unknown => None,
     }
 }
@@ -208,7 +207,7 @@ pub async fn invoke_summary_parts(
     tokio::time::timeout(Duration::from_secs(config.call_timeout_secs), async {
         if provider_isolation(agent) != Some(Isolation::ReadOnly) {
             return Err(SummaryInvokeError::UnsupportedCapability(format!(
-                "{} 尚未验证禁工具/只读总结能力，请选择 Claude 或 Codex",
+                "{} 尚未验证禁工具/只读总结能力，请选择 v8agent、Claude 或 Codex",
                 agent.label()
             )));
         }
@@ -430,13 +429,17 @@ mod tests {
     }
 
     #[test]
-    fn provider_isolation_maps_claude_and_codex_to_readonly() {
+    fn provider_isolation_maps_v8agent_claude_and_codex_to_readonly() {
         assert_eq!(
             provider_isolation(AgentKind::Claude),
             Some(Isolation::ReadOnly)
         );
         assert_eq!(
             provider_isolation(AgentKind::Codex),
+            Some(Isolation::ReadOnly)
+        );
+        assert_eq!(
+            provider_isolation(AgentKind::V8agent),
             Some(Isolation::ReadOnly)
         );
         assert_eq!(

@@ -2,8 +2,8 @@
 //!
 //! 独立于 Todo 的 `default_agent`——两者并存:`default_agent` 继续决定 Todo
 //! 派发用哪个 agent(不改行为),`[summary]` 段决定总结用哪个 provider。选择
-//! 优先级:本次 UI 显式选择 → `[summary]` 段 → 旧 `default_agent`(兼容来源,
-//! UI 明示)。均未配置时返回 `configuration_required`,**不静默选择 Claude**。
+//! 优先级:本次 UI 显式选择 → `[summary]` 段 → 内建 v8agent 默认值。
+//! Todo 的 `default_agent` 不影响总结器选择。
 
 use dozer_core::protocol::AgentKind;
 use serde::Deserialize;
@@ -28,7 +28,6 @@ struct RawSummaryConfig {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct RawRootConfig {
-    default_agent: Option<AgentKind>,
     summary: Option<RawSummaryConfig>,
 }
 
@@ -49,12 +48,12 @@ pub enum SummaryConfigSource {
     Ui,
     /// `[summary]` 段。
     Summary,
-    /// 旧 `default_agent`(兼容来源,UI 明示为兼容来源)。
-    DefaultAgent,
+    /// 未配置 `[summary]` 时使用产品内建的 v8agent 默认值。
+    BuiltInDefault,
 }
 
-/// provider 解析结果:`Configured` 携带配置与来源;`Required` 表示未配置,
-/// 调用方应记录 `configuration_required`,不静默选择 Claude、不启动必败进程。
+/// provider 解析结果:`Configured` 携带配置与来源;`Required` 表示配置存在
+/// 但无法读取或解析，调用方应记录 `configuration_required`。
 #[derive(Debug, Clone, PartialEq)]
 pub enum SummaryProviderResolution {
     Configured(SummaryConfig, SummaryConfigSource),
@@ -93,11 +92,13 @@ pub fn resolve_provider_from(
             SummaryConfigSource::Ui,
         );
     }
-    let root: Option<RawRootConfig> = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|text| toml::from_str(&text).ok());
-    let Some(root) = root else {
-        return SummaryProviderResolution::Required;
+    let root = match std::fs::read_to_string(path) {
+        Ok(text) => match toml::from_str::<RawRootConfig>(&text) {
+            Ok(root) => root,
+            Err(_) => return SummaryProviderResolution::Required,
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => RawRootConfig::default(),
+        Err(_) => return SummaryProviderResolution::Required,
     };
     if let Some(summary) = root.summary
         && let Some(provider) = summary.provider
@@ -115,20 +116,16 @@ pub fn resolve_provider_from(
             SummaryConfigSource::Summary,
         );
     }
-    // 兼容来源:旧 default_agent。无 default_agent 也落到 Required。
-    match root.default_agent {
-        Some(provider) => SummaryProviderResolution::Configured(
-            SummaryConfig {
-                provider,
-                model: None,
-                call_timeout_secs: DEFAULT_CALL_TIMEOUT_SECS,
-                max_retries: DEFAULT_MAX_RETRIES,
-                input_budget_chars: DEFAULT_INPUT_BUDGET_CHARS,
-            },
-            SummaryConfigSource::DefaultAgent,
-        ),
-        None => SummaryProviderResolution::Required,
-    }
+    SummaryProviderResolution::Configured(
+        SummaryConfig {
+            provider: AgentKind::V8agent,
+            model: None,
+            call_timeout_secs: DEFAULT_CALL_TIMEOUT_SECS,
+            max_retries: DEFAULT_MAX_RETRIES,
+            input_budget_chars: DEFAULT_INPUT_BUDGET_CHARS,
+        },
+        SummaryConfigSource::BuiltInDefault,
+    )
 }
 
 #[cfg(test)]
@@ -178,27 +175,30 @@ mod tests {
     }
 
     #[test]
-    fn default_agent_is_compat_source() {
+    fn default_agent_does_not_override_builtin_summary_provider() {
         let dir = tempfile::tempdir().unwrap();
         let path = write(dir.path(), "default_agent = \"goose\"\n");
         let r = resolve_provider_from(None, None, &path);
         match r {
             SummaryProviderResolution::Configured(cfg, src) => {
-                assert_eq!(cfg.provider, AgentKind::Goose);
-                assert_eq!(src, SummaryConfigSource::DefaultAgent);
+                assert_eq!(cfg.provider, AgentKind::V8agent);
+                assert_eq!(src, SummaryConfigSource::BuiltInDefault);
             }
-            _ => panic!("应解析到 default_agent 兼容来源"),
+            _ => panic!("应解析到内建 v8agent 默认值"),
         }
     }
 
     #[test]
-    fn missing_config_returns_required() {
+    fn missing_config_uses_builtin_v8agent() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("does-not-exist.toml");
-        assert_eq!(
-            resolve_provider_from(None, None, &path),
-            SummaryProviderResolution::Required
-        );
+        let SummaryProviderResolution::Configured(cfg, src) =
+            resolve_provider_from(None, None, &path)
+        else {
+            panic!("应使用内建 v8agent 默认值");
+        };
+        assert_eq!(cfg.provider, AgentKind::V8agent);
+        assert_eq!(src, SummaryConfigSource::BuiltInDefault);
     }
 
     #[test]
@@ -212,12 +212,15 @@ mod tests {
     }
 
     #[test]
-    fn empty_config_returns_required() {
+    fn empty_config_uses_builtin_v8agent() {
         let dir = tempfile::tempdir().unwrap();
         let path = write(dir.path(), "");
-        assert_eq!(
-            resolve_provider_from(None, None, &path),
-            SummaryProviderResolution::Required
-        );
+        let SummaryProviderResolution::Configured(cfg, src) =
+            resolve_provider_from(None, None, &path)
+        else {
+            panic!("应使用内建 v8agent 默认值");
+        };
+        assert_eq!(cfg.provider, AgentKind::V8agent);
+        assert_eq!(src, SummaryConfigSource::BuiltInDefault);
     }
 }

@@ -108,7 +108,7 @@ pub(crate) fn civil_from_days(z: i64) -> (i32, u32, u32) {
 /// cache——见 spec"关键语义确认"）。只保留最近 `DAILY_CHART_WINDOW_DAYS`
 /// 天，不足这个天数不补占位空天，按 `day_index` 升序（最旧在前，最新在后，
 /// 图表从左到右自然是时间顺序）。`totals` 只含这个项目实际用过的 agent
-/// (与 `agent_token_share` 同一套判定+顺序),不再是写死的 3/4 家——某个
+/// (经 `agents_present` 取,不做 1% 占比剔除——见 `daily_totals_by_agent`
 /// agent 这个项目压根没用过,就不该在柱状图里占一个永远是 0 的位置
 /// (2026-08-27 修正,原先固定 claude/codebuddy/opencode 三个字段,V8agent
 /// 完全进不了图,别的项目哪怕只用一家 agent 也照样画三根柱子)。同一个
@@ -125,10 +125,11 @@ pub fn daily_totals_by_agent(
     rows: &[(ConversationMeta, ConversationUsage)],
 ) -> Vec<DayAgentTotals> {
     use std::collections::BTreeMap;
-    let project_agents: Vec<AgentKind> = agent_token_share(rows)
-        .into_iter()
-        .map(|(k, _)| k)
-        .collect();
+    // 每日用量柱状图按 agent 分柱:用 `agents_present` 取本项目实际用过的
+    // 全部 agent,**不**套用 `agent_token_share` 的 1% 占比过滤——单天粒度
+    // 下小 agent 的当日占比可能极低,但跨天累计/逐日对比需要它稳定占一根
+    // 柱子,不该被整体剔除(饼图/图例仍保留 1% 过滤,见 `agent_metric_share`)。
+    let project_agents: Vec<AgentKind> = agents_present(rows);
     if project_agents.is_empty() {
         return Vec::new();
     }
