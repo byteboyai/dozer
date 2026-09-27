@@ -5493,7 +5493,7 @@ impl App {
         let list =
             container(list.width(Length::Fixed(220.0))).style(move |_t: &iced_widget::Theme| {
                 container::Style {
-                    background: Some(byteui::theme::color::current().card.into()),
+                    background: Some(byteui::theme::color::current().panel.into()),
                     border: Border {
                         color: byteui::theme::color::current().border,
                         width: 1.0,

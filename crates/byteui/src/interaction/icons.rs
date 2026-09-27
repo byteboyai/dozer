@@ -504,14 +504,14 @@ pub fn icon_button_entry<'a, M: Clone + 'a>(
     }
 }
 
-/// 提示气泡的容器样式:背景 `CARD` 实底 + `BORDER` 1px 描边圆角 6。`with_tooltip`
+/// 提示气泡的容器样式:背景 `PANEL` 实底 + `BORDER` 1px 描边圆角 6。`with_tooltip`
 /// 与页签"悬停 3s 才弹标题全称"的受控 tooltip 共用同一份样式,避免两处各写。
 /// 文字颜色/字号由调用方写在 bubble 内容里(`CREAM` 12px)。
 pub fn tooltip_bubble_style() -> impl Fn(&iced_widget::Theme) -> container::Style {
     |_t: &iced_widget::Theme| {
         let colors = crate::theme::color::current();
         container::Style {
-            background: Some(iced_widget::core::Background::Color(colors.card)),
+            background: Some(iced_widget::core::Background::Color(colors.panel)),
             border: Border {
                 color: colors.border,
                 width: 1.0,
@@ -523,7 +523,7 @@ pub fn tooltip_bubble_style() -> impl Fn(&iced_widget::Theme) -> container::Styl
 }
 
 /// ByteBoy2077 提示气泡:`Tooltip` 包一层,把 `content`(通常是图标按钮)用
-/// 指定 `label` 描述,鼠标悬停一小段延迟后弹出。背景 `CARD` 实底 + `BORDER`
+/// 指定 `label` 描述,鼠标悬停一小段延迟后弹出。背景 `PANEL` 实底 + `BORDER`
 /// 1px 描边圆角 6、`CREAM` 文字 12px,三角指针对着按钮。`label` 用中文
 /// (项目 UI 面向甲方,中文优先)。
 pub fn with_tooltip<'a, M: Clone + 'a, R: iced_widget::core::text::Renderer + 'a>(

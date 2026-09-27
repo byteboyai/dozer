@@ -50,11 +50,25 @@ pub(crate) fn centered_card_offset(
     )
 }
 
+/// overlay 窗口本身是 `with_decorations(false)` 的 borderless 窗口,macOS
+/// 不会像主窗口(保留 `.titled` style mask,见 `window.rs` 顶部注释)那样自动
+/// 套系统原生圆角——遮罩若填满整扇 overlay 窗口的直角矩形,四角会略微戳出
+/// 主窗体实际可见的圆角之外。这里给遮罩本身画成圆角矩形来补偿,而不是去
+/// 挂原生 CALayer 圆角:overlay 窗口已 `with_transparent(true)` 逐像素透明,
+/// 遮罩四角留空即可透出下层。
+///
+/// 取值不经 `theme::region` 的 `scaled_*` 折算——那条链路乘的是 Dozer 自己
+/// 的内容缩放(Cmd +/-,`icon_size::scale()`),而这里要匹配的是 macOS 窗口
+/// 服务端渲染的物理圆角,与 app 内容缩放无关,必须是与 UI 缩放脱钩的固定值。
+/// 10.0 是肉眼比对当前系统窗口圆角选的近似值(macOS 用连续曲率的"squircle"
+/// 描边,不是纯圆弧,像素级完全重合做不到,但目测已经贴合)。
+const BACKDROP_CORNER_RADIUS: f32 = 10.0;
+
 /// 给卡片元素套一层"整窗口居中 + 半透明背景遮罩"的外壳——遮罩色复用
 /// `theme::region::maximize_overlay().scrim_background`(放大态浮层同款
 /// token,不是另起一个硬编码颜色)。遮罩容器没有 `on_press`:点击穿不透
 /// 到主窗体,但也不产生任何消息去关弹窗(已与用户确认:点遮罩=无反应,
-/// 不是"点外部关闭")。
+/// 不是"点外部关闭")。遮罩圆角见 `BACKDROP_CORNER_RADIUS` 注释。
 pub(crate) fn backdrop_card<'a, Message: 'a>(
     card: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
     card_logical: LogicalSize<f32>,
@@ -71,6 +85,10 @@ pub(crate) fn backdrop_card<'a, Message: 'a>(
     .align_y(alignment::Vertical::Center)
     .style(move |_theme: &iced_widget::Theme| container::Style {
         background: Some(scrim.into()),
+        border: iced_widget::core::Border {
+            radius: BACKDROP_CORNER_RADIUS.into(),
+            ..Default::default()
+        },
         ..container::Style::default()
     })
     .into()

@@ -333,19 +333,19 @@ pub fn status_bar() -> RegionStyle {
 pub fn maximize_overlay() -> MaximizeOverlayStyle {
     scaled_overlay(resolve_maximize_overlay(&REGIONS.maximize_overlay))
 }
-/// 背景取 `BG` 色 + 半透明 alpha(≈0.98,模拟原生右键菜单磨砂观感)。
-/// `workspace.json` 里存的是 `"#0a0e16fa"` 这种烤死的深色字面量,不是
-/// 令牌名,同 `background`(根背景)一样不会随配色方案切换——所以这里不走
-/// 通用 `resolve_region`(它只按 JSON 里写的字面量/令牌名解析),显式用
-/// `current().bg` 现读再自己叠 alpha,让浅色主题也能拿到对应的浅色磨砂效果。
+/// 背景取 `PANEL` 色 + 半透明 alpha(≈0.98,模拟原生右键菜单磨砂观感)。
+/// 弹窗(右键菜单/下拉/溢出菜单)统一走 `panel` 主题色:暗色 `#0a0e16`、
+/// 浅色对应浅色 panel——所以这里不走通用 `resolve_region`(它只按 JSON 里
+/// 写的字面量/令牌名解析),显式用 `current().panel` 现读再自己叠 alpha,
+/// 让浅色主题也能拿到对应的浅色磨砂效果。
 pub fn context_menu() -> RegionStyle {
     let mut s = scaled_region(resolve_region(&REGIONS.context_menu));
-    let mut bg = byteui::theme::color::current().bg;
+    let mut bg = byteui::theme::color::current().panel;
     bg.a = 0xfa as f32 / 255.0;
     s.background = Some(bg);
     s
 }
-/// 弹窗(确认框/模态对话框)外壳:统一 CARD 底 + 金色描边(呼应放大态
+/// 弹窗(确认框/模态对话框)外壳:统一 PANEL 底 + 金色描边(呼应放大态
 /// 浮层同款"金色描边盒"),供 `dialog::card_style` 取用。
 pub fn dialog() -> RegionStyle {
     scaled_region(resolve_region(&REGIONS.dialog))
@@ -475,12 +475,12 @@ mod tests {
     fn context_menu_matches_pre_migration_literals() {
         let _guard = lock_scheme();
         let s = context_menu();
-        // 背景取 `BG` 色 + alpha,模拟 macOS 原生右键菜单的磨砂/半透明观感
+        // 背景取 `PANEL` 色 + alpha,模拟 macOS 原生右键菜单的磨砂/半透明观感
         // (iced 无实时高斯模糊可用,退而求其次用半透明打底 + `shell()` 的
         // 软阴影一起近似"浮起且透光"的质感)。alpha 0xfa(≈0.98,2026-09-13
         // 用户反馈原 0xf0/0.94 透得太明显、菜单后面内容看着太清楚,调高压
-        // 暗透光,仍留一丝透明感而非彻底不透明)。
-        assert_eq!(s.background, Some(parse_hex_color("#0d131cfa")));
+        // 暗透光,仍留一丝透明感而非彻底不透明)。暗色 PANEL = #0a0e16。
+        assert_eq!(s.background, Some(parse_hex_color("#0a0e16fa")));
         let border = s.border.expect("context_menu 应有边框");
         assert_eq!(border.color, byteui::theme::color::current().border);
         assert_eq!(border.width, 1.0);
@@ -587,8 +587,8 @@ mod tests {
         assert_eq!(
             context_menu().background.map(|c| (c.r, c.g, c.b)),
             Some({
-                let bg = byteui::theme::color::current().bg;
-                (bg.r, bg.g, bg.b)
+                let panel = byteui::theme::color::current().panel;
+                (panel.r, panel.g, panel.b)
             })
         );
         byteui::theme::color::set_scheme(byteui::theme::color::ColorScheme::Dark);

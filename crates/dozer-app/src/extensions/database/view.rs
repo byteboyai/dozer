@@ -466,7 +466,7 @@ pub fn database_source_card<'a>(
     }
 
     // 边框/底色统一成原生预览"文件内搜索"风格(`find_field_shell`/`find_rows`
-    // 外层组合的既有配色):底色 card、边框普通态 `colors.border`(不再恒描
+    // 外层组合的既有配色):底色 panel、边框普通态 `colors.border`(不再恒描
     // 金)——2026-09-11 需求,数据库/主机新增表单跟文件内搜索输入框对齐。
     // 宽度撑满宿主窗口(整窗逻辑尺寸由
     // `database_source_overlay::card_logical_size` 给定)。
@@ -474,7 +474,7 @@ pub fn database_source_card<'a>(
         .padding(12)
         .width(Length::Fill)
         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-            background: Some(byteui::theme::color::current().card.into()),
+            background: Some(byteui::theme::color::current().panel.into()),
             border: iced_widget::core::Border {
                 color: byteui::theme::color::current().border,
                 width: 1.0,

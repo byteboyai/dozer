@@ -6,7 +6,7 @@
 //! 不一致。现在把外壳原语收拢成共享的几件套:
 //!
 //! - `card_style`: 弹窗卡片本体的容器样式(`theme::region::dialog()`——
-//!   CARD 底 + 金色 `GOLD` 描边,呼应放大态浮层同款"金色描边盒",见
+//!   PANEL 底 + 金色 `GOLD` 描边,呼应放大态浮层同款"金色描边盒",见
 //!   `theme::region::maximize_overlay`)。
 //! - `actions`: 弹窗底部"取消/确认"这类操作按钮行的统一落位——靠右下角
 //!   纯按钮的收尾操作行;像 Todo 详情"回复框+提交"那种输入控件占满宽度
@@ -62,14 +62,15 @@ pub fn action_button_border_color(status: button::Status) -> Color {
     }
 }
 
-/// 弹窗操作按钮(取消/确认/删除)完整样式:CARD 底 + 统一描边规则 + 调用方
+/// 弹窗操作按钮(取消/确认/删除)完整样式:PANEL 底 + 统一描边规则 + 调用方
 /// 指定的文字色。文字色按语义传:`dim` 给取消/次要,`red` 给危险删除,
-/// `gold` 给非破坏性的主要确认(如"移动"弹窗的"确定")。
+/// `gold` 给非破坏性的主要确认(如"移动"弹窗的"确定")。底色与弹窗卡片
+/// 同走 `panel` 主题色,保持一致。
 pub fn action_button_style(
     text_color: Color,
 ) -> impl Fn(&iced_widget::Theme, button::Status) -> button::Style {
     move |_t, s| button::Style {
-        background: Some(byteui::theme::color::current().card.into()),
+        background: Some(byteui::theme::color::current().panel.into()),
         text_color,
         border: Border {
             color: action_button_border_color(s),

@@ -1253,7 +1253,7 @@ pub fn ssh_host_card<'a>(
     }
 
     // 边框/底色统一成原生预览"文件内搜索"风格(`find_field_shell`/`find_rows`
-    // 外层组合的既有配色):底色 card、边框普通态 `colors.border`(不再恒描
+    // 外层组合的既有配色):底色 panel、边框普通态 `colors.border`(不再恒描
     // 金)——2026-09-11 需求,同步 `database::view::database_source_card` 的改法。
     // 宽度撑满宿主窗口(整窗逻辑尺寸由 `ssh_host_overlay::card_logical_size`
     // 给定)。
@@ -1261,7 +1261,7 @@ pub fn ssh_host_card<'a>(
         .padding(12)
         .width(Length::Fill)
         .style(|_t: &iced_widget::Theme| iced_widget::container::Style {
-            background: Some(byteui::theme::color::current().card.into()),
+            background: Some(byteui::theme::color::current().panel.into()),
             border: iced_widget::core::Border {
                 color: byteui::theme::color::current().border,
                 width: 1.0,

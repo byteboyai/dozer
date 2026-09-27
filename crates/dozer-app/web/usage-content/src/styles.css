@@ -53,10 +53,10 @@ html, body {
 
 .usage-stat-row { display: flex; gap: 16px; width: 100%; margin-bottom: 24px; }
 .usage-stat-box {
-  flex: 1; display: flex; gap: 24px; padding: 12px;
+  flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 12px;
   background: var(--card); border: 1px solid var(--border); border-radius: 10px;
 }
-.usage-stat { display: flex; flex-direction: column; gap: 2px; }
+.usage-stat { display: flex; flex-direction: column; gap: 2px; flex: 0 0 auto; }
 .usage-stat-label { font-size: 11px; color: var(--dim); }
 .usage-stat-value { font-size: 15px; }
 

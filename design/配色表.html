@@ -168,7 +168,7 @@
     <h1>Dozer · ByteBoy2077 配色表</h1>
     <p>
       提取自 <code>crates/byteui/src/theme/color.rs</code>(语义色板 <code>ColorTokens</code>,编译期默认值)
-      与 <code>crates/dozer-app/src/term_model.rs</code>(终端 ANSI16 色板)。点击任意色块可复制十六进制值。
+      与 <code>crates/dozer-app/src/term/term_model.rs</code>(终端 ANSI16 色板)。点击任意色块可复制十六进制值。
     </p>
     <div class="notice">
       <b>硬性裁决</b>:金 <b>#F2D94E</b>(gold)是「甲方动作」专属色,不用于语法高亮等其它场景;
@@ -178,128 +178,451 @@
 
   <section>
     <h2>背景层级 <small>bg · panel · term_bg · card · border</small></h2>
-    <div class="grid" id="grp-surface"></div>
+    <div class="grid">
+    <div class="swatch">
+      <div class="chip" style="background:#0d131c"></div>
+      <div class="meta">
+        <div class="name">bg</div>
+        <div class="hex">#0d131c</div>
+        <div class="rgb">rgb(13, 19, 28)</div>
+        <div class="usage">主背景(可收缩 list 侧面板用)</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#0a0e16"></div>
+      <div class="meta">
+        <div class="name">panel</div>
+        <div class="hex">#0a0e16</div>
+        <div class="rgb">rgb(10, 14, 22)</div>
+        <div class="usage">面板背景(不可收缩 content 侧面板用)</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#0a0e16"></div>
+      <div class="meta">
+        <div class="name">term_bg</div>
+        <div class="hex">#0a0e16</div>
+        <div class="rgb">rgb(10, 14, 22)</div>
+        <div class="usage">终端背景(与 panel 同值)</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#12202a"></div>
+      <div class="meta">
+        <div class="name">card</div>
+        <div class="hex">#12202a</div>
+        <div class="rgb">rgb(18, 32, 42)</div>
+        <div class="usage">卡片/弹层底色</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#1c3440"></div>
+      <div class="meta">
+        <div class="name">border</div>
+        <div class="hex">#1c3440</div>
+        <div class="rgb">rgb(28, 52, 64)</div>
+        <div class="usage">描边</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    </div>
   </section>
 
   <section>
     <h2>文本 <small>cream · body · dim</small></h2>
-    <div class="grid" id="grp-text"></div>
+    <div class="grid">
+    <div class="swatch">
+      <div class="chip" style="background:#ffe5b4"></div>
+      <div class="meta">
+        <div class="name">cream</div>
+        <div class="hex">#ffe5b4</div>
+        <div class="rgb">rgb(255, 229, 180)</div>
+        <div class="usage">奶油文字,强调型正文</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#9ab4c4"></div>
+      <div class="meta">
+        <div class="name">body</div>
+        <div class="hex">#9ab4c4</div>
+        <div class="rgb">rgb(154, 180, 196)</div>
+        <div class="usage">默认正文文字色</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#6b7f8f"></div>
+      <div class="meta">
+        <div class="name">dim</div>
+        <div class="hex">#6b7f8f</div>
+        <div class="rgb">rgb(107, 127, 143)</div>
+        <div class="usage">弱化/禁用/次要文字</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    </div>
   </section>
 
   <section>
     <h2>强调色 <small>甲方动作 / 语法 / 状态</small></h2>
-    <div class="grid" id="grp-accent"></div>
+    <div class="grid">
+    <div class="swatch">
+      <div class="chip" style="background:#f2d94e"></div>
+      <div class="meta">
+        <div class="name">gold<span class="gold-flag">专属</span></div>
+        <div class="hex">#f2d94e</div>
+        <div class="rgb">rgb(242, 217, 78)</div>
+        <div class="usage">甲方动作专属(硬性裁决,见页头提示)</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#47def0"></div>
+      <div class="meta">
+        <div class="name">cyan</div>
+        <div class="hex">#47def0</div>
+        <div class="rgb">rgb(71, 222, 240)</div>
+        <div class="usage">强调 / 语法关键字</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#1ad585"></div>
+      <div class="meta">
+        <div class="name">green</div>
+        <div class="hex">#1ad585</div>
+        <div class="rgb">rgb(26, 213, 133)</div>
+        <div class="usage">强调 / 语法字符串</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#9580ff"></div>
+      <div class="meta">
+        <div class="name">purple</div>
+        <div class="hex">#9580ff</div>
+        <div class="rgb">rgb(149, 128, 255)</div>
+        <div class="usage">强调 / 语法类型-命名空间</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#ff6e6e"></div>
+      <div class="meta">
+        <div class="name">red</div>
+        <div class="hex">#ff6e6e</div>
+        <div class="rgb">rgb(255, 110, 110)</div>
+        <div class="usage">错误 / 删除</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#6b7f8f"></div>
+      <div class="meta">
+        <div class="name">ignored</div>
+        <div class="hex">#6b7f8f</div>
+        <div class="rgb">rgb(107, 127, 143)</div>
+        <div class="usage">忽略态(同 dim 数值)</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#ff9b4d"></div>
+      <div class="meta">
+        <div class="name">orange</div>
+        <div class="hex">#ff9b4d</div>
+        <div class="rgb">rgb(255, 155, 77)</div>
+        <div class="usage">警示 / 数值</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#ff6ec7"></div>
+      <div class="meta">
+        <div class="name">magenta</div>
+        <div class="hex">#ff6ec7</div>
+        <div class="rgb">rgb(255, 110, 199)</div>
+        <div class="usage">强调(备用位)</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#4d8cff"></div>
+      <div class="meta">
+        <div class="name">blue</div>
+        <div class="hex">#4d8cff</div>
+        <div class="rgb">rgb(77, 140, 255)</div>
+        <div class="usage">强调(备用位)</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#a3e635"></div>
+      <div class="meta">
+        <div class="name">lime</div>
+        <div class="hex">#a3e635</div>
+        <div class="rgb">rgb(163, 230, 53)</div>
+        <div class="usage">强调(备用位)</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    </div>
   </section>
 
   <section>
     <h2>Tab / 弹层 <small>tab_active_border · tab_active_bg · tab_hover · desc_bg · scrim</small></h2>
-    <div class="grid" id="grp-chrome"></div>
+    <div class="grid">
+    <div class="swatch">
+      <div class="chip" style="background:#dcc9a3"></div>
+      <div class="meta">
+        <div class="name">tab_active_border</div>
+        <div class="hex">#dcc9a3</div>
+        <div class="rgb">rgb(220, 201, 163)</div>
+        <div class="usage">激活 tab 描边</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#152630"></div>
+      <div class="meta">
+        <div class="name">tab_active_bg</div>
+        <div class="hex">#152630</div>
+        <div class="rgb">rgb(21, 38, 48)</div>
+        <div class="usage">激活 tab 底色</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#277a85"></div>
+      <div class="meta">
+        <div class="name">tab_hover</div>
+        <div class="hex">#277a85</div>
+        <div class="rgb">rgb(39, 122, 133)</div>
+        <div class="usage">hover 态底色(修正:原 #152630 已与 tab_active_bg 拆分)</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#152630"></div>
+      <div class="meta">
+        <div class="name">desc_bg</div>
+        <div class="hex">#152630</div>
+        <div class="rgb">rgb(21, 38, 48)</div>
+        <div class="usage">说明气泡底色(同上)</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:rgba(0,0,0,0.55)"></div>
+      <div class="meta">
+        <div class="name">scrim</div>
+        <div class="hex">rgba(0,0,0,0.55)</div>
+        <div class="rgb">rgba(0,0,0,0.55)</div>
+        <div class="usage">全屏蒙层(弹层背后遮罩)</div>
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    </div>
   </section>
 
   <section>
-    <h2>终端 ANSI16 <small>term_model.rs::ANSI16</small></h2>
+    <h2>终端 ANSI16 <small>term_model.rs::ANSI16_DARK</small></h2>
     <p class="ansi-note">
       默认前景(无 SGR 时的字符色)取 <code>#9AB4C4</code>,与语义色板 <code>body</code> 相同。
       注意终端 Magenta(<code>#FF3DCC</code>)与语义色板的 <code>magenta</code>(<code>#FF6EC7</code>)数值不同,是两套独立取值,不要混用。
     </p>
-    <div class="grid" id="grp-ansi-normal"></div>
+    <div class="grid">
+    <div class="swatch">
+      <div class="chip" style="background:#0a0e16"></div>
+      <div class="meta">
+        <div class="name">Black</div>
+        <div class="hex">#0a0e16</div>
+        <div class="rgb">rgb(10, 14, 22)</div>
+        
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#ff6e6e"></div>
+      <div class="meta">
+        <div class="name">Red</div>
+        <div class="hex">#ff6e6e</div>
+        <div class="rgb">rgb(255, 110, 110)</div>
+        
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#1ad585"></div>
+      <div class="meta">
+        <div class="name">Green</div>
+        <div class="hex">#1ad585</div>
+        <div class="rgb">rgb(26, 213, 133)</div>
+        
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#f2d94e"></div>
+      <div class="meta">
+        <div class="name">Yellow</div>
+        <div class="hex">#f2d94e</div>
+        <div class="rgb">rgb(242, 217, 78)</div>
+        
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#9580ff"></div>
+      <div class="meta">
+        <div class="name">Blue</div>
+        <div class="hex">#9580ff</div>
+        <div class="rgb">rgb(149, 128, 255)</div>
+        
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#ff3dcc"></div>
+      <div class="meta">
+        <div class="name">Magenta</div>
+        <div class="hex">#ff3dcc</div>
+        <div class="rgb">rgb(255, 61, 204)</div>
+        
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#47def0"></div>
+      <div class="meta">
+        <div class="name">Cyan</div>
+        <div class="hex">#47def0</div>
+        <div class="rgb">rgb(71, 222, 240)</div>
+        
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#ffe5b4"></div>
+      <div class="meta">
+        <div class="name">White</div>
+        <div class="hex">#ffe5b4</div>
+        <div class="rgb">rgb(255, 229, 180)</div>
+        
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    </div>
     <div style="height:12px"></div>
-    <div class="grid" id="grp-ansi-bright"></div>
+    <div class="grid">
+    <div class="swatch">
+      <div class="chip" style="background:#6b7f8f"></div>
+      <div class="meta">
+        <div class="name">BrightBlack</div>
+        <div class="hex">#6b7f8f</div>
+        <div class="rgb">rgb(107, 127, 143)</div>
+        
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#ff8e8e"></div>
+      <div class="meta">
+        <div class="name">BrightRed</div>
+        <div class="hex">#ff8e8e</div>
+        <div class="rgb">rgb(255, 142, 142)</div>
+        
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#4ae5a5"></div>
+      <div class="meta">
+        <div class="name">BrightGreen</div>
+        <div class="hex">#4ae5a5</div>
+        <div class="rgb">rgb(74, 229, 165)</div>
+        
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#fff3b0"></div>
+      <div class="meta">
+        <div class="name">BrightYellow</div>
+        <div class="hex">#fff3b0</div>
+        <div class="rgb">rgb(255, 243, 176)</div>
+        
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#b5a5ff"></div>
+      <div class="meta">
+        <div class="name">BrightBlue</div>
+        <div class="hex">#b5a5ff</div>
+        <div class="rgb">rgb(181, 165, 255)</div>
+        
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#ff6ddc"></div>
+      <div class="meta">
+        <div class="name">BrightMagenta</div>
+        <div class="hex">#ff6ddc</div>
+        <div class="rgb">rgb(255, 109, 220)</div>
+        
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#87eef8"></div>
+      <div class="meta">
+        <div class="name">BrightCyan</div>
+        <div class="hex">#87eef8</div>
+        <div class="rgb">rgb(135, 238, 248)</div>
+        
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#fff5d4"></div>
+      <div class="meta">
+        <div class="name">BrightWhite</div>
+        <div class="hex">#fff5d4</div>
+        <div class="rgb">rgb(255, 245, 212)</div>
+        
+      </div>
+      <div class="copied">已复制</div>
+    </div>
+    </div>
   </section>
 
   <footer>
     生成方式:直接读取当前 main 分支源码里的色值常量,不是手抄或截图取色——色值变更时重新跑一遍提取即可保持同步。<br />
-    语义色板 23 项、终端 ANSI16 共 16 项。
+    语义色板 23 项、终端 ANSI16 共 16 项。<br />
+    色块为静态 HTML,无需脚本即可显示;脚本仅用于点击复制(在无脚本沙箱中自动失效,不影响显示)。
   </footer>
 </div>
 
 <script>
-const semantic = {
-  surface: [
-    ["bg", "#0d131c", "主背景(可收缩 list 侧面板用)"],
-    ["panel", "#0a0e16", "面板背景(不可收缩 content 侧面板用)"],
-    ["term_bg", "#0a0e16", "终端背景(与 panel 同值)"],
-    ["card", "#12202a", "卡片/弹层底色"],
-    ["border", "#1c3440", "描边"],
-  ],
-  text: [
-    ["cream", "#ffe5b4", "奶油文字,强调型正文"],
-    ["body", "#9ab4c4", "默认正文文字色"],
-    ["dim", "#6b7f8f", "弱化/禁用/次要文字"],
-  ],
-  accent: [
-    ["gold", "#f2d94e", "甲方动作专属(硬性裁决,见页头提示)"],
-    ["cyan", "#47def0", "强调 / 语法关键字"],
-    ["green", "#1ad585", "强调 / 语法字符串"],
-    ["purple", "#9580ff", "强调 / 语法类型-命名空间"],
-    ["red", "#ff6e6e", "错误 / 删除"],
-    ["ignored", "#6b7f8f", "忽略态(同 dim 数值)"],
-    ["orange", "#ff9b4d", "警示 / 数值"],
-    ["magenta", "#ff6ec7", "强调(备用位)"],
-    ["blue", "#4d8cff", "强调(备用位)"],
-    ["lime", "#a3e635", "强调(备用位)"],
-  ],
-  chrome: [
-    ["tab_active_border", "#dcc9a3", "激活 tab 描边"],
-    ["tab_active_bg", "#152630", "激活 tab 底色"],
-    ["tab_hover", "#152630", "hover 态底色(同 tab_active_bg)"],
-    ["desc_bg", "#152630", "说明气泡底色(同上)"],
-    ["scrim", "rgba(0,0,0,0.55)", "全屏蒙层(弹层背后遮罩)"],
-  ],
-};
-
-const ansiNormal = [
-  ["Black", "#0a0e16"], ["Red", "#ff6e6e"], ["Green", "#1ad585"], ["Yellow", "#f2d94e"],
-  ["Blue", "#9580ff"], ["Magenta", "#ff3dcc"], ["Cyan", "#47def0"], ["White", "#ffe5b4"],
-];
-const ansiBright = [
-  ["BrightBlack", "#6b7f8f"], ["BrightRed", "#ff8e8e"], ["BrightGreen", "#4ae5a5"], ["BrightYellow", "#fff3b0"],
-  ["BrightBlue", "#b5a5ff"], ["BrightMagenta", "#ff6ddc"], ["BrightCyan", "#87eef8"], ["BrightWhite", "#fff5d4"],
-];
-
-function hexToRgb(hex) {
-  if (hex.startsWith("rgba")) return hex;
-  const h = hex.replace("#", "");
-  const r = parseInt(h.substring(0, 2), 16);
-  const g = parseInt(h.substring(2, 4), 16);
-  const b = parseInt(h.substring(4, 6), 16);
-  return `rgb(${r}, ${g}, ${b})`;
-}
-
-function makeSwatch(name, hex, usage, flagGold) {
-  const el = document.createElement("div");
-  el.className = "swatch";
-  el.innerHTML = `
-    <div class="chip" style="background:${hex}"></div>
-    <div class="meta">
-      <div class="name">${name}${flagGold ? '<span class="gold-flag">专属</span>' : ""}</div>
-      <div class="hex">${hex}</div>
-      <div class="rgb">${hexToRgb(hex)}</div>
-      ${usage ? `<div class="usage">${usage}</div>` : ""}
-    </div>
-    <div class="copied">已复制</div>
-  `;
-  el.addEventListener("click", () => {
-    navigator.clipboard?.writeText(hex).catch(() => {});
-    el.classList.add("copied");
-    setTimeout(() => el.classList.remove("copied"), 900);
+// 仅增强:点击复制。无脚本环境(如 dozer://html/ 隔离 host)下静默失效,
+// 色块本身由静态 HTML 渲染,显示不受影响。
+document.querySelectorAll('.swatch').forEach(function (el) {
+  el.addEventListener('click', function () {
+    var hex = el.querySelector('.hex').textContent.trim();
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(hex).catch(function () {});
+    }
+    el.classList.add('copied');
+    setTimeout(function () { el.classList.remove('copied'); }, 900);
   });
-  return el;
-}
-
-function fill(id, items, opts) {
-  const container = document.getElementById(id);
-  items.forEach(([name, hex, usage]) => {
-    container.appendChild(makeSwatch(name, hex, usage, opts && opts.flagGold && name === "gold"));
-  });
-}
-
-fill("grp-surface", semantic.surface);
-fill("grp-text", semantic.text);
-fill("grp-accent", semantic.accent, { flagGold: true });
-fill("grp-chrome", semantic.chrome);
-fill("grp-ansi-normal", ansiNormal.map(([n, h]) => [n, h, null]));
-fill("grp-ansi-bright", ansiBright.map(([n, h]) => [n, h, null]));
+});
 </script>
 </body>
 </html>
