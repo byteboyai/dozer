@@ -1,13 +1,11 @@
 //! 设置弹窗(主题 + Git 账户连接)的独立原生窗口宿主。设计见
 //! `docs/superpowers/specs/2026-09-18-git-account-settings-design.md`。
-//! 结构上是 `FileHistoryOverlay`(`FocusTracker` 失焦即关闭)与
-//! `ProjectCreateOverlay`(IME + 原生右键菜单挂靠,PAT 输入框需要)两者的
-//! 混合:接入失焦关闭,但"没有 PAT?点此生成"会拉起系统浏览器,那**确实**
-//! 会让本窗口收到一次真实失焦(这一点上一版文档说错了,代码评审已指出:
-//! PAT-link click can auto-close Settings)——`handle_focus` 需要配合
-//! `extensions::settings::State::suppress_next_blur` 吞掉那一次,不能只
-//! 靠 `FocusTracker` 自己判断。仍需要 IME(账户用户名可能是中文相关字符)
-//! 和原生右键菜单(PAT 输入框的粘贴)。
+//! 结构对照 `ProjectCreateOverlay`:接入 IME 与原生右键菜单(PAT 输入框的
+//! 粘贴、可能的 CJK 输入),**故意不接入 `FocusTracker`**——2026-09-27 用户
+//! 要求"点击窗口以外的地方不需要关闭窗口",与"新建项目"弹窗一致,只认 Esc
+//! 键 / 显式"关闭"按钮。既然不再有失焦即关闭,`State::suppress_next_blur`
+//! 那套吞失焦机制也随之作废("没有 PAT?点此生成"拉起浏览器导致的失焦本
+//! 就不会再关窗)。
 
 use std::sync::Arc;
 
@@ -23,16 +21,20 @@ use winit::window::{Window, WindowId};
 
 use crate::app::{App, Message};
 use crate::extensions::settings;
-use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
 use crate::platform::overlay_window::{
-    backdrop_card, full_window_overlay_bounds, open_child_window, popup_card_size,
+    backdrop_card, full_window_overlay_bounds, open_child_window,
 };
 
-/// 卡片逻辑尺寸——固定值,不随主窗口宽高缩放:设置表单内容量有限,不需要
-/// 像 file_history/project_create 那样按主窗口比例伸缩。
+/// 卡片逻辑尺寸——与"新建项目"弹窗(`project_create::card_logical_size`)
+/// 完全一致:宽度 = 主窗口宽度 40%(下限 560),高度 = 主窗口高度 75%(下限
+/// 520),保证两类弹窗窗口大小统一(2026-09-27 用户要求样式对齐创建项目弹窗)。
 fn card_logical_size(window: &Window) -> LogicalSize<f32> {
-    popup_card_size(window, 560.0)
+    let logical: LogicalSize<f32> = window
+        .inner_size()
+        .to_logical(window.scale_factor());
+    let size = crate::extensions::project_create::card_logical_size(logical.width, logical.height);
+    LogicalSize::new(size.width, size.height)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,23 +52,9 @@ pub(crate) fn sync_action(open: bool, overlay_present: bool) -> SyncAction {
     }
 }
 
-/// `handle_focus` 的吞掉判定拆成纯函数,不需要真建 `SettingsOverlay`/
-/// `FocusTracker` 就能单测。`Some(should_close)` 表示这次事件已经判完,
-/// 不用再交给 `FocusTracker`;`None` 表示按正常失焦逻辑走。只在"这次是
-/// 失焦、且标志位确实置着"时消费标志位并返回 `Some(false)`——聚焦事件或
-/// 标志位未置都不消费,交还给 `FocusTracker` 正常判定。
-fn suppressed_close(focused: bool, suppress_next_blur: &mut bool) -> Option<bool> {
-    if !focused && std::mem::take(suppress_next_blur) {
-        Some(false)
-    } else {
-        None
-    }
-}
-
 pub(crate) struct SettingsOverlay {
     window: Arc<Window>,
     gpu: OverlayGpu,
-    focus: FocusTracker,
     cursor: mouse::Cursor,
     modifiers: ModifiersState,
     main_window: Arc<Window>,
@@ -106,22 +94,10 @@ impl SettingsOverlay {
         SettingsOverlay {
             window,
             gpu,
-            focus: FocusTracker::default(),
             cursor: mouse::Cursor::Unavailable,
             modifiers: ModifiersState::default(),
             main_window: main_window.clone(),
         }
-    }
-
-    /// `suppress_next_blur` 来自 `extensions::settings::State`——"没有
-    /// PAT?点此生成"拉起系统浏览器时置位,这里读到就吞掉这一次失焦、不
-    /// touch `FocusTracker` 内部状态(浏览器打开后窗口重新聚焦会收到真实
-    /// `Focused(true)`,届时状态自然纠正)。
-    pub(crate) fn handle_focus(&mut self, focused: bool, suppress_next_blur: &mut bool) -> bool {
-        if let Some(should_close) = suppressed_close(focused, suppress_next_blur) {
-            return should_close;
-        }
-        self.focus.handle_focus(focused)
     }
 
     pub(crate) fn reposition(
@@ -260,25 +236,5 @@ mod tests {
     fn sync_action_noop_when_states_already_match() {
         assert_eq!(sync_action(true, true), SyncAction::Noop);
         assert_eq!(sync_action(false, false), SyncAction::Noop);
-    }
-
-    #[test]
-    fn suppressed_close_consumes_flag_and_swallows_the_blur() {
-        let mut suppress = true;
-        assert_eq!(suppressed_close(false, &mut suppress), Some(false));
-        assert!(!suppress, "标志位应该被消费掉,不能留着吞掉下一次真失焦");
-    }
-
-    #[test]
-    fn suppressed_close_defers_to_focus_tracker_when_flag_not_set() {
-        let mut suppress = false;
-        assert_eq!(suppressed_close(false, &mut suppress), None);
-    }
-
-    #[test]
-    fn suppressed_close_does_not_consume_flag_on_focus_gain() {
-        let mut suppress = true;
-        assert_eq!(suppressed_close(true, &mut suppress), None);
-        assert!(suppress, "聚焦事件不是要吞的那一次失焦,标志位应该留着");
     }
 }

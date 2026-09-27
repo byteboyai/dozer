@@ -1374,6 +1374,7 @@ pub(crate) fn delete_confirm_spec(
         cancel_msg: Message::DeleteHostCancel,
         confirm_label: "删除".to_string(),
         confirm_msg: Message::DeleteHost(host_id.to_string()),
+        close_msg: None,
         confirm_color: byteui::theme::color::current().red,
         content_spacing: 8.0,
     })

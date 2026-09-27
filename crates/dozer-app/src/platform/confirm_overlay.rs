@@ -211,6 +211,7 @@ fn map_ssh_spec(
         cancel_msg: Message::Ssh(spec.cancel_msg),
         confirm_label: spec.confirm_label,
         confirm_msg: Message::Ssh(spec.confirm_msg),
+        close_msg: None,
         confirm_color: spec.confirm_color,
         content_spacing: spec.content_spacing,
     }
@@ -228,6 +229,7 @@ fn map_database_spec(
         cancel_msg: Message::Database(spec.cancel_msg),
         confirm_label: spec.confirm_label,
         confirm_msg: Message::Database(spec.confirm_msg),
+        close_msg: None,
         confirm_color: spec.confirm_color,
         content_spacing: spec.content_spacing,
     }
@@ -246,6 +248,7 @@ fn map_files_spec(
         cancel_msg: Message::Files(spec.cancel_msg),
         confirm_label: spec.confirm_label,
         confirm_msg: Message::Files(spec.confirm_msg),
+        close_msg: None,
         confirm_color: spec.confirm_color,
         content_spacing: spec.content_spacing,
     }
@@ -265,6 +268,7 @@ fn map_todo_spec(
         cancel_msg: Message::Todo(spec.cancel_msg),
         confirm_label: spec.confirm_label,
         confirm_msg: Message::Todo(spec.confirm_msg),
+        close_msg: None,
         confirm_color: spec.confirm_color,
         content_spacing: spec.content_spacing,
     }

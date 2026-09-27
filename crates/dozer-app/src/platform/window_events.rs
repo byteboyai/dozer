@@ -3003,20 +3003,11 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 overlay.redraw(app);
             } else if matches!(event, WindowEvent::CloseRequested) {
                 self.dispatch(Message::Settings(extensions::settings::Message::Close));
-            } else if let WindowEvent::Focused(focused) = event {
-                // 本弹窗接入失焦即关闭,但"没有 PAT?点此生成"会拉起系统
-                // 浏览器,那次真实失焦要靠 `State::suppress_next_blur`
-                // 吞掉(见 `SettingsOverlay::handle_focus` 文档注释)。
-                let mut fallback = false;
-                let suppress = app
-                    .settings
-                    .as_mut()
-                    .map(|s| &mut s.suppress_next_blur)
-                    .unwrap_or(&mut fallback);
-                if overlay.handle_focus(focused, suppress) {
-                    self.dispatch(Message::Settings(extensions::settings::Message::Close));
-                }
             } else {
+                // 不接入失焦即关闭:2026-09-27 用户要求"点击窗口以外的地方
+                // 不需要关闭窗口",只认 Esc 键 / 显式"关闭"按钮(与"新建
+                // 项目"弹窗一致)。Focused 事件直接交给 `handle_input` 走
+                // 通用分支即可,不再据此关窗。
                 for message in overlay.handle_input(app, &event) {
                     self.dispatch(message);
                 }

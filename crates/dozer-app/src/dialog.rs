@@ -69,15 +69,26 @@ pub fn action_button_border_color(status: button::Status) -> Color {
 pub fn action_button_style(
     text_color: Color,
 ) -> impl Fn(&iced_widget::Theme, button::Status) -> button::Style {
-    move |_t, s| button::Style {
-        background: Some(byteui::theme::color::current().panel.into()),
-        text_color,
-        border: Border {
-            color: action_button_border_color(s),
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        ..button::Style::default()
+    move |_t, s| {
+        let colors = byteui::theme::color::current();
+        button::Style {
+            // 静止态底走 `panel`，悬浮/按下态提亮到 `card`——配合描边变金的
+            // 既有规则，给弹窗操作按钮一个明确的 hover 反馈。
+            background: Some(
+                match s {
+                    button::Status::Hovered | button::Status::Pressed => colors.card,
+                    _ => colors.panel,
+                }
+                .into(),
+            ),
+            text_color,
+            border: Border {
+                color: action_button_border_color(s),
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..button::Style::default()
+        }
     }
 }
 
@@ -94,6 +105,10 @@ pub struct ConfirmDialog<Msg> {
     pub cancel_msg: Msg,
     pub confirm_label: String,
     pub confirm_msg: Msg,
+    /// 右上角关闭按钮：传 `Some(msg)` 才在标题行右侧渲染 × 图标按钮
+    /// （如关 Agent tab 确认框），`None` 不渲染（其余四处确认框沿用旧样）。
+    /// × 与「取消」语义等价——都关掉弹窗、不执行确认动作。
+    pub close_msg: Option<Msg>,
     /// 确认按钮文字色：`red` 给危险删除，`gold` 给非破坏性主要确认。
     pub confirm_color: Color,
     /// 标题/说明/按钮行之间的纵向间距——四处原弹窗的 `column.spacing`
@@ -118,7 +133,7 @@ pub struct ConfirmDialog<Msg> {
 pub fn confirm<'a, Msg: 'a + Clone>(
     spec: ConfirmDialog<Msg>,
 ) -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {
-    let title_row: Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> = match spec.icon {
+    let title_content: Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> = match spec.icon {
         Some(icon) => row![
             byteui::interaction::icons::view(
                 icon,
@@ -136,6 +151,39 @@ pub fn confirm<'a, Msg: 'a + Clone>(
             .size(byteui::theme::font::subtitle())
             .color(byteui::theme::color::current().cream)
             .into(),
+    };
+    // 标题行右侧的可选 × 关闭按钮：仅 `close_msg` 为 `Some` 时渲染，把按钮
+    // 推到最右；无关闭按钮时整行就是标题本身。
+    let header: Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> = match spec.close_msg {
+        Some(close_msg) => {
+            let colors = byteui::theme::color::current();
+            let close_btn = button(
+                byteui::interaction::icons::view(
+                    IconKind::X,
+                    byteui::theme::icon_size::row(),
+                    colors.dim,
+                ),
+            )
+            .on_press(close_msg)
+            .padding(4)
+            .style(move |_t: &iced_widget::Theme, s: button::Status| button::Style {
+                background: match s {
+                    button::Status::Hovered | button::Status::Pressed => {
+                        Some(Color { a: 0.15, ..colors.gold }.into())
+                    }
+                    _ => None,
+                },
+                border: Border {
+                    width: 0.0,
+                    ..Border::default()
+                },
+                ..button::Style::default()
+            });
+            row![title_content, iced_widget::space::horizontal(), close_btn]
+                .align_y(iced_widget::core::Alignment::Center)
+                .into()
+        }
+        None => title_content,
     };
     let cancel = button(
         text(spec.cancel_label)
@@ -156,7 +204,7 @@ pub fn confirm<'a, Msg: 'a + Clone>(
 
     let dialog = container(
         column![
-            title_row,
+            header,
             text(spec.description)
                 .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().dim),
@@ -199,6 +247,7 @@ mod confirm_tests {
             cancel_msg: TestMsg::Cancel,
             confirm_label: "删除".to_string(),
             confirm_msg: TestMsg::Confirm,
+            close_msg: None,
             confirm_color: byteui::theme::color::current().red,
             content_spacing: 8.0,
         };
@@ -216,6 +265,7 @@ mod confirm_tests {
             cancel_msg: TestMsg::Cancel,
             confirm_label: "确认".to_string(),
             confirm_msg: TestMsg::Confirm,
+            close_msg: None,
             confirm_color: byteui::theme::color::current().red,
             content_spacing: 8.0,
         };

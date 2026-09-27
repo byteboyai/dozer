@@ -446,6 +446,7 @@ pub(crate) fn clear_confirm_spec() -> crate::dialog::ConfirmDialog<Message> {
         cancel_msg: Message::ClearListCancel,
         confirm_label: "清空".to_string(),
         confirm_msg: Message::ClearListConfirm,
+        close_msg: None,
         confirm_color: byteui::theme::color::current().red,
         // 原 `clear_confirm_popup` 的 `column.spacing(12)`，其它三处弹窗
         // 是 8，这里原样保留 12，不随 `confirm()` 默认值归一。

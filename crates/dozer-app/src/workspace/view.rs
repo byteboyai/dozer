@@ -370,20 +370,23 @@ pub(crate) fn agent_close_confirm_spec(
     ws: &Workspace,
 ) -> Option<crate::dialog::ConfirmDialog<Message>> {
     let id = ws.pending_close_tab.as_ref()?;
-    let title = ws
+    let agent_label = ws
         .tabs
         .iter()
         .find(|t| &t.info.id == id)
-        .map(|t| crate::workspace::hook::tab_title(t.agent, t.cwd.as_deref(), &t.info.name))
-        .unwrap_or_else(|| "会话".to_string());
+        .map(|t| t.agent.label().to_string())
+        .unwrap_or_else(|| "agent".to_string());
     Some(crate::dialog::ConfirmDialog {
-        icon: None,
-        title: format!("关闭 \"{title}\"?"),
-        description: "该会话仍在运行 / 等待输入,关闭会结束此会话。".to_string(),
+        icon: Some(IconKind::TriangleAlert),
+        title: format!("关闭\"{agent_label}\" Agent吗？"),
+        description: format!(
+            "\"{agent_label}\" Agent 当前正处于活动状态，关闭后会结束会话，并清空会话上下文。"
+        ),
         cancel_label: "取消".to_string(),
         cancel_msg: Message::TermTabCloseCancel,
         confirm_label: "关闭".to_string(),
         confirm_msg: Message::TermTabCloseConfirm,
+        close_msg: Some(Message::TermTabCloseCancel),
         confirm_color: byteui::theme::color::current().red,
         content_spacing: 8.0,
     })

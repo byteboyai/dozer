@@ -4,11 +4,12 @@
 //! ProjectCreateOverlay`,结构对照 `extensions::file_history` + 同名 overlay
 //! 的既有分工:本模块只管状态/消息/视图/异步落盘逻辑,不碰 winit/wgpu。
 
+use crate::chrome::tab_widget::{NO_TAB_W_LIMIT, tab_container_style, tab_label};
 use crate::delivery;
 use crate::git_accounts::{self, GitProvider, RemoteRepo};
 use byteui::interaction::icons;
-use iced_widget::core::{Border, Length};
-use iced_widget::{Space, button, column, container, row, text};
+use iced_widget::core::{Border, Color, Length, Padding};
+use iced_widget::{MouseArea, Space, button, column, container, row, text};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -121,6 +122,10 @@ pub struct State {
     pub error: Option<String>,
     pub busy: bool,
     pub close_hover: bool,
+    /// 两个视图切换 tab 的 hover 态,驱动 `tab_label`/`tab_container_style`
+    /// 的 hover 高亮(未选中 hover 时浮现 TAB_HOVER 胶囊 + 标题 DIM→GOLD),
+    /// 与文件预览窗口页签同一套视觉。
+    pub tab_hover: Option<Tab>,
 }
 
 #[derive(Debug, Clone)]
@@ -129,6 +134,8 @@ pub enum Message {
     /// 右上角 X 关闭按钮的 hover 态,驱动图标按钮统一的 hover 动画
     /// (图标从 DIM 平滑过渡到 GOLD),与 `extensions::settings` 的关闭按钮同套。
     CloseHover(bool),
+    /// 两个视图切换 tab 的 hover 态,驱动与文件预览窗口页签一致的高亮。
+    TabHover(Option<Tab>),
     TabSelected(Tab),
     LocalRootDirChanged(String),
     LocalRootDirPick,
@@ -227,6 +234,10 @@ fn apply_field_message(state: &mut State, msg: &Message) -> bool {
         }
         Message::CloseHover(h) => {
             state.close_hover = *h;
+            true
+        }
+        Message::TabHover(h) => {
+            state.tab_hover = *h;
             true
         }
         Message::Close
@@ -378,7 +389,8 @@ pub fn update(
         | Message::CloneNameChanged(_)
         | Message::CloneDescriptionAction(_)
         | Message::RepoListLoaded(..)
-        | Message::CloseHover(_) => {
+        | Message::CloseHover(_)
+        | Message::TabHover(_) => {
             unreachable!("已在 apply_field_message 或顶部处理")
         }
     }
@@ -399,35 +411,51 @@ pub(crate) fn card_logical_size(
     )
 }
 
-fn tab_button(label: &str, active: bool, tab: Tab) -> Element<'_> {
-    let colors = byteui::theme::color::current();
-    let label_el = text(label)
-        .size(byteui::theme::font::body())
-        .color(if active { colors.cream } else { colors.dim });
-    let inner = container(label_el)
-        .padding([10, 16])
-        .width(Length::Fill)
-        .align_x(iced_widget::core::alignment::Horizontal::Center)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: Some(if active { colors.card } else { colors.bg }.into()),
-            border: Border {
-                color: colors.border,
-                width: 1.0,
-                radius: 0.0.into(),
-            },
-            ..container::Style::default()
-        });
-    iced_widget::MouseArea::new(inner)
-        .interaction(iced_widget::core::mouse::Interaction::Pointer)
+fn tab_hover_t(hover: Option<Tab>, tab: Tab) -> f32 {
+    if hover == Some(tab) { 1.0 } else { 0.0 }
+}
+
+fn tab_button<'a>(label: &'a str, active: bool, tab: Tab, hover_t: f32) -> Element<'a> {
+    // 与文件预览窗口页签同一套视觉:`tab_label`(标题 body 字号 +
+    // `top_bar_font`,选中 CREAM、未选中 DIM→GOLD 按 hover 插值) +
+    // `tab_container_style`(选中 CARD 实底 + 1px 边框,未选中 hover 时浮现
+    // TAB_HOVER 胶囊)。两个 tab 是互斥的视图切换(不是可关闭的文件页签),
+    // 故不挂关闭 ×——只复用视觉,不复用 `panel_tab` 的关闭交互。
+    let content = tab_label(None, label.to_string(), active, hover_t, NO_TAB_W_LIMIT);
+    let el: Element<'a> = MouseArea::new(content)
         .on_press(Message::TabSelected(tab))
+        .on_enter(Message::TabHover(Some(tab)))
+        .on_exit(Message::TabHover(None))
+        .interaction(iced_widget::core::mouse::Interaction::Pointer)
+        .into();
+    container(el)
+        .padding(Padding {
+            top: 0.0,
+            right: 4.0,
+            bottom: 0.0,
+            left: 10.0,
+        })
+        .width(Length::Shrink)
+        .style(tab_container_style(active, hover_t))
         .into()
 }
 
-fn tab_row(active: Tab) -> Element<'static> {
+fn tab_row(active: Tab, hover: Option<Tab>) -> Element<'static> {
     row![
-        tab_button("新建本地项目", active == Tab::Local, Tab::Local),
-        tab_button("签出Git远程仓库的项目", active == Tab::Clone, Tab::Clone),
+        tab_button(
+            "新建本地项目",
+            active == Tab::Local,
+            Tab::Local,
+            tab_hover_t(hover, Tab::Local),
+        ),
+        tab_button(
+            "签出Git远程仓库的项目",
+            active == Tab::Clone,
+            Tab::Clone,
+            tab_hover_t(hover, Tab::Clone),
+        ),
     ]
+    .spacing(4)
     .into()
 }
 
@@ -668,11 +696,42 @@ fn clone_form_view(form: &CloneForm) -> Element<'_> {
     row![clone_sidebar(form.source), fields].spacing(16).into()
 }
 
+/// 弹窗底部操作按钮(取消 / 创建)的 hover 样式:静止态文字色由 `text_color`
+/// 决定,悬浮/按下时文字过渡到 GOLD、描边变 GOLD,并浮一层 `tab_hover` 胶囊
+/// 背景——与文件预览页签 / 图标按钮同一套 hover 语言,反馈比"只变描边"明确。
+/// 设置弹窗底部按钮复用同一份样式,保持两类弹窗观感一致。
+pub(crate) fn action_button_hover_style(
+    text_color: Color,
+) -> impl Fn(&iced_widget::Theme, button::Status) -> button::Style {
+    move |_t, s| {
+        let colors = byteui::theme::color::current();
+        let hovered = matches!(s, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: Some(if hovered {
+                Color {
+                    a: 0.15,
+                    ..colors.tab_hover
+                }
+                .into()
+            } else {
+                colors.panel.into()
+            }),
+            text_color: if hovered { colors.gold } else { text_color },
+            border: Border {
+                color: if hovered { colors.gold } else { colors.border },
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..button::Style::default()
+        }
+    }
+}
+
 fn primary_button(label: &'static str, msg: Message, busy: bool) -> Element<'static> {
     let btn = button(text(if busy { "处理中…" } else { label }).size(byteui::theme::font::body()))
-        .style(|_t: &iced_widget::Theme, status| {
-            crate::dialog::action_button_style(byteui::theme::color::current().gold)(_t, status)
-        })
+        .style(action_button_hover_style(
+            byteui::theme::color::current().gold,
+        ))
         .padding([8, 20]);
     if busy {
         btn.into()
@@ -701,7 +760,7 @@ pub(crate) fn project_create_card(state: &State) -> Element<'_> {
     let cancel = button(text("取消").size(byteui::theme::font::body()))
         .on_press(Message::Close)
         .padding([8, 20])
-        .style(crate::dialog::action_button_style(
+        .style(action_button_hover_style(
             byteui::theme::color::current().dim,
         ));
     let colors = byteui::theme::color::current();
@@ -738,7 +797,7 @@ pub(crate) fn project_create_card(state: &State) -> Element<'_> {
         .align_y(iced_widget::core::alignment::Vertical::Center);
     let content = column![
         header,
-        tab_row(state.tab),
+        tab_row(state.tab, state.tab_hover),
         container(body)
             .padding(16)
             .width(Length::Fill)

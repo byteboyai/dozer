@@ -1235,6 +1235,7 @@ pub(crate) fn delete_confirm_spec(
         cancel_msg: Message::DeleteCancel,
         confirm_label: "删除".to_string(),
         confirm_msg: Message::DeleteConfirm,
+        close_msg: None,
         confirm_color: byteui::theme::color::current().red,
         content_spacing: 8.0,
     })

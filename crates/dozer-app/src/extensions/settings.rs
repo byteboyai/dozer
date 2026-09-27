@@ -52,11 +52,6 @@ pub struct State {
     pub github: ConnectState,
     pub gitlab: ConnectState,
     pub gitee: ConnectState,
-    /// `OpenTokenPage` 拉起系统浏览器时置位——那会让本窗口收到一次真实
-    /// `Focused(false)`,若照常触发失焦即关闭会把正在填的 PAT 表单整个
-    /// 关掉(代码评审 finding:PAT-link click can auto-close Settings)。
-    /// `SettingsOverlay::handle_focus` 读到就消费掉、吞掉这一次失焦。
-    pub(crate) suppress_next_blur: bool,
     /// 正在进行的 `ConnectSubmit` 异步任务句柄,按 provider 存一份。
     /// `ConnectCancel` 用它真正中止任务,防止取消后 token 仍被异步写进
     /// Keychain/本地文件(代码评审 finding:Cancel doesn't stop in-flight
@@ -88,7 +83,6 @@ impl State {
             github: ConnectState::from_accounts(&accounts, GitProvider::GitHub),
             gitlab: ConnectState::from_accounts(&accounts, GitProvider::GitLab),
             gitee: ConnectState::from_accounts(&accounts, GitProvider::Gitee),
-            suppress_next_blur: false,
             connect_tasks: HashMap::new(),
             advanced: advanced_state_for_daemon(daemon_error),
             close_hover: false,
@@ -175,7 +169,6 @@ fn apply_sync_message(state: &mut State, msg: &Message) -> bool {
             true
         }
         Message::OpenTokenPage(provider) => {
-            state.suppress_next_blur = true;
             let _ = std::process::Command::new("open")
                 .arg(provider.token_creation_url())
                 .spawn();
@@ -590,8 +583,10 @@ pub fn settings_card(
             .color(colors.dim),
     )
     .on_press(Message::Close)
-    .padding([6, 12])
-    .style(crate::dialog::action_button_style(colors.dim));
+    .padding([8, 20])
+    .style(crate::extensions::project_create::action_button_hover_style(
+        colors.dim,
+    ));
     let close_icon = icons::icon_button_entry(
         icons::IconKind::X,
         byteui::theme::icon_size::row(),
@@ -609,8 +604,25 @@ pub fn settings_card(
     let advanced_title = text("高级")
         .size(byteui::theme::font::subtitle())
         .color(colors.cream);
+    // 标题行:settings 图标 + 奶油色标题文本,右上角 X 关闭按钮——与"新建
+    // 项目"弹窗同一套 header 结构(图标 + 标题 + 右对齐关闭按钮),
+    // 关闭按钮 hover 动画与 project_create 一致。
+    let title = row![
+        icons::view(
+            icons::IconKind::Settings,
+            byteui::theme::font::title() as f32,
+            colors.cream,
+        ),
+        text("设置")
+            .size(byteui::theme::font::title())
+            .color(colors.cream),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+    let header = row![title, Space::new().width(Length::Fill), close_icon]
+        .align_y(Alignment::Center);
     let content = column![
-        row![Space::new().width(Length::Fill), close_icon],
+        header,
         theme_title,
         scheme_row("深色 · ByteBoy2077", ColorScheme::Dark, current),
         scheme_row("浅色 · ByteBoy2077-Light", ColorScheme::Light, current),
@@ -636,15 +648,13 @@ pub fn settings_card(
 mod tests {
     use super::*;
 
-    /// 测试专用构造:`connect_tasks`/`suppress_next_blur` 是任务生命周期
-    /// 相关的簿记字段,跟这些纯状态转换测试无关,统一给默认值,避免每个
-    /// 测试都重复写。
+    /// 测试专用构造:`connect_tasks` 是任务生命周期相关的簿记字段,跟这些
+    /// 纯状态转换测试无关,统一给默认值,避免每个测试都重复写。
     fn test_state(github: ConnectState, gitlab: ConnectState, gitee: ConnectState) -> State {
         State {
             github,
             gitlab,
             gitee,
-            suppress_next_blur: false,
             connect_tasks: HashMap::new(),
             advanced: AdvancedState::Idle { error: None },
             close_hover: false,
@@ -784,7 +794,9 @@ mod tests {
     }
 
     #[test]
-    fn open_token_page_sets_suppress_next_blur() {
+    fn open_token_page_spawns_without_touching_blur_state() {
+        // 失焦即关闭已移除,`OpenTokenPage` 只剩"拉起浏览器"这一个副作用;
+        // 这里只验证它被当作已处理消息(返回 true),不再有状态位可断言。
         let mut state = test_state(
             ConnectState::Editing {
                 token: "x".into(),
@@ -794,8 +806,10 @@ mod tests {
             ConnectState::NotConnected,
             ConnectState::NotConnected,
         );
-        apply_sync_message(&mut state, &Message::OpenTokenPage(GitProvider::GitHub));
-        assert!(state.suppress_next_blur);
+        assert!(apply_sync_message(
+            &mut state,
+            &Message::OpenTokenPage(GitProvider::GitHub)
+        ));
     }
 
     #[test]
