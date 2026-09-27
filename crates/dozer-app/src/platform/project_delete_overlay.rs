@@ -17,10 +17,12 @@ use crate::app::{App, Message};
 use crate::extensions::project;
 use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{backdrop_card, open_overlay, reposition_overlay};
+use crate::platform::overlay_window::{
+    backdrop_card, open_overlay, popup_card_size, reposition_overlay,
+};
 
-fn card_logical_size() -> LogicalSize<f32> {
-    LogicalSize::new(440.0, 260.0)
+fn card_logical_size(window: &Window) -> LogicalSize<f32> {
+    popup_card_size(window, 260.0)
 }
 
 /// 开关决策拆成纯函数,便于单测(同 `settings_overlay::sync_action`)。
@@ -118,7 +120,7 @@ impl ProjectDeleteOverlay {
             self.cursor,
             backdrop_card(
                 project::view::project_delete_card(&ws.project_panel).map(Message::Project),
-                card_logical_size(),
+                card_logical_size(&self.window),
             ),
         );
     }
@@ -149,7 +151,7 @@ impl ProjectDeleteOverlay {
             self.cursor,
             backdrop_card(
                 project::view::project_delete_card(&ws.project_panel).map(Message::Project),
-                card_logical_size(),
+                card_logical_size(&self.window),
             ),
             iced_event,
         )

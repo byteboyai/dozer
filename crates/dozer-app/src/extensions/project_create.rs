@@ -6,6 +6,7 @@
 
 use crate::delivery;
 use crate::git_accounts::{self, GitProvider, RemoteRepo};
+use byteui::interaction::icons;
 use iced_widget::core::{Border, Length};
 use iced_widget::{Space, button, column, container, row, text};
 use std::collections::HashMap;
@@ -119,11 +120,15 @@ pub struct State {
     pub clone_form: CloneForm,
     pub error: Option<String>,
     pub busy: bool,
+    pub close_hover: bool,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
     Close,
+    /// 右上角 X 关闭按钮的 hover 态,驱动图标按钮统一的 hover 动画
+    /// (图标从 DIM 平滑过渡到 GOLD),与 `extensions::settings` 的关闭按钮同套。
+    CloseHover(bool),
     TabSelected(Tab),
     LocalRootDirChanged(String),
     LocalRootDirPick,
@@ -218,6 +223,10 @@ fn apply_field_message(state: &mut State, msg: &Message) -> bool {
         Message::LocalRootDirPick | Message::CloneRootDirPick => {
             // 弹 rfd 文件夹选择器是内核(`Runner::dispatch`)的职责,这里
             // 收到说明路由出了问题,当 no-op 处理,不 panic。
+            true
+        }
+        Message::CloseHover(h) => {
+            state.close_hover = *h;
             true
         }
         Message::Close
@@ -368,7 +377,8 @@ pub fn update(
         | Message::CloneRootDirPicked(_)
         | Message::CloneNameChanged(_)
         | Message::CloneDescriptionAction(_)
-        | Message::RepoListLoaded(..) => {
+        | Message::RepoListLoaded(..)
+        | Message::CloseHover(_) => {
             unreachable!("已在 apply_field_message 或顶部处理")
         }
     }
@@ -384,7 +394,7 @@ pub(crate) fn card_logical_size(
     window_height: f32,
 ) -> iced_winit::core::Size<f32> {
     iced_winit::core::Size::new(
-        (window_width * 0.55).max(560.0),
+        (window_width * crate::platform::overlay_window::POPUP_WIDTH_FRACTION).max(560.0),
         (window_height * 0.75).max(520.0),
     )
 }
@@ -694,8 +704,40 @@ pub(crate) fn project_create_card(state: &State) -> Element<'_> {
         .style(crate::dialog::action_button_style(
             byteui::theme::color::current().dim,
         ));
+    let colors = byteui::theme::color::current();
+    // 标题:briefcase 图标 + 奶油色标题文本,垂直居中对齐。
+    let title = row![
+        icons::view(
+            icons::IconKind::Briefcase,
+            byteui::theme::font::title() as f32,
+            colors.cream,
+        ),
+        text("新建项目")
+            .size(byteui::theme::font::title())
+            .color(colors.cream),
+    ]
+    .spacing(8)
+    .align_y(iced_widget::core::alignment::Vertical::Center);
+    // 右上角 X 关闭按钮——复用 `icon_button_entry`,与设置弹窗关闭按钮
+    // 同一套 hover 动画(图标从 DIM 平滑过渡到 GOLD),`close_hover` 由
+    // `Message::CloseHover` 驱动。
+    let close_icon = icons::icon_button_entry(
+        icons::IconKind::X,
+        byteui::theme::icon_size::row(),
+        false,
+        false,
+        if state.close_hover { 1.0 } else { 0.0 },
+        false,
+        byteui::theme::geometry::tab_button_size(),
+        true,
+        Message::Close,
+        Message::CloseHover,
+        "关闭",
+    );
+    let header = row![title, Space::new().width(Length::Fill), close_icon]
+        .align_y(iced_widget::core::alignment::Vertical::Center);
     let content = column![
-        text("新建项目").size(byteui::theme::font::title()),
+        header,
         tab_row(state.tab),
         container(body)
             .padding(16)

@@ -25,10 +25,14 @@ use crate::platform::overlay_window::{
     backdrop_card, centered_card_offset, full_window_overlay_bounds, open_child_window,
 };
 
-/// 卡片逻辑尺寸:宽 = 主窗口宽度的 75%,高 = 主窗口高度的 80%——同现状
-/// `file_history::popup_view` 的比例。
+/// 卡片逻辑尺寸:宽 = 主窗口宽度的 40%(整窗 `POPUP_WIDTH_FRACTION`),高 =
+/// 主窗口高度的 80%——所有模态弹窗宽度统一占整窗 40%,高度仍按 file_history
+/// 自身需要随窗高伸缩。
 fn card_logical_size(window_width: f32, window_height: f32) -> LogicalSize<f32> {
-    LogicalSize::new(window_width * 0.75, window_height * 0.8)
+    LogicalSize::new(
+        window_width * crate::platform::overlay_window::POPUP_WIDTH_FRACTION,
+        window_height * 0.8,
+    )
 }
 
 /// diff 区域(`file_history::diff_area_view` 的 `content` 子树)在弹窗卡片

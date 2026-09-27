@@ -50,6 +50,25 @@ pub(crate) fn centered_card_offset(
     )
 }
 
+/// 弹窗卡片默认宽度 = 主窗口逻辑宽度的 40%——设计裁定:所有模态弹窗统一
+/// 宽度占整个窗体的比例,不再各自写死 / 各按不同比例(`search` 的 1/3、
+/// `file_history` 的 0.75、`project_create` 的 0.55 等都收敛到这一个值)。
+/// 高度逻辑各弹窗仍自行决定(固定值或随窗高),这里只统一"宽度占比"这一项。
+pub(crate) const POPUP_WIDTH_FRACTION: f32 = 0.4;
+
+/// 取窗口逻辑尺寸:`inner_size()` 是物理像素,除以 `scale_factor` 折算成逻辑像素。
+pub(crate) fn window_logical_size(window: &Window) -> LogicalSize<f32> {
+    let scale = window.scale_factor();
+    window.inner_size().to_logical::<f32>(scale)
+}
+
+/// 弹窗卡片尺寸:宽度恒为窗口宽度的 `POPUP_WIDTH_FRACTION`,高度由调用方
+/// 给定(`height`)。各弹窗高度逻辑不同(固定 / 随窗高),本函数只收敛宽度占比。
+pub(crate) fn popup_card_size(window: &Window, height: f32) -> LogicalSize<f32> {
+    let width = window_logical_size(window).width * POPUP_WIDTH_FRACTION;
+    LogicalSize::new(width, height)
+}
+
 /// overlay 窗口本身是 `with_decorations(false)` 的 borderless 窗口,macOS
 /// 不会像主窗口(保留 `.titled` style mask,见 `window.rs` 顶部注释)那样自动
 /// 套系统原生圆角——遮罩若填满整扇 overlay 窗口的直角矩形,四角会略微戳出

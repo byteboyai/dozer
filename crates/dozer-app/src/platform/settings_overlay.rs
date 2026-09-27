@@ -26,13 +26,13 @@ use crate::extensions::settings;
 use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
 use crate::platform::overlay_window::{
-    backdrop_card, full_window_overlay_bounds, open_child_window,
+    backdrop_card, full_window_overlay_bounds, open_child_window, popup_card_size,
 };
 
 /// 卡片逻辑尺寸——固定值,不随主窗口宽高缩放:设置表单内容量有限,不需要
 /// 像 file_history/project_create 那样按主窗口比例伸缩。
-fn card_logical_size() -> LogicalSize<f32> {
-    LogicalSize::new(480.0, 560.0)
+fn card_logical_size(window: &Window) -> LogicalSize<f32> {
+    popup_card_size(window, 560.0)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,7 +146,7 @@ impl SettingsOverlay {
         let mut interface = UserInterface::build(
             backdrop_card(
                 settings::settings_card(state).map(Message::Settings),
-                card_logical_size(),
+                card_logical_size(&self.window),
             ),
             self.gpu.viewport.logical_size(),
             std::mem::take(&mut self.gpu.cache),
@@ -215,7 +215,7 @@ impl SettingsOverlay {
         let mut interface = UserInterface::build(
             backdrop_card(
                 settings::settings_card(state).map(Message::Settings),
-                card_logical_size(),
+                card_logical_size(&self.window),
             ),
             self.gpu.viewport.logical_size(),
             std::mem::take(&mut self.gpu.cache),

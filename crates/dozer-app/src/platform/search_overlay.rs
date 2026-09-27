@@ -27,15 +27,17 @@ use crate::platform::overlay_window::{
 };
 
 /// overlay 卡片的固定逻辑高度,对应现状 `search_modal` 的
-/// `max_height(640.0)`。宽度不固定,随主窗口宽度变化(见 `card_logical_size`
-/// 调用点,复用 `crate::dialog::width` 的"整窗 1/3"口径)。
+/// `max_height(640.0)`。宽度不固定,随主窗口宽度变化(整窗 40%,见
+/// `POPUP_WIDTH_FRACTION`)。
 const CARD_HEIGHT: f32 = 640.0;
 
-/// 卡片逻辑尺寸:宽度与 `dialog::width(window_width)`(`Length::Fixed(
-/// window_width / 3.0)`)保持一致,高度固定 `CARD_HEIGHT`。这里直接算成
-/// `f32`,因为 `LogicalSize::new` 要数值而 `dialog::width` 返回 `Length`。
+/// 卡片逻辑尺寸:宽度 = 主窗口宽度的 `POPUP_WIDTH_FRACTION`(整窗 40%),
+/// 高度固定 `CARD_HEIGHT`。
 fn card_logical_size(window_width: f32) -> LogicalSize<f32> {
-    LogicalSize::new(window_width / 3.0, CARD_HEIGHT)
+    LogicalSize::new(
+        window_width * crate::platform::overlay_window::POPUP_WIDTH_FRACTION,
+        CARD_HEIGHT,
+    )
 }
 
 /// `sync_search_overlay` 要不要开/关 overlay 的纯判定,跟真正建/毁窗口的

@@ -18,10 +18,12 @@ use crate::app::{App, Message};
 use crate::extensions::database;
 use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{backdrop_card, open_overlay, reposition_overlay};
+use crate::platform::overlay_window::{
+    backdrop_card, open_overlay, popup_card_size, reposition_overlay,
+};
 
-fn card_logical_size() -> LogicalSize<f32> {
-    LogicalSize::new(480.0, 480.0)
+fn card_logical_size(window: &Window) -> LogicalSize<f32> {
+    popup_card_size(window, 480.0)
 }
 
 /// 开关决策拆成纯函数,便于单测(同 `settings_overlay::sync_action`)。
@@ -149,7 +151,7 @@ impl DatabaseSourceOverlay {
         self.gpu.redraw(
             &self.window,
             self.cursor,
-            backdrop_card(card.map(Message::Database), card_logical_size()),
+            backdrop_card(card.map(Message::Database), card_logical_size(&self.window)),
         );
     }
 
@@ -180,7 +182,7 @@ impl DatabaseSourceOverlay {
         self.gpu.dispatch(
             &self.window,
             self.cursor,
-            backdrop_card(card.map(Message::Database), card_logical_size()),
+            backdrop_card(card.map(Message::Database), card_logical_size(&self.window)),
             iced_event,
         )
     }

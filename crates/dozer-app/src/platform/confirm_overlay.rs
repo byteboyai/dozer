@@ -19,7 +19,9 @@ use crate::app::Message;
 use crate::dialog;
 use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{backdrop_card, open_overlay, reposition_overlay};
+use crate::platform::overlay_window::{
+    backdrop_card, open_overlay, popup_card_size, reposition_overlay,
+};
 
 /// 五个 confirm 形态弹窗的判别标签——只用来在 `sync_confirm_overlay` 里
 /// 判断"这次 desired 和已开的窗口是不是同一个弹窗",不需要 `Message`/
@@ -33,10 +35,10 @@ pub(crate) enum ConfirmTrigger {
     TodoClear,
 }
 
-/// 内容有界(1-3 行说明 + 两个按钮),固定逻辑尺寸覆盖全部 5 个用例,不需要
-/// 按主窗口比例缩放(同 `settings`/`search` 的取舍,不同于 `file_history`)。
-fn card_logical_size() -> LogicalSize<f32> {
-    LogicalSize::new(420.0, 200.0)
+/// 内容有界(1-3 行说明 + 两个按钮),高度固定;宽度随主窗口走
+/// `POPUP_WIDTH_FRACTION`(整窗 40%,见 `overlay_window`)。
+fn card_logical_size(window: &Window) -> LogicalSize<f32> {
+    popup_card_size(window, 200.0)
 }
 
 pub(crate) struct ConfirmOverlay {
@@ -115,7 +117,10 @@ impl ConfirmOverlay {
     }
 
     pub(crate) fn redraw(&mut self) {
-        let card = backdrop_card(dialog::confirm(self.spec.clone()), card_logical_size());
+        let card = backdrop_card(
+            dialog::confirm(self.spec.clone()),
+            card_logical_size(&self.window),
+        );
         self.gpu.redraw(&self.window, self.cursor, card);
     }
 
@@ -142,7 +147,10 @@ impl ConfirmOverlay {
         else {
             return Vec::new();
         };
-        let card = backdrop_card(dialog::confirm(self.spec.clone()), card_logical_size());
+        let card = backdrop_card(
+            dialog::confirm(self.spec.clone()),
+            card_logical_size(&self.window),
+        );
         self.gpu
             .dispatch(&self.window, self.cursor, card, iced_event)
     }

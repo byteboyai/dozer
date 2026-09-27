@@ -17,12 +17,14 @@ use crate::app::{App, Message};
 use crate::extensions::database;
 use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{backdrop_card, open_overlay, reposition_overlay};
+use crate::platform::overlay_window::{
+    backdrop_card, open_overlay, popup_card_size, reposition_overlay,
+};
 
 /// 卡片逻辑尺寸——固定值,不随主窗口宽高缩放(设置/驱动列表内容量有限,
 /// 取舍同 `settings_overlay`/`search_overlay`)。
-fn card_logical_size() -> LogicalSize<f32> {
-    LogicalSize::new(480.0, 420.0)
+fn card_logical_size(window: &Window) -> LogicalSize<f32> {
+    popup_card_size(window, 420.0)
 }
 
 /// 开关决策拆成纯函数,便于单测(同 `settings_overlay::sync_action`)。
@@ -118,7 +120,7 @@ impl DatabaseDriversOverlay {
             self.cursor,
             backdrop_card(
                 database::database_drivers_card(&app.database).map(Message::Database),
-                card_logical_size(),
+                card_logical_size(&self.window),
             ),
         );
     }
@@ -146,7 +148,7 @@ impl DatabaseDriversOverlay {
             self.cursor,
             backdrop_card(
                 database::database_drivers_card(&app.database).map(Message::Database),
-                card_logical_size(),
+                card_logical_size(&self.window),
             ),
             iced_event,
         )
