@@ -1222,20 +1222,25 @@ pub(crate) fn delete_confirm_spec(
     ws_state: &WorkspaceState,
 ) -> Option<crate::dialog::ConfirmDialog<Message>> {
     let (path, is_dir) = ws_state.tree_delete_confirm.as_ref()?;
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string());
     let kind = if *is_dir { "文件夹" } else { "文件" };
+    // 标题用相对项目根的完整路径(同 `files_move_card` 的 source_display
+    // 手法),比单文件名更能定位目标——同名文件散在不同子目录时不再有歧义;
+    // 文件树尚未加载/路径不在根下时兜底完整路径原文。
+    let rel_path = ws_state
+        .file_tree
+        .as_ref()
+        .and_then(|t| path.strip_prefix(t.root()).ok())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
     Some(crate::dialog::ConfirmDialog {
-        icon: None,
-        title: format!("删除{kind} \"{name}\"?"),
-        description: "会移入系统回收站,可从回收站找回。".to_string(),
+        icon: Some(icons::IconKind::CircleAlert),
+        title: format!("删除{kind} \"{rel_path}\"?"),
+        description: format!("{kind}将会被放入系统回收站，如需恢复可从系统回收站找回。"),
         cancel_label: "取消".to_string(),
         cancel_msg: Message::DeleteCancel,
         confirm_label: "删除".to_string(),
         confirm_msg: Message::DeleteConfirm,
-        close_msg: None,
+        close_msg: Some(Message::DeleteCancel),
         confirm_color: byteui::theme::color::current().red,
         content_spacing: 8.0,
     })
@@ -1257,10 +1262,11 @@ pub fn files_move_card(
     } else {
         "文件"
     };
-    let source_name = pending
-        .source
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
+    let source_display = ws_state
+        .file_tree
+        .as_ref()
+        .and_then(|t| pending.source.strip_prefix(t.root()).ok())
+        .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| pending.source.display().to_string());
 
     let label = |s: &str| {
@@ -1278,7 +1284,7 @@ pub fn files_move_card(
         false,
         Message::MoveNameInput,
     ))
-    .width(Length::Fixed(320.0));
+    .width(Length::Fill);
     let dir_field = container(byteui::form::input_text::view(
         "",
         &pending.dir_draft,
@@ -1289,7 +1295,7 @@ pub fn files_move_card(
         false,
         Message::MoveDirInput,
     ))
-    .width(Length::Fixed(264.0));
+    .width(Length::Fill);
     let browse_btn = button(
         text("…")
             .size(byteui::theme::font::body())
@@ -1308,20 +1314,58 @@ pub fn files_move_card(
         ..button::Style::default()
     });
 
+    // 右上角 × 关闭按钮:样式同 `dialog::confirm` 的 close_btn(× 与「取消」
+    // 语义等价——都关掉弹窗不执行移动)。
+    let colors = byteui::theme::color::current();
+    let close_btn = button(icons::view(
+        icons::IconKind::X,
+        byteui::theme::icon_size::row(),
+        colors.dim,
+    ))
+    .on_press(Message::MoveCancel)
+    .padding(4)
+    .style(move |_t, s| button::Style {
+        background: match s {
+            button::Status::Hovered | button::Status::Pressed => {
+                Some(Color { a: 0.15, ..colors.gold }.into())
+            }
+            _ => None,
+        },
+        border: Border {
+            width: 0.0,
+            ..Border::default()
+        },
+        ..button::Style::default()
+    });
+
     let mut body = column![
-        text(format!("移动{kind} \"{source_name}\""))
-            .size(byteui::theme::font::subtitle())
-            .color(byteui::theme::color::current().cream),
+        row![
+            icons::view(
+                icons::IconKind::FolderTree,
+                byteui::theme::icon_size::row(),
+                colors.cream,
+            ),
+            text(format!("移动{kind} \"{source_display}\""))
+                .size(byteui::theme::font::subtitle())
+                .color(byteui::theme::color::current().cream),
+            iced_widget::space::horizontal(),
+            close_btn,
+        ]
+        .spacing(6)
+        .align_y(iced_widget::core::Alignment::Center)
+        .width(Length::Fill),
         column![label("新名称:"), name_field].spacing(4),
         column![
             label("到目录:"),
             row![dir_field, browse_btn]
                 .spacing(6)
                 .align_y(iced_widget::core::Alignment::Center)
+                .width(Length::Fill)
         ]
         .spacing(4),
     ]
-    .spacing(10);
+    .spacing(10)
+    .width(Length::Fill);
 
     if let Some(err) = &ws_state.tree_error {
         body = body.push(

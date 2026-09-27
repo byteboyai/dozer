@@ -234,9 +234,9 @@ pub enum IconKind {
     ListTree,
     /// 弹窗右上角关闭按钮(Lucide x:一对交叉斜线)。
     X,
-    /// 关 Agent tab 确认框标题前图标(Lucide triangle-alert:三角警告,表
+    /// 关 Agent tab 确认框标题前图标(Lucide circle-alert:圆形警告,表
     /// "活动会话将被结束"的破坏性提醒),见 `workspace::agent_close_confirm_spec`。
-    TriangleAlert,
+    CircleAlert,
 }
 
 impl IconKind {
@@ -363,8 +363,8 @@ impl IconKind {
             IconKind::FileClock => include_bytes!("../../assets/icons/file-clock.svg"),
             IconKind::ListTree => include_bytes!("../../assets/icons/list-tree.svg"),
             IconKind::X => include_bytes!("../../assets/icons/x.svg"),
-            IconKind::TriangleAlert => {
-                include_bytes!("../../assets/icons/triangle-alert.svg")
+            IconKind::CircleAlert => {
+                include_bytes!("../../assets/icons/circle-alert.svg")
             }
         }
     }

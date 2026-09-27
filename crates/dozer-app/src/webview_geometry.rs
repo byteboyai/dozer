@@ -563,21 +563,24 @@ pub fn usage_content_pane_bounds_for(
         if side != showing_side {
             return zero();
         }
-        let m = match side {
-            Side::Left => theme::region::left_zone().margin,
-            Side::Right => theme::region::right_zone().margin,
-        };
+        // 放大态外框是 `maximize_overlay` 的金色圆角描边盒(radius 10),不是
+        // `left_zone`/`right_zone`(border width 0、margin 单侧为 0,专为
+        // 分栏态"贴边不描边"设计)。分栏态那份 margin 拿来当这里的内容内缩
+        // 会让内容矩形的角贴在描边盒的直角坐标上,而描边盒转角是圆弧——
+        // 贴边的那一角会戳出圆弧之外。改用 `preview_content_bounds_for`/
+        // `left_files_tree_bounds_for` 同款的四边固定内缩(`x0 + 8.0`/
+        // `avail_w - 16.0`),不再复用分栏态 margin。
+        const CORNER_INSET: f32 = 8.0;
         let (x0, avail_w) = maximized_box_x_range(window_width);
-        let inx = x0 + m.left;
-        let inw = (avail_w - m.left - m.right).max(0.0);
+        let inx = x0 + CORNER_INSET;
+        let inw = (avail_w - CORNER_INSET * 2.0).max(0.0);
         let iny = byteui::theme::geometry::top_bar_height()
             + byteui::theme::geometry::maximize_overlay_padding()
-            + m.top;
+            + CORNER_INSET;
         let inh = (maximized_box_height(window_height)
             - byteui::theme::geometry::maximize_overlay_padding()
             - byteui::theme::geometry::status_bar_height()
-            - m.top
-            - m.bottom)
+            - CORNER_INSET * 2.0)
             .max(0.0);
         return compute(inx, iny, inw, inh);
     }
@@ -1426,5 +1429,63 @@ mod tests {
         let top_of_zone =
             byteui::theme::geometry::top_bar_height() + theme::region::left_zone().margin.top;
         assert!((y - top_of_zone - theme::geometry::usage_content_chrome_top_px()).abs() < 1.0);
+    }
+
+    /// 放大态下,内容矩形四边必须离 `maximize_overlay` 描边盒(圆角 10)至少
+    /// 8px,不能贴到盒子的直角坐标——贴边会让内容矩形的角戳出圆弧之外
+    /// (`left_zone`/`right_zone` 的 margin 部分边为 0,是分栏态"贴边不描边"
+    /// 的设计,不能直接挪来当放大态的圆角内缩用)。左右两侧各测一遍,因为
+    /// 两侧 zone margin 恰好在不同边为 0,回归时任一侧漏改都测得出来。
+    #[test]
+    fn usage_content_maximized_stays_clear_of_overlay_corners() {
+        const INSET: f32 = 8.0;
+        let window_w = 1600.0;
+        let window_h = 900.0;
+        for (side, maximized, panel_field) in [
+            (Side::Left, MaximizedPane::Left, "left"),
+            (Side::Right, MaximizedPane::Right, "right"),
+        ] {
+            let state = ShellState {
+                left_view: if panel_field == "left" {
+                    PanelKind::Usage
+                } else {
+                    PanelKind::Files
+                },
+                right_view: if panel_field == "right" {
+                    PanelKind::Usage
+                } else {
+                    PanelKind::Files
+                },
+                maximized: Some(maximized),
+                ..test_state()
+            };
+            let (x, y, w, h) =
+                usage_content_pane_bounds_for(side, window_w, window_h, &state, true, false);
+            assert!(w > 0.0 && h > 0.0, "{panel_field}: 内容矩形不应为空");
+            let (x0, avail_w) = maximized_box_x_range(window_w);
+            // 与 `usage_content_pane_bounds_for` 内部同一份公式反推:`compute`
+            // 只是把 `iny`/`inh` 拆成 `chrome_top` 前后两段,`y+h == iny+inh`
+            // 恒成立,与 `list_visible`/`pair_columns` 无关,可以直接核对。
+            let expected_bottom = byteui::theme::geometry::top_bar_height()
+                + maximized_box_height(window_h)
+                - byteui::theme::geometry::status_bar_height()
+                - INSET;
+            assert!(
+                (x - (x0 + INSET)).abs() < 0.1,
+                "{panel_field}: 左边未离描边盒直角 {INSET}px,x={x} x0={x0}"
+            );
+            assert!(
+                (x + w - (x0 + avail_w - INSET)).abs() < 0.1,
+                "{panel_field}: 右边未离描边盒直角 {INSET}px,x+w={} 期望={}",
+                x + w,
+                x0 + avail_w - INSET
+            );
+            assert!(
+                (y + h - expected_bottom).abs() < 0.1,
+                "{panel_field}: 底边未离描边盒直角 {INSET}px,y+h={} 期望={}",
+                y + h,
+                expected_bottom
+            );
+        }
     }
 }

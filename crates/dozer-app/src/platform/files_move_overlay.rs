@@ -23,7 +23,9 @@ use crate::platform::overlay_window::{
 };
 
 fn card_logical_size(window: &Window) -> LogicalSize<f32> {
-    popup_card_size(window, 220.0)
+    // 280:表单(标题行/两组 label+输入框)+ 底部「取消/确定」按钮行都要放得
+    // 下——此前 220 会把按钮行整个裁出卡片外(2026-09-27 用户实测)。
+    popup_card_size(window, 280.0)
 }
 
 /// 开关决策拆成纯函数,便于单测(同 `settings_overlay::sync_action`)。

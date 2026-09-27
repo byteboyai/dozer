@@ -4,7 +4,7 @@
 //! ProjectCreateOverlay`,结构对照 `extensions::file_history` + 同名 overlay
 //! 的既有分工:本模块只管状态/消息/视图/异步落盘逻辑,不碰 winit/wgpu。
 
-use crate::chrome::tab_widget::{NO_TAB_W_LIMIT, tab_container_style, tab_label};
+use crate::chrome::tab_widget::tab_container_style;
 use crate::delivery;
 use crate::git_accounts::{self, GitProvider, RemoteRepo};
 use byteui::interaction::icons;
@@ -416,12 +416,23 @@ fn tab_hover_t(hover: Option<Tab>, tab: Tab) -> f32 {
 }
 
 fn tab_button<'a>(label: &'a str, active: bool, tab: Tab, hover_t: f32) -> Element<'a> {
-    // 与文件预览窗口页签同一套视觉:`tab_label`(标题 body 字号 +
-    // `top_bar_font`,选中 CREAM、未选中 DIM→GOLD 按 hover 插值) +
-    // `tab_container_style`(选中 CARD 实底 + 1px 边框,未选中 hover 时浮现
-    // TAB_HOVER 胶囊)。两个 tab 是互斥的视图切换(不是可关闭的文件页签),
-    // 故不挂关闭 ×——只复用视觉,不复用 `panel_tab` 的关闭交互。
-    let content = tab_label(None, label.to_string(), active, hover_t, NO_TAB_W_LIMIT);
+    // 弹窗内两枚互斥视图切换 tab 的自绘标题(2026-09-27 起不再复用共享
+    // `tab_label`):字号降到 `label()`(13px,与表单字段标签同级,比共享
+    // 面板页签的 body 小一档),配色公式不变——选中 CREAM、未选中 DIM→GOLD
+    // 按 hover 插值;容器样式仍复用 `tab_container_style`(选中 CARD 实底 +
+    // 1px 边框,未选中 hover 时浮现 TAB_HOVER 胶囊)。两个 tab 是互斥的视图
+    // 切换(不是可关闭的文件页签),故不挂关闭 ×。边框内边距四边对称加大
+    // (原 top/bottom 0、right 4 只对面板页签的 × 区合理),文字不再贴边。
+    let colors = byteui::theme::color::current();
+    let title_color = if active {
+        colors.cream
+    } else {
+        byteui::theme::color::mix(colors.dim, colors.gold, hover_t)
+    };
+    let content = text(label.to_string())
+        .font(crate::app::top_bar_font())
+        .size(byteui::theme::font::label())
+        .color(title_color);
     let el: Element<'a> = MouseArea::new(content)
         .on_press(Message::TabSelected(tab))
         .on_enter(Message::TabHover(Some(tab)))
@@ -430,10 +441,10 @@ fn tab_button<'a>(label: &'a str, active: bool, tab: Tab, hover_t: f32) -> Eleme
         .into();
     container(el)
         .padding(Padding {
-            top: 0.0,
-            right: 4.0,
-            bottom: 0.0,
-            left: 10.0,
+            top: 4.0,
+            right: 12.0,
+            bottom: 4.0,
+            left: 12.0,
         })
         .width(Length::Shrink)
         .style(tab_container_style(active, hover_t))
@@ -795,9 +806,28 @@ pub(crate) fn project_create_card(state: &State) -> Element<'_> {
     );
     let header = row![title, Space::new().width(Length::Fill), close_icon]
         .align_y(iced_widget::core::alignment::Vertical::Center);
+    // tab 栏:整块左缩进 16,与下方表单容器(`container(body).padding(16)`)
+    // 的字段左缘对齐;底部一条 1px `BORDER` 分割线把 tab 栏与表单区分开
+    // (同文件树 footer-bar / ssh footer-bar 的分隔线手法)。
+    let tab_bar = column![
+        container(tab_row(state.tab, state.tab_hover)).padding(Padding {
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: 16.0,
+        }),
+        container(Space::new())
+            .width(Length::Fill)
+            .height(Length::Fixed(1.0))
+            .style(|_t: &iced_widget::Theme| container::Style {
+                background: Some(byteui::theme::color::current().border.into()),
+                ..container::Style::default()
+            }),
+    ]
+    .spacing(8);
     let content = column![
         header,
-        tab_row(state.tab, state.tab_hover),
+        tab_bar,
         container(body)
             .padding(16)
             .width(Length::Fill)

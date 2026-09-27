@@ -377,7 +377,7 @@ pub(crate) fn agent_close_confirm_spec(
         .map(|t| t.agent.label().to_string())
         .unwrap_or_else(|| "agent".to_string());
     Some(crate::dialog::ConfirmDialog {
-        icon: Some(IconKind::TriangleAlert),
+        icon: Some(IconKind::CircleAlert),
         title: format!("关闭\"{agent_label}\" Agent吗？"),
         description: format!(
             "\"{agent_label}\" Agent 当前正处于活动状态，关闭后会结束会话，并清空会话上下文。"
