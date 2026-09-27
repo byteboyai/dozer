@@ -1421,12 +1421,16 @@ impl PreviewPane {
                     id: tab.id,
                     url: u,
                     // T5/T8:非 Ready(Failed 已排除;此处是 Loading/SwitchingMode)
-                    // 的 host 预创建但 **hidden**,等 `ready` 才可见,避免露出空白
+                    // 的 host 预创建但 **不显示**,等 `ready` 才可见,避免露出空白
                     // 原生子视图盖住 iced loading。
                     visible: tab.backend_state.is_ready() && idx == self.active,
                     editor_binding: None,
                     // Rendered(Flyfish/HTML)host 不走资源 reserve,无需回灌。
                     loading_generation: None,
+                    // Flyfish/HTML 渲染器(docx 等)的 `load()` 依赖 rAF,hidden
+                    // 视图下 rAF 被 WebKit 挂起会死锁(见字段文档);未就绪时用
+                    // 离屏停放代替 hidden。已就绪者交给上层 visible 判断。
+                    park_offscreen: !tab.backend_state.is_ready(),
                 })
             })
             .collect()
@@ -1505,6 +1509,9 @@ impl PreviewPane {
                     // T10:在途加载时携带世代,reserve 批准后据此推进到
                     // `CreatingHost`;已就绪/非加载态的 host 无需回灌。
                     loading_generation: loading.then_some(tab.load_state.generation),
+                    // CodeMirror host 不依赖 rAF 完成 boot(hidden 下可正常
+                    // 建索引/读正文),保持原有的「hidden 预创建」语义。
+                    park_offscreen: false,
                 })
             })
             .collect()
@@ -1542,6 +1549,8 @@ impl PreviewPane {
                     editor_binding: Some(binding),
                     // T10:同 editor host,加载在途时携带世代供 reserve 回灌。
                     loading_generation: loading.then_some(tab.load_state.generation),
+                    // JSON Tree host 同为 hidden 预创建 boot,不依赖 rAF。
+                    park_offscreen: false,
                 })
             })
             .collect()
@@ -3444,12 +3453,20 @@ mod tests {
             .find(|s| s.id == id)
             .expect("Rendered 应产出 Flyfish webview spec");
         assert!(!spec.visible, "document_loaded 前 Flyfish 必须 hidden");
+        // 但未就绪时必须以「离屏停放」代替真 hidden:WKWebView 对 hidden 视图
+        // 挂起 rAF,而 docx 等渲染器的 `load()` 依赖 rAF,会死锁到看门狗超时
+        // (2026-09-27 docx「加载超时」根因)。
+        assert!(
+            spec.park_offscreen,
+            "未就绪 Flyfish 必须离屏停放(visible 但仍跑 rAF),不能真 hidden"
+        );
 
         // Flyfish `document_loaded` ACK → finish → Ready,方可可见。
         assert!(pane.finish_load(id, generation));
         let specs = pane.desired_webviews();
         let spec = specs.iter().find(|s| s.id == id).unwrap();
         assert!(spec.visible, "document_loaded 后 Flyfish 可见");
+        assert!(!spec.park_offscreen, "就绪后离开离屏停放,回到真实 bounds");
         assert!(
             spec.loading_generation.is_none(),
             "就绪后不再携带 loading 世代"

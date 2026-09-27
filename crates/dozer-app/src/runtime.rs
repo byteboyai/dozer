@@ -352,7 +352,11 @@ pub(crate) fn sync_webview_pool(
                     let _ = view.zoom(byteui::theme::icon_size::scale() as f64);
                 }
                 let _ = view.set_bounds(bounds);
-                let _ = view.set_visible(spec.visible);
+                // park_offscreen 的宿主必须保持 `set_visible(true)`:它虽被
+                // 摆到窗口外不可见,但 WebKit 只在视图「非 hidden」时才跑
+                // rAF,一旦这里跟着 `spec.visible=false` 真隐藏,docx 等依赖
+                // rAF 的渲染器又会卡死(见 `WebviewSpec::park_offscreen`)。
+                let _ = view.set_visible(spec.visible || spec.park_offscreen);
             }
             None => {
                 let allowed = std::sync::Arc::clone(&allowed_files);
@@ -419,7 +423,9 @@ pub(crate) fn sync_webview_pool(
                 let mut builder = wry::WebViewBuilder::new()
                     .with_url(&spec.url)
                     .with_bounds(bounds)
-                    .with_visible(spec.visible)
+                    // 同更新路径:park_offscreen 的宿主虽然被摆到窗口外,也必须
+                    // 以 visible 创建,保证 WebKit 跑 rAF(见 `WebviewSpec::park_offscreen`)。
+                    .with_visible(spec.visible || spec.park_offscreen)
                     // 关掉 macOS 的链接预览 force-click/long-press peek 浮层。
                     // (这只影响长按/重压预览,不影响普通单击跳转;普通单击
                     // 跳转真正缺的那块是下方的 `on_page_load`/`new_window_req`

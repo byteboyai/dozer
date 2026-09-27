@@ -3238,6 +3238,9 @@ impl App {
                             // Git Log diff 是固定单槽 webview、不走 tab 的
                             // `Reserving`/`CreatingHost` 加载阶段,故无世代。
                             loading_generation: None,
+                            // 可见性只由 `app_modal_open` 决定(浮层遮挡时真隐藏),
+                            // 无「隐藏预创建」语义,不需要离屏停放。
+                            park_offscreen: false,
                         };
                         out.push((spec, bounds));
                     }
@@ -3268,6 +3271,8 @@ impl App {
                         visible: !app_modal_open,
                         editor_binding: None,
                         loading_generation: None,
+                        // 用量内容 webview 无隐藏预创建,不涉及离屏停放。
+                        park_offscreen: false,
                     };
                     out.push((spec, bounds));
                 }

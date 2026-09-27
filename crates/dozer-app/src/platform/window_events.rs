@@ -27,6 +27,12 @@ use iced_winit::core::{Color, Event, Font, Pixels, Point, Rectangle, Size, Theme
 use iced_winit::futures;
 use iced_winit::runtime::user_interface::{self, UserInterface};
 
+/// 「未就绪的 Rendered 宿主离屏停放」用的逻辑 x 坐标:远在窗口左侧之外,
+/// 被窗口裁剪而不可见,但视图本身 `visible=true`,WKWebView 照常跑
+/// `requestAnimationFrame`(hidden 视图会被 WebKit 挂起,docx 等等 rAF 的
+/// 渲染器会死锁)。见 `WebviewSpec::park_offscreen`。
+const OFFSCREEN_PARK_X: f32 = -100_000.0;
+
 use winit::platform::macos::WindowAttributesExtMacOS;
 use winit::{
     dpi::LogicalSize,
@@ -1118,11 +1124,21 @@ impl Runner {
             app.preview_desired(logical_w, logical_h)
                 .into_iter()
                 .map(|(s, (x, y, w, h))| {
-                    webview_rects.push((x, y, w, h));
+                    // park_offscreen:未就绪的 Flyfish/HTML 宿主停到窗口外,
+                    // 维持 visible 以便 WebKit 继续跑 rAF(否则 docx 等依赖
+                    // rAF 的渲染器会死锁,见 `WebviewSpec::park_offscreen`)。
+                    // 既不在可视区,就不登记进 `webview_rects`——否则加载动画
+                    // 区域会被判成"光标悬在 webview 上"而错误切成箭头。
+                    let (bx, by) = if s.park_offscreen {
+                        (OFFSCREEN_PARK_X, y)
+                    } else {
+                        webview_rects.push((x, y, w, h));
+                        (x, y)
+                    };
                     (
                         s,
                         wry::Rect {
-                            position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
+                            position: wry::dpi::LogicalPosition::new(bx as f64, by as f64).into(),
                             size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
                         },
                     )

@@ -408,12 +408,16 @@ pub(crate) fn review_webview_spec(review: Option<&ReviewView>) -> Vec<crate::pre
     if rv.error.is_some() || rv.entries.is_empty() {
         return Vec::new();
     }
+    let loaded = rv.loaded_nonce == Some(rv.nonce);
     vec![crate::preview::WebviewSpec {
         id: 0,
         url: format!("dozer://review-trace/host.html?_r={}", rv.nonce),
-        visible: rv.loaded_nonce == Some(rv.nonce),
+        visible: loaded,
         editor_binding: None,
         loading_generation: None,
+        // review-trace 是同款「未就绪先创建」的 Rendered 宿主(Preact 渲染),
+        // 未就绪时离屏停放,避免 hidden 下 rAF 被挂起拖慢/卡住首帧。
+        park_offscreen: !loaded,
     }]
 }
 

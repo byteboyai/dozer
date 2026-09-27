@@ -244,6 +244,8 @@ impl Tabs {
                 editor_binding: None,
                 // 浏览器 webview 不参与预览资源 reserve。
                 loading_generation: None,
+                // 浏览器 tab 激活即显示,没有隐藏预创建,不涉及离屏停放。
+                park_offscreen: false,
             })
             .collect()
     }

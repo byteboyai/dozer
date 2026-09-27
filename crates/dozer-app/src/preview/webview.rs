@@ -16,6 +16,24 @@ pub struct WebviewSpec {
     /// 调用方,由 `apply_preview_pool_outcome` 世代校验后推进到 `CreatingHost`;
     /// 仅 host 类(editor/JSON)且在途加载时为 `Some`。
     pub loading_generation: Option<u64>,
+    /// 「创建但尚未就绪」的 Rendered 宿主(Flyfish/隔离 HTML)用**离屏停放**
+    /// 代替 `set_visible(false)`。
+    ///
+    /// 起因(2026-09-27,docx 预览「加载超时」):Flyfish 宿主为避免空白子视图
+    /// 露出,一律先以 hidden 创建、等 `document_loaded` 才 `set_visible(true)`。
+    /// 但 WKWebView 对 **hidden** 视图会挂起 `requestAnimationFrame`(与尺寸
+    /// 无关,`isHidden=true` 即停);而 docx 的 word 渲染器 `load()` 依赖
+    /// 「字体就绪 + 双 rAF」做分页布局(见 `awaitLayout`),于是 hidden 下
+    /// `load()` 永不 resolve → 15s `CreatingHost` 看门狗超时 → 用户看到
+    /// 「预览加载超时,请重试」。image/pdf/text 渲染器在 resolve 前不 await
+    /// rAF,故不受影响(这也是该 bug 只砸 docx/office 的原因)。
+    ///
+    /// 处置:对「未就绪」的 Rendered 宿主,把子视图停到窗口外(负 x),维持
+    /// `visible=true`——WebKit 因此照常跑 rAF,渲染能完成;而离屏矩形被窗口
+    /// 裁剪,用户不可见,与 `set_visible(false)` 的观感等价。就绪后再回到真实
+    /// bounds。真正「已就绪但被浮层/非激活隐藏」的场景仍走 `set_visible(false)`
+    /// (`park_offscreen=false`),以免后台 tab 常驻渲染空耗。
+    pub park_offscreen: bool,
 }
 
 /// RFC3986 严格百分号编码:unreserved(字母/数字/`-._~`)之外全部 %XX。
