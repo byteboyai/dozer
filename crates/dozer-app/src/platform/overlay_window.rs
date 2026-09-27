@@ -23,7 +23,7 @@ use iced_widget::container;
 use iced_widget::core::{Element, Length, alignment};
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event_loop::ActiveEventLoop;
-use winit::window::{Window, WindowLevel};
+use winit::window::Window;
 
 use crate::platform::overlay_gpu::OverlayGpu;
 
@@ -76,9 +76,17 @@ pub(crate) fn backdrop_card<'a, Message: 'a>(
     .into()
 }
 
-/// 挂成主窗口子窗口 + `AlwaysOnTop` 的无装饰透明窗口。只建窗口本身,不建
-/// wgpu 渲染管线(见 `OverlayGpu`)、不设 IME/原生菜单挂靠(消费方按需
-/// 自己调用,大多数消费方不需要——见 spec「架构」第 1 节)。
+/// 挂成主窗口子窗口的无装饰透明窗口。只建窗口本身,不建 wgpu 渲染管线(见
+/// `OverlayGpu`)、不设 IME/原生菜单挂靠(消费方按需自己调用,大多数消费方
+/// 不需要——见 spec「架构」第 1 节)。
+///
+/// **2026-09-27 去掉 `WindowLevel::AlwaysOnTop`**:macOS 上它映射到
+/// `kCGFloatingWindowLevel`,是跨 app 的全局悬浮层级——会导致这扇窗口飘在
+/// 其他 app(如浏览器)窗口之上,即便 Dozer 本身已切到后台。真正需要的"盖过
+/// 主窗口自己的 wry webview 子视图"效果,靠 `with_parent_window` 触发的
+/// `addChildWindow_ordered(NSWindowAbove)`(winit 侧无条件执行,见
+/// `window_delegate.rs`)已经保证——它是"这扇窗口相对父窗口的层级"，不依赖
+/// 全局窗口层级,默认 `WindowLevel::Normal` 即可,不再单独设置。
 pub(crate) fn open_child_window(
     main_window: &Window,
     pos: PhysicalPosition<i32>,
@@ -96,7 +104,6 @@ pub(crate) fn open_child_window(
         .with_title(title)
         .with_decorations(false)
         .with_transparent(true)
-        .with_window_level(WindowLevel::AlwaysOnTop)
         .with_position(pos)
         .with_inner_size(size);
     // Safety: `parent_handle` 取自仍存活的主窗口(`Ready` 持有的
