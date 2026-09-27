@@ -25,6 +25,25 @@ use winit::event::WindowEvent;
 use winit::keyboard::ModifiersState;
 use winit::window::Window;
 
+/// 按 iced 本帧算出的 `mouse_interaction` 刷新 overlay 窗口的鼠标光标。
+///
+/// 这扇窗口是独立原生窗口,主窗口那套 `apply_mouse_cursor`
+/// (`window_events.rs`,含 webview 命中测试/顶栏守卫)不覆盖它——这里只做
+/// 最基本的一件事:把光标形状写进窗口。缺了这步,弹窗里的按钮悬停时不会
+/// 变成手形(2026-09-27 用户反馈)。
+///
+/// `OverlayGpu::redraw`/`dispatch` 内部已自动调用;自己手写 `UserInterface::
+/// build`/`update` 的消费方(`search`/`file_history`/`settings`/
+/// `project_create`)需在 `update` 拿到 `State::Updated` 后自行调用它。
+pub(crate) fn apply_cursor(window: &Window, interaction: mouse::Interaction) {
+    if let Some(icon) = conversion::mouse_interaction(interaction) {
+        window.set_cursor(icon);
+        window.set_cursor_visible(true);
+    } else {
+        window.set_cursor_visible(false);
+    }
+}
+
 /// 独立原生窗口自己的一份渲染资源——不含 `Device`/`Queue`/`Adapter`/
 /// `Instance`(全部从主窗口 `Ready` 借来的共享句柄,`Device`/`Queue`
 /// 便宜 `Clone`),`iced_wgpu` 的 `Renderer` 内部持有 `Engine`,不能跨
@@ -152,13 +171,19 @@ impl OverlayGpu {
             std::mem::take(&mut self.cache),
             &mut self.renderer,
         );
-        let _ = interface.update(
+        let (state, _) = interface.update(
             &[],
             cursor,
             &mut self.renderer,
             &mut self.clipboard,
             &mut Vec::new(),
         );
+        if let user_interface::State::Updated {
+            mouse_interaction, ..
+        } = state
+        {
+            apply_cursor(window, mouse_interaction);
+        }
         interface.draw(
             &mut self.renderer,
             &iced_winit::core::Theme::Dark,
@@ -208,13 +233,19 @@ impl OverlayGpu {
             &mut self.renderer,
         );
         let mut messages = Vec::new();
-        let _ = interface.update(
+        let (state, _) = interface.update(
             &events,
             cursor,
             &mut self.renderer,
             &mut self.clipboard,
             &mut messages,
         );
+        if let user_interface::State::Updated {
+            mouse_interaction, ..
+        } = state
+        {
+            apply_cursor(window, mouse_interaction);
+        }
         self.cache = interface.into_cache();
         window.request_redraw();
         messages

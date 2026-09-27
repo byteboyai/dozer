@@ -198,13 +198,19 @@ impl SearchOverlay {
         );
         let query_focused = search::take_query_focused();
 
-        let _ = interface.update(
+        let (state, _) = interface.update(
             &[],
             self.cursor,
             &mut self.gpu.renderer,
             &mut self.gpu.clipboard,
             &mut Vec::new(),
         );
+        if let iced_winit::runtime::user_interface::State::Updated {
+            mouse_interaction, ..
+        } = state
+        {
+            crate::platform::overlay_gpu::apply_cursor(&self.window, mouse_interaction);
+        }
         interface.draw(
             &mut self.gpu.renderer,
             &iced_winit::core::Theme::Dark,
@@ -296,13 +302,19 @@ impl SearchOverlay {
             &mut self.gpu.renderer,
         );
         let mut messages = Vec::new();
-        let _ = interface.update(
+        let (state, _) = interface.update(
             &events,
             self.cursor,
             &mut self.gpu.renderer,
             &mut self.gpu.clipboard,
             &mut messages,
         );
+        if let iced_winit::runtime::user_interface::State::Updated {
+            mouse_interaction, ..
+        } = state
+        {
+            crate::platform::overlay_gpu::apply_cursor(&self.window, mouse_interaction);
+        }
         self.gpu.cache = interface.into_cache();
         self.window.request_redraw();
         messages
