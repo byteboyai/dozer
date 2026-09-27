@@ -17,7 +17,7 @@ use crate::app::{App, Message};
 use crate::extensions::project;
 use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{open_overlay, reposition_overlay};
+use crate::platform::overlay_window::{backdrop_card, open_overlay, reposition_overlay};
 
 fn card_logical_size() -> LogicalSize<f32> {
     LogicalSize::new(440.0, 260.0)
@@ -76,7 +76,6 @@ impl ProjectDeleteOverlay {
             device,
             queue,
             instance,
-            card_logical_size(),
             "project-delete",
             el,
         );
@@ -103,7 +102,6 @@ impl ProjectDeleteOverlay {
             main_outer_pos,
             main_inner_size,
             scale,
-            card_logical_size(),
         );
     }
 
@@ -118,7 +116,10 @@ impl ProjectDeleteOverlay {
         self.gpu.redraw(
             &self.window,
             self.cursor,
-            project::view::project_delete_card(&ws.project_panel).map(Message::Project),
+            backdrop_card(
+                project::view::project_delete_card(&ws.project_panel).map(Message::Project),
+                card_logical_size(),
+            ),
         );
     }
 
@@ -146,7 +147,10 @@ impl ProjectDeleteOverlay {
         self.gpu.dispatch(
             &self.window,
             self.cursor,
-            project::view::project_delete_card(&ws.project_panel).map(Message::Project),
+            backdrop_card(
+                project::view::project_delete_card(&ws.project_panel).map(Message::Project),
+                card_logical_size(),
+            ),
             iced_event,
         )
     }

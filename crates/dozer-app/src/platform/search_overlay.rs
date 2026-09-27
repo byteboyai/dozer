@@ -22,7 +22,9 @@ use crate::app::{App, Message};
 use crate::extensions::search;
 use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{centered_overlay_bounds, open_child_window};
+use crate::platform::overlay_window::{
+    backdrop_card, full_window_overlay_bounds, open_child_window,
+};
 
 /// overlay 卡片的固定逻辑高度,对应现状 `search_modal` 的
 /// `max_height(640.0)`。宽度不固定,随主窗口宽度变化(见 `card_logical_size`
@@ -97,18 +99,14 @@ impl SearchOverlay {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         instance: &wgpu::Instance,
-        window_width: f32,
         el: &ActiveEventLoop,
     ) -> SearchOverlay {
         let scale = main_window.scale_factor();
-        let card_logical = card_logical_size(window_width);
-        let (pos, size) = centered_overlay_bounds(
+        let (pos, size) = full_window_overlay_bounds(
             main_window
                 .outer_position()
                 .unwrap_or(PhysicalPosition::new(0, 0)),
             main_window.inner_size(),
-            scale,
-            card_logical,
         );
         let window = open_child_window(main_window, pos, size, "search", el);
         // CJK 组字要靠这个才能拿到候选窗——主窗口在 `resumed()` 里也调了
@@ -148,11 +146,8 @@ impl SearchOverlay {
         main_outer_pos: PhysicalPosition<i32>,
         main_inner_size: PhysicalSize<u32>,
         scale: f64,
-        window_width: f32,
     ) {
-        let card_logical = card_logical_size(window_width);
-        let (pos, size) =
-            centered_overlay_bounds(main_outer_pos, main_inner_size, scale, card_logical);
+        let (pos, size) = full_window_overlay_bounds(main_outer_pos, main_inner_size);
         self.window.set_outer_position(pos);
         if self.window.inner_size() != size {
             let _ = self.window.request_inner_size(size);
@@ -164,6 +159,9 @@ impl SearchOverlay {
     /// 第一帧顺带消费"查询框待自动聚焦"一次性位(复用
     /// `extensions::search::open()` 早就在设的那个标记)。
     pub(crate) fn redraw(&mut self, app: &mut App) {
+        // 借 `ws` 之前先取窗宽——`active_workspace_mut()` 整体可变借用
+        // `app`,借出后就够不着 `app.window_size` 了。
+        let window_width = app.window_size.0;
         let Some(ws) = app.active_workspace_mut() else {
             return;
         };
@@ -176,7 +174,10 @@ impl SearchOverlay {
         let focus_pending = ws.take_query_focus_pending();
 
         let mut interface = UserInterface::build(
-            search::search_card(&ws.search, project_root.as_deref()).map(Message::Search),
+            backdrop_card(
+                search::search_card(&ws.search, project_root.as_deref()).map(Message::Search),
+                card_logical_size(window_width),
+            ),
             self.gpu.viewport.logical_size(),
             std::mem::take(&mut self.gpu.cache),
             &mut self.gpu.renderer,
@@ -275,6 +276,7 @@ impl SearchOverlay {
             return Vec::new();
         };
         let events: [Event; 1] = [iced_event];
+        let window_width = app.window_size.0;
         let Some(ws) = app.active_workspace_mut() else {
             return Vec::new();
         };
@@ -283,7 +285,10 @@ impl SearchOverlay {
             .as_ref()
             .map(|p| std::path::Path::new(&p.path).to_path_buf());
         let mut interface = UserInterface::build(
-            search::search_card(&ws.search, project_root.as_deref()).map(Message::Search),
+            backdrop_card(
+                search::search_card(&ws.search, project_root.as_deref()).map(Message::Search),
+                card_logical_size(window_width),
+            ),
             self.gpu.viewport.logical_size(),
             std::mem::take(&mut self.gpu.cache),
             &mut self.gpu.renderer,
@@ -321,6 +326,7 @@ impl SearchOverlay {
         let Some((ch, target_id)) = app.take_pending_native_menu_edit_key() else {
             return;
         };
+        let window_width = app.window_size.0;
         let Some(ws) = app.active_workspace_mut() else {
             return;
         };
@@ -329,7 +335,10 @@ impl SearchOverlay {
             .as_ref()
             .map(|p| std::path::Path::new(&p.path).to_path_buf());
         let mut interface = UserInterface::build(
-            search::search_card(&ws.search, project_root.as_deref()).map(Message::Search),
+            backdrop_card(
+                search::search_card(&ws.search, project_root.as_deref()).map(Message::Search),
+                card_logical_size(window_width),
+            ),
             self.gpu.viewport.logical_size(),
             std::mem::take(&mut self.gpu.cache),
             &mut self.gpu.renderer,

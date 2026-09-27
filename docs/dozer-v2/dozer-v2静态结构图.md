@@ -1148,6 +1148,85 @@ Project/Goal/Task/Execution/Agent/Tool/风险查询，从事件跳转到对应�
 B 节 `ch_cdp` 说明与项目记忆），本节的"Agent 驱动"能力属于规划中，不是现状。目标插件为
 `dozer-plugin-browser`。
 
+WaveTerm 的 Electron `<webview>` 只作为产品形态和浏览器状态机参照：Dozer 保留 iced + wry 系统
+WebView，不随应用打包 Chromium；借鉴其稳定 Tab、导航事件、环境适配层和站点存储隔离，不复制
+Electron runtime。Browser 的目标是形成 Task/Execution 到 Delivery 的验收证据链，而不是成为
+通用 Chrome 替代品。
+
+```mermaid
+flowchart LR
+  subgraph browser_plugin["dozer-plugin-browser（进程外领域插件）"]
+    direction TB
+    br_panel["panel：Tab / 地址栏 / 书签 / 手动验收"]
+    br_run["browser_run：绑定 Project / Task / Execution"]
+    br_actions["actions：Navigate / Click / Input / Reload / Capture"]
+    br_events["events：统一 BrowserEvent / BrowserObservation"]
+    br_assert["assertions：DOM / Console / Network / Accessibility"]
+  end
+
+  subgraph host_browser["dozer-host：BrowserHost + 可信 Surface"]
+    direction TB
+    bh_api["browser_host.rs：版本化命令/事件契约（新增；不暴露 wry 句柄）"]
+    bh_sessions["browser_sessions.rs：Global / Project / Run / Plugin / Ephemeral scope"]
+    bh_policy["browser_policy.rs：导航/下载/剪贴板/设备/外部协议权限"]
+    bh_pool["既有 WebView pool + max_heavy_webviews：显示/挂起/恢复/淘汰"]
+    bh_bridge["受控 Bridge：身份校验、事件信封、敏感字段脱敏"]
+  end
+
+  subgraph providers["Browser Provider"]
+    direction TB
+    bp_interactive["Interactive wry Provider（现有能力演化）：人类浏览/轻量截图"]
+    bp_auto["Automation sidecar（规划中）：CDP / Playwright / Browser Use"]
+    bp_transport["owner-only UDS + versioned JSON-RPC/MCP；Node/Python/Chromium 不进 Host"]
+  end
+
+  subgraph evidence_flow["Workflow / Evidence"]
+    direction TB
+    ev_artifact["Artifact Store：截图/录像/trace/HAR/Console/A11y snapshot"]
+    ev_check["CheckResult：断言、期望、实际结果、Artifact refs"]
+    ev_delivery["Delivery / Acceptance：聚合展示与人工裁决"]
+  end
+
+  br_panel --> br_run --> br_actions
+  br_actions -->|"BrowserHost command"| bh_api
+  bh_api --> bh_sessions
+  bh_sessions --> bh_policy
+  bh_policy --> bh_pool
+  bh_pool --> bp_interactive
+  bh_api -.->|"自动化 provider 可用时"| bp_transport
+  bp_transport --> bp_auto
+  bp_interactive --> bh_bridge
+  bp_auto --> bp_transport --> bh_bridge
+  bh_bridge --> br_events
+  br_events --> br_assert
+  br_events --> ev_artifact
+  br_assert --> ev_check
+  ev_artifact --> ev_check
+  ev_check --> ev_delivery
+
+  class br_panel existing
+  class br_run,br_actions,br_events,br_assert,bh_api,bh_sessions,bh_policy,bh_bridge,bp_auto,bp_transport,ev_artifact,ev_check,ev_delivery newcrate
+  class bh_pool,bp_interactive evolved
+  classDef existing fill:#bdf3d6,stroke:#0f7a45,color:#1c1b17;
+  classDef evolved fill:#ffe29a,stroke:#b45309,color:#1c1b17;
+  classDef newcrate fill:#cfe2ff,stroke:#1d4ed8,color:#1c1b17;
+```
+
+**所有权与依赖裁决：**
+
+- `dozer-plugin-browser` 拥有 BrowserRun、步骤、断言、书签和面板状态，但不拥有原生 WebView 句柄。
+- Host 拥有 WebView 创建销毁、几何/z-order、焦点、会话分区、权限和资源预算；`Plugin` scope 必须
+  与普通 Browser 站点数据隔离。
+- Interactive wry 与 Automation sidecar 必须输出相同的 `BrowserEvent`、`BrowserObservation` 和
+  Artifact schema；自动化不可用时显式降级为手动验收，不得把缺失检查记录成通过。
+- Browser 事件信封携带适用的 Project/Task/Execution/Run/Session/Target 身份；Artifact 与
+  `CheckResult` 由 Workflow Kernel 建立归属，Delivery 只消费统一证据，不依赖 provider 私有格式。
+- Automation sidecar 是规划中能力，不能把图中的新节点误读为当前已实现；其进程、浏览器 profile、
+  trace/HAR 均受权限、容量和生命周期管理。
+
+推荐第一条纵向切片为：`Task → BrowserRun → 手动/自动步骤 → 截图 + Console/Network 失败摘要
+→ CheckResult → Delivery`；完整下载管理、浏览器扩展生态和通用历史同步不进入该切片。
+
 ---
 
 ## R. Files → Worktree-aware Changes

@@ -7,32 +7,73 @@
 //! `card_logical_size()`/窗口 tag)。IME/原生右键菜单挂靠仍由各消费方
 //! 自己在拿到 `open_overlay` 返回的 `window` 后按需调用——不是每个消费方
 //! 都需要,不塞进这个共用函数。
+//!
+//! **2026-09-27 背景遮罩改造**:overlay 窗口本身原来只等于卡片大小,四周
+//! 没有任何东西,点击卡片外的区域会直接穿透打到主窗体上(可操作主窗体的
+//! 按钮/标签页等,与"弹窗打开时不能操作主窗体"的预期相悖)。改造后 overlay
+//! 窗口覆盖整个主窗口客户区(`full_window_overlay_bounds`),卡片仍是原来
+//! 的大小,由 `backdrop_card` 套一层"整窗口居中 + 半透明遮罩"的外壳——
+//! 窗口本身天然挡住对主窗体的点击(遮罩区域没有 `on_press`,点了没反应,
+//! 只是穿不透,不是"点外部关闭")。
 
 use std::sync::Arc;
 
 use iced_wgpu::wgpu;
-use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
+use iced_widget::container;
+use iced_widget::core::{Element, Length, alignment};
+use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowLevel};
 
 use crate::platform::overlay_gpu::OverlayGpu;
 
-/// 主窗口外框物理位置 + 物理尺寸 + scale + 卡片逻辑尺寸 → overlay 应放的
-/// 物理位置与物理尺寸(居中于主窗口)。纯函数,不碰真实 `Window`,方便测试。
-pub(crate) fn centered_overlay_bounds(
+/// 主窗口外框物理位置 + 物理尺寸 → overlay 窗口应放的物理位置与物理尺寸——
+/// 覆盖整个主窗口客户区(不再只等于卡片大小,见上面模块文档的改造说明)。
+pub(crate) fn full_window_overlay_bounds(
     main_outer_pos: PhysicalPosition<i32>,
     main_inner_size: PhysicalSize<u32>,
-    scale: f64,
-    card_logical_size: LogicalSize<f32>,
 ) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
-    let card_w = card_logical_size.width as f64 * scale;
-    let card_h = card_logical_size.height as f64 * scale;
-    let x = main_outer_pos.x as f64 + (main_inner_size.width as f64 - card_w) / 2.0;
-    let y = main_outer_pos.y as f64 + (main_inner_size.height as f64 - card_h) / 2.0;
-    (
-        PhysicalPosition::new(x.round() as i32, y.round() as i32),
-        PhysicalSize::new(card_w.round() as u32, card_h.round() as u32),
+    (main_outer_pos, main_inner_size)
+}
+
+/// 卡片在 `backdrop_card` 居中布局后,相对 overlay 窗口左上角的逻辑偏移。
+/// `file_history_overlay` 定位内嵌 diff webview 时需要这个偏移——它的原生
+/// 子视图坐标系是"整扇窗口",不是"卡片";卡片本身在 iced 视图树里的居中
+/// 交给 `backdrop_card` 的布局自动处理,不需要这个偏移。
+pub(crate) fn centered_card_offset(
+    window_logical_size: LogicalSize<f32>,
+    card_logical_size: LogicalSize<f32>,
+) -> LogicalPosition<f32> {
+    LogicalPosition::new(
+        (window_logical_size.width - card_logical_size.width) / 2.0,
+        (window_logical_size.height - card_logical_size.height) / 2.0,
     )
+}
+
+/// 给卡片元素套一层"整窗口居中 + 半透明背景遮罩"的外壳——遮罩色复用
+/// `theme::region::maximize_overlay().scrim_background`(放大态浮层同款
+/// token,不是另起一个硬编码颜色)。遮罩容器没有 `on_press`:点击穿不透
+/// 到主窗体,但也不产生任何消息去关弹窗(已与用户确认:点遮罩=无反应,
+/// 不是"点外部关闭")。
+pub(crate) fn backdrop_card<'a, Message: 'a>(
+    card: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
+    card_logical: LogicalSize<f32>,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let scrim = crate::theme::region::maximize_overlay().scrim_background;
+    container(
+        container(card)
+            .width(Length::Fixed(card_logical.width))
+            .height(Length::Fixed(card_logical.height)),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .align_x(alignment::Horizontal::Center)
+    .align_y(alignment::Vertical::Center)
+    .style(move |_theme: &iced_widget::Theme| container::Style {
+        background: Some(scrim.into()),
+        ..container::Style::default()
+    })
+    .into()
 }
 
 /// 挂成主窗口子窗口 + `AlwaysOnTop` 的无装饰透明窗口。只建窗口本身,不建
@@ -66,41 +107,36 @@ pub(crate) fn open_child_window(
     window
 }
 
-/// `open` 方法体里"建居中子窗口 + 建这扇窗口自己的 wgpu 渲染管线"那两步
-/// 在 8 个模态卡片宿主之间逐字重复的部分。调用方自己的 `open` 只需要传
-/// 各自的 `card_logical_size()`/窗口 tag,再按需对返回的 `window` 调
-/// `set_ime_allowed`/`install_content_view`、拼自己结构体里其余字段。
-/// 8 个参数但两两不同类型(`Arc<Window>`/`&Adapter`/`&Device`/`&Queue`/
-/// `&Instance`/`LogicalSize`/`&str`/`&ActiveEventLoop`),传错顺序编译器
-/// 会直接报错而非静默接受——不属于 CLAUDE.md 那条"具名字段参数结构体"
-/// 规则要防的"相邻同类型参数传反"场景,不加 `#[allow]`,留下这条
-/// `too_many_arguments` warning(同各消费方自己的 `open` 现状一致)。
+/// `open` 方法体里"建覆盖主窗口的子窗口 + 建这扇窗口自己的 wgpu 渲染管线"
+/// 那两步在 8 个模态卡片宿主之间逐字重复的部分。调用方自己的 `open` 只需要
+/// 传窗口 tag,再按需对返回的 `window` 调 `set_ime_allowed`/
+/// `install_content_view`、拼自己结构体里其余字段;卡片大小由调用方自己在
+/// `redraw`/`handle_input` 里通过 `backdrop_card` 套壳时决定,不影响这里的
+/// 窗口本身几何(窗口现在恒等于主窗口客户区大小)。
 pub(crate) fn open_overlay(
     main_window: &Arc<Window>,
     adapter: &wgpu::Adapter,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     instance: &wgpu::Instance,
-    card_logical: LogicalSize<f32>,
     tag: &str,
     el: &ActiveEventLoop,
 ) -> (Arc<Window>, OverlayGpu) {
     let scale = main_window.scale_factor();
-    let (pos, size) = centered_overlay_bounds(
+    let (pos, size) = full_window_overlay_bounds(
         main_window
             .outer_position()
             .unwrap_or(PhysicalPosition::new(0, 0)),
         main_window.inner_size(),
-        scale,
-        card_logical,
     );
     let window = open_child_window(main_window, pos, size, tag, el);
     let gpu = OverlayGpu::open(&window, instance, adapter, device, queue, size, scale);
     (window, gpu)
 }
 
-/// `reposition` 方法体在 8 个模态卡片宿主之间逐字重复的部分——唯一变量
-/// 是各自的 `card_logical_size()`。
+/// `reposition` 方法体在 8 个模态卡片宿主之间逐字重复的部分——主窗口移动
+/// /resize 后跟着重新覆盖 + 重配置 surface,不再需要各自的
+/// `card_logical_size()`(窗口大小只取决于主窗口,同 `open_overlay`)。
 pub(crate) fn reposition_overlay(
     window: &Window,
     gpu: &mut OverlayGpu,
@@ -108,9 +144,8 @@ pub(crate) fn reposition_overlay(
     main_outer_pos: PhysicalPosition<i32>,
     main_inner_size: PhysicalSize<u32>,
     scale: f64,
-    card_logical: LogicalSize<f32>,
 ) {
-    let (pos, size) = centered_overlay_bounds(main_outer_pos, main_inner_size, scale, card_logical);
+    let (pos, size) = full_window_overlay_bounds(main_outer_pos, main_inner_size);
     window.set_outer_position(pos);
     if window.inner_size() != size {
         let _ = window.request_inner_size(size);
@@ -123,30 +158,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn centered_overlay_bounds_centers_within_main_window() {
-        let (pos, size) = centered_overlay_bounds(
+    fn full_window_overlay_bounds_matches_main_window_exactly() {
+        let (pos, size) = full_window_overlay_bounds(
             PhysicalPosition::new(100, 50),
             PhysicalSize::new(1200, 800),
-            2.0, // Retina 2x
-            LogicalSize::new(400.0, 640.0),
         );
-        // 卡片物理尺寸 = 逻辑尺寸 * scale。
-        assert_eq!(size, PhysicalSize::new(800, 1280));
-        // 居中:主窗口物理宽 1200,卡片物理宽 800 → 左右各留 200。
-        assert_eq!(pos.x, 100 + 200);
-        assert_eq!(pos.y, 50 + (800 - 1280) / 2);
+        assert_eq!(pos, PhysicalPosition::new(100, 50));
+        assert_eq!(size, PhysicalSize::new(1200, 800));
     }
 
     #[test]
-    fn centered_overlay_bounds_at_scale_one() {
-        let (pos, size) = centered_overlay_bounds(
-            PhysicalPosition::new(0, 0),
-            PhysicalSize::new(1000, 1000),
-            1.0,
+    fn centered_card_offset_centers_within_window() {
+        let offset = centered_card_offset(
+            LogicalSize::new(1200.0, 800.0),
+            LogicalSize::new(400.0, 640.0),
+        );
+        assert_eq!(offset.x, 400.0);
+        assert_eq!(offset.y, 80.0);
+    }
+
+    #[test]
+    fn centered_card_offset_zero_when_card_fills_window() {
+        let offset = centered_card_offset(
+            LogicalSize::new(600.0, 640.0),
             LogicalSize::new(600.0, 640.0),
         );
-        assert_eq!(size, PhysicalSize::new(600, 640));
-        assert_eq!(pos.x, (1000 - 600) / 2);
-        assert_eq!(pos.y, (1000 - 640) / 2);
+        assert_eq!(offset.x, 0.0);
+        assert_eq!(offset.y, 0.0);
     }
 }

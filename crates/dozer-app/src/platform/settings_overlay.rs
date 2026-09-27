@@ -25,7 +25,9 @@ use crate::app::{App, Message};
 use crate::extensions::settings;
 use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{centered_overlay_bounds, open_child_window};
+use crate::platform::overlay_window::{
+    backdrop_card, full_window_overlay_bounds, open_child_window,
+};
 
 /// 卡片逻辑尺寸——固定值,不随主窗口宽高缩放:设置表单内容量有限,不需要
 /// 像 file_history/project_create 那样按主窗口比例伸缩。
@@ -85,18 +87,14 @@ impl SettingsOverlay {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         instance: &wgpu::Instance,
-        _main_window_size: LogicalSize<f32>,
         el: &ActiveEventLoop,
     ) -> SettingsOverlay {
         let scale = main_window.scale_factor();
-        let card_logical = card_logical_size();
-        let (pos, size) = centered_overlay_bounds(
+        let (pos, size) = full_window_overlay_bounds(
             main_window
                 .outer_position()
                 .unwrap_or(PhysicalPosition::new(0, 0)),
             main_window.inner_size(),
-            scale,
-            card_logical,
         );
         let window = open_child_window(main_window, pos, size, "settings", el);
         window.set_ime_allowed(true);
@@ -132,12 +130,8 @@ impl SettingsOverlay {
         main_outer_pos: PhysicalPosition<i32>,
         main_inner_size: PhysicalSize<u32>,
         scale: f64,
-        _window_width: f32,
-        _window_height: f32,
     ) {
-        let card_logical = card_logical_size();
-        let (pos, size) =
-            centered_overlay_bounds(main_outer_pos, main_inner_size, scale, card_logical);
+        let (pos, size) = full_window_overlay_bounds(main_outer_pos, main_inner_size);
         self.window.set_outer_position(pos);
         if self.window.inner_size() != size {
             let _ = self.window.request_inner_size(size);
@@ -150,7 +144,10 @@ impl SettingsOverlay {
             return;
         };
         let mut interface = UserInterface::build(
-            settings::settings_card(state).map(Message::Settings),
+            backdrop_card(
+                settings::settings_card(state).map(Message::Settings),
+                card_logical_size(),
+            ),
             self.gpu.viewport.logical_size(),
             std::mem::take(&mut self.gpu.cache),
             &mut self.gpu.renderer,
@@ -216,7 +213,10 @@ impl SettingsOverlay {
             return Vec::new();
         };
         let mut interface = UserInterface::build(
-            settings::settings_card(state).map(Message::Settings),
+            backdrop_card(
+                settings::settings_card(state).map(Message::Settings),
+                card_logical_size(),
+            ),
             self.gpu.viewport.logical_size(),
             std::mem::take(&mut self.gpu.cache),
             &mut self.gpu.renderer,

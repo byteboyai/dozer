@@ -19,7 +19,7 @@ use winit::window::{Window, WindowId};
 use crate::app::{App, Message};
 use crate::extensions::project;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{open_overlay, reposition_overlay};
+use crate::platform::overlay_window::{backdrop_card, open_overlay, reposition_overlay};
 
 fn card_logical_size() -> LogicalSize<f32> {
     LogicalSize::new(480.0, 360.0)
@@ -71,7 +71,6 @@ impl ProjectScaffoldOverlay {
             device,
             queue,
             instance,
-            card_logical_size(),
             "project-scaffold",
             el,
         );
@@ -97,7 +96,6 @@ impl ProjectScaffoldOverlay {
             main_outer_pos,
             main_inner_size,
             scale,
-            card_logical_size(),
         );
     }
 
@@ -112,7 +110,10 @@ impl ProjectScaffoldOverlay {
         self.gpu.redraw(
             &self.window,
             self.cursor,
-            project::view::project_scaffold_card(&ws.project_panel).map(Message::Project),
+            backdrop_card(
+                project::view::project_scaffold_card(&ws.project_panel).map(Message::Project),
+                card_logical_size(),
+            ),
         );
     }
 
@@ -131,7 +132,10 @@ impl ProjectScaffoldOverlay {
         self.gpu.dispatch(
             &self.window,
             self.cursor,
-            project::view::project_scaffold_card(&ws.project_panel).map(Message::Project),
+            backdrop_card(
+                project::view::project_scaffold_card(&ws.project_panel).map(Message::Project),
+                card_logical_size(),
+            ),
             iced_event,
         )
     }

@@ -504,20 +504,28 @@ fn home_project_list_view(
             column![
                 top_line,
                 row![
-                    home_footbar_button(icons::IconKind::FolderOpenDot, "打开项目", Message::ProjectTabPickFolder),
-                    home_footbar_button(icons::IconKind::FolderPlus, "创建项目", Message::ProjectCreateOpen),
+                    home_footbar_button(
+                        icons::IconKind::FolderOpenDot,
+                        "打开项目",
+                        Message::ProjectTabPickFolder
+                    ),
+                    home_footbar_button(
+                        icons::IconKind::FolderPlus,
+                        "创建项目",
+                        Message::ProjectCreateOpen
+                    ),
                 ]
                 .spacing(8)
             ]
             .spacing(4),
         )
-            .width(Length::Fill)
-            .padding([6, 8])
-            .style(|_t: &iced_widget::Theme| container::Style {
-                background: None,
-                ..container::Style::default()
-            })
-            .into();
+        .width(Length::Fill)
+        .padding([6, 8])
+        .style(|_t: &iced_widget::Theme| container::Style {
+            background: None,
+            ..container::Style::default()
+        })
+        .into();
 
     if app.recent_projects.is_empty() {
         col = col.push(
@@ -634,7 +642,11 @@ fn home_footbar_button(
     // 与文字同色 `dim`)左置、文字紧跟其后,整体水平居中。
     let label = container(
         row![
-            icons::view(icon, byteui::theme::icon_size::row(), theme::homespace_color::dim()),
+            icons::view(
+                icon,
+                byteui::theme::icon_size::row(),
+                theme::homespace_color::dim()
+            ),
             text(label)
                 .size(theme::homespace_font::label())
                 .color(theme::homespace_color::dim()),
@@ -645,10 +657,8 @@ fn home_footbar_button(
     .width(Length::Fill)
     .align_x(iced_widget::core::alignment::Horizontal::Center);
 
-    let btn = button(label)
-        .on_press(msg)
-        .padding([6, 8])
-        .style(|_t: &iced_widget::Theme, s: button::Status| button::Style {
+    let btn = button(label).on_press(msg).padding([6, 8]).style(
+        |_t: &iced_widget::Theme, s: button::Status| button::Style {
             background: Some(theme::homespace_color::card_bg().into()),
             border: Border {
                 color: match s {
@@ -662,7 +672,8 @@ fn home_footbar_button(
             },
             text_color: theme::homespace_color::dim(),
             ..button::Style::default()
-        });
+        },
+    );
 
     btn.width(Length::Fill).into()
 }

@@ -48,6 +48,18 @@ pub(crate) fn should_answer_dynamic_color(
     picked_agent == Some(AgentKind::Opencode) || info_agent == AgentKind::Opencode
 }
 
+/// 新建 tab attach 时的初始 agent。daemon 里已有的识别结果优先；若首个
+/// hook 尚未到达、`SessionInfo.agent` 仍为 `Unknown`，则使用 picker 已经
+/// 明确选中的目标 agent。否则 Codex 等启动后不会立刻发 hook 的 CLI 会在
+/// 首次事件前把 tab 标题错误地回退成项目目录名。
+pub(crate) fn attached_agent(picked_agent: Option<AgentKind>, info_agent: AgentKind) -> AgentKind {
+    if info_agent != AgentKind::Unknown {
+        info_agent
+    } else {
+        picked_agent.unwrap_or(AgentKind::Unknown)
+    }
+}
+
 /// 已接入 `dozer-hook` 安装器的 agent 集合。刻意穷尽 match 而不是拿
 /// `agent.label()` 当 catch-all 参数：`install::settings_path_for` 对未识别
 /// 的 agent 名一律落回 Claude 的 `settings.json`路径，如果不显式排除

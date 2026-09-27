@@ -17,7 +17,7 @@ use crate::app::{App, Message};
 use crate::extensions::ssh;
 use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{open_overlay, reposition_overlay};
+use crate::platform::overlay_window::{backdrop_card, open_overlay, reposition_overlay};
 
 fn card_logical_size() -> LogicalSize<f32> {
     LogicalSize::new(480.0, 480.0)
@@ -78,7 +78,6 @@ impl SshHostOverlay {
             device,
             queue,
             instance,
-            card_logical_size(),
             "ssh-host",
             el,
         );
@@ -109,7 +108,6 @@ impl SshHostOverlay {
             main_outer_pos,
             main_inner_size,
             scale,
-            card_logical_size(),
         );
     }
 
@@ -140,8 +138,11 @@ impl SshHostOverlay {
         let Some(card) = Self::card(ws) else {
             return;
         };
-        self.gpu
-            .redraw(&self.window, self.cursor, card.map(Message::Ssh));
+        self.gpu.redraw(
+            &self.window,
+            self.cursor,
+            backdrop_card(card.map(Message::Ssh), card_logical_size()),
+        );
     }
 
     pub(crate) fn handle_input(&mut self, app: &mut App, event: &WindowEvent) -> Vec<Message> {
@@ -171,7 +172,7 @@ impl SshHostOverlay {
         self.gpu.dispatch(
             &self.window,
             self.cursor,
-            card.map(Message::Ssh),
+            backdrop_card(card.map(Message::Ssh), card_logical_size()),
             iced_event,
         )
     }

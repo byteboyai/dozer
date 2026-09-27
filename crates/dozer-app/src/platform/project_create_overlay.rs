@@ -23,7 +23,9 @@ use winit::window::{Window, WindowId};
 use crate::app::{App, Message};
 use crate::extensions::project_create;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{centered_overlay_bounds, open_child_window};
+use crate::platform::overlay_window::{
+    backdrop_card, full_window_overlay_bounds, open_child_window,
+};
 
 fn card_logical_size(window_width: f32, window_height: f32) -> LogicalSize<f32> {
     let size = project_create::card_logical_size(window_width, window_height);
@@ -68,18 +70,14 @@ impl ProjectCreateOverlay {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         instance: &wgpu::Instance,
-        main_window_size: LogicalSize<f32>,
         el: &ActiveEventLoop,
     ) -> ProjectCreateOverlay {
         let scale = main_window.scale_factor();
-        let card_logical = card_logical_size(main_window_size.width, main_window_size.height);
-        let (pos, size) = centered_overlay_bounds(
+        let (pos, size) = full_window_overlay_bounds(
             main_window
                 .outer_position()
                 .unwrap_or(PhysicalPosition::new(0, 0)),
             main_window.inner_size(),
-            scale,
-            card_logical,
         );
         let window = open_child_window(main_window, pos, size, "project-create", el);
         // CJK 项目名称/描述输入需要 IME 候选窗,winit 对新窗口默认关闭 IME
@@ -105,12 +103,8 @@ impl ProjectCreateOverlay {
         main_outer_pos: PhysicalPosition<i32>,
         main_inner_size: PhysicalSize<u32>,
         scale: f64,
-        window_width: f32,
-        window_height: f32,
     ) {
-        let card_logical = card_logical_size(window_width, window_height);
-        let (pos, size) =
-            centered_overlay_bounds(main_outer_pos, main_inner_size, scale, card_logical);
+        let (pos, size) = full_window_overlay_bounds(main_outer_pos, main_inner_size);
         self.window.set_outer_position(pos);
         if self.window.inner_size() != size {
             let _ = self.window.request_inner_size(size);
@@ -126,8 +120,16 @@ impl ProjectCreateOverlay {
         let Some(state) = app.project_create.as_ref() else {
             return;
         };
+        let logical_size: LogicalSize<f32> = self
+            .window
+            .inner_size()
+            .to_logical(self.window.scale_factor());
+        let card_logical = card_logical_size(logical_size.width, logical_size.height);
         let mut interface = UserInterface::build(
-            project_create::project_create_card(state).map(Message::ProjectCreate),
+            backdrop_card(
+                project_create::project_create_card(state).map(Message::ProjectCreate),
+                card_logical,
+            ),
             self.gpu.viewport.logical_size(),
             std::mem::take(&mut self.gpu.cache),
             &mut self.gpu.renderer,
@@ -192,8 +194,16 @@ impl ProjectCreateOverlay {
         let Some(state) = app.project_create.as_ref() else {
             return Vec::new();
         };
+        let logical_size: LogicalSize<f32> = self
+            .window
+            .inner_size()
+            .to_logical(self.window.scale_factor());
+        let card_logical = card_logical_size(logical_size.width, logical_size.height);
         let mut interface = UserInterface::build(
-            project_create::project_create_card(state).map(Message::ProjectCreate),
+            backdrop_card(
+                project_create::project_create_card(state).map(Message::ProjectCreate),
+                card_logical,
+            ),
             self.gpu.viewport.logical_size(),
             std::mem::take(&mut self.gpu.cache),
             &mut self.gpu.renderer,

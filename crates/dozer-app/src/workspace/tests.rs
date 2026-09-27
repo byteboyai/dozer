@@ -515,6 +515,19 @@ fn tab_title_prefers_agent_name_once_known() {
 }
 
 #[test]
+fn attached_agent_uses_picker_until_daemon_has_identified_session() {
+    assert_eq!(
+        attached_agent(Some(AgentKind::Codex), AgentKind::Unknown),
+        AgentKind::Codex
+    );
+    assert_eq!(
+        attached_agent(Some(AgentKind::Codex), AgentKind::Claude),
+        AgentKind::Claude
+    );
+    assert_eq!(attached_agent(None, AgentKind::Unknown), AgentKind::Unknown);
+}
+
+#[test]
 fn tab_window_no_overflow_all_visible() {
     let w = tab_window(&[50.0, 50.0, 50.0], 4.0, 500.0, 0);
     assert_eq!((w.first, w.visible_end), (0, 3));

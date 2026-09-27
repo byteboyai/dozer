@@ -18,7 +18,7 @@ use crate::app::{App, Message};
 use crate::extensions::database;
 use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{open_overlay, reposition_overlay};
+use crate::platform::overlay_window::{backdrop_card, open_overlay, reposition_overlay};
 
 fn card_logical_size() -> LogicalSize<f32> {
     LogicalSize::new(480.0, 480.0)
@@ -81,7 +81,6 @@ impl DatabaseSourceOverlay {
             device,
             queue,
             instance,
-            card_logical_size(),
             "database-source",
             el,
         );
@@ -112,7 +111,6 @@ impl DatabaseSourceOverlay {
             main_outer_pos,
             main_inner_size,
             scale,
-            card_logical_size(),
         );
     }
 
@@ -148,8 +146,11 @@ impl DatabaseSourceOverlay {
         let Some(card) = Self::card(ws, &app.database) else {
             return;
         };
-        self.gpu
-            .redraw(&self.window, self.cursor, card.map(Message::Database));
+        self.gpu.redraw(
+            &self.window,
+            self.cursor,
+            backdrop_card(card.map(Message::Database), card_logical_size()),
+        );
     }
 
     pub(crate) fn handle_input(&mut self, app: &mut App, event: &WindowEvent) -> Vec<Message> {
@@ -179,7 +180,7 @@ impl DatabaseSourceOverlay {
         self.gpu.dispatch(
             &self.window,
             self.cursor,
-            card.map(Message::Database),
+            backdrop_card(card.map(Message::Database), card_logical_size()),
             iced_event,
         )
     }

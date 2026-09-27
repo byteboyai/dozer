@@ -1300,22 +1300,14 @@ impl Runner {
                     adapter,
                     device,
                     queue,
-                    app,
                     search_overlay,
                     ..
                 } = self
                 else {
                     return;
                 };
-                let window_width = app.window_size.0;
                 *search_overlay = Some(search_overlay::SearchOverlay::open(
-                    window,
-                    adapter,
-                    device,
-                    queue,
-                    instance,
-                    window_width,
-                    el,
+                    window, adapter, device, queue, instance, el,
                 ));
             }
             search_overlay::SyncAction::Close => {
@@ -1366,22 +1358,14 @@ impl Runner {
                     adapter,
                     device,
                     queue,
-                    app,
                     file_history_overlay,
                     ..
                 } = self
                 else {
                     return;
                 };
-                let main_window_size = LogicalSize::new(app.window_size.0, app.window_size.1);
                 *file_history_overlay = Some(file_history_overlay::FileHistoryOverlay::open(
-                    window,
-                    adapter,
-                    device,
-                    queue,
-                    instance,
-                    main_window_size,
-                    el,
+                    window, adapter, device, queue, instance, el,
                 ));
             }
             file_history_overlay::SyncAction::Close => {
@@ -1435,23 +1419,14 @@ impl Runner {
                     adapter,
                     device,
                     queue,
-                    app,
                     project_create_overlay,
                     ..
                 } = self
                 else {
                     return;
                 };
-                let main_window_size =
-                    winit::dpi::LogicalSize::new(app.window_size.0, app.window_size.1);
                 *project_create_overlay = Some(project_create_overlay::ProjectCreateOverlay::open(
-                    window,
-                    adapter,
-                    device,
-                    queue,
-                    instance,
-                    main_window_size,
-                    el,
+                    window, adapter, device, queue, instance, el,
                 ));
             }
             project_create_overlay::SyncAction::Close => {
@@ -1501,23 +1476,14 @@ impl Runner {
                     adapter,
                     device,
                     queue,
-                    app,
                     settings_overlay,
                     ..
                 } = self
                 else {
                     return;
                 };
-                let main_window_size =
-                    winit::dpi::LogicalSize::new(app.window_size.0, app.window_size.1);
                 *settings_overlay = Some(settings_overlay::SettingsOverlay::open(
-                    window,
-                    adapter,
-                    device,
-                    queue,
-                    instance,
-                    main_window_size,
-                    el,
+                    window, adapter, device, queue, instance, el,
                 ));
             }
             settings_overlay::SyncAction::Close => {
@@ -4184,7 +4150,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                 .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
                             new_size,
                             window.scale_factor(),
-                            app.window_size.0,
                         );
                     }
                     if let Some(overlay) = file_history_overlay {
@@ -4195,8 +4160,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                 .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
                             new_size,
                             window.scale_factor(),
-                            app.window_size.0,
-                            app.window_size.1,
                         );
                     }
                     if let Some(overlay) = project_create_overlay {
@@ -4207,8 +4170,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                 .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
                             new_size,
                             window.scale_factor(),
-                            app.window_size.0,
-                            app.window_size.1,
                         );
                     }
                     if let Some(overlay) = settings_overlay {
@@ -4219,8 +4180,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                 .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
                             new_size,
                             window.scale_factor(),
-                            app.window_size.0,
-                            app.window_size.1,
                         );
                     }
                     if let Some(overlay) = confirm_overlay {

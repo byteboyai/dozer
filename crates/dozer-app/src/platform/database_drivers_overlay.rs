@@ -17,7 +17,7 @@ use crate::app::{App, Message};
 use crate::extensions::database;
 use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{open_overlay, reposition_overlay};
+use crate::platform::overlay_window::{backdrop_card, open_overlay, reposition_overlay};
 
 /// 卡片逻辑尺寸——固定值,不随主窗口宽高缩放(设置/驱动列表内容量有限,
 /// 取舍同 `settings_overlay`/`search_overlay`)。
@@ -79,7 +79,6 @@ impl DatabaseDriversOverlay {
             device,
             queue,
             instance,
-            card_logical_size(),
             "database-drivers",
             el,
         );
@@ -106,7 +105,6 @@ impl DatabaseDriversOverlay {
             main_outer_pos,
             main_inner_size,
             scale,
-            card_logical_size(),
         );
     }
 
@@ -118,7 +116,10 @@ impl DatabaseDriversOverlay {
         self.gpu.redraw(
             &self.window,
             self.cursor,
-            database::database_drivers_card(&app.database).map(Message::Database),
+            backdrop_card(
+                database::database_drivers_card(&app.database).map(Message::Database),
+                card_logical_size(),
+            ),
         );
     }
 
@@ -143,7 +144,10 @@ impl DatabaseDriversOverlay {
         self.gpu.dispatch(
             &self.window,
             self.cursor,
-            database::database_drivers_card(&app.database).map(Message::Database),
+            backdrop_card(
+                database::database_drivers_card(&app.database).map(Message::Database),
+                card_logical_size(),
+            ),
             iced_event,
         )
     }

@@ -2069,9 +2069,10 @@ impl Workspace {
         let _ = model.feed(&snapshot);
         let ssh_backend = self.ssh_out_pending.remove(&tab_id);
         let is_ssh = ssh_backend.is_some();
+        let agent = attached_agent(picked_agent, info.agent);
         let mut tab = SessionTab {
             agent_state: info.agent_state,
-            agent: info.agent,
+            agent,
             transcript_path: info.transcript_path.clone(),
             info,
             model,

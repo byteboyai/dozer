@@ -501,6 +501,26 @@ Dozer 已经有 wry/Preview 经验，但正式 Plugin Surface 仍需统一解决
 
 这些能力必须由 Host 的 `PluginSurface` 统一实现，不能由每个插件自行处理。
 
+#### 7.5.1 WaveTerm Web Block 的可借鉴边界（2026-09-27 追加）
+
+WaveTerm 的网页块采用 Electron `<webview>`（独立 Chromium guest process），React 层维护
+URL、标题、加载状态、前进/后退、缩放、查找、User-Agent、媒体与焦点，preload/环境适配层
+承接宿主能力，`partition` 隔离 Cookie 和站点存储。它证明了“网页是 Workspace 中与终端、
+文件并列的一等 Block”在产品上成立，也提供了较完整的浏览器状态机参照。
+
+Dozer 只借鉴其**产品形态、状态边界与事件覆盖面**，不迁移 Electron，也不随应用打包 Chromium：
+
+- 保留 iced Host + wry 系统 WebView，避免显著增加安装体积、常驻内存和 renderer 进程成本。
+- 浏览器领域状态不直接依赖 wry 句柄；通过 `BrowserHost`/命令接口使用导航、刷新、历史、
+  截图、存储清理、外部打开等宿主能力，便于以后接 WebKit、WebView2、CDP 或 Playwright provider。
+- 页面能力通过受控 Bridge/事件信封回传，网页默认不获得文件、进程、Secret 或任意 Host IPC。
+- WebView 由 Host 创建、池化、隐藏、挂起、恢复和销毁；插件只声明期望 Surface 与会话作用域。
+- 一个 Tab 对应稳定会话；普通切换不重新导航，资源压力下才按预算挂起或淘汰，并显式恢复状态。
+
+Electron `<webview>` 的焦点/事件路由复杂度和官方长期演进风险也是反例：Dozer 不把 WebView
+作为整个插件模型，只把它作为受限 UI Surface；Browser 自动化则走独立 provider/sidecar，
+不能把 Node/Playwright 或一套 Chromium runtime 链接进 Rust Host。
+
 ### 7.6 是否迁移 Tauri
 
 当前不建议为了插件化立即将 Host 从 iced 迁移到 Tauri。Tauri 能提供成熟的 Web 前端生态、IPC 和 Capability 思路，但不会替 Dozer 解决 manifest、插件进程、MCP 聚合、状态迁移和 Workspace 语义。
@@ -1283,6 +1303,97 @@ Code Health 必须输出标准 `CheckResult` 进入 Delivery/Acceptance，而不
 - 失败步骤定位。
 
 Browser Run 归属 Task/Execution，证据进入 Artifact Store，断言进入 `CheckResult`，并在 Delivery 页面直接参与验收。
+
+#### 18.7.1 产品边界：验收现场，不是通用 Chrome 替代品
+
+WaveTerm 的 Web Block 说明网页可以成为 Workspace 的一等工作单元，但 Dozer 的差异化不在于
+继续复制下载管理、扩展生态或完整浏览器历史，而在于把手动浏览和 Agent 自动化收敛到同一条
+可审计验收链：
+
+```text
+Task / Acceptance Criteria
+    → 启动或发现目标服务
+    → 创建 BrowserRun（绑定 Project/Task/Execution）
+    → 人类或 Agent 执行 BrowserAction
+    → BrowserObservation / BrowserEvent
+    → Screenshot / Console / Network / Trace Artifact
+    → Assertion CheckResult
+    → Delivery / Acceptance
+```
+
+手动浏览仍是必要入口，但每次正式验收必须可以选择“记录为证据”；没有归属、时间、环境和来源的
+截图不能自动视为验收结论。Browser 插件负责领域状态与交互，Host 负责可信 Surface、权限和资源
+预算，Workflow Kernel/Artifact Store 负责证据归属与生命周期。
+
+#### 18.7.2 BrowserHost 与 Provider 边界
+
+浏览器领域层不得持有具体 wry/WebKit/CDP 句柄，统一依赖版本化能力接口。概念接口至少覆盖：
+
+```rust
+trait BrowserHost {
+    fn create_session(&mut self, scope: BrowserSessionScope) -> BrowserSessionId;
+    fn execute(&mut self, target: BrowserTarget, action: BrowserAction) -> OperationId;
+    fn capture(&mut self, target: BrowserTarget, kind: CaptureKind) -> OperationId;
+    fn clear_storage(&mut self, scope: BrowserSessionScope) -> OperationId;
+    fn open_external(&self, url: Url) -> OperationId;
+}
+```
+
+接口是协议语义示意，不是已批准 Rust API。实现分成两类，不能混为一体：
+
+1. **Interactive WebView Provider**：复用现有 wry 池，服务人类浏览、地址栏、前进后退、刷新、
+   页面查找、缩放、外部打开和轻量截图。
+2. **Automation Provider（规划中）**：CDP/Playwright/Browser Use 等以独立 sidecar 运行，通过
+   owner-only UDS + 版本化 JSON-RPC/MCP 接入；负责可访问性树、可靠点击输入、Console/Network、
+   trace、录像和多 viewport。Host 不内嵌 Node、Python 或 Chromium runtime。
+
+两类 Provider 输出相同的 `BrowserEvent`、`BrowserObservation` 和 Artifact schema，使 Delivery
+不需要理解后端差异。Interactive WebView 不应伪装成已具备可靠自动化；自动化 provider 未安装或
+不可用时，UI 必须明确降级为手动验收，而不是静默跳过检查。
+
+#### 18.7.3 会话、身份与站点数据隔离
+
+借鉴 WaveTerm `partition` 的明确隔离语义，但映射到 Dozer 自己的 Host/Provider 协议：
+
+| Scope | 生命周期 | 典型用途 | 默认存储策略 |
+|------|---------|---------|-------------|
+| `Global` | 跨项目持久 | 首页常驻浏览器、公共文档 | 持久化，显式清理 |
+| `Project(project_id)` | 项目持久 | 项目内开发服务、长期登录 | 项目隔离持久化 |
+| `Run(run_id)` | 单次 BrowserRun | 可重放验收、基线比较 | Run 结束后按策略保留或清理 |
+| `Plugin(plugin_id)` | 插件生命周期 | 插件自带 WebView UI | 与 Browser 面板站点数据完全隔离 |
+| `Ephemeral(id)` | 临时 | 无痕检查、不可信页面 | 关闭即清理 |
+
+权限裁决同时考虑插件身份、Surface/Session 身份和资源 scope；不同项目、Run、插件不得意外共享
+Cookie、LocalStorage、缓存、下载目录或认证信息。Secret 注入必须通过短期引用和显式授权，不能写入
+浏览器 profile。会话清理、过期和异常退出后的回收都要产生审计事件。
+
+#### 18.7.4 统一事件与证据模型
+
+Browser Provider 至少规范化以下事件：`Ready`、`NavigationStarted`、`NavigationCommitted`、
+`NavigationFailed`、`TitleChanged`、`ConsoleMessage`、`NetworkRequestFailed`、
+`NewWindowRequested`、`DownloadRequested`、`Crashed`、`SessionClosed`。事件信封必须带
+`project_id/task_id/execution_id/run_id/session_id/target_id/provider/timestamp` 中适用的身份字段，
+并接受乱序、重复和迟到事件。
+
+证据不是事件日志的别名。Artifact Store 保存截图、录像、trace、HAR/网络摘要、Console 摘要、
+Accessibility snapshot 与结构化步骤；`CheckResult` 保存断言、期望、实际结果和关联 Artifact。
+敏感 header、Cookie、Token、输入值在入库前按策略脱敏；原始 trace/HAR 设置大小、保留期和访问权限。
+
+#### 18.7.5 生命周期与资源预算
+
+沿用当前 `max_heavy_webviews` 和期望清单/池同步思路，并扩展为 Browser Surface 的正式契约：
+
+- 可见目标优先运行，最近使用的后台目标可保活，超预算目标进入 `Suspended` 或被淘汰。
+- 普通 Tab 切换不改变 URL、不重建 WebView，尽量保持滚动、历史与表单状态。
+- 恢复失败、renderer 崩溃和 provider 断连进入显式可重试终态，不能留下空白 Surface。
+- Console/Network 环形缓冲、截图、录像和 trace 分别设容量上限；压力下先停止采集，再淘汰后台
+  Browser/Preview WebView，不影响终端与 Agent 会话。
+- 新窗口、下载、剪贴板、摄像头、麦克风、地理位置和外部协议统一经过 Host 策略；默认拒绝或询问，
+  插件页面不能自行放行。
+
+第一条推荐纵向切片不是“补齐全部浏览器功能”，而是：`Task → BrowserRun → 手动/自动步骤 →
+截图 + Console/Network 失败摘要 → CheckResult → Delivery`。该链路成立后，再增加录像、trace、
+视觉基线与高级 AI Browser Provider。
 
 ### 18.8 Files 面板 → Worktree-aware Changes
 

@@ -18,7 +18,7 @@ use winit::window::{Window, WindowId};
 use crate::app::{App, Message};
 use crate::extensions::files;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{open_overlay, reposition_overlay};
+use crate::platform::overlay_window::{backdrop_card, open_overlay, reposition_overlay};
 
 fn card_logical_size() -> LogicalSize<f32> {
     LogicalSize::new(460.0, 220.0)
@@ -78,7 +78,6 @@ impl FilesMoveOverlay {
             device,
             queue,
             instance,
-            card_logical_size(),
             "files-move",
             el,
         );
@@ -108,7 +107,6 @@ impl FilesMoveOverlay {
             main_outer_pos,
             main_inner_size,
             scale,
-            card_logical_size(),
         );
     }
 
@@ -119,7 +117,10 @@ impl FilesMoveOverlay {
         self.gpu.redraw(
             &self.window,
             self.cursor,
-            files::files_move_card(&ws.files).map(Message::Files),
+            backdrop_card(
+                files::files_move_card(&ws.files).map(Message::Files),
+                card_logical_size(),
+            ),
         );
     }
 
@@ -147,7 +148,10 @@ impl FilesMoveOverlay {
         self.gpu.dispatch(
             &self.window,
             self.cursor,
-            files::files_move_card(&ws.files).map(Message::Files),
+            backdrop_card(
+                files::files_move_card(&ws.files).map(Message::Files),
+                card_logical_size(),
+            ),
             iced_event,
         )
     }

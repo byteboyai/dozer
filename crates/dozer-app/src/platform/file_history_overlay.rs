@@ -21,7 +21,9 @@ use crate::app::{App, Message};
 use crate::extensions::file_history;
 use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{centered_overlay_bounds, open_child_window};
+use crate::platform::overlay_window::{
+    backdrop_card, centered_card_offset, full_window_overlay_bounds, open_child_window,
+};
 
 /// 卡片逻辑尺寸:宽 = 主窗口宽度的 75%,高 = 主窗口高度的 80%——同现状
 /// `file_history::popup_view` 的比例。
@@ -30,8 +32,11 @@ fn card_logical_size(window_width: f32, window_height: f32) -> LogicalSize<f32> 
 }
 
 /// diff 区域(`file_history::diff_area_view` 的 `content` 子树)在弹窗卡片
-/// **自身逻辑坐标系**里的矩形(卡片就是这扇独立窗口的整个客户区,不需要
-/// 再加窗口偏移)。跟 `file_history_card` 的实际布局逐项对应:外层
+/// **自身逻辑坐标系**里的矩形——**2026-09-27 背景遮罩改造后卡片不再是
+/// 这扇窗口的整个客户区**(窗口现覆盖整个主窗口,卡片由 `backdrop_card`
+/// 居中画在中间),调用方必须再加上 `centered_card_offset` 算出的卡片
+/// 偏移,才是这扇窗口客户区坐标系里 `view.set_bounds` 要的矩形(见
+/// `sync_diff_webview` 调用点)。跟 `file_history_card` 的实际布局逐项对应:外层
 /// `padding(16)`;`title` 一行(`font::subtitle()`,`spacing(12)` 在其后);
 /// `body` 是 `row![list(固定 240 宽), spacing(12), diff_area]`;
 /// `diff_area_view` 内部是 `column![header, content].spacing(8)`,`header`
@@ -95,29 +100,20 @@ impl FileHistoryOverlay {
         self.window.request_redraw();
     }
 
-    /// `main_window_size` 用具名字段的 `LogicalSize`(`.width`/`.height`)
-    /// 承载,而不是两个相邻的 `f32` 位置参数——8 个位置参数会触发
-    /// `clippy::too_many_arguments`,且 width/height 相邻同型传反编译器不
-    /// 报错,按 CLAUDE.md 关键裁决改具名字段(同 `workspace/state.rs` 的
-    /// `TabAttachedArgs` 先例),不加 `#[allow]`。
     pub(crate) fn open(
         main_window: &Arc<Window>,
         adapter: &wgpu::Adapter,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         instance: &wgpu::Instance,
-        main_window_size: LogicalSize<f32>,
         el: &ActiveEventLoop,
     ) -> FileHistoryOverlay {
         let scale = main_window.scale_factor();
-        let card_logical = card_logical_size(main_window_size.width, main_window_size.height);
-        let (pos, size) = centered_overlay_bounds(
+        let (pos, size) = full_window_overlay_bounds(
             main_window
                 .outer_position()
                 .unwrap_or(PhysicalPosition::new(0, 0)),
             main_window.inner_size(),
-            scale,
-            card_logical,
         );
         let window = open_child_window(main_window, pos, size, "file-history", el);
         let gpu = OverlayGpu::open(&window, instance, adapter, device, queue, size, scale);
@@ -143,12 +139,8 @@ impl FileHistoryOverlay {
         main_outer_pos: PhysicalPosition<i32>,
         main_inner_size: PhysicalSize<u32>,
         scale: f64,
-        window_width: f32,
-        window_height: f32,
     ) {
-        let card_logical = card_logical_size(window_width, window_height);
-        let (pos, size) =
-            centered_overlay_bounds(main_outer_pos, main_inner_size, scale, card_logical);
+        let (pos, size) = full_window_overlay_bounds(main_outer_pos, main_inner_size);
         self.window.set_outer_position(pos);
         if self.window.inner_size() != size {
             let _ = self.window.request_inner_size(size);
@@ -160,8 +152,16 @@ impl FileHistoryOverlay {
         let Some(state) = app.file_history.as_ref() else {
             return;
         };
+        let logical_size: LogicalSize<f32> = self
+            .window
+            .inner_size()
+            .to_logical(self.window.scale_factor());
+        let card_logical = card_logical_size(logical_size.width, logical_size.height);
         let mut interface = UserInterface::build(
-            file_history::file_history_card(state).map(Message::FileHistory),
+            backdrop_card(
+                file_history::file_history_card(state).map(Message::FileHistory),
+                card_logical,
+            ),
             self.gpu.viewport.logical_size(),
             std::mem::take(&mut self.gpu.cache),
             &mut self.gpu.renderer,
@@ -229,7 +229,9 @@ impl FileHistoryOverlay {
             .inner_size()
             .to_logical(self.window.scale_factor());
         let card_logical = card_logical_size(logical_size.width, logical_size.height);
+        let card_offset = centered_card_offset(logical_size, card_logical);
         let (x, y, w, h) = diff_area_bounds(card_logical);
+        let (x, y) = (x + card_offset.x, y + card_offset.y);
         let bounds = wry::Rect {
             position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
             size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
@@ -384,8 +386,16 @@ impl FileHistoryOverlay {
         let Some(state) = app.file_history.as_ref() else {
             return Vec::new();
         };
+        let logical_size: LogicalSize<f32> = self
+            .window
+            .inner_size()
+            .to_logical(self.window.scale_factor());
+        let card_logical = card_logical_size(logical_size.width, logical_size.height);
         let mut interface = UserInterface::build(
-            file_history::file_history_card(state).map(Message::FileHistory),
+            backdrop_card(
+                file_history::file_history_card(state).map(Message::FileHistory),
+                card_logical,
+            ),
             self.gpu.viewport.logical_size(),
             std::mem::take(&mut self.gpu.cache),
             &mut self.gpu.renderer,

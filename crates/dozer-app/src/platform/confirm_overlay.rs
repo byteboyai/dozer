@@ -19,7 +19,7 @@ use crate::app::Message;
 use crate::dialog;
 use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{open_overlay, reposition_overlay};
+use crate::platform::overlay_window::{backdrop_card, open_overlay, reposition_overlay};
 
 /// 五个 confirm 形态弹窗的判别标签——只用来在 `sync_confirm_overlay` 里
 /// 判断"这次 desired 和已开的窗口是不是同一个弹窗",不需要 `Message`/
@@ -84,16 +84,8 @@ impl ConfirmOverlay {
         spec: dialog::ConfirmDialog<Message>,
         el: &ActiveEventLoop,
     ) -> ConfirmOverlay {
-        let (window, gpu) = open_overlay(
-            main_window,
-            adapter,
-            device,
-            queue,
-            instance,
-            card_logical_size(),
-            "confirm",
-            el,
-        );
+        let (window, gpu) =
+            open_overlay(main_window, adapter, device, queue, instance, "confirm", el);
         ConfirmOverlay {
             window,
             gpu,
@@ -119,12 +111,11 @@ impl ConfirmOverlay {
             main_outer_pos,
             main_inner_size,
             scale,
-            card_logical_size(),
         );
     }
 
     pub(crate) fn redraw(&mut self) {
-        let card = dialog::confirm(self.spec.clone());
+        let card = backdrop_card(dialog::confirm(self.spec.clone()), card_logical_size());
         self.gpu.redraw(&self.window, self.cursor, card);
     }
 
@@ -151,7 +142,7 @@ impl ConfirmOverlay {
         else {
             return Vec::new();
         };
-        let card = dialog::confirm(self.spec.clone());
+        let card = backdrop_card(dialog::confirm(self.spec.clone()), card_logical_size());
         self.gpu
             .dispatch(&self.window, self.cursor, card, iced_event)
     }

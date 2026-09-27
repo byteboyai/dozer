@@ -17,7 +17,7 @@ use crate::app::{App, Message};
 use crate::extensions::todo;
 use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
-use crate::platform::overlay_window::{open_overlay, reposition_overlay};
+use crate::platform::overlay_window::{backdrop_card, open_overlay, reposition_overlay};
 
 fn card_logical_size() -> LogicalSize<f32> {
     LogicalSize::new(520.0, 480.0)
@@ -78,7 +78,6 @@ impl TodoDetailOverlay {
             device,
             queue,
             instance,
-            card_logical_size(),
             "todo-detail",
             el,
         );
@@ -109,7 +108,6 @@ impl TodoDetailOverlay {
             main_outer_pos,
             main_inner_size,
             scale,
-            card_logical_size(),
         );
     }
 
@@ -124,7 +122,10 @@ impl TodoDetailOverlay {
         self.gpu.redraw(
             &self.window,
             self.cursor,
-            todo::todo_detail_card(ws).map(Message::Todo),
+            backdrop_card(
+                todo::todo_detail_card(ws).map(Message::Todo),
+                card_logical_size(),
+            ),
         );
     }
 
@@ -152,7 +153,10 @@ impl TodoDetailOverlay {
         self.gpu.dispatch(
             &self.window,
             self.cursor,
-            todo::todo_detail_card(ws).map(Message::Todo),
+            backdrop_card(
+                todo::todo_detail_card(ws).map(Message::Todo),
+                card_logical_size(),
+            ),
             iced_event,
         )
     }
