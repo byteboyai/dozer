@@ -79,6 +79,12 @@ pub struct PreviewTab {
     /// T10:用户「保留我的修改」后记下的磁盘 mtime 基线;下次保存覆盖前再次
     /// 校验磁盘是否又变了(变了则重新进入冲突态)。
     pub conflict_baseline: Option<SystemTime>,
+    /// Tabular webview host(ag-grid)是否已报过 `ready`。与"数据是否已加载
+    /// 完成"(`runtime` 是否 `TabularState::Ready`)是两个独立的异步来源,
+    /// 两者都为真时才推初始 `Init`+`SetSchema`+`SetWindow`(见
+    /// `PreviewPane::finish_tabular_load`/`Message::TabularHostEvent` 处理)。
+    /// 新建 tab / reload 时重置为 `false`。
+    pub tabular_host_ready: bool,
     /// T11:该 tab 在途后台长任务(窗口化索引构建 / 表格解析 / recovery 读取)
     /// 的共享取消信号。任务 `spawn` 前经 [`PreviewTab::task_cancel_token`] 取走
     /// 一份 `Arc` 捕获进 `spawn_blocking`,按 chunk/批次检查;tab 关闭 / reload /
@@ -114,11 +120,15 @@ impl PreviewTab {
     }
 
     /// 该 tab 是否由**任一** WebView host 承载( Flyfish 渲染 / CodeMirror editor /
-    /// vanilla-jsoneditor Tree )。用于"加载是否需要等 host 信号"的判定:凡有
-    /// host 就不该在画像后立即 finish,须等 host 的 `ready`/`document_loaded`
-    /// (T5/T6/T8)。纯 iced fallback(Unsupported/External/表格)返回 false。
+    /// vanilla-jsoneditor Tree / Tabular ag-grid )。用于"加载是否需要等 host
+    /// 信号"的判定:凡有 host 就不该在画像后立即 finish,须等 host 的
+    /// `ready`/`document_loaded`/`window_applied`。纯 iced fallback
+    /// (Unsupported/External)返回 false。
     pub fn hosts_any_webview(&self) -> bool {
-        self.hosts_webview() || self.uses_editor_host() || self.uses_json_editor()
+        self.hosts_webview()
+            || self.uses_editor_host()
+            || self.uses_json_editor()
+            || self.uses_tabular_grid_host()
     }
 
     pub fn current_mode(&self) -> Option<PreviewMode> {
@@ -264,6 +274,13 @@ impl PreviewTab {
             if p.extension()
                 .and_then(|e| e.to_str())
                 .is_some_and(|e| e.eq_ignore_ascii_case("json")))
+    }
+
+    /// Tabular Grid 视图是否走 ag-grid webview host(与 `TabularMode::Text`
+    /// 的 CodeMirror 原文模式互斥,同一 tab 同一时刻只有一个为真)。
+    pub fn uses_tabular_grid_host(&self) -> bool {
+        tabular_grid_host_enabled()
+            && matches!(&self.backend, Some(PreviewBackend::Tabular(t)) if t.mode == TabularMode::Grid)
     }
 
     /// 运行时容器种类(仅用于 Debug 输出,避免打印整个 TabularView)。
@@ -711,6 +728,11 @@ pub struct PreviewPane {
     /// `window_events` 每帧(同 `apply_pending_preview_find` 节奏)取走并
     /// `evaluate_script` 注入;Agent reveal/select 与外部 reload 用它。
     pub(crate) pending_editor_commands: Vec<(usize, EditorCommand)>,
+    /// 待下发给 Tabular webview host(ag-grid)的命令队列(`tab_id`, 命令)。
+    /// 与 `pending_editor_commands` 平行:`window_events` 每帧取走并
+    /// `evaluate_script` 注入;初始 `Init`/`SetSchema`/`SetWindow`、滚动窗口
+    /// 回包、reveal、跨 sheet 切换都经它。
+    pub(crate) pending_tabular_commands: Vec<(usize, TabularCommand)>,
     /// "保存后再关闭"的 CodeMirror tab id 列表。Rust 侧不持有编辑器全文,
     /// 关闭 dirty tab 不能直接落盘,得先向 host 下发 `SaveDocument`,待
     /// host 回 `save_requested` 真正落盘后再移除 tab。`pending_editor_commands`
@@ -748,9 +770,43 @@ impl Default for PreviewPane {
             pending_webview_find_clear: None,
             pending_tabular_loads: Vec::new(),
             pending_editor_commands: Vec::new(),
+            pending_tabular_commands: Vec::new(),
             pending_close: Vec::new(),
             blank_info: None,
             blank_info_in_flight: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::preview::view::placeholder_tab;
+
+    fn tabular_tab(mode: TabularMode) -> PreviewTab {
+        let mut tab = placeholder_tab(1);
+        tab.kind = TabKind::File(PathBuf::from("/tmp/data.csv"));
+        tab.backend = Some(PreviewBackend::Tabular(TabularBackend {
+            format: TabularFormat::Csv,
+            mode,
+        }));
+        tab
+    }
+
+    #[test]
+    fn uses_tabular_grid_host_only_for_grid_mode() {
+        let mut tab = tabular_tab(TabularMode::Grid);
+        assert!(tab.uses_tabular_grid_host());
+        tab.backend = Some(PreviewBackend::Tabular(TabularBackend {
+            format: TabularFormat::Csv,
+            mode: TabularMode::Text,
+        }));
+        assert!(!tab.uses_tabular_grid_host());
+    }
+
+    #[test]
+    fn hosts_any_webview_covers_tabular_grid() {
+        let tab = tabular_tab(TabularMode::Grid);
+        assert!(tab.hosts_any_webview());
     }
 }
