@@ -779,6 +779,27 @@ async function boot(): Promise<void> {
     parent: document.getElementById('editor')!,
   });
 
+  // Phase 2:预览内选区右键"发送给 Agent"。选区为空时完全不拦截——右键
+  // 照常弹浏览器原生菜单;不做"发送整篇文件"这类超出范围的功能。选区非空
+  // 时现场取值上报,不依赖 `emitSelection` 的节流缓存(避免与最后一次
+  // selection_changed 之间的时序竞态)。
+  view.contentDOM.addEventListener(
+    'contextmenu',
+    (e) => {
+      const sel = view.state.selection.main;
+      if (sel.empty) return;
+      e.preventDefault();
+      post({
+        kind: 'context_menu_requested',
+        x: e.clientX,
+        y: e.clientY,
+        range: currentRange(),
+        selected_text: view.state.sliceDoc(sel.from, sel.to),
+      });
+    },
+    true,
+  );
+
   // T6:非 UTF-8 / UTF-16 只读:顶部常驻提示,说明只读原因(保存由
   // saveHandler / Rust 双重拒绝)。
   if (lossy || utf16) {

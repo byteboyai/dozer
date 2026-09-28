@@ -692,14 +692,14 @@ CodeMirror host 新增 `contextmenu` 拦截逻辑:选区非空时阻止浏览器
   引用)。
 - Produces: 无新导出——纯 DOM 事件副作用,供人工在预览里右键验证。
 
-- [ ] **Step 1: 定位 `view` 构造完成的位置**
+- [x] **Step 1: 定位 `view` 构造完成的位置**
 
 在 `main.ts` 里搜索 `view = new EditorView`(赋值语句,不是声明),确认
 新监听器要注册在这条赋值语句**之后**(此前 `view` 未初始化,访问
 `view.state` 会抛错)。若该赋值发生在某个初始化函数内部而非模块顶层,
 在同一函数末尾、`return`/函数体结束前注册。
 
-- [ ] **Step 2: 添加 `contextmenu` 监听器**
+- [x] **Step 2: 添加 `contextmenu` 监听器**
 
 紧邻 Step 1 定位到的位置(或紧邻现有的两个 `document.addEventListener`
 调用,约第 215/243 行附近,保持风格一致):
@@ -727,14 +727,14 @@ view.contentDOM.addEventListener(
 );
 ```
 
-- [ ] **Step 3: `npm run typecheck` 确认类型对齐**
+- [x] **Step 3: `npm run typecheck` 确认类型对齐**
 
 Run(`crates/dozer-app/web/editor/` 目录下): `npm run typecheck`
 Expected: 无类型错误(`post()` 的参数类型 `EditorEvent` 已在 Task 3
 包含 `context_menu_requested` 分支,`currentRange()` 返回值类型
 匹配 `range` 字段)。
 
-- [ ] **Step 4: 重新打包**
+- [x] **Step 4: 重新打包**
 
 Run: `npm run build`
 Expected: 生成新的 `crates/dozer-app/assets/editor/editor.js`/
@@ -751,7 +751,7 @@ dozer-app`,打开一个文本文件预览,验证:
   2. 选中一段文本右键 → 系统原生菜单不出现(Task 5 完成前,`post()` 发出
      的事件 Rust 侧还没人处理,属预期,此步只验证"原生菜单被正确拦下")。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/dozer-app/web/editor/src/main.ts \
