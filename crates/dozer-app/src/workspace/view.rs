@@ -1291,48 +1291,7 @@ pub(crate) fn preview_pane_for<'a>(
         );
     } else {
         let active_tab = &preview.tabs()[preview.active_idx()];
-        if let Some(tabular) = active_tab.tabular_state()
-            && !active_tab.uses_editor_host()
-        {
-            // 表格 tab:iced 原生渲染 Tabular Viewer(虚拟化网格 + sheet 切换
-            // 条),消息由 `grid::Action` 映射到 `Message::TabularAction`(带
-            // `tab_id` + `PanelKind`,同 Find 条的手法)。首次打开的解析是
-            // 后台线程跑的(大文件不能卡住 UI,见 `crate::tabular` 模块文档),
-            // 没跑完时 `TabularState::Loading`,画统一 loading 动画占位。
-            match tabular {
-                crate::preview::TabularState::Ready(view) => {
-                    let tab_id = active_tab.id;
-                    let panel = find_panel();
-                    content = content.push(
-                        container(
-                            view.view()
-                                .map(move |act| Message::TabularAction(panel, tab_id, act)),
-                        )
-                        .width(Length::Fill)
-                        .height(Length::Fill),
-                    );
-                }
-                crate::preview::TabularState::Loading => {
-                    // T1:统一走 `preview_loading_view`,文案随阶段(表格首解为
-                    // `Parsing`,懒加载 sheet 也复用该走法);无阶段时回落到表格
-                    // 专用文案。`loading_hint` 自带 `center_x/center_y(Fill)`,
-                    // 不需要再包一层容器。
-                    content = content.push(
-                        preview_loading_view(
-                            &active_tab.load_state,
-                            active_tab.load_observe.as_ref(),
-                        )
-                        .unwrap_or_else(|| {
-                            byteui::feedback::math_curve::loading_hint(
-                                byteui::feedback::math_curve::Curve::RoseThree,
-                                "正在打开表格…",
-                                48.0,
-                            )
-                        }),
-                    );
-                }
-            }
-        } else if let Some(page) = preview_fallback_page(kind, active_tab) {
+        if let Some(page) = preview_fallback_page(kind, active_tab) {
             // T1:External / Unsupported(及 Failed)统一 fallback 页——不再
             // 依赖 Flyfish 偶然兜底或空白。失败优先于 loading:终态不能被动画盖住。
             content = content.push(page);

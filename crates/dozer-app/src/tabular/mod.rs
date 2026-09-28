@@ -14,13 +14,8 @@
 //!   保持 `None`(未加载),切到哪个才在哪个时候才去加载(见 `SheetLoadRequest`)。
 //! - 渲染层(grid.rs)只 draw 可视窗口内的单元格——行数/列数再多,单帧开销
 //!   只与可视窗口大小相关,不随数据总量增长。
-
 use std::path::{Path, PathBuf};
 
-pub mod grid;
-pub mod view;
-
-pub use grid::Action;
 /// 单 sheet 载入的行数上限。超出即 `truncated = true`,顶部给提示条,且
 /// 加载器一旦读满这个数就不再继续解析文件剩余部分(见模块文档)。
 pub const MAX_TABULAR_ROWS: usize = 100_000;
@@ -621,10 +616,7 @@ mod tests {
     #[test]
     fn reselecting_still_loading_sheet_does_not_requeue_load() {
         let mut v = view_with_sheets(vec![Some(stub_sheet(100, 10)), None]);
-        assert!(
-            v.select_sheet(1).is_some(),
-            "首次切过去应该触发加载"
-        );
+        assert!(v.select_sheet(1).is_some(), "首次切过去应该触发加载");
         v.select_sheet(0);
         // 第一次加载还没回填(没调 `apply_sheet_loaded`),这次切回去
         // 不应该对着同一个 sheet 再 spawn 一次。

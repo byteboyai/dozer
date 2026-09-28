@@ -401,11 +401,6 @@ pub enum Message {
     /// 会话的 `count`/`current`。`current` 是 0-based 序号(idx),`total` 是命中
     /// 总数(0 表示无命中)。原生 editor 档不走这条(计数是本地现算的)。
     PreviewFindWebviewState(PanelKind, usize, usize),
-    /// 表格预览 tab 的交互(滚动/sheet 切换)。`usize` 是 `PreviewTab.id`,
-    /// `PanelKind` 区分 Files / Project 两个预览面板;`tabular::Action` 是
-    /// 网格/切换条发回的纯动作,由 `Workspace::preview_pane_tabular_action`
-    /// 定位对应 tab 后 `apply`。
-    TabularAction(PanelKind, usize, crate::tabular::Action),
     /// 表格 tab 首次打开的后台加载完成(见 `crate::tabular` 模块文档"够数
     /// 即停"的性能策略——大文件解析不能卡 UI 线程)。`ProjectId` 按项目路由
     /// (异步结果可能晚于用户切走项目才回来,不能假设"当前聚焦的就是它",

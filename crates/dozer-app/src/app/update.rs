@@ -661,8 +661,7 @@ impl App {
                         } else {
                             &mut ws.preview
                         };
-                        let Some(tab) =
-                            pane.tabs_mut().iter_mut().find(|t| t.id == binding.tab_id)
+                        let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == binding.tab_id)
                         else {
                             return;
                         };
@@ -677,9 +676,9 @@ impl App {
                                 // 首窗真正挂上才 finish,避免"空网格+行号1"
                                 // 的中间态露出。非在途(迟到 ACK)不改终态。
                                 if tab.load_state.is_active() {
-                                    let _ = tab.backend_state.try_transition(
-                                        crate::preview::BackendState::Ready,
-                                    );
+                                    let _ = tab
+                                        .backend_state
+                                        .try_transition(crate::preview::BackendState::Ready);
                                     tab.load_state.finish();
                                 }
                                 if let Some(view) = tab.tabular_view() {
@@ -765,7 +764,8 @@ impl App {
                     }
                 });
             }
-            Message::ReviewTraceWebviewEvent(event) => {                let crate::preview::ReviewTraceEvent::DocumentLoaded = event;
+            Message::ReviewTraceWebviewEvent(event) => {
+                let crate::preview::ReviewTraceEvent::DocumentLoaded = event;
                 self.with_focused_project(|ws, _io| {
                     mark_review_loaded(&mut ws.review);
                 });
@@ -2447,13 +2447,6 @@ impl App {
                 // apply_pending_preview_find`(句柄只在那里拿得到)。iced 在
                 // 处理完这条消息后会自然重绘,n/m 计数立即刷新。
                 self.preview_find_set_webview_state(kind, current, total);
-            }
-            Message::TabularAction(kind, tab_id, action) => {
-                self.with_focused_project(move |ws, io| {
-                    if let crate::tabular::Action::SelectSheet(sheet) = action {
-                        ws.preview_pane_tabular_action(kind, tab_id, sheet, io);
-                    }
-                });
             }
             Message::TabularLoaded(project_id, kind, tab_id, generation, result) => {
                 self.with_project(project_id, move |ws, io| {
