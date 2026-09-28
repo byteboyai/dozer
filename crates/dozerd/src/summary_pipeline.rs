@@ -323,6 +323,18 @@ fn parse_chunk_facts(stdout: &str) -> Result<ChunkFacts, PipelineError> {
         .map_err(|e| PipelineError::InvalidChunkOutput(e.to_string()))
 }
 
+/// 模型偶尔也会把归并阶段的 title/summary 写成 `{ "text": "..." }` 这类结构化
+/// 对象,而不是提示词要求的字符串(与 `deserialize_fact_list` 要处理的模型
+/// 偏差同源)。复用 `normalize_fact_value` 统一规范化成字符串,空值时给回
+/// 空字符串,让下面已有的"空 title/summary"校验去拒绝而不是在这里就崩解析。
+fn deserialize_fact_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(normalize_fact_value(value).unwrap_or_default())
+}
+
 /// 归并结果解析。
 fn parse_final(stdout: &str) -> Result<FinalSummary, PipelineError> {
     let start = stdout
@@ -333,7 +345,9 @@ fn parse_final(stdout: &str) -> Result<FinalSummary, PipelineError> {
         .ok_or_else(|| PipelineError::MergeFailed("输出里没有 JSON".into()))?;
     #[derive(Deserialize)]
     struct RawFinal {
+        #[serde(deserialize_with = "deserialize_fact_string")]
         title: String,
+        #[serde(deserialize_with = "deserialize_fact_string")]
         summary: String,
         #[serde(default, deserialize_with = "deserialize_fact_list")]
         goals: Vec<String>,
@@ -691,6 +705,21 @@ mod tests {
     #[test]
     fn parse_chunk_facts_errors_without_json() {
         assert!(parse_chunk_facts("没有 JSON").is_err());
+    }
+
+    #[test]
+    fn parse_final_accepts_structured_title_and_summary() {
+        // 复现线上报错:InvalidChunkOutput("invalid type: map, expected a
+        // string at line 1 column 10")——归并阶段模型偶尔把 title/summary
+        // 也写成结构化对象,而不是提示词要求的字符串。
+        let stdout = r#"{
+            "title":{"text":"修复总结按钮","source":"turn 1"},
+            "summary":{"text":"总结生成恢复正常"},
+            "goals":[],"actions":[],"decisions":[],"results":[],"incomplete":[]
+        }"#;
+        let summary = parse_final(stdout).unwrap();
+        assert_eq!(summary.title, "source: turn 1；text: 修复总结按钮");
+        assert_eq!(summary.summary, "text: 总结生成恢复正常");
     }
 
     #[test]

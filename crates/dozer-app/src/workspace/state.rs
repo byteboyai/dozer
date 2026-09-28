@@ -1534,9 +1534,13 @@ impl Workspace {
             // 其余 Code 到 editor host。
             Some(crate::preview::PreviewKind::Code) => begin_only(pane, Stage::Reserving),
             Some(crate::preview::PreviewKind::Tabular) => {
-                // 首次解析:进入 `Parsing`,网格后台加载完成前保持 Loading。
+                // 首次解析:进入 `Parsing`,网格后台加载完成前保持 Loading。这段
+                // 实际等的是"解析 + ag-grid host 握手(ready/window_applied)"
+                // 两件事;此前没有看门狗,host 握手卡住会永久停在"正在解析
+                // 文件…"(2026-09-28 复现),补上与其余阶段同款的超时兜底。
                 if let Some(generation) = begin_only(pane, Stage::Parsing) {
                     pane.set_tabular_loading(tab_id, path.clone());
+                    io.arm_load_timeout(project_id, kind, tab_id, generation, Stage::Parsing);
                     // CSV/TSV 原文模式:同时让 editor host 就绪(网格仍在后台加载,
                     // 便于切回)。原文 host 需占预算,故回到 `Reserving` 等 grant,
                     // 而非直接 finish。

@@ -986,10 +986,24 @@ impl App {
                                 .unwrap_or((false, false));
                             if is_tabular {
                                 // 表格:进入 `Parsing`,等后台解析出的首个可显示
-                                // sheet(TabularLoaded)才 finish(T7 bullet 2)。
+                                // sheet(TabularLoaded)且 ag-grid host 回
+                                // `ready`+`window_applied` 才 finish(T7 bullet 2)。
                                 // CSV/TSV 原文模式另有 editor host,由 `load_preview_tab`
                                 // 的恢复路径处理;正常打开路径这里不再 finish。
+                                //
+                                // 这段实际等的是"解析 + host 握手"两件事,任一个卡住
+                                // (如 host 从未报 `window_applied`)先前都没有看门狗,
+                                // 会永久停在"正在解析文件…"(2026-09-28 复现:CSV 文件
+                                // 打开后卡死,数据其实已解析完成)。补上与 Reserving/
+                                // CreatingHost/LoadingWindow 同款的超时兜底。
                                 pane.advance_load(
+                                    tab_id,
+                                    generation,
+                                    crate::preview::PreviewLoadStage::Parsing,
+                                );
+                                io.arm_load_timeout(
+                                    project_id,
+                                    panel,
                                     tab_id,
                                     generation,
                                     crate::preview::PreviewLoadStage::Parsing,
