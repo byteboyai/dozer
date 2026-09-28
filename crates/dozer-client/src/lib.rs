@@ -548,6 +548,63 @@ impl Client {
         }
     }
 
+    pub async fn locate_in_file(
+        &self,
+        project_id: i64,
+        path: &str,
+        query: &str,
+    ) -> Result<Vec<dozer_core::protocol::LocateMatch>> {
+        match self
+            .roundtrip(&Request::LocateInFile {
+                project_id,
+                path: path.into(),
+                query: query.into(),
+            })
+            .await?
+        {
+            Reply::LocateMatches { matches } => Ok(matches),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn apply_precise_edit(
+        &self,
+        project_id: i64,
+        path: &str,
+        start_line: u32,
+        start_col: u32,
+        end_line: u32,
+        end_col: u32,
+        expected_text: &str,
+        new_text: &str,
+        summary: &str,
+        actor: &str,
+        session_id: &str,
+    ) -> Result<dozer_core::protocol::MutationOutcome> {
+        match self
+            .roundtrip(&Request::ApplyPreciseEdit {
+                project_id,
+                path: path.into(),
+                start_line,
+                start_col,
+                end_line,
+                end_col,
+                expected_text: expected_text.into(),
+                new_text: new_text.into(),
+                summary: summary.into(),
+                actor: actor.into(),
+                session_id: session_id.into(),
+            })
+            .await?
+        {
+            Reply::MutationResult { outcome } => Ok(outcome),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
     pub async fn set_todo_plan_date(&self, id: i64, plan_date: Option<&str>) -> Result<TodoInfo> {
         match self
             .roundtrip(&Request::SetTodoPlanDate {
