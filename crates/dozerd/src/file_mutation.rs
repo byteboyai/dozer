@@ -33,7 +33,9 @@ pub fn resolve_project_path(project_root: &Path, rel_path: &str) -> Result<PathB
         .map_err(|_| LocateError::OutOfBounds)?;
     let joined = project_root.join(rel_path);
     let parent = joined.parent().ok_or(LocateError::OutOfBounds)?;
-    let parent_real = parent.canonicalize().map_err(|_| LocateError::OutOfBounds)?;
+    let parent_real = parent
+        .canonicalize()
+        .map_err(|_| LocateError::OutOfBounds)?;
     if !parent_real.starts_with(&root) {
         return Err(LocateError::OutOfBounds);
     }
@@ -100,6 +102,112 @@ pub fn locate_in_file(
     Ok(matches)
 }
 
+pub struct ApplyEditInput {
+    pub start_line: u32,
+    pub start_col: u32,
+    pub end_line: u32,
+    pub end_col: u32,
+    pub expected_text: String,
+    pub new_text: String,
+}
+
+#[derive(Debug)]
+pub struct AppliedEdit {
+    pub new_start_line: u32,
+    pub new_start_col: u32,
+    pub new_end_line: u32,
+    pub new_end_col: u32,
+    pub old_text: String,
+}
+
+/// 把 1-based (line, column) 转成字节偏移;越界/坐标非法时返回 `None`,调用方
+/// 统一映射成 `LocateError::Unwritable`(和"文件类型不可写"共用同一个变体——
+/// 从调用方视角都是"这次编辑请求本身有问题,不是环境/权限问题")。
+fn line_col_to_offset(text: &str, line: u32, col: u32) -> Option<usize> {
+    if line == 0 || col == 0 {
+        return None;
+    }
+    let mut current_line = 1u32;
+    let mut line_start = 0usize;
+    if line > 1 {
+        for (i, b) in text.bytes().enumerate() {
+            if b == b'\n' {
+                current_line += 1;
+                if current_line == line {
+                    line_start = i + 1;
+                    break;
+                }
+            }
+        }
+        if current_line != line {
+            return None;
+        }
+    }
+    let line_end = text[line_start..]
+        .find('\n')
+        .map(|i| line_start + i)
+        .unwrap_or(text.len());
+    let line_text = &text[line_start..line_end];
+    for (count, (byte_i, _ch)) in line_text.char_indices().enumerate() {
+        if count as u32 + 1 == col {
+            return Some(line_start + byte_i);
+        }
+    }
+    if line_text.chars().count() as u32 + 1 == col {
+        Some(line_start + line_text.len())
+    } else {
+        None
+    }
+}
+
+/// 精确替换 `[start_line,start_col]`~`[end_line,end_col]` 区间。返回值的外层
+/// `Result` 是"这次调用本身合不合法"(路径/坐标/编码),内层 `Result` 是
+/// Conflict Detection 的结果:`Ok(AppliedEdit)` 表示已成功写盘,`Err(String)`
+/// 表示 `expected_text` 跟磁盘实际内容不一致(附带磁盘实际内容),这种情况下
+/// **不写盘**。
+pub fn apply_precise_edit(
+    project_root: &Path,
+    rel_path: &str,
+    input: ApplyEditInput,
+) -> Result<Result<AppliedEdit, String>, LocateError> {
+    let path = resolve_project_path(project_root, rel_path)?;
+    let text = read_utf8(&path)?;
+
+    let start = line_col_to_offset(&text, input.start_line, input.start_col)
+        .ok_or_else(|| LocateError::Unwritable("坐标超出文件范围".into()))?;
+    let end = line_col_to_offset(&text, input.end_line, input.end_col)
+        .ok_or_else(|| LocateError::Unwritable("坐标超出文件范围".into()))?;
+    if start > end {
+        return Err(LocateError::Unwritable(
+            "start 坐标必须不晚于 end 坐标".into(),
+        ));
+    }
+
+    let actual = &text[start..end];
+    if actual != input.expected_text {
+        return Ok(Err(actual.to_string()));
+    }
+
+    let mut new_content = String::with_capacity(text.len() - (end - start) + input.new_text.len());
+    new_content.push_str(&text[..start]);
+    new_content.push_str(&input.new_text);
+    new_content.push_str(&text[end..]);
+    std::fs::write(&path, &new_content)
+        .map_err(|e| LocateError::Unwritable(format!("写盘失败: {e}")))?;
+
+    let new_end_byte = start + input.new_text.len();
+    let (new_start_line, new_start_col) = offset_to_line_col(&new_content, start);
+    let (new_end_line, new_end_col) = offset_to_line_col(&new_content, new_end_byte);
+
+    Ok(Ok(AppliedEdit {
+        new_start_line,
+        new_start_col,
+        new_end_line,
+        new_end_col,
+        old_text: actual.to_string(),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,5 +271,144 @@ mod tests {
         fs::write(dir.path().join("bin.dat"), [0xFF, 0xFE, 0x00, 0x01]).unwrap();
         let err = locate_in_file(dir.path(), "bin.dat", "x").unwrap_err();
         assert!(matches!(err, LocateError::Unwritable(_)));
+    }
+
+    #[test]
+    fn apply_edit_replaces_range_and_computes_new_coordinates() {
+        let dir = project();
+        fs::write(dir.path().join("a.txt"), "line one\nline two\nline three\n").unwrap();
+        let result = apply_precise_edit(
+            dir.path(),
+            "a.txt",
+            ApplyEditInput {
+                start_line: 2,
+                start_col: 1,
+                end_line: 2,
+                end_col: 9,
+                expected_text: "line two".into(),
+                new_text: "replaced".into(),
+            },
+        )
+        .unwrap();
+        let applied = result.expect("不应冲突");
+        assert_eq!(applied.new_start_line, 2);
+        assert_eq!(applied.new_start_col, 1);
+        assert_eq!(applied.new_end_line, 2);
+        assert_eq!(applied.new_end_col, 9); // "replaced" 长度同为 8
+        assert_eq!(applied.old_text, "line two");
+
+        let on_disk = fs::read_to_string(dir.path().join("a.txt")).unwrap();
+        assert_eq!(on_disk, "line one\nreplaced\nline three\n");
+    }
+
+    #[test]
+    fn apply_edit_handles_line_count_change_in_new_coordinates() {
+        let dir = project();
+        fs::write(dir.path().join("a.txt"), "keep\nreplace me\nkeep too\n").unwrap();
+        let result = apply_precise_edit(
+            dir.path(),
+            "a.txt",
+            ApplyEditInput {
+                start_line: 2,
+                start_col: 1,
+                end_line: 2,
+                end_col: 11,
+                expected_text: "replace me".into(),
+                new_text: "one\ntwo\nthree".into(),
+            },
+        )
+        .unwrap()
+        .expect("不应冲突");
+        assert_eq!(result.new_start_line, 2);
+        assert_eq!(result.new_start_col, 1);
+        assert_eq!(result.new_end_line, 4);
+        assert_eq!(result.new_end_col, 6); // "three" 长度 5
+
+        let on_disk = fs::read_to_string(dir.path().join("a.txt")).unwrap();
+        assert_eq!(on_disk, "keep\none\ntwo\nthree\nkeep too\n");
+    }
+
+    #[test]
+    fn apply_edit_conflict_when_expected_text_mismatches() {
+        let dir = project();
+        fs::write(dir.path().join("a.txt"), "actual content\n").unwrap();
+        let result = apply_precise_edit(
+            dir.path(),
+            "a.txt",
+            ApplyEditInput {
+                start_line: 1,
+                start_col: 1,
+                end_line: 1,
+                end_col: 15,
+                expected_text: "stale content".into(),
+                new_text: "new".into(),
+            },
+        )
+        .unwrap();
+        let conflict = result.expect_err("应产生冲突");
+        assert_eq!(conflict, "actual content");
+        // 冲突时不应写盘。
+        let on_disk = fs::read_to_string(dir.path().join("a.txt")).unwrap();
+        assert_eq!(on_disk, "actual content\n");
+    }
+
+    #[test]
+    fn apply_edit_rejects_reversed_coordinates() {
+        let dir = project();
+        fs::write(dir.path().join("a.txt"), "line one\nline two\n").unwrap();
+        let err = apply_precise_edit(
+            dir.path(),
+            "a.txt",
+            ApplyEditInput {
+                start_line: 2,
+                start_col: 1,
+                end_line: 1,
+                end_col: 1,
+                expected_text: String::new(),
+                new_text: "x".into(),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, LocateError::Unwritable(_)));
+    }
+
+    #[test]
+    fn apply_edit_rejects_out_of_range_coordinates() {
+        let dir = project();
+        fs::write(dir.path().join("a.txt"), "only one line\n").unwrap();
+        let err = apply_precise_edit(
+            dir.path(),
+            "a.txt",
+            ApplyEditInput {
+                start_line: 99,
+                start_col: 1,
+                end_line: 99,
+                end_col: 5,
+                expected_text: String::new(),
+                new_text: "x".into(),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, LocateError::Unwritable(_)));
+    }
+
+    #[test]
+    fn apply_edit_rejects_path_traversal() {
+        let dir = project();
+        fs::write(dir.path().join("a.txt"), "content\n").unwrap();
+        let err = apply_precise_edit(
+            dir.path(),
+            "../a.txt",
+            ApplyEditInput {
+                start_line: 1,
+                start_col: 1,
+                end_line: 1,
+                end_col: 1,
+                expected_text: String::new(),
+                new_text: "x".into(),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, LocateError::OutOfBounds));
     }
 }
