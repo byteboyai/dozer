@@ -8,9 +8,11 @@
 // - 文档内容由本 host 自行从 `dozer://editor/__file__<path>` 拉取(Rust 侧
 //   只对白名单内路径放行),避免启动时把全文经 IPC 推一遍。
 
-import { EditorState, Compartment, type Extension, type StateEffect } from '@codemirror/state';
+import { EditorState, Compartment, StateField, StateEffect, type Extension } from '@codemirror/state';
 import {
   EditorView,
+  Decoration,
+  type DecorationSet,
   keymap,
   lineNumbers,
   highlightActiveLine,
@@ -127,6 +129,43 @@ document.documentElement.setAttribute('data-theme', scheme);
 const languageCompartment = new Compartment();
 const readOnlyCompartment = new Compartment();
 const lineNumberCompartment = new Compartment();
+
+// Agent 短暂高亮:纯视觉装饰,不改变选区/光标。按 range 建一条 mark
+// decoration,`duration_ms` 后自动清除;新的高亮覆盖旧的并取消旧计时器。
+const setHighlight = StateEffect.define<{ from: number; to: number } | null>();
+let highlightTimer: ReturnType<typeof setTimeout> | null = null;
+
+const highlightMark = Decoration.mark({ class: 'dozer-agent-highlight' });
+
+const highlightField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(deco, tr) {
+    deco = deco.map(tr.changes);
+    for (const e of tr.effects) {
+      if (e.is(setHighlight)) {
+        deco = e.value === null
+          ? Decoration.none
+          : Decoration.set([highlightMark.range(e.value.from, e.value.to)]);
+      }
+    }
+    return deco;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+/** 下发一次短暂高亮;`duration_ms` 后自行清除。 */
+function applyHighlight(start: Position, end: Position, durationMs: number): void {
+  const a = positionToOffset(start);
+  const b = positionToOffset(end);
+  const from = Math.min(a, b);
+  const to = Math.max(a, b);
+  view.dispatch({ effects: setHighlight.of({ from, to }) });
+  if (highlightTimer !== null) clearTimeout(highlightTimer);
+  highlightTimer = setTimeout(() => {
+    highlightTimer = null;
+    view.dispatch({ effects: setHighlight.of(null) });
+  }, Math.max(1, durationMs));
+}
 
 function globalLineFormatter(lineNumber: number): string {
   return String(windowBase + lineNumber - 1);
@@ -426,6 +465,7 @@ function buildExtensions(): Extension[] {
     ]),
     readOnlyCompartment.of(readOnlyExtensions(initialReadOnly)),
     languageCompartment.of(languageFor(languageToken) ?? []),
+    highlightField,
     themeFor(scheme),
     EditorView.updateListener.of((update) => {
       if (update.docChanged) {
@@ -488,6 +528,7 @@ function buildDiffExtensions(oldText: string, language: string, readOnly: boolea
     diffMergeExtension(oldText),
     readOnlyCompartment.of(readOnlyExtensions(readOnly)),
     languageCompartment.of(languageFor(language) ?? []),
+    highlightField,
     themeFor(scheme),
     EditorView.updateListener.of((update) => {
       // 只读 diff:不做 document_changed / snapshot 上报;仅同步 viewport
@@ -614,6 +655,11 @@ function applyCommand(raw: string): void {
       const from = positionToOffset(cmd.start);
       const to = positionToOffset(cmd.end);
       view.dispatch({ changes: { from, to, insert: cmd.text } });
+      break;
+    }
+    case 'highlight_range': {
+      if (!isRange(cmd)) break;
+      applyHighlight(cmd.start, cmd.end, cmd.duration_ms);
       break;
     }
     case 'open_find': {

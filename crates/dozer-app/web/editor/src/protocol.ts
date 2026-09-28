@@ -93,6 +93,12 @@ export type EditorCommand =
       text: string;
       revision: number;
     }
+  | {
+      kind: 'highlight_range';
+      start: Position;
+      end: Position;
+      duration_ms: number;
+    }
   | { kind: 'open_find'; query?: string; replace?: boolean }
   | { kind: 'set_read_only'; read_only: boolean }
   | { kind: 'reload_document' }
@@ -207,6 +213,10 @@ export function decodeCommand(payload: unknown): EditorCommand | null {
       return isRange(c) &&
         typeof c.text === 'string' &&
         typeof c.revision === 'number'
+        ? (c as unknown as EditorCommand)
+        : null;
+    case 'highlight_range':
+      return isRange(c) && typeof c.duration_ms === 'number'
         ? (c as unknown as EditorCommand)
         : null;
     case 'open_find':

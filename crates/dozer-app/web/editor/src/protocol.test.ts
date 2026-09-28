@@ -81,6 +81,29 @@ test('decodeCommand accepts known commands', () => {
   assert.equal(save?.kind, 'save_document');
 });
 
+test('decodeCommand accepts highlight_range', () => {
+  const decoded = decodeCommand({
+    kind: 'highlight_range',
+    start: { line: 2, column: 1 },
+    end: { line: 4, column: 7 },
+    duration_ms: 2000,
+  });
+  assert.deepStrictEqual(decoded, {
+    kind: 'highlight_range',
+    start: { line: 2, column: 1 },
+    end: { line: 4, column: 7 },
+    duration_ms: 2000,
+  });
+  assert.equal(
+    decodeCommand({
+      kind: 'highlight_range',
+      start: { line: 2, column: 1 },
+      end: { line: 4, column: 7 },
+    }),
+    null,
+  );
+});
+
 test('decodeCommand accepts set_diff_document with all fields', () => {
   const decoded = decodeCommand({
     kind: 'set_diff_document',
