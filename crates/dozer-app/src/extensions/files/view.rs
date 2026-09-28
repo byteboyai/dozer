@@ -1326,9 +1326,13 @@ pub fn files_move_card(
     .padding(4)
     .style(move |_t, s| button::Style {
         background: match s {
-            button::Status::Hovered | button::Status::Pressed => {
-                Some(Color { a: 0.15, ..colors.gold }.into())
-            }
+            button::Status::Hovered | button::Status::Pressed => Some(
+                Color {
+                    a: 0.15,
+                    ..colors.gold
+                }
+                .into(),
+            ),
             _ => None,
         },
         border: Border {

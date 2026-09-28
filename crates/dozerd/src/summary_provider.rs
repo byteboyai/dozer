@@ -79,10 +79,9 @@ pub fn provider_isolation(agent: AgentKind) -> Option<Isolation> {
     match agent {
         AgentKind::Claude => Some(Isolation::ReadOnly),
         AgentKind::Codex | AgentKind::V8agent => Some(Isolation::ReadOnly),
-        AgentKind::Codebuddy
-        | AgentKind::Opencode
-        | AgentKind::Goose
-        | AgentKind::Aider => Some(Isolation::TempDirOnly),
+        AgentKind::Codebuddy | AgentKind::Opencode | AgentKind::Goose | AgentKind::Aider => {
+            Some(Isolation::TempDirOnly)
+        }
         AgentKind::Unknown => None,
     }
 }

@@ -584,9 +584,7 @@ pub fn settings_card(
     )
     .on_press(Message::Close)
     .padding([8, 20])
-    .style(crate::extensions::project_create::action_button_hover_style(
-        colors.dim,
-    ));
+    .style(crate::extensions::project_create::action_button_hover_style(colors.dim));
     let close_icon = icons::icon_button_entry(
         icons::IconKind::X,
         byteui::theme::icon_size::row(),
@@ -619,8 +617,8 @@ pub fn settings_card(
     ]
     .spacing(8)
     .align_y(Alignment::Center);
-    let header = row![title, Space::new().width(Length::Fill), close_icon]
-        .align_y(Alignment::Center);
+    let header =
+        row![title, Space::new().width(Length::Fill), close_icon].align_y(Alignment::Center);
     let content = column![
         header,
         theme_title,

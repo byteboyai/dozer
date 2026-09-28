@@ -1785,9 +1785,7 @@ mod trace_detail_tests {
         assert_eq!(turns.len(), 27, "真实事件应逐条产出 turn,不该有静默丢失");
         assert_eq!(turns[0].role, "human");
         assert!(
-            turns
-                .iter()
-                .any(|t| t.role == "tool_result" && t.is_error),
+            turns.iter().any(|t| t.role == "tool_result" && t.is_error),
             "真实捕获里含一次 PostToolUseFailure,必须映射成 is_error 的 tool_result"
         );
         assert!(

@@ -887,7 +887,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.title, "标题");
-        assert_eq!(flaky.calls, 3, "第一次抽取解析失败应重试一次,再加一次最终归并");
+        assert_eq!(
+            flaky.calls, 3,
+            "第一次抽取解析失败应重试一次,再加一次最终归并"
+        );
     }
 
     #[tokio::test]
@@ -899,7 +902,11 @@ mod tests {
                 _instruction: &str,
                 _data: &str,
             ) -> std::pin::Pin<
-                Box<dyn std::future::Future<Output = Result<String, PipelineError>> + Send + 'static>,
+                Box<
+                    dyn std::future::Future<Output = Result<String, PipelineError>>
+                        + Send
+                        + 'static,
+                >,
             > {
                 Box::pin(async move { Ok("{\"goals\":[\"没写完".to_string()) })
             }

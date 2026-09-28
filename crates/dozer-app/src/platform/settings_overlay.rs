@@ -30,9 +30,7 @@ use crate::platform::overlay_window::{
 /// 完全一致:宽度 = 主窗口宽度 40%(下限 560),高度 = 主窗口高度 75%(下限
 /// 520),保证两类弹窗窗口大小统一(2026-09-27 用户要求样式对齐创建项目弹窗)。
 fn card_logical_size(window: &Window) -> LogicalSize<f32> {
-    let logical: LogicalSize<f32> = window
-        .inner_size()
-        .to_logical(window.scale_factor());
+    let logical: LogicalSize<f32> = window.inner_size().to_logical(window.scale_factor());
     let size = crate::extensions::project_create::card_logical_size(logical.width, logical.height);
     LogicalSize::new(size.width, size.height)
 }

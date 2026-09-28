@@ -133,52 +133,58 @@ pub struct ConfirmDialog<Msg> {
 pub fn confirm<'a, Msg: 'a + Clone>(
     spec: ConfirmDialog<Msg>,
 ) -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {
-    let title_content: Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> = match spec.icon {
-        Some(icon) => row![
-            byteui::interaction::icons::view(
-                icon,
-                byteui::theme::icon_size::row(),
-                byteui::theme::color::current().cream,
-            ),
-            text(spec.title)
-                .size(byteui::theme::font::subtitle())
-                .color(byteui::theme::color::current().cream),
-        ]
-        .spacing(6)
-        .align_y(iced_widget::core::Alignment::Center)
-        .into(),
-        None => text(spec.title)
-            .size(byteui::theme::font::subtitle())
-            .color(byteui::theme::color::current().cream)
+    let title_content: Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> =
+        match spec.icon {
+            Some(icon) => row![
+                byteui::interaction::icons::view(
+                    icon,
+                    byteui::theme::icon_size::row(),
+                    byteui::theme::color::current().cream,
+                ),
+                text(spec.title)
+                    .size(byteui::theme::font::subtitle())
+                    .color(byteui::theme::color::current().cream),
+            ]
+            .spacing(6)
+            .align_y(iced_widget::core::Alignment::Center)
             .into(),
-    };
+            None => text(spec.title)
+                .size(byteui::theme::font::subtitle())
+                .color(byteui::theme::color::current().cream)
+                .into(),
+        };
     // 标题行右侧的可选 × 关闭按钮：仅 `close_msg` 为 `Some` 时渲染，把按钮
     // 推到最右；无关闭按钮时整行就是标题本身。
-    let header: Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> = match spec.close_msg {
+    let header: Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> = match spec.close_msg
+    {
         Some(close_msg) => {
             let colors = byteui::theme::color::current();
-            let close_btn = button(
-                byteui::interaction::icons::view(
-                    IconKind::X,
-                    byteui::theme::icon_size::row(),
-                    colors.dim,
-                ),
-            )
+            let close_btn = button(byteui::interaction::icons::view(
+                IconKind::X,
+                byteui::theme::icon_size::row(),
+                colors.dim,
+            ))
             .on_press(close_msg)
             .padding(4)
-            .style(move |_t: &iced_widget::Theme, s: button::Status| button::Style {
-                background: match s {
-                    button::Status::Hovered | button::Status::Pressed => {
-                        Some(Color { a: 0.15, ..colors.gold }.into())
-                    }
-                    _ => None,
+            .style(
+                move |_t: &iced_widget::Theme, s: button::Status| button::Style {
+                    background: match s {
+                        button::Status::Hovered | button::Status::Pressed => Some(
+                            Color {
+                                a: 0.15,
+                                ..colors.gold
+                            }
+                            .into(),
+                        ),
+                        _ => None,
+                    },
+                    border: Border {
+                        width: 0.0,
+                        ..Border::default()
+                    },
+                    ..button::Style::default()
                 },
-                border: Border {
-                    width: 0.0,
-                    ..Border::default()
-                },
-                ..button::Style::default()
-            });
+            );
             row![title_content, iced_widget::space::horizontal(), close_btn]
                 .align_y(iced_widget::core::Alignment::Center)
                 .into()
