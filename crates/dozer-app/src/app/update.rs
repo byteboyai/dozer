@@ -706,7 +706,11 @@ impl App {
                                     && let Some(sheet) = view.active_sheet()
                                 {
                                     let start = (start_row as usize).min(sheet.rows.len());
-                                    let end = (end_row as usize).min(sheet.rows.len());
+                                    // `.max(start)`:防御性防越界——不可信的
+                                    // IPC 输入若带 end_row < start_row,裸切片
+                                    // 会直接 panic(见 webview_protocol.rs
+                                    // "解析失败不 panic" 的既定原则)。
+                                    let end = (end_row as usize).min(sheet.rows.len()).max(start);
                                     let rows = sheet.rows[start..end].to_vec();
                                     window_push = Some((sheet_index, start as u32, rows, revision));
                                 }
@@ -2477,8 +2481,21 @@ impl App {
                         pane.finish_tabular_load(tab_id, generation, result)
                     };
                     // 恢复的 active sheet 不是首个 → 触发一次懒加载。
-                    if let Some(sheet) = sheet_to_select {
+                    // `select_sheet`(经 `preview_pane_tabular_action`)会把
+                    // scroll_row/scroll_col 重置为 0(正常切 sheet 的预期
+                    // 行为),因此要在它之后把持久化的 row/col 重新应用
+                    // 一遍,否则恢复到非首个 sheet 的滚动位置会被静默清零。
+                    if let Some((sheet, row, col)) = sheet_to_select {
                         ws.preview_pane_tabular_action(kind, tab_id, sheet, io);
+                        let pane = if kind == PanelKind::Project {
+                            &mut ws.project_preview
+                        } else {
+                            &mut ws.preview
+                        };
+                        if let Some(view) = pane.tabular_mut(tab_id) {
+                            view.scroll_row = row;
+                            view.scroll_col = col;
+                        }
                     }
                 });
             }
@@ -2502,7 +2519,14 @@ impl App {
                             loading: false,
                         },
                     );
-                    if loaded_ok {
+                    // 用户可能在这次懒加载完成前又切到了别的 sheet
+                    // (rapid switch)——`view.active_sheet` 已经不是
+                    // `sheet_index` 时,不该把 JS 拽回这个已经不再是目标的
+                    // sheet(否则会看到一个没数据的空白网格)。
+                    let still_active = pane
+                        .tabular_mut(tab_id)
+                        .is_some_and(|view| view.active_sheet == sheet_index);
+                    if loaded_ok && still_active {
                         pane.queue_tabular_command(
                             tab_id,
                             crate::preview::TabularCommand::SelectSheet { sheet_index },

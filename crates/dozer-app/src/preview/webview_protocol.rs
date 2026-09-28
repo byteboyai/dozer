@@ -483,7 +483,9 @@ pub enum TabularEvent {
     /// host JS 初始化完成(空网格)。不代表任何 sheet 已可显示。
     Ready,
     /// 用户点了 sheet tab。
-    SheetSelected { index: usize },
+    SheetSelected {
+        index: usize,
+    },
     /// ag-grid Infinite Row Model 的 `getRows` 回调发出,请求 `[start_row,
     /// end_row)` 区间的行。
     WindowRequest {
@@ -493,8 +495,13 @@ pub enum TabularEvent {
     },
     /// 首个 `SetWindow` 真正挂上(`api.setRowCount` + 首块数据到位),回报
     /// 窗口首行全局行号。Rust 以此作为该 sheet 加载的 Ready 边界。
-    WindowApplied { start_row: u32 },
-    Failed { message: String, recoverable: bool },
+    WindowApplied {
+        start_row: u32,
+    },
+    Failed {
+        message: String,
+        recoverable: bool,
+    },
 }
 
 /// 解析一条 tabular host 事件。与 [`parse_event`] 同规则(超大/非法/未知不 panic)。

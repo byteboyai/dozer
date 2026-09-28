@@ -48,6 +48,14 @@ interface SheetState {
   loading: boolean;
   api: GridApi | null;
   container: HTMLDivElement;
+  /// agent reveal(`reveal_range`)当前要高亮的范围(0-based,含端点)。
+  /// `null` = 无高亮。由 `cellClassRules` 读取,渲染成
+  /// `.dozer-reveal-highlight`。
+  highlight: { r1: number; c1: number; r2: number; c2: number } | null;
+  /// 最近一次真正被应用的 `set_window.revision`。用于丢弃迟到的过期响应
+  /// (与 Rust `TabularCommand::SetWindow` 文档"revision 供 JS 端丢弃过期
+  /// 响应"的约定对应)。`-1` 表示还没应用过任何窗口。
+  lastWindowRevision: number;
 }
 const sheets = new Map<number, SheetState>();
 
@@ -118,6 +126,8 @@ function ensureSheetState(sheetIndex: number): SheetState {
     loading: false,
     api: null,
     container,
+    highlight: null,
+    lastWindowRevision: -1,
   };
   sheets.set(sheetIndex, state);
   return state;
@@ -147,6 +157,15 @@ function buildGrid(sheetIndex: number, state: SheetState): void {
     // 非目标:不做列宽拖拽调整(spec"非目标"一节明确排除),固定宽度。
     resizable: false,
     width: Math.max(64, Math.min(320, (state.colWidths[c] ?? 12) * 8)),
+    // agent reveal 高亮:cellClassRules 在渲染/`refreshCells` 时重新求值,
+    // 命中 `state.highlight` 范围的单元格套 `.dozer-reveal-highlight`。
+    cellClassRules: {
+      'dozer-reveal-highlight': (p: { node: { rowIndex: number | null } }) => {
+        const h = state.highlight;
+        if (!h || p.node.rowIndex == null) return false;
+        return p.node.rowIndex >= h.r1 && p.node.rowIndex <= h.r2 && c >= h.c1 && c <= h.c2;
+      },
+    },
   }));
   const options: GridOptions = {
     columnDefs: [rowNumberCol, ...dataCols],
@@ -235,6 +254,14 @@ function applySetWindow(cmd: {
 }): void {
   const state = sheets.get(cmd.sheet_index);
   if (!state?.api) return;
+  // 丢弃迟到的过期响应(见 `lastWindowRevision` 文档)。数据本身对同一个
+  // (sheet, start_row) 从不改变(只读预览、Sheet 一旦加载不再变化),这里
+  // 主要是防御性地兑现协议文档的约定,避免旧响应覆盖更晚一次请求已经
+  // 应用的状态。
+  if (cmd.revision < state.lastWindowRevision) {
+    return;
+  }
+  state.lastWindowRevision = cmd.revision;
   const key = `${cmd.sheet_index}:${cmd.start_row}`;
   const pending = pendingGetRows.get(key);
   const rowData = cmd.rows.map((row) => Object.fromEntries(row.map((v, i) => [`c${i}`, v])));
@@ -270,8 +297,14 @@ function applyRevealRange(cmd: {
     showActiveSheet();
   }
   const state = sheets.get(cmd.sheet_index);
-  state?.api?.ensureIndexVisible(cmd.r1, 'top');
-  state?.api?.ensureColumnVisible(`c${cmd.c1}`);
+  if (!state) return;
+  state.highlight = { r1: cmd.r1, c1: cmd.c1, r2: cmd.r2, c2: cmd.c2 };
+  state.api?.ensureIndexVisible(cmd.r1, 'top');
+  state.api?.ensureColumnVisible(`c${cmd.c1}`);
+  // `cellClassRules` 只在渲染/刷新时重新求值,主动强制刷新可见单元格让
+  // 高亮立即生效(不用等下一次滚动/数据变更触发的自然重绘)。
+  state.api?.refreshCells({ force: true });
+  state.api?.setFocusedCell(cmd.r1, `c${cmd.c1}`);
 }
 
 function applyRestoreViewState(cmd: {

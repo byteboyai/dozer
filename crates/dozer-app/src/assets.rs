@@ -787,7 +787,8 @@ mod tests {
 
     /// 提交的 CodeMirror 产物必须齐全(防止忘记 `npm run build` 就提交)。
     #[test]
-    fn editor_bundle_assets_are_present() {        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/editor"));
+    fn editor_bundle_assets_are_present() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/editor"));
         for f in [
             "index.html",
             "editor.js",

@@ -126,8 +126,10 @@ impl TabularView {
     }
 
     /// T12:切到 `sheet`(越界钳到合法),未加载则返回后台加载请求(调用方物化
-    /// 后重试一次)。`sheet` 数为 0 时 no-op。
-    #[allow(dead_code)] // T12:Agent reveal 内部原语(暂由测试使用)。
+    /// 后重试一次)。`sheet` 数为 0 时 no-op。真实调用方是
+    /// `Workspace::preview_pane_tabular_action`(由 Tabular Grid webview host
+    /// 的 `sheet_selected` 事件驱动,或会话恢复到非首个 sheet 时触发),不再
+    /// 只是测试用内部原语。
     pub fn select_sheet(&mut self, sheet: usize) -> Option<SheetLoadRequest> {
         if self.sheets.is_empty() {
             return None;
