@@ -104,6 +104,9 @@ async fn generated_summary_is_visible_through_panel_query_and_shared_batches_fin
         todos: Arc::new(dozerd::todo::TodoStore::new(&db).unwrap()),
         categories: Arc::new(dozerd::todo_category::CategoryStore::new(&db).unwrap()),
         memories: Arc::new(dozerd::memory::MemoryStore::new(&db).unwrap()),
+        file_edit_history: Arc::new(
+            dozerd::file_edit_history::FileEditHistoryStore::new(&db).unwrap(),
+        ),
     };
     let server = tokio::spawn({
         let sock = sock.clone();

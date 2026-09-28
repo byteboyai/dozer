@@ -87,6 +87,7 @@ pub struct Stores {
     pub todos: std::sync::Arc<crate::todo::TodoStore>,
     pub categories: std::sync::Arc<crate::todo_category::CategoryStore>,
     pub memories: std::sync::Arc<crate::memory::MemoryStore>,
+    pub file_edit_history: std::sync::Arc<crate::file_edit_history::FileEditHistoryStore>,
 }
 
 /// 探测 `socket` 路径背后是否还有活着的 dozerd 在监听。`UnixListener::bind`
@@ -127,6 +128,7 @@ pub async fn serve(
         todos,
         categories,
         memories,
+        file_edit_history,
     } = stores;
     let preview_contexts = Arc::new(PreviewContextStore::new());
     let preview_commands = Arc::new(crate::preview_commands::PreviewCommandBus::new());
@@ -168,6 +170,7 @@ pub async fn serve(
         todos,
         categories,
         memories,
+        file_edit_history,
     };
     loop {
         tokio::select! {
@@ -412,6 +415,7 @@ async fn handle_conn(
         todos,
         categories,
         memories,
+        file_edit_history,
     } = stores;
     // 总结调度服务:提交/查询走持久化表,状态在 SQLite 里,跨连接可见。每个
     // 连接构造一份轻量句柄(只是 Arc 引用 + 一个 scratch 根路径)。
@@ -1188,8 +1192,121 @@ async fn handle_conn(
                             }
                         }
                         // T8 接线前的占位(见 2026-09-28 agent-native file editor plan)。
-                        Request::LocateInFile { .. } | Request::ApplyPreciseEdit { .. } => {
-                            Reply::Error { message: "未接线".into() }
+                        Request::LocateInFile { project_id, path, query } => {
+                            let root = projects
+                                .list()
+                                .ok()
+                                .and_then(|ps| ps.into_iter().find(|p| p.id == project_id))
+                                .map(|p| std::path::PathBuf::from(p.path));
+                            match root {
+                                None => Reply::Error {
+                                    message: "项目不存在".into(),
+                                },
+                                Some(root) => {
+                                    match crate::file_mutation::locate_in_file(&root, &path, &query)
+                                    {
+                                        Ok(matches) => Reply::LocateMatches { matches },
+                                        Err(e) => Reply::LocateMatches {
+                                            matches: locate_error_to_empty_with_log(e, &path),
+                                        },
+                                    }
+                                }
+                            }
+                        }
+                        Request::ApplyPreciseEdit {
+                            project_id,
+                            path,
+                            start_line,
+                            start_col,
+                            end_line,
+                            end_col,
+                            expected_text,
+                            new_text,
+                            summary,
+                            actor,
+                            session_id,
+                        } => {
+                            let root = projects
+                                .list()
+                                .ok()
+                                .and_then(|ps| ps.into_iter().find(|p| p.id == project_id))
+                                .map(|p| std::path::PathBuf::from(p.path));
+                            match root {
+                                None => Reply::Error {
+                                    message: "项目不存在".into(),
+                                },
+                                Some(root) => {
+                                    let input = crate::file_mutation::ApplyEditInput {
+                                        start_line,
+                                        start_col,
+                                        end_line,
+                                        end_col,
+                                        expected_text,
+                                        new_text: new_text.clone(),
+                                    };
+                                    let outcome = match crate::file_mutation::apply_precise_edit(
+                                        &root, &path, input,
+                                    ) {
+                                        Ok(Ok(applied)) => {
+                                            let history_id = file_edit_history
+                                                .record(crate::file_edit_history::NewFileEditHistoryEntry {
+                                                    project_id,
+                                                    target_path: path.clone(),
+                                                    actor,
+                                                    session_id,
+                                                    start_line,
+                                                    start_col,
+                                                    end_line,
+                                                    end_col,
+                                                    old_text: applied.old_text,
+                                                    new_text,
+                                                    summary,
+                                                })
+                                                .unwrap_or(-1);
+                                            let outcome =
+                                                dozer_core::protocol::MutationOutcome::Applied {
+                                                    new_start_line: applied.new_start_line,
+                                                    new_start_col: applied.new_start_col,
+                                                    new_end_line: applied.new_end_line,
+                                                    new_end_col: applied.new_end_col,
+                                                    history_id,
+                                                };
+                                            schedule_post_edit_reveal(
+                                                preview_commands.clone(),
+                                                project_id,
+                                                path.clone(),
+                                                applied.new_start_line,
+                                                applied.new_start_col,
+                                                applied.new_end_line,
+                                                applied.new_end_col,
+                                            );
+                                            outcome
+                                        }
+                                        Ok(Err(actual_text)) => {
+                                            dozer_core::protocol::MutationOutcome::Conflict {
+                                                actual_text,
+                                            }
+                                        }
+                                        Err(crate::file_mutation::LocateError::OutOfBounds) => {
+                                            dozer_core::protocol::MutationOutcome::PathOutOfBounds
+                                        }
+                                        Err(crate::file_mutation::LocateError::NotFound) => {
+                                            dozer_core::protocol::MutationOutcome::NotFound
+                                        }
+                                        Err(crate::file_mutation::LocateError::Unwritable(
+                                            reason,
+                                        )) => {
+                                            dozer_core::protocol::MutationOutcome::Unwritable {
+                                                reason,
+                                            }
+                                        }
+                                        Err(crate::file_mutation::LocateError::EmptyQuery) => {
+                                            unreachable!("apply_precise_edit 不会产生 EmptyQuery")
+                                        }
+                                    };
+                                    Reply::MutationResult { outcome }
+                                }
+                            }
                         }
                     },
                 };
@@ -1251,6 +1368,68 @@ async fn handle_conn(
         }
     }
     Ok(())
+}
+
+/// `LocateInFile` 遇到路径/编码问题时的兜底:不把 daemon 内部错误细节透传成
+/// agent 能直接摸到的报错通道,统一表现成"空匹配列表"——调用方(`dozer-mcp`
+/// 的 `locate_in_file` 工具)据此提示"没搜到,检查路径和 query"就够了,不需要
+/// 额外区分"路径越界"和"文件不存在",这两者对 agent 来说都是同一句"重新确认
+/// 一下路径"。
+fn locate_error_to_empty_with_log(
+    err: crate::file_mutation::LocateError,
+    path: &str,
+) -> Vec<dozer_core::protocol::LocateMatch> {
+    tracing::debug!(?err, path, "locate_in_file 失败");
+    Vec::new()
+}
+
+/// `ApplyPreciseEdit` 成功后,延迟一小段时间再把「定位到新范围 + 短暂高亮」
+/// 两条命令挂进 `PreviewCommandBus`——延迟是为了大概率排在
+/// `git_watch.rs`(通用文件监听)触发的 `ReloadDocument` 之后,避免定位先于
+/// 重载发生、又被重载盖掉视图状态(具体排序不做强保证,是啓发式,见 spec
+/// "Change Feedback"一节)。不等待这两条命令的应答——纯 best-effort,目标
+/// tab 未必存在(文件没被打开过),`PreviewCommandBus` 对找不到 tab 的情况本来
+/// 就有 `NotFound` 语义,这里不关心结果。
+fn schedule_post_edit_reveal(
+    bus: std::sync::Arc<crate::preview_commands::PreviewCommandBus>,
+    project_id: i64,
+    path: String,
+    start_line: u32,
+    start_col: u32,
+    end_line: u32,
+    end_col: u32,
+) {
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let target = dozer_core::protocol::PreviewCommandTarget::Path { path: path.clone() };
+        let select_id = format!("agent-edit-select-{}", uuid::Uuid::new_v4());
+        let _ = bus.enqueue(dozer_core::protocol::PreviewCommand {
+            request_id: select_id,
+            project_id,
+            target: target.clone(),
+            action: dozer_core::protocol::PreviewCommandAction::Select {
+                start_line,
+                start_column: start_col,
+                end_line,
+                end_column: end_col,
+            },
+            expected_revision: None,
+        });
+        let highlight_id = format!("agent-edit-highlight-{}", uuid::Uuid::new_v4());
+        let _ = bus.enqueue(dozer_core::protocol::PreviewCommand {
+            request_id: highlight_id,
+            project_id,
+            target,
+            action: dozer_core::protocol::PreviewCommandAction::Highlight {
+                start_line,
+                start_column: start_col,
+                end_line,
+                end_column: end_col,
+                duration_ms: 2000,
+            },
+            expected_revision: None,
+        });
+    });
 }
 
 #[cfg(test)]
@@ -1360,6 +1539,7 @@ mod tests {
             todos: std::sync::Arc<crate::todo::TodoStore>,
             categories: std::sync::Arc<crate::todo_category::CategoryStore>,
             memories: std::sync::Arc<crate::memory::MemoryStore>,
+            file_edit_history: std::sync::Arc<crate::file_edit_history::FileEditHistoryStore>,
         ) {
             let fut = crate::server::serve(
                 socket,
@@ -1383,6 +1563,7 @@ mod tests {
                     todos,
                     categories,
                     memories,
+                    file_edit_history,
                 },
                 crate::task_poller::new_in_flight(),
             );

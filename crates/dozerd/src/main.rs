@@ -104,6 +104,9 @@ async fn main() -> Result<()> {
     let memories = Arc::new(dozerd::memory::MemoryStore::new(
         &dozer_core::paths::state_dir().join("dozer.db"),
     )?);
+    let file_edit_history = Arc::new(dozerd::file_edit_history::FileEditHistoryStore::new(
+        &dozer_core::paths::state_dir().join("dozer.db"),
+    )?);
     let in_flight = dozerd::task_poller::new_in_flight();
     {
         let files = dozerd::transcripts::scan::discover_all_transcript_files();
@@ -162,6 +165,7 @@ async fn main() -> Result<()> {
             todos,
             categories,
             memories,
+            file_edit_history,
         },
         in_flight,
     );

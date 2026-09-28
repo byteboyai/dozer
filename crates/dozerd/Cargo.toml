@@ -23,3 +23,5 @@ libc.workspace = true
 tempfile = "3"
 
 [dev-dependencies]
+dozer-client = { path = "../dozer-client" }
+uuid.workspace = true
