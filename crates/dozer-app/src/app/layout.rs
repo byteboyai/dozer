@@ -396,17 +396,31 @@ pub(crate) fn tree_drag_held_long_enough(elapsed: std::time::Duration) -> bool {
 /// 面板级"场景已经在调用处单独合并,这里补的是"面板本身还在,但面板内
 /// 某个 `crate::chrome::menu` 弹层可能压住 webview 内容区"的场景:Files 面板的
 /// 文件树右键菜单、Project 面板的链接行右键菜单、Conversations 面板的
-/// agent 筛选下拉。原生 wry 子视图不听 iced 绘制顺序摆布,只能靠调用方
+/// agent 筛选下拉、以及预览内选区右键"发送给 Agent"菜单。
+///
+/// `preview_menu_covers_this` 调用方在传入前已经用该浮层自己的 `panel`
+/// 字段跟当前 `kind` 比对过(同 `tab_menu_covers_this` 的用法),但这里仍
+/// 按 `kind` 分支只把它并进真的可能承载这个菜单的面板——`preview_desired`
+/// 里当前只有 `PanelKind::Files`/`PanelKind::Project` 会经
+/// `desired_editor_webviews` 产出 CodeMirror 文本预览(能触发
+/// `EditorEvent::ContextMenuRequested` 的唯一来源),GitLog/Usage 等在
+/// 到达这个函数前已经各自 `continue` 掉,不会真的带着这个标志走到这里;
+/// 没有 webview 的面板种类(如 Todo)必须恒不隐藏,不能因为这个新标志
+/// 被误伤——不要改回"无条件 OR 进最终结果",那样会让任意 `kind` 只要
+/// 传 `true` 就被隐藏,破坏这条不变量(曾经这样改过,被
+/// `webview_hidden_by_panel_popup_false_for_panel_kinds_without_a_webview`
+/// 测试当场抓到)。原生 wry 子视图不听 iced 绘制顺序摆布,只能靠调用方
 /// 显式把 `WebviewSpec.visible` 置 `false` 才能让浮层真正盖住它。
 pub(crate) fn webview_hidden_by_panel_popup(
     kind: PanelKind,
     files_context_menu_open: bool,
     project_link_menu_open: bool,
     conversations_agent_picker_open: bool,
+    preview_menu_covers_this: bool,
 ) -> bool {
     match kind {
-        PanelKind::Files => files_context_menu_open,
-        PanelKind::Project => project_link_menu_open,
+        PanelKind::Files => files_context_menu_open || preview_menu_covers_this,
+        PanelKind::Project => project_link_menu_open || preview_menu_covers_this,
         PanelKind::Conversations => conversations_agent_picker_open,
         _ => false,
     }

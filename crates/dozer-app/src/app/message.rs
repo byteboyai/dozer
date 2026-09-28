@@ -675,16 +675,23 @@ pub enum Message {
     /// 设置弹窗内部消息,转发给 `extensions::settings::update`。
     Settings(settings::Message),
     /// 预览内选区右键"发送给 Agent":拼 `selection_reference_text` 后写进
-    /// 当前激活 agent 终端输入框(`term_paste`)。
+    /// 当前激活 agent 终端输入框(`term_paste`)。`project_id` 是触发这次
+    /// 右键的那个项目(建菜单时捕获,不是处理这条消息时"当前激活"的项目
+    /// ——两者在非 mac 的非阻塞 iced 弹层场景下可能已经不是同一个,见
+    /// handler 里的校验)。
     SendSelectionToAgent {
+        project_id: i64,
         path: std::path::PathBuf,
         range: crate::preview::TextRange,
         selected_text: String,
     },
     /// 预览内选区右键事件已到(`EditorEvent::ContextMenuRequested`),在
     /// `with_project` 闭包外计算几何坐标、判断终端可见性并弹菜单(闭包内
-    /// 拿不到 `self`)。
+    /// 拿不到 `self`)。`project_id` 是触发这次右键的项目(来自
+    /// `EditorHostBinding::project_id`),原样带到 `PreviewSelectionContextMenu`
+    /// 里,不依赖处理这条(异步派发的)消息时"当前激活"的是哪个项目。
     PreviewSelectionMenuOpen {
+        project_id: i64,
         panel: PanelKind,
         tab_id: usize,
         path: std::path::PathBuf,
@@ -706,8 +713,12 @@ pub(crate) struct ProjectLinkMenu {
 /// 预览内选区右键"发送给 Agent"浮层状态,镜像 `ProjectLinkMenu`/
 /// `TabContextMenu`。`panel`/`tab_id` 供非 mac iced fallback 判断这个
 /// 浮层是否盖住了当前正在算隐藏的那个 webview(同 `tab_menu_covers_this`
-/// 的用法)。
+/// 的用法)。`project_id` 是建菜单时捕获的"发起这次右键的项目"——非 mac
+/// 的 iced 弹层不阻塞输入,用户可能在菜单开着时切到另一个项目标签再点
+/// "发送给 Agent",`SendSelectionToAgent` 的 handler 靠这个字段校验目标
+/// 项目仍是发起者,不是当时"碰巧激活"的那个。
 pub(crate) struct PreviewSelectionContextMenu {
+    pub(crate) project_id: i64,
     pub(crate) x: f32,
     pub(crate) y: f32,
     pub(crate) panel: PanelKind,

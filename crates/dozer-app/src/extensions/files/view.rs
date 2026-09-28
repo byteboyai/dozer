@@ -1146,6 +1146,7 @@ pub(crate) fn preview_selection_context_menu_spec(
         },
         enabled: menu.agent_terminal_visible,
         msg: crate::app::Message::SendSelectionToAgent {
+            project_id: menu.project_id,
             path: menu.path.clone(),
             range: menu.range,
             selected_text: menu.selected_text.clone(),
@@ -1565,6 +1566,7 @@ mod tests {
         agent_terminal_visible: bool,
     ) -> crate::app::PreviewSelectionContextMenu {
         crate::app::PreviewSelectionContextMenu {
+            project_id: 7,
             x: 0.0,
             y: 0.0,
             panel: crate::app::PanelKind::Files,
@@ -1599,5 +1601,23 @@ mod tests {
             _ => None,
         });
         assert_eq!(enabled, Some(true));
+    }
+
+    /// 回归测试:菜单点击产生的 `SendSelectionToAgent` 必须带上建菜单时
+    /// 捕获的 `project_id`(发起这次右键的项目),而不是留给 handler 处理
+    /// 消息时再去猜"当前激活的是哪个项目"——后者在非 mac 的非阻塞弹层下,
+    /// 用户切换项目标签后点击,会把内容送错项目。
+    #[test]
+    fn preview_selection_menu_click_carries_originating_project_id() {
+        let menu = sample_selection_menu(true);
+        let spec = preview_selection_context_menu_spec(&menu);
+        let msg = spec.iter().find_map(|item| match item {
+            MenuSpecItem::Entry { msg, .. } => Some(msg.clone()),
+            _ => None,
+        });
+        assert!(matches!(
+            msg,
+            Some(crate::app::Message::SendSelectionToAgent { project_id: 7, .. })
+        ));
     }
 }

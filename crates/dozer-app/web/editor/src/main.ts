@@ -789,11 +789,15 @@ async function boot(): Promise<void> {
       const sel = view.state.selection.main;
       if (sel.empty) return;
       e.preventDefault();
+      // `currentRange()` 按 anchor/head 顺序给(反向选区时 start 在 end 之后),
+      // 但 `selected_text` 用 `sliceDoc(sel.from, sel.to)` 恒正向取值——这里
+      // 同样按 `from`/`to` 算 range,保证两者方向一致,不给 agent 一个头尾
+      // 颠倒的坐标区间。
       post({
         kind: 'context_menu_requested',
         x: e.clientX,
         y: e.clientY,
-        range: currentRange(),
+        range: { start: offsetToPosition(sel.from), end: offsetToPosition(sel.to) },
         selected_text: view.state.sliceDoc(sel.from, sel.to),
       });
     },

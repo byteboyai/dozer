@@ -2792,6 +2792,7 @@ impl App {
             || self.project_link_menu.is_some()
             || self.text_input_menu.is_some()
             || self.database_source_menu.is_some()
+            || self.preview_context_menu.is_some()
     }
 
     /// 输入框右键菜单是否打开(main.rs Esc 键路由用)。
@@ -3422,11 +3423,10 @@ impl App {
                 .is_some_and(|m| m.panel == kind);
             let panel_popup_open = webview_hidden_by_panel_popup(
                 kind,
-                self.files.context_menu_is_some()
-                    || tab_menu_covers_this
-                    || preview_menu_covers_this,
+                self.files.context_menu_is_some() || tab_menu_covers_this,
                 self.project_link_menu.is_some(),
                 ws.conversations.agent_picker_open(),
+                preview_menu_covers_this,
             );
             let mut bounds = webview_geometry::preview_content_bounds_for(
                 side,
@@ -3739,6 +3739,7 @@ mod tests {
             true,
             false,
             false,
+            false,
         ));
     }
 
@@ -3749,6 +3750,7 @@ mod tests {
             PanelKind::Project,
             false,
             true,
+            false,
             false,
         ));
     }
@@ -3761,28 +3763,39 @@ mod tests {
             false,
             false,
             true,
+            false,
         ));
     }
 
-    /// 预览选区右键菜单只按 `panel` 匹配当前正在算隐藏的 webview:
-    /// 同面板命中、异面板不命中,断言匹配逻辑没写反。
+    /// 预览选区右键菜单要能隐藏**任意**承载预览 webview 的面板,不止
+    /// `PanelKind::Files`——回归测试:之前的实现把这个标志并进了只在
+    /// `kind == PanelKind::Files` 时才生效的 `files_context_menu_open`
+    /// 分支,导致 Project/GitLog/Database 等面板下标志被静默丢弃,webview
+    /// 会盖住新弹出的"发送给 Agent"菜单。这里直接调生产代码
+    /// `webview_hidden_by_panel_popup`(不是像之前那样只断言
+    /// `Option::is_some_and` 本身),真正锁定这条路径。
     #[test]
-    fn preview_menu_covers_this_matches_only_same_panel() {
-        let menu = PreviewSelectionContextMenu {
-            x: 0.0,
-            y: 0.0,
-            panel: PanelKind::Files,
-            tab_id: 1,
-            path: std::path::PathBuf::from("a.rs"),
-            range: crate::preview::TextRange {
-                start: crate::preview::TextPosition { line: 1, column: 1 },
-                end: crate::preview::TextPosition { line: 1, column: 2 },
-            },
-            selected_text: "x".into(),
-            agent_terminal_visible: true,
-        };
-        assert!(Some(&menu).is_some_and(|m| m.panel == PanelKind::Files));
-        assert!(!Some(&menu).is_some_and(|m| m.panel == PanelKind::Project));
+    fn webview_hidden_by_panel_popup_preview_menu_covers_non_files_panel() {
+        assert!(webview_hidden_by_panel_popup(
+            PanelKind::Project,
+            false,
+            false,
+            false,
+            true,
+        ));
+    }
+
+    /// 预览选区右键菜单标志为假时,不应该无差别隐藏其他面板——防止上面
+    /// 那条回归测试是靠"参数顺序传错、结果恰好为真"这种方式假通过。
+    #[test]
+    fn webview_hidden_by_panel_popup_false_when_preview_menu_flag_is_false() {
+        assert!(!webview_hidden_by_panel_popup(
+            PanelKind::Project,
+            false,
+            false,
+            false,
+            false,
+        ));
     }
 
     /// 标志位为真,但当前面板种类对不上——不该被误伤隐藏(比如 Project
@@ -3794,15 +3807,17 @@ mod tests {
             false,
             true,
             false,
+            false,
         ));
     }
 
-    /// 没有 webview 的面板种类(如 Todo)恒不隐藏,即便三个标志全为真——
+    /// 没有 webview 的面板种类(如 Todo)恒不隐藏,即便四个标志全为真——
     /// 这几个标志本就不该对这类面板产生任何效果。
     #[test]
     fn webview_hidden_by_panel_popup_false_for_panel_kinds_without_a_webview() {
         assert!(!webview_hidden_by_panel_popup(
             PanelKind::Todo,
+            true,
             true,
             true,
             true,

@@ -492,6 +492,7 @@ impl App {
                                 selected_text,
                             } => {
                                 let _ = io.proxy.send_event(Message::PreviewSelectionMenuOpen {
+                                    project_id: binding.project_id,
                                     panel: binding.panel,
                                     tab_id: binding.tab_id,
                                     path: path.clone(),
@@ -3663,6 +3664,7 @@ impl App {
                 self.pending_preview_zoom = true;
             }
             Message::PreviewSelectionMenuOpen {
+                project_id,
                 panel,
                 tab_id,
                 path,
@@ -3681,6 +3683,7 @@ impl App {
                     &self.shell_state(),
                 );
                 let menu = PreviewSelectionContextMenu {
+                    project_id,
                     x: x0 + x,
                     y: y0 + y,
                     panel,
@@ -3707,11 +3710,20 @@ impl App {
                 }
             }
             Message::SendSelectionToAgent {
+                project_id,
                 path,
                 range,
                 selected_text,
             } => {
                 self.preview_context_menu = None;
+                // 非 mac 的 iced 弹层不阻塞输入,用户可能在菜单开着期间切到
+                // 别的项目标签再点"发送给 Agent"——`project_id` 是建菜单时
+                // 捕获的发起项目,与"当前激活"的项目不再一致就直接放弃,不
+                // 能把内容送错项目(同 `term_input` 里"看不见的地方不能
+                // 敲字"的既有原则)。
+                if self.active_project_id != Some(project_id) {
+                    return;
+                }
                 let Some(ws) = self.active_workspace() else {
                     return;
                 };
