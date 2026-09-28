@@ -564,7 +564,7 @@ git commit -m "feat(files): add 'send to agent context' menu action"
   selected_text: string }`。Task 4(JS)、Task 5(Rust 接收端)都消费这个
   形状。
 
-- [ ] **Step 1: 写 Rust 侧反序列化的失败测试**
+- [x] **Step 1: 写 Rust 侧反序列化的失败测试**
 
 在 `webview_protocol.rs` 的 `#[cfg(test)] mod tests`(已有
 `parses_selection_and_view_state` 之类的测试,紧邻着加):
@@ -593,12 +593,12 @@ fn parses_context_menu_requested() {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app parses_context_menu_requested`
 Expected: FAIL,`ContextMenuRequested` 变体不存在,编译错误。
 
-- [ ] **Step 3: `EditorEvent` 枚举新增变体**
+- [x] **Step 3: `EditorEvent` 枚举新增变体**
 
 `webview_protocol.rs`,紧贴 `SelectionChanged` 之后:
 
@@ -615,12 +615,12 @@ ContextMenuRequested {
 },
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app parses_context_menu_requested`
 Expected: PASS。
 
-- [ ] **Step 5: TS 侧镜像类型**
+- [x] **Step 5: TS 侧镜像类型**
 
 `protocol.ts` 的 `EditorEvent` 联合类型,紧贴 `selection_changed` 之后:
 
@@ -634,7 +634,7 @@ Expected: PASS。
     }
 ```
 
-- [ ] **Step 6: 写 TS 侧的信封往返测试**
+- [x] **Step 6: 写 TS 侧的信封往返测试**
 
 `protocol.test.ts` 底部追加:
 
@@ -661,12 +661,12 @@ test('context_menu_requested payload round-trips through envelope', () => {
 });
 ```
 
-- [ ] **Step 7: 跑 TS 测试与类型检查**
+- [x] **Step 7: 跑 TS 测试与类型检查**
 
 Run(在 `crates/dozer-app/web/editor/` 目录下): `npm test && npm run typecheck`
 Expected: 全部通过。
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add crates/dozer-app/src/preview/webview_protocol.rs \

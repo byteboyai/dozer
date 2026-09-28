@@ -145,3 +145,24 @@ test('decodeCommand rejects malformed and unknown commands', () => {
   );
   assert.equal(decodeCommand({ kind: 'set_read_only', read_only: 'yes' }), null);
 });
+
+test('context_menu_requested payload round-trips through envelope', () => {
+  const raw = encodeEnvelope(
+    envelope({
+      kind: 'context_menu_requested',
+      x: 12,
+      y: 34,
+      range: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } },
+      selected_text: 'abcd',
+    }),
+  );
+  const decoded = decodeEnvelope(raw);
+  assert.ok(decoded);
+  assert.deepEqual(decoded?.payload, {
+    kind: 'context_menu_requested',
+    x: 12,
+    y: 34,
+    range: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } },
+    selected_text: 'abcd',
+  });
+});

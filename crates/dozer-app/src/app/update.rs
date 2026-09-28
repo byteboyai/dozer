@@ -482,6 +482,9 @@ impl App {
                                 }
                             }
                             EditorEvent::FocusChanged { .. } => {}
+                            // Task 3 先只把协议打通;Task 5 在此接线换算坐标、
+                            // 弹菜单、`term_paste`。
+                            EditorEvent::ContextMenuRequested { .. } => {}
                         }
                     }
                     if let Some((tab_id, line)) = pending_reveal {

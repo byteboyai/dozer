@@ -38,6 +38,13 @@ export type EditorEvent =
       selected_text: string | null;
     }
   | {
+      kind: 'context_menu_requested';
+      x: number;
+      y: number;
+      range: Range;
+      selected_text: string;
+    }
+  | {
       kind: 'document_changed';
       revision: number;
       length: number;

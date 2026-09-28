@@ -86,6 +86,16 @@ pub enum EditorEvent {
         #[serde(default)]
         selected_text: Option<String>,
     },
+    /// 预览内选区右键(Phase 2):选区非空时上报,携带右键发生时刻的坐标与
+    /// 选区内容(现场取值,不依赖 `SelectionChanged` 的旧缓存,避免两者之间
+    /// 选区已变的竞态)。`x`/`y` 是 webview 本地坐标,Rust 侧还需加上 webview
+    /// 在窗口里的原点才是窗口坐标。
+    ContextMenuRequested {
+        x: f32,
+        y: f32,
+        range: TextRange,
+        selected_text: String,
+    },
     DocumentChanged {
         revision: u64,
         length: u64,
@@ -776,6 +786,28 @@ mod tests {
         // T4:窗口化首窗 ACK。
         let wa = parse_event(&raw(r#"{"kind":"window_applied","start_line":1234}"#)).unwrap();
         assert_eq!(wa.payload, EditorEvent::WindowApplied { start_line: 1234 });
+    }
+
+    #[test]
+    fn parses_context_menu_requested() {
+        let env = parse_event(&raw(
+            r#"{"kind":"context_menu_requested","x":120.5,"y":48.0,"range":{"start":{"line":3,"column":1},"end":{"line":3,"column":10}},"selected_text":"let x = 1;"}"#,
+        ))
+        .unwrap();
+        match env.payload {
+            EditorEvent::ContextMenuRequested {
+                x,
+                y,
+                range,
+                selected_text,
+            } => {
+                assert_eq!(x, 120.5);
+                assert_eq!(y, 48.0);
+                assert_eq!(range.start.line, 3);
+                assert_eq!(selected_text, "let x = 1;");
+            }
+            other => panic!("unexpected payload: {other:?}"),
+        }
     }
 
     /// T5:非窗口化 `document_loaded` 携带 revision/bytes/error(`error` 缺省为
