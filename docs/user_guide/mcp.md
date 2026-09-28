@@ -9,7 +9,7 @@
 1. **agent 能报告自己在干什么**(会话总结)、**能知道你在看什么**(预览上下文/定位)——这部分是只读的,不写任何东西。
 2. **agent 能读写 Dozer 自己的治理层状态**——具体是 **Todo 列表** 和 **项目共享记忆** 这两块。这两块数据权威存储都在 `dozerd` 的 `dozer.db`(SQLite),不是普通文本文件,agent 没有 MCP 之外的路子能碰到它们;开放读写是因为这本来就是"Dozer 管理的、给 agent 协作用的"数据,不是你的项目产物。
 
-这个"不代理 agent 已有能力"的边界正在往外挪一格:2026-09-28 批准的 [Agent-native 文件编辑器设计](../superpowers/specs/2026-09-28-agent-native-file-editor-design.md)明确要让 agent 成为编辑你项目文件的主体(推翻了"预览优先渲染而非编辑"这条旧裁决),第一阶段会给 Files/Preview 加两个真正写项目文件的工具——见下面"Files 面板(设计已定,尚未实现)"一节。所以更准确的说法是:**MCP 目前不扩大 agent 对你项目源文件本身的能力面,但这一条马上会因为 Agent-native 文件编辑器的落地而改变**;Todo、共享记忆这两块治理层状态的读写口子不受这次调整影响,逻辑不变。
+这个"不代理 agent 已有能力"的边界已经往外挪了一格:2026-09-28 批准的 [Agent-native 文件编辑器设计](../superpowers/specs/2026-09-28-agent-native-file-editor-design.md)明确要让 agent 成为编辑你项目文件的主体(推翻了"预览优先渲染而非编辑"这条旧裁决),第一阶段给 Files/Preview 加了两个真正写项目文件的工具(`locate_in_file`/`apply_precise_edit`)——见下面"Files 面板"一节。所以更准确的说法是:**MCP 现在会扩大 agent 对你项目源文件本身的能力面(精确修改,受 Conflict Detection 与路径边界约束)**;Todo、共享记忆这两块治理层状态的读写口子不受这次调整影响,逻辑不变。
 
 ## 手动安装/卸载
 
@@ -44,16 +44,15 @@ Goose、Aider 目前没有对应的 MCP 支持(接入方式和其余几家不同
 
 两个工具都不能编辑内容。预览命令协议本身其实已经定义了一个 `Replace`(按范围替换文本,受 `expected_revision` 保护,防止你和 agent 同时改同一处)动作,但目前没有任何 MCP 工具驱动它,唯一的调用方是内部测试;下面"Files 面板"一节要加的写入能力**不会**接这个 `Replace` 动作——`Replace` 继续只留给 UI 自己触发的编辑路径用,agent 精确修改走的是另一套直接对磁盘操作的机制(不要求文件已经开在某个 tab 里),两者不合并。
 
-### Files 面板(设计已定,尚未实现)
+### Files 面板
 
-以下两个工具目前**只有已批准的 spec 和写好的实现计划,代码还没有落地**——列在这里是为了让这份文档提前反映设计方向,不代表你现在就能调用它们;实现完成后这条状态说明会删掉。设计见
-[Agent-native 文件编辑器设计](../superpowers/specs/2026-09-28-agent-native-file-editor-design.md),实现计划见
+设计见 [Agent-native 文件编辑器设计](../superpowers/specs/2026-09-28-agent-native-file-editor-design.md),实现计划见
 [Phase 1 implementation plan](../superpowers/plans/2026-09-28-agent-native-file-editor-phase1.md)。
 
 - **`locate_in_file(path, query)`**——只读。在项目内某文本文件里搜索一段文字,唯一匹配时返回精确坐标(1-based 行列)+ 上下文;匹配到多处就把候选全部列出,不擅自选一个,逼你把 `query` 写得更具体。agent 应该先用这个工具拿到准确坐标,不是自己数行号。
 - **`apply_precise_edit(path, start_line, start_col, end_line, end_col, expected_text, new_text, summary)`**——写。精确替换给定坐标区间的内容,`expected_text` 必须等于该区间当前的原样内容(Conflict Detection:磁盘内容对不上就拒绝,把真实内容连同坐标一起回给 agent 重算,不会盲目覆盖)。`summary` 必填,一句话说明这次改了什么。整篇重写就是把区间设成整个文件,不是单独的工具。
 
-这两个工具会**直接对磁盘操作**,不要求目标文件当前开在某个 Preview tab 里;改完之后 Dozer 现有的文件系统监听会让已打开的干净 tab 自动刷新,并额外自动定位、短暂高亮到刚被改的位置。每次成功的精确修改都会写进一张新的历史表(`file_edit_history`),但 Phase 1 这张表只由 GUI 读取,不额外开一个"查历史"的 MCP 工具给 agent。
+这两个工具**直接对磁盘操作**,不要求目标文件当前开在某个 Preview tab 里;改完之后 Dozer 现有的文件系统监听会让已打开的干净 tab 自动刷新,并额外自动定位、短暂高亮到刚被改的位置。每次成功的精确修改都会写进一张新的历史表(`file_edit_history`),但 Phase 1 这张表只由 GUI 读取,不额外开一个"查历史"的 MCP 工具给 agent。
 
 Goose、Aider 这两家因为没有 MCP 通道,拿不到这两个工具;spec 里的应对方案是当前会话是 Goose/Aider 时,由 Dozer 另外并行 dispatch 一个 headless v8agent 去执行精确修改(历史记录署名 `v8agent`,如实反映谁动的手)——这条兜底路由要等 Phase 2("发送到上下文"提供一个结构化的意见输入框)才有触发信号,Phase 1 阶段还用不上。
 
@@ -82,7 +81,7 @@ Todo 的权威存储是 `dozerd` 的 SQLite(2026-09 已从早期的 `.dozer/todo
 
 ## 没有对应 MCP 工具的面板
 
-Git Log、Database、SSH、Web(浏览器)、Usage 目前都没有专属 MCP 工具(Files 面板已经有落地计划,见上面"Files 面板(设计已定,尚未实现)"一节,不再算在这里)。原因不完全一样:
+Git Log、Database、SSH、Web(浏览器)、Usage 目前都没有专属 MCP 工具(Files 面板已经有工具,见上面"Files 面板"一节,不再算在这里)。原因不完全一样:
 
 - **Git Log**:agent CLI 本来就有更好的原生 `git` 命令能力,Dozer 没必要代理一遍——这类"agent 自己就能做"的事,刻意不接进 MCP。
 - **Database / SSH**:面板里保存的是连接凭证(密码/私钥,存在钥匙串或加密配置里)。要把"查询这个已保存连接"开放给 agent,等于把凭证访问权也间接给了 agent,目前没有做,也还没有想清楚权限模型(比如按连接单独授权、还是整块面板级开关)。
