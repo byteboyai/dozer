@@ -5,6 +5,12 @@
 > 上下文与 CSV/TSV 原文模式统一以
 > [`2026-09-22-file-preview-architecture-redesign.md`](./2026-09-22-file-preview-architecture-redesign.md)
 > 为准。
+>
+> **状态（2026-09-28）：渲染层由新规格接管。** 本文档的加载/解析层
+> （`calamine`/`csv`、`MAX_TABULAR_ROWS` 封顶、取消机制、`Sheet` 数据模型）
+> 继续有效；iced canvas 渲染层（`tabular/grid.rs`/`tabular/view.rs`）改为
+> webview host（ag-grid），见
+> [`2026-09-28-tabular-webview-migration-design.md`](./2026-09-28-tabular-webview-migration-design.md)。
 
 ## 背景与动机
 
