@@ -470,15 +470,24 @@ pub(crate) fn review_content_pane<'a>(
     let actions: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
         match ws.review.as_ref().map(|rv| (&rv.source, rv.agent)) {
             Some((ReviewSource::Conversation(cid), agent)) => {
+                let generating = ws.conversations.summary_generating(cid);
                 let generate = button(
-                    text("生成总结")
-                        .size(byteui::theme::font::label())
-                        .color(byteui::theme::color::current().cream),
+                    text(if generating {
+                        "生成中…"
+                    } else {
+                        "生成总结"
+                    })
+                    .size(byteui::theme::font::label())
+                    .color(byteui::theme::color::current().cream),
                 )
-                .padding([4, 8])
-                .on_press(Message::Conversations(
-                    conversations::Message::SummaryGenerate(cid.clone(), agent),
-                ));
+                .padding([4, 8]);
+                let generate = if generating {
+                    generate
+                } else {
+                    generate.on_press(Message::Conversations(
+                        conversations::Message::SummaryGenerate(cid.clone(), agent),
+                    ))
+                };
                 row![generate, collapse_button].spacing(6).into()
             }
             _ => collapse_button,
@@ -493,6 +502,17 @@ pub(crate) fn review_content_pane<'a>(
     )
     .padding(theme::region::project_pane().padding);
     let mut content = column![header].spacing(region.gap);
+
+    if let Some(error) = ws.review.as_ref().and_then(|rv| match &rv.source {
+        ReviewSource::Conversation(cid) => ws.conversations.summary_error(cid),
+        ReviewSource::Session(_) => None,
+    }) {
+        content = content.push(
+            text(format!("⚠ 生成总结失败：{error}"))
+                .size(byteui::theme::font::body())
+                .color(byteui::theme::color::current().red),
+        );
+    }
 
     match review_pane_state(ws.review.as_ref()) {
         ReviewPaneState::Empty => {

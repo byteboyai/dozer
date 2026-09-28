@@ -24,6 +24,7 @@ use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
 use iced_widget::core::{Border, Element, Length};
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -122,9 +123,37 @@ pub struct WorkspaceState {
     search_focused: bool,
     agent_filter: Option<AgentKind>,
     agent_picker_open: bool,
+    summary_generating: HashSet<String>,
+    summary_errors: HashMap<String, String>,
 }
 
 impl WorkspaceState {
+    pub fn summary_generating(&self, conversation_id: &str) -> bool {
+        self.summary_generating.contains(conversation_id)
+    }
+
+    pub fn summary_error(&self, conversation_id: &str) -> Option<&str> {
+        self.summary_errors.get(conversation_id).map(String::as_str)
+    }
+
+    pub fn start_summary_generation(&mut self, conversation_id: String) -> bool {
+        self.summary_errors.remove(&conversation_id);
+        self.summary_generating.insert(conversation_id)
+    }
+
+    pub fn finish_summary_generation(
+        &mut self,
+        conversation_id: String,
+        result: Result<(), String>,
+    ) {
+        self.summary_generating.remove(&conversation_id);
+        if let Err(error) = result {
+            self.summary_errors.insert(conversation_id, error);
+        } else {
+            self.summary_errors.remove(&conversation_id);
+        }
+    }
+
     /// 供内核 `App::conversation_session_open` 按 `conversation_id` 查找
     /// 对应行的总结信息用。
     pub fn sessions(&self) -> Option<&[SessionRow]> {
@@ -164,6 +193,8 @@ pub enum Message {
     /// 会话详情面板"生成总结"按钮:对某 conversation 提交 V2 总结任务
     /// (Manual + force),随后轮询并刷新。内核直接拦截处理。
     SummaryGenerate(String, AgentKind),
+    /// 后台总结任务结束；用于恢复按钮并在详情页就地显示错误。
+    SummaryGenerateFinished(ProjectId, String, Result<(), String>),
     /// 列表底部"更多..."翻页,纯客户端状态。
     ListMore,
     /// 搜索框草稿变化。
@@ -213,6 +244,7 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
         Message::SessionOpen(..)
         | Message::DetailLoadMore(..)
         | Message::SummaryGenerate(..)
+        | Message::SummaryGenerateFinished(..)
         | Message::Hover(..)
         | Message::TextInputMenuOpen(..) => {
             unreachable!("由内核 App::update 直接拦截处理,不会转发到这里")
@@ -602,6 +634,25 @@ pub fn view<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summary_generation_state_prevents_duplicates_and_keeps_errors_visible() {
+        let mut state = WorkspaceState::default();
+
+        assert!(state.start_summary_generation("conversation-1".into()));
+        assert!(state.summary_generating("conversation-1"));
+        assert!(!state.start_summary_generation("conversation-1".into()));
+
+        state.finish_summary_generation("conversation-1".into(), Err("provider 超时".into()));
+        assert!(!state.summary_generating("conversation-1"));
+        assert_eq!(state.summary_error("conversation-1"), Some("provider 超时"));
+
+        assert!(state.start_summary_generation("conversation-1".into()));
+        assert_eq!(state.summary_error("conversation-1"), None);
+        state.finish_summary_generation("conversation-1".into(), Ok(()));
+        assert!(!state.summary_generating("conversation-1"));
+        assert_eq!(state.summary_error("conversation-1"), None);
+    }
 
     #[test]
     fn search_submit_commits_draft_and_resets_pages() {

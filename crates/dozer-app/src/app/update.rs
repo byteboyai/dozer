@@ -1277,6 +1277,16 @@ impl App {
             )) => {
                 self.conversation_summary_generate(conversation_id, agent);
             }
+            Message::Conversations(conversations::Message::SummaryGenerateFinished(
+                project_id,
+                conversation_id,
+                result,
+            )) => {
+                self.with_project(project_id, move |ws, _io| {
+                    ws.conversations
+                        .finish_summary_generation(conversation_id, result);
+                });
+            }
             Message::Conversations(conversations::Message::Hover(id, h)) => self.set_hover(id, h),
             Message::Conversations(conversations::Message::TextInputMenuOpen(target)) => {
                 self.update(Message::TextInputMenuOpen(target));
@@ -5363,6 +5373,13 @@ impl App {
         else {
             return;
         };
+        let started = self.active_workspace_mut().is_some_and(|ws| {
+            ws.conversations
+                .start_summary_generation(conversation_id.clone())
+        });
+        if !started {
+            return;
+        }
         let client = self.client.clone();
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
@@ -5375,7 +5392,13 @@ impl App {
                 Ok(id) => id,
                 Err(e) => {
                     tracing::warn!(error = %e, %cid, "提交总结任务失败");
-                    let _ = proxy.send_event(Message::DaemonError(format!("生成总结失败：{e}")));
+                    let _ = proxy.send_event(Message::Conversations(
+                        conversations::Message::SummaryGenerateFinished(
+                            project_id,
+                            cid.clone(),
+                            Err(e.to_string()),
+                        ),
+                    ));
                     return;
                 }
             };
@@ -5384,10 +5407,24 @@ impl App {
                 match client.get_summary_job(job_id).await {
                     Ok(Some(job)) => {
                         if job.status == SummaryJobStatus::Failed {
-                            let _ = proxy.send_event(Message::DaemonError(format!(
-                                "生成总结失败：{}",
-                                job.error_detail.unwrap_or_else(|| "未知错误".into())
-                            )));
+                            let error = job.error_detail.unwrap_or_else(|| "未知错误".into());
+                            let _ = proxy.send_event(Message::Conversations(
+                                conversations::Message::SummaryGenerateFinished(
+                                    project_id,
+                                    cid.clone(),
+                                    Err(error),
+                                ),
+                            ));
+                            return;
+                        }
+                        if job.status == SummaryJobStatus::Cancelled {
+                            let _ = proxy.send_event(Message::Conversations(
+                                conversations::Message::SummaryGenerateFinished(
+                                    project_id,
+                                    cid.clone(),
+                                    Err("任务已取消".into()),
+                                ),
+                            ));
                             return;
                         }
                         if matches!(
@@ -5401,15 +5438,25 @@ impl App {
                     }
                     Ok(None) => {
                         tracing::warn!(job_id, %cid, "总结任务不存在");
-                        let _ =
-                            proxy.send_event(Message::DaemonError("总结任务不存在，请重试".into()));
-                        break;
+                        let _ = proxy.send_event(Message::Conversations(
+                            conversations::Message::SummaryGenerateFinished(
+                                project_id,
+                                cid.clone(),
+                                Err("总结任务不存在，请重试".into()),
+                            ),
+                        ));
+                        return;
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, job_id, %cid, "查询总结任务失败");
-                        let _ =
-                            proxy.send_event(Message::DaemonError(format!("查询总结失败：{e}")));
-                        break;
+                        let _ = proxy.send_event(Message::Conversations(
+                            conversations::Message::SummaryGenerateFinished(
+                                project_id,
+                                cid.clone(),
+                                Err(format!("查询总结失败：{e}")),
+                            ),
+                        ));
+                        return;
                     }
                 }
             }
@@ -5422,8 +5469,15 @@ impl App {
                         .collect()
                 })
                 .map_err(|e| e.to_string());
+            let completion = result
+                .as_ref()
+                .map(|_| ())
+                .map_err(|e| format!("总结已生成，但刷新会话失败：{e}"));
             let _ = proxy.send_event(Message::Conversations(
                 conversations::Message::SessionsRefreshed(project_id, result),
+            ));
+            let _ = proxy.send_event(Message::Conversations(
+                conversations::Message::SummaryGenerateFinished(project_id, cid, completion),
             ));
         });
     }

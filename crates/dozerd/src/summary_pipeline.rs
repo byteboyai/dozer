@@ -21,15 +21,66 @@ pub const SUMMARY_MAX_CHARS: usize = 200;
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChunkFacts {
     /// 用户目标。
+    #[serde(default, deserialize_with = "deserialize_fact_list")]
     pub goals: Vec<String>,
     /// AI 实际行动(自述)。
+    #[serde(default, deserialize_with = "deserialize_fact_list")]
     pub actions: Vec<String>,
     /// 关键决策。
+    #[serde(default, deserialize_with = "deserialize_fact_list")]
     pub decisions: Vec<String>,
     /// 结果/验证(工具可验证证据)。
+    #[serde(default, deserialize_with = "deserialize_fact_list")]
     pub results: Vec<String>,
     /// 未完成事项。
+    #[serde(default, deserialize_with = "deserialize_fact_list")]
     pub incomplete: Vec<String>,
+}
+
+/// 模型偶尔会把事实写成 `{ "text": "...", "source": "turn 3" }`
+/// 而不是提示词要求的字符串。事实内容仍然完整有效，因此在边界处把字符串、
+/// 对象和标量统一规范化成字符串；只有字段本身是无法解析的 JSON 时才重试。
+fn deserialize_fact_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let values = match value {
+        serde_json::Value::Null => return Ok(Vec::new()),
+        serde_json::Value::Array(values) => values,
+        value => vec![value],
+    };
+    Ok(values
+        .into_iter()
+        .filter_map(normalize_fact_value)
+        .collect())
+}
+
+fn normalize_fact_value(value: serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(value) => (!value.trim().is_empty()).then_some(value),
+        serde_json::Value::Bool(value) => Some(value.to_string()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        serde_json::Value::Array(values) => {
+            let text = values
+                .into_iter()
+                .filter_map(normalize_fact_value)
+                .collect::<Vec<_>>()
+                .join("；");
+            (!text.is_empty()).then_some(text)
+        }
+        serde_json::Value::Object(values) => {
+            let text = values
+                .into_iter()
+                .filter_map(|(key, value)| {
+                    normalize_fact_value(value).map(|v| format!("{key}: {v}"))
+                })
+                .collect::<Vec<_>>()
+                .join("；");
+            (!text.is_empty()).then_some(text)
+        }
+    }
 }
 
 /// 最终总结的结构化 facts(spec 第 6 节:简短标题 + 可读摘要 + 保留证据范围
@@ -284,15 +335,15 @@ fn parse_final(stdout: &str) -> Result<FinalSummary, PipelineError> {
     struct RawFinal {
         title: String,
         summary: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "deserialize_fact_list")]
         goals: Vec<String>,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "deserialize_fact_list")]
         actions: Vec<String>,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "deserialize_fact_list")]
         decisions: Vec<String>,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "deserialize_fact_list")]
         results: Vec<String>,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "deserialize_fact_list")]
         incomplete: Vec<String>,
     }
     let raw: RawFinal = serde_json::from_str(&stdout[start..=end])
@@ -608,6 +659,33 @@ mod tests {
         let stdout = "好的，结果如下：\n{\"goals\":[\"改 README\"],\"actions\":[],\"decisions\":[],\"results\":[],\"incomplete\":[]}\n以上就是。";
         let facts = parse_chunk_facts(stdout).unwrap();
         assert_eq!(facts.goals, vec!["改 README"]);
+    }
+
+    #[test]
+    fn parse_chunk_facts_accepts_structured_fact_objects() {
+        let stdout = r#"{
+            "goals":[{"text":"修复总结按钮","source":"turn 1 / 用户要求"}],
+            "actions":{"description":"检查总结管线","turn":2},
+            "decisions":[],"results":null,"incomplete":["重新验证"]
+        }"#;
+        let facts = parse_chunk_facts(stdout).unwrap();
+        assert_eq!(
+            facts.goals,
+            vec!["source: turn 1 / 用户要求；text: 修复总结按钮"]
+        );
+        assert_eq!(facts.actions, vec!["description: 检查总结管线；turn: 2"]);
+        assert!(facts.results.is_empty());
+    }
+
+    #[test]
+    fn parse_final_accepts_structured_fact_objects() {
+        let stdout = r#"{
+            "title":"修复总结", "summary":"总结生成恢复正常",
+            "goals":[{"text":"生成总结","source":"turn 1"}],
+            "actions":[],"decisions":[],"results":[],"incomplete":[]
+        }"#;
+        let summary = parse_final(stdout).unwrap();
+        assert_eq!(summary.facts.goals, vec!["source: turn 1；text: 生成总结"]);
     }
 
     #[test]
