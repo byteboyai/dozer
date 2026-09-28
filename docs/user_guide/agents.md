@@ -38,12 +38,13 @@ hook 目前接了 **Claude、CodeBuddy、Codex**(直接写进各自的 settings 
 
 ## MCP:让 agent 知道你在看什么
 
-Dozer 同时会给支持的 agent 注册一个只读的 `dozer` MCP server(见 [dozer-mcp](mcp.md)),让 agent 可以:
+Dozer 同时会给支持的 agent 注册一个 `dozer` MCP server(见 [dozer-mcp](mcp.md) 看完整工具列表),让 agent 可以:
 
-- 查到你当前在 Dozer 预览面板里看的文件路径和光标/选中范围。
+- 查到你当前在 Dozer 预览面板里看的文件路径和光标/选中范围,并只读定位/选中到某段代码(不能编辑)。
 - 主动提交一段这次会话的标题+摘要,回填到 Dozer 的历史对话列表里。
+- 读写 Todo 面板的任务列表、读写 Project 面板的多 agent 共享记忆——这两块是 Dozer 自己管理的治理层状态,不是你项目里的源文件,MCP 只在这两处开放写权限。
 
-MCP 注册目前支持 **Claude**(写 `~/.claude.json`)、**CodeBuddy**(写 `~/.codebuddy/.mcp.json`)、**Codex**(写 `~/.codex/config.toml`,用无损编辑保留你原有的注释)、**OpenCode**(写 `~/.config/opencode/opencode.json`)。Goose/Aider 首期不挂 Dozer MCP(见设计文档 D8),v8agent 同样不支持。
+MCP 注册目前支持 **Claude**(写 `~/.claude.json`)、**CodeBuddy**(写 `~/.codebuddy/.mcp.json`)、**Codex**(写 `~/.codex/config.toml`,用无损编辑保留你原有的注释)、**OpenCode**(写 `~/.config/opencode/opencode.json`)。**v8agent** 不走这条注册路径,但一样能用到全部工具——它的 CLI 检测到 `DOZER_SESSION_ID` 就会自动挂载 `dozer-mcp serve`,不需要改配置文件。Goose/Aider 首期不挂 Dozer MCP(见设计文档 D8)。
 
 ## 会话状态胶囊
 
