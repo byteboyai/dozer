@@ -852,7 +852,10 @@ mod tests {
     fn highlight_range_command_round_trips() {
         let cmd = EditorCommand::HighlightRange {
             start: TextPosition { line: 3, column: 1 },
-            end: TextPosition { line: 5, column: 10 },
+            end: TextPosition {
+                line: 5,
+                column: 10,
+            },
             duration_ms: 2000,
         };
         let json = serde_json::to_string(&cmd).unwrap();
