@@ -13,7 +13,7 @@ Agent"入口,把结构化引用文本写进当前项目当前激活的 agent 终
 JS→Rust 的 webview 事件(`context_menu_requested`),Rust 收到后换算坐标、
 弹本地原生/iced 菜单,点击后同样调 `term_paste`。
 
-**Tech Stack:** Rust(iced 0.14 + wry webview)、TypeScript(CodeMirem 6
+**Tech Stack:** Rust(iced 0.14 + wry webview)、TypeScript(CodeMirror 6
 host,esbuild 打包,`node --test` 跑测试)。
 
 **Spec:** `docs/superpowers/specs/2026-09-28-agent-native-file-editor-phase2-send-design.md`
