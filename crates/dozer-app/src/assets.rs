@@ -216,6 +216,12 @@ fn json_editor_root_for(flyfish_root: &Path) -> PathBuf {
     flyfish_root.with_file_name("json-editor")
 }
 
+/// Tabular host(ag-grid)静态资源根 = flyfish 根的兄弟目录 `tabular-host`。
+/// 同 `json_editor_root_for`,dev 与打包态同构。
+fn tabular_host_root_for(flyfish_root: &Path) -> PathBuf {
+    flyfish_root.with_file_name("tabular-host")
+}
+
 pub fn handle_protocol(
     assets_root: &Path,
     allowed: &HashSet<PathBuf>,
@@ -268,6 +274,14 @@ pub fn handle_protocol(
             return serve_allowlisted_file(encoded, allowed);
         }
         return serve_vendored(&json_editor_root_for(assets_root), path);
+    }
+
+    // Tabular host(ag-grid):页面/脚本/样式从 `tabular-host` 兄弟根服务。
+    // 与 JSON host 不同,tabular **没有 `__file__` 端点**——表格数据完全由
+    // evaluate_script 推送的 `Init`/`SetWindow` 命令承载,host 不 fetch 任何
+    // 用户文件(见 preview/tabular 与 webview_protocol.rs)。
+    if let Some(path) = rest.strip_prefix("tabular/") {
+        return serve_vendored(&tabular_host_root_for(assets_root), path);
     }
 
     // T7:HTML 隔离 host。页面编译期内嵌;`__file__` 走 `serve_html_file`
@@ -703,10 +717,77 @@ mod tests {
         assert!(!html.contains("http://") && !html.contains("https://"));
     }
 
+    /// Tabular host 命名空间:从 `tabular-host` 兄弟根服务,拒绝穿越,且
+    /// **不暴露 `__file__`**(数据全由命令推送,host 不读用户文件)。
+    #[test]
+    fn serves_tabular_namespace() {
+        let dir = std::env::temp_dir().join(format!("dozer-assets-tab-{}", std::process::id()));
+        let flyfish = dir.join("flyfish");
+        let tabular = dir.join("tabular-host");
+        let _ = fs::create_dir_all(&tabular);
+        fs::write(tabular.join("index.html"), b"<!doctype html>").unwrap();
+        fs::write(tabular.join("tabular-host.js"), b"js").unwrap();
+
+        let r = handle_protocol(
+            &flyfish,
+            &HashSet::new(),
+            None,
+            "dozer://tabular/index.html",
+        );
+        assert_eq!((r.status, r.mime), (200, "text/html"));
+        let r = handle_protocol(
+            &flyfish,
+            &HashSet::new(),
+            None,
+            "dozer://tabular/tabular-host.js",
+        );
+        assert_eq!(r.status, 200);
+        for uri in [
+            "dozer://tabular/../flyfish/host.html",
+            "dozer://tabular/%2e%2e/etc/passwd",
+            "dozer://tabular/nope.js",
+        ] {
+            assert_eq!(
+                handle_protocol(&flyfish, &HashSet::new(), None, uri).status,
+                404,
+                "{uri}"
+            );
+        }
+    }
+
+    /// 提交的 Tabular host 产物必须齐全,首页严格 CSP、无外部引用,且
+    /// 打包产物不泄漏本机路径。
+    #[test]
+    fn tabular_host_bundle_assets_are_present() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/tabular-host"));
+        for f in ["index.html", "tabular-host.js", "tabular-host.css"] {
+            let p = root.join(f);
+            assert!(p.is_file(), "缺少 tabular-host 产物 {f}: {}", p.display());
+            assert!(
+                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 0,
+                "tabular-host 产物为空: {f}"
+            );
+        }
+        let html = std::fs::read_to_string(root.join("index.html")).unwrap();
+        assert!(html.contains("default-src 'none'"));
+        assert!(html.contains("script-src 'self'"), "脚本仅 self");
+        assert!(
+            !html.contains("http://") && !html.contains("https://"),
+            "tabular host 不得引用外部 URL(离线约束)"
+        );
+        assert!(html.contains("tabular-host.js") && html.contains("tabular-host.css"));
+        let js = std::fs::read_to_string(root.join("tabular-host.js")).unwrap();
+        assert!(!js.contains("sourceMappingURL"), "不应有 sourcemap 引用");
+        assert!(
+            !js.contains(env!("CARGO_MANIFEST_DIR")),
+            "不应含源码树绝对路径"
+        );
+        assert!(!js.contains("/Users/"), "不应含用户绝对路径");
+    }
+
     /// 提交的 CodeMirror 产物必须齐全(防止忘记 `npm run build` 就提交)。
     #[test]
-    fn editor_bundle_assets_are_present() {
-        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/editor"));
+    fn editor_bundle_assets_are_present() {        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/editor"));
         for f in [
             "index.html",
             "editor.js",
