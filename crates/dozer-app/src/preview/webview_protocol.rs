@@ -199,6 +199,13 @@ pub enum EditorCommand {
         text: String,
         revision: u64,
     },
+    /// 短暂高亮某段范围(纯视觉装饰,`duration_ms` 后 host 自己清除;不影响
+    /// 实际选区/光标)。
+    HighlightRange {
+        start: TextPosition,
+        end: TextPosition,
+        duration_ms: u32,
+    },
     OpenFind {
         query: Option<String>,
         replace: bool,
@@ -839,6 +846,18 @@ mod tests {
                 folds: Vec::new(),
             }
         );
+    }
+
+    #[test]
+    fn highlight_range_command_round_trips() {
+        let cmd = EditorCommand::HighlightRange {
+            start: TextPosition { line: 3, column: 1 },
+            end: TextPosition { line: 5, column: 10 },
+            duration_ms: 2000,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: EditorCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(cmd, back);
     }
 
     #[test]

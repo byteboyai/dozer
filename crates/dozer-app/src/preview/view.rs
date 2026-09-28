@@ -1994,6 +1994,35 @@ impl PreviewPane {
                 );
                 O::Accepted { request_id: rid }
             }
+            A::Highlight {
+                start_line,
+                start_column,
+                end_line,
+                end_column,
+                duration_ms,
+            } => {
+                if !is_editor {
+                    return O::UnsupportedBackend {
+                        request_id: rid,
+                        detail: "该 tab 无文本编辑器".into(),
+                    };
+                }
+                self.queue_editor_command(
+                    tab_id,
+                    EditorCommand::HighlightRange {
+                        start: TextPosition {
+                            line: *start_line,
+                            column: *start_column,
+                        },
+                        end: TextPosition {
+                            line: *end_line,
+                            column: *end_column,
+                        },
+                        duration_ms: *duration_ms,
+                    },
+                );
+                O::Accepted { request_id: rid }
+            }
             A::RevealCell { sheet, row, col } => {
                 if !is_tabular {
                     return O::UnsupportedBackend {
@@ -4772,6 +4801,81 @@ mod tests {
         std::fs::remove_file(&rs).ok();
         std::fs::remove_file(&csv).ok();
         std::fs::remove_file(&huge).ok();
+    }
+
+    #[test]
+    fn highlight_on_code_tab_queues_highlight_command() {
+        use dozer_core::protocol::{
+            PreviewCommand, PreviewCommandAction, PreviewCommandOutcome, PreviewCommandTarget,
+        };
+        let mk = |action, expected_revision| PreviewCommand {
+            request_id: "r".into(),
+            project_id: 1,
+            target: PreviewCommandTarget::Tab {
+                panel: "files".into(),
+                tab_id: 0,
+            },
+            action,
+            expected_revision,
+        };
+        let mut pane = PreviewPane::default();
+        let rs_id = pane.open_path(PathBuf::from("/tmp/highlight_test.rs"));
+        let cmd = mk(
+            PreviewCommandAction::Highlight {
+                start_line: 2,
+                start_column: 1,
+                end_line: 2,
+                end_column: 5,
+                duration_ms: 1500,
+            },
+            None,
+        );
+        let out = pane.apply_preview_command(rs_id, &cmd);
+        assert!(matches!(out, PreviewCommandOutcome::Accepted { .. }));
+        assert!(pane.take_pending_editor_commands().iter().any(|(id, c)| {
+            *id == rs_id
+                && matches!(
+                    c,
+                    EditorCommand::HighlightRange {
+                        duration_ms: 1500,
+                        ..
+                    }
+                )
+        }));
+    }
+
+    #[test]
+    fn highlight_on_non_editor_tab_is_unsupported() {
+        use dozer_core::protocol::{
+            PreviewCommand, PreviewCommandAction, PreviewCommandOutcome, PreviewCommandTarget,
+        };
+        let mk = |action, expected_revision| PreviewCommand {
+            request_id: "r".into(),
+            project_id: 1,
+            target: PreviewCommandTarget::Tab {
+                panel: "files".into(),
+                tab_id: 0,
+            },
+            action,
+            expected_revision,
+        };
+        let mut pane = PreviewPane::default();
+        let csv_id = pane.open_path(PathBuf::from("/tmp/highlight_test.csv"));
+        let cmd = mk(
+            PreviewCommandAction::Highlight {
+                start_line: 1,
+                start_column: 1,
+                end_line: 1,
+                end_column: 1,
+                duration_ms: 1500,
+            },
+            None,
+        );
+        let out = pane.apply_preview_command(csv_id, &cmd);
+        assert!(matches!(
+            out,
+            PreviewCommandOutcome::UnsupportedBackend { .. }
+        ));
     }
 
     /// T12:reveal_tabular_cell 在已就绪的表格 tab 上写入滚动 + 选中。
