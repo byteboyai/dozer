@@ -2422,6 +2422,15 @@ impl Runner {
                 }
             }
         }
+        // Tabular(ag-grid)webview host 的命令(Init/SetSchema/SetWindow/…):
+        // 与 editor 命令同一注入节奏,只是走 `encode_tabular_command`。
+        for kind in [PanelKind::Files, PanelKind::Project] {
+            for (webview_id, js) in app.take_preview_tabular_scripts(kind, &available_webview_ids) {
+                if let Some((view, _)) = webviews.get(&webview_id) {
+                    let _ = view.evaluate_script(&js);
+                }
+            }
+        }
         // Git Log diff webview(单固定槽,不在 PreviewPane tab 模型里):
         // 内容经 `SetDiffDocument` 推送,与上面的预览命令同一注入节奏。
         for (webview_id, js) in app.take_git_log_diff_script(&available_webview_ids) {
