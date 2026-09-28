@@ -9,6 +9,13 @@ import {
   type GridOptions,
   type ValueGetterParams,
 } from 'ag-grid-community';
+// `ag-theme-quartz.css` 只含配色/间距等 CSS 自定义属性(主题变量),不含
+// 结构性布局规则(`.ag-header{display:flex;...}` 等 flex/绝对定位)——那些
+// 规则在这份独立的"基础"样式表里。只导入主题文件、漏了这份基础样式表,
+// 会让 `.ag-header` 退化成默认的 `display:block`,子元素(各列表头)按块级
+// 流一个接一个纵向堆叠,而不是横向排成一行——表现为表头与行号列重叠、
+// 完全无法辨认(2026-09-28 用户实测复现)。
+import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-quartz.css';
 import './theme.css';
 
