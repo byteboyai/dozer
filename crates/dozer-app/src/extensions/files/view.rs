@@ -870,23 +870,23 @@ fn branch_picker_popup_offset(ws_state: &WorkspaceState) -> (f32, f32) {
 /// 单测覆盖,行为上二者应保持一致。仅 macOS 编译(`native_menu` 是平台专属
 /// 模块),非 mac 平台继续走 `context_menu_popup` 的 iced 弹层。数据组装
 /// 收拢到 `context_menu_spec()`,这里只做 native 转换。
+/// 文件树右键菜单的参数集合——`target/is_dir/is_root/has_clipboard/
+/// is_git_repo/external_apps` 六项里四个是相邻 `bool`,按 CLAUDE.md
+/// 关键裁决改具名字段结构体,避免位置传参时顺序传错编译器发现不了。
+pub(crate) struct FileContextMenuParams<'a> {
+    pub(crate) target: &'a Path,
+    pub(crate) is_dir: bool,
+    pub(crate) is_root: bool,
+    pub(crate) has_clipboard: bool,
+    pub(crate) is_git_repo: bool,
+    pub(crate) external_apps: &'a crate::external_apps::ExternalAppsConfig,
+}
+
 #[cfg(target_os = "macos")]
 pub fn context_menu_items(
-    target: &Path,
-    is_dir: bool,
-    is_root: bool,
-    has_clipboard: bool,
-    is_git_repo: bool,
-    external_apps: &crate::external_apps::ExternalAppsConfig,
+    params: FileContextMenuParams,
 ) -> Vec<crate::chrome::native_menu::Item<Message>> {
-    crate::menu_spec::to_native(context_menu_spec(
-        target,
-        is_dir,
-        is_root,
-        has_clipboard,
-        is_git_repo,
-        external_apps,
-    ))
+    crate::menu_spec::to_native(context_menu_spec(params))
 }
 
 /// 文件树右键菜单内容——native(`context_menu_items`)和 iced fallback
@@ -905,14 +905,15 @@ pub fn context_menu_items(
 ///   悬空一条线。底部五项按设计纯文字:复制路径/名称三项本就无图标,"用
 ///   外部软件打开"/"从磁盘重新加载" 的 FolderOpen/RefreshCw 图标也在此
 ///   去掉,与顶部带图标的操作项区分开。
-pub(crate) fn context_menu_spec(
-    target: &Path,
-    is_dir: bool,
-    is_root: bool,
-    has_clipboard: bool,
-    is_git_repo: bool,
-    external_apps: &crate::external_apps::ExternalAppsConfig,
-) -> MenuSpec<Message> {
+pub(crate) fn context_menu_spec(params: FileContextMenuParams) -> MenuSpec<Message> {
+    let FileContextMenuParams {
+        target,
+        is_dir,
+        is_root,
+        has_clipboard,
+        is_git_repo,
+        external_apps,
+    } = params;
     let dim = byteui::theme::color::current().dim;
     let target = target.to_path_buf();
     // 菜单项文案与打开动作都按扩展名查一次配置:有配置显示"用 {app} 打开"
@@ -1063,14 +1064,14 @@ pub fn context_menu_popup<'a>(
     let has_clipboard = ws_state.tree_clipboard.is_some();
     // 菜单内容组装收拢到 `context_menu_spec()`(与 native 版共用同一份
     // 条件分支),这里只做 iced 转换。注意宽度保持原值 `Length::Shrink`。
-    let spec = context_menu_spec(
-        &menu.target,
-        menu.is_dir,
+    let spec = context_menu_spec(FileContextMenuParams {
+        target: &menu.target,
+        is_dir: menu.is_dir,
         is_root,
         has_clipboard,
-        ws_state.git_is_repo,
+        is_git_repo: ws_state.git_is_repo,
         external_apps,
-    );
+    });
     let list = crate::menu_spec::to_iced(spec, Length::Shrink);
 
     container(list)

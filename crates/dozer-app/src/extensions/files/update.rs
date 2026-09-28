@@ -58,14 +58,14 @@ pub fn update(
                     .map(|t| t.root() == path.as_path())
                     .unwrap_or(false);
                 let has_clipboard = ws_state.tree_clipboard.is_some();
-                let items = context_menu_items(
-                    &path,
+                let items = context_menu_items(FileContextMenuParams {
+                    target: &path,
                     is_dir,
                     is_root,
                     has_clipboard,
-                    ws_state.git_is_repo,
+                    is_git_repo: ws_state.git_is_repo,
                     external_apps,
-                );
+                });
                 if let Some(msg) =
                     crate::chrome::native_menu::show_align_no_icon_left(items, (x, y))
                 {

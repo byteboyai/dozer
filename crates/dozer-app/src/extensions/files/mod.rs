@@ -1707,14 +1707,14 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_hides_delete_rename_for_root() {
-        let items = context_menu_items(
-            Path::new("/proj"),
-            true,
-            true,
-            false,
-            true,
-            &crate::external_apps::ExternalAppsConfig::default(),
-        );
+        let items = context_menu_items(FileContextMenuParams {
+            target: Path::new("/proj"),
+            is_dir: true,
+            is_root: true,
+            has_clipboard: false,
+            is_git_repo: true,
+            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+        });
         let has_delete = items.iter().any(|i| {
             matches!(
                 i,
@@ -1730,14 +1730,14 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_shows_delete_rename_for_non_root() {
-        let items = context_menu_items(
-            Path::new("/proj/src"),
-            true,
-            false,
-            false,
-            true,
-            &crate::external_apps::ExternalAppsConfig::default(),
-        );
+        let items = context_menu_items(FileContextMenuParams {
+            target: Path::new("/proj/src"),
+            is_dir: true,
+            is_root: false,
+            has_clipboard: false,
+            is_git_repo: true,
+            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+        });
         let has_delete = items.iter().any(|i| {
             matches!(
                 i,
@@ -1753,14 +1753,14 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_paste_locked_when_clipboard_empty() {
-        let items = context_menu_items(
-            Path::new("/proj/src"),
-            true,
-            false,
-            false,
-            true,
-            &crate::external_apps::ExternalAppsConfig::default(),
-        );
+        let items = context_menu_items(FileContextMenuParams {
+            target: Path::new("/proj/src"),
+            is_dir: true,
+            is_root: false,
+            has_clipboard: false,
+            is_git_repo: true,
+            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+        });
         let paste = items.iter().find_map(|i| match i {
             crate::chrome::native_menu::Item::Entry {
                 msg: Message::Paste(_),
@@ -1775,14 +1775,14 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_paste_enabled_when_clipboard_has_content() {
-        let items = context_menu_items(
-            Path::new("/proj/src"),
-            true,
-            false,
-            true,
-            true,
-            &crate::external_apps::ExternalAppsConfig::default(),
-        );
+        let items = context_menu_items(FileContextMenuParams {
+            target: Path::new("/proj/src"),
+            is_dir: true,
+            is_root: false,
+            has_clipboard: true,
+            is_git_repo: true,
+            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+        });
         let paste = items.iter().find_map(|i| match i {
             crate::chrome::native_menu::Item::Entry {
                 msg: Message::Paste(_),
@@ -1797,14 +1797,14 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_file_target_has_no_new_file_or_paste() {
-        let items = context_menu_items(
-            Path::new("/proj/src/main.rs"),
-            false,
-            false,
-            false,
-            true,
-            &crate::external_apps::ExternalAppsConfig::default(),
-        );
+        let items = context_menu_items(FileContextMenuParams {
+            target: Path::new("/proj/src/main.rs"),
+            is_dir: false,
+            is_root: false,
+            has_clipboard: false,
+            is_git_repo: true,
+            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+        });
         let has_new_file = items.iter().any(|i| {
             matches!(
                 i,
@@ -1829,14 +1829,14 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_shows_file_history_for_git_repo_file() {
-        let items = context_menu_items(
-            Path::new("/proj/src/main.rs"),
-            false,
-            false,
-            false,
-            true,
-            &crate::external_apps::ExternalAppsConfig::default(),
-        );
+        let items = context_menu_items(FileContextMenuParams {
+            target: Path::new("/proj/src/main.rs"),
+            is_dir: false,
+            is_root: false,
+            has_clipboard: false,
+            is_git_repo: true,
+            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+        });
         let has_history = items.iter().any(|i| {
             matches!(
                 i,
@@ -1852,14 +1852,14 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_hides_file_history_for_non_git_repo() {
-        let items = context_menu_items(
-            Path::new("/proj/src/main.rs"),
-            false,
-            false,
-            false,
-            false,
-            &crate::external_apps::ExternalAppsConfig::default(),
-        );
+        let items = context_menu_items(FileContextMenuParams {
+            target: Path::new("/proj/src/main.rs"),
+            is_dir: false,
+            is_root: false,
+            has_clipboard: false,
+            is_git_repo: false,
+            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+        });
         let has_history = items.iter().any(|i| {
             matches!(
                 i,
@@ -1875,14 +1875,14 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_hides_file_history_for_directory() {
-        let items = context_menu_items(
-            Path::new("/proj/src"),
-            true,
-            false,
-            false,
-            true,
-            &crate::external_apps::ExternalAppsConfig::default(),
-        );
+        let items = context_menu_items(FileContextMenuParams {
+            target: Path::new("/proj/src"),
+            is_dir: true,
+            is_root: false,
+            has_clipboard: false,
+            is_git_repo: true,
+            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+        });
         let has_history = items.iter().any(|i| {
             matches!(
                 i,
@@ -1898,14 +1898,14 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_dir_first_item_is_search_not_separator() {
-        let items = context_menu_items(
-            Path::new("/proj/src"),
-            true,
-            false,
-            false,
-            true,
-            &crate::external_apps::ExternalAppsConfig::default(),
-        );
+        let items = context_menu_items(FileContextMenuParams {
+            target: Path::new("/proj/src"),
+            is_dir: true,
+            is_root: false,
+            has_clipboard: false,
+            is_git_repo: true,
+            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+        });
         // 文件夹菜单:顶部组(搜索/新建)紧贴,组前无分隔线——第一项应是「搜索」。
         assert!(
             matches!(
@@ -1922,14 +1922,14 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_file_has_no_search_or_paste() {
-        let items = context_menu_items(
-            Path::new("/proj/src/main.rs"),
-            false,
-            false,
-            true,
-            true,
-            &crate::external_apps::ExternalAppsConfig::default(),
-        );
+        let items = context_menu_items(FileContextMenuParams {
+            target: Path::new("/proj/src/main.rs"),
+            is_dir: false,
+            is_root: false,
+            has_clipboard: true,
+            is_git_repo: true,
+            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+        });
         let has_search = items.iter().any(|i| {
             matches!(
                 i,
@@ -1954,30 +1954,30 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_rollback_for_git_file_only() {
-        let git_file = context_menu_items(
-            Path::new("/proj/src/main.rs"),
-            false,
-            false,
-            false,
-            true,
-            &crate::external_apps::ExternalAppsConfig::default(),
-        );
-        let non_git_file = context_menu_items(
-            Path::new("/proj/src/main.rs"),
-            false,
-            false,
-            false,
-            false,
-            &crate::external_apps::ExternalAppsConfig::default(),
-        );
-        let dir = context_menu_items(
-            Path::new("/proj/src"),
-            true,
-            false,
-            false,
-            true,
-            &crate::external_apps::ExternalAppsConfig::default(),
-        );
+        let git_file = context_menu_items(FileContextMenuParams {
+            target: Path::new("/proj/src/main.rs"),
+            is_dir: false,
+            is_root: false,
+            has_clipboard: false,
+            is_git_repo: true,
+            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+        });
+        let non_git_file = context_menu_items(FileContextMenuParams {
+            target: Path::new("/proj/src/main.rs"),
+            is_dir: false,
+            is_root: false,
+            has_clipboard: false,
+            is_git_repo: false,
+            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+        });
+        let dir = context_menu_items(FileContextMenuParams {
+            target: Path::new("/proj/src"),
+            is_dir: true,
+            is_root: false,
+            has_clipboard: false,
+            is_git_repo: true,
+            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+        });
         let rollback = |items: &[crate::chrome::native_menu::Item<Message>]| {
             items.iter().any(|i| {
                 matches!(
@@ -1999,14 +1999,14 @@ mod tests {
     fn context_menu_items_file_without_top_group_has_no_leading_separator() {
         // 非 git 文件没有顶部组(回滚/历史),组前分隔线不应悬空——第一项应是
         // 复制(中间组首项),而非分隔线。
-        let items = context_menu_items(
-            Path::new("/proj/src/main.rs"),
-            false,
-            false,
-            false,
-            false,
-            &crate::external_apps::ExternalAppsConfig::default(),
-        );
+        let items = context_menu_items(FileContextMenuParams {
+            target: Path::new("/proj/src/main.rs"),
+            is_dir: false,
+            is_root: false,
+            has_clipboard: false,
+            is_git_repo: false,
+            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+        });
         assert!(
             matches!(
                 items.first(),
