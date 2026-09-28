@@ -34,6 +34,12 @@ pub fn view<'a, Message: Clone + 'a>(
         .style(move |_theme: &iced_widget::Theme, status: Status| {
             let colors = crate::theme::color::current();
             let focused = matches!(status, Status::Focused { .. });
+            // hover 也描金,对齐 `form::input_text` 的 hover 反馈(2026-09-28
+            // 表单输入框 hover 需求);聚焦中悬停同样算 hover。
+            let hovered = matches!(
+                status,
+                Status::Hovered | Status::Focused { is_hovered: true }
+            );
             if bare {
                 return text_editor::Style {
                     background: iced_widget::core::Color::TRANSPARENT.into(),
@@ -50,7 +56,11 @@ pub fn view<'a, Message: Clone + 'a>(
             text_editor::Style {
                 background: colors.card.into(),
                 border: Border {
-                    color: if focused { colors.gold } else { colors.border },
+                    color: if focused || hovered {
+                        colors.gold
+                    } else {
+                        colors.border
+                    },
                     width: 1.0,
                     radius: 6.0.into(),
                 },
