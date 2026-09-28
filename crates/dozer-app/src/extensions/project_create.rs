@@ -57,6 +57,16 @@ pub(crate) fn derive_project_name_from_url(url: &str) -> String {
         .to_string()
 }
 
+/// 从本地根目录路径推导默认项目名称——取路径最后一段(`Path::file_name`,
+/// 自动容忍结尾斜杠)。根目录为空或到根(`/`)时取不到名字,回退空串由
+/// 用户手填。
+pub(crate) fn derive_project_name_from_dir(dir: &str) -> String {
+    Path::new(dir.trim())
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
     #[default]
@@ -82,6 +92,10 @@ pub enum RepoListState {
 pub struct LocalForm {
     pub root_dir: String,
     pub name: String,
+    /// 用户是否手动编辑过项目名称——同 `CloneForm::name_touched` 的语义,
+    /// 手改过后根目录再变化就不拿推导值覆盖(推导见
+    /// [`derive_project_name_from_dir`])。
+    pub name_touched: bool,
     pub description: iced_widget::text_editor::Content,
     pub create_git: bool,
 }
@@ -91,6 +105,7 @@ impl Default for LocalForm {
         LocalForm {
             root_dir: String::new(),
             name: String::new(),
+            name_touched: false,
             description: iced_widget::text_editor::Content::new(),
             create_git: true,
         }
@@ -185,10 +200,16 @@ fn apply_field_message(state: &mut State, msg: &Message) -> bool {
         }
         Message::LocalRootDirChanged(v) | Message::LocalRootDirPicked(v) => {
             state.local.root_dir = v.clone();
+            // 项目名称默认从根目录最后一段推导,手改过就不再覆盖
+            // (与 CloneForm 从 URL 推导同一套"可编辑默认值"语义)。
+            if !state.local.name_touched {
+                state.local.name = derive_project_name_from_dir(v);
+            }
             true
         }
         Message::LocalNameChanged(v) => {
             state.local.name = v.clone();
+            state.local.name_touched = true;
             true
         }
         Message::LocalDescriptionAction(action) => {
@@ -543,7 +564,7 @@ fn local_form_view(form: &LocalForm) -> Element<'_> {
         ),
         field_label("项目名称"),
         byteui::form::input_text::view(
-            "Input",
+            "项目名称",
             &form.name,
             false,
             None,
@@ -683,7 +704,10 @@ fn remote_repo_field(form: &CloneForm) -> Element<'_> {
                     .color(colors.dim);
                 let go_btn = button(text("去设置连接").size(byteui::theme::font::body()))
                     .on_press(Message::GoToSettings)
-                    .padding([6, 14]);
+                    .padding([6, 14])
+                    .style(action_button_hover_style(
+                        byteui::theme::color::current().cream,
+                    ));
                 column![hint, go_btn].spacing(8).into()
             }
             Some(RepoListState::Loading) => text("加载仓库列表中…")
@@ -696,7 +720,10 @@ fn remote_repo_field(form: &CloneForm) -> Element<'_> {
                     .color(colors.red);
                 let retry = button(text("重试").size(byteui::theme::font::body()))
                     .on_press(Message::SourceSelected(CloneSource::Provider(provider)))
-                    .padding([6, 14]);
+                    .padding([6, 14])
+                    .style(action_button_hover_style(
+                        byteui::theme::color::current().cream,
+                    ));
                 column![msg, retry].spacing(8).into()
             }
             Some(RepoListState::Loaded(repos)) if repos.is_empty() => text("该账户名下没有仓库")
@@ -734,7 +761,7 @@ fn clone_form_view(form: &CloneForm) -> Element<'_> {
         ),
         field_label("项目名称"),
         byteui::form::input_text::view(
-            "Input",
+            "项目名称",
             &form.name,
             false,
             None,
@@ -1011,6 +1038,36 @@ mod tests {
             derive_project_name_from_url("https://gitee.com/abc/baz/"),
             "baz"
         );
+    }
+
+    #[test]
+    fn derive_project_name_from_dir_takes_last_segment() {
+        assert_eq!(
+            derive_project_name_from_dir("/Users/u/Projects/website/zajia"),
+            "zajia"
+        );
+        // 结尾斜杠、首尾空白都容忍;空串与根路径取不到名字,回退空串。
+        assert_eq!(derive_project_name_from_dir("/tmp/foo/"), "foo");
+        assert_eq!(derive_project_name_from_dir("  /tmp/bar  "), "bar");
+        assert_eq!(derive_project_name_from_dir(""), "");
+        assert_eq!(derive_project_name_from_dir("/"), "");
+    }
+
+    #[test]
+    fn local_root_dir_change_derives_name_unless_manually_edited() {
+        let mut state = State::default();
+        apply_field_message(
+            &mut state,
+            &Message::LocalRootDirChanged("/Users/u/Projects/website/zajia".into()),
+        );
+        assert_eq!(state.local.name, "zajia");
+        // 手改过项目名称后,再改根目录不再覆盖。
+        apply_field_message(&mut state, &Message::LocalNameChanged("myrepo".into()));
+        apply_field_message(
+            &mut state,
+            &Message::LocalRootDirChanged("/Users/u/Projects/other".into()),
+        );
+        assert_eq!(state.local.name, "myrepo");
     }
 
     #[test]
