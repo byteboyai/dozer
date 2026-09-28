@@ -1187,6 +1187,10 @@ async fn handle_conn(
                                 Err(e) => Reply::Error { message: format!("查询结果失败: {e}") },
                             }
                         }
+                        // T8 接线前的占位(见 2026-09-28 agent-native file editor plan)。
+                        Request::LocateInFile { .. } | Request::ApplyPreciseEdit { .. } => {
+                            Reply::Error { message: "未接线".into() }
+                        }
                     },
                 };
                 w.write_all(encode_line(&reply).as_bytes()).await?;
