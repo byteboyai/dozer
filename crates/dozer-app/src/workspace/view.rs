@@ -1339,9 +1339,16 @@ pub(crate) fn preview_pane_for<'a>(
                 PreviewPaneKind::Files => PanelKind::Files,
                 PreviewPaneKind::Project => PanelKind::Project,
             };
+            // 与 fallback 页同一套系统操作按钮样式,避免这里落 iced 默认蓝底。
             content = content.push(
-                iced_widget::button(text("在系统应用中打开").size(byteui::theme::font::body()))
-                    .on_press(Message::PreviewOpenExternal(panel, tab_id)),
+                iced_widget::button(text("在系统应用中打开").size(byteui::theme::font::label()))
+                    .on_press(Message::PreviewOpenExternal(panel, tab_id))
+                    .padding([8, 20])
+                    .style(
+                        crate::extensions::project_create::action_button_hover_style(
+                            byteui::theme::color::current().dim,
+                        ),
+                    ),
             );
         }
     }
@@ -2036,6 +2043,7 @@ fn preview_fallback_page<'a>(
 
     let colors = byteui::theme::color::current();
     let body = byteui::theme::font::body();
+    let label = byteui::theme::font::label();
     let caption = byteui::theme::font::caption_sm();
     let mut col = column![
         text(tab.title.clone())
@@ -2066,23 +2074,35 @@ fn preview_fallback_page<'a>(
             .color(colors.dim),
     );
 
+    // 三个动作按钮走系统统一的操作按钮样式(`action_button_hover_style`:
+    // PANEL 底 + 描边变金 + hover `tab_hover` 胶囊,圆角 4),与「新建项目」/
+    // 设置弹窗底部按钮同一套观感——此前无 `.style()`,落 iced 默认蓝底按钮。
+    // 「重试」是推荐动作,用奶油色主按钮;其余两个为次要动作走 dim。
     let mut actions_row = row![]
         .spacing(8)
         .align_y(iced_widget::core::Alignment::Center);
     if actions.retry {
-        actions_row = actions_row
-            .push(button(text("重试").size(body)).on_press(Message::PreviewRetry(panel, tab_id)));
+        actions_row = actions_row.push(
+            button(text("重试").size(label))
+                .on_press(Message::PreviewRetry(panel, tab_id))
+                .padding([8, 20])
+                .style(crate::extensions::project_create::action_button_hover_style(colors.cream)),
+        );
     }
     if actions.plain_text_read_only {
         actions_row = actions_row.push(
-            button(text("以纯文本只读尝试").size(body))
-                .on_press(Message::PreviewPlainTextOpen(panel, tab_id)),
+            button(text("以纯文本只读尝试").size(label))
+                .on_press(Message::PreviewPlainTextOpen(panel, tab_id))
+                .padding([8, 20])
+                .style(crate::extensions::project_create::action_button_hover_style(colors.dim)),
         );
     }
     if actions.external_open {
         actions_row = actions_row.push(
-            button(text("在系统应用中打开").size(body))
-                .on_press(Message::PreviewOpenExternal(panel, tab_id)),
+            button(text("在系统应用中打开").size(label))
+                .on_press(Message::PreviewOpenExternal(panel, tab_id))
+                .padding([8, 20])
+                .style(crate::extensions::project_create::action_button_hover_style(colors.dim)),
         );
     }
     col = col.push(actions_row);

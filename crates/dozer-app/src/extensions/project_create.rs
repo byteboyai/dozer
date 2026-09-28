@@ -4,7 +4,6 @@
 //! ProjectCreateOverlay`,结构对照 `extensions::file_history` + 同名 overlay
 //! 的既有分工:本模块只管状态/消息/视图/异步落盘逻辑,不碰 winit/wgpu。
 
-use crate::chrome::tab_widget::tab_container_style;
 use crate::delivery;
 use crate::git_accounts::{self, GitProvider, RemoteRepo};
 use byteui::interaction::icons;
@@ -137,9 +136,9 @@ pub struct State {
     pub error: Option<String>,
     pub busy: bool,
     pub close_hover: bool,
-    /// 两个视图切换 tab 的 hover 态,驱动 `tab_label`/`tab_container_style`
-    /// 的 hover 高亮(未选中 hover 时浮现 TAB_HOVER 胶囊 + 标题 DIM→GOLD),
-    /// 与文件预览窗口页签同一套视觉。
+    /// 两个视图切换 tab 的 hover 态,驱动 `dialog_tab_style` 的 hover 高亮
+    /// (未选中 hover 时浮现 TAB_HOVER 胶囊 + 标题 DIM→GOLD),与文件预览
+    /// 窗口页签同一套视觉。
     pub tab_hover: Option<Tab>,
 }
 
@@ -438,12 +437,12 @@ fn tab_hover_t(hover: Option<Tab>, tab: Tab) -> f32 {
 
 fn tab_button<'a>(label: &'a str, active: bool, tab: Tab, hover_t: f32) -> Element<'a> {
     // 弹窗内两枚互斥视图切换 tab 的自绘标题(2026-09-27 起不再复用共享
-    // `tab_label`):字号降到 `label()`(13px,与表单字段标签同级,比共享
-    // 面板页签的 body 小一档),配色公式不变——选中 CREAM、未选中 DIM→GOLD
-    // 按 hover 插值;容器样式仍复用 `tab_container_style`(选中 CARD 实底 +
-    // 1px 边框,未选中 hover 时浮现 TAB_HOVER 胶囊)。两个 tab 是互斥的视图
-    // 切换(不是可关闭的文件页签),故不挂关闭 ×。边框内边距四边对称加大
-    // (原 top/bottom 0、right 4 只对面板页签的 × 区合理),文字不再贴边。
+    // `tab_label`):字号降到 `caption()`(12px,比共享面板页签的 `label` 还小
+    // 一档,与表单字段标签拉开层级),配色公式不变——选中 CREAM、未选中
+    // DIM→GOLD 按 hover 插值;容器样式走本模块专属 `dialog_tab_style`
+    // (选中 CARD 实底 + 1px 边框、未选中 hover 浮现 TAB_HOVER 胶囊),半径
+    // 加大到 8 让 tab 明显圆角化。两个 tab 是互斥的视图切换(不是可关闭的
+    // 文件页签),故不挂关闭 ×。边框内边距四边对称,文字不贴边。
     let colors = byteui::theme::color::current();
     let title_color = if active {
         colors.cream
@@ -452,7 +451,7 @@ fn tab_button<'a>(label: &'a str, active: bool, tab: Tab, hover_t: f32) -> Eleme
     };
     let content = text(label.to_string())
         .font(crate::app::top_bar_font())
-        .size(byteui::theme::font::label())
+        .size(byteui::theme::font::caption())
         .color(title_color);
     let el: Element<'a> = MouseArea::new(content)
         .on_press(Message::TabSelected(tab))
@@ -468,8 +467,50 @@ fn tab_button<'a>(label: &'a str, active: bool, tab: Tab, hover_t: f32) -> Eleme
             left: 12.0,
         })
         .width(Length::Shrink)
-        .style(tab_container_style(active, hover_t))
+        .style(dialog_tab_style(active, hover_t))
         .into()
+}
+
+/// 创建项目弹窗两枚切换 tab 的容器样式:配色与共享 `tab_container_style`
+/// 完全一致(选中 CARD 实底 + 1px 边框、未选中 hover 浮现 TAB_HOVER 胶囊),
+/// 但半径从共享的 6 提到 8,使 tab 更明显地圆角化。单独实现而不改共享样式,
+/// 避免波及终端/预览/SSH/浏览器等其它面板页签的圆角观感。设置弹窗的
+/// 左栏切换 tab 也复用同一份样式(见 `extensions::settings`),保证两处
+/// 圆角观感一致。
+pub(crate) fn dialog_tab_style(
+    active: bool,
+    hover: f32,
+) -> impl Fn(&iced_widget::Theme) -> container::Style {
+    move |_theme: &iced_widget::Theme| {
+        if active {
+            container::Style {
+                background: Some(byteui::theme::color::current().card.into()),
+                border: Border {
+                    color: byteui::theme::color::current().border,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..container::Style::default()
+            }
+        } else if hover > 0.0 {
+            container::Style {
+                background: Some(
+                    Color {
+                        a: hover,
+                        ..byteui::theme::color::current().tab_hover
+                    }
+                    .into(),
+                ),
+                border: Border {
+                    radius: 8.0.into(),
+                    ..Border::default()
+                },
+                ..container::Style::default()
+            }
+        } else {
+            container::Style::default()
+        }
+    }
 }
 
 fn tab_row(active: Tab, hover: Option<Tab>) -> Element<'static> {
@@ -598,15 +639,23 @@ fn local_form_view(form: &LocalForm) -> Element<'_> {
 /// `docs/superpowers/specs/2026-09-18-project-create-remote-repo-picker-
 /// design.md`)。
 fn sidebar_entry(label: &'static str, selected: bool, on_press: Message) -> Element<'static> {
+    // 左栏这组 provider 切换 tab(仓库URL / GitHub / GitLab / Gitee):字号降到
+    // `caption()`(12px,与弹窗顶部「本地新建 / Git仓库签出」切换 tab 同档),
+    // 容器加 8 圆角——选中 CARD 实底、未选中 BG 实底,各成一枚圆角胶囊,与
+    // 弹窗内其它 tab 的圆角观感一致。此前是直角 `body()` 字号。
     let colors = byteui::theme::color::current();
     let label_el = text(label)
-        .size(byteui::theme::font::body())
+        .size(byteui::theme::font::caption())
         .color(if selected { colors.cream } else { colors.dim });
     let cell = container(label_el)
         .padding([8, 12])
         .width(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
             background: Some(if selected { colors.card } else { colors.bg }.into()),
+            border: Border {
+                radius: 8.0.into(),
+                ..Border::default()
+            },
             ..container::Style::default()
         });
     iced_widget::MouseArea::new(cell)
@@ -813,7 +862,7 @@ pub(crate) fn action_button_hover_style(
 }
 
 fn primary_button(label: &'static str, msg: Message, busy: bool) -> Element<'static> {
-    let btn = button(text(if busy { "处理中…" } else { label }).size(byteui::theme::font::body()))
+    let btn = button(text(if busy { "处理中…" } else { label }).size(byteui::theme::font::label()))
         .style(action_button_hover_style(
             byteui::theme::color::current().cream,
         ))
@@ -842,7 +891,7 @@ pub(crate) fn project_create_card(state: &State) -> Element<'_> {
     } else {
         Space::new().into()
     };
-    let cancel = button(text("取消").size(byteui::theme::font::body()))
+    let cancel = button(text("取消").size(byteui::theme::font::label()))
         .on_press(Message::Close)
         .padding([8, 20])
         .style(action_button_hover_style(

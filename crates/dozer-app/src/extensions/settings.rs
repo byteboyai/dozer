@@ -5,8 +5,8 @@
 use crate::git_accounts::{self, GitAccountsState, GitProvider};
 use byteui::interaction::icons;
 use byteui::theme::color::ColorScheme;
-use iced_widget::core::{Alignment, Element, Length};
-use iced_widget::{Space, button, column, container, row, text};
+use iced_widget::core::{Alignment, Element, Length, Padding};
+use iced_widget::{MouseArea, Space, button, column, container, row, text};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -48,6 +48,15 @@ pub enum AdvancedState {
     RestartingDozerd,
 }
 
+/// 设置弹窗左栏三组切换 tab:主题 / Git 账户 / 高级。点击切换右侧内容区,
+/// 样式与「新建项目」弹窗左侧 tab 一致(`dialog_tab_style` + caption 字号)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsTab {
+    Theme,
+    Git,
+    Advanced,
+}
+
 pub struct State {
     pub github: ConnectState,
     pub gitlab: ConnectState,
@@ -58,6 +67,11 @@ pub struct State {
     /// connect task)。
     connect_tasks: HashMap<GitProvider, tokio::task::AbortHandle>,
     pub advanced: AdvancedState,
+    /// 左栏当前选中的 tab(主题 / Git 账户 / 高级),决定右侧内容区显示哪一组。
+    pub selected: SettingsTab,
+    /// 左栏 tab 的 hover 态,驱动 `dialog_tab_style` 的高亮(未选中 hover 时
+    /// 浮现 TAB_HOVER 胶囊 + 标题 DIM→GOLD),与「新建项目」弹窗同一套视觉。
+    tab_hover: Option<SettingsTab>,
     /// 右上角关闭图标按钮的悬停态——本弹窗渲染在独立原生窗口
     /// (`SettingsOverlay`),不接入 `App` 的全局 `hover_anims` 定时动画表
     /// (那套动画的自驱 redraw 只唤醒主窗口),所以这里退化成瞬时二值而非
@@ -85,6 +99,8 @@ impl State {
             gitee: ConnectState::from_accounts(&accounts, GitProvider::Gitee),
             connect_tasks: HashMap::new(),
             advanced: advanced_state_for_daemon(daemon_error),
+            selected: SettingsTab::Theme,
+            tab_hover: None,
             close_hover: false,
         }
     }
@@ -127,6 +143,10 @@ pub enum Message {
     AdvancedStopResult(Result<(), String>),
     AdvancedRestartClicked,
     AdvancedRestartResult(Result<(), String>),
+    /// 左栏 tab 切换:点击某组 tab 切到对应内容区。
+    TabSelected(SettingsTab),
+    /// 左栏 tab 的 hover 进入/离开,`Some(tab)` 进入、`None` 离开。
+    TabHover(Option<SettingsTab>),
 }
 
 /// 处理不需要 `handle`(异步)的消息,返回 `true` 表示已处理完。纯状态
@@ -251,6 +271,14 @@ fn apply_sync_message(state: &mut State, msg: &Message) -> bool {
                     error: Some(e.clone()),
                 },
             };
+            true
+        }
+        Message::TabSelected(tab) => {
+            state.selected = *tab;
+            true
+        }
+        Message::TabHover(h) => {
+            state.tab_hover = *h;
             true
         }
         Message::Close
@@ -396,7 +424,8 @@ fn provider_row(
                 .color(colors.dim);
             let connect_btn = button(text("连接").size(byteui::theme::font::body()))
                 .on_press(Message::ConnectClicked(provider))
-                .padding([6, 14]);
+                .padding([6, 14])
+                .style(crate::extensions::project_create::action_button_hover_style(colors.cream));
             row![title, status, Space::new().width(Length::Fill), connect_btn]
                 .spacing(10)
                 .align_y(Alignment::Center)
@@ -408,7 +437,8 @@ fn provider_row(
                 .color(colors.gold);
             let disconnect_btn = button(text("断开连接").size(byteui::theme::font::body()))
                 .on_press(Message::Disconnect(provider))
-                .padding([6, 14]);
+                .padding([6, 14])
+                .style(crate::extensions::project_create::action_button_hover_style(colors.dim));
             row![
                 title,
                 status,
@@ -438,14 +468,16 @@ fn provider_row(
             .interaction(iced_widget::core::mouse::Interaction::Pointer)
             .on_press(Message::OpenTokenPage(provider));
             let confirm_label = if *busy { "校验中…" } else { "确认" };
-            let confirm = button(text(confirm_label).size(byteui::theme::font::body()));
+            let confirm = button(text(confirm_label).size(byteui::theme::font::body()))
+                .style(crate::extensions::project_create::action_button_hover_style(colors.cream));
             let confirm = if *busy {
                 confirm
             } else {
                 confirm.on_press(Message::ConnectSubmit(provider))
             };
             let cancel = button(text("取消").size(byteui::theme::font::body()))
-                .on_press(Message::ConnectCancel(provider));
+                .on_press(Message::ConnectCancel(provider))
+                .style(crate::extensions::project_create::action_button_hover_style(colors.dim));
             let error_row: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
                 if let Some(e) = error {
                     text(e.clone())
@@ -495,7 +527,8 @@ fn advanced_row(
         AdvancedState::Idle { error } => {
             let btn = button(text("停止 dozerd").size(byteui::theme::font::body()))
                 .on_press(Message::AdvancedStopClicked)
-                .padding([6, 14]);
+                .padding([6, 14])
+                .style(crate::extensions::project_create::action_button_hover_style(colors.cream));
             column![
                 hint("停止后所有正在运行的 agent 会话会结束并生成总结,可随时重新启动。".into()),
                 row![Space::new().width(Length::Fill), btn],
@@ -525,14 +558,16 @@ fn advanced_row(
             };
             let cancel = button(text("取消").size(byteui::theme::font::body()))
                 .on_press(Message::AdvancedStopCancel)
-                .padding([6, 14]);
+                .padding([6, 14])
+                .style(crate::extensions::project_create::action_button_hover_style(colors.dim));
             let confirm = button(
                 text("确认停止")
                     .size(byteui::theme::font::body())
                     .color(colors.red),
             )
             .on_press(Message::AdvancedStopConfirm)
-            .padding([6, 14]);
+            .padding([6, 14])
+            .style(crate::extensions::project_create::action_button_hover_style(colors.red));
             column![
                 hint(body),
                 row![Space::new().width(Length::Fill), cancel, confirm].spacing(8),
@@ -550,7 +585,8 @@ fn advanced_row(
         AdvancedState::Stopped { error } => {
             let btn = button(text("重新启动 dozerd").size(byteui::theme::font::body()))
                 .on_press(Message::AdvancedRestartClicked)
-                .padding([6, 14]);
+                .padding([6, 14])
+                .style(crate::extensions::project_create::action_button_hover_style(colors.cream));
             column![
                 hint("dozerd 已停止,部分功能不可用。".into()),
                 row![Space::new().width(Length::Fill), btn],
@@ -566,6 +602,48 @@ fn advanced_row(
     }
 }
 
+/// 设置弹窗左栏单枚切换 tab(主题 / Git 账户 / 高级),样式与「新建项目」
+/// 弹窗左侧 tab 完全一致:caption 字号 + 选中 CREAM、未选中 DIM→GOLD 的
+/// 配色公式,容器走 `project_create::dialog_tab_style`(半径 8 圆角)。
+fn settings_tab_button(
+    label: &'static str,
+    active: bool,
+    hover_t: f32,
+    on_press: Message,
+    on_enter: impl Fn(bool) -> Message + 'static,
+    on_exit: impl Fn(bool) -> Message + 'static,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let colors = byteui::theme::color::current();
+    let title_color = if active {
+        colors.cream
+    } else {
+        byteui::theme::color::mix(colors.dim, colors.gold, hover_t)
+    };
+    let content = text(label.to_string())
+        .font(crate::app::top_bar_font())
+        .size(byteui::theme::font::caption())
+        .color(title_color);
+    let el: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        MouseArea::new(content)
+            .on_press(on_press)
+            .on_enter(on_enter(true))
+            .on_exit(on_exit(false))
+            .interaction(iced_widget::core::mouse::Interaction::Pointer)
+            .into();
+    container(el)
+        .padding(Padding {
+            top: 6.0,
+            right: 12.0,
+            bottom: 6.0,
+            left: 12.0,
+        })
+        .width(Length::Fill)
+        .style(crate::extensions::project_create::dialog_tab_style(
+            active, hover_t,
+        ))
+        .into()
+}
+
 pub fn settings_card(
     state: &State,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -579,7 +657,7 @@ pub fn settings_card(
         .color(colors.cream);
     let close = button(
         text("关闭")
-            .size(byteui::theme::font::body())
+            .size(byteui::theme::font::label())
             .color(colors.dim),
     )
     .on_press(Message::Close)
@@ -619,20 +697,87 @@ pub fn settings_card(
     .align_y(Alignment::Center);
     let header =
         row![title, Space::new().width(Length::Fill), close_icon].align_y(Alignment::Center);
-    let content = column![
-        header,
-        theme_title,
-        scheme_row("深色 · ByteBoy2077", ColorScheme::Dark, current),
-        scheme_row("浅色 · ByteBoy2077-Light", ColorScheme::Light, current),
-        git_title,
-        provider_row(GitProvider::GitHub, &state.github),
-        provider_row(GitProvider::GitLab, &state.gitlab),
-        provider_row(GitProvider::Gitee, &state.gitee),
-        advanced_title,
-        advanced_row(&state.advanced),
-        crate::dialog::actions(row![close]),
+
+    // 左栏三组切换 tab(主题 / Git 账户 / 高级),样式与「新建项目」弹窗左侧
+    // tab 一致;hover 二值驱动 `dialog_tab_style` 高亮。
+    let tab_hover_t = |tab: SettingsTab| -> f32 {
+        if state.tab_hover == Some(tab) {
+            1.0
+        } else {
+            0.0
+        }
+    };
+    let tab_col = column![
+        settings_tab_button(
+            "主题",
+            state.selected == SettingsTab::Theme,
+            tab_hover_t(SettingsTab::Theme),
+            Message::TabSelected(SettingsTab::Theme),
+            |h| Message::TabHover(if h { Some(SettingsTab::Theme) } else { None }),
+            |_| Message::TabHover(None),
+        ),
+        settings_tab_button(
+            "Git 账户",
+            state.selected == SettingsTab::Git,
+            tab_hover_t(SettingsTab::Git),
+            Message::TabSelected(SettingsTab::Git),
+            |h| Message::TabHover(if h { Some(SettingsTab::Git) } else { None }),
+            |_| Message::TabHover(None),
+        ),
+        settings_tab_button(
+            "高级",
+            state.selected == SettingsTab::Advanced,
+            tab_hover_t(SettingsTab::Advanced),
+            Message::TabSelected(SettingsTab::Advanced),
+            |h| Message::TabHover(if h { Some(SettingsTab::Advanced) } else { None }),
+            |_| Message::TabHover(None),
+        ),
     ]
-    .spacing(14);
+    .spacing(8)
+    .width(Length::Fill);
+
+    // 右侧内容区:只渲染左栏选中那一组,其余两组收起(互斥视图切换,与
+    // 「新建项目」弹窗的 Tab::Local/Clone 同一思路)。
+    let body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        match state.selected {
+            SettingsTab::Theme => column![
+                theme_title,
+                scheme_row("深色 · ByteBoy2077", ColorScheme::Dark, current),
+                scheme_row("浅色 · ByteBoy2077-Light", ColorScheme::Light, current),
+            ],
+            SettingsTab::Git => column![
+                git_title,
+                provider_row(GitProvider::GitHub, &state.github),
+                provider_row(GitProvider::GitLab, &state.gitlab),
+                provider_row(GitProvider::Gitee, &state.gitee),
+            ],
+            SettingsTab::Advanced => column![advanced_title, advanced_row(&state.advanced)],
+        }
+        .spacing(14)
+        .into();
+
+    // 左栏 tab + 1px 分割线 + 右侧内容区;分割线左右各 16,与内容左缘对齐。
+    let main = row![
+        container(tab_col).width(Length::Fixed(140.0)),
+        container(iced_widget::Space::new())
+            .width(Length::Fixed(1.0))
+            .height(Length::Fill)
+            .style(|_t: &iced_widget::Theme| container::Style {
+                background: Some(byteui::theme::color::current().border.into()),
+                ..container::Style::default()
+            }),
+        container(body).width(Length::Fill).padding(Padding {
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: 16.0,
+        }),
+    ]
+    .spacing(16)
+    .align_y(iced_widget::core::Alignment::Start)
+    .height(Length::Fill);
+
+    let content = column![header, main, crate::dialog::actions(row![close])].spacing(14);
 
     container(content)
         .padding(16)
@@ -655,6 +800,8 @@ mod tests {
             gitee,
             connect_tasks: HashMap::new(),
             advanced: AdvancedState::Idle { error: None },
+            selected: SettingsTab::Theme,
+            tab_hover: None,
             close_hover: false,
         }
     }

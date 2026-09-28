@@ -193,7 +193,7 @@ pub fn confirm<'a, Msg: 'a + Clone>(
     };
     let cancel = button(
         text(spec.cancel_label)
-            .size(byteui::theme::font::body())
+            .size(byteui::theme::font::label())
             .color(byteui::theme::color::current().dim),
     )
     .on_press(spec.cancel_msg)
@@ -201,7 +201,7 @@ pub fn confirm<'a, Msg: 'a + Clone>(
     .style(action_button_style(byteui::theme::color::current().dim));
     let confirm = button(
         text(spec.confirm_label)
-            .size(byteui::theme::font::body())
+            .size(byteui::theme::font::label())
             .color(spec.confirm_color),
     )
     .on_press(spec.confirm_msg)

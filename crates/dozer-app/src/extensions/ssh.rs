@@ -1168,15 +1168,22 @@ pub fn ssh_host_card<'a>(
         button(text(label).size(byteui::theme::font::label()).color(color))
             .on_press(msg)
             .padding([6, 12])
-            .style(move |_t: &iced_widget::Theme, _s| button::Style {
-                background: Some(byteui::theme::color::current().bg.into()),
-                border: iced_widget::core::Border {
-                    color,
-                    width: 1.0,
-                    radius: 4.0.into(),
-                },
-                text_color: color,
-                ..button::Style::default()
+            .style(move |_t: &iced_widget::Theme, s: button::Status| {
+                let hovered = matches!(s, button::Status::Hovered | button::Status::Pressed);
+                button::Style {
+                    background: Some(byteui::theme::color::current().bg.into()),
+                    border: iced_widget::core::Border {
+                        color: if hovered {
+                            byteui::theme::color::current().gold
+                        } else {
+                            color
+                        },
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    text_color: color,
+                    ..button::Style::default()
+                }
             })
     };
 

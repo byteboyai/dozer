@@ -105,13 +105,14 @@ html, body {
   position: relative; padding: 0 4px; border-radius: 4px;
   display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
   height: 102px;
+  flex: 1 1 0;
 }
 .usage-day-band .usage-tooltip { display: none; bottom: 100%; left: 50%; }
 .usage-day-band:hover .usage-tooltip { display: block; }
-.usage-bar-row { display: flex; gap: 3px; align-items: flex-end; height: 86px; }
-.usage-bar-col { display: flex; flex-direction: column; align-items: center; gap: 2px; justify-content: flex-end; height: 100%; }
+.usage-bar-row { display: flex; gap: 3px; align-items: flex-end; height: 86px; width: 100%; }
+.usage-bar-col { display: flex; flex-direction: column; align-items: center; gap: 2px; justify-content: flex-end; height: 100%; flex: 1 1 0; min-width: 1px; }
 .usage-bar-value { font-size: 8px; color: var(--dim); }
-.usage-bar { border-radius: 4px 4px 0 0; }
+.usage-bar { border-radius: 4px 4px 0 0; width: 100%; min-width: 1px; }
 .usage-day-label { font-size: 8px; color: var(--dim); margin-top: 4px; }
 
 .usage-trend-svg-wrap { position: relative; height: 86px; }

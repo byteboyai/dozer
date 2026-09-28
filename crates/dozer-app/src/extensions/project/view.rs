@@ -547,7 +547,7 @@ pub fn project_scaffold_card(
     let close_label = if done { "关闭" } else { "进行中…" };
     let close_btn = button(
         text(close_label)
-            .size(byteui::theme::font::body())
+            .size(byteui::theme::font::label())
             .color(byteui::theme::color::current().dim),
     )
     .on_press_maybe(done.then_some(Message::ScaffoldPopupClose))
@@ -661,7 +661,7 @@ pub fn project_delete_card(
 
     let cancel = button(
         text("取消")
-            .size(byteui::theme::font::body())
+            .size(byteui::theme::font::label())
             .color(byteui::theme::color::current().dim),
     )
     .on_press(Message::DeleteProjectCancel)
@@ -671,7 +671,7 @@ pub fn project_delete_card(
     ));
     let confirm = button(
         text("删除")
-            .size(byteui::theme::font::body())
+            .size(byteui::theme::font::label())
             .color(byteui::theme::color::current().red),
     )
     .on_press(Message::DeleteProjectConfirm)

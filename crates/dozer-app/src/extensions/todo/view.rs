@@ -1957,7 +1957,10 @@ pub fn todo_detail_card(
     };
     let submit = button(text(submit_label))
         .on_press_maybe((!ws.todo.detail_processing()).then_some(Message::DetailReplySubmit))
-        .padding([6, 12]);
+        .padding([6, 12])
+        .style(crate::dialog::action_button_style(
+            byteui::theme::color::current().cream,
+        ));
 
     let card = column![header, turns_scroll, row![reply_box, submit].spacing(8)]
         .spacing(12)

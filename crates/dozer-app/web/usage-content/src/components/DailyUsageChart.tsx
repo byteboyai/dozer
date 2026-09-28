@@ -1,7 +1,7 @@
 import type { DailyUsageChart as DailyUsageChartType } from '../types.ts';
 import { formatCount } from '../format.ts';
 import { agentColorVar } from '../theme.ts';
-import { GridLines, BAR_MAX_HEIGHT, BAR_WIDTH, GRID_LABEL_GUTTER } from './GridLines.tsx';
+import { GridLines, BAR_MAX_HEIGHT, GRID_LABEL_GUTTER } from './GridLines.tsx';
 
 // agent 展示名,同 ChartStatList.tsx 的 AGENT_LABEL(逐一对应
 // AgentKind::label())。
@@ -54,7 +54,7 @@ export function DailyUsageChart({ chart }: { chart: DailyUsageChartType }) {
                     <span class="usage-bar-value">{formatCount(value)}</span>
                     <div
                       class="usage-bar"
-                      style={{ height: `${height}px`, width: `${BAR_WIDTH}px`, background: agentColorVar(agent) }}
+                      style={{ height: `${height}px`, background: agentColorVar(agent) }}
                     />
                   </div>
                 );

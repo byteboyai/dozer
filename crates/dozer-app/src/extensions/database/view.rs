@@ -45,7 +45,7 @@ pub fn database_drivers_card(
 
     let close = button(
         text("关闭")
-            .size(byteui::theme::font::body())
+            .size(byteui::theme::font::label())
             .color(byteui::theme::color::current().dim),
     )
     .on_press(Message::DriversPopupToggle)
@@ -403,15 +403,25 @@ pub fn database_source_card<'a>(
             .on_press(msg)
             .padding([6, 12])
             .style(
-                move |_t: &iced_widget::Theme, _s| iced_widget::button::Style {
-                    background: Some(byteui::theme::color::current().bg.into()),
-                    border: iced_widget::core::Border {
-                        color,
-                        width: 1.0,
-                        radius: 4.0.into(),
-                    },
-                    text_color: color,
-                    ..iced_widget::button::Style::default()
+                move |_t: &iced_widget::Theme, s: iced_widget::button::Status| {
+                    let hovered = matches!(
+                        s,
+                        iced_widget::button::Status::Hovered | iced_widget::button::Status::Pressed
+                    );
+                    iced_widget::button::Style {
+                        background: Some(byteui::theme::color::current().bg.into()),
+                        border: iced_widget::core::Border {
+                            color: if hovered {
+                                byteui::theme::color::current().gold
+                            } else {
+                                color
+                            },
+                            width: 1.0,
+                            radius: 4.0.into(),
+                        },
+                        text_color: color,
+                        ..iced_widget::button::Style::default()
+                    }
                 },
             )
     };
