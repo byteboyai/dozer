@@ -412,6 +412,16 @@ pub enum PreviewCommandAction {
         end_column: u32,
         text: String,
     },
+    /// 短暂高亮某段范围(纯视觉装饰,定时自动消退;不改变实际的文本选区/光标
+    /// 状态——故意跟 `Select` 分开,`Select` 会占用 human 自己后续操作会用到
+    /// 的"当前选中范围",高亮不应该有这个副作用)。
+    Highlight {
+        start_line: u32,
+        start_column: u32,
+        end_line: u32,
+        end_column: u32,
+        duration_ms: u32,
+    },
 }
 
 /// T13:一条下行预览命令。
@@ -480,6 +490,42 @@ impl PreviewContext {
             Some(out)
         });
     }
+}
+
+/// `LocateInFile` 的一处匹配:坐标(1-based)+ 命中处附近的上下文,供 agent
+/// 判断是不是自己想要的位置、或缩小 `query` 范围。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LocateMatch {
+    pub start_line: u32,
+    pub start_col: u32,
+    pub end_line: u32,
+    pub end_col: u32,
+    pub context: String,
+}
+
+/// `ApplyPreciseEdit` 的结果。`Applied` 里的 `new_*` 坐标是替换后
+/// `new_text` 对应的新区间(供自动定位/高亮使用),`history_id` 是这次修改
+/// 写入 `file_edit_history` 表的行 id。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MutationOutcome {
+    Applied {
+        new_start_line: u32,
+        new_start_col: u32,
+        new_end_line: u32,
+        new_end_col: u32,
+        history_id: i64,
+    },
+    /// Conflict Detection:磁盘当前内容跟调用方传的 `expected_text` 不一致。
+    Conflict {
+        actual_text: String,
+    },
+    NotFound,
+    PathOutOfBounds,
+    /// 二进制/非 UTF-8 等不可写的文件。
+    Unwritable {
+        reason: String,
+    },
 }
 
 /// 项目（甲方资产域的根；P1g）。id 为 dozerd SQLite 主键。
@@ -1033,6 +1079,28 @@ pub enum Request {
         project_id: i64,
         id: i64,
     },
+    /// 在项目内某文本文件里搜索 `query`,返回全部匹配的坐标。只读。
+    LocateInFile {
+        project_id: i64,
+        path: String,
+        query: String,
+    },
+    /// 精确替换项目内某文本文件的 `[start_line,start_col]`~`[end_line,end_col]`
+    /// 区间(1-based,含端点)。`expected_text` 是调用方认为该区间当前的原样
+    /// 内容,用于 Conflict Detection。`actor`/`session_id` 供历史记录署名。
+    ApplyPreciseEdit {
+        project_id: i64,
+        path: String,
+        start_line: u32,
+        start_col: u32,
+        end_line: u32,
+        end_col: u32,
+        expected_text: String,
+        new_text: String,
+        summary: String,
+        actor: String,
+        session_id: String,
+    },
     /// 人工删除一条记忆(`dozer-mcp` 不暴露对应工具,只有 `dozer-app` UI
     /// 会发这个请求)。删除前的最后状态会被写进一条 `deleted` 历史。
     DeleteMemory {
@@ -1241,6 +1309,14 @@ pub enum Reply {
     /// `WriteMemory`/`GetMemory` 应答。
     MemoryDetail {
         detail: MemoryDetail,
+    },
+    /// `LocateInFile` 应答。
+    LocateMatches {
+        matches: Vec<LocateMatch>,
+    },
+    /// `ApplyPreciseEdit` 应答。
+    MutationResult {
+        outcome: MutationOutcome,
     },
     Categories {
         categories: Vec<CategoryInfo>,
@@ -2574,5 +2650,77 @@ mod tests {
             "dispatch_session_id":null,"dispatch_at_ms":null}"#;
         let todo: TodoInfo = serde_json::from_str(json).unwrap();
         assert_eq!(todo.assigned_agent, None);
+    }
+
+    #[test]
+    fn highlight_action_round_trips() {
+        let action = PreviewCommandAction::Highlight {
+            start_line: 3,
+            start_column: 1,
+            end_line: 5,
+            end_column: 10,
+            duration_ms: 2000,
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let back: PreviewCommandAction = serde_json::from_str(&json).unwrap();
+        assert_eq!(action, back);
+    }
+
+    #[test]
+    fn locate_in_file_request_round_trips() {
+        let req = Request::LocateInFile {
+            project_id: 1,
+            path: "src/lib.rs".into(),
+            query: "fn main".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: Request = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[test]
+    fn apply_precise_edit_request_round_trips() {
+        let req = Request::ApplyPreciseEdit {
+            project_id: 1,
+            path: "src/lib.rs".into(),
+            start_line: 3,
+            start_col: 1,
+            end_line: 3,
+            end_col: 10,
+            expected_text: "old".into(),
+            new_text: "new".into(),
+            summary: "修正拼写".into(),
+            actor: "claude".into(),
+            session_id: "sess-1".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: Request = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[test]
+    fn mutation_outcome_variants_round_trip() {
+        let variants = [
+            MutationOutcome::Applied {
+                new_start_line: 3,
+                new_start_col: 1,
+                new_end_line: 3,
+                new_end_col: 12,
+                history_id: 42,
+            },
+            MutationOutcome::Conflict {
+                actual_text: "实际内容".into(),
+            },
+            MutationOutcome::NotFound,
+            MutationOutcome::PathOutOfBounds,
+            MutationOutcome::Unwritable {
+                reason: "非 UTF-8".into(),
+            },
+        ];
+        for v in variants {
+            let json = serde_json::to_string(&v).unwrap();
+            let back: MutationOutcome = serde_json::from_str(&json).unwrap();
+            assert_eq!(v, back);
+        }
     }
 }
