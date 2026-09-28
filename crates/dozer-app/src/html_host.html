@@ -15,11 +15,22 @@
     </style>
   </head>
   <body>
-    <!-- T7 隔离 host:把绑定 HTML 放进 **无脚本** sandbox iframe(sandbox="" 即
-         最严格:禁脚本/禁同源),<base> 指向文件所在目录,让相对 css/js/图片经
-         同一 dozer://html/__file__ 白名单端点解析;无网络。Rust 侧只对"已打开
-         文件所在目录子树"放行(见 assets::serve_html_file)。 -->
-    <iframe id="view" sandbox referrerpolicy="no-referrer"></iframe>
+    <!-- T7 隔离 host:把绑定 HTML 放进**无脚本**sandbox iframe(sandbox 只放行
+         allow-same-origin,不放行 allow-scripts——脚本仍然完全禁跑,`<base>`
+         指向文件所在目录,让相对 css/js/图片经同一 dozer://html/__file__ 白名单
+         端点解析;无网络。Rust 侧只对"已打开文件所在目录子树"放行(见
+         assets::serve_html_file)。
+
+         2026-09-27 修订:最初 sandbox="" 不带 allow-same-origin,srcdoc 文档
+         拿到的是唯一 opaque origin——WebKit(macOS WKWebView)在这个组合下,
+         注入的 `<base>` 标签不会覆盖相对 URL 解析的 fallback base,相对 css/js/
+         图片请求解析不到 `dozer://html/__file__/...`,导致预览"只有文字没有
+         样式"(同源 Chromium 引擎下不复现,是 WebKit 特有行为,可查
+         whatwg/html#9025)。补回 allow-same-origin 后,文档 origin = 本 host 的
+         `dozer://html` origin,`<base>` 按预期生效;因为 allow-scripts 仍未放行,
+         被预览的 HTML 拿到"同源"也无法执行任何脚本去利用它,不引入新风险
+         (真正的沙盒逃逸手法要 allow-scripts + allow-same-origin 同时具备)。 -->
+    <iframe id="view" sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe>
     <div id="msg" hidden></div>
     <script>
       (function () {

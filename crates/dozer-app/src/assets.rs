@@ -765,7 +765,33 @@ mod tests {
         assert_eq!((r.status, r.mime), (200, "text/html"));
         let html = String::from_utf8(r.body).unwrap();
         assert!(html.contains("default-src 'none'"));
-        assert!(html.contains("sandbox"), "iframe 必须 sandbox(禁脚本)");
+        // 2026-09-27:`sandbox=""`(不带 allow-same-origin)会让 srcdoc 文档拿到
+        // 唯一 opaque origin,WebKit 在这个组合下不认注入的 `<base>` 标签,相对
+        // css/js/图片全部解析失败(只见文字不见样式,见 whatwg/html#9025)——必须
+        // 带 allow-same-origin 才能让 `<base>` 生效。没有 allow-scripts 时
+        // allow-same-origin 本身不引入脚本执行风险,不能把这个 token 删掉当作
+        // "更严格"。
+        // 从 `<iframe ...>` 标签本身取 sandbox 属性值,不从整份 HTML(含解释性
+        // 注释)里子串匹配——注释里为了说明历史 bug 也提到了 `sandbox=""` 之类
+        // 的反面写法,直接子串匹配会先命中注释而不是真正的属性。
+        let iframe_tag = html.split("<iframe").nth(1).unwrap_or_default();
+        let sandbox_value = iframe_tag
+            .split("sandbox=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap_or_default();
+        assert!(
+            sandbox_value
+                .split_whitespace()
+                .any(|t| t == "allow-same-origin"),
+            "iframe 必须带 allow-same-origin,否则 srcdoc 里的 <base> 在 WebKit 下不生效,相对 css/js/图片会全部加载失败(sandbox=\"{sandbox_value}\")"
+        );
+        assert!(
+            !sandbox_value
+                .split_whitespace()
+                .any(|t| t == "allow-scripts"),
+            "iframe 禁脚本,不能同时带 allow-scripts + allow-same-origin(经典沙盒逃逸组合)(sandbox=\"{sandbox_value}\")"
+        );
         assert!(
             !html.contains("http://") && !html.contains("https://"),
             "host 不得引用外部 URL"
