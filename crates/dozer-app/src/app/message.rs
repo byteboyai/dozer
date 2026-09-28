@@ -627,6 +627,13 @@ pub enum Message {
         crate::preview::HostBinding,
         crate::preview::WebviewEnvelope<crate::preview::FlyfishEvent>,
     ),
+    /// Tabular(ag-grid)预览 host 发回的已校验事件(ready/sheet_selected/
+    /// window_request/window_applied/failed)。binding 由 Rust 从 webview URL
+    /// 解析,不采信 JS 自报归属。
+    TabularHostEvent(
+        crate::preview::EditorHostBinding,
+        crate::preview::WebviewEnvelope<crate::preview::TabularEvent>,
+    ),
     /// T13:后台轮询取回的待处理预览命令(project_id, 命令列表)。处理后逐条
     /// 回报终态给 dozerd。
     PreviewCommandsFetched(i64, Vec<dozer_core::protocol::PreviewCommand>),
