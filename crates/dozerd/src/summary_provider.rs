@@ -279,6 +279,24 @@ async fn run_isolated_capture(
 ) -> Result<(String, String, Option<i32>), SummaryInvokeError> {
     use std::process::Stdio;
     cmd.current_dir(cwd);
+    // `resolve_binary_path` may find an npm-installed CLI such as
+    // `/usr/local/bin/codex` even when dozerd was launched by Finder with the
+    // system-only PATH.  Such launchers commonly use `#!/usr/bin/env node`:
+    // spawning the absolute script succeeds, but `env` then cannot find its
+    // sibling runtime and exits 127.  Put the resolved program directory at
+    // the front of the child's PATH so the executable and its interpreter are
+    // resolved from the same installation prefix.
+    if let Some(program_dir) = std::path::Path::new(cmd.as_std().get_program()).parent()
+        && !program_dir.as_os_str().is_empty()
+    {
+        let mut paths = vec![program_dir.to_path_buf()];
+        if let Some(inherited) = std::env::var_os("PATH") {
+            paths.extend(std::env::split_paths(&inherited));
+        }
+        if let Ok(path) = std::env::join_paths(paths) {
+            cmd.env("PATH", path);
+        }
+    }
     // 统一隔离层:清 session/MCP 关联环境变量(与 build_command 里各家分支
     // 的清理互为冗余,这里再兜底一次,防某家适配器漏清)。
     cmd.env_remove("DOZER_SESSION_ID");
@@ -380,6 +398,34 @@ async fn run_isolated(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn absolute_script_can_find_sibling_interpreter_with_minimal_parent_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let runtime = bin.join("summary-runtime");
+        let cli = bin.join("summary-cli");
+        std::fs::write(&runtime, "#!/bin/sh\nprintf runtime-ok\n").unwrap();
+        std::fs::write(&cli, "#!/usr/bin/env summary-runtime\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut cmd = tokio::process::Command::new(&cli);
+        cmd.env("PATH", "/usr/bin:/bin");
+        let (stdout, _, code) = run_isolated_capture(
+            cmd,
+            None,
+            dir.path(),
+            Duration::from_secs(2),
+            AgentKind::Codex,
+        )
+        .await
+        .unwrap();
+        assert_eq!(stdout, "runtime-ok");
+        assert_eq!(code, Some(0));
+    }
 
     #[tokio::test]
     async fn capture_checks_exit_even_with_valid_json() {
