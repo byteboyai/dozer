@@ -1,0 +1,19 @@
+{
+  "name": "dozer-tabular-host",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dozer tabular preview host (ag-grid Community), offline bundle.",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ag-grid-community": "32.3.3"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3",
+    "@types/node": "24"
+  }
+}
