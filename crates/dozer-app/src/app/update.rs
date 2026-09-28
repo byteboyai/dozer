@@ -648,6 +648,126 @@ impl App {
                     }
                 });
             }
+            Message::TabularHostEvent(binding, event) => {
+                self.with_project(binding.project_id, move |ws, io| {
+                    let panel = binding.panel;
+                    let mut push_initial = false;
+                    let mut restore_view: Option<(usize, u32, u32)> = None;
+                    let mut window_push: Option<(usize, u32, Vec<Vec<String>>, u64)> = None;
+                    let mut sheet_to_select: Option<usize> = None;
+                    {
+                        let pane = if panel == PanelKind::Project {
+                            &mut ws.project_preview
+                        } else {
+                            &mut ws.preview
+                        };
+                        let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == binding.tab_id)
+                        else {
+                            return;
+                        };
+                        use crate::preview::TabularEvent;
+                        match event.payload {
+                            TabularEvent::Ready => {
+                                tab.web_error = None;
+                                tab.tabular_host_ready = true;
+                                push_initial = true;
+                            }
+                            TabularEvent::WindowApplied { start_row: _ } => {
+                                // 首窗真正挂上才 finish,避免"空网格+行号1"
+                                // 的中间态露出。非在途(迟到 ACK)不改终态。
+                                if tab.load_state.is_active() {
+                                    let _ = tab
+                                        .backend_state
+                                        .try_transition(crate::preview::BackendState::Ready);
+                                    tab.load_state.finish();
+                                }
+                                if let Some(view) = tab.tabular_view() {
+                                    let (sheet_index, start_row, start_col) = (
+                                        view.active_sheet,
+                                        view.scroll_row as u32,
+                                        view.scroll_col as u32,
+                                    );
+                                    if start_row != 0 || start_col != 0 {
+                                        restore_view = Some((sheet_index, start_row, start_col));
+                                    }
+                                }
+                            }
+                            TabularEvent::WindowRequest {
+                                sheet_index,
+                                start_row,
+                                end_row,
+                            } => {
+                                // 零 IO:对已在内存的 Sheet.rows 切片。
+                                // sheet_index 与当前活动 sheet 不一致(用户
+                                // 已经切走)的迟到请求直接丢弃,不回窗口。
+                                let revision = tab.web_revision;
+                                if let Some(view) = tab.tabular_view()
+                                    && view.active_sheet == sheet_index
+                                    && let Some(sheet) = view.active_sheet()
+                                {
+                                    let start = (start_row as usize).min(sheet.rows.len());
+                                    // `.max(start)`:防御性防越界——不可信的
+                                    // IPC 输入若带 end_row < start_row,裸切片
+                                    // 会直接 panic(见 webview_protocol.rs
+                                    // "解析失败不 panic" 的既定原则)。
+                                    let end = (end_row as usize).min(sheet.rows.len()).max(start);
+                                    let rows = sheet.rows[start..end].to_vec();
+                                    window_push = Some((sheet_index, start as u32, rows, revision));
+                                }
+                            }
+                            TabularEvent::SheetSelected { index } => {
+                                sheet_to_select = Some(index);
+                            }
+                            TabularEvent::Failed {
+                                message,
+                                recoverable,
+                            } => {
+                                tab.web_error = Some(message.clone());
+                                let _ = tab.backend_state.try_transition(
+                                    crate::preview::BackendState::Failed(
+                                        crate::preview::PreviewError::new(message, recoverable),
+                                    ),
+                                );
+                                if tab.load_state.is_active() {
+                                    tab.load_state.finish();
+                                }
+                            }
+                        }
+                    }
+                    let pane = if panel == PanelKind::Project {
+                        &mut ws.project_preview
+                    } else {
+                        &mut ws.preview
+                    };
+                    if push_initial {
+                        pane.try_push_initial_tabular_state(binding.tab_id);
+                    }
+                    if let Some((sheet_index, start_row, start_col)) = restore_view {
+                        pane.queue_tabular_command(
+                            binding.tab_id,
+                            crate::preview::TabularCommand::RestoreViewState {
+                                sheet_index,
+                                start_row,
+                                start_col,
+                            },
+                        );
+                    }
+                    if let Some((sheet_index, start_row, rows, revision)) = window_push {
+                        pane.queue_tabular_command(
+                            binding.tab_id,
+                            crate::preview::TabularCommand::SetWindow {
+                                sheet_index,
+                                start_row,
+                                rows,
+                                revision,
+                            },
+                        );
+                    }
+                    if let Some(index) = sheet_to_select {
+                        ws.preview_pane_tabular_action(panel, binding.tab_id, index, io);
+                    }
+                });
+            }
             Message::ReviewTraceWebviewEvent(event) => {
                 let crate::preview::ReviewTraceEvent::DocumentLoaded = event;
                 self.with_focused_project(|ws, _io| {
@@ -2332,11 +2452,6 @@ impl App {
                 // 处理完这条消息后会自然重绘,n/m 计数立即刷新。
                 self.preview_find_set_webview_state(kind, current, total);
             }
-            Message::TabularAction(kind, tab_id, action) => {
-                self.with_focused_project(move |ws, io| {
-                    ws.preview_pane_tabular_action(kind, tab_id, action, io);
-                });
-            }
             Message::TabularLoaded(project_id, kind, tab_id, generation, result) => {
                 self.with_project(project_id, move |ws, io| {
                     // T11:取消是正常结束,不当作解析失败告警。
@@ -2366,13 +2481,21 @@ impl App {
                         pane.finish_tabular_load(tab_id, generation, result)
                     };
                     // 恢复的 active sheet 不是首个 → 触发一次懒加载。
-                    if let Some(sheet) = sheet_to_select {
-                        ws.preview_pane_tabular_action(
-                            kind,
-                            tab_id,
-                            crate::tabular::Action::SelectSheet(sheet),
-                            io,
-                        );
+                    // `select_sheet`(经 `preview_pane_tabular_action`)会把
+                    // scroll_row/scroll_col 重置为 0(正常切 sheet 的预期
+                    // 行为),因此要在它之后把持久化的 row/col 重新应用
+                    // 一遍,否则恢复到非首个 sheet 的滚动位置会被静默清零。
+                    if let Some((sheet, row, col)) = sheet_to_select {
+                        ws.preview_pane_tabular_action(kind, tab_id, sheet, io);
+                        let pane = if kind == PanelKind::Project {
+                            &mut ws.project_preview
+                        } else {
+                            &mut ws.preview
+                        };
+                        if let Some(view) = pane.tabular_mut(tab_id) {
+                            view.scroll_row = row;
+                            view.scroll_col = col;
+                        }
                     }
                 });
             }
@@ -2383,10 +2506,32 @@ impl App {
                     } else {
                         &mut ws.preview
                     };
+                    let loaded_ok = result.is_ok();
                     if let Some(crate::preview::TabularState::Ready(view)) =
                         pane.tabular_state_mut(tab_id)
                     {
                         view.apply_sheet_loaded(sheet_index, result);
+                    }
+                    pane.queue_tabular_command(
+                        tab_id,
+                        crate::preview::TabularCommand::SetSheetLoading {
+                            sheet_index,
+                            loading: false,
+                        },
+                    );
+                    // 用户可能在这次懒加载完成前又切到了别的 sheet
+                    // (rapid switch)——`view.active_sheet` 已经不是
+                    // `sheet_index` 时,不该把 JS 拽回这个已经不再是目标的
+                    // sheet(否则会看到一个没数据的空白网格)。
+                    let still_active = pane
+                        .tabular_mut(tab_id)
+                        .is_some_and(|view| view.active_sheet == sheet_index);
+                    if loaded_ok && still_active {
+                        pane.queue_tabular_command(
+                            tab_id,
+                            crate::preview::TabularCommand::SelectSheet { sheet_index },
+                        );
+                        pane.push_sheet_schema_and_window(tab_id, sheet_index);
                     }
                 });
             }

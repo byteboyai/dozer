@@ -19,6 +19,9 @@ pub const EDITOR_URL_PREFIX: &str = "dozer://editor/";
 /// JSON host(vanilla-jsoneditor)页面 URL 前缀。
 pub const JSON_EDITOR_URL_PREFIX: &str = "dozer://json-editor/";
 
+/// Tabular 预览 host(ag-grid)页面 URL 前缀。
+pub const TABULAR_URL_PREFIX: &str = "dozer://tabular/";
+
 /// 一个 editor webview 的归属绑定。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditorHostBinding {
@@ -119,6 +122,23 @@ impl EditorHostBinding {
             self.tab_id,
         )
     }
+
+    /// Tabular host(ag-grid)URL:正文完全由命令推送(`Init`/`SetSchema`/
+    /// `SetWindow`),host 不 fetch 任何文件,故不带 `fs=`/`lh=`(那是
+    /// CodeMirror 专用的等宽字号参数——tabular 走系统默认字体,见
+    /// CLAUDE.md"非代码/终端场景禁用等宽字体"裁决)。恒只读,不带 `ro=`
+    /// 参数(host 本身不支持编辑,无需首屏协商)。
+    pub fn tabular_url(&self, theme: &str) -> String {
+        format!(
+            "{TABULAR_URL_PREFIX}index.html?p={}&theme={}&doc={}&proj={}&panel={}&tab={}",
+            encode_path(&self.path),
+            theme,
+            super::encode_component(&self.document_id()),
+            self.project_id,
+            self.panel_token(),
+            self.tab_id,
+        )
+    }
 }
 
 /// 把 webview 池 key 反解成 `(panel, tab_id)`(IPC 回来时按 id 找绑定用)。
@@ -143,10 +163,15 @@ pub fn is_json_editor_url(url: &str) -> bool {
     url.starts_with(JSON_EDITOR_URL_PREFIX)
 }
 
-/// URL 是否是任一内部 host(CodeMirror / JSON),用于运行期区分"host WebView"
-/// 与 Flyfish WebView(注入脚本/IPC 路由不同)。
+/// URL 是否是 Tabular(ag-grid)host。
+pub fn is_tabular_url(url: &str) -> bool {
+    url.starts_with(TABULAR_URL_PREFIX)
+}
+
+/// URL 是否是任一内部 host(CodeMirror / JSON / Tabular),用于运行期区分
+/// "host WebView"与 Flyfish WebView(注入脚本/IPC 路由不同)。
 pub fn is_host_url(url: &str) -> bool {
-    is_editor_url(url) || is_json_editor_url(url)
+    is_editor_url(url) || is_json_editor_url(url) || is_tabular_url(url)
 }
 
 /// 严格 JSON 的 Tree 视图由 vanilla-jsoneditor host 承载(常开)。
@@ -156,6 +181,12 @@ pub fn json_editor_enabled() -> bool {
 
 /// CodeMirror editor host 已转默认常开(老 iced `CodeView` 已退役)。
 pub fn codemirror_enabled() -> bool {
+    true
+}
+
+/// Tabular Grid 视图已转 webview host(ag-grid),不留对照期,恒常开
+/// (与 `codemirror_enabled()`/`json_editor_enabled()` 同一"始终开"风格)。
+pub fn tabular_grid_host_enabled() -> bool {
     true
 }
 
@@ -232,6 +263,32 @@ mod tests {
         assert!(url.contains("dozer://json-editor/index.html"));
         assert!(url.contains("ro=1"));
         assert!(url.contains("doc=p7-t3"));
+    }
+
+    #[test]
+    fn tabular_url_is_distinct_and_always_read_only() {
+        let b = binding(PanelKind::Files, 3);
+        let url = b.tabular_url("dark");
+        assert!(is_tabular_url(&url));
+        assert!(!is_editor_url(&url));
+        assert!(!is_json_editor_url(&url));
+        assert!(url.contains("dozer://tabular/index.html"));
+        assert!(url.contains("doc=p7-t3"));
+        assert!(url.contains("theme=dark"));
+        // 不带 CodeMirror 专用的字号/行高参数。
+        assert!(!url.contains("fs="));
+        assert!(!url.contains("lh="));
+    }
+
+    #[test]
+    fn is_host_url_covers_tabular() {
+        let b = binding(PanelKind::Files, 3);
+        assert!(is_host_url(&b.tabular_url("dark")));
+    }
+
+    #[test]
+    fn tabular_grid_host_always_enabled() {
+        assert!(tabular_grid_host_enabled());
     }
 
     #[test]

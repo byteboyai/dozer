@@ -367,6 +367,7 @@ pub(crate) fn sync_webview_pool(
                 let webview_id = spec.id;
                 let editor_binding = spec.editor_binding.clone();
                 let is_json_host = crate::preview::is_json_editor_url(&spec.url);
+                let is_tabular_host = crate::preview::is_tabular_url(&spec.url);
                 // T9:Flyfish host 的绑定从 URL 查询串解析(proj/panel/tab/doc),
                 // host 回传的 envelope 据此校验归属。
                 let flyfish_binding = crate::preview::flyfish_binding_from_url(&spec.url);
@@ -561,7 +562,25 @@ pub(crate) fn sync_webview_pool(
                                         binding.tab_id,
                                         binding.document_id(),
                                     );
-                                    if is_json_host {
+                                    if is_tabular_host {
+                                        match crate::preview::parse_tabular_event(body) {
+                                            Ok(event) => {
+                                                if let Err(error) = event.validate(&expected) {
+                                                    tracing::warn!(%error, "拒绝无效 tabular IPC");
+                                                } else {
+                                                    let _ = ipc_proxy.send_event(
+                                                        Message::TabularHostEvent(
+                                                            binding.clone(),
+                                                            event,
+                                                        ),
+                                                    );
+                                                }
+                                            }
+                                            Err(error) => {
+                                                tracing::warn!(%error, "无法解析 tabular IPC");
+                                            }
+                                        }
+                                    } else if is_json_host {
                                         match crate::preview::parse_json_event(body) {
                                             Ok(event) => {
                                                 if let Err(error) = event.validate(&expected) {

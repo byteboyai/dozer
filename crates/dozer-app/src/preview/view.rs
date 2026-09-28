@@ -48,6 +48,7 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         conflict: None,
         conflict_reload_armed: false,
         conflict_baseline: None,
+        tabular_host_ready: false,
         task_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
 }
@@ -572,6 +573,7 @@ impl PreviewPane {
             conflict: None,
             conflict_reload_armed: false,
             conflict_baseline: None,
+            tabular_host_ready: false,
             task_cancel: fresh_task_cancel(),
         };
         tab.debug_assert_backend_consistent();
@@ -660,6 +662,7 @@ impl PreviewPane {
             conflict: None,
             conflict_reload_armed: false,
             conflict_baseline: None,
+            tabular_host_ready: false,
             task_cancel: fresh_task_cancel(),
         };
         self.tabs.push(tab);
@@ -1556,10 +1559,52 @@ impl PreviewPane {
             .collect()
     }
 
+    /// Tabular Grid 视图(ag-grid webview host)的期望清单。
+    pub fn desired_tabular_webviews(
+        &self,
+        project_id: i64,
+        panel: crate::app::PanelKind,
+    ) -> Vec<WebviewSpec> {
+        if !tabular_grid_host_enabled() {
+            return Vec::new();
+        }
+        self.tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, tab)| {
+                // 数据后台解析中(`TabularState::Loading`)也预创建 hidden
+                // host,让它先完成 boot、报 `ready`,不必等数据到位——两路
+                // 汇合逻辑在 `finish_tabular_load`/`try_push_initial_tabular_state`。
+                let loading = matches!(tab.backend_state, BackendState::Loading);
+                if !tab.uses_tabular_grid_host() || (!tab.backend_state.is_ready() && !loading) {
+                    return None;
+                }
+                let TabKind::File(path) = &tab.kind else {
+                    return None;
+                };
+                let binding = EditorHostBinding::new(project_id, panel, tab.id, path.clone());
+                let mut url = binding.tabular_url(scheme_query_value());
+                // 主题切换(`reload_all_webviews_for_theme`)靠 `_r=` 逼
+                // webview 重新导航拿到新 `theme=` 参数,同 `desired_editor_
+                // webviews` 的既有手法(tabular host 不支持原地换主题)。
+                if tab.reload_nonce > 0 {
+                    url.push_str(&format!("&_r={}", tab.reload_nonce));
+                }
+                Some(WebviewSpec {
+                    id: tab.id,
+                    url,
+                    visible: tab.backend_state.is_ready() && idx == self.active,
+                    editor_binding: Some(binding),
+                    loading_generation: loading.then_some(tab.load_state.generation),
+                    park_offscreen: false,
+                })
+            })
+            .collect()
+    }
+
     /// 老 iced editor 已退役:不再有原生标脏入口(CodeMirror 的脏由 web 事件维护)。
     #[cfg(test)]
     pub fn mark_dirty_by_id(&mut self, _tab_id: usize) {}
-
     /// Find 条目当前是否显示(至少打开过一次且没被生命周期/手动关掉)。
     pub fn find_bar_open(&self) -> bool {
         self.find.is_some()
@@ -1836,9 +1881,10 @@ impl PreviewPane {
 
     /// 按 tab id 取该 tab 的 Tabular Viewer 可变引用。tab 不存在、该 tab 不是
     /// 表格、或表格还在后台加载中(`TabularState::Loading`)都返回 `None`
-    /// (滚动/切 sheet 这类交互动作在数据到位前没有意义,直接 no-op)。
-    /// workspace 把 `Message::TabularAction` 的 `Action` 用它路由给正确的
-    /// tab 后 `apply`。
+    /// (切 sheet 这类交互动作在数据到位前没有意义,直接 no-op)。
+    /// `Workspace::preview_pane_tabular_action` 用它定位对应 tab 后调用
+    /// `TabularView::select_sheet`(Tabular Grid 已迁移到 ag-grid webview
+    /// host,交互经 `Message::TabularHostEvent` 而不是老式 iced `Action`)。
     pub fn tabular_mut(&mut self, tab_id: usize) -> Option<&mut crate::tabular::TabularView> {
         self.tabs
             .iter_mut()
@@ -1963,6 +2009,16 @@ impl PreviewPane {
                         detail: "目标 sheet 尚未加载".into(),
                     };
                 }
+                self.queue_tabular_command(
+                    tab_id,
+                    TabularCommand::RevealRange {
+                        sheet_index: *sheet,
+                        r1: *row,
+                        c1: *col,
+                        r2: *row,
+                        c2: *col,
+                    },
+                );
                 O::Accepted { request_id: rid }
             }
             A::Replace {
@@ -2023,43 +2079,166 @@ impl PreviewPane {
 
     /// `generation` 是启动后台解析时捕获的世代;与当前 `load_state` 不匹配
     /// (tab 已关闭重开 / 重试)时丢弃旧结果,不回填(T7 取消不回填旧 sheet)。
+    ///
+    /// 迁移到 webview host 后不再在数据到位那一刻立即 `Ready`——还要等
+    /// host `ready` + 首窗 `window_applied`(两路异步汇合,见
+    /// `try_push_initial_tabular_state`)。若 host 已经先 `ready` 过,本函数
+    /// 直接把初始状态推过去;若 host 还没 `ready`,由 `Message::TabularHostEvent`
+    /// 的 `Ready` 分支在稍后补推。
     pub fn finish_tabular_load(
         &mut self,
         tab_id: usize,
         generation: u64,
         result: Result<crate::tabular::TabularView, String>,
-    ) -> Option<usize> {
-        let tab = self.tabs.iter_mut().find(|tab| tab.id == tab_id)?;
-        if !tab.load_state.accepts(generation) {
+    ) -> Option<(usize, usize, usize)> {
+        // 借用 `self.tabs` 的部分收在这个块里,块结束后借用释放,后面才能
+        // 再调用 `self.try_push_initial_tabular_state`(它需要 `&mut self`)。
+        let accepted = {
+            let tab = self.tabs.iter_mut().find(|tab| tab.id == tab_id)?;
+            if !tab.load_state.accepts(generation) {
+                return None;
+            }
+            match result {
+                Ok(view) => {
+                    tab.runtime = PreviewRuntime::Tabular(TabularState::Ready(view));
+                    true
+                }
+                Err(message) => {
+                    tab.runtime = PreviewRuntime::None;
+                    let _ = tab
+                        .backend_state
+                        .try_transition(BackendState::Failed(PreviewError::new(message, true)));
+                    tab.load_state.finish();
+                    false
+                }
+            }
+        };
+        if !accepted {
             return None;
         }
-        match result {
-            Ok(view) => {
-                tab.runtime = PreviewRuntime::Tabular(TabularState::Ready(view));
-                let _ = tab.backend_state.try_transition(BackendState::Ready);
-            }
-            Err(message) => {
-                tab.runtime = PreviewRuntime::None;
-                let _ = tab
-                    .backend_state
-                    .try_transition(BackendState::Failed(PreviewError::new(message, true)));
-                tab.load_state.finish();
-                return None;
-            }
-        }
-        // 首个可显示 sheet 就绪:结束 loading,网格接管(T7 bullet 2)。
-        tab.load_state.finish();
         // 应用持久化的 sheet / 滚动锚点;若目标 sheet 不是当前已加载的,
-        // 返回它让调用方触发一次懒加载。
-        let (sheet, row, col) = tab.pending_tabular.take()?;
-        if let Some(view) = tab.tabular_view_mut() {
-            view.scroll_row = row;
-            view.scroll_col = col;
-            if sheet == view.active_sheet {
-                return None;
-            }
+        // 返回它让调用方触发一次懒加载。没有持久化状态(常见:新打开的
+        // tab,不是从会话恢复来的)时 `pending_sheet` 是 `None`,但仍要往下
+        // 走两路汇合尝试——`?` 只在这个 `and_then` 闭包内部短路,不会跳过
+        // 后面的 `try_push_initial_tabular_state`。
+        // 返回 `(sheet, row, col)` 而不只是 `sheet`——调用方稍后会经
+        // `select_sheet` 触发懒加载,而 `select_sheet` 会把 `scroll_row`/
+        // `scroll_col` 重置为 0(正常用户切 sheet 的预期行为)。把持久化的
+        // row/col 一并交给调用方,让它在 `select_sheet` 重置之后重新应用
+        // 一次,否则恢复到非首个 sheet 的滚动位置会被静默清零。
+        let pending_sheet = self.tabs.iter_mut().find(|tab| tab.id == tab_id).and_then(
+            |tab| -> Option<(usize, usize, usize)> {
+                let (sheet, row, col) = tab.pending_tabular.take()?;
+                let active_sheet = tab.tabular_view_mut().map(|view| {
+                    view.scroll_row = row;
+                    view.scroll_col = col;
+                    view.active_sheet
+                })?;
+                (active_sheet != sheet).then_some((sheet, row, col))
+            },
+        );
+        // 两路异步汇合:数据已加载(刚发生在上面)+ host 是否已先 `ready`
+        // 过(`tabular_host_ready`)。若 host 已就绪,这里立即推初始状态;
+        // 否则等 `Message::TabularHostEvent::Ready` 到达时再推
+        // (见 `try_push_initial_tabular_state` 文档)。
+        self.try_push_initial_tabular_state(tab_id);
+        pending_sheet
+    }
+
+    /// 两路异步汇合:数据已加载(`runtime` 是 `TabularState::Ready`)且 host
+    /// 已 `ready`(`tabular_host_ready`)都为真时,组好 `Init`+`SetSchema`+
+    /// `SetWindow`(首 200 行,与 JS 侧 `cacheBlockSize` 对齐)三条命令入队。
+    /// 两个条件哪个先满足都可能发生(小文件解析可能比 webview boot 快,
+    /// 反之亦然),调用方是 `finish_tabular_load`(数据到位那一刻)与
+    /// `Message::TabularHostEvent::Ready` 处理(host 到位那一刻)各调一次,
+    /// 只有真正"两个都满足"的那一次会实际入队命令。用 `pub` 而非
+    /// `pub(crate)`——同文件里 `queue_editor_command`/`take_pending_editor_
+    /// commands_for` 等跨文件调用的兄弟方法都是 `pub fn`,保持一致。
+    pub fn try_push_initial_tabular_state(&mut self, tab_id: usize) {
+        let Some((sheet_names, active_sheet, ready)) =
+            self.tabs.iter().find(|t| t.id == tab_id).and_then(|tab| {
+                if !tab.tabular_host_ready {
+                    return None;
+                }
+                let view = tab.tabular_view()?;
+                Some((
+                    view.sheet_names.clone(),
+                    view.active_sheet,
+                    view.active_sheet().is_some(),
+                ))
+            })
+        else {
+            return;
+        };
+        if !ready {
+            // sheet 0 理论上在打开文件时已同步预加载(见 `tabular::load` 文档
+            // "多 sheet 的 xlsx 只在打开时预加载第一个 sheet"),这个分支正常
+            // 不会命中,防御性保留(数据尚未就绪时不发半成品 Init)。
+            return;
         }
-        Some(sheet)
+        self.queue_tabular_command(
+            tab_id,
+            TabularCommand::Init {
+                sheet_names,
+                active_sheet,
+                read_only: true,
+            },
+        );
+        self.push_sheet_schema_and_window(tab_id, active_sheet);
+    }
+
+    /// 把"某个 sheet 当前已加载"的 `SetSchema`+`SetWindow`(首 200 行)命令
+    /// 入队。供两处共用:`try_push_initial_tabular_state`(首次打开,额外带
+    /// `Init`)与 `Message::TabularSheetLoaded` 处理(懒加载完某个 sheet 后,
+    /// 见 Task 11)。`sheet_index` 若已不是当前活动 sheet(用户在懒加载完成
+    /// 前又切到别处)则 no-op——不推一份不会被显示的窗口。
+    pub fn push_sheet_schema_and_window(&mut self, tab_id: usize, sheet_index: usize) {
+        const INITIAL_WINDOW_ROWS: usize = 200;
+        let Some((col_count, total_rows, truncated, col_widths, window)) = self
+            .tabs
+            .iter()
+            .find(|t| t.id == tab_id)
+            .and_then(|tab| tab.tabular_view())
+            .and_then(|view| {
+                if view.active_sheet != sheet_index {
+                    return None;
+                }
+                let sheet = view.active_sheet()?;
+                Some((
+                    sheet.col_count,
+                    sheet.total_rows,
+                    sheet.truncated,
+                    sheet.col_widths.clone(),
+                    sheet
+                        .rows
+                        .iter()
+                        .take(INITIAL_WINDOW_ROWS)
+                        .cloned()
+                        .collect::<Vec<Vec<String>>>(),
+                ))
+            })
+        else {
+            return;
+        };
+        self.queue_tabular_command(
+            tab_id,
+            TabularCommand::SetSchema {
+                sheet_index,
+                col_count,
+                total_rows,
+                truncated,
+                col_widths,
+            },
+        );
+        self.queue_tabular_command(
+            tab_id,
+            TabularCommand::SetWindow {
+                sheet_index,
+                start_row: 0,
+                rows: window,
+                revision: 0,
+            },
+        );
     }
 
     /// 记录启动恢复的表格视图状态,加载完成后应用一次。
@@ -2124,6 +2303,46 @@ impl PreviewPane {
         ready
     }
 
+    /// 排队一个待下发给 Tabular webview host 的命令(`tab_id`, 命令)。
+    pub fn queue_tabular_command(&mut self, tab_id: usize, command: TabularCommand) {
+        self.pending_tabular_commands.push((tab_id, command));
+    }
+
+    /// 取走(消费式)待下发的 tabular 命令队列。测试专用(同
+    /// `take_pending_editor_commands` 的既有先例),生产代码走
+    /// `take_pending_tabular_commands_for`(按可用 webview id 过滤)。
+    #[cfg(test)]
+    pub fn take_pending_tabular_commands(&mut self) -> Vec<(usize, TabularCommand)> {
+        std::mem::take(&mut self.pending_tabular_commands)
+    }
+
+    /// 只取当前已有 WebView 句柄对应的命令;其余保留待下一帧重试(同
+    /// `take_pending_editor_commands_for`)。
+    pub fn take_pending_tabular_commands_for(
+        &mut self,
+        available_webview_ids: &std::collections::HashSet<usize>,
+        project_id: i64,
+        panel: crate::app::PanelKind,
+    ) -> Vec<(usize, TabularCommand)> {
+        let pending = std::mem::take(&mut self.pending_tabular_commands);
+        let mut ready = Vec::new();
+        for (tab_id, command) in pending {
+            let webview_id = crate::preview::EditorHostBinding::new(
+                project_id,
+                panel,
+                tab_id,
+                std::path::PathBuf::new(),
+            )
+            .webview_id();
+            if available_webview_ids.contains(&webview_id) {
+                ready.push((tab_id, command));
+            } else {
+                self.pending_tabular_commands.push((tab_id, command));
+            }
+        }
+        ready
+    }
+
     /// 切换/恢复 JSON tab 的 mode(Tree ⇄ Text)。壳恢复已由 `push_shell_tab`
     /// 直接落到 backend 上;运行期切 Tree/Text 走本方法(由 tab 最右侧的
     /// "树/文本"切换按钮触发)。
@@ -2169,18 +2388,25 @@ impl PreviewPane {
         let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
             return;
         };
-        if !matches!(tab.runtime, PreviewRuntime::Tabular(_)) {
-            // T11:重载前取消在途后台任务。
-            tab.cancel_background();
-            tab.reload_nonce += 1;
-            if tab.uses_codemirror() {
-                // 新 WebView 内部 revision 从 1 重新开始；清掉 Rust 镜像，
-                // 让下一条 ready/selection 事件不会被旧 revision 拒绝。
-                tab.web_revision = 0;
-                tab.web_selection = None;
-                tab.web_selected_text = None;
-                tab.web_viewport = None;
-            }
+        // T11:重载前取消在途后台任务。Tabular Grid 迁移到 webview host 后
+        // 也需要参与这条路径(主题切换/外部文件变更都要能逼它重新导航),
+        // 不再像老 iced canvas 时代那样整体跳过。
+        tab.cancel_background();
+        tab.reload_nonce += 1;
+        if tab.uses_codemirror() {
+            // 新 WebView 内部 revision 从 1 重新开始；清掉 Rust 镜像，
+            // 让下一条 ready/selection 事件不会被旧 revision 拒绝。
+            tab.web_revision = 0;
+            tab.web_selection = None;
+            tab.web_selected_text = None;
+            tab.web_viewport = None;
+        }
+        if tab.uses_tabular_grid_host() {
+            // 新 webview 会重新走一遍 boot,旧的 `tabular_host_ready` 不再
+            // 有效——数据仍在 Rust 内存(不重新解析),host 报新 `ready` 后
+            // 两路汇合逻辑(`try_push_initial_tabular_state`)会自动补推
+            // `Init`+`SetSchema`+`SetWindow`。
+            tab.tabular_host_ready = false;
         }
     }
 
@@ -2355,15 +2581,18 @@ impl PreviewPane {
     }
 
     /// 配色方案切换后调用:把所有走 wry 的文件 tab 的 `reload_nonce` 各推一格,
-    /// 逼 `desired_webviews()` 换 URL(新 URL 带新的 `&theme=` 参数)重新导航,
-    /// flyfish 据此切到新主题。原生编辑器 / Tabular Viewer tab 不受影响(它们
-    /// 是 iced 原生渲染、每帧读 `byteui::theme::color::current()`,切主题自然
-    /// 跟随);`Blank` 占位 tab 没有 wry 页面,同样跳过。
+    /// 逼 `desired_webviews()` 换 URL(新 URL 带新的 `&theme=`/`&_r=` 参数)
+    /// 重新导航,flyfish/CodeMirror/vanilla-jsoneditor/Tabular ag-grid 据此
+    /// 切到新主题。原生编辑器 tab 不受影响(它是 iced 原生渲染、每帧读
+    /// `byteui::theme::color::current()`,切主题自然跟随);`Blank` 占位 tab
+    /// 没有 wry 页面,同样跳过。Tabular 重新导航会丢失 JS 侧已挂载的 ag-grid
+    /// 实例状态,但数据仍在 Rust 内存(`TabularView` 未清空),host 重新
+    /// `ready` 后两路汇合逻辑会自动补推 `Init`+`SetSchema`+`SetWindow`。
     pub fn reload_all_webviews_for_theme(&mut self) {
         let ids: Vec<usize> = self
             .tabs
             .iter()
-            .filter(|t| t.hosts_webview() || t.uses_codemirror())
+            .filter(|t| t.hosts_webview() || t.uses_codemirror() || t.uses_tabular_grid_host())
             .map(|t| t.id)
             .collect();
         for id in ids {
@@ -3021,12 +3250,106 @@ mod tests {
         pane.finish_tabular_load(id, generation, Ok(loaded));
         assert!(
             pane.tabular_mut(id).is_some(),
-            "Ready 之后 tabular_mut 应能拿到可变引用"
+            "数据到位后 tabular_mut 应能拿到可变引用(即便还没 Ready)"
         );
+        // 数据到位了,但 host 还没报 `ready`——两路汇合尚未完成,仍是
+        // Loading,不应有任何命令被推给还不存在的 webview。
         assert!(matches!(
             pane.tabs()[pane.active_idx()].backend_state,
-            BackendState::Ready
+            BackendState::Loading
         ));
+        assert!(pane.take_pending_tabular_commands().is_empty());
+        std::fs::remove_file(p).ok();
+    }
+
+    /// 数据先于 host 就绪(小文件解析比 webview boot 快的常见情形)。
+    #[test]
+    fn initial_tabular_state_pushes_once_when_data_ready_first() {
+        let p =
+            std::env::temp_dir().join(format!("tabular_rendezvous_a_{}.csv", std::process::id()));
+        std::fs::write(&p, "a,b\n1,2\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(p.clone());
+        let generation = pane.load_generation(id);
+        let loaded = crate::tabular::load(&p).expect("测试用 csv 应能正常解析");
+        pane.finish_tabular_load(id, generation, Ok(loaded));
+        assert!(
+            pane.take_pending_tabular_commands().is_empty(),
+            "host 还没 ready,不该推任何命令"
+        );
+        pane.tabs_mut()
+            .iter_mut()
+            .find(|t| t.id == id)
+            .unwrap()
+            .tabular_host_ready = true;
+        pane.try_push_initial_tabular_state(id);
+        let cmds = pane.take_pending_tabular_commands();
+        assert_eq!(cmds.len(), 3, "应恰好推 Init+SetSchema+SetWindow 三条");
+        assert!(matches!(cmds[0].1, TabularCommand::Init { .. }));
+        assert!(matches!(cmds[1].1, TabularCommand::SetSchema { .. }));
+        assert!(matches!(cmds[2].1, TabularCommand::SetWindow { .. }));
+        std::fs::remove_file(p).ok();
+    }
+
+    /// host 先于数据就绪(webview boot 比后台解析快的情形)。
+    #[test]
+    fn initial_tabular_state_pushes_once_when_host_ready_first() {
+        let p =
+            std::env::temp_dir().join(format!("tabular_rendezvous_b_{}.csv", std::process::id()));
+        std::fs::write(&p, "a,b\n1,2\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(p.clone());
+        pane.tabs_mut()
+            .iter_mut()
+            .find(|t| t.id == id)
+            .unwrap()
+            .tabular_host_ready = true;
+        pane.try_push_initial_tabular_state(id);
+        assert!(
+            pane.take_pending_tabular_commands().is_empty(),
+            "数据还没到位,不该推任何命令"
+        );
+        let generation = pane.load_generation(id);
+        let loaded = crate::tabular::load(&p).expect("测试用 csv 应能正常解析");
+        pane.finish_tabular_load(id, generation, Ok(loaded));
+        let cmds = pane.take_pending_tabular_commands();
+        assert_eq!(cmds.len(), 3, "应恰好推 Init+SetSchema+SetWindow 三条");
+        std::fs::remove_file(p).ok();
+    }
+
+    /// 回归测试:会话恢复到非首个 sheet 时,`finish_tabular_load` 必须把
+    /// 持久化的 (sheet, row, col) 完整交还给调用方——调用方随后会经
+    /// `select_sheet` 触发懒加载,而 `select_sheet` 会把 scroll 重置为 0
+    /// (正常用户切 sheet 的预期行为),所以 row/col 不能只在这里应用一次
+    /// 就再也拿不回来,否则恢复的滚动位置会被静默清零(见
+    /// `Message::TabularLoaded` 处理:重新应用一次这里返回的 row/col)。
+    #[test]
+    fn finish_tabular_load_returns_pending_scroll_for_non_default_sheet_restore() {
+        let p =
+            std::env::temp_dir().join(format!("tabular_restore_scroll_{}.csv", std::process::id()));
+        std::fs::write(&p, "a,b\n1,2\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(p.clone());
+        pane.set_pending_tabular(id, 1, 500, 3);
+        let sheet0 = crate::tabular::Sheet {
+            rows: vec![vec!["a".into(), "b".into()]],
+            col_count: 2,
+            total_rows: 1,
+            truncated: false,
+            col_widths: vec![8.0, 8.0],
+        };
+        let view = crate::tabular::TabularView::new(
+            p.clone(),
+            vec!["Sheet1".into(), "Sheet2".into()],
+            vec![Some(sheet0), None],
+        );
+        let generation = pane.load_generation(id);
+        let restore = pane.finish_tabular_load(id, generation, Ok(view));
+        assert_eq!(
+            restore,
+            Some((1, 500, 3)),
+            "目标 sheet 与持久化 row/col 必须一并交还,不能只剩 sheet 下标"
+        );
         std::fs::remove_file(p).ok();
     }
 
@@ -3189,6 +3512,32 @@ mod tests {
         );
 
         std::fs::remove_file(&rs_path).ok();
+    }
+
+    /// 回归测试:Tabular Grid 迁移到 webview host 后,主题切换必须能推进
+    /// 它的 reload_nonce(否则切主题时表格网格会停留在旧配色,见 code
+    /// review 发现)。`bump_reload` 顺带把 `tabular_host_ready` 重置为
+    /// `false`——新 webview 重新导航后会重新走一遍 `ready`。
+    #[test]
+    fn reload_all_webviews_for_theme_bumps_tabular_grid_tab() {
+        let p =
+            std::env::temp_dir().join(format!("tabular_theme_reload_{}.csv", std::process::id()));
+        std::fs::write(&p, "a,b\n1,2\n").unwrap();
+        let mut pane = PreviewPane::default();
+        let id = pane.open_path(p.clone());
+        pane.tabs_mut()
+            .iter_mut()
+            .find(|t| t.id == id)
+            .unwrap()
+            .tabular_host_ready = true;
+        pane.reload_all_webviews_for_theme();
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert_eq!(tab.reload_nonce, 1, "tabular tab 应被主题切换推进");
+        assert!(
+            !tab.tabular_host_ready,
+            "重新导航前应把旧 host 的 ready 标记清掉"
+        );
+        std::fs::remove_file(&p).ok();
     }
 
     #[test]

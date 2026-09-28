@@ -421,6 +421,145 @@ pub fn parse_json_event(raw: &str) -> Result<WebviewEnvelope<JsonEvent>, Protoco
     })
 }
 
+/// Tabular 预览 host(ag-grid)的 Rust -> JS 命令。与 `EditorCommand`/`JsonEvent`
+/// 共用 envelope,只扩展自己的命令/事件名。数据来源恒为已在内存的
+/// `crate::tabular::Sheet`(零 IO 切片),不是磁盘窗口化。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TabularCommand {
+    /// host `ready` 后立即发,JS 据此画整条 sheet tab 栏(未加载的 sheet 也要
+    /// 能点,保留原生网格的既有行为)。
+    Init {
+        sheet_names: Vec<String>,
+        active_sheet: usize,
+        read_only: bool,
+    },
+    /// 某 sheet 可显示时发(首次加载完成 / 懒加载完成),JS 用它配置 ag-grid
+    /// 列定义(行号 pinned 列 + Excel 字母列头)与截断提示条。
+    SetSchema {
+        sheet_index: usize,
+        col_count: usize,
+        total_rows: usize,
+        truncated: bool,
+        col_widths: Vec<f32>,
+    },
+    /// 懒加载中,JS 把对应 tab 标 loading 态。
+    SetSheetLoading { sheet_index: usize, loading: bool },
+    /// Rust 主动切 sheet(不是用户点 tab 触发——例如会话恢复到非首个 sheet,
+    /// 或懒加载完成后把视图切到刚加载好的目标 sheet)。JS 只更新高亮/显示,
+    /// 不回发 `sheet_selected`(避免来回死循环)。
+    SelectSheet { sheet_index: usize },
+    /// 响应 `TabularEvent::WindowRequest`:对已在内存的 `Sheet.rows` 做零 IO
+    /// 切片。`revision` 供 JS 端按 envelope 顶层 revision 丢弃过期响应
+    /// (与文本窗口化的 `SetWindow` 同一丢弃手法)。
+    SetWindow {
+        sheet_index: usize,
+        start_row: u32,
+        rows: Vec<Vec<String>>,
+        revision: u64,
+    },
+    /// agent reveal:切 sheet(未加载先走 `SheetLoadRequest`)+ 滚动到位 +
+    /// 高亮范围(0-based,含端点)。
+    RevealRange {
+        sheet_index: usize,
+        r1: u32,
+        c1: u32,
+        r2: u32,
+        c2: u32,
+    },
+    /// 首个窗口应用后发,回填会话持久化的 `PersistedTabular`(active sheet +
+    /// 逻辑滚动锚点)。
+    RestoreViewState {
+        sheet_index: usize,
+        start_row: u32,
+        start_col: u32,
+    },
+}
+
+/// Tabular host 的 JS -> Rust 事件。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TabularEvent {
+    /// host JS 初始化完成(空网格)。不代表任何 sheet 已可显示。
+    Ready,
+    /// 用户点了 sheet tab。
+    SheetSelected {
+        index: usize,
+    },
+    /// ag-grid Infinite Row Model 的 `getRows` 回调发出,请求 `[start_row,
+    /// end_row)` 区间的行。
+    WindowRequest {
+        sheet_index: usize,
+        start_row: u32,
+        end_row: u32,
+    },
+    /// 首个 `SetWindow` 真正挂上(`api.setRowCount` + 首块数据到位),回报
+    /// 窗口首行全局行号。Rust 以此作为该 sheet 加载的 Ready 边界。
+    WindowApplied {
+        start_row: u32,
+    },
+    Failed {
+        message: String,
+        recoverable: bool,
+    },
+}
+
+/// 解析一条 tabular host 事件。与 [`parse_event`] 同规则(超大/非法/未知不 panic)。
+pub fn parse_tabular_event(raw: &str) -> Result<WebviewEnvelope<TabularEvent>, ProtocolError> {
+    if raw.len() > MAX_MESSAGE_BYTES {
+        return Err(ProtocolError::TooLarge { bytes: raw.len() });
+    }
+    let env: WebviewEnvelope<serde_json::Value> =
+        serde_json::from_str(raw).map_err(|e| ProtocolError::BadJson(e.to_string()))?;
+    let kind = env
+        .payload
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_default();
+    let payload: TabularEvent = serde_json::from_value(env.payload)
+        .map_err(|_| ProtocolError::UnknownPayload(kind.clone()))?;
+    Ok(WebviewEnvelope {
+        protocol_version: env.protocol_version,
+        project_id: env.project_id,
+        panel: env.panel,
+        tab_id: env.tab_id,
+        document_id: env.document_id,
+        revision: env.revision,
+        request_id: env.request_id,
+        payload,
+    })
+}
+
+/// 编码一条 Rust -> tabular host 的命令为 envelope JSON,供 `dispatch_script`
+/// 注入。与 [`encode_command`] 同结构,只是 payload 类型不同(`encode_command`
+/// 硬编码 `EditorCommand`,不是泛型,故需要这个平行函数)。
+pub fn encode_tabular_command(
+    project_id: i64,
+    panel: PanelKind,
+    tab_id: usize,
+    document_id: &str,
+    revision: u64,
+    request_id: Option<String>,
+    command: TabularCommand,
+) -> String {
+    let env = WebviewEnvelope {
+        protocol_version: PROTOCOL_VERSION,
+        project_id,
+        panel: match panel {
+            PanelKind::Project => "project".to_string(),
+            PanelKind::GitLog => "gitlog".to_string(),
+            _ => "files".to_string(),
+        },
+        tab_id,
+        document_id: document_id.to_string(),
+        revision,
+        request_id,
+        payload: command,
+    };
+    serde_json::to_string(&env).unwrap_or_else(|_| "{}".to_string())
+}
+
 /// Flyfish 渲染 host 的事件(T9)。与 `EditorEvent`/`JsonEvent` 共用 envelope,
 /// 但保留自己的 payload enum——不与 editor 命令混用。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -864,6 +1003,118 @@ mod tests {
                 bytes: 7,
                 error: None
             }
+        );
+    }
+
+    #[test]
+    fn parses_tabular_events() {
+        let ready = parse_tabular_event(&raw(r#"{"kind":"ready"}"#)).unwrap();
+        assert_eq!(ready.payload, TabularEvent::Ready);
+
+        let sel = parse_tabular_event(&raw(r#"{"kind":"sheet_selected","index":2}"#)).unwrap();
+        assert_eq!(sel.payload, TabularEvent::SheetSelected { index: 2 });
+
+        let wr = parse_tabular_event(&raw(
+            r#"{"kind":"window_request","sheet_index":0,"start_row":100,"end_row":300}"#,
+        ))
+        .unwrap();
+        assert_eq!(
+            wr.payload,
+            TabularEvent::WindowRequest {
+                sheet_index: 0,
+                start_row: 100,
+                end_row: 300
+            }
+        );
+
+        let wa = parse_tabular_event(&raw(r#"{"kind":"window_applied","start_row":0}"#)).unwrap();
+        assert_eq!(wa.payload, TabularEvent::WindowApplied { start_row: 0 });
+
+        let failed = parse_tabular_event(&raw(
+            r#"{"kind":"failed","message":"boom","recoverable":true}"#,
+        ))
+        .unwrap();
+        assert_eq!(
+            failed.payload,
+            TabularEvent::Failed {
+                message: "boom".into(),
+                recoverable: true
+            }
+        );
+
+        assert!(matches!(
+            parse_tabular_event(&raw(r#"{"kind":"evil"}"#)),
+            Err(ProtocolError::UnknownPayload(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_oversized_tabular_message() {
+        let big = "a".repeat(MAX_MESSAGE_BYTES + 1);
+        assert!(matches!(
+            parse_tabular_event(&big),
+            Err(ProtocolError::TooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn encodes_tabular_commands() {
+        let s = encode_tabular_command(
+            1,
+            PanelKind::Files,
+            2,
+            "p1-t2",
+            0,
+            None,
+            TabularCommand::Init {
+                sheet_names: vec!["Sheet1".into(), "Sheet2".into()],
+                active_sheet: 0,
+                read_only: true,
+            },
+        );
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["payload"]["kind"], "init");
+        assert_eq!(v["payload"]["sheet_names"][1], "Sheet2");
+
+        let win = encode_tabular_command(
+            1,
+            PanelKind::Files,
+            2,
+            "p1-t2",
+            0,
+            None,
+            TabularCommand::SetWindow {
+                sheet_index: 0,
+                start_row: 0,
+                rows: vec![vec!["a".into(), "b".into()]],
+                revision: 3,
+            },
+        );
+        let v: serde_json::Value = serde_json::from_str(&win).unwrap();
+        assert_eq!(v["payload"]["kind"], "set_window");
+        assert_eq!(v["payload"]["rows"][0][1], "b");
+
+        let sel = encode_tabular_command(
+            1,
+            PanelKind::Files,
+            2,
+            "p1-t2",
+            0,
+            None,
+            TabularCommand::SelectSheet { sheet_index: 3 },
+        );
+        let v: serde_json::Value = serde_json::from_str(&sel).unwrap();
+        assert_eq!(v["payload"]["kind"], "select_sheet");
+        assert_eq!(v["payload"]["sheet_index"], 3);
+    }
+
+    #[test]
+    fn tabular_event_validates_against_host_binding() {
+        let env = parse_tabular_event(&raw(r#"{"kind":"ready"}"#)).unwrap();
+        assert!(env.validate(&binding()).is_ok());
+        assert!(
+            env.validate(&HostBinding::new(8, PanelKind::Files, 3, "p7-t3".into()))
+                .is_err()
         );
     }
 
