@@ -482,21 +482,60 @@ fn root_dir_row<'a>(
     on_change: impl Fn(String) -> Message + 'a,
     on_pick: Message,
 ) -> Element<'a> {
-    let input =
-        byteui::form::input_text::view("Input", value, false, None, false, None, false, on_change);
-    let pick_btn = button(text("📁").size(byteui::theme::font::body()))
-        .on_press(on_pick)
-        .padding([6, 10]);
-    row![input, pick_btn].spacing(6).into()
+    // 「项目根目录」输入框:把文件夹选择按钮收进输入框内(同文件树「搜索目录」
+    // 输入框的内嵌按钮手法),并改用统一的 `input_text::view_with_suffix`
+    // (card 底 + 1px 描边 + radius 6、聚焦金框),与系统其它输入框观感一致;
+    // 原先独立按钮 + 裸 text_input 的写法既没统一样式、按钮又散在框外。
+    let colors = byteui::theme::color::current();
+    let folder_btn = button(icons::view(
+        icons::IconKind::FolderOpen,
+        byteui::theme::icon_size::row(),
+        colors.dim,
+    ))
+    .on_press(on_pick)
+    .padding(4)
+    .style(
+        move |_t: &iced_widget::Theme, s: button::Status| button::Style {
+            background: match s {
+                button::Status::Hovered | button::Status::Pressed => Some(
+                    Color {
+                        a: 0.15,
+                        ..colors.gold
+                    }
+                    .into(),
+                ),
+                _ => None,
+            },
+            border: Border {
+                width: 0.0,
+                ..Border::default()
+            },
+            ..button::Style::default()
+        },
+    );
+    byteui::form::input_text::view_with_suffix(
+        "选择项目根目录…",
+        value,
+        false,
+        None,
+        false,
+        None,
+        on_change,
+        folder_btn.into(),
+    )
 }
 
 fn local_form_view(form: &LocalForm) -> Element<'_> {
-    let description_editor = iced_widget::text_editor(&form.description)
-        .placeholder("项目描述…")
-        .on_action(Message::LocalDescriptionAction)
-        .height(Length::Fixed(96.0));
+    let description_editor = byteui::form::text_area::view(
+        &form.description,
+        "项目描述…",
+        None,
+        false,
+        Some(96.0),
+        Message::LocalDescriptionAction,
+    );
     column![
-        field_label("根目录"),
+        field_label("项目根目录"),
         root_dir_row(
             &form.root_dir,
             Message::LocalRootDirChanged,
@@ -676,14 +715,18 @@ fn remote_repo_field(form: &CloneForm) -> Element<'_> {
 }
 
 fn clone_form_view(form: &CloneForm) -> Element<'_> {
-    let description_editor = iced_widget::text_editor(&form.description)
-        .placeholder("项目描述…")
-        .on_action(Message::CloneDescriptionAction)
-        .height(Length::Fixed(96.0));
+    let description_editor = byteui::form::text_area::view(
+        &form.description,
+        "项目描述…",
+        None,
+        false,
+        Some(96.0),
+        Message::CloneDescriptionAction,
+    );
     let fields = column![
         field_label("远程仓库"),
         remote_repo_field(form),
-        field_label("根目录"),
+        field_label("项目根目录"),
         root_dir_row(
             &form.root_dir,
             Message::CloneRootDirChanged,
@@ -808,7 +851,8 @@ pub(crate) fn project_create_card(state: &State) -> Element<'_> {
         .align_y(iced_widget::core::alignment::Vertical::Center);
     // tab 栏:整块左缩进 16,与下方表单容器(`container(body).padding(16)`)
     // 的字段左缘对齐;底部一条 1px `BORDER` 分割线把 tab 栏与表单区分开
-    // (同文件树 footer-bar / ssh footer-bar 的分隔线手法)。
+    // (同文件树 footer-bar / ssh footer-bar 的分隔线手法)。分割线左右各缩进
+    // 16,与表单字段的左右内边距一致——线宽与表单内容对齐,不再比表单宽。
     let tab_bar = column![
         container(tab_row(state.tab, state.tab_hover)).padding(Padding {
             top: 0.0,
@@ -816,13 +860,21 @@ pub(crate) fn project_create_card(state: &State) -> Element<'_> {
             bottom: 0.0,
             left: 16.0,
         }),
-        container(Space::new())
-            .width(Length::Fill)
-            .height(Length::Fixed(1.0))
-            .style(|_t: &iced_widget::Theme| container::Style {
-                background: Some(byteui::theme::color::current().border.into()),
-                ..container::Style::default()
-            }),
+        container(
+            container(Space::new())
+                .width(Length::Fill)
+                .height(Length::Fixed(1.0))
+                .style(|_t: &iced_widget::Theme| container::Style {
+                    background: Some(byteui::theme::color::current().border.into()),
+                    ..container::Style::default()
+                }),
+        )
+        .padding(Padding {
+            top: 0.0,
+            right: 16.0,
+            bottom: 0.0,
+            left: 16.0,
+        }),
     ]
     .spacing(8);
     let content = column![
