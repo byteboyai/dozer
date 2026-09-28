@@ -67,6 +67,24 @@ pub struct GetMemoryParams {
     pub title_or_id: String,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct LocateInFileParams {
+    pub path: String,
+    pub query: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ApplyPreciseEditParams {
+    pub path: String,
+    pub start_line: u32,
+    pub start_col: u32,
+    pub end_line: u32,
+    pub end_col: u32,
+    pub expected_text: String,
+    pub new_text: String,
+    pub summary: String,
+}
+
 /// T13:`preview_navigate` 参数。给 `path` + 起止(只给 line/column 是 reveal,
 /// 再给 end_line/end_column 就是 select,均 1-based)。
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -397,6 +415,105 @@ impl DozerMcpServer {
                 "change_kind": h.change_kind,
             })).collect::<Vec<_>>(),
         })))
+    }
+
+    #[tool(
+        description = "在项目内某个文本文件里搜索一段文字,返回精确坐标(1-based 行列)。唯一匹配才算定位成功;多处匹配会把候选全部列出,重新传更长/更具体的 query 缩小范围。调用 apply_precise_edit 前应该先用这个工具拿到准确坐标,不要自己数行号。"
+    )]
+    pub async fn locate_in_file(
+        &self,
+        Parameters(LocateInFileParams { path, query }): Parameters<LocateInFileParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let (project_id, _agent) = self
+            .resolve_project_and_agent()
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        let matches = self
+            .client
+            .locate_in_file(project_id, &path, &query)
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        let value = json!(
+            matches
+                .into_iter()
+                .map(|m| json!({
+                    "start_line": m.start_line,
+                    "start_col": m.start_col,
+                    "end_line": m.end_line,
+                    "end_col": m.end_col,
+                    "context": m.context,
+                }))
+                .collect::<Vec<_>>()
+        );
+        Ok(CallToolResult::structured(json!({ "matches": value })))
+    }
+
+    #[tool(
+        description = "精确替换项目内某文本文件 [start_line,start_col]~[end_line,end_col] 区间(1-based,含端点)的内容。expected_text 必须是这段区间当前的原样内容(用 locate_in_file 拿到坐标后紧跟着读到的那段文字),不一致会返回 conflict 并附带磁盘上的真实内容,不会写入;整篇重写就把区间设成整个文件。summary 必填,一句话说明这次改了什么。"
+    )]
+    pub async fn apply_precise_edit(
+        &self,
+        Parameters(ApplyPreciseEditParams {
+            path,
+            start_line,
+            start_col,
+            end_line,
+            end_col,
+            expected_text,
+            new_text,
+            summary,
+        }): Parameters<ApplyPreciseEditParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let (project_id, agent) = self
+            .resolve_project_and_agent()
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        let outcome = self
+            .client
+            .apply_precise_edit(
+                project_id,
+                &path,
+                start_line,
+                start_col,
+                end_line,
+                end_col,
+                &expected_text,
+                &new_text,
+                &summary,
+                agent.label(),
+                &self.session_id,
+            )
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e}"), None))?;
+        let value = match outcome {
+            dozer_core::protocol::MutationOutcome::Applied {
+                new_start_line,
+                new_start_col,
+                new_end_line,
+                new_end_col,
+                history_id,
+            } => json!({
+                "kind": "applied",
+                "new_start_line": new_start_line,
+                "new_start_col": new_start_col,
+                "new_end_line": new_end_line,
+                "new_end_col": new_end_col,
+                "history_id": history_id,
+            }),
+            dozer_core::protocol::MutationOutcome::Conflict { actual_text } => json!({
+                "kind": "conflict",
+                "actual_text": actual_text,
+            }),
+            dozer_core::protocol::MutationOutcome::NotFound => json!({ "kind": "not_found" }),
+            dozer_core::protocol::MutationOutcome::PathOutOfBounds => {
+                json!({ "kind": "path_out_of_bounds" })
+            }
+            dozer_core::protocol::MutationOutcome::Unwritable { reason } => json!({
+                "kind": "unwritable",
+                "reason": reason,
+            }),
+        };
+        Ok(CallToolResult::structured(value))
     }
 }
 
