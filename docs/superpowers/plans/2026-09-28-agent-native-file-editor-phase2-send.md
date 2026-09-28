@@ -78,7 +78,7 @@ host,esbuild 打包,`node --test` 跑测试)。
   Vec<crate::chrome::native_menu::Item<Message>>`——Task 2 在这个结构体上
   加 `agent_terminal_visible: bool` 字段。
 
-- [ ] **Step 1: 在 `files/view.rs` 里定义参数结构体,紧贴 `context_menu_items` 之前**
+- [x] **Step 1: 在 `files/view.rs` 里定义参数结构体,紧贴 `context_menu_items` 之前**
 
 ```rust
 /// 文件树右键菜单的参数集合——`target/is_dir/is_root/has_clipboard/
@@ -94,7 +94,7 @@ pub(crate) struct FileContextMenuParams<'a> {
 }
 ```
 
-- [ ] **Step 2: 把 `context_menu_items`/`context_menu_spec` 签名改成吃这个结构体**
+- [x] **Step 2: 把 `context_menu_items`/`context_menu_spec` 签名改成吃这个结构体**
 
 ```rust
 #[cfg(target_os = "macos")]
@@ -118,7 +118,7 @@ pub(crate) fn context_menu_spec(params: FileContextMenuParams) -> MenuSpec<Messa
 }
 ```
 
-- [ ] **Step 3: 更新三处生产代码调用点**
+- [x] **Step 3: 更新三处生产代码调用点**
 
 `files/update.rs:61` 附近:
 
@@ -149,7 +149,7 @@ let spec = context_menu_spec(FileContextMenuParams {
 (`is_root`/`has_clipboard` 局部变量名在两处原本就存在,只改调用形式,不改
 计算逻辑。)
 
-- [ ] **Step 4: 更新 `mod.rs` 里全部 12 处测试调用**
+- [x] **Step 4: 更新 `mod.rs` 里全部 12 处测试调用**
 
 逐个把 `context_menu_items(Path::new(...), bool, bool, bool, bool,
 &ExternalAppsConfig::default())` 改成
@@ -158,18 +158,18 @@ let spec = context_menu_spec(FileContextMenuParams {
 external_apps: &ExternalAppsConfig::default() })`,字段值与原位置参数
 一一对应,断言内容不改。
 
-- [ ] **Step 5: 跑现有测试确认零行为变化**
+- [x] **Step 5: 跑现有测试确认零行为变化**
 
 Run: `cargo test -p dozer-app context_menu_items --features ""` (macOS 上;
 非 mac 平台这些测试被 `#[cfg(target_os = "macos")]` 排除,跳过即可)
 Expected: 全部现有 `context_menu_items_*` 测试原样通过,无新增/删除断言。
 
-- [ ] **Step 6: `cargo clippy --all-targets` 确认无新增警告**
+- [x] **Step 6: `cargo clippy --all-targets` 确认无新增警告**
 
 Run: `cargo clippy -p dozer-app --all-targets`
 Expected: 无因这次重构新增的警告。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/dozer-app/src/extensions/files/view.rs \
@@ -211,7 +211,7 @@ git commit -m "refactor(files): collapse context menu params into a named struct
   bool) -> String`(Task 5 的选区发送文本模板函数可以仿照同一个"纯函数、
   易单测"的写法,不复用这一个,因为字段形状不同)。
 
-- [ ] **Step 1: 写 `agent_context_reference_text` 的失败测试**
+- [x] **Step 1: 写 `agent_context_reference_text` 的失败测试**
 
 在 `crates/dozer-app/src/extensions/files/view.rs` 测试模块(文件底部
 `#[cfg(test)] mod tests`,若没有就新建,参照 `mod.rs` 里其他测试的
@@ -243,12 +243,12 @@ fn agent_context_reference_text_keeps_unicode_and_spaces_verbatim() {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app agent_context_reference_text`
 Expected: FAIL,`agent_context_reference_text` 未定义。
 
-- [ ] **Step 3: 实现 `agent_context_reference_text`**
+- [x] **Step 3: 实现 `agent_context_reference_text`**
 
 紧贴 `context_menu_spec` 之前(`files/view.rs`):
 
@@ -265,12 +265,12 @@ pub(crate) fn agent_context_reference_text(relative_path: &str, is_dir: bool) ->
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app agent_context_reference_text`
 Expected: PASS(3 个测试)。
 
-- [ ] **Step 5: `FileContextMenuParams` 加新字段,顶部组加菜单项**
+- [x] **Step 5: `FileContextMenuParams` 加新字段,顶部组加菜单项**
 
 `view.rs` 结构体定义补一个字段:
 
@@ -325,7 +325,7 @@ if is_dir {
 (注意:`dim` 变量在函数体前面已经算好——`let dim =
 byteui::theme::color::current().dim;`——直接复用,不重复计算。)
 
-- [ ] **Step 6: 新增 `Message::SendToAgentContext` 变体**
+- [x] **Step 6: 新增 `Message::SendToAgentContext` 变体**
 
 `files/state.rs`(或 `Message` 枚举所在处,同文件顶部"消息类型定义"区域):
 
@@ -333,7 +333,7 @@ byteui::theme::color::current().dim;`——直接复用,不重复计算。)
 SendToAgentContext(PathBuf, bool),
 ```
 
-- [ ] **Step 7: `files::update` 签名加 `agent_terminal_visible` 参数,处理新消息**
+- [x] **Step 7: `files::update` 签名加 `agent_terminal_visible` 参数,处理新消息**
 
 ```rust
 pub fn update(
@@ -376,7 +376,7 @@ pub fn update(
 在 `files::update` 内部构造并 `emit` 一个顶层 `Message` 变体,而不是
 `files::Message` 变体。)
 
-- [ ] **Step 8: 顶层新增 `Message::RequestSendToAgentTerminal`,接线到 `term_paste`**
+- [x] **Step 8: 顶层新增 `Message::RequestSendToAgentTerminal`,接线到 `term_paste`**
 
 `app/message.rs`(顶层 `Message` 枚举):
 
@@ -393,7 +393,7 @@ Message::RequestSendToAgentTerminal(text) => {
 }
 ```
 
-- [ ] **Step 9: 两处 `files::update` 调用点补 `agent_terminal_visible` 实参**
+- [x] **Step 9: 两处 `files::update` 调用点补 `agent_terminal_visible` 实参**
 
 `app/update.rs:3149` 附近(`Message::Files(msg)` 分支)——`self.terminal_visible()`
 是 `&self` 方法,必须在 `app_files`/`ws` 两处可变借用**之前**求值,和
@@ -456,7 +456,7 @@ pub(crate) fn files_project_message(&mut self, project_id: i64, msg: files::Mess
 }
 ```
 
-- [ ] **Step 10: `ContextMenuOpen` 分支里把 `agent_terminal_visible` 传进 `FileContextMenuParams`**
+- [x] **Step 10: `ContextMenuOpen` 分支里把 `agent_terminal_visible` 传进 `FileContextMenuParams`**
 
 `files/update.rs` 的 `Message::ContextMenuOpen` 分支(macOS 与非 mac 两条
 路径都要更新——macOS 走 `context_menu_items(FileContextMenuParams { ...
@@ -466,7 +466,7 @@ Some(ContextMenu { ... })` 那条,`ContextMenu` 结构体本身不需要存
 `ws_state`/`app_state` 现算,或者更简单:把 `agent_terminal_visible` 存进
 非 mac 的 `ContextMenu` 结构体一并带上,渲染时直接用,不用重新计算)。
 
-- [ ] **Step 11: 写"菜单项在无终端时置灰"的失败测试**
+- [x] **Step 11: 写"菜单项在无终端时置灰"的失败测试**
 
 ```rust
 #[cfg(target_os = "macos")]
@@ -516,23 +516,23 @@ fn context_menu_items_enables_send_to_context_with_terminal() {
 }
 ```
 
-- [ ] **Step 12: 跑测试确认失败,然后通过**
+- [x] **Step 12: 跑测试确认失败,然后通过**
 
 Run: `cargo test -p dozer-app context_menu_items_disables_send_to_context`
 Expected: 先 FAIL(字段/变体不存在),补完 Step 5-10 的实现后 PASS。
 
-- [ ] **Step 13: 更新 Task 1 遗留的 12 处旧测试调用,补 `agent_terminal_visible` 字段**
+- [x] **Step 13: 更新 Task 1 遗留的 12 处旧测试调用,补 `agent_terminal_visible` 字段**
 
 Task 1 的测试调用点(`mod.rs` 里 12 处)都要加
 `agent_terminal_visible: true`(默认按"有终端"场景断言原有行为,除非
 测试本身就是在测这个字段)。
 
-- [ ] **Step 14: `cargo test -p dozer-app` 全量跑通**
+- [x] **Step 14: `cargo test -p dozer-app` 全量跑通**
 
 Run: `cargo test -p dozer-app`
 Expected: 全部通过,无编译错误。
 
-- [ ] **Step 15: Commit**
+- [x] **Step 15: Commit**
 
 ```bash
 git add crates/dozer-app/src/extensions/files/ crates/dozer-app/src/app/

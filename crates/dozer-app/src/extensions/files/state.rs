@@ -37,6 +37,10 @@ pub(crate) struct ContextMenu {
     pub(crate) y: f32,
     pub(crate) target: PathBuf,
     pub(crate) is_dir: bool,
+    /// 触发这次右键时"当前项目是否有可见/激活的 agent 终端"——非 mac 的
+    /// iced 兜底渲染时用它决定"添加到 Agent 上下文"是否置灰(渲染层拿不到
+    /// 顶层终端的可见性,故开菜单时存下来带上)。
+    pub(crate) agent_terminal_visible: bool,
 }
 
 /// 拖拽移动待确认——内部树拖拽落点合法、或外部 OS 单文件拖入命中树上
@@ -253,6 +257,15 @@ pub enum Message {
     /// 右键菜单"搜索":内核拦截,不进 `update`——由内核映射成
     /// `search::Message::SearchOpen` 打开文件树右键作用域的搜索弹窗。
     OpenSearch(PathBuf, bool),
+    /// 文件树右键"添加到 Agent 上下文":`bool` = `is_dir`。真正的 PTY 写入
+    /// 需要内核顶层的终端句柄,`files::update` 拿不到,同 `CopyPath` 的既有
+    /// 模式——`update` 里把拼好的文本经 `emit` 回内核顶层拦截处理
+    /// (`RequestSendToAgentTerminal`)。
+    SendToAgentContext(PathBuf, bool),
+    /// 内核拦截,不进 `update`——`SendToAgentContext` 在 `files::update` 里
+    /// 拼好模板文本后,经 `emit` 送回内核顶层,由 `App::update` 调
+    /// `term_paste` 写进当前激活的 agent 终端(真正的 PTY 句柄只有内核有)。
+    RequestSendToAgentTerminal(String),
     /// 内核拦截,不进 `update`——真正的系统剪贴板写入需要 `main.rs` 的
     /// `Clipboard` 句柄,`update()` 拿不到(见设计文档"关键语义确认")。
     CopyPath(PathBuf, PathKind),

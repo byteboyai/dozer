@@ -18,6 +18,7 @@ pub fn update(
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
     external_apps: &crate::external_apps::ExternalAppsConfig,
+    agent_terminal_visible: bool,
 ) {
     match msg {
         Message::Toggle(dir) => {
@@ -64,6 +65,7 @@ pub fn update(
                     is_root,
                     has_clipboard,
                     is_git_repo: ws_state.git_is_repo,
+                    agent_terminal_visible,
                     external_apps,
                 });
                 if let Some(msg) =
@@ -89,12 +91,33 @@ pub fn update(
                     y,
                     target: path,
                     is_dir,
+                    agent_terminal_visible,
                 });
             }
         }
         Message::ContextMenuClose => {
             app_state.context_menu = None;
             app_state.tab_context_menu = None;
+        }
+        Message::SendToAgentContext(target, is_dir) => {
+            // 真正的 PTY 写入需要 `main.rs` 的终端句柄,`files::update` 拿不到,
+            // 同 `CopyPath`/`OpenSearch` 的既有模式——把拼好的文本经 `emit`
+            // 回内核顶层,由 `App::update` 拦截并调 `term_paste`。
+            let Some(tree) = ws_state.file_tree.as_ref() else {
+                return;
+            };
+            let relative = crate::project::path_string(
+                crate::project::PathKind::Relative,
+                &target,
+                tree.root(),
+            );
+            let text = super::agent_context_reference_text(&relative, is_dir);
+            emit(Message::RequestSendToAgentTerminal(text));
+        }
+        Message::RequestSendToAgentTerminal(_) => {
+            // 内核拦截处理(`App::update` 的 `Message::Files(files::Message::
+            // RequestSendToAgentTerminal)` 分支),永远不该落回这里。
+            unreachable!("RequestSendToAgentTerminal 由内核拦截处理");
         }
         Message::TabContextMenuOpen { kind, path } => {
             // 与文件树右键菜单/分支切换弹层互斥:开 tab 菜单时一并收起两者

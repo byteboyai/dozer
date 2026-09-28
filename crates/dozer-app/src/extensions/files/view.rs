@@ -879,6 +879,7 @@ pub(crate) struct FileContextMenuParams<'a> {
     pub(crate) is_root: bool,
     pub(crate) has_clipboard: bool,
     pub(crate) is_git_repo: bool,
+    pub(crate) agent_terminal_visible: bool,
     pub(crate) external_apps: &'a crate::external_apps::ExternalAppsConfig,
 }
 
@@ -887,6 +888,17 @@ pub fn context_menu_items(
     params: FileContextMenuParams,
 ) -> Vec<crate::chrome::native_menu::Item<Message>> {
     crate::menu_spec::to_native(context_menu_spec(params))
+}
+
+/// 文件树"添加到 Agent 上下文"发送的引用文本——纯路径引用,不展开列举
+/// 目录下的文件(agent 自己有 ls/glob 可以探索)。`relative_path` 不做
+/// 任何转义,原样拼接(路径含空格/中文时也不处理)。
+pub(crate) fn agent_context_reference_text(relative_path: &str, is_dir: bool) -> String {
+    if is_dir {
+        format!("请将 {relative_path}/ 目录纳入你的工作上下文。")
+    } else {
+        format!("请将 {relative_path} 文件纳入你的工作上下文。")
+    }
 }
 
 /// 文件树右键菜单内容——native(`context_menu_items`)和 iced fallback
@@ -912,6 +924,7 @@ pub(crate) fn context_menu_spec(params: FileContextMenuParams) -> MenuSpec<Messa
         is_root,
         has_clipboard,
         is_git_repo,
+        agent_terminal_visible,
         external_apps,
     } = params;
     let dim = byteui::theme::color::current().dim;
@@ -935,6 +948,18 @@ pub(crate) fn context_menu_spec(params: FileContextMenuParams) -> MenuSpec<Messa
 
     // 顶部操作组:文件夹=搜索/新建;文件=回滚/历史(git 才有)。
     let mut top: Vec<MenuSpecItem<Message>> = Vec::new();
+    top.push(MenuSpecItem::Entry {
+        icon: Some(icons::IconKind::MessageSquare),
+        icon_color: None,
+        label: "添加到 Agent 上下文".into(),
+        color: if agent_terminal_visible {
+            byteui::theme::color::current().body
+        } else {
+            dim
+        },
+        enabled: agent_terminal_visible,
+        msg: Message::SendToAgentContext(target.clone(), is_dir),
+    });
     if is_dir {
         top.push(MenuSpecItem::entry(
             Some(icons::IconKind::Search),
@@ -1070,6 +1095,7 @@ pub fn context_menu_popup<'a>(
         is_root,
         has_clipboard,
         is_git_repo: ws_state.git_is_repo,
+        agent_terminal_visible: menu.agent_terminal_visible,
         external_apps,
     });
     let list = crate::menu_spec::to_iced(spec, Length::Shrink);
@@ -1413,4 +1439,33 @@ pub fn files_move_card(
         .align_x(iced_widget::core::alignment::Horizontal::Center)
         .align_y(iced_widget::core::alignment::Vertical::Center)
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_context_reference_text_for_file() {
+        assert_eq!(
+            agent_context_reference_text("src/main.rs", false),
+            "请将 src/main.rs 文件纳入你的工作上下文。"
+        );
+    }
+
+    #[test]
+    fn agent_context_reference_text_for_dir() {
+        assert_eq!(
+            agent_context_reference_text("research", true),
+            "请将 research/ 目录纳入你的工作上下文。"
+        );
+    }
+
+    #[test]
+    fn agent_context_reference_text_keeps_unicode_and_spaces_verbatim() {
+        assert_eq!(
+            agent_context_reference_text("我的 报告/draft v2.md", false),
+            "请将 我的 报告/draft v2.md 文件纳入你的工作上下文。"
+        );
+    }
 }

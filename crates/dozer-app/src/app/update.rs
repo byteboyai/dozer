@@ -3146,6 +3146,12 @@ impl App {
                     self.update(Message::Files(msg));
                 }
             }
+            Message::Files(files::Message::RequestSendToAgentTerminal(text)) => {
+                // 文件树右键"添加到 Agent 上下文":`files::update` 拼好模板文本
+                // 后经 `emit` 送回内核,这里写进当前激活的 agent 终端输入框
+                // (真正的 PTY 句柄只有内核有)。
+                self.term_paste(terminal::TermTarget::Shared, text);
+            }
             Message::Files(msg) => {
                 let Some(project_id) = self.active_project_id else {
                     return;
@@ -3155,11 +3161,12 @@ impl App {
                 let emit = move |m| {
                     let _ = proxy.send_event(Message::Files(m));
                 };
+                let external_apps = self.external_apps.clone();
+                let agent_terminal_visible = self.terminal_visible();
                 let app_files = &mut self.files;
                 let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
                     return;
                 };
-                let external_apps = self.external_apps.clone();
                 files::update(
                     &mut ws.files,
                     app_files,
@@ -3168,6 +3175,7 @@ impl App {
                     &handle,
                     emit,
                     &external_apps,
+                    agent_terminal_visible,
                 );
             }
             Message::Project(
@@ -5583,6 +5591,7 @@ impl App {
     pub(crate) fn files_project_message(&mut self, project_id: i64, msg: files::Message) {
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
+        let agent_terminal_visible = self.terminal_visible();
         let emit = move |m| {
             let _ = proxy.send_event(Message::Files(m));
         };
@@ -5599,6 +5608,7 @@ impl App {
             &handle,
             emit,
             &external_apps,
+            agent_terminal_visible,
         );
     }
 
