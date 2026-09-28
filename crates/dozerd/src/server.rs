@@ -1191,7 +1191,6 @@ async fn handle_conn(
                                 Err(e) => Reply::Error { message: format!("查询结果失败: {e}") },
                             }
                         }
-                        // T8 接线前的占位(见 2026-09-28 agent-native file editor plan)。
                         Request::LocateInFile { project_id, path, query } => {
                             let root = projects
                                 .list()
@@ -1262,7 +1261,14 @@ async fn handle_conn(
                                                     new_text,
                                                     summary,
                                                 })
-                                                .unwrap_or(-1);
+                                                .unwrap_or_else(|e| {
+                                                    tracing::warn!(
+                                                        error = %e,
+                                                        path = %path,
+                                                        "file_edit_history 写入失败(文件已改盘,仅历史记录丢失)"
+                                                    );
+                                                    -1
+                                                });
                                             let outcome =
                                                 dozer_core::protocol::MutationOutcome::Applied {
                                                     new_start_line: applied.new_start_line,

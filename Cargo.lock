@@ -1877,7 +1877,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "dozer-app"
-version = "0.5.260"
+version = "0.5.262"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -2011,6 +2011,7 @@ version = "0.3.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "dozer-client",
  "dozer-core",
  "futures-util",
  "libc",

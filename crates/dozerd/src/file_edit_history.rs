@@ -5,7 +5,7 @@
 //! `docs/superpowers/specs/2026-09-28-agent-native-file-editor-design.md`。
 
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::path::Path;
 use std::sync::Mutex;
 
