@@ -2516,7 +2516,7 @@ impl Workspace {
 
     /// 表格预览 tab 的交互动作(滚动/sheet 切换):按 `tab_id` 定位对应 tab 的
     /// `TabularView` 并 `apply`。tab 不存在 / 该 tab 不是表格 / 还在加载中都
-    /// no-op。切到一个还没加载过的 sheet 时,`apply` 会返回
+    /// no-op。切到一个还没加载过的 sheet 时,`select_sheet` 会返回
     /// `SheetLoadRequest`——这里负责把它 spawn 到后台线程,完成后经
     /// `Message::TabularSheetLoaded` 回填(同 `TabularLoaded` 的路由方式,
     /// 按 `project_id` 而非"当前聚焦项目",见该消息文档)。
@@ -2524,7 +2524,7 @@ impl Workspace {
         &mut self,
         kind: PanelKind,
         tab_id: usize,
-        action: crate::tabular::Action,
+        sheet: usize,
         io: &ShellIo,
     ) {
         let Some(project_id) = self.project_id() else {
@@ -2535,9 +2535,21 @@ impl Workspace {
         } else {
             &mut self.preview
         };
-        let Some(request) = pane.tabular_mut(tab_id).and_then(|view| view.apply(action)) else {
+        let Some(request) = pane
+            .tabular_mut(tab_id)
+            .and_then(|view| view.select_sheet(sheet))
+        else {
             return;
         };
+        // 该 sheet 还没加载过,才会走到这里:让 webview 把对应 tab 标 loading
+        // 态(见 Task 4 的 `TabularCommand::SetSheetLoading`)。
+        pane.queue_tabular_command(
+            tab_id,
+            crate::preview::TabularCommand::SetSheetLoading {
+                sheet_index: request.index,
+                loading: true,
+            },
+        );
         // T11:sheet 懒加载同样可取消(tab 关闭/切换即弃)。
         let cancel = pane
             .tabs()

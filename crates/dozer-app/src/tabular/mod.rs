@@ -21,7 +21,6 @@ pub mod grid;
 pub mod view;
 
 pub use grid::Action;
-
 /// 单 sheet 载入的行数上限。超出即 `truncated = true`,顶部给提示条,且
 /// 加载器一旦读满这个数就不再继续解析文件剩余部分(见模块文档)。
 pub const MAX_TABULAR_ROWS: usize = 100_000;
@@ -134,7 +133,7 @@ impl TabularView {
     /// T12:切到 `sheet`(越界钳到合法),未加载则返回后台加载请求(调用方物化
     /// 后重试一次)。`sheet` 数为 0 时 no-op。
     #[allow(dead_code)] // T12:Agent reveal 内部原语(暂由测试使用)。
-    fn select_sheet(&mut self, sheet: usize) -> Option<SheetLoadRequest> {
+    pub fn select_sheet(&mut self, sheet: usize) -> Option<SheetLoadRequest> {
         if self.sheets.is_empty() {
             return None;
         }
@@ -142,12 +141,25 @@ impl TabularView {
         if idx == self.active_sheet {
             return None;
         }
-        self.apply(Action::SelectSheet(idx))
+        self.active_sheet = idx;
+        self.scroll_row = 0;
+        self.scroll_col = 0;
+        // 已经有一次加载在飞就不再重复 spawn(2026-09 code review 发现:来回
+        // 切走再切回同一个未加载 sheet,原来会对着同一份大文件重复触发后台
+        // 加载)。
+        if self.sheets[idx].is_none() && self.loading_sheets.insert(idx) {
+            Some(SheetLoadRequest {
+                index: idx,
+                path: self.path.clone(),
+                name: self.sheet_names[idx].clone(),
+            })
+        } else {
+            None
+        }
     }
 
     /// T12:Agent 导航——切到 `sheet`、滚动到 `row/col`(越界钳到数据范围)并
     /// 选中该单元格。目标 sheet 未加载时返回 `SheetLoadRequest`。
-    #[allow(dead_code)] // T12:Agent reveal(暂由测试使用)。
     pub fn reveal_cell(
         &mut self,
         sheet: usize,
@@ -170,7 +182,6 @@ impl TabularView {
     }
 
     /// T12:Agent 导航——选中一个范围(0-based,含端点;自动归一化并钳位)。
-    #[allow(dead_code)] // T12:Agent reveal(暂由测试使用)。
     pub fn reveal_range(
         &mut self,
         sheet: usize,
@@ -196,59 +207,8 @@ impl TabularView {
         request
     }
 
-    /// 处理一条交互动作,纯状态转换(可单测,不做任何 IO)。滚动钳到
-    /// `[0, 上限]`;切到一个还没加载的 sheet 时返回 `SheetLoadRequest`,
-    /// 交给外层去后台加载(见该类型文档)。
-    pub fn apply(&mut self, action: Action) -> Option<SheetLoadRequest> {
-        match action {
-            Action::Scroll { dx, dy } => {
-                let Some(sheet) = self.active_sheet() else {
-                    return None; // 当前 sheet 还没加载完,没有边界可钳,不滚动。
-                };
-                let (max_row, max_col) = (
-                    sheet.total_rows.saturating_sub(1),
-                    sheet.col_count.saturating_sub(1),
-                );
-                self.scroll_row = self
-                    .scroll_row
-                    .saturating_add_signed(dy as isize)
-                    .min(max_row);
-                self.scroll_col = self
-                    .scroll_col
-                    .saturating_add_signed(dx as isize)
-                    .min(max_col);
-                None
-            }
-            Action::SelectSheet(idx) => {
-                if idx >= self.sheet_names.len() || idx == self.active_sheet {
-                    return None;
-                }
-                self.active_sheet = idx;
-                self.scroll_row = 0;
-                self.scroll_col = 0;
-                // 已经有一次加载在飞就不再重复 spawn(2026-09 code review
-                // 发现:来回切走再切回同一个未加载 sheet,原来会对着同一份
-                // 大文件重复触发后台加载)。
-                if self.sheets[idx].is_none() && self.loading_sheets.insert(idx) {
-                    Some(SheetLoadRequest {
-                        index: idx,
-                        path: self.path.clone(),
-                        name: self.sheet_names[idx].clone(),
-                    })
-                } else {
-                    None
-                }
-            }
-        }
-    }
-
-    /// 一个由 `SheetLoadRequest` 触发的后台加载完成后回填结果。下标越界
-    /// (sheet 列表在加载期间发生了变化——目前不会,但防御一下)静默丢弃。
-    /// 加载失败时保留 `None`,该 sheet 会一直显示"加载中"占位;失败原因
-    /// 记日志供排查,不在 UI 上展示内部错误文案(同 `data_to_string` 对
-    /// `Data::Error` 的处理取舍)。无论成功失败都把这个下标从
-    /// `loading_sheets` 摘掉——失败时这样用户切走再切回来才能重新触发一次
-    /// 加载(没有专门的"重试"按钮,靠这个当退路)。
+    /// 把已加载的 sheet 结果写回 `index` 槽位:成功落 `Sheet` 并清除
+    /// `loading_sheets` 标记;失败同样清除标记,保持槽位为空以便下次重试。
     pub fn apply_sheet_loaded(&mut self, index: usize, result: Result<Sheet, String>) {
         self.loading_sheets.remove(&index);
         let Some(slot) = self.sheets.get_mut(index) else {
@@ -624,27 +584,9 @@ mod tests {
     }
 
     #[test]
-    fn apply_scroll_clamps_to_loaded_sheet_bounds() {
-        let mut v = view_with_sheets(vec![Some(stub_sheet(100, 10))]);
-        let req = v.apply(Action::Scroll { dx: 1000, dy: 1000 });
-        assert_eq!(req, None);
-        assert!(v.scroll_row < 100);
-        assert!(v.scroll_col < 10);
-    }
-
-    #[test]
-    fn apply_scroll_on_unloaded_sheet_is_noop() {
-        let mut v = view_with_sheets(vec![None]);
-        let req = v.apply(Action::Scroll { dx: 5, dy: 5 });
-        assert_eq!(req, None);
-        assert_eq!(v.scroll_row, 0);
-        assert_eq!(v.scroll_col, 0);
-    }
-
-    #[test]
     fn select_sheet_out_of_range_is_noop() {
         let mut v = view_with_sheets(vec![Some(stub_sheet(100, 10))]);
-        assert_eq!(v.apply(Action::SelectSheet(9)), None);
+        assert_eq!(v.select_sheet(9), None);
         assert_eq!(v.active_sheet, 0);
     }
 
@@ -652,7 +594,7 @@ mod tests {
     fn select_loaded_sheet_switches_without_load_request() {
         let mut v = view_with_sheets(vec![Some(stub_sheet(100, 10)), Some(stub_sheet(5, 3))]);
         v.scroll_row = 50;
-        let req = v.apply(Action::SelectSheet(1));
+        let req = v.select_sheet(1);
         assert_eq!(req, None);
         assert_eq!(v.active_sheet, 1);
         assert_eq!(v.scroll_row, 0);
@@ -662,7 +604,7 @@ mod tests {
     #[test]
     fn select_unloaded_sheet_returns_load_request() {
         let mut v = view_with_sheets(vec![Some(stub_sheet(100, 10)), None]);
-        let req = v.apply(Action::SelectSheet(1));
+        let req = v.select_sheet(1);
         assert_eq!(
             req,
             Some(SheetLoadRequest {
@@ -680,23 +622,23 @@ mod tests {
     fn reselecting_still_loading_sheet_does_not_requeue_load() {
         let mut v = view_with_sheets(vec![Some(stub_sheet(100, 10)), None]);
         assert!(
-            v.apply(Action::SelectSheet(1)).is_some(),
+            v.select_sheet(1).is_some(),
             "首次切过去应该触发加载"
         );
-        v.apply(Action::SelectSheet(0));
+        v.select_sheet(0);
         // 第一次加载还没回填(没调 `apply_sheet_loaded`),这次切回去
         // 不应该对着同一个 sheet 再 spawn 一次。
         assert_eq!(
-            v.apply(Action::SelectSheet(1)),
+            v.select_sheet(1),
             None,
             "同一个 sheet 的加载已经在飞,不该重复触发"
         );
         // 加载结果回来之后,若这个 sheet 之后又被清空(理论上不会,但防御
         // 一下)再切过去应该能重新触发。
         v.apply_sheet_loaded(1, Err("boom".to_string()));
-        v.apply(Action::SelectSheet(0));
+        v.select_sheet(0);
         assert!(
-            v.apply(Action::SelectSheet(1)).is_some(),
+            v.select_sheet(1).is_some(),
             "失败之后应该能重新触发加载(没有专门的重试入口)"
         );
     }
@@ -704,7 +646,7 @@ mod tests {
     #[test]
     fn apply_sheet_loaded_fills_pending_slot() {
         let mut v = view_with_sheets(vec![Some(stub_sheet(100, 10)), None]);
-        v.apply(Action::SelectSheet(1));
+        v.select_sheet(1);
         v.apply_sheet_loaded(1, Ok(stub_sheet(7, 2)));
         let sheet = v.active_sheet().expect("加载完成后应有数据");
         assert_eq!(sheet.total_rows, 7);
