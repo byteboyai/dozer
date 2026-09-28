@@ -155,6 +155,30 @@ pub(crate) async fn resolve_binary_path(bin: &str) -> Option<String> {
     {
         return None;
     }
+
+    // Finder/launchd processes often have a system-only PATH, and shell rc
+    // files may be skipped or behave differently without a terminal. Probe
+    // the inherited PATH plus the conventional user/package-manager bin
+    // directories directly before consulting a shell. In particular,
+    // v8agent is installed into ~/.local/bin by its normal install flow.
+    let home = dozer_core::agent_paths::home_dir();
+    let mut search_dirs: Vec<std::path::PathBuf> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    search_dirs.extend([
+        home.join(".local/bin"),
+        home.join(".cargo/bin"),
+        std::path::PathBuf::from("/opt/homebrew/bin"),
+        std::path::PathBuf::from("/usr/local/bin"),
+    ]);
+    if let Some(path) = search_dirs
+        .into_iter()
+        .map(|dir| dir.join(bin))
+        .find(|path| path.is_file())
+    {
+        return Some(path.to_string_lossy().into_owned());
+    }
+
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
     let output = tokio::process::Command::new(&shell)
         .arg("-ilc")
