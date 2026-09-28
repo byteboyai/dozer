@@ -766,14 +766,7 @@ pub fn branch_picker_popup(
     let current = ws_state.current_branch.as_deref();
     // 当前分支是否带未提交改动(dirty)?是则锁定其余分支(禁用切换)并给
     // 当前分支行追加 "(Uncommitted)"。
-    let is_dirty = ws_state
-        .file_tree
-        .as_ref()
-        .map(|t| t.root().to_path_buf())
-        .as_deref()
-        .and_then(|r| ws_state.dir_statuses.get(r).copied())
-        .filter(|st| *st != delivery::TreeState::Ignored)
-        .is_some();
+    let is_dirty = ws_state.git_dirty();
     // dirty → 除当前分支外的其余分支全部置灰禁用。
     let lock_others = is_dirty;
     // 面板项/间隔统一走 `crate::chrome::menu`(样式基准即文件树右键菜单)。

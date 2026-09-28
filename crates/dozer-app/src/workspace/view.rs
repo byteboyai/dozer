@@ -282,6 +282,53 @@ pub(crate) fn agent_picker_items() -> Vec<crate::chrome::native_menu::Item<Messa
     crate::menu_spec::to_native(agent_picker_spec())
 }
 
+/// 分支切换原生菜单条目(文件树 git 底栏 / git log 面板两处版本选择共用)
+/// ——样式对齐 tab 组下拉菜单(`tab_overflow_items`):当前分支 CREAM 文字,
+/// 标题前置固定图标列里的 `>`(`ChevronRight`,CREAM),其余行 BODY 且不画
+/// 箭头;工作区有未提交改动(`dirty`)时除当前分支外全部 DIM 置灰禁用
+/// (dirty 下切分支会被 git 拒绝,提前锁定),当前分支追加 "(Uncommitted)"
+/// 提示——文案沿用 `files.rs::branch_picker_popup` 的既有口径。仅 macOS 编译。
+#[cfg(target_os = "macos")]
+pub(crate) fn branch_picker_items<Msg: Clone>(
+    current: Option<&str>,
+    branches: &[String],
+    dirty: bool,
+    on_switch: impl Fn(String) -> Msg,
+) -> Vec<crate::chrome::native_menu::Item<Msg>> {
+    let colors = byteui::theme::color::current();
+    branches
+        .iter()
+        .map(|name| {
+            let is_current = Some(name.as_str()) == current;
+            let mut label = name.clone();
+            if is_current && dirty {
+                label.push_str("(Uncommitted)");
+            }
+            let (color, icon, icon_color) = if is_current {
+                (
+                    colors.cream,
+                    Some(IconKind::ChevronRight),
+                    Some(colors.cream),
+                )
+            } else if dirty {
+                // 置灰行必须显式给 DIM——`MenuItemView` 只按调用方给的颜色
+                // 画字,`enabled:false` 只负责不接 hover/点击,不会自动变灰。
+                (colors.dim, None, None)
+            } else {
+                (colors.body, None, None)
+            };
+            crate::chrome::native_menu::Item::Entry {
+                icon,
+                icon_color,
+                label,
+                color,
+                enabled: is_current || !dirty,
+                msg: on_switch(name.clone()),
+            }
+        })
+        .collect()
+}
+
 /// Agent 选择器菜单内容——native(`agent_picker_items`)和 iced fallback
 /// (`agent_picker_popup`)共用同一份数据，只在这里组装一次。
 pub(crate) fn agent_picker_spec() -> MenuSpec<Message> {

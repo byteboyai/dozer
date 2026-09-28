@@ -2750,37 +2750,76 @@ impl App {
                 self.update(Message::RowDragStart(RowDivider::GitLogFileDiffSplit));
             }
             Message::GitLog(git_log::Message::BranchPickerOpen) => {
-                // 先把"展开"这个状态位落地(纯状态机部分仍走 update,不跳过),
-                // 首次展开且还没缓存过分支列表时,顺带异步查一次本地分支。
-                let handle = self.handle.clone();
-                let proxy = self.proxy.clone();
-                let emit = move |m| {
-                    let _ = proxy.send_event(Message::GitLog(m));
-                };
-                let needs_fetch = self.git_log.branches_is_empty();
-                git_log::update(
-                    &mut self.git_log,
-                    git_log::Message::BranchPickerOpen,
-                    &handle,
-                    emit.clone(),
-                );
-                if needs_fetch
-                    && let Some(repo_path) = self
-                        .active_workspace()
-                        .and_then(|ws| ws.active_project_path())
+                #[cfg(target_os = "macos")]
                 {
-                    self.handle.spawn(async move {
-                        let repo_path2 = repo_path.clone();
-                        let (branches, dirty) = tokio::task::spawn_blocking(move || {
-                            let branches =
-                                crate::delivery::local_branches(&repo_path2).unwrap_or_default();
-                            let dirty = crate::delivery::is_dirty(&repo_path2);
-                            (branches, dirty)
-                        })
-                        .await
-                        .unwrap_or_default();
-                        emit(git_log::Message::BranchesLoaded(repo_path, branches, dirty));
-                    });
+                    // macOS:版本选择菜单直接弹原生 NSMenu(与 tab 组下拉/
+                    // 文件树分支菜单同款,2026-09-28),选中即转 `BranchSwitch`
+                    // 走下方既有 checkout 回路。原生菜单是同步模态的,没有
+                    // "先弹层、列表异步落地再填充"的窗口,故首次展开(分支
+                    // 列表还没缓存)时直接在主线程同步查一次本地分支——纯
+                    // 本地 git refs 读取,毫秒级,可接受。
+                    if self.git_log.branches_is_empty()
+                        && let Some(repo_path) = self
+                            .active_workspace()
+                            .and_then(|ws| ws.active_project_path())
+                    {
+                        let branches =
+                            crate::delivery::local_branches(&repo_path).unwrap_or_default();
+                        let dirty = crate::delivery::is_dirty(&repo_path);
+                        git_log::update(
+                            &mut self.git_log,
+                            git_log::Message::BranchesLoaded(repo_path, branches, dirty),
+                            &self.handle,
+                            |_| {},
+                        );
+                    }
+                    let (head_branch, branches, dirty) = self.git_log.branch_picker_snapshot();
+                    let last_cursor = self.last_cursor;
+                    let items = crate::workspace::branch_picker_items(
+                        head_branch.as_deref(),
+                        &branches,
+                        dirty,
+                        |name| Message::GitLog(git_log::Message::BranchSwitch(name)),
+                    );
+                    if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
+                        self.update(msg);
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    // 非 macOS:iced 弹层兜底——先把"展开"状态位落地(纯状态
+                    // 机部分仍走 update),首次展开且还没缓存过分支列表时,
+                    // 顺带异步查一次本地分支。
+                    let handle = self.handle.clone();
+                    let proxy = self.proxy.clone();
+                    let emit = move |m| {
+                        let _ = proxy.send_event(Message::GitLog(m));
+                    };
+                    let needs_fetch = self.git_log.branches_is_empty();
+                    git_log::update(
+                        &mut self.git_log,
+                        git_log::Message::BranchPickerOpen,
+                        &handle,
+                        emit.clone(),
+                    );
+                    if needs_fetch
+                        && let Some(repo_path) = self
+                            .active_workspace()
+                            .and_then(|ws| ws.active_project_path())
+                    {
+                        self.handle.spawn(async move {
+                            let repo_path2 = repo_path.clone();
+                            let (branches, dirty) = tokio::task::spawn_blocking(move || {
+                                let branches = crate::delivery::local_branches(&repo_path2)
+                                    .unwrap_or_default();
+                                let dirty = crate::delivery::is_dirty(&repo_path2);
+                                (branches, dirty)
+                            })
+                            .await
+                            .unwrap_or_default();
+                            emit(git_log::Message::BranchesLoaded(repo_path, branches, dirty));
+                        });
+                    }
                 }
             }
             Message::GitLog(git_log::Message::BranchSwitch(name)) => {
@@ -3081,6 +3120,30 @@ impl App {
                     self.update(Message::Files(files::Message::Toggle(path)));
                 } else {
                     self.update(Message::PreviewOpenPath(path));
+                }
+            }
+            #[cfg(target_os = "macos")]
+            Message::Files(files::Message::BranchPickerOpen) => {
+                // macOS:文件树 git 底栏的版本选择菜单直接弹原生 NSMenu(与
+                // tab 组下拉/git log 面板同款,2026-09-28)——`files::update`
+                // 的 app_state 够不到内核 `last_cursor`,故与
+                // `GitLog(BranchPickerOpen)` 一样在内核拦截。选中经
+                // `Message::Files(BranchSwitch)` 走既有 checkout 回路。iced
+                // 弹层只在非 macOS 兜底平台保留。
+                let Some(project_id) = self.active_project_id else {
+                    return;
+                };
+                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+                    return;
+                };
+                let items = crate::workspace::branch_picker_items(
+                    ws.files.current_branch.as_deref(),
+                    &ws.files.git_branches,
+                    ws.files.git_dirty(),
+                    files::Message::BranchSwitch,
+                );
+                if let Some(msg) = crate::chrome::native_menu::show(items, self.last_cursor) {
+                    self.update(Message::Files(msg));
                 }
             }
             Message::Files(msg) => {

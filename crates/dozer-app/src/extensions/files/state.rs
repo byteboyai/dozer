@@ -612,6 +612,22 @@ impl WorkspaceState {
         self.branch_picker_open
     }
 
+    /// 工作区是否有未提交改动——项目根目录的聚合 git 状态非 `Ignored` 即有。
+    /// 分支切换菜单用:dirty 时锁定除当前分支外的其余分支(dirty 下切分支会
+    /// 被 git 拒绝),并给当前分支追加 "(Uncommitted)" 提示。原生菜单
+    /// (`files::update` 的 `BranchPickerOpen`)与 iced 弹层
+    /// (`branch_picker_popup`)共用这一份判断。
+    pub(crate) fn git_dirty(&self) -> bool {
+        self.file_tree
+            .as_ref()
+            .map(|t| t.root().to_path_buf())
+            .as_deref()
+            .and_then(|r| self.dir_statuses.get(r).copied())
+            // 聚合时忽略被忽略文件,`Some` 即真实未提交改动。
+            .filter(|st| *st != crate::delivery::TreeState::Ignored)
+            .is_some()
+    }
+
     /// 供内核 `Message::PreviewOpenPath` 处理器调用——打开预览的同时把该
     /// 文件标记为项目树里的"选中"行(点击文件行→打开预览→该行高亮,是
     /// 现状既有的联动效果,不是这次重构新增的)。

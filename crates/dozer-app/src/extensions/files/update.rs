@@ -264,7 +264,13 @@ pub fn update(
             ws_state.git_branches = info.branches;
         }
         Message::BranchPickerOpen => {
-            ws_state.branch_picker_open = true;
+            // macOS 由内核 `App::update` 拦截(`files::update` 的 app_state
+            // 够不到内核 `last_cursor`)直接弹原生 NSMenu;这里只剩非 macOS
+            // 平台的 iced 弹层兜底(`branch_picker_popup`)。
+            #[cfg(not(target_os = "macos"))]
+            {
+                ws_state.branch_picker_open = true;
+            }
             ws_state.git_error = None;
         }
         Message::BranchPickerClose => {

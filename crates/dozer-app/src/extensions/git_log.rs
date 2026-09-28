@@ -509,6 +509,20 @@ impl State {
     pub(crate) fn set_branch_switch_pending(&mut self, pending: bool) {
         self.branch_switch_pending = pending;
     }
+
+    /// 内核(macOS 原生分支菜单,`App::update` 拦截 `BranchPickerOpen` 时)
+    /// 需要的快照:`(HEAD 分支名, 本地分支列表, 工作区是否 dirty)`。
+    /// `head_branch` 从 commit 快照取(detached HEAD 时为 `None`)。
+    pub(crate) fn branch_picker_snapshot(&self) -> (Option<String>, Vec<String>, bool) {
+        (
+            self.cache
+                .as_ref()
+                .and_then(|c| c.head_branch())
+                .map(str::to_string),
+            self.branches.clone(),
+            self.dirty,
+        )
+    }
 }
 
 /// 处理 `SelectCommit`/`DetailLoaded`/`SnapshotLoaded` 三种消息。
