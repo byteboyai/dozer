@@ -1387,12 +1387,12 @@ pub fn files_move_card(
             button(
                 text("确定")
                     .size(byteui::theme::font::body())
-                    .color(byteui::theme::color::current().gold)
+                    .color(byteui::theme::color::current().cream)
             )
             .on_press(Message::MoveConfirm)
             .padding([6, 12])
             .style(crate::dialog::action_button_style(
-                byteui::theme::color::current().gold
+                byteui::theme::color::current().cream
             )),
         ]
         .spacing(8)

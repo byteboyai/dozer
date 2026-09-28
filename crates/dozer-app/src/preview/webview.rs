@@ -55,9 +55,13 @@ pub fn encode_component(s: &str) -> String {
 /// 走 Acceptance 式 iced 原生 pane"的分叉预留一个函数级插入点——不引入
 /// trait/注册表,YAGNI。
 ///
-/// 文本文件(`is_editable_extension`)额外挂 `&ln=1`:host.html 读到后给
-/// flyfish 的 text 渲染器开 `options.text.lineNumbers`,预览里显示行号
-///(图片/PDF 渲染器不认这个 option,挂了也无副作用)。
+/// 文本文件(`is_editable_extension`)额外挂两个参数:
+/// - `&ln=1`:host.html 读到后给 flyfish 的 text 渲染器开
+///   `options.text.lineNumbers`,预览里显示行号(图片/PDF 渲染器不认这个
+///   option,挂了也无副作用)。
+/// - `&fs=<px>`:预览字号跟随终端(单一真相源 `terminal_font::size()`),
+///   host.html 读到后用注入的 CSS 把 `.markdown-body` 缩到一致大小,使
+///   Markdown 预览与终端字号统一。缺省/异常值不挂,保持 flyfish 默认。
 ///
 /// `&theme=light|dark` 让预览渲染跟随 dozer 当前配色方案(单一真相源
 /// `byteui::theme::color::current_scheme()`)——host.html 读它设置
@@ -71,6 +75,9 @@ pub(crate) fn flyfish_url(path: &std::path::Path) -> String {
     );
     if is_editable_extension(path) {
         u.push_str("&ln=1");
+        // 文本/Markdown 预览字号跟随终端,与终端保持一致(`terminal_font::size()`
+        // 已是唯一真相源,如 assets/theme/terminal.json 的 14.0)。
+        u.push_str(&format!("&fs={}", crate::theme::terminal_font::size()));
     }
     u
 }

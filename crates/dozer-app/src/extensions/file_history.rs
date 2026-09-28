@@ -790,12 +790,12 @@ fn rollback_button<'a>(
     button(
         text("回滚")
             .size(byteui::theme::font::label())
-            .color(byteui::theme::color::current().gold),
+            .color(byteui::theme::color::current().cream),
     )
     .on_press_maybe((!disabled).then_some(Message::RollbackRequest(oid)))
     .padding([4, 10])
     .style(crate::dialog::action_button_style(
-        byteui::theme::color::current().gold,
+        byteui::theme::color::current().cream,
     ))
     .into()
 }

@@ -829,7 +829,7 @@ fn host_card<'a>(
             button(
                 text("信任并重试")
                     .size(byteui::theme::font::caption())
-                    .color(byteui::theme::color::current().gold),
+                    .color(byteui::theme::color::current().cream),
             )
             .on_press(Message::TrustHostKey(host.id.clone()))
             .padding([4, 8])
@@ -1247,7 +1247,7 @@ pub fn ssh_host_card<'a>(
     {
         col = col.push(text_btn(
             "信任并重试",
-            byteui::theme::color::current().gold,
+            byteui::theme::color::current().cream,
             Message::TrustHostKey(id.clone()),
         ));
     }

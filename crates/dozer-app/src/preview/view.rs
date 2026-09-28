@@ -3389,12 +3389,12 @@ mod tests {
         assert_eq!(specs.len(), 2);
         assert_eq!(
             specs[0].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fa%20b.md&theme=dark&ln=1"
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fa%20b.md&theme=dark&ln=1&fs=14"
         );
         assert!(!specs[0].visible, "非激活 tab 不可见");
         assert_eq!(
             specs[1].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fc.md&theme=dark&ln=1"
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fc.md&theme=dark&ln=1&fs=14"
         );
         assert!(specs[1].visible);
     }
@@ -3408,16 +3408,16 @@ mod tests {
         let specs = p.desired_webviews();
         assert_eq!(
             specs[0].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&theme=dark&ln=1&_r=1"
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&theme=dark&ln=1&fs=14&_r=1"
         );
         assert_eq!(
             specs[1].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&theme=dark&ln=1"
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&theme=dark&ln=1&fs=14"
         );
         p.bump_reload(id0);
         assert_eq!(
             p.desired_webviews()[0].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&theme=dark&ln=1&_r=2"
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&theme=dark&ln=1&fs=14&_r=2"
         );
         // 未知 id 是 no-op,不 panic。
         p.bump_reload(9999);
@@ -3449,7 +3449,7 @@ mod tests {
         assert_eq!(p.tabs()[2].reload_nonce, 1, "b.md 命中,webview 推进");
         let specs = p.desired_webviews();
         assert_eq!(
-            specs[1].url, "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&theme=dark&ln=1&_r=1",
+            specs[1].url, "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&theme=dark&ln=1&fs=14&_r=1",
             "命中的 webview 换 URL 重载"
         );
 
@@ -3553,12 +3553,12 @@ mod tests {
         assert_eq!(p.active_idx(), 1);
         assert_eq!(
             p.desired_webviews()[0].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&theme=dark&ln=1",
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&theme=dark&ln=1&fs=14",
             "切到异 tab 的 webview 不该推进 reload_nonce(保滚动位置)"
         );
         assert_eq!(
             p.desired_webviews()[1].url,
-            "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&theme=dark&ln=1",
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&theme=dark&ln=1&fs=14",
             "非目标 tab 不受影响"
         );
         assert_eq!(p.tabs()[1].reload_nonce, 0);

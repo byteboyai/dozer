@@ -27,6 +27,43 @@ use winit::window::Window;
 
 use crate::platform::overlay_gpu::OverlayGpu;
 
+/// 挂成主窗口子窗口后,在 macOS 上开启 `setAcceptsMouseMovedEvents:`。
+///
+/// **为什么必须做**:overlay 是无装饰(`with_decorations(false)`)+逐像素透明
+/// (`with_transparent(true)`)的主窗口子 `NSWindow`。macOS 上这类窗口默认
+/// **不会**收到 `mouseMoved` 事件,于是 winit 永远不会产生
+/// `WindowEvent::CursorMoved`,导致 iced 内部的 `mouse::Cursor` 始终停在
+/// `Unavailable` —— 这不仅让按钮 hover 样式失效,更会让 iced 无法对点击做
+/// 命中测试(见 Request 9 用户反馈"hover 和点击都不生效")。开启该项后
+/// `CursorMoved` 才会正常派发,hover 与点击一并恢复。
+///
+/// 非 macOS 平台没有这套机制,winit 自带 `CursorMoved`,无需任何处理。
+#[cfg(target_os = "macos")]
+pub(crate) fn enable_overlay_mouse_moved_events(window: &Window) {
+    use objc2_app_kit::NSView;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::AppKit(ah) = handle.as_raw() else {
+        return;
+    };
+    // 安全:`ns_view` 取自刚创建、仍存活的合法窗口,只借它拿 `window`,
+    // 不持有/释放任何对象。
+    let ns_view: &NSView = unsafe { &*(ah.ns_view.as_ptr() as *mut NSView) };
+    let Some(ns_window) = ns_view.window() else {
+        return;
+    };
+    // 安全:窗口存活期内调用一次即可(`open_child_window` 建窗后立即调),
+    // 只翻转一个输入事件开关,不影响任何对象生命周期。
+    ns_window.setAcceptsMouseMovedEvents(true);
+}
+
+/// 非 macOS 平台桩:无操作。
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn enable_overlay_mouse_moved_events(_window: &Window) {}
+
 /// 主窗口外框物理位置 + 物理尺寸 → overlay 窗口应放的物理位置与物理尺寸——
 /// 覆盖整个主窗口客户区(不再只等于卡片大小,见上面模块文档的改造说明)。
 pub(crate) fn full_window_overlay_bounds(
@@ -147,6 +184,7 @@ pub(crate) fn open_child_window(
     // `Arc<Window>`),本函数返回前主窗口不会被 drop。
     let attrs = unsafe { attrs.with_parent_window(Some(parent_handle)) };
     let window = Arc::new(el.create_window(attrs).expect("create overlay window"));
+    enable_overlay_mouse_moved_events(&window);
     window.focus_window();
     window
 }

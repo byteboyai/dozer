@@ -515,8 +515,9 @@ fn root_dir_row<'a>(
     ))
     .on_press(on_pick)
     .padding(4)
-    .style(
-        move |_t: &iced_widget::Theme, s: button::Status| button::Style {
+    .style(move |_t: &iced_widget::Theme, s: button::Status| {
+        let hovered = matches!(s, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
             background: match s {
                 button::Status::Hovered | button::Status::Pressed => Some(
                     Color {
@@ -527,13 +528,16 @@ fn root_dir_row<'a>(
                 ),
                 _ => None,
             },
+            // hover 时边框变金,与弹窗其它操作按钮(创建/取消/去设置连接…)
+            // 同一套 hover 语言:静止态 1px 描边、`colors.border`,悬浮变 `gold`。
             border: Border {
-                width: 0.0,
-                ..Border::default()
+                color: if hovered { colors.gold } else { colors.border },
+                width: 1.0,
+                radius: 4.0.into(),
             },
             ..button::Style::default()
-        },
-    );
+        }
+    });
     byteui::form::input_text::view_with_suffix(
         "选择项目根目录…",
         value,
@@ -797,7 +801,7 @@ pub(crate) fn action_button_hover_style(
             } else {
                 colors.panel.into()
             }),
-            text_color: if hovered { colors.gold } else { text_color },
+            text_color: if hovered { colors.cream } else { text_color },
             border: Border {
                 color: if hovered { colors.gold } else { colors.border },
                 width: 1.0,
@@ -811,7 +815,7 @@ pub(crate) fn action_button_hover_style(
 fn primary_button(label: &'static str, msg: Message, busy: bool) -> Element<'static> {
     let btn = button(text(if busy { "处理中…" } else { label }).size(byteui::theme::font::body()))
         .style(action_button_hover_style(
-            byteui::theme::color::current().gold,
+            byteui::theme::color::current().cream,
         ))
         .padding([8, 20]);
     if busy {

@@ -443,12 +443,12 @@ pub(crate) fn search_card<'a>(
     let submit_btn = button(
         text(if ws.running { "搜索中…" } else { "搜索" })
             .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().gold),
+            .color(byteui::theme::color::current().cream),
     )
     .on_press(Message::QuerySubmit)
     .padding([6, 12])
     .style(crate::dialog::action_button_style(
-        byteui::theme::color::current().gold,
+        byteui::theme::color::current().cream,
     ));
 
     let query_row = row![query_box(ws), submit_btn]

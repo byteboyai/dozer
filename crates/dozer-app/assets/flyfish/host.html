@@ -55,6 +55,19 @@
   if (new URLSearchParams(location.search).get('ln') === '1') {
     el.setAttribute('options', JSON.stringify({ text: { lineNumbers: true } }));
   }
+  // 预览字号跟随终端:URL 的 &fs= 由 Rust 侧按 terminal_font::size() 传入
+  // (像素,如 14)。命中 .markdown-body 只缩 Markdown 正文,不动纯文本/图片/
+  // PDF 渲染器;缺省/异常值不注入,保持 flyfish 默认 16px。切主题时 webview
+  // 重新导航会带上新参数,故主题重载后依旧生效。
+  const fsRaw = new URLSearchParams(location.search).get('fs');
+  if (fsRaw) {
+    const fsPx = parseFloat(fsRaw);
+    if (Number.isFinite(fsPx) && fsPx > 0) {
+      const fsStyle = document.createElement('style');
+      fsStyle.textContent = '.markdown-body{font-size:' + fsPx + 'px !important;}';
+      document.head.appendChild(fsStyle);
+    }
+  }
   document.body.appendChild(el);
 </script>
 <script>
