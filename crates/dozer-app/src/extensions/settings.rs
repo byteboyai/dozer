@@ -5,7 +5,7 @@
 use crate::git_accounts::{self, GitAccountsState, GitProvider};
 use byteui::interaction::icons;
 use byteui::theme::color::ColorScheme;
-use iced_widget::core::{Alignment, Element, Length, Padding};
+use iced_widget::core::{Alignment, Border, Element, Length, Padding};
 use iced_widget::{MouseArea, Space, button, column, container, row, text};
 use std::collections::HashMap;
 
@@ -69,8 +69,9 @@ pub struct State {
     pub advanced: AdvancedState,
     /// 左栏当前选中的 tab(主题 / Git 账户 / 高级),决定右侧内容区显示哪一组。
     pub selected: SettingsTab,
-    /// 左栏 tab 的 hover 态,驱动 `dialog_tab_style` 的高亮(未选中 hover 时
-    /// 浮现 TAB_HOVER 胶囊 + 标题 DIM→GOLD),与「新建项目」弹窗同一套视觉。
+    /// 左栏 tab 的 hover 态(已不驱动任何视觉——「新建项目」左侧
+    /// `sidebar_entry` 本身无 hover 高亮,设置弹窗左栏与之保持一致,所以
+    /// 这里仅保留事件埋点,样式上不浮 TAB_HOVER 胶囊、标题也不 DIM→GOLD)。
     tab_hover: Option<SettingsTab>,
     /// 右上角关闭图标按钮的悬停态——本弹窗渲染在独立原生窗口
     /// (`SettingsOverlay`),不接入 `App` 的全局 `hover_anims` 定时动画表
@@ -603,44 +604,37 @@ fn advanced_row(
 }
 
 /// 设置弹窗左栏单枚切换 tab(主题 / Git 账户 / 高级),样式与「新建项目」
-/// 弹窗左侧 tab 完全一致:caption 字号 + 选中 CREAM、未选中 DIM→GOLD 的
-/// 配色公式,容器走 `project_create::dialog_tab_style`(半径 8 圆角)。
+/// 弹窗左侧 `sidebar_entry` 完全一致:caption 字号,选中 CARD 实底、未选中
+/// BG 实底,8 圆角胶囊(无边框),选中 CREAM、未选中 DIM,无 hover 配色漂移
+/// (与「新建项目」左侧 tab 同一套观感)。
 fn settings_tab_button(
     label: &'static str,
     active: bool,
-    hover_t: f32,
+    _hover_t: f32,
     on_press: Message,
     on_enter: impl Fn(bool) -> Message + 'static,
     on_exit: impl Fn(bool) -> Message + 'static,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = byteui::theme::color::current();
-    let title_color = if active {
-        colors.cream
-    } else {
-        byteui::theme::color::mix(colors.dim, colors.gold, hover_t)
-    };
-    let content = text(label.to_string())
-        .font(crate::app::top_bar_font())
+    let label_el = text(label.to_string())
         .size(byteui::theme::font::caption())
-        .color(title_color);
-    let el: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        MouseArea::new(content)
-            .on_press(on_press)
-            .on_enter(on_enter(true))
-            .on_exit(on_exit(false))
-            .interaction(iced_widget::core::mouse::Interaction::Pointer)
-            .into();
-    container(el)
-        .padding(Padding {
-            top: 6.0,
-            right: 12.0,
-            bottom: 6.0,
-            left: 12.0,
-        })
+        .color(if active { colors.cream } else { colors.dim });
+    let cell = container(label_el)
+        .padding([8, 12])
         .width(Length::Fill)
-        .style(crate::extensions::project_create::dialog_tab_style(
-            active, hover_t,
-        ))
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(if active { colors.card } else { colors.bg }.into()),
+            border: Border {
+                radius: 8.0.into(),
+                ..Border::default()
+            },
+            ..container::Style::default()
+        });
+    MouseArea::new(cell)
+        .on_press(on_press)
+        .on_enter(on_enter(true))
+        .on_exit(on_exit(false))
+        .interaction(iced_widget::core::mouse::Interaction::Pointer)
         .into()
 }
 
@@ -699,7 +693,8 @@ pub fn settings_card(
         row![title, Space::new().width(Length::Fill), close_icon].align_y(Alignment::Center);
 
     // 左栏三组切换 tab(主题 / Git 账户 / 高级),样式与「新建项目」弹窗左侧
-    // tab 一致;hover 二值驱动 `dialog_tab_style` 高亮。
+    // `sidebar_entry` 完全一致(选中 CARD 实底、未选中 BG 实底、8 圆角、无
+    // 边框、无 hover 配色漂移)。
     let tab_hover_t = |tab: SettingsTab| -> f32 {
         if state.tab_hover == Some(tab) {
             1.0

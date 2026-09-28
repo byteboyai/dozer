@@ -3,8 +3,6 @@
 use iced_widget::core::widget;
 use iced_widget::core::{Border, Element, Length};
 use iced_widget::text_input::{self, Status};
-use std::cell::Cell;
-use std::rc::Rc;
 
 /// [`view`] 的实装:把真 `text_input` 按默认 UI 字号(box 缺省 `body`)烤出来。
 #[allow(clippy::too_many_arguments)]
@@ -303,25 +301,26 @@ fn view_with_suffix_at_size_flags<'a, Message: Clone + 'a>(
     suffix: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = crate::theme::color::current();
-    // framed 态边框画在外层 container 上,而 iced container 的 style 闭包拿不到
-    // hover 状态——用共享 Cell 由内层 text_input 的 `Status` 回填(container 先于
-    // 子控件绘制,故晚一帧生效,肉眼不可感知)。unframed 时边框归调用方,置位无人
-    // 读,无副作用。
-    let hovered_flag = Rc::new(Cell::new(false));
-    let flag_for_input = Rc::clone(&hovered_flag);
+    // framed 态边框画在外层 container 上——iced 0.14 `container::Style` 闭包
+    // 签名是 `Fn(&Theme) -> Style`,没有 `Status` 参数,读不到子控件的 hover
+    // 态(不像 `button`/`text_input` 自身的 style 闭包能拿到)。曾经用一个
+    // `Rc<Cell<bool>>` 在内层 `text_input` 的 style 闭包里回填、指望外层
+    // `container` 读到——但视图树是每帧从状态整体重建的全新实例,`Cell`
+    // 初值恒为 `false`,且同一帧内 `container.draw()` 先于子控件 `draw()`
+    // 执行,根本读不到子控件当帧才写入的值(不是"晚一帧"而是永远读不到),
+    // 边框因此永不描金(2026-09-28 用户反馈:根目录输入框 hover 不生效)。
+    // 边框高亮改回完全交给调用方的 `highlight`(与本函数原有文档注释的设计
+    // 一致):`root_dir_row` 外套 `MouseArea::on_enter`/`on_exit` 驱动一个
+    // 显式 hover 态字段传进来,不再指望 `text_input::Status` 回传。
     let mut input = iced_widget::text_input(placeholder, value)
         .secure(secure)
         .on_input(on_input)
         .on_submit_maybe(on_submit)
         .size(size)
         .padding(0)
-        .style(move |_theme: &iced_widget::Theme, status: Status| {
+        .style(move |_theme: &iced_widget::Theme, _status: Status| {
             // 边框/底色天然透明——framed 时由外层 container 画,unframed 时由
             // 调用方的整块 card 垫底,均不进 text_input 自身。
-            flag_for_input.set(matches!(
-                status,
-                Status::Hovered | Status::Focused { is_hovered: true }
-            ));
             text_input::Style {
                 background: iced_widget::core::Color::TRANSPARENT.into(),
                 border: Border {
@@ -351,8 +350,8 @@ fn view_with_suffix_at_size_flags<'a, Message: Clone + 'a>(
         return iced_widget::container(row).width(Length::Fill).into();
     }
     // padding 8 对齐非 bare `view` 里 text_input 自带的 `.padding(8)`,
-    // 条高观感不因内嵌后缀而变。hover 描金由 `hovered_flag` 驱动(见上方
-    // `flag_for_input` 处注释)。
+    // 条高观感不因内嵌后缀而变。hover/聚焦描金完全由调用方的 `highlight`
+    // 决定(见上方大段注释)。
     iced_widget::container(row)
         .width(Length::Fill)
         .padding(8)
@@ -360,7 +359,7 @@ fn view_with_suffix_at_size_flags<'a, Message: Clone + 'a>(
             move |_t: &iced_widget::Theme| iced_widget::container::Style {
                 background: Some(colors.card.into()),
                 border: Border {
-                    color: if highlight || hovered_flag.get() {
+                    color: if highlight {
                         colors.gold
                     } else {
                         colors.border

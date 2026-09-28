@@ -140,6 +140,20 @@ pub struct State {
     /// (未选中 hover 时浮现 TAB_HOVER 胶囊 + 标题 DIM→GOLD),与文件预览
     /// 窗口页签同一套视觉。
     pub tab_hover: Option<Tab>,
+    /// 「项目根目录」输入框(`root_dir_row`)的 hover 态。该输入框把选目录
+    /// 按钮内嵌进同一圈描边,`byteui::form::input_text::view_with_suffix`
+    /// 的边框由外层 `container` 画,而 iced 0.14 `container::Style` 闭包
+    /// 拿不到子控件的 `text_input::Status`(不像 `button`/`text_input` 自身
+    /// 有 `Status` 参数)——曾经用一个 `Rc<Cell<bool>>` 在 `text_input` 的
+    /// style 闭包里回填、指望 `container` 读到"上一帧"的值,但视图树是
+    /// 每帧从状态重建的全新实例,`Cell` 初值恒为 `false`,且同一帧内
+    /// `container.draw()` 先于子控件 `draw()` 执行,根本读不到子控件当帧
+    /// 写入的值——不是「晚一帧」而是永远读不到,故边框一直不会描金
+    /// (2026-09-28 用户反馈)。改回本模块统一的显式 hover 态
+    /// (同 `close_hover`/`tab_hover`):外层套 `MouseArea::on_enter`/
+    /// `on_exit` 驱动这个字段,`root_dir_row` 把它当 `highlight` 传给
+    /// `view_with_suffix`。
+    pub root_dir_hover: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +164,9 @@ pub enum Message {
     CloseHover(bool),
     /// 两个视图切换 tab 的 hover 态,驱动与文件预览窗口页签一致的高亮。
     TabHover(Option<Tab>),
+    /// 「项目根目录」输入框整行(文本区 + 内嵌选目录按钮)的 hover 态,见
+    /// `State::root_dir_hover` 文档注释。
+    RootDirHover(bool),
     TabSelected(Tab),
     LocalRootDirChanged(String),
     LocalRootDirPick,
@@ -258,6 +275,10 @@ fn apply_field_message(state: &mut State, msg: &Message) -> bool {
         }
         Message::TabHover(h) => {
             state.tab_hover = *h;
+            true
+        }
+        Message::RootDirHover(h) => {
+            state.root_dir_hover = *h;
             true
         }
         Message::Close
@@ -410,7 +431,8 @@ pub fn update(
         | Message::CloneDescriptionAction(_)
         | Message::RepoListLoaded(..)
         | Message::CloseHover(_)
-        | Message::TabHover(_) => {
+        | Message::TabHover(_)
+        | Message::RootDirHover(_) => {
             unreachable!("已在 apply_field_message 或顶部处理")
         }
     }
@@ -541,6 +563,7 @@ fn field_label(label: &str) -> Element<'static> {
 
 fn root_dir_row<'a>(
     value: &'a str,
+    hovered: bool,
     on_change: impl Fn(String) -> Message + 'a,
     on_pick: Message,
 ) -> Element<'a> {
@@ -579,19 +602,23 @@ fn root_dir_row<'a>(
             ..button::Style::default()
         }
     });
-    byteui::form::input_text::view_with_suffix(
+    let field = byteui::form::input_text::view_with_suffix(
         "选择项目根目录…",
         value,
         false,
         None,
-        false,
+        hovered,
         None,
         on_change,
         folder_btn.into(),
-    )
+    );
+    MouseArea::new(field)
+        .on_enter(Message::RootDirHover(true))
+        .on_exit(Message::RootDirHover(false))
+        .into()
 }
 
-fn local_form_view(form: &LocalForm) -> Element<'_> {
+fn local_form_view(form: &LocalForm, root_dir_hover: bool) -> Element<'_> {
     let description_editor = byteui::form::text_area::view(
         &form.description,
         "项目描述…",
@@ -604,6 +631,7 @@ fn local_form_view(form: &LocalForm) -> Element<'_> {
         field_label("项目根目录"),
         root_dir_row(
             &form.root_dir,
+            root_dir_hover,
             Message::LocalRootDirChanged,
             Message::LocalRootDirPick
         ),
@@ -794,7 +822,7 @@ fn remote_repo_field(form: &CloneForm) -> Element<'_> {
     }
 }
 
-fn clone_form_view(form: &CloneForm) -> Element<'_> {
+fn clone_form_view(form: &CloneForm, root_dir_hover: bool) -> Element<'_> {
     let description_editor = byteui::form::text_area::view(
         &form.description,
         "项目描述…",
@@ -809,6 +837,7 @@ fn clone_form_view(form: &CloneForm) -> Element<'_> {
         field_label("项目根目录"),
         root_dir_row(
             &form.root_dir,
+            root_dir_hover,
             Message::CloneRootDirChanged,
             Message::CloneRootDirPick
         ),
@@ -876,8 +905,8 @@ fn primary_button(label: &'static str, msg: Message, busy: bool) -> Element<'sta
 
 pub(crate) fn project_create_card(state: &State) -> Element<'_> {
     let body = match state.tab {
-        Tab::Local => local_form_view(&state.local),
-        Tab::Clone => clone_form_view(&state.clone_form),
+        Tab::Local => local_form_view(&state.local, state.root_dir_hover),
+        Tab::Clone => clone_form_view(&state.clone_form, state.root_dir_hover),
     };
     let submit = match state.tab {
         Tab::Local => primary_button("创建项目", Message::SubmitLocal, state.busy),

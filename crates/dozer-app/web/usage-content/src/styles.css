@@ -106,6 +106,10 @@ html, body {
   display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
   height: 102px;
   flex: 1 1 0;
+  /* 允许压到比内容(柱顶数值标签)还窄,否则默认 min-width:auto 会把
+     每天的分组撑到各自内容的宽度——分组宽窄不一,柱子也就跟着宽窄不一
+     且无法随面板继续收窄。柱宽的下限由 .usage-bar 的 min-width:1px 兜底。 */
+  min-width: 0;
 }
 .usage-day-band .usage-tooltip { display: none; bottom: 100%; left: 50%; }
 .usage-day-band:hover .usage-tooltip { display: block; }
@@ -114,6 +118,14 @@ html, body {
 .usage-bar-value { font-size: 8px; color: var(--dim); }
 .usage-bar { border-radius: 4px 4px 0 0; width: 100%; min-width: 1px; }
 .usage-day-label { font-size: 8px; color: var(--dim); margin-top: 4px; }
+
+/* 逐日柱状图:分组宽度随面板宽度等分(见 .usage-day-band 的 min-width:0),
+   柱宽即分组宽度按 agent 数等分。分组窄到放不下柱顶数值标签时,隐藏标签
+   避免相邻数字互相挤成一团——精确值仍由 hover tooltip 提供。 */
+.usage-bar-groups { container-type: inline-size; }
+@container (max-width: 800px) {
+  .usage-bar-value { display: none; }
+}
 
 .usage-trend-svg-wrap { position: relative; height: 86px; }
 .usage-trend-dot {

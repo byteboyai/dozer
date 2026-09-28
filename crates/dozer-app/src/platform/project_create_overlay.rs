@@ -12,6 +12,8 @@ use std::sync::Arc;
 
 use iced_wgpu::wgpu;
 use iced_winit::conversion;
+use iced_winit::core::time::Instant;
+use iced_winit::core::window;
 use iced_winit::core::{Event, mouse};
 use iced_winit::runtime::user_interface::UserInterface;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
@@ -134,8 +136,12 @@ impl ProjectCreateOverlay {
             std::mem::take(&mut self.gpu.cache),
             &mut self.gpu.renderer,
         );
+        // 必须喂 `RedrawRequested` 而非空切片——见 `overlay_gpu.rs::redraw`
+        // 同一处注释,否则弹窗内 hover/focus 描边永远不生效。
         let (state, _) = interface.update(
-            &[],
+            &[Event::Window(
+                window::Event::RedrawRequested(Instant::now()),
+            )],
             self.cursor,
             &mut self.gpu.renderer,
             &mut self.gpu.clipboard,

@@ -19,6 +19,8 @@ use iced_wgpu::graphics::{Shell, Viewport};
 use iced_wgpu::{Engine, Renderer, wgpu};
 use iced_winit::Clipboard;
 use iced_winit::conversion;
+use iced_winit::core::time::Instant;
+use iced_winit::core::window;
 use iced_winit::core::{Color, Element, Event, Font, Pixels, Size, mouse};
 use iced_winit::runtime::user_interface::{self, UserInterface};
 use winit::event::WindowEvent;
@@ -171,8 +173,16 @@ impl OverlayGpu {
             std::mem::take(&mut self.cache),
             &mut self.renderer,
         );
+        // 必须喂一个 `RedrawRequested` 事件而非空切片:iced 的 `button`/
+        // `text_input` 只在处理这个事件时才把当帧算出的 hover/focused
+        // `Status` 提交进 `draw()` 读的缓存字段(其它事件只会在状态变化时
+        // `request_redraw`,不提交),空切片下 `draw()` 恒 fallback 到
+        // `Status::Disabled` 的样式,hover/focus 视觉永远不生效——同
+        // `window_events.rs` 主窗口重绘分支的写法。
         let (state, _) = interface.update(
-            &[],
+            &[Event::Window(
+                window::Event::RedrawRequested(Instant::now()),
+            )],
             cursor,
             &mut self.renderer,
             &mut self.clipboard,
