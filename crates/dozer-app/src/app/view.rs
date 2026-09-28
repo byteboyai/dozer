@@ -145,6 +145,23 @@ impl App {
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
+        } else if self.preview_context_menu.is_some() {
+            // 预览内选区右键 iced fallback(仅非 mac 会真的进入——mac 弹
+            // 原生菜单、不存状态)。dismiss 层同 Files 右键菜单的既有约定。
+            let dismiss = MouseArea::new(
+                container(column![])
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::PreviewSelectionMenuClose);
+            stack![
+                base,
+                dismiss,
+                files::preview_selection_context_menu_popup(&self.preview_context_menu)
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
         } else if ws.files.branch_picker_is_open() {
             // 分支切换弹层:窗口级浮层。下层铺一块透明 `MouseArea` 承接
             // "点弹层外的任何地方收起"(与右键菜单同款 dismiss 约定),弹层

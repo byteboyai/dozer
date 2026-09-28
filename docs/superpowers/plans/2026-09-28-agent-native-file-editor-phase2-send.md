@@ -800,7 +800,7 @@ git commit -m "feat(editor): intercept contextmenu on non-empty selection"
   模板拼接,含 Review Focus 的"选中内容含反引号/多行"场景);
   `Message::SendSelectionToAgent`。
 
-- [ ] **Step 1: 写 `selection_reference_text` 的失败测试**
+- [x] **Step 1: 写 `selection_reference_text` 的失败测试**
 
 在 `files/view.rs` 测试模块(同 Task 2 Step 1 的位置)新增:
 
@@ -834,12 +834,12 @@ fn selection_reference_text_does_not_mangle_backticks_or_newlines() {
 `pub(crate)` 已经够用,若是模块私有需要在 `preview/mod.rs`/相应位置提升
 可见性到 `pub(crate)`,先确认再写测试。）
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app selection_reference_text`
 Expected: FAIL,函数不存在。
 
-- [ ] **Step 3: 实现 `selection_reference_text`**
+- [x] **Step 3: 实现 `selection_reference_text`**
 
 `files/view.rs`,紧贴 `agent_context_reference_text` 之后:
 
@@ -860,12 +860,12 @@ pub(crate) fn selection_reference_text(
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app selection_reference_text`
 Expected: PASS。
 
-- [ ] **Step 5: `app/message.rs` 新增弹层状态结构体**
+- [x] **Step 5: `app/message.rs` 新增弹层状态结构体**
 
 紧邻 `ProjectLinkMenu`(约第 678 行):
 
@@ -886,7 +886,7 @@ pub(crate) struct PreviewSelectionContextMenu {
 }
 ```
 
-- [ ] **Step 6: `App` 结构体加字段 + 初始化**
+- [x] **Step 6: `App` 结构体加字段 + 初始化**
 
 `app/app.rs` 约第 375 行(`project_link_menu` 旁边):
 
@@ -900,7 +900,7 @@ pub(crate) preview_context_menu: Option<PreviewSelectionContextMenu>,
 preview_context_menu: None,
 ```
 
-- [ ] **Step 7: `App::update` 里新增 `EditorEvent::ContextMenuRequested` 分支**
+- [x] **Step 7: `App::update` 里新增 `EditorEvent::ContextMenuRequested` 分支**
 
 在 `app/update.rs:273` 附近那个 `match event.payload` 里,紧邻
 `EditorEvent::SelectionChanged` 分支之后新增(`tab`/`path`/`binding`/
@@ -945,7 +945,7 @@ EditorEvent::ContextMenuRequested {
 （`self.window_size` 的确切字段名/类型以仓库现有用法为准——搜索
 `self.window_size` 已有的其它调用点核对,若字段名不同按实际名称调整。）
 
-- [ ] **Step 8: 新增两个菜单构造函数(仿照 Files 的 native/iced 双版本)**
+- [x] **Step 8: 新增两个菜单构造函数(仿照 Files 的 native/iced 双版本)**
 
 已确认 `MenuSpec<Msg> = Vec<MenuSpecItem<Msg>>` 是泛型别名
 (`crates/dozer-app/src/menu_spec.rs:31`),`files/view.rs` 里
@@ -995,7 +995,7 @@ pub fn preview_selection_context_menu_items(
 }
 ```
 
-- [ ] **Step 8b: 写"预览选区菜单在无终端时置灰"的测试**
+- [x] **Step 8b: 写"预览选区菜单在无终端时置灰"的测试**
 
 镜像 Task 2 Step 11 对文件树菜单做的同款断言,这次测
 `preview_selection_context_menu_spec`(Step 8 新增的函数):
@@ -1047,7 +1047,7 @@ fn preview_selection_menu_enabled_with_agent_terminal() {
 跑 `cargo test -p dozer-app preview_selection_menu_` 确认先失败(函数/
 字段不存在)、实现 Step 8 后再通过。
 
-- [ ] **Step 9: 顶层新增 `Message::SendSelectionToAgent` 处理**
+- [x] **Step 9: 顶层新增 `Message::SendSelectionToAgent` 处理**
 
 `app/message.rs` 顶层 `Message` 枚举:
 
@@ -1094,7 +1094,7 @@ Message::PreviewSelectionMenuClose => {
 需要把 Step 3 的函数可见性从 `pub(crate)` 保持不变即可,同模块内直接
 `files::selection_reference_text` 调用。）
 
-- [ ] **Step 10: 触发菜单弹出——收到 `ContextMenuRequested` 后实际展示**
+- [x] **Step 10: 触发菜单弹出——收到 `ContextMenuRequested` 后实际展示**
 
 Step 7 只是存状态,还需要在存状态**之后**(同一分支末尾)按平台弹菜单:
 
@@ -1125,7 +1125,7 @@ Step 7 只是存状态,还需要在存状态**之后**(同一分支末尾)按平
 右键菜单的实际分支结构调整 Step 7/Step 10,不要额外引入"macOS 也存状态
 再读出"这个不必要的中间态。）
 
-- [ ] **Step 11: 多项目路由——已确认不需要新测试,原因记录如下**
+- [x] **Step 11: 多项目路由——已确认不需要新测试,原因记录如下**
 
 已核实 `crates/dozer-app/src/app/app.rs` 里没有任何测试直接构造一个
 完整多项目 `App` 去调用 `preview_desired`/`with_focused_project`——这个
@@ -1144,12 +1144,12 @@ Step 7 只是存状态,还需要在存状态**之后**(同一分支末尾)按平
 两处 handler 都只调用既有的 `self.term_paste(...)`,没有自己算"发去哪个
 项目",即完成核验,不需要额外构造集成测试。
 
-- [ ] **Step 12: `cargo test -p dozer-app` 全量跑通,`cargo clippy` 无新警告**
+- [x] **Step 12: `cargo test -p dozer-app` 全量跑通,`cargo clippy` 无新警告**
 
 Run: `cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets`
 Expected: 全部通过。
 
-- [ ] **Step 13: Commit**
+- [x] **Step 13: Commit**
 
 ```bash
 git add crates/dozer-app/src/app/ crates/dozer-app/src/extensions/files/view.rs
@@ -1193,7 +1193,7 @@ webview 隐藏判断(`self.files.context_menu_is_some() || tab_menu_covers_this`
   `preview_selection_context_menu_spec`、`Message::PreviewSelectionMenuClose`
 - Produces: 无(UI 终端节点)
 
-- [ ] **Step 1: 新增非 mac iced 弹层渲染函数**
+- [x] **Step 1: 新增非 mac iced 弹层渲染函数**
 
 已确认 `context_menu_popup` 的实际约定(`files/view.rs:1048-1055`):函数
 吃"容器状态的引用",内部自己 `let Some(menu) = &app_state.context_menu
@@ -1231,7 +1231,7 @@ pub fn preview_selection_context_menu_popup(
 }
 ```
 
-- [ ] **Step 2: 挂载点——`crates/dozer-app/src/app/view.rs:126`**
+- [x] **Step 2: 挂载点——`crates/dozer-app/src/app/view.rs:126`**
 
 已确认挂载点:`app/view.rs:126` 是
 `files::context_menu_popup(&self.files, &ws.files, &self.external_apps)`
@@ -1248,7 +1248,7 @@ files::preview_selection_context_menu_popup(&self.preview_context_menu),
 插入位置紧邻 `:126`/`:142` 两行菜单弹层之后,与它们同属一个 `stack!`
 调用里的元素列表。
 
-- [ ] **Step 3: `preview_desired` 新增 `preview_menu_covers_this` 判断**
+- [x] **Step 3: `preview_desired` 新增 `preview_menu_covers_this` 判断**
 
 `app/app.rs:3405` 附近,紧邻 `tab_menu_covers_this` 之后:
 
@@ -1270,7 +1270,7 @@ let panel_popup_open = webview_hidden_by_panel_popup(
 );
 ```
 
-- [ ] **Step 4: `preview_menu_covers_this` 的测试策略——已确认走既有精简惯例**
+- [x] **Step 4: `preview_menu_covers_this` 的测试策略——已确认走既有精简惯例**
 
 已核实 `app.rs` 里没有任何测试构造完整 `App` 去调用
 `preview_desired`——这个函数本身(含 Step 3 新增的
@@ -1311,12 +1311,12 @@ fn preview_menu_covers_this_matches_only_same_panel() {
 之后的端到端可见性效果——那部分与 `tab_menu_covers_this` 现状一致,靠
 Task 6 Step 8 之后的人工 QA 覆盖,不是这次引入的新测试缺口。）
 
-- [ ] **Step 5: 跑测试确认通过**
+- [x] **Step 5: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app preview_menu_covers_this_matches_only_same_panel`
 Expected: PASS。
 
-- [ ] **Step 6: 关闭路径接线——Escape 键**
+- [x] **Step 6: 关闭路径接线——Escape 键**
 
 已确认 Esc 关闭各类右键菜单的互斥链在
 `crates/dozer-app/src/platform/window_events.rs:685-705`:一串
@@ -1373,9 +1373,9 @@ Step 4 已说明自动化测试只锁定 `PreviewSelectionContextMenu.panel` 的
   3. 按 Esc → 菜单关闭,不影响其它右键菜单的既有 Esc 行为
      (文件树右键/Project 链接右键依旧各自正常开关)。
 
-- [ ] **Step 8: `cargo test -p dozer-app && cargo clippy --all-targets` 全绿**
+- [x] **Step 8: `cargo test -p dozer-app && cargo clippy --all-targets` 全绿**
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add crates/dozer-app/src/extensions/files/view.rs crates/dozer-app/src/app/

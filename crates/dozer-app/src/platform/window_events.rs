@@ -695,6 +695,8 @@ impl Runner {
                 app.update(Message::TextInputMenuClose);
             } else if app.database_source_context_menu_open() {
                 app.update(Message::DatabaseSourceContextMenuClose);
+            } else if app.preview_context_menu.is_some() {
+                app.update(Message::PreviewSelectionMenuClose);
             } else {
                 app.update(Message::Files(
                     crate::extensions::files::Message::ContextMenuClose,

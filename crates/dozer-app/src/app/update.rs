@@ -482,9 +482,25 @@ impl App {
                                 }
                             }
                             EditorEvent::FocusChanged { .. } => {}
-                            // Task 3 先只把协议打通;Task 5 在此接线换算坐标、
-                            // 弹菜单、`term_paste`。
-                            EditorEvent::ContextMenuRequested { .. } => {}
+                            // Phase 2:预览内选区右键。闭包内拿不到 `self`
+                            // (几何/终端可见性),把原始 webview 坐标与绑定
+                            // 信息回投一条顶层消息,在 `with_project` 外弹菜单。
+                            EditorEvent::ContextMenuRequested {
+                                x,
+                                y,
+                                range,
+                                selected_text,
+                            } => {
+                                let _ = io.proxy.send_event(Message::PreviewSelectionMenuOpen {
+                                    panel: binding.panel,
+                                    tab_id: binding.tab_id,
+                                    path: path.clone(),
+                                    x,
+                                    y,
+                                    range,
+                                    selected_text,
+                                });
+                            }
                         }
                     }
                     if let Some((tab_id, line)) = pending_reveal {
@@ -3645,6 +3661,73 @@ impl App {
                 byteui::theme::icon_size::reset_scale(&crate::theme::ui_scale_path());
                 self.sync_terminal_grid();
                 self.pending_preview_zoom = true;
+            }
+            Message::PreviewSelectionMenuOpen {
+                panel,
+                tab_id,
+                path,
+                x,
+                y,
+                range,
+                selected_text,
+            } => {
+                // 闭包外:换算窗口坐标(webview 本地 + webview 原点),判断当前
+                // 是否有可见/激活的 agent 终端(无则菜单项置灰,不报错)。
+                let side = self.shell_state().layout.rail_layout.side_of(panel);
+                let (x0, y0, _, _) = crate::webview_geometry::preview_content_bounds_for(
+                    side,
+                    self.window_size.0,
+                    self.window_size.1,
+                    &self.shell_state(),
+                );
+                let menu = PreviewSelectionContextMenu {
+                    x: x0 + x,
+                    y: y0 + y,
+                    panel,
+                    tab_id,
+                    path,
+                    range,
+                    selected_text,
+                    agent_terminal_visible: self.terminal_visible(),
+                };
+                #[cfg(target_os = "macos")]
+                {
+                    // 原生菜单阻塞弹出,mac 不存状态,弹完即取返回值。
+                    let items = files::preview_selection_context_menu_items(&menu);
+                    let pos = (menu.x, menu.y);
+                    if let Some(msg) =
+                        crate::chrome::native_menu::show_align_no_icon_left(items, pos)
+                    {
+                        self.update(msg);
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    self.preview_context_menu = Some(menu);
+                }
+            }
+            Message::SendSelectionToAgent {
+                path,
+                range,
+                selected_text,
+            } => {
+                self.preview_context_menu = None;
+                let Some(ws) = self.active_workspace() else {
+                    return;
+                };
+                let Some(tree) = ws.files.file_tree.as_ref() else {
+                    return;
+                };
+                let relative = crate::project::path_string(
+                    crate::project::PathKind::Relative,
+                    &path,
+                    tree.root(),
+                );
+                let text = files::selection_reference_text(&relative, range, &selected_text);
+                self.term_paste(terminal::TermTarget::Shared, text);
+            }
+            Message::PreviewSelectionMenuClose => {
+                self.preview_context_menu = None;
             }
             Message::SettingsOpen => {
                 self.settings = Some(settings::State::load(self.daemon_error.as_deref()));

@@ -373,6 +373,9 @@ pub struct App {
     /// Project 面板「项目文档 / Agent 记忆」链接行的右键菜单浮层状态,坐标
     /// 同样复用 `files.last_right_click`。
     pub(crate) project_link_menu: Option<ProjectLinkMenu>,
+    /// 预览内选区右键"发送给 Agent"浮层状态(非 mac iced fallback 用;
+    /// mac 原生菜单弹完即清)。`None` 表示未打开。
+    pub(crate) preview_context_menu: Option<PreviewSelectionContextMenu>,
     /// 文件历史对比弹窗状态——见 `extensions::file_history::State`。`None`
     /// 表示弹窗未打开。
     pub(crate) file_history: Option<file_history::State>,
@@ -799,6 +802,7 @@ impl App {
             rail_drag: None,
             files: files::AppState::default(),
             project_link_menu: None,
+            preview_context_menu: None,
             file_history: None,
             project_create: None,
             settings: None,
@@ -3412,9 +3416,15 @@ impl App {
                         )
                 )
             });
+            let preview_menu_covers_this = self
+                .preview_context_menu
+                .as_ref()
+                .is_some_and(|m| m.panel == kind);
             let panel_popup_open = webview_hidden_by_panel_popup(
                 kind,
-                self.files.context_menu_is_some() || tab_menu_covers_this,
+                self.files.context_menu_is_some()
+                    || tab_menu_covers_this
+                    || preview_menu_covers_this,
                 self.project_link_menu.is_some(),
                 ws.conversations.agent_picker_open(),
             );
@@ -3752,6 +3762,27 @@ mod tests {
             false,
             true,
         ));
+    }
+
+    /// 预览选区右键菜单只按 `panel` 匹配当前正在算隐藏的 webview:
+    /// 同面板命中、异面板不命中,断言匹配逻辑没写反。
+    #[test]
+    fn preview_menu_covers_this_matches_only_same_panel() {
+        let menu = PreviewSelectionContextMenu {
+            x: 0.0,
+            y: 0.0,
+            panel: PanelKind::Files,
+            tab_id: 1,
+            path: std::path::PathBuf::from("a.rs"),
+            range: crate::preview::TextRange {
+                start: crate::preview::TextPosition { line: 1, column: 1 },
+                end: crate::preview::TextPosition { line: 1, column: 2 },
+            },
+            selected_text: "x".into(),
+            agent_terminal_visible: true,
+        };
+        assert!(Some(&menu).is_some_and(|m| m.panel == PanelKind::Files));
+        assert!(!Some(&menu).is_some_and(|m| m.panel == PanelKind::Project));
     }
 
     /// 标志位为真,但当前面板种类对不上——不该被误伤隐藏(比如 Project

@@ -674,12 +674,52 @@ pub enum Message {
     SettingsOpen,
     /// 设置弹窗内部消息,转发给 `extensions::settings::update`。
     Settings(settings::Message),
+    /// 预览内选区右键"发送给 Agent":拼 `selection_reference_text` 后写进
+    /// 当前激活 agent 终端输入框(`term_paste`)。
+    SendSelectionToAgent {
+        path: std::path::PathBuf,
+        range: crate::preview::TextRange,
+        selected_text: String,
+    },
+    /// 预览内选区右键事件已到(`EditorEvent::ContextMenuRequested`),在
+    /// `with_project` 闭包外计算几何坐标、判断终端可见性并弹菜单(闭包内
+    /// 拿不到 `self`)。
+    PreviewSelectionMenuOpen {
+        panel: PanelKind,
+        tab_id: usize,
+        path: std::path::PathBuf,
+        x: f32,
+        y: f32,
+        range: crate::preview::TextRange,
+        selected_text: String,
+    },
+    /// 关闭预览选区右键浮层(点菜单项后/Esc/点外部)。
+    PreviewSelectionMenuClose,
 }
 pub(crate) struct ProjectLinkMenu {
     pub(crate) x: f32,
     pub(crate) y: f32,
     pub(crate) target: project::links::LinkTarget,
     pub(crate) index: usize,
+}
+
+/// 预览内选区右键"发送给 Agent"浮层状态,镜像 `ProjectLinkMenu`/
+/// `TabContextMenu`。`panel`/`tab_id` 供非 mac iced fallback 判断这个
+/// 浮层是否盖住了当前正在算隐藏的那个 webview(同 `tab_menu_covers_this`
+/// 的用法)。
+pub(crate) struct PreviewSelectionContextMenu {
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) panel: PanelKind,
+    /// 触发右键的预览 tab id。当前只用于将来区分同面板多 tab 的归属;ices
+    /// fallback 的隐藏判断只按 `panel` 匹配(同 `tab_menu_covers_this`),
+    /// 故暂未读取。
+    #[allow(dead_code)]
+    pub(crate) tab_id: usize,
+    pub(crate) path: std::path::PathBuf,
+    pub(crate) range: crate::preview::TextRange,
+    pub(crate) selected_text: String,
+    pub(crate) agent_terminal_visible: bool,
 }
 
 /// Todo 分类树节点右键菜单浮层状态,镜像 `ProjectLinkMenu`。`id` 为

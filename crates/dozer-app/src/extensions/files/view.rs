@@ -901,6 +901,21 @@ pub(crate) fn agent_context_reference_text(relative_path: &str, is_dir: bool) ->
     }
 }
 
+/// 预览内选区"发送给 Agent"的引用文本——坐标沿用 Phase 1 `apply_precise_edit`
+/// 同一套 1-based line/col 格式,agent 若要直接照做修改可以跳过
+/// `locate_in_file` 直接调 `apply_precise_edit`。不用代码围栏包裹
+/// `selected_text`,原样拼接,避免选中内容本身含反引号/围栏时破坏格式。
+pub(crate) fn selection_reference_text(
+    relative_path: &str,
+    range: crate::preview::TextRange,
+    selected_text: &str,
+) -> String {
+    format!(
+        "参考 {relative_path}:{}:{}-{}:{} 这段内容:\n\n{selected_text}",
+        range.start.line, range.start.column, range.end.line, range.end.column
+    )
+}
+
 /// 文件树右键菜单内容——native(`context_menu_items`)和 iced fallback
 /// (`context_menu_popup`)共用同一份数据,按"顶部操作组 / 中间主操作组 /
 /// 底部工具组"三段组装,条件分支只写一遍。
@@ -1100,6 +1115,62 @@ pub fn context_menu_popup<'a>(
     });
     let list = crate::menu_spec::to_iced(spec, Length::Shrink);
 
+    container(list)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(Padding {
+            top: menu.y,
+            left: menu.x,
+            right: 0.0,
+            bottom: 0.0,
+        })
+        .into()
+}
+
+/// 预览选区右键菜单——只有一项"发送给 Agent",与文件树右键共用
+/// `IconKind::MessageSquare` 强化"同一类操作"的视觉关联。注意消息类型是
+/// `crate::app::Message`(顶层),不是本文件裸 `Message`(= `files::Message`)
+/// ——触发源是 `EditorEvent` 分发而不是文件树右键。
+pub(crate) fn preview_selection_context_menu_spec(
+    menu: &crate::app::PreviewSelectionContextMenu,
+) -> MenuSpec<crate::app::Message> {
+    let dim = byteui::theme::color::current().dim;
+    vec![MenuSpecItem::Entry {
+        icon: Some(icons::IconKind::MessageSquare),
+        icon_color: None,
+        label: "发送给 Agent".into(),
+        color: if menu.agent_terminal_visible {
+            byteui::theme::color::current().body
+        } else {
+            dim
+        },
+        enabled: menu.agent_terminal_visible,
+        msg: crate::app::Message::SendSelectionToAgent {
+            path: menu.path.clone(),
+            range: menu.range,
+            selected_text: menu.selected_text.clone(),
+        },
+    }]
+}
+
+#[cfg(target_os = "macos")]
+pub fn preview_selection_context_menu_items(
+    menu: &crate::app::PreviewSelectionContextMenu,
+) -> Vec<crate::chrome::native_menu::Item<crate::app::Message>> {
+    crate::menu_spec::to_native(preview_selection_context_menu_spec(menu))
+}
+
+/// 非 mac 的 iced fallback 渲染——恒可调用(内部自己判空),与
+/// `context_menu_popup` 同一约定。mac 上 `preview_context_menu` 恒为
+/// `None`(原生菜单不存状态),此函数在 mac 编译但不被走到。
+pub fn preview_selection_context_menu_popup(
+    preview_context_menu: &Option<crate::app::PreviewSelectionContextMenu>,
+) -> Element<'_, crate::app::Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let Some(menu) = preview_context_menu else {
+        return column![].into();
+    };
+    let spec = preview_selection_context_menu_spec(menu);
+    let list = crate::menu_spec::to_iced(spec, Length::Shrink);
     container(list)
         .width(Length::Fill)
         .height(Length::Fill)
@@ -1467,5 +1538,66 @@ mod tests {
             agent_context_reference_text("我的 报告/draft v2.md", false),
             "请将 我的 报告/draft v2.md 文件纳入你的工作上下文。"
         );
+    }
+
+    #[test]
+    fn selection_reference_text_formats_range_and_body() {
+        let range = crate::preview::TextRange {
+            start: crate::preview::TextPosition { line: 3, column: 1 },
+            end: crate::preview::TextPosition { line: 5, column: 4 },
+        };
+        let text = selection_reference_text("src/main.rs", range, "let x = 1;");
+        assert_eq!(text, "参考 src/main.rs:3:1-5:4 这段内容:\n\nlet x = 1;");
+    }
+
+    #[test]
+    fn selection_reference_text_does_not_mangle_backticks_or_newlines() {
+        let range = crate::preview::TextRange {
+            start: crate::preview::TextPosition { line: 1, column: 1 },
+            end: crate::preview::TextPosition { line: 2, column: 1 },
+        };
+        let body = "```diff\n- old\n+ new\n```";
+        let text = selection_reference_text("a.md", range, body);
+        assert!(text.ends_with(body), "选中内容需原样保留,不被模板转义/截断");
+    }
+
+    fn sample_selection_menu(
+        agent_terminal_visible: bool,
+    ) -> crate::app::PreviewSelectionContextMenu {
+        crate::app::PreviewSelectionContextMenu {
+            x: 0.0,
+            y: 0.0,
+            panel: crate::app::PanelKind::Files,
+            tab_id: 1,
+            path: std::path::PathBuf::from("a.rs"),
+            range: crate::preview::TextRange {
+                start: crate::preview::TextPosition { line: 1, column: 1 },
+                end: crate::preview::TextPosition { line: 1, column: 2 },
+            },
+            selected_text: "x".into(),
+            agent_terminal_visible,
+        }
+    }
+
+    #[test]
+    fn preview_selection_menu_disabled_without_agent_terminal() {
+        let menu = sample_selection_menu(false);
+        let spec = preview_selection_context_menu_spec(&menu);
+        let enabled = spec.iter().find_map(|item| match item {
+            MenuSpecItem::Entry { enabled, .. } => Some(*enabled),
+            _ => None,
+        });
+        assert_eq!(enabled, Some(false), "无可见终端时该菜单项应置灰");
+    }
+
+    #[test]
+    fn preview_selection_menu_enabled_with_agent_terminal() {
+        let menu = sample_selection_menu(true);
+        let spec = preview_selection_context_menu_spec(&menu);
+        let enabled = spec.iter().find_map(|item| match item {
+            MenuSpecItem::Entry { enabled, .. } => Some(*enabled),
+            _ => None,
+        });
+        assert_eq!(enabled, Some(true));
     }
 }
