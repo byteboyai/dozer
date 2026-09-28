@@ -3,6 +3,7 @@ pub mod bookmarks;
 pub mod code_health;
 pub mod default_agent_config;
 pub mod file_edit_history;
+pub mod file_mutation;
 pub mod headless_agent;
 pub mod ide_bridge;
 pub mod memory;
