@@ -91,22 +91,42 @@ function excelColumnLabel(idx: number): string {
   return label;
 }
 
+const tabBarRow = document.getElementById('tab-bar-row') as HTMLDivElement;
 const tabBar = document.getElementById('tab-bar') as HTMLDivElement;
+const tabScrollLeft = document.getElementById('tab-scroll-left') as HTMLButtonElement;
+const tabScrollRight = document.getElementById('tab-scroll-right') as HTMLButtonElement;
 const gridHost = document.getElementById('grid-host') as HTMLDivElement;
 const banner = document.getElementById('truncated-banner') as HTMLDivElement;
 
+// 一次滚动的距离(约 2-3 个 tab 的宽度),与左右按钮点击/长按体感对齐。
+const TAB_SCROLL_STEP = 160;
+
+function updateTabScrollButtons(): void {
+  const scrollable = tabBar.scrollWidth > tabBar.clientWidth + 1;
+  tabScrollLeft.disabled = !scrollable || tabBar.scrollLeft <= 0;
+  tabScrollRight.disabled =
+    !scrollable || tabBar.scrollLeft + tabBar.clientWidth >= tabBar.scrollWidth - 1;
+}
+
+tabScrollLeft.addEventListener('click', () => {
+  tabBar.scrollBy({ left: -TAB_SCROLL_STEP, behavior: 'smooth' });
+});
+tabScrollRight.addEventListener('click', () => {
+  tabBar.scrollBy({ left: TAB_SCROLL_STEP, behavior: 'smooth' });
+});
+tabBar.addEventListener('scroll', updateTabScrollButtons);
+window.addEventListener('resize', updateTabScrollButtons);
+
 function renderTabs(): void {
   tabBar.innerHTML = '';
-  if (sheetNames.length <= 1) {
-    tabBar.style.display = 'none';
-    return;
-  }
-  tabBar.style.display = 'flex';
+  tabBarRow.style.display = 'flex';
+  let activeBtn: HTMLButtonElement | null = null;
   sheetNames.forEach((name, idx) => {
     const btn = document.createElement('button');
     btn.textContent = name;
     btn.className = 'sheet-tab' + (idx === activeSheet ? ' active' : '');
     if (sheets.get(idx)?.loading) btn.classList.add('loading');
+    if (idx === activeSheet) activeBtn = btn;
     btn.addEventListener('click', () => {
       if (idx === activeSheet) return;
       activeSheet = idx;
@@ -116,6 +136,10 @@ function renderTabs(): void {
     });
     tabBar.appendChild(btn);
   });
+  // 当前 sheet 的 tab 若被横向滚动遮住(切 sheet 后/agent 主动切 sheet 后),
+  // 滚到可见范围内,不需要用户自己先找到它再点左右箭头。
+  (activeBtn as HTMLButtonElement | null)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  updateTabScrollButtons();
 }
 
 function ensureSheetState(sheetIndex: number): SheetState {
@@ -161,8 +185,10 @@ function buildGrid(sheetIndex: number, state: SheetState): void {
     field: `c${c}`,
     sortable: false,
     filter: false,
-    // 非目标:不做列宽拖拽调整(spec"非目标"一节明确排除),固定宽度。
-    resizable: false,
+    // 用户可手动拖拽调整列宽(2026-09-28 明确要开;原 spec"不做列宽拖拽
+    // 调整"的非目标由此改判)。初始宽度仍按内容估算,拖拽只影响显示,不回写
+    // 数据/不持久化——agent reveal 依赖的"行列坐标=数据坐标"假设不受影响。
+    resizable: true,
     width: Math.max(64, Math.min(320, (state.colWidths[c] ?? 12) * 8)),
     // agent reveal 高亮:cellClassRules 在渲染/`refreshCells` 时重新求值,
     // 命中 `state.highlight` 范围的单元格套 `.dozer-reveal-highlight`。

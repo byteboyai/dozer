@@ -17,20 +17,56 @@ html[data-theme='light'] body {
 html[data-theme='light'] #tabular-root {
   color: #3a3226;
 }
+#tab-bar-row {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
 #tab-bar {
   display: flex;
   gap: 4px;
-  padding: 4px 8px;
+  padding: 4px 4px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+#tab-bar::-webkit-scrollbar {
+  display: none;
+}
+.tab-scroll-btn {
+  background: transparent;
+  border: none;
+  color: #6b7f8f;
+  width: 22px;
   flex-shrink: 0;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 4px 0;
+}
+.tab-scroll-btn:hover {
+  color: #ffe5b4;
+}
+.tab-scroll-btn:disabled {
+  visibility: hidden;
+}
+html[data-theme='light'] .tab-scroll-btn {
+  color: #9a8f7d;
+}
+html[data-theme='light'] .tab-scroll-btn:hover {
+  color: #16232e;
 }
 .sheet-tab {
   background: transparent;
   border: none;
-  color: #6b7f8f;
+  color: #ffe5b4;
   padding: 4px 12px;
   border-radius: 4px;
   cursor: pointer;
   font-size: 13px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .sheet-tab.active {
   background: rgba(71, 222, 240, 0.16);
@@ -40,11 +76,11 @@ html[data-theme='light'] #tabular-root {
   opacity: 0.5;
 }
 html[data-theme='light'] .sheet-tab {
-  color: #9a8f7d;
+  color: #16232e;
 }
 html[data-theme='light'] .sheet-tab.active {
   background: rgba(11, 127, 146, 0.16);
-  color: #3a3226;
+  color: #16232e;
 }
 #truncated-banner {
   display: none;
@@ -68,7 +104,7 @@ html[data-theme='light'] #truncated-banner {
   --ag-background-color: #0a0e16;
   --ag-header-background-color: #0d1422;
   --ag-odd-row-background-color: rgba(255, 255, 255, 0.02);
-  --ag-foreground-color: #ffe5b4;
+  --ag-foreground-color: #9ab4c4;
   --ag-header-foreground-color: #ffe5b4;
   --ag-border-color: rgba(107, 127, 143, 0.4);
   --ag-row-hover-color: rgba(255, 229, 180, 0.06);
@@ -79,7 +115,7 @@ html[data-theme='light'] #truncated-banner {
   --ag-background-color: #fef2e4;
   --ag-header-background-color: #f3e6d2;
   --ag-odd-row-background-color: rgba(0, 0, 0, 0.02);
-  --ag-foreground-color: #3a3226;
+  --ag-foreground-color: #36424e;
   --ag-header-foreground-color: #3a3226;
   --ag-border-color: rgba(154, 143, 125, 0.4);
   --ag-row-hover-color: rgba(0, 0, 0, 0.05);
