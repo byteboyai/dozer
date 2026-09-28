@@ -146,27 +146,39 @@ pub(crate) fn bare_program_name(agent: AgentKind) -> Option<&'static str> {
 /// `None`,调用方回退到裸命令名,保留原有"确实没装就 spawn 失败降级"的
 /// 行为,不引入新的失败模式。
 pub(crate) async fn resolve_binary_path(bin: &str) -> Option<String> {
+    // `bin` comes from `bare_program_name`, but keep this helper safe if a new
+    // caller is added later: the value is interpolated into a shell snippet.
+    if bin.is_empty()
+        || !bin
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    {
+        return None;
+    }
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
     let output = tokio::process::Command::new(&shell)
         .arg("-ilc")
-        .arg(format!("command -v {bin}"))
+        // `command -v` may resolve a user alias to the bare alias name. Ask
+        // zsh/bash for the executable-only result as well, then select an
+        // absolute path from the combined output below.
+        .arg(format!(
+            "command -v -- {bin}; whence -p -- {bin} 2>/dev/null; type -P -- {bin} 2>/dev/null"
+        ))
         .output()
         .await
         .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout);
     // `command -v` 在交互式 zsh 下对别名/内置命令(如用户把 `ls` alias 成
     // `eza`)会打印别名定义或裸命令名而不是文件路径——只信一段以 `/`
     // 开头、看起来真是绝对路径的输出,否则当作没解析出来,回退到裸命令名
     // (让调用方走回原有的"确实没装就 spawn 失败降级"路径,不去猜别名里
     // 藏的到底是什么)。
-    if path.starts_with('/') {
-        Some(path)
-    } else {
-        None
-    }
+    stdout
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| line.starts_with('/') && Path::new(line).is_file())
+        .map(str::to_string)
 }
 
 /// 从完整 stdout 里抠出分隔符之间的 JSON 并解析。公开给单测直接调用,不
