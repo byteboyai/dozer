@@ -1,3 +1,4 @@
 openseadragon @6.1.1 (BSD-3-Clause),经 https://cdn.jsdelivr.net/npm/openseadragon@6.1.1/+esm 打包成自包含 ESM
 @annotorious/openseadragon @3.9.3 (BSD-3-Clause,内联 @annotorious/annotorious 核心),经 https://cdn.jsdelivr.net/npm/@annotorious/openseadragon@3.9.3/+esm 打包成自包含 ESM
+vendor/images/*.png 取自 openseadragon@6.1.1 的 build/openseadragon/images/(导航控件 zoomin/zoomout/home/fullpage 的四个状态位图,供 showNavigationControl 离线工作)
 均为一次性 curl 拉取的预构建产物,不接入 Node 构建流程;升级时重跑 Task 1 Step 1-4。

@@ -1,2 +1,109 @@
 <!doctype html>
-<html><head><meta charset="utf-8"></head><body></body></html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Dozer Image Annotate</title>
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'">
+<style>
+  html { --preview-bg: #0a0e16; --accent: #F2D94E; }
+  html[data-theme="light"] { --preview-bg: #fef2e4; --accent: #F2D94E; }
+  html, body { margin: 0; height: 100%; background: var(--preview-bg); overflow: hidden; }
+  #viewer { position: absolute; inset: 0; }
+  /* Annotorious 默认高亮色跟随 ByteBoy2077 金色(甲方动作专属)。 */
+  .a9s-annotation .a9s-outer { stroke: var(--accent) !important; }
+  .a9s-annotation .a9s-inner { stroke: var(--accent) !important; fill: transparent; }
+  #toolbar {
+    position: absolute; top: 8px; left: 8px; z-index: 10;
+    display: flex; gap: 4px; background: rgba(0,0,0,0.35); border-radius: 6px; padding: 4px;
+  }
+  #toolbar button {
+    background: transparent; border: 1px solid var(--accent); color: var(--accent);
+    border-radius: 4px; padding: 4px 8px; font-size: 12px; cursor: pointer;
+  }
+  #toolbar button.active { background: var(--accent); color: #0a0e16; }
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <button id="tool-pan" class="active" data-tool="">平移</button>
+  <button id="tool-rect" data-tool="rectangle">矩形</button>
+  <button id="tool-point" data-tool="point">点</button>
+  <button id="tool-polygon" data-tool="polygon">多边形</button>
+</div>
+<div id="viewer"></div>
+<script type="module">
+  import OpenSeadragon from './vendor/openseadragon.esm.js';
+  import { createOSDAnnotator } from './vendor/annotorious-openseadragon.esm.js';
+
+  const params = new URLSearchParams(location.search);
+  const p = decodeURIComponent(params.get('p') || '');
+  const theme = params.get('theme') === 'light' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', theme);
+
+  // T9:host -> Rust 的统一 envelope 通道,与 Flyfish 的 `__dozerFlyfishPost`
+  // 平行但不共享——payload kind 集合不同(见 `ImageAnnotateEvent`)。
+  function envelope(payload) {
+    return JSON.stringify({
+      protocol_version: 1,
+      project_id: Number(params.get('proj') || 0) || 0,
+      panel: params.get('panel') || 'files',
+      tab_id: Number(params.get('tab') || 0) || 0,
+      document_id: params.get('doc') || '',
+      revision: 0,
+      request_id: null,
+      payload,
+    });
+  }
+  function post(payload) {
+    try { window.ipc.postMessage(envelope(payload)); } catch (_) {}
+  }
+  window.__dozerImageAnnotatePost = post;
+
+  post({ kind: 'ready' });
+
+  const viewer = OpenSeadragon({
+    element: document.getElementById('viewer'),
+    tileSources: { type: 'image', url: '__file__' + encodeURI(p) },
+    showNavigationControl: true,
+    // 导航控件位图本地 vendor,离线可用(默认 `/images/` 在 dozer:// 下会 404)。
+    prefixUrl: './vendor/images/',
+    gestureSettingsMouse: { clickToZoom: false, dblClickToZoom: true },
+  });
+
+  viewer.addHandler('open', function () {
+    post({ kind: 'document_loaded' });
+  });
+  viewer.addHandler('open-failed', function (e) {
+    post({ kind: 'failed', message: (e && e.message) || '图片解码失败', recoverable: true });
+  });
+
+  const anno = createOSDAnnotator(viewer, { drawingEnabled: false });
+
+  function snapshotAnnotations() {
+    try {
+      post({ kind: 'annotations_changed', annotations: anno.getAnnotations() });
+    } catch (_) {}
+  }
+  anno.on('createAnnotation', snapshotAnnotations);
+  anno.on('updateAnnotation', snapshotAnnotations);
+  anno.on('deleteAnnotation', snapshotAnnotations);
+
+  // 工具条:切换绘制工具 / 回到平移模式(默认态,拖拽 = OSD 平移,不与
+  // 标注绘制手势冲突——见设计稿 §5 模式边界)。
+  const buttons = Array.from(document.querySelectorAll('#toolbar button'));
+  buttons.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      const tool = btn.getAttribute('data-tool');
+      buttons.forEach(function (b) { b.classList.toggle('active', b === btn); });
+      if (tool) {
+        anno.setDrawingTool(tool);
+        anno.setDrawingEnabled(true);
+      } else {
+        anno.setDrawingEnabled(false);
+      }
+    });
+  });
+</script>
+</body>
+</html>

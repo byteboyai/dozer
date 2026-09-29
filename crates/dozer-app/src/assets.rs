@@ -1050,6 +1050,22 @@ mod tests {
             );
         }
     }
+
+    /// Task 3:host 页必须声明严格 CSP、无外部引用、引用了两个 vendor 文件。
+    #[test]
+    fn image_annotate_host_has_strict_csp_and_no_external_refs() {
+        let html = include_str!("image_annotate_host.html");
+        assert!(html.contains("Content-Security-Policy"), "必须声明 CSP");
+        assert!(html.contains("default-src 'none'"), "CSP 必须以 default-src 'none' 起步");
+        assert!(html.contains("script-src 'self'"), "脚本仅 self");
+        assert!(
+            !html.contains("http://") && !html.contains("https://"),
+            "host.html 不得引用外部 URL(离线约束)"
+        );
+        assert!(html.contains("vendor/openseadragon.esm.js"));
+        assert!(html.contains("vendor/annotorious-openseadragon.esm.js"));
+        assert!(html.contains("__dozerImageAnnotatePost"));
+    }
 }
 
 pub mod clipboard_image;
