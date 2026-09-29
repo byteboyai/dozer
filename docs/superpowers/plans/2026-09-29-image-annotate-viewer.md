@@ -39,7 +39,7 @@
 **Interfaces:**
 - Produces:`crates/dozer-app/assets/image-annotate/vendor/*.esm.js` 两个自包含 ESM 文件(供 Task 3 的 `host.html` 用 `<script type="module">` 动态 `import`)。
 
-- [ ] **Step 1: 查询两个包的可用版本(jsdelivr data API,纯 curl,不装 Node)**
+- [x] **Step 1: 查询两个包的可用版本(jsdelivr data API,纯 curl,不装 Node)**
 
 ```bash
 curl -s https://data.jsdelivr.com/v1/packages/npm/openseadragon | python3 -c "import json,sys; d=json.load(sys.stdin); print([v['version'] for v in d['versions'] if '-' not in v['version']][:5])"
@@ -48,7 +48,7 @@ curl -s https://data.jsdelivr.com/v1/packages/npm/@annotorious/openseadragon | p
 
 记下两边输出的第一个(最新非预发布)版本号,后续步骤里的 `<OSD_VERSION>`/`<ANNO_VERSION>` 替换成实际值。
 
-- [ ] **Step 2: 下载两个自包含 ESM bundle**
+- [x] **Step 2: 下载两个自包含 ESM bundle**
 
 ```bash
 mkdir -p crates/dozer-app/assets/image-annotate/vendor
@@ -58,7 +58,7 @@ curl -sL "https://cdn.jsdelivr.net/npm/@annotorious/openseadragon@<ANNO_VERSION>
   -o crates/dozer-app/assets/image-annotate/vendor/annotorious-openseadragon.esm.js
 ```
 
-- [ ] **Step 3: 校验下载产物离线安全(无残留外部 import/引用)**
+- [x] **Step 3: 校验下载产物离线安全(无残留外部 import/引用)**
 
 ```bash
 grep -E "from *[\"']https?://|import\\(.*https?://" crates/dozer-app/assets/image-annotate/vendor/*.esm.js && echo "FAIL: 含外部引用" || echo "OK: 无外部引用"
@@ -66,7 +66,7 @@ grep -E "from *[\"']https?://|import\\(.*https?://" crates/dozer-app/assets/imag
 
 若报 FAIL,说明 jsdelivr `+esm` 没能把某个依赖内联(常见于依赖了 Node 内置模块或极大的可选依赖),需要改用该依赖单独的 `+esm` 地址递归拉取、或退回上游仓库自带的 `dist/` UMD 产物重新评估——这一步必须在提交前解决,不能把带外部 fetch 的文件提交进仓库(直接违反"无网络"CSP 约束)。
 
-- [ ] **Step 4: 记录导出符号(供 Task 3 写 import 语句用)**
+- [x] **Step 4: 记录导出符号(供 Task 3 写 import 语句用)**
 
 ```bash
 grep -o 'export[^;{]*' crates/dozer-app/assets/image-annotate/vendor/openseadragon.esm.js | head -5
@@ -75,7 +75,7 @@ grep -o 'export[^;{]*' crates/dozer-app/assets/image-annotate/vendor/annotorious
 
 把两边真实的导出形式(`export default ...` 还是 `export {...}`,以及 `createOSDAnnotator` 之类具名导出是否存在)记下来——Task 3 的 `import` 语句要跟这里看到的真实符号一致,不能假设。
 
-- [ ] **Step 5: 写版本记录文件**
+- [x] **Step 5: 写版本记录文件**
 
 ```
 crates/dozer-app/assets/image-annotate/VENDORED_VERSION
@@ -87,7 +87,7 @@ openseadragon @<OSD_VERSION>(BSD-3-Clause),经 https://cdn.jsdelivr.net/npm/open
 均为一次性 curl 拉取的预构建产物,不接入 Node 构建流程;升级时重跑 Task 1 Step 1-4。
 ```
 
-- [ ] **Step 6: 加资产存在性 + 离线安全测试(镜像 `editor_bundle_assets_are_present`/`editor_index_has_strict_csp_and_no_external_refs`)**
+- [x] **Step 6: 加资产存在性 + 离线安全测试(镜像 `editor_bundle_assets_are_present`/`editor_index_has_strict_csp_and_no_external_refs`)**
 
 追加到 `crates/dozer-app/src/assets.rs` 的 `#[cfg(test)] mod tests`:
 
@@ -126,12 +126,12 @@ openseadragon @<OSD_VERSION>(BSD-3-Clause),经 https://cdn.jsdelivr.net/npm/open
     }
 ```
 
-- [ ] **Step 7: 跑测试确认通过**
+- [x] **Step 7: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app assets::tests::image_annotate_vendor -- --nocapture`
 Expected: 两个新测试 PASS。
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add crates/dozer-app/assets/image-annotate/vendor crates/dozer-app/assets/image-annotate/VENDORED_VERSION crates/dozer-app/src/assets.rs
@@ -151,7 +151,7 @@ git commit -m "chore(image-annotate): vendor OpenSeadragon + Annotorious-OpenSea
 - Consumes: `serve_vendored`(已存在)、`serve_allowlisted_file`(已存在,`fn serve_allowlisted_file(encoded: &str, allowed: &HashSet<PathBuf>) -> ProtocolReply`)。
 - Produces: `handle_protocol` 新增对 `dozer://image-annotate/` 前缀的分发,供 Task 5 的 `image_annotate_url` 构造的 URL 实际可被 wry 加载。
 
-- [ ] **Step 1: 写最小占位 host 页**
+- [x] **Step 1: 写最小占位 host 页**
 
 ```html
 <!-- crates/dozer-app/src/image_annotate_host.html -->
@@ -159,7 +159,7 @@ git commit -m "chore(image-annotate): vendor OpenSeadragon + Annotorious-OpenSea
 <html><head><meta charset="utf-8"></head><body></body></html>
 ```
 
-- [ ] **Step 2: 写失败测试(命名空间尚未接线,应 404)**
+- [x] **Step 2: 写失败测试(命名空间尚未接线,应 404)**
 
 追加到 `crates/dozer-app/src/assets.rs` 的 `#[cfg(test)] mod tests`:
 
@@ -212,12 +212,12 @@ git commit -m "chore(image-annotate): vendor OpenSeadragon + Annotorious-OpenSea
     }
 ```
 
-- [ ] **Step 3: 跑测试确认失败(命名空间还没接线,落到 `handle_protocol` 末尾的 flyfish fallback 或 404)**
+- [x] **Step 3: 跑测试确认失败(命名空间还没接线,落到 `handle_protocol` 末尾的 flyfish fallback 或 404)**
 
 Run: `cargo test -p dozer-app assets::tests::serves_image_annotate_host assets::tests::image_annotate_file_endpoint_requires_allowlist -- --nocapture`
 Expected: FAIL(`serves_image_annotate_host` 拿到的不是 200,或 `image_annotate_file_endpoint_requires_allowlist` 因命名空间被 `flyfish/` fallback 误吞而行为不对)。
 
-- [ ] **Step 4: 实现协议分发**
+- [x] **Step 4: 实现协议分发**
 
 在 `crates/dozer-app/src/assets.rs` 里,`tabular_host_root_for` 函数之后新增:
 
@@ -252,17 +252,17 @@ fn image_annotate_root_for(flyfish_root: &Path) -> PathBuf {
 
 （放在 `html/` 分支之后、`let Some(path) = rest.strip_prefix("flyfish/") ...` 之前。）
 
-- [ ] **Step 5: 跑测试确认通过**
+- [x] **Step 5: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app assets::tests::serves_image_annotate_host assets::tests::image_annotate_file_endpoint_requires_allowlist assets::tests::image_annotate_rejects_traversal_and_unknown -- --nocapture`
 Expected: 三个测试 PASS。
 
-- [ ] **Step 6: 跑现有 assets.rs 全部测试确认无回归**
+- [x] **Step 6: 跑现有 assets.rs 全部测试确认无回归**
 
 Run: `cargo test -p dozer-app assets:: -- --nocapture`
 Expected: 全部 PASS。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/dozer-app/src/assets.rs crates/dozer-app/src/image_annotate_host.html
@@ -282,7 +282,7 @@ git commit -m "feat(image-annotate): add dozer://image-annotate/ protocol namesp
 - Consumes:`dozer://image-annotate/__file__<编码后的绝对路径>` 加载图片字节(Task 2 已接线)。
 - Produces:`window.__dozerImageAnnotatePost(payload)` envelope 通道(Task 8 的 Rust IPC handler 消费)。
 
-- [ ] **Step 1: 写内容测试(CSP/离线约束,镜像 `editor_index_has_strict_csp_and_no_external_refs`)**
+- [x] **Step 1: 写内容测试(CSP/离线约束,镜像 `editor_index_has_strict_csp_and_no_external_refs`)**
 
 追加到 `crates/dozer-app/src/assets.rs` 的 `#[cfg(test)] mod tests`:
 
@@ -304,12 +304,12 @@ git commit -m "feat(image-annotate): add dozer://image-annotate/ protocol namesp
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败(占位页没有这些内容)**
+- [x] **Step 2: 跑测试确认失败(占位页没有这些内容)**
 
 Run: `cargo test -p dozer-app assets::tests::image_annotate_host_has_strict_csp_and_no_external_refs -- --nocapture`
 Expected: FAIL。
 
-- [ ] **Step 3: 实现完整 host 页**
+- [x] **Step 3: 实现完整 host 页**
 
 ```html
 <!-- crates/dozer-app/src/image_annotate_host.html -->
@@ -423,17 +423,17 @@ Expected: FAIL。
 
 （`import` 的两个符号名需要按 Task 1 Step 4 实际记录的导出形式核对调整;若 `annotorious-openseadragon.esm.js` 没有具名导出 `createOSDAnnotator` 而是挂在默认导出对象上,把这行改成 `import AnnoOSD from '...'; const { createOSDAnnotator } = AnnoOSD;`。）
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app assets::tests::image_annotate_host_has_strict_csp_and_no_external_refs -- --nocapture`
 Expected: PASS。
 
-- [ ] **Step 5: 跑 assets.rs 全部测试确认无回归**
+- [x] **Step 5: 跑 assets.rs 全部测试确认无回归**
 
 Run: `cargo test -p dozer-app assets:: -- --nocapture`
 Expected: 全部 PASS。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/dozer-app/src/image_annotate_host.html crates/dozer-app/src/assets.rs
@@ -451,7 +451,7 @@ git commit -m "feat(image-annotate): implement OpenSeadragon + Annotorious host 
 **Interfaces:**
 - Produces: `pub(crate) fn is_image_annotate_extension(path: &Path) -> bool`,供 Task 5 的 `preview_url` 使用。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 追加到 `crates/dozer-app/src/preview/router.rs` 的 `#[cfg(test)] mod tests`:
 
@@ -471,12 +471,12 @@ git commit -m "feat(image-annotate): implement OpenSeadragon + Annotorious host 
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app preview::router::tests::image_annotate_extension -- --nocapture`
 Expected: FAIL(函数不存在,编译错误)。
 
-- [ ] **Step 3: 实现判定函数**
+- [x] **Step 3: 实现判定函数**
 
 紧跟在 `is_known_media_extension` 函数定义之后(`router.rs` 里 `pub fn is_known_media_extension` 结束的 `}` 之后)新增:
 
@@ -493,17 +493,17 @@ pub(crate) fn is_image_annotate_extension(path: &Path) -> bool {
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app preview::router::tests::image_annotate_extension -- --nocapture`
 Expected: PASS。
 
-- [ ] **Step 5: 跑 router.rs 全部测试确认无回归**
+- [x] **Step 5: 跑 router.rs 全部测试确认无回归**
 
 Run: `cargo test -p dozer-app preview::router:: -- --nocapture`
 Expected: 全部 PASS。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/dozer-app/src/preview/router.rs
@@ -527,7 +527,7 @@ git commit -m "feat(image-annotate): add extension predicate for new viewer subs
   - `preview_url` 新增分流分支
   - `flyfish_binding_from_url` 现在也能解析 `dozer://image-annotate/` URL 的绑定
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `crates/dozer-app/src/preview/webview.rs` 的 `#[cfg(test)] mod tests` 里新增:
 
@@ -572,12 +572,12 @@ git commit -m "feat(image-annotate): add extension predicate for new viewer subs
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app preview::webview::tests::image_annotate preview::webview::tests::hosts_rendered_binding preview::view::tests::preview_url_dispatches_browser_native_images -- --nocapture`
 Expected: FAIL(编译错误,函数不存在;或 `preview_url` 分支缺失导致断言失败)。
 
-- [ ] **Step 3: 实现 `image_annotate_url` + `hosts_rendered_binding`,接线 `preview_url`/`flyfish_binding_from_url`**
+- [x] **Step 3: 实现 `image_annotate_url` + `hosts_rendered_binding`,接线 `preview_url`/`flyfish_binding_from_url`**
 
 在 `crates/dozer-app/src/preview/webview.rs` 里,`html_url` 函数之后新增:
 
@@ -634,7 +634,7 @@ pub(crate) fn preview_url(path: &std::path::Path) -> String {
 }
 ```
 
-- [ ] **Step 4: 更新 `app.rs` 的绑定查询串追加条件**
+- [x] **Step 4: 更新 `app.rs` 的绑定查询串追加条件**
 
 `crates/dozer-app/src/app/app.rs:3384-3395` 原代码:
 
@@ -670,17 +670,17 @@ pub(crate) fn preview_url(path: &std::path::Path) -> String {
                 }
 ```
 
-- [ ] **Step 5: 跑测试确认通过**
+- [x] **Step 5: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app preview::webview:: preview::view::tests::preview_url_dispatches -- --nocapture`
 Expected: 全部 PASS。
 
-- [ ] **Step 6: 全量编译确认 `app.rs` 改动不破坏其它调用点**
+- [x] **Step 6: 全量编译确认 `app.rs` 改动不破坏其它调用点**
 
 Run: `cargo build -p dozer-app`
 Expected: 编译成功,无新增警告/错误。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/dozer-app/src/preview/webview.rs crates/dozer-app/src/preview/view.rs crates/dozer-app/src/app/app.rs
@@ -700,7 +700,7 @@ git commit -m "feat(image-annotate): route browser-native images to new viewer U
   - `pub enum ImageAnnotateEvent { Ready, DocumentLoaded { revision: u64, bytes: u64, error: Option<String> }, Failed { message: String, recoverable: bool }, AnnotationsChanged { annotations: Vec<serde_json::Value> } }`
   - `pub fn parse_image_annotate_event(raw: &str) -> Result<WebviewEnvelope<ImageAnnotateEvent>, ProtocolError>`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 追加到 `crates/dozer-app/src/preview/webview_protocol.rs` 的 `#[cfg(test)] mod tests`(复用文件里已有的 `binding()`/`raw()` helper):
 
@@ -774,12 +774,12 @@ git commit -m "feat(image-annotate): route browser-native images to new viewer U
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app preview::webview_protocol::tests::parses_and_validates_image_annotate_events preview::webview_protocol::tests::rejects_oversized_image_annotate_message -- --nocapture`
 Expected: FAIL(编译错误,类型/函数不存在)。
 
-- [ ] **Step 3: 实现类型与解析器**
+- [x] **Step 3: 实现类型与解析器**
 
 紧跟在 `parse_flyfish_event` 函数结束的 `}` 之后新增:
 
@@ -846,17 +846,17 @@ pub fn parse_image_annotate_event(
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app preview::webview_protocol::tests::parses_and_validates_image_annotate_events preview::webview_protocol::tests::rejects_oversized_image_annotate_message -- --nocapture`
 Expected: PASS。
 
-- [ ] **Step 5: 跑 webview_protocol.rs 全部测试确认无回归**
+- [x] **Step 5: 跑 webview_protocol.rs 全部测试确认无回归**
 
 Run: `cargo test -p dozer-app preview::webview_protocol:: -- --nocapture`
 Expected: 全部 PASS。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/dozer-app/src/preview/webview_protocol.rs
@@ -876,7 +876,7 @@ git commit -m "feat(image-annotate): add ImageAnnotateEvent type and parser"
 - Consumes: `ImageAnnotateEvent`(Task 6)、`PreviewRuntime::None`/`BackendState::{Ready,Failed}`/`PreviewError::new`(已存在)。
 - Produces: `PreviewTab.image_annotations: Vec<serde_json::Value>`、`PreviewPane::apply_image_annotate_event(&mut self, tab_id: usize, event: ImageAnnotateEvent)`(供 Task 8 的 `update.rs` 胶水调用)。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `crates/dozer-app/src/preview/view.rs` 靠近其它 `PreviewPane` 相关测试的 `#[cfg(test)] mod tests` 里新增(若该文件测试模块尚未 `use crate::preview::webview_protocol::ImageAnnotateEvent;` 之类的导入,按现有 `use super::*;` 惯例应已经可见):
 
@@ -986,12 +986,12 @@ git commit -m "feat(image-annotate): add ImageAnnotateEvent type and parser"
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app preview::view::tests::apply_image_annotate_event -- --nocapture`
 Expected: FAIL(编译错误:`image_annotations` 字段与 `apply_image_annotate_event` 方法都不存在)。
 
-- [ ] **Step 3: 加字段**
+- [x] **Step 3: 加字段**
 
 `crates/dozer-app/src/preview/state.rs`,在 `PreviewTab` 结构体的 `task_cancel` 字段之前新增:
 
@@ -1002,7 +1002,7 @@ Expected: FAIL(编译错误:`image_annotations` 字段与 `apply_image_annotate_
     pub image_annotations: Vec<serde_json::Value>,
 ```
 
-- [ ] **Step 4: 更新 3 处字面量初始化**
+- [x] **Step 4: 更新 3 处字面量初始化**
 
 `crates/dozer-app/src/preview/view.rs` 里的 `placeholder_tab`(约第 24 行起)、`push_tab` 内的 `let tab = PreviewTab { ... }`(约第 549 行起)、`push_shell_tab` 内的 `let tab = PreviewTab { ... }`(约第 638 行起)——三处都在 `tabular_host_ready: false,` 之后、`task_cancel: ...` 之前加一行:
 
@@ -1010,7 +1010,7 @@ Expected: FAIL(编译错误:`image_annotations` 字段与 `apply_image_annotate_
             image_annotations: Vec::new(),
 ```
 
-- [ ] **Step 5: 实现 `apply_image_annotate_event`**
+- [x] **Step 5: 实现 `apply_image_annotate_event`**
 
 在 `crates/dozer-app/src/preview/view.rs` 的 `impl PreviewPane` 块里(紧跟 `tabs_mut` 方法之后)新增:
 
@@ -1063,17 +1063,17 @@ Expected: FAIL(编译错误:`image_annotations` 字段与 `apply_image_annotate_
     }
 ```
 
-- [ ] **Step 6: 跑测试确认通过**
+- [x] **Step 6: 跑测试确认通过**
 
 Run: `cargo test -p dozer-app preview::view::tests::apply_image_annotate_event -- --nocapture`
 Expected: 全部 PASS。
 
-- [ ] **Step 7: 跑 preview 全部测试确认无回归(3 处字面量改动影响面广)**
+- [x] **Step 7: 跑 preview 全部测试确认无回归(3 处字面量改动影响面广)**
 
 Run: `cargo test -p dozer-app preview:: -- --nocapture`
 Expected: 全部 PASS。
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add crates/dozer-app/src/preview/state.rs crates/dozer-app/src/preview/view.rs
@@ -1095,7 +1095,7 @@ git commit -m "feat(image-annotate): add annotation snapshot field and event sta
 
 这一层是纯接线,和 `Message::FlyfishEvent` 的既有接线一样,仓库里没有对 `runtime.rs` 的 wry IPC 闭包做独立单测(闭包捕获 `wry`/`tao` 运行时句柄,现有 Flyfish/JSON/Tabular 接线同样没有);正确性由 Task 6(解析器)、Task 7(状态机)的单测 + 人工验收清单(Task 9)共同兜底。
 
-- [ ] **Step 1: 加 `Message` 变体**
+- [x] **Step 1: 加 `Message` 变体**
 
 `crates/dozer-app/src/app/message.rs`,紧跟 `FlyfishEvent(...)` 变体之后新增:
 
@@ -1109,7 +1109,7 @@ git commit -m "feat(image-annotate): add annotation snapshot field and event sta
     ),
 ```
 
-- [ ] **Step 2: `runtime.rs` 加 host 类型判定 + 派发分支**
+- [x] **Step 2: `runtime.rs` 加 host 类型判定 + 派发分支**
 
 `crates/dozer-app/src/runtime.rs` 里,`let is_flyfish_host = spec.url.starts_with("dozer://flyfish/");`(约第 377 行)之后新增:
 
@@ -1161,7 +1161,7 @@ git commit -m "feat(image-annotate): add annotation snapshot field and event sta
 
 （原来的 `parse_flyfish_event` 分支体、以及后面的 `else if webview_id == ...` 分支全部保持不变,只是从 `if` 换成 `else if`。）
 
-- [ ] **Step 3: `update.rs` 加 Message 处理**
+- [x] **Step 3: `update.rs` 加 Message 处理**
 
 `crates/dozer-app/src/app/update.rs`,紧跟 `Message::FlyfishEvent(binding, event) => { ... }` 整个 match arm(约第 797-891 行)结束的 `}` 之后新增:
 
@@ -1178,17 +1178,17 @@ git commit -m "feat(image-annotate): add annotation snapshot field and event sta
             }
 ```
 
-- [ ] **Step 4: 全量编译确认接线正确**
+- [x] **Step 4: 全量编译确认接线正确**
 
 Run: `cargo build -p dozer-app`
 Expected: 编译成功,无新增警告(尤其确认 `Message::ImageAnnotateEvent` 两处使用——`runtime.rs` 发送、`update.rs` 接收——类型完全匹配,没有 match 分支遗漏警告)。
 
-- [ ] **Step 5: 跑 dozer-app 全部单测确认无回归**
+- [x] **Step 5: 跑 dozer-app 全部单测确认无回归**
 
 Run: `cargo test -p dozer-app`
 Expected: 全部 PASS。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/dozer-app/src/app/message.rs crates/dozer-app/src/runtime.rs crates/dozer-app/src/app/update.rs
@@ -1201,7 +1201,7 @@ git commit -m "feat(image-annotate): wire IPC dispatch for ImageAnnotateEvent"
 
 **Files:** 无新增/修改代码文件(除非验证中发现问题需要回头小修)。
 
-- [ ] **Step 1: 全 workspace 编译 + lint + 格式检查**
+- [x] **Step 1: 全 workspace 编译 + lint + 格式检查**
 
 ```bash
 cargo build
@@ -1211,7 +1211,7 @@ cargo fmt --check
 
 Expected: 全部无错误(`cargo fmt --check` 若报格式问题,跑 `cargo fmt` 后重新 `git add`/`git commit`)。
 
-- [ ] **Step 2: 全 workspace 测试**
+- [x] **Step 2: 全 workspace 测试**
 
 ```bash
 cargo test
@@ -1236,7 +1236,7 @@ cargo run -p dozer-app
 
 任何一项不通过,回到对应 Task 定位问题、修复、重新提交,不要在验收清单打勾造假。
 
-- [ ] **Step 4: 最终 Commit(若 Step 1-3 期间有修复性改动)**
+- [x] **Step 4: 最终 Commit(若 Step 1-3 期间有修复性改动)**
 
 ```bash
 git add -A
