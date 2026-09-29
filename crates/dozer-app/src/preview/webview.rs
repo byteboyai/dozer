@@ -103,11 +103,25 @@ pub(crate) fn html_url(path: &std::path::Path) -> String {
     )
 }
 
-/// T9/T8:从 Rendered host(Flyfish 或隔离 HTML)URL 的查询串解析归属绑定
-/// (`proj`/`panel`/`tab`/`doc`),供 host 回传 envelope 时校验归属。非 Rendered
-/// host URL 或缺字段返回 `None`。
+/// image-annotate host 的 URL:与 `flyfish_url` 同为 Rendered host,但走
+/// OpenSeadragon + Annotorious 图片查看/标注 host。仅 `png/jpg/jpeg/webp/bmp/ico`
+/// 经此(判据 `router::is_image_annotate_extension`),`gif/tif/tiff` 仍走 Flyfish。
+pub(crate) fn image_annotate_url(path: &std::path::Path) -> String {
+    format!(
+        "dozer://image-annotate/host.html?p={}&theme={}",
+        encode_component(&path.to_string_lossy()),
+        scheme_query_value()
+    )
+}
+
+/// T9/T8:从 Rendered host(Flyfish、隔离 HTML 或 image-annotate)URL 的查询串
+/// 解析归属绑定(`proj`/`panel`/`tab`/`doc`),供 host 回传 envelope 时校验归属。
+/// 非 Rendered host URL 或缺字段返回 `None`。
 pub(crate) fn flyfish_binding_from_url(url: &str) -> Option<HostBinding> {
-    if !url.starts_with("dozer://flyfish/") && !url.starts_with("dozer://html/") {
+    if !url.starts_with("dozer://flyfish/")
+        && !url.starts_with("dozer://html/")
+        && !url.starts_with("dozer://image-annotate/")
+    {
         return None;
     }
     let query = url.split_once('?')?.1;
@@ -133,8 +147,13 @@ pub(crate) fn flyfish_binding_from_url(url: &str) -> Option<HostBinding> {
     Some(HostBinding::new(proj?, panel, tab?, doc?))
 }
 
-/// `TabKind::File` → wry 期望加载的 URL,按扩展名分派两条渲染路径。
+/// `TabKind::File` → wry 期望加载的 URL,按扩展名分派三条渲染路径:
+/// 隔离 HTML、image-annotate、其余(含 gif/tif/tiff)回落 Flyfish。这是唯一
+/// URL 决策点;扩展名判据集中在 `router::is_image_annotate_extension`。
 pub(crate) fn preview_url(path: &std::path::Path) -> String {
+    if is_image_annotate_extension(path) {
+        return image_annotate_url(path);
+    }
     match path
         .extension()
         .and_then(|e| e.to_str())
@@ -167,5 +186,24 @@ mod tests {
             flyfish_binding_from_url("dozer://editor/x?proj=1&panel=files&tab=2&doc=d").is_none()
         );
         assert!(flyfish_binding_from_url("dozer://flyfish/host.html?p=x").is_none());
+    }
+
+    #[test]
+    fn image_annotate_url_targets_its_namespace_and_carries_theme() {
+        let u = image_annotate_url(std::path::Path::new("/tmp/图 a.png"));
+        assert!(u.starts_with("dozer://image-annotate/host.html?p="), "{u}");
+        assert!(u.contains("&theme="), "{u}");
+    }
+
+    #[test]
+    fn image_annotate_binding_from_url_parses_query() {
+        let q = "?p=x&proj=3&panel=files&tab=7&doc=p3-t7";
+        let b = flyfish_binding_from_url(&format!("dozer://image-annotate/host.html{q}"));
+        assert_eq!(b.map(|b| (b.tab_id, b.panel)), Some((7, PanelKind::Files)));
+        // 走 image_annotate_url 构造出的 URL 本身不挂 proj/panel/tab/doc(由
+        // app.rs 注入),故直接解析应为 None——注入后才可解析(E2E 覆盖)。
+        assert!(
+            flyfish_binding_from_url(&image_annotate_url(std::path::Path::new("a.png"))).is_none()
+        );
     }
 }

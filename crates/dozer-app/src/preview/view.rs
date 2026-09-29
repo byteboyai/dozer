@@ -3055,6 +3055,22 @@ mod tests {
     }
 
     #[test]
+    fn preview_url_dispatches_annotate_exts_and_keeps_gif_tif_on_flyfish() {
+        for p in ["/tmp/a.png", "/tmp/b.JPG", "/tmp/c.jpeg", "/tmp/d.webp", "/tmp/e.bmp", "/tmp/f.ico"] {
+            let u = preview_url(std::path::Path::new(p));
+            assert!(u.starts_with("dozer://image-annotate/host.html?"), "{p} → {u}");
+        }
+        // gif/tif/tiff 明确不迁移:canvas 丢动画 / OSD 无 TIFF 解码。
+        for p in ["/tmp/a.gif", "/tmp/b.tif", "/tmp/c.tiff"] {
+            assert_eq!(
+                preview_url(std::path::Path::new(p)),
+                flyfish_url(std::path::Path::new(p)),
+                "{p} 必须仍走 flyfish"
+            );
+        }
+    }
+
+    #[test]
     fn flyfish_binding_from_url_parses_query_and_rejects_non_flyfish() {
         let url =
             "dozer://flyfish/host.html?p=%2Fa.md&theme=dark&proj=7&panel=project&tab=3&doc=p7-t3";
