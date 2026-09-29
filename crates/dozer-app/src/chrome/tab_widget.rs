@@ -21,9 +21,9 @@ use iced_widget::{MouseArea, column, container, row, scrollable, stack, text};
 /// 放大(原先与右侧同为 4,标题贴左缘太紧),右侧维持贴近关闭按钮的窄距。
 /// 上下 `PANEL_TAB_PAD_Y` 从 1 收到 0(验收反馈:tab 栏分割线要跟左栏
 /// header 分割线对齐,tab 栏整体降 2px 更贴近 header 那侧的基线)。
-const PANEL_TAB_PAD_LEFT: f32 = 10.0;
-const PANEL_TAB_PAD_X: f32 = 4.0;
-const PANEL_TAB_PAD_Y: f32 = 0.0;
+pub(crate) const PANEL_TAB_PAD_LEFT: f32 = 10.0;
+pub(crate) const PANEL_TAB_PAD_X: f32 = 4.0;
+pub(crate) const PANEL_TAB_PAD_Y: f32 = 0.0;
 
 /// 传给 `tab_label::max_width` 表示"不设上限"的名目值——面板 tab 随标题实际
 /// 内容伸缩,标题区用不上限宽参数 (`tab_label` 仅在下拉行需要按行宽裁列)。

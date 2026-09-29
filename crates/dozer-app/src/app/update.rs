@@ -3905,6 +3905,12 @@ impl App {
             // 那会把这个页签既有的终端全关掉、文件树对话列表全清空重来。
             self.current_page = AppPage::Workspace;
             self.ensure_loaded(id);
+            // 前台化同样是"换到另一个项目"(focus_project_tab 是唯一一条
+            // 换项目的路),Git Log 面板开着时要补同步,理由同
+            // `ProjectTabSwitch`。
+            if self.git_log_panel_active() {
+                self.sync_git_log_to_active_project();
+            }
             self.with_focused_project(move |ws, _io| {
                 ws.recent_projects = recent;
             });
@@ -3924,6 +3930,10 @@ impl App {
         // 换成新项目的面板布局(它自己没存过就退化成默认)。
         self.adopt_panel_layout(id);
         self.current_page = AppPage::Workspace;
+        // 全新页签同样过一遍 Git Log 同步(默认布局没开它时是廉价 no-op)。
+        if self.git_log_panel_active() {
+            self.sync_git_log_to_active_project();
+        }
         self.sync_terminal_grid(); // 同上
         self.persist_open_projects();
         // 新开的项目 tab(区别于"已开着、只是前台化"那条 `focus_project_tab`
@@ -3954,8 +3964,10 @@ impl App {
         // Git Log 面板已经开着的话,提交图缓存是 `App` 级的、不随项目
         // 页签走(见 `sync_git_log_to_active_project` 文档),不补这一
         // 下切页签会让提交图停在上一个项目,跟同一面板里已经按新项目
-        // 刷新的 worktree 速览条对不上。
-        if self.left_view == PanelKind::GitLog {
+        // 刷新的 worktree 速览条对不上。两栏都查:GitLog 被拖到右栏后
+        // `left_view` 不再是它,只查左栏会漏(用户实测:右栏 Git Log 切
+        // 页签后一直显示前一项目的提交)。
+        if self.git_log_panel_active() {
             self.sync_git_log_to_active_project();
         }
         // 清放大态后必须重算终端网格。`PaneResized` 那条分支只在**窗口
@@ -4005,6 +4017,11 @@ impl App {
             // 焦点被挪到了邻居页签,把它的面板布局换上来。
             self.adopt_panel_layout(next);
             self.ensure_loaded(next);
+            // 邻居页签的布局里开着 Git Log 的话,提交图缓存还停在刚被关
+            // 掉的那个项目上——同 `ProjectTabSwitch` 的补同步理由。
+            if self.git_log_panel_active() {
+                self.sync_git_log_to_active_project();
+            }
         }
         self.sync_terminal_grid(); // 清放大态后重算网格,理由同 `ProjectTabSwitch`
         self.persist_open_projects();

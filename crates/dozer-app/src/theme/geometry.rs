@@ -74,12 +74,13 @@ pub fn git_log_diff_header_h_px() -> f32 {
 
 /// 文件列表上方「分类筛选 tab」一行的高度（逻辑像素），已含全局 scale。
 ///
-/// tab 是 `button(text(caption)).padding([3,8])` + 1px 边框：文字行高按
-/// 字号 × 1.2 近似（iced 默认行高），加 tab 变体的上下内边距 3+3，再加边框
-/// 上下各 1。边框那 2px 是**取大不取小**——宁可把 header 估高一点，也别让
-/// 外部算出的 diff webview 上缘爬进文件列表/分割线里。
+/// tab 直接复用文件预览等面板页签的 `tab_label` + `tab_container_style`：
+/// 标题按 `body` 字号（14px）排版，上下内边距 `PANEL_TAB_PAD_Y` 为 0（见
+/// `chrome::tab_widget`），所以 tab 行高 ≈ 文字行高（body×1.2）。边框内绘、
+/// 不占布局，这里**不**额外加边框高度——与真实渲染一致即可，宁可略估低也
+/// 别让 diff webview 盖住文件列表。
 pub fn git_log_filter_tab_h_px() -> f32 {
-    byteui::theme::font::caption() as f32 * 1.2 + 3.0 + 3.0 + 2.0
+    byteui::theme::font::body() as f32 * 1.2
 }
 
 /// 用量面板内容侧 webview 之上、面板头(图标+"用量"标题+收起按钮,继续
@@ -126,13 +127,10 @@ mod tests {
     #[test]
     fn git_log_diff_header_matches_composition() {
         let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
-        assert!(near(
-            git_log_filter_tab_h_px(),
-            12.0 * 1.2 + 3.0 + 3.0 + 2.0
-        ));
+        assert!(near(git_log_filter_tab_h_px(), 14.0 * 1.2));
         assert!(near(
             git_log_diff_header_h_px(),
-            12.0 * 1.2 + 3.0 + 3.0 + 2.0 + 6.0 + 1.0 + 4.0 + 4.0
+            14.0 * 1.2 + 6.0 + 1.0 + 4.0 + 4.0
         ));
     }
 

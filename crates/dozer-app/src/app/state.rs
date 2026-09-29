@@ -8,6 +8,7 @@ use dozer_core::protocol::ProjectInfo;
 use iced_widget::core::Color;
 
 use crate::chrome::rail;
+use crate::extensions::git_log::FileFilter;
 use crate::workspace::Workspace;
 
 use super::layout::{PanelDims, ShellLayout};
@@ -257,6 +258,11 @@ pub enum HoverId {
     /// Git Log 面板改动文件列表某行(按下标区分):hover 时填充 `CARD` 背景 +
     /// 金色描边(见 `extensions::git_log::file_list_view`,统一卡片样式)。
     GitFile(usize),
+    /// Git Log 面板改动文件列表上方的分类筛选 tab(按筛选维度区分):hover 时
+    /// 标题 DIM→GOLD、浮现 `TAB_HOVER` 胶囊,选中态 CARD 实底+1px 边框——与
+    /// 文件预览等面板页签共用 `chrome::tab_widget` 的同一套 `tab_label`/
+    /// `tab_container_style`(见 `extensions::git_log::file_filter_tabs`)。
+    GitFileFilter(FileFilter),
     /// Git Log 面板 commit 搜索框内的提交按钮(`Search`):静止 DIM,hover
     /// 平滑过渡到 GOLD,处理方式同 `ConversationSearchSubmit`(见
     /// `extensions::git_log::commit_search_box`)。

@@ -3521,12 +3521,15 @@ impl App {
 
     /// 保证 `git_log` 状态跟得上"现在应该看哪个项目"——`git_log: State`
     /// 是 `App` 级字段,不是每个项目各自一份(不像 `Workspace.files`),
-    /// 所以面板打开时(`PanelSelect`)和切项目页签时(`ProjectTabSwitch`)
-    /// 都得调这个方法对齐一次,否则 Git Log 面板开着的状态下切页签,提交图
-    /// 会停在上一个项目不动,而同一面板里的 worktree 速览条(`ws.files
-    /// .worktrees()` 是按项目取的)却已经跳到新项目——两者对不上。缓存已经是当前项目的
-    /// 路径就不动(避免每次切页签都重算一遍),路径不一致就重建,没有项目
-    /// 就清空。只在 `left_view == PanelKind::GitLog` 时调用才有意义。
+    /// 所以面板打开时(`PanelSelect`)和切项目页签时(`ProjectTabSwitch`/
+    /// `ProjectTabOpened` 前台化/`ProjectTabClose` 焦点挪邻)都得调这个
+    /// 方法对齐一次,否则 Git Log 面板开着的状态下切页签,提交图会停在上
+    /// 一个项目不动,而同一面板里的 worktree 速览条(`ws.files.worktrees()`
+    /// 是按项目取的)却已经跳到新项目——两者对不上。缓存已经是当前项目的
+    /// 路径就不动(避免每次切页签都重算一遍),路径不一致就重建(走
+    /// `request_project_refresh`,先清旧缓存让面板显示"加载中…"而不是
+    /// 上一个项目的提交列表),没有项目就清空。调用前用
+    /// `git_log_panel_active()` 判断 Git Log 面板是否开着才有意义。
     pub(crate) fn sync_git_log_to_active_project(&mut self) {
         let path = self
             .active_workspace()
@@ -3538,7 +3541,7 @@ impl App {
                 let emit = move |m| {
                     let _ = proxy.send_event(Message::GitLog(m));
                 };
-                git_log::request_refresh(
+                git_log::request_project_refresh(
                     &mut self.git_log,
                     p,
                     git_log::DEFAULT_MAX_COMMITS,
@@ -3551,6 +3554,14 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Git Log 面板当前是否开着(任意一栏的 active view 是它)。图标栏拖拽
+    /// 换栏(rail-panel-drag-relocation)之后 GitLog 可能挂在右栏,切项目
+    /// 页签时的同步判断不能只看 `left_view`——否则右栏开着 Git Log 的项目
+    /// 切过来,面板会一直停在上一份(上一个项目的)缓存上。
+    pub(crate) fn git_log_panel_active(&self) -> bool {
+        self.left_view == PanelKind::GitLog || self.right_view == PanelKind::GitLog
     }
 }
 

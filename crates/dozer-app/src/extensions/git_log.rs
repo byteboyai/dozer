@@ -7,11 +7,15 @@
 //! 画一根直线,commit 是线上的一个圆点,父子关系用直线连接(不是贝塞尔)。
 //! 验证通过、决定转正时,再补动画/交互/性能优化。
 use crate::app::{App, HoverId};
+use crate::chrome::tab_widget::{
+    NO_TAB_W_LIMIT, PANEL_TAB_PAD_LEFT, PANEL_TAB_PAD_X, PANEL_TAB_PAD_Y, tab_container_style,
+    tab_label,
+};
 use crate::theme;
 use iced_widget::core::alignment;
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
-use iced_widget::core::{Border, Element, Font, Length, Rectangle};
+use iced_widget::core::{Border, Element, Font, Length, Padding, Rectangle, mouse};
 use iced_widget::{MouseArea, column, container, row, scrollable, text};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -282,7 +286,7 @@ pub struct CommitDetail {
 
 /// 文件列表上方的分类筛选维度。`All` = 不筛选(默认,也是切到不含当前分类
 /// 的提交时的回落值,见 `Message::DetailLoaded`)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum FileFilter {
     #[default]
     All,
@@ -774,6 +778,32 @@ pub fn request_refresh(
     });
 }
 
+/// 切到**另一个项目**时的重建入口(内核 `sync_git_log_to_active_project` 用)。
+/// 与 [`request_refresh`] 的区别只在先把旧项目的缓存快照清掉:加载期间面板
+/// 显示"加载中…"占位,而不是继续渲染上一个项目的提交列表(用户把它当成
+/// 当前项目的历史)。同项目的 `.git` 引用变化重建**不走这里**——那条路
+/// (update.rs 的 git_watch 分支)要保留 cache,避免每次引用变化都闪一次
+/// 加载态。
+pub(crate) fn request_project_refresh(
+    state: &mut State,
+    repo_path: PathBuf,
+    max_count: usize,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    // 旧项目的一切痕迹都不带走:快照(`cache`)清掉让面板进"加载中…",
+    // diff 侧的选中文件/已加载内容/送达标记清掉让 CodeMirror webview 判定
+    // 不再需要而销毁(`request_refresh` 只清 `selected`/`detail`,那是给
+    // 同项目重建留的余地)。
+    state.cache = None;
+    state.selected_file = None;
+    state.loaded_diff = None;
+    state.diff_load_error = None;
+    state.diff_webview_ready = false;
+    state.diff_sent_for = None;
+    request_refresh(state, repo_path, max_count, handle, emit);
+}
+
 /// 取某个提交改动了哪些文件、每个文件的 diff 文本。合并提交(≥2 parent)
 /// 相对**第一父**算(与 `git show` 默认行为一致,不做三方 diff——spec D5)。
 /// 根提交(无 parent)相对空树算,等价于"全部文件都是新增"。
@@ -1085,14 +1115,16 @@ fn commit_list_view<'a>(
 /// 重命名」,只渲染当前提交里实际存在的分类(计数 > 0);「全部」恒在,即使
 /// 没有改动文件也保留,当兜底 tab。
 ///
-/// 计数取自当前选中提交的文件数,点击发 `Message::SetFileFilter`。视觉对齐
-/// `codehealth` 的 `filter_buttons`(选中 = CARD 实底 + 金边 + 奶油字,未选中
-/// = 无底 + 暗字),并补上本仓库统一的 dim→gold hover 反馈。
+/// 计数取自当前选中提交的文件数,点击发 `Message::SetFileFilter`。每个 tab
+/// 直接复用文件预览等面板页签同一套外观内核——`tab_label`(标题
+/// DIM→GOLD 按 hover 插值、body 字号)+ `tab_container_style`(选中 = CARD
+/// 实底 + 1px 边框,hover = TAB_HOVER 胶囊,静止透明)——这样分类筛选 tab 与
+/// 预览页签视觉一致;hover 动画也走统一的 `HoverId::GitFileFilter`。
 fn file_filter_tabs<'a>(
+    app: &App,
     detail: &CommitDetail,
     current: FileFilter,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let c = byteui::theme::color::current();
     // 顺序与用户给的示例一致:「全部」放最前当默认项。
     let candidates = [
         (FileFilter::All, "全部"),
@@ -1113,45 +1145,26 @@ fn file_filter_tabs<'a>(
             continue;
         }
         let active = filter == current;
-        bar = bar.push(
-            iced_widget::button(
-                text(format!("{label}({count})")).size(byteui::theme::font::caption()),
-            )
+        let title = format!("{label}({count})");
+        // hover 进度走统一动画表(`Message::Hover` 由内核 `set_hover` 接管),
+        // 与预览/终端页签的标题 hover 表现同一套插值。
+        let hover_t = app.hover_progress(HoverId::GitFileFilter(filter));
+        let label_el = tab_label(None, title, active, hover_t, NO_TAB_W_LIMIT);
+        let chip = container(label_el)
+            .padding(Padding {
+                top: PANEL_TAB_PAD_Y,
+                right: PANEL_TAB_PAD_X,
+                bottom: PANEL_TAB_PAD_Y,
+                left: PANEL_TAB_PAD_LEFT,
+            })
+            .width(Length::Shrink)
+            .style(tab_container_style(active, hover_t));
+        let area = MouseArea::new(chip)
             .on_press(Message::SetFileFilter(filter))
-            .padding([3, 8])
-            .style(
-                move |_t: &iced_widget::Theme, status: iced_widget::button::Status| {
-                    let hovered = matches!(
-                        status,
-                        iced_widget::button::Status::Hovered | iced_widget::button::Status::Pressed
-                    );
-                    iced_widget::button::Style {
-                        background: if active || hovered {
-                            Some(c.card.into())
-                        } else {
-                            None
-                        },
-                        text_color: if active {
-                            c.cream
-                        } else if hovered {
-                            c.gold
-                        } else {
-                            c.dim
-                        },
-                        border: Border {
-                            color: if active {
-                                c.gold
-                            } else {
-                                iced_widget::core::Color::TRANSPARENT
-                            },
-                            width: 1.0,
-                            radius: 6.0.into(),
-                        },
-                        ..iced_widget::button::Style::default()
-                    }
-                },
-            ),
-        );
+            .on_enter(Message::Hover(HoverId::GitFileFilter(filter), true))
+            .on_exit(Message::Hover(HoverId::GitFileFilter(filter), false))
+            .interaction(mouse::Interaction::Pointer);
+        bar = bar.push(area);
     }
     bar.into()
 }
@@ -1356,7 +1369,7 @@ pub fn view<'a>(
             // 严格同源——外部据此算 diff webview 的落点。
             let filter_bar: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
                 match detail {
-                    Ok(d) => file_filter_tabs(d, state.file_filter),
+                    Ok(d) => file_filter_tabs(app, d, state.file_filter),
                     Err(_) => text("0 个修改的文件")
                         .size(byteui::theme::font::caption())
                         .color(byteui::theme::color::current().dim)
@@ -2977,6 +2990,46 @@ mod tests {
         assert!(state.selected.is_none());
         assert!(state.detail.is_none());
         assert_eq!(state.pending, Some((repo_path, 50)));
+    }
+
+    /// 切项目的重建入口必须把旧项目的快照/diff 侧状态全清掉——否则新快照
+    /// 落地前面板继续渲染上一个项目的提交列表(用户把它当成当前项目的历史),
+    /// 旧 commit 的 diff webview 判定也拿不到干净的销毁条件。
+    #[tokio::test]
+    async fn request_project_refresh_clears_stale_project_state() {
+        let old_repo = PathBuf::from("/tmp/old-repo");
+        let new_repo = PathBuf::from("/tmp/new-repo");
+        let oid = git2::Oid::from_bytes(&[9; 20]).unwrap();
+        let mut state = State {
+            cache: Some(snapshot_at(&old_repo, 10)),
+            selected: Some(oid),
+            detail: Some(Ok(CommitDetail { files: Vec::new() })),
+            selected_file: Some("a.rs".to_string()),
+            loaded_diff: Some(LoadedDiff {
+                commit: oid,
+                path: "a.rs".to_string(),
+                content: DiffBlobContent::Text {
+                    old_text: "x".into(),
+                    new_text: "y".into(),
+                },
+            }),
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        request_project_refresh(&mut state, new_repo.clone(), 50, &handle, |_| {});
+        assert!(
+            state.cache.is_none(),
+            "切项目时旧快照必须清掉,让面板显示加载态而不是旧项目的提交"
+        );
+        assert!(state.selected_file.is_none());
+        assert!(state.loaded_diff.is_none());
+        assert!(state.diff_load_error.is_none());
+        assert!(!state.diff_webview_ready);
+        assert!(state.diff_sent_for.is_none());
+        // request_refresh 的既有语义原样保留:选中/详情清空 + 记录 pending。
+        assert!(state.selected.is_none());
+        assert!(state.detail.is_none());
+        assert_eq!(state.pending, Some((new_repo, 50)));
     }
 
     fn make_commit_row(summary: &str) -> CommitRow {
