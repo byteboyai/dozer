@@ -91,6 +91,11 @@ pub struct PreviewTab {
     /// 切 mode / suspend / 重试 / 项目关闭时经 [`PreviewTab::cancel_background`]
     /// 置位并换新,确保旧任务尽快退出、新任务不被误取消。
     pub task_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// image-annotate host 内当前标注集合的镜像(Annotorious 导出数组原样透传,
+    /// 不解析结构)。仅内存:不持久化、不交付 agent(见 spec `2026-09-29`)。
+    /// 仅 `png/jpg/jpeg/webp/bmp/ico` 的 tab 会非空;host `annotations_changed`
+    /// 时整体替换。
+    pub image_annotations: Vec<serde_json::Value>,
 }
 
 impl PreviewTab {

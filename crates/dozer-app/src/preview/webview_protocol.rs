@@ -632,6 +632,58 @@ pub fn parse_flyfish_event(raw: &str) -> Result<WebviewEnvelope<FlyfishEvent>, P
     })
 }
 
+/// image-annotate host 的事件。与 `FlyfishEvent` **不复用**:那些 `Title`/
+/// `SearchState` 变体对图片查看无意义,而这里的 `AnnotationsChanged` 携带
+/// 标注数组、`Failed` 语义也不同(定位到图片解码)。标注按不透明
+/// `serde_json::Value` 承载——本期只做内存内保留,不做 W3C 反序列化/持久化/
+/// 交付,故 Rust 侧不定义标注结构。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ImageAnnotateEvent {
+    /// host 脚本初始化完成(元素已插入)。不代表图片已加载。
+    Ready,
+    /// 图片完成加载(T8:收到后才把原生子视图设为可见并 finish)。
+    DocumentLoaded,
+    /// 图片解码/读取失败。
+    Failed { message: String, recoverable: bool },
+    /// 标注集合发生变化(创建/更新/删除后 host 全量回传)。`annotations` 为
+    /// Annotorious 导出的标注数组原样透传,不透明。
+    AnnotationsChanged {
+        #[serde(default)]
+        annotations: Vec<serde_json::Value>,
+    },
+}
+
+/// 解析一条 image-annotate host 事件。与 [`parse_flyfish_event`] 同规则
+/// (超大/非法/未知不 panic)。
+pub fn parse_image_annotate_event(
+    raw: &str,
+) -> Result<WebviewEnvelope<ImageAnnotateEvent>, ProtocolError> {
+    if raw.len() > MAX_MESSAGE_BYTES {
+        return Err(ProtocolError::TooLarge { bytes: raw.len() });
+    }
+    let env: WebviewEnvelope<serde_json::Value> =
+        serde_json::from_str(raw).map_err(|e| ProtocolError::BadJson(e.to_string()))?;
+    let kind = env
+        .payload
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_default();
+    let payload: ImageAnnotateEvent = serde_json::from_value(env.payload)
+        .map_err(|_| ProtocolError::UnknownPayload(kind.clone()))?;
+    Ok(WebviewEnvelope {
+        protocol_version: env.protocol_version,
+        project_id: env.project_id,
+        panel: env.panel,
+        tab_id: env.tab_id,
+        document_id: env.document_id,
+        revision: env.revision,
+        request_id: env.request_id,
+        payload,
+    })
+}
+
 /// review-trace(单槽、非 tab)host 报回的事件。只有一个变体——
 /// review-trace 的失败已经是页面内可见的错误文案(见
 /// `web/review-trace/src/main.tsx` 的 `RenderErrorBoundary`/`.catch`),
@@ -1374,6 +1426,62 @@ mod tests {
             Err(ProtocolError::UnknownPayload(_))
         ));
         assert!(parse_flyfish_event("not json").is_err());
+    }
+
+    /// image-annotate:envelope 解析 + 归属校验 + 标注数组透传。
+    #[test]
+    fn parses_and_validates_image_annotate_events() {
+        let raw = r#"{"protocol_version":1,"project_id":7,"panel":"files","tab_id":3,"document_id":"p7-t3","revision":0,"request_id":null,"payload":{"kind":"failed","message":"boom","recoverable":true}}"#;
+        let env = parse_image_annotate_event(raw).unwrap();
+        assert_eq!(
+            env.payload,
+            ImageAnnotateEvent::Failed {
+                message: "boom".into(),
+                recoverable: true
+            }
+        );
+        let good = HostBinding::new(7, PanelKind::Files, 3, "p7-t3".into());
+        assert!(env.validate(&good).is_ok());
+        assert!(
+            env.validate(&HostBinding::new(7, PanelKind::Project, 3, "p7-t3".into()))
+                .is_err()
+        );
+
+        for (raw, want) in [
+            (r#"{"kind":"ready"}"#, ImageAnnotateEvent::Ready),
+            (
+                r#"{"kind":"document_loaded"}"#,
+                ImageAnnotateEvent::DocumentLoaded,
+            ),
+            (
+                r#"{"kind":"annotations_changed"}"#,
+                ImageAnnotateEvent::AnnotationsChanged {
+                    annotations: vec![],
+                },
+            ),
+            (
+                r#"{"kind":"annotations_changed","annotations":[{"id":"a1"},{"id":"a2"}]}"#,
+                ImageAnnotateEvent::AnnotationsChanged {
+                    annotations: vec![
+                        serde_json::json!({"id":"a1"}),
+                        serde_json::json!({"id":"a2"}),
+                    ],
+                },
+            ),
+        ] {
+            let full = format!(
+                r#"{{"protocol_version":1,"project_id":1,"panel":"files","tab_id":1,"document_id":"d","payload":{raw}}}"#
+            );
+            assert_eq!(parse_image_annotate_event(&full).unwrap().payload, want);
+        }
+
+        // 未知 kind / 非 JSON 报错且不 panic。
+        let bad = r#"{"protocol_version":1,"payload":{"kind":"title","title":"x"}}"#;
+        assert!(matches!(
+            parse_image_annotate_event(bad),
+            Err(ProtocolError::UnknownPayload(_))
+        ));
+        assert!(parse_image_annotate_event("not json").is_err());
     }
 
     #[test]

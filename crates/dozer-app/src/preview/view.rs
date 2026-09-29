@@ -50,6 +50,7 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         conflict_baseline: None,
         tabular_host_ready: false,
         task_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        image_annotations: Vec::new(),
     }
 }
 
@@ -282,6 +283,53 @@ impl PreviewPane {
             rt.error = None;
         }
         true
+    }
+
+    /// 应用 image-annotate host 事件。`bindings` 层已完成归属校验
+    /// (`HostBinding::validate`),这里只按 `tab_id` 找 tab 落状态,语义与
+    /// `Message::FlyfishEvent` 的各 arm 对齐:
+    /// - `Ready`:host 脚本就绪,不代表图片已加载,清错误、保持 Loading;
+    /// - `DocumentLoaded`:图片首帧就绪 → 置 Ready + finish(T8);
+    /// - `Failed`:回落统一 Failed 终态(原生子视图随后移除,fallback 页可见);
+    /// - `AnnotationsChanged`:整体替换内存镜像,不触加载状态。
+    pub fn apply_image_annotate_event(
+        &mut self,
+        tab_id: usize,
+        event: crate::preview::ImageAnnotateEvent,
+    ) {
+        use crate::preview::{BackendState, ImageAnnotateEvent, PreviewError, PreviewRuntime};
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return;
+        };
+        match event {
+            ImageAnnotateEvent::Ready => {
+                tab.web_error = None;
+            }
+            ImageAnnotateEvent::DocumentLoaded => {
+                if !tab.load_state.is_active() {
+                    return;
+                }
+                tab.web_error = None;
+                let _ = tab.backend_state.try_transition(BackendState::Ready);
+                tab.load_state.finish();
+            }
+            ImageAnnotateEvent::Failed {
+                message,
+                recoverable,
+            } => {
+                tab.runtime = PreviewRuntime::None;
+                tab.web_error = Some(message.clone());
+                let _ = tab.backend_state.try_transition(BackendState::Failed(
+                    PreviewError::new(message, recoverable),
+                ));
+                if tab.load_state.is_active() {
+                    tab.load_state.finish();
+                }
+            }
+            ImageAnnotateEvent::AnnotationsChanged { annotations } => {
+                tab.image_annotations = annotations;
+            }
+        }
     }
 
     /// T10:「保留我的修改」:清冲突态,以当前磁盘 mtime 作保存基线(下次保存
@@ -575,6 +623,7 @@ impl PreviewPane {
             conflict_baseline: None,
             tabular_host_ready: false,
             task_cancel: fresh_task_cancel(),
+            image_annotations: Vec::new(),
         };
         tab.debug_assert_backend_consistent();
         self.tabs.push(tab);
@@ -664,6 +713,7 @@ impl PreviewPane {
             conflict_baseline: None,
             tabular_host_ready: false,
             task_cancel: fresh_task_cancel(),
+            image_annotations: Vec::new(),
         };
         self.tabs.push(tab);
         id
@@ -6227,5 +6277,58 @@ mod tests {
                 .kind,
             PreviewKind::Unsupported
         );
+    }
+
+    #[test]
+    fn image_annotate_events_apply_to_matching_tab_only() {
+        use crate::preview::{ImageAnnotateEvent, PreviewRuntime};
+        let mut pane = PreviewPane::default();
+        let id = pane.push_tab(
+            TabKind::File(std::path::PathBuf::from("/tmp/pic.png")),
+            "pic.png".into(),
+        );
+        // 标注入镜像后不触加载状态。
+        pane.apply_image_annotate_event(
+            id,
+            ImageAnnotateEvent::AnnotationsChanged {
+                annotations: vec![serde_json::json!({"id":"a1"})],
+            },
+        );
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert_eq!(tab.image_annotations.len(), 1);
+        // 非本 tab 的事件不污染。
+        pane.apply_image_annotate_event(
+            id + 999,
+            ImageAnnotateEvent::AnnotationsChanged {
+                annotations: vec![serde_json::json!({"id":"z"})],
+            },
+        );
+        assert_eq!(
+            pane.tabs()
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap()
+                .image_annotations
+                .len(),
+            1
+        );
+        // Failed 回落统一 Failed 终态并清 runtime(先置 Loading,模拟生产
+        // 建壳后的加载态——`try_transition` 只允许 Loading→Failed)。
+        pane.tabs_mut()
+            .iter_mut()
+            .find(|t| t.id == id)
+            .unwrap()
+            .backend_state = crate::preview::BackendState::Loading;
+        pane.apply_image_annotate_event(
+            id,
+            ImageAnnotateEvent::Failed {
+                message: "decode".into(),
+                recoverable: true,
+            },
+        );
+        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
+        assert!(tab.backend_state.is_failed());
+        assert!(matches!(tab.runtime, PreviewRuntime::None));
+        assert_eq!(tab.web_error.as_deref(), Some("decode"));
     }
 }
