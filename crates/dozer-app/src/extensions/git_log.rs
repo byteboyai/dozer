@@ -280,6 +280,44 @@ pub struct CommitDetail {
     pub files: Vec<DiffFileEntry>,
 }
 
+/// 文件列表上方的分类筛选维度。`All` = 不筛选(默认,也是切到不含当前分类
+/// 的提交时的回落值,见 `Message::DetailLoaded`)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FileFilter {
+    #[default]
+    All,
+    /// 就地改动(`Modified`,以及 `Typechange` 这类没有专属 tab 的 delta)。
+    Modified,
+    Added,
+    Deleted,
+    /// 重命名 / 复制(`Renamed`/`Copied`)。
+    Renamed,
+}
+
+impl FileFilter {
+    /// 这个筛选是否接纳某个 git delta。
+    ///
+    /// 分桶与 `status_glyph` 的字符一一对应(`+`→Added、`-`→Deleted、
+    /// `M`→Modified、`R`/`C`→Renamed);`status_glyph` 落到 `?` 的其它 delta
+    /// (如 `Typechange`)归入「修改」——它们本质上也是就地改动,不给它们单开
+    /// 一个几乎不会出现的 tab。
+    fn matches(self, status: git2::Delta) -> bool {
+        match self {
+            FileFilter::All => true,
+            FileFilter::Added => status == git2::Delta::Added,
+            FileFilter::Deleted => status == git2::Delta::Deleted,
+            FileFilter::Renamed => matches!(status, git2::Delta::Renamed | git2::Delta::Copied),
+            FileFilter::Modified => !matches!(
+                status,
+                git2::Delta::Added
+                    | git2::Delta::Deleted
+                    | git2::Delta::Renamed
+                    | git2::Delta::Copied
+            ),
+        }
+    }
+}
+
 /// Git Log 模块自己的消息类型——内核(`workspace.rs`)只认一个包装变体
 /// `Message::GitLog(extensions::git_log::Message)`,这个模块本身不 import
 /// 顶层 `Message`,不知道自己被包在哪个外层类型里。
@@ -301,6 +339,8 @@ pub enum Message {
     SnapshotLoaded(PathBuf, usize, Result<GitLogSnapshot, String>),
     /// 点文件列表某一行,选中它(右下面板据此展示该文件的 diff)。
     SelectFile(String),
+    /// 点文件列表上方的分类 tab,切换文件列表的筛选维度。
+    SetFileFilter(FileFilter),
     /// 选中文件的 blob 内容异步加载完成。`git2::Oid`/`String` 是加载发起时
     /// 的 commit/路径快照,落地前核对仍匹配当前选择,不匹配则丢弃(用户
     /// 手快切换选择后的迟到结果)。
@@ -352,6 +392,10 @@ pub struct State {
     /// 右上文件列表当前选中的文件路径(`CommitDetail.files[].path`)。切
     /// commit 时先清空,新 `detail` 落地后预选第一个改动文件。
     selected_file: Option<String>,
+    /// 文件列表上方的分类筛选(默认 `All` = 不筛选)。用户点 tab 切换;
+    /// 新 `detail` 落地时若该分类一个文件都没有,`Message::DetailLoaded`
+    /// 会把它回落成 `All`(否则会停在一个空列表上)。
+    file_filter: FileFilter,
     /// 当前选中文件已加载的 diff 内容(CodeMirror webview 用)。切
     /// commit/切选中文件时先清空,新结果落地(`DiffContentLoaded`)且仍
     /// 匹配当前选择才重新填入。
@@ -580,6 +624,10 @@ pub fn update(
             });
             None
         }
+        Message::SetFileFilter(filter) => {
+            state.file_filter = filter;
+            None
+        }
         Message::DiffContentLoaded(commit, path, result) => {
             if state.selected != Some(commit)
                 || state.selected_file.as_deref() != Some(path.as_str())
@@ -613,6 +661,18 @@ pub fn update(
                 == Some(repo_path.as_path())
                 && state.selected == Some(oid);
             if still_current {
+                // 新提交的文件构成可能不含当前筛选的分类(比如上个提交筛了
+                // "新增",这个提交一个新增文件都没有)——那种情况下该分类
+                // tab 已从 tab 栏消失,继续保留筛选只会得到一个空列表,故
+                // 回落到"全部"。`All` 恒匹配,不会被这里重置。
+                if let Ok(detail) = &result
+                    && !detail
+                        .files
+                        .iter()
+                        .any(|f| state.file_filter.matches(f.status))
+                {
+                    state.file_filter = FileFilter::All;
+                }
                 state.selected_file = match &result {
                     Ok(detail) => detail.files.first().map(|f| f.path.clone()),
                     Err(_) => None,
@@ -1021,13 +1081,90 @@ fn commit_list_view<'a>(
         .into()
 }
 
+/// 文件列表上方的分类筛选 tab 栏。固定顺序「全部 / 修改 / 新增 / 删除 /
+/// 重命名」,只渲染当前提交里实际存在的分类(计数 > 0);「全部」恒在,即使
+/// 没有改动文件也保留,当兜底 tab。
+///
+/// 计数取自当前选中提交的文件数,点击发 `Message::SetFileFilter`。视觉对齐
+/// `codehealth` 的 `filter_buttons`(选中 = CARD 实底 + 金边 + 奶油字,未选中
+/// = 无底 + 暗字),并补上本仓库统一的 dim→gold hover 反馈。
+fn file_filter_tabs<'a>(
+    detail: &CommitDetail,
+    current: FileFilter,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let c = byteui::theme::color::current();
+    // 顺序与用户给的示例一致:「全部」放最前当默认项。
+    let candidates = [
+        (FileFilter::All, "全部"),
+        (FileFilter::Modified, "修改"),
+        (FileFilter::Added, "新增"),
+        (FileFilter::Deleted, "删除"),
+        (FileFilter::Renamed, "重命名"),
+    ];
+    let mut bar = row![].spacing(6);
+    for (filter, label) in candidates {
+        let count = detail
+            .files
+            .iter()
+            .filter(|f| filter.matches(f.status))
+            .count();
+        // 空分类不出 tab——点进去必然是空列表,没有意义。
+        if count == 0 && filter != FileFilter::All {
+            continue;
+        }
+        let active = filter == current;
+        bar = bar.push(
+            iced_widget::button(
+                text(format!("{label}({count})")).size(byteui::theme::font::caption()),
+            )
+            .on_press(Message::SetFileFilter(filter))
+            .padding([3, 8])
+            .style(
+                move |_t: &iced_widget::Theme, status: iced_widget::button::Status| {
+                    let hovered = matches!(
+                        status,
+                        iced_widget::button::Status::Hovered | iced_widget::button::Status::Pressed
+                    );
+                    iced_widget::button::Style {
+                        background: if active || hovered {
+                            Some(c.card.into())
+                        } else {
+                            None
+                        },
+                        text_color: if active {
+                            c.cream
+                        } else if hovered {
+                            c.gold
+                        } else {
+                            c.dim
+                        },
+                        border: Border {
+                            color: if active {
+                                c.gold
+                            } else {
+                                iced_widget::core::Color::TRANSPARENT
+                            },
+                            width: 1.0,
+                            radius: 6.0.into(),
+                        },
+                        ..iced_widget::button::Style::default()
+                    }
+                },
+            ),
+        );
+    }
+    bar.into()
+}
+
 /// 右上文件列表:选中 commit 改动的每个文件一行(状态字符 + 路径),点击
 /// 发 `Message::SelectFile`,选中态同 `commit_list_view` 的金边(统一卡片样式:
-/// 选中=金边、hover=金边+填充、一般态=描边)。
+/// 选中=金边、hover=金边+填充、一般态=描边)。`filter` 是上方分类 tab 选中的
+/// 维度,只渲染匹配的行。
 fn file_list_view<'a>(
     app: &App,
     detail: &'a Result<CommitDetail, String>,
     selected_file: Option<&'a str>,
+    filter: FileFilter,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     match detail {
         Err(err) => container(
@@ -1046,7 +1183,13 @@ fn file_list_view<'a>(
         .into(),
         Ok(detail) => {
             let mut list = column![].spacing(2);
+            // 用 `enumerate()` 的原始下标当 `HoverId::GitFile` 的 key(而不是
+            // 过滤后的显示序号):key 与 `detail.files` 的下标绑定,切筛选时
+            // 同一个文件始终是同一个 key,悬停高亮不会串到别的文件上。
             for (i, f) in detail.files.iter().enumerate() {
+                if !filter.matches(f.status) {
+                    continue;
+                }
                 let is_selected = selected_file == Some(f.path.as_str());
                 let color = match f.status {
                     git2::Delta::Added => byteui::theme::color::current().green,
@@ -1206,19 +1349,22 @@ pub fn view<'a>(
     let (list_portion, content_portion) = crate::workspace::split_portions(git_log_split);
     let right: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
         if let Some(detail) = state.detail.as_ref() {
-            // 文件列表上方头部:改动文件计数 + 一条 1px 分割线(见需求
-            // "右侧文件列表上方新增头部统计文件数量")。计数直接取当前选中
-            // 提交 `detail` 的文件数;加载失败时记 0(此时 file_list_view
-            // 会另显示错误文案,头部只是个中性计数)。
-            let file_count = match detail {
-                Ok(d) => d.files.len(),
-                Err(_) => 0,
-            };
+            // 文件列表上方头部:分类筛选 tab 栏 + 一条 1px 分割线。tab 栏的
+            // 计数要从当前提交的文件列表算,所以只在 `detail` 落地成功时给出;
+            // 加载失败时退回一句中性计数(此时 `file_list_view` 会另显示错误
+            // 文案)。头部高度与 `theme::geometry::git_log_diff_header_h_px`
+            // 严格同源——外部据此算 diff webview 的落点。
+            let filter_bar: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
+                match detail {
+                    Ok(d) => file_filter_tabs(d, state.file_filter),
+                    Err(_) => text("0 个修改的文件")
+                        .size(byteui::theme::font::caption())
+                        .color(byteui::theme::color::current().dim)
+                        .into(),
+                };
             let header = container(
                 column![
-                    text(format!("{} 个修改的文件", file_count))
-                        .size(byteui::theme::font::caption())
-                        .color(byteui::theme::color::current().dim),
+                    filter_bar,
                     container(iced_widget::Space::new())
                         .width(Length::Fill)
                         .height(Length::Fixed(1.0))
@@ -1234,8 +1380,13 @@ pub fn view<'a>(
                 crate::workspace::split_portions(git_log_file_diff_split);
             column![
                 header,
-                container(file_list_view(app, detail, state.selected_file.as_deref()))
-                    .height(Length::FillPortion(top_portion)),
+                container(file_list_view(
+                    app,
+                    detail,
+                    state.selected_file.as_deref(),
+                    state.file_filter
+                ))
+                .height(Length::FillPortion(top_portion)),
                 crate::app::horizontal_divider_bar(
                     byteui::theme::color::current().bg,
                     byteui::theme::color::current().bg,
@@ -2202,6 +2353,108 @@ mod tests {
             state.selected_file.as_deref(),
             Some("a.rs"),
             "detail 落地后应预选第一个改动文件"
+        );
+    }
+
+    /// 构造一个只关心 `path`/`status` 的 `DiffFileEntry`——分类筛选测试里
+    /// 其余字段与筛选无关。
+    fn file_entry(path: &str, status: git2::Delta) -> DiffFileEntry {
+        DiffFileEntry {
+            path: path.to_string(),
+            status,
+            patch: String::new(),
+            truncated: false,
+            old_blob: None,
+            new_blob: None,
+        }
+    }
+
+    /// 分桶与 `status_glyph` 的字符一一对应:`+`→Added、`-`→Deleted、
+    /// `M`→Modified、`R`/`C`→Renamed;其余 delta(如 `Typechange`)归「修改」。
+    #[test]
+    fn file_filter_matches_buckets() {
+        use git2::Delta;
+        assert!(FileFilter::All.matches(Delta::Added));
+        assert!(FileFilter::Added.matches(Delta::Added));
+        assert!(!FileFilter::Added.matches(Delta::Modified));
+        assert!(FileFilter::Deleted.matches(Delta::Deleted));
+        assert!(FileFilter::Renamed.matches(Delta::Renamed));
+        assert!(FileFilter::Renamed.matches(Delta::Copied));
+        assert!(FileFilter::Modified.matches(Delta::Modified));
+        assert!(FileFilter::Modified.matches(Delta::Typechange));
+        for excluded in [Delta::Added, Delta::Deleted, Delta::Renamed, Delta::Copied] {
+            assert!(!FileFilter::Modified.matches(excluded), "{excluded:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn set_file_filter_switches_filter() {
+        let handle = tokio::runtime::Handle::current();
+        let mut state = State::default();
+        let result = update(
+            &mut state,
+            Message::SetFileFilter(FileFilter::Added),
+            &handle,
+            |_| {},
+        );
+        assert_eq!(state.file_filter, FileFilter::Added);
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn detail_loaded_resets_filter_when_category_absent() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let oid = git2::Oid::from_bytes(&[12; 20]).unwrap();
+        let mut state = State {
+            cache: Some(snapshot_at(&repo_path, 10)),
+            selected: Some(oid),
+            file_filter: FileFilter::Added,
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        let detail = CommitDetail {
+            files: vec![file_entry("a.rs", git2::Delta::Modified)],
+        };
+        update(
+            &mut state,
+            Message::DetailLoaded(repo_path, oid, Ok(detail)),
+            &handle,
+            |_| {},
+        );
+        assert_eq!(
+            state.file_filter,
+            FileFilter::All,
+            "新提交没有「新增」文件时应回落「全部」,否则会停在空列表上"
+        );
+    }
+
+    #[tokio::test]
+    async fn detail_loaded_keeps_filter_when_category_present() {
+        let repo_path = PathBuf::from("/tmp/repo");
+        let oid = git2::Oid::from_bytes(&[13; 20]).unwrap();
+        let mut state = State {
+            cache: Some(snapshot_at(&repo_path, 10)),
+            selected: Some(oid),
+            file_filter: FileFilter::Added,
+            ..State::default()
+        };
+        let handle = tokio::runtime::Handle::current();
+        let detail = CommitDetail {
+            files: vec![
+                file_entry("a.rs", git2::Delta::Modified),
+                file_entry("b.rs", git2::Delta::Added),
+            ],
+        };
+        update(
+            &mut state,
+            Message::DetailLoaded(repo_path, oid, Ok(detail)),
+            &handle,
+            |_| {},
+        );
+        assert_eq!(
+            state.file_filter,
+            FileFilter::Added,
+            "新提交仍有「新增」文件时不该重置筛选"
         );
     }
 

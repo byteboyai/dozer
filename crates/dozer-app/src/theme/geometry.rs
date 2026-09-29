@@ -58,18 +58,28 @@ pub fn tree_chrome_bottom_px() -> f32 {
     region.padding.bottom + region.gap + footer_bar_h
 }
 
-/// Git Log 面板右下 diff pane 之上那段固定头部（"N 个修改的文件"计数 +
-/// 1px 分割线）的高度（逻辑像素），已含全局 scale。`git_log.rs::view` 的
+/// Git Log 面板右下 diff pane 之上那段固定头部（分类筛选 tab 栏 + 1px
+/// 分割线）的高度（逻辑像素），已含全局 scale。`git_log.rs::view` 的
 /// `right` 列是 `column![header, 文件列表(上 portion), 横向分割线, diff(下
 /// portion)]`，`FillPortion` 在扣掉这个固定头部与横向分割线之后才按权重分
 /// 剩余高度——外部算 diff pane 矩形时必须先把这段固定高度减掉，否则端口
 /// 会比实际渲染的 diff 内容区高出/低了一整个头部。
 ///
-/// 头部是 `container(column![text(caption), 1px].spacing(6)).padding([4,8])`：
-/// 行文字按字号 × 1.2 近似（iced 默认行高），加 `spacing 6` + 分割线 1 +
-/// 上下内边距 4+4。这里**复刻** `git_log.rs` 那段堆栈，不另起字面量。
+/// 头部是 `container(column![tab 栏, 1px].spacing(6)).padding([4,8])`，tab
+/// 栏高度见 `git_log_filter_tab_h_px`。这里**复刻** `git_log.rs` 那段堆栈，
+/// 不另起字面量。
 pub fn git_log_diff_header_h_px() -> f32 {
-    byteui::theme::font::caption() as f32 * 1.2 + 6.0 + 1.0 + 4.0 + 4.0
+    git_log_filter_tab_h_px() + 6.0 + 1.0 + 4.0 + 4.0
+}
+
+/// 文件列表上方「分类筛选 tab」一行的高度（逻辑像素），已含全局 scale。
+///
+/// tab 是 `button(text(caption)).padding([3,8])` + 1px 边框：文字行高按
+/// 字号 × 1.2 近似（iced 默认行高），加 tab 变体的上下内边距 3+3，再加边框
+/// 上下各 1。边框那 2px 是**取大不取小**——宁可把 header 估高一点，也别让
+/// 外部算出的 diff webview 上缘爬进文件列表/分割线里。
+pub fn git_log_filter_tab_h_px() -> f32 {
+    byteui::theme::font::caption() as f32 * 1.2 + 3.0 + 3.0 + 2.0
 }
 
 /// 用量面板内容侧 webview 之上、面板头(图标+"用量"标题+收起按钮,继续
@@ -111,13 +121,18 @@ mod tests {
     }
 
     /// Git Log diff 头部高度随 caption 字号 + 固定 chrome 同步折算
-    /// （基准 scale=1:caption 12 × 1.2 + 间距 6 + 分割线 1 + 内边距 8）。
+    /// （基准 scale=1:tab 行 12×1.2 + 3+3 内边距 + 2 边框 = 20.4，加
+    /// 间距 6 + 分割线 1 + 内边距 8）。
     #[test]
     fn git_log_diff_header_matches_composition() {
         let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
         assert!(near(
+            git_log_filter_tab_h_px(),
+            12.0 * 1.2 + 3.0 + 3.0 + 2.0
+        ));
+        assert!(near(
             git_log_diff_header_h_px(),
-            12.0 * 1.2 + 6.0 + 1.0 + 4.0 + 4.0
+            12.0 * 1.2 + 3.0 + 3.0 + 2.0 + 6.0 + 1.0 + 4.0 + 4.0
         ));
     }
 
