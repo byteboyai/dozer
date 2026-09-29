@@ -930,6 +930,56 @@ mod tests {
             404
         );
     }
+
+    /// Task 1:vendor 的 image-annotate 依赖必须存在且非空(防止忘记提交)。
+    #[test]
+    fn image_annotate_vendor_assets_are_present() {
+        let root = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/image-annotate/vendor"
+        ));
+        for f in ["openseadragon.esm.js", "annotorious-openseadragon.esm.js"] {
+            let p = root.join(f);
+            assert!(p.is_file(), "缺少 image-annotate vendor 产物 {f}: {}", p.display());
+            assert!(
+                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 0,
+                "image-annotate vendor 产物为空: {f}"
+            );
+        }
+    }
+
+    /// Task 1:vendor 产物不得残留**外部网络加载**(CSP "无网络" 约束的前提)。
+    ///
+    /// 放宽口径:只拒绝真正会发起网络请求的形态(动态 `import`/`fetch`/
+    /// `XMLHttpRequest`/`<script src>` 指向 `http(s)://`)。bundle 里合法地含有
+    /// XML 命名空间(`http://www.w3.org/2000/svg`)、IIIF/规范 URL、以及注释/
+    /// 错误提示文本里的链接——这些是字符串字面量,不构成网络访问,严格子串
+    /// 匹配会把它们误判为违规。
+    #[test]
+    fn image_annotate_vendor_assets_have_no_external_refs() {
+        let root = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/image-annotate/vendor"
+        ));
+        for f in ["openseadragon.esm.js", "annotorious-openseadragon.esm.js"] {
+            let js = std::fs::read_to_string(root.join(f)).expect("读 vendor 产物");
+            for (needle, what) in [
+                ("import(\"http", "动态 import"),
+                ("import('http", "动态 import"),
+                ("import( \"http", "动态 import"),
+                ("import( 'http", "动态 import"),
+                ("fetch(\"http", "fetch"),
+                ("fetch('http", "fetch"),
+                ("src=\"http", "<script src>"),
+                ("src='http", "<script src>"),
+            ] {
+                assert!(
+                    !js.contains(needle),
+                    "{f} 含外部网络加载形态({what}: {needle}),违反离线约束"
+                );
+            }
+        }
+    }
 }
 
 pub mod clipboard_image;
