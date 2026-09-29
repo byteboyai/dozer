@@ -114,14 +114,21 @@ pub(crate) fn image_annotate_url(path: &std::path::Path) -> String {
     )
 }
 
+/// 是否是需要 T9 envelope 绑定(proj/panel/tab/doc)的 Rendered host URL——
+/// Flyfish / 隔离 HTML / 图片标注 三者之一。`app.rs` 据此决定要不要往 URL
+/// 追加绑定查询串,`flyfish_binding_from_url` 据此决定要不要解析,避免两处
+/// 各写一份前缀列表、迟早漏改其中一处。
+pub(crate) fn hosts_rendered_binding(url: &str) -> bool {
+    url.starts_with("dozer://flyfish/")
+        || url.starts_with("dozer://html/")
+        || url.starts_with("dozer://image-annotate/")
+}
+
 /// T9/T8:从 Rendered host(Flyfish、隔离 HTML 或 image-annotate)URL 的查询串
 /// 解析归属绑定(`proj`/`panel`/`tab`/`doc`),供 host 回传 envelope 时校验归属。
 /// 非 Rendered host URL 或缺字段返回 `None`。
 pub(crate) fn flyfish_binding_from_url(url: &str) -> Option<HostBinding> {
-    if !url.starts_with("dozer://flyfish/")
-        && !url.starts_with("dozer://html/")
-        && !url.starts_with("dozer://image-annotate/")
-    {
+    if !hosts_rendered_binding(url) {
         return None;
     }
     let query = url.split_once('?')?.1;
@@ -193,6 +200,16 @@ mod tests {
         let u = image_annotate_url(std::path::Path::new("/tmp/图 a.png"));
         assert!(u.starts_with("dozer://image-annotate/host.html?p="), "{u}");
         assert!(u.contains("&theme="), "{u}");
+    }
+
+    #[test]
+    fn hosts_rendered_binding_covers_all_three_prefixes() {
+        assert!(hosts_rendered_binding("dozer://flyfish/host.html?p=x"));
+        assert!(hosts_rendered_binding("dozer://html/host.html?p=x"));
+        assert!(hosts_rendered_binding(
+            "dozer://image-annotate/host.html?p=x"
+        ));
+        assert!(!hosts_rendered_binding("dozer://editor/index.html"));
     }
 
     #[test]

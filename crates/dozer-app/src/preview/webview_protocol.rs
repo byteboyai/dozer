@@ -640,11 +640,22 @@ pub fn parse_flyfish_event(raw: &str) -> Result<WebviewEnvelope<FlyfishEvent>, P
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ImageAnnotateEvent {
-    /// host 脚本初始化完成(元素已插入)。不代表图片已加载。
+    /// host 脚本初始化完成(OpenSeadragon viewer 已挂载)。**不代表图片已解码
+    /// 完成**;仅用于清除错误并保持 loading,等 `DocumentLoaded` 才结束加载。
     Ready,
-    /// 图片完成加载(T8:收到后才把原生子视图设为可见并 finish)。
-    DocumentLoaded,
-    /// 图片解码/读取失败。
+    /// 图片已完成解码并首帧绘制(OpenSeadragon `open` 事件)。`revision`/
+    /// `bytes` 恒 0(host 不统计,仅为与 Flyfish/editor 事件形态对齐,便于
+    /// 复用 update.rs 既有处理惯例)。`error` 为 `Some` 时表示 host 把首帧
+    /// 就绪与解码失败合并上报,回落统一 Failed 终态。
+    DocumentLoaded {
+        #[serde(default)]
+        revision: u64,
+        #[serde(default)]
+        bytes: u64,
+        #[serde(default)]
+        error: Option<String>,
+    },
+    /// 渲染失败(读盘/解码错误、资源 404)。
     Failed { message: String, recoverable: bool },
     /// 标注集合发生变化(创建/更新/删除后 host 全量回传)。`annotations` 为
     /// Annotorious 导出的标注数组原样透传,不透明。
@@ -1451,7 +1462,19 @@ mod tests {
             (r#"{"kind":"ready"}"#, ImageAnnotateEvent::Ready),
             (
                 r#"{"kind":"document_loaded"}"#,
-                ImageAnnotateEvent::DocumentLoaded,
+                ImageAnnotateEvent::DocumentLoaded {
+                    revision: 0,
+                    bytes: 0,
+                    error: None,
+                },
+            ),
+            (
+                r#"{"kind":"document_loaded","error":"解码失败"}"#,
+                ImageAnnotateEvent::DocumentLoaded {
+                    revision: 0,
+                    bytes: 0,
+                    error: Some("解码失败".into()),
+                },
             ),
             (
                 r#"{"kind":"annotations_changed"}"#,
@@ -1482,6 +1505,15 @@ mod tests {
             Err(ProtocolError::UnknownPayload(_))
         ));
         assert!(parse_image_annotate_event("not json").is_err());
+    }
+
+    #[test]
+    fn rejects_oversized_image_annotate_message() {
+        let big = "a".repeat(MAX_MESSAGE_BYTES + 1);
+        assert!(matches!(
+            parse_image_annotate_event(&big),
+            Err(ProtocolError::TooLarge { .. })
+        ));
     }
 
     #[test]

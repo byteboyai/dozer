@@ -305,13 +305,22 @@ impl PreviewPane {
             ImageAnnotateEvent::Ready => {
                 tab.web_error = None;
             }
-            ImageAnnotateEvent::DocumentLoaded => {
+            ImageAnnotateEvent::DocumentLoaded { error, .. } => {
                 if !tab.load_state.is_active() {
                     return;
                 }
-                tab.web_error = None;
-                let _ = tab.backend_state.try_transition(BackendState::Ready);
-                tab.load_state.finish();
+                if let Some(message) = error {
+                    tab.runtime = PreviewRuntime::None;
+                    tab.web_error = Some(message.clone());
+                    let _ = tab
+                        .backend_state
+                        .try_transition(BackendState::Failed(PreviewError::new(message, true)));
+                    tab.load_state.finish();
+                } else {
+                    tab.web_error = None;
+                    let _ = tab.backend_state.try_transition(BackendState::Ready);
+                    tab.load_state.finish();
+                }
             }
             ImageAnnotateEvent::Failed {
                 message,
@@ -6292,56 +6301,108 @@ mod tests {
         );
     }
 
+    fn image_tab(id: usize, backend_state: BackendState) -> PreviewTab {
+        let mut tab = placeholder_tab(id);
+        tab.kind = TabKind::File(PathBuf::from("/tmp/photo.png"));
+        tab.backend_state = backend_state;
+        tab.load_state = PreviewLoadState::starting(1, PreviewLoadStage::Profiling);
+        tab
+    }
+
     #[test]
-    fn image_annotate_events_apply_to_matching_tab_only() {
-        use crate::preview::{ImageAnnotateEvent, PreviewRuntime};
+    fn apply_image_annotate_event_ready_clears_web_error() {
         let mut pane = PreviewPane::default();
-        let id = pane.push_tab(
-            TabKind::File(std::path::PathBuf::from("/tmp/pic.png")),
-            "pic.png".into(),
-        );
-        // 标注入镜像后不触加载状态。
+        let mut tab = image_tab(1, BackendState::Loading);
+        tab.web_error = Some("旧错误".into());
+        pane.tabs.push(tab);
+        pane.apply_image_annotate_event(1, ImageAnnotateEvent::Ready);
+        assert_eq!(pane.tabs()[1].web_error, None);
+    }
+
+    #[test]
+    fn apply_image_annotate_event_document_loaded_transitions_ready() {
+        let mut pane = PreviewPane::default();
+        pane.tabs.push(image_tab(1, BackendState::Loading));
         pane.apply_image_annotate_event(
-            id,
-            ImageAnnotateEvent::AnnotationsChanged {
-                annotations: vec![serde_json::json!({"id":"a1"})],
+            1,
+            ImageAnnotateEvent::DocumentLoaded {
+                revision: 0,
+                bytes: 0,
+                error: None,
             },
         );
-        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
-        assert_eq!(tab.image_annotations.len(), 1);
-        // 非本 tab 的事件不污染。
+        assert_eq!(pane.tabs()[1].backend_state, BackendState::Ready);
+        assert!(!pane.tabs()[1].load_state.is_active());
+    }
+
+    #[test]
+    fn apply_image_annotate_event_document_loaded_with_error_transitions_failed() {
+        let mut pane = PreviewPane::default();
+        pane.tabs.push(image_tab(1, BackendState::Loading));
         pane.apply_image_annotate_event(
-            id + 999,
-            ImageAnnotateEvent::AnnotationsChanged {
-                annotations: vec![serde_json::json!({"id":"z"})],
+            1,
+            ImageAnnotateEvent::DocumentLoaded {
+                revision: 0,
+                bytes: 0,
+                error: Some("解码失败".into()),
             },
         );
-        assert_eq!(
-            pane.tabs()
-                .iter()
-                .find(|t| t.id == id)
-                .unwrap()
-                .image_annotations
-                .len(),
-            1
-        );
-        // Failed 回落统一 Failed 终态并清 runtime(先置 Loading,模拟生产
-        // 建壳后的加载态——`try_transition` 只允许 Loading→Failed)。
-        pane.tabs_mut()
-            .iter_mut()
-            .find(|t| t.id == id)
-            .unwrap()
-            .backend_state = crate::preview::BackendState::Loading;
+        assert!(pane.tabs()[1].backend_state.is_failed());
+        assert_eq!(pane.tabs()[1].web_error.as_deref(), Some("解码失败"));
+    }
+
+    #[test]
+    fn apply_image_annotate_event_failed_transitions_failed_state() {
+        let mut pane = PreviewPane::default();
+        pane.tabs.push(image_tab(1, BackendState::Loading));
         pane.apply_image_annotate_event(
-            id,
+            1,
             ImageAnnotateEvent::Failed {
-                message: "decode".into(),
+                message: "boom".into(),
                 recoverable: true,
             },
         );
-        let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
-        assert!(tab.backend_state.is_failed());
-        assert!(matches!(tab.runtime, PreviewRuntime::None));
-        assert_eq!(tab.web_error.as_deref(), Some("decode"));
+        assert!(pane.tabs()[1].backend_state.is_failed());
+        assert!(matches!(pane.tabs()[1].runtime, PreviewRuntime::None));
+    }
+
+    #[test]
+    fn apply_image_annotate_event_annotations_changed_stores_snapshot() {
+        let mut pane = PreviewPane::default();
+        pane.tabs.push(image_tab(1, BackendState::Ready));
+        let annotations = vec![serde_json::json!({"id": "a1"})];
+        pane.apply_image_annotate_event(
+            1,
+            ImageAnnotateEvent::AnnotationsChanged {
+                annotations: annotations.clone(),
+            },
+        );
+        assert_eq!(pane.tabs()[1].image_annotations, annotations);
+    }
+
+    #[test]
+    fn apply_image_annotate_event_ignores_unknown_tab_id() {
+        let mut pane = PreviewPane::default();
+        pane.tabs.push(image_tab(1, BackendState::Ready));
+        // tab_id 99 不存在——必须静默返回,不能 panic。
+        pane.apply_image_annotate_event(99, ImageAnnotateEvent::Ready);
+    }
+
+    #[test]
+    fn apply_image_annotate_event_stale_document_loaded_does_not_finish_new_load() {
+        let mut pane = PreviewPane::default();
+        let mut tab = image_tab(1, BackendState::Ready);
+        tab.load_state = PreviewLoadState::default(); // 非 active(已完成)
+        pane.tabs.push(tab);
+        pane.apply_image_annotate_event(
+            1,
+            ImageAnnotateEvent::DocumentLoaded {
+                revision: 0,
+                bytes: 0,
+                error: None,
+            },
+        );
+        // 迟到 ACK 不应改变已经是 Ready 且非 active 的状态。
+        assert_eq!(pane.tabs()[1].backend_state, BackendState::Ready);
     }
 }
