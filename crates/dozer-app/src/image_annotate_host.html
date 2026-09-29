@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>Dozer Image Annotate</title>
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'">
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; worker-src 'self' blob:">
 <style>
   html { --preview-bg: #0a0e16; --accent: #F2D94E; }
   html[data-theme="light"] { --preview-bg: #fef2e4; --accent: #F2D94E; }
@@ -37,7 +37,11 @@
   import { createOSDAnnotator } from './vendor/annotorious-openseadragon.esm.js';
 
   const params = new URLSearchParams(location.search);
-  const p = decodeURIComponent(params.get('p') || '');
+  // `URLSearchParams.get()` 已经做过一次百分号解码,不能再 `decodeURIComponent`
+  // 一次——字面 `%` 字符(常见于真实文件名)解码一次后不再是合法转义序列,
+  // 二次解码会直接 `URIError: URI malformed` 炸掉整个模块脚本(同
+  // `html_host.html` 的正确写法,而不是 `flyfish/host.html` 那个双重解码写法)。
+  const p = params.get('p') || '';
   const theme = params.get('theme') === 'light' ? 'light' : 'dark';
   document.documentElement.setAttribute('data-theme', theme);
 
@@ -62,48 +66,60 @@
 
   post({ kind: 'ready' });
 
-  const viewer = OpenSeadragon({
-    element: document.getElementById('viewer'),
-    tileSources: { type: 'image', url: '__file__' + encodeURI(p) },
-    showNavigationControl: true,
-    // 导航控件位图本地 vendor,离线可用(默认 `/images/` 在 dozer:// 下会 404)。
-    prefixUrl: './vendor/images/',
-    gestureSettingsMouse: { clickToZoom: false, dblClickToZoom: true },
-  });
+  // `ready` 已经发出去了——从这里开始任何同步抛错都必须落到 `failed`,
+  // 否则 Rust 侧会永远停在 Loading(等不到 `document_loaded`/`failed` 中
+  // 任何一个,见 code review 2026-09-29 发现)。
+  try {
+    // 与 `html_host.html` 一致的按段 `encodeURIComponent`:保留 `/` 分隔符,
+    // 但正确转义 `#`/`?`——这两个字符若走 `encodeURI`(未转义)会被浏览器
+    // URL 解析器分别当成 fragment/query 起点截断路径,请求发不全。
+    const encPath = p.split('/').map(encodeURIComponent).join('/');
 
-  viewer.addHandler('open', function () {
-    post({ kind: 'document_loaded' });
-  });
-  viewer.addHandler('open-failed', function (e) {
-    post({ kind: 'failed', message: (e && e.message) || '图片解码失败', recoverable: true });
-  });
-
-  const anno = createOSDAnnotator(viewer, { drawingEnabled: false });
-
-  function snapshotAnnotations() {
-    try {
-      post({ kind: 'annotations_changed', annotations: anno.getAnnotations() });
-    } catch (_) {}
-  }
-  anno.on('createAnnotation', snapshotAnnotations);
-  anno.on('updateAnnotation', snapshotAnnotations);
-  anno.on('deleteAnnotation', snapshotAnnotations);
-
-  // 工具条:切换绘制工具 / 回到平移模式(默认态,拖拽 = OSD 平移,不与
-  // 标注绘制手势冲突——见设计稿 §5 模式边界)。
-  const buttons = Array.from(document.querySelectorAll('#toolbar button'));
-  buttons.forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      const tool = btn.getAttribute('data-tool');
-      buttons.forEach(function (b) { b.classList.toggle('active', b === btn); });
-      if (tool) {
-        anno.setDrawingTool(tool);
-        anno.setDrawingEnabled(true);
-      } else {
-        anno.setDrawingEnabled(false);
-      }
+    const viewer = OpenSeadragon({
+      element: document.getElementById('viewer'),
+      tileSources: { type: 'image', url: '__file__' + encPath },
+      showNavigationControl: true,
+      // 导航控件位图本地 vendor,离线可用(默认 `/images/` 在 dozer:// 下会 404)。
+      prefixUrl: './vendor/images/',
+      gestureSettingsMouse: { clickToZoom: false, dblClickToZoom: true },
     });
-  });
+
+    viewer.addHandler('open', function () {
+      post({ kind: 'document_loaded' });
+    });
+    viewer.addHandler('open-failed', function (e) {
+      post({ kind: 'failed', message: (e && e.message) || '图片解码失败', recoverable: true });
+    });
+
+    const anno = createOSDAnnotator(viewer, { drawingEnabled: false });
+
+    function snapshotAnnotations() {
+      try {
+        post({ kind: 'annotations_changed', annotations: anno.getAnnotations() });
+      } catch (_) {}
+    }
+    anno.on('createAnnotation', snapshotAnnotations);
+    anno.on('updateAnnotation', snapshotAnnotations);
+    anno.on('deleteAnnotation', snapshotAnnotations);
+
+    // 工具条:切换绘制工具 / 回到平移模式(默认态,拖拽 = OSD 平移,不与
+    // 标注绘制手势冲突——见设计稿 §5 模式边界)。
+    const buttons = Array.from(document.querySelectorAll('#toolbar button'));
+    buttons.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        const tool = btn.getAttribute('data-tool');
+        buttons.forEach(function (b) { b.classList.toggle('active', b === btn); });
+        if (tool) {
+          anno.setDrawingTool(tool);
+          anno.setDrawingEnabled(true);
+        } else {
+          anno.setDrawingEnabled(false);
+        }
+      });
+    });
+  } catch (e) {
+    post({ kind: 'failed', message: (e && e.message) || '查看器初始化失败', recoverable: true });
+  }
 </script>
 </body>
 </html>

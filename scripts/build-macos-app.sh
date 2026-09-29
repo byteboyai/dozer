@@ -117,6 +117,11 @@ cp -R "$ROOT_DIR/crates/dozer-app/assets/review-trace" "$APP_DIR/Contents/Resour
 # 整个 404 "not found"(2026-09-26 用户实测复现:只装了 flyfish/editor/
 # json-editor/review-trace 四者,独漏 usage-content)。
 cp -R "$ROOT_DIR/crates/dozer-app/assets/usage-content" "$APP_DIR/Contents/Resources/usage-content"
+# 图片标注 host(OpenSeadragon + Annotorious)。`dozer://image-annotate/` 从
+# flyfish 根的兄弟目录 `Contents/Resources/image-annotate` 读(vendor JS + 导航
+# 图标),漏拷会导致分发后 png/jpg/jpeg/webp/bmp/ico 预览整个 404(同
+# usage-content 2026-09-26 的漏拷教训,dev 态 `cargo run` 走源码树回退测不出来)。
+cp -R "$ROOT_DIR/crates/dozer-app/assets/image-annotate" "$APP_DIR/Contents/Resources/image-annotate"
 
 # cargo 链接期只对裸二进制做了 ad-hoc 签名(`codesign -dv` 显示
 # `Info.plist=not bound`),装进 bundle 后这个签名并不覆盖 Info.plist/资源,

@@ -91,6 +91,9 @@ fn mime_for(path: &Path) -> &'static str {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
         "svg" => "image/svg+xml",
         "pdf" => "application/pdf",
         "woff2" => "font/woff2",
@@ -485,6 +488,16 @@ mod tests {
         std::fs::create_dir_all(root.with_file_name("usage-content")).unwrap();
         let r = handle_protocol(&root, &HashSet::new(), None, "dozer://usage-content/nope");
         assert_eq!(r.status, 404);
+    }
+
+    /// image-annotate 覆盖的 webp/bmp/ico 曾经落到 `mime_for` 的 `_` 分支被当成
+    /// `application/octet-stream` 服务(2026-09 code review 发现);这三个和
+    /// png/jpg/jpeg/gif 一样是图片,必须有正确 MIME。
+    #[test]
+    fn mime_for_covers_all_image_annotate_extensions() {
+        assert_eq!(mime_for(Path::new("a.webp")), "image/webp");
+        assert_eq!(mime_for(Path::new("a.bmp")), "image/bmp");
+        assert_eq!(mime_for(Path::new("a.ico")), "image/x-icon");
     }
 
     #[test]

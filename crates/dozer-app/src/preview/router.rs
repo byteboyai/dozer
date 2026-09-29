@@ -250,7 +250,7 @@ fn default_modes(path: &Path, kind: PreviewKind) -> (PreviewMode, Vec<PreviewMod
         PreviewKind::Json => {
             // 严格 `.json` 树/文本双视图;JSONC/JSON5/JSONL/NDJSON 只给 CodeMirror
             // 文本(vanilla-jsoneditor 不解析注释;JSONL 逐行 JSON 也不是单个文档)。
-            if json_extension(path).as_str() == "json" {
+            if extension_lower(path).as_str() == "json" {
                 (PreviewMode::Tree, vec![PreviewMode::Text])
             } else {
                 (PreviewMode::Text, Vec::new())
@@ -272,7 +272,11 @@ fn default_modes(path: &Path, kind: PreviewKind) -> (PreviewMode, Vec<PreviewMod
     }
 }
 
-fn json_extension(path: &Path) -> String {
+/// 扩展名小写字符串,无扩展名给空串。名字刻意不叫 `json_extension`——这个
+/// helper 早已被 tabular/media/archive/image-annotate 等一堆非 JSON 判定复用
+/// (见下方调用点),叫 json 开头的名字会误导以为它是 JSON 专属(2026-09 code
+/// review 发现)。
+fn extension_lower(path: &Path) -> String {
     path.extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
@@ -280,7 +284,7 @@ fn json_extension(path: &Path) -> String {
 }
 
 fn rendered_ext(path: &Path) -> &'static str {
-    match json_extension(path).as_str() {
+    match extension_lower(path).as_str() {
         "md" => "md",
         "markdown" => "markdown",
         "html" => "html",
@@ -290,7 +294,7 @@ fn rendered_ext(path: &Path) -> &'static str {
 }
 
 fn is_csv_like(path: &Path) -> bool {
-    matches!(json_extension(path).as_str(), "csv" | "tsv")
+    matches!(extension_lower(path).as_str(), "csv" | "tsv")
 }
 
 /// 已知媒体/文档扩展名:图片、PDF、Office、音频、视频、字体。统一走 Flyfish
@@ -298,7 +302,7 @@ fn is_csv_like(path: &Path) -> bool {
 /// 源码切换(T5)。
 pub fn is_known_media_extension(path: &Path) -> bool {
     matches!(
-        json_extension(path).as_str(),
+        extension_lower(path).as_str(),
         "png"
             | "jpg"
             | "jpeg"
@@ -338,7 +342,7 @@ pub fn is_known_media_extension(path: &Path) -> bool {
 /// 唯一分流点在 `preview_url`(见 `preview/mod.rs`)。
 pub fn is_image_annotate_extension(path: &Path) -> bool {
     matches!(
-        json_extension(path).as_str(),
+        extension_lower(path).as_str(),
         "png" | "jpg" | "jpeg" | "webp" | "bmp" | "ico"
     )
 }
@@ -346,7 +350,7 @@ pub fn is_image_annotate_extension(path: &Path) -> bool {
 /// 压缩包类扩展名。
 pub fn is_archive_extension(path: &Path) -> bool {
     matches!(
-        json_extension(path).as_str(),
+        extension_lower(path).as_str(),
         "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar"
     )
 }
