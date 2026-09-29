@@ -1106,10 +1106,22 @@ pub fn view<'a>(
     mirror: bool,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let error = state.error.as_deref();
-    // 面板内边距对齐文件树面板(`project_pane` region):header/body/footer
-    // 的分隔线与内容容器统一按同一水平 inset 排布,避免 Git 面板自己另起
-    // 一套 → 0 的 padding 与文件树/项目面板(8)错位。
+    // 内容列(右侧文件列表/diff)内边距对齐文件树面板(`project_pane`,8):
+    // header/body/footer 的分隔线与内容容器统一按同一水平 inset 排布,避免
+    // Git 面板自己另起一套 → 0 的 padding 与文件树/项目面板错位。列表列另走
+    // 对话列表面板的 `conversation_list_pane`(12),见下方注释。
     let pad = theme::region::project_pane().padding;
+    // 列表列(commit 列表)水平内边距对齐对话列表面板
+    // (`conversation_list_pane`,12);垂直仍用 `project_pane`。空/加载态是单列
+    // 铺满面板,同样按列表列的水平 inset 排布,免得 header 在"有/无提交"间
+    // 左右跳一下。
+    let list_pad = theme::region::conversation_list_pane().padding;
+    let list_box_pad = iced_widget::core::Padding {
+        top: pad.top,
+        right: list_pad.right,
+        bottom: pad.bottom,
+        left: list_pad.left,
+    };
     let head = crate::chrome::homespace::home_panel_head(
         byteui::interaction::icons::IconKind::GitGraph,
         "Git",
@@ -1128,7 +1140,7 @@ pub fn view<'a>(
                     ),
                 ]
                 .spacing(8)
-                .padding(pad)
+                .padding(list_box_pad)
                 .height(Length::Fill),
             )
             .into();
@@ -1141,7 +1153,7 @@ pub fn view<'a>(
                     .color(byteui::theme::color::current().dim)
             ]
             .spacing(8)
-            .padding(pad),
+            .padding(list_box_pad),
         )
         .into();
     };
@@ -1154,7 +1166,7 @@ pub fn view<'a>(
                     .color(byteui::theme::color::current().dim)
             ]
             .spacing(8)
-            .padding(pad),
+            .padding(list_box_pad),
         )
         .into();
     }
@@ -1248,8 +1260,29 @@ pub fn view<'a>(
             .into()
         };
 
-    let left_box = container(left_with_picker).width(Length::FillPortion(list_portion));
-    let right_box = container(right).width(Length::FillPortion(content_portion));
+    // 水平内边距下放到两列各自承担:列表列对齐对话列表面板
+    // (`conversation_list_pane`,水平 12),内容列对齐文件树/预览
+    // (`project_pane`,水平 8)——与对话面板"列表 12 / 内容 8"的既有分工一致
+    // (用户反馈 commit 列表两侧边距太贴边)。垂直内边距仍由 body 统一施加,
+    // 保证 header/footer 的上下留白不变。这样改同时让
+    // `webview_geometry::git_log_diff_pane_bounds_for` 的 diff 落点更贴合真实
+    // 布局:body 不再有水平内边距后,配对列宽 = 区宽 - 分隔线,与几何口径一致。
+    let left_box = container(left_with_picker)
+        .width(Length::FillPortion(list_portion))
+        .padding(iced_widget::core::Padding {
+            top: 0.0,
+            right: list_pad.right,
+            bottom: 0.0,
+            left: list_pad.left,
+        });
+    let right_box = container(right)
+        .width(Length::FillPortion(content_portion))
+        .padding(iced_widget::core::Padding {
+            top: 0.0,
+            right: pad.right,
+            bottom: 0.0,
+            left: pad.left,
+        });
     let divider = crate::app::divider_bar(
         crate::app::Divider::GitLogSplit,
         byteui::theme::color::current().bg,
@@ -1263,7 +1296,12 @@ pub fn view<'a>(
     };
     body.width(Length::Fill)
         .height(Length::Fill)
-        .padding(pad)
+        .padding(iced_widget::core::Padding {
+            top: pad.top,
+            right: 0.0,
+            bottom: pad.bottom,
+            left: 0.0,
+        })
         .into()
 }
 

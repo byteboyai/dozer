@@ -50,6 +50,39 @@ pub(crate) fn mark_review_loaded(review: &mut Option<crate::workspace::ReviewVie
     }
 }
 
+/// 会话列表刷新带回新总结后，同步当前详情页及其 WebView 快照。
+///
+/// 详情正文由 `review_snapshot` 提供，单改 `ReviewView.summary_*` 不会让已经
+/// 加载的 WebView 重新取数；这里同时推进 nonce 并返回新的序列化快照。
+fn refresh_open_conversation_summary(
+    review: &mut Option<ReviewView>,
+    review_nonce: &mut u64,
+    row: &crate::conversation::SessionRow,
+) -> Option<String> {
+    let rv = review.as_mut()?;
+    if !matches!(&rv.source, ReviewSource::Conversation(cid) if cid == &row.conversation_id) {
+        return None;
+    }
+    if rv.summary_title.as_deref() == Some(row.display_title.as_str())
+        && rv.summary_text == row.summary
+    {
+        return None;
+    }
+
+    rv.summary_title = Some(row.display_title.clone());
+    rv.summary_text = row.summary.clone();
+    *review_nonce = review_nonce.wrapping_add(1);
+    rv.nonce = *review_nonce;
+    let snapshot = ReviewSnapshot {
+        entries: &rv.entries,
+        agent_label: rv.agent.label(),
+        summary_title: rv.summary_title.clone(),
+        summary_text: rv.summary_text.clone(),
+        summary_time: rv.summary_time.clone(),
+    };
+    serde_json::to_string(&snapshot).ok()
+}
+
 impl App {
     pub fn update(&mut self, message: Message) {
         match message {
@@ -1286,15 +1319,18 @@ impl App {
                         &mut ws.conversations,
                         conversations::Message::SessionsRefreshed(project_id, result),
                     );
-                    if let Some(rv) = &mut ws.review
-                        && let ReviewSource::Conversation(cid) = &rv.source
-                        && let Some(row) = ws
-                            .conversations
+                    let open_cid = ws.review.as_ref().and_then(|rv| match &rv.source {
+                        ReviewSource::Conversation(cid) => Some(cid.clone()),
+                        ReviewSource::Session(_) => None,
+                    });
+                    if let Some(row) = open_cid.as_deref().and_then(|cid| {
+                        ws.conversations
                             .sessions()
-                            .and_then(|rows| rows.iter().find(|r| &r.conversation_id == cid))
+                            .and_then(|rows| rows.iter().find(|r| r.conversation_id == cid))
+                    }) && let Some(json) =
+                        refresh_open_conversation_summary(&mut ws.review, &mut ws.review_nonce, row)
                     {
-                        rv.summary_title = Some(row.display_title.clone());
-                        rv.summary_text = row.summary.clone();
+                        *ws.review_snapshot.lock().expect("review snapshot 锁") = Some(json);
                     }
                 });
             }
@@ -6081,5 +6117,58 @@ mod review_trace_tests {
         let mut review: Option<crate::workspace::ReviewView> = None;
         mark_review_loaded(&mut review);
         assert!(review.is_none());
+    }
+
+    #[test]
+    fn refreshed_summary_rebuilds_snapshot_and_advances_nonce() {
+        let mut review = Some(review(5, Some(5)));
+        let mut nonce = 5;
+        let row = crate::conversation::SessionRow {
+            conversation_id: "c1".into(),
+            agent: AgentKind::Claude,
+            last_ts: 1,
+            display_title: "新标题".into(),
+            summary: Some("新总结".into()),
+            summary_status: Some(dozer_core::protocol::SummaryStatus::AiGenerated),
+            task_id: None,
+        };
+
+        let json = refresh_open_conversation_summary(&mut review, &mut nonce, &row)
+            .expect("总结变化应重建快照");
+
+        let rv = review.as_ref().unwrap();
+        assert_eq!(rv.summary_title.as_deref(), Some("新标题"));
+        assert_eq!(rv.summary_text.as_deref(), Some("新总结"));
+        assert_eq!(rv.nonce, 6);
+        assert_eq!(nonce, 6);
+        assert_eq!(
+            rv.loaded_nonce,
+            Some(5),
+            "旧加载水位应使新 WebView 进入加载态"
+        );
+        assert!(json.contains("新标题"));
+        assert!(json.contains("新总结"));
+    }
+
+    #[test]
+    fn unchanged_summary_does_not_reload_webview() {
+        let mut value = review(5, Some(5));
+        value.summary_title = Some("已有标题".into());
+        value.summary_text = Some("已有总结".into());
+        let mut review = Some(value);
+        let mut nonce = 5;
+        let row = crate::conversation::SessionRow {
+            conversation_id: "c1".into(),
+            agent: AgentKind::Claude,
+            last_ts: 1,
+            display_title: "已有标题".into(),
+            summary: Some("已有总结".into()),
+            summary_status: Some(dozer_core::protocol::SummaryStatus::AiGenerated),
+            task_id: None,
+        };
+
+        assert!(refresh_open_conversation_summary(&mut review, &mut nonce, &row).is_none());
+        assert_eq!(nonce, 5);
+        assert_eq!(review.as_ref().unwrap().nonce, 5);
     }
 }

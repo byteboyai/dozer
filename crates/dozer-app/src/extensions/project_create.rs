@@ -769,7 +769,7 @@ fn remote_repo_field(form: &CloneForm) -> Element<'_> {
     let colors = byteui::theme::color::current();
     match form.source {
         CloneSource::Url => byteui::form::input_text::view(
-            "Input",
+            "https://",
             &form.url,
             false,
             None,
