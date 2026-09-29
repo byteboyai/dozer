@@ -371,10 +371,14 @@ pub(crate) fn sync_webview_pool(
                 // T9:Flyfish host 的绑定从 URL 查询串解析(proj/panel/tab/doc),
                 // host 回传的 envelope 据此校验归属。
                 let flyfish_binding = crate::preview::flyfish_binding_from_url(&spec.url);
-                // `flyfish_binding_from_url` 同时覆盖 Flyfish 与隔离 HTML host；只有
-                // 前者暴露 `searchDocument` 等文档搜索 API。这个标记还用于把
-                // WebView 聚焦态的 Cmd/Ctrl+F 路由回 Dozer Find 条。
+                // `flyfish_binding_from_url` 同时覆盖 Flyfish、隔离 HTML 与
+                // image-annotate host；只有 Flyfish 暴露 `searchDocument` 等文档搜索
+                // API。这个标记还用于把 WebView 聚焦态的 Cmd/Ctrl+F 路由回 Dozer
+                // Find 条。
                 let is_flyfish_host = spec.url.starts_with("dozer://flyfish/");
+                // image-annotate host 的 envelope payload 与 Flyfish 不同
+                // (annotations_changed),解析器必须分开,不能几何共享。
+                let is_image_annotate_host = spec.url.starts_with("dozer://image-annotate/");
                 // 常驻注入脚本:焦点/拖拽/缩放三件套(所有 webview);浏览器
                 // 面板(`report_title`)额外附一段"页面标题回报":把
                 // `window.__dozer_webview` 记成本 webview 的 id,页面
@@ -507,6 +511,27 @@ pub(crate) fn sync_webview_pool(
                                 // T9:Flyfish host 回传的 envelope(JSON,以 `{` 起)。
                                 let looks_like_envelope = body.starts_with('{');
                                 if let Some(binding) = flyfish_binding.as_ref()
+                                    && is_image_annotate_host
+                                    && looks_like_envelope
+                                {
+                                    match crate::preview::parse_image_annotate_event(body) {
+                                        Ok(event) => {
+                                            if let Err(error) = event.validate(binding) {
+                                                tracing::warn!(%error, "拒绝无效 image-annotate IPC");
+                                            } else {
+                                                let _ = ipc_proxy.send_event(
+                                                    Message::ImageAnnotateEvent(
+                                                        binding.clone(),
+                                                        event,
+                                                    ),
+                                                );
+                                            }
+                                        }
+                                        Err(error) => {
+                                            tracing::warn!(%error, "无法解析 image-annotate IPC");
+                                        }
+                                    }
+                                } else if let Some(binding) = flyfish_binding.as_ref()
                                     && looks_like_envelope
                                 {
                                     match crate::preview::parse_flyfish_event(body) {

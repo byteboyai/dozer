@@ -963,7 +963,11 @@ mod tests {
         ));
         for f in ["openseadragon.esm.js", "annotorious-openseadragon.esm.js"] {
             let p = root.join(f);
-            assert!(p.is_file(), "缺少 image-annotate vendor 产物 {f}: {}", p.display());
+            assert!(
+                p.is_file(),
+                "缺少 image-annotate vendor 产物 {f}: {}",
+                p.display()
+            );
             assert!(
                 std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 0,
                 "image-annotate vendor 产物为空: {f}"
@@ -1056,7 +1060,10 @@ mod tests {
     fn image_annotate_host_has_strict_csp_and_no_external_refs() {
         let html = include_str!("image_annotate_host.html");
         assert!(html.contains("Content-Security-Policy"), "必须声明 CSP");
-        assert!(html.contains("default-src 'none'"), "CSP 必须以 default-src 'none' 起步");
+        assert!(
+            html.contains("default-src 'none'"),
+            "CSP 必须以 default-src 'none' 起步"
+        );
         assert!(html.contains("script-src 'self'"), "脚本仅 self");
         assert!(
             !html.contains("http://") && !html.contains("https://"),

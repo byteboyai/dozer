@@ -622,6 +622,13 @@ pub enum Message {
         crate::preview::HostBinding,
         crate::preview::WebviewEnvelope<crate::preview::FlyfishEvent>,
     ),
+    /// image-annotate host(OpenSeadragon + Annotorious)发回的已校验事件
+    /// (ready/document_loaded/failed/annotations_changed)。binding 由 Rust 从
+    /// webview URL 解析,不采信 JS 自报归属。
+    ImageAnnotateEvent(
+        crate::preview::HostBinding,
+        crate::preview::WebviewEnvelope<crate::preview::ImageAnnotateEvent>,
+    ),
     /// Tabular(ag-grid)预览 host 发回的已校验事件(ready/sheet_selected/
     /// window_request/window_applied/failed)。binding 由 Rust 从 webview URL
     /// 解析,不采信 JS 自报归属。

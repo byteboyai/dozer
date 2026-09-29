@@ -591,7 +591,9 @@ mod tests {
 
     #[test]
     fn image_annotate_extension_covers_browser_native_raster_formats() {
-        for p in ["a.png", "b.jpg", "c.jpeg", "d.webp", "e.bmp", "f.ico", "g.PNG"] {
+        for p in [
+            "a.png", "b.jpg", "c.jpeg", "d.webp", "e.bmp", "f.ico", "g.PNG",
+        ] {
             assert!(is_image_annotate_extension(&PathBuf::from(p)), "{p}");
         }
     }
@@ -618,8 +620,14 @@ mod tests {
             }
         }
         for p in ["a.gif", "b.tif", "c.tiff"] {
-            assert!(!is_image_annotate_extension(&PathBuf::from(p)), "{p} 不应被 annotate 认领");
-            assert!(is_known_media_extension(&PathBuf::from(p)), "{p} 应仍在 media 内");
+            assert!(
+                !is_image_annotate_extension(&PathBuf::from(p)),
+                "{p} 不应被 annotate 认领"
+            );
+            assert!(
+                is_known_media_extension(&PathBuf::from(p)),
+                "{p} 应仍在 media 内"
+            );
         }
     }
 }

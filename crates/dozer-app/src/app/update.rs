@@ -889,6 +889,16 @@ impl App {
                     }
                 });
             }
+            Message::ImageAnnotateEvent(binding, event) => {
+                self.with_project(binding.project_id, move |ws, _io| {
+                    let pane = if binding.panel == PanelKind::Project {
+                        &mut ws.project_preview
+                    } else {
+                        &mut ws.preview
+                    };
+                    pane.apply_image_annotate_event(binding.tab_id, event.payload);
+                });
+            }
             Message::PreviewCommandsFetched(project_id, commands) => {
                 self.with_project(project_id, move |ws, io| {
                     for cmd in commands {
