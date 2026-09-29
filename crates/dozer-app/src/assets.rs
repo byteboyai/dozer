@@ -222,6 +222,12 @@ fn tabular_host_root_for(flyfish_root: &Path) -> PathBuf {
     flyfish_root.with_file_name("tabular-host")
 }
 
+/// image-annotate host(OpenSeadragon + Annotorious 图片查看/标注)静态资源根
+/// = flyfish 根的兄弟目录 `image-annotate`。同 `editor_root_for`。
+fn image_annotate_root_for(flyfish_root: &Path) -> PathBuf {
+    flyfish_root.with_file_name("image-annotate")
+}
+
 pub fn handle_protocol(
     assets_root: &Path,
     allowed: &HashSet<PathBuf>,
@@ -298,6 +304,23 @@ pub fn handle_protocol(
             return serve_html_file(encoded, allowed);
         }
         return not_found();
+    }
+
+    // image-annotate host(OpenSeadragon + Annotorious):页面编译期内嵌;
+    // `__file__` 走 `serve_allowlisted_file`——这个 host 只需要精确读取
+    // "当前打开的这一张图片"本身,不像 HTML 预览需要相对资源子树访问。
+    if let Some(path) = rest.strip_prefix("image-annotate/") {
+        if path == "host.html" {
+            return ProtocolReply {
+                status: 200,
+                mime: "text/html",
+                body: include_str!("image_annotate_host.html").as_bytes().to_vec(),
+            };
+        }
+        if let Some(encoded) = path.strip_prefix("__file__") {
+            return serve_allowlisted_file(encoded, allowed);
+        }
+        return serve_vendored(&image_annotate_root_for(assets_root), path);
     }
 
     let Some(path) = rest.strip_prefix("flyfish/") else {
@@ -978,6 +1001,53 @@ mod tests {
                     "{f} 含外部网络加载形态({what}: {needle}),违反离线约束"
                 );
             }
+        }
+    }
+
+    /// Task 2:`dozer://image-annotate/host.html` 服务编译期内嵌页面。
+    #[test]
+    fn serves_image_annotate_host() {
+        let root = scratch();
+        let r = handle_protocol(
+            &root,
+            &HashSet::new(),
+            None,
+            "dozer://image-annotate/host.html",
+        );
+        assert_eq!((r.status, r.mime), (200, "text/html"));
+    }
+
+    /// Task 2:`__file__` 端点复用现有白名单读取,未在白名单内 404、在白名单内 200。
+    #[test]
+    fn image_annotate_file_endpoint_requires_allowlist() {
+        let root = scratch();
+        let f = root.join("photo.png");
+        fs::write(&f, b"\x89PNG\r\n").unwrap();
+        let uri = format!("dozer://image-annotate/__file__{}", f.to_string_lossy());
+        assert_eq!(
+            handle_protocol(&root, &HashSet::new(), None, &uri).status,
+            404
+        );
+        let mut allowed = HashSet::new();
+        allowed.insert(f.clone());
+        let r = handle_protocol(&root, &allowed, None, &uri);
+        assert_eq!((r.status, r.mime), (200, "image/png"));
+    }
+
+    /// Task 2:命名空间拒绝路径穿越(同 editor/json-editor/tabular 既有覆盖)。
+    #[test]
+    fn image_annotate_rejects_traversal_and_unknown() {
+        let root = scratch();
+        for uri in [
+            "dozer://image-annotate/../flyfish/host.html",
+            "dozer://image-annotate/%2e%2e/etc/passwd",
+            "dozer://image-annotate/nope.js",
+        ] {
+            assert_eq!(
+                handle_protocol(&root, &HashSet::new(), None, uri).status,
+                404,
+                "{uri}"
+            );
         }
     }
 }
