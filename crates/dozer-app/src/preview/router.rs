@@ -331,6 +331,18 @@ pub fn is_known_media_extension(path: &Path) -> bool {
     )
 }
 
+/// image-annotate host 认领的扩展名(浏览器原生可解码的光栅图)。
+///
+/// 这是 `is_known_media_extension` 的**子集**,但**不**缩减后者——`gif`(canvas
+/// 会丢动画)与 `tif`/`tiff`(OpenSeadragon 无 TIFF 解码器)仍留在 Flyfish。
+/// 唯一分流点在 `preview_url`(见 `preview/mod.rs`)。
+pub fn is_image_annotate_extension(path: &Path) -> bool {
+    matches!(
+        json_extension(path).as_str(),
+        "png" | "jpg" | "jpeg" | "webp" | "bmp" | "ico"
+    )
+}
+
 /// 压缩包类扩展名。
 pub fn is_archive_extension(path: &Path) -> bool {
     matches!(
@@ -575,5 +587,39 @@ mod tests {
         let r = route("main.rs", b"x");
         assert!(!r.reason.to_string().is_empty());
         assert!(r.supports(PreviewMode::Code));
+    }
+
+    #[test]
+    fn image_annotate_extension_covers_browser_native_raster_formats() {
+        for p in ["a.png", "b.jpg", "c.jpeg", "d.webp", "e.bmp", "f.ico", "g.PNG"] {
+            assert!(is_image_annotate_extension(&PathBuf::from(p)), "{p}");
+        }
+    }
+
+    #[test]
+    fn image_annotate_extension_excludes_gif_tif_and_non_image() {
+        for p in ["a.gif", "b.tif", "c.tiff", "d.pdf", "e.mp4", "f.docx"] {
+            assert!(!is_image_annotate_extension(&PathBuf::from(p)), "{p}");
+        }
+    }
+
+    /// 分流不能顺手动到 Flyfish 的既有覆盖:gif/tif/tiff 及全部非图片媒体
+    /// 仍在 `is_known_media_extension` 内,annotate 集合是其真子集。
+    #[test]
+    fn image_annotate_is_strict_subset_of_known_media() {
+        for p in [
+            "a.png", "b.jpg", "c.jpeg", "d.webp", "e.bmp", "f.ico", "g.gif", "h.tif", "i.tiff",
+            "j.pdf", "k.mp4", "l.docx",
+        ] {
+            let path = PathBuf::from(p);
+            assert!(is_known_media_extension(&path), "known_media 应含 {p}");
+            if is_image_annotate_extension(&path) {
+                assert!(is_known_media_extension(&path), "annotate ⊄ media: {p}");
+            }
+        }
+        for p in ["a.gif", "b.tif", "c.tiff"] {
+            assert!(!is_image_annotate_extension(&PathBuf::from(p)), "{p} 不应被 annotate 认领");
+            assert!(is_known_media_extension(&PathBuf::from(p)), "{p} 应仍在 media 内");
+        }
     }
 }
