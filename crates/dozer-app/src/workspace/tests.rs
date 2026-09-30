@@ -555,6 +555,17 @@ fn tab_window_overflow_clamps_and_computes_visible_end() {
     assert_eq!(w.hidden_after(5), 3..5);
 }
 
+/// 单个 tab 比可用宽度还宽(超长文件名)时,窗口仍要放出它(部分可见),
+/// 而不是 `visible_end == first` 导致整条 tab 栏空白。
+#[test]
+fn tab_window_oversized_single_tab_still_visible() {
+    let w = tab_window(&[900.0], 4.0, 300.0, 0);
+    assert_eq!((w.first, w.visible_end), (0, 1));
+    // 多 tab 且首个超宽:仍至少放出 first 这一个。
+    let w = tab_window(&[900.0, 80.0], 4.0, 300.0, 0);
+    assert_eq!((w.first, w.visible_end), (0, 1));
+}
+
 #[test]
 fn tab_window_reveal_keeps_visible_tab_still_no_jump() {
     let widths = [100.0; 5];

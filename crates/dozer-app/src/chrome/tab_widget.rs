@@ -293,11 +293,14 @@ pub(crate) fn tab_window(widths: &[f32], gap: f32, avail: f32, first: usize) -> 
     }
     let clamped = first.min(max_first);
     // 从钳后的 first 往右累加，算这一屏实际放得下几个。
-    let mut visible_end = clamped;
+    // 至少放 `first` 这一个:单个 tab 比可用宽度还宽(超长文件名)时,累加
+    // 一个都放不下,`visible_end == first` 会让整条 tab 栏空白;保底放一个,
+    // 由外层 `.clip(true)` 截出它的前半段(标题部分可见)。
+    let mut visible_end = clamped + 1;
     let mut fwd = 0.0;
     for (i, w) in widths.iter().enumerate().skip(clamped) {
         let w = *w + if i > clamped { gap } else { 0.0 };
-        if fwd + w <= avail {
+        if i == clamped || fwd + w <= avail {
             fwd += w;
             visible_end = i + 1;
         } else {
