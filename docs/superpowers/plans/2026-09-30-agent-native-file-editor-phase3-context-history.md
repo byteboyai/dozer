@@ -77,7 +77,7 @@ spec 隐含但没有任务专门测试的输入/故障,已分别加进对应任�
   - `Request::{AddContextItem{project_id,entity_kind,entity_ref}, RemoveContextItem{project_id,id}, ListContextItems{project_id}, ListFileEditHistory{project_id,path_filter:Option<String>,limit:u32}}`
   - `Reply::{ContextItem{item}, ContextItems{items}, FileEditHistory{entries}}`
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 在 `protocol.rs` 的 `#[cfg(test)] mod tests` 里、`apply_precise_edit_request_round_trips` 之后追加:
 
@@ -149,12 +149,12 @@ spec 隐含但没有任务专门测试的输入/故障,已分别加进对应任�
     }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `cargo test -p dozer-core context_and_history 2>&1 | tail -15`
 Expected: 编译失败,`cannot find type ContextItemInfo` / `no variant AddContextItem`。
 
-- [ ] **Step 3: 加类型与变体**
+- [x] **Step 3: 加类型与变体**
 
 在 `pub struct LocateMatch` 之前插入:
 
@@ -238,12 +238,12 @@ pub struct FileEditHistoryInfo {
     },
 ```
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `cargo test -p dozer-core 2>&1 | tail -8`
 Expected: 全部 PASS(含新增两条)。若 workspace 里别处对 `Request`/`Reply` 做了穷尽 `match`,此时 `cargo build --workspace 2>&1 | grep -E "^error" -A6` 会报 non-exhaustive,按报错位置补 `_ => ` 分支或对应处理。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-core/src/protocol.rs
@@ -268,7 +268,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>" -- crates/dozer-core/
   - `pub fn validate_context_ref(root: &std::path::Path, rel: &str) -> Result<(), String>`
   - `pub fn end_position_after(start_line: u32, start_col: u32, text: &str) -> (u32, u32)`
 
-- [ ] **Step 1: 写失败的测试(新文件只含测试骨架)**
+- [x] **Step 1: 写失败的测试(新文件只含测试骨架)**
 
 创建 `crates/dozerd/src/agent_context.rs`:
 
@@ -444,14 +444,14 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 在 `lib.rs` 里 `pub mod file_edit_history;` 下一行加 `pub mod agent_context;`,然后:
 
 Run: `cargo test -p dozerd agent_context 2>&1 | tail -20`
 Expected: 编译失败,找不到 `add_context_item` / `validate_context_ref` / `end_position_after` 等。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `file_edit_history.rs` 两处改动:
 1. `pub struct FileEditHistoryStore { conn: Mutex<Connection> }` 里字段改为 `pub(crate) conn: Mutex<Connection>,`。
@@ -650,12 +650,12 @@ impl FileEditHistoryStore {
 }
 ```
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `cargo test -p dozerd agent_context 2>&1 | tail -20`
 Expected: 10 条新测试 PASS。再跑 `cargo test -p dozerd file_edit_history 2>&1 | tail -6` 确认旧测试仍 PASS。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozerd/src/agent_context.rs crates/dozerd/src/file_edit_history.rs crates/dozerd/src/lib.rs
@@ -681,7 +681,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>" -- crates/dozerd/src/
   - `list_context_items(&self, project_id: i64) -> Result<Vec<ContextItemInfo>>`
   - `list_file_edit_history(&self, project_id: i64, path_filter: Option<&str>, limit: u32) -> Result<Vec<FileEditHistoryInfo>>`
 
-- [ ] **Step 1: 写失败的端到端测试**
+- [x] **Step 1: 写失败的端到端测试**
 
 创建 `crates/dozerd/tests/agent_context_requests.rs`(`start_daemon` 与 `file_mutation_requests.rs` 同构):
 
@@ -809,12 +809,12 @@ async fn history_lists_newest_first_filters_and_reports_new_end() {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `cargo test -p dozerd --test agent_context_requests 2>&1 | tail -12`
 Expected: 编译失败,`Client` 没有 `add_context_item` 等方法。
 
-- [ ] **Step 3: 实现 Client 方法**
+- [x] **Step 3: 实现 Client 方法**
 
 `crates/dozer-client/src/lib.rs` 里 `apply_precise_edit` 方法结束的 `}` 之后追加:
 
@@ -885,7 +885,7 @@ Expected: 编译失败,`Client` 没有 `add_context_item` 等方法。
     }
 ```
 
-- [ ] **Step 4: 实现服务端分支**
+- [x] **Step 4: 实现服务端分支**
 
 `server.rs` 里紧挨在 `Request::ListCategories { project_id } => {` 这一行之前插入:
 
@@ -950,12 +950,12 @@ Expected: 编译失败,`Client` 没有 `add_context_item` 等方法。
                         }
 ```
 
-- [ ] **Step 5: 运行确认通过**
+- [x] **Step 5: 运行确认通过**
 
 Run: `cargo test -p dozerd --test agent_context_requests 2>&1 | tail -12`
 Expected: 3 条 PASS。再跑 `cargo test -p dozerd -p dozer-client -p dozer-mcp 2>&1 | grep -E "test result|FAILED"` 确认既有测试未受影响。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/dozerd/src/server.rs crates/dozer-client/src/lib.rs crates/dozerd/tests/agent_context_requests.rs
@@ -990,7 +990,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>" -- crates/dozerd/src/
   - `agent_context::strip(&State) -> Element<Message>`、`agent_context::expanded_panel(&State) -> Option<Element<Message>>`
   - `App::agent_context_refresh(&mut self, project_id: i64)`(`pub(crate)`)
 
-- [ ] **Step 1: 写失败的测试(纯状态机)**
+- [x] **Step 1: 写失败的测试(纯状态机)**
 
 创建 `crates/dozer-app/src/extensions/agent_context.rs`,先只写模块头和测试:
 
@@ -1091,14 +1091,14 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 在 `extensions.rs` 加 `pub mod agent_context;`,然后:
 
 Run: `cargo test -p dozer-app agent_context 2>&1 | tail -15`
 Expected: 编译失败,`State`/`apply`/`Followup` 等未定义。
 
-- [ ] **Step 3: 实现状态机与 IO**
+- [x] **Step 3: 实现状态机与 IO**
 
 在 `agent_context.rs` 的 `use` 之后、`#[cfg(test)]` 之前写入:
 
@@ -1282,12 +1282,12 @@ pub fn update(
 }
 ```
 
-- [ ] **Step 4: 运行状态机测试确认通过**
+- [x] **Step 4: 运行状态机测试确认通过**
 
 Run: `cargo test -p dozer-app agent_context 2>&1 | tail -15`
 Expected: 6 条 PASS。
 
-- [ ] **Step 5: 实现视图**
+- [x] **Step 5: 实现视图**
 
 继续在 `agent_context.rs`(`update` 之后、`#[cfg(test)]` 之前)追加:
 
@@ -1407,7 +1407,7 @@ pub fn expanded_panel(
 Run: `cargo build -p dozer-app 2>&1 | grep -E "^error" -A8 | head -40`
 Expected: 仅剩"未使用"类警告或与后续接线相关的错误;若 `icons::IconKind::FileText`/`Folder`/`ChevronUp`/`ChevronDown` 报不存在,以 `crates/byteui/src/interaction/icons.rs` 里实际变体名为准替换(本计划调研时这四个都存在)。`byteui::theme::color::current()` 的字段名 `cream/dim/gold/red` 已在现有代码中使用。
 
-- [ ] **Step 6: 接线 —— 消息、Workspace 字段、路由、刷新**
+- [x] **Step 6: 接线 —— 消息、Workspace 字段、路由、刷新**
 
 1. `app/message.rs`:在 `FileHistory(file_history::Message),` 之后加
 
@@ -1519,7 +1519,7 @@ Expected: 仅剩"未使用"类警告或与后续接线相关的错误;若 `icons
 
 4. `app/app.rs::adopt_panel_layout` 末尾(函数最后一条语句之后)加 `self.agent_context_refresh(id);`。再 `grep -n "WorkspaceSlot::Loaded(" crates/dozer-app/src` 找到"启动时恢复出来的项目工作区变为 Loaded"的位置,在那里也调一次 `agent_context_refresh`(未加载则空操作),保证重启后列表不是空的;找不到明确的恢复点就只保留 `adopt_panel_layout` 这一处,并在 Task 9 的人工验证里检查重启后是否显示。
 
-- [ ] **Step 7: 接线 —— 终端渲染与几何,并更新既有几何测试**
+- [x] **Step 7: 接线 —— 终端渲染与几何,并更新既有几何测试**
 
 1. `term/terminal.rs::terminal_pane`:把 `content = content.push(active_tab_view(app, ws));` 之后到 `let body = container(...)` 之前改为
 
@@ -1615,12 +1615,12 @@ Expected: 仅剩"未使用"类警告或与后续接线相关的错误;若 `icons
     }
 ```
 
-- [ ] **Step 8: 全量验证**
+- [x] **Step 8: 全量验证**
 
 Run: `cargo build -p dozer-app 2>&1 | tail -5 && cargo test -p dozer-app 2>&1 | grep -E "test result|FAILED|panicked" | head`
 Expected: 编译通过;dozer-app 测试全绿。注意 CLAUDE 的 memory 记录过"合并前已存在的 2 个 footbar margin 测试失败"——若出现,先 `git stash` 对照确认是否本就失败,不是本任务引入就不处理。
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git status --short && git diff --cached --stat
@@ -1644,7 +1644,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>" -- crates/dozer-app/s
 - Consumes: Task 4 的 `agent_context::request_add(project_id, is_dir, relative, &client, &handle, emit)`。
 - Produces: `files::Message::RequestSendToAgentTerminal { text: String, is_dir: bool, relative: String }`;`files::update::send_payload(root: &Path, target: &Path, is_dir: bool) -> (String /*relative*/, String /*text*/)`(私有到 update 模块即可,测试在同文件)。
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 `files/update.rs` 末尾(没有 `#[cfg(test)]` 就新建)追加:
 
@@ -1675,12 +1675,12 @@ mod send_payload_tests {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `cargo test -p dozer-app send_payload 2>&1 | tail -10`
 Expected: 编译失败,`send_payload` 未定义。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `files/state.rs`:把
 
@@ -1768,12 +1768,12 @@ fn send_payload(root: &std::path::Path, target: &std::path::Path, is_dir: bool) 
             }
 ```
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `cargo test -p dozer-app send_payload 2>&1 | tail -6 && cargo build -p dozer-app 2>&1 | tail -3`
 Expected: 2 条 PASS,编译通过(`files/mod.rs` 里既有测试只匹配 `SendToAgentContext(..)`,不受影响)。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/extensions/files/state.rs crates/dozer-app/src/extensions/files/update.rs crates/dozer-app/src/app/update.rs
@@ -1807,7 +1807,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>" -- crates/dozer-app/s
   - 布局常量 `edit_history::{LIST_WIDTH: f32 = 300.0, ACTIONS_HEIGHT: f32 = 36.0}`
   - `App::open_edit_history(&mut self, project_id: i64, filter: Option<String>)`(替换 Task 4 的存根)
 
-- [ ] **Step 1: 写失败的状态机测试**
+- [x] **Step 1: 写失败的状态机测试**
 
 创建 `crates/dozer-app/src/extensions/edit_history.rs`,先写模块头与测试:
 
@@ -1943,14 +1943,14 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 在 `extensions.rs` 加 `pub mod edit_history;`,然后:
 
 Run: `cargo test -p dozer-app edit_history 2>&1 | tail -12`
 Expected: 编译失败,`State`/`Message`/`apply` 未定义。
 
-- [ ] **Step 3: 实现状态机与 IO**
+- [x] **Step 3: 实现状态机与 IO**
 
 在 `edit_history.rs` 的 `use` 之后、`#[cfg(test)]` 之前写入:
 
@@ -2222,12 +2222,12 @@ pub fn update(
 }
 ```
 
-- [ ] **Step 4: 运行状态机测试确认通过**
+- [x] **Step 4: 运行状态机测试确认通过**
 
 Run: `cargo test -p dozer-app edit_history 2>&1 | tail -14`
 Expected: 7 条 PASS。
 
-- [ ] **Step 5: 卡片视图 + 打开入口**
+- [x] **Step 5: 卡片视图 + 打开入口**
 
 1. `file_history.rs`:`fn format_commit_time(` 改为 `pub(crate) fn format_commit_time(`。
 
@@ -2467,7 +2467,7 @@ fn detail_view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_r
             }
 ```
 
-- [ ] **Step 6: 独立窗口宿主(克隆 `file_history_overlay.rs`)**
+- [x] **Step 6: 独立窗口宿主(克隆 `file_history_overlay.rs`)**
 
 1. 克隆并替换:
 
@@ -2527,7 +2527,7 @@ fn diff_area_bounds(card_logical: LogicalSize<f32>) -> (f32, f32, f32, f32) {
    - (i) 约 3307 与 4173:窗口 resize 处理的解构列表加 `edit_history_overlay,`,并在 `if let Some(overlay) = file_history_overlay { overlay.reposition(…); }` 之后复制一份用于 `edit_history_overlay`
    - (j) 约 4288 `CloseRequested` 里加 `*edit_history_overlay = None; // 图干净,Drop 本身就会释放。`
 
-- [ ] **Step 7: 编译与全量测试**
+- [x] **Step 7: 编译与全量测试**
 
 Run: `cargo build -p dozer-app 2>&1 | grep -E "^(error|warning: unused)" -A8 | head -60`
 Expected: 无 error。常见需要就地修的点:`window_events.rs` 里解构列表漏了 `edit_history_overlay`(报 `pattern does not mention field`)——按报错位置补;`edit_history_overlay.rs` 中被 sed 改名后残留的 `git2::Oid`/`LoadedDiff` 引用只存在于旧 `sync_diff_webview`,Step 6.2 已整体替换,若仍有残留 import 一并删除。
@@ -2535,7 +2535,7 @@ Expected: 无 error。常见需要就地修的点:`window_events.rs` 里解构�
 Run: `cargo test -p dozer-app 2>&1 | grep -E "test result|FAILED|panicked" | head`
 Expected: 全绿(edit_history_overlay 里从旧文件带来的 `sync_action_*` 三条测试也应通过)。
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git status --short && git diff --cached --stat
@@ -2556,7 +2556,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>" -- crates/dozer-app/s
 - Consumes: Task 6 的 `State::selected_entry()`、`diff_webview_ready()`、`diff_sent_for()`、`set_diff_sent_for(i64)`、`Message::EditHistoryDiffWebviewEvent`(已在 `App::update` 里把 `Ready` 翻成 `set_diff_webview_ready(true)`)。
 - 复用:`crate::preview::{EditorHostBinding, EditorCommand::SetDiffDocument, dispatch_script, encode_command, extension_to_syntax}`,与 `FileHistoryOverlay::sync_diff_webview` 同一套。
 
-- [ ] **Step 1: 写失败的测试(纯函数:把"该不该推、推什么"抽出来)**
+- [x] **Step 1: 写失败的测试(纯函数:把"该不该推、推什么"抽出来)**
 
 在 `edit_history_overlay.rs` 的 `#[cfg(test)] mod tests`(从旧文件带来的那个)里追加,并在文件里先声明待实现的函数签名对应的测试:
 
@@ -2614,12 +2614,12 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>" -- crates/dozer-app/s
     }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `cargo test -p dozer-app edit_history_overlay 2>&1 | tail -10`
 Expected: 编译失败,`diff_push_needed` / `diff_command` 未定义。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 在 `edit_history_overlay.rs` 顶层(`SyncAction` 附近)加两个纯函数:
 
@@ -2778,12 +2778,12 @@ fn diff_command(
     }
 ```
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `cargo test -p dozer-app edit_history_overlay 2>&1 | tail -10 && cargo build -p dozer-app 2>&1 | grep -E "^error" -A8 | head -30`
 Expected: 测试 PASS,编译通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/platform/edit_history_overlay.rs
@@ -2804,7 +2804,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>" -- crates/dozer-app/s
 - Consumes: `App::preview_open_path_at(path: PathBuf, target_line: Option<usize>)`、`App::term_paste(terminal::TermTarget::Shared, String)`、`edit_history::State::entry(id)`/`project_id()`/`agent_terminal_visible()`。
 - Produces: `edit_history::ask_agent_text(entry: &FileEditHistoryInfo) -> String`。
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 `edit_history.rs` 的 `mod tests` 里追加:
 
@@ -2836,12 +2836,12 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>" -- crates/dozer-app/s
     }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `cargo test -p dozer-app ask_agent_text 2>&1 | tail -8`
 Expected: 编译失败,`ask_agent_text` 未定义。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `edit_history.rs`(`request_load` 之前)加:
 
@@ -2919,12 +2919,12 @@ pub fn ask_agent_text(e: &FileEditHistoryInfo) -> String {
 ```
 (替换 Task 6 里的同名方法整体。)
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `cargo test -p dozer-app ask_agent_text 2>&1 | tail -8 && cargo build -p dozer-app 2>&1 | grep -E "^error" -A8 | head -30`
 Expected: 2 条 PASS,编译通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dozer-app/src/extensions/edit_history.rs crates/dozer-app/src/app/update.rs
@@ -2942,7 +2942,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>" -- crates/dozer-app/s
 - Modify: `docs/superpowers/specs/2026-09-30-agent-native-file-editor-phase3-context-history-design.md`
 - Modify: `docs/superpowers/plans/2026-09-30-agent-native-file-editor-phase3-context-history.md`(勾选步骤)
 
-- [ ] **Step 1: 用户文档**
+- [x] **Step 1: 用户文档**
 
 `grep -n "Agent\|Files" docs/user_guide/panels.md | head -20` 找到 Agent 面板与 Files 面板的章节,在 Agent 面板小节末尾追加(措辞贴合该文件既有语气):
 
@@ -2959,7 +2959,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>" -- crates/dozer-app/s
 修改之后又被改过时会拒绝,不会覆盖)、**只看此文件**(按文件过滤)。
 ```
 
-- [ ] **Step 2: 回写 spec 的三处偏差**
+- [x] **Step 2: 回写 spec 的三处偏差**
 
 在 spec 中:
 - §2「终端几何(需要专门测试)」小节整段改为:条恒定高度 `STRIP_HEIGHT`,展开列表以 `stack!` 浮在终端底部之上,不参与几何;`terminal_pane_pixel_size` 无条件扣 `strip_reserved_height()`;对应测试改为"预留高度与展开状态无关"。并把 §2 折叠/展开描述与「测试」里"折叠/展开后 PTY 网格行数一致"一条同步改掉。
@@ -2967,7 +2967,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>" -- crates/dozer-app/s
 - §4 Locate 描述改为"定位到修改起始行"。
 - §4 Revert 末尾追加一行已知缺口:"dozerd 不检查 GUI 脏 tab(Phase 1 spec 的第 3 条校验实际未在 dozerd 侧实现);脏 tab 会由 T10 磁盘冲突机制兜底,不会静默丢失修改。"
 
-- [ ] **Step 3: 全量验证**
+- [x] **Step 3: 全量验证**
 
 Run: `cargo build 2>&1 | tail -3 && cargo test -p dozer-core -p dozerd -p dozer-client -p dozer-mcp -p dozer-app 2>&1 | grep -E "test result|FAILED|panicked"; cargo clippy --all-targets 2>&1 | grep -E "^(warning|error)" | sort | uniq -c | head; cargo fmt --check 2>&1 | head -5`
 Expected: 全绿、无新增 clippy 警告、fmt 干净。有 fmt 差异就 `cargo fmt` 后单独看 diff 是否只涉及本计划文件。
@@ -2987,7 +2987,7 @@ Expected: 全绿、无新增 clippy 警告、fmt 干净。有 fmt 差异就 `car
 - [ ] 弹窗是独立窗口:叠在 Files/预览 webview 之上不被遮挡;点弹窗外(主窗口)失焦自动关闭;Esc 关闭。
 - [ ] 上下文项右键式入口:展开列表点某项的「历史」,弹窗顶部出现过滤标签且只列出该文件/目录下的记录;点标签 × 恢复全部。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/user_guide/panels.md docs/superpowers/specs/2026-09-30-agent-native-file-editor-phase3-context-history-design.md docs/superpowers/plans/2026-09-30-agent-native-file-editor-phase3-context-history.md

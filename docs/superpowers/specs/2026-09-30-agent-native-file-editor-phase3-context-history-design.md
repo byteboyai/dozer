@@ -83,6 +83,8 @@ Phase 1 结论:这是给 human 看的治理层信息,YAGNI)。
 - **折叠态**占一行:`Agent 上下文 · N 项`,右侧"修改历史"按钮。
 - **展开态**逐项列出:文件/目录图标 + 相对路径 + "移除"按钮;磁盘上已不存在的项
   灰显并标"缺失"。目录项代表其下全部文件(v0.1 §10),UI 不展开列举目录内容。
+  展开的列表以 `stack!` 浮在终端底部之上,**不推挤终端内容、不改变终端高度**
+  (见下文"终端几何")。
 - 点击某项:文件 → 在 Preview 打开;目录 → 在 Files 面板定位该目录。
 - 点击某项旁的"历史"入口(或该项右键)→ 打开历史弹窗且预先按该项过滤。
 - 折叠/展开状态是 per-project 的 UI 状态,不落库(重启回默认折叠即可)。
@@ -98,10 +100,12 @@ Phase 1 结论:这是给 human 看的治理层信息,YAGNI)。
 
 ### 终端几何(需要专门测试)
 
-条的折叠/展开会改变终端可用高度。终端网格行数必须经
-`terminal_pane_pixel_size`(`crates/dozer-app/src/app/layout.rs`)重算并给存活
-PTY 发 SIGWINCH,否则 PTY 行数与视觉高度不一致。条的高度要纳入这条既有几何
-公式,而不是另写一份。
+条的**折叠态**占恒定高度 `STRIP_HEIGHT`;**展开态列表以 `stack!` 浮在终端底部
+之上,不参与几何**——展开/折叠不改变终端可用高度,也不推挤终端内容。终端网格
+行数经 `terminal_pane_pixel_size`(`crates/dozer-app/src/app/layout.rs`)计算时
+**无条件**扣除 `strip_reserved_height()`(= `STRIP_HEIGHT` + 该 pane 的 gap),
+而不是随展开状态变化;否则 PTY 行数与视觉高度不一致。条的高度要纳入这条既有
+几何公式,而不是另写一份。对应测试改为"预留高度与展开状态无关"。
 
 ## 3. 发送动作补落库(改 Phase 2)
 
@@ -121,26 +125,30 @@ PTY 发 SIGWINCH,否则 PTY 行数与视觉高度不一致。条的高度要纳�
 不在本期处理。
 
 **列表**:按时间倒序,每条显示时间、`target_path`、`summary`、署名(`actor`)。
-顶部文件/目录过滤框:从条上"修改历史"按钮打开时不预过滤;从某个上下文项打开
-时预过滤到该项。数据来自 `ListFileEditHistory`,`limit` 默认 200。
+顶部**过滤标签**(从条上"修改历史"按钮打开时无标签;从某个上下文项打开时预置
+一个该项的标签,点标签上的 × 清除),每条记录另有「只看此文件」按钮一键按该条
+`target_path` 过滤。不使用文本过滤输入框。数据来自 `ListFileEditHistory`,
+`limit` 默认 200。
 
 **每条记录四个操作**:
 
 - **Diff**:用该条的 `old_text`/`new_text` 通过现有 CodeMirror diff 宿主展示
   前后对比(`file_history`/`git_log` 已在用的那一套,不新造渲染)。
-- **Locate**:在 Preview 打开该文件,发 `Reveal`/`Select` 命令到该条**修改后**的
-  坐标区间。目标文件已不存在则明确提示,不静默无反应。坐标只对"该次修改之后
+- **Locate**:在 Preview 打开该文件并**定位到修改起始行**(不选中整段范围)。目标
+  文件已不存在则明确提示,不静默无反应。坐标只对"该次修改之后
   文件未再变化"的情形精确;文件之后又被改过时定位到坐标仍可能偏移——这是已知
   限制,UI 不承诺精确,不做重新解析。
 - **Revert**:反向调用 `apply_precise_edit`——`expected_text` = 该条 `new_text`,
   `new_text` = 该条 `old_text`,坐标用该条修改后的区间。走同一套 Conflict
   Detection:磁盘在那次修改之后又被改过,得到 `MutationConflict`,弹窗显示
-  "文件已在此后被修改,无法撤销",**不覆盖**。脏 tab 拒绝的结果同样原样提示。
+  "文件已在此后被修改,无法撤销",**不覆盖**。(GUI 脏 tab 的拦截见下方已知缺口。)
   - **署名**:撤销也写一条新历史,`actor = "dozer"`(human 经 GUI 触发,不冒充
     agent)。`session_id` 使用 GUI 侧生成的稳定标识,不复用 agent 会话 id。
     `Request::ApplyPreciseEdit` 本来就带 `actor`/`session_id` 字段(MCP 路径填
     当前 agent),GUI 直接填 `"dozer"` 即可,协议与 dozerd 逻辑不需要改。
   - `summary` 自动填 `撤销:{原 summary}`。
+  - **已知缺口**:`dozerd` 不检查 GUI 脏 tab(Phase 1 spec 的第 3 条校验实际未在
+    `dozerd` 侧实现);脏 tab 会由 T10 磁盘冲突机制兜底,不会静默丢失修改。
 - **Ask Agent**:用 `term_paste` 把下列文本写进当前项目激活的 agent 终端,不自动
   回车(与 Phase 2 同一原语):
 
@@ -178,7 +186,8 @@ PTY 发 SIGWINCH,否则 PTY 行数与视觉高度不一致。条的高度要纳�
 - **`ListFileEditHistory`**:倒序;`path_filter` 等于文件路径命中该文件;等于目录
   命中其下所有文件且**不**误命中同前缀的兄弟(如过滤 `src/a` 不命中 `src/ab/x`);
   `None` 返回全部;`limit` 生效。
-- **上下文条**:折叠/展开后 `terminal_pane_pixel_size` 与 PTY 网格行数一致;缺失项
+- **上下文条**:预留高度与展开状态无关(`terminal_pane_pixel_size` 无条件扣
+  `strip_reserved_height()`);缺失项
   灰显;项目切换后各项目条目与折叠态互不串;异步应答按 `project_id` 路由到
   正确项目(在项目 A 发起、切到 B 后应答到达,不写进 B)。
 - **发送动作落库**:成功路径既落库又粘贴;`AddContextItem` 失败时仍粘贴且给出
@@ -190,6 +199,7 @@ PTY 发 SIGWINCH,否则 PTY 行数与视觉高度不一致。条的高度要纳�
     磁盘已变时得到冲突提示且文件未被改动;目标为脏 tab 时被拒绝。
   - Ask Agent 文本模板对含反引号/多行/中文的 `old_text`/`new_text` 不丢内容;
     无终端时按钮置灰。
-  - 从上下文项打开时预过滤生效,从条上按钮打开时无预过滤。
+  - 从上下文项打开时预过滤标签生效,从条上按钮打开时无标签;点「只看此文件」
+    按该条路径过滤,点标签 × 恢复全部。
 - **多项目场景**:在项目 A 触发 Ask Agent/添加,文本写进项目 A 激活的终端
   (与 Phase 2 同款集成测试锁定)。
