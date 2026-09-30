@@ -17,6 +17,7 @@ use crate::extensions::project_create;
 use crate::extensions::search;
 use crate::extensions::settings;
 use crate::extensions::ssh;
+use crate::extensions::toast;
 use crate::extensions::todo;
 use crate::extensions::usage;
 use crate::git_watch;
@@ -1436,6 +1437,9 @@ impl App {
                 self.with_focused_project(|ws, _io| {
                     usage::update(&mut ws.usage, msg);
                 });
+            }
+            Message::Toast(msg) => {
+                toast::update(&mut self.toast, msg, std::time::Instant::now());
             }
             Message::CodeHealth(msg @ codehealth::Message::Loaded(project_id, ..)) => {
                 self.with_project(project_id, move |ws, _io| {

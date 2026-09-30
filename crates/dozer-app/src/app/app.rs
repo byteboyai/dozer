@@ -13,6 +13,7 @@ use crate::extensions::git_log;
 use crate::extensions::project;
 use crate::extensions::project_create;
 use crate::extensions::settings;
+use crate::extensions::toast;
 use crate::extensions::todo;
 use crate::external_apps;
 use crate::layout;
@@ -468,6 +469,9 @@ pub struct App {
     /// 阶段启动一个长生命周期 tokio 任务,每 1s/300s 采样一次发回
     /// `Message::Footbar(Message::Sampled)`,UI 即刻刷新。
     pub(crate) footbar: footbar::AppState,
+    /// 统一 Toast 状态——App 级,跨所有项目页签共享(见 `extensions::toast`)。
+    /// 渲染由 `platform::toast_overlay` 的独立原生窗口承担。
+    pub(crate) toast: toast::ToastCenter,
     /// "扩展名 -> 外部 App"配置表(预览窗口工具栏"外部打开"按钮用),启动时
     /// `external_apps::load()` 读一次,本期没有运行时改写(见
     /// `external_apps` 模块文档)。
@@ -835,6 +839,7 @@ impl App {
             usage_webview: crate::extensions::usage::WebviewPushState::default(),
             database: database::AppState::load(),
             footbar: footbar::AppState::default(),
+            toast: toast::ToastCenter::default(),
             external_apps: external_apps::load(),
         };
         // 启动 footbar 采样任务(fire-and-forget):runtime drop 时任务自然取消。
@@ -2207,6 +2212,33 @@ impl App {
     /// 一次清除高亮(同 `next_tooltip_wake` 的定时范式)。
     pub fn next_todo_flash_wake(&self) -> Option<std::time::Duration> {
         self.active_workspace()?.todo.next_flash_wake()
+    }
+
+    /// 推一条 Toast(无去重键:同 level+文本会去重)。
+    pub fn push_toast(&mut self, level: toast::Level, text: impl AsRef<str>) {
+        self.toast
+            .push(level, text.as_ref(), None, std::time::Instant::now());
+    }
+
+    /// 推一条带去重键的 Toast:同 key 再推只刷新文本与计时。
+    pub fn push_toast_keyed(&mut self, level: toast::Level, text: impl AsRef<str>, key: &str) {
+        self.toast.push(
+            level,
+            text.as_ref(),
+            Some(key.to_string()),
+            std::time::Instant::now(),
+        );
+    }
+
+    /// 距最近一条 Toast 到期的剩余时间(`about_to_wait` 据此排精确唤醒,
+    /// 无 Toast 返回 `None` 不空转)。
+    pub fn next_toast_wake(&self) -> Option<std::time::Duration> {
+        self.toast.next_wake(std::time::Instant::now())
+    }
+
+    /// 移除到期 Toast(`new_events` 的 `ResumeTimeReached` 调用)。
+    pub fn advance_toasts(&mut self) -> bool {
+        self.toast.expire(std::time::Instant::now())
     }
 
     /// 推进新增闪光倒计时(每帧 `new_events` 调用):到点且用户未手动改选则

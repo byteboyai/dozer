@@ -2679,6 +2679,9 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             // 拖拽悬停到折叠目录的展开计时:满 1s 才真正展开,见
             // `App::advance_drag_hover_expand` 文档。
             app.advance_drag_hover_expand();
+            // 统一 Toast 到期清理:窗口宿主由 `about_to_wait` 里的
+            // `sync_toast_overlay` 据 `app.toast` 销毁/收缩。
+            app.advance_toasts();
             window.request_redraw();
         }
     }
@@ -2702,7 +2705,8 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             // `advance_drag_hover_expand` 真正展开,没有悬停中的目录时
             // 返回 `None` 不再空转。
             let next_drag_expand = app.next_drag_hover_expand_wake();
-            let wakes: [(bool, Duration); 6] = [
+            let next_toast = app.next_toast_wake();
+            let wakes: [(bool, Duration); 7] = [
                 (
                     app.any_hover_anim_active(),
                     crate::event::HOVER_ANIM_INTERVAL,
@@ -2724,6 +2728,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     next_drag_expand.is_some(),
                     next_drag_expand.unwrap_or(extensions::files::DRAG_HOVER_EXPAND_DELAY),
                 ),
+                (next_toast.is_some(), next_toast.unwrap_or(Duration::ZERO)),
             ];
             if let Some(interval) = wakes
                 .into_iter()
