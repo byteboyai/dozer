@@ -168,6 +168,20 @@ pub(crate) fn open_child_window(
     title: &str,
     el: &ActiveEventLoop,
 ) -> Arc<Window> {
+    let window = build_child_window(main_window, pos, size, title, el, true);
+    enable_overlay_mouse_moved_events(&window);
+    window.focus_window();
+    window
+}
+
+fn build_child_window(
+    main_window: &Window,
+    pos: PhysicalPosition<i32>,
+    size: PhysicalSize<u32>,
+    title: &str,
+    el: &ActiveEventLoop,
+    active: bool,
+) -> Arc<Window> {
     use winit::raw_window_handle::HasWindowHandle;
 
     let parent_handle = main_window
@@ -178,14 +192,28 @@ pub(crate) fn open_child_window(
         .with_title(title)
         .with_decorations(false)
         .with_transparent(true)
+        .with_active(active)
         .with_position(pos)
         .with_inner_size(size);
     // Safety: `parent_handle` 取自仍存活的主窗口(`Ready` 持有的
     // `Arc<Window>`),本函数返回前主窗口不会被 drop。
     let attrs = unsafe { attrs.with_parent_window(Some(parent_handle)) };
-    let window = Arc::new(el.create_window(attrs).expect("create overlay window"));
-    enable_overlay_mouse_moved_events(&window);
-    window.focus_window();
+    Arc::new(el.create_window(attrs).expect("create overlay window"))
+}
+
+/// 非模态提示窗口(Toast)用:建窗**不聚焦**(winit macOS 上 `with_active(false)`
+/// 走 `orderFront` 而非 `makeKeyAndOrderFront`)且整窗**点击穿透**——点击
+/// 落到下面的主窗口,这扇窗口永远不会成为 key window,不会抢终端键盘焦点。
+/// 不调 `enable_overlay_mouse_moved_events`(穿透窗口收不到鼠标事件)。
+pub(crate) fn open_child_window_unfocused(
+    main_window: &Window,
+    pos: PhysicalPosition<i32>,
+    size: PhysicalSize<u32>,
+    title: &str,
+    el: &ActiveEventLoop,
+) -> Arc<Window> {
+    let window = build_child_window(main_window, pos, size, title, el, false);
+    let _ = window.set_cursor_hittest(false);
     window
 }
 
