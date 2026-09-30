@@ -12,11 +12,25 @@ use iced_widget::{MouseArea, Space, button, column, container, row, text};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// 最终项目路径 = 根目录/项目名称。纯字符串拼接,不做存在性判断
-/// (存在性判断是 [`validate_target_not_exists`] 的职责,分开是因为提交
-/// 前两处都要单独调用:先拼路径给用户预览,再单独校验)。
+/// 最终项目路径 = 根目录/项目名称;但项目名称与根目录最后一段同名时,
+/// 根目录本身就是项目目录,直接返回根目录,不再在其下创建同名子目录
+/// (否则选中 `.../digger` 后自动推导名 `digger` 会得到 `digger/digger`
+/// 双层嵌套)。纯字符串拼接,不做存在性判断(存在性判断是
+/// [`validate_target`] 的职责,分开是因为提交前两处都要单独调用:先拼
+/// 路径,再单独校验)。
 pub(crate) fn target_path(root_dir: &str, name: &str) -> PathBuf {
+    if target_collapses_to_root(root_dir, name) {
+        return Path::new(root_dir).to_path_buf();
+    }
     Path::new(root_dir).join(name)
+}
+
+/// 项目名称是否与根目录最后一段同名——此时 [`target_path`] 把目标折叠
+/// 回根目录本身(同 [`derive_project_name_from_dir`] 的口径,`Path::
+/// file_name` 自动容忍结尾斜杠;根目录为空或到根 `/` 时取不到名字,
+/// 恒不折叠)。
+pub(crate) fn target_collapses_to_root(root_dir: &str, name: &str) -> bool {
+    Path::new(root_dir).file_name().is_some_and(|n| n == name)
 }
 
 /// 项目名称合法性:非空、首尾无空白、不含路径分隔符。
@@ -42,6 +56,40 @@ pub(crate) fn validate_target_not_exists(path: &Path) -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+/// 提交前的目标路径校验(统一入口):
+/// - 目标不存在 → 一律放行(本地创建会连父目录一起 `create_dir_all`)。
+/// - 目标已存在且**不是**折叠路径(要在根目录下新建子目录)→ 拒绝,
+///   同 [`validate_target_not_exists`]。
+/// - 目标已存在且是折叠路径(项目名 == 根目录最后一段,根目录本身就是
+///   项目目录)→ 本地创建直接复用该目录(`create_dir_all` 是 no-op,
+///   scaffold 各步都是 ensure 语义);签出要求它至多是空目录——git
+///   clone 拒绝往非空目录克隆,这里提前给出干净文案。目标存在但不是
+///   目录(同名文件挡路)→ 一律拒绝。
+pub(crate) fn validate_target(
+    path: &Path,
+    collapses_to_root: bool,
+    for_clone: bool,
+) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    if !collapses_to_root {
+        return validate_target_not_exists(path);
+    }
+    if !path.is_dir() {
+        return Err(format!("目标路径已存在同名文件: {}", path.display()));
+    }
+    if for_clone {
+        let empty = std::fs::read_dir(path)
+            .map(|mut entries| entries.next().is_none())
+            .unwrap_or(false);
+        if !empty {
+            return Err(format!("目标目录非空,无法签出到该目录: {}", path.display()));
+        }
+    }
+    Ok(())
 }
 
 /// 从远程仓库 URL 推导默认项目名称——取最后一段路径,去掉 `.git` 后缀。
@@ -340,7 +388,8 @@ pub fn update(
                 return;
             }
             let target = target_path(&root_dir, &name);
-            if let Err(e) = validate_target_not_exists(&target) {
+            let collapses = target_collapses_to_root(&root_dir, &name);
+            if let Err(e) = validate_target(&target, collapses, false) {
                 s.error = Some(e);
                 return;
             }
@@ -366,7 +415,8 @@ pub fn update(
                 return;
             }
             let target = target_path(&root_dir, &name);
-            if let Err(e) = validate_target_not_exists(&target) {
+            let collapses = target_collapses_to_root(&root_dir, &name);
+            if let Err(e) = validate_target(&target, collapses, true) {
                 s.error = Some(e);
                 return;
             }
@@ -1082,6 +1132,61 @@ mod tests {
             target_path("/tmp/projects", "foo"),
             PathBuf::from("/tmp/projects/foo")
         );
+    }
+
+    #[test]
+    fn target_path_collapses_when_name_matches_last_segment() {
+        assert_eq!(
+            target_path("/tmp/projects/digger", "digger"),
+            PathBuf::from("/tmp/projects/digger")
+        );
+        // 结尾斜杠容忍(同 derive_project_name_from_dir 的口径)。
+        assert_eq!(
+            target_path("/tmp/projects/digger/", "digger"),
+            PathBuf::from("/tmp/projects/digger/")
+        );
+        // 名字不同 → 维持原子目录拼接;根目录取不到最后一段(空串/根路径)
+        // → 恒不折叠。
+        assert_eq!(
+            target_path("/tmp/projects/digger", "other"),
+            PathBuf::from("/tmp/projects/digger/other")
+        );
+        assert_eq!(target_path("/", "foo"), PathBuf::from("/foo"));
+        assert_eq!(target_path("", "foo"), PathBuf::from("foo"));
+        assert!(!target_collapses_to_root("", "foo"));
+        assert!(!target_collapses_to_root("/", "foo"));
+        assert!(target_collapses_to_root("/tmp/digger/", "digger"));
+    }
+
+    #[test]
+    fn validate_target_allows_existing_dir_only_when_collapsed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("digger");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("existing.txt"), b"x").unwrap();
+
+        // 折叠路径 + 已存在非空目录:本地创建放行(直接复用),签出拒绝。
+        assert!(validate_target(&root, true, false).is_ok());
+        assert!(validate_target(&root, true, true).is_err());
+
+        // 折叠路径 + 已存在空目录:本地/签出都放行。
+        let empty = tmp.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        assert!(validate_target(&empty, true, false).is_ok());
+        assert!(validate_target(&empty, true, true).is_ok());
+
+        // 非折叠路径 + 已存在:一律拒绝(既有语义)。
+        assert!(validate_target(&root, false, false).is_err());
+        assert!(validate_target(&root, false, true).is_err());
+
+        // 不存在的目标:一律放行。
+        assert!(validate_target(&tmp.path().join("nope"), false, false).is_ok());
+        assert!(validate_target(&tmp.path().join("nope"), true, true).is_ok());
+
+        // 折叠路径 + 目标是同名文件:拒绝。
+        let file = tmp.path().join("a-file");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(validate_target(&file, true, false).is_err());
     }
 
     #[test]
