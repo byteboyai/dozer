@@ -1068,6 +1068,30 @@ mod tests {
         }
     }
 
+    /// 2026-09-30 jpg「预览加载超时」根因之一:jsDelivr `+esm` 产物里的裸/根路径
+    /// import(如 `/npm/openseadragon@.../+esm`)在 `dozer://` 下解析不到,整条
+    /// 模块图加载失败,host 脚本一行都不跑(既无 ready 也无 document_loaded)。
+    /// vendor 文件的 import 只能是相对同目录路径。
+    #[test]
+    fn image_annotate_vendor_imports_are_relative() {
+        for f in ["openseadragon.esm.js", "annotorious-openseadragon.esm.js"] {
+            let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/image-annotate/vendor/");
+            let js = std::fs::read_to_string(format!("{path}{f}")).unwrap();
+            assert!(
+                !js.contains("from\"/") && !js.contains("import\"/"),
+                "{f} 含根路径 import,dozer:// 下无法解析"
+            );
+        }
+    }
+
+    /// 同一 bug 的另两个 CSP 原因:host 自带内联 module 脚本(需 `unsafe-inline`),
+    /// Annotorious 的 pixi 渲染器用 `new Function` 编译着色器(需 `unsafe-eval`)。
+    #[test]
+    fn image_annotate_host_csp_allows_inline_and_eval() {
+        let html = include_str!("image_annotate_host.html");
+        assert!(html.contains("script-src 'self' 'unsafe-inline' 'unsafe-eval'"));
+    }
+
     /// Task 3:host 页必须声明严格 CSP、无外部引用、引用了两个 vendor 文件。
     #[test]
     fn image_annotate_host_has_strict_csp_and_no_external_refs() {
