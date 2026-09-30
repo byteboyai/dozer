@@ -252,6 +252,201 @@ pub fn prune_old_logs(dir: &Path, now: SystemTime, keep_days: u64) -> usize {
     removed
 }
 
+// ---- tracing 后端(`logging` feature) ----
+
+#[cfg(feature = "logging")]
+pub use tracing as __tracing;
+
+#[cfg(feature = "logging")]
+#[macro_export]
+macro_rules! log_error {
+    ($scope:expr, $($arg:tt)+) => {
+        $crate::log::__tracing::error!(target: $scope.target, $($arg)+)
+    };
+}
+#[cfg(feature = "logging")]
+#[macro_export]
+macro_rules! log_warn {
+    ($scope:expr, $($arg:tt)+) => {
+        $crate::log::__tracing::warn!(target: $scope.target, $($arg)+)
+    };
+}
+#[cfg(feature = "logging")]
+#[macro_export]
+macro_rules! log_info {
+    ($scope:expr, $($arg:tt)+) => {
+        $crate::log::__tracing::info!(target: $scope.target, $($arg)+)
+    };
+}
+#[cfg(feature = "logging")]
+#[macro_export]
+macro_rules! log_debug {
+    ($scope:expr, $($arg:tt)+) => {
+        $crate::log::__tracing::debug!(target: $scope.target, $($arg)+)
+    };
+}
+#[cfg(feature = "logging")]
+#[macro_export]
+macro_rules! log_trace {
+    ($scope:expr, $($arg:tt)+) => {
+        $crate::log::__tracing::trace!(target: $scope.target, $($arg)+)
+    };
+}
+
+#[cfg(feature = "logging")]
+pub use backend::{Console, Guard, init, init_at};
+
+#[cfg(feature = "logging")]
+mod backend {
+    use super::*;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Console {
+        None,
+        Stdout,
+        Stderr,
+    }
+
+    /// 持有 `tracing-appender` 后台落盘线程的存活凭证;提前 drop 会静默丢日志。
+    /// 调用方在 `main` 里绑到 `_guard`,寿命覆盖整个进程。
+    pub struct Guard {
+        _worker: Option<tracing_appender::non_blocking::WorkerGuard>,
+    }
+
+    /// `Daemon` 沿用 dozerd 现状输出到 stdout,`App` 输出到 stderr。
+    pub fn init(component: Component, version: &'static str) -> Guard {
+        let console = match component {
+            Component::Daemon => Console::Stdout,
+            _ => Console::Stderr,
+        };
+        init_at(component, version, &crate::paths::logs_dir(), console)
+    }
+
+    /// 只接受 `App`/`Daemon`(走 tracing);`Hook`/`Mcp` 用 `plain_write`。
+    /// 全局 subscriber 已被装过时(测试进程)`try_init` 失败,静默降级不 panic。
+    pub fn init_at(
+        component: Component,
+        version: &'static str,
+        dir: &Path,
+        console: Console,
+    ) -> Guard {
+        assert!(
+            matches!(component, Component::App | Component::Daemon),
+            "log::init 只用于 App/Daemon;Hook/Mcp 用 plain_write"
+        );
+        let filter =
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+        let dir_ok = std::fs::create_dir_all(dir).is_ok();
+        if dir_ok {
+            prune_old_logs(dir, SystemTime::now(), RETENTION_DAYS);
+        }
+        let (file_layer, worker) = if dir_ok {
+            let appender = tracing_appender::rolling::daily(dir, component.file_prefix());
+            let (writer, guard) = tracing_appender::non_blocking(appender);
+            (
+                Some(
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(writer)
+                        .with_ansi(false),
+                ),
+                Some(guard),
+            )
+        } else {
+            (None, None)
+        };
+        let stdout_layer = (console == Console::Stdout).then(tracing_subscriber::fmt::layer);
+        let stderr_layer = (console == Console::Stderr)
+            .then(|| tracing_subscriber::fmt::layer().with_writer(std::io::stderr));
+        let _ = tracing_subscriber::registry()
+            .with(filter)
+            .with(stdout_layer)
+            .with(stderr_layer)
+            .with(file_layer)
+            .try_init();
+        if !dir_ok {
+            tracing::warn!(target: "dozer::module::log", ?dir, "创建日志目录失败,本次运行只输出到控制台");
+        }
+        // panic 信息落盘后再交给原 hook(GUI 崩溃时此前没有任何落盘记录)。
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            tracing::error!(target: "dozer::module::panic", "{info}");
+            previous(info);
+        }));
+        tracing::info!(
+            target: "dozer::module::log",
+            component = component.file_prefix(),
+            version,
+            pid = std::process::id(),
+            "启动"
+        );
+        Guard { _worker: worker }
+    }
+}
+
+#[cfg(all(test, feature = "logging"))]
+mod backend_tests {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::fmt::MakeWriter;
+
+    crate::scope!(FILES, panel, "files");
+    crate::scope!(TODO, panel, "todo");
+
+    #[derive(Clone, Default)]
+    struct Buf(Arc<Mutex<Vec<u8>>>);
+    impl Write for Buf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> MakeWriter<'a> for Buf {
+        type Writer = Buf;
+        fn make_writer(&'a self) -> Buf {
+            self.clone()
+        }
+    }
+
+    fn capture(filter: &str, f: impl FnOnce()) -> String {
+        let buf = Buf::default();
+        let sub = tracing_subscriber::fmt()
+            .with_writer(buf.clone())
+            .with_ansi(false)
+            .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
+            .finish();
+        tracing::subscriber::with_default(sub, f);
+        String::from_utf8(buf.0.lock().unwrap().clone()).unwrap()
+    }
+
+    #[test]
+    fn log_line_carries_the_scope_target_and_structured_fields() {
+        let out = capture("info", || {
+            crate::log_warn!(TODO, project_id = 7, "写失败 {}", "boom");
+        });
+        assert!(out.contains("WARN"), "{out}");
+        assert!(out.contains("dozer::panel::todo"), "{out}");
+        assert!(out.contains("写失败 boom"), "{out}");
+        assert!(out.contains("project_id=7"), "{out}");
+    }
+
+    #[test]
+    fn filtering_by_scope_target_enables_only_that_panel() {
+        let out = capture("info,dozer::panel::files=debug", || {
+            crate::log_debug!(FILES, "files-debug");
+            crate::log_debug!(TODO, "todo-debug");
+            crate::log_info!(TODO, "todo-info");
+        });
+        assert!(out.contains("files-debug"), "{out}");
+        assert!(!out.contains("todo-debug"), "{out}");
+        assert!(out.contains("todo-info"), "{out}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
