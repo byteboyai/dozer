@@ -1,6 +1,8 @@
 //! macOS 专有外部文件拖拽悬停位置追踪:补 winit 没实现的 `draggingUpdated:`
 //! 回调,让外部 OS 文件拖拽悬停期间文件树能实时高亮命中目录。
 
+dozer_core::scope!(LOG, module, "platform");
+
 /// macOS 专有：外部 OS 文件拖拽悬停在窗口内移动期间的最新光标位置（逻辑
 /// 坐标，原点左上，Y 向下——与 `cursor_phys`/`files_drop_target` 同源）。
 ///
@@ -114,7 +116,7 @@ pub(crate) fn install_file_drag_position_tracker(window: &std::sync::Arc<winit::
         {
             let view: &NSView = unsafe { &*view_ptr };
             let local: NSPoint = view.convertPoint_fromView(loc, None);
-            tracing::debug!(
+            dozer_core::log_debug!(LOG,
                 raw_x = loc.x,
                 raw_y = loc.y,
                 local_x = local.x,
@@ -155,6 +157,9 @@ pub(crate) fn install_file_drag_position_tracker(window: &std::sync::Arc<winit::
         )
     };
     if !added.as_bool() {
-        tracing::warn!("挂 draggingUpdated: 覆写失败(selector 可能已存在于该类)");
+        dozer_core::log_warn!(
+            LOG,
+            "挂 draggingUpdated: 覆写失败(selector 可能已存在于该类)"
+        );
     }
 }

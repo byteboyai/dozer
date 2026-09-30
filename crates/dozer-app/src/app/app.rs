@@ -36,6 +36,8 @@ use tokio::runtime::Handle;
 
 use super::*;
 
+dozer_core::scope!(LOG, module, "shell");
+
 /// 终端初始网格尺寸（列 x 行）。真实尺寸由窗口创建后的第一次
 /// `Message::PaneResized` 立刻纠正（见 `main.rs` 的 `resumed()`）；这里只是
 /// "窗口还没量出真实像素前"的兜底默认值。
@@ -661,7 +663,7 @@ async fn join_pending_exit_tasks(
 ) {
     let joined = futures::future::join_all(tasks);
     if tokio::time::timeout(budget, joined).await.is_err() {
-        tracing::warn!("退出前等待关 tab 的收尾请求超时,放弃等待");
+        dozer_core::log_warn!(LOG, "退出前等待关 tab 的收尾请求超时,放弃等待");
     }
 }
 
@@ -919,7 +921,8 @@ impl App {
         let rows = ws.files.visible_tree_rows();
         let scroll = ws.files.tree_scroll();
         let hit = files::tree_drop_target(x, y, bounds, scroll, &rows);
-        tracing::debug!(
+        dozer_core::log_debug!(
+            LOG,
             x,
             y,
             window_w,
@@ -1350,7 +1353,7 @@ impl App {
         };
         self.handle.spawn(async move {
             if let Err(e) = open_projects::save(&state) {
-                tracing::warn!("项目页签集合写盘失败: {e}");
+                dozer_core::log_warn!(LOG, "项目页签集合写盘失败: {e}");
             }
         });
     }
@@ -2366,7 +2369,7 @@ impl App {
         let layout = self.shell_layout.clone();
         self.handle.spawn(async move {
             if let Err(e) = layout::save(&layout) {
-                tracing::warn!("外壳布局写盘失败: {e}");
+                dozer_core::log_warn!(LOG, "外壳布局写盘失败: {e}");
             }
         });
     }
@@ -2424,7 +2427,7 @@ impl App {
         let map = self.panel_layouts.clone();
         self.handle.spawn(async move {
             if let Err(e) = panel_layouts::save(&map) {
-                tracing::warn!("面板布局写盘失败: {e}");
+                dozer_core::log_warn!(LOG, "面板布局写盘失败: {e}");
             }
         });
     }
@@ -2492,7 +2495,7 @@ impl App {
         self.shell_layout.window_width = self.window_size.0;
         self.shell_layout.window_height = self.window_size.1;
         if let Err(e) = layout::save(&self.shell_layout) {
-            tracing::warn!("退出前窗口尺寸写盘失败: {e}");
+            dozer_core::log_warn!(LOG, "退出前窗口尺寸写盘失败: {e}");
         }
     }
 

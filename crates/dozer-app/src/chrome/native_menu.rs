@@ -11,6 +11,8 @@ use objc2::{AnyThread, MainThreadOnly};
 use objc2_app_kit::{NSColor, NSImage, NSMenu, NSMenuItem, NSView};
 use objc2_foundation::{NSData, NSPoint, NSRect, NSSize, NSString};
 
+dozer_core::scope!(LOG, module, "platform");
+
 /// 一条原生菜单描述——调用方只管拼数据,不碰 AppKit。
 ///
 /// `color` 是**文字**颜色;`icon_color` 是**图标**独立着色(`None` = 跟随
@@ -318,7 +320,7 @@ fn show_impl<Msg: Clone>(
         return None;
     }
     let Some(view) = content_view() else {
-        tracing::warn!("native_menu::show: 内容 view 未注册,跳过弹菜单");
+        dozer_core::log_warn!(LOG, "native_menu::show: 内容 view 未注册,跳过弹菜单");
         return None;
     };
     let mtm = objc2::MainThreadMarker::new().expect("show() 只能在主线程调用");

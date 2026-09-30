@@ -7,6 +7,8 @@ use std::path::PathBuf;
 
 use super::*;
 
+dozer_core::scope!(LOG, module, "preview");
+
 /// 窗口化 viewer 每次推给 CodeMirror 的窗口大小(以目标行为中心的前后行数)。
 pub const WINDOW_BEFORE: u32 = 1000;
 pub const WINDOW_AFTER: u32 = 2000;
@@ -884,7 +886,7 @@ impl PreviewPane {
         // T11 bullet 4:开一次三段延迟观测(首帧由视图组装时写回)。
         tab.load_observe = Some(crate::preview::LoadObservation::new(generation));
         // T11 bullet 3:结构化日志(只记阶段/世代,不记正文)。
-        tracing::debug!(tab_id, generation, stage = ?stage, "预览加载开始");
+        dozer_core::log_debug!(LOG, tab_id, generation, stage = ?stage, "预览加载开始");
         Some(generation)
     }
 
@@ -909,7 +911,7 @@ impl PreviewPane {
         let from = tab.load_state.stage;
         tab.load_state.advance(stage);
         // T11 bullet 3:阶段推进日志(含已等待毫秒,不记正文)。
-        tracing::debug!(
+        dozer_core::log_debug!(LOG,
             tab_id,
             generation,
             from = ?from,
@@ -963,7 +965,7 @@ impl PreviewPane {
         tab.runtime = PreviewRuntime::None;
         tab.web_error = Some(error.message.clone());
         // T11 bullet 3:失败原因 + 已等待毫秒(不记正文)。
-        tracing::warn!(
+        dozer_core::log_warn!(LOG,
             tab_id,
             generation,
             stage = ?tab.load_state.stage,
@@ -995,7 +997,7 @@ impl PreviewPane {
             return false;
         }
         // T11 bullet 3:取消原因(阶段 + 已等待毫秒)。
-        tracing::debug!(
+        dozer_core::log_debug!(LOG,
             tab_id,
             generation = tab.load_state.generation,
             stage = ?tab.load_state.stage,
@@ -1055,7 +1057,7 @@ impl PreviewPane {
     #[allow(dead_code)]
     pub fn log_load_diagnostics(&self, panel: &str) {
         for diag in self.load_diagnostics() {
-            tracing::info!(
+            dozer_core::log_info!(LOG,
                 panel,
                 tab_id = diag.tab_id,
                 label = %diag.label,

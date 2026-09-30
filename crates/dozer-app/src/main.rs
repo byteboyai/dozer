@@ -37,7 +37,11 @@ use iced_winit::winit;
 use winit::event_loop::EventLoop;
 
 pub fn main() -> Result<(), winit::error::EventLoopError> {
-    tracing_subscriber::fmt::init();
+    // 日志服务由 `dozer-core::log` 统一提供:stderr + 按天滚动的 `dozer-app.log.<日期>`
+    // (14 天保留、启动横幅、panic 落盘)。此前只有 stderr,从 Finder 启动时日志全部丢失。
+    // Guard 必须活到进程结束——`main` 在事件循环返回后才退出,绑在函数体顶部即可。
+    let _log_guard =
+        dozer_core::log::init(dozer_core::log::Component::App, env!("CARGO_PKG_VERSION"));
 
     // 第一次文本排版之前：先注册内嵌的 JetBrains Mono（代码/终端字体），
     // 再剔除毒化 CJK 回退的位图字体（见 fonts.rs 模块注释）。顺序很重要——
