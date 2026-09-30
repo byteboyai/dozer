@@ -265,7 +265,13 @@ pub enum Message {
     /// 内核拦截,不进 `update`——`SendToAgentContext` 在 `files::update` 里
     /// 拼好模板文本后,经 `emit` 送回内核顶层,由 `App::update` 调
     /// `term_paste` 写进当前激活的 agent 终端(真正的 PTY 句柄只有内核有)。
-    RequestSendToAgentTerminal(String),
+    /// 同时携带落库所需的 `is_dir`/`relative`。
+    RequestSendToAgentTerminal {
+        text: String,
+        is_dir: bool,
+        /// 项目内相对路径,目录不带尾部 `/`,落库用。
+        relative: String,
+    },
     /// 内核拦截,不进 `update`——真正的系统剪贴板写入需要 `main.rs` 的
     /// `Clipboard` 句柄,`update()` 拿不到(见设计文档"关键语义确认")。
     CopyPath(PathBuf, PathKind),

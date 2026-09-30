@@ -6,6 +6,14 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 
+/// 右键"添加到 Agent 上下文"的负载:项目内相对路径(与"复制相对路径"同一套
+/// `path_string` 逻辑,原样不转义)+ 要写进终端的模板文本。
+fn send_payload(root: &Path, target: &Path, is_dir: bool) -> (String, String) {
+    let relative = crate::project::path_string(crate::project::PathKind::Relative, target, root);
+    let text = super::agent_context_reference_text(&relative, is_dir);
+    (relative, text)
+}
+
 /// 处理 `CopyPath` 之外的全部消息。内核在到达这里之前已经拦截了
 /// `CopyPath`(真正的剪贴板写入需要 `main.rs` 的 `Clipboard` 句柄),它传
 /// 进来会 `unreachable!`(同 Todo 试点 `DispatchToExisting`/`DispatchNew`
@@ -106,15 +114,14 @@ pub fn update(
             let Some(tree) = ws_state.file_tree.as_ref() else {
                 return;
             };
-            let relative = crate::project::path_string(
-                crate::project::PathKind::Relative,
-                &target,
-                tree.root(),
-            );
-            let text = super::agent_context_reference_text(&relative, is_dir);
-            emit(Message::RequestSendToAgentTerminal(text));
+            let (relative, text) = send_payload(tree.root(), &target, is_dir);
+            emit(Message::RequestSendToAgentTerminal {
+                text,
+                is_dir,
+                relative,
+            });
         }
-        Message::RequestSendToAgentTerminal(_) => {
+        Message::RequestSendToAgentTerminal { .. } => {
             // 内核拦截处理(`App::update` 的 `Message::Files(files::Message::
             // RequestSendToAgentTerminal)` 分支),永远不该落回这里。
             unreachable!("RequestSendToAgentTerminal 由内核拦截处理");
@@ -695,4 +702,29 @@ fn spawn_git_info_load(
         });
         emit(Message::GitInfoLoaded(project_id, info));
     });
+}
+
+#[cfg(test)]
+mod send_payload_tests {
+    use super::send_payload;
+    use std::path::Path;
+
+    #[test]
+    fn relative_path_and_text_for_file_and_dir() {
+        let root = Path::new("/proj");
+        let (rel, text) = send_payload(root, Path::new("/proj/src/main.rs"), false);
+        assert_eq!(rel, "src/main.rs");
+        assert_eq!(text, "请将 src/main.rs 文件纳入你的工作上下文。");
+        let (rel, text) = send_payload(root, Path::new("/proj/research"), true);
+        assert_eq!(rel, "research", "落库用的相对路径不带尾部 /");
+        assert_eq!(text, "请将 research/ 目录纳入你的工作上下文。");
+    }
+
+    #[test]
+    fn keeps_spaces_and_unicode_verbatim() {
+        let root = Path::new("/proj");
+        let (rel, text) = send_payload(root, Path::new("/proj/我的 报告/draft v2.md"), false);
+        assert_eq!(rel, "我的 报告/draft v2.md");
+        assert_eq!(text, "请将 我的 报告/draft v2.md 文件纳入你的工作上下文。");
+    }
 }

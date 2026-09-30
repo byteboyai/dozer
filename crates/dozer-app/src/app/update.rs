@@ -3213,10 +3213,33 @@ impl App {
                     self.update(Message::Files(msg));
                 }
             }
-            Message::Files(files::Message::RequestSendToAgentTerminal(text)) => {
+            Message::Files(files::Message::RequestSendToAgentTerminal {
+                text,
+                is_dir,
+                relative,
+            }) => {
                 // 文件树右键"添加到 Agent 上下文":`files::update` 拼好模板文本
                 // 后经 `emit` 送回内核,这里写进当前激活的 agent 终端输入框
                 // (真正的 PTY 句柄只有内核有)。
+                //
+                // 先发起落库(异步),再写终端;落库失败不影响粘贴——上下文条会
+                // 显示"已发送到终端,但未能记录到上下文列表"(见
+                // `agent_context::apply`)。
+                if let Some(project_id) = self.active_project_id {
+                    let client = self.client.clone();
+                    let handle = self.handle.clone();
+                    let proxy = self.proxy.clone();
+                    crate::extensions::agent_context::request_add(
+                        project_id,
+                        is_dir,
+                        relative,
+                        &client,
+                        &handle,
+                        move |m| {
+                            let _ = proxy.send_event(Message::AgentContext(project_id, m));
+                        },
+                    );
+                }
                 self.term_paste(terminal::TermTarget::Shared, text);
             }
             Message::Files(msg) => {
