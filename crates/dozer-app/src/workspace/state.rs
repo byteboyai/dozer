@@ -682,7 +682,7 @@ impl Workspace {
     /// `Workspace` 恒有 `project: Some(_)`,不会和这个占位混淆。
     ///
     /// 注意这**不是**旧的 `Workspace::with_daemon_error`:"daemon 连不上"是
-    /// 整个程序共享的状态(`daemon_error` 已随外壳字段搬到 `App`),对应
+    /// 整个程序共享的状态(`daemon_unavailable` 已随外壳字段搬到 `App`),对应
     /// `App::with_daemon_error`;这里表达的是完全不同的"这个项目的真实状态
     /// 还没加载完"。
     pub(crate) fn empty_for_project_placeholder() -> Self {
@@ -1714,7 +1714,14 @@ impl Workspace {
             {
                 Ok(info) => info,
                 Err(e) => {
-                    let _ = proxy.send_event(Message::DaemonError(format!("新建会话失败: {e}")));
+                    // 一次性事件(不是"daemon 不可用"这个持久状态):走 Toast。
+                    let _ =
+                        proxy.send_event(Message::Toast(crate::extensions::toast::Message::Push {
+                            scope: LOG,
+                            level: crate::extensions::toast::Level::Error,
+                            text: format!("新建会话失败: {e}"),
+                            key: Some("new-session-failed".to_string()),
+                        }));
                     return;
                 }
             };
@@ -1767,7 +1774,12 @@ impl Workspace {
                 }
                 Err(e) => {
                     let _ =
-                        proxy.send_event(Message::DaemonError(format!("attach 新会话失败: {e}")));
+                        proxy.send_event(Message::Toast(crate::extensions::toast::Message::Push {
+                            scope: LOG,
+                            level: crate::extensions::toast::Level::Error,
+                            text: format!("attach 新会话失败: {e}"),
+                            key: Some("attach-session-failed".to_string()),
+                        }));
                 }
             }
         });

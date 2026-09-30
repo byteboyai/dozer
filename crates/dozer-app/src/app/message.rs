@@ -74,8 +74,8 @@ pub enum Message {
     /// 一次"删除项目"执行完成。`errors` 是文件系统步骤各自独立的
     /// 失败原因(空 = 全部成功);dozerd 侧两步(登记/agent 历史)任一失败
     /// 时这里只会收到那一条错误。项目对应的 tab 在发起删除时已经关掉,
-    /// 这个消息到达时已经没有面板可以展示状态,统一走 `self.daemon_error`
-    /// (同 `project_tab_opened` 失败路径的既有做法)。`deregistered` 表示
+    /// 这个消息到达时已经没有面板可以展示状态,失败原因走 Toast(同
+    /// `project_tab_opened` 失败路径的既有做法)。`deregistered` 表示
     /// dozerd 侧登记是否已取消(成功)——只有它为 true 时才把项目从
     /// `recent_projects` 各镜像列表里剪掉,否则项目还登记着,条目必须留。
     ProjectDeleteDone {
@@ -250,9 +250,6 @@ pub enum Message {
     /// 滚轮同理会穿到底层那块看不见的终端 canvas 上,把它的历史滚走
     /// (Fix round 2 #4)。
     Noop,
-    /// daemon 不可用（启动连接失败，或某次会话操作失败）的错误文案，
-    /// 终端区以 RED 文案展示。
-    DaemonError(String),
     /// 终端滚轮：视口向历史方向（正数）/活动区方向（负数）滚动的行数。
     /// 只作用于当前激活 tab（滚轮事件来自它的 canvas）。
     TermScroll(terminal::TermTarget, i32),

@@ -56,27 +56,16 @@ impl App {
         }
         // 一个项目页签都没有(或当前页签还停在 `Stub` 没促成)时的占位正文。
         let Some(ws) = self.active_workspace() else {
-            // `daemon_error` 必须在这里也画:它平时挂在 `terminal_pane`/
-            // `project_status_bar` 上,而那两处都在"有 `Workspace` 才走到"的
-            // 分支里。偏偏 daemon 连不上时(`App::with_daemon_error`)一个项目
-            // 都恢复不出来,恰恰只会走到这条空态分支——错误文案于是在最需要它
-            // 的时候恰好隐身,用户只看到"点 ＋ 打开一个",点了又静默失败
-            // (`ProjectTabOpened(None, ..)` 只是再写一遍 `daemon_error`)。
-            // 配色沿用 `terminal_pane` 那条同源文案的 RED(最终审查
-            // Required Fix #1)。
-            let mut hint_col = column![
+            // daemon 不可用时不在这里画错误:那是持久状态,由顶栏的 daemon 徽标
+            // (`topbar::daemon_badge`)统一展示——顶栏在首页/空态/工作区三种页面
+            // 里都存在,所以状态只有这一个展示位。"打开项目失败"这类一次性事件
+            // 走 Toast。
+            let hint_col = column![
                 text("未打开任何项目——点顶栏的 ＋ 打开一个")
                     .size(byteui::theme::font::subtitle())
                     .color(byteui::theme::color::current().dim)
             ]
             .spacing(8);
-            if let Some(err) = &self.daemon_error {
-                hint_col = hint_col.push(
-                    text(format!("⚠ {err}"))
-                        .size(byteui::theme::font::body())
-                        .color(byteui::theme::color::current().red),
-                );
-            }
             let hint = container(hint_col.padding(16))
                 .width(Length::Fill)
                 .height(Length::Fill)

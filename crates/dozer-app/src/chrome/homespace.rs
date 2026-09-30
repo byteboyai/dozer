@@ -127,14 +127,9 @@ pub(crate) fn home_page<'a>(
     ]
     .height(Length::Fill);
 
-    let mut col = column![body].height(Length::Fill);
-    if let Some(err) = &app.daemon_error {
-        col = col.push(
-            text(format!("⚠ {err}"))
-                .size(theme::homespace_font::body())
-                .color(theme::homespace_color::error()),
-        );
-    }
+    // daemon 不可用是持久状态,由顶栏徽标统一展示(`topbar::daemon_badge`),不在
+    // 首页再画一份。
+    let col = column![body].height(Length::Fill);
 
     container(col)
         .width(Length::Fill)

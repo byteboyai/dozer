@@ -167,6 +167,77 @@ fn dozer_home_tab<'a>(
         .into()
 }
 
+/// 顶栏 daemon 状态徽标的内容:`App.daemon_unavailable` 有值(dozerd 不可用这个**持久
+/// 状态**)才显示,返回 `(标签, 悬停详情)`。详情为空白时给兜底文案——状态本身是真的,
+/// 不能因为没有文案就把徽标藏起来。
+pub(crate) fn daemon_badge(unavailable: Option<&str>) -> Option<(&'static str, &str)> {
+    const LABEL: &str = "dozerd 不可用";
+    unavailable.map(|detail| {
+        if detail.trim().is_empty() {
+            (LABEL, "无法连接到 dozerd")
+        } else {
+            (LABEL, detail)
+        }
+    })
+}
+
+/// daemon 不可用徽标:红色小标签,点击打开设置("高级"区块里有"重新启动 dozerd"),
+/// 悬停显示详情。**不占布局**(顶栏右侧固定高度的行内一个小标签),且顶栏在首页/空态/
+/// 工作区三种页面里都存在,所以它是这个状态唯一的展示位。
+///
+/// 没有复用 `icons::icon_button_entry`:那是"图标 + 金色 hover"的形态,颜色固定为金
+/// (甲方动作专属色,不能拿来表示故障),也没有文字标签——形态明显不同,所以自绘。
+fn daemon_badge_view(
+    app: &App,
+) -> Option<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> {
+    let (label, detail) = daemon_badge(app.daemon_unavailable.as_deref())?;
+    let colors = byteui::theme::color::current();
+    let red = colors.red;
+    let chip = button(
+        text(format!("⚠ {label}"))
+            .size(byteui::theme::font::label())
+            .color(red)
+            .shaping(iced_widget::text::Shaping::Advanced),
+    )
+    .padding(Padding {
+        top: 2.0,
+        right: 8.0,
+        bottom: 2.0,
+        left: 8.0,
+    })
+    .on_press(Message::SettingsOpen)
+    .style(move |_t: &iced_widget::Theme, status: button::Status| {
+        let alpha = if matches!(status, button::Status::Hovered) {
+            0.24
+        } else {
+            0.12
+        };
+        button::Style {
+            background: Some(Color { a: alpha, ..red }.into()),
+            text_color: red,
+            border: Border {
+                color: red,
+                width: 1.0,
+                radius: 10.0.into(),
+            },
+            ..button::Style::default()
+        }
+    });
+    let bubble = container(
+        text(detail.to_string())
+            .size(12)
+            .color(colors.cream)
+            .shaping(iced_widget::text::Shaping::Advanced),
+    )
+    .padding([5, 9]);
+    Some(
+        iced_widget::Tooltip::new(chip, bubble, tooltip::Position::Bottom)
+            .gap(4)
+            .style(icons::tooltip_bubble_style())
+            .into(),
+    )
+}
+
 pub(crate) fn top_bar(
     app: &App,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -189,7 +260,12 @@ pub(crate) fn top_bar(
     // 效果不好)——退回吃外层 `bar` 的 `align_y(Center)`,在顶栏自身固定
     // 40px 高度内垂直居中;真正跟 rail 按钮对齐靠下面 `region.padding.right`
     // 那个值(见其注释),不靠竖直方向这里做文章。
-    let mut right = row![].spacing(10);
+    let mut right = row![]
+        .spacing(10)
+        .align_y(iced_widget::core::Alignment::Center);
+    if let Some(badge) = daemon_badge_view(app) {
+        right = right.push(badge);
+    }
     right = right.push(icons::icon_button_entry(
         icons::IconKind::Settings,
         byteui::theme::icon_size::rail(),
@@ -792,6 +868,28 @@ fn project_tab_dot(ws: &Workspace) -> Option<Color> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn daemon_badge_hidden_when_daemon_is_available() {
+        assert_eq!(daemon_badge(None), None);
+    }
+
+    #[test]
+    fn daemon_badge_shows_label_and_detail_when_unavailable() {
+        assert_eq!(
+            daemon_badge(Some("dozerd 已停止,部分功能不可用")),
+            Some(("dozerd 不可用", "dozerd 已停止,部分功能不可用"))
+        );
+    }
+
+    #[test]
+    fn daemon_badge_falls_back_when_the_detail_is_blank() {
+        // 状态为"不可用"但没有文案:徽标仍要显示(状态本身是真的),详情给个兜底。
+        assert_eq!(
+            daemon_badge(Some("  ")),
+            Some(("dozerd 不可用", "无法连接到 dozerd"))
+        );
+    }
+
     use super::*;
 
     fn project(id: i64, name: &str, updated_ms: u64) -> ProjectInfo {

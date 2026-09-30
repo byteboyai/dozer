@@ -86,22 +86,22 @@ impl State {
     /// 打开设置弹窗时调用——从本地 `git_accounts.json` 重建三家的连接
     /// 展示态(不重新校验 token 有效性,只是回显上次连接成功记下的用户名)。
     ///
-    /// `daemon_error` 是 `App.daemon_error`(整程序共享的"daemon 连不上"
+    /// `daemon_unavailable` 是 `App.daemon_unavailable`(整程序共享的"daemon 连不上"
     /// 状态)。每次开 Settings 都会重建一份 `State`,如果 `advanced` 一律从
     /// `Idle` 起步,用户停止 dozerd 后关窗再开就只剩"停止 dozerd"按钮,
     /// "重新启动 dozerd"这个入口永久丢失(spec 2026-09-19:"可随时重新
     /// 启动"),再点一次只会拿到一行连接报错。所以这里按 daemon 当前是否
     /// 可达推导初值——真相源是可达性,不是上次 UI 停在哪。`ensure_daemon`
     /// 幂等(daemon 其实活着时 `list()` 立刻成功返回 `Ok`),即便传进来的是
-    /// 过期的 `daemon_error` 也不会误伤。
-    pub fn load(daemon_error: Option<&str>) -> State {
+    /// 过期的 `daemon_unavailable` 也不会误伤。
+    pub fn load(daemon_unavailable: Option<&str>) -> State {
         let accounts = git_accounts::load();
         State {
             github: ConnectState::from_accounts(&accounts, GitProvider::GitHub),
             gitlab: ConnectState::from_accounts(&accounts, GitProvider::GitLab),
             gitee: ConnectState::from_accounts(&accounts, GitProvider::Gitee),
             connect_tasks: HashMap::new(),
-            advanced: advanced_state_for_daemon(daemon_error),
+            advanced: advanced_state_for_daemon(daemon_unavailable),
             selected: SettingsTab::Theme,
             tab_hover: None,
             close_hover: false,
@@ -117,11 +117,11 @@ impl State {
     }
 }
 
-/// 开窗时"高级"区块的初始态:`daemon_error` 有值 = daemon 不可达 = 该给
+/// 开窗时"高级"区块的初始态:`daemon_unavailable` 有值 = daemon 不可达 = 该给
 /// "重新启动 dozerd";否则给默认的"停止 dozerd"。抽成纯函数是为了不起
 /// daemon 就能测两个分支。
-fn advanced_state_for_daemon(daemon_error: Option<&str>) -> AdvancedState {
-    match daemon_error {
+fn advanced_state_for_daemon(daemon_unavailable: Option<&str>) -> AdvancedState {
+    match daemon_unavailable {
         Some(_) => AdvancedState::Stopped { error: None },
         None => AdvancedState::Idle { error: None },
     }
