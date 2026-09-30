@@ -5340,18 +5340,54 @@ impl App {
     }
 
     pub(crate) fn edit_history_message(&mut self, msg: crate::extensions::edit_history::Message) {
-        let client = self.client.clone();
-        let handle = self.handle.clone();
-        let proxy = self.proxy.clone();
-        crate::extensions::edit_history::update(
-            &mut self.edit_history,
-            msg,
-            &client,
-            &handle,
-            move |m| {
-                let _ = proxy.send_event(Message::EditHistory(m));
-            },
-        );
+        use crate::extensions::edit_history as eh;
+        match msg {
+            eh::Message::Locate(id) => {
+                let Some((entry, project_id)) = self
+                    .edit_history
+                    .as_ref()
+                    .and_then(|s| s.entry(id).cloned().map(|e| (e, s.project_id())))
+                else {
+                    return;
+                };
+                let Some(root) = loaded_workspace_mut(&mut self.projects, project_id)
+                    .and_then(|ws| ws.project.as_ref().map(|p| PathBuf::from(&p.path)))
+                else {
+                    return;
+                };
+                let path = root.join(&entry.target_path);
+                self.edit_history = None; // 关弹窗
+                if path.is_file() {
+                    // 定位到修改起始行(不选中整段范围,见 plan「有意偏差 3」)。
+                    self.preview_open_path_at(path, Some(entry.start_line as usize));
+                } else {
+                    self.with_project(project_id, move |ws, _io| {
+                        ws.preview_error =
+                            Some(format!("文件已不存在,无法定位: {}", path.display()));
+                    });
+                }
+            }
+            eh::Message::AskAgent(id) => {
+                let Some(text) = self
+                    .edit_history
+                    .as_ref()
+                    .filter(|s| s.agent_terminal_visible())
+                    .and_then(|s| s.entry(id).map(eh::ask_agent_text))
+                else {
+                    return;
+                };
+                self.edit_history = None; // 关弹窗
+                self.term_paste(terminal::TermTarget::Shared, text);
+            }
+            other => {
+                let client = self.client.clone();
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                eh::update(&mut self.edit_history, other, &client, &handle, move |m| {
+                    let _ = proxy.send_event(Message::EditHistory(m));
+                });
+            }
+        }
     }
 
     pub(crate) fn preview_open_path_at(&mut self, path: PathBuf, target_line: Option<usize>) {

@@ -210,6 +210,22 @@ pub fn apply(state: &mut Option<State>, msg: Message) -> Followup {
     }
 }
 
+/// "Ask Agent"要写进终端的文本。不使用代码围栏(原文可能含反引号/diff),
+/// 原样拼接;结束坐标用修改**后**的 `new_end_*`,与 Locate/Revert 一致。
+pub fn ask_agent_text(e: &FileEditHistoryInfo) -> String {
+    format!(
+        "关于 {path}:{sl}:{sc}-{el}:{ec} 的这次修改({summary}):\n\n修改前:\n{old}\n\n修改后:\n{new}",
+        path = e.target_path,
+        sl = e.start_line,
+        sc = e.start_col,
+        el = e.new_end_line,
+        ec = e.new_end_col,
+        summary = e.summary,
+        old = e.old_text,
+        new = e.new_text,
+    )
+}
+
 pub fn request_load(
     project_id: i64,
     filter: Option<String>,
@@ -498,6 +514,35 @@ mod tests {
 
     fn open(filter: Option<&str>) -> Option<State> {
         Some(State::new(1, filter.map(String::from), true))
+    }
+
+    #[test]
+    fn ask_agent_text_has_location_summary_before_and_after() {
+        let mut e = info(1, "src/a.rs");
+        e.start_line = 3;
+        e.start_col = 5;
+        e.new_end_line = 4;
+        e.new_end_col = 2;
+        e.summary = "修正拼写".into();
+        e.old_text = "teh".into();
+        e.new_text = "the".into();
+        assert_eq!(
+            ask_agent_text(&e),
+            "关于 src/a.rs:3:5-4:2 的这次修改(修正拼写):\n\n修改前:\nteh\n\n修改后:\nthe"
+        );
+    }
+
+    #[test]
+    fn ask_agent_text_keeps_backticks_multiline_chinese_and_empty_sides() {
+        let mut e = info(1, "我的 报告/d.md");
+        e.old_text = String::new(); // 纯插入
+        e.new_text = "```rust\nfn main() {}\n```\n中文".into();
+        let t = ask_agent_text(&e);
+        assert!(
+            t.contains("修改前:\n\n\n修改后:\n```rust\nfn main() {}\n```\n中文"),
+            "{t}"
+        );
+        assert!(t.starts_with("关于 我的 报告/d.md:"), "{t}");
     }
 
     #[test]
