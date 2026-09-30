@@ -68,12 +68,36 @@ pub(crate) enum SyncAction {
     Close,
     Noop,
 }
-
 pub(crate) fn sync_action(open: bool, overlay_present: bool) -> SyncAction {
     match (open, overlay_present) {
         (true, false) => SyncAction::Open,
         (false, true) => SyncAction::Close,
         (true, true) | (false, false) => SyncAction::Noop,
+    }
+}
+
+/// 是否需要向 diff webview 推送当前选中条目的内容:webview 已 ready 且这一条
+/// 还没送达过。
+fn diff_push_needed(
+    webview_ready: bool,
+    sent_for: Option<i64>,
+    entry: &dozer_core::protocol::FileEditHistoryInfo,
+) -> bool {
+    webview_ready && sent_for != Some(entry.id)
+}
+
+/// 选中条目 → `SetDiffDocument` 命令。`old_text`/`new_text` 就是这次修改的前后
+/// 文本(可为空:纯插入/纯删除),恒只读。
+fn diff_command(
+    entry: &dozer_core::protocol::FileEditHistoryInfo,
+) -> crate::preview::EditorCommand {
+    let language = crate::preview::extension_to_syntax(std::path::Path::new(&entry.target_path));
+    crate::preview::EditorCommand::SetDiffDocument {
+        old_text: entry.old_text.clone(),
+        new_text: entry.new_text.clone(),
+        language: language.to_string(),
+        revision: 0,
+        read_only: true,
     }
 }
 
@@ -213,19 +237,128 @@ impl EditHistoryOverlay {
     /// "Architecture"——那套的 IPC 路由按 `binding.panel` 分支,且池 key
     /// 空间是主窗口专属的,生搬到这扇独立窗口上要么错路由要么要新增
     /// `PanelKind` 变体,两者都不值当,这个槽位本来就只服务一个 webview)。
-    ///
-    /// **Task 6 里是空操作**:diff webview 在下一任务实现,这里先只清空槽位。
     pub(crate) fn sync_diff_webview(
         &mut self,
         app: &mut App,
         allowed_files: Arc<std::sync::Mutex<std::collections::HashSet<PathBuf>>>,
         proxy: winit::event_loop::EventLoopProxy<Message>,
     ) {
-        // Task 6 先不做 diff webview(下一任务实现)。这里显式消费参数、清空槽位,
-        // 保持签名不变。
-        let _ = (app, allowed_files, proxy);
-        self.diff_webview = None;
-        self.diff_webview_bounds = None;
+        let Some(entry) = app
+            .edit_history
+            .as_ref()
+            .and_then(|s| s.selected_entry())
+            .cloned()
+        else {
+            self.diff_webview = None;
+            self.diff_webview_bounds = None;
+            return;
+        };
+
+        let binding = crate::preview::EditorHostBinding::new(
+            0,
+            crate::app::PanelKind::Files,
+            0,
+            PathBuf::from(&entry.target_path),
+        );
+        let url = binding.diff_url(crate::preview::scheme_query_value());
+        let logical_size: LogicalSize<f32> = self
+            .window
+            .inner_size()
+            .to_logical(self.window.scale_factor());
+        let card_logical = card_logical_size(logical_size.width, logical_size.height);
+        let card_offset = centered_card_offset(logical_size, card_logical);
+        let (x, y, w, h) = diff_area_bounds(card_logical);
+        let (x, y) = (x + card_offset.x, y + card_offset.y);
+        let bounds = wry::Rect {
+            position: wry::dpi::LogicalPosition::new(x as f64, y as f64).into(),
+            size: wry::dpi::LogicalSize::new(w as f64, h as f64).into(),
+        };
+
+        match &mut self.diff_webview {
+            Some((view, loaded_url)) => {
+                if *loaded_url != url {
+                    let _ = view.load_url(&url);
+                    *loaded_url = url;
+                }
+                if self.diff_webview_bounds != Some((x, y, w, h)) {
+                    let _ = view.set_bounds(bounds);
+                    self.diff_webview_bounds = Some((x, y, w, h));
+                }
+            }
+            None => {
+                let root = crate::assets::assets_root();
+                let ipc_proxy = proxy;
+                let expected_binding = binding.clone();
+                let built = wry::WebViewBuilder::new()
+                    .with_url(&url)
+                    .with_bounds(bounds)
+                    .with_visible(true)
+                    .with_custom_protocol("dozer".into(), move |_id, request| {
+                        let allowed = allowed_files.lock().expect("allowed_files 锁");
+                        let reply = crate::assets::handle_protocol(
+                            &root,
+                            &allowed,
+                            None,
+                            &request.uri().to_string(),
+                        );
+                        wry::http::Response::builder()
+                            .status(reply.status)
+                            .header("Content-Type", reply.mime)
+                            .body(std::borrow::Cow::Owned(reply.body))
+                            .unwrap()
+                    })
+                    .with_ipc_handler(move |req| {
+                        let expected = crate::preview::HostBinding::new(
+                            expected_binding.project_id,
+                            expected_binding.panel,
+                            expected_binding.tab_id,
+                            expected_binding.document_id(),
+                        );
+                        match crate::preview::parse_event(req.body().as_str()) {
+                            Ok(event) => {
+                                if let Err(error) = event.validate(&expected) {
+                                    tracing::warn!(%error, "拒绝无效 edit-history diff IPC");
+                                } else {
+                                    let _ = ipc_proxy.send_event(
+                                        Message::EditHistoryDiffWebviewEvent(expected, event),
+                                    );
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, "无法解析 edit-history diff IPC");
+                            }
+                        }
+                    })
+                    .build_as_child(&self.window);
+                match built {
+                    Ok(view) => {
+                        self.diff_webview = Some((view, url));
+                        self.diff_webview_bounds = Some((x, y, w, h));
+                    }
+                    Err(e) => tracing::warn!("修改历史 diff webview 创建失败: {e}"),
+                }
+            }
+        }
+
+        let need_push = app
+            .edit_history
+            .as_ref()
+            .is_some_and(|s| diff_push_needed(s.diff_webview_ready(), s.diff_sent_for(), &entry));
+        if need_push && let Some((view, _)) = &self.diff_webview {
+            let script = crate::preview::dispatch_script(&crate::preview::encode_command(
+                binding.project_id,
+                binding.panel,
+                binding.tab_id,
+                &binding.document_id(),
+                0,
+                None,
+                diff_command(&entry),
+            ));
+            let _ = view.evaluate_script(&script);
+            if let Some(s) = app.edit_history.as_mut() {
+                s.set_diff_sent_for(entry.id);
+            }
+        }
     }
 
     /// 喂一个原始 winit 事件进这扇窗口自己的 iced 管线。同
@@ -315,5 +448,57 @@ mod tests {
     fn sync_action_noop_when_states_already_match() {
         assert_eq!(sync_action(true, true), SyncAction::Noop);
         assert_eq!(sync_action(false, false), SyncAction::Noop);
+    }
+
+    use dozer_core::protocol::FileEditHistoryInfo;
+
+    fn entry(id: i64, path: &str, old: &str, new: &str) -> FileEditHistoryInfo {
+        FileEditHistoryInfo {
+            id,
+            project_id: 1,
+            target_path: path.into(),
+            actor: "claude".into(),
+            session_id: "s".into(),
+            start_line: 1,
+            start_col: 1,
+            end_line: 1,
+            end_col: 1,
+            new_end_line: 1,
+            new_end_col: 1,
+            old_text: old.into(),
+            new_text: new.into(),
+            summary: "s".into(),
+            created_ms: 0,
+        }
+    }
+
+    #[test]
+    fn diff_push_needed_only_when_ready_and_not_yet_sent() {
+        let e = entry(4, "a.rs", "o", "n");
+        assert!(!diff_push_needed(false, None, &e), "webview 未 ready 不推");
+        assert!(diff_push_needed(true, None, &e));
+        assert!(!diff_push_needed(true, Some(4), &e), "同一条已推过不重复推");
+        assert!(diff_push_needed(true, Some(3), &e), "换了条目要重推");
+    }
+
+    #[test]
+    fn diff_command_carries_old_new_and_language_and_is_read_only() {
+        let e = entry(4, "src/a.rs", "", "fn x() {}\n"); // 纯插入:old 为空
+        let cmd = diff_command(&e);
+        match cmd {
+            crate::preview::EditorCommand::SetDiffDocument {
+                old_text,
+                new_text,
+                language,
+                read_only,
+                ..
+            } => {
+                assert_eq!(old_text, "");
+                assert_eq!(new_text, "fn x() {}\n");
+                assert!(read_only);
+                assert!(!language.is_empty());
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }
