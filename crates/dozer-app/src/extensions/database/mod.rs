@@ -1335,4 +1335,39 @@ mod persist_tests {
         assert!(got[0].text.contains("数据库驱动"), "{}", got[0].text);
         assert_eq!(got[0].scope.name, "database");
     }
+
+    #[test]
+    fn store_source_password_uses_the_dozer_service_and_project_scoped_account() {
+        use crate::secrets::fake::FakeStore;
+        let store = FakeStore::ok();
+        let mut ws = WorkspaceState::default();
+        update::store_source_password(&store, &mut ws, 7, "s1", "pw-secret");
+        assert_eq!(*store.calls.borrow(), vec!["set dozer/7:s1 pw-secret"]);
+        assert!(ws.take_outbox().is_empty());
+    }
+
+    #[test]
+    fn store_source_password_failure_toasts_with_database_scope_and_leaks_nothing() {
+        use crate::secrets::fake::FakeStore;
+        let store = FakeStore::failing("钥匙串已锁定");
+        let mut ws = WorkspaceState::default();
+        update::store_source_password(&store, &mut ws, 7, "s1", "pw-secret");
+        let got = ws.take_outbox();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].scope.name, "database");
+        assert!(got[0].text.contains("钥匙串已锁定"));
+        assert!(!got[0].text.contains("pw-secret"));
+    }
+
+    #[test]
+    fn forget_source_password_failure_is_a_warning() {
+        use crate::secrets::fake::FakeStore;
+        let store = FakeStore::failing("拒绝访问");
+        let mut ws = WorkspaceState::default();
+        update::forget_source_password(&store, &mut ws, 7, "s1");
+        assert_eq!(*store.calls.borrow(), vec!["delete dozer/7:s1"]);
+        let got = ws.take_outbox();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].level, crate::extensions::toast::Level::Warning);
+    }
 }

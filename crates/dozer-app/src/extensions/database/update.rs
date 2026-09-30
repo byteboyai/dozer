@@ -8,6 +8,48 @@ use super::*;
 
 dozer_core::scope!(LOG, panel, "database");
 
+/// 把数据源密码写进钥匙串;失败推 Toast(此前 `let _ = entry.set_password(..)` 静默吞掉,
+/// 界面显示已保存,之后连接报认证错误)。**调用方保证 `password` 非空**(`draft_to_source`
+/// 只在有密码时返回 `Some`)。
+pub(crate) fn store_source_password(
+    store: &dyn crate::secrets::SecretStore,
+    ws_state: &mut WorkspaceState,
+    project_id: i64,
+    source_id: &str,
+    password: &str,
+) {
+    let account = keyring_account(project_id, source_id);
+    crate::secrets::save(
+        store,
+        &mut ws_state.outbox,
+        LOG,
+        &crate::secrets::SecretRef {
+            service: KEYRING_SERVICE,
+            account: &account,
+        },
+        password,
+    );
+}
+
+/// 删数据源时清掉它的钥匙串条目;失败推 Warning(条目不存在视为成功,见 `SecretStore::delete`)。
+pub(crate) fn forget_source_password(
+    store: &dyn crate::secrets::SecretStore,
+    ws_state: &mut WorkspaceState,
+    project_id: i64,
+    source_id: &str,
+) {
+    let account = keyring_account(project_id, source_id);
+    crate::secrets::remove(
+        store,
+        &mut ws_state.outbox,
+        LOG,
+        &crate::secrets::SecretRef {
+            service: KEYRING_SERVICE,
+            account: &account,
+        },
+    );
+}
+
 /// 保存数据源列表;失败不 panic,推一条 Toast——否则界面看着已保存、重启后连接配置丢失。
 pub(crate) fn persist_sources(ws_state: &mut WorkspaceState, repo_path: &Path) {
     if let Err(e) = save_sources(repo_path, &ws_state.sources) {
@@ -94,10 +136,9 @@ pub fn update(
             } else {
                 ws_state.sources.push(source);
             }
-            if let Some(p) = pw_to_save
-                && let Ok(entry) = keyring_entry(project_id, &id)
-            {
-                let _ = entry.set_password(&p);
+            // `pw_to_save` 只在草稿里有密码时是 `Some`;钥匙串写失败不阻断数据源本身的保存。
+            if let Some(p) = pw_to_save {
+                store_source_password(&crate::secrets::KeyringStore, ws_state, project_id, &id, &p);
             }
             // 编辑已有源:连接信息可能变了,旧结构快照不作数(设计文档 §2)。
             if draft.id.is_some() {
@@ -158,9 +199,7 @@ pub fn update(
             ws_state.schemas.remove(&id);
             ws_state.content.close_by_source(&id);
             ws_state.expanded_sources.remove(&id);
-            if let Ok(entry) = keyring_entry(project_id, &id) {
-                let _ = entry.delete_credential();
-            }
+            forget_source_password(&crate::secrets::KeyringStore, ws_state, project_id, &id);
             persist_sources(ws_state, repo_path);
         }
         Message::TestConnection(id) => {

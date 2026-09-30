@@ -313,9 +313,16 @@ pub(crate) fn save_sources(repo: &Path, sources: &[DataSource]) -> std::io::Resu
 
 /// Keychain 条目 key:`{project_id}:{source_id}`,同一把钥匙串条目按项目+
 /// 数据源双重区分。
+/// 数据库凭据在钥匙串里的 service。读、写、删共用,避免字面量漂移。
+pub(crate) const KEYRING_SERVICE: &str = "dozer";
+
+pub(crate) fn keyring_account(project_id: i64, source_id: &str) -> String {
+    format!("{project_id}:{source_id}")
+}
+
 pub(crate) fn keyring_entry(
     project_id: i64,
     source_id: &str,
 ) -> Result<keyring::Entry, keyring::Error> {
-    keyring::Entry::new("dozer", &format!("{project_id}:{source_id}"))
+    keyring::Entry::new(KEYRING_SERVICE, &keyring_account(project_id, source_id))
 }
