@@ -2241,21 +2241,6 @@ impl App {
         self.toast.expire(std::time::Instant::now())
     }
 
-    /// **临时**(Task 6 删除):`DOZER_TOAST_DEMO=1` 时一次推四条不同级别的
-    /// Toast,用于手工验收窗口宿主。
-    pub fn push_demo_toasts_if_requested(&mut self) {
-        if std::env::var_os("DOZER_TOAST_DEMO").is_none() {
-            return;
-        }
-        self.push_toast(toast::Level::Info, "信息:这是一条 Info Toast");
-        self.push_toast(toast::Level::Success, "成功:已保存");
-        self.push_toast(toast::Level::Warning, "警告:这是一条 Warning Toast");
-        self.push_toast(
-            toast::Level::Error,
-            "错误:打开项目失败,请确认 dozerd 正常后重试——这条文本故意写得很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长,用来验证固定高度下的裁剪",
-        );
-    }
-
     /// 推进新增闪光倒计时(每帧 `new_events` 调用):到点且用户未手动改选则
     /// 自动清除选中高亮。
     pub fn advance_todo_flash(&mut self) {

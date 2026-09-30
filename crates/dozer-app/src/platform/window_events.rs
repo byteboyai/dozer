@@ -2922,10 +2922,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             let logical: LogicalSize<f32> = physical_size.to_logical(window.scale_factor());
             app.set_window_size(logical.width, logical.height);
 
-            // **临时**(Task 6 删除):`DOZER_TOAST_DEMO=1` 时推几条 Toast,
-            // 用于手工验收窗口宿主。
-            app.push_demo_toasts_if_requested();
-
             // Initialize iced
 
             let renderer = {
