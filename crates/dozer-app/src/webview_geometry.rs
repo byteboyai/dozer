@@ -601,11 +601,29 @@ pub fn usage_content_pane_bounds_for(
         Side::Left => left_zone_width(window_width, state),
         Side::Right => right_zone_width(window_width, state),
     };
-    let inx = zone_x0 + m.left;
+    // webview 是直角原生子视图,恒盖在 iced 之上:既会盖住区外框 1px 内边距
+    // (左右两侧),也会让底部两个直角戳出面板圆角(`zone_pane_border` 的
+    // 半径 = 区圆角 - 区内边距)。左右各内缩区内边距,底部内缩「内边距 + 圆角
+    // 半径」,让矩形停在圆弧起点之上(放大态同理用 `CORNER_INSET`)。
+    let zone = match side {
+        Side::Left => theme::region::left_zone(),
+        Side::Right => theme::region::right_zone(),
+    };
+    let pad = zone.padding.left;
+    let corner_r = zone
+        .border
+        .map(|b| (b.radius.bottom_left - zone.padding.bottom).max(0.0))
+        .unwrap_or(0.0);
+    let inx = zone_x0 + m.left + pad;
     let iny = byteui::theme::geometry::top_bar_height() + m.top;
-    let inw = (zone_raw_w - m.left - m.right).max(0.0);
-    let inh =
-        (window_height - iny - m.bottom - byteui::theme::geometry::status_bar_height()).max(0.0);
+    let inw = (zone_raw_w - m.left - m.right - pad * 2.0).max(0.0);
+    let inh = (window_height
+        - iny
+        - m.bottom
+        - pad
+        - corner_r
+        - byteui::theme::geometry::status_bar_height())
+    .max(0.0);
     compute(inx, iny, inw, inh)
 }
 
@@ -1415,6 +1433,32 @@ mod tests {
         assert!(
             w_full > w_split,
             "无筛选栏时内容应独占整条配对宽,比分栏时更宽:{w_full} vs {w_split}"
+        );
+    }
+
+    /// 分栏态 webview 是直角子视图:左右要让出区内边距、底部要让出圆角半径,
+    /// 否则会盖住区外框并让直角戳出面板底部圆角(2026-09-30 用量面板溢出)。
+    #[test]
+    fn usage_content_inset_clears_zone_padding_and_bottom_corners() {
+        let state = ShellState {
+            left_view: PanelKind::Usage,
+            ..test_state()
+        };
+        let (x, y, w, h) =
+            usage_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true, false);
+        let zone = theme::region::left_zone();
+        let m = zone.margin;
+        let pad = zone.padding.left;
+        let r = zone.border.unwrap().radius.bottom_left - zone.padding.bottom;
+        let zone_x0 = byteui::theme::geometry::icon_rail_width();
+        assert!((x - (zone_x0 + m.left + pad)).abs() < 0.01);
+        assert!((x + w - (zone_x0 + left_zone_width(1600.0, &state) - m.right - pad)).abs() < 0.01);
+        let zone_bottom = 900.0 - byteui::theme::geometry::status_bar_height() - m.bottom;
+        assert!(
+            y + h <= zone_bottom - pad - r + 0.01,
+            "底边应停在圆弧起点之上:{} vs {}",
+            y + h,
+            zone_bottom - pad - r
         );
     }
 
