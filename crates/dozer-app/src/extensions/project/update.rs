@@ -286,13 +286,17 @@ pub fn update(
             ws_state.memory_edit_draft = None;
             let client = client.clone();
             handle.spawn(async move {
-                if let Ok(detail) = client.get_memory(project_id, id).await {
-                    emit(Message::MemoryDetailLoaded(detail));
-                }
+                // 先 await 再调用 `emit`:`emit` 是 `Fn + Send`(非 `Sync`),
+                // 写成 `emit(f(x.await))` 会让 `&emit` 横跨 await,future 就不是 `Send` 了。
+                let res = client.get_memory(project_id, id).await;
+                emit(memory_detail_message(res));
             });
         }
         Message::MemoryDetailLoaded(detail) => {
             ws_state.memory_detail = Some(detail);
+        }
+        Message::MemoryDetailLoadFailed(e) => {
+            ws_state.error = Some(format!("读取记忆失败: {e}"));
         }
         Message::MemoryDetailClose => {
             ws_state.memory_detail = None;
@@ -353,9 +357,8 @@ pub fn update(
                         // 编辑成功后重拉详情(带历史),覆盖 `MemoryMutated`
                         // 只刷新列表的局限——否则详情面板会停在编辑前的内容,
                         // 必须退回列表再点进去才看得到新值。
-                        if let Ok(fresh) = client.get_memory(project_id, detail.id).await {
-                            emit(Message::MemoryDetailLoaded(fresh));
-                        }
+                        let fresh = client.get_memory(project_id, detail.id).await;
+                        emit(memory_detail_message(fresh));
                         emit(Message::MemoryMutated(Ok(())));
                     }
                     Err(e) => emit(Message::MemoryMutated(Err(e.to_string()))),

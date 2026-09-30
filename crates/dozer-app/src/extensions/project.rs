@@ -427,6 +427,9 @@ pub enum Message {
     MemoryDetailOpen(i64),
     /// 详情拉取完成。
     MemoryDetailLoaded(dozer_core::protocol::MemoryDetail),
+    /// 读取记忆详情失败(打开一条记忆,或编辑成功后刷新详情)。此前失败时静默不动,用户
+    /// 点了没反应。沿用该面板既有的内联 `error` 展示("保存记忆失败"同款)。
+    MemoryDetailLoadFailed(String),
     /// 关闭详情面板。
     MemoryDetailClose,
     /// 进入编辑态(用当前详情内容预填草稿)。
@@ -534,6 +537,17 @@ fn dir_size_and_count(root: &std::path::Path, exclude: &[&str]) -> (u64, u64) {
         }
     }
     (total_size, total_count)
+}
+
+/// 把一次 `get_memory` 的结果变成要回给 `update` 的消息:成功 → `MemoryDetailLoaded`,
+/// 失败 → `MemoryDetailLoadFailed`(而不是像过去那样在 `if let Ok(..)` 里静默丢掉)。
+pub(crate) fn memory_detail_message<E: std::fmt::Display>(
+    res: Result<dozer_core::protocol::MemoryDetail, E>,
+) -> Message {
+    match res {
+        Ok(detail) => Message::MemoryDetailLoaded(detail),
+        Err(e) => Message::MemoryDetailLoadFailed(e.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -1309,5 +1323,51 @@ mod tests {
         assert_eq!(info.file_count, 0);
         assert!(info.created.is_none());
         assert!(info.modified.is_none());
+    }
+
+    fn sample_memory_detail() -> dozer_core::protocol::MemoryDetail {
+        dozer_core::protocol::MemoryDetail {
+            id: 1,
+            project_id: 1,
+            title: "t".into(),
+            kind: "note".into(),
+            description: "d".into(),
+            body: "b".into(),
+            created_ms: 0,
+            created_by: "user".into(),
+            updated_ms: 0,
+            updated_by: "user".into(),
+            history: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn memory_detail_message_maps_ok_and_err() {
+        assert!(matches!(
+            memory_detail_message(Ok::<_, String>(sample_memory_detail())),
+            Message::MemoryDetailLoaded(_)
+        ));
+        match memory_detail_message(Err::<dozer_core::protocol::MemoryDetail, _>("连接被拒")) {
+            Message::MemoryDetailLoadFailed(e) => assert_eq!(e, "连接被拒"),
+            other => panic!("期望 MemoryDetailLoadFailed,得到 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn memory_detail_load_failed_sets_the_inline_error() {
+        let mut ws = new_ws();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        update(
+            &mut ws,
+            Message::MemoryDetailLoadFailed("连接被拒".to_string()),
+            1,
+            "名字",
+            &test_repo_path(),
+            &test_client(),
+            rt.handle(),
+            |_| {},
+        );
+        assert_eq!(ws.error.as_deref(), Some("读取记忆失败: 连接被拒"));
+        assert!(ws.memory_detail.is_none(), "读取失败不应留下半截详情");
     }
 }
