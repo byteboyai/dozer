@@ -91,6 +91,21 @@ pub fn log_toast(scope: Scope, level: Level, text: &str) {
     }
 }
 
+/// 后台任务(拿不到 `App`)里把一次失败变成可经 `proxy.send_event(Message::Toast(..))`
+/// 发回主线程的 Toast 消息;`Ok` 返回 `None`(什么都不发)。文案是 `"{what}: {e}"`。
+pub fn failure_message<T, E: std::fmt::Display>(
+    scope: Scope,
+    what: &str,
+    res: &Result<T, E>,
+) -> Option<Message> {
+    res.as_ref().err().map(|e| Message::Push {
+        scope,
+        level: Level::Error,
+        text: format!("{what}: {e}"),
+        key: None,
+    })
+}
+
 /// 一条待发的提示。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pending {
@@ -420,5 +435,26 @@ mod tests {
         assert!(out.contains("line1\nline2"), "{out}");
         let out = capture(|| log_toast(TEST_TODO, Level::Error, "  \n "));
         assert!(out.trim().is_empty(), "{out}");
+    }
+
+    #[test]
+    fn failure_message_is_none_on_ok() {
+        assert!(failure_message(TEST_TODO, "处理任务失败", &Ok::<(), String>(())).is_none());
+    }
+
+    #[test]
+    fn failure_message_builds_an_error_push_with_what_prefix() {
+        let msg = failure_message(TEST_TODO, "处理任务失败", &Err::<(), _>("daemon 超时"))
+            .expect("Err 应产生消息");
+        let Message::Push {
+            scope,
+            level,
+            text,
+            key,
+        } = msg;
+        assert_eq!(scope, TEST_TODO);
+        assert_eq!(level, Level::Error);
+        assert_eq!(text, "处理任务失败: daemon 超时");
+        assert_eq!(key, None);
     }
 }
