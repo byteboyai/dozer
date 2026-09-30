@@ -1,3 +1,4 @@
+pub mod agent_context;
 pub mod backfill;
 pub mod bookmarks;
 pub mod code_health;

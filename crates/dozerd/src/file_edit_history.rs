@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 pub struct FileEditHistoryStore {
-    conn: Mutex<Connection>,
+    pub(crate) conn: Mutex<Connection>,
 }
 
 /// 写入一条历史记录所需的字段;不含 `id`/`created_ms`(由存储层生成)。
@@ -83,6 +83,7 @@ impl FileEditHistoryStore {
                 ON file_edit_history(project_id, target_path, created_ms);",
         )
         .context("建表")?;
+        crate::agent_context::init_schema(&conn).context("建上下文表")?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
