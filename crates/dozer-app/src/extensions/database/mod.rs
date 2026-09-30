@@ -1297,3 +1297,42 @@ mod content_message_tests {
         assert!(tab_overflow_items(&ws_state).is_empty());
     }
 }
+
+#[cfg(test)]
+mod persist_tests {
+    use super::*;
+
+    #[test]
+    fn persist_sources_failure_lands_in_outbox() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, "x").unwrap();
+        let mut ws = WorkspaceState::default();
+        update::persist_sources(&mut ws, &blocker);
+        let got = ws.take_outbox();
+        assert_eq!(got.len(), 1);
+        assert!(got[0].text.contains("数据库"), "{}", got[0].text);
+        assert_eq!(got[0].scope.name, "database");
+    }
+
+    #[test]
+    fn persist_sources_success_leaves_outbox_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = WorkspaceState::default();
+        update::persist_sources(&mut ws, dir.path());
+        assert!(ws.take_outbox().is_empty());
+    }
+
+    #[test]
+    fn driver_settings_save_failure_lands_in_app_outbox() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, "x").unwrap();
+        let mut app = AppState::default();
+        app.save_to(&blocker.join("database_drivers.json"));
+        let got = app.take_outbox();
+        assert_eq!(got.len(), 1);
+        assert!(got[0].text.contains("数据库驱动"), "{}", got[0].text);
+        assert_eq!(got[0].scope.name, "database");
+    }
+}

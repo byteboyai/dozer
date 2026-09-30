@@ -6,6 +6,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::*;
 
+dozer_core::scope!(LOG, panel, "database");
+
 /// 数据库面板支持的驱动类型。穷举枚举,不做插件机制(见设计文档"非目标")。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum DriverKind {
@@ -268,15 +270,24 @@ impl AppState {
         }
     }
 
-    fn save(&self) {
+    fn save(&mut self) {
+        self.save_to(&drivers_path());
+    }
+
+    /// `save` 的可注入路径版本(测试用);失败推 Toast,不 panic。
+    pub(crate) fn save_to(&mut self, path: &std::path::Path) {
         let file = EnabledDriversFile {
             enabled: self.enabled.iter().copied().collect(),
         };
         let Ok(json) = serde_json::to_string_pretty(&file) else {
             return;
         };
-        if let Err(e) = std::fs::write(drivers_path(), json) {
-            tracing::warn!("写入 database_drivers.json 失败: {e}");
+        if let Err(e) = std::fs::write(path, json) {
+            self.outbox.push(
+                LOG,
+                crate::extensions::toast::Level::Error,
+                format!("数据库驱动配置未能保存到磁盘: {e}"),
+            );
         }
     }
 

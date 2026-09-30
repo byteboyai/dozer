@@ -5,6 +5,8 @@ use dozer_core::protocol::TodoInfo;
 
 use super::*;
 
+dozer_core::scope!(LOG, panel, "todo");
+
 /// 本地时区无关的"今天" (年, 月, 日),用 `SystemTime::now()` 的 UTC 秒数
 /// 经 `civil_from_days` 换算。只用于日历默认停在当前月,时区偏差一天内无感。
 pub(crate) fn today_ymd() -> (i32, u32, u32) {
@@ -86,16 +88,13 @@ pub fn update(
         Message::ToggleListCollapse => {}
         Message::Loaded(todos) => ws_state.items = todos,
         Message::Mutated(res) => {
-            if let Err(e) = res {
-                tracing::warn!("Todo 写操作失败: {e}");
-            }
+            // 失败时列表随后会按磁盘状态刷新回旧样子,用户会以为没生效——Toast 说明。
+            ws_state.outbox.push_err(LOG, "Todo 操作失败", &res);
             request_todos_refresh(project_id, client, handle, emit);
         }
         Message::CategoriesLoaded(categories) => ws_state.categories = categories,
         Message::CategoryMutated(res) => {
-            if let Err(e) = res {
-                tracing::warn!("分类写操作失败: {e}");
-            }
+            ws_state.outbox.push_err(LOG, "分类操作失败", &res);
             let client1 = client.clone();
             let client2 = client.clone();
             let handle1 = handle.clone();
