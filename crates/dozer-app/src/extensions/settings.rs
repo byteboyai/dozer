@@ -80,6 +80,8 @@ pub struct State {
     /// (那套动画的自驱 redraw 只唤醒主窗口),所以这里退化成瞬时二值而非
     /// 平滑过渡,复用 `icon_button_entry` 本身的 hover 着色逻辑即可。
     close_hover: bool,
+    /// 待发提示(断开账户失败等一次性反馈),`App::update` 的包装函数排空成 Toast。
+    pub(crate) outbox: crate::extensions::toast::Outbox,
 }
 
 impl State {
@@ -105,7 +107,13 @@ impl State {
             selected: SettingsTab::Theme,
             tab_hover: None,
             close_hover: false,
+            outbox: Default::default(),
         }
+    }
+
+    /// 取走待发提示(`App::drain_outboxes` 调用)。
+    pub fn take_outbox(&mut self) -> Vec<crate::extensions::toast::Pending> {
+        self.outbox.take()
     }
 
     fn slot_mut(&mut self, provider: GitProvider) -> &mut ConnectState {
@@ -113,6 +121,40 @@ impl State {
             GitProvider::GitHub => &mut self.github,
             GitProvider::GitLab => &mut self.gitlab,
             GitProvider::Gitee => &mut self.gitee,
+        }
+    }
+}
+
+/// 断开 Git 账户的收尾:`saved` 是"把账户置空写回本地非敏感记录"的结果,`delete_token`
+/// 是删钥匙串 token 的动作(惰性传入,以便"本地记录没写成就不能先删 token"可测)。
+///
+/// 顺序沿用既有裁决:**先写本地记录,成功了才删钥匙串 token**——反过来做的话,本地文件
+/// 写失败会留下"钥匙串已删、json 仍写着已连接"这种更糟的不一致态(代码评审 finding:
+/// Disconnect drops failed save, leaves stale state)。写失败就整个放弃这次断开,保留
+/// 原有已连接展示,并且现在**告诉用户**(此前只写一条日志,用户看到的是点了没反应)。
+pub(crate) fn finish_disconnect(
+    state: &mut State,
+    provider: GitProvider,
+    saved: Result<(), String>,
+    delete_token: impl FnOnce() -> Result<(), String>,
+) {
+    match saved {
+        Ok(()) => {
+            if let Err(e) = delete_token() {
+                state.outbox.push(
+                    LOG,
+                    crate::extensions::toast::Level::Warning,
+                    format!("账户已断开,但系统钥匙串里的 token 未能删除: {e}"),
+                );
+            }
+            *state.slot_mut(provider) = ConnectState::NotConnected;
+        }
+        Err(e) => {
+            state.outbox.push(
+                LOG,
+                crate::extensions::toast::Level::Error,
+                format!("断开账户失败:写入本地记录出错({e}),已保留原有连接状态"),
+            );
         }
     }
 }
@@ -202,22 +244,13 @@ fn apply_sync_message(state: &mut State, msg: &Message) -> bool {
             // 本地文件写失败会留下"Keychain 已删、json 仍写着已连接"这种
             // 更糟的不一致态(代码评审 finding:Disconnect drops failed
             // save, leaves stale state)。写失败就整个放弃这次断开,保留
-            // 原有已连接展示,只记日志。
+            // 原有已连接展示并告知用户(见 `finish_disconnect`)。
             let mut accounts = git_accounts::load();
             accounts.set(*provider, None);
-            match git_accounts::save(&accounts) {
-                Ok(()) => {
-                    let _ = git_accounts::delete_token(*provider);
-                    *state.slot_mut(*provider) = ConnectState::NotConnected;
-                }
-                Err(e) => {
-                    dozer_core::log_error!(LOG,
-                        provider = provider.as_key(),
-                        error = %e,
-                        "断开账户失败:写入本地记录出错,已保留 Keychain token 与已连接展示"
-                    );
-                }
-            }
+            let saved = git_accounts::save(&accounts).map_err(|e| e.to_string());
+            finish_disconnect(state, *provider, saved, || {
+                git_accounts::delete_token(*provider)
+            });
             true
         }
         Message::ConnectResult(provider, result) => {
@@ -800,6 +833,7 @@ mod tests {
             selected: SettingsTab::Theme,
             tab_hover: None,
             close_hover: false,
+            outbox: Default::default(),
         }
     }
 
@@ -1138,5 +1172,65 @@ mod tests {
             AdvancedState::Stopped { error: None },
             "daemon 不可达时必须给「重新启动 dozerd」,否则关窗重开后入口丢失"
         );
+    }
+
+    /// GitHub 已连接、其余未连接的状态(复用上面的 `test_state`,不重复列字段)。
+    fn blank_state() -> State {
+        test_state(
+            ConnectState::Connected {
+                username: "octocat".into(),
+            },
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        )
+    }
+
+    #[test]
+    fn disconnect_success_clears_the_slot_and_stays_silent() {
+        let mut s = blank_state();
+        finish_disconnect(&mut s, GitProvider::GitHub, Ok(()), || Ok(()));
+        assert_eq!(s.github, ConnectState::NotConnected);
+        assert!(s.take_outbox().is_empty());
+    }
+
+    #[test]
+    fn disconnect_token_delete_failure_still_disconnects_but_warns() {
+        let mut s = blank_state();
+        finish_disconnect(&mut s, GitProvider::GitHub, Ok(()), || {
+            Err("系统钥匙串删除失败: 拒绝访问".to_string())
+        });
+        assert_eq!(s.github, ConnectState::NotConnected, "本地记录已断开");
+        let got = s.take_outbox();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].level, crate::extensions::toast::Level::Warning);
+        assert!(got[0].text.contains("token 未能删除"), "{}", got[0].text);
+        assert_eq!(got[0].scope.name, "settings");
+    }
+
+    #[test]
+    fn disconnect_save_failure_keeps_connected_state_and_tells_the_user() {
+        let mut s = blank_state();
+        let mut token_delete_called = false;
+        finish_disconnect(
+            &mut s,
+            GitProvider::GitHub,
+            Err("磁盘满".to_string()),
+            || {
+                token_delete_called = true;
+                Ok(())
+            },
+        );
+        assert!(
+            matches!(s.github, ConnectState::Connected { .. }),
+            "写不进本地记录就整个放弃这次断开"
+        );
+        assert!(
+            !token_delete_called,
+            "本地记录没写成,不能先把钥匙串 token 删了"
+        );
+        let got = s.take_outbox();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].level, crate::extensions::toast::Level::Error);
+        assert!(got[0].text.contains("磁盘满"));
     }
 }

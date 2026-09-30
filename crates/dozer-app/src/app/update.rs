@@ -110,6 +110,9 @@ impl App {
             }
         }
         pending.extend(self.database.take_outbox());
+        if let Some(settings) = self.settings.as_mut() {
+            pending.extend(settings.take_outbox());
+        }
         if !pending.is_empty() {
             self.flush_outbox(pending);
         }
