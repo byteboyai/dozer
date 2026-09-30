@@ -16,6 +16,8 @@ use dozer_core::protocol::{
 use std::path::PathBuf;
 use std::sync::Arc;
 
+dozer_core::scope!(LOG, module, "summary");
+
 /// 需要总结的原因(spec 第 7 节:无结果、旧 heuristic、空白/占位、旧
 /// pipeline_version、revision 不匹配、最近失败)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -313,7 +315,7 @@ impl SummaryService {
         let current_revision = summary_snapshot::revision_of(&turns);
         if current_revision != job.source_revision {
             // 输入在任务创建后更新了:结果将带 stale 语义发布,但不声称完整。
-            tracing::warn!(
+            dozer_core::log_warn!(LOG,
                 job_id,
                 conversation_id = %job.conversation_id,
                 "输入在任务排队期间更新,发布结果将标记 stale"
@@ -445,7 +447,7 @@ impl SummaryService {
                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "claim 下一个任务失败");
+                    dozer_core::log_warn!(LOG, error = %e, "claim 下一个任务失败");
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 }
             }

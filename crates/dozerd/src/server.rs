@@ -13,6 +13,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Notify, broadcast};
 
+dozer_core::scope!(LOG, module, "server");
+
 /// `ProcessTodoNow` handler 的实际执行:查任务 → 加入 in_flight → 调
 /// `task_processor::process_task` → 移出 in_flight → 回最新任务或错误。
 /// 拆成独立 async 函数是为了把"多条可能中途返回不同 Reply 的路径"收敛成
@@ -155,7 +157,7 @@ pub async fn serve(
         std::fs::create_dir_all(parent)?;
     }
     let listener = UnixListener::bind(socket)?;
-    tracing::info!(socket = %socket.display(), "dozerd 监听中");
+    dozer_core::log_info!(LOG, socket = %socket.display(), "dozerd 监听中");
     let draining = Arc::new(AtomicBool::new(false));
     let shutdown_signal = Arc::new(Notify::new());
     let stores = Stores {
@@ -178,7 +180,7 @@ pub async fn serve(
                 let (stream, _) = match accepted {
                     Ok(pair) => pair,
                     Err(e) => {
-                        tracing::warn!(error = %e, "accept 失败，跳过本次连接");
+                        dozer_core::log_warn!(LOG, error = %e, "accept 失败，跳过本次连接");
                         continue;
                     }
                 };
@@ -202,12 +204,12 @@ pub async fn serve(
                     )
                     .await
                     {
-                        tracing::debug!(error = %e, "连接结束");
+                        dozer_core::log_debug!(LOG, error = %e, "连接结束");
                     }
                 });
             }
             _ = shutdown_signal.notified() => {
-                tracing::info!("收到 Shutdown 请求收尾完成，dozerd 退出");
+                dozer_core::log_info!(LOG, "收到 Shutdown 请求收尾完成，dozerd 退出");
                 let _ = std::fs::remove_file(socket);
                 return Ok(());
             }
@@ -243,7 +245,7 @@ fn maybe_ingest_from_hook_data(
         return;
     };
     if let Err(e) = transcripts.ingest_session(agent, std::path::Path::new(path)) {
-        tracing::warn!(error = %e, %path, "hook 触发的对话摄取失败");
+        dozer_core::log_warn!(LOG, error = %e, %path, "hook 触发的对话摄取失败");
     }
 }
 
@@ -266,7 +268,7 @@ fn maybe_ingest_on_state_transition(
     }
     let Some(path) = transcript_path else { return };
     if let Err(e) = transcripts.ingest_session(agent, std::path::Path::new(path)) {
-        tracing::warn!(error = %e, %path, "待命态兜底摄取失败");
+        dozer_core::log_warn!(LOG, error = %e, %path, "待命态兜底摄取失败");
     }
 }
 
@@ -347,7 +349,7 @@ fn drain_all_sessions(
             &summary_service,
             dozer_core::protocol::SummaryTrigger::Shutdown,
         ) {
-            tracing::warn!(error = %e, session_id = %id, "Shutdown 提交总结任务失败");
+            dozer_core::log_warn!(LOG, error = %e, session_id = %id, "Shutdown 提交总结任务失败");
         }
     }
     kill_remaining_live_sessions(&registry);
@@ -367,7 +369,7 @@ fn kill_remaining_live_sessions(registry: &SessionRegistry) {
         if info.alive
             && let Err(e) = registry.kill(&info.id)
         {
-            tracing::warn!(
+            dozer_core::log_warn!(LOG,
                 error = %e,
                 session_id = %info.id,
                 "Shutdown 兜底 kill 残留存活会话失败"
@@ -461,7 +463,7 @@ async fn handle_conn(
                                             }
                                             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                                             if let Err(e) = enqueue_session_summary(&exit_session, &exit_service, dozer_core::protocol::SummaryTrigger::NaturalExit) {
-                                                tracing::warn!(error=%e, "自然退出总结提交失败");
+                                                dozer_core::log_warn!(LOG, error=%e, "自然退出总结提交失败");
                                             }
                                         });
                                         // `session_started` 失败(绑端口/写锁文件出错)时不会在
@@ -553,7 +555,7 @@ async fn handle_conn(
                         Request::HookEvent { session_id, agent, event, ts_ms, data } => {
                             match registry.get(&session_id) {
                                 None => {
-                                    tracing::debug!(%session_id, %event, "hook 事件的会话不存在，丢弃");
+                                    dozer_core::log_debug!(LOG, %session_id, %event, "hook 事件的会话不存在，丢弃");
                                 }
                                 Some(s) => {
                                     s.set_agent(agent);
@@ -573,7 +575,7 @@ async fn handle_conn(
                                                 tp.as_deref(),
                                             );
                                         }
-                                        None => tracing::debug!(%event, "未知 hook 事件，不改状态"),
+                                        None => dozer_core::log_debug!(LOG, %event, "未知 hook 事件，不改状态"),
                                     }
                                     maybe_ingest_from_hook_data(&transcripts, agent, &data);
                                 }
@@ -1047,10 +1049,10 @@ async fn handle_conn(
                                 None => Reply::Error { message: format!("会话不存在: {session_id}") },
                                 Some(s) => {
                                     if let Err(e) = enqueue_session_summary(&s, &summary_service, dozer_core::protocol::SummaryTrigger::Close) {
-                                        tracing::warn!(error=%e, %session_id, "提交关闭总结任务失败");
+                                        dozer_core::log_warn!(LOG, error=%e, %session_id, "提交关闭总结任务失败");
                                     }
                                     if let Err(e) = registry.kill(&session_id) {
-                                        tracing::warn!(error = %e, %session_id, "关闭会话失败(可能已死亡)");
+                                        dozer_core::log_warn!(LOG, error = %e, %session_id, "关闭会话失败(可能已死亡)");
                                     }
                                     Reply::Ok
                                 }
@@ -1262,7 +1264,7 @@ async fn handle_conn(
                                                     summary,
                                                 })
                                                 .unwrap_or_else(|e| {
-                                                    tracing::warn!(
+                                                    dozer_core::log_warn!(LOG,
                                                         error = %e,
                                                         path = %path,
                                                         "file_edit_history 写入失败(文件已改盘,仅历史记录丢失)"
@@ -1443,7 +1445,7 @@ fn locate_error_to_empty_with_log(
     err: crate::file_mutation::LocateError,
     path: &str,
 ) -> Vec<dozer_core::protocol::LocateMatch> {
-    tracing::debug!(?err, path, "locate_in_file 失败");
+    dozer_core::log_debug!(LOG, ?err, path, "locate_in_file 失败");
     Vec::new()
 }
 

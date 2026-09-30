@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 
+dozer_core::scope!(LOG, module, "session");
+
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
     Output {
@@ -105,7 +107,7 @@ impl Session {
                     cmd.env("DOZER_ZDOTDIR_WRAPPER", &wrapper);
                     cmd.env("ZDOTDIR", &wrapper);
                 }
-                Err(e) => tracing::warn!("shell 集成落盘失败，跳过注入: {e}"),
+                Err(e) => dozer_core::log_warn!(LOG, "shell 集成落盘失败，跳过注入: {e}"),
             }
         }
         // 没有 TERM 时很多 shell 行编辑器（readline/zle）退化成极简模式，

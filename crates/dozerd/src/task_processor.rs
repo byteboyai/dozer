@@ -9,6 +9,8 @@ use crate::todo::TodoStore;
 use crate::transcripts::TranscriptStore;
 use dozer_core::protocol::{TodoInfo, TurnRecord};
 
+dozer_core::scope!(LOG, module, "task");
+
 /// 待处理判定:不新增标记字段,直接看该任务关联会话最新一条回合的
 /// `role`。没有任何回合(刚指派/从未处理过)、或最新一条是 `"human"`
 /// (人类刚回复,或上一次处理失败没能写入 ai 回合)→ 待处理;最新一条是
@@ -107,7 +109,7 @@ pub async fn process_task(
             force: false,
         })
     {
-        tracing::warn!(error = %e, todo_id = todo.id, "Todo 完成后提交总结任务失败");
+        dozer_core::log_warn!(LOG, error = %e, todo_id = todo.id, "Todo 完成后提交总结任务失败");
     }
     Ok(())
 }

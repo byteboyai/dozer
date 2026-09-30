@@ -5,6 +5,8 @@
 use dozer_core::protocol::{AgentKind, ToolCallInfo};
 use serde_json::Value;
 
+dozer_core::scope!(LOG, module, "transcripts");
+
 pub const MUTATING_TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
 const V8AGENT_MUTATING_TOOLS: [&str; 3] = ["write_file", "edit_file", "git_commit"];
 
@@ -698,7 +700,7 @@ fn parse_goose_hook_chunk(
             continue;
         }
         if v.get("schema_version").and_then(|n| n.as_u64()) != Some(1) {
-            tracing::warn!("goose hook journal 未知 schema_version,跳过该行");
+            dozer_core::log_warn!(LOG, "goose hook journal 未知 schema_version,跳过该行");
             continue;
         }
         let Some(event) = v.get("event").and_then(|e| e.as_str()) else {
@@ -863,7 +865,7 @@ fn parse_aider_chunk(
             continue;
         }
         if v.get("schema_version").and_then(|n| n.as_u64()) != Some(1) {
-            tracing::warn!("aider canonical 未知 schema_version,跳过该行");
+            dozer_core::log_warn!(LOG, "aider canonical 未知 schema_version,跳过该行");
             continue;
         }
         let Some(role) = v.get("role").and_then(|r| r.as_str()) else {
