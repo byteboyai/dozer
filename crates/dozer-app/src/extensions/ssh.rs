@@ -222,8 +222,58 @@ pub(crate) fn persist_hosts(ws_state: &mut WorkspaceState, repo_path: &Path) {
     }
 }
 
+/// SSH 凭据在钥匙串里的 service。读(`keyring_password`)、写、删共用这一个常量,
+/// 避免各写一份字面量以后漂移。
+const KEYRING_SERVICE: &str = "dozer-ssh";
+
+fn keyring_account(project_id: i64, host_id: &str) -> String {
+    format!("{project_id}:{host_id}")
+}
+
 fn keyring_entry(project_id: i64, host_id: &str) -> Result<keyring::Entry, keyring::Error> {
-    keyring::Entry::new("dozer-ssh", &format!("{project_id}:{host_id}"))
+    keyring::Entry::new(KEYRING_SERVICE, &keyring_account(project_id, host_id))
+}
+
+/// 把主机密码/私钥口令写进钥匙串;失败推 Toast(此前 `let _ = entry.set_password(..)`
+/// 静默吞掉,界面显示已保存,之后连接报认证错误)。**调用方保证 `password` 非空**——
+/// 空密码不是"清除密码",不该碰钥匙串。
+pub(crate) fn store_host_password(
+    store: &dyn crate::secrets::SecretStore,
+    ws_state: &mut WorkspaceState,
+    project_id: i64,
+    host_id: &str,
+    password: &str,
+) {
+    let account = keyring_account(project_id, host_id);
+    crate::secrets::save(
+        store,
+        &mut ws_state.outbox,
+        LOG,
+        &crate::secrets::SecretRef {
+            service: KEYRING_SERVICE,
+            account: &account,
+        },
+        password,
+    );
+}
+
+/// 删主机时清掉它的钥匙串条目;失败推 Warning(条目不存在视为成功,见 `SecretStore::delete`)。
+pub(crate) fn forget_host_password(
+    store: &dyn crate::secrets::SecretStore,
+    ws_state: &mut WorkspaceState,
+    project_id: i64,
+    host_id: &str,
+) {
+    let account = keyring_account(project_id, host_id);
+    crate::secrets::remove(
+        store,
+        &mut ws_state.outbox,
+        LOG,
+        &crate::secrets::SecretRef {
+            service: KEYRING_SERVICE,
+            account: &account,
+        },
+    );
 }
 
 /// 从 Keychain 读某台主机的密码/私钥口令,读不到按无密码处理(不 panic,
@@ -587,10 +637,15 @@ pub fn update(
             } else {
                 ws_state.hosts.push(host);
             }
-            if !draft.password.is_empty()
-                && let Ok(entry) = keyring_entry(project_id, &id)
-            {
-                let _ = entry.set_password(&draft.password);
+            // 空密码不是"清除密码",不碰钥匙串;钥匙串写失败不阻断主机本身的保存。
+            if !draft.password.is_empty() {
+                store_host_password(
+                    &crate::secrets::KeyringStore,
+                    ws_state,
+                    project_id,
+                    &id,
+                    &draft.password,
+                );
             }
             persist_hosts(ws_state, repo_path);
         }
@@ -606,9 +661,7 @@ pub fn update(
             if ws_state.delete_confirm.as_deref() == Some(id.as_str()) {
                 ws_state.delete_confirm = None;
             }
-            if let Ok(entry) = keyring_entry(project_id, &id) {
-                let _ = entry.delete_credential();
-            }
+            forget_host_password(&crate::secrets::KeyringStore, ws_state, project_id, &id);
             persist_hosts(ws_state, repo_path);
         }
         Message::TestConnection(id) => {
@@ -1516,6 +1569,41 @@ mod tests {
         ws.hosts = vec![host("h1")];
         persist_hosts(&mut ws, dir.path());
         assert!(ws.take_outbox().is_empty());
+    }
+
+    #[test]
+    fn store_host_password_uses_the_ssh_service_and_project_scoped_account() {
+        use crate::secrets::fake::FakeStore;
+        let store = FakeStore::ok();
+        let mut ws = WorkspaceState::default();
+        store_host_password(&store, &mut ws, 7, "h1", "pw-secret");
+        assert_eq!(*store.calls.borrow(), vec!["set dozer-ssh/7:h1 pw-secret"]);
+        assert!(ws.take_outbox().is_empty());
+    }
+
+    #[test]
+    fn store_host_password_failure_toasts_with_ssh_scope_and_leaks_nothing() {
+        use crate::secrets::fake::FakeStore;
+        let store = FakeStore::failing("钥匙串已锁定");
+        let mut ws = WorkspaceState::default();
+        store_host_password(&store, &mut ws, 7, "h1", "pw-secret");
+        let got = ws.take_outbox();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].scope.name, "ssh");
+        assert!(got[0].text.contains("钥匙串已锁定"));
+        assert!(!got[0].text.contains("pw-secret"));
+    }
+
+    #[test]
+    fn forget_host_password_failure_is_a_warning() {
+        use crate::secrets::fake::FakeStore;
+        let store = FakeStore::failing("拒绝访问");
+        let mut ws = WorkspaceState::default();
+        forget_host_password(&store, &mut ws, 7, "h1");
+        assert_eq!(*store.calls.borrow(), vec!["delete dozer-ssh/7:h1"]);
+        let got = ws.take_outbox();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].level, crate::extensions::toast::Level::Warning);
     }
 
     #[test]
