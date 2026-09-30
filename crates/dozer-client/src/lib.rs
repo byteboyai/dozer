@@ -605,6 +605,71 @@ impl Client {
         }
     }
 
+    pub async fn add_context_item(
+        &self,
+        project_id: i64,
+        entity_kind: &str,
+        entity_ref: &str,
+    ) -> Result<dozer_core::protocol::ContextItemInfo> {
+        match self
+            .roundtrip(&Request::AddContextItem {
+                project_id,
+                entity_kind: entity_kind.into(),
+                entity_ref: entity_ref.into(),
+            })
+            .await?
+        {
+            Reply::ContextItem { item } => Ok(item),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn remove_context_item(&self, project_id: i64, id: i64) -> Result<()> {
+        match self
+            .roundtrip(&Request::RemoveContextItem { project_id, id })
+            .await?
+        {
+            Reply::Ok => Ok(()),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn list_context_items(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<dozer_core::protocol::ContextItemInfo>> {
+        match self
+            .roundtrip(&Request::ListContextItems { project_id })
+            .await?
+        {
+            Reply::ContextItems { items } => Ok(items),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn list_file_edit_history(
+        &self,
+        project_id: i64,
+        path_filter: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<dozer_core::protocol::FileEditHistoryInfo>> {
+        match self
+            .roundtrip(&Request::ListFileEditHistory {
+                project_id,
+                path_filter: path_filter.map(String::from),
+                limit,
+            })
+            .await?
+        {
+            Reply::FileEditHistory { entries } => Ok(entries),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
     pub async fn set_todo_plan_date(&self, id: i64, plan_date: Option<&str>) -> Result<TodoInfo> {
         match self
             .roundtrip(&Request::SetTodoPlanDate {

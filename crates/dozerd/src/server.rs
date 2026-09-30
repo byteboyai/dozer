@@ -1314,11 +1314,63 @@ async fn handle_conn(
                                 }
                             }
                         }
-                        Request::AddContextItem { .. }
-                        | Request::RemoveContextItem { .. }
-                        | Request::ListContextItems { .. }
-                        | Request::ListFileEditHistory { .. } => {
-                            Reply::Error { message: "暂未实现".into() }
+                        Request::AddContextItem { project_id, entity_kind, entity_ref } => {
+                            let root = projects
+                                .list()
+                                .ok()
+                                .and_then(|ps| ps.into_iter().find(|p| p.id == project_id))
+                                .map(|p| std::path::PathBuf::from(p.path));
+                            match root {
+                                None => Reply::Error {
+                                    message: "项目不存在".into(),
+                                },
+                                Some(root) => {
+                                    match crate::agent_context::validate_context_ref(
+                                        &root,
+                                        &entity_ref,
+                                    ) {
+                                        Err(message) => Reply::Error { message },
+                                        Ok(()) => match file_edit_history.add_context_item(
+                                            project_id,
+                                            &entity_kind,
+                                            &entity_ref,
+                                        ) {
+                                            Ok(item) => Reply::ContextItem { item },
+                                            Err(e) => Reply::Error {
+                                                message: format!("添加上下文项失败: {e}"),
+                                            },
+                                        },
+                                    }
+                                }
+                            }
+                        }
+                        Request::RemoveContextItem { project_id, id } => {
+                            match file_edit_history.remove_context_item(project_id, id) {
+                                Ok(()) => Reply::Ok,
+                                Err(e) => Reply::Error {
+                                    message: format!("移除上下文项失败: {e}"),
+                                },
+                            }
+                        }
+                        Request::ListContextItems { project_id } => {
+                            match file_edit_history.list_context_items(project_id) {
+                                Ok(items) => Reply::ContextItems { items },
+                                Err(e) => Reply::Error {
+                                    message: format!("列上下文项失败: {e}"),
+                                },
+                            }
+                        }
+                        Request::ListFileEditHistory { project_id, path_filter, limit } => {
+                            match file_edit_history.list_history(
+                                project_id,
+                                path_filter.as_deref(),
+                                limit,
+                            ) {
+                                Ok(entries) => Reply::FileEditHistory { entries },
+                                Err(e) => Reply::Error {
+                                    message: format!("查修改历史失败: {e}"),
+                                },
+                            }
                         }
                     },
                 };
