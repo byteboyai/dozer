@@ -1314,6 +1314,12 @@ async fn handle_conn(
                                 }
                             }
                         }
+                        Request::AddContextItem { .. }
+                        | Request::RemoveContextItem { .. }
+                        | Request::ListContextItems { .. }
+                        | Request::ListFileEditHistory { .. } => {
+                            Reply::Error { message: "暂未实现".into() }
+                        }
                     },
                 };
                 w.write_all(encode_line(&reply).as_bytes()).await?;

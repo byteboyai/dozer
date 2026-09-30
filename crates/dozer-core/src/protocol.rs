@@ -492,6 +492,43 @@ impl PreviewContext {
     }
 }
 
+/// Agent 上下文列表的一项(v0.1 意向文档 §10 Context Scope)。`entity_kind`
+/// 本期取值 `"file"`/`"dir"`,日后要纳入 todo/会话/ssh/数据库时直接新增取值,
+/// 不需要迁移表结构,所以传输与落库都用字符串而非枚举;读到不认识的取值时
+/// 调用方应原样保留、显示为"未知类型"。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContextItemInfo {
+    pub id: i64,
+    pub project_id: i64,
+    pub entity_kind: String,
+    /// 本期是项目内相对路径,目录不带尾部 `/`。
+    pub entity_ref: String,
+    pub created_ms: u64,
+}
+
+/// `file_edit_history` 一行,给 GUI 的修改历史弹窗用。`start_*`/`end_*` 是
+/// **修改前**的坐标(1-based,结束坐标是最后一个字符之后的位置);
+/// `new_end_*` 是**修改后** `new_text` 的结束坐标(起点不变),由 dozerd
+/// 在查询时按 `new_text` 推算,Revert 反向调用 `apply_precise_edit` 需要它。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileEditHistoryInfo {
+    pub id: i64,
+    pub project_id: i64,
+    pub target_path: String,
+    pub actor: String,
+    pub session_id: String,
+    pub start_line: u32,
+    pub start_col: u32,
+    pub end_line: u32,
+    pub end_col: u32,
+    pub new_end_line: u32,
+    pub new_end_col: u32,
+    pub old_text: String,
+    pub new_text: String,
+    pub summary: String,
+    pub created_ms: u64,
+}
+
 /// `LocateInFile` 的一处匹配:坐标(1-based)+ 命中处附近的上下文,供 agent
 /// 判断是不是自己想要的位置、或缩小 `query` 范围。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1101,6 +1138,24 @@ pub enum Request {
         actor: String,
         session_id: String,
     },
+    /// 把一个实体加入项目的 Agent 上下文列表。重复添加幂等(返回既有项)。
+    /// 路径越出项目根目录时应答 `Reply::Error`。
+    AddContextItem {
+        project_id: i64,
+        entity_kind: String,
+        entity_ref: String,
+    },
+    /// 移除一项;目标不存在也视为成功。
+    RemoveContextItem { project_id: i64, id: i64 },
+    /// 按添加时间升序列出项目的上下文项。
+    ListContextItems { project_id: i64 },
+    /// 按时间倒序列出项目的 agent 修改历史。`path_filter` 命中规则:
+    /// `target_path` 等于该值,或位于该目录之下;`None` 不过滤。
+    ListFileEditHistory {
+        project_id: i64,
+        path_filter: Option<String>,
+        limit: u32,
+    },
     /// 人工删除一条记忆(`dozer-mcp` 不暴露对应工具,只有 `dozer-app` UI
     /// 会发这个请求)。删除前的最后状态会被写进一条 `deleted` 历史。
     DeleteMemory {
@@ -1317,6 +1372,18 @@ pub enum Reply {
     /// `ApplyPreciseEdit` 应答。
     MutationResult {
         outcome: MutationOutcome,
+    },
+    /// `AddContextItem` 应答。
+    ContextItem {
+        item: ContextItemInfo,
+    },
+    /// `ListContextItems` 应答。
+    ContextItems {
+        items: Vec<ContextItemInfo>,
+    },
+    /// `ListFileEditHistory` 应答。
+    FileEditHistory {
+        entries: Vec<FileEditHistoryInfo>,
     },
     Categories {
         categories: Vec<CategoryInfo>,
@@ -2696,6 +2763,72 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let back: Request = serde_json::from_str(&json).unwrap();
         assert_eq!(req, back);
+    }
+
+    #[test]
+    fn context_and_history_requests_round_trip() {
+        let reqs = [
+            Request::AddContextItem {
+                project_id: 1,
+                entity_kind: "file".into(),
+                entity_ref: "src/lib.rs".into(),
+            },
+            Request::RemoveContextItem { project_id: 1, id: 7 },
+            Request::ListContextItems { project_id: 1 },
+            Request::ListFileEditHistory {
+                project_id: 1,
+                path_filter: Some("src".into()),
+                limit: 200,
+            },
+            Request::ListFileEditHistory {
+                project_id: 1,
+                path_filter: None,
+                limit: 50,
+            },
+        ];
+        for req in reqs {
+            let json = serde_json::to_string(&req).unwrap();
+            let back: Request = serde_json::from_str(&json).unwrap();
+            assert_eq!(req, back);
+        }
+    }
+
+    #[test]
+    fn context_and_history_replies_round_trip() {
+        let item = ContextItemInfo {
+            id: 3,
+            project_id: 1,
+            entity_kind: "dir".into(),
+            entity_ref: "research".into(),
+            created_ms: 1_700_000_000_000,
+        };
+        let entry = FileEditHistoryInfo {
+            id: 9,
+            project_id: 1,
+            target_path: "a.txt".into(),
+            actor: "claude".into(),
+            session_id: "s1".into(),
+            start_line: 2,
+            start_col: 1,
+            end_line: 2,
+            end_col: 9,
+            new_end_line: 3,
+            new_end_col: 4,
+            old_text: "line two".into(),
+            new_text: "x\nabc".into(),
+            summary: "改".into(),
+            created_ms: 1_700_000_000_001,
+        };
+        let replies = [
+            Reply::ContextItem { item: item.clone() },
+            Reply::ContextItems { items: vec![item] },
+            Reply::FileEditHistory { entries: vec![entry] },
+        ];
+        for reply in replies {
+            let json = serde_json::to_string(&reply).unwrap();
+            let back: Reply = serde_json::from_str(&json).unwrap();
+            assert_eq!(reply, back);
+        }
     }
 
     #[test]
