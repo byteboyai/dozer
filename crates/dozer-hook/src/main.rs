@@ -7,6 +7,10 @@ use dozer_core::protocol::AgentKind;
 use dozer_hook::{goose_install, install, opencode_install};
 use std::io::Read;
 
+// 运行期诊断写日志文件(`dozer-hook.log.<日期>`),不写 stderr——hook 的 stderr 可能被
+// agent 当成 hook 输出展示。`install`/`launch` 等给命令行用户看的提示仍是 `eprintln!`。
+dozer_core::scope!(pub(crate) LOG, module, "hook");
+
 fn main() {
     let arg1 = std::env::args().nth(1);
     match arg1.as_deref() {
@@ -145,7 +149,11 @@ fn forward(agent: AgentKind, event_arg: Option<&str>) {
             .cloned()
             && let Err(e) = opencode::append_transcript_line(&cwd, &session_id, &line)
         {
-            eprintln!("opencode transcript 落盘失败（已忽略，不影响转发）: {e}");
+            dozer_core::plain_warn!(
+                dozer_core::log::Component::Hook,
+                LOG,
+                "opencode transcript 落盘失败（已忽略，不影响转发）: {e}"
+            );
         }
     }
     if agent == AgentKind::Goose {
