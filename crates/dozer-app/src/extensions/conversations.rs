@@ -28,6 +28,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+dozer_core::scope!(LOG, panel, "conversations");
+
 /// 会话列表(对话面板扁平列表)一页显示的条数,与 Git Log commit 列表的
 /// `COMMIT_PAGE_SIZE` 保持一致。首帧 1 页,点"更多..."页数递增。
 pub(crate) const CONVERSATION_PAGE_SIZE: usize = 20;
@@ -223,7 +225,7 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
             ws_state.sessions = Some(match result {
                 Ok(rows) => rows,
                 Err(e) => {
-                    tracing::warn!(error = %e, "对话会话列表查询失败");
+                    dozer_core::log_warn!(LOG, error = %e, "对话会话列表查询失败");
                     Vec::new()
                 }
             });

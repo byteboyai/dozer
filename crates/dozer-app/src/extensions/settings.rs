@@ -9,6 +9,8 @@ use iced_widget::core::{Alignment, Border, Element, Length, Padding};
 use iced_widget::{MouseArea, Space, button, column, container, row, text};
 use std::collections::HashMap;
 
+dozer_core::scope!(LOG, module, "settings");
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConnectState {
     NotConnected,
@@ -209,7 +211,7 @@ fn apply_sync_message(state: &mut State, msg: &Message) -> bool {
                     *state.slot_mut(*provider) = ConnectState::NotConnected;
                 }
                 Err(e) => {
-                    tracing::warn!(
+                    dozer_core::log_error!(LOG,
                         provider = provider.as_key(),
                         error = %e,
                         "断开账户失败:写入本地记录出错,已保留 Keychain token 与已连接展示"

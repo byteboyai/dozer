@@ -1738,13 +1738,29 @@ impl Workspace {
                     if let Some(cmd) = picker_launch_command(launch, &hook_exe) {
                         let bytes = format!("{cmd}\n").into_bytes();
                         if let Err(e) = client.write(&session_id, &bytes).await {
-                            dozer_core::log_warn!(LOG, "自动键入初始命令失败: {e}");
+                            // 一次性的启动写(不是逐击键路径),失败用户会看到 agent 没起来
+                            // 却不知道为什么;`Message::Toast` 分支会写日志(scope=shell)。
+                            let _ = proxy.send_event(Message::Toast(
+                                crate::extensions::toast::Message::Push {
+                                    scope: LOG,
+                                    level: crate::extensions::toast::Level::Error,
+                                    text: format!("未能把启动命令写入终端: {e}"),
+                                    key: Some("term-initial-write".to_string()),
+                                },
+                            ));
                         }
                     }
                     if let Some(text) = follow_up {
                         let bytes = format!("{text}\n").into_bytes();
                         if let Err(e) = client.write(&session_id, &bytes).await {
-                            dozer_core::log_warn!(LOG, "派发任务文本失败: {e}");
+                            let _ = proxy.send_event(Message::Toast(
+                                crate::extensions::toast::Message::Push {
+                                    scope: LOG,
+                                    level: crate::extensions::toast::Level::Error,
+                                    text: format!("未能把任务文本写入终端: {e}"),
+                                    key: Some("term-dispatch-write".to_string()),
+                                },
+                            ));
                         }
                     }
                     forward_events(project_id, tab_id, rx, proxy).await;

@@ -2,6 +2,8 @@
 
 use super::*;
 
+dozer_core::scope!(LOG, panel, "project");
+
 /// 处理全部消息——本模块不触碰终端会话域,没有需要内核拦截、`update` 里
 /// `unreachable!` 的消息(不像 Files);改名需要 daemon 往返,走
 /// `handle`/`emit`。
@@ -467,7 +469,7 @@ pub fn spawn_repair_run(
         let (batch_id, _total) = match client.submit_summary_batch(&cwd, None, None).await {
             Ok(pair) => pair,
             Err(e) => {
-                tracing::warn!(error = %e, "提交总结批次失败");
+                dozer_core::log_warn!(LOG, error = %e, "提交总结批次失败");
                 emit(Message::SummaryBackfillFailed(project_id, e.to_string()));
                 return;
             }
@@ -493,7 +495,7 @@ pub fn spawn_repair_run(
                     }
                 }
                 Ok(None) => {
-                    tracing::warn!(batch_id, "批次不存在,停止轮询");
+                    dozer_core::log_warn!(LOG, batch_id, "批次不存在,停止轮询");
                     emit(Message::SummaryBackfillFailed(
                         project_id,
                         "总结批次不存在，请重试".into(),
@@ -501,7 +503,7 @@ pub fn spawn_repair_run(
                     break;
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "查询总结批次失败,停止轮询");
+                    dozer_core::log_warn!(LOG, error = %e, "查询总结批次失败,停止轮询");
                     emit(Message::SummaryBackfillFailed(project_id, e.to_string()));
                     break;
                 }

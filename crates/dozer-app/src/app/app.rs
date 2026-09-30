@@ -1351,9 +1351,17 @@ impl App {
             project_ids: self.project_order.clone(),
             active_project_id: self.active_project_id,
         };
+        let proxy = self.proxy.clone();
         self.handle.spawn(async move {
             if let Err(e) = open_projects::save(&state) {
-                dozer_core::log_warn!(LOG, "项目页签集合写盘失败: {e}");
+                // 经 `Message::Toast` 回主线程:该分支会写日志(scope=shell)并入队 Toast。
+                // 同 key 去重:连续拖拽/切换失败只显示一条。
+                let _ = proxy.send_event(Message::Toast(toast::Message::Push {
+                    scope: LOG,
+                    level: toast::Level::Warning,
+                    text: format!("项目页签未能保存,下次启动可能丢失: {e}"),
+                    key: Some("persist-open-projects".to_string()),
+                }));
             }
         });
     }

@@ -14,7 +14,10 @@ pub const MAX_VISIBLE: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
+    // 预留的级别:目前的调用点都是失败/警告,成功/信息类提示暂无调用点。
+    #[allow(dead_code)]
     Info,
+    #[allow(dead_code)]
     Success,
     Warning,
     Error,
@@ -115,15 +118,6 @@ impl Outbox {
         });
     }
 
-    pub fn push_keyed(&mut self, scope: Scope, level: Level, text: impl Into<String>, key: &str) {
-        self.items.push(Pending {
-            scope,
-            level,
-            text: text.into(),
-            key: Some(key.to_string()),
-        });
-    }
-
     /// `Err(e)` 时推一条 `Error` 级 `"{what}: {e}"`;`Ok` 什么都不做。
     pub fn push_err<T, E: std::fmt::Display>(
         &mut self,
@@ -138,10 +132,6 @@ impl Outbox {
 
     pub fn take(&mut self) -> Vec<Pending> {
         std::mem::take(&mut self.items)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
     }
 }
 
@@ -353,25 +343,24 @@ mod tests {
     #[test]
     fn outbox_take_drains_and_preserves_order() {
         let mut o = Outbox::default();
-        assert!(o.is_empty());
+        assert!(o.take().is_empty());
         o.push(TEST_TODO, Level::Error, "a");
-        o.push_keyed(TEST_TODO, Level::Warning, "b", "k");
-        assert!(!o.is_empty());
+        o.push(TEST_TODO, Level::Warning, "b");
         let got = o.take();
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].text, "a");
         assert_eq!(got[0].key, None);
-        assert_eq!(got[1].key.as_deref(), Some("k"));
+        assert_eq!(got[1].text, "b");
+        assert_eq!(got[1].level, Level::Warning);
         assert_eq!(got[1].scope, TEST_TODO);
-        assert!(o.is_empty());
-        assert!(o.take().is_empty());
+        assert!(o.take().is_empty(), "取走后应为空");
     }
 
     #[test]
     fn outbox_push_err_pushes_only_on_err_with_what_prefix() {
         let mut o = Outbox::default();
         o.push_err(TEST_TODO, "保存失败", &Ok::<(), String>(()));
-        assert!(o.is_empty());
+        assert!(o.take().is_empty(), "Ok 不应推提示");
         o.push_err(TEST_TODO, "保存失败", &Err::<(), _>("磁盘满"));
         let got = o.take();
         assert_eq!(got.len(), 1);
