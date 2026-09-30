@@ -47,6 +47,7 @@ use crate::extensions::files;
 use crate::platform::confirm_overlay;
 use crate::platform::database_drivers_overlay;
 use crate::platform::database_source_overlay;
+use crate::platform::edit_history_overlay;
 use crate::platform::file_history_overlay;
 use crate::platform::files_move_overlay;
 use crate::platform::project_create_overlay;
@@ -211,6 +212,11 @@ pub(crate) enum Runner {
         /// is_some()` 单向驱动开/关,且与 `search_overlay` 互斥(见
         /// `OverlayKind`/`close_other_overlays`)。
         file_history_overlay: Option<file_history_overlay::FileHistoryOverlay>,
+        /// 同 `file_history_overlay`,`edit_history`(Agent 修改历史)弹窗的
+        /// 独立窗口宿主。生命周期由 `sync_edit_history_overlay` 按
+        /// `app.edit_history.is_some()` 驱动,且与其他 overlay 互斥(见
+        /// `OverlayKind`/`close_other_overlays`)。
+        edit_history_overlay: Option<edit_history_overlay::EditHistoryOverlay>,
         /// 同 `search_overlay`/`file_history_overlay`,"创建项目"弹窗的
         /// 独立窗口宿主。**不接入失焦关闭**(见 `ProjectCreateOverlay` 文档
         /// 注释),生命周期只由 `sync_project_create_overlay` 按
@@ -272,6 +278,7 @@ pub(crate) enum FocusIntent {
 pub(crate) enum OverlayKind {
     Search,
     FileHistory,
+    EditHistory,
     ProjectCreate,
     Settings,
     Confirm,
@@ -1215,6 +1222,7 @@ impl Runner {
             let Self::Ready {
                 search_overlay,
                 file_history_overlay,
+                edit_history_overlay,
                 project_create_overlay,
                 settings_overlay,
                 confirm_overlay,
@@ -1235,6 +1243,9 @@ impl Runner {
             }
             if keep != OverlayKind::FileHistory {
                 *file_history_overlay = None;
+            }
+            if keep != OverlayKind::EditHistory {
+                *edit_history_overlay = None;
             }
             if keep != OverlayKind::ProjectCreate {
                 *project_create_overlay = None;
@@ -1408,6 +1419,69 @@ impl Runner {
             return;
         };
         if let Some(overlay) = file_history_overlay {
+            overlay.sync_diff_webview(app, app.allowed_files(), proxy.clone());
+            overlay.request_redraw();
+        }
+    }
+
+    /// 同 `sync_file_history_overlay`,按 `app.edit_history.is_some()` 开/关
+    /// edit_history overlay 窗口。
+    fn sync_edit_history_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let action = {
+            let Self::Ready {
+                app,
+                edit_history_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            edit_history_overlay::sync_action(
+                app.edit_history.is_some(),
+                edit_history_overlay.is_some(),
+            )
+        };
+        match action {
+            edit_history_overlay::SyncAction::Open => {
+                self.close_other_overlays(OverlayKind::EditHistory);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    edit_history_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *edit_history_overlay = Some(edit_history_overlay::EditHistoryOverlay::open(
+                    window, adapter, device, queue, instance, el,
+                ));
+            }
+            edit_history_overlay::SyncAction::Close => {
+                let Self::Ready {
+                    edit_history_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *edit_history_overlay = None;
+            }
+            edit_history_overlay::SyncAction::Noop => {}
+        }
+        let Self::Ready {
+            app,
+            edit_history_overlay,
+            proxy,
+            ..
+        } = self
+        else {
+            return;
+        };
+        if let Some(overlay) = edit_history_overlay {
             overlay.sync_diff_webview(app, app.allowed_files(), proxy.clone());
             overlay.request_redraw();
         }
@@ -2843,6 +2917,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 proxy: proxy.clone(),
                 search_overlay: None,
                 file_history_overlay: None,
+                edit_history_overlay: None,
                 project_create_overlay: None,
                 settings_overlay: None,
                 confirm_overlay: None,
@@ -2877,6 +2952,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.apply_pending_blank_info();
         self.sync_search_overlay(event_loop);
         self.sync_file_history_overlay(event_loop);
+        self.sync_edit_history_overlay(event_loop);
         self.sync_project_create_overlay(event_loop);
         self.sync_settings_overlay(event_loop);
         self.sync_confirm_overlay(event_loop);
@@ -2979,6 +3055,37 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 }
             }
             self.sync_file_history_overlay(event_loop);
+            return;
+        }
+
+        // edit_history overlay 窗口自己那份 `WindowId` 的事件,同上,
+        // 互相独立。
+        if let Self::Ready {
+            app,
+            edit_history_overlay,
+            ..
+        } = self
+            && let Some(overlay) = edit_history_overlay
+            && window_id == overlay.window_id()
+        {
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app);
+            } else if matches!(event, WindowEvent::CloseRequested) {
+                self.dispatch(Message::EditHistory(
+                    extensions::edit_history::Message::Close,
+                ));
+            } else if let WindowEvent::Focused(focused) = event {
+                if overlay.handle_focus(focused) {
+                    self.dispatch(Message::EditHistory(
+                        extensions::edit_history::Message::Close,
+                    ));
+                }
+            } else {
+                for message in overlay.handle_input(app, &event) {
+                    self.dispatch(message);
+                }
+            }
+            self.sync_edit_history_overlay(event_loop);
             return;
         }
 
@@ -3305,6 +3412,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 resized,
                 search_overlay,
                 file_history_overlay,
+                edit_history_overlay,
                 project_create_overlay,
                 settings_overlay,
                 confirm_overlay,
@@ -4180,6 +4288,16 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             window.scale_factor(),
                         );
                     }
+                    if let Some(overlay) = edit_history_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                        );
+                    }
                     if let Some(overlay) = project_create_overlay {
                         overlay.reposition(
                             device,
@@ -4286,6 +4404,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     // 图干净,不是正确性要求——Drop 本身就会释放。
                     *search_overlay = None;
                     *file_history_overlay = None; // 同上,图干净。
+                    *edit_history_overlay = None; // 图干净,Drop 本身就会释放。
                     *project_create_overlay = None; // 图干净,Drop 本身就会释放。
                     *settings_overlay = None; // 图干净,Drop 本身就会释放。
                     *confirm_overlay = None; // 图干净,Drop 本身就会释放。
@@ -4471,6 +4590,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.apply_pending_blank_info();
         self.sync_search_overlay(event_loop);
         self.sync_file_history_overlay(event_loop);
+        self.sync_edit_history_overlay(event_loop);
         self.sync_project_create_overlay(event_loop);
         self.sync_settings_overlay(event_loop);
         self.sync_confirm_overlay(event_loop);

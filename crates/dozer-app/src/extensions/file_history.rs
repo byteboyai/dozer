@@ -812,7 +812,7 @@ fn short_sha_of(state: &State, oid: git2::Oid) -> String {
 /// commit 时间戳格式化,`YYYY-MM-DD HH:MM:SS`,UTC。跟
 /// `git_log.rs::format_commit_time` 同源但那边是模块私有、不便跨模块复用
 /// (该函数自己的文档也是这么处理 `todo.rs` 同名函数的),这里照抄一份。
-fn format_commit_time(unix_secs: i64) -> String {
+pub(crate) fn format_commit_time(unix_secs: i64) -> String {
     let secs = unix_secs.max(0) as u64;
     let days = (secs / 86_400) as i64;
     let secs_of_day = secs % 86_400;

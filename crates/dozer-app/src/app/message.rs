@@ -605,6 +605,14 @@ pub enum Message {
         crate::preview::HostBinding,
         crate::preview::WebviewEnvelope<crate::preview::EditorEvent>,
     ),
+    /// Agent 修改历史弹窗的全部消息,内核只转发不解读——见
+    /// `extensions::edit_history::Message`。
+    EditHistory(crate::extensions::edit_history::Message),
+    /// 修改历史弹窗 diff webview 发回的已校验协议事件(同 `FileHistoryDiffWebviewEvent`)。
+    EditHistoryDiffWebviewEvent(
+        crate::preview::HostBinding,
+        crate::preview::WebviewEnvelope<crate::preview::EditorEvent>,
+    ),
     /// 用量面板内容侧 Preact webview 发回的已解析事件(目前只有 `ready`)。
     /// 不带 binding——固定单槽、不按项目分,没有 tab/document 身份需要校验
     /// (同 `usage::WebviewPushState` 不按项目分的理由一致),直接携带已解析

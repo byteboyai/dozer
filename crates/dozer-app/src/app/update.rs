@@ -106,6 +106,14 @@ impl App {
                 }
                 // 其余事件忽略,同 GitLogDiffWebviewEvent 的处理。
             }
+            Message::EditHistory(msg) => self.edit_history_message(msg),
+            Message::EditHistoryDiffWebviewEvent(_binding, event) => {
+                if matches!(event.payload, crate::preview::EditorEvent::Ready { .. })
+                    && let Some(s) = self.edit_history.as_mut()
+                {
+                    s.set_diff_webview_ready(true);
+                }
+            }
             Message::UsageContentWebviewEvent(event) => {
                 if matches!(event, crate::extensions::usage::UsageWebviewEvent::Ready) {
                     // `set_ready(true)` 内部已经清空 `last_sent`,强制下一帧重发
@@ -5308,7 +5316,43 @@ impl App {
         );
     }
 
-    pub(crate) fn open_edit_history(&mut self, _project_id: i64, _filter: Option<String>) {}
+    /// 打开修改历史弹窗(独立原生窗口由 `window_events` 的 sync 按
+    /// `edit_history.is_some()` 开出)。`filter`:上下文项的 `entity_ref`,
+    /// `None` = 全部。
+    pub(crate) fn open_edit_history(&mut self, project_id: i64, filter: Option<String>) {
+        self.edit_history = Some(crate::extensions::edit_history::State::new(
+            project_id,
+            filter.clone(),
+            self.terminal_visible(),
+        ));
+        let client = self.client.clone();
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        crate::extensions::edit_history::request_load(
+            project_id,
+            filter,
+            &client,
+            &handle,
+            move |m| {
+                let _ = proxy.send_event(Message::EditHistory(m));
+            },
+        );
+    }
+
+    pub(crate) fn edit_history_message(&mut self, msg: crate::extensions::edit_history::Message) {
+        let client = self.client.clone();
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        crate::extensions::edit_history::update(
+            &mut self.edit_history,
+            msg,
+            &client,
+            &handle,
+            move |m| {
+                let _ = proxy.send_event(Message::EditHistory(m));
+            },
+        );
+    }
 
     pub(crate) fn preview_open_path_at(&mut self, path: PathBuf, target_line: Option<usize>) {
         // 同 `preview_select_tab`:`preview_tab_bar_avail_px` 要 `&self`,

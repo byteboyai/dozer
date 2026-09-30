@@ -5,6 +5,7 @@
 pub mod confirm_overlay;
 pub mod database_drivers_overlay;
 pub mod database_source_overlay;
+pub mod edit_history_overlay;
 pub mod file_drag;
 pub mod file_history_overlay;
 pub mod files_move_overlay;

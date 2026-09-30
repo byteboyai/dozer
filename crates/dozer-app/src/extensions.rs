@@ -9,6 +9,7 @@ pub mod codehealth;
 pub mod conversations;
 pub mod database;
 pub mod diff_render;
+pub mod edit_history;
 pub mod file_history;
 pub mod files;
 pub mod footbar;

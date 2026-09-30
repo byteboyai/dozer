@@ -379,6 +379,9 @@ pub struct App {
     /// 文件历史对比弹窗状态——见 `extensions::file_history::State`。`None`
     /// 表示弹窗未打开。
     pub(crate) file_history: Option<file_history::State>,
+    /// Agent 修改历史弹窗状态——`None` 表示未打开;独立原生窗口宿主见
+    /// `platform/edit_history_overlay.rs`。
+    pub(crate) edit_history: Option<crate::extensions::edit_history::State>,
     /// "创建项目"对话框状态——见 `extensions::project_create::State`。
     /// `None` 表示当前没开。
     pub(crate) project_create: Option<project_create::State>,
@@ -804,6 +807,7 @@ impl App {
             project_link_menu: None,
             preview_context_menu: None,
             file_history: None,
+            edit_history: None,
             project_create: None,
             settings: None,
             category_context_menu: None,

@@ -1146,9 +1146,14 @@ pub enum Request {
         entity_ref: String,
     },
     /// 移除一项;目标不存在也视为成功。
-    RemoveContextItem { project_id: i64, id: i64 },
+    RemoveContextItem {
+        project_id: i64,
+        id: i64,
+    },
     /// 按添加时间升序列出项目的上下文项。
-    ListContextItems { project_id: i64 },
+    ListContextItems {
+        project_id: i64,
+    },
     /// 按时间倒序列出项目的 agent 修改历史。`path_filter` 命中规则:
     /// `target_path` 等于该值,或位于该目录之下;`None` 不过滤。
     ListFileEditHistory {
@@ -2773,7 +2778,10 @@ mod tests {
                 entity_kind: "file".into(),
                 entity_ref: "src/lib.rs".into(),
             },
-            Request::RemoveContextItem { project_id: 1, id: 7 },
+            Request::RemoveContextItem {
+                project_id: 1,
+                id: 7,
+            },
             Request::ListContextItems { project_id: 1 },
             Request::ListFileEditHistory {
                 project_id: 1,
@@ -2822,7 +2830,9 @@ mod tests {
         let replies = [
             Reply::ContextItem { item: item.clone() },
             Reply::ContextItems { items: vec![item] },
-            Reply::FileEditHistory { entries: vec![entry] },
+            Reply::FileEditHistory {
+                entries: vec![entry],
+            },
         ];
         for reply in replies {
             let json = serde_json::to_string(&reply).unwrap();
