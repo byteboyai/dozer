@@ -5318,18 +5318,24 @@ impl App {
                 let emit = move |m| {
                     let _ = proxy.send_event(Message::AgentContext(project_id, m));
                 };
-                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
-                    return;
+                let notice = {
+                    let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+                        return;
+                    };
+                    ctx::update(
+                        &mut ws.agent_context,
+                        project_id,
+                        root,
+                        other,
+                        &client,
+                        &handle,
+                        emit,
+                    );
+                    ws.agent_context.take_notice()
                 };
-                ctx::update(
-                    &mut ws.agent_context,
-                    project_id,
-                    root,
-                    other,
-                    &client,
-                    &handle,
-                    emit,
-                );
+                if let Some(n) = notice {
+                    self.push_toast(toast::Level::Error, n);
+                }
             }
         }
     }

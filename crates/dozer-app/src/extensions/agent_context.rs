@@ -43,8 +43,10 @@ impl State {
     pub fn expanded(&self) -> bool {
         self.expanded
     }
-    pub fn notice(&self) -> Option<&str> {
-        self.notice.as_deref()
+    /// 取走待展示的失败提示(App 每次处理完 `AgentContext` 消息后调用一次,
+    /// 转成 Toast)。取走后为 `None`,同一条不会重复弹。
+    pub fn take_notice(&mut self) -> Option<String> {
+        self.notice.take()
     }
     pub fn entry(&self, id: i64) -> Option<&ContextEntry> {
         self.items.iter().find(|e| e.info.id == id)
@@ -64,7 +66,6 @@ pub enum Message {
     Open(i64),
     /// 打开修改历史弹窗:`None` = 全部;`Some(item_id)` = 预过滤到该项。App 拦截。
     OpenHistory(Option<i64>),
-    DismissNotice,
 }
 
 /// `apply` 之后调用方还要做的 IO。
@@ -105,10 +106,6 @@ pub fn apply(state: &mut State, msg: Message) -> Followup {
             Followup::Refresh
         }
         Message::Open(_) | Message::OpenHistory(_) => Followup::None,
-        Message::DismissNotice => {
-            state.notice = None;
-            Followup::None
-        }
     }
 }
 
@@ -221,20 +218,8 @@ pub fn strip(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_ren
     .on_press(Message::ToggleExpanded)
     .style(flat_button(colors.cream));
 
-    let mut bar = row![toggle].spacing(12).align_y(Alignment::Center);
-    if let Some(n) = state.notice() {
-        bar = bar.push(
-            button(
-                text(n.to_string())
-                    .size(byteui::theme::font::label())
-                    .color(colors.red),
-            )
-            .padding(0)
-            .on_press(Message::DismissNotice)
-            .style(flat_button(colors.red)),
-        );
-    }
-    bar = bar.push(iced_widget::space::horizontal()).push(
+    let bar = row![toggle].spacing(12).align_y(Alignment::Center);
+    let bar = bar.push(iced_widget::space::horizontal()).push(
         button(
             text("修改历史")
                 .size(byteui::theme::font::label())
@@ -345,7 +330,7 @@ mod tests {
         );
         assert_eq!(s.items().len(), 1);
         apply(&mut s, Message::Loaded(Err("boom".into())));
-        assert!(s.notice().unwrap().contains("boom"));
+        assert!(s.take_notice().unwrap().contains("boom"));
         assert_eq!(s.items().len(), 1, "加载失败不清空已有列表");
     }
 
@@ -368,7 +353,7 @@ mod tests {
             apply(&mut s, Message::Removed(Err("x".into()))),
             Followup::Refresh
         );
-        assert!(s.notice().unwrap().contains("x"));
+        assert!(s.take_notice().unwrap().contains("x"));
     }
 
     #[test]
@@ -382,23 +367,31 @@ mod tests {
             created_ms: 1,
         };
         assert_eq!(apply(&mut s, Message::Added(Ok(info))), Followup::Refresh);
-        assert!(s.notice().is_none());
+        assert!(s.take_notice().is_none());
         assert_eq!(
             apply(&mut s, Message::Added(Err("db 挂了".into()))),
             Followup::Refresh
         );
-        let n = s.notice().unwrap();
+        let n = s.take_notice().unwrap();
         assert!(n.contains("已发送到终端") && n.contains("db 挂了"), "{n}");
     }
 
     #[test]
-    fn open_messages_are_not_handled_here_and_dismiss_clears_notice() {
+    fn open_messages_are_not_handled_here_and_leave_notice_untouched() {
         let mut s = State::default();
         assert_eq!(apply(&mut s, Message::Open(1)), Followup::None);
         assert_eq!(apply(&mut s, Message::OpenHistory(None)), Followup::None);
         apply(&mut s, Message::Loaded(Err("e".into())));
-        apply(&mut s, Message::DismissNotice);
-        assert!(s.notice().is_none());
+        let n = s.take_notice();
+        assert!(n.unwrap().contains("e"));
+    }
+
+    #[test]
+    fn take_notice_returns_once_then_none() {
+        let mut s = State::default();
+        apply(&mut s, Message::Loaded(Err("boom".into())));
+        assert!(s.take_notice().unwrap().contains("boom"));
+        assert!(s.take_notice().is_none());
     }
 
     #[test]
