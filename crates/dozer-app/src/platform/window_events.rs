@@ -56,6 +56,7 @@ use crate::platform::project_scaffold_overlay;
 use crate::platform::search_overlay;
 use crate::platform::settings_overlay;
 use crate::platform::ssh_host_overlay;
+use crate::platform::toast_overlay;
 use crate::platform::todo_detail_overlay;
 use crate::preview;
 use crate::theme;
@@ -260,6 +261,10 @@ pub(crate) enum Runner {
         /// `sync_todo_detail_overlay` 按当前工作区 `todo.detail_popup_open()`
         /// 单向驱动。需 IME + 失焦即关闭。
         todo_detail_overlay: Option<todo_detail_overlay::TodoDetailOverlay>,
+        /// Toast 的独立原生窗口。**不参与** `OverlayKind`/`close_other_overlays`
+        /// (非模态,与任何模态弹窗并存)。生命周期由 `sync_toast_overlay` 按
+        /// `app.toast` 单向驱动:有 Toast 才建窗,清空即销毁。
+        toast_overlay: Option<toast_overlay::ToastOverlay>,
     },
 }
 /// 点击/消息后决定键盘焦点归谁:预览 webview、浏览器 webview(各自
@@ -1662,6 +1667,50 @@ impl Runner {
         }
     }
 
+    /// 按 `app.toast` 驱动 Toast 窗口:空 → 销毁;有 → 开窗或(指纹变了时)
+    /// 重定位并重绘。指纹见 `toast_overlay::Stamp`。`about_to_wait` 每轮
+    /// 调一次,所以 overlay 窗口自己事件里派发出的 Toast 也会在同一轮之后
+    /// 显示,不依赖某个特定的 dispatch 尾部。
+    fn sync_toast_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let Self::Ready {
+            app,
+            window,
+            instance,
+            adapter,
+            device,
+            queue,
+            toast_overlay,
+            ..
+        } = self
+        else {
+            return;
+        };
+        let stamps = toast_overlay::stamps_of(app.toast.items());
+        if stamps.is_empty() {
+            *toast_overlay = None;
+            return;
+        }
+        let outer = window
+            .outer_position()
+            .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0));
+        let inner = window.inner_size();
+        let scale = window.scale_factor();
+        match toast_overlay {
+            Some(o) if o.stamps() == stamps.as_slice() => {}
+            Some(o) => {
+                o.update(device, outer, inner, scale, stamps);
+                o.request_redraw();
+            }
+            None => {
+                let o = toast_overlay::ToastOverlay::open(
+                    window, adapter, device, queue, instance, stamps, el,
+                );
+                o.request_redraw();
+                *toast_overlay = Some(o);
+            }
+        }
+    }
+
     /// 数据库「管理驱动」弹窗:开关条件是 `app.database.drivers_popup_open()`
     /// 布尔值,照抄 `sync_settings_overlay` 的三段 `match SyncAction` 模式。
     fn sync_database_drivers_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
@@ -2679,6 +2728,9 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             // 拖拽悬停到折叠目录的展开计时:满 1s 才真正展开,见
             // `App::advance_drag_hover_expand` 文档。
             app.advance_drag_hover_expand();
+            // 统一 Toast 到期清理:窗口宿主由 `about_to_wait` 里的
+            // `sync_toast_overlay` 据 `app.toast` 销毁/收缩。
+            app.advance_toasts();
             window.request_redraw();
         }
     }
@@ -2690,6 +2742,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
     /// 解耦重构:每个关注点自己的函数各自按自己的 `last_*_at` 限速,
     /// 这里只负责"下次什么时候唤醒",不负责"唤醒后该不该真的做事")。
     fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        self.sync_toast_overlay(event_loop);
         if let Self::Ready { app, .. } = self {
             // 页签标题 tooltip 的 3s 悬停计时:还没满 3s 的页签需要继续排
             // 唤醒,满 3s 那一刻靠 `next_tooltip_wake` 算出的剩余时间精确
@@ -2702,7 +2755,8 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             // `advance_drag_hover_expand` 真正展开,没有悬停中的目录时
             // 返回 `None` 不再空转。
             let next_drag_expand = app.next_drag_hover_expand_wake();
-            let wakes: [(bool, Duration); 6] = [
+            let next_toast = app.next_toast_wake();
+            let wakes: [(bool, Duration); 7] = [
                 (
                     app.any_hover_anim_active(),
                     crate::event::HOVER_ANIM_INTERVAL,
@@ -2724,6 +2778,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     next_drag_expand.is_some(),
                     next_drag_expand.unwrap_or(extensions::files::DRAG_HOVER_EXPAND_DELAY),
                 ),
+                (next_toast.is_some(), next_toast.unwrap_or(Duration::ZERO)),
             ];
             if let Some(interval) = wakes
                 .into_iter()
@@ -2928,6 +2983,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 project_delete_overlay: None,
                 ssh_host_overlay: None,
                 todo_detail_overlay: None,
+                toast_overlay: None,
             };
         }
     }
@@ -3055,6 +3111,20 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 }
             }
             self.sync_file_history_overlay(event_loop);
+            return;
+        }
+
+        // Toast 窗口自己那份 `WindowId` 的事件:整窗点击穿透、不聚焦,只需要
+        // 响应重绘;其余事件(包括合成的 Focused)一律忽略。
+        if let Self::Ready {
+            app, toast_overlay, ..
+        } = self
+            && let Some(overlay) = toast_overlay
+            && window_id == overlay.window_id()
+        {
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app.toast.items());
+            }
             return;
         }
 
@@ -3423,6 +3493,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 project_delete_overlay,
                 ssh_host_overlay,
                 todo_detail_overlay,
+                toast_overlay,
                 ..
             } = self
             else {
@@ -4398,6 +4469,16 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             window.scale_factor(),
                         );
                     }
+                    if let Some(overlay) = toast_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                        );
+                    }
                     // bounds 同步由本函数末尾的 sync_previews 统一执行
                 }
                 WindowEvent::CloseRequested => {
@@ -4415,6 +4496,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     *project_delete_overlay = None; // 图干净,Drop 本身就会释放。
                     *ssh_host_overlay = None; // 图干净,Drop 本身就会释放。
                     *todo_detail_overlay = None; // 图干净,Drop 本身就会释放。
+                    *toast_overlay = None; // 图干净,Drop 本身就会释放。
                     // 同步写盘,不用 `spawn_shell_layout_save` 的异步路径——
                     // 进程马上退出,spawn 的 tokio 任务不保证跑得完。
                     app.persist_window_size_on_exit();

@@ -8,7 +8,7 @@ use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 use crate::chrome::homespace::{self, HomeRecentConversation, HomeRecentFile};
 use crate::extensions::{
     browser, codehealth, conversations, database, file_history, files, footbar, git_log, project,
-    project_create, search, settings, ssh, todo, usage,
+    project_create, search, settings, ssh, toast, todo, usage,
 };
 use crate::git_watch;
 use crate::term::terminal;
@@ -558,6 +558,9 @@ pub enum Message {
     /// 路由比其它 extension 简单:不带 `project_id`,不需要
     /// `with_project`/`with_focused_project`,直接 `footbar::update`。
     Footbar(footbar::Message),
+    /// 统一 Toast 的消息(全局,不 per-project),内核直接处理,见
+    /// `extensions::toast`。extension 想弹 Toast 时构造这条消息发给内核。
+    Toast(toast::Message),
     /// UI 整体放大(Ctrl +)：放大/还原的全局 scale 乘一个步近因子,下一帧
     /// 按新 scale 重排全部图标/字号/间距/骨架。
     ZoomIn,

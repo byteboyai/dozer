@@ -19,6 +19,7 @@ pub mod project_scaffold_overlay;
 pub mod search_overlay;
 pub mod settings_overlay;
 pub mod ssh_host_overlay;
+pub mod toast_overlay;
 pub mod todo_detail_overlay;
 pub mod window;
 pub mod window_events;
