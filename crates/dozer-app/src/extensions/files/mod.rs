@@ -772,7 +772,10 @@ mod tests {
         );
 
         assert!(ws_state.pending_move.is_none());
-        assert!(ws_state.tree_error.is_some());
+        assert!(ws_state.move_error.is_none(), "被拒不是对话框内的校验错误");
+        let toasts = ws_state.take_outbox();
+        assert_eq!(toasts.len(), 1);
+        assert!(toasts[0].text.contains("已在项目内"), "{}", toasts[0].text);
         assert!(inside.exists());
     }
 
@@ -877,7 +880,7 @@ mod tests {
 
         assert!(!file.exists());
         assert!(sub.join("f.txt").exists());
-        assert!(ws_state.tree_error.is_none());
+        assert!(ws_state.move_error.is_none());
     }
 
     /// `MoveConfirm` 改过草稿:新文件名 + 新目标目录都要生效——覆盖
@@ -930,7 +933,7 @@ mod tests {
         assert!(!file.exists());
         assert!(!sub_b.join("f.txt").exists());
         assert!(sub_b.join("renamed.txt").exists());
-        assert!(ws_state.tree_error.is_none());
+        assert!(ws_state.move_error.is_none());
     }
 
     /// 名字含路径分隔符:拒绝,`pending_move` 放回去(对话框留在屏幕上),
@@ -963,7 +966,8 @@ mod tests {
 
         assert!(file.exists());
         assert!(ws_state.pending_move.is_some());
-        assert!(ws_state.tree_error.is_some());
+        assert!(ws_state.move_error.is_some());
+        assert!(ws_state.take_outbox().is_empty(), "对话框内校验不进 Toast");
     }
 
     /// 目标目录不存在:拒绝,同上不提交任何磁盘改动。
@@ -995,7 +999,8 @@ mod tests {
 
         assert!(file.exists());
         assert!(ws_state.pending_move.is_some());
-        assert!(ws_state.tree_error.is_some());
+        assert!(ws_state.move_error.is_some());
+        assert!(ws_state.take_outbox().is_empty(), "对话框内校验不进 Toast");
     }
 
     /// 路径压根没变(草稿名字/目录都还是源本来的):静默当取消处理——不
@@ -1030,7 +1035,7 @@ mod tests {
 
         assert!(file.exists());
         assert!(ws_state.pending_move.is_none());
-        assert!(ws_state.tree_error.is_none());
+        assert!(ws_state.move_error.is_none());
     }
 
     /// 目录被改成要移进它自己的子树:静默当取消处理,同上不提示错误——
@@ -1066,7 +1071,7 @@ mod tests {
         assert!(src_dir.exists());
         assert!(nested.exists());
         assert!(ws_state.pending_move.is_none());
-        assert!(ws_state.tree_error.is_none());
+        assert!(ws_state.move_error.is_none());
     }
 
     /// `MoveCancel` 整场作废,不做任何磁盘改动。
@@ -1360,7 +1365,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn paste_done_err_sets_tree_error() {
+    async fn paste_done_err_pushes_toast() {
         let dir = tempfile::tempdir().unwrap();
         let mut ws_state = ws_with_tree(dir.path().to_path_buf());
         let mut app_state = AppState::default();
@@ -1375,19 +1380,90 @@ mod tests {
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
         );
-        assert_eq!(ws_state.tree_error.as_deref(), Some("boom"));
+        let toasts = ws_state.take_outbox();
+        assert_eq!(toasts.len(), 1);
+        assert_eq!(toasts[0].text, "粘贴失败: boom");
+        assert_eq!(toasts[0].level, crate::extensions::toast::Level::Error);
+        assert_eq!(toasts[0].scope.name, "files");
+        assert!(ws_state.move_error.is_none());
     }
 
     #[tokio::test]
-    async fn paste_done_ok_refreshes_parent_without_touching_stale_error() {
+    async fn file_drop_done_err_pushes_toast() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::FileDropDone(1, dir.path().to_path_buf(), Err("disk full".to_string())),
+            1,
+            &handle,
+            |_| {},
+            &crate::external_apps::ExternalAppsConfig::default(),
+            true,
+        );
+        let toasts = ws_state.take_outbox();
+        assert_eq!(toasts.len(), 1);
+        assert_eq!(toasts[0].text, "拖拽移动失败: disk full");
+        assert!(ws_state.move_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn rollback_done_err_pushes_toast() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::FileHistoryRollbackDone(
+                1,
+                dir.path().join("a.txt"),
+                Err("该文件没有可回滚的历史版本".to_string()),
+            ),
+            1,
+            &handle,
+            |_| {},
+            &crate::external_apps::ExternalAppsConfig::default(),
+            true,
+        );
+        let toasts = ws_state.take_outbox();
+        assert_eq!(toasts.len(), 1);
+        assert_eq!(toasts[0].text, "还原文件失败: 该文件没有可回滚的历史版本");
+    }
+
+    #[tokio::test]
+    async fn move_cancel_clears_the_dialog_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws_state = ws_with_tree(dir.path().to_path_buf());
+        let mut app_state = AppState::default();
+        ws_state.move_error = Some("上次的校验错误".to_string());
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::MoveCancel,
+            1,
+            &handle,
+            |_| {},
+            &crate::external_apps::ExternalAppsConfig::default(),
+            true,
+        );
+        assert!(
+            ws_state.move_error.is_none(),
+            "取消后不该把旧错误带进下一个对话框"
+        );
+    }
+
+    #[tokio::test]
+    async fn paste_done_ok_refreshes_parent_without_a_toast() {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("sub");
         std::fs::create_dir(&sub).unwrap();
         let mut ws_state = ws_with_tree(dir.path().to_path_buf());
-        // 现有 `ProjectTreePasteDone` 的 `Ok` 分支不清 `tree_error`(只有
-        // `ProjectTreeOpDone` 的 `Ok` 分支才清)——纯迁移原样保留这个不对称,
-        // 不是这次重构该修的行为。
-        ws_state.tree_error = Some("stale".to_string());
         let new_file = sub.join("new.txt");
         std::fs::write(&new_file, "x").unwrap();
         let mut app_state = AppState::default();
@@ -1402,7 +1478,7 @@ mod tests {
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
         );
-        assert_eq!(ws_state.tree_error.as_deref(), Some("stale"));
+        assert!(ws_state.take_outbox().is_empty(), "粘贴成功不该有提示");
     }
 
     #[tokio::test]
@@ -1446,7 +1522,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn op_done_err_sets_tree_error_ok_refreshes() {
+    async fn op_done_err_pushes_toast_ok_is_silent() {
         let dir = tempfile::tempdir().unwrap();
         let mut ws_state = ws_with_tree(dir.path().to_path_buf());
         let mut app_state = AppState::default();
@@ -1465,7 +1541,9 @@ mod tests {
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
         );
-        assert_eq!(ws_state.tree_error.as_deref(), Some("nope"));
+        let toasts = ws_state.take_outbox();
+        assert_eq!(toasts.len(), 1);
+        assert_eq!(toasts[0].text, "文件操作失败: nope");
         update(
             &mut ws_state,
             &mut app_state,
@@ -1480,7 +1558,7 @@ mod tests {
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
         );
-        assert!(ws_state.tree_error.is_none());
+        assert!(ws_state.take_outbox().is_empty(), "OpDone(Ok) 不该有提示");
     }
 
     #[tokio::test]
@@ -1671,9 +1749,12 @@ mod tests {
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
         );
-        assert_eq!(
-            ws_state.tree_error.as_deref(),
-            Some("名字不能包含路径分隔符")
+        let toasts = ws_state.take_outbox();
+        assert_eq!(toasts.len(), 1);
+        assert_eq!(toasts[0].text, "名字不能包含路径分隔符");
+        assert!(
+            ws_state.move_error.is_none(),
+            "行内校验不写移动对话框的错误位"
         );
         assert!(ws_state.tree_edit.is_some(), "编辑框保留,让用户改名重试");
     }
@@ -1700,12 +1781,12 @@ mod tests {
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
         );
+        let toasts = ws_state.take_outbox();
+        assert_eq!(toasts.len(), 1);
         assert!(
-            ws_state
-                .tree_error
-                .as_deref()
-                .unwrap()
-                .contains("已存在同名项")
+            toasts[0].text.contains("已存在同名项"),
+            "{}",
+            toasts[0].text
         );
     }
 

@@ -4142,13 +4142,13 @@ mod tests {
 
     fn loaded_slot(marker: &str) -> WorkspaceSlot {
         let mut ws = Workspace::empty_for_project_placeholder();
-        ws.files.set_tree_error(Some(marker.to_string()));
+        ws.files.set_move_error(Some(marker.to_string()));
         WorkspaceSlot::Loaded(Box::new(ws))
     }
 
     fn slot_marker(slot: Option<&WorkspaceSlot>) -> Option<String> {
         match slot {
-            Some(WorkspaceSlot::Loaded(ws)) => ws.files.tree_error().map(String::from),
+            Some(WorkspaceSlot::Loaded(ws)) => ws.files.move_error().map(String::from),
             _ => None,
         }
     }
@@ -4236,13 +4236,13 @@ mod tests {
         // A 的异步结果(A 在后台)必须落到 A 身上。
         let ws = loaded_workspace_mut(&mut projects, 1).expect("A 已加载");
         assert_eq!(
-            ws.files.tree_error(),
+            ws.files.move_error(),
             Some("A"),
             "后台项目的结果不能落到前台项目"
         );
         // 反向同理:B 的结果落到 B。
         let ws = loaded_workspace_mut(&mut projects, 2).expect("B 已加载");
-        assert_eq!(ws.files.tree_error(), Some("B"));
+        assert_eq!(ws.files.move_error(), Some("B"));
         assert_eq!(active, Some(2), "路由全程没有读过 active_project_id");
     }
 
@@ -4265,7 +4265,7 @@ mod tests {
         // 丢弃的那两条没有波及仍在的槽位。
         assert_eq!(
             loaded_workspace_mut(&mut projects, 1)
-                .and_then(|w| w.files.tree_error().map(String::from)),
+                .and_then(|w| w.files.move_error().map(String::from)),
             Some("A".to_string())
         );
     }

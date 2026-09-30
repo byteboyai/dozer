@@ -220,13 +220,6 @@ pub fn view<'a>(
         header = header.push(root_area);
     }
 
-    if let Some(err) = &ws_state.tree_error {
-        header = header.push(
-            text(format!("⚠ {err}"))
-                .size(byteui::theme::font::label())
-                .color(byteui::theme::color::current().red),
-        );
-    }
     if let Some(tree) = &ws_state.file_tree {
         // 搜索激活时走全树搜索(递归遍历含未展开深层目录),否则走当前展开
         // 的可见行。`search_rows` 只读不写缓存/展开态,view 的不变借用即可。
@@ -1463,7 +1456,7 @@ pub fn files_move_card(
     .spacing(10)
     .width(Length::Fill);
 
-    if let Some(err) = &ws_state.tree_error {
+    if let Some(err) = &ws_state.move_error {
         body = body.push(
             text(err.clone())
                 .size(byteui::theme::font::label())

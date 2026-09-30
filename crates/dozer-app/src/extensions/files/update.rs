@@ -1,6 +1,7 @@
 //! Files 面板 update 消息分发 + git 信息加载 spawn。
 
 use crate::delivery;
+use crate::extensions::toast;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -200,7 +201,6 @@ pub fn update(
         }
         Message::Paste(target_dir) => {
             app_state.context_menu = None;
-            ws_state.tree_error = None;
             let Some((source, source_is_dir)) = ws_state.tree_clipboard.clone() else {
                 return;
             };
@@ -219,7 +219,9 @@ pub fn update(
                     tree.refresh(parent);
                 }
             }
-            Err(e) => ws_state.tree_error = Some(e),
+            Err(e) => ws_state
+                .outbox
+                .push(LOG, toast::Level::Error, format!("粘贴失败: {e}")),
         },
         Message::FileHistoryRollbackDone(_project_id, abs_path, result) => match result {
             Ok(()) => {
@@ -229,7 +231,9 @@ pub fn update(
                     tree.refresh(parent);
                 }
             }
-            Err(e) => ws_state.tree_error = Some(e),
+            Err(e) => ws_state
+                .outbox
+                .push(LOG, toast::Level::Error, format!("还原文件失败: {e}")),
         },
         Message::DeleteRequest(path, is_dir) => {
             app_state.context_menu = None;
@@ -242,7 +246,6 @@ pub fn update(
             let Some((path, _)) = ws_state.tree_delete_confirm.take() else {
                 return;
             };
-            ws_state.tree_error = None;
             handle.spawn(async move {
                 let parent = path.parent().map(|p| p.to_path_buf());
                 let result = tokio::task::spawn_blocking(move || {
@@ -264,7 +267,6 @@ pub fn update(
         }
         Message::OpDone { parent, expand, .. } => match parent {
             Ok(parent) => {
-                ws_state.tree_error = None;
                 if let Some(tree) = &mut ws_state.file_tree {
                     tree.refresh(&parent);
                     if expand {
@@ -272,7 +274,9 @@ pub fn update(
                     }
                 }
             }
-            Err(e) => ws_state.tree_error = Some(e),
+            Err(e) => ws_state
+                .outbox
+                .push(LOG, toast::Level::Error, format!("文件操作失败: {e}")),
         },
         Message::NewFile(parent) => {
             app_state.context_menu = None;
@@ -284,7 +288,6 @@ pub fn update(
         }
         Message::ReloadFromDisk => {
             app_state.context_menu = None;
-            ws_state.tree_error = None;
             if let Some(tree) = &mut ws_state.file_tree {
                 tree.reload_from_disk();
             }
@@ -372,7 +375,6 @@ pub fn update(
         },
         Message::RenameStart(path) => {
             app_state.context_menu = None;
-            ws_state.tree_error = None;
             let Some(parent) = path.parent().map(|p| p.to_path_buf()) else {
                 return;
             };
@@ -433,7 +435,7 @@ pub fn update(
         // 跨文件系统在 `move_item` 里降级为复制+删源)。全部完成后 `emit`
         // `FileDropDone` 刷新目标目录。
         Message::FileDrop { paths, target } => {
-            ws_state.tree_error = None;
+            ws_state.move_error = None;
             ws_state.drag_hover = HashSet::new();
             if paths.is_empty() {
                 return;
@@ -446,10 +448,11 @@ pub fn update(
             if let Some(tree) = &ws_state.file_tree
                 && let Some(bad) = paths.iter().find(|p| p.starts_with(tree.root()))
             {
-                ws_state.tree_error = Some(format!(
-                    "{} 已在项目内,不支持用拖拽移动项目内文件",
-                    bad.display()
-                ));
+                ws_state.outbox.push(
+                    LOG,
+                    toast::Level::Warning,
+                    format!("{} 已在项目内,不支持用拖拽移动项目内文件", bad.display()),
+                );
                 return;
             }
             if let [only] = paths.as_slice() {
@@ -486,12 +489,13 @@ pub fn update(
         }
         Message::FileDropDone(_, target, result) => match result {
             Ok(()) => {
-                ws_state.tree_error = None;
                 if let Some(tree) = &mut ws_state.file_tree {
                     tree.refresh(&target);
                 }
             }
-            Err(e) => ws_state.tree_error = Some(e),
+            Err(e) => ws_state
+                .outbox
+                .push(LOG, toast::Level::Error, format!("拖拽移动失败: {e}")),
         },
         Message::MoveNameInput(s) => {
             if let Some(pending) = &mut ws_state.pending_move {
@@ -510,6 +514,7 @@ pub fn update(
         }
         Message::MoveCancel => {
             ws_state.pending_move = None;
+            ws_state.move_error = None;
         }
         // 校验同行内编辑框既有口径(`submit_tree_edit`):名字非空、不含路径
         // 分隔符;目标目录必须真实存在。任一失败都把 `pending_move` 放
@@ -519,11 +524,11 @@ pub fn update(
             let Some(pending) = ws_state.pending_move.take() else {
                 return;
             };
-            ws_state.tree_error = None;
+            ws_state.move_error = None;
             let name = pending.name_draft.trim().to_string();
             let dir_text = pending.dir_draft.trim().to_string();
             if name.is_empty() || !crate::project::is_single_path_component(&name) {
-                ws_state.tree_error = Some("名字不能为空或包含路径分隔符".to_string());
+                ws_state.move_error = Some("名字不能为空或包含路径分隔符".to_string());
                 ws_state.pending_move = Some(PendingMove {
                     name_draft: name,
                     ..pending
@@ -532,7 +537,7 @@ pub fn update(
             }
             let target_dir = PathBuf::from(&dir_text);
             if !target_dir.is_dir() {
-                ws_state.tree_error = Some(format!("{} 不是有效目录", target_dir.display()));
+                ws_state.move_error = Some(format!("{} 不是有效目录", target_dir.display()));
                 ws_state.pending_move = Some(PendingMove {
                     dir_draft: dir_text,
                     ..pending
@@ -655,6 +660,7 @@ pub fn update(
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            ws_state.move_error = None;
             ws_state.pending_move = Some(PendingMove {
                 source: drag.source,
                 source_is_dir: drag.source_is_dir,

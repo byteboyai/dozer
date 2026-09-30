@@ -76,7 +76,11 @@ pub struct WorkspaceState {
     pub(crate) dir_statuses: HashMap<PathBuf, delivery::TreeState>,
     pub(crate) tree_selected: Option<PathBuf>,
     pub(crate) tree_clipboard: Option<(PathBuf, bool)>,
-    pub(crate) tree_error: Option<String>,
+    /// **仅**移动对话框(`pending_move`)内的校验错误,在对话框里内联显示(对话框保持
+    /// 打开,用户就地改正)。其余文件操作的失败/被拒(粘贴、回滚、新建/重命名/删除、
+    /// 拖拽移动、行内命名校验)不进这里,走 `outbox` → Toast。(原名 `tree_error`,
+    /// 曾同时承载这两类语义。)
+    pub(crate) move_error: Option<String>,
     pub(crate) tree_delete_confirm: Option<(PathBuf, bool)>,
     pub(crate) tree_edit: Option<TreeEdit>,
     /// 项目树行内编辑框是否持有 iced 内部真实焦点,每帧由 `CaptureTreeEditFocus`
@@ -254,7 +258,7 @@ pub enum Message {
     FileHistoryRollbackPrevious(PathBuf),
     /// `FileHistoryRollbackPrevious` 的异步结果:成功即把文件还原到了上一版本,
     /// 失败带错误信息。由 `app/update.rs` 发出、在 `files::update` 里刷新树/
-    /// 写 `tree_error`(不进 `file_history` 弹窗状态机——这是从文件树右键发起
+    /// 失败推 Toast(不进 `file_history` 弹窗状态机——这是从文件树右键发起
     /// 的一键动作,与弹窗内的版本挑选回滚是两条独立路径)。
     FileHistoryRollbackDone(i64, PathBuf, Result<(), String>),
     /// 右键菜单"搜索":内核拦截,不进 `update`——由内核映射成
@@ -362,7 +366,7 @@ pub enum Message {
         target: PathBuf,
     },
     /// 一次拖入(多文件兜底分支)/`Message::MoveConfirm` 的异步移动结果:
-    /// 成功时刷新 `target` 目录,失败时置 `tree_error`。
+    /// 成功时刷新 `target` 目录,失败时推 Toast(outbox)。
     FileDropDone(i64, PathBuf, Result<(), String>),
     /// 拖拽移动确认框"新名称"输入框内容变化(`byteui::form::input_text`
     /// 的 `on_input`)。
@@ -379,7 +383,7 @@ pub enum Message {
     MoveDirBrowse,
     /// 拖拽移动确认框"确定":真正提交移动(改名 + 改目标目录一起生效,见
     /// `PendingMove`/`crate::project::move_item_to`)。校验失败(名字为空/
-    /// 含路径分隔符、目标目录不存在)置 `tree_error` 并把对话框放回去
+    /// 含路径分隔符、目标目录不存在)置 `move_error` 并把对话框放回去
     /// (不关闭,同行内编辑框"已存在同名项"校验失败时的既有口径);校验通过
     /// 异步落盘,完成后复用 `FileDropDone` 刷新目标目录。
     MoveConfirm,
@@ -554,7 +558,7 @@ impl WorkspaceState {
 
     /// 复用中的 `Workspace` 认领另一个项目时重置(现有
     /// `Workspace::adopt_project` 里对应 5 行赋值的搬家版本,行为原样保留——
-    /// 包括现状本来就没重置 `worktrees`/`tree_clipboard`/`tree_error`/
+    /// 包括现状本来就没重置 `worktrees`/`tree_clipboard`/`move_error`/
     /// `tree_delete_confirm`/`tree_edit` 这一点,纯迁移不新增行为)。
     pub fn reset_for_project(&mut self, file_tree: FileTree) {
         self.file_tree = Some(file_tree);
@@ -665,18 +669,18 @@ impl WorkspaceState {
         self.tree_selected = Some(path);
     }
 
-    /// 项目树操作的行内报错文案,供内核测试用作槽位内容的身份标记(见
+    /// 移动对话框内的校验错误文案,供内核测试用作槽位内容的身份标记(见
     /// `workspace.rs` 测试模块 `loaded_slot`)。只有测试会调用,生产代码不
     /// 需要读它(渲染走 `files::view` 内部,不经这个访问器)。
     #[cfg(test)]
-    pub fn tree_error(&self) -> Option<&str> {
-        self.tree_error.as_deref()
+    pub fn move_error(&self) -> Option<&str> {
+        self.move_error.as_deref()
     }
 
     /// 同上,供测试构造带标记的槽位用。
     #[cfg(test)]
-    pub fn set_tree_error(&mut self, e: Option<String>) {
-        self.tree_error = e;
+    pub fn set_move_error(&mut self, e: Option<String>) {
+        self.move_error = e;
     }
 
     /// 文件树是否已建立(供内核测试断言"占位构造立刻有文件树根,不需要
@@ -717,7 +721,6 @@ impl WorkspaceState {
     /// "新建文件"/"新建文件夹"的公共起点(现有 `Workspace::start_tree_new`
     /// 的搬家版本,逻辑不变)。
     pub(crate) fn start_tree_new(&mut self, parent: PathBuf, mode: TreeEditMode) {
-        self.tree_error = None;
         if let Some(tree) = &mut self.file_tree {
             tree.ensure_expanded(&parent);
         }
@@ -743,13 +746,16 @@ impl WorkspaceState {
         let Some(edit) = self.tree_edit.take() else {
             return;
         };
-        self.tree_error = None;
         let name = edit.buffer.trim();
         if name.is_empty() {
             return;
         }
         if !crate::project::is_single_path_component(name) {
-            self.tree_error = Some("名字不能包含路径分隔符".to_string());
+            self.outbox.push(
+                LOG,
+                crate::extensions::toast::Level::Error,
+                "名字不能包含路径分隔符",
+            );
             self.tree_edit = Some(TreeEdit {
                 parent_dir: edit.parent_dir,
                 mode: edit.mode,
@@ -764,7 +770,11 @@ impl WorkspaceState {
                     return;
                 }
                 if new_path.exists() {
-                    self.tree_error = Some(format!("{} 已存在同名项", new_path.display()));
+                    self.outbox.push(
+                        LOG,
+                        crate::extensions::toast::Level::Error,
+                        format!("{} 已存在同名项", new_path.display()),
+                    );
                     self.tree_edit = Some(TreeEdit {
                         parent_dir: edit.parent_dir,
                         mode: TreeEditMode::Rename(old_path),
@@ -789,7 +799,11 @@ impl WorkspaceState {
             }
             TreeEditMode::NewFile => {
                 if new_path.exists() {
-                    self.tree_error = Some(format!("{} 已存在同名项", new_path.display()));
+                    self.outbox.push(
+                        LOG,
+                        crate::extensions::toast::Level::Error,
+                        format!("{} 已存在同名项", new_path.display()),
+                    );
                     self.tree_edit = Some(TreeEdit {
                         parent_dir: edit.parent_dir,
                         mode: TreeEditMode::NewFile,
@@ -816,7 +830,11 @@ impl WorkspaceState {
             }
             TreeEditMode::NewFolder => {
                 if new_path.exists() {
-                    self.tree_error = Some(format!("{} 已存在同名项", new_path.display()));
+                    self.outbox.push(
+                        LOG,
+                        crate::extensions::toast::Level::Error,
+                        format!("{} 已存在同名项", new_path.display()),
+                    );
                     self.tree_edit = Some(TreeEdit {
                         parent_dir: edit.parent_dir,
                         mode: TreeEditMode::NewFolder,
