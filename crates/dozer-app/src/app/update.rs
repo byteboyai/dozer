@@ -4673,8 +4673,19 @@ impl App {
         let client = self.client.clone();
         let proxy = self.proxy.clone();
         handle.spawn(async move {
-            if let Ok((_, turns)) = client.get_todo_detail(id).await {
-                let _ = proxy.send_event(Message::TodoDetailLoaded(idx, turns));
+            match client.get_todo_detail(id).await {
+                Ok((_, turns)) => {
+                    let _ = proxy.send_event(Message::TodoDetailLoaded(idx, turns));
+                }
+                Err(e) => {
+                    // 详情弹窗已经打开(空回合),读取失败时用户只会看到一片空白。
+                    let _ = proxy.send_event(Message::Toast(toast::Message::Push {
+                        scope: todo::LOG,
+                        level: toast::Level::Error,
+                        text: format!("读取任务详情失败: {e}"),
+                        key: None,
+                    }));
+                }
             }
         });
     }
@@ -4694,9 +4705,27 @@ impl App {
         let client = self.client.clone();
         let proxy = self.proxy.clone();
         handle.spawn(async move {
-            let _ = client.process_todo_now(id, reply_text.as_deref()).await;
-            if let Ok((_, turns)) = client.get_todo_detail(id).await {
-                let _ = proxy.send_event(Message::TodoDetailLoaded(idx, turns));
+            // 失败此前被 `let _ =` 吞掉,随后照常刷新详情,用户看到的是"点了什么都没发生"。
+            let processed = client.process_todo_now(id, reply_text.as_deref()).await;
+            let failed = processed.is_err();
+            if let Some(msg) = toast::failure_message(todo::LOG, "处理任务失败", &processed) {
+                let _ = proxy.send_event(Message::Toast(msg));
+            }
+            // 无论处理成败都用服务端权威回合列表刷新;刷新本身也失败时,只有在"处理成功"的
+            // 情况下才再提示——处理已经失败时不在其上再叠一条(daemon 不通时两个请求会一起失败)。
+            match client.get_todo_detail(id).await {
+                Ok((_, turns)) => {
+                    let _ = proxy.send_event(Message::TodoDetailLoaded(idx, turns));
+                }
+                Err(e) if !failed => {
+                    let _ = proxy.send_event(Message::Toast(toast::Message::Push {
+                        scope: todo::LOG,
+                        level: toast::Level::Error,
+                        text: format!("刷新任务详情失败: {e}"),
+                        key: None,
+                    }));
+                }
+                Err(_) => {}
             }
         });
     }

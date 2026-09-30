@@ -5,7 +5,7 @@ use dozer_core::protocol::TodoInfo;
 
 use super::*;
 
-dozer_core::scope!(LOG, panel, "todo");
+dozer_core::scope!(pub(crate) LOG, panel, "todo");
 
 /// 本地时区无关的"今天" (年, 月, 日),用 `SystemTime::now()` 的 UTC 秒数
 /// 经 `civil_from_days` 换算。只用于日历默认停在当前月,时区偏差一天内无感。
