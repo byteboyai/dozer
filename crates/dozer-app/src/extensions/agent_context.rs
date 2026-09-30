@@ -202,7 +202,7 @@ fn flat_button(
 /// `修改历史`。字体走系统默认(非代码/终端场景)。
 pub fn strip(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = byteui::theme::color::current();
-    let arrow = if state.expanded {
+    let arrow = if state.expanded() {
         icons::IconKind::ChevronDown
     } else {
         icons::IconKind::ChevronUp
@@ -210,7 +210,7 @@ pub fn strip(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_ren
     let toggle = button(
         row![
             icons::view(arrow, byteui::theme::icon_size::row(), colors.dim),
-            text(format!("Agent 上下文 · {} 项", state.items.len()))
+            text(format!("Agent 上下文 · {} 项", state.items().len()))
                 .size(byteui::theme::font::label())
                 .color(colors.cream),
         ]
@@ -256,12 +256,12 @@ pub fn strip(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_ren
 pub fn expanded_panel(
     state: &State,
 ) -> Option<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> {
-    if !state.expanded || state.items.is_empty() {
+    if !state.expanded() || state.items().is_empty() {
         return None;
     }
     let colors = byteui::theme::color::current();
     let mut list = column![].spacing(4);
-    for e in &state.items {
+    for e in state.items() {
         let kind_icon = if e.info.entity_kind == "dir" {
             icons::IconKind::Folder
         } else {
