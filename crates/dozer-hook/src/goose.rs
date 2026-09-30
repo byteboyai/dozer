@@ -12,6 +12,8 @@ use dozer_core::agent_paths::{goose_project_dir_in, home_dir};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
+use crate::LOG;
+
 /// 单行 payload 大小上限：超限保留事件元数据、把大字段替换成截断标记，
 /// 防止异常工具输出把磁盘和 SQLite 拖垮（spec §5）。
 const MAX_LINE_BYTES: usize = 1024 * 1024;
@@ -69,14 +71,18 @@ pub fn build_journal_line(
     Value::Object(obj).to_string()
 }
 
-/// 把一行 journal 追加到文件（建目录 + 逐行 append）。失败只记 `eprintln!`、
+/// 把一行 journal 追加到文件（建目录 + 逐行 append）。失败只记日志文件、
 /// 不 panic——journal 写失败仍要照常转发状态事件（spec §5）。
 pub fn append_journal_line(path: &Path, line: &str) {
     use std::io::Write;
     if let Some(parent) = path.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
-        eprintln!("建 journal 目录失败（已忽略）: {e}");
+        dozer_core::plain_warn!(
+            dozer_core::log::Component::Hook,
+            LOG,
+            "建 journal 目录失败（已忽略）: {e}"
+        );
         return;
     }
     let Ok(mut f) = std::fs::OpenOptions::new()
@@ -84,11 +90,20 @@ pub fn append_journal_line(path: &Path, line: &str) {
         .append(true)
         .open(path)
     else {
-        eprintln!("打开 journal 失败（已忽略）: {}", path.display());
+        dozer_core::plain_warn!(
+            dozer_core::log::Component::Hook,
+            LOG,
+            "打开 journal 失败（已忽略）: {}",
+            path.display()
+        );
         return;
     };
     if let Err(e) = writeln!(f, "{line}") {
-        eprintln!("写 journal 失败（已忽略）: {e}");
+        dozer_core::plain_warn!(
+            dozer_core::log::Component::Hook,
+            LOG,
+            "写 journal 失败（已忽略）: {e}"
+        );
     }
 }
 

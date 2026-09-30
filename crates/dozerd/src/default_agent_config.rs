@@ -6,6 +6,8 @@ use dozer_core::protocol::AgentKind;
 use serde::Deserialize;
 use std::path::Path;
 
+dozer_core::scope!(LOG, module, "agent_config");
+
 #[derive(Deserialize)]
 struct DefaultAgentConfig {
     default_agent: AgentKind,
@@ -18,17 +20,17 @@ pub fn load_default_agent() -> AgentKind {
 
 /// `path` 显式传入版本,测试用。文件不存在、读取失败、内容非法(缺字段/
 /// `default_agent` 值不是四家已知 agent 之一)都回落到 `AgentKind::Claude`
-/// 并记 `tracing::warn!`——不 panic,不阻塞补总结流程。
+/// 并记 warn 日志——不 panic,不阻塞补总结流程。
 pub fn load_default_agent_from(path: &Path) -> AgentKind {
     let fallback = AgentKind::Claude;
     let Ok(text) = std::fs::read_to_string(path) else {
-        tracing::warn!(path = %path.display(), "default_agent 配置文件不存在,回退到 Claude");
+        dozer_core::log_warn!(LOG, path = %path.display(), "default_agent 配置文件不存在,回退到 Claude");
         return fallback;
     };
     match toml::from_str::<DefaultAgentConfig>(&text) {
         Ok(cfg) => cfg.default_agent,
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "default_agent 配置解析失败,回退到 Claude");
+            dozer_core::log_warn!(LOG, path = %path.display(), error = %e, "default_agent 配置解析失败,回退到 Claude");
             fallback
         }
     }

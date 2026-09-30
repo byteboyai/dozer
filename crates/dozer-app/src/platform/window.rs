@@ -1,5 +1,7 @@
 //! macOS 专有窗口平台胶水:原生交通灯垂直居中 + 顶栏原生拖窗守卫。
 
+dozer_core::scope!(LOG, module, "platform");
+
 /// macOS 专有：把原生红黄绿交通灯在垂直方向居中到 app 自己画的 `top_bar`
 /// （默认 40pt 高）中部，而不是系统默认的 28pt 标题栏中部。去掉原生标题栏
 /// 后系统仍按 28pt 旧基准排版交通灯，导致它们贴着顶栏上沿、与 40pt 顶栏里
@@ -113,7 +115,6 @@ pub(crate) fn install_topbar_drag_guard(window: &winit::window::Window) {
 
     unsafe extern "C-unwind" fn mouse_down_can_move_window(_this: &AnyObject, _cmd: Sel) -> Bool {
         let hovered = TOPBAR_CONTROL_HOVERED.load(std::sync::atomic::Ordering::Relaxed);
-        tracing::warn!("[DIAG] mouseDownCanMoveWindow called, hovered={hovered}");
         Bool::new(!hovered)
     }
 
@@ -141,7 +142,10 @@ pub(crate) fn install_topbar_drag_guard(window: &winit::window::Window) {
         )
     };
     if !added.as_bool() {
-        tracing::warn!("挂 mouseDownCanMoveWindow 覆写失败(selector 可能已存在于该类)");
+        dozer_core::log_warn!(
+            LOG,
+            "挂 mouseDownCanMoveWindow 覆写失败(selector 可能已存在于该类)"
+        );
     }
 }
 

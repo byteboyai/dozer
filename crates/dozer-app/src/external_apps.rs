@@ -60,9 +60,105 @@ fn save_to(path: &Path, config: &ExternalAppsConfig) -> io::Result<()> {
     std::fs::write(path, json)
 }
 
+/// 运行"外部打开"命令并**等它退出**。`open -a 不存在的App` 这类失败发生在 `open`
+/// 进程退出之后(`spawn()` 本身会成功),所以只看 `spawn` 的结果永远发现不了;必须
+/// 看退出状态。会阻塞,调用方放到 `spawn_blocking`。返回给用户看的原因(优先 stderr,
+/// 为空退回退出码)。
+pub(crate) fn run_open_command(mut command: std::process::Command) -> Result<(), String> {
+    match command.output() {
+        Err(e) => Err(format!(
+            "无法启动 {}: {e}",
+            command.get_program().to_string_lossy()
+        )),
+        Ok(out) if out.status.success() => Ok(()),
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            Err(if stderr.is_empty() {
+                match out.status.code() {
+                    Some(code) => format!("退出码 {code}"),
+                    None => "被信号终止".to_string(),
+                }
+            } else {
+                stderr
+            })
+        }
+    }
+}
+
+/// 外部打开失败时给用户看的一句话。`reason` 为空时不带冒号。
+pub(crate) fn open_failure_message(app_name: Option<&str>, path: &Path, reason: &str) -> String {
+    let file = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    // App 名字多是拉丁字母,两侧留空格;默认应用是纯中文,不留。
+    let who = match app_name {
+        Some(app) => format!(" {app} "),
+        None => "系统默认应用".to_string(),
+    };
+    let base = format!("无法用{who}打开 {file}");
+    if reason.is_empty() {
+        base
+    } else {
+        format!("{base}: {reason}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_open_command_ok_on_zero_exit() {
+        assert_eq!(run_open_command(std::process::Command::new("true")), Ok(()));
+    }
+
+    #[test]
+    fn run_open_command_reports_stderr_on_nonzero_exit() {
+        // `open -a 不存在的App` 就是这种形态:进程能启动,随后以非零退出并把原因写到 stderr。
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "echo 'Unable to find application' >&2; exit 1"]);
+        assert_eq!(
+            run_open_command(cmd),
+            Err("Unable to find application".to_string())
+        );
+    }
+
+    #[test]
+    fn run_open_command_falls_back_to_exit_code_when_stderr_is_empty() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "exit 3"]);
+        assert_eq!(run_open_command(cmd), Err("退出码 3".to_string()));
+    }
+
+    #[test]
+    fn run_open_command_reports_spawn_failure() {
+        let err = run_open_command(std::process::Command::new("/nonexistent/dozer-open-xyz"))
+            .unwrap_err();
+        assert!(err.starts_with("无法启动"), "{err}");
+    }
+
+    #[test]
+    fn open_failure_message_names_app_file_and_reason() {
+        assert_eq!(
+            open_failure_message(Some("Typora"), Path::new("/p/a/notes.md"), "not found"),
+            "无法用 Typora 打开 notes.md: not found"
+        );
+        assert_eq!(
+            open_failure_message(None, Path::new("/p/a/notes.md"), "not found"),
+            "无法用系统默认应用打开 notes.md: not found"
+        );
+        // 原因为空时不留悬空的冒号。
+        assert_eq!(
+            open_failure_message(None, Path::new("/p/a/notes.md"), ""),
+            "无法用系统默认应用打开 notes.md"
+        );
+        // 没有文件名(如根路径)时退回完整路径,不 panic。
+        assert_eq!(
+            open_failure_message(None, Path::new("/"), ""),
+            "无法用系统默认应用打开 /"
+        );
+    }
 
     #[test]
     fn load_from_missing_file_returns_default() {

@@ -11,6 +11,8 @@ use iced_widget::core::{Border, Color, Element, Length, Rectangle};
 use iced_widget::{button, column, container, row, scrollable, text};
 use std::path::{Path, PathBuf};
 
+dozer_core::scope!(LOG, module, "search");
+
 /// 搜索作用域：右键目标。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Scope {
@@ -66,7 +68,7 @@ impl<'a> ignore::ParallelVisitor for HitVisitor<'a> {
         let de = match entry {
             Ok(de) => de,
             Err(e) => {
-                tracing::warn!("搜索遍历跳过错误条目: {e}");
+                dozer_core::log_warn!(LOG, "搜索遍历跳过错误条目: {e}");
                 return ignore::WalkState::Continue;
             }
         };

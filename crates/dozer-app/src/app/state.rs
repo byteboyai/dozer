@@ -451,3 +451,109 @@ pub(crate) fn right_zone_width(window_width: f32, state: &ShellState) -> f32 {
 pub(crate) fn pair_content_width(zone_width: f32) -> f32 {
     (zone_width - byteui::theme::geometry::divider_width()).max(0.0)
 }
+
+#[cfg(test)]
+mod log_name_tests {
+    use super::PanelKind;
+
+    /// 每个 `PanelKind` 对应的日志面板名(单一真相)。源码里每个
+    /// `scope!(_, panel, "<名>")` 的名字都必须出自这张表——由下面的源码扫描测试强制。
+    /// 穷举 `match` 保证新增变体时编译报错,提醒同步这张表。
+    fn expected_log_name(kind: PanelKind) -> &'static str {
+        match kind {
+            PanelKind::Files => "files",
+            PanelKind::GitLog => "git_log",
+            PanelKind::Todo => "todo",
+            PanelKind::Project => "project",
+            PanelKind::Database => "database",
+            PanelKind::Ssh => "ssh",
+            PanelKind::Web => "web",
+            PanelKind::Agent => "agent",
+            PanelKind::Conversations => "conversations",
+            PanelKind::Usage => "usage",
+            PanelKind::CodeHealth => "code_health",
+        }
+    }
+
+    const ALL_KINDS: [PanelKind; 11] = [
+        PanelKind::Files,
+        PanelKind::GitLog,
+        PanelKind::Todo,
+        PanelKind::Project,
+        PanelKind::Database,
+        PanelKind::Ssh,
+        PanelKind::Web,
+        PanelKind::Agent,
+        PanelKind::Conversations,
+        PanelKind::Usage,
+        PanelKind::CodeHealth,
+    ];
+
+    #[test]
+    fn log_names_are_unique_and_valid_scope_names() {
+        let mut seen = std::collections::HashSet::new();
+        for k in ALL_KINDS {
+            let n = expected_log_name(k);
+            assert!(dozer_core::log::is_valid_scope_name(n), "{n}");
+            assert!(seen.insert(n), "重复的面板日志名: {n}");
+        }
+    }
+
+    /// 源码里每个 panel 来源的名字都必须是某个 `PanelKind` 的日志名;弹窗类 extension
+    /// 与非面板代码必须用 module 来源,不能冒充面板。
+    #[test]
+    fn every_panel_scope_in_source_uses_a_known_panel_name() {
+        let known: std::collections::HashSet<&str> =
+            ALL_KINDS.iter().map(|k| expected_log_name(*k)).collect();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![root];
+        let mut found = Vec::new();
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                if p.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&p).unwrap();
+                for line in text.lines() {
+                    let t = line.trim_start();
+                    if t.starts_with("//") {
+                        continue;
+                    }
+                    let Some(rest) = t.strip_prefix("dozer_core::scope!(") else {
+                        continue;
+                    };
+                    let parts: Vec<&str> = rest.split(',').map(str::trim).collect();
+                    if parts.len() >= 3 && parts[1] == "panel" {
+                        let name = parts[2].trim_end_matches(");").trim_matches('"');
+                        assert!(
+                            known.contains(name),
+                            "{}: 未知面板日志名 {name:?}(必须是 PanelKind 对应的名字)",
+                            p.display()
+                        );
+                        found.push(name.to_string());
+                    }
+                }
+            }
+        }
+        // 至少已经声明的面板来源都被扫到,证明扫描本身有效而不是空转。
+        for expected in [
+            "files",
+            "todo",
+            "ssh",
+            "database",
+            "agent",
+            "project",
+            "conversations",
+        ] {
+            assert!(
+                found.iter().any(|n| n == expected),
+                "源码扫描没找到 panel 来源 {expected:?},实际找到 {found:?}"
+            );
+        }
+    }
+}

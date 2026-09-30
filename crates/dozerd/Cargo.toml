@@ -4,12 +4,9 @@ version = "0.3.3"
 edition.workspace = true
 
 [dependencies]
-dozer-core = { path = "../dozer-core" }
+dozer-core = { path = "../dozer-core", features = ["logging"] }
 anyhow.workspace = true
 tokio.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
-tracing-appender.workspace = true
 portable-pty.workspace = true
 uuid.workspace = true
 serde_json.workspace = true

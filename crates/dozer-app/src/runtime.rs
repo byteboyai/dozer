@@ -9,6 +9,8 @@ use wry::WebViewBuilderExtDarwin;
 
 use crate::app::{App, Message};
 
+dozer_core::scope!(LOG, module, "runtime");
+
 /// daemon 连不上时的自动拉起：优先用 `current_exe` 同目录下的 `dozerd`
 /// 二进制（cargo workspace 构建后与 `dozer` 落在同一个 target 目录），
 /// 找不到就退化到 PATH 查找（`Command::new("dozerd")` 交给 shell/PATH 解析）。
@@ -23,8 +25,8 @@ pub(crate) fn spawn_dozerd() {
     };
 
     match command.stdin(Stdio::null()).spawn() {
-        Ok(_child) => tracing::info!("已自动拉起 dozerd"),
-        Err(e) => tracing::error!("自动拉起 dozerd 失败: {e}"),
+        Ok(_child) => dozer_core::log_info!(LOG, "已自动拉起 dozerd"),
+        Err(e) => dozer_core::log_error!(LOG, "自动拉起 dozerd 失败: {e}"),
     }
 }
 
@@ -36,7 +38,7 @@ pub(crate) async fn ensure_daemon(client: &dozer_client::Client) -> Result<(), S
         return Ok(());
     }
 
-    tracing::warn!("daemon 未响应，尝试自动拉起 dozerd");
+    dozer_core::log_warn!(LOG, "daemon 未响应，尝试自动拉起 dozerd");
     spawn_dozerd();
 
     let mut last_err = String::from("daemon 未响应");
@@ -46,7 +48,7 @@ pub(crate) async fn ensure_daemon(client: &dozer_client::Client) -> Result<(), S
             Ok(_) => return Ok(()),
             Err(e) => {
                 last_err = e.to_string();
-                tracing::warn!(attempt, "重试连接 dozerd 仍失败: {last_err}");
+                dozer_core::log_warn!(LOG, attempt, "重试连接 dozerd 仍失败: {last_err}");
             }
         }
     }
@@ -70,7 +72,7 @@ pub(crate) async fn build_app(
         crate::capabilities::detect_hardware(),
     ));
     let caps = &capabilities;
-    tracing::info!(
+    dozer_core::log_info!(LOG,
         total_memory_bytes = caps.hardware.total_memory_bytes,
         available_memory_bytes = caps.hardware.available_memory_at_start_bytes,
         physical_cpus = caps.hardware.physical_cpu_count,
@@ -91,7 +93,7 @@ pub(crate) async fn build_app(
     let marker = crate::preview::marker_path();
     let safe_startup = crate::preview::was_interrupted_from(&marker);
     if safe_startup {
-        tracing::warn!("检测到上次启动未完成,进入安全启动(仅恢复 tab 壳)");
+        dozer_core::log_warn!(LOG, "检测到上次启动未完成,进入安全启动(仅恢复 tab 壳)");
     }
     let _ = crate::preview::write_status_to(&marker, crate::preview::STATUS_IN_PROGRESS);
 
@@ -276,7 +278,8 @@ pub(crate) fn sync_webview_pool(
                 manager.try_reserve(bytes, true, binding.project_id),
                 crate::preview::Reservation::Granted
             ) {
-                tracing::warn!(
+                dozer_core::log_warn!(
+                    LOG,
                     project_id = binding.project_id,
                     tab_id = binding.tab_id,
                     "preview resource budget denied editor webview"
@@ -344,7 +347,7 @@ pub(crate) fn sync_webview_pool(
                 let current = view.url().unwrap_or_else(|_| loaded_url.clone());
                 if current != spec.url && *loaded_url != spec.url {
                     if let Err(e) = view.load_url(&spec.url) {
-                        tracing::warn!("预览导航失败: {e}");
+                        dozer_core::log_warn!(LOG, "预览导航失败: {e}");
                     }
                     *loaded_url = spec.url.clone();
                     // 导航会重置 WKWebView 的 pageZoom,重建后把当前
@@ -517,7 +520,7 @@ pub(crate) fn sync_webview_pool(
                                     match crate::preview::parse_image_annotate_event(body) {
                                         Ok(event) => {
                                             if let Err(error) = event.validate(binding) {
-                                                tracing::warn!(%error, "拒绝无效 image-annotate IPC");
+                                                dozer_core::log_warn!(LOG, %error, "拒绝无效 image-annotate IPC");
                                             } else {
                                                 let _ = ipc_proxy.send_event(
                                                     Message::ImageAnnotateEvent(
@@ -528,7 +531,7 @@ pub(crate) fn sync_webview_pool(
                                             }
                                         }
                                         Err(error) => {
-                                            tracing::warn!(%error, "无法解析 image-annotate IPC");
+                                            dozer_core::log_warn!(LOG, %error, "无法解析 image-annotate IPC");
                                         }
                                     }
                                 } else if let Some(binding) = flyfish_binding.as_ref()
@@ -537,7 +540,7 @@ pub(crate) fn sync_webview_pool(
                                     match crate::preview::parse_flyfish_event(body) {
                                         Ok(event) => {
                                             if let Err(error) = event.validate(binding) {
-                                                tracing::warn!(%error, "拒绝无效 flyfish IPC");
+                                                dozer_core::log_warn!(LOG, %error, "拒绝无效 flyfish IPC");
                                             } else {
                                                 let _ = ipc_proxy.send_event(
                                                     Message::FlyfishEvent(binding.clone(), event),
@@ -545,7 +548,7 @@ pub(crate) fn sync_webview_pool(
                                             }
                                         }
                                         Err(error) => {
-                                            tracing::warn!(%error, "无法解析 flyfish IPC");
+                                            dozer_core::log_warn!(LOG, %error, "无法解析 flyfish IPC");
                                         }
                                     }
                                 } else if webview_id == crate::app::USAGE_CONTENT_ID_OFFSET
@@ -562,7 +565,7 @@ pub(crate) fn sync_webview_pool(
                                             );
                                         }
                                         Err(error) => {
-                                            tracing::warn!(%error, "无法解析 usage-content IPC");
+                                            dozer_core::log_warn!(LOG, %error, "无法解析 usage-content IPC");
                                         }
                                     }
                                 } else if webview_id == crate::app::CONVERSATION_REVIEW_ID_OFFSET
@@ -577,7 +580,7 @@ pub(crate) fn sync_webview_pool(
                                             );
                                         }
                                         Err(error) => {
-                                            tracing::warn!(%error, "无法解析 review-trace IPC");
+                                            dozer_core::log_warn!(LOG, %error, "无法解析 review-trace IPC");
                                         }
                                     }
                                 } else if let Some(binding) = editor_binding.as_ref() {
@@ -591,7 +594,7 @@ pub(crate) fn sync_webview_pool(
                                         match crate::preview::parse_tabular_event(body) {
                                             Ok(event) => {
                                                 if let Err(error) = event.validate(&expected) {
-                                                    tracing::warn!(%error, "拒绝无效 tabular IPC");
+                                                    dozer_core::log_warn!(LOG, %error, "拒绝无效 tabular IPC");
                                                 } else {
                                                     let _ = ipc_proxy.send_event(
                                                         Message::TabularHostEvent(
@@ -602,14 +605,14 @@ pub(crate) fn sync_webview_pool(
                                                 }
                                             }
                                             Err(error) => {
-                                                tracing::warn!(%error, "无法解析 tabular IPC");
+                                                dozer_core::log_warn!(LOG, %error, "无法解析 tabular IPC");
                                             }
                                         }
                                     } else if is_json_host {
                                         match crate::preview::parse_json_event(body) {
                                             Ok(event) => {
                                                 if let Err(error) = event.validate(&expected) {
-                                                    tracing::warn!(%error, "拒绝无效 json-editor IPC");
+                                                    dozer_core::log_warn!(LOG, %error, "拒绝无效 json-editor IPC");
                                                 } else {
                                                     let _ = ipc_proxy.send_event(
                                                         Message::JsonEditorEvent(
@@ -620,14 +623,14 @@ pub(crate) fn sync_webview_pool(
                                                 }
                                             }
                                             Err(error) => {
-                                                tracing::warn!(%error, "无法解析 json-editor IPC");
+                                                dozer_core::log_warn!(LOG, %error, "无法解析 json-editor IPC");
                                             }
                                         }
                                     } else {
                                         match crate::preview::parse_event(body) {
                                             Ok(event) => {
                                                 if let Err(error) = event.validate(&expected) {
-                                                    tracing::warn!(%error, "拒绝无效 editor IPC");
+                                                    dozer_core::log_warn!(LOG, %error, "拒绝无效 editor IPC");
                                                 } else if binding.panel
                                                     == crate::app::PanelKind::GitLog
                                                 {
@@ -646,7 +649,7 @@ pub(crate) fn sync_webview_pool(
                                                 }
                                             }
                                             Err(error) => {
-                                                tracing::warn!(%error, "无法解析 editor IPC");
+                                                dozer_core::log_warn!(LOG, %error, "无法解析 editor IPC");
                                             }
                                         }
                                     }
@@ -714,7 +717,7 @@ pub(crate) fn sync_webview_pool(
                         let _ = view.zoom(byteui::theme::icon_size::scale() as f64);
                         pool.insert(spec.id, (view, spec.url.clone()));
                     }
-                    Err(e) => tracing::error!("创建预览 webview 失败: {e}"),
+                    Err(e) => dozer_core::log_error!(LOG, "创建预览 webview 失败: {e}"),
                 }
             }
         }

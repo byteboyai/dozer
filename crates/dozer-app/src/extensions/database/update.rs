@@ -6,6 +6,19 @@ use std::path::Path;
 
 use super::*;
 
+dozer_core::scope!(LOG, panel, "database");
+
+/// 保存数据源列表;失败不 panic,推一条 Toast——否则界面看着已保存、重启后连接配置丢失。
+pub(crate) fn persist_sources(ws_state: &mut WorkspaceState, repo_path: &Path) {
+    if let Err(e) = save_sources(repo_path, &ws_state.sources) {
+        ws_state.outbox.push(
+            LOG,
+            crate::extensions::toast::Level::Error,
+            format!("数据库连接配置未能保存到磁盘: {e}"),
+        );
+    }
+}
+
 pub fn update(
     ws_state: &mut WorkspaceState,
     app_state: &mut AppState,
@@ -92,9 +105,7 @@ pub fn update(
                 ws_state.content.close_by_source(&id);
                 ws_state.expanded_sources.remove(&id);
             }
-            if let Err(e) = save_sources(repo_path, &ws_state.sources) {
-                tracing::warn!("写入 database.json 失败: {e}");
-            }
+            persist_sources(ws_state, repo_path);
             ws_state.draft_test_status = TestStatus::Idle;
         }
         Message::DraftCancel => {
@@ -150,9 +161,7 @@ pub fn update(
             if let Ok(entry) = keyring_entry(project_id, &id) {
                 let _ = entry.delete_credential();
             }
-            if let Err(e) = save_sources(repo_path, &ws_state.sources) {
-                tracing::warn!("写入 database.json 失败: {e}");
-            }
+            persist_sources(ws_state, repo_path);
         }
         Message::TestConnection(id) => {
             let Some(source) = ws_state.sources.iter().find(|s| s.id == id).cloned() else {

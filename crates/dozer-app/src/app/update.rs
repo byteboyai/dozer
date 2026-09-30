@@ -38,6 +38,9 @@ use std::path::PathBuf;
 
 use super::*;
 
+dozer_core::scope!(LOG, module, "shell");
+dozer_core::scope!(PREVIEW_LOG, module, "preview");
+
 /// review-trace webview 报回 `document_loaded` 后落地:"当前 nonce 的内容
 /// 已可显示"。抽成纯函数便于 headless 单测(构造完整 `App` 成本过高)。
 ///
@@ -86,6 +89,33 @@ fn refresh_open_conversation_summary(
 
 impl App {
     pub fn update(&mut self, message: Message) {
+        self.update_inner(message);
+        // 放在包装里而不是 `match` 末尾:`update_inner` 的许多分支会提前 `return`,
+        // 放在 `match` 里会漏排空。
+        self.drain_outboxes();
+    }
+
+    /// 排空所有 extension state 的 outbox 并推成 Toast(extension 的 `update`
+    /// 拿不到 `App`,失败提示先写进自己 state 的 outbox)。遍历已加载工作区的
+    /// 代价只是几个 `Vec::is_empty`,可以每条消息都做。
+    fn drain_outboxes(&mut self) {
+        let mut pending: Vec<toast::Pending> = Vec::new();
+        for slot in self.projects.values_mut() {
+            if let WorkspaceSlot::Loaded(ws) = slot {
+                pending.extend(ws.files.take_outbox());
+                pending.extend(ws.todo.take_outbox());
+                pending.extend(ws.ssh.take_outbox());
+                pending.extend(ws.database.take_outbox());
+                pending.extend(ws.agent_context.take_outbox());
+            }
+        }
+        pending.extend(self.database.take_outbox());
+        if !pending.is_empty() {
+            self.flush_outbox(pending);
+        }
+    }
+
+    fn update_inner(&mut self, message: Message) {
         match message {
             Message::GitLogDiffWebviewEvent(_binding, event) => {
                 if matches!(event.payload, crate::preview::EditorEvent::Ready { .. }) {
@@ -274,7 +304,7 @@ impl App {
                                     if let Some(observe) = tab.load_observe.take() {
                                         let ready_ms = observe.elapsed_ms();
                                         let first_frame_ms = observe.first_frame_offset_ms();
-                                        tracing::info!(
+                                        dozer_core::log_info!(PREVIEW_LOG,
                                             panel = ?binding.panel,
                                             tab_id = tab.id,
                                             generation = observe.generation,
@@ -948,7 +978,7 @@ impl App {
                         let client = io.client.clone();
                         io.handle.spawn(async move {
                             if let Err(e) = client.report_preview_command_outcome(outcome).await {
-                                tracing::warn!(%e, "回报预览命令结果失败");
+                                dozer_core::log_warn!(PREVIEW_LOG, %e, "回报预览命令结果失败");
                             }
                         });
                     }
@@ -958,7 +988,7 @@ impl App {
                 self.with_project(project_id, move |ws, io| {
                     // T11 bullet 3:结构化日志(读取字节 + 行数,不记正文)。
                     match &result {
-                        Ok(index) => tracing::debug!(
+                        Ok(index) => dozer_core::log_debug!(PREVIEW_LOG,
                             panel = ?panel,
                             tab_id,
                             bytes = index.file_len(),
@@ -966,7 +996,7 @@ impl App {
                             "大文件行索引建立完成"
                         ),
                         Err(error) => {
-                            tracing::warn!(panel = ?panel, tab_id, %error, "大文件行索引建立失败")
+                            dozer_core::log_warn!(PREVIEW_LOG, panel = ?panel, tab_id, %error, "大文件行索引建立失败")
                         }
                     }
                     match result {
@@ -1176,7 +1206,7 @@ impl App {
                     // stage 不符说明已推进到下一阶段(会有新的超时接管),generation
                     // 不符说明已重开/被替换——两者都静默丢弃,避免迟到超时误杀。
                     if pane.load_timeout_matches(tab_id, generation, stage) {
-                        tracing::warn!(
+                        dozer_core::log_warn!(PREVIEW_LOG,
                             panel = ?panel,
                             tab_id,
                             generation,
@@ -1414,6 +1444,7 @@ impl App {
             } => {
                 if !errors.is_empty() {
                     self.push_toast(
+                        LOG,
                         toast::Level::Warning,
                         format!("删除项目未完全成功: {}", errors.join("; ")),
                     );
@@ -1442,6 +1473,15 @@ impl App {
                 });
             }
             Message::Toast(msg) => {
+                // 单变体枚举,模式不可反驳;先写日志再入队(与 `emit_toast` 同一个
+                // `log_toast`)。
+                let toast::Message::Push {
+                    scope,
+                    level,
+                    ref text,
+                    ..
+                } = msg;
+                toast::log_toast(scope, level, text);
                 toast::update(&mut self.toast, msg, std::time::Instant::now());
             }
             Message::CodeHealth(msg @ codehealth::Message::Loaded(project_id, ..)) => {
@@ -2334,7 +2374,7 @@ impl App {
             }
             Message::PreviewSelectTab(idx) => self.preview_select_tab(idx),
             Message::PreviewOpenExternal(kind, tab_id) => {
-                self.with_focused_project(move |ws, _io| {
+                self.with_focused_project(move |ws, io| {
                     let pane = match kind {
                         PanelKind::Project => &ws.project_preview,
                         _ => &ws.preview,
@@ -2353,9 +2393,29 @@ impl App {
                     let program = "open";
                     #[cfg(not(target_os = "macos"))]
                     let program = "xdg-open";
-                    if let Err(e) = std::process::Command::new(program).arg(path).spawn() {
-                        tracing::warn!(%e, "外部打开失败");
-                    }
+                    // `spawn()` 成功不代表打开成功(应用找不到/被拒时进程随后才非零退出),
+                    // 后台等退出状态,失败经 `proxy` 发 Toast(`Message::Toast` 分支会写日志)。
+                    let path = path.clone();
+                    let proxy = io.proxy.clone();
+                    io.handle.spawn(async move {
+                        let mut command = std::process::Command::new(program);
+                        command.arg(&path);
+                        let result = tokio::task::spawn_blocking(move || {
+                            crate::external_apps::run_open_command(command)
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(e.to_string()));
+                        if let Err(reason) = result {
+                            let _ = proxy.send_event(Message::Toast(toast::Message::Push {
+                                scope: PREVIEW_LOG,
+                                level: toast::Level::Error,
+                                text: crate::external_apps::open_failure_message(
+                                    None, &path, &reason,
+                                ),
+                                key: None,
+                            }));
+                        }
+                    });
                 });
             }
             Message::PreviewRetry(kind, tab_id) => {
@@ -2574,13 +2634,13 @@ impl App {
                     // T11:取消是正常结束,不当作解析失败告警。
                     match &result {
                         Err(error) if error == crate::tabular::TABULAR_CANCELLED => {
-                            tracing::debug!(panel = ?kind, tab_id, generation, "表格加载已取消");
+                            dozer_core::log_debug!(PREVIEW_LOG, panel = ?kind, tab_id, generation, "表格加载已取消");
                         }
                         Err(error) => {
-                            tracing::warn!(panel = ?kind, tab_id, generation, %error, "表格首次加载失败");
+                            dozer_core::log_warn!(PREVIEW_LOG, panel = ?kind, tab_id, generation, %error, "表格首次加载失败");
                         }
                         Ok(view) => {
-                            tracing::debug!(
+                            dozer_core::log_debug!(PREVIEW_LOG,
                                 panel = ?kind,
                                 tab_id,
                                 generation,
@@ -3116,7 +3176,8 @@ impl App {
                 | files::Message::GitInfoLoaded(project_id, ..)
                 | files::Message::BranchSwitchDone(project_id, ..)
                 | files::Message::GitInitDone(project_id, ..)
-                | files::Message::FileDropDone(project_id, ..)),
+                | files::Message::FileDropDone(project_id, ..)
+                | files::Message::OpenWithDefaultDone(project_id, ..)),
             ) => self.files_project_message(project_id, msg),
 
             Message::Files(files::Message::TabReloadFromDisk(path)) => {
@@ -3937,8 +3998,9 @@ impl App {
         // `Workspace` 存在,一个项目都没打开时也能显示(不再挂
         // `daemon_error`)。
         let Some(project) = project else {
-            tracing::warn!("打开项目页签失败,页签集合保持不变");
+            dozer_core::log_warn!(LOG, "打开项目页签失败,页签集合保持不变");
             self.push_toast_keyed(
+                LOG,
                 toast::Level::Error,
                 "打开项目失败,请确认 dozerd 正常后重试",
                 "open-project-failed",
@@ -4168,7 +4230,7 @@ impl App {
             let task = self.handle.spawn(async move {
                 for sid in ids {
                     if let Err(e) = client.kill(&sid).await {
-                        tracing::warn!("丢弃过期促成结果时结束会话失败: {e}");
+                        dozer_core::log_warn!(LOG, "丢弃过期促成结果时结束会话失败: {e}");
                     }
                 }
             });
@@ -4843,7 +4905,7 @@ impl App {
                     let id = tab.info.id.clone();
                     io.handle.spawn(async move {
                         if let Err(e) = client.write(&id, &responses).await {
-                            tracing::warn!("回写终端查询应答失败: {e}");
+                            dozer_core::log_warn!(LOG, "回写终端查询应答失败: {e}");
                         }
                     });
                 }
@@ -5318,24 +5380,18 @@ impl App {
                 let emit = move |m| {
                     let _ = proxy.send_event(Message::AgentContext(project_id, m));
                 };
-                let notice = {
-                    let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
-                        return;
-                    };
-                    ctx::update(
-                        &mut ws.agent_context,
-                        project_id,
-                        root,
-                        other,
-                        &client,
-                        &handle,
-                        emit,
-                    );
-                    ws.agent_context.take_notice()
+                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+                    return;
                 };
-                if let Some(n) = notice {
-                    self.push_toast(toast::Level::Error, n);
-                }
+                ctx::update(
+                    &mut ws.agent_context,
+                    project_id,
+                    root,
+                    other,
+                    &client,
+                    &handle,
+                    emit,
+                );
             }
         }
     }
@@ -5744,7 +5800,7 @@ impl App {
                 if let Some(tp) = transcript_path {
                     tab.transcript_path = Some(tp);
                 }
-                tracing::info!(tab_id, ?state, "agent 状态变更");
+                dozer_core::log_info!(LOG, tab_id, ?state, "agent 状态变更");
                 card_refresh_args = Some((tab.transcript_path.clone(), tab.effective_cwd()));
             }
             if let Some((transcript_path, cwd)) = card_refresh_args {
@@ -5872,7 +5928,7 @@ impl App {
             {
                 Ok(id) => id,
                 Err(e) => {
-                    tracing::warn!(error = %e, %cid, "提交总结任务失败");
+                    dozer_core::log_warn!(LOG, error = %e, %cid, "提交总结任务失败");
                     let _ = proxy.send_event(Message::Conversations(
                         conversations::Message::SummaryGenerateFinished(
                             project_id,
@@ -5918,7 +5974,7 @@ impl App {
                         }
                     }
                     Ok(None) => {
-                        tracing::warn!(job_id, %cid, "总结任务不存在");
+                        dozer_core::log_warn!(LOG, job_id, %cid, "总结任务不存在");
                         let _ = proxy.send_event(Message::Conversations(
                             conversations::Message::SummaryGenerateFinished(
                                 project_id,
@@ -5929,7 +5985,7 @@ impl App {
                         return;
                     }
                     Err(e) => {
-                        tracing::warn!(error = %e, job_id, %cid, "查询总结任务失败");
+                        dozer_core::log_warn!(LOG, error = %e, job_id, %cid, "查询总结任务失败");
                         let _ = proxy.send_event(Message::Conversations(
                             conversations::Message::SummaryGenerateFinished(
                                 project_id,

@@ -2,6 +2,20 @@
 
 状态:草案(2026-09-30),待评审。不改变一期范围;不涉及规格 §8 的显式未决项。2026-09-30 已按评审意见定稿全部原「未决项」(见文末「已决事项」):纳入 hook/mcp、纯文本格式、只按天数保留不设大小上限、直接删除遗留 `[DIAG]`/`DEBUG` 日志、`Agent` 与 `agent_context` 合并来源。
 
+## 实施结果与偏差(2026-09-30,已按 `plans/2026-09-30-logging-and-toast-migration.md` 落地)
+
+与本文下面的设计相比,实施中有这些确认过的偏差,**以此节为准**:
+
+1. **clippy `disallowed_macros` 门禁不可用**(spike B):它会把 `log_warn!` 等包装宏展开出的 `tracing::warn!` 在**每个调用点**报成违规(同 crate、跨 crate 都是),函数上加 `#[allow(clippy::disallowed_macros)]` 也压不住。所以**不建 `clippy.toml`**,门禁只有 `scripts/check-log-scope.sh`(`grep` 扫 `dozerd`/`dozer-app`,带 `// cli-output` 的行放行)。§5 的第 1 条作废。
+2. **`target: $scope.target` 可行**(spike A):`const` 项的字段可以作 `tracing` 的 `target:`,`RUST_LOG=dozer::panel::files=debug` 的按面板过滤有单测。
+3. **Toast 日志不能用调用方来源当 target**:`tracing` 的 `target:` 必须是常量,而 `push_toast` 的 `Scope` 是运行时形参。Toast 日志固定用 `module::toast` 作 target,调用方来源放进字段 `scope`(值为其 target 字符串)。所以 Toast 日志不能按面板过滤,但仍写明面板名;**没有** `toast = true` 字段(target 已经标明是 Toast 日志)。写日志的唯一函数是 `toast::log_toast`,`App::emit_toast` 与 `Message::Toast` 分支各调用一次(不是"一个咽喉点函数")。
+4. **hook/mcp 范围收窄**:`dozer-hook`/`dozer-mcp` 的 `eprintln!` 绝大多数是 `install`/`uninstall`/`launch` 给命令行用户看的结果,不是日志,保持不动。运行期诊断只有 hook 的 4 处(已改 `plain_warn!`);`dozer-mcp` 没有。门禁脚本与日志约束只覆盖 `dozerd`/`dozer-app`。
+5. **`Outbox`**(spec 未预见):`toast::Outbox` 让 extension 的 `update` 在拿不到 `App` 时排队提示,由 `App::update` 包装函数统一排空。
+6. **遗留调试日志删除时发现一处安全问题**:`DEBUG term input fallback fired` 会把每次终端击键的字节以 `warn` 级别打出来。GUI 日志落盘后这会把口令等输入写进磁盘,所以是删除而不是降级。
+7. **审计更正**:`tree_error` 不是"加载失败",全部写入点都是文件操作反馈;已拆成移动对话框内联的 `move_error` 与 Toast(见 `error-feedback-audit.md`)。
+8. **外部打开失败**:审计假设 `Command::spawn()` 失败即打开失败,这是错的——`open -a 不存在的App` 能正常 spawn,`open` 随后才以非零退出码报错。改为后台等退出状态(`external_apps::run_open_command`)。
+
+
 ## 背景与动机
 
 现状(审计于 2026-09-30):
@@ -141,7 +155,7 @@ pub fn plain_write(component: Component, scope: &Scope, level: PlainLevel, msg: 
 
 两层保险,不依赖代码审阅:
 
-1. **clippy `disallowed-macros`**:仓库根 `clippy.toml` 禁用 `tracing::{error,warn,info,debug,trace}` 与 `std::eprintln`(标准 `println` 不在禁用范围,`dozer-mcp` 的 stdout 是协议通道,不能动)。`dozer-core/src/log.rs` 内部用 `#[allow(clippy::disallowed_macros)]` 豁免;`dozer-mcp` 的 CLI 用户输出按 §4b 局部豁免。
+1. ~~**clippy `disallowed-macros`**~~ **(作废,见上面「实施结果与偏差」第 1 条:包装宏的每个调用点都会被误报。)**
 2. **兜底脚本**:`scripts/check-log-scope.sh` 用 `rg` 在 `crates/{dozerd,dozer-app,dozer-hook,dozer-mcp}` 里搜裸 `tracing::(error|warn|info|debug|trace)!` 与 `eprintln!`(带 `// cli-output` 标记的行豁免),命中即失败。用于 clippy 对宏展开判断有漏洞时兜底(见「风险」)。
 
 ### 6. 来源命名表
@@ -213,7 +227,7 @@ toast::Message::Push { scope: Scope, level: Level, text: String, key: Option<Str
 
 - 级别映射:`Info`/`Success` → `info`,`Warning` → `warn`,`Error` → `error`。
 - 写**原始文本**(未经 `normalize` 折叠空白、未被固定卡片高度裁剪的完整文本),这正是日志相对 Toast 多出来的价值。
-- 带结构化字段 `toast = true`,便于把"用户看到过的提示"从其他日志里 grep 出来:`ERROR dozer::panel::agent: toast=true 移除失败: ...`。
+- ~~带结构化字段 `toast = true`~~ **(未采用)**:Toast 日志的 target 固定为 `dozer::module::toast`,调用方来源在字段 `scope` 里,见「实施结果与偏差」第 3 条。
 - 同 `key` 的重复推送**每次都写日志**:Toast 去重是为了不刷屏,日志是历史记录,重复发生本身就是信息(例如重试连续失败了几次)。
 - 文本归一化后为空的推送(`ToastCenter::push` 会忽略)**不写日志**——`emit_toast` 在写日志前用同一个判空规则,避免空日志行。
 

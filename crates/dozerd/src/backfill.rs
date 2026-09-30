@@ -4,6 +4,8 @@ use crate::transcripts::TranscriptStore;
 use dozer_core::protocol::AgentKind;
 use std::path::PathBuf;
 
+dozer_core::scope!(LOG, module, "summary");
+
 /// 对一批 `(agent, 文件路径)` 逐个 `ingest_session`,单个文件失败只记警告
 /// 跳过,不中断其它文件——`backfill_all`(daemon 启动全量回填)和
 /// `TranscriptStore::backfill_project`(单项目按需回填,Task 4)共用这同一个
@@ -15,7 +17,7 @@ pub fn ingest_files(store: &TranscriptStore, files: Vec<(AgentKind, PathBuf)>) -
         match store.ingest_session(agent, &path) {
             Ok(()) => imported += 1,
             Err(e) => {
-                tracing::warn!(error = %e, path = %path.display(), "回填摄取失败,跳过该文件");
+                dozer_core::log_warn!(LOG, error = %e, path = %path.display(), "回填摄取失败,跳过该文件");
             }
         }
     }

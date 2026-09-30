@@ -14,6 +14,8 @@ use tokio::sync::mpsc;
 
 use super::*;
 
+dozer_core::scope!(LOG, module, "shell");
+
 /// 关闭 tab 时是否应该走"总结后关闭"而不是直接 `Kill`——仅对话摄取管线
 /// 已覆盖、且当前存活、且走 daemon 后端的四家 agent(spec
 /// 2026-08-27)。
@@ -422,12 +424,12 @@ pub(crate) async fn fetch_project_restore(client: &Client, project: ProjectInfo)
                 match client.attach(&info.id, 0).await {
                     Ok((snapshot, _next_offset, rx)) => sessions.push((info, snapshot, rx)),
                     Err(e) => {
-                        tracing::warn!(session = %info.id, "attach 失败，跳过该会话恢复: {e}")
+                        dozer_core::log_warn!(LOG, session = %info.id, "attach 失败，跳过该会话恢复: {e}")
                     }
                 }
             }
         }
-        Err(e) => tracing::warn!("list 失败，跳过启动恢复: {e}"),
+        Err(e) => dozer_core::log_warn!(LOG, "list 失败，跳过启动恢复: {e}"),
     }
     // 最近项目列表（git 分支/脏在窗口起来后异步补）。"当前项目"不再
     // 向 daemon 打听——daemon 侧的"活跃项目"概念已随 P2a Task 1-3 删除
@@ -465,7 +467,7 @@ pub(crate) async fn forward_events(
                 return;
             }
             TermEvent::Lagged => {
-                tracing::warn!(tab_id, "终端事件滞后（lagged），可能丢失部分历史输出");
+                dozer_core::log_warn!(LOG, tab_id, "终端事件滞后（lagged），可能丢失部分历史输出");
                 continue;
             }
             TermEvent::Agent {

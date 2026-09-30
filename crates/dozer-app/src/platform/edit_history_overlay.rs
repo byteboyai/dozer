@@ -27,6 +27,8 @@ use crate::platform::overlay_window::{
     backdrop_card, centered_card_offset, full_window_overlay_bounds, open_child_window,
 };
 
+dozer_core::scope!(LOG, module, "platform");
+
 /// 卡片逻辑尺寸:宽 = 主窗口宽度的 40%(整窗 `POPUP_WIDTH_FRACTION`),高 =
 /// 主窗口高度的 80%——所有模态弹窗宽度统一占整窗 40%,高度仍按本弹窗
 /// 自身需要随窗高伸缩。
@@ -317,7 +319,7 @@ impl EditHistoryOverlay {
                         match crate::preview::parse_event(req.body().as_str()) {
                             Ok(event) => {
                                 if let Err(error) = event.validate(&expected) {
-                                    tracing::warn!(%error, "拒绝无效 edit-history diff IPC");
+                                    dozer_core::log_warn!(LOG, %error, "拒绝无效 edit-history diff IPC");
                                 } else {
                                     let _ = ipc_proxy.send_event(
                                         Message::EditHistoryDiffWebviewEvent(expected, event),
@@ -325,7 +327,7 @@ impl EditHistoryOverlay {
                                 }
                             }
                             Err(error) => {
-                                tracing::warn!(%error, "无法解析 edit-history diff IPC");
+                                dozer_core::log_warn!(LOG, %error, "无法解析 edit-history diff IPC");
                             }
                         }
                     })
@@ -335,7 +337,7 @@ impl EditHistoryOverlay {
                         self.diff_webview = Some((view, url));
                         self.diff_webview_bounds = Some((x, y, w, h));
                     }
-                    Err(e) => tracing::warn!("修改历史 diff webview 创建失败: {e}"),
+                    Err(e) => dozer_core::log_warn!(LOG, "修改历史 diff webview 创建失败: {e}"),
                 }
             }
         }

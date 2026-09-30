@@ -36,6 +36,8 @@ use tokio::runtime::Handle;
 
 use super::*;
 
+dozer_core::scope!(LOG, module, "shell");
+
 /// 终端初始网格尺寸（列 x 行）。真实尺寸由窗口创建后的第一次
 /// `Message::PaneResized` 立刻纠正（见 `main.rs` 的 `resumed()`）；这里只是
 /// "窗口还没量出真实像素前"的兜底默认值。
@@ -661,7 +663,7 @@ async fn join_pending_exit_tasks(
 ) {
     let joined = futures::future::join_all(tasks);
     if tokio::time::timeout(budget, joined).await.is_err() {
-        tracing::warn!("退出前等待关 tab 的收尾请求超时,放弃等待");
+        dozer_core::log_warn!(LOG, "退出前等待关 tab 的收尾请求超时,放弃等待");
     }
 }
 
@@ -919,7 +921,8 @@ impl App {
         let rows = ws.files.visible_tree_rows();
         let scroll = ws.files.tree_scroll();
         let hit = files::tree_drop_target(x, y, bounds, scroll, &rows);
-        tracing::debug!(
+        dozer_core::log_debug!(
+            LOG,
             x,
             y,
             window_w,
@@ -1348,9 +1351,17 @@ impl App {
             project_ids: self.project_order.clone(),
             active_project_id: self.active_project_id,
         };
+        let proxy = self.proxy.clone();
         self.handle.spawn(async move {
             if let Err(e) = open_projects::save(&state) {
-                tracing::warn!("项目页签集合写盘失败: {e}");
+                // 经 `Message::Toast` 回主线程:该分支会写日志(scope=shell)并入队 Toast。
+                // 同 key 去重:连续拖拽/切换失败只显示一条。
+                let _ = proxy.send_event(Message::Toast(toast::Message::Push {
+                    scope: LOG,
+                    level: toast::Level::Warning,
+                    text: format!("项目页签未能保存,下次启动可能丢失: {e}"),
+                    key: Some("persist-open-projects".to_string()),
+                }));
             }
         });
     }
@@ -2214,20 +2225,45 @@ impl App {
         self.active_workspace()?.todo.next_flash_wake()
     }
 
-    /// 推一条 Toast(无去重键:同 level+文本会去重)。
-    pub fn push_toast(&mut self, level: toast::Level, text: impl AsRef<str>) {
-        self.toast
-            .push(level, text.as_ref(), None, std::time::Instant::now());
+    /// 直接推一条 Toast 并写日志(`toast::log_toast` 是唯一写 Toast 日志的函数;
+    /// `Message::Toast` 分支走同一个函数)。`scope` 是调用方的日志来源。
+    fn emit_toast(
+        &mut self,
+        scope: dozer_core::log::Scope,
+        level: toast::Level,
+        text: &str,
+        key: Option<String>,
+    ) {
+        toast::log_toast(scope, level, text);
+        self.toast.push(level, text, key, std::time::Instant::now());
     }
 
-    /// 推一条带去重键的 Toast:同 key 再推只刷新文本与计时。
-    pub fn push_toast_keyed(&mut self, level: toast::Level, text: impl AsRef<str>, key: &str) {
-        self.toast.push(
-            level,
-            text.as_ref(),
-            Some(key.to_string()),
-            std::time::Instant::now(),
-        );
+    /// 推一条 Toast(无去重键:同 level+文本会去重),并写日志。
+    pub fn push_toast(
+        &mut self,
+        scope: dozer_core::log::Scope,
+        level: toast::Level,
+        text: impl AsRef<str>,
+    ) {
+        self.emit_toast(scope, level, text.as_ref(), None);
+    }
+
+    /// 推一条带去重键的 Toast:同 key 再推只刷新文本与计时(日志每次都写)。
+    pub fn push_toast_keyed(
+        &mut self,
+        scope: dozer_core::log::Scope,
+        level: toast::Level,
+        text: impl AsRef<str>,
+        key: &str,
+    ) {
+        self.emit_toast(scope, level, text.as_ref(), Some(key.to_string()));
+    }
+
+    /// 把各 extension outbox 里排出来的待发提示推成 Toast。
+    pub(crate) fn flush_outbox(&mut self, pending: Vec<toast::Pending>) {
+        for p in pending {
+            self.emit_toast(p.scope, p.level, &p.text, p.key);
+        }
     }
 
     /// 距最近一条 Toast 到期的剩余时间(`about_to_wait` 据此排精确唤醒,
@@ -2366,7 +2402,7 @@ impl App {
         let layout = self.shell_layout.clone();
         self.handle.spawn(async move {
             if let Err(e) = layout::save(&layout) {
-                tracing::warn!("外壳布局写盘失败: {e}");
+                dozer_core::log_warn!(LOG, "外壳布局写盘失败: {e}");
             }
         });
     }
@@ -2424,7 +2460,7 @@ impl App {
         let map = self.panel_layouts.clone();
         self.handle.spawn(async move {
             if let Err(e) = panel_layouts::save(&map) {
-                tracing::warn!("面板布局写盘失败: {e}");
+                dozer_core::log_warn!(LOG, "面板布局写盘失败: {e}");
             }
         });
     }
@@ -2492,7 +2528,7 @@ impl App {
         self.shell_layout.window_width = self.window_size.0;
         self.shell_layout.window_height = self.window_size.1;
         if let Err(e) = layout::save(&self.shell_layout) {
-            tracing::warn!("退出前窗口尺寸写盘失败: {e}");
+            dozer_core::log_warn!(LOG, "退出前窗口尺寸写盘失败: {e}");
         }
     }
 
@@ -4106,13 +4142,13 @@ mod tests {
 
     fn loaded_slot(marker: &str) -> WorkspaceSlot {
         let mut ws = Workspace::empty_for_project_placeholder();
-        ws.files.set_tree_error(Some(marker.to_string()));
+        ws.files.set_move_error(Some(marker.to_string()));
         WorkspaceSlot::Loaded(Box::new(ws))
     }
 
     fn slot_marker(slot: Option<&WorkspaceSlot>) -> Option<String> {
         match slot {
-            Some(WorkspaceSlot::Loaded(ws)) => ws.files.tree_error().map(String::from),
+            Some(WorkspaceSlot::Loaded(ws)) => ws.files.move_error().map(String::from),
             _ => None,
         }
     }
@@ -4200,13 +4236,13 @@ mod tests {
         // A 的异步结果(A 在后台)必须落到 A 身上。
         let ws = loaded_workspace_mut(&mut projects, 1).expect("A 已加载");
         assert_eq!(
-            ws.files.tree_error(),
+            ws.files.move_error(),
             Some("A"),
             "后台项目的结果不能落到前台项目"
         );
         // 反向同理:B 的结果落到 B。
         let ws = loaded_workspace_mut(&mut projects, 2).expect("B 已加载");
-        assert_eq!(ws.files.tree_error(), Some("B"));
+        assert_eq!(ws.files.move_error(), Some("B"));
         assert_eq!(active, Some(2), "路由全程没有读过 active_project_id");
     }
 
@@ -4229,7 +4265,7 @@ mod tests {
         // 丢弃的那两条没有波及仍在的槽位。
         assert_eq!(
             loaded_workspace_mut(&mut projects, 1)
-                .and_then(|w| w.files.tree_error().map(String::from)),
+                .and_then(|w| w.files.move_error().map(String::from)),
             Some("A".to_string())
         );
     }

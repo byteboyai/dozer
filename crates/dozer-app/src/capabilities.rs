@@ -9,6 +9,8 @@
 
 use std::sync::{Arc, OnceLock};
 
+dozer_core::scope!(LOG, module, "shell");
+
 /// 启动时一次性探测到的硬件事实(纯数据,无策略)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct HardwareCapabilities {
@@ -80,12 +82,12 @@ pub fn detect_hardware() -> HardwareCapabilities {
         )
     } else {
         if available == 0 {
-            tracing::warn!("系统可用内存探测为 0,按保守值处理");
+            dozer_core::log_warn!(LOG, "系统可用内存探测为 0,按保守值处理");
         }
         (total, available, false)
     };
     if flagged {
-        tracing::warn!("系统总内存探测失败,按保守默认值 (4GiB) 处理");
+        dozer_core::log_warn!(LOG, "系统总内存探测失败,按保守默认值 (4GiB) 处理");
     }
 
     HardwareCapabilities {

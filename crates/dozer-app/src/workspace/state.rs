@@ -29,6 +29,8 @@ use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 use iced_widget::text;
 use iced_widget::text_editor::Action as EditorAction;
 
+dozer_core::scope!(LOG, module, "shell");
+
 /// T13:后台预览命令轮询驱动。每隔一段时间向 dozerd 取当前聚焦项目待处理的
 /// 预览命令,取到就发 `Message::PreviewCommandsFetched`。只在聚焦项目存在时
 /// 真的请求;幂等(同一进程只启动一次)。
@@ -668,7 +670,9 @@ impl Workspace {
             },
         ) {
             Ok(handle) => self.git_watch = Some(handle),
-            Err(err) => tracing::warn!(project_id, %err, "git_watch 启动失败,降级为手动刷新"),
+            Err(err) => {
+                dozer_core::log_warn!(LOG, project_id, %err, "git_watch 启动失败,降级为手动刷新")
+            }
         }
     }
 
@@ -785,7 +789,7 @@ impl Workspace {
                 let id = tab.info.id.clone();
                 io.handle.spawn(async move {
                     if let Err(e) = client.write(&id, &bytes).await {
-                        tracing::warn!("写入终端失败: {e}");
+                        dozer_core::log_warn!(LOG, "写入终端失败: {e}");
                     }
                 });
             }
@@ -1143,14 +1147,14 @@ impl Workspace {
         if should_summarize_on_close(tab.agent, tab.alive, &tab.backend) {
             let task = io.handle.spawn(async move {
                 if let Err(e) = client.close_with_summary(&id).await {
-                    tracing::warn!("关闭 tab 时触发总结失败: {e}");
+                    dozer_core::log_warn!(LOG, "关闭 tab 时触发总结失败: {e}");
                 }
             });
             io.track_exit_critical(task);
         } else if tab.alive && matches!(tab.backend, TabBackend::Daemon) {
             let task = io.handle.spawn(async move {
                 if let Err(e) = client.kill(&id).await {
-                    tracing::warn!("关闭 tab 时结束会话失败: {e}");
+                    dozer_core::log_warn!(LOG, "关闭 tab 时结束会话失败: {e}");
                 }
             });
             io.track_exit_critical(task);
@@ -1300,7 +1304,7 @@ impl Workspace {
         };
         io.handle.spawn(async move {
             if let Err(e) = preview_state::save(project_id, &state) {
-                tracing::warn!("预览 tab 状态写盘失败: {e}");
+                dozer_core::log_warn!(LOG, "预览 tab 状态写盘失败: {e}");
             }
         });
     }
@@ -1404,7 +1408,7 @@ impl Workspace {
                 return; // 被更晚的一次变化取代
             }
             if let Err(e) = client.update_preview_context(project_id, context).await {
-                tracing::warn!("推送预览上下文失败: {e}");
+                dozer_core::log_warn!(LOG, "推送预览上下文失败: {e}");
             }
         });
     }
@@ -1459,7 +1463,7 @@ impl Workspace {
         // 只排队当前项目当前文件;没有 active 时退而物化第一个,保证首屏有内容。
         // 安全启动下**不自动物化**任何文件(只留壳),避免上次未完成的启动循环。
         if io.safe_startup {
-            tracing::warn!("安全启动:预览 tab 仅恢复壳,不自动加载");
+            dozer_core::log_warn!(LOG, "安全启动:预览 tab 仅恢复壳,不自动加载");
             return;
         }
         let to_load = active_id.or(first_id);
@@ -1646,7 +1650,7 @@ impl Workspace {
             if let Some(idx) = pane.tabs().iter().position(|t| t.id == tab_id)
                 && let Err(error) = pane.enter_code_mode(idx)
             {
-                tracing::warn!(%error, "恢复预览源码模式失败，回退到渲染模式");
+                dozer_core::log_warn!(LOG, %error, "恢复预览源码模式失败，回退到渲染模式");
             }
         }
     }
@@ -1734,13 +1738,29 @@ impl Workspace {
                     if let Some(cmd) = picker_launch_command(launch, &hook_exe) {
                         let bytes = format!("{cmd}\n").into_bytes();
                         if let Err(e) = client.write(&session_id, &bytes).await {
-                            tracing::warn!("自动键入初始命令失败: {e}");
+                            // 一次性的启动写(不是逐击键路径),失败用户会看到 agent 没起来
+                            // 却不知道为什么;`Message::Toast` 分支会写日志(scope=shell)。
+                            let _ = proxy.send_event(Message::Toast(
+                                crate::extensions::toast::Message::Push {
+                                    scope: LOG,
+                                    level: crate::extensions::toast::Level::Error,
+                                    text: format!("未能把启动命令写入终端: {e}"),
+                                    key: Some("term-initial-write".to_string()),
+                                },
+                            ));
                         }
                     }
                     if let Some(text) = follow_up {
                         let bytes = format!("{text}\n").into_bytes();
                         if let Err(e) = client.write(&session_id, &bytes).await {
-                            tracing::warn!("派发任务文本失败: {e}");
+                            let _ = proxy.send_event(Message::Toast(
+                                crate::extensions::toast::Message::Push {
+                                    scope: LOG,
+                                    level: crate::extensions::toast::Level::Error,
+                                    text: format!("未能把任务文本写入终端: {e}"),
+                                    key: Some("term-dispatch-write".to_string()),
+                                },
+                            ));
                         }
                     }
                     forward_events(project_id, tab_id, rx, proxy).await;
@@ -2182,7 +2202,7 @@ impl Workspace {
                 let id = tab.info.id.clone();
                 handle.spawn(async move {
                     if let Err(e) = client.resize(&id, cols, rows).await {
-                        tracing::warn!("同步终端尺寸到 daemon 失败: {e}");
+                        dozer_core::log_warn!(LOG, "同步终端尺寸到 daemon 失败: {e}");
                     }
                 });
             }

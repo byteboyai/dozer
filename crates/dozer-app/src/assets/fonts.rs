@@ -11,6 +11,8 @@
 //! Sans GB / Heiti / Songti / Arial Unicode MS 等大量可缩放 CJK 字体可供
 //! 回退，剔除只影响本进程渲染，不动系统。
 
+dozer_core::scope!(LOG, module, "shell");
+
 /// 内嵌的 JetBrains Mono（variable 字体，SIL OFL 授权，可随程序分发）。
 /// 经 `include_bytes!` 编译进二进制，macOS 打包无需额外拷贝资源。
 /// 代码/终端字体统一走它（见 `code_font`）；UI 字体保持系统默认，不用它。
@@ -55,7 +57,7 @@ pub fn sanitize_font_db() {
         .map(|face| face.id)
         .collect();
     for id in poisoned {
-        tracing::info!(?id, "剔除 GB18030 Bitmap 位图字体（CJK 回退毒源）");
+        dozer_core::log_info!(LOG, ?id, "剔除 GB18030 Bitmap 位图字体（CJK 回退毒源）");
         db.remove_face(id);
     }
 }

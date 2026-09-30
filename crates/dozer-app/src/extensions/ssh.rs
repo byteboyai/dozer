@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+dozer_core::scope!(LOG, panel, "ssh");
+
 /// 阶段 3:SFTP 文件传输(数据模型 + 连接生命周期 + 消息路由 + 渲染)。
 /// 独立子模块避免 `ssh.rs` 继续膨胀(镜像 `extensions/project/links.rs`)。
 pub mod sftp;
@@ -84,6 +86,9 @@ pub struct SshHostDraft {
 /// 公钥字节到处传)。
 #[derive(Debug, Default)]
 pub struct WorkspaceState {
+    /// 待发提示(失败/被拒等一次性反馈)。`App::update` 的包装函数每次处理完消息后
+    /// 统一排空成 Toast,见 `extensions::toast::Outbox`。
+    pub(crate) outbox: crate::extensions::toast::Outbox,
     hosts: Vec<SshHost>,
     editing: Option<SshHostDraft>,
     test_status: HashMap<String, TestStatus>,
@@ -118,6 +123,11 @@ pub struct WorkspaceState {
 }
 
 impl WorkspaceState {
+    /// 取走待发提示(`App::drain_outboxes` 调用)。
+    pub fn take_outbox(&mut self) -> Vec<crate::extensions::toast::Pending> {
+        self.outbox.take()
+    }
+
     pub fn hosts(&self) -> &[SshHost] {
         &self.hosts
     }
@@ -199,6 +209,17 @@ fn save_hosts(repo: &Path, hosts: &[SshHost]) -> std::io::Result<()> {
     std::fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(hosts).expect("Vec<SshHost> 总能序列化");
     std::fs::write(hosts_path(repo), json)
+}
+
+/// 保存主机列表;失败不 panic,推一条 Toast——否则界面看着已保存、重启后主机消失。
+pub(crate) fn persist_hosts(ws_state: &mut WorkspaceState, repo_path: &Path) {
+    if let Err(e) = save_hosts(repo_path, &ws_state.hosts) {
+        ws_state.outbox.push(
+            LOG,
+            crate::extensions::toast::Level::Error,
+            format!("SSH 主机未能保存到磁盘: {e}"),
+        );
+    }
 }
 
 fn keyring_entry(project_id: i64, host_id: &str) -> Result<keyring::Entry, keyring::Error> {
@@ -571,9 +592,7 @@ pub fn update(
             {
                 let _ = entry.set_password(&draft.password);
             }
-            if let Err(e) = save_hosts(repo_path, &ws_state.hosts) {
-                tracing::warn!("写入 ssh_hosts.json 失败: {e}");
-            }
+            persist_hosts(ws_state, repo_path);
         }
         Message::DraftCancel => ws_state.editing = None,
         Message::DeleteHostRequest(id) => ws_state.request_delete(id),
@@ -590,9 +609,7 @@ pub fn update(
             if let Ok(entry) = keyring_entry(project_id, &id) {
                 let _ = entry.delete_credential();
             }
-            if let Err(e) = save_hosts(repo_path, &ws_state.hosts) {
-                tracing::warn!("写入 ssh_hosts.json 失败: {e}");
-            }
+            persist_hosts(ws_state, repo_path);
         }
         Message::TestConnection(id) => {
             let Some(host) = ws_state.hosts.iter().find(|h| h.id == id).cloned() else {
@@ -1475,6 +1492,30 @@ mod tests {
             username: "deploy".into(),
             auth: AuthMethod::Password,
         }
+    }
+
+    #[test]
+    fn persist_hosts_failure_lands_in_outbox() {
+        let dir = tempfile::tempdir().unwrap();
+        // repo_path 是个普通文件:`create_dir_all(<file>/.dozer)` 必失败。
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, "x").unwrap();
+        let mut ws = WorkspaceState::default();
+        persist_hosts(&mut ws, &blocker);
+        let got = ws.take_outbox();
+        assert_eq!(got.len(), 1);
+        assert!(got[0].text.contains("SSH"), "{}", got[0].text);
+        assert_eq!(got[0].scope.name, "ssh");
+        assert_eq!(got[0].level, crate::extensions::toast::Level::Error);
+    }
+
+    #[test]
+    fn persist_hosts_success_leaves_outbox_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = WorkspaceState::default();
+        ws.hosts = vec![host("h1")];
+        persist_hosts(&mut ws, dir.path());
+        assert!(ws.take_outbox().is_empty());
     }
 
     #[test]

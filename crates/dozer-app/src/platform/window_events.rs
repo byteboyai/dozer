@@ -101,14 +101,6 @@ fn apply_mouse_cursor(
     #[cfg(target_os = "macos")]
     {
         let hovered = mouse_interaction != mouse::Interaction::None;
-        static LAST_HOVERED: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(false);
-        if LAST_HOVERED.swap(hovered, std::sync::atomic::Ordering::Relaxed) != hovered {
-            tracing::warn!(
-                "[DIAG] TOPBAR_CONTROL_HOVERED changed to {hovered}, cursor={:?}, interaction={mouse_interaction:?}",
-                app.last_cursor
-            );
-        }
         crate::platform::window::TOPBAR_CONTROL_HOVERED
             .store(hovered, std::sync::atomic::Ordering::Relaxed);
     }
@@ -363,11 +355,6 @@ impl Runner {
         } = event
         {
             *left_mouse_down = *state == ElementState::Pressed;
-            tracing::warn!(
-                "[DIAG] left MouseInput state={:?} cursor_phys={:?}",
-                state,
-                cursor_phys
-            );
         }
 
         // 光标位置跟踪 + 点击焦点路由（验收反馈 2/失焦回正常态）:
@@ -1071,7 +1058,6 @@ impl Runner {
 
         if let Some(bytes) = bytes {
             let target = app.keyboard_term_target();
-            tracing::warn!(?target, ?bytes, "DEBUG term input fallback fired");
             app.update(Message::TermInput(target, bytes));
             // 提交即组字结束:清掉预览态,避免上一段预览文字残留在
             // 光标位置(下一次 `Ime::Preedit` 到来前的空窗期)。

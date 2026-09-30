@@ -6,6 +6,8 @@ use dozer_core::protocol::{ConversationSummary, SessionSummaryPayload, SummarySt
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+dozer_core::scope!(LOG, module, "summary");
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BackfillProgress {
     pub total: u32,
@@ -109,7 +111,7 @@ pub async fn run_backfill(
             match crate::headless_agent::summarize_headless(agent, &turns).await {
                 Ok((t, s)) => (t, s, SummaryStatus::AiGenerated),
                 Err(e) => {
-                    tracing::warn!(
+                    dozer_core::log_warn!(LOG,
                         error = ?e,
                         conversation_id = %conv.conversation_id,
                         "headless 总结失败,走启发式兜底"
@@ -132,7 +134,7 @@ pub async fn run_backfill(
             task_id: None,
         };
         if let Err(e) = session_summaries.record(&payload) {
-            tracing::error!(error = %e, conversation_id = %conv.conversation_id, "补总结落库失败");
+            dozer_core::log_error!(LOG, error = %e, conversation_id = %conv.conversation_id, "补总结落库失败");
         }
         registry.increment(&cwd);
     }

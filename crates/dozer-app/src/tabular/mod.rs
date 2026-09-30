@@ -16,6 +16,8 @@
 //!   只与可视窗口大小相关,不随数据总量增长。
 use std::path::{Path, PathBuf};
 
+dozer_core::scope!(LOG, module, "preview");
+
 /// 单 sheet 载入的行数上限。超出即 `truncated = true`,顶部给提示条,且
 /// 加载器一旦读满这个数就不再继续解析文件剩余部分(见模块文档)。
 pub const MAX_TABULAR_ROWS: usize = 100_000;
@@ -213,7 +215,7 @@ impl TabularView {
         };
         match result {
             Ok(sheet) => *slot = Some(sheet),
-            Err(err) => tracing::warn!(sheet = index, %err, "表格 sheet 后台加载失败"),
+            Err(err) => dozer_core::log_warn!(LOG, sheet = index, %err, "表格 sheet 后台加载失败"),
         }
     }
 }

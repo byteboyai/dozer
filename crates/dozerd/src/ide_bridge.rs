@@ -13,6 +13,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex as AsyncMutex, oneshot};
 use tokio_tungstenite::tungstenite::Message;
 
+dozer_core::scope!(LOG, module, "ide_bridge");
+
 pub(crate) fn resolve_lock_dir(
     override_dir: Option<String>,
     claude_config_dir: Option<String>,
@@ -534,14 +536,14 @@ impl IdeBridgeRegistry {
         let listener = match TcpListener::bind(("127.0.0.1", 0)).await {
             Ok(l) => l,
             Err(e) => {
-                tracing::warn!(project_id, error = %e, "ide_bridge 绑定端口失败,跳过该项目的自动上下文");
+                dozer_core::log_warn!(LOG, project_id, error = %e, "ide_bridge 绑定端口失败,跳过该项目的自动上下文");
                 return false;
             }
         };
         let port = match listener.local_addr() {
             Ok(addr) => addr.port(),
             Err(e) => {
-                tracing::warn!(project_id, error = %e, "ide_bridge 读取本地端口失败,跳过");
+                dozer_core::log_warn!(LOG, project_id, error = %e, "ide_bridge 读取本地端口失败,跳过");
                 return false;
             }
         };
@@ -564,11 +566,11 @@ impl IdeBridgeRegistry {
         let lock_path = match write_result {
             Ok(Ok(path)) => path,
             Ok(Err(e)) => {
-                tracing::warn!(project_id, error = %e, "ide_bridge 写锁文件失败,跳过");
+                dozer_core::log_warn!(LOG, project_id, error = %e, "ide_bridge 写锁文件失败,跳过");
                 return false;
             }
             Err(e) => {
-                tracing::warn!(project_id, error = %e, "ide_bridge 写锁文件任务崩溃,跳过");
+                dozer_core::log_warn!(LOG, project_id, error = %e, "ide_bridge 写锁文件任务崩溃,跳过");
                 return false;
             }
         };
@@ -646,7 +648,7 @@ async fn run_bridge_listener(
             accepted = listener.accept() => {
                 let Ok((stream, _)) = accepted else { continue };
                 let Ok(permit) = connection_slots.clone().try_acquire_owned() else {
-                    tracing::debug!(project_id, "ide_bridge 并发连接数已达上限,丢弃这次连接");
+                    dozer_core::log_debug!(LOG, project_id, "ide_bridge 并发连接数已达上限,丢弃这次连接");
                     continue;
                 };
                 let token = token.clone();
@@ -698,7 +700,7 @@ async fn handle_bridge_connection(
         return;
     };
     if presented.as_deref() != Some(token.as_str()) {
-        tracing::debug!(project_id, "ide_bridge 鉴权失败,关闭连接");
+        dozer_core::log_debug!(LOG, project_id, "ide_bridge 鉴权失败,关闭连接");
         return;
     }
     let (mut write, mut read) = ws.split();
