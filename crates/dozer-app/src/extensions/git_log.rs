@@ -1150,6 +1150,10 @@ fn file_filter_tabs<'a>(
         // 与预览/终端页签的标题 hover 表现同一套插值。
         let hover_t = app.hover_progress(HoverId::GitFileFilter(filter));
         let label_el = tab_label(None, title, active, hover_t, NO_TAB_W_LIMIT);
+        // 高度对齐 `panel_tab`:预览页签的行里有 `tab_button_size()` 的 ×
+        // 关闭按钮把整个页签撑高、文字垂直居中;筛选 chip 没有关闭按钮,
+        // 高度会塌缩到文字行高,观感上就是"内边距比预览页签小一圈"——这里
+        // 显式钉同一高度 + 垂直居中,与文件预览页签逐像素同高。
         let chip = container(label_el)
             .padding(Padding {
                 top: PANEL_TAB_PAD_Y,
@@ -1158,6 +1162,8 @@ fn file_filter_tabs<'a>(
                 left: PANEL_TAB_PAD_LEFT,
             })
             .width(Length::Shrink)
+            .height(Length::Fixed(byteui::theme::geometry::tab_button_size()))
+            .align_y(alignment::Vertical::Center)
             .style(tab_container_style(active, hover_t));
         let area = MouseArea::new(chip)
             .on_press(Message::SetFileFilter(filter))

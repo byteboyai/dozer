@@ -76,7 +76,7 @@ html, body {
 .usage-inline-legend { display: flex; gap: 12px; }
 .usage-inline-legend .usage-legend-row { margin-bottom: 0; }
 
-.usage-chart-wrap { position: relative; width: 100%; }
+.usage-chart-wrap { position: relative; }
 .usage-tooltip {
   position: absolute; z-index: 1; padding: 6px 8px; border-radius: 6px;
   background: var(--card); border: 1px solid var(--border);
