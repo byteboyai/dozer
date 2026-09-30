@@ -93,6 +93,7 @@
 依赖:Toast 的 `Outbox` 与日志来源机制(均已落地)。
 
 1. **批 1(伤害最大,改动集中)**:A1、A2(Keychain 读写)、A4(处理 Todo)、A5(打开记忆)。都是 outbox 或 `proxy` 一行接入 + 单测(Keychain 部分需要把 `entry` 操作抽成可注入的小函数才能测失败路径)。
+   **已落地(2026-09-30,`plans/2026-09-30-silent-failures-batch1.md`)**:Keychain 写入/删除(SSH、数据库经新的可注入 `secrets::SecretStore`;Git 账户断开)、处理 Todo 与打开详情、记忆详情读取失败。与本审计的差异:① 记忆读取失败用**内联** `ws_state.error` 而非 Toast(同组"保存记忆失败"已用它);② 额外补了 `todo_detail_open` 与"Git 账户断开时本地记录写失败"(此前只有日志,界面表现为点了没反应);③ SSH 保存密码实际有**两个**吞错点(`keyring_entry` 失败被 `&& let Ok(..)` 跳过,`set_password` 失败被 `let _ =` 吞),都已覆盖。
 2. **批 2(dozerd 日志)**:A6、A7、A8。只加日志,零 UI 风险。
 3. **批 3(hook/mcp 安装)**:A3。先只做"GUI 侧检查返回码、写日志 + keyed Toast";让安装函数返回带原因的 `Result` 的 API 改造留后。
 4. **批 4(读请求)**:B 类,**先做最小方案(日志 warn)**;面板内联重试状态与 daemon 存活判据各自单独立项,等你定方向。

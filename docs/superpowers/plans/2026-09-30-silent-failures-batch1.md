@@ -1140,6 +1140,11 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 不要自行合并 `feat/silent-failures-batch1`;交给用户审阅后再合并(合并前先看主 checkout 是否有别的会话的未提交改动/并发提交,合并后重跑全量构建)。
 
+## 实施中发现的计划勘误
+
+- **Task 7 的 `emit(memory_detail_message(client.get_memory(..).await))` 写法会让 future 不是 `Send`**:`emit` 是 `Fn + Send`(非 `Sync`),调用表达式先借用 `emit` 再 `await` 参数,`&emit` 就横跨了 await。实施时改为先 `let res = client.get_memory(..).await;` 再 `emit(memory_detail_message(res))`。以后在 `spawn` 的异步块里给 `emit` 传带 `.await` 的参数都要先绑定。
+- **Task 5 的测试辅助**:`settings.rs` 已有 `test_state(github, gitlab, gitee)`,新测试复用它(加了 `outbox` 字段初始化),没有另造 `State` 字面量。
+
 ## 已知边界
 
 - **记忆详情的内联错误不会自动清除**:`ws_state.error` 由下一次成功的记忆操作(`MemoryMutated(Ok)`)清掉。读取失败后用户重新点开记忆成功,提示不会自己消失,直到下一次保存/删除成功。这与该面板既有"保存记忆失败"的行为一致,本批不改;若你觉得别扭,可在 `MemoryDetailLoaded` 里顺手清 `error`(一行,但要先确认不会误清"保存记忆失败"的提示)。
