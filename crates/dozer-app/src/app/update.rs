@@ -1413,7 +1413,10 @@ impl App {
                 errors,
             } => {
                 if !errors.is_empty() {
-                    self.daemon_error = Some(format!("删除项目未完全成功: {}", errors.join("; ")));
+                    self.push_toast(
+                        toast::Level::Warning,
+                        format!("删除项目未完全成功: {}", errors.join("; ")),
+                    );
                 }
                 // 登记一取消就把这个项目从所有 recent 列表里剪掉——
                 // `recent_projects` 只是 `list_projects()` 的快照,删除流程
@@ -3930,12 +3933,16 @@ impl App {
         // `None` = 这次打开失败(daemon 不通/回 `Reply::Error`)。硬性
         // 要求:失败绝不能落进任何 `Workspace`,否则会留下"有界面、没
         // 归属项目"的破状态,用户一点 tab 栏的"＋"就 panic
-        // (`spawn_new_tab` 的 expect)。失败文案挂到 App 级的
-        // `daemon_error` 上——它不依赖任何 `Workspace` 存在,一个项目
-        // 都没打开时空态视图也画得出来(Required Fix #1)。
+        // (`spawn_new_tab` 的 expect)。失败文案走 Toast——它不依赖任何
+        // `Workspace` 存在,一个项目都没打开时也能显示(不再挂
+        // `daemon_error`)。
         let Some(project) = project else {
             tracing::warn!("打开项目页签失败,页签集合保持不变");
-            self.daemon_error = Some("打开项目失败,请确认 dozerd 正常后重试".to_string());
+            self.push_toast_keyed(
+                toast::Level::Error,
+                "打开项目失败,请确认 dozerd 正常后重试",
+                "open-project-failed",
+            );
             self.with_focused_project(move |ws, _io| {
                 ws.recent_projects = recent;
             });
