@@ -107,7 +107,7 @@ pub struct ToastCenter { items: Vec<Toast>, next_id: u64 }
 
 1. **阶段 1 — 纯逻辑**:`ToastCenter`、`Level`、`Message::Toast`、`next_toast_wake` 及单测(去重/堆叠上限/悬停暂停/到期)。可先用最朴素的方式渲染验证(不进入生产),不依赖窗口方案。
 2. **阶段 2 — 渲染宿主**:`toast_overlay.rs` + `open_child_window_unfocused` + `about_to_wait` 接入 + 第一批迁移点。
-3. **阶段 3 — 持久状态拆分**:`daemon_error` 只留"dozerd 已停止/连不上"语义,改为顶栏或 footbar 的不占布局徽标;首页与空态页的三处渲染收敛为一处。此阶段单独评审,不与阶段 2 捆绑。
+3. **阶段 3 — 持久状态拆分(已落地,2026-09-30)**:`daemon_error` 更名 `daemon_unavailable`,只留"dozerd 不可用"这个持久语义(三种写入:启动连不上、设置里停止、打开项目成功即清除),由**顶栏**红色徽标 `topbar::daemon_badge` 展示(选顶栏而不是 footbar:首页/空态/工作区三种页面都有顶栏,footbar 在空态页没有),点击打开设置、悬停看详情;首页与空态页的两处渲染(终端栏那处更早已删)全部删除,`homespace.json` 的 `colors.error` token 一并移除。一次性事件也拆了出来:`Message::DaemonError` 删除,"新建会话失败""attach 新会话失败"改推 Toast。
 
 ## 测试
 

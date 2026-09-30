@@ -2055,7 +2055,6 @@ impl App {
                 }
             }
             Message::Noop => {}
-            Message::DaemonError(message) => self.daemon_error = Some(message),
             Message::TermScroll(target, delta) => {
                 self.with_focused_project(|ws, _io| {
                     let tab = match target {
@@ -3043,7 +3042,7 @@ impl App {
             }
             Message::ProjectCreate(project_create::Message::GoToSettings) => {
                 self.project_create = None;
-                self.settings = Some(settings::State::load(self.daemon_error.as_deref()));
+                self.settings = Some(settings::State::load(self.daemon_unavailable.as_deref()));
             }
             Message::ProjectCreate(project_create::Message::Done(Ok((
                 project,
@@ -3900,7 +3899,7 @@ impl App {
                 self.preview_context_menu = None;
             }
             Message::SettingsOpen => {
-                self.settings = Some(settings::State::load(self.daemon_error.as_deref()));
+                self.settings = Some(settings::State::load(self.daemon_unavailable.as_deref()));
             }
             Message::Settings(msg) => {
                 // 主题切换要在设置 update(它会 set_scheme 改全局配色)之后,把
@@ -3908,10 +3907,10 @@ impl App {
                 // 参数(见 preview::flyfish_url),不重载不会跟着变。两个预览
                 // 面板(Files/Project)各推进各自 wry tab 的 reload_nonce。
                 let theme_changed = matches!(msg, settings::Message::ThemeSelected(_));
-                // 停止/重新启动 dozerd 的结果要顺带更新 `daemon_error`——
+                // 停止/重新启动 dozerd 的结果要顺带更新 `daemon_unavailable`——
                 // 这是"daemon 连不上"的整程序共享状态(`app/view.rs`/
                 // `term/terminal.rs` 已经在读),不新建 UI 组件(spec「复用
-                // App.daemon_error」)。跟 `theme_changed` 一样,要在
+                // App.daemon_unavailable」)。跟 `theme_changed` 一样,要在
                 // `msg` 被 move 进 `settings::update` 之前取值。
                 let stop_succeeded = matches!(msg, settings::Message::AdvancedStopResult(Ok(())));
                 let restart_succeeded =
@@ -3924,10 +3923,10 @@ impl App {
                 };
                 settings::update(&mut self.settings, msg, &client, &handle, emit);
                 if stop_succeeded {
-                    self.daemon_error = Some("dozerd 已停止,部分功能不可用".to_string());
+                    self.daemon_unavailable = Some("dozerd 已停止,部分功能不可用".to_string());
                 }
                 if restart_succeeded {
-                    self.daemon_error = None;
+                    self.daemon_unavailable = None;
                 }
                 if theme_changed && let Some(ws) = self.active_workspace_mut() {
                     ws.preview.reload_all_webviews_for_theme();
@@ -3996,7 +3995,7 @@ impl App {
         // 归属项目"的破状态,用户一点 tab 栏的"＋"就 panic
         // (`spawn_new_tab` 的 expect)。失败文案走 Toast——它不依赖任何
         // `Workspace` 存在,一个项目都没打开时也能显示(不再挂
-        // `daemon_error`)。
+        // `daemon_unavailable`)。
         let Some(project) = project else {
             dozer_core::log_warn!(LOG, "打开项目页签失败,页签集合保持不变");
             self.push_toast_keyed(
@@ -4010,7 +4009,7 @@ impl App {
             });
             return;
         };
-        self.daemon_error = None;
+        self.daemon_unavailable = None;
         // 放大态是外壳态,换页签后留着只会挡住新页签的界面。
         self.maximized = None;
         let id = project.id;

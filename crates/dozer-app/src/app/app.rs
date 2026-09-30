@@ -277,9 +277,12 @@ pub struct App {
     /// 指向的那个终端 pane 生效(见两处 `term_view::view` 调用处按
     /// `focused` 决定是否传入)。
     pub(crate) term_ime_preedit: Option<String>,
-    /// daemon 连接失败,或某次会话操作失败时的错误文案。整个程序共享
-    /// 一份:daemon 连不连得上不是某个项目自己的状态。
-    pub(crate) daemon_error: Option<String>,
+    /// **持久状态**:dozerd 当前不可用的原因文案(`None` = 可用)。只有三种写入:
+    /// 启动时连不上(`with_daemon_error`)、设置里停止 dozerd、以及"打开项目成功
+    /// 即清除"。整个程序共享一份:daemon 连不连得上不是某个项目自己的状态。
+    /// 由顶栏徽标(`topbar::daemon_badge`)展示。**一次性事件**(打开项目失败、
+    /// 新建会话失败…)不要写这里,走 Toast。
+    pub(crate) daemon_unavailable: Option<String>,
     /// 上次真正执行 Todo 面板磁盘轮询(`poll_todo_if_visible`)的时刻:
     /// 按 `TODO_POLL_INTERVAL` 自限速,未到点的调用直接 no-op。现在靠
     /// mtime 检查已经安全(没变化就早退,见该方法文档),这里补上限速是为了
@@ -740,7 +743,7 @@ impl App {
     /// 会话/项目恢复，只记下错误文案，交给 `view()` 画 RED 文案。
     ///
     /// 这是旧 `Workspace::with_daemon_error` 的正确归宿——"daemon 连不上"
-    /// 是整个程序共享的状态（`daemon_error` 现在长在 `App` 上），从来就不是
+    /// 是整个程序共享的状态（`daemon_unavailable` 现在长在 `App` 上），从来就不是
     /// 某一个项目自己的状态。
     pub fn with_daemon_error(
         client: Client,
@@ -765,7 +768,7 @@ impl App {
         client: Client,
         handle: Handle,
         proxy: EventLoopProxy<Message>,
-        daemon_error: Option<String>,
+        daemon_unavailable: Option<String>,
         capabilities: Arc<crate::capabilities::ClientCapabilities>,
         safe_startup: bool,
     ) -> Self {
@@ -785,7 +788,7 @@ impl App {
             ssh_cols: DEFAULT_COLS,
             ssh_rows: DEFAULT_ROWS,
             term_ime_preedit: None,
-            daemon_error,
+            daemon_unavailable,
             last_todo_poll_at: std::time::Instant::now(),
             left_view: PanelLayout::default().left_view,
             right_view: PanelLayout::default().right_view,

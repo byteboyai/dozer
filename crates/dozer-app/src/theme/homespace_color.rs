@@ -16,8 +16,6 @@ const RAW: &str = include_str!("../../assets/theme/homespace.json");
 
 #[derive(Deserialize)]
 struct HomespaceColors {
-    /// 错误文案(如 daemon 连接失败提示)颜色。
-    error: String,
     /// 次要/标签文字(标题、副标题、占位符、相对时间、路径)颜色。
     dim: String,
     /// 卡片/搜索框/按钮等面内容器的实底背景色(与面板底色一致)。
@@ -46,9 +44,6 @@ fn load(raw: &str) -> HomespaceColors {
 
 static COLORS: LazyLock<HomespaceColors> = LazyLock::new(|| load(RAW));
 
-pub fn error() -> Color {
-    region::resolve_color(&COLORS.error)
-}
 pub fn dim() -> Color {
     region::resolve_color(&COLORS.dim)
 }
@@ -89,7 +84,7 @@ mod tests {
     #[test]
     fn tokens_resolve_without_panic() {
         // 加载在首次调用时panic;这里逐一调用,确认配置可正常解析。
-        let _ = (error(), dim(), cream(), border(), gold());
+        let _ = (dim(), cream(), border(), gold());
     }
 
     #[test]
