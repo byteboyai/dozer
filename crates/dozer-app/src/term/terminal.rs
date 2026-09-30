@@ -81,7 +81,36 @@ pub(crate) fn terminal_pane<'a>(
 
     // P1j 收敛：终端"审阅"按钮移除，会话审阅入口统一到右一对话列表。
 
-    content = content.push(active_tab_view(app, ws));
+    let term = active_tab_view(app, ws);
+    let pid = ws.project.as_ref().map(|p| p.id).unwrap_or_default();
+    // 展开的上下文列表浮在终端底部之上(有意偏差 1:不推挤终端,PTY 网格
+    // 不因展开/折叠重算)。`stack!` 让面板锚在底部、条的下缘。
+    let term: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        match crate::extensions::agent_context::expanded_panel(&ws.agent_context) {
+            Some(panel) => iced_widget::stack![
+                term,
+                container(column![
+                    iced_widget::space::vertical(),
+                    container(panel.map(move |m| Message::AgentContext(pid, m))).padding(
+                        iced_widget::core::Padding {
+                            bottom: region.padding.bottom
+                                + crate::extensions::agent_context::STRIP_HEIGHT
+                                + region.gap,
+                            ..Default::default()
+                        }
+                    ),
+                ])
+                .width(Length::Fill)
+                .height(Length::Fill),
+            ]
+            .into(),
+            None => term,
+        };
+    content = content.push(term);
+    content = content.push(
+        crate::extensions::agent_context::strip(&ws.agent_context)
+            .map(move |m| Message::AgentContext(pid, m)),
+    );
 
     let body = container(content.spacing(region.gap).padding(region.padding))
         .width(Length::Fill)

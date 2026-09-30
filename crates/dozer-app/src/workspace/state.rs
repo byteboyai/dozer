@@ -410,6 +410,9 @@ pub struct Workspace {
     /// `extensions::browser`。挂在每个 `Workspace` 上(不像 Git Log 挂在
     /// `App` 上),项目切换靠 `Workspace` 生命周期天然隔离。
     pub(crate) browser: browser::State,
+    /// 终端下方 Agent 上下文条状态(每项目一份)。见
+    /// `extensions::agent_context`。
+    pub(crate) agent_context: crate::extensions::agent_context::State,
     /// `dozer://flyfish/__file__` 端点的文件白名单;与 main.rs 的协议
     /// 闭包共享(Arc),打开文件时插入.
     pub(crate) allowed_files: Arc<Mutex<HashSet<PathBuf>>>,
@@ -696,6 +699,7 @@ impl Workspace {
             project_preview_error: None,
             preview_context_nonce: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             browser: browser::State::default(),
+            agent_context: Default::default(),
             allowed_files: Arc::new(Mutex::new(HashSet::new())),
             review: None,
             review_snapshot: Arc::new(Mutex::new(None)),

@@ -536,6 +536,9 @@ pub enum Message {
     /// 文件历史对比弹窗的全部消息,内核只转发不解读——见
     /// `extensions::file_history::Message`。
     FileHistory(file_history::Message),
+    /// 终端下方 Agent 上下文条的消息。`i64` 是 `project_id`:所有异步结果都按它
+    /// 路由到对应 `Workspace`,不落进"当前聚焦项目"。
+    AgentContext(i64, crate::extensions::agent_context::Message),
     /// Files 面板的全部消息,内核只转发不解读——见 `extensions::files::Message`。
     Files(files::Message),
     /// Project 信息面板的全部消息,内核只转发不解读——见

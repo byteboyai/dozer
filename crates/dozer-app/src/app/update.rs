@@ -2950,6 +2950,7 @@ impl App {
                 };
                 file_history::update(&mut self.file_history, msg, &handle, emit);
             }
+            Message::AgentContext(project_id, msg) => self.agent_context_message(project_id, msg),
             Message::ProjectCreateOpen => {
                 self.project_create = Some(project_create::State::default());
             }
@@ -4117,6 +4118,8 @@ impl App {
         ws.resize_all(&io, io.cols, io.rows, self.ssh_cols, self.ssh_rows);
         self.projects
             .insert(id, WorkspaceSlot::Loaded(Box::new(ws)));
+        // 恢复出来的工作区变为 Loaded:补拉一次上下文列表,重启后条上不是空的。
+        self.agent_context_refresh(id);
     }
 
     pub(crate) fn project_fs_changed(
@@ -5199,6 +5202,90 @@ impl App {
     pub(crate) fn preview_open_path(&mut self, path: PathBuf) {
         self.preview_open_path_at(path, None);
     }
+
+    /// 上下文条的消息路由。`project_id` 来自信封,异步应答即使在用户切到别的
+    /// 项目之后到达,也只写回发起它的那个 `Workspace`。
+    pub(crate) fn agent_context_message(
+        &mut self,
+        project_id: i64,
+        msg: crate::extensions::agent_context::Message,
+    ) {
+        use crate::extensions::agent_context as ctx;
+        let Some(root) = loaded_workspace_mut(&mut self.projects, project_id)
+            .and_then(|ws| ws.project.as_ref().map(|p| PathBuf::from(&p.path)))
+        else {
+            return;
+        };
+        match msg {
+            ctx::Message::Open(id) => {
+                let Some(entry) = loaded_workspace_mut(&mut self.projects, project_id)
+                    .and_then(|ws| ws.agent_context.entry(id).cloned())
+                else {
+                    return;
+                };
+                let path = root.join(&entry.info.entity_ref);
+                if entry.info.entity_kind == "dir" {
+                    // 目录:在文件树里选中它(不展开/收起,避免误 toggle)。
+                    if let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) {
+                        ws.files.set_tree_selected(path);
+                    }
+                } else {
+                    self.preview_open_path(path);
+                }
+            }
+            ctx::Message::OpenHistory(item) => {
+                let filter = item.and_then(|id| {
+                    loaded_workspace_mut(&mut self.projects, project_id)
+                        .and_then(|ws| ws.agent_context.entry(id))
+                        .map(|e| e.info.entity_ref.clone())
+                });
+                self.open_edit_history(project_id, filter);
+            }
+            other => {
+                let client = self.client.clone();
+                let handle = self.handle.clone();
+                let proxy = self.proxy.clone();
+                let emit = move |m| {
+                    let _ = proxy.send_event(Message::AgentContext(project_id, m));
+                };
+                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+                    return;
+                };
+                ctx::update(
+                    &mut ws.agent_context,
+                    project_id,
+                    root,
+                    other,
+                    &client,
+                    &handle,
+                    emit,
+                );
+            }
+        }
+    }
+
+    /// 拉取某项目的上下文列表(切入项目时调用;工作区未加载则空操作)。
+    pub(crate) fn agent_context_refresh(&mut self, project_id: i64) {
+        let Some(root) = loaded_workspace_mut(&mut self.projects, project_id)
+            .and_then(|ws| ws.project.as_ref().map(|p| PathBuf::from(&p.path)))
+        else {
+            return;
+        };
+        let client = self.client.clone();
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        crate::extensions::agent_context::request_refresh(
+            project_id,
+            root,
+            &client,
+            &handle,
+            move |m| {
+                let _ = proxy.send_event(Message::AgentContext(project_id, m));
+            },
+        );
+    }
+
+    pub(crate) fn open_edit_history(&mut self, _project_id: i64, _filter: Option<String>) {}
 
     pub(crate) fn preview_open_path_at(&mut self, path: PathBuf, target_line: Option<usize>) {
         // 同 `preview_select_tab`:`preview_tab_bar_avail_px` 要 `&self`,

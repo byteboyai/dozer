@@ -2380,6 +2380,7 @@ impl App {
         self.left_collapsed = pl.left_collapsed;
         self.right_collapsed = pl.right_collapsed;
         self.dims = pl.dims;
+        self.agent_context_refresh(id);
     }
 
     /// 把整份 `panel_layouts`(所有项目的面板布局)异步写盘。
@@ -4431,10 +4432,15 @@ mod tests {
         let only_chrome = 900.0 - byteui::theme::geometry::chrome_height_px();
         let m = theme::region::right_zone().margin;
         assert!(
-            (only_chrome - h_with - (byteui::theme::geometry::top_bar_height() + m.top + m.bottom))
-                .abs()
+            (only_chrome
+                - h_with
+                - (byteui::theme::geometry::top_bar_height()
+                    + m.top
+                    + m.bottom
+                    + crate::extensions::agent_context::strip_reserved_height()))
+            .abs()
                 < 0.01,
-            "终端 pane 高度必须再扣顶栏+right_zone 上下 margin"
+            "终端 pane 高度必须再扣顶栏+right_zone 上下 margin+上下文条"
         );
     }
 
@@ -4662,11 +4668,12 @@ mod tests {
     /// avail_w = 1440 - 2*44 - 2*40 = 1272,pair_w = 1272 - 8 = 1264,
     /// 终端占 1-0.35 → 1264*0.65 = 821.6,减 `byteui::theme::geometry::chrome_width_px()`(16) = 805.6;
     /// 盒子高 = 900 - 40(顶栏) - 2*40 = 780,再减
-    /// `byteui::theme::geometry::chrome_height_px()`(50) = 730(不扣状态栏高——
-    /// 终端 pane 自带的 `terminal_status_bar` 已经去掉)。
+    /// `byteui::theme::geometry::chrome_height_px()`(50) = 730,再减上下文条
+    /// 预留 `strip_reserved_height()`(不扣状态栏高——终端 pane 自带的
+    /// `terminal_status_bar` 已经去掉)。
     /// 对照平时:zones_width = 1440-2*44-8=1344,right_w = 1344 - 640 = 704,pair = 696,
-    /// 696*0.65 = 452.4,减 16 = 436.4;高 = 900 - 40 - 50 - right_zone 上下 margin = 804。
-    /// 换成网格(CELL_WIDTH=8.4,LINE_HEIGHT_PX=16.8 即 14*1.2):放大后 95x43,平时 51x47。
+    /// 696*0.65 = 452.4,减 16 = 436.4;高 = 900 - 40 - 50 - right_zone 上下 margin - 上下文条预留 = 804 - 预留。
+    /// 换成网格(CELL_WIDTH=8.4,LINE_HEIGHT_PX=16.8 即 14*1.2):放大后 95x41,平时 51x45(含上下文条预留)。
     #[test]
     fn terminal_pane_pixel_size_right_maximized_matches_overlay_box() {
         let maxed = ShellState {
@@ -4675,18 +4682,26 @@ mod tests {
         };
         let (w, h) = terminal_pane_pixel_size(1440.0, 900.0, &maxed);
         assert!((w - 805.6).abs() < 0.1, "w={w}");
-        assert!((h - 730.0).abs() < 0.1, "h={h}");
+        assert!(
+            (h - (730.0 - crate::extensions::agent_context::strip_reserved_height())).abs() < 0.1,
+            "h={h}"
+        );
 
         let normal = terminal_pane_pixel_size(1440.0, 900.0, &test_state());
         assert!((normal.0 - 436.4).abs() < 0.1, "平时 w={}", normal.0);
-        assert!((normal.1 - 804.0).abs() < 0.1, "平时 h={}", normal.1);
+        assert!(
+            (normal.1 - (804.0 - crate::extensions::agent_context::strip_reserved_height())).abs()
+                < 0.1,
+            "平时 h={}",
+            normal.1
+        );
         assert_ne!((w, h), normal, "放大态几何必须和平时不同");
         assert!(w > normal.0, "放大后终端必须真的更宽(网格跟着变宽)");
 
-        assert_eq!(crate::term::term_view::grid_size(w, h), (95, 43));
+        assert_eq!(crate::term::term_view::grid_size(w, h), (95, 41));
         assert_eq!(
             crate::term::term_view::grid_size(normal.0, normal.1),
-            (51, 47)
+            (51, 45)
         );
 
         // 左侧放大不改变右面板区几何(右半只是被遮罩盖住)。
@@ -4695,6 +4710,25 @@ mod tests {
             ..test_state()
         };
         assert_eq!(terminal_pane_pixel_size(1440.0, 900.0, &left_maxed), normal);
+    }
+
+    #[test]
+    fn context_strip_reserve_is_constant_regardless_of_expansion() {
+        // 展开态列表是浮层,不参与几何:预留高度只依赖常量与 region.gap,
+        // 与 State.expanded 无关,PTY 网格不会因折叠/展开重算。
+        let a = crate::extensions::agent_context::strip_reserved_height();
+        let mut s = crate::extensions::agent_context::State::default();
+        crate::extensions::agent_context::apply(
+            &mut s,
+            crate::extensions::agent_context::Message::ToggleExpanded,
+        );
+        assert!(s.expanded());
+        assert_eq!(a, crate::extensions::agent_context::strip_reserved_height());
+        assert_eq!(
+            a,
+            crate::extensions::agent_context::STRIP_HEIGHT
+                + crate::theme::region::terminal_pane().gap
+        );
     }
 
     /// Fix round 2 #6b:终端当前不可见时,网格换算走"若显示则多大"的假想
@@ -4722,9 +4756,9 @@ mod tests {
             assert_eq!(terminal_pane_pixel_size(1440.0, 900.0, &for_grid), shown);
         }
 
-        // 具体网格:1440x900 下应是 51x47(已扣 right_zone 上下 margin),不是兜底的 80x24。
+        // 具体网格:1440x900 下应是 51x45(已扣 right_zone 上下 margin 与上下文条预留),不是兜底的 80x24。
         let (cols, rows) = crate::term::term_view::grid_size(shown.0, shown.1);
-        assert_eq!((cols, rows), (51, 47));
+        assert_eq!((cols, rows), (51, 45));
         assert_ne!(
             (cols as u16, rows as u16),
             (DEFAULT_COLS, DEFAULT_ROWS),

@@ -1183,7 +1183,8 @@ pub fn terminal_pane_pixel_size(
             - byteui::theme::geometry::chrome_width_px())
         .max(0.0);
         let pane_height = (maximized_box_height(window_height)
-            - byteui::theme::geometry::chrome_height_px())
+            - byteui::theme::geometry::chrome_height_px()
+            - crate::extensions::agent_context::strip_reserved_height())
         .max(0.0);
         return (pane_width, pane_height);
     }
@@ -1206,6 +1207,7 @@ pub fn terminal_pane_pixel_size(
     let pane_height = (window_height
         - byteui::theme::geometry::top_bar_height()
         - byteui::theme::geometry::chrome_height_px()
+        - crate::extensions::agent_context::strip_reserved_height()
         - m.top
         - m.bottom)
         .max(0.0);
