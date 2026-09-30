@@ -71,12 +71,18 @@ pub enum Message {
     /// `DetailLoadMore`/`Hover`/`TextInputMenuOpen` 四种由内核直接拦截处理,
     /// 不会到达 `conversations::update`。
     Conversations(conversations::Message),
-    /// 一次"删除项目"执行完成。`Vec<String>` 是文件系统步骤各自独立的
+    /// 一次"删除项目"执行完成。`errors` 是文件系统步骤各自独立的
     /// 失败原因(空 = 全部成功);dozerd 侧两步(登记/agent 历史)任一失败
     /// 时这里只会收到那一条错误。项目对应的 tab 在发起删除时已经关掉,
     /// 这个消息到达时已经没有面板可以展示状态,统一走 `self.daemon_error`
-    /// (同 `project_tab_opened` 失败路径的既有做法)。
-    ProjectDeleteDone(Vec<String>),
+    /// (同 `project_tab_opened` 失败路径的既有做法)。`deregistered` 表示
+    /// dozerd 侧登记是否已取消(成功)——只有它为 true 时才把项目从
+    /// `recent_projects` 各镜像列表里剪掉,否则项目还登记着,条目必须留。
+    ProjectDeleteDone {
+        project_id: i64,
+        deregistered: bool,
+        errors: Vec<String>,
+    },
     /// 切换当前显示的 tab（这里的 `usize` 是 vec 位置——用户点击的是
     /// "屏幕上第几个 tab"，跟稳定 id 是两回事）。**仅限左侧终端 tab 栏本身
     /// 的按钮**发这条消息——`select_tab()` 顺带把 `tab_drag` 武装成"这一

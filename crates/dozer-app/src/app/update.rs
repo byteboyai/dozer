@@ -1406,9 +1406,21 @@ impl App {
                     conversations::update(&mut ws.conversations, msg);
                 });
             }
-            Message::ProjectDeleteDone(errors) => {
+            Message::ProjectDeleteDone {
+                project_id,
+                deregistered,
+                errors,
+            } => {
                 if !errors.is_empty() {
                     self.daemon_error = Some(format!("删除项目未完全成功: {}", errors.join("; ")));
+                }
+                // 登记一取消就把这个项目从所有 recent 列表里剪掉——
+                // `recent_projects` 只是 `list_projects()` 的快照,删除流程
+                // 只改了 dozerd 的 DB,不刷这里的话,首页项目卡/顶栏"＋"菜单/
+                // 未打开项目占位列表会继续留着一条已删除的死条目(点它会
+                // 报"打开项目失败")。
+                if deregistered {
+                    self.prune_recent_projects(project_id);
                 }
             }
             Message::Usage(msg @ usage::Message::Loaded(project_id, ..)) => {
@@ -4059,6 +4071,18 @@ impl App {
         self.persist_open_projects();
     }
 
+    /// 把一个项目从所有"最近项目"镜像列表里剪掉(`App::recent_projects`
+    /// 与每个已打开 `Workspace` 各自持有的那份快照)。删除项目后调用,
+    /// 保证首页项目卡/顶栏菜单/占位列表不再出现死条目。
+    fn prune_recent_projects(&mut self, id: i64) {
+        self.recent_projects.retain(|p| p.id != id);
+        for slot in self.projects.values_mut() {
+            if let WorkspaceSlot::Loaded(ws) = slot {
+                ws.recent_projects.retain(|p| p.id != id);
+            }
+        }
+    }
+
     /// "删除项目"确认弹窗的"删除"按钮触发,由 `Message::Project(project::
     /// Message::DeleteProjectConfirm)` 拦截调用(见该分支注释)。这个操作
     /// 一定作用在当前聚焦的项目上——删除按钮本来就在那个项目自己的面板
@@ -4083,8 +4107,12 @@ impl App {
         let client = self.client.clone();
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
-        let on_done = move |errors: Vec<String>| {
-            let _ = proxy.send_event(Message::ProjectDeleteDone(errors));
+        let on_done = move |project_id, deregistered, errors: Vec<String>| {
+            let _ = proxy.send_event(Message::ProjectDeleteDone {
+                project_id,
+                deregistered,
+                errors,
+            });
         };
         project::delete::spawn_delete_project(
             project_id, repo_path, scope, client, &handle, on_done,

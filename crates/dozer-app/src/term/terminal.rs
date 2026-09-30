@@ -60,14 +60,6 @@ pub(crate) fn terminal_pane<'a>(
     let region = theme::region::terminal_pane();
     let mut content = column![tab_bar(app, ws)].spacing(region.gap);
 
-    if let Some(err) = &app.daemon_error {
-        content = content.push(
-            text(format!("⚠ {err}"))
-                .size(byteui::theme::font::body())
-                .color(byteui::theme::color::current().red),
-        );
-    }
-
     // OSC 133;D 的最近命令非零退出码提示（下一条命令开始时消失）。
     if let Some(code) = ws.tabs.get(ws.active).and_then(|t| t.last_exit)
         && code != 0

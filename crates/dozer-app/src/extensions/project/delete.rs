@@ -15,32 +15,35 @@ pub enum DeleteScope {
     WithProjectFiles,
 }
 
-/// 跑一次完整的删除流程。`on_done` 收到的 `Vec<String>` 是文件系统步骤
-/// 里各自独立失败的原因(空 = 全部成功)；dozerd 两步任一失败时，`on_done`
-/// 只收到那一条错误、后续步骤(含文件系统步骤)都不会跑。调用方
+/// 跑一次完整的删除流程。`on_done(project_id, deregistered, errors)`:
+/// `deregistered` = dozerd 侧登记已成功取消(`RemoveProject` 通过)——
+/// 无论后续步骤是否失败,登记一取消项目就该从各 recent 列表里消失;
+/// `errors` 是文件系统步骤里各自独立失败的原因(空 = 全部成功);dozerd
+/// 两步任一失败时,`on_done` 只收到那一条错误、且 `deregistered=false`、
+/// 后续步骤(含文件系统步骤)都不会跑。调用方
 /// (`app.rs::App::project_delete_confirm`)负责在调这个函数**之前**先把
 /// 这个项目的 tab 关掉——这个函数本身不碰任何 `Workspace`/UI 状态，
 /// 只认 `project_id`(用于 dozerd 请求，虽然当前两个请求都不需要
 /// `project_id`，只需要 `cwd`——保留这个参数是为了跟调用方的日志/未来
 /// 扩展对齐，不是死代码；如果实现阶段发现完全用不上，可以去掉)。
 pub fn spawn_delete_project(
-    _project_id: i64,
+    project_id: i64,
     repo_path: PathBuf,
     scope: DeleteScope,
     client: dozer_client::Client,
     handle: &tokio::runtime::Handle,
-    on_done: impl Fn(Vec<String>) + Send + 'static,
+    on_done: impl Fn(i64, bool, Vec<String>) + Send + 'static,
 ) {
     let cwd = repo_path.to_string_lossy().into_owned();
     handle.spawn(async move {
-        if let Err(e) = client.remove_project(_project_id).await {
-            on_done(vec![format!("取消项目登记失败: {e}")]);
+        if let Err(e) = client.remove_project(project_id).await {
+            on_done(project_id, false, vec![format!("取消项目登记失败: {e}")]);
             return;
         }
         if scope != DeleteScope::DozerOnly
             && let Err(e) = client.delete_project_transcripts(&cwd).await
         {
-            on_done(vec![format!("删除 agent 历史失败: {e}")]);
+            on_done(project_id, true, vec![format!("删除 agent 历史失败: {e}")]);
             return;
         }
         let repo_path_fs = repo_path.clone();
@@ -85,6 +88,6 @@ pub fn spawn_delete_project(
         })
         .await
         .unwrap_or_else(|e| vec![format!("内部错误: {e}")]);
-        on_done(errors);
+        on_done(project_id, true, errors);
     });
 }
