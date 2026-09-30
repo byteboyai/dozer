@@ -89,6 +89,33 @@ fn refresh_open_conversation_summary(
 
 impl App {
     pub fn update(&mut self, message: Message) {
+        self.update_inner(message);
+        // 放在包装里而不是 `match` 末尾:`update_inner` 的许多分支会提前 `return`,
+        // 放在 `match` 里会漏排空。
+        self.drain_outboxes();
+    }
+
+    /// 排空所有 extension state 的 outbox 并推成 Toast(extension 的 `update`
+    /// 拿不到 `App`,失败提示先写进自己 state 的 outbox)。遍历已加载工作区的
+    /// 代价只是几个 `Vec::is_empty`,可以每条消息都做。
+    fn drain_outboxes(&mut self) {
+        let mut pending: Vec<toast::Pending> = Vec::new();
+        for slot in self.projects.values_mut() {
+            if let WorkspaceSlot::Loaded(ws) = slot {
+                pending.extend(ws.files.take_outbox());
+                pending.extend(ws.todo.take_outbox());
+                pending.extend(ws.ssh.take_outbox());
+                pending.extend(ws.database.take_outbox());
+                pending.extend(ws.agent_context.take_outbox());
+            }
+        }
+        pending.extend(self.database.take_outbox());
+        if !pending.is_empty() {
+            self.flush_outbox(pending);
+        }
+    }
+
+    fn update_inner(&mut self, message: Message) {
         match message {
             Message::GitLogDiffWebviewEvent(_binding, event) => {
                 if matches!(event.payload, crate::preview::EditorEvent::Ready { .. }) {
@@ -1417,6 +1444,7 @@ impl App {
             } => {
                 if !errors.is_empty() {
                     self.push_toast(
+                        LOG,
                         toast::Level::Warning,
                         format!("删除项目未完全成功: {}", errors.join("; ")),
                     );
@@ -1445,6 +1473,15 @@ impl App {
                 });
             }
             Message::Toast(msg) => {
+                // 单变体枚举,模式不可反驳;先写日志再入队(与 `emit_toast` 同一个
+                // `log_toast`)。
+                let toast::Message::Push {
+                    scope,
+                    level,
+                    ref text,
+                    ..
+                } = msg;
+                toast::log_toast(scope, level, text);
                 toast::update(&mut self.toast, msg, std::time::Instant::now());
             }
             Message::CodeHealth(msg @ codehealth::Message::Loaded(project_id, ..)) => {
@@ -3942,6 +3979,7 @@ impl App {
         let Some(project) = project else {
             dozer_core::log_warn!(LOG, "打开项目页签失败,页签集合保持不变");
             self.push_toast_keyed(
+                LOG,
                 toast::Level::Error,
                 "打开项目失败,请确认 dozerd 正常后重试",
                 "open-project-failed",
@@ -5321,24 +5359,18 @@ impl App {
                 let emit = move |m| {
                     let _ = proxy.send_event(Message::AgentContext(project_id, m));
                 };
-                let notice = {
-                    let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
-                        return;
-                    };
-                    ctx::update(
-                        &mut ws.agent_context,
-                        project_id,
-                        root,
-                        other,
-                        &client,
-                        &handle,
-                        emit,
-                    );
-                    ws.agent_context.take_notice()
+                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+                    return;
                 };
-                if let Some(n) = notice {
-                    self.push_toast(toast::Level::Error, n);
-                }
+                ctx::update(
+                    &mut ws.agent_context,
+                    project_id,
+                    root,
+                    other,
+                    &client,
+                    &handle,
+                    emit,
+                );
             }
         }
     }

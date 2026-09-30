@@ -65,6 +65,9 @@ pub struct PendingMove {
 /// 弹层)。对应现有 `Workspace` 上 11 个字段。
 #[derive(Default)]
 pub struct WorkspaceState {
+    /// 待发提示(失败/被拒等一次性反馈)。`App::update` 的包装函数每次处理完消息后
+    /// 统一排空成 Toast,见 `extensions::toast::Outbox`。
+    pub(crate) outbox: crate::extensions::toast::Outbox,
     pub(crate) file_tree: Option<FileTree>,
     pub(crate) git_statuses: HashMap<PathBuf, FileGitStatus>,
     /// 目录 → 聚合 git 状态(由 `delivery::rollup_dir_statuses` 在
@@ -532,6 +535,11 @@ impl Operation<()> for CaptureTreeEditFocus {
 }
 
 impl WorkspaceState {
+    /// 取走待发提示(`App::drain_outboxes` 调用)。
+    pub fn take_outbox(&mut self) -> Vec<crate::extensions::toast::Pending> {
+        self.outbox.take()
+    }
+
     /// 打开一个新项目时构造(现有 `Workspace::from_restore` 里
     /// `file_tree: Some(FileTree::new(..))` 那一步的搬家版本)。
     pub fn new(file_tree: FileTree) -> Self {

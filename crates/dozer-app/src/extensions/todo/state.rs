@@ -133,6 +133,9 @@ pub const TODO_LIST_SCROLL_ID: &str = "todo-list";
 /// Todo 面板挂在每个 `Workspace` 上的状态。
 #[derive(Default)]
 pub struct WorkspaceState {
+    /// 待发提示(失败/被拒等一次性反馈)。`App::update` 的包装函数每次处理完消息后
+    /// 统一排空成 Toast,见 `extensions::toast::Outbox`。
+    pub(crate) outbox: crate::extensions::toast::Outbox,
     pub(crate) items: Vec<TodoInfo>,
     /// 新增任务框草稿。类型从 `String` 换成 `iced_widget::text_editor::
     /// Content`(实现 `Default`/`Clone`)——真正的 `text_editor` 自己管理
@@ -256,6 +259,11 @@ pub struct WorkspaceState {
 }
 
 impl WorkspaceState {
+    /// 取走待发提示(`App::drain_outboxes` 调用)。
+    pub fn take_outbox(&mut self) -> Vec<crate::extensions::toast::Pending> {
+        self.outbox.take()
+    }
+
     /// 派发选择层是否打开(内核 `App::todo_dispatch_open` 键盘/UI 状态查询用)。
     pub fn dispatch_popup_open(&self) -> bool {
         self.dispatch_open.is_some()

@@ -5,6 +5,10 @@
 
 use std::time::{Duration, Instant};
 
+use dozer_core::log::Scope;
+
+dozer_core::scope!(LOG, module, "toast");
+
 /// 同屏最多显示的 Toast 条数;超出时挤掉最旧的(瞬时消息过期即无意义,不排队)。
 pub const MAX_VISIBLE: usize = 3;
 
@@ -50,6 +54,8 @@ pub struct ToastCenter {
 #[derive(Debug, Clone)]
 pub enum Message {
     Push {
+        /// 调用方的日志来源(只用于写日志,不进入 `ToastCenter`)。
+        scope: Scope,
         level: Level,
         text: String,
         key: Option<String>,
@@ -58,9 +64,84 @@ pub enum Message {
 
 pub fn update(state: &mut ToastCenter, msg: Message, now: Instant) {
     match msg {
-        Message::Push { level, text, key } => {
+        Message::Push {
+            level, text, key, ..
+        } => {
             state.push(level, &text, key, now);
         }
+    }
+}
+
+/// 每条 Toast 自动写一条日志。`tracing` 的 `target:` 必须是常量,而这里的
+/// `scope` 是运行时形参,所以固定用 `module::toast` 作 target,调用方来源放进
+/// 字段 `scope`(值是它的 target 字符串,如 `dozer::panel::agent`)。写**原始
+/// 完整文本**(未折叠空白、未被固定卡片高度裁剪);归一化后为空的不写。
+pub fn log_toast(scope: Scope, level: Level, text: &str) {
+    if normalize(text).is_empty() {
+        return;
+    }
+    let from = scope.target;
+    match level {
+        Level::Info | Level::Success => dozer_core::log_info!(LOG, scope = from, "{text}"),
+        Level::Warning => dozer_core::log_warn!(LOG, scope = from, "{text}"),
+        Level::Error => dozer_core::log_error!(LOG, scope = from, "{text}"),
+    }
+}
+
+/// 一条待发的提示。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pending {
+    pub scope: Scope,
+    pub level: Level,
+    pub text: String,
+    pub key: Option<String>,
+}
+
+/// extension state 里的待发提示。extension 的 `update` 拿不到 `App`,失败时往
+/// 自己 state 的 `outbox` 里 `push`,`App::update` 的包装函数每次处理完消息后统一
+/// 排空成 Toast。纯数据,可单测;extension 因此不依赖 `ToastCenter`/`App`。
+#[derive(Debug, Default)]
+pub struct Outbox {
+    items: Vec<Pending>,
+}
+
+impl Outbox {
+    pub fn push(&mut self, scope: Scope, level: Level, text: impl Into<String>) {
+        self.items.push(Pending {
+            scope,
+            level,
+            text: text.into(),
+            key: None,
+        });
+    }
+
+    pub fn push_keyed(&mut self, scope: Scope, level: Level, text: impl Into<String>, key: &str) {
+        self.items.push(Pending {
+            scope,
+            level,
+            text: text.into(),
+            key: Some(key.to_string()),
+        });
+    }
+
+    /// `Err(e)` 时推一条 `Error` 级 `"{what}: {e}"`;`Ok` 什么都不做。
+    pub fn push_err<T, E: std::fmt::Display>(
+        &mut self,
+        scope: Scope,
+        what: &str,
+        res: &Result<T, E>,
+    ) {
+        if let Err(e) = res {
+            self.push(scope, Level::Error, format!("{what}: {e}"));
+        }
+    }
+
+    pub fn take(&mut self) -> Vec<Pending> {
+        std::mem::take(&mut self.items)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
     }
 }
 
@@ -250,12 +331,15 @@ mod tests {
         );
     }
 
+    dozer_core::scope!(TEST_TODO, panel, "todo");
+
     #[test]
-    fn update_push_message_delegates_to_push() {
+    fn update_push_message_delegates_to_push_and_carries_scope() {
         let (mut c, now) = center();
         update(
             &mut c,
             Message::Push {
+                scope: TEST_TODO,
                 level: Level::Success,
                 text: "ok".into(),
                 key: None,
@@ -264,5 +348,88 @@ mod tests {
         );
         assert_eq!(c.items().len(), 1);
         assert_eq!(c.items()[0].level, Level::Success);
+    }
+
+    #[test]
+    fn outbox_take_drains_and_preserves_order() {
+        let mut o = Outbox::default();
+        assert!(o.is_empty());
+        o.push(TEST_TODO, Level::Error, "a");
+        o.push_keyed(TEST_TODO, Level::Warning, "b", "k");
+        assert!(!o.is_empty());
+        let got = o.take();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].text, "a");
+        assert_eq!(got[0].key, None);
+        assert_eq!(got[1].key.as_deref(), Some("k"));
+        assert_eq!(got[1].scope, TEST_TODO);
+        assert!(o.is_empty());
+        assert!(o.take().is_empty());
+    }
+
+    #[test]
+    fn outbox_push_err_pushes_only_on_err_with_what_prefix() {
+        let mut o = Outbox::default();
+        o.push_err(TEST_TODO, "保存失败", &Ok::<(), String>(()));
+        assert!(o.is_empty());
+        o.push_err(TEST_TODO, "保存失败", &Err::<(), _>("磁盘满"));
+        let got = o.take();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].level, Level::Error);
+        assert_eq!(got[0].text, "保存失败: 磁盘满");
+    }
+
+    #[derive(Clone, Default)]
+    struct Buf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Buf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Buf {
+        type Writer = Buf;
+        fn make_writer(&'a self) -> Buf {
+            self.clone()
+        }
+    }
+
+    fn capture(f: impl FnOnce()) -> String {
+        let buf = Buf::default();
+        let sub = tracing_subscriber::fmt()
+            .with_writer(buf.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        tracing::subscriber::with_default(sub, f);
+        String::from_utf8(buf.0.lock().unwrap().clone()).unwrap()
+    }
+
+    #[test]
+    fn log_toast_maps_levels_and_records_caller_scope_in_a_field() {
+        let cases = [
+            (Level::Info, "INFO"),
+            (Level::Success, "INFO"),
+            (Level::Warning, "WARN"),
+            (Level::Error, "ERROR"),
+        ];
+        for (level, label) in cases {
+            let out = capture(|| log_toast(TEST_TODO, level, "hello"));
+            assert!(out.contains(label), "{level:?}: {out}");
+            assert!(out.contains("dozer::module::toast"), "{out}");
+            assert!(out.contains("scope=\"dozer::panel::todo\""), "{out}");
+            assert!(out.contains("hello"), "{out}");
+        }
+    }
+
+    #[test]
+    fn log_toast_keeps_full_multiline_text_and_skips_blank() {
+        let out = capture(|| log_toast(TEST_TODO, Level::Error, "line1\nline2"));
+        assert!(out.contains("line1\nline2"), "{out}");
+        let out = capture(|| log_toast(TEST_TODO, Level::Error, "  \n "));
+        assert!(out.trim().is_empty(), "{out}");
     }
 }

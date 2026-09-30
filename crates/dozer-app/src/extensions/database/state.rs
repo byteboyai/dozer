@@ -229,6 +229,9 @@ fn push_table_rows<'a>(
 /// 挂在 `App` 上:哪些驱动类型在"新增数据源"下拉里可选。默认全部启用。
 #[derive(Debug)]
 pub struct AppState {
+    /// 待发提示(失败/被拒等一次性反馈)。`App::update` 的包装函数每次处理完消息后
+    /// 统一排空成 Toast,见 `extensions::toast::Outbox`。
+    pub(crate) outbox: crate::extensions::toast::Outbox,
     pub(crate) enabled: std::collections::HashSet<DriverKind>,
     /// 驱动管理弹层的开关态(非持久化 UI 态,不参与 `save()`)。
     pub(crate) drivers_popup_open: bool,
@@ -237,6 +240,7 @@ pub struct AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self {
+            outbox: Default::default(),
             enabled: DriverKind::ALL.into_iter().collect(),
             drivers_popup_open: false,
         }
@@ -244,6 +248,11 @@ impl Default for AppState {
 }
 
 impl AppState {
+    /// 取走待发提示(`App::drain_outboxes` 调用)。
+    pub fn take_outbox(&mut self) -> Vec<crate::extensions::toast::Pending> {
+        self.outbox.take()
+    }
+
     pub fn load() -> Self {
         let path = drivers_path();
         let Ok(text) = std::fs::read_to_string(&path) else {
@@ -253,6 +262,7 @@ impl AppState {
             return Self::default();
         };
         Self {
+            outbox: Default::default(),
             enabled: file.enabled.into_iter().collect(),
             drivers_popup_open: false,
         }
@@ -307,6 +317,9 @@ pub struct DataSourceDraft {
 /// 的连接测试状态 + schema 树浏览态(阶段 2,纯内存)。
 #[derive(Default)]
 pub struct WorkspaceState {
+    /// 待发提示(失败/被拒等一次性反馈)。`App::update` 的包装函数每次处理完消息后
+    /// 统一排空成 Toast,见 `extensions::toast::Outbox`。
+    pub(crate) outbox: crate::extensions::toast::Outbox,
     pub(crate) sources: Vec<DataSource>,
     pub(crate) editing: Option<DataSourceDraft>,
     pub(crate) test_status: HashMap<String, TestStatus>,
@@ -357,6 +370,11 @@ impl std::fmt::Debug for WorkspaceState {
 }
 
 impl WorkspaceState {
+    /// 取走待发提示(`App::drain_outboxes` 调用)。
+    pub fn take_outbox(&mut self) -> Vec<crate::extensions::toast::Pending> {
+        self.outbox.take()
+    }
+
     pub fn sources(&self) -> &[DataSource] {
         &self.sources
     }

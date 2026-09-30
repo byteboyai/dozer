@@ -2217,20 +2217,45 @@ impl App {
         self.active_workspace()?.todo.next_flash_wake()
     }
 
-    /// 推一条 Toast(无去重键:同 level+文本会去重)。
-    pub fn push_toast(&mut self, level: toast::Level, text: impl AsRef<str>) {
-        self.toast
-            .push(level, text.as_ref(), None, std::time::Instant::now());
+    /// 直接推一条 Toast 并写日志(`toast::log_toast` 是唯一写 Toast 日志的函数;
+    /// `Message::Toast` 分支走同一个函数)。`scope` 是调用方的日志来源。
+    fn emit_toast(
+        &mut self,
+        scope: dozer_core::log::Scope,
+        level: toast::Level,
+        text: &str,
+        key: Option<String>,
+    ) {
+        toast::log_toast(scope, level, text);
+        self.toast.push(level, text, key, std::time::Instant::now());
     }
 
-    /// 推一条带去重键的 Toast:同 key 再推只刷新文本与计时。
-    pub fn push_toast_keyed(&mut self, level: toast::Level, text: impl AsRef<str>, key: &str) {
-        self.toast.push(
-            level,
-            text.as_ref(),
-            Some(key.to_string()),
-            std::time::Instant::now(),
-        );
+    /// 推一条 Toast(无去重键:同 level+文本会去重),并写日志。
+    pub fn push_toast(
+        &mut self,
+        scope: dozer_core::log::Scope,
+        level: toast::Level,
+        text: impl AsRef<str>,
+    ) {
+        self.emit_toast(scope, level, text.as_ref(), None);
+    }
+
+    /// 推一条带去重键的 Toast:同 key 再推只刷新文本与计时(日志每次都写)。
+    pub fn push_toast_keyed(
+        &mut self,
+        scope: dozer_core::log::Scope,
+        level: toast::Level,
+        text: impl AsRef<str>,
+        key: &str,
+    ) {
+        self.emit_toast(scope, level, text.as_ref(), Some(key.to_string()));
+    }
+
+    /// 把各 extension outbox 里排出来的待发提示推成 Toast。
+    pub(crate) fn flush_outbox(&mut self, pending: Vec<toast::Pending>) {
+        for p in pending {
+            self.emit_toast(p.scope, p.level, &p.text, p.key);
+        }
     }
 
     /// 距最近一条 Toast 到期的剩余时间(`about_to_wait` 据此排精确唤醒,

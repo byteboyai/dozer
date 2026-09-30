@@ -10,6 +10,8 @@ use dozer_core::protocol::ContextItemInfo;
 use iced_widget::core::{Alignment, Element, Length};
 use iced_widget::{button, column, container, row, scrollable, text};
 
+dozer_core::scope!(pub(crate) LOG, panel, "agent");
+
 /// 条的固定高度。折叠/展开都不改变它:展开的列表用 `stack!` 浮在终端底部
 /// 之上,不推挤终端,所以 PTY 网格不会因折叠/展开重算(见 plan「有意偏差 1」)。
 pub const STRIP_HEIGHT: f32 = 28.0;
@@ -31,22 +33,24 @@ pub struct ContextEntry {
 
 #[derive(Debug, Default)]
 pub struct State {
+    /// 待发提示(失败/被拒等一次性反馈)。`App::update` 的包装函数每次处理完消息后
+    /// 统一排空成 Toast,见 `extensions::toast::Outbox`。
+    pub(crate) outbox: crate::extensions::toast::Outbox,
     items: Vec<ContextEntry>,
     expanded: bool,
-    notice: Option<String>,
 }
 
 impl State {
+    /// 取走待发提示(`App::drain_outboxes` 调用)。
+    pub fn take_outbox(&mut self) -> Vec<crate::extensions::toast::Pending> {
+        self.outbox.take()
+    }
+
     pub fn items(&self) -> &[ContextEntry] {
         &self.items
     }
     pub fn expanded(&self) -> bool {
         self.expanded
-    }
-    /// 取走待展示的失败提示(App 每次处理完 `AgentContext` 消息后调用一次,
-    /// 转成 Toast)。取走后为 `None`,同一条不会重复弹。
-    pub fn take_notice(&mut self) -> Option<String> {
-        self.notice.take()
     }
     pub fn entry(&self, id: i64) -> Option<&ContextEntry> {
         self.items.iter().find(|e| e.info.id == id)
@@ -84,7 +88,11 @@ pub fn apply(state: &mut State, msg: Message) -> Followup {
             Followup::None
         }
         Message::Loaded(Err(e)) => {
-            state.notice = Some(format!("加载上下文列表失败: {e}"));
+            state.outbox.push(
+                LOG,
+                crate::extensions::toast::Level::Error,
+                format!("加载上下文列表失败: {e}"),
+            );
             Followup::None
         }
         Message::ToggleExpanded => {
@@ -94,14 +102,22 @@ pub fn apply(state: &mut State, msg: Message) -> Followup {
         Message::Remove(id) => Followup::RemoveItem(id),
         Message::Removed(res) => {
             if let Err(e) = res {
-                state.notice = Some(format!("移除失败: {e}"));
+                state.outbox.push(
+                    LOG,
+                    crate::extensions::toast::Level::Error,
+                    format!("移除失败: {e}"),
+                );
             }
             Followup::Refresh
         }
         Message::Added(res) => {
             if let Err(e) = res {
                 // 落库失败时终端粘贴已经发生(见 Task 5),这里如实告知。
-                state.notice = Some(format!("已发送到终端,但未能记录到上下文列表: {e}"));
+                state.outbox.push(
+                    LOG,
+                    crate::extensions::toast::Level::Warning,
+                    format!("已发送到终端,但未能记录到上下文列表: {e}"),
+                );
             }
             Followup::Refresh
         }
@@ -322,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn loaded_ok_replaces_items_and_err_sets_notice() {
+    fn loaded_ok_replaces_items_and_err_pushes_to_outbox() {
         let mut s = State::default();
         assert_eq!(
             apply(&mut s, Message::Loaded(Ok(vec![entry(1, "a", false)]))),
@@ -330,7 +346,7 @@ mod tests {
         );
         assert_eq!(s.items().len(), 1);
         apply(&mut s, Message::Loaded(Err("boom".into())));
-        assert!(s.take_notice().unwrap().contains("boom"));
+        assert!(s.take_outbox()[0].text.contains("boom"));
         assert_eq!(s.items().len(), 1, "加载失败不清空已有列表");
     }
 
@@ -353,7 +369,7 @@ mod tests {
             apply(&mut s, Message::Removed(Err("x".into()))),
             Followup::Refresh
         );
-        assert!(s.take_notice().unwrap().contains("x"));
+        assert!(s.take_outbox()[0].text.contains("x"));
     }
 
     #[test]
@@ -367,31 +383,36 @@ mod tests {
             created_ms: 1,
         };
         assert_eq!(apply(&mut s, Message::Added(Ok(info))), Followup::Refresh);
-        assert!(s.take_notice().is_none());
+        assert!(s.take_outbox().is_empty());
         assert_eq!(
             apply(&mut s, Message::Added(Err("db 挂了".into()))),
             Followup::Refresh
         );
-        let n = s.take_notice().unwrap();
+        let got = s.take_outbox();
+        assert_eq!(got.len(), 1);
+        let n = &got[0].text;
         assert!(n.contains("已发送到终端") && n.contains("db 挂了"), "{n}");
+        // 终端粘贴已经发生、只是记录失败:是警告而不是错误。
+        assert_eq!(got[0].level, crate::extensions::toast::Level::Warning);
+        assert_eq!(got[0].scope.name, "agent");
     }
 
     #[test]
-    fn open_messages_are_not_handled_here_and_leave_notice_untouched() {
+    fn open_messages_are_not_handled_here_and_leave_outbox_untouched() {
         let mut s = State::default();
         assert_eq!(apply(&mut s, Message::Open(1)), Followup::None);
         assert_eq!(apply(&mut s, Message::OpenHistory(None)), Followup::None);
         apply(&mut s, Message::Loaded(Err("e".into())));
-        let n = s.take_notice();
-        assert!(n.unwrap().contains("e"));
+        let got = s.take_outbox();
+        assert!(got[0].text.contains("e"));
     }
 
     #[test]
-    fn take_notice_returns_once_then_none() {
+    fn take_outbox_returns_once_then_empty() {
         let mut s = State::default();
         apply(&mut s, Message::Loaded(Err("boom".into())));
-        assert!(s.take_notice().unwrap().contains("boom"));
-        assert!(s.take_notice().is_none());
+        assert!(s.take_outbox()[0].text.contains("boom"));
+        assert!(s.take_outbox().is_empty());
     }
 
     #[test]

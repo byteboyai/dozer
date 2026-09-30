@@ -84,6 +84,9 @@ pub struct SshHostDraft {
 /// 公钥字节到处传)。
 #[derive(Debug, Default)]
 pub struct WorkspaceState {
+    /// 待发提示(失败/被拒等一次性反馈)。`App::update` 的包装函数每次处理完消息后
+    /// 统一排空成 Toast,见 `extensions::toast::Outbox`。
+    pub(crate) outbox: crate::extensions::toast::Outbox,
     hosts: Vec<SshHost>,
     editing: Option<SshHostDraft>,
     test_status: HashMap<String, TestStatus>,
@@ -118,6 +121,11 @@ pub struct WorkspaceState {
 }
 
 impl WorkspaceState {
+    /// 取走待发提示(`App::drain_outboxes` 调用)。
+    pub fn take_outbox(&mut self) -> Vec<crate::extensions::toast::Pending> {
+        self.outbox.take()
+    }
+
     pub fn hosts(&self) -> &[SshHost] {
         &self.hosts
     }
