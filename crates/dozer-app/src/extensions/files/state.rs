@@ -285,6 +285,9 @@ pub enum Message {
     /// 消息一并带下来(菜单项的展示文案也用它,见 `context_menu_spec`),
     /// `files::update` 的 handler 直接按它 spawn,不重复查配置。
     OpenWithDefault(PathBuf, Option<String>),
+    /// `OpenWithDefault` 后台等 `open` 退出后的结果(项目 id,路径,App 名,结果)。
+    /// `open -a 不存在的App` 的失败在进程退出之后才出现,所以必须等退出状态。
+    OpenWithDefaultDone(i64, PathBuf, Option<String>, Result<(), String>),
     Copy(PathBuf, bool),
     Paste(PathBuf),
     PasteDone(i64, Result<PathBuf, String>),

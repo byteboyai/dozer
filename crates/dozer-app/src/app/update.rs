@@ -2374,7 +2374,7 @@ impl App {
             }
             Message::PreviewSelectTab(idx) => self.preview_select_tab(idx),
             Message::PreviewOpenExternal(kind, tab_id) => {
-                self.with_focused_project(move |ws, _io| {
+                self.with_focused_project(move |ws, io| {
                     let pane = match kind {
                         PanelKind::Project => &ws.project_preview,
                         _ => &ws.preview,
@@ -2393,9 +2393,29 @@ impl App {
                     let program = "open";
                     #[cfg(not(target_os = "macos"))]
                     let program = "xdg-open";
-                    if let Err(e) = std::process::Command::new(program).arg(path).spawn() {
-                        dozer_core::log_warn!(PREVIEW_LOG, %e, "外部打开失败");
-                    }
+                    // `spawn()` 成功不代表打开成功(应用找不到/被拒时进程随后才非零退出),
+                    // 后台等退出状态,失败经 `proxy` 发 Toast(`Message::Toast` 分支会写日志)。
+                    let path = path.clone();
+                    let proxy = io.proxy.clone();
+                    io.handle.spawn(async move {
+                        let mut command = std::process::Command::new(program);
+                        command.arg(&path);
+                        let result = tokio::task::spawn_blocking(move || {
+                            crate::external_apps::run_open_command(command)
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(e.to_string()));
+                        if let Err(reason) = result {
+                            let _ = proxy.send_event(Message::Toast(toast::Message::Push {
+                                scope: PREVIEW_LOG,
+                                level: toast::Level::Error,
+                                text: crate::external_apps::open_failure_message(
+                                    None, &path, &reason,
+                                ),
+                                key: None,
+                            }));
+                        }
+                    });
                 });
             }
             Message::PreviewRetry(kind, tab_id) => {
@@ -3156,7 +3176,8 @@ impl App {
                 | files::Message::GitInfoLoaded(project_id, ..)
                 | files::Message::BranchSwitchDone(project_id, ..)
                 | files::Message::GitInitDone(project_id, ..)
-                | files::Message::FileDropDone(project_id, ..)),
+                | files::Message::FileDropDone(project_id, ..)
+                | files::Message::OpenWithDefaultDone(project_id, ..)),
             ) => self.files_project_message(project_id, msg),
 
             Message::Files(files::Message::TabReloadFromDisk(path)) => {

@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 
+dozer_core::scope!(pub(crate) LOG, panel, "files");
+
 /// 右键"添加到 Agent 上下文"的负载:项目内相对路径(与"复制相对路径"同一套
 /// `path_string` 逻辑,原样不转义)+ 要写进终端的模板文本。
 fn send_payload(root: &Path, target: &Path, is_dir: bool) -> (String, String) {
@@ -163,20 +165,32 @@ pub fn update(
         }
         Message::OpenWithDefault(path, app_name) => {
             app_state.close_context_menu();
-            // 与预览工具栏原"用外部软件打开"按钮(`App::update` 里被移除的
-            // `Message::PreviewOpenExternal`)同口径:`spawn()` 失败(App 名字
-            // 拼错/系统没装)只记日志,不弹 toast。`app_name` 为 `None` 退回
-            // 系统默认打开方式(`open <path>`,不带 `-a`)。
+            // `app_name` 为 `None` 退回系统默认打开方式(`open <path>`,不带 `-a`)。
+            // `open -a 不存在的App` 的失败发生在 `open` 进程退出之后(`spawn()` 本身
+            // 会成功),所以后台等退出状态,失败经 `OpenWithDefaultDone` 回来进 outbox。
             let mut command = std::process::Command::new("open");
             if let Some(app_name) = &app_name {
                 command.arg("-a").arg(app_name);
             }
             command.arg(&path);
-            if let Err(err) = command.spawn() {
-                tracing::warn!(
-                    "用外部软件打开失败: app={} path={} err={err}",
-                    app_name.as_deref().unwrap_or("<系统默认>"),
-                    path.display()
+            handle.spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::external_apps::run_open_command(command)
+                })
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()));
+                emit(Message::OpenWithDefaultDone(
+                    project_id, path, app_name, result,
+                ));
+            });
+        }
+        Message::OpenWithDefaultDone(_, path, app_name, result) => {
+            if let Err(reason) = result {
+                // Toast 会把完整文案写进日志(含文件名与原因),这里不再重复写。
+                ws_state.outbox.push(
+                    LOG,
+                    crate::extensions::toast::Level::Error,
+                    crate::external_apps::open_failure_message(app_name.as_deref(), &path, &reason),
                 );
             }
         }
