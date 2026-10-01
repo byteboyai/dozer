@@ -108,6 +108,11 @@ function baseTheme(p: Palette): Extension {
         fontSize: `${fontSize}px`,
         lineHeight: String(lineHeight),
       },
+      // 可编辑正文用 I 形文本光标;只读档(EditorView.editable.of(false) 会把
+      // contenteditable 置为 false)保持箭头,避免误导用户以为能改。WKWebView
+      // 对 contenteditable 不一定给 I 形光标,故这里显式声明。
+      '.cm-content[contenteditable=true]': { cursor: 'text' },
+      '.cm-content[contenteditable=false]': { cursor: 'default' },
       '.cm-content': { caretColor: p.cursor },
       '.cm-cursor, .cm-dropCursor': { borderLeftColor: p.cursor },
       '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection':
