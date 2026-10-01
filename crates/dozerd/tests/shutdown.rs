@@ -87,6 +87,7 @@ fn create_long_running_session_req() -> Request {
         cols: 80,
         rows: 24,
         project_id: 1,
+        agent: dozer_core::protocol::AgentKind::Unknown,
     }
 }
 

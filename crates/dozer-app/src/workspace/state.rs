@@ -1709,7 +1709,16 @@ impl Workspace {
                 let _ = tokio::task::spawn_blocking(move || ensure_mcp_installed(agent)).await;
             }
             let info = match client
-                .create("shell", &shell, &[], &cwd, cols, rows, project_id)
+                .create_for_agent(
+                    "shell",
+                    &shell,
+                    &[],
+                    &cwd,
+                    cols,
+                    rows,
+                    project_id,
+                    hook_agent.unwrap_or(AgentKind::Unknown),
+                )
                 .await
             {
                 Ok(info) => info,

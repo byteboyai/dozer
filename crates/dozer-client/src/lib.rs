@@ -71,6 +71,31 @@ impl Client {
         rows: u16,
         project_id: i64,
     ) -> Result<SessionInfo> {
+        self.create_for_agent(
+            name,
+            command,
+            args,
+            cwd,
+            cols,
+            rows,
+            project_id,
+            AgentKind::Unknown,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_for_agent(
+        &self,
+        name: &str,
+        command: &str,
+        args: &[String],
+        cwd: &str,
+        cols: u16,
+        rows: u16,
+        project_id: i64,
+        agent: AgentKind,
+    ) -> Result<SessionInfo> {
         match self
             .roundtrip(&Request::CreateSession {
                 name: name.into(),
@@ -80,6 +105,7 @@ impl Client {
                 cols,
                 rows,
                 project_id,
+                agent,
             })
             .await?
         {

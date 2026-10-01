@@ -443,12 +443,16 @@ async fn handle_conn(
                     Err(e) => Reply::Error { message: format!("协议错误: {e}") },
                     Ok(req) => match req {
                         Request::ListSessions => Reply::Sessions { sessions: registry.list() },
-                        Request::CreateSession { name, command, args, cwd, cols, rows, project_id } => {
+                        Request::CreateSession { name, command, args, cwd, cols, rows, project_id, agent } => {
                             if draining.load(Ordering::SeqCst) {
                                 Reply::Error { message: "dozerd 正在停止,无法创建新会话".into() }
                             } else {
                                 match registry.create(SessionSpec { name, command, args, cwd: cwd.clone(), cols, rows, project_id }) {
                                     Ok(s) => {
+                                        // picker 在创建 PTY 时已经知道即将启动的 agent。
+                                        // 立即记下，不要等可能很晚甚至本轮不会到达的 hook，
+                                        // 否则 GUI 重启后会把存活的 Codex 会话误认成 shell。
+                                        s.set_agent(agent);
                                         // Independent of UI attachment and IDE-bridge startup.
                                         let exit_session = s.clone();
                                         let exit_service = summary_service.clone();

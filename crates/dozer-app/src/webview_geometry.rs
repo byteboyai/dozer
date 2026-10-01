@@ -382,6 +382,12 @@ pub fn left_files_tree_bounds_for(
 /// `git_log_split`(内容列),纵向起点/高度用 `git_log_file_diff_split` 的下
 /// portion,二者不可混用。
 ///
+/// 返回的矩形是交给原生 wry 子视图的**精确**落点,必须落在面板实际渲染的
+/// diff 盒子之内:横向要扣掉 zone 内边距(1)与内容列自己的 `project_pane`
+/// 左右内边距(各 8),纵向底要扣掉 zone 内边距;放大态则直接落在金色描边
+/// 盒之内。少扣任何一项,直角原生子视图(恒盖在 iced 之上)就会越界戳出
+/// 面板外框。
+///
 /// 不可摆放(该侧收起 / 不是 GitLog / 放大的是另一侧)时返回零尺寸矩形。
 pub fn git_log_diff_pane_bounds_for(
     side: Side,
@@ -416,10 +422,16 @@ pub fn git_log_diff_pane_bounds_for(
         // 传"扣过中间固定分隔线之后的可分配内容宽"(`FillPortion` 在扣掉分隔
         // 线后才按权重分),同 `preview_content_bounds_for` 用 `pair_x0_and_width`
         // (内部 `pair_content_width`)的口径;x 再补 project_pane 左 padding。
+        //
+        // 内容列(`right_box`)左右各有 `project_pane` 的 8px 内边距,diff
+        // pane 是它们**之内**的盒子。之前只给 x 补了左内边距、宽度却仍取整条
+        // `content_w`,于是直角原生 webview 比实际渲染的 pane 宽出左右内边距
+        // 之和(16px),右缘越过 pane 边界盖住区外框/相邻栏(2026-09-30
+        // "git log diff 窗口溢出")。宽度必须同样扣掉左右内边距。
         let pair_w = pair_content_width(inw);
         let cols = pair_columns(pair_w, state.dims.git_log_split, mirrored);
         let x = inx + p.padding.left + cols.content_x;
-        let w = cols.content_w.max(0.0);
+        let w = (cols.content_w - p.padding.left - p.padding.right).max(0.0);
 
         // 纵向:body 顶起 padding.top,content 列 = 固定头部 + 上 portion +
         // 横向分割线 + 下 portion。整列高 = body 高 - 上下 padding。
@@ -449,28 +461,34 @@ pub fn git_log_diff_pane_bounds_for(
         if side != showing_side {
             return zero();
         }
-        let m = match side {
-            Side::Left => theme::region::left_zone().margin,
-            Side::Right => theme::region::right_zone().margin,
-        };
+        // 放大态:`left_panel_area`/`right_panel_area` 的 `maximized` 分支跳过
+        // zone 的 margin/padding(`maximize_overlay` 的金色描边盒已经把内容
+        // 整体框住),面板 body 直接铺满 `maximized_box_x_range` 给出的金框
+        // 盒子。所以这里直接用盒子的整宽整高,**不掺 zone margin**——旧实现
+        // 掺了它,右缘恰好顶到金框(还叠加了上面那 16px 宽度溢出),直角
+        // webview 会戳出半径 10 的圆角;纵向又重复扣了一遍
+        // `maximize_overlay_padding`/`status_bar_height`,diff pane 比实际
+        // 渲染的短一截。内容列自带的 8px 内边距已经能在金框内侧留出安全
+        // 间隙(半径 10 的圆角在 8px 内缩处已收回)。
         let (x0, avail_w) = maximized_box_x_range(window_width);
-        let inx = x0 + m.left;
-        let inw = (avail_w - m.left - m.right).max(0.0);
+        let inx = x0;
+        let inw = avail_w.max(0.0);
         let iny = byteui::theme::geometry::top_bar_height()
-            + byteui::theme::geometry::maximize_overlay_padding()
-            + m.top;
-        let inh = (maximized_box_height(window_height)
-            - byteui::theme::geometry::maximize_overlay_padding()
-            - byteui::theme::geometry::status_bar_height()
-            - m.top
-            - m.bottom)
-            .max(0.0);
+            + byteui::theme::geometry::maximize_overlay_padding();
+        let inh = maximized_box_height(window_height).max(0.0);
         return compute(inx, iny, inw, inh);
     }
 
     let m = match side {
         Side::Left => theme::region::left_zone().margin,
         Side::Right => theme::region::right_zone().margin,
+    };
+    // zone 外框自己还有 1px 内边距(`left_zone`/`right_zone` 的 padding),
+    // 面板 body 在它**之内**;直角 webview 必须跟着内缩,否则会盖住这圈
+    // 内边距、戳出外框(同 `usage_content_pane_bounds_for` 的处理)。
+    let zone_pad = match side {
+        Side::Left => theme::region::left_zone().padding.left,
+        Side::Right => theme::region::right_zone().padding.left,
     };
     // GitLog body 是**区内的一个整体**(`row![list | divider | content]` 直接
     // 就是面板内容),区宽即 body 外框——横向起点从面板区左沿量起(左栏 =
@@ -487,11 +505,18 @@ pub fn git_log_diff_pane_bounds_for(
         Side::Left => left_zone_width(window_width, state),
         Side::Right => right_zone_width(window_width, state),
     };
-    let inx = zone_x0 + m.left;
-    let iny = byteui::theme::geometry::top_bar_height() + m.top;
-    let inw = (zone_raw_w - m.left - m.right).max(0.0);
-    let inh =
-        (window_height - iny - m.bottom - byteui::theme::geometry::status_bar_height()).max(0.0);
+    let inx = zone_x0 + m.left + zone_pad;
+    let iny = byteui::theme::geometry::top_bar_height() + m.top + zone_pad;
+    let inw = (zone_raw_w - m.left - m.right - zone_pad * 2.0).max(0.0);
+    // 纵向底:body 底 = zone 内框底(区底再内缩 zone_pad);`compute` 里已扣
+    // 过 body 自己的 `padding.bottom`,这里只把 zone_pad 一并算进去。
+    let inh = (window_height
+        - byteui::theme::geometry::top_bar_height()
+        - byteui::theme::geometry::status_bar_height()
+        - m.top
+        - m.bottom
+        - zone_pad * 2.0)
+        .max(0.0);
     compute(inx, iny, inw, inh)
 }
 
@@ -1307,15 +1332,26 @@ mod tests {
         let state = git_log_test_state();
         let (x, y, w, h) = git_log_diff_pane_bounds_for(Side::Left, 1440.0, 900.0, &state);
         let p = theme::region::project_pane();
-        let m = theme::region::left_zone().margin;
+        let zone = theme::region::left_zone();
+        let m = zone.margin;
+        let pad = zone.padding.left;
         let left_w = left_zone_width(1440.0, &state);
-        let zone_inner_w = left_w - m.left - m.right;
+        let zone_inner_w = left_w - m.left - m.right - pad * 2.0;
         let pair_w = pair_content_width(zone_inner_w);
         let cols = pair_columns(pair_w, state.dims.git_log_split, false);
-        // x = 图标栏 + margin.left + padding.left + content_x
-        let expected_x =
-            byteui::theme::geometry::icon_rail_width() + m.left + p.padding.left + cols.content_x;
+        // x = 图标栏 + margin.left + 区 padding + 内容列 padding.left + content_x
+        let expected_x = byteui::theme::geometry::icon_rail_width()
+            + m.left
+            + pad
+            + p.padding.left
+            + cols.content_x;
         assert!((x - expected_x).abs() < 0.5, "x={x} expected≈{expected_x}");
+        // 宽度 = 内容列净宽(扣掉左右内边距)——否则 webview 右缘越界。
+        assert!(
+            (w - (cols.content_w - p.padding.left - p.padding.right)).abs() < 0.5,
+            "w={w} expected≈{}",
+            cols.content_w - p.padding.left - p.padding.right
+        );
         assert!(w > 100.0 && w < zone_inner_w, "w={w}");
         assert!(h > 0.0 && y + h < 900.0, "y={y} h={h}");
     }
@@ -1367,7 +1403,7 @@ mod tests {
     }
 
     /// GitLog 镜像(挪到右栏)时 diff pane 的横向起点应与左栏同款公式
-    /// (内容列在 pair 里的位置随镜像翻转)。
+    /// (内容列在 pair 里的位置随镜像翻转),右缘同样停在区右边界内缩处。
     #[test]
     fn git_log_diff_pane_mirrored_uses_content_column() {
         let state = ShellState {
@@ -1377,16 +1413,79 @@ mod tests {
         };
         let (x, _y, w, _h) = git_log_diff_pane_bounds_for(Side::Right, 1440.0, 900.0, &state);
         let m = theme::region::right_zone().margin;
+        let pad = theme::region::right_zone().padding.left;
         let right_raw = right_zone_width(1440.0, &state);
         let (zone_x0, _) = pair_x0_and_width(Side::Right, 1440.0, &state);
         let p = theme::region::project_pane();
-        let pair_w = pair_content_width(right_raw - m.left - m.right);
+        let pair_w = pair_content_width(right_raw - m.left - m.right - pad * 2.0);
         let mirrored =
             state.layout.rail_layout.side_of(PanelKind::GitLog) != PanelKind::GitLog.default_side();
         let cols = pair_columns(pair_w, state.dims.git_log_split, mirrored);
-        let expected_x = zone_x0 + m.left + p.padding.left + cols.content_x;
+        let expected_x = zone_x0 + m.left + pad + p.padding.left + cols.content_x;
         assert!((x - expected_x).abs() < 0.5, "x={x} expected≈{expected_x}");
+        // 右缘 = 区右边界内缩「区 padding + 内容列右 padding」。
+        assert!(
+            (x + w - (zone_x0 + right_raw - m.right - pad - p.padding.right)).abs() < 0.5,
+            "镜像态 diff 右缘越界: x+w={} 期望={}",
+            x + w,
+            zone_x0 + right_raw - m.right - pad - p.padding.right
+        );
         assert!(w > 100.0, "w={w}");
+    }
+
+    /// 回归护栏(2026-09-30「git log diff 窗口溢出」):直角原生 webview 恒
+    /// 盖在 iced 之上,必须落在面板实际渲染的 diff 盒子之内——分栏态右缘
+    /// 内缩「区 padding + 内容列右 padding」、底边不进区底内边距;放大态整
+    /// 块落在金色描边盒之内(右缘内缩内容列右 padding、底边内缩 body 下
+    /// padding),不顶到金框圆角。
+    #[test]
+    fn git_log_diff_pane_clears_zone_edges_and_frame() {
+        // 分栏态(左栏)。
+        let state = git_log_test_state();
+        let (x, y, w, h) = git_log_diff_pane_bounds_for(Side::Left, 1440.0, 900.0, &state);
+        let zone = theme::region::left_zone();
+        let m = zone.margin;
+        let pad = zone.padding.left;
+        let p = theme::region::project_pane();
+        let zone_x0 = byteui::theme::geometry::icon_rail_width();
+        let zone_right = zone_x0 + left_zone_width(1440.0, &state);
+        assert!(
+            (x + w - (zone_right - m.right - pad - p.padding.right)).abs() < 0.5,
+            "分栏态 diff 右缘应内缩于区右边界: x+w={} 期望={}",
+            x + w,
+            zone_right - m.right - pad - p.padding.right
+        );
+        let zone_bottom = 900.0 - byteui::theme::geometry::status_bar_height() - m.bottom;
+        assert!(
+            y + h <= zone_bottom - pad + 0.01,
+            "分栏态 diff 底边应在区内边距之上: {} vs {}",
+            y + h,
+            zone_bottom - pad
+        );
+
+        // 放大态(左放大):整矩形落在金框内。
+        let maxed = ShellState {
+            maximized: Some(MaximizedPane::Left),
+            ..git_log_test_state()
+        };
+        let (x, y, w, h) = git_log_diff_pane_bounds_for(Side::Left, 1440.0, 900.0, &maxed);
+        let (x0, avail_w) = maximized_box_x_range(1440.0);
+        let box_bottom = byteui::theme::geometry::top_bar_height()
+            + byteui::theme::geometry::maximize_overlay_padding()
+            + maximized_box_height(900.0);
+        assert!(
+            (x + w - (x0 + avail_w - p.padding.right)).abs() < 0.5,
+            "放大态 diff 右缘应内缩于金框: x+w={} 期望={}",
+            x + w,
+            x0 + avail_w - p.padding.right
+        );
+        assert!(
+            y + h <= box_bottom - p.padding.bottom + 0.01,
+            "放大态 diff 底边应内缩于金框: {} vs {}",
+            y + h,
+            box_bottom - p.padding.bottom
+        );
+        assert!(w > 100.0 && h > 0.0, "放大态矩形不应为空: w={w} h={h}");
     }
 
     #[test]

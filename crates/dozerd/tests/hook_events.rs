@@ -78,6 +78,7 @@ async fn hook_event_reaches_attached_client_and_list() {
             cols: 80,
             rows: 24,
             project_id: 1,
+            agent: dozer_core::protocol::AgentKind::Unknown,
         },
     )
     .await
@@ -699,6 +700,7 @@ async fn aider_hook_sequence_drives_state_machine() {
             cols: 80,
             rows: 24,
             project_id: 1,
+            agent: dozer_core::protocol::AgentKind::Unknown,
         },
     )
     .await

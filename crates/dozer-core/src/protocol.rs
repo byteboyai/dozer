@@ -800,6 +800,10 @@ pub enum Request {
         /// 这个会话属于哪个项目——GUI 侧发起 CreateSession 时必须显式指定，
         /// 不再像单项目时代那样只靠一个隐式全局"当前项目"（P2a）。
         project_id: i64,
+        /// 创建者已知的 agent 身份。旧客户端没有此字段时兼容为
+        /// `Unknown`；后续 hook 事件仍可更新它。
+        #[serde(default)]
+        agent: AgentKind,
     },
     Attach {
         session_id: String,
@@ -1609,6 +1613,7 @@ mod tests {
             cols: 80,
             rows: 24,
             project_id: 1,
+            agent: AgentKind::Unknown,
         };
         let line = encode_line(&req);
         assert!(line.ends_with('\n'));
@@ -1819,10 +1824,24 @@ mod tests {
             cols: 80,
             rows: 24,
             project_id: 3,
+            agent: AgentKind::Codex,
         };
         let line = encode_line(&req);
         let back: Request = decode_line(line.trim()).unwrap();
         assert_eq!(back, req);
+    }
+
+    #[test]
+    fn old_create_session_request_without_agent_defaults_unknown() {
+        let old = r#"{"type":"create_session","name":"n","command":"/bin/sh","args":[],"cwd":"/tmp","cols":80,"rows":24,"project_id":3}"#;
+        let req: Request = decode_line(old).unwrap();
+        assert!(matches!(
+            req,
+            Request::CreateSession {
+                agent: AgentKind::Unknown,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -99,6 +99,7 @@ async fn session_survives_client_disconnect() {
         cols: 80,
         rows: 24,
         project_id: 1,
+        agent: dozer_core::protocol::AgentKind::Codex,
     })
     .await;
     let Reply::Created { session } = c1.recv().await else {
@@ -134,6 +135,11 @@ async fn session_survives_client_disconnect() {
     let Reply::Sessions { sessions } = c2.recv().await else {
         panic!("expect Sessions")
     };
+    assert_eq!(
+        sessions.iter().find(|s| s.id == sid).map(|s| s.agent),
+        Some(dozer_core::protocol::AgentKind::Codex),
+        "GUI 断开重连后 daemon 仍应记得创建时的 agent"
+    );
     assert_eq!(sessions.len(), 1);
     assert!(sessions[0].alive, "session must survive client disconnect");
 
@@ -291,6 +297,7 @@ async fn attach_delivers_marker_exactly_once() {
         cols: 80,
         rows: 24,
         project_id: 1,
+        agent: dozer_core::protocol::AgentKind::Unknown,
     })
     .await;
     let Reply::Created { session } = c.recv().await else {
@@ -379,6 +386,7 @@ async fn attach_from_offset_resumes_within_window() {
         cols: 80,
         rows: 24,
         project_id: 1,
+        agent: dozer_core::protocol::AgentKind::Unknown,
     })
     .await;
     let Reply::Created { session } = c1.recv().await else {
@@ -500,6 +508,7 @@ async fn attach_stream_offset_invariant_under_load() {
         cols: 80,
         rows: 24,
         project_id: 1,
+        agent: dozer_core::protocol::AgentKind::Unknown,
     })
     .await;
     let Reply::Created { session } = c0.recv().await else {
@@ -599,6 +608,7 @@ async fn attach_from_offset_out_of_window_falls_back_to_full_snapshot() {
         cols: 80,
         rows: 24,
         project_id: 1,
+        agent: dozer_core::protocol::AgentKind::Unknown,
     })
     .await;
     let Reply::Created { session } = c.recv().await else {
