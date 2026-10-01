@@ -1,10 +1,10 @@
-import { useState } from 'preact/hooks';
+import { useViewState } from '../useViewState.ts';
 import type { StructureBody } from '../types.ts';
 import { filterStructure } from '../structureFilter.ts';
 import { FindingRowView } from './FindingRow.tsx';
 
 export function StructurePage({ body }: { body: StructureBody }) {
-  const [mode, setMode] = useState<'new' | 'all'>('new');
+  const [mode, setMode] = useViewState<'new' | 'all'>('structure.mode', 'new');
   const shown = filterStructure(body.findings, mode);
   return (
     <div>

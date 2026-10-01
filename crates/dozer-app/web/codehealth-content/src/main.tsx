@@ -4,6 +4,7 @@ import './styles.css';
 import { App } from './components/App.tsx';
 import { applyEnvelope, type PushState } from './protocol.ts';
 import { send } from './ipc.ts';
+import { shouldReportError } from './errors.ts';
 
 // 主题由 URL `?theme=light|dark` 注入(同 dozer://usage-content),缺省回落 dark。
 function applyThemeFromUrl() {
@@ -20,12 +21,14 @@ function Root() {
         setState((prev) => applyEnvelope(prev, json));
       },
     };
-    window.addEventListener('error', (e) =>
-      send({ kind: 'failed', reason: String(e.message || e.error) }),
-    );
+    const onError = (e: ErrorEvent) => {
+      if (shouldReportError(e)) send({ kind: 'failed', reason: String(e.message || e.error) });
+    };
+    window.addEventListener('error', onError);
     // `__dozer.dispatch` 已可用,报回 Rust;Rust 收到后才开始推送。
     send({ kind: 'ready' });
     return () => {
+      window.removeEventListener('error', onError);
       delete window.__dozer;
     };
   }, []);

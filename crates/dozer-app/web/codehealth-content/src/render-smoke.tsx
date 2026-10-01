@@ -126,3 +126,24 @@ test('architecture: partial shows warning and errors', () => {
 test('architecture: truncated shows the truncation note', () => {
   assert.match(html(archTruncatedFixture), /仅显示 crate 层/);
 });
+
+import { resetViewState, writeViewState } from './viewState.ts';
+
+// 修复回归:分类切换会卸载页面,视图状态必须从组件外的存储恢复。
+test('structure: filter chosen earlier is restored when the page is mounted again', () => {
+  resetViewState();
+  writeViewState('structure.mode', 'all');
+  const out = html(structureFixture);
+  assert.match(out, /old 控制流信号 9/, '「全部」筛选应被恢复,持续存在的发现可见');
+  resetViewState();
+});
+
+test('architecture: layer and risk-only chosen earlier are restored', () => {
+  resetViewState();
+  writeViewState('arch.layer', 'module');
+  writeViewState('arch.riskOnly', true);
+  const out = html(archFixture);
+  assert.match(out, /class="active"[^>]*>\s*module/);
+  assert.match(out, /checked/);
+  resetViewState();
+});

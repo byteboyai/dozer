@@ -140,3 +140,25 @@ test('crate layer ignores module nodes even when expanded set is non-empty', () 
     ['crate:a', 'crate:b'],
   );
 });
+
+// 修复:crate 层必须把该 crate 的所有后代模块并入 representedIds,否则模块级的
+// 风险/影响范围在默认的 crate 层看不见,"仅看风险"得到空图。
+test('crate layer represents all descendant modules', () => {
+  const g = projectGraph(base);
+  const a = g.nodes.find((v) => v.id === 'crate:a')!;
+  assert.deepEqual(
+    [...a.representedIds].sort(),
+    ['crate:a', 'module:a', 'module:a::x', 'module:a::x::deep', 'module:a::y'],
+  );
+  const b = g.nodes.find((v) => v.id === 'crate:b')!;
+  assert.deepEqual([...b.representedIds].sort(), ['crate:b', 'module:b']);
+});
+
+test('crate layer + riskOnly keeps crates owning a risky module', () => {
+  const g = projectGraph({
+    ...base,
+    riskOnly: true,
+    riskNodeIds: new Set(['module:a::x::deep']),
+  });
+  assert.deepEqual(g.nodes.map((v) => v.id), ['crate:a']);
+});

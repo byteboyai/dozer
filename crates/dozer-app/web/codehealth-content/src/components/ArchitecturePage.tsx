@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'preact/hooks';
+import { useViewState } from '../useViewState.ts';
 import type { ArchitectureBody } from '../types.ts';
 import { projectGraph } from '../graph/projection.ts';
 import { addedNodeIds, impactNodeIds, riskForNode, riskIndex } from '../graph/linking.ts';
@@ -6,10 +7,10 @@ import { GraphCanvas } from './GraphCanvas.tsx';
 import { FindingRowView } from './FindingRow.tsx';
 
 export function ArchitecturePage({ body }: { body: ArchitectureBody }) {
-  const [layer, setLayer] = useState<'crate' | 'module'>('crate');
-  const [riskOnly, setRiskOnly] = useState(false);
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [layer, setLayer] = useViewState<'crate' | 'module'>('arch.layer', 'crate');
+  const [riskOnly, setRiskOnly] = useViewState('arch.riskOnly', false);
+  const [expanded, setExpanded] = useViewState<ReadonlySet<string>>('arch.expanded', new Set());
+  const [selectedId, setSelectedId] = useViewState<string | null>('arch.selected', null);
   const [focusId, setFocusId] = useState<string | null>(null);
   const [fitSignal, setFitSignal] = useState(0);
 
@@ -68,10 +69,10 @@ export function ArchitecturePage({ body }: { body: ArchitectureBody }) {
       <div class="arch-toolbar">
         <h2>架构地图</h2>
         <div class="seg">
-          <button class={layer === 'crate' ? 'active' : ''} onClick={() => setLayer('crate')}>
+          <button class={layer === 'crate' ? 'active' : ''} onClick={() => { setLayer('crate'); setFitSignal((n) => n + 1); }}>
             crate
           </button>
-          <button class={layer === 'module' ? 'active' : ''} onClick={() => setLayer('module')}>
+          <button class={layer === 'module' ? 'active' : ''} onClick={() => { setLayer('module'); setFitSignal((n) => n + 1); }}>
             module
           </button>
         </div>
@@ -79,7 +80,10 @@ export function ArchitecturePage({ body }: { body: ArchitectureBody }) {
           <input
             type="checkbox"
             checked={riskOnly}
-            onChange={(e) => setRiskOnly((e.currentTarget as HTMLInputElement).checked)}
+            onChange={(e) => {
+              setRiskOnly((e.currentTarget as HTMLInputElement).checked);
+              setFitSignal((n) => n + 1);
+            }}
           />
           仅看风险
         </label>

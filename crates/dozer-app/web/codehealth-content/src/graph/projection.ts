@@ -45,6 +45,25 @@ export function projectGraph(input: ProjectionInput): VisibleGraph {
 function projectCrateLayer(input: ProjectionInput): VisibleGraph {
   const crates = input.nodes.filter((n) => n.kind === 'crate').sort(byId);
   const ids = new Set(crates.map((c) => c.id));
+  // 每个节点归属的 crate(沿 parent_id 链向上找到 crate 为止)。模块级的风险/影响
+  // 范围要能在 crate 层显示,所以 crate 节点代表它名下的全部后代模块。
+  const parentOf = new Map(input.nodes.map((n) => [n.id, n.parent_id]));
+  const owner = (id: string): string | null => {
+    const seen = new Set<string>();
+    let cur: string | null | undefined = id;
+    while (cur && !seen.has(cur)) {
+      if (ids.has(cur)) return cur;
+      seen.add(cur);
+      cur = parentOf.get(cur);
+    }
+    return null;
+  };
+  const represented = new Map<string, string[]>(crates.map((c) => [c.id, [c.id]]));
+  for (const n of input.nodes) {
+    if (n.kind === 'crate') continue;
+    const o = owner(n.id);
+    if (o) represented.get(o)!.push(n.id);
+  }
   const nodes: VNode[] = crates.map((c) => ({
     id: c.id,
     label: c.name,
@@ -52,7 +71,7 @@ function projectCrateLayer(input: ProjectionInput): VisibleGraph {
     loc: c.loc,
     childCount: 0,
     collapsed: false,
-    representedIds: [c.id],
+    representedIds: represented.get(c.id)!.slice().sort(),
   }));
   const edges: VEdge[] = input.edges
     .filter((e) => e.kind === 'cargo_dependency' && ids.has(e.from) && ids.has(e.to))
