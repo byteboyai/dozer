@@ -36,6 +36,7 @@ import {
   closeSearchPanel,
   setSearchQuery,
   SearchQuery,
+  highlightSelectionMatches,
 } from '@codemirror/search';
 import {
   bracketMatching,
@@ -423,6 +424,8 @@ function buildExtensions(): Extension[] {
     crosshairCursor(),
     highlightActiveLine(),
     search({ top: true }),
+    // 选中一个词(如双击)时,高亮同一文件里其他位置的相同文字。
+    highlightSelectionMatches(),
     keymap.of([
       {
         key: 'Mod-s',

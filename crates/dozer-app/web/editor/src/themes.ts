@@ -14,6 +14,7 @@ interface Palette {
   gutterFg: string;
   activeLine: string;
   selection: string;
+  selectionMatch: string;
   cursor: string;
   comment: string;
   green: string;
@@ -32,6 +33,8 @@ const DARK: Palette = {
   gutterFg: '#6B7F8F',
   activeLine: 'rgba(255,229,180,0.05)',
   selection: 'rgba(71,222,240,0.22)',
+  // 其他位置的同词高亮:与选区同一青色系但更淡(金色 #F2D94E 是"甲方动作"专属,不能拿来做装饰)。
+  selectionMatch: 'rgba(71,222,240,0.12)',
   cursor: '#F2D94E',
   comment: '#6B7F8F',
   green: '#1AD585',
@@ -50,6 +53,7 @@ const LIGHT: Palette = {
   gutterFg: '#9a8f7d',
   activeLine: 'rgba(0,0,0,0.04)',
   selection: 'rgba(0,120,150,0.18)',
+  selectionMatch: 'rgba(0,120,150,0.10)',
   cursor: '#8a6d00',
   comment: '#9a8f7d',
   green: '#0f8a52',
@@ -108,6 +112,7 @@ function baseTheme(p: Palette): Extension {
       '.cm-cursor, .cm-dropCursor': { borderLeftColor: p.cursor },
       '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection':
         { backgroundColor: p.selection },
+      '.cm-selectionMatch': { backgroundColor: p.selectionMatch },
       '.cm-gutters': {
         backgroundColor: p.gutterBg,
         color: p.gutterFg,
