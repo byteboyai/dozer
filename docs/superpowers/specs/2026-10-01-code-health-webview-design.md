@@ -1,6 +1,6 @@
 # 代码健康度面板内容侧迁移到 WebView（含架构地图）
 
-**状态：已批准（brainstorming 会话，2026-10-01，设计三节均获用户确认）**
+**状态:已批准并已实现(2026-10-01,见实现计划与「实现期决议」)**
 
 **关联 spec：**
 
@@ -146,6 +146,16 @@
 2. Cytoscape + 布局插件的 bundle 体积与 webview 首屏时间。
 3. 重新扫描后同一份图布局是否完全一致。
 4. `CODEHEALTH_CONTENT_ID_OFFSET` 取值与现有槽位序列的衔接。
+
+## 实现期决议(2026-10-01,写计划时确定)
+
+1. **不用 Cytoscape 复合节点、不装 cytoscape-dagre / cytoscape-expand-collapse**:展开/折叠由前端纯函数 `projectGraph` 投影出扁平可见图,`dagre` 单独算坐标,Cytoscape 用 `preset` 布局只负责绘制与交互。风险 1(复合节点稳定性)因此规避;风险 3(布局确定性)由 `layout.test.ts` 固化。
+2. **不引入 elk**:`elkjs` 为 EPL-2.0 / GPL 双许可,与仓库其余 MIT 依赖不同;dagre 够用,需要时另行评估。
+3. **「前端不做计算」的精确边界**:聚合、排序、差异、风险分析在 Rust;前端只做「由视图状态(层级/展开集合/仅看风险)派生的可见子图投影」与布局坐标,这两者是渲染的一部分,且为纯函数、有单测。
+4. **结构复杂度「本轮新增/全部」筛选**移到前端本地(Rust `StructureFilter` 删除);分类 `category` 仍留在 Rust(原生导航需要)。
+5. **扫描中**不卸载 webview(原 spec 误以为现状是 `math_curve` 动画,实际是文字提示)。
+6. **新增事件 `ScanRequested` / `AnalyzeFinding`**;删除 `SelectFinding`(无需求)。
+7. **webview 事件的跳转路径**只接受相对路径且不含 `..`(`is_safe_relative_path`)。
 
 ## 文档同步
 
