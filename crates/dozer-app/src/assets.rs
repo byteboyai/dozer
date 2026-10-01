@@ -176,6 +176,12 @@ fn usage_content_root_for(flyfish_root: &Path) -> PathBuf {
     flyfish_root.with_file_name("usage-content")
 }
 
+/// codehealth-content host(代码健康度内容侧)静态资源根 = flyfish 根的兄弟
+/// 目录 `codehealth-content`。同 `usage_content_root_for`。
+fn codehealth_content_root_for(flyfish_root: &Path) -> PathBuf {
+    flyfish_root.with_file_name("codehealth-content")
+}
+
 /// T7:`dozer://html/__file__/<abs>` 的读取闸门。比 editor 的"精确文件白名单"
 /// 宽一点:允许**已打开文件所在目录子树**(相对资源 css/js/图片要能加载),
 /// 但不允许跨出这些目录,且拒绝任何 `..` 分量 + 再 canonicalize 复核(防符号
@@ -238,7 +244,7 @@ pub fn handle_protocol(
     uri: &str,
 ) -> ProtocolReply {
     // 剥离 scheme 与 query;只服务 flyfish/review-trace/editor/json-editor/
-    // html/usage-content 这些命名空间。
+    // html/usage-content/codehealth-content 这些命名空间。
     let Some(rest) = uri.strip_prefix("dozer://") else {
         return not_found();
     };
@@ -266,6 +272,12 @@ pub fn handle_protocol(
     // 全靠 evaluate_script 推送,不走 fetch(见 protocol.rs)。
     if let Some(path) = rest.strip_prefix("usage-content/") {
         return serve_vendored(&usage_content_root_for(assets_root), path);
+    }
+
+    // codehealth-content host(代码健康度内容侧):同 usage-content,没有 data.json
+    // 特判,数据全靠 evaluate_script 推送。
+    if let Some(path) = rest.strip_prefix("codehealth-content/") {
+        return serve_vendored(&codehealth_content_root_for(assets_root), path);
     }
 
     // editor host:页面/脚本/样式/字体从 editor 根服务;`__file__/<abs>` 复用
@@ -487,6 +499,52 @@ mod tests {
         let root = scratch();
         std::fs::create_dir_all(root.with_file_name("usage-content")).unwrap();
         let r = handle_protocol(&root, &HashSet::new(), None, "dozer://usage-content/nope");
+        assert_eq!(r.status, 404);
+    }
+
+    #[test]
+    fn codehealth_content_serves_vendored_files() {
+        let root = scratch();
+        std::fs::create_dir_all(root.with_file_name("codehealth-content")).unwrap();
+        std::fs::write(
+            root.with_file_name("codehealth-content").join("host.html"),
+            b"<html>c</html>",
+        )
+        .unwrap();
+        let r = handle_protocol(
+            &root,
+            &HashSet::new(),
+            None,
+            "dozer://codehealth-content/host.html",
+        );
+        assert_eq!((r.status, r.mime), (200, "text/html"));
+        assert_eq!(r.body, b"<html>c</html>");
+    }
+
+    #[test]
+    fn codehealth_content_unknown_subpath_404() {
+        let root = scratch();
+        std::fs::create_dir_all(root.with_file_name("codehealth-content")).unwrap();
+        let r = handle_protocol(
+            &root,
+            &HashSet::new(),
+            None,
+            "dozer://codehealth-content/nope",
+        );
+        assert_eq!(r.status, 404);
+    }
+
+    /// 路径穿越不得逃出 codehealth-content 根。
+    #[test]
+    fn codehealth_content_rejects_path_traversal() {
+        let root = scratch();
+        std::fs::create_dir_all(root.with_file_name("codehealth-content")).unwrap();
+        let r = handle_protocol(
+            &root,
+            &HashSet::new(),
+            None,
+            "dozer://codehealth-content/../usage-content/host.html",
+        );
         assert_eq!(r.status, 404);
     }
 
