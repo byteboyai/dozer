@@ -54,7 +54,10 @@ rail、左侧树面板、中央工作区、右侧面板；配色语义一致（�
 - 应用自己的 `theme::init()`：启动时读自己的 JSON 并调用 `set_theme()`。digger 初期直接用默认值，后续按需微调。
 - `icon_size` 缩放配置路径由应用传入（现状如此），digger 传自己的路径。
 
-**拆出前要改的两处**
+**拆出前要改的三处**
+0. `icon_size` 读取的环境变量 `DOZER_ICON_SCALE` 是 Dozer 专属名字。库里改为优先读
+   `BYTEUI_ICON_SCALE`，同时兼容旧名 `DOZER_ICON_SCALE`（已有用户的设置不失效）；非数字、0、负数视为
+   未设置。（评审实现计划时补记。）
 1. 测试 `byteboy2077_matches_dozer_app_baseline` 引用了 dozer-app 的取值，拆库后不能保留。改成 byteui
    内部的锁值快照；dozer-app 另加一条测试，说明自己的 JSON 与默认值的差异是有意为之。
 2. 注释中提到 dozer-app 文件路径的地方（`search_box.rs`、`toast.rs`、`theme/color.rs`、`theme/font.rs`
@@ -110,5 +113,7 @@ rail、左侧树面板、中央工作区、右侧面板；配色语义一致（�
 ## 8. 未决项
 
 - 仓库名为 `byteui`、历史随迁：已确认。
-- `dozer-silent1` 是否仍需保留：迁移第 4 步时再确认。
+- `dozer-silent1`：已确认它是 dozer 的一个 git worktree（分支 `feat/silent-failures-batch1`，领先 main
+  8 个提交、未推远程），不是独立副本，**必须保留**，不在本次处理范围；它不改动 byteui，拆分合并后
+  `git rebase main` 即可。
 - finmeter 的接入与 `byteui-tokens` 拆分：待 finmeter 开始实现时单独立项。
