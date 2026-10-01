@@ -1524,12 +1524,6 @@ impl App {
                     codehealth::update(&mut ws.codehealth, msg);
                 });
             }
-            Message::CodeHealth(codehealth::Message::OpenLocation(path, line)) => {
-                self.code_health_open_location(path, line);
-            }
-            Message::CodeHealth(codehealth::Message::AnalyzeFinding(id)) => {
-                self.code_health_analyze_finding(id);
-            }
             Message::CodeHealth(codehealth::Message::ScanRequested) => {
                 self.code_health_request_scan();
             }
