@@ -1,4 +1,9 @@
-export type CategoryKey = 'overview' | 'structure' | 'ui_consistency' | 'scan_scope';
+export type CategoryKey =
+  | 'overview'
+  | 'structure'
+  | 'ui_consistency'
+  | 'scan_scope'
+  | 'architecture';
 export type SeverityKey = 'critical' | 'watch';
 export type ChangeKey = 'new' | 'worsened' | 'improved' | 'persisting' | 'resolved';
 export type TierKey = 'healthy' | 'watch' | 'critical';
@@ -86,7 +91,69 @@ export interface EmptyBody {
   message: string;
 }
 
-export type Body = EmptyBody | OverviewBody | StructureBody | UiBody | ScopeBody;
+export interface ArchNode {
+  id: string;
+  kind: 'workspace' | 'crate' | 'module' | 'external_crate';
+  name: string;
+  qualified_name: string;
+  path: string | null;
+  parent_id: string | null;
+  loc: number;
+  fan_in: number;
+  fan_out: number;
+  layer: string | null;
+}
+
+export interface ArchEdge {
+  id: string;
+  from: string;
+  to: string;
+  kind: 'cargo_dependency' | 'module_use';
+  evidence_count: number;
+}
+
+export interface ArchRisk {
+  kind: 'cycle' | 'hub' | 'boundary';
+  finding: FindingRow;
+  node_ids: string[];
+  edge_ids: string[];
+}
+
+export interface ArchImpactNode {
+  node_id: string;
+  distance: number;
+}
+
+export interface ArchitectureBody {
+  kind: 'architecture';
+  status: 'complete' | 'partial' | 'not_applicable';
+  status_note: string | null;
+  truncated_note: string | null;
+  nodes: ArchNode[];
+  edges: ArchEdge[];
+  cycles: { id: string; node_ids: string[]; edge_ids: string[] }[];
+  risks: ArchRisk[];
+  diff: {
+    state: 'no_baseline' | 'unavailable' | 'compared';
+    added_nodes: string[];
+    removed_nodes: string[];
+    added_edges: string[];
+    removed_edges: string[];
+    added_cycles: string[];
+    resolved_cycles: string[];
+  };
+  impact: { direct: ArchImpactNode[]; indirect: ArchImpactNode[]; truncated: boolean };
+  errors: string[];
+  unresolved_edges: number;
+}
+
+export type Body =
+  | EmptyBody
+  | OverviewBody
+  | StructureBody
+  | UiBody
+  | ScopeBody
+  | ArchitectureBody;
 
 export interface ViewPayload {
   scan: ScanBar;
