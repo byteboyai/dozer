@@ -24,3 +24,20 @@ export function computeLayout(graph: VisibleGraph): Map<string, { x: number; y: 
 }
 
 export const NODE_SIZE = { w: NODE_W, h: NODE_H };
+
+type Positions = Map<string, { x: number; y: number }>;
+
+/** 展开/折叠后整图被 dagre 重排;把整张新布局平移,使被点击的锚点节点留在原位
+ *  (用户的方位感),其余节点相对锚点的位置不变。锚点不在新旧布局里时原样返回。
+ *  不修改入参。 */
+export function alignToAnchor(next: Positions, prev: Positions, anchorId: string | null): Positions {
+  if (!anchorId) return next;
+  const before = prev.get(anchorId);
+  const after = next.get(anchorId);
+  if (!before || !after) return next;
+  const dx = before.x - after.x;
+  const dy = before.y - after.y;
+  const out: Positions = new Map();
+  for (const [id, p] of next) out.set(id, { x: p.x + dx, y: p.y + dy });
+  return out;
+}

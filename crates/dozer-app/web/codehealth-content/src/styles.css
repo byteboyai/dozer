@@ -121,3 +121,4 @@ h3 { margin: 18px 0 8px; font-size: 14px; font-weight: 600; color: var(--cream);
 .risk-item.active { border-color: var(--gold); }
 .detail dt { color: var(--dim); font-size: 11px; margin-top: 6px; }
 .detail dd { margin: 0; word-break: break-all; }
+.seg button:disabled { opacity: .4; cursor: default; }

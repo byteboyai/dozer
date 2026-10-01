@@ -147,3 +147,17 @@ test('architecture: layer and risk-only chosen earlier are restored', () => {
   assert.match(out, /checked/);
   resetViewState();
 });
+
+import { archCrateOnlyFixture } from './fixtures.ts';
+
+// 修复 5:没有模块节点(例如大图被裁成 crate 层)时,module 层不可选,
+// 即使之前持久化的是 module 也要回落到 crate,避免空图。
+test('architecture: crate-only payload disables the module layer and falls back to crate', () => {
+  resetViewState();
+  writeViewState('arch.layer', 'module');
+  const out = html(archCrateOnlyFixture);
+  assert.match(out, /<button[^>]*disabled[^>]*>\s*module/);
+  assert.match(out, /class="active"[^>]*>\s*crate/);
+  assert.match(out, /仅显示 crate 层/);
+  resetViewState();
+});

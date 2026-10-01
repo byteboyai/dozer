@@ -57,3 +57,33 @@ test('cycles do not throw and still place every node', () => {
 test('empty graph yields empty layout', () => {
   assert.equal(computeLayout({ nodes: [], edges: [] }).size, 0);
 });
+
+import { alignToAnchor } from './layout.ts';
+
+type Pos = Map<string, { x: number; y: number }>;
+const P = (o: Record<string, [number, number]>): Pos =>
+  new Map(Object.entries(o).map(([k, [x, y]]) => [k, { x, y }]));
+
+// 展开/折叠后整图被 dagre 重排,但用户点的那个节点要留在原位,否则会失去方位感。
+test('alignToAnchor keeps the anchor where it was and shifts everything by the same delta', () => {
+  const prev = P({ a: [100, 50], b: [300, 50] });
+  const next = P({ a: [20, 20], b: [220, 20], c: [220, 80] });
+  const out = alignToAnchor(next, prev, 'a');
+  assert.deepEqual(out.get('a'), { x: 100, y: 50 });
+  assert.deepEqual(out.get('b'), { x: 300, y: 50 });
+  assert.deepEqual(out.get('c'), { x: 300, y: 110 });
+});
+
+test('alignToAnchor is a no-op without an anchor or when the anchor is new', () => {
+  const next = P({ a: [20, 20] });
+  assert.deepEqual(alignToAnchor(next, P({ z: [1, 1] }), null), next);
+  assert.deepEqual(alignToAnchor(next, P({ z: [1, 1] }), 'a'), next);
+  assert.deepEqual(alignToAnchor(next, P({ z: [1, 1] }), 'missing'), next);
+});
+
+test('alignToAnchor does not mutate its inputs', () => {
+  const prev = P({ a: [100, 50] });
+  const next = P({ a: [20, 20] });
+  alignToAnchor(next, prev, 'a');
+  assert.deepEqual(next.get('a'), { x: 20, y: 20 });
+});

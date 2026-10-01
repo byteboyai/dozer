@@ -229,3 +229,14 @@ export const archTruncatedFixture: ViewPayload = {
     truncated_note: '模块图过大(3005 个节点),仅显示 crate 层;分析结果(循环/枢纽/越界)仍基于完整图。',
   },
 };
+
+export const archCrateOnlyFixture: ViewPayload = {
+  scan: scanIdle,
+  category: 'architecture',
+  body: {
+    ...archBody,
+    nodes: archBody.nodes.filter((n) => n.kind === 'crate'),
+    edges: archBody.edges.filter((e) => e.kind === 'cargo_dependency'),
+    truncated_note: '模块图过大(3005 个节点),仅显示 crate 层;分析结果(循环/枢纽/越界)仍基于完整图。',
+  },
+};

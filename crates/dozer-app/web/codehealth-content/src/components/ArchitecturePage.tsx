@@ -7,12 +7,17 @@ import { GraphCanvas } from './GraphCanvas.tsx';
 import { FindingRowView } from './FindingRow.tsx';
 
 export function ArchitecturePage({ body }: { body: ArchitectureBody }) {
-  const [layer, setLayer] = useViewState<'crate' | 'module'>('arch.layer', 'crate');
+  const [storedLayer, setLayer] = useViewState<'crate' | 'module'>('arch.layer', 'crate');
   const [riskOnly, setRiskOnly] = useViewState('arch.riskOnly', false);
   const [expanded, setExpanded] = useViewState<ReadonlySet<string>>('arch.expanded', new Set());
   const [selectedId, setSelectedId] = useViewState<string | null>('arch.selected', null);
   const [focusId, setFocusId] = useState<string | null>(null);
   const [fitSignal, setFitSignal] = useState(0);
+  const [anchorId, setAnchorId] = useState<string | null>(null);
+
+  // 大图被裁成 crate 层(或没有模块节点)时 module 层是空图:不可选,并回落到 crate。
+  const hasModules = body.nodes.some((n) => n.kind === 'module');
+  const layer = hasModules ? storedLayer : 'crate';
 
   const idx = useMemo(() => riskIndex(body.risks), [body.risks]);
   const impact = useMemo(() => impactNodeIds(body.impact), [body.impact]);
@@ -44,9 +49,16 @@ export function ArchitecturePage({ body }: { body: ArchitectureBody }) {
     );
   }
 
+  const switchLayer = (next: 'crate' | 'module') => {
+    setLayer(next);
+    setAnchorId(null);
+    setFitSignal((n) => n + 1);
+  };
+
   const toggleExpand = (id: string) => {
     const node = graph.nodes.find((n) => n.id === id);
     if (!node || node.childCount === 0) return;
+    setAnchorId(id);
     setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -69,10 +81,18 @@ export function ArchitecturePage({ body }: { body: ArchitectureBody }) {
       <div class="arch-toolbar">
         <h2>架构地图</h2>
         <div class="seg">
-          <button class={layer === 'crate' ? 'active' : ''} onClick={() => { setLayer('crate'); setFitSignal((n) => n + 1); }}>
+          <button
+            class={layer === 'crate' ? 'active' : ''}
+            onClick={() => switchLayer('crate')}
+          >
             crate
           </button>
-          <button class={layer === 'module' ? 'active' : ''} onClick={() => { setLayer('module'); setFitSignal((n) => n + 1); }}>
+          <button
+            class={layer === 'module' ? 'active' : ''}
+            disabled={!hasModules}
+            title={hasModules ? undefined : '没有可显示的模块节点'}
+            onClick={() => switchLayer('module')}
+          >
             module
           </button>
         </div>
@@ -82,6 +102,7 @@ export function ArchitecturePage({ body }: { body: ArchitectureBody }) {
             checked={riskOnly}
             onChange={(e) => {
               setRiskOnly((e.currentTarget as HTMLInputElement).checked);
+              setAnchorId(null);
               setFitSignal((n) => n + 1);
             }}
           />
@@ -124,6 +145,7 @@ export function ArchitecturePage({ body }: { body: ArchitectureBody }) {
           impactNodeIds={impact}
           addedNodeIds={added}
           focusId={focusId}
+          anchorId={anchorId}
           fitSignal={fitSignal}
           onSelect={setSelectedId}
           onToggleExpand={toggleExpand}

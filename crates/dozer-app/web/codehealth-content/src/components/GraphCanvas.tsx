@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'preact/hooks';
 import cytoscape, { type Core, type ElementDefinition } from 'cytoscape';
 import type { VisibleGraph } from '../graph/projection.ts';
-import { computeLayout, NODE_SIZE } from '../graph/layout.ts';
+import { alignToAnchor, computeLayout, NODE_SIZE } from '../graph/layout.ts';
 
 export interface GraphCanvasProps {
   graph: VisibleGraph;
@@ -14,6 +14,8 @@ export interface GraphCanvasProps {
   focusId: string | null;
   /** 值变化时适配窗口(「适配窗口 / 重置视图」按钮)。 */
   fitSignal: number;
+  /** 刚被展开/折叠的节点:重排后它留在原位,其余节点平滑过渡。 */
+  anchorId: string | null;
   onSelect(id: string | null): void;
   onToggleExpand(id: string): void;
 }
@@ -66,8 +68,10 @@ function styleSheet(): cytoscape.StylesheetJson {
   ] as cytoscape.StylesheetJson;
 }
 
-function elements(p: GraphCanvasProps): ElementDefinition[] {
-  const pos = computeLayout(p.graph);
+type Positions = Map<string, { x: number; y: number }>;
+
+/** `start`:上一次的位置。幸存节点先放在旧位置,随后动画到 `pos`,避免展开时整图跳变。 */
+function elements(p: GraphCanvasProps, pos: Positions, start: Positions): ElementDefinition[] {
   const nodes: ElementDefinition[] = p.graph.nodes.map((n) => ({
     group: 'nodes',
     data: {
@@ -75,7 +79,7 @@ function elements(p: GraphCanvasProps): ElementDefinition[] {
       label: n.collapsed ? `${n.label} (+${n.childCount})` : n.label,
       collapsed: n.collapsed,
     },
-    position: pos.get(n.id)!,
+    position: start.get(n.id) ?? pos.get(n.id)!,
     classes: [
       n.representedIds.some((id) => p.riskNodeIds.has(id)) ? 'risk' : '',
       n.representedIds.some((id) => p.impactNodeIds.has(id)) ? 'impact' : '',
@@ -97,6 +101,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
   const cy = useRef<Core | null>(null);
   const handlers = useRef(props);
   handlers.current = props;
+  const lastPos = useRef<Positions>(new Map());
 
   // 创建一次。
   useEffect(() => {
@@ -129,11 +134,21 @@ export function GraphCanvas(props: GraphCanvasProps) {
     const core = cy.current;
     if (!core) return;
     const hadNodes = core.nodes().length > 0;
+    const prev = lastPos.current;
+    const next = alignToAnchor(computeLayout(props.graph), prev, props.anchorId);
+    lastPos.current = next;
     core.batch(() => {
       core.elements().remove();
-      core.add(elements(props));
+      core.add(elements(props, next, prev));
     });
     core.layout({ name: 'preset' }).run();
+    core.nodes().forEach((n) => {
+      const from = prev.get(n.id());
+      const to = next.get(n.id());
+      if (from && to && (from.x !== to.x || from.y !== to.y)) {
+        n.animate({ position: to }, { duration: 200 });
+      }
+    });
     if (!hadNodes) core.fit(undefined, 24);
     if (props.selectedId) core.getElementById(props.selectedId).select();
   }, [
