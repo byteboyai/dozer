@@ -13,6 +13,8 @@ pub(crate) use git_hotspots::{HotspotView, rank_hotspots};
 mod view;
 pub(crate) use view::{content_pane, list_pane};
 
+pub(crate) mod arch_payload;
+
 pub(crate) mod view_model;
 
 pub(crate) mod protocol;
@@ -31,6 +33,7 @@ pub enum CodeHealthCategory {
     Structure,
     UiConsistency,
     ScanScope,
+    Architecture,
 }
 
 impl CodeHealthCategory {
@@ -40,15 +43,17 @@ impl CodeHealthCategory {
             CodeHealthCategory::Structure => "结构复杂度",
             CodeHealthCategory::UiConsistency => "UI 一致性",
             CodeHealthCategory::ScanScope => "扫描范围",
+            CodeHealthCategory::Architecture => "架构",
         }
     }
 
-    pub fn all() -> [CodeHealthCategory; 4] {
+    pub fn all() -> [CodeHealthCategory; 5] {
         [
             CodeHealthCategory::Overview,
             CodeHealthCategory::Structure,
             CodeHealthCategory::UiConsistency,
             CodeHealthCategory::ScanScope,
+            CodeHealthCategory::Architecture,
         ]
     }
 }

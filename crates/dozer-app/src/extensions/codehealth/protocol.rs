@@ -15,7 +15,7 @@ pub const CODEHEALTH_PROTOCOL_VERSION: u32 = 1;
 /// webview 加载后超过这个时长还没发 `ready` 就判失败,回落原生占位页。
 pub const READY_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// 面板分类(JSON 里的小写下划线形式)。阶段二会加 `Architecture`。
+/// 面板分类(JSON 里的小写下划线形式)。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CategoryKey {
@@ -23,6 +23,7 @@ pub enum CategoryKey {
     Structure,
     UiConsistency,
     ScanScope,
+    Architecture,
 }
 
 impl From<CodeHealthCategory> for CategoryKey {
@@ -32,6 +33,7 @@ impl From<CodeHealthCategory> for CategoryKey {
             CodeHealthCategory::Structure => CategoryKey::Structure,
             CodeHealthCategory::UiConsistency => CategoryKey::UiConsistency,
             CodeHealthCategory::ScanScope => CategoryKey::ScanScope,
+            CodeHealthCategory::Architecture => CategoryKey::Architecture,
         }
     }
 }
@@ -193,6 +195,7 @@ pub enum Body {
     Structure(StructureBody),
     UiConsistency(UiBody),
     ScanScope(ScopeBody),
+    Architecture(super::arch_payload::ArchitectureBody),
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -460,6 +463,9 @@ pub fn current_view_payload(ws: &WorkspaceState) -> CodeHealthViewPayload {
             CategoryKey::Structure => Body::Structure(structure_body(ws, report)),
             CategoryKey::UiConsistency => Body::UiConsistency(ui_body(report)),
             CategoryKey::ScanScope => Body::ScanScope(scope_body(ws, report)),
+            CategoryKey::Architecture => {
+                Body::Architecture(super::arch_payload::architecture_body(ws, report))
+            }
         },
     };
     CodeHealthViewPayload {

@@ -13,6 +13,7 @@ fn category_icon(category: CodeHealthCategory) -> icons::IconKind {
         CodeHealthCategory::Structure => icons::IconKind::FileCode,
         CodeHealthCategory::UiConsistency => icons::IconKind::LayoutList,
         CodeHealthCategory::ScanScope => icons::IconKind::Search,
+        CodeHealthCategory::Architecture => icons::IconKind::GitBranch,
     }
 }
 
@@ -140,11 +141,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn category_labels_and_all_cover_four_categories() {
-        assert_eq!(CodeHealthCategory::all().len(), 4);
+    fn category_labels_and_all_cover_five_categories() {
+        assert_eq!(CodeHealthCategory::all().len(), 5);
         assert_eq!(CodeHealthCategory::Overview.label(), "总览");
         assert_eq!(CodeHealthCategory::Structure.label(), "结构复杂度");
         assert_eq!(CodeHealthCategory::UiConsistency.label(), "UI 一致性");
         assert_eq!(CodeHealthCategory::ScanScope.label(), "扫描范围");
+        assert_eq!(CodeHealthCategory::Architecture.label(), "架构");
     }
 }
