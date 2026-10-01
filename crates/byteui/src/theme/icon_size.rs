@@ -45,8 +45,8 @@ pub struct IconSizeTokens {
 }
 
 impl IconSizeTokens {
-    /// 逐一对应 `dozer-app` 当前 `assets/theme/workspace.json` 的
-    /// `icon_sizes` 节点，仅作未显式 `set_theme()` 时的兜底默认值。
+    /// ByteBoy2077 的取值（与应用侧 JSON 的 `icon_sizes` 节点同名字段一致），
+    /// 仅作未显式 `set_theme()` 时的兜底默认值。
     pub const fn byteboy2077() -> Self {
         Self {
             rail: 16.0,
@@ -67,7 +67,7 @@ pub fn current() -> IconSizeTokens {
     *CURRENT.read().expect("byteui icon_size RwLock poisoned")
 }
 
-/// 整体替换当前图标尺寸 token——供调用方（如 `dozer-app::theme::init()`）
+/// 整体替换当前图标尺寸 token——供调用方（如应用启动时的 `theme::init()`）
 /// 在启动时用自己的 `workspace.json` 覆盖默认值。**不影响**运行时缩放
 /// 倍数（`CURRENT_SCALE`），那是独立机制，见模块文档。
 pub fn set_theme(tokens: IconSizeTokens) {
@@ -100,13 +100,30 @@ pub fn tree_row_gap() -> f32 {
 /// "尚未被运行时改写"，此时回落到 `current().scale`（token 基准值）。
 static CURRENT_SCALE: AtomicU32 = AtomicU32::new(u32::MAX);
 
-/// 启动基准 scale：`DOZER_ICON_SCALE` 环境变量优先，否则用 token 的 `scale`。
+/// 环境变量覆盖：`BYTEUI_ICON_SCALE` 优先；`DOZER_ICON_SCALE` 是 Dozer 早期
+/// 使用的名字，仍然兼容（已有用户的设置不失效）。
+const ENV_SCALE: &str = "BYTEUI_ICON_SCALE";
+const ENV_SCALE_LEGACY: &str = "DOZER_ICON_SCALE";
+
+/// 纯函数，便于不碰进程环境地测试：非数字、0、负数都当作"没设"。
+fn pick_env_scale(primary: Option<String>, legacy: Option<String>) -> Option<f32> {
+    let parse = |v: Option<String>| {
+        v.and_then(|s| s.parse::<f32>().ok())
+            .filter(|&v| v.is_finite() && v > 0.0)
+    };
+    parse(primary).or_else(|| parse(legacy))
+}
+
+fn env_scale_override() -> Option<f32> {
+    pick_env_scale(
+        std::env::var(ENV_SCALE).ok(),
+        std::env::var(ENV_SCALE_LEGACY).ok(),
+    )
+}
+
+/// 启动基准 scale：环境变量覆盖优先，否则用 token 的 `scale`。
 fn base_scale() -> f32 {
-    std::env::var("DOZER_ICON_SCALE")
-        .ok()
-        .and_then(|v| v.parse::<f32>().ok())
-        .filter(|&v| v > 0.0)
-        .unwrap_or(current().scale)
+    env_scale_override().unwrap_or(current().scale)
 }
 
 /// 全局缩放因子：所有 token accessor 都会乘它，因此改这一个值即整体缩放
@@ -145,7 +162,7 @@ pub fn reset_scale(path: &Path) {
 /// (`byteui` 不内置任何 Dozer 专属路径约定)。`DOZER_ICON_SCALE` 环境变量
 /// 是显式覆盖,优先级高于落盘值。
 pub fn init_scale(path: &Path) {
-    if std::env::var("DOZER_ICON_SCALE").is_ok() {
+    if env_scale_override().is_some() {
         return;
     }
     if let Some(v) = load_persisted_scale(path) {
@@ -169,7 +186,7 @@ fn load_persisted_scale(path: &Path) -> Option<f32> {
 }
 
 /// 写存盘 scale：目录不存在先建；任何 IO 失败静默（缩放是体验增强，不阻断
-/// 主流程，同 `dozer-hook` 的"任何错误都静默"定位）。
+/// 主流程，任何错误都静默）。
 fn save_persisted_scale(path: &Path, v: f32) {
     let _ = save_to(path, v);
 }
@@ -204,10 +221,10 @@ pub const SCALE_MAX: f32 = 3.0;
 mod tests {
     use super::*;
 
-    /// 防漂移锚：`byteboy2077()` 的每个字段值必须和 `dozer-app` 当前
-    /// `assets/theme/workspace.json` 的 `icon_sizes` 字面量一致。
+    /// 锁值快照：`byteboy2077()` 的每个字段值不得随意改动；
+    /// 改动必须同步确认所有消费方。
     #[test]
-    fn byteboy2077_matches_dozer_app_baseline() {
+    fn byteboy2077_locked_values() {
         let t = IconSizeTokens::byteboy2077();
         assert_eq!(t.rail, 16.0);
         assert_eq!(t.row, 14.0);
@@ -287,7 +304,7 @@ mod tests {
     /// 并落盘复位成出厂默认。两者都吃显式临时路径，不再碰用户真实配置目录。
     #[test]
     fn init_applies_persisted_and_reset_clears_it() {
-        if std::env::var("DOZER_ICON_SCALE").is_ok() {
+        if env_scale_override().is_some() {
             return;
         }
         with_temp_scale_file(|path| {
@@ -299,5 +316,31 @@ mod tests {
             assert_eq!(scale(), current().scale);
             assert_eq!(load_from(path), Some(current().scale));
         });
+    }
+
+    #[test]
+    fn pick_env_scale_prefers_byteui_name() {
+        assert_eq!(
+            pick_env_scale(Some("1.5".into()), Some("2.0".into())),
+            Some(1.5)
+        );
+    }
+
+    #[test]
+    fn pick_env_scale_falls_back_to_legacy_name() {
+        assert_eq!(pick_env_scale(None, Some("2.0".into())), Some(2.0));
+    }
+
+    #[test]
+    fn pick_env_scale_ignores_invalid_values() {
+        // 非数字、0、负数都当作"没设"。
+        assert_eq!(pick_env_scale(Some("abc".into()), None), None);
+        assert_eq!(pick_env_scale(Some("0".into()), None), None);
+        assert_eq!(pick_env_scale(Some("-1".into()), None), None);
+        // 主名非法时仍可回落到旧名。
+        assert_eq!(
+            pick_env_scale(Some("abc".into()), Some("2.0".into())),
+            Some(2.0)
+        );
     }
 }

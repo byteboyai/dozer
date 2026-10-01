@@ -19,8 +19,8 @@ pub struct FontTokens {
 }
 
 impl FontTokens {
-    /// 逐一对应 `dozer-app` 当前 `assets/theme/workspace.json` 的
-    /// `font_sizes` 节点，仅作未显式 `set_theme()` 时的兜底默认值。
+    /// ByteBoy2077 的取值（与应用侧 JSON 的 `font_sizes` 节点同名字段一致），
+    /// 仅作未显式 `set_theme()` 时的兜底默认值。
     pub const fn byteboy2077() -> Self {
         Self {
             dot_sm: 10,
@@ -41,7 +41,7 @@ pub fn current() -> FontTokens {
     *CURRENT.read().expect("byteui font RwLock poisoned")
 }
 
-/// 整体替换当前字号 token——供调用方（如 `dozer-app::theme::init()`）在
+/// 整体替换当前字号 token——供调用方（如应用启动时的 `theme::init()`）在
 /// 启动时用自己的 `workspace.json` 覆盖默认值。
 pub fn set_theme(tokens: FontTokens) {
     *CURRENT.write().expect("byteui font RwLock poisoned") = tokens;
@@ -78,10 +78,10 @@ fn scale(base: u32) -> u32 {
 mod tests {
     use super::*;
 
-    /// 防漂移锚：`byteboy2077()` 的每个字段值必须和 `dozer-app` 当前
-    /// `assets/theme/workspace.json` 的 `font_sizes` 字面量一致。
+    /// 锁值快照：`byteboy2077()` 的每个字段值不得随意改动；
+    /// 改动必须同步确认所有消费方。
     #[test]
-    fn byteboy2077_matches_dozer_app_baseline() {
+    fn byteboy2077_locked_values() {
         let t = FontTokens::byteboy2077();
         assert_eq!(t.dot_sm, 10);
         assert_eq!(t.caption_sm, 11);

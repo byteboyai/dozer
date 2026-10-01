@@ -40,14 +40,11 @@ pub struct ColorTokens {
 impl ColorTokens {
     /// `bg`/`panel`(`term_bg` 跟 `panel` 同值)2026-09-16 起拆成两个不同
     /// 数值——此前三者恒等,面板背景语义上分"可收缩的 list 侧用 bg、不可
-    /// 收缩的 content 侧用 panel"(见 dozer-app 的
-    /// `theme::region::{project_pane,agent_list_pane,conversation_list_pane}`
-    /// 等区域 JSON),浅色主题本就两值不同,深色缺这个区分度、用户要求补上。
+    /// 收缩的 content 侧用 panel"(见 Dozer 应用侧的
+    /// 区域样式 JSON),浅色主题本就两值不同,深色缺这个区分度、用户要求补上。
     /// `panel` 保留原有数值(终端/内容区视觉不变),`bg` 提亮一档给 list 侧
-    /// 一点分离感,同色系不出戏。此前这里写"逐一对应
-    /// crates/dozer-app/src/theme/color.rs 的锁死值,禁止改动"——那份文件
-    /// 在 byteui 颜色迁移系列完工后已删除,颜色 token 唯一来源就是这里,
-    /// 说明已过期一并去掉。
+    /// 一点分离感,同色系不出戏。颜色 token 的唯一来源就是这里,
+    /// 锁值测试见本文件 `tests`。
     pub const fn byteboy2077() -> Self {
         Self {
             bg: c(0x0d, 0x13, 0x1c),

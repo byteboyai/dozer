@@ -1,6 +1,6 @@
 //! amis `toast`(轻提示):<https://baidu.github.io/amis/zh-CN/components/toast>
 //!
-//! `ToastQueue` 是纯数据结构,不碰 iced 事件循环——消费方(如 dozer-app 的
+//! `ToastQueue` 是纯数据结构,不碰 iced 事件循环——消费方(应用的
 //! `State`)自己持有它,在已有的动画 tick 里调 `retain_active`,在需要弹
 //! 提示的地方调 `push`,决定把 `view(&queue)` 结果叠在哪一层。
 

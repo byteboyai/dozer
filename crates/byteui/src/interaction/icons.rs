@@ -81,11 +81,10 @@ pub enum IconKind {
     BotMessageSquare,
     /// 内容 pane 放大/还原(`MaximizedPane`)的触发图标。触发按钮已在
     /// `a0d324e`(2026-08-06)被主动移除,状态机/overlay 仍保留,是否重新
-    /// 接一个入口留给后续产品决策——见
-    /// `docs/superpowers/plans/2026-08-07-dozer-milestone-summary-and-plan-audit.md`。
+    /// 接一个入口留给后续产品决策(见 dozer 仓库的里程碑总结文档)。
     #[allow(dead_code)]
     Maximize,
-    /// 顶栏 `dozer_home_tab` 品牌页签标题图标(Lucide house)。
+    /// 应用顶栏首页页签的标题图标(Lucide house)。
     Home,
     RefreshCw,
     /// 无外框的裸加号(Lucide plus),项目面板小节行的"+"按钮用——
@@ -249,7 +248,7 @@ impl IconKind {
         )
     }
 
-    /// 内嵌 SVG 原始字节。`pub` 供 `dozer-app::native_menu` 等跨 crate 消费
+    /// 内嵌 SVG 原始字节。`pub` 供应用侧(如原生菜单)等跨 crate 消费
     /// 方在运行时把同一份 Lucide SVG 栅格化成原生菜单图标(用 resvg/usvg),
     /// 与 iced 侧 `view()` 的渲染共享同一份资源与着色语义。
     pub fn bytes(self) -> &'static [u8] {
