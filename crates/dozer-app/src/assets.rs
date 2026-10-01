@@ -555,9 +555,17 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/assets/codehealth-content"
         ));
-        for f in ["host.html", "codehealth-content.js", "codehealth-content.css"] {
+        for f in [
+            "host.html",
+            "codehealth-content.js",
+            "codehealth-content.css",
+        ] {
             let p = root.join(f);
-            assert!(p.is_file(), "缺少 codehealth-content 产物 {f}: {}", p.display());
+            assert!(
+                p.is_file(),
+                "缺少 codehealth-content 产物 {f}: {}",
+                p.display()
+            );
             assert!(
                 std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 0,
                 "codehealth-content 产物为空: {f}"
@@ -577,9 +585,7 @@ mod tests {
         assert!(html.contains("script-src 'self'"));
         assert!(!html.contains("connect-src"));
         assert!(!html.contains("http://") && !html.contains("https://"));
-        assert!(
-            html.contains("codehealth-content.js") && html.contains("codehealth-content.css")
-        );
+        assert!(html.contains("codehealth-content.js") && html.contains("codehealth-content.css"));
     }
 
     /// image-annotate 覆盖的 webp/bmp/ico 曾经落到 `mime_for` 的 `_` 分支被当成

@@ -1212,7 +1212,8 @@ impl App {
         let webview_id = CODEHEALTH_CONTENT_ID_OFFSET;
         self.codehealth_webview
             .observe_availability(available_webview_ids.contains(&webview_id), now);
-        if !available_webview_ids.contains(&webview_id) || self.codehealth_webview.failed().is_some()
+        if !available_webview_ids.contains(&webview_id)
+            || self.codehealth_webview.failed().is_some()
         {
             return Vec::new();
         }

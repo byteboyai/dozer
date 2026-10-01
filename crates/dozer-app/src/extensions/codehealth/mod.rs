@@ -53,14 +53,6 @@ impl CodeHealthCategory {
     }
 }
 
-/// 结构复杂度页的筛选：只看本轮新增 / 全部。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum StructureFilter {
-    #[default]
-    New,
-    All,
-}
-
 /// 一次加载/扫描完成后灌给 `WorkspaceState` 的完整面板状态。
 #[derive(Debug, Clone, Default)]
 pub struct PanelState {
@@ -90,8 +82,6 @@ pub struct WorkspaceState {
     scan_error: Option<String>,
     /// 右侧分类导航当前选中的分类（默认总览）。
     category: CodeHealthCategory,
-    /// 结构复杂度页筛选（默认只看本轮新增）。
-    structure_filter: StructureFilter,
 }
 
 impl WorkspaceState {
@@ -142,10 +132,6 @@ impl WorkspaceState {
     pub fn category(&self) -> CodeHealthCategory {
         self.category
     }
-
-    pub fn structure_filter(&self) -> StructureFilter {
-        self.structure_filter
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -159,8 +145,6 @@ pub enum Message {
     ScanRequested,
     /// 右侧分类导航点击。
     CategorySet(CodeHealthCategory),
-    /// 结构复杂度页筛选切换（本轮新增 / 全部）。
-    StructureFilterSet(StructureFilter),
     /// 发现行点击：文件路径 + 目标行(1-based)。由内核（`app/update.rs`）拦截
     /// 转成顶层 `Message::CodeHealthOpenLocation`，不进本模块 `update`。
     OpenLocation(std::path::PathBuf, usize),
@@ -193,9 +177,6 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
         }
         Message::CategorySet(category) => {
             ws_state.category = category;
-        }
-        Message::StructureFilterSet(filter) => {
-            ws_state.structure_filter = filter;
         }
         Message::OpenLocation(..) => {
             unreachable!("由内核拦截处理,见 codehealth::Message::OpenLocation 文档")

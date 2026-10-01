@@ -310,7 +310,11 @@ fn structure_body(ws: &WorkspaceState, report: &dozer_codehealth::ProjectReport)
             };
             row_dto(
                 f.id.clone(),
-                format!("{} 控制流信号 {}", f.symbol.as_deref().unwrap_or("?"), metric),
+                format!(
+                    "{} 控制流信号 {}",
+                    f.symbol.as_deref().unwrap_or("?"),
+                    metric
+                ),
                 &f.path,
                 f.start_line,
                 f.severity,
@@ -704,7 +708,10 @@ mod tests {
         let ws = ws_with(sample_report());
         let p = current_view_payload(&ws);
         assert_eq!(p.category, CategoryKey::Overview);
-        assert_eq!(p.scan.scanned_at.as_deref(), Some("1970-01-01 00:00:00 UTC"));
+        assert_eq!(
+            p.scan.scanned_at.as_deref(),
+            Some("1970-01-01 00:00:00 UTC")
+        );
         match p.body {
             Body::Overview(o) => {
                 assert_eq!(o.tier_label, "需要关注");

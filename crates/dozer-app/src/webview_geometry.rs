@@ -597,8 +597,7 @@ fn pair_content_pane_bounds_for(
     if !pane.content_desired || collapsed || kind != pane.kind {
         return zero();
     }
-    let mirrored =
-        state.layout.rail_layout.side_of(pane.kind) != pane.kind.default_side();
+    let mirrored = state.layout.rail_layout.side_of(pane.kind) != pane.kind.default_side();
     let chrome_top = pane.chrome_top;
 
     // 给定"面板区外框(区)矩形" → 内容矩形。放大态与非放大态只差这个输入
@@ -1651,8 +1650,8 @@ mod tests {
         };
         let (_, y, _, _) =
             codehealth_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true);
-        let zone_top = byteui::theme::geometry::top_bar_height()
-            + theme::region::left_zone().margin.top;
+        let zone_top =
+            byteui::theme::geometry::top_bar_height() + theme::region::left_zone().margin.top;
         assert!((y - zone_top).abs() < 1.0, "y={y} zone_top={zone_top}");
     }
 
