@@ -153,6 +153,36 @@ impl App {
                     self.usage_webview.set_ready(true);
                 }
             }
+            Message::CodeHealthContentWebviewEvent(event) => {
+                use crate::extensions::codehealth::CodeHealthWebviewEvent as Ev;
+                match event {
+                    Ev::Ready => self.codehealth_webview.set_ready(true),
+                    Ev::ScanRequested => self.code_health_request_scan(),
+                    Ev::AnalyzeFinding { id } => self.code_health_analyze_finding(id),
+                    Ev::OpenLocation { path, line } => {
+                        // webview 内容不可信:拒绝绝对路径与 `..`。
+                        if codehealth::is_safe_relative_path(&path) {
+                            self.code_health_open_location(path, line);
+                        } else {
+                            dozer_core::log_warn!(
+                                LOG,
+                                panel = "code_health",
+                                path = %path.display(),
+                                "拒绝 webview 发来的非相对路径跳转"
+                            );
+                        }
+                    }
+                    Ev::Failed { reason } => {
+                        dozer_core::log_warn!(
+                            LOG,
+                            panel = "code_health",
+                            %reason,
+                            "代码健康度内容页渲染失败,回落原生占位"
+                        );
+                        self.codehealth_webview.set_failed(reason);
+                    }
+                }
+            }
             Message::EditorWebviewEvent(binding, event) => {
                 self.with_project(binding.project_id, move |ws, io| {
                     let pane = if binding.panel == PanelKind::Project {
@@ -1501,10 +1531,10 @@ impl App {
                 self.code_health_analyze_finding(id);
             }
             Message::CodeHealth(codehealth::Message::ScanRequested) => {
-                self.with_focused_project(|ws, io| {
-                    codehealth::update(&mut ws.codehealth, codehealth::Message::ScanRequested);
-                    ws.spawn_codehealth_scan(io);
-                });
+                self.code_health_request_scan();
+            }
+            Message::CodeHealth(codehealth::Message::ContentRetry) => {
+                self.codehealth_webview.clear_failed();
             }
             Message::CodeHealth(msg) => {
                 self.with_focused_project(|ws, _io| {
@@ -5555,6 +5585,14 @@ impl App {
                 tab_widget::tab_window_reveal(&widths, 4.0, avail_w, ws.preview_tab_first, active);
             ws.spawn_preview_state_save(io);
             ws.spawn_preview_context_push(io);
+        });
+    }
+
+    /// 点"扫描"(原生按钮与 webview 事件共用入口)。
+    pub(crate) fn code_health_request_scan(&mut self) {
+        self.with_focused_project(|ws, io| {
+            codehealth::update(&mut ws.codehealth, codehealth::Message::ScanRequested);
+            ws.spawn_codehealth_scan(io);
         });
     }
 

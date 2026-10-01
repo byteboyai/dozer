@@ -167,6 +167,9 @@ pub enum Message {
     /// "交给 Agent 分析"：携带 finding ID（不含可被 UI 篡改的完整 prompt）。
     /// 内核拦截解析成诊断文本送入 agent 输入区。
     AnalyzeFinding(String),
+    /// 内容侧 webview 加载失败时,原生占位页的"重试"按钮。内核拦截(清除
+    /// `App::codehealth_webview` 的失败状态让 webview 重新挂载),不进本模块 `update`。
+    ContentRetry,
 }
 
 pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
@@ -199,6 +202,9 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
         }
         Message::AnalyzeFinding(..) => {
             unreachable!("由内核拦截处理,见 codehealth::Message::AnalyzeFinding 文档")
+        }
+        Message::ContentRetry => {
+            unreachable!("由内核拦截处理,见 codehealth::Message::ContentRetry 文档")
         }
     }
 }
@@ -363,5 +369,15 @@ mod tests {
         update(&mut ws, Message::Loaded(1, Box::new(panel)));
         assert_eq!(ws.save_error(), Some("未保存，无法用于下次比较"));
         assert_eq!(ws.scan_error(), None);
+    }
+
+    #[test]
+    fn content_retry_message_is_kernel_intercepted() {
+        // 与 OpenLocation/AnalyzeFinding 同款:由内核拦截,不进本模块 update。
+        let result = std::panic::catch_unwind(|| {
+            let mut ws = WorkspaceState::default();
+            update(&mut ws, Message::ContentRetry);
+        });
+        assert!(result.is_err(), "ContentRetry 必须由内核拦截");
     }
 }

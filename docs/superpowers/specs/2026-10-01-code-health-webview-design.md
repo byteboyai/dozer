@@ -47,7 +47,7 @@
 |---|---|
 | 右侧分类导航 `list_pane`（含新「架构」按钮） | 原生 iced；点击仍发 `Message` 改当前分类，同时往 webview 推一条 `SetView` |
 | 内容侧（含扫描头部：扫描按钮、基准时间） | webview |
-| 扫描中动画 | 原生 iced（同用量面板「统计中」先例）；此时 webview 不挂载，完成后挂载并推 `SetView` |
+| 扫描中 | webview 内展示（状态条「扫描中…」+ 旧结果时间提示，保留旧内容；尚无报告时只显示「扫描中…」），不卸载 webview——现状 `view.rs::content_pane` 本来就是文字提示而非 `math_curve` 动画 |
 | 瞬时失败（如跳转文件失败） | Toast（`App::push_toast`），不在内容区自画 |
 | `daemon_unavailable` | 顶栏徽标，不在内容区自画 |
 
@@ -69,7 +69,8 @@
 |---|---|
 | `Ready` | webview 加载完成；Rust 收到后才推第一条 `SetView` |
 | `OpenFile { path, line }` | 沿用现有「点发现项跳转文件」路径 |
-| `SelectFinding { id }` | 仅在 Rust 需要记录选中项时发；纯前端高亮不回传 |
+| `ScanRequested` | 点页头「扫描」 |
+| `AnalyzeFinding { id }` | 「交给 Agent 分析」（现有功能，原 spec 漏列） |
 | `Failed { reason }` | 渲染异常；Rust 回落原生占位页 |
 
 **revision**：每条 `SetView` 带单调递增 `revision`，前端丢弃小于当前值的指令，防止快速切换分类时旧响应覆盖新状态。
@@ -96,7 +97,7 @@
 
 ### 四个现有分类页
 
-逐页对照现有 `overview_content`、`structure_content`、`ui_consistency_content`、`scan_scope_content`，内容不增不减；`filter_buttons` 筛选、`priority_list` 排行、`finding_row` 原因文本原样保留，筛选状态前端本地维护。验收标准：与已批准 Figma（「S-CodeHealth 代码健康 · 本次变化与风险热点」）信息结构逐项一致，渲染质量不低于旧实现。
+逐页对照现有 `overview_content`、`structure_content`、`ui_consistency_content`、`scan_scope_content`，内容不增不减；`filter_buttons` 筛选、`priority_list` 排行、`finding_row` 原因文本原样保留，筛选状态前端本地维护。结构复杂度「本轮新增/全部」筛选状态移到前端本地，Rust 侧 `StructureFilter` 随之删除。验收标准：与已批准 Figma（「S-CodeHealth 代码健康 · 本次变化与风险热点」）信息结构逐项一致，渲染质量不低于旧实现。
 
 ### 架构页（新）
 
@@ -110,7 +111,7 @@
 
 ## 错误与降级
 
-- **扫描中**：原生动画，webview 不挂载。
+- **扫描中**：webview 内展示（状态条「扫描中…」+ 旧结果时间提示，保留旧内容；尚无报告时只显示「扫描中…」），不卸载 webview。
 - **webview 加载/渲染失败**：收到 `Failed` 或超时未收到 `Ready`，回落原生占位页（失败原因 + 重试），不保留旧 iced 内容渲染。
 - **旧报告（schema < 2）**：沿用 `legacy_report_note`；缺 `architecture` 的旧报告在架构页显示「请重新扫描」，不得把空图解释为零风险。
 - **架构专属**：Cargo metadata 失败时 module 图继续可用，原因记录在扫描范围页；非 Cargo Rust 项目显示 module 图并标注「未发现 Cargo workspace」；无 Rust 语义分析显示「暂无可生成架构图的代码」；图超上限显示聚合图与截断说明。

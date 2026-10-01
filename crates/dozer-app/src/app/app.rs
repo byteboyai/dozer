@@ -466,6 +466,8 @@ pub struct App {
     /// 用量面板内容侧 Preact webview 的推送判定状态(固定单槽、不按项目分,
     /// 见 `extensions::usage::WebviewPushState`)。
     pub(crate) usage_webview: crate::extensions::usage::WebviewPushState,
+    /// 代码健康度内容侧 webview 推送状态(App 级,固定单槽)。
+    pub(crate) codehealth_webview: crate::extensions::codehealth::WebviewPushState,
     /// 数据库面板 App 级状态(哪些驱动类型在"新增数据源"下拉里可选,
     /// 启动时读盘)——见 `extensions::database::AppState`。
     pub(crate) database: database::AppState,
@@ -650,6 +652,8 @@ pub(crate) const GIT_LOG_DIFF_ID_OFFSET: usize = 3_000_000;
 /// 用量面板内容侧 Preact webview 的固定槽 id(继承既有 1_000_000 递增序列,
 /// 固定单槽、不按项目分)。
 pub(crate) const USAGE_CONTENT_ID_OFFSET: usize = 4_000_000;
+/// 代码健康度面板内容侧 Preact webview 的固定槽 id(继承 1_000_000 递增序列)。
+pub(crate) const CODEHEALTH_CONTENT_ID_OFFSET: usize = 5_000_000;
 
 /// `wait_for_pending_exit_tasks` 允许在飞的关 tab 收尾请求跑完的总预算。
 /// 本地 UDS 往返通常亚毫秒级,留 2 秒是给 daemon 偶尔卡顿的余量,而不是
@@ -842,6 +846,7 @@ impl App {
             home_browser: browser::State::with_initial_url("https://byteboy.ai"),
             git_log: git_log::State::default(),
             usage_webview: crate::extensions::usage::WebviewPushState::default(),
+            codehealth_webview: crate::extensions::codehealth::WebviewPushState::default(),
             database: database::AppState::load(),
             footbar: footbar::AppState::default(),
             toast: toast::ToastCenter::default(),
@@ -1192,6 +1197,34 @@ impl App {
         };
         let envelope = crate::extensions::usage::encode_usage_push(payload.clone());
         self.usage_webview.mark_sent(payload);
+        vec![(webview_id, crate::preview::dispatch_script(&envelope))]
+    }
+
+    /// 代码健康度内容侧待下发推送。声明式:每帧比较"当前该显示什么"
+    /// (`current_view_payload`)与"上次送达的"(`codehealth_webview.pending_push`)。
+    /// 同时驱动加载超时判定(`observe_availability`)。已失败(`failed`)时不推送——
+    /// 原生占位页接管。
+    pub fn take_codehealth_content_script(
+        &mut self,
+        available_webview_ids: &std::collections::HashSet<usize>,
+        now: std::time::Instant,
+    ) -> Vec<(usize, String)> {
+        let webview_id = CODEHEALTH_CONTENT_ID_OFFSET;
+        self.codehealth_webview
+            .observe_availability(available_webview_ids.contains(&webview_id), now);
+        if !available_webview_ids.contains(&webview_id) || self.codehealth_webview.failed().is_some()
+        {
+            return Vec::new();
+        }
+        let Some(ws) = self.active_workspace() else {
+            return Vec::new();
+        };
+        let desired = crate::extensions::codehealth::current_view_payload(&ws.codehealth);
+        let Some(payload) = self.codehealth_webview.pending_push(&desired) else {
+            return Vec::new();
+        };
+        let revision = self.codehealth_webview.mark_sent(payload.clone());
+        let envelope = crate::extensions::codehealth::encode_codehealth_push(revision, payload);
         vec![(webview_id, crate::preview::dispatch_script(&envelope))]
     }
 
@@ -3401,6 +3434,34 @@ impl App {
                         editor_binding: None,
                         loading_generation: None,
                         // 用量内容 webview 无隐藏预创建,不涉及离屏停放。
+                        park_offscreen: false,
+                    };
+                    out.push((spec, bounds));
+                }
+                continue;
+            }
+            if kind == PanelKind::CodeHealth {
+                // 已失败(加载超时/渲染异常)时不挂载,原生占位页接管(见
+                // `codehealth::content_pane`)。其余时候恒挂载——"扫描中"也由
+                // webview 自己展示(保留旧结果 + 状态条)。
+                let content_desired = self.codehealth_webview.failed().is_none();
+                let bounds = crate::webview_geometry::codehealth_content_pane_bounds_for(
+                    side,
+                    window_width,
+                    window_height,
+                    &self.shell_state(),
+                    content_desired,
+                );
+                if bounds.2 > 0.0 && bounds.3 > 0.0 {
+                    let spec = WebviewSpec {
+                        id: CODEHEALTH_CONTENT_ID_OFFSET,
+                        url: format!(
+                            "dozer://codehealth-content/host.html?theme={}",
+                            crate::preview::scheme_query_value()
+                        ),
+                        visible: !app_modal_open,
+                        editor_binding: None,
+                        loading_generation: None,
                         park_offscreen: false,
                     };
                     out.push((spec, bounds));

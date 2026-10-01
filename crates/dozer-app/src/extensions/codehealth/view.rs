@@ -679,60 +679,28 @@ fn scan_header(
     .into()
 }
 
+/// 内容列原生壳:webview 盖在这块 `container` 之上(同 Files/Usage 现状),
+/// 它只负责面板背景/边框;`failed` 为 `Some` 时 webview 不挂载,这里显示
+/// 失败原因与"重试"。
 pub fn content_pane(
-    ws_state: &WorkspaceState,
+    failed: Option<&str>,
     width: Length,
     outer: Border,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let tokens = byteui::theme::color::current();
-    let error = ws_state.scan_error().map(|e| error_banner(e, &tokens));
-    let save_error: Option<Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer>> =
-        ws_state
-            .save_error()
-            .map(|e| text(e.to_string()).size(12).color(tokens.cyan).into());
-
-    let body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        if ws_state.scanning() {
-            // 扫描中继续展示旧结果，顶部叠提示并标注旧结果时间。
-            let scanning_text = text("扫描中…").size(14).color(tokens.body);
-            match ws_state.report() {
-                Some(_) => {
-                    let mut col = column![scanning_text];
-                    if let Some(ms) = ws_state.scanned_at_ms() {
-                        col = col.push(
-                            text(format!("当前展示的是 {} 的旧结果", format_ms(ms)))
-                                .size(11)
-                                .color(tokens.dim),
-                        );
-                    }
-                    col = col.push(category_content(ws_state.category(), ws_state));
-                    col.into()
-                }
-                None => container(scanning_text).into(),
-            }
-        } else if ws_state.report().is_some() {
-            let mut col = column![scan_header(ws_state.scanned_at_ms())];
-            if let Some(err) = error {
-                col = col.push(err);
-            }
-            if let Some(se) = save_error {
-                col = col.push(se);
-            }
-            col = col.push(category_content(ws_state.category(), ws_state));
-            col.spacing(8).into()
-        } else {
-            let mut col = column![
-                empty_content(ws_state),
-                button(text("扫描")).on_press(Message::ScanRequested),
-            ]
-            .spacing(12);
-            if let Some(err) = error {
-                col = col.push(err);
-            }
-            container(col.padding(16)).into()
-        };
-
-    container(scrollable(body))
+    let body: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> = match failed
+    {
+        Some(reason) => column![
+            text("代码健康度页面加载失败").size(14).color(tokens.body),
+            text(reason.to_string()).size(12).color(tokens.dim),
+            button(text("重试").size(13)).on_press(Message::ContentRetry),
+        ]
+        .spacing(10)
+        .padding(16)
+        .into(),
+        None => column![].into(),
+    };
+    container(body)
         .width(width)
         .height(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {
