@@ -12,6 +12,12 @@ import {
   uiNotApplicableFixture,
   scopeFixture,
 } from './fixtures.ts';
+import {
+  archFixture,
+  archNotApplicableFixture,
+  archPartialFixture,
+  archTruncatedFixture,
+} from './fixtures.ts';
 import type { ViewPayload } from './types.ts';
 
 const html = (p: ViewPayload) => render(<App payload={p} />);
@@ -90,4 +96,33 @@ test('scope: status, counts, skipped details', () => {
   assert.match(out, /报告版本:schema v3/);
   assert.match(out, /Git 基准:main @ abc123/);
   assert.match(out, /src\/bad\.rs\(解析失败\)/);
+});
+
+test('architecture: toolbar, layer switch, risk list with text labels', () => {
+  const out = html(archFixture);
+  assert.match(out, /架构地图/);
+  assert.match(out, /crate/);
+  assert.match(out, /module/);
+  assert.match(out, /仅看风险/);
+  assert.match(out, /适配窗口/);
+  assert.match(out, /循环依赖/);
+  assert.match(out, /graph-canvas/);
+});
+
+// Review Focus 4:没有架构数据时不能显示成零风险。
+test('architecture: not applicable shows the note and no canvas', () => {
+  const out = html(archNotApplicableFixture);
+  assert.match(out, /请重新扫描/);
+  assert.doesNotMatch(out, /graph-canvas/);
+  assert.doesNotMatch(out, /无风险/);
+});
+
+test('architecture: partial shows warning and errors', () => {
+  const out = html(archPartialFixture);
+  assert.match(out, /不能据此判断没有风险/);
+  assert.match(out, /cargo metadata 失败/);
+});
+
+test('architecture: truncated shows the truncation note', () => {
+  assert.match(html(archTruncatedFixture), /仅显示 crate 层/);
 });

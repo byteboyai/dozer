@@ -1,4 +1,11 @@
-import type { ViewPayload, FindingRow, ScanBar } from './types.ts';
+import type {
+  ViewPayload,
+  FindingRow,
+  ScanBar,
+  ArchitectureBody,
+  ArchNode,
+  ArchEdge,
+} from './types.ts';
 
 export const scanIdle: ScanBar = {
   scanning: false,
@@ -118,4 +125,107 @@ export const scanFailedFixture: ViewPayload = {
   ...emptyFixture,
   scan: { ...scanIdle, scanned_at: null, scan_error: 'boom' },
   body: { kind: 'empty', message: '扫描失败。' },
+};
+
+const an = (id: string, kind: ArchNode['kind'], parent: string | null): ArchNode => ({
+  id,
+  kind,
+  name: id.replace(/^(crate|module):/, ''),
+  qualified_name: id.replace(/^(crate|module):/, ''),
+  path: null,
+  parent_id: parent,
+  loc: 10,
+  fan_in: 1,
+  fan_out: 1,
+  layer: null,
+});
+const ae = (kind: ArchEdge['kind'], from: string, to: string): ArchEdge => ({
+  id: `edge:${kind}:${from}:${to}`,
+  from,
+  to,
+  kind,
+  evidence_count: 1,
+});
+
+export const archBody: ArchitectureBody = {
+  kind: 'architecture',
+  status: 'complete',
+  status_note: null,
+  truncated_note: null,
+  nodes: [
+    an('crate:a', 'crate', null),
+    an('crate:b', 'crate', null),
+    an('module:a', 'module', 'crate:a'),
+    an('module:a::x', 'module', 'module:a'),
+    an('module:a::y', 'module', 'module:a'),
+  ],
+  edges: [
+    ae('cargo_dependency', 'crate:a', 'crate:b'),
+    ae('module_use', 'module:a::x', 'module:a::y'),
+    ae('module_use', 'module:a::y', 'module:a::x'),
+  ],
+  cycles: [{ id: 'c1', node_ids: ['module:a::x', 'module:a::y'], edge_ids: [] }],
+  risks: [
+    {
+      kind: 'cycle',
+      finding: row({
+        id: 'arch-cycle-1',
+        title: '循环依赖',
+        change: null,
+        change_label: null,
+        reasons: [],
+      }),
+      node_ids: ['module:a::x', 'module:a::y'],
+      edge_ids: [],
+    },
+  ],
+  diff: {
+    state: 'no_baseline',
+    added_nodes: [],
+    removed_nodes: [],
+    added_edges: [],
+    removed_edges: [],
+    added_cycles: [],
+    resolved_cycles: [],
+  },
+  impact: { direct: [], indirect: [], truncated: false },
+  errors: [],
+  unresolved_edges: 0,
+};
+
+export const archFixture: ViewPayload = {
+  scan: scanIdle,
+  category: 'architecture',
+  body: archBody,
+};
+export const archNotApplicableFixture: ViewPayload = {
+  scan: scanIdle,
+  category: 'architecture',
+  body: {
+    ...archBody,
+    status: 'not_applicable',
+    nodes: [],
+    edges: [],
+    cycles: [],
+    risks: [],
+    status_note: '没有可用的架构数据(旧版报告或项目内没有可分析的 Rust 代码),请重新扫描。',
+  },
+};
+export const archPartialFixture: ViewPayload = {
+  scan: scanIdle,
+  category: 'architecture',
+  body: {
+    ...archBody,
+    status: 'partial',
+    status_note: '架构分析不完整(见扫描范围或下方错误),不能据此判断没有风险。',
+    errors: ['cargo metadata 失败'],
+  },
+};
+export const archTruncatedFixture: ViewPayload = {
+  scan: scanIdle,
+  category: 'architecture',
+  body: {
+    ...archBody,
+    truncated_note: '模块图过大(3005 个节点),仅显示 crate 层;分析结果(循环/枢纽/越界)仍基于完整图。',
+  },
 };

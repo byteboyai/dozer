@@ -1,9 +1,20 @@
 import type { FindingRow as Row } from '../types.ts';
 import { send } from '../ipc.ts';
 
-export function FindingRowView({ row, analyze }: { row: Row; analyze?: boolean }) {
+export function FindingRowView({
+  row,
+  analyze,
+  onActivate,
+}: {
+  row: Row;
+  analyze?: boolean;
+  onActivate?: () => void;
+}) {
   return (
-    <div class="finding" onClick={() => send({ kind: 'open_location', path: row.path, line: row.line })}>
+    <div
+      class="finding"
+      onClick={onActivate ?? (() => send({ kind: 'open_location', path: row.path, line: row.line }))}
+    >
       <div class="finding-head">
         <span class={`badge ${row.severity}`}>{row.severity_label}</span>
         <span class="finding-title">{row.title}</span>

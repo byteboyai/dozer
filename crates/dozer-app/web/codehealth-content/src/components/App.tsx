@@ -5,6 +5,7 @@ import { OverviewPage } from './OverviewPage.tsx';
 import { StructurePage } from './StructurePage.tsx';
 import { UiPage } from './UiPage.tsx';
 import { ScopePage } from './ScopePage.tsx';
+import { ArchitecturePage } from './ArchitecturePage.tsx';
 
 export function App({ payload }: { payload: ViewPayload }) {
   const { scan, body } = payload;
@@ -16,6 +17,7 @@ export function App({ payload }: { payload: ViewPayload }) {
       {body.kind === 'structure' && <StructurePage body={body} />}
       {body.kind === 'ui_consistency' && <UiPage body={body} />}
       {body.kind === 'scan_scope' && <ScopePage body={body} />}
+      {body.kind === 'architecture' && <ArchitecturePage body={body} />}
     </div>
   );
 }
