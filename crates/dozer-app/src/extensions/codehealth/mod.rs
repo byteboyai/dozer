@@ -15,6 +15,9 @@ pub(crate) use view::{content_pane, list_pane};
 
 pub(crate) mod view_model;
 
+pub(crate) mod protocol;
+pub(crate) use protocol::*;
+
 use dozer_codehealth::{
     ArchitectureDiffOutcome, GitSnapshot, ImpactScope, ProjectReport, ReportDiff,
 };

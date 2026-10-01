@@ -3,7 +3,7 @@
 //! 不再自己拼字符串或做分支判断。
 
 use super::{HotspotView, WorkspaceState};
-use dozer_codehealth::{FindingChange, FindingSeverity, ProjectReport, ReportDiff};
+use dozer_codehealth::{FindingChange, FindingSeverity, HealthTier, ProjectReport, ReportDiff};
 
 /// 变化卡数据。`FirstScan` = 没有上一份可比较报告，展示“首次扫描”而非伪造零。
 #[derive(Debug, Clone, PartialEq)]
@@ -291,6 +291,58 @@ pub fn empty_state(ws: &WorkspaceState) -> EmptyState {
     }
 }
 
+pub(super) fn tier_label(tier: HealthTier) -> &'static str {
+    match tier {
+        HealthTier::Healthy => "健康",
+        HealthTier::Watch => "需要关注",
+        HealthTier::Critical => "警戒",
+    }
+}
+
+pub(super) fn sev_label(s: FindingSeverity) -> &'static str {
+    match s {
+        FindingSeverity::Critical => "警戒",
+        FindingSeverity::Watch => "关注",
+    }
+}
+
+pub(super) fn change_label(c: FindingChange) -> &'static str {
+    match c {
+        FindingChange::New => "本轮新增",
+        FindingChange::Worsened => "本轮恶化",
+        FindingChange::Improved => "本轮改善",
+        FindingChange::Persisting => "持续存在",
+        FindingChange::Resolved => "已解决",
+    }
+}
+
+/// 同 `git_log.rs::format_commit_time`:展示 UTC,不引入时区库。
+pub(super) fn format_ms(ms: u64) -> String {
+    let secs = (ms / 1000) as i64;
+    let days = secs / 86_400;
+    let secs_of_day = secs % 86_400;
+    let (h, m, s) = (
+        secs_of_day / 3600,
+        (secs_of_day / 60) % 60,
+        secs_of_day % 60,
+    );
+    let (y, mo, d) = civil_from_days(days);
+    format!("{y:04}-{mo:02}-{d:02} {h:02}:{m:02}:{s:02} UTC")
+}
+
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,5 +496,18 @@ mod tests {
         }
         // 路径是相对项目根的规范化路径，不应出现绝对路径分隔的机器目录。
         assert!(!text.contains("/Users/"), "不应包含绝对路径：{text}");
+    }
+
+    #[test]
+    fn format_ms_matches_expected_layout() {
+        assert_eq!(format_ms(1_789_891_086_991), "2026-09-20 07:58:06 UTC");
+        assert_eq!(format_ms(0), "1970-01-01 00:00:00 UTC");
+    }
+
+    #[test]
+    fn tier_labels_include_text_for_all_states() {
+        assert_eq!(tier_label(HealthTier::Healthy), "健康");
+        assert_eq!(tier_label(HealthTier::Watch), "需要关注");
+        assert_eq!(tier_label(HealthTier::Critical), "警戒");
     }
 }
