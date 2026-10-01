@@ -10,9 +10,12 @@
     "test": "node --test src/*.test.ts src/graph/*.test.ts && node render-smoke.mjs"
   },
   "dependencies": {
+    "cytoscape": "3.34.3",
+    "dagre": "0.8.5",
     "preact": "10.29.8"
   },
   "devDependencies": {
+    "@types/dagre": "0.7.54",
     "@types/node": "^24",
     "esbuild": "0.28.2",
     "preact-render-to-string": "6.6.3",
