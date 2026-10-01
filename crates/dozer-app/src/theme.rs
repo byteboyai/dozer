@@ -55,6 +55,26 @@ mod tests {
         assert_eq!(byteui::theme::icon_size::current().rail, 16.0);
     }
 
+    /// dozer-app 的 `workspace.json` 与 byteui 的 ByteBoy2077 默认值目前一致。
+    /// 若将来有意让 Dozer 与默认值分叉，同时修改本测试，留下"有意分叉"的记录。
+    #[test]
+    fn workspace_json_matches_byteui_defaults() {
+        let raw: RawWorkspaceFile =
+            serde_json::from_str(WORKSPACE_JSON).expect("workspace.json 格式错误(解析失败)");
+        assert_eq!(
+            format!("{:?}", raw.font_sizes),
+            format!("{:?}", byteui::theme::font::FontTokens::byteboy2077())
+        );
+        assert_eq!(
+            format!("{:?}", raw.geometry),
+            format!("{:?}", byteui::theme::geometry::GeometryTokens::byteboy2077())
+        );
+        assert_eq!(
+            format!("{:?}", raw.icon_sizes),
+            format!("{:?}", byteui::theme::icon_size::IconSizeTokens::byteboy2077())
+        );
+    }
+
     #[test]
     #[should_panic(expected = "workspace.json 格式错误")]
     fn init_panics_on_malformed_json() {
