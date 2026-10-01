@@ -23,6 +23,9 @@ crates/dozer-app/web/review-trace/node_modules/
 # usage-content host deps (built assets under assets/usage-content are committed)
 crates/dozer-app/web/usage-content/node_modules/
 
+# codehealth-content host deps (built assets under assets/codehealth-content are committed)
+crates/dozer-app/web/codehealth-content/node_modules/
+
 # tabular host deps (built assets under assets/tabular-host are committed)
 crates/dozer-app/web/tabular-host/node_modules/
 .gstack/

@@ -548,6 +548,40 @@ mod tests {
         assert_eq!(r.status, 404);
     }
 
+    /// 提交的 codehealth-content 产物必须齐全(防止忘记 `npm run build` 就提交)。
+    #[test]
+    fn codehealth_content_bundle_assets_are_present() {
+        let root = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/codehealth-content"
+        ));
+        for f in ["host.html", "codehealth-content.js", "codehealth-content.css"] {
+            let p = root.join(f);
+            assert!(p.is_file(), "缺少 codehealth-content 产物 {f}: {}", p.display());
+            assert!(
+                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 0,
+                "codehealth-content 产物为空: {f}"
+            );
+        }
+    }
+
+    /// 严格 CSP、无 connect-src、无网络引用。
+    #[test]
+    fn codehealth_content_host_has_strict_csp_and_no_external_refs() {
+        let root = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/codehealth-content"
+        ));
+        let html = std::fs::read_to_string(root.join("host.html")).expect("读 host.html");
+        assert!(html.contains("default-src 'none'"));
+        assert!(html.contains("script-src 'self'"));
+        assert!(!html.contains("connect-src"));
+        assert!(!html.contains("http://") && !html.contains("https://"));
+        assert!(
+            html.contains("codehealth-content.js") && html.contains("codehealth-content.css")
+        );
+    }
+
     /// image-annotate 覆盖的 webp/bmp/ico 曾经落到 `mime_for` 的 `_` 分支被当成
     /// `application/octet-stream` 服务(2026-09 code review 发现);这三个和
     /// png/jpg/jpeg/gif 一样是图片,必须有正确 MIME。

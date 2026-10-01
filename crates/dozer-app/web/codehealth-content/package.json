@@ -1,0 +1,21 @@
+{
+  "name": "dozer-codehealth-content",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dozer 代码健康度面板内容侧(codehealth-content),Preact 离线打包,无 CDN/无运行时 Node。",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test src/*.test.ts && node render-smoke.mjs"
+  },
+  "dependencies": {
+    "preact": "10.29.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "esbuild": "0.28.2",
+    "preact-render-to-string": "6.6.3",
+    "typescript": "5.9.3"
+  }
+}
