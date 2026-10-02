@@ -1114,7 +1114,7 @@ pub(crate) fn panel_body<'a>(
             // 代码健康度）。同 Usage 面板的"内容在前、列表在后"分栏模式。
             let (list_portion, content_portion) = split_portions(app.dims.codehealth_split);
             let content_pane = codehealth::content_pane(
-                &ws.codehealth,
+                app.codehealth_webview.failed(),
                 Length::FillPortion(content_portion),
                 zone_pane_border(zone, lc),
             )

@@ -13,7 +13,12 @@ pub(crate) use git_hotspots::{HotspotView, rank_hotspots};
 mod view;
 pub(crate) use view::{content_pane, list_pane};
 
+pub(crate) mod arch_payload;
+
 pub(crate) mod view_model;
+
+pub(crate) mod protocol;
+pub(crate) use protocol::*;
 
 use dozer_codehealth::{
     ArchitectureDiffOutcome, GitSnapshot, ImpactScope, ProjectReport, ReportDiff,
@@ -28,6 +33,7 @@ pub enum CodeHealthCategory {
     Structure,
     UiConsistency,
     ScanScope,
+    Architecture,
 }
 
 impl CodeHealthCategory {
@@ -37,25 +43,19 @@ impl CodeHealthCategory {
             CodeHealthCategory::Structure => "结构复杂度",
             CodeHealthCategory::UiConsistency => "UI 一致性",
             CodeHealthCategory::ScanScope => "扫描范围",
+            CodeHealthCategory::Architecture => "架构",
         }
     }
 
-    pub fn all() -> [CodeHealthCategory; 4] {
+    pub fn all() -> [CodeHealthCategory; 5] {
         [
             CodeHealthCategory::Overview,
             CodeHealthCategory::Structure,
             CodeHealthCategory::UiConsistency,
             CodeHealthCategory::ScanScope,
+            CodeHealthCategory::Architecture,
         ]
     }
-}
-
-/// 结构复杂度页的筛选：只看本轮新增 / 全部。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum StructureFilter {
-    #[default]
-    New,
-    All,
 }
 
 /// 一次加载/扫描完成后灌给 `WorkspaceState` 的完整面板状态。
@@ -87,8 +87,6 @@ pub struct WorkspaceState {
     scan_error: Option<String>,
     /// 右侧分类导航当前选中的分类（默认总览）。
     category: CodeHealthCategory,
-    /// 结构复杂度页筛选（默认只看本轮新增）。
-    structure_filter: StructureFilter,
 }
 
 impl WorkspaceState {
@@ -139,10 +137,6 @@ impl WorkspaceState {
     pub fn category(&self) -> CodeHealthCategory {
         self.category
     }
-
-    pub fn structure_filter(&self) -> StructureFilter {
-        self.structure_filter
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -156,14 +150,9 @@ pub enum Message {
     ScanRequested,
     /// 右侧分类导航点击。
     CategorySet(CodeHealthCategory),
-    /// 结构复杂度页筛选切换（本轮新增 / 全部）。
-    StructureFilterSet(StructureFilter),
-    /// 发现行点击：文件路径 + 目标行(1-based)。由内核（`app/update.rs`）拦截
-    /// 转成顶层 `Message::CodeHealthOpenLocation`，不进本模块 `update`。
-    OpenLocation(std::path::PathBuf, usize),
-    /// "交给 Agent 分析"：携带 finding ID（不含可被 UI 篡改的完整 prompt）。
-    /// 内核拦截解析成诊断文本送入 agent 输入区。
-    AnalyzeFinding(String),
+    /// 内容侧 webview 加载失败时,原生占位页的"重试"按钮。内核拦截(清除
+    /// `App::codehealth_webview` 的失败状态让 webview 重新挂载),不进本模块 `update`。
+    ContentRetry,
 }
 
 pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
@@ -188,14 +177,8 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
         Message::CategorySet(category) => {
             ws_state.category = category;
         }
-        Message::StructureFilterSet(filter) => {
-            ws_state.structure_filter = filter;
-        }
-        Message::OpenLocation(..) => {
-            unreachable!("由内核拦截处理,见 codehealth::Message::OpenLocation 文档")
-        }
-        Message::AnalyzeFinding(..) => {
-            unreachable!("由内核拦截处理,见 codehealth::Message::AnalyzeFinding 文档")
+        Message::ContentRetry => {
+            unreachable!("由内核拦截处理,见 codehealth::Message::ContentRetry 文档")
         }
     }
 }
@@ -360,5 +343,15 @@ mod tests {
         update(&mut ws, Message::Loaded(1, Box::new(panel)));
         assert_eq!(ws.save_error(), Some("未保存，无法用于下次比较"));
         assert_eq!(ws.scan_error(), None);
+    }
+
+    #[test]
+    fn content_retry_message_is_kernel_intercepted() {
+        // 由内核拦截,不进本模块 update。
+        let result = std::panic::catch_unwind(|| {
+            let mut ws = WorkspaceState::default();
+            update(&mut ws, Message::ContentRetry);
+        });
+        assert!(result.is_err(), "ContentRetry 必须由内核拦截");
     }
 }

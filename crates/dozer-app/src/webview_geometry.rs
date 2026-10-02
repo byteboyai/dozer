@@ -520,6 +520,17 @@ pub fn git_log_diff_pane_bounds_for(
     compute(inx, iny, inw, inh)
 }
 
+/// "内容在前、列表在后"两栏面板(Usage、CodeHealth)的内容侧 webview 几何参数。
+struct PairPane {
+    kind: PanelKind,
+    /// 列表列占比(`dims.usage_split` / `dims.codehealth_split`)。
+    split: f32,
+    /// 内容顶部要让出的原生面板头高度。
+    chrome_top: f32,
+    content_desired: bool,
+    list_visible: bool,
+}
+
 /// 用量面板内容侧 Preact webview 矩形(上/左/宽/高,逻辑像素),供 main.rs
 /// 摆放固定单槽的图表 webview 用。
 ///
@@ -549,6 +560,56 @@ pub fn usage_content_pane_bounds_for(
     content_desired: bool,
     list_visible: bool,
 ) -> (f32, f32, f32, f32) {
+    pair_content_pane_bounds_for(
+        side,
+        window_width,
+        window_height,
+        state,
+        PairPane {
+            kind: PanelKind::Usage,
+            split: state.dims.usage_split,
+            chrome_top: theme::geometry::usage_content_chrome_top_px(),
+            content_desired,
+            list_visible,
+        },
+    )
+}
+
+/// 代码健康度内容侧 webview 矩形。与用量面板同构("内容在前、列表在后"),
+/// 差别:分类导航列恒存在(`list_visible = true`),内容列顶部没有原生面板头
+/// (`chrome_top = 0`,原生 `content_pane` 不画头),分栏占比用
+/// `dims.codehealth_split`。不可摆放(`!content_desired` / 该侧收起 / 不是
+/// CodeHealth / 放大的是另一侧)时返回零尺寸矩形。
+pub fn codehealth_content_pane_bounds_for(
+    side: Side,
+    window_width: f32,
+    window_height: f32,
+    state: &ShellState,
+    content_desired: bool,
+) -> (f32, f32, f32, f32) {
+    pair_content_pane_bounds_for(
+        side,
+        window_width,
+        window_height,
+        state,
+        PairPane {
+            kind: PanelKind::CodeHealth,
+            split: state.dims.codehealth_split,
+            chrome_top: 0.0,
+            content_desired,
+            list_visible: true,
+        },
+    )
+}
+
+/// 共享实现,见 [`usage_content_pane_bounds_for`] / [`codehealth_content_pane_bounds_for`]。
+fn pair_content_pane_bounds_for(
+    side: Side,
+    window_width: f32,
+    window_height: f32,
+    state: &ShellState,
+    pane: PairPane,
+) -> (f32, f32, f32, f32) {
     let zero = || (0.0, 0.0, 0.0, 0.0);
     let kind = match side {
         Side::Left => state.left_view,
@@ -558,19 +619,18 @@ pub fn usage_content_pane_bounds_for(
         Side::Left => state.left_collapsed,
         Side::Right => state.right_collapsed,
     };
-    if !content_desired || collapsed || kind != PanelKind::Usage {
+    if !pane.content_desired || collapsed || kind != pane.kind {
         return zero();
     }
-    let mirrored =
-        state.layout.rail_layout.side_of(PanelKind::Usage) != PanelKind::Usage.default_side();
-    let chrome_top = theme::geometry::usage_content_chrome_top_px();
+    let mirrored = state.layout.rail_layout.side_of(pane.kind) != pane.kind.default_side();
+    let chrome_top = pane.chrome_top;
 
     // 给定"面板区外框(区)矩形" → 内容矩形。放大态与非放大态只差这个输入
     // 矩形,分块逻辑共用(同 `git_log_diff_pane_bounds_for` 的 `compute` 手法)。
     let compute = |inx: f32, iny: f32, inw: f32, inh: f32| -> (f32, f32, f32, f32) {
-        let (x, w) = if list_visible {
+        let (x, w) = if pane.list_visible {
             let pair_w = pair_content_width(inw);
-            let cols = pair_columns(pair_w, state.dims.usage_split, !mirrored);
+            let cols = pair_columns(pair_w, pane.split, !mirrored);
             (inx + cols.content_x, cols.content_w.max(0.0))
         } else {
             (inx, inw.max(0.0))
@@ -1630,5 +1690,82 @@ mod tests {
                 expected_bottom
             );
         }
+    }
+
+    #[test]
+    fn codehealth_content_zero_when_not_desired() {
+        let state = ShellState {
+            left_view: PanelKind::CodeHealth,
+            ..test_state()
+        };
+        let (_, _, w, h) =
+            codehealth_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, false);
+        assert_eq!((w, h), (0.0, 0.0));
+    }
+
+    #[test]
+    fn codehealth_content_zero_when_side_collapsed() {
+        let state = ShellState {
+            left_view: PanelKind::CodeHealth,
+            left_collapsed: true,
+            ..test_state()
+        };
+        let (_, _, w, h) =
+            codehealth_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true);
+        assert_eq!((w, h), (0.0, 0.0));
+    }
+
+    #[test]
+    fn codehealth_content_zero_when_panel_kind_is_not_codehealth() {
+        let state = test_state(); // left_view: PanelKind::Files
+        let (_, _, w, h) =
+            codehealth_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true);
+        assert_eq!((w, h), (0.0, 0.0));
+    }
+
+    /// 内容 | 分隔线 | 分类导航 两栏恒存在,所以 webview 宽度必须严格小于整区宽度。
+    #[test]
+    fn codehealth_content_is_narrower_than_zone_and_follows_split() {
+        let state = ShellState {
+            left_view: PanelKind::CodeHealth,
+            ..test_state()
+        };
+        let (_, _, w, h) =
+            codehealth_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true);
+        assert!(w > 100.0 && h > 100.0, "w={w} h={h}");
+        let mut wider_list = state.clone();
+        wider_list.dims.codehealth_split = (state.dims.codehealth_split + 0.2).min(0.9);
+        let (_, _, w2, _) =
+            codehealth_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &wider_list, true);
+        assert!(w2 != w, "拖动分栏后宽度应变化: {w} vs {w2}");
+    }
+
+    /// 本面板内容列顶部没有原生面板头(分类导航那一列才有),webview 紧贴区顶。
+    #[test]
+    fn codehealth_content_y_starts_at_zone_top() {
+        let state = ShellState {
+            left_view: PanelKind::CodeHealth,
+            ..test_state()
+        };
+        let (_, y, _, _) =
+            codehealth_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true);
+        let zone_top =
+            byteui::theme::geometry::top_bar_height() + theme::region::left_zone().margin.top;
+        assert!((y - zone_top).abs() < 1.0, "y={y} zone_top={zone_top}");
+    }
+
+    #[test]
+    fn codehealth_content_maximized_stays_inside_box() {
+        let state = ShellState {
+            left_view: PanelKind::CodeHealth,
+            maximized: Some(MaximizedPane::Left),
+            ..test_state()
+        };
+        let (x, y, w, h) =
+            codehealth_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true);
+        assert!(w > 100.0 && h > 100.0, "w={w} h={h}");
+        let (x0, avail_w) = maximized_box_x_range(1600.0);
+        assert!(x >= x0 && x + w <= x0 + avail_w, "x={x} w={w}");
+        assert!(y + h <= maximized_box_height(900.0) + 200.0);
     }
 }

@@ -316,6 +316,13 @@ pub struct ArchitectureDiff {
 
 ## 布局与渲染
 
+> **已被取代(2026-10-01)**:本节的「纯函数布局 + iced Canvas」方案作废。架构页改为
+> `dozer://codehealth-content` webview 内用 Cytoscape.js 渲染、dagre 在前端算坐标;展开/折叠
+> 由前端对可见子图做纯函数投影(不使用 Cytoscape 复合节点)。见
+> `2026-10-01-code-health-webview-design.md` 与 `docs/superpowers/plans/2026-10-01-code-health-webview.md`。
+> 本文其余部分(产品原则、数据模型、关系提取、图分析与健康规则、统一发现与差异、
+> Agent 诊断上下文、性能约束)继续有效。
+
 ### 布局
 
 - crate 层使用从左到右的分层有向图布局。

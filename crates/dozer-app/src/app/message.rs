@@ -624,6 +624,9 @@ pub enum Message {
     /// (同 `usage::WebviewPushState` 不按项目分的理由一致),直接携带已解析
     /// 事件。
     UsageContentWebviewEvent(crate::extensions::usage::UsageWebviewEvent),
+    /// 代码健康度内容侧 webview 发回的已解析事件(ready/扫描/跳转/交给 Agent/失败)。
+    /// 不带 binding——固定单槽、不按项目分,同 `UsageContentWebviewEvent`。
+    CodeHealthContentWebviewEvent(crate::extensions::codehealth::CodeHealthWebviewEvent),
     /// review-trace(会话审阅)webview 发回的已解析事件(目前只有
     /// `document_loaded`)。不带 binding——`ws.review` 是"当前聚焦项目"的
     /// 直接字段,不按 project_id/tab_id 路由,没有身份需要校验。
