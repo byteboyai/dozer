@@ -28,4 +28,7 @@ crates/dozer-app/web/codehealth-content/node_modules/
 
 # tabular host deps (built assets under assets/tabular-host are committed)
 crates/dozer-app/web/tabular-host/node_modules/
+
+# todo-content host deps (built assets under assets/todo-content are committed)
+crates/dozer-app/web/todo-content/node_modules/
 .gstack/
