@@ -1378,6 +1378,23 @@ async fn handle_conn(
                                 },
                             }
                         }
+                        // 群聊请求的落地在 Task 7 接(见
+                        // docs/superpowers/plans/2026-10-02-group-chat-backend.md)。
+                        // 先占住协议分支,避免 `Request` 新增变体后这里的穷尽
+                        // 匹配编译不过。
+                        Request::CreateGroup { .. }
+                        | Request::ListGroups { .. }
+                        | Request::DeleteGroup { .. }
+                        | Request::AddGroupMember { .. }
+                        | Request::UpdateGroupMember { .. }
+                        | Request::RemoveGroupMember { .. }
+                        | Request::PostGroupMessage { .. }
+                        | Request::ListGroupMessages { .. }
+                        | Request::CancelGroup { .. }
+                        | Request::RetryGroupMessage { .. }
+                        | Request::PushGroupMessageToTodo { .. } => Reply::Error {
+                            message: "群聊功能尚未接线".into(),
+                        },
                     },
                 };
                 w.write_all(encode_line(&reply).as_bytes()).await?;
