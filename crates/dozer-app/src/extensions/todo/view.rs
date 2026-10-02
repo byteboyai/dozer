@@ -432,10 +432,8 @@ pub(crate) fn category_tree_nav<'a>(
         };
         // 拖动进行时:源行变淡,合法落点描边金色(都只在已确认 `Dragging`
         // 时才有视觉——`Pending` 期间必须完全没反应)。
-        let is_source = ws_state
-            .category_drag()
-            .is_some_and(|d| d.source == row.id)
-            && drag_confirmed;
+        let is_source =
+            ws_state.category_drag().is_some_and(|d| d.source == row.id) && drag_confirmed;
         let is_drop_target = ws_state
             .category_drag()
             .is_some_and(|d| d.over == Some(DropTarget::Node(row.id)));

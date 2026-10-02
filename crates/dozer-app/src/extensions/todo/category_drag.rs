@@ -66,7 +66,10 @@ pub fn should_confirm(drag: &CategoryDrag, cursor: (f32, f32), now: Instant) -> 
 pub enum ReleaseAction {
     /// 没确认就松手 = 点击:选中该分类。
     Select(i64),
-    Reparent { id: i64, new_parent: Option<i64> },
+    Reparent {
+        id: i64,
+        new_parent: Option<i64>,
+    },
     Nothing,
 }
 

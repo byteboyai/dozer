@@ -4036,11 +4036,7 @@ mod tests {
     #[test]
     fn category_context_menu_items_real_node_has_full_action_set() {
         let items = category_context_menu_items(Some(7), Some(3));
-        assert_eq!(
-            items.len(),
-            6,
-            "新建子/同级、上移、下移、重命名、删除"
-        );
+        assert_eq!(items.len(), 6, "新建子/同级、上移、下移、重命名、删除");
         let has_sibling_with_parent = items.iter().any(|i| {
             matches!(
                 i,
