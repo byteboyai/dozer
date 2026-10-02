@@ -51,22 +51,19 @@ pub(crate) fn parse_month_day(s: &str) -> Option<(u32, u32)> {
     (1..=12).contains(&m).then_some((m, d))
 }
 
-/// 新增任务的共享逻辑:插入乐观项(置顶)、起闪光、异步落库。`AddSubmit`(原生
-/// 草稿)与 `AddText`(webview 文本)共用。
-fn submit_new_todo(
+/// 插入一条乐观新增项(置顶)并起闪光,返回它的临时 id。纯状态操作,便于单测。
+pub(crate) fn insert_optimistic_todo(
     ws_state: &mut WorkspaceState,
-    text: String,
     project_id: i64,
-    client: &Client,
-    handle: &tokio::runtime::Handle,
-    emit: impl Fn(Message) + Send + Sync + 'static,
-) {
+    text: String,
+) -> i64 {
+    let id = ws_state.alloc_optimistic_id();
     ws_state.items.insert(
         0,
         TodoInfo {
-            id: OPTIMISTIC_TODO_ID,
+            id,
             project_id,
-            text: text.clone(),
+            text,
             done: false,
             paused: false,
             rank: 0,
@@ -80,6 +77,20 @@ fn submit_new_todo(
         },
     );
     ws_state.start_flash(0);
+    id
+}
+
+/// 新增任务的共享逻辑:插入乐观项(置顶)、起闪光、异步落库。`AddSubmit`(原生
+/// 草稿)与 `AddText`(webview 文本)共用。
+fn submit_new_todo(
+    ws_state: &mut WorkspaceState,
+    text: String,
+    project_id: i64,
+    client: &Client,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + Sync + 'static,
+) {
+    insert_optimistic_todo(ws_state, project_id, text.clone());
     let client = client.clone();
     handle.spawn(async move {
         let res = client

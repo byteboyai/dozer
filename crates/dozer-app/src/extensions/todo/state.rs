@@ -117,6 +117,8 @@ pub struct WorkspaceState {
     /// 每次 `start_flash`(新增任务后要滚回顶部)时递增;随推送带给 webview,
     /// 前端据此滚回顶部。取代旧 iced `scrollable::scroll_to` 的一次性标记。
     pub(crate) scroll_nonce: u32,
+    /// 乐观新增的临时 id 序号(见 `alloc_optimistic_id`)。
+    pub(crate) optimistic_seq: u32,
     /// 当前项目全部分类节点,随 `ListTodos` 同一轮轮询一并拉取
     /// (`request_categories_refresh`)。
     pub(crate) categories: Vec<CategoryInfo>,
@@ -196,6 +198,12 @@ impl WorkspaceState {
     /// 只读当前已加载的任务列表,给视图层渲染与内核处理按下标取任务用。
     pub fn items(&self) -> &[TodoInfo] {
         &self.items
+    }
+
+    /// 分配一个唯一的乐观临时 id(-1, -2, …)。
+    pub(crate) fn alloc_optimistic_id(&mut self) -> i64 {
+        self.optimistic_seq = self.optimistic_seq.wrapping_add(1);
+        -(self.optimistic_seq as i64)
     }
 
     /// 当前"选中高亮"的任务 id(新增后 2 秒高亮用),供推送给 webview。
@@ -552,10 +560,14 @@ impl Operation<()> for CaptureDetailReplyFocus {
     }
 }
 
-/// 乐观新增(`AddSubmit`)时,服务端真实 id 还没回来前的占位值。
-/// 真实 id 从 1 起(`AUTOINCREMENT`),用 0 保证不会跟真实任务撞车。
-/// `Mutated` 触发的刷新会用服务端权威列表整体替换掉带这个 id 的乐观行。
-pub(crate) const OPTIMISTIC_TODO_ID: i64 = 0;
+/// 乐观新增时,服务端真实 id 还没回来前的占位 id 一律 **≤ 0**:真实 id 从 1 起
+/// (`AUTOINCREMENT`),所以不会跟真实任务撞车。每条乐观项拿一个**唯一**的负数
+/// (见 `WorkspaceState::alloc_optimistic_id`),一次往返内连续新增多条也不会撞 id
+/// (前端按 id 做 key 与事件路由)。`Mutated` 触发的刷新会用服务端权威列表整体
+/// 替换掉乐观行。
+pub(crate) fn is_optimistic_id(id: i64) -> bool {
+    id <= 0
+}
 
 /// 现有 `Workspace::spawn_bookmarks_refresh`(见 `extensions::browser::
 /// request_bookmarks_refresh`)同款手法的搬家版本:异步拉取某项目的任务

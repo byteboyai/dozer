@@ -229,6 +229,31 @@ mod tests {
         assert_eq!(ws_state.selected_id(), Some(6));
     }
 
+    // 审阅 Important 4:一次往返内连续新增两条,临时项的 id 不能撞(前端按 id 做 key 与路由)。
+    #[test]
+    fn optimistic_ids_are_unique_and_never_look_like_real_ids() {
+        let mut ws_state = WorkspaceState::default();
+        let a = ws_state.alloc_optimistic_id();
+        let b = ws_state.alloc_optimistic_id();
+        assert!(a != b);
+        assert!(is_optimistic_id(a) && is_optimistic_id(b));
+        assert!(!is_optimistic_id(1), "dozerd 的真实 id 从 1 起");
+    }
+
+    #[test]
+    fn two_quick_optimistic_adds_get_distinct_ids_and_newest_is_on_top() {
+        let mut ws_state = WorkspaceState {
+            items: vec![todo_info(10, "已有", false)],
+            ..WorkspaceState::default()
+        };
+        let first = insert_optimistic_todo(&mut ws_state, 1, "第一条".into());
+        let second = insert_optimistic_todo(&mut ws_state, 1, "第二条".into());
+        assert!(first != second);
+        let ids: Vec<i64> = ws_state.items.iter().map(|i| i.id).collect();
+        assert_eq!(ids, vec![second, first, 10]);
+        assert_eq!(ws_state.selected_id(), Some(second), "闪光落在最新一条上");
+    }
+
     #[test]
     fn set_add_input_height_clamps_to_bounds() {
         let mut ws_state = WorkspaceState::default();

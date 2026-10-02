@@ -5,7 +5,7 @@
 
 use super::{
     CategoryFilter, Message, TodoState, WorkspaceState, filter_todos_by_category,
-    format_todo_month_day, is_active_todo, parse_month_day, todo_display_state,
+    format_todo_month_day, is_active_todo, is_optimistic_id, parse_month_day, todo_display_state,
     visible_category_rows,
 };
 use crate::workspace::{Workspace, agent_icon};
@@ -319,6 +319,10 @@ pub enum Routed {
 }
 
 fn index_of(items: &[TodoInfo], id: i64) -> Option<usize> {
+    // 乐观新增的临时项(id <= 0)还不是真实任务:任何事件都不能落到它上面。
+    if is_optimistic_id(id) {
+        return None;
+    }
     items.iter().position(|i| i.id == id)
 }
 
@@ -345,6 +349,14 @@ pub(crate) fn route_event(items: &[TodoInfo], event: TodoWebviewEvent) -> Option
             let idx = index_of(items, id)?;
             if !is_active_todo(&items[idx]) || after_id == Some(id) {
                 return None;
+            }
+            // `after_id` 必须仍然存在且是进行中的真实任务;否则 dozerd 会把卡片静默
+            // 挪到末尾——放置期间那张卡被别的 agent 删掉 / 完成时应当空操作。
+            if let Some(after) = after_id {
+                let after_idx = index_of(items, after)?;
+                if !is_active_todo(&items[after_idx]) {
+                    return None;
+                }
             }
             Some(Routed::Message(Message::ReorderTo { id, after_id }))
         }
@@ -895,6 +907,100 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    // 审阅 Important 3:放置位置上方的那张卡已被删掉 / 不再是进行中,必须空操作,
+    // 不能让 dozerd 把卡片静默挪到末尾。
+    #[test]
+    fn route_reorder_with_stale_or_inactive_after_id_is_noop() {
+        let items = items3(); // 1 进行 / 2 搁置 / 3 已完成
+        for after in [999, 2, 3] {
+            assert!(
+                route_event(
+                    &items,
+                    TodoWebviewEvent::Reorder {
+                        id: 1,
+                        after_id: Some(after)
+                    }
+                )
+                .is_none(),
+                "after_id={after}"
+            );
+        }
+    }
+
+    #[test]
+    fn route_reorder_after_another_active_item_is_still_routed() {
+        let mut items = items3();
+        items.push(todo(4, "又一个进行中"));
+        let r = route_event(
+            &items,
+            TodoWebviewEvent::Reorder {
+                id: 1,
+                after_id: Some(4),
+            },
+        );
+        assert!(matches!(
+            r,
+            Some(Routed::Message(Message::ReorderTo {
+                id: 1,
+                after_id: Some(4)
+            }))
+        ));
+    }
+
+    // 审阅 Important 4:乐观新增的临时项(id <= 0)不是真实任务,任何事件都不能落到它上面,
+    // 也不能当作 `after_id`。
+    #[test]
+    fn optimistic_items_are_never_routed() {
+        for temp in [0_i64, -1, -7] {
+            let mut items = items3();
+            items.insert(0, todo(temp, "乐观新增"));
+            for ev in [
+                TodoWebviewEvent::Toggle { id: temp },
+                TodoWebviewEvent::EditText {
+                    id: temp,
+                    text: "x".into(),
+                },
+                TodoWebviewEvent::Reorder {
+                    id: temp,
+                    after_id: None,
+                },
+                TodoWebviewEvent::SetStatus {
+                    id: temp,
+                    state: SetStatusTarget::Done,
+                },
+                TodoWebviewEvent::SetPlanDate {
+                    id: temp,
+                    date: "10-05".into(),
+                },
+                TodoWebviewEvent::AssignAgent {
+                    id: temp,
+                    agent: AgentKind::Claude,
+                },
+                TodoWebviewEvent::SetCategory {
+                    id: temp,
+                    category_id: None,
+                },
+                TodoWebviewEvent::OpenDetail { id: temp },
+            ] {
+                assert!(
+                    route_event(&items, ev.clone()).is_none(),
+                    "temp={temp} {ev:?}"
+                );
+            }
+            assert!(
+                route_event(
+                    &items,
+                    TodoWebviewEvent::Reorder {
+                        id: 1,
+                        after_id: Some(temp)
+                    }
+                )
+                .is_none(),
+                "temp={temp} 不能当 after_id"
+            );
+        }
     }
 
     #[test]
