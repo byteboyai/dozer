@@ -8,6 +8,7 @@ pub mod file_mutation;
 pub mod group_adapter;
 pub mod group_mentions;
 pub mod group_prompt;
+pub mod group_service;
 pub mod group_store;
 pub mod headless_agent;
 pub mod ide_bridge;
