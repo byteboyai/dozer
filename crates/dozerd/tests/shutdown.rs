@@ -61,6 +61,7 @@ async fn start_test_daemon() -> PathBuf {
                 categories: test_categories(),
                 memories: test_memories(),
                 file_edit_history: test_file_edit_history(),
+                groups: test_group_service(),
             },
             dozerd::task_poller::new_in_flight(),
         )
@@ -235,4 +236,8 @@ fn test_memories() -> std::sync::Arc<dozerd::memory::MemoryStore> {
 fn test_file_edit_history() -> std::sync::Arc<dozerd::file_edit_history::FileEditHistoryStore> {
     let db = std::env::temp_dir().join(format!("dozerd-feh-{}.db", uuid::Uuid::new_v4()));
     std::sync::Arc::new(dozerd::file_edit_history::FileEditHistoryStore::new(&db).unwrap())
+}
+
+fn test_group_service() -> std::sync::Arc<dozerd::group_service::GroupService> {
+    dozerd::group_service::GroupService::for_tests()
 }

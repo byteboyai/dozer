@@ -55,6 +55,7 @@ async fn hook_event_reaches_attached_client_and_list() {
                     categories: test_categories(),
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
+                    groups: test_group_service(),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -232,6 +233,10 @@ fn test_file_edit_history() -> std::sync::Arc<dozerd::file_edit_history::FileEdi
     std::sync::Arc::new(dozerd::file_edit_history::FileEditHistoryStore::new(&db).unwrap())
 }
 
+fn test_group_service() -> std::sync::Arc<dozerd::group_service::GroupService> {
+    dozerd::group_service::GroupService::for_tests()
+}
+
 #[tokio::test]
 async fn project_open_and_list_roundtrip() {
     let sock = std::env::temp_dir().join(format!("dozerd-proj-{}.sock", uuid::Uuid::new_v4()));
@@ -288,6 +293,7 @@ async fn project_open_and_list_roundtrip() {
                     categories,
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
+                    groups: test_group_service(),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -352,6 +358,7 @@ async fn record_and_get_session_summary_roundtrip() {
                     categories,
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
+                    groups: test_group_service(),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -455,6 +462,7 @@ async fn close_with_summary_kills_session_after_ai_summary_recorded() {
                     categories,
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
+                    groups: test_group_service(),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -566,6 +574,7 @@ async fn list_conversations_with_summaries_joins_correctly() {
                     categories,
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
+                    groups: test_group_service(),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -677,6 +686,7 @@ async fn aider_hook_sequence_drives_state_machine() {
                     categories: test_categories(),
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
+                    groups: test_group_service(),
                 },
                 dozerd::task_poller::new_in_flight(),
             )

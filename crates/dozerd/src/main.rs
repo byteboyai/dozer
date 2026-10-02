@@ -72,6 +72,24 @@ async fn main() -> Result<()> {
     let file_edit_history = Arc::new(dozerd::file_edit_history::FileEditHistoryStore::new(
         &dozer_core::paths::state_dir().join("dozer.db"),
     )?);
+    let groups = {
+        let store = Arc::new(dozerd::group_store::GroupStore::new(
+            &dozer_core::paths::state_dir().join("dozer.db"),
+        )?);
+        let projects_for_dir = projects.clone();
+        let svc = dozerd::group_service::GroupService::with_headless_runner(
+            store,
+            Arc::new(move |id| {
+                projects_for_dir
+                    .path_of(id)
+                    .ok()
+                    .flatten()
+                    .map(std::path::PathBuf::from)
+            }),
+        );
+        svc.recover_on_startup();
+        svc
+    };
     let in_flight = dozerd::task_poller::new_in_flight();
     {
         let files = dozerd::transcripts::scan::discover_all_transcript_files();
@@ -135,6 +153,7 @@ async fn main() -> Result<()> {
             categories,
             memories,
             file_edit_history,
+            groups,
         },
         in_flight,
     );

@@ -1540,6 +1540,13 @@ pub enum Reply {
     GroupMessage {
         message: GroupMessageInfo,
     },
+    /// `PostGroupMessage` 应答:human 消息 + 为每个 `@` 成员一次性创建的排队占位 +
+    /// 未识别的 handle。
+    GroupPosted {
+        human: GroupMessageInfo,
+        placeholders: Vec<GroupMessageInfo>,
+        unknown_handles: Vec<String>,
+    },
     /// `ListGroupMessages` 应答。`latest_rev` 是本群当前最大 rev,GUI 下次拿它
     /// 当 `after_rev` 继续轮询。
     GroupMessages {
