@@ -91,6 +91,36 @@ pub fn release_action(drag: &CategoryDrag, categories: &[CategoryInfo]) -> Relea
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tick {
+    Nothing,
+    /// 左键没按下却还有残留拖拽态:自愈清空。
+    Clear,
+    /// 该推进到 `Dragging`。
+    Confirm,
+}
+
+/// 每次 `CursorMoved` 的决策(纯函数,便于测试):没有物理按住左键就绝不确认,
+/// 并清掉任何残留(正常路径下松手收尾早该清过;还留着只可能是那次收尾丢了)。
+pub fn tick(
+    drag: Option<&CategoryDrag>,
+    left_mouse_down: bool,
+    cursor: (f32, f32),
+    now: Instant,
+) -> Tick {
+    let Some(d) = drag else {
+        return Tick::Nothing;
+    };
+    if !left_mouse_down {
+        return Tick::Clear;
+    }
+    if should_confirm(d, cursor, now) {
+        Tick::Confirm
+    } else {
+        Tick::Nothing
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,5 +283,36 @@ mod tests {
         // 点击一个已不存在的行不选中任何东西
         let click = drag(99, CategoryDragPhase::Pending, None);
         assert_eq!(release_action(&click, &tree()), ReleaseAction::Nothing);
+    }
+
+    // Review Focus 5:左键并未按下却残留了拖拽态 → 必须清空,不能确认。
+    #[test]
+    fn tick_clears_a_stale_drag_when_the_mouse_is_not_down() {
+        let d = CategoryDrag {
+            armed_at: Instant::now() - Duration::from_millis(500),
+            ..drag(2, CategoryDragPhase::Pending, None)
+        };
+        assert_eq!(
+            tick(Some(&d), false, (100.0, 300.0), Instant::now()),
+            Tick::Clear
+        );
+    }
+
+    #[test]
+    fn tick_confirms_only_with_the_mouse_down_and_both_thresholds() {
+        let d = CategoryDrag {
+            armed_at: Instant::now() - Duration::from_millis(500),
+            ..drag(2, CategoryDragPhase::Pending, None)
+        };
+        assert_eq!(
+            tick(Some(&d), true, (100.0, 300.0), Instant::now()),
+            Tick::Confirm
+        );
+        assert_eq!(
+            tick(Some(&d), true, (101.0, 101.0), Instant::now()),
+            Tick::Nothing
+        );
+        assert_eq!(tick(None, true, (0.0, 0.0), Instant::now()), Tick::Nothing);
+        assert_eq!(tick(None, false, (0.0, 0.0), Instant::now()), Tick::Nothing);
     }
 }

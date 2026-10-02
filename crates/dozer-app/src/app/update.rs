@@ -1760,6 +1760,16 @@ impl App {
                 todo::Message::CategoryContextMenuOpen(id) => {
                     self.todo_category_context_menu(id);
                 }
+                // 分类行被按下:内核拦截以取 `last_cursor`(同文件树
+                // `TreeRowPress` 的做法),武装 `Pending`。之后是否确认、松手
+                // 收尾、Esc 取消都交给窗口事件与 `todo::update`。
+                todo::Message::CategoryRowPress(id) => {
+                    let press_pos = self.last_cursor;
+                    self.with_focused_project(|ws, _io| {
+                        ws.todo
+                            .arm_category_drag(id, press_pos, std::time::Instant::now());
+                    });
+                }
                 // 以下几种分类动作都是从右键菜单里点出来的:先关掉菜单本
                 // 身(浮层 if-else 链里 `category_context_menu` 分支排在
                 // `category_picker` 之前,不关会导致"移动到..."开了选择器

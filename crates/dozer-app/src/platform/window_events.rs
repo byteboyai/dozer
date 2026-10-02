@@ -382,6 +382,12 @@ impl Runner {
                 if app.maybe_confirm_tree_drag(*left_mouse_down) {
                     window.request_redraw();
                 }
+                // 分类树拖动移动的 `Pending → Dragging` 确认,同树内拖拽那套
+                // (距离+时长两道阈值 + 左键必须物理按住)。转换/自愈清空发生
+                // 时才重绘——转换后行才挂 `on_move`/换抓取光标/画落点高亮。
+                if app.maybe_confirm_category_drag(*left_mouse_down) {
+                    window.request_redraw();
+                }
                 // 外部文件拖拽悬停:实时 re-hit-test 文件树目录行,把
                 // 命中结果作为 `FileDragHover` 刷给 `drag_hover`,驱动
                 // 目录行整行金色高亮(用户要求的"拖拽时实时高亮")。命中
@@ -560,6 +566,18 @@ impl Runner {
                 ));
                 window.request_redraw();
             }
+            // 分类树拖动移动:左键松开即收尾——未确认当点击选中,已确认且
+            // 目标合法就调 `reparent_category`(见 `todo::release_action`)。
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: winit::event::MouseButton::Left,
+                ..
+            } if app.dragging_category() => {
+                app.update(Message::Todo(
+                    crate::extensions::todo::Message::CategoryDragRelease,
+                ));
+                window.request_redraw();
+            }
             // 外部 OS 文件拖拽悬停期间的实时高亮/自动展开:macOS 上原生
             // 拖拽悬停不产生 `CursorMoved`(见 `FILE_DRAG_POSITION` 文档),
             // 改由 `install_file_drag_position_tracker` 装的原生覆写驱动
@@ -658,6 +676,22 @@ impl Runner {
             app.update(Message::Search(
                 crate::extensions::search::Message::SearchClose,
             ));
+            window.request_redraw();
+            return false;
+        }
+
+        // 分类树拖动移动进行中(`Dragging`),Esc 取消这次拖拽(光标松不松开
+        // 都不落盘),同文件树拖拽的既有口径。
+        if app.category_drag_confirmed()
+            && let WindowEvent::KeyboardInput {
+                event,
+                is_synthetic: false,
+                ..
+            } = event
+            && event.state == ElementState::Pressed
+            && event.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+        {
+            app.cancel_category_drag();
             window.request_redraw();
             return false;
         }

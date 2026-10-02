@@ -2808,6 +2808,56 @@ impl App {
         should_confirm
     }
 
+    /// 分类树拖动移动是否有进行中的拖拽(含 `Pending`)——窗口事件据此决定要不要在
+    /// 左键松开时发收尾消息(同 `dragging_tree_item`)。
+    pub(crate) fn dragging_category(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.todo.category_drag().is_some())
+    }
+
+    /// 已确认(`Dragging`)——供顶层判断要不要重绘 / 换光标。
+    pub(crate) fn category_drag_confirmed(&self) -> bool {
+        self.active_workspace()
+            .is_some_and(|ws| ws.todo.category_drag_confirmed())
+    }
+
+    /// Esc 取消进行中的分类拖拽。
+    pub(crate) fn cancel_category_drag(&mut self) {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.todo.cancel_category_drag();
+        }
+    }
+
+    /// 每次 `CursorMoved` 调用。返回是否发生了状态变化(调用方据此请求重绘)。
+    pub(crate) fn maybe_confirm_category_drag(&mut self, left_mouse_down: bool) -> bool {
+        let cursor = self.last_cursor;
+        let action = {
+            let Some(ws) = self.active_workspace() else {
+                return false;
+            };
+            todo::tick(
+                ws.todo.category_drag(),
+                left_mouse_down,
+                cursor,
+                std::time::Instant::now(),
+            )
+        };
+        let Some(ws) = self.active_workspace_mut() else {
+            return false;
+        };
+        match action {
+            todo::Tick::Nothing => false,
+            todo::Tick::Clear => {
+                ws.todo.cancel_category_drag();
+                true
+            }
+            todo::Tick::Confirm => {
+                ws.todo.confirm_category_drag();
+                true
+            }
+        }
+    }
+
     /// 当前正被拖拽的面板种类(`None` = 未在拖拽)——视图层(`icon_rail`
     /// 源图标变淡 / `rail_drag_ghost` 幽灵图标取图标)据此判断"这是不是
     /// 我"。薄包装 `dragged_panel_kind` 自由函数(同 `rail_drag_move`
