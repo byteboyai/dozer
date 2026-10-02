@@ -9,6 +9,13 @@ use crate::extensions::toast::{Level, Outbox, Pending};
 use dozer_core::protocol::{GroupInfo, GroupMessageInfo, GroupMessageStatus};
 use std::time::{Duration, Instant};
 
+mod protocol;
+pub(crate) use protocol::route_event;
+pub use protocol::{
+    Command, GroupChatViewPayload, GroupChatWebviewEvent, WebviewPushState, current_view_payload,
+    encode_group_chat_push, parse_group_chat_event,
+};
+
 dozer_core::scope!(pub(crate) LOG, panel, "group_chat");
 
 /// 有发言进行中时,两次轮询的最小间隔。本地 UDS 往返亚毫秒级,这个间隔只是为了
