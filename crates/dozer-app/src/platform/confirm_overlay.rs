@@ -16,12 +16,12 @@ use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
 use crate::app::Message;
-use crate::dialog;
 use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
 use crate::platform::overlay_window::{
     backdrop_card, open_overlay, popup_card_size, reposition_overlay,
 };
+use byteui::feedback::dialog;
 
 /// 五个 confirm 形态弹窗的判别标签——只用来在 `sync_confirm_overlay` 里
 /// 判断"这次 desired 和已开的窗口是不是同一个弹窗",不需要 `Message`/

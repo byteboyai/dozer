@@ -1044,14 +1044,14 @@ pub(crate) fn project_create_card(state: &State) -> Element<'_> {
             .width(Length::Fill)
             .height(Length::Fill),
         error_row,
-        crate::dialog::actions(row![cancel, submit].spacing(8)),
+        byteui::feedback::dialog::actions(row![cancel, submit].spacing(8)),
     ]
     .spacing(12);
     container(content)
         .padding(16)
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(crate::dialog::card_style)
+        .style(byteui::feedback::dialog::card_style)
         .into()
 }
 

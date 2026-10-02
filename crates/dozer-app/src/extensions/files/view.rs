@@ -1305,7 +1305,7 @@ pub fn tab_context_menu_popup<'a>(
 /// 保证文案/消息不因迁移而分叉。`None` 表示当前没有待确认的删除。
 pub(crate) fn delete_confirm_spec(
     ws_state: &WorkspaceState,
-) -> Option<crate::dialog::ConfirmDialog<Message>> {
+) -> Option<byteui::feedback::dialog::ConfirmDialog<Message>> {
     let (path, is_dir) = ws_state.tree_delete_confirm.as_ref()?;
     let kind = if *is_dir { "文件夹" } else { "文件" };
     // 标题用相对项目根的完整路径(同 `files_move_card` 的 source_display
@@ -1317,7 +1317,7 @@ pub(crate) fn delete_confirm_spec(
         .and_then(|t| path.strip_prefix(t.root()).ok())
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string());
-    Some(crate::dialog::ConfirmDialog {
+    Some(byteui::feedback::dialog::ConfirmDialog {
         icon: Some(icons::IconKind::CircleAlert),
         title: format!("删除{kind} \"{rel_path}\"?"),
         description: format!("{kind}将会被放入系统回收站，如需恢复可从系统回收站找回。"),
@@ -1464,7 +1464,7 @@ pub fn files_move_card(
         );
     }
 
-    body = body.push(crate::dialog::actions(
+    body = body.push(byteui::feedback::dialog::actions(
         row![
             button(
                 text("取消")
@@ -1473,7 +1473,7 @@ pub fn files_move_card(
             )
             .on_press(Message::MoveCancel)
             .padding([6, 12])
-            .style(crate::dialog::action_button_style(
+            .style(byteui::feedback::dialog::action_button_style(
                 byteui::theme::color::current().dim
             )),
             button(
@@ -1483,7 +1483,7 @@ pub fn files_move_card(
             )
             .on_press(Message::MoveConfirm)
             .padding([6, 12])
-            .style(crate::dialog::action_button_style(
+            .style(byteui::feedback::dialog::action_button_style(
                 byteui::theme::color::current().cream
             )),
         ]
@@ -1496,7 +1496,7 @@ pub fn files_move_card(
     let dialog = container(body)
         .padding(16)
         .width(Length::Fill)
-        .style(crate::dialog::card_style);
+        .style(byteui::feedback::dialog::card_style);
 
     container(dialog)
         .width(Length::Fill)

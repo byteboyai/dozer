@@ -380,7 +380,7 @@ fn project_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_re
     .style(|_t: &iced_widget::Theme, s| iced_widget::button::Style {
         background: Some(byteui::theme::color::current().bg.into()),
         border: Border {
-            color: crate::dialog::action_button_border_color(s),
+            color: byteui::feedback::dialog::action_button_border_color(s),
             width: 1.0,
             radius: 4.0.into(),
         },
@@ -399,7 +399,7 @@ fn project_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_re
     .style(|_t: &iced_widget::Theme, s| iced_widget::button::Style {
         background: Some(byteui::theme::color::current().bg.into()),
         border: Border {
-            color: crate::dialog::action_button_border_color(s),
+            color: byteui::feedback::dialog::action_button_border_color(s),
             width: 1.0,
             radius: 4.0.into(),
         },
@@ -552,7 +552,7 @@ pub fn project_scaffold_card(
     )
     .on_press_maybe(done.then_some(Message::ScaffoldPopupClose))
     .padding([6, 12])
-    .style(crate::dialog::action_button_style(
+    .style(byteui::feedback::dialog::action_button_style(
         byteui::theme::color::current().dim,
     ));
 
@@ -576,7 +576,7 @@ pub fn project_scaffold_card(
         // 默认 `Shrink`——容器跟按钮本身一样宽,`align_x` 无从对齐起,视觉
         // 上就是贴左(2026-09-15 用户反馈)。改用 `dialog::actions`(同其它
         // 弹窗底部按钮行的既有约定),内部套了 `width(Fill)` 才会真正靠右。
-        crate::dialog::actions(row![close_btn]),
+        byteui::feedback::dialog::actions(row![close_btn]),
     ]
     .spacing(14);
 
@@ -585,7 +585,7 @@ pub fn project_scaffold_card(
     let dialog = container(card)
         .width(Length::Fill)
         .padding(16)
-        .style(crate::dialog::card_style);
+        .style(byteui::feedback::dialog::card_style);
 
     // 之前这里直接返回卡片本体,在外层 `stack!` 里默认贴左上角——同类
     // "删除项目"确认弹窗(`project_delete_confirm_popup`)/SSH 删主机确认
@@ -666,7 +666,7 @@ pub fn project_delete_card(
     )
     .on_press(Message::DeleteProjectCancel)
     .padding([6, 12])
-    .style(crate::dialog::action_button_style(
+    .style(byteui::feedback::dialog::action_button_style(
         byteui::theme::color::current().dim,
     ));
     let confirm = button(
@@ -676,7 +676,7 @@ pub fn project_delete_card(
     )
     .on_press(Message::DeleteProjectConfirm)
     .padding([6, 12])
-    .style(crate::dialog::action_button_style(
+    .style(byteui::feedback::dialog::action_button_style(
         byteui::theme::color::current().red,
     ));
 
@@ -711,7 +711,7 @@ pub fn project_delete_card(
                 ),
             ]
             .spacing(8),
-            crate::dialog::actions(row![cancel, confirm].spacing(8)),
+            byteui::feedback::dialog::actions(row![cancel, confirm].spacing(8)),
         ]
         .spacing(12),
     )
@@ -719,7 +719,7 @@ pub fn project_delete_card(
     // 给定)。
     .width(Length::Fill)
     .padding(16)
-    .style(crate::dialog::card_style);
+    .style(byteui::feedback::dialog::card_style);
 
     container(dialog)
         .width(Length::Fill)

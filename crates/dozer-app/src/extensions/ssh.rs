@@ -1383,14 +1383,14 @@ pub fn view<'a>(
 pub(crate) fn delete_confirm_spec(
     ws_state: &WorkspaceState,
     host_id: &str,
-) -> Option<crate::dialog::ConfirmDialog<Message>> {
+) -> Option<byteui::feedback::dialog::ConfirmDialog<Message>> {
     let name = ws_state
         .hosts()
         .iter()
         .find(|h| h.id == host_id)
         .map(|h| h.name.as_str())
         .unwrap_or(host_id);
-    Some(crate::dialog::ConfirmDialog {
+    Some(byteui::feedback::dialog::ConfirmDialog {
         icon: None,
         title: format!("删除主机 \"{name}\"?"),
         description: "这会永久删除这台主机的连接记录。".to_string(),
@@ -1437,7 +1437,7 @@ fn ssh_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_render
         .style(|_t: &iced_widget::Theme, s| button::Style {
             background: Some(byteui::theme::color::current().bg.into()),
             border: iced_widget::core::Border {
-                color: crate::dialog::action_button_border_color(s),
+                color: byteui::feedback::dialog::action_button_border_color(s),
                 width: 1.0,
                 radius: 4.0.into(),
             },

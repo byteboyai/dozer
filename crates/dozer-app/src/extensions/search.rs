@@ -449,7 +449,7 @@ pub(crate) fn search_card<'a>(
     )
     .on_press(Message::QuerySubmit)
     .padding([6, 12])
-    .style(crate::dialog::action_button_style(
+    .style(byteui::feedback::dialog::action_button_style(
         byteui::theme::color::current().cream,
     ));
 
@@ -488,7 +488,7 @@ pub(crate) fn search_card<'a>(
     container(body.padding(16))
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(crate::dialog::card_style)
+        .style(byteui::feedback::dialog::card_style)
         .into()
 }
 

@@ -22,7 +22,7 @@ struct HomespaceColors {
     card_bg: String,
     /// 卡片主文字(项目名、文件名、对话标题、最近文件标题)颜色。
     cream: String,
-    /// 按钮 hover/按下态描边色(统一按钮规范,见 `dialog::
+    /// 按钮 hover/按下态描边色(统一按钮规范,见 `byteui::feedback::dialog::
     /// action_button_border_color`)。
     gold: String,
     /// 卡片/按钮描边色。

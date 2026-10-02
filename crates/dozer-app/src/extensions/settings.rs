@@ -774,13 +774,13 @@ pub fn settings_card(
     .align_y(iced_widget::core::Alignment::Start)
     .height(Length::Fill);
 
-    let content = column![header, main, crate::dialog::actions(row![close])].spacing(14);
+    let content = column![header, main, byteui::feedback::dialog::actions(row![close])].spacing(14);
 
     container(content)
         .padding(16)
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(crate::dialog::card_style)
+        .style(byteui::feedback::dialog::card_style)
         .into()
 }
 

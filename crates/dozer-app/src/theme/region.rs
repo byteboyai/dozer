@@ -95,7 +95,6 @@ struct RawRegions {
     status_bar: RawRegion,
     maximize_overlay: RawMaximizeOverlay,
     context_menu: RawRegion,
-    dialog: RawRegion,
     left_zone: RawRegion,
     right_zone: RawRegion,
 }
@@ -344,11 +343,6 @@ pub fn context_menu() -> RegionStyle {
     bg.a = 0xfa as f32 / 255.0;
     s.background = Some(bg);
     s
-}
-/// 弹窗(确认框/模态对话框)外壳:统一 PANEL 底 + 金色描边(呼应放大态
-/// 浮层同款"金色描边盒"),供 `dialog::card_style` 取用。
-pub fn dialog() -> RegionStyle {
-    scaled_region(resolve_region(&REGIONS.dialog))
 }
 /// 左面板区(项目树+预览,或单个 Web 预览)整体外边框——把"左1左2两栏"
 /// 框成一个视觉整体,不是某一栏自己的边框。

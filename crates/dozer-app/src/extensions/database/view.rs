@@ -50,7 +50,7 @@ pub fn database_drivers_card(
     )
     .on_press(Message::DriversPopupToggle)
     .padding([6, 12])
-    .style(crate::dialog::action_button_style(
+    .style(byteui::feedback::dialog::action_button_style(
         byteui::theme::color::current().dim,
     ));
 
@@ -61,14 +61,14 @@ pub fn database_drivers_card(
                 .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().dim),
             items_col,
-            crate::dialog::actions(row![close]),
+            byteui::feedback::dialog::actions(row![close]),
         ]
         .spacing(10),
     )
     .padding(16)
     .width(Length::Fill)
     .height(Length::Fill)
-    .style(crate::dialog::card_style)
+    .style(byteui::feedback::dialog::card_style)
     .into()
 }
 
@@ -575,14 +575,14 @@ pub fn view<'a>(
 pub(crate) fn delete_confirm_spec(
     ws_state: &WorkspaceState,
     source_id: &str,
-) -> Option<crate::dialog::ConfirmDialog<Message>> {
+) -> Option<byteui::feedback::dialog::ConfirmDialog<Message>> {
     let name = ws_state
         .sources()
         .iter()
         .find(|s| s.id == source_id)
         .map(|s| s.name.to_string())
         .unwrap_or_else(|| source_id.to_string());
-    Some(crate::dialog::ConfirmDialog {
+    Some(byteui::feedback::dialog::ConfirmDialog {
         icon: None,
         title: format!("删除数据源 \"{name}\"?"),
         description: "这会永久删除这条连接记录及其保存的密码。".to_string(),
@@ -632,7 +632,7 @@ pub(crate) fn database_footer_bar<'a>()
             .style(|_t: &iced_widget::Theme, s| button::Style {
                 background: Some(byteui::theme::color::current().bg.into()),
                 border: iced_widget::core::Border {
-                    color: crate::dialog::action_button_border_color(s),
+                    color: byteui::feedback::dialog::action_button_border_color(s),
                     width: 1.0,
                     radius: 4.0.into(),
                 },

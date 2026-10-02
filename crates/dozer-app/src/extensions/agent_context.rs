@@ -315,7 +315,7 @@ pub fn expanded_panel(
             .width(Length::Fill)
             .max_height(EXPANDED_MAX_HEIGHT)
             .padding(8)
-            .style(crate::dialog::card_style)
+            .style(byteui::feedback::dialog::card_style)
             .into(),
     )
 }

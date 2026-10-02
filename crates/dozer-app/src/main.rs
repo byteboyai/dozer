@@ -4,7 +4,6 @@ mod capabilities;
 mod chrome;
 mod conversation;
 mod delivery;
-mod dialog;
 mod event;
 mod extensions;
 mod external_apps;

@@ -356,7 +356,7 @@ pub fn edit_history_card(
         .width(Length::Fill)
         .height(Length::Fill)
         .padding(16)
-        .style(crate::dialog::card_style)
+        .style(byteui::feedback::dialog::card_style)
         .into()
 }
 

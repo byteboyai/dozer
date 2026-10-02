@@ -612,7 +612,7 @@ pub fn file_history_card(
         .width(Length::Fill)
         .height(Length::Fill)
         .padding(16)
-        .style(crate::dialog::card_style)
+        .style(byteui::feedback::dialog::card_style)
         .into()
 }
 
@@ -794,7 +794,7 @@ fn rollback_button<'a>(
     )
     .on_press_maybe((!disabled).then_some(Message::RollbackRequest(oid)))
     .padding([4, 10])
-    .style(crate::dialog::action_button_style(
+    .style(byteui::feedback::dialog::action_button_style(
         byteui::theme::color::current().cream,
     ))
     .into()

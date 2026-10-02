@@ -77,12 +77,6 @@
       "padding": 8,
       "gap": 1
     },
-    "dialog": {
-      "background": "PANEL",
-      "border": { "color": "GOLD", "width": 1.5, "radius": 8.0 },
-      "padding": 16,
-      "gap": 0
-    },
     "left_zone": {
       "background": "BG",
       "border": { "color": "BORDER", "width": 0.0, "radius": 8.0 },

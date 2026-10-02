@@ -389,7 +389,7 @@ pub(crate) fn todo_clear_footer_bar<'a>(
         .style(|_t: &iced_widget::Theme, s| button::Style {
             background: Some(byteui::theme::color::current().bg.into()),
             border: Border {
-                color: crate::dialog::action_button_border_color(s),
+                color: byteui::feedback::dialog::action_button_border_color(s),
                 width: 1.0,
                 radius: 4.0.into(),
             },
@@ -437,8 +437,8 @@ pub(crate) fn todo_clear_footer_bar<'a>(
 /// 由红色"清空"按钮本身表达,不需要标题图标重复。
 /// "清空列表"确认弹窗的内容描述——宿主(`platform::confirm_overlay`)取这
 /// 一份渲染,保证文案/消息不因迁移而分叉。
-pub(crate) fn clear_confirm_spec() -> crate::dialog::ConfirmDialog<Message> {
-    crate::dialog::ConfirmDialog {
+pub(crate) fn clear_confirm_spec() -> byteui::feedback::dialog::ConfirmDialog<Message> {
+    byteui::feedback::dialog::ConfirmDialog {
         icon: Some(icons::IconKind::ListTodo),
         title: "清空列表".to_string(),
         description: "这会清空当前项目的全部任务,操作不可撤销。".to_string(),
@@ -1958,7 +1958,7 @@ pub fn todo_detail_card(
     let submit = button(text(submit_label))
         .on_press_maybe((!ws.todo.detail_processing()).then_some(Message::DetailReplySubmit))
         .padding([6, 12])
-        .style(crate::dialog::action_button_style(
+        .style(byteui::feedback::dialog::action_button_style(
             byteui::theme::color::current().cream,
         ));
 
@@ -1966,7 +1966,7 @@ pub fn todo_detail_card(
         .spacing(12)
         .padding(16)
         .width(Length::Fill);
-    let card = container(card).style(crate::dialog::card_style);
+    let card = container(card).style(byteui::feedback::dialog::card_style);
 
     container(card)
         .width(Length::Fill)

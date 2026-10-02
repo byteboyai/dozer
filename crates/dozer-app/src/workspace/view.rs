@@ -406,7 +406,7 @@ pub(crate) fn agent_picker_popup(
 
 /// 关 Agent 面板 tab 前的确认弹窗:目标会话处于 Running/AwaitingInput 时才
 /// 弹(分流见 `app::update` `Message::CloseTab`)。窗口级 overlay,复用
-/// `crate::dialog::confirm` 骨架(同文件树删除/主机删除确认框)。
+/// `byteui::feedback::dialog::confirm` 骨架(同文件树删除/主机删除确认框)。
 /// `pending_close_tab` 存的是被点 × 那个会话的稳定 id(不是下标)——弹窗
 /// 迁到独立原生窗口后主窗口仍可交互,tab 列表在弹窗存活期间可能被重排/
 /// 增删,按 id 现查才能保证标题始终对应真正会被关掉的那个会话;查不到
@@ -415,7 +415,7 @@ pub(crate) fn agent_picker_popup(
 /// 份渲染。`None` 表示当前没有待确认的关闭。
 pub(crate) fn agent_close_confirm_spec(
     ws: &Workspace,
-) -> Option<crate::dialog::ConfirmDialog<Message>> {
+) -> Option<byteui::feedback::dialog::ConfirmDialog<Message>> {
     let id = ws.pending_close_tab.as_ref()?;
     let agent_label = ws
         .tabs
@@ -423,7 +423,7 @@ pub(crate) fn agent_close_confirm_spec(
         .find(|t| &t.info.id == id)
         .map(|t| t.agent.label().to_string())
         .unwrap_or_else(|| "agent".to_string());
-    Some(crate::dialog::ConfirmDialog {
+    Some(byteui::feedback::dialog::ConfirmDialog {
         icon: Some(IconKind::CircleAlert),
         title: format!("关闭\"{agent_label}\" Agent吗？"),
         description: format!(
