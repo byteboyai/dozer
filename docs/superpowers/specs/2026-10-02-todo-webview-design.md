@@ -135,6 +135,8 @@ Todo 面板（`extensions/todo/`，`view.rs` 1977 行）左栏为分类树，右
 - 拖拽是 iced 内的交互，各平台一致，不需要分支。
 - **要删**：右键菜单里的「移动到…」项（macOS 的原生 `category_context_menu_items` 与非 mac 的 iced `category_context_menu_popup` 两处），以及 `category_picker` 整套：`CategoryPicker`、`CategoryPickerTarget`、`category_picker_popup`、`app/view.rs` 中对应分支、`Message::CategoryPickerClose` / `CategoryPickerSelect`、`todo::Message::CategoryReparentPickerOpen` / `CategoryPickerOpenForTodo`、`todo_category_picker_open`、Esc 路由里的 `category_picker_open`。
 
+**实现说明（2026-10-02 完成，分支 `feat/todo-category-drag`）**：落地沿用文件树 `TreeDrag` 的同一套两阶段机制与阈值（距离 12px + 按住 300ms，复用 `tree_drag_past_threshold` / `tree_drag_held_long_enough`），只在 `Dragging` 阶段给候选行挂 `on_move`、换抓取光标并画落点高亮，`Pending` 期间零视觉反应。放下的判定抽成纯函数 `todo::category_drag::release_action(&CategoryDrag, &[CategoryInfo]) -> ReleaseAction`（未确认 → 点击选中；已确认且目标合法 → `Reparent{id, new_parent}`；源/目标在拖拽期间消失 → 空操作），`is_valid_drop` 负责防成环与无意义移动；`tick` 负责每次 `CursorMoved` 的确认与「左键未按下即自愈清空」。「全部」行是顶层放置目标（整行金色描边），「未分类」不接受放置但进入时清空悬停目标，Esc 取消进行中的拖拽。落盘仍走 `Client::reparent_category`，失败经 `CategoryMutated(Err)` → Toast，日志/Toast 来源 `todo`。右键菜单的「移动到…」与 `category_picker` 整套已删除。
+
 ## WebView 集成
 
 仿 Code Health / Usage / Git Log 先例：
