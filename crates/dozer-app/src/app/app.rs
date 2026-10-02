@@ -1648,7 +1648,10 @@ impl App {
         let Some(drag) = self.tab_drag else {
             return;
         };
-        if !tab_drag_past_threshold(drag.press_pos, self.last_cursor) {
+        if !byteui::interaction::tab_strip::tab_drag_past_threshold(
+            drag.press_pos,
+            self.last_cursor,
+        ) {
             return;
         }
         if drag.group != group {
@@ -3231,7 +3234,7 @@ impl App {
     }
 
     /// `kind`(`Files`/`Project`)预览面板当前**实际渲染宽度**(逻辑像素),
-    /// 供 tab 栏分页(`tab_widget::tab_window`)当可用宽度预算——复用 webview
+    /// 供 tab 栏分页(`byteui::interaction::tab_strip::tab_window`)当可用宽度预算——复用 webview
     /// 定位同源的 `preview_content_bounds_for`,不再用
     /// `byteui::theme::geometry::tab_bar_avail_px()` 那个跟真实面板宽度
     /// 完全无关的静态估算常量(2026-09-14 用户反馈:明明面板里还有大把
@@ -3677,34 +3680,6 @@ mod tests {
     use std::sync::Arc;
 
     /// 光标没动(或只在阈值内小幅抖动)不算越过阈值——普通单击场景,同
-    /// `rail::rail_drag_past_threshold` 的对应用例。这是 2026-09-04
-    /// 用户反馈"agent tab 偶尔两个同时看起来被选中"的根因防回归测试:
-    /// 单击 tab 时按下瞬间到抬起前的亚像素抖动不该被当成一次拖拽换位。
-    #[test]
-    fn tab_drag_past_threshold_false_when_cursor_has_not_moved() {
-        assert!(!tab_drag_past_threshold((100.0, 100.0), (100.0, 100.0)));
-        assert!(!tab_drag_past_threshold((100.0, 100.0), (101.0, 100.0)));
-    }
-
-    /// 恰好等于阈值(平方比较是 `>` 不是 `>=`)不算越过,严格大于才算。
-    #[test]
-    fn tab_drag_past_threshold_false_when_exactly_at_threshold() {
-        assert!(!tab_drag_past_threshold(
-            (0.0, 0.0),
-            (TAB_DRAG_CONFIRM_THRESHOLD_PX, 0.0)
-        ));
-    }
-
-    /// 光标越过阈值(任意方向,这里用纯 x 位移)判定为真的拖拽,真实拖拽
-    /// 不受这道阈值影响。
-    #[test]
-    fn tab_drag_past_threshold_true_once_cursor_moves_past_it() {
-        assert!(tab_drag_past_threshold(
-            (0.0, 0.0),
-            (TAB_DRAG_CONFIRM_THRESHOLD_PX + 1.0, 0.0)
-        ));
-    }
-
     /// 2026-09 用户反馈的根因防回归测试:被关掉的 tab 若正被悬停,它自己的
     /// 两个键(标题 + 关闭按钮)必须整个消失,不能挪去任何位置——否则会被
     /// 将来复用同一下标的新 tab 意外继承("从未真正悬停过却带着高亮")。

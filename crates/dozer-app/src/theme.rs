@@ -67,11 +67,17 @@ mod tests {
         );
         assert_eq!(
             format!("{:?}", raw.geometry),
-            format!("{:?}", byteui::theme::geometry::GeometryTokens::byteboy2077())
+            format!(
+                "{:?}",
+                byteui::theme::geometry::GeometryTokens::byteboy2077()
+            )
         );
         assert_eq!(
             format!("{:?}", raw.icon_sizes),
-            format!("{:?}", byteui::theme::icon_size::IconSizeTokens::byteboy2077())
+            format!(
+                "{:?}",
+                byteui::theme::icon_size::IconSizeTokens::byteboy2077()
+            )
         );
     }
 

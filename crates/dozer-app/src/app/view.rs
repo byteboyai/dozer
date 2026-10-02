@@ -1701,7 +1701,7 @@ pub(crate) fn ssh_tab_bar<'a>(
         let _ = state;
     }
     let widths: Vec<f32> = entries.iter().map(|(w, _)| *w).collect();
-    let window = tab_widget::tab_window(
+    let window = byteui::interaction::tab_strip::tab_window(
         &widths,
         4.0,
         byteui::theme::geometry::tab_bar_avail_px(),

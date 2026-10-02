@@ -1,7 +1,6 @@
 use super::*;
 
 use crate::app::{Message, PanelKind};
-use crate::chrome::tab_widget::tab_window;
 use crate::osc::OscScanner;
 use crate::term::term_model::TerminalModel;
 use crate::transcript::ReviewEntry;
@@ -525,65 +524,6 @@ fn attached_agent_uses_picker_until_daemon_has_identified_session() {
         AgentKind::Claude
     );
     assert_eq!(attached_agent(None, AgentKind::Unknown), AgentKind::Unknown);
-}
-
-#[test]
-fn tab_window_no_overflow_all_visible() {
-    let w = tab_window(&[50.0, 50.0, 50.0], 4.0, 500.0, 0);
-    assert_eq!((w.first, w.visible_end), (0, 3));
-    assert!(!w.has_overflow(3));
-}
-
-#[test]
-fn tab_window_overflow_clamps_and_computes_visible_end() {
-    let widths = [100.0; 5];
-    let w = tab_window(&widths, 0.0, 250.0, 0);
-    assert_eq!((w.first, w.visible_end), (0, 2));
-    assert!(w.has_overflow(5));
-    assert_eq!(w.hidden_before(), 0..0);
-    assert_eq!(w.hidden_after(5), 2..5);
-
-    // 请求的 first 越界 → 钳到 max_first(=3),此时尾部 3 个恰好全可见。
-    let w = tab_window(&widths, 0.0, 250.0, 99);
-    assert_eq!((w.first, w.visible_end), (3, 5));
-    assert_eq!(w.hidden_before(), 0..3);
-    assert_eq!(w.hidden_after(5), 5..5);
-
-    let w = tab_window(&widths, 0.0, 250.0, 1);
-    assert_eq!((w.first, w.visible_end), (1, 3));
-    assert_eq!(w.hidden_before(), 0..1);
-    assert_eq!(w.hidden_after(5), 3..5);
-}
-
-/// 单个 tab 比可用宽度还宽(超长文件名)时,窗口仍要放出它(部分可见),
-/// 而不是 `visible_end == first` 导致整条 tab 栏空白。
-#[test]
-fn tab_window_oversized_single_tab_still_visible() {
-    let w = tab_window(&[900.0], 4.0, 300.0, 0);
-    assert_eq!((w.first, w.visible_end), (0, 1));
-    // 多 tab 且首个超宽:仍至少放出 first 这一个。
-    let w = tab_window(&[900.0, 80.0], 4.0, 300.0, 0);
-    assert_eq!((w.first, w.visible_end), (0, 1));
-}
-
-#[test]
-fn tab_window_reveal_keeps_visible_tab_still_no_jump() {
-    let widths = [100.0; 5];
-    // first=1 时可见区间是 [1,3):选中已经可见的 tab 1,first 不应该变。
-    assert_eq!(
-        crate::chrome::tab_widget::tab_window_reveal(&widths, 0.0, 250.0, 1, 1),
-        1
-    );
-}
-
-#[test]
-fn tab_window_reveal_scrolls_hidden_tab_into_view() {
-    let widths = [100.0; 5];
-    // first=0 时可见区间是 [0,2):选中隐藏在右侧的 tab 4,应重新钳出
-    // 一个包含它的窗口。
-    let new_first = crate::chrome::tab_widget::tab_window_reveal(&widths, 0.0, 250.0, 0, 4);
-    let w = tab_window(&widths, 0.0, 250.0, new_first);
-    assert!((w.first..w.visible_end).contains(&4));
 }
 
 #[test]

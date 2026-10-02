@@ -3614,7 +3614,7 @@ impl App {
                             .map(|i| i + 1 + ws.ssh_tabs.len())
                             .unwrap_or(0),
                     };
-                    ws.ssh_tab_first = tab_widget::tab_window_reveal(
+                    ws.ssh_tab_first = byteui::interaction::tab_strip::tab_window_reveal(
                         &widths,
                         4.0,
                         byteui::theme::geometry::tab_bar_avail_px(),
@@ -3643,7 +3643,7 @@ impl App {
                                 .unwrap_or_else(|| host_id.clone()),
                         )
                     }));
-                    ws.ssh_tab_first = tab_widget::tab_window_reveal(
+                    ws.ssh_tab_first = byteui::interaction::tab_strip::tab_window_reveal(
                         &widths,
                         4.0,
                         byteui::theme::geometry::tab_bar_avail_px(),
@@ -5007,8 +5007,13 @@ impl App {
                     .iter()
                     .map(|t| tab_display_width(&tab_title(t.agent, t.cwd.as_deref(), &t.info.name)))
                     .collect();
-                ws.term_tab_first =
-                    tab_widget::tab_window_reveal(&widths, 4.0, avail_px, ws.term_tab_first, idx);
+                ws.term_tab_first = byteui::interaction::tab_strip::tab_window_reveal(
+                    &widths,
+                    4.0,
+                    avail_px,
+                    ws.term_tab_first,
+                    idx,
+                );
                 ws.term_tab_overflow_anchor = None;
             }
         });
@@ -5551,8 +5556,13 @@ impl App {
                 .iter()
                 .map(|t| preview_tab_display_width(&t.title))
                 .collect();
-            ws.preview_tab_first =
-                tab_widget::tab_window_reveal(&widths, 4.0, avail_w, ws.preview_tab_first, active);
+            ws.preview_tab_first = byteui::interaction::tab_strip::tab_window_reveal(
+                &widths,
+                4.0,
+                avail_w,
+                ws.preview_tab_first,
+                active,
+            );
             ws.spawn_preview_state_save(io);
             ws.spawn_preview_context_push(io);
         });
@@ -5646,8 +5656,13 @@ impl App {
                     .iter()
                     .map(|t| preview_tab_display_width(&t.title))
                     .collect();
-                ws.preview_tab_first =
-                    tab_widget::tab_window_reveal(&widths, 4.0, avail_w, ws.preview_tab_first, idx);
+                ws.preview_tab_first = byteui::interaction::tab_strip::tab_window_reveal(
+                    &widths,
+                    4.0,
+                    avail_w,
+                    ws.preview_tab_first,
+                    idx,
+                );
                 ws.preview_tab_overflow_anchor = None;
             }
             ws.spawn_preview_state_save(io);
@@ -5703,7 +5718,7 @@ impl App {
                 .iter()
                 .map(|t| preview_tab_display_width(&t.title))
                 .collect();
-            ws.project_preview_tab_first = tab_widget::tab_window_reveal(
+            ws.project_preview_tab_first = byteui::interaction::tab_strip::tab_window_reveal(
                 &widths,
                 4.0,
                 avail_w,
@@ -5748,7 +5763,7 @@ impl App {
                     .iter()
                     .map(|t| preview_tab_display_width(&t.title))
                     .collect();
-                ws.project_preview_tab_first = tab_widget::tab_window_reveal(
+                ws.project_preview_tab_first = byteui::interaction::tab_strip::tab_window_reveal(
                     &widths,
                     4.0,
                     avail_w,

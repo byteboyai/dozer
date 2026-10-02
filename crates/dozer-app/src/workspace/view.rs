@@ -6,7 +6,6 @@ use crate::chrome::homespace::home_panel_head_with_actions;
 use crate::chrome::tab_widget::{
     PanelTabArgs, TabOverflowEntry, TabOverflowMenuArgs, panel_tab, tab_json_mode_button,
     tab_overflow_button, tab_overflow_menu, tab_render_mode_button, tab_tabular_mode_button,
-    tab_window,
 };
 use crate::extensions::conversations;
 use crate::menu_spec::{MenuSpec, MenuSpecItem};
@@ -15,6 +14,7 @@ use crate::theme;
 use crate::theme::terminal_font;
 use byteui::interaction::icons;
 use byteui::interaction::icons::IconKind;
+use byteui::interaction::tab_strip::tab_window;
 use dozer_core::protocol::AgentKind;
 use iced_widget::core::mouse;
 use iced_widget::core::text::LineHeight;

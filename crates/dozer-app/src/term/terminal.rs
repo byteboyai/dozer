@@ -133,7 +133,7 @@ pub(crate) fn tab_bar<'a>(
         .iter()
         .map(|t| tab_display_width(&tab_title(t.agent, t.cwd.as_deref(), &t.info.name)))
         .collect();
-    let window = tab_widget::tab_window(
+    let window = byteui::interaction::tab_strip::tab_window(
         &widths,
         4.0,
         app.terminal_tab_bar_avail_px(),

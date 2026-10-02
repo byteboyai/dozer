@@ -832,8 +832,8 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "byteui"
-version = "0.1.0"
-source = "git+https://github.com/byteboyai/byteui?tag=v0.1.0#f136bdc6f4de17c25ec5168f56e40e84c1d1cd9b"
+version = "0.3.0"
+source = "git+https://github.com/byteboyai/byteui?tag=v0.3.0#58adfe1cf619a72d1ac708124b49d8085c315b17"
 dependencies = [
  "iced_futures",
  "iced_renderer",

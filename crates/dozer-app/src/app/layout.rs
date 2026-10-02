@@ -325,28 +325,7 @@ pub struct TabDrag {
     pub press_pos: (f32, f32),
 }
 
-/// 页签拖拽确认阈值(同 rail 图标栏 `RAIL_DRAG_VISUAL_THRESHOLD_PX`)：按下
-/// 瞬间到当前光标的位移必须越过这个半径才算"确认是一次拖拽换位"，见
-/// `tab_drag_past_threshold` 用法处的文档。
-pub(crate) const TAB_DRAG_CONFIRM_THRESHOLD_PX: f32 = 4.0;
-
-/// `drag.press_pos` 到 `cursor` 的位移是否已越过 [`TAB_DRAG_CONFIRM_THRESHOLD_PX`]。
-/// 页签(4px 间距)比 rail 图标栏排得更紧——`select_tab`/`preview_select_tab`
-/// 等"按下即武装拖拽"的调用点(见 `Message::SelectTab` 文档)本身没问题，
-/// 但 `tab_drag_move` 此前对**任何** `on_move`（哪怕只挪了半个像素）都直接
-/// 执行换位 + `rekey_hover_range`：触控板等高灵敏输入下，单击落点到抬起
-/// 之间的亚像素抖动偶尔会越界到邻居页签的命中框，触发一次肉眼不可见的
-/// "拖拽"，把正被按住那个页签的 hover 光效错挪到邻居页签上——观感上就是
-/// 两个页签同时像被选中(2026-09-04 用户反馈截图：点击切换 tab 后出现两个
-/// 高亮页签，且无拖拽意图、偶发)。`tab_drag_move` 现在先过这道阈值，真正
-/// 的拖拽(持续位移必然越界)不受影响，普通点击的抖动不再触发换位。
-pub(crate) fn tab_drag_past_threshold(press_pos: (f32, f32), cursor: (f32, f32)) -> bool {
-    let dx = cursor.0 - press_pos.0;
-    let dy = cursor.1 - press_pos.1;
-    dx * dx + dy * dy > TAB_DRAG_CONFIRM_THRESHOLD_PX * TAB_DRAG_CONFIRM_THRESHOLD_PX
-}
-
-/// 文件树内拖拽确认阈值。最初照抄 `TAB_DRAG_CONFIRM_THRESHOLD_PX` 的 4px,
+/// 文件树内拖拽确认阈值。最初照抄页签拖拽阈值(`byteui::interaction::tab_strip::TAB_DRAG_CONFIRM_THRESHOLD_PX`)的 4px,
 /// 但 tab/rail 是紧凑排列的小控件,4px 越界就意味着真的碰到邻居;树行是
 /// 整行高的目标,trackpad 上一次认真点击(尤其是刻意放慢、想点准的那种)
 /// 本身就可能带着好几像素的手指位移,4px 太容易被"只是想点一下"的正常

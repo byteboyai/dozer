@@ -2,7 +2,8 @@
 //! 面板内 tab 栏的共享部件:`panel_tab`(单个 tab 渲染器,被终端
 //! `terminal.rs`、SSH 面板 `app.rs::ssh_tab_bar`、文件/项目预览
 //! `workspace.rs`、浏览器 `extensions::browser` 四处跨模块复用)、
-//! `tab_window`/`tab_window_reveal`(窗口化滚动算法 + 选中自动带入可见区),
+//! (窗口化滚动算法 `tab_window`/`tab_window_reveal` 已搬到
+//! `byteui::interaction::tab_strip`),
 //! 以及 `tab_overflow_button`/`tab_overflow_menu`(V 溢出下拉入口与悬浮
 //! 菜单,列出某 tab 组内全部 tab,供 `terminal.rs`/`workspace.rs`/
 //! `ssh_tab_bar`/Database 面板复用)。
@@ -230,107 +231,6 @@ where
     // 面板页签在屏幕底部,tooltip 用 `Top` 弹在页签上方,免出屏。仅当悬停
     // 满 2s(`show_tooltip`)才显示标题全称(见 `App::hover_tooltip_ready`)。
     controlled_tooltip(el, title, Position::Top, show_tooltip)
-}
-
-/// 给定各 tab 宽、tab 间距、可视宽、当前 first,算出实际渲染窗口:
-/// (钳制后的 first, 可见区间的独占结束下标)。
-/// - 全部 tab 能放下(总宽<=avail) → first=0, visible_end=n(全可见,无溢出)。
-/// - 溢出 → 先按原算法算 max_first(从右往左累加,找最大窗口起点使尾部放得下),
-///   钳 first 到 [0, max_first];再从钳后的 first 往右累加,算出这一屏实际能
-///   放下几个(`visible_end`)——原算法只钳 first,不知道"从 first 起到底能看见
-///   几个",全靠调用方外层 `.clip(true)` 视觉裁切,拿不到索引,这次要靠这个
-///   新窗口的可见区间构建"隐藏了哪些 tab"的列表,必须补上这个正向累加。
-pub(crate) struct TabOverflow {
-    pub first: usize,
-    pub visible_end: usize,
-}
-
-// 该窗口结构体最终在 `tab_window_reveal` 里按是否落在窗口内决定是否松开
-// 钳制。下面三组"隐藏段"取法只在既有单元测试里断言布局时用到(V 下拉不再
-// 消费它们:新版下拉列出组内全部 tab,不区分子集),生产 build 里去重以免
-// dead-code 告警,故整块挂在 `#[cfg(test)]` 下。
-#[cfg(test)]
-impl TabOverflow {
-    pub(crate) fn hidden_before(&self) -> std::ops::Range<usize> {
-        0..self.first
-    }
-
-    pub(crate) fn hidden_after(&self, len: usize) -> std::ops::Range<usize> {
-        self.visible_end..len
-    }
-
-    pub(crate) fn has_overflow(&self, len: usize) -> bool {
-        self.first > 0 || self.visible_end < len
-    }
-}
-
-pub(crate) fn tab_window(widths: &[f32], gap: f32, avail: f32, first: usize) -> TabOverflow {
-    let n = widths.len();
-    if n == 0 {
-        return TabOverflow {
-            first: 0,
-            visible_end: 0,
-        };
-    }
-    let total: f32 = widths.iter().sum::<f32>() + gap * (n.saturating_sub(1)) as f32;
-    if total <= avail {
-        return TabOverflow {
-            first: 0,
-            visible_end: n,
-        };
-    }
-    // 求 max_first：从右往左累加，找最大的窗口起点使 tails 放得下。
-    let mut max_first = n - 1;
-    let mut acc = 0.0;
-    for i in (0..n).rev() {
-        let w = widths[i] + if i < n - 1 { gap } else { 0.0 };
-        if acc + w <= avail {
-            acc += w;
-            max_first = i;
-        } else {
-            break;
-        }
-    }
-    let clamped = first.min(max_first);
-    // 从钳后的 first 往右累加，算这一屏实际放得下几个。
-    // 至少放 `first` 这一个:单个 tab 比可用宽度还宽(超长文件名)时,累加
-    // 一个都放不下,`visible_end == first` 会让整条 tab 栏空白;保底放一个,
-    // 由外层 `.clip(true)` 截出它的前半段(标题部分可见)。
-    let mut visible_end = clamped + 1;
-    let mut fwd = 0.0;
-    for (i, w) in widths.iter().enumerate().skip(clamped) {
-        let w = *w + if i > clamped { gap } else { 0.0 };
-        if i == clamped || fwd + w <= avail {
-            fwd += w;
-            visible_end = i + 1;
-        } else {
-            break;
-        }
-    }
-    TabOverflow {
-        first: clamped,
-        visible_end,
-    }
-}
-
-/// 选中某个 tab(`target`)后:若它已经在当前窗口可见区间内,`first` 原样
-/// 不变(避免"点已可见的 tab 也跟着跳一下"的抖动);若它当前隐藏(在窗口外),
-/// 把候选 first 设为 `target` 本身,交给 `tab_window` 重新钳出一个包含它的
-/// 窗口——这就是"自动滚动带入可见区"的全部逻辑,没有新算法,只是换个候选值
-/// 重跑一次既有的钳制。
-pub(crate) fn tab_window_reveal(
-    widths: &[f32],
-    gap: f32,
-    avail: f32,
-    first: usize,
-    target: usize,
-) -> usize {
-    let current = tab_window(widths, gap, avail, first);
-    if target >= current.first && target < current.visible_end {
-        current.first
-    } else {
-        tab_window(widths, gap, avail, target).first
-    }
 }
 
 /// 溢出下拉入口。V 按钮在 tab 组非空时始终显示(即使当前没有横向溢出,

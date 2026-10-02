@@ -752,7 +752,7 @@ pub fn content_pane<'a>(
         )
     }));
     let widths: Vec<f32> = entries.iter().map(|(w, _)| *w).collect();
-    let window = crate::chrome::tab_widget::tab_window(
+    let window = byteui::interaction::tab_strip::tab_window(
         &widths,
         4.0,
         byteui::theme::geometry::tab_bar_avail_px(),
@@ -1695,7 +1695,7 @@ impl DatabaseContentState {
     /// 钳出包含它的窗口;已可见则不动。`widths` 由渲染侧按 `tab_bar_avail_px`
     /// 同一套口径传入(含开头的空白占位 tab 宽度)。
     pub fn reveal_tab(&mut self, widths: &[f32], target: usize) {
-        self.tab_scroll_first = crate::chrome::tab_widget::tab_window_reveal(
+        self.tab_scroll_first = byteui::interaction::tab_strip::tab_window_reveal(
             widths,
             4.0,
             byteui::theme::geometry::tab_bar_avail_px(),

@@ -5,7 +5,6 @@
 use crate::app::{
     DEFAULT_COLS, DEFAULT_ROWS, Message, PROJECT_PREVIEW_ID_OFFSET, PanelKind, ProjectId,
 };
-use crate::chrome::tab_widget::tab_window_reveal;
 use crate::delivery::{self};
 use crate::extensions::browser;
 use crate::extensions::codehealth;
@@ -24,6 +23,7 @@ use crate::preview_state;
 use crate::project::FileTree;
 use crate::term::term_model::TerminalModel;
 use crate::transcript::{self, ReviewEntry};
+use byteui::interaction::tab_strip::tab_window_reveal;
 use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
 use iced_widget::text;
