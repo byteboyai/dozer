@@ -866,8 +866,35 @@ async fn handle_conn(
                             Ok(message) => Reply::GroupMessage { message },
                             Err(e) => Reply::Error { message: format!("重试失败: {e}") },
                         },
-                        Request::PushGroupMessageToTodo { .. } => Reply::Error {
-                            message: "未实现".into(),
+                        Request::PushGroupMessageToTodo { message_id, text } => {
+                            let text = text.trim().to_string();
+                            if text.is_empty() {
+                                Reply::Error { message: "待办内容不能为空".into() }
+                            } else {
+                                match groups.store().get_message(message_id) {
+                                    Err(e) => Reply::Error { message: format!("推送待办失败: {e}") },
+                                    Ok(msg) if msg.todo_id.is_some() => Reply::Error {
+                                        message: "该消息已转为待办".into(),
+                                    },
+                                    Ok(msg) => match groups.store().get_group(msg.group_id) {
+                                        Err(e) => Reply::Error { message: format!("推送待办失败: {e}") },
+                                        Ok(group) => match todos.add(group.project_id, &text) {
+                                            Err(e) => Reply::Error {
+                                                message: format!("新增任务失败: {e}"),
+                                            },
+                                            Ok(todo) => match groups.store().set_todo_link(message_id, todo.id) {
+                                                Ok(()) => Reply::Todo { todo },
+                                                Err(e) => {
+                                                    dozer_core::log_warn!(LOG, message_id, todo_id = todo.id, error = %e, "待办已创建但记录关联失败");
+                                                    Reply::Error {
+                                                        message: format!("待办已创建,但记录来源失败: {e}"),
+                                                    }
+                                                }
+                                            },
+                                        },
+                                    },
+                                }
+                            }
                         },
                         Request::ListCategories { project_id } => {
                             match categories.list(project_id) {

@@ -209,3 +209,59 @@ async fn errors_come_back_as_errors() {
     assert!(client.create_group(1, "   ").await.is_err());
     assert!(client.delete_group(424242).await.is_err());
 }
+
+#[tokio::test]
+async fn push_message_to_todo_creates_todo_links_message_and_only_once() {
+    let (sock, _g, projects) = start_daemon().await;
+    let dir = tempfile::tempdir().unwrap();
+    let project = projects.open(dir.path().to_str().unwrap()).unwrap();
+    let client = Client::new(sock);
+    let group = client.create_group(project.id, "t").await.unwrap();
+    client
+        .add_group_member(group.id, AgentKind::Claude, "claude", "")
+        .await
+        .unwrap();
+    client
+        .post_group_message(group.id, "@claude 说说")
+        .await
+        .unwrap();
+    let msgs = poll_until_settled(&client, group.id).await;
+    let reply = &msgs[1];
+
+    let todo = client
+        .push_group_message_to_todo(reply.id, "把登录页加上验证码")
+        .await
+        .unwrap();
+    assert_eq!(todo.text, "把登录页加上验证码");
+    assert_eq!(todo.project_id, project.id, "待办落在群所属项目");
+    assert_eq!(todo.assigned_agent, None, "群聊不分配任务");
+
+    let (msgs, _) = client.list_group_messages(group.id, 0, 500).await.unwrap();
+    assert_eq!(msgs[1].todo_id, Some(todo.id));
+
+    // 同一条消息不能重复转
+    assert!(
+        client
+            .push_group_message_to_todo(reply.id, "再来一遍")
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        client.list_todos(project.id).await.unwrap().len(),
+        1,
+        "没有产生第二条待办"
+    );
+    // 空文本拒绝,且不消耗"已转"名额
+    assert!(
+        client
+            .push_group_message_to_todo(msgs[0].id, "  ")
+            .await
+            .is_err()
+    );
+    assert!(
+        client
+            .push_group_message_to_todo(msgs[0].id, "人类这条也能转")
+            .await
+            .is_ok()
+    );
+}

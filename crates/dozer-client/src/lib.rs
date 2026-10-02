@@ -726,6 +726,25 @@ impl Client {
         }
     }
 
+    /// 把群消息推送为一条待办(只新建,不指派——任务分配归 Todo)。
+    pub async fn push_group_message_to_todo(
+        &self,
+        message_id: i64,
+        text: &str,
+    ) -> Result<TodoInfo> {
+        match self
+            .roundtrip(&Request::PushGroupMessageToTodo {
+                message_id,
+                text: text.into(),
+            })
+            .await?
+        {
+            Reply::Todo { todo } => Ok(todo),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
     pub async fn locate_in_file(
         &self,
         project_id: i64,
