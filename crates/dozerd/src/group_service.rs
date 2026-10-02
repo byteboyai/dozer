@@ -37,7 +37,7 @@ struct CurrentTurn {
 }
 
 struct Worker {
-    tx: mpsc::UnboundedSender<i64>,
+    tx: mpsc::UnboundedSender<()>,
     current: Arc<Mutex<Option<CurrentTurn>>>,
 }
 
@@ -120,8 +120,8 @@ impl GroupService {
         let (human, placeholders) =
             self.store
                 .post_human_message(group_id, trimmed, &parsed.members)?;
-        for p in &placeholders {
-            self.enqueue(group_id, p.id);
+        if !placeholders.is_empty() {
+            self.wake_worker(group_id);
         }
         Ok(PostOutcome {
             human,
@@ -147,7 +147,7 @@ impl GroupService {
 
     pub fn retry(self: &Arc<Self>, message_id: i64) -> Result<GroupMessageInfo> {
         let msg = self.store.requeue(message_id)?;
-        self.enqueue(msg.group_id, msg.id);
+        self.wake_worker(msg.group_id);
         Ok(msg)
     }
 
@@ -159,21 +159,33 @@ impl GroupService {
         Ok(())
     }
 
-    fn enqueue(self: &Arc<Self>, group_id: i64, message_id: i64) {
+    fn wake_worker(self: &Arc<Self>, group_id: i64) {
         let mut workers = self.workers.lock().expect("workers lock");
         let worker = workers.entry(group_id).or_insert_with(|| {
-            let (tx, mut rx) = mpsc::unbounded_channel::<i64>();
+            let (tx, mut rx) = mpsc::unbounded_channel::<()>();
             let current: Arc<Mutex<Option<CurrentTurn>>> = Arc::new(Mutex::new(None));
             let svc = Arc::clone(self);
             let cur = Arc::clone(&current);
             tokio::spawn(async move {
-                while let Some(id) = rx.recv().await {
-                    svc.run_turn(group_id, id, &cur).await;
+                while rx.recv().await.is_some() {
+                    // 多个连接可以同时 post；数据库 seq 才是权威顺序，不能
+                    // 依赖各调用提交后抢到 channel 的先后。
+                    loop {
+                        let next = match svc.store.next_queued_id(group_id) {
+                            Ok(next) => next,
+                            Err(e) => {
+                                dozer_core::log_warn!(LOG, group_id, error = %e, "读取群聊队列失败");
+                                break;
+                            }
+                        };
+                        let Some(id) = next else { break };
+                        svc.run_turn(group_id, id, &cur).await;
+                    }
                 }
             });
             Worker { tx, current }
         });
-        let _ = worker.tx.send(message_id);
+        let _ = worker.tx.send(());
     }
 
     /// 跑一位。取消通道在 `try_start` **之前**登记进 `current`,这样库里一旦是
@@ -229,7 +241,14 @@ impl GroupService {
             self.store.fail(message_id, "找不到项目目录", None)?;
             return Ok(());
         };
-        let (history, omitted_before) = self.store.history_before(group_id, msg.seq)?;
+        // 初次发言只看自己 seq 之前的历史，保持排队轮次语义；重试则按规格
+        // 使用点击重试时的当前完整历史，但触发消息仍是最初那条 human 消息。
+        let history_before_seq = if self.store.is_retry(message_id)? {
+            i64::MAX
+        } else {
+            msg.seq
+        };
+        let (history, omitted_before) = self.store.history_before(group_id, history_before_seq)?;
         let prompt = build_prompt(&PromptInput {
             topic: &group.topic,
             me: &me,
@@ -579,7 +598,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retry_reruns_only_that_member_with_history_up_to_its_position() {
+    async fn retry_reruns_only_that_member_with_current_history() {
         let f = fixture(FakeRunner::new(vec![
             Err(TurnError::Empty),
             Ok("重试成功".into()),
@@ -594,6 +613,7 @@ mod tests {
                 .status,
             Some(GroupMessageStatus::Failed { .. })
         ));
+        f.svc.post(f.gid, "失败之后的新讨论").unwrap();
         f.svc.retry(out.placeholders[0].id).unwrap();
         wait_until(|| {
             f.svc
@@ -607,6 +627,10 @@ mod tests {
         let m = f.svc.store().get_message(out.placeholders[0].id).unwrap();
         assert_eq!(m.text, "重试成功");
         assert_eq!(f.runner.prompts().len(), 2);
+        assert!(
+            f.runner.prompts()[1].contains("失败之后的新讨论"),
+            "重试应使用当前群聊历史"
+        );
     }
 
     #[tokio::test]

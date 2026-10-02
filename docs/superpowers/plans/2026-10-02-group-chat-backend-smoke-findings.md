@@ -87,9 +87,10 @@ ls -la ~/.claude/projects/-private-tmp*/
   （时间过滤后为 0 条），暂未观察到污染；若其它版本/配置会写，同样会被
   `jsonl_recursive` 扫到。
 
-**结论**：**会污染**。按 plan 的停止条件，此处停下向用户汇报，由用户决定
-是否实现过滤（例如：群聊无头调用改用独立 cwd + 记账目录，或在
-`discover_all_transcript_files_in` / 摄取入口排除这些目录），**不自行实现**。
+**结论（审核修复后）**：默认参数会污染。后端现已给 Claude 增加
+`--no-session-persistence`、给 Codex 增加 `--ephemeral`，使用两家 CLI 的原生
+非持久化模式从源头隔离群聊无头 session，不需要在通用 transcript 扫描器里做
+易误伤普通会话的路径过滤。
 
 ## Task 0 Step 4b：headless_agent.rs Codex 分支验证状态
 

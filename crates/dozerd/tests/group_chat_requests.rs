@@ -39,11 +39,14 @@ impl Drop for CleanupGuard {
     }
 }
 
-async fn start_daemon() -> (
-    std::path::PathBuf,
-    CleanupGuard,
-    Arc<dozerd::projects::ProjectStore>,
-) {
+struct TestDaemon {
+    socket: std::path::PathBuf,
+    _cleanup: CleanupGuard,
+    projects: Arc<dozerd::projects::ProjectStore>,
+    _task: tokio::task::JoinHandle<anyhow::Result<()>>,
+}
+
+async fn start_daemon() -> TestDaemon {
     let sock = temp_sock();
     let db = std::path::PathBuf::from(format!("/tmp/dz-group-{}.db", uuid::Uuid::new_v4()));
     let projects = Arc::new(dozerd::projects::ProjectStore::new(&db).unwrap());
@@ -80,7 +83,7 @@ async fn start_daemon() -> (
     };
     let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
     let s = sock.clone();
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         dozerd::server::serve(
             &s,
             ide_lock_dir.path().to_path_buf(),
@@ -89,8 +92,22 @@ async fn start_daemon() -> (
         )
         .await
     });
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    (sock.clone(), CleanupGuard(sock), projects)
+    for _ in 0..100 {
+        if tokio::net::UnixStream::connect(&sock).await.is_ok() {
+            return TestDaemon {
+                socket: sock.clone(),
+                _cleanup: CleanupGuard(sock),
+                projects,
+                _task: task,
+            };
+        }
+        if task.is_finished() {
+            let result = task.await.expect("测试 dozerd task panic");
+            panic!("测试 dozerd 在监听前退出: {result:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("等待测试 dozerd 监听超时");
 }
 
 async fn poll_until_settled(
@@ -115,10 +132,10 @@ async fn poll_until_settled(
 
 #[tokio::test]
 async fn full_flow_create_post_poll_incrementally() {
-    let (sock, _g, projects) = start_daemon().await;
+    let daemon = start_daemon().await;
     let dir = tempfile::tempdir().unwrap();
-    let project = projects.open(dir.path().to_str().unwrap()).unwrap();
-    let client = Client::new(sock);
+    let project = daemon.projects.open(dir.path().to_str().unwrap()).unwrap();
+    let client = Client::new(daemon.socket.clone());
 
     let group = client
         .create_group(project.id, "评审登录方案")
@@ -164,10 +181,10 @@ async fn full_flow_create_post_poll_incrementally() {
 
 #[tokio::test]
 async fn cancel_round_over_the_wire_then_retry() {
-    let (sock, _g, projects) = start_daemon().await;
+    let daemon = start_daemon().await;
     let dir = tempfile::tempdir().unwrap();
-    let project = projects.open(dir.path().to_str().unwrap()).unwrap();
-    let client = Client::new(sock);
+    let project = daemon.projects.open(dir.path().to_str().unwrap()).unwrap();
+    let client = Client::new(daemon.socket.clone());
     let group = client.create_group(project.id, "t").await.unwrap();
     client
         .add_group_member(group.id, AgentKind::Claude, "claude", "")
@@ -203,8 +220,8 @@ async fn cancel_round_over_the_wire_then_retry() {
 
 #[tokio::test]
 async fn errors_come_back_as_errors() {
-    let (sock, _g, _p) = start_daemon().await;
-    let client = Client::new(sock);
+    let daemon = start_daemon().await;
+    let client = Client::new(daemon.socket.clone());
     assert!(client.post_group_message(424242, "hi").await.is_err());
     assert!(client.create_group(1, "   ").await.is_err());
     assert!(client.delete_group(424242).await.is_err());
@@ -212,10 +229,10 @@ async fn errors_come_back_as_errors() {
 
 #[tokio::test]
 async fn push_message_to_todo_creates_todo_links_message_and_only_once() {
-    let (sock, _g, projects) = start_daemon().await;
+    let daemon = start_daemon().await;
     let dir = tempfile::tempdir().unwrap();
-    let project = projects.open(dir.path().to_str().unwrap()).unwrap();
-    let client = Client::new(sock);
+    let project = daemon.projects.open(dir.path().to_str().unwrap()).unwrap();
+    let client = Client::new(daemon.socket.clone());
     let group = client.create_group(project.id, "t").await.unwrap();
     client
         .add_group_member(group.id, AgentKind::Claude, "claude", "")

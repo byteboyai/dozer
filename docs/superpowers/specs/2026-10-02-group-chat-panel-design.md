@@ -81,8 +81,8 @@ human 发消息（含 `@claude @codex`）→ dozerd 落库该消息并为每个�
 
 复用 `headless_agent.rs` 的进程层（`resolve_binary_path`、超时、`env_remove(DOZER_SESSION_ID)` 防止 hook 误记会话）。与总结任务的区别：不用分隔符 JSON 协议，直接取最终文本作为回复；工作目录设为项目目录（允许只读浏览）。
 
-- **Claude**：`claude -p`，提示词走 stdin，只读靠 `--allowedTools "Read,Grep,Glob" --disallowedTools "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch"`。
-- **Codex**：`codex exec --sandbox read-only --skip-git-repo-check --output-last-message <file>`（最终文本取文件，回退 stdout），提示词走位置参数。
+- **Claude**：`claude -p --no-session-persistence`，提示词走 stdin，只读靠 `--allowedTools "Read,Grep,Glob" --disallowedTools "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch"`；不持久化群聊无头 session，避免污染 Conversations / Usage。
+- **Codex**：`codex exec --ephemeral --sandbox read-only --skip-git-repo-check --output-last-message <file>`（最终文本取文件，回退 stdout），提示词走位置参数；同样禁止持久化 session。
 
 **只读约束必须靠执行层**（Codex sandbox、Claude 工具白名单/plan 模式），不能只靠提示词：群历史含其他 agent 的输出，不应被当作可信指令。
 
@@ -90,7 +90,7 @@ human 发消息（含 `@claude @codex`）→ dozerd 落库该消息并为每个�
 
 1. 两家能否稳定拿到**干净的最终文本**（Codex stdout 是否夹杂进度输出、是否需 `--output-last-message`）。
 2. Claude 的只读限制具体参数组合（`--permission-mode plan` / 工具白名单等）；允许读文件、禁止写与执行。
-3. 无头调用留下的 session 文件是否会被对话摄取管线当成用户会话，混入 Conversations / Usage 面板；若会，需决定过滤或标记方式。
+3. 无头调用默认会留下 session 文件并污染 Conversations / Usage；实现统一使用两家 CLI 原生的非持久化参数，从源头隔离。
 4. `headless_agent.rs` 里 Codex 分支的注释自述"参数名/版本待真实验证、不宣称已 smoke"，本功能须一并验证。
 
 ## 9. 界面（webview）
@@ -128,5 +128,5 @@ human 发消息（含 `@claude @codex`）→ dozerd 落库该消息并为每个�
 
 - 群与消息的具体持久化形态（读 dozerd 既有存储后定）。
 - 总字符预算 / 单条上限 / 单次发言超时的具体数值（需实测，不在设计里定死）。
-- 无头调用 session 是否污染 Conversations / Usage（见 8 节核实项 3）。
+- 无头调用 session 污染已通过 `--no-session-persistence` / `--ephemeral` 解决（见 8 节核实项 3）。
 - 实现须在独立分支进行，审阅后合并（见仓库惯例）。

@@ -190,7 +190,8 @@ impl GroupStore {
                 fail_reason TEXT,
                 duration_ms INTEGER,
                 created_ms INTEGER NOT NULL,
-                todo_id INTEGER
+                todo_id INTEGER,
+                retry_count INTEGER NOT NULL DEFAULT 0
              );
              CREATE UNIQUE INDEX IF NOT EXISTS chat_group_messages_seq
                 ON chat_group_messages(group_id, seq);
@@ -198,6 +199,20 @@ impl GroupStore {
                 ON chat_group_messages(group_id, rev);",
         )
         .context("建表")?;
+        // 兼容已经由本功能早期版本创建的数据库。
+        let has_retry_count = conn
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('chat_group_messages')
+                 WHERE name = 'retry_count'",
+            )?
+            .exists([])?;
+        if !has_retry_count {
+            conn.execute(
+                "ALTER TABLE chat_group_messages
+                 ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -394,6 +409,33 @@ impl GroupStore {
         message_by_id(&conn, message_id)
     }
 
+    /// worker 不相信跨连接的 enqueue 先后顺序，始终从数据库按展示顺序取
+    /// 本群下一条排队消息。
+    pub fn next_queued_id(&self, group_id: i64) -> Result<Option<i64>> {
+        let conn = self.conn.lock().expect("db lock");
+        Ok(conn
+            .query_row(
+                "SELECT id FROM chat_group_messages
+                 WHERE group_id = ?1 AND status = 'queued' ORDER BY seq ASC LIMIT 1",
+                [group_id],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn is_retry(&self, message_id: i64) -> Result<bool> {
+        let conn = self.conn.lock().expect("db lock");
+        Ok(conn
+            .query_row(
+                "SELECT retry_count FROM chat_group_messages WHERE id = ?1",
+                [message_id],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?
+            .unwrap_or(0)
+            > 0)
+    }
+
     /// 返回 `rev > after_rev` 的消息(按 rev 升序,至多 `limit` 条)和
     /// 本次返回里的最大 rev(没有新变更时原样返回 `after_rev`,不回退)。
     pub fn list_messages_after_rev(
@@ -586,7 +628,8 @@ impl GroupStore {
             let rev = next_rev(&conn, group_id)?;
             let affected = conn.execute(
                 "UPDATE chat_group_messages
-                 SET status = 'queued', fail_reason = NULL, text = '', duration_ms = NULL, rev = ?1
+                 SET status = 'queued', fail_reason = NULL, text = '', duration_ms = NULL,
+                     rev = ?1, retry_count = retry_count + 1
                  WHERE id = ?2 AND status IN ('failed', 'cancelled') AND author_kind = 'member'",
                 params![rev, message_id],
             )?;
@@ -775,6 +818,18 @@ mod tests {
         assert_eq!(q.status, Some(GroupMessageStatus::Queued));
         assert_eq!(q.text, "");
         assert_eq!(q.duration_ms, None);
+        assert!(s.is_retry(q.id).unwrap());
+    }
+
+    #[test]
+    fn next_queued_uses_seq_not_notification_order() {
+        let (_d, s) = store();
+        let (gid, m1, m2) = group_with_two(&s);
+        let (_, first) = s.post_human_message(gid, "first", &[m1]).unwrap();
+        let (_, second) = s.post_human_message(gid, "second", &[m2]).unwrap();
+        assert_eq!(s.next_queued_id(gid).unwrap(), Some(first[0].id));
+        s.try_start(first[0].id).unwrap();
+        assert_eq!(s.next_queued_id(gid).unwrap(), Some(second[0].id));
     }
 
     #[test]

@@ -99,6 +99,7 @@ pub(crate) fn build_turn_command(
                 .env_remove("DOZER_SESSION_ID")
                 .arg("-p")
                 .arg(CLAUDE_STDIN_POINTER)
+                .arg("--no-session-persistence")
                 .args(CLAUDE_READONLY_ARGS);
             Some((cmd, Some(prompt.as_bytes().to_vec())))
         }
@@ -107,6 +108,7 @@ pub(crate) fn build_turn_command(
             cmd.current_dir(project_dir)
                 .env_remove("DOZER_SESSION_ID")
                 .arg("exec")
+                .arg("--ephemeral")
                 .arg("--sandbox")
                 .arg("read-only")
                 .arg("--skip-git-repo-check");
@@ -273,6 +275,7 @@ mod tests {
         assert_eq!(args[0], "-p");
         assert!(args.contains(&"--allowedTools".to_string()));
         assert!(args.contains(&"--disallowedTools".to_string()));
+        assert!(args.contains(&"--no-session-persistence".to_string()));
         assert!(
             !args.iter().any(|a| a.contains("dangerously") || a == "-y"),
             "群聊不得跳过权限: {args:?}"
@@ -310,7 +313,10 @@ mod tests {
         )
         .unwrap();
         let args = args_of(&cmd);
-        assert_eq!(&args[..3], ["exec", "--sandbox", "read-only"]);
+        assert_eq!(
+            &args[..4],
+            ["exec", "--ephemeral", "--sandbox", "read-only"]
+        );
         assert!(args.contains(&"--skip-git-repo-check".to_string()));
         let i = args
             .iter()
