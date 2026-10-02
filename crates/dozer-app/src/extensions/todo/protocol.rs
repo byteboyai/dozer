@@ -783,6 +783,13 @@ mod tests {
         ));
     }
 
+    /// 与前端 `limits.ts` 的 `MAX_TEXT_CHARS` 必须同值(前端有对应断言),
+    /// 改一边必须同步另一边,否则超长文本会被 Rust 静默丢弃。
+    #[test]
+    fn max_text_chars_matches_the_frontend_limit() {
+        assert_eq!(MAX_TEXT_CHARS, 10_000);
+    }
+
     #[test]
     fn route_add_trims_and_rejects_empty_and_oversized() {
         let items = items3();
