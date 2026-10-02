@@ -552,5 +552,12 @@ pub fn update(
                 }
             }
         }
+        // Task 7 接入 webview 事件处理;本任务先占位保证 match 穷尽。
+        Message::AddText(_)
+        | Message::EditText(_, _)
+        | Message::ReorderTo { .. }
+        | Message::SetCategory(_, _)
+        | Message::AddHeight(_)
+        | Message::ContentRetry => {}
     }
 }

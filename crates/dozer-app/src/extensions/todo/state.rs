@@ -162,6 +162,9 @@ pub struct WorkspaceState {
     /// 消耗(见 `App::take_todo_scroll_to_top`),置位后一直为 `true` 直到
     /// 被取走,避免主事件循环与渲染循环的帧序差异漏掉这次滚动。
     pub(crate) scroll_to_top: bool,
+    /// 每次 `start_flash`(新增任务后要滚回顶部)时递增;随推送带给 webview,
+    /// 前端据此滚回顶部。取代 iced `scrollable::scroll_to` 的一次性标记。
+    pub(crate) scroll_nonce: u32,
     /// 已生效的搜索关键词(列表过滤用)。打字期间只改草稿 `search_draft`,
     /// 回车/点右侧搜索按钮才落成这里(与文件树搜索 `search_query` 同款
     /// "草稿→提交"模型)。
@@ -291,6 +294,7 @@ impl WorkspaceState {
             until: std::time::Instant::now() + ADD_SELECT_HIGHLIGHT,
         });
         self.scroll_to_top = true;
+        self.scroll_nonce = self.scroll_nonce.wrapping_add(1);
     }
 
     /// 距新增闪光自动清除的剩余时间:main.rs 据此排下次唤醒,做到"恰好 2s
@@ -326,6 +330,13 @@ impl WorkspaceState {
     /// 只读当前已加载的任务列表,给视图层渲染与内核处理按下标取任务用。
     pub fn items(&self) -> &[TodoInfo] {
         &self.items
+    }
+
+    /// 当前"选中高亮"的任务 id(新增后 2 秒高亮用),供推送给 webview。
+    pub fn selected_id(&self) -> Option<i64> {
+        self.selected_row
+            .and_then(|i| self.items.get(i))
+            .map(|it| it.id)
     }
 
     /// 反查:这个 `session_id` 是不是某条 Todo 任务铸造出来的会话,是的话
@@ -861,6 +872,18 @@ pub enum Message {
     /// 点任务卡片的分类 chip,打开分类选择器(内核拦截,转发到
     /// `App::todo_category_picker_open`)。
     CategoryPickerOpenForTodo(i64),
+    /// webview `Add`:新增任务文本(已 trim、非空、未超长)。
+    AddText(String),
+    /// webview `EditText`:按 id 改文字。
+    EditText(i64, String),
+    /// webview `Reorder`:把 `id` 挪到 `after_id` 之后(`None` = 进行中段最前)。
+    ReorderTo { id: i64, after_id: Option<i64> },
+    /// webview `SetCategory`:`None` = 未分类。
+    SetCategory(i64, Option<i64>),
+    /// webview `AddHeight`:新增框高度(px),由 `set_add_input_height` 钳制。
+    AddHeight(f32),
+    /// webview 加载失败后原生占位页的「重试」。
+    ContentRetry,
 }
 
 /// 任务内容编辑/添加框的真 `text_input`/`text_editor` 的 `widget::Id`。

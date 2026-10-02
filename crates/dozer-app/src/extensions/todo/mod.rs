@@ -6,11 +6,13 @@
 //! (MARKDOWN 整文件视图已随迁移移除)。
 
 mod filter;
+mod protocol;
 mod state;
 mod update;
 mod view;
 
 pub(crate) use filter::*;
+pub(crate) use protocol::*;
 pub(crate) use state::*;
 pub(crate) use update::*;
 pub(crate) use view::*;
