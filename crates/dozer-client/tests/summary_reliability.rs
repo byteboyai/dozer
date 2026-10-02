@@ -107,6 +107,7 @@ async fn generated_summary_is_visible_through_panel_query_and_shared_batches_fin
         file_edit_history: Arc::new(
             dozerd::file_edit_history::FileEditHistoryStore::new(&db).unwrap(),
         ),
+        groups: dozerd::group_service::GroupService::for_tests(),
     };
     let server = tokio::spawn({
         let sock = sock.clone();

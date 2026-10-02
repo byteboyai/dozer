@@ -90,6 +90,7 @@ pub struct Stores {
     pub categories: std::sync::Arc<crate::todo_category::CategoryStore>,
     pub memories: std::sync::Arc<crate::memory::MemoryStore>,
     pub file_edit_history: std::sync::Arc<crate::file_edit_history::FileEditHistoryStore>,
+    pub groups: std::sync::Arc<crate::group_service::GroupService>,
 }
 
 /// 探测 `socket` 路径背后是否还有活着的 dozerd 在监听。`UnixListener::bind`
@@ -131,6 +132,7 @@ pub async fn serve(
         categories,
         memories,
         file_edit_history,
+        groups,
     } = stores;
     let preview_contexts = Arc::new(PreviewContextStore::new());
     let preview_commands = Arc::new(crate::preview_commands::PreviewCommandBus::new());
@@ -173,6 +175,7 @@ pub async fn serve(
         categories,
         memories,
         file_edit_history,
+        groups,
     };
     loop {
         tokio::select! {
@@ -418,6 +421,7 @@ async fn handle_conn(
         categories,
         memories,
         file_edit_history,
+        groups,
     } = stores;
     // 总结调度服务:提交/查询走持久化表,状态在 SQLite 里,跨连接可见。每个
     // 连接构造一份轻量句柄(只是 Arc 引用 + 一个 scratch 根路径)。
@@ -804,6 +808,94 @@ async fn handle_conn(
                                 },
                             }
                         }
+                        Request::CreateGroup { project_id, topic } => {
+                            match groups.store().create_group(project_id, &topic) {
+                                Ok(group) => Reply::Group { group },
+                                Err(e) => Reply::Error { message: format!("新建群聊失败: {e}") },
+                            }
+                        }
+                        Request::ListGroups { project_id } => {
+                            match groups.store().list_groups(project_id) {
+                                Ok(groups) => Reply::Groups { groups },
+                                Err(e) => Reply::Error { message: format!("列群聊失败: {e}") },
+                            }
+                        }
+                        Request::DeleteGroup { group_id } => match groups.delete_group(group_id) {
+                            Ok(()) => Reply::Ok,
+                            Err(e) => Reply::Error { message: format!("删除群聊失败: {e}") },
+                        },
+                        Request::AddGroupMember { group_id, agent, handle, role_prompt } => {
+                            match groups.store().add_member(group_id, agent, &handle, &role_prompt) {
+                                Ok(group) => Reply::Group { group },
+                                Err(e) => Reply::Error { message: format!("添加成员失败: {e}") },
+                            }
+                        }
+                        Request::UpdateGroupMember { member_id, handle, role_prompt } => {
+                            match groups.store().update_member(member_id, &handle, &role_prompt) {
+                                Ok(group) => Reply::Group { group },
+                                Err(e) => Reply::Error { message: format!("修改成员失败: {e}") },
+                            }
+                        }
+                        Request::RemoveGroupMember { member_id } => {
+                            match groups.store().remove_member(member_id) {
+                                Ok(group) => Reply::Group { group },
+                                Err(e) => Reply::Error { message: format!("移除成员失败: {e}") },
+                            }
+                        }
+                        Request::PostGroupMessage { group_id, text } => {
+                            match groups.post(group_id, &text) {
+                                Ok(o) => Reply::GroupPosted {
+                                    human: o.human,
+                                    placeholders: o.placeholders,
+                                    unknown_handles: o.unknown_handles,
+                                },
+                                Err(e) => Reply::Error { message: format!("发送失败: {e}") },
+                            }
+                        }
+                        Request::ListGroupMessages { group_id, after_rev, limit } => {
+                            match groups.store().list_messages_after_rev(group_id, after_rev, limit.clamp(1, 500)) {
+                                Ok((messages, latest_rev)) => Reply::GroupMessages { messages, latest_rev },
+                                Err(e) => Reply::Error { message: format!("取群消息失败: {e}") },
+                            }
+                        }
+                        Request::CancelGroup { group_id, scope } => {
+                            groups.cancel(group_id, scope);
+                            Reply::Ok
+                        }
+                        Request::RetryGroupMessage { message_id } => match groups.retry(message_id) {
+                            Ok(message) => Reply::GroupMessage { message },
+                            Err(e) => Reply::Error { message: format!("重试失败: {e}") },
+                        },
+                        Request::PushGroupMessageToTodo { message_id, text } => {
+                            let text = text.trim().to_string();
+                            if text.is_empty() {
+                                Reply::Error { message: "待办内容不能为空".into() }
+                            } else {
+                                match groups.store().get_message(message_id) {
+                                    Err(e) => Reply::Error { message: format!("推送待办失败: {e}") },
+                                    Ok(msg) if msg.todo_id.is_some() => Reply::Error {
+                                        message: "该消息已转为待办".into(),
+                                    },
+                                    Ok(msg) => match groups.store().get_group(msg.group_id) {
+                                        Err(e) => Reply::Error { message: format!("推送待办失败: {e}") },
+                                        Ok(group) => match todos.add(group.project_id, &text) {
+                                            Err(e) => Reply::Error {
+                                                message: format!("新增任务失败: {e}"),
+                                            },
+                                            Ok(todo) => match groups.store().set_todo_link(message_id, todo.id) {
+                                                Ok(()) => Reply::Todo { todo },
+                                                Err(e) => {
+                                                    dozer_core::log_warn!(LOG, message_id, todo_id = todo.id, error = %e, "待办已创建但记录关联失败");
+                                                    Reply::Error {
+                                                        message: format!("待办已创建,但记录来源失败: {e}"),
+                                                    }
+                                                }
+                                            },
+                                        },
+                                    },
+                                }
+                            }
+                        },
                         Request::ListCategories { project_id } => {
                             match categories.list(project_id) {
                                 Ok(categories) => Reply::Categories { categories },
@@ -1610,6 +1702,7 @@ mod tests {
             categories: std::sync::Arc<crate::todo_category::CategoryStore>,
             memories: std::sync::Arc<crate::memory::MemoryStore>,
             file_edit_history: std::sync::Arc<crate::file_edit_history::FileEditHistoryStore>,
+            groups: std::sync::Arc<crate::group_service::GroupService>,
         ) {
             let fut = crate::server::serve(
                 socket,
@@ -1634,6 +1727,7 @@ mod tests {
                     categories,
                     memories,
                     file_edit_history,
+                    groups,
                 },
                 crate::task_poller::new_in_flight(),
             );

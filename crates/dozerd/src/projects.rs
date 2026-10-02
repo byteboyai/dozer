@@ -6,6 +6,7 @@
 use anyhow::{Context, Result};
 use dozer_core::protocol::ProjectInfo;
 use rusqlite::Connection;
+use rusqlite::OptionalExtension;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -183,6 +184,16 @@ impl ProjectStore {
         }
         Ok(())
     }
+
+    /// 轻量按 id 查项目路径(不算 git 派生的 `updated_ms`,群聊每次发言都要查)。
+    pub fn path_of(&self, id: i64) -> Result<Option<String>> {
+        let conn = self.conn.lock().expect("db lock");
+        Ok(conn
+            .query_row("SELECT path FROM projects WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .optional()?)
+    }
 }
 
 fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<ProjectInfo> {
@@ -277,5 +288,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = ProjectStore::new(&dir.path().join("t.db")).unwrap();
         assert!(store.remove(999).is_err());
+    }
+
+    #[test]
+    fn path_of_returns_path_or_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ProjectStore::new(&dir.path().join("p.db")).unwrap();
+        let p = store.open("/tmp/some-proj").unwrap();
+        assert_eq!(
+            store.path_of(p.id).unwrap().as_deref(),
+            Some("/tmp/some-proj")
+        );
+        assert_eq!(store.path_of(9999).unwrap(), None);
     }
 }

@@ -3,9 +3,9 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use dozer_core::protocol::{
     AgentKind, AgentState, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
-    CodeHealthReportInfo, ConversationSummary, PreviewCommand, PreviewContext, ProjectInfo, Reply,
-    Request, SessionInfo, SessionSummaryPayload, TodoInfo, TurnRecord, UsagePayload, decode_line,
-    encode_line,
+    CodeHealthReportInfo, ConversationSummary, GroupCancelScope, GroupInfo, GroupMessageInfo,
+    PreviewCommand, PreviewContext, ProjectInfo, Reply, Request, SessionInfo,
+    SessionSummaryPayload, TodoInfo, TurnRecord, UsagePayload, decode_line, encode_line,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -569,6 +569,177 @@ impl Client {
             .await?
         {
             Reply::Ok => Ok(()),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn create_group(&self, project_id: i64, topic: &str) -> Result<GroupInfo> {
+        match self
+            .roundtrip(&Request::CreateGroup {
+                project_id,
+                topic: topic.into(),
+            })
+            .await?
+        {
+            Reply::Group { group } => Ok(group),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn list_groups(&self, project_id: i64) -> Result<Vec<GroupInfo>> {
+        match self.roundtrip(&Request::ListGroups { project_id }).await? {
+            Reply::Groups { groups } => Ok(groups),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn delete_group(&self, group_id: i64) -> Result<()> {
+        match self.roundtrip(&Request::DeleteGroup { group_id }).await? {
+            Reply::Ok => Ok(()),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn add_group_member(
+        &self,
+        group_id: i64,
+        agent: AgentKind,
+        handle: &str,
+        role_prompt: &str,
+    ) -> Result<GroupInfo> {
+        match self
+            .roundtrip(&Request::AddGroupMember {
+                group_id,
+                agent,
+                handle: handle.into(),
+                role_prompt: role_prompt.into(),
+            })
+            .await?
+        {
+            Reply::Group { group } => Ok(group),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn update_group_member(
+        &self,
+        member_id: i64,
+        handle: &str,
+        role_prompt: &str,
+    ) -> Result<GroupInfo> {
+        match self
+            .roundtrip(&Request::UpdateGroupMember {
+                member_id,
+                handle: handle.into(),
+                role_prompt: role_prompt.into(),
+            })
+            .await?
+        {
+            Reply::Group { group } => Ok(group),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn remove_group_member(&self, member_id: i64) -> Result<GroupInfo> {
+        match self
+            .roundtrip(&Request::RemoveGroupMember { member_id })
+            .await?
+        {
+            Reply::Group { group } => Ok(group),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// 返回 `(human 消息, 排队占位, 未识别的 handle)`。
+    pub async fn post_group_message(
+        &self,
+        group_id: i64,
+        text: &str,
+    ) -> Result<(GroupMessageInfo, Vec<GroupMessageInfo>, Vec<String>)> {
+        match self
+            .roundtrip(&Request::PostGroupMessage {
+                group_id,
+                text: text.into(),
+            })
+            .await?
+        {
+            Reply::GroupPosted {
+                human,
+                placeholders,
+                unknown_handles,
+            } => Ok((human, placeholders, unknown_handles)),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// 返回 `rev > after_rev` 的消息与新的 `latest_rev`。
+    pub async fn list_group_messages(
+        &self,
+        group_id: i64,
+        after_rev: i64,
+        limit: u32,
+    ) -> Result<(Vec<GroupMessageInfo>, i64)> {
+        match self
+            .roundtrip(&Request::ListGroupMessages {
+                group_id,
+                after_rev,
+                limit,
+            })
+            .await?
+        {
+            Reply::GroupMessages {
+                messages,
+                latest_rev,
+            } => Ok((messages, latest_rev)),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn cancel_group(&self, group_id: i64, scope: GroupCancelScope) -> Result<()> {
+        match self
+            .roundtrip(&Request::CancelGroup { group_id, scope })
+            .await?
+        {
+            Reply::Ok => Ok(()),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn retry_group_message(&self, message_id: i64) -> Result<GroupMessageInfo> {
+        match self
+            .roundtrip(&Request::RetryGroupMessage { message_id })
+            .await?
+        {
+            Reply::GroupMessage { message } => Ok(message),
+            Reply::Error { message } => Err(anyhow::anyhow!(message)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// 把群消息推送为一条待办(只新建,不指派——任务分配归 Todo)。
+    pub async fn push_group_message_to_todo(
+        &self,
+        message_id: i64,
+        text: &str,
+    ) -> Result<TodoInfo> {
+        match self
+            .roundtrip(&Request::PushGroupMessageToTodo {
+                message_id,
+                text: text.into(),
+            })
+            .await?
+        {
+            Reply::Todo { todo } => Ok(todo),
             Reply::Error { message } => Err(anyhow::anyhow!(message)),
             other => bail!("意外应答: {other:?}"),
         }

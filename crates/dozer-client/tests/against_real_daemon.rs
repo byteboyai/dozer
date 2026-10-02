@@ -29,6 +29,7 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
     let memories = Arc::new(dozerd::memory::MemoryStore::new(&db).unwrap());
     let file_edit_history =
         Arc::new(dozerd::file_edit_history::FileEditHistoryStore::new(&db).unwrap());
+    let groups = dozerd::group_service::GroupService::for_tests();
     let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
     tokio::spawn(async move {
         dozerd::server::serve(
@@ -47,6 +48,7 @@ async fn start_daemon() -> (std::path::PathBuf, Arc<SessionRegistry>, CleanupGua
                 categories,
                 memories,
                 file_edit_history,
+                groups,
             },
             dozerd::task_poller::new_in_flight(),
         )

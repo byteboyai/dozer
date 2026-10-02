@@ -75,6 +75,7 @@ async fn session_survives_client_disconnect() {
                     categories: test_categories(),
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
+                    groups: test_group_service(),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -223,6 +224,7 @@ async fn unknown_session_returns_error_reply() {
                     categories: test_categories(),
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
+                    groups: test_group_service(),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -275,6 +277,7 @@ async fn attach_delivers_marker_exactly_once() {
                     categories: test_categories(),
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
+                    groups: test_group_service(),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -364,6 +367,7 @@ async fn attach_from_offset_resumes_within_window() {
                     categories: test_categories(),
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
+                    groups: test_group_service(),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -482,6 +486,7 @@ async fn attach_stream_offset_invariant_under_load() {
                     categories: test_categories(),
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
+                    groups: test_group_service(),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -587,6 +592,7 @@ async fn attach_from_offset_out_of_window_falls_back_to_full_snapshot() {
                     categories: test_categories(),
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
+                    groups: test_group_service(),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -708,4 +714,8 @@ fn test_memories() -> std::sync::Arc<dozerd::memory::MemoryStore> {
 fn test_file_edit_history() -> std::sync::Arc<dozerd::file_edit_history::FileEditHistoryStore> {
     let db = std::env::temp_dir().join(format!("dozerd-feh-{}.db", uuid::Uuid::new_v4()));
     std::sync::Arc::new(dozerd::file_edit_history::FileEditHistoryStore::new(&db).unwrap())
+}
+
+fn test_group_service() -> std::sync::Arc<dozerd::group_service::GroupService> {
+    dozerd::group_service::GroupService::for_tests()
 }

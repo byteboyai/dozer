@@ -320,8 +320,9 @@ pub(crate) fn build_command_parts(
         }
         AgentKind::Codex => {
             // Codex CLI 一次性执行 + 只读沙箱。`exec` 子命令 + `--sandbox
-            // read-only` 是禁工具/只读隔离的官方契约(参数名/版本待 Task 8
-            // 真实验证,此处按已读文档约定落地,不宣称已 smoke)。
+            // read-only` 是禁工具/只读隔离的官方契约(2026-10-02 群聊 Task 0
+            // 已用真 CLI 冒烟验证:`codex exec --sandbox read-only
+            // --skip-git-repo-check <prompt>` 能跑通并返回干净文本)。
             let mut cmd = tokio::process::Command::new(program);
             cmd.arg("exec")
                 .arg("--sandbox")
