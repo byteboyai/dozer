@@ -106,6 +106,14 @@ fn submit_new_todo(
 /// 会话读写,内核会先拦截,不会转发到这里。写操作(增/改/勾选/排序/计划
 /// 日期/派发)一律走异步 `Client`,结果经 `Message::Loaded`/`Mutated`
 /// 落回 `ws_state.items`。
+/// 切换选中分类(`CategorySelect` 与拖拽松手当点击时的 `ReleaseAction::Select`
+/// 共用)。切显示分类时,前端按 `category_key` 变化重置搜索关键词(哪怕切回
+/// 原来那个用关键词搜过的分类也要重置,不做"记住每个分类各自搜索词"那套)
+/// ——搜索草稿/生效词现由 webview 侧持有,这里只改选中分类。
+fn select_category(ws_state: &mut WorkspaceState, filter: CategoryFilter) {
+    ws_state.category_selected = filter;
+}
+
 pub fn update(
     ws_state: &mut WorkspaceState,
     msg: Message,
@@ -150,13 +158,33 @@ pub fn update(
         }
         Message::CategoryToggleExpand(id) => ws_state.toggle_category_expanded(id),
         Message::SelectView(view) => ws_state.view = view,
-        Message::CategorySelect(filter) => {
-            // 切显示分类时,前端按 `category_key` 变化重置搜索关键词(哪怕切回
-            // 原来那个用关键词搜过的分类也要重置,不做"记住每个分类各自搜索词"
-            // 那套)——搜索草稿/生效词现由 webview 侧持有,这里只改选中分类。
-            ws_state.category_selected = filter;
-        }
+        Message::CategorySelect(filter) => select_category(ws_state, filter),
         Message::CategoryContextMenuOpen(_) => {}
+        // 分类行被按下(武装拖拽)由内核拦截以取 `last_cursor`,不进这里。
+        Message::CategoryRowPress(_) => {}
+        Message::CategoryDragOver(target) => ws_state.set_category_drag_over(target),
+        Message::CategoryDragRelease => {
+            let Some(drag) = ws_state.take_category_drag() else {
+                return;
+            };
+            match release_action(&drag, &ws_state.categories) {
+                ReleaseAction::Select(id) => {
+                    select_category(ws_state, CategoryFilter::Node(id));
+                }
+                ReleaseAction::Reparent { id, new_parent } => {
+                    let client = client.clone();
+                    handle.spawn(async move {
+                        let res = client
+                            .reparent_category(id, new_parent)
+                            .await
+                            .map(|_| ())
+                            .map_err(|e| e.to_string());
+                        emit(Message::CategoryMutated(res));
+                    });
+                }
+                ReleaseAction::Nothing => {}
+            }
+        }
         Message::CategoryNewChild(parent_id) => {
             let client = client.clone();
             let project_id_owned = project_id;

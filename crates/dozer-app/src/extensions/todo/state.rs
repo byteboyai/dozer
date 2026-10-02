@@ -153,6 +153,8 @@ pub struct WorkspaceState {
     /// 确认框(危险操作,不可撤销),取消/遮罩收起,确认才真正触发
     /// `Message::ClearListConfirm`。
     pub(crate) clear_confirm: bool,
+    /// 分类树拖动移动的进行态(`None` = 没在拖)。见 `category_drag::CategoryDrag`。
+    pub(crate) category_drag: Option<CategoryDrag>,
 }
 
 impl WorkspaceState {
@@ -309,6 +311,63 @@ impl WorkspaceState {
     /// 转发到 `commit_category_rename`。
     pub(crate) fn commit_category_rename_for_blur(&mut self) -> Option<(i64, String)> {
         self.commit_category_rename()
+    }
+
+    /// 分类行被按下:武装拖拽(`Pending`)。该消息由内核拦截(要拿 `last_cursor`),
+    /// 内核直接调用这个方法。
+    pub(crate) fn arm_category_drag(
+        &mut self,
+        source: i64,
+        press_pos: (f32, f32),
+        armed_at: std::time::Instant,
+    ) {
+        self.category_drag = Some(CategoryDrag {
+            source,
+            phase: CategoryDragPhase::Pending,
+            press_pos,
+            armed_at,
+            over: None,
+        });
+    }
+
+    pub(crate) fn category_drag(&self) -> Option<&CategoryDrag> {
+        self.category_drag.as_ref()
+    }
+
+    /// 已确认(`Dragging`)——视图层据此给行挂 `on_move`、换抓取光标、画高亮。
+    /// `Pending` 期间返回 `false`:此时必须完全没有反应。
+    pub(crate) fn category_drag_confirmed(&self) -> bool {
+        self.category_drag
+            .as_ref()
+            .is_some_and(|d| d.phase == CategoryDragPhase::Dragging)
+    }
+
+    pub(crate) fn confirm_category_drag(&mut self) {
+        if let Some(d) = self.category_drag.as_mut() {
+            d.phase = CategoryDragPhase::Dragging;
+        }
+    }
+
+    pub(crate) fn cancel_category_drag(&mut self) {
+        self.category_drag = None;
+    }
+
+    /// 光标悬停到某个候选目标。`Pending` 期间忽略;`target` 不合法时清空记录
+    /// (UI 不高亮非法目标),所以 `over` 里永远只有合法目标。
+    pub(crate) fn set_category_drag_over(&mut self, target: Option<DropTarget>) {
+        let Some(d) = self.category_drag.as_mut() else {
+            return;
+        };
+        if d.phase != CategoryDragPhase::Dragging {
+            return;
+        }
+        let source = d.source;
+        let valid = target.filter(|t| is_valid_drop(&self.categories, source, *t));
+        self.category_drag.as_mut().unwrap().over = valid;
+    }
+
+    pub(crate) fn take_category_drag(&mut self) -> Option<CategoryDrag> {
+        self.category_drag.take()
     }
 
     /// 详情弹窗是否打开(内核键盘 Esc 关闭用,同 `dispatch_popup_open`)。
@@ -495,6 +554,12 @@ pub enum Message {
     /// 打开"移动到..."选择器(内核拦截,转发到
     /// `App::todo_category_picker_open_for_category`)。
     CategoryReparentPickerOpen(i64),
+    /// 分类行被按下(武装拖拽;内核拦截以取 `last_cursor`)。
+    CategoryRowPress(i64),
+    /// 拖拽已确认期间光标悬停到候选目标(`None` = 离开所有目标)。
+    CategoryDragOver(Option<DropTarget>),
+    /// 左键松开的收尾(窗口事件在 `dragging_category()` 时发)。
+    CategoryDragRelease,
     /// webview `Add`:新增任务文本(已 trim、非空、未超长)。
     AddText(String),
     /// webview `EditText`:按 id 改文字。

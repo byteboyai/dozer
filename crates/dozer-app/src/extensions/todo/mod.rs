@@ -264,4 +264,35 @@ mod tests {
         ws_state.set_add_input_height(1.0);
         assert!(ws_state.add_input_height() >= ADD_INPUT_MIN_HEIGHT);
     }
+
+    #[test]
+    fn category_drag_lifecycle_arm_confirm_over_take() {
+        let mut ws_state = WorkspaceState::default();
+        assert!(ws_state.category_drag().is_none());
+        ws_state.arm_category_drag(7, (10.0, 10.0), std::time::Instant::now());
+        assert!(!ws_state.category_drag_confirmed());
+        // Pending 期间设置悬停目标无效(不允许有任何反应)
+        ws_state.set_category_drag_over(Some(DropTarget::Root));
+        assert_eq!(ws_state.category_drag().unwrap().over, None);
+        ws_state.confirm_category_drag();
+        assert!(ws_state.category_drag_confirmed());
+        ws_state.set_category_drag_over(Some(DropTarget::Node(3)));
+        assert_eq!(
+            ws_state.category_drag().unwrap().over,
+            None,
+            "不存在的目标 id 应被拒绝"
+        );
+        let taken = ws_state.take_category_drag().unwrap();
+        assert_eq!(taken.source, 7);
+        assert!(ws_state.category_drag().is_none());
+    }
+
+    #[test]
+    fn cancel_category_drag_clears_any_phase() {
+        let mut ws_state = WorkspaceState::default();
+        ws_state.arm_category_drag(7, (0.0, 0.0), std::time::Instant::now());
+        ws_state.cancel_category_drag();
+        assert!(ws_state.category_drag().is_none());
+        ws_state.cancel_category_drag(); // 幂等
+    }
 }
