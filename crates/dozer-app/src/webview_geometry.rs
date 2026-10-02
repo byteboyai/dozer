@@ -523,7 +523,8 @@ pub fn git_log_diff_pane_bounds_for(
     compute(inx, iny, inw, inh)
 }
 
-/// 两栏面板(Usage、CodeHealth、Todo)的内容侧 webview 几何参数。
+/// 两栏面板(Usage、CodeHealth、Todo)的内容侧 webview 几何参数;GroupChat 也走
+/// 这里,只是固定 `list_visible = false`(单列,不参与分栏)。
 struct PairPane {
     kind: PanelKind,
     /// 列表列占比(`dims.usage_split` / `dims.codehealth_split` / `dims.todo_split`)。
@@ -639,8 +640,36 @@ pub fn todo_content_pane_bounds_for(
     )
 }
 
+/// 群聊面板 webview 矩形:单列整宽(没有原生列表列、没有分隔线),顶部无原生头
+/// (`chrome_top = 0`,群切换/成员条都在 webview 里)。与用量面板"无筛选栏时内容
+/// 独占整宽"同一个分支(`list_visible = false`)。不可摆放(`!content_desired` /
+/// 该侧收起 / 不是 GroupChat / 放大的是另一侧)时返回零尺寸矩形。
+pub fn group_chat_content_pane_bounds_for(
+    side: Side,
+    window_width: f32,
+    window_height: f32,
+    state: &ShellState,
+    content_desired: bool,
+) -> (f32, f32, f32, f32) {
+    pair_content_pane_bounds_for(
+        side,
+        window_width,
+        window_height,
+        state,
+        PairPane {
+            kind: PanelKind::GroupChat,
+            // `list_visible = false` 时不参与分栏,取值无意义。
+            split: byteui::theme::geometry::default_split_ratio(),
+            chrome_top: 0.0,
+            content_desired,
+            list_visible: false,
+            content_first: true,
+        },
+    )
+}
+
 /// 共享实现,见 [`usage_content_pane_bounds_for`] / [`codehealth_content_pane_bounds_for`] /
-/// [`todo_content_pane_bounds_for`]。
+/// [`todo_content_pane_bounds_for`] / [`group_chat_content_pane_bounds_for`]。
 fn pair_content_pane_bounds_for(
     side: Side,
     window_width: f32,
@@ -1910,6 +1939,88 @@ mod tests {
             ..test_state()
         };
         let (x, y, w, h) = todo_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true);
+        assert!(w > 100.0 && h > 100.0, "w={w} h={h}");
+        let (x0, avail_w) = maximized_box_x_range(1600.0);
+        assert!(x >= x0 && x + w <= x0 + avail_w, "x={x} w={w}");
+        assert!(y + h <= maximized_box_height(900.0) + 200.0);
+    }
+
+    #[test]
+    fn group_chat_content_zero_when_not_desired() {
+        let state = ShellState {
+            right_view: PanelKind::GroupChat,
+            ..test_state()
+        };
+        let (_, _, w, h) =
+            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &state, false);
+        assert_eq!((w, h), (0.0, 0.0));
+    }
+
+    #[test]
+    fn group_chat_content_zero_when_side_collapsed() {
+        let state = ShellState {
+            right_view: PanelKind::GroupChat,
+            right_collapsed: true,
+            ..test_state()
+        };
+        let (_, _, w, h) =
+            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &state, true);
+        assert_eq!((w, h), (0.0, 0.0));
+    }
+
+    #[test]
+    fn group_chat_content_zero_when_panel_kind_is_not_group_chat() {
+        let state = test_state();
+        let (_, _, w, h) =
+            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &state, true);
+        assert_eq!((w, h), (0.0, 0.0));
+    }
+
+    /// 单列整宽:与"用量面板无筛选栏时内容独占整宽"同一个分支,横向位置与宽度必须一致
+    /// (用量面板顶部多一个原生头所以 y/h 不同,只比 x/w)。
+    #[test]
+    fn group_chat_content_fills_the_whole_zone_width_like_usage_without_list() {
+        let gc = ShellState {
+            right_view: PanelKind::GroupChat,
+            ..test_state()
+        };
+        let us = ShellState {
+            right_view: PanelKind::Usage,
+            ..test_state()
+        };
+        let (gx, _, gw, gh) =
+            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &gc, true);
+        let (ux, _, uw, _) =
+            usage_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &us, true, false);
+        assert!(gw > 100.0 && gh > 100.0, "w={gw} h={gh}");
+        assert!(
+            (gx - ux).abs() < 0.1 && (gw - uw).abs() < 0.1,
+            "gx={gx} gw={gw} ux={ux} uw={uw}"
+        );
+    }
+
+    #[test]
+    fn group_chat_content_y_starts_at_zone_top() {
+        let state = ShellState {
+            right_view: PanelKind::GroupChat,
+            ..test_state()
+        };
+        let (_, y, _, _) =
+            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &state, true);
+        let zone_top =
+            byteui::theme::geometry::top_bar_height() + theme::region::right_zone().margin.top;
+        assert!((y - zone_top).abs() < 1.0, "y={y} zone_top={zone_top}");
+    }
+
+    #[test]
+    fn group_chat_content_maximized_stays_inside_box() {
+        let state = ShellState {
+            right_view: PanelKind::GroupChat,
+            maximized: Some(MaximizedPane::Right),
+            ..test_state()
+        };
+        let (x, y, w, h) =
+            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &state, true);
         assert!(w > 100.0 && h > 100.0, "w={w} h={h}");
         let (x0, avail_w) = maximized_box_x_range(1600.0);
         assert!(x >= x0 && x + w <= x0 + avail_w, "x={x} w={w}");

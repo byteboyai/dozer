@@ -12,11 +12,13 @@ use std::time::{Duration, Instant};
 use tokio::runtime::Handle;
 
 mod protocol;
+mod view;
 pub(crate) use protocol::route_event;
 pub use protocol::{
-    Command, GroupChatViewPayload, GroupChatWebviewEvent, WebviewPushState, current_view_payload,
-    encode_group_chat_push, parse_group_chat_event,
+    Command, GroupChatWebviewEvent, WebviewPushState, current_view_payload, encode_group_chat_push,
+    parse_group_chat_event,
 };
+pub use view::{ShellMessage, content_pane};
 
 dozer_core::scope!(pub(crate) LOG, panel, "group_chat");
 

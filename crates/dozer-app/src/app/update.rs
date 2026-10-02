@@ -104,6 +104,7 @@ impl App {
             if let WorkspaceSlot::Loaded(ws) = slot {
                 pending.extend(ws.files.take_outbox());
                 pending.extend(ws.todo.take_outbox());
+                pending.extend(ws.group_chat.take_outbox());
                 pending.extend(ws.ssh.take_outbox());
                 pending.extend(ws.database.take_outbox());
                 pending.extend(ws.agent_context.take_outbox());
@@ -1783,6 +1784,18 @@ impl App {
                 }
                 other => self.todo_message(other),
             },
+            Message::GroupChatContentWebviewEvent(event) => self.group_chat_content_event(event),
+            Message::GroupChatShell(crate::extensions::group_chat::ShellMessage::Retry) => {
+                self.group_chat_webview.clear_failed();
+            }
+            Message::GroupChat(msg) => {
+                let project_id = msg.project_id();
+                let mut effects = Vec::new();
+                self.with_project(project_id, |ws, _io| {
+                    effects = crate::extensions::group_chat::update(&mut ws.group_chat, msg);
+                });
+                self.run_group_chat_effects(project_id, effects);
+            }
             Message::TodoDetailLoaded(idx, turns) => {
                 self.with_focused_project(move |ws, _io| {
                     if ws.todo.detail_open_idx() == Some(idx) {
@@ -4712,6 +4725,97 @@ impl App {
         }
     }
 
+    /// 群聊 webview 事件入口。`Ready`/`Failed` 在这里直接处理;其余事件交给
+    /// 纯函数 `group_chat::route_event` 校验并映射成命令,再派发:`SelectGroup`
+    /// 同步改状态、`OpenTodo` 切面板,其余异步命令走 `spawn_command`。
+    pub(crate) fn group_chat_content_event(
+        &mut self,
+        event: crate::extensions::group_chat::GroupChatWebviewEvent,
+    ) {
+        use crate::extensions::group_chat::{self as gc, GroupChatWebviewEvent as Ev};
+        match &event {
+            Ev::Ready => {
+                self.group_chat_webview.set_ready(true);
+                return;
+            }
+            Ev::Failed { reason } => {
+                dozer_core::log_warn!(
+                    gc::LOG,
+                    panel = "group_chat",
+                    %reason,
+                    "群聊内容页渲染失败,回落原生占位"
+                );
+                self.group_chat_webview.set_failed(reason.clone());
+                return;
+            }
+            _ => {}
+        }
+        let Some(project_id) = self.active_project_id else {
+            return;
+        };
+        let cmd = self
+            .active_workspace()
+            .and_then(|ws| gc::route_event(&ws.group_chat, event));
+        if let Some(cmd) = cmd {
+            self.group_chat_command(project_id, cmd);
+        }
+    }
+
+    fn group_chat_command(&mut self, project_id: i64, cmd: crate::extensions::group_chat::Command) {
+        use crate::extensions::group_chat::{self as gc, Command};
+        match cmd {
+            Command::SelectGroup { group_id } => {
+                let mut effects = Vec::new();
+                self.with_project(project_id, |ws, _io| {
+                    effects = ws.group_chat.select(group_id);
+                });
+                self.run_group_chat_effects(project_id, effects);
+            }
+            Command::OpenTodo { .. } => {
+                // 只切到 Todo 面板;不做"定位到某条待办"(Todo 面板没有这个入口,
+                // 且不在本功能范围)。
+                self.panel_select(PanelKind::Todo);
+            }
+            other => {
+                let proxy = self.proxy.clone();
+                gc::spawn_command(
+                    project_id,
+                    other,
+                    &self.client.clone(),
+                    &self.handle.clone(),
+                    move |m| {
+                        let _ = proxy.send_event(Message::GroupChat(m));
+                    },
+                );
+            }
+        }
+    }
+
+    fn run_group_chat_effects(
+        &mut self,
+        project_id: i64,
+        effects: Vec<crate::extensions::group_chat::Effect>,
+    ) {
+        use crate::extensions::group_chat::{self as gc, Effect};
+        for effect in effects {
+            match effect {
+                Effect::FetchMessages { group_id } => {
+                    let proxy = self.proxy.clone();
+                    gc::spawn_fetch_messages(
+                        project_id,
+                        group_id,
+                        0,
+                        &self.client.clone(),
+                        &self.handle.clone(),
+                        move |m| {
+                            let _ = proxy.send_event(Message::GroupChat(m));
+                        },
+                    );
+                }
+            }
+        }
+    }
+
     pub(crate) fn browser_bookmarks_loaded(
         &mut self,
         pid: Option<i64>,
@@ -5142,7 +5246,12 @@ impl App {
                 PanelKind::Conversations => self.with_focused_project(|ws, io| {
                     ws.spawn_conversations_refresh(io);
                 }),
-                PanelKind::Files | PanelKind::Web | PanelKind::Agent | PanelKind::GroupChat => {}
+                // 切入时刷新群列表(别的入口可能新增过群);`mark_stale` 不清已有内容,
+                // 切入瞬间不会闪成"没有群聊"。实际加载由 `poll_group_chat_if_active` 发起。
+                PanelKind::GroupChat => self.with_focused_project(|ws, _io| {
+                    ws.group_chat.mark_stale();
+                }),
+                PanelKind::Files | PanelKind::Web | PanelKind::Agent => {}
             }
         }
         // 图标栏点击一律退出放大态。放大态浮层不拦图标栏上的点击

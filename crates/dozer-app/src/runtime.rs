@@ -598,6 +598,21 @@ pub(crate) fn sync_webview_pool(
                                             dozer_core::log_warn!(LOG, %error, "无法解析 todo-content IPC");
                                         }
                                     }
+                                } else if webview_id == crate::app::GROUP_CHAT_CONTENT_ID_OFFSET
+                                    && looks_like_envelope
+                                {
+                                    // group-chat-content 同 todo-content:固定单槽,按固定
+                                    // webview id 识别,不复用任何 binding。
+                                    match crate::extensions::group_chat::parse_group_chat_event(body) {
+                                        Ok(event) => {
+                                            let _ = ipc_proxy.send_event(
+                                                Message::GroupChatContentWebviewEvent(event),
+                                            );
+                                        }
+                                        Err(error) => {
+                                            dozer_core::log_warn!(LOG, %error, "无法解析 group-chat-content IPC");
+                                        }
+                                    }
                                 } else if webview_id == crate::app::CONVERSATION_REVIEW_ID_OFFSET
                                     && looks_like_envelope
                                 {

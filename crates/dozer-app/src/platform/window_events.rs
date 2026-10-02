@@ -2522,6 +2522,14 @@ impl Runner {
                 let _ = view.evaluate_script(&js);
             }
         }
+        // 群聊面板 webview(单固定槽):声明式推送,同 Todo 节奏。
+        for (webview_id, js) in
+            app.take_group_chat_content_script(&available_webview_ids, std::time::Instant::now())
+        {
+            if let Some((view, _)) = webviews.get(&webview_id) {
+                let _ = view.evaluate_script(&js);
+            }
+        }
     }
 
     /// 空白页信息卡后台扫描钩子:`PreviewPane::blank_info` 空、active tab 为
@@ -2667,6 +2675,9 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             // Todo 面板可见时轮询磁盘上的 `.dozer/todo.md`,agent 或用户
             // 在编辑器中改完文件,面板能自动跟上。
             app.poll_todo_if_visible();
+            // 群聊面板可见且需要(加载群列表/有发言进行中)时,经 `rev` 增量
+            // 轮询 `dozerd`;没有发言时不空转(`group_chat_poll_wanted`)。
+            app.poll_group_chat_if_active();
             // 新增任务闪光倒计时:到点且用户未手动改选就自动清除选中高亮
             // (每次都调,内部按 `until` 自己短路,不再显式判断 `flash_active`)。
             app.advance_todo_flash();
@@ -2707,12 +2718,16 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             // 返回 `None` 不再空转。
             let next_drag_expand = app.next_drag_hover_expand_wake();
             let next_toast = app.next_toast_wake();
-            let wakes: [(bool, Duration); 7] = [
+            let wakes: [(bool, Duration); 8] = [
                 (
                     app.any_hover_anim_active(),
                     crate::event::HOVER_ANIM_INTERVAL,
                 ),
                 (app.todo_panel_visible(), TODO_POLL_INTERVAL),
+                (
+                    app.group_chat_poll_wanted(),
+                    crate::extensions::group_chat::POLL_INTERVAL,
+                ),
                 (app.dragging_tab().is_some(), DRAG_REDRAW_INTERVAL),
                 (
                     next_tip.is_some(),
