@@ -46,18 +46,18 @@ GitHub 上已有同类项目，均为独立聊天工具，无一站在"委托人
 ### 4.1 三层分工
 
 1. **`dozer-core`**：共享类型（群、成员、消息、状态）与 UDS 协议新增的请求/事件。
-2. **`dozerd`**：群聊权威状态与调度。持久化消息、解析 `@`、按序调用无头适配器、写回回复、向 GUI 推送事件。放 dozerd 是因为 agent 启动/托管本就归它，GUI 重启不丢进行中的一轮讨论。
+2. **`dozerd`**：群聊权威状态与调度。持久化消息、解析 `@`、按序调用无头适配器、写回回复。放 dozerd 是因为 agent 启动/托管本就归它，GUI 重启不丢进行中的一轮讨论。
 3. **`dozer-app`**：`extensions/group_chat`，仅展示与输入；不持有 agent 进程；失败经 `outbox` → `App::push_toast` 路径（见 CLAUDE.md Toast 约定）。
 
 ### 4.2 一轮发言的数据流
 
-human 发消息（含 `@claude @codex`）→ dozerd 落库该消息 → 解析 mentions → 对每个被点名成员**按序**：写 `Running` 占位消息 → 拼装提示词 → 调用适配器 → 成功写入正文/`Done`，失败 `Failed` → 全部结束后停下等 human。
+human 发消息（含 `@claude @codex`）→ dozerd 落库该消息并为每个被点名成员**一次性创建全部排队占位**（`Queued`，`seq` 连续）→ 解析 mentions → 对每个被点名成员**按序**：占位转 `Running` → 拼装提示词 → 调用适配器 → 成功写入正文/`Done`，失败 `Failed` → 全部结束后停下等 human。GUI 用 `rev` 增量轮询（`ListGroupMessages{after_rev}`）获取新增与变更，不依赖 dozerd 主动推送事件。
 
 ## 5. 数据模型（类型放 `dozer-core`）
 
 - **`Group`**：id、所属项目、群主题（讨论目标）、成员列表、创建时间。
 - **`Member`**：id、`AgentKind`（第一版仅 Claude / Codex）、群内唯一 `handle`（如 `@架构师`）、角色设定文本。同一种 agent 可多次入群扮演不同角色——"按角色发言"即 `@` 不同 handle，不另设机制。
-- **`Message`**：群内单调递增 `seq`、作者（`Human` / `Member(id)` / `System`）、正文、`mentions`、状态（`Running` / `Done` / `Failed(原因)` / `Cancelled`，仅 agent 消息有）、耗时、创建时间、可选的 Todo 关联 id。
+- **`Message`**：群内单调递增 `seq`、作者（`Human` / `Member(id)` / `System`）、正文、`mentions`、状态（`Queued` / `Running` / `Done` / `Failed(原因)` / `Cancelled`，仅 agent 消息有）、耗时、创建时间、可选的 Todo 关联 id。human 消息落库时一次性为所有被点名成员创建排队占位，保证 `seq` 连续。
 - 持久化沿用 dozerd 现有存储方式；实现计划阶段读 `todo.rs` 等既有存储后确定具体形态（本设计不预设）。
 
 ## 6. 上下文拼装
@@ -81,12 +81,12 @@ human 发消息（含 `@claude @codex`）→ dozerd 落库该消息 → 解析 m
 
 复用 `headless_agent.rs` 的进程层（`resolve_binary_path`、超时、`env_remove(DOZER_SESSION_ID)` 防止 hook 误记会话）。与总结任务的区别：不用分隔符 JSON 协议，直接取最终文本作为回复；工作目录设为项目目录（允许只读浏览）。
 
-- **Claude**：`claude -p`，提示词走 stdin。
-- **Codex**：`codex exec --sandbox read-only --skip-git-repo-check`。
+- **Claude**：`claude -p`，提示词走 stdin，只读靠 `--allowedTools "Read,Grep,Glob" --disallowedTools "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch"`。
+- **Codex**：`codex exec --sandbox read-only --skip-git-repo-check --output-last-message <file>`（最终文本取文件，回退 stdout），提示词走位置参数。
 
 **只读约束必须靠执行层**（Codex sandbox、Claude 工具白名单/plan 模式），不能只靠提示词：群历史含其他 agent 的输出，不应被当作可信指令。
 
-### 前置核实项（实现计划第 0 步，冒烟验证，当前**均未验证**）
+### 前置核实项（实现计划第 0 步，冒烟验证，**已由 Task 0 实测**）
 
 1. 两家能否稳定拿到**干净的最终文本**（Codex stdout 是否夹杂进度输出、是否需 `--output-last-message`）。
 2. Claude 的只读限制具体参数组合（`--permission-mode plan` / 工具白名单等）；允许读文件、禁止写与执行。
@@ -107,7 +107,7 @@ human 发消息（含 `@claude @codex`）→ dozerd 落库该消息 → 解析 m
 
 - 每条消息的操作含"转为待办"：弹对话框，预填消息内容可编辑，确认后在 Todo 中新建一条待办。对话框内**没有**指派 agent 的选项。
 - 创建后消息显示待办徽标，点击跳转 Todo 面板。
-- 走现有 Todo 的新增入口。计划阶段确认 Todo 现有数据模型是否支持"来源链接"（指回群聊消息）；不足则在 Todo 侧补最小字段。指派不在本功能范围内，不为它改动 Todo。
+- 走现有 Todo 的新增入口。来源链接**只在消息侧记录**（消息的 `todo_id` 字段），Todo 表不加反向字段，不改动 Todo。指派不在本功能范围内，不为它改动 Todo。
 
 ## 11. 错误与空状态
 
