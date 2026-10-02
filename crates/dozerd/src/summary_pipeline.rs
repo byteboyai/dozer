@@ -71,6 +71,12 @@ fn normalize_fact_value(value: serde_json::Value) -> Option<String> {
             (!text.is_empty()).then_some(text)
         }
         serde_json::Value::Object(values) => {
+            // `serde_json::Map` is a BTreeMap by default, but becomes an
+            // insertion-ordered IndexMap when another workspace package enables
+            // `serde_json/preserve_order`. Sort explicitly so normalization does
+            // not change with Cargo's feature unification or the model's key order.
+            let mut values = values.into_iter().collect::<Vec<_>>();
+            values.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
             let text = values
                 .into_iter()
                 .filter_map(|(key, value)| {
@@ -689,6 +695,18 @@ mod tests {
         );
         assert_eq!(facts.actions, vec!["description: 检查总结管线；turn: 2"]);
         assert!(facts.results.is_empty());
+    }
+
+    #[test]
+    fn parse_chunk_facts_normalizes_object_keys_deterministically() {
+        let text_first = r#"{"goals":[{"text":"生成总结","source":"turn 1"}]}"#;
+        let source_first = r#"{"goals":[{"source":"turn 1","text":"生成总结"}]}"#;
+
+        let text_first = parse_chunk_facts(text_first).unwrap();
+        let source_first = parse_chunk_facts(source_first).unwrap();
+
+        assert_eq!(text_first.goals, source_first.goals);
+        assert_eq!(text_first.goals, vec!["source: turn 1；text: 生成总结"]);
     }
 
     #[test]
