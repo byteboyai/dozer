@@ -2565,6 +2565,14 @@ impl Runner {
                 let _ = view.evaluate_script(&js);
             }
         }
+        // Todo 内容区 webview(单固定槽):声明式推送,同代码健康度节奏。
+        for (webview_id, js) in
+            app.take_todo_content_script(&available_webview_ids, std::time::Instant::now())
+        {
+            if let Some((view, _)) = webviews.get(&webview_id) {
+                let _ = view.evaluate_script(&js);
+            }
+        }
     }
 
     /// 空白页信息卡后台扫描钩子:`PreviewPane::blank_info` 空、active tab 为

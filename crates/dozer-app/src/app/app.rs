@@ -468,6 +468,8 @@ pub struct App {
     pub(crate) usage_webview: crate::extensions::usage::WebviewPushState,
     /// 代码健康度内容侧 webview 推送状态(App 级,固定单槽)。
     pub(crate) codehealth_webview: crate::extensions::codehealth::WebviewPushState,
+    /// Todo 内容区 webview 推送状态(App 级,固定单槽)。
+    pub(crate) todo_webview: crate::extensions::todo::WebviewPushState,
     /// 数据库面板 App 级状态(哪些驱动类型在"新增数据源"下拉里可选,
     /// 启动时读盘)——见 `extensions::database::AppState`。
     pub(crate) database: database::AppState,
@@ -654,6 +656,9 @@ pub(crate) const GIT_LOG_DIFF_ID_OFFSET: usize = 3_000_000;
 pub(crate) const USAGE_CONTENT_ID_OFFSET: usize = 4_000_000;
 /// 代码健康度面板内容侧 Preact webview 的固定槽 id(继承 1_000_000 递增序列)。
 pub(crate) const CODEHEALTH_CONTENT_ID_OFFSET: usize = 5_000_000;
+/// Todo 面板内容区 webview 的固定槽位 ID(接在 `CODEHEALTH_CONTENT_ID_OFFSET` 之后,
+/// 避免与其它偏移冲突)。
+pub(crate) const TODO_CONTENT_ID_OFFSET: usize = 6_000_000;
 
 /// `wait_for_pending_exit_tasks` 允许在飞的关 tab 收尾请求跑完的总预算。
 /// 本地 UDS 往返通常亚毫秒级,留 2 秒是给 daemon 偶尔卡顿的余量,而不是
@@ -847,6 +852,7 @@ impl App {
             git_log: git_log::State::default(),
             usage_webview: crate::extensions::usage::WebviewPushState::default(),
             codehealth_webview: crate::extensions::codehealth::WebviewPushState::default(),
+            todo_webview: crate::extensions::todo::WebviewPushState::default(),
             database: database::AppState::load(),
             footbar: footbar::AppState::default(),
             toast: toast::ToastCenter::default(),
@@ -1226,6 +1232,39 @@ impl App {
         };
         let revision = self.codehealth_webview.mark_sent(payload.clone());
         let envelope = crate::extensions::codehealth::encode_codehealth_push(revision, payload);
+        vec![(webview_id, crate::preview::dispatch_script(&envelope))]
+    }
+
+    /// Todo 内容区待下发推送。声明式:每帧比较"当前该显示什么"
+    /// (`current_view_payload`)与"上次送达的"(`todo_webview.pending_push`),
+    /// 同时驱动加载超时判定。已失败时不推送——原生占位页接管。
+    pub fn take_todo_content_script(
+        &mut self,
+        available_webview_ids: &std::collections::HashSet<usize>,
+        now: std::time::Instant,
+    ) -> Vec<(usize, String)> {
+        let webview_id = TODO_CONTENT_ID_OFFSET;
+        self.todo_webview
+            .observe_availability(available_webview_ids.contains(&webview_id), now);
+        if !available_webview_ids.contains(&webview_id) || self.todo_webview.failed().is_some() {
+            return Vec::new();
+        }
+        let Some(project_id) = self.active_project_id else {
+            return Vec::new();
+        };
+        let Some(ws) = self.active_workspace() else {
+            return Vec::new();
+        };
+        let desired = crate::extensions::todo::current_view_payload(
+            ws,
+            project_id,
+            crate::extensions::todo::today_ymd(),
+        );
+        let Some(payload) = self.todo_webview.pending_push(&desired) else {
+            return Vec::new();
+        };
+        let revision = self.todo_webview.mark_sent(payload.clone());
+        let envelope = crate::extensions::todo::encode_todo_push(revision, payload);
         vec![(webview_id, crate::preview::dispatch_script(&envelope))]
     }
 
@@ -3461,6 +3500,35 @@ impl App {
                         id: CODEHEALTH_CONTENT_ID_OFFSET,
                         url: format!(
                             "dozer://codehealth-content/host.html?theme={}",
+                            crate::preview::scheme_query_value()
+                        ),
+                        visible: !app_modal_open,
+                        editor_binding: None,
+                        loading_generation: None,
+                        park_offscreen: false,
+                    };
+                    out.push((spec, bounds));
+                }
+                continue;
+            }
+            if kind == PanelKind::Todo {
+                // 已失败(加载超时/渲染异常)时不挂载,原生占位页接管;看板视图是
+                // 原生占位,同样不挂载。列表列收起时矩形由几何函数按
+                // `todo_list_collapsed` 处理(内容独占整条配对宽),不在这里隐藏。
+                let content_desired = self.todo_webview.failed().is_none()
+                    && ws.todo.view() == crate::extensions::todo::TodoView::List;
+                let bounds = crate::webview_geometry::todo_content_pane_bounds_for(
+                    side,
+                    window_width,
+                    window_height,
+                    &self.shell_state(),
+                    content_desired,
+                );
+                if bounds.2 > 0.0 && bounds.3 > 0.0 {
+                    let spec = WebviewSpec {
+                        id: TODO_CONTENT_ID_OFFSET,
+                        url: format!(
+                            "dozer://todo-content/host.html?theme={}",
                             crate::preview::scheme_query_value()
                         ),
                         visible: !app_modal_open,

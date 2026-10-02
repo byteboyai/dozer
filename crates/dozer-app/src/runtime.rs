@@ -583,6 +583,21 @@ pub(crate) fn sync_webview_pool(
                                             dozer_core::log_warn!(LOG, %error, "无法解析 codehealth-content IPC");
                                         }
                                     }
+                                } else if webview_id == crate::app::TODO_CONTENT_ID_OFFSET
+                                    && looks_like_envelope
+                                {
+                                    // todo-content 同 codehealth-content:固定单槽,按固定
+                                    // webview id 识别,不复用任何 binding。
+                                    match crate::extensions::todo::parse_todo_event(body) {
+                                        Ok(event) => {
+                                            let _ = ipc_proxy.send_event(
+                                                Message::TodoContentWebviewEvent(event),
+                                            );
+                                        }
+                                        Err(error) => {
+                                            dozer_core::log_warn!(LOG, %error, "无法解析 todo-content IPC");
+                                        }
+                                    }
                                 } else if webview_id == crate::app::CONVERSATION_REVIEW_ID_OFFSET
                                     && looks_like_envelope
                                 {

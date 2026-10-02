@@ -877,7 +877,10 @@ pub enum Message {
     /// webview `EditText`:按 id 改文字。
     EditText(i64, String),
     /// webview `Reorder`:把 `id` 挪到 `after_id` 之后(`None` = 进行中段最前)。
-    ReorderTo { id: i64, after_id: Option<i64> },
+    ReorderTo {
+        id: i64,
+        after_id: Option<i64>,
+    },
     /// webview `SetCategory`:`None` = 未分类。
     SetCategory(i64, Option<i64>),
     /// webview `AddHeight`:新增框高度(px),由 `set_add_input_height` 钳制。

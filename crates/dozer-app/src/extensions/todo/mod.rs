@@ -359,4 +359,29 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn start_flash_bumps_scroll_nonce_and_sets_selected_id() {
+        let mut ws_state = WorkspaceState {
+            items: vec![todo_info(5, "新", false), todo_info(6, "旧", false)],
+            ..WorkspaceState::default()
+        };
+        assert_eq!(ws_state.scroll_nonce, 0);
+        assert_eq!(ws_state.selected_id(), None);
+        ws_state.start_flash(0);
+        assert_eq!(ws_state.scroll_nonce, 1);
+        assert_eq!(ws_state.selected_id(), Some(5));
+        ws_state.start_flash(1);
+        assert_eq!(ws_state.scroll_nonce, 2);
+        assert_eq!(ws_state.selected_id(), Some(6));
+    }
+
+    #[test]
+    fn set_add_input_height_clamps_to_bounds() {
+        let mut ws_state = WorkspaceState::default();
+        ws_state.set_add_input_height(10_000.0);
+        assert!(ws_state.add_input_height() <= ADD_INPUT_MAX_HEIGHT);
+        ws_state.set_add_input_height(1.0);
+        assert!(ws_state.add_input_height() >= ADD_INPUT_MIN_HEIGHT);
+    }
 }

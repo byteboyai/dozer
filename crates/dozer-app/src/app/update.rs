@@ -186,6 +186,7 @@ impl App {
                     }
                 }
             }
+            Message::TodoContentWebviewEvent(event) => self.todo_content_event(event),
             Message::EditorWebviewEvent(binding, event) => {
                 self.with_project(binding.project_id, move |ws, io| {
                     let pane = if binding.panel == PanelKind::Project {
@@ -1759,6 +1760,7 @@ impl App {
                 todo::Message::ToggleListCollapse => {
                     self.toggle_panel_list_collapse(PanelKind::Todo);
                 }
+                todo::Message::ContentRetry => self.todo_webview.clear_failed(),
                 todo::Message::CategoryContextMenuOpen(id) => {
                     self.todo_category_context_menu(id);
                 }
@@ -4800,6 +4802,38 @@ impl App {
             }
             todo::update(&mut ws.todo, msg, project_id, &client, &handle, emit);
         });
+    }
+
+    /// Todo 内容区 webview 事件入口。`Ready`/`Failed` 在这里直接处理;其余事件交给
+    /// 纯函数 `todo::route_event` 把 `id` 映射成当前下标并校验入参,再复用现有的
+    /// 下标式入口(`todo_message` / `todo_assign_agent` / `todo_detail_open`)。
+    pub(crate) fn todo_content_event(&mut self, event: todo::TodoWebviewEvent) {
+        match &event {
+            todo::TodoWebviewEvent::Ready => {
+                self.todo_webview.set_ready(true);
+                return;
+            }
+            todo::TodoWebviewEvent::Failed { reason } => {
+                dozer_core::log_warn!(
+                    LOG,
+                    panel = "todo",
+                    %reason,
+                    "Todo 内容页渲染失败,回落原生占位"
+                );
+                self.todo_webview.set_failed(reason.clone());
+                return;
+            }
+            _ => {}
+        }
+        let routed = self
+            .active_workspace()
+            .and_then(|ws| todo::route_event(ws.todo.items(), event));
+        match routed {
+            Some(todo::Routed::Message(msg)) => self.todo_message(msg),
+            Some(todo::Routed::AssignAgent { idx, agent }) => self.todo_assign_agent(idx, agent),
+            Some(todo::Routed::OpenDetail { idx }) => self.todo_detail_open(idx),
+            None => {}
+        }
     }
 
     pub(crate) fn browser_bookmarks_loaded(

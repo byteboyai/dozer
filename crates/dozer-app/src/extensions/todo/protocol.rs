@@ -535,7 +535,8 @@ mod tests {
     #[test]
     fn payload_category_key_covers_all_filters() {
         let mut ws = state_with(vec![]);
-        let key = |ws: &WorkspaceState| build_payload(ws, &[], 1, (2026, 10, 2), vec![]).category_key;
+        let key =
+            |ws: &WorkspaceState| build_payload(ws, &[], 1, (2026, 10, 2), vec![]).category_key;
         ws.category_selected = CategoryFilter::All;
         assert_eq!(key(&ws), "all");
         ws.category_selected = CategoryFilter::Uncategorized;
@@ -550,7 +551,14 @@ mod tests {
         ws.categories = vec![category(10, None, "后端"), category(11, Some(10), "接口")];
         let p = build_payload(&ws, &[], 1, (2026, 10, 2), vec![]);
         assert_eq!(p.categories.len(), 2);
-        assert_eq!((p.categories[1].id, p.categories[1].depth, p.categories[1].parent_id), (11, 1, Some(10)));
+        assert_eq!(
+            (
+                p.categories[1].id,
+                p.categories[1].depth,
+                p.categories[1].parent_id
+            ),
+            (11, 1, Some(10))
+        );
     }
 
     #[test]
@@ -582,7 +590,13 @@ mod tests {
                 "category_name": null, "assigned_agent": null, "has_dispatch": false
             })
         );
-        for key in ["categories", "agents", "add_height_px", "selected_id", "scroll_nonce"] {
+        for key in [
+            "categories",
+            "agents",
+            "add_height_px",
+            "selected_id",
+            "scroll_nonce",
+        ] {
             assert!(v.get(key).is_some(), "缺字段 {key}");
         }
     }
@@ -593,7 +607,12 @@ mod tests {
         let kinds: Vec<_> = agents.iter().map(|a| a.kind).collect();
         assert_eq!(
             kinds,
-            vec![AgentKind::Claude, AgentKind::Codebuddy, AgentKind::Opencode, AgentKind::V8agent]
+            vec![
+                AgentKind::Claude,
+                AgentKind::Codebuddy,
+                AgentKind::Opencode,
+                AgentKind::V8agent
+            ]
         );
         assert!(agents.iter().all(|a| a.icon_svg.contains("<svg")));
     }
@@ -604,39 +623,75 @@ mod tests {
     fn parses_every_event_kind() {
         let cases = [
             (r#"{"kind":"ready"}"#, TodoWebviewEvent::Ready),
-            (r#"{"kind":"failed","reason":"x"}"#, TodoWebviewEvent::Failed { reason: "x".into() }),
-            (r#"{"kind":"add","text":"a"}"#, TodoWebviewEvent::Add { text: "a".into() }),
-            (r#"{"kind":"toggle","id":3}"#, TodoWebviewEvent::Toggle { id: 3 }),
+            (
+                r#"{"kind":"failed","reason":"x"}"#,
+                TodoWebviewEvent::Failed { reason: "x".into() },
+            ),
+            (
+                r#"{"kind":"add","text":"a"}"#,
+                TodoWebviewEvent::Add { text: "a".into() },
+            ),
+            (
+                r#"{"kind":"toggle","id":3}"#,
+                TodoWebviewEvent::Toggle { id: 3 },
+            ),
             (
                 r#"{"kind":"edit_text","id":3,"text":"b"}"#,
-                TodoWebviewEvent::EditText { id: 3, text: "b".into() },
+                TodoWebviewEvent::EditText {
+                    id: 3,
+                    text: "b".into(),
+                },
             ),
             (
                 r#"{"kind":"reorder","id":3,"after_id":null}"#,
-                TodoWebviewEvent::Reorder { id: 3, after_id: None },
+                TodoWebviewEvent::Reorder {
+                    id: 3,
+                    after_id: None,
+                },
             ),
             (
                 r#"{"kind":"reorder","id":3,"after_id":2}"#,
-                TodoWebviewEvent::Reorder { id: 3, after_id: Some(2) },
+                TodoWebviewEvent::Reorder {
+                    id: 3,
+                    after_id: Some(2),
+                },
             ),
             (
                 r#"{"kind":"set_status","id":3,"state":"suspended"}"#,
-                TodoWebviewEvent::SetStatus { id: 3, state: SetStatusTarget::Suspended },
+                TodoWebviewEvent::SetStatus {
+                    id: 3,
+                    state: SetStatusTarget::Suspended,
+                },
             ),
             (
                 r#"{"kind":"set_plan_date","id":3,"date":"10-05"}"#,
-                TodoWebviewEvent::SetPlanDate { id: 3, date: "10-05".into() },
+                TodoWebviewEvent::SetPlanDate {
+                    id: 3,
+                    date: "10-05".into(),
+                },
             ),
             (
                 r#"{"kind":"assign_agent","id":3,"agent":"claude"}"#,
-                TodoWebviewEvent::AssignAgent { id: 3, agent: AgentKind::Claude },
+                TodoWebviewEvent::AssignAgent {
+                    id: 3,
+                    agent: AgentKind::Claude,
+                },
             ),
             (
                 r#"{"kind":"set_category","id":3,"category_id":null}"#,
-                TodoWebviewEvent::SetCategory { id: 3, category_id: None },
+                TodoWebviewEvent::SetCategory {
+                    id: 3,
+                    category_id: None,
+                },
             ),
-            (r#"{"kind":"open_detail","id":3}"#, TodoWebviewEvent::OpenDetail { id: 3 }),
-            (r#"{"kind":"add_height","px":120.0}"#, TodoWebviewEvent::AddHeight { px: 120.0 }),
+            (
+                r#"{"kind":"open_detail","id":3}"#,
+                TodoWebviewEvent::OpenDetail { id: 3 },
+            ),
+            (
+                r#"{"kind":"add_height","px":120.0}"#,
+                TodoWebviewEvent::AddHeight { px: 120.0 },
+            ),
         ];
         for (body, expected) in cases {
             assert_eq!(parse_todo_event(body).unwrap(), expected, "{body}");
@@ -665,12 +720,30 @@ mod tests {
         let items = items3();
         for ev in [
             TodoWebviewEvent::Toggle { id: 999 },
-            TodoWebviewEvent::EditText { id: 999, text: "x".into() },
-            TodoWebviewEvent::Reorder { id: 999, after_id: None },
-            TodoWebviewEvent::SetStatus { id: 999, state: SetStatusTarget::Done },
-            TodoWebviewEvent::SetPlanDate { id: 999, date: "10-05".into() },
-            TodoWebviewEvent::AssignAgent { id: 999, agent: AgentKind::Claude },
-            TodoWebviewEvent::SetCategory { id: 999, category_id: None },
+            TodoWebviewEvent::EditText {
+                id: 999,
+                text: "x".into(),
+            },
+            TodoWebviewEvent::Reorder {
+                id: 999,
+                after_id: None,
+            },
+            TodoWebviewEvent::SetStatus {
+                id: 999,
+                state: SetStatusTarget::Done,
+            },
+            TodoWebviewEvent::SetPlanDate {
+                id: 999,
+                date: "10-05".into(),
+            },
+            TodoWebviewEvent::AssignAgent {
+                id: 999,
+                agent: AgentKind::Claude,
+            },
+            TodoWebviewEvent::SetCategory {
+                id: 999,
+                category_id: None,
+            },
             TodoWebviewEvent::OpenDetail { id: 999 },
         ] {
             assert!(route_event(&items, ev.clone()).is_none(), "{ev:?}");
@@ -686,34 +759,59 @@ mod tests {
         assert!(matches!(r, Routed::OpenDetail { idx: 1 }));
         let r = route_event(
             &items,
-            TodoWebviewEvent::SetStatus { id: 1, state: SetStatusTarget::Done },
+            TodoWebviewEvent::SetStatus {
+                id: 1,
+                state: SetStatusTarget::Done,
+            },
         )
         .unwrap();
-        assert!(matches!(r, Routed::Message(Message::StatusPick(0, TodoState::Done))));
+        assert!(matches!(
+            r,
+            Routed::Message(Message::StatusPick(0, TodoState::Done))
+        ));
     }
 
     #[test]
     fn route_add_trims_and_rejects_empty_and_oversized() {
         let items = items3();
-        let r = route_event(&items, TodoWebviewEvent::Add { text: "  新任务\n".into() }).unwrap();
+        let r = route_event(
+            &items,
+            TodoWebviewEvent::Add {
+                text: "  新任务\n".into(),
+            },
+        )
+        .unwrap();
         assert!(matches!(r, Routed::Message(Message::AddText(ref t)) if t == "新任务"));
         assert!(route_event(&items, TodoWebviewEvent::Add { text: "   ".into() }).is_none());
         let huge = "字".repeat(MAX_TEXT_CHARS + 1);
         assert!(route_event(&items, TodoWebviewEvent::Add { text: huge.clone() }).is_none());
-        assert!(
-            route_event(&items, TodoWebviewEvent::EditText { id: 1, text: huge }).is_none()
-        );
+        assert!(route_event(&items, TodoWebviewEvent::EditText { id: 1, text: huge }).is_none());
     }
 
     #[test]
     fn route_set_plan_date_validates_month_day() {
         let items = items3();
-        let ok = route_event(&items, TodoWebviewEvent::SetPlanDate { id: 1, date: "9-5".into() });
+        let ok = route_event(
+            &items,
+            TodoWebviewEvent::SetPlanDate {
+                id: 1,
+                date: "9-5".into(),
+            },
+        );
         // 规范化成 MM-DD
-        assert!(matches!(ok, Some(Routed::Message(Message::CalendarPick(0, ref d))) if d == "09-05"));
+        assert!(
+            matches!(ok, Some(Routed::Message(Message::CalendarPick(0, ref d))) if d == "09-05")
+        );
         for bad in ["13-01", "00-10", "10-32", "abc", "10-00", ""] {
             assert!(
-                route_event(&items, TodoWebviewEvent::SetPlanDate { id: 1, date: bad.into() }).is_none(),
+                route_event(
+                    &items,
+                    TodoWebviewEvent::SetPlanDate {
+                        id: 1,
+                        date: bad.into()
+                    }
+                )
+                .is_none(),
                 "{bad}"
             );
         }
@@ -722,23 +820,81 @@ mod tests {
     #[test]
     fn route_assign_agent_only_accepts_the_four_headless_kinds() {
         let items = items3();
-        let ok = route_event(&items, TodoWebviewEvent::AssignAgent { id: 1, agent: AgentKind::V8agent });
-        assert!(matches!(ok, Some(Routed::AssignAgent { idx: 0, agent: AgentKind::V8agent })));
-        for bad in [AgentKind::Codex, AgentKind::Goose, AgentKind::Aider, AgentKind::Unknown] {
-            assert!(route_event(&items, TodoWebviewEvent::AssignAgent { id: 1, agent: bad }).is_none());
+        let ok = route_event(
+            &items,
+            TodoWebviewEvent::AssignAgent {
+                id: 1,
+                agent: AgentKind::V8agent,
+            },
+        );
+        assert!(matches!(
+            ok,
+            Some(Routed::AssignAgent {
+                idx: 0,
+                agent: AgentKind::V8agent
+            })
+        ));
+        for bad in [
+            AgentKind::Codex,
+            AgentKind::Goose,
+            AgentKind::Aider,
+            AgentKind::Unknown,
+        ] {
+            assert!(
+                route_event(&items, TodoWebviewEvent::AssignAgent { id: 1, agent: bad }).is_none()
+            );
         }
     }
 
     #[test]
     fn route_reorder_only_for_active_items_and_not_onto_itself() {
         let items = items3();
-        let ok = route_event(&items, TodoWebviewEvent::Reorder { id: 1, after_id: None });
-        assert!(matches!(ok, Some(Routed::Message(Message::ReorderTo { id: 1, after_id: None }))));
+        let ok = route_event(
+            &items,
+            TodoWebviewEvent::Reorder {
+                id: 1,
+                after_id: None,
+            },
+        );
+        assert!(matches!(
+            ok,
+            Some(Routed::Message(Message::ReorderTo {
+                id: 1,
+                after_id: None
+            }))
+        ));
         // 搁置、已完成不可拖
-        assert!(route_event(&items, TodoWebviewEvent::Reorder { id: 2, after_id: None }).is_none());
-        assert!(route_event(&items, TodoWebviewEvent::Reorder { id: 3, after_id: None }).is_none());
+        assert!(
+            route_event(
+                &items,
+                TodoWebviewEvent::Reorder {
+                    id: 2,
+                    after_id: None
+                }
+            )
+            .is_none()
+        );
+        assert!(
+            route_event(
+                &items,
+                TodoWebviewEvent::Reorder {
+                    id: 3,
+                    after_id: None
+                }
+            )
+            .is_none()
+        );
         // 挪到自己之后无意义
-        assert!(route_event(&items, TodoWebviewEvent::Reorder { id: 1, after_id: Some(1) }).is_none());
+        assert!(
+            route_event(
+                &items,
+                TodoWebviewEvent::Reorder {
+                    id: 1,
+                    after_id: Some(1)
+                }
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -774,7 +930,10 @@ mod tests {
         let to_send = s.pending_push(&p).expect("ready 后应推送");
         assert_eq!(s.mark_sent(to_send), 1);
         assert!(s.pending_push(&p).is_none(), "内容没变不重复推送");
-        assert!(s.pending_push(&payload(2)).is_some(), "内容变了(换项目)要推送");
+        assert!(
+            s.pending_push(&payload(2)).is_some(),
+            "内容变了(换项目)要推送"
+        );
     }
 
     // Review Focus 4:webview 被重建后 ready 会强制重发当前内容。

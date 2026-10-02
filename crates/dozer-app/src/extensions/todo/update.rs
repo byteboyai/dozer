@@ -62,6 +62,46 @@ pub(crate) fn first_weekday_of_month(y: i32, m: u32) -> u32 {
     (days_from_civil(y, m, 1) + 4).rem_euclid(7) as u32
 }
 
+/// 新增任务的共享逻辑:插入乐观项(置顶)、起闪光、异步落库。`AddSubmit`(原生
+/// 草稿)与 `AddText`(webview 文本)共用。
+fn submit_new_todo(
+    ws_state: &mut WorkspaceState,
+    text: String,
+    project_id: i64,
+    client: &Client,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + Sync + 'static,
+) {
+    ws_state.items.insert(
+        0,
+        TodoInfo {
+            id: OPTIMISTIC_TODO_ID,
+            project_id,
+            text: text.clone(),
+            done: false,
+            paused: false,
+            rank: 0,
+            created_ms: 0,
+            completed_at_ms: None,
+            plan_date: None,
+            dispatch_session_id: None,
+            dispatch_at_ms: None,
+            category_id: None,
+            assigned_agent: None,
+        },
+    );
+    ws_state.start_flash(0);
+    let client = client.clone();
+    handle.spawn(async move {
+        let res = client
+            .add_todo(project_id, &text)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string());
+        emit(Message::Mutated(res));
+    });
+}
+
 /// 处理除 `DispatchToExisting` 之外的消息。`DispatchToExisting` 涉及终端
 /// 会话读写,内核会先拦截,不会转发到这里。写操作(增/改/勾选/排序/计划
 /// 日期/派发)一律走异步 `Client`,结果经 `Message::Loaded`/`Mutated`
@@ -228,37 +268,7 @@ pub fn update(
                 return;
             }
             ws_state.add_draft = iced_widget::text_editor::Content::new();
-            // 乐观置顶:插入一条临时 id 的条目,立即触发既有的"新增闪光+
-            // 滚回顶部"效果,不等服务端往返。
-            ws_state.items.insert(
-                0,
-                TodoInfo {
-                    id: OPTIMISTIC_TODO_ID,
-                    project_id,
-                    text: text.clone(),
-                    done: false,
-                    paused: false,
-                    rank: 0,
-                    created_ms: 0,
-                    completed_at_ms: None,
-                    plan_date: None,
-                    dispatch_session_id: None,
-                    dispatch_at_ms: None,
-                    category_id: None,
-                    assigned_agent: None,
-                },
-            );
-            ws_state.start_flash(0);
-            let client = client.clone();
-            let project_id_owned = project_id;
-            handle.spawn(async move {
-                let res = client
-                    .add_todo(project_id_owned, &text)
-                    .await
-                    .map(|_| ())
-                    .map_err(|e| e.to_string());
-                emit(Message::Mutated(res));
-            });
+            submit_new_todo(ws_state, text, project_id, client, handle, emit);
         }
         // 高度拖拽在 app 层 `todo_message` 已早退,不会到这里;保留 arm 仅
         // 为 match 穷尽。
@@ -552,12 +562,51 @@ pub fn update(
                 }
             }
         }
-        // Task 7 接入 webview 事件处理;本任务先占位保证 match 穷尽。
-        Message::AddText(_)
-        | Message::EditText(_, _)
-        | Message::ReorderTo { .. }
-        | Message::SetCategory(_, _)
-        | Message::AddHeight(_)
-        | Message::ContentRetry => {}
+        Message::AddText(text) => {
+            submit_new_todo(ws_state, text, project_id, client, handle, emit);
+        }
+        Message::EditText(id, text) => {
+            let text = text.trim().to_string();
+            let Some(item) = ws_state.items.iter().find(|i| i.id == id) else {
+                return;
+            };
+            if text.is_empty() || item.text == text {
+                return;
+            }
+            let client = client.clone();
+            handle.spawn(async move {
+                let res = client
+                    .edit_todo_text(id, &text)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string());
+                emit(Message::Mutated(res));
+            });
+        }
+        Message::ReorderTo { id, after_id } => {
+            let client = client.clone();
+            handle.spawn(async move {
+                let res = client
+                    .reorder_todo(id, after_id)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string());
+                emit(Message::Mutated(res));
+            });
+        }
+        Message::SetCategory(id, category_id) => {
+            let client = client.clone();
+            handle.spawn(async move {
+                let res = client
+                    .set_todo_category(id, category_id)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string());
+                // 与原分类选择器同一条刷新路径:分类与任务列表一并重拉。
+                emit(Message::CategoryMutated(res));
+            });
+        }
+        Message::AddHeight(px) => ws_state.set_add_input_height(px),
+        Message::ContentRetry => {}
     }
 }
