@@ -609,7 +609,12 @@ mod tests {
             b"<html>t</html>",
         )
         .unwrap();
-        let r = handle_protocol(&root, &HashSet::new(), None, "dozer://todo-content/host.html");
+        let r = handle_protocol(
+            &root,
+            &HashSet::new(),
+            None,
+            "dozer://todo-content/host.html",
+        );
         assert_eq!((r.status, r.mime), (200, "text/html"));
         assert_eq!(r.body, b"<html>t</html>");
     }

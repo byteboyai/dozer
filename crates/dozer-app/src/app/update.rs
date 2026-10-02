@@ -1784,34 +1784,6 @@ impl App {
                 todo::Message::CategoryPickerOpenForTodo(todo_id) => {
                     self.todo_category_picker_open(CategoryPickerTarget::Todo(todo_id));
                 }
-                todo::Message::DispatchOpen(idx) => {
-                    #[cfg(target_os = "macos")]
-                    {
-                        let last_cursor = self.last_cursor;
-                        let items = todo::dispatch_items(idx);
-                        if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
-                            self.update(Message::Todo(msg));
-                        }
-                    }
-                    #[cfg(not(target_os = "macos"))]
-                    {
-                        self.todo_message(todo::Message::DispatchOpen(idx));
-                    }
-                }
-                todo::Message::StatusOpen(idx) => {
-                    #[cfg(target_os = "macos")]
-                    {
-                        let last_cursor = self.last_cursor;
-                        let items = todo::status_items(idx);
-                        if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
-                            self.update(Message::Todo(msg));
-                        }
-                    }
-                    #[cfg(not(target_os = "macos"))]
-                    {
-                        self.todo_message(todo::Message::StatusOpen(idx));
-                    }
-                }
                 other => self.todo_message(other),
             },
             Message::TodoDetailLoaded(idx, turns) => {

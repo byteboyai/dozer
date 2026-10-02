@@ -3840,7 +3840,7 @@ git commit -m "feat(todo): host the todo content webview (slot, push, IPC routin
 - Consumes: Task 6 的 `theme::geometry::todo_top_row_inner_h_px()`；Task 7 的 `App.todo_webview`、`Message::ContentRetry`。
 - Produces: `todo::view` 右栏 = 钉高的原生 tab 行 + 分割线 + `todo_content_slot`。
 
-- [ ] **Step 1: 钉 tab 按钮高度，写右栏新结构**
+- [x] **Step 1: 钉 tab 按钮高度，写右栏新结构**
 
 `todo_view_tab` 里，在 `.padding([5, 14])` 之后加一行（让 tab 行高度确定，与几何同源）：
 
@@ -3948,7 +3948,7 @@ pub(crate) fn todo_content_slot<'a>(
 
 3. `view()` 的 `ws: &Workspace` 参数不再使用：从签名删掉，并同步改 `app/view.rs` 里两处调用（`todo::view(app, &ws.todo, ws, …)` → `todo::view(app, &ws.todo, …)`）。
 
-- [ ] **Step 2: 删除 `view.rs` 里不再被引用的函数**
+- [x] **Step 2: 删除 `view.rs` 里不再被引用的函数**
 
 **保留**（左栏、tab 行、详情窗口、通用工具仍在用）：`view`、`todo_view_tab`、`kanban_placeholder`、`todo_content_slot`、`todo_clear_footer_bar`、`clear_confirm_spec`、`category_tree_nav`、`category_rename_row`、`category_pseudo_row`、`todo_detail_card`、`format_todo_month_day`、`civil_from_days`，以及这些函数直接依赖的辅助（如 `status_meta`，若详情窗口在用则保留）。
 
@@ -3956,15 +3956,15 @@ pub(crate) fn todo_content_slot<'a>(
 
 做法：先删上面这批，再 `cargo build`，编译器会报出被它们独占使用的 `use`、常量和辅助函数——**逐条判断**：确属只服务已删函数的就删；若某条是被保留代码引用（报"未找到"），说明保留清单漏了，恢复它并在 ledger 记一条 `Ruling`。
 
-- [ ] **Step 3: 删除 `app/view.rs` 里四个浮层挂载**
+- [x] **Step 3: 删除 `app/view.rs` 里四个浮层挂载**
 
 删除 `else if ws.todo.status_popup_open() { … }`、`else if ws.todo.calendar_popup_open() { … }`、`else if ws.todo.dispatch_popup_open() { … }`、`else if ws.todo.status_filter_popup_open() { … }` 四个完整分支（各自含一个 `dismiss` 与一个 `match todo::todo_*_overlay(ws, self.window_size)`），其余 `else if` 链保持。
 
-- [ ] **Step 4: 删除随函数失效的测试**
+- [x] **Step 4: 删除随函数失效的测试**
 
 `extensions/todo/mod.rs` 的 `mod tests` 里删除 `dispatch_items_covers_the_four_headless_agents`、`status_items_covers_all_four_states_for_given_index`（它们测的是已删的 `dispatch_items` / `status_items`）。
 
-- [ ] **Step 5: 编译与回归**
+- [x] **Step 5: 编译与回归**
 
 ```bash
 cargo build 2>&1 | grep -E "^error" -A8 | head -40
@@ -3973,14 +3973,14 @@ cargo test -p dozer-app webview_geometry 2>&1 | tail -4
 ```
 Expected: 编译通过；todo 与几何测试 PASS。此时 `cargo build` 会出现一批 `dead_code` / `unused` 警告（`Message` 变体、状态字段、焦点相关函数等），**记录下来**作为 Task 9 的清单，**不要**现在 `#[allow]`。
 
-- [ ] **Step 6: GUI 冒烟（需要显示环境）**
+- [x] **Step 6: GUI 冒烟（需要显示环境）** — 无显示环境,未做 GUI 冒烟
 
 ```bash
 cargo run -p dozer-app
 ```
 手工：打开项目 → Todo 面板。预期：左栏分类树与「清空列表」不变；右栏顶部是「列表视图 / 看板视图」tab 和「收起」按钮，其下是 WebView（搜索条、卡片、新增框）；切到「看板视图」tab，WebView 消失、显示看板占位；切回列表视图 WebView 恢复且数据在。若 tab 行与 WebView 之间出现缝隙或被盖住，检查 `todo_top_row_inner_h_px` 与 tab 按钮 `Fixed` 高度是否一致。**无显示环境无法执行时，在 ledger 明确写"未做 GUI 冒烟"。**
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git branch --show-current

@@ -246,86 +246,6 @@ impl App {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
-        } else if ws.todo.status_popup_open() {
-            // 状态下拉选择层:窗口级 overlay。点弹层外任意处经 dismiss 收起
-            // (与右键菜单/分支切换同款约定),弹层本体定位到点击"状态"按钮时
-            // 的光标锚点。
-            let dismiss = MouseArea::new(
-                container(column![])
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            )
-            .on_press(Message::Todo(todo::Message::StatusClose));
-            match todo::todo_status_overlay(ws, self.window_size) {
-                Some(popup) => stack![base, dismiss, popup.map(Message::Todo)]
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into(),
-                None => stack![base, dismiss]
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into(),
-            }
-        } else if ws.todo.calendar_popup_open() {
-            // 日历浮层:窗口级 overlay。点弹层外任意处经 dismiss 收起(与右键
-            // 菜单/分支切换同款约定),弹层本体定位到点击按钮时的光标锚点。
-            let dismiss = MouseArea::new(
-                container(column![])
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            )
-            .on_press(Message::Todo(todo::Message::CalendarClose));
-            match todo::todo_calendar_overlay(ws, self.window_size) {
-                Some(popup) => stack![base, dismiss, popup.map(Message::Todo)]
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into(),
-                None => stack![base, dismiss]
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into(),
-            }
-        } else if ws.todo.dispatch_popup_open() {
-            // 派发选择层:窗口级 overlay。点弹层外任意处经 dismiss 收起(与
-            // 右键菜单/分支切换同款约定),弹层本体列出可指派的 agent(带图标),
-            // 定位到点击"指派"按钮时的光标锚点。
-            let dismiss = MouseArea::new(
-                container(column![])
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            )
-            .on_press(Message::Todo(todo::Message::DispatchClose));
-            match todo::todo_dispatch_overlay(ws, self.window_size) {
-                Some(popup) => stack![base, dismiss, popup.map(Message::Todo)]
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into(),
-                None => stack![base, dismiss]
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into(),
-            }
-        } else if ws.todo.status_filter_popup_open() {
-            // 搜索框左前"状态"筛选浮层:窗口级 overlay。点弹层外任意处经
-            // dismiss 收起(与右键菜单/分支切换同款约定),弹层本体的每一项
-            // (全部/待办/进行中/搁置/已完成)emit `StatusFilterPick`,选中
-            // 浮层即收。
-            let dismiss = MouseArea::new(
-                container(column![])
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            )
-            .on_press(Message::Todo(todo::Message::StatusFilterClose));
-            match todo::todo_status_filter_overlay(ws, self.window_size) {
-                Some(popup) => stack![base, dismiss, popup.map(Message::Todo)]
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into(),
-                None => stack![base, dismiss]
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into(),
-            }
         } else if ws.term_tab_overflow_anchor.is_some() {
             // 终端 tab 栏"溢出下拉"(V 按钮):窗口级 overlay,理由见
             // `terminal::term_tab_overflow_popup` 文档——必须在这里(顶层)
@@ -698,7 +618,6 @@ pub(crate) fn panel_body<'a>(
                 return todo::view(
                     app,
                     &ws.todo,
-                    ws,
                     Length::Fixed(0.0),
                     Border::default(),
                     Length::Fill,
@@ -711,7 +630,6 @@ pub(crate) fn panel_body<'a>(
             let (sidebar_pane, content_pane) = todo::view(
                 app,
                 &ws.todo,
-                ws,
                 Length::FillPortion(list_portion),
                 zone_pane_border(zone, lc),
                 Length::FillPortion(content_portion),
