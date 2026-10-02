@@ -4068,7 +4068,7 @@ git commit -m "refactor(todo): remove native input/popup plumbing and dead state
 - Modify: `docs/superpowers/specs/2026-10-02-todo-webview-design.md`（同步三处细化）
 - 无新代码
 
-- [ ] **Step 1: 全量检查**
+- [x] **Step 1: 全量检查**
 
 ```bash
 cd crates/dozer-app/web/todo-content && npm test 2>&1 | tail -6 && npm run typecheck 2>&1 | tail -3 && cd -
@@ -4079,14 +4079,16 @@ bash scripts/check-log-scope.sh
 ```
 Expected: 前端测试与类型检查全过；fmt ok；clippy 警告数不高于 main 基线（改动前在 main 上先记一次基线）；整包测试的失败**只有**已知基线：`delete_confirm_spec_reflects_pending_target` 与 dozerd 的 3 个 `summary_pipeline`；门禁 ok。
 
-- [ ] **Step 2: 确认前端产物与源码一致**
+- [x] **Step 2: 确认前端产物与源码一致**
 
 ```bash
 cd crates/dozer-app/web/todo-content && npm run build 2>&1 | tail -2 && cd - && git status --short crates/dozer-app/assets/todo-content
 ```
 Expected: `git status` 在该目录下**无改动**（提交的产物就是当前源码的确定性构建结果）。若有改动，说明忘了提交最新产物，提交之。
 
-- [ ] **Step 3: 人工验收清单（需要显示环境，逐项执行并把结果写进 ledger）**
+- [x] **Step 3: 人工验收清单（需要显示环境，逐项执行并把结果写进 ledger）**
+
+  > 未做 GUI 冒烟：本环境无显示环境，11 项未能逐项人工执行，留待有显示环境时验收。
 
 1. **拖拽排序**：只有「进行中」段可拖；放置指示线所见即所得；放回原位不触发落库；`Esc` 取消。
 2. **内联编辑**：点文字进入编辑；回车提交、失焦提交、空文本丢弃；**中文输入法组合期间回车不误提交**。
@@ -4100,7 +4102,7 @@ Expected: `git status` 在该目录下**无改动**（提交的产物就是当�
 10. **「详情」窗口**：点「详情」打开原生详情窗口，回复框、处理按钮照常。
 11. **左栏**：分类树选择、右键菜单、「清空列表」确认框都照常。
 
-- [ ] **Step 4: 同步 spec**
+- [x] **Step 4: 同步 spec**
 
 在 `docs/superpowers/specs/2026-10-02-todo-webview-design.md` 里按本 plan 开头的三处细化修改：
 - 「协议 → revision 与一致性」：乐观更新改为"沿用现有 Rust 侧乐观更新（`Toggle` / 新增），前端只对拖拽排序做本地预览"；删除"取消 `Flash` / `FlashItem` 跨边界协议"的说法，改为"保留 Rust 的 `Flash` 计时，通过 payload 的 `selected_id` 与 `scroll_nonce` 带给前端"。
@@ -4113,7 +4115,7 @@ git add docs/superpowers/specs/2026-10-02-todo-webview-design.md
 git commit -m "docs: sync todo webview spec with the implemented flash/optimistic-update decisions" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 5: 收尾**
+- [x] **Step 5: 收尾**
 
 按 `superpowers:finishing-a-development-branch` 处理：向用户汇报验证结果与 ledger 里的 Rulings，**合并到 main 由用户决定**。合并前检查主工作区是否有别人未提交的改动与本分支文件重叠（`comm -12 <(git diff --name-only main..feat/todo-webview | sort) <(git status --short | awk '{print $2}' | sort)`），有重叠按"用唯一标签 stash → 快进合并 → `stash apply` → 按标签 drop"的流程处理，不要碰别人的 stash。
 

@@ -103,11 +103,12 @@ Todo 面板（`extensions/todo/`，`view.rs` 1977 行）左栏为分类树，右
 
 - 每条 `SetView` 带单调递增 `revision`，前端丢弃小于当前值的指令。
 - **成功不回执**：操作成功后 Rust 经 `Client` 落库，再推新的 `SetView` 即为确认；失败走 Toast，并推一条权威 `SetView` 把前端的乐观状态还原。
-- 乐观更新沿用现有做法：新增（插入临时项）、切换完成、拖拽排序，由前端本地先改，Rust 落库后以权威 `SetView` 覆盖。前端用「`id` 集合差异」判断哪张卡片是新出现的并做高亮闪烁，**取消现有 `Flash` / `FlashItem` 的跨边界协议**。
+- 乐观更新沿用现有 Rust 侧做法（`Toggle` / 新增）：新增插入临时项、切换完成，均由 Rust 本地先改再落库；前端只对拖拽排序做本地预览（松手发 `Reorder`，落库后以权威 `SetView` 覆盖）。失败走 Toast，并推一条权威 `SetView` 把前端的乐观状态还原。
+- 新增后的高亮闪烁**保留 Rust 的 `Flash` 计时**（`start_flash` / `advance_flash` / `next_flash_wake` 不删），由 Rust 把 `Flash` 命中的任务 `id` 经 payload 的 `selected_id` 与 `scroll_nonce` 带给前端：前端据 `selected_id` 覆盖一次卡片选中高亮、据 `scroll_nonce` 变化滚回顶部。
 
 ### 纯前端视图状态（不回传 Rust，按 `project_id` 分别保留）
 
-搜索词（草稿与生效值）、状态筛选、新增框草稿文字、内联编辑中的文字与目标卡片、各弹层开合与定位、日历当前月份、滚动位置。切换项目标签再切回来这些不丢；Rust 切到另一个项目时对新活动项目重推 `SetView`，前端据 `project_id` 取回对应状态。**例外**：分类切换（`category_key` 变化）清空搜索草稿与生效词，沿用现有语义。
+搜索词（草稿与生效值）、状态筛选、新增框草稿文字、内联编辑中的文字与目标卡片、各弹层开合与定位、日历当前月份、滚动位置、卡片选中高亮。切换项目标签再切回来这些不丢；Rust 切到另一个项目时对新活动项目重推 `SetView`，前端据 `project_id` 取回对应状态。**卡片选中高亮是前端本地状态，Rust 仅在新增后通过 `selected_id` 覆盖一次。** **例外**：分类切换（`category_key` 变化）清空搜索草稿与生效词，沿用现有语义。
 
 ## 前端行为（1:1 保留，逐项对照现有实现）
 
@@ -153,7 +154,7 @@ Todo 面板（`extensions/todo/`，`view.rs` 1977 行）左栏为分类树，右
 - `extensions/todo/view.rs` 中的 `todo_list_view`、`todo_list_row`、`todo_card`、`todo_search_bar`、`status_filter_*`、`todo_footer_bar`（新增框）、`drag_insert_indicator`、`todo_segment_divider`、`todo_status_button`、`todo_dispatch_overlay` / `todo_status_overlay` / `todo_status_filter_overlay` / `todo_calendar_overlay` / `todo_calendar_popup`、`dispatch_items` / `status_items`；`app/view.rs` 中对应的四个浮层挂载；`app.rs` 里按 Todo 弹层展开隐藏预览的逻辑与对应的 `dispatch_popup_open` 等访问器。
 - 只为原生输入与拖拽服务的接线：`Capture{Add,ContentEdit,TodoSearch}Focus`、`take_content_edit_focused`、`add_field_id` / `content_field_id`、Todo 对应的 `TextInputTarget`、`TodoDrag`、`DragMove` / `DragEnd` / `RowSelect`、`AddEdit` / `AddSubmit` / `AddResizeStart`、`SearchInput` / `SearchSubmit`、`ContentEditStart` / `ContentEdit`、`StatusFilter*`、`Calendar*`、`Dispatch*`、`Status*`，以及一批 `HoverId::Todo*`。**保留**详情窗口用的 `CaptureDetailReplyFocus` 与 `Detail*`，以及左栏分类树与「清空列表」相关的全部消息。
 - 位置下标类 `Message`（`Toggle(usize)` 等）改为按 `id` 处理的入口，落库、rank 计算、派生状态等逻辑保留并复用现有函数。
-- 状态里随之无用的字段（`status_filter`、`search*`、`add_draft`、`editing_content`、`dispatch_open` / `status_open` / `calendar_*`、`drag`、`flash` 等）一并清理；`add_input_height` 保留。
+- 状态里随之无用的字段（`status_filter`、`search*`、`add_draft`、`editing_content`、`dispatch_open` / `status_open` / `calendar_*`、`drag` 等）一并清理；`add_input_height` 保留。**保留** `Flash` / `advance_flash` / `next_flash_wake`（新增后高亮的计时仍在 Rust），前端据 payload 的 `selected_id` / `scroll_nonce` 呈现。
 - 左栏「移动到…」与 `category_picker` 整套（见上一节）。
 
 ## 错误与降级
