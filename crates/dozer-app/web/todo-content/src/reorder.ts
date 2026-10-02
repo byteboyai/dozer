@@ -40,3 +40,18 @@ export function slotFromY(rects: RowRect[], draggedId: number, y: number): numbe
   }
   return slot;
 }
+
+/** 放下后保持预览顺序,直到权威推送到达(避免先弹回原位、再跳到新位置)。
+ *  - 没有待定预览 → `null`;
+ *  - 服务端顺序已与预览一致(已落库) → `null`(收敛,以服务端为准);
+ *  - 条目集合变了(别处新增 / 删除 / 完成) → `null`(预览已过期);
+ *  - 否则继续保持预览。落库被拒时由调用方的超时把预览清掉。 */
+export function reconcilePendingOrder(
+  pending: number[] | null,
+  serverIds: number[],
+): number[] | null {
+  if (!pending) return null;
+  if (pending.length !== serverIds.length) return null;
+  if (!pending.every((id) => serverIds.includes(id))) return null;
+  return pending.every((id, i) => id === serverIds[i]) ? null : pending;
+}

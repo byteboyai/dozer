@@ -4,7 +4,8 @@ import { send } from '../ipc.ts';
 import { UiStore } from '../uiStore.ts';
 import { visibleItems } from '../filter.ts';
 import { splitSegments, displayNumbers } from '../segments.ts';
-import { afterIdForSlot, isNoopMove, moveToSlot, slotFromY } from '../reorder.ts';
+import { afterIdForSlot, isNoopMove, moveToSlot, reconcilePendingOrder, slotFromY } from '../reorder.ts';
+import { decideAdd, decideEdit } from '../limits.ts';
 import { Toolbar } from './Toolbar.tsx';
 import { TodoCard } from './TodoCard.tsx';
 import { AddBox } from './AddBox.tsx';
@@ -28,6 +29,10 @@ export function App({ payload }: { payload: ViewPayload }) {
   const [popover, setPopover] = useState<PopoverState | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
+  // 放下后保持的预览顺序,直到权威推送到达(见 `reconcilePendingOrder`)。
+  const [pendingOrder, setPendingOrder] = useState<number[] | null>(null);
+  const dragRef = useRef<DragState | null>(null);
+  dragRef.current = drag;
 
   const { scrollToTop } = store.onPayload(payload);
   const ui = store.get(payload.project_id);
@@ -41,6 +46,7 @@ export function App({ payload }: { payload: ViewPayload }) {
     setPopover(null);
     setEditingId(null);
     setDrag(null);
+    setPendingOrder(null);
   }, [payload.project_id]);
 
   const visible = useMemo(
@@ -52,9 +58,24 @@ export function App({ payload }: { payload: ViewPayload }) {
 
   // 拖动期间的预览顺序(只在进行中段)
   const activeIds = segs.active.map((i) => i.id);
-  const previewIds = drag && drag.active ? moveToSlot(activeIds, drag.id, drag.slot) : activeIds;
+  const settledPending = reconcilePendingOrder(pendingOrder, activeIds);
+  const previewIds =
+    drag && drag.active
+      ? moveToSlot(activeIds, drag.id, drag.slot)
+      : settledPending ?? activeIds;
   const activeById = new Map(segs.active.map((i) => [i.id, i]));
   const activeOrdered = previewIds.map((id) => activeById.get(id)!).filter(Boolean);
+
+  // 服务端顺序追上预览(或条目集合变了)后清掉待定预览。
+  useEffect(() => {
+    if (pendingOrder !== null && settledPending === null) setPendingOrder(null);
+  }, [pendingOrder, settledPending]);
+  // 落库被拒时服务端顺序永远追不上:超时后回退到权威顺序(Rust 侧已发 Toast)。
+  useEffect(() => {
+    if (pendingOrder === null) return;
+    const t = setTimeout(() => setPendingOrder(null), 2000);
+    return () => clearTimeout(t);
+  }, [pendingOrder]);
 
   const submitSearch = () => {
     ui.search = ui.searchDraft;
@@ -62,9 +83,9 @@ export function App({ payload }: { payload: ViewPayload }) {
   };
 
   const submitAdd = () => {
-    const text = ui.addDraft.trim();
-    if (!text) return;
-    send({ kind: 'add', text });
+    const d = decideAdd(ui.addDraft);
+    if (d.action !== 'send') return; // 空草稿不发;超长保留草稿(不静默丢字)
+    send({ kind: 'add', text: d.text });
     ui.addDraft = '';
     rerender();
   };
@@ -91,12 +112,12 @@ export function App({ payload }: { payload: ViewPayload }) {
       });
     };
     const finish = (commit: boolean) => {
-      setDrag((d) => {
-        if (d && d.active && commit && !isNoopMove(activeIds, d.id, d.slot)) {
-          send({ kind: 'reorder', id: d.id, after_id: afterIdForSlot(activeIds, d.id, d.slot) });
-        }
-        return null;
-      });
+      const d = dragRef.current;
+      if (d && d.active && commit && !isNoopMove(activeIds, d.id, d.slot)) {
+        setPendingOrder(moveToSlot(activeIds, d.id, d.slot));
+        send({ kind: 'reorder', id: d.id, after_id: afterIdForSlot(activeIds, d.id, d.slot) });
+      }
+      setDrag(null);
     };
     const onUp = () => finish(true);
     const onKey = (e: KeyboardEvent) => {
@@ -137,9 +158,10 @@ export function App({ payload }: { payload: ViewPayload }) {
         setEditingId(it.id);
       }}
       onCommitEdit={(text) => {
+        const d = decideEdit(text, it.text);
+        if (d.action === 'keep') return; // 超长:继续编辑,不丢改动
         setEditingId(null);
-        const t = text.trim();
-        if (t && t !== it.text) send({ kind: 'edit_text', id: it.id, text: t });
+        if (d.action === 'send') send({ kind: 'edit_text', id: it.id, text: d.text });
       }}
       onCancelEdit={() => setEditingId(null)}
       onOpenCategory={(a) => openPopover({ kind: 'category', id: it.id, anchor: rect(a), currentId: it.category_id })}

@@ -1,5 +1,6 @@
 import { useRef } from 'preact/hooks';
 import { isAddSubmit } from '../compose.ts';
+import { MAX_TEXT_CHARS } from '../limits.ts';
 
 const MIN_H = 44;
 const MAX_H = 360;
@@ -46,6 +47,7 @@ export function AddBox(p: Props) {
           class="add-input"
           style={{ height: `${p.height}px` }}
           placeholder="添加新任务"
+          maxLength={MAX_TEXT_CHARS}
           value={p.draft}
           onInput={(e) => p.onDraft((e.currentTarget as HTMLTextAreaElement).value)}
           onKeyDown={(e) => {

@@ -56,3 +56,8 @@ test('long and english text render', () => {
 test('no popover is rendered initially', () => {
   assert.doesNotMatch(html(threeSegmentsFixture), /class="popover/);
 });
+
+// 审阅 Important 5:输入框带与 Rust 一致的长度上限,超限根本输入不进去。
+test('add box limits input length to the shared maximum', () => {
+  assert.match(html(emptyFixture), /maxlength="10000"/);
+});

@@ -3,6 +3,7 @@ import type { TodoCard as Card } from '../types.ts';
 import { STATUS_META } from '../statusMeta.ts';
 import { formatNumber } from '../segments.ts';
 import { isCancel, isInlineCommit } from '../compose.ts';
+import { MAX_TEXT_CHARS } from '../limits.ts';
 
 export interface CardProps {
   item: Card;
@@ -77,6 +78,7 @@ export function TodoCard(p: CardProps) {
             ref={taRef}
             class="edit-area"
             placeholder="任务内容…"
+            maxLength={MAX_TEXT_CHARS}
             defaultValue={item.text}
             rows={1}
             onKeyDown={(e) => {
