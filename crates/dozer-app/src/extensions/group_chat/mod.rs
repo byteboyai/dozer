@@ -6,8 +6,10 @@
 //! 与 `App::poll_group_chat_if_active`)。
 
 use crate::extensions::toast::{Level, Outbox, Pending};
+use dozer_client::Client;
 use dozer_core::protocol::{GroupInfo, GroupMessageInfo, GroupMessageStatus};
 use std::time::{Duration, Instant};
+use tokio::runtime::Handle;
 
 mod protocol;
 pub(crate) use protocol::route_event;
@@ -348,6 +350,141 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
             Vec::new()
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// 异步 spawn:只负责"调 Client → 把结果包成 Message 经 emit 发回",不含业务逻辑
+// (校验已在 `protocol::route_event` 完成)。
+// ---------------------------------------------------------------------------
+
+/// 加载某项目的群聊列表。
+pub fn spawn_load_groups(
+    project_id: i64,
+    client: &Client,
+    handle: &Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    let client = client.clone();
+    handle.spawn(async move {
+        let result = client
+            .list_groups(project_id)
+            .await
+            .map_err(|e| e.to_string());
+        emit(Message::GroupsLoaded(project_id, result));
+    });
+}
+
+/// 取某群 `rev > after_rev` 的消息(`after_rev = 0` 即全量)。
+pub fn spawn_fetch_messages(
+    project_id: i64,
+    group_id: i64,
+    after_rev: i64,
+    client: &Client,
+    handle: &Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    let client = client.clone();
+    handle.spawn(async move {
+        let result = client
+            .list_group_messages(group_id, after_rev, POLL_LIMIT)
+            .await
+            .map_err(|e| e.to_string());
+        emit(Message::Polled {
+            project_id,
+            group_id,
+            result,
+        });
+    });
+}
+
+/// 执行一条经 `route_event` 校验过的命令。`SelectGroup`/`OpenTodo` 不走这里
+/// (前者是同步状态变更,后者是切面板),由 `App` 直接处理。
+pub fn spawn_command(
+    project_id: i64,
+    cmd: Command,
+    client: &Client,
+    handle: &Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    let client = client.clone();
+    handle.spawn(async move {
+        let fail =
+            |what: &str, e: anyhow::Error| Message::Failed(project_id, format!("{what}: {e}"));
+        match cmd {
+            Command::CreateGroup { topic } => match client.create_group(project_id, &topic).await {
+                Ok(group) => emit(Message::GroupCreated(project_id, group)),
+                Err(e) => emit(fail("新建群聊失败", e)),
+            },
+            Command::DeleteGroup { group_id } => match client.delete_group(group_id).await {
+                Ok(()) => emit(Message::GroupDeleted(project_id, group_id)),
+                Err(e) => emit(fail("删除群聊失败", e)),
+            },
+            Command::AddMember {
+                group_id,
+                agent,
+                handle,
+                role_prompt,
+            } => match client
+                .add_group_member(group_id, agent, &handle, &role_prompt)
+                .await
+            {
+                Ok(group) => emit(Message::GroupChanged(project_id, group)),
+                Err(e) => emit(fail("添加成员失败", e)),
+            },
+            Command::UpdateMember {
+                member_id,
+                handle,
+                role_prompt,
+            } => match client
+                .update_group_member(member_id, &handle, &role_prompt)
+                .await
+            {
+                Ok(group) => emit(Message::GroupChanged(project_id, group)),
+                Err(e) => emit(fail("修改成员失败", e)),
+            },
+            Command::RemoveMember { member_id } => {
+                match client.remove_group_member(member_id).await {
+                    Ok(group) => emit(Message::GroupChanged(project_id, group)),
+                    Err(e) => emit(fail("移除成员失败", e)),
+                }
+            }
+            Command::Post { group_id, text } => {
+                match client.post_group_message(group_id, &text).await {
+                    Ok((human, placeholders, unknown)) => emit(Message::Posted {
+                        project_id,
+                        group_id,
+                        human,
+                        placeholders,
+                        unknown,
+                    }),
+                    Err(e) => emit(fail("发送失败", e)),
+                }
+            }
+            Command::Cancel { group_id, scope } => {
+                if let Err(e) = client.cancel_group(group_id, scope).await {
+                    emit(fail("停止失败", e));
+                }
+            }
+            Command::Retry { message_id } => match client.retry_group_message(message_id).await {
+                Ok(message) => emit(Message::MessageUpdated(project_id, message)),
+                Err(e) => emit(fail("重试失败", e)),
+            },
+            Command::PushTodo {
+                group_id,
+                message_id,
+                text,
+            } => match client.push_group_message_to_todo(message_id, &text).await {
+                Ok(todo) => emit(Message::TodoPushed {
+                    project_id,
+                    group_id,
+                    message_id,
+                    todo_id: todo.id,
+                }),
+                Err(e) => emit(fail("转为待办失败", e)),
+            },
+            Command::SelectGroup { .. } | Command::OpenTodo { .. } => {}
+        }
+    });
 }
 
 #[cfg(test)]
