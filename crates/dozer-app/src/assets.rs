@@ -182,6 +182,12 @@ fn codehealth_content_root_for(flyfish_root: &Path) -> PathBuf {
     flyfish_root.with_file_name("codehealth-content")
 }
 
+/// todo-content host(Todo 面板内容区)静态资源根 = flyfish 根的兄弟目录
+/// `todo-content`。同 `codehealth_content_root_for`。
+fn todo_content_root_for(flyfish_root: &Path) -> PathBuf {
+    flyfish_root.with_file_name("todo-content")
+}
+
 /// T7:`dozer://html/__file__/<abs>` 的读取闸门。比 editor 的"精确文件白名单"
 /// 宽一点:允许**已打开文件所在目录子树**(相对资源 css/js/图片要能加载),
 /// 但不允许跨出这些目录,且拒绝任何 `..` 分量 + 再 canonicalize 复核(防符号
@@ -244,7 +250,7 @@ pub fn handle_protocol(
     uri: &str,
 ) -> ProtocolReply {
     // 剥离 scheme 与 query;只服务 flyfish/review-trace/editor/json-editor/
-    // html/usage-content/codehealth-content 这些命名空间。
+    // html/usage-content/codehealth-content/todo-content 这些命名空间。
     let Some(rest) = uri.strip_prefix("dozer://") else {
         return not_found();
     };
@@ -278,6 +284,12 @@ pub fn handle_protocol(
     // 特判,数据全靠 evaluate_script 推送。
     if let Some(path) = rest.strip_prefix("codehealth-content/") {
         return serve_vendored(&codehealth_content_root_for(assets_root), path);
+    }
+
+    // todo-content host(Todo 面板内容区):同 codehealth-content,没有 data.json
+    // 特判,数据全靠 evaluate_script 推送。
+    if let Some(path) = rest.strip_prefix("todo-content/") {
+        return serve_vendored(&todo_content_root_for(assets_root), path);
     }
 
     // editor host:页面/脚本/样式/字体从 editor 根服务;`__file__/<abs>` 复用
@@ -586,6 +598,68 @@ mod tests {
         assert!(!html.contains("connect-src"));
         assert!(!html.contains("http://") && !html.contains("https://"));
         assert!(html.contains("codehealth-content.js") && html.contains("codehealth-content.css"));
+    }
+
+    #[test]
+    fn todo_content_serves_vendored_files() {
+        let root = scratch();
+        std::fs::create_dir_all(root.with_file_name("todo-content")).unwrap();
+        std::fs::write(
+            root.with_file_name("todo-content").join("host.html"),
+            b"<html>t</html>",
+        )
+        .unwrap();
+        let r = handle_protocol(&root, &HashSet::new(), None, "dozer://todo-content/host.html");
+        assert_eq!((r.status, r.mime), (200, "text/html"));
+        assert_eq!(r.body, b"<html>t</html>");
+    }
+
+    #[test]
+    fn todo_content_unknown_subpath_404() {
+        let root = scratch();
+        std::fs::create_dir_all(root.with_file_name("todo-content")).unwrap();
+        let r = handle_protocol(&root, &HashSet::new(), None, "dozer://todo-content/nope");
+        assert_eq!(r.status, 404);
+    }
+
+    /// 路径穿越不得逃出 todo-content 根。
+    #[test]
+    fn todo_content_rejects_path_traversal() {
+        let root = scratch();
+        std::fs::create_dir_all(root.with_file_name("todo-content")).unwrap();
+        let r = handle_protocol(
+            &root,
+            &HashSet::new(),
+            None,
+            "dozer://todo-content/../usage-content/host.html",
+        );
+        assert_eq!(r.status, 404);
+    }
+
+    /// 提交的 todo-content 产物必须齐全(防止忘记 `npm run build` 就提交)。
+    #[test]
+    fn todo_content_bundle_assets_are_present() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/todo-content"));
+        for f in ["host.html", "todo-content.js", "todo-content.css"] {
+            let p = root.join(f);
+            assert!(p.is_file(), "缺少 todo-content 产物 {f}: {}", p.display());
+            assert!(
+                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 0,
+                "todo-content 产物为空: {f}"
+            );
+        }
+    }
+
+    /// 严格 CSP、无 connect-src、无网络引用。
+    #[test]
+    fn todo_content_host_has_strict_csp_and_no_external_refs() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/todo-content"));
+        let html = std::fs::read_to_string(root.join("host.html")).expect("读 host.html");
+        assert!(html.contains("default-src 'none'"));
+        assert!(html.contains("script-src 'self'"));
+        assert!(!html.contains("connect-src"));
+        assert!(!html.contains("http://") && !html.contains("https://"));
+        assert!(html.contains("todo-content.js") && html.contains("todo-content.css"));
     }
 
     /// image-annotate 覆盖的 webp/bmp/ico 曾经落到 `mime_for` 的 `_` 分支被当成
