@@ -37,3 +37,84 @@ html, body {
   font: 13px/1.5 -apple-system, "PingFang SC", sans-serif;
 }
 #root { height: 100%; }
+
+.todo-root { display: flex; flex-direction: column; height: 100%; position: relative; }
+.todo-scroll { flex: 1; overflow-y: auto; padding: 0 20px 8px; }
+
+/* 搜索条 */
+.toolbar { display: flex; align-items: center; gap: 8px; margin: 8px 20px; padding: 4px 8px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.toolbar.is-highlight { border-color: var(--gold); }
+.search-input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--cream); font: inherit; }
+.search-input::placeholder { color: var(--dim); }
+.status-segment, .icon-btn, .chip, .date-badge, .status-btn, .detail-btn, .assign-btn, .menu-item, .add-submit, .checkbox {
+  appearance: none; font: inherit; cursor: pointer; background: transparent; border: 0; color: inherit;
+}
+.status-segment { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--border);
+  border-radius: 4px; background: var(--bg); }
+.status-segment:hover, .status-btn:hover, .detail-btn:hover, .assign-btn:hover { background: var(--card); border-color: var(--gold); }
+.icon-btn { padding: 2px 6px; color: var(--dim); border-radius: 4px; }
+.icon-btn:hover { color: var(--gold); }
+.chevron { color: var(--dim); font-size: 10px; }
+
+/* 分段 */
+.segment-divider { display: flex; align-items: center; gap: 10px; margin: 14px 0 8px; color: var(--dim); font-size: 12px; }
+.segment-divider-line { flex: 1; height: 1px; background: var(--border); }
+.empty-hint { padding: 20px; color: var(--dim); }
+
+/* 卡片 */
+.todo-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+  margin-bottom: 8px; box-shadow: var(--shadow); user-select: none; }
+.todo-card.is-draggable { cursor: grab; }
+.todo-card.is-selected { border-color: var(--gold); }
+.todo-card.is-dragging { opacity: .55; cursor: grabbing; }
+.card-top { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); }
+.spacer { flex: 1; }
+.chip { padding: 1px 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); color: var(--dim); }
+.chip:hover { border-color: var(--gold); }
+.date-badge { display: inline-flex; align-items: center; gap: 4px; color: var(--dim); }
+.card-body { display: flex; gap: 10px; align-items: flex-start; margin: 8px 0; }
+.checkbox { width: 18px; height: 18px; flex: none; border: 1.5px solid var(--dim); border-radius: 4px; color: var(--dim);
+  display: inline-flex; align-items: center; justify-content: center; font-size: 12px; line-height: 1; padding: 0; margin-top: 2px; }
+.checkbox.is-checked { background: var(--border); border-color: var(--border); }
+.card-text { flex: 1; min-width: 0; color: var(--body); cursor: text; white-space: pre-wrap; word-break: break-word; user-select: text; }
+.is-done .card-text { color: var(--dim); text-decoration: line-through; }
+.edit-area { flex: 1; min-width: 0; resize: none; padding: 6px 8px; font: inherit; color: var(--cream); background: transparent;
+  border: 1px solid var(--border); border-radius: 4px; outline: 0; field-sizing: content; min-height: 2.4em; }
+.card-bottom { display: flex; align-items: center; gap: 12px; }
+.status-btn, .detail-btn, .assign-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px;
+  border: 1px solid var(--border); border-radius: 4px; background: var(--bg); }
+.detail-btn { color: var(--gold); }
+.assign-btn { color: var(--cream); }
+
+/* 新增框 */
+.add-box { padding: 4px 20px 12px; border-top: 1px solid var(--border); }
+.add-resize-handle { height: 6px; margin: 0 auto 4px; width: 48px; border-radius: 3px; background: var(--border); cursor: ns-resize; }
+.add-row { position: relative; }
+.add-input { width: 100%; resize: none; padding: 8px 40px 8px 10px; font: inherit; color: var(--cream); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 8px; outline: 0; }
+.add-input:hover, .add-input:focus { border-color: var(--gold); }
+.add-submit { position: absolute; right: 8px; bottom: 8px; width: 24px; height: 24px; border-radius: 12px; color: var(--dim); font-size: 14px; }
+.add-submit:hover { color: var(--gold); }
+
+/* 弹层 */
+.popover-layer { position: fixed; inset: 0; z-index: 10; }
+.popover { position: fixed; min-width: 120px; max-height: 70vh; overflow: auto; padding: 4px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow); }
+.menu-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; text-align: left; border-radius: 4px; color: var(--cream); }
+.menu-item:hover { background: var(--card-hover); }
+.menu-item.is-current { background: var(--tab-hover); }
+.agent-icon { width: 14px; height: 14px; display: inline-flex; color: var(--cream); }
+.agent-icon svg { width: 100%; height: 100%; fill: currentColor; }
+.agent-icon.keep-color svg { fill: revert; }
+.popover-category { min-width: 180px; }
+
+/* 日历 */
+.calendar { width: 224px; padding: 6px; }
+.calendar-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.calendar-title { color: var(--cream); }
+.calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; text-align: center; }
+.calendar-weekday { color: var(--dim); font-size: 11px; padding: 2px 0; }
+.calendar-cell { padding: 4px 0; border-radius: 4px; color: var(--body); }
+.calendar-cell:not(.empty):hover { background: var(--card-hover); }
+.calendar-cell.is-selected { background: var(--tab-hover); color: var(--cream); }
