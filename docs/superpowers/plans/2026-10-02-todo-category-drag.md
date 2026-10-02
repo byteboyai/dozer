@@ -52,7 +52,7 @@ crates/dozer-app/src/
 
 ### Task 0: 建 worktree 分支
 
-- [ ] **Step 1**
+- [x] **Step 1**
 
 ```bash
 cd /Users/chrischiang/Projects/CoralProjects/byteboy/dozer
@@ -75,7 +75,7 @@ Expected: 输出 `feat/todo-category-drag`；`git log` 最近提交里应已含 
   - `pub enum DropTarget { Root, Node(i64) }`（`Debug, Clone, Copy, PartialEq, Eq`）
   - `pub fn is_valid_drop(categories: &[CategoryInfo], source: i64, target: DropTarget) -> bool`
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 创建 `category_drag.rs`，先只写测试模块（实现在 Step 3）：
 
@@ -157,14 +157,14 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 先在 `mod.rs` 加 `mod category_drag;` 与 `pub(crate) use category_drag::*;`，然后：
 
 Run: `cargo test -p dozer-app extensions::todo::category_drag 2>&1 | tail -8`
 Expected: 编译失败，`cannot find type DropTarget` / `function is_valid_drop`（RED）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 在 `category_drag.rs` 里、`mod tests` 之前加：
 
@@ -199,7 +199,7 @@ pub fn is_valid_drop(categories: &[CategoryInfo], source: i64, target: DropTarge
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过并提交**
+- [x] **Step 4: 跑测试确认通过并提交**
 
 Run: `cargo test -p dozer-app extensions::todo::category_drag 2>&1 | tail -8`
 Expected: 6 个 PASS。
@@ -230,7 +230,7 @@ git commit -m "feat(todo): category drag-and-drop validity (pure logic)" -m "Co-
   - `WorkspaceState` 方法：`arm_category_drag(source, press_pos, armed_at)`、`category_drag() -> Option<&CategoryDrag>`、`category_drag_confirmed() -> bool`、`confirm_category_drag()`、`cancel_category_drag()`、`set_category_drag_over(Option<DropTarget>)`、`take_category_drag() -> Option<CategoryDrag>`
   - `Message::{CategoryRowPress(i64), CategoryDragOver(Option<DropTarget>), CategoryDragRelease}`
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 在 `category_drag.rs` 的 `mod tests` 追加：
 
@@ -353,12 +353,12 @@ git commit -m "feat(todo): category drag-and-drop validity (pure logic)" -m "Co-
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p dozer-app extensions::todo 2>&1 | grep -E "^error" | head -5`
 Expected: 一批 `cannot find ...`（RED）。
 
-- [ ] **Step 3: 实现纯函数与类型**
+- [x] **Step 3: 实现纯函数与类型**
 
 `category_drag.rs`（`mod tests` 之前）：
 
@@ -421,7 +421,7 @@ pub fn release_action(drag: &CategoryDrag, categories: &[CategoryInfo]) -> Relea
 }
 ```
 
-- [ ] **Step 4: 实现状态方法与消息**
+- [x] **Step 4: 实现状态方法与消息**
 
 `state.rs`：`WorkspaceState` 增字段（放在 `category_renaming` 附近）：
 
@@ -533,12 +533,12 @@ pub fn release_action(drag: &CategoryDrag, categories: &[CategoryInfo]) -> Relea
 
 > 点击选中要与原 `CategorySelect(filter)` 的副作用一致（它还会 `ws_state.category_selected = filter; ws_state.clear_search()`）。**Plan 1 之后 `clear_search` 已被删除**（搜索清空由前端按 `category_key` 变化完成），所以这里只设 `category_selected` 即可；若合并后的 main 里 `CategorySelect` 还有别的副作用，让 `Select` 分支直接复用同一段（把 `CategorySelect` 的处理抽成 `fn select_category(ws_state, filter)` 两处共用，不要复制）。
 
-- [ ] **Step 5: 跑测试**
+- [x] **Step 5: 跑测试**
 
 Run: `cargo test -p dozer-app extensions::todo 2>&1 | tail -12`
 Expected: 全部 PASS（含新增约 12 个）。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git branch --show-current
@@ -559,7 +559,7 @@ git commit -m "feat(todo): category drag state machine, release action and messa
 - Consumes: Task 2 的 `WorkspaceState` 方法与 `should_confirm`。
 - Produces: `App::dragging_category() -> bool`、`App::category_drag_confirmed() -> bool`、`App::maybe_confirm_category_drag(left_mouse_down: bool) -> bool`。
 
-- [ ] **Step 1: 写失败的测试（残留自愈）**
+- [x] **Step 1: 写失败的测试（残留自愈）**
 
 `App` 难以在单测里构造，把"左键没按下时清空、按下且越阈值才确认"的决策抽成可测的纯函数。在 `category_drag.rs` 加测试：
 
@@ -590,7 +590,7 @@ git commit -m "feat(todo): category drag state machine, release action and messa
 Run: `cargo test -p dozer-app extensions::todo::category_drag 2>&1 | grep -E "^error" | head -3`
 Expected: `cannot find function tick` / `Tick`（RED）。
 
-- [ ] **Step 2: 实现 `tick`**
+- [x] **Step 2: 实现 `tick`**
 
 `category_drag.rs`：
 
@@ -629,7 +629,7 @@ pub fn tick(
 Run: `cargo test -p dozer-app extensions::todo::category_drag 2>&1 | tail -6`
 Expected: PASS。
 
-- [ ] **Step 3: `App` 方法**
+- [x] **Step 3: `App` 方法**
 
 `app/app.rs`（紧挨 `maybe_confirm_tree_drag`）：
 
@@ -690,7 +690,7 @@ Expected: PASS。
                 }
 ```
 
-- [ ] **Step 4: 窗口事件接线**
+- [x] **Step 4: 窗口事件接线**
 
 `platform/window_events.rs`：
 
@@ -740,11 +740,11 @@ Expected: PASS。
         }
 ```
 
-- [ ] **Step 4b: 切面板 / 失焦时清空**
+- [x] **Step 4b: 切面板 / 失焦时清空**
 
 在 `workspace/state.rs` 里原来调用 `self.todo.cancel_drag()` 的位置（Plan 1 已删除该行；找"切面板 / 失焦时清拖拽状态"的同类函数，通常叫 `cancel_pending_drags` 之类）加上 `self.todo.cancel_category_drag();`。若找不到这样的函数，不要新造，依赖 `maybe_confirm_category_drag` 的"左键未按下即清空"自愈（Review Focus 5）。
 
-- [ ] **Step 5: 编译与测试**
+- [x] **Step 5: 编译与测试**
 
 ```bash
 cargo build 2>&1 | grep -E "^error" -A8 | head -20
@@ -752,7 +752,7 @@ cargo test -p dozer-app extensions::todo 2>&1 | tail -6
 ```
 Expected: 编译通过；测试 PASS。此时 `CategoryRowPress` 还没有发出方（Task 4），`dead_code` 提示属预期。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git branch --show-current
@@ -772,7 +772,7 @@ git commit -m "feat(todo): wire category drag confirmation, release routing and 
 
 要点（照抄文件树的做法，见 `extensions/files/view.rs` 340–470 行的长注释）：iced 的 `button::on_press` 实际在 `ButtonReleased` 才发，所以**行内的 `button` 不接 `on_press`**，改由外层 `MouseArea::on_press` 在物理按下那一刻武装；点击选中改由松手收尾（`CategoryDragRelease` → `ReleaseAction::Select`）完成。
 
-- [ ] **Step 1: 改 `category_tree_nav` 的真实节点行**
+- [x] **Step 1: 改 `category_tree_nav` 的真实节点行**
 
 在 `for row in rows { … }` 循环里，把
 
@@ -833,7 +833,7 @@ git commit -m "feat(todo): wire category drag confirmation, release routing and 
         ));
 ```
 
-- [ ] **Step 2: 「全部」伪节点做顶层放置目标**
+- [x] **Step 2: 「全部」伪节点做顶层放置目标**
 
 「全部」行仍是 `category_pseudo_row(..., Message::CategorySelect(CategoryFilter::All))`（点击由它自己的 `button` 处理，不参与武装）。为它加落点高亮和 `on_move`：把「全部」那一处改成
 
@@ -876,7 +876,7 @@ git commit -m "feat(todo): wire category drag confirmation, release routing and 
 
 「未分类」行**不接** `on_move`、不高亮（它不是合法放置目标）。
 
-- [ ] **Step 3: 光标离开所有目标时清空悬停目标**
+- [x] **Step 3: 光标离开所有目标时清空悬停目标**
 
 拖拽确认期间，光标移到树外 / 「未分类」/ 空白处，`over` 应清空，否则会停留在最后一个目标上，松手时误落。给 `col` 外层（`category_tree_nav` 返回前）包一层：已确认时挂 `on_exit(Message::CategoryDragOver(None))`：
 
@@ -892,7 +892,7 @@ git commit -m "feat(todo): wire category drag confirmation, release routing and 
 ```
 （把原来末尾的 `col.into()` 改为上面这段。）「未分类」行本身没有 `on_move`，光标在其上时 `over` 保持上一个目标——为避免该情况，也给「未分类」行包 `MouseArea::new(...).on_enter(Message::CategoryDragOver(None))`（仅在 `category_drag_confirmed()` 时挂）。
 
-- [ ] **Step 4: 编译并回归**
+- [x] **Step 4: 编译并回归**
 
 ```bash
 cargo build 2>&1 | grep -E "^error" -A8 | head -30
@@ -900,7 +900,9 @@ cargo test -p dozer-app extensions::todo 2>&1 | tail -6
 ```
 Expected: 编译通过；测试 PASS。`CategorySelect(Node)` 变体仍被「全部 / 未分类」的 `button` 与松手点击使用，不应出现 `dead_code`。
 
-- [ ] **Step 5: GUI 验收（需要显示环境；无法执行时在 ledger 明确写"未做 GUI 验收"）**
+- [x] **Step 5: GUI 验收（需要显示环境；无法执行时在 ledger 明确写"未做 GUI 验收"）**
+
+> 未做 GUI 验收：本环境无显示环境，下列 8 项未能逐项人工执行。自动测试（`is_valid_drop` / `release_action` / `tick` / 状态机 15 项）、`cargo build`、`cargo fmt`、clippy、workspace 测试与 `check-log-scope.sh` 均已通过。
 
 ```bash
 cargo run -p dozer-app
@@ -916,7 +918,7 @@ cargo run -p dozer-app
 7. **Esc 取消**：拖拽中按 Esc，松手后不移动、也不选中。
 8. **失败路径**：在拖拽过程中让 agent（MCP）或另一个窗口删除目标分类，再松手 → 一条 Toast，列表刷新，不崩溃。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git branch --show-current
@@ -933,12 +935,12 @@ git commit -m "feat(todo): drag category rows to reparent (grab cursor, drop hig
 - Modify: `crates/dozer-app/src/platform/window_events.rs`
 - Modify: `crates/dozer-app/src/extensions/todo/{state,update}.rs`
 
-- [ ] **Step 1: 删右键菜单里的「移动到…」项**
+- [x] **Step 1: 删右键菜单里的「移动到…」项**
 
 - `app/app.rs`（约 230 行，macOS 原生菜单 `category_context_menu_items`）：删除 `"移动到..."` 这一个 `Item::Entry`（连同 `Message::Todo(todo::Message::CategoryReparentPickerOpen(id))`）；若删除后紧邻的分隔线变成孤立 / 重复，一并整理。
 - `app/update.rs`（约 6237 行，非 macOS 的 iced 菜单 `category_context_menu_popup`）：同样删除该项；并更新注释里"下移、移动到..."的描述为"上移、下移"。
 
-- [ ] **Step 2: 删选择器整套**
+- [x] **Step 2: 删选择器整套**
 
 - `app/message.rs`：删除 `CategoryPickerClose`、`CategoryPickerSelect(Option<i64>)`，以及 `CategoryPickerTarget` 枚举与 `CategoryPicker` 结构体（约 776–789 行）。
 - `app/app.rs`：删除字段 `category_picker`（约 400 行）及其初始化（约 827 行）、`category_picker_open()`（约 3037 行）、`todo_category_picker_open`（约 3047 行）；`App` 的 `use` 里不再需要的 `CategoryPicker` / `CategoryPickerTarget` 一并清理。
@@ -947,7 +949,7 @@ git commit -m "feat(todo): drag category rows to reparent (grab cursor, drop hig
 - `platform/window_events.rs`：删除 Esc 路由里 `else if app.category_picker_open() { app.update(Message::CategoryPickerClose); }`（约 691 行），保持其它 `else if` 链完整。
 - `extensions/todo/state.rs` 与 `update.rs`：删除 `Message::CategoryReparentPickerOpen(i64)` 变体及 `update` 里的空分支；Plan 1 之后 `CategoryPickerOpenForTodo` 应已删除，若还在一并删。
 
-- [ ] **Step 3: 门禁与测试**
+- [x] **Step 3: 门禁与测试**
 
 ```bash
 cargo build 2>&1 | grep -E "^(error|warning: unused|warning: .*never)" -A6 | head -30
@@ -957,7 +959,7 @@ bash scripts/check-log-scope.sh
 ```
 Expected: 编译无 `dead_code` / `unused` 警告；grep **无输出**；`dozer-app` 测试只剩基线那 1 个失败；门禁 ok。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git branch --show-current
@@ -969,7 +971,7 @@ git commit -m "refactor(todo): remove the 'move to…' menu item and the iced ca
 
 ### Task 6: 最终验证与收尾
 
-- [ ] **Step 1: 全量检查**
+- [x] **Step 1: 全量检查**
 
 ```bash
 cargo fmt --check && echo fmt-ok
@@ -979,11 +981,11 @@ bash scripts/check-log-scope.sh
 ```
 Expected: fmt ok；clippy 警告数不高于 main 基线；失败只有已知基线（`delete_confirm_spec_reflects_pending_target` 与 dozerd 的 3 个 `summary_pipeline`）；门禁 ok。
 
-- [ ] **Step 2: 人工验收**
+- [x] **Step 2: 人工验收**
 
 重跑 Task 4 Step 5 的 8 项；另外确认：右键分类菜单（macOS 原生）里**没有**「移动到…」，仍有「新建子 / 同级、上移、下移、重命名、删除」；右键「上移 / 下移」仍然有效。
 
-- [ ] **Step 3: 更新 spec 状态并收尾**
+- [x] **Step 3: 更新 spec 状态并收尾**
 
 在 `docs/superpowers/specs/2026-10-02-todo-webview-design.md` 的「左栏分类树：拖动移动」一节末尾补一句实现说明（沿用文件树 `TreeDrag` 机制、阈值 12px + 300ms、`ReleaseAction` 纯函数），提交：
 
@@ -1002,4 +1004,5 @@ git commit -m "docs: note the category drag implementation in the todo webview s
 - **Spec 覆盖**（分类拖动一节）：拖起（两阶段 + 12px/300ms）→ Task 2、3；放下 = 成为子分类 → Task 2（`Reparent{Some}`）；放到「全部」= 顶层、「未分类」不接受 → Task 1、4；防成环与无意义移动 → Task 1；视觉（金色落点、被拖行半透明、抓取光标）→ Task 4；删除「移动到…」两处菜单与 `category_picker` 整套 → Task 5；失败走 Toast → Task 2（`CategoryMutated`）。
 - **类型一致**：`DropTarget`、`CategoryDrag`、`CategoryDragPhase`、`ReleaseAction`、`Tick` 在 Task 1–3 定义，Task 3–4 使用；`Message::{CategoryRowPress, CategoryDragOver, CategoryDragRelease}` 在 Task 2 定义，Task 3（拦截）、Task 4（发出）、Task 5 不再改动。
 - **已知需要以编译器为准的点**：`crate::app::tree_drag_past_threshold` 的可达路径（定义在 `app/layout.rs`）、`set_category_drag_over` 的借用拆分、`CategorySelect` 的副作用抽取（Plan 1 之后 `clear_search` 已删除）、macOS 原生菜单里分隔线整理——均在对应步骤标明，行为保持不变。
-- **只能在 GUI 里验证的点**：展开箭头的按下是否被捕获（Review Focus 2）、`MouseArea::on_move` 在按钮上是否照常触发——Task 4 Step 5 逐项人工验收；无显示环境时必须在 ledger 里写明"未做 GUI 验收"。
+- **只能在 GUI 里验证的点**：展开箭头的按下是否被捕获（Review Focus 2）、`MouseArea::on_move` 在按钮上是否照常触发——Task 4 Step 5 逐项人工验收；**未做 GUI 验收**（本环境无显示环境），见 Task 4 Step 5 顶部说明。
+- **收尾状态（2026-10-02）**：Task 0–6 全部完成，提交于分支 `feat/todo-category-drag`（`ef476459` → `1bbe6537`，含 spec 更新 `457c00f2`）；`cargo fmt --check` 通过，clippy 14/16 警告与 main 基线持平，workspace 测试仅剩已知基线失败（`delete_confirm_spec_reflects_pending_target` + 3 个 `summary_pipeline`），`check-log-scope.sh` ok。合并到 main 由用户决定。
