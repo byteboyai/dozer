@@ -762,6 +762,76 @@ pub enum CategoryMoveDirection {
     Down,
 }
 
+/// 群聊成员(spec 2026-10-02-group-chat-panel-design §5)。同一种 agent 可
+/// 多次入群扮演不同角色,`handle` 在群内唯一(忽略大小写)。第一版 `agent`
+/// 只会是 `Claude`/`Codex`,由 `dozerd::group_store` 校验。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GroupMemberInfo {
+    pub id: i64,
+    pub group_id: i64,
+    pub agent: AgentKind,
+    pub handle: String,
+    pub role_prompt: String,
+}
+
+/// 一个群聊。`topic` 既是列表里的显示名,也是每次发言提示词里的"讨论目标"。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GroupInfo {
+    pub id: i64,
+    pub project_id: i64,
+    pub topic: String,
+    pub created_ms: u64,
+    pub members: Vec<GroupMemberInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GroupAuthor {
+    Human,
+    Member { member_id: i64 },
+    System,
+}
+
+/// agent 消息的状态机:`Queued → Running → Done|Failed|Cancelled`;`Failed`/
+/// `Cancelled` 可经重试回到 `Queued`。human/系统消息没有状态(`None`)。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum GroupMessageStatus {
+    Queued,
+    Running,
+    Done,
+    Failed { reason: String },
+    Cancelled,
+}
+
+/// 群消息。`seq` 是群内展示顺序(创建时定,不变);`rev` 是群内变更序号
+/// (插入或状态/正文变化都会取新的更大值),GUI 用它做增量轮询。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GroupMessageInfo {
+    pub id: i64,
+    pub group_id: i64,
+    pub seq: i64,
+    pub rev: i64,
+    pub author: GroupAuthor,
+    pub text: String,
+    /// human 消息里被点名的成员 id(按首次出现顺序);其余消息为空。
+    pub mentions: Vec<i64>,
+    pub status: Option<GroupMessageStatus>,
+    pub duration_ms: Option<u64>,
+    pub created_ms: u64,
+    /// 已转成的待办 id(只在消息侧记录,Todo 表不加反向字段)。
+    pub todo_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupCancelScope {
+    /// 只停当前正在发言的那一位。
+    Turn,
+    /// 停当前发言并清掉本群排队中的全部发言。
+    Round,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: String,
@@ -1222,6 +1292,57 @@ pub enum Request {
         id: i64,
         category_id: Option<i64>,
     },
+    /// 新建群聊。`topic` 非空。
+    CreateGroup {
+        project_id: i64,
+        topic: String,
+    },
+    ListGroups {
+        project_id: i64,
+    },
+    /// 删除群(含成员与消息);会先取消该群进行中的发言。
+    DeleteGroup {
+        group_id: i64,
+    },
+    AddGroupMember {
+        group_id: i64,
+        agent: AgentKind,
+        handle: String,
+        role_prompt: String,
+    },
+    UpdateGroupMember {
+        member_id: i64,
+        handle: String,
+        role_prompt: String,
+    },
+    RemoveGroupMember {
+        member_id: i64,
+    },
+    /// human 发一条消息;其中 `@handle` 触发对应成员按首次出现顺序串行发言。
+    PostGroupMessage {
+        group_id: i64,
+        text: String,
+    },
+    /// 增量取消息:返回 `rev > after_rev` 的消息(含状态变更过的老消息)。
+    ListGroupMessages {
+        group_id: i64,
+        after_rev: i64,
+        limit: u32,
+    },
+    CancelGroup {
+        group_id: i64,
+        scope: GroupCancelScope,
+    },
+    /// 重试一条 `Failed`/`Cancelled` 的 agent 消息(只重跑这一位)。
+    RetryGroupMessage {
+        message_id: i64,
+    },
+    /// 把一条消息推送到 Todo(新建一条待办)。**不做任何指派**——任务分配
+    /// 由 Todo 负责。`text` 是用户在对话框里编辑后的内容。
+    PushGroupMessageToTodo {
+        message_id: i64,
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1404,6 +1525,26 @@ pub enum Reply {
     TodoDetail {
         info: TodoInfo,
         turns: Vec<TurnRecord>,
+    },
+    /// `CreateGroup`/`ListGroups` 用的单个群(含成员)。
+    Group {
+        group: GroupInfo,
+    },
+    Groups {
+        groups: Vec<GroupInfo>,
+    },
+    GroupMember {
+        member: GroupMemberInfo,
+    },
+    /// `PostGroupMessage` 应答:用户这条 human 消息本身。
+    GroupMessage {
+        message: GroupMessageInfo,
+    },
+    /// `ListGroupMessages` 应答。`latest_rev` 是本群当前最大 rev,GUI 下次拿它
+    /// 当 `after_rev` 继续轮询。
+    GroupMessages {
+        messages: Vec<GroupMessageInfo>,
+        latest_rev: i64,
     },
 }
 
@@ -2884,5 +3025,54 @@ mod tests {
             let back: MutationOutcome = serde_json::from_str(&json).unwrap();
             assert_eq!(v, back);
         }
+    }
+
+    #[test]
+    fn group_chat_protocol_types_roundtrip() {
+        let req = Request::PostGroupMessage {
+            group_id: 3,
+            text: "@claude 看下这个方案".into(),
+        };
+        let back: Request = decode_line(&encode_line(&req)).unwrap();
+        assert_eq!(back, req);
+
+        let msg = GroupMessageInfo {
+            id: 9,
+            group_id: 3,
+            seq: 4,
+            rev: 12,
+            author: GroupAuthor::Member { member_id: 2 },
+            text: "好的".into(),
+            mentions: vec![],
+            status: Some(GroupMessageStatus::Failed {
+                reason: "超时".into(),
+            }),
+            duration_ms: Some(1500),
+            created_ms: 1,
+            todo_id: None,
+        };
+        let line = encode_line(&Reply::GroupMessages {
+            messages: vec![msg.clone()],
+            latest_rev: 12,
+        });
+        assert!(line.contains("\"state\":\"failed\""), "{line}");
+        assert!(line.contains("\"reason\":\"超时\""), "{line}");
+        match decode_line::<Reply>(&line).unwrap() {
+            Reply::GroupMessages {
+                messages,
+                latest_rev,
+            } => {
+                assert_eq!(messages, vec![msg]);
+                assert_eq!(latest_rev, 12);
+            }
+            other => panic!("意外应答: {other:?}"),
+        }
+
+        let cancel = Request::CancelGroup {
+            group_id: 3,
+            scope: GroupCancelScope::Round,
+        };
+        let back: Request = decode_line(&encode_line(&cancel)).unwrap();
+        assert_eq!(back, cancel);
     }
 }
