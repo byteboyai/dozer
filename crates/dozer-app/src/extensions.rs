@@ -14,6 +14,7 @@ pub mod file_history;
 pub mod files;
 pub mod footbar;
 pub mod git_log;
+pub mod group_chat;
 pub mod project;
 pub mod project_create;
 pub mod search;
