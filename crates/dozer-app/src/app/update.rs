@@ -5142,7 +5142,7 @@ impl App {
                 PanelKind::Conversations => self.with_focused_project(|ws, io| {
                     ws.spawn_conversations_refresh(io);
                 }),
-                PanelKind::Files | PanelKind::Web | PanelKind::Agent => {}
+                PanelKind::Files | PanelKind::Web | PanelKind::Agent | PanelKind::GroupChat => {}
             }
         }
         // 图标栏点击一律退出放大态。放大态浮层不拦图标栏上的点击

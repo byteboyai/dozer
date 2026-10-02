@@ -189,7 +189,7 @@ impl Default for PanelLayout {
 /// `byteui::theme::geometry::initial_window_size()`。
 ///
 /// `rail_layout` 走 `sanitize_rail_layout`:任何坏数据(任一栏为空、两侧合计
-/// 不是恰 11 个不重复面板)回落 `RailLayout::default()`。
+/// 不是恰 12 个不重复面板)回落 `RailLayout::default()`(旧版 11 个会先迁移)。
 pub fn sanitize_shell_layout(l: ShellLayout) -> ShellLayout {
     ShellLayout {
         window_width: if l.window_width.is_finite() && l.window_width > 0.0 {
@@ -536,6 +536,7 @@ pub(crate) fn pair_split_ratio(dims: &PanelDims, kind: PanelKind) -> Option<f32>
         PanelKind::GitLog => Some(dims.git_log_split),
         PanelKind::Web => Some(dims.browser_bookmarks_split),
         PanelKind::Agent => Some(dims.agent_split),
+        PanelKind::GroupChat => None,
         PanelKind::Conversations => Some(dims.conversations_split),
         PanelKind::Usage => Some(dims.usage_split),
         PanelKind::CodeHealth => Some(dims.codehealth_split),
@@ -577,6 +578,7 @@ pub(crate) fn with_pair_split_ratio(dims: PanelDims, kind: PanelKind, ratio: f32
             agent_split: ratio,
             ..dims
         },
+        PanelKind::GroupChat => dims,
         PanelKind::Conversations => PanelDims {
             conversations_split: ratio,
             ..dims

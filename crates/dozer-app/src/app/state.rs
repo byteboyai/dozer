@@ -13,7 +13,7 @@ use crate::workspace::Workspace;
 
 use super::layout::{PanelDims, ShellLayout};
 
-/// 工作区 10 个面板的统一标识——workspace 图标栏拖拽换栏功能
+/// 工作区 12 个面板的统一标识——workspace 图标栏拖拽换栏功能
 /// (见 `2026-08-19-rail-panel-drag-relocation-design.md`)的面板类型。
 /// 由原左栏(7)+ 右栏(3)两个枚举合并而来,variant 名字逐一沿用,
 /// 不改名。Stage 1(这次)只做了类型统一 + 数据模型,渲染/交互仍各自
@@ -28,6 +28,7 @@ pub enum PanelKind {
     Ssh,
     Web,
     Agent,
+    GroupChat,
     Conversations,
     Usage,
     CodeHealth,
@@ -46,7 +47,11 @@ impl PanelKind {
             | Self::Database
             | Self::Ssh
             | Self::Web => Side::Left,
-            Self::Agent | Self::Conversations | Self::Usage | Self::CodeHealth => Side::Right,
+            Self::Agent
+            | Self::GroupChat
+            | Self::Conversations
+            | Self::Usage
+            | Self::CodeHealth => Side::Right,
         }
     }
 }
@@ -460,13 +465,14 @@ mod log_name_tests {
             PanelKind::Ssh => "ssh",
             PanelKind::Web => "web",
             PanelKind::Agent => "agent",
+            PanelKind::GroupChat => "group_chat",
             PanelKind::Conversations => "conversations",
             PanelKind::Usage => "usage",
             PanelKind::CodeHealth => "code_health",
         }
     }
 
-    const ALL_KINDS: [PanelKind; 11] = [
+    const ALL_KINDS: [PanelKind; 12] = [
         PanelKind::Files,
         PanelKind::GitLog,
         PanelKind::Todo,
@@ -475,6 +481,7 @@ mod log_name_tests {
         PanelKind::Ssh,
         PanelKind::Web,
         PanelKind::Agent,
+        PanelKind::GroupChat,
         PanelKind::Conversations,
         PanelKind::Usage,
         PanelKind::CodeHealth,

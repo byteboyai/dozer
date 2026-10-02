@@ -1062,6 +1062,19 @@ pub(crate) fn panel_body<'a>(
                 .into()
             }
         }
+        PanelKind::GroupChat => {
+            // Task 5 的占位:群聊面板整体是一块 Preact webview(单列满宽),
+            // 这里先给一个占满面板区的空容器,等 webview host 接上后替换。
+            container(column![])
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(move |_t: &iced_widget::Theme| container::Style {
+                    background: Some(byteui::theme::color::current().panel.into()),
+                    border: zone_pane_border(zone, lc),
+                    ..container::Style::default()
+                })
+                .into()
+        }
     }
 }
 
