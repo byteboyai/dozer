@@ -19,6 +19,29 @@ pub(crate) fn today_ymd() -> (i32, u32, u32) {
     (y as i32, m, d)
 }
 
+/// 完成时间(毫秒) → "MM-DD"(SUCCESS 徽章用,只取月日)。
+pub(crate) fn format_todo_month_day(ms: u64) -> String {
+    let secs = ms / 1000;
+    let days = (secs / 86400) as i64;
+    let (_y, m, d) = civil_from_days(days);
+    format!("{m:02}-{d:02}")
+}
+
+/// civil-from-days:把"自 1970-01-01 的天数"换算成 (年, 月, 日)。
+/// 用 Hinnant 经典公式,范围覆盖 1970..=2100,足够"完成于"提示用。
+pub(crate) fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
+}
+
 /// 解析 "MM-DD"(允许 `8-3` 这种缺前导零写法,兼容用户手敲的计划日期),
 /// 返回 (月, 日);解析失败返回 `None`。
 pub(crate) fn parse_month_day(s: &str) -> Option<(u32, u32)> {
@@ -26,40 +49,6 @@ pub(crate) fn parse_month_day(s: &str) -> Option<(u32, u32)> {
     let m: u32 = mm.trim().parse().ok()?;
     let d: u32 = dd.trim().parse().ok()?;
     (1..=12).contains(&m).then_some((m, d))
-}
-
-/// `civil_from_days` 的逆运算:把 (年, 月, 日) 换算回"自 1970-01-01 的天数",
-/// 给日历算"某月 1 号是星期几"和"某月有多少天"用。只覆盖 1970..=2100,
-/// 与 `civil_from_days` 同范围。
-pub(crate) fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
-    let y = y as i64;
-    let m = m as i64;
-    let d = d as i64;
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = if m > 2 { m - 3 } else { m + 9 };
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146097 + doe - 719468
-}
-
-/// 某年某月有多少天。
-pub(crate) fn days_in_month(y: i32, m: u32) -> u32 {
-    match m {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 => {
-            let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-            if leap { 29 } else { 28 }
-        }
-        _ => 0,
-    }
-}
-
-/// 某年某月 1 号是星期几:0 = 周日,1 = 周一 … 6 = 周六(1970-01-01 是周四)。
-pub(crate) fn first_weekday_of_month(y: i32, m: u32) -> u32 {
-    (days_from_civil(y, m, 1) + 4).rem_euclid(7) as u32
 }
 
 /// 新增任务的共享逻辑:插入乐观项(置顶)、起闪光、异步落库。`AddSubmit`(原生
@@ -151,11 +140,10 @@ pub fn update(
         Message::CategoryToggleExpand(id) => ws_state.toggle_category_expanded(id),
         Message::SelectView(view) => ws_state.view = view,
         Message::CategorySelect(filter) => {
+            // 切显示分类时,前端按 `category_key` 变化重置搜索关键词(哪怕切回
+            // 原来那个用关键词搜过的分类也要重置,不做"记住每个分类各自搜索词"
+            // 那套)——搜索草稿/生效词现由 webview 侧持有,这里只改选中分类。
             ws_state.category_selected = filter;
-            // 切显示分类重置搜索关键词过滤(原在切换状态分类时做,现左栏只留
-            // 自定义分类这一口径,故改到切换分类这里):哪怕切回原来那个用
-            // 关键词搜过的分类也要重置,不做"记住每个分类各自搜索词"那套。
-            ws_state.clear_search();
         }
         Message::CategoryContextMenuOpen(_) => {}
         Message::CategoryNewChild(parent_id) => {
@@ -230,7 +218,53 @@ pub fn update(
             });
         }
         Message::CategoryReparentPickerOpen(_) => {}
-        Message::CategoryPickerOpenForTodo(_) => {}
+        Message::DetailClose => ws_state.close_detail(),
+        Message::DetailReplyInput(text) => ws_state.detail_reply_draft = text,
+        Message::DetailReplySubmit => {
+            // 乐观插入 + 置处理中标记在这里做(纯本地状态);真正发
+            // `ProcessTodoNow` RPC 在 `App::todo_detail_process`(app.rs),
+            // 那边会读 `detail_reply_draft` 拿文本、读 `items()[idx].id`
+            // 拿任务 id。
+            let draft = std::mem::take(&mut ws_state.detail_reply_draft);
+            if !draft.trim().is_empty() {
+                ws_state.push_optimistic_human_turn(draft);
+            }
+        }
+        Message::StatusPick(idx, target) => {
+            let Some(item) = ws_state.items.get(idx) else {
+                return;
+            };
+            let stored_target = match target {
+                TodoState::Pending => dozer_core::protocol::TodoStoredStatus::Todo,
+                TodoState::Done => dozer_core::protocol::TodoStoredStatus::Done,
+                TodoState::Suspended => dozer_core::protocol::TodoStoredStatus::Suspended,
+                TodoState::InProgress => return,
+            };
+            let client = client.clone();
+            let id = item.id;
+            handle.spawn(async move {
+                let res = client
+                    .set_todo_status(id, stored_target)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string());
+                emit(Message::Mutated(res));
+            });
+        }
+        Message::CalendarPick(idx, day) => {
+            if let Some(item) = ws_state.items.get(idx) {
+                let id = item.id;
+                let client = client.clone();
+                handle.spawn(async move {
+                    let res = client
+                        .set_todo_plan_date(id, Some(&day))
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| e.to_string());
+                    emit(Message::Mutated(res));
+                });
+            }
+        }
         Message::Toggle(idx) => {
             let Some(item) = ws_state.items.get(idx) else {
                 return;
@@ -259,308 +293,6 @@ pub fn update(
                     .map_err(|e| e.to_string());
                 emit(Message::Mutated(res));
             });
-        }
-        Message::AddEdit(action) => ws_state.add_draft.perform(action),
-        Message::AddSubmit => {
-            let text = ws_state.add_draft.text();
-            let text = text.trim().to_string();
-            if text.is_empty() {
-                return;
-            }
-            ws_state.add_draft = iced_widget::text_editor::Content::new();
-            submit_new_todo(ws_state, text, project_id, client, handle, emit);
-        }
-        // 高度拖拽在 app 层 `todo_message` 已早退,不会到这里;保留 arm 仅
-        // 为 match 穷尽。
-        Message::AddResizeStart => {}
-        Message::RowSelect(idx) => {
-            ws_state.selected_row = idx;
-            // 用户手动选中(点卡片空白处)会打断"新增闪光":否则 2 秒计时到点
-            // 会把用户刚主动选的卡片又自动取消选中。`take_scroll_to_top` 未定
-            // 时用户主动点才会走到这里,新增闪光阶段不处理(见 `Message::Toggle`
-            // 之上对闪光来源的约定)。
-            ws_state.flash = None;
-            // 活动卡片被按下即"准备拖":记下它的 item-index 作为拖拽源。
-            // 搁置/完成不参与拖拽(只有活动段才进 `drag`)。注意这跟选中态是
-            // 两件独立的事——纯点击(不移动)也会落到这里,但松手时
-            // source==target 不写盘,只是正常选中切换(同 `TabDragMove`
-            // 的"按住=准备拖,移动才换位"语义)。
-            if let Some(i) = idx
-                && let Some(item) = ws_state.items.get(i)
-                && is_active_todo(item)
-            {
-                ws_state.drag = Some(TodoDrag {
-                    source_idx: i,
-                    target_idx: i,
-                });
-            }
-        }
-        Message::SearchInput(s) => ws_state.search_draft = s,
-        Message::SearchSubmit => ws_state.commit_search(),
-        Message::DragMove(over_idx) => {
-            // 只有"正在拖"才生效;纯悬停不会动任何东西。
-            let Some(drag) = ws_state.drag else {
-                return;
-            };
-            // 活动段尾部下标:最后一个活动(非 done && 非 paused)项的
-            // item-index。搁置/完成都夹不到活动段的"之后"(活动段是整它自己
-            // 那一段),落到非活动行就一律取"最后一个活动"当落点。
-            let last_active = ws_state
-                .items
-                .iter()
-                .enumerate()
-                .rfind(|(_, it)| is_active_todo(it))
-                .map(|(i, _)| i);
-            let target = match ws_state.items.get(over_idx) {
-                Some(it) if is_active_todo(it) => over_idx,
-                // 走到这个分支时表示悬停到搁置/完成(或在它之上)。为了让用户把
-                // 活动拖到"搁置段之前",落点取最后一个活动项的 idx(下面换算成
-                // after_id);若根本没有可落的活动行则走 usize::MAX(交服务端
-                // 按"待办块挪到最前"处理)。注意 source 等于该 last_active(正要
-                // 把它挪到自己之后)会让 last_active 与 itself 结算成 no-op。
-                _ => last_active.unwrap_or(usize::MAX),
-            };
-            if target != drag.target_idx {
-                ws_state.drag = Some(TodoDrag {
-                    source_idx: drag.source_idx,
-                    target_idx: target,
-                });
-            }
-        }
-        Message::DragEnd => {
-            let Some(drag) = ws_state.drag.take() else {
-                return;
-            };
-            if drag.source_idx == drag.target_idx {
-                return;
-            }
-            let Some(source_item) = ws_state.items.get(drag.source_idx) else {
-                return;
-            };
-            let id = source_item.id;
-            // 落点 target 只在"另一个活动项"上(DragMove 里已保证夹在活动段
-            // 内、且 source != target 已在上方早退),after_id 直接取它的 id,
-            // 让服务端把本任务挪到它之后。活动段/搁置段边界由 DragMove 夹好,
-            // 这里不需要再区分 usize::MAX。
-            let after_id = ws_state.items.get(drag.target_idx).map(|it| it.id);
-            let client = client.clone();
-            handle.spawn(async move {
-                let res = client
-                    .reorder_todo(id, after_id)
-                    .await
-                    .map(|_| ())
-                    .map_err(|e| e.to_string());
-                emit(Message::Mutated(res));
-            });
-        }
-        Message::DispatchOpen(idx) => {
-            // 与卡片浮层互斥:开派发层顺手收起状态筛选、日历、卡片状态下拉。
-            ws_state.close_status_filter_popup();
-            ws_state.calendar_open = None;
-            ws_state.status_open = None;
-            ws_state.dispatch_open = Some(idx);
-        }
-        Message::DispatchClose => {
-            ws_state.dispatch_open = None;
-            ws_state.dispatch_anchor = None;
-        }
-        Message::AssignAgent(_, _) => {
-            // 真正的 RPC 调用在 `App::todo_assign_agent`(app.rs),这里
-            // 只负责关掉选择层——与 `DispatchClose` 同款收尾。
-            ws_state.dispatch_open = None;
-            ws_state.dispatch_anchor = None;
-        }
-        Message::DetailClose => ws_state.close_detail(),
-        Message::DetailReplyInput(text) => ws_state.detail_reply_draft = text,
-        Message::DetailReplySubmit => {
-            // 乐观插入 + 置处理中标记在这里做(纯本地状态);真正发
-            // `ProcessTodoNow` RPC 在 `App::todo_detail_process`(app.rs),
-            // 那边会读 `detail_reply_draft` 拿文本、读 `items()[idx].id`
-            // 拿任务 id。
-            let draft = std::mem::take(&mut ws_state.detail_reply_draft);
-            if !draft.trim().is_empty() {
-                ws_state.push_optimistic_human_turn(draft);
-            }
-        }
-        Message::DetailOpen(_) => {
-            // 真正拉 `GetTodoDetail` 在 `App::todo_detail_open`(app.rs),
-            // `todo::update` 不处理这条(no-op arm 保持 match 穷尽,同
-            // `AddResizeStart` 的既有模式)。
-        }
-        Message::StatusOpen(idx) => {
-            // 同一时刻只允许一个卡片弹层(状态/日历/派发互斥):打开状态下拉时
-            // 顺手把另外两个收起,避免叠两层卡片浮层。
-            ws_state.close_status_filter_popup();
-            ws_state.dispatch_open = None;
-            ws_state.calendar_open = None;
-            ws_state.status_open = Some(idx);
-        }
-        Message::StatusClose => ws_state.close_status_popup(),
-        Message::StatusPick(idx, target) => {
-            // 关闭状态下拉;无论目标是什么都先收起浮层,再做分支处理。
-            ws_state.close_status_popup();
-            let Some(item) = ws_state.items.get(idx) else {
-                return;
-            };
-            // 需要把状态落到 dozerd 的存储态。InProgress 不是存储位:真正
-            // "进进行中"要一次指派(选到某个存活会话);这里要么把这个分支
-            // 转给派发选择层(待办/搁置想进进行中),要么撤销搁置先变"待办"。
-            let stored_target = match target {
-                TodoState::Pending => Some(dozer_core::protocol::TodoStoredStatus::Todo),
-                TodoState::Done => Some(dozer_core::protocol::TodoStoredStatus::Done),
-                TodoState::Suspended => Some(dozer_core::protocol::TodoStoredStatus::Suspended),
-                TodoState::InProgress => None,
-            };
-            // InProgress:当前没存活会话(从 Pending/Suspended 想转)就交给
-            // 派发选择层;已经 InProgress 的选它不做事。搁置(拿回暂停)想
-            // 进"进行中"先把 stored 位撤回待办(撤销暂停),下一拍用户再走
-            // "指派"一个存活会话；这里不连做两次写只因想分清"取消搁置"跟
-            // "指派会话"两件原子动作。
-            if target == TodoState::InProgress {
-                if item.paused {
-                    let client = client.clone();
-                    let id = item.id;
-                    handle.spawn(async move {
-                        let res = client
-                            .set_todo_status(id, dozer_core::protocol::TodoStoredStatus::Todo)
-                            .await
-                            .map(|_| ())
-                            .map_err(|e| e.to_string());
-                        emit(Message::Mutated(res));
-                    });
-                } else {
-                    // 非搁置想进进行中 = 想指派一个会话 → 把状态浮层让位给
-                    // 派发浮层,并沿用它自己的弹出锚点(刚记录的那次点击)。
-                    if let Some(a) = ws_state.status_anchor.take() {
-                        ws_state.dispatch_anchor = Some(a);
-                    }
-                    ws_state.dispatch_open = Some(idx);
-                }
-                ws_state.status_open = None;
-                ws_state.status_anchor = None;
-                return;
-            }
-            let Some(stored_target) = stored_target else {
-                return;
-            };
-            let client = client.clone();
-            let id = item.id;
-            handle.spawn(async move {
-                let res = client
-                    .set_todo_status(id, stored_target)
-                    .await
-                    .map(|_| ())
-                    .map_err(|e| e.to_string());
-                emit(Message::Mutated(res));
-            });
-        }
-        Message::StatusFilterOpen => {
-            // 与卡片浮层互斥:开搜索框筛选浮层时先收起派发层/日历/卡片状态。
-            ws_state.status_open = None;
-            ws_state.dispatch_open = None;
-            ws_state.calendar_open = None;
-            ws_state.open_status_filter();
-        }
-        Message::StatusFilterClose => ws_state.close_status_filter_popup(),
-        Message::StatusFilterPick(filter) => {
-            // 纯本地筛选轴:只改选中项,不落盘、不动搜索关键词。选中某项或
-            // "全部"后顺带关闭浮层。
-            ws_state.status_filter = filter;
-            ws_state.close_status_filter_popup();
-        }
-        Message::CalendarOpen(idx) => {
-            // 与 StatusOpen/派发同样"同时只能有一个浮层":开日历时收起状态
-            // 提层/派发层,以及搜索框的状态筛选浮层。
-            ws_state.close_status_filter_popup();
-            ws_state.status_open = None;
-            ws_state.status_anchor = None;
-            ws_state.dispatch_open = None;
-            // 打开日历:默认停在"当前月",若任务已有计划日期且能解析成 MM-DD,
-            // 则把视图拨到该月(年份取当前年——plan_date 只有月日,无年份)。
-            let (now_y, now_m, _) = today_ymd();
-            let (y, m) = ws_state
-                .items
-                .get(idx)
-                .and_then(|item| item.plan_date.clone())
-                .and_then(|s| parse_month_day(&s))
-                .map(|(mm, _)| (now_y, mm))
-                .unwrap_or((now_y, now_m));
-            ws_state.calendar_open = Some(idx);
-            ws_state.calendar_view = (y, m);
-        }
-        Message::CalendarClose => ws_state.close_calendar_popup(),
-        Message::CalendarPrevMonth => {
-            let (y, m) = ws_state.calendar_view;
-            ws_state.calendar_view = if m == 1 { (y - 1, 12) } else { (y, m - 1) };
-        }
-        Message::CalendarNextMonth => {
-            let (y, m) = ws_state.calendar_view;
-            ws_state.calendar_view = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
-        }
-        Message::CalendarPick(idx, day) => {
-            if let Some(item) = ws_state.items.get(idx) {
-                let id = item.id;
-                let client = client.clone();
-                handle.spawn(async move {
-                    let res = client
-                        .set_todo_plan_date(id, Some(&day))
-                        .await
-                        .map(|_| ())
-                        .map_err(|e| e.to_string());
-                    emit(Message::Mutated(res));
-                });
-            }
-            ws_state.close_calendar_popup();
-        }
-        Message::ContentEditStart(idx) => {
-            // 已经在编辑同一张卡:保持草稿(重击只用于鼠标定位,不重置,
-            // 否则点一下就把刚改了一半的文字丢掉)。新卡进入编辑态则重置草稿。
-            if ws_state
-                .editing_content
-                .as_ref()
-                .is_some_and(|(eidx, _)| *eidx == idx)
-            {
-                return;
-            }
-            if let Some(item) = ws_state.items.get(idx) {
-                ws_state.editing_content = Some((
-                    idx,
-                    iced_widget::text_editor::Content::with_text(&item.text),
-                ));
-            }
-            // 点卡片文字这个点击落在旧的文字 `MouseArea` 上,真 `text_editor`
-            // 下一帧才出现、不会自己拿聚焦,置位一次性聚焦标记。
-            ws_state.content_edit_focus_pending = true;
-        }
-        Message::ContentEdit(action) => {
-            let is_enter = matches!(
-                action,
-                iced_widget::text_editor::Action::Edit(iced_widget::text_editor::Edit::Enter)
-            );
-            if let Some((idx, draft)) = ws_state.editing_content.as_mut() {
-                draft.perform(action.clone());
-                if is_enter {
-                    let idx = *idx;
-                    let new_text = draft.text().trim().to_string();
-                    let old_item = ws_state.items.get(idx).cloned();
-                    ws_state.editing_content = None;
-                    if let Some(old_item) = old_item
-                        && !new_text.is_empty()
-                        && old_item.text != new_text
-                    {
-                        let id = old_item.id;
-                        let client = client.clone();
-                        handle.spawn(async move {
-                            let res = client
-                                .edit_todo_text(id, &new_text)
-                                .await
-                                .map(|_| ())
-                                .map_err(|e| e.to_string());
-                            emit(Message::Mutated(res));
-                        });
-                    }
-                }
-            }
         }
         Message::AddText(text) => {
             submit_new_todo(ws_state, text, project_id, client, handle, emit);

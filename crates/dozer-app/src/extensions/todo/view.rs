@@ -350,19 +350,6 @@ pub(crate) fn clear_confirm_spec() -> byteui::feedback::dialog::ConfirmDialog<Me
     }
 }
 
-/// 任务状态文案与专属色,四态一个不落:
-/// 待办=青 `CYAN`、进行中=金 `GOLD`、搁置=奶油 `CREAM`(比 DIM 略亮一点、
-/// 强调"还没完,只是被拿回来放着")、完成=灰 `DIM`。状态按钮文本与状态下拉
-/// 菜单各条目统一从这里取色,不各写一份颜色表。
-pub(crate) fn status_meta(state: TodoState) -> (&'static str, Color) {
-    match state {
-        TodoState::Pending => ("待办", byteui::theme::color::current().cyan),
-        TodoState::InProgress => ("进行中", byteui::theme::color::current().gold),
-        TodoState::Suspended => ("搁置", byteui::theme::color::current().cream),
-        TodoState::Done => ("已完成", byteui::theme::color::current().dim),
-    }
-}
-
 /// 分类树导航区:钉顶的"全部"/"未分类"伪节点 + 用户自建分类节点(可
 /// 展开/收起、点选切过滤)。本函数只做展示 + 选中;右键菜单/增删改在
 /// 后续任务接入。
@@ -554,29 +541,6 @@ pub(crate) fn category_pseudo_row<'a>(
         ..button::Style::default()
     })
     .into()
-}
-
-/// 完成时间(毫秒) → "MM-DD"（SUCCESS 徽章用，只取月日）。
-pub(crate) fn format_todo_month_day(ms: u64) -> String {
-    let secs = ms / 1000;
-    let days = (secs / 86400) as i64;
-    let (_y, m, d) = civil_from_days(days);
-    format!("{m:02}-{d:02}")
-}
-
-/// civil-from-days：把"自 1970-01-01 的天数"换算成 (年, 月, 日)。
-/// 用 Hinnant 经典公式,范围覆盖 1970..=2100,足够"完成于"提示用。
-pub(crate) fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
 }
 
 #[cfg(test)]

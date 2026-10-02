@@ -2951,14 +2951,6 @@ impl Workspace {
         self.files.take_move_focus_pending()
     }
 
-    /// 读走(消费式)Todo 任务内容编辑的一次性程序化聚焦标记(点卡片文字进入
-    /// 编辑态时置位,text_input 下一帧才出现、不会自己拿焦点)。main.rs 在
-    /// `UserInterface::build` 之前调用,为真则用 `operation::focusable::
-    /// focus` 强制聚焦真 `text_input`。
-    pub fn take_content_edit_focus_pending(&mut self) -> bool {
-        self.todo.take_content_edit_focus_pending()
-    }
-
     /// 文件树搜索框是否持有 iced 真实焦点(main.rs 键盘路由用):为真时按键
     /// 放行给标准 iced 事件管线,交真正的 text_input 自己处理。
     pub fn files_search_focused(&self) -> bool {
@@ -3033,7 +3025,6 @@ impl Workspace {
     /// "点代码预览无法获得光标" 修复)。点击的是预览列里非编辑器区(树/Files
     /// 等)时保持 `false`,照旧把预览编辑器也一起 blur 掉。
     pub fn blur_inputs(&mut self, keep_native_preview_editor: bool) {
-        self.todo.cancel_drag();
         // 名称编辑不在失焦时丢弃——改由 `App::blur_inputs` 取出缓冲并发起
         // daemon 改名(改动且非空才发请求),与描述字段"失焦写盘"行为对齐。
         if let Some(project) = self.project.as_ref() {

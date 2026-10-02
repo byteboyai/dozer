@@ -1666,18 +1666,6 @@ impl App {
         self.hover_anims.get(&id).map(HoverAnim::t).unwrap_or(0.0)
     }
 
-    /// 某元素当前是否处于 hover **目标态**(0/1,不做平滑插值)。卡片填充/描边
-    /// 这类二元视觉用这个:与 `button` 卡的原生 `button::Status::Hovered` 同
-    /// 语义(瞬时切换),不像 `hover_progress` 那样带 ease-out 淡入淡出——图标
-    /// 颜色过渡需要平滑,卡片背景/边框切换需要干脆,避免 hover 离开后边框还
-    /// 拖着淡出一段(观感像"动画停了一下")。
-    pub fn hover_target(&self, id: HoverId) -> bool {
-        self.hover_anims
-            .get(&id)
-            .map(|a| a.target > 0.5)
-            .unwrap_or(false)
-    }
-
     /// 某页签悬停是否已持续满 `HOVER_TOOLTIP_DELAY`:满则应在视图层弹出标题
     /// 全称 tooltip(`controlled_tooltip` 据此驱动 `Tooltip::show`)。
     pub fn hover_tooltip_ready(&self, id: HoverId) -> bool {
@@ -2106,21 +2094,6 @@ impl App {
         }
     }
 
-    /// Todo 面板搜索框是否持有 iced 真实焦点(main.rs 键盘路由用)。
-    pub fn todo_search_focused(&self) -> bool {
-        self.active_workspace()
-            .is_some_and(|ws| ws.todo.search_focused())
-    }
-
-    /// 每帧渲染循环调用:把 `extensions::todo::CaptureTodoSearchFocus` 问到
-    /// 的真实焦点态写进当前工作区的 Todo(`main.rs` 键盘路由随后读
-    /// `todo_search_focused` 消费)。
-    pub fn set_todo_search_focused(&mut self, focused: bool) {
-        if let Some(ws) = self.active_workspace_mut() {
-            ws.todo.set_search_focused(focused);
-        }
-    }
-
     /// 会话列表搜索框是否持有 iced 真实焦点(main.rs 键盘路由用)。
     pub fn conversation_search_focused(&self) -> bool {
         self.active_workspace()
@@ -2166,62 +2139,6 @@ impl App {
     pub(crate) fn commit_home_project_search(&mut self) {
         self.home_project_search = self.home_project_search_draft.clone();
         self.home_project_pages = 1;
-    }
-
-    /// Todo 面板新增任务框是否持有 iced 真实焦点(main.rs 键盘路由用)。
-    pub fn todo_add_focused(&self) -> bool {
-        self.active_workspace()
-            .is_some_and(|ws| ws.todo.add_focused())
-    }
-
-    /// 每帧渲染循环调用:把 `extensions::todo::CaptureAddFocus` 问到的真实
-    /// 焦点态写进当前工作区的 Todo(`main.rs` 键盘路由随后读
-    /// `todo_add_focused` 消费)。
-    pub fn set_todo_add_focused(&mut self, focused: bool) {
-        if let Some(ws) = self.active_workspace_mut() {
-            ws.todo.set_add_focused(focused);
-        }
-    }
-
-    /// Todo 任务内容编辑框是否持有 iced 真实焦点(main.rs 键盘路由用)。
-    pub fn todo_content_focused(&self) -> bool {
-        self.active_workspace()
-            .is_some_and(|ws| ws.todo.content_edit_focused())
-    }
-
-    /// 每帧渲染循环调用:把 `CaptureContentEditFocus` 问到的真实焦点态
-    /// 写进当前工作区的 Todo,并在"焦点从真变假"的那一刻做落盘判断
-    /// (同 `Workspace::blur_inputs` 原先的"有项目就 commit、没项目就
-    /// cancel"逻辑,只是触发时机从"点击别处"改成"真实焦点丢失")。
-    pub fn set_todo_content_focused(&mut self, focused: bool) {
-        let Some(ws) = self.active_workspace_mut() else {
-            return;
-        };
-        let was_focused = ws.todo.content_edit_focused();
-        // 失焦回退:取走待提交的草稿改动(`commit_content_edit` 返回
-        // `Some((id, new_text))` 表示草稿确有改动,且会消费 `editing_content`);
-        // 无改动/空草稿返回 `None`,到此随 `editing_content` 一并丢弃。
-        let pending_commit = if was_focused && !focused {
-            ws.todo.commit_content_edit()
-        } else {
-            None
-        };
-        ws.todo.set_content_edit_focused_flag(focused);
-        // 先把 `ws` 的借用放掉,再经 self 的 client/handle/proxy 发起异步提交
-        // (否则 `active_workspace_mut` 对 `self` 的可变借用会挡住 `self.client`)。
-        if let Some((id, new_text)) = pending_commit {
-            let client = self.client.clone();
-            let handle = self.handle.clone();
-            let proxy = self.proxy.clone();
-            handle.spawn(async move {
-                let res = client
-                    .edit_todo_text(id, &new_text)
-                    .await
-                    .map(|_| ())
-                    .map_err(|e| e.to_string());
-                let _ = proxy.send_event(Message::Todo(todo::Message::Mutated(res)));
-            });
-        }
     }
 
     /// 分类改名框是否持有 iced 真实焦点(main.rs 键盘路由用)。
@@ -2291,13 +2208,6 @@ impl App {
         self.right_view
     }
 
-    /// 是否正在拖拽 Todo 任务排序(main.rs 鼠标释放路由 + about_to_wait
-    /// 持续重绘用;同 `dragging_tab` 那套)。
-    pub fn todo_dragging(&self) -> bool {
-        self.active_workspace()
-            .is_some_and(|ws| ws.todo.drag_active())
-    }
-
     /// 距新增闪光自动清除的剩余时间:main.rs 据此排下次唤醒,恰好到点重绘
     /// 一次清除高亮(同 `next_tooltip_wake` 的定时范式)。
     pub fn next_todo_flash_wake(&self) -> Option<std::time::Duration> {
@@ -2362,12 +2272,6 @@ impl App {
         if let Some(ws) = self.active_workspace_mut() {
             ws.todo.advance_flash();
         }
-    }
-
-    /// 取走"Todo 列表滚回顶部"的一次性滚动位(main.rs 渲染循环消费)。
-    pub fn take_todo_scroll_to_top(&mut self) -> bool {
-        self.active_workspace_mut()
-            .is_some_and(|ws| ws.todo.take_scroll_to_top())
     }
 
     /// 当前项目根路径(供 main.rs 算相对路径用;未打开项目时 None)。
@@ -3098,37 +3002,6 @@ impl App {
     /// 顶栏新增项目菜单是否打开(main.rs Esc 键路由用)。
     pub fn project_add_menu_open(&self) -> bool {
         self.project_add_menu_open
-    }
-
-    /// Todo 派发选择层是否打开(给 main.rs 的 Esc 关闭用)。
-    pub fn todo_dispatch_open(&self) -> bool {
-        self.active_workspace()
-            .map(|ws| ws.todo.dispatch_popup_open())
-            .unwrap_or(false)
-    }
-
-    /// Todo 日历日期选择器是否打开(给 main.rs 的 Esc 关闭用,同
-    /// `todo_dispatch_open` 的既有模式)。
-    pub fn todo_calendar_open(&self) -> bool {
-        self.active_workspace()
-            .map(|ws| ws.todo.calendar_popup_open())
-            .unwrap_or(false)
-    }
-
-    /// Todo 状态下拉选择层是否打开(给 main.rs 的 Esc 关闭用,同
-    /// `todo_dispatch_open` 的既有模式)。
-    pub fn todo_status_open(&self) -> bool {
-        self.active_workspace()
-            .map(|ws| ws.todo.status_popup_open())
-            .unwrap_or(false)
-    }
-
-    /// Todo **搜索框状态筛选**浮层是否打开(给 main.rs 的 Esc 关闭用,同
-    /// `todo_dispatch_open` 的既有模式)。
-    pub fn todo_status_filter_open(&self) -> bool {
-        self.active_workspace()
-            .map(|ws| ws.todo.status_filter_popup_open())
-            .unwrap_or(false)
     }
 
     /// 当前激活预览 tab 是否走原生渲染。main.rs 键盘路由用:原生预览是就地可

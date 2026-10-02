@@ -4003,7 +4003,7 @@ git commit -m "refactor(todo): replace the iced list with the webview slot; drop
 
 **保留清单（不要删）**：`start_flash` / `advance_flash` / `next_flash_wake` / `Flash` / `selected_row` / `scroll_nonce`；`add_input_height` / `set_add_input_height` / `ADD_INPUT_*`；左栏分类树、改名（`category_renaming`、`CaptureCategoryRenameFocus`、`category_rename_*`）；详情窗口全部（`detail_*`、`CaptureDetailReplyFocus`、`Detail*` 消息）；`Toggle(idx)`、`StatusPick(idx, TodoState)`、`CalendarPick(idx, String)`（`route_event` 在用）；`Hover(HoverId, bool)`（收起按钮在用）；`AddText`、`EditText`、`ReorderTo`、`SetCategory`、`AddHeight`、`ContentRetry`；`filter_todos_by_category` 及其测试；`parse_month_day`、`today_ymd`。
 
-- [ ] **Step 1: 删 `platform/window_events.rs` 里 Todo 的接线**
+- [x] **Step 1: 删 `platform/window_events.rs` 里 Todo 的接线**
 
 - 删除四段 `if app.todo_dispatch_open() … / app.todo_status_open() … / app.todo_calendar_open() … / app.todo_status_filter_open() …`（各自是一个 Esc 关弹层的 `if` 块，约 742–800 行）。
 - 从 `if app.files_search_focused() || … ` 的 `||` 链里删除 `app.todo_search_focused()`、`app.todo_add_focused()`、`app.todo_content_focused()` 三行。
@@ -4012,11 +4012,11 @@ git commit -m "refactor(todo): replace the iced list with the webview slot; drop
 - 删除 Todo 卡片拖拽的**释放路由**：`WindowEvent::MouseInput { state: Released, button: Left, .. } if app.todo_dragging() => { app.update(Message::TodoDragEnd); … }` 整个分支（约 565–572 行）；把 `app.todo_dragging() || app.dragging_tab().is_some()`（约 2760 行的重绘条件）改为 `app.dragging_tab().is_some()`。
 - 删除 `todo_search_focused` / `todo_add_focused` / `content_edit_focused` 三个"每帧查真实焦点"的 `let` 块（各自调用 `CaptureTodoSearchFocus` / `CaptureAddFocus` / `CaptureContentEditFocus`），以及末尾 `app.set_todo_search_focused(…)`、`app.set_todo_add_focused(…)`、`app.set_todo_content_focused(…)` 三行。**不要**动 `category_rename_focused` 与 `detail_reply_focused` 的对应代码。
 
-- [ ] **Step 2: 删 `app/app.rs` 里 Todo 的访问器与焦点方法**
+- [x] **Step 2: 删 `app/app.rs` 里 Todo 的访问器与焦点方法**
 
 删除：`todo_dragging`（约 2257 行）、`todo_search_focused` / `set_todo_search_focused`、`todo_add_focused` / `set_todo_add_focused`、`todo_content_focused` / `set_todo_content_focused`（及其"失焦即落盘"逻辑）、`todo_dispatch_open` / `todo_calendar_open` / `todo_status_open` / `todo_status_filter_open`（约 3033–3089 行一带）。`advance_flash` 调用点（`App` 的 `ws.todo.advance_flash()`）、`next_flash_wake`、**保留**。`take_todo_scroll_to_top` 删除。
 
-- [ ] **Step 3: 删 `app/update.rs`、`app/layout.rs` 里的 `TodoAddGrow` 与已死的 Todo 分支**
+- [x] **Step 3: 删 `app/update.rs`、`app/layout.rs` 里的 `TodoAddGrow` 与已死的 Todo 分支**
 
 - `app/layout.rs`：删除 `RowDivider::TodoAddGrow` 变体与其 `state.dims` 分支（约 300、1022–1025 行）。
 - `app/update.rs`：删除 `RowDivider::TodoAddGrow => { … }`（约 1896 行）；`todo_message` 里删除 `AddResizeStart` 特判（`self.dragging_row = Some(RowDivider::TodoAddGrow)`）以及 `CalendarOpen` / `DispatchOpen` / `StatusOpen` / `StatusFilterOpen` 设置锚点的四个 `if matches!` 块；删除 `Message::Todo(todo::Message::AssignAgent(idx, agent)) => …` 与 `Message::Todo(todo::Message::DetailOpen(idx)) => …` 两条分支（`route_event` 直接调用 `todo_assign_agent` / `todo_detail_open`）；删除 `todo::Message::DispatchOpen(idx)` 与 `todo::Message::StatusOpen(idx)` 的 macOS 原生菜单分支。
@@ -4024,7 +4024,7 @@ git commit -m "refactor(todo): replace the iced list with the webview slot; drop
 - `workspace/state.rs`（约 3036 行）删除 `self.todo.cancel_drag();` 一行（`cancel_drag` 随 `drag` 字段一起删除）。
 - `app/state.rs`：删除只服务已删视图的 `HoverId::Todo*`（`TodoAddSubmit`、`TodoSearchSubmit` 等）；**保留** `TodoListCollapse`。以编译器 `dead_code` 为准。
 
-- [ ] **Step 4: 删 `extensions/todo/state.rs` 里的状态字段、消息变体与无用函数**
+- [x] **Step 4: 删 `extensions/todo/state.rs` 里的状态字段、消息变体与无用函数**
 
 `WorkspaceState` 删除字段：`add_draft`、`add_focused`、`scroll_to_top`、`search`、`search_draft`、`search_focused`、`dispatch_open`、`dispatch_anchor`、`status_open`、`status_anchor`、`calendar_open`、`calendar_view`、`calendar_anchor`、`editing_content`、`content_edit_focused`、`content_edit_focus_pending`、`drag`、`status_filter`、`status_filter_open`、`status_filter_anchor`。
 
@@ -4034,14 +4034,14 @@ git commit -m "refactor(todo): replace the iced list with the webview slot; drop
 
 做法：先删字段与变体，`cargo build`，按编译错误逐处清理引用；最后跑下面的 grep 门禁。
 
-- [ ] **Step 5: 迁移与清理工具函数、测试**
+- [x] **Step 5: 迁移与清理工具函数、测试**
 
 - 把 `format_todo_month_day` 与 `civil_from_days`（目前在 `view.rs`）移到 `update.rs`，紧挨 `today_ymd`（它们是日期工具，不再属于视图）；`mod.rs` 里 `format_month_day_from_ms` 测试保持不动（通过 `super::*` 引用）。
 - 删除不再被调用的 `filter_todos`（`filter.rs`）、`first_weekday_of_month`、`days_in_month`、`days_from_civil`（若编译器报 `dead_code` 且无其它引用）。
 - `mod.rs` 的 `mod tests` 删除对应测试：`filter_all_with_empty_query_keeps_everything`、`filter_by_keyword_case_insensitive_substring`、`filter_keyword_is_substring_match_on_text`、`commit_content_edit_*` 三个、`calendar_days_in_month_handles_leap_years`、`calendar_first_weekday_of_1970_jan_is_thursday`、`calendar_days_from_civil_round_trips`。**保留** `calendar_parse_month_day_accepts_mm_dd_and_rejects_bad_input`、`completed_at_for_toggle_reflects_done`、`display_state_*`、`filter_todos_by_category_*`、`visible_category_rows_*`、`category_descendants_*`、`task_title_for_session_*`、`format_month_day_from_ms`。
 - `sample_states()` 若只被已删测试用则一并删。
 
-- [ ] **Step 6: 编译、门禁、测试**
+- [x] **Step 6: 编译、门禁、测试**
 
 ```bash
 cargo build 2>&1 | grep -E "^(warning: unused|warning: .*never|error)" -A5 | head -40
@@ -4051,7 +4051,7 @@ bash scripts/check-log-scope.sh
 ```
 Expected: 编译无 `dead_code` / `unused` 警告（有则逐条判断：要么删、要么说明接线漏了并修）；grep **无输出**（注释行不计）；`dozer-app` 测试只剩基线那 1 个失败（`delete_confirm_spec_reflects_pending_target`）；门禁 `log scope check: ok`。
 
-- [ ] **Step 7: 统计与提交**
+- [x] **Step 7: 统计与提交**
 
 ```bash
 git diff --stat main..HEAD -- crates/dozer-app/src/extensions/todo/view.rs | tail -1

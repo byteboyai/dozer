@@ -292,12 +292,6 @@ pub enum Divider {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RowDivider {
     GitLogFileDiffSplit,
-    /// Todo 面板底部"新增任务框"的顶边框拖拽手柄:向上拉放大输入框高度,
-    /// 高度换算出来的像素值写回 `WorkspaceState::add_input_height`(不是
-    /// `PanelDims`——它是每项目的工作树状态,不是全局布局)。基线 = 框底
-    /// = 左面板区底 = 顶栏之下、footbar 之上的整段,即
-    /// `window_height - footbar_height`;高度 = 基线 - 光标 y。
-    TodoAddGrow,
 }
 
 /// 参与拖拽换位的四种 tab 组：顶栏项目页签、终端会话页签、预览页签、浏览器
@@ -1019,10 +1013,6 @@ pub(crate) fn apply_row_drag(
                 ..state.dims
             }
         }
-        // `TodoAddGrow` 的高度换算不走这套 `PanelDims`(它落在 `ws.todo`),
-        // 由 `update` 的 `RowDrag` 分支单独处理。`apply_row_drag` 只会被
-        // `GitLogFileDiffSplit` 调用,这里给个兜底。
-        RowDivider::TodoAddGrow => state.dims,
     }
 }
 

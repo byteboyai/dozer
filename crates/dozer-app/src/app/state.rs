@@ -230,15 +230,6 @@ pub enum HoverId {
     PreviewJsonMode,
     /// Project 面板配对预览"树 / 文本"切换按钮,处理方式同 `PreviewJsonMode`。
     ProjectPreviewJsonMode,
-    /// Todo 面板单个任务卡(按下标区分):hover 时填充 `CARD` 背景 + 金色描边
-    /// (见 `extensions::todo::todo_card`,统一卡片样式)。
-    TodoCard(usize),
-    /// Todo 面板底部"新增任务"输入框内的提交按钮(`CircleArrowUp`):静止
-    /// DIM,hover 平滑过渡到 GOLD(见 `extensions::todo::todo_footer_bar`)。
-    TodoAddSubmit,
-    /// Todo 面板搜索框内的提交按钮(`Search`):静止 DIM,hover 平滑过渡到
-    /// GOLD,处理方式同 `TodoAddSubmit`(见 `extensions::todo::todo_search_bar`)。
-    TodoSearchSubmit,
     /// 首页项目列表搜索框内的提交按钮(`Search`):静止 DIM,hover 平滑
     /// 过渡到 GOLD,处理方式同 `TodoAddSubmit`(见
     /// `homespace::home_project_list_view`)。

@@ -560,16 +560,6 @@ impl Runner {
                 ));
                 window.request_redraw();
             }
-            // Todo 面板拖拽排序同理:左键松开即结束并把新顺序写盘(换位
-            // 是靠被拖过卡片的 `on_move` 驱动的,这里只负责收尾)。
-            WindowEvent::MouseInput {
-                state: ElementState::Released,
-                button: winit::event::MouseButton::Left,
-                ..
-            } if app.todo_dragging() => {
-                app.update(Message::TodoDragEnd);
-                window.request_redraw();
-            }
             // 外部 OS 文件拖拽悬停期间的实时高亮/自动展开:macOS 上原生
             // 拖拽悬停不产生 `CursorMoved`(见 `FILE_DRAG_POSITION` 文档),
             // 改由 `install_file_drag_position_tracker` 装的原生覆写驱动
@@ -737,76 +727,6 @@ impl Runner {
             return false;
         }
 
-        // Todo 派发选择层打开时,Esc 同样优先关掉弹出层,口径同上面的
-        // agent 选择菜单。
-        if app.todo_dispatch_open()
-            && let WindowEvent::KeyboardInput {
-                event,
-                is_synthetic: false,
-                ..
-            } = event
-            && event.state == ElementState::Pressed
-            && event.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
-        {
-            app.update(Message::Todo(
-                crate::extensions::todo::Message::DispatchClose,
-            ));
-            window.request_redraw();
-            return false;
-        }
-
-        // Todo 状态(待办/进行中/搁置/已完成)下拉选择层打开时,Esc 优先
-        // 关掉弹出层,口径同上面 agent 选择菜单。
-        if app.todo_status_open()
-            && let WindowEvent::KeyboardInput {
-                event,
-                is_synthetic: false,
-                ..
-            } = event
-            && event.state == ElementState::Pressed
-            && event.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
-        {
-            app.update(Message::Todo(crate::extensions::todo::Message::StatusClose));
-            window.request_redraw();
-            return false;
-        }
-
-        // Todo 日历日期选择器打开时,Esc 同样优先关掉弹出层,口径同上面
-        // 的 Todo 派发选择层。
-        if app.todo_calendar_open()
-            && let WindowEvent::KeyboardInput {
-                event,
-                is_synthetic: false,
-                ..
-            } = event
-            && event.state == ElementState::Pressed
-            && event.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
-        {
-            app.update(Message::Todo(
-                crate::extensions::todo::Message::CalendarClose,
-            ));
-            window.request_redraw();
-            return false;
-        }
-
-        // Todo 搜索框左前"状态"筛选浮层打开时,Esc 同样优先关掉弹出层,
-        // 口径同上面 Todo 日历选择器。
-        if app.todo_status_filter_open()
-            && let WindowEvent::KeyboardInput {
-                event,
-                is_synthetic: false,
-                ..
-            } = event
-            && event.state == ElementState::Pressed
-            && event.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
-        {
-            app.update(Message::Todo(
-                crate::extensions::todo::Message::StatusFilterClose,
-            ));
-            window.request_redraw();
-            return false;
-        }
-
         // 原生预览 tab(白名单扩展名,`preview.rs` 直接画 `CodeEditor`,
         // 不再是旧版 wry 预览那种能抢走 OS 级键盘焦点的子视图)打开且
         // 键盘焦点确实在预览列时,同上一道闸门的道理放行——键盘事件走
@@ -912,9 +832,6 @@ impl Runner {
         // 被错误地转发进终端而不是交给 text_input 自己内置的粘贴处理。
         if app.files_search_focused()
             || app.browser_addr_focused()
-            || app.todo_search_focused()
-            || app.todo_add_focused()
-            || app.todo_content_focused()
             || app.category_rename_focused()
             || app.detail_reply_focused()
             || app.tree_edit_focused()
@@ -2764,10 +2681,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     crate::event::HOVER_ANIM_INTERVAL,
                 ),
                 (app.todo_panel_visible(), TODO_POLL_INTERVAL),
-                (
-                    app.todo_dragging() || app.dragging_tab().is_some(),
-                    DRAG_REDRAW_INTERVAL,
-                ),
+                (app.dragging_tab().is_some(), DRAG_REDRAW_INTERVAL),
                 (
                     next_tip.is_some(),
                     next_tip.unwrap_or(crate::app::HOVER_TOOLTIP_DELAY),
@@ -3555,11 +3469,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             // Submit the clear pass
                             queue.submit([encoder.finish()]);
 
-                            // 消费"Todo 列表滚回顶部"一次性位(必须在
-                            // `UserInterface::build` 之前取走,因为构建会借走
-                            // `app` 的不可变引用,后面就不能再可变借用了)。
-                            let scroll_pending = app.take_todo_scroll_to_top();
-
                             // 同理,消费"项目树行内编辑刚触发、需要程序化聚焦"
                             // 一次性位(右键菜单点"重命名"/"新建文件"这类触发
                             // 点击落在别的控件上,真 `text_input` 下一帧才出现、
@@ -3574,13 +3483,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             let move_focus_pending = app
                                 .active_workspace_mut()
                                 .is_some_and(|ws| ws.take_move_focus_pending());
-
-                            // 同理,消费"Todo 任务内容编辑刚触发、需要程序化
-                            // 聚焦"一次性位(点卡片文字进入编辑态,真 `text_input`
-                            // 下一帧才出现、不会自己拿焦点)。
-                            let content_edit_focus_pending = app
-                                .active_workspace_mut()
-                                .is_some_and(|ws| ws.take_content_edit_focus_pending());
 
                             // 同理,消费"Todo 分类树行内改名刚触发、需要程序化
                             // 聚焦"一次性位(右键"重命名"/新建后自动进入改名态,
@@ -3696,21 +3598,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                 &mut Vec::new(),
                             );
 
-                            // 新增任务置顶后把 Todo 列表滚回顶部,让新任务
-                            // 可见(一次性位,消费即复位)。
-                            if scroll_pending {
-                                let mut op = iced_winit::core::widget::operation::scrollable::scroll_to::<()>(
-                                    iced_winit::core::widget::Id::new(
-                                        crate::extensions::todo::TODO_LIST_SCROLL_ID,
-                                    ),
-                                    iced_winit::core::widget::operation::scrollable::AbsoluteOffset::<Option<f32>> {
-                                        x: Some(0.0),
-                                        y: Some(0.0),
-                                    },
-                                );
-                                crate::runtime::run_operate(&mut interface, renderer, &mut op);
-                            }
-
                             // 项目树行内编辑刚触发时程序化聚焦真正的
                             // `text_input`(一次性位,消费即复位)。
                             if tree_edit_focus_pending {
@@ -3727,16 +3614,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                 let mut op =
                                     iced_widget::core::widget::operation::focusable::focus::<()>(
                                         extensions::files::move_name_field_id(),
-                                    );
-                                crate::runtime::run_operate(&mut interface, renderer, &mut op);
-                            }
-
-                            // Todo 任务内容编辑刚触发时程序化聚焦真正的
-                            // `text_input`(一次性位,消费即复位)。
-                            if content_edit_focus_pending {
-                                let mut op =
-                                    iced_widget::core::widget::operation::focusable::focus::<()>(
-                                        extensions::todo::content_field_id(),
                                     );
                                 crate::runtime::run_operate(&mut interface, renderer, &mut op);
                             }
@@ -3966,49 +3843,6 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                         &mut extensions::browser::CaptureAddrFocus,
                                     );
                                     extensions::browser::take_addr_focused()
-                                } else {
-                                    false
-                                };
-
-                            // Todo 搜索框(Stage 4)同款:每帧查真实焦点态。
-                            // 只在 Todo 左栏可见时跑,不必要时不做无谓遍历。
-                            let todo_search_focused =
-                                if matches!(app.left_view(), crate::app::PanelKind::Todo) {
-                                    crate::runtime::run_operate(
-                                        &mut interface,
-                                        renderer,
-                                        &mut extensions::todo::CaptureTodoSearchFocus,
-                                    );
-                                    extensions::todo::take_todo_search_focused()
-                                } else {
-                                    false
-                                };
-
-                            // Todo 添加框(Stage 4):同款每帧查真实焦点态。
-                            let todo_add_focused =
-                                if matches!(app.left_view(), crate::app::PanelKind::Todo) {
-                                    crate::runtime::run_operate(
-                                        &mut interface,
-                                        renderer,
-                                        &mut extensions::todo::CaptureAddFocus,
-                                    );
-                                    extensions::todo::take_add_focused()
-                                } else {
-                                    false
-                                };
-
-                            // Todo 任务内容编辑框(Stage 5):同款每帧查真实焦点
-                            // 态。只在 Todo 左栏可见时跑;光标/焦点在编辑态内由原生
-                            // `text_input` 自己维护,这里只要真/假,供
-                            // `set_todo_content_focused` 做"失焦即落盘"边缘触发。
-                            let content_edit_focused =
-                                if matches!(app.left_view(), crate::app::PanelKind::Todo) {
-                                    crate::runtime::run_operate(
-                                        &mut interface,
-                                        renderer,
-                                        &mut extensions::todo::CaptureContentEditFocus,
-                                    );
-                                    extensions::todo::take_content_edit_focused()
                                 } else {
                                     false
                                 };
@@ -4264,11 +4098,8 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             // `files_search_focused` 消费)。每帧都重写,
                             // 即使值没变也幂等,无副作用。
                             app.set_files_search_focused(files_focused);
-                            app.set_todo_search_focused(todo_search_focused);
-                            app.set_todo_add_focused(todo_add_focused);
                             app.set_home_project_search_focused(home_search_focused);
                             app.set_tree_edit_focused(tree_edit_focused);
-                            app.set_todo_content_focused(content_edit_focused);
                             app.set_category_rename_focused(category_rename_focused);
                             app.set_detail_reply_focused(detail_reply_focused);
                             app.set_project_name_focused(name_edit_focused);

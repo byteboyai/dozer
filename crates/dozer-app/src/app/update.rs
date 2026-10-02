@@ -1667,10 +1667,6 @@ impl App {
             Message::ProjectAddMenuClose => {
                 self.project_add_menu_open = false;
             }
-            Message::Todo(todo::Message::AssignAgent(idx, agent)) => {
-                self.todo_assign_agent(idx, agent)
-            }
-            Message::Todo(todo::Message::DetailOpen(idx)) => self.todo_detail_open(idx),
             Message::Todo(todo::Message::DetailReplySubmit) => self.todo_detail_process(),
             // 数据库连接测试的异步结果带显式 `project_id`——用户可能在等待
             // 期间切走了项目页签,必须按自带 id 路由,不能用当前聚焦项目
@@ -1781,9 +1777,6 @@ impl App {
                     self.category_context_menu = None;
                     self.todo_message(msg);
                 }
-                todo::Message::CategoryPickerOpenForTodo(todo_id) => {
-                    self.todo_category_picker_open(CategoryPickerTarget::Todo(todo_id));
-                }
                 other => self.todo_message(other),
             },
             Message::TodoDetailLoaded(idx, turns) => {
@@ -1858,27 +1851,8 @@ impl App {
                 logical_y,
             } => {
                 if let Some(divider) = self.dragging_row {
-                    match divider {
-                        RowDivider::GitLogFileDiffSplit => {
-                            let state = self.shell_state();
-                            self.dims = apply_row_drag(state, divider, window_height, logical_y);
-                        }
-                        // 新增任务框高度:基线 = 框底 = 左面板区底 =
-                        // `window_height - footbar_height`(顶栏在 `base`
-                        // 之上,不参与);高度 = 基线 - 光标 y,向上拉变高。
-                        // 上限再夹一道,避免列表区被压没(留约 140px)。
-                        RowDivider::TodoAddGrow => {
-                            let baseline =
-                                window_height - byteui::theme::geometry::footbar_height();
-                            let max_h =
-                                (baseline - byteui::theme::geometry::top_bar_height() - 140.0)
-                                    .max(todo::ADD_INPUT_MIN_HEIGHT);
-                            let h = (baseline - logical_y).clamp(todo::ADD_INPUT_MIN_HEIGHT, max_h);
-                            if let Some(ws) = self.active_workspace_mut() {
-                                ws.todo.set_add_input_height(h);
-                            }
-                        }
-                    }
+                    let state = self.shell_state();
+                    self.dims = apply_row_drag(state, divider, window_height, logical_y);
                 }
             }
             Message::RowDragEnd => {
@@ -1896,9 +1870,6 @@ impl App {
             }
             Message::RailDragEnd => {
                 self.end_rail_drag();
-            }
-            Message::TodoDragEnd => {
-                self.todo_message(todo::Message::DragEnd);
             }
             Message::PanelSelect(v) => self.panel_select(v),
             Message::ToggleFileTreeCollapse => self.toggle_files_tree_collapse(),
@@ -2842,20 +2813,6 @@ impl App {
                     return;
                 };
                 match picker.target {
-                    CategoryPickerTarget::Todo(todo_id) => {
-                        let client = self.client.clone();
-                        let handle = self.handle.clone();
-                        let proxy = self.proxy.clone();
-                        handle.spawn(async move {
-                            let res = client
-                                .set_todo_category(todo_id, chosen)
-                                .await
-                                .map(|_| ())
-                                .map_err(|e| e.to_string());
-                            let _ = proxy
-                                .send_event(Message::Todo(todo::Message::CategoryMutated(res)));
-                        });
-                    }
                     CategoryPickerTarget::Category(category_id) => {
                         let client = self.client.clone();
                         let handle = self.handle.clone();
@@ -4636,9 +4593,6 @@ impl App {
         else {
             return;
         };
-        self.with_focused_project(|ws, _io| {
-            ws.todo.close_dispatch_popup();
-        });
         let handle = self.handle.clone();
         let client = self.client.clone();
         let proxy = self.proxy.clone();
@@ -4729,21 +4683,12 @@ impl App {
     }
 
     pub(crate) fn todo_message(&mut self, msg: todo::Message) {
-        // 新增任务框高度拖拽:只在 app 层接管,置 `dragging_row`,后续
-        // `CursorMoved` → `RowDrag` 由 `update` 统一换算高度写回
-        // `ws.todo`(见 `RowDrag` 的 `TodoAddGrow` 分支)。这条不到
-        // `todo::update`(那里有 no-op arm 保持 match 穷尽)。
-        if let todo::Message::AddResizeStart = msg {
-            self.dragging_row = Some(RowDivider::TodoAddGrow);
-            return;
-        }
         let Some(project_id) = self.active_project_id else {
             return;
         };
         let client = self.client.clone();
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
-        let last_cursor = self.last_cursor;
         // 异步结果/写确认透过 `proxy` 重发回主循环,回调里会借用 `self`
         // 的 client/handle ——闭包捕获是 move 出来的副本,行得通(同
         // `Message::Search` 分支的既有手法)。
@@ -4751,27 +4696,6 @@ impl App {
             let _ = proxy.send_event(Message::Todo(m));
         };
         self.with_focused_project(move |ws, _io| {
-            // 点日历按钮时的光标逻辑坐标,作为窗口级 overlay 的弹出锚点——
-            // 先记下再交给 `todo::update` 展开(它只管 `calendar_open`/`calendar_view`)。
-            if matches!(msg, todo::Message::CalendarOpen(_)) {
-                ws.todo.set_calendar_anchor(last_cursor);
-            }
-            // 点"指派"按钮时的光标逻辑坐标,作为派发选择层 overlay 的弹出锚点。
-            if matches!(msg, todo::Message::DispatchOpen(_)) {
-                ws.todo.set_dispatch_anchor(last_cursor);
-            }
-            // 点卡片左下"状态"按钮的光标逻辑坐标,作为状态下拉选择层 overlay
-            // 的弹出锚点。`StatusOpen` 自身交给 `todo::update` 展开(它只改
-            // `status_open`)。
-            if matches!(msg, todo::Message::StatusOpen(_)) {
-                ws.todo.set_status_anchor(last_cursor);
-            }
-            // 点搜索框左前"状态"segment 按钮时的光标逻辑坐标,作为搜索框状态
-            // 筛选浮层 overlay 的弹出锚点。`StatusFilterOpen` 自身交给
-            // `todo::update` 展开(它只改 `status_filter_open`)。
-            if matches!(msg, todo::Message::StatusFilterOpen) {
-                ws.todo.set_status_filter_anchor(last_cursor);
-            }
             todo::update(&mut ws.todo, msg, project_id, &client, &handle, emit);
         });
     }

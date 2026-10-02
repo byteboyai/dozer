@@ -5,22 +5,6 @@ use dozer_core::protocol::{CategoryInfo, TodoInfo};
 
 use super::*;
 
-/// 纯前端关键字过滤：对 `TodoInfo.text` 做大小写不敏感子串匹配（空
-/// `query` 不过滤）。作用在"已经解析+推导好状态"的内存列表上，不碰
-/// 数据库（design 第 7 节）。左栏"按状态分类"筛选维度移除后，可视
-/// 范围只由「关键字 × 自定义分类」两口径取交集决定。
-pub fn filter_todos(items: &[TodoInfo], query: &str) -> Vec<usize> {
-    let query_lower = query.trim().to_lowercase();
-    items
-        .iter()
-        .enumerate()
-        .filter(|(_, item)| {
-            query_lower.is_empty() || item.text.to_lowercase().contains(&query_lower)
-        })
-        .map(|(i, _)| i)
-        .collect()
-}
-
 /// 按 `parent_id` 把 `categories` 拼成树,按 `expanded` 展开态深度优先
 /// 拍平成可见行(未展开节点的子孙不出现在结果里,但节点自身若有子节点
 /// 仍会标 `has_children = true`,供左侧渲染箭头)。同级顺序按

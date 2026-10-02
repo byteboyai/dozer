@@ -191,11 +191,6 @@ pub enum Message {
     /// 松开左键,结束图标栏面板拖拽。构造方为 main.rs 的
     /// `MouseInput{Released}` 分支;跨栏移动此时才提交并写盘。
     RailDragEnd,
-    /// Todo 面板拖拽排序结束:松开左键,把新顺序写盘。构造方为 main.rs 的
-    /// `MouseInput{Released}` 分支,同 `TabDragEnd`(页签拖拽)那套。拖拽中
-    /// 的 `DragMove` 由卡片外层 `MouseArea::on_move` 直接发 `Todo::DragMove`
-    /// (走 `Message::Todo` 通道),不需要顶层变体——这里只收尾。
-    TodoDragEnd,
     /// 图标栏点击选中某个面板——不区分左右栏,`panel_select` 内部按
     /// `RailLayout::side_of` 查它当前挂在哪条栏。
     PanelSelect(PanelKind),
@@ -776,9 +771,8 @@ pub(crate) struct CategoryContextMenu {
 /// "点树选一个节点";挂任务 → `set_todo_category`,reparent → `reparent_category`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CategoryPickerTarget {
-    /// 给某个任务挂分类(任务 id)。
-    Todo(i64),
-    /// 给某个分类节点 reparent(分类 id)。
+    /// 给某个分类节点 reparent(分类 id)。挂任务分类改走 webview 的
+    /// `SetCategory` 事件,不再经这个选择器。
     Category(i64),
 }
 

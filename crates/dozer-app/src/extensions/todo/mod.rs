@@ -21,7 +21,7 @@ pub(crate) use view::*;
 mod tests {
     use super::*;
 
-    use dozer_core::protocol::{AgentKind, CategoryInfo, TodoInfo};
+    use dozer_core::protocol::{CategoryInfo, TodoInfo};
 
     fn todo_info(id: i64, text: &str, done: bool) -> TodoInfo {
         TodoInfo {
@@ -53,34 +53,6 @@ mod tests {
         assert_eq!(todo_display_state(&item, true), TodoState::Pending);
     }
 
-    fn sample_states() -> Vec<TodoInfo> {
-        vec![
-            todo_info(1, "修复登录页闪烁", false),
-            todo_info(2, "补 README 安装说明", true),
-            todo_info(3, "给 claude 指派生成报告", false),
-        ]
-    }
-
-    #[test]
-    fn filter_all_with_empty_query_keeps_everything() {
-        let items = sample_states();
-        let hits = filter_todos(&items, "");
-        assert_eq!(hits, vec![0, 1, 2]);
-    }
-
-    #[test]
-    fn filter_by_keyword_case_insensitive_substring() {
-        let items = sample_states();
-        assert_eq!(filter_todos(&items, "CLAUDE"), vec![2]);
-    }
-
-    #[test]
-    fn filter_keyword_is_substring_match_on_text() {
-        let items = sample_states();
-        assert_eq!(filter_todos(&items, "登录"), vec![0]);
-        assert_eq!(filter_todos(&items, "不存在的关键词"), Vec::<usize>::new());
-    }
-
     #[test]
     fn completed_at_for_toggle_reflects_done() {
         let now = std::time::SystemTime::now();
@@ -95,28 +67,6 @@ mod tests {
         assert_eq!(parse_month_day("13-01"), None);
         assert_eq!(parse_month_day("08"), None);
         assert_eq!(parse_month_day("abc"), None);
-    }
-
-    #[test]
-    fn calendar_days_in_month_handles_leap_years() {
-        assert_eq!(days_in_month(2024, 2), 29); // 闰
-        assert_eq!(days_in_month(2023, 2), 28);
-        assert_eq!(days_in_month(2024, 4), 30);
-        assert_eq!(days_in_month(2024, 1), 31);
-        assert_eq!(days_in_month(2024, 13), 0);
-    }
-
-    #[test]
-    fn calendar_first_weekday_of_1970_jan_is_thursday() {
-        assert_eq!(first_weekday_of_month(1970, 1), 4); // 周四
-    }
-
-    #[test]
-    fn calendar_days_from_civil_round_trips() {
-        use super::civil_from_days;
-        assert_eq!(days_from_civil(1970, 1, 1), 0);
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-        assert_eq!(civil_from_days(days_from_civil(2024, 2, 29)), (2024, 2, 29));
     }
 
     #[test]
@@ -142,45 +92,6 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(ws_state.task_title_for_session("sess-1"), None);
-    }
-
-    fn editing_state(text: &str) -> WorkspaceState {
-        WorkspaceState {
-            items: vec![todo_info(7, "旧文字", false)],
-            editing_content: Some((0, iced_widget::text_editor::Content::with_text(text))),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn commit_content_edit_returns_id_and_text_when_changed() {
-        let mut ws_state = editing_state("新文字");
-        let result = ws_state.commit_content_edit();
-        assert_eq!(result, Some((7, "新文字".to_string())));
-        assert!(ws_state.editing_content.is_none());
-    }
-
-    #[test]
-    fn commit_content_edit_none_when_unchanged() {
-        let mut ws_state = WorkspaceState {
-            items: vec![todo_info(7, "同样的文字", false)],
-            editing_content: Some((
-                0,
-                iced_widget::text_editor::Content::with_text("同样的文字"),
-            )),
-            ..Default::default()
-        };
-        assert_eq!(ws_state.commit_content_edit(), None);
-    }
-
-    #[test]
-    fn commit_content_edit_none_when_draft_empty() {
-        let mut ws_state = WorkspaceState {
-            items: vec![todo_info(7, "旧文字", false)],
-            editing_content: Some((0, iced_widget::text_editor::Content::new())),
-            ..Default::default()
-        };
-        assert_eq!(ws_state.commit_content_edit(), None);
     }
 
     fn cat(id: i64, parent_id: Option<i64>, name: &str) -> CategoryInfo {
