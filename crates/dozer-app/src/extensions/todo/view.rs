@@ -4,8 +4,9 @@ use crate::app::{App, HoverId};
 use crate::theme;
 use crate::workspace::Workspace;
 use byteui::interaction::icons;
+use iced_widget::core::mouse;
 use iced_widget::core::{Border, Color, Element, Length, Padding};
-use iced_widget::{button, column, container, row, space, text};
+use iced_widget::{MouseArea, button, column, container, row, space, text};
 
 use super::*;
 
@@ -359,25 +360,59 @@ pub(crate) fn category_tree_nav<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![].spacing(2).padding([4, 8]);
 
+    let drag_confirmed = ws_state.category_drag_confirmed();
+
     // "全部"/"未分类"伪节点可右键弹出顶层"新建分类"(见
     // `CategoryContextMenuOpen(None)` 的语义)。两者都新建的是顶层分类
     // (新建后并不会真挂在哪个名字下面——全部/未分类只是视图桶)。
+    // 「全部」是"移到顶层"的合法放置目标(拖拽期间挂 `on_move` + 整行金色
+    // 描边);「未分类」不是,但拖到它上面时要清空悬停目标,免得上个目标的
+    // 高亮残留。
+    let root_is_drop_target = ws_state
+        .category_drag()
+        .is_some_and(|d| d.over == Some(DropTarget::Root));
+    let mut all_area = MouseArea::new(category_pseudo_row(
+        icons::IconKind::CircleSmall,
+        "全部",
+        ws_state.category_selected() == CategoryFilter::All,
+        Message::CategorySelect(CategoryFilter::All),
+    ));
+    if drag_confirmed {
+        all_area = all_area
+            .on_move(|_| Message::CategoryDragOver(Some(DropTarget::Root)))
+            .interaction(mouse::Interaction::Grabbing);
+    }
+    let all_el: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        if root_is_drop_target {
+            container(all_area)
+                .style(|_t: &iced_widget::Theme| container::Style {
+                    border: Border {
+                        color: byteui::theme::color::current().gold,
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..container::Style::default()
+                })
+                .into()
+        } else {
+            all_area.into()
+        };
     col = col.push(byteui::interaction::context_menu::wrap(
-        category_pseudo_row(
-            icons::IconKind::CircleSmall,
-            "全部",
-            ws_state.category_selected() == CategoryFilter::All,
-            Message::CategorySelect(CategoryFilter::All),
-        ),
+        all_el,
         Some(Message::CategoryContextMenuOpen(None)),
     ));
+
+    let mut uncat_area = MouseArea::new(category_pseudo_row(
+        icons::IconKind::CircleSmall,
+        "未分类",
+        ws_state.category_selected() == CategoryFilter::Uncategorized,
+        Message::CategorySelect(CategoryFilter::Uncategorized),
+    ));
+    if drag_confirmed {
+        uncat_area = uncat_area.on_enter(Message::CategoryDragOver(None));
+    }
     col = col.push(byteui::interaction::context_menu::wrap(
-        category_pseudo_row(
-            icons::IconKind::CircleSmall,
-            "未分类",
-            ws_state.category_selected() == CategoryFilter::Uncategorized,
-            Message::CategorySelect(CategoryFilter::Uncategorized),
-        ),
+        uncat_area.into(),
         Some(Message::CategoryContextMenuOpen(None)),
     ));
 
@@ -395,6 +430,15 @@ pub(crate) fn category_tree_nav<'a>(
         } else {
             byteui::theme::color::current().dim
         };
+        // 拖动进行时:源行变淡,合法落点描边金色(都只在已确认 `Dragging`
+        // 时才有视觉——`Pending` 期间必须完全没反应)。
+        let is_source = ws_state
+            .category_drag()
+            .is_some_and(|d| d.source == row.id)
+            && drag_confirmed;
+        let is_drop_target = ws_state
+            .category_drag()
+            .is_some_and(|d| d.over == Some(DropTarget::Node(row.id)));
         let chevron: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
             if row.has_children {
                 icons::icon_button_entry(
@@ -419,6 +463,10 @@ pub(crate) fn category_tree_nav<'a>(
                     .width(byteui::theme::geometry::tab_button_size())
                     .into()
             };
+        // 行内 `button` 不接 `on_press`(iced 的 `on_press` 实际在松开时才发,
+        // 会把"按下即武装拖拽"错开);点击选中改由松手收尾
+        // (`CategoryDragRelease` → `ReleaseAction::Select`)完成。chevron 是
+        // 独立 `icon_button_entry`,按下被它捕获,不会冒泡武装拖拽。
         let label = button(
             row![
                 chevron,
@@ -429,7 +477,6 @@ pub(crate) fn category_tree_nav<'a>(
             .spacing(4)
             .align_y(iced_widget::core::alignment::Vertical::Center),
         )
-        .on_press(Message::CategorySelect(CategoryFilter::Node(row.id)))
         .width(Length::Fill)
         .padding([6, 4 + (row.depth as u16) * 16])
         .style(move |_t: &iced_widget::Theme, _s| button::Style {
@@ -438,24 +485,47 @@ pub(crate) fn category_tree_nav<'a>(
             } else {
                 None
             },
-            text_color: fg,
+            text_color: if is_source {
+                Color { a: 0.4, ..fg }
+            } else {
+                fg
+            },
             border: Border {
-                color: if active {
+                color: if is_drop_target || active {
                     byteui::theme::color::current().gold
                 } else {
                     Color::TRANSPARENT
                 },
-                width: if active { 1.0 } else { 0.0 },
+                width: if is_drop_target || active { 1.0 } else { 0.0 },
                 radius: 6.0.into(),
             },
             ..button::Style::default()
         });
+        let mut area = MouseArea::new(label).on_press(Message::CategoryRowPress(row.id));
+        // 已确认(`Dragging`)才挂 `on_move` 与抓取光标;`Pending` 期间必须完全
+        // 没有反应("点一下就进入拖拽态"的根因,见文件树 `TreeDragPhase`)。
+        if drag_confirmed {
+            let target = DropTarget::Node(row.id);
+            area = area
+                .on_move(move |_| Message::CategoryDragOver(Some(target)))
+                .interaction(mouse::Interaction::Grabbing);
+        }
         col = col.push(byteui::interaction::context_menu::wrap(
-            label.into(),
+            area.into(),
             Some(Message::CategoryContextMenuOpen(Some(row.id))),
         ));
     }
-    col.into()
+
+    // 光标移出整棵分类树(空白处/别的面板)时清空悬停目标,否则会停在最后一个
+    // 目标上,松手时误落。只在拖拽确认期间挂,平时零负担。
+    let tree: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = col.into();
+    if drag_confirmed {
+        MouseArea::new(tree)
+            .on_exit(Message::CategoryDragOver(None))
+            .into()
+    } else {
+        tree
+    }
 }
 
 /// 分类树一行的行内改名输入框,镜像 `files.rs::tree_edit_row`(同款
