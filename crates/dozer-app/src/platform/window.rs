@@ -2,6 +2,165 @@
 
 dozer_core::scope!(LOG, module, "platform");
 
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+struct TrafficLightHome {
+    parent: usize,
+    frame: objc2_foundation::NSRect,
+    content_frame: objc2_foundation::NSRect,
+}
+
+#[cfg(target_os = "macos")]
+thread_local! {
+    static TRAFFIC_LIGHT_HOME: std::cell::RefCell<Option<[TrafficLightHome; 3]>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(target_os = "macos")]
+fn window_buttons(
+    window: &objc2_app_kit::NSWindow,
+) -> [Option<objc2::rc::Retained<objc2_app_kit::NSButton>>; 3] {
+    use objc2_app_kit::NSWindowButton;
+
+    [
+        window.standardWindowButton(NSWindowButton::CloseButton),
+        window.standardWindowButton(NSWindowButton::MiniaturizeButton),
+        window.standardWindowButton(NSWindowButton::ZoomButton),
+    ]
+}
+
+/// 原生全屏不绘制标题栏，标准交通灯也会随标题栏一起移出窗口。进入全屏前
+/// 保存按钮在内容视图中的等价位置；全屏完成后把同一组原生按钮临时挂到内容
+/// 视图。这样外观、hover 和点击行为仍完全由 AppKit 提供，而位置与普通窗口
+/// 中一致。退出全屏时再把按钮交还原来的标题栏父视图。
+#[cfg(target_os = "macos")]
+fn save_traffic_light_home(content: &objc2_app_kit::NSView) {
+    let Some(window) = content.window() else {
+        return;
+    };
+    let buttons = window_buttons(&window);
+
+    TRAFFIC_LIGHT_HOME.with(|saved| {
+        let mut saved = saved.borrow_mut();
+        if saved.is_some() {
+            return;
+        }
+        *saved = Some(std::array::from_fn(|index| {
+            let button = buttons[index].as_ref().expect("standard window button");
+            let parent = unsafe { button.superview() }.expect("window button superview");
+            TrafficLightHome {
+                parent: std::ptr::from_ref(&*parent) as usize,
+                frame: button.frame(),
+                content_frame: content.convertRect_fromView(button.frame(), Some(&parent)),
+            }
+        }));
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn move_traffic_lights_to_content(content: &objc2_app_kit::NSView) {
+    save_traffic_light_home(content);
+    let Some(window) = content.window() else {
+        return;
+    };
+    let buttons = window_buttons(&window);
+
+    TRAFFIC_LIGHT_HOME.with(|saved| {
+        let saved = saved.borrow();
+        let homes = saved.as_ref().expect("traffic light homes initialized");
+        for (button, home) in buttons.into_iter().zip(homes) {
+            let Some(button) = button else { continue };
+            button.removeFromSuperview();
+            content.addSubview(&button);
+            button.setFrame(home.content_frame);
+            button.setHidden(false);
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn restore_traffic_lights(content: &objc2_app_kit::NSView) {
+    let Some(window) = content.window() else {
+        return;
+    };
+    let buttons = window_buttons(&window);
+
+    TRAFFIC_LIGHT_HOME.with(|saved| {
+        let Some(homes) = saved.borrow_mut().take() else {
+            return;
+        };
+        for (button, home) in buttons.into_iter().zip(homes) {
+            let Some(button) = button else { continue };
+            // SAFETY: the saved parent is the button's original titlebar view. It
+            // belongs to the same live NSWindow and is retained by that hierarchy
+            // throughout the native fullscreen transition.
+            let parent = unsafe { &*(home.parent as *const objc2_app_kit::NSView) };
+            button.removeFromSuperview();
+            parent.addSubview(&button);
+            button.setFrame(home.frame);
+            button.setHidden(false);
+        }
+    });
+}
+
+/// 在 AppKit 的全屏生命周期边界搬移/还原交通灯。只靠 `Resized` 不可靠：
+/// 最后一次 resize 可能发生在 AppKit 把标题栏隐藏之前。
+#[cfg(target_os = "macos")]
+pub(crate) fn install_fullscreen_traffic_light_guard(window: &winit::window::Window) {
+    use block2::RcBlock;
+    use objc2_app_kit::{
+        NSWindowDidEnterFullScreenNotification, NSWindowDidExitFullScreenNotification,
+        NSWindowWillEnterFullScreenNotification, NSWindowWillExitFullScreenNotification,
+    };
+    use objc2_foundation::{NSNotificationCenter, NSOperationQueue};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::AppKit(ah) = handle.as_raw() else {
+        return;
+    };
+    let content_ptr = ah.ns_view.as_ptr() as usize;
+    let content: &objc2_app_kit::NSView =
+        unsafe { &*(content_ptr as *const objc2_app_kit::NSView) };
+    let Some(ns_window) = content.window() else {
+        return;
+    };
+    let center = NSNotificationCenter::defaultCenter();
+    let queue = NSOperationQueue::mainQueue();
+
+    let install = |name, action: u8| {
+        let block = RcBlock::new(move |_| {
+            // SAFETY: observer is scoped to the process lifetime and the main app
+            // window/content view outlives it. AppKit delivers these notifications
+            // on the main thread.
+            let content = unsafe { &*(content_ptr as *const objc2_app_kit::NSView) };
+            match action {
+                0 => save_traffic_light_home(content),
+                1 => move_traffic_lights_to_content(content),
+                _ => restore_traffic_lights(content),
+            }
+        });
+        let observer = unsafe {
+            center.addObserverForName_object_queue_usingBlock(
+                Some(name),
+                Some(&ns_window),
+                Some(&queue),
+                &block,
+            )
+        };
+        // The main window lives for the whole process. Keeping the observer for
+        // that same lifetime avoids a second owner solely for teardown bookkeeping.
+        std::mem::forget(observer);
+    };
+
+    install(unsafe { NSWindowWillEnterFullScreenNotification }, 0);
+    install(unsafe { NSWindowDidEnterFullScreenNotification }, 1);
+    install(unsafe { NSWindowWillExitFullScreenNotification }, 2);
+    install(unsafe { NSWindowDidExitFullScreenNotification }, 2);
+}
+
 /// macOS 专有：把原生红黄绿交通灯在垂直方向居中到 app 自己画的 `top_bar`
 /// （默认 40pt 高）中部，而不是系统默认的 28pt 标题栏中部。去掉原生标题栏
 /// 后系统仍按 28pt 旧基准排版交通灯，导致它们贴着顶栏上沿、与 40pt 顶栏里

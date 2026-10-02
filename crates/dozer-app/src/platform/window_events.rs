@@ -2751,6 +2751,10 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             // 顶栏原生拖窗守卫：只需装一次方法覆写，见函数文档。
             #[cfg(target_os = "macos")]
             crate::platform::window::install_topbar_drag_guard(&window);
+            // macOS 原生全屏会把整个标题栏（含交通灯）移出窗口；守卫在
+            // 全屏生命周期内把原生按钮临时留在应用顶栏的原位置。
+            #[cfg(target_os = "macos")]
+            crate::platform::window::install_fullscreen_traffic_light_guard(&window);
             // 外部文件拖拽悬停位置追踪：补 winit 没实现的 `draggingUpdated:`，
             // 见函数文档。
             #[cfg(target_os = "macos")]
