@@ -6,6 +6,7 @@ pub mod default_agent_config;
 pub mod file_edit_history;
 pub mod file_mutation;
 pub mod group_mentions;
+pub mod group_prompt;
 pub mod group_store;
 pub mod headless_agent;
 pub mod ide_bridge;
