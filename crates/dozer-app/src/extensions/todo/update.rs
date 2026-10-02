@@ -163,15 +163,16 @@ pub fn update(
         // 分类行被按下(武装拖拽)由内核拦截以取 `last_cursor`,不进这里。
         Message::CategoryRowPress(_) => {}
         Message::CategoryDragOver(target) => ws_state.set_category_drag_over(target),
-        Message::CategoryDragRelease => {
+        Message::CategoryDragRelease(cursor) => {
             let Some(drag) = ws_state.take_category_drag() else {
                 return;
             };
-            match release_action(&drag, &ws_state.categories) {
+            match release_action_at(&drag, &ws_state.categories, cursor) {
                 ReleaseAction::Select(id) => {
                     select_category(ws_state, CategoryFilter::Node(id));
                 }
                 ReleaseAction::Reparent { id, new_parent } => {
+                    ws_state.expand_for_reparent(new_parent);
                     let client = client.clone();
                     handle.spawn(async move {
                         let res = client

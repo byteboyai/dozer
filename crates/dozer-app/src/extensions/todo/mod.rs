@@ -287,6 +287,26 @@ mod tests {
         assert!(ws_state.category_drag().is_none());
     }
 
+    // 审阅 Important 8:拖进一个折叠的分类后,新父节点要展开,否则被移动的节点(可能正是
+    // 选中项)会从树里消失。
+    #[test]
+    fn reparent_expands_the_new_parent_so_the_node_stays_visible() {
+        let mut ws_state = WorkspaceState::default();
+        assert!(!ws_state.category_expanded().contains(&5));
+        ws_state.expand_for_reparent(Some(5));
+        assert!(ws_state.category_expanded().contains(&5));
+        // 已展开的不会被收起(不是 toggle)
+        ws_state.expand_for_reparent(Some(5));
+        assert!(ws_state.category_expanded().contains(&5));
+    }
+
+    #[test]
+    fn reparent_to_top_level_changes_no_expansion() {
+        let mut ws_state = WorkspaceState::default();
+        ws_state.expand_for_reparent(None);
+        assert!(ws_state.category_expanded().is_empty());
+    }
+
     #[test]
     fn cancel_category_drag_clears_any_phase() {
         let mut ws_state = WorkspaceState::default();

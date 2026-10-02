@@ -574,7 +574,7 @@ impl Runner {
                 ..
             } if app.dragging_category() => {
                 app.update(Message::Todo(
-                    crate::extensions::todo::Message::CategoryDragRelease,
+                    crate::extensions::todo::Message::CategoryDragRelease(app.last_cursor),
                 ));
                 window.request_redraw();
             }

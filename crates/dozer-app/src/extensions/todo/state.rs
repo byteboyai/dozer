@@ -259,6 +259,14 @@ impl WorkspaceState {
         self.view
     }
 
+    /// 把分类移到 `new_parent` 下之后展开它(`None` = 顶层,不变),否则被移动的节点
+    /// (可能正是选中项)会因为新父节点折叠而从树里消失。只展开,不是 toggle。
+    pub(crate) fn expand_for_reparent(&mut self, new_parent: Option<i64>) {
+        if let Some(id) = new_parent {
+            self.category_expanded.insert(id);
+        }
+    }
+
     /// 展开/收起某个分类节点(点左侧树箭头)。
     pub(crate) fn toggle_category_expanded(&mut self, id: i64) {
         if !self.category_expanded.remove(&id) {
@@ -556,7 +564,7 @@ pub enum Message {
     /// 拖拽已确认期间光标悬停到候选目标(`None` = 离开所有目标)。
     CategoryDragOver(Option<DropTarget>),
     /// 左键松开的收尾(窗口事件在 `dragging_category()` 时发)。
-    CategoryDragRelease,
+    CategoryDragRelease((f32, f32)),
     /// webview `Add`:新增任务文本(已 trim、非空、未超长)。
     AddText(String),
     /// webview `EditText`:按 id 改文字。

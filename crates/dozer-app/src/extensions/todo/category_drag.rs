@@ -73,6 +73,22 @@ pub enum ReleaseAction {
     Nothing,
 }
 
+/// 带光标位置的松手收尾:`Pending` 时只有光标仍在按下点附近(没越过距离阈值)才算点击;
+/// 甩出去很远再松手既不是点击也不是确认过的拖拽,什么都不做(原来的按钮在光标离开后
+/// 松手同样不会触发)。已确认的拖拽不看距离。
+pub fn release_action_at(
+    drag: &CategoryDrag,
+    categories: &[CategoryInfo],
+    cursor: (f32, f32),
+) -> ReleaseAction {
+    if drag.phase == CategoryDragPhase::Pending
+        && crate::app::tree_drag_past_threshold(drag.press_pos, cursor)
+    {
+        return ReleaseAction::Nothing;
+    }
+    release_action(drag, categories)
+}
+
 /// 松手收尾:未确认 → 点击(源行仍存在才选中);已确认 → 目标合法才移动,否则空操作。
 /// 源或目标在拖拽期间被删掉(别的会话 / agent)一律落到 `Nothing`。
 pub fn release_action(drag: &CategoryDrag, categories: &[CategoryInfo]) -> ReleaseAction {
@@ -277,6 +293,47 @@ mod tests {
     fn release_action_with_vanished_target_is_none() {
         let d = drag(4, CategoryDragPhase::Dragging, Some(DropTarget::Node(77)));
         assert_eq!(release_action(&d, &tree()), ReleaseAction::Nothing);
+    }
+
+    // 审阅 Important 7:没确认就松手,只有光标还在按下点附近才算点击;甩出去很远再松手
+    // 既不是点击也不是拖拽,不能把源行选中。
+    #[test]
+    fn release_far_from_the_press_point_while_pending_is_not_a_click() {
+        let d = drag(2, CategoryDragPhase::Pending, None); // press_pos = (100, 100)
+        assert_eq!(
+            release_action_at(&d, &tree(), (100.0, 160.0)),
+            ReleaseAction::Nothing
+        );
+        assert_eq!(
+            release_action_at(&d, &tree(), (400.0, 100.0)),
+            ReleaseAction::Nothing
+        );
+    }
+
+    #[test]
+    fn release_near_the_press_point_while_pending_is_still_a_click() {
+        let d = drag(2, CategoryDragPhase::Pending, None);
+        assert_eq!(
+            release_action_at(&d, &tree(), (100.0, 100.0)),
+            ReleaseAction::Select(2)
+        );
+        // 手抖几个像素仍是点击
+        assert_eq!(
+            release_action_at(&d, &tree(), (103.0, 102.0)),
+            ReleaseAction::Select(2)
+        );
+    }
+
+    #[test]
+    fn confirmed_drag_does_not_care_about_press_distance() {
+        let d = drag(4, CategoryDragPhase::Dragging, Some(DropTarget::Node(5)));
+        assert_eq!(
+            release_action_at(&d, &tree(), (900.0, 900.0)),
+            ReleaseAction::Reparent {
+                id: 4,
+                new_parent: Some(5)
+            }
+        );
     }
 
     #[test]
