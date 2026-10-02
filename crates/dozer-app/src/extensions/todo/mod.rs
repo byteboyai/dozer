@@ -5,12 +5,14 @@
 //! 走 UDS 与 dozerd 同步;不再直接读写 `.dozer/todo.md`/`todo_meta.json`
 //! (MARKDOWN 整文件视图已随迁移移除)。
 
+mod category_drag;
 mod filter;
 mod protocol;
 mod state;
 mod update;
 mod view;
 
+pub(crate) use category_drag::*;
 pub(crate) use filter::*;
 pub(crate) use protocol::*;
 pub(crate) use state::*;
