@@ -96,6 +96,20 @@ pub fn usage_content_chrome_top_px() -> f32 {
     14.0 + head_h + 12.0
 }
 
+/// Todo 右栏顶部原生 tab 行(「列表视图 / 看板视图」+「收起」按钮)本身的固定
+/// 高度(逻辑像素,已含全局 scale)。渲染侧 `todo::view` 把 tab 行钉成这个高度
+/// (tab 按钮同样钉 `tab_button_size()` 高),不靠内容自然撑高——几何侧才能
+/// 精确地给 webview 让出这段。
+pub fn todo_top_row_inner_h_px() -> f32 {
+    byteui::theme::geometry::tab_button_size() + 8.0
+}
+
+/// tab 行 + 其下 1px 分割线(`byteui::layout::divider::horizontal`)的总高。
+/// webview 只覆盖这段**以下**的内容区,不能把 tab 行也盖住。
+pub fn todo_top_row_h_px() -> f32 {
+    todo_top_row_inner_h_px() + 1.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,5 +160,15 @@ mod tests {
             usage_content_chrome_top_px(),
             14.0 + byteui::theme::geometry::tab_button_size() + 4.0 + 1.0 + 12.0
         ));
+    }
+
+    /// Todo 右栏 tab 行 + 分割线的总高:渲染侧(`todo::view`)固定 tab 行高、
+    /// 几何侧(`todo_content_pane_bounds_for`)据此给 webview 让出头部。两侧
+    /// 同一真相,漂移会让 webview 盖住 tab 行或留空。
+    #[test]
+    fn todo_top_row_is_tab_height_plus_padding_plus_divider() {
+        let inner = todo_top_row_inner_h_px();
+        assert_eq!(inner, byteui::theme::geometry::tab_button_size() + 8.0);
+        assert_eq!(todo_top_row_h_px(), inner + 1.0);
     }
 }

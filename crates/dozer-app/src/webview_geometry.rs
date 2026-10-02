@@ -520,15 +520,18 @@ pub fn git_log_diff_pane_bounds_for(
     compute(inx, iny, inw, inh)
 }
 
-/// "内容在前、列表在后"两栏面板(Usage、CodeHealth)的内容侧 webview 几何参数。
+/// 两栏面板(Usage、CodeHealth、Todo)的内容侧 webview 几何参数。
 struct PairPane {
     kind: PanelKind,
-    /// 列表列占比(`dims.usage_split` / `dims.codehealth_split`)。
+    /// 列表列占比(`dims.usage_split` / `dims.codehealth_split` / `dims.todo_split`)。
     split: f32,
     /// 内容顶部要让出的原生面板头高度。
     chrome_top: f32,
     content_desired: bool,
     list_visible: bool,
+    /// `true` = "内容在前、列表在后"(Usage、CodeHealth);`false` = "列表在前、
+    /// 内容在后"(Todo)。非镜像时决定 `pair_columns` 的 `mirrored` 参数。
+    content_first: bool,
 }
 
 /// 用量面板内容侧 Preact webview 矩形(上/左/宽/高,逻辑像素),供 main.rs
@@ -571,6 +574,7 @@ pub fn usage_content_pane_bounds_for(
             chrome_top: theme::geometry::usage_content_chrome_top_px(),
             content_desired,
             list_visible,
+            content_first: true,
         },
     )
 }
@@ -598,11 +602,42 @@ pub fn codehealth_content_pane_bounds_for(
             chrome_top: 0.0,
             content_desired,
             list_visible: true,
+            content_first: true,
         },
     )
 }
 
-/// 共享实现,见 [`usage_content_pane_bounds_for`] / [`codehealth_content_pane_bounds_for`]。
+/// Todo 面板内容区 webview 矩形。与用量 / 代码健康度同走 `pair_content_pane_bounds_for`,
+/// 差别:Todo 是"**列表在前、内容在后**"(`content_first = false`);列表列可收起
+/// (`dims.todo_list_collapsed`,收起后内容独占整条配对宽);内容列顶部让出原生
+/// tab 行与分割线的固定高度(`theme::geometry::todo_top_row_h_px`,渲染侧同源)。
+/// 不可摆放(`!content_desired` / 该侧收起 / 不是 Todo / 放大的是另一侧)时返回零
+/// 尺寸矩形;看板视图由调用方(`preview_desired`)令 `content_desired = false`。
+pub fn todo_content_pane_bounds_for(
+    side: Side,
+    window_width: f32,
+    window_height: f32,
+    state: &ShellState,
+    content_desired: bool,
+) -> (f32, f32, f32, f32) {
+    pair_content_pane_bounds_for(
+        side,
+        window_width,
+        window_height,
+        state,
+        PairPane {
+            kind: PanelKind::Todo,
+            split: state.dims.todo_split,
+            chrome_top: theme::geometry::todo_top_row_h_px(),
+            content_desired,
+            list_visible: !state.dims.todo_list_collapsed,
+            content_first: false,
+        },
+    )
+}
+
+/// 共享实现,见 [`usage_content_pane_bounds_for`] / [`codehealth_content_pane_bounds_for`] /
+/// [`todo_content_pane_bounds_for`]。
 fn pair_content_pane_bounds_for(
     side: Side,
     window_width: f32,
@@ -630,7 +665,15 @@ fn pair_content_pane_bounds_for(
     let compute = |inx: f32, iny: f32, inw: f32, inh: f32| -> (f32, f32, f32, f32) {
         let (x, w) = if pane.list_visible {
             let pair_w = pair_content_width(inw);
-            let cols = pair_columns(pair_w, pane.split, !mirrored);
+            let cols = pair_columns(
+                pair_w,
+                pane.split,
+                if pane.content_first {
+                    !mirrored
+                } else {
+                    mirrored
+                },
+            );
             (inx + cols.content_x, cols.content_w.max(0.0))
         } else {
             (inx, inw.max(0.0))
@@ -1763,6 +1806,101 @@ mod tests {
         };
         let (x, y, w, h) =
             codehealth_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true);
+        assert!(w > 100.0 && h > 100.0, "w={w} h={h}");
+        let (x0, avail_w) = maximized_box_x_range(1600.0);
+        assert!(x >= x0 && x + w <= x0 + avail_w, "x={x} w={w}");
+        assert!(y + h <= maximized_box_height(900.0) + 200.0);
+    }
+
+    #[test]
+    fn todo_content_zero_when_not_desired() {
+        let state = ShellState {
+            left_view: PanelKind::Todo,
+            ..test_state()
+        };
+        let (_, _, w, h) = todo_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, false);
+        assert_eq!((w, h), (0.0, 0.0));
+    }
+
+    #[test]
+    fn todo_content_zero_when_side_collapsed() {
+        let state = ShellState {
+            left_view: PanelKind::Todo,
+            left_collapsed: true,
+            ..test_state()
+        };
+        let (_, _, w, h) = todo_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true);
+        assert_eq!((w, h), (0.0, 0.0));
+    }
+
+    #[test]
+    fn todo_content_zero_when_panel_kind_is_not_todo() {
+        let state = test_state(); // left_view: PanelKind::Files
+        let (_, _, w, h) = todo_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true);
+        assert_eq!((w, h), (0.0, 0.0));
+    }
+
+    /// Todo 是"列表在前、内容在后":内容列的起点在分栏线右侧,且随 `todo_split` 变化。
+    #[test]
+    fn todo_content_is_to_the_right_of_the_list_and_follows_split() {
+        let state = ShellState {
+            left_view: PanelKind::Todo,
+            ..test_state()
+        };
+        let (x, _, w, h) = todo_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true);
+        assert!(w > 100.0 && h > 100.0, "w={w} h={h}");
+        let zone_x0 = byteui::theme::geometry::icon_rail_width();
+        assert!(
+            x > zone_x0 + 50.0,
+            "内容列应在列表列右侧: x={x} zone_x0={zone_x0}"
+        );
+        let mut wider_list = state.clone();
+        wider_list.dims.todo_split = (state.dims.todo_split + 0.2).min(0.9);
+        let (x2, _, w2, _) =
+            todo_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &wider_list, true);
+        assert!(
+            x2 > x && w2 < w,
+            "列表变宽,内容列右移且变窄: {x}->{x2}, {w}->{w2}"
+        );
+    }
+
+    /// Review Focus 6:列表列收起后内容拿满整个配对宽度。
+    #[test]
+    fn todo_content_fills_when_list_collapsed() {
+        let state = ShellState {
+            left_view: PanelKind::Todo,
+            ..test_state()
+        };
+        let (_, _, w, _) = todo_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true);
+        let mut collapsed = state.clone();
+        collapsed.dims.todo_list_collapsed = true;
+        let (_, _, wc, _) =
+            todo_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &collapsed, true);
+        assert!(wc > w, "收起列表列后内容更宽: {w} -> {wc}");
+    }
+
+    /// webview 只覆盖原生 tab 行与分割线**以下**。
+    #[test]
+    fn todo_content_y_starts_below_the_native_top_row() {
+        let state = ShellState {
+            left_view: PanelKind::Todo,
+            ..test_state()
+        };
+        let (_, y, _, _) = todo_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true);
+        let zone_top =
+            byteui::theme::geometry::top_bar_height() + theme::region::left_zone().margin.top;
+        let expected = zone_top + theme::geometry::todo_top_row_h_px();
+        assert!((y - expected).abs() < 1.0, "y={y} expected={expected}");
+    }
+
+    #[test]
+    fn todo_content_maximized_stays_inside_box() {
+        let state = ShellState {
+            left_view: PanelKind::Todo,
+            maximized: Some(MaximizedPane::Left),
+            ..test_state()
+        };
+        let (x, y, w, h) = todo_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true);
         assert!(w > 100.0 && h > 100.0, "w={w} h={h}");
         let (x0, avail_w) = maximized_box_x_range(1600.0);
         assert!(x >= x0 && x + w <= x0 + avail_w, "x={x} w={w}");
