@@ -256,7 +256,6 @@ pub fn update(
                 emit(Message::CategoryMutated(res));
             });
         }
-        Message::CategoryReparentPickerOpen(_) => {}
         Message::DetailClose => ws_state.close_detail(),
         Message::DetailReplyInput(text) => ws_state.detail_reply_draft = text,
         Message::DetailReplySubmit => {

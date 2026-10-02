@@ -551,9 +551,6 @@ pub enum Message {
     CategoryRenameSubmit,
     /// 与前一个/后一个同级节点交换顺序。
     CategoryMoveSibling(i64, dozer_core::protocol::CategoryMoveDirection),
-    /// 打开"移动到..."选择器(内核拦截,转发到
-    /// `App::todo_category_picker_open_for_category`)。
-    CategoryReparentPickerOpen(i64),
     /// 分类行被按下(武装拖拽;内核拦截以取 `last_cursor`)。
     CategoryRowPress(i64),
     /// 拖拽已确认期间光标悬停到候选目标(`None` = 离开所有目标)。

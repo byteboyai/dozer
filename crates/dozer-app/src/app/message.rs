@@ -473,11 +473,6 @@ pub enum Message {
     ProjectLinkContextMenuClose,
     /// Todo 分类树节点右键菜单关闭(点遮罩 / 按 Esc)。
     CategoryContextMenuClose,
-    /// 分类选择器("移动到..." / 任务挂分类)浮层关闭(点遮罩 / 按 Esc)。
-    CategoryPickerClose,
-    /// 选择器里点了某一项:`None` = "未分类"(仅 `Todo` target 下有效,
-    /// `Category` target 选"未分类"表示挪到顶层)。
-    CategoryPickerSelect(Option<i64>),
     /// 数据库面板数据源树 header 行右键菜单关闭(点遮罩 / 按 Esc)。
     DatabaseSourceContextMenuClose,
     /// 项目页签:把某路径作为**新页签**打开(不动任何已存在页签的内容)。
@@ -765,24 +760,6 @@ pub(crate) struct CategoryContextMenu {
     pub(crate) y: f32,
     /// 被右键的节点:`Some` 为真实分类 id,`None` 为全部/未分类伪节点。
     pub(crate) id: Option<i64>,
-}
-
-/// 分类选择器要挂靠的目标:给任务挂分类、给分类节点 reparent。二者共用
-/// "点树选一个节点";挂任务 → `set_todo_category`,reparent → `reparent_category`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CategoryPickerTarget {
-    /// 给某个分类节点 reparent(分类 id)。挂任务分类改走 webview 的
-    /// `SetCategory` 事件,不再经这个选择器。
-    Category(i64),
-}
-
-/// 分类选择器浮层状态:定位坐标 + 目标。渲染内容复用
-/// `category_tree_nav` 同一份树数据(只读展示,不接展开/右键,选中即
-/// 关闭并提交)。
-pub(crate) struct CategoryPicker {
-    pub(crate) x: f32,
-    pub(crate) y: f32,
-    pub(crate) target: CategoryPickerTarget,
 }
 
 /// 输入框右键菜单浮层状态:定位坐标(屏幕空间,复用 `files.last_right_click`)

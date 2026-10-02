@@ -191,17 +191,6 @@ impl App {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
-        } else if self.category_picker.is_some() {
-            let dismiss = MouseArea::new(
-                container(column![])
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            )
-            .on_press(Message::CategoryPickerClose);
-            stack![base, dismiss, self.category_picker_popup()]
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
         } else if self.text_input_menu.is_some() {
             let dismiss = MouseArea::new(
                 container(column![])

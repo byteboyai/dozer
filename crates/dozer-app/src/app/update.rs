@@ -32,8 +32,8 @@ use byteui::interaction::icons;
 use dozer_core::protocol::{
     AgentKind, AgentState, BookmarkInfo, ProjectInfo, SummaryJobStatus, SummaryTrigger,
 };
-use iced_widget::core::{Border, Element, Length, Padding};
-use iced_widget::{button, column, container, text};
+use iced_widget::core::{Element, Length, Padding};
+use iced_widget::{column, container};
 use std::path::PathBuf;
 
 use super::*;
@@ -1771,14 +1771,8 @@ impl App {
                     });
                 }
                 // 以下几种分类动作都是从右键菜单里点出来的:先关掉菜单本
-                // 身(浮层 if-else 链里 `category_context_menu` 分支排在
-                // `category_picker` 之前,不关会导致"移动到..."开了选择器
-                // 却永远被菜单盖住),镜像 `files.rs::RenameStart` 落盘动作
-                // 时 `app_state.context_menu = None;` 的既有口径。
-                todo::Message::CategoryReparentPickerOpen(id) => {
-                    self.category_context_menu = None;
-                    self.todo_category_picker_open(CategoryPickerTarget::Category(id));
-                }
+                // 身,镜像 `files.rs::RenameStart` 落盘动作时
+                // `app_state.context_menu = None;` 的既有口径。
                 todo::Message::CategoryNewChild(_)
                 | todo::Message::CategoryNewSibling(_)
                 | todo::Message::CategoryDelete(_)
@@ -2814,30 +2808,6 @@ impl App {
             }
             Message::CategoryContextMenuClose => {
                 self.category_context_menu = None;
-            }
-            Message::CategoryPickerClose => {
-                self.category_picker = None;
-            }
-            Message::CategoryPickerSelect(chosen) => {
-                let Some(picker) = self.category_picker.take() else {
-                    return;
-                };
-                match picker.target {
-                    CategoryPickerTarget::Category(category_id) => {
-                        let client = self.client.clone();
-                        let handle = self.handle.clone();
-                        let proxy = self.proxy.clone();
-                        handle.spawn(async move {
-                            let res = client
-                                .reparent_category(category_id, chosen)
-                                .await
-                                .map(|_| ())
-                                .map_err(|e| e.to_string());
-                            let _ = proxy
-                                .send_event(Message::Todo(todo::Message::CategoryMutated(res)));
-                        });
-                    }
-                }
             }
             Message::DatabaseSourceContextMenuClose => {
                 self.database_source_menu = None;
@@ -6117,7 +6087,7 @@ impl App {
     }
 
     /// Todo 分类树节点右键菜单浮层:新建子/同级分类、重命名、删除、上移/
-    /// 下移、移动到...。定位坐标复用 `files.last_right_click`。
+    /// 下移。定位坐标复用 `files.last_right_click`。
     pub(crate) fn category_context_menu_popup<'a>(
         &self,
     ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -6173,11 +6143,6 @@ impl App {
                             )),
                         ),
                         crate::chrome::menu::item::<Message>(
-                            Some(icons::IconKind::FolderOpen),
-                            "移动到...",
-                            Message::Todo(todo::Message::CategoryReparentPickerOpen(id)),
-                        ),
-                        crate::chrome::menu::item::<Message>(
                             Some(icons::IconKind::Rename),
                             "重命名",
                             Message::Todo(todo::Message::CategoryRenameStart(id)),
@@ -6199,71 +6164,6 @@ impl App {
             .padding(Padding {
                 top: menu.y,
                 left: menu.x,
-                right: 0.0,
-                bottom: 0.0,
-            })
-            .into()
-    }
-
-    /// 分类选择器浮层:列出当前项目的全部分类节点(全展开按 depth 缩进
-    /// 平铺),点"未分类"或某个节点即把 `category_picker` 目标落盘并关闭
-    /// (Category → reparent,Todo → set_todo_category)。浮层只服务这两类
-    /// "把一个节点挂到某个分类"的动作 —— 搜索框的分类速滤已移除(改为
-    /// 按状态过滤),不再有 `Filter` 目标。
-    pub(crate) fn category_picker_popup<'a>(
-        &self,
-    ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-        let Some(picker) = &self.category_picker else {
-            return column![].into();
-        };
-        let categories = self
-            .active_workspace()
-            .map(|ws| ws.todo.categories().to_vec())
-            .unwrap_or_default();
-        let mut list = column![].spacing(2);
-
-        // "未分类"钉在树顶(`None` = 未分类)。
-        list = list.push(
-            button(text("未分类").size(byteui::theme::font::body()))
-                .on_press(Message::CategoryPickerSelect(None))
-                .width(Length::Fill)
-                .padding([6, 10]),
-        );
-        // 复用一份没有展开态(全展开)的拍平——选择器只做单次选择,不需要
-        // 折叠交互,直接把整棵树按 depth 缩进平铺出来最简单。
-        let all_expanded: std::collections::HashSet<i64> =
-            categories.iter().map(|c| c.id).collect();
-        for row in todo::visible_category_rows(&categories, &all_expanded) {
-            let id = row.id;
-            let click = Message::CategoryPickerSelect(Some(id));
-            list = list.push(
-                button(
-                    text(format!("{}{}", "  ".repeat(row.depth), row.name))
-                        .size(byteui::theme::font::body()),
-                )
-                .on_press(click)
-                .width(Length::Fill)
-                .padding([6, 10]),
-            );
-        }
-        let list =
-            container(list.width(Length::Fixed(220.0))).style(move |_t: &iced_widget::Theme| {
-                container::Style {
-                    background: Some(byteui::theme::color::current().panel.into()),
-                    border: Border {
-                        color: byteui::theme::color::current().border,
-                        width: 1.0,
-                        radius: 6.0.into(),
-                    },
-                    ..container::Style::default()
-                }
-            });
-        container(list)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .padding(Padding {
-                top: picker.y,
-                left: picker.x,
                 right: 0.0,
                 bottom: 0.0,
             })

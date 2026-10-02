@@ -712,8 +712,6 @@ impl Runner {
                 app.update(Message::ProjectLinkContextMenuClose);
             } else if app.category_context_menu_open() {
                 app.update(Message::CategoryContextMenuClose);
-            } else if app.category_picker_open() {
-                app.update(Message::CategoryPickerClose);
             } else if app.text_input_menu_open() {
                 app.update(Message::TextInputMenuClose);
             } else if app.database_source_context_menu_open() {

@@ -226,11 +226,6 @@ pub(crate) fn category_context_menu_items(
                 )),
             ),
             Item::entry(
-                Some(icons::IconKind::FolderOpen),
-                "移动到...",
-                Message::Todo(todo::Message::CategoryReparentPickerOpen(id)),
-            ),
-            Item::entry(
                 Some(icons::IconKind::Rename),
                 "重命名",
                 Message::Todo(todo::Message::CategoryRenameStart(id)),
@@ -396,8 +391,6 @@ pub struct App {
     pub(crate) settings: Option<settings::State>,
     /// Todo 分类树节点右键菜单浮层状态,坐标复用 `files.last_right_click`。
     pub(crate) category_context_menu: Option<CategoryContextMenu>,
-    /// 分类选择器("移动到..." / 任务挂分类)浮层状态:定位坐标 + 目标。
-    pub(crate) category_picker: Option<CategoryPicker>,
     /// 通用输入框右键菜单浮层状态(屏幕空间单例)。`TextInputMenuOpen` 时
     /// 写入、`TextInputMenuClose`/动作后清空。同一时刻最多挂一个。
     pub(crate) text_input_menu: Option<TextInputMenu>,
@@ -829,7 +822,6 @@ impl App {
             project_create: None,
             settings: None,
             category_context_menu: None,
-            category_picker: None,
             text_input_menu: None,
             database_source_menu: None,
             pending_text_input_focus: None,
@@ -3026,20 +3018,9 @@ impl App {
         }
     }
 
-    /// 分类选择器是否打开(main.rs Esc 键路由用)。
-    pub fn category_picker_open(&self) -> bool {
-        self.category_picker.is_some()
-    }
-
     /// Todo 分类树节点右键菜单是否打开(main.rs Esc 键路由用)。
     pub fn category_context_menu_open(&self) -> bool {
         self.category_context_menu.is_some()
-    }
-
-    /// 打开分类选择器浮层,挂到给定目标(任务挂分类 / 分类 reparent)。
-    pub(crate) fn todo_category_picker_open(&mut self, target: CategoryPickerTarget) {
-        let (x, y) = self.last_cursor;
-        self.category_picker = Some(CategoryPicker { x, y, target });
     }
 
     /// Agent 选择菜单是否打开(main.rs Esc 键路由用)。
@@ -4057,8 +4038,8 @@ mod tests {
         let items = category_context_menu_items(Some(7), Some(3));
         assert_eq!(
             items.len(),
-            7,
-            "新建子/同级、上移、下移、移动到、重命名、删除"
+            6,
+            "新建子/同级、上移、下移、重命名、删除"
         );
         let has_sibling_with_parent = items.iter().any(|i| {
             matches!(
