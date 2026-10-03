@@ -5,7 +5,6 @@ use anyhow::Result;
 use bytegit::{ChangeKind as GitChange, Repo, StatusOptions};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// 两个目录是同一个目录(规范化后相等);任一规范化失败按不同处理。
 fn same_dir(a: &Path, b: &Path) -> bool {
@@ -281,42 +280,28 @@ pub fn current_branch_has_commits(repo: &Path) -> bool {
 }
 
 /// 切换到 `name` 指定分支(本地分支)。错误透传 git 的 stderr,便于展示给
-/// 用户(如工作区有未提交改动导致的 checkout 失败)。
+/// 用户(如工作区有未提交改动导致的 checkout 失败)。实现是 `bytegit` 的
+/// `Repo::checkout_branch`(仍走 `git` 命令行:hook 与 Git LFS 过滤器要执行,
+/// 冲突时要给出带文件列表的原文——见 `bytegit` 的 `write.rs` 模块文档)。
+/// 项目目录在仓库子目录里时向上查找,切整个仓库(与迁移前命令行一致)。
 pub fn checkout_branch(repo: &Path, name: &str) -> Result<(), String> {
-    let out = Command::new("git")
-        .args(["checkout", name])
-        .current_dir(repo)
-        .output()
-        .map_err(|e| format!("无法运行 git: {e}"))?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-    }
+    Repo::discover(repo)
+        .and_then(|r| r.checkout_branch(name))
+        .map_err(|e| e.message().to_string())
 }
 
-/// 在项目根目录执行 `git init` 新建仓库。错误透传 git 的 stderr。
+/// 在项目根目录新建 git 仓库。初始分支遵循用户的 `init.defaultBranch`。
+/// 错误以可展示的文本返回。
 pub fn init_repo(repo: &Path) -> Result<(), String> {
-    let out = Command::new("git")
-        .args(["init"])
-        .current_dir(repo)
-        .output()
-        .map_err(|e| format!("无法运行 git: {e}"))?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-    }
+    bytegit::init(repo)
+        .map(|_| ())
+        .map_err(|e| e.message().to_string())
 }
 
 /// 系统是否装了可用的 git——URL 签出 tab 提交前的轻量检测,不解析
 /// 具体版本号,只看子进程能否成功跑起来。
 pub fn git_available() -> bool {
-    Command::new("git")
-        .arg("--version")
-        .output()
-        .map(|out| out.status.success())
-        .unwrap_or(false)
+    bytegit::git_available()
 }
 
 /// `git clone <url> <dest>`,鉴权完全委托系统已配置的 SSH agent/凭证
@@ -325,22 +310,12 @@ pub fn git_available() -> bool {
 /// `dest` 必须还不存在(调用方在此之前已经校验过,见 `project_create`
 /// 模块的 `validate_target_not_exists`),失败把 git 的 stderr 原样透传。
 /// `url` 可能来自用户直接粘贴,也可能来自第三方 API 返回的 clone_url
-/// (见 `git_accounts::list_repos`)——两者都不可信,用 `--` 结束选项解析,
-/// 防止以 `-` 开头的伪造 URL 被 git 当成命令行选项吃掉(同 CVE-2017-1000117
-/// 那一类问题)。
+/// (见 `git_accounts::list_repos`)——两者都不可信;`--` 结束选项解析的
+/// 防线在 `bytegit::clone` 里(同 CVE-2017-1000117 那一类问题)。
 pub fn clone_repo(url: &str, dest: &Path) -> Result<(), String> {
-    let out = Command::new("git")
-        .arg("clone")
-        .arg("--")
-        .arg(url)
-        .arg(dest)
-        .output()
-        .map_err(|e| format!("无法运行 git: {e}"))?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-    }
+    bytegit::clone(url, dest, bytegit::CloneOptions::default())
+        .map(|_| ())
+        .map_err(|e| e.message().to_string())
 }
 
 #[cfg(test)]
