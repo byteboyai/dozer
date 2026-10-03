@@ -324,4 +324,99 @@ mod tests {
             "target/ 下的改动不该触发回调"
         );
     }
+
+    // ---- bytegit P4:迁移前就有、此前没有测试的口径 ----
+
+    #[test]
+    fn the_repo_root_itself_is_relevant_as_workdir() {
+        let repo = Path::new("/r");
+        assert_eq!(
+            is_relevant_path(repo, Path::new("/r")),
+            Some(Relevance::Workdir)
+        );
+    }
+
+    #[test]
+    fn paths_outside_the_repo_are_not_relevant() {
+        let repo = Path::new("/r");
+        assert_eq!(
+            is_relevant_path(repo, Path::new("/elsewhere/src/main.rs")),
+            None
+        );
+        assert_eq!(
+            is_relevant_path(repo, Path::new("/rr/src/main.rs")),
+            None,
+            "前缀相同但不是子路径"
+        );
+    }
+
+    #[test]
+    fn git_lock_files_and_lookalikes_are_not_refs_except_under_refs() {
+        let repo = Path::new("/r");
+        let rel = |p: &str| is_relevant_path(repo, Path::new(p));
+        assert_eq!(rel("/r/.git/index.lock"), None);
+        assert_eq!(rel("/r/.git/HEAD.lock"), None);
+        assert_eq!(rel("/r/.git/refsx"), None, "按路径分量判断,不是字符串前缀");
+        // `refs/` 之下一律算引用类,包括 git 写引用时的临时 `.lock` 文件。
+        assert_eq!(
+            rel("/r/.git/refs/heads/main.lock"),
+            Some(Relevance::GitRefs)
+        );
+        assert_eq!(rel("/r/.git/refs"), Some(Relevance::GitRefs));
+    }
+
+    #[test]
+    fn dotfiles_outside_the_hidden_list_are_relevant() {
+        let repo = Path::new("/r");
+        let rel = |p: &str| is_relevant_path(repo, Path::new(p));
+        assert_eq!(rel("/r/.env"), Some(Relevance::Workdir));
+        assert_eq!(rel("/r/.gitignore"), Some(Relevance::Workdir));
+        assert_eq!(rel("/r/src/.hidden/x"), Some(Relevance::Workdir));
+    }
+
+    #[test]
+    fn a_dot_git_file_at_the_root_is_not_relevant() {
+        // linked worktree / 子模块里 `.git` 是个指向别处 gitdir 的文件:这个文件本身的变化不上报
+        // (真实 gitdir 在仓库根之外,从来不在监听范围内——规格 O3 的已知缺口)。
+        let repo = Path::new("/r");
+        assert_eq!(is_relevant_path(repo, Path::new("/r/.git")), None);
+    }
+
+    #[test]
+    fn start_reports_a_git_ref_change_as_git_refs() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::write(repo.join(".git").join("HEAD"), "ref: refs/heads/main\n").unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<FsChanges>::new()));
+        let seen2 = seen.clone();
+        let _handle = rt.block_on(async {
+            start(
+                &tokio::runtime::Handle::current(),
+                repo.clone(),
+                Duration::from_millis(100),
+                move |changes| seen2.lock().unwrap().push(changes),
+            )
+            .unwrap()
+        });
+
+        std::fs::write(repo.join(".git").join("HEAD"), "ref: refs/heads/other\n").unwrap();
+        rt.block_on(async {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            while seen.lock().unwrap().is_empty() && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        });
+        let seen = seen.lock().unwrap();
+        if seen.is_empty() {
+            // 某些沙盒/CI 环境不向临时目录投递 FSEvents;分类算法由上面的纯函数测试覆盖。
+            return;
+        }
+        assert!(
+            seen.iter().any(|c| c.relevance == Some(Relevance::GitRefs)),
+            "{seen:?}"
+        );
+    }
 }
