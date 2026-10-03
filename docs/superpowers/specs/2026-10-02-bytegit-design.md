@@ -90,22 +90,27 @@ is_dirty(&self, opts) -> Result<bool, GitError>
 
 ```text
 log(&self, opts: LogOptions) -> Result<Vec<CommitSummary>, GitError>
-    LogOptions { max_count: usize, path: Option<PathBuf>, since: Option<SystemTime> }
+    LogOptions { max_count: usize, path: Option<PathBuf> }   // 无 since(P3 需要时再加);用 LogOptions::new(n).path(p) 构造,#[non_exhaustive]
     CommitSummary { id: CommitId, parents: Vec<CommitId>, author: Signature, time: SystemTime, summary: String, message: String }
-commit_files(&self, id: CommitId) -> Result<Vec<FileChange>, GitError>        // 根提交按空树对比
+commit_files(&self, id: CommitId) -> Result<Vec<FileChange>, GitError>        // 根提交按空树对比,合并提交相对第一父
     FileChange { path: PathBuf, old_path: Option<PathBuf>, kind: ChangeKind, old_blob: Option<BlobId>, new_blob: Option<BlobId> }
 blob_text(&self, blob: BlobId, limits: ContentLimits) -> Result<Content, GitError>
-file_at(&self, id: CommitId, path: &Path, limits: ContentLimits) -> Result<Option<Content>, GitError>
+file_at(&self, id: CommitId, path: &Path, limits: ContentLimits) -> Result<Option<Content>, GitError>  // 提交里没有该路径为 None
+file_bytes_at(&self, id: CommitId, path: &Path) -> Result<Vec<u8>, GitError>  // 原始字节(回滚用,不做大小/编码判定;路径是目录时报错"该历史版本对应的不是一个文件")
+workdir_patch(&self, commit: CommitId, path: &Path, max_bytes: usize) -> Result<Patch, GitError>  // Patch { text, truncated };截断在追加每行之前检查,text 可能略超上限;提示文案归调用方
 workdir_vs_commit(&self, id: CommitId, path: &Path, limits) -> Result<ContentPair, GitError>
 previous_version(&self, path: &Path) -> Result<Option<CommitId>, GitError>   // 现 previous_oid 语义
-commit_count(&self) -> Result<u64, GitError>
-commit_count_by_day(&self) -> Result<BTreeMap<i64, u64>, GitError>
-churn(&self, since: SystemTime) -> Result<HashMap<PathBuf, u32>, GitError>   // 现 recent_churn
+commit_count(&self) -> Result<u64, GitError>                                  // P3
+commit_count_by_day(&self) -> Result<BTreeMap<i64, u64>, GitError>            // P3
+churn(&self, since: SystemTime) -> Result<HashMap<PathBuf, u32>, GitError>    // P3;现 recent_churn
 ```
 
-- `Content` 是 `enum { Text(String), TooLarge{bytes}, Binary, NotUtf8 }`，**吸收现在 `git_log::classify_diff_bytes` 与 `DiffBlobContent`**，`git_log` 与 `file_history` 共用同一套截断阈值（`ContentLimits`），不再靠注释对齐。
-- 回滚（B2）：`bytegit` 只提供 `file_at`（取某提交的文件内容）；**写回磁盘由调用方做**，`rollback_to` 留在 `file_history` 里，内部改为 `file_at` + `fs::write`。
-- `churn` 与 `commit_count*` 现状分别是命令行与 git2 实现，统一为 git2。
+- `LogOptions` 用 `LogOptions::new(n).path(p)` 构造,`#[non_exhaustive]`;**没有 `since`**(P3 需要时再加)。`path` 按 pathspec 解释(通配符有效、无 `--follow`),见 §8 O11。
+- `CommitSummary.time` 是**提交者时间**(committer time,`git log --format=%ct`),不是作者时间(迁移前 `git_log`/`file_history` 的注释写 "author time",实际取的也是 `commit.time()`,即提交者时间)。
+- `FileChange`: `commit_files` **不做改名检测**,所以 `old_path` 目前恒为 `None`;合并提交相对第一父,根提交相对空树。
+- `Content` 是 `enum { Text(String), TooLarge{bytes}, Binary, NotUtf8, NotAFile }`(最后一项 = 路径是目录/子模块),**吸收现在 `git_log::classify_diff_bytes` 与 `DiffBlobContent`**,`git_log` 与 `file_history` 共用同一套截断阈值(`ContentLimits`),不再靠注释对齐。`ContentPair { old: Option<Content>, new: Option<Content> }`(`None` = 该侧没有这个文件)。判定顺序:先大小(恰好等于上限不算超)→ NUL → UTF-8。
+- `log` 在 HEAD 未诞生时返回 `GitErrorKind::NoCommits`。
+- 回滚(B2):`rollback_to` 留在 `file_history`,内部用 `file_bytes_at`(原始字节,避免再套一层编码判定)+ `fs::write`。
 
 ### 4.5 变更监听（feature `watch`，B5）
 
@@ -165,7 +170,7 @@ TempRepo::new()                         // 临时目录 + git init，固定作�
 |------|------|--------------|------|
 | P0 | 建 `byteboyai/bytegit` 仓库骨架、CI、`TempRepo`、`CommitId`/`GitError`/`ChangeKind`、`Repo::discover`；发 `v0.1.0` | — | `cargo test`、clippy、fmt 通过 |
 | P1 | HEAD/分支/远程、工作区状态；迁移 `delivery.rs` 的 `is_dirty`/`file_statuses`/`branch`/`remote_url`/`local_branches`/`current_branch_has_commits`、`git_hotspots::dirty_paths`/`head_short_sha`；**先核对并写清 §4.3 的口径** | 适配层随 P6 删除（`delivery.rs` 对应函数改成 bytegit 适配层，**签名不变**，调用点不动） | 并行比对测试；文件树着色、首页分支显示行为不变 |
-| P2 | 历史与 diff；迁移 `git_log::{commit_detail, diff_blob_content, read_side, classify_diff_bytes}`、`file_history::*`、`rollback` 的取内容部分；`git_log` 与 `file_history` 不再互相引用，`file_history → git_log` 耦合消失 | `git_log` 里的 blob/分类代码、`file_history` 里的重复实现 | 两面板 diff 展示行为不变；`DiffBlobContent` 不再被 `file_history` 引用 |
+| P2 | 历史与 diff；迁移 `git_log::{commit_detail, diff_blob_content, read_side, classify_diff_bytes}`、`file_history::*`、`rollback` 的取内容部分；`git_log` 与 `file_history` 不再互相引用，`file_history → git_log` 耦合消失 | `git_log` 里的 blob/分类代码、`git_log` 的 `DiffFileEntry.patch/truncated` 死字段、`file_history` 里的重复实现 | 两面板 diff 展示行为不变；`DiffBlobContent` 不再被 `file_history` 引用；**刻画测试在旧/新实现上都通过**（用刻画测试固定行为，而非双实现并行）；`extensions/diff_content.rs` 作为两面板共用的中立层 |
 | P3 | `usage` 的 `commit_count*`、`git_hotspots::recent_churn`、`dozerd/projects.rs` 的两处命令行；`dozerd` 加依赖 | 对应实现 | `usage`、项目更新时间、Code Health 热点结果不变 |
 | P4 | `watch` feature；迁移 `git_watch`，`HIDDEN` 由调用方传入 | `git_watch.rs` 里的路径分类逻辑 | 现有 `git_watch` 测试迁移后通过 |
 | P5 | 写操作（`init/clone/checkout_branch`），含 §4.6 评估结论 | `delivery.rs` 剩余的命令行函数 | 新建项目、克隆、分支切换行为不变 |
@@ -188,10 +193,12 @@ TempRepo::new()                         // 临时目录 + git init，固定作�
 | O1 | §4.3 口径（untracked/ignored、`discover` vs `open`）现状不一致，且未读对应测试 | **P1 已完成**：`is_dirty` 含未跟踪、不含被忽略；`file_statuses` 含未跟踪与被忽略；`current_branch_has_commits` 在 detached HEAD 为 `true`。结论写入 §4.3 |
 | O2 | 写操作 `git2` 化的可行性（`clone` 认证/进度、`checkout` 冲突） | §4.6 并行评估，结论回写本规格 |
 | O3 | `.git` 为文件（worktree/子模块）的监听与读取 | v0.1 不强求，API 留位；v2 引入 worktree 时必须解决 |
-| O4 | `git2`（libgit2）与命令行 git 在边角行为上的差异（如大仓库 `status` 性能、`.gitattributes`/filter、submodule、sparse checkout） | P1/P2 的并行比对测试覆盖现有用法；未覆盖的差异记为已知限制 |
+| O4 | `git2`（libgit2）与命令行 git 在边角行为上的差异（如大仓库 `status` 性能、`.gitattributes`/filter、submodule、sparse checkout） | P1 用并行比对测试覆盖现有用法；P2 的实际情况是并行比对用刻画测试代替（同一批测试在旧/新实现都通过），libgit2 与命令行 git 在 P2 覆盖的用法上未发现差异；未覆盖的差异记为已知限制 |
 | O5 | 大仓库性能：`log` 的 `max_count`、`churn` 的全历史扫描，`usage` 的全量 revwalk | 保持现有上限与调用方式，不在迁移中优化；另立项 |
 | O6 | 25 处 `delivery::*` 调用方的逐个核对只做了数量统计 | **P1 已完成**：核对后决定不逐个改调用点，改为把 `delivery.rs` 保留为签名不变的 bytegit 适配层，随 P6 一并删除。 |
 | O7 | `gleisbau` 与 `bytegit` 的 `git2` 版本对齐的长期维护 | 升级时同步升；若 `gleisbau` 成为阻碍再评估 B1 |
 | O8 | Digger 是否需要提交图 | 不影响 v0.1；需要时单独设计 `graph` feature |
 | O9 | 项目目录位于仓库子目录时，`Repo::discover`（向上查找）与 `delivery::open_exact`（只认仓库根）语义不一致；P1 为保持旧行为在 `delivery` 适配层用了 `open_exact` | 待用户裁决；统一前不要擅自把 `open_exact` 改成向上查找 |
 | O10 | 同一子目录项目下 `git_hotspots::dirty_paths`（相对仓库根）与 `recent_churn`（`--relative`，相对项目根）路径口径不同 | 迁移期保持现状；统一口径另议（P3 迁移 `recent_churn` 时评估） |
+| O11 | `log`/`file_history` 的 `path` 按 pathspec 解释：文件名含 `[`、`*` 时会混入别的文件的提交（`build_treats_glob_characters_in_the_file_name_as_a_pathspec_known_quirk` 已固化该行为） | 待用户裁决；刻画测试已固定现状，修不修都先不擅自改 |
+| O12 | P2 中三处错误文案由英文原文改为中文（`该历史版本对应的不是一个文件` 等） | 记录为已知的用户可见文案变化；若需要保持英文另议 |
