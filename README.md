@@ -10,6 +10,7 @@ Dozer 不是 IDE、不是编辑器、不是 AI 聊天应用、不是终端模拟
 
 - 规格（唯一需求真相源）：`docs/superpowers/specs/2026-07-14-dozer-phase1-design.md`
 - 实现计划系列：`docs/superpowers/plans/`
+- ByteBoy 多仓治理：`docs/architecture/byteboy-repositories.md`
 - 开发者指引：`CLAUDE.md`
 
 ## Workspace

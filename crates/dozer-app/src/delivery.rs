@@ -22,9 +22,10 @@ pub fn repo_root(dir: &Path) -> Option<PathBuf> {
     if !dir.is_dir() {
         return None;
     }
-    let out = git(dir, &["rev-parse", "--show-toplevel"])?;
-    let line = out.lines().next()?.trim();
-    (!line.is_empty()).then(|| PathBuf::from(line))
+    bytegit::Repo::discover(dir)
+        .ok()
+        .filter(|repo| !repo.is_bare())
+        .map(|repo| repo.root().to_path_buf())
 }
 
 /// 工作区是否有任何改动(暂存或未暂存,不含被 `.gitignore` 排除的文件)。
