@@ -99,6 +99,10 @@ async fn main() -> Result<()> {
             "启动回填:发现历史 transcript 文件"
         );
         dozerd::backfill::backfill_all(&transcripts, files);
+        match transcripts.ingest_codex_sqlite(None) {
+            Ok(count) => dozer_core::log_info!(LOG, count, "启动回填:已摄取 Codex SQLite 会话"),
+            Err(e) => dozer_core::log_warn!(LOG, error = %e, "Codex SQLite 启动回填失败"),
+        }
     }
     // 总结调度服务 + worker:全局并发 1,串行消费持久化队列;启动时先把上次
     // 进程中途退出遗留的 running 任务归位 queued。

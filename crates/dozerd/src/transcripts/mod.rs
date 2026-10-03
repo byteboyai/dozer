@@ -10,6 +10,8 @@ use std::io::{BufRead, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::Mutex;
 
+dozer_core::scope!(LOG, module, "transcripts");
+
 /// 从 transcript 文件路径派生 `conversation_id`(即文件名去掉扩展名)。
 /// `ingest_session` 与 `dozerd::server` 的 `RecordSessionSummary`/
 /// `CloseWithSummary` 处理器共用同一份派生逻辑,避免各自写一份、两处
@@ -109,6 +111,195 @@ pub struct TranscriptStore {
 }
 
 impl TranscriptStore {
+    /// Import conversations from Codex's paginated SQLite history (Codex 0.16x+).
+    ///
+    /// Recent Codex builds keep `~/.codex/sessions` empty and store thread metadata
+    /// and rendered history in `state_N.sqlite` / `thread_history_N.sqlite`.
+    /// Keeping this reader here (rather than teaching the UI about Codex-private
+    /// storage) preserves the existing conversations/usage query contract.
+    pub fn ingest_codex_sqlite(&self, cwd: Option<&str>) -> Result<u32> {
+        self.ingest_codex_sqlite_in(&dozer_core::agent_paths::home_dir(), cwd)
+    }
+
+    fn ingest_codex_sqlite_in(&self, home: &Path, cwd: Option<&str>) -> Result<u32> {
+        use rusqlite::OpenFlags;
+
+        fn newest_numbered_db(root: &Path, prefix: &str) -> Option<std::path::PathBuf> {
+            std::fs::read_dir(root)
+                .ok()?
+                .filter_map(|entry| entry.ok().map(|e| e.path()))
+                .filter_map(|path| {
+                    let name = path.file_name()?.to_str()?;
+                    let version = name
+                        .strip_prefix(prefix)?
+                        .strip_suffix(".sqlite")?
+                        .parse::<u64>()
+                        .ok()?;
+                    Some((version, path))
+                })
+                .max_by_key(|(version, _)| *version)
+                .map(|(_, path)| path)
+        }
+
+        let codex = home.join(".codex");
+        let Some(state_path) = newest_numbered_db(&codex, "state_") else {
+            return Ok(0);
+        };
+        let Some(history_path) = newest_numbered_db(&codex, "thread_history_") else {
+            return Ok(0);
+        };
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let state = Connection::open_with_flags(&state_path, flags)
+            .with_context(|| format!("打开 Codex 状态库失败: {}", state_path.display()))?;
+        let history = Connection::open_with_flags(&history_path, flags)
+            .with_context(|| format!("打开 Codex 历史库失败: {}", history_path.display()))?;
+
+        let sql = if cwd.is_some() {
+            "SELECT id, cwd, title, created_at, updated_at, tokens_used, rollout_path
+             FROM threads WHERE cwd = ?1 AND archived = 0 ORDER BY updated_at"
+        } else {
+            "SELECT id, cwd, title, created_at, updated_at, tokens_used, rollout_path
+             FROM threads WHERE archived = 0 ORDER BY updated_at"
+        };
+        let mut stmt = state.prepare(sql)?;
+        let map_thread = |row: &rusqlite::Row<'_>| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, u64>(3)?,
+                row.get::<_, u64>(4)?,
+                row.get::<_, u64>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        };
+        let threads: Vec<_> = if let Some(cwd) = cwd {
+            stmt.query_map([cwd], map_thread)?
+                .collect::<rusqlite::Result<_>>()?
+        } else {
+            stmt.query_map([], map_thread)?
+                .collect::<rusqlite::Result<_>>()?
+        };
+
+        let mut imported = 0u32;
+        for (id, thread_cwd, title, created, updated, tokens_used, rollout_path) in threads {
+            let mut item_stmt = history.prepare(
+                "SELECT item_id, created_at_ms, item_type, item_json
+                 FROM thread_items WHERE thread_id = ?1 ORDER BY rollout_ordinal",
+            )?;
+            let items = item_stmt.query_map([&id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?;
+            let mut turns = Vec::new();
+            for item in items {
+                let (item_id, ts, item_type, raw_json) = item?;
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw_json) else {
+                    continue;
+                };
+                let (role, content, tool_calls, mutating, files) = match item_type.as_str() {
+                    "userMessage" => {
+                        let text = value
+                            .get("content")
+                            .and_then(|v| v.as_array())
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|b| b.get("text").and_then(|v| v.as_str()))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        if text.trim().is_empty() {
+                            continue;
+                        }
+                        ("human", text, 0, 0, Vec::new())
+                    }
+                    "agentMessage" => {
+                        let text = value.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                        if text.trim().is_empty() {
+                            continue;
+                        }
+                        ("ai", text.to_string(), 0, 0, Vec::new())
+                    }
+                    "commandExecution" => {
+                        let command = value.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                        ("ai", String::new(), 1, 0, Vec::from([command.to_string()]))
+                    }
+                    "fileChange" => {
+                        let files = value
+                            .get("changes")
+                            .and_then(|v| v.as_array())
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|change| change.get("path").and_then(|v| v.as_str()))
+                            .map(str::to_string)
+                            .collect::<Vec<_>>();
+                        ("ai", String::new(), 1, 1, files)
+                    }
+                    _ => continue,
+                };
+                turns.push(parse::ParsedTurn {
+                    message_key: item_id,
+                    role: role.into(),
+                    content,
+                    tool_calls,
+                    mutating_tool_calls: mutating,
+                    files_touched: files,
+                    ts: Some(ts),
+                    raw_json,
+                    ..Default::default()
+                });
+            }
+            // The paginated history DB does not expose the old per-response token
+            // breakdown. Preserve Codex's authoritative thread total as one usage
+            // row so totals continue to work without inventing an input/output split.
+            turns.push(parse::ParsedTurn {
+                message_key: format!("codex-sqlite-usage:{id}"),
+                role: "token_usage".into(),
+                tokens_in: tokens_used,
+                ts: Some(updated.saturating_mul(1000)),
+                raw_json: "{\"type\":\"codex_sqlite_usage\"}".into(),
+                ..Default::default()
+            });
+
+            let mut conn = self.conn.lock().expect("db lock");
+            let tx = conn.transaction()?;
+            tx.execute(
+                "DELETE FROM conversation_turns WHERE conversation_id = ?1",
+                [&id],
+            )?;
+            for (index, turn) in turns.iter().enumerate() {
+                tx.execute(
+                    "INSERT INTO conversation_turns
+                     (conversation_id, turn_index, message_key, role, content, tools_summary,
+                      thinking, ts, tool_calls, mutating_tool_calls, files_touched,
+                      tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, raw_json, is_error)
+                     VALUES (?1,?2,?3,?4,?5,'[]',0,?6,?7,?8,?9,?10,0,0,0,?11,0)",
+                    params![id, index as i64, turn.message_key, turn.role, turn.content,
+                        turn.ts, turn.tool_calls, turn.mutating_tool_calls,
+                        serde_json::to_string(&turn.files_touched).unwrap_or_else(|_| "[]".into()),
+                        turn.tokens_in, turn.raw_json],
+                )?;
+            }
+            tx.execute(
+                "INSERT INTO conversations
+                 (conversation_id,agent_kind,dir,file_path,title,first_ts,last_ts,turn_count,
+                  parsed_offset,file_size_at_parse,cwd)
+                 VALUES (?1,'codex','',?2,?3,?4,?5,?6,0,0,?7)
+                 ON CONFLICT(conversation_id) DO UPDATE SET agent_kind='codex', file_path=excluded.file_path,
+                    title=excluded.title, first_ts=excluded.first_ts, last_ts=excluded.last_ts,
+                    turn_count=excluded.turn_count, cwd=excluded.cwd",
+                params![id, rollout_path, title, created.saturating_mul(1000),
+                    updated.saturating_mul(1000), turns.len() as u32, thread_cwd],
+            )?;
+            tx.commit()?;
+            imported += 1;
+        }
+        Ok(imported)
+    }
+
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).context("建库目录")?;
@@ -546,7 +737,14 @@ impl TranscriptStore {
     pub fn backfill_project(&self, cwd: &str) -> u32 {
         let files =
             crate::transcripts::scan::discover_project_transcript_files(std::path::Path::new(cwd));
-        crate::backfill::ingest_files(self, files)
+        let legacy = crate::backfill::ingest_files(self, files);
+        match self.ingest_codex_sqlite(Some(cwd)) {
+            Ok(count) => legacy.saturating_add(count),
+            Err(e) => {
+                dozer_core::log_warn!(LOG, error = %e, "Codex SQLite 项目回填失败");
+                legacy
+            }
+        }
     }
 
     /// 生产入口,内部用 `dozer_core::agent_paths::home_dir()`。按项目根目录
@@ -862,6 +1060,65 @@ mod tests {
         let p = dir.join(name);
         std::fs::write(&p, content).unwrap();
         p
+    }
+
+    #[test]
+    fn ingest_codex_sqlite_imports_paginated_history_and_usage() {
+        let tmp = tempfile::tempdir().unwrap();
+        let codex = tmp.path().join(".codex");
+        std::fs::create_dir_all(&codex).unwrap();
+        let state = rusqlite::Connection::open(codex.join("state_5.sqlite")).unwrap();
+        state
+            .execute_batch(
+                "CREATE TABLE threads (
+                id TEXT PRIMARY KEY, cwd TEXT NOT NULL, title TEXT NOT NULL,
+                created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+                tokens_used INTEGER NOT NULL, rollout_path TEXT NOT NULL,
+                archived INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO threads VALUES
+                ('c1','/work/project','最近的 Codex 会话',100,200,321,'/gone/rollout.jsonl',0),
+                ('other','/work/other','别的项目',100,300,999,'/gone/other.jsonl',0);",
+            )
+            .unwrap();
+        let history = rusqlite::Connection::open(codex.join("thread_history_1.sqlite")).unwrap();
+        history.execute_batch(
+            "CREATE TABLE thread_items (
+                thread_id TEXT NOT NULL, item_id TEXT NOT NULL,
+                rollout_ordinal INTEGER NOT NULL, created_at_ms INTEGER NOT NULL,
+                item_type TEXT NOT NULL, item_json TEXT NOT NULL
+             );
+             INSERT INTO thread_items VALUES
+                ('c1','u1',1,101000,'userMessage',
+                 '{\"type\":\"userMessage\",\"content\":[{\"type\":\"text\",\"text\":\"帮我修复统计\"}]}'),
+                ('c1','a1',2,102000,'agentMessage',
+                 '{\"type\":\"agentMessage\",\"text\":\"已经修复\"}');",
+        )
+        .unwrap();
+        drop(state);
+        drop(history);
+
+        let store = TranscriptStore::open(&tmp.path().join("dozer.db")).unwrap();
+        assert_eq!(
+            store
+                .ingest_codex_sqlite_in(tmp.path(), Some("/work/project"))
+                .unwrap(),
+            1
+        );
+        let rows = store
+            .list_conversations_in(tmp.path(), "/work/project", Some(AgentKind::Codex), 10, 0)
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].conversation_id, "c1");
+        assert_eq!(rows[0].title, "最近的 Codex 会话");
+        let turns = store.get_conversation_turns("c1", -1, 10).unwrap();
+        assert_eq!(turns.iter().filter(|t| t.role == "human").count(), 1);
+        let usage = store
+            .get_usage_summary_in(tmp.path(), "/work/project", None)
+            .unwrap();
+        assert_eq!(usage.len(), 1);
+        assert_eq!(usage[0].1.turns, 1);
+        assert_eq!(usage[0].1.tokens_in, 321);
     }
 
     #[test]
