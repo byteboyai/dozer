@@ -1,0 +1,36 @@
+<!-- bytehost H0 机械报表快照;基线提交 e2ed23d3;生成命令: python3 scripts/audit/report.py panelkind -->
+
+| 文件 | 点名变体的行 | 仅类型的行 | 遍历候选簇 |
+|---|---|---|---|
+| `app/app.rs` | 100 | 29 | 1 |
+| `webview_geometry.rs` | 114 | 3 | 11 |
+| `chrome/rail.rs` | 92 | 22 | 12 |
+| `app/update.rs` | 78 | 9 | 6 |
+| `workspace/state.rs` | 42 | 39 | 0 |
+| `app/layout.rs` | 60 | 7 | 6 |
+| `platform/window_events.rs` | 45 | 4 | 0 |
+| `workspace/view.rs` | 42 | 4 | 0 |
+| `app/message.rs` | 0 | 45 | 0 |
+| `preview/view.rs` | 30 | 8 | 0 |
+| `app/view.rs` | 35 | 1 | 0 |
+| `app/state.rs` | 25 | 10 | 3 |
+| `preview/code_host.rs` | 22 | 7 | 2 |
+| `preview/webview_protocol.rs` | 22 | 5 | 0 |
+| `workspace/tests.rs` | 17 | 1 | 0 |
+| `preview/resources.rs` | 4 | 5 | 0 |
+| `panel_layouts.rs` | 6 | 1 | 1 |
+| `term/terminal.rs` | 4 | 2 | 0 |
+| `extensions/usage/mod.rs` | 5 | 0 | 0 |
+| `preview/webview.rs` | 3 | 1 | 0 |
+| `extensions/files/state.rs` | 0 | 3 | 0 |
+| `extensions/files/view.rs` | 1 | 2 | 0 |
+| `extensions/project/view.rs` | 3 | 0 | 0 |
+| `extensions/todo/view.rs` | 3 | 0 | 0 |
+| `extensions/usage/view.rs` | 3 | 0 | 0 |
+| `extensions/database/view.rs` | 2 | 0 | 0 |
+| `platform/edit_history_overlay.rs` | 1 | 1 | 0 |
+| `platform/file_history_overlay.rs` | 1 | 1 | 0 |
+| `extensions/database/state.rs` | 1 | 0 | 0 |
+| `extensions/todo/state.rs` | 1 | 0 | 0 |
+| `runtime.rs` | 1 | 0 | 0 |
+| **合计** | 763 | 210 | 42 |
