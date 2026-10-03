@@ -1037,4 +1037,155 @@ mod tests {
             "冲突文件没有暂存/工作区改动标志,旧实现不给它状态"
         );
     }
+
+    // ---- bytegit P5:init_repo / checkout_branch 迁移前后必须一致的口径 ----
+
+    /// main:a.txt("a1")、b.txt("b1");feature:a.txt("a2")、多一个 c.txt。当前在 main。
+    fn two_branches() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        git_in(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "a1\n").unwrap();
+        std::fs::write(repo.join("b.txt"), "b1\n").unwrap();
+        git_in(&repo, &["add", "."]);
+        git_in(&repo, &["commit", "-qm", "base"]);
+        git_in(&repo, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(repo.join("a.txt"), "a2\n").unwrap();
+        std::fs::write(repo.join("c.txt"), "c1\n").unwrap();
+        git_in(&repo, &["add", "."]);
+        git_in(&repo, &["commit", "-qm", "feature"]);
+        git_in(&repo, &["checkout", "-q", "main"]);
+        (dir, repo)
+    }
+
+    fn read(repo: &std::path::Path, rel: &str) -> String {
+        std::fs::read_to_string(repo.join(rel)).unwrap()
+    }
+
+    #[test]
+    fn init_repo_creates_a_repository_with_no_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path()).unwrap();
+        assert!(dir.path().join(".git").is_dir());
+        assert!(repo_root(dir.path()).is_some());
+        assert!(!current_branch_has_commits(dir.path()));
+        assert_eq!(branch(dir.path()), None);
+    }
+
+    #[test]
+    fn init_repo_uses_the_users_default_branch_name() {
+        // 不假设本机配置:预期值用 `git config` 读同一份。
+        let out = Command::new("git")
+            .args(["config", "--get", "init.defaultBranch"])
+            .output()
+            .unwrap();
+        let configured = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let expected = if configured.is_empty() {
+            "master".to_string()
+        } else {
+            configured
+        };
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path()).unwrap();
+        let head = std::fs::read_to_string(dir.path().join(".git/HEAD")).unwrap();
+        assert_eq!(head.trim(), format!("ref: refs/heads/{expected}"));
+    }
+
+    #[test]
+    fn init_repo_on_an_existing_repo_keeps_its_commits() {
+        let (_d, repo) = mkrepo();
+        let before = branch(&repo);
+        init_repo(&repo).unwrap();
+        assert_eq!(branch(&repo), before);
+        assert!(current_branch_has_commits(&repo));
+    }
+
+    #[test]
+    fn init_repo_inside_a_repo_subdirectory_creates_a_nested_repo() {
+        let (_d, repo) = mkrepo();
+        let sub = repo.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        init_repo(&sub).unwrap();
+        assert!(sub.join(".git").is_dir());
+    }
+
+    #[test]
+    fn init_repo_fails_when_the_directory_is_missing_and_creates_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope");
+        assert!(init_repo(&missing).is_err());
+        assert!(!missing.exists());
+    }
+
+    #[test]
+    fn checkout_branch_switches_head_and_the_worktree() {
+        let (_d, repo) = two_branches();
+        checkout_branch(&repo, "feature").unwrap();
+        assert_eq!(branch(&repo).as_deref(), Some("feature"));
+        assert_eq!(read(&repo, "a.txt"), "a2\n");
+        assert_eq!(read(&repo, "c.txt"), "c1\n");
+    }
+
+    #[test]
+    fn checking_out_the_current_branch_is_fine() {
+        let (_d, repo) = two_branches();
+        checkout_branch(&repo, "main").unwrap();
+        assert_eq!(branch(&repo).as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn checkout_carries_an_unstaged_edit_to_a_file_the_branches_agree_on() {
+        let (_d, repo) = two_branches();
+        std::fs::write(repo.join("b.txt"), "b-local\n").unwrap();
+        checkout_branch(&repo, "feature").unwrap();
+        assert_eq!(read(&repo, "b.txt"), "b-local\n");
+    }
+
+    #[test]
+    fn checkout_carries_a_staged_new_file() {
+        let (_d, repo) = two_branches();
+        std::fs::write(repo.join("d.txt"), "d\n").unwrap();
+        git_in(&repo, &["add", "d.txt"]);
+        checkout_branch(&repo, "feature").unwrap();
+        assert_eq!(read(&repo, "d.txt"), "d\n");
+    }
+
+    #[test]
+    fn a_conflicting_edit_blocks_checkout_and_the_error_names_the_file() {
+        let (_d, repo) = two_branches();
+        std::fs::write(repo.join("a.txt"), "a-local\n").unwrap();
+        let err = checkout_branch(&repo, "feature").unwrap_err();
+        // git 的 stderr 原文会点名受影响的文件(`git_error` 把它原样展示给用户)。
+        assert!(err.contains("a.txt"), "{err}");
+        assert_eq!(branch(&repo).as_deref(), Some("main"));
+        assert_eq!(read(&repo, "a.txt"), "a-local\n");
+    }
+
+    #[test]
+    fn an_untracked_file_in_the_way_blocks_checkout() {
+        let (_d, repo) = two_branches();
+        std::fs::write(repo.join("c.txt"), "mine\n").unwrap();
+        let err = checkout_branch(&repo, "feature").unwrap_err();
+        assert!(err.contains("c.txt"), "{err}");
+        assert_eq!(branch(&repo).as_deref(), Some("main"));
+        assert_eq!(read(&repo, "c.txt"), "mine\n");
+    }
+
+    #[test]
+    fn checking_out_a_missing_branch_is_an_error() {
+        let (_d, repo) = two_branches();
+        let err = checkout_branch(&repo, "nope").unwrap_err();
+        assert!(!err.is_empty());
+        assert_eq!(branch(&repo).as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn checkout_from_a_repo_subdirectory_switches_the_whole_repo() {
+        let (_d, repo) = two_branches();
+        let sub = repo.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        checkout_branch(&sub, "feature").unwrap();
+        assert_eq!(branch(&repo).as_deref(), Some("feature"));
+        assert_eq!(read(&repo, "a.txt"), "a2\n");
+    }
 }
