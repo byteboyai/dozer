@@ -31,4 +31,7 @@ crates/dozer-app/web/tabular-host/node_modules/
 
 # todo-content host deps (built assets under assets/todo-content are committed)
 crates/dozer-app/web/todo-content/node_modules/
+
+# group-chat-content host deps (built assets under assets/group-chat-content are committed)
+crates/dozer-app/web/group-chat-content/node_modules/
 .gstack/

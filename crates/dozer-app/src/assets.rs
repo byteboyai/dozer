@@ -612,6 +612,46 @@ mod tests {
         assert!(html.contains("codehealth-content.js") && html.contains("codehealth-content.css"));
     }
 
+    /// 提交的 group-chat-content 产物必须齐全(防止忘记 `npm run build` 就提交)。
+    #[test]
+    fn group_chat_content_bundle_assets_are_present() {
+        let root = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/group-chat-content"
+        ));
+        for f in [
+            "host.html",
+            "group-chat-content.js",
+            "group-chat-content.css",
+        ] {
+            let p = root.join(f);
+            assert!(
+                p.is_file(),
+                "缺少 group-chat-content 产物 {f}: {}",
+                p.display()
+            );
+            assert!(
+                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 0,
+                "group-chat-content 产物为空: {f}"
+            );
+        }
+    }
+
+    /// 严格 CSP、无 connect-src、无网络引用。
+    #[test]
+    fn group_chat_content_host_has_strict_csp_and_no_external_refs() {
+        let root = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/group-chat-content"
+        ));
+        let html = std::fs::read_to_string(root.join("host.html")).expect("读 host.html");
+        assert!(html.contains("default-src 'none'"));
+        assert!(html.contains("script-src 'self'"));
+        assert!(!html.contains("connect-src"));
+        assert!(!html.contains("http://") && !html.contains("https://"));
+        assert!(html.contains("group-chat-content.js") && html.contains("group-chat-content.css"));
+    }
+
     #[test]
     fn todo_content_serves_vendored_files() {
         let root = scratch();
