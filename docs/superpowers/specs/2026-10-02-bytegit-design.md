@@ -65,8 +65,8 @@ remotes(&self) -> Result<Vec<Remote>, GitError>                   // 升序、�
     Remote { name: String, url: String, push_url: Option<String> }
 ```
 
-- `HeadInfo` 没有 `short_id`/`has_commits` 字段；少/多提交由 `commit: Option<CommitId>` 表达，调用方需要"是否有提交"时用 `head()?.commit.is_some()`（`has_commits()` 方法可另加，P1 未实现）。`CommitId::short(n)` 提供短 id。
-- `Remote` 没有 `kind` 字段（`Fetch | Push` 未实现）；取不到 url 时该远程仍会出现，`url` 为空串。`push_url` 缺失或与 `url` 相同则为 `None`。
+- `HeadInfo` 没有 `short_id`/`has_commits` 字段；少/多提交由 `commit: Option<CommitId>` 表达，调用方需要"是否有提交"时可用 `HeadInfo::has_commits()`。`CommitId::short(n)` 提供短 id。
+- `Remote` 没有 `kind` 字段（`Fetch | Push` 未实现）；取不到 fetch URL 的 remote 会被跳过。`push_url` 没有单独配置时为 `None`。
 
 替代：`delivery::branch`、`current_branch_has_commits`、`local_branches`、`remote_url`，`git_hotspots::head_short_sha`，`dozerd::git_head_commit_ms`。
 
@@ -76,12 +76,12 @@ remotes(&self) -> Result<Vec<Remote>, GitError>                   // 升序、�
 status(&self, opts: StatusOptions) -> Result<Vec<StatusEntry>, GitError>
     StatusOptions { include_untracked: bool, include_ignored: bool, detect_renames: bool }
     StatusEntry { path: PathBuf /* 相对仓库根 */, state: FileState }
-    FileState { index: Option<ChangeKind>, worktree: Option<ChangeKind>, conflicted: bool, ignored: bool, untracked: bool }
+    FileState { index: Option<ChangeKind>, worktree: Option<ChangeKind>, conflicted: bool, ignored: bool }
 is_dirty(&self, opts) -> Result<bool, GitError>
 ```
 
 - `StatusOptions` 没有 `include_untracked_files_in_dirs`：现有三份实现都递归进未跟踪目录，没有"不递归"的使用者，该开关无意义（P1 未实现）。
-- `FileState` 与现有 `delivery::FileGitStatus` 语义等价，多个 `conflicted` 字段（合并冲突标记）；迁移时逐变体对照（P1 的验收项）。
+- `FileState` 与现有 `delivery::FileGitStatus` 语义等价，多了 `conflicted` 字段（合并冲突标记）。未跟踪文件用 `index == None && worktree == Some(Added)` 表达，没有单独的 `untracked` 字段。
 - `dirty_paths`（命令行 `status --porcelain --untracked-files=all`）等价于 `status` 带 `include_untracked + detect_renames` 后取路径，不再另做。
 - **P1 已核对的口径（O1）：** `is_dirty` 含未跟踪、不含被忽略；`file_statuses` 含未跟踪与被忽略；`current_branch_has_commits` 在 detached HEAD 时为 `true`。
 - **实现细节：** 重命名时 libgit2 的 `entry.path()` 返回旧路径，实现改从 diff delta 取新路径；被忽略的目录只作为一个带尾部 `/` 的条目；路径不是 UTF-8 的条目被跳过。
