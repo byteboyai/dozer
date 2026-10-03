@@ -841,4 +841,120 @@ mod tests {
         state.set_ready(true);
         assert_eq!(state.pending_push(&payload_a()), Some(payload_a()));
     }
+
+    // ---- bytegit P3:git 提交计数迁移前后必须一致的口径 ----
+
+    const DAY_20000: i64 = 20_000 * 86_400;
+
+    /// 在 `repo` 里跑一条 git 命令。作者日期固定为 2000-01-01(证明统计用的是**提交者**时间,
+    /// 不是作者时间);`when` 是提交者日期(unix 秒),`None` 用当前时间。
+    fn git_at(repo: &std::path::Path, args: &[&str], when: Option<i64>) {
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(args)
+            .current_dir(repo)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .env("GIT_AUTHOR_DATE", "946684800 +0000");
+        if let Some(w) = when {
+            cmd.env("GIT_COMMITTER_DATE", format!("{w} +0000"));
+        }
+        let out = cmd.output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    fn commit_at(repo: &std::path::Path, rel: &str, content: &str, when: Option<i64>) {
+        let full = repo.join(rel);
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(full, content).unwrap();
+        git_at(repo, &["add", "."], None);
+        git_at(repo, &["commit", "-qm", "c"], when);
+    }
+
+    fn init_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        git_at(dir.path(), &["init", "-q"], None);
+        dir
+    }
+
+    #[test]
+    fn git_commit_counts_are_zero_and_empty_outside_a_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(count_git_commits(dir.path()), 0);
+        assert!(count_git_commits_by_day(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn git_commit_counts_are_zero_and_empty_for_a_repo_without_commits() {
+        let dir = init_repo();
+        assert_eq!(count_git_commits(dir.path()), 0);
+        assert!(count_git_commits_by_day(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn count_git_commits_counts_commits_reachable_from_head() {
+        let dir = init_repo();
+        for i in 0..3 {
+            commit_at(dir.path(), "a.txt", &i.to_string(), None);
+        }
+        assert_eq!(count_git_commits(dir.path()), 3);
+    }
+
+    #[test]
+    fn git_commit_counts_look_upward_from_a_repo_subdirectory() {
+        let dir = init_repo();
+        commit_at(dir.path(), "sub/a.txt", "1", Some(DAY_20000));
+        commit_at(dir.path(), "sub/a.txt", "2", Some(DAY_20000 + 1));
+        let sub = dir.path().join("sub");
+        assert_eq!(count_git_commits(&sub), 2);
+        assert_eq!(
+            count_git_commits_by_day(&sub),
+            BTreeMap::from([(20_000, 2)])
+        );
+    }
+
+    #[test]
+    fn count_git_commits_counts_a_merged_commit_once() {
+        let dir = init_repo();
+        let r = dir.path();
+        commit_at(r, "a.txt", "a", None);
+        git_at(r, &["checkout", "-q", "-b", "other"], None);
+        commit_at(r, "b.txt", "b", None);
+        git_at(r, &["checkout", "-q", "-"], None);
+        commit_at(r, "c.txt", "c", None);
+        git_at(r, &["merge", "-q", "--no-ff", "other", "-m", "merge"], None);
+        // base + other + main + merge
+        assert_eq!(count_git_commits(r), 4);
+    }
+
+    #[test]
+    fn git_commit_counts_work_on_a_detached_head() {
+        let dir = init_repo();
+        commit_at(dir.path(), "a.txt", "1", None);
+        commit_at(dir.path(), "a.txt", "2", None);
+        git_at(dir.path(), &["checkout", "-q", "--detach"], None);
+        assert_eq!(count_git_commits(dir.path()), 2);
+        assert_eq!(
+            count_git_commits_by_day(dir.path()).values().sum::<u64>(),
+            2
+        );
+    }
+
+    #[test]
+    fn git_commits_by_day_buckets_by_utc_committer_day_not_author_day() {
+        let dir = init_repo();
+        commit_at(dir.path(), "a.txt", "1", Some(DAY_20000));
+        commit_at(dir.path(), "a.txt", "2", Some(DAY_20000 + 86_399));
+        commit_at(dir.path(), "a.txt", "3", Some(DAY_20000 + 86_400));
+        // 作者日期都是 2000-01-01,桶却按提交者日期落在 20000/20001 天。
+        assert_eq!(
+            count_git_commits_by_day(dir.path()),
+            BTreeMap::from([(20_000, 2), (20_001, 1)])
+        );
+    }
 }

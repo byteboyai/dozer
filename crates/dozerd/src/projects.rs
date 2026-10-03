@@ -301,4 +301,152 @@ mod tests {
         );
         assert_eq!(store.path_of(9999).unwrap(), None);
     }
+
+    // ---- bytegit P3:compute_updated_ms 迁移前后必须一致的口径 ----
+
+    const T: i64 = 20_000 * 86_400;
+
+    fn git_at(dir: &Path, args: &[&str], when: Option<i64>) {
+        let mut cmd = Command::new("git");
+        cmd.args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            // 作者日期固定为很早以前:更新时间取的是**提交者**日期。
+            .env("GIT_AUTHOR_DATE", "946684800 +0000");
+        if let Some(w) = when {
+            cmd.env("GIT_COMMITTER_DATE", format!("{w} +0000"));
+        }
+        let out = cmd.output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    fn commit_at(dir: &Path, rel: &str, content: &str, when: i64) {
+        let full = dir.join(rel);
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(full, content).unwrap();
+        git_at(dir, &["add", "."], None);
+        git_at(dir, &["commit", "-qm", "c"], Some(when));
+    }
+
+    fn updated(dir: &Path, last_active_ms: u64) -> u64 {
+        compute_updated_ms(dir.to_str().unwrap(), last_active_ms)
+    }
+
+    #[test]
+    fn updated_ms_is_last_active_outside_a_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(updated(dir.path(), 5_000), 5_000);
+    }
+
+    #[test]
+    fn updated_ms_is_last_active_for_a_repo_without_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        git_at(dir.path(), &["init", "-q"], None);
+        assert_eq!(updated(dir.path(), 5_000), 5_000);
+    }
+
+    #[test]
+    fn updated_ms_is_the_head_commit_time_when_it_is_not_older_than_last_active() {
+        let dir = tempfile::tempdir().unwrap();
+        git_at(dir.path(), &["init", "-q"], None);
+        commit_at(dir.path(), "a.txt", "1", T + 123);
+        assert_eq!(updated(dir.path(), 1_000), (T as u64 + 123) * 1000);
+        // 恰好相等也取提交时间(`>=`)。
+        assert_eq!(
+            updated(dir.path(), (T as u64 + 123) * 1000),
+            (T as u64 + 123) * 1000
+        );
+    }
+
+    #[test]
+    fn updated_ms_falls_back_to_last_active_when_the_commit_is_older() {
+        let dir = tempfile::tempdir().unwrap();
+        git_at(dir.path(), &["init", "-q"], None);
+        commit_at(dir.path(), "a.txt", "1", T);
+        let later = (T as u64 + 10) * 1000;
+        assert_eq!(updated(dir.path(), later), later);
+    }
+
+    #[test]
+    fn updated_ms_uses_the_head_commit_even_when_an_ancestor_has_a_newer_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        git_at(dir.path(), &["init", "-q"], None);
+        commit_at(dir.path(), "a.txt", "1", T + 5_000);
+        commit_at(dir.path(), "a.txt", "2", T);
+        assert_eq!(updated(dir.path(), 1_000), (T as u64) * 1000);
+    }
+
+    #[test]
+    fn updated_ms_looks_upward_from_a_repo_subdirectory() {
+        let dir = tempfile::tempdir().unwrap();
+        git_at(dir.path(), &["init", "-q"], None);
+        commit_at(dir.path(), "sub/a.txt", "1", T + 7);
+        assert_eq!(
+            updated(&dir.path().join("sub"), 1_000),
+            (T as u64 + 7) * 1000
+        );
+    }
+
+    #[test]
+    fn updated_ms_works_on_a_detached_head() {
+        let dir = tempfile::tempdir().unwrap();
+        git_at(dir.path(), &["init", "-q"], None);
+        commit_at(dir.path(), "a.txt", "1", T + 9);
+        git_at(dir.path(), &["checkout", "-q", "--detach"], None);
+        assert_eq!(updated(dir.path(), 1_000), (T as u64 + 9) * 1000);
+    }
+
+    #[test]
+    fn updated_ms_ignores_a_bare_repo_because_it_has_no_work_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir(&src).unwrap();
+        git_at(&src, &["init", "-q"], None);
+        commit_at(&src, "a.txt", "1", T + 11);
+        let bare = dir.path().join("bare.git");
+        git_at(
+            dir.path(),
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                src.to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(updated(&bare, 1_000), 1_000);
+    }
+
+    #[test]
+    fn updated_ms_of_a_linked_worktree_follows_that_worktrees_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main");
+        std::fs::create_dir(&main).unwrap();
+        git_at(&main, &["init", "-q"], None);
+        commit_at(&main, "a.txt", "1", T + 100);
+        let wt = dir.path().join("wt");
+        git_at(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feature",
+                wt.to_str().unwrap(),
+            ],
+            None,
+        );
+        commit_at(&wt, "b.txt", "2", T + 200);
+        assert_eq!(updated(&main, 1_000), (T as u64 + 100) * 1000);
+        assert_eq!(updated(&wt, 1_000), (T as u64 + 200) * 1000);
+    }
 }

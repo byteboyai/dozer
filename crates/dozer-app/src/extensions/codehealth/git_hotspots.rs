@@ -533,4 +533,165 @@ mod tests {
         let plain = tempfile::tempdir().unwrap();
         assert_eq!(head_short_sha(plain.path()), None);
     }
+
+    // ---- bytegit P3:recent_churn 迁移前后必须一致的口径 ----
+
+    fn churn_git(repo: &Path, args: &[&str], when: Option<i64>) {
+        let mut cmd = Command::new("git");
+        cmd.args(args)
+            .current_dir(repo)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            // 作者日期固定为 2000-01-01:`--since` 看的是**提交者**日期,作者日期再老也不影响。
+            .env("GIT_AUTHOR_DATE", "946684800 +0000");
+        if let Some(w) = when {
+            cmd.env("GIT_COMMITTER_DATE", format!("{w} +0000"));
+        }
+        let out = cmd.output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    fn churn_commit(repo: &Path, rel: &str, content: &str, when: Option<i64>) {
+        let full = repo.join(rel);
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(full, content).unwrap();
+        churn_git(repo, &["add", "."], None);
+        churn_git(repo, &["commit", "-qm", "c"], when);
+    }
+
+    fn now_secs() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+    }
+
+    fn init_churn_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        churn_git(dir.path(), &["init", "-q"], None);
+        dir
+    }
+
+    #[test]
+    fn recent_churn_is_none_for_a_repo_without_commits() {
+        let dir = init_churn_repo();
+        assert!(recent_churn(dir.path()).is_none());
+    }
+
+    #[test]
+    fn recent_churn_is_empty_not_none_when_every_commit_is_older_than_30_days() {
+        let dir = init_churn_repo();
+        churn_commit(dir.path(), "a.rs", "1", Some(now_secs() - 40 * 86_400));
+        assert_eq!(recent_churn(dir.path()), Some(HashMap::new()));
+    }
+
+    #[test]
+    fn recent_churn_counts_recent_commits_by_committer_date_not_author_date() {
+        let dir = init_churn_repo();
+        // 提交者日期 40 天前:不算。
+        churn_commit(dir.path(), "old.rs", "x", Some(now_secs() - 40 * 86_400));
+        // 作者日期是 2000 年,提交者日期是现在:算近期。
+        churn_commit(dir.path(), "a.rs", "1", None);
+        churn_commit(dir.path(), "a.rs", "2", None);
+        let churn = recent_churn(dir.path()).unwrap();
+        assert_eq!(churn.get("a.rs").copied(), Some(2));
+        assert_eq!(churn.get("old.rs"), None);
+    }
+
+    /// 迁移前 `git log --since` 遇到(从 HEAD 往下数的)第一个过旧的提交就停止遍历:
+    /// 当 HEAD 提交的提交者日期早于 30 天、而更深处的提交反而很新(时间戳不单调)时,
+    /// 那些近期提交不会被计入。bytegit 的 `churn` 按时间全局排序,会把它们算上
+    /// (更符合"近 30 天"的字面含义,有意的差异,见 P3 计划"待决事项" D5);
+    /// 这条测试在 Task 5 里随之翻转。
+    #[test]
+    fn recent_churn_stops_at_an_old_head_even_if_deeper_commits_are_recent_before_migration() {
+        let dir = init_churn_repo();
+        churn_commit(dir.path(), "a.rs", "1", None);
+        churn_commit(dir.path(), "a.rs", "2", None);
+        churn_commit(dir.path(), "old.rs", "x", Some(now_secs() - 40 * 86_400));
+        let churn = recent_churn(dir.path()).unwrap();
+        assert_eq!(churn.get("a.rs"), None, "{churn:?}");
+    }
+
+    #[test]
+    fn recent_churn_includes_the_root_commit_files() {
+        let dir = init_churn_repo();
+        churn_commit(dir.path(), "a.rs", "1", None);
+        assert_eq!(
+            recent_churn(dir.path()).unwrap().get("a.rs").copied(),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn recent_churn_paths_are_relative_to_a_project_subdirectory_and_exclude_outside_files() {
+        let dir = init_churn_repo();
+        churn_commit(dir.path(), "top.rs", "1", None);
+        churn_commit(dir.path(), "sub/a.rs", "1", None);
+        churn_commit(dir.path(), "sub/a.rs", "2", None);
+        let churn = recent_churn(&dir.path().join("sub")).unwrap();
+        assert_eq!(churn.get("a.rs").copied(), Some(2), "{churn:?}");
+        assert_eq!(churn.len(), 1, "仓库根里 sub 之外的文件不出现: {churn:?}");
+    }
+
+    #[test]
+    fn recent_churn_ignores_merge_commits() {
+        let dir = init_churn_repo();
+        let r = dir.path();
+        churn_commit(r, "a.rs", "a", None);
+        churn_git(r, &["checkout", "-q", "-b", "other"], None);
+        churn_commit(r, "b.rs", "b", None);
+        churn_git(r, &["checkout", "-q", "-"], None);
+        churn_commit(r, "c.rs", "c", None);
+        churn_git(r, &["merge", "-q", "--no-ff", "other", "-m", "merge"], None);
+        let churn = recent_churn(r).unwrap();
+        assert_eq!(
+            churn.get("b.rs").copied(),
+            Some(1),
+            "只算 other 上那一次: {churn:?}"
+        );
+        assert_eq!(churn.get("a.rs").copied(), Some(1));
+        assert_eq!(churn.get("c.rs").copied(), Some(1));
+    }
+
+    #[test]
+    fn recent_churn_counts_a_pure_rename_for_the_new_path_only() {
+        let dir = init_churn_repo();
+        let r = dir.path();
+        churn_commit(r, "old.rs", "same content\nline 2\nline 3\n", None);
+        churn_git(r, &["mv", "old.rs", "new.rs"], None);
+        churn_git(r, &["commit", "-qm", "rename"], None);
+        let churn = recent_churn(r).unwrap();
+        assert_eq!(churn.get("new.rs").copied(), Some(1));
+        assert_eq!(churn.get("old.rs").copied(), Some(1), "只有最初添加那一次");
+    }
+
+    #[test]
+    fn recent_churn_counts_the_old_path_of_a_deletion() {
+        let dir = init_churn_repo();
+        let r = dir.path();
+        churn_commit(r, "gone.rs", "1", None);
+        churn_git(r, &["rm", "-q", "gone.rs"], None);
+        churn_git(r, &["commit", "-qm", "delete"], None);
+        assert_eq!(recent_churn(r).unwrap().get("gone.rs").copied(), Some(2));
+    }
+
+    /// 迁移前 `git log --name-only` 对非 ASCII 文件名输出 git 转义过的八进制(带引号),
+    /// 所以真实的 UTF-8 路径永远匹配不上——churn 对这类文件恒为 0。bytegit 迁移后返回真实路径
+    /// (有意的改进,同 P1 的 `dirty_paths`),这条测试在 Task 4 里随之翻转。
+    #[test]
+    fn recent_churn_keys_non_ascii_names_as_git_escaped_text_before_migration() {
+        let dir = init_churn_repo();
+        churn_commit(dir.path(), "文档.md", "x", None);
+        let churn = recent_churn(dir.path()).unwrap();
+        assert_eq!(churn.get("文档.md"), None, "{churn:?}");
+        assert_eq!(churn.len(), 1, "{churn:?}");
+        assert!(churn.keys().next().unwrap().contains("\\"), "{churn:?}");
+    }
 }
