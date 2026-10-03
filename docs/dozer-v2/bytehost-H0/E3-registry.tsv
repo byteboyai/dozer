@@ -1,0 +1,25 @@
+id	位置	类别	对象	原因	移除条件
+E3-001	app/update.rs:5152-5215 fire_panel_switch_in	panel-special-case	Todo, Database, Project, Ssh, Usage, CodeHealth, Conversations, GitLog, GroupChat	host 对 9 个面板各写一段『切入时刷新』	面板注册钩子 on_activate 后删除该 match(01-panelkind B4)
+E3-002	app/app.rs:3419-3544	panel-special-case	GitLog, Usage, CodeHealth, Todo, GroupChat	host 为每个面板各写一段 webview 期望几何	面板注册钩子 desired_webviews 后删除(01-panelkind B4)
+E3-003	webview_geometry.rs:75-269 两个穷举 match	panel-special-case	Files, Web, Project, Conversations(其余 8 个臂为 0 几何)	预览列几何按面板穷举	面板声明是否需要预览列;几何计算留 host Surface 机制(01-panelkind B3)
+E3-004	全库 114 行 kind == PanelKind::Project 窗格选择(workspace/state.rs 35、app/update.rs 33、app/app.rs 14、workspace/view.rs 11 等)	panel-special-case	Project, Files	Preview 业务有两个实例由 PanelKind 选择	先收口为 preview_pane(kind)(01-panelkind B0);随 Preview 留产品层,不进 host
+E3-005	preview/code_host.rs:150、preview/webview.rs:150、PROJECT_PREVIEW_ID_OFFSET	panel-special-case	Project, Files	webview id 偏移与 URL 参数里编码面板	Preview 留产品层;host 的 webview 注册不再认识这两个名字
+E3-006	app/layout.rs:1146-1198、app/app.rs:3248-3375	panel-special-case	Agent	右栏『Agent 未镜像』时渲染顺序与尺寸	O1(Agent 怎么切)裁决后
+E3-007	term/terminal.rs:46、:188	panel-special-case	Ssh, Agent	终端区对这两个面板的特殊布局与列表折叠	O6(Terminal 是否共享)裁决后
+E3-008	app/app.rs:1634-1635(group_chat_panel_visible)	panel-special-case	GroupChat	host 方法按面板名判断是否可见	面板可见性查询经 registry 通用接口
+E3-009	runtime.rs:680	panel-special-case	GitLog	host 的 IPC 分发对 GitLog 的 diff webview 事件走专用消息 GitLogDiffWebviewEvent	webview 事件按绑定的面板 id 路由到面板钩子
+E3-010	platform/window_events.rs:305-723	panel-special-case	Files, Todo, Search	窗口事件里直接构造 files::Message(FileDragHover/RightClickAt/TreeDragRelease/FileDrop/ContextMenuClose)、todo::Message::CategoryDragRelease、search::Message::SearchClose	面板声明自己关心的窗口事件(拖拽/右键/Esc),host 通用分发
+E3-011	platform/window_events.rs:2141-2300	panel-special-case	Browser, Project, ProjectCreate, Files, Search	host 拦截面板消息做系统接入(rfd 目录选择、复制路径、浏览器导航),再把结果包成面板消息回投	面板经 host 服务请求系统对话框(Effect),host 不再点名面板消息
+E3-012	app/update.rs:2846-2975	panel-special-case	GitLog	Q13:host 直接调用 git_log::update/load_branch_picker_data/request_refresh,并在 BranchSwitchDone(Ok) 后自行重拉提交列表	分支选择器与切换后刷新收进 git_log 面板自身(Effect 机制),host 只转发消息
+E3-013	app/state.rs:11、:261(HoverId::GitFileFilter(FileFilter))	panel-special-case	GitLog	Q13:host 枚举 HoverId 引用 git_log::FileFilter 类型	随 HoverId 命名空间化(E3-016)
+E3-014	app/update.rs:1787-1794、:4723-4794	panel-special-case	GroupChat	host 内含 group_chat 的 Command/Effect 派发(group_chat_command、group_chat_effects)	Effect 执行器随面板迁出,host 提供通用 Effect 通道
+E3-015	app/layout.rs:1208、:1231 使用 agent_context::strip_reserved_height()	panel-special-case	AgentContext	host 布局计算里加上 agent_context 条的保留高度	面板声明保留区域,host 通用累加
+E3-016	app/state.rs:93 HoverId(62 个变体,约 20 个是面板自己的按钮)	panel-special-case	Todo, Database, Ssh, Conversations, Usage, Files, Project, GitLog, Preview…	host 单枚举里点名各面板按钮(TodoListCollapse、FilesSearchSubmit 等),是 PanelKind 之外的第二处点名	HoverId 改带命名空间的键或面板自持悬停状态(02-panel-to-host §3.2)
+E3-017	extensions/files/tree.rs:145	panel-special-case	Files	越界:面板 view 里直接 app.active_workspace()	host 把所需数据作为参数传入
+E3-018	conversation.rs(根模块)	parked-service	Conversation	扇入 4 个单元(conversations, usage, app, chrome),无 iced 依赖;含会话元数据类型,Digger 复用的 Conversation 面板需要	待 Task 6 裁决去向;触发条件:Digger 接入 Conversation 面板时必须有定论
+E3-019	transcript.rs(根模块)	parked-service	Transcript	扇入 2(app, workspace),827 行;dozerd 已有 transcripts 目录,可能重复	待 Task 6 裁决;触发条件:conversation 归属确定时同时裁决
+E3-020	project.rs、project_meta.rs、open_projects.rs(Project context)	parked-service	Project context	项目打开/关闭/当前项目;project 扇入 5(files, ssh, app, platform, workspace),project_meta 扇入 4	待 Task 6 与 O2 裁决;触发条件:首个脱离 Dozer 的面板需要项目上下文时
+E3-021	secrets.rs	parked-service	Secrets	扇入 2(database, ssh),无 Dozer 语义	待 Task 6 与 O4 裁决;触发条件:有第三个需要存凭据的面板时
+E3-022	external_apps.rs	parked-service	ExternalApps	扇入 2(files, app);files 面板用 ExternalAppsConfig 74 次	待 Task 6 与 O4 裁决;触发条件:Files Tree 被 Digger 复用时
+E3-023	capabilities.rs	parked-service	Capabilities	扇入 4(app, preview, workspace, runtime),客户端能力探测	待 Task 6 与 O4 裁决;触发条件:Surface 机制进 host 时
+E3-024	git_accounts.rs	parked-service	GitAccounts	扇入 2(project_create, settings),bytegit 规格 B3 排除	待 Task 6 与 O8 裁决;触发条件:Digger 需要托管平台账户时
