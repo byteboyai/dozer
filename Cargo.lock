@@ -794,8 +794,8 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "bytegit"
-version = "0.2.0"
-source = "git+https://github.com/byteboyai/bytegit?tag=v0.2.0#6445f4158527ab9a52b7c54e516186eb41a8ebf3"
+version = "0.3.0"
+source = "git+https://github.com/byteboyai/bytegit?tag=v0.3.0#eff7b861f9de7cbca04806e0c98baa56e5908597"
 dependencies = [
  "git2",
  "serde",

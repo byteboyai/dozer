@@ -8,6 +8,7 @@ pub mod browser;
 pub mod codehealth;
 pub mod conversations;
 pub mod database;
+pub mod diff_content;
 pub mod diff_render;
 pub mod edit_history;
 pub mod file_history;

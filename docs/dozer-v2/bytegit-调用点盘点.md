@@ -19,6 +19,8 @@
 
 **P1 之后（2026-10-02）：** 工作区状态 ×3、HEAD/分支/远程的重复实现已合并为 bytegit（`v0.2.0`）；`delivery.rs` 对应函数保留为签名不变的适配层，随 P6 删除。
 
+**P2 之后（2026-10-03）：** blob 读取与分类 ×2、历史/diff 的重复实现已合并为 bytegit（`v0.3.0`）；`git_log`/`file_history` 共用的 diff 内容层移到 `extensions/diff_content.rs`，两面板不再互相 import。
+
 ## 2. 按操作归类
 
 ### 2.1 仓库发现与可用性
@@ -60,14 +62,14 @@
 | 操作 | 位置 | 实现 |
 |------|------|------|
 | 全仓库提交图 | `git_log::build(repo, max_count)` → `GitLogSnapshot` | **`gleisbau`**（含图布局）+ git2 |
-| 单个提交详情（文件列表） | `git_log::commit_detail` | git2 `diff_tree_to_tree` |
-| 两个 blob 的文本内容 | `git_log::diff_blob_content` / `read_side` → `DiffBlobContent` | git2 `find_blob` |
-| 内容分类（二进制/过大/文本） | `git_log::classify_diff_bytes` | 纯函数，`file_history` 借用 |
-| 单文件历史 | `file_history::build(repo, file, max_count)` | git2 `revwalk` + 路径过滤 |
-| 与当前工作区对比 | `file_history::diff_against_current`、`diff_blob_content_against_workdir` | git2 `diff_tree_to_workdir` |
-| 上一版本 | `file_history::previous_oid` | 复用 `build` 取前两条 |
-| 提交计数（总/按天） | `usage::count_git_commits`、`count_git_commits_by_day` | git2 `revwalk` |
-| 近 30 天文件变更频次 | `git_hotspots::recent_churn` | CLI `log --since=30.days --name-only` |
+| 单个提交详情（文件列表） | `git_log::commit_detail` | **P2 已迁移**：bytegit `commit_files` |
+| 两个 blob 的文本内容 | `git_log::diff_blob_content` / `read_side` → `DiffBlobContent` | **P2 已迁移**：`diff_content::blob_pair_content`（bytegit `blob_text`） |
+| 内容分类（二进制/过大/文本） | `git_log::classify_diff_bytes` | **P2 已迁移**：bytegit `Content`/`ContentLimits` |
+| 单文件历史 | `file_history::build(repo, file, max_count)` | **P2 已迁移**：bytegit `log` |
+| 与当前工作区对比 | `file_history::diff_against_current`、`diff_blob_content_against_workdir` | **P2 已迁移**：`diff_content::workdir_content`（bytegit `workdir_patch`/`blob_text`） |
+| 上一版本 | `file_history::previous_oid` | **P2 已迁移**：`file_history::previous_commit`（bytegit `previous_version`） |
+| 提交计数（总/按天） | `usage::count_git_commits`、`count_git_commits_by_day` | git2 `revwalk`（P3） |
+| 近 30 天文件变更频次 | `git_hotspots::recent_churn` | CLI `log --since=30.days --name-only`（P3） |
 
 重复与泄漏：
 - `git_log` 与 `file_history` 各实现一份"取 blob + 分类 + 截断"，靠注释保持一致（`MAX_PATCH_CHARS`、根提交按空树对比、`DEFAULT_MAX_COMMITS` 量级）。

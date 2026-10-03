@@ -3103,7 +3103,7 @@ impl App {
                     let file_path2 = file_path.clone();
                     let path2 = path.clone();
                     let result = tokio::task::spawn_blocking(move || {
-                        file_history::previous_oid(&repo_path2, &file_path2).and_then(|opt| {
+                        file_history::previous_commit(&repo_path2, &file_path2).and_then(|opt| {
                             match opt {
                                 Some(oid) => {
                                     file_history::rollback_to(&repo_path2, &file_path2, oid)
