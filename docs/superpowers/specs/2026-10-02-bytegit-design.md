@@ -140,10 +140,15 @@ watch(root: &Path, opts: WatchOptions, on_change: impl FnMut(GitChange) + Send +
 init(path) -> Result<Repo, GitError>
 clone(url, dest, opts: CloneOptions) -> Result<Repo, GitError>
 Repo::checkout_branch(&self, name) -> Result<(), GitError>
+git_available() -> bool
 ```
 
-- 现状三者均为命令行实现。**v0.1 先保持行为不变**：这三个操作在 `bytegit` 内仍调用 `git` 可执行文件，但封装在 `bytegit` 内部，调用方看不到命令行细节；`git_available()` 因此保留为内部检测，失败时返回 `GitError::GitBinaryUnavailable`。
-- **并行评估项（不阻塞 v0.1）：** `clone` 是否能用 `git2` 实现，取决于用户机器上的凭据助手与 ssh-agent 是否可被 libgit2 继承，以及进度回调；`checkout` 在有未提交修改时的冲突处理与命令行是否一致；`init` 最简单，评估通过即可先切换。评估结论决定写操作是否最终去掉对 `git` 可执行文件的依赖，写入本规格的修订。
+- **实现选择（评估结论，P5 实测）：`init` → `git2`；`clone` 与 `checkout_branch` → 保留 `git` 可执行文件。** 完整评估（环境、程序、原始输出）见 `docs/superpowers/specs/2026-10-03-bytegit-write-ops-evaluation.md`。
+  - **`init(path)` 用 `git2`**：初始分支遵循 `init.defaultBranch`；写出的 `config` 与命令行逐键相同；对已有仓库重复 `init` 无害；`init.templateDir` 被应用。**目录必须已存在**（`git init` 在不存在的工作目录里跑不起来；libgit2 默认会 `mkdir -p`，`bytegit::init` 显式拦住，保持旧行为）。
+  - **`clone(url, dest, opts)` 与 `Repo::checkout_branch(name)` 在 `bytegit` 内部调用 `git` 可执行文件。** clone：本构建的 libgit2 没有 https/ssh 传输（`git2` 保持 `default = []`），且 libgit2 读不全 `~/.ssh/config`、`core.sshCommand`、系统凭据助手；checkout：`git2` 不执行 `post-checkout` hook、不执行外部 smudge/clean 过滤器（Git LFS 靠它），冲突报错也不点名文件。二者**失败时 `message()` 是 git 的 stderr 原文**（`GitErrorKind::Backend`）；缺 `git` 为 `GitBinaryUnavailable`，其他 spawn 失败为 `Io`（`init` 的目录不存在为 `Io`，文案 `目录不存在: <路径>`）。`clone` 用 `--` 结束选项解析（CVE-2017-1000117 一类）。
+  - **`git_available()` 公开**（规格原写"内部检测"）：URL 签出表单要在提交前提示"请安装 Xcode Command Line Tools"（`project_create.rs`）。
+  - `CloneOptions` 目前没有可选项，`#[non_exhaustive]`（以后加分支/深度不破坏调用方）。
+  - `Repo::checkout_branch` 走 `Repo::discover`（向上查找），项目目录在仓库子目录里时切整个仓库——与 P1/P2 的 `open_exact`（只认仓库根）相反，是有意的（迁移前命令行会向上查找）。
 - 读操作一律 `git2`。
 
 ### 4.7 测试夹具（feature `testutil`）
@@ -181,7 +186,7 @@ TempRepo::new()                         // 临时目录 + git init，固定作�
 | P2 | 历史与 diff；迁移 `git_log::{commit_detail, diff_blob_content, read_side, classify_diff_bytes}`、`file_history::*`、`rollback` 的取内容部分；`git_log` 与 `file_history` 不再互相引用，`file_history → git_log` 耦合消失 | `git_log` 里的 blob/分类代码、`git_log` 的 `DiffFileEntry.patch/truncated` 死字段、`file_history` 里的重复实现 | 两面板 diff 展示行为不变；`DiffBlobContent` 不再被 `file_history` 引用；**刻画测试在旧/新实现上都通过**（用刻画测试固定行为，而非双实现并行）；`extensions/diff_content.rs` 作为两面板共用的中立层 |
 | P3 | `usage` 的 `commit_count*`、`git_hotspots::recent_churn`、`dozerd/projects.rs` 的两处命令行；`dozerd` 加依赖 | `dozerd/projects.rs` 的 `git_repo_root`/`git_head_commit_ms`、`usage` 的两个 revwalk 函数、`recent_churn` 的命令行调用 | `usage`、项目更新时间、Code Health 热点结果不变；**刻画测试在旧/新实现上都通过** |
 | P4 | `watch` feature；迁移 `git_watch`，`HIDDEN` 由调用方传入 | 整个 `git_watch.rs`（路径分类 + debounce + 监听线程） | 分类断言在旧/新实现上都通过（刻画测试）；**P4 已完成**，发 `v0.5.0`，`dozer-app` 去掉直接 `notify` 依赖 |
-| P5 | 写操作（`init/clone/checkout_branch`），含 §4.6 评估结论 | `delivery.rs` 剩余的命令行函数 | 新建项目、克隆、分支切换行为不变 |
+| P5 | 写操作（`init/clone/checkout_branch`），含 §4.6 评估结论 | `delivery.rs` 里四个函数的命令行实现（`init_repo`/`clone_repo`/`checkout_branch`/`git_available` 保留为 bytegit 适配层，签名不变，P6 移除） | 新建项目、克隆、分支切换行为不变；**刻画测试在旧/新实现上都通过** |
 | P6 | 清理：`delivery.rs` 不再含 git 逻辑（只剩交付语义，或整体改名/删除）；`dozer-app/Cargo.toml` 去掉直接的 `git2` 依赖（保留 `gleisbau` 的传递依赖对齐）；`CLAUDE.md` 增补 bytegit 条目 | — | `cargo machete`、clippy、全量测试 |
 
 - **版本节奏：** 每个阶段在 `bytegit` 发一个小版本，`dozer` 用 tag 引用；联调期间用本地 patch，不提交。
@@ -199,7 +204,7 @@ TempRepo::new()                         // 临时目录 + git init，固定作�
 | # | 问题 | 处理 |
 |---|------|------|
 | O1 | §4.3 口径（untracked/ignored、`discover` vs `open`）现状不一致，且未读对应测试 | **P1 已完成**：`is_dirty` 含未跟踪、不含被忽略；`file_statuses` 含未跟踪与被忽略；`current_branch_has_commits` 在 detached HEAD 为 `true`。结论写入 §4.3 |
-| O2 | 写操作 `git2` 化的可行性（`clone` 认证/进度、`checkout` 冲突） | §4.6 并行评估，结论回写本规格 |
+| O2 | 写操作 `git2` 化的可行性（`clone` 认证/进度、`checkout` 冲突） | **P5 已完成**：`init` 用 `git2`；`clone`/`checkout_branch` 留命令行（本构建 libgit2 无 https/ssh；不执行 hook 与外部过滤器；报错信息退化）。结论见 §4.6，评估存档 `docs/superpowers/specs/2026-10-03-bytegit-write-ops-evaluation.md` |
 | O3 | `.git` 为文件（worktree/子模块）的监听与读取 | v0.1 不强求，API 留位；v2 引入 worktree 时必须解决。**P4 实测**：`bytegit::watch` 只监听 `root` 目录树，linked worktree 的真实 gitdir 在树外，`refs_changed` 收不到；`.git` 文件本身的变化也被丢弃（其 mtime 变化落到根路径）。 |
 | O4 | `git2`（libgit2）与命令行 git 在边角行为上的差异（如大仓库 `status` 性能、`.gitattributes`/filter、submodule、sparse checkout） | P1 用并行比对测试覆盖现有用法；P2 的实际情况是并行比对用刻画测试代替（同一批测试在旧/新实现都通过），libgit2 与命令行 git 在 P2 覆盖的用法上未发现差异；未覆盖的差异记为已知限制 |
 | O5 | 大仓库性能：`log` 的 `max_count`、`churn` 的全历史扫描，`usage` 的全量 revwalk | 保持现有上限与调用方式，不在迁移中优化；另立项。P3 的 `commit_count*`、`churn` 沿用全历史扫描口径，未优化（见 O14） |
@@ -213,3 +218,4 @@ TempRepo::new()                         // 临时目录 + git init，固定作�
 | O13 | `churn` 对"HEAD 提交过旧而更深处有近期提交"（提交时间戳不单调，rebase/cherry-pick 保留旧提交日期时可能出现）的结果比迁移前的 `git log --since` 多 | 有意差异：`churn` 对提交时间做全局排序，更符合"近 30 天"的字面含义。迁移前行为已由 Task 3 的刻画测试固定，Task 6 翻转。若要逐字保持旧行为需在 `churn` 里模仿 git"遇到第一个过旧提交就停"并放弃全局排序 |
 | O14 | `churn` 在超大仓库上比命令行 `git log --since` 慢：libgit2 的时间排序遍历会先解析整段可达历史再产出，而 git 借助提交图可提前结束 | 与 O5 同类，不在迁移中优化；另立项 |
 | O15 | `watch` 与迁移前一样**不过滤 notify 的事件种类**：macOS 的 FSEvents 只报修改类事件，但 Linux 的 inotify 后端会报「文件被打开/读取」这类 Access 事件，届时 dozer 自己读文件（如 `git status`）可能反过来触发刷新。 | 非 macOS 平台从未实际编译过（见 `CLAUDE.md`），发布前处理；`bytegit::watch` 的 API 不需变，加事件种类过滤即可。 |
+| O16 | P5 写操作迁移前就有的三个怪癖：① `git checkout <name>` 分支名与同名文件并存时报歧义、`-` 开头被当选项；② `clone` 从终端启动 dozer 时 git 可能在终端提示凭据、GUI 任务一直等；③ `init` 不再生成 14 个 `.sample` 示例 hook（只一个 `README.sample`） | **保持原样**（迁移前就有，非迁移引入）；要修另提：① 拒绝 `-` 开头或加 `--`；② 设 `GIT_TERMINAL_PROMPT=0`；③ 纯外观差异 |

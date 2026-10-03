@@ -25,6 +25,8 @@
 
 **P4 之后（2026-10-03）：** `git_watch` 的路径分类与 debounce 已合并进 bytegit（`bytegit::watch`，feature `watch`，`v0.5.0`）；`dozer-app` 不再直接依赖 `notify`，`git_watch.rs` 已删除。
 
+**P5 之后（2026-10-03）：** 写操作 `init`/`clone`/`checkout_branch` 与 `git_available` 已迁到 bytegit（`v0.6.0`），`delivery.rs` 对应函数保留为签名不变的适配层，`Command::new("git")` 从生产代码中消失。**生产代码里直接调用命令行 `git` 的只剩 `bytegit` 内部的 `clone`/`checkout_branch`**（评估后的有意选择，见 `2026-10-03-bytegit-write-ops-evaluation.md`）。
+
 ## 2. 按操作归类
 
 ### 2.1 仓库发现与可用性
@@ -34,7 +36,7 @@
 | 找仓库根 | `dozerd/projects.rs:36` `git_repo_root` | **P3 已迁移**：bytegit `Repo::discover` |
 | 找仓库（含子目录） | `usage/mod.rs:201、218` | **P3 已迁移**：bytegit `Repo::discover` |
 | 打开仓库 | `delivery.rs` 多处、`git_log.rs`、`file_history.rs`、`git_hotspots.rs` | `git2 Repository::open`（只认仓库根） |
-| 判断 git 是否可用 | `delivery.rs:369` `git_available` | CLI `--version` |
+| 判断 git 是否可用 | `delivery.rs:369` `git_available` | **P5 已迁移**：`bytegit::git_available`（公开） |
 
 同一件事三种做法，且 `open` 与 `discover` 对"项目在仓库子目录"的处理不一致（`usage` 注释特意说明了这点）。
 
@@ -83,9 +85,9 @@
 
 | 操作 | 位置 | 实现 | 调用方 |
 |------|------|------|--------|
-| 初始化仓库 | `delivery::init_repo` | CLI `init` | `project_create`、`project/scaffold` |
-| 克隆 | `delivery::clone_repo(url, dest)` | CLI `clone --` | `project_create` |
-| 切换分支 | `delivery::checkout_branch` | CLI `checkout` | `git_log`（分支选择器） |
+| 初始化仓库 | `delivery::init_repo` | **P5 已迁移**：`bytegit::init`（git2） | `project_create`、`project/scaffold` |
+| 克隆 | `delivery::clone_repo(url, dest)` | **P5 已迁移**：`bytegit::clone`（内部 CLI `clone --`） | `project_create` |
+| 切换分支 | `delivery::checkout_branch` | **P5 已迁移**：`Repo::checkout_branch`（内部 CLI `checkout`） | `git_log`（分支选择器） |
 | 文件还原到某提交 | `file_history::rollback_to` | git2 读 blob + `std::fs::write` | `file_history`、文件树右键「回滚」 |
 
 `rollback_to` 严格说不是 git 写操作，而是"读 blob 再写文件"；它放在 `file_history` 里，属于"取某版本文件内容"的上层动作，归属需要决定（见 §5）。

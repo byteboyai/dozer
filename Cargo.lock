@@ -181,7 +181,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
  "x11rb",
 ]
 
@@ -794,8 +794,17 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "bytegit"
-version = "0.5.0"
-source = "git+https://github.com/byteboyai/bytegit?tag=v0.5.0#bfd1d313e3432ed2926b08277e44ad1ec0830951"
+version = "0.4.0"
+source = "git+https://github.com/byteboyai/bytegit?tag=v0.4.0#41e8f1f3cdfb1012259f8159aff6824ed02941dc"
+dependencies = [
+ "git2",
+ "serde",
+]
+
+[[package]]
+name = "bytegit"
+version = "0.6.0"
+source = "git+https://github.com/byteboyai/bytegit?tag=v0.6.0#75bf02b9cf241d755dc1e7da896dcf729d3a2b96"
 dependencies = [
  "git2",
  "notify",
@@ -1893,7 +1902,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "block2 0.6.2",
- "bytegit",
+ "bytegit 0.6.0",
  "byteui",
  "calamine",
  "csv",
@@ -2025,7 +2034,7 @@ version = "0.3.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "bytegit",
+ "bytegit 0.4.0",
  "dozer-client",
  "dozer-core",
  "futures-util",
@@ -4530,7 +4539,7 @@ version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "536bfad37a309d62069485248eeaba1e8d9853aaf951caaeaed0585a95346f08"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7523,7 +7532,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9010,7 +9019,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset 0.9.1",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9787,7 +9796,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

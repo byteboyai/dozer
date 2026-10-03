@@ -154,6 +154,7 @@ Host（窗口 / 布局 / 焦点 / 浮层 / 主题 / 面板 Registry）
    - **P2 已完成（2026-10-03）：** `v0.3.0` 已发布（历史/diff、blob 读取与分类、`workdir_patch`/`file_bytes_at`）；`git_log`/`file_history` 已迁到 bytegit，两面板共用的 diff 内容层抽到 `extensions/diff_content.rs`，`file_history → git_log` 的面板间耦合已消失。计划：`docs/superpowers/plans/2026-10-03-bytegit-p2-history-diff.md`。
    - **P3 已完成（2026-10-03）：** `v0.4.0` 已发布（`head_commit_time`/`commit_count`/`commit_count_by_day`/`churn`）；`usage` 的提交计数、`git_hotspots::recent_churn`、`dozerd/projects.rs` 的项目更新时间已迁到 bytegit，**`dozerd` 现在也依赖 `bytegit`**。计划：`docs/superpowers/plans/2026-10-03-bytegit-p3-stats-churn.md`。
    - **P4 已完成（2026-10-03）：** `v0.5.0` 已发布（`watch` feature）；项目工作区监听已进 `bytegit`（`bytegit::watch`，忽略名单由 dozer 经 `IgnoreRules` 传入），`dozer-app` 不再直接依赖 `notify`，`git_watch.rs` 已删除；Host 只负责把 `GitChange` 转成消息。计划：`docs/superpowers/plans/2026-10-03-bytegit-p4-watch.md`。
+   - **P5 已完成（2026-10-03）：** `v0.6.0` 已发布（写操作 `init`/`clone`/`Repo::checkout_branch`/`git_available`）；`delivery.rs` 的四个函数改为 bytegit 适配层。写操作评估：`init` 用 `git2`，`clone`/`checkout` 留在命令行（本构建 libgit2 无 https/ssh、不执行 hook 与外部过滤器、报错退化），理由见评估存档 `docs/superpowers/specs/2026-10-03-bytegit-write-ops-evaluation.md`。计划：`docs/superpowers/plans/2026-10-03-bytegit-p5-write-ops.md`。
 
 2. 审计 Q7、Q8、Q13。
 3. 确定事件总线的最小模型（Q9），先给 Git 状态变化（工作区变更、分支切换）这一条事件用起来。
