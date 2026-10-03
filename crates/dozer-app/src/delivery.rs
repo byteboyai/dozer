@@ -2,42 +2,42 @@
 //! 全部同步阻塞——调用方负责放进 tokio 任务，不许在 UI 线程直呼。
 
 use anyhow::Result;
+use bytegit::{ChangeKind as GitChange, Repo, StatusOptions};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn git(repo: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+/// 两个目录是同一个目录(规范化后相等);任一规范化失败按不同处理。
+fn same_dir(a: &Path, b: &Path) -> bool {
+    matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
 }
 
+/// 只认仓库根:`path` 必须正好是某个仓库的工作区根才打开。保持迁移前 `git2::Repository::open`
+/// 的语义——项目路径在仓库子目录时视为"不是仓库"。要不要改成向上查找是单独的产品决策
+/// (见 bytegit P1 计划"待决事项"),不在迁移里顺手改变。
+pub(crate) fn open_exact(path: &Path) -> Option<Repo> {
+    let repo = Repo::discover(path).ok()?;
+    same_dir(repo.root(), path).then_some(repo)
+}
+
+/// 向上查找所属仓库(迁移前用命令行 `git`,在子目录里同样会向上找)。
+fn open_upward(path: &Path) -> Option<Repo> {
+    Repo::discover(path).ok()
+}
+
+/// 取 `dir` 所属 git 仓库的工作区根;非 git、bare 仓库、`dir` 不是目录时返回 `None`。
 pub fn repo_root(dir: &Path) -> Option<PathBuf> {
     if !dir.is_dir() {
         return None;
     }
-    bytegit::Repo::discover(dir)
-        .ok()
-        .filter(|repo| !repo.is_bare())
-        .map(|repo| repo.root().to_path_buf())
+    let repo = open_upward(dir)?;
+    (!repo.is_bare()).then(|| repo.root().to_path_buf())
 }
 
-/// 工作区是否有任何改动(暂存或未暂存,不含被 `.gitignore` 排除的文件)。
+/// 工作区是否有任何改动(暂存或未暂存,含未跟踪,不含被 `.gitignore` 排除的文件)。
 pub fn is_dirty(repo: &Path) -> bool {
-    let Ok(git_repo) = git2::Repository::open(repo) else {
-        return false;
-    };
-    let mut opts = git2::StatusOptions::new();
-    opts.include_untracked(true).recurse_untracked_dirs(true);
-    git_repo
-        .statuses(Some(&mut opts))
-        .map(|s| !s.is_empty())
+    open_exact(repo)
+        .and_then(|r| r.is_dirty(StatusOptions::default()).ok())
         .unwrap_or(false)
 }
 
@@ -63,59 +63,26 @@ pub struct FileGitStatus {
     pub ignored: bool,
 }
 
-/// 用 `git2::Repository::statuses` 取代 shell 出 `git status --porcelain`
-/// 文本解析(D1):`INDEX_*` 标志位=相对 HEAD 的暂存改动,`WT_*`=相对 index
-/// 的工作区改动,原生区分,不用再猜双字符码语义。非 git / 打开失败返回空。
+/// 取整个仓库的文件级状态(含未跟踪与被忽略)。`repo` 必须是仓库根(见 [`open_exact`]);
+/// 非 git / 打开失败返回空。键是 `repo.join(相对路径)`。
 pub fn file_statuses(repo: &Path) -> HashMap<PathBuf, FileGitStatus> {
     let mut map = HashMap::new();
-    let Ok(git_repo) = git2::Repository::open(repo) else {
+    let Some(git_repo) = open_exact(repo) else {
         return map;
     };
-    let mut opts = git2::StatusOptions::new();
-    opts.include_untracked(true)
-        .recurse_untracked_dirs(true)
-        .include_ignored(true);
-    let Ok(statuses) = git_repo.statuses(Some(&mut opts)) else {
+    let opts = StatusOptions {
+        include_untracked: true,
+        include_ignored: true,
+        detect_renames: false,
+    };
+    let Ok(entries) = git_repo.status(opts) else {
         return map;
     };
-    for entry in statuses.iter() {
-        let Ok(rel) = entry.path() else {
-            continue; // 非 UTF-8 路径,跳过而非崩(同旧版"格式意外跳过该行"精神)
-        };
-        if rel.is_empty() {
-            continue;
-        }
-        let s = entry.status();
-        if s.is_empty() {
-            // 纯已跟踪且无改动:git 不放这类条目,出现空状态直接跳过。
-            continue;
-        }
-        let ignored = s.contains(git2::Status::IGNORED);
-        let staged = if ignored {
-            false
-        } else {
-            s.intersects(
-                git2::Status::INDEX_NEW
-                    | git2::Status::INDEX_MODIFIED
-                    | git2::Status::INDEX_DELETED
-                    | git2::Status::INDEX_RENAMED
-                    | git2::Status::INDEX_TYPECHANGE,
-            )
-        };
-        let unstaged = if ignored {
-            false
-        } else {
-            s.intersects(
-                git2::Status::WT_NEW
-                    | git2::Status::WT_MODIFIED
-                    | git2::Status::WT_DELETED
-                    | git2::Status::WT_RENAMED
-                    | git2::Status::WT_TYPECHANGE,
-            )
-        };
-        if ignored {
+    for entry in entries {
+        let st = entry.state;
+        if st.ignored {
             map.insert(
-                repo.join(rel),
+                repo.join(&entry.path),
                 FileGitStatus {
                     kind: ChangeKind::Modified,
                     staged: false,
@@ -125,18 +92,21 @@ pub fn file_statuses(repo: &Path) -> HashMap<PathBuf, FileGitStatus> {
             );
             continue;
         }
+        let staged = st.index.is_some();
+        let unstaged = st.worktree.is_some();
         if !staged && !unstaged {
-            continue;
+            continue; // 例如合并冲突:没有暂存/工作区改动标志,保持与旧实现一致地跳过
         }
-        let kind = if s.intersects(git2::Status::INDEX_NEW | git2::Status::WT_NEW) {
+        let has = |kind: GitChange| st.index == Some(kind) || st.worktree == Some(kind);
+        let kind = if has(GitChange::Added) {
             ChangeKind::New
-        } else if s.intersects(git2::Status::INDEX_DELETED | git2::Status::WT_DELETED) {
+        } else if has(GitChange::Deleted) {
             ChangeKind::Deleted
         } else {
             ChangeKind::Modified
         };
         map.insert(
-            repo.join(rel),
+            repo.join(&entry.path),
             FileGitStatus {
                 kind,
                 staged,
@@ -267,73 +237,42 @@ pub fn rollup_dir_statuses(
 
 /// 当前分支名;非 git / 无提交 / detached HEAD 返回 None。
 pub fn branch(repo: &Path) -> Option<String> {
-    let git_repo = git2::Repository::open(repo).ok()?;
-    let head = git_repo.head().ok()?;
-    if !head.is_branch() {
-        return None; // detached HEAD 或指向 tag 等非分支引用
-    }
-    head.shorthand().ok().map(str::to_string)
+    open_exact(repo)?.head().ok()?.branch
 }
 
-/// 返回仓库**全部** remote 的 fetch URL(去重,保持 `git remote -v`
-/// 出现顺序)。`git remote -v` 每行形如 `origin  https://x.git (fetch)`,
-/// 只取 `(fetch)` 方向避免 `(push)` 重复;完全没有 remote / 非 git 目录
-/// → 空 `Vec`(语义上即"未设置")。
+/// 返回仓库**全部** remote 的 fetch URL(去重,按 remote 名字升序,与 `git remote -v`
+/// 的顺序一致);没有 remote / 非 git 目录 → 空 `Vec`(语义上即"未设置")。
 pub fn remote_url(repo: &Path) -> Vec<String> {
-    let Ok(out) = Command::new("git")
-        .args(["remote", "-v"])
-        .current_dir(repo)
-        .output()
-    else {
+    let Some(git_repo) = open_upward(repo) else {
         return Vec::new();
     };
-    if !out.status.success() {
+    let Ok(remotes) = git_repo.remotes() else {
         return Vec::new();
-    }
+    };
     let mut seen = std::collections::HashSet::new();
     let mut urls = Vec::new();
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        if !line.contains("(fetch)") {
-            continue;
-        }
-        let Some(url) = line.split_whitespace().nth(1) else {
-            continue;
-        };
-        if seen.insert(url.to_string()) {
-            urls.push(url.to_string());
+    for remote in remotes {
+        if seen.insert(remote.url.clone()) {
+            urls.push(remote.url);
         }
     }
     urls
 }
 
-/// 所有本地分支名(按 refs/heads 前缀,short 名)。非 git 仓库返回 None;
+/// 所有本地分支名(短名,升序)。非 git 仓库返回 None;
 /// git 仓库但没有分支(空仓未提交)返回 Some(空 vec)。
 pub fn local_branches(repo: &Path) -> Option<Vec<String>> {
-    let out = git(
-        repo,
-        &["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
-    )?;
-    Some(
-        out.lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .collect(),
-    )
+    open_upward(repo)?.local_branches().ok()
 }
 
-/// 当前分支是否已有提交。空仓(刚 `git init` 未 commit 的 unborn 分支)——
-/// HEAD 指不到任何提交对象,返回 `false`;已有一条或更多提交返回 `true`。
-/// 非 git / detached HEAD 一律按 `false` 处理。分支菜单据此把其余分支
-/// 置灰禁用(没有提交可切换的合理基线)。
+/// HEAD 是否能解析到提交。空仓(刚 `git init` 未 commit 的 unborn 分支)返回 `false`;
+/// 已有一条或更多提交返回 `true`;非 git 返回 `false`。
+/// **detached HEAD 返回 `true`**(HEAD 仍指向一个提交)——迁移前的注释写的是 `false`,
+/// 但代码一直是 `true`,这里保持代码行为、更正注释。
 pub fn current_branch_has_commits(repo: &Path) -> bool {
-    let Ok(git_repo) = git2::Repository::open(repo) else {
-        return false;
-    };
-    git_repo
-        .head()
-        .ok()
-        .and_then(|h| h.peel_to_commit().ok())
-        .is_some()
+    open_exact(repo)
+        .and_then(|r| r.head().ok())
+        .is_some_and(|h| h.has_commits())
 }
 
 /// 切换到 `name` 指定分支(本地分支)。错误透传 git 的 stderr,便于展示给
@@ -938,5 +877,159 @@ mod tests {
             "伪造的 --upload-pack 参数不应该被当成选项接受"
         );
         assert!(!err.is_empty());
+    }
+
+    // ---- bytegit P1:刻画迁移前后必须一致的口径 ----
+
+    fn git_in(repo: &std::path::Path, args: &[&str]) {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    #[test]
+    fn project_in_a_repo_subdirectory_is_treated_as_not_a_repo_by_open_based_queries() {
+        // 迁移前 `branch/is_dirty/file_statuses/current_branch_has_commits` 用 `Repository::open`,
+        // 只认仓库根;`repo_root/local_branches/remote_url` 用命令行,会向上找。
+        let (_d, repo) = mkrepo();
+        git_in(
+            &repo,
+            &["remote", "add", "origin", "https://example.com/x.git"],
+        );
+        let sub = repo.join("pkg");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("f.txt"), "x").unwrap();
+
+        assert_eq!(branch(&sub), None);
+        assert!(!is_dirty(&sub));
+        assert!(file_statuses(&sub).is_empty());
+        assert!(!current_branch_has_commits(&sub));
+
+        assert!(repo_root(&sub).is_some());
+        assert_eq!(
+            remote_url(&sub),
+            vec!["https://example.com/x.git".to_string()]
+        );
+        assert!(local_branches(&sub).is_some_and(|b| !b.is_empty()));
+    }
+
+    #[test]
+    fn detached_head_still_counts_as_having_commits() {
+        let (_d, repo) = mkrepo();
+        git_in(&repo, &["checkout", "-q", "--detach"]);
+        assert!(current_branch_has_commits(&repo));
+        assert_eq!(branch(&repo), None);
+    }
+
+    #[test]
+    fn empty_repo_has_no_commits_no_branch_but_an_empty_branch_list() {
+        let dir = tempfile::tempdir().unwrap();
+        git_in(dir.path(), &["init", "-q"]);
+        assert!(!current_branch_has_commits(dir.path()));
+        assert_eq!(branch(dir.path()), None);
+        assert_eq!(local_branches(dir.path()), Some(Vec::new()));
+        assert!(!is_dirty(dir.path()));
+    }
+
+    #[test]
+    fn non_git_dir_answers_the_empty_way() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(branch(dir.path()), None);
+        assert!(!is_dirty(dir.path()));
+        assert!(file_statuses(dir.path()).is_empty());
+        assert_eq!(local_branches(dir.path()), None);
+        assert!(remote_url(dir.path()).is_empty());
+        assert!(repo_root(dir.path()).is_none());
+    }
+
+    #[test]
+    fn remote_urls_are_deduped_and_ordered_by_remote_name() {
+        let dir = tempfile::tempdir().unwrap();
+        git_in(dir.path(), &["init", "-q"]);
+        git_in(
+            dir.path(),
+            &["remote", "add", "upstream", "https://example.com/u.git"],
+        );
+        git_in(
+            dir.path(),
+            &["remote", "add", "origin", "https://example.com/o.git"],
+        );
+        git_in(
+            dir.path(),
+            &["remote", "add", "zed", "https://example.com/o.git"],
+        );
+        assert_eq!(
+            remote_url(dir.path()),
+            vec![
+                "https://example.com/o.git".to_string(),
+                "https://example.com/u.git".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn local_branches_are_listed_in_name_order() {
+        let (_d, repo) = mkrepo();
+        git_in(&repo, &["branch", "zeta"]);
+        git_in(&repo, &["branch", "alpha"]);
+        git_in(&repo, &["branch", "feature/x"]);
+        let mut expected = vec![
+            "alpha".to_string(),
+            "feature/x".to_string(),
+            "zeta".to_string(),
+        ];
+        let got = local_branches(&repo).unwrap();
+        // 初始分支名取决于用户的 init.defaultBranch,不假设它是什么
+        let current = branch(&repo).unwrap();
+        expected.push(current);
+        expected.sort();
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn ignored_files_do_not_make_the_repo_dirty_but_untracked_ones_do() {
+        let (_d, repo) = mkrepo();
+        std::fs::write(repo.join(".gitignore"), "*.log\n").unwrap();
+        git_in(&repo, &["add", "."]);
+        git_in(&repo, &["commit", "-qm", "ignore"]);
+        std::fs::write(repo.join("debug.log"), "x").unwrap();
+        assert!(!is_dirty(&repo));
+        assert!(file_statuses(&repo)[&repo.join("debug.log")].ignored);
+        std::fs::write(repo.join("new.txt"), "x").unwrap();
+        assert!(is_dirty(&repo));
+    }
+
+    #[test]
+    fn merge_conflict_makes_the_repo_dirty_but_has_no_file_status() {
+        let (_d, repo) = mkrepo();
+        let base = branch(&repo).unwrap();
+        git_in(&repo, &["checkout", "-q", "-b", "other"]);
+        std::fs::write(repo.join("a.txt"), "other\n").unwrap();
+        git_in(&repo, &["commit", "-qam", "other"]);
+        git_in(&repo, &["checkout", "-q", &base]);
+        std::fs::write(repo.join("a.txt"), "main\n").unwrap();
+        git_in(&repo, &["commit", "-qam", "main"]);
+        // 合并冲突时 git 以非零退出,这里不能用 git_in 的成功断言
+        let _ = Command::new("git")
+            .args(["merge", "other"])
+            .current_dir(&repo)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(is_dirty(&repo));
+        assert!(
+            !file_statuses(&repo).contains_key(&repo.join("a.txt")),
+            "冲突文件没有暂存/工作区改动标志,旧实现不给它状态"
+        );
     }
 }

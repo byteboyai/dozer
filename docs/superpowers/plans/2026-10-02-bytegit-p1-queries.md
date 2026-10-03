@@ -1,5 +1,10 @@
 # bytegit P1:状态 / HEAD / 分支 / 远程迁移 Implementation Plan
 
+> **执行状态：已完成（2026-10-03）。** `bytegit v0.2.0` 已发布，对应提交
+> `6445f41`；dozer 迁移位于 `bytegit-p1` 分支，代码提交为 `1381a7b5`、
+> `dac47559`，结果与偏差记录为 `c37cc120`。下方复选框保留为原始执行清单，
+> 不再表示当前完成状态；实际结果以本状态栏、Git 提交和 Self-Review 为准。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 给 `bytegit` 增加 HEAD、本地分支、远程、工作区状态四类只读 API(发 `v0.2.0`),并让 dozer 的 `delivery.rs` 查询函数与 `git_hotspots` 的 `dirty_paths`/`head_short_sha` 改用它,消除工作区状态 ×3 的重复实现,行为保持等价。
