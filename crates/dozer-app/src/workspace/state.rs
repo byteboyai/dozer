@@ -3209,13 +3209,13 @@ pub(crate) fn project_git_snapshot(
 ) -> (
     Option<String>,
     bool,
-    HashMap<PathBuf, delivery::FileGitStatus>,
+    HashMap<PathBuf, files::git_status::FileGitStatus>,
     Vec<String>,
 ) {
     (
         delivery::branch(repo_path),
         delivery::is_dirty(repo_path),
-        delivery::file_statuses(repo_path),
+        files::git_status::file_statuses(repo_path),
         delivery::remote_url(repo_path),
     )
 }

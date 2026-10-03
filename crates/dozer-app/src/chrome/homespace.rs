@@ -10,6 +10,7 @@ use crate::chrome::rail::RailButton;
 use crate::conversation::ConversationMeta;
 use crate::delivery;
 use crate::extensions::browser;
+use crate::extensions::files::git_status;
 use crate::theme;
 use crate::workspace::{agent_dot_color, agent_icon, lh, relative_time_text};
 use byteui::interaction::icons;
@@ -882,7 +883,7 @@ pub(crate) async fn load_home_recents(
         for p in &projects_owned {
             let cwd = PathBuf::from(&p.path);
             if let Some(repo) = delivery::repo_root(&cwd) {
-                for (path, _status) in delivery::file_statuses(&repo) {
+                for (path, _status) in git_status::file_statuses(&repo) {
                     let Ok(meta) = std::fs::metadata(&path) else {
                         continue; // 路径已在磁盘消失(用户手动删了),静默跳过(spec §4)
                     };

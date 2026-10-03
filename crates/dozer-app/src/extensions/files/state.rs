@@ -1,7 +1,7 @@
 //! Files 面板状态类型与状态机:TreeEditMode/TreeEdit/ContextMenu/PendingMove/
 //! WorkspaceState/GitInfo/AppState/Message/焦点捕获。
 
-use crate::delivery;
+use super::git_status;
 use crate::project::{FileTree, PathKind};
 use iced_widget::core::Rectangle;
 use iced_widget::core::widget::operation::Focusable;
@@ -70,10 +70,10 @@ pub struct WorkspaceState {
     pub(crate) outbox: crate::extensions::toast::Outbox,
     pub(crate) file_tree: Option<FileTree>,
     pub(crate) git_statuses: HashMap<PathBuf, FileGitStatus>,
-    /// 目录 → 聚合 git 状态(由 `delivery::rollup_dir_statuses` 在
+    /// 目录 → 聚合 git 状态(由 `git_status::rollup_dir_statuses` 在
     /// `StatusesRefreshed` 时一并算出),文件树渲染 O(1) 查表,取代每行
     /// 一次 `dir_status` 的全表扫描(2026-09-17 性能优化)。
-    pub(crate) dir_statuses: HashMap<PathBuf, delivery::TreeState>,
+    pub(crate) dir_statuses: HashMap<PathBuf, git_status::TreeState>,
     pub(crate) tree_selected: Option<PathBuf>,
     pub(crate) tree_clipboard: Option<(PathBuf, bool)>,
     /// **仅**移动对话框(`pending_move`)内的校验错误,在对话框里内联显示(对话框保持
@@ -658,7 +658,7 @@ impl WorkspaceState {
             .as_deref()
             .and_then(|r| self.dir_statuses.get(r).copied())
             // 聚合时忽略被忽略文件,`Some` 即真实未提交改动。
-            .filter(|st| *st != crate::delivery::TreeState::Ignored)
+            .filter(|st| *st != git_status::TreeState::Ignored)
             .is_some()
     }
 

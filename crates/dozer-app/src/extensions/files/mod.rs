@@ -1,8 +1,9 @@
 //! Files(项目文件树)面板:文件树 + 右键菜单/删除确认浮层。阶段 1 扩展化
 //! 重构第四个试点,设计见
 //! `docs/superpowers/specs/2026-08-07-files-extension-pilot-design.md`。
-use crate::delivery::FileGitStatus;
+use git_status::FileGitStatus;
 
+pub(crate) mod git_status;
 mod state;
 mod tree;
 mod update;
@@ -17,7 +18,6 @@ pub(crate) use view::*;
 mod tests {
     use super::*;
 
-    use crate::delivery;
     use crate::project::{FileTree, PathKind, TreeRow};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -218,23 +218,23 @@ mod tests {
     #[test]
     fn tree_state_colors() {
         assert_eq!(
-            tree_state_color(delivery::TreeState::Untracked),
+            tree_state_color(git_status::TreeState::Untracked),
             byteui::theme::color::current().red
         );
         assert_eq!(
-            tree_state_color(delivery::TreeState::StagedNew),
+            tree_state_color(git_status::TreeState::StagedNew),
             byteui::theme::color::current().green
         );
         assert_eq!(
-            tree_state_color(delivery::TreeState::Modified),
+            tree_state_color(git_status::TreeState::Modified),
             byteui::theme::color::current().cyan
         );
         assert_eq!(
-            tree_state_color(delivery::TreeState::Unchanged),
+            tree_state_color(git_status::TreeState::Unchanged),
             byteui::theme::color::current().body
         );
         assert_eq!(
-            tree_state_color(delivery::TreeState::Ignored),
+            tree_state_color(git_status::TreeState::Ignored),
             byteui::theme::color::current().ignored
         );
     }
@@ -1797,8 +1797,8 @@ mod tests {
         let mut statuses = HashMap::new();
         statuses.insert(
             PathBuf::from("/x"),
-            crate::delivery::FileGitStatus {
-                kind: crate::delivery::ChangeKind::Modified,
+            git_status::FileGitStatus {
+                kind: git_status::ChangeKind::Modified,
                 staged: false,
                 unstaged: true,
                 ignored: false,

@@ -1,7 +1,7 @@
 //! 文件树拖拽状态机与落点命中:TreeDragPhase/TreeDrag/DropHit/tree_drop_target/
 //! is_valid_move_target/tree_drag_ghost/tree_state_color。
 
-use crate::delivery;
+use super::git_status;
 use crate::project::TreeRow;
 use byteui::interaction::icons;
 use iced_widget::core::{Border, Element, Length, Padding};
@@ -200,15 +200,15 @@ pub(crate) fn tree_drag_ghost(
 }
 
 /// 文件树名称颜色编码 git 状态,取代早前 D2 的行尾色点。按
-/// `delivery::TreeState` 档位取色:未加入版本 → 红 `RED`;加入版本未提交的
+/// `git_status::TreeState` 档位取色:未加入版本 → 红 `RED`;加入版本未提交的
 /// 新文件 → 绿 `GREEN`;修改/删除未提交 → 青 `CYAN`;被忽略 → 弱灰
 /// `IGNORED`。无改动(状态为 `None`)由调用方给灰色 `BODY`。
-pub(crate) fn tree_state_color(state: delivery::TreeState) -> iced_widget::core::Color {
+pub(crate) fn tree_state_color(state: git_status::TreeState) -> iced_widget::core::Color {
     match state {
-        delivery::TreeState::Untracked => byteui::theme::color::current().red,
-        delivery::TreeState::StagedNew => byteui::theme::color::current().green,
-        delivery::TreeState::Modified => byteui::theme::color::current().cyan,
-        delivery::TreeState::Unchanged => byteui::theme::color::current().body,
-        delivery::TreeState::Ignored => byteui::theme::color::current().ignored,
+        git_status::TreeState::Untracked => byteui::theme::color::current().red,
+        git_status::TreeState::StagedNew => byteui::theme::color::current().green,
+        git_status::TreeState::Modified => byteui::theme::color::current().cyan,
+        git_status::TreeState::Unchanged => byteui::theme::color::current().body,
+        git_status::TreeState::Ignored => byteui::theme::color::current().ignored,
     }
 }

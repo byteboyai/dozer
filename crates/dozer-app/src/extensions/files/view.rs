@@ -1,10 +1,11 @@
 //! Files 面板 view:文件树列表/行内编辑/git footer/分支选择器/右键菜单/
 //! 删除与移动确认浮层。
 
+use super::git_status;
 use crate::menu_spec::{MenuSpec, MenuSpecItem};
 use crate::project::PathKind;
+use crate::theme;
 use crate::theme::terminal_font;
-use crate::{delivery, theme};
 use byteui::interaction::icons;
 use iced_widget::core::mouse;
 use iced_widget::core::text::LineHeight;
@@ -110,7 +111,7 @@ pub fn view<'a>(
             .dir_statuses
             .get(root)
             .copied()
-            .unwrap_or(delivery::TreeState::Unchanged);
+            .unwrap_or(git_status::TreeState::Unchanged);
         let root_color = tree_state_color(root_state);
         // 根目录本身也是合法的拖拽落点(项目内移动到顶层),但它不在
         // `visible_tree_rows()` 循环里(单独渲成静态头部,见上方注释),
@@ -247,19 +248,19 @@ pub fn view<'a>(
             // 的新文件=绿,修改/删除未提交=青,一般=灰,被忽略=弱灰。目录
             // 聚合取子孙中最高档(`dir_status`),让用户先注意到没加入版本
             // 管理的文件。无任何 git 记录的干净条目(状态 `None`)补成"一般"。
-            let state: delivery::TreeState = if row.is_dir {
+            let state: git_status::TreeState = if row.is_dir {
                 ws_state
                     .dir_statuses
                     .get(&row.path)
                     .copied()
-                    .unwrap_or(delivery::TreeState::Unchanged)
+                    .unwrap_or(git_status::TreeState::Unchanged)
             } else {
                 ws_state
                     .git_statuses
                     .get(&row.path)
                     .copied()
-                    .map(delivery::TreeState::from)
-                    .unwrap_or(delivery::TreeState::Unchanged)
+                    .map(git_status::TreeState::from)
+                    .unwrap_or(git_status::TreeState::Unchanged)
             };
             let is_selected = ws_state.tree_selected.as_deref() == Some(row.path.as_path());
             // 选中行背景改半透明奶油色(见下方 `row_btn` 的 `background`,
@@ -611,7 +612,7 @@ fn git_footer_bar(
             .as_deref()
             .and_then(|r| ws_state.dir_statuses.get(r).copied())
             // 聚合时忽略被忽略文件,`Some` 即真实未提交改动。
-            .filter(|st| *st != delivery::TreeState::Ignored);
+            .filter(|st| *st != git_status::TreeState::Ignored);
         let branch_name = ws_state
             .current_branch
             .clone()
