@@ -10,8 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytegit::{CommitId, LogOptions};
 
-use crate::delivery::open_exact_or_err;
-use crate::extensions::diff_content::{DiffBlobContent, workdir_content};
+use crate::extensions::diff_content::{DiffBlobContent, open_exact_repo, workdir_content};
 use byteui::interaction::icons;
 use iced_widget::core::{Element, Length};
 use iced_widget::{button, column, container, row, scrollable, text};
@@ -371,7 +370,7 @@ fn spawn_diff_content<E>(
         let repo_path2 = repo_path.clone();
         let file_path2 = file_path.clone();
         let result = tokio::task::spawn_blocking(move || {
-            let repo = open_exact_or_err(&repo_path2)?;
+            let repo = open_exact_repo(&repo_path2)?;
             workdir_content(&repo, oid, &file_path2)
         })
         .await
@@ -394,7 +393,7 @@ pub fn build(
     file_path: &Path,
     max_count: usize,
 ) -> Result<FileHistorySnapshot, String> {
-    let repo = open_exact_or_err(repo_path)?;
+    let repo = open_exact_repo(repo_path)?;
     let log = repo
         .log(LogOptions::new(max_count).path(file_path))
         .map_err(|e| e.message().to_string())?;
@@ -430,7 +429,7 @@ pub fn diff_against_current(
     file_path: &Path,
     id: CommitId,
 ) -> Result<String, String> {
-    let repo = open_exact_or_err(repo_path)?;
+    let repo = open_exact_repo(repo_path)?;
     let patch = repo
         .workdir_patch(id, file_path, MAX_PATCH_CHARS)
         .map_err(|e| e.message().to_string())?;
@@ -445,7 +444,7 @@ pub fn diff_against_current(
 /// 不碰 git 索引,不 `git add`,是纯粹的文件系统写入——回滚后 git status 会显示这是一处
 /// 未提交改动,交给用户/agent 自行决定要不要提交。二进制、超大、非 UTF-8 的文件也原样写回。
 pub fn rollback_to(repo_path: &Path, file_path: &Path, id: CommitId) -> Result<(), String> {
-    let repo = open_exact_or_err(repo_path)?;
+    let repo = open_exact_repo(repo_path)?;
     let bytes = repo
         .file_bytes_at(id, file_path)
         .map_err(|e| e.message().to_string())?
@@ -459,7 +458,7 @@ pub fn rollback_to(repo_path: &Path, file_path: &Path, id: CommitId) -> Result<(
 /// (没有更早的版本),回落到那唯一一次提交(等价于把工作区还原到最近一次提交、丢弃
 /// 未提交改动);文件不在 git 跟踪内(历史为空)则返回 `None`。
 pub fn previous_commit(repo_path: &Path, file_path: &Path) -> Result<Option<CommitId>, String> {
-    let repo = open_exact_or_err(repo_path)?;
+    let repo = open_exact_repo(repo_path)?;
     repo.previous_version(file_path)
         .map_err(|e| e.message().to_string())
 }

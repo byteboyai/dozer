@@ -5,7 +5,6 @@
 //! 稳定发现 ID 的差异把“本轮新增/恶化 + 严重度 + 近期修改 + 指标增量 + 当前值”
 //! 排成可解释的优先处理顺序。Git 不可用一律降级返回空/`None`，不让扫描失败。
 
-use crate::delivery;
 use bytegit::{Repo, StatusOptions};
 use dozer_codehealth::{Finding, FindingChange, FindingSeverity, GitSnapshot, diff_reports};
 use std::collections::HashMap;
@@ -14,10 +13,18 @@ use std::path::Path;
 /// 采集当前 Git 元数据。非 git 目录返回 `None`（detached HEAD 时 `head` 有值、
 /// `branch` 为 `None`，仍返回 `Some`）。
 pub fn git_snapshot(project_root: &Path) -> Option<GitSnapshot> {
-    delivery::repo_root(project_root)?;
+    // 先确认在某个仓库里(向上查找),分支/改动再按"项目路径就是仓库根"取——项目在仓库子目录
+    // 时它们是 `None`/`false`(迁移前就如此,保持原样)。
+    Repo::discover_workdir(project_root).ok()?;
     let head = head_short_sha(project_root);
-    let branch = delivery::branch(project_root);
-    let dirty = delivery::is_dirty(project_root);
+    let exact = Repo::open_exact(project_root).ok();
+    let branch = exact
+        .as_ref()
+        .and_then(|repo| repo.head().ok())
+        .and_then(|head| head.branch);
+    let dirty = exact
+        .as_ref()
+        .is_some_and(|repo| repo.is_dirty(StatusOptions::default()).unwrap_or(false));
     Some(GitSnapshot {
         head,
         branch,
@@ -25,9 +32,9 @@ pub fn git_snapshot(project_root: &Path) -> Option<GitSnapshot> {
     })
 }
 
-/// HEAD 提交的前 7 位。和迁移前一致只认仓库根(见 `delivery::open_exact`)。
+/// HEAD 提交的前 7 位。和迁移前一致只认仓库根(见 `Repo::open_exact`)。
 fn head_short_sha(dir: &Path) -> Option<String> {
-    let commit = delivery::open_exact(dir)?.head().ok()?.commit?;
+    let commit = Repo::open_exact(dir).ok()?.head().ok()?.commit?;
     Some(commit.short(7))
 }
 

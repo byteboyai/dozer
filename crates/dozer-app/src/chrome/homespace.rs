@@ -8,7 +8,6 @@
 use crate::app::{App, HoverId, Message, PaneCorner, zone_pane_border};
 use crate::chrome::rail::RailButton;
 use crate::conversation::ConversationMeta;
-use crate::delivery;
 use crate::extensions::browser;
 use crate::extensions::files::git_status;
 use crate::theme;
@@ -882,8 +881,8 @@ pub(crate) async fn load_home_recents(
         let mut files: Vec<HomeRecentFile> = Vec::new();
         for p in &projects_owned {
             let cwd = PathBuf::from(&p.path);
-            if let Some(repo) = delivery::repo_root(&cwd) {
-                for (path, _status) in git_status::file_statuses(&repo) {
+            if let Ok(repo) = bytegit::Repo::discover_workdir(&cwd) {
+                for (path, _status) in git_status::file_statuses(repo.root()) {
                     let Ok(meta) = std::fs::metadata(&path) else {
                         continue; // 路径已在磁盘消失(用户手动删了),静默跳过(spec §4)
                     };

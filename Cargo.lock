@@ -794,17 +794,8 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "bytegit"
-version = "0.4.0"
-source = "git+https://github.com/byteboyai/bytegit?tag=v0.4.0#41e8f1f3cdfb1012259f8159aff6824ed02941dc"
-dependencies = [
- "git2",
- "serde",
-]
-
-[[package]]
-name = "bytegit"
-version = "0.6.0"
-source = "git+https://github.com/byteboyai/bytegit?tag=v0.6.0#75bf02b9cf241d755dc1e7da896dcf729d3a2b96"
+version = "0.7.0"
+source = "git+https://github.com/byteboyai/bytegit?tag=v0.7.0#0a3d2ab3e835ed20119dcaa6ce1a88d0a075ae3f"
 dependencies = [
  "git2",
  "notify",
@@ -1903,7 +1894,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "block2 0.6.2",
- "bytegit 0.6.0",
+ "bytegit",
  "byteui",
  "calamine",
  "csv",
@@ -1913,7 +1904,6 @@ dependencies = [
  "dozer-hook",
  "dozer-mcp",
  "futures",
- "git2",
  "gleisbau",
  "grep-regex",
  "grep-searcher",
@@ -2035,7 +2025,7 @@ version = "0.3.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "bytegit 0.4.0",
+ "bytegit",
  "dozer-client",
  "dozer-core",
  "futures-util",

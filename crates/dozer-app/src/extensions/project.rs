@@ -100,7 +100,7 @@ pub struct MemoryDraft {
 pub struct WorkspaceState {
     branch: Option<String>,
     dirty: bool,
-    /// git remote 的 fetch URL 列表(`delivery::remote_url`)。空 = 无 remote/
+    /// git remote 的 fetch URL 列表(`bytegit::Repo::remotes`,去重后)。空 = 无 remote/
     /// 非 git(面板据此显示"未设置")。
     remote_url: Vec<String>,
     /// 磁盘占用字节数(排除构建产物)。None=尚未算出来。

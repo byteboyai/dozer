@@ -332,7 +332,9 @@ pub fn update(
             let root = tree.root().to_path_buf();
             handle.spawn(async move {
                 let result = tokio::task::spawn_blocking(move || {
-                    crate::delivery::checkout_branch(&root, &name)
+                    bytegit::Repo::discover(&root)
+                        .and_then(|repo| repo.checkout_branch(&name))
+                        .map_err(|e| e.message().to_string())
                 })
                 .await
                 .unwrap_or_else(|e| Err(e.to_string()));
@@ -355,10 +357,13 @@ pub fn update(
             if let Some(tree) = &ws_state.file_tree {
                 let root = tree.root().to_path_buf();
                 handle.spawn(async move {
-                    let result =
-                        tokio::task::spawn_blocking(move || crate::delivery::init_repo(&root))
-                            .await
-                            .unwrap_or_else(|e| Err(e.to_string()));
+                    let result = tokio::task::spawn_blocking(move || {
+                        bytegit::init(&root)
+                            .map(|_| ())
+                            .map_err(|e| e.message().to_string())
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
                     emit(Message::GitInitDone(project_id, result));
                 });
             }
@@ -684,7 +689,7 @@ pub fn update(
 
 /// 异步加载一次 git 仓库信息:判项目根是否在仓库内、读当前分支、读本地分支
 /// 表,结果通过 `emit(GitInfoLoaded(..))` 回投。走 `spawn_blocking` 防止阻塞
-/// UI 线程(交付层的 git 调用都是同步阻塞,见 delivery.rs 模块头注释)。
+/// UI 线程(bytegit 的调用都是同步阻塞的)。
 fn spawn_git_info_load(
     ws_state: &WorkspaceState,
     project_id: i64,
@@ -711,15 +716,17 @@ fn spawn_git_info_load(
 /// 分支栏用的 git 信息:`root` 所属的(非 bare)仓库;不在仓库里为 `is_repo: false`。
 /// `root` 在仓库子目录里照样向上找到仓库。
 pub(crate) fn load_git_info(root: &Path) -> GitInfo {
-    use crate::delivery::{branch, current_branch_has_commits, local_branches, repo_root};
-    match repo_root(root) {
-        Some(repo) => GitInfo {
-            is_repo: true,
-            current_branch: branch(&repo),
-            current_branch_has_commits: current_branch_has_commits(&repo),
-            branches: local_branches(&repo).unwrap_or_default(),
-        },
-        None => GitInfo {
+    match bytegit::Repo::discover_workdir(root) {
+        Ok(repo) => {
+            let head = repo.head().ok();
+            GitInfo {
+                is_repo: true,
+                current_branch: head.as_ref().and_then(|h| h.branch.clone()),
+                current_branch_has_commits: head.as_ref().is_some_and(|h| h.has_commits()),
+                branches: repo.local_branches().unwrap_or_default(),
+            }
+        }
+        Err(_) => GitInfo {
             is_repo: false,
             current_branch: None,
             current_branch_has_commits: false,

@@ -5,7 +5,6 @@
 use crate::app::{
     DEFAULT_COLS, DEFAULT_ROWS, Message, PROJECT_PREVIEW_ID_OFFSET, PanelKind, ProjectId,
 };
-use crate::delivery::{self};
 use crate::extensions::browser;
 use crate::extensions::codehealth;
 use crate::extensions::conversations;
@@ -216,7 +215,7 @@ pub enum TabBackend {
     Ssh { out: mpsc::UnboundedSender<SshOut> },
 }
 
-/// 单个会话的工作区展示态,来自 `delivery::branch`/`delivery::is_dirty`。
+/// 单个会话的工作区展示态,来自 bytegit 的 `Repo::head`(分支)与 `Repo::is_dirty`。
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct WorkspaceGitInfo {
     pub branch: Option<String>,
@@ -3194,9 +3193,12 @@ pub(crate) fn spawn_project_git_refresh(project_id: i64, repo_path: PathBuf, io:
 /// agent 会话当前 cwd 所属仓库的分支/脏标(卡片工作区行用)。cwd 不是目录、不在任何仓库里、
 /// 或仓库是 bare 时为 `None`;cwd 在仓库**子目录**里照样向上找到仓库。
 pub(crate) fn workspace_git_info(cwd: &Path) -> Option<WorkspaceGitInfo> {
-    delivery::repo_root(cwd).map(|repo| WorkspaceGitInfo {
-        branch: delivery::branch(&repo),
-        dirty: delivery::is_dirty(&repo),
+    let repo = bytegit::Repo::discover_workdir(cwd).ok()?;
+    Some(WorkspaceGitInfo {
+        branch: repo.head().ok().and_then(|h| h.branch),
+        dirty: repo
+            .is_dirty(bytegit::StatusOptions::default())
+            .unwrap_or(false),
     })
 }
 
@@ -3212,12 +3214,37 @@ pub(crate) fn project_git_snapshot(
     HashMap<PathBuf, files::git_status::FileGitStatus>,
     Vec<String>,
 ) {
+    let exact = bytegit::Repo::open_exact(repo_path).ok();
+    let branch = exact
+        .as_ref()
+        .and_then(|repo| repo.head().ok())
+        .and_then(|head| head.branch);
+    let dirty = exact.as_ref().is_some_and(|repo| {
+        repo.is_dirty(bytegit::StatusOptions::default())
+            .unwrap_or(false)
+    });
     (
-        delivery::branch(repo_path),
-        delivery::is_dirty(repo_path),
+        branch,
+        dirty,
         files::git_status::file_statuses(repo_path),
-        delivery::remote_url(repo_path),
+        unique_remote_urls(repo_path),
     )
+}
+
+/// 仓库**全部** remote 的 fetch URL:去重、按 remote 名字升序(与 `git remote -v` 的顺序一致);
+/// 没有 remote / 不在仓库里为空 `Vec`。向上查找。
+fn unique_remote_urls(path: &Path) -> Vec<String> {
+    let Ok(remotes) = bytegit::Repo::discover(path).and_then(|repo| repo.remotes()) else {
+        return Vec::new();
+    };
+    let mut seen = HashSet::new();
+    let mut urls = Vec::new();
+    for remote in remotes {
+        if seen.insert(remote.url.clone()) {
+            urls.push(remote.url);
+        }
+    }
+    urls
 }
 
 /// 磁盘占用是独立于组合 git 刷新的异步任务——避免大仓库的目录遍历拖慢

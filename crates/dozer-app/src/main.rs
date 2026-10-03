@@ -3,7 +3,6 @@ mod assets;
 mod capabilities;
 mod chrome;
 mod conversation;
-mod delivery;
 mod event;
 mod extensions;
 mod external_apps;

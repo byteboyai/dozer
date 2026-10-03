@@ -11,10 +11,9 @@ use crate::chrome::tab_widget::{
     NO_TAB_W_LIMIT, PANEL_TAB_PAD_LEFT, PANEL_TAB_PAD_X, PANEL_TAB_PAD_Y, tab_container_style,
     tab_label,
 };
-use crate::delivery::open_exact_or_err;
-use crate::extensions::diff_content::{DiffBlobContent, blob_pair_content};
+use crate::extensions::diff_content::{DiffBlobContent, blob_pair_content, open_exact_repo};
 use crate::theme;
-use bytegit::{BlobId, ChangeKind, CommitId};
+use bytegit::{BlobId, ChangeKind, CommitId, Repo, StatusOptions};
 use iced_widget::core::alignment;
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
@@ -284,11 +283,11 @@ pub enum Message {
     /// 手快切换选择后的迟到结果)。
     DiffContentLoaded(CommitId, String, Result<DiffBlobContent, String>),
     /// 展开左侧面板底部的分支切换下拉(首次展开时内核顺带异步查一次
-    /// `delivery::local_branches`)。
+    /// `bytegit::Repo::local_branches`)。
     BranchPickerOpen,
     BranchPickerClose,
     /// 内核异步查完本地分支列表 + 工作区 dirty 状态后落地(仓库路径核对
-    /// 一致才接受)。`bool` = 工作区是否有未提交改动(`delivery::is_dirty`)。
+    /// 一致才接受)。`bool` = 工作区是否有未提交改动(`bytegit::Repo::is_dirty`)。
     BranchesLoaded(PathBuf, Vec<String>, bool),
     /// 点某个分支——内核截获处理(同 `ProjectTabOpen` 的既有例外模式),
     /// 不会转发到 `update`(见其 `unreachable!` 分支)。
@@ -359,10 +358,10 @@ pub struct State {
     pending: Option<(PathBuf, usize)>,
     /// 面板底部分支下拉是否展开。
     branch_picker_open: bool,
-    /// 当前仓库的本地分支列表(`delivery::local_branches` 结果缓存,内核在
+    /// 当前仓库的本地分支列表(`bytegit::Repo::local_branches` 结果缓存,内核在
     /// `BranchPickerOpen` 首次展开时异步查一次)。
     branches: Vec<String>,
-    /// 当前仓库工作区是否有未提交改动(`delivery::is_dirty` 结果,随
+    /// 当前仓库工作区是否有未提交改动(`bytegit::Repo::is_dirty` 结果,随
     /// `BranchesLoaded` 一起落地)。dirty 时锁定除当前分支外的其余分支,
     /// 语义跟 `files.rs::branch_picker_popup` 的 dirty-lock 一致。
     dirty: bool,
@@ -551,7 +550,7 @@ pub fn update(
             let repo_path = state.cache.as_ref().map(|c| c.repo_path().to_path_buf())?;
             handle.spawn(async move {
                 let result = tokio::task::spawn_blocking(move || {
-                    let repo = open_exact_or_err(&repo_path)?;
+                    let repo = open_exact_repo(&repo_path)?;
                     blob_pair_content(&repo, old_blob, new_blob)
                 })
                 .await
@@ -743,7 +742,7 @@ pub(crate) fn request_project_refresh(
 /// 底层走 `bytegit::Repo::commit_files`,不再自己 `find_blob`/`diff_tree_to_tree`;
 /// 内容的文本判定与双侧读取交给 [`blob_pair_content`]。
 pub fn commit_detail(repo_path: &Path, oid: CommitId) -> Result<CommitDetail, String> {
-    let repo = open_exact_or_err(repo_path)?;
+    let repo = open_exact_repo(repo_path)?;
     let files = repo
         .commit_files(oid)
         .map_err(|e| e.message().to_string())?
@@ -764,8 +763,12 @@ pub fn commit_detail(repo_path: &Path, oid: CommitId) -> Result<CommitDetail, St
 /// **注意口径不一致(迁移前就如此,保持原样):** 分支列表向上查找(`repo_path` 在仓库子目录里
 /// 也能取到),"是否有改动"只认仓库根(子目录里恒为 `false`)。不在仓库里为 `(空, false)`。
 pub(crate) fn load_branch_picker_data(repo_path: &Path) -> (Vec<String>, bool) {
-    let branches = crate::delivery::local_branches(repo_path).unwrap_or_default();
-    let dirty = crate::delivery::is_dirty(repo_path);
+    let branches = Repo::discover(repo_path)
+        .and_then(|repo| repo.local_branches())
+        .unwrap_or_default();
+    let dirty = Repo::open_exact(repo_path)
+        .and_then(|repo| repo.is_dirty(StatusOptions::default()))
+        .unwrap_or(false);
     (branches, dirty)
 }
 
@@ -1661,7 +1664,6 @@ mod tests {
     use super::*;
 
     use crate::extensions::diff_content::MAX_DIFF_BLOB_BYTES;
-    use bytegit::Repo;
 
     /// 第 `n` 个固定的假 blob id(`n` 重复 20 次的 40 位十六进制)。
     fn test_blob(n: u8) -> BlobId {
@@ -1812,8 +1814,7 @@ mod tests {
         }
     }
 
-    /// tempdir 里造一个只有一次提交(根提交)的真 git 仓库,同 `delivery.rs`
-    /// 的 `mkrepo` 惯例(用真 `git` CLI,不手搓 git2 底层对象)。
+    /// tempdir 里造一个只有一次提交(根提交)的真 git 仓库(用真 `git` CLI)。
     fn mkrepo_with_one_commit() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().to_path_buf();

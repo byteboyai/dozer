@@ -4,7 +4,6 @@
 //! ProjectCreateOverlay`,结构对照 `extensions::file_history` + 同名 overlay
 //! 的既有分工:本模块只管状态/消息/视图/异步落盘逻辑,不碰 winit/wgpu。
 
-use crate::delivery;
 use crate::git_accounts::{self, GitProvider, RemoteRepo};
 use byteui::interaction::icons;
 use iced_widget::core::{Border, Color, Length, Padding};
@@ -420,7 +419,7 @@ pub fn update(
                 s.error = Some(e);
                 return;
             }
-            if !delivery::git_available() {
+            if !bytegit::git_available() {
                 s.error = Some(
                     "未检测到系统 git,请先安装 Xcode Command Line Tools(终端执行: xcode-select --install)后重试"
                         .to_string(),
@@ -1097,10 +1096,13 @@ async fn spawn_clone(
 ) -> SubmitResult {
     let url2 = url.clone();
     let target2 = target.clone();
-    let clone_result =
-        tokio::task::spawn_blocking(move || crate::delivery::clone_repo(&url2, &target2))
-            .await
-            .unwrap_or_else(|e| Err(format!("内部错误: {e}")));
+    let clone_result = tokio::task::spawn_blocking(move || {
+        bytegit::clone(&url2, &target2, bytegit::CloneOptions::default())
+            .map(|_| ())
+            .map_err(|e| e.message().to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("内部错误: {e}")));
     clone_result?;
     let target3 = target.clone();
     let description2 = description.clone();

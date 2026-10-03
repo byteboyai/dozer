@@ -5,7 +5,7 @@ edition.workspace = true
 
 [dependencies]
 dozer-core = { path = "../dozer-core", features = ["logging"] }
-bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.4.0" }
+bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.7.0" }
 anyhow.workspace = true
 tokio.workspace = true
 portable-pty.workspace = true

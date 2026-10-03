@@ -2931,7 +2931,9 @@ impl App {
                 self.handle.spawn(async move {
                     let repo_path2 = repo_path.clone();
                     let result = tokio::task::spawn_blocking(move || {
-                        crate::delivery::checkout_branch(&repo_path2, &name)
+                        bytegit::Repo::discover(&repo_path2)
+                            .and_then(|repo| repo.checkout_branch(&name))
+                            .map_err(|e| e.message().to_string())
                     })
                     .await
                     .unwrap_or_else(|e| Err(e.to_string()));

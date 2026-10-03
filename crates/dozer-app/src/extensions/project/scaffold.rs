@@ -56,9 +56,9 @@ fn ensure_git_repo(repo: &Path) -> ScaffoldStepResult {
     if repo.join(".git").exists() {
         return ScaffoldStepResult::AlreadyOk;
     }
-    match crate::delivery::init_repo(repo) {
-        Ok(()) => ScaffoldStepResult::Created("已初始化 git 仓库".into()),
-        Err(e) => ScaffoldStepResult::Failed(e),
+    match bytegit::init(repo) {
+        Ok(_) => ScaffoldStepResult::Created("已初始化 git 仓库".into()),
+        Err(e) => ScaffoldStepResult::Failed(e.message().to_string()),
     }
 }
 

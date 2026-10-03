@@ -33,6 +33,12 @@ fn not_renderable(reason: &str) -> DiffBlobContent {
     }
 }
 
+/// 按"项目路径就是仓库根"打开仓库(项目在仓库子目录里时报错,而不是向上查找),失败信息可直接展示。
+/// 两个面板的历史/文件内容查询共用它:`file_path` 是相对项目根的,必须和仓库根一致,否则查错文件。
+pub(crate) fn open_exact_repo(path: &Path) -> Result<Repo, String> {
+    Repo::open_exact(path).map_err(|e| e.message().to_string())
+}
+
 /// 两个 blob 之间的双侧文本。`None` 侧按新增/删除文件语义当空字符串;
 /// 非 `None` 侧任一超过 [`MAX_DIFF_BLOB_BYTES`]、含二进制内容或不是合法 UTF-8 都判定
 /// "不可渲染"——不做部分截断渲染。
