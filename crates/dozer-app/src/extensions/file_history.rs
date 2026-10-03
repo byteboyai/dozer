@@ -1041,6 +1041,139 @@ mod tests {
         );
     }
 
+    /// 在 `repo` 里写入 `rel`(任意字节)并提交。
+    fn commit_bytes(repo: &Path, rel: &str, bytes: &[u8], msg: &str) {
+        let full = repo.join(rel);
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(full, bytes).unwrap();
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-qm", msg]);
+    }
+
+    /// 刻画测试:`build` 把文件名当 pathspec,`[`、`*` 是通配符,所以 `a[1].txt` 的历史里会
+    /// 混进 `a1.txt` 的提交。这是迁移前就有的怪癖,迁移保持原样(见 P2 计划"待决事项" D3)。
+    #[test]
+    fn build_treats_glob_characters_in_the_file_name_as_a_pathspec_known_quirk() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        git(&repo, &["init", "-q"]);
+        commit_bytes(&repo, "a[1].txt", b"x\n", "literal bracket");
+        commit_bytes(&repo, "a1.txt", b"x\n", "a1");
+        let summaries = |p: &str| -> Vec<String> {
+            build(&repo, Path::new(p), 10)
+                .unwrap()
+                .entries
+                .into_iter()
+                .map(|e| e.summary)
+                .collect()
+        };
+        assert_eq!(summaries("a1.txt"), vec!["a1"]);
+        assert_eq!(summaries("a[1].txt"), vec!["a1", "literal bracket"]);
+    }
+
+    #[test]
+    fn build_in_a_repo_subdirectory_is_an_error_not_a_wrong_history() {
+        // 迁移前用 `Repository::open`(只认仓库根):项目目录在仓库子目录时直接报错,
+        // 而不是在"相对仓库根"的 pathspec 下悄悄给出错误的历史。
+        let (_d, repo) = mkrepo();
+        std::fs::create_dir(repo.join("sub")).unwrap();
+        assert!(build(&repo.join("sub"), Path::new("a.txt"), 10).is_err());
+    }
+
+    #[test]
+    fn build_on_a_repo_without_commits_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-q"]);
+        assert!(build(dir.path(), Path::new("a.txt"), 10).is_err());
+    }
+
+    #[test]
+    fn build_on_a_plain_directory_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(build(dir.path(), Path::new("a.txt"), 10).is_err());
+    }
+
+    #[test]
+    fn rollback_to_restores_binary_non_utf8_bytes_exactly() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        git(&repo, &["init", "-q"]);
+        let bin = [0u8, 159, 146, 150, 0xff, 0, 1];
+        commit_bytes(&repo, "img.bin", &bin, "add binary");
+        commit_bytes(&repo, "img.bin", b"changed\0", "change binary");
+        let snapshot = build(&repo, Path::new("img.bin"), 10).unwrap();
+        let first = snapshot.entries[1].oid;
+        rollback_to(&repo, Path::new("img.bin"), first).expect("二进制文件也应能回滚");
+        assert_eq!(std::fs::read(repo.join("img.bin")).unwrap(), bin);
+    }
+
+    #[test]
+    fn rollback_to_errors_when_the_commit_has_no_such_file() {
+        let (_d, repo) = mkrepo();
+        let snapshot = build(&repo, Path::new("b.txt"), 10).unwrap();
+        let c2 = snapshot.entries[0].oid;
+        assert!(rollback_to(&repo, Path::new("never-existed.txt"), c2).is_err());
+        assert!(
+            !repo.join("never-existed.txt").exists(),
+            "出错时不能写出文件"
+        );
+    }
+
+    #[test]
+    fn rollback_to_a_directory_path_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        git(&repo, &["init", "-q"]);
+        commit_bytes(&repo, "sub/a.txt", b"x\n", "add");
+        let snapshot = build(&repo, Path::new("sub/a.txt"), 10).unwrap();
+        let c = snapshot.entries[0].oid;
+        assert!(rollback_to(&repo, Path::new("sub"), c).is_err());
+    }
+
+    #[test]
+    fn previous_oid_is_the_version_before_the_latest_change() {
+        let (_d, repo) = mkrepo();
+        let snapshot = build(&repo, Path::new("a.txt"), 10).unwrap();
+        let c1 = snapshot.entries[1].oid;
+        assert_eq!(previous_oid(&repo, Path::new("a.txt")).unwrap(), Some(c1));
+    }
+
+    #[test]
+    fn previous_oid_falls_back_to_the_only_commit() {
+        let (_d, repo) = mkrepo();
+        let snapshot = build(&repo, Path::new("b.txt"), 10).unwrap();
+        let c2 = snapshot.entries[0].oid;
+        assert_eq!(previous_oid(&repo, Path::new("b.txt")).unwrap(), Some(c2));
+    }
+
+    #[test]
+    fn previous_oid_of_an_untracked_file_is_none() {
+        let (_d, repo) = mkrepo();
+        assert_eq!(previous_oid(&repo, Path::new("nope.txt")).unwrap(), None);
+    }
+
+    #[test]
+    fn diff_against_current_truncates_and_appends_the_notice() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        git(&repo, &["init", "-q"]);
+        let many: String = (0..5000).map(|i| format!("line {i}\n")).collect();
+        commit_bytes(&repo, "big.txt", many.as_bytes(), "big");
+        let changed: String = (0..5000).map(|i| format!("changed {i}\n")).collect();
+        std::fs::write(repo.join("big.txt"), &changed).unwrap();
+        let c1 = build(&repo, Path::new("big.txt"), 10).unwrap().entries[0].oid;
+        let patch = diff_against_current(&repo, Path::new("big.txt"), c1).unwrap();
+        assert!(
+            patch.ends_with("\n… diff 过长,已截断显示\n"),
+            "{}",
+            &patch[patch.len() - 40..]
+        );
+        assert!(patch.len() >= MAX_PATCH_CHARS);
+        assert!(patch.len() < MAX_PATCH_CHARS + 500);
+    }
+
     #[tokio::test]
     async fn close_clears_state() {
         let mut state = Some(State::new(target()));

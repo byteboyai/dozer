@@ -2015,6 +2015,117 @@ mod tests {
         assert_eq!(deleted.new_blob, None, "删除文件必须是 new_blob = None");
     }
 
+    /// 在 `repo` 里跑一条 git 命令(固定作者/提交者,不依赖用户配置)。
+    fn git_cmd(repo: &Path, args: &[&str]) {
+        let st = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(st.status.success(), "git {args:?}: {st:?}");
+    }
+
+    fn commit_text(repo: &Path, rel: &str, content: &str, msg: &str) {
+        let full = repo.join(rel);
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(full, content).unwrap();
+        git_cmd(repo, &["add", "."]);
+        git_cmd(repo, &["commit", "-qm", msg]);
+    }
+
+    /// 合并提交相对**第一父**算(与 `git show` 默认一致,不做三方 diff)。
+    #[test]
+    fn commit_detail_of_a_merge_commit_is_relative_to_the_first_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        git_cmd(&repo, &["init", "-q"]);
+        commit_text(&repo, "a.txt", "a\n", "base");
+        git_cmd(&repo, &["checkout", "-q", "-b", "other"]);
+        commit_text(&repo, "b.txt", "b\n", "other adds b");
+        git_cmd(&repo, &["checkout", "-q", "-"]);
+        commit_text(&repo, "c.txt", "c\n", "main adds c");
+        git_cmd(
+            &repo,
+            &["merge", "-q", "--no-ff", "other", "-m", "merge other"],
+        );
+
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).unwrap();
+        let merge_row = &snapshot.rows[0];
+        assert!(merge_row.is_merge, "最新一行应是合并提交");
+        let detail = commit_detail(&repo, merge_row.oid).unwrap();
+        assert_eq!(detail.files.len(), 1, "{:?}", detail.files);
+        assert_eq!(detail.files[0].path, "b.txt");
+        assert_eq!(detail.files[0].status, git2::Delta::Added);
+    }
+
+    /// `commit_detail` 不做重命名检测:改名表现为"旧路径删除 + 新路径新增"。
+    #[test]
+    fn commit_detail_does_not_detect_renames() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        git_cmd(&repo, &["init", "-q"]);
+        commit_text(&repo, "old.txt", "same content\nline 2\nline 3\n", "add");
+        git_cmd(&repo, &["mv", "old.txt", "new.txt"]);
+        git_cmd(&repo, &["commit", "-qm", "rename"]);
+
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).unwrap();
+        let detail = commit_detail(&repo, snapshot.rows[0].oid).unwrap();
+        assert_eq!(detail.files.len(), 2, "{:?}", detail.files);
+        let status_of = |name: &str| {
+            detail
+                .files
+                .iter()
+                .find(|f| f.path == name)
+                .map(|f| f.status)
+        };
+        assert_eq!(status_of("new.txt"), Some(git2::Delta::Added));
+        assert_eq!(status_of("old.txt"), Some(git2::Delta::Deleted));
+    }
+
+    #[test]
+    fn commit_detail_keeps_non_ascii_paths_verbatim() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        git_cmd(&repo, &["init", "-q"]);
+        commit_text(&repo, "文档/说明.md", "x\n", "cn");
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).unwrap();
+        let detail = commit_detail(&repo, snapshot.rows[0].oid).unwrap();
+        assert_eq!(detail.files.len(), 1);
+        assert_eq!(detail.files[0].path, "文档/说明.md");
+    }
+
+    /// 取不出文本的内容(二进制/非 UTF-8)不能当文本渲染:非 UTF-8 但不含 NUL 的 blob 也判不可渲染。
+    #[test]
+    fn diff_blob_content_rejects_non_utf8_without_nul() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        git_cmd(&repo, &["init", "-q"]);
+        std::fs::write(repo.join("latin.txt"), [0xe9u8, b'a']).unwrap();
+        git_cmd(&repo, &["add", "."]);
+        git_cmd(&repo, &["commit", "-qm", "latin1"]);
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).unwrap();
+        let detail = commit_detail(&repo, snapshot.rows[0].oid).unwrap();
+        let entry = &detail.files[0];
+        let git_repo = git2::Repository::open(&repo).unwrap();
+        let content = diff_blob_content(&git_repo, entry.old_blob, entry.new_blob).unwrap();
+        assert!(matches!(content, DiffBlobContent::NotRenderable { .. }));
+    }
+
+    /// 迁移前 `commit_detail` 用 `Repository::open`(只认仓库根):项目目录在仓库子目录时报错。
+    #[test]
+    fn commit_detail_in_a_repo_subdirectory_is_an_error() {
+        let (_dir, repo) = mkrepo_with_one_commit();
+        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).unwrap();
+        std::fs::create_dir(repo.join("sub")).unwrap();
+        assert!(commit_detail(&repo.join("sub"), snapshot.rows[0].oid).is_err());
+    }
+
     #[test]
     fn diff_blob_content_reads_modified_file_both_sides() {
         let (_dir, repo) = mkrepo_with_modify_and_delete_commit();
