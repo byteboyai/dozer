@@ -46,12 +46,12 @@
 
 ### 3.1 `app::App`(18 处生产引用 / 7 个面板)
 
-面板文件里 `&App`(8 个声明点,见 `grep -rn "crate::app::App" extensions`)之后对它调用的方法,统计(`grep -rnE "app\.[a-z_]+\(" crates/dozer-app/src/extensions`)只有这几个:`app.hover_progress`(13 次)、`app.list_collapsed`(3)、`app.list_collapse_button`(3)、`app.hover_tooltip_ready`(1)、`app.active_workspace`(1);另有 `app.take_outbox`、`app.save_to` 各 1 次,经读代码属于**别的叫 `app` 的局部变量**(不是 `&App`),不计。归成三类:
+面板文件里 `App` 的 import 点有 8 个(见 `grep -rn "crate::app::App" extensions`),按名字使用共 22 处(含 Workspace),此后对它调用的方法,统计(`grep -rnE "app\.[a-z_]+\(" crates/dozer-app/src/extensions`)只有这几个:`app.hover_progress`(13 次)、`app.list_collapsed`(3)、`app.list_collapse_button`(3)、`app.hover_tooltip_ready`(1)、`app.active_workspace`(1);另有 `app.take_outbox`、`app.save_to` 各 1 次,经读代码属于**别的叫 `app` 的局部变量**(不是 `&App`),不计。归成三类:
 1. **悬停动画:** `hover_progress`、`hover_tooltip_ready`(14 次)——由 host 提供只读的 `HoverQuery` 句柄。
 2. **折叠状态与按钮:** `list_collapsed`、`list_collapse_button`(6 次)——应改成 host 调用面板 view 时把 `collapsed: bool` 传入;折叠按钮本身是通用 UI,可由 host 渲染。
 3. **取当前工作区:** `active_workspace`(1 次,在 `extensions/` 的某个面板里,Task 5 记入 E3 的"越界"类,逐处确认)。
 
-结论:面板对 `App` 的依赖**形态只有这三种**,每一种都可以由"调用方传参/注入句柄"替代;这是 H1 门禁基线(`scripts/audit/panel-boundary.baseline.json`,11 处 `App`/`Workspace` 引用 / 9 文件)有希望降到 0 的依据。注意**基线里的"引用"是 import/路径引用**(11 处),与上面"方法调用"次数是两种口径,不可相加。
+结论:面板对 `App` 的依赖**形态只有这三种**,每一种都可以由"调用方传参/注入句柄"替代;这是 H1 门禁基线(`scripts/audit/panel-boundary.baseline.json`,22 处 `App`/`Workspace` 使用 / 9 文件)有希望降到 0 的依据。注意**门禁基线数的是 `App`/`Workspace` 的"使用次数"**(import 行 + 每个 `&App` 参数/限定路径,共 22 处,评审后由 import 路径数 11 改为此口径),与上面"方法调用"次数(`app.hover_progress(…)` 等)是两种口径,不可相加。
 
 ### 3.2 `app::HoverId`(45 处生产引用,面板是 6 个)
 

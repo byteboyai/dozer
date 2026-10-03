@@ -32,9 +32,9 @@
 
 ## 3. A 类的量:host 持有多少面板状态
 
-- `App`(`app/app.rs`)直接持有的面板/弹窗类状态字段约 **8 个**:`git_log`、`todo_webview`、`footbar`、`toast`,以及 `Option<…>` 形式的 `file_history`、`edit_history`、`project_create`、`settings`。
+- `App`(`app/app.rs`)直接持有的面板/弹窗类状态字段 **15 个**(评审后订正,原误写约 8 个):`files: files::AppState`、`database: database::AppState`、`git_log`、`home_browser`、`project_link_menu`、四个 `*_webview` 推送状态(`usage_webview`、`codehealth_webview`、`todo_webview`、`group_chat_webview`)、`footbar`、`toast`,以及 `Option<…>` 形式的 `file_history`、`edit_history`、`project_create`、`settings`。
 - `Workspace`(`workspace/state.rs`)的 `pub struct Workspace` 里按项目持有的面板状态 **14 个**:`browser`、`agent_context`、`conversations`、`usage`、`codehealth`、`project_panel`、`files`、`todo`、`group_chat`、`database`、`ssh`(+`ssh_active`、`sftp_tabs`)、`search`。
-- `Message`(`app/message.rs`)里面板消息包装变体 **16 个**:`Usage/CodeHealth/Conversations/Todo/GroupChat/Database/Search/Browser/GitLog/AgentContext/Files/Project/Ssh/Footbar/Toast/Settings` 等。
+- `Message`(`app/message.rs`)里面板消息直接包装变体 **20 个**(评审后订正,原误写 16 个;另有 5 个面板 webview 事件/外壳消息变体 `UsageContentWebviewEvent`、`CodeHealthContentWebviewEvent`、`TodoContentWebviewEvent`、`GroupChatContentWebviewEvent`、`GroupChatShell`):`ProjectCreate/HomeBrowser/FileHistory/EditHistory/AgentContext(i64, …)` 加上`Usage/CodeHealth/Conversations/Todo/GroupChat/Database/Search/Browser/GitLog/AgentContext/Files/Project/Ssh/Footbar/Toast/Settings` 等。
 
 这三处是 host 对面板最直接的**编译期耦合面**:每新增一个面板,要同时改 `Workspace` 字段、`Message` 变体、`App::update` 的转发臂。迁移后它们应变成按注册 id 索引的 state 容器与统一的消息信封(`Message::Panel(panel_id, Box<dyn Any>)` 一类,**具体形态不在 H0 设计**)。
 

@@ -17,13 +17,13 @@
 
 ## 2. 最重要的发现:引用量被两件事撑大,都不是"每个面板一个特判"
 
-**(a) `Project`/`Files` 预览窗格二选一,共 114 行。** `kind == PanelKind::Project` / `PanelKind::Project => …` 这种写法在全库有 **114 行**(`workspace/state.rs` 35、`app/update.rs` 33、`app/app.rs` 14、`workspace/view.rs` 11、其余 21),几乎全是同一个模式:
+**(a) `Project`/`Files` 预览窗格二选一,约 82 行。** 全库 `== PanelKind::Project` / `!= PanelKind::Project` / `PanelKind::Project => …` 共 **114 行**,其中**约 82 行是窗格选择**(53 处 `==`/`!=` 判断 + 29 个取 `project_preview` 的 match 臂;`grep -rnE "(==|!=) PanelKind::Project"` 得 53,`grep -rnE -A1 "PanelKind::Project =>"` 里下一行含 `project_preview` 的有 29),**其余约 32 行是 12 臂的元数据/名称映射 match**(图标、split 比例、`"project"` 字符串、`webview_geometry` 的穷举 match 等),属 B2/B3,不是窗格选择。分布(114 行口径):(`workspace/state.rs` 35、`app/update.rs` 33、`app/app.rs` 14、`workspace/view.rs` 11、其余 21),几乎全是同一个模式:
 
 ```rust
 let pane = if kind == PanelKind::Project { &mut ws.project_preview } else { &mut ws.preview };
 ```
 
-(例:`workspace/state.rs:2349`、`app/app.rs:1031`、`app/update.rs:2298`)。**这不是 N 个面板的特判,而是"Preview 业务有两个实例,由 PanelKind 选择"**。Preview 业务按规格 §3.2 留在 Dozer 产品层,所以这 114 行迁移后不进 host;它们应由一个 `preview_pane(kind)` 访问器收口——收口本身是**纯机械重构**,可以先于任何注册制工作完成,且一次能消掉全库约 12% 的引用行。
+(例:`workspace/state.rs:2349`、`app/app.rs:1031`、`app/update.rs:2298`)。**这不是 N 个面板的特判,而是"Preview 业务有两个实例,由 PanelKind 选择"**。Preview 业务按规格 §3.2 留在 Dozer 产品层,所以这约 82 行迁移后不进 host;它们应由一个 `preview_pane(kind)` 访问器收口——收口本身是**纯机械重构**,可以先于任何注册制工作完成,且一次能消掉全库约 8% 的引用行(评审前误写为 114 行/12%,已按 reviewer 抽查订正)。
 
 **(b) 每面板一份的维度表,host 持有按面板展开的字段。** 例:`PanelDims` 里每个面板各有 `*_list_collapsed`、`*_split` 字段,`toggle_panel_list_collapse`(`app/update.rs:5368`)、`panel_mirrored`(`:5336`)、`with_pair_split_ratio`(`app/layout.rs:560`)、`pair_split_ratio`(`:538`)、`panel_meta`(`chrome/rail.rs:576`)都是对 12 个变体的穷举 `match`。这些是**元数据/按面板状态**:迁移后应是"以注册 id 为键的一张表",不是 12 路 match。
 
@@ -74,7 +74,7 @@ let pane = if kind == PanelKind::Project { &mut ws.project_preview } else { &mut
 | S1 | `app/update.rs:5152-5215` `fire_panel_switch_in` | Todo、Database、Project、Ssh、Usage、CodeHealth、Conversations、GitLog、GroupChat(Files/Web/Agent 为空) | 切入面板时的刷新动作 | 面板钩子 `on_activate`,host 只调用 |
 | S2 | `app/app.rs:3419-3544` | GitLog、Usage、CodeHealth、Todo、GroupChat | 每面板一段 webview 期望几何 | 面板钩子 `desired_webviews` |
 | S3 | `webview_geometry.rs:75-269` 两个穷举 `match` | Files、Web、Project、Conversations 有几何,其余 `(0,0,0,0)` | 预览列几何 | 面板声明自己是否有预览列;几何计算留 host(Surface 机制) |
-| S4 | 114 处 Project/Files 窗格选择(§2a) | Project、Files | 选 `project_preview` 还是 `preview` | **留产品层**(Preview 业务),先用 `preview_pane(kind)` 收口 |
+| S4 | 约 82 处 Project/Files 窗格选择(§2a;114 行口径里另约 32 行是元数据 match,归 B2/B3) | Project、Files | 选 `project_preview` 还是 `preview` | **留产品层**(Preview 业务),先用 `preview_pane(kind)` 收口 |
 | S5 | `preview/code_host.rs:150`、`preview/webview.rs:150`、`PROJECT_PREVIEW_ID_OFFSET` | Project、Files | webview id/URL 里编码面板 | 留产品层;host 的 webview 注册不应认识这两个名字 |
 | S6 | `app/layout.rs:1146-1198`、`app/app.rs:3248-3375` | Agent | 右栏"Agent 未镜像"时的渲染顺序与尺寸 | 待 O1(Agent 怎么切)裁决后再定 |
 | S7 | `term/terminal.rs:46`、`:188` | Ssh、Agent | 终端区对这两个面板的特殊布局 | 待 O6(Terminal 是否共享) |
@@ -93,14 +93,14 @@ let pane = if kind == PanelKind::Project { &mut ws.project_preview } else { &mut
 
 | 批 | 内容 | 涉及(行数,来自 §2–§3) | 前置 |
 |---|---|---|---|
-| B0 | **`preview_pane(kind)` 收口**:消掉 114 处 Project/Files 窗格选择(留产品层的纯机械重构) | 114 行 / 13 个文件 | 无 |
+| B0 | **`preview_pane(kind)` 收口**:消掉约 82 处 Project/Files 窗格选择(留产品层的纯机械重构) | 约 82 行(114 行口径的子集)/ 13 个文件 | 无 |
 | B1 | **类型传递**:`PanelKind` 换成注册 id 类型(`app/message.rs` 45 个变体、`preview/resources.rs`、面板里的 `kind` 字段),保持 serde 兼容 | 约 210 行(仅类型) | O5 |
 | B2 | **元数据表**:`panel_meta`、`default_side`、按面板的 `*_list_collapsed`/`*_split` 字段变成按 id 取的表,消掉 `app/layout.rs` 的 12 臂 `match` 与 10 段重复布局 | `app/layout.rs` 60、`chrome/rail.rs` 92、`app/update.rs` 约 20 | B1;O5 |
 | B3 | **遍历**:`webview_geometry.rs`、`app/layout.rs:681-990` 的"每面板一段"改成对注册表的 for | 约 150 行 | B2 |
 | B4 | **特判变钩子**:`fire_panel_switch_in`(S1)、`desired_webviews`(S2) | 约 90 行 | B3;面板接口设计 |
 | B5 | 剩余特判(S6–S9) | — | O1、O6 |
 
-**建议第一批:B0。** 它不需要任何未决项,不改变行为,只动产品层的 Preview 业务,并一次消掉全库约 12% 的 `PanelKind` 引用。
+**建议第一批:B0。** 它不需要任何未决项,不改变行为,只动产品层的 Preview 业务,并一次消掉全库约 8% 的 `PanelKind` 引用行。
 
 ## 7. 抽样校验
 
