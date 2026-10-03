@@ -794,8 +794,8 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "bytegit"
-version = "0.3.0"
-source = "git+https://github.com/byteboyai/bytegit?tag=v0.3.0#eff7b861f9de7cbca04806e0c98baa56e5908597"
+version = "0.4.0"
+source = "git+https://github.com/byteboyai/bytegit?tag=v0.4.0#41e8f1f3cdfb1012259f8159aff6824ed02941dc"
 dependencies = [
  "git2",
  "serde",
@@ -2025,6 +2025,7 @@ version = "0.3.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "bytegit",
  "dozer-client",
  "dozer-core",
  "futures-util",

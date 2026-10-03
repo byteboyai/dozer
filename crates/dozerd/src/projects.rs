@@ -4,11 +4,11 @@
 //! 多连接足够（无需连接池）。
 
 use anyhow::{Context, Result};
+use bytegit::Repo;
 use dozer_core::protocol::ProjectInfo;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 use std::sync::Mutex;
 
 pub struct ProjectStore {
@@ -29,46 +29,27 @@ fn basename(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-/// 取 `dir` 所属 git 仓库的根目录（无 git 或 git 不可用时返回 `None`）。
-fn git_repo_root(dir: &Path) -> Option<PathBuf> {
+/// 项目所属 git 仓库 HEAD 提交的提交时间(毫秒)。不是 git 工作区(含裸仓库)、
+/// 仓库没有提交或读取失败时返回 `None`。`dir` 在仓库子目录里时向上查找;
+/// linked worktree 取该 worktree 自己的 HEAD。
+fn git_head_commit_ms(dir: &Path) -> Option<u64> {
     if !dir.is_dir() {
         return None;
     }
-    let out = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(dir)
-        .output()
-        .ok()?;
-    if !out.status.success() {
+    let repo = Repo::discover(dir).ok()?;
+    // 裸仓库没有工作区:迁移前 `git rev-parse --show-toplevel` 在那里失败,保持不计。
+    if repo.is_bare() {
         return None;
     }
-    let line = String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .next()?
-        .trim()
-        .to_string();
-    (!line.is_empty()).then(|| PathBuf::from(line))
-}
-
-/// 仓库最新 commit 的提交时间（毫秒）。无 commit / git 不可用 / 解析失败
-/// 时返回 `None`。
-fn git_head_commit_ms(repo: &Path) -> Option<u64> {
-    let out = Command::new("git")
-        .args(["log", "-1", "--format=%ct"])
-        .current_dir(repo)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let secs: u64 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
+    let time = repo.head_commit_time().ok()??;
+    let secs = time.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
     Some(secs * 1000)
 }
 
 /// 计算项目的 git 感知更新时间：优先取仓库最新 commit 时间，若该仓库没有
 /// commit，或 commit 时间早于 `last_active_ms`，则回落为 `last_active_ms`。
 fn compute_updated_ms(path: &str, last_active_ms: u64) -> u64 {
-    let commit = git_repo_root(Path::new(path)).and_then(|root| git_head_commit_ms(&root));
+    let commit = git_head_commit_ms(Path::new(path));
     match commit {
         Some(c) if c >= last_active_ms => c,
         _ => last_active_ms,
@@ -214,6 +195,7 @@ fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<ProjectInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     #[test]
     fn open_list_and_persist() {
