@@ -54,7 +54,7 @@
 
 ## 5. 对 E3 清单的口径说明
 
-- E3 目前 **24 条:17 条 `panel-special-case`、7 条 `parked-service`**(`overlay` 类在 Task 6 随 `platform/` 清单补充)。
+- E3 初版 **24 条:17 条 `panel-special-case`、7 条 `parked-service`**;Task 6 回填 `parked-service` 的移除条件并追加 14 条 `overlay`,共 **38 条**(见 `05-platform-overlays.md`)。
 - 一条登记 = 一处**可独立移除**的单元(一个函数、一段 match、一个类型)。同一个函数里对 N 个面板的特判算一条,"对象"列列出 N 个面板。
 - `parked-service` 的"移除条件"目前写的是**触发条件**(什么情况下必须有定论),候选最终去向由 `04-shared-modules.md`(Task 6)裁决后回填。
 - **门禁形式留 H1:** H0 只做 `App`/`Workspace` 引用的棘轮(Task 8);"清单外无新增特判"的门禁需要先有稳定的特判识别规则(如 `PanelKind::X` 出现在 `extensions/` 之外),在 H1 设计。

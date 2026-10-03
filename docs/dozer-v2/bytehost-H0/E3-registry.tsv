@@ -16,10 +16,24 @@ E3-014	app/update.rs:1787-1794、:4723-4794	panel-special-case	GroupChat	host �
 E3-015	app/layout.rs:1208、:1231 使用 agent_context::strip_reserved_height()	panel-special-case	AgentContext	host 布局计算里加上 agent_context 条的保留高度	面板声明保留区域,host 通用累加
 E3-016	app/state.rs:93 HoverId(62 个变体,约 20 个是面板自己的按钮)	panel-special-case	Todo, Database, Ssh, Conversations, Usage, Files, Project, GitLog, Preview…	host 单枚举里点名各面板按钮(TodoListCollapse、FilesSearchSubmit 等),是 PanelKind 之外的第二处点名	HoverId 改带命名空间的键或面板自持悬停状态(02-panel-to-host §3.2)
 E3-017	extensions/files/tree.rs:145	panel-special-case	Files	越界:面板 view 里直接 app.active_workspace()	host 把所需数据作为参数传入
-E3-018	conversation.rs(根模块)	parked-service	Conversation	扇入 4 个单元(conversations, usage, app, chrome),无 iced 依赖;含会话元数据类型,Digger 复用的 Conversation 面板需要	待 Task 6 裁决去向;触发条件:Digger 接入 Conversation 面板时必须有定论
-E3-019	transcript.rs(根模块)	parked-service	Transcript	扇入 2(app, workspace),827 行;dozerd 已有 transcripts 目录,可能重复	待 Task 6 裁决;触发条件:conversation 归属确定时同时裁决
-E3-020	project.rs、project_meta.rs、open_projects.rs(Project context)	parked-service	Project context	项目打开/关闭/当前项目;project 扇入 5(files, ssh, app, platform, workspace),project_meta 扇入 4	待 Task 6 与 O2 裁决;触发条件:首个脱离 Dozer 的面板需要项目上下文时
-E3-021	secrets.rs	parked-service	Secrets	扇入 2(database, ssh),无 Dozer 语义	待 Task 6 与 O4 裁决;触发条件:有第三个需要存凭据的面板时
-E3-022	external_apps.rs	parked-service	ExternalApps	扇入 2(files, app);files 面板用 ExternalAppsConfig 74 次	待 Task 6 与 O4 裁决;触发条件:Files Tree 被 Digger 复用时
-E3-023	capabilities.rs	parked-service	Capabilities	扇入 4(app, preview, workspace, runtime),客户端能力探测	待 Task 6 与 O4 裁决;触发条件:Surface 机制进 host 时
-E3-024	git_accounts.rs	parked-service	GitAccounts	扇入 2(project_create, settings),bytegit 规格 B3 排除	待 Task 6 与 O8 裁决;触发条件:Digger 需要托管平台账户时
+E3-018	conversation.rs(根模块)	parked-service	Conversation	展示用中间表示(ConversationMeta/SessionRow),领域类型已在 dozer-core::protocol;扇入 4(conversations, usage, app, chrome)	随 Conversation 面板迁出;usage 对它的 6 处引用需保留只读视图类型(04-shared-modules §2)
+E3-019	transcript.rs(根模块)	parked-service	Transcript	Claude 专属适配器,828 行,扇入 2(app, workspace);可能与 dozerd/transcripts 解析重复	随 Agent 领域(O1)裁决;先核实与 dozerd/src/transcripts 的重复
+E3-020	open_projects.rs、project_meta.rs(Project context 的两件事;project.rs 实为文件树,不是 Project context)	parked-service	Project context	权威数据在 dozerd(ProjectInfo);open_projects(扇入 1)是 host 持久化,project_meta(扇入 4)读写 .dozer/description.md	open_projects 留 host;project_meta 随 Project 面板迁出;project.rs(FileTree)随 Files Tree 面板——见 04-shared-modules §1
+E3-021	secrets.rs	parked-service	Secrets	SecretStore 抽象,扇入 2(database, ssh),无 Dozer 语义	建议升为 host 服务;触发条件:出现第三个需存凭据的面板
+E3-022	external_apps.rs	parked-service	ExternalApps	Files 右键菜单的配置表,files 面板引用 74 次,扇入 2(files, app)	随 Files Tree 面板走,不是 host 服务(04-shared-modules §3)
+E3-023	capabilities.rs	parked-service	Capabilities	启动期硬件探测与预算,扇入 4(app, preview, workspace, runtime),面板不直接用	建议 host;随 Surface 机制进 host 时移除登记
+E3-024	git_accounts.rs	parked-service	GitAccounts	钥匙串命名空间 dozer-git 写死、托管平台 API 面向 Project 创建,扇入 2(project_create, settings)	留产品;Digger 需要托管平台账户时再抽(O8)
+E3-025	platform/database_drivers_overlay.rs	overlay	Database	数据库『管理驱动』弹窗宿主,面板专属	随 Database 面板迁出时迁走
+E3-026	platform/database_source_overlay.rs	overlay	Database	数据源表单弹窗宿主,面板专属	随 Database 面板迁出时迁走
+E3-027	platform/edit_history_overlay.rs	overlay	EditHistory	Agent 修改历史弹窗宿主;引用 preview×10(Preview 业务)	随 edit_history 迁出;依赖 Preview 业务,先于 Preview 抽象之前不可迁
+E3-028	platform/file_history_overlay.rs	overlay	FileHistory, DiffContent	file_history 弹窗宿主,同时引用 diff_content	随 file_history 迁出
+E3-029	platform/files_move_overlay.rs	overlay	Files	文件树拖拽移动确认弹窗宿主	随 Files Tree 面板迁出
+E3-030	platform/project_create_overlay.rs	overlay	ProjectCreate	创建项目对话框宿主	随 Project 面板迁出
+E3-031	platform/project_delete_overlay.rs	overlay	Project	删除项目三选一确认宿主	随 Project 面板迁出
+E3-032	platform/project_scaffold_overlay.rs	overlay	Project	修复项目进度弹窗宿主	随 Project 面板迁出
+E3-033	platform/search_overlay.rs	overlay	Search	search_modal 独立原生窗口宿主(引用 runtime×3、event×1)	随 search 迁出;其建窗/GPU 共享机制已在 overlay_window/overlay_gpu 中
+E3-034	platform/settings_overlay.rs	overlay	Settings, ProjectCreate	设置弹窗宿主,引用 project_create::card_logical_size 复用卡片尺寸	壳留 host(设置的注册/展示机制),内容(主题+Git 账户)留产品;卡片尺寸函数应下沉为通用助手
+E3-035	platform/ssh_host_overlay.rs	overlay	Ssh	SSH 主机表单弹窗宿主	随 Ssh 面板迁出
+E3-036	platform/todo_detail_overlay.rs	overlay	Todo	Todo 详情弹窗宿主	随 Todo 面板迁出
+E3-037	platform/confirm_overlay.rs:176-196	overlay	Database, Files, Ssh, Todo	通用确认弹窗宿主本身是 host,但 :176-196 逐面板收集 delete_confirm_spec/clear_confirm_spec 并做类型提升(map_todo_spec 等)	面板经 registry 提供 confirm spec,host 只渲染
+E3-038	platform/window_events.rs(4602 行)	overlay	Files, Browser, Project, ProjectCreate, Todo, Search, GroupChat	host 事件循环状态机与各面板事件处理(E3-010、E3-011)混在一个 4602 行文件里	拆成 host 事件循环 + 面板事件钩子后移除
