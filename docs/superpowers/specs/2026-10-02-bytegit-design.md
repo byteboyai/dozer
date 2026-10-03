@@ -42,12 +42,18 @@
 ### 4.1 打开与可用性
 
 ```text
-Repo::discover(path) -> Result<Repo, GitError>   // 向上查找，支持项目位于仓库子目录
-Repo::root(&self) -> &Path                        // 仓库工作区根目录
+Repo::discover(path) -> Result<Repo, GitError>        // 向上查找，支持项目位于仓库子目录
+Repo::open_exact(path) -> Result<Repo, GitError>      // 只认仓库根；子目录/非仓库都报 NotARepo（P6）
+Repo::discover_workdir(dir) -> Result<Repo, GitError> // 参数必须是目录、非 bare、向上查找（P6）
+Repo::root(&self) -> &Path                             // 仓库工作区根目录
 Repo::is_bare / is_empty (无提交)
 ```
 
 - 默认只提供 `discover`。现有 `open`（只认仓库根）的调用点，其传入路径本就是仓库根，用 `discover` 结果一致；若存在传入子目录并依赖「不是仓库根就失败」的调用点，迁移时逐个确认，必要时再加 `Repo::open_exact`。
+- **P6 显式化（O9）：**迁移到 P6 发现需要三种打开语义并存，故显式提供 `open_exact` 与 `discover_workdir`：
+  - `Repo::open_exact(path)`：只认 `path` 就是仓库根，否则 `NotARepo`，文案 `不是 git 仓库的根目录: <路径>`；比较前规范化路径。用于历史/文件内容查询这类「`file_path` 相对项目根、必须与仓库根一致」的场景。
+  - `Repo::discover_workdir(dir)`：`dir` 必须是目录（是文件路径返回 `Io`），且仓库不能是 bare（bare 没有工作区，返回 `NotARepo`），否则向上查找。用于「拿一个项目目录问它所在的工作区」的元数据/状态查询。`Repo::discover` 对文件路径会成功，所以这两条拒绝规则不能靠 `discover` 表达，必须单独实现。
+  - **[P6 未统一，待裁决]** 同一个「项目在仓库子目录里」的场景，各调用点用的语义不同（见 §8 O9 口径清单）——这是迁移前就存在的不一致，P6 原样保留。
 - **P0 实测补充：** `discover` 对不存在的路径返回 `Io`（libgit2 原本报 NotFound，会被误归为 `RefNotFound`）；`root()` 已去掉尾部分隔符，但是 libgit2 解析后的真实路径（macOS 上 `/var/...` 会变成 `/private/var/...`），调用方与自己持有的项目路径比较前要先规范化；bare 仓库的 `root()` 是 git 目录。
 - **`is_empty` 语义：仓库里没有任何引用（即还没有提交）。** HEAD 指向未诞生分支但其他分支有提交（如 `git checkout --orphan` 之后）时为 `false`。不直接用 `git2::Repository::is_empty`，因为它对"空"的判断依赖用户全局配置的 `init.defaultBranch`，同一个空仓库在不同机器上结果可能不同。
 - **`TempRepo` 隔离全局 git 配置：** libgit2 会读 `~/.gitconfig`，`core.autocrlf` 等会改变 blob 内容与提交 id；夹具在仓库级配置里固定 `core.autocrlf=false`、`core.eol=lf`、`core.safecrlf=false` 与空的 `core.attributesFile`，才能保证"同样操作得到同样 id"。
@@ -187,7 +193,7 @@ TempRepo::new()                         // 临时目录 + git init，固定作�
 | P3 | `usage` 的 `commit_count*`、`git_hotspots::recent_churn`、`dozerd/projects.rs` 的两处命令行；`dozerd` 加依赖 | `dozerd/projects.rs` 的 `git_repo_root`/`git_head_commit_ms`、`usage` 的两个 revwalk 函数、`recent_churn` 的命令行调用 | `usage`、项目更新时间、Code Health 热点结果不变；**刻画测试在旧/新实现上都通过** |
 | P4 | `watch` feature；迁移 `git_watch`，`HIDDEN` 由调用方传入 | 整个 `git_watch.rs`（路径分类 + debounce + 监听线程） | 分类断言在旧/新实现上都通过（刻画测试）；**P4 已完成**，发 `v0.5.0`，`dozer-app` 去掉直接 `notify` 依赖 |
 | P5 | 写操作（`init/clone/checkout_branch`），含 §4.6 评估结论 | `delivery.rs` 里四个函数的命令行实现（`init_repo`/`clone_repo`/`checkout_branch`/`git_available` 保留为 bytegit 适配层，签名不变，P6 移除） | 新建项目、克隆、分支切换行为不变；**刻画测试在旧/新实现上都通过** |
-| P6 | 清理：`delivery.rs` 不再含 git 逻辑（只剩交付语义，或整体改名/删除）；`dozer-app/Cargo.toml` 去掉直接的 `git2` 依赖（保留 `gleisbau` 的传递依赖对齐）；`CLAUDE.md` 增补 bytegit 条目 | — | `cargo machete`、clippy、全量测试 |
+| P6 | **已完成**，发 `v0.7.0`。清理：`delivery.rs` 已整体删除；全部生产调用点直接调 `bytegit`；`dozer-app/Cargo.toml` 去掉直接的 `git2` 依赖（保留 `gleisbau` 的传递依赖对齐）；`CLAUDE.md` 增补 bytegit 条目 | 整个 `delivery.rs`（含着色适配层，着色语义迁到 `extensions/files/git_status.rs`） | `cargo machete` 干净（基线正好只报 `git2`）、clippy 逐文件与基线一致、全量测试通过（`delivery.rs` 的测试去向见 P6 计划） |
 
 - **版本节奏：** 每个阶段在 `bytegit` 发一个小版本，`dozer` 用 tag 引用；联调期间用本地 patch，不提交。
 - **不得在迁移阶段改变用户可见行为。** 若比对发现旧实现有 bug，先在原样迁移后单独提交修复，不与迁移混在同一个提交里（便于回退）。
@@ -208,10 +214,24 @@ TempRepo::new()                         // 临时目录 + git init，固定作�
 | O3 | `.git` 为文件（worktree/子模块）的监听与读取 | v0.1 不强求，API 留位；v2 引入 worktree 时必须解决。**P4 实测**：`bytegit::watch` 只监听 `root` 目录树，linked worktree 的真实 gitdir 在树外，`refs_changed` 收不到；`.git` 文件本身的变化也被丢弃（其 mtime 变化落到根路径）。 |
 | O4 | `git2`（libgit2）与命令行 git 在边角行为上的差异（如大仓库 `status` 性能、`.gitattributes`/filter、submodule、sparse checkout） | P1 用并行比对测试覆盖现有用法；P2 的实际情况是并行比对用刻画测试代替（同一批测试在旧/新实现都通过），libgit2 与命令行 git 在 P2 覆盖的用法上未发现差异；未覆盖的差异记为已知限制 |
 | O5 | 大仓库性能：`log` 的 `max_count`、`churn` 的全历史扫描，`usage` 的全量 revwalk | 保持现有上限与调用方式，不在迁移中优化；另立项。P3 的 `commit_count*`、`churn` 沿用全历史扫描口径，未优化（见 O14） |
-| O6 | 25 处 `delivery::*` 调用方的逐个核对只做了数量统计 | **P1 已完成**：核对后决定不逐个改调用点，改为把 `delivery.rs` 保留为签名不变的 bytegit 适配层，随 P6 一并删除。 |
+| O6 | 25 处 `delivery::*` 调用方的逐个核对只做了数量统计 | **P1 已完成核对**（保留为签名不变的适配层）。**P6 已完成拆除**：25 个调用点逐个迁移到直接调 `bytegit`，`delivery.rs` 删除，`dozer-app` 不再直接依赖 `git2`。 |
 | O7 | `gleisbau` 与 `bytegit` 的 `git2` 版本对齐的长期维护 | 升级时同步升；若 `gleisbau` 成为阻碍再评估 B1 |
 | O8 | Digger 是否需要提交图 | 不影响 v0.1；需要时单独设计 `graph` feature |
-| O9 | 项目目录位于仓库子目录时，`Repo::discover`（向上查找）与 `delivery::open_exact`（只认仓库根）语义不一致；P1 为保持旧行为在 `delivery` 适配层用了 `open_exact` | 待用户裁决；统一前不要擅自把 `open_exact` 改成向上查找 |
+| O9 | 项目目录位于仓库子目录时，`Repo::discover`（向上查找）与 `delivery::open_exact`（只认仓库根）语义不一致；P1 为保持旧行为在 `delivery` 适配层用了 `open_exact` | **P6 已显式化、未统一**：新增 `Repo::open_exact`/`Repo::discover_workdir`（§4.1），把每个调用点用的语义写死，等价迁移。**是否统一是产品决策（待裁决 D14），统一前不要擅自把 `open_exact` 改成向上查找。** 口径清单与 D14 建议见下。 |
+
+### O9 口径清单（P6 之后，哪个调用点用哪个构造函数）
+
+迁移前适配层混用了两种语义（`open_exact` 只认仓库根；`discover` 向上查找），P1 起一直保持原样。P6 把每个调用点用的语义显式写出来：
+
+| 构造函数 | 调用点（含它取的字段） |
+|---|---|
+| `Repo::open_exact`（只认仓库根；项目在仓库子目录里时拿不到） | `workspace::project_git_snapshot` 的分支/是否有改动/文件状态；`git_log::load_branch_picker_data` 的“是否有改动”；`git_hotspots::git_snapshot` 的分支/是否有改动、`head_short_sha`；`file_history`/`git_log`/`diff_content` 的历史、blob、工作区内容、回滚、上一版本（经 `diff_content::open_exact_repo`）；`files::git_status::file_statuses` |
+| `Repo::discover`（向上查找） | `workspace::project_git_snapshot` 的 remote URL；`git_log::load_branch_picker_data` 的分支列表；`checkout_branch` 的两个调用点；`usage` 的提交计数（P3）；`recent_churn`（P3）；`dozerd` 项目更新时间（P3） |
+| `Repo::discover_workdir`（目录、非 bare、向上查找） | `workspace::workspace_git_info`；`files::load_git_info`；`git_hotspots::git_snapshot` 的“是否在仓库里”判断；首页最近文件（`homespace::load_home_recents`） |
+
+同一个“项目在仓库子目录里”的场景，在不同面板里表现不同（分支栏有分支，Project 面板没有分支、Git Log 的“有改动”恒为否但分支列表是全的……）。**这是迁移前就有的不一致**，P6 用刻画测试把它钉住。
+
+- **D14（请用户决定是否排期）：统一“只认仓库根 vs 向上查找”。** 建议：状态类查询（`project_git_snapshot` 的分支/改动/文件状态、`load_branch_picker_data` 的改动、`git_snapshot`）改成向上查找，文件状态的键仍按项目路径拼，这是安全的改动；**历史类**（`file_history`/`git_log` 的 `file_path` 是相对项目根的，而 pathspec 相对仓库根）统一需要先把 `file_path` 换算成相对仓库根，是单独的、有风险的改动。P6 完成后做这件事就是“逐个调用点把 `Repo::open_exact` 换成 `Repo::discover`”，bytegit 与 API 都不用动。
 | O10 | 同一子目录项目下 `git_hotspots::dirty_paths`（相对仓库根）与 `recent_churn`（`--relative`，相对项目根）路径口径不同 | **P3 已完成**：bytegit 的路径一律相对仓库根（`status` 与 `churn` 一致）；`recent_churn` 的适配层再转成相对项目根（`dirty_paths` 仍相对仓库根，与迁移前一致） |
 | O11 | `log`/`file_history` 的 `path` 按 pathspec 解释：文件名含 `[`、`*` 时会混入别的文件的提交（`build_treats_glob_characters_in_the_file_name_as_a_pathspec_known_quirk` 已固化该行为） | 待用户裁决；刻画测试已固定现状，修不修都先不擅自改 |
 | O12 | P2 中三处错误文案由英文原文改为中文（`该历史版本对应的不是一个文件` 等） | 记录为已知的用户可见文案变化；若需要保持英文另议 |

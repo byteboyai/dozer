@@ -27,6 +27,8 @@
 
 **P5 之后（2026-10-03）：** 写操作 `init`/`clone`/`checkout_branch` 与 `git_available` 已迁到 bytegit（`v0.6.0`），`delivery.rs` 对应函数保留为签名不变的适配层，`Command::new("git")` 从生产代码中消失。**生产代码里直接调用命令行 `git` 的只剩 `bytegit` 内部的 `clone`/`checkout_branch`**（评估后的有意选择，见 `2026-10-03-bytegit-write-ops-evaluation.md`）。
 
+**P6 之后（2026-10-03，迁移收官）：** 盘点里的全部生产调用点都已迁移（或明确留在 bytegit 内部——`clone`/`checkout_branch` 的命令行实现）；`delivery.rs` 已删除，文件树着色语义迁到 `extensions/files/git_status.rs`；`dozer-app` 不再直接依赖 `git2`（新增 `Repo::open_exact`/`Repo::discover_workdir` 显式区分“只认仓库根 vs 向上查找”，`v0.7.0`）。“项目在仓库子目录里”各调用点口径不一致的问题已显式化但未统一（规格 §8 O9，待决 D14）。
+
 ## 2. 按操作归类
 
 ### 2.1 仓库发现与可用性
@@ -35,7 +37,7 @@
 |------|------|------|
 | 找仓库根 | `dozerd/projects.rs:36` `git_repo_root` | **P3 已迁移**：bytegit `Repo::discover` |
 | 找仓库（含子目录） | `usage/mod.rs:201、218` | **P3 已迁移**：bytegit `Repo::discover` |
-| 打开仓库 | `delivery.rs` 多处、`git_log.rs`、`file_history.rs`、`git_hotspots.rs` | `git2 Repository::open`（只认仓库根） |
+| 打开仓库 | `delivery.rs` 多处、`git_log.rs`、`file_history.rs`、`git_hotspots.rs` | **P6 已拆除**：改用 bytegit `Repo::open_exact`/`discover`/`discover_workdir`（`delivery.rs` 已删除） |
 | 判断 git 是否可用 | `delivery.rs:369` `git_available` | **P5 已迁移**：`bytegit::git_available`（公开） |
 
 同一件事三种做法，且 `open` 与 `discover` 对"项目在仓库子目录"的处理不一致（`usage` 注释特意说明了这点）。
@@ -44,11 +46,11 @@
 
 | 操作 | 位置 | 实现 |
 |------|------|------|
-| 当前分支名 | `delivery::branch` | git2 `head().shorthand()` |
-| HEAD 短 sha | `git_hotspots::head_short_sha` | git2 |
-| 本地分支列表 | `delivery::local_branches` | CLI `for-each-ref`（经 `delivery::git` 辅助函数） |
-| 当前分支有无提交 | `delivery::current_branch_has_commits` | git2 |
-| 远程 URL | `delivery::remote_url` | CLI `remote -v` |
+| 当前分支名 | `delivery::branch` | **P6 已拆除**：bytegit `Repo::head()`（`delivery.rs` 已删除） |
+| HEAD 短 sha | `git_hotspots::head_short_sha` | **P6 已拆除**：bytegit `Repo::open_exact(...).head()` |
+| 本地分支列表 | `delivery::local_branches` | **P6 已拆除**：bytegit `Repo::local_branches()`（`delivery.rs` 已删除） |
+| 当前分支有无提交 | `delivery::current_branch_has_commits` | **P6 已拆除**：bytegit `Repo::head()` + `HeadInfo::has_commits()` |
+| 远程 URL | `delivery::remote_url` | **P6 已拆除**：bytegit `Repo::remotes()`（`delivery.rs` 已删除） |
 | HEAD 提交时间 | `dozerd/projects.rs:55` `git_head_commit_ms` | **P3 已迁移**：bytegit `head_commit_time`（提交者时间） |
 
 注意：`dozerd/code_health.rs` 存的 `git_head`/`git_branch`/`git_dirty` 是 **GUI 经协议传来的值**（GUI 用 `delivery::*` 算好再上报），不是 daemon 自己算的；daemon 自己只算项目"更新时间"用的最新提交时间。
@@ -57,9 +59,9 @@
 
 | 操作 | 位置 | 实现 |
 |------|------|------|
-| 是否 dirty | `delivery::is_dirty` | git2 |
-| 每文件状态（供文件树着色） | `delivery::file_statuses` → `FileGitStatus` | git2 `statuses`，映射 INDEX_*/WT_*/IGNORED 标志位 |
-| 变更路径列表 | `git_hotspots::dirty_paths` | CLI `status --porcelain --untracked-files=all` |
+| 是否 dirty | `delivery::is_dirty` | **P6 已拆除**：bytegit `Repo::is_dirty(StatusOptions)` |
+| 每文件状态（供文件树着色） | `delivery::file_statuses` → `FileGitStatus` | **P6 已拆除**：着色语义迁到 `extensions/files/git_status.rs`，查询走 bytegit `Repo::status` |
+| 变更路径列表 | `git_hotspots::dirty_paths` | **P1 已拆除**：bytegit `Repo::status`（取路径） |
 
 **`is_dirty`、`file_statuses`、`dirty_paths` 是三份"工作区状态"实现**，一份 git2、一份 git2、一份 CLI，口径（是否含 untracked、ignored）是否一致没有核对。
 
@@ -107,6 +109,8 @@
 ## 3. 调用方（谁在用 `delivery::*`）
 
 `delivery::` 的函数在 `app/update.rs`(5)、`workspace/state.rs`(7)、`git_log.rs`(4)、`files/update.rs`(2)、`git_hotspots.rs`(2)、`project_create.rs`(2)、`homespace.rs`(1)、`project.rs`(1)、`project/scaffold.rs`(1) 共约 25 处被调用。Host 层（`app/`、`workspace/`）已直接依赖 `delivery`，所以 `delivery` 现实中就是一个"准 Git 底层"，只是名字叫"交付"、放在 `dozer-app` 根下。
+
+**P6 已拆除（2026-10-03）：** 上述 25 个调用点全部改为直接调 `bytegit`（`delivery.rs` 已删除），本节仅为迁移前的现状记录。
 
 ## 4. 对 bytegit API 的启示
 

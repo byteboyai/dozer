@@ -155,6 +155,7 @@ Host（窗口 / 布局 / 焦点 / 浮层 / 主题 / 面板 Registry）
    - **P3 已完成（2026-10-03）：** `v0.4.0` 已发布（`head_commit_time`/`commit_count`/`commit_count_by_day`/`churn`）；`usage` 的提交计数、`git_hotspots::recent_churn`、`dozerd/projects.rs` 的项目更新时间已迁到 bytegit，**`dozerd` 现在也依赖 `bytegit`**。计划：`docs/superpowers/plans/2026-10-03-bytegit-p3-stats-churn.md`。
    - **P4 已完成（2026-10-03）：** `v0.5.0` 已发布（`watch` feature）；项目工作区监听已进 `bytegit`（`bytegit::watch`，忽略名单由 dozer 经 `IgnoreRules` 传入），`dozer-app` 不再直接依赖 `notify`，`git_watch.rs` 已删除；Host 只负责把 `GitChange` 转成消息。计划：`docs/superpowers/plans/2026-10-03-bytegit-p4-watch.md`。
    - **P5 已完成（2026-10-03）：** `v0.6.0` 已发布（写操作 `init`/`clone`/`Repo::checkout_branch`/`git_available`）；`delivery.rs` 的四个函数改为 bytegit 适配层。写操作评估：`init` 用 `git2`，`clone`/`checkout` 留在命令行（本构建 libgit2 无 https/ssh、不执行 hook 与外部过滤器、报错退化），理由见评估存档 `docs/superpowers/specs/2026-10-03-bytegit-write-ops-evaluation.md`。计划：`docs/superpowers/plans/2026-10-03-bytegit-p5-write-ops.md`。
+   - **P6 已完成（2026-10-03，迁移收官）：** `v0.7.0` 已发布（新增 `Repo::open_exact`/`Repo::discover_workdir`）；全部生产调用点改为直接调 `bytegit`，`delivery.rs` 已删除，文件树着色语义迁到 `extensions/files/git_status.rs`，**`dozer-app` 不再直接依赖 `git2`**（`gleisbau` 与 `bytegit` 都要求 `git2 = "0.21"` 无默认 feature，cargo 统一成同一份）。面板对 Git 的依赖收敛为 `bytegit` 类型与 `Repo` 句柄。生产代码里直接调命令行 `git` 的只剩 `bytegit` 内部的 `clone`/`checkout_branch`。“项目在仓库子目录里”各面板口径不一致的问题已显式化但未统一（规格 §8 O9，待决 D14）。计划：`docs/superpowers/plans/2026-10-03-bytegit-p6-cleanup.md`。
 
 2. 审计 Q7、Q8、Q13。
 3. 确定事件总线的最小模型（Q9），先给 Git 状态变化（工作区变更、分支切换）这一条事件用起来。
