@@ -23,6 +23,8 @@
 
 **P3 之后（2026-10-03）：** `dozerd` 与 `dozer-app` 的两份项目更新时间/提交统计实现、`recent_churn` 的命令行调用已合并为 bytegit（`v0.4.0`）；`dozerd` 现在也依赖 bytegit。
 
+**P4 之后（2026-10-03）：** `git_watch` 的路径分类与 debounce 已合并进 bytegit（`bytegit::watch`，feature `watch`，`v0.5.0`）；`dozer-app` 不再直接依赖 `notify`，`git_watch.rs` 已删除。
+
 ## 2. 按操作归类
 
 ### 2.1 仓库发现与可用性
@@ -88,11 +90,13 @@
 
 `rollback_to` 严格说不是 git 写操作，而是"读 blob 再写文件"；它放在 `file_history` 里，属于"取某版本文件内容"的上层动作，归属需要决定（见 §5）。
 
-### 2.6 变更监听
+### 2.6 变更监听（**P4 已迁移**）
 
 `git_watch::start(handle, repo, debounce, on_change)`：基于 `notify`，对 `.git/HEAD`、`index`、`packed-refs`、`refs/*` 放行为 `GitRefs`，其余为 `Workdir`，并按 `project::HIDDEN` 过滤 `node_modules`、`target` 等（含嵌套层，注释里提到是 code review 发现的问题）。
 
 耦合点：**依赖 `crate::project::HIDDEN`**（文件树的隐藏名单），把 git 监听和文件树的概念绑在了一起。这正是将来事件总线的"Git 状态变化"生产者。
+
+**P4 已迁移（`v0.5.0`）：** 上述逻辑进 `bytegit::watch`（feature `watch`）；`HIDDEN` 仍由 dozer 经 `IgnoreRules` 传入，解耦点保留。调用点 `workspace/state.rs::start_git_watch` 改调 `bytegit::watch`，`Message::ProjectFsChanged` 的载荷由 `git_watch::FsChanges` 换成 `bytegit::GitChange`。
 
 ### 2.7 与 git 无关、但名字里有 git
 

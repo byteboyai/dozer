@@ -16,7 +16,6 @@ use crate::extensions::search;
 use crate::extensions::ssh;
 use crate::extensions::todo;
 use crate::extensions::usage;
-use crate::git_watch;
 use crate::osc::{OscEvent, OscScanner};
 use crate::preview::{PreviewPane, TabKind};
 use crate::preview_state;
@@ -455,7 +454,7 @@ pub struct Workspace {
     pub(crate) recent_projects: Vec<ProjectInfo>,
     /// 本项目的实时文件系统监听(D4)。`None` 只可能出现在 watcher 启动
     /// 失败时(降级为"只在开项目/回合结束时刷新")。Drop 时自动停止。
-    pub(crate) git_watch: Option<git_watch::Handle>,
+    pub(crate) git_watch: Option<bytegit::WatchHandle>,
     /// Project 信息面板 per-project 状态——见 `extensions::project::WorkspaceState`。
     pub(crate) project_panel: project::WorkspaceState,
     /// 终端 tab 栏当前最左可见 tab 序号（箭头翻页用；P1L T5）。溢出改 V
@@ -663,17 +662,15 @@ impl Workspace {
         let project_id = p.id;
         let repo = PathBuf::from(&p.path);
         let proxy = io.proxy.clone();
-        match git_watch::start(
-            &io.handle,
-            repo,
-            std::time::Duration::from_millis(300),
-            move |changes| {
-                let _ = proxy.send_event(Message::ProjectFsChanged(project_id, changes));
-            },
-        ) {
+        // 忽略名单由我们自己传:文件树恒不显示的那几个目录/文件名(含嵌套层)的改动不触发刷新。
+        let options = bytegit::WatchOptions::new(std::time::Duration::from_millis(300))
+            .ignore(bytegit::IgnoreRules::new(crate::project::HIDDEN));
+        match bytegit::watch(&repo, options, move |changes| {
+            let _ = proxy.send_event(Message::ProjectFsChanged(project_id, changes));
+        }) {
             Ok(handle) => self.git_watch = Some(handle),
             Err(err) => {
-                dozer_core::log_warn!(LOG, project_id, %err, "git_watch 启动失败,降级为手动刷新")
+                dozer_core::log_warn!(LOG, project_id, %err, "bytegit watch 启动失败,降级为手动刷新")
             }
         }
     }

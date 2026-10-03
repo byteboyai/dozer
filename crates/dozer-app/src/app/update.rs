@@ -20,7 +20,6 @@ use crate::extensions::ssh;
 use crate::extensions::toast;
 use crate::extensions::todo;
 use crate::extensions::usage;
-use crate::git_watch;
 use crate::term::terminal;
 use crate::workspace::{
     CONVERSATION_DETAIL_PAGE_SIZE, RestorePayload, ReviewSource, ReviewView, SshOut,
@@ -4207,15 +4206,13 @@ impl App {
     pub(crate) fn project_fs_changed(
         &mut self,
         project_id: ProjectId,
-        changes: git_watch::FsChanges,
+        changes: bytegit::GitChange,
     ) {
         // 工作区类变更:文件树 + 打开的 webview 预览即时跟进。`notify` 递上
         // 的是具体变更路径 `changes.paths`,文件树按"受影响即相关"整棵从盘重
         // 读已缓存目录(`reload_tree_from_disk`,只重读已展开/缓存过的层,开销
         // 小),预览则只重载路径命中的 webview tab。
-        if changes.relevance == Some(git_watch::Relevance::Workdir)
-            || changes.relevance == Some(git_watch::Relevance::GitRefs)
-        {
+        if changes.workdir_changed || changes.refs_changed {
             self.with_project(project_id, |ws, _io| {
                 ws.files.reload_tree_from_disk();
                 ws.preview.reload_webviews_for(&changes.paths);
@@ -4237,7 +4234,7 @@ impl App {
         // 的引用变化会拿"缓存路径恰好等于前台项目路径"这个巧合当
         // 通行证,把前台正打开的详情/选中态平白清掉,而其实什么都
         // 没变。项目 id 匹配之外再核一次路径,双保险防状态漂移。
-        if changes.relevance == Some(git_watch::Relevance::GitRefs)
+        if changes.refs_changed
             && self.active_project_id == Some(project_id)
             && let Some(repo_path) = self.git_log.cache_repo_path().map(|p| p.to_path_buf())
             && self

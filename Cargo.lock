@@ -794,10 +794,11 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "bytegit"
-version = "0.4.0"
-source = "git+https://github.com/byteboyai/bytegit?tag=v0.4.0#41e8f1f3cdfb1012259f8159aff6824ed02941dc"
+version = "0.5.0"
+source = "git+https://github.com/byteboyai/bytegit?tag=v0.5.0#bfd1d313e3432ed2926b08277e44ad1ec0830951"
 dependencies = [
  "git2",
+ "notify",
  "serde",
 ]
 
@@ -1914,7 +1915,6 @@ dependencies = [
  "keyring",
  "memchr",
  "mongodb",
- "notify",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
