@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use bytegit::CommitId;
 use iced_wgpu::wgpu;
 use iced_winit::conversion;
 use iced_winit::core::time::Instant;
@@ -226,7 +227,8 @@ impl FileHistoryOverlay {
     ) {
         let desired = app.file_history.as_ref().and_then(|s| {
             let loaded = s.loaded_diff()?;
-            let crate::extensions::git_log::DiffBlobContent::Text { .. } = &loaded.content else {
+            let crate::extensions::diff_content::DiffBlobContent::Text { .. } = &loaded.content
+            else {
                 return None;
             };
             let target = s.target()?;
@@ -326,7 +328,7 @@ impl FileHistoryOverlay {
         // 内容推送:webview 已 ready 且当前内容还没送达才推。包一层闭包,让
         // 内部的早退 `return None` 只跳出这段计算,不会意外跳出整个
         // `sync_diff_webview`(万一以后有人在这段之后追加清理/日志代码)。
-        let push: Option<(git2::Oid, String)> = (|| {
+        let push: Option<(CommitId, String)> = (|| {
             let s = app.file_history.as_ref()?;
             if !s.diff_webview_ready() {
                 return None;
@@ -335,7 +337,7 @@ impl FileHistoryOverlay {
             if s.diff_sent_for() == Some(loaded.oid) {
                 return None;
             }
-            let crate::extensions::git_log::DiffBlobContent::Text { old_text, new_text } =
+            let crate::extensions::diff_content::DiffBlobContent::Text { old_text, new_text } =
                 &loaded.content
             else {
                 return None;

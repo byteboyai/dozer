@@ -6,7 +6,12 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use bytegit::{CommitId, LogOptions};
+
+use crate::delivery::open_exact_or_err;
+use crate::extensions::diff_content::{DiffBlobContent, workdir_content};
 use byteui::interaction::icons;
 use iced_widget::core::{Element, Length};
 use iced_widget::{button, column, container, row, scrollable, text};
@@ -15,7 +20,7 @@ use iced_widget::{button, column, container, row, scrollable, text};
 /// 收集,只包含真正改动过这个文件的提交。
 #[derive(Debug, Clone)]
 pub struct FileHistoryEntry {
-    pub oid: git2::Oid,
+    pub oid: CommitId,
     pub short_sha: String,
     /// commit message 首行。
     pub summary: String,
@@ -69,8 +74,8 @@ pub struct FileHistoryTarget {
 /// 目标,不看 `oid`——两条并行的加载各自要自己的 oid 匹配)。
 #[derive(Debug, Clone)]
 pub struct LoadedDiff {
-    pub oid: git2::Oid,
-    pub content: crate::extensions::git_log::DiffBlobContent,
+    pub oid: CommitId,
+    pub content: DiffBlobContent,
 }
 
 /// 弹窗全部状态。整体以 `Option<State>` 挂在顶层 `App`(同
@@ -79,11 +84,11 @@ pub struct LoadedDiff {
 pub struct State {
     target: Option<FileHistoryTarget>,
     snapshot: Option<Result<FileHistorySnapshot, String>>,
-    selected: Option<git2::Oid>,
+    selected: Option<CommitId>,
     /// 已经查过的 commit 各自的 diff 结果,按 oid 缓存,来回切换选中项不用
     /// 重复计算。
-    diff_cache: HashMap<git2::Oid, Result<String, String>>,
-    rollback_pending: Option<git2::Oid>,
+    diff_cache: HashMap<CommitId, Result<String, String>>,
+    rollback_pending: Option<CommitId>,
     rollback_error: Option<String>,
     /// 当前选中版本已加载的 diff 内容(CodeMirror webview 用),与
     /// `diff_cache`(patch 文本,给 `colored_diff_lines` 用)并存。
@@ -94,7 +99,7 @@ pub struct State {
     diff_webview_ready: bool,
     /// 最近一次**确认送达** webview 的内容对应的 `oid`。跟 `loaded_diff`
     /// 的 `oid` 不一致就还需要再推一次。
-    diff_sent_for: Option<git2::Oid>,
+    diff_sent_for: Option<CommitId>,
     /// 每次发出 `spawn_diff_content` 就自增一代。`DiffContentLoaded` 携带
     /// 发起时的这个值,落地前核对是否仍是最新一代——只按 `(repo_path,
     /// file_path, oid)` 核对不够:`SelectCommit` 选中提交 X 后又快速
@@ -124,11 +129,11 @@ impl State {
         self.snapshot.as_ref()
     }
 
-    pub fn selected(&self) -> Option<git2::Oid> {
+    pub fn selected(&self) -> Option<CommitId> {
         self.selected
     }
 
-    pub fn diff_for(&self, oid: git2::Oid) -> Option<&Result<String, String>> {
+    pub fn diff_for(&self, oid: CommitId) -> Option<&Result<String, String>> {
         self.diff_cache.get(&oid)
     }
 
@@ -140,11 +145,11 @@ impl State {
         self.diff_webview_ready
     }
 
-    pub fn diff_sent_for(&self) -> Option<git2::Oid> {
+    pub fn diff_sent_for(&self) -> Option<CommitId> {
         self.diff_sent_for
     }
 
-    pub(crate) fn set_diff_sent_for(&mut self, oid: git2::Oid) {
+    pub(crate) fn set_diff_sent_for(&mut self, oid: CommitId) {
         self.diff_sent_for = Some(oid);
     }
 
@@ -155,7 +160,7 @@ impl State {
         }
     }
 
-    pub fn rollback_pending(&self) -> Option<git2::Oid> {
+    pub fn rollback_pending(&self) -> Option<CommitId> {
         self.rollback_pending
     }
 
@@ -170,12 +175,12 @@ pub enum Message {
     /// `(repo_path, file_path)` 用于核对结果落地时是不是仍是当前目标
     /// (弹窗打开期间项目被切走/关闭时,过期结果直接丢弃)。
     SnapshotLoaded(PathBuf, PathBuf, Result<FileHistorySnapshot, String>),
-    SelectCommit(git2::Oid),
+    SelectCommit(CommitId),
     /// `(repo_path, file_path)` 同 `SnapshotLoaded`——目标已切换(弹窗关了
     /// 又对另一个文件重开)时丢弃过期结果,不能只按 `oid` 判断:两个不同
     /// 文件的历史列表完全可能包含同一个 commit(比如一次全仓格式化提交),
     /// 若不核对目标,晚到达的旧文件 diff 会被错插进新文件的缓存里。
-    DiffLoaded(PathBuf, PathBuf, git2::Oid, Result<String, String>),
+    DiffLoaded(PathBuf, PathBuf, CommitId, Result<String, String>),
     /// 选中版本的 blob/磁盘内容异步加载完成(CodeMirror 用,跟
     /// `DiffLoaded`——patch 文本、给 `colored_diff_lines` 用——并行、各自
     /// 独立缓存)。`(PathBuf, PathBuf)` 同 `DiffLoaded` 的目标核对手法;
@@ -185,12 +190,12 @@ pub enum Message {
     DiffContentLoaded(
         PathBuf,
         PathBuf,
-        git2::Oid,
+        CommitId,
         u64,
-        Result<crate::extensions::git_log::DiffBlobContent, String>,
+        Result<DiffBlobContent, String>,
     ),
-    RollbackRequest(git2::Oid),
-    RollbackDone(git2::Oid, Result<(), String>),
+    RollbackRequest(CommitId),
+    RollbackDone(CommitId, Result<(), String>),
 }
 
 /// 弹窗状态机。`state` 是 `&mut Option<State>`(不是 `&mut State`)——
@@ -329,7 +334,7 @@ pub fn update(
 
 fn spawn_diff<E>(
     target: &FileHistoryTarget,
-    oid: git2::Oid,
+    oid: CommitId,
     handle: &tokio::runtime::Handle,
     emit: &std::sync::Arc<E>,
 ) where
@@ -352,7 +357,7 @@ fn spawn_diff<E>(
 
 fn spawn_diff_content<E>(
     target: &FileHistoryTarget,
-    oid: git2::Oid,
+    oid: CommitId,
     generation: u64,
     handle: &tokio::runtime::Handle,
     emit: &std::sync::Arc<E>,
@@ -366,8 +371,8 @@ fn spawn_diff_content<E>(
         let repo_path2 = repo_path.clone();
         let file_path2 = file_path.clone();
         let result = tokio::task::spawn_blocking(move || {
-            let repo = git2::Repository::open(&repo_path2).map_err(|e| e.message().to_string())?;
-            diff_blob_content_against_workdir(&repo, &repo_path2, &file_path2, oid)
+            let repo = open_exact_or_err(&repo_path2)?;
+            workdir_content(&repo, oid, &file_path2)
         })
         .await
         .unwrap_or_else(|e| Err(format!("diff 内容加载任务失败: {e}")));
@@ -377,12 +382,9 @@ fn spawn_diff_content<E>(
     });
 }
 
-/// 手写 revwalk:从 HEAD 开始逐提交,用
-/// `repo.diff_tree_to_tree(parent_tree, tree, Some(&mut opts))` 配合
-/// `DiffOptions::pathspec(file_path)` 判断这次提交是否碰过这个文件
-/// (pathspec 下推给 git2 做,不用自己在结果里过滤),命中的收进结果,按
-/// `max_count` 截断。没有 `git log --follow` 的 rename 跟踪。根提交(无父)
-/// 按空树对比,逻辑同 `git_log.rs::commit_detail` 处理根提交的既有写法。
+/// 该文件的提交历史:按时间倒序,只含真正改动过这个文件的提交,按 `max_count` 截断。
+/// 没有 `git log --follow` 的 rename 跟踪;根提交相对空树对比。查询本身在
+/// `bytegit::Repo::log`(带 `path`)。
 ///
 /// 注意:文件历史稀疏时(仓库有很多提交、这个文件只被改过几次)需要遍历
 /// 大量提交才能凑够 `max_count` 条结果——这是 `git log -- <path>` 的固有
@@ -392,49 +394,20 @@ pub fn build(
     file_path: &Path,
     max_count: usize,
 ) -> Result<FileHistorySnapshot, String> {
-    let repo = git2::Repository::open(repo_path).map_err(|e| e.message().to_string())?;
-    let pathspec = file_path.to_string_lossy().into_owned();
-
-    let mut revwalk = repo.revwalk().map_err(|e| e.message().to_string())?;
-    revwalk.push_head().map_err(|e| e.message().to_string())?;
-    revwalk
-        .set_sorting(git2::Sort::TIME)
+    let repo = open_exact_or_err(repo_path)?;
+    let log = repo
+        .log(LogOptions::new(max_count).path(file_path))
         .map_err(|e| e.message().to_string())?;
-
-    let mut entries = Vec::new();
-    for oid in revwalk {
-        if entries.len() >= max_count {
-            break;
-        }
-        let oid = oid.map_err(|e| e.message().to_string())?;
-        let commit = repo.find_commit(oid).map_err(|e| e.message().to_string())?;
-        let new_tree = commit.tree().map_err(|e| e.message().to_string())?;
-        let old_tree = match commit.parent(0) {
-            Ok(parent) => Some(parent.tree().map_err(|e| e.message().to_string())?),
-            Err(_) => None,
-        };
-        let mut opts = git2::DiffOptions::new();
-        opts.pathspec(&pathspec);
-        let diff = repo
-            .diff_tree_to_tree(old_tree.as_ref(), Some(&new_tree), Some(&mut opts))
-            .map_err(|e| e.message().to_string())?;
-        if diff.deltas().next().is_none() {
-            continue;
-        }
-        let full_sha = oid.to_string();
-        let short_sha = full_sha.chars().take(7).collect();
-        let summary = commit.summary().ok().flatten().unwrap_or("").to_string();
-        let author = commit.author().name().ok().map(|n| n.to_string());
-        let time = commit.time().seconds();
-        entries.push(FileHistoryEntry {
-            oid,
-            short_sha,
-            summary,
-            author,
-            time,
-        });
-    }
-
+    let entries = log
+        .into_iter()
+        .map(|c| FileHistoryEntry {
+            oid: c.id,
+            short_sha: c.id.short(7),
+            summary: c.summary,
+            author: c.author.name,
+            time: unix_secs(c.time),
+        })
+        .collect();
     Ok(FileHistorySnapshot {
         repo_path: repo_path.to_path_buf(),
         file_path: file_path.to_path_buf(),
@@ -442,125 +415,53 @@ pub fn build(
     })
 }
 
-/// `oid` 对应提交的树 vs *当前工作目录*的这一个文件,用
-/// `repo.diff_tree_to_workdir(Some(&tree), Some(&mut opts))`(`opts` 配
-/// `pathspec(file_path)`)。`diff_tree_to_workdir` 直接读磁盘上的实时内容
-/// (不是索引/HEAD 里的版本,可能包含未提交改动),不需要自己
-/// `std::fs::read` 再手动比较——git2 0.21 并未导出
-/// `git_diff_blob_to_buffer` 这个 C API,没有"blob 对内存 buffer"直接
-/// 比较的安全封装,这是选 `diff_tree_to_workdir` 而不是手动读两份内容比较
-/// 的原因。两边内容相同时 `diff` 是空(0 个 delta),返回空字符串。
-pub fn diff_against_current(
-    repo_path: &Path,
-    file_path: &Path,
-    oid: git2::Oid,
-) -> Result<String, String> {
-    let repo = git2::Repository::open(repo_path).map_err(|e| e.message().to_string())?;
-    let commit = repo.find_commit(oid).map_err(|e| e.message().to_string())?;
-    let tree = commit.tree().map_err(|e| e.message().to_string())?;
-    let mut opts = git2::DiffOptions::new();
-    opts.pathspec(file_path.to_string_lossy().into_owned());
-    let diff = repo
-        .diff_tree_to_workdir(Some(&tree), Some(&mut opts))
-        .map_err(|e| e.message().to_string())?;
-
-    let mut patch = String::new();
-    let mut truncated = false;
-    diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
-        if truncated {
-            return true;
-        }
-        if patch.len() >= MAX_PATCH_CHARS {
-            truncated = true;
-            patch.push_str("\n… diff 过长,已截断显示\n");
-            return true;
-        }
-        let prefix = match line.origin() {
-            '+' | '-' | ' ' => line.origin().to_string(),
-            _ => String::new(),
-        };
-        patch.push_str(&prefix);
-        patch.push_str(&String::from_utf8_lossy(line.content()));
-        true
-    })
-    .map_err(|e| e.message().to_string())?;
-
-    Ok(patch)
-}
-
-/// `oid` 对应提交树里 `file_path` 的历史内容 vs 磁盘上 `repo_path.join(
-/// file_path)` 的实时内容。跟 `git_log::diff_blob_content`(两个 commit 之间)
-/// 的关键差异:new 侧永远来自磁盘,不是另一个 blob;old 侧若该提交树里没有
-/// 这个路径(历史记录本身是一次删除),按空字符串处理,不报错——这不是
-/// 异常情况,是"文件历史"列表天然会包含的一种记录(`build()` 的 pathspec
-/// 过滤只看"这次提交碰过这个路径",删除也算碰过)。
-pub fn diff_blob_content_against_workdir(
-    repo: &git2::Repository,
-    repo_path: &Path,
-    file_path: &Path,
-    oid: git2::Oid,
-) -> Result<crate::extensions::git_log::DiffBlobContent, String> {
-    use crate::extensions::git_log::{DiffBlobContent, classify_diff_bytes};
-
-    let commit = repo.find_commit(oid).map_err(|e| e.message().to_string())?;
-    let tree = commit.tree().map_err(|e| e.message().to_string())?;
-    let old_text = match tree.get_path(file_path) {
-        Ok(entry) => {
-            let obj = entry.to_object(repo).map_err(|e| e.message().to_string())?;
-            match obj.as_blob() {
-                Some(blob) => classify_diff_bytes(blob.content()),
-                None => None, // 路径是目录/子模块,不是文件——判不可渲染。
-            }
-        }
-        Err(_) => Some(String::new()), // 该提交树里没有这个路径:删除类历史记录。
-    };
-    let new_text = match std::fs::read(repo_path.join(file_path)) {
-        Ok(bytes) => classify_diff_bytes(&bytes),
-        Err(_) => None, // 磁盘文件已不存在/不可读。
-    };
-    match (old_text, new_text) {
-        (Some(old_text), Some(new_text)) => Ok(DiffBlobContent::Text { old_text, new_text }),
-        _ => Ok(DiffBlobContent::NotRenderable {
-            reason: "文件不是文本、超过大小上限,或磁盘文件当前不存在,不支持 CodeMirror 渲染"
-                .to_string(),
-        }),
+/// `SystemTime` → Unix 秒;早于 1970 的时间戳为负数。
+fn unix_secs(t: SystemTime) -> i64 {
+    match t.duration_since(UNIX_EPOCH) {
+        Ok(d) => d.as_secs() as i64,
+        Err(e) => -(e.duration().as_secs() as i64),
     }
 }
 
-/// 取 `oid` 对应提交树里 `file_path` 的 blob 字节,写入
-/// `repo_path.join(file_path)`。不碰 git 索引,不 `git add`,是纯粹的文件
-/// 系统写入——回滚后 git status 会显示这是一处未提交改动,交给用户/agent
-/// 自行决定要不要提交。
-pub fn rollback_to(repo_path: &Path, file_path: &Path, oid: git2::Oid) -> Result<(), String> {
-    let repo = git2::Repository::open(repo_path).map_err(|e| e.message().to_string())?;
-    let commit = repo.find_commit(oid).map_err(|e| e.message().to_string())?;
-    let tree = commit.tree().map_err(|e| e.message().to_string())?;
-    let entry = tree
-        .get_path(file_path)
+/// `id` 对应提交的树 vs *当前工作目录*的这一个文件的 unified patch(含未提交改动)。
+/// 两边内容相同时返回空字符串;超过 [`MAX_PATCH_CHARS`] 截断并追加一行提示。
+pub fn diff_against_current(
+    repo_path: &Path,
+    file_path: &Path,
+    id: CommitId,
+) -> Result<String, String> {
+    let repo = open_exact_or_err(repo_path)?;
+    let patch = repo
+        .workdir_patch(id, file_path, MAX_PATCH_CHARS)
         .map_err(|e| e.message().to_string())?;
-    let object = entry
-        .to_object(&repo)
-        .map_err(|e| e.message().to_string())?;
-    let blob = object
-        .into_blob()
-        .map_err(|_| "该历史版本对应的不是一个文件".to_string())?;
-    std::fs::write(repo_path.join(file_path), blob.content())
-        .map_err(|e| format!("写入文件失败: {e}"))?;
+    let mut text = patch.text;
+    if patch.truncated {
+        text.push_str("\n… diff 过长,已截断显示\n");
+    }
+    Ok(text)
+}
+
+/// 取 `id` 对应提交里 `file_path` 的原始字节,写入 `repo_path.join(file_path)`。
+/// 不碰 git 索引,不 `git add`,是纯粹的文件系统写入——回滚后 git status 会显示这是一处
+/// 未提交改动,交给用户/agent 自行决定要不要提交。二进制、超大、非 UTF-8 的文件也原样写回。
+pub fn rollback_to(repo_path: &Path, file_path: &Path, id: CommitId) -> Result<(), String> {
+    let repo = open_exact_or_err(repo_path)?;
+    let bytes = repo
+        .file_bytes_at(id, file_path)
+        .map_err(|e| e.message().to_string())?
+        .ok_or_else(|| format!("该历史版本里没有文件 {}", file_path.display()))?;
+    std::fs::write(repo_path.join(file_path), bytes).map_err(|e| format!("写入文件失败: {e}"))?;
     Ok(())
 }
 
-/// 取文件「上一版本」对应的 commit Oid——供文件树右键菜单「回滚」一键还原
-/// 用。定义:最近一次修改该文件的提交(HEAD 版本)之前的那个版本;若该文件
-/// 在整个仓库历史里只有一次提交(没有更早的版本),回落到那唯一一次提交
-/// (等价于把工作区还原到最近一次提交、丢弃未提交改动);文件不在 git 跟踪内
-/// (历史为空)则返回 `None`。复用 `build` 但只取前两条,避免拉满整份历史。
-pub fn previous_oid(repo_path: &Path, file_path: &Path) -> Result<Option<git2::Oid>, String> {
-    let snapshot = build(repo_path, file_path, 2)?;
-    Ok(snapshot
-        .entries
-        .get(1)
-        .or_else(|| snapshot.entries.get(0))
-        .map(|e| e.oid))
+/// 取文件「上一版本」对应的提交——供文件树右键菜单「回滚」一键还原用。定义:最近一次
+/// 修改该文件的提交(HEAD 版本)之前的那个版本;若该文件在整个仓库历史里只有一次提交
+/// (没有更早的版本),回落到那唯一一次提交(等价于把工作区还原到最近一次提交、丢弃
+/// 未提交改动);文件不在 git 跟踪内(历史为空)则返回 `None`。
+pub fn previous_commit(repo_path: &Path, file_path: &Path) -> Result<Option<CommitId>, String> {
+    let repo = open_exact_or_err(repo_path)?;
+    repo.previous_version(file_path)
+        .map_err(|e| e.message().to_string())
 }
 
 /// 弹窗卡片本体(标题 + 左侧提交列表 + 右侧 diff 区),无外层居中容器——
@@ -712,11 +613,7 @@ fn diff_area_view<'a>(
     let content: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         match state.loaded_diff() {
             Some(loaded)
-                if loaded.oid == oid
-                    && matches!(
-                        loaded.content,
-                        crate::extensions::git_log::DiffBlobContent::Text { .. }
-                    ) =>
+                if loaded.oid == oid && matches!(loaded.content, DiffBlobContent::Text { .. }) =>
             {
                 // CodeMirror 常开:留一块空区域给 Task 3 挂的 webview 合成
                 // (同 git-log-diff 计划 Task 7 的手法)。
@@ -784,7 +681,7 @@ fn diff_area_view<'a>(
 
 fn rollback_button<'a>(
     state: &'a State,
-    oid: git2::Oid,
+    oid: CommitId,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let disabled = state.rollback_pending().is_some();
     button(
@@ -800,13 +697,13 @@ fn rollback_button<'a>(
     .into()
 }
 
-fn short_sha_of(state: &State, oid: git2::Oid) -> String {
+fn short_sha_of(state: &State, oid: CommitId) -> String {
     state
         .snapshot()
         .and_then(|r| r.as_ref().ok())
         .and_then(|s| s.entries.iter().find(|e| e.oid == oid))
         .map(|e| e.short_sha.clone())
-        .unwrap_or_else(|| oid.to_string().chars().take(7).collect())
+        .unwrap_or_else(|| oid.short(7))
 }
 
 /// commit 时间戳格式化,`YYYY-MM-DD HH:MM:SS`,UTC。跟
@@ -842,6 +739,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytegit::Repo;
     use std::process::Command;
 
     fn git(repo: &Path, args: &[&str]) {
@@ -892,17 +790,15 @@ mod tests {
     }
 
     #[test]
-    fn diff_blob_content_against_workdir_reads_historical_and_current() {
+    fn workdir_content_reads_historical_and_current() {
         let (_dir, repo) = mkrepo();
-        let git_repo = git2::Repository::open(&repo).unwrap();
+        let git_repo = Repo::discover(&repo).unwrap();
         let snapshot = build(&repo, Path::new("a.txt"), 10).unwrap();
         let c1_oid = snapshot.entries[1].oid; // c1: a.txt == "one\n"
         // 磁盘当前内容是 c3 之后的 "two\n"。
-        let content =
-            diff_blob_content_against_workdir(&git_repo, &repo, Path::new("a.txt"), c1_oid)
-                .expect("应能读出历史版本与磁盘当前内容");
-        let crate::extensions::git_log::DiffBlobContent::Text { old_text, new_text } = content
-        else {
+        let content = workdir_content(&git_repo, c1_oid, Path::new("a.txt"))
+            .expect("应能读出历史版本与磁盘当前内容");
+        let DiffBlobContent::Text { old_text, new_text } = content else {
             panic!("正常改动文件应判定为可渲染文本");
         };
         assert_eq!(old_text, "one\n");
@@ -910,20 +806,18 @@ mod tests {
     }
 
     #[test]
-    fn diff_blob_content_against_workdir_empty_old_side_for_deletion_commit() {
+    fn workdir_content_empty_old_side_for_deletion_commit() {
         let (_dir, repo) = mkrepo_with_delete_commit();
         // 删除后又重新创建同名文件:此时"c4 那次提交"在它的树里没有这个
         // 路径(旧侧为空),但磁盘上文件在(新侧有内容)——正是"删除类历史
         // 记录"里可渲染的那一种。
         std::fs::write(repo.join("a.txt"), "reborn\n").unwrap();
-        let git_repo = git2::Repository::open(&repo).unwrap();
+        let git_repo = Repo::discover(&repo).unwrap();
         let snapshot = build(&repo, Path::new("a.txt"), 10).unwrap();
         let c4_oid = snapshot.entries[0].oid; // c4: 删除 a.txt,该提交树里没有这个路径
         let content =
-            diff_blob_content_against_workdir(&git_repo, &repo, Path::new("a.txt"), c4_oid)
-                .expect("删除类历史记录不应报错");
-        let crate::extensions::git_log::DiffBlobContent::Text { old_text, new_text } = content
-        else {
+            workdir_content(&git_repo, c4_oid, Path::new("a.txt")).expect("删除类历史记录不应报错");
+        let DiffBlobContent::Text { old_text, new_text } = content else {
             panic!("应判定为可渲染文本(旧侧为空)");
         };
         assert_eq!(old_text, "", "该提交树里没有这个路径,旧侧按空字符串处理");
@@ -931,23 +825,19 @@ mod tests {
     }
 
     #[test]
-    fn diff_blob_content_against_workdir_not_renderable_when_disk_file_missing() {
+    fn workdir_content_not_renderable_when_disk_file_missing() {
         let (_dir, repo) = mkrepo();
-        let git_repo = git2::Repository::open(&repo).unwrap();
+        let git_repo = Repo::discover(&repo).unwrap();
         let snapshot = build(&repo, Path::new("a.txt"), 10).unwrap();
         let c1_oid = snapshot.entries[1].oid;
         std::fs::remove_file(repo.join("a.txt")).unwrap();
-        let content =
-            diff_blob_content_against_workdir(&git_repo, &repo, Path::new("a.txt"), c1_oid)
-                .expect("磁盘文件缺失不应报错,应判定为不可渲染");
-        assert!(matches!(
-            content,
-            crate::extensions::git_log::DiffBlobContent::NotRenderable { .. }
-        ));
+        let content = workdir_content(&git_repo, c1_oid, Path::new("a.txt"))
+            .expect("磁盘文件缺失不应报错,应判定为不可渲染");
+        assert!(matches!(content, DiffBlobContent::NotRenderable { .. }));
     }
 
-    fn fake_oid(byte: u8) -> git2::Oid {
-        git2::Oid::from_bytes(&[byte; 20]).unwrap()
+    fn fake_oid(byte: u8) -> CommitId {
+        format!("{byte:02x}").repeat(20).parse().unwrap()
     }
 
     fn snapshot_with(entries: Vec<FileHistoryEntry>) -> FileHistorySnapshot {
@@ -958,10 +848,10 @@ mod tests {
         }
     }
 
-    fn fake_entry(oid: git2::Oid, summary: &str) -> FileHistoryEntry {
+    fn fake_entry(oid: CommitId, summary: &str) -> FileHistoryEntry {
         FileHistoryEntry {
             oid,
-            short_sha: oid.to_string().chars().take(7).collect(),
+            short_sha: oid.short(7),
             summary: summary.to_string(),
             author: None,
             time: 0,
@@ -1133,25 +1023,31 @@ mod tests {
     }
 
     #[test]
-    fn previous_oid_is_the_version_before_the_latest_change() {
+    fn previous_commit_is_the_version_before_the_latest_change() {
         let (_d, repo) = mkrepo();
         let snapshot = build(&repo, Path::new("a.txt"), 10).unwrap();
         let c1 = snapshot.entries[1].oid;
-        assert_eq!(previous_oid(&repo, Path::new("a.txt")).unwrap(), Some(c1));
+        assert_eq!(
+            previous_commit(&repo, Path::new("a.txt")).unwrap(),
+            Some(c1)
+        );
     }
 
     #[test]
-    fn previous_oid_falls_back_to_the_only_commit() {
+    fn previous_commit_falls_back_to_the_only_commit() {
         let (_d, repo) = mkrepo();
         let snapshot = build(&repo, Path::new("b.txt"), 10).unwrap();
         let c2 = snapshot.entries[0].oid;
-        assert_eq!(previous_oid(&repo, Path::new("b.txt")).unwrap(), Some(c2));
+        assert_eq!(
+            previous_commit(&repo, Path::new("b.txt")).unwrap(),
+            Some(c2)
+        );
     }
 
     #[test]
-    fn previous_oid_of_an_untracked_file_is_none() {
+    fn previous_commit_of_an_untracked_file_is_none() {
         let (_d, repo) = mkrepo();
-        assert_eq!(previous_oid(&repo, Path::new("nope.txt")).unwrap(), None);
+        assert_eq!(previous_commit(&repo, Path::new("nope.txt")).unwrap(), None);
     }
 
     #[test]
@@ -1384,7 +1280,7 @@ mod tests {
                 target().file_path,
                 fake_oid(1),
                 0,
-                Ok(crate::extensions::git_log::DiffBlobContent::Text {
+                Ok(DiffBlobContent::Text {
                     old_text: "a".into(),
                     new_text: "b".into(),
                 }),
@@ -1412,7 +1308,7 @@ mod tests {
                 target().file_path,
                 fake_oid(1),
                 0,
-                Ok(crate::extensions::git_log::DiffBlobContent::Text {
+                Ok(DiffBlobContent::Text {
                     old_text: "a".into(),
                     new_text: "b".into(),
                 }),
@@ -1426,10 +1322,7 @@ mod tests {
             .loaded_diff()
             .expect("目标匹配的结果应该落地");
         assert_eq!(loaded.oid, fake_oid(1));
-        assert!(matches!(
-            loaded.content,
-            crate::extensions::git_log::DiffBlobContent::Text { .. }
-        ));
+        assert!(matches!(loaded.content, DiffBlobContent::Text { .. }));
     }
 
     #[tokio::test]
@@ -1446,7 +1339,7 @@ mod tests {
                 target().file_path,
                 fake_oid(1),
                 0,
-                Ok(crate::extensions::git_log::DiffBlobContent::Text {
+                Ok(DiffBlobContent::Text {
                     old_text: "a".into(),
                     new_text: "b".into(),
                 }),
@@ -1471,7 +1364,7 @@ mod tests {
             s.diff_content_generation = 2; // 已经又发出一次新的加载(第 2 代)。
             s.loaded_diff = Some(LoadedDiff {
                 oid: fake_oid(1),
-                content: crate::extensions::git_log::DiffBlobContent::Text {
+                content: DiffBlobContent::Text {
                     old_text: "post-rollback".into(),
                     new_text: "post-rollback".into(),
                 },
@@ -1485,7 +1378,7 @@ mod tests {
                 target().file_path,
                 fake_oid(1),
                 1, // 第 1 代(回滚前发起)的结果,迟到。
-                Ok(crate::extensions::git_log::DiffBlobContent::Text {
+                Ok(DiffBlobContent::Text {
                     old_text: "pre-rollback".into(),
                     new_text: "pre-rollback".into(),
                 }),
@@ -1495,8 +1388,7 @@ mod tests {
         );
         let loaded = state.as_ref().unwrap().loaded_diff().expect("不该被清空");
         assert_eq!(loaded.oid, fake_oid(1));
-        let crate::extensions::git_log::DiffBlobContent::Text { old_text, .. } = &loaded.content
-        else {
+        let DiffBlobContent::Text { old_text, .. } = &loaded.content else {
             panic!("应保留 post-rollback 那份内容");
         };
         assert_eq!(
@@ -1511,7 +1403,7 @@ mod tests {
         if let Some(s) = &mut state {
             s.loaded_diff = Some(LoadedDiff {
                 oid: fake_oid(9),
-                content: crate::extensions::git_log::DiffBlobContent::Text {
+                content: DiffBlobContent::Text {
                     old_text: "old".into(),
                     new_text: "old".into(),
                 },
@@ -1537,7 +1429,7 @@ mod tests {
             s.selected = Some(fake_oid(3));
             s.loaded_diff = Some(LoadedDiff {
                 oid: fake_oid(3),
-                content: crate::extensions::git_log::DiffBlobContent::Text {
+                content: DiffBlobContent::Text {
                     old_text: "old".into(),
                     new_text: "old".into(),
                 },

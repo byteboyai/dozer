@@ -20,6 +20,11 @@ pub(crate) fn open_exact(path: &Path) -> Option<Repo> {
     same_dir(repo.root(), path).then_some(repo)
 }
 
+/// [`open_exact`] 的带错误文本版本,给要把失败展示给用户的调用方(`Result<_, String>`)。
+pub(crate) fn open_exact_or_err(path: &Path) -> Result<Repo, String> {
+    open_exact(path).ok_or_else(|| format!("不是 git 仓库的根目录: {}", path.display()))
+}
+
 /// 向上查找所属仓库(迁移前用命令行 `git`,在子目录里同样会向上找)。
 fn open_upward(path: &Path) -> Option<Repo> {
     Repo::discover(path).ok()
