@@ -5,13 +5,16 @@
 //! 内容读取与"能不能当文本"的判定在 `bytegit`,这里只负责把它的分类结果折成 UI 要的
 //! 二选一(可渲染 / 不可渲染)与占位文案。
 
-use bytegit::{CommitId, Content, ContentLimits, ContentPair, Repo};
+use bytegit::{BlobId, CommitId, Content, ContentLimits, ContentPair, Repo};
 use std::path::Path;
 
 /// 单侧内容的字节上限(old/new 各自判定),超过就判定"不可渲染"。
 pub const MAX_DIFF_BLOB_BYTES: usize = 512 * 1024;
 
 const LIMITS: ContentLimits = ContentLimits::new(MAX_DIFF_BLOB_BYTES);
+
+/// 提交 vs 提交的不可渲染占位文案。
+const REASON_BLOB: &str = "文件不是文本,或超过大小上限,不支持 diff 渲染";
 
 /// 提交 vs 磁盘的不可渲染占位文案(多一种"磁盘文件不存在"的原因)。
 const REASON_WORKDIR: &str =
@@ -27,6 +30,29 @@ pub enum DiffBlobContent {
 fn not_renderable(reason: &str) -> DiffBlobContent {
     DiffBlobContent::NotRenderable {
         reason: reason.to_string(),
+    }
+}
+
+/// 两个 blob 之间的双侧文本。`None` 侧按新增/删除文件语义当空字符串;
+/// 非 `None` 侧任一超过 [`MAX_DIFF_BLOB_BYTES`]、含二进制内容或不是合法 UTF-8 都判定
+/// "不可渲染"——不做部分截断渲染。
+pub fn blob_pair_content(
+    repo: &Repo,
+    old_blob: Option<BlobId>,
+    new_blob: Option<BlobId>,
+) -> Result<DiffBlobContent, String> {
+    let side = |blob: Option<BlobId>| -> Result<Option<String>, String> {
+        match blob {
+            None => Ok(Some(String::new())),
+            Some(id) => repo
+                .blob_text(id, LIMITS)
+                .map(Content::into_text)
+                .map_err(|e| e.message().to_string()),
+        }
+    };
+    match (side(old_blob)?, side(new_blob)?) {
+        (Some(old_text), Some(new_text)) => Ok(DiffBlobContent::Text { old_text, new_text }),
+        _ => Ok(not_renderable(REASON_BLOB)),
     }
 }
 

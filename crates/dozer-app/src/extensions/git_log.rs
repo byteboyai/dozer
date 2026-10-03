@@ -11,13 +11,17 @@ use crate::chrome::tab_widget::{
     NO_TAB_W_LIMIT, PANEL_TAB_PAD_LEFT, PANEL_TAB_PAD_X, PANEL_TAB_PAD_Y, tab_container_style,
     tab_label,
 };
+use crate::delivery::open_exact_or_err;
+use crate::extensions::diff_content::{DiffBlobContent, blob_pair_content};
 use crate::theme;
+use bytegit::{BlobId, ChangeKind, CommitId};
 use iced_widget::core::alignment;
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
 use iced_widget::core::{Border, Element, Font, Length, Padding, Rectangle, mouse};
 use iced_widget::{MouseArea, column, container, row, scrollable, text};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Mutex;
 
 /// 首次打开面板拉多少个 commit——够看出分叉/合并的形状,又不至于让
@@ -59,9 +63,9 @@ pub struct CommitRow {
     author: Option<String>,
     /// 指向这个 commit 的分支/tag(可能为空)。
     refs: Vec<RefLabel>,
-    /// 这个 commit 的完整 40 位 oid,选中详情用——`short_sha` 只够显示,
-    /// 不够拿去 `git2::Repository::find_commit`。
-    oid: git2::Oid,
+    /// 这个 commit 的完整 id,选中详情用——`short_sha` 只够显示,
+    /// 不够拿去向仓库查提交。
+    oid: CommitId,
     /// author time,Unix 秒——commit 列表行展示用(见 `format_commit_time`)。
     time: i64,
     /// 这是不是合并提交(真实 git parent 数 `>= 2`)。见 spec §6——2026-08-17
@@ -144,8 +148,11 @@ pub fn build(repo_path: &Path, max_count: usize) -> Result<GitLogSnapshot, Strin
             let git_commit = graph
                 .commit(commit.oid)
                 .map_err(|e| e.message().to_string())?;
-            let full_sha = commit.oid.to_string();
-            let short_sha = full_sha.chars().take(7).collect();
+            // gleisbau 给的是 git2 的 oid,在这里转成 bytegit 的 `CommitId`,
+            // 不让 git2 类型流进面板状态。
+            let id =
+                CommitId::from_str(&commit.oid.to_string()).map_err(|e| e.message().to_string())?;
+            let short_sha = id.short(7);
             let summary = git_commit
                 .summary()
                 .ok()
@@ -181,7 +188,7 @@ pub fn build(repo_path: &Path, max_count: usize) -> Result<GitLogSnapshot, Strin
                 summary,
                 author,
                 refs,
-                oid: commit.oid,
+                oid: id,
                 time,
                 is_merge,
             })
@@ -196,87 +203,17 @@ pub fn build(repo_path: &Path, max_count: usize) -> Result<GitLogSnapshot, Strin
     })
 }
 
-/// 单个改动文件:哪个文件、什么类型的改动、这个文件自己的 unified diff
-/// 文本(不是整个提交的 diff——按文件拆开,方便 UI 逐文件展开)。
+/// 单个改动文件:哪个文件、什么类型的改动,以及两侧 blob(CodeMirror diff 的内容来源)。
 /// 派生 `Clone`(`Message::GitLogDetailLoaded` 要装 `Result<CommitDetail, _>`,
-/// `Message` 本身 `derive(Debug, Clone)`——workspace.rs 的 `Message`,
-/// 这两个结构体的字段类型都天然 `Debug + Clone`,一起派生即可)。
+/// `Message` 本身 `derive(Debug, Clone)`)。
 #[derive(Debug, Clone)]
 pub struct DiffFileEntry {
     pub path: String,
-    pub status: git2::Delta,
-    pub patch: String,
-    /// `patch` 是否因为过大被截断——超过 [`MAX_PATCH_CHARS`] 就不再追加
-    /// 正文,只留一行提示。大 diff(几千行)一次性喂给 `text()` widget 排版,
-    /// 布局开销肉眼可见("打开一次提交详情也有些卡顿"),而详情面板本来就
-    /// 不是给通读整份 diff 用的,截断只影响展示,不影响 diff 计算的正确性。
-    ///
-    /// CodeMirror diff 接管后,`patch`/`truncated` 不再是 diff 面板的正文来源
-    /// (正文改由 `old_blob`/`new_blob` 读出的双侧文本经 `SetDiffDocument`
-    /// 推送);保留它们是为 `file_history` 同款纯文本兜底与既有测试。
-    pub truncated: bool,
-    /// 旧版本 blob oid(新增文件为 `None`)。CodeMirror diff 渲染用,与
-    /// `patch`(unified patch 文本)并存,互不影响。
-    pub old_blob: Option<git2::Oid>,
-    /// 新版本 blob oid(删除文件为 `None`)。
-    pub new_blob: Option<git2::Oid>,
-}
-
-/// 单个文件 `patch` 文本的字符数上限,超过就截断(见 [`DiffFileEntry::truncated`])。
-const MAX_PATCH_CHARS: usize = 20_000;
-
-/// 单侧 blob 内容的字节上限(old/new 各自判定),超过就判定"不可渲染"。
-pub const MAX_DIFF_BLOB_BYTES: usize = 512 * 1024;
-
-/// [`diff_blob_content`] 的结果:要么是可渲染的双侧文本,要么给出原因
-/// (供 UI 占位文案使用)。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DiffBlobContent {
-    Text { old_text: String, new_text: String },
-    NotRenderable { reason: String },
-}
-
-/// 给定原始字节,判断能否喂给 CodeMirror diff 渲染:超过
-/// [`MAX_DIFF_BLOB_BYTES`] 或含二进制内容(NUL 字节 / 非法 UTF-8)都判定
-/// "不可渲染"。`git_log`(commit vs commit)与 `file_history`(commit vs
-/// 磁盘实时内容)共用同一份判定,不允许出现第二份可能漂移的实现。
-pub(crate) fn classify_diff_bytes(bytes: &[u8]) -> Option<String> {
-    if bytes.len() > MAX_DIFF_BLOB_BYTES {
-        return None;
-    }
-    if bytes.contains(&0u8) {
-        return None;
-    }
-    std::str::from_utf8(bytes).ok().map(|s| s.to_string())
-}
-
-/// 按新增/删除文件语义把 `None` 侧当空字符串处理;非 `None` 侧任一超过
-/// [`MAX_DIFF_BLOB_BYTES`] 或含二进制内容(NUL 字节 / 非法 UTF-8)都判定
-/// "不可渲染"——不做部分截断渲染。
-pub fn diff_blob_content(
-    repo: &git2::Repository,
-    old_blob: Option<git2::Oid>,
-    new_blob: Option<git2::Oid>,
-) -> Result<DiffBlobContent, String> {
-    fn read_side(
-        repo: &git2::Repository,
-        oid: Option<git2::Oid>,
-    ) -> Result<Option<String>, String> {
-        let Some(oid) = oid else {
-            return Ok(Some(String::new()));
-        };
-        let blob = repo.find_blob(oid).map_err(|e| e.message().to_string())?;
-        Ok(classify_diff_bytes(blob.content()))
-    }
-
-    let old_text = read_side(repo, old_blob)?;
-    let new_text = read_side(repo, new_blob)?;
-    match (old_text, new_text) {
-        (Some(old_text), Some(new_text)) => Ok(DiffBlobContent::Text { old_text, new_text }),
-        _ => Ok(DiffBlobContent::NotRenderable {
-            reason: "文件不是文本,或超过大小上限,不支持 diff 渲染".to_string(),
-        }),
-    }
+    pub status: ChangeKind,
+    /// 旧版本 blob(新增文件为 `None`)。
+    pub old_blob: Option<BlobId>,
+    /// 新版本 blob(删除文件为 `None`)。
+    pub new_blob: Option<BlobId>,
 }
 
 #[derive(Debug, Clone)]
@@ -305,18 +242,15 @@ impl FileFilter {
     /// `M`→Modified、`R`/`C`→Renamed);`status_glyph` 落到 `?` 的其它 delta
     /// (如 `Typechange`)归入「修改」——它们本质上也是就地改动,不给它们单开
     /// 一个几乎不会出现的 tab。
-    fn matches(self, status: git2::Delta) -> bool {
+    fn matches(self, status: ChangeKind) -> bool {
         match self {
             FileFilter::All => true,
-            FileFilter::Added => status == git2::Delta::Added,
-            FileFilter::Deleted => status == git2::Delta::Deleted,
-            FileFilter::Renamed => matches!(status, git2::Delta::Renamed | git2::Delta::Copied),
+            FileFilter::Added => status == ChangeKind::Added,
+            FileFilter::Deleted => status == ChangeKind::Deleted,
+            FileFilter::Renamed => matches!(status, ChangeKind::Renamed | ChangeKind::Copied),
             FileFilter::Modified => !matches!(
                 status,
-                git2::Delta::Added
-                    | git2::Delta::Deleted
-                    | git2::Delta::Renamed
-                    | git2::Delta::Copied
+                ChangeKind::Added | ChangeKind::Deleted | ChangeKind::Renamed | ChangeKind::Copied
             ),
         }
     }
@@ -327,7 +261,7 @@ impl FileFilter {
 /// 顶层 `Message`,不知道自己被包在哪个外层类型里。
 #[derive(Debug, Clone)]
 pub enum Message {
-    SelectCommit(git2::Oid),
+    SelectCommit(CommitId),
     /// commit 列表客户端翻页"更多"图标按钮:只在已缓存的 `cache` 里往下
     /// 多展开一页(`COMMIT_PAGE_SIZE` 条),不问 git 要新数据。
     CommitListMore,
@@ -339,16 +273,16 @@ pub enum Message {
     /// commit 搜索框被右键:内核拦截,不进 `update`——转发成顶层
     /// `Message::TextInputMenuOpen` 弹出通用输入框右键菜单(见 app.rs)。
     TextInputMenuOpen(crate::app::TextInputTarget),
-    DetailLoaded(PathBuf, git2::Oid, Result<CommitDetail, String>),
+    DetailLoaded(PathBuf, CommitId, Result<CommitDetail, String>),
     SnapshotLoaded(PathBuf, usize, Result<GitLogSnapshot, String>),
     /// 点文件列表某一行,选中它(右下面板据此展示该文件的 diff)。
     SelectFile(String),
     /// 点文件列表上方的分类 tab,切换文件列表的筛选维度。
     SetFileFilter(FileFilter),
-    /// 选中文件的 blob 内容异步加载完成。`git2::Oid`/`String` 是加载发起时
+    /// 选中文件的 blob 内容异步加载完成。`CommitId`/`String` 是加载发起时
     /// 的 commit/路径快照,落地前核对仍匹配当前选择,不匹配则丢弃(用户
     /// 手快切换选择后的迟到结果)。
-    DiffContentLoaded(git2::Oid, String, Result<DiffBlobContent, String>),
+    DiffContentLoaded(CommitId, String, Result<DiffBlobContent, String>),
     /// 展开左侧面板底部的分支切换下拉(首次展开时内核顺带异步查一次
     /// `delivery::local_branches`)。
     BranchPickerOpen,
@@ -379,7 +313,7 @@ pub enum Message {
 /// `DetailLoaded` 的 `repo_path`/`oid` 核对手法)。
 #[derive(Debug, Clone)]
 pub struct LoadedDiff {
-    pub commit: git2::Oid,
+    pub commit: CommitId,
     pub path: String,
     pub content: DiffBlobContent,
 }
@@ -391,7 +325,7 @@ pub struct LoadedDiff {
 pub struct State {
     cache: Option<GitLogSnapshot>,
     error: Option<String>,
-    selected: Option<git2::Oid>,
+    selected: Option<CommitId>,
     detail: Option<Result<CommitDetail, String>>,
     /// 右上文件列表当前选中的文件路径(`CommitDetail.files[].path`)。切
     /// commit 时先清空,新 `detail` 落地后预选第一个改动文件。
@@ -419,7 +353,7 @@ pub struct State {
     /// 实在本帧池里、可 `evaluate_script` 之后才更新)的内容对应的
     /// `(commit, path)`。跟 `loaded_diff` 的 `(commit, path)` 不一致就还
     /// 需要再推一次;webview 那一帧还没进池就不写,下一帧重试,内容不丢。
-    diff_sent_for: Option<(git2::Oid, String)>,
+    diff_sent_for: Option<(CommitId, String)>,
     /// 最近一次派发的 `build` 请求 (repo_path, max_count)——落地时核对
     /// 还对不对得上"现在真正需要的",不对就丢弃。
     pending: Option<(PathBuf, usize)>,
@@ -486,7 +420,7 @@ impl State {
     /// 纯状态判定,不碰 webview 池——调用方(`App::take_git_log_diff_script`)
     /// 拿去组 envelope 后,只有真正 `evaluate_script` 成功才写
     /// `set_diff_sent_for`,保证"webview 还没进池"时下一帧重试不丢内容。
-    pub fn pending_diff_push(&self) -> Option<(git2::Oid, String, String, String)> {
+    pub fn pending_diff_push(&self) -> Option<(CommitId, String, String, String)> {
         if !self.diff_webview_ready {
             return None;
         }
@@ -521,7 +455,7 @@ impl State {
     }
 
     /// `take_git_log_diff_script` 确认内容已下发后写回(见字段文档)。
-    pub(crate) fn set_diff_sent_for(&mut self, key: (git2::Oid, String)) {
+    pub(crate) fn set_diff_sent_for(&mut self, key: (CommitId, String)) {
         self.diff_sent_for = Some(key);
     }
 
@@ -616,11 +550,9 @@ pub fn update(
             let (old_blob, new_blob) = (entry.old_blob, entry.new_blob);
             let repo_path = state.cache.as_ref().map(|c| c.repo_path().to_path_buf())?;
             handle.spawn(async move {
-                let repo_path2 = repo_path.clone();
                 let result = tokio::task::spawn_blocking(move || {
-                    let repo =
-                        git2::Repository::open(&repo_path2).map_err(|e| e.message().to_string())?;
-                    diff_blob_content(&repo, old_blob, new_blob)
+                    let repo = open_exact_or_err(&repo_path)?;
+                    blob_pair_content(&repo, old_blob, new_blob)
                 })
                 .await
                 .unwrap_or_else(|e| Err(format!("diff 内容加载任务失败: {e}")));
@@ -804,76 +736,25 @@ pub(crate) fn request_project_refresh(
     request_refresh(state, repo_path, max_count, handle, emit);
 }
 
-/// 取某个提交改动了哪些文件、每个文件的 diff 文本。合并提交(≥2 parent)
+/// 取某个提交改动了哪些文件、每个文件的前后 blob。合并提交(≥2 parent)
 /// 相对**第一父**算(与 `git show` 默认行为一致,不做三方 diff——spec D5)。
 /// 根提交(无 parent)相对空树算,等价于"全部文件都是新增"。
-pub fn commit_detail(repo_path: &Path, oid: git2::Oid) -> Result<CommitDetail, String> {
-    let repo = git2::Repository::open(repo_path).map_err(|e| e.message().to_string())?;
-    let commit = repo.find_commit(oid).map_err(|e| e.message().to_string())?;
-    let new_tree = commit.tree().map_err(|e| e.message().to_string())?;
-    let old_tree = match commit.parent(0) {
-        Ok(parent) => Some(parent.tree().map_err(|e| e.message().to_string())?),
-        Err(_) => None, // 根提交,相对空树
-    };
-    let diff = repo
-        .diff_tree_to_tree(old_tree.as_ref(), Some(&new_tree), None)
-        .map_err(|e| e.message().to_string())?;
-
-    let mut files: Vec<DiffFileEntry> = diff
-        .deltas()
-        .filter_map(|delta| {
-            let path = delta
-                .new_file()
-                .path()
-                .or_else(|| delta.old_file().path())?
-                .to_string_lossy()
-                .into_owned();
-            let old_blob = (!delta.old_file().id().is_zero()).then(|| delta.old_file().id());
-            let new_blob = (!delta.new_file().id().is_zero()).then(|| delta.new_file().id());
-            Some(DiffFileEntry {
-                path,
-                status: delta.status(),
-                patch: String::new(), // 下面按文件路径回填
-                truncated: false,
-                old_blob,
-                new_blob,
-            })
+///
+/// 底层走 `bytegit::Repo::commit_files`,不再自己 `find_blob`/`diff_tree_to_tree`;
+/// 内容的文本判定与双侧读取交给 [`blob_pair_content`]。
+pub fn commit_detail(repo_path: &Path, oid: CommitId) -> Result<CommitDetail, String> {
+    let repo = open_exact_or_err(repo_path)?;
+    let files = repo
+        .commit_files(oid)
+        .map_err(|e| e.message().to_string())?
+        .into_iter()
+        .map(|change| DiffFileEntry {
+            path: change.path.to_string_lossy().into_owned(),
+            status: change.kind,
+            old_blob: change.old_blob,
+            new_blob: change.new_blob,
         })
         .collect();
-
-    // git2 的 `Diff::print` 是整份 diff 一次性回调、按行给,不是按文件给
-    // 一整块文本——这里按 `DiffLine::origin_value()` 是不是文件头
-    // (`FileHeader`)切分,把每一行追加到当前文件对应的 `patch` 里。
-    let mut current_path: Option<String> = None;
-    diff.print(git2::DiffFormat::Patch, |delta, _hunk, line| {
-        if matches!(line.origin_value(), git2::DiffLineType::FileHeader) {
-            current_path = delta
-                .new_file()
-                .path()
-                .or_else(|| delta.old_file().path())
-                .map(|p| p.to_string_lossy().into_owned());
-        }
-        if let Some(path) = &current_path
-            && let Some(entry) = files.iter_mut().find(|f| &f.path == path)
-            && !entry.truncated
-        {
-            if entry.patch.len() >= MAX_PATCH_CHARS {
-                entry.truncated = true;
-                entry.patch.push_str("\n… diff 过长,已截断显示\n");
-            } else {
-                let prefix = match line.origin() {
-                    '+' | '-' | ' ' => line.origin().to_string(),
-                    _ => String::new(),
-                };
-                entry.patch.push_str(&prefix);
-                entry
-                    .patch
-                    .push_str(&String::from_utf8_lossy(line.content()));
-            }
-        }
-        true
-    })
-    .map_err(|e| e.message().to_string())?;
 
     Ok(CommitDetail { files })
 }
@@ -985,7 +866,7 @@ fn ref_labels_text(refs: &[RefLabel], head_branch: Option<&str>) -> String {
 fn commit_list_view<'a>(
     app: &App,
     rows: &[&'a CommitRow],
-    selected: Option<git2::Oid>,
+    selected: Option<CommitId>,
     head_branch: Option<&'a str>,
     visible_count: usize,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -1211,8 +1092,8 @@ fn file_list_view<'a>(
                 }
                 let is_selected = selected_file == Some(f.path.as_str());
                 let color = match f.status {
-                    git2::Delta::Added => byteui::theme::color::current().green,
-                    git2::Delta::Deleted => byteui::theme::color::current().red,
+                    ChangeKind::Added => byteui::theme::color::current().green,
+                    ChangeKind::Deleted => byteui::theme::color::current().red,
                     _ => byteui::theme::color::current().cyan,
                 };
                 let line = row![
@@ -1721,14 +1602,14 @@ fn branch_picker_view<'a>(
         .into()
 }
 
-fn status_glyph(status: git2::Delta) -> &'static str {
+fn status_glyph(status: ChangeKind) -> &'static str {
     match status {
-        git2::Delta::Added => "+",
-        git2::Delta::Deleted => "-",
-        git2::Delta::Modified => "M",
-        git2::Delta::Renamed => "R",
-        git2::Delta::Copied => "C",
-        _ => "?",
+        ChangeKind::Added => "+",
+        ChangeKind::Deleted => "-",
+        ChangeKind::Modified => "M",
+        ChangeKind::Renamed => "R",
+        ChangeKind::Copied => "C",
+        ChangeKind::TypeChange => "?",
     }
 }
 
@@ -1768,6 +1649,19 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::extensions::diff_content::MAX_DIFF_BLOB_BYTES;
+    use bytegit::Repo;
+
+    /// 第 `n` 个固定的假 blob id(`n` 重复 20 次的 40 位十六进制)。
+    fn test_blob(n: u8) -> BlobId {
+        format!("{n:02x}").repeat(20).parse().unwrap()
+    }
+
+    /// 第 `n` 个固定的假提交 id(同 [`test_blob`])。
+    fn test_oid(n: u8) -> CommitId {
+        format!("{n:02x}").repeat(20).parse().unwrap()
+    }
 
     /// spike 验证核心问题:`gleisbau` 能否对 Dozer 自己这个真实、有分叉/合并
     /// 历史的仓库跑出合理的 commit 列表 + refs 标签 + is_merge 标记。跑
@@ -1827,14 +1721,20 @@ mod tests {
             has_merge_row,
             "200 个 commit 窗口内应能看到至少一个 is_merge=true 的行"
         );
-        let repo = git2::Repository::open(repo_root).expect("应能打开 dozer 自己的仓库");
+        let repo = Repo::discover(repo_root).expect("应能打开 dozer 自己的仓库");
+        let parents: std::collections::HashMap<CommitId, usize> = repo
+            .log(bytegit::LogOptions::new(DEFAULT_MAX_COMMITS))
+            .expect("应能读出 dozer 自己的提交历史")
+            .into_iter()
+            .map(|c| (c.id, c.parents.len()))
+            .collect();
         for row in &snapshot.rows {
-            let commit = repo
-                .find_commit(row.oid)
-                .expect("snapshot 里的 oid 应能查到");
+            let parent_count = parents
+                .get(&row.oid)
+                .expect("snapshot 里的 oid 应在同一窗口的提交历史里");
             assert_eq!(
                 row.is_merge,
-                commit.parent_count() >= 2,
+                *parent_count >= 2,
                 "is_merge 应与真实 git parent 数一致: {}",
                 row.short_sha
             );
@@ -1900,12 +1800,6 @@ mod tests {
         for f in &detail.files {
             assert!(!f.path.is_empty());
         }
-        // 至少一个文件真的算出了 diff 文本——否则 `detail_view` 渲染的 patch
-        // 永远是空字符串,回归成"只有文件列表看不到 diff"(code review 发现)。
-        assert!(
-            detail.files.iter().any(|f| !f.patch.is_empty()),
-            "至少一个改动文件应该有非空 patch 文本"
-        );
     }
 
     /// tempdir 里造一个只有一次提交(根提交)的真 git 仓库,同 `delivery.rs`
@@ -1943,13 +1837,9 @@ mod tests {
         let detail = commit_detail(&repo, root_oid).expect("根提交相对空树应该也能算出 diff");
         assert_eq!(detail.files.len(), 2, "根提交里的两个文件都应该出现");
         assert!(
-            detail.files.iter().all(|f| f.status == git2::Delta::Added),
+            detail.files.iter().all(|f| f.status == ChangeKind::Added),
             "根提交相对空树,所有文件都该是 Added: {:?}",
             detail.files.iter().map(|f| f.status).collect::<Vec<_>>()
-        );
-        assert!(
-            detail.files.iter().all(|f| !f.patch.is_empty()),
-            "根提交的每个文件都该有非空 patch 文本"
         );
     }
 
@@ -2000,7 +1890,7 @@ mod tests {
             .iter()
             .find(|f| f.path == "a.txt")
             .expect("a.txt 应该在改动文件里");
-        assert_eq!(modified.status, git2::Delta::Modified);
+        assert_eq!(modified.status, ChangeKind::Modified);
         assert!(modified.old_blob.is_some());
         assert!(modified.new_blob.is_some());
         assert_ne!(modified.old_blob, modified.new_blob);
@@ -2010,7 +1900,7 @@ mod tests {
             .iter()
             .find(|f| f.path == "b.txt")
             .expect("b.txt 应该在改动文件里");
-        assert_eq!(deleted.status, git2::Delta::Deleted);
+        assert_eq!(deleted.status, ChangeKind::Deleted);
         assert!(deleted.old_blob.is_some());
         assert_eq!(deleted.new_blob, None, "删除文件必须是 new_blob = None");
     }
@@ -2061,7 +1951,7 @@ mod tests {
         let detail = commit_detail(&repo, merge_row.oid).unwrap();
         assert_eq!(detail.files.len(), 1, "{:?}", detail.files);
         assert_eq!(detail.files[0].path, "b.txt");
-        assert_eq!(detail.files[0].status, git2::Delta::Added);
+        assert_eq!(detail.files[0].status, ChangeKind::Added);
     }
 
     /// `commit_detail` 不做重命名检测:改名表现为"旧路径删除 + 新路径新增"。
@@ -2084,8 +1974,8 @@ mod tests {
                 .find(|f| f.path == name)
                 .map(|f| f.status)
         };
-        assert_eq!(status_of("new.txt"), Some(git2::Delta::Added));
-        assert_eq!(status_of("old.txt"), Some(git2::Delta::Deleted));
+        assert_eq!(status_of("new.txt"), Some(ChangeKind::Added));
+        assert_eq!(status_of("old.txt"), Some(ChangeKind::Deleted));
     }
 
     #[test]
@@ -2112,8 +2002,8 @@ mod tests {
         let snapshot = build(&repo, DEFAULT_MAX_COMMITS).unwrap();
         let detail = commit_detail(&repo, snapshot.rows[0].oid).unwrap();
         let entry = &detail.files[0];
-        let git_repo = git2::Repository::open(&repo).unwrap();
-        let content = diff_blob_content(&git_repo, entry.old_blob, entry.new_blob).unwrap();
+        let git_repo = Repo::discover(&repo).unwrap();
+        let content = blob_pair_content(&git_repo, entry.old_blob, entry.new_blob).unwrap();
         assert!(matches!(content, DiffBlobContent::NotRenderable { .. }));
     }
 
@@ -2134,8 +2024,8 @@ mod tests {
         let detail = commit_detail(&repo, head_oid).unwrap();
         let modified = detail.files.iter().find(|f| f.path == "a.txt").unwrap();
 
-        let git_repo = git2::Repository::open(&repo).unwrap();
-        let content = diff_blob_content(&git_repo, modified.old_blob, modified.new_blob)
+        let git_repo = Repo::discover(&repo).unwrap();
+        let content = blob_pair_content(&git_repo, modified.old_blob, modified.new_blob)
             .expect("修改文件的 blob 内容应能读出");
         let DiffBlobContent::Text { old_text, new_text } = content else {
             panic!("修改文件应该判定为可渲染文本");
@@ -2152,8 +2042,8 @@ mod tests {
         let detail = commit_detail(&repo, root_oid).unwrap();
         let added = detail.files.iter().find(|f| f.path == "a.txt").unwrap();
 
-        let git_repo = git2::Repository::open(&repo).unwrap();
-        let content = diff_blob_content(&git_repo, added.old_blob, added.new_blob).unwrap();
+        let git_repo = Repo::discover(&repo).unwrap();
+        let content = blob_pair_content(&git_repo, added.old_blob, added.new_blob).unwrap();
         let DiffBlobContent::Text { old_text, new_text } = content else {
             panic!("新增文件应该判定为可渲染文本");
         };
@@ -2169,8 +2059,8 @@ mod tests {
         let detail = commit_detail(&repo, head_oid).unwrap();
         let deleted = detail.files.iter().find(|f| f.path == "b.txt").unwrap();
 
-        let git_repo = git2::Repository::open(&repo).unwrap();
-        let content = diff_blob_content(&git_repo, deleted.old_blob, deleted.new_blob).unwrap();
+        let git_repo = Repo::discover(&repo).unwrap();
+        let content = blob_pair_content(&git_repo, deleted.old_blob, deleted.new_blob).unwrap();
         let DiffBlobContent::Text { old_text, new_text } = content else {
             panic!("删除文件应该判定为可渲染文本");
         };
@@ -2209,8 +2099,8 @@ mod tests {
         let detail = commit_detail(&repo, root_oid).unwrap();
         let bin = detail.files.iter().find(|f| f.path == "blob.bin").unwrap();
 
-        let git_repo = git2::Repository::open(&repo).unwrap();
-        let content = diff_blob_content(&git_repo, bin.old_blob, bin.new_blob).unwrap();
+        let git_repo = Repo::discover(&repo).unwrap();
+        let content = blob_pair_content(&git_repo, bin.old_blob, bin.new_blob).unwrap();
         assert!(matches!(content, DiffBlobContent::NotRenderable { .. }));
     }
 
@@ -2241,8 +2131,8 @@ mod tests {
         let detail = commit_detail(&repo, root_oid).unwrap();
         let entry = detail.files.iter().find(|f| f.path == "big.txt").unwrap();
 
-        let git_repo = git2::Repository::open(&repo).unwrap();
-        let content = diff_blob_content(&git_repo, entry.old_blob, entry.new_blob).unwrap();
+        let git_repo = Repo::discover(&repo).unwrap();
+        let content = blob_pair_content(&git_repo, entry.old_blob, entry.new_blob).unwrap();
         assert!(matches!(content, DiffBlobContent::NotRenderable { .. }));
     }
 
@@ -2272,25 +2162,12 @@ mod tests {
         let detail = commit_detail(&repo, root_oid).unwrap();
         let entry = detail.files.iter().find(|f| f.path == "exact.txt").unwrap();
 
-        let git_repo = git2::Repository::open(&repo).unwrap();
-        let content = diff_blob_content(&git_repo, entry.old_blob, entry.new_blob).unwrap();
+        let git_repo = Repo::discover(&repo).unwrap();
+        let content = blob_pair_content(&git_repo, entry.old_blob, entry.new_blob).unwrap();
         assert!(
             matches!(content, DiffBlobContent::Text { .. }),
             "恰好等于上限应当可渲染"
         );
-    }
-
-    #[test]
-    fn classify_diff_bytes_matches_diff_blob_content_behavior() {
-        // 提取重构不应该改变行为:同一段字节,`classify_diff_bytes` 的结果
-        // 要跟通过 `diff_blob_content` 间接观察到的判定一致(正常文本/
-        // 二进制/超限三种)。
-        assert_eq!(classify_diff_bytes(b"hello\n"), Some("hello\n".to_string()));
-        assert_eq!(classify_diff_bytes(&[0x00, 0x01, 0x02]), None);
-        let big = vec![b'a'; MAX_DIFF_BLOB_BYTES + 1];
-        assert_eq!(classify_diff_bytes(&big), None);
-        let exact = vec![b'a'; MAX_DIFF_BLOB_BYTES];
-        assert!(classify_diff_bytes(&exact).is_some());
     }
 
     #[test]
@@ -2343,7 +2220,7 @@ mod tests {
             detail: Some(Ok(CommitDetail { files: Vec::new() })),
             ..State::default()
         };
-        let oid = git2::Oid::from_bytes(&[1; 20]).unwrap();
+        let oid = test_oid(1);
         let handle = tokio::runtime::Handle::current();
         let result = update(&mut state, Message::SelectCommit(oid), &handle, |_| {});
         assert_eq!(state.selected, Some(oid));
@@ -2354,7 +2231,7 @@ mod tests {
     #[tokio::test]
     async fn select_commit_without_cache_sets_selected_but_spawns_nothing() {
         let mut state = State::default();
-        let oid = git2::Oid::from_bytes(&[2; 20]).unwrap();
+        let oid = test_oid(2);
         let handle = tokio::runtime::Handle::current();
         let result = update(&mut state, Message::SelectCommit(oid), &handle, |_| {
             panic!("无缓存时不该 emit 任何消息");
@@ -2366,7 +2243,7 @@ mod tests {
     #[tokio::test]
     async fn detail_loaded_writes_when_repo_path_and_selected_match() {
         let repo_path = PathBuf::from("/tmp/repo");
-        let oid = git2::Oid::from_bytes(&[3; 20]).unwrap();
+        let oid = test_oid(3);
         let mut state = State {
             cache: Some(snapshot_at(&repo_path, 10)),
             selected: Some(oid),
@@ -2390,7 +2267,7 @@ mod tests {
     async fn detail_loaded_discarded_when_repo_path_mismatches() {
         let mut state = State {
             cache: Some(snapshot_at(Path::new("/tmp/a"), 10)),
-            selected: Some(git2::Oid::from_bytes(&[4; 20]).unwrap()),
+            selected: Some(test_oid(4)),
             ..State::default()
         };
         let handle = tokio::runtime::Handle::current();
@@ -2398,7 +2275,7 @@ mod tests {
             &mut state,
             Message::DetailLoaded(
                 PathBuf::from("/tmp/b"),
-                git2::Oid::from_bytes(&[4; 20]).unwrap(),
+                test_oid(4),
                 Ok(CommitDetail { files: Vec::new() }),
             ),
             &handle,
@@ -2412,7 +2289,7 @@ mod tests {
         let repo_path = PathBuf::from("/tmp/repo");
         let mut state = State {
             cache: Some(snapshot_at(&repo_path, 10)),
-            selected: Some(git2::Oid::from_bytes(&[5; 20]).unwrap()),
+            selected: Some(test_oid(5)),
             ..State::default()
         };
         let handle = tokio::runtime::Handle::current();
@@ -2420,7 +2297,7 @@ mod tests {
             &mut state,
             Message::DetailLoaded(
                 repo_path,
-                git2::Oid::from_bytes(&[6; 20]).unwrap(),
+                test_oid(6),
                 Ok(CommitDetail { files: Vec::new() }),
             ),
             &handle,
@@ -2446,7 +2323,7 @@ mod tests {
     #[tokio::test]
     async fn detail_loaded_preselects_first_file() {
         let repo_path = PathBuf::from("/tmp/repo");
-        let oid = git2::Oid::from_bytes(&[10; 20]).unwrap();
+        let oid = test_oid(10);
         let mut state = State {
             cache: Some(snapshot_at(&repo_path, 10)),
             selected: Some(oid),
@@ -2457,17 +2334,13 @@ mod tests {
             files: vec![
                 DiffFileEntry {
                     path: "a.rs".to_string(),
-                    status: git2::Delta::Modified,
-                    patch: "+x".to_string(),
-                    truncated: false,
+                    status: ChangeKind::Modified,
                     old_blob: None,
                     new_blob: None,
                 },
                 DiffFileEntry {
                     path: "b.rs".to_string(),
-                    status: git2::Delta::Added,
-                    patch: "+y".to_string(),
-                    truncated: false,
+                    status: ChangeKind::Added,
                     old_blob: None,
                     new_blob: None,
                 },
@@ -2488,12 +2361,10 @@ mod tests {
 
     /// 构造一个只关心 `path`/`status` 的 `DiffFileEntry`——分类筛选测试里
     /// 其余字段与筛选无关。
-    fn file_entry(path: &str, status: git2::Delta) -> DiffFileEntry {
+    fn file_entry(path: &str, status: ChangeKind) -> DiffFileEntry {
         DiffFileEntry {
             path: path.to_string(),
             status,
-            patch: String::new(),
-            truncated: false,
             old_blob: None,
             new_blob: None,
         }
@@ -2503,7 +2374,7 @@ mod tests {
     /// `M`→Modified、`R`/`C`→Renamed;其余 delta(如 `Typechange`)归「修改」。
     #[test]
     fn file_filter_matches_buckets() {
-        use git2::Delta;
+        use ChangeKind as Delta;
         assert!(FileFilter::All.matches(Delta::Added));
         assert!(FileFilter::Added.matches(Delta::Added));
         assert!(!FileFilter::Added.matches(Delta::Modified));
@@ -2511,7 +2382,7 @@ mod tests {
         assert!(FileFilter::Renamed.matches(Delta::Renamed));
         assert!(FileFilter::Renamed.matches(Delta::Copied));
         assert!(FileFilter::Modified.matches(Delta::Modified));
-        assert!(FileFilter::Modified.matches(Delta::Typechange));
+        assert!(FileFilter::Modified.matches(Delta::TypeChange));
         for excluded in [Delta::Added, Delta::Deleted, Delta::Renamed, Delta::Copied] {
             assert!(!FileFilter::Modified.matches(excluded), "{excluded:?}");
         }
@@ -2534,7 +2405,7 @@ mod tests {
     #[tokio::test]
     async fn detail_loaded_resets_filter_when_category_absent() {
         let repo_path = PathBuf::from("/tmp/repo");
-        let oid = git2::Oid::from_bytes(&[12; 20]).unwrap();
+        let oid = test_oid(12);
         let mut state = State {
             cache: Some(snapshot_at(&repo_path, 10)),
             selected: Some(oid),
@@ -2543,7 +2414,7 @@ mod tests {
         };
         let handle = tokio::runtime::Handle::current();
         let detail = CommitDetail {
-            files: vec![file_entry("a.rs", git2::Delta::Modified)],
+            files: vec![file_entry("a.rs", ChangeKind::Modified)],
         };
         update(
             &mut state,
@@ -2561,7 +2432,7 @@ mod tests {
     #[tokio::test]
     async fn detail_loaded_keeps_filter_when_category_present() {
         let repo_path = PathBuf::from("/tmp/repo");
-        let oid = git2::Oid::from_bytes(&[13; 20]).unwrap();
+        let oid = test_oid(13);
         let mut state = State {
             cache: Some(snapshot_at(&repo_path, 10)),
             selected: Some(oid),
@@ -2571,8 +2442,8 @@ mod tests {
         let handle = tokio::runtime::Handle::current();
         let detail = CommitDetail {
             files: vec![
-                file_entry("a.rs", git2::Delta::Modified),
-                file_entry("b.rs", git2::Delta::Added),
+                file_entry("a.rs", ChangeKind::Modified),
+                file_entry("b.rs", ChangeKind::Added),
             ],
         };
         update(
@@ -2591,18 +2462,16 @@ mod tests {
     #[tokio::test]
     async fn select_file_clears_stale_diff_and_requests_fresh_load() {
         let repo_path = PathBuf::from("/tmp/repo");
-        let commit_oid = git2::Oid::from_bytes(&[7; 20]).unwrap();
-        let old_blob = git2::Oid::from_bytes(&[8; 20]).unwrap();
-        let new_blob = git2::Oid::from_bytes(&[9; 20]).unwrap();
+        let commit_oid = test_oid(7);
+        let old_blob = test_blob(8);
+        let new_blob = test_blob(9);
         let mut state = State {
             cache: Some(snapshot_at(&repo_path, 10)),
             selected: Some(commit_oid),
             detail: Some(Ok(CommitDetail {
                 files: vec![DiffFileEntry {
                     path: "a.txt".into(),
-                    status: git2::Delta::Modified,
-                    patch: "x".into(),
-                    truncated: false,
+                    status: ChangeKind::Modified,
                     old_blob: Some(old_blob),
                     new_blob: Some(new_blob),
                 }],
@@ -2635,7 +2504,7 @@ mod tests {
 
     #[tokio::test]
     async fn diff_content_loaded_ignored_when_selection_moved_on() {
-        let commit_a = git2::Oid::from_bytes(&[11; 20]).unwrap();
+        let commit_a = test_oid(11);
         let mut state = State {
             selected: Some(commit_a),
             selected_file: Some("b.txt".to_string()), // 用户已经切到 b.txt
@@ -2664,7 +2533,7 @@ mod tests {
 
     #[tokio::test]
     async fn diff_content_loaded_applied_when_selection_still_matches() {
-        let commit_a = git2::Oid::from_bytes(&[12; 20]).unwrap();
+        let commit_a = test_oid(12);
         let mut state = State {
             selected: Some(commit_a),
             selected_file: Some("a.txt".to_string()),
@@ -2694,7 +2563,7 @@ mod tests {
     }
 
     fn loaded_text_state(
-        commit: git2::Oid,
+        commit: CommitId,
         path: &str,
         old_text: &str,
         new_text: &str,
@@ -2716,7 +2585,7 @@ mod tests {
 
     #[test]
     fn pending_diff_push_requires_ready_webview() {
-        let commit = git2::Oid::from_bytes(&[7; 20]).unwrap();
+        let commit = test_oid(7);
         let state = loaded_text_state(commit, "a.txt", "old", "new", false);
         assert!(
             state.pending_diff_push().is_none(),
@@ -2726,7 +2595,7 @@ mod tests {
 
     #[test]
     fn pending_diff_push_returns_text_once_ready() {
-        let commit = git2::Oid::from_bytes(&[7; 20]).unwrap();
+        let commit = test_oid(7);
         let state = loaded_text_state(commit, "a.txt", "old", "new", true);
         let push = state.pending_diff_push().expect("Ready 且未送达应产出推送");
         assert_eq!(push.0, commit);
@@ -2737,7 +2606,7 @@ mod tests {
 
     #[test]
     fn pending_diff_push_suppressed_after_sent() {
-        let commit = git2::Oid::from_bytes(&[7; 20]).unwrap();
+        let commit = test_oid(7);
         let mut state = loaded_text_state(commit, "a.txt", "old", "new", true);
         assert!(state.pending_diff_push().is_some());
         // 模拟 `take_git_log_diff_script` 下发后写回送达标记。
@@ -2750,7 +2619,7 @@ mod tests {
 
     #[test]
     fn pending_diff_push_resends_when_selection_changes() {
-        let commit = git2::Oid::from_bytes(&[7; 20]).unwrap();
+        let commit = test_oid(7);
         let mut state = loaded_text_state(commit, "a.txt", "old", "new", true);
         state.set_diff_sent_for((commit, "a.txt".to_string()));
         // 换文件(同一 commit 内):新 path 对应新内容,应再次产出推送。
@@ -2769,7 +2638,7 @@ mod tests {
 
     #[test]
     fn pending_diff_push_skips_not_renderable() {
-        let commit = git2::Oid::from_bytes(&[7; 20]).unwrap();
+        let commit = test_oid(7);
         let state = State {
             loaded_diff: Some(LoadedDiff {
                 commit,
@@ -2798,7 +2667,7 @@ mod tests {
 
     #[test]
     fn diff_webview_desired_only_for_renderable_text() {
-        let commit = git2::Oid::from_bytes(&[7; 20]).unwrap();
+        let commit = test_oid(7);
         let text = loaded_text_state(commit, "a.txt", "old", "new", false);
         assert_eq!(text.diff_webview_desired(), Some("a.txt"));
 
@@ -2823,7 +2692,7 @@ mod tests {
 
     #[tokio::test]
     async fn diff_content_loaded_error_sets_load_error_and_clears_content() {
-        let commit = git2::Oid::from_bytes(&[13; 20]).unwrap();
+        let commit = test_oid(13);
         let mut state = State {
             selected: Some(commit),
             selected_file: Some("a.txt".to_string()),
@@ -2850,16 +2719,14 @@ mod tests {
 
     #[tokio::test]
     async fn select_file_clears_previous_load_error() {
-        let commit = git2::Oid::from_bytes(&[14; 20]).unwrap();
+        let commit = test_oid(14);
         let mut state = State {
             selected: Some(commit),
             selected_file: Some("a.txt".to_string()),
             detail: Some(Ok(CommitDetail {
                 files: vec![DiffFileEntry {
                     path: "b.txt".into(),
-                    status: git2::Delta::Modified,
-                    patch: String::new(),
-                    truncated: false,
+                    status: ChangeKind::Modified,
                     old_blob: None,
                     new_blob: None,
                 }],
@@ -2883,7 +2750,7 @@ mod tests {
     #[tokio::test]
     async fn detail_loaded_with_no_files_clears_selected_file() {
         let repo_path = PathBuf::from("/tmp/repo");
-        let oid = git2::Oid::from_bytes(&[11; 20]).unwrap();
+        let oid = test_oid(11);
         let mut state = State {
             cache: Some(snapshot_at(&repo_path, 10)),
             selected: Some(oid),
@@ -2911,7 +2778,7 @@ mod tests {
             selected_file: Some("old.rs".to_string()),
             ..State::default()
         };
-        let oid = git2::Oid::from_bytes(&[12; 20]).unwrap();
+        let oid = test_oid(12);
         let handle = tokio::runtime::Handle::current();
         update(&mut state, Message::SelectCommit(oid), &handle, |_| {});
         assert_eq!(
@@ -3098,7 +2965,7 @@ mod tests {
     async fn request_refresh_resets_selection_and_records_pending() {
         let repo_path = PathBuf::from("/tmp/repo");
         let mut state = State {
-            selected: Some(git2::Oid::from_bytes(&[8; 20]).unwrap()),
+            selected: Some(test_oid(8)),
             detail: Some(Ok(CommitDetail { files: Vec::new() })),
             ..State::default()
         };
@@ -3116,7 +2983,7 @@ mod tests {
     async fn request_project_refresh_clears_stale_project_state() {
         let old_repo = PathBuf::from("/tmp/old-repo");
         let new_repo = PathBuf::from("/tmp/new-repo");
-        let oid = git2::Oid::from_bytes(&[9; 20]).unwrap();
+        let oid = test_oid(9);
         let mut state = State {
             cache: Some(snapshot_at(&old_repo, 10)),
             selected: Some(oid),
@@ -3155,7 +3022,7 @@ mod tests {
             summary: summary.to_string(),
             author: None,
             refs: Vec::new(),
-            oid: git2::Oid::from_bytes(&[0; 20]).unwrap(),
+            oid: test_oid(0),
             time: 0,
             is_merge: false,
         }
