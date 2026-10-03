@@ -150,6 +150,7 @@ Host（窗口 / 布局 / 焦点 / 浮层 / 主题 / 面板 Registry）
 
 1. **Git 底层化作为第一个纵向切片，`file_history`/`git_log` 是它的第一批消费者。** 先为 `bytegit` 定 API 清单与设计（Q12、Q14），再把 `file_history`、`git_log`、`delivery`、`git_hotspots`、`dozerd/projects.rs` 的调用点逐步迁到它之上。这同时是"一个面板 + Host + fake Git 服务能跑"的第一次验证。
    - **P0 已完成（2026-10-02）：** `byteboyai/bytegit` `v0.1.0` 已发布（`Repo::discover`、`TempRepo` 夹具、基础类型，31 个测试）；P1 计划待写。计划：`docs/superpowers/plans/2026-10-02-bytegit-p0-skeleton.md`。
+   - **P1 已完成（2026-10-02）：** `v0.2.0` 已发布（HEAD/分支/远程、工作区状态）；`delivery.rs` 的 `repo_root/is_dirty/file_statuses/branch/remote_url/local_branches/current_branch_has_commits` 与 `git_hotspots::dirty_paths/head_short_sha` 已迁为 bytegit 适配层。计划：`docs/superpowers/plans/2026-10-02-bytegit-p1-queries.md`。
 2. 审计 Q7、Q8、Q13。
 3. 确定事件总线的最小模型（Q9），先给 Git 状态变化（工作区变更、分支切换）这一条事件用起来。
 4. 面板扩展化的整体顺序待定，原文 §11 的试点顺序（Code Health → Todo → SSH）是按"进程外插件"定的，与本文"一个面板 + Host"的目标不同，是否沿用待议。

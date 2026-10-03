@@ -58,12 +58,15 @@ Repo::is_bare / is_empty (无提交)
 
 ```text
 head(&self) -> Result<HeadInfo, GitError>
-    HeadInfo { branch: Option<String> /* None = detached */, short_id: Option<CommitId>, has_commits: bool }
+    HeadInfo { branch: Option<String> /* None = detached */, commit: Option<CommitId> }
 head_commit_time(&self) -> Result<Option<SystemTime>, GitError>   // 空仓库为 None
-local_branches(&self) -> Result<Vec<String>, GitError>
-remotes(&self) -> Result<Vec<Remote>, GitError>
-    Remote { name: String, url: String, kind: Fetch | Push }
+local_branches(&self) -> Result<Vec<String>, GitError>            // 升序
+remotes(&self) -> Result<Vec<Remote>, GitError>                   // 升序、按 name 去重
+    Remote { name: String, url: String, push_url: Option<String> }
 ```
+
+- `HeadInfo` 没有 `short_id`/`has_commits` 字段；少/多提交由 `commit: Option<CommitId>` 表达，调用方需要"是否有提交"时用 `head()?.commit.is_some()`（`has_commits()` 方法可另加，P1 未实现）。`CommitId::short(n)` 提供短 id。
+- `Remote` 没有 `kind` 字段（`Fetch | Push` 未实现）；取不到 url 时该远程仍会出现，`url` 为空串。`push_url` 缺失或与 `url` 相同则为 `None`。
 
 替代：`delivery::branch`、`current_branch_has_commits`、`local_branches`、`remote_url`，`git_hotspots::head_short_sha`，`dozerd::git_head_commit_ms`。
 
@@ -71,15 +74,17 @@ remotes(&self) -> Result<Vec<Remote>, GitError>
 
 ```text
 status(&self, opts: StatusOptions) -> Result<Vec<StatusEntry>, GitError>
-    StatusOptions { include_untracked: bool, include_ignored: bool, include_untracked_files_in_dirs: bool }
+    StatusOptions { include_untracked: bool, include_ignored: bool, detect_renames: bool }
     StatusEntry { path: PathBuf /* 相对仓库根 */, state: FileState }
-    FileState { index: Option<ChangeKind>, worktree: Option<ChangeKind>, ignored: bool, untracked: bool }
+    FileState { index: Option<ChangeKind>, worktree: Option<ChangeKind>, conflicted: bool, ignored: bool, untracked: bool }
 is_dirty(&self, opts) -> Result<bool, GitError>
 ```
 
-- `FileState` 与现有 `delivery::FileGitStatus` 语义等价，迁移时逐变体对照（P1 的验收项）。
-- `dirty_paths`（命令行 `status --porcelain --untracked-files=all`）等价于 `status` 带 `include_untracked + include_untracked_files_in_dirs` 后取路径，不再另做。
-- **口径待在 P1 核对**：`is_dirty` 现状计不计 untracked/ignored、`file_statuses` 计不计 ignored，需要先读测试确认，再决定默认值，不凭空假设。
+- `StatusOptions` 没有 `include_untracked_files_in_dirs`：现有三份实现都递归进未跟踪目录，没有"不递归"的使用者，该开关无意义（P1 未实现）。
+- `FileState` 与现有 `delivery::FileGitStatus` 语义等价，多个 `conflicted` 字段（合并冲突标记）；迁移时逐变体对照（P1 的验收项）。
+- `dirty_paths`（命令行 `status --porcelain --untracked-files=all`）等价于 `status` 带 `include_untracked + detect_renames` 后取路径，不再另做。
+- **P1 已核对的口径（O1）：** `is_dirty` 含未跟踪、不含被忽略；`file_statuses` 含未跟踪与被忽略；`current_branch_has_commits` 在 detached HEAD 时为 `true`。
+- **实现细节：** 重命名时 libgit2 的 `entry.path()` 返回旧路径，实现改从 diff delta 取新路径；被忽略的目录只作为一个带尾部 `/` 的条目；路径不是 UTF-8 的条目被跳过。
 
 ### 4.4 历史与 diff
 
@@ -159,7 +164,7 @@ TempRepo::new()                         // 临时目录 + git init，固定作�
 | 阶段 | 内容 | 删除的旧代码 | 验收 |
 |------|------|--------------|------|
 | P0 | 建 `byteboyai/bytegit` 仓库骨架、CI、`TempRepo`、`CommitId`/`GitError`/`ChangeKind`、`Repo::discover`；发 `v0.1.0` | — | `cargo test`、clippy、fmt 通过 |
-| P1 | HEAD/分支/远程、工作区状态；迁移 `delivery.rs` 的 `is_dirty`/`file_statuses`/`branch`/`remote_url`/`local_branches`/`current_branch_has_commits`、`git_hotspots::dirty_paths`/`head_short_sha`；**先核对并写清 §4.3 的口径** | `delivery.rs` 对应函数与 `delivery::git` 辅助函数 | 并行比对测试；文件树着色、首页分支显示行为不变 |
+| P1 | HEAD/分支/远程、工作区状态；迁移 `delivery.rs` 的 `is_dirty`/`file_statuses`/`branch`/`remote_url`/`local_branches`/`current_branch_has_commits`、`git_hotspots::dirty_paths`/`head_short_sha`；**先核对并写清 §4.3 的口径** | 适配层随 P6 删除（`delivery.rs` 对应函数改成 bytegit 适配层，**签名不变**，调用点不动） | 并行比对测试；文件树着色、首页分支显示行为不变 |
 | P2 | 历史与 diff；迁移 `git_log::{commit_detail, diff_blob_content, read_side, classify_diff_bytes}`、`file_history::*`、`rollback` 的取内容部分；`git_log` 与 `file_history` 不再互相引用，`file_history → git_log` 耦合消失 | `git_log` 里的 blob/分类代码、`file_history` 里的重复实现 | 两面板 diff 展示行为不变；`DiffBlobContent` 不再被 `file_history` 引用 |
 | P3 | `usage` 的 `commit_count*`、`git_hotspots::recent_churn`、`dozerd/projects.rs` 的两处命令行；`dozerd` 加依赖 | 对应实现 | `usage`、项目更新时间、Code Health 热点结果不变 |
 | P4 | `watch` feature；迁移 `git_watch`，`HIDDEN` 由调用方传入 | `git_watch.rs` 里的路径分类逻辑 | 现有 `git_watch` 测试迁移后通过 |
@@ -180,11 +185,13 @@ TempRepo::new()                         // 临时目录 + git init，固定作�
 
 | # | 问题 | 处理 |
 |---|------|------|
-| O1 | §4.3 口径（untracked/ignored、`discover` vs `open`）现状不一致，且未读对应测试 | P1 第一步，不凭空决定默认值 |
+| O1 | §4.3 口径（untracked/ignored、`discover` vs `open`）现状不一致，且未读对应测试 | **P1 已完成**：`is_dirty` 含未跟踪、不含被忽略；`file_statuses` 含未跟踪与被忽略；`current_branch_has_commits` 在 detached HEAD 为 `true`。结论写入 §4.3 |
 | O2 | 写操作 `git2` 化的可行性（`clone` 认证/进度、`checkout` 冲突） | §4.6 并行评估，结论回写本规格 |
 | O3 | `.git` 为文件（worktree/子模块）的监听与读取 | v0.1 不强求，API 留位；v2 引入 worktree 时必须解决 |
 | O4 | `git2`（libgit2）与命令行 git 在边角行为上的差异（如大仓库 `status` 性能、`.gitattributes`/filter、submodule、sparse checkout） | P1/P2 的并行比对测试覆盖现有用法；未覆盖的差异记为已知限制 |
 | O5 | 大仓库性能：`log` 的 `max_count`、`churn` 的全历史扫描，`usage` 的全量 revwalk | 保持现有上限与调用方式，不在迁移中优化；另立项 |
-| O6 | 25 处 `delivery::*` 调用方的逐个核对只做了数量统计 | P1 前补一次逐个确认 |
+| O6 | 25 处 `delivery::*` 调用方的逐个核对只做了数量统计 | **P1 已完成**：核对后决定不逐个改调用点，改为把 `delivery.rs` 保留为签名不变的 bytegit 适配层，随 P6 一并删除。 |
 | O7 | `gleisbau` 与 `bytegit` 的 `git2` 版本对齐的长期维护 | 升级时同步升；若 `gleisbau` 成为阻碍再评估 B1 |
 | O8 | Digger 是否需要提交图 | 不影响 v0.1；需要时单独设计 `graph` feature |
+| O9 | 项目目录位于仓库子目录时，`Repo::discover`（向上查找）与 `delivery::open_exact`（只认仓库根）语义不一致；P1 为保持旧行为在 `delivery` 适配层用了 `open_exact` | 待用户裁决；统一前不要擅自把 `open_exact` 改成向上查找 |
+| O10 | 同一子目录项目下 `git_hotspots::dirty_paths`（相对仓库根）与 `recent_churn`（`--relative`，相对项目根）路径口径不同 | 迁移期保持现状；统一口径另议（P3 迁移 `recent_churn` 时评估） |
