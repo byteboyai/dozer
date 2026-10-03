@@ -3062,9 +3062,10 @@ pub(crate) const GROUP_CHAT_CONTENT_ID_OFFSET: usize = 7_000_000;
                 self.run_group_chat_effects(project_id, effects);
             }
             Command::OpenTodo { .. } => {
-                // 只切到 Todo 面板;不做"定位到某条待办"(Todo 面板没有这个入口,
-                // 且不在本功能范围)。
-                self.panel_select(PanelKind::Todo);
+                // 只确保 Todo 面板看得见;不做"定位到某条待办"(Todo 面板没有这个入口,
+                // 且不在本功能范围)。**不能用 `panel_select`**:它是图标栏点击的处理器,
+                // 对已激活的面板是"收起",还会武装图标栏拖拽(审阅发现的缺陷)。
+                self.show_panel(PanelKind::Todo);
             }
             other => {
                 let proxy = self.proxy.clone();
@@ -3172,6 +3173,8 @@ pub(crate) const GROUP_CHAT_CONTENT_ID_OFFSET: usize = 7_000_000;
         )
         .map(Message::GroupChatShell),
 ```
+
+**`show_panel`（`OpenTodo` 用）**：在 `chrome/rail.rs` 加纯函数 `show_panel_in(side, kind, view, collapsed, maximized) -> ShowPanel`（字段 `view/collapsed/maximized/switched/changed`）：已看得见（且没被对侧放大态盖住）→ `changed = false` 什么都不做；被收起 → 展开；显示的是别的 → 切过去；被对侧放大盖住 → 退出放大态；凡有改动一律清 `maximized`（同 `panel_select` 口径）。单测覆盖这几种情形，并有回归测试"已展开的面板绝不被收起"。`App::show_panel(kind)` 调它，应用结果后调 `fire_panel_switch_in(kind)` 与 `on_shell_layout_changed()`。为此把 `panel_select` 里的"切入时动作"`match` 抽成 `fn fire_panel_switch_in(&mut self, kind)`，图标栏点击与程序化显示共用，`panel_select` 行为不变。
 
 - [ ] **Step 6: 编译与测试**
 
@@ -3851,6 +3854,8 @@ export interface MentionContext { start: number; query: string }
 export function mentionContext(text: string, caret: number): MentionContext | null;
 export function filterMembers<T extends { handle: string }>(members: T[], query: string): T[];
 export function applyMention(text: string, ctx: MentionContext, caret: number, handle: string): { text: string; caret: number };
+export function mentionMenuOpen(ctx: MentionContext | null, dismissedStart: number | null): boolean;  // Esc 关闭后按 `@` 位置记住
+export function nextDismissed(ctx: MentionContext | null, dismissedStart: number | null): number | null;
 export function formatDuration(ms: number | null): string;
 ```
 
@@ -3865,6 +3870,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   validateHandle, handleKey, suggestHandle, mentionContext, filterMembers, applyMention,
+  mentionMenuOpen, nextDismissed,
 } from './handle.ts';
 
 test('validateHandle accepts normal handles incl. chinese', () => {
@@ -3928,6 +3934,32 @@ test('applyMention replaces the partial mention and adds a trailing space', () =
   assert.deepEqual(applyMention('你好 @cla', ctx, 7, 'claude'), { text: '你好 @claude ', caret: 11 });
   // 光标后还有文字时不吞掉后面的内容
   assert.deepEqual(applyMention('你好 @cla 你呢', ctx, 7, 'claude'), { text: '你好 @claude  你呢', caret: 11 });
+});
+
+// ---- Esc 关闭补全菜单 ----
+// 回归:Esc 的 keydown 关掉菜单后,紧接着的 keyup 会按真实光标重算上下文,菜单立刻重开。
+// 所以"已被用户关闭"要按 `@` 的位置记住,而不是靠改光标。
+
+test('menu is open for a live mention context and closed without one', () => {
+  assert.equal(mentionMenuOpen({ start: 3, query: 'c' }, null), true);
+  assert.equal(mentionMenuOpen(null, null), false);
+});
+
+test('a dismissed mention stays closed across keyup recomputation of the same context', () => {
+  assert.equal(mentionMenuOpen({ start: 3, query: 'cl' }, 3), false);
+  assert.equal(mentionMenuOpen({ start: 3, query: 'cla' }, 3), false); // 继续输入也不重开
+});
+
+test('a different mention (new @ elsewhere) opens normally', () => {
+  assert.equal(mentionMenuOpen({ start: 10, query: '' }, 3), true);
+});
+
+test('dismissal is forgotten once the caret leaves any mention', () => {
+  assert.equal(nextDismissed(null, 3), null);
+  assert.equal(nextDismissed({ start: 3, query: 'x' }, 3), 3);
+  assert.equal(nextDismissed({ start: 3, query: 'x' }, null), null);
+  // 忘掉之后,同一下标再敲 `@` 能正常打开
+  assert.equal(mentionMenuOpen({ start: 3, query: '' }, nextDismissed(null, 3)), true);
 });
 ```
 
@@ -4033,6 +4065,16 @@ export function applyMention(
   const insert = `@${handle} `;
   const next = text.slice(0, ctx.start) + insert + text.slice(caret);
   return { text: next, caret: ctx.start + insert.length };
+}
+
+/** 补全菜单是否该显示:有上下文,且用户没有在**这个 `@`** 上按过 Esc。 */
+export function mentionMenuOpen(ctx: MentionContext | null, dismissedStart: number | null): boolean {
+  return ctx !== null && ctx.start !== dismissedStart;
+}
+
+/** 光标离开任何 `@` 提及后忘掉"已关闭"标记,之后在同一下标再敲 `@` 能正常打开。 */
+export function nextDismissed(ctx: MentionContext | null, dismissedStart: number | null): number | null {
+  return ctx === null ? null : dismissedStart;
 }
 ```
 
@@ -4505,7 +4547,9 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Member } from '../types.ts';
 import { send } from '../ipc.ts';
 import { cancelEvent } from '../events.ts';
-import { applyMention, filterMembers, mentionContext } from '../handle.ts';
+import {
+  applyMention, filterMembers, mentionContext, mentionMenuOpen, nextDismissed,
+} from '../handle.ts';
 
 export function Composer({
   groupId, members, running, hint, draftOf, onDraft,
@@ -4520,13 +4564,20 @@ export function Composer({
   const [text, setText] = useState(draftOf(groupId));
   const [caret, setCaret] = useState(0);
   const [pick, setPick] = useState(0);
+  // 用户在哪个 `@`(下标)上按过 Esc;见 `mentionMenuOpen`。
+  const [dismissed, setDismissed] = useState<number | null>(null);
   const area = useRef<HTMLTextAreaElement>(null);
 
   // 切群:载入该群草稿。
   useEffect(() => { setText(draftOf(groupId)); setPick(0); }, [groupId]);
 
   const ctx = mentionContext(text, caret);
-  const options = ctx ? filterMembers(members, ctx.query) : [];
+  const ctxStart = ctx ? ctx.start : -1;
+  // 光标离开提及后忘掉"已关闭"标记。
+  useEffect(() => {
+    setDismissed((d) => nextDismissed(ctx, d));
+  }, [ctxStart]);
+  const options = ctx && mentionMenuOpen(ctx, dismissed) ? filterMembers(members, ctx.query) : [];
   const menuOpen = options.length > 0;
 
   const update = (next: string, c: number) => {
@@ -4557,7 +4608,7 @@ export function Composer({
       if (e.key === 'ArrowDown') { e.preventDefault(); setPick((p) => (p + 1) % options.length); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); setPick((p) => (p - 1 + options.length) % options.length); return; }
       if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); choose(options[pick].handle); return; }
-      if (e.key === 'Escape') { e.preventDefault(); setCaret(0); return; }
+      if (e.key === 'Escape') { e.preventDefault(); if (ctx) setDismissed(ctx.start); return; }
     }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
   };
