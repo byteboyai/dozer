@@ -75,3 +75,15 @@ export function applyMention(
   const next = text.slice(0, ctx.start) + insert + text.slice(caret);
   return { text: next, caret: ctx.start + insert.length };
 }
+
+/** 补全菜单是否该显示:有上下文,且用户没有在**这个 `@`** 上按过 Esc。
+ *  "已关闭"按 `@` 的位置记,而不是靠改光标——否则 Esc 的 keydown 关掉菜单后,紧接着的
+ *  keyup 会按真实光标重算上下文,菜单立刻又打开。 */
+export function mentionMenuOpen(ctx: MentionContext | null, dismissedStart: number | null): boolean {
+  return ctx !== null && ctx.start !== dismissedStart;
+}
+
+/** 光标离开任何 `@` 提及后忘掉"已关闭"标记,之后在同一下标再敲 `@` 能正常打开。 */
+export function nextDismissed(ctx: MentionContext | null, dismissedStart: number | null): number | null {
+  return ctx === null ? null : dismissedStart;
+}

@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Member } from '../types.ts';
 import { send } from '../ipc.ts';
 import { cancelEvent } from '../events.ts';
-import { applyMention, filterMembers, mentionContext } from '../handle.ts';
+import {
+  applyMention, filterMembers, mentionContext, mentionMenuOpen, nextDismissed,
+} from '../handle.ts';
 
 export function Composer({
   groupId, members, running, hint, draftOf, onDraft,
@@ -17,13 +19,20 @@ export function Composer({
   const [text, setText] = useState(draftOf(groupId));
   const [caret, setCaret] = useState(0);
   const [pick, setPick] = useState(0);
+  // 用户在哪个 `@`(下标)上按过 Esc;见 `mentionMenuOpen`。
+  const [dismissed, setDismissed] = useState<number | null>(null);
   const area = useRef<HTMLTextAreaElement>(null);
 
   // 切群:载入该群草稿。
   useEffect(() => { setText(draftOf(groupId)); setPick(0); }, [groupId]);
 
   const ctx = mentionContext(text, caret);
-  const options = ctx ? filterMembers(members, ctx.query) : [];
+  const ctxStart = ctx ? ctx.start : -1;
+  // 光标离开提及后忘掉"已关闭"标记。
+  useEffect(() => {
+    setDismissed((d) => nextDismissed(ctx, d));
+  }, [ctxStart]);
+  const options = ctx && mentionMenuOpen(ctx, dismissed) ? filterMembers(members, ctx.query) : [];
   const menuOpen = options.length > 0;
 
   const update = (next: string, c: number) => {
@@ -54,7 +63,7 @@ export function Composer({
       if (e.key === 'ArrowDown') { e.preventDefault(); setPick((p) => (p + 1) % options.length); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); setPick((p) => (p - 1 + options.length) % options.length); return; }
       if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); choose(options[pick].handle); return; }
-      if (e.key === 'Escape') { e.preventDefault(); setCaret(0); return; }
+      if (e.key === 'Escape') { e.preventDefault(); if (ctx) setDismissed(ctx.start); return; }
     }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
   };

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   validateHandle, handleKey, suggestHandle, mentionContext, filterMembers, applyMention,
+  mentionMenuOpen, nextDismissed,
 } from './handle.ts';
 
 test('validateHandle accepts normal handles incl. chinese', () => {
@@ -65,4 +66,39 @@ test('applyMention replaces the partial mention and adds a trailing space', () =
   assert.deepEqual(applyMention('你好 @cla', ctx, 7, 'claude'), { text: '你好 @claude ', caret: 11 });
   // 光标后还有文字时不吞掉后面的内容
   assert.deepEqual(applyMention('你好 @cla 你呢', ctx, 7, 'claude'), { text: '你好 @claude  你呢', caret: 11 });
+});
+
+// ---- Esc 关闭补全菜单 ----
+// 回归:按 Esc 时 keydown 关掉菜单,紧接着的 keyup 会按真实光标重算上下文,
+// 菜单立刻重新打开。所以"已被用户关闭"要按 `@` 的位置记住,而不是靠改光标。
+
+test('menu is open for a live mention context and closed without one', () => {
+  assert.equal(mentionMenuOpen({ start: 3, query: 'c' }, null), true);
+  assert.equal(mentionMenuOpen(null, null), false);
+});
+
+test('a dismissed mention stays closed across keyup recomputation of the same context', () => {
+  const ctx = { start: 3, query: 'cl' };
+  assert.equal(mentionMenuOpen(ctx, 3), false);
+  // keyup 之后上下文重算得到同一个 start:仍然关闭
+  assert.equal(mentionMenuOpen({ start: 3, query: 'cl' }, 3), false);
+});
+
+test('continuing to type inside the dismissed mention does not reopen it', () => {
+  assert.equal(mentionMenuOpen({ start: 3, query: 'cla' }, 3), false);
+});
+
+test('a different mention (new @ elsewhere) opens normally', () => {
+  assert.equal(mentionMenuOpen({ start: 10, query: '' }, 3), true);
+});
+
+test('dismissal is forgotten once the caret leaves any mention', () => {
+  assert.equal(nextDismissed(null, 3), null);
+  assert.equal(nextDismissed({ start: 3, query: 'x' }, 3), 3);
+  assert.equal(nextDismissed({ start: 3, query: 'x' }, null), null);
+});
+
+test('after forgetting, a new @ at the same index opens again', () => {
+  const forgotten = nextDismissed(null, 3);
+  assert.equal(mentionMenuOpen({ start: 3, query: '' }, forgotten), true);
 });
