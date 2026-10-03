@@ -10,7 +10,6 @@ use crate::extensions::{
     browser, codehealth, conversations, database, file_history, files, footbar, git_log, project,
     project_create, search, settings, ssh, toast, todo, usage,
 };
-use crate::git_watch;
 use crate::term::terminal;
 use crate::transcript::ReviewEntry;
 use crate::workspace::{PickerLaunch, RestorePayload, ReviewSource};
@@ -519,12 +518,12 @@ pub enum Message {
     /// `update` 在 UI 线程上装配成 `Workspace`,替换掉那份"加载中"占位
     /// (载荷是一次性信封,见 [`RestorePayload`])。
     ProjectSlotLoaded(i64, RestorePayload),
-    /// 项目:`git_watch` 监听到工作区/`.git` 引用变化,该重新跑一次 git 刷新
-    /// 了(D4)。`Relevance` 决定这次触发要不要顺带做 Plan 2 的 Git Log 快照
-    /// 重建。这条消息同时喂给 Files(刷新 git_statuses)、Project(刷新
+    /// 项目:`bytegit::watch` 监听到工作区/`.git` 引用变化,该重新跑一次 git 刷新
+    /// 了(D4)。`GitChange::refs_changed` 决定这次触发要不要顺带做 Plan 2 的
+    /// Git Log 快照重建。这条消息同时喂给 Files(刷新 git_statuses)、Project(刷新
     /// branch/dirty)和 Git Log(条件触发快照重建)三个独立扩展,
     /// 内核继续拦截、分别转发,不包进任何一个 extension 的 `Message`。
-    ProjectFsChanged(ProjectId, git_watch::FsChanges),
+    ProjectFsChanged(ProjectId, bytegit::GitChange),
     /// Git Log 面板的全部消息,内核只转发不解读——见
     /// `extensions::git_log::Message`。
     GitLog(git_log::Message),

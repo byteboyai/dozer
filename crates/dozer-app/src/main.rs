@@ -9,7 +9,6 @@ mod extensions;
 mod external_apps;
 mod frosted;
 mod git_accounts;
-mod git_watch;
 mod keymap;
 mod layout;
 mod menu_spec;

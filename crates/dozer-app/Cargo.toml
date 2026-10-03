@@ -21,7 +21,7 @@ dozer-hook = { path = "../dozer-hook" }
 # 新建 agent 会话时静默注册对应 CLI 的 dozer-mcp（第一个写工具 2026-08-27）。
 dozer-mcp = { path = "../dozer-mcp" }
 byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.1" }
-bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.3.0" }
+bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.5.0", features = ["watch"] }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -57,10 +57,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # gleisbau = 原生 git 提交图布局库,嵌入 iced Canvas(已转正,非 spike)。
 # git2 = git 数据层(git_log 提交图 + delivery 状态查询 + worktree 列表),
 # 依赖版本与 gleisbau 传递依赖对齐,避免 cargo 拉两份。
-# notify = 项目工作区实时文件系统监听(git_watch 的 debounce 基础)。
 gleisbau = "0.7"
 git2 = "0.21"
-notify = "8"
 russh = "0.62.5"
 # SFTP 客户端(阶段 3):在 russh channel 上跑 SFTP 子系统,查过 docs.rs
 # 确认 2.4.0 的公开 API(SftpSession::new(stream)/read_dir/read/write/
