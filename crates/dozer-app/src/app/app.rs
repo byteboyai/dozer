@@ -463,6 +463,8 @@ pub struct App {
     pub(crate) codehealth_webview: crate::extensions::codehealth::WebviewPushState,
     /// Todo 内容区 webview 推送状态(App 级,固定单槽)。
     pub(crate) todo_webview: crate::extensions::todo::WebviewPushState,
+    /// 群聊内容区 webview 推送状态(App 级,固定单槽)。
+    pub(crate) group_chat_webview: crate::extensions::group_chat::WebviewPushState,
     /// 数据库面板 App 级状态(哪些驱动类型在"新增数据源"下拉里可选,
     /// 启动时读盘)——见 `extensions::database::AppState`。
     pub(crate) database: database::AppState,
@@ -652,6 +654,9 @@ pub(crate) const CODEHEALTH_CONTENT_ID_OFFSET: usize = 5_000_000;
 /// Todo 面板内容区 webview 的固定槽位 ID(接在 `CODEHEALTH_CONTENT_ID_OFFSET` 之后,
 /// 避免与其它偏移冲突)。
 pub(crate) const TODO_CONTENT_ID_OFFSET: usize = 6_000_000;
+/// 群聊面板 webview 的固定单槽位 ID(接在 `TODO_CONTENT_ID_OFFSET` 之后,避免与其它
+/// 偏移冲突)。
+pub(crate) const GROUP_CHAT_CONTENT_ID_OFFSET: usize = 7_000_000;
 
 /// `wait_for_pending_exit_tasks` 允许在飞的关 tab 收尾请求跑完的总预算。
 /// 本地 UDS 往返通常亚毫秒级,留 2 秒是给 daemon 偶尔卡顿的余量,而不是
@@ -845,6 +850,7 @@ impl App {
             usage_webview: crate::extensions::usage::WebviewPushState::default(),
             codehealth_webview: crate::extensions::codehealth::WebviewPushState::default(),
             todo_webview: crate::extensions::todo::WebviewPushState::default(),
+            group_chat_webview: crate::extensions::group_chat::WebviewPushState::default(),
             database: database::AppState::load(),
             footbar: footbar::AppState::default(),
             toast: toast::ToastCenter::default(),
@@ -1260,6 +1266,38 @@ impl App {
         vec![(webview_id, crate::preview::dispatch_script(&envelope))]
     }
 
+    /// 群聊面板待下发推送。声明式:每帧比较"当前该显示什么"
+    /// (`current_view_payload`)与"上次送达的"(`group_chat_webview.pending_push`),
+    /// 同时驱动加载超时判定。已失败时不推送——原生占位页接管。
+    pub fn take_group_chat_content_script(
+        &mut self,
+        available_webview_ids: &std::collections::HashSet<usize>,
+        now: std::time::Instant,
+    ) -> Vec<(usize, String)> {
+        let webview_id = GROUP_CHAT_CONTENT_ID_OFFSET;
+        self.group_chat_webview
+            .observe_availability(available_webview_ids.contains(&webview_id), now);
+        if !available_webview_ids.contains(&webview_id)
+            || self.group_chat_webview.failed().is_some()
+        {
+            return Vec::new();
+        }
+        let Some(project_id) = self.active_project_id else {
+            return Vec::new();
+        };
+        let Some(ws) = self.active_workspace() else {
+            return Vec::new();
+        };
+        let desired =
+            crate::extensions::group_chat::current_view_payload(&ws.group_chat, project_id);
+        let Some(payload) = self.group_chat_webview.pending_push(&desired) else {
+            return Vec::new();
+        };
+        let revision = self.group_chat_webview.mark_sent(payload.clone());
+        let envelope = crate::extensions::group_chat::encode_group_chat_push(revision, payload);
+        vec![(webview_id, crate::preview::dispatch_script(&envelope))]
+    }
+
     /// 找到某个 pane 里处于"CodeMirror 且 Ready"的 tab(Agent 命令入口的前置
     /// 校验)。非 CodeMirror/未就绪返回 false。
     fn codemirror_tab_ready(pane: &crate::preview::PreviewPane, tab_id: usize) -> bool {
@@ -1585,6 +1623,65 @@ impl App {
         let emit_todos = emit.clone();
         todo::request_todos_refresh(project_id, &client, &handle, emit_todos);
         todo::request_categories_refresh(project_id, &client, &handle, emit);
+    }
+
+    /// 群聊面板当前是否"正被看着":在某一侧显示、该侧未收起,且没有被另一侧的
+    /// 放大态盖住。
+    pub fn group_chat_panel_visible(&self) -> bool {
+        if self.active_workspace().is_none() {
+            return false;
+        }
+        let left = self.left_view == PanelKind::GroupChat && !self.left_collapsed;
+        let right = self.right_view == PanelKind::GroupChat && !self.right_collapsed;
+        match self.maximized {
+            Some(MaximizedPane::Left) => left,
+            Some(MaximizedPane::Right) => right,
+            None => left || right,
+        }
+    }
+
+    /// `about_to_wait` 是否需要为群聊排下一拍唤醒:面板可见,且(需要加载群列表 或
+    /// 本群有发言进行中)。没有发言时不轮询,不空转。
+    pub fn group_chat_poll_wanted(&self) -> bool {
+        self.group_chat_panel_visible()
+            && self
+                .active_workspace()
+                .is_some_and(|ws| ws.group_chat.load_pending() || ws.group_chat.has_active_turn())
+    }
+
+    /// `ResumeTimeReached` 时调用:该加载就加载,该轮询就轮询(限速、在途、退避都在
+    /// `WorkspaceState` 里)。
+    pub fn poll_group_chat_if_active(&mut self) {
+        if !self.group_chat_panel_visible() {
+            return;
+        }
+        let Some(project_id) = self.active_project_id else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        let client = self.client.clone();
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        let emit = move |m: crate::extensions::group_chat::Message| {
+            let _ = proxy.send_event(Message::GroupChat(m));
+        };
+        let Some(ws) = self.active_workspace_mut() else {
+            return;
+        };
+        if ws.group_chat.load_due() {
+            crate::extensions::group_chat::spawn_load_groups(project_id, &client, &handle, emit);
+            return;
+        }
+        let (Some(group_id), true) = (ws.group_chat.selected(), ws.group_chat.has_active_turn())
+        else {
+            return;
+        };
+        if ws.group_chat.poll_due(now) {
+            let after_rev = ws.group_chat.latest_rev();
+            crate::extensions::group_chat::spawn_fetch_messages(
+                project_id, group_id, after_rev, &client, &handle, emit,
+            );
+        }
     }
 
     /// 设置某按钮的悬停目标（`true`=进入,`false`=离开）；动画由
@@ -3433,6 +3530,32 @@ impl App {
                         id: TODO_CONTENT_ID_OFFSET,
                         url: format!(
                             "dozer://todo-content/host.html?theme={}",
+                            crate::preview::scheme_query_value()
+                        ),
+                        visible: !app_modal_open,
+                        editor_binding: None,
+                        loading_generation: None,
+                        park_offscreen: false,
+                    };
+                    out.push((spec, bounds));
+                }
+                continue;
+            }
+            if kind == PanelKind::GroupChat {
+                // 已失败(加载超时/渲染异常)时不挂载,原生占位页接管。
+                let content_desired = self.group_chat_webview.failed().is_none();
+                let bounds = crate::webview_geometry::group_chat_content_pane_bounds_for(
+                    side,
+                    window_width,
+                    window_height,
+                    &self.shell_state(),
+                    content_desired,
+                );
+                if bounds.2 > 0.0 && bounds.3 > 0.0 {
+                    let spec = WebviewSpec {
+                        id: GROUP_CHAT_CONTENT_ID_OFFSET,
+                        url: format!(
+                            "dozer://group-chat-content/host.html?theme={}",
                             crate::preview::scheme_query_value()
                         ),
                         visible: !app_modal_open,

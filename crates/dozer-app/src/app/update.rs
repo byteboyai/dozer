@@ -104,6 +104,7 @@ impl App {
             if let WorkspaceSlot::Loaded(ws) = slot {
                 pending.extend(ws.files.take_outbox());
                 pending.extend(ws.todo.take_outbox());
+                pending.extend(ws.group_chat.take_outbox());
                 pending.extend(ws.ssh.take_outbox());
                 pending.extend(ws.database.take_outbox());
                 pending.extend(ws.agent_context.take_outbox());
@@ -1783,6 +1784,18 @@ impl App {
                 }
                 other => self.todo_message(other),
             },
+            Message::GroupChatContentWebviewEvent(event) => self.group_chat_content_event(event),
+            Message::GroupChatShell(crate::extensions::group_chat::ShellMessage::Retry) => {
+                self.group_chat_webview.clear_failed();
+            }
+            Message::GroupChat(msg) => {
+                let project_id = msg.project_id();
+                let mut effects = Vec::new();
+                self.with_project(project_id, |ws, _io| {
+                    effects = crate::extensions::group_chat::update(&mut ws.group_chat, msg);
+                });
+                self.run_group_chat_effects(project_id, effects);
+            }
             Message::TodoDetailLoaded(idx, turns) => {
                 self.with_focused_project(move |ws, _io| {
                     if ws.todo.detail_open_idx() == Some(idx) {
@@ -4712,6 +4725,98 @@ impl App {
         }
     }
 
+    /// 群聊 webview 事件入口。`Ready`/`Failed` 在这里直接处理;其余事件交给
+    /// 纯函数 `group_chat::route_event` 校验并映射成命令,再派发:`SelectGroup`
+    /// 同步改状态、`OpenTodo` 显示 Todo 面板,其余异步命令走 `spawn_command`。
+    pub(crate) fn group_chat_content_event(
+        &mut self,
+        event: crate::extensions::group_chat::GroupChatWebviewEvent,
+    ) {
+        use crate::extensions::group_chat::{self as gc, GroupChatWebviewEvent as Ev};
+        match &event {
+            Ev::Ready => {
+                self.group_chat_webview.set_ready(true);
+                return;
+            }
+            Ev::Failed { reason } => {
+                dozer_core::log_warn!(
+                    gc::LOG,
+                    panel = "group_chat",
+                    %reason,
+                    "群聊内容页渲染失败,回落原生占位"
+                );
+                self.group_chat_webview.set_failed(reason.clone());
+                return;
+            }
+            _ => {}
+        }
+        let Some(project_id) = self.active_project_id else {
+            return;
+        };
+        let cmd = self
+            .active_workspace()
+            .and_then(|ws| gc::route_event(&ws.group_chat, event));
+        if let Some(cmd) = cmd {
+            self.group_chat_command(project_id, cmd);
+        }
+    }
+
+    fn group_chat_command(&mut self, project_id: i64, cmd: crate::extensions::group_chat::Command) {
+        use crate::extensions::group_chat::{self as gc, Command};
+        match cmd {
+            Command::SelectGroup { group_id } => {
+                let mut effects = Vec::new();
+                self.with_project(project_id, |ws, _io| {
+                    effects = ws.group_chat.select(group_id);
+                });
+                self.run_group_chat_effects(project_id, effects);
+            }
+            Command::OpenTodo { .. } => {
+                // 只确保 Todo 面板看得见;不做"定位到某条待办"(Todo 面板没有这个入口,
+                // 且不在本功能范围)。不能用 `panel_select`:它对已激活的面板是"收起",
+                // 还会武装图标栏拖拽。
+                self.show_panel(PanelKind::Todo);
+            }
+            other => {
+                let proxy = self.proxy.clone();
+                gc::spawn_command(
+                    project_id,
+                    other,
+                    &self.client.clone(),
+                    &self.handle.clone(),
+                    move |m| {
+                        let _ = proxy.send_event(Message::GroupChat(m));
+                    },
+                );
+            }
+        }
+    }
+
+    fn run_group_chat_effects(
+        &mut self,
+        project_id: i64,
+        effects: Vec<crate::extensions::group_chat::Effect>,
+    ) {
+        use crate::extensions::group_chat::{self as gc, Effect};
+        for effect in effects {
+            match effect {
+                Effect::FetchMessages { group_id } => {
+                    let proxy = self.proxy.clone();
+                    gc::spawn_fetch_messages(
+                        project_id,
+                        group_id,
+                        0,
+                        &self.client.clone(),
+                        &self.handle.clone(),
+                        move |m| {
+                            let _ = proxy.send_event(Message::GroupChat(m));
+                        },
+                    );
+                }
+            }
+        }
+    }
+
     pub(crate) fn browser_bookmarks_loaded(
         &mut self,
         pid: Option<i64>,
@@ -5024,6 +5129,102 @@ impl App {
         }
     }
 
+    /// 面板专属的"切入时动作"(刷新/重载/标记过期等)。图标栏点击(`panel_select`)
+    /// 与程序化显示(`show_panel`)共用同一份,保证两条路径切进同一个面板时行为一致。
+    fn fire_panel_switch_in(&mut self, kind: PanelKind) {
+        match kind {
+            PanelKind::GitLog => self.sync_git_log_to_active_project(),
+            PanelKind::Todo => {
+                if let Some(project_id) = self.active_project_id {
+                    let client = self.client.clone();
+                    let handle = self.handle.clone();
+                    let proxy = self.proxy.clone();
+                    let emit = move |m: todo::Message| {
+                        let _ = proxy.send_event(Message::Todo(m));
+                    };
+                    let emit_todos = emit.clone();
+                    todo::request_todos_refresh(project_id, &client, &handle, emit_todos);
+                    todo::request_categories_refresh(project_id, &client, &handle, emit);
+                }
+            }
+            PanelKind::Database => self.with_focused_project(|ws, _io| {
+                if let Some(project) = ws.project.as_ref() {
+                    database::reload_from_disk(
+                        &mut ws.database,
+                        std::path::Path::new(&project.path),
+                    );
+                }
+            }),
+            PanelKind::Project => {
+                self.ensure_project_readme_and_reveal();
+                if let Some(project_id) = self.active_project_id {
+                    let client = self.client.clone();
+                    let handle = self.handle.clone();
+                    let proxy = self.proxy.clone();
+                    let emit = move |m: project::Message| {
+                        let _ = proxy.send_event(Message::Project(m));
+                    };
+                    project::request_memories_refresh(project_id, &client, &handle, emit);
+                }
+            }
+            PanelKind::Ssh => self.with_focused_project(|ws, _io| {
+                if let Some(project) = ws.project.as_ref() {
+                    ssh::reload_from_disk(&mut ws.ssh, std::path::Path::new(&project.path));
+                }
+            }),
+            PanelKind::Usage => self.with_focused_project(|ws, io| {
+                ws.usage.set_loading(true);
+                ws.spawn_usage_refresh(io);
+            }),
+            // 代码健康度面板切入时只读上次落盘结果，不自动扫描（spec：
+            // 手动触发，与 Usage 的"打开即自动扫"是明确的行为差异）。
+            PanelKind::CodeHealth => self.with_focused_project(|ws, io| {
+                ws.spawn_codehealth_load(io);
+            }),
+            // 会话列表原本只在项目打开时和回合结束时刷新,切进这个面板时
+            // 没有任何补救手段——离开一段时间再切回来看到的还是上次的
+            // 快照。补一次切入即刷新,同 `Usage` 面板的既有口径。
+            PanelKind::Conversations => self.with_focused_project(|ws, io| {
+                ws.spawn_conversations_refresh(io);
+            }),
+            // 切入时刷新群列表(别的入口可能新增过群);`mark_stale` 不清已有内容,
+            // 切入瞬间不会闪成"没有群聊"。实际加载由 `poll_group_chat_if_active` 发起。
+            PanelKind::GroupChat => self.with_focused_project(|ws, _io| {
+                ws.group_chat.mark_stale();
+            }),
+            PanelKind::Files | PanelKind::Web | PanelKind::Agent => {}
+        }
+    }
+
+    /// 程序化"确保这个面板看得见"(如群聊里点"已转待办 ↗"去 Todo)。与图标栏点击
+    /// (`panel_select`)的区别:**绝不收起**、**不武装图标栏拖拽**——点已激活的图标
+    /// 是"退回未选中并收起",且按下即武装拖拽,这两个副作用都不该由程序化跳转触发。
+    /// 逻辑在纯函数 `rail::show_panel_in`(带单测)。
+    pub(crate) fn show_panel(&mut self, kind: PanelKind) {
+        let side = self.shell_layout.rail_layout.side_of(kind);
+        let (view, collapsed) = match side {
+            Side::Left => (self.left_view, self.left_collapsed),
+            Side::Right => (self.right_view, self.right_collapsed),
+        };
+        let out = rail::show_panel_in(side, kind, view, collapsed, self.maximized);
+        if !out.changed {
+            return;
+        }
+        match side {
+            Side::Left => {
+                self.left_view = out.view;
+                self.left_collapsed = out.collapsed;
+            }
+            Side::Right => {
+                self.right_view = out.view;
+                self.right_collapsed = out.collapsed;
+            }
+        }
+        self.maximized = out.maximized;
+        self.fire_panel_switch_in(kind);
+        self.on_shell_layout_changed();
+    }
+
     pub(crate) fn panel_select(&mut self, kind: PanelKind) {
         let side = self.shell_layout.rail_layout.side_of(kind);
         // 武装拖拽态:按住图标＝准备拖(同 `TabDrag` 的"按下即武装"手法)。
@@ -5087,63 +5288,7 @@ impl App {
             Side::Right => switched,
         };
         if fire {
-            match kind {
-                PanelKind::GitLog => self.sync_git_log_to_active_project(),
-                PanelKind::Todo => {
-                    if let Some(project_id) = self.active_project_id {
-                        let client = self.client.clone();
-                        let handle = self.handle.clone();
-                        let proxy = self.proxy.clone();
-                        let emit = move |m: todo::Message| {
-                            let _ = proxy.send_event(Message::Todo(m));
-                        };
-                        let emit_todos = emit.clone();
-                        todo::request_todos_refresh(project_id, &client, &handle, emit_todos);
-                        todo::request_categories_refresh(project_id, &client, &handle, emit);
-                    }
-                }
-                PanelKind::Database => self.with_focused_project(|ws, _io| {
-                    if let Some(project) = ws.project.as_ref() {
-                        database::reload_from_disk(
-                            &mut ws.database,
-                            std::path::Path::new(&project.path),
-                        );
-                    }
-                }),
-                PanelKind::Project => {
-                    self.ensure_project_readme_and_reveal();
-                    if let Some(project_id) = self.active_project_id {
-                        let client = self.client.clone();
-                        let handle = self.handle.clone();
-                        let proxy = self.proxy.clone();
-                        let emit = move |m: project::Message| {
-                            let _ = proxy.send_event(Message::Project(m));
-                        };
-                        project::request_memories_refresh(project_id, &client, &handle, emit);
-                    }
-                }
-                PanelKind::Ssh => self.with_focused_project(|ws, _io| {
-                    if let Some(project) = ws.project.as_ref() {
-                        ssh::reload_from_disk(&mut ws.ssh, std::path::Path::new(&project.path));
-                    }
-                }),
-                PanelKind::Usage => self.with_focused_project(|ws, io| {
-                    ws.usage.set_loading(true);
-                    ws.spawn_usage_refresh(io);
-                }),
-                // 代码健康度面板切入时只读上次落盘结果，不自动扫描（spec：
-                // 手动触发，与 Usage 的"打开即自动扫"是明确的行为差异）。
-                PanelKind::CodeHealth => self.with_focused_project(|ws, io| {
-                    ws.spawn_codehealth_load(io);
-                }),
-                // 会话列表原本只在项目打开时和回合结束时刷新,切进这个面板时
-                // 没有任何补救手段——离开一段时间再切回来看到的还是上次的
-                // 快照。补一次切入即刷新,同 `Usage` 面板的既有口径。
-                PanelKind::Conversations => self.with_focused_project(|ws, io| {
-                    ws.spawn_conversations_refresh(io);
-                }),
-                PanelKind::Files | PanelKind::Web | PanelKind::Agent => {}
-            }
+            self.fire_panel_switch_in(kind);
         }
         // 图标栏点击一律退出放大态。放大态浮层不拦图标栏上的点击
         // (遮罩两侧垫的是无交互 Space,点击穿到下层图标按钮),所以

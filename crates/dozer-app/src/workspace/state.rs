@@ -495,6 +495,8 @@ pub struct Workspace {
     pub(crate) pending_editor_unfocus: bool,
     /// Todo 面板 per-project 状态——见 `extensions::todo::WorkspaceState`。
     pub(crate) todo: todo::WorkspaceState,
+    /// 群聊面板 per-project 状态——见 `extensions::group_chat::WorkspaceState`。
+    pub(crate) group_chat: crate::extensions::group_chat::WorkspaceState,
     /// 数据库面板 per-project 状态(当前项目的数据源列表 + 编辑草稿 + 测试
     /// 状态 map)——见 `extensions::database::WorkspaceState`。
     pub(crate) database: database::WorkspaceState,
@@ -726,6 +728,7 @@ impl Workspace {
             pending_close_tab: None,
             pending_editor_unfocus: false,
             todo: todo::WorkspaceState::default(),
+            group_chat: crate::extensions::group_chat::WorkspaceState::default(),
             database: database::WorkspaceState::default(),
             ssh: ssh::WorkspaceState::default(),
             search: search::WorkspaceState::default(),
@@ -1100,6 +1103,7 @@ impl Workspace {
         self.conversations = conversations::WorkspaceState::default();
         self.usage = usage::WorkspaceState::default();
         self.codehealth = codehealth::WorkspaceState::default();
+        self.group_chat = crate::extensions::group_chat::WorkspaceState::default();
         let project_id = project.id;
         let repo_path = PathBuf::from(&project.path);
         self.project_panel = project::WorkspaceState::new(

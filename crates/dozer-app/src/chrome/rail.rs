@@ -1,5 +1,5 @@
 // crates/dozer-app/src/rail.rs
-//! 图标栏(Rail):11 个面板挂载的两条侧栏,支持点击切换、同栏重排、跨栏
+//! 图标栏(Rail):12 个面板挂载的两条侧栏,支持点击切换、同栏重排、跨栏
 //! 拖拽换边。类型 + 纯逻辑 + 槽位动画 + 渲染都在这个模块——不是
 //! `extensions/` 那种私有 Message+State+update+view 的 extension 形态,
 //! `rail_layout`/`rail_drag`/`rail_slot_anims` 三个字段仍然挂在
@@ -7,7 +7,7 @@
 //! Rail 逻辑物理搬出 `app.rs`。见
 //! `docs/superpowers/specs/2026-08-21-rail-extraction-pilot-design.md`。
 
-use crate::app::{App, HoverId, Message, PanelKind, Side};
+use crate::app::{App, HoverId, MaximizedPane, Message, PanelKind, Side};
 use crate::theme;
 use byteui::interaction::icons;
 use iced_widget::core::mouse;
@@ -84,7 +84,7 @@ impl RailLayout {
     }
 
     /// 给定面板,反查它当前挂在哪条栏。`RailLayout` 的不变式(见
-    /// `sanitize_rail_layout`)保证 11 个面板不重不漏分布在两条栏,
+    /// `sanitize_rail_layout`)保证 12 个面板不重不漏分布在两条栏,
     /// 所以这里的 `expect` 不会在合法状态下触发——`RailLayout` 一旦
     /// 通不过消毒就已经在 `layout::load_from` 里回落 `default()` 了,
     /// 不会带着"某个面板哪条栏都不在"的坏数据流到这里。
@@ -110,6 +110,57 @@ pub(crate) fn panel_mirrored_in(rail: &RailLayout, kind: PanelKind) -> bool {
     rail.side_of(kind) != kind.default_side()
 }
 
+/// `show_panel_in` 的结果。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ShowPanel {
+    pub view: PanelKind,
+    pub collapsed: bool,
+    pub maximized: Option<MaximizedPane>,
+    /// 该侧原本显示的是别的面板(需要触发切入动作的"真切换")。
+    pub switched: bool,
+    /// 是否有任何状态要改;`false` = 该面板本来就看得见,什么都不用做。
+    pub changed: bool,
+}
+
+/// "把某面板显示出来"的纯逻辑——与图标栏点击(`App::panel_select`)的区别:
+/// **绝不收起**。点已激活的图标是"退回未选中并收起",而程序化跳转(如群聊里点
+/// "已转待办 ↗" 去 Todo)要的是"确保看得见":已经看得见就什么都不做,被收起就
+/// 展开,显示的是别的就切过去,被另一侧的放大态盖住就退出放大态。
+///
+/// 自由函数单纯是为了让单测不必构造完整 `App`(同 `panel_mirrored_in`)。
+/// `side` 是 `kind` 所在栏;`view`/`collapsed` 是该栏当前状态。
+pub(crate) fn show_panel_in(
+    side: Side,
+    kind: PanelKind,
+    view: PanelKind,
+    collapsed: bool,
+    maximized: Option<MaximizedPane>,
+) -> ShowPanel {
+    let visible = view == kind && !collapsed;
+    let covered = match maximized {
+        Some(MaximizedPane::Left) => side != Side::Left,
+        Some(MaximizedPane::Right) => side != Side::Right,
+        None => false,
+    };
+    if visible && !covered {
+        return ShowPanel {
+            view,
+            collapsed,
+            maximized,
+            switched: false,
+            changed: false,
+        };
+    }
+    ShowPanel {
+        view: kind,
+        collapsed: false,
+        // 与 `panel_select` 同口径:改变本侧显示内容/展开状态时,放大态不该存活。
+        maximized: None,
+        switched: view != kind,
+        changed: true,
+    }
+}
+
 impl Default for RailLayout {
     fn default() -> Self {
         Self {
@@ -124,6 +175,7 @@ impl Default for RailLayout {
             ],
             right: vec![
                 PanelKind::Agent,
+                PanelKind::GroupChat,
                 PanelKind::Conversations,
                 PanelKind::Usage,
                 PanelKind::CodeHealth,
@@ -132,18 +184,52 @@ impl Default for RailLayout {
     }
 }
 
-/// `RailLayout` 的消毒:任一栏为空,或两侧合计不是恰 11 个不重复的
-/// `PanelKind`(手改/版本不一致导致的坏数据),整个回落 `default()`。
-/// 不做部分修复——缺一个面板就补在默认栏这种中间态比"直接用默认值"
-/// 更难排查。
+/// 旧版(没有群聊面板)落盘的布局迁移:合计恰为其余 11 个不重复面板、且不含
+/// `GroupChat` 时,把 `GroupChat` 插到 `Agent` 之后(同一栏)。找不到 `Agent`
+/// (理论上不会,上面的"恰 11 个不重复"已排除)就追加到右栏末尾。不满足条件
+/// 的原样返回,交给后面的常规校验判定坏数据。
+///
+/// 不迁移的后果:升级后所有存过布局的用户都会被"恰 12 个"校验判为坏数据,
+/// 整体回落默认,丢掉自定义的换栏。
+pub(crate) fn migrate_legacy_rail(mut rail: RailLayout) -> RailLayout {
+    let has_group_chat = rail
+        .left
+        .iter()
+        .chain(rail.right.iter())
+        .any(|k| *k == PanelKind::GroupChat);
+    if has_group_chat {
+        return rail;
+    }
+    let mut all: Vec<_> = rail.left.iter().chain(rail.right.iter()).collect();
+    all.sort_by_key(|k| format!("{k:?}"));
+    all.dedup();
+    if all.len() != 11 || rail.left.len() + rail.right.len() != 11 {
+        return rail;
+    }
+    for side in [Side::Left, Side::Right] {
+        let panels = rail.side_mut(side);
+        if let Some(i) = panels.iter().position(|k| *k == PanelKind::Agent) {
+            panels.insert(i + 1, PanelKind::GroupChat);
+            return rail;
+        }
+    }
+    rail.right.push(PanelKind::GroupChat);
+    rail
+}
+
+/// `RailLayout` 的消毒:先做旧布局迁移;然后任一栏为空,或两侧合计不是恰 12 个
+/// 不重复的 `PanelKind`(手改/版本不一致导致的坏数据),整个回落 `default()`。
+/// 不做部分修复——缺一个面板就补在默认栏这种中间态比"直接用默认值"更难排查
+/// (旧版缺群聊的迁移是唯一例外,见 `migrate_legacy_rail`)。
 pub(crate) fn sanitize_rail_layout(rail: RailLayout) -> RailLayout {
+    let rail = migrate_legacy_rail(rail);
     if rail.left.is_empty() || rail.right.is_empty() {
         return RailLayout::default();
     }
     let mut all: Vec<_> = rail.left.iter().chain(rail.right.iter()).collect();
     all.sort_by_key(|k| format!("{k:?}"));
     all.dedup();
-    if all.len() != 11 || rail.left.len() + rail.right.len() != 11 {
+    if all.len() != 12 || rail.left.len() + rail.right.len() != 12 {
         return RailLayout::default();
     }
     rail
@@ -484,7 +570,7 @@ pub(crate) fn icon_rail(
         .into()
 }
 
-/// 面板 → (图标, 图标栏 tooltip 文案)。11 个 `PanelKind` variant 逐一
+/// 面板 → (图标, 图标栏 tooltip 文案)。12 个 `PanelKind` variant 逐一
 /// 对应,顺序与 `PanelKind` 定义顺序一致,不代表渲染顺序(渲染顺序看
 /// `RailLayout`)。
 fn panel_meta(kind: PanelKind) -> (icons::IconKind, &'static str) {
@@ -497,6 +583,7 @@ fn panel_meta(kind: PanelKind) -> (icons::IconKind, &'static str) {
         PanelKind::Ssh => (icons::IconKind::Server, "SSH 主机"),
         PanelKind::Web => (icons::IconKind::Globe, "浏览器"),
         PanelKind::Agent => (icons::IconKind::Brain, "代理"),
+        PanelKind::GroupChat => (icons::IconKind::SquareSparkles, "群聊"),
         PanelKind::Conversations => (icons::IconKind::BotMessageSquare, "对话"),
         PanelKind::Usage => (icons::IconKind::BarChart3, "用量"),
         PanelKind::CodeHealth => (icons::IconKind::SquareActivity, "代码健康度"),
@@ -673,17 +760,175 @@ mod tests {
         );
     }
 
-    /// `RailLayout::default()` 把 11 个面板不重不漏分到左右两栏,
-    /// 与现状 7/4 分组逐一对应(防漂移锚)。
+    /// `RailLayout::default()` 把 12 个面板不重不漏分到左右两栏,
+    /// 与现状 7/5 分组逐一对应(防漂移锚)。
     #[test]
     fn rail_layout_default_covers_all_panels_without_duplicates() {
         let rail = RailLayout::default();
         assert_eq!(rail.left.len(), 7);
-        assert_eq!(rail.right.len(), 4);
+        assert_eq!(rail.right.len(), 5);
         let mut all: Vec<_> = rail.left.iter().chain(rail.right.iter()).collect();
         all.sort_by_key(|k| format!("{k:?}"));
         all.dedup();
-        assert_eq!(all.len(), 11, "11 个面板不重不漏分到左右两栏");
+        assert_eq!(all.len(), 12, "12 个面板不重不漏分到左右两栏");
+    }
+
+    // ---- show_panel_in:程序化显示面板,绝不收起 ----
+
+    #[test]
+    fn show_panel_does_nothing_when_already_visible() {
+        let out = show_panel_in(Side::Left, PanelKind::Todo, PanelKind::Todo, false, None);
+        assert!(!out.changed);
+        assert_eq!(out.view, PanelKind::Todo);
+        assert!(!out.collapsed);
+    }
+
+    /// 回归:此前用 `panel_select` 跳转,Todo 已展开时会被收起。
+    #[test]
+    fn show_panel_never_collapses_an_already_open_panel() {
+        let out = show_panel_in(Side::Left, PanelKind::Todo, PanelKind::Todo, false, None);
+        assert!(!out.collapsed, "已展开的面板不能被收起");
+    }
+
+    #[test]
+    fn show_panel_keeps_own_side_maximized_when_already_visible() {
+        let out = show_panel_in(
+            Side::Left,
+            PanelKind::Todo,
+            PanelKind::Todo,
+            false,
+            Some(MaximizedPane::Left),
+        );
+        assert!(!out.changed);
+        assert_eq!(out.maximized, Some(MaximizedPane::Left));
+    }
+
+    #[test]
+    fn show_panel_expands_a_collapsed_active_panel_without_a_switch() {
+        let out = show_panel_in(Side::Left, PanelKind::Todo, PanelKind::Todo, true, None);
+        assert!(out.changed && !out.switched);
+        assert!(!out.collapsed);
+    }
+
+    #[test]
+    fn show_panel_switches_when_side_shows_another_panel() {
+        let out = show_panel_in(Side::Left, PanelKind::Todo, PanelKind::Files, false, None);
+        assert!(out.changed && out.switched);
+        assert_eq!(out.view, PanelKind::Todo);
+        assert!(!out.collapsed);
+    }
+
+    #[test]
+    fn show_panel_leaves_maximized_of_the_other_side_when_it_covers_us() {
+        // 右侧放大盖住了左侧的 Todo:要退出放大态才看得见。
+        let out = show_panel_in(
+            Side::Left,
+            PanelKind::Todo,
+            PanelKind::Todo,
+            false,
+            Some(MaximizedPane::Right),
+        );
+        assert!(out.changed && !out.switched);
+        assert_eq!(out.maximized, None);
+        assert_eq!(out.view, PanelKind::Todo);
+    }
+
+    #[test]
+    fn show_panel_switch_clears_maximized_like_panel_select() {
+        let out = show_panel_in(
+            Side::Right,
+            PanelKind::Todo,
+            PanelKind::Agent,
+            false,
+            Some(MaximizedPane::Right),
+        );
+        assert!(out.switched);
+        assert_eq!(out.maximized, None);
+    }
+
+    #[test]
+    fn group_chat_sits_right_after_agent_by_default() {
+        let rail = RailLayout::default();
+        let i = rail
+            .right
+            .iter()
+            .position(|k| *k == PanelKind::Agent)
+            .unwrap();
+        assert_eq!(rail.right[i + 1], PanelKind::GroupChat);
+        assert_eq!(rail.side_of(PanelKind::GroupChat), Side::Right);
+        assert_eq!(PanelKind::GroupChat.default_side(), Side::Right);
+    }
+
+    /// Review Focus 1:升级前保存的 11 面板布局不得被判成坏数据整体重置。
+    #[test]
+    fn legacy_eleven_panel_layout_gets_group_chat_inserted_after_agent() {
+        let legacy = RailLayout {
+            left: vec![
+                PanelKind::Project,
+                PanelKind::Todo,
+                PanelKind::Files,
+                PanelKind::GitLog,
+                PanelKind::Database,
+                PanelKind::Ssh,
+                PanelKind::Web,
+            ],
+            right: vec![
+                PanelKind::Agent,
+                PanelKind::Conversations,
+                PanelKind::Usage,
+                PanelKind::CodeHealth,
+            ],
+        };
+        let out = sanitize_rail_layout(legacy);
+        assert_eq!(out, RailLayout::default());
+    }
+
+    #[test]
+    fn legacy_customized_layout_keeps_customization() {
+        // 用户把 Agent 拖到了左栏、Files 拖到了右栏。
+        let legacy = RailLayout {
+            left: vec![
+                PanelKind::Project,
+                PanelKind::Agent,
+                PanelKind::Todo,
+                PanelKind::GitLog,
+                PanelKind::Database,
+                PanelKind::Ssh,
+                PanelKind::Web,
+            ],
+            right: vec![
+                PanelKind::Files,
+                PanelKind::Conversations,
+                PanelKind::Usage,
+                PanelKind::CodeHealth,
+            ],
+        };
+        let out = sanitize_rail_layout(legacy.clone());
+        assert_eq!(out.left[1], PanelKind::Agent);
+        assert_eq!(out.left[2], PanelKind::GroupChat, "跟在 Agent 后面,同一栏");
+        assert_eq!(out.right, legacy.right, "其它栏不动");
+        assert_eq!(out.left.len() + out.right.len(), 12);
+    }
+
+    #[test]
+    fn already_twelve_panel_layout_is_untouched() {
+        let rail = RailLayout::default();
+        assert_eq!(sanitize_rail_layout(rail.clone()), rail);
+    }
+
+    #[test]
+    fn eleven_panels_with_duplicate_still_falls_back_to_default() {
+        let bad = RailLayout {
+            left: vec![PanelKind::Files, PanelKind::Files],
+            right: vec![PanelKind::Agent],
+        };
+        assert_eq!(sanitize_rail_layout(bad), RailLayout::default());
+    }
+
+    #[test]
+    fn group_chat_has_rail_meta() {
+        let (_icon, tip) = panel_meta(PanelKind::GroupChat);
+        assert_eq!(tip, "群聊");
     }
 
     #[test]
@@ -702,7 +947,7 @@ mod tests {
     }
 
     /// `sanitize_rail_layout` 对坏数据回落默认:任一栏为空、面板重复、
-    /// 面板数不是 10——任一情形都不做部分修复。
+    /// 面板数不是 12——任一情形都不做部分修复。
     #[test]
     fn sanitize_rail_layout_falls_back_to_default_on_bad_data() {
         // 左侧为空。
@@ -712,7 +957,7 @@ mod tests {
         };
         assert_eq!(sanitize_rail_layout(empty_left), RailLayout::default());
 
-        // 面板数不是 10。
+        // 面板数不是 12。
         let too_few = RailLayout {
             left: vec![PanelKind::Files],
             right: vec![PanelKind::Agent],

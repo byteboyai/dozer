@@ -128,6 +128,8 @@ pub enum Message {
     /// 拦截处理,见 `update()` 对应分支),内核只转发不解读——见
     /// `extensions::todo::Message`。
     Todo(todo::Message),
+    /// 群聊面板的消息(见 `extensions::group_chat::Message`)。
+    GroupChat(crate::extensions::group_chat::Message),
     /// 数据库面板的全部消息。`TestConnectionResult` 特化分支内核直接拦截
     /// 处理(带 `project_id`,不能按当前聚焦项目路由),其余走通配分发。
     Database(database::Message),
@@ -619,6 +621,10 @@ pub enum Message {
     CodeHealthContentWebviewEvent(crate::extensions::codehealth::CodeHealthWebviewEvent),
     /// Todo 内容区 webview 发回的事件(固定单槽,按固定 webview id 识别)。
     TodoContentWebviewEvent(crate::extensions::todo::TodoWebviewEvent),
+    /// 群聊面板 webview 发回的事件(固定单槽,按固定 webview id 识别)。
+    GroupChatContentWebviewEvent(crate::extensions::group_chat::GroupChatWebviewEvent),
+    /// 群聊原生壳(失败占位页)的"重试"。
+    GroupChatShell(crate::extensions::group_chat::ShellMessage),
     /// review-trace(会话审阅)webview 发回的已解析事件(目前只有
     /// `document_loaded`)。不带 binding——`ws.review` 是"当前聚焦项目"的
     /// 直接字段,不按 project_id/tab_id 路由,没有身份需要校验。

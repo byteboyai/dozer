@@ -47,7 +47,7 @@ GitHub 上已有同类项目，均为独立聊天工具，无一站在"委托人
 
 1. **`dozer-core`**：共享类型（群、成员、消息、状态）与 UDS 协议新增的请求/事件。
 2. **`dozerd`**：群聊权威状态与调度。持久化消息、解析 `@`、按序调用无头适配器、写回回复。放 dozerd 是因为 agent 启动/托管本就归它，GUI 重启不丢进行中的一轮讨论。
-3. **`dozer-app`**：`extensions/group_chat`，仅展示与输入；不持有 agent 进程；失败经 `outbox` → `App::push_toast` 路径（见 CLAUDE.md Toast 约定）。
+3. **`dozer-app`**：`extensions/group_chat`，仅展示与输入；不持有 agent 进程；失败经 `outbox` → `App::push_toast` 路径（见 CLAUDE.md Toast 约定）。轮询由 `about_to_wait` 定时唤醒驱动（不再起每群一个循环任务），**仅在面板可见且有发言进行中时运行**，空闲时自降频退避。
 
 ### 4.2 一轮发言的数据流
 
@@ -96,9 +96,9 @@ human 发消息（含 `@claude @codex`）→ dozerd 落库该消息并为每个�
 ## 9. 界面（webview）
 
 - 宿主接线对照 Todo / Usage 的 webview 面板做法，细节在计划阶段确认。
-- 布局：群切换条（多群、新建入口）→ 成员条（每成员一个色块 chip，可添加/编辑角色）→ 消息流 → 底部输入框（`@` 补全）。
-- `@` 补全与成员选择在网页 DOM 内，不涉及原生浮层；新建群、编辑成员等对话框走标准对话框独立窗口机制。
-- 视觉：human 消息与发送按钮用金色（甲方动作专属）；各 agent 成员用青/绿等区分；正文系统字体，仅代码块用 JetBrains Mono；渲染 Markdown。发言中用现有 loading 动画（不新增 Spinner）；agent 消息有"停止"，失败有"重试"。
+- 布局：面板为**单列整宽 webview，无原生列表列**（复用 `PairPane` 但 `list_visible: false`，`pair_split_ratio(GroupChat)` 返回 `None`）。自上而下：群切换条（多群、新建入口）→ 成员条（每成员一个色块 chip，可添加/编辑角色）→ 消息流 → 底部输入框（`@` 补全）。
+- `@` 补全与成员选择在网页 DOM 内，不涉及原生浮层；**新建群、添加/编辑成员、删除确认、转为待办也都是 webview 内 DOM 对话框**（不再走标准对话框独立窗口机制）。
+- 视觉：human 消息与发送按钮用金色（甲方动作专属）；各 agent 成员用青/绿等区分；正文用系统字体，代码块目前用系统等宽字体（见 §13）；Markdown 渲染采用**最小安全子集，原始 HTML 与链接一律以纯文本显示**。发言中用现有 loading 动画（不新增 Spinner）；agent 消息有"停止"，失败有"重试"。
 - 遵循核心原则：消息只读展示，不提供编辑入口。
 
 ## 10. 转为待办
@@ -112,7 +112,8 @@ human 发消息（含 `@claude @codex`）→ dozerd 落库该消息并为每个�
 ## 11. 错误与空状态
 
 - dozerd 不可用：沿用顶栏 `daemon_badge`，输入框置灰。
-- 创建群失败等一次性事件：走 Toast。
+- 创建群失败等一次性事件：走 Toast（对话框提交后**立即关闭**，失败由 Rust 侧经 `outbox` → Toast 反馈，不在对话框内停留）。
+- 成员名称在前端先做**即时校验**（镜像后端 `dozerd::group_mentions::validate_handle` 规则，含空/超长/非法字符/重复），提交前就能给出提示；后端仍为权威，两侧规则须同步。
 - 无成员：显示引导。
 - 无 `@` 的消息：轻提示"无人被点名，仅作为上下文"。
 - 日志来源名用面板名 `group_chat`（`app/state.rs` 测试强制）；不记录敏感内容。
@@ -129,4 +130,6 @@ human 发消息（含 `@claude @codex`）→ dozerd 落库该消息并为每个�
 - 群与消息的具体持久化形态（读 dozerd 既有存储后定）。
 - 总字符预算 / 单条上限 / 单次发言超时的具体数值（需实测，不在设计里定死）。
 - 无头调用 session 污染已通过 `--no-session-persistence` / `--ephemeral` 解决（见 8 节核实项 3）。
+- **群聊代码块字体**：目前用系统等宽；是否改用 JetBrains Mono 待用户决定（需扩 host CSP 的 `font-src` 并拷贝字体到 `assets/group-chat-content/`）。
+- **轮询间隔** `POLL_INTERVAL = 500ms`（带 `POLL_BACKOFF = 5s` 退避）为初值，待实测调整。
 - 实现须在独立分支进行，审阅后合并（见仓库惯例）。

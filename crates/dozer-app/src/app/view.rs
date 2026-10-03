@@ -12,6 +12,7 @@ use crate::extensions::database;
 use crate::extensions::files;
 use crate::extensions::footbar;
 use crate::extensions::git_log;
+use crate::extensions::group_chat;
 use crate::extensions::project;
 use crate::extensions::ssh;
 use crate::extensions::todo;
@@ -1061,6 +1062,12 @@ pub(crate) fn panel_body<'a>(
                 .width(Length::Fill)
                 .into()
             }
+        }
+        PanelKind::GroupChat => {
+            // 单列满宽:webview 盖在原生壳之上(见 `group_chat::content_pane`);
+            // 失败时壳里显示原因与"重试"。
+            group_chat::content_pane(app.group_chat_webview.failed(), zone_pane_border(zone, lc))
+                .map(Message::GroupChatShell)
         }
     }
 }
