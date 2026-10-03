@@ -1064,10 +1064,62 @@ pub(crate) fn panel_body<'a>(
             }
         }
         PanelKind::GroupChat => {
-            // 单列满宽:webview 盖在原生壳之上(见 `group_chat::content_pane`);
-            // 失败时壳里显示原因与"重试"。
-            group_chat::content_pane(app.group_chat_webview.failed(), zone_pane_border(zone, lc))
-                .map(Message::GroupChatShell)
+            // 两栏:左侧聊天详情(webview 盖在原生壳之上,见
+            // `group_chat::content_pane`)+ 右侧原生群列表(选择/新建/删除群)。
+            // 群列表收起时详情独占整条配对宽,同 Usage/CodeHealth。
+            if app.list_collapsed(PanelKind::GroupChat) {
+                return group_chat::content_pane(
+                    app.group_chat_webview.failed(),
+                    Length::Fill,
+                    zone_pane_border(zone, ac),
+                )
+                .map(Message::GroupChatShell);
+            }
+            let (list_portion, content_portion) = split_portions(app.dims.group_chat_split);
+            let content_pane = group_chat::content_pane(
+                app.group_chat_webview.failed(),
+                Length::FillPortion(content_portion),
+                zone_pane_border(zone, lc),
+            )
+            .map(Message::GroupChatShell);
+            let list_pane = group_chat::list_pane(
+                &ws.group_chat,
+                ws.project.as_ref().map(|p| p.id).unwrap_or_default(),
+                Length::FillPortion(list_portion),
+                zone_pane_border(zone, rc),
+            )
+            .map(Message::GroupChat);
+            let content_bg = byteui::theme::color::current().panel;
+            let list_bg = theme::region::group_chat_list_pane()
+                .background
+                .unwrap_or(byteui::theme::color::current().bg);
+            if app.panel_mirrored(PanelKind::GroupChat) {
+                row![
+                    list_pane,
+                    divider_bar(
+                        Divider::GroupChatSplit,
+                        list_bg,
+                        content_bg,
+                        Message::ColumnDragStart(Divider::GroupChatSplit),
+                    ),
+                    content_pane,
+                ]
+                .width(Length::Fill)
+                .into()
+            } else {
+                row![
+                    content_pane,
+                    divider_bar(
+                        Divider::GroupChatSplit,
+                        content_bg,
+                        list_bg,
+                        Message::ColumnDragStart(Divider::GroupChatSplit),
+                    ),
+                    list_pane,
+                ]
+                .width(Length::Fill)
+                .into()
+            }
         }
     }
 }

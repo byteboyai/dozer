@@ -54,9 +54,6 @@ export type CancelScope = 'turn' | 'round';
 export type OutEvent =
   | { kind: 'ready' }
   | { kind: 'failed'; reason: string }
-  | { kind: 'create_group'; topic: string }
-  | { kind: 'select_group'; group_id: number }
-  | { kind: 'delete_group'; group_id: number }
   | { kind: 'add_member'; group_id: number; agent: AgentKey; handle: string; role_prompt: string }
   | { kind: 'update_member'; member_id: number; handle: string; role_prompt: string }
   | { kind: 'remove_member'; member_id: number }

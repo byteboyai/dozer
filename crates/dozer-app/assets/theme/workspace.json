@@ -55,6 +55,12 @@
       "padding": 12,
       "gap": 8
     },
+    "group_chat_list_pane": {
+      "background": "BG",
+      "border": null,
+      "padding": 12,
+      "gap": 8
+    },
     "review_content_pane": {
       "background": "PANEL",
       "border": null,

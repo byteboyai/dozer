@@ -3542,14 +3542,18 @@ impl App {
                 continue;
             }
             if kind == PanelKind::GroupChat {
-                // 已失败(加载超时/渲染异常)时不挂载,原生占位页接管。
+                // 已失败(加载超时/渲染异常)时不挂载,原生占位页接管。群列表列
+                // 收起时矩形由几何函数按 `group_chat_list_collapsed` 处理(详情
+                // 独占整条配对宽),不在这里隐藏。
                 let content_desired = self.group_chat_webview.failed().is_none();
+                let list_visible = !self.dims.group_chat_list_collapsed;
                 let bounds = crate::webview_geometry::group_chat_content_pane_bounds_for(
                     side,
                     window_width,
                     window_height,
                     &self.shell_state(),
                     content_desired,
+                    list_visible,
                 );
                 if bounds.2 > 0.0 && bounds.3 > 0.0 {
                     let spec = WebviewSpec {
@@ -6189,6 +6193,44 @@ mod tests {
             let logical_x = x0 + (1.0 - target_list_ratio) * pair_w;
             let result = apply_column_drag(state, Divider::RightPairSplit, window_width, logical_x);
             assert!(!result.conversations_list_collapsed);
+        }
+
+        #[test]
+        fn group_chat_split_collapses_when_narrower_than_header() {
+            let state = test_state();
+            let window_width = 1600.0;
+            let (x0, pair_w) = pair_x0_and_width(
+                state.layout.rail_layout.side_of(PanelKind::GroupChat),
+                window_width,
+                &state,
+            );
+            // 群聊默认"内容在前、群列表在后"(同 Usage),拖窄群列表得把
+            // `logical_x` 推得更靠右,坐标公式同 UsageSplit。
+            let target_list_ratio = (project::footer_min_width() - 10.0) / pair_w;
+            let logical_x = x0 + (1.0 - target_list_ratio) * pair_w;
+            let result = apply_column_drag(
+                state.clone(),
+                Divider::GroupChatSplit,
+                window_width,
+                logical_x,
+            );
+            assert!(result.group_chat_list_collapsed);
+            assert_eq!(result.group_chat_split, state.dims.group_chat_split);
+        }
+
+        #[test]
+        fn group_chat_split_stays_expanded_when_wider_than_header() {
+            let state = test_state();
+            let window_width = 1600.0;
+            let (x0, pair_w) = pair_x0_and_width(
+                state.layout.rail_layout.side_of(PanelKind::GroupChat),
+                window_width,
+                &state,
+            );
+            let target_list_ratio = (project::footer_min_width() + 20.0) / pair_w;
+            let logical_x = x0 + (1.0 - target_list_ratio) * pair_w;
+            let result = apply_column_drag(state, Divider::GroupChatSplit, window_width, logical_x);
+            assert!(!result.group_chat_list_collapsed);
         }
     }
 }

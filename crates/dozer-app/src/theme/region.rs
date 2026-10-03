@@ -91,6 +91,7 @@ struct RawRegions {
     agent_list_pane: RawRegion,
     terminal_pane: RawRegion,
     conversation_list_pane: RawRegion,
+    group_chat_list_pane: RawRegion,
     review_content_pane: RawRegion,
     status_bar: RawRegion,
     maximize_overlay: RawMaximizeOverlay,
@@ -322,6 +323,9 @@ pub fn terminal_pane() -> RegionStyle {
 }
 pub fn conversation_list_pane() -> RegionStyle {
     scaled_region(resolve_region(&REGIONS.conversation_list_pane))
+}
+pub fn group_chat_list_pane() -> RegionStyle {
+    scaled_region(resolve_region(&REGIONS.group_chat_list_pane))
 }
 pub fn review_content_pane() -> RegionStyle {
     scaled_region(resolve_region(&REGIONS.review_content_pane))

@@ -640,16 +640,20 @@ pub fn todo_content_pane_bounds_for(
     )
 }
 
-/// 群聊面板 webview 矩形:单列整宽(没有原生列表列、没有分隔线),顶部无原生头
-/// (`chrome_top = 0`,群切换/成员条都在 webview 里)。与用量面板"无筛选栏时内容
-/// 独占整宽"同一个分支(`list_visible = false`)。不可摆放(`!content_desired` /
-/// 该侧收起 / 不是 GroupChat / 放大的是另一侧)时返回零尺寸矩形。
+/// 群聊面板聊天详情侧 webview 矩形(左侧;右侧是原生群列表列),顶部无原生头
+/// (`chrome_top = 0`,成员条/消息/输入框都在 webview 里)。与用量 / 代码健康度
+/// 同构("内容在前、列表在后",`content_first = true`),差别:群列表列可收起
+/// (`dims.group_chat_list_collapsed`,收起后详情独占整条配对宽)。与用量面板
+/// "无筛选栏时内容独占整宽"同一个分支(`list_visible = false`)。不可摆放
+/// (`!content_desired` / 该侧收起 / 不是 GroupChat / 放大的是另一侧)时返回零
+/// 尺寸矩形。
 pub fn group_chat_content_pane_bounds_for(
     side: Side,
     window_width: f32,
     window_height: f32,
     state: &ShellState,
     content_desired: bool,
+    list_visible: bool,
 ) -> (f32, f32, f32, f32) {
     pair_content_pane_bounds_for(
         side,
@@ -658,11 +662,10 @@ pub fn group_chat_content_pane_bounds_for(
         state,
         PairPane {
             kind: PanelKind::GroupChat,
-            // `list_visible = false` 时不参与分栏,取值无意义。
-            split: byteui::theme::geometry::default_split_ratio(),
+            split: state.dims.group_chat_split,
             chrome_top: 0.0,
             content_desired,
-            list_visible: false,
+            list_visible,
             content_first: true,
         },
     )
@@ -1952,7 +1955,7 @@ mod tests {
             ..test_state()
         };
         let (_, _, w, h) =
-            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &state, false);
+            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &state, false, false);
         assert_eq!((w, h), (0.0, 0.0));
     }
 
@@ -1964,7 +1967,7 @@ mod tests {
             ..test_state()
         };
         let (_, _, w, h) =
-            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &state, true);
+            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &state, true, false);
         assert_eq!((w, h), (0.0, 0.0));
     }
 
@@ -1972,12 +1975,13 @@ mod tests {
     fn group_chat_content_zero_when_panel_kind_is_not_group_chat() {
         let state = test_state();
         let (_, _, w, h) =
-            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &state, true);
+            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &state, true, false);
         assert_eq!((w, h), (0.0, 0.0));
     }
 
-    /// 单列整宽:与"用量面板无筛选栏时内容独占整宽"同一个分支,横向位置与宽度必须一致
-    /// (用量面板顶部多一个原生头所以 y/h 不同,只比 x/w)。
+    /// 群列表收起时聊天详情独占整条配对宽:与"用量面板无筛选栏时内容独占整宽"
+    /// 同一个分支,横向位置与宽度必须一致(用量面板顶部多一个原生头所以 y/h
+    /// 不同,只比 x/w)。
     #[test]
     fn group_chat_content_fills_the_whole_zone_width_like_usage_without_list() {
         let gc = ShellState {
@@ -1989,13 +1993,34 @@ mod tests {
             ..test_state()
         };
         let (gx, _, gw, gh) =
-            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &gc, true);
+            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &gc, true, false);
         let (ux, _, uw, _) =
             usage_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &us, true, false);
         assert!(gw > 100.0 && gh > 100.0, "w={gw} h={gh}");
         assert!(
             (gx - ux).abs() < 0.1 && (gw - uw).abs() < 0.1,
             "gx={gx} gw={gw} ux={ux} uw={uw}"
+        );
+    }
+
+    /// 群列表可见时详情列窄于整条配对宽(与 Usage 有筛选栏时的分栏同构)。
+    #[test]
+    fn group_chat_content_narrower_than_zone_when_list_visible() {
+        let gc = ShellState {
+            right_view: PanelKind::GroupChat,
+            ..test_state()
+        };
+        let (_, _, full_w, _) =
+            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &gc, true, false);
+        let (_, _, split_w, _) =
+            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &gc, true, true);
+        assert!(
+            full_w > 100.0 && split_w > 100.0,
+            "full={full_w} split={split_w}"
+        );
+        assert!(
+            split_w < full_w,
+            "群列表可见时详情应更窄 full={full_w} split={split_w}"
         );
     }
 
@@ -2006,7 +2031,7 @@ mod tests {
             ..test_state()
         };
         let (_, y, _, _) =
-            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &state, true);
+            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &state, true, false);
         let zone_top =
             byteui::theme::geometry::top_bar_height() + theme::region::right_zone().margin.top;
         assert!((y - zone_top).abs() < 1.0, "y={y} zone_top={zone_top}");
@@ -2020,7 +2045,7 @@ mod tests {
             ..test_state()
         };
         let (x, y, w, h) =
-            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &state, true);
+            group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &state, true, false);
         assert!(w > 100.0 && h > 100.0, "w={w} h={h}");
         let (x0, avail_w) = maximized_box_x_range(1600.0);
         assert!(x >= x0 && x + w <= x0 + avail_w, "x={x} w={w}");

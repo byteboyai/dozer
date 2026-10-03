@@ -81,6 +81,8 @@ pub struct PanelDims {
     pub agent_list_collapsed: bool,
     /// Conversations 面板列表列是否被收起,语义同 `project_list_collapsed`。
     pub conversations_list_collapsed: bool,
+    /// 群聊面板列表列(右侧群列表)是否被收起,语义同 `project_list_collapsed`。
+    pub group_chat_list_collapsed: bool,
     /// 用量面板 agent 筛选栏是否被收起,语义同 `project_list_collapsed`。
     pub usage_list_collapsed: bool,
     /// Project 面板配对:信息面板占左面板区宽度的比例，项目预览(右配对)拿剩下的。
@@ -114,6 +116,9 @@ pub struct PanelDims {
     /// 代码健康度面板配对:分类导航(右侧栏)占右面板区宽度的比例,检测结果
     /// 内容(左)拿剩下的。语义同 `usage_split`(默认"内容在前、列表在后")。
     pub codehealth_split: f32,
+    /// 群聊面板配对:群列表(右侧栏)占右面板区宽度的比例,聊天详情内容(左)
+    /// 拿剩下的。语义同 `usage_split`(默认"内容在前、列表在后")。
+    pub group_chat_split: f32,
 }
 
 /// 每项目尺寸的默认值(数值来源统一从这取,迁走的 `ShellLayout::default()`
@@ -131,6 +136,7 @@ pub(crate) fn default_panel_dims() -> PanelDims {
         ssh_list_collapsed: false,
         agent_list_collapsed: false,
         conversations_list_collapsed: false,
+        group_chat_list_collapsed: false,
         usage_list_collapsed: false,
         project_split: byteui::theme::geometry::default_split_ratio(),
         ssh_split: byteui::theme::geometry::default_split_ratio(),
@@ -143,6 +149,7 @@ pub(crate) fn default_panel_dims() -> PanelDims {
         database_split: byteui::theme::geometry::default_split_ratio(),
         usage_split: byteui::theme::geometry::default_split_ratio(),
         codehealth_split: byteui::theme::geometry::default_split_ratio(),
+        group_chat_split: byteui::theme::geometry::default_split_ratio(),
     }
 }
 
@@ -238,6 +245,7 @@ pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
         ssh_list_collapsed: d.ssh_list_collapsed,
         agent_list_collapsed: d.agent_list_collapsed,
         conversations_list_collapsed: d.conversations_list_collapsed,
+        group_chat_list_collapsed: d.group_chat_list_collapsed,
         usage_list_collapsed: d.usage_list_collapsed,
         project_split: clamp_split(d.project_split),
         ssh_split: clamp_split(d.ssh_split),
@@ -250,6 +258,7 @@ pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
         database_split: clamp_split(d.database_split),
         usage_split: clamp_split(d.usage_split),
         codehealth_split: clamp_split(d.codehealth_split),
+        group_chat_split: clamp_split(d.group_chat_split),
     }
 }
 
@@ -282,6 +291,10 @@ pub enum Divider {
     /// 代码健康度面板内部的分隔线:左边检测结果内容,右边分类导航。语义同
     /// `UsageSplit`("内容在前、列表在后")。
     CodeHealthSplit,
+    /// 群聊面板内部的分隔线:左边聊天详情(webview),右边群列表。语义同
+    /// `UsageSplit`/`CodeHealthSplit`("内容在前、列表在后"),且群聊不参与
+    /// Agent/Conversations 的互斥右栏轮换,所以单独开一个 divider。
+    GroupChatSplit,
     RightPairSplit,
 }
 
@@ -536,7 +549,7 @@ pub(crate) fn pair_split_ratio(dims: &PanelDims, kind: PanelKind) -> Option<f32>
         PanelKind::GitLog => Some(dims.git_log_split),
         PanelKind::Web => Some(dims.browser_bookmarks_split),
         PanelKind::Agent => Some(dims.agent_split),
-        PanelKind::GroupChat => None,
+        PanelKind::GroupChat => Some(dims.group_chat_split),
         PanelKind::Conversations => Some(dims.conversations_split),
         PanelKind::Usage => Some(dims.usage_split),
         PanelKind::CodeHealth => Some(dims.codehealth_split),
@@ -578,7 +591,10 @@ pub(crate) fn with_pair_split_ratio(dims: PanelDims, kind: PanelKind, ratio: f32
             agent_split: ratio,
             ..dims
         },
-        PanelKind::GroupChat => dims,
+        PanelKind::GroupChat => PanelDims {
+            group_chat_split: ratio,
+            ..dims
+        },
         PanelKind::Conversations => PanelDims {
             conversations_split: ratio,
             ..dims
@@ -845,6 +861,40 @@ pub(crate) fn apply_column_drag(
             PanelDims {
                 codehealth_split: ratio,
                 ..state.dims
+            }
+        }
+        Divider::GroupChatSplit => {
+            let side = state.layout.rail_layout.side_of(PanelKind::GroupChat);
+            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
+            if pair_w <= 0.0 {
+                return state.dims;
+            }
+            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
+                byteui::theme::geometry::min_split_ratio(),
+                byteui::theme::geometry::max_split_ratio(),
+            );
+            let mirrored = side != PanelKind::GroupChat.default_side();
+            // 群聊面板默认"内容(聊天详情)在前、群列表在后"(同 Usage/
+            // CodeHealth,`default_list_first = false`)。
+            let ratio = if list_rendered_first(false, mirrored) {
+                raw_ratio
+            } else {
+                1.0 - raw_ratio
+            };
+            // 拖窄到小于 `project::footer_min_width` 时直接收起群列表,
+            // 语义同 `Divider::ProjectSplit` 那条分支。
+            let (list_w, _) = pair_list_content_width(pair_w, ratio);
+            if list_w < project::footer_min_width() {
+                PanelDims {
+                    group_chat_list_collapsed: true,
+                    ..state.dims
+                }
+            } else {
+                PanelDims {
+                    group_chat_split: ratio,
+                    group_chat_list_collapsed: false,
+                    ..state.dims
+                }
             }
         }
         Divider::TodoSplit => {

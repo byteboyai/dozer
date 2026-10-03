@@ -13,8 +13,10 @@
 
 ## 对 spec 的五处细化（Rulings，执行前请知悉）
 
-1. **对话框全部做成 webview 内的 DOM 对话框**（新建群、添加/编辑成员、删除群确认、转为待办），不用原生独立窗口。spec 第 9 节写的是"走标准对话框独立窗口机制"。改因：①这些对话框全是文本输入，原生输入要接一整套焦点桥接（见 memory"原生输入框 Stage 2–6"那一串工作），webview 里天然具备；②Todo webview 已有"五个弹层做 DOM"的先例；③`app_modal_open` 时 webview 本来就会被隐藏，不存在遮挡问题。代价：提交失败时对话框已关闭，错误走 Toast（符合 spec 11 节"一次性事件走 Toast"）；成员 handle 的明显错误在前端先校验（见 Task 8）。**执行完 Task 11 同步改 spec。**
-2. **面板是单列整宽 webview，没有原生列表列、没有分隔线、不新增 `PanelDims` 字段。** 几何复用 `PairPane`，`list_visible: false`（用量面板"无筛选栏时内容独占整宽"已有同款分支）；`pair_split_ratio(GroupChat)` 返回 `None`。
+> **2026-10-03 修订（重要，覆盖下方 Ruling 1/2）**：用户裁决群聊面板改为**两栏**——左侧聊天详情 webview + 右侧**原生**群列表（选择群、新建群=内联文本输入、删除群=内联二次确认）。切群/新建群/删除群不再走 webview 对话框；成员条、消息流、输入框、添加/编辑成员、转为待办仍留在 webview。落点：`PanelDims` 新增 `group_chat_split`/`group_chat_list_collapsed`；新增 `Divider::GroupChatSplit`；`pair_split_ratio(GroupChat)` 改返回 `Some`；`webview_geometry::group_chat_content_pane_bounds_for` 加 `list_visible`；新增 `extensions::group_chat::view::list_pane`；`webview/group-chat-content` 移除 `GroupBar` 与其 `create_group`/`select_group`/`delete_group` 出站事件。**下文 Ruling 1/2 即被本修订覆盖，仅作历史记录保留。** spec §9 已同步。
+
+1. **对话框全部做成 webview 内的 DOM 对话框**（原含新建群、添加/编辑成员、删除群确认、转为待办，不用原生独立窗口）。spec 第 9 节写的是"走标准对话框独立窗口机制"。改因：①这些对话框全是文本输入，原生输入要接一整套焦点桥接（见 memory"原生输入框 Stage 2–6"那一串工作），webview 里天然具备；②Todo webview 已有"五个弹层做 DOM"的先例；③`app_modal_open` 时 webview 本来就会被隐藏，不存在遮挡问题。代价：提交失败时对话框已关闭，错误走 Toast（符合 spec 11 节"一次性事件走 Toast"）；成员 handle 的明显错误在前端先校验（见 Task 8）。**执行完 Task 11 同步改 spec。**（2026-10-03：新建群/删除群已改原生列表内联，仅剩添加/编辑成员、转为待办留在 webview。）
+2. **（已被 2026-10-03 修订覆盖）**原设计为单列整宽 webview，没有原生列表列、没有分隔线、不新增 `PanelDims` 字段。几何复用 `PairPane`，`list_visible: false`（用量面板"无筛选栏时内容独占整宽"已有同款分支）；`pair_split_ratio(GroupChat)` 返回 `None`。**现行实现改为两栏（见上方修订）。**
 3. **轮询而不是每群起循环任务。** 在 `window_events.rs` 的 `wakes` 数组里加一行（仿 Todo 轮询），`App::poll_group_chat_if_active` 自限速。理由：天然随项目切换/面板隐藏停止，无泄漏任务。
 4. **Markdown 用一个自写的最小安全子集渲染器**（标题、段落、有序/无序列表、粗体、斜体、行内代码、围栏代码块、换行），**先整体转义再套样式**，原始 HTML 与链接一律以纯文本显示。agent 输出不可信，且引入 `marked` 等库需要先核实其 API 与转义行为，第一版不值得。代码块用系统等宽（`ui-monospace`）：webview host 的 CSP 没有 `font-src`，加载 JetBrains Mono 要扩 CSP 并拷 ttf，**这与 CLAUDE.md"只有 code editor 和 pty 用 JetBrains Mono"的字体裁决有出入，需要你定**：默认按"代码块算代码场景但先用系统等宽"实现，若要 JetBrains Mono 另开一个小任务。
 5. **图标要先在 `byteboyai/byteui` 仓库发版。** `IconKind::SquareSparkles` 不存在，byteui 是独立仓库、dozer 按 git tag 引用（CLAUDE.md）。Task 0 里改 byteui、发 `v0.4.1`，**推送 tag 是对外动作，必须停下来由用户确认**。

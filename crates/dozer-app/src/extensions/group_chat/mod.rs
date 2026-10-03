@@ -18,7 +18,7 @@ pub use protocol::{
     Command, GroupChatWebviewEvent, WebviewPushState, current_view_payload, encode_group_chat_push,
     parse_group_chat_event,
 };
-pub use view::{ShellMessage, content_pane};
+pub use view::{ShellMessage, content_pane, list_pane};
 
 dozer_core::scope!(pub(crate) LOG, panel, "group_chat");
 
@@ -48,6 +48,10 @@ pub struct WorkspaceState {
     last_poll: Option<Instant>,
     backoff_until: Option<Instant>,
     hint: Option<String>,
+    /// 原生群列表侧"新建群聊"内联输入框的草稿。空串 = 未在新建。
+    new_group_topic: String,
+    /// 原生群列表侧待确认删除的群 id(内联二次确认,不弹独立窗口)。
+    delete_confirm: Option<i64>,
     pub(crate) outbox: Outbox,
 }
 
@@ -83,6 +87,20 @@ pub enum Message {
         message_id: i64,
         todo_id: i64,
     },
+    /// 原生群列表:点一行选中该群。
+    SelectRequested(i64),
+    /// 原生群列表"新建群聊"内联输入框内容变化。
+    NewGroupDraftChanged(i64, String),
+    /// 原生群列表提交"新建群聊"(空主题忽略)。
+    NewGroupSubmit(i64),
+    /// 原生群列表点删除,进入内联二次确认态。
+    DeleteRequested(i64, i64),
+    /// 内联确认删除。
+    DeleteConfirmed(i64),
+    /// 取消内联二次确认。
+    DeleteCancelled(i64),
+    /// 原生列表交互的悬停/无操作占位。
+    Noop(i64),
     /// 一次性失败(新建群失败、发送失败…),进 Toast。
     Failed(i64, String),
 }
@@ -95,10 +113,17 @@ impl Message {
             | Message::GroupChanged(p, _)
             | Message::GroupDeleted(p, _)
             | Message::MessageUpdated(p, _)
+            | Message::NewGroupDraftChanged(p, _)
+            | Message::NewGroupSubmit(p)
+            | Message::DeleteRequested(p, _)
+            | Message::DeleteConfirmed(p)
+            | Message::DeleteCancelled(p)
+            | Message::Noop(p)
             | Message::Failed(p, _) => *p,
-            Message::Polled { project_id, .. }
-            | Message::Posted { project_id, .. }
-            | Message::TodoPushed { project_id, .. } => *project_id,
+            Message::SelectRequested(p)
+            | Message::Polled { project_id: p, .. }
+            | Message::Posted { project_id: p, .. }
+            | Message::TodoPushed { project_id: p, .. } => *p,
         }
     }
 }
@@ -108,6 +133,10 @@ impl Message {
 pub enum Effect {
     /// 从头拉某群的消息(`after_rev = 0`)。
     FetchMessages { group_id: i64 },
+    /// 新建群(主题由原生列表内联输入提供)。
+    CreateGroup { topic: String },
+    /// 删除某群(原生列表内联二次确认通过后)。
+    DeleteGroup { group_id: i64 },
 }
 
 fn is_active(status: &Option<GroupMessageStatus>) -> bool {
@@ -152,6 +181,14 @@ impl WorkspaceState {
     }
     pub fn hint(&self) -> Option<&str> {
         self.hint.as_deref()
+    }
+    /// 原生群列表"新建群聊"内联输入框的当前草稿。
+    pub fn new_group_topic(&self) -> &str {
+        &self.new_group_topic
+    }
+    /// 原生群列表内联二次确认待删除的群 id。
+    pub fn delete_confirm(&self) -> Option<i64> {
+        self.delete_confirm
     }
 
     pub fn has_active_turn(&self) -> bool {
@@ -271,6 +308,9 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
         }
         Message::GroupDeleted(_, id) => {
             state.groups.retain(|g| g.id != id);
+            if state.delete_confirm == Some(id) {
+                state.delete_confirm = None;
+            }
             if state.selected == Some(id) {
                 state.selected = None;
             }
@@ -347,6 +387,33 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
             }
             Vec::new()
         }
+        Message::SelectRequested(id) => state.select(id),
+        Message::NewGroupDraftChanged(_, text) => {
+            state.new_group_topic = text;
+            Vec::new()
+        }
+        Message::NewGroupSubmit(_) => {
+            let topic = state.new_group_topic.trim().to_string();
+            if topic.is_empty() {
+                // 空主题忽略(与后端校验一致),不清草稿以免用户误触丢输入。
+                return Vec::new();
+            }
+            state.new_group_topic.clear();
+            vec![Effect::CreateGroup { topic }]
+        }
+        Message::DeleteRequested(_, id) => {
+            state.delete_confirm = Some(id);
+            Vec::new()
+        }
+        Message::DeleteConfirmed(_) => match state.delete_confirm.take() {
+            Some(id) => vec![Effect::DeleteGroup { group_id: id }],
+            None => Vec::new(),
+        },
+        Message::DeleteCancelled(_) => {
+            state.delete_confirm = None;
+            Vec::new()
+        }
+        Message::Noop(_) => Vec::new(),
         Message::Failed(_, text) => {
             state.outbox.push(LOG, Level::Error, text);
             Vec::new()

@@ -1,6 +1,5 @@
 import { useRef, useState } from 'preact/hooks';
 import type { ViewPayload } from '../types.ts';
-import { GroupBar } from './GroupBar.tsx';
 import { MemberBar } from './MemberBar.tsx';
 import { MessageList } from './MessageList.tsx';
 import { Composer } from './Composer.tsx';
@@ -17,20 +16,13 @@ export function App({ payload }: { payload: ViewPayload }) {
 
   return (
     <div class="gc-root">
-      <GroupBar
-        groups={payload.groups}
-        selectedId={payload.selected_group_id}
-        onNew={() => setDialog({ kind: 'new_group' })}
-        onDelete={(id) => setDialog({ kind: 'delete_group', groupId: id })}
-      />
       {payload.groups.length === 0 ? (
         <div class="gc-empty">
           <p>还没有群聊</p>
-          <p class="gc-dim">邀请 Claude、Codex 进群,用 @ 点名让它们依次发言讨论。</p>
-          <button class="gc-primary" onClick={() => setDialog({ kind: 'new_group' })}>新建群聊</button>
+          <p class="gc-dim">在右侧「群聊」列表里新建一个群,邀请 Claude、Codex 进群,用 @ 点名让它们依次发言讨论。</p>
         </div>
       ) : group === null ? (
-        <div class="gc-empty">选择一个群聊</div>
+        <div class="gc-empty">在右侧列表里选择一个群聊</div>
       ) : (
         <>
           <MemberBar

@@ -4813,6 +4813,30 @@ impl App {
                         },
                     );
                 }
+                Effect::CreateGroup { topic } => {
+                    let proxy = self.proxy.clone();
+                    gc::spawn_command(
+                        project_id,
+                        gc::Command::CreateGroup { topic },
+                        &self.client.clone(),
+                        &self.handle.clone(),
+                        move |m| {
+                            let _ = proxy.send_event(Message::GroupChat(m));
+                        },
+                    );
+                }
+                Effect::DeleteGroup { group_id } => {
+                    let proxy = self.proxy.clone();
+                    gc::spawn_command(
+                        project_id,
+                        gc::Command::DeleteGroup { group_id },
+                        &self.client.clone(),
+                        &self.handle.clone(),
+                        move |m| {
+                            let _ = proxy.send_event(Message::GroupChat(m));
+                        },
+                    );
+                }
             }
         }
     }
@@ -5326,9 +5350,9 @@ impl App {
         self.dims.files_tree_collapsed
     }
 
-    /// 七个两栏面板(Project/Todo/Database/Ssh/Agent/Conversations/Usage)的
-    /// 列表列当前是否被收起。语义同 `files_tree_collapsed`:列表不渲染、内容
-    /// 拿满配对宽度,split 比例保留(展开时按原宽度恢复)。
+    /// 两栏面板(Project/Todo/Database/Ssh/Agent/Conversations/GroupChat/
+    /// Usage)的列表列当前是否被收起。语义同 `files_tree_collapsed`:列表不
+    /// 渲染、内容拿满配对宽度,split 比例保留(展开时按原宽度恢复)。
     pub(crate) fn list_collapsed(&self, kind: PanelKind) -> bool {
         match kind {
             PanelKind::Project => self.dims.project_list_collapsed,
@@ -5337,6 +5361,7 @@ impl App {
             PanelKind::Ssh => self.dims.ssh_list_collapsed,
             PanelKind::Agent => self.dims.agent_list_collapsed,
             PanelKind::Conversations => self.dims.conversations_list_collapsed,
+            PanelKind::GroupChat => self.dims.group_chat_list_collapsed,
             PanelKind::Usage => self.dims.usage_list_collapsed,
             _ => false,
         }
@@ -5354,6 +5379,7 @@ impl App {
             PanelKind::Ssh => &mut self.dims.ssh_list_collapsed,
             PanelKind::Agent => &mut self.dims.agent_list_collapsed,
             PanelKind::Conversations => &mut self.dims.conversations_list_collapsed,
+            PanelKind::GroupChat => &mut self.dims.group_chat_list_collapsed,
             PanelKind::Usage => &mut self.dims.usage_list_collapsed,
             _ => return,
         };

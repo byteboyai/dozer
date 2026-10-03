@@ -6,8 +6,6 @@ import { handleKey, suggestHandle, validateHandle } from '../handle.ts';
 
 export type DialogState =
   | null
-  | { kind: 'new_group' }
-  | { kind: 'delete_group'; groupId: number }
   | { kind: 'member'; groupId: number; editing: Member | null }
   | { kind: 'push_todo'; message: Message };
 
@@ -26,42 +24,6 @@ function Shell({
         {children}
       </div>
     </div>
-  );
-}
-
-function NewGroup({ onClose }: { onClose: () => void }) {
-  const [topic, setTopic] = useState('');
-  const ok = topic.trim() !== '';
-  const submit = () => { if (!ok) return; send({ kind: 'create_group', topic: topic.trim() }); onClose(); };
-  return (
-    <Shell title="新建群聊" onClose={onClose}>
-      <label class="gc-field">
-        <span>讨论主题</span>
-        <input
-          class="gc-text" value={topic} autoFocus placeholder="例如:评审登录方案"
-          onInput={(e) => setTopic(e.currentTarget.value)}
-          onKeyDown={(e) => { if (e.isComposing || e.keyCode === 229) return; if (e.key === 'Enter') submit(); }}
-        />
-      </label>
-      <div class="gc-modal-actions">
-        <button onClick={onClose}>取消</button>
-        <button class="gc-primary" disabled={!ok} onClick={submit}>创建</button>
-      </div>
-    </Shell>
-  );
-}
-
-function DeleteGroup({ groupId, onClose }: { groupId: number; onClose: () => void }) {
-  return (
-    <Shell title="删除群聊" onClose={onClose}>
-      <p>删除后群聊记录无法恢复,进行中的发言会被停止。</p>
-      <div class="gc-modal-actions">
-        <button onClick={onClose}>取消</button>
-        <button class="gc-danger" onClick={() => { send({ kind: 'delete_group', group_id: groupId }); onClose(); }}>
-          删除
-        </button>
-      </div>
-    </Shell>
   );
 }
 
@@ -147,8 +109,6 @@ export function Dialogs({
 }: { state: DialogState; group: Group | null; onClose: () => void }) {
   if (!state) return null;
   switch (state.kind) {
-    case 'new_group': return <NewGroup onClose={onClose} />;
-    case 'delete_group': return <DeleteGroup groupId={state.groupId} onClose={onClose} />;
     case 'member': return <MemberForm group={group} groupId={state.groupId} editing={state.editing} onClose={onClose} />;
     case 'push_todo': return <PushTodo message={state.message} onClose={onClose} />;
   }

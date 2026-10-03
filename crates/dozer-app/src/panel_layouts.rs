@@ -41,6 +41,9 @@ fn legacy_global_dims(layout_path: &Path) -> PanelDims {
             ssh_list_collapsed: false,
             agent_list_collapsed: false,
             conversations_list_collapsed: false,
+            // 群聊面板两栏/可收起/可拖拽是这版才加的能力,旧版全局
+            // layout.json 里不存在这两个字段,恒退回默认值。
+            group_chat_list_collapsed: false,
             // 用量面板可收起/可拖拽是这版才加的能力,旧版全局 layout.json
             // 里不存在这两个字段,恒退回默认值。
             usage_list_collapsed: false,
@@ -72,6 +75,8 @@ fn legacy_global_dims(layout_path: &Path) -> PanelDims {
             // 代码健康度面板两栏分栏是这版才加的能力,旧版全局 layout.json
             // 里不存在这个字段,恒退回默认比例。
             codehealth_split: byteui::theme::geometry::default_split_ratio(),
+            // 群聊面板两栏分栏同上。
+            group_chat_split: byteui::theme::geometry::default_split_ratio(),
         })
         .unwrap_or_default()
 }
