@@ -194,47 +194,26 @@ pub fn spawn_refresh(
 }
 
 /// 统计项目仓库 HEAD 可达的提交总数(当前分支口径,同 git_log 面板的
-/// revwalk 起点)。项目不是 git 仓库、空仓库或任何 git2 报错都一律记 0
+/// revwalk 起点)。项目不是 git 仓库、空仓库或任何 bytegit 报错都一律记 0
 /// ——这格统计不值得让整个面板失败。
 fn count_git_commits(path: &std::path::Path) -> u64 {
     // `discover` 兼容项目路径是仓库子目录的情况;`open` 只认仓库根。
-    let Ok(repo) = git2::Repository::discover(path) else {
+    let Ok(repo) = bytegit::Repo::discover(path) else {
         return 0;
     };
-    let Ok(mut revwalk) = repo.revwalk() else {
-        return 0;
-    };
-    if revwalk.push_head().is_err() {
-        return 0;
-    }
-    revwalk.count() as u64
+    repo.commit_count().unwrap_or(0)
 }
 
 /// 统计 HEAD 可达提交按 UTC 提交日的逐日计数,供"每日行为统计"折线图用。
 /// 与 `day_index_from_ms` 同口径:UTC 日索引 = `提交时间秒 / 86_400`(注意这里
 /// 整段除以 86400,跟毫秒口径 `ms / 86_400_000` 等价)。项目不是 git 仓库/
-/// 任何 git2 报错都返回空 map;不会因提交多而爆炸——返回的只是"有提交的那
+/// 任何 bytegit 报错都返回空 map;不会因提交多而爆炸——返回的只是"有提交的那
 /// 些天"的计数,不是每一条提交。
 fn count_git_commits_by_day(path: &std::path::Path) -> BTreeMap<i64, u64> {
-    let Ok(repo) = git2::Repository::discover(path) else {
+    let Ok(repo) = bytegit::Repo::discover(path) else {
         return BTreeMap::new();
     };
-    let Ok(mut revwalk) = repo.revwalk() else {
-        return BTreeMap::new();
-    };
-    if revwalk.push_head().is_err() {
-        return BTreeMap::new();
-    };
-    let mut by_day: BTreeMap<i64, u64> = BTreeMap::new();
-    for oid in revwalk {
-        let Ok(oid) = oid else { continue };
-        let Ok(commit) = repo.find_commit(oid) else {
-            continue;
-        };
-        let day = commit.time().seconds() / 86_400;
-        *by_day.entry(day).or_insert(0) += 1;
-    }
-    by_day
+    repo.commit_count_by_day().unwrap_or_default()
 }
 
 /// 面板内容侧:顶部"用量"标题 + 加载态动画占位。四态图表内容已迁到
