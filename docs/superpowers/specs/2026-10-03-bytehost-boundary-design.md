@@ -12,7 +12,7 @@
 
 1. 从 `dozer-app` 里抽出一个产品无关的 iced 桌面宿主：窗口、布局、焦点、浮层、主题承载、面板生命周期，让"一个面板 + host 就能运行"（要求文档 R1）。
 2. 让 Digger 能只换面板清单、复用 Todo / Conversation / Agent / Project / Files Tree 面板，而不带走 Dozer 的治理、交付、验收语义。
-3. 把"面板清单散落在 `PanelKind` 的约 887 处引用"收敛成一个注册点（要求文档 §4.3）。
+3. 把"面板清单散落在 `PanelKind` 的 973 处引用(H0 实测,原审计为约 887)"收敛成一个注册点（要求文档 §4.3）。
 4. 在不改变用户可见行为的前提下完成，沿用 bytegit 的纵向切片方式：每一步都能单独编译、通过测试、合并。
 
 **非目标**
@@ -99,9 +99,9 @@ Todo、Conversation、Agent、Project 面板、Files Tree。共享的是**面板
 | 差距 | 现状（2026-10-02 审计） | host 化需要解决什么 |
 |------|-------------------------|---------------------|
 | 面板依赖 host 内部符号 | 面板 import `crate::app::{App, HoverId, ProjectId, TextInputTarget}`、`crate::workspace::*`、`crate::chrome::*`、`crate::preview::WebviewSpec`、`crate::theme`、`crate::menu_spec`（todo/conversations/git_log/ssh/browser/footbar/usage 等） | `App`、`Workspace` 必须从面板代码里出局；`HoverId`/`theme`/图标/菜单规格这类通用能力要么进 byteui，要么成为 host 的稳定接口（Q10） |
-| host 对面板硬编码 | `PanelKind` 是封闭枚举（11 变体）、默认栏位写死在 `default_side()`；host 侧（`app/`、`workspace/`、`chrome/`、`platform/`、`preview/`）对 18 个 extension 模块有直接引用；`app/` 约 1.7 万行 | 注册制替代封闭枚举；host 通过 registry 遍历面板而不是点名 |
+| host 对面板硬编码 | `PanelKind` 是封闭枚举（12 变体；原审计为 11，H0 实测多 `GroupChat`，引用 973 行/31 文件，见 `docs/dozer-v2/bytehost-H0/00-summary.md`）、默认栏位写死在 `default_side()`；host 侧（`app/`、`workspace/`、`chrome/`、`platform/`、`preview/`）对 18 个 extension 模块有直接引用；`app/` 约 1.7 万行 | 注册制替代封闭枚举；host 通过 registry 遍历面板而不是点名 |
 | 共享领域模块在 app 根 | `conversation`、`project`（`delivery` 已拆除）被多个面板共用 | 逐个裁决：留 host / 下沉 `dozerd` / 独立领域库（Q7） |
-| 面板专属 overlay 在 `platform/` | `platform/` 下约 20 个 `*_overlay.rs`，多数是某个面板专属 | 机制归 host，具体 overlay 随面板走（H0 出迁移清单） |
+| 面板专属 overlay 在 `platform/` | `platform/` 22 个文件、9584 行；面板专属 overlay 宿主 11 个（5 个属 Digger 复用面板）；`window_events.rs` 单文件 4602 行内联多个面板的事件处理（H0 实测，见 `bytehost-H0/05-platform-overlays.md`） | 机制归 host，具体 overlay 随面板走（H0 出迁移清单） |
 | 面板间耦合 | 只剩 `file_history → git_log` 一处，已于 bytegit P2 解除 | 无（门禁防止回归） |
 
 ## 5. 迁移原则
@@ -136,14 +136,14 @@ host 边界"成立"的判据（每一条都要有可执行的检查，不接受"
 
 | # | 问题 | 现状 / 倾向 |
 |---|------|-------------|
-| O1 | **Agent** 的面板主体与会话运行服务具体怎么切；要求文档 Q15 提出 Agent 与 Git 对称为底层支柱，是否做一次对称的分布审计 | 未审计；H0 先出 Agent 相关代码在 `dozerd` 与 `dozer-app` 的分布，再决定 |
-| O2 | **Project context** 进入 host 的范围 | 倾向最小化（项目打开/关闭/当前项目），具体待 H0 |
-| O3 | **Files Tree "打开目标"协议**（Files Tree → 通用打开命令/目标注册 → 产品决定处理者） | 协议形态未定；H0 只统计 Files 对 Preview 的现有引用 |
-| O4 | `secrets`、`external_apps`、`capabilities` 的归属 | 暂存 host，登记候选去向 |
-| O5 | 移除 `PanelKind` 后，面板**默认栏位**由注册信息还是产品 composition root 决定 | 未决；影响 registry 的数据形状 |
-| O6 | **Terminal** 是否纳入当前共享范围 | 架构上更像独立面板，但 Digger 真实需求未确认；不确认前不进共享清单 |
-| O7 | `conversation`/`transcript` 等领域模型最终归属 | 要求文档 Q7，H0 审计 |
-| O8 | `git_accounts` 归 bytegit 还是独立服务 | 未定 |
+| O1 | **Agent** 的面板主体与会话运行服务具体怎么切；要求文档 Q15 提出 Agent 与 Git 对称为底层支柱，是否做一次对称的分布审计 | 未审计；H0 先出 Agent 相关代码在 `dozerd` 与 `dozer-app` 的分布，再决定；证据:`bytehost-H0/06-open-items-evidence.md` §O1(机制已集中在 dozerd;Agent 面板 = 终端区,与 O6 同一刀) |
+| O2 | **Project context** 进入 host 的范围 | 倾向最小化（项目打开/关闭/当前项目），具体待 H0；证据:`bytehost-H0/06-open-items-evidence.md` §O2、`04-shared-modules.md` §1(`project.rs` 实为文件树,不是 project context) |
+| O3 | **Files Tree "打开目标"协议**（Files Tree → 通用打开命令/目标注册 → 产品决定处理者） | 协议形态未定；H0 只统计 Files 对 Preview 的现有引用；证据:`bytehost-H0/06-open-items-evidence.md` §O3(边界已存在于 `App::update` 分派) |
+| O4 | `secrets`、`external_apps`、`capabilities` 的归属 | 暂存 host，登记候选去向；证据:`bytehost-H0/04-shared-modules.md` §5(三者不是同一类) |
+| O5 | 移除 `PanelKind` 后，面板**默认栏位**由注册信息还是产品 composition root 决定 | 未决；影响 registry 的数据形状；证据:`bytehost-H0/01-panelkind.md` §5 |
+| O6 | **Terminal** 是否纳入当前共享范围 | 架构上更像独立面板，但 Digger 真实需求未确认；不确认前不进共享清单；证据:`bytehost-H0/06-open-items-evidence.md` §O6 |
+| O7 | `conversation`/`transcript` 等领域模型最终归属 | 要求文档 Q7，H0 审计；证据:`bytehost-H0/04-shared-modules.md` §3(领域类型已在 `dozer-core::protocol`) |
+| O8 | `git_accounts` 归 bytegit 还是独立服务 | 未定；证据:`bytehost-H0/04-shared-modules.md` §3(倾向留产品) |
 | O9 | 事件总线承载（复用 `dozerd` UDS 还是进程内 channel）与降级约定 | 要求文档 Q6、Q9，另行设计 |
 | O10 | host 物理形态：先在 `dozer-app` 内以模块边界成立，还是直接建 `bytehost` crate；以及独立仓库（按 bytegit/byteui 的 tag 方式）的时机 | 倾向"先模块边界 + 门禁，后物理拆分"；时机待 H0 |
 | O11 | Digger 的 Todo 语义（选题 vs 验收项）与对非编码 agent 的摄取支持 | 要求文档 Q11，待产品确认；影响 Todo 是否能原样共享 |
@@ -154,17 +154,17 @@ host 边界"成立"的判据（每一条都要有可执行的检查，不接受"
 - **"剩余即 host"会让 host 变成新的垃圾场。** 缓解：E3 登记清单 + 寄存条目标注候选去向，只减不增。
 - **按目录而不是按机制搬运。** `app/`（约 1.7 万行）和 `platform/` 里 host 机制与面板专属代码混杂；整目录搬运会把面板特判一并带进 host，违反 E1/E2。缓解：H0 逐文件裁决。
 - **归属假设未经验证就固化。** 缓解：§5.3，H0 之前不写 H1 以后的计划。
-- **`PanelKind` 约 887 处引用的迁移成本**。缓解：Q8 的分类（"遍历全部面板" / "特判某面板" / "仅类型传递"）作为 H0 的审计产出，分批迁移。
+- **`PanelKind` 973 处引用的迁移成本**（其中 114 行是 Project/Files 预览窗格二选一，可先机械收口，见 `bytehost-H0/01-panelkind.md` B0）。缓解：Q8 的分类（"遍历全部面板" / "特判某面板" / "仅类型传递"）作为 H0 的审计产出，分批迁移。
 - **预览 WebView 恒在 GPU 内容之上**这一约束使"通用 Surface 几何同步"成为 host 的硬需求：旧模式浮层需要 `App::preview_desired` 显式隐藏，host 化时这个耦合点要么随旧浮层迁走，要么进 host 的几何同步机制，不能被遗漏。
 - **Digger 尚未接入：** host 的抽象全部来自 Dozer 的单一消费者，容易过拟合。缓解：一期不预设 trait；等 Digger 接入后按真实差异再抽象。
 
 ## 10. 下一步
 
 1. 评审本规格，确认 §2 的三条硬边界、§3 的归属裁决与 §8 的未决项。
-2. 编写 **H0 plan（只读审计与迁移清单）**，范围：
+2. **H0（只读审计与迁移清单）已完成（2026-10-03）**，计划 `docs/superpowers/plans/2026-10-03-bytehost-h0-audit.md`，汇总 `docs/dozer-v2/bytehost-H0/00-summary.md`。H0 新发现需在评审时一并确认：(a) `dozer-core::protocol`（3085 行 Dozer 领域类型）的归属；(b) §3.3 应改为"overlay 宿主壳随面板走，窗口机制归 host"（`05-platform-overlays.md` §3）；(c) `HoverId` 是 `PanelKind` 之外第二处点名面板的 host 枚举。H0 的范围原为：
    - 各候选模块对 `App`、`Workspace` 与其他面板的依赖统计；
    - 顶层共享模型（`conversation`/`project`/`transcript` 等）及 host 反向调用面板的审计，覆盖要求文档 Q7、Q8、Q13；
    - 面板边界门禁设计（§6 第 4 条）；
    - `platform/` 下各面板专属 overlay 的迁移清单；
    - E3 登记清单的初版。
-3. H1 以后的实施计划，等 H0 审计结果确定后再写。
+3. 评审 H0 汇总 → 从 `00-summary.md` §4 的候选切片里选定 H1 → 写 H1 plan（候选 1、2 无前置未决项、不改行为）。
