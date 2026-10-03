@@ -152,6 +152,7 @@ Host（窗口 / 布局 / 焦点 / 浮层 / 主题 / 面板 Registry）
    - **P0 已完成（2026-10-02）：** `byteboyai/bytegit` `v0.1.0` 已发布（`Repo::discover`、`TempRepo` 夹具、基础类型，31 个测试）；P1 计划待写。计划：`docs/superpowers/plans/2026-10-02-bytegit-p0-skeleton.md`。
    - **P1 已完成（2026-10-02）：** `v0.2.0` 已发布（HEAD/分支/远程、工作区状态）；`delivery.rs` 的 `repo_root/is_dirty/file_statuses/branch/remote_url/local_branches/current_branch_has_commits` 与 `git_hotspots::dirty_paths/head_short_sha` 已迁为 bytegit 适配层。计划：`docs/superpowers/plans/2026-10-02-bytegit-p1-queries.md`。
    - **P2 已完成（2026-10-03）：** `v0.3.0` 已发布（历史/diff、blob 读取与分类、`workdir_patch`/`file_bytes_at`）；`git_log`/`file_history` 已迁到 bytegit，两面板共用的 diff 内容层抽到 `extensions/diff_content.rs`，`file_history → git_log` 的面板间耦合已消失。计划：`docs/superpowers/plans/2026-10-03-bytegit-p2-history-diff.md`。
+   - **P4 已完成（2026-10-03）：** `v0.5.0` 已发布（`watch` feature）；项目工作区监听已进 `bytegit`（`bytegit::watch`，忽略名单由 dozer 经 `IgnoreRules` 传入），`dozer-app` 不再直接依赖 `notify`，`git_watch.rs` 已删除；Host 只负责把 `GitChange` 转成消息。计划：`docs/superpowers/plans/2026-10-03-bytegit-p4-watch.md`。
 2. 审计 Q7、Q8、Q13。
 3. 确定事件总线的最小模型（Q9），先给 Git 状态变化（工作区变更、分支切换）这一条事件用起来。
 4. 面板扩展化的整体顺序待定，原文 §11 的试点顺序（Code Health → Todo → SSH）是按"进程外插件"定的，与本文"一个面板 + Host"的目标不同，是否沿用待议。
