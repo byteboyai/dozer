@@ -99,6 +99,11 @@ button { appearance: none; font: inherit; cursor: pointer; color: inherit; }
 .gc-body code { background: var(--card); border-radius: 4px; padding: 0 4px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
 .gc-body pre { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; overflow-x: auto; }
 .gc-body pre code { background: transparent; padding: 0; }
+.gc-progress { display: flex; align-items: center; gap: 6px; color: var(--cyan); font-size: 12px; margin: 4px 0; }
+.gc-body .gc-table-wrap { overflow-x: auto; margin: 6px 0; }
+.gc-body table { border-collapse: collapse; font-size: 12px; }
+.gc-body th, .gc-body td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; vertical-align: top; }
+.gc-body th { background: var(--card); font-weight: 600; }
 .gc-msg-actions { display: flex; gap: 4px; margin-top: 2px; min-height: 18px; }
 .gc-dots i { display: inline-block; width: 4px; height: 4px; margin: 0 1px; border-radius: 50%; background: currentColor;
   animation: gc-pulse 1.2s infinite ease-in-out; }

@@ -92,3 +92,31 @@ test('very long single line does not blow up', () => {
 test('crlf line endings are normalized', () => {
   assert.equal(renderMarkdown('甲\r\n\r\n乙'), '<p>甲</p><p>乙</p>');
 });
+
+test('GFM table renders thead/tbody with alignment', () => {
+  const out = renderMarkdown('| 名称 | 数量 |\n| :--- | ---: |\n| 苹果 | 3 |\n| 梨 | 12 |');
+  assert.equal(
+    out,
+    '<div class="gc-table-wrap"><table><thead><tr><th style="text-align:left">名称</th><th style="text-align:right">数量</th></tr></thead>' +
+      '<tbody><tr><td style="text-align:left">苹果</td><td style="text-align:right">3</td></tr>' +
+      '<tr><td style="text-align:left">梨</td><td style="text-align:right">12</td></tr></tbody></table></div>',
+  );
+});
+
+test('table without outer pipes, inline markdown in cells, escaped html, ragged rows', () => {
+  const out = renderMarkdown('a | b\n--- | ---\n**x** | <i>y</i>\nonly |');
+  assert.match(out, /<th>a<\/th><th>b<\/th>/);
+  assert.match(out, /<td><strong>x<\/strong><\/td><td>&lt;i&gt;y&lt;\/i&gt;<\/td>/);
+  assert.match(out, /<tr><td>only<\/td><td><\/td><\/tr>/);
+  assert.doesNotMatch(out, /<i>/);
+});
+
+test('escaped pipe stays in cell; pipes in a lone line are not a table', () => {
+  assert.match(renderMarkdown('| a | b |\n|---|---|\n| x\\|y | z |'), /<td>x\|y<\/td>/);
+  assert.equal(renderMarkdown('a | b'), '<p>a | b</p>');
+});
+
+test('table directly after a paragraph line, and streaming header-only table', () => {
+  assert.match(renderMarkdown('说明:\n| a | b |\n|---|---|\n| 1 | 2 |'), /^<p>说明:<\/p><div class="gc-table-wrap">/);
+  assert.match(renderMarkdown('| a | b |\n|---|---|'), /<thead>.*<\/thead><tbody><\/tbody>/);
+});

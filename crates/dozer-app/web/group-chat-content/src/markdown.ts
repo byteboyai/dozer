@@ -2,7 +2,7 @@
 //   1. **先整体转义**,再在转义后的文本上套固定的标签——输出里不可能出现输入带来的标签;
 //   2. 不支持原始 HTML、链接、图片(一律以纯文本显示);
 //   3. 只做:标题、段落、有序/无序列表、粗体、斜体、行内代码、围栏代码块、换行。
-// 不引入第三方库(见 plan Ruling 4)。
+// 另支持 GFM 表格(含对齐);不引入第三方库(见 plan Ruling 4)。
 
 const ESC: Record<string, string> = {
   '&': '&amp;',
@@ -28,6 +28,50 @@ function renderInline(text: string): string {
   out = out.replace(/\*\*(?=\S)([^*\n]*?\S)\*\*/g, '<strong>$1</strong>');
   out = out.replace(/(^|[^*\w])\*(?=\S)([^*\n]*?\S)\*(?!\*)/g, '$1<em>$2</em>');
   return out.replace(/\u0000(\d+)\u0000/g, (_m, i: string) => codes[Number(i)]);
+}
+
+/** 把一行表格按未转义的 `|` 切成单元格,去掉首尾竖线;`\\|` 还原为字面 `|`。 */
+function splitRow(line: string): string[] {
+  let t = line.trim();
+  if (t.startsWith('|')) t = t.slice(1);
+  if (t.endsWith('|') && !t.endsWith('\\|')) t = t.slice(0, -1);
+  const cells: string[] = [];
+  let cur = '';
+  for (let k = 0; k < t.length; k++) {
+    if (t[k] === '\\' && t[k + 1] === '|') {
+      cur += '|';
+      k++;
+    } else if (t[k] === '|') {
+      cells.push(cur.trim());
+      cur = '';
+    } else {
+      cur += t[k];
+    }
+  }
+  cells.push(cur.trim());
+  return cells;
+}
+
+const DELIM_CELL = /^:?-+:?$/;
+
+/** 分隔行(`---|:--:|--:`):至少含一个 `|` 或首尾竖线,且每格都是横线。 */
+function parseDelimiter(line: string): string[] | null {
+  if (!line.includes('|') || !line.includes('-')) return null;
+  const cells = splitRow(line);
+  if (!cells.every((c) => DELIM_CELL.test(c))) return null;
+  return cells.map((c) => {
+    const l = c.startsWith(':');
+    const r = c.endsWith(':');
+    return l && r ? 'center' : r ? 'right' : l ? 'left' : '';
+  });
+}
+
+function renderRow(tag: 'th' | 'td', cells: string[], aligns: string[]): string {
+  const tds = aligns.map((a, c) => {
+    const style = a ? ` style="text-align:${a}"` : '';
+    return `<${tag}${style}>${renderInline(cells[c] ?? '')}</${tag}>`;
+  });
+  return `<tr>${tds.join('')}</tr>`;
 }
 
 const FENCE = /^```/;
@@ -77,6 +121,26 @@ export function renderMarkdown(src: string): string {
       html.push(`<h${level}>${renderInline(h[2])}</h${level}>`);
       i++;
       continue;
+    }
+
+    // 表格:表头行 + 分隔行,列数一致;后续连续含 `|` 的行都是表体。
+    if (line.includes('|') && i + 1 < lines.length) {
+      const aligns = parseDelimiter(lines[i + 1]);
+      const head = aligns && splitRow(line);
+      if (aligns && head && head.length === aligns.length) {
+        flushParagraph(para);
+        i += 2;
+        const body: string[] = [];
+        while (i < lines.length && lines[i].trim() !== '' && lines[i].includes('|')) {
+          body.push(renderRow('td', splitRow(lines[i]), aligns));
+          i++;
+        }
+        html.push(
+          `<div class="gc-table-wrap"><table><thead>${renderRow('th', head, aligns)}</thead>` +
+            `<tbody>${body.join('')}</tbody></table></div>`,
+        );
+        continue;
+      }
     }
 
     const isBullet = BULLET.test(line);

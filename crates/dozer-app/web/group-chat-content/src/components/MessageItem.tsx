@@ -1,8 +1,9 @@
+import { useEffect, useState } from 'preact/hooks';
 import type { Message } from '../types.ts';
 import { send } from '../ipc.ts';
 import { cancelEvent } from '../events.ts';
 import { renderMarkdown } from '../markdown.ts';
-import { formatDuration } from '../format.ts';
+import { formatDuration, formatElapsed, runningPhase } from '../format.ts';
 
 const STATUS_LABEL: Record<string, string> = {
   queued: '排队中',
@@ -10,6 +11,27 @@ const STATUS_LABEL: Record<string, string> = {
   failed: '发言失败',
   cancelled: '已取消',
 };
+
+// 消息首次以 running 出现的客户端时刻;模块级是为了列表重渲/重挂载不让计时归零。
+const runningSince = new Map<number, number>();
+
+/** 发言中的阶段 + 已等待时长,每秒刷新;还没有正文时才显示(正文流入后无需再占位)。 */
+function RunningIndicator({ id }: { id: number }) {
+  if (!runningSince.has(id)) runningSince.set(id, Date.now());
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const elapsed = now - (runningSince.get(id) ?? now);
+  return (
+    <div class="gc-progress" role="status">
+      <span class="gc-dots" aria-hidden="true"><i /><i /><i /></span>
+      {runningPhase(elapsed)}…
+      <span class="gc-dim">{formatElapsed(elapsed)}</span>
+    </div>
+  );
+}
 
 export function MessageItem({
   m, groupId, onPushTodo,
@@ -34,6 +56,7 @@ export function MessageItem({
         )}
         {dur && m.status === 'done' && <span class="gc-dim">{dur}</span>}
       </div>
+      {m.status === 'running' && m.text === '' && <RunningIndicator id={m.id} />}
       {m.status === 'failed' && m.reason && <div class="gc-reason">{m.reason}</div>}
       {m.text !== '' && (
         <div class="gc-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(m.text) }} />
