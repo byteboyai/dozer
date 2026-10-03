@@ -21,14 +21,16 @@
 
 **P2 之后（2026-10-03）：** blob 读取与分类 ×2、历史/diff 的重复实现已合并为 bytegit（`v0.3.0`）；`git_log`/`file_history` 共用的 diff 内容层移到 `extensions/diff_content.rs`，两面板不再互相 import。
 
+**P3 之后（2026-10-03）：** `dozerd` 与 `dozer-app` 的两份项目更新时间/提交统计实现、`recent_churn` 的命令行调用已合并为 bytegit（`v0.4.0`）；`dozerd` 现在也依赖 bytegit。
+
 ## 2. 按操作归类
 
 ### 2.1 仓库发现与可用性
 
 | 操作 | 位置 | 实现 |
 |------|------|------|
-| 找仓库根 | `dozerd/projects.rs:36` `git_repo_root` | CLI `rev-parse --show-toplevel` |
-| 找仓库（含子目录） | `usage/mod.rs:201、218` | `git2 Repository::discover` |
+| 找仓库根 | `dozerd/projects.rs:36` `git_repo_root` | **P3 已迁移**：bytegit `Repo::discover` |
+| 找仓库（含子目录） | `usage/mod.rs:201、218` | **P3 已迁移**：bytegit `Repo::discover` |
 | 打开仓库 | `delivery.rs` 多处、`git_log.rs`、`file_history.rs`、`git_hotspots.rs` | `git2 Repository::open`（只认仓库根） |
 | 判断 git 是否可用 | `delivery.rs:369` `git_available` | CLI `--version` |
 
@@ -43,7 +45,7 @@
 | 本地分支列表 | `delivery::local_branches` | CLI `for-each-ref`（经 `delivery::git` 辅助函数） |
 | 当前分支有无提交 | `delivery::current_branch_has_commits` | git2 |
 | 远程 URL | `delivery::remote_url` | CLI `remote -v` |
-| HEAD 提交时间 | `dozerd/projects.rs:55` `git_head_commit_ms` | CLI `log -1 --format=%ct` |
+| HEAD 提交时间 | `dozerd/projects.rs:55` `git_head_commit_ms` | **P3 已迁移**：bytegit `head_commit_time`（提交者时间） |
 
 注意：`dozerd/code_health.rs` 存的 `git_head`/`git_branch`/`git_dirty` 是 **GUI 经协议传来的值**（GUI 用 `delivery::*` 算好再上报），不是 daemon 自己算的；daemon 自己只算项目"更新时间"用的最新提交时间。
 
@@ -68,8 +70,8 @@
 | 单文件历史 | `file_history::build(repo, file, max_count)` | **P2 已迁移**：bytegit `log` |
 | 与当前工作区对比 | `file_history::diff_against_current`、`diff_blob_content_against_workdir` | **P2 已迁移**：`diff_content::workdir_content`（bytegit `workdir_patch`/`blob_text`） |
 | 上一版本 | `file_history::previous_oid` | **P2 已迁移**：`file_history::previous_commit`（bytegit `previous_version`） |
-| 提交计数（总/按天） | `usage::count_git_commits`、`count_git_commits_by_day` | git2 `revwalk`（P3） |
-| 近 30 天文件变更频次 | `git_hotspots::recent_churn` | CLI `log --since=30.days --name-only`（P3） |
+| 提交计数（总/按天） | `usage::count_git_commits`、`count_git_commits_by_day` | **P3 已迁移**：bytegit `commit_count`/`commit_count_by_day` |
+| 近 30 天文件变更频次 | `git_hotspots::recent_churn` | **P3 已迁移**：bytegit `churn`（路径相对仓库根，适配层转相对项目根） |
 
 重复与泄漏：
 - `git_log` 与 `file_history` 各实现一份"取 blob + 分类 + 截断"，靠注释保持一致（`MAX_PATCH_CHARS`、根提交按空树对比、`DEFAULT_MAX_COMMITS` 量级）。

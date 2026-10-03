@@ -4,11 +4,11 @@
 //! 多连接足够（无需连接池）。
 
 use anyhow::{Context, Result};
+use bytegit::Repo;
 use dozer_core::protocol::ProjectInfo;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 use std::sync::Mutex;
 
 pub struct ProjectStore {
@@ -29,46 +29,27 @@ fn basename(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-/// 取 `dir` 所属 git 仓库的根目录（无 git 或 git 不可用时返回 `None`）。
-fn git_repo_root(dir: &Path) -> Option<PathBuf> {
+/// 项目所属 git 仓库 HEAD 提交的提交时间(毫秒)。不是 git 工作区(含裸仓库)、
+/// 仓库没有提交或读取失败时返回 `None`。`dir` 在仓库子目录里时向上查找;
+/// linked worktree 取该 worktree 自己的 HEAD。
+fn git_head_commit_ms(dir: &Path) -> Option<u64> {
     if !dir.is_dir() {
         return None;
     }
-    let out = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(dir)
-        .output()
-        .ok()?;
-    if !out.status.success() {
+    let repo = Repo::discover(dir).ok()?;
+    // 裸仓库没有工作区:迁移前 `git rev-parse --show-toplevel` 在那里失败,保持不计。
+    if repo.is_bare() {
         return None;
     }
-    let line = String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .next()?
-        .trim()
-        .to_string();
-    (!line.is_empty()).then(|| PathBuf::from(line))
-}
-
-/// 仓库最新 commit 的提交时间（毫秒）。无 commit / git 不可用 / 解析失败
-/// 时返回 `None`。
-fn git_head_commit_ms(repo: &Path) -> Option<u64> {
-    let out = Command::new("git")
-        .args(["log", "-1", "--format=%ct"])
-        .current_dir(repo)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let secs: u64 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
+    let time = repo.head_commit_time().ok()??;
+    let secs = time.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
     Some(secs * 1000)
 }
 
 /// 计算项目的 git 感知更新时间：优先取仓库最新 commit 时间，若该仓库没有
 /// commit，或 commit 时间早于 `last_active_ms`，则回落为 `last_active_ms`。
 fn compute_updated_ms(path: &str, last_active_ms: u64) -> u64 {
-    let commit = git_repo_root(Path::new(path)).and_then(|root| git_head_commit_ms(&root));
+    let commit = git_head_commit_ms(Path::new(path));
     match commit {
         Some(c) if c >= last_active_ms => c,
         _ => last_active_ms,
@@ -214,6 +195,7 @@ fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<ProjectInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     #[test]
     fn open_list_and_persist() {
@@ -300,5 +282,153 @@ mod tests {
             Some("/tmp/some-proj")
         );
         assert_eq!(store.path_of(9999).unwrap(), None);
+    }
+
+    // ---- bytegit P3:compute_updated_ms 迁移前后必须一致的口径 ----
+
+    const T: i64 = 20_000 * 86_400;
+
+    fn git_at(dir: &Path, args: &[&str], when: Option<i64>) {
+        let mut cmd = Command::new("git");
+        cmd.args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            // 作者日期固定为很早以前:更新时间取的是**提交者**日期。
+            .env("GIT_AUTHOR_DATE", "946684800 +0000");
+        if let Some(w) = when {
+            cmd.env("GIT_COMMITTER_DATE", format!("{w} +0000"));
+        }
+        let out = cmd.output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    fn commit_at(dir: &Path, rel: &str, content: &str, when: i64) {
+        let full = dir.join(rel);
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(full, content).unwrap();
+        git_at(dir, &["add", "."], None);
+        git_at(dir, &["commit", "-qm", "c"], Some(when));
+    }
+
+    fn updated(dir: &Path, last_active_ms: u64) -> u64 {
+        compute_updated_ms(dir.to_str().unwrap(), last_active_ms)
+    }
+
+    #[test]
+    fn updated_ms_is_last_active_outside_a_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(updated(dir.path(), 5_000), 5_000);
+    }
+
+    #[test]
+    fn updated_ms_is_last_active_for_a_repo_without_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        git_at(dir.path(), &["init", "-q"], None);
+        assert_eq!(updated(dir.path(), 5_000), 5_000);
+    }
+
+    #[test]
+    fn updated_ms_is_the_head_commit_time_when_it_is_not_older_than_last_active() {
+        let dir = tempfile::tempdir().unwrap();
+        git_at(dir.path(), &["init", "-q"], None);
+        commit_at(dir.path(), "a.txt", "1", T + 123);
+        assert_eq!(updated(dir.path(), 1_000), (T as u64 + 123) * 1000);
+        // 恰好相等也取提交时间(`>=`)。
+        assert_eq!(
+            updated(dir.path(), (T as u64 + 123) * 1000),
+            (T as u64 + 123) * 1000
+        );
+    }
+
+    #[test]
+    fn updated_ms_falls_back_to_last_active_when_the_commit_is_older() {
+        let dir = tempfile::tempdir().unwrap();
+        git_at(dir.path(), &["init", "-q"], None);
+        commit_at(dir.path(), "a.txt", "1", T);
+        let later = (T as u64 + 10) * 1000;
+        assert_eq!(updated(dir.path(), later), later);
+    }
+
+    #[test]
+    fn updated_ms_uses_the_head_commit_even_when_an_ancestor_has_a_newer_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        git_at(dir.path(), &["init", "-q"], None);
+        commit_at(dir.path(), "a.txt", "1", T + 5_000);
+        commit_at(dir.path(), "a.txt", "2", T);
+        assert_eq!(updated(dir.path(), 1_000), (T as u64) * 1000);
+    }
+
+    #[test]
+    fn updated_ms_looks_upward_from_a_repo_subdirectory() {
+        let dir = tempfile::tempdir().unwrap();
+        git_at(dir.path(), &["init", "-q"], None);
+        commit_at(dir.path(), "sub/a.txt", "1", T + 7);
+        assert_eq!(
+            updated(&dir.path().join("sub"), 1_000),
+            (T as u64 + 7) * 1000
+        );
+    }
+
+    #[test]
+    fn updated_ms_works_on_a_detached_head() {
+        let dir = tempfile::tempdir().unwrap();
+        git_at(dir.path(), &["init", "-q"], None);
+        commit_at(dir.path(), "a.txt", "1", T + 9);
+        git_at(dir.path(), &["checkout", "-q", "--detach"], None);
+        assert_eq!(updated(dir.path(), 1_000), (T as u64 + 9) * 1000);
+    }
+
+    #[test]
+    fn updated_ms_ignores_a_bare_repo_because_it_has_no_work_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir(&src).unwrap();
+        git_at(&src, &["init", "-q"], None);
+        commit_at(&src, "a.txt", "1", T + 11);
+        let bare = dir.path().join("bare.git");
+        git_at(
+            dir.path(),
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                src.to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(updated(&bare, 1_000), 1_000);
+    }
+
+    #[test]
+    fn updated_ms_of_a_linked_worktree_follows_that_worktrees_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main");
+        std::fs::create_dir(&main).unwrap();
+        git_at(&main, &["init", "-q"], None);
+        commit_at(&main, "a.txt", "1", T + 100);
+        let wt = dir.path().join("wt");
+        git_at(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feature",
+                wt.to_str().unwrap(),
+            ],
+            None,
+        );
+        commit_at(&wt, "b.txt", "2", T + 200);
+        assert_eq!(updated(&main, 1_000), (T as u64 + 100) * 1000);
+        assert_eq!(updated(&wt, 1_000), (T as u64 + 200) * 1000);
     }
 }
