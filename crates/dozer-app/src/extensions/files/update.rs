@@ -696,32 +696,103 @@ fn spawn_git_info_load(
     };
     let root = tree.root().to_path_buf();
     handle.spawn(async move {
-        let info = tokio::task::spawn_blocking(move || {
-            use crate::delivery::{branch, current_branch_has_commits, local_branches, repo_root};
-            match repo_root(&root) {
-                Some(repo) => GitInfo {
-                    is_repo: true,
-                    current_branch: branch(&repo),
-                    current_branch_has_commits: current_branch_has_commits(&repo),
-                    branches: local_branches(&repo).unwrap_or_default(),
-                },
-                None => GitInfo {
-                    is_repo: false,
-                    current_branch: None,
-                    current_branch_has_commits: false,
-                    branches: Vec::new(),
-                },
-            }
-        })
-        .await
-        .unwrap_or_else(|_| GitInfo {
+        let info = tokio::task::spawn_blocking(move || load_git_info(&root))
+            .await
+            .unwrap_or_else(|_| GitInfo {
+                is_repo: false,
+                current_branch: None,
+                current_branch_has_commits: false,
+                branches: Vec::new(),
+            });
+        emit(Message::GitInfoLoaded(project_id, info));
+    });
+}
+
+/// 分支栏用的 git 信息:`root` 所属的(非 bare)仓库;不在仓库里为 `is_repo: false`。
+/// `root` 在仓库子目录里照样向上找到仓库。
+pub(crate) fn load_git_info(root: &Path) -> GitInfo {
+    use crate::delivery::{branch, current_branch_has_commits, local_branches, repo_root};
+    match repo_root(root) {
+        Some(repo) => GitInfo {
+            is_repo: true,
+            current_branch: branch(&repo),
+            current_branch_has_commits: current_branch_has_commits(&repo),
+            branches: local_branches(&repo).unwrap_or_default(),
+        },
+        None => GitInfo {
             is_repo: false,
             current_branch: None,
             current_branch_has_commits: false,
             branches: Vec::new(),
-        });
-        emit(Message::GitInfoLoaded(project_id, info));
-    });
+        },
+    }
+}
+
+#[cfg(test)]
+mod git_info_tests {
+    use super::*;
+    use bytegit::testutil::TempRepo;
+
+    fn not_a_repo() -> GitInfo {
+        GitInfo {
+            is_repo: false,
+            current_branch: None,
+            current_branch_has_commits: false,
+            branches: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_non_repo_is_not_a_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(load_git_info(dir.path()), not_a_repo());
+    }
+
+    #[test]
+    fn a_repo_reports_branch_commits_and_sorted_branches() {
+        let t = TempRepo::new();
+        t.commit_file("a.txt", "x\n", "one");
+        t.branch("feature");
+        assert_eq!(
+            load_git_info(t.path()),
+            GitInfo {
+                is_repo: true,
+                current_branch: Some("main".to_string()),
+                current_branch_has_commits: true,
+                branches: vec!["feature".to_string(), "main".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn a_repo_without_commits_has_no_branch_and_no_branches() {
+        let t = TempRepo::new();
+        assert_eq!(
+            load_git_info(t.path()),
+            GitInfo {
+                is_repo: true,
+                current_branch: None,
+                current_branch_has_commits: false,
+                branches: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_repo_subdirectory_is_looked_up_to_the_repo() {
+        let t = TempRepo::new();
+        t.commit_file("sub/a.txt", "x\n", "one");
+        let info = load_git_info(&t.path().join("sub"));
+        assert!(info.is_repo);
+        assert_eq!(info.current_branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn a_file_path_is_not_a_repo() {
+        let t = TempRepo::new();
+        t.commit_file("a.txt", "x\n", "one");
+        assert_eq!(load_git_info(&t.path().join("a.txt")), not_a_repo());
+    }
 }
 
 #[cfg(test)]

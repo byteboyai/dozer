@@ -759,6 +759,16 @@ pub fn commit_detail(repo_path: &Path, oid: CommitId) -> Result<CommitDetail, St
     Ok(CommitDetail { files })
 }
 
+/// 分支选择器要的数据:`(本地分支名升序, 工作区是否有改动)`。
+///
+/// **注意口径不一致(迁移前就如此,保持原样):** 分支列表向上查找(`repo_path` 在仓库子目录里
+/// 也能取到),"是否有改动"只认仓库根(子目录里恒为 `false`)。不在仓库里为 `(空, false)`。
+pub(crate) fn load_branch_picker_data(repo_path: &Path) -> (Vec<String>, bool) {
+    let branches = crate::delivery::local_branches(repo_path).unwrap_or_default();
+    let dirty = crate::delivery::is_dirty(repo_path);
+    (branches, dirty)
+}
+
 /// commit 搜索框(iced 原生 `text_input`)的 `widget::Id`:main.rs 每帧
 /// `interface.operate` 用 `CaptureSearchFocus` 问真实焦点态。
 pub fn search_field_id() -> Id {
@@ -3065,5 +3075,38 @@ mod tests {
         assert!(update(&mut state, Message::SearchSubmit, &handle, |_| {}).is_none());
         assert_eq!(state.search, "login");
         assert_eq!(state.pages, 0);
+    }
+
+    // ---- bytegit P6:分支选择器数据迁移前后必须一致的口径 ----
+
+    #[test]
+    fn branch_picker_data_of_a_non_repo_is_empty_and_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(load_branch_picker_data(dir.path()), (Vec::new(), false));
+    }
+
+    #[test]
+    fn branch_picker_data_lists_sorted_branches_and_flags_dirtiness() {
+        use bytegit::testutil::TempRepo;
+        let t = TempRepo::new();
+        t.commit_file("a.txt", "x\n", "one");
+        t.branch("feature");
+        let branches = vec!["feature".to_string(), "main".to_string()];
+        assert_eq!(load_branch_picker_data(t.path()), (branches.clone(), false));
+        t.write_untracked("new.txt", "y");
+        assert_eq!(load_branch_picker_data(t.path()), (branches, true));
+    }
+
+    /// 口径不一致(迁移前就如此):子目录里分支列表能取到,"是否有改动"恒为 false。
+    #[test]
+    fn branch_picker_data_in_a_repo_subdirectory_finds_branches_but_never_dirtiness() {
+        use bytegit::testutil::TempRepo;
+        let t = TempRepo::new();
+        t.commit_file("sub/a.txt", "x\n", "one");
+        t.write_untracked("new.txt", "y");
+        assert_eq!(
+            load_branch_picker_data(&t.path().join("sub")),
+            (vec!["main".to_string()], false)
+        );
     }
 }

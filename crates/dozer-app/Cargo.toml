@@ -94,6 +94,8 @@ csv = "1"
 [dev-dependencies]
 tracing-subscriber.workspace = true
 tempfile = "3"
+# 面板单元测试用 `TempRepo` 造真实仓库。
+bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.6.0", features = ["testutil"] }
 
 # macOS 原生右键菜单(`native_menu`)在运行时把内嵌 Lucide SVG 栅格化成
 # PNG 包成 NSImage,依赖 resvg/usvg/tiny-skia。三个 crate 已经是 iced_wgpu

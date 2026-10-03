@@ -2865,9 +2865,7 @@ impl App {
                             .active_workspace()
                             .and_then(|ws| ws.active_project_path())
                     {
-                        let branches =
-                            crate::delivery::local_branches(&repo_path).unwrap_or_default();
-                        let dirty = crate::delivery::is_dirty(&repo_path);
+                        let (branches, dirty) = git_log::load_branch_picker_data(&repo_path);
                         git_log::update(
                             &mut self.git_log,
                             git_log::Message::BranchesLoaded(repo_path, branches, dirty),
@@ -2912,10 +2910,7 @@ impl App {
                         self.handle.spawn(async move {
                             let repo_path2 = repo_path.clone();
                             let (branches, dirty) = tokio::task::spawn_blocking(move || {
-                                let branches = crate::delivery::local_branches(&repo_path2)
-                                    .unwrap_or_default();
-                                let dirty = crate::delivery::is_dirty(&repo_path2);
-                                (branches, dirty)
+                                git_log::load_branch_picker_data(&repo_path2)
                             })
                             .await
                             .unwrap_or_default();

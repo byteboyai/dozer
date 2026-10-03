@@ -809,6 +809,7 @@ dependencies = [
  "git2",
  "notify",
  "serde",
+ "tempfile",
 ]
 
 [[package]]

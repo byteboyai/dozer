@@ -1042,10 +1042,7 @@ impl Workspace {
                     (None, None, None)
                 };
                 let workspace = if needs_workspace {
-                    delivery::repo_root(&cwd).map(|repo| WorkspaceGitInfo {
-                        branch: delivery::branch(&repo),
-                        dirty: delivery::is_dirty(&repo),
-                    })
+                    workspace_git_info(&cwd)
                 } else {
                     None
                 };
@@ -3181,14 +3178,7 @@ pub(crate) fn spawn_project_git_refresh(project_id: i64, repo_path: PathBuf, io:
     io.handle.spawn(async move {
         let (b, d, s, r) = tokio::task::spawn_blocking({
             let repo_path = repo_path.clone();
-            move || {
-                (
-                    delivery::branch(&repo_path),
-                    delivery::is_dirty(&repo_path),
-                    delivery::file_statuses(&repo_path),
-                    delivery::remote_url(&repo_path),
-                )
-            }
+            move || project_git_snapshot(&repo_path)
         })
         .await
         .unwrap_or((None, false, HashMap::new(), Vec::new()));
@@ -3199,6 +3189,35 @@ pub(crate) fn spawn_project_git_refresh(project_id: i64, repo_path: PathBuf, io:
             project_id, b, d, r,
         )));
     });
+}
+
+/// agent 会话当前 cwd 所属仓库的分支/脏标(卡片工作区行用)。cwd 不是目录、不在任何仓库里、
+/// 或仓库是 bare 时为 `None`;cwd 在仓库**子目录**里照样向上找到仓库。
+pub(crate) fn workspace_git_info(cwd: &Path) -> Option<WorkspaceGitInfo> {
+    delivery::repo_root(cwd).map(|repo| WorkspaceGitInfo {
+        branch: delivery::branch(&repo),
+        dirty: delivery::is_dirty(&repo),
+    })
+}
+
+/// 项目的 git 快照:`(当前分支, 是否有改动, 文件级状态, 全部 remote 的 URL)`。
+///
+/// **注意口径不一致(迁移前就如此,保持原样):** 分支、改动、文件状态只认仓库根——项目目录
+/// 在仓库子目录里时它们是 `None`/`false`/空;而 remote URL 向上查找,子目录里照样能取到。
+pub(crate) fn project_git_snapshot(
+    repo_path: &Path,
+) -> (
+    Option<String>,
+    bool,
+    HashMap<PathBuf, delivery::FileGitStatus>,
+    Vec<String>,
+) {
+    (
+        delivery::branch(repo_path),
+        delivery::is_dirty(repo_path),
+        delivery::file_statuses(repo_path),
+        delivery::remote_url(repo_path),
+    )
 }
 
 /// 磁盘占用是独立于组合 git 刷新的异步任务——避免大仓库的目录遍历拖慢
@@ -3268,4 +3287,105 @@ pub(crate) fn review_content<'a>(
         content = content.push(load_more_button(conversation_id, rv.entries.len() as i64));
     }
     content
+}
+
+#[cfg(test)]
+mod git_snapshot_tests {
+    use super::*;
+    use bytegit::testutil::TempRepo;
+
+    fn info(branch: Option<&str>, dirty: bool) -> Option<WorkspaceGitInfo> {
+        Some(WorkspaceGitInfo {
+            branch: branch.map(str::to_string),
+            dirty,
+        })
+    }
+
+    #[test]
+    fn workspace_git_info_is_none_outside_a_repo_and_for_a_file_path() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(workspace_git_info(dir.path()), None);
+        let t = TempRepo::new();
+        t.commit_file("a.txt", "x\n", "one");
+        assert_eq!(workspace_git_info(&t.path().join("a.txt")), None);
+    }
+
+    #[test]
+    fn workspace_git_info_reports_branch_and_dirtiness() {
+        let t = TempRepo::new();
+        t.commit_file("a.txt", "x\n", "one");
+        assert_eq!(workspace_git_info(t.path()), info(Some("main"), false));
+        t.write_untracked("new.txt", "y");
+        assert_eq!(workspace_git_info(t.path()), info(Some("main"), true));
+    }
+
+    #[test]
+    fn workspace_git_info_looks_upward_from_a_subdirectory() {
+        let t = TempRepo::new();
+        t.commit_file("sub/a.txt", "x\n", "one");
+        t.write_untracked("new.txt", "y");
+        assert_eq!(
+            workspace_git_info(&t.path().join("sub")),
+            info(Some("main"), true)
+        );
+    }
+
+    #[test]
+    fn workspace_git_info_has_no_branch_on_a_detached_head() {
+        let t = TempRepo::new();
+        t.commit_file("a.txt", "x\n", "one");
+        t.detach_head();
+        assert_eq!(workspace_git_info(t.path()), info(None, false));
+    }
+
+    #[test]
+    fn project_git_snapshot_of_a_non_repo_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let (branch, dirty, statuses, remotes) = project_git_snapshot(dir.path());
+        assert_eq!((branch, dirty), (None, false));
+        assert!(statuses.is_empty() && remotes.is_empty());
+    }
+
+    #[test]
+    fn project_git_snapshot_collects_branch_dirtiness_statuses_and_remotes() {
+        let t = TempRepo::new();
+        t.commit_file("a.txt", "x\n", "one");
+        t.add_remote("origin", "https://example.com/x.git");
+        t.write_untracked("a.txt", "changed\n");
+        t.write_untracked("new.txt", "y");
+        let (branch, dirty, statuses, remotes) = project_git_snapshot(t.path());
+        assert_eq!(branch.as_deref(), Some("main"));
+        assert!(dirty);
+        assert!(statuses.contains_key(&t.path().join("a.txt")));
+        assert!(statuses.contains_key(&t.path().join("new.txt")));
+        assert_eq!(remotes, vec!["https://example.com/x.git".to_string()]);
+    }
+
+    #[test]
+    fn project_git_snapshot_remote_urls_are_deduped_in_remote_name_order() {
+        let t = TempRepo::new();
+        t.commit_file("a.txt", "x\n", "one");
+        t.add_remote("c", "https://x/2");
+        t.add_remote("b", "https://x/1");
+        t.add_remote("a", "https://x/1");
+        let (_, _, _, remotes) = project_git_snapshot(t.path());
+        assert_eq!(
+            remotes,
+            vec!["https://x/1".to_string(), "https://x/2".to_string()]
+        );
+    }
+
+    /// 口径不一致(迁移前就如此):项目在仓库子目录里时,分支/改动/文件状态按"不是仓库"处理,
+    /// remote URL 却能向上找到。是否统一是规格 O9 的待决事项,迁移保持原样。
+    #[test]
+    fn project_git_snapshot_in_a_repo_subdirectory_only_finds_remotes() {
+        let t = TempRepo::new();
+        t.commit_file("sub/a.txt", "x\n", "one");
+        t.add_remote("origin", "https://example.com/x.git");
+        t.write_untracked("new.txt", "y");
+        let (branch, dirty, statuses, remotes) = project_git_snapshot(&t.path().join("sub"));
+        assert_eq!((branch, dirty), (None, false));
+        assert!(statuses.is_empty());
+        assert_eq!(remotes, vec!["https://example.com/x.git".to_string()]);
+    }
 }
