@@ -6,6 +6,7 @@
 //! 排成可解释的优先处理顺序。Git 不可用一律降级返回空/`None`，不让扫描失败。
 
 use crate::delivery;
+use bytegit::{Repo, StatusOptions};
 use dozer_codehealth::{Finding, FindingChange, FindingSeverity, GitSnapshot, diff_reports};
 use std::collections::HashMap;
 use std::path::Path;
@@ -25,11 +26,10 @@ pub fn git_snapshot(project_root: &Path) -> Option<GitSnapshot> {
     })
 }
 
+/// HEAD 提交的前 7 位。和迁移前一致只认仓库根(见 `delivery::open_exact`)。
 fn head_short_sha(dir: &Path) -> Option<String> {
-    let repo = git2::Repository::open(dir).ok()?;
-    let head = repo.head().ok()?;
-    let commit = head.peel_to_commit().ok()?;
-    Some(commit.id().to_string().chars().take(7).collect())
+    let commit = delivery::open_exact(dir)?.head().ok()?.commit?;
+    Some(commit.short(7))
 }
 
 /// 近 30 天各文件（相对项目根的规范化路径）的提交次数。Git 不可用/失败返回
@@ -61,33 +61,28 @@ pub fn recent_churn(project_root: &Path) -> Option<HashMap<String, usize>> {
     Some(map)
 }
 
-/// 当前 Git dirty（未提交改动 + 新增未跟踪）文件路径，相对项目根、`/` 分隔。
+/// 当前 Git dirty（未提交改动 + 新增未跟踪）文件路径，相对**仓库根**、`/` 分隔。
 /// Git 不可用/失败返回空列表（影响范围退化为仅看图变化，不让扫描失败）。
+///
+/// 注意：项目目录在仓库子目录时，这里的路径仍是相对仓库根的（迁移前同样如此），
+/// 与 `recent_churn` 的 `--relative`（相对项目根）口径不同——见 bytegit P1 计划“待决事项”。
 pub fn dirty_paths(project_root: &Path) -> Vec<String> {
-    let out = match Command::new("git")
-        .args(["status", "--porcelain", "--untracked-files=all"])
-        .current_dir(project_root)
-        .output()
-    {
-        Ok(o) if o.status.success() => o,
-        _ => return Vec::new(),
+    let Ok(repo) = Repo::discover(project_root) else {
+        return Vec::new();
     };
-    let mut paths: Vec<String> = Vec::new();
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        // porcelain 格式：`XY <path>`，重命名时 `XY <old> -> <new>`。
-        if line.len() < 4 {
-            continue;
-        }
-        let rest = &line[3..];
-        let path = match rest.split_once(" -> ") {
-            Some((_, new)) => new,
-            None => rest,
-        };
-        let path = path.trim().trim_matches('"');
-        if !path.is_empty() {
-            paths.push(path.replace('\\', "/"));
-        }
-    }
+    let opts = StatusOptions {
+        include_untracked: true,
+        include_ignored: false,
+        // 与 `git status --porcelain` 的默认一致：重命名只报新路径。
+        detect_renames: true,
+    };
+    let Ok(entries) = repo.status(opts) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<String> = entries
+        .into_iter()
+        .map(|e| e.path.to_string_lossy().replace('\\', "/"))
+        .collect();
     paths.sort();
     paths.dedup();
     paths
@@ -417,5 +412,125 @@ mod tests {
 
         let churn = recent_churn(repo).expect("git repo 应有 churn");
         assert_eq!(churn.get("hot.rs").copied(), Some(2));
+    }
+
+    // ---- bytegit P1:dirty_paths / head_short_sha 迁移前后必须一致的口径 ----
+
+    fn run_git(repo: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    fn repo_with_two_files() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        run_git(dir.path(), &["init", "-q"]);
+        std::fs::write(dir.path().join("tracked.rs"), "fn a() {}\n").unwrap();
+        std::fs::write(dir.path().join("gone.rs"), "fn g() {}\n").unwrap();
+        run_git(dir.path(), &["add", "."]);
+        run_git(dir.path(), &["commit", "-qm", "c1"]);
+        dir
+    }
+
+    #[test]
+    fn dirty_paths_clean_repo_is_empty() {
+        let dir = repo_with_two_files();
+        assert!(dirty_paths(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn dirty_paths_covers_modified_deleted_untracked_dirs_and_staged_new() {
+        let dir = repo_with_two_files();
+        let r = dir.path();
+        std::fs::write(r.join("tracked.rs"), "fn a() {}\nfn b() {}\n").unwrap();
+        std::fs::remove_file(r.join("gone.rs")).unwrap();
+        std::fs::create_dir_all(r.join("dir/sub")).unwrap();
+        std::fs::write(r.join("dir/sub/x.rs"), "x").unwrap();
+        std::fs::write(r.join("dir/y.rs"), "y").unwrap();
+        std::fs::write(r.join("staged.rs"), "s").unwrap();
+        run_git(r, &["add", "staged.rs"]);
+        assert_eq!(
+            dirty_paths(r),
+            vec![
+                "dir/sub/x.rs",
+                "dir/y.rs",
+                "gone.rs",
+                "staged.rs",
+                "tracked.rs"
+            ]
+        );
+    }
+
+    #[test]
+    fn dirty_paths_excludes_ignored_files() {
+        let dir = repo_with_two_files();
+        let r = dir.path();
+        std::fs::write(r.join(".gitignore"), "*.log\n").unwrap();
+        run_git(r, &["add", ".gitignore"]);
+        run_git(r, &["commit", "-qm", "ignore"]);
+        std::fs::write(r.join("debug.log"), "x").unwrap();
+        assert!(dirty_paths(r).is_empty());
+    }
+
+    #[test]
+    fn dirty_paths_reports_only_the_new_path_of_a_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        run_git(r, &["init", "-q"]);
+        let body = "line one\nline two\nline three\nline four\nline five\n";
+        std::fs::write(r.join("old.rs"), body).unwrap();
+        run_git(r, &["add", "."]);
+        run_git(r, &["commit", "-qm", "c1"]);
+        run_git(r, &["mv", "old.rs", "renamed.rs"]);
+        assert_eq!(dirty_paths(r), vec!["renamed.rs"]);
+    }
+
+    #[test]
+    fn dirty_paths_handles_spaces_in_names() {
+        let dir = repo_with_two_files();
+        std::fs::write(dir.path().join("my file.rs"), "x").unwrap();
+        assert_eq!(dirty_paths(dir.path()), vec!["my file.rs"]);
+    }
+
+    #[test]
+    fn dirty_paths_from_a_subdirectory_are_relative_to_the_repo_root() {
+        let dir = repo_with_two_files();
+        let r = dir.path();
+        std::fs::create_dir(r.join("pkg")).unwrap();
+        std::fs::write(r.join("pkg/f.rs"), "x").unwrap();
+        assert_eq!(dirty_paths(&r.join("pkg")), vec!["pkg/f.rs"]);
+    }
+
+    #[test]
+    fn dirty_paths_reports_non_ascii_names_as_real_utf8() {
+        // 迁移前读 porcelain 文本，非 ASCII 路径会被 git 转义成 "\346\226..." 八进制；
+        // 迁移后是真实路径（有意的改进，不是等价迁移）。
+        let dir = repo_with_two_files();
+        std::fs::write(dir.path().join("说明.md"), "x").unwrap();
+        assert_eq!(dirty_paths(dir.path()), vec!["说明.md"]);
+    }
+
+    #[test]
+    fn head_short_sha_is_seven_chars_at_the_root_and_none_elsewhere() {
+        let dir = repo_with_two_files();
+        let r = dir.path();
+        let sha = head_short_sha(r).expect("有提交应有 sha");
+        assert_eq!(sha.len(), 7);
+        assert!(sha.chars().all(|c| c.is_ascii_hexdigit()));
+        // 只认仓库根:子目录、空仓库、非 git 目录都是 None
+        std::fs::create_dir(r.join("pkg")).unwrap();
+        assert_eq!(head_short_sha(&r.join("pkg")), None);
+        let empty = tempfile::tempdir().unwrap();
+        run_git(empty.path(), &["init", "-q"]);
+        assert_eq!(head_short_sha(empty.path()), None);
+        let plain = tempfile::tempdir().unwrap();
+        assert_eq!(head_short_sha(plain.path()), None);
     }
 }
