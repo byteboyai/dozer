@@ -254,7 +254,7 @@ pub(crate) fn work_content_and_workspace_row(
 /// Agent 面板头部"＋"按钮:点击切换 `agent_picker_open`,弹出 agent
 /// 选择菜单(`agent_picker_popup`)。样式与顶栏页签行的"＋"一致——无背景、
 /// Lucide `SquarePlus` 图标、静止灰(`DIM`)、hover 平滑过渡到金(`GOLD`),
-/// 由 `HoverId::AgentPickerToggle` + `MouseArea` 驱动同一套悬停动画。
+/// 由 `HoverId::named(PanelKind::Agent, "picker_toggle")` + `MouseArea` 驱动同一套悬停动画。
 pub(crate) fn agent_picker_toggle_button<'a>(
     app: &App,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -263,12 +263,12 @@ pub(crate) fn agent_picker_toggle_button<'a>(
         byteui::theme::icon_size::row(),
         false,
         false,
-        app.hover_progress(HoverId::AgentPickerToggle),
+        app.hover_progress(HoverId::named(PanelKind::Agent, "picker_toggle")),
         false,
         byteui::theme::geometry::tab_button_size(),
         true,
         Message::AgentPickerToggle,
-        |hovered| Message::Hover(HoverId::AgentPickerToggle, hovered),
+        |hovered| Message::Hover(HoverId::named(PanelKind::Agent, "picker_toggle"), hovered),
         "新建 Agent 会话",
     )
 }
@@ -508,11 +508,11 @@ pub(crate) fn review_content_pane<'a>(
     let collapse_button = app.list_collapse_button(
         PanelKind::Conversations,
         app.list_collapsed(PanelKind::Conversations),
-        HoverId::ConversationsListCollapse,
+        HoverId::list_collapse(PanelKind::Conversations),
         "收起列表",
         "展开列表",
         Message::TogglePanelListCollapse(PanelKind::Conversations),
-        move |h| Message::Hover(HoverId::ConversationsListCollapse, h),
+        move |h| Message::Hover(HoverId::list_collapse(PanelKind::Conversations), h),
     );
     let actions: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
         match ws.review.as_ref().map(|rv| (&rv.source, rv.agent)) {
@@ -1059,12 +1059,12 @@ pub(crate) fn preview_pane_for<'a>(
     // 状态取的是一份只读引用,后续渲染把对应的消息/前缀按 `kind` 选好。
     // `move` 只捕获 `PreviewPaneKind`(Clone/Copy),多余生命周期问题一并消掉。
     let item_hover = move |idx| match kind {
-        PreviewPaneKind::Files => HoverId::PreviewTabItem(idx),
-        PreviewPaneKind::Project => HoverId::ProjectPreviewTabItem(idx),
+        PreviewPaneKind::Files => HoverId::tab_item(PanelKind::Files, idx as u64),
+        PreviewPaneKind::Project => HoverId::tab_item(PanelKind::Project, idx as u64),
     };
     let close_hover = move |idx| match kind {
-        PreviewPaneKind::Files => HoverId::PreviewTabClose(idx),
-        PreviewPaneKind::Project => HoverId::ProjectPreviewTabClose(idx),
+        PreviewPaneKind::Files => HoverId::tab_close(PanelKind::Files, idx as u64),
+        PreviewPaneKind::Project => HoverId::tab_close(PanelKind::Project, idx as u64),
     };
     let tab_group = match kind {
         PreviewPaneKind::Files => crate::app::TabGroup::Preview,
@@ -1087,20 +1087,20 @@ pub(crate) fn preview_pane_for<'a>(
         PreviewPaneKind::Project => Message::ProjectPreviewTabOverflowToggle,
     };
     let overflow_hover = move || match kind {
-        PreviewPaneKind::Files => HoverId::PreviewTabOverflow,
-        PreviewPaneKind::Project => HoverId::ProjectPreviewTabOverflow,
+        PreviewPaneKind::Files => HoverId::tab_overflow(PanelKind::Files),
+        PreviewPaneKind::Project => HoverId::tab_overflow(PanelKind::Project),
     };
     let render_mode_hover = move || match kind {
-        PreviewPaneKind::Files => HoverId::PreviewRenderMode,
-        PreviewPaneKind::Project => HoverId::ProjectPreviewRenderMode,
+        PreviewPaneKind::Files => HoverId::named(PanelKind::Files, "render_mode"),
+        PreviewPaneKind::Project => HoverId::named(PanelKind::Project, "render_mode"),
     };
     let tabular_mode_hover = move || match kind {
-        PreviewPaneKind::Files => HoverId::PreviewTabularMode,
-        PreviewPaneKind::Project => HoverId::ProjectPreviewTabularMode,
+        PreviewPaneKind::Files => HoverId::named(PanelKind::Files, "tabular_mode"),
+        PreviewPaneKind::Project => HoverId::named(PanelKind::Project, "tabular_mode"),
     };
     let json_mode_hover = move || match kind {
-        PreviewPaneKind::Files => HoverId::PreviewJsonMode,
-        PreviewPaneKind::Project => HoverId::ProjectPreviewJsonMode,
+        PreviewPaneKind::Files => HoverId::named(PanelKind::Files, "json_mode"),
+        PreviewPaneKind::Project => HoverId::named(PanelKind::Project, "json_mode"),
     };
     // Find 条与编辑器共享同一份"按面板选消息/悬停态"手法。消息统一走带
     // `PanelKind` 的顶层 `Message::PreviewFind*`(同 `PreviewSaveActive`,一条
@@ -1290,20 +1290,20 @@ pub(crate) fn preview_pane_for<'a>(
         PreviewPaneKind::Files => app.list_collapse_button(
             PanelKind::Files,
             app.files_tree_collapsed(),
-            HoverId::FileTreeCollapse,
+            HoverId::list_collapse(PanelKind::Files),
             "收起文件树",
             "展开文件树",
             Message::ToggleFileTreeCollapse,
-            move |hovered| Message::Hover(HoverId::FileTreeCollapse, hovered),
+            move |hovered| Message::Hover(HoverId::list_collapse(PanelKind::Files), hovered),
         ),
         PreviewPaneKind::Project => app.list_collapse_button(
             PanelKind::Project,
             app.list_collapsed(PanelKind::Project),
-            HoverId::ProjectListCollapse,
+            HoverId::list_collapse(PanelKind::Project),
             "收起列表",
             "展开列表",
             Message::TogglePanelListCollapse(PanelKind::Project),
-            move |hovered| Message::Hover(HoverId::ProjectListCollapse, hovered),
+            move |hovered| Message::Hover(HoverId::list_collapse(PanelKind::Project), hovered),
         ),
     };
     let mut tab_bar_row = row![]
@@ -1512,12 +1512,12 @@ pub(crate) fn preview_find_bar_widget<'a>(
         };
     let hover = move |next: bool| match next {
         true => match panel {
-            PanelKind::Project => HoverId::ProjectPreviewFindNext,
-            _ => HoverId::PreviewFindNext,
+            PanelKind::Project => HoverId::named(PanelKind::Project, "find_next"),
+            _ => HoverId::named(PanelKind::Files, "find_next"),
         },
         false => match panel {
-            PanelKind::Project => HoverId::ProjectPreviewFindPrev,
-            _ => HoverId::PreviewFindPrev,
+            PanelKind::Project => HoverId::named(PanelKind::Project, "find_prev"),
+            _ => HoverId::named(PanelKind::Files, "find_prev"),
         },
     };
     let step_icon = move |next: bool| -> iced_widget::core::Element<
@@ -1570,8 +1570,8 @@ pub(crate) fn preview_find_bar_widget<'a>(
     let replace_toggle_opt: Option<EE<'_>> = if show_replace {
         let replace_open = find.replace_open;
         let replace_toggle_hid = match panel {
-            PanelKind::Project => HoverId::ProjectPreviewFindReplaceToggle,
-            _ => HoverId::PreviewFindReplaceToggle,
+            PanelKind::Project => HoverId::named(PanelKind::Project, "find_replace_toggle"),
+            _ => HoverId::named(PanelKind::Files, "find_replace_toggle"),
         };
         Some(icons::icon_button_entry(
             if replace_open {
@@ -1684,8 +1684,9 @@ pub(crate) fn preview_find_bar_widget<'a>(
                 replace_icon_button(
                     icons::IconKind::Replace,
                     match panel {
-                        PanelKind::Project => HoverId::ProjectPreviewFindReplaceCurrentBtn,
-                        _ => HoverId::PreviewFindReplaceCurrentBtn,
+                        PanelKind::Project =>
+                            HoverId::named(PanelKind::Project, "find_replace_current"),
+                        _ => HoverId::named(PanelKind::Files, "find_replace_current"),
                     },
                     match panel {
                         PanelKind::Project =>
@@ -1698,8 +1699,9 @@ pub(crate) fn preview_find_bar_widget<'a>(
                 replace_icon_button(
                     icons::IconKind::ReplaceAll,
                     match panel {
-                        PanelKind::Project => HoverId::ProjectPreviewFindReplaceAllBtn,
-                        _ => HoverId::PreviewFindReplaceAllBtn,
+                        PanelKind::Project =>
+                            HoverId::named(PanelKind::Project, "find_replace_all"),
+                        _ => HoverId::named(PanelKind::Files, "find_replace_all"),
                     },
                     match panel {
                         PanelKind::Project => Message::PreviewFindReplaceAll(PanelKind::Project),

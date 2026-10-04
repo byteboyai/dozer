@@ -1,5 +1,5 @@
 //! Todo 面板 view:主视图/列表/卡片/搜索栏/footer/清空确认/状态与日历浮层。
-use crate::app::HoverId;
+use crate::app::{HoverId, PanelKind};
 use crate::panel_host::PanelHost;
 
 use crate::theme;
@@ -75,11 +75,16 @@ pub fn view<'a>(
     let collapse = app.list_collapse_button(
         crate::app::PanelKind::Todo,
         app.list_collapsed(crate::app::PanelKind::Todo),
-        crate::app::HoverId::TodoListCollapse,
+        crate::app::HoverId::list_collapse(crate::app::PanelKind::Todo),
         "收起",
         "展开",
         Message::ToggleListCollapse,
-        move |hovered| Message::Hover(crate::app::HoverId::TodoListCollapse, hovered),
+        move |hovered| {
+            Message::Hover(
+                crate::app::HoverId::list_collapse(crate::app::PanelKind::Todo),
+                hovered,
+            )
+        },
     );
     // 右区顶栏(原生,保留):左侧「列表视图 / 看板视图」切换 tab,右端收起/展开
     // 列表列按钮。**钉成固定高度**(`todo_top_row_inner_h_px`,tab 按钮同样钉
@@ -451,12 +456,14 @@ pub(crate) fn category_tree_nav<'a>(
                     byteui::theme::icon_size::row(),
                     active,
                     !active,
-                    app.hover_progress(HoverId::TodoCategoryRow(row.id)),
+                    app.hover_progress(HoverId::row(PanelKind::Todo, row.id as u64)),
                     false,
                     byteui::theme::geometry::tab_button_size(),
                     true,
                     Message::CategoryToggleExpand(row.id),
-                    move |hovered| Message::Hover(HoverId::TodoCategoryRow(row.id), hovered),
+                    move |hovered| {
+                        Message::Hover(HoverId::row(PanelKind::Todo, row.id as u64), hovered)
+                    },
                     if row.expanded { "收起" } else { "展开" },
                 )
             } else {

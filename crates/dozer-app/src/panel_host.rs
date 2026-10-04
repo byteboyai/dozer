@@ -10,6 +10,30 @@
 use crate::app::{App, HoverId, PanelKind};
 use iced_widget::core::Element;
 
+/// 面板内一个可悬停元素的**槽位**——词汇通用,不含任何面板名(规格 E2:宿主公开类型里不出现业务类型)。
+/// 与面板(`PanelKind`)一起构成 `HoverId::Panel(panel, slot)`。新增槽位种类前先看能不能用 `Named`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HoverSlot {
+    /// 列表列折叠按钮。
+    ListCollapse,
+    /// 搜索框提交按钮。
+    SearchSubmit,
+    /// "更多…"翻页按钮。
+    More,
+    /// 页签标题(下标或稳定 id)。
+    TabItem(u64),
+    /// 页签关闭按钮。
+    TabClose(u64),
+    /// 页签溢出菜单按钮。
+    TabOverflow,
+    /// 列表行/卡片。
+    Row(u64),
+    /// 一组互斥选项里的一项。
+    Choice(u64),
+    /// 面板内一次性的具名按钮(同一面板内唯一)。
+    Named(&'static str),
+}
+
 pub trait PanelHost {
     /// 某个按钮/页签的悬停动画进度 0.0..=1.0。
     fn hover_progress(&self, id: HoverId) -> f32;
@@ -134,5 +158,59 @@ mod tests {
             Border::default(),
         );
         assert_eq!(host.collapse_buttons_asked.get(), 1);
+    }
+    // ---- H2:HoverId 的面板作用域键 ----
+
+    use crate::extensions::git_log::FileFilter;
+
+    #[test]
+    fn same_slot_in_different_panels_is_a_different_key() {
+        assert_ne!(
+            HoverId::tab_item(PanelKind::Files, 1),
+            HoverId::tab_item(PanelKind::Project, 1)
+        );
+        assert_ne!(
+            HoverId::named(PanelKind::Files, "find_prev"),
+            HoverId::named(PanelKind::Project, "find_prev")
+        );
+        assert_ne!(
+            HoverId::list_collapse(PanelKind::Todo),
+            HoverId::list_collapse(PanelKind::Usage)
+        );
+    }
+
+    #[test]
+    fn different_slots_and_keys_in_one_panel_are_different_keys() {
+        let p = PanelKind::Database;
+        let all = [
+            HoverId::list_collapse(p),
+            HoverId::search_submit(p),
+            HoverId::more(p),
+            HoverId::tab_overflow(p),
+            HoverId::tab_item(p, 0),
+            HoverId::tab_item(p, 1),
+            HoverId::tab_close(p, 0),
+            HoverId::row(p, 0),
+            HoverId::choice(p, 0),
+            HoverId::named(p, "a"),
+            HoverId::named(p, "b"),
+        ];
+        let set: std::collections::HashSet<_> = all.iter().copied().collect();
+        assert_eq!(set.len(), all.len());
+    }
+
+    #[test]
+    fn git_file_filters_map_to_distinct_choice_keys() {
+        let keys: std::collections::HashSet<_> = [
+            FileFilter::All,
+            FileFilter::Modified,
+            FileFilter::Added,
+            FileFilter::Deleted,
+            FileFilter::Renamed,
+        ]
+        .into_iter()
+        .map(|f| HoverId::choice(PanelKind::GitLog, f as u64))
+        .collect();
+        assert_eq!(keys.len(), 5);
     }
 }

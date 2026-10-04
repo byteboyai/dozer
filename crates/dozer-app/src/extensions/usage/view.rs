@@ -24,11 +24,16 @@ pub fn content_pane<'a>(
     let collapse = app.list_collapse_button(
         crate::app::PanelKind::Usage,
         app.list_collapsed(crate::app::PanelKind::Usage),
-        crate::app::HoverId::UsageListCollapse,
+        crate::app::HoverId::list_collapse(crate::app::PanelKind::Usage),
         "收起列表",
         "展开列表",
         Message::ToggleListCollapse,
-        move |hovered| Message::Hover(crate::app::HoverId::UsageListCollapse, hovered),
+        move |hovered| {
+            Message::Hover(
+                crate::app::HoverId::list_collapse(crate::app::PanelKind::Usage),
+                hovered,
+            )
+        },
     );
     let head = crate::chrome::homespace::home_panel_head_with_actions(
         icons::IconKind::BarChart3,

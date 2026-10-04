@@ -454,7 +454,7 @@ impl WorkspaceState {
 }
 
 /// 内容窗格 tab 栏里某个可悬停部件的身份;配合 `Message::TabHover` 由内核
-/// 转发到 `HoverId::DatabaseTabItem/DatabaseTabClose`。
+/// 转发到 `HoverId::tab_item`/`tab_close`(`PanelKind::Database`)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatabaseTabHoverTarget {
     Title,

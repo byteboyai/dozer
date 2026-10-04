@@ -1654,8 +1654,12 @@ impl App {
                 // 内容窗格 tab 本体/关闭按钮的悬停,转发成 `HoverId`(同
                 // `ToolbarHover` 的口径)。
                 let id = match target {
-                    database::DatabaseTabHoverTarget::Title => HoverId::DatabaseTabItem(idx),
-                    database::DatabaseTabHoverTarget::Close => HoverId::DatabaseTabClose(idx),
+                    database::DatabaseTabHoverTarget::Title => {
+                        HoverId::tab_item(PanelKind::Database, idx as u64)
+                    }
+                    database::DatabaseTabHoverTarget::Close => {
+                        HoverId::tab_close(PanelKind::Database, idx as u64)
+                    }
                 };
                 self.set_hover(id, hovered);
             }
@@ -2413,8 +2417,8 @@ impl App {
                 // 悬停,残留的 hover 记录会被将来复用同一下标的新 tab 继承。
                 if let Some(old_len) = closed_old_len {
                     self.dehover_after_tab_close(
-                        HoverId::PreviewTabItem,
-                        HoverId::PreviewTabClose,
+                        |i| HoverId::tab_item(PanelKind::Files, i as u64),
+                        |i| HoverId::tab_close(PanelKind::Files, i as u64),
                         idx,
                         old_len,
                     );
@@ -2624,8 +2628,8 @@ impl App {
                 // 悬停,残留的 hover 记录会被将来复用同一下标的新 tab 继承。
                 if let Some(old_len) = closed_old_len {
                     self.dehover_after_tab_close(
-                        HoverId::ProjectPreviewTabItem,
-                        HoverId::ProjectPreviewTabClose,
+                        |i| HoverId::tab_item(PanelKind::Project, i as u64),
+                        |i| HoverId::tab_close(PanelKind::Project, i as u64),
                         idx,
                         old_len,
                     );
@@ -3080,9 +3084,15 @@ impl App {
                 // 文件树工具行 icon 按钮的 hover:本面板不挂 App 的 hover 动画
                 // 表,把进入/离开转发成 `HoverId` 由内核统一驱动动画进度。
                 let id = match target {
-                    files::FilesToolbarTarget::SearchSubmit => HoverId::FilesSearchSubmit,
-                    files::FilesToolbarTarget::Dotfiles => HoverId::FilesDotfiles,
-                    files::FilesToolbarTarget::BranchSwitch => HoverId::FilesBranchSwitch,
+                    files::FilesToolbarTarget::SearchSubmit => {
+                        HoverId::search_submit(PanelKind::Files)
+                    }
+                    files::FilesToolbarTarget::Dotfiles => {
+                        HoverId::named(PanelKind::Files, "dotfiles")
+                    }
+                    files::FilesToolbarTarget::BranchSwitch => {
+                        HoverId::named(PanelKind::Files, "branch_switch")
+                    }
                 };
                 self.set_hover(id, hovered);
             }
@@ -3330,9 +3340,15 @@ impl App {
                 // 把进入/离开转发成 `HoverId` 由内核统一驱动动画进度(同
                 // `Message::Files(files::Message::ToolbarHover(..))` 的既有先例)。
                 let id = match target {
-                    project::ProjectToolbarTarget::Docs => HoverId::ProjectDocsAdd,
-                    project::ProjectToolbarTarget::Remote => HoverId::ProjectRemoteAdd,
-                    project::ProjectToolbarTarget::Memory => HoverId::ProjectMemoryAdd,
+                    project::ProjectToolbarTarget::Docs => {
+                        HoverId::named(PanelKind::Project, "docs_add")
+                    }
+                    project::ProjectToolbarTarget::Remote => {
+                        HoverId::named(PanelKind::Project, "remote_add")
+                    }
+                    project::ProjectToolbarTarget::Memory => {
+                        HoverId::named(PanelKind::Project, "memory_add")
+                    }
                 };
                 self.set_hover(id, hovered);
             }
@@ -5289,7 +5305,7 @@ impl App {
     }
 
     /// 内容侧"收起/展开列表列"按钮:用户点击某面板内容区的按钮翻转其列表列
-    /// 显隐。语义完全对齐文件预览的 `FileTreeCollapse` 按钮(见 `preview_pane_for`),
+    /// 显隐。语义完全对齐文件预览的 `HoverId::list_collapse(PanelKind::Files)` 按钮(见 `preview_pane_for`),
     /// 只是图标按该面板当前所在栏(左/右)与收起态四选一、tooltip 由调用方
     /// 给静态文案。泛型 `M` 兼容顶层 `Message` 与各扩展模块的本地 `Message`。
     #[allow(clippy::too_many_arguments)]

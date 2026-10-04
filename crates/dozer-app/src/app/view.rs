@@ -548,9 +548,9 @@ pub(crate) fn panel_body<'a>(
                         &ws.files,
                         Length::FillPortion(list_portion),
                         zone_pane_border(zone, lc),
-                        app.hover_progress(HoverId::FilesSearchSubmit),
-                        app.hover_progress(HoverId::FilesDotfiles),
-                        app.hover_progress(HoverId::FilesBranchSwitch),
+                        app.hover_progress(HoverId::search_submit(PanelKind::Files)),
+                        app.hover_progress(HoverId::named(PanelKind::Files, "dotfiles")),
+                        app.hover_progress(HoverId::named(PanelKind::Files, "branch_switch")),
                     )
                     .map(Message::Files)
                 } else {
@@ -682,9 +682,12 @@ pub(crate) fn panel_body<'a>(
                     Length::FillPortion(list_portion),
                     zone_pane_border(zone, lc),
                     project::ProjectPaneHover {
-                        docs_add: app.hover_progress(HoverId::ProjectDocsAdd),
-                        remote_add: app.hover_progress(HoverId::ProjectRemoteAdd),
-                        memory_add: app.hover_progress(HoverId::ProjectMemoryAdd),
+                        docs_add: app
+                            .hover_progress(HoverId::named(PanelKind::Project, "docs_add")),
+                        remote_add: app
+                            .hover_progress(HoverId::named(PanelKind::Project, "remote_add")),
+                        memory_add: app
+                            .hover_progress(HoverId::named(PanelKind::Project, "memory_add")),
                     },
                 )
                 .map(Message::Project);
@@ -1517,7 +1520,7 @@ where
         .into()
 }
 
-/// `host_id` → `HoverId::SshTab{Item,Close}` 用的哈希键(`HoverId` 整体
+/// `host_id` → `HoverId::tab_item`/`tab_close`(`PanelKind::Ssh`) 用的哈希键(`HoverId` 整体
 /// `derive(Copy)`,`String` 不是 `Copy`,退化成 `u64`,不要求无碰撞——
 /// 碰撞在同一台主机的 tab hover 高亮场景下不构成实际风险)。
 pub(crate) fn ssh_tab_hover_key(host_id: &str) -> u64 {
@@ -1565,15 +1568,15 @@ pub(crate) fn ssh_tab_bar<'a>(
         tab_widget::panel_tab(tab_widget::PanelTabArgs {
             title: "空白".to_string(),
             active: blank_active,
-            hover_t: app.hover_progress(HoverId::SshTabItem(blank_key)),
-            close_hover_t: app.hover_progress(HoverId::SshTabClose(blank_key)),
+            hover_t: app.hover_progress(HoverId::tab_item(PanelKind::Ssh, blank_key)),
+            close_hover_t: app.hover_progress(HoverId::tab_close(PanelKind::Ssh, blank_key)),
             prefix: None,
             suffix: None,
             on_select: Message::Ssh(ssh::Message::SelectBlankTab),
             on_close: Message::Ssh(ssh::Message::SelectBlankTab),
-            show_tooltip: app.hover_tooltip_ready(HoverId::SshTabItem(blank_key)),
-            title_hover: move |h| Message::Hover(HoverId::SshTabItem(blank_key), h),
-            close_hover: move |h| Message::Hover(HoverId::SshTabClose(blank_key), h),
+            show_tooltip: app.hover_tooltip_ready(HoverId::tab_item(PanelKind::Ssh, blank_key)),
+            title_hover: move |h| Message::Hover(HoverId::tab_item(PanelKind::Ssh, blank_key), h),
+            close_hover: move |h| Message::Hover(HoverId::tab_close(PanelKind::Ssh, blank_key), h),
         }),
     ));
     for tab in &ws.ssh_tabs {
@@ -1588,8 +1591,8 @@ pub(crate) fn ssh_tab_bar<'a>(
             .as_ref()
             .is_some_and(|(h, k)| h == &host_id && *k == ssh::SshTabKind::Terminal);
         let key = ssh_tab_hover_key(&host_id);
-        let title_hover_t = app.hover_progress(HoverId::SshTabItem(key));
-        let close_hover_t = app.hover_progress(HoverId::SshTabClose(key));
+        let title_hover_t = app.hover_progress(HoverId::tab_item(PanelKind::Ssh, key));
+        let close_hover_t = app.hover_progress(HoverId::tab_close(PanelKind::Ssh, key));
         let icon = icons::view(
             icons::IconKind::Terminal,
             byteui::theme::icon_size::row(),
@@ -1617,12 +1620,18 @@ pub(crate) fn ssh_tab_bar<'a>(
                     close_id,
                     ssh::SshTabKind::Terminal,
                 )),
-                show_tooltip: app.hover_tooltip_ready(HoverId::SshTabItem(key)),
+                show_tooltip: app.hover_tooltip_ready(HoverId::tab_item(PanelKind::Ssh, key)),
                 title_hover: move |h| {
-                    Message::Hover(HoverId::SshTabItem(ssh_tab_hover_key(&title_hover_id)), h)
+                    Message::Hover(
+                        HoverId::tab_item(PanelKind::Ssh, ssh_tab_hover_key(&title_hover_id)),
+                        h,
+                    )
                 },
                 close_hover: move |h| {
-                    Message::Hover(HoverId::SshTabClose(ssh_tab_hover_key(&close_hover_id)), h)
+                    Message::Hover(
+                        HoverId::tab_close(PanelKind::Ssh, ssh_tab_hover_key(&close_hover_id)),
+                        h,
+                    )
                 },
             }),
         ));
@@ -1639,8 +1648,8 @@ pub(crate) fn ssh_tab_bar<'a>(
             .map(|h| h.name.clone())
             .unwrap_or_else(|| host_id.clone());
         let key = ssh_tab_hover_key(host_id);
-        let title_hover_t = app.hover_progress(HoverId::SshTabItem(key));
-        let close_hover_t = app.hover_progress(HoverId::SshTabClose(key));
+        let title_hover_t = app.hover_progress(HoverId::tab_item(PanelKind::Ssh, key));
+        let close_hover_t = app.hover_progress(HoverId::tab_close(PanelKind::Ssh, key));
         let icon = icons::view(
             icons::IconKind::FolderSync,
             byteui::theme::icon_size::row(),
@@ -1664,12 +1673,18 @@ pub(crate) fn ssh_tab_bar<'a>(
                     ssh::SshTabKind::Sftp,
                 )),
                 on_close: Message::Ssh(ssh::Message::CloseSshTab(close_id, ssh::SshTabKind::Sftp)),
-                show_tooltip: app.hover_tooltip_ready(HoverId::SshTabItem(key)),
+                show_tooltip: app.hover_tooltip_ready(HoverId::tab_item(PanelKind::Ssh, key)),
                 title_hover: move |h| {
-                    Message::Hover(HoverId::SshTabItem(ssh_tab_hover_key(&title_hover_id)), h)
+                    Message::Hover(
+                        HoverId::tab_item(PanelKind::Ssh, ssh_tab_hover_key(&title_hover_id)),
+                        h,
+                    )
                 },
                 close_hover: move |h| {
-                    Message::Hover(HoverId::SshTabClose(ssh_tab_hover_key(&close_hover_id)), h)
+                    Message::Hover(
+                        HoverId::tab_close(PanelKind::Ssh, ssh_tab_hover_key(&close_hover_id)),
+                        h,
+                    )
                 },
             }),
         ));
@@ -1701,19 +1716,19 @@ pub(crate) fn ssh_tab_bar<'a>(
     let ssh_tab_total = ws.ssh_tabs.len() + ws.sftp_tabs.len();
     let overflow_button = tab_widget::tab_overflow_button(
         ssh_tab_total,
-        app.hover_progress(HoverId::SshTabOverflow),
+        app.hover_progress(HoverId::tab_overflow(PanelKind::Ssh)),
         Message::Ssh(ssh::Message::TabOverflowToggle),
-        move |hovered| Message::Hover(HoverId::SshTabOverflow, hovered),
+        move |hovered| Message::Hover(HoverId::tab_overflow(PanelKind::Ssh), hovered),
     );
     // 内容侧"收起/展开列表列"按钮(收起左列主机列表后仍在此可见以便恢复)。
     let collapse = app.list_collapse_button(
         PanelKind::Ssh,
         app.list_collapsed(PanelKind::Ssh),
-        HoverId::SshListCollapse,
+        HoverId::list_collapse(PanelKind::Ssh),
         "收起列表",
         "展开列表",
         Message::TogglePanelListCollapse(PanelKind::Ssh),
-        move |hovered| Message::Hover(HoverId::SshListCollapse, hovered),
+        move |hovered| Message::Hover(HoverId::list_collapse(PanelKind::Ssh), hovered),
     );
     let mut tab_bar_row = row![]
         .spacing(4)

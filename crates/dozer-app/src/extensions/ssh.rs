@@ -4,7 +4,7 @@
 //! SSH 终端(阶段 2)/SFTP(阶段 3)留后续,见
 //! `docs/superpowers/specs/2026-08-08-ssh-panel-phase1-design.md`。
 
-use crate::app::{HoverId, ssh_tab_hover_key};
+use crate::app::{HoverId, PanelKind, ssh_tab_hover_key};
 use crate::panel_host::PanelHost;
 use byteui::interaction::icons;
 use iced_widget::core::Element;
@@ -948,11 +948,11 @@ fn host_card<'a>(
     });
     MouseArea::new(card)
         .on_enter(Message::Hover(
-            HoverId::HostCard(ssh_tab_hover_key(&host.id)),
+            HoverId::row(PanelKind::Ssh, ssh_tab_hover_key(&host.id)),
             true,
         ))
         .on_exit(Message::Hover(
-            HoverId::HostCard(ssh_tab_hover_key(&host.id)),
+            HoverId::row(PanelKind::Ssh, ssh_tab_hover_key(&host.id)),
             false,
         ))
         .into()
@@ -1385,7 +1385,8 @@ pub fn view<'a>(
         );
     } else {
         for h in ws_state.hosts() {
-            let hovered = app.hover_progress(HoverId::HostCard(ssh_tab_hover_key(&h.id))) > 0.0;
+            let hovered =
+                app.hover_progress(HoverId::row(PanelKind::Ssh, ssh_tab_hover_key(&h.id))) > 0.0;
             list = list.push(host_card(
                 h,
                 ws_state.test_status(&h.id),

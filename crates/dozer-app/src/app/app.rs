@@ -1852,7 +1852,12 @@ impl App {
                     source: to,
                     press_pos: drag.press_pos,
                 });
-                self.rekey_hover_range(HoverId::PreviewTabItem, HoverId::PreviewTabClose, from, to);
+                self.rekey_hover_range(
+                    |i| HoverId::tab_item(PanelKind::Files, i as u64),
+                    |i| HoverId::tab_close(PanelKind::Files, i as u64),
+                    from,
+                    to,
+                );
             }
             TabGroup::ProjectPreview => {
                 if from == to {
@@ -1873,8 +1878,8 @@ impl App {
                     press_pos: drag.press_pos,
                 });
                 self.rekey_hover_range(
-                    HoverId::ProjectPreviewTabItem,
-                    HoverId::ProjectPreviewTabClose,
+                    |i| HoverId::tab_item(PanelKind::Project, i as u64),
+                    |i| HoverId::tab_close(PanelKind::Project, i as u64),
                     from,
                     to,
                 );
@@ -3826,12 +3831,12 @@ mod tests {
     #[test]
     fn shift_index_keys_after_close_drops_the_closed_tabs_own_hover_entirely() {
         let mut map: HashMap<HoverId, f32> = HashMap::new();
-        map.insert(HoverId::PreviewTabItem(1), 1.0);
-        map.insert(HoverId::PreviewTabClose(1), 1.0);
+        map.insert(HoverId::tab_item(PanelKind::Files, 1), 1.0);
+        map.insert(HoverId::tab_close(PanelKind::Files, 1), 1.0);
         shift_index_keys_after_close(
             &mut map,
-            HoverId::PreviewTabItem,
-            HoverId::PreviewTabClose,
+            |i| HoverId::tab_item(PanelKind::Files, i as u64),
+            |i| HoverId::tab_close(PanelKind::Files, i as u64),
             1,
             2,
         );
@@ -3843,21 +3848,24 @@ mod tests {
     #[test]
     fn shift_index_keys_after_close_shifts_higher_indices_down_by_one() {
         let mut map: HashMap<HoverId, f32> = HashMap::new();
-        map.insert(HoverId::PreviewTabItem(0), 0.4);
-        map.insert(HoverId::PreviewTabItem(2), 1.0);
-        map.insert(HoverId::PreviewTabClose(2), 1.0);
+        map.insert(HoverId::tab_item(PanelKind::Files, 0), 0.4);
+        map.insert(HoverId::tab_item(PanelKind::Files, 2), 1.0);
+        map.insert(HoverId::tab_close(PanelKind::Files, 2), 1.0);
         shift_index_keys_after_close(
             &mut map,
-            HoverId::PreviewTabItem,
-            HoverId::PreviewTabClose,
+            |i| HoverId::tab_item(PanelKind::Files, i as u64),
+            |i| HoverId::tab_close(PanelKind::Files, i as u64),
             1,
             3,
         );
-        assert_eq!(map.get(&HoverId::PreviewTabItem(0)), Some(&0.4));
-        assert_eq!(map.get(&HoverId::PreviewTabItem(1)), Some(&1.0));
-        assert_eq!(map.get(&HoverId::PreviewTabClose(1)), Some(&1.0));
-        assert!(!map.contains_key(&HoverId::PreviewTabItem(2)));
-        assert!(!map.contains_key(&HoverId::PreviewTabClose(2)));
+        assert_eq!(map.get(&HoverId::tab_item(PanelKind::Files, 0)), Some(&0.4));
+        assert_eq!(map.get(&HoverId::tab_item(PanelKind::Files, 1)), Some(&1.0));
+        assert_eq!(
+            map.get(&HoverId::tab_close(PanelKind::Files, 1)),
+            Some(&1.0)
+        );
+        assert!(!map.contains_key(&HoverId::tab_item(PanelKind::Files, 2)));
+        assert!(!map.contains_key(&HoverId::tab_close(PanelKind::Files, 2)));
     }
 
     /// 关掉最右侧(最后一个)tab 时,`(closed_idx+1)..old_len` 是空区间,
@@ -3865,17 +3873,17 @@ mod tests {
     #[test]
     fn shift_index_keys_after_close_noop_for_indices_before_closed_when_closing_the_last_tab() {
         let mut map: HashMap<HoverId, f32> = HashMap::new();
-        map.insert(HoverId::PreviewTabItem(0), 0.7);
-        map.insert(HoverId::PreviewTabItem(1), 1.0);
+        map.insert(HoverId::tab_item(PanelKind::Files, 0), 0.7);
+        map.insert(HoverId::tab_item(PanelKind::Files, 1), 1.0);
         shift_index_keys_after_close(
             &mut map,
-            HoverId::PreviewTabItem,
-            HoverId::PreviewTabClose,
+            |i| HoverId::tab_item(PanelKind::Files, i as u64),
+            |i| HoverId::tab_close(PanelKind::Files, i as u64),
             1,
             2,
         );
-        assert_eq!(map.get(&HoverId::PreviewTabItem(0)), Some(&0.7));
-        assert!(!map.contains_key(&HoverId::PreviewTabItem(1)));
+        assert_eq!(map.get(&HoverId::tab_item(PanelKind::Files, 0)), Some(&0.7));
+        assert!(!map.contains_key(&HoverId::tab_item(PanelKind::Files, 1)));
     }
 
     /// `tree_drag_past_threshold` 同款三条用例(同 `tab_drag_past_threshold`
