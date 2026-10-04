@@ -39,20 +39,9 @@ impl PanelKind {
     /// ("是否偏离了默认栏")共用这一份真相,不要在两处各写一份可能
     /// 不同步的列表。
     pub fn default_side(self) -> Side {
-        match self {
-            Self::Files
-            | Self::GitLog
-            | Self::Todo
-            | Self::Project
-            | Self::Database
-            | Self::Ssh
-            | Self::Web => Side::Left,
-            Self::Agent
-            | Self::GroupChat
-            | Self::Conversations
-            | Self::Usage
-            | Self::CodeHealth => Side::Right,
-        }
+        crate::panel_registry::catalog()
+            .default_side(self)
+            .unwrap_or_else(|| panic!("{self:?} 没有在面板清单里注册"))
     }
 }
 

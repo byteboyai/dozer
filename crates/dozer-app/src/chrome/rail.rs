@@ -162,25 +162,9 @@ pub(crate) fn show_panel_in(
 }
 
 impl Default for RailLayout {
+    /// 产品组合根给的默认布局(见 `product::dozer_catalog`)。
     fn default() -> Self {
-        Self {
-            left: vec![
-                PanelKind::Project,
-                PanelKind::Todo,
-                PanelKind::Files,
-                PanelKind::GitLog,
-                PanelKind::Database,
-                PanelKind::Ssh,
-                PanelKind::Web,
-            ],
-            right: vec![
-                PanelKind::Agent,
-                PanelKind::GroupChat,
-                PanelKind::Conversations,
-                PanelKind::Usage,
-                PanelKind::CodeHealth,
-            ],
-        }
+        crate::panel_registry::catalog().default_rail()
     }
 }
 
@@ -217,19 +201,14 @@ pub(crate) fn migrate_legacy_rail(mut rail: RailLayout) -> RailLayout {
     rail
 }
 
-/// `RailLayout` 的消毒:先做旧布局迁移;然后任一栏为空,或两侧合计不是恰 12 个
-/// 不重复的 `PanelKind`(手改/版本不一致导致的坏数据),整个回落 `default()`。
+/// `RailLayout` 的消毒:先做旧布局迁移;然后任一栏为空,或两侧合计不是恰好等于面板清单里
+/// 那些面板各一次(手改/版本不一致导致的坏数据),整个回落 `default()`。
 /// 不做部分修复——缺一个面板就补在默认栏这种中间态比"直接用默认值"更难排查
 /// (旧版缺群聊的迁移是唯一例外,见 `migrate_legacy_rail`)。
 pub(crate) fn sanitize_rail_layout(rail: RailLayout) -> RailLayout {
-    let rail = migrate_legacy_rail(rail);
-    if rail.left.is_empty() || rail.right.is_empty() {
-        return RailLayout::default();
-    }
-    let mut all: Vec<_> = rail.left.iter().chain(rail.right.iter()).collect();
-    all.sort_by_key(|k| format!("{k:?}"));
-    all.dedup();
-    if all.len() != 12 || rail.left.len() + rail.right.len() != 12 {
+    let catalog = crate::panel_registry::catalog();
+    let rail = catalog.migrate_legacy(rail);
+    if !catalog.accepts(&rail) {
         return RailLayout::default();
     }
     rail
@@ -570,24 +549,12 @@ pub(crate) fn icon_rail(
         .into()
 }
 
-/// 面板 → (图标, 图标栏 tooltip 文案)。12 个 `PanelKind` variant 逐一
-/// 对应,顺序与 `PanelKind` 定义顺序一致,不代表渲染顺序(渲染顺序看
-/// `RailLayout`)。
+/// 面板 → (图标, 图标栏 tooltip 文案),取自面板清单(见 `product::dozer_catalog`)。
 fn panel_meta(kind: PanelKind) -> (icons::IconKind, &'static str) {
-    match kind {
-        PanelKind::Files => (icons::IconKind::FolderTree, "文件"),
-        PanelKind::GitLog => (icons::IconKind::GitGraph, "Git Log"),
-        PanelKind::Todo => (icons::IconKind::ListTodo, "待办"),
-        PanelKind::Project => (icons::IconKind::Briefcase, "项目"),
-        PanelKind::Database => (icons::IconKind::Database, "数据库"),
-        PanelKind::Ssh => (icons::IconKind::Server, "SSH 主机"),
-        PanelKind::Web => (icons::IconKind::Globe, "浏览器"),
-        PanelKind::Agent => (icons::IconKind::Brain, "代理"),
-        PanelKind::GroupChat => (icons::IconKind::SquareSparkles, "群聊"),
-        PanelKind::Conversations => (icons::IconKind::BotMessageSquare, "对话"),
-        PanelKind::Usage => (icons::IconKind::BarChart3, "用量"),
-        PanelKind::CodeHealth => (icons::IconKind::SquareActivity, "代码健康度"),
-    }
+    let d = crate::panel_registry::catalog()
+        .descriptor(kind)
+        .unwrap_or_else(|| panic!("{kind:?} 没有在面板清单里注册"));
+    (d.icon, d.title)
 }
 
 /// 给一个图标栏按钮包上"拖拽换栏/换位"的感应层,手法同 `tab_core::select`
@@ -1257,5 +1224,78 @@ mod tests {
             assert_eq!(a.current, 2.0);
             assert!(!a.active(2.0), "目标未变时不应产生动画");
         }
+    }
+
+    // ---- H7:面板清单的特征测试(在迁移前后都必须通过) ----
+
+    /// 默认栏位与默认顺序的**字面值**:`RailLayout::default()` 与 `default_side()` 迁到
+    /// 注册清单之后,这张表是"逐字不变"的唯一依据。
+    #[test]
+    fn golden_default_layout_order_and_sides() {
+        use PanelKind::*;
+        let rail = RailLayout::default();
+        assert_eq!(
+            rail.left,
+            vec![Project, Todo, Files, GitLog, Database, Ssh, Web]
+        );
+        assert_eq!(
+            rail.right,
+            vec![Agent, GroupChat, Conversations, Usage, CodeHealth]
+        );
+        for kind in [Files, GitLog, Todo, Project, Database, Ssh, Web] {
+            assert_eq!(kind.default_side(), Side::Left, "{kind:?}");
+        }
+        for kind in [Agent, GroupChat, Conversations, Usage, CodeHealth] {
+            assert_eq!(kind.default_side(), Side::Right, "{kind:?}");
+        }
+    }
+
+    /// 12 个面板的图标与 tooltip 文案的字面值。
+    #[test]
+    fn golden_panel_icons_and_titles() {
+        use PanelKind::*;
+        use icons::IconKind as I;
+        let expected = [
+            (Files, I::FolderTree, "文件"),
+            (GitLog, I::GitGraph, "Git Log"),
+            (Todo, I::ListTodo, "待办"),
+            (Project, I::Briefcase, "项目"),
+            (Database, I::Database, "数据库"),
+            (Ssh, I::Server, "SSH 主机"),
+            (Web, I::Globe, "浏览器"),
+            (Agent, I::Brain, "代理"),
+            (GroupChat, I::SquareSparkles, "群聊"),
+            (Conversations, I::BotMessageSquare, "对话"),
+            (Usage, I::BarChart3, "用量"),
+            (CodeHealth, I::SquareActivity, "代码健康度"),
+        ];
+        for (kind, icon, title) in expected {
+            let (got_icon, got_title) = panel_meta(kind);
+            assert_eq!(got_icon, icon, "{kind:?} 图标");
+            assert_eq!(got_title, title, "{kind:?} 文案");
+        }
+    }
+
+    /// 落盘兼容:旧版 `layout.json` 里的 `rail_layout` 用**枚举名字符串**,12 个名字逐一
+    /// 能反序列化、再序列化出同一个字符串;12 个面板的合法布局经消毒后原样保留。
+    #[test]
+    fn golden_rail_layout_json_uses_variant_names_and_survives_sanitize() {
+        let json = r#"{"left":["Project","Todo","Files","GitLog","Database","Ssh","Web"],
+                       "right":["Agent","GroupChat","Conversations","Usage","CodeHealth"]}"#;
+        let rail: RailLayout = serde_json::from_str(json).unwrap();
+        assert_eq!(rail, RailLayout::default());
+        assert_eq!(sanitize_rail_layout(rail.clone()), rail);
+        let out = serde_json::to_value(&rail).unwrap();
+        assert_eq!(out["left"][0], "Project");
+        assert_eq!(out["right"][4], "CodeHealth");
+    }
+
+    /// 旧版(11 个面板、没有群聊)的 `rail_layout` 经消毒后迁移成 12 个,群聊紧跟在 Agent 后。
+    #[test]
+    fn golden_legacy_eleven_panel_json_is_migrated() {
+        let json = r#"{"left":["Project","Todo","Files","GitLog","Database","Ssh","Web"],
+                       "right":["Agent","Conversations","Usage","CodeHealth"]}"#;
+        let rail: RailLayout = serde_json::from_str(json).unwrap();
+        assert_eq!(sanitize_rail_layout(rail), RailLayout::default());
     }
 }
