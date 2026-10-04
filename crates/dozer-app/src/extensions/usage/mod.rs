@@ -106,7 +106,7 @@ impl WebviewPushState {
 
 /// 对应现在顶层 `Message` 里的 `UsageLoaded` 变体,去前缀原样搬来。
 /// `Refresh`/`Hover` 随手动刷新按钮一起移除——进入面板时由
-/// `Workspace::spawn_usage_refresh` 自动刷新,不再需要面板内按钮。
+/// `usage::on_activate` 自动刷新,不再需要面板内按钮。
 #[derive(Debug, Clone)]
 pub enum Message {
     /// 第三字段是项目 git 提交总数(供"Git提交"格),第四字段是每日提交计数
@@ -150,8 +150,7 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
 
 /// 异步扫描项目全部 agent transcript 并逐个解析用量。内核在
 /// `PanelSelect(PanelKind::Usage)` 分支(切到面板时自动刷新)调用,
-/// 经 `Workspace::spawn_usage_refresh` 转发。现有
-/// `Workspace::spawn_usage_refresh` 的搬家版本,逻辑不变(读失败的会话
+/// 经 `usage::on_activate` 转发。逻辑不变(读失败的会话
 /// 整条跳过、不计入汇总)。
 pub fn spawn_refresh(
     project_id: i64,
