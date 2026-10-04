@@ -2192,51 +2192,6 @@ impl Runner {
                     app.update(Message::ProjectTabOpen(dir));
                 }
             }
-            // "创建项目"弹窗里两处"选择根目录…":同 `ProjectTabPickFolder`
-            // 的套路,原生模态选中后回填 `*RootDirPicked`。`project_create`
-            // 模块自己不认识 `rfd`(保持可在单测里构造),原生选择器必须
-            // 在这层窗口句柄侧拦截。本窗口不做失焦关闭(见
-            // `ProjectCreateOverlay`),即为了此模态弹起时表单不被误关。
-            Message::ProjectCreate(
-                crate::extensions::project_create::Message::LocalRootDirPick,
-            ) => {
-                if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                    app.update(Message::ProjectCreate(
-                        crate::extensions::project_create::Message::LocalRootDirPicked(
-                            dir.display().to_string(),
-                        ),
-                    ));
-                }
-            }
-            Message::ProjectCreate(
-                crate::extensions::project_create::Message::CloneRootDirPick,
-            ) => {
-                if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                    app.update(Message::ProjectCreate(
-                        crate::extensions::project_create::Message::CloneRootDirPicked(
-                            dir.display().to_string(),
-                        ),
-                    ));
-                }
-            }
-            // 拖拽移动确认框"到目录"旁边的"..."浏览按钮:同上一条
-            // `ProjectTabPickFolder` 的套路,原生模态选中后回填
-            // `MoveDirInput`(`files::update()` 自己不认识 `rfd`,见
-            // `files::Message::MoveDirBrowse` 文档)。起始目录用当前
-            // 草稿(没有待确认的移动时这条消息本就不会被派发,`unwrap_or_
-            // default` 只是防御性兜底)。
-            Message::Files(crate::extensions::files::Message::MoveDirBrowse) => {
-                let start = app
-                    .active_workspace()
-                    .and_then(|ws| ws.files.move_dir_draft())
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_default();
-                if let Some(dir) = rfd::FileDialog::new().set_directory(&start).pick_folder() {
-                    app.update(Message::Files(
-                        crate::extensions::files::Message::MoveDirInput(dir.display().to_string()),
-                    ));
-                }
-            }
             Message::ProjectLinkPick(target) => {
                 // 单颗"＋"入口:打开根目录在项目根的文件浏览器,选中后按
                 // 实际类型(`is_dir()`)判定虚拟链接是该当文件还是目录,再回

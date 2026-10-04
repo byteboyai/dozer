@@ -68,6 +68,8 @@ pub struct WorkspaceState {
     /// 待发提示(失败/被拒等一次性反馈)。`App::update` 的包装函数每次处理完消息后
     /// 统一排空成 Toast,见 `extensions::toast::Outbox`。
     pub(crate) outbox: crate::extensions::toast::Outbox,
+    /// 待交给 host 的需求(系统对话框、跨面板命令);`App::update` 每条消息后排空执行。
+    pub(crate) host: crate::panel_host::HostOutbox<Message>,
     pub(crate) file_tree: Option<FileTree>,
     pub(crate) git_statuses: HashMap<PathBuf, FileGitStatus>,
     /// 目录 → 聚合 git 状态(由 `git_status::rollup_dir_statuses` 在
@@ -244,7 +246,8 @@ pub enum Message {
     /// 让 webview 重新 `load_url` 读盘最新内容(见 `preview.rs::PreviewPane::
     /// bump_reload` 文档)。携带该 tab 文件的绝对路径。
     TabReloadFromDisk(PathBuf),
-    /// 右键"查看此文件历史":内核拦截,不进 `update`——由内核解析出仓库
+    /// 右键"查看此文件历史":`files::update` 先收起右键菜单,再往 `ws_state.host` 提一个
+    /// `PanelCommand::ShowFileHistory`;host 的 `run_panel_command` 解析出仓库
     /// 相对路径、组出 `file_history::FileHistoryTarget`,写入
     /// `App::file_history` 并异步跑 `file_history::build`(见
     /// `docs/superpowers/specs/2026-09-17-file-history-popup-design.md`)。
@@ -261,8 +264,9 @@ pub enum Message {
     /// 失败推 Toast(不进 `file_history` 弹窗状态机——这是从文件树右键发起
     /// 的一键动作,与弹窗内的版本挑选回滚是两条独立路径)。
     FileHistoryRollbackDone(i64, PathBuf, Result<(), String>),
-    /// 右键菜单"搜索":内核拦截,不进 `update`——由内核映射成
-    /// `search::Message::SearchOpen` 打开文件树右键作用域的搜索弹窗。
+    /// 右键菜单"搜索":`files::update` 先收起右键菜单,再往 `ws_state.host` 提一个
+    /// `PanelCommand::SearchIn`;host 把它映射成 `search::Message::SearchOpen`
+    /// 打开文件树右键作用域的搜索弹窗。
     OpenSearch(PathBuf, bool),
     /// 文件树右键"添加到 Agent 上下文":`bool` = `is_dir`。真正的 PTY 写入
     /// 需要内核顶层的终端句柄,`files::update` 拿不到,同 `CopyPath` 的既有
@@ -374,12 +378,10 @@ pub enum Message {
     /// 拖拽移动确认框"到目录"输入框内容变化——手动改写路径文本,或
     /// `MoveDirBrowse` 选完目录后回填。
     MoveDirInput(String),
-    /// 拖拽移动确认框"到目录"字段旁边的"..."浏览按钮:要弹原生目录选择器
-    /// (`rfd::FileDialog`),`files::update()`(纯状态转换,拿不到原生
-    /// 对话框能力)处理不了——由 main.rs 的 `Runner::dispatch` 拦截(同
-    /// `Message::ProjectTabPickFolder` 的既有套路,注意这**不是**
-    /// `App::update` 那层拦截,是更外层 main.rs 自己的 match),选完后转发
-    /// 一条 `MoveDirInput` 回填草稿。
+    /// 拖拽移动确认框"到目录"字段旁边的"..."浏览按钮:要弹原生目录选择器,
+    /// `files::update()`(纯状态转换,拿不到原生对话框能力)自己做不了——它往
+    /// `ws_state.host` 提一个 `HostRequest::PickDirectory`(起始目录 = 当前草稿),
+    /// host 弹完对话框后用 `on_picked` 转发一条 `MoveDirInput` 回填草稿。
     MoveDirBrowse,
     /// 拖拽移动确认框"确定":真正提交移动(改名 + 改目标目录一起生效,见
     /// `PendingMove`/`crate::project::move_item_to`)。校验失败(名字为空/

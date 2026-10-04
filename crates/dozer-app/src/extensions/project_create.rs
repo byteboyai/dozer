@@ -5,6 +5,7 @@
 //! 的既有分工:本模块只管状态/消息/视图/异步落盘逻辑,不碰 winit/wgpu。
 
 use crate::git_accounts::{self, GitProvider, RemoteRepo};
+use crate::panel_host::HostRequest;
 use byteui::interaction::icons;
 use iced_widget::core::{Border, Color, Length, Padding};
 use iced_widget::{MouseArea, Space, button, column, container, row, text};
@@ -177,6 +178,8 @@ pub struct CloneForm {
 
 #[derive(Default)]
 pub struct State {
+    /// 待交给 host 的需求(两处"选择根目录…"弹系统对话框);`App::update` 每条消息后排空执行。
+    pub(crate) host: crate::panel_host::HostOutbox<Message>,
     pub tab: Tab,
     pub local: LocalForm,
     pub clone_form: CloneForm,
@@ -311,9 +314,20 @@ fn apply_field_message(state: &mut State, msg: &Message) -> bool {
             state.clone_form.repo_lists.insert(*provider, repo_state);
             true
         }
-        Message::LocalRootDirPick | Message::CloneRootDirPick => {
-            // 弹 rfd 文件夹选择器是内核(`Runner::dispatch`)的职责,这里
-            // 收到说明路由出了问题,当 no-op 处理,不 panic。
+        // 弹系统文件夹选择器是 host 的职责(本模块保持可在单测里构造):提一个 `PickDirectory` 需求,
+        // host 选完后用 `on_picked` 把结果回填成 `*RootDirPicked`。
+        Message::LocalRootDirPick => {
+            state.host.push(HostRequest::PickDirectory {
+                start: None,
+                on_picked: |dir| Message::LocalRootDirPicked(dir.display().to_string()),
+            });
+            true
+        }
+        Message::CloneRootDirPick => {
+            state.host.push(HostRequest::PickDirectory {
+                start: None,
+                on_picked: |dir| Message::CloneRootDirPicked(dir.display().to_string()),
+            });
             true
         }
         Message::CloseHover(h) => {
@@ -1410,5 +1424,35 @@ mod tests {
             state = None;
         }
         assert!(state.is_none());
+    }
+
+    // ---- H5:两处"选择根目录…"经 HostOutbox 提给 host ----
+
+    use crate::panel_host::HostRequest;
+
+    #[test]
+    fn root_dir_pick_buttons_ask_the_host_for_a_directory_and_map_the_reply_back() {
+        for (pick, expect_local) in [
+            (Message::LocalRootDirPick, true),
+            (Message::CloneRootDirPick, false),
+        ] {
+            let mut s = State::default();
+            assert!(apply_field_message(&mut s, &pick));
+            let mut reqs = s.host.take();
+            assert_eq!(reqs.len(), 1);
+            match reqs.remove(0) {
+                HostRequest::PickDirectory { start, on_picked } => {
+                    assert_eq!(start, None);
+                    match (on_picked(std::path::PathBuf::from("/r")), expect_local) {
+                        (Message::LocalRootDirPicked(p), true)
+                        | (Message::CloneRootDirPicked(p), false) => {
+                            assert_eq!(p, "/r");
+                        }
+                        (other, _) => panic!("unexpected reply: {other:?}"),
+                    }
+                }
+                _ => panic!("expected PickDirectory"),
+            }
+        }
     }
 }

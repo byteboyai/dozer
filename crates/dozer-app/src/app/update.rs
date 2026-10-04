@@ -92,6 +92,101 @@ impl App {
         // 放在包装里而不是 `match` 末尾:`update_inner` 的许多分支会提前 `return`,
         // 放在 `match` 里会漏排空。
         self.drain_outboxes();
+        self.drain_host_requests();
+    }
+
+    /// 排空各面板 state 的 `HostOutbox` 并执行(系统对话框、跨面板命令)。先把所有需求收出来再执行:
+    /// 执行过程会再进 `self.update`(回投面板消息),不能在持有 workspace 借用时做。
+    fn drain_host_requests(&mut self) {
+        let mut files_requests = Vec::new();
+        for slot in self.projects.values_mut() {
+            if let WorkspaceSlot::Loaded(ws) = slot {
+                files_requests.extend(ws.files.host.take());
+            }
+        }
+        let create_requests = self
+            .project_create
+            .as_mut()
+            .map(|s| s.host.take())
+            .unwrap_or_default();
+        self.run_host_requests(files_requests, Message::Files);
+        self.run_host_requests(create_requests, Message::ProjectCreate);
+    }
+
+    /// 执行一批面板需求;`wrap` 把提需求的面板自己的 `Message` 包成宿主 `Message`。
+    fn run_host_requests<M: Send + 'static>(
+        &mut self,
+        requests: Vec<crate::panel_host::HostRequest<M>>,
+        wrap: fn(M) -> Message,
+    ) {
+        use crate::panel_host::HostRequest;
+        for request in requests {
+            match request {
+                HostRequest::PickDirectory { start, on_picked } => {
+                    let mut dialog = rfd::FileDialog::new();
+                    if let Some(start) = start {
+                        dialog = dialog.set_directory(start);
+                    }
+                    if let Some(dir) = dialog.pick_folder() {
+                        self.update(wrap(on_picked(dir)));
+                    }
+                }
+                HostRequest::Command(command) => self.run_panel_command(command),
+            }
+        }
+    }
+
+    /// 跨面板命令的唯一派发点:面板只说"想让别人做什么",由这里决定谁来做。
+    fn run_panel_command(&mut self, command: crate::panel_host::PanelCommand) {
+        use crate::panel_host::PanelCommand;
+        match command {
+            PanelCommand::SearchIn { path, is_dir } => {
+                let scope = if is_dir {
+                    search::Scope::Dir(path)
+                } else {
+                    search::Scope::File(path)
+                };
+                self.update(Message::Search(search::Message::SearchOpen(scope)));
+            }
+            PanelCommand::ShowFileHistory { path } => self.show_file_history(path),
+        }
+    }
+
+    /// 解析出仓库相对路径、组出 `FileHistoryTarget`、异步跑一次 `build()`。
+    fn show_file_history(&mut self, path: PathBuf) {
+        let Some(project_id) = self.active_project_id else {
+            return;
+        };
+        let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+            return;
+        };
+        let Some(project) = ws.project.as_ref() else {
+            return;
+        };
+        let repo_path = PathBuf::from(&project.path);
+        let Ok(file_path) = path.strip_prefix(&repo_path).map(|p| p.to_path_buf()) else {
+            return;
+        };
+        let target = file_history::FileHistoryTarget {
+            project_id,
+            repo_path: repo_path.clone(),
+            file_path: file_path.clone(),
+        };
+        self.file_history = Some(file_history::State::new(target));
+        let handle = self.handle.clone();
+        let proxy = self.proxy.clone();
+        handle.spawn(async move {
+            let repo_path2 = repo_path.clone();
+            let file_path2 = file_path.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                file_history::build(&repo_path2, &file_path2, file_history::DEFAULT_MAX_COUNT)
+            })
+            .await
+            .unwrap_or_else(|e| Err(format!("加载失败: {e}")));
+            let _ = proxy.send_event(Message::FileHistory(file_history::Message::SnapshotLoaded(
+                repo_path, file_path, result,
+            )));
+        });
     }
 
     /// 排空所有 extension state 的 outbox 并推成 Toast(extension 的 `update`
@@ -2928,62 +3023,6 @@ impl App {
             }
             Message::Files(files::Message::CopyPath(path, kind)) => {
                 let _ = (path, kind); // main.rs 拦截处理写剪贴板,这里维持现状空分支
-            }
-            Message::Files(files::Message::OpenSearch(path, is_dir)) => {
-                // 右键菜单"搜索":跨 `files::Message` 边界,由内核把它映射成
-                // `search::Message::SearchOpen`。先关右键菜单(否则搜索弹窗
-                // dismiss 一关,旧菜单又冒回来),作用域由 `is_dir` 决定——目录
-                // 按目录递归搜,文件只搜单文件。
-                self.files.close_context_menu();
-                let scope = if is_dir {
-                    search::Scope::Dir(path)
-                } else {
-                    search::Scope::File(path)
-                };
-                self.update(Message::Search(search::Message::SearchOpen(scope)));
-            }
-            Message::Files(files::Message::FileHistoryOpen(path)) => {
-                // 右键"查看此文件历史":先收起右键菜单(同 OpenSearch 的既有
-                // 约定),再解析出仓库相对路径、组出 `FileHistoryTarget`、
-                // 异步跑一次 `build()`。
-                self.files.close_context_menu();
-                let Some(project_id) = self.active_project_id else {
-                    return;
-                };
-                let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
-                    return;
-                };
-                let Some(project) = ws.project.as_ref() else {
-                    return;
-                };
-                let repo_path = PathBuf::from(&project.path);
-                let Ok(file_path) = path.strip_prefix(&repo_path).map(|p| p.to_path_buf()) else {
-                    return;
-                };
-                let target = file_history::FileHistoryTarget {
-                    project_id,
-                    repo_path: repo_path.clone(),
-                    file_path: file_path.clone(),
-                };
-                self.file_history = Some(file_history::State::new(target));
-                let handle = self.handle.clone();
-                let proxy = self.proxy.clone();
-                handle.spawn(async move {
-                    let repo_path2 = repo_path.clone();
-                    let file_path2 = file_path.clone();
-                    let result = tokio::task::spawn_blocking(move || {
-                        file_history::build(
-                            &repo_path2,
-                            &file_path2,
-                            file_history::DEFAULT_MAX_COUNT,
-                        )
-                    })
-                    .await
-                    .unwrap_or_else(|e| Err(format!("加载失败: {e}")));
-                    let _ = proxy.send_event(Message::FileHistory(
-                        file_history::Message::SnapshotLoaded(repo_path, file_path, result),
-                    ));
-                });
             }
             Message::Files(files::Message::FileHistoryRollbackPrevious(path)) => {
                 // 右键"回滚到上一版本":先收起右键菜单,再解析出仓库相对路径,
