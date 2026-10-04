@@ -140,7 +140,7 @@ host 边界"成立"的判据（每一条都要有可执行的检查，不接受"
 | O2 | **Project context** 进入 host 的范围 | 倾向最小化（项目打开/关闭/当前项目），具体待 H0；证据:`bytehost-H0/06-open-items-evidence.md` §O2、`04-shared-modules.md` §1(`project.rs` 实为文件树,不是 project context) |
 | O3 | **Files Tree "打开目标"协议**（Files Tree → 通用打开命令/目标注册 → 产品决定处理者） | 协议形态未定；H0 只统计 Files 对 Preview 的现有引用；证据:`bytehost-H0/06-open-items-evidence.md` §O3(边界已存在于 `App::update` 分派) |
 | O4 | `secrets`、`external_apps`、`capabilities` 的归属 | 暂存 host，登记候选去向；证据:`bytehost-H0/04-shared-modules.md` §5(三者不是同一类) |
-| O5 | 移除 `PanelKind` 后，面板**默认栏位**由注册信息还是产品 composition root 决定 | 未决；影响 registry 的数据形状；证据:`bytehost-H0/01-panelkind.md` §5 |
+| O5 | 移除 `PanelKind` 后，面板**默认栏位**由注册信息还是产品 composition root 决定 | 未决；影响 registry 的数据形状；证据:`bytehost-H0/01-panelkind.md` §5 **已定(2026-10-04,用户):产品组合根决定;H7a 落地(`panel_registry`/`product`)** |
 | O6 | **Terminal** 是否纳入当前共享范围 | 架构上更像独立面板，但 Digger 真实需求未确认；不确认前不进共享清单；证据:`bytehost-H0/06-open-items-evidence.md` §O6 |
 | O7 | `conversation`/`transcript` 等领域模型最终归属 | 要求文档 Q7，H0 审计；证据:`bytehost-H0/04-shared-modules.md` §3(领域类型已在 `dozer-core::protocol`) |
 | O8 | `git_accounts` 归 bytegit 还是独立服务 | 未定；证据:`bytehost-H0/04-shared-modules.md` §3(倾向留产品) |
