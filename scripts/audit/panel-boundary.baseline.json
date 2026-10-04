@@ -1,30 +1,14 @@
 {
- "extensions/conversations.rs": {
-  "R-APP": 2
+ "app/layout.rs": {
+  "R-PANE-PICK": 1
  },
- "extensions/database/view.rs": {
-  "R-APP": 2
+ "app/update.rs": {
+  "R-PANE-PICK": 1
  },
- "extensions/files/tree.rs": {
-  "R-APP": 1
+ "platform/window_events.rs": {
+  "R-PANE-PICK": 3
  },
- "extensions/git_log.rs": {
-  "R-APP": 6
- },
- "extensions/ssh.rs": {
-  "R-APP": 1
- },
- "extensions/ssh/sftp.rs": {
-  "R-WS": 1
- },
- "extensions/todo/protocol.rs": {
-  "R-WS": 3
- },
- "extensions/todo/view.rs": {
-  "R-APP": 3,
-  "R-WS": 2
- },
- "extensions/usage/view.rs": {
-  "R-APP": 1
+ "workspace/state.rs": {
+  "R-PANE-PICK": 2
  }
 }

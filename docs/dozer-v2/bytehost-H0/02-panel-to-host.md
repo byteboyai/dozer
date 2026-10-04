@@ -53,6 +53,8 @@
 
 结论:面板对 `App` 的依赖**形态只有这三种**,每一种都可以由"调用方传参/注入句柄"替代;这是 H1 门禁基线(`scripts/audit/panel-boundary.baseline.json`,22 处 `App`/`Workspace` 使用 / 9 文件)有希望降到 0 的依据。注意**门禁基线数的是 `App`/`Workspace` 的"使用次数"**(import 行 + 每个 `&App` 参数/限定路径,共 22 处,评审后由 import 路径数 11 改为此口径),与上面"方法调用"次数(`app.hover_progress(…)` 等)是两种口径,不可相加。
 
+**H1 结果:** `PanelHost`(`crates/dozer-app/src/panel_host.rs`,6 个方法)已落地,面板代码对 `App`/`Workspace` 的使用降为 0;`HoverId`/`PanelKind`/`TextInputTarget` 仍是宿主类型,留给后续切片。
+
 ### 3.2 `app::HoverId`(45 处生产引用,面板是 6 个)
 
 `HoverId` 是 host 的单个枚举(`app/state.rs:93`),共 **62 个变体、全库 188 处使用(extensions 里 40 处)**。变体里混着三类:host 自己的(`Topbar`、`Rail`、`ProjectTabClose`、`HomeTab`…)、预览的(`PreviewTabItem`、`ProjectPreviewFindPrev`…共约 14 个,留产品)、**各面板自己的按钮**(`TodoListCollapse`、`TodoCategoryRow(i64)`、`DatabaseListCollapse`、`DatabaseTabItem`、`SshListCollapse`、`SshTabItem`、`ConversationsListCollapse`、`UsageListCollapse`、`FilesSearchSubmit`、`FilesDotfiles`、`FilesBranchSwitch`、`FileTreeCollapse`、`ProjectDocsAdd`、`ProjectRemoteAdd`、`ProjectMemoryAdd`、`ProjectListCollapse`…)。

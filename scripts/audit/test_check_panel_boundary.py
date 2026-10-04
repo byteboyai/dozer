@@ -30,6 +30,19 @@ class UseCounting(unittest.TestCase):
     def test_workspace_params(self):
         text = "use crate::workspace::Workspace;\nfn f(w: &Workspace) {}"
         self.assertEqual(self.scan1(text), {"R-WS": 2})
+class PanePick(unittest.TestCase):
+    """R-PANE-PICK:全库里手写"按 PanelKind::Project 选预览窗格"的写法只许减不许增(H1 切片 1 的回退防线)。"""
+    def scan1(self, rel, text):
+        return g.scan({rel: text}).get(rel, {})
+    def test_if_eq_project_counts_anywhere(self):
+        self.assertEqual(self.scan1("workspace/state.rs", "if kind == PanelKind::Project { a } else { b }"), {"R-PANE-PICK": 1})
+    def test_match_arm_selecting_project_preview_counts(self):
+        text = "match kind { PanelKind::Project => &mut ws.project_preview, _ => &mut ws.preview }"
+        self.assertEqual(self.scan1("app/update.rs", text), {"R-PANE-PICK": 1})
+    def test_other_project_arms_do_not_count(self):
+        self.assertEqual(self.scan1("chrome/rail.rs", 'PanelKind::Project => (icon, "项目"),'), {})
+    def test_comments_do_not_count(self):
+        self.assertEqual(self.scan1("a.rs", "// if kind == PanelKind::Project {"), {})
 class Compare(unittest.TestCase):
     def test_decrease_and_equal_pass(self):
         base = {"extensions/a.rs": {"R-APP": 3}}

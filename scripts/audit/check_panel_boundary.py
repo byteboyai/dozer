@@ -3,11 +3,12 @@
 
 规则 R-APP:  extensions 下文件对 `crate::app::App` 的**使用次数**(import 行 + 每个 `&App` 参数/限定路径)
 规则 R-WS:   extensions 下文件对 `crate::workspace::Workspace` 的使用次数
+规则 R-PANE-PICK: 全库手写"按 PanelKind::Project 选预览窗格"的写法条数(应走 `Workspace::preview_pane[_mut]`)
 
 用法:
   check_panel_boundary.py            对照基线检查,有文件的引用数上升(或新文件出现违规)则退出 1
   check_panel_boundary.py --update   用当前扫描结果重写基线(只在引用数下降或经评审的迁移后使用)
-基线:scripts/audit/panel-boundary.baseline.json,格式 {"<文件>": {"R-APP": n, "R-WS": n}}。
+基线:scripts/audit/panel-boundary.baseline.json,格式 {"<文件>": {"R-APP": n, "R-WS": n, "R-PANE-PICK": n}}。
 测试代码里的引用同样计入:H0 阶段不区分生产与测试,迁移完成后再评估是否放宽测试。
 """
 import collections, importlib.util, json, os, re, sys
@@ -62,17 +63,28 @@ def count_uses(text, mod, name):
     return n
 
 
+# 全库规则:手写"按 PanelKind::Project 选预览窗格"的写法(应走 `Workspace::preview_pane[_mut]`)。
+# 命中 `== / != PanelKind::Project` 与"取 project_preview 的 match 臂";窗口层对 `right_view`
+# 的比较等合理写法也会命中,所以用基线棘轮(只许减不许增),不是零容忍。
+PANE_PICK_RE = re.compile(
+    r"PanelKind::Project\s*=>\s*&(?:mut\s+)?[\w\.]+\.project_preview\b"
+    r"|(?:==|!=)\s*(?:crate::app::)?PanelKind::Project\b"
+)
+
+
 def scan(files):
     """files: {相对路径: 源码文本} -> {相对路径: {规则: 次数}},只含 extensions/ 下且有违规的文件。"""
     out = {}
     for rel, text in files.items():
-        if not rel.startswith("extensions/"):
-            continue
         hit = {}
-        for rule, (mod, name) in RULES.items():
-            n = count_uses(text, mod, name)
-            if n:
-                hit[rule] = n
+        if rel.startswith("extensions/"):
+            for rule, (mod, name) in RULES.items():
+                n = count_uses(text, mod, name)
+                if n:
+                    hit[rule] = n
+        n = len(PANE_PICK_RE.findall(edges.strip_comments(text)))
+        if n:
+            hit["R-PANE-PICK"] = n
         if hit:
             out[rel] = hit
     return out
@@ -112,7 +124,7 @@ def main(argv):
         baseline = json.load(f)
     problems = compare(baseline, current)
     if problems:
-        print("面板边界回退(面板代码里 App/Workspace 引用增加):", file=sys.stderr)
+        print("面板边界回退(引用/写法条数高于基线):", file=sys.stderr)
         for rel, rule, old, n in problems:
             print(f"  {rel}: {rule} {old} -> {n}", file=sys.stderr)
         return 1

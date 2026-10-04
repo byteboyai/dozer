@@ -49,8 +49,8 @@
 
 | # | 候选切片 | 涉及(H0 数据) | 前置未决项 | 风险 |
 |---|---|---|---|---|
-| 1 | **`preview_pane(kind)` 收口**:消掉约 82 行 Project/Files 窗格二选一(01 B0) | 13 个文件 | 无 | 低:纯机械、不改行为,只动产品层 Preview 业务 |
-| 2 | **面板引用 `App`/`Workspace` 降到 0**:22 处使用改为传参/注入句柄,基线降 0 | 9 个文件 | 无 | 低–中:`hover_progress` 13 次、`list_collapsed` 6 次要引入 `HoverQuery`/参数 |
+| 1 | **`preview_pane(kind)` 收口**:消掉约 82 行 Project/Files 窗格二选一(01 B0) | 13 个文件(已完成(H1,`bytehost-h1`):`cde93415`) | 无 | 低:纯机械、不改行为,只动产品层 Preview 业务 |
+| 2 | **面板引用 `App`/`Workspace` 降到 0**:22 处使用改为传参/注入句柄,基线降 0 | 9 个文件(已完成(H1,`bytehost-h1`):`d9fda235`) | 无 | 低–中:`hover_progress` 13 次、`list_collapsed` 6 次要引入 `HoverQuery`/参数 |
 | 3 | **`window_events.rs` 内联的面板事件声明化**(E3-010/011/038):面板声明自己关心的窗口事件 | 4602 行文件中的约 80 个引用点 | 无,但要新增事件钩子接口 | 中:最大单点,是 overlay 迁移的前置(05 §4) |
 | 4 | **`HoverId` 命名空间化**:把面板按钮移出 host 枚举(E3-016) | 62 变体/188 处使用 | 无 | 中:动画键与 tooltip 机制被牵动 |
 | 5 | **"一个面板 + host 可运行"夹具(O12)的形式定义**:选一个面板(建议 Todo 或 Usage——纯展示、依赖少)做最小 host + fake 服务的**可行性探针**,只写形式不迁移 | 一个面板 | 依赖 2、4 的接口 | 中:验证性质,产出是 spec 不是代码 |
@@ -60,7 +60,7 @@
 ## 5. 门禁说明
 
 - **怎么跑:** `python3 scripts/audit/check_panel_boundary.py`(检查,有回退退出 1)、`--update`(重写基线)。测试:`python3 scripts/audit/test_check_panel_boundary.py`、`python3 scripts/audit/test_edges.py`。
-- **基线含义:** `scripts/audit/panel-boundary.baseline.json`,**`extensions/**` 里对 `App` 与 `Workspace` 的"使用次数"(import 行 + 每个 `&App` 参数/限定路径;注释与字符串字面量不计),按文件×规则记数,只许减不许增**;当前 22 处 / 9 个文件(import 路径 11 条,其余是同文件里的参数与限定路径)。测试代码里的使用同样计入。识别的写法:按名字 import(含 `{…}` 嵌套、`as` 别名、`use super::super::…`)、只 import 模块后的 `app::App`/别名模块、不 import 的 `crate::app::App` 全路径。**已知漏洞:** 通过 `use crate::app::*` glob 带入 `App`、通过类型别名(`type H = App`)间接使用、宏内路径;**棘轮不会自动收紧**——使用次数下降后,在有人运行 `--update` 之前计数可以涨回旧基线。
+- **基线含义:** `scripts/audit/panel-boundary.baseline.json`,**`extensions/**` 里对 `App` 与 `Workspace` 的"使用次数"(import 行 + 每个 `&App` 参数/限定路径;注释与字符串字面量不计),按文件×规则记数,只许减不许增**;`R-APP`/`R-WS` 已清零;新增全库规则 `R-PANE-PICK`(手写按 `PanelKind::Project` 选预览窗格),基线 7 处 / 4 个文件。测试代码里的使用同样计入。识别的写法:按名字 import(含 `{…}` 嵌套、`as` 别名、`use super::super::…`)、只 import 模块后的 `app::App`/别名模块、不 import 的 `crate::app::App` 全路径;`R-PANE-PICK` 识别 `== / != PanelKind::Project` 与"取 `project_preview` 的 match 臂"(应走 `Workspace::preview_pane[_mut]`)。**已知漏洞:** 通过 `use crate::app::*` glob 带入 `App`、通过类型别名(`type H = App`)间接使用、宏内路径;**棘轮不会自动收紧**——使用次数下降后,在有人运行 `--update` 之前计数可以涨回旧基线。
 - **何时可 `--update`:** 引用数下降后固化新基线;或经评审的迁移引入新的合理引用。不得为"让门禁过"而 `--update` 抬高基线。
 - **尚未接入 CI:** 仓库当前没有 CI 配置,门禁**手动运行**;接入前建议加进 `scripts/` 旁的现有检查(`scripts/check-log-scope.sh` 同类)的调用处。
 - **变异检验已做:** 在 `extensions/toast.rs` 首行加 `use crate::app::App;`,门禁报 `R-APP 0 -> 1` 且退出 1;还原后退出 0。评审后又做一次:在 `extensions/git_log.rs` 里追加一个 `fn f(a: &App) {}`(不新增 import),门禁报 `R-APP 6 -> 7`——旧的"数 import 路径"口径抓不到这种回退。

@@ -2,7 +2,7 @@ id	位置	类别	对象	原因	移除条件
 E3-001	app/update.rs:5152-5215 fire_panel_switch_in	panel-special-case	Todo, Database, Project, Ssh, Usage, CodeHealth, Conversations, GitLog, GroupChat	host 对 9 个面板各写一段『切入时刷新』	面板注册钩子 on_activate 后删除该 match(01-panelkind B4)
 E3-002	app/app.rs:3419-3544	panel-special-case	GitLog, Usage, CodeHealth, Todo, GroupChat	host 为每个面板各写一段 webview 期望几何	面板注册钩子 desired_webviews 后删除(01-panelkind B4)
 E3-003	webview_geometry.rs:75-269 两个穷举 match	panel-special-case	Files, Web, Project, Conversations(其余 8 个臂为 0 几何)	预览列几何按面板穷举	面板声明是否需要预览列;几何计算留 host Surface 机制(01-panelkind B3)
-E3-004	全库 114 行 kind == PanelKind::Project 窗格选择(workspace/state.rs 35、app/update.rs 33、app/app.rs 14、workspace/view.rs 11 等)	panel-special-case	Project, Files	Preview 业务有两个实例由 PanelKind 选择	先收口为 preview_pane(kind)(01-panelkind B0);随 Preview 留产品层,不进 host
+E3-004	全库 114 行 kind == PanelKind::Project 窗格选择(workspace/state.rs 35、app/update.rs 33、app/app.rs 14、workspace/view.rs 11 等)	panel-special-case	Project, Files	约 82 处中 75 处已收口为 `preview_pane[_mut]`;剩余按字段保留 1 处(借用冲突)与 Preview 内部的 webview id/URL 编码(见 E3-005)	先收口为 preview_pane(kind)(01-panelkind B0);随 Preview 留产品层,不进 host
 E3-005	preview/code_host.rs:150、preview/webview.rs:150、PROJECT_PREVIEW_ID_OFFSET	panel-special-case	Project, Files	webview id 偏移与 URL 参数里编码面板	Preview 留产品层;host 的 webview 注册不再认识这两个名字
 E3-006	app/layout.rs:1146-1198、app/app.rs:3248-3375	panel-special-case	Agent	右栏『Agent 未镜像』时渲染顺序与尺寸	O1(Agent 怎么切)裁决后
 E3-007	term/terminal.rs:46、:188	panel-special-case	Ssh, Agent	终端区对这两个面板的特殊布局与列表折叠	O6(Terminal 是否共享)裁决后
@@ -15,7 +15,6 @@ E3-013	app/state.rs:11、:261(HoverId::GitFileFilter(FileFilter))	panel-special-
 E3-014	app/update.rs:1787-1794、:4723-4794	panel-special-case	GroupChat	host 内含 group_chat 的 Command/Effect 派发(group_chat_command、group_chat_effects)	Effect 执行器随面板迁出,host 提供通用 Effect 通道
 E3-015	app/layout.rs:1208、:1231 使用 agent_context::strip_reserved_height()	panel-special-case	AgentContext	host 布局计算里加上 agent_context 条的保留高度	面板声明保留区域,host 通用累加
 E3-016	app/state.rs:93 HoverId(62 个变体,约 20 个是面板自己的按钮)	panel-special-case	Todo, Database, Ssh, Conversations, Usage, Files, Project, GitLog, Preview…	host 单枚举里点名各面板按钮(TodoListCollapse、FilesSearchSubmit 等),是 PanelKind 之外的第二处点名	HoverId 改带命名空间的键或面板自持悬停状态(02-panel-to-host §3.2)
-E3-017	extensions/files/tree.rs:145	panel-special-case	Files	越界:面板 view 里直接 app.active_workspace()	host 把所需数据作为参数传入
 E3-018	conversation.rs(根模块)	parked-service	Conversation	展示用中间表示(ConversationMeta/SessionRow),领域类型已在 dozer-core::protocol;扇入 4(conversations, usage, app, chrome)	随 Conversation 面板迁出;usage 对它的 6 处引用需保留只读视图类型(04-shared-modules §2)
 E3-019	transcript.rs(根模块)	parked-service	Transcript	Claude 专属适配器,828 行,扇入 2(app, workspace);可能与 dozerd/transcripts 解析重复	随 Agent 领域(O1)裁决;先核实与 dozerd/src/transcripts 的重复
 E3-020	open_projects.rs、project_meta.rs(Project context 的两件事;project.rs 实为文件树,不是 Project context)	parked-service	Project context	权威数据在 dozerd(ProjectInfo);open_projects(扇入 1)是 host 持久化,project_meta(扇入 4)读写 .dozer/description.md	open_projects 留 host;project_meta 随 Project 面板迁出;project.rs(FileTree)随 Files Tree 面板——见 04-shared-modules §1
