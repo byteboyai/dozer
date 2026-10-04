@@ -2220,4 +2220,104 @@ mod tests {
         });
         assert_eq!(send, Some(true));
     }
+
+    // ---- H5:需要 host 才能做的动作,经 HostOutbox 提给 host ----
+
+    use crate::panel_host::{HostRequest, PanelCommand};
+
+    async fn dispatch(ws_state: &mut WorkspaceState, app_state: &mut AppState, msg: Message) {
+        let handle = tokio::runtime::Handle::current();
+        update(
+            ws_state,
+            app_state,
+            msg,
+            1,
+            &handle,
+            |_| {},
+            &crate::external_apps::ExternalAppsConfig::default(),
+            true,
+        );
+    }
+
+    fn open_context_menu() -> AppState {
+        AppState {
+            context_menu: Some(ContextMenu {
+                x: 1.0,
+                y: 2.0,
+                target: PathBuf::from("/proj/a.txt"),
+                is_dir: false,
+                agent_terminal_visible: true,
+            }),
+            ..AppState::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn move_dir_browse_asks_the_host_for_a_directory_starting_at_the_draft() {
+        let mut ws_state = ws_with_tree(std::env::temp_dir());
+        ws_state.pending_move = Some(PendingMove {
+            source: PathBuf::from("/a/b.txt"),
+            source_is_dir: false,
+            name_draft: "b.txt".into(),
+            dir_draft: "/tmp/x".into(),
+        });
+        dispatch(
+            &mut ws_state,
+            &mut AppState::default(),
+            Message::MoveDirBrowse,
+        )
+        .await;
+        let mut reqs = ws_state.host.take();
+        assert_eq!(reqs.len(), 1);
+        match reqs.remove(0) {
+            HostRequest::PickDirectory { start, on_picked } => {
+                assert_eq!(start, Some(PathBuf::from("/tmp/x")));
+                assert!(matches!(
+                    on_picked(PathBuf::from("/tmp/y")),
+                    Message::MoveDirInput(ref s) if s == "/tmp/y"
+                ));
+            }
+            _ => panic!("expected PickDirectory"),
+        }
+    }
+
+    #[tokio::test]
+    async fn open_search_closes_the_context_menu_and_asks_the_host_to_search_there() {
+        let mut ws_state = ws_with_tree(std::env::temp_dir());
+        let mut app_state = open_context_menu();
+        dispatch(
+            &mut ws_state,
+            &mut app_state,
+            Message::OpenSearch(PathBuf::from("/proj/dir"), true),
+        )
+        .await;
+        assert!(app_state.context_menu.is_none(), "先关右键菜单");
+        let reqs = ws_state.host.take();
+        assert_eq!(reqs.len(), 1);
+        assert!(matches!(
+            &reqs[0],
+            HostRequest::Command(PanelCommand::SearchIn { path, is_dir: true })
+                if path == &PathBuf::from("/proj/dir")
+        ));
+    }
+
+    #[tokio::test]
+    async fn file_history_open_closes_the_context_menu_and_asks_the_host_to_show_history() {
+        let mut ws_state = ws_with_tree(std::env::temp_dir());
+        let mut app_state = open_context_menu();
+        dispatch(
+            &mut ws_state,
+            &mut app_state,
+            Message::FileHistoryOpen(PathBuf::from("/proj/a.txt")),
+        )
+        .await;
+        assert!(app_state.context_menu.is_none(), "先关右键菜单");
+        let reqs = ws_state.host.take();
+        assert_eq!(reqs.len(), 1);
+        assert!(matches!(
+            &reqs[0],
+            HostRequest::Command(PanelCommand::ShowFileHistory { path })
+                if path == &PathBuf::from("/proj/a.txt")
+        ));
+    }
 }

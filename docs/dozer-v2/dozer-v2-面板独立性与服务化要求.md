@@ -170,3 +170,5 @@ Host（窗口 / 布局 / 焦点 / 浮层 / 主题 / 面板 Registry）
 8. **bytehost H3 已完成（2026-10-04）：** 宿主布局里按面板展开的重复收口——`PanelDims` 访问器替换 4 处 12 臂 match，`apply_column_drag` 的 10 条面板分隔线分支合并为一个函数（230 个用例的特征化测试钉住行为）；`PanelDims` 字段与落盘格式未动，`PanelKind` 注册制（B1）与面板钩子（B4）留给后续切片。
 
 9. **bytehost H4 已完成（2026-10-04）：** 引入 `PanelIo`（host 给面板的执行原语），`group_chat` 的 Effect 执行器/命令派发/轮询判定迁入面板模块并补上首批单测（假 `Client` 指向不存在的 socket）；host 里 `run_group_chat_effects` 删除；门禁新增 `R-HOST-PANEL-ARMS`（基线 97）与 `R-HOST-EXECUTORS`。H5（`HostEffect`：`ShowPanel`/`Emit`/`PickDirectory`）是下一步；P1 已定为受限的 `PanelCommand`。
+
+10. **bytehost H5a 已完成（2026-10-04）：** 引入 `HostOutbox`/`HostRequest`/`PanelCommand`（P1 已定为受限命令类型）；`project_create` 的两处“选择根目录…”、`Files` 的“移动到目录…”与右键“搜索”“查看此文件历史”不再靠 host/窗口层拦截，改为面板往自己 state 的 outbox 提需求、host 每条消息后统一执行；窗口层少 3 条拦截臂，`App::update` 少 2 条 `Files` 专属臂，门禁 `R-HOST-PANEL-ARMS` 基线 97 → 95。余下的窗口层拦截（剪贴板、焦点意图、webview 句柄、`ProjectLinkPick`）需要窗口层上下文可注入，留给后续切片。

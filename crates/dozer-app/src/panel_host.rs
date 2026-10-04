@@ -11,6 +11,7 @@ use crate::app::{App, HoverId, PanelKind};
 use dozer_client::Client;
 use iced_widget::core::Element;
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 
@@ -65,6 +66,53 @@ impl<M: Send + 'static> PanelIo<M> {
         let client = self.client.clone();
         let io = self.clone();
         self.handle.spawn(async move { task(client, io).await });
+    }
+}
+
+/// 面板之间"我想让另一个面板做点事"的**受限词汇**(设计文档 P1,用户 2026-10-04 裁决:面板不依赖
+/// host 的总 `Message`,也不互相引用)。载荷只用通用类型(路径、布尔),不出现任何面板的业务类型;
+/// 由 host 把命令翻译成对目标面板/弹窗的具体动作(`App::run_panel_command`)。
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum PanelCommand {
+    /// 在某个路径下发起搜索(`is_dir` 决定按目录递归还是只搜单文件)。
+    SearchIn { path: PathBuf, is_dir: bool },
+    /// 打开某个文件(绝对路径)的 git 历史。
+    ShowFileHistory { path: PathBuf },
+}
+
+/// 面板向 host 提的需求——只有 host 才能做的事(系统对话框、跨面板动作)。`M` 是提需求的那个面板
+/// 自己的 `Message` 类型:需要回复的需求带一个 `fn(..) -> M`,host 执行后把回复包成该面板的消息
+/// 投回(包装函数由 host 在排空时给,面板不知道自己在 host 里叫什么)。
+pub(crate) enum HostRequest<M> {
+    /// 弹系统"选择文件夹"对话框;选中后用 `on_picked` 造出面板消息。`start` 是起始目录。
+    PickDirectory {
+        start: Option<PathBuf>,
+        on_picked: fn(PathBuf) -> M,
+    },
+    /// 让 host 把一个跨面板命令派发给目标。
+    Command(PanelCommand),
+}
+
+/// 面板 state 里待交给 host 的需求队列。与 `toast::Outbox`(待发提示)同一个模式:面板的 `update`
+/// 签名各不相同(返回 `()`/`Option`/`Vec<Effect>`),拿不到 `App`;往自己 state 的 outbox 里 `push`,
+/// `App::update` 的包装函数每条消息后统一排空执行。纯数据,可单测。
+pub(crate) struct HostOutbox<M> {
+    items: Vec<HostRequest<M>>,
+}
+
+impl<M> Default for HostOutbox<M> {
+    fn default() -> Self {
+        Self { items: Vec::new() }
+    }
+}
+
+impl<M> HostOutbox<M> {
+    pub(crate) fn push(&mut self, request: HostRequest<M>) {
+        self.items.push(request);
+    }
+
+    pub(crate) fn take(&mut self) -> Vec<HostRequest<M>> {
+        std::mem::take(&mut self.items)
     }
 }
 
@@ -351,5 +399,44 @@ mod tests {
             rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
             1
         );
+    }
+
+    // ---- H5:HostOutbox / HostRequest / PanelCommand ----
+
+    #[test]
+    fn host_outbox_returns_requests_in_push_order_and_empties_itself() {
+        let mut out: HostOutbox<u32> = HostOutbox::default();
+        out.push(HostRequest::Command(PanelCommand::SearchIn {
+            path: "/a".into(),
+            is_dir: true,
+        }));
+        out.push(HostRequest::PickDirectory {
+            start: None,
+            on_picked: |p| p.as_os_str().len() as u32,
+        });
+        let reqs = out.take();
+        assert_eq!(reqs.len(), 2);
+        assert!(matches!(
+            &reqs[0],
+            HostRequest::Command(PanelCommand::SearchIn { is_dir: true, .. })
+        ));
+        assert!(matches!(
+            &reqs[1],
+            HostRequest::PickDirectory { start: None, .. }
+        ));
+        assert!(out.take().is_empty());
+    }
+
+    #[test]
+    fn pick_directory_reply_maps_the_picked_path_into_the_panels_message() {
+        let req: HostRequest<String> = HostRequest::PickDirectory {
+            start: Some("/s".into()),
+            on_picked: |p| p.display().to_string(),
+        };
+        let HostRequest::PickDirectory { start, on_picked } = req else {
+            panic!("expected PickDirectory");
+        };
+        assert_eq!(start, Some(std::path::PathBuf::from("/s")));
+        assert_eq!(on_picked("/x/y".into()), "/x/y");
     }
 }

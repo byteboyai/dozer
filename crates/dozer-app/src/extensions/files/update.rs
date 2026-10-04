@@ -2,6 +2,7 @@
 
 use super::git_status;
 use crate::extensions::toast;
+use crate::panel_host::{HostRequest, PanelCommand};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -409,11 +410,23 @@ pub fn update(
         Message::CopyPath(..) => {
             unreachable!("由内核拦截处理,见 files::Message::CopyPath 文档")
         }
-        Message::OpenSearch(..) => {
-            unreachable!("由内核拦截处理,映射成 search::Message::SearchOpen")
+        // 右键菜单"搜索":先关右键菜单(否则搜索弹窗 dismiss 一关,旧菜单又冒回来),再请 host 在该路径下
+        // 开搜索——目录按目录递归搜,文件只搜单文件(由 host 的 `SearchIn` 处理)。
+        Message::OpenSearch(path, is_dir) => {
+            app_state.close_context_menu();
+            ws_state
+                .host
+                .push(HostRequest::Command(PanelCommand::SearchIn {
+                    path,
+                    is_dir,
+                }));
         }
-        Message::FileHistoryOpen(_) => {
-            unreachable!("由内核拦截处理,见 files::Message::FileHistoryOpen 文档")
+        // 右键"查看此文件历史":先收起右键菜单(同 OpenSearch 的既有约定),再请 host 打开历史。
+        Message::FileHistoryOpen(path) => {
+            app_state.close_context_menu();
+            ws_state
+                .host
+                .push(HostRequest::Command(PanelCommand::ShowFileHistory { path }));
         }
         Message::FileHistoryRollbackPrevious(_) => {
             unreachable!("由 app 拦截处理,见 files::Message::FileHistoryRollbackPrevious 文档")
@@ -512,10 +525,13 @@ pub fn update(
                 pending.dir_draft = s;
             }
         }
+        // 拖拽移动确认框"到目录"旁的浏览按钮:本模块不认识系统对话框,交给 host 弹,起始目录用当前草稿。
         Message::MoveDirBrowse => {
-            unreachable!(
-                "由 main.rs Runner::dispatch 拦截处理,见 files::Message::MoveDirBrowse 文档"
-            )
+            let start = ws_state.move_dir_draft().map(PathBuf::from);
+            ws_state.host.push(HostRequest::PickDirectory {
+                start,
+                on_picked: |dir| Message::MoveDirInput(dir.display().to_string()),
+            });
         }
         Message::MoveCancel => {
             ws_state.pending_move = None;
