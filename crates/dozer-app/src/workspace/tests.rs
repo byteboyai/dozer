@@ -1453,3 +1453,51 @@ fn ui_handlers_do_not_call_blocking_preview_entry_points() {
     }
     assert!(audited > 0, "审计未命中任何调用点,词法规则可能已失效");
 }
+
+// ---- bytehost H1:预览窗格访问器 ----
+
+#[test]
+fn preview_pane_is_project_preview_only_for_the_project_panel() {
+    let ws = Workspace::empty_for_project_placeholder();
+    assert!(std::ptr::eq(
+        ws.preview_pane(PanelKind::Project),
+        &ws.project_preview
+    ));
+    for kind in [
+        PanelKind::Files,
+        PanelKind::GitLog,
+        PanelKind::Todo,
+        PanelKind::Web,
+        PanelKind::Agent,
+    ] {
+        assert!(
+            std::ptr::eq(ws.preview_pane(kind), &ws.preview),
+            "{kind:?} 应落到 Files 的预览窗格"
+        );
+    }
+}
+
+#[test]
+fn preview_pane_mut_hits_the_same_pane_as_preview_pane() {
+    let mut ws = Workspace::empty_for_project_placeholder();
+    let project_ptr = ws.preview_pane(PanelKind::Project) as *const _;
+    let files_ptr = ws.preview_pane(PanelKind::Files) as *const _;
+    assert_eq!(
+        ws.preview_pane_mut(PanelKind::Project) as *const _,
+        project_ptr
+    );
+    assert_eq!(ws.preview_pane_mut(PanelKind::Files) as *const _, files_ptr);
+    assert_ne!(project_ptr, files_ptr);
+}
+
+#[test]
+fn per_pane_companion_slots_follow_the_same_selection() {
+    let mut ws = Workspace::empty_for_project_placeholder();
+    *ws.preview_tab_first_mut(PanelKind::Project) = 3;
+    *ws.preview_tab_first_mut(PanelKind::Files) = 5;
+    assert_eq!((ws.project_preview_tab_first, ws.preview_tab_first), (3, 5));
+    *ws.preview_error_mut(PanelKind::Project) = Some("p".into());
+    *ws.preview_error_mut(PanelKind::Files) = Some("f".into());
+    assert_eq!(ws.project_preview_error.as_deref(), Some("p"));
+    assert_eq!(ws.preview_error.as_deref(), Some("f"));
+}

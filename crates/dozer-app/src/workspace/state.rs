@@ -1479,11 +1479,7 @@ impl Workspace {
         let Some(project_id) = self.project_id() else {
             return;
         };
-        let pane = if kind == PanelKind::Project {
-            &mut self.project_preview
-        } else {
-            &mut self.preview
-        };
+        let pane = self.preview_pane_mut(kind);
         if !pane.is_pending_load(tab_id) {
             return;
         }
@@ -1639,11 +1635,7 @@ impl Workspace {
         if mode == Some(crate::preview::PreviewMode::Source)
             && route_kind == Some(crate::preview::PreviewKind::Rendered)
         {
-            let pane = if kind == PanelKind::Project {
-                &mut self.project_preview
-            } else {
-                &mut self.preview
-            };
+            let pane = self.preview_pane_mut(kind);
             if let Some(idx) = pane.tabs().iter().position(|t| t.id == tab_id)
                 && let Err(error) = pane.enter_code_mode(idx)
             {
@@ -2269,6 +2261,42 @@ impl Workspace {
         }
     }
 
+    /// `kind` 对应的预览窗格:`Project` 是 Project 面板自己的预览列,其余(含 `Files`)都是 Files
+    /// 面板的预览列。**所有"按面板选预览窗格"的地方都走这两个访问器**,不要再手写
+    /// `if kind == PanelKind::Project { &self.project_preview } else { &self.preview }`。
+    ///
+    /// 注意:访问器借走整个 `Workspace`;同一作用域里还要并存地借用 `ws` 的其它字段(如
+    /// `ws.project`、`ws.*_preview_error`)时,保持按字段的写法,别硬套访问器。
+    pub(crate) fn preview_pane(&self, kind: PanelKind) -> &PreviewPane {
+        match kind {
+            PanelKind::Project => &self.project_preview,
+            _ => &self.preview,
+        }
+    }
+
+    pub(crate) fn preview_pane_mut(&mut self, kind: PanelKind) -> &mut PreviewPane {
+        match kind {
+            PanelKind::Project => &mut self.project_preview,
+            _ => &mut self.preview,
+        }
+    }
+
+    /// `kind` 对应面板的预览错误槽(`preview_error` / `project_preview_error`)。
+    pub(crate) fn preview_error_mut(&mut self, kind: PanelKind) -> &mut Option<String> {
+        match kind {
+            PanelKind::Project => &mut self.project_preview_error,
+            _ => &mut self.preview_error,
+        }
+    }
+
+    /// `kind` 对应预览 tab 条的翻页窗口起点(`preview_tab_first` / `project_preview_tab_first`)。
+    pub(crate) fn preview_tab_first_mut(&mut self, kind: PanelKind) -> &mut usize {
+        match kind {
+            PanelKind::Project => &mut self.project_preview_tab_first,
+            _ => &mut self.preview_tab_first,
+        }
+    }
+
     /// `kind` 是当前 `FocusIntent::Preview` 携带的面板(`Files` 或
     /// `Project`)——当前激活预览 tab 是否走原生渲染(有 `editor`)。
     /// main.rs 键盘路由用:原生预览 tab 需要在按键分发链里提前放行,让键盘
@@ -2278,10 +2306,7 @@ impl Workspace {
     /// 收不到键盘输入,是这次 Stage 4b 审阅时发现的独立预存 bug,和
     /// `active_preview_webview_id` 此前只查 `ws.preview` 是同一类问题。
     pub fn active_preview_tab_has_native_editor(&self, kind: PanelKind) -> bool {
-        let pane = match kind {
-            PanelKind::Project => &self.project_preview,
-            _ => &self.preview,
-        };
+        let pane = self.preview_pane(kind);
         pane.tabs()
             .get(pane.active_idx())
             .is_some_and(|t| t.tabular_state().is_some())
@@ -2306,11 +2331,7 @@ impl Workspace {
     /// ⌘S:把 `kind` 面板**当前激活原生 tab** 的就地改动保存到磁盘,语义同
     /// `preview_pane_save_at`——除了定位固定取"当前激活 tab"。
     pub fn preview_pane_save_active(&mut self, kind: PanelKind) {
-        let idx = if kind == PanelKind::Project {
-            self.project_preview.active_idx()
-        } else {
-            self.preview.active_idx()
-        };
+        let idx = self.preview_pane_mut(kind).active_idx();
         self.preview_pane_save_at(kind, idx);
     }
 
@@ -2319,11 +2340,7 @@ impl Workspace {
     /// spawn 后台解析)。非 Failed tab 是 no-op。
     pub fn preview_retry(&mut self, kind: PanelKind, tab_id: usize, io: &ShellIo) {
         {
-            let pane = if kind == PanelKind::Project {
-                &mut self.project_preview
-            } else {
-                &mut self.preview
-            };
+            let pane = self.preview_pane_mut(kind);
             if !pane.is_pending_load(tab_id) {
                 return;
             }
@@ -2336,21 +2353,13 @@ impl Workspace {
     /// 让窗口化 host 能滚动。
     pub fn preview_plain_text_open(&mut self, kind: PanelKind, tab_id: usize, io: &ShellIo) {
         let windowed = {
-            let pane = if kind == PanelKind::Project {
-                &self.project_preview
-            } else {
-                &self.preview
-            };
+            let pane = self.preview_pane(kind);
             pane.tabs()
                 .iter()
                 .find(|t| t.id == tab_id)
                 .is_some_and(|t| t.windowed && matches!(t.kind, crate::preview::TabKind::File(_)))
         };
-        let pane = if kind == PanelKind::Project {
-            &mut self.project_preview
-        } else {
-            &mut self.preview
-        };
+        let pane = self.preview_pane_mut(kind);
         if !pane.force_plain_text(tab_id) {
             return;
         }
@@ -2361,32 +2370,20 @@ impl Workspace {
 
     /// T10:该面板是否有激活的磁盘冲突(渲染/几何让位用)。
     pub fn preview_conflict_active(&self, kind: PanelKind) -> bool {
-        let pane = if kind == PanelKind::Project {
-            &self.project_preview
-        } else {
-            &self.preview
-        };
+        let pane = self.preview_pane(kind);
         pane.active_conflict().is_some()
     }
 
     /// T10:「保留我的修改」——清冲突态,以当前磁盘 mtime 为保存基线。
     pub fn preview_conflict_keep(&mut self, kind: PanelKind, tab_id: usize) {
-        let pane = if kind == PanelKind::Project {
-            &mut self.project_preview
-        } else {
-            &mut self.preview
-        };
+        let pane = self.preview_pane_mut(kind);
         pane.keep_conflict_changes(tab_id);
     }
 
     /// T10:「重载磁盘(丢弃我的修改)」——第一次点击进入二次确认,再点一次才
     /// 真正丢弃:清冲突/清 dirty/推进 reload/复位 revision,并删除 recovery 快照。
     pub fn preview_conflict_reload(&mut self, kind: PanelKind, tab_id: usize, io: &ShellIo) {
-        let pane = if kind == PanelKind::Project {
-            &mut self.project_preview
-        } else {
-            &mut self.preview
-        };
+        let pane = self.preview_pane_mut(kind);
         let armed = pane
             .tabs()
             .iter()
@@ -2427,21 +2424,13 @@ impl Workspace {
         };
         // Suspended 壳:先物化(T3 的 reserve→load→ready),再执行一次性命令。
         let suspended = {
-            let pane = if panel_kind == PanelKind::Project {
-                &self.project_preview
-            } else {
-                &self.preview
-            };
+            let pane = self.preview_pane(panel_kind);
             pane.is_pending_load(tab_id)
         };
         if suspended {
             self.load_preview_tab(panel_kind, tab_id, io);
         }
-        let pane = if panel_kind == PanelKind::Project {
-            &mut self.project_preview
-        } else {
-            &mut self.preview
-        };
+        let pane = self.preview_pane_mut(panel_kind);
         pane.apply_preview_command(tab_id, cmd)
     }
 
@@ -2490,11 +2479,7 @@ impl Workspace {
         let Some(project_id) = self.project_id() else {
             return;
         };
-        let pane = if kind == PanelKind::Project {
-            &self.project_preview
-        } else {
-            &self.preview
-        };
+        let pane = self.preview_pane(kind);
         let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
             return;
         };
@@ -2533,11 +2518,7 @@ impl Workspace {
         let Some(project_id) = self.project_id() else {
             return;
         };
-        let pane = if kind == PanelKind::Project {
-            &mut self.project_preview
-        } else {
-            &mut self.preview
-        };
+        let pane = self.preview_pane_mut(kind);
         for (tab_id, path) in pane.take_pending_tabular_loads() {
             // 捕获启动时的 generation:tab 关闭/重开/重试后到达的旧结果按此丢弃
             // (T7 取消不回填旧 sheet)。
@@ -2576,11 +2557,7 @@ impl Workspace {
         let Some(project_id) = self.project_id() else {
             return;
         };
-        let pane = if kind == PanelKind::Project {
-            &mut self.project_preview
-        } else {
-            &mut self.preview
-        };
+        let pane = self.preview_pane_mut(kind);
         let Some(request) = pane
             .tabular_mut(tab_id)
             .and_then(|view| view.select_sheet(sheet))
@@ -2645,48 +2622,27 @@ impl Workspace {
         kind: PanelKind,
         idx: usize,
     ) -> Option<(usize, u64)> {
-        let project = kind == PanelKind::Project;
         let in_code_mode = {
-            let pane = if project {
-                &self.project_preview
-            } else {
-                &self.preview
-            };
+            let pane = self.preview_pane(kind);
             pane.tabs()
                 .get(idx)
                 .is_some_and(|t| t.uses_rendered_source_editor())
         };
         if in_code_mode {
             self.preview_pane_save_at(kind, idx);
-            let pane = if project {
-                &mut self.project_preview
-            } else {
-                &mut self.preview
-            };
+            let pane = self.preview_pane_mut(kind);
             pane.exit_code_mode(idx);
         } else {
-            let pane = if project {
-                &mut self.project_preview
-            } else {
-                &mut self.preview
-            };
+            let pane = self.preview_pane_mut(kind);
             if let Err(e) = pane.enter_code_mode(idx) {
                 let err = Some(format!("打开代码模式失败: {e}"));
-                if project {
-                    self.project_preview_error = err;
-                } else {
-                    self.preview_error = err;
-                }
+                *self.preview_error_mut(kind) = err;
                 return None;
             }
         }
         // T11:切换进入 `SwitchingMode` 且仍在 Loading 时,取 tab_id/generation
         // 供上层 arm 看门狗(等目标 host 首帧)。
-        let pane = if project {
-            &self.project_preview
-        } else {
-            &self.preview
-        };
+        let pane = self.preview_pane(kind);
         let tab = pane.tabs().get(idx)?;
         (tab.load_state.stage == crate::preview::PreviewLoadStage::SwitchingMode)
             .then_some((tab.id, tab.load_state.generation))
@@ -2702,12 +2658,7 @@ impl Workspace {
         kind: PanelKind,
         tab_id: usize,
     ) -> Option<(usize, u64)> {
-        let project = kind == PanelKind::Project;
-        let pane = if project {
-            &mut self.project_preview
-        } else {
-            &mut self.preview
-        };
+        let pane = self.preview_pane_mut(kind);
         let backend = pane
             .tabs()
             .iter()
@@ -2732,11 +2683,7 @@ impl Workspace {
     /// `preview_find_open_with_replace` 才展开)。
     pub fn preview_find_open(&mut self, kind: PanelKind) {
         let pool_id = self.active_preview_webview_id(kind);
-        let pane = if kind == PanelKind::Project {
-            &mut self.project_preview
-        } else {
-            &mut self.preview
-        };
+        let pane = self.preview_pane_mut(kind);
         pane.open_find_on_active(false, pool_id);
         pane.request_find_focus();
     }
@@ -2745,43 +2692,27 @@ impl Workspace {
     /// 替换概念,展开态会被 `open_find_on_active` 强制收起。
     pub fn preview_find_open_with_replace(&mut self, kind: PanelKind) {
         let pool_id = self.active_preview_webview_id(kind);
-        let pane = if kind == PanelKind::Project {
-            &mut self.project_preview
-        } else {
-            &mut self.preview
-        };
+        let pane = self.preview_pane_mut(kind);
         pane.open_find_on_active(true, pool_id);
         pane.request_find_focus();
     }
 
     /// 查询框前的圆盘箭头:手动翻转 `kind` 面板 Find 条的替换行展开态。
     pub fn preview_find_toggle_replace(&mut self, kind: PanelKind) {
-        if kind == PanelKind::Project {
-            self.project_preview.toggle_find_replace();
-        } else {
-            self.preview.toggle_find_replace();
-        }
+        self.preview_pane_mut(kind).toggle_find_replace();
     }
 
     /// `kind` 面板的 Find 条当前是否显示(main.rs Esc/⌘ 键盘路由、视图渲染分层
     /// 共用)。
     pub fn preview_find_bar_open(&self, kind: PanelKind) -> bool {
-        if kind == PanelKind::Project {
-            self.project_preview.find_bar_open()
-        } else {
-            self.preview.find_bar_open()
-        }
+        self.preview_pane(kind).find_bar_open()
     }
 
     /// `kind` 面板当前开着的 Find 会话是否锁在 webview(flyfish)预览 tab 上
     /// (`is_webview=true`)。`preview_find_bar_open` 为真但这里是假 ⇒ 锁的是
     /// 原生 editor,二者配合判断 Find 条是否该压在 webview 之上。
     pub fn preview_find_is_webview(&self, kind: PanelKind) -> bool {
-        let pane = if kind == PanelKind::Project {
-            &self.project_preview
-        } else {
-            &self.preview
-        };
+        let pane = self.preview_pane(kind);
         pane.find_state().is_some_and(|f| f.is_webview)
     }
 
@@ -2789,22 +2720,14 @@ impl Workspace {
     /// `uses_windowed_editor` 的 CodeMirror tab 上)。窗口化 host 也是原生
     /// webview,条渲染时同样要把 webview 矩形下推让位。
     pub fn preview_large_file_search_bar_open(&self, kind: PanelKind) -> bool {
-        let pane = if kind == PanelKind::Project {
-            &self.project_preview
-        } else {
-            &self.preview
-        };
+        let pane = self.preview_pane(kind);
         pane.large_file_search.is_some()
     }
 
     /// 每帧渲染循环把 `preview::take_find_focused(kind)` 查到的真实焦点态
     /// 写回这里。
     pub fn set_find_query_focused(&mut self, kind: PanelKind, focused: bool) {
-        if kind == PanelKind::Project {
-            self.project_preview.set_find_query_focused(focused);
-        } else {
-            self.preview.set_find_query_focused(focused);
-        }
+        self.preview_pane_mut(kind).set_find_query_focused(focused);
     }
 
     /// 关闭 `kind` 面板 Find 条(× / Esc / ⌘F 里输入框清空后的迁离)。关闭后把
@@ -2812,68 +2735,41 @@ impl Workspace {
     /// 用 `active_editor_focus_id` 真正聚焦回)——⌘F 打开时开条会抢走输入框焦
     /// 点,关闭就该还回去,不许键盘焦点悬空在已消失的 widget 上。
     pub fn preview_find_close(&mut self, kind: PanelKind) {
-        let pane = if kind == PanelKind::Project {
-            &mut self.project_preview
-        } else {
-            &mut self.preview
-        };
+        let pane = self.preview_pane_mut(kind);
         pane.close_find();
         pane.request_editor_focus();
     }
 
     /// 键入:转发 query 到面板,让面板当场重算与跳第一个命中。
     pub fn preview_find_type(&mut self, kind: PanelKind, query: String) {
-        if kind == PanelKind::Project {
-            self.project_preview.find_type(query);
-        } else {
-            self.preview.find_type(query);
-        }
+        self.preview_pane_mut(kind).find_type(query);
     }
 
     /// 下一个/上一个命中。
     pub fn preview_find_go(&mut self, kind: PanelKind, next: bool) {
-        if kind == PanelKind::Project {
-            self.project_preview.find_go(next);
-        } else {
-            self.preview.find_go(next);
-        }
+        self.preview_pane_mut(kind).find_go(next);
     }
 
     /// 翻转 Find 条大小写敏感开关(`case_sensitive` 真=逐字严格、假=ASCII 折叠),
     /// 作用在 `kind` 面板当前打开的会话上;条未开是 no-op。
     pub fn preview_find_case(&mut self, kind: PanelKind, case_sensitive: bool) {
-        if kind == PanelKind::Project {
-            self.project_preview.set_find_case(case_sensitive);
-        } else {
-            self.preview.set_find_case(case_sensitive);
-        }
+        self.preview_pane_mut(kind).set_find_case(case_sensitive);
     }
 
     /// 落定「替换为」草稿到 `kind` 面板当前 Find 会话(只写,不触发替换)。
     pub fn preview_find_set_replacement(&mut self, kind: PanelKind, replacement: String) {
-        if kind == PanelKind::Project {
-            self.project_preview.set_find_replacement(replacement);
-        } else {
-            self.preview.set_find_replacement(replacement);
-        }
+        self.preview_pane_mut(kind)
+            .set_find_replacement(replacement);
     }
 
     /// 「替换当前命中」。作用对象与返回值语义见 `PreviewPane::replace_current`。
     pub fn preview_find_replace_current(&mut self, kind: PanelKind) {
-        if kind == PanelKind::Project {
-            self.project_preview.replace_current();
-        } else {
-            self.preview.replace_current();
-        }
+        self.preview_pane_mut(kind).replace_current();
     }
 
     /// 「替换全部」。作用对象与返回值语义见 `PreviewPane::replace_all`。
     pub fn preview_find_replace_all(&mut self, kind: PanelKind) {
-        if kind == PanelKind::Project {
-            self.project_preview.replace_all();
-        } else {
-            self.preview.replace_all();
-        }
+        self.preview_pane_mut(kind).replace_all();
     }
 
     /// 取走 `kind` 面板 webview(flyfish)档 Find 待下发的搜索动作 + 查询词 +
@@ -2883,19 +2779,14 @@ impl Workspace {
         &mut self,
         kind: PanelKind,
     ) -> Option<(crate::preview::WebviewFindAction, String, bool)> {
-        match kind {
-            PanelKind::Project => self.project_preview.take_pending_webview_find(),
-            _ => self.preview.take_pending_webview_find(),
-        }
+        self.preview_pane_mut(kind).take_pending_webview_find()
     }
 
     /// 取走 `kind` 面板 webview(flyfish)档待清理的 webview 池 key,供
     /// `apply_pending_preview_find` 注入 `clearDocumentSearch()` 抹高亮。
     pub fn take_preview_webview_find_clear(&mut self, kind: PanelKind) -> Option<usize> {
-        match kind {
-            PanelKind::Project => self.project_preview.take_pending_webview_find_clear(),
-            _ => self.preview.take_pending_webview_find_clear(),
-        }
+        self.preview_pane_mut(kind)
+            .take_pending_webview_find_clear()
     }
 
     /// 把 flyfish `getSearchState()` 回写的命中总数 / 当前序号(idx,0-based)
@@ -2907,11 +2798,7 @@ impl Workspace {
         current: usize,
         total: usize,
     ) {
-        let pane = if kind == PanelKind::Project {
-            &mut self.project_preview
-        } else {
-            &mut self.preview
-        };
+        let pane = self.preview_pane_mut(kind);
         if let Some(f) = pane.find.as_mut()
             && f.is_webview
         {

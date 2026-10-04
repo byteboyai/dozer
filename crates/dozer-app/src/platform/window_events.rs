@@ -2553,10 +2553,7 @@ impl Runner {
             let Some((project_id, root)) = (|| {
                 let ws = app.active_workspace()?;
                 let project = ws.project.as_ref()?;
-                let pane = match kind {
-                    PanelKind::Project => &ws.project_preview,
-                    _ => &ws.preview,
-                };
+                let pane = ws.preview_pane(kind);
                 if pane.blank_info.is_some() || pane.blank_info_in_flight {
                     return None;
                 }
@@ -2577,10 +2574,7 @@ impl Runner {
                 Some(ws) => ws,
                 None => continue,
             };
-            let pane = match kind {
-                PanelKind::Project => &mut ws.project_preview,
-                _ => &mut ws.preview,
-            };
+            let pane = ws.preview_pane_mut(kind);
             pane.blank_info_in_flight = true;
             let panel_kind = kind;
             let proxy = proxy.clone();

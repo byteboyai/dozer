@@ -189,11 +189,7 @@ impl App {
             Message::TodoContentWebviewEvent(event) => self.todo_content_event(event),
             Message::EditorWebviewEvent(binding, event) => {
                 self.with_project(binding.project_id, move |ws, io| {
-                    let pane = if binding.panel == PanelKind::Project {
-                        &mut ws.project_preview
-                    } else {
-                        &mut ws.preview
-                    };
+                    let pane = ws.preview_pane_mut(binding.panel);
                     // `Ready` 时若该 tab 有"打开后跳转到某行"的诉求(代码健康度
                     // 面板),取出来在 tab 借用结束后排队一条 reveal 命令。
                     let mut pending_reveal: Option<(usize, u32)> = None;
@@ -692,11 +688,7 @@ impl App {
                         && pane.take_pending_close(tab_id)
                     {
                         pane.close_by_id(tab_id);
-                        if binding.panel == PanelKind::Project {
-                            ws.project_preview_tab_first = 0;
-                        } else {
-                            ws.preview_tab_first = 0;
-                        }
+                        *ws.preview_tab_first_mut(binding.panel) = 0;
                         ws.spawn_preview_state_save(io);
                         ws.flush_preview_context_push(io);
                     }
@@ -709,11 +701,7 @@ impl App {
             }
             Message::JsonEditorEvent(binding, event) => {
                 self.with_project(binding.project_id, move |ws, _io| {
-                    let pane = if binding.panel == PanelKind::Project {
-                        &mut ws.project_preview
-                    } else {
-                        &mut ws.preview
-                    };
+                    let pane = ws.preview_pane_mut(binding.panel);
                     if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == binding.tab_id) {
                         use crate::preview::JsonEvent;
                         match event.payload {
@@ -782,11 +770,7 @@ impl App {
                     let mut window_push: Option<(usize, u32, Vec<Vec<String>>, u64)> = None;
                     let mut sheet_to_select: Option<usize> = None;
                     {
-                        let pane = if panel == PanelKind::Project {
-                            &mut ws.project_preview
-                        } else {
-                            &mut ws.preview
-                        };
+                        let pane = ws.preview_pane_mut(panel);
                         let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == binding.tab_id)
                         else {
                             return;
@@ -860,11 +844,7 @@ impl App {
                             }
                         }
                     }
-                    let pane = if panel == PanelKind::Project {
-                        &mut ws.project_preview
-                    } else {
-                        &mut ws.preview
-                    };
+                    let pane = ws.preview_pane_mut(panel);
                     if push_initial {
                         pane.try_push_initial_tabular_state(binding.tab_id);
                     }
@@ -905,11 +885,7 @@ impl App {
                     use crate::preview::FlyfishEvent;
                     // 搜索状态:只在本次 webview Find 会话正锁定该 tab 时回填。
                     if let FlyfishEvent::SearchState { current, total } = event.payload {
-                        let pane = if binding.panel == PanelKind::Project {
-                            &mut ws.project_preview
-                        } else {
-                            &mut ws.preview
-                        };
+                        let pane = ws.preview_pane_mut(binding.panel);
                         let matches = pane
                             .find_state()
                             .is_some_and(|f| f.is_webview && f.tab_id == binding.tab_id);
@@ -918,11 +894,7 @@ impl App {
                         }
                         return;
                     }
-                    let pane = if binding.panel == PanelKind::Project {
-                        &mut ws.project_preview
-                    } else {
-                        &mut ws.preview
-                    };
+                    let pane = ws.preview_pane_mut(binding.panel);
                     if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == binding.tab_id) {
                         match event.payload {
                             FlyfishEvent::Ready => {
@@ -997,11 +969,7 @@ impl App {
             }
             Message::ImageAnnotateEvent(binding, event) => {
                 self.with_project(binding.project_id, move |ws, _io| {
-                    let pane = if binding.panel == PanelKind::Project {
-                        &mut ws.project_preview
-                    } else {
-                        &mut ws.preview
-                    };
+                    let pane = ws.preview_pane_mut(binding.panel);
                     pane.apply_image_annotate_event(binding.tab_id, event.payload);
                 });
             }
@@ -1035,11 +1003,7 @@ impl App {
                     }
                     match result {
                         Ok(index) => {
-                            let pane = if panel == PanelKind::Project {
-                                &mut ws.project_preview
-                            } else {
-                                &mut ws.preview
-                            };
+                            let pane = ws.preview_pane_mut(panel);
                             // 过期索引(文件 revision 已变)必须丢弃,不得套到
                             // 新内容上——见 `PreviewPane::apply_window_index`。
                             if pane.apply_window_index(tab_id, index) {
@@ -1081,11 +1045,7 @@ impl App {
                             }
                         }
                         Err(error) => {
-                            let pane = if panel == PanelKind::Project {
-                                &mut ws.project_preview
-                            } else {
-                                &mut ws.preview
-                            };
+                            let pane = ws.preview_pane_mut(panel);
                             if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == tab_id) {
                                 tab.web_error = Some(format!("建立行索引失败: {error}"));
                             }
@@ -1095,11 +1055,7 @@ impl App {
             }
             Message::PreviewProfiled(project_id, panel, tab_id, generation, result) => {
                 self.with_project(project_id, move |ws, io| {
-                    let pane = if panel == PanelKind::Project {
-                        &mut ws.project_preview
-                    } else {
-                        &mut ws.preview
-                    };
+                    let pane = ws.preview_pane_mut(panel);
                     match result {
                         Ok(profile) => {
                             if !pane.apply_profile(tab_id, generation, &profile) {
@@ -1231,11 +1187,7 @@ impl App {
             }
             Message::PreviewLoadTimeout(project_id, panel, tab_id, generation, stage) => {
                 self.with_project(project_id, move |ws, _io| {
-                    let pane = if panel == PanelKind::Project {
-                        &mut ws.project_preview
-                    } else {
-                        &mut ws.preview
-                    };
+                    let pane = ws.preview_pane_mut(panel);
                     // T11:只有仍在该 generation **且仍停在同 stage**的加载才判超时。
                     // stage 不符说明已推进到下一阶段(会有新的超时接管),generation
                     // 不符说明已重开/被替换——两者都静默丢弃,避免迟到超时误杀。
@@ -1260,11 +1212,7 @@ impl App {
             }
             Message::PreviewRecoveryWritten(project_id, panel, tab_id) => {
                 self.with_project(project_id, move |ws, _io| {
-                    let pane = if panel == PanelKind::Project {
-                        &mut ws.project_preview
-                    } else {
-                        &mut ws.preview
-                    };
+                    let pane = ws.preview_pane_mut(panel);
                     if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == tab_id) {
                         tab.recovery_written = true;
                     }
@@ -1272,11 +1220,7 @@ impl App {
             }
             Message::PreviewRecoveryRead(project_id, panel, tab_id, generation, restore) => {
                 self.with_project(project_id, move |ws, _io| {
-                    let pane = if panel == PanelKind::Project {
-                        &mut ws.project_preview
-                    } else {
-                        &mut ws.preview
-                    };
+                    let pane = ws.preview_pane_mut(panel);
                     let Some(text) = restore else {
                         return;
                     };
@@ -2177,13 +2121,14 @@ impl App {
             // 先清回 false,再做 stale guard(active tab 已不是 Blank 也丢)。
             Message::PreviewBlankInfoLoaded(project_id, kind, info) => {
                 self.with_project(project_id, move |ws, _io| {
-                    let pane = match kind {
-                        PanelKind::Project => &mut ws.project_preview,
-                        _ => &mut ws.preview,
-                    };
+                    // 先取项目根(`preview_pane_mut` 会借走整个 `ws`,不能再和它并存)。
+                    let current_root = ws.project.as_ref().map(|p| p.path.clone());
+                    let pane = ws.preview_pane_mut(kind);
                     pane.blank_info_in_flight = false;
-                    let current_root = ws.project.as_ref().map(|p| p.path.as_str());
-                    if !current_root.is_some_and(|r| r == info.path.to_string_lossy().as_ref()) {
+                    if !current_root
+                        .as_deref()
+                        .is_some_and(|r| r == info.path.to_string_lossy().as_ref())
+                    {
                         return;
                     }
                     let active_is_blank = pane
@@ -2197,9 +2142,8 @@ impl App {
                 });
             }
             Message::PreviewLargeFileSearchClose(kind) => {
-                self.with_focused_project(move |ws, _io| match kind {
-                    PanelKind::Project => ws.project_preview.close_large_file_search(),
-                    _ => ws.preview.close_large_file_search(),
+                self.with_focused_project(move |ws, _io| {
+                    ws.preview_pane_mut(kind).close_large_file_search()
                 });
             }
             Message::PreviewLargeFileSearchSubmit(kind, tab_id, query) => {
@@ -2207,10 +2151,7 @@ impl App {
                     return;
                 };
                 self.with_focused_project(move |ws, io| {
-                    let pane = match kind {
-                        PanelKind::Project => &mut ws.project_preview,
-                        _ => &mut ws.preview,
-                    };
+                    let pane = ws.preview_pane_mut(kind);
                     // T9 bullet 5:空查询立即取消在途查询并清 loading,不派任务。
                     if query.trim().is_empty() {
                         pane.clear_large_file_search(tab_id);
@@ -2294,10 +2235,7 @@ impl App {
                 result,
             ) => {
                 self.with_project(project_id, move |ws, _io| {
-                    let pane = match kind {
-                        PanelKind::Project => &mut ws.project_preview,
-                        _ => &mut ws.preview,
-                    };
+                    let pane = ws.preview_pane_mut(kind);
                     pane.set_large_file_search_results(tab_id, generation, result);
                 });
             }
@@ -2310,10 +2248,7 @@ impl App {
                 total,
             ) => {
                 self.with_project(project_id, move |ws, _io| {
-                    let pane = match kind {
-                        PanelKind::Project => &mut ws.project_preview,
-                        _ => &mut ws.preview,
-                    };
+                    let pane = ws.preview_pane_mut(kind);
                     pane.set_large_file_search_progress(
                         tab_id,
                         generation,
@@ -2326,6 +2261,8 @@ impl App {
             }
             Message::PreviewLargeFileSearchGo(kind, forward) => {
                 self.with_focused_project(move |ws, _io| {
+                    // 这里要同时可变借用 `pane` 与 `ws.*_preview_error` 两个不相交字段,
+                    // 访问器会借走整个 `ws`,所以保留按字段的写法。
                     let pane = match kind {
                         PanelKind::Project => &mut ws.project_preview,
                         _ => &mut ws.preview,
@@ -2362,10 +2299,7 @@ impl App {
             Message::PreviewSelectTab(idx) => self.preview_select_tab(idx),
             Message::PreviewOpenExternal(kind, tab_id) => {
                 self.with_focused_project(move |ws, io| {
-                    let pane = match kind {
-                        PanelKind::Project => &ws.project_preview,
-                        _ => &ws.preview,
-                    };
+                    let pane = ws.preview_pane(kind);
                     let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
                         return;
                     };
@@ -2427,11 +2361,7 @@ impl App {
             }
             Message::PreviewTabularTextModeToggle(kind, tab_id) => {
                 self.with_focused_project(move |ws, _io| {
-                    let pane = if kind == PanelKind::Project {
-                        &mut ws.project_preview
-                    } else {
-                        &mut ws.preview
-                    };
+                    let pane = ws.preview_pane_mut(kind);
                     if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == tab_id)
                         && let Some(crate::preview::PreviewBackend::Tabular(tabular)) =
                             tab.backend.as_mut()
@@ -2530,10 +2460,7 @@ impl App {
                     // 窗口化 CodeMirror tab:普通 Find 只搜持有窗口没意义,改为
                     // 打开整文件流式搜索条(与 host `find_request` 同一条 session)。
                     let windowed_id = {
-                        let pane = match kind {
-                            PanelKind::Project => &ws.project_preview,
-                            _ => &ws.preview,
-                        };
+                        let pane = ws.preview_pane(kind);
                         let idx = pane.active_idx();
                         pane.tabs()
                             .get(idx)
@@ -2541,10 +2468,7 @@ impl App {
                             .map(|t| t.id)
                     };
                     if let Some(tab_id) = windowed_id {
-                        let pane = match kind {
-                            PanelKind::Project => &mut ws.project_preview,
-                            _ => &mut ws.preview,
-                        };
+                        let pane = ws.preview_pane_mut(kind);
                         pane.open_large_file_search(tab_id);
                     } else {
                         ws.preview_find_open(kind);
@@ -2556,10 +2480,7 @@ impl App {
                 // "默认展开替换行"这个语义,大文件搜索条本来就没有替换行)。
                 self.with_focused_project(move |ws, _io| {
                     let windowed_id = {
-                        let pane = match kind {
-                            PanelKind::Project => &ws.project_preview,
-                            _ => &ws.preview,
-                        };
+                        let pane = ws.preview_pane(kind);
                         let idx = pane.active_idx();
                         pane.tabs()
                             .get(idx)
@@ -2567,10 +2488,7 @@ impl App {
                             .map(|t| t.id)
                     };
                     if let Some(tab_id) = windowed_id {
-                        let pane = match kind {
-                            PanelKind::Project => &mut ws.project_preview,
-                            _ => &mut ws.preview,
-                        };
+                        let pane = ws.preview_pane_mut(kind);
                         pane.open_large_file_search(tab_id);
                     } else {
                         ws.preview_find_open_with_replace(kind);
@@ -2637,11 +2555,7 @@ impl App {
                         }
                     }
                     let sheet_to_select = {
-                        let pane = if kind == PanelKind::Project {
-                            &mut ws.project_preview
-                        } else {
-                            &mut ws.preview
-                        };
+                        let pane = ws.preview_pane_mut(kind);
                         pane.finish_tabular_load(tab_id, generation, result)
                     };
                     // 恢复的 active sheet 不是首个 → 触发一次懒加载。
@@ -2651,11 +2565,7 @@ impl App {
                     // 一遍,否则恢复到非首个 sheet 的滚动位置会被静默清零。
                     if let Some((sheet, row, col)) = sheet_to_select {
                         ws.preview_pane_tabular_action(kind, tab_id, sheet, io);
-                        let pane = if kind == PanelKind::Project {
-                            &mut ws.project_preview
-                        } else {
-                            &mut ws.preview
-                        };
+                        let pane = ws.preview_pane_mut(kind);
                         if let Some(view) = pane.tabular_mut(tab_id) {
                             view.scroll_row = row;
                             view.scroll_col = col;
@@ -2665,11 +2575,7 @@ impl App {
             }
             Message::TabularSheetLoaded(project_id, kind, tab_id, sheet_index, result) => {
                 self.with_project(project_id, move |ws, _io| {
-                    let pane = if kind == PanelKind::Project {
-                        &mut ws.project_preview
-                    } else {
-                        &mut ws.preview
-                    };
+                    let pane = ws.preview_pane_mut(kind);
                     let loaded_ok = result.is_ok();
                     if let Some(crate::preview::TabularState::Ready(view)) =
                         pane.tabular_state_mut(tab_id)

@@ -1027,10 +1027,7 @@ impl App {
         let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
             return Vec::new();
         };
-        let pane = match kind {
-            PanelKind::Project => &mut ws.project_preview,
-            _ => &mut ws.preview,
-        };
+        let pane = ws.preview_pane_mut(kind);
         let pending =
             pane.take_pending_editor_commands_for(available_webview_ids, project_id, kind);
         let mut out = Vec::new();
@@ -1081,10 +1078,7 @@ impl App {
         let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
             return Vec::new();
         };
-        let pane = match kind {
-            PanelKind::Project => &mut ws.project_preview,
-            _ => &mut ws.preview,
-        };
+        let pane = ws.preview_pane_mut(kind);
         let pending =
             pane.take_pending_tabular_commands_for(available_webview_ids, project_id, kind);
         let mut out = Vec::new();
@@ -1321,10 +1315,7 @@ impl App {
         let Some(ws) = self.active_workspace_mut() else {
             return false;
         };
-        let pane = match kind {
-            PanelKind::Project => &mut ws.project_preview,
-            _ => &mut ws.preview,
-        };
+        let pane = ws.preview_pane_mut(kind);
         if !Self::codemirror_tab_ready(pane, tab_id) {
             return false;
         }
@@ -1347,10 +1338,7 @@ impl App {
         let Some(ws) = self.active_workspace_mut() else {
             return false;
         };
-        let pane = match kind {
-            PanelKind::Project => &mut ws.project_preview,
-            _ => &mut ws.preview,
-        };
+        let pane = ws.preview_pane_mut(kind);
         if !Self::codemirror_tab_ready(pane, tab_id) {
             return false;
         }
@@ -1377,10 +1365,7 @@ impl App {
         let Some(ws) = self.active_workspace_mut() else {
             return false;
         };
-        let pane = match kind {
-            PanelKind::Project => &mut ws.project_preview,
-            _ => &mut ws.preview,
-        };
+        let pane = ws.preview_pane_mut(kind);
         let accepted = pane
             .tabs()
             .iter()
@@ -1521,11 +1506,7 @@ impl App {
         let io = self.shell_io();
         for ((project, panel, tab_id), generation) in &outcome.granted {
             if let Some(ws) = loaded_workspace_mut(&mut self.projects, *project) {
-                let pane = if *panel == PanelKind::Project {
-                    &mut ws.project_preview
-                } else {
-                    &mut ws.preview
-                };
+                let pane = ws.preview_pane_mut(*panel);
                 if pane.grant_reserve(*tab_id, *generation) {
                     io.arm_load_timeout(
                         *project,
@@ -1539,21 +1520,13 @@ impl App {
         }
         for (project, panel, tab_id) in &outcome.evicted {
             if let Some(ws) = loaded_workspace_mut(&mut self.projects, *project) {
-                let pane = if *panel == PanelKind::Project {
-                    &mut ws.project_preview
-                } else {
-                    &mut ws.preview
-                };
+                let pane = ws.preview_pane_mut(*panel);
                 pane.suspend_tab(*tab_id);
             }
         }
         for ((project, panel, tab_id), generation) in &outcome.denied {
             if let Some(ws) = loaded_workspace_mut(&mut self.projects, *project) {
-                let pane = if *panel == PanelKind::Project {
-                    &mut ws.project_preview
-                } else {
-                    &mut ws.preview
-                };
+                let pane = ws.preview_pane_mut(*panel);
                 pane.mark_reserve_denied(
                     *tab_id,
                     *generation,
