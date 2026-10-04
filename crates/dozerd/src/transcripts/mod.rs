@@ -964,6 +964,19 @@ impl TranscriptStore {
             dozer_core::protocol::UsagePayload,
         )>,
     > {
+        // Codex 0.16x+ writes its live usage to state_N.sqlite instead of a
+        // rollout JSONL file. Startup/backfill ingestion alone therefore
+        // leaves a long-running daemon with a stale snapshot. Refresh this
+        // project immediately before reading our aggregate cache. Keep it
+        // best-effort so a Codex schema/read failure cannot hide other agents.
+        if let Err(e) = self.ingest_codex_sqlite_in(home, Some(cwd)) {
+            dozer_core::log_warn!(
+                LOG,
+                error = %e,
+                cwd,
+                "查询用量前刷新 Codex SQLite 失败，继续使用已有缓存"
+            );
+        }
         let mut conversations = self.list_conversations_in(home, cwd, None, u32::MAX, 0)?;
         if let Some(since) = since_ts {
             conversations.retain(|c| c.last_ts >= since);
@@ -1119,6 +1132,54 @@ mod tests {
         assert_eq!(usage.len(), 1);
         assert_eq!(usage[0].1.turns, 1);
         assert_eq!(usage[0].1.tokens_in, 321);
+    }
+
+    #[test]
+    fn usage_query_refreshes_codex_sqlite_updated_after_daemon_start() {
+        let tmp = tempfile::tempdir().unwrap();
+        let codex = tmp.path().join(".codex");
+        std::fs::create_dir_all(&codex).unwrap();
+        let state = rusqlite::Connection::open(codex.join("state_5.sqlite")).unwrap();
+        state
+            .execute_batch(
+                "CREATE TABLE threads (
+                    id TEXT PRIMARY KEY, cwd TEXT NOT NULL, title TEXT NOT NULL,
+                    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+                    tokens_used INTEGER NOT NULL, rollout_path TEXT NOT NULL,
+                    archived INTEGER NOT NULL DEFAULT 0
+                 );
+                 INSERT INTO threads VALUES
+                    ('c1','/work/project','Codex 会话',100,200,10,'/gone/rollout.jsonl',0);",
+            )
+            .unwrap();
+        let history = rusqlite::Connection::open(codex.join("thread_history_1.sqlite")).unwrap();
+        history
+            .execute_batch(
+                "CREATE TABLE thread_items (
+                    thread_id TEXT NOT NULL, item_id TEXT NOT NULL,
+                    rollout_ordinal INTEGER NOT NULL, created_at_ms INTEGER NOT NULL,
+                    item_type TEXT NOT NULL, item_json TEXT NOT NULL
+                 );",
+            )
+            .unwrap();
+
+        let store = TranscriptStore::open(&tmp.path().join("dozer.db")).unwrap();
+        let first = store
+            .get_usage_summary_in(tmp.path(), "/work/project", None)
+            .unwrap();
+        assert_eq!(first[0].1.tokens_in, 10);
+
+        state
+            .execute(
+                "UPDATE threads SET tokens_used = 25, updated_at = 300 WHERE id = 'c1'",
+                [],
+            )
+            .unwrap();
+        let refreshed = store
+            .get_usage_summary_in(tmp.path(), "/work/project", None)
+            .unwrap();
+        assert_eq!(refreshed[0].1.tokens_in, 25);
+        assert_eq!(refreshed[0].0.last_ts, 300_000);
     }
 
     #[test]
