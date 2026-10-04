@@ -102,5 +102,5 @@ impl<M: Send + 'static> PanelIo<M> {
 | P1 | `HostEffect::Emit` 携带的是 host 的 `Message` 还是一个受限的"跨面板命令"类型？前者简单但让面板依赖 host 总消息，后者要多一层 | 受限命令类型（`PanelCommand`），否则 E2 形同虚设；H5 设计时定 **已定(2026-10-04,用户):受限的 `PanelCommand` 类型**,不让面板依赖 host 总消息;H5 设计时定其词汇 |
 | P2 | Effect 的执行顺序与失败语义（一条失败是否影响后续）；现状各面板各自隐式约定 | 顺序执行、互不影响；失败经 `Toast` 报告 |
 | P3 | `PanelIo::spawn` 的取消（面板被关/项目被关后任务结果如何丢弃） | 沿用现状（结果带 `project_id`，host 在投递时按项目路由，项目已关则丢） |
-| P4 | H8（状态与消息信封动态化）是否值得做 | H7 完成后用 H0 的度量重新评估 |
+| P4 | H8（状态与消息信封动态化）是否值得做 | H7 完成后用 H0 的度量重新评估 **已评估(2026-10-04):见 `docs/dozer-v2/bytehost-H8-evaluation.md`——H1–H7a 后 host 的点名面积几乎没变(`update.rs` −1.5%),H8 收益要等第二个消费者出现才兑现;建议在 H7a 停下,先做 O12 探针,待用户裁决** |
 | P5 | `PanelDescriptor` 里的 `hooks` 是 trait object 还是函数指针表 | 函数指针表（零成本、与"不预设 trait"一致）；H7 设计时定 |
