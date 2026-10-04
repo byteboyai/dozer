@@ -31,7 +31,7 @@
 ### 阶段 1:应用宿主的无界面部分(A0–A2,已有设计 `bytehost-app-host-design.md`)
 
 - **A0** 新建 `crates/bytehost-apps`(无 feature:类型与纯逻辑;`digest` feature:摘要)。 **已完成(`bytehost-a0`):`6ebec5fe`。**
-- **A1** `server` feature:`AppManager`、`static_web` runtime、gateway(Host 校验、固定端口)、各 runtime 的 `probe`。前置验证 V1。
+- **A1** `server` feature:`AppManager`、`static_web` runtime、gateway(Host 校验、固定端口)、各 runtime 的 `probe`。前置验证 V1。 **已完成(`bytehost-a1`):`283ff056`。**
 - **A2** 接入 dozerd:`dozer-core::protocol` 加 `App(..)` 变体、`dozerd/server.rs` 转发、`dozer-client` 加 `app_*`、启动对账/退出清理。
 - 这一阶段结束时:Dozer 里能装静态 Web 应用并由 dozerd 提供服务(GUI 入口在阶段 2 的 A3/A4)。
 
