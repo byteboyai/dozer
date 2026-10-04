@@ -21,6 +21,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `crates/dozer-hook` | 被 agent hooks 调用的零依赖小二进制（bin: `dozer-hook`） |
 | `crates/dozer-client` | dozer-app/dozer-mcp 共用的 UDS 客户端库（`Client`） |
 | `crates/dozer-mcp` | 面向外部 CLI agent 的只读 MCP stdio server（bin: `dozer-mcp`） |
+| `crates/bytehost-apps` | bytehost 应用宿主的无界面部分(应用模型 / 安装计划 / 生命周期 / 注册表),设计见 `docs/superpowers/specs/2026-10-04-bytehost-app-host-design.md`。**不得依赖任何 `dozer*` crate**、默认 feature 的依赖只能是 serde 家族——门禁 `scripts/check-bytehost-apps-deps.sh` |
 | `spike/*` | 一次性技术验证，随时可删 |
 
 ## 构建与测试
