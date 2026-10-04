@@ -133,6 +133,10 @@ cp -R "$ROOT_DIR/crates/dozer-app/assets/todo-content" "$APP_DIR/Contents/Resour
 cp -R "$ROOT_DIR/crates/dozer-app/assets/group-chat-content" "$APP_DIR/Contents/Resources/group-chat-content"
 # 表格预览 host(`dozer://tabular-host/`)。
 cp -R "$ROOT_DIR/crates/dozer-app/assets/tabular-host" "$APP_DIR/Contents/Resources/tabular-host"
+# PlantUML viewer host(`dozer://plantuml-viewer/`,含 vendored 官方引擎与 C4
+# stdlib)。漏拷会导致分发后 .puml/.plantuml 预览整个 404(dev 态 `cargo run`
+# 走源码树回退测不出来)。
+cp -R "$ROOT_DIR/crates/dozer-app/assets/plantuml-viewer" "$APP_DIR/Contents/Resources/plantuml-viewer"
 
 # cargo 链接期只对裸二进制做了 ad-hoc 签名(`codesign -dv` 显示
 # `Info.plist=not bound`),装进 bundle 后这个签名并不覆盖 Info.plist/资源,

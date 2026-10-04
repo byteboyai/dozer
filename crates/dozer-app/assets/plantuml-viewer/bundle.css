@@ -1,0 +1,119 @@
+/* src/style.css */
+:root {
+  --bg: #0a0e16;
+  --fg: #ffe5b4;
+  --gold: #f2d94e;
+  --cyan: #47def0;
+  --muted: #6b7f8f;
+  --panel: #152630;
+}
+:root.theme-light {
+  --bg: #ffffff;
+  --fg: #1a2430;
+  --gold: #b58a00;
+  --cyan: #0a7d92;
+  --muted: #6b7f8f;
+  --panel: #f1f4f7;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family:
+    system-ui,
+    -apple-system,
+    "Helvetica Neue",
+    sans-serif;
+  overflow: hidden;
+}
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--panel);
+  background: var(--bg);
+  flex: 0 0 auto;
+}
+#toolbar button {
+  appearance: none;
+  border: 1px solid var(--panel);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+#toolbar button:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+#toolbar .spacer {
+  flex: 1 1 auto;
+}
+#toolbar .diagnostics {
+  color: var(--muted);
+  font-size: 11px;
+}
+#stage {
+  position: relative;
+  flex: 1 1 auto;
+  overflow: hidden;
+  cursor: grab;
+}
+#content {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+#content svg {
+  display: block;
+  max-width: none;
+}
+#status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  text-align: center;
+  padding: 24px;
+  color: var(--muted);
+  font-size: 13px;
+}
+#status.hidden {
+  display: none;
+}
+#status .title {
+  color: var(--fg);
+  font-size: 14px;
+}
+#status .error {
+  color: var(--gold);
+  white-space: pre-wrap;
+  max-width: 80%;
+}
+#status button {
+  appearance: none;
+  border: 1px solid var(--gold);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--gold);
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+body {
+  display: flex;
+  flex-direction: column;
+}

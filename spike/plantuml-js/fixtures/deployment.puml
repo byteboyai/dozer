@@ -1,0 +1,8 @@
+@startuml
+node "Server" {
+  artifact "app.jar"
+}
+cloud "CDN" {
+}
+node "Server" --> cloud : assets
+@enduml

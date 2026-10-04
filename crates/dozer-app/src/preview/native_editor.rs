@@ -37,7 +37,7 @@ pub(crate) fn prefers_rendered_preview(path: &std::path::Path) -> bool {
             .to_ascii_lowercase()
             .as_str(),
         "md" | "markdown" | "html" | "htm" | "svg"
-    )
+    ) || is_plantuml_extension(path)
 }
 
 /// 文件名注册表(T5):优先于扩展名 fallback 的、按**文件名**认领的文本类型。
@@ -61,6 +61,20 @@ pub(crate) fn filename_code_rule(path: &std::path::Path) -> Option<(&'static str
         return Some(("license", "txt"));
     }
     None
+}
+
+/// PlantUML 扩展名(2026-10-04 PlantUML 预览)。五类扩展名在这一处集中判定,
+/// 大小写不敏感;其它模块**不得**复制这份列表。路由据此进入
+/// `RenderedRenderer::PlantUml`,默认图形、可切 CodeMirror 源码。
+pub fn is_plantuml_extension(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
+        "puml" | "plantuml" | "iuml" | "pu" | "wsd"
+    )
 }
 
 /// JSON 家族扩展名(严格 json 与 json5/jsonc)。路由据此归入
@@ -99,7 +113,7 @@ pub(crate) fn is_json_lines_extension(path: &std::path::Path) -> bool {
 }
 
 /// tab 上"预览/代码"切换按钮该不该出现:只对"文本可编辑、但默认走渲染"的
-/// 文件出现(目前即 `.md`/`.markdown`/`.html`/`.htm`)。
+/// 文件出现(目前即 `.md`/`.markdown`/`.html`/`.htm`/`.svg` 与 PlantUML 家族)。
 pub fn wry_toggle_eligible(path: &std::path::Path) -> bool {
     is_editable_extension(path) && prefers_rendered_preview(path)
 }
@@ -141,6 +155,8 @@ pub(crate) fn extension_to_syntax(path: &std::path::Path) -> String {
         "xml" => "xml",
         // SVG 是 XML 家族;默认走图像渲染,源码模式用 XML 高亮。
         "svg" => "xml",
+        // PlantUML:默认走图形渲染,源码模式用 plantuml token(CodeMirror 有对应语言)。
+        "puml" | "plantuml" | "iuml" | "pu" | "wsd" => "plantuml",
         "sql" => "sql",
         "diff" => "diff",
         "lua" => "lua",
@@ -157,4 +173,39 @@ pub(crate) fn extension_to_syntax(path: &std::path::Path) -> String {
         _ => "txt",
     }
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn plantuml_extension_is_case_insensitive_and_exact() {
+        for p in [
+            "a.puml",
+            "a.plantuml",
+            "a.iuml",
+            "a.pu",
+            "a.wsd",
+            "A.PUML",
+            "X.Pu",
+        ] {
+            assert!(is_plantuml_extension(Path::new(p)), "{p}");
+        }
+        for p in ["a.md", "a.txt", "a.pumlz", "a.pux", "pu", "a.pu.txt"] {
+            assert!(!is_plantuml_extension(Path::new(p)), "{p}");
+        }
+    }
+
+    #[test]
+    fn plantuml_is_editable_toggleable_and_plantuml_syntax() {
+        for p in ["a.puml", "a.plantuml", "a.iuml", "a.pu", "a.wsd"] {
+            let path = Path::new(p);
+            assert_eq!(extension_to_syntax(path), "plantuml", "{p}");
+            assert!(is_editable_extension(path), "{p}");
+            assert!(prefers_rendered_preview(path), "{p}");
+            assert!(wry_toggle_eligible(path), "{p}");
+        }
+    }
 }

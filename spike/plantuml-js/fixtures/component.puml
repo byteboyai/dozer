@@ -1,0 +1,12 @@
+@startuml
+package "Frontend" {
+  [Web App]
+}
+package "Backend" {
+  [API]
+}
+database "Postgres" {
+}
+[Web App] --> [API] : REST
+[API] --> Postgres : SQL
+@enduml

@@ -88,6 +88,13 @@ pub struct ViewerCost {
 /// 窗口化 viewer 的常驻估算(稀疏索引 + 有界窗口),**不随文件大小增长**。
 pub const WINDOWED_RESIDENT_BYTES: u64 = 4 * 1024 * 1024;
 
+/// PlantUML host 的**固定**常驻上界:引擎静态资产 + 单图 SVG 输出上限。
+/// Task 0 实测(§6.3、§7):静态资产 `plantuml.js`(3.9MB)+ `viz-global.js`
+/// (1.4MB)+ `themes.js`(320KB)+ `emoji.js`(1.8MB)+ `openiconic.js`(52KB)
+/// ≈ 7.5MB,保守取 8 MiB;SVG 输出上限 32 MiB(未知时才入库的引擎堆实际更低,
+/// 这里取保守上界)。源码/include 字节另按 `file_size` 计入。
+pub const PLANTUML_RESIDENT_BYTES: u64 = 8 * 1024 * 1024 + 32 * 1024 * 1024;
+
 /// 按 backend 种类 + 是否窗口化估算一个 tab 的成本(T3):
 /// - 窗口化:常驻只有稀疏索引 + 有界窗口,不随文件线性增长;
 /// - CodeMirror / vanilla-jsoneditor(Tree)/ Flyfish 渲染:重型 WebView,按文件大小估;
@@ -127,10 +134,25 @@ pub fn estimate_cost(
             },
             heavy_webview: true,
         },
-        PreviewBackend::Rendered(rendered) => ViewerCost {
-            estimated_bytes: file_size,
-            heavy_webview: matches!(rendered.mode, crate::preview::RenderedMode::Rendered),
-        },
+        PreviewBackend::Rendered(rendered) => {
+            let heavy = matches!(rendered.mode, crate::preview::RenderedMode::Rendered);
+            // PlantUML 渲染态:固定引擎+SVG 上界 + 根源码大小;源码态由 CodeMirror
+            // 承载,只按文件大小(与其它文本一致)。
+            let estimated_bytes = match rendered.renderer {
+                crate::preview::RenderedRenderer::PlantUml => {
+                    if heavy {
+                        PLANTUML_RESIDENT_BYTES.saturating_add(file_size)
+                    } else {
+                        file_size
+                    }
+                }
+                _ => file_size,
+            };
+            ViewerCost {
+                estimated_bytes,
+                heavy_webview: heavy,
+            }
+        }
         PreviewBackend::Tabular(_) => ViewerCost {
             estimated_bytes: file_size,
             heavy_webview: false,
@@ -521,6 +543,28 @@ mod tests {
         m.register(reg(1, 1, 30, true));
         assert_eq!(m.total_resident_bytes(), 30);
         assert_eq!(m.diagnostics().resident_count, 1);
+    }
+
+    #[test]
+    fn estimate_cost_plantuml_rendered_is_heavy_with_fixed_engine_overhead() {
+        let rendered = crate::preview::PreviewBackend::Rendered(crate::preview::RenderedBackend {
+            renderer: crate::preview::RenderedRenderer::PlantUml,
+            mode: crate::preview::RenderedMode::Rendered,
+            source_language: Some("plantuml".into()),
+        });
+        let c = estimate_cost(Some(&rendered), false, 1000);
+        assert!(c.heavy_webview);
+        assert_eq!(c.estimated_bytes, PLANTUML_RESIDENT_BYTES + 1000);
+
+        // 源码态由 CodeMirror 承载:不占重型名额,按文件大小。
+        let source = crate::preview::PreviewBackend::Rendered(crate::preview::RenderedBackend {
+            renderer: crate::preview::RenderedRenderer::PlantUml,
+            mode: crate::preview::RenderedMode::Source,
+            source_language: Some("plantuml".into()),
+        });
+        let c = estimate_cost(Some(&source), false, 1000);
+        assert!(!c.heavy_webview);
+        assert_eq!(c.estimated_bytes, 1000);
     }
 
     #[test]

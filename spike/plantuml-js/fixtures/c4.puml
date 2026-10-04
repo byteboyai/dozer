@@ -1,0 +1,7 @@
+@startuml
+!include <C4/C4_Context>
+title System Context diagram for Internet Banking System
+Person(customer, "Banking Customer", "A customer of the bank")
+System(banking_system, "Internet Banking System", "Allows customers to view accounts")
+Rel(customer, banking_system, "Uses")
+@enduml

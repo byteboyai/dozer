@@ -91,6 +91,19 @@ pub(crate) fn scheme_query_value() -> &'static str {
     }
 }
 
+/// `.html`/`.htm`(大小写不敏感)判据——隔离 host 的唯一真相源,`backend.rs`
+/// 选 renderer 与 `preview_url` 无 backend 回退共用,避免两处各写一份。
+pub(crate) fn is_html_extension(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
+        "html" | "htm"
+    )
+}
+
 /// HTML/HTM 的隔离 host URL:不再直接 `file://` 加载,改走 `dozer://html/host.html`,
 /// 由 host 把绑定文件放进**无脚本 sandbox iframe** 渲染,相对资源经
 /// `dozer://html/__file__` 白名单(已打开文件所在目录子树)解析。详见
@@ -122,6 +135,7 @@ pub(crate) fn hosts_rendered_binding(url: &str) -> bool {
     url.starts_with("dozer://flyfish/")
         || url.starts_with("dozer://html/")
         || url.starts_with("dozer://image-annotate/")
+        || url.starts_with("dozer://plantuml-viewer/")
 }
 
 /// T9/T8:从 Rendered host(Flyfish、隔离 HTML 或 image-annotate)URL 的查询串
@@ -154,23 +168,47 @@ pub(crate) fn flyfish_binding_from_url(url: &str) -> Option<HostBinding> {
     Some(HostBinding::new(proj?, panel, tab?, doc?))
 }
 
-/// `TabKind::File` → wry 期望加载的 URL,按扩展名分派三条渲染路径:
-/// 隔离 HTML、image-annotate、其余(含 gif/tif/tiff)回落 Flyfish。这是唯一
-/// URL 决策点;扩展名判据集中在 `router::is_image_annotate_extension`。
-pub(crate) fn preview_url(path: &std::path::Path) -> String {
+/// `TabKind::File` → wry 期望加载的 URL。**按 backend 的 renderer 分派**
+/// (而非只凭扩展名再猜一次):PlantUML 走 `dozer://plantuml-viewer/index.html`,
+/// 隔离 HTML 走 html host,image-annotate 走图片 host,其余(含 gif/tif/tiff)
+/// 回落 Flyfish。
+///
+/// `backend` 为 `None`(backend 尚未判定/已判为不 host)时退化为按扩展名分派,
+/// 与 PlantUML 引入前的行为一致——但正常路径下调用方 `desired_webviews` 一定
+/// 已持有 `Some(PreviewBackend::Rendered(..))`。扩展名判据仍集中在
+/// `router::is_image_annotate_extension`,不再额外新增 PlantUML 扩展名判断。
+pub(crate) fn preview_url(path: &std::path::Path, backend: Option<&PreviewBackend>) -> String {
+    if let Some(PreviewBackend::Rendered(rendered)) = backend {
+        match rendered.renderer {
+            RenderedRenderer::PlantUml => return plantuml_viewer_url(),
+            RenderedRenderer::IsolatedHtml => return html_url(path),
+            RenderedRenderer::Flyfish => {
+                // Flyfish 仍然承载 image-annotate 图片(OpenSeadragon)——图片
+                // 扩展名由 router 判据决定,不由 renderer 决定。
+                if is_image_annotate_extension(path) {
+                    return image_annotate_url(path);
+                }
+                return flyfish_url(path);
+            }
+        }
+    }
     if is_image_annotate_extension(path) {
         return image_annotate_url(path);
     }
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "html" | "htm" => html_url(path),
-        _ => flyfish_url(path),
+    if is_html_extension(path) {
+        html_url(path)
+    } else {
+        flyfish_url(path)
     }
+}
+
+/// PlantUML viewer host 的 URL。与其它 Rendered host 一样在调用处再追加
+/// `proj`/`panel`/`tab`/`doc` 绑定查询串(`hosts_rendered_binding`)。
+pub(crate) fn plantuml_viewer_url() -> String {
+    format!(
+        "dozer://plantuml-viewer/index.html?theme={}",
+        scheme_query_value()
+    )
 }
 
 #[cfg(test)]
@@ -203,13 +241,43 @@ mod tests {
     }
 
     #[test]
-    fn hosts_rendered_binding_covers_all_three_prefixes() {
+    fn hosts_rendered_binding_covers_all_four_prefixes() {
         assert!(hosts_rendered_binding("dozer://flyfish/host.html?p=x"));
         assert!(hosts_rendered_binding("dozer://html/host.html?p=x"));
         assert!(hosts_rendered_binding(
             "dozer://image-annotate/host.html?p=x"
         ));
+        assert!(hosts_rendered_binding(
+            "dozer://plantuml-viewer/index.html?theme=dark"
+        ));
         assert!(!hosts_rendered_binding("dozer://editor/index.html"));
+    }
+
+    #[test]
+    fn plantuml_viewer_url_targets_namespace_and_binds() {
+        let u = plantuml_viewer_url();
+        assert!(u.starts_with("dozer://plantuml-viewer/index.html?"), "{u}");
+        // 与其它 rendered host 一样,绑定由调用处(desired_webviews→app.rs)注入;
+        // 解析走同一 `flyfish_binding_from_url`。
+        let b = flyfish_binding_from_url(&format!("{u}&proj=3&panel=files&tab=7&doc=p3-t7"));
+        assert_eq!(b.map(|b| (b.tab_id, b.panel)), Some((7, PanelKind::Files)));
+    }
+
+    #[test]
+    fn preview_url_uses_backend_renderer_for_plantuml() {
+        use crate::preview::{PreviewBackend, RenderedBackend, RenderedMode, RenderedRenderer};
+        let backend = PreviewBackend::Rendered(RenderedBackend {
+            renderer: RenderedRenderer::PlantUml,
+            mode: RenderedMode::Rendered,
+            source_language: Some("plantuml".to_string()),
+        });
+        // 即便路径无关(fixture 文件名),只要 backend 说是 PlantUML 就走 viewer。
+        let u = preview_url(std::path::Path::new("/tmp/diagram.puml"), Some(&backend));
+        assert!(u.starts_with("dozer://plantuml-viewer/index.html?"), "{u}");
+        // 无 backend 时退化为扩展名分派:PlantUML 扩展名在没有 backend 判定时
+        // 不特殊处理,仍回落 flyfish(ProductInt:backend 是唯一身份来源)。
+        let fallback = preview_url(std::path::Path::new("/tmp/diagram.puml"), None);
+        assert!(fallback.starts_with("dozer://flyfish/"), "{fallback}");
     }
 
     #[test]

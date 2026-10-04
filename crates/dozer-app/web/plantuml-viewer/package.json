@@ -1,0 +1,23 @@
+{
+  "name": "dozer-plantuml-viewer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dozer offline PlantUML SVG preview host. Thin glue over the vendored official @plantuml/core engine (no Java, no server, no runtime network).",
+  "scripts": {
+    "build": "node build.mjs && node scan-offline.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "scan": "node scan-offline.mjs",
+    "test": "node --test src/*.test.mjs && node render-smoke.mjs"
+  },
+  "dependencies": {
+    "@plantuml/core": "1.2026.8"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^24.13.6",
+    "esbuild": "0.28.2",
+    "jsdom": "^29.1.1",
+    "typescript": "5.9.3"
+  }
+}

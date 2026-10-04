@@ -249,6 +249,12 @@ fn image_annotate_root_for(flyfish_root: &Path) -> PathBuf {
     flyfish_root.with_file_name("image-annotate")
 }
 
+/// PlantUML viewer host 静态资源根 = flyfish 根的兄弟目录 `plantuml-viewer`。
+/// 同 `image_annotate_root_for`,dev 与打包态同构。
+fn plantuml_viewer_root_for(flyfish_root: &Path) -> PathBuf {
+    flyfish_root.with_file_name("plantuml-viewer")
+}
+
 pub fn handle_protocol(
     assets_root: &Path,
     allowed: &HashSet<PathBuf>,
@@ -256,7 +262,8 @@ pub fn handle_protocol(
     uri: &str,
 ) -> ProtocolReply {
     // 剥离 scheme 与 query;只服务 flyfish/review-trace/editor/json-editor/
-    // html/usage-content/codehealth-content/todo-content/group-chat-content 这些命名空间。
+    // html/usage-content/codehealth-content/todo-content/group-chat-content/
+    // tabular/image-annotate/plantuml-viewer 这些命名空间。
     let Some(rest) = uri.strip_prefix("dozer://") else {
         return not_found();
     };
@@ -360,6 +367,14 @@ pub fn handle_protocol(
             return serve_allowlisted_file(encoded, allowed);
         }
         return serve_vendored(&image_annotate_root_for(assets_root), path);
+    }
+
+    // PlantUML viewer host:只服务 vendored 静态资产(index.html/bundle/引擎/
+    // stdlib)。**没有 `__file__` 端点**——源码与 include 由 Rust 用具名 command
+    // 推送(见 preview/webview_protocol.rs),host 页面不得自行 fetch 任意已打开
+    // 文件,避免页面凭 URL 猜路径读取项目内文件。
+    if let Some(path) = rest.strip_prefix("plantuml-viewer/") {
+        return serve_vendored(&plantuml_viewer_root_for(assets_root), path);
     }
 
     let Some(path) = rest.strip_prefix("flyfish/") else {
@@ -1384,6 +1399,142 @@ mod tests {
         assert!(html.contains("vendor/openseadragon.esm.js"));
         assert!(html.contains("vendor/annotorious-openseadragon.esm.js"));
         assert!(html.contains("__dozerImageAnnotatePost"));
+    }
+
+    /// Task 3:提交的 plantuml-viewer 产物必须齐全(防止忘记 `npm run build`
+    /// 就提交)。引擎产物较大,只断言存在且非空,不比内容。
+    #[test]
+    fn plantuml_viewer_bundle_assets_are_present() {
+        let root = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/plantuml-viewer"
+        ));
+        for f in [
+            "index.html",
+            "bundle.js",
+            "bundle.css",
+            "plantuml.js",
+            "viz-global.js",
+            "themes.js",
+            "emoji.js",
+            "openiconic.js",
+            "stdlib/c4.min.js",
+        ] {
+            let p = root.join(f);
+            assert!(
+                p.is_file(),
+                "缺少 plantuml-viewer 产物 {f}: {}",
+                p.display()
+            );
+            assert!(
+                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 0,
+                "plantuml-viewer 产物为空: {f}"
+            );
+        }
+    }
+
+    /// Task 3:index.html 必须带严格 CSP:从 `default-src 'none'` 起步,只开
+    /// 本地 script/style/img,**不声明 connect-src**(无网络),且不得含任何
+    /// 外部 URL(离线约束,§12.2)。
+    #[test]
+    fn plantuml_viewer_host_has_strict_csp_and_no_external_refs() {
+        let root = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/plantuml-viewer"
+        ));
+        let html = std::fs::read_to_string(root.join("index.html")).expect("读 index.html");
+        assert!(html.contains("Content-Security-Policy"), "必须声明 CSP");
+        assert!(
+            html.contains("default-src 'none'"),
+            "CSP 必须以 default-src 'none' 起步"
+        );
+        assert!(html.contains("script-src 'self'"), "脚本仅 self");
+        assert!(
+            !html.contains("connect-src"),
+            "plantuml-viewer 无 fetch 端点,不应声明 connect-src"
+        );
+        assert!(
+            !html.contains("unsafe-eval"),
+            "主线程 TeaVM 路径不需要 unsafe-eval(§12.2)"
+        );
+        assert!(
+            !html.contains("http://") && !html.contains("https://"),
+            "index.html 不得引用外部 URL(离线约束)"
+        );
+        assert!(html.contains("bundle.js") && html.contains("viz-global.js"));
+    }
+
+    /// Task 3:打包产物不得泄漏本机绝对路径或 sourcemap 引用。
+    #[test]
+    fn plantuml_viewer_bundle_has_no_absolute_paths_or_sourcemap() {
+        let root = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/plantuml-viewer"
+        ));
+        let js = std::fs::read_to_string(root.join("bundle.js")).expect("读 bundle.js");
+        assert!(!js.contains("sourceMappingURL"), "不应有 sourcemap 引用");
+        assert!(
+            !js.contains(env!("CARGO_MANIFEST_DIR")),
+            "不应含源码树绝对路径"
+        );
+    }
+
+    /// Task 3:`dozer://plantuml-viewer/` 服务 vendored 资产(index.html/bundle/
+    /// stdlib 200,未知资源 404)。
+    #[test]
+    fn plantuml_viewer_serves_vendored_files() {
+        let root = scratch();
+        let ns = root.with_file_name("plantuml-viewer");
+        std::fs::create_dir_all(ns.join("stdlib")).unwrap();
+        std::fs::write(ns.join("index.html"), b"<html>p</html>").unwrap();
+        std::fs::write(ns.join("bundle.js"), b"js").unwrap();
+        std::fs::write(ns.join("stdlib").join("c4.min.js"), b"c4").unwrap();
+
+        let r = handle_protocol(
+            &root,
+            &HashSet::new(),
+            None,
+            "dozer://plantuml-viewer/index.html",
+        );
+        assert_eq!((r.status, r.mime), (200, "text/html"));
+        assert_eq!(r.body, b"<html>p</html>");
+
+        let r = handle_protocol(
+            &root,
+            &HashSet::new(),
+            None,
+            "dozer://plantuml-viewer/stdlib/c4.min.js",
+        );
+        assert_eq!((r.status, r.mime), (200, "text/javascript"));
+        assert_eq!(r.body, b"c4");
+
+        let r = handle_protocol(
+            &root,
+            &HashSet::new(),
+            None,
+            "dozer://plantuml-viewer/nope.js",
+        );
+        assert_eq!(r.status, 404);
+    }
+
+    /// Task 3:命名空间拒绝路径穿越;且本 task **不提供 `__file__` 端点**——
+    /// 源码/include 由具名 command 推送,host 页面不得自行 fetch 任意已打开文件。
+    #[test]
+    fn plantuml_viewer_rejects_traversal_and_has_no_file_endpoint() {
+        let root = scratch();
+        std::fs::create_dir_all(root.with_file_name("plantuml-viewer")).unwrap();
+        // `__file__` 未被特判 → 落到 serve_vendored,按普通路径查找(不存在即 404)。
+        for uri in [
+            "dozer://plantuml-viewer/../flyfish/host.html",
+            "dozer://plantuml-viewer/%2e%2e/etc/passwd",
+            "dozer://plantuml-viewer/__file__/etc/passwd",
+        ] {
+            assert_eq!(
+                handle_protocol(&root, &HashSet::new(), None, uri).status,
+                404,
+                "{uri}"
+            );
+        }
     }
 }
 

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <!--
+    Minimal CSP (Task 0 §12.2): start from default-src 'none' and open only the
+    local directives the viewer needs.
+      - script-src 'self': the bundled glue + viz-global.js/plantuml.js
+        (served same-origin from dozer://plantuml-viewer/). No eval / wasm-eval
+        relaxation: the spike proved the main-thread TeaVM path needs neither.
+      - style-src 'self' 'unsafe-inline': the bundle CSS + engine-injected
+        inline SVG styles.
+      - img-src 'self' data:: engine rasterizes some diagrams to data: URLs.
+    No network source is opened: the viewer never reaches the network.
+  -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'" />
+  <link rel="stylesheet" href="bundle.css" />
+  <title>PlantUML</title>
+</head>
+<body>
+  <div id="toolbar">
+    <button id="btn-fit" type="button">适配窗口</button>
+    <button id="btn-100" type="button">100%</button>
+    <button id="btn-zoom-in" type="button">放大</button>
+    <button id="btn-zoom-out" type="button">缩小</button>
+    <button id="btn-reset" type="button">重置视图</button>
+    <span class="spacer"></span>
+    <span class="diagnostics" id="diagnostics"></span>
+  </div>
+  <div id="stage">
+    <div id="content"></div>
+    <div id="status"></div>
+  </div>
+  <!-- viz-global.js must run as a classic script BEFORE the module glue loads
+       the engine ESM entry (Task 0 §12.2). -->
+  <script src="viz-global.js"></script>
+  <script type="module" src="bundle.js"></script>
+</body>
+</html>

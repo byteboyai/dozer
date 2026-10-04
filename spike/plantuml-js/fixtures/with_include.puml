@@ -1,0 +1,4 @@
+@startuml
+!include ./included.puml
+Alice -> Bob: uses ${GREETING}
+@enduml

@@ -1,0 +1,10 @@
+@startuml
+class User {
+  +String name
+  +login()
+}
+class Order {
+  +int id
+}
+User "1" --> "*" Order
+@enduml

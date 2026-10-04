@@ -1477,7 +1477,7 @@ impl PreviewPane {
                 let TabKind::File(path) = &tab.kind else {
                     return None;
                 };
-                let mut u = preview_url(path);
+                let mut u = preview_url(path, tab.backend.as_ref());
                 if tab.reload_nonce > 0 {
                     // flyfish 与 html host 的 URL 都已带 `?p=...` 查询串;按 URL
                     // 是否已有查询串决定用 `&` 还是 `?` 起头(防御性)。
@@ -3106,13 +3106,13 @@ mod tests {
 
     #[test]
     fn preview_url_dispatches_html_to_isolated_host_and_others_to_flyfish() {
-        let html = preview_url(std::path::Path::new("/tmp/page.html"));
+        let html = preview_url(std::path::Path::new("/tmp/page.html"), None);
         assert!(html.starts_with("dozer://html/host.html?"), "got {html}");
         assert!(html.contains("p=%2Ftmp%2Fpage.html"), "got {html}");
-        let htm = preview_url(std::path::Path::new("/tmp/page.HTM"));
+        let htm = preview_url(std::path::Path::new("/tmp/page.HTM"), None);
         assert!(htm.starts_with("dozer://html/host.html?"), "大小写不敏感");
         assert_eq!(
-            preview_url(std::path::Path::new("/tmp/notes.md")),
+            preview_url(std::path::Path::new("/tmp/notes.md"), None),
             flyfish_url(std::path::Path::new("/tmp/notes.md")),
             "非 html/htm 扩展名不变,仍走 flyfish"
         );
@@ -3128,7 +3128,7 @@ mod tests {
             "/tmp/e.bmp",
             "/tmp/f.ico",
         ] {
-            let u = preview_url(std::path::Path::new(p));
+            let u = preview_url(std::path::Path::new(p), None);
             assert!(
                 u.starts_with("dozer://image-annotate/host.html?"),
                 "{p} → {u}"
@@ -3137,7 +3137,7 @@ mod tests {
         // gif/tif/tiff 明确不迁移:canvas 丢动画 / OSD 无 TIFF 解码。
         for p in ["/tmp/a.gif", "/tmp/b.tif", "/tmp/c.tiff"] {
             assert_eq!(
-                preview_url(std::path::Path::new(p)),
+                preview_url(std::path::Path::new(p), None),
                 flyfish_url(std::path::Path::new(p)),
                 "{p} 必须仍走 flyfish"
             );

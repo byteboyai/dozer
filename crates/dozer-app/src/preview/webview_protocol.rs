@@ -21,6 +21,13 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// 单条消息的字节上限(恶意/异常超大消息直接拒绝,不进解析)。
 pub const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 
+/// PlantUML host 错误文案的字符上限。引擎异常消息可能极长;超限截断而非拒绝
+/// (失败本身要保留,只是别让一条错误撑爆 UI/日志)。
+pub const MAX_PLANTUML_ERROR_CHARS: usize = 4096;
+
+/// PlantUML 错误行号的合理上限(1-based)。超出视为"无行号"而非拒绝整条事件。
+pub const MAX_PLANTUML_LINE: u32 = 1_000_000;
+
 /// 通用 envelope。`payload` 为具名命令/事件。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WebviewEnvelope<T> {
@@ -771,6 +778,197 @@ pub fn encode_command(
 pub fn dispatch_script(envelope_json: &str) -> String {
     let literal = serde_json::to_string(envelope_json).unwrap_or_else(|_| "\"{}\"".to_string());
     format!("window.__dozer&&window.__dozer.dispatch&&window.__dozer.dispatch({literal});")
+}
+
+/// PlantUML viewer host 的 Rust -> JS 命令(设计 §5.2)。与其它 host 共用
+/// `WebviewEnvelope`;payload 用 `kind` 作 tag。
+///
+/// `includes` 是 Rust 侧**已授权并读取**的项目内 include 文件(项目相对规范化
+/// 路径 + UTF-8 内容);页面绝不自行 fetch 任意路径。`theme` 供图面明暗适配。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PlantUmlCommand {
+    SetDocument {
+        revision: u64,
+        path: String,
+        source: String,
+        includes: Vec<PlantUmlInclude>,
+        theme: PlantUmlTheme,
+    },
+    FitView,
+    ActualSize,
+    ResetView,
+}
+
+/// 一条已由 Rust 读取的项目内 include 文件。`path` 为项目相对规范化路径。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlantUmlInclude {
+    pub path: String,
+    pub content: String,
+}
+
+/// 图面主题。默认 `Dark`(ByteBoy2077 背景),可切 `Light`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlantUmlTheme {
+    Light,
+    Dark,
+}
+
+/// PlantUML viewer host 的 JS -> Rust 事件(设计 §5.2)。
+///
+/// 失败分类供 Rust 决定终态文案(远程 include 被拒要明说,不伪装成语法错误)。
+/// `revision` 在 envelope 顶层,事件载荷不重复携带。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PlantUmlEvent {
+    /// host 脚本初始化完成。**不代表图已渲染**;仅用于清错误、保持 loading,
+    /// 等 `Rendered`/`Failed` 才定终态。
+    Ready,
+    /// 渲染成功。`width`/`height` 为 sanitize 后 SVG 的像素尺寸。
+    Rendered {
+        width: u32,
+        height: u32,
+        duration_ms: u64,
+    },
+    /// 渲染失败。`line` 为引擎报告的 1-based 行号(若有)。
+    Failed {
+        failure_kind: PlantUmlFailureKind,
+        message: String,
+        #[serde(default)]
+        line: Option<u32>,
+    },
+    /// 用户在错误态点了"查看源码":切到 CodeMirror 源码视图。
+    OpenSource {
+        #[serde(default)]
+        line: Option<u32>,
+    },
+}
+
+/// PlantUML 渲染失败分类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlantUmlFailureKind {
+    /// 引擎报语法错误(带行号)。
+    Syntax,
+    /// 源码/输出超出安全上限。
+    TooLarge,
+    /// 引擎内部错误(未归类)。
+    Engine,
+    /// 渲染超时。
+    Timeout,
+    /// 检测到远程 include(`!includeurl`/URL):禁止,明确拒绝。
+    RemoteInclude,
+    /// Rust 侧内部错误(授权/读取/协议)。
+    Internal,
+}
+
+impl PlantUmlEvent {
+    /// 该事件是否携带**终态结果**(会改变 tab 状态的 `Rendered`/`Failed`)。
+    /// `Ready`/`OpenSource` 是控制类事件,不受 revision 门控。
+    pub fn carries_terminal_result(&self) -> bool {
+        matches!(
+            self,
+            PlantUmlEvent::Rendered { .. } | PlantUmlEvent::Failed { .. }
+        )
+    }
+
+    /// 相对当前活动 revision 是否过期。控制类事件永不过期;终态结果必须
+    /// `event_revision == current_revision`,否则丢弃(快速切 tab、连续保存、
+    /// 后台渲染乱序都可能让旧结果后到)。设计 §5.2。
+    pub fn is_stale(&self, event_revision: u64, current_revision: u64) -> bool {
+        self.carries_terminal_result() && event_revision != current_revision
+    }
+
+    /// 把 host 报来的事件裁剪到安全范围:错误文案按字符截断,越界行号降级为
+    /// `None`。不 panic、不拒绝整条事件(失败本身要保留)。
+    fn normalized(self) -> Self {
+        match self {
+            PlantUmlEvent::Failed {
+                failure_kind,
+                message,
+                line,
+            } => PlantUmlEvent::Failed {
+                failure_kind,
+                message: truncate_chars(message, MAX_PLANTUML_ERROR_CHARS),
+                line: line.filter(|l| *l >= 1 && *l <= MAX_PLANTUML_LINE),
+            },
+            PlantUmlEvent::OpenSource { line } => PlantUmlEvent::OpenSource {
+                line: line.filter(|l| *l >= 1 && *l <= MAX_PLANTUML_LINE),
+            },
+            other => other,
+        }
+    }
+}
+
+/// 按 Unicode 字符数截断字符串(不切断 UTF-8 码点)。
+fn truncate_chars(mut s: String, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s;
+    }
+    let cut = s
+        .char_indices()
+        .nth(max)
+        .map(|(idx, _)| idx)
+        .unwrap_or(s.len());
+    s.truncate(cut);
+    s
+}
+
+/// 解析一条 PlantUML host 事件。与 [`parse_event`] 同规则(超大/非法/未知不 panic),
+/// 并对错误文案/行号做范围裁剪(见 [`PlantUmlEvent::normalized`])。
+pub fn parse_plantuml_event(raw: &str) -> Result<WebviewEnvelope<PlantUmlEvent>, ProtocolError> {
+    if raw.len() > MAX_MESSAGE_BYTES {
+        return Err(ProtocolError::TooLarge { bytes: raw.len() });
+    }
+    let env: WebviewEnvelope<serde_json::Value> =
+        serde_json::from_str(raw).map_err(|e| ProtocolError::BadJson(e.to_string()))?;
+    let kind = env
+        .payload
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_default();
+    let payload: PlantUmlEvent = serde_json::from_value(env.payload)
+        .map_err(|_| ProtocolError::UnknownPayload(kind.clone()))?;
+    Ok(WebviewEnvelope {
+        protocol_version: env.protocol_version,
+        project_id: env.project_id,
+        panel: env.panel,
+        tab_id: env.tab_id,
+        document_id: env.document_id,
+        revision: env.revision,
+        request_id: env.request_id,
+        payload: payload.normalized(),
+    })
+}
+
+/// 编码一条 Rust -> PlantUML host 的命令为 envelope JSON,供 `dispatch_script`
+/// 注入。与 [`encode_tabular_command`] 同结构,只是 payload 类型不同。
+pub fn encode_plantuml_command(
+    project_id: i64,
+    panel: PanelKind,
+    tab_id: usize,
+    document_id: &str,
+    revision: u64,
+    request_id: Option<String>,
+    command: PlantUmlCommand,
+) -> String {
+    let env = WebviewEnvelope {
+        protocol_version: PROTOCOL_VERSION,
+        project_id,
+        panel: match panel {
+            PanelKind::Project => "project".to_string(),
+            PanelKind::GitLog => "gitlog".to_string(),
+            _ => "files".to_string(),
+        },
+        tab_id,
+        document_id: document_id.to_string(),
+        revision,
+        request_id,
+        payload: command,
+    };
+    serde_json::to_string(&env).unwrap_or_else(|_| "{}".to_string())
 }
 
 #[cfg(test)]
@@ -1544,5 +1742,273 @@ mod tests {
             parse_review_trace_event(&raw),
             Err(ProtocolError::TooLarge { .. })
         ));
+    }
+
+    // ---- PlantUML host (设计 §5.2) ----
+
+    fn plantuml_raw(payload: &str) -> String {
+        format!(
+            r#"{{"protocol_version":1,"project_id":7,"panel":"files","tab_id":3,"document_id":"p7-t3","revision":2,"request_id":null,"payload":{payload}}}"#
+        )
+    }
+
+    #[test]
+    fn plantuml_event_serde_round_trips() {
+        for payload in [
+            PlantUmlEvent::Ready,
+            PlantUmlEvent::Rendered {
+                width: 100,
+                height: 50,
+                duration_ms: 12,
+            },
+            PlantUmlEvent::Failed {
+                failure_kind: PlantUmlFailureKind::Syntax,
+                message: "boom".into(),
+                line: Some(3),
+            },
+            PlantUmlEvent::OpenSource { line: None },
+        ] {
+            let env = WebviewEnvelope {
+                protocol_version: PROTOCOL_VERSION,
+                project_id: 7,
+                panel: "files".into(),
+                tab_id: 3,
+                document_id: "p7-t3".into(),
+                revision: 2,
+                request_id: None,
+                payload: payload.clone(),
+            };
+            let json = serde_json::to_string(&env).unwrap();
+            let back = parse_plantuml_event(&json).unwrap();
+            assert_eq!(back.payload, payload);
+            assert_eq!(back.revision, 2);
+        }
+    }
+
+    #[test]
+    fn plantuml_command_serde_round_trips_and_encodes_binding() {
+        let cmd = PlantUmlCommand::SetDocument {
+            revision: 5,
+            path: "docs/d.puml".into(),
+            source: "@startuml\n@enduml\n".into(),
+            includes: vec![PlantUmlInclude {
+                path: "docs/common.puml".into(),
+                content: "!define X 1\n".into(),
+            }],
+            theme: PlantUmlTheme::Dark,
+        };
+        let json = encode_plantuml_command(7, PanelKind::Files, 3, "p7-t3", 5, None, cmd.clone());
+        let env: WebviewEnvelope<PlantUmlCommand> = serde_json::from_str(&json).unwrap();
+        assert_eq!(env.payload, cmd);
+        assert_eq!(env.project_id, 7);
+        assert_eq!(env.panel, "files");
+        assert_eq!(env.revision, 5);
+
+        // Project 面板映射到 "project"。
+        let json = encode_plantuml_command(
+            7,
+            PanelKind::Project,
+            1,
+            "p7-t1",
+            0,
+            None,
+            PlantUmlCommand::FitView,
+        );
+        let env: WebviewEnvelope<PlantUmlCommand> = serde_json::from_str(&json).unwrap();
+        assert_eq!(env.panel, "project");
+        assert_eq!(env.payload, PlantUmlCommand::FitView);
+    }
+
+    #[test]
+    fn plantuml_view_commands_parse_without_fields() {
+        // FitView/ActualSize/ResetView 是 unit 变体,JS 只发 `{"kind":"fit_view"}`。
+        for (raw, want) in [
+            (r#"{"kind":"fit_view"}"#, PlantUmlCommand::FitView),
+            (r#"{"kind":"actual_size"}"#, PlantUmlCommand::ActualSize),
+            (r#"{"kind":"reset_view"}"#, PlantUmlCommand::ResetView),
+        ] {
+            let env: WebviewEnvelope<PlantUmlCommand> =
+                serde_json::from_str(&plantuml_raw(raw)).unwrap();
+            assert_eq!(env.payload, want);
+        }
+    }
+
+    #[test]
+    fn parses_and_validates_plantuml_events() {
+        let env = parse_plantuml_event(&plantuml_raw(
+            r#"{"kind":"failed","failure_kind":"remote_include","message":"远程 include 已禁用","line":null}"#,
+        ))
+        .unwrap();
+        assert_eq!(
+            env.payload,
+            PlantUmlEvent::Failed {
+                failure_kind: PlantUmlFailureKind::RemoteInclude,
+                message: "远程 include 已禁用".into(),
+                line: None,
+            }
+        );
+
+        let good = HostBinding::new(7, PanelKind::Files, 3, "p7-t3".into());
+        assert!(env.validate(&good).is_ok());
+        // 任一身份不匹配都拒绝:project/panel/tab/document。
+        assert!(
+            env.validate(&HostBinding::new(8, PanelKind::Files, 3, "p7-t3".into()))
+                .is_err()
+        );
+        assert!(
+            env.validate(&HostBinding::new(7, PanelKind::Project, 3, "p7-t3".into()))
+                .is_err()
+        );
+        assert!(
+            env.validate(&HostBinding::new(7, PanelKind::Files, 4, "p7-t3".into()))
+                .is_err()
+        );
+        assert!(
+            env.validate(&HostBinding::new(7, PanelKind::Files, 3, "p7-t9".into()))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn plantuml_events_accept_ready_rendered_and_open_source() {
+        assert_eq!(
+            parse_plantuml_event(&plantuml_raw(r#"{"kind":"ready"}"#))
+                .unwrap()
+                .payload,
+            PlantUmlEvent::Ready
+        );
+        assert_eq!(
+            parse_plantuml_event(&plantuml_raw(
+                r#"{"kind":"rendered","width":640,"height":480,"duration_ms":33}"#
+            ))
+            .unwrap()
+            .payload,
+            PlantUmlEvent::Rendered {
+                width: 640,
+                height: 480,
+                duration_ms: 33,
+            }
+        );
+        assert_eq!(
+            parse_plantuml_event(&plantuml_raw(r#"{"kind":"open_source","line":7}"#))
+                .unwrap()
+                .payload,
+            PlantUmlEvent::OpenSource { line: Some(7) }
+        );
+    }
+
+    #[test]
+    fn plantuml_event_truncates_error_and_clamps_line() {
+        // 超长错误文案截断到上限,但事件仍解析成功(失败要保留)。
+        let long = "字".repeat(MAX_PLANTUML_ERROR_CHARS + 500);
+        let raw = format!(
+            r#"{{"kind":"failed","failure_kind":"engine","message":"{long}","line":null}}"#
+        );
+        let env = parse_plantuml_event(&plantuml_raw(&raw)).unwrap();
+        match env.payload {
+            PlantUmlEvent::Failed { message, line, .. } => {
+                assert_eq!(message.chars().count(), MAX_PLANTUML_ERROR_CHARS);
+                assert_eq!(line, None);
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        // 越界/0 行号降级为 None,不拒绝整条事件。
+        for line in [0u32, MAX_PLANTUML_LINE + 1] {
+            let raw = format!(
+                r#"{{"kind":"failed","failure_kind":"syntax","message":"x","line":{line}}}"#
+            );
+            assert_eq!(
+                parse_plantuml_event(&plantuml_raw(&raw)).unwrap().payload,
+                PlantUmlEvent::Failed {
+                    failure_kind: PlantUmlFailureKind::Syntax,
+                    message: "x".into(),
+                    line: None,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn plantuml_event_rejects_oversized_unknown_and_malformed() {
+        let big = "a".repeat(MAX_MESSAGE_BYTES + 1);
+        assert!(matches!(
+            parse_plantuml_event(&big),
+            Err(ProtocolError::TooLarge { .. })
+        ));
+        // 未知 kind。
+        assert!(matches!(
+            parse_plantuml_event(&plantuml_raw(r#"{"kind":"bogus"}"#)),
+            Err(ProtocolError::UnknownPayload(_))
+        ));
+        // 缺字段的 failed(没有 failure_kind)/ 非 JSON / 缺 payload:都报错不 panic。
+        assert!(parse_plantuml_event(&plantuml_raw(r#"{"kind":"failed","message":"x"}"#)).is_err());
+        assert!(parse_plantuml_event("not json").is_err());
+        assert!(parse_plantuml_event(r#"{"protocol_version":1}"#).is_err());
+    }
+
+    #[test]
+    fn plantuml_failure_kinds_are_snake_case_on_the_wire() {
+        for (json, want) in [
+            ("syntax", PlantUmlFailureKind::Syntax),
+            ("too_large", PlantUmlFailureKind::TooLarge),
+            ("engine", PlantUmlFailureKind::Engine),
+            ("timeout", PlantUmlFailureKind::Timeout),
+            ("remote_include", PlantUmlFailureKind::RemoteInclude),
+            ("internal", PlantUmlFailureKind::Internal),
+        ] {
+            let raw =
+                format!(r#"{{"kind":"failed","failure_kind":"{json}","message":"m","line":null}}"#);
+            match parse_plantuml_event(&plantuml_raw(&raw)).unwrap().payload {
+                PlantUmlEvent::Failed { failure_kind, .. } => assert_eq!(failure_kind, want),
+                other => panic!("expected Failed, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn plantuml_stale_terminal_results_are_droppable() {
+        // 终态结果(Rendered/Failed)按 revision 严格门控。
+        assert!(
+            PlantUmlEvent::Rendered {
+                width: 1,
+                height: 1,
+                duration_ms: 1,
+            }
+            .is_stale(1, 2)
+        );
+        assert!(
+            PlantUmlEvent::Failed {
+                failure_kind: PlantUmlFailureKind::Engine,
+                message: "x".into(),
+                line: None,
+            }
+            .is_stale(0, 5)
+        );
+        // 当前 revision 的结果不 stale。
+        assert!(
+            !PlantUmlEvent::Rendered {
+                width: 1,
+                height: 1,
+                duration_ms: 1,
+            }
+            .is_stale(2, 2)
+        );
+        // 控制类事件不受门控(切 tab 时的 open_source、初次 ready 不应被丢)。
+        assert!(!PlantUmlEvent::OpenSource { line: None }.is_stale(0, 9));
+        assert!(!PlantUmlEvent::Ready.is_stale(0, 9));
+        assert!(!PlantUmlEvent::OpenSource { line: None }.carries_terminal_result());
+        assert!(!PlantUmlEvent::Ready.carries_terminal_result());
+    }
+
+    #[test]
+    fn plantuml_theme_is_snake_case_on_the_wire() {
+        let cmd: PlantUmlCommand = serde_json::from_str(
+            r#"{"kind":"set_document","revision":1,"path":"a.puml","source":"x","includes":[],"theme":"light"}"#,
+        )
+        .unwrap();
+        match cmd {
+            PlantUmlCommand::SetDocument { theme, .. } => assert_eq!(theme, PlantUmlTheme::Light),
+            other => panic!("expected SetDocument, got {other:?}"),
+        }
     }
 }

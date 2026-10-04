@@ -85,7 +85,8 @@ pub enum RouteReason {
     JsonTreeExtension,
     /// JSON Lines / NDJSON 扩展名认领(T8,流式)。
     JsonLinesExtension,
-    /// Markdown/HTML/SVG 等"可渲染但也可切源码"的扩展名。
+    /// Markdown/HTML/SVG 等"可渲染但也可切源码"的扩展名;PlantUML 家族同样
+    /// 走这里,`&str` 为具体扩展名(如 `plantuml`),供诊断区分,不冒充 Markdown。
     RenderedExtension(&'static str),
     /// 语法高亮器认识的代码扩展名。
     CodeExtension,
@@ -206,6 +207,27 @@ fn classify_kind(path: &Path, profile: &FileProfile) -> (PreviewKind, RouteReaso
         // json5/jsonc/jsonl/ndjson 一律只给 CodeMirror 文本(见 `default_modes`)。
         return (PreviewKind::Json, RouteReason::JsonTreeExtension);
     }
+    if crate::preview::native_editor::is_plantuml_extension(path) {
+        // PlantUML 专用扩展名**不能凌驾于内容安全检查**:`.puml` 里塞 NUL/
+        // 二进制时落安全 fallback,而不是进 renderer(与 `.md` 等既有"渲染优先"
+        // 分支不同,故单列)。空文件仍归 PlantUML 路由(显示"暂无可渲染内容")。
+        if profile.content_kind == ContentKind::Binary {
+            return (PreviewKind::Unsupported, RouteReason::ContentBinaryFallback);
+        }
+        if profile.is_lossy_text()
+            || matches!(
+                profile.encoding,
+                TextEncoding::Utf16Le | TextEncoding::Utf16Be
+            )
+        {
+            // 有损 UTF-8 / UTF-16 不进 renderer;保留源码只读退路,故落 Code。
+            return (PreviewKind::Code, RouteReason::CodeExtension);
+        }
+        return (
+            PreviewKind::Rendered,
+            RouteReason::RenderedExtension("plantuml"),
+        );
+    }
     if prefers_rendered_preview(path) {
         return (
             PreviewKind::Rendered,
@@ -289,6 +311,7 @@ fn rendered_ext(path: &Path) -> &'static str {
         "markdown" => "markdown",
         "html" => "html",
         "htm" => "htm",
+        "puml" | "plantuml" | "iuml" | "pu" | "wsd" => "plantuml",
         _ => "rendered",
     }
 }
@@ -533,6 +556,81 @@ mod tests {
         assert_eq!(r.default_mode, PreviewMode::Rendered);
         assert_eq!(r.alternate_modes, vec![PreviewMode::Source]);
         assert_eq!(r.reason, RouteReason::RenderedExtension("rendered"));
+    }
+
+    #[test]
+    fn plantuml_extensions_route_to_rendered_with_source_alternate() {
+        // 五种扩展名 + 大小写:默认 Rendered、可切 Source、原因为 plantuml。
+        for p in [
+            "diagram.puml",
+            "diagram.plantuml",
+            "diagram.iuml",
+            "diagram.pu",
+            "diagram.wsd",
+            "DIAGRAM.PUML",
+            "Diag.PlantUML",
+        ] {
+            let r = route(p, b"@startuml\nA -> B\n@enduml\n");
+            assert_eq!(r.kind, PreviewKind::Rendered, "{p}");
+            assert_eq!(r.default_mode, PreviewMode::Rendered, "{p}");
+            assert_eq!(r.alternate_modes, vec![PreviewMode::Source], "{p}");
+            assert_eq!(r.reason, RouteReason::RenderedExtension("plantuml"), "{p}");
+        }
+    }
+
+    #[test]
+    fn plantuml_extension_helper_is_authoritative_and_case_insensitive() {
+        for p in [
+            "a.puml",
+            "a.plantuml",
+            "a.iuml",
+            "a.pu",
+            "a.wsd",
+            "A.PUML",
+            "X.WSD",
+        ] {
+            assert!(
+                crate::preview::native_editor::is_plantuml_extension(&PathBuf::from(p)),
+                "{p}"
+            );
+        }
+        for p in ["a.md", "a.txt", "a.pumlx", "a.pu.txt", "apuml"] {
+            assert!(
+                !crate::preview::native_editor::is_plantuml_extension(&PathBuf::from(p)),
+                "{p}"
+            );
+        }
+    }
+
+    #[test]
+    fn plantuml_binary_masquerade_does_not_enter_renderer() {
+        // `.puml` 里塞 NUL → 安全 fallback,不得进 renderer。
+        let r = route("fake.puml", b"@startuml\0binary\x01\x02");
+        assert_eq!(r.kind, PreviewKind::Unsupported);
+        assert_eq!(r.reason, RouteReason::ContentBinaryFallback);
+    }
+
+    #[test]
+    fn empty_plantuml_still_routes_to_plantuml() {
+        // 空 `.puml` 仍由 PlantUML 路由认领(显示"暂无可渲染内容"),不落空文本。
+        let r = route("empty.puml", b"");
+        assert_eq!(r.kind, PreviewKind::Rendered);
+        assert_eq!(r.default_mode, PreviewMode::Rendered);
+        assert_eq!(r.reason, RouteReason::RenderedExtension("plantuml"));
+    }
+
+    #[test]
+    fn plantuml_persisted_mode_round_trips_source_and_rejects_code() {
+        let path = PathBuf::from("d.puml");
+        let profile = analyze(b"@startuml\n@enduml\n", None, 18, None);
+        // 持久化 Source → 保留。
+        let r = classify_preview(&path, &profile, &caps(), Some(PreviewMode::Source));
+        assert_eq!(r.default_mode, PreviewMode::Source);
+        assert_eq!(r.reason, RouteReason::PersistedMode);
+        // 不支持的旧 mode(Code)→ 安全落回 Rendered。
+        let r = classify_preview(&path, &profile, &caps(), Some(PreviewMode::Code));
+        assert_eq!(r.default_mode, PreviewMode::Rendered);
+        assert_eq!(r.reason, RouteReason::RenderedExtension("plantuml"));
     }
 
     #[test]

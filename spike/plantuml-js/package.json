@@ -1,0 +1,16 @@
+{
+  "name": "dozer-plantuml-js-spike",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Task 0 spike: verify @plantuml/core renders offline in a DOM, incl. stdlib injection",
+  "type": "module",
+  "scripts": {
+    "test": "node run.mjs && node run-c4.mjs"
+  },
+  "dependencies": {
+    "@plantuml/core": "1.2026.8"
+  },
+  "devDependencies": {
+    "jsdom": "29.1.1"
+  }
+}

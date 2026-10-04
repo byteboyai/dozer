@@ -109,6 +109,21 @@ pub enum RenderedRenderer {
     Flyfish,
     /// 隔离 host 的 HTML 渲染(Phase D 收敛目标;Phase A 仍是 file://)。
     IsolatedHtml,
+    /// PlantUML 预览:离线渲染源码为 SVG(本地 JS 引擎,无网络/无 Java)。
+    /// 显式身份,不靠 URL 扩展名隐式路由。默认可切 CodeMirror 源码(`Source`)。
+    PlantUml,
+}
+
+impl RenderedRenderer {
+    /// 该渲染器是否由 wry host 承载(需要重型 WebView 名额)。
+    fn hosts_webview(self, mode: RenderedMode) -> bool {
+        match mode {
+            RenderedMode::Rendered => true,
+            // 图片 PDF 等无源码模式;Markdown/HTML/SVG/PlantUML 的源码模式由
+            // CodeMirror 呈现,不占渲染 host。
+            RenderedMode::Source => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,13 +217,22 @@ impl PreviewBackend {
                 language: super::native_editor::extension_to_syntax(path),
             }),
             PreviewKind::Rendered => {
+                // renderer 在这里选定,**不再**由 `preview_url` 按扩展名隐式猜:
+                // PlantUML 走离线 viewer,HTML/HTM 走隔离 host,其余落 Flyfish。
+                let renderer = if super::native_editor::is_plantuml_extension(path) {
+                    RenderedRenderer::PlantUml
+                } else if super::webview::is_html_extension(path) {
+                    RenderedRenderer::IsolatedHtml
+                } else {
+                    RenderedRenderer::Flyfish
+                };
                 let source_language = if route.supports(PreviewMode::Source) {
                     Some(super::native_editor::extension_to_syntax(path))
                 } else {
                     None
                 };
                 PreviewBackend::Rendered(RenderedBackend {
-                    renderer: RenderedRenderer::Flyfish,
+                    renderer,
                     mode: RenderedMode::Rendered,
                     source_language,
                 })
@@ -253,17 +277,15 @@ impl PreviewBackend {
         }
     }
 
-    /// 该 backend 是否需要 Flyfish wry webview。渲染类走 Flyfish;T1 起
+    /// 该 backend 是否需要 wry webview。渲染类走 Rendered host(Flyfish/隔离
+    /// HTML/PlantUML),但 `Source` 模式由 CodeMirror 承载 → 不 host;T1 起
     /// `External`/`Unsupported` **不再** host webview——它们改由 iced 统一
     /// fallback 页呈现(外部打开 / 纯文本退路 / 重试)。
     pub fn hosts_webview(&self) -> bool {
-        matches!(
-            self,
-            PreviewBackend::Rendered(RenderedBackend {
-                mode: RenderedMode::Rendered,
-                ..
-            })
-        )
+        match self {
+            PreviewBackend::Rendered(rendered) => rendered.renderer.hosts_webview(rendered.mode),
+            _ => false,
+        }
     }
 
     /// 当前实际显示的模式。持久化必须写这个值，而不是路由初始默认值。
@@ -417,6 +439,61 @@ mod tests {
         };
         assert_eq!(code.language, "rust");
         assert_eq!(code.mode, CodeMode::ReadOnly);
+    }
+
+    #[test]
+    fn plantuml_backend_uses_plantuml_renderer_and_source_language() {
+        let b = backend("d.puml", b"@startuml\nA -> B\n@enduml\n");
+        let PreviewBackend::Rendered(r) = &b else {
+            panic!("应是 Rendered");
+        };
+        assert_eq!(r.renderer, RenderedRenderer::PlantUml);
+        assert_eq!(r.mode, RenderedMode::Rendered);
+        assert_eq!(r.source_language.as_deref(), Some("plantuml"));
+        assert_eq!(b.current_mode(), PreviewMode::Rendered);
+        assert!(b.hosts_webview());
+    }
+
+    #[test]
+    fn plantuml_source_mode_does_not_host_webview() {
+        let mut b = backend("d.puml", b"@startuml\n@enduml\n");
+        let PreviewBackend::Rendered(r) = &mut b else {
+            panic!()
+        };
+        r.mode = RenderedMode::Source;
+        assert_eq!(b.current_mode(), PreviewMode::Source);
+        assert!(!b.hosts_webview(), "源码模式由 CodeMirror 承载");
+    }
+
+    #[test]
+    fn every_plantuml_extension_gets_plantuml_renderer() {
+        for p in ["a.puml", "a.plantuml", "a.iuml", "a.pu", "a.wsd", "A.PUML"] {
+            let b = backend(p, b"@startuml\n@enduml\n");
+            let PreviewBackend::Rendered(r) = &b else {
+                panic!("{p} 应是 Rendered");
+            };
+            assert_eq!(r.renderer, RenderedRenderer::PlantUml, "{p}");
+        }
+    }
+
+    #[test]
+    fn markdown_still_uses_flyfish_renderer() {
+        // 回归:PlantUML 分支不得把既有渲染器改掉。
+        let PreviewBackend::Rendered(r) = backend("README.md", b"# hi\n") else {
+            panic!()
+        };
+        assert_eq!(r.renderer, RenderedRenderer::Flyfish);
+    }
+
+    #[test]
+    fn html_gets_isolated_host_renderer() {
+        // renderer 选定搬到 backend(不再由 preview_url 猜扩展名)。
+        for p in ["page.html", "page.HTM"] {
+            let PreviewBackend::Rendered(r) = backend(p, b"<h1>hi</h1>") else {
+                panic!("{p} 应是 Rendered");
+            };
+            assert_eq!(r.renderer, RenderedRenderer::IsolatedHtml, "{p}");
+        }
     }
 
     #[test]

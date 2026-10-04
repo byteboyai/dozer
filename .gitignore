@@ -38,6 +38,9 @@ crates/dozer-app/web/todo-content/node_modules/
 
 # group-chat-content host deps (built assets under assets/group-chat-content are committed)
 crates/dozer-app/web/group-chat-content/node_modules/
+
+# plantuml-viewer host deps (built assets + vendored engine under assets/plantuml-viewer are committed)
+crates/dozer-app/web/plantuml-viewer/node_modules/
 .gstack/
 
 # local byteui dev [patch] (never commit; see CLAUDE.md)
