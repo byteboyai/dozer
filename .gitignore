@@ -8,6 +8,10 @@
 examples/
 .aider*
 
+# Python bytecode from scripts/audit (run with PYTHONDONTWRITEBYTECODE=1)
+__pycache__/
+*.pyc
+
 # CodeMirror editor frontend deps (built assets under assets/editor are committed)
 crates/dozer-app/web/editor/node_modules/
 
