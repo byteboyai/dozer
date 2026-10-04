@@ -1312,3 +1312,375 @@ pub type ProjectId = i64;
 
 /// Ctrl + / Ctrl - 每次触发的相对缩放步近因子（1.1 ≈ 每按一次放大 10%）。
 pub(crate) const UI_ZOOM_STEP: f32 = 1.1;
+
+/// bytehost H3 特征化测试:`apply_column_drag` 对 11 条面板分隔线(13 种面板视图组合)在
+/// 镜像/未镜像 × 4 个光标位置下的结果,逐条钉住(黄金值由重构前的实现导出)。
+/// 重构(把每面板一段的分支收成一个函数)前后这张表必须一字不差。
+#[cfg(test)]
+mod drag_characterization_tests {
+    use super::*;
+    use crate::app::{PanelKind, ShellLayout, ShellState};
+
+    const WINDOW_W: f32 = 1600.0;
+    const XS: [f32; 5] = [0.0, 300.0, 700.0, 1000.0, 1500.0];
+
+    /// 把 `kind` 的收起标志置位;没有收起能力的面板返回 false。**故意按字段手写**,不依赖被测的新访问器。
+    fn collapse_it(dims: &mut PanelDims, kind: PanelKind) -> bool {
+        match kind {
+            PanelKind::Files => dims.files_tree_collapsed = true,
+            PanelKind::Project => dims.project_list_collapsed = true,
+            PanelKind::Todo => dims.todo_list_collapsed = true,
+            PanelKind::Database => dims.database_list_collapsed = true,
+            PanelKind::Ssh => dims.ssh_list_collapsed = true,
+            PanelKind::Agent => dims.agent_list_collapsed = true,
+            PanelKind::Conversations => dims.conversations_list_collapsed = true,
+            PanelKind::GroupChat => dims.group_chat_list_collapsed = true,
+            PanelKind::Usage => dims.usage_list_collapsed = true,
+            PanelKind::GitLog | PanelKind::Web | PanelKind::CodeHealth => return false,
+        }
+        true
+    }
+
+    fn cases() -> Vec<(Divider, PanelKind)> {
+        vec![
+            (Divider::LeftPairSplit, PanelKind::Files),
+            (Divider::ProjectSplit, PanelKind::Project),
+            (Divider::SshSplit, PanelKind::Ssh),
+            (Divider::TodoSplit, PanelKind::Todo),
+            (Divider::GitLogSplit, PanelKind::GitLog),
+            (Divider::BrowserBookmarksSplit, PanelKind::Web),
+            (Divider::DatabaseSplit, PanelKind::Database),
+            (Divider::UsageSplit, PanelKind::Usage),
+            (Divider::CodeHealthSplit, PanelKind::CodeHealth),
+            (Divider::GroupChatSplit, PanelKind::GroupChat),
+            (Divider::RightPairSplit, PanelKind::Agent),
+            (Divider::RightPairSplit, PanelKind::Conversations),
+            (Divider::RightPairSplit, PanelKind::Usage),
+        ]
+    }
+
+    fn state_for(kind: PanelKind, mirrored: bool) -> ShellState {
+        let mut layout = ShellLayout::default();
+        if mirrored {
+            // 把 kind 挪到它默认栏的对面
+            let rail = &mut layout.rail_layout;
+            rail.left.retain(|k| *k != kind);
+            rail.right.retain(|k| *k != kind);
+            match kind.default_side() {
+                Side::Left => rail.right.push(kind),
+                Side::Right => rail.left.push(kind),
+            }
+        }
+        ShellState {
+            layout,
+            dims: PanelDims::default(),
+            left_view: PanelKind::Files,
+            left_collapsed: false,
+            right_view: if kind.default_side() == Side::Right {
+                kind
+            } else {
+                PanelKind::Agent
+            },
+            right_collapsed: false,
+            browser_bookmarks_open: false,
+            maximized: None,
+        }
+    }
+
+    /// 与输入 `dims` 相比变了哪些字段,`name=value;` 串起来。
+    fn changed(before: &PanelDims, after: &PanelDims) -> String {
+        let b = format!("{before:?}");
+        let a = format!("{after:?}");
+        let tokens = |s: &str| -> Vec<String> {
+            s.trim_start_matches("PanelDims { ")
+                .trim_end_matches(" }")
+                .split(", ")
+                .map(str::to_string)
+                .collect()
+        };
+        let mut out = Vec::new();
+        for (x, y) in tokens(&b).into_iter().zip(tokens(&a)) {
+            if x != y {
+                out.push(y.replace(": ", "="));
+            }
+        }
+        if out.is_empty() {
+            "-".to_string()
+        } else {
+            out.join(";")
+        }
+    }
+
+    fn actual() -> Vec<String> {
+        let mut rows = Vec::new();
+        for (divider, kind) in cases() {
+            for mirrored in [false, true] {
+                // 第二维:从"已收起"状态出发(只对有收起能力的面板)——钉住"拖回够宽就展开"。
+                for start_collapsed in [false, true] {
+                    for x in XS {
+                        let mut state = state_for(kind, mirrored);
+                        if start_collapsed && !collapse_it(&mut state.dims, kind) {
+                            continue;
+                        }
+                        let before = state.dims;
+                        let after = apply_column_drag(state, divider, WINDOW_W, x);
+                        rows.push(format!(
+                            "{divider:?}/{kind:?}|mirrored={mirrored}|start_collapsed={start_collapsed}|x={x}|{}",
+                            changed(&before, &after)
+                        ));
+                    }
+                }
+            }
+        }
+        rows
+    }
+
+    #[test]
+    #[ignore = "导出黄金值用:cargo test -p dozer-app drag_characterization_dump -- --ignored --nocapture"]
+    fn drag_characterization_dump() {
+        for r in actual() {
+            println!("GOLDEN {r}");
+        }
+    }
+
+    #[test]
+    fn apply_column_drag_matches_the_golden_table() {
+        let golden: Vec<&str> = GOLDEN.lines().collect();
+        let got = actual();
+        assert_eq!(got.len(), golden.len(), "用例数变了");
+        for (g, a) in golden.iter().zip(got.iter()) {
+            assert_eq!(g, a);
+        }
+    }
+
+    const GOLDEN: &str = r#"LeftPairSplit/Files|mirrored=false|start_collapsed=false|x=0|files_tree_collapsed=true
+LeftPairSplit/Files|mirrored=false|start_collapsed=false|x=300|files_split=0.4050633
+LeftPairSplit/Files|mirrored=false|start_collapsed=false|x=700|files_split=0.8
+LeftPairSplit/Files|mirrored=false|start_collapsed=false|x=1000|files_split=0.8
+LeftPairSplit/Files|mirrored=false|start_collapsed=false|x=1500|files_split=0.8
+LeftPairSplit/Files|mirrored=false|start_collapsed=true|x=0|-
+LeftPairSplit/Files|mirrored=false|start_collapsed=true|x=300|files_split=0.4050633;files_tree_collapsed=false
+LeftPairSplit/Files|mirrored=false|start_collapsed=true|x=700|files_split=0.8;files_tree_collapsed=false
+LeftPairSplit/Files|mirrored=false|start_collapsed=true|x=1000|files_split=0.8;files_tree_collapsed=false
+LeftPairSplit/Files|mirrored=false|start_collapsed=true|x=1500|files_split=0.8;files_tree_collapsed=false
+LeftPairSplit/Files|mirrored=true|start_collapsed=false|x=0|files_split=0.8
+LeftPairSplit/Files|mirrored=true|start_collapsed=false|x=300|files_split=0.8
+LeftPairSplit/Files|mirrored=true|start_collapsed=false|x=700|files_split=0.8
+LeftPairSplit/Files|mirrored=true|start_collapsed=false|x=1000|files_split=0.6401869
+LeftPairSplit/Files|mirrored=true|start_collapsed=false|x=1500|files_tree_collapsed=true
+LeftPairSplit/Files|mirrored=true|start_collapsed=true|x=0|files_split=0.8;files_tree_collapsed=false
+LeftPairSplit/Files|mirrored=true|start_collapsed=true|x=300|files_split=0.8;files_tree_collapsed=false
+LeftPairSplit/Files|mirrored=true|start_collapsed=true|x=700|files_split=0.8;files_tree_collapsed=false
+LeftPairSplit/Files|mirrored=true|start_collapsed=true|x=1000|files_split=0.6401869;files_tree_collapsed=false
+LeftPairSplit/Files|mirrored=true|start_collapsed=true|x=1500|-
+ProjectSplit/Project|mirrored=false|start_collapsed=false|x=0|project_list_collapsed=true
+ProjectSplit/Project|mirrored=false|start_collapsed=false|x=300|project_split=0.4050633
+ProjectSplit/Project|mirrored=false|start_collapsed=false|x=700|project_split=0.8
+ProjectSplit/Project|mirrored=false|start_collapsed=false|x=1000|project_split=0.8
+ProjectSplit/Project|mirrored=false|start_collapsed=false|x=1500|project_split=0.8
+ProjectSplit/Project|mirrored=false|start_collapsed=true|x=0|-
+ProjectSplit/Project|mirrored=false|start_collapsed=true|x=300|project_list_collapsed=false;project_split=0.4050633
+ProjectSplit/Project|mirrored=false|start_collapsed=true|x=700|project_list_collapsed=false;project_split=0.8
+ProjectSplit/Project|mirrored=false|start_collapsed=true|x=1000|project_list_collapsed=false;project_split=0.8
+ProjectSplit/Project|mirrored=false|start_collapsed=true|x=1500|project_list_collapsed=false;project_split=0.8
+ProjectSplit/Project|mirrored=true|start_collapsed=false|x=0|project_split=0.8
+ProjectSplit/Project|mirrored=true|start_collapsed=false|x=300|project_split=0.8
+ProjectSplit/Project|mirrored=true|start_collapsed=false|x=700|project_split=0.8
+ProjectSplit/Project|mirrored=true|start_collapsed=false|x=1000|project_split=0.6401869
+ProjectSplit/Project|mirrored=true|start_collapsed=false|x=1500|project_list_collapsed=true
+ProjectSplit/Project|mirrored=true|start_collapsed=true|x=0|project_list_collapsed=false;project_split=0.8
+ProjectSplit/Project|mirrored=true|start_collapsed=true|x=300|project_list_collapsed=false;project_split=0.8
+ProjectSplit/Project|mirrored=true|start_collapsed=true|x=700|project_list_collapsed=false;project_split=0.8
+ProjectSplit/Project|mirrored=true|start_collapsed=true|x=1000|project_list_collapsed=false;project_split=0.6401869
+ProjectSplit/Project|mirrored=true|start_collapsed=true|x=1500|-
+SshSplit/Ssh|mirrored=false|start_collapsed=false|x=0|ssh_list_collapsed=true
+SshSplit/Ssh|mirrored=false|start_collapsed=false|x=300|ssh_split=0.4050633
+SshSplit/Ssh|mirrored=false|start_collapsed=false|x=700|ssh_split=0.8
+SshSplit/Ssh|mirrored=false|start_collapsed=false|x=1000|ssh_split=0.8
+SshSplit/Ssh|mirrored=false|start_collapsed=false|x=1500|ssh_split=0.8
+SshSplit/Ssh|mirrored=false|start_collapsed=true|x=0|-
+SshSplit/Ssh|mirrored=false|start_collapsed=true|x=300|ssh_list_collapsed=false;ssh_split=0.4050633
+SshSplit/Ssh|mirrored=false|start_collapsed=true|x=700|ssh_list_collapsed=false;ssh_split=0.8
+SshSplit/Ssh|mirrored=false|start_collapsed=true|x=1000|ssh_list_collapsed=false;ssh_split=0.8
+SshSplit/Ssh|mirrored=false|start_collapsed=true|x=1500|ssh_list_collapsed=false;ssh_split=0.8
+SshSplit/Ssh|mirrored=true|start_collapsed=false|x=0|ssh_split=0.8
+SshSplit/Ssh|mirrored=true|start_collapsed=false|x=300|ssh_split=0.8
+SshSplit/Ssh|mirrored=true|start_collapsed=false|x=700|ssh_split=0.8
+SshSplit/Ssh|mirrored=true|start_collapsed=false|x=1000|ssh_split=0.6401869
+SshSplit/Ssh|mirrored=true|start_collapsed=false|x=1500|ssh_list_collapsed=true
+SshSplit/Ssh|mirrored=true|start_collapsed=true|x=0|ssh_list_collapsed=false;ssh_split=0.8
+SshSplit/Ssh|mirrored=true|start_collapsed=true|x=300|ssh_list_collapsed=false;ssh_split=0.8
+SshSplit/Ssh|mirrored=true|start_collapsed=true|x=700|ssh_list_collapsed=false;ssh_split=0.8
+SshSplit/Ssh|mirrored=true|start_collapsed=true|x=1000|ssh_list_collapsed=false;ssh_split=0.6401869
+SshSplit/Ssh|mirrored=true|start_collapsed=true|x=1500|-
+TodoSplit/Todo|mirrored=false|start_collapsed=false|x=0|todo_list_collapsed=true
+TodoSplit/Todo|mirrored=false|start_collapsed=false|x=300|todo_split=0.4050633
+TodoSplit/Todo|mirrored=false|start_collapsed=false|x=700|todo_split=0.8
+TodoSplit/Todo|mirrored=false|start_collapsed=false|x=1000|todo_split=0.8
+TodoSplit/Todo|mirrored=false|start_collapsed=false|x=1500|todo_split=0.8
+TodoSplit/Todo|mirrored=false|start_collapsed=true|x=0|-
+TodoSplit/Todo|mirrored=false|start_collapsed=true|x=300|todo_list_collapsed=false;todo_split=0.4050633
+TodoSplit/Todo|mirrored=false|start_collapsed=true|x=700|todo_list_collapsed=false;todo_split=0.8
+TodoSplit/Todo|mirrored=false|start_collapsed=true|x=1000|todo_list_collapsed=false;todo_split=0.8
+TodoSplit/Todo|mirrored=false|start_collapsed=true|x=1500|todo_list_collapsed=false;todo_split=0.8
+TodoSplit/Todo|mirrored=true|start_collapsed=false|x=0|todo_split=0.8
+TodoSplit/Todo|mirrored=true|start_collapsed=false|x=300|todo_split=0.8
+TodoSplit/Todo|mirrored=true|start_collapsed=false|x=700|todo_split=0.8
+TodoSplit/Todo|mirrored=true|start_collapsed=false|x=1000|todo_split=0.6401869
+TodoSplit/Todo|mirrored=true|start_collapsed=false|x=1500|todo_list_collapsed=true
+TodoSplit/Todo|mirrored=true|start_collapsed=true|x=0|todo_list_collapsed=false;todo_split=0.8
+TodoSplit/Todo|mirrored=true|start_collapsed=true|x=300|todo_list_collapsed=false;todo_split=0.8
+TodoSplit/Todo|mirrored=true|start_collapsed=true|x=700|todo_list_collapsed=false;todo_split=0.8
+TodoSplit/Todo|mirrored=true|start_collapsed=true|x=1000|todo_list_collapsed=false;todo_split=0.6401869
+TodoSplit/Todo|mirrored=true|start_collapsed=true|x=1500|-
+GitLogSplit/GitLog|mirrored=false|start_collapsed=false|x=0|git_log_split=0.2
+GitLogSplit/GitLog|mirrored=false|start_collapsed=false|x=300|git_log_split=0.4050633
+GitLogSplit/GitLog|mirrored=false|start_collapsed=false|x=700|git_log_split=0.8
+GitLogSplit/GitLog|mirrored=false|start_collapsed=false|x=1000|git_log_split=0.8
+GitLogSplit/GitLog|mirrored=false|start_collapsed=false|x=1500|git_log_split=0.8
+GitLogSplit/GitLog|mirrored=true|start_collapsed=false|x=0|git_log_split=0.8
+GitLogSplit/GitLog|mirrored=true|start_collapsed=false|x=300|git_log_split=0.8
+GitLogSplit/GitLog|mirrored=true|start_collapsed=false|x=700|git_log_split=0.8
+GitLogSplit/GitLog|mirrored=true|start_collapsed=false|x=1000|git_log_split=0.6401869
+GitLogSplit/GitLog|mirrored=true|start_collapsed=false|x=1500|git_log_split=0.19999999
+BrowserBookmarksSplit/Web|mirrored=false|start_collapsed=false|x=0|browser_bookmarks_split=0.2
+BrowserBookmarksSplit/Web|mirrored=false|start_collapsed=false|x=300|browser_bookmarks_split=0.4050633
+BrowserBookmarksSplit/Web|mirrored=false|start_collapsed=false|x=700|browser_bookmarks_split=0.8
+BrowserBookmarksSplit/Web|mirrored=false|start_collapsed=false|x=1000|browser_bookmarks_split=0.8
+BrowserBookmarksSplit/Web|mirrored=false|start_collapsed=false|x=1500|browser_bookmarks_split=0.8
+BrowserBookmarksSplit/Web|mirrored=true|start_collapsed=false|x=0|browser_bookmarks_split=0.8
+BrowserBookmarksSplit/Web|mirrored=true|start_collapsed=false|x=300|browser_bookmarks_split=0.8
+BrowserBookmarksSplit/Web|mirrored=true|start_collapsed=false|x=700|browser_bookmarks_split=0.8
+BrowserBookmarksSplit/Web|mirrored=true|start_collapsed=false|x=1000|browser_bookmarks_split=0.6401869
+BrowserBookmarksSplit/Web|mirrored=true|start_collapsed=false|x=1500|browser_bookmarks_split=0.19999999
+DatabaseSplit/Database|mirrored=false|start_collapsed=false|x=0|database_list_collapsed=true
+DatabaseSplit/Database|mirrored=false|start_collapsed=false|x=300|database_split=0.4050633
+DatabaseSplit/Database|mirrored=false|start_collapsed=false|x=700|database_split=0.8
+DatabaseSplit/Database|mirrored=false|start_collapsed=false|x=1000|database_split=0.8
+DatabaseSplit/Database|mirrored=false|start_collapsed=false|x=1500|database_split=0.8
+DatabaseSplit/Database|mirrored=false|start_collapsed=true|x=0|-
+DatabaseSplit/Database|mirrored=false|start_collapsed=true|x=300|database_list_collapsed=false;database_split=0.4050633
+DatabaseSplit/Database|mirrored=false|start_collapsed=true|x=700|database_list_collapsed=false;database_split=0.8
+DatabaseSplit/Database|mirrored=false|start_collapsed=true|x=1000|database_list_collapsed=false;database_split=0.8
+DatabaseSplit/Database|mirrored=false|start_collapsed=true|x=1500|database_list_collapsed=false;database_split=0.8
+DatabaseSplit/Database|mirrored=true|start_collapsed=false|x=0|database_split=0.8
+DatabaseSplit/Database|mirrored=true|start_collapsed=false|x=300|database_split=0.8
+DatabaseSplit/Database|mirrored=true|start_collapsed=false|x=700|database_split=0.8
+DatabaseSplit/Database|mirrored=true|start_collapsed=false|x=1000|database_split=0.6401869
+DatabaseSplit/Database|mirrored=true|start_collapsed=false|x=1500|database_list_collapsed=true
+DatabaseSplit/Database|mirrored=true|start_collapsed=true|x=0|database_list_collapsed=false;database_split=0.8
+DatabaseSplit/Database|mirrored=true|start_collapsed=true|x=300|database_list_collapsed=false;database_split=0.8
+DatabaseSplit/Database|mirrored=true|start_collapsed=true|x=700|database_list_collapsed=false;database_split=0.8
+DatabaseSplit/Database|mirrored=true|start_collapsed=true|x=1000|database_list_collapsed=false;database_split=0.6401869
+DatabaseSplit/Database|mirrored=true|start_collapsed=true|x=1500|-
+UsageSplit/Usage|mirrored=false|start_collapsed=false|x=0|usage_split=0.8
+UsageSplit/Usage|mirrored=false|start_collapsed=false|x=300|usage_split=0.8
+UsageSplit/Usage|mirrored=false|start_collapsed=false|x=700|usage_split=0.8
+UsageSplit/Usage|mirrored=false|start_collapsed=false|x=1000|usage_split=0.6401869
+UsageSplit/Usage|mirrored=false|start_collapsed=false|x=1500|usage_list_collapsed=true
+UsageSplit/Usage|mirrored=false|start_collapsed=true|x=0|usage_list_collapsed=false;usage_split=0.8
+UsageSplit/Usage|mirrored=false|start_collapsed=true|x=300|usage_list_collapsed=false;usage_split=0.8
+UsageSplit/Usage|mirrored=false|start_collapsed=true|x=700|usage_list_collapsed=false;usage_split=0.8
+UsageSplit/Usage|mirrored=false|start_collapsed=true|x=1000|usage_list_collapsed=false;usage_split=0.6401869
+UsageSplit/Usage|mirrored=false|start_collapsed=true|x=1500|-
+UsageSplit/Usage|mirrored=true|start_collapsed=false|x=0|usage_list_collapsed=true
+UsageSplit/Usage|mirrored=true|start_collapsed=false|x=300|usage_split=0.4050633
+UsageSplit/Usage|mirrored=true|start_collapsed=false|x=700|usage_split=0.8
+UsageSplit/Usage|mirrored=true|start_collapsed=false|x=1000|usage_split=0.8
+UsageSplit/Usage|mirrored=true|start_collapsed=false|x=1500|usage_split=0.8
+UsageSplit/Usage|mirrored=true|start_collapsed=true|x=0|-
+UsageSplit/Usage|mirrored=true|start_collapsed=true|x=300|usage_list_collapsed=false;usage_split=0.4050633
+UsageSplit/Usage|mirrored=true|start_collapsed=true|x=700|usage_list_collapsed=false;usage_split=0.8
+UsageSplit/Usage|mirrored=true|start_collapsed=true|x=1000|usage_list_collapsed=false;usage_split=0.8
+UsageSplit/Usage|mirrored=true|start_collapsed=true|x=1500|usage_list_collapsed=false;usage_split=0.8
+CodeHealthSplit/CodeHealth|mirrored=false|start_collapsed=false|x=0|codehealth_split=0.8
+CodeHealthSplit/CodeHealth|mirrored=false|start_collapsed=false|x=300|codehealth_split=0.8
+CodeHealthSplit/CodeHealth|mirrored=false|start_collapsed=false|x=700|codehealth_split=0.8
+CodeHealthSplit/CodeHealth|mirrored=false|start_collapsed=false|x=1000|codehealth_split=0.6401869
+CodeHealthSplit/CodeHealth|mirrored=false|start_collapsed=false|x=1500|codehealth_split=0.19999999
+CodeHealthSplit/CodeHealth|mirrored=true|start_collapsed=false|x=0|codehealth_split=0.2
+CodeHealthSplit/CodeHealth|mirrored=true|start_collapsed=false|x=300|codehealth_split=0.4050633
+CodeHealthSplit/CodeHealth|mirrored=true|start_collapsed=false|x=700|codehealth_split=0.8
+CodeHealthSplit/CodeHealth|mirrored=true|start_collapsed=false|x=1000|codehealth_split=0.8
+CodeHealthSplit/CodeHealth|mirrored=true|start_collapsed=false|x=1500|codehealth_split=0.8
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=false|x=0|group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=false|x=300|group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=false|x=700|group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=false|x=1000|group_chat_split=0.6401869
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=false|x=1500|group_chat_list_collapsed=true
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=true|x=0|group_chat_list_collapsed=false;group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=true|x=300|group_chat_list_collapsed=false;group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=true|x=700|group_chat_list_collapsed=false;group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=true|x=1000|group_chat_list_collapsed=false;group_chat_split=0.6401869
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=true|x=1500|-
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=false|x=0|group_chat_list_collapsed=true
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=false|x=300|group_chat_split=0.4050633
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=false|x=700|group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=false|x=1000|group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=false|x=1500|group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=true|x=0|-
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=true|x=300|group_chat_list_collapsed=false;group_chat_split=0.4050633
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=true|x=700|group_chat_list_collapsed=false;group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=true|x=1000|group_chat_list_collapsed=false;group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=true|x=1500|group_chat_list_collapsed=false;group_chat_split=0.8
+RightPairSplit/Agent|mirrored=false|start_collapsed=false|x=0|agent_split=0.8
+RightPairSplit/Agent|mirrored=false|start_collapsed=false|x=300|agent_split=0.8
+RightPairSplit/Agent|mirrored=false|start_collapsed=false|x=700|agent_split=0.8
+RightPairSplit/Agent|mirrored=false|start_collapsed=false|x=1000|agent_split=0.6401869
+RightPairSplit/Agent|mirrored=false|start_collapsed=false|x=1500|agent_list_collapsed=true
+RightPairSplit/Agent|mirrored=false|start_collapsed=true|x=0|agent_list_collapsed=false;agent_split=0.8
+RightPairSplit/Agent|mirrored=false|start_collapsed=true|x=300|agent_list_collapsed=false;agent_split=0.8
+RightPairSplit/Agent|mirrored=false|start_collapsed=true|x=700|agent_list_collapsed=false;agent_split=0.8
+RightPairSplit/Agent|mirrored=false|start_collapsed=true|x=1000|agent_list_collapsed=false;agent_split=0.6401869
+RightPairSplit/Agent|mirrored=false|start_collapsed=true|x=1500|-
+RightPairSplit/Agent|mirrored=true|start_collapsed=false|x=0|agent_list_collapsed=true
+RightPairSplit/Agent|mirrored=true|start_collapsed=false|x=300|agent_split=0.4050633
+RightPairSplit/Agent|mirrored=true|start_collapsed=false|x=700|agent_split=0.8
+RightPairSplit/Agent|mirrored=true|start_collapsed=false|x=1000|agent_split=0.8
+RightPairSplit/Agent|mirrored=true|start_collapsed=false|x=1500|agent_split=0.8
+RightPairSplit/Agent|mirrored=true|start_collapsed=true|x=0|-
+RightPairSplit/Agent|mirrored=true|start_collapsed=true|x=300|agent_list_collapsed=false;agent_split=0.4050633
+RightPairSplit/Agent|mirrored=true|start_collapsed=true|x=700|agent_list_collapsed=false;agent_split=0.8
+RightPairSplit/Agent|mirrored=true|start_collapsed=true|x=1000|agent_list_collapsed=false;agent_split=0.8
+RightPairSplit/Agent|mirrored=true|start_collapsed=true|x=1500|agent_list_collapsed=false;agent_split=0.8
+RightPairSplit/Conversations|mirrored=false|start_collapsed=false|x=0|conversations_split=0.8
+RightPairSplit/Conversations|mirrored=false|start_collapsed=false|x=300|conversations_split=0.8
+RightPairSplit/Conversations|mirrored=false|start_collapsed=false|x=700|conversations_split=0.8
+RightPairSplit/Conversations|mirrored=false|start_collapsed=false|x=1000|conversations_split=0.6401869
+RightPairSplit/Conversations|mirrored=false|start_collapsed=false|x=1500|conversations_list_collapsed=true
+RightPairSplit/Conversations|mirrored=false|start_collapsed=true|x=0|conversations_list_collapsed=false;conversations_split=0.8
+RightPairSplit/Conversations|mirrored=false|start_collapsed=true|x=300|conversations_list_collapsed=false;conversations_split=0.8
+RightPairSplit/Conversations|mirrored=false|start_collapsed=true|x=700|conversations_list_collapsed=false;conversations_split=0.8
+RightPairSplit/Conversations|mirrored=false|start_collapsed=true|x=1000|conversations_list_collapsed=false;conversations_split=0.6401869
+RightPairSplit/Conversations|mirrored=false|start_collapsed=true|x=1500|-
+RightPairSplit/Conversations|mirrored=true|start_collapsed=false|x=0|conversations_list_collapsed=true
+RightPairSplit/Conversations|mirrored=true|start_collapsed=false|x=300|conversations_split=0.4050633
+RightPairSplit/Conversations|mirrored=true|start_collapsed=false|x=700|conversations_split=0.8
+RightPairSplit/Conversations|mirrored=true|start_collapsed=false|x=1000|conversations_split=0.8
+RightPairSplit/Conversations|mirrored=true|start_collapsed=false|x=1500|conversations_split=0.8
+RightPairSplit/Conversations|mirrored=true|start_collapsed=true|x=0|-
+RightPairSplit/Conversations|mirrored=true|start_collapsed=true|x=300|conversations_list_collapsed=false;conversations_split=0.4050633
+RightPairSplit/Conversations|mirrored=true|start_collapsed=true|x=700|conversations_list_collapsed=false;conversations_split=0.8
+RightPairSplit/Conversations|mirrored=true|start_collapsed=true|x=1000|conversations_list_collapsed=false;conversations_split=0.8
+RightPairSplit/Conversations|mirrored=true|start_collapsed=true|x=1500|conversations_list_collapsed=false;conversations_split=0.8
+RightPairSplit/Usage|mirrored=false|start_collapsed=false|x=0|-
+RightPairSplit/Usage|mirrored=false|start_collapsed=false|x=300|-
+RightPairSplit/Usage|mirrored=false|start_collapsed=false|x=700|-
+RightPairSplit/Usage|mirrored=false|start_collapsed=false|x=1000|-
+RightPairSplit/Usage|mirrored=false|start_collapsed=false|x=1500|-
+RightPairSplit/Usage|mirrored=false|start_collapsed=true|x=0|-
+RightPairSplit/Usage|mirrored=false|start_collapsed=true|x=300|-
+RightPairSplit/Usage|mirrored=false|start_collapsed=true|x=700|-
+RightPairSplit/Usage|mirrored=false|start_collapsed=true|x=1000|-
+RightPairSplit/Usage|mirrored=false|start_collapsed=true|x=1500|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=false|x=0|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=false|x=300|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=false|x=700|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=false|x=1000|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=false|x=1500|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=true|x=0|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=true|x=300|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=true|x=700|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=true|x=1000|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=true|x=1500|-"#;
+}
