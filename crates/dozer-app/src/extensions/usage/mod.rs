@@ -193,6 +193,27 @@ pub fn spawn_refresh(
     });
 }
 
+/// 面板切入:先置"统计中",有项目就发起一次用量统计(没有项目时只置 loading——迁移前的行为)。
+pub fn on_activate(
+    state: &mut WorkspaceState,
+    ctx: Option<&crate::panel_host::ActivationCtx<Message>>,
+) {
+    state.set_loading(true);
+    let Some(ctx) = ctx else {
+        return;
+    };
+    let Some(path) = ctx.project_path.clone() else {
+        return;
+    };
+    spawn_refresh(
+        ctx.project_id,
+        path,
+        ctx.io.client(),
+        ctx.io.handle(),
+        ctx.io.emitter(),
+    );
+}
+
 /// 统计项目仓库 HEAD 可达的提交总数(当前分支口径,同 git_log 面板的
 /// revwalk 起点)。项目不是 git 仓库、空仓库或任何 bytegit 报错都一律记 0
 /// ——这格统计不值得让整个面板失败。
@@ -935,5 +956,29 @@ mod tests {
             count_git_commits_by_day(dir.path()),
             BTreeMap::from([(20_000, 2), (20_001, 1)])
         );
+    }
+
+    // ---- H6:切入钩子 ----
+
+    use crate::panel_host::testing::{TIMEOUT, offline_ctx, runtime};
+
+    #[test]
+    fn on_activate_marks_loading_and_requests_a_refresh_for_that_project() {
+        let rt = runtime();
+        let (ctx, rx) = offline_ctx::<Message>(&rt, 7, Some(std::env::temp_dir()));
+        let mut state = WorkspaceState::default();
+        on_activate(&mut state, Some(&ctx));
+        assert!(state.loading());
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::Loaded(7, ..)
+        ));
+    }
+
+    #[test]
+    fn on_activate_without_a_project_still_marks_loading_but_requests_nothing() {
+        let mut state = WorkspaceState::default();
+        on_activate(&mut state, None);
+        assert!(state.loading(), "迁移前的行为:先置 loading,再看有没有项目");
     }
 }

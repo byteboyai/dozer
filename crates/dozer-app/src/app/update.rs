@@ -20,6 +20,7 @@ use crate::extensions::ssh;
 use crate::extensions::toast;
 use crate::extensions::todo;
 use crate::extensions::usage;
+use crate::panel_host::ActivationCtx;
 use crate::term::terminal;
 use crate::workspace::{
     CONVERSATION_DETAIL_PAGE_SIZE, RestorePayload, ReviewSource, ReviewView, SshOut,
@@ -84,6 +85,20 @@ fn refresh_open_conversation_summary(
         summary_time: rv.summary_time.clone(),
     };
     serde_json::to_string(&snapshot).ok()
+}
+
+/// 由工作区的项目信息造切入上下文;工作区还没有项目时返回 `None`。
+fn workspace_activation_ctx<M: Send + 'static>(
+    ws: &Workspace,
+    io: &crate::workspace::ShellIo,
+    wrap: fn(M) -> Message,
+) -> Option<ActivationCtx<M>> {
+    let project = ws.project.as_ref()?;
+    Some(ActivationCtx {
+        project_id: project.id,
+        project_path: Some(PathBuf::from(&project.path)),
+        io: io.panel_io(wrap),
+    })
 }
 
 impl App {
@@ -5056,15 +5071,11 @@ impl App {
             PanelKind::GitLog => self.sync_git_log_to_active_project(),
             PanelKind::Todo => {
                 if let Some(project_id) = self.active_project_id {
-                    let client = self.client.clone();
-                    let handle = self.handle.clone();
-                    let proxy = self.proxy.clone();
-                    let emit = move |m: todo::Message| {
-                        let _ = proxy.send_event(Message::Todo(m));
-                    };
-                    let emit_todos = emit.clone();
-                    todo::request_todos_refresh(project_id, &client, &handle, emit_todos);
-                    todo::request_categories_refresh(project_id, &client, &handle, emit);
+                    todo::on_activate(&ActivationCtx {
+                        project_id,
+                        project_path: None,
+                        io: self.panel_io(Message::Todo),
+                    });
                 }
             }
             PanelKind::Database => self.with_focused_project(|ws, _io| {
@@ -5078,13 +5089,11 @@ impl App {
             PanelKind::Project => {
                 self.ensure_project_readme_and_reveal();
                 if let Some(project_id) = self.active_project_id {
-                    let client = self.client.clone();
-                    let handle = self.handle.clone();
-                    let proxy = self.proxy.clone();
-                    let emit = move |m: project::Message| {
-                        let _ = proxy.send_event(Message::Project(m));
-                    };
-                    project::request_memories_refresh(project_id, &client, &handle, emit);
+                    project::on_activate(&ActivationCtx {
+                        project_id,
+                        project_path: None,
+                        io: self.panel_io(Message::Project),
+                    });
                 }
             }
             PanelKind::Ssh => self.with_focused_project(|ws, _io| {
@@ -5093,24 +5102,28 @@ impl App {
                 }
             }),
             PanelKind::Usage => self.with_focused_project(|ws, io| {
-                ws.usage.set_loading(true);
-                ws.spawn_usage_refresh(io);
+                let ctx = workspace_activation_ctx(ws, io, Message::Usage);
+                usage::on_activate(&mut ws.usage, ctx.as_ref());
             }),
             // 代码健康度面板切入时只读上次落盘结果，不自动扫描（spec：
             // 手动触发，与 Usage 的"打开即自动扫"是明确的行为差异）。
             PanelKind::CodeHealth => self.with_focused_project(|ws, io| {
-                ws.spawn_codehealth_load(io);
+                if let Some(ctx) = workspace_activation_ctx(ws, io, Message::CodeHealth) {
+                    codehealth::on_activate(&ctx);
+                }
             }),
             // 会话列表原本只在项目打开时和回合结束时刷新,切进这个面板时
             // 没有任何补救手段——离开一段时间再切回来看到的还是上次的
             // 快照。补一次切入即刷新,同 `Usage` 面板的既有口径。
             PanelKind::Conversations => self.with_focused_project(|ws, io| {
-                ws.spawn_conversations_refresh(io);
+                if let Some(ctx) = workspace_activation_ctx(ws, io, Message::Conversations) {
+                    conversations::on_activate(&ctx);
+                }
             }),
             // 切入时刷新群列表(别的入口可能新增过群);`mark_stale` 不清已有内容,
             // 切入瞬间不会闪成"没有群聊"。实际加载由 `poll_group_chat_if_active` 发起。
             PanelKind::GroupChat => self.with_focused_project(|ws, _io| {
-                ws.group_chat.mark_stale();
+                crate::extensions::group_chat::on_activate(&mut ws.group_chat);
             }),
             PanelKind::Files | PanelKind::Web | PanelKind::Agent => {}
         }

@@ -581,6 +581,12 @@ pub fn poll_if_due(
     }
 }
 
+/// 面板切入:把群列表标成过期(下次轮询重新加载)。`mark_stale` 不清已有内容,切入瞬间不会闪成
+/// "没有群聊";实际加载由 host 的轮询(`poll_if_due`)发起。
+pub fn on_activate(state: &mut WorkspaceState) {
+    state.mark_stale();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1280,5 +1286,17 @@ mod tests {
             } => {}
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    // ---- H6:切入钩子 ----
+
+    #[test]
+    fn on_activate_marks_the_group_list_stale_without_clearing_it() {
+        let mut s = loaded(vec![group(5, "A")]);
+        assert!(!s.load_pending(), "刚加载完:列表是新的");
+        on_activate(&mut s);
+        assert!(s.load_pending(), "切入后下次轮询要重新加载群列表");
+        assert_eq!(s.groups().len(), 1, "不清已有内容,免得切入瞬间闪成没有群聊");
+        assert!(s.loaded(), "ever_loaded 不回退,前端不闪回加载中");
     }
 }

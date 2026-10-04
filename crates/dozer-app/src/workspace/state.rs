@@ -865,38 +865,6 @@ impl Workspace {
         conversations::spawn_refresh(project_id, cwd, &io.client, &io.handle, emit);
     }
 
-    /// 异步扫当前项目的全部 transcript 并逐个解析用量 → `Usage(Loaded)`。
-    /// 比 `spawn_all_turn_groups_refresh` 贵得多(要读整份文件内容，不只是
-    /// 文件头)，所以不接入它那条"回合结束自动刷新"的调用链——只在
-    /// 切到 Usage 面板(右图标栏)或手动刷新按钮时触发。
-    pub(crate) fn spawn_usage_refresh(&self, io: &ShellIo) {
-        let Some(p) = &self.project else {
-            return;
-        };
-        let project_id = p.id;
-        let project_path = PathBuf::from(&p.path);
-        let proxy = io.proxy.clone();
-        let emit = move |m| {
-            let _ = proxy.send_event(Message::Usage(m));
-        };
-        usage::spawn_refresh(project_id, project_path, &io.client, &io.handle, emit);
-    }
-
-    /// 代码健康度面板切进时调用：只读 dozerd 落盘的"上次扫描结果"缓存，
-    /// **不**自动触发扫描（spec：手动触发，与 Usage 面板"打开即自动扫"不同）。
-    pub(crate) fn spawn_codehealth_load(&self, io: &ShellIo) {
-        let Some(p) = &self.project else {
-            return;
-        };
-        let project_id = p.id;
-        let project_path = PathBuf::from(&p.path);
-        let proxy = io.proxy.clone();
-        let emit = move |m| {
-            let _ = proxy.send_event(Message::CodeHealth(m));
-        };
-        codehealth::spawn_load_cached(project_id, project_path, &io.client, &io.handle, emit);
-    }
-
     /// 点"扫描"按钮：本地跑 `dozer_codehealth::scan_project`（CPU/IO 密集，
     /// `spawn_blocking`），成功后落盘 dozerd 并回灌 UI。
     pub(crate) fn spawn_codehealth_scan(&self, io: &ShellIo) {

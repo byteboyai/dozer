@@ -18,7 +18,7 @@ pub fn content_pane<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 套用统一 panel head:Lucide `BarChart3` 图标 + 暖金 `#dcc9a3` 的 "用量"
     // 标题 + 1px 分割线。刷新不再走面板内按钮——进入面板时由
-    // `Workspace::spawn_usage_refresh` 自动触发(见 `panel_select`)。
+    // `usage::on_activate` 自动触发(见 `fire_panel_switch_in`)。
     // 标题行末尾挂"收起/展开列表列"按钮(收起 agent 筛选栏后仍在此可见
     // 以便恢复),照抄 `database.rs` 的 `list_collapse_button` 用法。
     let collapse = app.list_collapse_button(

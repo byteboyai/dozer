@@ -155,6 +155,21 @@ pub fn spawn_load_cached(
     });
 }
 
+/// 面板切入:只读上次落盘的扫描结果,**不**自动扫描(spec:手动触发,与 Usage 的"打开即自动扫"
+/// 是明确的行为差异)。没有项目路径时什么都不做。
+pub fn on_activate(ctx: &crate::panel_host::ActivationCtx<Message>) {
+    let Some(path) = ctx.project_path.clone() else {
+        return;
+    };
+    spawn_load_cached(
+        ctx.project_id,
+        path,
+        ctx.io.client(),
+        ctx.io.handle(),
+        ctx.io.emitter(),
+    );
+}
+
 /// 点"扫描"按钮：本地跑 `dozer_codehealth::scan_project`（CPU/IO 密集），
 /// 成功后采集 Git + 计算差异/热点，再异步落盘 dozerd，最后回灌 UI。
 pub fn spawn_scan(

@@ -429,6 +429,16 @@ pub fn request_memories_refresh(
     });
 }
 
+/// 面板切入:刷新共享记忆列表(README 的展开/定位是 host 的预览动作,不在这里)。
+pub fn on_activate(ctx: &crate::panel_host::ActivationCtx<Message>) {
+    request_memories_refresh(
+        ctx.project_id,
+        ctx.io.client(),
+        ctx.io.handle(),
+        ctx.io.emitter(),
+    );
+}
+
 const SUMMARY_BACKFILL_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// "修复项目"按钮触发的完整跑法:4 个同步步骤逐个 Started/Finished、

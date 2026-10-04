@@ -56,6 +56,22 @@ impl<M: Send + 'static> PanelIo<M> {
         (self.emit)(message);
     }
 
+    /// host 的 dozerd 连接(给仍然吃 `(client, handle, emit)` 三件套的面板 `spawn_*` 函数用)。
+    pub(crate) fn client(&self) -> &Client {
+        &self.client
+    }
+
+    /// host 的 tokio runtime 句柄(给仍然吃 `(client, handle, emit)` 三件套的面板 `spawn_*` 函数用)。
+    pub(crate) fn handle(&self) -> &Handle {
+        &self.handle
+    }
+
+    /// 一个可 `clone`、可跨线程的 `emit` 闭包(同上,给 `spawn_*(.., emit: impl Fn(M) + Send + 'static)`)。
+    pub(crate) fn emitter(&self) -> impl Fn(M) + Clone + Send + 'static {
+        let emit = Arc::clone(&self.emit);
+        move |message| emit(message)
+    }
+
     /// 在 host 的 runtime 上跑一个后台任务。任务拿到 host 的 `Client` 和一份 `PanelIo` 副本,
     /// 想发多少条消息(包括零条:只在失败时才发的命令)由任务自己决定。
     pub(crate) fn spawn<F, Fut>(&self, task: F)
@@ -67,6 +83,14 @@ impl<M: Send + 'static> PanelIo<M> {
         let io = self.clone();
         self.handle.spawn(async move { task(client, io).await });
     }
+}
+
+/// 面板"切入"(被用户切到前台)时 host 交给它的上下文:当前项目 id、项目路径(项目还没有路径时为
+/// `None`)和执行原语。面板的 `on_activate` 钩子只依赖它,不碰 `App`/`Workspace`。
+pub(crate) struct ActivationCtx<M> {
+    pub(crate) project_id: i64,
+    pub(crate) project_path: Option<PathBuf>,
+    pub(crate) io: PanelIo<M>,
 }
 
 /// 面板之间"我想让另一个面板做点事"的**受限词汇**(设计文档 P1,用户 2026-10-04 裁决:面板不依赖
@@ -206,6 +230,45 @@ impl PanelHost for App {
 
     fn last_cursor(&self) -> (f32, f32) {
         self.last_cursor
+    }
+}
+
+/// 给面板钩子单测用的离线夹具:`Client` 指向不存在的 socket,`emit` 收进 channel。
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+    use std::sync::{Mutex, mpsc};
+    use std::time::Duration;
+
+    pub(crate) const TIMEOUT: Duration = Duration::from_secs(5);
+
+    pub(crate) fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    pub(crate) fn offline_ctx<M: Send + 'static>(
+        rt: &tokio::runtime::Runtime,
+        project_id: i64,
+        project_path: Option<PathBuf>,
+    ) -> (ActivationCtx<M>, mpsc::Receiver<M>) {
+        let (tx, rx) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        let client = Client::new(PathBuf::from("/tmp/dozer-activation-test-nonexistent.sock"));
+        let io = PanelIo::new(client, rt.handle().clone(), move |m| {
+            let _ = tx.lock().unwrap().send(m);
+        });
+        (
+            ActivationCtx {
+                project_id,
+                project_path,
+                io,
+            },
+            rx,
+        )
     }
 }
 
@@ -438,5 +501,28 @@ mod tests {
         };
         assert_eq!(start, Some(std::path::PathBuf::from("/s")));
         assert_eq!(on_picked("/x/y".into()), "/x/y");
+    }
+
+    // ---- H6:PanelIo 访问器 ----
+
+    #[test]
+    fn emitter_is_a_clone_that_shares_the_sink_and_handle_is_the_hosts_runtime() {
+        let rt = test_runtime();
+        let (io, rx) = recording_io(&rt);
+        let emit = io.emitter();
+        let again = emit.clone();
+        emit(1);
+        again(2);
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec![1, 2]);
+        // handle() 是 host 的 runtime:能在上面 spawn
+        let (tx, done) = std::sync::mpsc::channel();
+        io.handle().spawn(async move {
+            let _ = tx.send(42u32);
+        });
+        assert_eq!(
+            done.recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+            42
+        );
     }
 }

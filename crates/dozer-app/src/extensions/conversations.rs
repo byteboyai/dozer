@@ -279,6 +279,21 @@ pub fn spawn_refresh(
     });
 }
 
+/// 面板切入:刷新会话列表(离开一段时间再切回来不会看到陈旧快照,同 Usage 的既有口径)。
+/// 没有项目路径时什么都不做。
+pub fn on_activate(ctx: &crate::panel_host::ActivationCtx<Message>) {
+    let Some(cwd) = ctx.project_path.clone() else {
+        return;
+    };
+    spawn_refresh(
+        ctx.project_id,
+        cwd,
+        ctx.io.client(),
+        ctx.io.handle(),
+        ctx.io.emitter(),
+    );
+}
+
 /// 会话列表底部 agent 筛选栏:样式对齐文件树面板的分支切换下拉——左边
 /// 图标 + 当前筛选(agent 名称,不筛选时"全部"),右边一个展开/收起下拉
 /// 的箭头按钮。`agents` 为空(没有会话数据)时不渲染整条 bar。
@@ -861,5 +876,31 @@ mod tests {
         };
         assert!(!enabled_at(1), "当前选中的 Claude 该锁定");
         assert!(enabled_at(2), "未选中的 Opencode 该可点");
+    }
+
+    // ---- H6:切入钩子 ----
+
+    use crate::panel_host::testing::{TIMEOUT, offline_ctx, runtime};
+
+    #[test]
+    fn on_activate_refreshes_the_session_list_of_that_project() {
+        let rt = runtime();
+        let (ctx, rx) = offline_ctx::<Message>(&rt, 7, Some(std::env::temp_dir()));
+        on_activate(&ctx);
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::SessionsRefreshed(7, Err(_))
+        ));
+    }
+
+    #[test]
+    fn on_activate_without_a_project_path_does_nothing() {
+        let rt = runtime();
+        let (ctx, rx) = offline_ctx::<Message>(&rt, 7, None);
+        on_activate(&ctx);
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(200))
+                .is_err()
+        );
     }
 }

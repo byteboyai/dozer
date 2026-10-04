@@ -315,4 +315,23 @@ mod tests {
         assert!(ws_state.category_drag().is_none());
         ws_state.cancel_category_drag(); // 幂等
     }
+
+    // ---- H6:切入钩子 ----
+
+    use crate::panel_host::testing::{TIMEOUT, offline_ctx, runtime};
+
+    #[test]
+    fn on_activate_requests_both_the_todo_list_and_the_category_tree() {
+        let rt = runtime();
+        let (ctx, rx) = offline_ctx::<Message>(&rt, 7, None);
+        on_activate(&ctx);
+        let first = rx.recv_timeout(TIMEOUT).unwrap();
+        let second = rx.recv_timeout(TIMEOUT).unwrap();
+        let loaded = |m: &Message| matches!(m, Message::Loaded(_));
+        let categories = |m: &Message| matches!(m, Message::CategoriesLoaded(_));
+        assert!(
+            (loaded(&first) && categories(&second)) || (categories(&first) && loaded(&second)),
+            "两个请求各回一条消息"
+        );
+    }
 }
