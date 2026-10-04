@@ -13,6 +13,9 @@ mod file_profile;
 mod large_text;
 mod loading;
 mod native_editor;
+// Task 5 建好后,Task 6 才会接线消费;在那之前内部条目视为暂未使用。
+#[allow(dead_code)]
+mod plantuml;
 mod recovery;
 mod resources;
 mod router;
@@ -41,6 +44,10 @@ pub(crate) use code_host::*;
 pub(crate) use file_policy::*;
 #[allow(unused_imports)]
 pub(crate) use large_text::*;
+// `plantuml`(Task 5 受限 include resolver)当前只在自身单测使用;对外
+// re-export 待 Task 6 的加载接线接入。
+#[allow(unused_imports)]
+pub(crate) use plantuml::*;
 #[allow(unused_imports)]
 pub(crate) use recovery::*;
 #[allow(unused_imports)]

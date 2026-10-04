@@ -251,14 +251,19 @@ pub fn load_document(
 ) -> Result<PlantUmlDocument, PlantUmlLoadError>;
 ```
 
-- [ ] 先写 fixture 测试：相对 include、嵌套、once、环、includesub（按 spike 裁决）。
-- [ ] 拒绝 `!includeurl`、URL、绝对路径、`file://` 和无法静态授权的外部 include。
-- [ ] canonicalize 根路径、源文件和 include；验证 include 最终路径仍在项目根。
-- [ ] 用真实 symlink fixture 覆盖“文本路径在根内、目标在根外”。
-- [ ] 实施 spec 的根大小、深度、文件数和总字节上限；错误携带安全的相对 include 链。
-- [ ] 非 UTF-8、目录、设备文件、读取失败返回具名错误。
-- [ ] 不展开 PlantUML 宏/条件语义；只建立官方引擎可见的虚拟文件集合。
-- [ ] 输出依赖列表去重且排序稳定，供文件监听和确定性测试。
+- [x] 先写 fixture 测试：相对 include、嵌套、once、环、includesub（按 spike 裁决）。
+      决议：`!includesub file!tag` 取 `!` 前文件部分,按本地 include 处理(支持);
+      尖括号 `<C4/...>` stdlib 不是项目文件,不读盘。
+- [x] 拒绝 `!includeurl`、URL、绝对路径、`file://` 和无法静态授权的外部 include
+      (空目标、`${var}`/`%()`/`$!` 动态构造)。
+- [x] canonicalize 根路径、源文件和 include；验证 include 最终路径仍在项目根。
+- [x] 用真实 symlink fixture 覆盖“文本路径在根内、目标在根外”。
+- [x] 实施 spec 的根大小、深度、文件数和总字节上限；错误携带安全的相对 include 链。
+- [x] 非 UTF-8、目录、设备文件、读取失败返回具名错误。
+- [x] 不展开 PlantUML 宏/条件语义；只建立官方引擎可见的虚拟文件集合。
+- [x] 输出依赖列表去重且排序稳定，供文件监听和确定性测试。
+      证据:`cargo test -p dozer-app preview::plantuml` → 20 passed;`preview::` → 347 passed;
+      `cargo clippy -p dozer-app --all-targets` 对改动文件无告警。
 
 **验证：**
 
