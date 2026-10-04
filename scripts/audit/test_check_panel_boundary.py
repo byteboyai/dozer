@@ -56,6 +56,30 @@ class EnumVariants(unittest.TestCase):
         self.assertEqual(got, {"R-HOVERSLOT-VARIANTS": 3})
     def test_other_files_ignore_same_named_enums(self):
         self.assertEqual(g.scan({"extensions/x.rs": self.ENUM}).get("extensions/x.rs", {}), {})
+class HostPanelCoupling(unittest.TestCase):
+    """R-HOST-PANEL-ARMS / R-HOST-EXECUTORS:host 里"替面板做事"的代码只许减不许增(H4)。"""
+    def scan1(self, rel, text):
+        return g.scan({rel: text}).get(rel, {})
+    def test_panel_specific_arms_in_app_update_are_counted(self):
+        text = (
+            "            Message::Files(files::Message::CopyPath(p, k)) => {}\n"
+            "            Message::GitLog(msg) => {}\n"
+            "            Message::TermInput(x) => {}\n"          # 非面板消息
+            "                Message::Files(inner) => {}\n"       # 缩进更深:不是顶层臂
+        )
+        self.assertEqual(self.scan1("app/update.rs", text), {"R-HOST-PANEL-ARMS": 2})
+    def test_arms_in_other_files_are_not_counted(self):
+        text = "            Message::Files(files::Message::CopyPath(p, k)) => {}\n"
+        self.assertEqual(self.scan1("app/view.rs", text), {})
+    def test_commented_out_arms_are_not_counted(self):
+        text = "            // Message::Files(x) => {}\n"
+        self.assertEqual(self.scan1("app/update.rs", text), {})
+    def test_per_panel_effect_executors_in_host_are_counted(self):
+        text = "    fn run_group_chat_effects(&mut self) {}\n    fn run_other_effects(&mut self) {}\n    fn run_effect(&mut self) {}\n"
+        self.assertEqual(self.scan1("app/update.rs", text), {"R-HOST-EXECUTORS": 2})
+    def test_executors_outside_app_are_not_counted(self):
+        text = "pub fn run_group_chat_effects() {}\n"
+        self.assertEqual(self.scan1("extensions/group_chat/mod.rs", text), {})
 class Compare(unittest.TestCase):
     def test_decrease_and_equal_pass(self):
         base = {"extensions/a.rs": {"R-APP": 3}}

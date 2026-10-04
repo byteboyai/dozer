@@ -5,6 +5,7 @@
 规则 R-WS:   extensions 下文件对 `crate::workspace::Workspace` 的使用次数
 规则 R-PANE-PICK: 全库手写"按 PanelKind::Project 选预览窗格"的写法条数(应走 `Workspace::preview_pane[_mut]`)
 规则 R-HOVERID-VARIANTS / R-HOVERSLOT-VARIANTS: `HoverId`(app/state.rs)与 `HoverSlot`(panel_host.rs)的变体数
+规则 R-HOST-PANEL-ARMS / R-HOST-EXECUTORS: `app/update.rs` 里面板专属消息臂条数 / `app/` 下 `run_<面板>_effects` 执行器个数
 
 用法:
   check_panel_boundary.py            对照基线检查,有文件的引用数上升(或新文件出现违规)则退出 1
@@ -91,6 +92,19 @@ def enum_variant_count(text, name):
     return len(re.findall(r"^    [A-Z]\w*", body, flags=re.M))
 
 
+# host 里"替面板做事"的两种形态(H4 起,规格 §6 验收 2):
+#  - R-HOST-PANEL-ARMS:`app/update.rs` 里顶层(12 空格缩进)的"某个面板的消息"臂条数——host 对该面板
+#    有专属处理体的入口(含纯转发臂,所以这是个粗指标,只看趋势:只许减不许增);
+#  - R-HOST-EXECUTORS:`app/` 下名为 `run_<面板>_effects` 的 host 侧面板 Effect 执行器(应随面板走,
+#    host 只给 `PanelIo`)。
+HOST_PANEL_ARM_RE = re.compile(
+    r"^ {12}Message::(?:Files|GitLog|Todo|Project|Database|Ssh|Browser|HomeBrowser|Conversations|Usage"
+    r"|CodeHealth|GroupChat|AgentContext|Search|Settings|ProjectCreate|FileHistory|EditHistory|Footbar)\(",
+    re.M,
+)
+HOST_EXECUTOR_RE = re.compile(r"\bfn run_[a-z_]+_effects\b")
+
+
 def scan(files):
     """files: {相对路径: 源码文本} -> {相对路径: {规则: 次数}},只含 extensions/ 下且有违规的文件。"""
     out = {}
@@ -106,6 +120,15 @@ def scan(files):
                 k = enum_variant_count(text, name)
                 if k:
                     hit[rule] = k
+        code = edges.strip_comments(text)
+        if rel == "app/update.rs":
+            k = len(HOST_PANEL_ARM_RE.findall(code))
+            if k:
+                hit["R-HOST-PANEL-ARMS"] = k
+        if rel.startswith("app/"):
+            k = len(HOST_EXECUTOR_RE.findall(code))
+            if k:
+                hit["R-HOST-EXECUTORS"] = k
         n = len(PANE_PICK_RE.findall(edges.strip_comments(text)))
         if n:
             hit["R-PANE-PICK"] = n

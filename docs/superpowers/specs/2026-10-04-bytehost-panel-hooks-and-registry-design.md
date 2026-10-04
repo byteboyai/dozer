@@ -35,12 +35,12 @@ pub(crate) struct PanelIo<M> { /* client, handle, wrap: Arc<dyn Fn(M) + Send + S
 impl<M: Send + 'static> PanelIo<M> {
     pub fn client(&self) -> &Client;
     pub fn emit(&self, m: M);                 // 同步投回一条面板消息
-    pub fn spawn(&self, fut: impl Future<Output = M> + Send + 'static); // 跑异步,完成后 emit
-    pub fn spawn_blocking(&self, f: impl FnOnce() -> M + Send + 'static); // 同 spawn_blocking
+    pub fn spawn<F, Fut>(&self, task: F)  // 任务拿到 host 的 Client 与一份 PanelIo 副本,想发几条消息(含零条)自己定
+    where F: FnOnce(Client, PanelIo<M>) -> Fut + Send + 'static, Fut: Future<Output = ()> + Send + 'static;
 }
 ```
 
-`PanelIo` 与 H1 的 `PanelHost`（只读视图契约）是一对：`PanelHost` 管"读 host 状态来画 view"，`PanelIo` 管"让 host 替我跑东西"。仍然**不为未来的第二个宿主实现预先抽象 trait**：`PanelIo` 是具体结构体，测试里用一个"录制 emit"的构造函数即可。
+(`spawn_blocking` 暂时没人用,按需再加——H4 实现取舍。)`PanelIo` 与 H1 的 `PanelHost`（只读视图契约）是一对：`PanelHost` 管"读 host 状态来画 view"，`PanelIo` 管"让 host 替我跑东西"。仍然**不为未来的第二个宿主实现预先抽象 trait**：`PanelIo` 是具体结构体，测试里用一个"录制 emit"的构造函数即可。
 
 ### 3.2 Effect 的两层（对用户裁决的一处**细化**，需评审确认）
 
@@ -64,7 +64,7 @@ impl<M: Send + 'static> PanelIo<M> {
 
 | 步 | 内容 | 依赖 | 体量（估） |
 |---|---|---|---|
-| **H4** | 引入 `PanelIo<M>`；把 `group_chat` 的 Effect 执行器与 `Command` 的异步分支搬进 `group_chat`（删 `run_group_chat_effects` 与 `group_chat_command` 的 spawn 分支）；`PanelIo` 带测试构造函数，给 `group_chat` 补 effect 单测 | 无 | 约 −60 行 host、+80 行（`PanelIo` + 测试） |
+| **H4** | 引入 `PanelIo<M>`；把 `group_chat` 的 Effect 执行器与 `Command` 的异步分支搬进 `group_chat`（删 `run_group_chat_effects` 与 `group_chat_command` 的 spawn 分支）；`PanelIo` 带测试构造函数，给 `group_chat` 补 effect 单测 | 无 | 约 −60 行 host、+80 行（`PanelIo` + 测试） **已完成(H4,`bytehost-h4`):`778df4de`** |
 | **H5** | `HostEffect` 最小词汇（`ShowPanel`、`Emit`、`PickDirectory`）+ 执行器；迁 `window_events.rs` 的 rfd 对话框拦截（E3-011）与 `Files::OpenSearch`/`FileHistoryOpen` 这类跨面板消息臂 | H4 | 约 −300 行 host |
 | **H6** | 切入钩子：`on_activate` 取代 `fire_panel_switch_in`（9 个臂） | H4、H5 | 约 −70 行 host |
 | **H7** | `PanelId` 类型 + `PanelDescriptor`/registry + 组合根给默认栏位（B1/B2 的剩余部分，O5 已定）；布局校验按清单；serde 兼容测试 | H6 | 大（`PanelKind` 约 970 行引用里的类型传递部分，机械） |
@@ -93,7 +93,7 @@ impl<M: Send + 'static> PanelIo<M> {
 
 | # | 问题 | 倾向 |
 |---|---|---|
-| P1 | `HostEffect::Emit` 携带的是 host 的 `Message` 还是一个受限的"跨面板命令"类型？前者简单但让面板依赖 host 总消息，后者要多一层 | 受限命令类型（`PanelCommand`），否则 E2 形同虚设；H5 设计时定 |
+| P1 | `HostEffect::Emit` 携带的是 host 的 `Message` 还是一个受限的"跨面板命令"类型？前者简单但让面板依赖 host 总消息，后者要多一层 | 受限命令类型（`PanelCommand`），否则 E2 形同虚设；H5 设计时定 **已定(2026-10-04,用户):受限的 `PanelCommand` 类型**,不让面板依赖 host 总消息;H5 设计时定其词汇 |
 | P2 | Effect 的执行顺序与失败语义（一条失败是否影响后续）；现状各面板各自隐式约定 | 顺序执行、互不影响；失败经 `Toast` 报告 |
 | P3 | `PanelIo::spawn` 的取消（面板被关/项目被关后任务结果如何丢弃） | 沿用现状（结果带 `project_id`，host 在投递时按项目路由，项目已关则丢） |
 | P4 | H8（状态与消息信封动态化）是否值得做 | H7 完成后用 H0 的度量重新评估 |
