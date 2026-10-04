@@ -1,0 +1,72 @@
+<!doctype html><meta charset="utf-8"><title>origin spike</title>
+<body><pre id="o">running…</pre>
+<script>
+const MODE = "__MODE__", PHASE = "__PHASE__", LOOP = "__LOOP__", MARKER = "__MARKER__";
+const r = { mode: MODE, phase: PHASE, origin: location.origin, secure: window.isSecureContext };
+const t = (p, ms = 4000) => Promise.race([p, new Promise((_, j) => setTimeout(() => j(new Error("timeout")), ms))]);
+const ok = async (name, f) => { try { r[name] = await t(f()); } catch (e) { r[name] = "ERR:" + (e && e.message || e); } };
+
+(async () => {
+  r.has = {
+    serviceWorker: "serviceWorker" in navigator, indexedDB: !!window.indexedDB,
+    cryptoSubtle: !!(window.crypto && crypto.subtle), clipboard: !!navigator.clipboard,
+    eventSource: typeof EventSource, webSocket: typeof WebSocket,
+  };
+  await ok("fetch_get", async () => (await (await fetch("/ping")).json()).ok);
+  await ok("fetch_post", async () => await (await fetch("/echo", { method: "POST", body: "hello" })).text());
+
+  // 同源 / 跨源 WebSocket
+  const wsTest = (url) => new Promise((res, rej) => {
+    const w = new WebSocket(url);
+    w.onopen = () => w.send("ping");
+    w.onmessage = (e) => { res(e.data); w.close(); };
+    w.onerror = () => rej(new Error("ws error"));
+  });
+  if (MODE === "custom") {
+    await ok("ws_same_origin_scheme", () => wsTest(location.origin.replace(/^[^:]+/, "ws") + "/ws"));
+    await ok("ws_loopback_cross_origin", () => wsTest("ws://" + LOOP + "/ws"));
+  } else {
+    await ok("ws_same_origin", () => wsTest(location.origin.replace(/^http/, "ws") + "/ws"));
+  }
+
+  // SSE
+  await ok("sse", () => new Promise((res, rej) => {
+    const es = new EventSource("/events"); const got = [];
+    es.onmessage = (e) => { got.push(e.data); if (got.length >= 3) { es.close(); res(got.join(",")); } };
+    es.onerror = () => { es.close(); got.length ? res("partial:" + got.join(",")) : rej(new Error("sse error")); };
+  }));
+
+  // 跨源探测:从本页去取另一个 origin(127.0.0.1:端口 / localhost:端口)的应用服务
+  if (MODE !== "custom") {
+    await ok("cross_origin_read_loopback", async () => {
+      const other = location.hostname === "127.0.0.1" ? "http://localhost:" + location.port : "http://127.0.0.1:" + location.port;
+      try { return (await (await fetch(other + "/ping")).json()).ok ? "READABLE" : "?"; } catch (e) { return "blocked:" + e.message; }
+    });
+  }
+
+  // 持久化:localStorage / IndexedDB / cookie
+  const idb = () => new Promise((res, rej) => { const q = indexedDB.open("spike", 1); q.onupgradeneeded = () => q.result.createObjectStore("kv"); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+  const idbGet = async () => { const d = await idb(); return await new Promise((res, rej) => { const g = d.transaction("kv").objectStore("kv").get("marker"); g.onsuccess = () => res(g.result ?? null); g.onerror = () => rej(g.error); }); };
+  const idbPut = async (v) => { const d = await idb(); await new Promise((res, rej) => { const tx = d.transaction("kv", "readwrite"); tx.objectStore("kv").put(v, "marker"); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); };
+  if (PHASE === "write") {
+    await ok("ls_write", () => { localStorage.setItem("marker", MARKER); return "ok"; });
+    await ok("idb_write", async () => { await idbPut(MARKER); return "ok"; });
+    await ok("cookie_write", () => { document.cookie = "marker=" + MARKER + "; max-age=3600; path=/"; return document.cookie.includes(MARKER) ? "ok" : "not-set"; });
+  } else {
+    await ok("ls_read", () => localStorage.getItem("marker"));
+    await ok("idb_read", idbGet);
+    await ok("cookie_read", () => (document.cookie.match(/marker=([^;]+)/) || [null, null])[1]);
+  }
+
+  // Service Worker
+  await ok("service_worker", async () => {
+    if (!("serviceWorker" in navigator)) return "unavailable";
+    const reg = await navigator.serviceWorker.register("/sw.js");
+    await navigator.serviceWorker.ready;
+    return "registered scope=" + reg.scope;
+  });
+
+  document.getElementById("o").textContent = JSON.stringify(r, null, 2);
+  window.ipc.postMessage(JSON.stringify(r));
+})();
+</script>
