@@ -36,3 +36,17 @@ cd spike/origin-gateway && cargo build && sh run_matrix.sh   # 会短暂弹出�
 - 不带存储标识时的默认数据存储行为;
 - CSP、下载、弹窗、`window.open`、剪贴板的**实际读写**(只测了 API 存在);
 - 外部浏览器 / DNS rebinding 的真实攻击面(只靠规格里的 Host 校验约束,未做攻击实验)。
+
+## V1:同一端口、多个应用(2026-10-04 实测)
+
+`--app <id>` 让页面跑在 `http://<id>.localhost:<端口>/`;两个应用 `alpha`、`beta` 共用端口 18770、**共用同一个存储标识 31**:
+
+| 操作 | 结果 |
+|---|---|
+| alpha 写 localStorage/IndexedDB/Cookie(标记 `A-1`) | 写入成功 |
+| beta(同端口、同存储标识)读 | 三者**全部为空** |
+| alpha 再读 | 三者都是 `A-1` |
+| beta 写入 `B-1` 后 alpha 再读 | 仍是 `A-1`(没被覆盖) |
+| beta 用另一个存储标识读 | 空 |
+
+结论:**不同 `<id>.localhost` 主机名本身就把 localStorage、IndexedDB、Cookie 隔开了**(origin 不同 + Cookie 是 host-only),`data_store_identifier` 是在此之上额外的一层;两个应用各自的 Service Worker 作用域也各是自己的 origin。同一端口下的 Host 路由在 WKWebView 里没有问题。

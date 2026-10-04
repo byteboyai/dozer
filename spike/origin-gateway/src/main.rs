@@ -17,7 +17,6 @@ use wry::WebViewBuilder;
 use wry::WebViewBuilderExtDarwin;
 
 const PAGE: &str = include_str!("page.html");
-const APP: &str = "excalidraw";
 const SW: &str = "self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>self.clients.claim());";
 
 struct Cfg {
@@ -26,6 +25,8 @@ struct Cfg {
     store: u8,
     port: u16,
     marker: String,
+    /// 应用 id(决定 `<app>.localhost` 主机名与自定义协议名);V1 验证"同一端口、多个应用"时用。
+    app: String,
 }
 
 fn arg(name: &str, default: &str) -> String {
@@ -127,6 +128,7 @@ fn main() {
         store: arg("--store", "1").parse().unwrap_or(1),
         port: arg("--port", "18765").parse().unwrap_or(18765),
         marker: arg("--marker", "M-default"),
+        app: arg("--app", "excalidraw"),
     });
     // 所有模式都起本机 HTTP/WS 服务(自定义协议模式用它测"跨源回环 WebSocket")
     let listener = TcpListener::bind(("127.0.0.1", cfg.port)).expect("bind");
@@ -135,8 +137,8 @@ fn main() {
         thread::spawn(move || serve_http(cfg, listener));
     }
     let url = match cfg.mode.as_str() {
-        "custom" => format!("app-{APP}://localhost/"),
-        "localhost" => format!("http://{APP}.localhost:{}/", cfg.port),
+        "custom" => format!("app-{}://localhost/", cfg.app),
+        "localhost" => format!("http://{}.localhost:{}/", cfg.app, cfg.port),
         _ => format!("http://127.0.0.1:{}/", cfg.port),
     };
 
@@ -154,7 +156,7 @@ fn main() {
         .with_ipc_handler(move |req| {
             let _ = ipc_proxy.send_event(req.body().clone());
         })
-        .with_custom_protocol(format!("app-{APP}"), move |_id, req| {
+        .with_custom_protocol(format!("app-{}", cfg.app), move |_id, req| {
             let path = req.uri().path().to_string();
             let (status, ct, body) = route(&proto_cfg, req.method().as_str(), &path, req.body(), "app-custom");
             wry::http::Response::builder()
