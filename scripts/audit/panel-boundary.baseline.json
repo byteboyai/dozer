@@ -1,7 +1,4 @@
 {
- "app/layout.rs": {
-  "R-PANE-PICK": 1
- },
  "app/state.rs": {
   "R-HOVERID-VARIANTS": 12
  },

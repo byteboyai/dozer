@@ -153,6 +153,75 @@ pub(crate) fn default_panel_dims() -> PanelDims {
     }
 }
 
+impl PanelDims {
+    /// `kind` 面板配对的分割比例(统一口径是"pair 内第一个 slot 的占比",见 `pair_split_ratio`)。
+    pub(crate) fn split(&self, kind: PanelKind) -> f32 {
+        match kind {
+            PanelKind::Files => self.files_split,
+            PanelKind::Project => self.project_split,
+            PanelKind::Ssh => self.ssh_split,
+            PanelKind::Database => self.database_split,
+            PanelKind::Todo => self.todo_split,
+            PanelKind::GitLog => self.git_log_split,
+            PanelKind::Web => self.browser_bookmarks_split,
+            PanelKind::Agent => self.agent_split,
+            PanelKind::GroupChat => self.group_chat_split,
+            PanelKind::Conversations => self.conversations_split,
+            PanelKind::Usage => self.usage_split,
+            PanelKind::CodeHealth => self.codehealth_split,
+        }
+    }
+
+    pub(crate) fn split_mut(&mut self, kind: PanelKind) -> &mut f32 {
+        match kind {
+            PanelKind::Files => &mut self.files_split,
+            PanelKind::Project => &mut self.project_split,
+            PanelKind::Ssh => &mut self.ssh_split,
+            PanelKind::Database => &mut self.database_split,
+            PanelKind::Todo => &mut self.todo_split,
+            PanelKind::GitLog => &mut self.git_log_split,
+            PanelKind::Web => &mut self.browser_bookmarks_split,
+            PanelKind::Agent => &mut self.agent_split,
+            PanelKind::GroupChat => &mut self.group_chat_split,
+            PanelKind::Conversations => &mut self.conversations_split,
+            PanelKind::Usage => &mut self.usage_split,
+            PanelKind::CodeHealth => &mut self.codehealth_split,
+        }
+    }
+
+    /// `kind` 面板列表列的"是否收起"标志;没有收起能力的面板(`GitLog`/`Web`/`CodeHealth`)是 `None`。
+    /// `Files` 的标志是 `files_tree_collapsed`(语义同其余面板的 `*_list_collapsed`)。
+    pub(crate) fn collapsed(&self, kind: PanelKind) -> Option<bool> {
+        match kind {
+            PanelKind::Files => Some(self.files_tree_collapsed),
+            PanelKind::Project => Some(self.project_list_collapsed),
+            PanelKind::Todo => Some(self.todo_list_collapsed),
+            PanelKind::Database => Some(self.database_list_collapsed),
+            PanelKind::Ssh => Some(self.ssh_list_collapsed),
+            PanelKind::Agent => Some(self.agent_list_collapsed),
+            PanelKind::Conversations => Some(self.conversations_list_collapsed),
+            PanelKind::GroupChat => Some(self.group_chat_list_collapsed),
+            PanelKind::Usage => Some(self.usage_list_collapsed),
+            PanelKind::GitLog | PanelKind::Web | PanelKind::CodeHealth => None,
+        }
+    }
+
+    pub(crate) fn collapsed_mut(&mut self, kind: PanelKind) -> Option<&mut bool> {
+        match kind {
+            PanelKind::Files => Some(&mut self.files_tree_collapsed),
+            PanelKind::Project => Some(&mut self.project_list_collapsed),
+            PanelKind::Todo => Some(&mut self.todo_list_collapsed),
+            PanelKind::Database => Some(&mut self.database_list_collapsed),
+            PanelKind::Ssh => Some(&mut self.ssh_list_collapsed),
+            PanelKind::Agent => Some(&mut self.agent_list_collapsed),
+            PanelKind::Conversations => Some(&mut self.conversations_list_collapsed),
+            PanelKind::GroupChat => Some(&mut self.group_chat_list_collapsed),
+            PanelKind::Usage => Some(&mut self.usage_list_collapsed),
+            PanelKind::GitLog | PanelKind::Web | PanelKind::CodeHealth => None,
+        }
+    }
+}
+
 impl Default for PanelDims {
     fn default() -> Self {
         default_panel_dims()
@@ -540,74 +609,76 @@ pub(crate) fn list_rendered_first(default_list_first: bool, mirrored: bool) -> b
 /// `split` 参数,不区分这个 slot 语义上是"列表"还是"内容",Browser 的
 /// `browser_bookmarks_split` 反着命名也是同一套算法)。
 pub(crate) fn pair_split_ratio(dims: &PanelDims, kind: PanelKind) -> Option<f32> {
-    match kind {
-        PanelKind::Files => Some(dims.files_split),
-        PanelKind::Project => Some(dims.project_split),
-        PanelKind::Ssh => Some(dims.ssh_split),
-        PanelKind::Database => Some(dims.database_split),
-        PanelKind::Todo => Some(dims.todo_split),
-        PanelKind::GitLog => Some(dims.git_log_split),
-        PanelKind::Web => Some(dims.browser_bookmarks_split),
-        PanelKind::Agent => Some(dims.agent_split),
-        PanelKind::GroupChat => Some(dims.group_chat_split),
-        PanelKind::Conversations => Some(dims.conversations_split),
-        PanelKind::Usage => Some(dims.usage_split),
-        PanelKind::CodeHealth => Some(dims.codehealth_split),
-    }
+    Some(dims.split(kind))
 }
 
 /// `pair_split_ratio` 的写入侧。
 pub(crate) fn with_pair_split_ratio(dims: PanelDims, kind: PanelKind, ratio: f32) -> PanelDims {
+    let mut dims = dims;
+    *dims.split_mut(kind) = ratio;
+    dims
+}
+
+/// 每个面板默认(未镜像)态下"列表侧是否渲染在前(pair 内第一个元素)"。`Web` 的
+/// `browser_bookmarks_split` 虽然语义反着命名(内容占比),算法上它的 pair 第一个元素
+/// 就是"split 字段那一侧",所以按 `true` 处理——由特征化测试钉住。
+fn default_list_first(kind: PanelKind) -> bool {
     match kind {
-        PanelKind::Files => PanelDims {
-            files_split: ratio,
-            ..dims
-        },
-        PanelKind::Project => PanelDims {
-            project_split: ratio,
-            ..dims
-        },
-        PanelKind::Ssh => PanelDims {
-            ssh_split: ratio,
-            ..dims
-        },
-        PanelKind::Database => PanelDims {
-            database_split: ratio,
-            ..dims
-        },
-        PanelKind::Todo => PanelDims {
-            todo_split: ratio,
-            ..dims
-        },
-        PanelKind::GitLog => PanelDims {
-            git_log_split: ratio,
-            ..dims
-        },
-        PanelKind::Web => PanelDims {
-            browser_bookmarks_split: ratio,
-            ..dims
-        },
-        PanelKind::Agent => PanelDims {
-            agent_split: ratio,
-            ..dims
-        },
-        PanelKind::GroupChat => PanelDims {
-            group_chat_split: ratio,
-            ..dims
-        },
-        PanelKind::Conversations => PanelDims {
-            conversations_split: ratio,
-            ..dims
-        },
-        PanelKind::Usage => PanelDims {
-            usage_split: ratio,
-            ..dims
-        },
-        PanelKind::CodeHealth => PanelDims {
-            codehealth_split: ratio,
-            ..dims
-        },
+        PanelKind::Files
+        | PanelKind::Project
+        | PanelKind::Ssh
+        | PanelKind::Database
+        | PanelKind::Todo
+        | PanelKind::GitLog
+        | PanelKind::Web => true,
+        PanelKind::Agent
+        | PanelKind::GroupChat
+        | PanelKind::Conversations
+        | PanelKind::Usage
+        | PanelKind::CodeHealth => false,
     }
+}
+
+/// 拖拽 `kind` 面板的配对分割线到窗口逻辑 x 坐标 `logical_x` 后的新 `PanelDims`
+/// (`apply_column_drag` 里所有"面板分割线"分支的共用实现)。
+///
+/// 有收起能力的面板(`PanelDims::collapsed(kind)` 为 `Some`):拖窄到列表列宽度小于
+/// `project::footer_min_width`(所有可收纳面板统一走这一份估算,不各面板各算一套)时直接收起
+/// ——冻结 `split` 里上一次仍够宽的比例,不让它被拖成挤爆按钮的小数值;拖回超过阈值时用当前
+/// 光标位置连续算出新比例并展开,对称、可逆(拖拽是逐帧调用本函数,不是一次性判定)。
+/// 没有收起能力的面板只写 `split`。
+fn apply_pair_split_drag(
+    state: &ShellState,
+    kind: PanelKind,
+    window_width: f32,
+    logical_x: f32,
+) -> PanelDims {
+    let side = state.layout.rail_layout.side_of(kind);
+    let (x0, pair_w) = pair_x0_and_width(side, window_width, state);
+    if pair_w <= 0.0 {
+        return state.dims;
+    }
+    let raw_ratio = ((logical_x - x0) / pair_w).clamp(
+        byteui::theme::geometry::min_split_ratio(),
+        byteui::theme::geometry::max_split_ratio(),
+    );
+    let mirrored = side != kind.default_side();
+    let ratio = if list_rendered_first(default_list_first(kind), mirrored) {
+        raw_ratio
+    } else {
+        1.0 - raw_ratio
+    };
+    let mut dims = state.dims;
+    if let Some(flag) = dims.collapsed_mut(kind) {
+        let (list_w, _) = pair_list_content_width(pair_w, ratio);
+        if list_w < project::footer_min_width() {
+            *flag = true;
+            return dims;
+        }
+        *flag = false;
+    }
+    *dims.split_mut(kind) = ratio;
+    dims
 }
 
 /// 拖拽某条分隔线到窗口逻辑 x 坐标 `logical_x` 后的新 `ShellLayout`。
@@ -669,375 +740,45 @@ pub(crate) fn apply_column_drag(
             new_dims
         }
         Divider::LeftPairSplit => {
-            let side = state.layout.rail_layout.side_of(PanelKind::Files);
-            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
-            if pair_w <= 0.0 {
-                return state.dims;
-            }
-            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
-                byteui::theme::geometry::min_split_ratio(),
-                byteui::theme::geometry::max_split_ratio(),
-            );
-            let mirrored = side != PanelKind::Files.default_side();
-            let ratio = if list_rendered_first(true, mirrored) {
-                raw_ratio
-            } else {
-                1.0 - raw_ratio
-            };
-            // 拖窄到小于 `project::footer_min_width`(所有可收纳面板统一走
-            // 这一份估算,不各面板各算一套)时直接收起文件树列表子栏,语义同
-            // `Divider::ProjectSplit` 那条分支(冻结 `files_split`、对称
-            // 可逆),只是这里翻的是 `files_tree_collapsed`。
-            let (list_w, _) = pair_list_content_width(pair_w, ratio);
-            if list_w < project::footer_min_width() {
-                PanelDims {
-                    files_tree_collapsed: true,
-                    ..state.dims
-                }
-            } else {
-                PanelDims {
-                    files_split: ratio,
-                    files_tree_collapsed: false,
-                    ..state.dims
-                }
-            }
+            apply_pair_split_drag(&state, PanelKind::Files, window_width, logical_x)
         }
         Divider::ProjectSplit => {
-            let side = state.layout.rail_layout.side_of(PanelKind::Project);
-            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
-            if pair_w <= 0.0 {
-                return state.dims;
-            }
-            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
-                byteui::theme::geometry::min_split_ratio(),
-                byteui::theme::geometry::max_split_ratio(),
-            );
-            let mirrored = side != PanelKind::Project.default_side();
-            let ratio = if list_rendered_first(true, mirrored) {
-                raw_ratio
-            } else {
-                1.0 - raw_ratio
-            };
-            // 信息面板(footer「修复项目/删除项目」两个按钮所在栏)拖窄到
-            // 小于 `project::footer_min_width` 时直接收起——等同用户点了
-            // 收起按钮(见 `toggle_panel_list_collapse`):冻结 `state.dims`
-            // 里上一次仍够宽的 `project_split`,不让它被拖成挤爆按钮的小
-            // 数值;拖回超过阈值时用当前光标位置连续算出新比例并展开,
-            // 对称、可逆(拖拽是逐帧调用本函数,不是一次性判定)。这份估算是
-            // 所有可收纳面板(Files/Ssh/Database/Todo/Usage/Agent/
-            // Conversations)统一的最小宽度基准,不是 Project 专属——按用户
-            // 要求"所有面板最小宽度都和项目面板一样,就是两个按钮的宽度"。
-            let (list_w, _) = pair_list_content_width(pair_w, ratio);
-            if list_w < project::footer_min_width() {
-                PanelDims {
-                    project_list_collapsed: true,
-                    ..state.dims
-                }
-            } else {
-                PanelDims {
-                    project_split: ratio,
-                    project_list_collapsed: false,
-                    ..state.dims
-                }
-            }
+            apply_pair_split_drag(&state, PanelKind::Project, window_width, logical_x)
         }
-        Divider::SshSplit => {
-            let side = state.layout.rail_layout.side_of(PanelKind::Ssh);
-            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
-            if pair_w <= 0.0 {
-                return state.dims;
-            }
-            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
-                byteui::theme::geometry::min_split_ratio(),
-                byteui::theme::geometry::max_split_ratio(),
-            );
-            let mirrored = side != PanelKind::Ssh.default_side();
-            let ratio = if list_rendered_first(true, mirrored) {
-                raw_ratio
-            } else {
-                1.0 - raw_ratio
-            };
-            // 拖窄到小于 `project::footer_min_width` 时直接收起主机列表,
-            // 语义同 `Divider::ProjectSplit` 那条分支。
-            let (list_w, _) = pair_list_content_width(pair_w, ratio);
-            if list_w < project::footer_min_width() {
-                PanelDims {
-                    ssh_list_collapsed: true,
-                    ..state.dims
-                }
-            } else {
-                PanelDims {
-                    ssh_split: ratio,
-                    ssh_list_collapsed: false,
-                    ..state.dims
-                }
-            }
-        }
+        Divider::SshSplit => apply_pair_split_drag(&state, PanelKind::Ssh, window_width, logical_x),
         Divider::DatabaseSplit => {
-            let side = state.layout.rail_layout.side_of(PanelKind::Database);
-            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
-            if pair_w <= 0.0 {
-                return state.dims;
-            }
-            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
-                byteui::theme::geometry::min_split_ratio(),
-                byteui::theme::geometry::max_split_ratio(),
-            );
-            let mirrored = side != PanelKind::Database.default_side();
-            let ratio = if list_rendered_first(true, mirrored) {
-                raw_ratio
-            } else {
-                1.0 - raw_ratio
-            };
-            // 拖窄到小于 `project::footer_min_width` 时直接收起 schema 树,
-            // 语义同 `Divider::ProjectSplit` 那条分支。
-            let (list_w, _) = pair_list_content_width(pair_w, ratio);
-            if list_w < project::footer_min_width() {
-                PanelDims {
-                    database_list_collapsed: true,
-                    ..state.dims
-                }
-            } else {
-                PanelDims {
-                    database_split: ratio,
-                    database_list_collapsed: false,
-                    ..state.dims
-                }
-            }
+            apply_pair_split_drag(&state, PanelKind::Database, window_width, logical_x)
         }
         Divider::UsageSplit => {
-            let side = state.layout.rail_layout.side_of(PanelKind::Usage);
-            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
-            if pair_w <= 0.0 {
-                return state.dims;
-            }
-            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
-                byteui::theme::geometry::min_split_ratio(),
-                byteui::theme::geometry::max_split_ratio(),
-            );
-            let mirrored = side != PanelKind::Usage.default_side();
-            // 用量面板默认"内容在前、agent 筛选栏在后"(同 Agent/Conversations
-            // 的 `RightPairSplit`,`default_list_first = false`),翻转方向
-            // 跟 Database/Ssh 等"列表在前"的面板相反。
-            let ratio = if list_rendered_first(false, mirrored) {
-                raw_ratio
-            } else {
-                1.0 - raw_ratio
-            };
-            // 拖窄到小于 `project::footer_min_width` 时直接收起 agent 筛选栏,
-            // 语义同 `Divider::ProjectSplit` 那条分支。
-            let (list_w, _) = pair_list_content_width(pair_w, ratio);
-            if list_w < project::footer_min_width() {
-                PanelDims {
-                    usage_list_collapsed: true,
-                    ..state.dims
-                }
-            } else {
-                PanelDims {
-                    usage_split: ratio,
-                    usage_list_collapsed: false,
-                    ..state.dims
-                }
-            }
+            apply_pair_split_drag(&state, PanelKind::Usage, window_width, logical_x)
         }
         Divider::CodeHealthSplit => {
-            let side = state.layout.rail_layout.side_of(PanelKind::CodeHealth);
-            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
-            if pair_w <= 0.0 {
-                return state.dims;
-            }
-            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
-                byteui::theme::geometry::min_split_ratio(),
-                byteui::theme::geometry::max_split_ratio(),
-            );
-            let mirrored = side != PanelKind::CodeHealth.default_side();
-            // 代码健康度面板默认"内容在前、分类导航在后"(同 Usage,
-            // `default_list_first = false`)。
-            let ratio = if list_rendered_first(false, mirrored) {
-                raw_ratio
-            } else {
-                1.0 - raw_ratio
-            };
-            PanelDims {
-                codehealth_split: ratio,
-                ..state.dims
-            }
+            apply_pair_split_drag(&state, PanelKind::CodeHealth, window_width, logical_x)
         }
         Divider::GroupChatSplit => {
-            let side = state.layout.rail_layout.side_of(PanelKind::GroupChat);
-            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
-            if pair_w <= 0.0 {
-                return state.dims;
-            }
-            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
-                byteui::theme::geometry::min_split_ratio(),
-                byteui::theme::geometry::max_split_ratio(),
-            );
-            let mirrored = side != PanelKind::GroupChat.default_side();
-            // 群聊面板默认"内容(聊天详情)在前、群列表在后"(同 Usage/
-            // CodeHealth,`default_list_first = false`)。
-            let ratio = if list_rendered_first(false, mirrored) {
-                raw_ratio
-            } else {
-                1.0 - raw_ratio
-            };
-            // 拖窄到小于 `project::footer_min_width` 时直接收起群列表,
-            // 语义同 `Divider::ProjectSplit` 那条分支。
-            let (list_w, _) = pair_list_content_width(pair_w, ratio);
-            if list_w < project::footer_min_width() {
-                PanelDims {
-                    group_chat_list_collapsed: true,
-                    ..state.dims
-                }
-            } else {
-                PanelDims {
-                    group_chat_split: ratio,
-                    group_chat_list_collapsed: false,
-                    ..state.dims
-                }
-            }
+            apply_pair_split_drag(&state, PanelKind::GroupChat, window_width, logical_x)
         }
         Divider::TodoSplit => {
-            let side = state.layout.rail_layout.side_of(PanelKind::Todo);
-            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
-            if pair_w <= 0.0 {
-                return state.dims;
-            }
-            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
-                byteui::theme::geometry::min_split_ratio(),
-                byteui::theme::geometry::max_split_ratio(),
-            );
-            let mirrored = side != PanelKind::Todo.default_side();
-            let ratio = if list_rendered_first(true, mirrored) {
-                raw_ratio
-            } else {
-                1.0 - raw_ratio
-            };
-            // 拖窄到小于 `project::footer_min_width` 时直接收起分类导航栏,
-            // 语义同 `Divider::ProjectSplit` 那条分支。
-            let (list_w, _) = pair_list_content_width(pair_w, ratio);
-            if list_w < project::footer_min_width() {
-                PanelDims {
-                    todo_list_collapsed: true,
-                    ..state.dims
-                }
-            } else {
-                PanelDims {
-                    todo_split: ratio,
-                    todo_list_collapsed: false,
-                    ..state.dims
-                }
-            }
+            apply_pair_split_drag(&state, PanelKind::Todo, window_width, logical_x)
         }
         Divider::GitLogSplit => {
-            let side = state.layout.rail_layout.side_of(PanelKind::GitLog);
-            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
-            if pair_w <= 0.0 {
-                return state.dims;
-            }
-            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
-                byteui::theme::geometry::min_split_ratio(),
-                byteui::theme::geometry::max_split_ratio(),
-            );
-            let mirrored = side != PanelKind::GitLog.default_side();
-            let ratio = if list_rendered_first(true, mirrored) {
-                raw_ratio
-            } else {
-                1.0 - raw_ratio
-            };
-            PanelDims {
-                git_log_split: ratio,
-                ..state.dims
-            }
+            apply_pair_split_drag(&state, PanelKind::GitLog, window_width, logical_x)
         }
         Divider::BrowserBookmarksSplit => {
-            let side = state.layout.rail_layout.side_of(PanelKind::Web);
-            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
-            if pair_w <= 0.0 {
-                return state.dims;
-            }
-            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
-                byteui::theme::geometry::min_split_ratio(),
-                byteui::theme::geometry::max_split_ratio(),
-            );
-            let mirrored = side != PanelKind::Web.default_side();
-            // browser_bookmarks_split 存的是"内容占比"(Web 唯一反着命名
-            // 的字段),content 默认渲染在前,所以这里 `list_rendered_first`
-            // 的 `default_list_first` 参数传 `false`(不是 `true`)——
-            // "list" 这个泛化概念在 Web 这里对应收藏夹侧栏,不是内容。
-            // 翻转方向和 Files/Project 相反,写反会收藏夹拖拽方向错乱。
-            let ratio = if list_rendered_first(false, mirrored) {
-                1.0 - raw_ratio
-            } else {
-                raw_ratio
-            };
-            PanelDims {
-                browser_bookmarks_split: ratio,
-                ..state.dims
-            }
+            apply_pair_split_drag(&state, PanelKind::Web, window_width, logical_x)
         }
-        Divider::RightPairSplit => {
-            let kind = state.right_view; // Agent 或 Conversations
-            let side = state.layout.rail_layout.side_of(kind);
-            let (x0, pair_w) = pair_x0_and_width(side, window_width, &state);
-            if pair_w <= 0.0 {
-                return state.dims;
+        // 右栏配对:写哪个 split 取决于右侧当前视图(Agent / Conversations;Usage 有自己的
+        // `UsageSplit` 分割线,这里不动它)。
+        Divider::RightPairSplit => match state.right_view {
+            kind @ (PanelKind::Agent | PanelKind::Conversations) => {
+                apply_pair_split_drag(&state, kind, window_width, logical_x)
             }
-            let raw_ratio = ((logical_x - x0) / pair_w).clamp(
-                byteui::theme::geometry::min_split_ratio(),
-                byteui::theme::geometry::max_split_ratio(),
-            );
-            let mirrored = side != kind.default_side();
-            // Agent/Conversations 默认"内容在前"(default_list_first = false),
-            // 和 Task 5 三个面板相反。默认栏(`mirrored = false`)下
-            // `list_rendered_first(false, false) = false`,走 `1.0 - raw_ratio`
-            // 这条分支,和改造前的固定行为逐字节一致(防回归)。
-            let ratio = if list_rendered_first(false, mirrored) {
-                raw_ratio
-            } else {
-                1.0 - raw_ratio
-            };
-            // 拖窄到小于 `project::footer_min_width` 时直接收起列表侧,语义同
-            // `Divider::ProjectSplit` 那条分支——`kind` 决定翻哪个
-            // `*_list_collapsed` 字段。
-            let (list_w, _) = pair_list_content_width(pair_w, ratio);
-            match kind {
-                PanelKind::Agent => {
-                    if list_w < project::footer_min_width() {
-                        PanelDims {
-                            agent_list_collapsed: true,
-                            ..state.dims
-                        }
-                    } else {
-                        PanelDims {
-                            agent_split: ratio,
-                            agent_list_collapsed: false,
-                            ..state.dims
-                        }
-                    }
-                }
-                PanelKind::Conversations => {
-                    if list_w < project::footer_min_width() {
-                        PanelDims {
-                            conversations_list_collapsed: true,
-                            ..state.dims
-                        }
-                    } else {
-                        PanelDims {
-                            conversations_split: ratio,
-                            conversations_list_collapsed: false,
-                            ..state.dims
-                        }
-                    }
-                }
-                // 用量统计是单栏（不分割）,没有自己的 split 权重。
-                PanelKind::Usage => state.dims,
-                _ => unreachable!(
-                    "RightPairSplit 只会在 state.right_view 是 Agent/Conversations/\
-                     Usage 之一时出现——Stage 1 遗留的兜底,这里维持"
-                ),
-            }
-        }
+            PanelKind::Usage => state.dims,
+            _ => unreachable!(
+                "RightPairSplit 只会在 state.right_view 是 Agent/Conversations/\
+                 Usage 之一时出现——Stage 1 遗留的兜底,这里维持"
+            ),
+        },
     }
 }
 
@@ -1312,3 +1053,453 @@ pub type ProjectId = i64;
 
 /// Ctrl + / Ctrl - 每次触发的相对缩放步近因子（1.1 ≈ 每按一次放大 10%）。
 pub(crate) const UI_ZOOM_STEP: f32 = 1.1;
+
+/// bytehost H3 特征化测试:`apply_column_drag` 对 11 条面板分隔线(13 种面板视图组合)在
+/// 镜像/未镜像 × 4 个光标位置下的结果,逐条钉住(黄金值由重构前的实现导出)。
+/// 重构(把每面板一段的分支收成一个函数)前后这张表必须一字不差。
+#[cfg(test)]
+mod drag_characterization_tests {
+    use super::*;
+    use crate::app::{PanelKind, ShellLayout, ShellState};
+
+    const WINDOW_W: f32 = 1600.0;
+    const XS: [f32; 5] = [0.0, 300.0, 700.0, 1000.0, 1500.0];
+
+    /// 把 `kind` 的收起标志置位;没有收起能力的面板返回 false。**故意按字段手写**,不依赖被测的新访问器。
+    fn collapse_it(dims: &mut PanelDims, kind: PanelKind) -> bool {
+        match kind {
+            PanelKind::Files => dims.files_tree_collapsed = true,
+            PanelKind::Project => dims.project_list_collapsed = true,
+            PanelKind::Todo => dims.todo_list_collapsed = true,
+            PanelKind::Database => dims.database_list_collapsed = true,
+            PanelKind::Ssh => dims.ssh_list_collapsed = true,
+            PanelKind::Agent => dims.agent_list_collapsed = true,
+            PanelKind::Conversations => dims.conversations_list_collapsed = true,
+            PanelKind::GroupChat => dims.group_chat_list_collapsed = true,
+            PanelKind::Usage => dims.usage_list_collapsed = true,
+            PanelKind::GitLog | PanelKind::Web | PanelKind::CodeHealth => return false,
+        }
+        true
+    }
+
+    fn cases() -> Vec<(Divider, PanelKind)> {
+        vec![
+            (Divider::LeftPairSplit, PanelKind::Files),
+            (Divider::ProjectSplit, PanelKind::Project),
+            (Divider::SshSplit, PanelKind::Ssh),
+            (Divider::TodoSplit, PanelKind::Todo),
+            (Divider::GitLogSplit, PanelKind::GitLog),
+            (Divider::BrowserBookmarksSplit, PanelKind::Web),
+            (Divider::DatabaseSplit, PanelKind::Database),
+            (Divider::UsageSplit, PanelKind::Usage),
+            (Divider::CodeHealthSplit, PanelKind::CodeHealth),
+            (Divider::GroupChatSplit, PanelKind::GroupChat),
+            (Divider::RightPairSplit, PanelKind::Agent),
+            (Divider::RightPairSplit, PanelKind::Conversations),
+            (Divider::RightPairSplit, PanelKind::Usage),
+        ]
+    }
+
+    fn state_for(kind: PanelKind, mirrored: bool) -> ShellState {
+        let mut layout = ShellLayout::default();
+        if mirrored {
+            // 把 kind 挪到它默认栏的对面
+            let rail = &mut layout.rail_layout;
+            rail.left.retain(|k| *k != kind);
+            rail.right.retain(|k| *k != kind);
+            match kind.default_side() {
+                Side::Left => rail.right.push(kind),
+                Side::Right => rail.left.push(kind),
+            }
+        }
+        ShellState {
+            layout,
+            dims: PanelDims::default(),
+            left_view: PanelKind::Files,
+            left_collapsed: false,
+            right_view: if kind.default_side() == Side::Right {
+                kind
+            } else {
+                PanelKind::Agent
+            },
+            right_collapsed: false,
+            browser_bookmarks_open: false,
+            maximized: None,
+        }
+    }
+
+    /// 与输入 `dims` 相比变了哪些字段,`name=value;` 串起来。
+    fn changed(before: &PanelDims, after: &PanelDims) -> String {
+        let b = format!("{before:?}");
+        let a = format!("{after:?}");
+        let tokens = |s: &str| -> Vec<String> {
+            s.trim_start_matches("PanelDims { ")
+                .trim_end_matches(" }")
+                .split(", ")
+                .map(str::to_string)
+                .collect()
+        };
+        let mut out = Vec::new();
+        for (x, y) in tokens(&b).into_iter().zip(tokens(&a)) {
+            if x != y {
+                out.push(y.replace(": ", "="));
+            }
+        }
+        if out.is_empty() {
+            "-".to_string()
+        } else {
+            out.join(";")
+        }
+    }
+
+    fn actual() -> Vec<String> {
+        let mut rows = Vec::new();
+        for (divider, kind) in cases() {
+            for mirrored in [false, true] {
+                // 第二维:从"已收起"状态出发(只对有收起能力的面板)——钉住"拖回够宽就展开"。
+                for start_collapsed in [false, true] {
+                    for x in XS {
+                        let mut state = state_for(kind, mirrored);
+                        if start_collapsed && !collapse_it(&mut state.dims, kind) {
+                            continue;
+                        }
+                        let before = state.dims;
+                        let after = apply_column_drag(state, divider, WINDOW_W, x);
+                        rows.push(format!(
+                            "{divider:?}/{kind:?}|mirrored={mirrored}|start_collapsed={start_collapsed}|x={x}|{}",
+                            changed(&before, &after)
+                        ));
+                    }
+                }
+            }
+        }
+        rows
+    }
+
+    #[test]
+    #[ignore = "导出黄金值用:cargo test -p dozer-app drag_characterization_dump -- --ignored --nocapture"]
+    fn drag_characterization_dump() {
+        for r in actual() {
+            println!("GOLDEN {r}");
+        }
+    }
+
+    #[test]
+    fn apply_column_drag_matches_the_golden_table() {
+        let golden: Vec<&str> = GOLDEN.lines().collect();
+        let got = actual();
+        assert_eq!(got.len(), golden.len(), "用例数变了");
+        for (g, a) in golden.iter().zip(got.iter()) {
+            assert_eq!(g, a);
+        }
+    }
+
+    const GOLDEN: &str = r#"LeftPairSplit/Files|mirrored=false|start_collapsed=false|x=0|files_tree_collapsed=true
+LeftPairSplit/Files|mirrored=false|start_collapsed=false|x=300|files_split=0.4050633
+LeftPairSplit/Files|mirrored=false|start_collapsed=false|x=700|files_split=0.8
+LeftPairSplit/Files|mirrored=false|start_collapsed=false|x=1000|files_split=0.8
+LeftPairSplit/Files|mirrored=false|start_collapsed=false|x=1500|files_split=0.8
+LeftPairSplit/Files|mirrored=false|start_collapsed=true|x=0|-
+LeftPairSplit/Files|mirrored=false|start_collapsed=true|x=300|files_split=0.4050633;files_tree_collapsed=false
+LeftPairSplit/Files|mirrored=false|start_collapsed=true|x=700|files_split=0.8;files_tree_collapsed=false
+LeftPairSplit/Files|mirrored=false|start_collapsed=true|x=1000|files_split=0.8;files_tree_collapsed=false
+LeftPairSplit/Files|mirrored=false|start_collapsed=true|x=1500|files_split=0.8;files_tree_collapsed=false
+LeftPairSplit/Files|mirrored=true|start_collapsed=false|x=0|files_split=0.8
+LeftPairSplit/Files|mirrored=true|start_collapsed=false|x=300|files_split=0.8
+LeftPairSplit/Files|mirrored=true|start_collapsed=false|x=700|files_split=0.8
+LeftPairSplit/Files|mirrored=true|start_collapsed=false|x=1000|files_split=0.6401869
+LeftPairSplit/Files|mirrored=true|start_collapsed=false|x=1500|files_tree_collapsed=true
+LeftPairSplit/Files|mirrored=true|start_collapsed=true|x=0|files_split=0.8;files_tree_collapsed=false
+LeftPairSplit/Files|mirrored=true|start_collapsed=true|x=300|files_split=0.8;files_tree_collapsed=false
+LeftPairSplit/Files|mirrored=true|start_collapsed=true|x=700|files_split=0.8;files_tree_collapsed=false
+LeftPairSplit/Files|mirrored=true|start_collapsed=true|x=1000|files_split=0.6401869;files_tree_collapsed=false
+LeftPairSplit/Files|mirrored=true|start_collapsed=true|x=1500|-
+ProjectSplit/Project|mirrored=false|start_collapsed=false|x=0|project_list_collapsed=true
+ProjectSplit/Project|mirrored=false|start_collapsed=false|x=300|project_split=0.4050633
+ProjectSplit/Project|mirrored=false|start_collapsed=false|x=700|project_split=0.8
+ProjectSplit/Project|mirrored=false|start_collapsed=false|x=1000|project_split=0.8
+ProjectSplit/Project|mirrored=false|start_collapsed=false|x=1500|project_split=0.8
+ProjectSplit/Project|mirrored=false|start_collapsed=true|x=0|-
+ProjectSplit/Project|mirrored=false|start_collapsed=true|x=300|project_list_collapsed=false;project_split=0.4050633
+ProjectSplit/Project|mirrored=false|start_collapsed=true|x=700|project_list_collapsed=false;project_split=0.8
+ProjectSplit/Project|mirrored=false|start_collapsed=true|x=1000|project_list_collapsed=false;project_split=0.8
+ProjectSplit/Project|mirrored=false|start_collapsed=true|x=1500|project_list_collapsed=false;project_split=0.8
+ProjectSplit/Project|mirrored=true|start_collapsed=false|x=0|project_split=0.8
+ProjectSplit/Project|mirrored=true|start_collapsed=false|x=300|project_split=0.8
+ProjectSplit/Project|mirrored=true|start_collapsed=false|x=700|project_split=0.8
+ProjectSplit/Project|mirrored=true|start_collapsed=false|x=1000|project_split=0.6401869
+ProjectSplit/Project|mirrored=true|start_collapsed=false|x=1500|project_list_collapsed=true
+ProjectSplit/Project|mirrored=true|start_collapsed=true|x=0|project_list_collapsed=false;project_split=0.8
+ProjectSplit/Project|mirrored=true|start_collapsed=true|x=300|project_list_collapsed=false;project_split=0.8
+ProjectSplit/Project|mirrored=true|start_collapsed=true|x=700|project_list_collapsed=false;project_split=0.8
+ProjectSplit/Project|mirrored=true|start_collapsed=true|x=1000|project_list_collapsed=false;project_split=0.6401869
+ProjectSplit/Project|mirrored=true|start_collapsed=true|x=1500|-
+SshSplit/Ssh|mirrored=false|start_collapsed=false|x=0|ssh_list_collapsed=true
+SshSplit/Ssh|mirrored=false|start_collapsed=false|x=300|ssh_split=0.4050633
+SshSplit/Ssh|mirrored=false|start_collapsed=false|x=700|ssh_split=0.8
+SshSplit/Ssh|mirrored=false|start_collapsed=false|x=1000|ssh_split=0.8
+SshSplit/Ssh|mirrored=false|start_collapsed=false|x=1500|ssh_split=0.8
+SshSplit/Ssh|mirrored=false|start_collapsed=true|x=0|-
+SshSplit/Ssh|mirrored=false|start_collapsed=true|x=300|ssh_list_collapsed=false;ssh_split=0.4050633
+SshSplit/Ssh|mirrored=false|start_collapsed=true|x=700|ssh_list_collapsed=false;ssh_split=0.8
+SshSplit/Ssh|mirrored=false|start_collapsed=true|x=1000|ssh_list_collapsed=false;ssh_split=0.8
+SshSplit/Ssh|mirrored=false|start_collapsed=true|x=1500|ssh_list_collapsed=false;ssh_split=0.8
+SshSplit/Ssh|mirrored=true|start_collapsed=false|x=0|ssh_split=0.8
+SshSplit/Ssh|mirrored=true|start_collapsed=false|x=300|ssh_split=0.8
+SshSplit/Ssh|mirrored=true|start_collapsed=false|x=700|ssh_split=0.8
+SshSplit/Ssh|mirrored=true|start_collapsed=false|x=1000|ssh_split=0.6401869
+SshSplit/Ssh|mirrored=true|start_collapsed=false|x=1500|ssh_list_collapsed=true
+SshSplit/Ssh|mirrored=true|start_collapsed=true|x=0|ssh_list_collapsed=false;ssh_split=0.8
+SshSplit/Ssh|mirrored=true|start_collapsed=true|x=300|ssh_list_collapsed=false;ssh_split=0.8
+SshSplit/Ssh|mirrored=true|start_collapsed=true|x=700|ssh_list_collapsed=false;ssh_split=0.8
+SshSplit/Ssh|mirrored=true|start_collapsed=true|x=1000|ssh_list_collapsed=false;ssh_split=0.6401869
+SshSplit/Ssh|mirrored=true|start_collapsed=true|x=1500|-
+TodoSplit/Todo|mirrored=false|start_collapsed=false|x=0|todo_list_collapsed=true
+TodoSplit/Todo|mirrored=false|start_collapsed=false|x=300|todo_split=0.4050633
+TodoSplit/Todo|mirrored=false|start_collapsed=false|x=700|todo_split=0.8
+TodoSplit/Todo|mirrored=false|start_collapsed=false|x=1000|todo_split=0.8
+TodoSplit/Todo|mirrored=false|start_collapsed=false|x=1500|todo_split=0.8
+TodoSplit/Todo|mirrored=false|start_collapsed=true|x=0|-
+TodoSplit/Todo|mirrored=false|start_collapsed=true|x=300|todo_list_collapsed=false;todo_split=0.4050633
+TodoSplit/Todo|mirrored=false|start_collapsed=true|x=700|todo_list_collapsed=false;todo_split=0.8
+TodoSplit/Todo|mirrored=false|start_collapsed=true|x=1000|todo_list_collapsed=false;todo_split=0.8
+TodoSplit/Todo|mirrored=false|start_collapsed=true|x=1500|todo_list_collapsed=false;todo_split=0.8
+TodoSplit/Todo|mirrored=true|start_collapsed=false|x=0|todo_split=0.8
+TodoSplit/Todo|mirrored=true|start_collapsed=false|x=300|todo_split=0.8
+TodoSplit/Todo|mirrored=true|start_collapsed=false|x=700|todo_split=0.8
+TodoSplit/Todo|mirrored=true|start_collapsed=false|x=1000|todo_split=0.6401869
+TodoSplit/Todo|mirrored=true|start_collapsed=false|x=1500|todo_list_collapsed=true
+TodoSplit/Todo|mirrored=true|start_collapsed=true|x=0|todo_list_collapsed=false;todo_split=0.8
+TodoSplit/Todo|mirrored=true|start_collapsed=true|x=300|todo_list_collapsed=false;todo_split=0.8
+TodoSplit/Todo|mirrored=true|start_collapsed=true|x=700|todo_list_collapsed=false;todo_split=0.8
+TodoSplit/Todo|mirrored=true|start_collapsed=true|x=1000|todo_list_collapsed=false;todo_split=0.6401869
+TodoSplit/Todo|mirrored=true|start_collapsed=true|x=1500|-
+GitLogSplit/GitLog|mirrored=false|start_collapsed=false|x=0|git_log_split=0.2
+GitLogSplit/GitLog|mirrored=false|start_collapsed=false|x=300|git_log_split=0.4050633
+GitLogSplit/GitLog|mirrored=false|start_collapsed=false|x=700|git_log_split=0.8
+GitLogSplit/GitLog|mirrored=false|start_collapsed=false|x=1000|git_log_split=0.8
+GitLogSplit/GitLog|mirrored=false|start_collapsed=false|x=1500|git_log_split=0.8
+GitLogSplit/GitLog|mirrored=true|start_collapsed=false|x=0|git_log_split=0.8
+GitLogSplit/GitLog|mirrored=true|start_collapsed=false|x=300|git_log_split=0.8
+GitLogSplit/GitLog|mirrored=true|start_collapsed=false|x=700|git_log_split=0.8
+GitLogSplit/GitLog|mirrored=true|start_collapsed=false|x=1000|git_log_split=0.6401869
+GitLogSplit/GitLog|mirrored=true|start_collapsed=false|x=1500|git_log_split=0.19999999
+BrowserBookmarksSplit/Web|mirrored=false|start_collapsed=false|x=0|browser_bookmarks_split=0.2
+BrowserBookmarksSplit/Web|mirrored=false|start_collapsed=false|x=300|browser_bookmarks_split=0.4050633
+BrowserBookmarksSplit/Web|mirrored=false|start_collapsed=false|x=700|browser_bookmarks_split=0.8
+BrowserBookmarksSplit/Web|mirrored=false|start_collapsed=false|x=1000|browser_bookmarks_split=0.8
+BrowserBookmarksSplit/Web|mirrored=false|start_collapsed=false|x=1500|browser_bookmarks_split=0.8
+BrowserBookmarksSplit/Web|mirrored=true|start_collapsed=false|x=0|browser_bookmarks_split=0.8
+BrowserBookmarksSplit/Web|mirrored=true|start_collapsed=false|x=300|browser_bookmarks_split=0.8
+BrowserBookmarksSplit/Web|mirrored=true|start_collapsed=false|x=700|browser_bookmarks_split=0.8
+BrowserBookmarksSplit/Web|mirrored=true|start_collapsed=false|x=1000|browser_bookmarks_split=0.6401869
+BrowserBookmarksSplit/Web|mirrored=true|start_collapsed=false|x=1500|browser_bookmarks_split=0.19999999
+DatabaseSplit/Database|mirrored=false|start_collapsed=false|x=0|database_list_collapsed=true
+DatabaseSplit/Database|mirrored=false|start_collapsed=false|x=300|database_split=0.4050633
+DatabaseSplit/Database|mirrored=false|start_collapsed=false|x=700|database_split=0.8
+DatabaseSplit/Database|mirrored=false|start_collapsed=false|x=1000|database_split=0.8
+DatabaseSplit/Database|mirrored=false|start_collapsed=false|x=1500|database_split=0.8
+DatabaseSplit/Database|mirrored=false|start_collapsed=true|x=0|-
+DatabaseSplit/Database|mirrored=false|start_collapsed=true|x=300|database_list_collapsed=false;database_split=0.4050633
+DatabaseSplit/Database|mirrored=false|start_collapsed=true|x=700|database_list_collapsed=false;database_split=0.8
+DatabaseSplit/Database|mirrored=false|start_collapsed=true|x=1000|database_list_collapsed=false;database_split=0.8
+DatabaseSplit/Database|mirrored=false|start_collapsed=true|x=1500|database_list_collapsed=false;database_split=0.8
+DatabaseSplit/Database|mirrored=true|start_collapsed=false|x=0|database_split=0.8
+DatabaseSplit/Database|mirrored=true|start_collapsed=false|x=300|database_split=0.8
+DatabaseSplit/Database|mirrored=true|start_collapsed=false|x=700|database_split=0.8
+DatabaseSplit/Database|mirrored=true|start_collapsed=false|x=1000|database_split=0.6401869
+DatabaseSplit/Database|mirrored=true|start_collapsed=false|x=1500|database_list_collapsed=true
+DatabaseSplit/Database|mirrored=true|start_collapsed=true|x=0|database_list_collapsed=false;database_split=0.8
+DatabaseSplit/Database|mirrored=true|start_collapsed=true|x=300|database_list_collapsed=false;database_split=0.8
+DatabaseSplit/Database|mirrored=true|start_collapsed=true|x=700|database_list_collapsed=false;database_split=0.8
+DatabaseSplit/Database|mirrored=true|start_collapsed=true|x=1000|database_list_collapsed=false;database_split=0.6401869
+DatabaseSplit/Database|mirrored=true|start_collapsed=true|x=1500|-
+UsageSplit/Usage|mirrored=false|start_collapsed=false|x=0|usage_split=0.8
+UsageSplit/Usage|mirrored=false|start_collapsed=false|x=300|usage_split=0.8
+UsageSplit/Usage|mirrored=false|start_collapsed=false|x=700|usage_split=0.8
+UsageSplit/Usage|mirrored=false|start_collapsed=false|x=1000|usage_split=0.6401869
+UsageSplit/Usage|mirrored=false|start_collapsed=false|x=1500|usage_list_collapsed=true
+UsageSplit/Usage|mirrored=false|start_collapsed=true|x=0|usage_list_collapsed=false;usage_split=0.8
+UsageSplit/Usage|mirrored=false|start_collapsed=true|x=300|usage_list_collapsed=false;usage_split=0.8
+UsageSplit/Usage|mirrored=false|start_collapsed=true|x=700|usage_list_collapsed=false;usage_split=0.8
+UsageSplit/Usage|mirrored=false|start_collapsed=true|x=1000|usage_list_collapsed=false;usage_split=0.6401869
+UsageSplit/Usage|mirrored=false|start_collapsed=true|x=1500|-
+UsageSplit/Usage|mirrored=true|start_collapsed=false|x=0|usage_list_collapsed=true
+UsageSplit/Usage|mirrored=true|start_collapsed=false|x=300|usage_split=0.4050633
+UsageSplit/Usage|mirrored=true|start_collapsed=false|x=700|usage_split=0.8
+UsageSplit/Usage|mirrored=true|start_collapsed=false|x=1000|usage_split=0.8
+UsageSplit/Usage|mirrored=true|start_collapsed=false|x=1500|usage_split=0.8
+UsageSplit/Usage|mirrored=true|start_collapsed=true|x=0|-
+UsageSplit/Usage|mirrored=true|start_collapsed=true|x=300|usage_list_collapsed=false;usage_split=0.4050633
+UsageSplit/Usage|mirrored=true|start_collapsed=true|x=700|usage_list_collapsed=false;usage_split=0.8
+UsageSplit/Usage|mirrored=true|start_collapsed=true|x=1000|usage_list_collapsed=false;usage_split=0.8
+UsageSplit/Usage|mirrored=true|start_collapsed=true|x=1500|usage_list_collapsed=false;usage_split=0.8
+CodeHealthSplit/CodeHealth|mirrored=false|start_collapsed=false|x=0|codehealth_split=0.8
+CodeHealthSplit/CodeHealth|mirrored=false|start_collapsed=false|x=300|codehealth_split=0.8
+CodeHealthSplit/CodeHealth|mirrored=false|start_collapsed=false|x=700|codehealth_split=0.8
+CodeHealthSplit/CodeHealth|mirrored=false|start_collapsed=false|x=1000|codehealth_split=0.6401869
+CodeHealthSplit/CodeHealth|mirrored=false|start_collapsed=false|x=1500|codehealth_split=0.19999999
+CodeHealthSplit/CodeHealth|mirrored=true|start_collapsed=false|x=0|codehealth_split=0.2
+CodeHealthSplit/CodeHealth|mirrored=true|start_collapsed=false|x=300|codehealth_split=0.4050633
+CodeHealthSplit/CodeHealth|mirrored=true|start_collapsed=false|x=700|codehealth_split=0.8
+CodeHealthSplit/CodeHealth|mirrored=true|start_collapsed=false|x=1000|codehealth_split=0.8
+CodeHealthSplit/CodeHealth|mirrored=true|start_collapsed=false|x=1500|codehealth_split=0.8
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=false|x=0|group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=false|x=300|group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=false|x=700|group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=false|x=1000|group_chat_split=0.6401869
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=false|x=1500|group_chat_list_collapsed=true
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=true|x=0|group_chat_list_collapsed=false;group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=true|x=300|group_chat_list_collapsed=false;group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=true|x=700|group_chat_list_collapsed=false;group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=true|x=1000|group_chat_list_collapsed=false;group_chat_split=0.6401869
+GroupChatSplit/GroupChat|mirrored=false|start_collapsed=true|x=1500|-
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=false|x=0|group_chat_list_collapsed=true
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=false|x=300|group_chat_split=0.4050633
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=false|x=700|group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=false|x=1000|group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=false|x=1500|group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=true|x=0|-
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=true|x=300|group_chat_list_collapsed=false;group_chat_split=0.4050633
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=true|x=700|group_chat_list_collapsed=false;group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=true|x=1000|group_chat_list_collapsed=false;group_chat_split=0.8
+GroupChatSplit/GroupChat|mirrored=true|start_collapsed=true|x=1500|group_chat_list_collapsed=false;group_chat_split=0.8
+RightPairSplit/Agent|mirrored=false|start_collapsed=false|x=0|agent_split=0.8
+RightPairSplit/Agent|mirrored=false|start_collapsed=false|x=300|agent_split=0.8
+RightPairSplit/Agent|mirrored=false|start_collapsed=false|x=700|agent_split=0.8
+RightPairSplit/Agent|mirrored=false|start_collapsed=false|x=1000|agent_split=0.6401869
+RightPairSplit/Agent|mirrored=false|start_collapsed=false|x=1500|agent_list_collapsed=true
+RightPairSplit/Agent|mirrored=false|start_collapsed=true|x=0|agent_list_collapsed=false;agent_split=0.8
+RightPairSplit/Agent|mirrored=false|start_collapsed=true|x=300|agent_list_collapsed=false;agent_split=0.8
+RightPairSplit/Agent|mirrored=false|start_collapsed=true|x=700|agent_list_collapsed=false;agent_split=0.8
+RightPairSplit/Agent|mirrored=false|start_collapsed=true|x=1000|agent_list_collapsed=false;agent_split=0.6401869
+RightPairSplit/Agent|mirrored=false|start_collapsed=true|x=1500|-
+RightPairSplit/Agent|mirrored=true|start_collapsed=false|x=0|agent_list_collapsed=true
+RightPairSplit/Agent|mirrored=true|start_collapsed=false|x=300|agent_split=0.4050633
+RightPairSplit/Agent|mirrored=true|start_collapsed=false|x=700|agent_split=0.8
+RightPairSplit/Agent|mirrored=true|start_collapsed=false|x=1000|agent_split=0.8
+RightPairSplit/Agent|mirrored=true|start_collapsed=false|x=1500|agent_split=0.8
+RightPairSplit/Agent|mirrored=true|start_collapsed=true|x=0|-
+RightPairSplit/Agent|mirrored=true|start_collapsed=true|x=300|agent_list_collapsed=false;agent_split=0.4050633
+RightPairSplit/Agent|mirrored=true|start_collapsed=true|x=700|agent_list_collapsed=false;agent_split=0.8
+RightPairSplit/Agent|mirrored=true|start_collapsed=true|x=1000|agent_list_collapsed=false;agent_split=0.8
+RightPairSplit/Agent|mirrored=true|start_collapsed=true|x=1500|agent_list_collapsed=false;agent_split=0.8
+RightPairSplit/Conversations|mirrored=false|start_collapsed=false|x=0|conversations_split=0.8
+RightPairSplit/Conversations|mirrored=false|start_collapsed=false|x=300|conversations_split=0.8
+RightPairSplit/Conversations|mirrored=false|start_collapsed=false|x=700|conversations_split=0.8
+RightPairSplit/Conversations|mirrored=false|start_collapsed=false|x=1000|conversations_split=0.6401869
+RightPairSplit/Conversations|mirrored=false|start_collapsed=false|x=1500|conversations_list_collapsed=true
+RightPairSplit/Conversations|mirrored=false|start_collapsed=true|x=0|conversations_list_collapsed=false;conversations_split=0.8
+RightPairSplit/Conversations|mirrored=false|start_collapsed=true|x=300|conversations_list_collapsed=false;conversations_split=0.8
+RightPairSplit/Conversations|mirrored=false|start_collapsed=true|x=700|conversations_list_collapsed=false;conversations_split=0.8
+RightPairSplit/Conversations|mirrored=false|start_collapsed=true|x=1000|conversations_list_collapsed=false;conversations_split=0.6401869
+RightPairSplit/Conversations|mirrored=false|start_collapsed=true|x=1500|-
+RightPairSplit/Conversations|mirrored=true|start_collapsed=false|x=0|conversations_list_collapsed=true
+RightPairSplit/Conversations|mirrored=true|start_collapsed=false|x=300|conversations_split=0.4050633
+RightPairSplit/Conversations|mirrored=true|start_collapsed=false|x=700|conversations_split=0.8
+RightPairSplit/Conversations|mirrored=true|start_collapsed=false|x=1000|conversations_split=0.8
+RightPairSplit/Conversations|mirrored=true|start_collapsed=false|x=1500|conversations_split=0.8
+RightPairSplit/Conversations|mirrored=true|start_collapsed=true|x=0|-
+RightPairSplit/Conversations|mirrored=true|start_collapsed=true|x=300|conversations_list_collapsed=false;conversations_split=0.4050633
+RightPairSplit/Conversations|mirrored=true|start_collapsed=true|x=700|conversations_list_collapsed=false;conversations_split=0.8
+RightPairSplit/Conversations|mirrored=true|start_collapsed=true|x=1000|conversations_list_collapsed=false;conversations_split=0.8
+RightPairSplit/Conversations|mirrored=true|start_collapsed=true|x=1500|conversations_list_collapsed=false;conversations_split=0.8
+RightPairSplit/Usage|mirrored=false|start_collapsed=false|x=0|-
+RightPairSplit/Usage|mirrored=false|start_collapsed=false|x=300|-
+RightPairSplit/Usage|mirrored=false|start_collapsed=false|x=700|-
+RightPairSplit/Usage|mirrored=false|start_collapsed=false|x=1000|-
+RightPairSplit/Usage|mirrored=false|start_collapsed=false|x=1500|-
+RightPairSplit/Usage|mirrored=false|start_collapsed=true|x=0|-
+RightPairSplit/Usage|mirrored=false|start_collapsed=true|x=300|-
+RightPairSplit/Usage|mirrored=false|start_collapsed=true|x=700|-
+RightPairSplit/Usage|mirrored=false|start_collapsed=true|x=1000|-
+RightPairSplit/Usage|mirrored=false|start_collapsed=true|x=1500|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=false|x=0|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=false|x=300|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=false|x=700|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=false|x=1000|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=false|x=1500|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=true|x=0|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=true|x=300|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=true|x=700|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=true|x=1000|-
+RightPairSplit/Usage|mirrored=true|start_collapsed=true|x=1500|-"#;
+}
+
+/// bytehost H3:`PanelDims` 按面板取字段的访问器。
+#[cfg(test)]
+mod panel_dims_accessor_tests {
+    use super::*;
+    use crate::app::PanelKind;
+
+    const ALL: [PanelKind; 12] = [
+        PanelKind::Files,
+        PanelKind::GitLog,
+        PanelKind::Todo,
+        PanelKind::Project,
+        PanelKind::Database,
+        PanelKind::Ssh,
+        PanelKind::Web,
+        PanelKind::Agent,
+        PanelKind::GroupChat,
+        PanelKind::Conversations,
+        PanelKind::Usage,
+        PanelKind::CodeHealth,
+    ];
+
+    #[test]
+    fn split_mut_writes_exactly_the_field_split_reads() {
+        for (i, kind) in ALL.into_iter().enumerate() {
+            let mut dims = PanelDims::default();
+            let marker = 0.123 + i as f32 * 0.01;
+            *dims.split_mut(kind) = marker;
+            assert_eq!(dims.split(kind), marker, "{kind:?}");
+            // 别的面板的 split 一个都不能被碰
+            for other in ALL.into_iter().filter(|k| *k != kind) {
+                assert_ne!(dims.split(other), marker, "{kind:?} 写进了 {other:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn exactly_nine_panels_can_collapse_and_three_cannot() {
+        let can: Vec<_> = ALL
+            .into_iter()
+            .filter(|k| PanelDims::default().collapsed(*k).is_some())
+            .collect();
+        assert_eq!(can.len(), 9);
+        for kind in [PanelKind::GitLog, PanelKind::Web, PanelKind::CodeHealth] {
+            assert_eq!(PanelDims::default().collapsed(kind), None, "{kind:?}");
+            assert!(
+                PanelDims::default().collapsed_mut(kind).is_none(),
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn collapsed_mut_writes_exactly_the_field_collapsed_reads() {
+        for kind in ALL {
+            let mut dims = PanelDims::default();
+            let Some(flag) = dims.collapsed_mut(kind) else {
+                continue;
+            };
+            *flag = true;
+            assert_eq!(dims.collapsed(kind), Some(true), "{kind:?}");
+            for other in ALL.into_iter().filter(|k| *k != kind) {
+                assert_ne!(
+                    dims.collapsed(other),
+                    Some(true),
+                    "{kind:?} 写进了 {other:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn files_collapse_flag_is_the_tree_collapsed_field() {
+        let mut dims = PanelDims::default();
+        *dims.collapsed_mut(PanelKind::Files).unwrap() = true;
+        assert!(dims.files_tree_collapsed);
+    }
+}
