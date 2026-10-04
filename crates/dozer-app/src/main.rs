@@ -13,6 +13,7 @@ mod layout;
 mod menu_spec;
 mod open_projects;
 mod osc;
+mod panel_host;
 mod panel_layouts;
 mod platform;
 mod preview;

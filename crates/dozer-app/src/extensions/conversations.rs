@@ -9,10 +9,10 @@
 //! `ReviewSource::Session` 和本面板的 `ReviewSource::Conversation`,继续留在
 //! `workspace.rs`(见 docs/superpowers/specs/2026-09-15-conversations-extension-pilot-design.md)。
 
-use crate::app::App;
 use crate::app::{HoverId, ProjectId, TextInputTarget};
 use crate::chrome::homespace::home_panel_head;
 use crate::conversation::SessionRow;
+use crate::panel_host::PanelHost;
 use crate::theme;
 use crate::workspace::{agent_dot_color, agent_icon, lh, relative_time_text};
 use byteui::interaction::icons;
@@ -458,7 +458,7 @@ fn agent_picker_view(
 /// 不是"全部打开的 Agent tab"——2026-09-25 之前误用后者,导致同时开几个
 /// tab 就有几行同时标"● 当前"。
 pub fn view<'a>(
-    app: &'a App,
+    app: &'a impl PanelHost,
     ws_state: &'a WorkspaceState,
     todo_items: &[TodoInfo],
     current_review_id: Option<&str>,

@@ -125,7 +125,7 @@ impl TodoDetailOverlay {
             &self.window,
             self.cursor,
             backdrop_card(
-                todo::todo_detail_card(ws).map(Message::Todo),
+                todo::todo_detail_card(&ws.todo).map(Message::Todo),
                 card_logical_size(&self.window),
             ),
         );
@@ -156,7 +156,7 @@ impl TodoDetailOverlay {
             &self.window,
             self.cursor,
             backdrop_card(
-                todo::todo_detail_card(ws).map(Message::Todo),
+                todo::todo_detail_card(&ws.todo).map(Message::Todo),
                 card_logical_size(&self.window),
             ),
             iced_event,

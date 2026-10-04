@@ -1248,7 +1248,13 @@ impl App {
             return Vec::new();
         };
         let desired = crate::extensions::todo::current_view_payload(
-            ws,
+            &ws.todo,
+            &|sid: &str| {
+                ws.tabs
+                    .iter()
+                    .chain(ws.ssh_tabs.iter())
+                    .any(|t| t.alive && t.info.id == sid)
+            },
             project_id,
             crate::extensions::todo::today_ymd(),
         );

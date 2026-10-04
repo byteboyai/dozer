@@ -6,6 +6,7 @@ use iced_widget::core::{Border, Element, Length};
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 
 use super::*;
+use crate::panel_host::PanelHost;
 
 /// 驱动管理弹窗:独立原生窗口的卡片内容,视觉模板同 `delete_confirm_popup`
 /// (CARD 底 + 圆角描边 + 标题图标)。此前走独立窗口(2026-09-23 起,见
@@ -684,7 +685,7 @@ pub(crate) fn database_footer_bar<'a>()
 /// `workspace.rs::preview_pane_for`,**不**带拖拽换位/右键菜单(设计文档
 /// 非目标)。
 pub fn content_pane<'a>(
-    app: &'a crate::app::App,
+    app: &'a impl PanelHost,
     ws_state: &'a WorkspaceState,
     width: Length,
     outer: Border,
@@ -870,7 +871,7 @@ pub(crate) fn tab_overflow_items(
 /// 解释的理由——`anchor`/`window_size` 是全窗口坐标系,嵌在 `content_pane`
 /// 自己的局部布局里换算位置会跟真实点击位置对不上)。
 pub fn tab_overflow_popup<'a>(
-    app: &'a crate::app::App,
+    app: &'a impl PanelHost,
     ws_state: &'a WorkspaceState,
 ) -> Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> {
     let content = ws_state.content();
@@ -896,7 +897,7 @@ pub fn tab_overflow_popup<'a>(
         crate::chrome::tab_widget::TabOverflowMenuArgs {
             entries: overflow_entries,
             anchor,
-            window_size: app.window_size,
+            window_size: app.window_size(),
             on_select: |idx| {
                 if idx == 0 {
                     Message::SelectBlankTab

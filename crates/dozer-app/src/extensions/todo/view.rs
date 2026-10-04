@@ -1,8 +1,8 @@
 //! Todo 面板 view:主视图/列表/卡片/搜索栏/footer/清空确认/状态与日历浮层。
-use crate::app::{App, HoverId};
+use crate::app::HoverId;
+use crate::panel_host::PanelHost;
 
 use crate::theme;
-use crate::workspace::Workspace;
 use byteui::interaction::icons;
 use iced_widget::core::mouse;
 use iced_widget::core::{Border, Color, Element, Length, Padding};
@@ -17,8 +17,11 @@ use super::*;
 /// 左栏：面板头 + 分类导航。右栏：列表视图主体 + 底部新增输入。
 #[allow(clippy::too_many_arguments)]
 pub fn view<'a>(
-    app: &App,
+    app: &impl PanelHost,
     ws_state: &'a WorkspaceState,
+    // 内容区 webview 宿主的失败原因(`App.todo_webview.failed()`,由调用方取了传进来:
+    // 面板 view 不再读宿主的 `App` 字段)。
+    webview_failed: Option<&'a str>,
     sidebar_width: Length,
     sidebar_outer: Border,
     content_width: Length,
@@ -108,7 +111,7 @@ pub fn view<'a>(
     .align_y(iced_widget::core::alignment::Vertical::Center);
     let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         match ws_state.view() {
-            TodoView::List => todo_content_slot(app.todo_webview.failed()),
+            TodoView::List => todo_content_slot(webview_failed),
             // 看板视图一期仅占位:此时 webview 不挂载(`preview_desired` 的
             // `content_desired` 为假),原生占位可见。
             TodoView::Kanban => kanban_placeholder(),
@@ -355,7 +358,7 @@ pub(crate) fn clear_confirm_spec() -> byteui::feedback::dialog::ConfirmDialog<Me
 /// 展开/收起、点选切过滤)。本函数只做展示 + 选中;右键菜单/增删改在
 /// 后续任务接入。
 pub(crate) fn category_tree_nav<'a>(
-    app: &App,
+    app: &impl PanelHost,
     ws_state: &'a WorkspaceState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![].spacing(2).padding([4, 8]);
@@ -635,12 +638,12 @@ mod clear_confirm_tests {
 /// 宽度撑满宿主窗口(整窗逻辑尺寸由 `todo_detail_overlay::card_logical_size`
 /// 给定)。
 pub fn todo_detail_card(
-    ws: &Workspace,
+    todo: &WorkspaceState,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let Some(idx) = ws.todo.detail_open_idx() else {
+    let Some(idx) = todo.detail_open_idx() else {
         return column![].into();
     };
-    let Some(item) = ws.todo.items().get(idx) else {
+    let Some(item) = todo.items().get(idx) else {
         return column![].into();
     };
 
@@ -657,7 +660,7 @@ pub fn todo_detail_card(
     .spacing(4);
 
     let mut turns_col = column![].spacing(8);
-    for turn in ws.todo.detail_turns() {
+    for turn in todo.detail_turns() {
         let label = if turn.role == "human" {
             "你".to_string()
         } else {
@@ -687,7 +690,7 @@ pub fn todo_detail_card(
 
     let reply_box = container(byteui::form::input_text::view(
         "回复...",
-        ws.todo.detail_reply_draft(),
+        todo.detail_reply_draft(),
         false,
         Some(detail_reply_field_id()),
         false,
@@ -696,13 +699,13 @@ pub fn todo_detail_card(
         |s| Message::DetailReplyInput(s),
     ))
     .width(Length::Fill);
-    let submit_label = if ws.todo.detail_processing() {
+    let submit_label = if todo.detail_processing() {
         "处理中…"
     } else {
         "处理"
     };
     let submit = button(text(submit_label))
-        .on_press_maybe((!ws.todo.detail_processing()).then_some(Message::DetailReplySubmit))
+        .on_press_maybe((!todo.detail_processing()).then_some(Message::DetailReplySubmit))
         .padding([6, 12])
         .style(byteui::feedback::dialog::action_button_style(
             byteui::theme::color::current().cream,

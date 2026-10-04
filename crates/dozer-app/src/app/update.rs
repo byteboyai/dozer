@@ -3586,7 +3586,7 @@ impl App {
                     // 再同步弹原生菜单,结果经 `Ssh(Sftp(msg))` 回路由。
                     self.with_focused_project(|ws, io| {
                         ssh::sftp::route(
-                            ws,
+                            &mut ws.sftp_tabs,
                             io,
                             ssh::sftp::Message::ContextMenuOpen {
                                 host_id: host_id.clone(),
@@ -3605,7 +3605,7 @@ impl App {
                 {
                     self.with_focused_project(|ws, io| {
                         ssh::sftp::route(
-                            ws,
+                            &mut ws.sftp_tabs,
                             io,
                             ssh::sftp::Message::ContextMenuOpen {
                                 host_id,
@@ -3618,7 +3618,7 @@ impl App {
             }
             Message::Ssh(ssh::Message::Sftp(msg)) => {
                 self.with_focused_project(|ws, io| {
-                    ssh::sftp::route(ws, io, msg);
+                    ssh::sftp::route(&mut ws.sftp_tabs, io, msg);
                 });
             }
             // 终端连接失败:先做内核层面的清理(pending/ssh_out_pending

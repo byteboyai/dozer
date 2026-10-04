@@ -138,14 +138,14 @@ pub(crate) fn is_valid_move_target(
 /// `.interaction(Grabbing)` 负责(iced 逐帧 `mouse_interaction` →
 /// `window.set_cursor` 既有管线),这个函数只管跟着光标的"正在拖什么"
 /// 提示胶囊。挂在 `App` 顶层 view 的 `stack!` 里(同 `rail_drag_ghost`),
-/// 不是 `files::view()` 的一部分,故吃 `&App` 不是 `&WorkspaceState`。
-pub(crate) fn tree_drag_ghost(
-    app: &crate::app::App,
-) -> Element<'_, crate::app::Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let Some(ws) = app.active_workspace() else {
-        return column![].into();
-    };
-    let Some((source, is_dir)) = ws.files.tree_drag_ghost_source() else {
+/// 不是 `files::view()` 的一部分,故吃宿主视图契约 `PanelHost` + 调用方取好的拖拽源,不是 `&WorkspaceState`。
+pub(crate) fn tree_drag_ghost<'a>(
+    host: &impl crate::panel_host::PanelHost,
+    // `WorkspaceState::tree_drag_ghost_source()` 的结果,由调用方取了传进来(面板 view 不再
+    // 自己去宿主里翻"当前活动工作区")。
+    source: Option<(&std::path::Path, bool)>,
+) -> Element<'a, crate::app::Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let Some((source, is_dir)) = source else {
         return column![].into();
     };
     let name = source
@@ -182,8 +182,8 @@ pub(crate) fn tree_drag_ghost(
     // 胶囊宽度随文件名变化、渲染前量不出来,不像 `rail_drag_ghost` 能拿
     // 固定按钮边长居中——改成钉在光标右下方一个小偏移处(同真实 OS 拖拽
     // 缩略图的惯例:贴着光标而不是压在正下方,免得挡住落点判断的视线)。
-    let (cx, cy) = app.last_cursor;
-    let (window_w, window_h) = app.window_size;
+    let (cx, cy) = host.last_cursor();
+    let (window_w, window_h) = host.window_size();
     let x = (cx + 12.0).clamp(0.0, window_w);
     let y = (cy + 16.0).clamp(0.0, window_h);
 

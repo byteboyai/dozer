@@ -6,12 +6,13 @@
 //! 只验证数据链路是否走得通,不追求 curve/fork 的像素级还原:每条 track
 //! 画一根直线,commit 是线上的一个圆点,父子关系用直线连接(不是贝塞尔)。
 //! 验证通过、决定转正时,再补动画/交互/性能优化。
-use crate::app::{App, HoverId};
+use crate::app::HoverId;
 use crate::chrome::tab_widget::{
     NO_TAB_W_LIMIT, PANEL_TAB_PAD_LEFT, PANEL_TAB_PAD_X, PANEL_TAB_PAD_Y, tab_container_style,
     tab_label,
 };
 use crate::extensions::diff_content::{DiffBlobContent, blob_pair_content, open_exact_repo};
+use crate::panel_host::PanelHost;
 use crate::theme;
 use bytegit::{BlobId, ChangeKind, CommitId, Repo, StatusOptions};
 use iced_widget::core::alignment;
@@ -823,7 +824,7 @@ fn filter_commit_rows<'a>(rows: &'a [CommitRow], query: &str) -> Vec<&'a CommitR
 /// `search`。`highlight` 传 `search_active`:即使当前没聚焦,只要列表被
 /// 搜索词过滤中就持续金框提示。
 fn commit_search_box<'a>(
-    app: &App,
+    app: &impl PanelHost,
     state: &'a State,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let search_active = state.search_focused() || !state.search.is_empty();
@@ -877,7 +878,7 @@ fn ref_labels_text(refs: &[RefLabel], head_branch: Option<&str>) -> String {
 /// `snapshot.rows`(最多到 `DEFAULT_MAX_COMMITS`)一次性全画出来,大仓库
 /// 几百条 commit 一次性铺开会让这块 `scrollable` 明显变沉。
 fn commit_list_view<'a>(
-    app: &App,
+    app: &impl PanelHost,
     rows: &[&'a CommitRow],
     selected: Option<CommitId>,
     head_branch: Option<&'a str>,
@@ -1015,7 +1016,7 @@ fn commit_list_view<'a>(
 /// 实底 + 1px 边框,hover = TAB_HOVER 胶囊,静止透明)——这样分类筛选 tab 与
 /// 预览页签视觉一致;hover 动画也走统一的 `HoverId::GitFileFilter`。
 fn file_filter_tabs<'a>(
-    app: &App,
+    app: &impl PanelHost,
     detail: &CommitDetail,
     current: FileFilter,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -1074,7 +1075,7 @@ fn file_filter_tabs<'a>(
 /// 选中=金边、hover=金边+填充、一般态=描边)。`filter` 是上方分类 tab 选中的
 /// 维度,只渲染匹配的行。
 fn file_list_view<'a>(
-    app: &App,
+    app: &impl PanelHost,
     detail: &'a Result<CommitDetail, String>,
     selected_file: Option<&'a str>,
     filter: FileFilter,
@@ -1155,7 +1156,7 @@ fn file_list_view<'a>(
 /// 两条 split 比例由内核(`app.rs`)持有并传进来(与 Todo/Project 面板"内核
 /// 传 split 值进来"的既有模式一致)。
 pub fn view<'a>(
-    app: &App,
+    app: &impl PanelHost,
     state: &'a State,
     git_log_split: f32,
     git_log_file_diff_split: f32,

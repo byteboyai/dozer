@@ -199,7 +199,7 @@ impl SftpTabState {
 }
 
 /// PFTP tab 内部交互消息:每个变体都带 `host_id` 首字段——
-/// `ws.sftp_tabs` 是 `HashMap<host_id, SftpTabState>`,`route()` 靠这个
+/// `sftp_tabs` 是 `HashMap<host_id, SftpTabState>`,`route()` 靠这个
 /// 字段直接 `get_mut(&host_id)` 定位到具体 tab,不需要在多个同时打开的
 /// SFTP tab 之间"猜"消息属于哪一个。
 #[derive(Debug, Clone)]
@@ -234,16 +234,16 @@ pub enum Message {
 }
 
 /// 每个 `sftp::Message` 变体都带 `host_id`,`route()` 里每个分支都是
-/// "`ws.sftp_tabs.get_mut(&host_id)` 精确定位到具体 tab,再改字段/发
+/// "`sftp_tabs.get_mut(&host_id)` 精确定位到具体 tab,再改字段/发
 /// `SftpCmd`"这个统一模式。
 pub(crate) fn route(
-    ws: &mut crate::workspace::Workspace,
+    sftp_tabs: &mut HashMap<String, SftpTabState>,
     _io: &crate::workspace::ShellIo,
     msg: Message,
 ) {
     match msg {
         Message::Connected(host_id, result) => {
-            let Some(state) = ws.sftp_tabs.get_mut(&host_id) else {
+            let Some(state) = sftp_tabs.get_mut(&host_id) else {
                 return;
             };
             match result {
@@ -263,17 +263,17 @@ pub(crate) fn route(
             }
         }
         Message::LocalToggle(host_id, dir) => {
-            if let Some(state) = ws.sftp_tabs.get_mut(&host_id) {
+            if let Some(state) = sftp_tabs.get_mut(&host_id) {
                 state.local_tree.toggle(&dir);
             }
         }
         Message::LocalSelect(host_id, path) => {
-            if let Some(state) = ws.sftp_tabs.get_mut(&host_id) {
+            if let Some(state) = sftp_tabs.get_mut(&host_id) {
                 state.selected_local = Some(path);
             }
         }
         Message::RemoteToggle(host_id, dir) => {
-            let Some(state) = ws.sftp_tabs.get_mut(&host_id) else {
+            let Some(state) = sftp_tabs.get_mut(&host_id) else {
                 return;
             };
             if let Some(need_fetch) = state.remote_tree.toggle(&dir)
@@ -283,17 +283,17 @@ pub(crate) fn route(
             }
         }
         Message::RemoteDirLoaded(host_id, dir, result) => {
-            if let Some(state) = ws.sftp_tabs.get_mut(&host_id) {
+            if let Some(state) = sftp_tabs.get_mut(&host_id) {
                 state.remote_tree.set_children(&dir, result);
             }
         }
         Message::RemoteSelect(host_id, path) => {
-            if let Some(state) = ws.sftp_tabs.get_mut(&host_id) {
+            if let Some(state) = sftp_tabs.get_mut(&host_id) {
                 state.selected_remote = Some(path);
             }
         }
         Message::Upload(host_id) => {
-            let Some(state) = ws.sftp_tabs.get_mut(&host_id) else {
+            let Some(state) = sftp_tabs.get_mut(&host_id) else {
                 return;
             };
             let Some(local) = state.selected_local.clone() else {
@@ -310,7 +310,7 @@ pub(crate) fn route(
             state.status = Some(("正在上传…".to_string(), false));
         }
         Message::Download(host_id) => {
-            let Some(state) = ws.sftp_tabs.get_mut(&host_id) else {
+            let Some(state) = sftp_tabs.get_mut(&host_id) else {
                 return;
             };
             let Some(remote) = state.selected_remote.clone() else {
@@ -324,7 +324,7 @@ pub(crate) fn route(
             state.status = Some(("正在下载…".to_string(), false));
         }
         Message::TransferResult(host_id, result) => {
-            let Some(state) = ws.sftp_tabs.get_mut(&host_id) else {
+            let Some(state) = sftp_tabs.get_mut(&host_id) else {
                 return;
             };
             state.status = Some(match &result {
@@ -346,7 +346,7 @@ pub(crate) fn route(
             is_local,
             path,
         } => {
-            let Some(state) = ws.sftp_tabs.get_mut(&host_id) else {
+            let Some(state) = sftp_tabs.get_mut(&host_id) else {
                 return;
             };
             if is_local {
@@ -365,7 +365,7 @@ pub(crate) fn route(
             }
         }
         Message::ContextMenuClose => {
-            for state in ws.sftp_tabs.values_mut() {
+            for state in sftp_tabs.values_mut() {
                 state.context_menu = None;
             }
         }

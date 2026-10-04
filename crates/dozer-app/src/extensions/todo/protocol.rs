@@ -8,7 +8,7 @@ use super::{
     format_todo_month_day, is_active_todo, is_optimistic_id, parse_month_day, todo_display_state,
     visible_category_rows,
 };
-use crate::workspace::{Workspace, agent_icon};
+use crate::workspace::agent_icon;
 use dozer_core::protocol::{AgentKind, TodoInfo};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
@@ -135,22 +135,20 @@ pub(crate) fn agent_vms() -> Vec<AgentVm> {
         .collect()
 }
 
-/// 每张任务卡片的派生状态(需要看派发的目标 session 是否存活,所以要
-/// `Workspace` 而不只是 `WorkspaceState`)。顺序与 `ws.todo.items` 一一对应。
-pub(crate) fn derive_states(ws: &Workspace) -> Vec<TodoState> {
-    ws.todo
-        .items()
+/// 每张任务卡片的派生状态(需要看派发的目标 session 是否存活,所以除了 `WorkspaceState` 还要
+/// 一个"session 是否存活"的查询,由调用方按宿主的会话表给出——本模块不认识宿主的 `Workspace`)。
+/// 顺序与 `todo.items` 一一对应。
+pub(crate) fn derive_states(
+    todo: &WorkspaceState,
+    session_alive: &dyn Fn(&str) -> bool,
+) -> Vec<TodoState> {
+    todo.items()
         .iter()
         .map(|item| {
             let target_alive = item
                 .dispatch_session_id
-                .as_ref()
-                .map(|sid| {
-                    ws.tabs
-                        .iter()
-                        .chain(ws.ssh_tabs.iter())
-                        .any(|t| t.alive && t.info.id == *sid)
-                })
+                .as_deref()
+                .map(session_alive)
                 .unwrap_or(false);
             todo_display_state(item, target_alive)
         })
@@ -158,11 +156,18 @@ pub(crate) fn derive_states(ws: &Workspace) -> Vec<TodoState> {
 }
 
 pub(crate) fn current_view_payload(
-    ws: &Workspace,
+    todo: &WorkspaceState,
+    session_alive: &dyn Fn(&str) -> bool,
     project_id: i64,
     today: (i32, u32, u32),
 ) -> TodoViewPayload {
-    build_payload(&ws.todo, &derive_states(ws), project_id, today, agent_vms())
+    build_payload(
+        todo,
+        &derive_states(todo, session_alive),
+        project_id,
+        today,
+        agent_vms(),
+    )
 }
 
 /// 纯函数,便于不构造 `Workspace` 地测试。`states` 与 `todo.items` 等长。

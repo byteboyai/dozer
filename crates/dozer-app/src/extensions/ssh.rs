@@ -4,7 +4,8 @@
 //! SSH 终端(阶段 2)/SFTP(阶段 3)留后续,见
 //! `docs/superpowers/specs/2026-08-08-ssh-panel-phase1-design.md`。
 
-use crate::app::{App, HoverId, ssh_tab_hover_key};
+use crate::app::{HoverId, ssh_tab_hover_key};
+use crate::panel_host::PanelHost;
 use byteui::interaction::icons;
 use iced_widget::core::Element;
 use iced_widget::core::Length;
@@ -1356,7 +1357,7 @@ pub fn ssh_host_card<'a>(
 }
 
 pub fn view<'a>(
-    app: &App,
+    app: &impl PanelHost,
     ws_state: &'a WorkspaceState,
     width: iced_widget::core::Length,
     outer: iced_widget::core::Border,

@@ -357,10 +357,17 @@ impl App {
                 .height(Length::Fill)
                 .into()
         } else if self.tree_drag_confirmed() {
-            stack![with_maximize, files::tree_drag_ghost(self)]
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
+            stack![
+                with_maximize,
+                files::tree_drag_ghost(
+                    self,
+                    self.active_workspace()
+                        .and_then(|ws| ws.files.tree_drag_ghost_source()),
+                )
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
         } else {
             with_maximize
         }
@@ -608,6 +615,7 @@ pub(crate) fn panel_body<'a>(
                 return todo::view(
                     app,
                     &ws.todo,
+                    app.todo_webview.failed(),
                     Length::Fixed(0.0),
                     Border::default(),
                     Length::Fill,
@@ -620,6 +628,7 @@ pub(crate) fn panel_body<'a>(
             let (sidebar_pane, content_pane) = todo::view(
                 app,
                 &ws.todo,
+                app.todo_webview.failed(),
                 Length::FillPortion(list_portion),
                 zone_pane_border(zone, lc),
                 Length::FillPortion(content_portion),

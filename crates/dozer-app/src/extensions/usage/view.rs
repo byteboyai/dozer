@@ -8,9 +8,10 @@ use iced_widget::core::{Border, Color, Element, Length};
 use iced_widget::{button, column, container, text};
 
 use super::*;
+use crate::panel_host::PanelHost;
 
 pub fn content_pane<'a>(
-    app: &crate::app::App,
+    app: &impl PanelHost,
     ws_state: &'a WorkspaceState,
     width: Length,
     outer: Border,
