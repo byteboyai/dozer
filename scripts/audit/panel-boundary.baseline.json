@@ -2,8 +2,14 @@
  "app/layout.rs": {
   "R-PANE-PICK": 1
  },
+ "app/state.rs": {
+  "R-HOVERID-VARIANTS": 12
+ },
  "app/update.rs": {
   "R-PANE-PICK": 1
+ },
+ "panel_host.rs": {
+  "R-HOVERSLOT-VARIANTS": 9
  },
  "platform/window_events.rs": {
   "R-PANE-PICK": 3

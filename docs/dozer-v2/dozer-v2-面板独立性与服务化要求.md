@@ -164,3 +164,5 @@ Host（窗口 / 布局 / 焦点 / 浮层 / 主题 / 面板 Registry）
 5. **bytehost H0 已完成（2026-10-03）：** 产出 `scripts/audit/`（依赖边提取器、五种报表、面板边界棘轮门禁，基线 22 处 `App`/`Workspace` 使用 / 9 个文件）与 `docs/dozer-v2/bytehost-H0/`（汇总 `00-summary.md`、E3 登记清单 38 条）。Q7/Q8/Q13 状态已回填；H0 新发现 `HoverId` 是 `PanelKind` 之外第二处点名面板的 host 枚举（62 变体、188 处使用）。
 
 6. **bytehost H1 已完成（2026-10-04）：** `Workspace::preview_pane[_mut]` 收口 75 处预览窗格选择；`PanelHost` 契约落地，面板代码不再引用 `App`/`Workspace`（门禁基线 22 → 0）；`HoverId` 命名空间化、`window_events.rs` 面板事件声明化留给后续切片。
+
+7. **bytehost H2 已完成（2026-10-04）：** 宿主 `HoverId` 不再点名面板按钮（51 个变体 → `HoverId::Panel(PanelKind, HoverSlot)`），门禁新增变体数棘轮；`PanelKind` 注册制、`window_events.rs` 面板事件声明化留给后续切片。

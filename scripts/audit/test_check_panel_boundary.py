@@ -43,6 +43,19 @@ class PanePick(unittest.TestCase):
         self.assertEqual(self.scan1("chrome/rail.rs", 'PanelKind::Project => (icon, "项目"),'), {})
     def test_comments_do_not_count(self):
         self.assertEqual(self.scan1("a.rs", "// if kind == PanelKind::Project {"), {})
+class EnumVariants(unittest.TestCase):
+    """R-HOVERID-VARIANTS / R-HOVERSLOT-VARIANTS:宿主的 HoverId 与通用槽位词汇 HoverSlot 的变体数只许减不许增
+    (H2:面板按钮不得再写回 host 枚举;要新增悬停元素先用 `HoverId::named(panel, ..)`)。"""
+    ENUM = "pub enum HoverId {\n    /// doc\n    Topbar(TopbarButton),\n    Rail(R),\n    HomeTab,\n    // c\n    Panel(PanelKind, HoverSlot),\n}\n"
+    def test_counts_variants_not_docs_or_comments(self):
+        got = g.scan({"app/state.rs": self.ENUM}).get("app/state.rs", {})
+        self.assertEqual(got, {"R-HOVERID-VARIANTS": 4})
+    def test_slot_enum_counted_in_panel_host(self):
+        text = "pub enum HoverSlot {\n    ListCollapse,\n    TabItem(u64),\n    Named(&'static str),\n}\n"
+        got = g.scan({"panel_host.rs": text}).get("panel_host.rs", {})
+        self.assertEqual(got, {"R-HOVERSLOT-VARIANTS": 3})
+    def test_other_files_ignore_same_named_enums(self):
+        self.assertEqual(g.scan({"extensions/x.rs": self.ENUM}).get("extensions/x.rs", {}), {})
 class Compare(unittest.TestCase):
     def test_decrease_and_equal_pass(self):
         base = {"extensions/a.rs": {"R-APP": 3}}
