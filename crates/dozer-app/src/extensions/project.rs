@@ -1370,4 +1370,19 @@ mod tests {
         assert_eq!(ws.error.as_deref(), Some("读取记忆失败: 连接被拒"));
         assert!(ws.memory_detail.is_none(), "读取失败不应留下半截详情");
     }
+
+    // ---- H6:切入钩子 ----
+
+    use crate::panel_host::testing::{TIMEOUT, offline_ctx, runtime};
+
+    #[test]
+    fn on_activate_requests_the_shared_memories() {
+        let rt = runtime();
+        let (ctx, rx) = offline_ctx::<Message>(&rt, 7, None);
+        on_activate(&ctx);
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::MemoriesLoaded(_)
+        ));
+    }
 }

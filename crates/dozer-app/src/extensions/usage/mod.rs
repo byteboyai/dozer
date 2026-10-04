@@ -106,7 +106,7 @@ impl WebviewPushState {
 
 /// 对应现在顶层 `Message` 里的 `UsageLoaded` 变体,去前缀原样搬来。
 /// `Refresh`/`Hover` 随手动刷新按钮一起移除——进入面板时由
-/// `Workspace::spawn_usage_refresh` 自动刷新,不再需要面板内按钮。
+/// `usage::on_activate` 自动刷新,不再需要面板内按钮。
 #[derive(Debug, Clone)]
 pub enum Message {
     /// 第三字段是项目 git 提交总数(供"Git提交"格),第四字段是每日提交计数
@@ -150,8 +150,7 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
 
 /// 异步扫描项目全部 agent transcript 并逐个解析用量。内核在
 /// `PanelSelect(PanelKind::Usage)` 分支(切到面板时自动刷新)调用,
-/// 经 `Workspace::spawn_usage_refresh` 转发。现有
-/// `Workspace::spawn_usage_refresh` 的搬家版本,逻辑不变(读失败的会话
+/// 经 `usage::on_activate` 转发。逻辑不变(读失败的会话
 /// 整条跳过、不计入汇总)。
 pub fn spawn_refresh(
     project_id: i64,
@@ -191,6 +190,27 @@ pub fn spawn_refresh(
             git_commits_by_day,
         ));
     });
+}
+
+/// 面板切入:先置"统计中",有项目就发起一次用量统计(没有项目时只置 loading——迁移前的行为)。
+pub fn on_activate(
+    state: &mut WorkspaceState,
+    ctx: Option<&crate::panel_host::ActivationCtx<Message>>,
+) {
+    state.set_loading(true);
+    let Some(ctx) = ctx else {
+        return;
+    };
+    let Some(path) = ctx.project_path.clone() else {
+        return;
+    };
+    spawn_refresh(
+        ctx.project_id,
+        path,
+        ctx.io.client(),
+        ctx.io.handle(),
+        ctx.io.emitter(),
+    );
 }
 
 /// 统计项目仓库 HEAD 可达的提交总数(当前分支口径,同 git_log 面板的
@@ -935,5 +955,29 @@ mod tests {
             count_git_commits_by_day(dir.path()),
             BTreeMap::from([(20_000, 2), (20_001, 1)])
         );
+    }
+
+    // ---- H6:切入钩子 ----
+
+    use crate::panel_host::testing::{TIMEOUT, offline_ctx, runtime};
+
+    #[test]
+    fn on_activate_marks_loading_and_requests_a_refresh_for_that_project() {
+        let rt = runtime();
+        let (ctx, rx) = offline_ctx::<Message>(&rt, 7, Some(std::env::temp_dir()));
+        let mut state = WorkspaceState::default();
+        on_activate(&mut state, Some(&ctx));
+        assert!(state.loading());
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::Loaded(7, ..)
+        ));
+    }
+
+    #[test]
+    fn on_activate_without_a_project_still_marks_loading_but_requests_nothing() {
+        let mut state = WorkspaceState::default();
+        on_activate(&mut state, None);
+        assert!(state.loading(), "迁移前的行为:先置 loading,再看有没有项目");
     }
 }

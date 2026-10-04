@@ -1,5 +1,5 @@
 id	位置	类别	对象	原因	移除条件
-E3-001	app/update.rs:5152-5215 fire_panel_switch_in	panel-special-case	Todo, Database, Project, Ssh, Usage, CodeHealth, Conversations, GitLog, GroupChat	host 对 9 个面板各写一段『切入时刷新』	面板注册钩子 on_activate 后删除该 match(01-panelkind B4)
+E3-001	app/update.rs:5152-5215 fire_panel_switch_in	panel-special-case	Todo, Database, Project, Ssh, Usage, CodeHealth, Conversations, GitLog, GroupChat	H6 已把 Todo/Project 记忆/Usage/CodeHealth/Conversations/GroupChat 六个分支的切入动作迁进各面板的 on_activate;fire_panel_switch_in 仍是按 PanelKind 的 match(GitLog、Project 的 README 展开、Database、Ssh 四处仍在 host)	注册制(H7)后改成遍历 registry 调用面板钩子;GitLog 的 App 级状态与 README 展开随之评估
 E3-002	app/app.rs:3419-3544	panel-special-case	GitLog, Usage, CodeHealth, Todo, GroupChat	host 为每个面板各写一段 webview 期望几何	面板注册钩子 desired_webviews 后删除(01-panelkind B4)
 E3-003	webview_geometry.rs:75-269 两个穷举 match	panel-special-case	Files, Web, Project, Conversations(其余 8 个臂为 0 几何)	预览列几何按面板穷举	面板声明是否需要预览列;几何计算留 host Surface 机制(01-panelkind B3)
 E3-004	全库 114 行 kind == PanelKind::Project 窗格选择(workspace/state.rs 35、app/update.rs 33、app/app.rs 14、workspace/view.rs 11 等)	panel-special-case	Project, Files	约 82 处中 75 处已收口为 `preview_pane[_mut]`;剩余按字段保留 1 处(借用冲突)与 Preview 内部的 webview id/URL 编码(见 E3-005)	先收口为 preview_pane(kind)(01-panelkind B0);随 Preview 留产品层,不进 host

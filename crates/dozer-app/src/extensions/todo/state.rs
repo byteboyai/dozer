@@ -668,3 +668,15 @@ pub fn request_categories_refresh(
         emit(Message::CategoriesLoaded(categories));
     });
 }
+
+/// 面板切入:刷新任务列表与分类树(两个请求各回一条消息)。
+pub fn on_activate(ctx: &crate::panel_host::ActivationCtx<Message>) {
+    let emit = ctx.io.emitter();
+    request_todos_refresh(
+        ctx.project_id,
+        ctx.io.client(),
+        ctx.io.handle(),
+        emit.clone(),
+    );
+    request_categories_refresh(ctx.project_id, ctx.io.client(), ctx.io.handle(), emit);
+}

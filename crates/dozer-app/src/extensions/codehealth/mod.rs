@@ -354,4 +354,35 @@ mod tests {
         });
         assert!(result.is_err(), "ContentRetry 必须由内核拦截");
     }
+
+    // ---- H6:切入钩子 ----
+
+    use crate::panel_host::testing::{TIMEOUT, offline_ctx, runtime};
+
+    #[test]
+    fn on_activate_only_loads_the_cached_report_and_never_starts_a_scan() {
+        let rt = runtime();
+        let (ctx, rx) = offline_ctx::<Message>(&rt, 7, Some(std::env::temp_dir()));
+        on_activate(&ctx);
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::Loaded(7, _)
+        ));
+        // 切入不自动扫描(spec:手动触发):缓存加载之后不应再有任何消息
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(300))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn on_activate_without_a_project_path_does_nothing() {
+        let rt = runtime();
+        let (ctx, rx) = offline_ctx::<Message>(&rt, 7, None);
+        on_activate(&ctx);
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(200))
+                .is_err()
+        );
+    }
 }
