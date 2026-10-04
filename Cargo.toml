@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "spike/*"]
+# origin-gateway 是 bytehost 应用宿主的一次性 origin 验证(自带 [workspace],不进主锁文件)
+exclude = ["spike/origin-gateway"]
 
 [workspace.package]
 edition = "2024"
