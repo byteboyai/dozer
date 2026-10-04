@@ -1167,7 +1167,7 @@ cd ~/Projects/CoralProjects/byteboy/dozer-bytehost-a0 && export PYTHONDONTWRITEB
 SP=$SCRATCH/a0 python3 $SCRATCH/a0_skeleton.py
 cargo test -p bytehost-apps --all-features --no-run 2>&1 | grep -E "^error" | sort | uniq -c | head
 ```
-Expected: 脚本输出 `ok`;编译失败,报错包含 `cannot find type AppId`、`cannot find type Manifest`、`cannot find function digest_tree`、`cannot find function next_action`、`cannot find type Registry` 之类(RED——测试引用的类型都还不存在)。
+Expected: 脚本输出 `ok`;编译失败(`could not compile bytehost-apps (lib test)`),报错是 `unresolved import`(如 `Action`、`crate::id::Version`、`crate::permissions::Access`)与 `cannot find …` 一类(RED——测试引用的类型和函数都还不存在)。
 
 - [ ] **Step 4: 写实现源文件**
 
