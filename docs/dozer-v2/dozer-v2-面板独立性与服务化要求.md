@@ -166,3 +166,5 @@ Host（窗口 / 布局 / 焦点 / 浮层 / 主题 / 面板 Registry）
 6. **bytehost H1 已完成（2026-10-04）：** `Workspace::preview_pane[_mut]` 收口 75 处预览窗格选择；`PanelHost` 契约落地，面板代码不再引用 `App`/`Workspace`（门禁基线 22 → 0）；`HoverId` 命名空间化、`window_events.rs` 面板事件声明化留给后续切片。
 
 7. **bytehost H2 已完成（2026-10-04）：** 宿主 `HoverId` 不再点名面板按钮（51 个变体 → `HoverId::Panel(PanelKind, HoverSlot)`），门禁新增变体数棘轮；`PanelKind` 注册制、`window_events.rs` 面板事件声明化留给后续切片。
+
+8. **bytehost H3 已完成（2026-10-04）：** 宿主布局里按面板展开的重复收口——`PanelDims` 访问器替换 4 处 12 臂 match，`apply_column_drag` 的 10 条面板分隔线分支合并为一个函数（230 个用例的特征化测试钉住行为）；`PanelDims` 字段与落盘格式未动，`PanelKind` 注册制（B1）与面板钩子（B4）留给后续切片。

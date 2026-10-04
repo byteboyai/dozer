@@ -95,8 +95,8 @@ let pane = if kind == PanelKind::Project { &mut ws.project_preview } else { &mut
 |---|---|---|---|
 | B0 | **`preview_pane(kind)` 收口**:消掉约 82 处 Project/Files 窗格选择(留产品层的纯机械重构) | 约 82 行(114 行口径的子集)/ 13 个文件 | 无 | **已完成(H1):75 处机械重写 + 4 个访问器 + 4 处手工编辑;剩余 7 处是合理写法(见基线)** |
 | B1 | **类型传递**:`PanelKind` 换成注册 id 类型(`app/message.rs` 45 个变体、`preview/resources.rs`、面板里的 `kind` 字段),保持 serde 兼容 | 约 210 行(仅类型) | O5 |
-| B2 | **元数据表**:`panel_meta`、`default_side`、按面板的 `*_list_collapsed`/`*_split` 字段变成按 id 取的表,消掉 `app/layout.rs` 的 12 臂 `match` 与 10 段重复布局 | `app/layout.rs` 60、`chrome/rail.rs` 92、`app/update.rs` 约 20 | B1;O5 |
-| B3 | **遍历**:`webview_geometry.rs`、`app/layout.rs:681-990` 的"每面板一段"改成对注册表的 for | 约 150 行 | B2 |
+| B2 | **元数据表**:`panel_meta`、`default_side`、按面板的 `*_list_collapsed`/`*_split` 字段变成按 id 取的表,消掉 `app/layout.rs` 的 12 臂 `match` 与 10 段重复布局 | `app/layout.rs` 60、`chrome/rail.rs` 92、`app/update.rs` 约 20 | B1;O5 **部分完成(H3):** `PanelDims` 的 4 处 12 臂 `match`(`pair_split_ratio`/`with_pair_split_ratio`/`App::list_collapsed`/`toggle_panel_list_collapse`)走 `PanelDims::{split,split_mut,collapsed,collapsed_mut}`;`apply_column_drag` 里 10 条面板分隔线分支合并为 `apply_pair_split_drag`(约 494 → 约 230 行,含访问器);`panel_meta`、`fire_panel_switch_in`、`webview_geometry.rs` 的穷举 match 仍在(需面板钩子)。 |
+| B3 | **遍历**:`webview_geometry.rs`、`app/layout.rs:681-990` 的"每面板一段"改成对注册表的 for | 约 150 行 | B2 **部分完成(H3):** `PanelDims` 的 4 处 12 臂 `match`(`pair_split_ratio`/`with_pair_split_ratio`/`App::list_collapsed`/`toggle_panel_list_collapse`)走 `PanelDims::{split,split_mut,collapsed,collapsed_mut}`;`apply_column_drag` 里 10 条面板分隔线分支合并为 `apply_pair_split_drag`(约 494 → 约 230 行,含访问器);`panel_meta`、`fire_panel_switch_in`、`webview_geometry.rs` 的穷举 match 仍在(需面板钩子)。 |
 | B4 | **特判变钩子**:`fire_panel_switch_in`(S1)、`desired_webviews`(S2) | 约 90 行 | B3;面板接口设计 |
 | B5 | 剩余特判(S6–S9) | — | O1、O6 |
 

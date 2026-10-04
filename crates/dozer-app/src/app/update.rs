@@ -5271,15 +5271,8 @@ impl App {
     /// 渲染、内容拿满配对宽度,split 比例保留(展开时按原宽度恢复)。
     pub(crate) fn list_collapsed(&self, kind: PanelKind) -> bool {
         match kind {
-            PanelKind::Project => self.dims.project_list_collapsed,
-            PanelKind::Todo => self.dims.todo_list_collapsed,
-            PanelKind::Database => self.dims.database_list_collapsed,
-            PanelKind::Ssh => self.dims.ssh_list_collapsed,
-            PanelKind::Agent => self.dims.agent_list_collapsed,
-            PanelKind::Conversations => self.dims.conversations_list_collapsed,
-            PanelKind::GroupChat => self.dims.group_chat_list_collapsed,
-            PanelKind::Usage => self.dims.usage_list_collapsed,
-            _ => false,
+            PanelKind::Files => false,
+            _ => self.dims.collapsed(kind).unwrap_or(false),
         }
     }
 
@@ -5288,16 +5281,11 @@ impl App {
     /// 放大态 + 落盘/重算网格。非两栏面板(`Files` 走独立的
     /// `files_tree_collapsed`,其余单/两栏面板无此能力)直接忽略。
     pub(crate) fn toggle_panel_list_collapse(&mut self, kind: PanelKind) {
-        let flag = match kind {
-            PanelKind::Project => &mut self.dims.project_list_collapsed,
-            PanelKind::Todo => &mut self.dims.todo_list_collapsed,
-            PanelKind::Database => &mut self.dims.database_list_collapsed,
-            PanelKind::Ssh => &mut self.dims.ssh_list_collapsed,
-            PanelKind::Agent => &mut self.dims.agent_list_collapsed,
-            PanelKind::Conversations => &mut self.dims.conversations_list_collapsed,
-            PanelKind::GroupChat => &mut self.dims.group_chat_list_collapsed,
-            PanelKind::Usage => &mut self.dims.usage_list_collapsed,
-            _ => return,
+        if kind == PanelKind::Files {
+            return;
+        }
+        let Some(flag) = self.dims.collapsed_mut(kind) else {
+            return;
         };
         *flag = !*flag;
         self.maximized = None;
