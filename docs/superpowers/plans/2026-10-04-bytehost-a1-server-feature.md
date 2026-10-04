@@ -3426,3 +3426,18 @@ Expected: 只有 `docs/` 下 2 个文件与 `CLAUDE.md`。
 **3. 一致性:** `Gateway`/`GatewayConfig`/`csp_for`/`AppManager`/`AppSource`/`AppSummary`/`ManagerError`/`pick_port`/`load_or_choose_port`/`enforcement_for`/`RuntimeAvailability`/`CommandRunner` 的名字与形状在测试、实现、Interfaces、文档里一致。`install` 接收 `now_ms` 而不是自己读时钟——单测可控,时间由调用方(dozerd)提供。
 
 **4. Review Focus:** 9 条各有归属(1→测试+变异 12;2→事件无令牌的断言;3、4→说明与 A5;5→测试+变异 9;6、7→A2 注意事项;8→探测测试;9→范围说明)。
+
+---
+
+## 执行后修订(评审修复轮,2026-10-04)
+
+独立评审(opus)对执行出的 crate 提出 5 条 Important,全部成立,在同一轮里修掉(每条先写失败测试,旧实现 + 新测试逐个失败后再修;测试数 118 → **126**):
+
+1. **`SystemRunner` 只在子进程退出后才读管道**——输出超过 64KB 的命令会写满管道、永远不退出,被误报成 `Timeout`;命令退出后若有后台孙进程还攥着管道,`read_to_string` 会一直阻塞、超时形同虚设。现在读线程从启动起持续读走输出,命令退出后只再等 500ms 宽限期、用已读到的输出返回;超时仍杀子进程。
+2. **落位(rename)之后的失败没有撤回,残骸还会挡住重试,而且"旧版本仍然完整"的注释是错的。** 现在落位之后任何一步失败都会撤回刚落位的包;"有包目录、没有版本记录"的残骸在下次安装时被清掉(只有 `versions` 里已记录的版本才算 `AlreadyInstalled`);并且不再另存共享的应用级 `manifest.toml`,启动/列表都从**当前版本的包**里读清单(升级中途失败不会让新清单套在旧包上)。
+3. **`static_web` 的出站网络从 `Enforced` 降为 `Advisory`。** CSP 挡得住 fetch/XHR/子资源,挡不住顶层导航、`window.open` 与 WebRTC——在 A4 的 WebView 导航策略落地之前不能标 `Enforced`(已写进规格 A4 行作为前置要求)。CSP 另加 `object-src 'none'; frame-ancestors 'self'`。
+4. **固定端口范围从 49152–65000 改为 20000–32767**(低于 macOS 与 Linux 的临时端口段,否则 dozerd 停着时别的程序会占走它)。"首次绑定成功后才持久化 / 首次运行可重选"留给 A2 的 dozerd 流程。
+5. **gateway 没有连接层限制**:现在 `Limits { header_read_timeout: 10s, max_connections: 128 }`(`Gateway::start_with_limits`,`start` 用默认值),每个应答后关闭连接(`keep_alive(false)`),超出上限的连接立即丢弃;网页让浏览器对 `rN.localhost:端口` 开大量连接已不能耗尽 dozerd 的文件描述符。
+
+**推迟的 Minor(12 条)** 与两条裁决见账本;值得 A2 前后处理的:`//` 路径配合有效令牌会让 `Location` 变成协议相对地址;令牌是整个进程一把且可重复使用(文档里写的"一次性"不准确,可改成每应用派生的 Cookie 值);`AppManager` 做阻塞 I/O 且持有 `std::sync::Mutex`,A2 必须经 `spawn_blocking` 调用;`apps/.staging-*` 崩溃残留没有清扫。
+
