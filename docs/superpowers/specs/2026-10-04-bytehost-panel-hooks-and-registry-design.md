@@ -62,13 +62,15 @@ impl<M: Send + 'static> PanelIo<M> {
 - 默认栏位/顺序 = 组合根给的 `DefaultLayout`；`RailLayout` 的"恰 12 个不重复"校验改成"恰等于组合根清单"；`migrate_legacy_rail` 这类按枚举写死的迁移要改成按清单。
 - 每面板展开的状态（`Workspace` 的 14 个面板字段、`Message` 的 20 个包装变体、`PanelDims` 的字段）**第一阶段不动**：注册制先只替换"类型传递/元数据/遍历"（H0 `01-panelkind.md` B1–B3），状态与消息信封的动态化是最后一步（§4 H8），收益与风险都最大，等前面验证再定。
 
+
+(H6 实现取舍:钩子签名是 `on_activate(ctx: &ActivationCtx<Message>)`,有状态要改的面板再加 `&mut WorkspaceState`;`ActivationCtx { project_id, project_path: Option<PathBuf>, io: PanelIo<M> }`。host 的 `fire_panel_switch_in` 仍是一个按 `PanelKind` 的 `match`——它到 H7 注册制落地才会变成遍历 registry;H6 只把每个分支的**逻辑**搬进面板、让它们可单测。)
 ## 4. 迁移顺序（每一步单独可合并、行为不变）
 
 | 步 | 内容 | 依赖 | 体量（估） |
 |---|---|---|---|
 | **H4** | 引入 `PanelIo<M>`；把 `group_chat` 的 Effect 执行器与 `Command` 的异步分支搬进 `group_chat`（删 `run_group_chat_effects` 与 `group_chat_command` 的 spawn 分支）；`PanelIo` 带测试构造函数，给 `group_chat` 补 effect 单测 | 无 | 约 −60 行 host、+80 行（`PanelIo` + 测试） **已完成(H4,`bytehost-h4`):`778df4de`** |
 | **H5** | `HostEffect` 最小词汇（`ShowPanel`、`Emit`、`PickDirectory`）+ 执行器；迁 `window_events.rs` 的 rfd 对话框拦截（E3-011）与 `Files::OpenSearch`/`FileHistoryOpen` 这类跨面板消息臂 | H4 | 约 −300 行 host **部分完成(H5a,`bytehost-h5`):`ee7a2803`**——3 个选目录对话框(project_create 两处 + Files 的移动到目录)与 Files 的搜索/查看历史两条跨面板臂;`PanelCommand` 目前只有 `SearchIn`/`ShowFileHistory`;余下见 E3-010/E3-011 |
-| **H6** | 切入钩子：`on_activate` 取代 `fire_panel_switch_in`（9 个臂） | H4、H5 | 约 −70 行 host |
+| **H6** | 切入钩子：`on_activate` 取代 `fire_panel_switch_in`（9 个臂） | H4、H5 | 约 −70 行 host **部分完成(H6,`bytehost-h6`):`80a499c3`**——6 个面板的切入钩子(Todo、Project 记忆刷新、Usage、CodeHealth、Conversations、GroupChat)迁入面板模块并补测;GitLog(host 的 `App.git_log` 状态)、Project 的 README 展开(host 预览动作)、Database/Ssh(只是一行 `reload_from_disk`)留在 host |
 | **H7** | `PanelId` 类型 + `PanelDescriptor`/registry + 组合根给默认栏位（B1/B2 的剩余部分，O5 已定）；布局校验按清单；serde 兼容测试 | H6 | 大（`PanelKind` 约 970 行引用里的类型传递部分，机械） |
 | **H8** | 状态与消息信封动态化（`Workspace` 面板字段、`Message` 包装）——**仅在 H7 后评估是否做** | H7 | 很大，单独立项 |
 
