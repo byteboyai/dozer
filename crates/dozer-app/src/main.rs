@@ -15,9 +15,11 @@ mod open_projects;
 mod osc;
 mod panel_host;
 mod panel_layouts;
+mod panel_registry;
 mod platform;
 mod preview;
 mod preview_state;
+mod product;
 mod project;
 mod project_meta;
 mod runtime;
@@ -41,6 +43,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
     // Guard 必须活到进程结束——`main` 在事件循环返回后才退出,绑在函数体顶部即可。
     let _log_guard =
         dozer_core::log::init(dozer_core::log::Component::App, env!("CARGO_PKG_VERSION"));
+
+    // 产品组合根:先装面板清单,之后任何布局读取/校验都以它为准。
+    panel_registry::install(product::dozer_catalog()).expect("面板清单只注册一次");
 
     // 第一次文本排版之前：先注册内嵌的 JetBrains Mono（代码/终端字体），
     // 再剔除毒化 CJK 回退的位图字体（见 fonts.rs 模块注释）。顺序很重要——
