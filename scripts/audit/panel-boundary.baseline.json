@@ -3,7 +3,7 @@
   "R-HOVERID-VARIANTS": 12
  },
  "app/update.rs": {
-  "R-HOST-PANEL-ARMS": 97,
+  "R-HOST-PANEL-ARMS": 95,
   "R-PANE-PICK": 1
  },
  "panel_host.rs": {

@@ -49,6 +49,8 @@ impl<M: Send + 'static> PanelIo<M> {
 - **面板专属 Effect（类型化，留在面板模块里）：** 面板的 `update` 返回自己的 `enum Effect`（如 `group_chat::Effect::FetchMessages{..}`），保持纯函数、可断言。**执行器是面板模块里的 `run_effect(effect, project_id, &PanelIo<Message>)`**，host 不再认识这些变体（删掉 `run_group_chat_effects` 这类代码）。
 - **host 通用 Effect（词汇固定、host 自己执行）：** 面板需要 host 才有的能力时用 `HostEffect`——`ShowPanel(PanelId)`、`PickDirectory{ start, on_done }`/`PickFile`（系统对话框，现在 `window_events.rs` 为面板代拦 `rfd`）、`OpenExternal(path)`、`Emit(宿主消息)`（跨面板消息，如 Files 的 `OpenSearch` 变成 `search::Message::SearchOpen`）、`Toast(…)`（现有 `Outbox` 并入）。词汇小而稳，按真实需求增加。
 
+(H5 实现取舍:需求经面板 state 里的 `HostOutbox` 返回,而不是 `update` 的返回值——沿用 `toast::Outbox` 的现有模式,各面板 `update` 的签名不变;本刀词汇只落地 `PickDirectory` 与 `Command(PanelCommand)`,`ShowPanel` 等有使用者时再加。)
+
 ### 3.3 切入钩子
 
 `fire_panel_switch_in`（9 个面板各一段"切入时刷新"）变成面板的 `on_activate(&mut PanelState, ActivationCtx) -> Vec<Effect>`；`ActivationCtx` 只带只读的 `project_id`/项目路径。host 对所有面板调用同一个入口，不再 `match`。
@@ -65,7 +67,7 @@ impl<M: Send + 'static> PanelIo<M> {
 | 步 | 内容 | 依赖 | 体量（估） |
 |---|---|---|---|
 | **H4** | 引入 `PanelIo<M>`；把 `group_chat` 的 Effect 执行器与 `Command` 的异步分支搬进 `group_chat`（删 `run_group_chat_effects` 与 `group_chat_command` 的 spawn 分支）；`PanelIo` 带测试构造函数，给 `group_chat` 补 effect 单测 | 无 | 约 −60 行 host、+80 行（`PanelIo` + 测试） **已完成(H4,`bytehost-h4`):`778df4de`** |
-| **H5** | `HostEffect` 最小词汇（`ShowPanel`、`Emit`、`PickDirectory`）+ 执行器；迁 `window_events.rs` 的 rfd 对话框拦截（E3-011）与 `Files::OpenSearch`/`FileHistoryOpen` 这类跨面板消息臂 | H4 | 约 −300 行 host |
+| **H5** | `HostEffect` 最小词汇（`ShowPanel`、`Emit`、`PickDirectory`）+ 执行器；迁 `window_events.rs` 的 rfd 对话框拦截（E3-011）与 `Files::OpenSearch`/`FileHistoryOpen` 这类跨面板消息臂 | H4 | 约 −300 行 host **部分完成(H5a,`bytehost-h5`):`ee7a2803`**——3 个选目录对话框(project_create 两处 + Files 的移动到目录)与 Files 的搜索/查看历史两条跨面板臂;`PanelCommand` 目前只有 `SearchIn`/`ShowFileHistory`;余下见 E3-010/E3-011 |
 | **H6** | 切入钩子：`on_activate` 取代 `fire_panel_switch_in`（9 个臂） | H4、H5 | 约 −70 行 host |
 | **H7** | `PanelId` 类型 + `PanelDescriptor`/registry + 组合根给默认栏位（B1/B2 的剩余部分，O5 已定）；布局校验按清单；serde 兼容测试 | H6 | 大（`PanelKind` 约 970 行引用里的类型传递部分，机械） |
 | **H8** | 状态与消息信封动态化（`Workspace` 面板字段、`Message` 包装）——**仅在 H7 后评估是否做** | H7 | 很大，单独立项 |
