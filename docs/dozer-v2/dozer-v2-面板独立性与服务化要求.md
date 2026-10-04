@@ -66,7 +66,7 @@
 
 ### 4.3 Host 对面板的硬编码：数量大
 
-- `PanelKind` 是封闭枚举（11 个变体：Files、GitLog、Todo、Project、Database、Ssh、Web、Agent、Conversations、Usage、CodeHealth），默认左右栏归属也写死在 `default_side()` 里。`PanelKind` 在 src 内约 887 处引用，分布在 `workspace`、`preview`、`platform`、`term`、`panel_layouts`、`webview_geometry` 等约 25 个文件。
+- `PanelKind` 是封闭枚举（11 个变体：Files、GitLog、Todo、Project、Database、Ssh、Web、Agent、Conversations、Usage、CodeHealth），默认左右栏归属也写死在 `default_side()` 里。`PanelKind` 在 src 内约 887 处引用，分布在 `workspace`、`preview`、`platform`、`term`、`panel_layouts`、`webview_geometry` 等约 25 个文件。**【2026-10-03 H0 实测订正：12 个变体（多 `GroupChat`），973 处引用，31 个文件；其中约 82 行是 Project/Files 预览窗格二选一。见 `bytehost-H0/01-panelkind.md`。】**
 - host 侧（`app/`、`workspace/`、`chrome/`、`platform/`、`preview/`）对 18 个 extension 模块有直接引用：files 35、project 27、todo 26、browser 20、database 19、agent_context 18、project_create/git_log 各 15、usage/ssh/search/conversations 各 14、toast 13、codehealth 11、edit_history 10、footbar 7、file_history 7、settings 6。
 - `app/` 目录合计约 1.7 万行，是 host 的主要体量。
 
@@ -136,15 +136,15 @@ Host（窗口 / 布局 / 焦点 / 浮层 / 主题 / 面板 Registry）
 | Q4 | Git 服务放哪 | 已定性为底层（§2.5）；**具体承载（独立 crate / 独立仓库 / 并入 `dozerd`）待定**，见 Q14 | 部分已决 |
 | Q5 | 面板调用 Host 服务的权限 | 本地可信程序，第一阶段不做面板级权限 | 暂缓 |
 | Q6 | 事件总线上，订阅的面板缺席/Host 服务不可用时的降级约定（例：Usage 没有 Conversation 数据） | 需统一约定而非各面板自定 | 待设计 |
-| Q7 | `conversation`/`delivery`/`project` 三个共享模块的归属：本质都是"Host 服务"候选 | §4.4，**未审计其内部**，不知道哪些是纯数据哪些带 UI | 待审计 |
-| Q8 | `PanelKind` → 注册制：887 处引用怎么分批 | 先分类："遍历全部面板" vs "特判某个面板" vs "仅类型传递" | 待审计 |
+| Q7 | `conversation`/`delivery`/`project` 三个共享模块的归属：本质都是"Host 服务"候选 | **H0 已审计（2026-10-03）：`delivery` 已随 bytegit P6 删除；`project.rs` 实为文件树、`conversation.rs` 实为展示 IR（领域类型已在 `dozer-core::protocol`）。逐模块归属建议见 `bytehost-H0/04-shared-modules.md`；`protocol` 本身的归属另列未决** | H0 已审计（`protocol` 归属待定） |
+| Q8 | `PanelKind` → 注册制：973 处引用怎么分批 | **H0 已审计（2026-10-03）：分类与 B0–B5 分批建议见 `bytehost-H0/01-panelkind.md`；第一批建议 B0（`preview_pane(kind)` 收口，约 82 行）** | H0 已审计 |
 | Q9 | 事件总线的承载：复用 `dozerd` UDS 协议，还是 Host 进程内 channel | 需要定事件模型（序号、revision、订阅粒度、背压） | 待设计 |
 | Q10 | 面板对 Host 的 SDK 契约清单：`HoverId`、`theme`、`menu_spec`、`tab_widget` 哪些进 byteui、哪些进 Host SDK | §4.2 表是起点 | 待设计 |
 | Q11 | Digger 的 Todo 语义（选题 vs 验收项）与 agent/conversation 摄取对非编码 agent 的支持 | 复用前需确认 | 待产品确认 |
 | Q12 | Git 服务的边界 | 已定：完整底层 API，不是 diff 读取子集（§2.5）；**现状盘点已完成，见 `bytegit-调用点盘点.md`**：生产代码几乎只读，仅 4 个写操作，commit/worktree/merge 等现状为零；边界问题 B1–B6 已裁决；**设计规格草案：`docs/superpowers/specs/2026-10-02-bytegit-design.md`** | 部分已决 |
 | Q14 | `bytegit` 的设计：①API 清单（Q12）；②`git2` 还是命令行 git（现状并存，需统一）；③同步还是提供异步封装（GUI 里现在如何包 blocking 调用）；④`git_watch`（变更监听）属于 `bytegit` 还是 Host 事件总线的生产者；⑤`git_accounts`（凭据）归属；⑥独立仓库按 tag 引用，沿用 byteui 的 patch 联调流程 | 形态已定：独立库；其余待设计 | 部分已决 |
 | Q15 | Agent 作为另一根支柱：现有 agent 能力（启动、会话、hook、PTY）在 `dozerd` 与 `dozer-app` 中的分布是否也像 Git 一样散落 | 需同样做一次分布审计；是否抽成与 Git 对称的底层 | 待审计 |
-| Q13 | Host 自身对 `git_log` 的直接引用（`app/update.rs` 里分支选择器直接调 `git_log::update`、`app/state.rs` 引用 `FileFilter`）是否也要经 Registry | Host 对面板的硬编码属 Q8 范畴 | 待审计 |
+| Q13 | Host 自身对 `git_log` 的直接引用（`app/update.rs` 里分支选择器直接调 `git_log::update`、`app/state.rs` 引用 `FileFilter`）是否也要经 Registry | **H0 已审计（2026-10-03）：必须经 registry，且越界比引用更深（host 替面板做了分支加载、切换与切换后刷新），见 `bytehost-H0/03-host-to-panel.md` §4** | H0 已审计 |
 
 ## 7. 下一步
 
@@ -160,3 +160,5 @@ Host（窗口 / 布局 / 焦点 / 浮层 / 主题 / 面板 Registry）
 2. 审计 Q7、Q8、Q13。
 3. 确定事件总线的最小模型（Q9），先给 Git 状态变化（工作区变更、分支切换）这一条事件用起来。
 4. 面板扩展化的整体顺序待定，原文 §11 的试点顺序（Code Health → Todo → SSH）是按"进程外插件"定的，与本文"一个面板 + Host"的目标不同，是否沿用待议。
+
+5. **bytehost H0 已完成（2026-10-03）：** 产出 `scripts/audit/`（依赖边提取器、五种报表、面板边界棘轮门禁，基线 22 处 `App`/`Workspace` 使用 / 9 个文件）与 `docs/dozer-v2/bytehost-H0/`（汇总 `00-summary.md`、E3 登记清单 38 条）。Q7/Q8/Q13 状态已回填；H0 新发现 `HoverId` 是 `PanelKind` 之外第二处点名面板的 host 枚举（62 变体、188 处使用）。
