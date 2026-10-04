@@ -278,7 +278,7 @@ pub(crate) fn tab_overflow_button<'a, M: Clone + 'a>(
 /// 命中区 `icon_size::row() + 6.0`)特意与相邻的"收起文件树"
 /// (`App::list_collapse_button`)对齐,不用自己的 `tab_button_size`
 /// (验收反馈:两个按钮挤在一起,尺寸得一致)。`hover_t`/`on_hover` 由调用方
-/// 接自己那组专属 `HoverId`(如 `HoverId::PreviewRenderMode`)——这个按钮
+/// 接自己那组专属 `HoverId`(如 `HoverId::named(PanelKind::Files, "render_mode")`)——这个按钮
 /// 现在挂在 tab 组本身(只对当前选中 tab 出一个),不再是随每个 tab 渲染、
 /// 随下标漂移的旧版做法,已不需要为漂移规避 `HoverId` 动画体系。
 pub(crate) fn tab_render_mode_button<'a, M: Clone + 'a>(
@@ -309,7 +309,7 @@ pub(crate) fn tab_render_mode_button<'a, M: Clone + 'a>(
 
 /// 表格(CSV/TSV)tab 的「网格 / 原文」切换按钮:网格下显示 `FileCode`
 /// (点它看原文),原文下显示 `Table`(点它回网格)。`hover_t`/`on_hover`
-/// 由调用方接专属 `HoverId`(见 `HoverId::PreviewTabularMode`)。
+/// 由调用方接专属 `HoverId`(见 `HoverId::named(PanelKind::Files, "tabular_mode")`)。
 pub(crate) fn tab_tabular_mode_button<'a, M: Clone + 'a>(
     in_text: bool,
     hover_t: f32,
@@ -338,7 +338,7 @@ pub(crate) fn tab_tabular_mode_button<'a, M: Clone + 'a>(
 
 /// 严格 `.json` tab 的「树 / 文本」切换按钮:树视图下显示 `FileCode`
 /// (点它看文本),文本下显示 `Table`(点它回树)。`hover_t`/`on_hover`
-/// 由调用方接专属 `HoverId`(见 `HoverId::PreviewJsonMode`)。
+/// 由调用方接专属 `HoverId`(见 `HoverId::named(PanelKind::Files, "json_mode")`)。
 pub(crate) fn tab_json_mode_button<'a, M: Clone + 'a>(
     in_text: bool,
     hover_t: f32,

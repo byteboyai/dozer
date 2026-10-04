@@ -61,6 +61,8 @@
 
 这是与 `PanelKind` 并行的**第二处"host 枚举里点名面板"**:Digger 想去掉某个面板,`HoverId` 里的变体就成了死代码;想加新面板,必须改 host 枚举。注册制需要把它改成"带命名空间的 id"(例如 `(panel_id, local_key)`),或让面板自己持有悬停状态——**这条在原 v2 文档里没被列出,是 H0 的新发现**,H1 候选切片应单独评估。
 
+**H2 结果:** `HoverId` 51 个点名面板的变体已收敛为 `HoverId::Panel(PanelKind, HoverSlot)`,宿主枚举只剩 11 个自己的变体 + `Panel`;`HoverSlot` 是通用槽位词汇(9 个变体)。`PanelKind` 作为键的一部分仍是宿主类型,随注册制(`01-panelkind.md` B1)一起换成注册 id。
+
 ## 4. 对 byteui 的影响(**本任务不改 byteui**)
 
 被判为 byteui 的符号清单,供另开 byteui 仓库的计划使用:`homespace::home_panel_head*`(需先从首页模块拆出)、`chrome::menu::*` 与 `menu_spec`、`chrome::tab_widget`、`app::divider_bar`/`tab_divider`(及 `Divider` 中的通用部分)、`workspace::{relative_time_text, split_portions, lh, tree_row_font_size}`(纯助手,目前放在 `workspace/view.rs`,搬家前要去掉对 `Workspace` 的间接依赖)、`theme::region` 的结构部分。**byteui 现为独立仓库且 dozer 与 digger 共用(项目 CLAUDE.md),发版流程是 byteui 仓库改并发 tag**;这些搬迁属于独立的 byteui 计划,不在 bytehost H0/H1 范围。

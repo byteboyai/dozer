@@ -713,15 +713,22 @@ pub fn content_pane<'a>(
         crate::chrome::tab_widget::panel_tab(crate::chrome::tab_widget::PanelTabArgs {
             title: "空白".to_string(),
             active: blank_active,
-            hover_t: app.hover_progress(crate::app::HoverId::DatabaseTabItem(BLANK_HOVER_KEY)),
-            close_hover_t: app
-                .hover_progress(crate::app::HoverId::DatabaseTabClose(BLANK_HOVER_KEY)),
+            hover_t: app.hover_progress(crate::app::HoverId::tab_item(
+                crate::app::PanelKind::Database,
+                BLANK_HOVER_KEY as u64,
+            )),
+            close_hover_t: app.hover_progress(crate::app::HoverId::tab_close(
+                crate::app::PanelKind::Database,
+                BLANK_HOVER_KEY as u64,
+            )),
             prefix: Some(blank_icon),
             suffix: None,
             on_select: Message::SelectBlankTab,
             on_close: Message::SelectBlankTab,
-            show_tooltip: app
-                .hover_tooltip_ready(crate::app::HoverId::DatabaseTabItem(BLANK_HOVER_KEY)),
+            show_tooltip: app.hover_tooltip_ready(crate::app::HoverId::tab_item(
+                crate::app::PanelKind::Database,
+                BLANK_HOVER_KEY as u64,
+            )),
             title_hover: move |h| {
                 Message::TabHover(DatabaseTabHoverTarget::Title, BLANK_HOVER_KEY, h)
             },
@@ -732,8 +739,14 @@ pub fn content_pane<'a>(
     )];
     entries.extend(content.tabs().iter().enumerate().map(|(idx, tab)| {
         let active = Some(idx) == content.active_idx();
-        let title_hover_t = app.hover_progress(crate::app::HoverId::DatabaseTabItem(idx));
-        let close_hover_t = app.hover_progress(crate::app::HoverId::DatabaseTabClose(idx));
+        let title_hover_t = app.hover_progress(crate::app::HoverId::tab_item(
+            crate::app::PanelKind::Database,
+            idx as u64,
+        ));
+        let close_hover_t = app.hover_progress(crate::app::HoverId::tab_close(
+            crate::app::PanelKind::Database,
+            idx as u64,
+        ));
         let title = tab_title(tab, ws_state);
         (
             tab_title_display_width(&title),
@@ -746,7 +759,10 @@ pub fn content_pane<'a>(
                 suffix: None,
                 on_select: Message::SelectTab(idx),
                 on_close: Message::CloseTab(idx),
-                show_tooltip: app.hover_tooltip_ready(crate::app::HoverId::DatabaseTabItem(idx)),
+                show_tooltip: app.hover_tooltip_ready(crate::app::HoverId::tab_item(
+                    crate::app::PanelKind::Database,
+                    idx as u64,
+                )),
                 title_hover: move |h| Message::TabHover(DatabaseTabHoverTarget::Title, idx, h),
                 close_hover: move |h| Message::TabHover(DatabaseTabHoverTarget::Close, idx, h),
             }),
@@ -772,20 +788,32 @@ pub fn content_pane<'a>(
     let db_tab_total = content.tabs().len();
     let overflow_button = crate::chrome::tab_widget::tab_overflow_button(
         db_tab_total,
-        app.hover_progress(crate::app::HoverId::DatabaseTabOverflow),
+        app.hover_progress(crate::app::HoverId::tab_overflow(
+            crate::app::PanelKind::Database,
+        )),
         Message::TabOverflowToggle,
-        move |hovered| Message::Hover(crate::app::HoverId::DatabaseTabOverflow, hovered),
+        move |hovered| {
+            Message::Hover(
+                crate::app::HoverId::tab_overflow(crate::app::PanelKind::Database),
+                hovered,
+            )
+        },
     );
     // 内容侧"收起/展开列表列"按钮(收起左列 schema 树后仍在此可见以便恢复)。
     // 消息为本地 `Message::ToggleListCollapse`,由内核 `App::update` 拦截。
     let collapse = app.list_collapse_button(
         crate::app::PanelKind::Database,
         app.list_collapsed(crate::app::PanelKind::Database),
-        crate::app::HoverId::DatabaseListCollapse,
+        crate::app::HoverId::list_collapse(crate::app::PanelKind::Database),
         "收起列表",
         "展开列表",
         Message::ToggleListCollapse,
-        move |hovered| Message::Hover(crate::app::HoverId::DatabaseListCollapse, hovered),
+        move |hovered| {
+            Message::Hover(
+                crate::app::HoverId::list_collapse(crate::app::PanelKind::Database),
+                hovered,
+            )
+        },
     );
     let mut tab_bar_row = row![]
         .spacing(4)

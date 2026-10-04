@@ -442,7 +442,7 @@ pub enum Message {
 }
 
 /// 文件树工具行里带 hover 动画的 icon 按钮。与内核 `HoverId` 一一对应
-/// (`HoverId::FilesSearchSubmit` / `FilesDotfiles` / `FilesBranchSwitch`)。
+/// (`HoverId::search_submit` / `named(.., "dotfiles")` / `named(.., "branch_switch")`,面板均为 `PanelKind::Files`)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilesToolbarTarget {
     SearchSubmit,

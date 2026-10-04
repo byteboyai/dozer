@@ -8,7 +8,7 @@ use dozer_core::protocol::ProjectInfo;
 use iced_widget::core::Color;
 
 use crate::chrome::rail;
-use crate::extensions::git_log::FileFilter;
+use crate::panel_host::HoverSlot;
 use crate::workspace::Workspace;
 
 use super::layout::{PanelDims, ShellLayout};
@@ -105,136 +105,18 @@ pub enum HoverId {
     /// 终端面板某个会话 tab 的关闭按钮(×),按会话序号区分——hover 时颜色从
     /// DIM 平滑过渡到 GOLD(见 `panel_tab`)。
     TermTabClose(usize),
-    /// 预览面板某个文件 tab 的标题文字,按 tab 序号区分(同 `TermTabItem`)。
-    PreviewTabItem(usize),
-    /// 预览面板某个文件 tab 的关闭按钮(×),按 tab 序号区分(同 `TermTabClose`)。
-    PreviewTabClose(usize),
-    /// Project 面板右配对预览某个文件 tab 的标题文字,按 tab 序号区分。
-    ProjectPreviewTabItem(usize),
-    /// Project 面板右配对预览某个文件 tab 的关闭按钮(×),按 tab 序号区分。
-    ProjectPreviewTabClose(usize),
-    /// SSH 面板自己 tab 条上某个 tab 的标题文字,按 host_id 的哈希区分
-    /// (SSH tab 没有稳定的数字序号——按身份是 `(host_id, SshTabKind)`,
-    /// `HoverId` 整体 `derive(Copy)`,`String` 不是 `Copy`,不能直接塞
-    /// `host_id.clone()`,用哈希值退化成 `u64`,不要求无碰撞,只要求
-    /// "实践中够用"。
-    SshTabItem(u64),
-    /// SSH 面板自己 tab 条上某个 tab 的关闭按钮(×),同上按 host_id 哈希区分。
-    SshTabClose(u64),
     /// 顶栏 Dozer Home 品牌页签的标题文字(图标 + "Dozer"):未选中态 hover 时
     /// 从 DIM 平滑过渡到 GOLD,选中态恒为 GOLD——与 `ProjectTabItem` 同一手法
     /// (见 `dozer_home_tab`)。
     HomeTab,
-    /// Agent 面板头部"＋"按钮:无背景的 `SquarePlus` 图标,未选中态静止 DIM,
-    /// hover 平滑过渡到 GOLD(见 `agent_picker_toggle_button`)。
-    AgentPickerToggle,
-    /// Project 面板「项目文档」标题行"＋"按钮,处理方式同 `AgentPickerToggle`
-    /// (见 `extensions::project::view`)。
-    ProjectDocsAdd,
-    /// Project 面板「Git 远程仓库」标题行"＋"按钮:功能未接入前的纯视觉占位
-    /// (`interactive` 为假,点击无动作),hover 动画处理方式同
-    /// `AgentPickerToggle`。
-    ProjectRemoteAdd,
-    /// Project 面板「共享记忆」标题行"＋"按钮,处理方式同 `AgentPickerToggle`
-    /// (见 `extensions::project::view`)。
-    ProjectMemoryAdd,
-    /// 文件树搜索提交按钮(`FolderSearch`):静止 DIM,hover 过渡到 GOLD
-    /// (见 `extensions/files.rs` 的搜索按钮)。
-    FilesSearchSubmit,
-    /// 文件树"显示隐藏文件"切换按钮(`Eye`/`EyeOff`):静止 DIM,hover 过渡
-    /// 到 GOLD;已开启(隐藏文件可见)恒金(见 `extensions/files.rs`)。
-    FilesDotfiles,
-    /// 文件树底栏 git 分支切换按钮(`ChevronDown`):静止 DIM,hover 过渡到
-    /// GOLD(见 `extensions/files.rs` 的 `git_footer_bar`)。
-    FilesBranchSwitch,
-    /// 文件预览右上角"收起/展开文件树"按钮(`panel-left/right-close/open`):
-    /// 静止 DIM,hover 平滑过渡到 GOLD(见 `preview_pane_for`)。
-    FileTreeCollapse,
-    /// Project 面板列表列"收起/展开"按钮(`panel-left/right-close/open`):
-    /// 处理方式同 `FileTreeCollapse`(见 `preview_pane_for`)。
-    ProjectListCollapse,
-    /// 预览文件 Find 条的上一个/下一个命中(⌃/⌄)与关闭(×)图标按钮,悬停
-    /// DIM→GOLD(处理同 `FilesBranchSwitch`)。Files / Project 预览各一套。
-    PreviewFindPrev,
-    PreviewFindNext,
-    /// Project 面板预览 Find 条同上定向的独立 hover 态(Files / Project 各有
-    /// 一套;× 关闭按钮是文字 glyph,不参与悬停着色)。
-    ProjectPreviewFindPrev,
-    ProjectPreviewFindNext,
-    /// 查询框前的展开/收起替换行圆盘箭头(Files / Project 各一套)。
-    PreviewFindReplaceToggle,
-    ProjectPreviewFindReplaceToggle,
-    /// 替换行「替换当前」/「替换全部」图标按钮(Files / Project 各一套)。
-    PreviewFindReplaceCurrentBtn,
-    PreviewFindReplaceAllBtn,
-    ProjectPreviewFindReplaceCurrentBtn,
-    ProjectPreviewFindReplaceAllBtn,
-    /// Todo 面板列表列"收起/展开"按钮:处理方式同 `FileTreeCollapse`
-    /// (见 `extensions::todo::view`)。
-    TodoListCollapse,
-    /// Todo 面板分类树的某一行(展开箭头 + 行本身共用一个悬停态,按分类
-    /// id 区分,同一时刻可能有多行渲染,不能用全局标识共用)。
-    TodoCategoryRow(i64),
-    /// Database 面板列表列"收起/展开"按钮:处理方式同 `FileTreeCollapse`
-    /// (见 `extensions::database::content_pane`)。
-    DatabaseListCollapse,
-    /// SSH 面板列表列"收起/展开"按钮:处理方式同 `FileTreeCollapse`
-    /// (见 `ssh_tab_bar`)。
-    SshListCollapse,
-    /// Agent 面板列表列"收起/展开"按钮:处理方式同 `FileTreeCollapse`
-    /// (见 `terminal::tab_bar`)。
-    AgentListCollapse,
-    /// Conversations 面板列表列"收起/展开"按钮:处理方式同 `FileTreeCollapse`
-    /// (见 `review_content_pane`)。
-    ConversationsListCollapse,
-    /// 用量面板 agent 筛选栏"收起/展开"按钮:处理方式同 `FileTreeCollapse`
-    /// (见 `extensions::usage::content_pane`)。
-    UsageListCollapse,
-    /// 数据库内容窗格 tab 栏:某个 tab 本体的悬停(按索引区分,同
-    /// `PreviewTabItem`)。
-    DatabaseTabItem(usize),
-    /// 数据库内容窗格 tab 栏:某个 tab 关闭按钮 `×` 的悬停。
-    DatabaseTabClose(usize),
     /// 终端面板 tab 栏"溢出下拉"入口(`ChevronDown`):静止 DIM,hover
-    /// 平滑过渡到 GOLD,处理方式同 `FileTreeCollapse`(见 `terminal::tab_bar`)。
+    /// 平滑过渡到 GOLD,处理方式同 `HoverId::list_collapse(PanelKind::Files)`(见 `terminal::tab_bar`)。
     TermTabOverflow,
-    /// 文件预览面板 tab 栏"溢出下拉"入口,处理方式同 `TermTabOverflow`
-    /// (见 `workspace::preview_pane_for`)。
-    PreviewTabOverflow,
-    /// Project 面板配对预览 tab 栏"溢出下拉"入口,处理方式同 `TermTabOverflow`
-    /// (同一份 `preview_pane_for` 渲染,按 `PreviewPaneKind` 区分)。
-    ProjectPreviewTabOverflow,
-    /// SSH 面板自己 tab 条"溢出下拉"入口,处理方式同 `TermTabOverflow`
-    /// (见 `ssh_tab_bar`)。
-    SshTabOverflow,
-    /// Database 面板内容窗格 tab 栏"溢出下拉"入口,处理方式同 `TermTabOverflow`
-    /// (见 `extensions::database::content_pane`)。
-    DatabaseTabOverflow,
     /// 任一 tab 组"溢出下拉"菜单里**某一行**的悬停(按该行在菜单里的
     /// `TabOverflowEntry::index` 区分)。五处下拉(终端/文件预览/项目预览/
     /// SSH/Database)互斥展开,同一时刻只会有其中一个菜单可见,因此不同组
     /// 复用同一套行下标键不会冲突(见 `tab_widget::tab_overflow_menu`)。
     TabOverflowRow(usize),
-    /// 文件预览 tab 组最右侧"预览/代码切换"按钮(`FilePlay`/`FileCode`):
-    /// 处理方式同 `FileTreeCollapse`(见 `tab_widget::tab_render_mode_button`,
-    /// 调用点 `workspace::preview_pane_for`)。
-    PreviewRenderMode,
-    /// Project 面板配对预览"预览/代码切换"按钮,处理方式同 `PreviewRenderMode`
-    /// (同一份 `preview_pane_for` 渲染,按 `PreviewPaneKind` 区分)。
-    ProjectPreviewRenderMode,
-    /// 文件预览 tab 组最右侧"网格 / 原文"切换按钮(CSV/TSV 的 Tabular
-    /// 双视图):处理方式同 `PreviewRenderMode`(见
-    /// `tab_widget::tab_tabular_mode_button`,调用点
-    /// `workspace::preview_pane_for`)。
-    PreviewTabularMode,
-    /// Project 面板配对预览"网格 / 原文"切换按钮,处理方式同
-    /// `PreviewTabularMode`。
-    ProjectPreviewTabularMode,
-    /// 文件预览 tab 组最右侧"树 / 文本"切换按钮(严格 `.json` 的 Tree/Text
-    /// 双视图):处理方式同 `PreviewRenderMode`。
-    PreviewJsonMode,
-    /// Project 面板配对预览"树 / 文本"切换按钮,处理方式同 `PreviewJsonMode`。
-    ProjectPreviewJsonMode,
     /// 首页项目列表搜索框内的提交按钮(`Search`):静止 DIM,hover 平滑
     /// 过渡到 GOLD,处理方式同 `TodoAddSubmit`(见
     /// `homespace::home_project_list_view`)。
@@ -242,31 +124,48 @@ pub enum HoverId {
     /// 首页项目列表"更多..."翻页图标按钮(`Ellipsis`):静止 DIM,hover
     /// 平滑过渡到 GOLD,处理方式同 `HomeProjectSearchSubmit`。
     HomeProjectMore,
-    /// Git Log 面板 commit 列表末尾"更多"翻页图标按钮,处理方式同
-    /// `HomeProjectMore`(见 `extensions::git_log::commit_list_view`)。
-    CommitListMore,
-    /// 对话列表面板(会话列表)扁平列表末尾的"更多..."翻页图标按钮,处理
-    /// 方式同 `CommitListMore`(见 `extensions::conversations::view`)。
-    ConversationListMore,
-    /// 会话列表搜索框内的提交按钮(`Search`):静止 DIM,hover 平滑过渡到
-    /// GOLD,处理方式同 `HomeProjectSearchSubmit`(见 `extensions::conversations::view`)。
-    ConversationSearchSubmit,
-    /// Git Log 面板改动文件列表某行(按下标区分):hover 时填充 `CARD` 背景 +
-    /// 金色描边(见 `extensions::git_log::file_list_view`,统一卡片样式)。
-    GitFile(usize),
-    /// Git Log 面板改动文件列表上方的分类筛选 tab(按筛选维度区分):hover 时
-    /// 标题 DIM→GOLD、浮现 `TAB_HOVER` 胶囊,选中态 CARD 实底+1px 边框——与
-    /// 文件预览等面板页签共用 `chrome::tab_widget` 的同一套 `tab_label`/
-    /// `tab_container_style`(见 `extensions::git_log::file_filter_tabs`)。
-    GitFileFilter(FileFilter),
-    /// Git Log 面板 commit 搜索框内的提交按钮(`Search`):静止 DIM,hover
-    /// 平滑过渡到 GOLD,处理方式同 `ConversationSearchSubmit`(见
-    /// `extensions::git_log::commit_search_box`)。
-    GitLogSearchSubmit,
-    /// 主机面板单个主机卡(按 host_id 哈希区分,`HoverId` 整体 `Copy` 不能
-    /// 塞 `String`,同 `SshTabItem` 的精度取舍):hover 时填充 `CARD` 背景 +
-    /// 金色描边(见 `extensions::ssh::host_card`,统一卡片样式)。
-    HostCard(u64),
+    /// 某个面板里的一个可悬停元素,按"面板 + 槽位"作用域取键——**宿主枚举里不再点名任何面板的按钮**
+    /// (槽位词汇见 [`HoverSlot`],通用、不含面板名)。用下面的 `HoverId::tab_item(..)` 等构造函数造。
+    Panel(PanelKind, HoverSlot),
+}
+
+impl HoverId {
+    /// 面板列表列的折叠/展开按钮。
+    pub(crate) fn list_collapse(panel: PanelKind) -> Self {
+        Self::Panel(panel, HoverSlot::ListCollapse)
+    }
+    /// 面板搜索框旁的提交按钮。
+    pub(crate) fn search_submit(panel: PanelKind) -> Self {
+        Self::Panel(panel, HoverSlot::SearchSubmit)
+    }
+    /// 列表末尾的"更多…"翻页按钮。
+    pub(crate) fn more(panel: PanelKind) -> Self {
+        Self::Panel(panel, HoverSlot::More)
+    }
+    /// 页签标题(`key` 是页签下标或稳定 id)。
+    pub(crate) fn tab_item(panel: PanelKind, key: u64) -> Self {
+        Self::Panel(panel, HoverSlot::TabItem(key))
+    }
+    /// 页签关闭按钮(`key` 同 `tab_item`)。
+    pub(crate) fn tab_close(panel: PanelKind, key: u64) -> Self {
+        Self::Panel(panel, HoverSlot::TabClose(key))
+    }
+    /// 页签溢出菜单按钮。
+    pub(crate) fn tab_overflow(panel: PanelKind) -> Self {
+        Self::Panel(panel, HoverSlot::TabOverflow)
+    }
+    /// 列表行/卡片(`key` 是行下标或稳定 id)。
+    pub(crate) fn row(panel: PanelKind, key: u64) -> Self {
+        Self::Panel(panel, HoverSlot::Row(key))
+    }
+    /// 一组互斥选项/筛选里的一项。
+    pub(crate) fn choice(panel: PanelKind, key: u64) -> Self {
+        Self::Panel(panel, HoverSlot::Choice(key))
+    }
+    /// 面板内一次性的具名按钮(`name` 在同一面板内唯一)。
+    pub(crate) fn named(panel: PanelKind, name: &'static str) -> Self {
+        Self::Panel(panel, HoverSlot::Named(name))
+    }
 }
 
 /// 一个可平滑过渡的 hover 动画状态机。iced 0.14 无内置动画 API,这套自驱

@@ -6,7 +6,7 @@
 //! 只验证数据链路是否走得通,不追求 curve/fork 的像素级还原:每条 track
 //! 画一根直线,commit 是线上的一个圆点,父子关系用直线连接(不是贝塞尔)。
 //! 验证通过、决定转正时,再补动画/交互/性能优化。
-use crate::app::HoverId;
+use crate::app::{HoverId, PanelKind};
 use crate::chrome::tab_widget::{
     NO_TAB_W_LIMIT, PANEL_TAB_PAD_LEFT, PANEL_TAB_PAD_X, PANEL_TAB_PAD_Y, tab_container_style,
     tab_label,
@@ -835,8 +835,8 @@ fn commit_search_box<'a>(
         search_active,
         Message::SearchInput,
         Message::SearchSubmit,
-        app.hover_progress(HoverId::GitLogSearchSubmit),
-        |hovered| Message::Hover(HoverId::GitLogSearchSubmit, hovered),
+        app.hover_progress(HoverId::search_submit(PanelKind::GitLog)),
+        |hovered| Message::Hover(HoverId::search_submit(PanelKind::GitLog), hovered),
     );
     byteui::interaction::context_menu::wrap(
         box_el,
@@ -982,12 +982,12 @@ fn commit_list_view<'a>(
             byteui::theme::icon_size::row(),
             false,
             false,
-            app.hover_progress(HoverId::CommitListMore),
+            app.hover_progress(HoverId::more(PanelKind::GitLog)),
             false,
             byteui::theme::geometry::tab_button_size(),
             true,
             Message::CommitListMore,
-            |hovered| Message::Hover(HoverId::CommitListMore, hovered),
+            |hovered| Message::Hover(HoverId::more(PanelKind::GitLog), hovered),
             "更多",
         );
         list = list.push(
@@ -1014,7 +1014,7 @@ fn commit_list_view<'a>(
 /// 直接复用文件预览等面板页签同一套外观内核——`tab_label`(标题
 /// DIM→GOLD 按 hover 插值、body 字号)+ `tab_container_style`(选中 = CARD
 /// 实底 + 1px 边框,hover = TAB_HOVER 胶囊,静止透明)——这样分类筛选 tab 与
-/// 预览页签视觉一致;hover 动画也走统一的 `HoverId::GitFileFilter`。
+/// 预览页签视觉一致;hover 动画也走统一的 `HoverId::choice(PanelKind::GitLog, ..)`。
 fn file_filter_tabs<'a>(
     app: &impl PanelHost,
     detail: &CommitDetail,
@@ -1043,7 +1043,7 @@ fn file_filter_tabs<'a>(
         let title = format!("{label}({count})");
         // hover 进度走统一动画表(`Message::Hover` 由内核 `set_hover` 接管),
         // 与预览/终端页签的标题 hover 表现同一套插值。
-        let hover_t = app.hover_progress(HoverId::GitFileFilter(filter));
+        let hover_t = app.hover_progress(HoverId::choice(PanelKind::GitLog, filter as u64));
         let label_el = tab_label(None, title, active, hover_t, NO_TAB_W_LIMIT);
         // 高度对齐 `panel_tab`:预览页签的行里有 `tab_button_size()` 的 ×
         // 关闭按钮把整个页签撑高、文字垂直居中;筛选 chip 没有关闭按钮,
@@ -1062,8 +1062,14 @@ fn file_filter_tabs<'a>(
             .style(tab_container_style(active, hover_t));
         let area = MouseArea::new(chip)
             .on_press(Message::SetFileFilter(filter))
-            .on_enter(Message::Hover(HoverId::GitFileFilter(filter), true))
-            .on_exit(Message::Hover(HoverId::GitFileFilter(filter), false))
+            .on_enter(Message::Hover(
+                HoverId::choice(PanelKind::GitLog, filter as u64),
+                true,
+            ))
+            .on_exit(Message::Hover(
+                HoverId::choice(PanelKind::GitLog, filter as u64),
+                false,
+            ))
             .interaction(mouse::Interaction::Pointer);
         bar = bar.push(area);
     }
@@ -1097,7 +1103,7 @@ fn file_list_view<'a>(
         .into(),
         Ok(detail) => {
             let mut list = column![].spacing(2);
-            // 用 `enumerate()` 的原始下标当 `HoverId::GitFile` 的 key(而不是
+            // 用 `enumerate()` 的原始下标当 `HoverId::row(PanelKind::GitLog, ..)` 的 key(而不是
             // 过滤后的显示序号):key 与 `detail.files` 的下标绑定,切筛选时
             // 同一个文件始终是同一个 key,悬停高亮不会串到别的文件上。
             for (i, f) in detail.files.iter().enumerate() {
@@ -1122,7 +1128,7 @@ fn file_list_view<'a>(
                 .spacing(4);
                 // 统一卡片样式:选中/一般/hover 三态(选中=金边、hover=金边+填充、
                 // 一般态=描边),不再用左侧 3px 金竖条表示选中。
-                let hovered = app.hover_progress(HoverId::GitFile(i)) > 0.0;
+                let hovered = app.hover_progress(HoverId::row(PanelKind::GitLog, i as u64)) > 0.0;
                 let inner = container(line).padding([2, 8]).width(Length::Fill).style(
                     move |_t: &iced_widget::Theme| {
                         byteui::interaction::cards::container_card(
@@ -1134,8 +1140,14 @@ fn file_list_view<'a>(
                 );
                 let area = MouseArea::new(inner)
                     .interaction(iced_widget::core::mouse::Interaction::Pointer)
-                    .on_enter(Message::Hover(HoverId::GitFile(i), true))
-                    .on_exit(Message::Hover(HoverId::GitFile(i), false))
+                    .on_enter(Message::Hover(
+                        HoverId::row(PanelKind::GitLog, i as u64),
+                        true,
+                    ))
+                    .on_exit(Message::Hover(
+                        HoverId::row(PanelKind::GitLog, i as u64),
+                        false,
+                    ))
                     .on_press(Message::SelectFile(f.path.clone()));
                 list = list.push(area);
             }

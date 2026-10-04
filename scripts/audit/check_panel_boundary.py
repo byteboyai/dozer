@@ -4,6 +4,7 @@
 规则 R-APP:  extensions 下文件对 `crate::app::App` 的**使用次数**(import 行 + 每个 `&App` 参数/限定路径)
 规则 R-WS:   extensions 下文件对 `crate::workspace::Workspace` 的使用次数
 规则 R-PANE-PICK: 全库手写"按 PanelKind::Project 选预览窗格"的写法条数(应走 `Workspace::preview_pane[_mut]`)
+规则 R-HOVERID-VARIANTS / R-HOVERSLOT-VARIANTS: `HoverId`(app/state.rs)与 `HoverSlot`(panel_host.rs)的变体数
 
 用法:
   check_panel_boundary.py            对照基线检查,有文件的引用数上升(或新文件出现违规)则退出 1
@@ -72,6 +73,24 @@ PANE_PICK_RE = re.compile(
 )
 
 
+# 枚举变体数棘轮:(文件, 枚举名) -> 规则名。HoverId 是宿主的悬停键枚举,HoverSlot 是面板作用域下的通用槽位词汇;
+# 两者的变体数只许减不许增,新增悬停元素先用 `HoverId::named(panel, "..")`。
+ENUM_RULES = {
+    ("app/state.rs", "HoverId"): "R-HOVERID-VARIANTS",
+    ("panel_host.rs", "HoverSlot"): "R-HOVERSLOT-VARIANTS",
+}
+
+
+def enum_variant_count(text, name):
+    """`pub enum NAME { .. }` 里的变体个数(忽略文档注释/注释/属性)。找不到枚举返回 0。"""
+    m = re.search(r"\bpub enum " + re.escape(name) + r"\s*\{", text)
+    if not m:
+        return 0
+    end = text.index("\n}\n", m.end())
+    body = edges.strip_comments(text[m.end():end])
+    return len(re.findall(r"^    [A-Z]\w*", body, flags=re.M))
+
+
 def scan(files):
     """files: {相对路径: 源码文本} -> {相对路径: {规则: 次数}},只含 extensions/ 下且有违规的文件。"""
     out = {}
@@ -82,6 +101,11 @@ def scan(files):
                 n = count_uses(text, mod, name)
                 if n:
                     hit[rule] = n
+        for (path, name), rule in ENUM_RULES.items():
+            if rel == path:
+                k = enum_variant_count(text, name)
+                if k:
+                    hit[rule] = k
         n = len(PANE_PICK_RE.findall(edges.strip_comments(text)))
         if n:
             hit["R-PANE-PICK"] = n

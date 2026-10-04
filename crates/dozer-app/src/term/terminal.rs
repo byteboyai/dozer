@@ -187,11 +187,11 @@ pub(crate) fn tab_bar<'a>(
     tab_row = tab_row.push(app.list_collapse_button(
         PanelKind::Agent,
         app.list_collapsed(PanelKind::Agent),
-        HoverId::AgentListCollapse,
+        HoverId::list_collapse(PanelKind::Agent),
         "收起列表",
         "展开列表",
         Message::TogglePanelListCollapse(PanelKind::Agent),
-        move |hovered| Message::Hover(HoverId::AgentListCollapse, hovered),
+        move |hovered| Message::Hover(HoverId::list_collapse(PanelKind::Agent), hovered),
     ));
 
     let base = column![tab_row, tab_divider()].spacing(4);

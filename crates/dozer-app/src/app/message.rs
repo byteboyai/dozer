@@ -368,7 +368,7 @@ pub enum Message {
     /// 双枚举映射。
     PreviewFindOpen(PanelKind),
     /// 同 `PreviewFindOpen`(⌘R),但替换行默认展开——查询框前的圆盘箭头也
-    /// 展示这个展开态,`PreviewFindReplaceToggle` 再手动翻转。
+    /// 展示这个展开态,`HoverId::named(PanelKind::Files, "find_replace_toggle")` 对应的按钮再手动翻转。
     PreviewFindOpenWithReplace(PanelKind),
     /// 查询框前的圆盘箭头点击:手动翻转替换行展开/收起,不受 ⌘F/⌘R 影响。
     PreviewFindReplaceToggle(PanelKind),

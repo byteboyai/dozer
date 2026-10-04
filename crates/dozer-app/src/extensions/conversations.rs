@@ -9,7 +9,7 @@
 //! `ReviewSource::Session` 和本面板的 `ReviewSource::Conversation`,继续留在
 //! `workspace.rs`(见 docs/superpowers/specs/2026-09-15-conversations-extension-pilot-design.md)。
 
-use crate::app::{HoverId, ProjectId, TextInputTarget};
+use crate::app::{HoverId, PanelKind, ProjectId, TextInputTarget};
 use crate::chrome::homespace::home_panel_head;
 use crate::conversation::SessionRow;
 use crate::panel_host::PanelHost;
@@ -477,8 +477,8 @@ pub fn view<'a>(
         search_active,
         Message::SearchInput,
         Message::SearchSubmit,
-        app.hover_progress(HoverId::ConversationSearchSubmit),
-        |hovered| Message::Hover(HoverId::ConversationSearchSubmit, hovered),
+        app.hover_progress(HoverId::search_submit(PanelKind::Conversations)),
+        |hovered| Message::Hover(HoverId::search_submit(PanelKind::Conversations), hovered),
     );
     content = content.push(byteui::interaction::context_menu::wrap(
         search_box,
@@ -593,12 +593,12 @@ pub fn view<'a>(
             byteui::theme::icon_size::row(),
             false,
             false,
-            app.hover_progress(HoverId::ConversationListMore),
+            app.hover_progress(HoverId::more(PanelKind::Conversations)),
             false,
             byteui::theme::geometry::tab_button_size(),
             true,
             Message::ListMore,
-            |hovered| Message::Hover(HoverId::ConversationListMore, hovered),
+            |hovered| Message::Hover(HoverId::more(PanelKind::Conversations), hovered),
             "更多",
         );
         cards = cards.push(

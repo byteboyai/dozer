@@ -567,7 +567,7 @@ pub fn update(
         }
         Message::TabHover(..) => {
             // 内容窗格 tab 悬停:由内核 `App::update` 的特化臂转发到
-            // `HoverId::DatabaseTabItem/DatabaseTabClose`,吃不到这里。
+            // `HoverId::tab_item`/`tab_close`(`PanelKind::Database`),吃不到这里。
         }
     }
 }
