@@ -8,7 +8,65 @@
 //! 目前只有 `App` 一个实现;不为未来的第二个实现预先抽象更多方法——面板需要什么才加什么。
 
 use crate::app::{App, HoverId, PanelKind};
+use dozer_client::Client;
 use iced_widget::core::Element;
+use std::future::Future;
+use std::sync::Arc;
+use tokio::runtime::Handle;
+
+/// host 给面板的**执行原语**:面板要在后台跑任务,需要三样东西——`Client`(dozerd 连接)、
+/// `Handle`(tokio runtime)、"把结果包成该面板的 `Message` 投回事件循环"。收成一个值,由 host
+/// 构造、传给面板模块里的执行器(`group_chat::run_effect` 等);host 不再认识面板的具体 Effect。
+///
+/// 与 [`PanelHost`](只读视图契约)是一对:`PanelHost` 管"读 host 状态来画 view",`PanelIo` 管
+/// "让 host 替我跑东西"。是具体结构体而不是 trait(规格 §1:不为未来的第二个宿主预先抽象);
+/// 测试里用 `PanelIo::new` 配一个收进 channel 的 `emit` 即可。
+pub(crate) struct PanelIo<M> {
+    client: Client,
+    handle: Handle,
+    emit: Arc<dyn Fn(M) + Send + Sync + 'static>,
+}
+
+impl<M> Clone for PanelIo<M> {
+    fn clone(&self) -> Self {
+        Self {
+            client: self.client.clone(),
+            handle: self.handle.clone(),
+            emit: Arc::clone(&self.emit),
+        }
+    }
+}
+
+impl<M: Send + 'static> PanelIo<M> {
+    pub(crate) fn new(
+        client: Client,
+        handle: Handle,
+        emit: impl Fn(M) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            client,
+            handle,
+            emit: Arc::new(emit),
+        }
+    }
+
+    /// 同步投回一条面板消息。
+    pub(crate) fn emit(&self, message: M) {
+        (self.emit)(message);
+    }
+
+    /// 在 host 的 runtime 上跑一个后台任务。任务拿到 host 的 `Client` 和一份 `PanelIo` 副本,
+    /// 想发多少条消息(包括零条:只在失败时才发的命令)由任务自己决定。
+    pub(crate) fn spawn<F, Fut>(&self, task: F)
+    where
+        F: FnOnce(Client, PanelIo<M>) -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let client = self.client.clone();
+        let io = self.clone();
+        self.handle.spawn(async move { task(client, io).await });
+    }
+}
 
 /// 面板内一个可悬停元素的**槽位**——词汇通用,不含任何面板名(规格 E2:宿主公开类型里不出现业务类型)。
 /// 与面板(`PanelKind`)一起构成 `HoverId::Panel(panel, slot)`。新增槽位种类前先看能不能用 `Named`。
@@ -212,5 +270,86 @@ mod tests {
         .map(|f| HoverId::choice(PanelKind::GitLog, f as u64))
         .collect();
         assert_eq!(keys.len(), 5);
+    }
+
+    // ---- H4:PanelIo ----
+
+    fn test_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    /// 一个把 `emit` 都收进 channel 的 `PanelIo<u32>`(`Client` 指向不存在的 socket,本组测试不用它)。
+    fn recording_io(
+        rt: &tokio::runtime::Runtime,
+    ) -> (PanelIo<u32>, std::sync::mpsc::Receiver<u32>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        let client = dozer_client::Client::new(std::path::PathBuf::from(
+            "/tmp/dozer-panel-io-test-nonexistent.sock",
+        ));
+        let io = PanelIo::new(client, rt.handle().clone(), move |m| {
+            let _ = tx.lock().unwrap().send(m);
+        });
+        (io, rx)
+    }
+
+    #[test]
+    fn emit_delivers_the_message_synchronously() {
+        let rt = test_runtime();
+        let (io, rx) = recording_io(&rt);
+        io.emit(7);
+        assert_eq!(rx.try_recv().unwrap(), 7);
+    }
+
+    #[test]
+    fn clones_share_one_sink() {
+        let rt = test_runtime();
+        let (io, rx) = recording_io(&rt);
+        let other = io.clone();
+        io.emit(1);
+        other.emit(2);
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec![1, 2]);
+    }
+
+    #[test]
+    fn spawn_runs_on_the_runtime_and_the_task_may_emit_any_number_of_times() {
+        let rt = test_runtime();
+        let (io, rx) = recording_io(&rt);
+        io.spawn(|_client, io| async move {
+            io.emit(10);
+            io.emit(11);
+        });
+        io.spawn(
+            |_client, _io| async move { /* 零条也合法(例如只在失败时才发消息的命令) */
+            },
+        );
+        let got = [
+            rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
+            rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
+        ];
+        assert_eq!(got, [10, 11]);
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(200))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn spawn_hands_the_task_the_hosts_client() {
+        let rt = test_runtime();
+        let (io, rx) = recording_io(&rt);
+        io.spawn(|client, io| async move {
+            // 指向不存在 socket 的 Client:真的发请求必然失败——证明拿到的是 host 的那个 Client。
+            let failed = client.list_groups(1).await.is_err();
+            io.emit(u32::from(failed));
+        });
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
+            1
+        );
     }
 }

@@ -330,6 +330,17 @@ pub struct ShellIo {
 }
 
 impl ShellIo {
+    /// 给面板模块的执行原语:`wrap` 把面板自己的 `Message` 包成宿主 `Message`(通常是 `Message::<面板>`)。
+    pub(crate) fn panel_io<M: Send + 'static>(
+        &self,
+        wrap: fn(M) -> Message,
+    ) -> crate::panel_host::PanelIo<M> {
+        let proxy = self.proxy.clone();
+        crate::panel_host::PanelIo::new(self.client.clone(), self.handle.clone(), move |m| {
+            let _ = proxy.send_event(wrap(m));
+        })
+    }
+
     /// 登记一个"退出前必须等完"的 spawn 任务。调用方仍按 fire-and-forget
     /// 的写法 `io.handle.spawn(...)`,只是把返回的 `JoinHandle` 交这里
     /// 存着,而不是直接丢弃——退出时 `App::wait_for_pending_exit_tasks`

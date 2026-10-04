@@ -868,6 +868,14 @@ impl App {
     }
 
     /// 外壳侧共享句柄的快照,交给项目态方法发起异步 IO(见 [`ShellIo`])。
+    /// 同 [`ShellIo::panel_io`],直接从 `App` 取。
+    pub(crate) fn panel_io<M: Send + 'static>(
+        &self,
+        wrap: fn(M) -> Message,
+    ) -> crate::panel_host::PanelIo<M> {
+        self.shell_io().panel_io(wrap)
+    }
+
     pub(crate) fn shell_io(&self) -> ShellIo {
         ShellIo {
             client: self.client.clone(),
@@ -1638,29 +1646,11 @@ impl App {
             return;
         };
         let now = std::time::Instant::now();
-        let client = self.client.clone();
-        let handle = self.handle.clone();
-        let proxy = self.proxy.clone();
-        let emit = move |m: crate::extensions::group_chat::Message| {
-            let _ = proxy.send_event(Message::GroupChat(m));
-        };
+        let io = self.panel_io(Message::GroupChat);
         let Some(ws) = self.active_workspace_mut() else {
             return;
         };
-        if ws.group_chat.load_due() {
-            crate::extensions::group_chat::spawn_load_groups(project_id, &client, &handle, emit);
-            return;
-        }
-        let (Some(group_id), true) = (ws.group_chat.selected(), ws.group_chat.has_active_turn())
-        else {
-            return;
-        };
-        if ws.group_chat.poll_due(now) {
-            let after_rev = ws.group_chat.latest_rev();
-            crate::extensions::group_chat::spawn_fetch_messages(
-                project_id, group_id, after_rev, &client, &handle, emit,
-            );
-        }
+        crate::extensions::group_chat::poll_if_due(&mut ws.group_chat, project_id, now, &io);
     }
 
     /// 设置某按钮的悬停目标（`true`=进入,`false`=离开）；动画由

@@ -6,10 +6,9 @@
 //! 与 `App::poll_group_chat_if_active`)。
 
 use crate::extensions::toast::{Level, Outbox, Pending};
-use dozer_client::Client;
+use crate::panel_host::PanelIo;
 use dozer_core::protocol::{GroupInfo, GroupMessageInfo, GroupMessageStatus};
 use std::time::{Duration, Instant};
-use tokio::runtime::Handle;
 
 mod protocol;
 mod view;
@@ -427,38 +426,24 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
 // ---------------------------------------------------------------------------
 
 /// 加载某项目的群聊列表。
-pub fn spawn_load_groups(
-    project_id: i64,
-    client: &Client,
-    handle: &Handle,
-    emit: impl Fn(Message) + Send + 'static,
-) {
-    let client = client.clone();
-    handle.spawn(async move {
+pub fn spawn_load_groups(project_id: i64, io: &PanelIo<Message>) {
+    io.spawn(move |client, io| async move {
         let result = client
             .list_groups(project_id)
             .await
             .map_err(|e| e.to_string());
-        emit(Message::GroupsLoaded(project_id, result));
+        io.emit(Message::GroupsLoaded(project_id, result));
     });
 }
 
 /// 取某群 `rev > after_rev` 的消息(`after_rev = 0` 即全量)。
-pub fn spawn_fetch_messages(
-    project_id: i64,
-    group_id: i64,
-    after_rev: i64,
-    client: &Client,
-    handle: &Handle,
-    emit: impl Fn(Message) + Send + 'static,
-) {
-    let client = client.clone();
-    handle.spawn(async move {
+pub fn spawn_fetch_messages(project_id: i64, group_id: i64, after_rev: i64, io: &PanelIo<Message>) {
+    io.spawn(move |client, io| async move {
         let result = client
             .list_group_messages(group_id, after_rev, POLL_LIMIT)
             .await
             .map_err(|e| e.to_string());
-        emit(Message::Polled {
+        io.emit(Message::Polled {
             project_id,
             group_id,
             result,
@@ -467,26 +452,19 @@ pub fn spawn_fetch_messages(
 }
 
 /// 执行一条经 `route_event` 校验过的命令。`SelectGroup`/`OpenTodo` 不走这里
-/// (前者是同步状态变更,后者是切面板),由 `App` 直接处理。
-pub fn spawn_command(
-    project_id: i64,
-    cmd: Command,
-    client: &Client,
-    handle: &Handle,
-    emit: impl Fn(Message) + Send + 'static,
-) {
-    let client = client.clone();
-    handle.spawn(async move {
+/// (前者是同步状态变更,见 [`select_group`];后者是切面板,由 host 处理)。
+pub fn spawn_command(project_id: i64, cmd: Command, io: &PanelIo<Message>) {
+    io.spawn(move |client, io| async move {
         let fail =
             |what: &str, e: anyhow::Error| Message::Failed(project_id, format!("{what}: {e}"));
         match cmd {
             Command::CreateGroup { topic } => match client.create_group(project_id, &topic).await {
-                Ok(group) => emit(Message::GroupCreated(project_id, group)),
-                Err(e) => emit(fail("新建群聊失败", e)),
+                Ok(group) => io.emit(Message::GroupCreated(project_id, group)),
+                Err(e) => io.emit(fail("新建群聊失败", e)),
             },
             Command::DeleteGroup { group_id } => match client.delete_group(group_id).await {
-                Ok(()) => emit(Message::GroupDeleted(project_id, group_id)),
-                Err(e) => emit(fail("删除群聊失败", e)),
+                Ok(()) => io.emit(Message::GroupDeleted(project_id, group_id)),
+                Err(e) => io.emit(fail("删除群聊失败", e)),
             },
             Command::AddMember {
                 group_id,
@@ -497,8 +475,8 @@ pub fn spawn_command(
                 .add_group_member(group_id, agent, &handle, &role_prompt)
                 .await
             {
-                Ok(group) => emit(Message::GroupChanged(project_id, group)),
-                Err(e) => emit(fail("添加成员失败", e)),
+                Ok(group) => io.emit(Message::GroupChanged(project_id, group)),
+                Err(e) => io.emit(fail("添加成员失败", e)),
             },
             Command::UpdateMember {
                 member_id,
@@ -508,52 +486,99 @@ pub fn spawn_command(
                 .update_group_member(member_id, &handle, &role_prompt)
                 .await
             {
-                Ok(group) => emit(Message::GroupChanged(project_id, group)),
-                Err(e) => emit(fail("修改成员失败", e)),
+                Ok(group) => io.emit(Message::GroupChanged(project_id, group)),
+                Err(e) => io.emit(fail("修改成员失败", e)),
             },
             Command::RemoveMember { member_id } => {
                 match client.remove_group_member(member_id).await {
-                    Ok(group) => emit(Message::GroupChanged(project_id, group)),
-                    Err(e) => emit(fail("移除成员失败", e)),
+                    Ok(group) => io.emit(Message::GroupChanged(project_id, group)),
+                    Err(e) => io.emit(fail("移除成员失败", e)),
                 }
             }
             Command::Post { group_id, text } => {
                 match client.post_group_message(group_id, &text).await {
-                    Ok((human, placeholders, unknown)) => emit(Message::Posted {
+                    Ok((human, placeholders, unknown)) => io.emit(Message::Posted {
                         project_id,
                         group_id,
                         human,
                         placeholders,
                         unknown,
                     }),
-                    Err(e) => emit(fail("发送失败", e)),
+                    Err(e) => io.emit(fail("发送失败", e)),
                 }
             }
             Command::Cancel { group_id, scope } => {
                 if let Err(e) = client.cancel_group(group_id, scope).await {
-                    emit(fail("停止失败", e));
+                    io.emit(fail("停止失败", e));
                 }
             }
             Command::Retry { message_id } => match client.retry_group_message(message_id).await {
-                Ok(message) => emit(Message::MessageUpdated(project_id, message)),
-                Err(e) => emit(fail("重试失败", e)),
+                Ok(message) => io.emit(Message::MessageUpdated(project_id, message)),
+                Err(e) => io.emit(fail("重试失败", e)),
             },
             Command::PushTodo {
                 group_id,
                 message_id,
                 text,
             } => match client.push_group_message_to_todo(message_id, &text).await {
-                Ok(todo) => emit(Message::TodoPushed {
+                Ok(todo) => io.emit(Message::TodoPushed {
                     project_id,
                     group_id,
                     message_id,
                     todo_id: todo.id,
                 }),
-                Err(e) => emit(fail("转为待办失败", e)),
+                Err(e) => io.emit(fail("转为待办失败", e)),
             },
             Command::SelectGroup { .. } | Command::OpenTodo { .. } => {}
         }
     });
+}
+
+/// 面板 `Effect` 的执行器:host 不认识这些变体,只负责给 `PanelIo`。
+pub fn run_effect(effect: Effect, project_id: i64, io: &PanelIo<Message>) {
+    match effect {
+        Effect::FetchMessages { group_id } => spawn_fetch_messages(project_id, group_id, 0, io),
+        Effect::CreateGroup { topic } => {
+            spawn_command(project_id, Command::CreateGroup { topic }, io)
+        }
+        Effect::DeleteGroup { group_id } => {
+            spawn_command(project_id, Command::DeleteGroup { group_id }, io)
+        }
+    }
+}
+
+/// 选中某群(`Command::SelectGroup`:同步状态变更),再执行它产生的 Effect(清空后从头拉消息)。
+/// 其余命令走异步 [`spawn_command`];`OpenTodo`(切面板)是跨面板动作,由 host 处理。
+pub fn select_group(
+    state: &mut WorkspaceState,
+    project_id: i64,
+    group_id: i64,
+    io: &PanelIo<Message>,
+) {
+    for effect in state.select(group_id) {
+        run_effect(effect, project_id, io);
+    }
+}
+
+/// `ResumeTimeReached` 时调用:该加载群列表就加载,该轮询当前群的消息就轮询
+/// (限速、在途、退避都在 `WorkspaceState` 里)。"面板是否可见"由 host 在调用前判断。
+pub fn poll_if_due(
+    state: &mut WorkspaceState,
+    project_id: i64,
+    now: Instant,
+    io: &PanelIo<Message>,
+) {
+    if state.load_due() {
+        spawn_load_groups(project_id, io);
+        return;
+    }
+    let (Some(group_id), true) = (state.selected(), state.has_active_turn()) else {
+        return;
+    };
+    if state.poll_due(now) {
+        let after_rev = state.latest_rev();
+        spawn_fetch_messages(project_id, group_id, after_rev, io);
+    }
 }
 
 #[cfg(test)]
@@ -1033,6 +1058,227 @@ mod tests {
         ];
         for msg in all {
             assert_eq!(msg.project_id(), 3, "{msg:?}");
+        }
+    }
+
+    // ---- H4:Effect/Command 的执行器随面板走(host 只给 PanelIo) ----
+
+    use crate::panel_host::PanelIo;
+    use std::sync::mpsc::{Receiver, channel};
+    use std::sync::{Arc, Mutex};
+
+    const TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// `Client` 指向不存在的 socket:所有请求都会快速失败,于是每个任务都恰好发出一条"失败"
+    /// 形态的消息——不需要 dozerd 就能断言"哪个 Effect/Command 触发了哪个任务、报什么错"。
+    fn offline_io(rt: &tokio::runtime::Runtime) -> (PanelIo<Message>, Receiver<Message>) {
+        let (tx, rx) = channel();
+        let tx = Arc::new(Mutex::new(tx));
+        let client = dozer_client::Client::new(std::path::PathBuf::from(
+            "/tmp/dozer-group-chat-test-nonexistent.sock",
+        ));
+        let io = PanelIo::new(client, rt.handle().clone(), move |m| {
+            let _ = tx.lock().unwrap().send(m);
+        });
+        (io, rx)
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn load_groups_against_an_unreachable_daemon_reports_an_error_for_that_project() {
+        let rt = runtime();
+        let (io, rx) = offline_io(&rt);
+        spawn_load_groups(7, &io);
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::GroupsLoaded(7, Err(_)) => {}
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fetch_messages_against_an_unreachable_daemon_reports_an_error_poll_for_that_group() {
+        let rt = runtime();
+        let (io, rx) = offline_io(&rt);
+        spawn_fetch_messages(7, 5, 3, &io);
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::Polled {
+                project_id: 7,
+                group_id: 5,
+                result: Err(_),
+            } => {}
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_async_command_reports_failure_with_its_own_wording() {
+        let cases: Vec<(Command, &str)> = vec![
+            (Command::CreateGroup { topic: "t".into() }, "新建群聊失败"),
+            (Command::DeleteGroup { group_id: 5 }, "删除群聊失败"),
+            (
+                Command::AddMember {
+                    group_id: 5,
+                    agent: dozer_core::protocol::AgentKind::Claude,
+                    handle: "h".into(),
+                    role_prompt: String::new(),
+                },
+                "添加成员失败",
+            ),
+            (
+                Command::UpdateMember {
+                    member_id: 1,
+                    handle: "h".into(),
+                    role_prompt: String::new(),
+                },
+                "修改成员失败",
+            ),
+            (Command::RemoveMember { member_id: 1 }, "移除成员失败"),
+            (
+                Command::Post {
+                    group_id: 5,
+                    text: "hi".into(),
+                },
+                "发送失败",
+            ),
+            (
+                Command::Cancel {
+                    group_id: 5,
+                    scope: dozer_core::protocol::GroupCancelScope::Turn,
+                },
+                "停止失败",
+            ),
+            (Command::Retry { message_id: 9 }, "重试失败"),
+            (
+                Command::PushTodo {
+                    group_id: 5,
+                    message_id: 9,
+                    text: "x".into(),
+                },
+                "转为待办失败",
+            ),
+        ];
+        let rt = runtime();
+        for (cmd, wording) in cases {
+            let (io, rx) = offline_io(&rt);
+            spawn_command(7, cmd.clone(), &io);
+            match rx.recv_timeout(TIMEOUT).unwrap() {
+                Message::Failed(7, text) => {
+                    assert!(text.starts_with(wording), "{cmd:?}: {text}");
+                }
+                other => panic!("{cmd:?}: unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn select_and_open_todo_commands_do_not_spawn_anything() {
+        let rt = runtime();
+        let (io, rx) = offline_io(&rt);
+        spawn_command(7, Command::SelectGroup { group_id: 5 }, &io);
+        spawn_command(7, Command::OpenTodo { todo_id: 1 }, &io);
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+    }
+
+    #[test]
+    fn run_effect_maps_each_effect_to_its_task() {
+        let rt = runtime();
+        let (io, rx) = offline_io(&rt);
+        run_effect(Effect::FetchMessages { group_id: 5 }, 7, &io);
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::Polled {
+                project_id: 7,
+                group_id: 5,
+                result: Err(_),
+            } => {}
+            other => panic!("unexpected: {other:?}"),
+        }
+        run_effect(Effect::CreateGroup { topic: "t".into() }, 7, &io);
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::Failed(7, ref t) if t.starts_with("新建群聊失败")
+        ));
+        run_effect(Effect::DeleteGroup { group_id: 5 }, 7, &io);
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::Failed(7, ref t) if t.starts_with("删除群聊失败")
+        ));
+    }
+
+    #[test]
+    fn select_group_changes_selection_and_fetches_its_messages() {
+        let rt = runtime();
+        let (io, rx) = offline_io(&rt);
+        let mut s = loaded(vec![group(5, "A"), group(6, "B")]);
+        select_group(&mut s, 7, 6, &io);
+        assert_eq!(s.selected(), Some(6));
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::Polled {
+                project_id: 7,
+                group_id: 6,
+                ..
+            } => {}
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn select_of_the_current_or_an_unknown_group_does_nothing() {
+        let rt = runtime();
+        let (io, rx) = offline_io(&rt);
+        let mut s = loaded(vec![group(5, "A")]);
+        select_group(&mut s, 7, 5, &io);
+        select_group(&mut s, 7, 999, &io);
+        assert_eq!(s.selected(), Some(5));
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+    }
+
+    #[test]
+    fn poll_if_due_loads_the_group_list_first() {
+        let rt = runtime();
+        let (io, rx) = offline_io(&rt);
+        let mut s = WorkspaceState::default(); // 从未加载:load_due
+        poll_if_due(&mut s, 7, Instant::now(), &io);
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::GroupsLoaded(7, Err(_))
+        ));
+        // 在途期间不重复发起
+        poll_if_due(&mut s, 7, Instant::now(), &io);
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+    }
+
+    #[test]
+    fn poll_if_due_polls_only_a_selected_group_with_an_active_turn() {
+        let rt = runtime();
+        let (io, rx) = offline_io(&rt);
+        let mut s = loaded(vec![group(5, "A")]);
+        // 没有进行中的发言:不轮询
+        poll_if_due(&mut s, 7, Instant::now(), &io);
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        // 有一条 Running 的消息:轮询,after_rev 取当前 latest_rev
+        update(
+            &mut s,
+            Message::Polled {
+                project_id: 7,
+                group_id: 5,
+                result: Ok((vec![msg(1, 1, 4, Some(GroupMessageStatus::Running))], 4)),
+            },
+        );
+        poll_if_due(&mut s, 7, Instant::now(), &io);
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::Polled {
+                project_id: 7,
+                group_id: 5,
+                result: Err(_),
+            } => {}
+            other => panic!("unexpected: {other:?}"),
         }
     }
 }

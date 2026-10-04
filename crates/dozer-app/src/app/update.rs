@@ -1737,11 +1737,12 @@ impl App {
             }
             Message::GroupChat(msg) => {
                 let project_id = msg.project_id();
-                let mut effects = Vec::new();
-                self.with_project(project_id, |ws, _io| {
-                    effects = crate::extensions::group_chat::update(&mut ws.group_chat, msg);
+                self.with_project(project_id, |ws, io| {
+                    let pio = io.panel_io(Message::GroupChat);
+                    for effect in crate::extensions::group_chat::update(&mut ws.group_chat, msg) {
+                        crate::extensions::group_chat::run_effect(effect, project_id, &pio);
+                    }
                 });
-                self.run_group_chat_effects(project_id, effects);
             }
             Message::TodoDetailLoaded(idx, turns) => {
                 self.with_focused_project(move |ws, _io| {
@@ -4681,79 +4682,19 @@ impl App {
         use crate::extensions::group_chat::{self as gc, Command};
         match cmd {
             Command::SelectGroup { group_id } => {
-                let mut effects = Vec::new();
-                self.with_project(project_id, |ws, _io| {
-                    effects = ws.group_chat.select(group_id);
+                self.with_project(project_id, |ws, io| {
+                    let pio = io.panel_io(Message::GroupChat);
+                    gc::select_group(&mut ws.group_chat, project_id, group_id, &pio);
                 });
-                self.run_group_chat_effects(project_id, effects);
             }
             Command::OpenTodo { .. } => {
                 // 只确保 Todo 面板看得见;不做"定位到某条待办"(Todo 面板没有这个入口,
                 // 且不在本功能范围)。不能用 `panel_select`:它对已激活的面板是"收起",
-                // 还会武装图标栏拖拽。
+                // 还会武装图标栏拖拽。(跨面板动作,留在 host。)
                 self.show_panel(PanelKind::Todo);
             }
-            other => {
-                let proxy = self.proxy.clone();
-                gc::spawn_command(
-                    project_id,
-                    other,
-                    &self.client.clone(),
-                    &self.handle.clone(),
-                    move |m| {
-                        let _ = proxy.send_event(Message::GroupChat(m));
-                    },
-                );
-            }
-        }
-    }
-
-    fn run_group_chat_effects(
-        &mut self,
-        project_id: i64,
-        effects: Vec<crate::extensions::group_chat::Effect>,
-    ) {
-        use crate::extensions::group_chat::{self as gc, Effect};
-        for effect in effects {
-            match effect {
-                Effect::FetchMessages { group_id } => {
-                    let proxy = self.proxy.clone();
-                    gc::spawn_fetch_messages(
-                        project_id,
-                        group_id,
-                        0,
-                        &self.client.clone(),
-                        &self.handle.clone(),
-                        move |m| {
-                            let _ = proxy.send_event(Message::GroupChat(m));
-                        },
-                    );
-                }
-                Effect::CreateGroup { topic } => {
-                    let proxy = self.proxy.clone();
-                    gc::spawn_command(
-                        project_id,
-                        gc::Command::CreateGroup { topic },
-                        &self.client.clone(),
-                        &self.handle.clone(),
-                        move |m| {
-                            let _ = proxy.send_event(Message::GroupChat(m));
-                        },
-                    );
-                }
-                Effect::DeleteGroup { group_id } => {
-                    let proxy = self.proxy.clone();
-                    gc::spawn_command(
-                        project_id,
-                        gc::Command::DeleteGroup { group_id },
-                        &self.client.clone(),
-                        &self.handle.clone(),
-                        move |m| {
-                            let _ = proxy.send_event(Message::GroupChat(m));
-                        },
-                    );
-                }
-            }
+            // 其余命令不依赖工作区状态,直接 spawn(与迁移前一致:项目工作区没加载也照常执行)。
+            other => gc::spawn_command(project_id, other, &self.panel_io(Message::GroupChat)),
         }
     }
 
