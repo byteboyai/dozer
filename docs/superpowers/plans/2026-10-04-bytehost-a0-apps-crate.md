@@ -2586,3 +2586,18 @@ Expected: 只有 `docs/` 下 2 个文件与 `CLAUDE.md`。
 **3. 一致性:** `AppId`/`Version`/`Permissions`/`Manifest`/`InstallPlan`/`ObservedState`/`AppRecord` 等名字与形状在测试、实现、Interfaces、文档里一致;`PlanInput` 用具名字段承载 7 个输入(避免相邻的 `String`/枚举参数顺序传错)。
 
 **4. Review Focus:** 8 条各有归属(1、2、4、5、6→审阅/说明;3→`next_action_truth_table`;7→`unknown_fields_…`;8→范围说明)。
+
+---
+
+## 执行后修订(评审修复轮,2026-10-04)
+
+独立评审(opus)对上面执行出的 crate 提出 6 条 Important,全部成立并在同一轮里修掉(每条先写失败测试再修;测试数 59 → **69**,默认 feature 47 → 55、`digest` 53 → 63、`manifest-toml` 53 → 61):
+
+1. **`ApprovedInstallPlan::verify` 改为 `verify(&self, fresh: InstallPlan) -> Result<InstallPlan, VerifyError>`**:先比两个摘要,再比整份计划(新增 `VerifyError::PlanChanged`),并返回**重新计算的**计划——调用方安装/授予权限只能用返回值。原先只比两个摘要,线上 JSON 里被改宽的 `requested`/`enforcement`/`permission_diff` 会原样放行。同时订正了"字段私有、只能经 `approve` 构造"的过度表述(它可以被反序列化出来,安全属性只来自 `verify`)。
+2. **`digest_tree` 拒绝非 UTF-8 文件名**(原先 `to_string_lossy` 会让 `a\xff` 与 `a\u{FFFD}` 变成同一个键,载荷文件的字节可能根本没进摘要)。
+3. **`digest_tree` 只接受普通文件与目录**(FIFO/套接字/设备返回 `InvalidInput`,原先 FIFO 会让安装任务永久阻塞);模块文档补写了"摘要覆盖整个包根目录"与"防 TOCTOU 的前提是对 staging 副本算摘要再 `verify`"。
+4. **`next_action(Stopped, Failed{..})` 改为 `Some(Stop)`**(规格 §4.4:Failed 可经 stop 复位;失败的进程型应用可能还留着活进程)。
+5. **`AppRecord` 新增 `format_version` 与 `observed`**,`state.json` 读到不认识的版本直接拒绝(`RECORD_FORMAT_VERSION = 1`);**被打断的 `Updating` 恢复成 `Stopped`**(每个版本的包目录不可变、`current_version` 最后才写,旧版本仍然完整),原先的"可重试失败"在 `desired = Running` 下会立刻 `Start`、既不重做升级也不检查包。`load` 与 `list` 共用一个 `parse_record`。
+6. **`Manifest::validate` 补了面向 A2/A4 的约束**:入口路径与 `health.path` 不得以 `//` 开头、不得含反斜杠/`?`/`#`/控制字符/`..` 段;`name`、入口 `title`、命令参数不得含控制字符或双向控制字符;容器镜像名不得以 `-` 开头、不得含空白。`will_run` 对命令参数做 shell 风格引用并转义控制/双向字符(`["python","-m app"]` 与 `["python","-m","app"]` 不再渲染成同一行)。
+
+**推迟的 Minor(11 条)**记在 `docs` 之外的执行账本里,交给用户决定;其中值得 A1 前处理的:门禁脚本只查 `-e normal` 的宿主目标(漏 build-dependency 与非 mac 的 cfg 依赖)、`write_atomic` 无 `fsync`、`next_action` 对"可重试失败"没有退避上限(A1 的 manager 必须自己限制)。
