@@ -90,6 +90,10 @@ async fn main() -> Result<()> {
         svc.recover_on_startup();
         svc
     };
+    // 应用宿主:启动永不失败(端口被占用等只会让它"不可用",不影响会话功能);启动时对账,退出时收尾
+    let apps =
+        dozerd::app_service::AppService::start(&dozer_core::paths::state_dir().join("bytehost"))
+            .await;
     let in_flight = dozerd::task_poller::new_in_flight();
     {
         let files = dozerd::transcripts::scan::discover_all_transcript_files();
@@ -158,6 +162,7 @@ async fn main() -> Result<()> {
             memories,
             file_edit_history,
             groups,
+            apps: apps.clone(),
         },
         in_flight,
     );
@@ -168,6 +173,7 @@ async fn main() -> Result<()> {
         }
         _ = tokio::signal::ctrl_c() => {
             dozer_core::log_info!(LOG, "收到 Ctrl-C，退出");
+            apps.shutdown().await;
             summary_shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
             let _ = std::fs::remove_file(&socket);
         }

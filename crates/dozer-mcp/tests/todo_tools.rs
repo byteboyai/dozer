@@ -56,6 +56,7 @@ async fn start_daemon() -> (std::path::PathBuf, CleanupGuard) {
                 memories,
                 file_edit_history,
                 groups,
+                apps: dozerd::app_service::AppService::unavailable("test"),
             },
             dozerd::task_poller::new_in_flight(),
         )

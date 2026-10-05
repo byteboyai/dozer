@@ -1,6 +1,10 @@
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
+use bytehost_apps::id::AppId;
+use bytehost_apps::plan::{ApprovedInstallPlan, InstallPlan, Provenance, TrustLevel};
+use bytehost_apps::proto::{AppReply, AppRequest, AppSource, AppSummary, RuntimeProbe};
+use bytehost_apps::registry::UninstallMode;
 use dozer_core::protocol::{
     AgentKind, AgentState, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
     CodeHealthReportInfo, ConversationSummary, GroupCancelScope, GroupInfo, GroupMessageInfo,
@@ -173,6 +177,93 @@ impl Client {
         let outcome =
             tokio::time::timeout(Duration::from_secs(90), self.roundtrip(&Request::Shutdown)).await;
         interpret_shutdown_reply(outcome)
+    }
+
+    /// 应用宿主请求(原样转给 dozerd 的 `AppService`)。失败(含"应用宿主不可用")走 `Err`。
+    pub async fn app_request(&self, request: AppRequest) -> Result<AppReply> {
+        match self.roundtrip(&Request::App { request }).await? {
+            Reply::App { reply } => Ok(reply),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn app_list(&self) -> Result<Vec<AppSummary>> {
+        match self.app_request(AppRequest::List).await? {
+            AppReply::Apps { apps } => Ok(apps),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// 出安装计划(不安装任何东西)。
+    pub async fn app_plan(
+        &self,
+        source: AppSource,
+        provenance: Provenance,
+        trust: TrustLevel,
+    ) -> Result<InstallPlan> {
+        match self
+            .app_request(AppRequest::Plan {
+                source,
+                provenance,
+                trust,
+            })
+            .await?
+        {
+            AppReply::Plan { plan } => Ok(*plan),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// 安装一份已批准的计划(服务端对 staging 副本重新计算并核对)。
+    pub async fn app_install(
+        &self,
+        approved: ApprovedInstallPlan,
+        source: AppSource,
+    ) -> Result<()> {
+        let request = AppRequest::Install {
+            approved: Box::new(approved),
+            source,
+        };
+        self.app_expect_done(request).await
+    }
+
+    /// 启动应用,返回不含令牌的站点地址。
+    pub async fn app_start(&self, id: AppId) -> Result<String> {
+        match self.app_request(AppRequest::Start { id }).await? {
+            AppReply::Started { url } => Ok(url),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn app_stop(&self, id: AppId) -> Result<()> {
+        self.app_expect_done(AppRequest::Stop { id }).await
+    }
+
+    pub async fn app_uninstall(&self, id: AppId, mode: UninstallMode) -> Result<()> {
+        self.app_expect_done(AppRequest::Uninstall { id, mode })
+            .await
+    }
+
+    /// 首次导航用的地址(含令牌,**秘密**:不要写日志)。应用没在运行会失败。
+    pub async fn app_launch_url(&self, id: AppId) -> Result<String> {
+        match self.app_request(AppRequest::LaunchUrl { id }).await? {
+            AppReply::LaunchUrl { url } => Ok(url),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn app_probe_runtimes(&self) -> Result<Vec<RuntimeProbe>> {
+        match self.app_request(AppRequest::ProbeRuntimes).await? {
+            AppReply::Runtimes { runtimes } => Ok(runtimes),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    async fn app_expect_done(&self, request: AppRequest) -> Result<()> {
+        match self.app_request(request).await? {
+            AppReply::Done => Ok(()),
+            other => bail!("意外应答: {other:?}"),
+        }
     }
 
     /// 触发某 cwd 下缺失总结会话的批量补录(项目"修复"按钮用,spec
