@@ -1912,6 +1912,7 @@ dependencies = [
  "arboard",
  "block2 0.6.2",
  "bytegit",
+ "bytehost-apps",
  "byteui",
  "calamine",
  "csv",
