@@ -1,5 +1,9 @@
 # bytehost A3:图标栏应用条目 Implementation Plan
 
+> **状态:已实现(2026-10-05)。** Task 1 → `64e2d283`;Task 2+3 → `22b0289e`(合并提交,理由见 Task 2 Step 6)。
+> 门禁:fmt / check-log-scope / check_panel_boundary 通过,clippy 仅存量警告,`cargo test -p dozer-app`
+> 1868 passed(仅既有 NFD 文件名失败)。已知局限见文末(rail 条目无调用者,A4 才接线)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 图标栏能出现、拖动、切换"应用"条目(`PanelKind::App`),并有一个与已安装应用集合对齐的纯函数;应用自己的 wry 视图、数据来源留给 A4。
@@ -38,9 +42,9 @@
 **Interfaces:**
 - Produces: `AppSlot::intern(&str) -> Option<AppSlot>`(幂等,非法 id/表满返回 `None`)、`AppSlot::id(self) -> &'static str`、`PanelKind::App(AppSlot)`、`PanelDims.app_split`、`app_placeholder_pane`(占位内容)。
 
-- [ ] **Step 1: 写失败测试。** 新建 `app_slots.rs`(下面的测试模块先写,`intern`/`id` 先 `todo!()`),并在 `state.rs` 末尾加 `panel_kind_serde_tests`(见 Step 3 的 diff 里的测试模块)。
-- [ ] **Step 2: 运行确认 RED。** `cargo test -p dozer-app -- slot panel_kind_serde` → 编译失败(`PanelKind::App` 不存在)/测试失败。
-- [ ] **Step 3: 实现。** 新建文件内容:
+- [x] **Step 1: 写失败测试。** 新建 `app_slots.rs`(下面的测试模块先写,`intern`/`id` 先 `todo!()`),并在 `state.rs` 末尾加 `panel_kind_serde_tests`(见 Step 3 的 diff 里的测试模块)。
+- [x] **Step 2: 运行确认 RED。** `cargo test -p dozer-app -- slot panel_kind_serde` → 编译失败(`PanelKind::App` 不存在)/测试失败。
+- [x] **Step 3: 实现。** 新建文件内容:
 
 ```rust
 //! 应用面板槽(bytehost A3):`PanelKind::App(AppSlot)` 里的 `AppSlot` 是进程内的小整数,
@@ -400,9 +404,9 @@ index 918bef3c..d1f3a2cf 100644
          // "配对列宽 + preview chrome 高度"算法,但 `mirrored` 要取反——
 ```
 
-- [ ] **Step 4: GREEN。** `cargo fmt -p dozer-app && cargo test -p dozer-app -- slot panel_kind_serde` → 全过(5 个)。
-- [ ] **Step 5: 变异检查。** 把序列化改成 `s.serialize_str(slot.id())` → `app_panels_roundtrip_as_app_colon_id` 必须 FAILED;还原。
-- [ ] **Step 6: Commit。** `git add crates/dozer-app && git commit -m "feat(dozer-app): PanelKind::App + AppSlot interning (A3 task 1)"`
+- [x] **Step 4: GREEN。** `cargo fmt -p dozer-app && cargo test -p dozer-app -- slot panel_kind_serde` → 全过(5 个)。
+- [x] **Step 5: 变异检查。** 把序列化改成 `s.serialize_str(slot.id())` → `app_panels_roundtrip_as_app_colon_id` 必须 FAILED;还原。
+- [x] **Step 6: Commit。** `git add crates/dozer-app && git commit -m "feat(dozer-app): PanelKind::App + AppSlot interning (A3 task 1)"`
 
 ### Task 2: 清单容忍 + `sync_apps` + 拖拽守卫 + `panel_meta`
 
@@ -412,9 +416,9 @@ index 918bef3c..d1f3a2cf 100644
 - Consumes: Task 1 的 `AppSlot`/`PanelKind::App`。
 - Produces: `RailLayout::sync_apps(&mut self, installed: &[AppSlot], default_side: Side) -> bool`、`RailLayout::view_or_first(&self, side: Side, view: PanelKind) -> PanelKind`、`panel_registry::APP_DEFAULT_SIDE`(= 左栏)、`catalog.default_side(App)`、`accepts` 只校内置面板。
 
-- [ ] **Step 1: 写失败测试。** 下面 diff 里 `panel_registry.rs` 的 `accepts_ignores_app_entries_but_rejects_duplicates_among_them` 与 `rail.rs` 的 5 个 A3 测试(`sync_apps_*`、`view_or_first_*`、`cross_apply_never_strands_*`、`app_entries_have_title_icon_and_default_side`)。
-- [ ] **Step 2: RED。** `cargo test -p dozer-app -- sync_apps view_or_first cross_apply_never app_entries accepts_ignores` → 失败(函数不存在/行为不对)。
-- [ ] **Step 3: 实现:**
+- [x] **Step 1: 写失败测试。** 下面 diff 里 `panel_registry.rs` 的 `accepts_ignores_app_entries_but_rejects_duplicates_among_them` 与 `rail.rs` 的 5 个 A3 测试(`sync_apps_*`、`view_or_first_*`、`cross_apply_never_strands_*`、`app_entries_have_title_icon_and_default_side`)。
+- [x] **Step 2: RED。** `cargo test -p dozer-app -- sync_apps view_or_first cross_apply_never app_entries accepts_ignores` → 失败(函数不存在/行为不对)。
+- [x] **Step 3: 实现:**
 
 ```diff
 diff --git a/crates/dozer-app/src/panel_registry.rs b/crates/dozer-app/src/panel_registry.rs
@@ -678,9 +682,9 @@ index cd376260..342b4ace 100644
  }
 ```
 
-- [ ] **Step 4: GREEN。** `cargo fmt -p dozer-app && cargo test -p dozer-app -- sync_apps view_or_first cross_apply_never app_entries accepts_ignores` → 全过。
-- [ ] **Step 5: 变异检查(每条都必须让对应测试 FAILED,再还原):** (a) `PanelKind::App(slot) => installed.contains(slot),` 改成 `PanelKind::App(_) => true,`;(b) `if !matches!(moved, PanelKind::App(_)) && builtin_left <= 1` 改成 `if false`;(c) `apps.windows(2).any(|w| w[0] == w[1])` 改成 `false`。
-- [ ] **Step 6: Commit。** `git commit -am "feat(dozer-app): rail app entries — sync_apps, catalog tolerance, drag guard (A3 task 2)"`
+- [x] **Step 4: GREEN。** `cargo fmt -p dozer-app && cargo test -p dozer-app -- sync_apps view_or_first cross_apply_never app_entries accepts_ignores` → 全过。
+- [x] **Step 5: 变异检查(每条都必须让对应测试 FAILED,再还原):** (a) `PanelKind::App(slot) => installed.contains(slot),` 改成 `PanelKind::App(_) => true,`;(b) `if !matches!(moved, PanelKind::App(_)) && builtin_left <= 1` 改成 `if false`;(c) `apps.windows(2).any(|w| w[0] == w[1])` 改成 `false`。
+- [x] **Step 6: Commit。** Task 2 与 Task 3 合并为一个提交 `22b0289e`(Task 2 的 `sync_apps`/`view_or_first` 只有 Task 3 的调用者,单独提交会留下 dead-code 警告)。
 
 ### Task 3: host 同步入口 + 项目视图退路
 
@@ -690,7 +694,7 @@ index cd376260..342b4ace 100644
 - Consumes: Task 2 的 `sync_apps`/`view_or_first`/`APP_DEFAULT_SIDE`。
 - Produces: `App::sync_installed_apps(&mut self, installed: &[AppSlot])`(`#[allow(dead_code)]`,A4 才有调用者);`adopt_panel_layout` 对已消失应用的视图退到该栏第一个面板。
 
-- [ ] **Step 1: 实现**(这一步的 `App` 需要 `Client`/事件循环,没有廉价夹具——逻辑全在 Task 2 已测的纯函数里,这里只是接线):
+- [x] **Step 1: 实现**(这一步的 `App` 需要 `Client`/事件循环,没有廉价夹具——逻辑全在 Task 2 已测的纯函数里,这里只是接线):
 
 ```diff
 diff --git a/crates/dozer-app/src/app/app.rs b/crates/dozer-app/src/app/app.rs
@@ -733,9 +737,9 @@ index 4b66828c..3dc71a6e 100644
      pub(crate) fn spawn_panel_layouts_save(&mut self) {
 ```
 
-- [ ] **Step 2: 全量验证。** `cargo fmt -p dozer-app && cargo clippy -p dozer-app --all-targets && cargo test -p dozer-app` → 预期仅 `extensions::files::tests::delete_confirm_spec_reflects_pending_target` 与 `extensions::git_log::tests::build_marks_head_branch_and_labels` 两个**已在 main 上失败**的环境相关测试红(执行前先在 main 上确认),其余全绿(基线 1855 + 本计划新增 11 个)。
-- [ ] **Step 3: Commit。** `git commit -am "feat(dozer-app): App::sync_installed_apps + stale-view fallback (A3 task 3)"`
-- [ ] **Step 4: 文档。** 在 `docs/superpowers/specs/2026-10-04-bytehost-app-host-design.md` 的 A3 行后加一句"A3 已落地:见本计划;`App::sync_installed_apps` 待 A4 接线"。
+- [x] **Step 2: 全量验证。** `cargo fmt -p dozer-app && cargo clippy -p dozer-app --all-targets && cargo test -p dozer-app` → 预期仅 `extensions::files::tests::delete_confirm_spec_reflects_pending_target` 与 `extensions::git_log::tests::build_marks_head_branch_and_labels` 两个**已在 main 上失败**的环境相关测试红(执行前先在 main 上确认),其余全绿(基线 1855 + 本计划新增 11 个)。
+- [x] **Step 3: Commit。** 同 Task 2,合并提交 `22b0289e`。
+- [x] **Step 4: 文档。** 在 `docs/superpowers/specs/2026-10-04-bytehost-app-host-design.md` 的 A3 行后加一句"A3 已落地:见本计划;`App::sync_installed_apps` 待 A4 接线"。
 
 ## 已知局限(写在计划里,不是缺陷)
 
