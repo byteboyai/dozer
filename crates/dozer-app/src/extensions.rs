@@ -21,6 +21,7 @@ pub mod project;
 pub mod project_create;
 pub mod search;
 pub mod settings;
+pub mod settings_apps;
 pub mod ssh;
 pub mod toast;
 pub mod todo;

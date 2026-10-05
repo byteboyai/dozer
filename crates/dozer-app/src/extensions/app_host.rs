@@ -39,7 +39,7 @@ impl Failure {
         }
     }
 
-    fn text(&self) -> &str {
+    pub(crate) fn text(&self) -> &str {
         match self {
             Self::Host(f) => &f.message,
             Self::Transport(t) => t,

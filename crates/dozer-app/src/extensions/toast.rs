@@ -133,6 +133,22 @@ impl Outbox {
         });
     }
 
+    /// 带去重键的版本:同 key 再推只刷新文本与计时(语义同 `App::push_toast_keyed`)。
+    pub fn push_keyed(
+        &mut self,
+        scope: Scope,
+        level: Level,
+        text: impl Into<String>,
+        key: impl Into<String>,
+    ) {
+        self.items.push(Pending {
+            scope,
+            level,
+            text: text.into(),
+            key: Some(key.into()),
+        });
+    }
+
     /// `Err(e)` 时推一条 `Error` 级 `"{what}: {e}"`;`Ok` 什么都不做。
     pub fn push_err<T, E: std::fmt::Display>(
         &mut self,
@@ -369,6 +385,17 @@ mod tests {
         assert_eq!(got[1].level, Level::Warning);
         assert_eq!(got[1].scope, TEST_TODO);
         assert!(o.take().is_empty(), "取走后应为空");
+    }
+
+    #[test]
+    fn outbox_push_keyed_carries_the_dedupe_key() {
+        let mut o = Outbox::default();
+        o.push_keyed(TEST_TODO, Level::Error, "停止失败", "apps:act:x");
+        let got = o.take();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].key.as_deref(), Some("apps:act:x"));
+        assert_eq!(got[0].text, "停止失败");
+        assert_eq!(got[0].level, Level::Error);
     }
 
     #[test]
