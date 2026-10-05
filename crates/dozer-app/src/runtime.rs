@@ -234,25 +234,54 @@ pub(crate) fn sync_webview_pool(
         .lock()
         .expect("preview resource manager lock");
     let mut keep = std::collections::HashSet::new();
-    let current_project = specs
-        .iter()
-        .find_map(|(s, _)| s.editor_binding.as_ref().map(|b| b.project_id));
+    // 需要计入预算的 host 有两类:CodeMirror/JSON Tree 编辑 host(身份来自
+    // `editor_binding`)与 T8 起的 PlantUML Rendered host(身份来自
+    // `reserve` 的 `ReserveHint`,无编辑器绑定)。两者的 `(project, panel, tab)`
+    // 只有一套用于 reserve/register/evict/回灌台账。
+    let current_project = specs.iter().find_map(|(s, _)| {
+        s.editor_binding
+            .as_ref()
+            .map(|b| b.project_id)
+            .or_else(|| s.reserve.as_ref().map(|r| r.project_id))
+    });
     for (spec, bounds) in specs {
-        let Some(binding) = spec.editor_binding.as_ref() else {
+        // 解析本条 spec 的预算身份与开销;不参与 reserve 的 host 直接放行。
+        let budget = spec
+            .editor_binding
+            .as_ref()
+            .map(|binding| {
+                let bytes = std::fs::metadata(&binding.path)
+                    .map(|m| m.len().saturating_mul(2).saturating_add(1024 * 1024))
+                    .unwrap_or(1024 * 1024)
+                    .min(manager.budgets().single_editor_bytes);
+                (
+                    (binding.project_id, binding.panel, binding.tab_id),
+                    bytes,
+                    true,
+                    crate::preview::ViewerHostKind::Editor,
+                )
+            })
+            .or_else(|| {
+                spec.reserve.as_ref().map(|hint| {
+                    (
+                        hint.key(),
+                        hint.cost.estimated_bytes,
+                        hint.cost.heavy_webview,
+                        hint.cost.kind,
+                    )
+                })
+            });
+        let Some((key, bytes, heavy, kind)) = budget else {
             approved.push((spec, bounds));
             continue;
         };
-        let key = (binding.project_id, binding.panel, binding.tab_id);
+        let (project_id, panel, tab_id) = key;
         // T10:host 若在 `Reserving` 等待预算,携带其 loading 世代回灌调用方。
         let loading_generation = spec.loading_generation;
-        keep.insert((binding.panel, binding.tab_id));
+        keep.insert((panel, tab_id));
         if !manager.contains(key) {
-            let bytes = std::fs::metadata(&binding.path)
-                .map(|m| m.len().saturating_mul(2).saturating_add(1024 * 1024))
-                .unwrap_or(1024 * 1024)
-                .min(manager.budgets().single_editor_bytes);
             let reservation =
-                manager.try_reserve(bytes, true, current_project.unwrap_or(binding.project_id));
+                manager.try_reserve(bytes, heavy, current_project.unwrap_or(project_id));
             if let crate::preview::Reservation::NeedEviction(keys) = reservation {
                 for (project, panel, tab) in keys {
                     let marker = format!("proj={project}");
@@ -275,27 +304,26 @@ pub(crate) fn sync_webview_pool(
                 }
             }
             if !matches!(
-                manager.try_reserve(bytes, true, binding.project_id),
+                manager.try_reserve(bytes, heavy, project_id),
                 crate::preview::Reservation::Granted
             ) {
                 dozer_core::log_warn!(
                     LOG,
-                    project_id = binding.project_id,
-                    tab_id = binding.tab_id,
-                    "preview resource budget denied editor webview"
+                    project_id,
+                    tab_id,
+                    heavy,
+                    "preview resource budget denied webview"
                 );
-                outcome.denied.push((
-                    (binding.project_id, binding.panel, binding.tab_id),
-                    loading_generation.unwrap_or(0),
-                ));
+                outcome.denied.push((key, loading_generation.unwrap_or(0)));
                 continue;
             }
             manager.register(crate::preview::ViewerRegistration {
-                project_id: binding.project_id,
-                panel: binding.panel,
-                tab_id: binding.tab_id,
+                project_id,
+                panel,
+                tab_id,
                 estimated_bytes: bytes,
-                heavy_webview: true,
+                heavy_webview: heavy,
+                kind,
                 active: spec.visible,
                 dirty: false,
                 has_recovery: false,
@@ -316,6 +344,25 @@ pub(crate) fn sync_webview_pool(
     if let Some(project_id) = current_project {
         manager.prune_project(project_id, &keep);
     }
+    // T8 bullet 8:资源诊断——按宿主种类报告驻留数与估算字节(成本估算,
+    // 不含任何文件正文)。debug 级,面板过滤见 `dozer::module::runtime`。
+    let diag = manager.diagnostics();
+    dozer_core::log_debug!(
+        LOG,
+        resident_count = diag.resident_count,
+        total_resident_bytes = diag.total_resident_bytes,
+        heavy_webviews = diag.heavy_webviews,
+        max_heavy_webviews = diag.max_heavy_webviews,
+        plantuml_resident = diag
+            .by_kind
+            .iter()
+            .find(|(k, _)| *k == crate::preview::ViewerHostKind::PlantUml)
+            .map(|(_, n)| *n)
+            .unwrap_or(0),
+        by_kind = ?diag.by_kind,
+        bytes_by_kind = ?diag.bytes_by_kind,
+        "预览资源诊断"
+    );
     drop(manager);
     let specs = approved;
     let desired_hosts: std::collections::HashMap<usize, bool> = specs

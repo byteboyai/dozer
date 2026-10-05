@@ -18,6 +18,39 @@ pub(crate) fn disk_mtime(path: &std::path::Path) -> Option<std::time::SystemTime
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
+/// T8:构造 PlantUML Rendered host 的 reserve 线索(仅 PlantUML;其余
+/// Rendered host 返回 `None`,沿用"不走 reserve"的既有行为)。成本按
+/// `estimate_cost` 的固定引擎开销 + 源码大小、占一个重型 WebView 名额
+/// (规格 §7)。仅当 tab 处于**渲染态**(`RenderedMode::Rendered`)时才计入:
+/// Source 模式由 CodeMirror 承载,成本走 editor 路径,不重复登记。
+fn plantuml_reserve_hint(
+    project_id: i64,
+    panel: crate::app::PanelKind,
+    tab: &PreviewTab,
+) -> Option<crate::preview::ReserveHint> {
+    let backend = tab.backend.as_ref()?;
+    let crate::preview::PreviewBackend::Rendered(rendered) = backend else {
+        return None;
+    };
+    if rendered.renderer != crate::preview::RenderedRenderer::PlantUml {
+        return None;
+    }
+    if rendered.mode != crate::preview::RenderedMode::Rendered {
+        return None;
+    }
+    let file_size = match &tab.kind {
+        TabKind::File(p) => std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
+        _ => 0,
+    };
+    let cost = crate::preview::estimate_cost(Some(backend), tab.windowed, file_size);
+    Some(crate::preview::ReserveHint {
+        project_id,
+        panel,
+        tab_id: tab.id,
+        cost,
+    })
+}
+
 /// 构造一个 `TabKind::Blank` 占位 tab。**可被关掉**(`close(0)` 在有兄弟
 /// tab 时真关;没兄弟时关完自动补一个新的,见 [`PreviewPane::close`]),所以
 /// "id 0" 不再是不变量。`Default` 与 `clear_all`(项目切换)都靠它把面板
@@ -1418,7 +1451,7 @@ impl PreviewPane {
 
     /// 当前激活 tab 若是**文件**且走 wry 路径则返回其 id(=webview 池的 key)。
     /// 原生渲染 tab(有 `editor`)与 `Blank` 占位都返回 `None`——它们不进
-    /// webview 池(`desired_webviews()` 同样跳过这两类),返回一个池里并不
+    /// webview 池(`desired_webviews` 同样跳过这两类),返回一个池里并不
     /// 存在的 id 会把"当前激活的是不是真 webview"这个问题答错。
     pub fn active_webview_id(&self) -> Option<usize> {
         self.tabs
@@ -1579,7 +1612,15 @@ impl PreviewPane {
 
     /// webview 期望清单:每文件 tab 一个,仅激活者可见(设计 D2)。是否走
     /// webview 由统一 backend 判定(见 `PreviewTab::hosts_webview`)。
-    pub fn desired_webviews(&self) -> Vec<WebviewSpec> {
+    ///
+    /// `project_id`/`panel` 用于给需计入预算的 Rendered host(PlantUML)构造
+    /// `ReserveHint`——该 host 没有 `EditorHostBinding`,身份只能由调用上下文
+    /// 提供;`app.rs` 此前的 URL 绑定注入同样是按 `(project, panel, tab)` 生成。
+    pub fn desired_webviews(
+        &self,
+        project_id: i64,
+        panel: crate::app::PanelKind,
+    ) -> Vec<WebviewSpec> {
         self.tabs
             .iter()
             .enumerate()
@@ -1597,6 +1638,11 @@ impl PreviewPane {
                     let sep = if u.contains('?') { '&' } else { '?' };
                     u.push_str(&format!("{sep}_r={}", tab.reload_nonce));
                 }
+                // T8:PlantUML Rendered host 计入预览资源预算(固定引擎开销 +
+                // 源码大小,占一个重型 WebView 名额);其余 Rendered host
+                // (Flyfish/HTML)沿用既有"不走 reserve"行为,`reserve` 为 None。
+                let reserve = plantuml_reserve_hint(project_id, panel, tab);
+                let loading = matches!(tab.backend_state, BackendState::Loading);
                 Some(WebviewSpec {
                     id: tab.id,
                     url: u,
@@ -1605,8 +1651,12 @@ impl PreviewPane {
                     // 原生子视图盖住 iced loading。
                     visible: tab.backend_state.is_ready() && idx == self.active,
                     editor_binding: None,
-                    // Rendered(Flyfish/HTML)host 不走资源 reserve,无需回灌。
-                    loading_generation: None,
+                    reserve,
+                    // T8:PlantUML 渲染态走 reserve;在途加载时携带 loading 世代,
+                    // 供 `sync_webview_pool` 回灌 `granted`/`denied`(其余
+                    // Rendered host 不 reserve,恒 `None`)。
+                    loading_generation: (reserve.is_some() && loading)
+                        .then_some(tab.load_state.generation),
                     // Flyfish/HTML 渲染器(docx 等)的 `load()` 依赖 rAF,hidden
                     // 视图下 rAF 被 WebKit 挂起会死锁(见字段文档);未就绪时用
                     // 离屏停放代替 hidden。已就绪者交给上层 visible 判断。
@@ -1686,6 +1736,7 @@ impl PreviewPane {
                     // 其余 ready 且激活者可见。
                     visible: tab.backend_state.is_ready() && idx == self.active,
                     editor_binding: Some(binding),
+                    reserve: None,
                     // T10:在途加载时携带世代,reserve 批准后据此推进到
                     // `CreatingHost`;已就绪/非加载态的 host 无需回灌。
                     loading_generation: loading.then_some(tab.load_state.generation),
@@ -1727,6 +1778,7 @@ impl PreviewPane {
                     // 非 Ready 预创建但 hidden。
                     visible: tab.backend_state.is_ready() && idx == self.active,
                     editor_binding: Some(binding),
+                    reserve: None,
                     // T10:同 editor host,加载在途时携带世代供 reserve 回灌。
                     loading_generation: loading.then_some(tab.load_state.generation),
                     // JSON Tree host 同为 hidden 预创建 boot,不依赖 rAF。
@@ -1772,6 +1824,7 @@ impl PreviewPane {
                     url,
                     visible: tab.backend_state.is_ready() && idx == self.active,
                     editor_binding: Some(binding),
+                    reserve: None,
                     loading_generation: loading.then_some(tab.load_state.generation),
                     park_offscreen: false,
                 })
@@ -2741,7 +2794,7 @@ impl PreviewPane {
 
     /// 编辑保存后调用:按 `PreviewTab.id` 找到对应 tab,推进 reload。原生
     /// (有 `editor`)tab 直接读盘重建编辑器实例(`bump_reload` 路径),wry
-    /// tab 走 `reload_nonce` 计数(驱动 `desired_webviews()` 换 URL)。未知
+    /// tab 走 `reload_nonce` 计数(驱动 `desired_webviews(1, crate::app::PanelKind::Files)` 换 URL)。未知
     /// id 是 no-op(tab 可能已被关闭)。
     pub fn bump_reload(&mut self, tab_id: usize) {
         let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
@@ -3020,7 +3073,7 @@ impl PreviewPane {
     }
 
     /// 配色方案切换后调用:把所有走 wry 的文件 tab 的 `reload_nonce` 各推一格,
-    /// 逼 `desired_webviews()` 换 URL(新 URL 带新的 `&theme=`/`&_r=` 参数)
+    /// 逼 `desired_webviews(1, crate::app::PanelKind::Files)` 换 URL(新 URL 带新的 `&theme=`/`&_r=` 参数)
     /// 重新导航,flyfish/CodeMirror/vanilla-jsoneditor/Tabular ag-grid 据此
     /// 切到新主题。原生编辑器 tab 不受影响(它是 iced 原生渲染、每帧读
     /// `byteui::theme::color::current()`,切主题自然跟随);`Blank` 占位 tab
@@ -3289,7 +3342,7 @@ mod tests {
             ".png 扩展名不应构造原生 editor,继续走 wry"
         );
 
-        let specs = p.desired_webviews();
+        let specs = p.desired_webviews(1, crate::app::PanelKind::Files);
         assert_eq!(
             specs.len(),
             1,
@@ -3315,7 +3368,7 @@ mod tests {
         // 预览"这回事——原生编辑器按内存动态分三档(`native_editor::SizeTier`),
         // 超过 `EDIT_MODE_MAX_BYTES`(20MB)的可编辑扩展名文件仍然构造原生
         // `CodeView`,只是从可写切换成只读(`is_read_only() == true`),不会
-        // 出现在 `desired_webviews()` 期望清单里。
+        // 出现在 `desired_webviews(1, crate::app::PanelKind::Files)` 期望清单里。
         let dir = std::env::temp_dir();
         let big_path = dir.join(format!(
             "preview_oversize_test_{}.json5",
@@ -3345,7 +3398,7 @@ mod tests {
             .as_ref()
             .expect("小文件照常构造原生 editor");
         assert!(!small_editor.is_read_only(), "小文件仍可写");
-        let specs = p.desired_webviews();
+        let specs = p.desired_webviews(1, crate::app::PanelKind::Files);
         assert_eq!(
             specs.iter().filter(|s| s.id == p.tabs()[1].id).count(),
             0,
@@ -3377,7 +3430,7 @@ mod tests {
             is_editable_extension(&md_path),
             ".md 仍应保留可编辑属性,右键“编辑”入口不受影响"
         );
-        let specs = p.desired_webviews();
+        let specs = p.desired_webviews(1, crate::app::PanelKind::Files);
         assert_eq!(specs.len(), 1, ".md 现在应进 wry 期望清单");
         assert!(
             specs[0].url.contains("&ln=1"),
@@ -3439,7 +3492,7 @@ mod tests {
             is_editable_extension(&html_path),
             ".html 仍应保留可编辑属性,右键“编辑”入口不受影响"
         );
-        let specs = p.desired_webviews();
+        let specs = p.desired_webviews(1, crate::app::PanelKind::Files);
         assert_eq!(specs.len(), 1, ".html 现在应进 wry 期望清单");
         assert!(
             specs[0].url.starts_with("dozer://html/host.html?"),
@@ -3560,7 +3613,7 @@ mod tests {
         let mut p = PreviewPane::default();
         let id0 = p.open_path(PathBuf::from("/tmp/a.html"));
         p.bump_reload(id0);
-        let url = &p.desired_webviews()[0].url;
+        let url = &p.desired_webviews(1, crate::app::PanelKind::Files)[0].url;
         assert!(url.starts_with("dozer://html/host.html?"), "got {url}");
         assert!(url.ends_with("&_r=1"), "已有查询串,重载参数用 & : {url}");
     }
@@ -3592,7 +3645,10 @@ mod tests {
         assert_eq!(p.tabs()[0].kind, TabKind::Blank);
         assert_eq!(p.active_idx(), 0);
         // Blank tab 没有 wry 页面,不该进期望清单。
-        assert!(p.desired_webviews().is_empty());
+        assert!(
+            p.desired_webviews(1, crate::app::PanelKind::Files)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -3605,7 +3661,10 @@ mod tests {
         assert_eq!(p.tabs().len(), 1, "关掉最后一个文件 tab 后只剩 Blank 占位");
         assert_eq!(p.tabs()[0].kind, TabKind::Blank);
         assert_eq!(p.active_idx(), 0, "落点回到空白占位页");
-        assert!(p.desired_webviews().is_empty());
+        assert!(
+            p.desired_webviews(1, crate::app::PanelKind::Files)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -3666,7 +3725,8 @@ mod tests {
         );
         assert!(!tab.uses_editor_host(), "csv 不应再进文本编辑器");
         assert!(
-            pane.desired_webviews().is_empty(),
+            pane.desired_webviews(1, crate::app::PanelKind::Files)
+                .is_empty(),
             "tabular tab(哪怕还在加载)不该进 webview 池"
         );
         assert!(
@@ -3850,7 +3910,7 @@ mod tests {
         let mut p = PreviewPane::default();
         p.open_path(PathBuf::from("/tmp/a b.md"));
         p.open_path(PathBuf::from("/tmp/c.md"));
-        let specs = p.desired_webviews();
+        let specs = p.desired_webviews(1, crate::app::PanelKind::Files);
         assert_eq!(specs.len(), 2);
         assert_eq!(
             specs[0].url,
@@ -3870,7 +3930,7 @@ mod tests {
         let id0 = p.open_path(PathBuf::from("/tmp/a.md"));
         let _id1 = p.open_path(PathBuf::from("/tmp/b.md"));
         p.bump_reload(id0);
-        let specs = p.desired_webviews();
+        let specs = p.desired_webviews(1, crate::app::PanelKind::Files);
         assert_eq!(
             specs[0].url,
             "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&theme=dark&ln=1&fs=14&_r=1"
@@ -3881,7 +3941,7 @@ mod tests {
         );
         p.bump_reload(id0);
         assert_eq!(
-            p.desired_webviews()[0].url,
+            p.desired_webviews(1, crate::app::PanelKind::Files)[0].url,
             "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&theme=dark&ln=1&fs=14&_r=2"
         );
         // 未知 id 是 no-op,不 panic。
@@ -3912,7 +3972,7 @@ mod tests {
         p.reload_webviews_for(&[PathBuf::from("/tmp/b.md")]);
         assert_eq!(p.tabs()[1].reload_nonce, 0, "a.md 不受影响");
         assert_eq!(p.tabs()[2].reload_nonce, 1, "b.md 命中,webview 推进");
-        let specs = p.desired_webviews();
+        let specs = p.desired_webviews(1, crate::app::PanelKind::Files);
         assert_eq!(
             specs[1].url, "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&theme=dark&ln=1&fs=14&_r=1",
             "命中的 webview 换 URL 重载"
@@ -4017,12 +4077,12 @@ mod tests {
         p.select(1);
         assert_eq!(p.active_idx(), 1);
         assert_eq!(
-            p.desired_webviews()[0].url,
+            p.desired_webviews(1, crate::app::PanelKind::Files)[0].url,
             "dozer://flyfish/host.html?p=%2Ftmp%2Fa.md&theme=dark&ln=1&fs=14",
             "切到异 tab 的 webview 不该推进 reload_nonce(保滚动位置)"
         );
         assert_eq!(
-            p.desired_webviews()[1].url,
+            p.desired_webviews(1, crate::app::PanelKind::Files)[1].url,
             "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&theme=dark&ln=1&fs=14",
             "非目标 tab 不受影响"
         );
@@ -4261,7 +4321,7 @@ mod tests {
         assert!(tab.hosts_webview(), "Rendered tab 应 host Flyfish webview");
 
         // Loading 期(激活 tab)Flyfish spec 存在但不可见 —— 不覆盖 loading 动画。
-        let specs = pane.desired_webviews();
+        let specs = pane.desired_webviews(1, crate::app::PanelKind::Files);
         let spec = specs
             .iter()
             .find(|s| s.id == id)
@@ -4277,7 +4337,7 @@ mod tests {
 
         // Flyfish `document_loaded` ACK → finish → Ready,方可可见。
         assert!(pane.finish_load(id, generation));
-        let specs = pane.desired_webviews();
+        let specs = pane.desired_webviews(1, crate::app::PanelKind::Files);
         let spec = specs.iter().find(|s| s.id == id).unwrap();
         assert!(spec.visible, "document_loaded 后 Flyfish 可见");
         assert!(!spec.park_offscreen, "就绪后离开离屏停放,回到真实 bounds");
@@ -4675,7 +4735,8 @@ mod tests {
         let mut pane = PreviewPane::default();
         pane.open_path(p.clone());
         assert!(
-            pane.desired_webviews().is_empty(),
+            pane.desired_webviews(1, crate::app::PanelKind::Files)
+                .is_empty(),
             "json tab 不该进 webview 池"
         );
         std::fs::remove_file(p).ok();
@@ -5754,7 +5815,11 @@ mod tests {
         let tab = pane.tabs().iter().find(|t| t.id == id).unwrap();
         assert!(matches!(tab.backend_state, BackendState::Suspended));
         assert!(!tab.hosts_webview(), "Suspended 壳不建 WebView");
-        assert!(pane.desired_webviews().iter().all(|s| s.id != id));
+        assert!(
+            pane.desired_webviews(1, crate::app::PanelKind::Files)
+                .iter()
+                .all(|s| s.id != id)
+        );
         assert!(
             pane.desired_editor_webviews(1, crate::app::PanelKind::Files)
                 .iter()
@@ -5793,7 +5858,11 @@ mod tests {
         assert!(matches!(tab.backend_state, BackendState::Suspended));
         assert_eq!(tab.load_state.stage, PreviewLoadStage::Idle);
         assert!(!tab.load_state.is_active());
-        assert!(pane.desired_webviews().iter().all(|s| s.id != id));
+        assert!(
+            pane.desired_webviews(1, crate::app::PanelKind::Files)
+                .iter()
+                .all(|s| s.id != id)
+        );
         assert!(
             pane.desired_editor_webviews(1, crate::app::PanelKind::Files)
                 .iter()
@@ -6206,7 +6275,7 @@ mod tests {
             assert!(!tab.hosts_webview(), "fallback 类 tab 不吃 Flyfish");
         }
         assert!(
-            pane.desired_webviews()
+            pane.desired_webviews(1, crate::app::PanelKind::Files)
                 .iter()
                 .all(|s| s.id != z && s.id != b),
             "fallback 类 tab 不进 webview 期望清单"
@@ -6777,6 +6846,66 @@ mod tests {
             }],
             dependencies: Vec::new(),
         }
+    }
+
+    #[test]
+    fn plantuml_rendered_host_carries_reserve_hint_in_desired_webviews() {
+        let mut pane = PreviewPane::default();
+        pane.tabs.push(plantuml_tab(1));
+        let specs = pane.desired_webviews(7, crate::app::PanelKind::Project);
+        assert_eq!(specs.len(), 1);
+        let spec = &specs[0];
+        // PlantUML Rendered host 没有编辑器绑定,但带 reserve 线索。
+        assert!(spec.editor_binding.is_none());
+        let hint = spec.reserve.expect("PlantUML host 应携带 reserve 线索");
+        assert_eq!(hint.project_id, 7);
+        assert_eq!(hint.panel, crate::app::PanelKind::Project);
+        assert_eq!(hint.tab_id, 1);
+        assert_eq!(hint.cost.kind, crate::preview::ViewerHostKind::PlantUml);
+        assert!(hint.cost.heavy_webview, "PlantUML 占重型 WebView 名额");
+        assert!(
+            hint.cost.estimated_bytes >= crate::preview::PLANTUML_RESIDENT_BYTES,
+            "固定引擎+SVG 上界应计入"
+        );
+        // 在途加载(Loading)时携带世代,供 grant/deny 回灌。
+        assert_eq!(spec.loading_generation, Some(1));
+    }
+
+    #[test]
+    fn plantuml_source_mode_has_no_plantuml_reserve_hint() {
+        let mut pane = PreviewPane::default();
+        let mut tab = plantuml_tab(1);
+        // 切到 Source:由 CodeMirror 承载,不产生 PlantUML Rendered host。
+        if let Some(PreviewBackend::Rendered(r)) = tab.backend.as_mut() {
+            r.mode = RenderedMode::Source;
+        }
+        pane.tabs.push(tab);
+        assert!(
+            pane.desired_webviews(7, crate::app::PanelKind::Files)
+                .is_empty(),
+            "Source 模式不产生 Rendered host spec"
+        );
+    }
+
+    #[test]
+    fn non_plantuml_rendered_host_has_no_reserve_hint() {
+        let mut pane = PreviewPane::default();
+        let mut tab = placeholder_tab(1);
+        tab.kind = TabKind::File(PathBuf::from("/tmp/doc.md"));
+        tab.backend = Some(PreviewBackend::Rendered(RenderedBackend {
+            renderer: RenderedRenderer::Flyfish,
+            mode: RenderedMode::Rendered,
+            source_language: None,
+        }));
+        tab.backend_state = BackendState::Loading;
+        pane.tabs.push(tab);
+        let specs = pane.desired_webviews(7, crate::app::PanelKind::Files);
+        assert_eq!(specs.len(), 1);
+        assert!(
+            specs[0].reserve.is_none(),
+            "Flyfish 沿用既有不走 reserve 的行为"
+        );
+        assert!(specs[0].loading_generation.is_none());
     }
 
     #[test]

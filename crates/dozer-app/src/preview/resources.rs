@@ -30,6 +30,8 @@ pub struct ViewerRegistration {
     pub estimated_bytes: u64,
     /// 是否占用一个"重型 WebView"名额(CodeMirror/Flyfish)。
     pub heavy_webview: bool,
+    /// 宿主种类(诊断用;不参与预算判定)。
+    pub kind: ViewerHostKind,
     pub active: bool,
     pub dirty: bool,
     /// 脏内容是否已有 recovery snapshot(有才允许被淘汰)。
@@ -48,6 +50,7 @@ impl ViewerRegistration {
             tab_id,
             estimated_bytes: 0,
             heavy_webview: false,
+            kind: ViewerHostKind::Other,
             active: false,
             dirty: false,
             has_recovery: false,
@@ -78,11 +81,44 @@ pub enum Reservation {
     Denied { reason: String },
 }
 
+/// viewer 的宿主种类,仅用于**资源诊断**区分(不改变预算算法)。诊断只报种类
+/// 与估算字节,不涉及任何文件正文(规格 §7/T8 bullet 8)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewerHostKind {
+    /// CodeMirror 编辑/只读 host(文本、源码模式、窗口化)。
+    Editor,
+    /// vanilla-jsoneditor 的 JSON Tree host。
+    JsonEditor,
+    /// PlantUML Rendered host(重型引擎)。
+    PlantUml,
+    /// ag-grid 表格网格 host。
+    TabularGrid,
+    /// Flyfish / 隔离 HTML 渲染 host。
+    Rendered,
+    /// 其它/未知。
+    Other,
+}
+
+impl ViewerHostKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            ViewerHostKind::Editor => "editor",
+            ViewerHostKind::JsonEditor => "json-editor",
+            ViewerHostKind::PlantUml => "plantuml",
+            ViewerHostKind::TabularGrid => "tabular-grid",
+            ViewerHostKind::Rendered => "rendered",
+            ViewerHostKind::Other => "other",
+        }
+    }
+}
+
 /// 一个 viewer 的估算成本与是否占重型 WebView 名额(T3)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ViewerCost {
     pub estimated_bytes: u64,
     pub heavy_webview: bool,
+    /// 宿主种类(诊断用)。
+    pub kind: ViewerHostKind,
 }
 
 /// 窗口化 viewer 的常驻估算(稀疏索引 + 有界窗口),**不随文件大小增长**。
@@ -111,6 +147,7 @@ pub fn estimate_cost(
         return ViewerCost {
             estimated_bytes: 0,
             heavy_webview: false,
+            kind: ViewerHostKind::Other,
         };
     };
     match backend {
@@ -121,10 +158,16 @@ pub fn estimate_cost(
                 file_size
             },
             heavy_webview: true,
+            kind: ViewerHostKind::Editor,
         },
-        PreviewBackend::Json(_) => ViewerCost {
+        PreviewBackend::Json(json) => ViewerCost {
             estimated_bytes: file_size,
             heavy_webview: true,
+            kind: if json.mode == crate::preview::JsonMode::Tree {
+                ViewerHostKind::JsonEditor
+            } else {
+                ViewerHostKind::Editor
+            },
         },
         PreviewBackend::Streamed(_) => ViewerCost {
             estimated_bytes: if windowed {
@@ -133,33 +176,44 @@ pub fn estimate_cost(
                 file_size
             },
             heavy_webview: true,
+            kind: ViewerHostKind::Editor,
         },
         PreviewBackend::Rendered(rendered) => {
             let heavy = matches!(rendered.mode, crate::preview::RenderedMode::Rendered);
             // PlantUML 渲染态:固定引擎+SVG 上界 + 根源码大小;源码态由 CodeMirror
             // 承载,只按文件大小(与其它文本一致)。
-            let estimated_bytes = match rendered.renderer {
+            let (estimated_bytes, kind) = match rendered.renderer {
                 crate::preview::RenderedRenderer::PlantUml => {
                     if heavy {
-                        PLANTUML_RESIDENT_BYTES.saturating_add(file_size)
+                        (
+                            PLANTUML_RESIDENT_BYTES.saturating_add(file_size),
+                            ViewerHostKind::PlantUml,
+                        )
                     } else {
-                        file_size
+                        (file_size, ViewerHostKind::Editor)
                     }
                 }
-                _ => file_size,
+                _ => (file_size, ViewerHostKind::Rendered),
             };
             ViewerCost {
                 estimated_bytes,
                 heavy_webview: heavy,
+                kind,
             }
         }
-        PreviewBackend::Tabular(_) => ViewerCost {
+        PreviewBackend::Tabular(tabular) => ViewerCost {
             estimated_bytes: file_size,
             heavy_webview: false,
+            kind: if tabular.mode == crate::preview::TabularMode::Grid {
+                ViewerHostKind::TabularGrid
+            } else {
+                ViewerHostKind::Editor
+            },
         },
         PreviewBackend::External(_) | PreviewBackend::Unsupported(_) => ViewerCost {
             estimated_bytes: 0,
             heavy_webview: false,
+            kind: ViewerHostKind::Other,
         },
     }
 }
@@ -172,6 +226,10 @@ pub struct ResourceDiagnostics {
     pub total_preview_bytes_budget: u64,
     pub heavy_webviews: usize,
     pub max_heavy_webviews: usize,
+    /// 各类宿主当前驻留数(按 `ViewerHostKind`,诊断用)。
+    pub by_kind: Vec<(ViewerHostKind, usize)>,
+    /// 各类宿主当前估算常驻字节合计(诊断用;是成本估算,不含任何文件正文)。
+    pub bytes_by_kind: Vec<(ViewerHostKind, u64)>,
 }
 
 /// 全局资源管理器(按项目 id 跨项目共享一份)。
@@ -271,12 +329,29 @@ impl ResourceManager {
     }
 
     pub fn diagnostics(&self) -> ResourceDiagnostics {
+        // 按宿主种类聚合(顺序稳定:按 label 排序,便于测试与日志可读)。
+        let mut counts: Vec<(ViewerHostKind, usize)> = Vec::new();
+        let mut bytes: Vec<(ViewerHostKind, u64)> = Vec::new();
+        for reg in self.registrations.values() {
+            match counts.iter_mut().find(|(k, _)| *k == reg.kind) {
+                Some((_, n)) => *n += 1,
+                None => counts.push((reg.kind, 1)),
+            }
+            match bytes.iter_mut().find(|(k, _)| *k == reg.kind) {
+                Some((_, b)) => *b = b.saturating_add(reg.estimated_bytes),
+                None => bytes.push((reg.kind, reg.estimated_bytes)),
+            }
+        }
+        counts.sort_by_key(|(k, _)| k.label());
+        bytes.sort_by_key(|(k, _)| k.label());
         ResourceDiagnostics {
             resident_count: self.registrations.len(),
             total_resident_bytes: self.total_resident_bytes(),
             total_preview_bytes_budget: self.budgets.total_preview_bytes,
             heavy_webviews: self.heavy_webviews(),
             max_heavy_webviews: self.budgets.max_heavy_webviews,
+            by_kind: counts,
+            bytes_by_kind: bytes,
         }
     }
 
@@ -568,6 +643,36 @@ mod tests {
     }
 
     #[test]
+    fn diagnostics_distinguishes_plantuml_via_estimate_cost() {
+        use crate::preview::{PreviewBackend, RenderedBackend, RenderedMode, RenderedRenderer};
+        let mut m = ResourceManager::new(ResourceBudgets {
+            total_preview_bytes: 1_000_000,
+            ..budgets()
+        });
+        let plantuml = estimate_cost(
+            Some(&PreviewBackend::Rendered(RenderedBackend {
+                renderer: RenderedRenderer::PlantUml,
+                mode: RenderedMode::Rendered,
+                source_language: Some("plantuml".into()),
+            })),
+            false,
+            1000,
+        );
+        assert_eq!(plantuml.kind, ViewerHostKind::PlantUml);
+        let mut reg = ViewerRegistration::new(1, PanelKind::Files, 1);
+        reg.estimated_bytes = plantuml.estimated_bytes;
+        reg.heavy_webview = plantuml.heavy_webview;
+        reg.kind = plantuml.kind;
+        m.register(reg);
+        let d = m.diagnostics();
+        assert_eq!(d.by_kind, vec![(ViewerHostKind::PlantUml, 1)]);
+        assert_eq!(
+            d.bytes_by_kind,
+            vec![(ViewerHostKind::PlantUml, plantuml.estimated_bytes)]
+        );
+    }
+
+    #[test]
     fn estimate_cost_classifies_backends() {
         use crate::preview::PreviewBackend;
         // 窗口化:常驻固定,不随文件增长,重型。
@@ -589,7 +694,8 @@ mod tests {
             estimate_cost(Some(&ext), false, 1234),
             ViewerCost {
                 estimated_bytes: 0,
-                heavy_webview: false
+                heavy_webview: false,
+                kind: ViewerHostKind::Other,
             }
         );
     }

@@ -403,15 +403,41 @@ preview` 422 passed / `workspace` 91 passed，clippy 无新增告警。
 - Modify: 主题重载与 pending command 相关模块
 - Test: Rust 与前端测试
 
-- [ ] reserve/register/touch/active/suspend/release 全部复用当前 resource manager。
-- [ ] 不把 SVG 或 JS 引擎对象放入 Rust tab 状态；WebView 淘汰后允许重建。
-- [ ] 给有界 viewport state 定义 `scale/x/y`；普通 mode 切换保留，进程重启不要求恢复。
-- [ ] 主题切换不创建第二 renderer；验证显式 PlantUML 颜色不被覆盖。
-- [ ] 工具条完成 Fit/Actual Size/Zoom/Reset；按钮语义和颜色遵循 ByteBoy2077，金色
-      只用于用户动作。
-- [ ] `Cmd/Ctrl +/-/0` 与 Dozer 全局缩放不冲突；焦点路由复用现有 WebView 逻辑。
-- [ ] 连续多帧不得对被预算拒绝的 viewer 反复销毁/重建。
-- [ ] 资源诊断能区分 PlantUML host，并显示估算成本而不泄露源码。
+- [x] reserve/register/touch/active/suspend/release 全部复用当前 resource manager。
+      `WebviewSpec` 新增 `reserve: Option<ReserveHint>`；PlantUML Rendered host 无
+      `editor_binding` 但带 `ReserveHint{project,panel,tab,cost}`（`plantuml_reserve_hint`
+      用 `estimate_cost` 的固定引擎+SVG 上界）。`sync_webview_pool` 的可预留判据改为
+      `editor_binding.is_some() || reserve.is_some()`，两种 host 共用
+      reserve/register/touch/set_active/prune/release 与淘汰台账；`update.rs` 的
+      `needs_reserve` 增加 `uses_plantuml_host()`，PlantUML 在画像后进入 `Reserving`
+      再经 `granted` 推进 `CreatingHost`。证据：`plantuml_rendered_host_carries_reserve_hint_in_desired_webviews`。
+- [x] 不把 SVG 或 JS 引擎对象放入 Rust tab 状态；WebView 淘汰后允许重建。
+      Rust 侧只登记 `ViewerCost`（字节估算 + 种类），SVG 与引擎对象仅活在 webview 内；
+      失败/淘汰走既有 `mark_reserve_denied`/`suspend_tab`，不缓存渲染结果。
+- [x] 给有界 viewport state 定义 `scale/x/y`；普通 mode 切换保留，进程重启不要求恢复。
+      前端 `viewport.ts` 的 `Viewport` 维护有界 `scale/x/y`（含 wheel 缩放、拖拽平移、
+      Fit/ActualSize/Reset）；view state 纯前端，不新增协议事件（规格 §5.2 无 viewport 事件）。
+- [x] 主题切换不创建第二 renderer；验证显式 PlantUML 颜色不被覆盖。
+      `reload_all_webviews_for_theme` 已覆盖 `hosts_webview()`（含 PlantUML），只推进
+      `_r=` 重载并带新 `theme=` 参数重新导航（同一 host，不并存两个 renderer）；
+      `style.css` 注释明确引擎显式颜色优先、不被 host 主题改写。
+- [x] 工具条完成 Fit/Actual Size/Zoom/Reset；按钮语义和颜色遵循 ByteBoy2077，金色
+      只用于用户动作。`index.html` 五键（适配窗口/100%/放大/缩小/重置视图）在
+      `index.ts` 本地接 `Viewport`；`style.css` 金色仅用于 hover 高亮与错误重试（用户动作）。
+- [x] `Cmd/Ctrl +/-/0` 与 Dozer 全局缩放不冲突；焦点路由复用现有 WebView 逻辑。
+      viewer 脚本不注册任何 keydown/keypress，不 `preventDefault`，这些快捷键照常冒泡到
+      Dozer 全局缩放/查找路由。
+- [x] 连续多帧不得对被预算拒绝的 viewer 反复销毁/重建。
+      被拒 → `mark_reserve_denied` 把 tab 迁到 `Failed` 并 `load_state.finish()`；
+      `hosts_webview()` 对 Failed 返回 false → `desired_webviews` 不再产出 spec →
+      同帧起不再创建/销毁。证据：`plantuml_rendered_host_carries_reserve_hint_in_desired_webviews`
+      + `suspend_and_reserve_denied_lifecycle`。
+- [x] 资源诊断能区分 PlantUML host，并显示估算成本而不泄露源码。
+      新增 `ViewerHostKind`（editor/json-editor/plantuml/tabular-grid/rendered/other），
+      `ViewerCost.kind` + `ViewerRegistration.kind` 承载；`ResourceDiagnostics` 增加
+      `by_kind`/`bytes_by_kind`（只报种类与字节估算，不含正文）。`sync_webview_pool`
+      每轮发 `预览资源诊断` debug 日志（含 `plantuml_resident`）。证据：
+      `diagnostics_distinguishes_plantuml_via_estimate_cost`。
 
 **验证：**
 

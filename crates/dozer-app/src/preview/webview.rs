@@ -3,6 +3,29 @@
 
 use super::*;
 use crate::app::PanelKind;
+use crate::preview::ViewerCost;
+
+/// 不携带 `EditorHostBinding`(非 editor/JSON/tabular host)但**仍需计入
+/// 预览资源预算**的 viewer 的 reserve 线索。PlantUML Rendered host 用它:
+/// 它没有 CodeMirror 的 path 绑定,却要占用一个重型 WebView 名额、按
+/// `estimate_cost` 的固定引擎开销计费(规格 §7)。
+///
+/// `ViewerKey` 即 `(project_id, panel, tab_id)`,与 editor host 共用同一套
+/// reserve/register/touch/evict/deny 闭环;`cost` 用显式估算,不回落到
+/// `fs::metadata` 的编辑器启发式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReserveHint {
+    pub project_id: i64,
+    pub panel: PanelKind,
+    pub tab_id: usize,
+    pub cost: ViewerCost,
+}
+
+impl ReserveHint {
+    pub fn key(&self) -> crate::preview::ViewerKey {
+        (self.project_id, self.panel, self.tab_id)
+    }
+}
 
 /// main.rs 同步 webview 的期望清单项。
 #[derive(Debug, Clone, PartialEq)]
@@ -11,6 +34,10 @@ pub struct WebviewSpec {
     pub url: String,
     pub visible: bool,
     pub editor_binding: Option<EditorHostBinding>,
+    /// 无 `editor_binding` 但需计入资源预算的 viewer 的 reserve 线索
+    /// (目前仅 PlantUML Rendered host)。`None` = 不走 reserve(与
+    /// Flyfish/HTML 等 Rendered host 的既有行为一致)。
+    pub reserve: Option<ReserveHint>,
     /// T10:该 host 若在 `Reserving` 阶段等待预算,携带其 loading `generation`。
     /// `sync_webview_pool` 在 reserve 被批准时把 `(key, generation)` 回灌给
     /// 调用方,由 `apply_preview_pool_outcome` 世代校验后推进到 `CreatingHost`;

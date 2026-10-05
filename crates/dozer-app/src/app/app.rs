@@ -3461,6 +3461,7 @@ impl App {
                             url: binding.diff_url(crate::preview::scheme_query_value()),
                             visible: !app_modal_open,
                             editor_binding: Some(binding),
+                            reserve: None,
                             // Git Log diff 是固定单槽 webview、不走 tab 的
                             // `Reserving`/`CreatingHost` 加载阶段,故无世代。
                             loading_generation: None,
@@ -3496,6 +3497,7 @@ impl App {
                         ),
                         visible: !app_modal_open,
                         editor_binding: None,
+                        reserve: None,
                         loading_generation: None,
                         // 用量内容 webview 无隐藏预创建,不涉及离屏停放。
                         park_offscreen: false,
@@ -3525,6 +3527,7 @@ impl App {
                         ),
                         visible: !app_modal_open,
                         editor_binding: None,
+                        reserve: None,
                         loading_generation: None,
                         park_offscreen: false,
                     };
@@ -3554,6 +3557,7 @@ impl App {
                         ),
                         visible: !app_modal_open,
                         editor_binding: None,
+                        reserve: None,
                         loading_generation: None,
                         park_offscreen: false,
                     };
@@ -3584,6 +3588,7 @@ impl App {
                         ),
                         visible: !app_modal_open,
                         editor_binding: None,
+                        reserve: None,
                         loading_generation: None,
                         park_offscreen: false,
                     };
@@ -3591,10 +3596,16 @@ impl App {
                 }
                 continue;
             }
+            // T8:PlantUML Rendered host 的 reserve 线索需要 `(project, panel)`
+            // 归属——与下方 URL 绑定注入同源。project 未加载时用占位 id 0
+            // (此时 `if let Some(project)` 分支不会注入绑定,也不会有 PlantUML
+            // host 进入池)。
+            let reserve_project_id = ws.project.as_ref().map(|p| p.id).unwrap_or(0);
             let (mut specs, id_offset): (Vec<WebviewSpec>, usize) = match kind {
-                PanelKind::Files => (ws.preview.desired_webviews(), 0),
+                PanelKind::Files => (ws.preview.desired_webviews(reserve_project_id, kind), 0),
                 PanelKind::Project => (
-                    ws.project_preview.desired_webviews(),
+                    ws.project_preview
+                        .desired_webviews(reserve_project_id, kind),
                     PROJECT_PREVIEW_ID_OFFSET,
                 ),
                 PanelKind::Conversations => (

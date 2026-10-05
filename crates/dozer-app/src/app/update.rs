@@ -1292,7 +1292,9 @@ impl App {
                                     .map(|t| {
                                         (
                                             t.hosts_webview(),
-                                            t.uses_editor_host() || t.uses_json_editor(),
+                                            t.uses_editor_host()
+                                                || t.uses_json_editor()
+                                                || t.uses_plantuml_host(),
                                         )
                                     })
                                     .unwrap_or((false, false));
