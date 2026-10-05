@@ -657,6 +657,8 @@ pub(crate) const TODO_CONTENT_ID_OFFSET: usize = 6_000_000;
 /// 群聊面板 webview 的固定单槽位 ID(接在 `TODO_CONTENT_ID_OFFSET` 之后,避免与其它
 /// 偏移冲突)。
 pub(crate) const GROUP_CHAT_CONTENT_ID_OFFSET: usize = 7_000_000;
+/// 应用面板 webview 的 id 段:`APP_CONTENT_ID_OFFSET + 槽号`(`AppSlot::index`,最多 65536 个)。
+pub(crate) const APP_CONTENT_ID_OFFSET: usize = 8_000_000;
 
 /// `wait_for_pending_exit_tasks` 允许在飞的关 tab 收尾请求跑完的总预算。
 /// 本地 UDS 往返通常亚毫秒级,留 2 秒是给 daemon 偶尔卡顿的余量,而不是

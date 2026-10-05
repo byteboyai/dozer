@@ -1,4 +1,5 @@
 mod app;
+mod app_webview;
 mod assets;
 mod capabilities;
 mod chrome;

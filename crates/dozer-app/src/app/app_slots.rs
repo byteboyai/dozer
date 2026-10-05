@@ -38,6 +38,17 @@ impl AppSlot {
         Some(Self(i))
     }
 
+    /// 槽号(进程内、不落盘;给 webview id 段用)。
+    pub(crate) fn index(self) -> usize {
+        usize::from(self.0)
+    }
+
+    /// `index` 的反函数;槽还没分配返回 `None`。
+    pub(crate) fn from_index(index: usize) -> Option<Self> {
+        let t = TABLE.lock().unwrap_or_else(|e| e.into_inner());
+        (index < t.len()).then_some(Self(index as u16))
+    }
+
     /// 这个槽对应的应用 id。
     pub fn id(self) -> &'static str {
         let t = TABLE.lock().unwrap_or_else(|e| e.into_inner());

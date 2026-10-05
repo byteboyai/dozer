@@ -21,6 +21,7 @@ mod view;
 
 pub(crate) use app::*;
 pub use app_slots::AppSlot;
+pub(crate) use app_slots::valid_app_id;
 pub(crate) use layout::*;
 pub(crate) use message::*;
 pub(crate) use state::*;
