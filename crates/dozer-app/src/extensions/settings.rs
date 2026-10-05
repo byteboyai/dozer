@@ -2,6 +2,7 @@
 //! 设计见 `docs/superpowers/specs/2026-09-18-git-account-settings-design.md`。
 //! 渲染宿主是独立原生窗口 `platform::settings_overlay::SettingsOverlay`。
 
+use crate::extensions::settings_apps;
 use crate::git_accounts::{self, GitAccountsState, GitProvider};
 use byteui::interaction::icons;
 use byteui::theme::color::ColorScheme;
@@ -57,6 +58,8 @@ pub enum SettingsTab {
     Theme,
     Git,
     Advanced,
+    /// 应用宿主:运行时探测、已安装应用、安装流程(bytehost A4c)。
+    Apps,
 }
 
 pub struct State {
@@ -82,6 +85,10 @@ pub struct State {
     close_hover: bool,
     /// 待发提示(断开账户失败等一次性反馈),`App::update` 的包装函数排空成 Toast。
     pub(crate) outbox: crate::extensions::toast::Outbox,
+    /// 「应用」页的状态(运行时探测/已安装应用/安装流程)。
+    pub apps: settings_apps::State,
+    /// 应用页改了已安装集合或运行状态,主窗口的应用宿主需要立刻刷新(`App::update` 的包装函数取走)。
+    host_changed: bool,
 }
 
 impl State {
@@ -108,7 +115,14 @@ impl State {
             tab_hover: None,
             close_hover: false,
             outbox: Default::default(),
+            apps: Default::default(),
+            host_changed: false,
         }
+    }
+
+    /// 取走"应用宿主需要刷新"标记(`App::update` 的包装函数调用)。
+    pub(crate) fn take_host_changed(&mut self) -> bool {
+        std::mem::take(&mut self.host_changed)
     }
 
     /// 取走待发提示(`App::drain_outboxes` 调用)。
@@ -192,6 +206,8 @@ pub enum Message {
     TabSelected(SettingsTab),
     /// 左栏 tab 的 hover 进入/离开,`Some(tab)` 进入、`None` 离开。
     TabHover(Option<SettingsTab>),
+    /// 「应用」页的全部消息(见 `settings_apps`)。
+    Apps(settings_apps::Message),
 }
 
 /// 处理不需要 `handle`(异步)的消息,返回 `true` 表示已处理完。纯状态
@@ -321,7 +337,9 @@ fn apply_sync_message(state: &mut State, msg: &Message) -> bool {
         | Message::ConnectSubmit(_)
         | Message::AdvancedStopClicked
         | Message::AdvancedStopConfirm
-        | Message::AdvancedRestartClicked => false,
+        | Message::AdvancedRestartClicked
+        // `Apps` 在 `update` 里先于本函数分流,到不了这里。
+        | Message::Apps(_) => false,
     }
 }
 
@@ -333,14 +351,29 @@ pub fn update(
     msg: Message,
     client: &dozer_client::Client,
     handle: &tokio::runtime::Handle,
-    emit: impl Fn(Message) + Send + 'static,
+    emit: impl Fn(Message) + Clone + Send + 'static,
 ) {
     if let Message::Close = msg {
         *state = None;
         return;
     }
     let Some(s) = state else { return };
+    if let Message::Apps(apps_msg) = msg {
+        run_apps_message(s, apps_msg, client, handle, emit.clone());
+        return;
+    }
+    // 切到「应用」页要现拉探测与列表(其余页纯本地,没有加载)。
+    let opened_apps = matches!(msg, Message::TabSelected(SettingsTab::Apps));
     if apply_sync_message(s, &msg) {
+        if opened_apps {
+            run_apps_message(
+                s,
+                settings_apps::Message::Opened,
+                client,
+                handle,
+                emit.clone(),
+            );
+        }
         return;
     }
     let provider = match msg {
@@ -421,6 +454,107 @@ pub fn update(
         emit(Message::ConnectResult(provider, result));
     });
     s.connect_tasks.insert(provider, join_handle.abort_handle());
+}
+
+/// 「应用」页的消息:先过纯状态机,再执行它吐出的副作用(发请求/弹 Toast/标记主窗口刷新)。
+fn run_apps_message(
+    s: &mut State,
+    msg: settings_apps::Message,
+    client: &dozer_client::Client,
+    handle: &tokio::runtime::Handle,
+    emit: impl Fn(Message) + Send + 'static,
+) {
+    use crate::extensions::app_host::Failure;
+    use crate::extensions::settings_apps::{ActKind, Effect, Message as M};
+    use bytehost_apps::id::AppId;
+    use bytehost_apps::plan::{Provenance, TrustLevel};
+    use bytehost_apps::proto::AppSource;
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let effects = s.apps.update(msg, now_ms);
+    let emit = std::sync::Arc::new(std::sync::Mutex::new(emit));
+    let send = {
+        let emit = std::sync::Arc::clone(&emit);
+        move |m: M| {
+            if let Ok(emit) = emit.lock() {
+                emit(Message::Apps(m));
+            }
+        }
+    };
+    for effect in effects {
+        let client = client.clone();
+        let send = send.clone();
+        match effect {
+            Effect::Probe => {
+                handle.spawn(async move {
+                    let r = client
+                        .app_probe_runtimes()
+                        .await
+                        .map_err(|e| Failure::from_client_error(&e));
+                    send(M::ProbesLoaded(r));
+                });
+            }
+            Effect::List => {
+                handle.spawn(async move {
+                    let r = client
+                        .app_list()
+                        .await
+                        .map_err(|e| Failure::from_client_error(&e));
+                    send(M::ListLoaded(r));
+                });
+            }
+            // 选目录对话框是阻塞的原生窗口,由 `window_events` 拦截 `InstallClicked` 在窗口层执行。
+            Effect::PickSource => {}
+            Effect::Plan(path) => {
+                handle.spawn(async move {
+                    let r = client
+                        .app_plan(
+                            AppSource::LocalDir { path },
+                            Provenance::Local,
+                            TrustLevel::Trusted,
+                        )
+                        .await
+                        .map(Box::new)
+                        .map_err(|e| Failure::from_client_error(&e));
+                    send(M::PlanLoaded(r));
+                });
+            }
+            Effect::Install { approved, source } => {
+                handle.spawn(async move {
+                    let r = client
+                        .app_install(*approved, AppSource::LocalDir { path: source })
+                        .await
+                        .map_err(|e| Failure::from_client_error(&e));
+                    send(M::InstallDone(r));
+                });
+            }
+            Effect::Stop(id) => {
+                handle.spawn(async move {
+                    let r = match AppId::new(&id) {
+                        Ok(app) => client.app_stop(app).await,
+                        Err(e) => Err(anyhow::anyhow!("{e}")),
+                    }
+                    .map_err(|e| Failure::from_client_error(&e));
+                    send(M::ActionDone(id, ActKind::Stop, r));
+                });
+            }
+            Effect::Uninstall(id, mode) => {
+                handle.spawn(async move {
+                    let r = match AppId::new(&id) {
+                        Ok(app) => client.app_uninstall(app, mode).await,
+                        Err(e) => Err(anyhow::anyhow!("{e}")),
+                    }
+                    .map_err(|e| Failure::from_client_error(&e));
+                    send(M::ActionDone(id, ActKind::Uninstall, r));
+                });
+            }
+            Effect::HostChanged => s.host_changed = true,
+            Effect::Toast { level, text, key } => s.outbox.push_keyed(LOG, level, text, key),
+        }
+    }
 }
 
 fn scheme_row<'a>(
@@ -762,6 +896,14 @@ pub fn settings_card(
             |h| Message::TabHover(if h { Some(SettingsTab::Advanced) } else { None }),
             |_| Message::TabHover(None),
         ),
+        settings_tab_button(
+            "应用",
+            state.selected == SettingsTab::Apps,
+            tab_hover_t(SettingsTab::Apps),
+            Message::TabSelected(SettingsTab::Apps),
+            |h| Message::TabHover(if h { Some(SettingsTab::Apps) } else { None }),
+            |_| Message::TabHover(None),
+        ),
     ]
     .spacing(8)
     .width(Length::Fill);
@@ -782,6 +924,9 @@ pub fn settings_card(
                 provider_row(GitProvider::Gitee, &state.gitee),
             ],
             SettingsTab::Advanced => column![advanced_title, advanced_row(&state.advanced)],
+            SettingsTab::Apps => {
+                column![crate::extensions::settings_apps::view(&state.apps).map(Message::Apps)]
+            }
         }
         .spacing(14)
         .into();
@@ -834,6 +979,8 @@ mod tests {
             tab_hover: None,
             close_hover: false,
             outbox: Default::default(),
+            apps: Default::default(),
+            host_changed: false,
         }
     }
 

@@ -3921,6 +3921,14 @@ impl App {
                     let _ = proxy.send_event(Message::Settings(m));
                 };
                 settings::update(&mut self.settings, msg, &client, &handle, emit);
+                // 设置里的安装/停止/卸载改了已安装集合或运行状态:立刻刷新应用宿主的列表(同步图标栏)。
+                if self
+                    .settings
+                    .as_mut()
+                    .is_some_and(|s| s.take_host_changed())
+                {
+                    self.app_host_update(crate::extensions::app_host::Message::Refresh);
+                }
                 if stop_succeeded {
                     self.daemon_unavailable = Some("dozerd 已停止,部分功能不可用".to_string());
                 }

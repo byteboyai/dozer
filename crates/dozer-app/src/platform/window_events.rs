@@ -2202,6 +2202,19 @@ impl Runner {
                     app.update(Message::ProjectTabOpen(dir));
                 }
             }
+            // 设置「应用」页的「安装应用…」:先把状态机推进到"选目录中",再弹原生选目录对话框
+            // (阻塞,只能在窗口层做,同 `ProjectTabPickFolder`),结果经 `SourcePicked` 回到状态机。
+            Message::Settings(crate::extensions::settings::Message::Apps(
+                crate::extensions::settings_apps::Message::InstallClicked,
+            )) => {
+                use crate::extensions::{settings::Message as S, settings_apps::Message as A};
+                app.update(Message::Settings(S::Apps(A::InstallClicked)));
+                let picked = rfd::FileDialog::new()
+                    .set_title("选择应用目录(目录里要有 manifest.toml)")
+                    .pick_folder();
+                app.update(Message::Settings(S::Apps(A::SourcePicked(picked))));
+                window.request_redraw();
+            }
             Message::ProjectLinkPick(target) => {
                 // 单颗"＋"入口:打开根目录在项目根的文件浏览器,选中后按
                 // 实际类型(`is_dir()`)判定虚拟链接是该当文件还是目录,再回

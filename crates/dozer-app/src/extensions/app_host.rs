@@ -63,6 +63,8 @@ pub enum Message {
     Stop(AppSlot),
     /// 该应用面板被切到前台(图标栏点击或程序化显示)。
     PanelShown(AppSlot),
+    /// 别处(设置里的安装/停止/卸载)改了已安装集合或运行状态:立刻拉一次列表。
+    Refresh,
 }
 
 /// 状态机要 `App` 去做的事。
@@ -175,6 +177,13 @@ impl State {
             Message::Start(slot) => self.act(slot, Act::Start),
             Message::Stop(slot) => self.act(slot, Act::Stop),
             Message::ActionDone(slot, act, result) => self.action_done(slot, act, result, now),
+            Message::Refresh => {
+                if self.in_flight {
+                    return Vec::new();
+                }
+                self.begin_fetch(now);
+                vec![Effect::FetchList]
+            }
             Message::PanelShown(slot) => {
                 self.launch_failed.remove(&slot);
                 let mut effects = Vec::new();
@@ -579,6 +588,16 @@ mod tests {
         assert_eq!(shown, vec![Effect::FetchList]);
         let after = loaded(&mut s, vec![running("fail-a")], Some(a));
         assert!(after.contains(&Effect::FetchLaunchUrl(a)));
+    }
+
+    #[test]
+    fn refresh_fetches_the_list_unless_one_is_already_in_flight() {
+        let mut s = State::default();
+        assert_eq!(
+            s.update(Message::Refresh, Instant::now(), None),
+            vec![Effect::FetchList]
+        );
+        assert!(s.update(Message::Refresh, Instant::now(), None).is_empty());
     }
 
     #[test]
