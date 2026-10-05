@@ -149,9 +149,15 @@ pub struct State {
 }
 
 impl State {
-    /// 要不要排下一拍唤醒:从没拉过(启动后的第一次),或者有应用面板可见(持续轮询)。
+    /// 连不上 dozerd(传输层失败):没有应用面板可见时也要按间隔重试,连上后才恢复安静。
+    fn disconnected(&self) -> bool {
+        matches!(self.phase, Some(Phase::Disconnected))
+    }
+
+    /// 要不要排下一拍唤醒:从没拉过(启动后的第一次)、有应用面板可见(持续轮询)、或者连不上 dozerd
+    /// (自愈:dozerd 启动时没起、之后才起或被重启,不用等用户操作就能拿到应用列表)。
     pub fn poll_wanted(&self, app_panel_visible: bool) -> bool {
-        !self.in_flight && (self.last_poll.is_none() || app_panel_visible)
+        !self.in_flight && (self.last_poll.is_none() || app_panel_visible || self.disconnected())
     }
 
     /// `ResumeTimeReached` 时调用:到点就拉一次列表。
@@ -161,7 +167,10 @@ impl State {
         }
         let due = match self.last_poll {
             None => true,
-            Some(t) => !visible.is_empty() && now.duration_since(t) >= POLL_INTERVAL,
+            Some(t) => {
+                (!visible.is_empty() || self.disconnected())
+                    && now.duration_since(t) >= POLL_INTERVAL
+            }
         };
         if !due {
             return Vec::new();
@@ -822,5 +831,31 @@ mod tests {
             !again.iter().any(|e| matches!(e, Effect::FetchLaunchUrl(_))),
             "各自在途时不重复取"
         );
+    }
+
+    /// dozerd 暂时连不上(启动时没起、被重启中)时,即使没有应用面板可见也要继续按间隔重试,
+    /// 连上后恢复安静——否则"启动时没起、之后才起"的 dozerd 永远等不到应用列表。
+    #[test]
+    fn a_disconnected_host_keeps_polling_until_the_daemon_answers() {
+        let mut s = State::default();
+        let t0 = Instant::now();
+        s.poll_if_due(t0, &[]);
+        s.update(
+            Message::ListLoaded(Err(Failure::Transport("连不上".into()))),
+            t0,
+            &[],
+        );
+        assert!(s.poll_wanted(false), "断开状态要继续排唤醒");
+        assert!(
+            s.poll_if_due(t0 + POLL_INTERVAL / 2, &[]).is_empty(),
+            "没到点"
+        );
+        assert_eq!(
+            s.poll_if_due(t0 + POLL_INTERVAL, &[]),
+            vec![Effect::FetchList]
+        );
+        s.update(Message::ListLoaded(Ok(vec![])), t0 + POLL_INTERVAL, &[]);
+        assert!(!s.poll_wanted(false), "连上以后恢复到不轮询");
+        assert!(s.poll_if_due(t0 + POLL_INTERVAL * 9, &[]).is_empty());
     }
 }
