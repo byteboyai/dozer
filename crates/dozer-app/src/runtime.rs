@@ -217,16 +217,15 @@ pub(crate) struct PoolSyncOutcome {
     pub denied: Vec<(crate::preview::ViewerKey, u64)>,
 }
 
-/// 应用 webview 里注入的脚本:只转发焦点/拖拽松开/缩放三类按键与鼠标事件(与预览 webview 的前三件套同款,
-/// 但**没有**查找、光标样式、标题回报——应用页面自己管这些)。
-const APP_INIT_SCRIPT: &str = "document.addEventListener('mousedown',function(){window.ipc.postMessage('focus')},true);document.addEventListener('mouseup',function(){window.ipc.postMessage('mouseup')},true);document.addEventListener('keydown',function(e){if(e.ctrlKey){var c=e.code,k=e.key;if(c==='Equal'||k==='+'||k==='='){e.preventDefault();window.ipc.postMessage('zoom_in');}else if(c==='Minus'||k==='-'){e.preventDefault();window.ipc.postMessage('zoom_out');}else if(c==='Digit1'||k==='1'){e.preventDefault();window.ipc.postMessage('zoom_reset');}}},true);";
-
 /// 创建一个应用 webview(`app_webview` 模块文档说明了信任模型)。与 `sync_webview_pool` 里给预览/浏览器
 /// 用的构建路径的区别——**应用代码不可信**:
 /// - 不注册 `dozer://` 自定义协议(预览 host/审阅快照/允许文件都只在那条协议后面);
-/// - IPC 只认 `focus`/`mouseup`/`zoom_*` 四类白名单消息,其余一律丢弃;
-/// - 导航只放行本应用 origin(`AppOrigin::allows_navigation`),`window.open`/新窗口一律拒绝,
-///   下载不处理(没有 download handler = 取消);
+/// - IPC 只认 `focus`/`mouseup`/`zoom_*` 白名单消息,且必须带本 webview 的随机 nonce(页面伪造不了,
+///   见 `AppIpc::parse`/`app_init_script`),其余一律丢弃;
+/// - 下载一律拒绝:wry 0.55 的**默认**是放行(默认 `download_started_handler` 返回 `true`,且下载路径
+///   不经导航策略),所以必须显式 `with_download_started_handler(|_, _| false)`;开发者工具同理显式关闭;
+///   摄像头/麦克风权限 wry 会无条件批准(目前靠系统 TCC 挡着,见规格 §6.4)。
+/// - 导航只放行本应用 origin(`AppOrigin::allows_navigation`),`window.open`/新窗口一律拒绝;
 /// - 每应用独立的 WKWebsiteDataStore(macOS 14+;更老的系统 wry 会退回默认存储)。
 ///
 /// `spec.url` 不是该形状的应用地址时**不创建**(返回 `None`,记日志):fail closed。
@@ -243,21 +242,25 @@ fn build_app_webview(
     let webview_id = spec.id;
     let app_id = origin.app_id().to_owned();
     let ipc_proxy = proxy;
+    let nonce = crate::app_webview::new_ipc_nonce();
     let built = wry::WebViewBuilder::new()
         .with_url(&spec.url)
         .with_bounds(bounds)
         .with_visible(spec.visible)
         .with_allow_link_preview(false)
         .with_data_store_identifier(crate::app_webview::data_store_identifier(&app_id))
-        .with_initialization_script(APP_INIT_SCRIPT)
+        .with_download_started_handler(|_, _| false)
+        .with_devtools(false)
+        .with_initialization_script(crate::app_webview::app_init_script(&nonce))
         .with_ipc_handler(move |req| {
-            let message = match req.body().as_str() {
-                "mouseup" => Message::WebViewMouseUp,
-                "focus" => Message::AppWebViewFocused(webview_id),
-                "zoom_in" => Message::ZoomIn,
-                "zoom_out" => Message::ZoomOut,
-                "zoom_reset" => Message::ZoomReset,
-                _ => return,
+            use crate::app_webview::AppIpc;
+            let message = match AppIpc::parse(req.body().as_str(), &nonce) {
+                Some(AppIpc::MouseUp) => Message::WebViewMouseUp,
+                Some(AppIpc::Focus) => Message::AppWebViewFocused(webview_id),
+                Some(AppIpc::ZoomIn) => Message::ZoomIn,
+                Some(AppIpc::ZoomOut) => Message::ZoomOut,
+                Some(AppIpc::ZoomReset) => Message::ZoomReset,
+                None => return,
             };
             let _ = ipc_proxy.send_event(message);
         })

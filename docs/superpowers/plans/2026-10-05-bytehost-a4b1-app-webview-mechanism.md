@@ -737,4 +737,18 @@ index 573aec1f..a24b346f 100644
 - 子框架与主框架同一策略:应用页面里嵌第三方 iframe(如 YouTube 嵌入)会被拒——一期有意收紧。
 - 应用面板在首页(`AppPage::Home`)与无活动工作区时不产出 spec(沿用 `preview_desired` 的入口判断);要不要让应用跨项目常驻是 A4b2/产品决定。
 - 其他 iced 内浮层(tab 溢出下拉、右键菜单)是否会被应用 webview 盖住:A4b1 只处理 `text_input_menu`(`app_modal_open`),其余在 A4b2 做面板 UI 时按 `preview_desired` 的惯例补。
-- 下载被静默取消(没有 download handler);是否需要"保存导出文件"留给产品决定(Excalidraw 导出 PNG 会用到,A5 验收时看)。
+- 下载一律拒绝(**显式** `with_download_started_handler(|_, _| false)`;本计划初稿写的"没有 download handler = 取消"是错的,见下方"评审后修订");是否需要"保存导出文件"留给产品决定(Excalidraw 导出 PNG 会用到,A5 验收时看)。
+
+## 评审后修订(2026-10-05,独立安全评审 + 一轮修复,分支 `a4b1-fix`)
+
+评审发现计划初稿对 wry 默认值的两个假设是错的,已修:
+
+- **C1 下载默认放行**:wry 0.55.1 的默认 `download_started_handler` 返回 `true`,且部分下载路径(`shouldPerformDownload`)在导航策略**之前**就被放行,应用页面可以不经提示把文件写进 `~/Downloads`。修:`with_download_started_handler(|_, _| false)`;同时显式 `with_devtools(false)`(wry 默认在 debug 构建里开)。`build_app_webview_pins_the_restrictive_settings` 用源码扫描钉住这些配置(wry 默认值会反过来,没有廉价夹具能真的建一个 webview)。
+- **C2 页面可抢键盘焦点/刷全局缩放**:页面自己调 `window.ipc.postMessage('focus')` 就能让应用 webview 成为 first responder(终端键盘被它收走),`zoom_in` 同理改写并落盘全局缩放。修:每个应用 webview 创建时生成随机 nonce,只写进注入脚本闭包;消息体必须是 `<nonce>:<动词>`(`AppIpc::parse`),注入脚本先把 `postMessage` 绑到局部变量(页面之后改写也截不到)、且只转发 `isTrusted` 的真实用户事件。已用 node 做了行为验证:合成事件不发送、页面劫持后的 `postMessage` 截不到 nonce。
+- **I1 媒体权限**:wry 对摄像头/麦克风请求**无条件批准**(`wry_web_view_ui_delegate.rs`),目前仅靠 macOS TCC 挡着(Dozer 没有声明用途)。写进规格 §6.4;将来 Dozer 若加麦克风/摄像头功能,必须先给应用 webview 加授权闸门。
+
+**留给 A4b2 的(已记录,不在本次修复内):**
+- 应用 webview 在切面板/收起/另一侧放大/回首页/无项目/**每次切项目**(`webviews.clear()`)时被销毁重载,页面内状态丢失;A4b2 要决定隐藏常驻还是豁免应用 id。
+- 同一槽的 URL 换成另一个 origin 时,旧 webview 持有旧 origin 的导航策略会拒绝新地址、面板停在失败态;应在 `AppOrigin` 变化时重建。
+- Minor:`about:blank#x`/`about:blank?…` 被精确匹配拒绝;macOS 14 以前每应用存储退回默认存储。
+- 预览/浏览器共用构建路径同样有"下载默认放行"与"媒体权限批准"——不在应用宿主范围,另行评估。

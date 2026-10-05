@@ -126,6 +126,54 @@ impl AppViews {
     }
 }
 
+/// 应用 webview 允许发给宿主的 IPC 消息(白名单)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AppIpc {
+    Focus,
+    MouseUp,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+}
+
+impl AppIpc {
+    /// 消息体必须是 `<nonce>:<动词>`:nonce 是本 webview 创建时随机生成、只写进注入脚本闭包的,页面脚本拿不到,
+    /// 所以页面**不能**自己 `window.ipc.postMessage(..)` 伪造焦点/缩放(抢终端键盘、狂刷全局缩放)。
+    /// 其余一切(没有 nonce、nonce 不对、未知动词、多余字段)一律 `None`。
+    pub(crate) fn parse(body: &str, nonce: &str) -> Option<Self> {
+        let verb = body.strip_prefix(nonce)?.strip_prefix(':')?;
+        Some(match verb {
+            "focus" => Self::Focus,
+            "mouseup" => Self::MouseUp,
+            "zoom_in" => Self::ZoomIn,
+            "zoom_out" => Self::ZoomOut,
+            "zoom_reset" => Self::ZoomReset,
+            _ => return None,
+        })
+    }
+}
+
+/// 每个应用 webview 一个新 nonce(122 位随机,32 个十六进制字符,可安全嵌进脚本字面量)。
+pub(crate) fn new_ipc_nonce() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
+/// 注入脚本(在页面脚本之前运行):先把 `postMessage` 绑定到局部变量——页面之后改写
+/// `window.ipc.postMessage` 也截不到 nonce——再只转发 **`isTrusted` 的真实用户事件**
+/// (页面脚本 `dispatchEvent` 合成的事件 `isTrusted` 为假)。转发的内容只有焦点/拖拽松开/缩放三类。
+pub(crate) fn app_init_script(nonce: &str) -> String {
+    format!(
+        "(function(){{var post=window.ipc.postMessage.bind(window.ipc);var N='{nonce}';\
+function send(v){{post(N+':'+v)}}\
+document.addEventListener('mousedown',function(e){{if(e.isTrusted)send('focus')}},true);\
+document.addEventListener('mouseup',function(e){{if(e.isTrusted)send('mouseup')}},true);\
+document.addEventListener('keydown',function(e){{if(!e.isTrusted||!e.ctrlKey)return;var c=e.code,k=e.key;\
+if(c==='Equal'||k==='+'||k==='='){{e.preventDefault();send('zoom_in')}}\
+else if(c==='Minus'||k==='-'){{e.preventDefault();send('zoom_out')}}\
+else if(c==='Digit1'||k==='1'){{e.preventDefault();send('zoom_reset')}}}},true)}})();"
+    )
+}
+
 pub(crate) fn app_webview_spec(slot: AppSlot, url: &str, visible: bool) -> WebviewSpec {
     WebviewSpec {
         id: webview_id(slot),
@@ -231,6 +279,99 @@ mod tests {
             ]
         );
         assert_ne!(data_store_identifier("a"), data_store_identifier("b"));
+    }
+
+    const NONCE: &str = "0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn ipc_messages_need_the_per_webview_nonce_and_a_known_verb() {
+        for (verb, want) in [
+            ("focus", AppIpc::Focus),
+            ("mouseup", AppIpc::MouseUp),
+            ("zoom_in", AppIpc::ZoomIn),
+            ("zoom_out", AppIpc::ZoomOut),
+            ("zoom_reset", AppIpc::ZoomReset),
+        ] {
+            assert_eq!(AppIpc::parse(&format!("{NONCE}:{verb}"), NONCE), Some(want));
+        }
+        for bad in [
+            "focus",
+            "mouseup",
+            "title:1:x",
+            "find_native",
+            &format!("{NONCE}:"),
+            &format!("{NONCE}:format_disk"),
+            &format!("{NONCE}x:focus"),
+            &format!("x{NONCE}:focus"),
+            ":focus",
+            &format!("{NONCE}:focus:extra"),
+            "wrong-nonce:focus",
+            "",
+        ] {
+            assert_eq!(AppIpc::parse(bad, NONCE), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn nonces_are_unguessable_and_safe_to_embed_in_a_script() {
+        let a = new_ipc_nonce();
+        let b = new_ipc_nonce();
+        assert_ne!(a, b);
+        assert!(
+            a.len() >= 32 && a.bytes().all(|c| c.is_ascii_hexdigit()),
+            "{a}"
+        );
+    }
+
+    /// 页面脚本不能伪造 IPC:消息带只有注入脚本闭包知道的 nonce,注入脚本在页面脚本之前
+    /// 绑定好 `postMessage`(页面之后改写 `window.ipc.postMessage` 也截不到),且只转发
+    /// `isTrusted` 的真实用户事件。
+    #[test]
+    fn the_init_script_binds_post_message_first_and_forwards_only_trusted_events() {
+        let script = app_init_script(NONCE);
+        assert!(script.contains(NONCE));
+        assert!(script.contains("window.ipc.postMessage.bind(window.ipc)"));
+        assert!(
+            !script.contains("window.ipc.postMessage('"),
+            "不得再直接调用页面可改写的 postMessage"
+        );
+        for listener in ["mousedown", "mouseup", "keydown"] {
+            let at = script
+                .find(&format!("addEventListener('{listener}'"))
+                .unwrap();
+            assert!(
+                script[at..].contains("isTrusted"),
+                "{listener} 监听必须校验 isTrusted"
+            );
+        }
+        assert!(script.matches("isTrusted").count() >= 3);
+    }
+
+    /// `build_app_webview` 是创建 wry webview 的唯一应用路径,没有廉价夹具能真的建一个;
+    /// 这些是它**必须**写出的、且 wry 默认值会反过来的配置,用源码扫描钉住
+    /// (wry 0.55 默认:下载放行、debug 下开发者工具开、媒体权限自动批准)。
+    #[test]
+    fn build_app_webview_pins_the_restrictive_settings() {
+        let src = include_str!("runtime.rs");
+        let start = src.find("fn build_app_webview(").unwrap();
+        let end = start + src[start..].find("\n}\n").unwrap();
+        let body = &src[start..end];
+        for required in [
+            ".with_download_started_handler(|_, _| false)",
+            ".with_devtools(false)",
+            ".with_new_window_req_handler(",
+            ".with_navigation_handler(",
+            "AppIpc::parse(",
+        ] {
+            assert!(body.contains(required), "缺少 {required}");
+        }
+        for forbidden in [
+            "with_custom_protocol",
+            "with_download_completed_handler",
+            "APP_INIT_SCRIPT",
+        ] {
+            assert!(!body.contains(forbidden), "不得出现 {forbidden}");
+        }
     }
 
     #[test]
