@@ -13,6 +13,7 @@ var RenderError = class extends Error {
   }
 };
 var ASSET_BASE = "dozer://plantuml-viewer/";
+var VENDORED_STDLIB_SCRIPTS = ["c4.min.js"];
 var stdlibStore = {};
 var stdlibJsonStore = {};
 var stdlibInfoStore = {};
@@ -52,6 +53,9 @@ function loadEngine() {
   enginePromise = (async () => {
     ensureNamespaces();
     await loadScript(`${ASSET_BASE}viz-global.js`);
+    for (const name of VENDORED_STDLIB_SCRIPTS) {
+      await loadScript(`${ASSET_BASE}stdlib/${name}`);
+    }
     const mod = await import(
       /* @vite-ignore */
       `${ASSET_BASE}plantuml.js`

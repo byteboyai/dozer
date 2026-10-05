@@ -69,6 +69,39 @@ delete_confirm_spec_reflects_pending_target`(NFD/NFC 文件名)、
 | 离线条带(无公网/`file://`/`eval`) | `scan-offline.mjs` | `offline asset scan passed (9 files)` |
 | 零网络请求(引擎路径) | harness 阻断 XHR/fetch 并断言零次 | `render-smoke.mjs` → `zero network attempts` |
 
+## 2.5 Task 10 代码审计(2026-10-05)
+
+| 审计项 | 命令/方法 | 结果 |
+|---|---|---|
+| spike 可执行临时代码 | 删除 `harness.mjs`/`run.mjs`/`run-c4.mjs`/`package.json`/`package-lock.json` | ✅ 已删;保留 README/fixtures/stdlib |
+| 扩展名唯一权威 | `rg '"puml"\|"plantuml"\|"iuml"\|"wsd"\|"pu"'` | ✅ 路由判据唯一来自 `is_plantuml_extension`(`router.rs:210`);`extension_to_syntax`(语法 token)与 `rendered_ext`(原因标签)是各自独立映射,与 `md`/`html`/`svg` 一致 |
+| 公网 URL / `file://` / eval 入口 | `rg 'https?://\|file://\|eval\(\|new Function'` host 源码 | ✅ 已修复(唯一 `new Function` 已删,改同源 `<script>`;见下) |
+| 提交物 | `git ls-files` | ✅ `package-lock.json`、生成 assets、stdlib 均提交;`assets/.../stdlib/c4.min.js` 为 `web/.../stdlib/c4.min.js` 的构建拷贝 |
+| 许可证/版本记录 | 检查 | ✅ 版本/integrity 见 `spike/plantuml-js/README.md` §版本许可 + spec §12.1 + `package.json`/`package-lock.json`;仓库无独立 THIRD-PARTY 文件 |
+
+### ✅ 已修复:vendored C4 stdlib 生产路径注册(2026-10-05)
+
+**发现:** 初版 `renderer.ts::registerStdlibScript`(用 `new Function` 安装 c4 载荷)
+**未被任何代码调用**,已被 tree-shake 出 `bundle.js`;`index.ts` 启动也**不加载**
+`stdlib/c4.min.js`。后果:生产环境 `!include <C4/...>` 时,引擎的
+`PLANTUML_STDLIB_LOADER` 找不到 `c4` 命名空间即 `return false`,回落到引擎默认的
+**网络加载器** → 被 CSP(`script-src 'self'`,无 `connect-src`/`unsafe-eval`)拒绝,
+C4 图渲染失败。且 `new Function` 即便被调用也会被 `script-src 'self'` 拒绝。
+
+**修复:**
+- 删除死的 `registerStdlibScript`;`renderer.ts::loadEngine` 在加载引擎前用**同源
+  classic `<script>`** 依次加载 `VENDORED_STDLIB_SCRIPTS`(现为 `c4.min.js`)。
+  c4.min.js 自赋值 `window.PLANTUML_STDLIB[.c4]`/`_JSON`/`_INFO`,classic 脚本在
+  `script-src 'self'` 下可执行。
+- `render-smoke.mjs` 改为按**同一机制**在 window 作用域内执行 c4.min.js(不再用
+  `new Function`),并新增断言 `PLANTUML_STDLIB.c4` 已注册;C4 图仍渲染且零网络。
+- 重建 `assets/plantuml-viewer/bundle.js`:`new Function`/`registerStdlibScript` 已消失,
+  新增 `stdlib/c4.min.js` 加载引用。
+
+**覆盖测试:** `render-smoke.mjs`(C4 渲染 + 命名空间断言 + 零网络)、
+`npm run typecheck`、`node --test src/sanitize.test.mjs`(6 例)、`scan-offline.mjs`
+(9 文件)。**对应 Task 9 人工验收 A4 的阻塞项已解除**(仍需人工在真实 WKWebView 复核)。
+
 ## 3. 安全回归(Rust 侧协议 / 生命周期 / include)
 
 上述 §2 覆盖以下 spec §9.1 条目:router 表(五种扩展名/大小写/空文件/二进制伪装/

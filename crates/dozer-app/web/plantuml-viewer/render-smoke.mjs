@@ -128,10 +128,14 @@ async function main() {
 
   const { window, networkAttempts, stdlib } = createHarness();
 
-  // Register the vendored C4 stdlib exactly as the runtime loader script would.
+  // Register the vendored C4 stdlib exactly as the production bootstrap does:
+  // `renderer.ts::loadEngine` appends a same-origin classic `<script
+  // src="stdlib/c4.min.js">`, which self-assigns `window.PLANTUML_STDLIB*`.
+  // jsdom does not execute injected script elements, so evaluate the file in
+  // the window scope to mirror what the classic script does (NO new Function).
   const c4 = readFileSync(path.join(assetsDir, "stdlib/c4.min.js"), "utf8");
-  const installer = new Function("window", "globalThis", c4);
-  installer.call(window, window, window);
+  window.eval(c4);
+  assert.ok(stdlib["c4"], "c4.min.js must self-assign window.PLANTUML_STDLIB.c4");
 
   const engine = await loadEngine(window);
   assert.equal(typeof engine.renderToString, "function", "engine must export renderToString");

@@ -49,6 +49,13 @@ export class RenderError extends Error {
 /** Base URL the vendored assets are served from. */
 const ASSET_BASE = "dozer://plantuml-viewer/";
 
+/**
+ * Vendored stdlib packages to register at engine bootstrap (spec §12.3). Each is
+ * a classic script under `stdlib/` that self-assigns the `PLANTUML_STDLIB*`
+ * namespaces on `window`; loaded same-origin so `script-src 'self'` permits it.
+ */
+const VENDORED_STDLIB_SCRIPTS = ["c4.min.js"] as const;
+
 /** Namespaces registered by vendored stdlib packages keyed by library base. */
 const stdlibStore: Record<string, Record<string, string | string[]>> = {};
 const stdlibJsonStore: Record<string, Record<string, string>> = {};
@@ -102,6 +109,14 @@ export function loadEngine(): Promise<EngineModule> {
     ensureNamespaces();
     // viz-global.js must run first and as a classic script (defines Graphviz).
     await loadScript(`${ASSET_BASE}viz-global.js`);
+    // Register the vendored stdlib packages (e.g. C4) by loading their classic
+    // scripts same-origin. They self-assign `window.PLANTUML_STDLIB[_JSON/_INFO]`,
+    // so the engine's `PLANTUML_STDLIB_LOADER` can satisfy `!include <C4/...>`
+    // synchronously without any network. `script-src 'self'` allows this; a
+    // `new Function` installer would be rejected (no `unsafe-eval`).
+    for (const name of VENDORED_STDLIB_SCRIPTS) {
+      await loadScript(`${ASSET_BASE}stdlib/${name}`);
+    }
     const mod = (await import(
       /* @vite-ignore */ `${ASSET_BASE}plantuml.js`
     )) as EngineModule;
@@ -111,19 +126,6 @@ export function loadEngine(): Promise<EngineModule> {
     return mod;
   })();
   return enginePromise;
-}
-
-/**
- * Register a vendored stdlib package from its `c4.min.js`-style payload, which
- * assigns `PLANTUML_STDLIB[base]`, `PLANTUML_STDLIB_JSON[base]` and
- * `PLANTUML_STDLIB_INFO[base]` on the chosen global object.
- */
-export function registerStdlibScript(scriptText: string): void {
-  const g = globals() as unknown as Record<string, unknown>;
-  const installer = new Function("window", "globalThis", scriptText);
-  // The stdlib payloads reference `window.PLANTUML_STDLIB` etc. Provide the
-  // same object for both bindings (browser: window === globalThis).
-  installer.call(g, g, g);
 }
 
 /**

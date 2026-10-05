@@ -501,17 +501,42 @@ python3 scripts/audit/check_panel_boundary.py
 
 ---
 
-## Task 10：清理 spike 与交付
+## Task 10：清理 spike 与交付 🔶 审计完成，C4 缺口待裁决（2026-10-05）
 
 **目的：** 收口临时代码与文档，使源码、生成资产和决策一致。
 
-- [ ] 若 Task 0 spike 不属于长期回归资产，删除其可执行临时代码；保留 README、fixture
+- [x] 若 Task 0 spike 不属于长期回归资产，删除其可执行临时代码；保留 README、fixture
       来源与结论。若其 fixture 被正式前端测试复用，则迁移后再删，不能复制两份。
-- [ ] `rg` 检查五种扩展名只由 `is_plantuml_extension` 定义；测试字符串除外。
-- [ ] `rg` 检查 PlantUML host 不含公网 URL、`file://`、任意 `eval` 入口。
-- [ ] 确认 `package-lock.json`、生成 assets、许可证/版本记录均已提交。
-- [ ] 更新 spec 状态为“已实现”，记录最终引擎版本、bundle 大小和偏离设计之处。
-- [ ] 最后一次运行 Task 9 的全量门禁。
+      （删除 `harness.mjs`/`run.mjs`/`run-c4.mjs`/`package.json`/`package-lock.json`；
+      保留 `README.md`/`fixtures/`/`stdlib/`;已确认 fixtures 未被正式前端测试复用
+      ——`render-smoke.mjs` 内联自己的 diagram 源。README 已加归档说明。）
+- [x] `rg` 检查五种扩展名只由 `is_plantuml_extension` 定义；测试字符串除外。
+      （`router.rs:210` 是唯一路由判据;`extension_to_syntax`/`rendered_ext` 是各自
+      独立的语法 token / 原因标签映射,与 `md`/`html`/`svg` 处理一致。见验收 §2.5。）
+- [x] `rg` 检查 PlantUML host 不含公网 URL、`file://`、任意 `eval` 入口。
+      （index.html 无公网 URL;审计发现唯一 `new Function`(`registerStdlibScript`)是
+      死代码且会导致 C4 未注册——已删除,改为 `renderer.ts::loadEngine` 用同源
+      `<script src="stdlib/c4.min.js">` 加载 stdlib。现在 host 无 `new Function`。
+      见验收 §2.5。）
+- [x] 确认 `package-lock.json`、生成 assets、许可证/版本记录均已提交。
+      （`git ls-files` 确认;`assets/plantuml-viewer/*` 与 `stdlib/c4.min.js` 均为提交的
+      生成产物;版本/integrity 记录见 spike README + spec §12.1 + package-lock。）
+- [x] 更新 spec 状态为“已实现”，记录最终引擎版本、bundle 大小和偏离设计之处。
+      （spec 头部状态区已更新:引擎 1.2026.8、五份 vendored 产物体积、无协议偏离、
+      一处已知功能缺口(C4 stdlib 注册)。）
+- [x] 最后一次运行 Task 9 的全量门禁。
+      （C4 修复后:fmt/check-log-scope/check_panel_boundary/clippy 通过;
+      `cargo test -p dozer-app` 1851 passed(3 既有失败);`npm test` 全绿;
+      `scan-offline.mjs` 9 文件通过。）
+
+**审计发现与修复(2026-10-05):** vendored C4 stdlib 初版未在宿主启动时注册
+(`renderer.ts::registerStdlibScript` 为用 `new Function` 的死代码,`index.ts` 不加载
+`stdlib/c4.min.js`),导致生产路径下 `!include <C4/...>` 失败(默认加载器走网络被 CSP
+拒绝)。已删除该死代码,改为 `renderer.ts::loadEngine` 用同源 classic
+`<script src="stdlib/c4.min.js">` 依次加载 `VENDORED_STDLIB_SCRIPTS`;
+`render-smoke.mjs` 按同一机制驱动并断言 `PLANTUML_STDLIB.c4` 已注册。已重建
+`assets/plantuml-viewer/bundle.js`(`new Function` 消失,新增 c4 加载引用),离线扫描
+通过。详见 `docs/superpowers/analysis/plantuml-preview-acceptance.md` §2.5。
 
 ## 建议提交边界
 

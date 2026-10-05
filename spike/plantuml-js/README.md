@@ -1,24 +1,29 @@
 # Task 0 spike — offline PlantUML JS engine
 
-一次性技术验证，随时可删（不留进产品代码）。目的：在实现 Dozer PlantUML
-文件预览前，确认官方 `@plantuml/core`（PlantUML 作者 Arnaud Roques 发布的
-TeaVM→JS 编译版）能**完全离线**在浏览器 DOM 里把 `.puml` 渲染成 SVG，并能
-通过注入把标准库（如 C4）和本地 `!include` 喂给引擎。
+一次性技术验证（Task 0 硬门禁）。目的：在实现 Dozer PlantUML 文件预览前，确认
+官方 `@plantuml/core`（PlantUML 作者 Arnaud Roques 发布的 TeaVM→JS 编译版）能
+**完全离线**在浏览器 DOM 里把 `.puml` 渲染成 SVG，并能通过注入把标准库（如 C4）
+和本地 `!include` 喂给引擎。
 
 对应计划：`docs/superpowers/plans/2026-10-04-plantuml-file-preview.md` 的 Task 0
 （硬门禁）。结论：**门禁通过**，可以进入 Task 1。
 
-## 怎么跑
+> **归档（Task 10，2026-10-05）**：一次性可执行 harness（`harness.mjs`/
+> `run.mjs`/`run-c4.mjs`/`package.json`/`package-lock.json`）已删除，只保留本
+> README（结论/契约/体积/许可记录）、`fixtures/` 与 `stdlib/`（fixture 来源）。
+> 这些 fixture **未**被正式前端测试复用——`web/plantuml-viewer/render-smoke.mjs`
+> 内联自己的 diagram 源，不依赖本目录。正式回归入口是
+> `crates/dozer-app/web/plantuml-viewer`(`npm test`) 与 Rust 侧 `cargo test
+> -p dozer-app`；本目录不再参与构建或测试。
 
-```bash
-cd spike/plantuml-js
-npm install          # 只装 @plantuml/core 与 jsdom
-npm test             # = node run.mjs && node run-c4.mjs
-```
+## 怎么跑（历史，已归档）
 
-- `run.mjs`：五种核心图（sequence/class/component/deployment/state）离线渲染 +
+原 harness 已删除。如需复现 Task 0 结论，参照下方"结论"与"关键 API 与契约"，
+在 `web/plantuml-viewer` 的 jsdom harness（`render-smoke.mjs`）基础上扩展。
+
+- 历史 `run.mjs`：五种核心图（sequence/class/component/deployment/state）离线渲染 +
   确定性 + 本地 `!include` 走 stdlib 虚拟文件系统。
-- `run-c4.mjs`：额外加载 vendored C4 标准库包，渲染真实 C4 图；全程**断网**
+- 历史 `run-c4.mjs`：额外加载 vendored C4 标准库包，渲染真实 C4 图；全程**断网**
   （XHR/fetch 被替换成抛错），断言零网络请求。
 
 ## 结论（全部验证通过）
@@ -138,9 +143,8 @@ window.PLANTUML_STDLIB_INFO.c4 = { name:"C4", version:"2.13.0", license:"MIT", .
 
 ## 文件
 
-- `harness.mjs` — jsdom 环境 + 全局镜像 + canvas/SVG mock + 命名空间/loader 注册。
-- `run.mjs` — 五核心图 + 确定性 + 本地 include。
-- `run-c4.mjs` — 断网 + C4 stdlib 全链路。
-- `fixtures/*.puml` — 六种图的样例（含 `with_include.puml`/`included.puml`）。
-- `stdlib/c4.min.js` — vendored C4 标准库包（spike 期抓取，随 spike 提交）。
-- `node_modules/` — 不提交（见仓库 `.gitignore`）。
+- `README.md` — 本记录（结论/契约/体积/许可）。**保留**。
+- `fixtures/*.puml` — 六种图的样例（含 `with_include.puml`/`included.puml`）。**保留**（fixture 来源）。
+- `stdlib/c4.min.js` — vendored C4 标准库包（spike 期抓取）。**保留**。
+- 已删除（Task 10）：`harness.mjs`、`run.mjs`、`run-c4.mjs`、`package.json`、
+  `package-lock.json`。原 `node_modules/` 亦不再需要。

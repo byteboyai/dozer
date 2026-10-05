@@ -1,6 +1,24 @@
 # PlantUML 文件预览设计
 
-> **状态：已批准，待实施。** 日期：2026-10-04。
+> **状态：已实现（引擎/路由/include/宿主/生命周期），Task 9 人工验收待执行。**
+> 实施完成日期：2026-10-05。见 `docs/superpowers/plans/2026-10-04-plantuml-file-preview.md`
+> 与验收记录 `docs/superpowers/analysis/plantuml-preview-acceptance.md`。
+>
+> **实现期事实（供追溯）：**
+> - 引擎：官方 `@plantuml/core@1.2026.8`（MIT，Arnaud Roques），逐字节 vendored
+>   （`plantuml.js` 3.9 MiB、`viz-global.js` 1.4 MiB、`themes.js` 326 KiB、
+>   `emoji.js` 1.9 MiB、`openiconic.js` 51 KiB），我方胶水 `bundle.js` 12 KiB。
+> - include：项目内 include 由 Rust 重写为 `!include <local/<项目相对键>>` 注入引擎
+>   `PLANTUML_STDLIB`（浏览器引擎只认尖括号 stdlib 形式，普通相对 include 会被静默
+>   丢弃——这是实现期发现并已解决的引擎行为）。尖括号 stdlib（`<C4/...>`）原样透传。
+> - stdlib 注册：随应用 vendored 的 stdlib 包（`stdlib/c4.min.js`）在引擎引导时由
+>   `renderer.ts::loadEngine` 以**同源 classic `<script>`** 加载（c4.min.js 自赋值
+>   `window.PLANTUML_STDLIB*`），契合 `script-src 'self'`；不使用 `new Function`
+>   （会被 CSP 拒绝）。`render-smoke.mjs` 按同一机制驱动并断言 `PLANTUML_STDLIB.c4`
+>   已注册。（2026-10-05 Task 10 审计发现初版 `registerStdlibScript` 为未调用死代码、
+>   C4 未注册，已改用上述 `<script>` 方案修复。）
+> - 偏离设计之处：**无协议层偏离**（viewport 为纯前端视图状态，未新增协议事件，符合
+>   §5.2）。
 >
 > **产品裁决：** PlantUML 是文件预览能力，不新增 UML 面板；首版只读、本地离线
 > 渲染，不要求用户安装 Java，也不把项目源码发送给公共 PlantUML Server。
