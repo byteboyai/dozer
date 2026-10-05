@@ -70,11 +70,9 @@ impl AppService {
         };
         spawn_event_logger(&manager);
         let for_reconcile = manager.clone();
-        let failures = tokio::task::spawn_blocking(move || for_reconcile.reconcile())
-            .await
-            .unwrap_or_default();
-        for (app, error) in failures {
-            dozer_core::log_warn!(LOG, app = %app, error = %error, "启动对账:应用恢复失败");
+        match tokio::task::spawn_blocking(move || for_reconcile.reconcile()).await {
+            Ok(report) => log_report(&report, "启动对账"),
+            Err(e) => dozer_core::log_error!(LOG, error = %e, "启动对账任务失败(panic?)"),
         }
         dozer_core::log_info!(LOG, port = gateway.port(), "应用宿主已启动");
         Arc::new(Self {
@@ -83,11 +81,9 @@ impl AppService {
     }
 
     pub async fn handle(&self, request: AppRequest) -> Result<AppReply, String> {
-        let State::Ready { manager, .. } = &self.state else {
-            let State::Unavailable(reason) = &self.state else {
-                unreachable!()
-            };
-            return Err(reason.clone());
+        let manager = match &self.state {
+            State::Ready { manager, .. } => manager,
+            State::Unavailable(reason) => return Err(reason.clone()),
         };
         match request {
             AppRequest::List => blocking(manager, |m| m.list())
@@ -119,20 +115,10 @@ impl AppService {
                     .map(|()| AppReply::Done)
             }
             AppRequest::LaunchUrl { id } => {
-                // 只给正在运行的应用发带令牌的地址;没运行的应用打开只会是 404
-                blocking(manager, move |m| {
-                    let running = m.list()?.into_iter().find(|a| a.id == id);
-                    match running {
-                        Some(a) if a.url.is_some() => Ok(m.launch_url(&id)),
-                        Some(_) => Err(ManagerError::BadState {
-                            app: id,
-                            state: bytehost_apps::state::ObservedState::Stopped,
-                        }),
-                        None => Err(ManagerError::NotInstalled(id)),
-                    }
-                })
-                .await
-                .map(|url| AppReply::LaunchUrl { url })
+                // 只给正在运行的应用发带令牌的地址;判断与构造在 manager 的锁内一起完成
+                blocking(manager, move |m| m.launch_url_if_running(&id))
+                    .await
+                    .map(|url| AppReply::LaunchUrl { url })
             }
             AppRequest::ProbeRuntimes => {
                 let probes = tokio::task::spawn_blocking(|| probe_all(&SystemRunner::default()))
@@ -166,13 +152,21 @@ impl AppService {
             return;
         };
         let m = manager.clone();
-        let failures = tokio::task::spawn_blocking(move || m.suspend_all())
-            .await
-            .unwrap_or_default();
-        for (app, error) in failures {
-            dozer_core::log_warn!(LOG, app = %app, error = %error, "退出时收尾失败");
+        match tokio::task::spawn_blocking(move || m.suspend_all()).await {
+            Ok(report) => log_report(&report, "退出收尾"),
+            Err(e) => dozer_core::log_error!(LOG, error = %e, "退出收尾任务失败(panic?)"),
         }
         gateway.stop().await;
+    }
+}
+
+/// 把对账/收尾的结果写进日志:单个应用的失败,以及读不出来的记录(损坏的 `state.json`)。
+fn log_report(report: &bytehost_apps::manager::ReconcileReport, what: &str) {
+    for (app, error) in &report.failures {
+        dozer_core::log_warn!(LOG, app = %app, error = %error, "{what}:应用处理失败");
+    }
+    for (dir, error) in &report.problems {
+        dozer_core::log_warn!(LOG, dir = %dir, error = %error, "{what}:读不出应用记录");
     }
 }
 
@@ -575,5 +569,29 @@ source = "web/"
         assert_eq!(apps.len(), 1, "beta 没有被安装");
         assert!(apps[0].url.is_none(), "alpha 没有被再次启动");
         assert!(svc.gateway_stopped());
+    }
+
+    /// 首次运行(还没有 `gateway.json`):经 `AppService::start` 选端口、持久化、真正绑定并能提供服务。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_first_run_picks_persists_and_binds_a_port() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("bytehost");
+        assert!(!root.join("gateway.json").exists());
+        let svc = AppService::start(&root).await;
+        let persisted: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("gateway.json")).unwrap())
+                .unwrap();
+        let port = persisted["port"].as_u64().unwrap();
+        assert!((20000..=32767).contains(&port), "{port}");
+        install(&svc, write_app(&tmp.path().join("src/a"), "alpha", "A")).await;
+        let AppReply::Started { url } = svc
+            .handle(AppRequest::Start { id: id("alpha") })
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert!(url.contains(&format!(":{port}/")), "{url}");
+        svc.shutdown().await;
     }
 }

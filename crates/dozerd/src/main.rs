@@ -90,6 +90,9 @@ async fn main() -> Result<()> {
         svc.recover_on_startup();
         svc
     };
+    // 单实例检查必须在任何有副作用的启动工作(应用宿主的对账会起站点、写状态)之前:误启动的第二个 dozerd
+    // 不能先动手、之后才发现自己不该启动
+    dozerd::server::ensure_single_instance(&socket).await?;
     // 应用宿主:启动永不失败(端口被占用等只会让它"不可用",不影响会话功能);启动时对账,退出时收尾
     let apps =
         dozerd::app_service::AppService::start(&dozer_core::paths::state_dir().join("bytehost"))

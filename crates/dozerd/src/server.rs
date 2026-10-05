@@ -94,6 +94,18 @@ pub struct Stores {
     pub apps: std::sync::Arc<crate::app_service::AppService>,
 }
 
+/// 单实例检查:`socket` 背后已经有活着的监听者就报错。**启动期要尽早调用**(在做任何有副作用的启动工作——
+/// 例如应用宿主的对账——之前),否则误启动的第二个 dozerd 会先动手、之后才发现自己不该启动。
+pub async fn ensure_single_instance(socket: &Path) -> Result<()> {
+    if socket.exists() && socket_has_live_listener(socket).await {
+        anyhow::bail!(
+            "dozerd 已在运行（socket={}），拒绝重复启动",
+            socket.display()
+        );
+    }
+    Ok(())
+}
+
 /// 探测 `socket` 路径背后是否还有活着的 dozerd 在监听。`UnixListener::bind`
 /// 对已存在的路径会直接报错，绑定前必须先删掉旧文件——但删之前得确认它
 /// 背后真的没人在听：一个已存在的 socket 文件不代表监听者已死，直接删掉
@@ -148,13 +160,8 @@ pub async fn serve(
                 .await;
     }
     let ide_bridge = IdeBridgeRegistry::new(ide_lock_dir, preview_contexts.clone());
+    ensure_single_instance(socket).await?;
     if socket.exists() {
-        if socket_has_live_listener(socket).await {
-            anyhow::bail!(
-                "dozerd 已在运行（socket={}），拒绝重复启动",
-                socket.display()
-            );
-        }
         std::fs::remove_file(socket)?;
     }
     if let Some(parent) = socket.parent() {
@@ -1638,6 +1645,27 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         assert!(!alive, "dropped listener 的 socket 文件不应该还有人在监听");
+    }
+
+    /// 启动期的单实例检查:有活着的监听者就报错;路径不存在或只是陈旧的 socket 文件都放行。
+    #[tokio::test]
+    async fn ensure_single_instance_only_fails_when_someone_is_really_listening() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("dozerd.sock");
+        ensure_single_instance(&socket)
+            .await
+            .expect("路径不存在:放行");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let err = ensure_single_instance(&socket)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("已在运行"), "{err}");
+        drop(listener);
+        // 监听者没了:留下的 socket 文件只是陈旧文件,放行(`serve` 随后会清掉它)
+        ensure_single_instance(&socket)
+            .await
+            .expect("陈旧 socket 文件:放行");
     }
 
     #[tokio::test]
