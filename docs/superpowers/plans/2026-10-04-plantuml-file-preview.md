@@ -15,6 +15,10 @@ Project 共用实现。
 **Spec:**
 `docs/superpowers/specs/2026-10-04-plantuml-file-preview-design.md`
 
+> **状态：Task 0–8、10 已完成（提交 `d9bf310a`/`9139f606`/`9a9d0962`/`d918fa1e`/`71c9bd9f`/`59cabb80`）；
+> Task 9 自动化完成（`d6ca7c8b`），仅人工验收矩阵 A1–A13 待人工在真实 WKWebView/断网/发布包上执行。**
+> 验收记录见 `docs/superpowers/analysis/plantuml-preview-acceptance.md`（§4 人工矩阵）。
+
 ## Global Constraints
 
 - 不新增 `PanelKind::Uml`、Rail 项或独立面板状态。
@@ -501,7 +505,7 @@ python3 scripts/audit/check_panel_boundary.py
 
 ---
 
-## Task 10：清理 spike 与交付 🔶 审计完成，C4 缺口待裁决（2026-10-05）
+## Task 10：清理 spike 与交付 ✅ 完成（2026-10-05，C4 缺口已修复并提交 `59cabb80`）
 
 **目的：** 收口临时代码与文档，使源码、生成资产和决策一致。
 
@@ -526,8 +530,8 @@ python3 scripts/audit/check_panel_boundary.py
       一处已知功能缺口(C4 stdlib 注册)。）
 - [x] 最后一次运行 Task 9 的全量门禁。
       （C4 修复后:fmt/check-log-scope/check_panel_boundary/clippy 通过;
-      `cargo test -p dozer-app` 1851 passed(3 既有失败);`npm test` 全绿;
-      `scan-offline.mjs` 9 文件通过。）
+      `cargo test -p dozer-app` 1853 passed(1 既有 NFD 失败);`npm test` 全绿;
+      `scan-offline.mjs` 9 文件通过。C4 修复提交 `59cabb80`。）
 
 **审计发现与修复(2026-10-05):** vendored C4 stdlib 初版未在宿主启动时注册
 (`renderer.ts::registerStdlibScript` 为用 `new Function` 的死代码,`index.ts` 不加载
