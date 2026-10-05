@@ -1159,3 +1159,11 @@ index f74fa2f4..7ab52907 100644
 - 应用面板在首页(`AppPage::Home`)与没有活动工作区时不显示 webview(沿用 `preview_desired` 的入口判断);但列表轮询与图标栏同步不受影响。
 - 图标栏图标仍是 `LayoutList`,tooltip 是应用 id 而不是显示名(`panel_meta` 返回 `&'static str`);显示名只在面板标题行。
 - 取启动地址失败的应用,面板显示「打开失败」,需用户再次点图标栏才会重试(避免轮询刷屏)。
+
+## 执行后修订
+
+- **Task 1:** 测试与实现一起写(未逐字走 RED→GREEN 两步;`bytehost_apps::id` 在测试里一度手误写成 `bytehost_apps`,已修正)。Step 5 的四条变异检查全部按预期让对应测试 FAILED,再还原通过。
+- **Task 1 提交的 `Cargo.lock`:** 本地 `.cargo/config.toml` 对 `bytegit`/`byteui` 的 `[patch]` 会在 `cargo build` 时把这两条的 `source` 行去掉;提交时手工只保留新增的 `bytehost-apps` 依赖一行,没有带上 patch 引起的 `source` 删除。
+- **Task 2:** 与计划一致。全量 `cargo test -p dozer-app` 一度多出一次 `assets::tests::serves_vendored_asset_with_mime` 偶发失败(单独跑通过、base 上不复现),重跑即消失;稳定复现的仍只有既有的 `extensions::files::tests::delete_confirm_spec_reflects_pending_target`。
+- **Task 3 手工验收(Step 3):** 未执行——需要真实 GUI + dozerd,本环境无法自动化。清单保留,留待人工按项核对。
+

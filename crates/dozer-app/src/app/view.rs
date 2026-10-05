@@ -1133,28 +1133,74 @@ pub(crate) fn panel_body<'a>(
                 .into()
             }
         }
-        PanelKind::App(slot) => app_placeholder_pane(slot, zone_pane_border(zone, PaneCorner::All)),
+        PanelKind::App(slot) => app_panel_pane(app, slot, zone_pane_border(zone, PaneCorner::All)),
     }
 }
 
-/// 应用面板的占位内容(bytehost A3):rail 条目与切换已经通了,应用自己的 wry 视图由 A4 接入。
-/// 只显示应用 id,不挂任何 webview(矩形恒为空,见 `webview_geometry`)。
-fn app_placeholder_pane<'a>(
+/// 应用面板的内容(bytehost A4b2):按 `app_host::State::view_model` 画应用当前状况与可做的操作。
+/// 应用在跑且地址就绪时 wry webview 盖在整个面板上(见 `webview_geometry`),这里只是它下面的底;
+/// 其余状态(未运行/启动中/打开失败/宿主不可用/崩溃)靠这里告诉用户发生了什么。
+fn app_panel_pane<'a>(
+    app: &'a App,
     slot: AppSlot,
     border: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    container(
-        text(format!("应用 {}", slot.id()))
+    use crate::extensions::app_host::{Message as M, PanelView as V};
+    let colors = byteui::theme::color::current();
+    let on_press = |m: M| Message::AppHost(m);
+    let (headline, detail, action): (String, Option<String>, Option<(&'static str, M)>) =
+        match app.app_host.view_model(slot) {
+            V::HostUnavailable(reason) => ("应用宿主不可用".into(), Some(reason), None),
+            V::Loading => ("正在读取应用状态…".into(), None, None),
+            V::Missing => ("这个应用已不在已安装列表里".into(), None, None),
+            V::Stopped => ("应用未运行".into(), None, Some(("启动", M::Start(slot)))),
+            V::Busy(text) => (text.into(), None, None),
+            V::Opening => ("正在打开…".into(), None, None),
+            V::OpenFailed => (
+                "打开失败".into(),
+                Some("再次点击侧栏图标重试,或先停止应用".into()),
+                Some(("停止", M::Stop(slot))),
+            ),
+            V::Running => ("应用运行中".into(), None, None),
+            V::Crashed(reason) => (
+                "应用已退出".into(),
+                Some(reason),
+                Some(("重新启动", M::Start(slot))),
+            ),
+        };
+    let mut body = column![
+        text(app.app_host.display_name(slot))
             .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().dim),
-    )
-    .center(Length::Fill)
-    .style(move |_t: &iced_widget::Theme| container::Style {
-        background: Some(byteui::theme::color::current().panel.into()),
-        border,
-        ..container::Style::default()
-    })
-    .into()
+            .color(colors.cream),
+        text(headline)
+            .size(byteui::theme::font::body())
+            .color(colors.dim),
+    ]
+    .spacing(8)
+    .align_x(iced_widget::core::alignment::Horizontal::Center);
+    if let Some(detail) = detail {
+        body = body.push(
+            text(detail)
+                .size(byteui::theme::font::body())
+                .color(colors.dim),
+        );
+    }
+    if let Some((label, msg)) = action {
+        body = body.push(
+            iced_widget::button(text(label).size(byteui::theme::font::body()))
+                .padding([4, 12])
+                .on_press(on_press(msg))
+                .style(byteui::feedback::dialog::action_button_style(colors.gold)),
+        );
+    }
+    container(body)
+        .center(Length::Fill)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(byteui::theme::color::current().panel.into()),
+            border,
+            ..container::Style::default()
+        })
+        .into()
 }
 
 /// 左面板区:按当前左视图组合"项目树+文件预览"配对或单个 Web 预览面板;
