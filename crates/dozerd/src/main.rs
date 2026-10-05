@@ -32,6 +32,11 @@ async fn main() -> Result<()> {
         }
     }
 
+    // 单实例检查必须在**任何**有副作用的启动工作之前:`group_service.recover_on_startup()` 会把共享 dozer.db 里
+    // "进行中"的群聊发言标成失败、应用宿主的对账会起站点写状态——误启动的第二个 dozerd 不能先动手、
+    // 之后才发现自己不该启动(那会改坏正在运行的第一个 dozerd 的状态)
+    dozerd::server::ensure_single_instance(&socket).await?;
+
     // 日志服务由 `dozer-core::log` 统一提供(按天滚动到 `logs_dir()`、14 天保留、
     // 启动横幅、panic 落盘);daemon 沿用此前的 stdout 输出。返回的 Guard 必须活到
     // 进程结束,否则落盘线程提前退出会静默丢日志。

@@ -130,6 +130,10 @@ impl Registry {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().into_owned();
+            // 以 `.` 开头的目录(安装中的 `.staging-*`)不是应用;应用 id 不可能以 `.` 开头
+            if name.starts_with('.') {
+                continue;
+            }
             let state = entry.path().join("state.json");
             if !state.exists() {
                 continue;
@@ -220,7 +224,12 @@ fn parse_record(text: &str, dir_name: &str) -> Result<AppRecord, String> {
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let tmp = path.with_extension("tmp");
-    fs::write(&tmp, bytes)?;
+    {
+        let mut file = fs::File::create(&tmp)?;
+        io::Write::write_all(&mut file, bytes)?;
+        // 先落盘再改名:断电后不会留下"改名成功但内容是空的"的 state.json
+        file.sync_all()?;
+    }
     fs::rename(&tmp, path)
 }
 
@@ -488,5 +497,20 @@ mod tests {
         let listing = reg.list().unwrap();
         assert!(listing.apps.is_empty());
         assert_eq!(listing.problems.len(), 1);
+    }
+
+    /// 以 `.` 开头的目录(如安装中的 `.staging-*`)不是应用:就算里面碰巧有 `state.json`(源码树的顶层文件),
+    /// 也不能被 `list` 当成记录、报成"读不出来的记录"。应用 id 不可能以 `.` 开头。
+    #[test]
+    fn directories_starting_with_a_dot_are_never_listed_as_apps() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = Registry::open(tmp.path()).unwrap();
+        reg.save(&record("alpha")).unwrap();
+        let staging = reg.paths().apps_dir().join(".staging-abc");
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("state.json"), "{not a record}").unwrap();
+        let listing = reg.list().unwrap();
+        assert_eq!(listing.apps.len(), 1);
+        assert!(listing.problems.is_empty(), "{:?}", listing.problems);
     }
 }
