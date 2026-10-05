@@ -106,6 +106,12 @@ pub struct PreviewTab {
     /// 已授权 include 内容 + 渲染 revision)。host `ready` 之前先备好,`ready`
     /// 到达即经 `SetDocument` 推给 host。host 未就绪期间的重新加载会整体替换。
     pub pending_plantuml_document: Option<PendingPlantUmlDocument>,
+    /// Task 7:该 PlantUML 图依赖的**绝对 canonical 路径集**(含根文件),
+    /// 来自最近一次成功 `load_document` 的 `dependencies`。文件变化时若命中
+    /// 其中任一路径即重渲染本图。失败/关闭/suspend/reload 时清空——清空后
+    /// 反向索引不再把这个 tab 与旧依赖关联,依赖删除/重命名不会误伤。
+    /// 非 PlantUML 渲染 host 的 tab 恒为空。
+    pub plantuml_dependencies: Vec<PathBuf>,
     /// T11:该 tab 在途后台长任务(窗口化索引构建 / 表格解析 / recovery 读取)
     /// 的共享取消信号。任务 `spawn` 前经 [`PreviewTab::task_cancel_token`] 取走
     /// 一份 `Arc` 捕获进 `spawn_blocking`,按 chunk/批次检查;tab 关闭 / reload /
@@ -773,6 +779,18 @@ pub struct PreviewPane {
     /// `pending_tabular_commands` 平行:`window_events` 每帧取走并
     /// `evaluate_script` 注入;初始 `SetDocument`、`FitView` 等经它。
     pub(crate) pending_plantuml_commands: Vec<(usize, PlantUmlCommand)>,
+    /// Task 7:因根文件/include 变化而需要重跑 `load_document` 的 PlantUML tab
+    /// 队列 `(tab_id, 根文件路径)`。`reload_webviews_for` 里不能做 I/O,故只
+    /// 把受影响的 tab 记到这里,由调用方(手上有 `io`/`project` 的 `App`)在
+    /// 同一轮事件里取走并 spawn 后台重载。与 `pending_tabular_loads` 平行。
+    pub(crate) pending_plantuml_reloads: Vec<(usize, PathBuf)>,
+    /// Task 7:PlantUML 依赖反向索引 `dependency(canonical) -> [tab_id]`。一个
+    /// include 被多张图共享时,该依赖命中会刷新全部引用它的 tab。索引是本 pane
+    /// 维护的派生视图:任何改动 tab / 依赖集的操作都经
+    /// `rebuild_plantuml_dep_index` 从 `tabs[*].plantuml_dependencies` 整体重建,
+    /// 避免增量维护在多处漏改。viewer 身份即"本 pane + tab_id"(每个面板各有
+    /// 一份 `PreviewPane`,天然区分 Files / Project)。
+    pub(crate) plantuml_dep_index: std::collections::HashMap<PathBuf, Vec<usize>>,
     /// "保存后再关闭"的 CodeMirror tab id 列表。Rust 侧不持有编辑器全文,
     /// 关闭 dirty tab 不能直接落盘,得先向 host 下发 `SaveDocument`,待
     /// host 回 `save_requested` 真正落盘后再移除 tab。`pending_editor_commands`
@@ -812,6 +830,8 @@ impl Default for PreviewPane {
             pending_editor_commands: Vec::new(),
             pending_tabular_commands: Vec::new(),
             pending_plantuml_commands: Vec::new(),
+            pending_plantuml_reloads: Vec::new(),
+            plantuml_dep_index: std::collections::HashMap::new(),
             pending_close: Vec::new(),
             blank_info: None,
             blank_info_in_flight: false,

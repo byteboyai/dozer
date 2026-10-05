@@ -4257,10 +4257,14 @@ impl App {
         // 读已缓存目录(`reload_tree_from_disk`,只重读已展开/缓存过的层,开销
         // 小),预览则只重载路径命中的 webview tab。
         if changes.workdir_changed || changes.refs_changed {
-            self.with_project(project_id, |ws, _io| {
+            self.with_project(project_id, |ws, io| {
                 ws.files.reload_tree_from_disk();
                 ws.preview.reload_webviews_for(&changes.paths);
                 ws.project_preview.reload_webviews_for(&changes.paths);
+                // Task 7:根文件/include 变化后重跑受影响的 PlantUML 图,重读
+                // include。放在 `reload_webviews_for` 之后立即取走队列。
+                ws.spawn_pending_plantuml_reloads(PanelKind::Files, io);
+                ws.spawn_pending_plantuml_reloads(PanelKind::Project, io);
             });
         }
         self.with_project(project_id, |ws, io| {

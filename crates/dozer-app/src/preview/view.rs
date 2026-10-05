@@ -53,6 +53,7 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         tabular_host_ready: false,
         plantuml_host_ready: false,
         pending_plantuml_document: None,
+        plantuml_dependencies: Vec::new(),
         task_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         image_annotations: Vec::new(),
     }
@@ -730,6 +731,7 @@ impl PreviewPane {
             tabular_host_ready: false,
             plantuml_host_ready: false,
             pending_plantuml_document: None,
+            plantuml_dependencies: Vec::new(),
             task_cancel: fresh_task_cancel(),
             image_annotations: Vec::new(),
         };
@@ -822,6 +824,7 @@ impl PreviewPane {
             tabular_host_ready: false,
             plantuml_host_ready: false,
             pending_plantuml_document: None,
+            plantuml_dependencies: Vec::new(),
             task_cancel: fresh_task_cancel(),
             image_annotations: Vec::new(),
         };
@@ -875,7 +878,13 @@ impl PreviewPane {
         tab.web_selection = None;
         tab.web_selected_text = None;
         tab.web_viewport = None;
+        // Task 7:淘汰即清依赖集与暂存文档——Suspended 壳不 host viewer,不应再被
+        // include 变化触发;重新物化时重跑 load_document 重建依赖。
+        tab.plantuml_dependencies.clear();
+        tab.pending_plantuml_document = None;
+        tab.plantuml_host_ready = false;
         let _ = tab.backend_state.try_transition(BackendState::Suspended);
+        self.rebuild_plantuml_dep_index();
         true
     }
 
@@ -1445,6 +1454,8 @@ impl PreviewPane {
         self.tabs.push(placeholder_tab(self.next_id));
         self.next_id += 1;
         self.active = 0;
+        // Task 7:清空后没有任何图,反向索引一并清掉(旧依赖不得再触发刷新)。
+        self.plantuml_dep_index.clear();
         // 整个 pane 换主人/清空:Find 必然失配,直接丢。
         self.find = None;
         // 空白页信息卡也丢——项目根路径变了,旧结果失配;`apply_pending_blank_info`
@@ -1517,7 +1528,13 @@ impl PreviewPane {
         // T11:关闭即取消该 tab 在途后台任务(索引/解析/recovery),避免白算。
         self.tabs[idx].cancel_background();
         let removed_id = self.tabs[idx].id;
+        let removed_plantuml = !self.tabs[idx].plantuml_dependencies.is_empty();
         self.tabs.remove(idx);
+        // Task 7:关闭即从反向索引里摘掉该 tab 的依赖(共享依赖只影响本 tab 的
+        // 条目,别的图仍保留)。无 PlantUML 依赖时不重建,避免无谓开销。
+        if removed_plantuml {
+            self.rebuild_plantuml_dep_index();
+        }
         // 该 tab 若还在"保存后关闭"等待列表里,一并清掉(重复关闭路径兜底)。
         if let Some(pos) = self.pending_close.iter().position(|id| *id == removed_id) {
             self.pending_close.remove(pos);
@@ -2456,14 +2473,50 @@ impl PreviewPane {
                 .unwrap_or_default(),
             _ => String::new(),
         };
+        tab.plantuml_dependencies = document.dependencies;
         tab.pending_plantuml_document = Some(PendingPlantUmlDocument {
             revision,
             path,
             source: document.source,
             includes: document.includes,
         });
+        self.rebuild_plantuml_dep_index();
         self.try_push_initial_plantuml_state(tab_id);
         true
+    }
+
+    /// Task 7:从各 tab 的 `plantuml_dependencies` 整体重建反向索引
+    /// `dependency -> [tab_id]`。原子替换(先清后建),不增量维护——tab / 依赖
+    /// 集的任何改动只需调用本方法一次,杜绝增量维护在多处漏改导致的悬挂引用。
+    /// 依赖路径为 canonical 绝对路径(见 `PlantUmlDocument::dependencies`)。
+    pub(crate) fn rebuild_plantuml_dep_index(&mut self) {
+        self.plantuml_dep_index.clear();
+        for tab in &self.tabs {
+            if tab.plantuml_dependencies.is_empty() {
+                continue;
+            }
+            for dep in &tab.plantuml_dependencies {
+                self.plantuml_dep_index
+                    .entry(dep.clone())
+                    .or_default()
+                    .push(tab.id);
+            }
+        }
+    }
+
+    /// Task 7:`changed` 的 canonical 形式命中了哪些 PlantUML 图的 tab id。
+    /// 调用方需保证 `changed` 已 canonical(见 `reload_webviews_for`)。返回的
+    /// id 已去重排序,便于稳定测试。一个依赖被多张图共享时全部命中。
+    pub fn plantuml_tabs_depending_on(&self, changed: &[PathBuf]) -> Vec<usize> {
+        let mut hit: Vec<usize> = Vec::new();
+        for c in changed {
+            if let Some(ids) = self.plantuml_dep_index.get(c) {
+                hit.extend_from_slice(ids);
+            }
+        }
+        hit.sort_unstable();
+        hit.dedup();
+        hit
     }
 
     /// Task 6:两路异步汇合——文档已授权读取(`pending_plantuml_document` 有值)
@@ -2522,6 +2575,13 @@ impl PreviewPane {
     /// 立刻 spawn",天然不会攒,但方法本身按"一次性取干净"设计更不容易踩)。
     pub fn take_pending_tabular_loads(&mut self) -> Vec<(usize, PathBuf)> {
         std::mem::take(&mut self.pending_tabular_loads)
+    }
+
+    /// Task 7:取走(清空)因文件变化而待重载的 PlantUML tab 队列
+    /// `(tab_id, 根文件路径)`。调用方(`App::project_fs_changed`)在
+    /// `reload_webviews_for` 之后立即取走并 spawn `load_document`。
+    pub fn take_pending_plantuml_reloads(&mut self) -> Vec<(usize, PathBuf)> {
+        std::mem::take(&mut self.pending_plantuml_reloads)
     }
 
     /// 排队一个待下发给 CodeMirror editor webview 的命令(`tab_id`, 命令)。
@@ -2862,10 +2922,84 @@ impl PreviewPane {
             tab.reload_nonce += 1;
             tab.web_error = None;
         }
+        // Task 7:PlantUML 渲染 host 单独一档。根文件变化走下面的通用 webview
+        // 重导航即可;但**include 变化**只被反向索引看见——根文件本身没动,
+        // 通用路径不会命中。这里按 canonical 依赖集求命中,命中的图(根或任一
+        // include 变了)一律:作废在途渲染、清 host 暂存/就绪、推进一次
+        // generation 进入新 Loading,并把 `(tab_id, 根路径)` 记进待重载队列,
+        // 交给 `App` 在同一轮事件里 spawn 新的 `load_document`(重读 include)。
+        //
+        // 注意:命中的图不再走下方通用 `bump_reload`(那会再推一次 reload_nonce
+        // 且不推进 generation)。这里显式推进 generation,确保旧渲染结果因
+        // revision 不符被丢弃,不会把旧图盖到新数据上,也不会永久 Loading
+        // (新 load_document 会重新汇合推 SetDocument)。
+        let canonical_changed: Vec<PathBuf> = changed
+            .iter()
+            .filter_map(|c| std::fs::canonicalize(c).ok())
+            .collect();
+        let mut plantuml_reload: Vec<(usize, PathBuf)> = Vec::new();
+        if !canonical_changed.is_empty() {
+            let dep_hit = self.plantuml_tabs_depending_on(&canonical_changed);
+            for tab in self.tabs.iter_mut() {
+                if !tab.uses_plantuml_host() {
+                    continue;
+                }
+                let TabKind::File(root) = &tab.kind else {
+                    continue;
+                };
+                let root = root.clone();
+                let root_hit = changed.iter().any(|c| c == &root)
+                    || std::fs::canonicalize(&root)
+                        .map(|p| changed.iter().any(|c| c == &p))
+                        .unwrap_or(false);
+                if !root_hit && !dep_hit.contains(&tab.id) {
+                    continue;
+                }
+                // 重载前取消在途任务、清旧依赖(等新结果重建,避免旧依赖在途
+                // 期间再次触发);host 会换新,清 ready/暂存。
+                tab.cancel_background();
+                tab.plantuml_dependencies.clear();
+                tab.plantuml_host_ready = false;
+                tab.pending_plantuml_document = None;
+                tab.web_revision = 0;
+                tab.web_error = None;
+                let generation = tab.load_state.generation.wrapping_add(1);
+                tab.load_state = PreviewLoadState::starting(
+                    generation,
+                    crate::preview::PreviewLoadStage::CreatingHost,
+                );
+                let _ = tab.backend_state.try_transition(BackendState::Loading);
+                // 换 URL 重新导航(与 `bump_reload` 同效),让 host 重新 boot。
+                tab.reload_nonce += 1;
+                plantuml_reload.push((tab.id, root.clone()));
+            }
+            if !plantuml_reload.is_empty() {
+                self.plantuml_dep_index.clear();
+            }
+        }
+        // 去重:同一个 tab 在上一轮已入队、尚未被 `App` 取走时,本轮再次命中
+        // 不得重复入队(否则会 spawn 两份 `load_document`)。生成世代/导航已在
+        // 上面只推进一次,队列也保持唯一。
+        for entry in plantuml_reload {
+            if !self
+                .pending_plantuml_reloads
+                .iter()
+                .any(|(id, _)| *id == entry.0)
+            {
+                self.pending_plantuml_reloads.push(entry);
+            }
+        }
+        // 通用 webview 重导航:排除已由上面 PlantUML 分支处理的 tab(它们已推进
+        // generation/reload_nonce,不能重复 `bump_reload`)。
+        let plantuml_ids: std::collections::HashSet<usize> = self
+            .pending_plantuml_reloads
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
         let mut matched: Vec<usize> = self
             .tabs
             .iter()
-            .filter(|t| t.hosts_webview())
+            .filter(|t| t.hosts_webview() && !plantuml_ids.contains(&t.id))
             .filter_map(|t| match &t.kind {
                 TabKind::File(path)
                     if changed.iter().any(|c| c == path)
@@ -6798,5 +6932,296 @@ mod tests {
         assert!(!tab.plantuml_host_ready);
         assert!(tab.pending_plantuml_document.is_none());
         assert_eq!(tab.reload_nonce, 1);
+    }
+
+    // ── Task 7:文件变化、include 依赖与 revision ──────────────────────────
+
+    /// 建一个临时目录,写入给定 `(相对路径, 内容)` 并返回 `(目录, 各文件绝对
+    /// canonical 路径)`。目录名带 `process::id()` 与纳秒时间戳,避免并发/重复
+    /// 运行串台。canonicalize 保证和 `reload_webviews_for` 内的规范化口径一致。
+    fn plantuml_fixture(tag: &str, files: &[(&str, &str)]) -> (PathBuf, Vec<PathBuf>) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("plantuml_dep_{tag}_{}_{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut canon = Vec::new();
+        for (rel, content) in files {
+            let p = dir.join(rel);
+            if let Some(parent) = p.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(&p, content).unwrap();
+            canon.push(std::fs::canonicalize(&p).unwrap());
+        }
+        (dir, canon)
+    }
+
+    /// 把一个 PlantUML tab 挂到 pane 上,并模拟一次成功加载:写入依赖集 +
+    /// 重建索引。返回 tab id。
+    fn push_loaded_plantuml_tab(
+        pane: &mut PreviewPane,
+        id: usize,
+        root: &std::path::Path,
+        deps: Vec<PathBuf>,
+    ) {
+        let mut tab = plantuml_tab(id);
+        tab.kind = TabKind::File(root.to_path_buf());
+        tab.plantuml_dependencies = deps;
+        pane.tabs.push(tab);
+        pane.rebuild_plantuml_dep_index();
+    }
+
+    #[test]
+    fn plantuml_dep_index_maps_shared_include_to_both_tabs() {
+        let (dir, canon) = plantuml_fixture(
+            "shared",
+            &[
+                ("a.puml", "@startuml\n!include shared/x.puml\n@enduml"),
+                ("b.puml", "@startuml\n!include shared/x.puml\n@enduml"),
+                ("shared/x.puml", "Alice -> Bob"),
+            ],
+        );
+        let shared = canon[2].clone();
+        let mut pane = PreviewPane::default();
+        // 两张图共享同一个 include。
+        push_loaded_plantuml_tab(
+            &mut pane,
+            1,
+            &canon[0],
+            vec![canon[0].clone(), shared.clone()],
+        );
+        push_loaded_plantuml_tab(
+            &mut pane,
+            2,
+            &canon[1],
+            vec![canon[1].clone(), shared.clone()],
+        );
+        assert_eq!(
+            pane.plantuml_tabs_depending_on(std::slice::from_ref(&shared)),
+            vec![1, 2],
+            "共享 include 命中两张图"
+        );
+        // 只改了 a 的根,只命中 1。
+        assert_eq!(
+            pane.plantuml_tabs_depending_on(&[canon[0].clone()]),
+            vec![1]
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn plantuml_include_change_marks_tab_for_reload_and_bumps_generation() {
+        let (dir, canon) = plantuml_fixture(
+            "reload",
+            &[
+                ("root.puml", "@startuml\n!include inc.puml\n@enduml"),
+                ("inc.puml", "Alice -> Bob"),
+            ],
+        );
+        let mut pane = PreviewPane::default();
+        push_loaded_plantuml_tab(
+            &mut pane,
+            1,
+            &canon[0],
+            vec![canon[0].clone(), canon[1].clone()],
+        );
+        let gen_before = pane.tabs()[1].load_state.generation;
+        let nonce_before = pane.tabs()[1].reload_nonce;
+        // 只改 include(根没动)。
+        pane.reload_webviews_for(&[canon[1].clone()]);
+        let queued = pane.take_pending_plantuml_reloads();
+        assert_eq!(
+            queued,
+            vec![(1, canon[0].clone())],
+            "include 变化应把根路径入队待重载"
+        );
+        let tab = &pane.tabs()[1];
+        assert_eq!(
+            tab.load_state.generation,
+            gen_before.wrapping_add(1),
+            "重载应推进一次 generation 作废旧结果"
+        );
+        assert!(tab.load_state.is_active(), "应进入新的 Loading");
+        assert_eq!(tab.backend_state, BackendState::Loading);
+        assert_eq!(tab.reload_nonce, nonce_before + 1, "应换 URL 重新导航");
+        assert!(
+            tab.plantuml_dependencies.is_empty(),
+            "旧依赖集应被清空待重建"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn plantuml_root_change_is_not_double_bumped_by_generic_path() {
+        // 根文件变化:既要进 PlantUML 重载队列,又**不能**再被通用 webview
+        // 分支 `bump_reload` 二次推进(否则 reload_nonce 前进两格)。
+        let (dir, canon) = plantuml_fixture("rootonly", &[("root.puml", "@startuml\n@enduml")]);
+        let mut pane = PreviewPane::default();
+        push_loaded_plantuml_tab(&mut pane, 1, &canon[0], vec![canon[0].clone()]);
+        let nonce_before = pane.tabs()[1].reload_nonce;
+        pane.reload_webviews_for(&[canon[0].clone()]);
+        assert_eq!(pane.take_pending_plantuml_reloads().len(), 1);
+        assert_eq!(
+            pane.tabs()[1].reload_nonce,
+            nonce_before + 1,
+            "根变化只应推进一档 reload_nonce"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn repeat_include_change_coalesces_into_single_queued_reload() {
+        let (dir, canon) = plantuml_fixture(
+            "coalesce",
+            &[
+                ("root.puml", "@startuml\n!include inc.puml\n@enduml"),
+                ("inc.puml", "Alice -> Bob"),
+            ],
+        );
+        let mut pane = PreviewPane::default();
+        push_loaded_plantuml_tab(
+            &mut pane,
+            1,
+            &canon[0],
+            vec![canon[0].clone(), canon[1].clone()],
+        );
+        let gen_before = pane.tabs()[1].load_state.generation;
+        let nonce_before = pane.tabs()[1].reload_nonce;
+        // 同一 include 连续两次变化(debounce 未及合并的极端情形):队列仍只
+        // 一条,但 generation / reload_nonce 也只应各推进一次(第一次命中后
+        // 依赖集已清空,旧依赖索引不再命中)。
+        pane.reload_webviews_for(&[canon[1].clone()]);
+        pane.reload_webviews_for(&[canon[1].clone()]);
+        assert_eq!(pane.take_pending_plantuml_reloads().len(), 1);
+        let tab = &pane.tabs()[1];
+        assert_eq!(tab.load_state.generation, gen_before.wrapping_add(1));
+        assert_eq!(tab.reload_nonce, nonce_before + 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn plantuml_unrelated_change_is_noop() {
+        let (dir, canon) = plantuml_fixture(
+            "unrelated",
+            &[
+                ("root.puml", "@startuml\n@enduml"),
+                ("other.puml", "@startuml\n@enduml"),
+            ],
+        );
+        let mut pane = PreviewPane::default();
+        push_loaded_plantuml_tab(&mut pane, 1, &canon[0], vec![canon[0].clone()]);
+        pane.reload_webviews_for(&[canon[1].clone()]);
+        assert!(pane.take_pending_plantuml_reloads().is_empty());
+        assert_eq!(pane.tabs()[1].reload_nonce, 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn closing_one_tab_cleans_shared_dep_index() {
+        let (dir, canon) = plantuml_fixture(
+            "cleanup",
+            &[
+                ("a.puml", "@startuml\n!include shared.puml\n@enduml"),
+                ("b.puml", "@startuml\n!include shared.puml\n@enduml"),
+                ("shared.puml", "Alice -> Bob"),
+            ],
+        );
+        let shared = canon[2].clone();
+        let mut pane = PreviewPane::default();
+        push_loaded_plantuml_tab(
+            &mut pane,
+            1,
+            &canon[0],
+            vec![canon[0].clone(), shared.clone()],
+        );
+        push_loaded_plantuml_tab(
+            &mut pane,
+            2,
+            &canon[1],
+            vec![canon[1].clone(), shared.clone()],
+        );
+        assert_eq!(
+            pane.plantuml_tabs_depending_on(std::slice::from_ref(&shared)),
+            vec![1, 2]
+        );
+        // 关掉 tab 1:索引里 shared 只剩 tab 2。
+        let idx1 = pane.tabs().iter().position(|t| t.id == 1).unwrap();
+        pane.close(idx1);
+        assert_eq!(
+            pane.plantuml_tabs_depending_on(std::slice::from_ref(&shared)),
+            vec![2],
+            "关闭一个 tab 后共享依赖只保留另一张图"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn suspending_tab_drops_its_dep_index_entry() {
+        let (dir, canon) = plantuml_fixture(
+            "suspend",
+            &[
+                ("root.puml", "@startuml\n!include inc.puml\n@enduml"),
+                ("inc.puml", "Alice -> Bob"),
+            ],
+        );
+        let mut pane = PreviewPane::default();
+        push_loaded_plantuml_tab(
+            &mut pane,
+            1,
+            &canon[0],
+            vec![canon[0].clone(), canon[1].clone()],
+        );
+        assert_eq!(
+            pane.plantuml_tabs_depending_on(&[canon[1].clone()]),
+            vec![1]
+        );
+        assert!(pane.suspend_tab(1));
+        assert!(
+            pane.plantuml_tabs_depending_on(&[canon[1].clone()])
+                .is_empty(),
+            "suspend 后不应再被 include 变化命中"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn removed_include_after_reload_is_no_longer_a_trigger() {
+        // 依赖删除/重命名:重载成功后依赖集整体替换,旧依赖不再触发刷新。
+        let (dir, canon) = plantuml_fixture(
+            "replace",
+            &[
+                ("root.puml", "@startuml\n!include old.puml\n@enduml"),
+                ("old.puml", "Alice -> Bob"),
+                ("new.puml", "Bob -> Carol"),
+            ],
+        );
+        let mut pane = PreviewPane::default();
+        push_loaded_plantuml_tab(
+            &mut pane,
+            1,
+            &canon[0],
+            vec![canon[0].clone(), canon[1].clone()],
+        );
+        assert_eq!(
+            pane.plantuml_tabs_depending_on(&[canon[1].clone()]),
+            vec![1]
+        );
+        // 模拟一次成功重载:依赖集换成 new.puml(原子整体替换)。
+        let tab = pane.tabs_mut().iter_mut().find(|t| t.id == 1).unwrap();
+        tab.plantuml_dependencies = vec![canon[0].clone(), canon[2].clone()];
+        pane.rebuild_plantuml_dep_index();
+        assert!(
+            pane.plantuml_tabs_depending_on(&[canon[1].clone()])
+                .is_empty(),
+            "旧依赖替换后不再触发"
+        );
+        assert_eq!(
+            pane.plantuml_tabs_depending_on(&[canon[2].clone()]),
+            vec![1]
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

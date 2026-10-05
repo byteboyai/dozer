@@ -336,14 +336,36 @@ spec §12.3 已同步修订说明。
 - Modify: 当前工作区文件事件分发所在模块
 - Test: 对应模块测试
 
-- [ ] 在 preview workspace state 维护 `dependency -> ViewerKey` 反向索引；路径使用
+- [x] 在 preview workspace state 维护 `dependency -> ViewerKey` 反向索引；路径使用
       canonical form，UI/错误只显示项目相对路径。
-- [ ] 每次成功 load 原子替换该 viewer 的依赖集；失败/关闭/suspend 清理旧索引。
-- [ ] 根文件变化沿用现有 reload；include 变化对所有引用它的打开 tab 发失效。
-- [ ] 连续变更经现有 debounce 合并；每次有效失效只递增一次 revision。
-- [ ] watcher 在一次渲染期间再次变更时，旧结果丢弃并安排新一轮，不进入永久 loading。
-- [ ] 分支切换/批量变更只刷新当前驻留 viewer；Suspended tab 激活时读取最新磁盘。
-- [ ] 测试两个根图共享 include、依赖删除/重命名、关闭一个 tab 后索引清理。
+      *实现期决议：反向索引落在每个 `PreviewPane`(`plantuml_dep_index:
+      HashMap<PathBuf, Vec<usize>>`)，viewer 身份即“本 pane + tab_id”——每个面板
+      各有一份 `PreviewPane`，天然区分 Files / Project；键为
+      `PlantUmlDocument::dependencies` 里的绝对 canonical 路径。索引是派生视图，
+      任何 tab/依赖集变动后由 `rebuild_plantuml_dep_index` 整体重建（先清后建），
+      不增量维护。doc 里的“workspace state”按此实现（`Workspace` 只是逐 pane 转发）。*
+- [x] 每次成功 load 原子替换该 viewer 的依赖集；失败/关闭/suspend 清理旧索引。
+      *`store_plantuml_document` 整体替换 `tab.plantuml_dependencies` 后重建索引；
+      `close` 摘除该 tab 条目、`clear_all` 清空、`suspend_tab` 清空依赖集并重建。*
+- [x] 根文件变化沿用现有 reload；include 变化对所有引用它的打开 tab 发失效。
+      *`reload_webviews_for` 新增 PlantUML 分支：命中判据 = 根路径命中 **或**
+      `plantuml_tabs_depending_on(canonical_changed)` 命中；命中的图清依赖/暂存/
+      host 就绪、推进 generation、换 URL 重新导航，并把 `(tab_id, 根路径)` 记入
+      `pending_plantuml_reloads`，由 `Workspace::spawn_pending_plantuml_reloads`
+      （`App::project_fs_changed` 调用，Files/Project 各一次）在后台重跑
+      `load_document` 重读 include。*
+- [x] 连续变更经现有 debounce 合并；每次有效失效只递增一次 revision。
+      *watcher 侧 debounce 不变；pane 侧对 `pending_plantuml_reloads` 按 tab 去重，
+      同一 include 连续两次变化只入队一条、generation/reload_nonce 各只推进一次
+      （首次命中已清依赖集，旧依赖索引不再命中）。*
+- [x] watcher 在一次渲染期间再次变更时，旧结果丢弃并安排新一轮，不进入永久 loading。
+      *每次失效推进一次 generation 并重置 `PendingPlantUmlDocument`/host 就绪；
+      `store_plantuml_document`/`apply_plantuml_event` 按 generation/revision 门控
+      丢弃旧结果；新 `load_document` 汇合后推新 `SetDocument`，不会永久 Loading。*
+- [x] 分支切换/批量变更只刷新当前驻留 viewer；Suspended tab 激活时读取最新磁盘。
+      *反向索引只登记已成功加载（有依赖集）的 tab；`suspend_tab` 清空依赖后不再被
+      命中，重新物化时经既有 `begin_load` 路径重跑 `load_document` 读最新磁盘。*
+- [x] 测试两个根图共享 include、依赖删除/重命名、关闭一个 tab 后索引清理。
 
 **验证：**
 
@@ -351,6 +373,21 @@ spec §12.3 已同步修订说明。
 cargo test -p dozer-app preview -- --nocapture
 cargo test -p dozer-app workspace -- --nocapture
 ```
+
+**实现期记录（2026-10-05）：** 新增/改动：`preview/state.rs`（`PreviewTab::
+plantuml_dependencies`、`PreviewPane::pending_plantuml_reloads`/`plantuml_dep_index`）、
+`preview/view.rs`（`rebuild_plantuml_dep_index`、`plantuml_tabs_depending_on`、
+`take_pending_plantuml_reloads`、`reload_webviews_for` PlantUML 分支、`close`/
+`clear_all`/`suspend_tab`/`store_plantuml_document` 索引维护）、`workspace/state.rs`
+（`spawn_pending_plantuml_reloads`）、`app/update.rs`（`project_fs_changed` 调
+spawn）。测试：`plantuml_dep_index_maps_shared_include_to_both_tabs`、
+`plantuml_include_change_marks_tab_for_reload_and_bumps_generation`、
+`plantuml_root_change_is_not_double_bumped_by_generic_path`、
+`repeat_include_change_coalesces_into_single_queued_reload`、
+`plantuml_unrelated_change_is_noop`、`closing_one_tab_cleans_shared_dep_index`、
+`suspending_tab_drops_its_dep_index_entry`、
+`removed_include_after_reload_is_no_longer_a_trigger`。`cargo test -p dozer-app
+preview` 422 passed / `workspace` 91 passed，clippy 无新增告警。
 
 ---
 

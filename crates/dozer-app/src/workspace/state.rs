@@ -2520,6 +2520,39 @@ impl Workspace {
         }
     }
 
+    /// Task 7:把 `reload_webviews_for` 攒下的、因文件/include 变化而待重载的
+    /// PlantUML tab 全部 spawn 到后台重跑 `load_document`(重读根与 include)。
+    /// 完成后经 `Message::PlantUmlLoaded` 回填,按 `project_id` 路由 + `generation`
+    /// 闸门丢弃过期结果。调用方在 `reload_webviews_for` 之后立即调用——不能攒着
+    /// 不调,否则对应的图会一直停在 Loading。
+    pub fn spawn_pending_plantuml_reloads(&mut self, kind: PanelKind, io: &ShellIo) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        let root = PathBuf::from(&project.path);
+        let pane = self.preview_pane_mut(kind);
+        for (tab_id, path) in pane.take_pending_plantuml_reloads() {
+            // 捕获当前 generation:tab 关闭/重开/再次重载后到达的旧结果据此丢弃。
+            let generation = match pane.tabs().iter().find(|t| t.id == tab_id) {
+                Some(tab) => tab.load_state.generation,
+                None => 0,
+            };
+            let proxy = io.proxy.clone();
+            let project_id = project.id;
+            let root = root.clone();
+            io.handle.spawn_blocking(move || {
+                let result = crate::preview::load_document(
+                    &root,
+                    &path,
+                    crate::preview::PlantUmlLimits::default(),
+                );
+                let _ = proxy.send_event(Message::PlantUmlLoaded(
+                    project_id, kind, tab_id, generation, result,
+                ));
+            });
+        }
+    }
+
     /// 表格预览 tab 的交互动作(滚动/sheet 切换):按 `tab_id` 定位对应 tab 的
     /// `TabularView` 并 `apply`。tab 不存在 / 该 tab 不是表格 / 还在加载中都
     /// no-op。切到一个还没加载过的 sheet 时,`select_sheet` 会返回
