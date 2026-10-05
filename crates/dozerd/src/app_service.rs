@@ -528,4 +528,52 @@ source = "web/"
             install(svc, write_app(&scratch.join("src/a"), "alpha", "A")).await;
         }
     }
+
+    /// dozerd 停止之后到达的请求不能再启动/安装任何东西:否则会给调用方一个"成功"的假应答,
+    /// 并在一个已停止的 gateway 上注册站点(将来进程型 runtime 还会因此留下没人管的子进程)。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn requests_arriving_after_shutdown_do_not_start_or_install_anything() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc =
+            AppService::start_with(&tmp.path().join("bytehost"), GatewayConfig { port: 0 }).await;
+        let a = write_app(&tmp.path().join("src/a"), "alpha", "A");
+        install(&svc, a).await;
+        svc.shutdown().await;
+
+        let err = svc
+            .handle(AppRequest::Start { id: id("alpha") })
+            .await
+            .unwrap_err();
+        assert!(err.contains("停止"), "{err}");
+        let b = write_app(&tmp.path().join("src/b"), "beta", "B");
+        let plan = svc
+            .handle(AppRequest::Plan {
+                source: b.clone(),
+                provenance: Provenance::Local,
+                trust: TrustLevel::Trusted,
+            })
+            .await
+            .unwrap();
+        let AppReply::Plan { plan } = plan else {
+            panic!()
+        };
+        let approved = plan.approve(Approval {
+            approver: "t".into(),
+            approved_ms: 1,
+        });
+        let err = svc
+            .handle(AppRequest::Install {
+                approved: Box::new(approved),
+                source: b,
+            })
+            .await
+            .unwrap_err();
+        assert!(err.contains("停止"), "{err}");
+        let AppReply::Apps { apps } = svc.handle(AppRequest::List).await.unwrap() else {
+            panic!()
+        };
+        assert_eq!(apps.len(), 1, "beta 没有被安装");
+        assert!(apps[0].url.is_none(), "alpha 没有被再次启动");
+        assert!(svc.gateway_stopped());
+    }
 }

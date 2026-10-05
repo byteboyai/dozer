@@ -1723,3 +1723,14 @@ Expected: 只有 `docs/` 下 2 个文件与 `CLAUDE.md`。
 **3. 一致性:** `AppRequest`/`AppReply`/`AppService`/`Stores.apps`/`Client::app_*` 的名字与形状在测试、实现、Interfaces、文档里一致。
 
 **4. Review Focus:** 9 条各有归属(1→M1 与 A1 的对账测试;2→corrupt/taken-port 测试;3→说明;4→说明与审阅;5→说明;6→脚本 + `cargo check --workspace --all-targets`;7→范围说明;8→说明;9→范围说明)。
+
+---
+
+## 执行后修订(评审修复轮,2026-10-05)
+
+独立评审(opus)对执行出的分支提出 2 条 Important:
+
+1. **成立并已修复——`Request::App` 在 dozerd 停止期间/之后仍被接受。** 一个恰好排在 manager 锁后面的 `Start` 会在 `suspend_all` 撤掉站点之后拿到锁、把站点注册回已停止的 gateway,并回一个永远打不开的 `Started{url}`(将来进程型 runtime 还会因此留下没人管的子进程)。现在 `AppManager` 有 `closed` 标志:`suspend_all` 置位、`reconcile` 清除;置位期间 `install` 与 `start` 在**拿到锁之后**返回新的 `ManagerError::ShuttingDown`(停止/卸载这类清理操作照常允许)。两个新测试:`after_suspend_all_installs_and_starts_are_refused_until_the_next_reconcile`(manager)与 `requests_arriving_after_shutdown_do_not_start_or_install_anything`(`AppService`);3 个变异(去掉 `start`/`install` 的检查、`reconcile` 不重新放开)都被抓到。测试数:`bytehost-apps --all-features` 132 → **133**,`dozerd --lib` 471 → **472**。
+2. **未修复,有明确裁决——错误只是字符串。** GUI 要区分"应用宿主不可用"(持久状态)与一次性失败(Toast),目前只能匹配文字。加 `AppReply::Unavailable`/`AppError { kind, message }` 是增量改动,但它会改变所有客户端包装函数对错误的映射,属于 A4 里设计 GUI 两种呈现时一并决定的事;代价是 A4 要再动一次 `app_service.rs`/`proto.rs`/`dozer-client`。
+
+**推迟的 Minor(9 条)**记在账本里并写进最终汇报,其中值得 A4 前处理的:关停没有时间上限且排在 manager 锁之后(安装大目录时停 dozerd 会等拷贝完)、`JoinError` 被静默吞掉且 panic 会毒化锁、`AppService` 在 `serve()` 的重复进程检查与 socket 绑定之前就启动、门禁第 3 项只查 `dozer-hook` 单独的依赖闭包(发布脚本把 hook 与 dozerd 一起构建,feature 会合并;链接器会裁掉未用代码)、`LocalDir.path` 未校验且整目录(含 `.env`)被永久拷贝。
