@@ -603,10 +603,10 @@ mod tests {
     fn refresh_fetches_the_list_unless_one_is_already_in_flight() {
         let mut s = State::default();
         assert_eq!(
-            s.update(Message::Refresh, Instant::now(), None),
+            s.update(Message::Refresh, Instant::now(), &[]),
             vec![Effect::FetchList]
         );
-        assert!(s.update(Message::Refresh, Instant::now(), None).is_empty());
+        assert!(s.update(Message::Refresh, Instant::now(), &[]).is_empty());
     }
 
     #[test]
