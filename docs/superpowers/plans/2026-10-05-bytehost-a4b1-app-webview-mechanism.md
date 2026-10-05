@@ -39,10 +39,10 @@
 **Interfaces:**
 - Produces: `AppOrigin::{from_url, app_id, allows_navigation}`、`data_store_identifier(&str) -> [u8; 16]`、`is_app_webview_id`/`webview_id(AppSlot)`/`slot_for_webview_id`、`AppViews::{set_url, clear, url, spec}`、`app_webview_spec`、`AppSlot::{index, from_index}`、`APP_CONTENT_ID_OFFSET`。
 
-- [ ] **Step 1: 写失败测试。** 新文件里的测试模块(7 个)先写;`the_data_store_identifier_is_stable_and_per_app` 先放一个**错误的占位向量**。
-- [ ] **Step 2: RED。** `cargo test -p dozer-app -- app_webview` → 编译失败(模块不存在),补骨架后 `the_data_store_identifier_*` 失败。
-- [ ] **Step 3: 独立验证钉死的向量**:`python3 -c "O=0x6c62272e07bb014262b821756295c58d;P=0x0000000001000000000000000000013b;h=O\nfor b in b'bytehost-app:excalidraw': h^=b;h=(h*P)%(1<<128)\nprint(h.to_bytes(16,'big').hex())"` → `30cd3bc2160471a7ee03a52d8c2e59db`,把它写进测试。
-- [ ] **Step 4: 实现。**
+- [x] **Step 1: 写失败测试。** 新文件里的测试模块(7 个)先写;`the_data_store_identifier_is_stable_and_per_app` 先放一个**错误的占位向量**。
+- [x] **Step 2: RED。** `cargo test -p dozer-app -- app_webview` → 编译失败(模块不存在),补骨架后 `the_data_store_identifier_*` 失败。
+- [x] **Step 3: 独立验证钉死的向量**:`python3 -c "O=0x6c62272e07bb014262b821756295c58d;P=0x0000000001000000000000000000013b;h=O\nfor b in b'bytehost-app:excalidraw': h^=b;h=(h*P)%(1<<128)\nprint(h.to_bytes(16,'big').hex())"` → `30cd3bc2160471a7ee03a52d8c2e59db`,把它写进测试。
+- [x] **Step 4: 实现。**
 
 ```diff
 diff --git a/crates/dozer-app/src/app_webview.rs b/crates/dozer-app/src/app_webview.rs
@@ -347,9 +347,9 @@ index 268300f1..6b759bce 100644
 pub(crate) const APP_CONTENT_ID_OFFSET: usize = 8_000_000;
 ```
 
-- [ ] **Step 5: GREEN。** `cargo fmt -p dozer-app && cargo test -p dozer-app -- app_webview slot` → 全过(21 个)。
-- [ ] **Step 6: 变异检查(每条必须让对应测试 FAILED,再还原):** (a) 删掉 `&& parsed.port() == Some(self.port)`;(b) 把 `strip_prefix("blob:")` 那行改成 `let inner = url;`;(c) 把 `from_url` 里的用户名/密码检查删掉。
-- [ ] **Step 7: Commit。** `git commit -am "feat(dozer-app): app_webview — origin policy, id range, per-app store id (A4b1 task 1)"`
+- [x] **Step 5: GREEN。** `cargo fmt -p dozer-app && cargo test -p dozer-app -- app_webview slot` → 全过(21 个)。
+- [x] **Step 6: 变异检查(每条必须让对应测试 FAILED,再还原):** (a) 删掉 `&& parsed.port() == Some(self.port)`;(b) 把 `strip_prefix("blob:")` 那行改成 `let inner = url;`;(c) 把 `from_url` 里的用户名/密码检查删掉。
+- [x] **Step 7: Commit。** `git commit -am "feat(dozer-app): app_webview — origin policy, id range, per-app store id (A4b1 task 1)"`
 
 ### Task 2: 几何 + 期望清单 + 命中测试 + 键盘闸门
 
@@ -359,9 +359,9 @@ pub(crate) const APP_CONTENT_ID_OFFSET: usize = 8_000_000;
 - Consumes: Task 1 的 `AppViews`、`webview_id`、`APP_CONTENT_ID_OFFSET`。
 - Produces: `preview_content_bounds_for` 对 `App` 返回整条面板区(无 chrome;放大态占满放大盒子);`is_in_preview_column` 对 `App` 命中;`App.app_views`;`App::preview_desired` 为 `App` 面板产出 spec;`App::active_preview_webview_id(App(slot))`;`active_preview_tab_has_native_editor(App)` 恒假。
 
-- [ ] **Step 1: 写失败测试。** `webview_geometry.rs` 的 4 个:`app_view_spans_the_whole_zone_with_no_chrome`、`app_view_is_hidden_when_collapsed_or_covered_by_the_other_sides_maximize`、`a_maximized_app_view_fills_the_maximize_box`、`clicks_inside_an_app_column_are_routed_to_that_app`(含 `app_state` 夹具:`rail_layout.sync_apps` 把应用放进栏里,否则 `side_of` 会 `unreachable!`)。
-- [ ] **Step 2: RED。** `cargo test -p dozer-app -- app_view clicks_inside` → 失败(App 的几何目前是零矩形/未命中)。
-- [ ] **Step 3: 实现。**
+- [x] **Step 1: 写失败测试。** `webview_geometry.rs` 的 4 个:`app_view_spans_the_whole_zone_with_no_chrome`、`app_view_is_hidden_when_collapsed_or_covered_by_the_other_sides_maximize`、`a_maximized_app_view_fills_the_maximize_box`、`clicks_inside_an_app_column_are_routed_to_that_app`(含 `app_state` 夹具:`rail_layout.sync_apps` 把应用放进栏里,否则 `side_of` 会 `unreachable!`)。
+- [x] **Step 2: RED。** `cargo test -p dozer-app -- app_view clicks_inside` → 失败(App 的几何目前是零矩形/未命中)。
+- [x] **Step 3: 实现。**
 
 ```diff
 diff --git a/crates/dozer-app/src/webview_geometry.rs b/crates/dozer-app/src/webview_geometry.rs
@@ -577,9 +577,9 @@ index 3dc71a6e..c2674e86 100644
                  // 已失败(加载超时/渲染异常)时不挂载,原生占位页接管。群列表列
 ```
 
-- [ ] **Step 4: GREEN。** `cargo fmt -p dozer-app && cargo test -p dozer-app -- app_view clicks_inside` → 4 个全过。
-- [ ] **Step 5: 变异检查:** 把命中测试那行改回 `PanelKind::Web => ...`(去掉 `| PanelKind::App(_)`)→ `clicks_inside_an_app_column_*` 必须 FAILED;还原。
-- [ ] **Step 6: Commit。** `git commit -am "feat(dozer-app): app panel webview geometry, spec production and hit routing (A4b1 task 2)"`
+- [x] **Step 4: GREEN。** `cargo fmt -p dozer-app && cargo test -p dozer-app -- app_view clicks_inside` → 4 个全过。
+- [x] **Step 5: 变异检查:** 把命中测试那行改回 `PanelKind::Web => ...`(去掉 `| PanelKind::App(_)`)→ `clicks_inside_an_app_column_*` 必须 FAILED;还原。
+- [x] **Step 6: Commit。** `git commit -am "feat(dozer-app): app panel webview geometry, spec production and hit routing (A4b1 task 2)"`
 
 ### Task 3: 受限构建路径 + 焦点消息
 
@@ -726,10 +726,10 @@ index 573aec1f..a24b346f 100644
              // 子 webview 上的 mousedown winit 收不到,JS 经 IPC 发来这条
 ```
 
-- [ ] **Step 2: 静态核对(代码审查项,逐条打勾)。** `build_app_webview` 里 **没有** `with_custom_protocol`、没有 `with_download_*`;IPC 的 `match` 只有 5 个分支且 `_ => return`;`from_url` 为 `None` 就返回 `None`。
-- [ ] **Step 3: 全量门禁。** `cargo fmt --check -p dozer-app && bash scripts/check-log-scope.sh && cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets` → 仅 `extensions::files::tests::delete_confirm_spec_reflects_pending_target` 与(环境相关的)`extensions::git_log::tests::build_marks_head_branch_and_labels` 这两个**已在 main 上失败**的测试红(执行前先在 main 上复核);clippy 无本片新增警告。
-- [ ] **Step 4: 手工冒烟(不提交)。** 临时在 `App::new` 里读环境变量 `DOZER_DEV_APP="<id>=<launch-url>"`,对 `AppSlot::intern(id)` 调 `app_views.set_url`,并手动 `sync_installed_apps`;用 `dozerd` 里装一个静态应用(`manifest.toml` + 一个含 `<a href="https://example.com">`、`window.open`、`<iframe src="about:blank">` 的页面),确认:页面能加载并带键盘焦点;点外链被拒(日志有"应用尝试离开自己的 origin");`window.open` 无反应;`about:blank` iframe 正常;放大/收起/切到别的面板时 webview 隐藏。结果写进最终汇报。测完撤销临时代码。
-- [ ] **Step 5: Commit + 文档。** `git commit -am "feat(dozer-app): restricted app webview builder + focus routing (A4b1 task 3)"`;同一提交里把规格 A4 行补上"A4b1 已完成:应用 webview 机制,见 `plans/2026-10-05-bytehost-a4b1-app-webview-mechanism.md`";`CLAUDE.md` 的 bytehost-apps 行后补一条关键裁决:**应用 webview 走 `runtime.rs::build_app_webview`,不得复用预览/浏览器的构建路径(那条路径装了 `dozer://` 协议与完整 IPC)**。
+- [x] **Step 2: 静态核对(代码审查项,逐条打勾)。** `build_app_webview` 里 **没有** `with_custom_protocol`、没有 `with_download_*`;IPC 的 `match` 只有 5 个分支且 `_ => return`;`from_url` 为 `None` 就返回 `None`。
+- [x] **Step 3: 全量门禁。** `cargo fmt --check -p dozer-app && bash scripts/check-log-scope.sh && cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets` → 仅 `extensions::files::tests::delete_confirm_spec_reflects_pending_target` 与(环境相关的)`extensions::git_log::tests::build_marks_head_branch_and_labels` 这两个**已在 main 上失败**的测试红(执行前先在 main 上复核);clippy 无本片新增警告。
+- [~] **Step 4: 手工冒烟(不提交)——本次未执行(无 GUI/dozerd 环境,agent 无法跑 wry 窗口)。**  临时在 `App::new` 里读环境变量 `DOZER_DEV_APP="<id>=<launch-url>"`,对 `AppSlot::intern(id)` 调 `app_views.set_url`,并手动 `sync_installed_apps`;用 `dozerd` 里装一个静态应用(`manifest.toml` + 一个含 `<a href="https://example.com">`、`window.open`、`<iframe src="about:blank">` 的页面),确认:页面能加载并带键盘焦点;点外链被拒(日志有"应用尝试离开自己的 origin");`window.open` 无反应;`about:blank` iframe 正常;放大/收起/切到别的面板时 webview 隐藏。结果写进最终汇报。测完撤销临时代码。
+- [x] **Step 5: Commit + 文档。** `git commit -am "feat(dozer-app): restricted app webview builder + focus routing (A4b1 task 3)"`;同一提交里把规格 A4 行补上"A4b1 已完成:应用 webview 机制,见 `plans/2026-10-05-bytehost-a4b1-app-webview-mechanism.md`";`CLAUDE.md` 的 bytehost-apps 行后补一条关键裁决:**应用 webview 走 `runtime.rs::build_app_webview`,不得复用预览/浏览器的构建路径(那条路径装了 `dozer://` 协议与完整 IPC)**。
 
 ## 已知局限
 
