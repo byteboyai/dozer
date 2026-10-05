@@ -13,7 +13,13 @@
 //! 动态构造后无法静态确定目标的 include 一律拒绝,最终预处理仍由官方引擎执行。
 //!
 //! `PlantUmlInclude.path` 是**项目相对规范化路径**(POSIX 分隔符),与设计 §5.2
-//! 一致;前端据此把内容注入引擎的虚拟文件系统。
+//! 一致;前端据此把内容注入引擎的虚拟文件系统(`PLANTUML_STDLIB.local[path]`)。
+//!
+//! **重写(设计 §12.3 修订)**:浏览器构建的引擎只在 `!include <base/path>`(尖括号
+//! stdlib 形式)时查询 `PLANTUML_STDLIB`;普通相对 `!include path` 因无文件系统被
+//! **静默丢弃**。因此本解析器把根源码与每个 include 内容里**项目内**的 include 指令
+//! 一律重写为 `!include <local/<项目相对键>>`,随 `PlantUmlDocument.source` /
+//! `PlantUmlInclude.content` 一起交给引擎。尖括号 stdlib(`<C4/...>`)原样保留。
 
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
@@ -47,9 +53,10 @@ impl Default for PlantUmlLimits {
 /// 成功加载后的文档:根源码 + 授权 include 虚拟文件 + 依赖路径。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlantUmlDocument {
-    /// 根源码(UTF-8)。
+    /// 根源码(UTF-8),其中项目内 include 已重写为 `<local/...>` 形式。
     pub source: String,
-    /// 所有可交给引擎的 include 文件(去重,按 `path` 排序稳定)。
+    /// 所有可交给引擎的 include 文件(去重,按 `path` 排序稳定);`content`
+    /// 同样已完成 include 重写。
     pub includes: Vec<PlantUmlInclude>,
     /// 依赖的**绝对 canonical 路径**(含根文件),去重且排序稳定。
     /// 供 Task 7 反向索引;UI/错误只展示项目相对路径。
@@ -177,7 +184,7 @@ pub fn load_document(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| root.clone());
     let mut chain = vec![project_relative(&root, &source_abs)];
-    resolver.expand(&source, &source_dir, 0, &mut chain)?;
+    let source = resolver.expand(&source, &source_dir, 0, &mut chain)?;
     resolver.seen.insert(source_abs);
 
     resolver.includes.sort_by(|a, b| a.path.cmp(&b.path));
@@ -208,7 +215,10 @@ struct Resolver {
 }
 
 impl Resolver {
-    /// 扫描 `content` 里的 include 并逐个展开。`dir` 是相对路径基准;
+    /// 扫描 `content` 里的 include、逐个授权展开,并**返回重写后的内容**:每个
+    /// 项目内 include 一律改写成 `!include <local/<项目相对键>>` 形式。浏览器
+    /// 构建的引擎没有文件系统,只有尖括号 stdlib 形式能经 `PLANTUML_STDLIB`
+    /// 解析;不重写则普通 `!include path` 会被静默丢弃。`dir` 是相对路径基准;
     /// `depth` 是当前文件相对根的深度;`chain` 是从根到当前文件的相对链。
     fn expand(
         &mut self,
@@ -216,8 +226,14 @@ impl Resolver {
         dir: &Path,
         depth: u32,
         chain: &mut Vec<String>,
-    ) -> Result<(), PlantUmlLoadError> {
-        for directive in scan_includes(content) {
+    ) -> Result<String, PlantUmlLoadError> {
+        let directives = scan_includes(content);
+        if directives.is_empty() {
+            return Ok(content.to_string());
+        }
+        // 行号 -> 该行的重写结果(仅 include 行)。
+        let mut rewrites: Vec<(usize, String)> = Vec::new();
+        for (line_idx, directive) in directives {
             if depth + 1 > self.limits.max_depth {
                 return Err(PlantUmlLoadError::TooDeep {
                     depth: depth + 1,
@@ -225,13 +241,21 @@ impl Resolver {
                     chain: chain.clone(),
                 });
             }
-            let resolved = resolve_target(&directive, dir, &self.root)?;
+            let resolved = match resolve_target(&directive, dir, &self.root)? {
+                // stdlib(`<C4/...>`):原样保留,引擎自行解析。
+                IncludeTarget::Stdlib => continue,
+                IncludeTarget::Project(p) => p,
+            };
 
             if chain.iter().any(|c| self.root.join(c) == resolved) {
                 let mut cycle = chain.clone();
                 cycle.push(project_relative(&self.root, &resolved));
                 return Err(PlantUmlLoadError::Cycle { chain: cycle });
             }
+
+            let rel = project_relative(&self.root, &resolved);
+            rewrites.push((line_idx, directive.rewrite_line(&rel)));
+
             if self.seen.contains(&resolved) {
                 continue;
             }
@@ -265,31 +289,48 @@ impl Resolver {
                     target: directive.target.clone(),
                 })?;
 
-            let rel = project_relative(&self.root, &resolved);
             self.dependencies.insert(resolved.clone());
-            self.includes.push(PlantUmlInclude {
-                path: rel.clone(),
-                content: include_content.clone(),
-            });
 
             let child_dir = resolved
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| self.root.clone());
-            chain.push(rel);
-            self.expand(&include_content, &child_dir, depth + 1, chain)?;
+            chain.push(rel.clone());
+            let rewritten_include = self.expand(&include_content, &child_dir, depth + 1, chain)?;
             chain.pop();
+
+            self.includes.push(PlantUmlInclude {
+                path: rel,
+                content: rewritten_include,
+            });
         }
-        Ok(())
+
+        if rewrites.is_empty() {
+            return Ok(content.to_string());
+        }
+        let mut lines: Vec<String> = content.split('\n').map(str::to_string).collect();
+        for (idx, new_line) in rewrites {
+            lines[idx] = new_line;
+        }
+        // 用 join 保留原换行结构:`split('\n')` 后再 `join("\n")` 等价往返。
+        Ok(lines.join("\n"))
     }
 }
 
-/// 把 include 目标解析为 canonical 绝对路径,并施加授权规则。
+/// include 目标的授权结果。
+enum IncludeTarget {
+    /// 项目内文件:canonical 绝对路径(必然在根内)。
+    Project(PathBuf),
+    /// 随应用发布的 stdlib(`<C4/...>`):不读盘、不改写,交由引擎解析。
+    Stdlib,
+}
+
+/// 把 include 目标解析为授权结果,并施加安全规则。
 fn resolve_target(
     directive: &Directive,
     dir: &Path,
     root: &Path,
-) -> Result<PathBuf, PlantUmlLoadError> {
+) -> Result<IncludeTarget, PlantUmlLoadError> {
     let target = directive.target.trim();
 
     if directive.kind == DirectiveKind::Url || is_url(target) {
@@ -303,11 +344,9 @@ fn resolve_target(
         });
     }
     // 尖括号 `<C4/C4_Context>` 是随应用发布的 stdlib,由引擎经 vendored
-    // 命名空间解析,不是项目文件——不读盘,也不进依赖集合。
+    // 命名空间解析,不是项目文件——不读盘,也不进依赖集合,原样保留。
     if target.starts_with('<') && target.ends_with('>') {
-        return Err(PlantUmlLoadError::UnresolvableInclude {
-            target: target.to_string(),
-        });
+        return Ok(IncludeTarget::Stdlib);
     }
     // 动态构造(`${var}` / `%(...)` / `$!var`)无法静态授权。
     if target.contains("${") || target.contains("%(") || target.contains("$!") {
@@ -321,9 +360,7 @@ fn resolve_target(
         });
     }
 
-    // `!includesub file!tag` 与 PlantUML 的 `file!sub` 语法:取 `!` 前的文件部分。
-    let file_part = target.split('!').next().unwrap_or(target).trim();
-    let joined = PathBuf::from(file_part);
+    let joined = PathBuf::from(target);
     if joined.is_absolute() {
         return Err(PlantUmlLoadError::AbsoluteInclude {
             target: target.to_string(),
@@ -346,7 +383,7 @@ fn resolve_target(
             target: target.to_string(),
         });
     }
-    Ok(canon)
+    Ok(IncludeTarget::Project(canon))
 }
 
 fn is_url(target: &str) -> bool {
@@ -394,6 +431,28 @@ struct Directive {
     target: String,
     /// 指令种类,决定授权规则。
     kind: DirectiveKind,
+    /// 行首缩进(重写时保留)。
+    indent: String,
+    /// 指令关键字(如 `include` / `include_once` / `includesub`)。
+    keyword: String,
+    /// 目标之后的尾随片段(如 `!includesub` 的 `!TAG`),重写时原样保留。
+    suffix: String,
+}
+
+impl Directive {
+    /// 用引擎虚拟文件系统键重写该指令行。浏览器构建的引擎**只对
+    /// `!include <base/path>`(尖括号)查询 `PLANTUML_STDLIB`,普通相对
+    /// `!include path` 因无文件系统被静默丢弃**——因此项目内 include 必须一律
+    /// 重写为 `<local/<项目相对键>>` 形式。
+    fn rewrite_line(&self, rel_key: &str) -> String {
+        format!(
+            "{indent}!{keyword} <local/{key}>{suffix}",
+            indent = self.indent,
+            keyword = self.keyword,
+            key = rel_key,
+            suffix = self.suffix,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -404,12 +463,14 @@ enum DirectiveKind {
     Url,
 }
 
-/// 逐行静态扫描 include 指令。只识别行首(允许前导空白)的 `!include*`。
-/// 不做预处理展开:动态目标在授权阶段被拒。
-fn scan_includes(source: &str) -> Vec<Directive> {
+/// 逐行静态扫描 include 指令,返回 `(行号, 指令)`(行号用于把命中行重写回
+/// 源文本)。只识别行首(允许前导空白)的 `!include*`。不做预处理展开:动态
+/// 目标在授权阶段被拒。
+fn scan_includes(source: &str) -> Vec<(usize, Directive)> {
     let mut out = Vec::new();
-    for raw_line in source.split('\n') {
+    for (idx, raw_line) in source.split('\n').enumerate() {
         let line = raw_line.trim_start();
+        let indent = &raw_line[..raw_line.len() - line.len()];
         let Some(rest) = line.strip_prefix('!') else {
             continue;
         };
@@ -424,12 +485,25 @@ fn scan_includes(source: &str) -> Vec<Directive> {
             _ => continue,
         };
         // 去掉行内注释(PlantUML 用 `/'` 起块注释;这里只处理尾随 `/'` 片段)
-        // 与尾随空白。
+        // 与尾随空白。`!includesub file!TAG` 的 `!TAG` 在重写时保留。
         let arg = arg.split(" /'").next().unwrap_or(arg).trim();
-        out.push(Directive {
-            target: arg.to_string(),
-            kind,
-        });
+        let (target, suffix) = match kind {
+            DirectiveKind::Local if keyword == "includesub" => match arg.split_once('!') {
+                Some((file, tag)) => (file.trim(), format!("!{tag}")),
+                None => (arg, String::new()),
+            },
+            _ => (arg, String::new()),
+        };
+        out.push((
+            idx,
+            Directive {
+                target: target.to_string(),
+                kind,
+                indent: indent.to_string(),
+                keyword: keyword.to_string(),
+                suffix,
+            },
+        ));
     }
     out
 }
@@ -535,17 +609,19 @@ mod tests {
     }
 
     #[test]
-    fn angle_bracket_stdlib_is_not_a_project_file() {
+    fn angle_bracket_stdlib_is_passed_through_untouched() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        write(&root.join("main.puml"), "!include <C4/C4_Context>\n");
+        write(
+            &root.join("main.puml"),
+            "@startuml\n!include <C4/C4_Context>\n@enduml\n",
+        );
 
-        match load(root, &root.join("main.puml")) {
-            Err(PlantUmlLoadError::UnresolvableInclude { target }) => {
-                assert_eq!(target, "<C4/C4_Context>")
-            }
-            other => panic!("expected UnresolvableInclude, got {other:?}"),
-        }
+        let doc = load(root, &root.join("main.puml")).unwrap();
+        // stdlib 不读盘、不进依赖、不改写。
+        assert!(doc.includes.is_empty());
+        assert_eq!(doc.dependencies.len(), 1);
+        assert!(doc.source.contains("!include <C4/C4_Context>"));
     }
 
     #[test]
@@ -760,7 +836,96 @@ mod tests {
         let src = "  !include spaced.puml\n";
         let found = scan_includes(src);
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].target, "spaced.puml");
-        assert_eq!(found[0].kind, DirectiveKind::Local);
+        assert_eq!(found[0].0, 0);
+        assert_eq!(found[0].1.target, "spaced.puml");
+        assert_eq!(found[0].1.kind, DirectiveKind::Local);
+        assert_eq!(found[0].1.indent, "  ");
+        assert_eq!(found[0].1.keyword, "include");
+    }
+
+    #[test]
+    fn scan_splits_includesub_tag_into_suffix() {
+        let src = "!includesub part.puml!BLOCK\n";
+        let found = scan_includes(src);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].1.target, "part.puml");
+        assert_eq!(found[0].1.suffix, "!BLOCK");
+    }
+
+    #[test]
+    fn rewrites_plain_include_to_local_stdlib_form() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            &root.join("main.puml"),
+            "@startuml\n!include common.puml\nAlice -> Bob\n@enduml\n",
+        );
+        write(&root.join("common.puml"), "!define X 1\n");
+
+        let doc = load(root, &root.join("main.puml")).unwrap();
+        assert!(doc.source.contains("!include <local/common.puml>"));
+        assert!(!doc.source.contains("!include common.puml"));
+        // 非 include 行逐字保留。
+        assert!(doc.source.contains("Alice -> Bob"));
+    }
+
+    #[test]
+    fn rewrites_nested_include_relative_to_including_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            &root.join("docs/main.puml"),
+            "@startuml\n!include sub/a.puml\n@enduml\n",
+        );
+        write(&root.join("docs/sub/a.puml"), "!include b.puml\n");
+        write(&root.join("docs/sub/b.puml"), "!define Y 2\n");
+
+        let doc = load(root, &root.join("docs/main.puml")).unwrap();
+        // 根里的 `sub/a.puml` 相对根;a 里的 `b.puml` 相对 a 的目录,键为
+        // 项目相对 `docs/sub/b.puml`——位置无关,嵌套解析正确。
+        assert!(doc.source.contains("!include <local/docs/sub/a.puml>"));
+        let a = doc
+            .includes
+            .iter()
+            .find(|i| i.path == "docs/sub/a.puml")
+            .unwrap();
+        assert_eq!(a.content, "!include <local/docs/sub/b.puml>\n");
+    }
+
+    #[test]
+    fn rewrites_include_once_preserving_keyword() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(&root.join("main.puml"), "!include_once a.puml\n");
+        write(&root.join("a.puml"), "!define Z 3\n");
+
+        let doc = load(root, &root.join("main.puml")).unwrap();
+        assert!(doc.source.contains("!include_once <local/a.puml>"));
+    }
+
+    #[test]
+    fn rewrites_includesub_preserving_tag() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(&root.join("main.puml"), "!includesub part.puml!BLOCK\n");
+        write(&root.join("part.puml"), "//BLOCK\nAlice -> Bob\n//END\n");
+
+        let doc = load(root, &root.join("main.puml")).unwrap();
+        assert!(doc.source.contains("!includesub <local/part.puml>!BLOCK"));
+    }
+
+    #[test]
+    fn rewrites_stdlib_and_local_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            &root.join("main.puml"),
+            "@startuml\n!include <C4/C4_Context>\n!include local.puml\n@enduml\n",
+        );
+        write(&root.join("local.puml"), "Person(a, \"A\")\n");
+
+        let doc = load(root, &root.join("main.puml")).unwrap();
+        assert!(doc.source.contains("!include <C4/C4_Context>"));
+        assert!(doc.source.contains("!include <local/local.puml>"));
     }
 }

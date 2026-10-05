@@ -126,12 +126,17 @@ export function registerStdlibScript(scriptText: string): void {
   installer.call(g, g, g);
 }
 
-/** Inject one project-local `!include` as a virtual file under `local/`. */
+/**
+ * Inject project-local `!include` files as virtual files under the `local/`
+ * stdlib base. Rust has already rewritten every project-local include in the
+ * source and in each include's content to `!include <local/<project-relative>>`
+ * (the browser engine only consults `PLANTUML_STDLIB` for the angle-bracket
+ * stdlib form; plain relative includes are silently dropped). So the key here
+ * is exactly `inc.path`, the project-relative normalized path.
+ */
 export function setLocalIncludes(includes: PlantUmlInclude[]): void {
   const local: Record<string, string[]> = {};
   for (const inc of includes) {
-    // Normalize the key the engine will look up: it strips a leading `local/`
-    // segment for `!include local/x.puml`, and also accepts the bare path.
     const key = inc.path.replace(/\\/g, "/");
     local[key] = inc.content.split(/\r\n|\r|\n/);
   }

@@ -1083,6 +1083,50 @@ impl App {
                     pane.apply_image_annotate_event(binding.tab_id, event.payload);
                 });
             }
+            Message::PlantUmlEvent(binding, event) => {
+                self.with_project(binding.project_id, move |ws, _io| {
+                    let event_revision = event.revision;
+                    let pane = ws.preview_pane_mut(binding.panel);
+                    let open_source =
+                        pane.apply_plantuml_event(binding.tab_id, event_revision, event.payload);
+                    if let Some(line) = open_source {
+                        // 用户点"查看源码":切到 Source 源码模式;带行号则排队跳行。
+                        let idx = pane.tabs().iter().position(|t| t.id == binding.tab_id);
+                        if let Some(idx) = idx {
+                            let tab_id = binding.tab_id;
+                            if pane.enter_code_mode(idx).is_ok()
+                                && let Some(line) = line
+                            {
+                                pane.queue_editor_command(
+                                    tab_id,
+                                    crate::preview::EditorCommand::RevealPosition {
+                                        line,
+                                        column: 1,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                });
+            }
+            Message::PlantUmlLoaded(project_id, panel, tab_id, generation, result) => {
+                self.with_project(project_id, move |ws, _io| {
+                    let pane = ws.preview_pane_mut(panel);
+                    match result {
+                        Ok(doc) => {
+                            // host 报 `rendered`/`failed` 时回带的 revision 与本次
+                            // 推送一致;用 load generation 当渲染世代。
+                            if !pane.store_plantuml_document(tab_id, generation, generation, doc) {
+                                // tab 已关闭/替换/切走:丢弃过期结果,不落状态。
+                                dozer_core::log_debug!(LOG, tab_id, "丢弃过期的 PlantUML 加载结果");
+                            }
+                        }
+                        Err(error) => {
+                            pane.apply_plantuml_load_error(tab_id, generation, &error);
+                        }
+                    }
+                });
+            }
             Message::PreviewCommandsFetched(project_id, commands) => {
                 self.with_project(project_id, move |ws, io| {
                     for cmd in commands {
@@ -1165,6 +1209,19 @@ impl App {
             }
             Message::PreviewProfiled(project_id, panel, tab_id, generation, result) => {
                 self.with_project(project_id, move |ws, io| {
+                    // Task 6:PlantUML 渲染视图的 include 授权读取在后台跑
+                    // (CodeMirror 源码模式不需要)。路径在这里捕获,spawn 放到
+                    // `pane` 可变借用结束之后,避免借用冲突。
+                    let plantuml_path = ws
+                        .preview_pane(panel)
+                        .tabs()
+                        .iter()
+                        .find(|t| t.id == tab_id)
+                        .filter(|t| t.uses_plantuml_host())
+                        .and_then(|t| match &t.kind {
+                            crate::preview::TabKind::File(p) => Some(p.clone()),
+                            _ => None,
+                        });
                     let pane = ws.preview_pane_mut(panel);
                     match result {
                         Ok(profile) => {
@@ -1289,6 +1346,19 @@ impl App {
                                 crate::preview::PreviewError::new(error, true),
                             );
                         }
+                    }
+                    // Task 6:画像落定后,若该 tab 走 PlantUML 渲染 host,起后台
+                    // 授权读取(`load_document`)。放在 `pane` 可变借用结束后,
+                    // spawn 只需 `ws.project` 与已捕获的路径。
+                    if let (Some(path), Some(project)) =
+                        (plantuml_path.as_ref(), ws.project.as_ref())
+                        && ws
+                            .preview_pane(panel)
+                            .tabs()
+                            .iter()
+                            .any(|t| t.id == tab_id && t.uses_plantuml_host())
+                    {
+                        Self::spawn_plantuml_load(project, io, panel, tab_id, generation, path);
                     }
                     // 画像可能把临时非表格 route 改判为表格:此时才入队,需立即
                     // spawn(建壳时已入队的由调用方 `preview_open_path` 那侧已 spawn)。
@@ -5360,6 +5430,34 @@ impl App {
         io.handle.spawn_blocking(move || {
             let result = crate::preview::profile_file(&path).map_err(|e| e.to_string());
             let _ = proxy.send_event(Message::PreviewProfiled(
+                project_id, panel, tab_id, generation, result,
+            ));
+        });
+    }
+
+    /// Task 6:把 PlantUML `load_document`(读父源码 + 递归授权 include,含
+    /// 安全校验)丢到 `spawn_blocking` 后台线程跑,UI 线程不做文件 I/O。完成
+    /// 后经 [`Message::PlantUmlLoaded`] 回灌,按 `project_id` 路由 + `generation`
+    /// 闸门丢弃过期结果。
+    fn spawn_plantuml_load(
+        project: &dozer_core::protocol::ProjectInfo,
+        io: &crate::workspace::ShellIo,
+        panel: PanelKind,
+        tab_id: usize,
+        generation: u64,
+        path: &std::path::Path,
+    ) {
+        let root = std::path::PathBuf::from(&project.path);
+        let path = path.to_path_buf();
+        let proxy = io.proxy.clone();
+        let project_id = project.id;
+        io.handle.spawn_blocking(move || {
+            let result = crate::preview::load_document(
+                &root,
+                &path,
+                crate::preview::PlantUmlLimits::default(),
+            );
+            let _ = proxy.send_event(Message::PlantUmlLoaded(
                 project_id, panel, tab_id, generation, result,
             ));
         });

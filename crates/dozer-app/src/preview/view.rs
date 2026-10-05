@@ -51,6 +51,8 @@ pub(crate) fn placeholder_tab(id: usize) -> PreviewTab {
         conflict_reload_armed: false,
         conflict_baseline: None,
         tabular_host_ready: false,
+        plantuml_host_ready: false,
+        pending_plantuml_document: None,
         task_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         image_annotations: Vec::new(),
     }
@@ -346,6 +348,96 @@ impl PreviewPane {
         }
     }
 
+    /// Task 6:应用 PlantUML viewer host 事件。binding 归属校验已在 runtime
+    /// 层完成,这里按 `tab_id` 找 tab 落状态,语义:
+    /// - `Ready`:host 脚本就绪(不代表图已渲染),置 `plantuml_host_ready`,
+    ///   清错误、保持 Loading,并尝试与已备好的文档汇合推 `SetDocument`;
+    /// - `Rendered`:渲染成功且 revision 与当前世代一致 → Ready + finish;
+    /// - `Failed`:回落统一 Failed 终态(fallback 页可见);
+    /// - `OpenSource`:返回 `Some(line)`,由调用方(需 App 级能力)把 tab 切到
+    ///   Source 源码模式并跳行;本方法只负责上报意图。
+    ///
+    /// 终态结果(`Rendered`/`Failed`)先过 revision 门控:`event_revision` 与
+    /// tab 当前渲染世代不一致即丢弃(后台渲染乱序/快速重载)。
+    pub fn apply_plantuml_event(
+        &mut self,
+        tab_id: usize,
+        event_revision: u64,
+        event: crate::preview::PlantUmlEvent,
+    ) -> Option<Option<u32>> {
+        use crate::preview::{BackendState, PlantUmlEvent, PreviewError, PreviewRuntime};
+        let tab = self.tabs.iter_mut().find(|t| t.id == tab_id)?;
+        if !tab.uses_plantuml_host() {
+            return None;
+        }
+        match event {
+            PlantUmlEvent::Ready => {
+                tab.web_error = None;
+                tab.plantuml_host_ready = true;
+                self.try_push_initial_plantuml_state(tab_id);
+                None
+            }
+            PlantUmlEvent::Rendered { .. } => {
+                if event_revision != tab.web_revision {
+                    return None;
+                }
+                if !tab.load_state.is_active() {
+                    return None;
+                }
+                tab.web_error = None;
+                let _ = tab.backend_state.try_transition(BackendState::Ready);
+                tab.load_state.finish();
+                None
+            }
+            PlantUmlEvent::Failed {
+                failure_kind,
+                message,
+                ..
+            } => {
+                if event_revision != tab.web_revision {
+                    return None;
+                }
+                let _ = failure_kind;
+                tab.runtime = PreviewRuntime::None;
+                tab.web_error = Some(message.clone());
+                let _ = tab
+                    .backend_state
+                    .try_transition(BackendState::Failed(PreviewError::new(message, true)));
+                if tab.load_state.is_active() {
+                    tab.load_state.finish();
+                }
+                None
+            }
+            PlantUmlEvent::OpenSource { line } => Some(line),
+        }
+    }
+
+    /// Task 6:后台授权读取失败回灌——把 tab 落到统一 Failed 终态并显示安全
+    /// 文案(不含绝对路径/源码)。generation 过期或 tab 已不适用则丢弃。
+    pub fn apply_plantuml_load_error(
+        &mut self,
+        tab_id: usize,
+        generation: u64,
+        error: &crate::preview::PlantUmlLoadError,
+    ) {
+        use crate::preview::{BackendState, PreviewError, PreviewRuntime};
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return;
+        };
+        if !tab.uses_plantuml_host() || tab.load_state.generation != generation {
+            return;
+        }
+        let message = error.to_string();
+        tab.runtime = PreviewRuntime::None;
+        tab.web_error = Some(message.clone());
+        let _ = tab
+            .backend_state
+            .try_transition(BackendState::Failed(PreviewError::new(message, true)));
+        if tab.load_state.is_active() {
+            tab.load_state.finish();
+        }
+    }
+
     /// T10:「保留我的修改」:清冲突态,以当前磁盘 mtime 作保存基线(下次保存
     /// 覆盖前会再校验磁盘是否又变了)。返回是否有冲突被清除。
     pub fn keep_conflict_changes(&mut self, tab_id: usize) -> bool {
@@ -636,6 +728,8 @@ impl PreviewPane {
             conflict_reload_armed: false,
             conflict_baseline: None,
             tabular_host_ready: false,
+            plantuml_host_ready: false,
+            pending_plantuml_document: None,
             task_cancel: fresh_task_cancel(),
             image_annotations: Vec::new(),
         };
@@ -726,6 +820,8 @@ impl PreviewPane {
             conflict_reload_armed: false,
             conflict_baseline: None,
             tabular_host_ready: false,
+            plantuml_host_ready: false,
+            pending_plantuml_document: None,
             task_cancel: fresh_task_cancel(),
             image_annotations: Vec::new(),
         };
@@ -2334,6 +2430,78 @@ impl PreviewPane {
         );
     }
 
+    /// Task 6:后台 `plantuml::load_document` 成功回灌——把授权读取到的文档
+    /// 暂存到 tab,并尝试与 host ready 汇合推 `SetDocument`(见
+    /// [`PreviewPane::try_push_initial_plantuml_state`])。返回 `true` 表示该
+    /// tab 存在且仍走 PlantUML host(调用方据此决定是否清 Loading);`false`
+    /// 表示 tab 已被关闭/替换/切走(丢弃过期结果)。
+    pub fn store_plantuml_document(
+        &mut self,
+        tab_id: usize,
+        generation: u64,
+        revision: u64,
+        document: crate::preview::PlantUmlDocument,
+    ) -> bool {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return false;
+        };
+        if !tab.uses_plantuml_host() || tab.load_state.generation != generation {
+            return false;
+        }
+        // 路径只作 host 内部标记:取文件名(避免向页面泄露绝对路径)。
+        let path = match &tab.kind {
+            TabKind::File(p) => p
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
+        tab.pending_plantuml_document = Some(PendingPlantUmlDocument {
+            revision,
+            path,
+            source: document.source,
+            includes: document.includes,
+        });
+        self.try_push_initial_plantuml_state(tab_id);
+        true
+    }
+
+    /// Task 6:两路异步汇合——文档已授权读取(`pending_plantuml_document` 有值)
+    /// 且 host 已 `ready`(`plantuml_host_ready`)都为真时,组好 `SetDocument`
+    /// 命令入队,并清掉暂存(一次性推送)。任一条件先满足都会调用本方法,
+    /// 只有真正"两个都满足"的那一次实际入队。
+    pub fn try_push_initial_plantuml_state(&mut self, tab_id: usize) {
+        let Some((revision, path, source, includes)) = self
+            .tabs
+            .iter_mut()
+            .find(|t| t.id == tab_id)
+            .and_then(|tab| {
+                if !tab.plantuml_host_ready {
+                    return None;
+                }
+                let doc = tab.pending_plantuml_document.take()?;
+                // 记下本次推送的渲染世代:host 的终态事件须回带同一 revision。
+                tab.web_revision = doc.revision;
+                Some((doc.revision, doc.path, doc.source, doc.includes))
+            })
+        else {
+            return;
+        };
+        // 初始主题默认 Dark(ByteBoy2077 背景);主题随系统切换由 Task 8
+        // 经 `reload_nonce`/重推处理。
+        let theme = crate::preview::PlantUmlTheme::Dark;
+        self.queue_plantuml_command(
+            tab_id,
+            PlantUmlCommand::SetDocument {
+                revision,
+                path,
+                source,
+                includes,
+                theme,
+            },
+        );
+    }
+
     /// 记录启动恢复的表格视图状态,加载完成后应用一次。
     pub fn set_pending_tabular(
         &mut self,
@@ -2436,6 +2604,44 @@ impl PreviewPane {
         ready
     }
 
+    /// 排队一个待下发给 PlantUML viewer host 的命令(`tab_id`, 命令)。
+    pub fn queue_plantuml_command(&mut self, tab_id: usize, command: PlantUmlCommand) {
+        self.pending_plantuml_commands.push((tab_id, command));
+    }
+
+    /// 取走(消费式)待下发的 PlantUML 命令队列。测试专用。
+    #[cfg(test)]
+    pub fn take_pending_plantuml_commands(&mut self) -> Vec<(usize, PlantUmlCommand)> {
+        std::mem::take(&mut self.pending_plantuml_commands)
+    }
+
+    /// 只取当前已有 WebView 句柄对应的命令;其余保留待下一帧重试(同
+    /// `take_pending_tabular_commands_for`)。
+    pub fn take_pending_plantuml_commands_for(
+        &mut self,
+        available_webview_ids: &std::collections::HashSet<usize>,
+        project_id: i64,
+        panel: crate::app::PanelKind,
+    ) -> Vec<(usize, PlantUmlCommand)> {
+        let pending = std::mem::take(&mut self.pending_plantuml_commands);
+        let mut ready = Vec::new();
+        for (tab_id, command) in pending {
+            let webview_id = crate::preview::EditorHostBinding::new(
+                project_id,
+                panel,
+                tab_id,
+                std::path::PathBuf::new(),
+            )
+            .webview_id();
+            if available_webview_ids.contains(&webview_id) {
+                ready.push((tab_id, command));
+            } else {
+                self.pending_plantuml_commands.push((tab_id, command));
+            }
+        }
+        ready
+    }
+
     /// 切换/恢复 JSON tab 的 mode(Tree ⇄ Text)。壳恢复已由 `push_shell_tab`
     /// 直接落到 backend 上;运行期切 Tree/Text 走本方法(由 tab 最右侧的
     /// "树/文本"切换按钮触发)。
@@ -2500,6 +2706,12 @@ impl PreviewPane {
             // 两路汇合逻辑(`try_push_initial_tabular_state`)会自动补推
             // `Init`+`SetSchema`+`SetWindow`。
             tab.tabular_host_ready = false;
+        }
+        if tab.uses_plantuml_host() {
+            // 新 webview 重新 boot:清 host ready 与上次暂存的文档,待
+            // 后台授权读取重跑、host 报新 `ready` 后补推 `SetDocument`。
+            tab.plantuml_host_ready = false;
+            tab.pending_plantuml_document = None;
         }
     }
 
@@ -6406,5 +6618,185 @@ mod tests {
         );
         // 迟到 ACK 不应改变已经是 Ready 且非 active 的状态。
         assert_eq!(pane.tabs()[1].backend_state, BackendState::Ready);
+    }
+
+    /// Task 6:构造一个走 PlantUML 渲染 host 的 tab(Loading,generation 1)。
+    fn plantuml_tab(id: usize) -> PreviewTab {
+        let mut tab = placeholder_tab(id);
+        tab.kind = TabKind::File(PathBuf::from("/tmp/diagram.puml"));
+        tab.backend = Some(PreviewBackend::Rendered(RenderedBackend {
+            renderer: RenderedRenderer::PlantUml,
+            mode: RenderedMode::Rendered,
+            source_language: Some("plantuml".to_string()),
+        }));
+        tab.backend_state = BackendState::Loading;
+        tab.load_state = PreviewLoadState::starting(1, PreviewLoadStage::CreatingHost);
+        tab
+    }
+
+    fn plantuml_doc(source: &str) -> crate::preview::PlantUmlDocument {
+        crate::preview::PlantUmlDocument {
+            source: source.to_string(),
+            includes: vec![crate::preview::PlantUmlInclude {
+                path: "included.puml".to_string(),
+                content: "Alice -> Bob".to_string(),
+            }],
+            dependencies: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn apply_plantuml_event_ready_arms_host_and_keeps_loading() {
+        let mut pane = PreviewPane::default();
+        pane.tabs.push(plantuml_tab(1));
+        pane.apply_plantuml_event(1, 1, crate::preview::PlantUmlEvent::Ready);
+        let tab = &pane.tabs()[1];
+        assert!(tab.plantuml_host_ready, "ready 应置 host 就绪标记");
+        // host 就绪不代表图已渲染,仍保持 Loading。
+        assert_eq!(tab.backend_state, BackendState::Loading);
+        assert!(tab.load_state.is_active());
+    }
+
+    #[test]
+    fn store_pushes_set_document_only_after_host_ready() {
+        let mut pane = PreviewPane::default();
+        pane.tabs.push(plantuml_tab(1));
+        // host 未 ready:文档先暂存,不入队命令。
+        assert!(pane.store_plantuml_document(1, 1, 1, plantuml_doc("@startuml\n@enduml")));
+        assert!(pane.take_pending_plantuml_commands().is_empty());
+        assert!(pane.tabs()[1].pending_plantuml_document.is_some());
+        // host ready:汇合,推 SetDocument。
+        pane.apply_plantuml_event(1, 1, crate::preview::PlantUmlEvent::Ready);
+        let cmds = pane.take_pending_plantuml_commands();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0].1 {
+            PlantUmlCommand::SetDocument {
+                revision,
+                path,
+                source,
+                includes,
+                ..
+            } => {
+                assert_eq!(*revision, 1);
+                assert_eq!(path, "diagram.puml", "只带文件名,不泄露绝对路径");
+                assert_eq!(source, "@startuml\n@enduml");
+                assert_eq!(includes.len(), 1);
+                assert_eq!(includes[0].path, "included.puml");
+            }
+            other => panic!("期望 SetDocument,得到 {other:?}"),
+        }
+        // 推送后暂存清空,且渲染世代回写为 1。
+        assert!(pane.tabs()[1].pending_plantuml_document.is_none());
+        assert_eq!(pane.tabs()[1].web_revision, 1);
+    }
+
+    #[test]
+    fn apply_plantuml_event_rendered_finishes_matching_revision() {
+        let mut pane = PreviewPane::default();
+        let mut tab = plantuml_tab(1);
+        tab.web_revision = 7;
+        pane.tabs.push(tab);
+        pane.apply_plantuml_event(
+            1,
+            7,
+            crate::preview::PlantUmlEvent::Rendered {
+                width: 100,
+                height: 50,
+                duration_ms: 3,
+            },
+        );
+        assert_eq!(pane.tabs()[1].backend_state, BackendState::Ready);
+        assert!(!pane.tabs()[1].load_state.is_active());
+    }
+
+    #[test]
+    fn apply_plantuml_event_rendered_stale_revision_is_dropped() {
+        let mut pane = PreviewPane::default();
+        let mut tab = plantuml_tab(1);
+        tab.web_revision = 7;
+        pane.tabs.push(tab);
+        // 迟到的旧世代结果(revision 3 ≠ 7)必须丢弃,保持 Loading。
+        pane.apply_plantuml_event(
+            1,
+            3,
+            crate::preview::PlantUmlEvent::Rendered {
+                width: 100,
+                height: 50,
+                duration_ms: 3,
+            },
+        );
+        assert_eq!(pane.tabs()[1].backend_state, BackendState::Loading);
+        assert!(pane.tabs()[1].load_state.is_active());
+    }
+
+    #[test]
+    fn apply_plantuml_event_failed_transitions_failed() {
+        let mut pane = PreviewPane::default();
+        let mut tab = plantuml_tab(1);
+        tab.web_revision = 1;
+        pane.tabs.push(tab);
+        pane.apply_plantuml_event(
+            1,
+            1,
+            crate::preview::PlantUmlEvent::Failed {
+                failure_kind: crate::preview::PlantUmlFailureKind::Syntax,
+                message: "syntax error".into(),
+                line: Some(3),
+            },
+        );
+        assert!(pane.tabs()[1].backend_state.is_failed());
+        assert_eq!(pane.tabs()[1].web_error.as_deref(), Some("syntax error"));
+    }
+
+    #[test]
+    fn apply_plantuml_event_open_source_reports_line() {
+        let mut pane = PreviewPane::default();
+        let mut tab = plantuml_tab(1);
+        tab.web_revision = 1;
+        pane.tabs.push(tab);
+        let line = pane.apply_plantuml_event(
+            1,
+            1,
+            crate::preview::PlantUmlEvent::OpenSource { line: Some(5) },
+        );
+        assert_eq!(line, Some(Some(5)));
+    }
+
+    #[test]
+    fn apply_plantuml_event_ignores_non_plantuml_tab() {
+        let mut pane = PreviewPane::default();
+        pane.tabs.push(image_tab(1, BackendState::Loading));
+        // 非 PlantUML tab:即使 tab_id 命中也不应落状态。
+        let out = pane.apply_plantuml_event(1, 1, crate::preview::PlantUmlEvent::Ready);
+        assert_eq!(out, None);
+        assert!(!pane.tabs()[1].plantuml_host_ready);
+    }
+
+    #[test]
+    fn store_plantuml_document_drops_stale_generation() {
+        let mut pane = PreviewPane::default();
+        pane.tabs.push(plantuml_tab(1)); // generation 1
+        // generation 0 ≠ 1:过期结果,丢弃且不暂存。
+        assert!(!pane.store_plantuml_document(1, 0, 0, plantuml_doc("@startuml")));
+        assert!(pane.tabs()[1].pending_plantuml_document.is_none());
+    }
+
+    #[test]
+    fn bump_reload_resets_plantuml_host_state() {
+        let mut pane = PreviewPane::default();
+        let mut tab = plantuml_tab(1);
+        tab.plantuml_host_ready = true;
+        tab.pending_plantuml_document = Some(PendingPlantUmlDocument {
+            revision: 1,
+            path: "diagram.puml".into(),
+            source: "@startuml".into(),
+            includes: Vec::new(),
+        });
+        pane.tabs.push(tab);
+        pane.bump_reload(1);
+        let tab = &pane.tabs()[1];
+        assert!(!tab.plantuml_host_ready);
+        assert!(tab.pending_plantuml_document.is_none());
+        assert_eq!(tab.reload_nonce, 1);
     }
 }

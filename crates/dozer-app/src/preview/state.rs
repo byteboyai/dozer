@@ -6,6 +6,17 @@ use std::time::SystemTime;
 
 use super::*;
 
+/// Task 6:后台授权读取完成、待推给 PlantUML host 的文档载荷。`revision` 是
+/// 该次加载对应的渲染世代,host 终态事件须与之一致才被采纳。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingPlantUmlDocument {
+    pub revision: u64,
+    /// 项目根相对规范化路径(仅用于展示/host 内部标记,不含绝对路径)。
+    pub path: String,
+    pub source: String,
+    pub includes: Vec<crate::preview::PlantUmlInclude>,
+}
+
 /// 一个预览 tab。
 pub struct PreviewTab {
     pub id: usize,
@@ -85,6 +96,16 @@ pub struct PreviewTab {
     /// `PreviewPane::finish_tabular_load`/`Message::TabularHostEvent` 处理)。
     /// 新建 tab / reload 时重置为 `false`。
     pub tabular_host_ready: bool,
+    /// PlantUML viewer host(`dozer://plantuml-viewer/`)是否已报过 `ready`。
+    /// 与"文档是否已授权读取"(`pending_plantuml_document` 是否已备好)是两个
+    /// 独立异步来源,两者都为真时才推初始 `SetDocument`(见
+    /// `PreviewPane::try_push_initial_plantuml_state`)。新建 tab / reload 时
+    /// 重置为 `false`。
+    pub plantuml_host_ready: bool,
+    /// Task 6:后台 `plantuml::load_document` 成功后暂存的待推文档(作者源码 +
+    /// 已授权 include 内容 + 渲染 revision)。host `ready` 之前先备好,`ready`
+    /// 到达即经 `SetDocument` 推给 host。host 未就绪期间的重新加载会整体替换。
+    pub pending_plantuml_document: Option<PendingPlantUmlDocument>,
     /// T11:该 tab 在途后台长任务(窗口化索引构建 / 表格解析 / recovery 读取)
     /// 的共享取消信号。任务 `spawn` 前经 [`PreviewTab::task_cancel_token`] 取走
     /// 一份 `Arc` 捕获进 `spawn_blocking`,按 chunk/批次检查;tab 关闭 / reload /
@@ -286,6 +307,16 @@ impl PreviewTab {
     pub fn uses_tabular_grid_host(&self) -> bool {
         tabular_grid_host_enabled()
             && matches!(&self.backend, Some(PreviewBackend::Tabular(t)) if t.mode == TabularMode::Grid)
+    }
+
+    /// PlantUML 渲染视图是否走 `dozer://plantuml-viewer/` host(Source 源码
+    /// 模式走 CodeMirror,此时返回 false)。
+    pub fn uses_plantuml_host(&self) -> bool {
+        matches!(
+            &self.backend,
+            Some(PreviewBackend::Rendered(r))
+                if r.renderer == RenderedRenderer::PlantUml && r.mode == RenderedMode::Rendered
+        )
     }
 
     /// 运行时容器种类(仅用于 Debug 输出,避免打印整个 TabularView)。
@@ -738,6 +769,10 @@ pub struct PreviewPane {
     /// `evaluate_script` 注入;初始 `Init`/`SetSchema`/`SetWindow`、滚动窗口
     /// 回包、reveal、跨 sheet 切换都经它。
     pub(crate) pending_tabular_commands: Vec<(usize, TabularCommand)>,
+    /// 待下发给 PlantUML viewer host 的命令队列(`tab_id`, 命令)。与
+    /// `pending_tabular_commands` 平行:`window_events` 每帧取走并
+    /// `evaluate_script` 注入;初始 `SetDocument`、`FitView` 等经它。
+    pub(crate) pending_plantuml_commands: Vec<(usize, PlantUmlCommand)>,
     /// "保存后再关闭"的 CodeMirror tab id 列表。Rust 侧不持有编辑器全文,
     /// 关闭 dirty tab 不能直接落盘,得先向 host 下发 `SaveDocument`,待
     /// host 回 `save_requested` 真正落盘后再移除 tab。`pending_editor_commands`
@@ -776,6 +811,7 @@ impl Default for PreviewPane {
             pending_tabular_loads: Vec::new(),
             pending_editor_commands: Vec::new(),
             pending_tabular_commands: Vec::new(),
+            pending_plantuml_commands: Vec::new(),
             pending_close: Vec::new(),
             blank_info: None,
             blank_info_in_flight: false,

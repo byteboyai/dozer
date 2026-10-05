@@ -382,6 +382,10 @@ pub(crate) fn sync_webview_pool(
                 // image-annotate host 的 envelope payload 与 Flyfish 不同
                 // (annotations_changed),解析器必须分开,不能几何共享。
                 let is_image_annotate_host = spec.url.starts_with("dozer://image-annotate/");
+                // PlantUML viewer host 的 envelope(ready/rendered/failed/
+                // open_source)与 Flyfish 不同,解析器必须分开;binding 同样从
+                // URL 解析(PlantUML host `editor_binding` 为 `None`)。
+                let is_plantuml_host = spec.url.starts_with("dozer://plantuml-viewer/");
                 // 常驻注入脚本:焦点/拖拽/缩放三件套(所有 webview);浏览器
                 // 面板(`report_title`)额外附一段"页面标题回报":把
                 // `window.__dozer_webview` 记成本 webview 的 id,页面
@@ -532,6 +536,27 @@ pub(crate) fn sync_webview_pool(
                                         }
                                         Err(error) => {
                                             dozer_core::log_warn!(LOG, %error, "无法解析 image-annotate IPC");
+                                        }
+                                    }
+                                } else if let Some(binding) = flyfish_binding.as_ref()
+                                    && is_plantuml_host
+                                    && looks_like_envelope
+                                {
+                                    match crate::preview::parse_plantuml_event(body) {
+                                        Ok(event) => {
+                                            if let Err(error) = event.validate(binding) {
+                                                dozer_core::log_warn!(LOG, %error, "拒绝无效 plantuml IPC");
+                                            } else {
+                                                let _ = ipc_proxy.send_event(
+                                                    Message::PlantUmlEvent(
+                                                        binding.clone(),
+                                                        event,
+                                                    ),
+                                                );
+                                            }
+                                        }
+                                        Err(error) => {
+                                            dozer_core::log_warn!(LOG, %error, "无法解析 plantuml IPC");
                                         }
                                     }
                                 } else if let Some(binding) = flyfish_binding.as_ref()

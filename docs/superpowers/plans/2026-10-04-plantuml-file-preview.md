@@ -273,7 +273,7 @@ cargo test -p dozer-app preview::plantuml -- --nocapture
 
 ---
 
-## Task 6：预览加载、WebView 创建与 IPC 接线
+## Task 6：预览加载、WebView 创建与 IPC 接线 ✅ 完成（2026-10-05）
 
 **目的：** 让 Files/Project 真正打开 PlantUML host，并完成 ready → render → ack。
 
@@ -287,24 +287,41 @@ cargo test -p dozer-app preview::plantuml -- --nocapture
 - Modify: `crates/dozer-app/src/app/update.rs`（若消息处理实际落在此）
 - Test: 对应模块测试
 
-- [ ] PlantUML tab 在 Rendered mode 产生一个普通 preview WebView spec；Source mode 只产生
-      CodeMirror spec，不得同时驻留两份 host。
-- [ ] host URL 注入完整 `proj/panel/tab/doc`，与其它 rendered host 同一绑定来源。
-- [ ] runtime IPC 识别 PlantUML envelope，先解析、再 `HostBinding::validate`、最后投递。
-- [ ] 收到 `Ready` 后后台 `load_document`，成功才推 `SetDocument`；文件 IO/include
-      解析不得阻塞 UI 线程。
-- [ ] `Rendered` 只在 revision 与当前 load 匹配时迁为 Ready。
-- [ ] `Failed` 迁入统一 `BackendState::Failed`；可重试错误显示 Retry，策略拒绝不可
-      伪装成 retryable 引擎错误。
-- [ ] `OpenSource { line }` 切换当前 tab 到 Source mode，并复用现有 reveal 命令定位。
-- [ ] tab/项目关闭后的迟到事件静默丢弃；记录 debug 日志但不 Toast 骚扰用户。
-- [ ] Files 与 Project 相同 tab id 的测试确保资源键/事件不串线。
+- [x] PlantUML tab 在 Rendered mode 产生一个普通 preview WebView spec；Source mode 只产生
+      CodeMirror spec，不得同时驻留两份 host。（`uses_plantuml_host()` 门控；`preview_desired` 据此选 host。）
+- [x] host URL 注入完整 `proj/panel/tab/doc`，与其它 rendered host 同一绑定来源。
+      （`plantuml_viewer_url()` + `EditorHostBinding::new(...).document_id()`；runtime 用 `flyfish_binding_from_url` 复核。）
+- [x] runtime IPC 识别 PlantUML envelope，先解析、再 `HostBinding::validate`、最后投递。
+      （`runtime.rs` `is_plantuml_host` 分支 → `parse_plantuml_event` → `event.validate(binding)` → `Message::PlantUmlEvent`。）
+- [x] 收到 `Ready` 后后台 `load_document`，成功才推 `SetDocument`；文件 IO/include
+      解析不得阻塞 UI 线程。（`spawn_plantuml_load` 在 `spawn_blocking`；`try_push_initial_plantuml_state` 收敛为 rendezvous。）
+- [x] `Rendered` 只在 revision 与当前 load 匹配时迁为 Ready。
+      （`apply_plantuml_event(..)` 按 `event_revision` 门控；`apply_plantuml_event_rendered_stale_revision_is_dropped`。）
+- [x] `Failed` 迁入统一 `BackendState::Failed`；可重试错误显示 Retry，策略拒绝不可
+      伪装成 retryable 引擎错误。（`apply_plantuml_event` / `apply_plantuml_load_error` 走同一 `PreviewError`。）
+- [x] `OpenSource { line }` 切换当前 tab 到 Source mode，并复用现有 reveal 命令定位。
+      （`update.rs` OpenSource 臂 → `enter_code_mode` + `EditorCommand::RevealPosition`。）
+- [x] tab/项目关闭后的迟到事件静默丢弃；记录 debug 日志但不 Toast 骚扰用户。
+      （`PlantUmlLoaded` 世代不匹配 / 事件 tab 缺失 → 静默；`apply_plantuml_event_ignores_non_plantuml_tab`。）
+- [x] Files 与 Project 相同 tab id 的测试确保资源键/事件不串线。
+      （`take_pending_plantuml_commands_for(available_webview_ids, project_id, panel)`。）
 
 **验证：**
 
 ```bash
 cargo test -p dozer-app preview -- --nocapture
 ```
+
+**实现期修订（含 include 重写，2026-10-05）：** Task 0 spike 对“本地 include 生效”的
+断言只检查输出含 `<svg`，实测证明普通 `!include path` 被引擎**静默丢弃**（引擎只在
+尖括号 stdlib 形式 `!include <local/...>` 时查询 `PLANTUML_STDLIB`）。因此
+`preview/plantuml.rs`（Task 5 文件）新增**重写**：把根源码与每个 include 内容里项目内的
+include 指令改写为 `!include <local/<项目相对键>>`；新增测试
+`rewrites_plain_include_to_local_stdlib_form` / `rewrites_nested_include_relative_to_including_file`
+/ `rewrites_include_once_preserving_keyword` / `rewrites_includesub_preserving_tag` /
+`rewrites_stdlib_and_local_together` / `angle_bracket_stdlib_is_passed_through_untouched`，
+并把前端 `render-smoke.mjs` 的本地 include 断言改为**内容确实出现在 SVG**（含嵌套）。
+spec §12.3 已同步修订说明。
 
 ---
 

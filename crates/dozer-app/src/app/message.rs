@@ -646,6 +646,24 @@ pub enum Message {
         crate::preview::HostBinding,
         crate::preview::WebviewEnvelope<crate::preview::ImageAnnotateEvent>,
     ),
+    /// PlantUML viewer host(`dozer://plantuml-viewer/`)发回的已校验事件
+    /// (ready/rendered/failed/open_source)。binding 由 Rust 从 webview URL
+    /// 解析,不采信 JS 自报归属。
+    PlantUmlEvent(
+        crate::preview::HostBinding,
+        crate::preview::WebviewEnvelope<crate::preview::PlantUmlEvent>,
+    ),
+    /// Task 6:后台 `plantuml::load_document`(读取根文件 + 授权 include)完成
+    /// 回灌(后台线程 → UI 线程)。`project_id` 按项目路由;`generation` 用于
+    /// 丢弃过期结果(用户在加载期间关闭/重开/reload)。`result` 是待推给 host
+    /// 的文档,或带安全相对链的加载错误。
+    PlantUmlLoaded(
+        ProjectId,
+        PanelKind,
+        usize,
+        u64,
+        Result<crate::preview::PlantUmlDocument, crate::preview::PlantUmlLoadError>,
+    ),
     /// Tabular(ag-grid)预览 host 发回的已校验事件(ready/sheet_selected/
     /// window_request/window_applied/failed)。binding 由 Rust 从 webview URL
     /// 解析,不采信 JS 自报归属。

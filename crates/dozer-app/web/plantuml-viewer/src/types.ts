@@ -20,11 +20,16 @@ export interface Envelope<T> {
   payload: T;
 }
 
-/** One project-relative include file, content already authorized/read by Rust. */
+/**
+ * One project-relative include file, already authorized/read **and rewritten**
+ * by Rust. `content` has its own nested project-local includes rewritten to
+ * `!include <local/<project-relative>>`; register it under
+ * `PLANTUML_STDLIB.local[path]`.
+ */
 export interface PlantUmlInclude {
   /** Project-relative normalized path, e.g. `docs/diagrams/common.puml`. */
   path: string;
-  /** UTF-8 file contents. */
+  /** UTF-8 file contents with project-local includes already rewritten. */
   content: string;
 }
 

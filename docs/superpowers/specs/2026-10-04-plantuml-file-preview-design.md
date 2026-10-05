@@ -360,6 +360,22 @@ spike 证实引擎不访问文件系统，全部经注入全局：
 也不得给 JS 任意路径 fetch 权限。C4 等官方 stdlib 以固定版本 vendored 静态资源随应用
 发布（`c4.min.js` 180KB/gzip 24KB），页面引导时预置命名空间。
 
+> **修订（2026-10-05，实现期发现 Task 0 spike 误判）**：原 spike 断言本地 include
+> “通过 `PLANTUML_STDLIB` 生效”，但其断言只检查输出含 `<svg`。实测复核发现：
+> 浏览器构建的引擎**只在 `!include <base/path>`（尖括号 = stdlib）时走 `CBf`/`Er5`
+> 查询 `PLANTUML_STDLIB`**；普通相对 `!include path`（含 `./x.puml`、`dir/x.puml`）
+> 因无文件系统被**静默丢弃**（既不渲染内容也不报错）。这导致“项目内 include”在
+> spike 里从未真正验证过。
+>
+> **修正方案（已实现）**：Rust 解析器 `preview/plantuml.rs` 在授权、canonicalize、
+> 递归展开的同时，把**根源码与每个 include 内容里项目内的** include 指令**重写为
+> `!include <local/<项目相对键>>`**（`!include_once`/`!includesub` 保留关键字与
+> `!TAG` 后缀；尖括号 stdlib 原样透传）。前端只按 `PLANTUML_STDLIB.local[path] = 内容行
+> 数组` 播种，不再做任何按指令的判断。键是**项目相对路径**（位置无关），因此嵌套
+> include 也能正确解析——included 文件内部同样已被重写。回归测试已改为断言
+> **被 include 的内容真的出现在 SVG 里**（`render-smoke.mjs`），而非仅 `<svg`。
+> 未重写 `!includeurl`/远程/绝对/`..`/symlink 逃逸/动态构造的拒绝规则不变。
+
 ### 12.4 确定性与错误
 
 - 同一输入两次渲染**逐字节相同**；唯一易变字段是 SVG 上的 `plantuml-src` 数据属性，

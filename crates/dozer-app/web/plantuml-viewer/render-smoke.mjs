@@ -172,10 +172,27 @@ async function main() {
     await assert.rejects(() => render("@startuml\nAlice -> Bob"));
   });
 
-  await check("local !include resolves from virtual fs", async () => {
-    stdlib["local"] = { "common.puml": ["@startuml", "@enduml"] };
-    const svg = await render("@startuml\n!include local/common.puml\nAlice -> Bob\n@enduml");
-    assert.match(svg, /<svg/);
+  // Rust rewrites every project-local include to `!include <local/<rel>>` and
+  // registers the file under `PLANTUML_STDLIB.local[<rel>]`. Assert the
+  // included *content* actually renders — not merely that an <svg> was emitted
+  // (the old assertion passed even when the include was silently dropped).
+  await check("local !include renders included content", async () => {
+    stdlib["local"] = { "common.puml": ["participant IncludedNode"] };
+    const svg = await render(
+      "@startuml\n!include <local/common.puml>\nIncludedNode -> Bob\n@enduml",
+    );
+    assert.match(svg, /IncludedNode/, "included participant must appear in SVG");
+  });
+
+  await check("nested local !include resolves via project-relative keys", async () => {
+    stdlib["local"] = {
+      "docs/sub/a.puml": ["!include <local/docs/sub/b.puml>"],
+      "docs/sub/b.puml": ["participant DeepNode"],
+    };
+    const svg = await render(
+      "@startuml\n!include <local/docs/sub/a.puml>\nDeepNode -> Bob\n@enduml",
+    );
+    assert.match(svg, /DeepNode/, "nested included participant must appear in SVG");
   });
 
   await check("zero network attempts", () => {

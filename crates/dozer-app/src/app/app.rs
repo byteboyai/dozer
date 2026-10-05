@@ -1119,6 +1119,52 @@ impl App {
         out
     }
 
+    /// 构建本帧待注入 PlantUML viewer host 的脚本清单,同
+    /// `take_preview_tabular_scripts` 的节奏。
+    pub fn take_preview_plantuml_scripts(
+        &mut self,
+        kind: PanelKind,
+        available_webview_ids: &std::collections::HashSet<usize>,
+    ) -> Vec<(usize, String)> {
+        let Some(ws) = self.active_workspace_mut() else {
+            return Vec::new();
+        };
+        let Some(project_id) = ws.project.as_ref().map(|p| p.id) else {
+            return Vec::new();
+        };
+        let pane = ws.preview_pane_mut(kind);
+        let pending =
+            pane.take_pending_plantuml_commands_for(available_webview_ids, project_id, kind);
+        let mut out = Vec::new();
+        for (tab_id, command) in pending {
+            let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
+                continue;
+            };
+            if !tab.uses_plantuml_host() {
+                continue;
+            }
+            let crate::preview::TabKind::File(path) = &tab.kind else {
+                continue;
+            };
+            let binding =
+                crate::preview::EditorHostBinding::new(project_id, kind, tab_id, path.clone());
+            let envelope = crate::preview::encode_plantuml_command(
+                project_id,
+                kind,
+                tab_id,
+                &binding.document_id(),
+                tab.web_revision,
+                None,
+                command,
+            );
+            out.push((
+                binding.webview_id(),
+                crate::preview::dispatch_script(&envelope),
+            ));
+        }
+        out
+    }
+
     /// Git Log diff webview 的待注入脚本(0 或 1 条)。与
     /// `take_preview_editor_scripts` 分开:diff 面板不是 tab 模型,内容经    /// `EditorCommand::SetDiffDocument` 推送,绑定是固定的
     /// `EditorHostBinding::diff_url`(project_id/tab_id 恒 0)。
