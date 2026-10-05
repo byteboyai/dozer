@@ -293,6 +293,46 @@ impl State {
     }
 }
 
+/// 设置窗口已经关掉(状态没了)时到达的安装/停止/卸载结果:状态机已不存在,但事情照样发生了——
+/// 仍要通知主窗口刷新应用列表(同步图标栏),并把失败/成功告诉用户(Toast)。其余消息在没有窗口时无意义,忽略。
+pub fn orphan_result_effects(msg: &Message) -> Vec<Effect> {
+    match msg {
+        Message::InstallDone(Ok(())) => vec![
+            Effect::Toast {
+                level: Level::Success,
+                text: "应用已安装".into(),
+                key: "apps:install".into(),
+            },
+            Effect::HostChanged,
+        ],
+        Message::InstallDone(Err(f)) => vec![
+            Effect::Toast {
+                level: Level::Error,
+                text: format!("安装失败:{}", f.text()),
+                key: "apps:install".into(),
+            },
+            Effect::HostChanged,
+        ],
+        Message::ActionDone(id, kind, result) => {
+            let mut effects = Vec::new();
+            if let Err(f) = result {
+                let verb = match kind {
+                    ActKind::Stop => "停止",
+                    ActKind::Uninstall => "卸载",
+                };
+                effects.push(Effect::Toast {
+                    level: Level::Error,
+                    text: format!("{verb}应用 {id} 失败:{}", f.text()),
+                    key: format!("apps:act:{id}"),
+                });
+            }
+            effects.push(Effect::HostChanged);
+            effects
+        }
+        _ => Vec::new(),
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // 展示用的纯函数(可测):计划 → 要给用户看的行;运行时探测 → 一行文案;观察态 → 文案。
 // ---------------------------------------------------------------------------------------------
@@ -1070,5 +1110,57 @@ mod tests {
             }),
             "已退出 · 崩了"
         );
+    }
+
+    // ---- 设置窗口已关闭时到达的结果 ----
+
+    #[test]
+    fn results_that_arrive_after_the_settings_window_closed_still_refresh_the_host_and_toast() {
+        let ok = orphan_result_effects(&Message::InstallDone(Ok(())));
+        assert!(ok.contains(&Effect::HostChanged));
+        assert!(ok.iter().any(|e| matches!(
+            e,
+            Effect::Toast {
+                level: Level::Success,
+                ..
+            }
+        )));
+
+        let bad = orphan_result_effects(&Message::InstallDone(Err(fail(
+            AppErrorKind::Rejected,
+            "应用源码在审批之后发生了变化",
+        ))));
+        assert!(bad.iter().any(|e| matches!(e,
+            Effect::Toast { level: Level::Error, text, .. } if text.contains("源码在审批之后"))));
+        assert!(
+            bad.contains(&Effect::HostChanged),
+            "失败也刷新,列表反映真相"
+        );
+
+        let stop_ok =
+            orphan_result_effects(&Message::ActionDone("x-a".into(), ActKind::Stop, Ok(())));
+        assert_eq!(stop_ok, vec![Effect::HostChanged]);
+        let un_bad = orphan_result_effects(&Message::ActionDone(
+            "x-a".into(),
+            ActKind::Uninstall,
+            Err(fail(AppErrorKind::Conflict, "状态冲突")),
+        ));
+        assert!(un_bad.iter().any(|e| matches!(e,
+            Effect::Toast { level: Level::Error, text, .. } if text.contains("卸载") && text.contains("x-a"))));
+        assert!(un_bad.contains(&Effect::HostChanged));
+    }
+
+    #[test]
+    fn only_install_and_action_results_are_handled_without_a_window() {
+        for msg in [
+            Message::Opened,
+            Message::InstallClicked,
+            Message::ApproveClicked,
+            Message::FlowDismissed,
+            Message::ListLoaded(Ok(vec![])),
+            Message::ProbesLoaded(Ok(vec![])),
+        ] {
+            assert!(orphan_result_effects(&msg).is_empty(), "{msg:?}");
+        }
     }
 }

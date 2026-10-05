@@ -1540,7 +1540,7 @@ mod tests {
 - **设置页的列表只在打开页面与每次操作后刷新,不轮询**:另一处(CLI、其他窗口)改了状态,要重新切到该页才看到;主窗口图标栏由 `app_host` 的轮询保证最终一致。
 - **运行时探测只展示**:不提供"安装 uv/Python/Node"。
 - 审批卡在窄窗口下靠滚动查看;权限很多时没有分组折叠。
-- 卸载一个正在运行的应用:按钮只在非过渡态出现,运行中要先「停止」(dozerd 的 `uninstall` 对运行中的应用会拒绝,界面不替它兜底)。
+- 卸载一个正在运行的应用:按钮只在非过渡态出现(运行中也显示);dozerd 的 `uninstall` 会先停止再卸载,不需要用户先手动停止(计划初稿写成"会拒绝"是错的,评审时按 `AppManager::uninstall` 源码更正)。
 - 下载/弹窗/剪贴板权限即使在审批里被"批准",A4b1 的应用 webview 也一律拒绝下载与弹窗(评审后修订),所以这几条在静态 Web 上的强制等级应显示"不支持/仅声明"——展示的是 `enforcement_for` 的真实结果,A5 验收时核对它与 A4b1 的实际行为是否一致,不一致要修 `enforcement_for` 而不是改文案。
 
 ## 执行后修订
@@ -1549,3 +1549,12 @@ mod tests {
 - **Task 1 提交的 `Cargo.lock`:** 本地 `.cargo/config.toml` 对 `bytegit`/`byteui` 的 `[patch]` 会在 `cargo build` 时把这两条的 `source` 行去掉;提交前 `git checkout HEAD -- Cargo.lock` 还原,没有带上 patch 引起的改动(本任务无新增依赖)。
 - **Task 2:** 计划里 `run_apps_message(s, msg, client, handle, emit)` 与 `opened_apps` 分支都把 `emit` 按值传入,但 `settings::update` 之后不再用到 `emit`,而计划代码在两处 `run_apps_message` 之后仍有后续逻辑——按值传会被 move 两次。实际把 `update` 的 `emit` 形参加 `+ Clone` 约束(调用方传的是捕获 `Proxy` 的 `move` 闭包,`Proxy` 是 `Clone`,满足约束),两个调用点传 `emit.clone()`;`run_apps_message` 内部仍按计划用 `Arc<Mutex<_>>` 包住后再 spawn。全量 `cargo test -p dozer-app` 只有既有的 `extensions::files::tests::delete_confirm_spec_reflects_pending_target` 失败(base 上本来就红);`settings_apps.rs`/`settings.rs`/`app_host.rs`/`window_events.rs`/`app/update.rs` 无新 clippy 警告。
 - **Task 3 手工验收(Step 1):** 未执行——需要真实 GUI + dozerd 与一份准备好的静态应用目录,本环境无法自动化。清单(8 点)保留,留待人工按项核对;文档(Step 2)已先行更新。
+
+## 评审后修订(2026-10-05,分支 `a4c-fix`)
+
+独立审核(读代码,无 App 夹具可跑)找出两处计划设计缺陷,已修:
+
+- **设置窗口关闭后到达的结果丢失**:点「批准并安装」后立刻关窗,安装完成消息到达时设置状态已是 `None`,`settings::update` 丢弃它,既不刷新图标栏也不弹 Toast;而 `app_host` 只在应用面板可见时轮询,应用装上了却要重启 Dozer 才出现。修:`settings_apps::orphan_result_effects`(纯函数,有测试)在状态为 `None` 时把 `InstallDone`/`ActionDone` 翻成 `HostChanged` + Toast,由 `App::update` 的 Settings 分支执行(`Refresh` + `push_toast_keyed`)。
+- **dozerd 后起时应用列表永远不来**:启动时 dozerd 没起,首次拉取失败后 `last_poll` 已置位,没有应用面板可见就不再轮询;之后从设置里重启 dozerd 也不触发刷新。修两层:(1) `app_host` 在 `Phase::Disconnected` 时即使没有应用面板可见也按 `POLL_INTERVAL` 自愈重试,连上后恢复安静(`a_disconnected_host_keeps_polling_until_the_daemon_answers`);(2) 重启 dozerd 成功时立即发 `Refresh`(`App::update` 的一行,无自动化测试)。
+
+仍然没人在真实窗口里验过:手工验收清单(8 项)。

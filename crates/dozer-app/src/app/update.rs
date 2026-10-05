@@ -3914,6 +3914,14 @@ impl App {
                 let stop_succeeded = matches!(msg, settings::Message::AdvancedStopResult(Ok(())));
                 let restart_succeeded =
                     matches!(msg, settings::Message::AdvancedRestartResult(Ok(())));
+                // 设置窗口已经关了(状态是 `None`)时才到达的安装/停止/卸载结果:状态机不在了,事情照样发生了,
+                // 仍要刷新应用宿主、把结果告诉用户(见 `settings_apps::orphan_result_effects`)。
+                let orphan_effects = match (&self.settings, &msg) {
+                    (None, settings::Message::Apps(m)) => {
+                        crate::extensions::settings_apps::orphan_result_effects(m)
+                    }
+                    _ => Vec::new(),
+                };
                 let client = self.client.clone();
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
@@ -3921,6 +3929,17 @@ impl App {
                     let _ = proxy.send_event(Message::Settings(m));
                 };
                 settings::update(&mut self.settings, msg, &client, &handle, emit);
+                for effect in orphan_effects {
+                    match effect {
+                        crate::extensions::settings_apps::Effect::HostChanged => {
+                            self.app_host_update(crate::extensions::app_host::Message::Refresh);
+                        }
+                        crate::extensions::settings_apps::Effect::Toast { level, text, key } => {
+                            self.push_toast_keyed(LOG, level, text, &key);
+                        }
+                        _ => {}
+                    }
+                }
                 // 设置里的安装/停止/卸载改了已安装集合或运行状态:立刻刷新应用宿主的列表(同步图标栏)。
                 if self
                     .settings
@@ -3934,6 +3953,8 @@ impl App {
                 }
                 if restart_succeeded {
                     self.daemon_unavailable = None;
+                    // dozerd 刚被重新拉起:立刻拉一次应用列表(同步图标栏),不等下一次轮询。
+                    self.app_host_update(crate::extensions::app_host::Message::Refresh);
                 }
                 if theme_changed {
                     self.with_focused_project(|ws, io| {
