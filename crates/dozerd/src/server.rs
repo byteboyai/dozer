@@ -1662,10 +1662,18 @@ mod tests {
             .to_string();
         assert!(err.contains("已在运行"), "{err}");
         drop(listener);
-        // 监听者没了:留下的 socket 文件只是陈旧文件,放行(`serve` 随后会清掉它)
-        ensure_single_instance(&socket)
-            .await
-            .expect("陈旧 socket 文件:放行");
+        // 监听者没了:留下的 socket 文件只是陈旧文件,放行(`serve` 随后会清掉它)。listener 关闭在内核里生效有
+        // 极短的异步窗口(全量并行跑测试时能观察到),所以轮询——与上面 `socket_has_live_listener_false_for_stale_file`
+        // 同一手法
+        let mut outcome = ensure_single_instance(&socket).await;
+        for _ in 0..50 {
+            if outcome.is_ok() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            outcome = ensure_single_instance(&socket).await;
+        }
+        outcome.expect("陈旧 socket 文件:放行");
     }
 
     #[tokio::test]
