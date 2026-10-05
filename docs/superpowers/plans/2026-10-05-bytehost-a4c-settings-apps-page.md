@@ -42,9 +42,9 @@
 **Interfaces:**
 - Produces: `settings_apps::{State, Message, Effect, Flow, Load, ActKind, PlanView, PermLine, plan_view, runtime_line, observed_label, enforcement_label, provenance_label, trust_label, view, APPROVER}`、`Outbox::push_keyed(scope, level, text, key)`。
 
-- [ ] **Step 1: 写失败测试。** 新文件的 `tests` 模块(17 个)先写,`State::update` 先 `todo!()`;`toast.rs` 的 `outbox_push_keyed_carries_the_dedupe_key`。
-- [ ] **Step 2: RED。** `cargo test -p dozer-app -- settings_apps outbox_push_keyed` → 失败。
-- [ ] **Step 3: 实现。** 新文件全文(含视图函数 `view`;视图只画 `State` 与展示函数,不含逻辑):
+- [x] **Step 1: 写失败测试。** 新文件的 `tests` 模块(17 个)先写,`State::update` 先 `todo!()`;`toast.rs` 的 `outbox_push_keyed_carries_the_dedupe_key`。
+- [x] **Step 2: RED。** `cargo test -p dozer-app -- settings_apps outbox_push_keyed` → 失败。
+- [x] **Step 3: 实现。** 新文件全文(含视图函数 `view`;视图只画 `State` 与展示函数,不含逻辑):
 
 ```rust
 //! 设置弹窗的「应用」页(bytehost A4c):运行时探测、已安装应用的停止/卸载、安装流程
@@ -1181,9 +1181,9 @@ mod tests {
          o.push_err(TEST_TODO, "保存失败", &Ok::<(), String>(()));
 ```
 
-- [ ] **Step 4: GREEN。** `cargo fmt -p dozer-app && cargo test -p dozer-app -- settings_apps outbox` → 全过(`settings_apps` 17 个 + toast 新增 1 个)。
-- [ ] **Step 5: 变异检查(每条必须让对应测试 FAILED,再还原):** (a) `approved_ms: now_ms` 改成 `0`;(b) `FlowDismissed` 的可取消集合里加上 `Flow::Installing { .. }`;(c) `plan_view` 里 `.map(|e| e.enforcement)` 后追加 `.map(|_| Enforcement::Enforced)`;(d) `ActionDone` 失败分支里在 `Toast` 前多塞一个 `Effect::List`。
-- [ ] **Step 6: Commit。** `git commit -am "feat(dozer-app): settings_apps state machine, plan view and apps tab view (A4c task 1)"`
+- [x] **Step 4: GREEN。** `cargo fmt -p dozer-app && cargo test -p dozer-app -- settings_apps outbox` → 全过(`settings_apps` 17 个 + toast 新增 1 个)。
+- [x] **Step 5: 变异检查(每条必须让对应测试 FAILED,再还原):** (a) `approved_ms: now_ms` 改成 `0`;(b) `FlowDismissed` 的可取消集合里加上 `Flow::Installing { .. }`;(c) `plan_view` 里 `.map(|e| e.enforcement)` 后追加 `.map(|_| Enforcement::Enforced)`;(d) `ActionDone` 失败分支里在 `Toast` 前多塞一个 `Effect::List`。
+- [x] **Step 6: Commit。** `git commit -am "feat(dozer-app): settings_apps state machine, plan view and apps tab view (A4c task 1)"`
 
 ### Task 2: 接线(设置页、选目录、刷新主窗口)
 
@@ -1193,9 +1193,9 @@ mod tests {
 - Consumes: Task 1;A4b2 的 `app_host::{Failure, State, Message}`(`Failure::text` 改为 `pub(crate)`)。
 - Produces: `app_host::Message::Refresh`(列表在途时忽略,否则立刻拉一次)、`SettingsTab::Apps`、`settings::Message::Apps`、`settings::State.apps`/`take_host_changed()`、`run_apps_message`(私有)。
 
-- [ ] **Step 1: 写失败测试。** `app_host.rs` 的 `refresh_fetches_the_list_unless_one_is_already_in_flight`;`settings.rs` 里已有的 `test_state` 夹具补两个新字段(编译层面的改动,不是行为测试)。
-- [ ] **Step 2: RED。** `cargo test -p dozer-app app_host::tests::refresh` → 编译失败(`Message::Refresh` 不存在)。
-- [ ] **Step 3: 实现。**
+- [x] **Step 1: 写失败测试。** `app_host.rs` 的 `refresh_fetches_the_list_unless_one_is_already_in_flight`;`settings.rs` 里已有的 `test_state` 夹具补两个新字段(编译层面的改动,不是行为测试)。
+- [x] **Step 2: RED。** `cargo test -p dozer-app app_host::tests::refresh` → 编译失败(`Message::Refresh` 不存在)。
+- [x] **Step 3: 实现。**
 
 ```diff
 --- a/crates/dozer-app/src/extensions/app_host.rs
@@ -1515,9 +1515,9 @@ mod tests {
                  }
 ```
 
-- [ ] **Step 4: 静态核对。** `run_apps_message` 里 `Effect::PickSource` 是空操作(对话框只在窗口层弹);`window_events.rs` 的拦截先 `app.update(InstallClicked)` 再弹对话框再 `app.update(SourcePicked(..))`,保证状态机先进入 `Picking`;设置页的 Toast 只经 `outbox`;`Failure::from_client_error` 是唯一把 `anyhow` 还原成 `AppFailure` 的地方。
-- [ ] **Step 5: 全量门禁。** `cargo fmt --check -p dozer-app && bash scripts/check-log-scope.sh && bash scripts/check-bytehost-apps-deps.sh && cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets` → 测试全过,**除**既有的环境相关失败(`extensions::files::tests::delete_confirm_spec_reflects_pending_target`,以及在 worktree 里不稳定的 `extensions::git_log::tests::build_marks_head_branch_and_labels`/`build_populates_time_and_is_merge`;执行前先在 main 上复核它们本来就红);clippy 里 `settings_apps.rs`/`app_host.rs`/`settings.rs` 没有新警告。
-- [ ] **Step 6: Commit。** `git commit -am "feat(dozer-app): wire the settings apps tab (picker, effects, host refresh) (A4c task 2)"`
+- [x] **Step 4: 静态核对。** `run_apps_message` 里 `Effect::PickSource` 是空操作(对话框只在窗口层弹);`window_events.rs` 的拦截先 `app.update(InstallClicked)` 再弹对话框再 `app.update(SourcePicked(..))`,保证状态机先进入 `Picking`;设置页的 Toast 只经 `outbox`;`Failure::from_client_error` 是唯一把 `anyhow` 还原成 `AppFailure` 的地方。
+- [x] **Step 5: 全量门禁。** `cargo fmt --check -p dozer-app && bash scripts/check-log-scope.sh && bash scripts/check-bytehost-apps-deps.sh && cargo test -p dozer-app && cargo clippy -p dozer-app --all-targets` → 测试全过,**除**既有的环境相关失败(`extensions::files::tests::delete_confirm_spec_reflects_pending_target`,以及在 worktree 里不稳定的 `extensions::git_log::tests::build_marks_head_branch_and_labels`/`build_populates_time_and_is_merge`;执行前先在 main 上复核它们本来就红);clippy 里 `settings_apps.rs`/`app_host.rs`/`settings.rs` 没有新警告。
+- [x] **Step 6: Commit。** `git commit -am "feat(dozer-app): wire the settings apps tab (picker, effects, host refresh) (A4c task 2)"`
 
 ### Task 3: 手工验收 + 文档
 
@@ -1532,7 +1532,7 @@ mod tests {
   6. 启动该应用(面板里「启动」)后回设置:列表显示「运行中」,「停止」可用 → 停止 → 状态变「已停止」,面板回到「应用未运行」;
   7. 「卸载」→ 二选一确认 → 「保留数据」:条目从图标栏消失、若正显示它则该栏退到第一个面板;重装同一应用,确认数据还在;再「连数据一起删」一次,确认数据没了;
   8. 停掉 dozerd 后打开「应用」页:列表/探测显示失败原因,不崩。
-- [ ] **Step 2: Commit + 文档。** 规格 A4 行补"A4c 已完成:设置「应用」页(探测/安装审批/停止/卸载),**A4 全部完成**,见 `plans/2026-10-05-bytehost-a4c-settings-apps-page.md`;下一步 A5(Excalidraw 端到端验收)";`CLAUDE.md` 的 bytehost-apps 行补一句"安装/卸载/停止界面在设置「应用」页(`extensions/settings_apps.rs`,纯状态机);来源固定为本机目录(`Local`/`Trusted`),审批的就是展示的那份计划"。
+- [x] **Step 2: Commit + 文档。** 规格 A4 行补"A4c 已完成:设置「应用」页(探测/安装审批/停止/卸载),**A4 全部完成**,见 `plans/2026-10-05-bytehost-a4c-settings-apps-page.md`;下一步 A5(Excalidraw 端到端验收)";`CLAUDE.md` 的 bytehost-apps 行补一句"安装/卸载/停止界面在设置「应用」页(`extensions/settings_apps.rs`,纯状态机);来源固定为本机目录(`Local`/`Trusted`),审批的就是展示的那份计划"。
 
 ## 已知局限
 
@@ -1542,3 +1542,10 @@ mod tests {
 - 审批卡在窄窗口下靠滚动查看;权限很多时没有分组折叠。
 - 卸载一个正在运行的应用:按钮只在非过渡态出现,运行中要先「停止」(dozerd 的 `uninstall` 对运行中的应用会拒绝,界面不替它兜底)。
 - 下载/弹窗/剪贴板权限即使在审批里被"批准",A4b1 的应用 webview 也一律拒绝下载与弹窗(评审后修订),所以这几条在静态 Web 上的强制等级应显示"不支持/仅声明"——展示的是 `enforcement_for` 的真实结果,A5 验收时核对它与 A4b1 的实际行为是否一致,不一致要修 `enforcement_for` 而不是改文案。
+
+## 执行后修订
+
+- **Task 1:** 测试与实现一起写(未逐字走 RED→GREEN 两步)。`Failure::text` 的 `pub(crate)` 提升提前到 Task 1 做(计划排在 Task 2,但 `settings_apps.rs` 在 Task 1 就要用它)。Step 5 的四条变异检查(a–d)全部按预期让对应测试 FAILED,再还原通过。18 条测试全过。Task 1 提交后剩余的 dead_code/clippy 警告属预期,Task 2 接线后消失。
+- **Task 1 提交的 `Cargo.lock`:** 本地 `.cargo/config.toml` 对 `bytegit`/`byteui` 的 `[patch]` 会在 `cargo build` 时把这两条的 `source` 行去掉;提交前 `git checkout HEAD -- Cargo.lock` 还原,没有带上 patch 引起的改动(本任务无新增依赖)。
+- **Task 2:** 计划里 `run_apps_message(s, msg, client, handle, emit)` 与 `opened_apps` 分支都把 `emit` 按值传入,但 `settings::update` 之后不再用到 `emit`,而计划代码在两处 `run_apps_message` 之后仍有后续逻辑——按值传会被 move 两次。实际把 `update` 的 `emit` 形参加 `+ Clone` 约束(调用方传的是捕获 `Proxy` 的 `move` 闭包,`Proxy` 是 `Clone`,满足约束),两个调用点传 `emit.clone()`;`run_apps_message` 内部仍按计划用 `Arc<Mutex<_>>` 包住后再 spawn。全量 `cargo test -p dozer-app` 只有既有的 `extensions::files::tests::delete_confirm_spec_reflects_pending_target` 失败(base 上本来就红);`settings_apps.rs`/`settings.rs`/`app_host.rs`/`window_events.rs`/`app/update.rs` 无新 clippy 警告。
+- **Task 3 手工验收(Step 1):** 未执行——需要真实 GUI + dozerd 与一份准备好的静态应用目录,本环境无法自动化。清单(8 点)保留,留待人工按项核对;文档(Step 2)已先行更新。
