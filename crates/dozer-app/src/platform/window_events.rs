@@ -2647,6 +2647,8 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             // 群聊面板可见且需要(加载群列表/有发言进行中)时,经 `rev` 增量
             // 轮询 `dozerd`;没有发言时不空转(`group_chat_poll_wanted`)。
             app.poll_group_chat_if_active();
+            // 已安装应用列表:启动后拉一次;应用面板可见时按 `app_host::POLL_INTERVAL` 持续拉。
+            app.poll_app_host_if_due();
             // 新增任务闪光倒计时:到点且用户未手动改选就自动清除选中高亮
             // (每次都调,内部按 `until` 自己短路,不再显式判断 `flash_active`)。
             app.advance_todo_flash();
@@ -2687,7 +2689,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             // 返回 `None` 不再空转。
             let next_drag_expand = app.next_drag_hover_expand_wake();
             let next_toast = app.next_toast_wake();
-            let wakes: [(bool, Duration); 8] = [
+            let wakes: [(bool, Duration); 9] = [
                 (
                     app.any_hover_anim_active(),
                     crate::event::HOVER_ANIM_INTERVAL,
@@ -2696,6 +2698,10 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 (
                     app.group_chat_poll_wanted(),
                     crate::extensions::group_chat::POLL_INTERVAL,
+                ),
+                (
+                    app.app_host_poll_wanted(),
+                    crate::extensions::app_host::POLL_INTERVAL,
                 ),
                 (app.dragging_tab().is_some(), DRAG_REDRAW_INTERVAL),
                 (

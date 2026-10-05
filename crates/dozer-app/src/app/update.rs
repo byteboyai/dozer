@@ -1917,6 +1917,7 @@ impl App {
             Message::GroupChatShell(crate::extensions::group_chat::ShellMessage::Retry) => {
                 self.group_chat_webview.clear_failed();
             }
+            Message::AppHost(msg) => self.app_host_update(msg),
             Message::GroupChat(msg) => {
                 let project_id = msg.project_id();
                 self.with_project(project_id, |ws, io| {
@@ -5209,7 +5210,10 @@ impl App {
             PanelKind::GroupChat => self.with_focused_project(|ws, _io| {
                 crate::extensions::group_chat::on_activate(&mut ws.group_chat);
             }),
-            PanelKind::Files | PanelKind::Web | PanelKind::Agent | PanelKind::App(_) => {}
+            PanelKind::App(slot) => {
+                self.app_host_update(crate::extensions::app_host::Message::PanelShown(slot));
+            }
+            PanelKind::Files | PanelKind::Web | PanelKind::Agent => {}
         }
     }
 

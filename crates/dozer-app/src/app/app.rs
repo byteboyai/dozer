@@ -467,6 +467,8 @@ pub struct App {
     pub(crate) group_chat_webview: crate::extensions::group_chat::WebviewPushState,
     /// 应用面板当前要加载的地址(bytehost A4b1,见 `app_webview`)。
     pub(crate) app_views: crate::app_webview::AppViews,
+    /// 已安装应用的列表轮询与每个应用面板的状态机(bytehost A4b2,见 `extensions::app_host`)。
+    pub(crate) app_host: crate::extensions::app_host::State,
     /// 数据库面板 App 级状态(哪些驱动类型在"新增数据源"下拉里可选,
     /// 启动时读盘)——见 `extensions::database::AppState`。
     pub(crate) database: database::AppState,
@@ -856,6 +858,7 @@ impl App {
             todo_webview: crate::extensions::todo::WebviewPushState::default(),
             group_chat_webview: crate::extensions::group_chat::WebviewPushState::default(),
             app_views: crate::app_webview::AppViews::default(),
+            app_host: crate::extensions::app_host::State::default(),
             database: database::AppState::load(),
             footbar: footbar::AppState::default(),
             toast: toast::ToastCenter::default(),
@@ -1702,6 +1705,104 @@ impl App {
             return;
         };
         crate::extensions::group_chat::poll_if_due(&mut ws.group_chat, project_id, now, &io);
+    }
+
+    /// 当前可见(未收起、未被另一侧放大盖住)的应用面板;没有返回 `None`。
+    pub(crate) fn visible_app_slot(&self) -> Option<AppSlot> {
+        let left = match self.left_view {
+            PanelKind::App(slot) if !self.left_collapsed => Some(slot),
+            _ => None,
+        };
+        let right = match self.right_view {
+            PanelKind::App(slot) if !self.right_collapsed => Some(slot),
+            _ => None,
+        };
+        match self.maximized {
+            Some(MaximizedPane::Left) => left,
+            Some(MaximizedPane::Right) => right,
+            None => left.or(right),
+        }
+    }
+
+    /// `about_to_wait` 是否要为应用宿主排下一拍唤醒(见 `app_host::State::poll_wanted`)。
+    pub fn app_host_poll_wanted(&self) -> bool {
+        self.app_host.poll_wanted(self.visible_app_slot().is_some())
+    }
+
+    /// `ResumeTimeReached` 时调用:到点就拉一次已安装应用列表。
+    pub fn poll_app_host_if_due(&mut self) {
+        let effects = self
+            .app_host
+            .poll_if_due(std::time::Instant::now(), self.visible_app_slot());
+        self.run_app_host_effects(effects);
+    }
+
+    /// 应用宿主状态机的消息入口(异步结果、点击、面板切入都走这里)。
+    pub(crate) fn app_host_update(&mut self, msg: crate::extensions::app_host::Message) {
+        let effects = self
+            .app_host
+            .update(msg, std::time::Instant::now(), self.visible_app_slot());
+        self.run_app_host_effects(effects);
+    }
+
+    /// 执行状态机吐出的副作用:发请求(结果经 `proxy` 回到 `Message::AppHost`)、同步 rail、写/清
+    /// 启动地址、弹 Toast。**启动地址是秘密,不写日志。**
+    fn run_app_host_effects(&mut self, effects: Vec<crate::extensions::app_host::Effect>) {
+        use crate::extensions::app_host::{Act, Effect, Failure, Message as M};
+        for effect in effects {
+            match effect {
+                Effect::FetchList => {
+                    let (client, proxy) = (self.client.clone(), self.proxy.clone());
+                    self.handle.spawn(async move {
+                        let result = client
+                            .app_list()
+                            .await
+                            .map_err(|e| Failure::from_client_error(&e));
+                        let _ = proxy.send_event(Message::AppHost(M::ListLoaded(result)));
+                    });
+                }
+                Effect::FetchLaunchUrl(slot) => {
+                    let Ok(id) = bytehost_apps::id::AppId::new(slot.id()) else {
+                        continue;
+                    };
+                    let (client, proxy) = (self.client.clone(), self.proxy.clone());
+                    self.handle.spawn(async move {
+                        let result = client
+                            .app_launch_url(id)
+                            .await
+                            .map_err(|e| Failure::from_client_error(&e));
+                        let _ =
+                            proxy.send_event(Message::AppHost(M::LaunchUrlLoaded(slot, result)));
+                    });
+                }
+                Effect::StartApp(slot) | Effect::StopApp(slot) => {
+                    let act = if matches!(effect, Effect::StartApp(_)) {
+                        Act::Start
+                    } else {
+                        Act::Stop
+                    };
+                    let Ok(id) = bytehost_apps::id::AppId::new(slot.id()) else {
+                        continue;
+                    };
+                    let (client, proxy) = (self.client.clone(), self.proxy.clone());
+                    self.handle.spawn(async move {
+                        let result = match act {
+                            Act::Start => client.app_start(id).await.map(|_url| ()),
+                            Act::Stop => client.app_stop(id).await,
+                        }
+                        .map_err(|e| Failure::from_client_error(&e));
+                        let _ =
+                            proxy.send_event(Message::AppHost(M::ActionDone(slot, act, result)));
+                    });
+                }
+                Effect::SyncRail(slots) => self.sync_installed_apps(&slots),
+                Effect::SetUrl(slot, url) => self.app_views.set_url(slot, url),
+                Effect::ClearUrl(slot) => self.app_views.clear(slot),
+                Effect::Toast { level, text, key } => {
+                    self.push_toast_keyed(LOG, level, text, &key);
+                }
+            }
+        }
     }
 
     /// 设置某按钮的悬停目标（`true`=进入,`false`=离开）；动画由
@@ -2564,7 +2665,6 @@ impl App {
     /// 让图标栏里的应用条目与已安装应用集合一致(bytehost A3):卸载的应用条目消失,新装的追加到默认栏末尾。
     /// 当前正显示着已消失应用的那一侧退到该栏第一个面板。有改动才存盘。A3 里还没有调用者——A4 在拿到
     /// dozerd 的应用列表后调它。
-    #[allow(dead_code)]
     pub(crate) fn sync_installed_apps(&mut self, installed: &[AppSlot]) {
         let changed = self
             .shell_layout

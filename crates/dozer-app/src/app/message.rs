@@ -127,6 +127,8 @@ pub enum Message {
     /// 拦截处理,见 `update()` 对应分支),内核只转发不解读——见
     /// `extensions::todo::Message`。
     Todo(todo::Message),
+    /// 应用面板的宿主消息(见 `extensions::app_host`):列表/启动地址的异步结果与启停点击。
+    AppHost(crate::extensions::app_host::Message),
     /// 群聊面板的消息(见 `extensions::group_chat::Message`)。
     GroupChat(crate::extensions::group_chat::Message),
     /// 数据库面板的全部消息。`TestConnectionResult` 特化分支内核直接拦截

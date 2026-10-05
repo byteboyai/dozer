@@ -105,12 +105,10 @@ pub(crate) struct AppViews {
 }
 
 impl AppViews {
-    #[allow(dead_code)] // A4b2 的启动流程调用
     pub(crate) fn set_url(&mut self, slot: AppSlot, url: String) {
         self.urls.insert(slot, url);
     }
 
-    #[allow(dead_code)] // A4b2
     pub(crate) fn clear(&mut self, slot: AppSlot) {
         self.urls.remove(&slot);
     }
