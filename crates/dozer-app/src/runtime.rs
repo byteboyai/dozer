@@ -217,6 +217,75 @@ pub(crate) struct PoolSyncOutcome {
     pub denied: Vec<(crate::preview::ViewerKey, u64)>,
 }
 
+/// 应用 webview 里注入的脚本:只转发焦点/拖拽松开/缩放三类按键与鼠标事件(与预览 webview 的前三件套同款,
+/// 但**没有**查找、光标样式、标题回报——应用页面自己管这些)。
+const APP_INIT_SCRIPT: &str = "document.addEventListener('mousedown',function(){window.ipc.postMessage('focus')},true);document.addEventListener('mouseup',function(){window.ipc.postMessage('mouseup')},true);document.addEventListener('keydown',function(e){if(e.ctrlKey){var c=e.code,k=e.key;if(c==='Equal'||k==='+'||k==='='){e.preventDefault();window.ipc.postMessage('zoom_in');}else if(c==='Minus'||k==='-'){e.preventDefault();window.ipc.postMessage('zoom_out');}else if(c==='Digit1'||k==='1'){e.preventDefault();window.ipc.postMessage('zoom_reset');}}},true);";
+
+/// 创建一个应用 webview(`app_webview` 模块文档说明了信任模型)。与 `sync_webview_pool` 里给预览/浏览器
+/// 用的构建路径的区别——**应用代码不可信**:
+/// - 不注册 `dozer://` 自定义协议(预览 host/审阅快照/允许文件都只在那条协议后面);
+/// - IPC 只认 `focus`/`mouseup`/`zoom_*` 四类白名单消息,其余一律丢弃;
+/// - 导航只放行本应用 origin(`AppOrigin::allows_navigation`),`window.open`/新窗口一律拒绝,
+///   下载不处理(没有 download handler = 取消);
+/// - 每应用独立的 WKWebsiteDataStore(macOS 14+;更老的系统 wry 会退回默认存储)。
+///
+/// `spec.url` 不是该形状的应用地址时**不创建**(返回 `None`,记日志):fail closed。
+fn build_app_webview(
+    window: &winit::window::Window,
+    spec: &crate::preview::WebviewSpec,
+    bounds: wry::Rect,
+    proxy: winit::event_loop::EventLoopProxy<Message>,
+) -> Option<wry::WebView> {
+    let Some(origin) = crate::app_webview::AppOrigin::from_url(&spec.url) else {
+        dozer_core::log_error!(LOG, "应用 webview 的地址不是应用站点形状,拒绝创建");
+        return None;
+    };
+    let webview_id = spec.id;
+    let app_id = origin.app_id().to_owned();
+    let ipc_proxy = proxy;
+    let built = wry::WebViewBuilder::new()
+        .with_url(&spec.url)
+        .with_bounds(bounds)
+        .with_visible(spec.visible)
+        .with_allow_link_preview(false)
+        .with_data_store_identifier(crate::app_webview::data_store_identifier(&app_id))
+        .with_initialization_script(APP_INIT_SCRIPT)
+        .with_ipc_handler(move |req| {
+            let message = match req.body().as_str() {
+                "mouseup" => Message::WebViewMouseUp,
+                "focus" => Message::AppWebViewFocused(webview_id),
+                "zoom_in" => Message::ZoomIn,
+                "zoom_out" => Message::ZoomOut,
+                "zoom_reset" => Message::ZoomReset,
+                _ => return,
+            };
+            let _ = ipc_proxy.send_event(message);
+        })
+        .with_navigation_handler({
+            let app_id = app_id.clone();
+            move |url| {
+                let allowed = origin.allows_navigation(&url);
+                if !allowed {
+                    // 只记 scheme+host:被拒的地址可能带任意查询串。
+                    let target = url::Url::parse(&url)
+                        .map(|u| format!("{}://{}", u.scheme(), u.host_str().unwrap_or("")))
+                        .unwrap_or_else(|_| "无法解析的地址".into());
+                    dozer_core::log_warn!(LOG, app = %app_id, target = %target, "应用尝试离开自己的 origin,已拒绝");
+                }
+                allowed
+            }
+        })
+        .with_new_window_req_handler(|_url, _features| wry::NewWindowResponse::Deny)
+        .build_as_child(window);
+    match built {
+        Ok(view) => Some(view),
+        Err(e) => {
+            dozer_core::log_error!(LOG, app = %app_id, "创建应用 webview 失败: {e}");
+            None
+        }
+    }
+}
+
 pub(crate) fn sync_webview_pool(
     window: &winit::window::Window,
     pool: &mut std::collections::HashMap<usize, (wry::WebView, String)>,
@@ -407,6 +476,13 @@ pub(crate) fn sync_webview_pool(
                 // rAF,一旦这里跟着 `spec.visible=false` 真隐藏,docx 等依赖
                 // rAF 的渲染器又会卡死(见 `WebviewSpec::park_offscreen`)。
                 let _ = view.set_visible(spec.visible || spec.park_offscreen);
+            }
+            None if crate::app_webview::is_app_webview_id(spec.id) => {
+                // 应用面板(第三方/agent 生成的代码):走**单独的受限构建路径**,不装 `dozer://` 协议。
+                if let Some(view) = build_app_webview(window, &spec, bounds, proxy.clone()) {
+                    let _ = view.zoom(byteui::theme::icon_size::scale() as f64);
+                    pool.insert(spec.id, (view, spec.url.clone()));
+                }
             }
             None => {
                 let allowed = std::sync::Arc::clone(&allowed_files);

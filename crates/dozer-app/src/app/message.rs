@@ -562,6 +562,9 @@ pub enum Message {
     /// 不区分 Preview/Browser:`left_view` 互斥,`dispatch` 按 `shell_state`
     /// 判断归谁。
     WebViewFocused,
+    /// 应用 webview(`app_webview`)里的 mousedown:带 webview id,据此反查是哪个应用面板拿到了键盘焦点
+    /// (共用的 `WebViewFocused` 不带面板信息,会被误判成 Files/Project/Browser)。
+    AppWebViewFocused(usize),
     /// 子 webview 上的鼠标松开(winit 收不到,JS 经 IPC 发来)。目的是结束
     /// 页签拖拽:若用户把 tab 从 iced 表层一路拖进 webview 并在这里松开,
     /// winit 的根本 `MouseInput{Released}` 收不到,`TabDragEnd` 就永不触发,

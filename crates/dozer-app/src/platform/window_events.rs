@@ -2156,6 +2156,16 @@ impl Runner {
             *pending_focus = Some(FocusIntent::Terminal);
             *current_focus = FocusIntent::Terminal;
             app.blur_preview_editors();
+        } else if let Message::AppWebViewFocused(id) = &message {
+            // 应用 webview 拿到焦点:意图是"那个应用面板的 webview"(池里的 id 由槽号决定,见
+            // `app_webview::webview_id`);id 不在应用段(不会发生)就交回终端。
+            let intent = match crate::app_webview::slot_for_webview_id(*id) {
+                Some(slot) => FocusIntent::Preview(PanelKind::App(slot)),
+                None => FocusIntent::Terminal,
+            };
+            *pending_focus = Some(intent);
+            *current_focus = intent;
+            app.blur_preview_editors();
         } else if matches!(message, Message::WebViewFocused) {
             // 子 webview 上的 mousedown winit 收不到,JS 经 IPC 发来这条
             // 消息。它不携带面板信息(预览池/浏览器池共用同一 IPC 代理),
