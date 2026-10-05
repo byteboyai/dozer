@@ -97,11 +97,17 @@ pub fn preview_content_bounds_for(
                 let w = (avail_w - 16.0).max(0.0);
                 (x, y, w, h)
             }
+            // 应用面板(bytehost A4b1):单栏、无 chrome,放大态占满整条放大盒子。
+            PanelKind::App(_) => {
+                let h = (avail_h - 8.0).max(0.0);
+                let x = x0 + 8.0;
+                let w = (avail_w - 16.0).max(0.0);
+                (x, y0, w, h)
+            }
             // Git 提交图是原生 Canvas 绘制,不挂 webview 子视图。
             PanelKind::GitLog
             // Todo 面板同 GitLog,纯 iced 绘制,不挂 webview 子视图。
-            | PanelKind::Todo => (0.0, 0.0, 0.0, 0.0),
-            PanelKind::Project => {
+            | PanelKind::Todo => (0.0, 0.0, 0.0, 0.0),            PanelKind::Project => {
                 let y = y0 + byteui::theme::geometry::preview_chrome_top_px();
                 let h = (avail_h - byteui::theme::geometry::preview_chrome_top_px() - 8.0).max(0.0);
                 if state.dims.project_list_collapsed {
@@ -126,8 +132,7 @@ pub fn preview_content_bounds_for(
             | PanelKind::Agent
             | PanelKind::GroupChat
             | PanelKind::Usage
-            | PanelKind::CodeHealth
-            | PanelKind::App(_) => (0.0, 0.0, 0.0, 0.0),
+            | PanelKind::CodeHealth => (0.0, 0.0, 0.0, 0.0),
             // 审阅内容放大态:跟非放大态同一份 `!mirrored` 理由,只是
             // x0/avail_w/avail_h 换成放大盒子的换算(同 Files/Project 放大
             // 态分支)。
@@ -259,11 +264,22 @@ pub fn preview_content_bounds_for(
         PanelKind::Ssh => (0.0, 0.0, 0.0, 0.0),
         // Stage 4a 跨栏拖拽:该侧视图可为另一栏面板,纯 iced 绘制、该侧
         // 无 webview 可摆,装空矩形。
-        PanelKind::Agent
-        | PanelKind::GroupChat
-        | PanelKind::Usage
-        | PanelKind::CodeHealth
-        | PanelKind::App(_) => (0.0, 0.0, 0.0, 0.0),
+        PanelKind::Agent | PanelKind::GroupChat | PanelKind::Usage | PanelKind::CodeHealth => {
+            (0.0, 0.0, 0.0, 0.0)
+        }
+        // 应用面板(bytehost A4b1):单栏、无配对,占满整条面板区(同 `Web` 关掉收藏夹时的算法,
+        // 只是没有地址栏 chrome)。
+        PanelKind::App(_) => {
+            let y = y_top(0.0);
+            let h = h_for(y);
+            let zone_raw_w = match side {
+                Side::Left => left_zone_width(window_width, state),
+                Side::Right => right_zone_width(window_width, state),
+            };
+            let x = zone_x0 + 8.0 + m.left;
+            let w = (zone_raw_w - 16.0 - m.left - m.right).max(0.0);
+            (x, y, w, h)
+        }
         // 审阅内容(2026-08-21 webview trace 改造):跟 Files/Project 同款
         // "配对列宽 + preview chrome 高度"算法,但 `mirrored` 要取反——
         // app.rs 的 `PanelKind::Conversations` 分支未镜像时渲染顺序是
@@ -845,7 +861,7 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> Op
                         x >= x0 + cols.content_x && x < x0 + cols.content_x + cols.content_w
                     }
                 }
-                PanelKind::Web => x >= x0 && x < x0 + avail_w,
+                PanelKind::Web | PanelKind::App(_) => x >= x0 && x < x0 + avail_w,
                 PanelKind::Project => {
                     if state.dims.project_list_collapsed {
                         // 收起列表列:内容拿满放大盒子整宽,整条都算预览列。
@@ -878,7 +894,7 @@ pub fn is_in_preview_column(x: f32, window_width: f32, state: &ShellState) -> Op
                     x >= zone_x0 + cols.content_x && x < zone_x0 + cols.content_x + cols.content_w
                 }
             }
-            PanelKind::Web => x >= zone_x0 && x < zone_x0 + zone_w,
+            PanelKind::Web | PanelKind::App(_) => x >= zone_x0 && x < zone_x0 + zone_w,
             PanelKind::Project => {
                 if state.dims.project_list_collapsed {
                     // 收起列表列:内容拿满整条配对宽,整条都算预览列。
@@ -914,6 +930,81 @@ mod tests {
             browser_bookmarks_open: false,
             maximized: None,
         }
+    }
+
+    // ---- bytehost A4b1:应用面板 ----
+
+    fn app_state(id: &str) -> (ShellState, crate::app::AppSlot) {
+        let slot = crate::app::AppSlot::intern(id).unwrap();
+        let mut state = test_state();
+        state
+            .layout
+            .rail_layout
+            .sync_apps(&[slot], crate::app::Side::Left);
+        state.left_view = PanelKind::App(slot);
+        (state, slot)
+    }
+
+    #[test]
+    fn app_view_spans_the_whole_zone_with_no_chrome() {
+        let (state, _) = app_state("geo-app-a");
+        let (x, y, w, h) = preview_content_bounds_for(Side::Left, 1440.0, 900.0, &state);
+        let m = theme::region::left_zone().margin;
+        assert_eq!(x, byteui::theme::geometry::icon_rail_width() + 8.0 + m.left);
+        assert_eq!(w, left_zone_width(1440.0, &state) - 16.0 - m.left - m.right);
+        assert_eq!(
+            y,
+            byteui::theme::geometry::top_bar_height() + m.top,
+            "没有 chrome 高度"
+        );
+        assert_eq!(
+            h,
+            900.0 - y - m.bottom - byteui::theme::geometry::status_bar_height(),
+            "底部扣 footbar"
+        );
+    }
+
+    #[test]
+    fn app_view_is_hidden_when_collapsed_or_covered_by_the_other_sides_maximize() {
+        let (state, _) = app_state("geo-app-b");
+        let collapsed = ShellState {
+            left_collapsed: true,
+            ..state.clone()
+        };
+        assert_eq!(
+            preview_content_bounds_for(Side::Left, 1440.0, 900.0, &collapsed),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+        let covered = ShellState {
+            maximized: Some(MaximizedPane::Right),
+            ..state
+        };
+        assert_eq!(
+            preview_content_bounds_for(Side::Left, 1440.0, 900.0, &covered),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn a_maximized_app_view_fills_the_maximize_box() {
+        let (state, _) = app_state("geo-app-c");
+        let state = ShellState {
+            maximized: Some(MaximizedPane::Left),
+            ..state
+        };
+        let (x, y, w, h) = preview_content_bounds_for(Side::Left, 1440.0, 900.0, &state);
+        let (x0, avail_w) = maximized_box_x_range(1440.0);
+        assert_eq!((x, w), (x0 + 8.0, avail_w - 16.0));
+        assert!(y > 0.0 && h > 0.0);
+    }
+
+    #[test]
+    fn clicks_inside_an_app_column_are_routed_to_that_app() {
+        let (state, slot) = app_state("geo-app-d");
+        assert_eq!(
+            is_in_preview_column(400.0, 1440.0, &state),
+            Some(PanelKind::App(slot))
+        );
     }
 
     #[test]

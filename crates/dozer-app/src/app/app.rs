@@ -465,6 +465,8 @@ pub struct App {
     pub(crate) todo_webview: crate::extensions::todo::WebviewPushState,
     /// 群聊内容区 webview 推送状态(App 级,固定单槽)。
     pub(crate) group_chat_webview: crate::extensions::group_chat::WebviewPushState,
+    /// 应用面板当前要加载的地址(bytehost A4b1,见 `app_webview`)。
+    pub(crate) app_views: crate::app_webview::AppViews,
     /// 数据库面板 App 级状态(哪些驱动类型在"新增数据源"下拉里可选,
     /// 启动时读盘)——见 `extensions::database::AppState`。
     pub(crate) database: database::AppState,
@@ -853,6 +855,7 @@ impl App {
             codehealth_webview: crate::extensions::codehealth::WebviewPushState::default(),
             todo_webview: crate::extensions::todo::WebviewPushState::default(),
             group_chat_webview: crate::extensions::group_chat::WebviewPushState::default(),
+            app_views: crate::app_webview::AppViews::default(),
             database: database::AppState::load(),
             footbar: footbar::AppState::default(),
             toast: toast::ToastCenter::default(),
@@ -2401,6 +2404,13 @@ impl App {
     /// 的 id 已加 `PROJECT_PREVIEW_ID_OFFSET`(见 workspace.rs 同名方法)。
     /// main.rs 焦点路由取句柄用。
     pub fn active_preview_webview_id(&self, kind: PanelKind) -> Option<usize> {
+        // 应用面板的 webview 不属于任何工作区(同一个应用跨项目共用),直接按槽号定 id。
+        if let PanelKind::App(slot) = kind {
+            return self
+                .app_views
+                .url(slot)
+                .map(|_| crate::app_webview::webview_id(slot));
+        }
         self.active_workspace()?.active_preview_webview_id(kind)
     }
 
@@ -3179,6 +3189,10 @@ impl App {
     /// FocusIntent::Preview`),否则用户正在打字给终端时,只因为预览列背景里
     /// 开着一个原生 tab 就会把按键错误地拦下来。
     pub fn active_preview_tab_has_native_editor(&self, kind: PanelKind) -> bool {
+        // 应用面板没有原生预览 tab;`preview_pane` 对未知面板会退到 Files 的窗格,会误拦应用的键盘。
+        if matches!(kind, PanelKind::App(_)) {
+            return false;
+        }
         self.active_workspace()
             .map(|ws| ws.active_preview_tab_has_native_editor(kind))
             .unwrap_or(false)
@@ -3583,6 +3597,23 @@ impl App {
                         loading_generation: None,
                         park_offscreen: false,
                     };
+                    out.push((spec, bounds));
+                }
+                continue;
+            }
+            // 应用面板(bytehost A4b1):单栏 webview,地址由 `app_views` 给(A4b2 的启动流程写入,没写
+            // 之前没有 spec,面板显示占位页)。被 iced 内浮层盖住时同样要隐藏。
+            if let PanelKind::App(slot) = kind {
+                let bounds = webview_geometry::preview_content_bounds_for(
+                    side,
+                    window_width,
+                    window_height,
+                    &self.shell_state(),
+                );
+                if bounds.2 > 0.0
+                    && bounds.3 > 0.0
+                    && let Some(spec) = self.app_views.spec(slot, !app_modal_open)
+                {
                     out.push((spec, bounds));
                 }
                 continue;
