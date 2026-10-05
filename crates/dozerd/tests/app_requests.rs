@@ -3,7 +3,7 @@
 use bytehost_apps::gateway::GatewayConfig;
 use bytehost_apps::id::AppId;
 use bytehost_apps::plan::{Approval, Provenance, TrustLevel};
-use bytehost_apps::proto::AppSource;
+use bytehost_apps::proto::{AppErrorKind, AppFailure, AppSource};
 use bytehost_apps::registry::UninstallMode;
 use dozer_client::Client;
 use dozerd::app_service::AppService;
@@ -165,8 +165,10 @@ async fn the_whole_install_run_stop_uninstall_cycle_works_over_the_socket() {
         .unwrap();
     assert!(c.app_list().await.unwrap().is_empty());
 
-    let err = c.app_start(id("excalidraw")).await.unwrap_err().to_string();
-    assert!(err.contains("没有安装"), "{err}");
+    let err = c.app_start(id("excalidraw")).await.unwrap_err();
+    let failure = err.downcast_ref::<AppFailure>().expect("带类别的失败");
+    assert_eq!(failure.kind, AppErrorKind::NotFound);
+    assert!(failure.message.contains("没有安装"), "{failure}");
     let runtimes = c.app_probe_runtimes().await.unwrap();
     assert_eq!(runtimes.len(), 3);
 }
@@ -176,8 +178,13 @@ async fn the_whole_install_run_stop_uninstall_cycle_works_over_the_socket() {
 async fn an_unavailable_app_host_does_not_break_the_rest_of_the_daemon() {
     let d = start_daemon(AppService::unavailable("gateway 端口 12345 已被占用")).await;
     assert!(d.client.list().await.unwrap().is_empty(), "会话列表照常");
-    let err = d.client.app_list().await.unwrap_err().to_string();
-    assert!(err.contains("12345") && err.contains("占用"), "{err}");
+    let err = d.client.app_list().await.unwrap_err();
+    let failure = err.downcast_ref::<AppFailure>().expect("带类别的失败");
+    assert_eq!(failure.kind, AppErrorKind::Unavailable);
+    assert!(
+        failure.message.contains("12345") && failure.message.contains("占用"),
+        "{failure}"
+    );
 }
 
 /// `Shutdown` 请求:应用跟随 dozerd 停止(gateway 关闭、站点撤下),但用户想要运行的意愿(desired)保留。
