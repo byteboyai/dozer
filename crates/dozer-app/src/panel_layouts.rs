@@ -77,6 +77,7 @@ fn legacy_global_dims(layout_path: &Path) -> PanelDims {
             codehealth_split: byteui::theme::geometry::default_split_ratio(),
             // 群聊面板两栏分栏同上。
             group_chat_split: byteui::theme::geometry::default_split_ratio(),
+            app_split: byteui::theme::geometry::default_split_ratio(),
         })
         .unwrap_or_default()
 }

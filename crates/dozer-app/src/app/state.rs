@@ -11,6 +11,7 @@ use crate::chrome::rail;
 use crate::panel_host::HoverSlot;
 use crate::workspace::Workspace;
 
+use super::AppSlot;
 use super::layout::{PanelDims, ShellLayout};
 
 /// 工作区 12 个面板的统一标识——workspace 图标栏拖拽换栏功能
@@ -18,7 +19,7 @@ use super::layout::{PanelDims, ShellLayout};
 /// 由原左栏(7)+ 右栏(3)两个枚举合并而来,variant 名字逐一沿用,
 /// 不改名。Stage 1(这次)只做了类型统一 + 数据模型,渲染/交互仍各自
 /// 按 `left_view`/`right_view` 字段走(Stage 2/4 才遍历 `RailLayout`)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PanelKind {
     Files,
     GitLog,
@@ -32,6 +33,57 @@ pub enum PanelKind {
     Conversations,
     Usage,
     CodeHealth,
+    /// 一个已安装的第三方应用(bytehost A3)。条目由 `RailLayout::sync_apps` 按已安装应用集合增删,
+    /// 不在 `PanelCatalog` 的描述符里。
+    App(AppSlot),
+}
+
+/// 落盘/日志用的面板名:内置面板沿用变体名(与旧的 derive 输出逐字一致),应用面板是 `app:<id>`。
+const BUILTIN_NAMES: [(PanelKind, &str); 12] = [
+    (PanelKind::Files, "Files"),
+    (PanelKind::GitLog, "GitLog"),
+    (PanelKind::Todo, "Todo"),
+    (PanelKind::Project, "Project"),
+    (PanelKind::Database, "Database"),
+    (PanelKind::Ssh, "Ssh"),
+    (PanelKind::Web, "Web"),
+    (PanelKind::Agent, "Agent"),
+    (PanelKind::GroupChat, "GroupChat"),
+    (PanelKind::Conversations, "Conversations"),
+    (PanelKind::Usage, "Usage"),
+    (PanelKind::CodeHealth, "CodeHealth"),
+];
+
+impl Serialize for PanelKind {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            PanelKind::App(slot) => s.serialize_str(&format!("app:{}", slot.id())),
+            other => {
+                let name = BUILTIN_NAMES
+                    .iter()
+                    .find(|(k, _)| k == other)
+                    .map(|(_, n)| *n)
+                    .expect("BUILTIN_NAMES 覆盖全部内置面板");
+                s.serialize_str(name)
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PanelKind {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(d)?;
+        if let Some(id) = name.strip_prefix("app:") {
+            return AppSlot::intern(id)
+                .map(PanelKind::App)
+                .ok_or_else(|| serde::de::Error::custom(format!("非法的应用面板 id {id:?}")));
+        }
+        BUILTIN_NAMES
+            .iter()
+            .find(|(_, n)| *n == name)
+            .map(|(k, _)| *k)
+            .ok_or_else(|| serde::de::Error::custom(format!("未知面板 {name:?}")))
+    }
 }
 
 impl PanelKind {
@@ -357,6 +409,7 @@ mod log_name_tests {
             PanelKind::Conversations => "conversations",
             PanelKind::Usage => "usage",
             PanelKind::CodeHealth => "code_health",
+            PanelKind::App(_) => "app",
         }
     }
 
@@ -440,6 +493,44 @@ mod log_name_tests {
                 found.iter().any(|n| n == expected),
                 "源码扫描没找到 panel 来源 {expected:?},实际找到 {found:?}"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod panel_kind_serde_tests {
+    use super::{AppSlot, PanelKind};
+
+    #[test]
+    fn builtin_panels_keep_their_legacy_variant_name_encoding() {
+        assert_eq!(
+            serde_json::to_string(&PanelKind::GroupChat).unwrap(),
+            "\"GroupChat\""
+        );
+        assert_eq!(
+            serde_json::from_str::<PanelKind>("\"CodeHealth\"").unwrap(),
+            PanelKind::CodeHealth
+        );
+    }
+
+    #[test]
+    fn app_panels_roundtrip_as_app_colon_id() {
+        let k = PanelKind::App(AppSlot::intern("serde-app").unwrap());
+        let json = serde_json::to_string(&k).unwrap();
+        assert_eq!(json, "\"app:serde-app\"");
+        assert_eq!(serde_json::from_str::<PanelKind>(&json).unwrap(), k);
+    }
+
+    #[test]
+    fn unknown_or_malformed_names_are_rejected() {
+        for bad in [
+            "\"Nope\"",
+            "\"app:\"",
+            "\"app:Bad_Id\"",
+            "\"app:../x\"",
+            "\"files\"",
+        ] {
+            assert!(serde_json::from_str::<PanelKind>(bad).is_err(), "{bad}");
         }
     }
 }

@@ -126,7 +126,8 @@ pub fn preview_content_bounds_for(
             | PanelKind::Agent
             | PanelKind::GroupChat
             | PanelKind::Usage
-            | PanelKind::CodeHealth => (0.0, 0.0, 0.0, 0.0),
+            | PanelKind::CodeHealth
+            | PanelKind::App(_) => (0.0, 0.0, 0.0, 0.0),
             // 审阅内容放大态:跟非放大态同一份 `!mirrored` 理由,只是
             // x0/avail_w/avail_h 换成放大盒子的换算(同 Files/Project 放大
             // 态分支)。
@@ -258,9 +259,11 @@ pub fn preview_content_bounds_for(
         PanelKind::Ssh => (0.0, 0.0, 0.0, 0.0),
         // Stage 4a 跨栏拖拽:该侧视图可为另一栏面板,纯 iced 绘制、该侧
         // 无 webview 可摆,装空矩形。
-        PanelKind::Agent | PanelKind::GroupChat | PanelKind::Usage | PanelKind::CodeHealth => {
-            (0.0, 0.0, 0.0, 0.0)
-        }
+        PanelKind::Agent
+        | PanelKind::GroupChat
+        | PanelKind::Usage
+        | PanelKind::CodeHealth
+        | PanelKind::App(_) => (0.0, 0.0, 0.0, 0.0),
         // 审阅内容(2026-08-21 webview trace 改造):跟 Files/Project 同款
         // "配对列宽 + preview chrome 高度"算法,但 `mirrored` 要取反——
         // app.rs 的 `PanelKind::Conversations` 分支未镜像时渲染顺序是

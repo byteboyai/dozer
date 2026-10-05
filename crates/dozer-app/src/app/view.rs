@@ -1133,7 +1133,28 @@ pub(crate) fn panel_body<'a>(
                 .into()
             }
         }
+        PanelKind::App(slot) => app_placeholder_pane(slot, zone_pane_border(zone, PaneCorner::All)),
     }
+}
+
+/// 应用面板的占位内容(bytehost A3):rail 条目与切换已经通了,应用自己的 wry 视图由 A4 接入。
+/// 只显示应用 id,不挂任何 webview(矩形恒为空,见 `webview_geometry`)。
+fn app_placeholder_pane<'a>(
+    slot: AppSlot,
+    border: Border,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    container(
+        text(format!("应用 {}", slot.id()))
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().dim),
+    )
+    .center(Length::Fill)
+    .style(move |_t: &iced_widget::Theme| container::Style {
+        background: Some(byteui::theme::color::current().panel.into()),
+        border,
+        ..container::Style::default()
+    })
+    .into()
 }
 
 /// 左面板区:按当前左视图组合"项目树+文件预览"配对或单个 Web 预览面板;

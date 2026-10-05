@@ -5201,7 +5201,7 @@ impl App {
             PanelKind::GroupChat => self.with_focused_project(|ws, _io| {
                 crate::extensions::group_chat::on_activate(&mut ws.group_chat);
             }),
-            PanelKind::Files | PanelKind::Web | PanelKind::Agent => {}
+            PanelKind::Files | PanelKind::Web | PanelKind::Agent | PanelKind::App(_) => {}
         }
     }
 

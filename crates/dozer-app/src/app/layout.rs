@@ -119,6 +119,8 @@ pub struct PanelDims {
     /// 群聊面板配对:群列表(右侧栏)占右面板区宽度的比例,聊天详情内容(左)
     /// 拿剩下的。语义同 `usage_split`(默认"内容在前、列表在后")。
     pub group_chat_split: f32,
+    /// 应用面板(bytehost A3)占位:A3 里应用面板没有配对分栏,只为让 `split`/`split_mut` 全覆盖。
+    pub app_split: f32,
 }
 
 /// 每项目尺寸的默认值(数值来源统一从这取,迁走的 `ShellLayout::default()`
@@ -150,6 +152,7 @@ pub(crate) fn default_panel_dims() -> PanelDims {
         usage_split: byteui::theme::geometry::default_split_ratio(),
         codehealth_split: byteui::theme::geometry::default_split_ratio(),
         group_chat_split: byteui::theme::geometry::default_split_ratio(),
+        app_split: byteui::theme::geometry::default_split_ratio(),
     }
 }
 
@@ -169,6 +172,7 @@ impl PanelDims {
             PanelKind::Conversations => self.conversations_split,
             PanelKind::Usage => self.usage_split,
             PanelKind::CodeHealth => self.codehealth_split,
+            PanelKind::App(_) => self.app_split,
         }
     }
 
@@ -186,6 +190,7 @@ impl PanelDims {
             PanelKind::Conversations => &mut self.conversations_split,
             PanelKind::Usage => &mut self.usage_split,
             PanelKind::CodeHealth => &mut self.codehealth_split,
+            PanelKind::App(_) => &mut self.app_split,
         }
     }
 
@@ -202,7 +207,7 @@ impl PanelDims {
             PanelKind::Conversations => Some(self.conversations_list_collapsed),
             PanelKind::GroupChat => Some(self.group_chat_list_collapsed),
             PanelKind::Usage => Some(self.usage_list_collapsed),
-            PanelKind::GitLog | PanelKind::Web | PanelKind::CodeHealth => None,
+            PanelKind::GitLog | PanelKind::Web | PanelKind::CodeHealth | PanelKind::App(_) => None,
         }
     }
 
@@ -217,7 +222,7 @@ impl PanelDims {
             PanelKind::Conversations => Some(&mut self.conversations_list_collapsed),
             PanelKind::GroupChat => Some(&mut self.group_chat_list_collapsed),
             PanelKind::Usage => Some(&mut self.usage_list_collapsed),
-            PanelKind::GitLog | PanelKind::Web | PanelKind::CodeHealth => None,
+            PanelKind::GitLog | PanelKind::Web | PanelKind::CodeHealth | PanelKind::App(_) => None,
         }
     }
 }
@@ -328,6 +333,7 @@ pub fn sanitize_panel_dims(d: PanelDims) -> PanelDims {
         usage_split: clamp_split(d.usage_split),
         codehealth_split: clamp_split(d.codehealth_split),
         group_chat_split: clamp_split(d.group_chat_split),
+        app_split: clamp_split(d.app_split),
     }
 }
 
@@ -631,7 +637,8 @@ fn default_list_first(kind: PanelKind) -> bool {
         | PanelKind::Todo
         | PanelKind::GitLog
         | PanelKind::Web => true,
-        PanelKind::Agent
+        PanelKind::App(_)
+        | PanelKind::Agent
         | PanelKind::GroupChat
         | PanelKind::Conversations
         | PanelKind::Usage
@@ -1077,7 +1084,9 @@ mod drag_characterization_tests {
             PanelKind::Conversations => dims.conversations_list_collapsed = true,
             PanelKind::GroupChat => dims.group_chat_list_collapsed = true,
             PanelKind::Usage => dims.usage_list_collapsed = true,
-            PanelKind::GitLog | PanelKind::Web | PanelKind::CodeHealth => return false,
+            PanelKind::GitLog | PanelKind::Web | PanelKind::CodeHealth | PanelKind::App(_) => {
+                return false;
+            }
         }
         true
     }

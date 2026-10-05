@@ -287,7 +287,7 @@ mod tests {
         for k in all {
             match k {
                 Files | GitLog | Todo | Project | Database | Ssh | Web | Agent | GroupChat
-                | Conversations | Usage | CodeHealth => {}
+                | Conversations | Usage | CodeHealth | App(_) => {}
             }
         }
         all.to_vec()

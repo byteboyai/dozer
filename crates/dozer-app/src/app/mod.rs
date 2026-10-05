@@ -12,6 +12,7 @@
 
 #[allow(clippy::module_inception)]
 mod app;
+mod app_slots;
 mod layout;
 mod message;
 mod state;
@@ -19,6 +20,7 @@ mod update;
 mod view;
 
 pub(crate) use app::*;
+pub use app_slots::AppSlot;
 pub(crate) use layout::*;
 pub(crate) use message::*;
 pub(crate) use state::*;
