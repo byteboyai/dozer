@@ -1968,6 +1968,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "bytehost-apps",
  "dozer-core",
  "dozerd",
  "tempfile",
@@ -1998,6 +1999,7 @@ name = "dozer-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytehost-apps",
  "directories",
  "serde",
  "serde_json",
@@ -2043,6 +2045,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "bytegit",
+ "bytehost-apps",
  "dozer-client",
  "dozer-core",
  "futures-util",

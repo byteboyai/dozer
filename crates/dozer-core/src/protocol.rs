@@ -859,6 +859,11 @@ pub struct SessionInfo {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
+    /// bytehost 应用宿主的请求(安装/启动/停止/列表……),原样交给 dozerd 里的 `AppService`。
+    /// 用结构体变体包一层,避免"内部带标签的枚举套内部带标签的枚举"。
+    App {
+        request: bytehost_apps::proto::AppRequest,
+    },
     ListSessions,
     CreateSession {
         name: String,
@@ -1348,6 +1353,10 @@ pub enum Request {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Reply {
+    /// 应用宿主请求的应答。失败走通用的 `Error`。
+    App {
+        reply: bytehost_apps::proto::AppReply,
+    },
     Sessions {
         sessions: Vec<SessionInfo>,
     },
@@ -1568,6 +1577,50 @@ pub fn decode_line<T: DeserializeOwned>(line: &str) -> anyhow::Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_host_requests_and_replies_roundtrip_through_the_line_codec() {
+        use bytehost_apps::id::AppId;
+        use bytehost_apps::plan::{Provenance, TrustLevel};
+        use bytehost_apps::proto::{
+            AppReply, AppRequest, AppSource, RuntimeAvailability, RuntimeProbe,
+        };
+
+        let requests = [
+            AppRequest::List,
+            AppRequest::ProbeRuntimes,
+            AppRequest::Start {
+                id: AppId::new("excalidraw").unwrap(),
+            },
+            AppRequest::Plan {
+                source: AppSource::LocalDir {
+                    path: "/tmp/x".into(),
+                },
+                provenance: Provenance::Local,
+                trust: TrustLevel::Trusted,
+            },
+        ];
+        for request in requests {
+            let req = Request::App { request };
+            let line = encode_line(&req);
+            assert!(line.contains("\"type\":\"app\""), "{line}");
+            assert_eq!(decode_line::<Request>(&line).unwrap(), req);
+        }
+        let reply = Reply::App {
+            reply: AppReply::Runtimes {
+                runtimes: vec![RuntimeProbe {
+                    runtime: "docker".into(),
+                    availability: RuntimeAvailability::NotInstalled,
+                }],
+            },
+        };
+        assert_eq!(decode_line::<Reply>(&encode_line(&reply)).unwrap(), reply);
+        // 未知的 op 在协议层就被拒绝
+        assert!(
+            decode_line::<Request>("{\"type\":\"app\",\"request\":{\"op\":\"format_disk\"}}")
+                .is_err()
+        );
+    }
 
     #[test]
     fn conversation_protocol_types_roundtrip() {

@@ -91,6 +91,7 @@ pub struct Stores {
     pub memories: std::sync::Arc<crate::memory::MemoryStore>,
     pub file_edit_history: std::sync::Arc<crate::file_edit_history::FileEditHistoryStore>,
     pub groups: std::sync::Arc<crate::group_service::GroupService>,
+    pub apps: std::sync::Arc<crate::app_service::AppService>,
 }
 
 /// 探测 `socket` 路径背后是否还有活着的 dozerd 在监听。`UnixListener::bind`
@@ -133,6 +134,7 @@ pub async fn serve(
         memories,
         file_edit_history,
         groups,
+        apps,
     } = stores;
     let preview_contexts = Arc::new(PreviewContextStore::new());
     let preview_commands = Arc::new(crate::preview_commands::PreviewCommandBus::new());
@@ -176,6 +178,7 @@ pub async fn serve(
         memories,
         file_edit_history,
         groups,
+        apps,
     };
     loop {
         tokio::select! {
@@ -422,6 +425,7 @@ async fn handle_conn(
         memories,
         file_edit_history,
         groups,
+        apps,
     } = stores;
     // 总结调度服务:提交/查询走持久化表,状态在 SQLite 里,跨连接可见。每个
     // 连接构造一份轻量句柄(只是 Arc 引用 + 一个 scratch 根路径)。
@@ -446,6 +450,10 @@ async fn handle_conn(
                 let reply = match decode_line::<Request>(&line) {
                     Err(e) => Reply::Error { message: format!("协议错误: {e}") },
                     Ok(req) => match req {
+                        Request::App { request } => match apps.handle(request).await {
+                            Ok(reply) => Reply::App { reply },
+                            Err(message) => Reply::Error { message },
+                        },
                         Request::ListSessions => Reply::Sessions { sessions: registry.list() },
                         Request::CreateSession { name, command, args, cwd, cols, rows, project_id, agent } => {
                             if draining.load(Ordering::SeqCst) {
@@ -556,6 +564,8 @@ async fn handle_conn(
                                 // 不注入 prompt、不等模型完成;下次启动由 worker
                                 // 恢复执行。
                                 drain_all_sessions(registry.clone(), summary_service.clone());
+                                // 应用跟随 dozerd:撤下站点、观察态落成 Stopped(desired 保留,下次启动自动恢复)
+                                apps.shutdown().await;
                                 should_exit_after_reply = true;
                                 Reply::Ok
                             }
@@ -1728,6 +1738,7 @@ mod tests {
                     memories,
                     file_edit_history,
                     groups,
+                    apps: crate::app_service::AppService::unavailable("test"),
                 },
                 crate::task_poller::new_in_flight(),
             );

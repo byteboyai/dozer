@@ -10,6 +10,8 @@ logging = ["dep:tracing", "dep:tracing-subscriber", "dep:tracing-appender"]
 
 [dependencies]
 anyhow.workspace = true
+# 应用宿主的线上类型(默认 feature:只有 serde 依赖,`dozer-hook`/`dozer-mcp` 的依赖闭包不会因此多出新 crate)
+bytehost-apps = { path = "../bytehost-apps" }
 directories.workspace = true
 serde.workspace = true
 serde_json.workspace = true

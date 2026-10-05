@@ -56,6 +56,7 @@ async fn hook_event_reaches_attached_client_and_list() {
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
                     groups: test_group_service(),
+                    apps: dozerd::app_service::AppService::unavailable("test"),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -294,6 +295,7 @@ async fn project_open_and_list_roundtrip() {
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
                     groups: test_group_service(),
+                    apps: dozerd::app_service::AppService::unavailable("test"),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -359,6 +361,7 @@ async fn record_and_get_session_summary_roundtrip() {
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
                     groups: test_group_service(),
+                    apps: dozerd::app_service::AppService::unavailable("test"),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -463,6 +466,7 @@ async fn close_with_summary_kills_session_after_ai_summary_recorded() {
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
                     groups: test_group_service(),
+                    apps: dozerd::app_service::AppService::unavailable("test"),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -575,6 +579,7 @@ async fn list_conversations_with_summaries_joins_correctly() {
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
                     groups: test_group_service(),
+                    apps: dozerd::app_service::AppService::unavailable("test"),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -687,6 +692,7 @@ async fn aider_hook_sequence_drives_state_machine() {
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
                     groups: test_group_service(),
+                    apps: dozerd::app_service::AppService::unavailable("test"),
                 },
                 dozerd::task_poller::new_in_flight(),
             )

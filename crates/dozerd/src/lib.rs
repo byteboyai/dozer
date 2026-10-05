@@ -1,4 +1,5 @@
 pub mod agent_context;
+pub mod app_service;
 pub mod backfill;
 pub mod bookmarks;
 pub mod code_health;

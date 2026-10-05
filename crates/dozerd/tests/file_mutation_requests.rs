@@ -42,6 +42,7 @@ async fn start_daemon() -> (
             dozerd::file_edit_history::FileEditHistoryStore::new(&db).unwrap(),
         ),
         groups: dozerd::group_service::GroupService::for_tests(),
+        apps: dozerd::app_service::AppService::unavailable("test"),
     };
     let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
     let s = sock.clone();
