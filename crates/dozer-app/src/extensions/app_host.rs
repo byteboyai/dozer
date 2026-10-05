@@ -112,6 +112,8 @@ pub enum PanelView {
     HostUnavailable(String),
     /// 还没拿到列表。
     Loading,
+    /// 连不上 dozerd,又没有任何已知的应用。
+    Disconnected,
     /// 列表里已经没有这个应用(刚被卸载)。
     Missing,
     Stopped,
@@ -141,6 +143,9 @@ pub struct State {
     /// 已经把启动地址交给 `AppViews` 的应用。
     url_set: HashSet<AppSlot>,
     acting: HashMap<AppSlot, Act>,
+    /// 已经成功拉到过一次列表(并因此同步过图标栏)。首次必须无条件同步:磁盘里的布局可能留着已卸载应用的
+    /// 条目,而 `order` 的初值也是空,不能靠"集合变了"来触发。
+    synced_once: bool,
 }
 
 impl State {
@@ -150,13 +155,13 @@ impl State {
     }
 
     /// `ResumeTimeReached` 时调用:到点就拉一次列表。
-    pub fn poll_if_due(&mut self, now: Instant, visible: Option<AppSlot>) -> Vec<Effect> {
+    pub fn poll_if_due(&mut self, now: Instant, visible: &[AppSlot]) -> Vec<Effect> {
         if self.in_flight {
             return Vec::new();
         }
         let due = match self.last_poll {
             None => true,
-            Some(t) => visible.is_some() && now.duration_since(t) >= POLL_INTERVAL,
+            Some(t) => !visible.is_empty() && now.duration_since(t) >= POLL_INTERVAL,
         };
         if !due {
             return Vec::new();
@@ -170,7 +175,7 @@ impl State {
         self.last_poll = Some(now);
     }
 
-    pub fn update(&mut self, msg: Message, now: Instant, visible: Option<AppSlot>) -> Vec<Effect> {
+    pub fn update(&mut self, msg: Message, now: Instant, visible: &[AppSlot]) -> Vec<Effect> {
         match msg {
             Message::ListLoaded(result) => self.list_loaded(result, visible),
             Message::LaunchUrlLoaded(slot, result) => self.launch_url_loaded(slot, result),
@@ -202,7 +207,7 @@ impl State {
     fn list_loaded(
         &mut self,
         result: Result<Vec<AppSummary>, Failure>,
-        visible: Option<AppSlot>,
+        visible: &[AppSlot],
     ) -> Vec<Effect> {
         self.in_flight = false;
         let apps = match result {
@@ -265,24 +270,26 @@ impl State {
                 }
             }
         }
-        let set_changed = order != self.order;
+        let set_changed = !self.synced_once || order != self.order;
+        self.synced_once = true;
         self.rows = rows;
         self.order = order;
         if set_changed {
             effects.push(Effect::SyncRail(self.order.clone()));
         }
-        // 可见的应用在跑、还没有地址:去取一个。
-        if let Some(slot) = visible
-            && self
+        // 可见的应用在跑、还没有地址:去取一个(左右两栏可以同时显示两个应用面板,每个都要取)。
+        for &slot in visible {
+            if self
                 .rows
                 .get(&slot)
                 .is_some_and(|r| r.observed == ObservedState::Running)
-            && !self.url_set.contains(&slot)
-            && !self.launching.contains(&slot)
-            && !self.launch_failed.contains(&slot)
-        {
-            self.launching.insert(slot);
-            effects.push(Effect::FetchLaunchUrl(slot));
+                && !self.url_set.contains(&slot)
+                && !self.launching.contains(&slot)
+                && !self.launch_failed.contains(&slot)
+            {
+                self.launching.insert(slot);
+                effects.push(Effect::FetchLaunchUrl(slot));
+            }
         }
         effects
     }
@@ -381,6 +388,8 @@ impl State {
         let Some(row) = self.rows.get(&slot) else {
             return match self.phase {
                 None => PanelView::Loading,
+                // 连不上 dozerd 时什么都不知道——不能说"应用已不在列表里"。
+                Some(Phase::Disconnected) => PanelView::Disconnected,
                 Some(_) => PanelView::Missing,
             };
         };
@@ -444,7 +453,7 @@ mod tests {
         Failure::Host(AppFailure::new(kind, message))
     }
 
-    fn loaded(state: &mut State, apps: Vec<AppSummary>, visible: Option<AppSlot>) -> Vec<Effect> {
+    fn loaded(state: &mut State, apps: Vec<AppSummary>, visible: &[AppSlot]) -> Vec<Effect> {
         state.update(Message::ListLoaded(Ok(apps)), Instant::now(), visible)
     }
 
@@ -453,19 +462,19 @@ mod tests {
         let mut s = State::default();
         let t0 = Instant::now();
         assert!(s.poll_wanted(false), "启动后至少拉一次");
-        assert_eq!(s.poll_if_due(t0, None), vec![Effect::FetchList]);
-        assert!(s.poll_if_due(t0, None).is_empty(), "在途时不重复发");
-        s.update(Message::ListLoaded(Ok(vec![])), t0, None);
+        assert_eq!(s.poll_if_due(t0, &[]), vec![Effect::FetchList]);
+        assert!(s.poll_if_due(t0, &[]).is_empty(), "在途时不重复发");
+        s.update(Message::ListLoaded(Ok(vec![])), t0, &[]);
         assert!(!s.poll_wanted(false), "没有应用面板可见就不再轮询");
-        assert!(s.poll_if_due(t0 + POLL_INTERVAL * 5, None).is_empty());
-        let a = Some(slot("hp-a"));
+        assert!(s.poll_if_due(t0 + POLL_INTERVAL * 5, &[]).is_empty());
+        let a = [slot("hp-a")];
         assert!(s.poll_wanted(true));
         assert!(
-            s.poll_if_due(t0 + POLL_INTERVAL / 2, a).is_empty(),
+            s.poll_if_due(t0 + POLL_INTERVAL / 2, &a).is_empty(),
             "没到点"
         );
         assert_eq!(
-            s.poll_if_due(t0 + POLL_INTERVAL, a),
+            s.poll_if_due(t0 + POLL_INTERVAL, &a),
             vec![Effect::FetchList]
         );
     }
@@ -477,14 +486,14 @@ mod tests {
         let first = loaded(
             &mut s,
             vec![app("rail-sync-a", ObservedState::Stopped)],
-            None,
+            &[],
         );
         assert_eq!(first, vec![Effect::SyncRail(vec![a])]);
         assert!(
             loaded(
                 &mut s,
                 vec![app("rail-sync-a", ObservedState::Stopped)],
-                None
+                &[]
             )
             .is_empty()
         );
@@ -494,13 +503,13 @@ mod tests {
                 app("rail-sync-a", ObservedState::Stopped),
                 app("rail-sync-b", ObservedState::Stopped),
             ],
-            None,
+            &[],
         );
         assert_eq!(both, vec![Effect::SyncRail(vec![a, b])]);
         let removed = loaded(
             &mut s,
             vec![app("rail-sync-b", ObservedState::Stopped)],
-            None,
+            &[],
         );
         assert_eq!(removed, vec![Effect::SyncRail(vec![b])]);
     }
@@ -509,9 +518,9 @@ mod tests {
     fn a_visible_running_app_gets_exactly_one_launch_url_fetch() {
         let mut s = State::default();
         let a = slot("launch-a");
-        let first = loaded(&mut s, vec![running("launch-a")], Some(a));
+        let first = loaded(&mut s, vec![running("launch-a")], &[a]);
         assert!(first.contains(&Effect::FetchLaunchUrl(a)));
-        let again = loaded(&mut s, vec![running("launch-a")], Some(a));
+        let again = loaded(&mut s, vec![running("launch-a")], &[a]);
         assert!(
             !again.contains(&Effect::FetchLaunchUrl(a)),
             "在途时不重复取"
@@ -521,18 +530,18 @@ mod tests {
         let done = s.update(
             Message::LaunchUrlLoaded(a, Ok(url.clone())),
             Instant::now(),
-            Some(a),
+            &[a],
         );
         assert_eq!(done, vec![Effect::SetUrl(a, url)]);
         assert_eq!(s.view_model(a), PanelView::Running);
-        let later = loaded(&mut s, vec![running("launch-a")], Some(a));
+        let later = loaded(&mut s, vec![running("launch-a")], &[a]);
         assert!(later.is_empty(), "已有地址就不再取");
     }
 
     #[test]
     fn a_running_app_whose_panel_is_not_visible_is_not_opened() {
         let mut s = State::default();
-        let effects = loaded(&mut s, vec![running("hidden-a")], None);
+        let effects = loaded(&mut s, vec![running("hidden-a")], &[]);
         assert!(
             !effects
                 .iter()
@@ -544,12 +553,12 @@ mod tests {
     fn a_launch_url_that_arrives_after_the_app_stopped_is_dropped() {
         let mut s = State::default();
         let a = slot("late-a");
-        loaded(&mut s, vec![running("late-a")], Some(a));
-        loaded(&mut s, vec![app("late-a", ObservedState::Stopped)], Some(a));
+        loaded(&mut s, vec![running("late-a")], &[a]);
+        loaded(&mut s, vec![app("late-a", ObservedState::Stopped)], &[a]);
         let done = s.update(
             Message::LaunchUrlLoaded(a, Ok("http://late-a.localhost:1/".into())),
             Instant::now(),
-            Some(a),
+            &[a],
         );
         assert!(done.is_empty());
         assert_eq!(s.view_model(a), PanelView::Stopped);
@@ -559,11 +568,11 @@ mod tests {
     fn a_failed_launch_toasts_once_and_is_not_retried_until_the_panel_is_shown_again() {
         let mut s = State::default();
         let a = slot("fail-a");
-        loaded(&mut s, vec![running("fail-a")], Some(a));
+        loaded(&mut s, vec![running("fail-a")], &[a]);
         let failed = s.update(
             Message::LaunchUrlLoaded(a, Err(host_failure(AppErrorKind::Conflict, "不在运行"))),
             Instant::now(),
-            Some(a),
+            &[a],
         );
         assert_eq!(failed.len(), 1);
         match &failed[0] {
@@ -578,15 +587,15 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert_eq!(s.view_model(a), PanelView::OpenFailed);
-        let poll = loaded(&mut s, vec![running("fail-a")], Some(a));
+        let poll = loaded(&mut s, vec![running("fail-a")], &[a]);
         assert!(
             !poll.iter().any(|e| matches!(e, Effect::FetchLaunchUrl(_))),
             "轮询不重试"
         );
         // 再次切入面板:清状态并重新拉列表,列表回来后再取地址。
-        let shown = s.update(Message::PanelShown(a), Instant::now(), Some(a));
+        let shown = s.update(Message::PanelShown(a), Instant::now(), &[a]);
         assert_eq!(shown, vec![Effect::FetchList]);
-        let after = loaded(&mut s, vec![running("fail-a")], Some(a));
+        let after = loaded(&mut s, vec![running("fail-a")], &[a]);
         assert!(after.contains(&Effect::FetchLaunchUrl(a)));
     }
 
@@ -604,16 +613,16 @@ mod tests {
     fn showing_the_panel_discards_the_old_address_so_a_fresh_one_is_fetched() {
         let mut s = State::default();
         let a = slot("shown-a");
-        loaded(&mut s, vec![running("shown-a")], Some(a));
+        loaded(&mut s, vec![running("shown-a")], &[a]);
         s.update(
             Message::LaunchUrlLoaded(a, Ok("http://shown-a.localhost:1/?bh_token=old".into())),
             Instant::now(),
-            Some(a),
+            &[a],
         );
-        let shown = s.update(Message::PanelShown(a), Instant::now(), Some(a));
+        let shown = s.update(Message::PanelShown(a), Instant::now(), &[a]);
         assert_eq!(shown, vec![Effect::ClearUrl(a), Effect::FetchList]);
         assert_eq!(s.view_model(a), PanelView::Opening);
-        let again = s.update(Message::PanelShown(a), Instant::now(), Some(a));
+        let again = s.update(Message::PanelShown(a), Instant::now(), &[a]);
         assert!(again.is_empty(), "已有列表请求在途,不重复发");
     }
 
@@ -621,15 +630,15 @@ mod tests {
     fn an_app_that_stops_or_disappears_loses_its_address() {
         let mut s = State::default();
         let (a, b) = (slot("drop-a"), slot("drop-b"));
-        loaded(&mut s, vec![running("drop-a"), running("drop-b")], Some(a));
+        loaded(&mut s, vec![running("drop-a"), running("drop-b")], &[a]);
         for x in [a, b] {
             s.update(
                 Message::LaunchUrlLoaded(x, Ok(format!("http://{}.localhost:1/", x.id()))),
                 Instant::now(),
-                Some(a),
+                &[a],
             );
         }
-        let effects = loaded(&mut s, vec![app("drop-a", ObservedState::Stopped)], Some(a));
+        let effects = loaded(&mut s, vec![app("drop-a", ObservedState::Stopped)], &[a]);
         assert!(effects.contains(&Effect::ClearUrl(a)), "停了");
         assert!(effects.contains(&Effect::ClearUrl(b)), "没了");
         assert!(effects.contains(&Effect::SyncRail(vec![a])));
@@ -640,18 +649,18 @@ mod tests {
     fn an_unavailable_host_is_a_persistent_panel_state_not_a_toast() {
         let mut s = State::default();
         let a = slot("unavail-a");
-        loaded(&mut s, vec![running("unavail-a")], None);
+        loaded(&mut s, vec![running("unavail-a")], &[]);
         let effects = s.update(
             Message::ListLoaded(Err(host_failure(AppErrorKind::Unavailable, "端口被占用"))),
             Instant::now(),
-            None,
+            &[],
         );
         assert!(effects.is_empty());
         assert_eq!(
             s.view_model(a),
             PanelView::HostUnavailable("端口被占用".into())
         );
-        loaded(&mut s, vec![running("unavail-a")], None);
+        loaded(&mut s, vec![running("unavail-a")], &[]);
         assert_eq!(s.view_model(a), PanelView::Opening, "恢复后回到正常状态");
     }
 
@@ -662,12 +671,12 @@ mod tests {
         loaded(
             &mut s,
             vec![app("transport-a", ObservedState::Stopped)],
-            None,
+            &[],
         );
         let effects = s.update(
             Message::ListLoaded(Err(Failure::Transport("连不上".into()))),
             Instant::now(),
-            None,
+            &[],
         );
         assert!(effects.is_empty());
         assert_eq!(s.view_model(a), PanelView::Stopped);
@@ -677,26 +686,26 @@ mod tests {
     fn start_and_stop_are_deduplicated_and_refresh_the_list_when_done() {
         let mut s = State::default();
         let a = slot("act-a");
-        loaded(&mut s, vec![app("act-a", ObservedState::Stopped)], None);
+        loaded(&mut s, vec![app("act-a", ObservedState::Stopped)], &[]);
         s.update(
             Message::ListLoaded(Ok(vec![app("act-a", ObservedState::Stopped)])),
             Instant::now(),
-            None,
+            &[],
         );
         assert_eq!(
-            s.update(Message::Start(a), Instant::now(), None),
+            s.update(Message::Start(a), Instant::now(), &[]),
             vec![Effect::StartApp(a)]
         );
-        assert!(s.update(Message::Start(a), Instant::now(), None).is_empty());
+        assert!(s.update(Message::Start(a), Instant::now(), &[]).is_empty());
         assert!(
-            s.update(Message::Stop(a), Instant::now(), None).is_empty(),
+            s.update(Message::Stop(a), Instant::now(), &[]).is_empty(),
             "在途时也不接受另一个动作"
         );
         assert_eq!(s.view_model(a), PanelView::Busy("启动中…"));
         let done = s.update(
             Message::ActionDone(a, Act::Start, Ok(())),
             Instant::now(),
-            None,
+            &[],
         );
         assert_eq!(done, vec![Effect::FetchList]);
     }
@@ -705,8 +714,8 @@ mod tests {
     fn a_failed_action_toasts_with_the_verb_and_still_refreshes() {
         let mut s = State::default();
         let a = slot("actfail-a");
-        loaded(&mut s, vec![app("actfail-a", ObservedState::Stopped)], None);
-        s.update(Message::Stop(a), Instant::now(), None);
+        loaded(&mut s, vec![app("actfail-a", ObservedState::Stopped)], &[]);
+        s.update(Message::Stop(a), Instant::now(), &[]);
         let done = s.update(
             Message::ActionDone(
                 a,
@@ -714,7 +723,7 @@ mod tests {
                 Err(host_failure(AppErrorKind::Conflict, "状态冲突")),
             ),
             Instant::now(),
-            None,
+            &[],
         );
         assert_eq!(done.len(), 2);
         match &done[0] {
@@ -731,7 +740,7 @@ mod tests {
     fn actions_on_unknown_apps_are_ignored() {
         let mut s = State::default();
         assert!(
-            s.update(Message::Start(slot("nobody-a")), Instant::now(), None)
+            s.update(Message::Start(slot("nobody-a")), Instant::now(), &[])
                 .is_empty()
         );
     }
@@ -756,9 +765,62 @@ mod tests {
             (ObservedState::Running, PanelView::Opening),
         ];
         for (observed, want) in cases {
-            loaded(&mut s, vec![app("vm-a", observed.clone())], None);
+            loaded(&mut s, vec![app("vm-a", observed.clone())], &[]);
             assert_eq!(s.view_model(a), want, "{observed:?}");
         }
         assert_eq!(State::default().view_model(a), PanelView::Loading);
+    }
+
+    /// 磁盘里留着已卸载应用的 `app:<id>` 条目;第一次拉到的列表是空的也必须同步(把它清掉),
+    /// 不能因为 `order` 的初值也是空就当成"没变"。
+    #[test]
+    fn the_first_successful_list_always_syncs_the_rail_even_when_empty() {
+        let mut s = State::default();
+        let effects = loaded(&mut s, vec![], &[]);
+        assert_eq!(effects, vec![Effect::SyncRail(vec![])]);
+        assert!(loaded(&mut s, vec![], &[]).is_empty(), "之后没变就不再同步");
+    }
+
+    #[test]
+    fn the_first_list_syncs_even_if_an_unavailable_answer_came_first() {
+        let mut s = State::default();
+        s.update(
+            Message::ListLoaded(Err(host_failure(AppErrorKind::Unavailable, "端口被占用"))),
+            Instant::now(),
+            &[],
+        );
+        let effects = loaded(&mut s, vec![], &[]);
+        assert!(effects.contains(&Effect::SyncRail(vec![])), "{effects:?}");
+    }
+
+    /// 连不上 dozerd 而且没有任何已知应用时,面板不能说"这个应用已不在已安装列表里"。
+    #[test]
+    fn a_disconnected_panel_with_no_known_apps_says_so_instead_of_claiming_the_app_is_gone() {
+        let mut s = State::default();
+        let a = slot("disc-a");
+        s.update(
+            Message::ListLoaded(Err(Failure::Transport("连不上".into()))),
+            Instant::now(),
+            &[],
+        );
+        assert_eq!(s.view_model(a), PanelView::Disconnected);
+        // 成功拉到列表之后才有资格说"已不在列表里"。
+        loaded(&mut s, vec![], &[]);
+        assert_eq!(s.view_model(a), PanelView::Missing);
+    }
+
+    /// 左右两栏可以同时各显示一个应用面板,两个都要取启动地址。
+    #[test]
+    fn two_visible_app_panels_each_get_their_launch_url_fetch() {
+        let mut s = State::default();
+        let (a, b) = (slot("two-a"), slot("two-b"));
+        let effects = loaded(&mut s, vec![running("two-a"), running("two-b")], &[a, b]);
+        assert!(effects.contains(&Effect::FetchLaunchUrl(a)));
+        assert!(effects.contains(&Effect::FetchLaunchUrl(b)));
+        let again = loaded(&mut s, vec![running("two-a"), running("two-b")], &[a, b]);
+        assert!(
+            !again.iter().any(|e| matches!(e, Effect::FetchLaunchUrl(_))),
+            "各自在途时不重复取"
+        );
     }
 }

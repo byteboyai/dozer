@@ -1707,41 +1707,40 @@ impl App {
         crate::extensions::group_chat::poll_if_due(&mut ws.group_chat, project_id, now, &io);
     }
 
-    /// 当前可见(未收起、未被另一侧放大盖住)的应用面板;没有返回 `None`。
-    pub(crate) fn visible_app_slot(&self) -> Option<AppSlot> {
-        let left = match self.left_view {
-            PanelKind::App(slot) if !self.left_collapsed => Some(slot),
+    /// 当前可见(未收起、未被另一侧放大盖住)的应用面板——左右两栏可以同时各显示一个应用面板。
+    pub(crate) fn visible_app_slots(&self) -> Vec<AppSlot> {
+        let side_slot = |view: PanelKind, collapsed: bool| match view {
+            PanelKind::App(slot) if !collapsed => Some(slot),
             _ => None,
         };
-        let right = match self.right_view {
-            PanelKind::App(slot) if !self.right_collapsed => Some(slot),
-            _ => None,
-        };
+        let left = side_slot(self.left_view, self.left_collapsed);
+        let right = side_slot(self.right_view, self.right_collapsed);
         match self.maximized {
-            Some(MaximizedPane::Left) => left,
-            Some(MaximizedPane::Right) => right,
-            None => left.or(right),
+            Some(MaximizedPane::Left) => left.into_iter().collect(),
+            Some(MaximizedPane::Right) => right.into_iter().collect(),
+            None => left.into_iter().chain(right).collect(),
         }
     }
 
     /// `about_to_wait` 是否要为应用宿主排下一拍唤醒(见 `app_host::State::poll_wanted`)。
     pub fn app_host_poll_wanted(&self) -> bool {
-        self.app_host.poll_wanted(self.visible_app_slot().is_some())
+        self.app_host
+            .poll_wanted(!self.visible_app_slots().is_empty())
     }
 
     /// `ResumeTimeReached` 时调用:到点就拉一次已安装应用列表。
     pub fn poll_app_host_if_due(&mut self) {
         let effects = self
             .app_host
-            .poll_if_due(std::time::Instant::now(), self.visible_app_slot());
+            .poll_if_due(std::time::Instant::now(), &self.visible_app_slots());
         self.run_app_host_effects(effects);
     }
 
     /// 应用宿主状态机的消息入口(异步结果、点击、面板切入都走这里)。
     pub(crate) fn app_host_update(&mut self, msg: crate::extensions::app_host::Message) {
-        let effects = self
-            .app_host
-            .update(msg, std::time::Instant::now(), self.visible_app_slot());
+        let effects =
+            self.app_host
+                .update(msg, std::time::Instant::now(), &self.visible_app_slots());
         self.run_app_host_effects(effects);
     }
 

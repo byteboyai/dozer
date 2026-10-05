@@ -1152,6 +1152,11 @@ fn app_panel_pane<'a>(
         match app.app_host.view_model(slot) {
             V::HostUnavailable(reason) => ("应用宿主不可用".into(), Some(reason), None),
             V::Loading => ("正在读取应用状态…".into(), None, None),
+            V::Disconnected => (
+                "无法连接 dozerd".into(),
+                Some("应用状态暂时读不到,连上后会自动恢复".into()),
+                None,
+            ),
             V::Missing => ("这个应用已不在已安装列表里".into(), None, None),
             V::Stopped => ("应用未运行".into(), None, Some(("启动", M::Start(slot)))),
             V::Busy(text) => (text.into(), None, None),
