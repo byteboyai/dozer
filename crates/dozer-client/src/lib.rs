@@ -182,6 +182,10 @@ impl Client {
     /// 应用宿主请求(原样转给 dozerd 的 `AppService`)。失败(含"应用宿主不可用")走 `Err`。
     pub async fn app_request(&self, request: AppRequest) -> Result<AppReply> {
         match self.roundtrip(&Request::App { request }).await? {
+            // 失败带类别:用 `err.downcast_ref::<AppFailure>()` 取回(其余错误是传输/协议问题)。
+            Reply::App {
+                reply: AppReply::Failed { failure },
+            } => Err(anyhow::Error::new(failure)),
             Reply::App { reply } => Ok(reply),
             other => bail!("意外应答: {other:?}"),
         }

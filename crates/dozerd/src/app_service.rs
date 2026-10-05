@@ -12,10 +12,10 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytehost_apps::HOST_VERSION;
-use bytehost_apps::gateway::{Gateway, GatewayConfig};
+use bytehost_apps::gateway::{Gateway, GatewayConfig, GatewayError};
 use bytehost_apps::manager::{AppManager, ManagerError};
-use bytehost_apps::port::load_or_choose_port;
-use bytehost_apps::proto::{AppReply, AppRequest, RuntimeProbe};
+use bytehost_apps::port::{load_port, persist_port, pick_port};
+use bytehost_apps::proto::{AppErrorKind, AppFailure, AppReply, AppRequest, RuntimeProbe};
 use bytehost_apps::runtime::{SystemRunner, probe_all};
 
 dozer_core::scope!(LOG, module, "apps");
@@ -40,15 +40,48 @@ impl AppService {
         })
     }
 
-    /// 用**持久化的端口**启动(首次启动随机选一个并写进 `<root>/gateway.json`)。永不失败。
+    /// 用**持久化的端口**启动。首次运行(没有 `<root>/gateway.json`)随机选端口、**绑定成功之后**才写盘;
+    /// 选中的端口恰好被占就换一个再试(此时还没有任何应用数据绑定在旧端口上)。永不失败。
     pub async fn start(root: &Path) -> Arc<Self> {
-        match load_or_choose_port(root) {
-            Ok(port) => Self::start_with(root, GatewayConfig { port }).await,
+        match load_port(root) {
+            Ok(Some(port)) => Self::start_with(root, GatewayConfig { port }).await,
+            Ok(None) => Self::first_run(root, pick_port).await,
             Err(e) => {
                 dozer_core::log_error!(LOG, error = %e, "读取 gateway 端口失败,应用宿主不可用");
                 Self::unavailable(format!("应用宿主不可用:{e}"))
             }
         }
+    }
+
+    /// 首次运行选端口的重试次数(范围 12768 个端口,连续占用 5 个几乎不可能,真发生就说明环境有问题)。
+    const FIRST_RUN_ATTEMPTS: usize = 5;
+
+    async fn first_run(root: &Path, mut pick: impl FnMut() -> u16) -> Arc<Self> {
+        for _ in 0..Self::FIRST_RUN_ATTEMPTS {
+            let port = pick();
+            match Gateway::start(GatewayConfig { port }).await {
+                Ok(gateway) => {
+                    // 绑定成功才记住;写不进去就不能继续——否则下次启动换端口,所有应用的本地存储都会丢。
+                    if let Err(e) = persist_port(root, port) {
+                        gateway.stop().await;
+                        dozer_core::log_error!(LOG, error = %e, "gateway 端口写盘失败,应用宿主不可用");
+                        return Self::unavailable(format!("应用宿主不可用:端口无法保存:{e}"));
+                    }
+                    return Self::finish_start(root, Arc::new(gateway)).await;
+                }
+                Err(GatewayError::PortInUse(p)) => {
+                    dozer_core::log_warn!(LOG, port = p, "首次选的端口被占用,换一个重试");
+                }
+                Err(e) => {
+                    dozer_core::log_error!(LOG, error = %e, "gateway 启动失败,应用宿主不可用");
+                    return Self::unavailable(format!("应用宿主不可用:{e}"));
+                }
+            }
+        }
+        Self::unavailable(format!(
+            "应用宿主不可用:连续 {} 次选到的端口都被占用",
+            Self::FIRST_RUN_ATTEMPTS
+        ))
     }
 
     /// 用给定的 gateway 配置启动(测试用 `port: 0`)。永不失败。
@@ -60,6 +93,10 @@ impl AppService {
                 return Self::unavailable(format!("应用宿主不可用:{e}"));
             }
         };
+        Self::finish_start(root, gateway).await
+    }
+
+    async fn finish_start(root: &Path, gateway: Arc<Gateway>) -> Arc<Self> {
         let manager = match AppManager::new(root, HOST_VERSION, gateway.clone()) {
             Ok(m) => Arc::new(m),
             Err(e) => {
@@ -80,10 +117,12 @@ impl AppService {
         })
     }
 
-    pub async fn handle(&self, request: AppRequest) -> Result<AppReply, String> {
+    pub async fn handle(&self, request: AppRequest) -> Result<AppReply, AppFailure> {
         let manager = match &self.state {
             State::Ready { manager, .. } => manager,
-            State::Unavailable(reason) => return Err(reason.clone()),
+            State::Unavailable(reason) => {
+                return Err(AppFailure::new(AppErrorKind::Unavailable, reason.clone()));
+            }
         };
         match request {
             AppRequest::List => blocking(manager, |m| m.list())
@@ -123,7 +162,9 @@ impl AppService {
             AppRequest::ProbeRuntimes => {
                 let probes = tokio::task::spawn_blocking(|| probe_all(&SystemRunner::default()))
                     .await
-                    .map_err(|e| format!("探测任务失败: {e}"))?;
+                    .map_err(|e| {
+                        AppFailure::new(AppErrorKind::Internal, format!("探测任务失败: {e}"))
+                    })?;
                 Ok(AppReply::Runtimes {
                     runtimes: probes
                         .into_iter()
@@ -170,7 +211,7 @@ fn log_report(report: &bytehost_apps::manager::ReconcileReport, what: &str) {
     }
 }
 
-async fn blocking<T, F>(manager: &Arc<AppManager>, f: F) -> Result<T, String>
+async fn blocking<T, F>(manager: &Arc<AppManager>, f: F) -> Result<T, AppFailure>
 where
     T: Send + 'static,
     F: FnOnce(&AppManager) -> Result<T, ManagerError> + Send + 'static,
@@ -178,8 +219,8 @@ where
     let manager = manager.clone();
     tokio::task::spawn_blocking(move || f(&manager))
         .await
-        .map_err(|e| format!("应用宿主任务失败: {e}"))?
-        .map_err(|e| e.to_string())
+        .map_err(|e| AppFailure::new(AppErrorKind::Internal, format!("应用宿主任务失败: {e}")))?
+        .map_err(|e| AppFailure::new(e.kind(), e.to_string()))
 }
 
 fn now_ms() -> u64 {
@@ -309,7 +350,9 @@ source = "web/"
             AppRequest::ProbeRuntimes,
             AppRequest::Stop { id: id("a") },
         ] {
-            assert_eq!(svc.handle(req).await.unwrap_err(), "原因 X");
+            let failure = svc.handle(req).await.unwrap_err();
+            assert_eq!(failure.message, "原因 X");
+            assert_eq!(failure.kind, AppErrorKind::Unavailable);
         }
         svc.shutdown().await; // 不可用的服务关停也是空操作
     }
@@ -321,7 +364,7 @@ source = "web/"
         let squatter = Gateway::start(GatewayConfig { port: 0 }).await.unwrap();
         let taken = squatter.port();
         let svc = AppService::start_with(tmp.path(), GatewayConfig { port: taken }).await;
-        let err = svc.handle(AppRequest::List).await.unwrap_err();
+        let err = svc.handle(AppRequest::List).await.unwrap_err().message;
         assert!(
             err.contains(&taken.to_string()) && err.contains("占用"),
             "{err}"
@@ -336,7 +379,7 @@ source = "web/"
         std::fs::write(&blocker, "x").unwrap();
         let svc =
             AppService::start_with(&blocker.join("bytehost"), GatewayConfig { port: 0 }).await;
-        let err = svc.handle(AppRequest::List).await.unwrap_err();
+        let err = svc.handle(AppRequest::List).await.unwrap_err().message;
         assert!(err.contains("应用目录"), "{err}");
     }
 
@@ -467,7 +510,7 @@ source = "web/"
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("gateway.json"), "{not json").unwrap();
         let svc = AppService::start(&root).await;
-        let err = svc.handle(AppRequest::List).await.unwrap_err();
+        let err = svc.handle(AppRequest::List).await.unwrap_err().message;
         assert!(
             err.contains("应用宿主不可用") && err.contains("gateway.json"),
             "{err}"
@@ -538,7 +581,10 @@ source = "web/"
             .handle(AppRequest::Start { id: id("alpha") })
             .await
             .unwrap_err();
-        assert!(err.contains("停止"), "{err}");
+        assert!(
+            err.message.contains("停止") && err.kind == AppErrorKind::Unavailable,
+            "{err}"
+        );
         let b = write_app(&tmp.path().join("src/b"), "beta", "B");
         let plan = svc
             .handle(AppRequest::Plan {
@@ -562,7 +608,10 @@ source = "web/"
             })
             .await
             .unwrap_err();
-        assert!(err.contains("停止"), "{err}");
+        assert!(
+            err.message.contains("停止") && err.kind == AppErrorKind::Unavailable,
+            "{err}"
+        );
         let AppReply::Apps { apps } = svc.handle(AppRequest::List).await.unwrap() else {
             panic!()
         };
@@ -592,6 +641,92 @@ source = "web/"
             panic!()
         };
         assert!(url.contains(&format!(":{port}/")), "{url}");
+        svc.shutdown().await;
+    }
+    /// 一个已被占住的端口(持有 listener 直到测试结束)。
+    fn squat() -> (std::net::TcpListener, u16) {
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let p = l.local_addr().unwrap().port();
+        (l, p)
+    }
+
+    fn free_port() -> u16 {
+        squat().1
+    }
+
+    fn persisted_port(root: &Path) -> Option<u16> {
+        bytehost_apps::port::load_port(root).unwrap()
+    }
+
+    /// 首次运行选中的端口恰好被占:换一个再试,**只记住真正绑上的那个**。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_first_run_retries_a_taken_port_and_persists_only_the_one_it_bound() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("bytehost");
+        let (_held, taken) = squat();
+        let good = free_port();
+        let mut picks = vec![taken, good].into_iter();
+        let svc = AppService::first_run(&root, move || picks.next().unwrap()).await;
+        assert!(svc.handle(AppRequest::List).await.is_ok(), "服务可用");
+        assert_eq!(persisted_port(&root), Some(good));
+        svc.shutdown().await;
+    }
+
+    /// 连续都被占:服务不可用,并且**什么都没写盘**(下次启动还能重新选)。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_first_run_gives_up_after_repeated_collisions_without_persisting_anything() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("bytehost");
+        let (_held, taken) = squat();
+        let svc = AppService::first_run(&root, move || taken).await;
+        let failure = svc.handle(AppRequest::List).await.unwrap_err();
+        assert_eq!(failure.kind, AppErrorKind::Unavailable);
+        assert!(failure.message.contains("占用"), "{failure}");
+        assert_eq!(persisted_port(&root), None, "没绑上的端口不被记住");
+    }
+
+    /// 端口写不进磁盘:不能带着一个下次会变的端口继续跑——服务不可用,gateway 被撤下。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_first_run_is_unavailable_when_the_port_cannot_be_saved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let blocker = tmp.path().join("not-a-dir");
+        std::fs::write(&blocker, "x").unwrap();
+        let port = free_port();
+        let svc = AppService::first_run(&blocker.join("bytehost"), move || port).await;
+        let failure = svc.handle(AppRequest::List).await.unwrap_err();
+        assert_eq!(failure.kind, AppErrorKind::Unavailable);
+        assert!(failure.message.contains("无法保存"), "{failure}");
+        assert!(svc.gateway_stopped());
+        assert!(
+            std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(),
+            "gateway 已释放端口"
+        );
+    }
+
+    /// 失败带类别:相对路径的来源是 `Rejected`,没装的应用是 `NotFound`。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failures_are_classified_not_just_described() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc =
+            AppService::start_with(&tmp.path().join("bytehost"), GatewayConfig { port: 0 }).await;
+        let plan = AppRequest::Plan {
+            source: AppSource::LocalDir {
+                path: "relative/dir".into(),
+            },
+            provenance: Provenance::Local,
+            trust: TrustLevel::Trusted,
+        };
+        assert_eq!(
+            svc.handle(plan).await.unwrap_err().kind,
+            AppErrorKind::Rejected
+        );
+        assert_eq!(
+            svc.handle(AppRequest::Stop { id: id("ghost") })
+                .await
+                .unwrap_err()
+                .kind,
+            AppErrorKind::NotFound
+        );
         svc.shutdown().await;
     }
 }

@@ -459,7 +459,7 @@ async fn handle_conn(
                     Ok(req) => match req {
                         Request::App { request } => match apps.handle(request).await {
                             Ok(reply) => Reply::App { reply },
-                            Err(message) => Reply::Error { message },
+                            Err(failure) => Reply::App { reply: bytehost_apps::proto::AppReply::Failed { failure } },
                         },
                         Request::ListSessions => Reply::Sessions { sessions: registry.list() },
                         Request::CreateSession { name, command, args, cwd, cols, rows, project_id, agent } => {
