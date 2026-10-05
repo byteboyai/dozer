@@ -2593,9 +2593,11 @@ impl PreviewPane {
         else {
             return;
         };
-        // 初始主题默认 Dark(ByteBoy2077 背景);主题随系统切换由 Task 8
-        // 经 `reload_nonce`/重推处理。
-        let theme = crate::preview::PlantUmlTheme::Dark;
+        // 每次推送读取当前主题，包括切换主题后的重载。
+        let theme = match byteui::theme::color::current_scheme() {
+            byteui::theme::color::ColorScheme::Light => crate::preview::PlantUmlTheme::Light,
+            byteui::theme::color::ColorScheme::Dark => crate::preview::PlantUmlTheme::Dark,
+        };
         self.queue_plantuml_command(
             tab_id,
             PlantUmlCommand::SetDocument {
@@ -2825,6 +2827,12 @@ impl PreviewPane {
             // 后台授权读取重跑、host 报新 `ready` 后补推 `SetDocument`。
             tab.plantuml_host_ready = false;
             tab.pending_plantuml_document = None;
+            tab.web_revision = 0;
+            tab.load_state = PreviewLoadState::starting(
+                tab.load_state.generation.wrapping_add(1),
+                PreviewLoadStage::CreatingHost,
+            );
+            let _ = tab.backend_state.try_transition(BackendState::Loading);
         }
     }
 
@@ -2867,6 +2875,13 @@ impl PreviewPane {
                 PreviewLoadState::starting(generation, PreviewLoadStage::SwitchingMode);
             let _ = tab.backend_state.try_transition(BackendState::Loading);
             tab.web_revision = 0;
+            if tab.uses_plantuml_host() {
+                tab.plantuml_host_ready = false;
+                tab.pending_plantuml_document = None;
+                if let TabKind::File(path) = &tab.kind {
+                    self.pending_plantuml_reloads.push((tab.id, path.clone()));
+                }
+            }
             tab.debug_assert_backend_consistent();
         }
     }
@@ -2988,7 +3003,14 @@ impl PreviewPane {
         // (新 load_document 会重新汇合推 SetDocument)。
         let canonical_changed: Vec<PathBuf> = changed
             .iter()
-            .filter_map(|c| std::fs::canonicalize(c).ok())
+            .map(|c| {
+                std::fs::canonicalize(c).unwrap_or_else(|_| {
+                    c.parent()
+                        .and_then(|p| std::fs::canonicalize(p).ok())
+                        .and_then(|p| c.file_name().map(|name| p.join(name)))
+                        .unwrap_or_else(|| c.clone())
+                })
+            })
             .collect();
         let mut plantuml_reload: Vec<(usize, PathBuf)> = Vec::new();
         if !canonical_changed.is_empty() {
@@ -3008,10 +3030,8 @@ impl PreviewPane {
                 if !root_hit && !dep_hit.contains(&tab.id) {
                     continue;
                 }
-                // 重载前取消在途任务、清旧依赖(等新结果重建,避免旧依赖在途
-                // 期间再次触发);host 会换新,清 ready/暂存。
+                // 保留旧依赖直到新结果原子替换；在途变更仍须作废当前世代。
                 tab.cancel_background();
-                tab.plantuml_dependencies.clear();
                 tab.plantuml_host_ready = false;
                 tab.pending_plantuml_document = None;
                 tab.web_revision = 0;
@@ -3025,9 +3045,6 @@ impl PreviewPane {
                 // 换 URL 重新导航(与 `bump_reload` 同效),让 host 重新 boot。
                 tab.reload_nonce += 1;
                 plantuml_reload.push((tab.id, root.clone()));
-            }
-            if !plantuml_reload.is_empty() {
-                self.plantuml_dep_index.clear();
             }
         }
         // 去重:同一个 tab 在上一轮已入队、尚未被 `App` 取走时,本轮再次命中
@@ -3089,6 +3106,14 @@ impl PreviewPane {
             .collect();
         for id in ids {
             self.bump_reload(id);
+            if let Some(tab) = self
+                .tabs
+                .iter()
+                .find(|t| t.id == id && t.uses_plantuml_host())
+                && let TabKind::File(path) = &tab.kind
+            {
+                self.pending_plantuml_reloads.push((id, path.clone()));
+            }
         }
     }
 }
@@ -7177,8 +7202,8 @@ mod tests {
         assert_eq!(tab.backend_state, BackendState::Loading);
         assert_eq!(tab.reload_nonce, nonce_before + 1, "应换 URL 重新导航");
         assert!(
-            tab.plantuml_dependencies.is_empty(),
-            "旧依赖集应被清空待重建"
+            !tab.plantuml_dependencies.is_empty(),
+            "保留旧依赖直到新结果替换，避免在途变更漏报"
         );
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -7219,16 +7244,90 @@ mod tests {
         );
         let gen_before = pane.tabs()[1].load_state.generation;
         let nonce_before = pane.tabs()[1].reload_nonce;
-        // 同一 include 连续两次变化(debounce 未及合并的极端情形):队列仍只
-        // 一条,但 generation / reload_nonce 也只应各推进一次(第一次命中后
-        // 依赖集已清空,旧依赖索引不再命中)。
+        // 队列合并，但每次事件都必须作废之前可能在途的读取结果。
         pane.reload_webviews_for(&[canon[1].clone()]);
         pane.reload_webviews_for(&[canon[1].clone()]);
         assert_eq!(pane.take_pending_plantuml_reloads().len(), 1);
         let tab = &pane.tabs()[1];
-        assert_eq!(tab.load_state.generation, gen_before.wrapping_add(1));
-        assert_eq!(tab.reload_nonce, nonce_before + 1);
+        assert_eq!(tab.load_state.generation, gen_before.wrapping_add(2));
+        assert_eq!(tab.reload_nonce, nonce_before + 2);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn plantuml_deleted_include_still_invalidates_document() {
+        let (dir, paths) = plantuml_fixture("deleted", &[("a.puml", ""), ("inc.puml", "")]);
+        let mut pane = PreviewPane::default();
+        push_loaded_plantuml_tab(&mut pane, 1, &paths[0], paths.clone());
+        std::fs::remove_file(&paths[1]).unwrap();
+        pane.reload_webviews_for(&[paths[1].clone()]);
+        assert_eq!(
+            pane.take_pending_plantuml_reloads(),
+            vec![(1, paths[0].clone())]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn plantuml_inflight_reload_keeps_other_documents_dependencies() {
+        let (dir, paths) = plantuml_fixture(
+            "inflight",
+            &[("a.puml", ""), ("b.puml", ""), ("a.inc", ""), ("b.inc", "")],
+        );
+        let mut pane = PreviewPane::default();
+        push_loaded_plantuml_tab(
+            &mut pane,
+            1,
+            &paths[0],
+            vec![paths[0].clone(), paths[2].clone()],
+        );
+        push_loaded_plantuml_tab(
+            &mut pane,
+            2,
+            &paths[1],
+            vec![paths[1].clone(), paths[3].clone()],
+        );
+        pane.reload_webviews_for(&[paths[2].clone()]);
+        pane.take_pending_plantuml_reloads();
+        let old_generation = pane.tabs()[1].load_state.generation;
+        pane.reload_webviews_for(&[paths[2].clone(), paths[3].clone()]);
+        assert_eq!(
+            pane.take_pending_plantuml_reloads(),
+            vec![(1, paths[0].clone()), (2, paths[1].clone())]
+        );
+        assert!(!pane.store_plantuml_document(
+            1,
+            old_generation,
+            old_generation,
+            plantuml_doc("stale")
+        ));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn plantuml_source_roundtrip_queues_fresh_document() {
+        let mut pane = PreviewPane::default();
+        let mut tab = plantuml_tab(1);
+        if let Some(PreviewBackend::Rendered(r)) = tab.backend.as_mut() {
+            r.mode = RenderedMode::Source;
+        }
+        tab.plantuml_host_ready = true;
+        pane.tabs.push(tab);
+        pane.exit_code_mode(1);
+        assert!(!pane.tabs()[1].plantuml_host_ready);
+        assert_eq!(pane.take_pending_plantuml_reloads().len(), 1);
+        let generation = pane.tabs()[1].load_state.generation;
+        pane.apply_plantuml_event(1, 0, PlantUmlEvent::Ready);
+        assert!(pane.store_plantuml_document(1, generation, generation, plantuml_doc("fresh")));
+        assert_eq!(pane.take_pending_plantuml_commands().len(), 1);
+    }
+
+    #[test]
+    fn plantuml_theme_reload_queues_fresh_document() {
+        let mut pane = PreviewPane::default();
+        pane.tabs.push(plantuml_tab(1));
+        pane.reload_all_webviews_for_theme();
+        assert_eq!(pane.take_pending_plantuml_reloads().len(), 1);
     }
 
     #[test]

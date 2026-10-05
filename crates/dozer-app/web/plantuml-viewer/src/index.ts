@@ -91,6 +91,7 @@ async function setDocument(cmd: Extract<PlantUmlCommand, { kind: "set_document" 
   diagnostics.textContent = "";
   if (cmd.source.trim() === "") {
     showStatus("暂无可渲染内容", "该 PlantUML 文件为空。");
+    postEvent({ kind: "rendered", width: 0, height: 0, duration_ms: 0 }, cmd.revision);
     return;
   }
   showStatus("正在渲染…");

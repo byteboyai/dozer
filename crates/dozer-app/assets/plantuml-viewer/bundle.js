@@ -344,6 +344,7 @@ async function setDocument(cmd) {
   diagnostics.textContent = "";
   if (cmd.source.trim() === "") {
     showStatus("\u6682\u65E0\u53EF\u6E32\u67D3\u5185\u5BB9", "\u8BE5 PlantUML \u6587\u4EF6\u4E3A\u7A7A\u3002");
+    postEvent({ kind: "rendered", width: 0, height: 0, duration_ms: 0 }, cmd.revision);
     return;
   }
   showStatus("\u6B63\u5728\u6E32\u67D3\u2026");

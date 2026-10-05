@@ -2621,6 +2621,7 @@ impl App {
                             crate::preview::PreviewLoadStage::SwitchingMode,
                         );
                     }
+                    ws.spawn_pending_plantuml_reloads(PanelKind::Files, io);
                 });
             }
             Message::PreviewSaveActive(kind) => {
@@ -2832,6 +2833,7 @@ impl App {
                             crate::preview::PreviewLoadStage::SwitchingMode,
                         );
                     }
+                    ws.spawn_pending_plantuml_reloads(PanelKind::Project, io);
                 });
             }
             Message::ProjectPreviewTabOverflowToggle => {
@@ -3924,9 +3926,13 @@ impl App {
                 if restart_succeeded {
                     self.daemon_unavailable = None;
                 }
-                if theme_changed && let Some(ws) = self.active_workspace_mut() {
-                    ws.preview.reload_all_webviews_for_theme();
-                    ws.project_preview.reload_all_webviews_for_theme();
+                if theme_changed {
+                    self.with_focused_project(|ws, io| {
+                        ws.preview.reload_all_webviews_for_theme();
+                        ws.project_preview.reload_all_webviews_for_theme();
+                        ws.spawn_pending_plantuml_reloads(PanelKind::Files, io);
+                        ws.spawn_pending_plantuml_reloads(PanelKind::Project, io);
+                    });
                 }
             }
             // WebViewFocused 只在 main.rs 的 dispatch 里设 pending_focus,
