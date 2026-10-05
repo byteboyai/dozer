@@ -2525,8 +2525,10 @@ impl App {
     /// default()`,跟旧行为一致。
     pub(crate) fn adopt_panel_layout(&mut self, id: i64) {
         let pl = self.panel_layouts.get(&id).copied().unwrap_or_default();
-        self.left_view = pl.left_view;
-        self.right_view = pl.right_view;
+        // 项目存的视图可能是一个后来被卸载的应用:退到该栏第一个面板。
+        let rail = &self.shell_layout.rail_layout;
+        self.left_view = rail.view_or_first(Side::Left, pl.left_view);
+        self.right_view = rail.view_or_first(Side::Right, pl.right_view);
         // 磁盘数据可能来自 `end_rail_drag` 修复前写入的坏状态:两侧
         // active view 撞成同一个 `kind`,渲染时同一面板画两遍,复现过
         // wgpu StagingBelt "still mapped" panic(2026-08-20 崩溃排查)。
@@ -2545,6 +2547,24 @@ impl App {
         self.right_collapsed = pl.right_collapsed;
         self.dims = pl.dims;
         self.agent_context_refresh(id);
+    }
+
+    /// 让图标栏里的应用条目与已安装应用集合一致(bytehost A3):卸载的应用条目消失,新装的追加到默认栏末尾。
+    /// 当前正显示着已消失应用的那一侧退到该栏第一个面板。有改动才存盘。A3 里还没有调用者——A4 在拿到
+    /// dozerd 的应用列表后调它。
+    #[allow(dead_code)]
+    pub(crate) fn sync_installed_apps(&mut self, installed: &[AppSlot]) {
+        let changed = self
+            .shell_layout
+            .rail_layout
+            .sync_apps(installed, crate::panel_registry::APP_DEFAULT_SIDE);
+        if !changed {
+            return;
+        }
+        let rail = &self.shell_layout.rail_layout;
+        self.left_view = rail.view_or_first(Side::Left, self.left_view);
+        self.right_view = rail.view_or_first(Side::Right, self.right_view);
+        self.on_shell_layout_changed();
     }
 
     /// 把整份 `panel_layouts`(所有项目的面板布局)异步写盘。

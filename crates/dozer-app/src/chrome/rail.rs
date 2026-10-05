@@ -7,7 +7,7 @@
 //! Rail 逻辑物理搬出 `app.rs`。见
 //! `docs/superpowers/specs/2026-08-21-rail-extraction-pilot-design.md`。
 
-use crate::app::{App, HoverId, MaximizedPane, Message, PanelKind, Side};
+use crate::app::{App, AppSlot, HoverId, MaximizedPane, Message, PanelKind, Side};
 use crate::theme;
 use byteui::interaction::icons;
 use iced_widget::core::mouse;
@@ -98,6 +98,42 @@ impl RailLayout {
                 "RailLayout 不变式被破坏:{kind:?} 不在任何一条栏——\
                  sanitize_rail_layout 应该已经挡掉这种坏数据"
             )
+        }
+    }
+}
+
+impl RailLayout {
+    /// 让图标栏里的应用条目与已安装应用集合一致(bytehost A3):不在 `installed` 里的应用条目被移除,
+    /// 已安装但还没有条目的应用追加到 `default_side` 栏末尾(`installed` 的顺序);已有条目的位置与
+    /// 顺序保持不变。返回是否有改动。内置面板不受影响。
+    pub(crate) fn sync_apps(&mut self, installed: &[AppSlot], default_side: Side) -> bool {
+        let mut changed = false;
+        for side in [Side::Left, Side::Right] {
+            let panels = self.side_mut(side);
+            let before = panels.len();
+            panels.retain(|k| match k {
+                PanelKind::App(slot) => installed.contains(slot),
+                _ => true,
+            });
+            changed |= panels.len() != before;
+        }
+        for slot in installed {
+            let kind = PanelKind::App(*slot);
+            if !self.left.contains(&kind) && !self.right.contains(&kind) {
+                self.side_mut(default_side).push(kind);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// `view` 若是一个已不在 `side` 栏里的面板(应用被卸载),退到该栏第一个面板;否则原样返回。
+    pub(crate) fn view_or_first(&self, side: Side, view: PanelKind) -> PanelKind {
+        let panels = self.side(side);
+        if panels.contains(&view) {
+            view
+        } else {
+            panels.first().copied().unwrap_or(view)
         }
     }
 }
@@ -261,6 +297,15 @@ pub(crate) fn rail_cross_apply(
     let source_panels = rail.side(source_side);
     if source_side == target_side || source_panels.len() <= 1 || source_index >= source_panels.len()
     {
+        return None;
+    }
+    // 每条栏至少保留一个内置面板(应用条目会随卸载消失,栏不能因此变空)。
+    let moved = source_panels[source_index];
+    let builtin_left = source_panels
+        .iter()
+        .filter(|k| !matches!(k, PanelKind::App(_)))
+        .count();
+    if !matches!(moved, PanelKind::App(_)) && builtin_left <= 1 {
         return None;
     }
     let kind = rail.side_mut(source_side).remove(source_index);
@@ -551,6 +596,10 @@ pub(crate) fn icon_rail(
 
 /// 面板 → (图标, 图标栏 tooltip 文案),取自面板清单(见 `product::dozer_catalog`)。
 fn panel_meta(kind: PanelKind) -> (icons::IconKind, &'static str) {
+    // 应用面板不在清单里:标题是应用 id,图标 A3 先用通用的列表图标(应用自带图标由 A4 接入)。
+    if let PanelKind::App(slot) = kind {
+        return (icons::IconKind::LayoutList, slot.id());
+    }
     let d = crate::panel_registry::catalog()
         .descriptor(kind)
         .unwrap_or_else(|| panic!("{kind:?} 没有在面板清单里注册"));
@@ -1297,5 +1346,99 @@ mod tests {
                        "right":["Agent","Conversations","Usage","CodeHealth"]}"#;
         let rail: RailLayout = serde_json::from_str(json).unwrap();
         assert_eq!(sanitize_rail_layout(rail), RailLayout::default());
+    }
+
+    // ---- bytehost A3:应用条目 ----
+
+    fn slot(id: &str) -> AppSlot {
+        AppSlot::intern(id).unwrap()
+    }
+
+    #[test]
+    fn sync_apps_appends_new_apps_to_the_default_side_in_installed_order() {
+        let mut rail = RailLayout::default();
+        let builtin_left = rail.left.clone();
+        let (a, b) = (slot("rail-a"), slot("rail-b"));
+        assert!(rail.sync_apps(&[a, b], Side::Left));
+        assert_eq!(
+            &rail.left[builtin_left.len()..],
+            &[PanelKind::App(a), PanelKind::App(b)]
+        );
+        assert_eq!(
+            &rail.left[..builtin_left.len()],
+            &builtin_left[..],
+            "内置面板顺序不动"
+        );
+        assert!(
+            !rail.sync_apps(&[a, b], Side::Left),
+            "幂等:再同步一次没有改动"
+        );
+    }
+
+    #[test]
+    fn sync_apps_keeps_user_placement_and_drops_uninstalled() {
+        let mut rail = RailLayout::default();
+        let (a, b) = (slot("rail-keep-a"), slot("rail-keep-b"));
+        rail.sync_apps(&[a, b], Side::Left);
+        // 用户把 a 拖到了右栏最前。
+        rail.left.retain(|k| *k != PanelKind::App(a));
+        rail.right.insert(0, PanelKind::App(a));
+        assert!(rail.sync_apps(&[a], Side::Left), "b 被卸载,有改动");
+        assert_eq!(rail.right[0], PanelKind::App(a), "仍在用户放的位置");
+        assert!(!rail.left.contains(&PanelKind::App(b)));
+        assert!(!rail.right.contains(&PanelKind::App(b)));
+        assert_eq!(
+            rail.left.len() + rail.right.len(),
+            12 + 1,
+            "内置 12 个 + 1 个应用"
+        );
+    }
+
+    #[test]
+    fn view_or_first_falls_back_only_when_the_view_vanished() {
+        let mut rail = RailLayout::default();
+        let a = slot("rail-view-a");
+        rail.sync_apps(&[a], Side::Left);
+        assert_eq!(
+            rail.view_or_first(Side::Left, PanelKind::App(a)),
+            PanelKind::App(a)
+        );
+        rail.sync_apps(&[], Side::Left);
+        assert_eq!(
+            rail.view_or_first(Side::Left, PanelKind::App(a)),
+            rail.left[0]
+        );
+        assert_eq!(
+            rail.view_or_first(Side::Left, PanelKind::Todo),
+            PanelKind::Todo
+        );
+    }
+
+    #[test]
+    fn cross_apply_never_strands_a_side_with_only_apps() {
+        let mut rail = RailLayout {
+            left: vec![PanelKind::Files, PanelKind::App(slot("rail-strand"))],
+            right: vec![PanelKind::Agent],
+        };
+        assert_eq!(
+            rail_cross_apply(&mut rail, Side::Left, 0, Side::Right, 0),
+            None,
+            "Files 是左栏最后一个内置面板,搬走会让左栏只剩应用"
+        );
+        assert_eq!(rail.left.len(), 2, "未改动");
+        assert_eq!(
+            rail_cross_apply(&mut rail, Side::Left, 1, Side::Right, 0),
+            Some(PanelKind::App(slot("rail-strand"))),
+            "应用条目可以随意搬"
+        );
+    }
+
+    #[test]
+    fn app_entries_have_title_icon_and_default_side() {
+        let a = slot("rail-meta");
+        let (icon, title) = panel_meta(PanelKind::App(a));
+        assert_eq!(title, "rail-meta");
+        assert_eq!(icon, icons::IconKind::LayoutList);
+        assert_eq!(PanelKind::App(a).default_side(), Side::Left);
     }
 }

@@ -84,6 +84,9 @@ impl PanelCatalog {
 
     /// 面板默认挂在哪条栏;没注册的面板返回 `None`。
     pub(crate) fn default_side(&self, id: PanelKind) -> Option<Side> {
+        if matches!(id, PanelKind::App(_)) {
+            return Some(APP_DEFAULT_SIDE);
+        }
         if self.default_left.contains(&id) {
             Some(Side::Left)
         } else if self.default_right.contains(&id) {
@@ -98,12 +101,33 @@ impl PanelCatalog {
         (self.migrate_legacy)(rail)
     }
 
-    /// `rail` 是不是一个合法布局:两栏都非空,且恰好是全部已注册面板(每个一次,不多不少)。
+    /// `rail` 是不是一个合法布局:**内置面板**两栏各至少一个,且合计恰好是全部已注册面板(每个一次,
+    /// 不多不少)。应用条目(`PanelKind::App`)不在清单里、数量随安装变化,所以不计入这些检查——
+    /// 只要求它们不重复;它们与已安装集合的对齐由 `RailLayout::sync_apps` 负责。
     pub(crate) fn accepts(&self, rail: &RailLayout) -> bool {
-        if rail.left.is_empty() || rail.right.is_empty() {
+        let builtin = |panels: &[PanelKind]| -> Vec<PanelKind> {
+            panels
+                .iter()
+                .copied()
+                .filter(|k| !matches!(k, PanelKind::App(_)))
+                .collect()
+        };
+        let (left, right) = (builtin(&rail.left), builtin(&rail.right));
+        if left.is_empty() || right.is_empty() {
             return false;
         }
-        let mut all: Vec<PanelKind> = rail.left.iter().chain(rail.right.iter()).copied().collect();
+        let mut apps: Vec<PanelKind> = rail
+            .left
+            .iter()
+            .chain(rail.right.iter())
+            .copied()
+            .filter(|k| matches!(k, PanelKind::App(_)))
+            .collect();
+        apps.sort_by_key(|k| format!("{k:?}"));
+        if apps.windows(2).any(|w| w[0] == w[1]) {
+            return false;
+        }
+        let mut all: Vec<PanelKind> = left.into_iter().chain(right).collect();
         all.sort_by_key(|k| format!("{k:?}"));
         if all.windows(2).any(|w| w[0] == w[1]) {
             return false;
@@ -111,6 +135,9 @@ impl PanelCatalog {
         all.len() == self.len() && all.iter().all(|k| self.descriptor(*k).is_some())
     }
 }
+
+/// 新安装的应用在图标栏里默认挂的栏(A3 固定左栏;要做成产品可配置再提进 `PanelCatalog`)。
+pub(crate) const APP_DEFAULT_SIDE: Side = Side::Left;
 
 static CATALOG: OnceLock<PanelCatalog> = OnceLock::new();
 
@@ -301,5 +328,27 @@ mod tests {
             assert!(c.descriptor(k).is_some(), "{k:?} 没注册");
             assert!(c.default_side(k).is_some(), "{k:?} 不在默认布局里");
         }
+    }
+
+    #[test]
+    fn accepts_ignores_app_entries_but_rejects_duplicates_among_them() {
+        use PanelKind::*;
+        let c = small();
+        let a = PanelKind::App(crate::app::AppSlot::intern("reg-app").unwrap());
+        assert!(
+            c.accepts(&rail(&[Todo, Files, a], &[Agent])),
+            "应用条目不计入清单"
+        );
+        assert!(c.accepts(&rail(&[Todo, Files], &[Agent, a])));
+        assert!(
+            !c.accepts(&rail(&[Todo, Files, a], &[Agent, a])),
+            "同一个应用出现两次"
+        );
+        assert!(
+            !c.accepts(&rail(&[a], &[Todo, Files, Agent])),
+            "左栏只有应用、没有内置面板"
+        );
+        assert_eq!(c.default_side(a), Some(APP_DEFAULT_SIDE));
+        assert!(c.descriptor(a).is_none(), "应用不在描述符里");
     }
 }
