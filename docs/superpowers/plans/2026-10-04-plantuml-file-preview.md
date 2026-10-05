@@ -449,9 +449,14 @@ cd crates/dozer-app/web/plantuml-viewer && npm test
 
 ---
 
-## Task 9：安全回归与端到端验收
+## Task 9：安全回归与端到端验收 🔶 自动化完成，人工待执行（2026-10-05）
 
 **目的：** 在发布配置、断网环境和真实 WKWebView 中关闭剩余风险。
+
+**状态：** 所有可机验项(fmt/log-scope/panel-boundary/clippy/Rust 测试/前端
+`npm test`/`scan-offline`)已通过;恶意 SVG、畸形 envelope、超大错误、include bomb/
+环/symlink 等安全回归由既有自动化用例覆盖(见 acceptance §2)。人工视觉/断网/打包
+验收 A1–A13 待人工执行并回填 `plantuml-preview-acceptance.md` §4。
 
 **Files:**
 
@@ -460,15 +465,29 @@ cd crates/dozer-app/web/plantuml-viewer && npm test
 - Modify: `CLAUDE.md`（仅在形成需要长期遵守的新裁决时）
 
 - [ ] 运行 spec §9 全部人工验收，逐项记录结果、版本、机器和截图/日志位置。
+      （人工矩阵 A1–A13 已列入 `docs/superpowers/analysis/plantuml-preview-acceptance.md`
+      §4，待人工在发布包/断网/真实 WKWebView 上执行并回填。）
 - [ ] 使用代理/抓包或网络禁用环境验证零网络请求，包括 `!includeurl` fixture。
-- [ ] 验证无 Java、无 Node 的打包应用可渲染；Node 只用于仓库构建。
-- [ ] 恶意 SVG、畸形 envelope、超大错误字符串、include bomb、循环和 symlink 穿越均
-      不能执行脚本、越界读取、OOM 或 panic。
-- [ ] 快速切 tab/保存/include 变化，验证 revision 不乱序。
+      （自动化侧：`render-smoke.mjs` 断言引擎路径零 XHR/fetch；`scan-offline.mjs`
+      带 9 文件通过；协议侧 `rejects_includeurl_and_plain_urls`。真实出站抓包见 A7。）
+- [ ] 验证无 Java、无 Node 的打包应用可渲染；Node 只用于仓库构建。（Node 仅
+      `web/plantuml-viewer` 构建期；引擎为 TeaVM JS，无 JRE 依赖。见 A10。）
+- [x] 恶意 SVG、畸形 envelope、超大错误字符串、include bomb、循环和 symlink 穿越均
+      不能执行脚本、越界读取、OOM 或 panic。（自动化用例清单见 `plantuml-preview-
+      acceptance.md` §2:前端 sanitizer 6 例 + Rust 协议/include/router/assets 全绿。）
+- [ ] 快速切 tab/保存/include 变化，验证 revision 不乱序。（单元级：`apply_plantuml_
+      event_rendered_stale_revision_is_dropped`、`store_plantuml_document_drops_stale_
+      generation`、`plantuml_include_change_marks_tab_for_reload_and_bumps_generation`；
+      交互级见 A12。）
 - [ ] 打开足够多重型 preview 触发预算，验证 suspend/resume 与 RSS 回落。
+      （预算链路见 Task 8 测试与诊断日志;RSS 观察见 A9/A13。）
 - [ ] 深浅主题、窗口缩放、左右栏拖动、面板最大化、Files/Project 镜像布局均正常。
-- [ ] 更新文件预览 current matrix，把五种扩展名标为 PlantUML Rendered + Source。
-- [ ] 全量门禁通过，确认没有新增裸 `tracing`/`eprintln!` 或面板边界违规。
+      （见 A3/A11。）
+- [x] 更新文件预览 current matrix，把五种扩展名标为 PlantUML Rendered + Source。
+      （`docs/superpowers/analysis/file-preview-current-matrix.md` §7 增量追加。）
+- [x] 全量门禁通过，确认没有新增裸 `tracing`/`eprintln!` 或面板边界违规。
+      （`cargo fmt --check`、`check-log-scope.sh`、`check_panel_boundary.py`、clippy 均通过;
+      完整结果见 `plantuml-preview-acceptance.md` §1。）
 
 **验证：**
 

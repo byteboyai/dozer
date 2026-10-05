@@ -154,3 +154,24 @@ JSONC/JSON5、JSONL/NDJSON、CSV/TSV/XLSX、图片(PNG/SVG)、PDF、压缩包、
 
 `PreviewBackend::hosts_webview()` 对 `External`/`Unsupported` 返回 `true`
 正是这份兜底的编码；T1 落地正式 fallback 后改为 `false`。
+
+## 7. 增量:PlantUML Rendered + Source(2026-10-05)
+
+> 本节是对上方**冻结基线**的增量追加,不改动 §1–§6 的历史语义。来源:
+> `docs/superpowers/plans/2026-10-04-plantuml-file-preview.md`(已实现)。
+
+五种扩展名 `.puml` / `.plantuml` / `.iuml` / `.pu` / `.wsd`(大小写不敏感)
+现走**离线 PlantUML SVG 预览**:
+
+| 场景 | 路由 | 默认视图 | 可切视图 | 消费方 |
+|---|---|---|---|---|
+| `.puml`/`.plantuml`/`.iuml`/`.pu`/`.wsd` 文本 | `Rendered` + `RenderedRenderer::PlantUml`(`RouteReason::RenderedExtension("plantuml")`) | 图形(SVG,离线引擎) | Source(CodeMirror `plantuml` 语法,复用通用编辑 host) | PlantUML viewer host(计入预览资源预算)、Source 复用 CodeMirror |
+| 空 PlantUML 文件 | 同上 | 图形 | Source | 显示"暂无可渲染内容" |
+| 二进制/伪装 / 非 UTF-8 | **不**进渲染器,落 `Unsupported`/只读 fallback | fallback 页 | — | `router.rs` 内容安全检查优先于扩展名 |
+| `!include` 项目内文件 | Rendered host 内由 Rust 重写为 `<local/<rel>>` 并注入 | — | — | include 变化反查使依赖 tab 失效重渲染 |
+
+- 扩展名唯一权威:`preview::native_editor::is_plantuml_extension`。
+- 文件系统暴露面:仅项目根内、UTF-8、非设备/非特殊文件;`!includeurl`/远程/
+  `file://`/绝对路径/`..`/symlink 越界一律拒绝(见 spec §6.2/§6.3)。
+- 未新增 `PanelKind`;Files 与 Project 两 pane 各自独立路由,同一 `(project,
+  panel, tab)` 键不冲突。
