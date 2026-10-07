@@ -729,4 +729,169 @@ source = "web/"
         );
         svc.shutdown().await;
     }
+
+    // ===== A6c Task 6:进程型应用经 dozerd 线上协议 =====
+
+    #[cfg(unix)]
+    fn have_python3() -> bool {
+        ["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin"]
+            .iter()
+            .any(|d| Path::new(d).join("python3").is_file())
+    }
+
+    #[cfg(unix)]
+    fn write_py_app(dir: &Path, id: &str) -> AppSource {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join("manifest.toml"),
+            format!(
+                r#"schema_version = 1
+min_host_version = "0.1.0"
+id = "{id}"
+name = "{id} app"
+version = "1.0.0"
+
+[presentation]
+entrypoint = "main"
+
+[entrypoints.main]
+type = "web"
+path = "/"
+
+[runtime]
+kind = "python"
+command = ["python3", "server.py"]
+
+[runtime.http]
+port_env = "APP_PORT"
+"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("server.py"),
+            "import os, http.server\n\
+             http.server.test(HandlerClass=http.server.SimpleHTTPRequestHandler, port=int(os.environ[\"APP_PORT\"]), bind=\"127.0.0.1\")\n",
+        )
+        .unwrap();
+        AppSource::LocalDir {
+            path: dir.to_path_buf(),
+        }
+    }
+
+    /// 轮询 `List` 直到该应用满足 `pred`(最多 `secs` 秒)。
+    #[cfg(unix)]
+    async fn wait_app<F: Fn(&bytehost_apps::proto::AppSummary) -> bool>(
+        svc: &AppService,
+        app: &AppId,
+        secs: u64,
+        pred: F,
+    ) -> bytehost_apps::proto::AppSummary {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        loop {
+            let AppReply::Apps { apps } = svc.handle(AppRequest::List).await.unwrap() else {
+                panic!("List 应回 Apps")
+            };
+            if let Some(a) = apps.into_iter().find(|a| &a.id == app)
+                && pred(&a)
+            {
+                return a;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("等待 {app} 超时");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_python_app_runs_through_the_wire_and_dies_with_dozerd() {
+        use bytehost_apps::state::{DesiredState, ObservedState};
+        if !have_python3() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("bytehost");
+        let svc = AppService::start_with(&root, GatewayConfig { port: 0 }).await;
+        install(&svc, write_py_app(&tmp.path().join("src/app"), "pyapp")).await;
+        svc.handle(AppRequest::Start { id: id("pyapp") })
+            .await
+            .unwrap();
+        let running = wait_app(&svc, &id("pyapp"), 15, |a| {
+            matches!(a.observed, ObservedState::Running)
+        })
+        .await;
+        assert!(running.url.is_some(), "{running:?}");
+        let url = running_url(
+            svc.handle(AppRequest::LaunchUrl { id: id("pyapp") })
+                .await
+                .unwrap(),
+        );
+        let (status, _) = fetch(&url, "pyapp");
+        assert_eq!(status, 200);
+        let upstream_port: u16 = url
+            .strip_prefix("http://")
+            .unwrap()
+            .split(':')
+            .nth(1)
+            .unwrap()
+            .split('/')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+
+        svc.shutdown().await;
+
+        // 应用跟随 dozerd:进程已被收掉,端口不再应答
+        assert!(
+            std::net::TcpStream::connect(("127.0.0.1", upstream_port)).is_err(),
+            "dozerd 停了,应用进程也该没了"
+        );
+
+        // 同根目录重建:desired 仍是 Running(应用随上次 dozerd 停止,但想要的还在);reconcile 会把它重新拉起
+        let again = AppService::start_with(&root, GatewayConfig { port: 0 }).await;
+        let rec = wait_app(&again, &id("pyapp"), 15, |a| {
+            matches!(a.observed, ObservedState::Running)
+        })
+        .await;
+        assert_eq!(rec.desired, DesiredState::Running);
+        again.shutdown().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dozerd_restart_brings_a_python_app_back() {
+        if !have_python3() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("bytehost");
+        let first = AppService::start_with(&root, GatewayConfig { port: 0 }).await;
+        install(&first, write_py_app(&tmp.path().join("src/app"), "pyapp")).await;
+        first
+            .handle(AppRequest::Start { id: id("pyapp") })
+            .await
+            .unwrap();
+        wait_app(&first, &id("pyapp"), 15, |a| {
+            matches!(a.observed, bytehost_apps::state::ObservedState::Running)
+        })
+        .await;
+        first.shutdown().await;
+
+        let second = AppService::start_with(&root, GatewayConfig { port: 0 }).await;
+        wait_app(&second, &id("pyapp"), 15, |a| {
+            matches!(a.observed, bytehost_apps::state::ObservedState::Running)
+        })
+        .await;
+        let url = running_url(
+            second
+                .handle(AppRequest::LaunchUrl { id: id("pyapp") })
+                .await
+                .unwrap(),
+        );
+        assert_eq!(fetch(&url, "pyapp").0, 200);
+        second.shutdown().await;
+    }
 }
