@@ -1918,6 +1918,7 @@ impl App {
                 self.group_chat_webview.clear_failed();
             }
             Message::AppHost(msg) => self.app_host_update(msg),
+            Message::AppStoreRemoval(id, outcome) => self.app_store_removal(&id, outcome),
             Message::GroupChat(msg) => {
                 let project_id = msg.project_id();
                 self.with_project(project_id, |ws, io| {
@@ -3914,6 +3915,29 @@ impl App {
                 let stop_succeeded = matches!(msg, settings::Message::AdvancedStopResult(Ok(())));
                 let restart_succeeded =
                     matches!(msg, settings::Message::AdvancedRestartResult(Ok(())));
+                // 卸载"连数据一起删":在请求发出前记下意图(id 取自确认步骤),结果回来时据此清数据存储。
+                // 意图存在 `App` 上而不是设置状态里,所以确认后立刻关窗也不丢。
+                if let settings::Message::Apps(
+                    crate::extensions::settings_apps::Message::UninstallConfirmed(
+                        bytehost_apps::registry::UninstallMode::ProgramAndData,
+                    ),
+                ) = &msg
+                    && let Some(crate::extensions::settings_apps::Flow::ConfirmUninstall {
+                        id, ..
+                    }) = self.settings.as_ref().map(|s| &s.apps.flow)
+                {
+                    self.purge_intents.insert(id.clone());
+                }
+                let uninstall_result = match &msg {
+                    settings::Message::Apps(
+                        crate::extensions::settings_apps::Message::ActionDone(
+                            id,
+                            crate::extensions::settings_apps::ActKind::Uninstall,
+                            result,
+                        ),
+                    ) => Some((id.clone(), result.is_ok())),
+                    _ => None,
+                };
                 // 设置窗口已经关了(状态是 `None`)时才到达的安装/停止/卸载结果:状态机不在了,事情照样发生了,
                 // 仍要刷新应用宿主、把结果告诉用户(见 `settings_apps::orphan_result_effects`)。
                 let orphan_effects = match (&self.settings, &msg) {
@@ -3929,6 +3953,12 @@ impl App {
                     let _ = proxy.send_event(Message::Settings(m));
                 };
                 settings::update(&mut self.settings, msg, &client, &handle, emit);
+                if let Some((id, ok)) = uninstall_result
+                    && self.purge_intents.remove(&id)
+                    && ok
+                {
+                    self.purge_app_data_store(&id);
+                }
                 for effect in orphan_effects {
                     match effect {
                         crate::extensions::settings_apps::Effect::HostChanged => {

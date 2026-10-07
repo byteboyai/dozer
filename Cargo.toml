@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "spike/*"]
 # origin-gateway 是 bytehost 应用宿主的一次性 origin 验证(自带 [workspace],不进主锁文件)
 # plantuml-js 是文件预览 PlantUML 的 Node/JS 引擎 spike(npm 工程,无 Cargo.toml)
-exclude = ["spike/origin-gateway", "spike/plantuml-js"]
+exclude = ["spike/origin-gateway", "spike/plantuml-js", "spike/v2-excalidraw"]
 
 [workspace.package]
 edition = "2024"

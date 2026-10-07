@@ -1,0 +1,16 @@
+[package]
+name = "v2-excalidraw-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# bytehost V2 验证:真实 Excalidraw 静态构建在**真实 gateway(含 CSP)+ 受限 wry webview** 里的行为。
+# 一次性工具,随时可删;自带 [workspace](不进主锁文件)。
+[workspace]
+
+[dependencies]
+bytehost-apps = { path = "../../crates/bytehost-apps", features = ["server"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+wry = "0.55.1"
+tao = "0.35.3"
+serde_json = "1"

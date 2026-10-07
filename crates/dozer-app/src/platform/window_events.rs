@@ -61,6 +61,8 @@ use crate::platform::todo_detail_overlay;
 use crate::preview;
 use crate::theme;
 
+dozer_core::scope!(LOG, module, "platform");
+
 /// 按 iced 本帧算出的 `mouse_interaction` 刷新窗口光标。
 ///
 /// 这套事件循环是手写的(不是 `iced_winit::program::run`),光标刷新必须
@@ -1141,6 +1143,32 @@ impl Runner {
             // 从 URL 切到 HTML `<title>`。
             true,
         );
+        // 卸载"连数据一起删"的应用:它的 webview 已经不在池里了才能清它的 WKWebsiteDataStore
+        // (wry 要求先 drop 所有用这个存储的 WebView;`remove_data_store` 需在主线程且有事件循环)。
+        for (app_id, store) in app.take_ready_store_removals(|slot| {
+            webviews.contains_key(&crate::app_webview::webview_id(slot))
+        }) {
+            use crate::app_webview::StoreRemovalOutcome as O;
+            use wry::WebViewExtDarwin;
+            // wry 不检查系统版本:macOS 12/13 上没有这个选择器,直接调会让进程崩掉——先判断。
+            if !crate::app_webview::supports_store_removal(crate::app_webview::host_os_major()) {
+                let _ = proxy.send_event(Message::AppStoreRemoval(app_id, O::Unsupported));
+                continue;
+            }
+            let reply = proxy.clone();
+            wry::WebView::remove_data_store(&store, move |result| {
+                let outcome = match result {
+                    Ok(()) => {
+                        dozer_core::log_info!(LOG, app = %app_id, "已清除应用的 WebView 数据存储");
+                        O::Done
+                    }
+                    // 刚丢掉 webview 时 WebKit 可能还没放开存储:交给 `App` 隔一会儿重试。
+                    Err(wry::Error::DataStoreInUse) => O::InUse,
+                    Err(e) => O::Failed(e.to_string()),
+                };
+                let _ = reply.send_event(Message::AppStoreRemoval(app_id, outcome));
+            });
+        }
     }
 
     /// 打开任意一类独立窗口弹窗前,先关掉其余已开的——见 `OverlayKind`
@@ -2702,7 +2730,8 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             // 返回 `None` 不再空转。
             let next_drag_expand = app.next_drag_hover_expand_wake();
             let next_toast = app.next_toast_wake();
-            let wakes: [(bool, Duration); 9] = [
+            let store_wake = app.store_removal_wake();
+            let wakes: [(bool, Duration); 10] = [
                 (
                     app.any_hover_anim_active(),
                     crate::event::HOVER_ANIM_INTERVAL,
@@ -2716,6 +2745,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     app.app_host_poll_wanted(),
                     crate::extensions::app_host::POLL_INTERVAL,
                 ),
+                (store_wake.is_some(), store_wake.unwrap_or_default()),
                 (app.dragging_tab().is_some(), DRAG_REDRAW_INTERVAL),
                 (
                     next_tip.is_some(),

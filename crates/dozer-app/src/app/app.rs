@@ -469,6 +469,10 @@ pub struct App {
     pub(crate) app_views: crate::app_webview::AppViews,
     /// 已安装应用的列表轮询与每个应用面板的状态机(bytehost A4b2,见 `extensions::app_host`)。
     pub(crate) app_host: crate::extensions::app_host::State,
+    /// 用户在卸载确认里选了"连数据一起删"、请求已发出但结果还没回来的应用 id(设置窗口关了也不丢)。
+    pub(crate) purge_intents: std::collections::HashSet<String>,
+    /// 待清除的应用 WKWebsiteDataStore(见 `app_webview::StoreRemovals`)。
+    pub(crate) store_removals: crate::app_webview::StoreRemovals,
     /// 数据库面板 App 级状态(哪些驱动类型在"新增数据源"下拉里可选,
     /// 启动时读盘)——见 `extensions::database::AppState`。
     pub(crate) database: database::AppState,
@@ -859,6 +863,8 @@ impl App {
             group_chat_webview: crate::extensions::group_chat::WebviewPushState::default(),
             app_views: crate::app_webview::AppViews::default(),
             app_host: crate::extensions::app_host::State::default(),
+            purge_intents: Default::default(),
+            store_removals: Default::default(),
             database: database::AppState::load(),
             footbar: footbar::AppState::default(),
             toast: toast::ToastCenter::default(),
@@ -1705,6 +1711,71 @@ impl App {
             return;
         };
         crate::extensions::group_chat::poll_if_due(&mut ws.group_chat, project_id, now, &io);
+    }
+
+    /// 应用已被"连数据一起删"卸载:收回它的 webview(让池释放),再排队清除它的数据存储——
+    /// localStorage/IndexedDB 在 WKWebsiteDataStore 里,不在应用的 `data/` 目录里,光删目录清不掉画。
+    pub(crate) fn purge_app_data_store(&mut self, app_id: &str) {
+        if let Some(slot) = AppSlot::intern(app_id) {
+            self.app_views.clear(slot);
+        }
+        self.store_removals.request(app_id);
+    }
+
+    /// 数据存储清除的结果:`InUse` 在次数内重试;不支持/最终失败要告诉用户(重装后可能还是旧数据)——这是"刚发生的一件事",走 Toast。
+    pub(crate) fn app_store_removal(
+        &mut self,
+        app_id: &str,
+        outcome: crate::app_webview::StoreRemovalOutcome,
+    ) {
+        use crate::app_webview::StoreRemovalOutcome as O;
+        use crate::extensions::toast::Level;
+        let key = format!("app_store:{app_id}");
+        match outcome {
+            O::Done => self.store_removals.finish(app_id),
+            O::InUse => {
+                if !self.store_removals.retry(app_id, std::time::Instant::now()) {
+                    self.push_toast_keyed(
+                        LOG,
+                        Level::Error,
+                        format!("清除应用 {app_id} 的页面数据失败(数据仍被占用),重装后可能还会看到旧数据"),
+                        &key,
+                    );
+                }
+            }
+            O::Unsupported => {
+                self.store_removals.finish(app_id);
+                self.push_toast_keyed(
+                    LOG,
+                    Level::Warning,
+                    format!("此系统版本(低于 macOS 14)无法清除应用 {app_id} 的页面数据,重装后可能还会看到旧数据"),
+                    &key,
+                );
+            }
+            O::Failed(why) => {
+                self.store_removals.finish(app_id);
+                self.push_toast_keyed(
+                    LOG,
+                    Level::Error,
+                    format!("清除应用 {app_id} 的页面数据失败:{why}"),
+                    &key,
+                );
+            }
+        }
+    }
+
+    /// `about_to_wait` 用:最近一次数据存储清除重试还有多久。
+    pub fn store_removal_wake(&self) -> Option<std::time::Duration> {
+        self.store_removals.next_wake(std::time::Instant::now())
+    }
+
+    /// 窗口层每帧在池同步之后调:取走现在可以清除的数据存储(它们的 webview 已不在池里)。
+    pub(crate) fn take_ready_store_removals(
+        &mut self,
+        webview_in_pool: impl Fn(AppSlot) -> bool,
+    ) -> Vec<(String, [u8; 16])> {
+        self.store_removals
+            .take_ready(std::time::Instant::now(), webview_in_pool)
     }
 
     /// 当前可见(未收起、未被另一侧放大盖住)的应用面板——左右两栏可以同时各显示一个应用面板。
