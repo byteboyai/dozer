@@ -274,7 +274,7 @@ fn version_names_that_could_escape_the_store_are_rejected() {
   // AppRequest 新增: RuntimePlan{runtime}, InstallRuntime{plan: Box<RuntimeInstallPlan>}, UninstallRuntime{runtime, version}
   // AppReply 新增:   RuntimePlan{plan: Box<RuntimeInstallPlan>};安装/卸载成功回 `Done`
   ```
-  `ManagedRuntime` 与 `managed` 模块里 Task 1 的同名枚举**合并成一处**:定义在 `proto.rs`,`managed` 模块 `pub use crate::proto::ManagedRuntime`(Task 1 若已定义则移过来并改引用);`InstallPlanRt`/`Job` 同理改为直接使用 `proto` 里的 `RuntimeInstallPlan`/`RuntimeJob`(本任务把 Task 3 的库内类型替换成 proto 类型,测试随之改名)。
+  `ManagedRuntime` 已在 Task 1 放进 `proto.rs`(默认 feature 下 proto 不依赖 server 代码);`InstallPlanRt`/`Job` 在本任务改为直接使用 `proto` 里的 `RuntimeInstallPlan`/`RuntimeJob`(把 Task 3 的库内类型替换成 proto 类型,测试随之改名)。
   - `dozer-client`:`app_runtime_plan(runtime) -> Result<RuntimeInstallPlan>`、`app_install_runtime(plan) -> Result<()>`、`app_uninstall_runtime(runtime, version) -> Result<()>`。
   - `app_service`:`State::Ready` 多持一个 `Arc<RuntimeManager>`(根目录 `<root>/runtimes`,启动时 `sweep_staging`);`AppManager` 用 `with_resolver(…, ChainResolver[ManagedResolver, SystemResolver])` 构造(**受管优先**);`ProbeRuntimes` 回复里对 `node`/`python` 填 `managed`/`installable`/`job`;`shutdown()` 先 `runtime_manager.cancel_all_and_join()`(在 `suspend_all` 之前)。失败映射:`Unsupported`→`AppErrorKind::Unsupported`,`Conflict`→`Conflict`,`PlanChanged`→`Rejected`,`Io`→`Internal`。
 
