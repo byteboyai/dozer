@@ -267,7 +267,10 @@ impl Client {
 
     /// 出一份运行时安装计划(不下载任何东西)。
     pub async fn app_runtime_plan(&self, runtime: ManagedRuntime) -> Result<RuntimeInstallPlan> {
-        match self.app_request(AppRequest::RuntimePlan { runtime }).await? {
+        match self
+            .app_request(AppRequest::RuntimePlan { runtime })
+            .await?
+        {
             AppReply::RuntimePlan { plan } => Ok(*plan),
             other => bail!("意外应答: {other:?}"),
         }
