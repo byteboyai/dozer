@@ -129,6 +129,8 @@ pub enum Message {
     Todo(todo::Message),
     /// 应用面板的宿主消息(见 `extensions::app_host`):列表/启动地址的异步结果与启停点击。
     AppHost(crate::extensions::app_host::Message),
+    /// 应用 WKWebsiteDataStore 清除的结果(窗口层调完 `remove_data_store` 经 `proxy` 送回,见 `app_webview::StoreRemovals`)。
+    AppStoreRemoval(String, crate::app_webview::StoreRemovalOutcome),
     /// 群聊面板的消息(见 `extensions::group_chat::Message`)。
     GroupChat(crate::extensions::group_chat::Message),
     /// 数据库面板的全部消息。`TestConnectionResult` 特化分支内核直接拦截

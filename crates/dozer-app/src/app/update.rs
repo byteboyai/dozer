@@ -1918,6 +1918,7 @@ impl App {
                 self.group_chat_webview.clear_failed();
             }
             Message::AppHost(msg) => self.app_host_update(msg),
+            Message::AppStoreRemoval(id, outcome) => self.app_store_removal(&id, outcome),
             Message::GroupChat(msg) => {
                 let project_id = msg.project_id();
                 self.with_project(project_id, |ws, io| {

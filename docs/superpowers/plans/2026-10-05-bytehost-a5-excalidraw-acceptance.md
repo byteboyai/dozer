@@ -801,4 +801,14 @@ index 5a9705df..2944bf33 100644
 - **`esm.sh` 字体回退源的 CSP 违规日志**是已知噪音(字体已从本站加载),`verify.py` 显式放行这一类。
 - 官方镜像的版本是 `latest`;`package.sh` 会打印实际摘要,报告里要记下它。需要可重复时把镜像钉成摘要。
 - 剪贴板与下载的**自动**探测在 wry 里拿不到用户手势,只能手工验(Step 3)。
-- 清除 WebView 存储要求 macOS 14+(`remove_data_store`);更老系统每应用存储本来就退回默认存储,"含数据"卸载清不掉该应用的页面数据(A4b1 已记录同一限制)。
+- 清除 WebView 存储要求 macOS 14+(`remove_data_store`);更老系统每应用存储本来就退回默认存储,"含数据"卸载清不掉该应用的页面数据(A4b1 已记录同一限制)。**初稿写成"清不掉"是低估了:wry 不检查系统版本,12/13 上直接调会崩进程**——见下方"评审后修订"。
+
+## 评审后修订(2026-10-07,独立评审 + 一轮修复,仍在 `bytehost-a5` 分支)
+
+- **Critical:macOS 12/13 上"含数据"卸载会崩进程。** `Info.plist` 最低系统 12.0;wry 的 `remove_data_store` 不检查系统版本(只有创建带存储的 webview 时才查),`removeDataStoreForIdentifier` 在 12/13 上不存在 → 未知选择器 → 进程中止。修:调用前 `supports_store_removal(host_os_major())`(`NSProcessInfo`),不支持就送回 `StoreRemovalOutcome::Unsupported`,`App` 弹 Warning Toast(重装后可能还有旧数据)。
+- **Important:一次清除、不重试。** 丢掉 Rust 侧 `WebView` 句柄不等于 WebKit 已放开存储,刚丢掉就清可能 `DataStoreInUse`,而条目已离开队列、只有一行日志。修:`StoreRemovals` 增加尝试计数与 `retry`(间隔 1s,最多 5 次,`next_wake` 驱动唤醒),窗口层把结果经 `Message::AppStoreRemoval` 送回 `App`;次数用完/最终失败弹 Error Toast。该"丢掉后同一帧清除"路径仍只有手工 §3 第 3 项能验。
+- **Important:`package.py` 会删掉传入的任意输出目录。** `rmtree(app, ignore_errors=True)` 在任何检查之前执行(`package.sh ~` 即灾难)。修:源目录必须有 `index.html`;输出路径只能不存在、是空目录、或是上次的打包输出(有 `manifest.toml` 与 `web/`),否则拒绝;改为在同级临时目录里完成并自检,成功后整体换上去(中途失败不留半成品、不先毁掉旧输出)。已手工验证:对含文件的目录拒绝且文件完好。
+- **Important:`verify.py` 传相对路径会失败**(`cargo` 在 spike 目录里跑)。修:`os.path.abspath`。
+- 顺手:`spike/v2-excalidraw/.gitignore` 的 `.cargo/` 改成 `.cargo`(它可能是个文件),并删除我误留的那份本地 `.cargo`。
+
+**留作 Minor(未修,已记账):** Assistant 字重未被 `verify.py` 逐个检查、自检只要求 Regular 存在;`package.py` 对内联脚本的属性(`type="module"`/`importmap`)与 `data-src` 的处理较脆(对当前镜像无影响);字体文件名未做路径穿越校验、下载内容未校验;`package.sh` 在 `docker cp` 失败时不清理容器、离线时即使有缓存镜像也会因 `docker pull` 失败;spike 的 `--purge` 无超时且存储标识是单字节(测机制而非生产标识);`AppSlot::intern` 会为从没有面板的 id 分配槽(应改为只查不分配);`purge_app_data_store` 直接清 `app_views` 绕过 `app_host` 的 `url_set`(同 id 在列表轮询察觉前被重装且已运行时面板可能空白);设置窗口关闭会丢 `acting` 防重入标记(连续两次卸载同一 id 的顺序怪异)。

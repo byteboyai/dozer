@@ -172,39 +172,120 @@ else if(c==='Digit1'||k==='1'){{e.preventDefault();send('zoom_reset')}}}},true)}
     )
 }
 
+use std::time::{Duration, Instant};
+
+/// 清除失败后重试的间隔与次数上限:丢掉 Rust 侧的 `WebView` 句柄不等于 WebKit 已经放开数据存储
+/// (WebContent 进程异步退出),刚丢掉就清可能返回 `DataStoreInUse`,隔一会儿再试通常就行。
+const STORE_RETRY_DELAY: Duration = Duration::from_secs(1);
+const STORE_MAX_ATTEMPTS: u8 = 5;
+
+/// `WebView::remove_data_store`(`WKWebsiteDataStore.removeDataStore(forIdentifier:)`)只在 **macOS 14+** 存在;
+/// wry 自己**不检查**系统版本(创建带存储的 webview 时才检查),在 12/13 上直接调会因"未知选择器"让整个进程崩掉
+/// (`Info.plist` 的 `LSMinimumSystemVersion` 是 12.0)。所以调用前必须先过这个判断。
+pub(crate) fn supports_store_removal(os_major: isize) -> bool {
+    os_major >= 14
+}
+
+/// 当前 macOS 主版本号。
+pub(crate) fn host_os_major() -> isize {
+    objc2_foundation::NSProcessInfo::processInfo()
+        .operatingSystemVersion()
+        .majorVersion
+}
+
+/// 一次清除的结果(由窗口层经 `Message::AppStoreRemoval` 送回 `App`)。
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum StoreRemovalOutcome {
+    Done,
+    /// 数据存储还被占用(webview 刚丢掉,WebKit 还没放开)——可重试。
+    InUse,
+    /// 系统版本不支持(< macOS 14)。
+    Unsupported,
+    Failed(String),
+}
+
+#[derive(Debug)]
+struct PendingRemoval {
+    id: String,
+    /// 重试要等到的时刻;`None` = 随时可以(只要 webview 已不在池里)。
+    not_before: Option<Instant>,
+}
+
 /// 待清除的应用 WKWebsiteDataStore(卸载"连数据一起删"时用)。**清除前必须先让使用它的 webview 离开池**
 /// (wry:`remove_data_store` 要求先 drop 所有用这个存储的 WebView),所以这里只排队,
-/// 窗口层每帧在 `sync_webview_pool` 之后调 [`StoreRemovals::take_ready`],只放行"池里已经没有它的 webview"的那些。
+/// 窗口层每帧在 `sync_webview_pool` 之后调 [`StoreRemovals::take_ready`],只放行"池里已经没有它的 webview"
+/// 且已到重试时刻的那些。
 #[derive(Debug, Default)]
 pub(crate) struct StoreRemovals {
-    pending: Vec<String>,
+    pending: Vec<PendingRemoval>,
+    /// 每个已请求、尚未结束的应用已失败重试了几次(`finish`/放弃时移除)。
+    attempts: std::collections::HashMap<String, u8>,
 }
 
 impl StoreRemovals {
     /// 排队清除某应用的数据存储(同一个应用重复排队只留一份)。
     pub(crate) fn request(&mut self, app_id: &str) {
-        if !self.pending.iter().any(|p| p == app_id) {
-            self.pending.push(app_id.to_owned());
+        if self.attempts.contains_key(app_id) {
+            return;
         }
+        self.attempts.insert(app_id.to_owned(), 0);
+        self.pending.push(PendingRemoval {
+            id: app_id.to_owned(),
+            not_before: None,
+        });
     }
 
-    /// 取走已经可以清除的:`webview_in_pool(slot)` 为假(那个应用的 webview 已不在池里)的才放行,
-    /// 其余继续排队等下一帧。`(应用 id, 存储标识)`。
+    /// 取走已经可以清除的。`(应用 id, 存储标识)`。放行后条目离开队列;结果回来时调 `finish` 或 `retry`。
     pub(crate) fn take_ready(
         &mut self,
+        now: Instant,
         webview_in_pool: impl Fn(AppSlot) -> bool,
     ) -> Vec<(String, [u8; 16])> {
         let mut ready = Vec::new();
-        self.pending.retain(|id| {
-            // 没有槽(从没被面板用过)就一定没有 webview,可以直接清。
-            let in_pool = AppSlot::intern(id).is_some_and(&webview_in_pool);
-            if in_pool {
-                return true;
+        self.pending.retain(|p| {
+            if p.not_before.is_some_and(|t| now < t) {
+                return true; // 重试还没到点
             }
-            ready.push((id.clone(), data_store_identifier(id)));
+            // 没有槽(id 形状不合法)就一定没有 webview,可以直接清。
+            if AppSlot::intern(&p.id).is_some_and(&webview_in_pool) {
+                return true; // webview 还在池里,等下一帧
+            }
+            ready.push((p.id.clone(), data_store_identifier(&p.id)));
             false
         });
         ready
+    }
+
+    /// 清除成功(或不会再重试了):忘掉这个应用的尝试计数。
+    pub(crate) fn finish(&mut self, app_id: &str) {
+        self.attempts.remove(app_id);
+    }
+
+    /// 清除失败(`DataStoreInUse`)后重新排队,`STORE_RETRY_DELAY` 之后再试;次数用完(或这个应用根本没有在途请求)
+    /// 返回 `false`——调用方要告诉用户,不能悄悄放弃。
+    pub(crate) fn retry(&mut self, app_id: &str, now: Instant) -> bool {
+        let Some(n) = self.attempts.get_mut(app_id) else {
+            return false;
+        };
+        *n += 1;
+        if *n >= STORE_MAX_ATTEMPTS {
+            self.attempts.remove(app_id);
+            return false;
+        }
+        self.pending.push(PendingRemoval {
+            id: app_id.to_owned(),
+            not_before: Some(now + STORE_RETRY_DELAY),
+        });
+        true
+    }
+
+    /// 距最近一次重试还有多久(没有等待中的重试返回 `None`)——`about_to_wait` 据此排唤醒。
+    pub(crate) fn next_wake(&self, now: Instant) -> Option<Duration> {
+        self.pending
+            .iter()
+            .filter_map(|p| p.not_before)
+            .map(|t| t.saturating_duration_since(now))
+            .min()
     }
 }
 
@@ -412,30 +493,73 @@ mod tests {
     fn store_removal_waits_until_the_apps_webview_has_left_the_pool() {
         let mut q = StoreRemovals::default();
         let slot = AppSlot::intern("purge-a").unwrap();
+        let now = Instant::now();
         q.request("purge-a");
         q.request("purge-a");
         assert!(
-            q.take_ready(|s| s == slot).is_empty(),
+            q.take_ready(now, |s| s == slot).is_empty(),
             "webview 还在池里:不能清"
         );
-        let ready = q.take_ready(|_| false);
+        let ready = q.take_ready(now, |_| false);
         assert_eq!(
             ready,
             vec![("purge-a".to_string(), data_store_identifier("purge-a"))]
         );
-        assert!(q.take_ready(|_| false).is_empty(), "只清一次");
+        assert!(q.take_ready(now, |_| false).is_empty(), "只清一次");
     }
 
     #[test]
     fn store_removal_only_releases_apps_that_are_ready_and_keeps_the_rest_queued() {
         let mut q = StoreRemovals::default();
         let busy = AppSlot::intern("purge-busy").unwrap();
+        let now = Instant::now();
         q.request("purge-busy");
         q.request("purge-free");
-        let ready = q.take_ready(|s| s == busy);
+        let ready = q.take_ready(now, |s| s == busy);
         assert_eq!(ready.len(), 1);
         assert_eq!(ready[0].0, "purge-free");
-        assert_eq!(q.take_ready(|_| false).len(), 1, "busy 的下一帧放行");
+        assert_eq!(q.take_ready(now, |_| false).len(), 1, "busy 的下一帧放行");
+    }
+
+    /// 刚丢掉 webview 就清可能 `DataStoreInUse`:隔 `STORE_RETRY_DELAY` 重试,最多 `STORE_MAX_ATTEMPTS` 次,
+    /// 用完返回 `false` 让调用方告诉用户(不能悄悄放弃)。
+    #[test]
+    fn a_failed_removal_is_retried_after_a_delay_and_then_given_up_on() {
+        let mut q = StoreRemovals::default();
+        let t0 = Instant::now();
+        q.request("retry-a");
+        assert_eq!(q.take_ready(t0, |_| false).len(), 1);
+        for attempt in 1..STORE_MAX_ATTEMPTS {
+            assert!(q.retry("retry-a", t0), "第 {attempt} 次失败后应重新排队");
+            assert!(q.take_ready(t0, |_| false).is_empty(), "没到重试时刻");
+            assert_eq!(q.next_wake(t0), Some(STORE_RETRY_DELAY));
+            assert_eq!(
+                q.take_ready(t0 + STORE_RETRY_DELAY, |_| false).len(),
+                1,
+                "到点放行"
+            );
+        }
+        assert!(!q.retry("retry-a", t0), "次数用完:放弃");
+        assert!(
+            q.take_ready(t0 + STORE_RETRY_DELAY * 9, |_| false)
+                .is_empty()
+        );
+        assert_eq!(q.next_wake(t0), None);
+    }
+
+    #[test]
+    fn retrying_an_unknown_removal_does_nothing() {
+        let mut q = StoreRemovals::default();
+        assert!(!q.retry("never-requested", Instant::now()));
+    }
+
+    /// wry 不检查系统版本,12/13 上调 `remove_data_store` 会崩进程。
+    #[test]
+    fn store_removal_is_only_attempted_on_macos_14_and_later() {
+        assert!(!supports_store_removal(12));
+        assert!(!supports_store_removal(13));
+        assert!(supports_store_removal(14));
+        assert!(supports_store_removal(26));
     }
 
     #[test]

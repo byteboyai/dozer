@@ -1722,12 +1722,60 @@ impl App {
         self.store_removals.request(app_id);
     }
 
+    /// 数据存储清除的结果:`InUse` 在次数内重试;不支持/最终失败要告诉用户(重装后可能还是旧数据)——这是"刚发生的一件事",走 Toast。
+    pub(crate) fn app_store_removal(
+        &mut self,
+        app_id: &str,
+        outcome: crate::app_webview::StoreRemovalOutcome,
+    ) {
+        use crate::app_webview::StoreRemovalOutcome as O;
+        use crate::extensions::toast::Level;
+        let key = format!("app_store:{app_id}");
+        match outcome {
+            O::Done => self.store_removals.finish(app_id),
+            O::InUse => {
+                if !self.store_removals.retry(app_id, std::time::Instant::now()) {
+                    self.push_toast_keyed(
+                        LOG,
+                        Level::Error,
+                        format!("清除应用 {app_id} 的页面数据失败(数据仍被占用),重装后可能还会看到旧数据"),
+                        &key,
+                    );
+                }
+            }
+            O::Unsupported => {
+                self.store_removals.finish(app_id);
+                self.push_toast_keyed(
+                    LOG,
+                    Level::Warning,
+                    format!("此系统版本(低于 macOS 14)无法清除应用 {app_id} 的页面数据,重装后可能还会看到旧数据"),
+                    &key,
+                );
+            }
+            O::Failed(why) => {
+                self.store_removals.finish(app_id);
+                self.push_toast_keyed(
+                    LOG,
+                    Level::Error,
+                    format!("清除应用 {app_id} 的页面数据失败:{why}"),
+                    &key,
+                );
+            }
+        }
+    }
+
+    /// `about_to_wait` 用:最近一次数据存储清除重试还有多久。
+    pub fn store_removal_wake(&self) -> Option<std::time::Duration> {
+        self.store_removals.next_wake(std::time::Instant::now())
+    }
+
     /// 窗口层每帧在池同步之后调:取走现在可以清除的数据存储(它们的 webview 已不在池里)。
     pub(crate) fn take_ready_store_removals(
         &mut self,
         webview_in_pool: impl Fn(AppSlot) -> bool,
     ) -> Vec<(String, [u8; 16])> {
-        self.store_removals.take_ready(webview_in_pool)
+        self.store_removals
+            .take_ready(std::time::Instant::now(), webview_in_pool)
     }
 
     /// 当前可见(未收起、未被另一侧放大盖住)的应用面板——左右两栏可以同时各显示一个应用面板。
