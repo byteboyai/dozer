@@ -329,6 +329,7 @@ fn rt_failure(e: RtError) -> AppFailure {
         RtError::Unsupported(_) => AppErrorKind::Unsupported,
         RtError::Conflict(_) => AppErrorKind::Conflict,
         RtError::PlanChanged => AppErrorKind::Rejected,
+        RtError::ShuttingDown => AppErrorKind::Unavailable,
         RtError::Io(_) => AppErrorKind::Internal,
     };
     AppFailure::new(kind, e.to_string())
