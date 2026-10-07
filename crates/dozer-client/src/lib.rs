@@ -3,7 +3,9 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use bytehost_apps::id::AppId;
 use bytehost_apps::plan::{ApprovedInstallPlan, InstallPlan, Provenance, TrustLevel};
-use bytehost_apps::proto::{AppReply, AppRequest, AppSource, AppSummary, RuntimeProbe};
+use bytehost_apps::proto::{
+    AppReply, AppRequest, AppSource, AppSummary, ManagedRuntime, RuntimeInstallPlan, RuntimeProbe,
+};
 use bytehost_apps::registry::UninstallMode;
 use dozer_core::protocol::{
     AgentKind, AgentState, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
@@ -261,6 +263,35 @@ impl Client {
             AppReply::Runtimes { runtimes } => Ok(runtimes),
             other => bail!("意外应答: {other:?}"),
         }
+    }
+
+    /// 出一份运行时安装计划(不下载任何东西)。
+    pub async fn app_runtime_plan(&self, runtime: ManagedRuntime) -> Result<RuntimeInstallPlan> {
+        match self.app_request(AppRequest::RuntimePlan { runtime }).await? {
+            AppReply::RuntimePlan { plan } => Ok(*plan),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    /// 安装一份已批准的运行时计划(服务端重算并逐字段核对)。
+    pub async fn app_install_runtime(&self, plan: RuntimeInstallPlan) -> Result<()> {
+        self.app_expect_done(AppRequest::InstallRuntime {
+            plan: Box::new(plan),
+        })
+        .await
+    }
+
+    /// 卸载某个受管运行时版本。
+    pub async fn app_uninstall_runtime(
+        &self,
+        runtime: ManagedRuntime,
+        version: &str,
+    ) -> Result<()> {
+        self.app_expect_done(AppRequest::UninstallRuntime {
+            runtime,
+            version: version.to_string(),
+        })
+        .await
     }
 
     async fn app_expect_done(&self, request: AppRequest) -> Result<()> {

@@ -15,8 +15,13 @@ use bytehost_apps::HOST_VERSION;
 use bytehost_apps::gateway::{Gateway, GatewayConfig, GatewayError};
 use bytehost_apps::manager::{AppManager, ManagerError};
 use bytehost_apps::port::{load_port, persist_port, pick_port};
-use bytehost_apps::proto::{AppErrorKind, AppFailure, AppReply, AppRequest, RuntimeProbe};
-use bytehost_apps::runtime::{SystemRunner, probe_all};
+use bytehost_apps::proto::{
+    AppErrorKind, AppFailure, AppReply, AppRequest, ManagedRuntime, RuntimeProbe,
+};
+use bytehost_apps::runtime::managed::{
+    ChainResolver, ManagedResolver, RtError, RuntimeManager, RuntimeStore,
+};
+use bytehost_apps::runtime::{SystemResolver, SystemRunner, probe_all};
 
 dozer_core::scope!(LOG, module, "apps");
 
@@ -24,6 +29,7 @@ enum State {
     Ready {
         manager: Arc<AppManager>,
         gateway: Arc<Gateway>,
+        runtime_manager: Arc<RuntimeManager>,
     },
     Unavailable(String),
 }
@@ -97,7 +103,25 @@ impl AppService {
     }
 
     async fn finish_start(root: &Path, gateway: Arc<Gateway>) -> Arc<Self> {
-        let manager = match AppManager::new(root, HOST_VERSION, gateway.clone()) {
+        let runtime_manager = Arc::new(RuntimeManager::new(root.join("runtimes")));
+        Self::finish_start_with(root, gateway, runtime_manager).await
+    }
+
+    /// 真正的构造主体:`RuntimeManager` 可注入(测试用假 `Fetcher`)。
+    async fn finish_start_with(
+        root: &Path,
+        gateway: Arc<Gateway>,
+        runtime_manager: Arc<RuntimeManager>,
+    ) -> Arc<Self> {
+        // 受管运行时优先,系统兜底。
+        let resolver = Arc::new(ChainResolver(vec![
+            Arc::new(ManagedResolver::new(RuntimeStore::new(
+                runtime_manager.store().root().to_path_buf(),
+            ))),
+            Arc::new(SystemResolver::new()),
+        ]));
+        let manager = match AppManager::with_resolver(root, HOST_VERSION, gateway.clone(), resolver)
+        {
             Ok(m) => Arc::new(m),
             Err(e) => {
                 gateway.stop().await;
@@ -113,13 +137,21 @@ impl AppService {
         }
         dozer_core::log_info!(LOG, port = gateway.port(), "应用宿主已启动");
         Arc::new(Self {
-            state: State::Ready { manager, gateway },
+            state: State::Ready {
+                manager,
+                gateway,
+                runtime_manager,
+            },
         })
     }
 
     pub async fn handle(&self, request: AppRequest) -> Result<AppReply, AppFailure> {
-        let manager = match &self.state {
-            State::Ready { manager, .. } => manager,
+        let (manager, runtime_manager) = match &self.state {
+            State::Ready {
+                manager,
+                runtime_manager,
+                ..
+            } => (manager, runtime_manager),
             State::Unavailable(reason) => {
                 return Err(AppFailure::new(AppErrorKind::Unavailable, reason.clone()));
             }
@@ -165,15 +197,74 @@ impl AppService {
                     .map_err(|e| {
                         AppFailure::new(AppErrorKind::Internal, format!("探测任务失败: {e}"))
                     })?;
+                let runtime_manager = runtime_manager.clone();
+                let installable_target =
+                    bytehost_apps::runtime::managed::Target::current().is_some();
+                let jobs = runtime_manager.jobs();
                 Ok(AppReply::Runtimes {
                     runtimes: probes
                         .into_iter()
-                        .map(|(runtime, availability)| RuntimeProbe {
-                            runtime: runtime.to_string(),
-                            availability,
+                        .map(|(runtime, availability)| {
+                            let (managed, installable) = match runtime {
+                                "node" => (
+                                    runtime_manager.installed(ManagedRuntime::Node),
+                                    installable_target,
+                                ),
+                                "python" => (
+                                    runtime_manager.installed(ManagedRuntime::Python),
+                                    installable_target,
+                                ),
+                                _ => (Vec::new(), false),
+                            };
+                            let jrt = match runtime {
+                                "node" => Some(ManagedRuntime::Node),
+                                "python" => Some(ManagedRuntime::Python),
+                                _ => None,
+                            };
+                            let job =
+                                jrt.and_then(|rt| jobs.iter().find(|j| j.runtime == rt).cloned());
+                            RuntimeProbe {
+                                runtime: runtime.to_string(),
+                                availability,
+                                managed,
+                                installable,
+                                job,
+                            }
                         })
                         .collect(),
                 })
+            }
+            AppRequest::RuntimePlan { runtime } => {
+                let runtime_manager = runtime_manager.clone();
+                tokio::task::spawn_blocking(move || runtime_manager.plan(runtime))
+                    .await
+                    .map_err(|e| {
+                        AppFailure::new(AppErrorKind::Internal, format!("计划任务失败: {e}"))
+                    })?
+                    .map(|plan| AppReply::RuntimePlan {
+                        plan: Box::new(plan),
+                    })
+                    .map_err(rt_failure)
+            }
+            AppRequest::InstallRuntime { plan } => {
+                let runtime_manager = runtime_manager.clone();
+                tokio::task::spawn_blocking(move || runtime_manager.start_install(&plan))
+                    .await
+                    .map_err(|e| {
+                        AppFailure::new(AppErrorKind::Internal, format!("安装任务失败: {e}"))
+                    })?
+                    .map(|()| AppReply::Done)
+                    .map_err(rt_failure)
+            }
+            AppRequest::UninstallRuntime { runtime, version } => {
+                let runtime_manager = runtime_manager.clone();
+                tokio::task::spawn_blocking(move || runtime_manager.uninstall(runtime, &version))
+                    .await
+                    .map_err(|e| {
+                        AppFailure::new(AppErrorKind::Internal, format!("卸载任务失败: {e}"))
+                    })?
+                    .map(|()| AppReply::Done)
+                    .map_err(rt_failure)
             }
         }
     }
@@ -189,9 +280,17 @@ impl AppService {
 
     /// dozerd 退出前调用(幂等):撤下站点、观察态落成 `Stopped`、停 gateway;`desired` 保留。
     pub async fn shutdown(&self) {
-        let State::Ready { manager, gateway } = &self.state else {
+        let State::Ready {
+            manager,
+            gateway,
+            runtime_manager,
+        } = &self.state
+        else {
             return;
         };
+        // 先取消并收掉还在跑的运行时安装/下载线程,再撤应用(不能把 dozerd 的退出拖住)。
+        let rm = runtime_manager.clone();
+        let _ = tokio::task::spawn_blocking(move || rm.cancel_all_and_join()).await;
         let m = manager.clone();
         match tokio::task::spawn_blocking(move || m.suspend_all()).await {
             Ok(report) => log_report(&report, "退出收尾"),
@@ -221,6 +320,18 @@ where
         .await
         .map_err(|e| AppFailure::new(AppErrorKind::Internal, format!("应用宿主任务失败: {e}")))?
         .map_err(|e| AppFailure::new(e.kind(), e.to_string()))
+}
+
+/// `RuntimeManager` 的错误映射成带类别的失败:不支持→Unsupported,冲突→Conflict,
+/// 计划变化→Rejected,I/O→Internal。
+fn rt_failure(e: RtError) -> AppFailure {
+    let kind = match &e {
+        RtError::Unsupported(_) => AppErrorKind::Unsupported,
+        RtError::Conflict(_) => AppErrorKind::Conflict,
+        RtError::PlanChanged => AppErrorKind::Rejected,
+        RtError::Io(_) => AppErrorKind::Internal,
+    };
+    AppFailure::new(kind, e.to_string())
 }
 
 fn now_ms() -> u64 {
@@ -893,5 +1004,343 @@ port_env = "APP_PORT"
         );
         assert_eq!(fetch(&url, "pyapp").0, 200);
         second.shutdown().await;
+    }
+
+    // ===== A6d Task 4:运行时安装经 dozerd 线上协议 =====
+    use bytehost_apps::digest::sha256_hex;
+    use bytehost_apps::proto::RuntimeDownload;
+    use bytehost_apps::runtime::managed::{Fetcher, UvRunner};
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    fn leak(s: String) -> &'static str {
+        Box::leak(s.into_boxed_str())
+    }
+
+    /// 造一个顶层 `bin/tool`(strip 0)的 `.tar.gz`。
+    fn tool_tar(dir: &Path, script: &str) -> (std::path::PathBuf, String) {
+        let src = dir.join(format!("tsrc-{}", std::process::id()));
+        std::fs::create_dir_all(src.join("bin")).unwrap();
+        let tool = src.join("bin/tool");
+        std::fs::write(&tool, script).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let archive = dir.join(format!("t-{}.tar.gz", std::process::id()));
+        let status = std::process::Command::new("/usr/bin/tar")
+            .args(["-czf"])
+            .arg(&archive)
+            .arg("-C")
+            .arg(&src)
+            .arg("bin")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let bytes = std::fs::read(&archive).unwrap();
+        (archive, sha256_hex(&bytes))
+    }
+
+    /// 顶层就是 `uv`(strip 0)。
+    fn uv_tar(dir: &Path) -> (std::path::PathBuf, String) {
+        let src = dir.join(format!("usrc-{}", std::process::id()));
+        std::fs::create_dir_all(&src).unwrap();
+        let uv = src.join("uv");
+        std::fs::write(&uv, "#!/bin/sh\necho uv\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&uv, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let archive = dir.join(format!("u-{}.tar.gz", std::process::id()));
+        let status = std::process::Command::new("/usr/bin/tar")
+            .args(["-czf"])
+            .arg(&archive)
+            .arg("-C")
+            .arg(&src)
+            .arg("uv")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let bytes = std::fs::read(&archive).unwrap();
+        (archive, sha256_hex(&bytes))
+    }
+
+    struct FakeFetcher {
+        source: std::path::PathBuf,
+        calls: AtomicUsize,
+        block: bool,
+    }
+
+    impl Fetcher for FakeFetcher {
+        fn fetch(
+            &self,
+            _url: &str,
+            dest: &Path,
+            on_progress: &mut dyn FnMut(u64, Option<u64>),
+            cancel: &AtomicBool,
+        ) -> std::io::Result<()> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.block {
+                while !cancel.load(Ordering::SeqCst) {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "取消"));
+            }
+            let bytes = std::fs::read(&self.source)?;
+            std::fs::write(dest, &bytes)?;
+            on_progress(bytes.len() as u64, Some(bytes.len() as u64));
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeUv {
+        calls: Mutex<usize>,
+    }
+
+    impl UvRunner for FakeUv {
+        fn python_install(
+            &self,
+            _uv: &Path,
+            version: &str,
+            install_dir: &Path,
+            _cache_dir: &Path,
+            _cancel: &AtomicBool,
+        ) -> std::io::Result<()> {
+            *self.calls.lock().unwrap() += 1;
+            let d = install_dir.join(format!("cpython-{version}.0-macos-aarch64-none"));
+            std::fs::create_dir_all(d.join("bin"))?;
+            let py = d.join("bin/python3");
+            std::fs::write(&py, "#!/bin/sh\n")?;
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&py, std::fs::Permissions::from_mode(0o755))?;
+            Ok(())
+        }
+    }
+
+    /// 用测试专用 pin 表(受管版本固定为 24.21.0),假 fetcher/uv,启动服务。
+    async fn start_with_fake_runtime(
+        root: &Path,
+        fetcher: Arc<dyn Fetcher>,
+        pins: &'static [bytehost_apps::runtime::managed::Pin],
+    ) -> Arc<AppService> {
+        let gateway = Arc::new(Gateway::start(GatewayConfig { port: 0 }).await.unwrap());
+        let rm = Arc::new(RuntimeManager::with_parts(
+            root.join("runtimes"),
+            fetcher,
+            Arc::new(bytehost_apps::runtime::managed::TarArchive),
+            Some(bytehost_apps::runtime::managed::Target::Aarch64Apple),
+            Arc::new(FakeUv::default()),
+            pins,
+        ));
+        AppService::finish_start_with(root, gateway, rm).await
+    }
+
+    fn node_pins(url: &str, sha: String) -> &'static [bytehost_apps::runtime::managed::Pin] {
+        use bytehost_apps::runtime::managed::{Pin, Target};
+        Box::leak(
+            vec![Pin {
+                name: "node",
+                version: "24.21.0",
+                target: Target::Aarch64Apple,
+                url: leak(url.to_string()),
+                sha256: leak(sha),
+                strip_components: 0,
+                bin_rel: "bin/tool",
+            }]
+            .into_boxed_slice(),
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_runtime_install_goes_plan_approve_progress_installed_and_probes_show_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("bytehost");
+        let (tar, sha) = tool_tar(tmp.path(), "#!/bin/sh\necho v1\n");
+        let pins = node_pins("https://nodejs.org/x.tar.gz", sha);
+        let svc = start_with_fake_runtime(
+            &root,
+            Arc::new(FakeFetcher {
+                source: tar,
+                calls: AtomicUsize::new(0),
+                block: false,
+            }),
+            pins,
+        )
+        .await;
+
+        let AppReply::RuntimePlan { plan } = svc
+            .handle(AppRequest::RuntimePlan {
+                runtime: ManagedRuntime::Node,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        svc.handle(AppRequest::InstallRuntime { plan })
+            .await
+            .unwrap();
+
+        // 轮询探测直到任务 finished 且版本出现。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let AppReply::Runtimes { runtimes } =
+                svc.handle(AppRequest::ProbeRuntimes).await.unwrap()
+            else {
+                panic!()
+            };
+            let node = runtimes.iter().find(|r| r.runtime == "node").unwrap();
+            if node.job.as_ref().map(|j| j.finished).unwrap_or(false)
+                && node.managed.contains(&"24.21.0".to_string())
+            {
+                assert!(node.installable);
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "安装未在 10s 内完成: {node:?}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        svc.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_forged_runtime_plan_is_rejected_without_downloading() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("bytehost");
+        let (tar, sha) = tool_tar(tmp.path(), "#!/bin/sh\necho v1\n");
+        let pins = node_pins("https://nodejs.org/x.tar.gz", sha);
+        let fetcher = Arc::new(FakeFetcher {
+            source: tar,
+            calls: AtomicUsize::new(0),
+            block: false,
+        });
+        let svc = start_with_fake_runtime(&root, fetcher.clone(), pins).await;
+
+        let AppReply::RuntimePlan { plan } = svc
+            .handle(AppRequest::RuntimePlan {
+                runtime: ManagedRuntime::Node,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        let mut forged = *plan;
+        forged.downloads[0] = RuntimeDownload {
+            url: "https://evil/x.tar.gz".into(),
+            ..forged.downloads[0].clone()
+        };
+        let err = svc
+            .handle(AppRequest::InstallRuntime {
+                plan: Box::new(forged),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, AppErrorKind::Rejected);
+        assert_eq!(fetcher.calls.load(Ordering::SeqCst), 0, "不得发起下载");
+        svc.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutdown_cancels_a_running_download() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("bytehost");
+        let (tar, sha) = tool_tar(tmp.path(), "#!/bin/sh\necho v1\n");
+        let pins = node_pins("https://nodejs.org/x.tar.gz", sha);
+        let svc = start_with_fake_runtime(
+            &root,
+            Arc::new(FakeFetcher {
+                source: tar,
+                calls: AtomicUsize::new(0),
+                block: true,
+            }),
+            pins,
+        )
+        .await;
+        let AppReply::RuntimePlan { plan } = svc
+            .handle(AppRequest::RuntimePlan {
+                runtime: ManagedRuntime::Node,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        svc.handle(AppRequest::InstallRuntime { plan })
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let start = std::time::Instant::now();
+        svc.shutdown().await;
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(3),
+            "取消不应拖住退出"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(root.join("runtimes"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".staging-"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_process_app_uses_the_managed_runtime_before_the_system_one() {
+        if !have_python3() {
+            return;
+        }
+        use bytehost_apps::runtime::managed::Pin;
+        use bytehost_apps::runtime::managed::Target;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("bytehost");
+        // 受管的 python3 包装脚本:内部转调系统 python3,并留下"我是受管版本"的标记。
+        let marker = tmp.path().join("managed-marker");
+        let wrapper = format!(
+            "#!/bin/sh\ntouch {}\nexec /usr/bin/python3 \"$@\"\n",
+            marker.display()
+        );
+        // 这里直接手工把受管 python 摆进 store(模拟 uv python install 完成);pin 表只需让
+        // RuntimeManager 构造得起来,python 应用不会触发任何下载。
+        let pins: &'static [Pin] = Box::leak(
+            vec![Pin {
+                name: "uv",
+                version: "0.12.23",
+                target: Target::Aarch64Apple,
+                url: leak("https://github.com/uv.tar.gz".into()),
+                sha256: leak("0".repeat(64)),
+                strip_components: 0,
+                bin_rel: "uv",
+            }]
+            .into_boxed_slice(),
+        );
+        let (tar, _sha) = uv_tar(tmp.path());
+        let svc = start_with_fake_runtime(
+            &root,
+            Arc::new(FakeFetcher {
+                source: tar,
+                calls: AtomicUsize::new(0),
+                block: false,
+            }),
+            pins,
+        )
+        .await;
+        let pydir = root.join("runtimes/python/cpython-3.13.0-macos-aarch64-none/bin");
+        std::fs::create_dir_all(&pydir).unwrap();
+        let py = pydir.join("python3");
+        std::fs::write(&py, &wrapper).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&py, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        install(&svc, write_py_app(&tmp.path().join("src/app"), "pyapp")).await;
+        svc.handle(AppRequest::Start { id: id("pyapp") })
+            .await
+            .unwrap();
+        let running = wait_app(&svc, &id("pyapp"), 15, |a| {
+            matches!(a.observed, bytehost_apps::state::ObservedState::Running)
+        })
+        .await;
+        assert!(running.url.is_some(), "{running:?}");
+        assert!(marker.exists(), "受管 python 被使用(标记文件应存在)");
+        svc.shutdown().await;
     }
 }
