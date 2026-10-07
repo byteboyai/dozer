@@ -553,6 +553,40 @@ fn run_apps_message(
             }
             Effect::HostChanged => s.host_changed = true,
             Effect::Toast { level, text, key } => s.outbox.push_keyed(LOG, level, text, key),
+            Effect::RuntimePlan(runtime) => {
+                handle.spawn(async move {
+                    let r = client
+                        .app_runtime_plan(runtime)
+                        .await
+                        .map(Box::new)
+                        .map_err(|e| Failure::from_client_error(&e));
+                    send(M::RuntimePlanLoaded(r));
+                });
+            }
+            Effect::InstallRuntime(plan) => {
+                handle.spawn(async move {
+                    let r = client
+                        .app_install_runtime(*plan)
+                        .await
+                        .map_err(|e| Failure::from_client_error(&e));
+                    send(M::RuntimeInstallStarted(r));
+                });
+            }
+            Effect::UninstallRuntime(runtime, version) => {
+                handle.spawn(async move {
+                    let r = client
+                        .app_uninstall_runtime(runtime, &version)
+                        .await
+                        .map_err(|e| Failure::from_client_error(&e));
+                    send(M::RuntimeUninstallDone(r));
+                });
+            }
+            Effect::ProbeAfter(duration) => {
+                handle.spawn(async move {
+                    tokio::time::sleep(duration).await;
+                    send(M::PollProbes);
+                });
+            }
         }
     }
 }

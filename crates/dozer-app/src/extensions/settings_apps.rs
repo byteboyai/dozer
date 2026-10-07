@@ -16,7 +16,9 @@ use std::path::PathBuf;
 
 use bytehost_apps::permissions::{Enforcement, PermissionKey};
 use bytehost_apps::plan::{Approval, ApprovedInstallPlan, InstallPlan, Provenance, TrustLevel};
-use bytehost_apps::proto::{AppSummary, RuntimeAvailability, RuntimeProbe};
+use bytehost_apps::proto::{
+    AppSummary, ManagedRuntime, RuntimeAvailability, RuntimeInstallPlan, RuntimeProbe,
+};
 use bytehost_apps::registry::UninstallMode;
 use bytehost_apps::state::ObservedState;
 
@@ -61,6 +63,19 @@ pub enum Flow {
         id: String,
         name: String,
     },
+    /// 正在出一份运行时安装计划(不下载任何东西)。
+    RuntimePlanning {
+        runtime: ManagedRuntime,
+    },
+    /// 运行时安装计划已展示,等用户批准。
+    RuntimeReviewing {
+        plan: Box<RuntimeInstallPlan>,
+    },
+    /// 卸载某个受管运行时版本的确认。
+    ConfirmRuntimeUninstall {
+        runtime: ManagedRuntime,
+        version: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +102,17 @@ pub enum Message {
     UninstallClicked(String),
     UninstallConfirmed(UninstallMode),
     ActionDone(String, ActKind, Result<(), Failure>),
+    /// 点「安装…」:为一个运行时出一份安装计划。
+    RuntimeInstallClicked(ManagedRuntime),
+    RuntimePlanLoaded(Result<Box<RuntimeInstallPlan>, Failure>),
+    RuntimeApproveClicked,
+    /// 安装请求已发出(成功表示 dozerd 接受了任务,进度靠轮询)。
+    RuntimeInstallStarted(Result<(), Failure>),
+    RuntimeUninstallClicked(ManagedRuntime, String),
+    RuntimeUninstallConfirmed,
+    RuntimeUninstallDone(Result<(), Failure>),
+    /// 安装进行中的定时刷新(由 `Effect::ProbeAfter` 转回)。
+    PollProbes,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -102,6 +128,14 @@ pub enum Effect {
     },
     Stop(String),
     Uninstall(String, UninstallMode),
+    /// 为一个运行时出一份安装计划(不下载)。
+    RuntimePlan(ManagedRuntime),
+    /// 安装一份已批准的运行时计划。
+    InstallRuntime(Box<RuntimeInstallPlan>),
+    /// 卸载某个受管运行时版本。
+    UninstallRuntime(ManagedRuntime, String),
+    /// 延时后再探测一次(安装进行中的进度轮询)。
+    ProbeAfter(std::time::Duration),
     /// 已安装集合/运行状态变了:通知主窗口的应用宿主立刻刷新列表(同步图标栏)。
     HostChanged,
     Toast {
@@ -117,6 +151,10 @@ pub struct State {
     pub apps: Load<Vec<AppSummary>>,
     pub flow: Flow,
     acting: std::collections::HashMap<String, ActKind>,
+    /// 已经报过结果(成功或失败 Toast)的运行时任务——避免每次轮询重复弹。
+    reported_jobs: std::collections::HashSet<ManagedRuntime>,
+    /// 已发出但还没回结果的受管运行时卸载(去重)。
+    uninstalling: std::collections::HashSet<(ManagedRuntime, String)>,
 }
 
 impl State {
@@ -132,7 +170,7 @@ impl State {
                     Ok(p) => Load::Loaded(p),
                     Err(f) => Load::Failed(f.text().to_owned()),
                 };
-                Vec::new()
+                self.probe_side_effects()
             }
             Message::ListLoaded(result) => {
                 self.apps = match result {
@@ -198,7 +236,11 @@ impl State {
                 // 在途的规划/安装不能取消(请求已发出);其余步骤都可以关。
                 if matches!(
                     self.flow,
-                    Flow::Reviewing { .. } | Flow::Failed { .. } | Flow::ConfirmUninstall { .. }
+                    Flow::Reviewing { .. }
+                        | Flow::Failed { .. }
+                        | Flow::ConfirmUninstall { .. }
+                        | Flow::RuntimeReviewing { .. }
+                        | Flow::ConfirmRuntimeUninstall { .. }
                 ) {
                     self.flow = Flow::Idle;
                 }
@@ -274,7 +316,128 @@ impl State {
                 effects.push(Effect::HostChanged);
                 effects
             }
+            Message::RuntimeInstallClicked(runtime) => {
+                if self.flow != Flow::Idle {
+                    return Vec::new();
+                }
+                self.flow = Flow::RuntimePlanning { runtime };
+                vec![Effect::RuntimePlan(runtime)]
+            }
+            Message::RuntimePlanLoaded(result) => {
+                let Flow::RuntimePlanning { .. } = &self.flow else {
+                    return Vec::new();
+                };
+                self.flow = match result {
+                    Ok(plan) => Flow::RuntimeReviewing { plan },
+                    // 流程内的失败:留在对话里,不弹 Toast(与安装计划一致)。
+                    Err(f) => Flow::Failed {
+                        message: f.text().to_owned(),
+                    },
+                };
+                Vec::new()
+            }
+            Message::RuntimeApproveClicked => {
+                let Flow::RuntimeReviewing { plan } = &self.flow else {
+                    return Vec::new();
+                };
+                // 批准的就是展示的这一份:原封不动发回去,dozerd 会重算核对。
+                let plan = plan.clone();
+                self.flow = Flow::Idle;
+                vec![
+                    Effect::InstallRuntime(plan),
+                    Effect::ProbeAfter(std::time::Duration::from_millis(500)),
+                ]
+            }
+            Message::RuntimeInstallStarted(result) => match result {
+                Ok(()) => Vec::new(),
+                Err(f) => vec![Effect::Toast {
+                    level: Level::Error,
+                    text: format!("安装运行时失败:{}", f.text()),
+                    key: "runtimes:install".into(),
+                }],
+            },
+            Message::RuntimeUninstallClicked(runtime, version) => {
+                if self.flow != Flow::Idle
+                    || self.uninstalling.contains(&(runtime, version.clone()))
+                {
+                    return Vec::new();
+                }
+                self.flow = Flow::ConfirmRuntimeUninstall { runtime, version };
+                Vec::new()
+            }
+            Message::RuntimeUninstallConfirmed => {
+                let Flow::ConfirmRuntimeUninstall { runtime, version } = &self.flow else {
+                    return Vec::new();
+                };
+                let (runtime, version) = (*runtime, version.clone());
+                self.flow = Flow::Idle;
+                self.uninstalling.insert((runtime, version.clone()));
+                vec![Effect::UninstallRuntime(runtime, version)]
+            }
+            Message::RuntimeUninstallDone(result) => {
+                // 哪个版本已经不在状态里记了(可能同时多个);都清掉,要求刷新即可。
+                for key in self.uninstalling.drain() {
+                    self.reported_jobs.remove(&key.0);
+                }
+                let effects = vec![Effect::Probe];
+                match result {
+                    Ok(()) => effects,
+                    Err(f) => {
+                        let mut effects = effects;
+                        effects.insert(
+                            0,
+                            Effect::Toast {
+                                level: Level::Error,
+                                text: format!("卸载运行时失败:{}", f.text()),
+                                key: "runtimes:uninstall".into(),
+                            },
+                        );
+                        effects
+                    }
+                }
+            }
+            Message::PollProbes => vec![Effect::Probe],
         }
+    }
+
+    /// `ProbesLoaded` 之后的副作用:安装进行中继续轮询;刚完成的任务报一次结果。
+    fn probe_side_effects(&mut self) -> Vec<Effect> {
+        let Load::Loaded(probes) = &self.probes else {
+            return Vec::new();
+        };
+        let mut effects = Vec::new();
+        let mut any_running = false;
+        for probe in probes {
+            let Some(job) = &probe.job else { continue };
+            if !job.finished {
+                any_running = true;
+                continue;
+            }
+            if self.reported_jobs.contains(&job.runtime) {
+                continue;
+            }
+            self.reported_jobs.insert(job.runtime);
+            let name = managed_runtime_label(job.runtime);
+            match &job.failed {
+                Some(why) => effects.push(Effect::Toast {
+                    level: Level::Error,
+                    text: format!("{name} 运行时安装失败:{why}"),
+                    key: format!("runtimes:job:{name}"),
+                }),
+                None => {
+                    effects.push(Effect::Toast {
+                        level: Level::Success,
+                        text: format!("{name} 运行时已安装"),
+                        key: format!("runtimes:job:{name}"),
+                    });
+                    effects.push(Effect::HostChanged);
+                }
+            }
+        }
+        if any_running {
+            effects.push(Effect::ProbeAfter(std::time::Duration::from_secs(1)));
+        }
+        effects
     }
 
     pub fn is_acting(&self, id: &str) -> Option<ActKind> {
@@ -329,6 +492,16 @@ pub fn orphan_result_effects(msg: &Message) -> Vec<Effect> {
             effects.push(Effect::HostChanged);
             effects
         }
+        Message::RuntimeInstallStarted(Err(f)) => vec![Effect::Toast {
+            level: Level::Error,
+            text: format!("安装运行时失败:{}", f.text()),
+            key: "runtimes:install".into(),
+        }],
+        Message::RuntimeUninstallDone(Err(f)) => vec![Effect::Toast {
+            level: Level::Error,
+            text: format!("卸载运行时失败:{}", f.text()),
+            key: "runtimes:uninstall".into(),
+        }],
         _ => Vec::new(),
     }
 }
@@ -471,6 +644,94 @@ pub fn observed_label(state: &ObservedState) -> String {
     }
 }
 
+/// 受管运行时的中文名(给按钮/Toast 用)。
+pub fn managed_runtime_label(runtime: ManagedRuntime) -> &'static str {
+    match runtime {
+        ManagedRuntime::Node => "Node.js",
+        ManagedRuntime::Python => "Python",
+    }
+}
+
+/// 运行时行:一个运行时一行(名称、探测状态、受管版本、安装/卸载按钮、进度)。
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuntimeRow {
+    pub probe_runtime: String,
+    pub name: String,
+    /// 探测到的可用性文案(如 `可用 · v20` / `未安装`)。
+    pub status: String,
+    /// 已装的受管版本(新→旧),带 `uninstall` 的按钮文案所需。
+    pub managed: Vec<String>,
+    /// 此平台可自动安装(有固定版本)。
+    pub installable: bool,
+    /// 显示的进度文案(有任务且未完成时),如 `下载 node · 45%` 或 `下载 node · 12.3 MB`。
+    pub progress: Option<String>,
+}
+
+/// 把探测结果映射成运行时行。每个探测一行;未受管不支持的运行时(docker)`installable=false`。
+#[cfg(test)]
+pub fn runtime_rows(probes: &[RuntimeProbe]) -> Vec<RuntimeRow> {
+    probes
+        .iter()
+        .map(|probe| {
+            let (name, status, _) = runtime_line(probe);
+            RuntimeRow {
+                probe_runtime: probe.runtime.clone(),
+                name,
+                status,
+                managed: probe.managed.clone(),
+                installable: probe.installable,
+                progress: probe
+                    .job
+                    .as_ref()
+                    .filter(|j| !j.finished)
+                    .map(progress_text),
+            }
+        })
+        .collect()
+}
+
+/// 一个进行中的任务 → 进度文案;`total` 未知时只显示已下载 MB。
+fn progress_text(job: &bytehost_apps::proto::RuntimeJob) -> String {
+    match job.total {
+        Some(total) if total > 0 => {
+            let pct = (job.done.saturating_mul(100) / total).min(100);
+            format!("{} · {}%", job.phase, pct)
+        }
+        _ => format!("{} · {:.1} MB", job.phase, job.done as f64 / 1_048_576.0),
+    }
+}
+
+/// 判断某探测对应的运行时是否正在安装(未完成的任务)。
+pub fn probe_is_installing(probe: &RuntimeProbe) -> bool {
+    probe.job.as_ref().is_some_and(|j| !j.finished)
+}
+
+/// 审批页逐行内容:`(标签, 值)`——来源 / 固定版本 / SHA-256 / 安装位置 / 将要做的事。
+pub fn plan_lines(plan: &RuntimeInstallPlan) -> Vec<(String, String)> {
+    let mut lines: Vec<(String, String)> = Vec::new();
+    lines.push((
+        "运行时".into(),
+        managed_runtime_label(plan.runtime).to_owned(),
+    ));
+    for (name, version) in &plan.versions {
+        lines.push((format!("版本({name})"), version.clone()));
+    }
+    for d in &plan.downloads {
+        lines.push((format!("来源({})", d.what), d.url.clone()));
+        let sha = match &d.sha256 {
+            Some(s) => s.clone(),
+            None => "由 uv 内置哈希校验".to_owned(),
+        };
+        lines.push((format!("SHA-256({})", d.what), sha));
+        if !d.note.is_empty() {
+            lines.push((format!("说明({})", d.what), d.note.clone()));
+        }
+    }
+    lines.push(("安装位置".into(), plan.dest.clone()));
+    lines
+}
+
 // ---------------------------------------------------------------------------------------------
 // 视图(只画 `State` 与上面的纯展示函数,不含逻辑)。
 // ---------------------------------------------------------------------------------------------
@@ -504,30 +765,17 @@ fn dim<'a>(
 }
 
 pub fn view(state: &State) -> El<'_> {
-    let colors = byteui::theme::color::current();
     let mut body = column![heading("应用")].spacing(12).width(Length::Fill);
 
-    // 运行时探测(只展示;一期只有静态 Web 应用,不依赖它们)。
-    body = body.push(dim("运行时(Python/Node/容器类应用以后才支持,这里只探测)"));
+    // 运行时探测 + 受管运行时的安装/卸载。
+    body = body.push(dim("运行时(受管版本随 dozerd 安装在本机,优先于系统版本)"));
     let probes_view: El<'_> = match &state.probes {
         Load::Loading => dim("检测中…").into(),
         Load::Failed(why) => dim(format!("探测失败:{why}")).into(),
         Load::Loaded(probes) => {
             let mut col = column![].spacing(4);
             for probe in probes {
-                let (name, status, ok) = runtime_line(probe);
-                col = col.push(
-                    row![
-                        text(name)
-                            .size(byteui::theme::font::body())
-                            .color(colors.cream),
-                        Space::new().width(Length::Fill),
-                        text(status)
-                            .size(byteui::theme::font::label())
-                            .color(if ok { colors.gold } else { colors.dim }),
-                    ]
-                    .spacing(10),
-                );
+                col = col.push(runtime_row_view(state, probe));
             }
             col.into()
         }
@@ -561,6 +809,67 @@ pub fn view(state: &State) -> El<'_> {
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
+}
+
+/// 一行受管运行时:名称、状态、受管版本、进度或安装/卸载按钮。
+fn runtime_row_view<'a>(state: &'a State, probe: &'a RuntimeProbe) -> El<'a> {
+    let colors = byteui::theme::color::current();
+    let (name, status, _) = runtime_line(probe);
+    let mut r = row![
+        text(name)
+            .size(byteui::theme::font::body())
+            .color(colors.cream),
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center);
+
+    if probe_is_installing(probe) {
+        let progress = probe.job.as_ref().map(progress_text).unwrap_or_default();
+        r = r.push(dim(progress));
+        r = r.push(Space::new().width(Length::Fill));
+        return r.into();
+    }
+
+    r = r.push(dim(status));
+    r = r.push(Space::new().width(Length::Fill));
+
+    let runtime = managed_runtime_of(&probe.runtime);
+    if !probe.managed.is_empty() {
+        for v in &probe.managed {
+            let Some(rt) = runtime else {
+                r = r.push(dim(v.clone()));
+                continue;
+            };
+            if state.uninstalling.contains(&(rt, v.clone())) {
+                r = r.push(dim(format!("{v}(处理中…)")));
+                continue;
+            }
+            r = r.push(dim(v.clone()));
+            r = r.push(action_button(
+                "卸载",
+                Message::RuntimeUninstallClicked(rt, v.clone()),
+                colors.red,
+            ));
+        }
+    } else if probe.installable
+        && let Some(rt) = runtime
+    {
+        r = r.push(action_button(
+            "安装…",
+            Message::RuntimeInstallClicked(rt),
+            colors.gold,
+        ));
+    }
+    r.into()
+}
+
+/// 探测的 `runtime` 键 → 受管运行时(仅 node/python;其他返回 `None`)。
+fn managed_runtime_of(key: &str) -> Option<ManagedRuntime> {
+    match key {
+        "node" => Some(ManagedRuntime::Node),
+        "python" => Some(ManagedRuntime::Python),
+        _ => None,
+    }
 }
 
 fn app_row<'a>(state: &'a State, app: &'a AppSummary) -> El<'a> {
@@ -642,7 +951,70 @@ fn flow_view(flow: &Flow) -> El<'_> {
         .spacing(8)
         .into(),
         Flow::Reviewing { plan, .. } => review_view(plan),
+        Flow::RuntimePlanning { runtime } => dim(format!(
+            "正在准备 {} 运行时的安装计划…",
+            managed_runtime_label(*runtime)
+        ))
+        .into(),
+        Flow::RuntimeReviewing { plan } => runtime_review_view(plan),
+        Flow::ConfirmRuntimeUninstall { runtime, version } => column![
+            text(format!(
+                "卸载受管运行时 {} {version}?",
+                managed_runtime_label(*runtime)
+            ))
+            .size(byteui::theme::font::body())
+            .color(colors.cream),
+            dim("依赖它的应用下次启动会因运行时缺失而失败;重装可恢复。"),
+            row![
+                action_button("取消", Message::FlowDismissed, colors.dim),
+                action_button("卸载", Message::RuntimeUninstallConfirmed, colors.red),
+            ]
+            .spacing(8),
+        ]
+        .spacing(8)
+        .into(),
     }
+}
+
+/// 运行时安装审批卡:逐行展示 `plan_lines`(来源 URL、固定版本、完整 SHA-256、目标目录)。
+fn runtime_review_view(plan: &RuntimeInstallPlan) -> El<'_> {
+    let colors = byteui::theme::color::current();
+    let mut col = column![
+        text(format!(
+            "安装 {} 运行时",
+            managed_runtime_label(plan.runtime)
+        ))
+        .size(byteui::theme::font::body())
+        .color(colors.cream),
+    ]
+    .spacing(6);
+    for (k, v) in plan_lines(plan) {
+        col = col.push(
+            row![
+                dim(k),
+                text(v)
+                    .size(byteui::theme::font::label())
+                    .color(colors.cream)
+            ]
+            .spacing(10),
+        );
+    }
+    col = col.push(dim("将要做的事:"));
+    for line in &plan.will_do {
+        col = col.push(
+            text(line.clone())
+                .size(byteui::theme::font::label())
+                .color(colors.cream),
+        );
+    }
+    col = col.push(
+        row![
+            action_button("取消", Message::FlowDismissed, colors.dim),
+            action_button("下载并安装", Message::RuntimeApproveClicked, colors.gold),
+        ]
+        .spacing(8),
+    );
+    container(col).padding(10).width(Length::Fill).into()
 }
 
 /// 审批卡:把 `plan_view` 的每一行如实画出来;升级(申请比已授予更多)的权限用金色标 `↑`。
@@ -716,7 +1088,7 @@ mod tests {
     use bytehost_apps::id::{AppId, Version};
     use bytehost_apps::permissions::{Access, Gate, Outbound, Permissions, diff_permissions};
     use bytehost_apps::plan::EnforcementEntry;
-    use bytehost_apps::proto::{AppErrorKind, AppFailure};
+    use bytehost_apps::proto::{AppErrorKind, AppFailure, RuntimeDownload, RuntimeJob};
     use bytehost_apps::state::DesiredState;
 
     const NOW: u64 = 1_700_000_000_000;
@@ -1068,6 +1440,9 @@ mod tests {
         let probe = |runtime: &str, availability| RuntimeProbe {
             runtime: runtime.into(),
             availability,
+            managed: Vec::new(),
+            installable: false,
+            job: None,
         };
         assert_eq!(
             runtime_line(&probe(
@@ -1162,5 +1537,331 @@ mod tests {
         ] {
             assert!(orphan_result_effects(&msg).is_empty(), "{msg:?}");
         }
+    }
+
+    // ---- A6d Task 5:运行时安装审批 / 进度 / 卸载 ----
+
+    fn rt_plan(runtime: ManagedRuntime, sha: Option<&str>) -> RuntimeInstallPlan {
+        RuntimeInstallPlan {
+            runtime,
+            versions: vec![("node".into(), "24.21.0".into())],
+            downloads: vec![RuntimeDownload {
+                what: "node".into(),
+                url: "https://nodejs.org/dist/v24.21.0/node.tar.gz".into(),
+                sha256: sha.map(str::to_owned),
+                note: String::new(),
+            }],
+            dest: "/Users/x/bytehost/runtimes/node/24.21.0".into(),
+            will_do: vec!["下载并解压到目标目录".into(), "校验 SHA-256".into()],
+        }
+    }
+
+    fn rt_probe(
+        runtime: &str,
+        managed: Vec<&str>,
+        installable: bool,
+        job: Option<RuntimeJob>,
+    ) -> RuntimeProbe {
+        RuntimeProbe {
+            runtime: runtime.into(),
+            availability: RuntimeAvailability::NotInstalled,
+            managed: managed.into_iter().map(String::from).collect(),
+            installable,
+            job,
+        }
+    }
+
+    fn job(runtime: ManagedRuntime, finished: bool, failed: Option<&str>) -> RuntimeJob {
+        RuntimeJob {
+            runtime,
+            phase: "下载".into(),
+            done: 5,
+            total: Some(10),
+            failed: failed.map(str::to_owned),
+            finished,
+        }
+    }
+
+    #[test]
+    fn clicking_install_plans_then_reviewing_shows_every_download_with_its_checksum() {
+        let mut s = State::default();
+        assert_eq!(
+            s.update(Message::RuntimeInstallClicked(ManagedRuntime::Node), NOW),
+            vec![Effect::RuntimePlan(ManagedRuntime::Node)]
+        );
+        assert_eq!(
+            s.flow,
+            Flow::RuntimePlanning {
+                runtime: ManagedRuntime::Node
+            }
+        );
+        s.update(
+            Message::RuntimePlanLoaded(Ok(Box::new(rt_plan(
+                ManagedRuntime::Node,
+                Some(&"a".repeat(64)),
+            )))),
+            NOW,
+        );
+        assert!(matches!(s.flow, Flow::RuntimeReviewing { .. }));
+
+        let plan = rt_plan(ManagedRuntime::Node, Some(&"a".repeat(64)));
+        let lines = plan_lines(&plan);
+        assert!(lines.iter().any(|(_, v)| v.contains("nodejs.org")));
+        assert!(
+            lines
+                .iter()
+                .any(|(k, v)| k.starts_with("版本") && v == "24.21.0")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|(k, v)| k.starts_with("SHA-256") && v == &"a".repeat(64))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|(_, v)| v.contains("/runtimes/node/24.21.0"))
+        );
+
+        // sha256 == None → 说明由 uv 校验。
+        let uv = RuntimeInstallPlan {
+            runtime: ManagedRuntime::Python,
+            versions: vec![("python".into(), "3.13".into())],
+            downloads: vec![RuntimeDownload {
+                what: "python".into(),
+                url: "uv:python-install".into(),
+                sha256: None,
+                note: "由 uv 下载".into(),
+            }],
+            dest: "/x/runtimes/python".into(),
+            will_do: vec![],
+        };
+        assert!(
+            plan_lines(&uv)
+                .iter()
+                .any(|(k, v)| k.starts_with("SHA-256") && v == "由 uv 内置哈希校验")
+        );
+    }
+
+    #[test]
+    fn approving_sends_back_exactly_the_plan_that_was_shown_and_starts_polling() {
+        let mut s = State::default();
+        s.update(Message::RuntimeInstallClicked(ManagedRuntime::Node), NOW);
+        let plan = rt_plan(ManagedRuntime::Node, Some(&"b".repeat(64)));
+        s.update(Message::RuntimePlanLoaded(Ok(Box::new(plan.clone()))), NOW);
+        let effects = s.update(Message::RuntimeApproveClicked, NOW);
+        assert_eq!(effects.len(), 2);
+        assert_eq!(effects[0], Effect::InstallRuntime(Box::new(plan)));
+        assert!(matches!(effects[1], Effect::ProbeAfter(_)));
+        assert_eq!(s.flow, Flow::Idle, "批准后回到 Idle");
+    }
+
+    #[test]
+    fn approve_outside_reviewing_does_nothing() {
+        let mut s = State::default();
+        assert!(s.update(Message::RuntimeApproveClicked, NOW).is_empty());
+        s.update(Message::RuntimeInstallClicked(ManagedRuntime::Node), NOW);
+        assert!(s.update(Message::RuntimeApproveClicked, NOW).is_empty());
+    }
+
+    #[test]
+    fn polling_continues_only_while_a_job_is_unfinished_and_stops_after() {
+        let mut s = State::default();
+        // 未完成 → 继续轮询。
+        let effects = s.update(
+            Message::ProbesLoaded(Ok(vec![rt_probe(
+                "node",
+                vec![],
+                true,
+                Some(job(ManagedRuntime::Node, false, None)),
+            )])),
+            NOW,
+        );
+        assert!(effects.iter().any(|e| matches!(e, Effect::ProbeAfter(_))));
+
+        // 已完成且成功 → 一次成功 Toast + HostChanged,且不再轮询。
+        let effects = s.update(
+            Message::ProbesLoaded(Ok(vec![rt_probe(
+                "node",
+                vec!["24.21.0"],
+                true,
+                Some(job(ManagedRuntime::Node, true, None)),
+            )])),
+            NOW,
+        );
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::Toast {
+                level: Level::Success,
+                ..
+            }
+        )));
+        assert!(effects.contains(&Effect::HostChanged));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::ProbeAfter(_))));
+    }
+
+    #[test]
+    fn a_finished_job_toasts_once_and_a_failed_one_toasts_its_reason_once() {
+        let mut s = State::default();
+        let probes_ok = || {
+            vec![rt_probe(
+                "node",
+                vec!["24.21.0"],
+                true,
+                Some(job(ManagedRuntime::Node, true, None)),
+            )]
+        };
+        let first = s.update(Message::ProbesLoaded(Ok(probes_ok())), NOW);
+        assert_eq!(
+            first
+                .iter()
+                .filter(|e| matches!(e, Effect::Toast { .. }))
+                .count(),
+            1
+        );
+        let second = s.update(Message::ProbesLoaded(Ok(probes_ok())), NOW);
+        assert_eq!(
+            second
+                .iter()
+                .filter(|e| matches!(e, Effect::Toast { .. }))
+                .count(),
+            0,
+            "同一任务只报一次"
+        );
+
+        // 失败:报一次原因;不同运行时各报各的。
+        let mut s = State::default();
+        let f = s.update(
+            Message::ProbesLoaded(Ok(vec![rt_probe(
+                "python",
+                vec![],
+                true,
+                Some(job(ManagedRuntime::Python, true, Some("下载超时"))),
+            )])),
+            NOW,
+        );
+        assert!(f.iter().any(|e| matches!(e,
+            Effect::Toast { level: Level::Error, text, .. } if text.contains("下载超时"))));
+    }
+
+    #[test]
+    fn docker_never_offers_install() {
+        let probes = vec![rt_probe("docker", vec![], false, None)];
+        let rows = runtime_rows(&probes);
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].installable);
+        assert!(rows[0].managed.is_empty());
+        assert!(managed_runtime_of("docker").is_none());
+    }
+
+    #[test]
+    fn an_installed_managed_version_offers_uninstall_with_the_warning() {
+        let probes = vec![rt_probe("node", vec!["24.21.0"], true, None)];
+        let rows = runtime_rows(&probes);
+        assert_eq!(rows[0].managed, vec!["24.21.0".to_string()]);
+
+        // 确认页文案含"运行时缺失而失败"的警告。
+        let mut s = State::default();
+        s.update(Message::ProbesLoaded(Ok(probes.clone())), NOW);
+        let effects = s.update(
+            Message::RuntimeUninstallClicked(ManagedRuntime::Node, "24.21.0".into()),
+            NOW,
+        );
+        assert!(effects.is_empty(), "先确认");
+        assert!(matches!(
+            s.flow,
+            Flow::ConfirmRuntimeUninstall { ref runtime, .. } if *runtime == ManagedRuntime::Node
+        ));
+        let effects = s.update(Message::RuntimeUninstallConfirmed, NOW);
+        assert_eq!(
+            effects,
+            vec![Effect::UninstallRuntime(
+                ManagedRuntime::Node,
+                "24.21.0".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn a_plan_failure_stays_in_the_flow_not_a_toast() {
+        let mut s = State::default();
+        s.update(Message::RuntimeInstallClicked(ManagedRuntime::Node), NOW);
+        let effects = s.update(
+            Message::RuntimePlanLoaded(Err(fail(AppErrorKind::Unsupported, "此平台不支持"))),
+            NOW,
+        );
+        assert!(effects.is_empty(), "流程内失败不弹 Toast");
+        assert_eq!(
+            s.flow,
+            Flow::Failed {
+                message: "此平台不支持".into()
+            }
+        );
+    }
+
+    #[test]
+    fn runtime_rows_show_progress_percent_or_megabytes() {
+        // total 已知 → 百分比。
+        let pct = runtime_rows(&[rt_probe(
+            "node",
+            vec![],
+            true,
+            Some(RuntimeJob {
+                runtime: ManagedRuntime::Node,
+                phase: "下载".into(),
+                done: 3,
+                total: Some(4),
+                failed: None,
+                finished: false,
+            }),
+        )]);
+        assert_eq!(pct[0].progress.as_deref(), Some("下载 · 75%"));
+
+        // total 未知 → 只显示 MB。
+        let mb = runtime_rows(&[rt_probe(
+            "node",
+            vec![],
+            true,
+            Some(RuntimeJob {
+                runtime: ManagedRuntime::Node,
+                phase: "下载".into(),
+                done: 2_097_152,
+                total: None,
+                failed: None,
+                finished: false,
+            }),
+        )]);
+        assert_eq!(mb[0].progress.as_deref(), Some("下载 · 2.0 MB"));
+    }
+
+    #[test]
+    fn a_finished_uninstall_clears_dedup_and_refreshes() {
+        let mut s = State::default();
+        s.update(Message::ProbesLoaded(Ok(vec![])), NOW);
+        s.update(
+            Message::RuntimeUninstallClicked(ManagedRuntime::Node, "24.21.0".into()),
+            NOW,
+        );
+        s.update(Message::RuntimeUninstallConfirmed, NOW);
+        let effects = s.update(Message::RuntimeUninstallDone(Ok(())), NOW);
+        assert_eq!(effects, vec![Effect::Probe]);
+        // 失败版带 Toast。
+        s.update(
+            Message::RuntimeUninstallClicked(ManagedRuntime::Node, "24.21.0".into()),
+            NOW,
+        );
+        s.update(Message::RuntimeUninstallConfirmed, NOW);
+        let bad = s.update(
+            Message::RuntimeUninstallDone(Err(fail(AppErrorKind::Conflict, "仍在运行"))),
+            NOW,
+        );
+        assert!(bad.iter().any(|e| matches!(e,
+            Effect::Toast { level: Level::Error, text, .. } if text.contains("仍在运行"))));
+    }
+
+    #[test]
+    fn poll_probes_outside_the_settings_window_does_nothing_bad() {
+        // PollProbes 在有窗口时只返回一个 Probe 意图;窗口没了时不产生任何孤儿副作用。
+        assert!(orphan_result_effects(&Message::PollProbes).is_empty());
     }
 }
