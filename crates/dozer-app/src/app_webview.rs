@@ -172,6 +172,42 @@ else if(c==='Digit1'||k==='1'){{e.preventDefault();send('zoom_reset')}}}},true)}
     )
 }
 
+/// 待清除的应用 WKWebsiteDataStore(卸载"连数据一起删"时用)。**清除前必须先让使用它的 webview 离开池**
+/// (wry:`remove_data_store` 要求先 drop 所有用这个存储的 WebView),所以这里只排队,
+/// 窗口层每帧在 `sync_webview_pool` 之后调 [`StoreRemovals::take_ready`],只放行"池里已经没有它的 webview"的那些。
+#[derive(Debug, Default)]
+pub(crate) struct StoreRemovals {
+    pending: Vec<String>,
+}
+
+impl StoreRemovals {
+    /// 排队清除某应用的数据存储(同一个应用重复排队只留一份)。
+    pub(crate) fn request(&mut self, app_id: &str) {
+        if !self.pending.iter().any(|p| p == app_id) {
+            self.pending.push(app_id.to_owned());
+        }
+    }
+
+    /// 取走已经可以清除的:`webview_in_pool(slot)` 为假(那个应用的 webview 已不在池里)的才放行,
+    /// 其余继续排队等下一帧。`(应用 id, 存储标识)`。
+    pub(crate) fn take_ready(
+        &mut self,
+        webview_in_pool: impl Fn(AppSlot) -> bool,
+    ) -> Vec<(String, [u8; 16])> {
+        let mut ready = Vec::new();
+        self.pending.retain(|id| {
+            // 没有槽(从没被面板用过)就一定没有 webview,可以直接清。
+            let in_pool = AppSlot::intern(id).is_some_and(&webview_in_pool);
+            if in_pool {
+                return true;
+            }
+            ready.push((id.clone(), data_store_identifier(id)));
+            false
+        });
+        ready
+    }
+}
+
 pub(crate) fn app_webview_spec(slot: AppSlot, url: &str, visible: bool) -> WebviewSpec {
     WebviewSpec {
         id: webview_id(slot),
@@ -370,6 +406,36 @@ mod tests {
         ] {
             assert!(!body.contains(forbidden), "不得出现 {forbidden}");
         }
+    }
+
+    #[test]
+    fn store_removal_waits_until_the_apps_webview_has_left_the_pool() {
+        let mut q = StoreRemovals::default();
+        let slot = AppSlot::intern("purge-a").unwrap();
+        q.request("purge-a");
+        q.request("purge-a");
+        assert!(
+            q.take_ready(|s| s == slot).is_empty(),
+            "webview 还在池里:不能清"
+        );
+        let ready = q.take_ready(|_| false);
+        assert_eq!(
+            ready,
+            vec![("purge-a".to_string(), data_store_identifier("purge-a"))]
+        );
+        assert!(q.take_ready(|_| false).is_empty(), "只清一次");
+    }
+
+    #[test]
+    fn store_removal_only_releases_apps_that_are_ready_and_keeps_the_rest_queued() {
+        let mut q = StoreRemovals::default();
+        let busy = AppSlot::intern("purge-busy").unwrap();
+        q.request("purge-busy");
+        q.request("purge-free");
+        let ready = q.take_ready(|s| s == busy);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].0, "purge-free");
+        assert_eq!(q.take_ready(|_| false).len(), 1, "busy 的下一帧放行");
     }
 
     #[test]

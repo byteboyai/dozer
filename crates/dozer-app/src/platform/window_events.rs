@@ -61,6 +61,8 @@ use crate::platform::todo_detail_overlay;
 use crate::preview;
 use crate::theme;
 
+dozer_core::scope!(LOG, module, "platform");
+
 /// 按 iced 本帧算出的 `mouse_interaction` 刷新窗口光标。
 ///
 /// 这套事件循环是手写的(不是 `iced_winit::program::run`),光标刷新必须
@@ -1141,6 +1143,21 @@ impl Runner {
             // 从 URL 切到 HTML `<title>`。
             true,
         );
+        // 卸载"连数据一起删"的应用:它的 webview 已经不在池里了才能清它的 WKWebsiteDataStore
+        // (wry 要求先 drop 所有用这个存储的 WebView;`remove_data_store` 需在主线程且有事件循环)。
+        for (app_id, store) in app.take_ready_store_removals(|slot| {
+            webviews.contains_key(&crate::app_webview::webview_id(slot))
+        }) {
+            use wry::WebViewExtDarwin;
+            wry::WebView::remove_data_store(&store, move |result| match result {
+                Ok(()) => {
+                    dozer_core::log_info!(LOG, app = %app_id, "已清除应用的 WebView 数据存储")
+                }
+                Err(e) => {
+                    dozer_core::log_warn!(LOG, app = %app_id, error = %e, "清除应用的 WebView 数据存储失败")
+                }
+            });
+        }
     }
 
     /// 打开任意一类独立窗口弹窗前,先关掉其余已开的——见 `OverlayKind`
