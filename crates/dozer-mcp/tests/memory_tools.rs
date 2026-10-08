@@ -37,7 +37,7 @@ async fn start_daemon() -> (std::path::PathBuf, CleanupGuard) {
             dozerd::file_edit_history::FileEditHistoryStore::new(&db).unwrap(),
         ),
         groups: dozerd::group_service::GroupService::for_tests(),
-        apps: dozerd::app_service::AppService::unavailable("test"),
+        apps: bytehost_apps::service::AppService::unavailable("test"),
     };
     let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
     let s = sock.clone();

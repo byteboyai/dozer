@@ -1850,15 +1850,13 @@ impl App {
     /// 启动地址、弹 Toast。**启动地址是秘密,不写日志。**
     fn run_app_host_effects(&mut self, effects: Vec<crate::extensions::app_host::Effect>) {
         use crate::extensions::app_host::{Act, Effect, Failure, Message as M};
+        use bytehost_client::AppHostApi;
         for effect in effects {
             match effect {
                 Effect::FetchList => {
                     let (client, proxy) = (self.client.clone(), self.proxy.clone());
                     self.handle.spawn(async move {
-                        let result = client
-                            .app_list()
-                            .await
-                            .map_err(|e| Failure::from_client_error(&e));
+                        let result = client.app_list().await.map_err(Failure::from);
                         let _ = proxy.send_event(Message::AppHost(M::ListLoaded(result)));
                     });
                 }
@@ -1868,10 +1866,7 @@ impl App {
                     };
                     let (client, proxy) = (self.client.clone(), self.proxy.clone());
                     self.handle.spawn(async move {
-                        let result = client
-                            .app_launch_url(id)
-                            .await
-                            .map_err(|e| Failure::from_client_error(&e));
+                        let result = client.app_launch_url(id).await.map_err(Failure::from);
                         let _ =
                             proxy.send_event(Message::AppHost(M::LaunchUrlLoaded(slot, result)));
                     });
@@ -1891,7 +1886,7 @@ impl App {
                             Act::Start => client.app_start(id).await.map(|_url| ()),
                             Act::Stop => client.app_stop(id).await,
                         }
-                        .map_err(|e| Failure::from_client_error(&e));
+                        .map_err(Failure::from);
                         let _ =
                             proxy.send_event(Message::AppHost(M::ActionDone(slot, act, result)));
                     });
@@ -1905,10 +1900,7 @@ impl App {
                     };
                     let (client, proxy) = (self.client.clone(), self.proxy.clone());
                     self.handle.spawn(async move {
-                        let result = client
-                            .app_logs(id, max_lines)
-                            .await
-                            .map_err(|e| Failure::from_client_error(&e));
+                        let result = client.app_logs(id, max_lines).await.map_err(Failure::from);
                         let _ = proxy.send_event(Message::AppHost(M::LogsLoaded(slot, result)));
                     });
                 }
@@ -1918,7 +1910,7 @@ impl App {
                     // 失败只写日志(`module` 来源),不弹 Toast——这是"当前处于某状态",不是一次性事件。
                     let (client, proxy) = (self.client.clone(), self.proxy.clone());
                     self.handle.spawn(async move {
-                        match client.app_subscribe().await {
+                        match client.subscribe().await {
                             Ok(mut rx) => {
                                 let _ = proxy.send_event(Message::AppHost(M::Subscribed));
                                 while let Some(change) = rx.recv().await {

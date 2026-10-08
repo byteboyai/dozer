@@ -1,12 +1,7 @@
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
-use bytehost_apps::id::AppId;
-use bytehost_apps::plan::{ApprovedInstallPlan, InstallPlan, Provenance, TrustLevel};
-use bytehost_apps::proto::{
-    AppReply, AppRequest, AppSource, AppSummary, ManagedRuntime, RuntimeInstallPlan, RuntimeProbe,
-};
-use bytehost_apps::registry::UninstallMode;
+use bytehost_apps::proto::{AppReply, AppRequest};
 use dozer_core::protocol::{
     AgentKind, AgentState, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
     CodeHealthReportInfo, ConversationSummary, GroupCancelScope, GroupInfo, GroupMessageInfo,
@@ -33,16 +28,8 @@ pub enum TermEvent {
     },
 }
 
-/// 应用变更订阅里的一条事件。都是**失效信号**:收到后重拉 `AppRequest::List` 即可。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AppChange {
-    /// 某个应用的状态/端点/问题变了。
-    Changed(AppId),
-    /// 广播落后丢了事件(或服务刚恢复):整体重拉。
-    Resync,
-    /// 订阅连接断了:调用方应退避重订阅,并回退到轮询兜底。
-    Disconnected,
-}
+// 应用变更事件与失败类型统一来自 `bytehost-client`(与进程内实现共用一套语义)。
+pub use bytehost_client::{AppApiError, AppChange, AppHostApi};
 
 #[derive(Clone)]
 pub struct Client {
@@ -190,209 +177,6 @@ impl Client {
         let outcome =
             tokio::time::timeout(Duration::from_secs(90), self.roundtrip(&Request::Shutdown)).await;
         interpret_shutdown_reply(outcome)
-    }
-
-    /// 应用宿主请求(原样转给 dozerd 的 `AppService`)。失败(含"应用宿主不可用")走 `Err`。
-    pub async fn app_request(&self, request: AppRequest) -> Result<AppReply> {
-        match self.roundtrip(&Request::App { request }).await? {
-            // 失败带类别:用 `err.downcast_ref::<AppFailure>()` 取回(其余错误是传输/协议问题)。
-            Reply::App {
-                reply: AppReply::Failed { failure },
-            } => Err(anyhow::Error::new(failure)),
-            Reply::App { reply } => Ok(reply),
-            other => bail!("意外应答: {other:?}"),
-        }
-    }
-
-    pub async fn app_list(&self) -> Result<Vec<AppSummary>> {
-        match self.app_request(AppRequest::List).await? {
-            AppReply::Apps { apps } => Ok(apps),
-            other => bail!("意外应答: {other:?}"),
-        }
-    }
-
-    /// 出安装计划(不安装任何东西)。
-    pub async fn app_plan(
-        &self,
-        source: AppSource,
-        provenance: Provenance,
-        trust: TrustLevel,
-    ) -> Result<InstallPlan> {
-        match self
-            .app_request(AppRequest::Plan {
-                source,
-                provenance,
-                trust,
-            })
-            .await?
-        {
-            AppReply::Plan { plan } => Ok(*plan),
-            other => bail!("意外应答: {other:?}"),
-        }
-    }
-
-    /// 安装一份已批准的计划(服务端对 staging 副本重新计算并核对)。
-    pub async fn app_install(
-        &self,
-        approved: ApprovedInstallPlan,
-        source: AppSource,
-    ) -> Result<()> {
-        let request = AppRequest::Install {
-            approved: Box::new(approved),
-            source,
-        };
-        self.app_expect_done(request).await
-    }
-
-    /// 启动应用,返回不含令牌的站点地址。
-    pub async fn app_start(&self, id: AppId) -> Result<String> {
-        match self.app_request(AppRequest::Start { id }).await? {
-            AppReply::Started { url } => Ok(url),
-            other => bail!("意外应答: {other:?}"),
-        }
-    }
-
-    pub async fn app_stop(&self, id: AppId) -> Result<()> {
-        self.app_expect_done(AppRequest::Stop { id }).await
-    }
-
-    /// 手动回滚到上一版(仅当有可回滚的上一版时可用;回滚不得提升权限)。
-    pub async fn app_rollback(&self, id: AppId) -> Result<()> {
-        self.app_expect_done(AppRequest::Rollback { id }).await
-    }
-
-    pub async fn app_uninstall(&self, id: AppId, mode: UninstallMode) -> Result<()> {
-        self.app_expect_done(AppRequest::Uninstall { id, mode })
-            .await
-    }
-
-    /// 首次导航用的地址(含令牌,**秘密**:不要写日志)。应用没在运行会失败。
-    pub async fn app_launch_url(&self, id: AppId) -> Result<String> {
-        match self.app_request(AppRequest::LaunchUrl { id }).await? {
-            AppReply::LaunchUrl { url } => Ok(url),
-            other => bail!("意外应答: {other:?}"),
-        }
-    }
-
-    pub async fn app_probe_runtimes(&self) -> Result<Vec<RuntimeProbe>> {
-        match self.app_request(AppRequest::ProbeRuntimes).await? {
-            AppReply::Runtimes { runtimes } => Ok(runtimes),
-            other => bail!("意外应答: {other:?}"),
-        }
-    }
-
-    /// 读某应用日志的末尾(有界、已清洗);返回 `(text, truncated)`。
-    pub async fn app_logs(&self, id: AppId, max_lines: u32) -> Result<(String, bool)> {
-        match self.app_request(AppRequest::Logs { id, max_lines }).await? {
-            AppReply::Logs { text, truncated } => Ok((text, truncated)),
-            other => bail!("意外应答: {other:?}"),
-        }
-    }
-
-    /// 订阅应用变更。先发出 `Subscribe` 并等第一行应答(`Subscribed`)确认后返回事件流;
-    /// 之后 dozerd 在同一连接上把 `Changed`/`Resync` 推过来,分别映射成 `AppChange::Changed`/`Resync`。
-    /// 连接断开时流里最后一条是 `Disconnected`,随后关闭。读循环模仿 `attach`:`tx.closed()` 时退出,
-    /// 保证接收端被丢弃后连接与任务都不滞留。
-    pub async fn app_subscribe(&self) -> Result<mpsc::UnboundedReceiver<AppChange>> {
-        let stream = UnixStream::connect(&self.socket).await?;
-        let (r, mut w) = stream.into_split();
-        w.write_all(
-            encode_line(&Request::App {
-                request: AppRequest::Subscribe,
-            })
-            .as_bytes(),
-        )
-        .await?;
-        let mut lines = BufReader::new(r).lines();
-        let first = lines
-            .next_line()
-            .await?
-            .ok_or_else(|| anyhow!("daemon 断开"))?;
-        match decode_line::<Reply>(&first)? {
-            Reply::App {
-                reply: AppReply::Subscribed,
-            } => {}
-            Reply::App {
-                reply: AppReply::Failed { failure },
-            } => return Err(anyhow::Error::new(failure)),
-            Reply::Error { message } => bail!("订阅失败: {message}"),
-            other => bail!("意外应答: {other:?}"),
-        }
-        let (tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            let _keep_writer = w;
-            loop {
-                tokio::select! {
-                    // 接收端被丢弃(例如面板不再需要订阅):停读循环,连接两端随后关闭,
-                    // daemon 侧 handle_conn 才能在下一次 next_line() 收到 EOF 并退出。
-                    _ = tx.closed() => break,
-                    line = lines.next_line() => {
-                        match line {
-                            Ok(Some(line)) => {
-                                let change = match decode_line::<Reply>(&line) {
-                                    Ok(Reply::App { reply: AppReply::Changed { app } }) => {
-                                        AppChange::Changed(app)
-                                    }
-                                    Ok(Reply::App { reply: AppReply::Resync }) => AppChange::Resync,
-                                    Ok(Reply::Error { message }) if message.contains("lagged") => {
-                                        AppChange::Resync
-                                    }
-                                    // 其余(含一次行的 `Subscribed` 回显)忽略。
-                                    _ => continue,
-                                };
-                                if tx.send(change).is_err() {
-                                    break;
-                                }
-                            }
-                            _ => {
-                                let _ = tx.send(AppChange::Disconnected);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        });
-        Ok(rx)
-    }
-
-    /// 出一份运行时安装计划(不下载任何东西)。
-    pub async fn app_runtime_plan(&self, runtime: ManagedRuntime) -> Result<RuntimeInstallPlan> {
-        match self
-            .app_request(AppRequest::RuntimePlan { runtime })
-            .await?
-        {
-            AppReply::RuntimePlan { plan } => Ok(*plan),
-            other => bail!("意外应答: {other:?}"),
-        }
-    }
-
-    /// 安装一份已批准的运行时计划(服务端重算并逐字段核对)。
-    pub async fn app_install_runtime(&self, plan: RuntimeInstallPlan) -> Result<()> {
-        self.app_expect_done(AppRequest::InstallRuntime {
-            plan: Box::new(plan),
-        })
-        .await
-    }
-
-    /// 卸载某个受管运行时版本。
-    pub async fn app_uninstall_runtime(
-        &self,
-        runtime: ManagedRuntime,
-        version: &str,
-    ) -> Result<()> {
-        self.app_expect_done(AppRequest::UninstallRuntime {
-            runtime,
-            version: version.to_string(),
-        })
-        .await
-    }
-
-    async fn app_expect_done(&self, request: AppRequest) -> Result<()> {
-        match self.app_request(request).await? {
-            AppReply::Done => Ok(()),
-            other => bail!("意外应答: {other:?}"),
-        }
     }
 
     /// 触发某 cwd 下缺失总结会话的批量补录(项目"修复"按钮用,spec
@@ -1539,6 +1323,96 @@ impl Client {
     }
 }
 
+/// 经 UDS 连到 dozerd 的 [`AppHostApi`] 实现。失败映射:dozerd 回的
+/// `AppReply::Failed` 是 `Host`(带类别,含"宿主不可用"),其余连接/协议问题
+/// (`Reply::Error`、意外变体、连不上)是 `Transport`。
+impl AppHostApi for Client {
+    async fn request(&self, request: AppRequest) -> std::result::Result<AppReply, AppApiError> {
+        match self
+            .roundtrip(&Request::App { request })
+            .await
+            .map_err(|e| AppApiError::Transport(format!("{e:#}")))?
+        {
+            Reply::App {
+                reply: AppReply::Failed { failure },
+            } => Err(AppApiError::Host(failure)),
+            Reply::App { reply } => Ok(reply),
+            other => Err(AppApiError::Transport(format!("意外应答: {other:?}"))),
+        }
+    }
+
+    async fn subscribe(
+        &self,
+    ) -> std::result::Result<mpsc::UnboundedReceiver<AppChange>, AppApiError> {
+        let stream = UnixStream::connect(&self.socket)
+            .await
+            .map_err(|e| AppApiError::Transport(format!("{e}")))?;
+        let (r, mut w) = stream.into_split();
+        // `Subscribe` 不是一问一答:dozerd 在同一连接上先回 `Subscribed`,之后持续推 `Changed`/`Resync`。
+        let request = encode_line(&Request::App {
+            request: AppRequest::Subscribe,
+        });
+        if let Err(e) = w.write_all(request.as_bytes()).await {
+            return Err(AppApiError::Transport(format!("{e}")));
+        }
+        let mut lines = BufReader::new(r).lines();
+        let first = match lines.next_line().await {
+            Ok(Some(line)) => line,
+            Ok(None) => return Err(AppApiError::Transport("daemon 断开".into())),
+            Err(e) => return Err(AppApiError::Transport(format!("{e}"))),
+        };
+        match decode_line::<Reply>(&first) {
+            Ok(Reply::App {
+                reply: AppReply::Subscribed,
+            }) => {}
+            Ok(Reply::App {
+                reply: AppReply::Failed { failure },
+            }) => return Err(AppApiError::Host(failure)),
+            Ok(Reply::Error { message }) => {
+                return Err(AppApiError::Transport(format!("订阅失败: {message}")));
+            }
+            Ok(other) => return Err(AppApiError::Transport(format!("意外应答: {other:?}"))),
+            Err(e) => return Err(AppApiError::Transport(format!("{e}"))),
+        }
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let _keep_writer = w;
+            loop {
+                tokio::select! {
+                    // 接收端被丢弃(例如面板不再需要订阅):停读循环,连接两端随后关闭,
+                    // daemon 侧 handle_conn 才能在下一次 next_line() 收到 EOF 并退出。
+                    _ = tx.closed() => break,
+                    line = lines.next_line() => {
+                        match line {
+                            Ok(Some(line)) => {
+                                let change = match decode_line::<Reply>(&line) {
+                                    Ok(Reply::App { reply: AppReply::Changed { app } }) => {
+                                        AppChange::Changed(app)
+                                    }
+                                    Ok(Reply::App { reply: AppReply::Resync }) => AppChange::Resync,
+                                    Ok(Reply::Error { message }) if message.contains("lagged") => {
+                                        AppChange::Resync
+                                    }
+                                    // 其余(含一次行的 `Subscribed` 回显)忽略。
+                                    _ => continue,
+                                };
+                                if tx.send(change).is_err() {
+                                    break;
+                                }
+                            }
+                            _ => {
+                                let _ = tx.send(AppChange::Disconnected);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        Ok(rx)
+    }
+}
+
 /// `shutdown_daemon()` 的超时/协议错误/成功三分支映射,拆成纯函数是为了
 /// 不用真的等 90s 或起一个假 UDS server 就能测到每条分支(`Client`::
 /// `shutdown_daemon` 本身只做一次 `tokio::time::timeout` 包裹,逻辑全在
@@ -1596,6 +1470,7 @@ mod shutdown_tests {
 #[cfg(test)]
 mod app_subscribe_tests {
     use super::*;
+    use bytehost_apps::id::AppId;
 
     fn temp_sock(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -1638,7 +1513,7 @@ mod app_subscribe_tests {
         let listener = tokio::net::UnixListener::bind(&sock).unwrap();
         let server = tokio::spawn(fake_server(listener));
 
-        let mut rx = Client::new(sock.clone()).app_subscribe().await.unwrap();
+        let mut rx = Client::new(sock.clone()).subscribe().await.unwrap();
         assert_eq!(
             rx.recv().await,
             Some(AppChange::Changed(AppId::new("a").unwrap()))
@@ -1681,7 +1556,7 @@ mod app_subscribe_tests {
             assert!(line.is_none(), "连接应被关闭(EOF),得到 {line:?}");
         });
 
-        let rx = Client::new(sock.clone()).app_subscribe().await.unwrap();
+        let rx = Client::new(sock.clone()).subscribe().await.unwrap();
         drop(rx);
         server.await.unwrap();
         let _ = std::fs::remove_file(&sock);
@@ -1710,13 +1585,10 @@ mod app_subscribe_tests {
             .unwrap();
         });
 
-        let err = Client::new(sock.clone()).app_subscribe().await.unwrap_err();
-        let failure = err
-            .downcast_ref::<bytehost_apps::proto::AppFailure>()
-            .unwrap();
+        let err = Client::new(sock.clone()).subscribe().await.unwrap_err();
         assert_eq!(
-            failure.kind,
-            bytehost_apps::proto::AppErrorKind::Unavailable
+            err.kind(),
+            Some(bytehost_apps::proto::AppErrorKind::Unavailable)
         );
         let _ = std::fs::remove_file(&sock);
     }

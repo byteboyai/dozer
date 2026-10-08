@@ -7,6 +7,8 @@ edition.workspace = true
 dozer-core = { path = "../dozer-core" }
 # 应用宿主的线上类型(默认 feature,只有 serde)
 bytehost-apps = { path = "../bytehost-apps" }
+# 与传输无关的应用宿主客户端 trait / 失败类型 / 事件类型
+bytehost-client = { path = "../bytehost-client" }
 anyhow.workspace = true
 tokio.workspace = true
 base64.workspace = true

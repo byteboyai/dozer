@@ -80,27 +80,27 @@ dozer 侧改动:
 - Produces:`bytehost_apps::service::{AppService, change_reply}`,签名与原来一致:
   `AppService::{unavailable(reason)->Arc<Self>, start(root:&Path)->Arc<Self>, start_with(root, GatewayConfig), start_with_monitor_for_test(root, GatewayConfig, MonitorConfig), handle(&self, AppRequest)->Result<AppReply,AppFailure>, subscribe(&self)->Option<broadcast::Receiver<AppEvent>>, gateway_stopped(&self)->bool, shutdown(&self)}`。
 
-- [ ] **Step 1: 记录基线用例数**
+- [x] **Step 1: 记录基线用例数**
   Run: `cargo test -p dozerd --lib app_service:: 2>&1 | grep "test result"` 与 `cargo test -p dozerd --test app_requests 2>&1 | grep "test result"`;把 passed 数记进提交信息(搬后必须一致)。
 
-- [ ] **Step 2: 搬文件并替换日志宏**
+- [x] **Step 2: 搬文件并替换日志宏**
   `git mv crates/dozerd/src/app_service.rs crates/bytehost-apps/src/service.rs`。把文件顶部 `dozer_core::scope!(LOG, module, "apps");` 删掉,所有 `dozer_core::log_error!(LOG, ...)` / `log_warn!` / `log_info!` 改成 `tracing::error!(target: "bytehost::service", ...)` 等(字段写法不变:`error = %e`、`port = p`、`app = %app`)。`use` 里与 `bytehost_apps::` 自引用的前缀改成 `crate::`。
   只在 `service.rs` 内换宏,**不改任何逻辑**。
 
-- [ ] **Step 3: 接线**
+- [x] **Step 3: 接线**
   `Cargo.toml`:`server = [..., "dep:tracing"]`,`tracing = { workspace = true, optional = true }`。`lib.rs` 加 `#[cfg(feature = "server")] pub mod service;`。dozerd 里所有 `crate::app_service::` / `dozerd::app_service::` 改成 `bytehost_apps::service::`;`dozerd/src/lib.rs` 去掉模块声明。
 
-- [ ] **Step 4: 搬 live 测试**
+- [x] **Step 4: 搬 live 测试**
   `git mv crates/dozerd/tests/process_apps_live.rs crates/bytehost-apps/tests/process_apps_live.rs`;测试里的 `dozerd::app_service::AppService` 改 `bytehost_apps::service::AppService`,样例路径(`scripts/bytehost/samples/...`)改成相对 `CARGO_MANIFEST_DIR` 的 `../../scripts/bytehost/samples/...`。`dev-dependencies` 补测试需要的 crate(以编译报错为准,只加已在 workspace 里的)。
 
-- [ ] **Step 5: 验证**
+- [x] **Step 5: 验证**
   Run: `cargo test -p bytehost-apps --all-features`(用例数 = 原 bytehost-apps 数 + 原 `app_service::` 数)、`cargo test -p dozerd`(集成测试逐字通过,`app_requests` 仍 5 个)、`cargo test -p bytehost-apps --test process_apps_live -- --ignored`(3 个通过)、`scripts/check-log-scope.sh`、`scripts/check-bytehost-apps-deps.sh`(默认 feature 依赖不变,`tracing` 只在 `server` 下)。
   Expected: 全绿;用例总数不少于基线。
 
-- [ ] **Step 6: 变异验证(退出语义)**
+- [x] **Step 6: 变异验证(退出语义)**
   临时把 `shutdown` 里"保留 `desired`"的那一步改成清掉 `desired`,确认 `a_python_app_runs_through_the_wire_and_dies_with_dozerd`(或等价的重启恢复用例)失败;恢复。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
   ```bash
   git add crates/bytehost-apps crates/dozerd
   git commit -m "refactor(bytehost-apps,dozerd): move AppService into bytehost-apps so a host without dozerd can embed it (A7 task 1)"
@@ -153,29 +153,29 @@ dozer 侧改动:
   `in_process`(feature `in-process`,隐含 `bytehost-apps/server`):`pub struct InProcess(Arc<AppService>); impl InProcess { pub fn new(svc: Arc<AppService>) -> Self }`;`request` → `svc.handle(..)`,`Err(AppFailure)` → `AppApiError::Host`;`subscribe` → `svc.subscribe()`,`None` → `Host(Unavailable)`,否则起一个任务把 broadcast 经 `change_reply` 转成 `AppChange`(`Closed`→`Disconnected` 后结束;接收端被丢弃即退出)。
   `conformance`(feature `conformance`):`pub async fn run<A: AppHostApi>(api: &A, source: AppSource, app_id: AppId)`,`source` 是一个**静态应用目录**(调用方负责造)。
 
-- [ ] **Step 1: 写契约测试(先红)**
+- [x] **Step 1: 写契约测试(先红)**
   `conformance::run` 依次断言:① `app_list()` 初始为空;② `app_plan(source, Local, Trusted)` 得到的计划 `id == app_id`;③ `app_install(approve(plan), source.clone())` 成功后 `app_list()` 含它且 `observed == Stopped`;④ `app_start(id)` 返回 `http://<id>.localhost:` 开头的启动地址(静态应用),随后 `app_list()` 里 `Running`;⑤ 订阅 **先于** `app_stop` 建立,`app_stop` 后 5s 内收到 `Changed(app_id)`;⑥ `app_start(未知 id)` 的错误 `kind() == Some(NotFound)`,**不是** `Transport`;⑦ `app_uninstall(id, ProgramAndData)` 后列表为空;⑧ 一个订阅接收端被 drop 后,服务端不残留(`InProcess`:任务退出)。
   `tests/in_process.rs`:造临时根目录 + `AppService::start_with(root, GatewayConfig{port:0})`,跑 `conformance::run(&InProcess::new(svc), ..)`;结束 `svc.shutdown()`。
   此时 `bytehost-client` 尚未实现 → 编译失败(预期红)。
 
-- [ ] **Step 2: 实现 trait、错误类型、`InProcess`,跑红→绿**
+- [x] **Step 2: 实现 trait、错误类型、`InProcess`,跑红→绿**
   Run: `cargo test -p bytehost-client --features in-process,conformance`
   Expected: PASS。
 
-- [ ] **Step 3: dozer-client 实现同一 trait**
+- [x] **Step 3: dozer-client 实现同一 trait**
   `impl AppHostApi for Client`:`request` = 现 `app_request` 的逻辑(`Reply::App{Failed}` → `Host`,其余协议问题 → `Transport`);`subscribe` = 现 `app_subscribe` 的主体(`Subscribed` 握手失败 → `Host`/`Transport`),`AppChange` 改为 re-export `bytehost_client::AppChange`。**删除**固有的 `app_*` 方法与重复的 `AppChange` 定义;`dozer-client` 的 `app_subscribe_tests` 保留并改调 trait 方法。
 
-- [ ] **Step 4: dozerd 集成测试跑同一份契约**
+- [x] **Step 4: dozerd 集成测试跑同一份契约**
   `crates/dozerd/tests/app_requests.rs` 新增 `uds_client_passes_the_same_conformance_suite`:起测试 daemon,`conformance::run(&Client::new(sock), ..)`。(`dozerd` dev-dependency 加 `bytehost-client` 的 `conformance` feature。)
 
-- [ ] **Step 5: 调用点迁移**
+- [x] **Step 5: 调用点迁移**
   `dozer-app` 里 16 处 `client.app_*(..)`(`app/app.rs` 6 处、`extensions/settings.rs` 10 处)加 `use bytehost_client::AppHostApi;`,错误处理从 `Failure::from_client_error(&e)` 改为 `Failure::from(e)`:`app_host::Failure` 改成 `pub use bytehost_client::AppApiError as Failure;` 的薄包装不可行(`from_client_error` 被多处引用)→ 做法:保留 `Failure` 枚举,新增 `impl From<AppApiError> for Failure`,`from_client_error` 删除,编译器会指出全部调用点。
   `dozerd/tests/app_requests.rs` 的 18 处同样迁移。
 
-- [ ] **Step 6: 变异验证**
+- [x] **Step 6: 变异验证**
   ① 把 `InProcess::subscribe` 的 `None` 分支改成返回空流 → 契约 ⑤/Unavailable 用例失败;② 把默认实现里 `NotFound` 映射成 `Transport` → 契约 ⑥ 失败;③ 让 UDS `request` 吞掉 `Failed` → 契约 ⑥ 失败。逐个确认后恢复。
 
-- [ ] **Step 7: 验证并提交**
+- [x] **Step 7: 验证并提交**
   Run: `cargo test -p bytehost-client --all-features`、`cargo test -p dozer-client`、`cargo test -p dozerd`、`cargo test -p dozer-app -- app_host settings_apps`(`Failure` 的 `text()`/类别判断用例不变)、`cargo clippy --all-targets`。
   ```bash
   git add crates/bytehost-client crates/dozer-client crates/dozer-app crates/dozerd Cargo.toml

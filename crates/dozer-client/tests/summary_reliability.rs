@@ -108,7 +108,7 @@ async fn generated_summary_is_visible_through_panel_query_and_shared_batches_fin
             dozerd::file_edit_history::FileEditHistoryStore::new(&db).unwrap(),
         ),
         groups: dozerd::group_service::GroupService::for_tests(),
-        apps: dozerd::app_service::AppService::unavailable("test"),
+        apps: bytehost_apps::service::AppService::unavailable("test"),
     };
     let server = tokio::spawn({
         let sock = sock.clone();

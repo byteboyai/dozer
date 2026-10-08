@@ -795,7 +795,6 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 [[package]]
 name = "bytegit"
 version = "0.7.0"
-source = "git+https://github.com/byteboyai/bytegit?tag=v0.7.0#0a3d2ab3e835ed20119dcaa6ce1a88d0a075ae3f"
 dependencies = [
  "git2",
  "notify",
@@ -820,8 +819,19 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml 0.8.2",
+ "tracing",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "bytehost-client"
+version = "0.1.0"
+dependencies = [
+ "bytehost-apps",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -865,7 +875,6 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "byteui"
 version = "0.4.1"
-source = "git+https://github.com/byteboyai/byteui?tag=v0.4.1#8ef64af21fd2a84ef0ad341a254cfcea4bb011dc"
 dependencies = [
  "iced_futures",
  "iced_renderer",
@@ -1909,7 +1918,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "dozer-app"
-version = "0.5.283"
+version = "0.5.284"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -1917,6 +1926,7 @@ dependencies = [
  "block2 0.6.2",
  "bytegit",
  "bytehost-apps",
+ "bytehost-client",
  "byteui",
  "calamine",
  "csv",
@@ -1974,6 +1984,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "bytehost-apps",
+ "bytehost-client",
  "dozer-core",
  "dozerd",
  "tempfile",
@@ -2029,6 +2040,7 @@ name = "dozer-mcp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytehost-apps",
  "dozer-client",
  "dozer-core",
  "dozerd",
@@ -2051,6 +2063,7 @@ dependencies = [
  "base64 0.22.1",
  "bytegit",
  "bytehost-apps",
+ "bytehost-client",
  "dozer-client",
  "dozer-core",
  "futures-util",

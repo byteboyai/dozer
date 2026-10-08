@@ -43,15 +43,16 @@ pub enum Failure {
     Transport(String),
 }
 
-impl Failure {
-    /// 从 `dozer-client` 的错误还原:能 `downcast` 成 `AppFailure` 的是宿主失败,其余是传输层。
-    pub fn from_client_error(e: &anyhow::Error) -> Self {
-        match e.downcast_ref::<AppFailure>() {
-            Some(f) => Self::Host(f.clone()),
-            None => Self::Transport(format!("{e:#}")),
+impl From<bytehost_client::AppApiError> for Failure {
+    fn from(e: bytehost_client::AppApiError) -> Self {
+        match e {
+            bytehost_client::AppApiError::Host(f) => Self::Host(f),
+            bytehost_client::AppApiError::Transport(t) => Self::Transport(t),
         }
     }
+}
 
+impl Failure {
     pub(crate) fn text(&self) -> &str {
         match self {
             Self::Host(f) => &f.message,
@@ -111,7 +112,7 @@ pub enum Effect {
     FetchLogs(AppSlot, u32),
     /// 打开 设置 → 应用 页(运行时问题页的「去设置安装」)。
     OpenSettingsApps,
-    /// 建立应用变更订阅(`Client::app_subscribe`)。
+    /// 建立应用变更订阅(`AppHostApi::subscribe`)。
     Subscribe,
     Toast {
         level: Level,

@@ -3,9 +3,10 @@
 use bytehost_apps::gateway::GatewayConfig;
 use bytehost_apps::id::AppId;
 use bytehost_apps::plan::{Approval, Provenance, TrustLevel};
-use bytehost_apps::proto::{AppErrorKind, AppFailure, AppSource};
+use bytehost_apps::proto::{AppErrorKind, AppSource};
 use bytehost_apps::registry::UninstallMode;
 use bytehost_apps::service::AppService;
+use bytehost_client::AppHostApi;
 use dozer_client::Client;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -168,9 +169,9 @@ async fn the_whole_install_run_stop_uninstall_cycle_works_over_the_socket() {
     assert!(c.app_list().await.unwrap().is_empty());
 
     let err = c.app_start(id("excalidraw")).await.unwrap_err();
-    let failure = err.downcast_ref::<AppFailure>().expect("带类别的失败");
-    assert_eq!(failure.kind, AppErrorKind::NotFound);
-    assert!(failure.message.contains("没有安装"), "{failure}");
+    let failure = err.kind().expect("带类别的失败");
+    assert_eq!(failure, AppErrorKind::NotFound);
+    assert!(err.text().contains("没有安装"), "{err}");
     let runtimes = c.app_probe_runtimes().await.unwrap();
     assert_eq!(runtimes.len(), 3);
 }
@@ -230,8 +231,7 @@ async fn a_rollback_request_restores_the_previous_version_over_uds() {
     assert!(!listed[0].rollback_note.as_ref().unwrap().automatic);
 
     let err = c.app_rollback(id("site")).await.unwrap_err();
-    let failure = err.downcast_ref::<AppFailure>().expect("带类别的失败");
-    assert_eq!(failure.kind, AppErrorKind::NotFound);
+    assert_eq!(err.kind(), Some(AppErrorKind::NotFound));
 }
 
 /// 应用宿主不可用(例如端口被占)不能影响会话等其他功能:其他请求照常工作,应用请求带着原因失败。
@@ -240,11 +240,10 @@ async fn an_unavailable_app_host_does_not_break_the_rest_of_the_daemon() {
     let d = start_daemon(AppService::unavailable("gateway 端口 12345 已被占用")).await;
     assert!(d.client.list().await.unwrap().is_empty(), "会话列表照常");
     let err = d.client.app_list().await.unwrap_err();
-    let failure = err.downcast_ref::<AppFailure>().expect("带类别的失败");
-    assert_eq!(failure.kind, AppErrorKind::Unavailable);
+    assert_eq!(err.kind(), Some(AppErrorKind::Unavailable));
     assert!(
-        failure.message.contains("12345") && failure.message.contains("占用"),
-        "{failure}"
+        err.text().contains("12345") && err.text().contains("占用"),
+        "{err}"
     );
 }
 
@@ -507,4 +506,20 @@ async fn a_directory_source_still_works_alongside_the_new_kinds() {
     .await
     .unwrap();
     assert_eq!(c.app_list().await.unwrap().len(), 1);
+}
+
+/// 经 UDS 的 `Client`(dozerd 侧实现)必须通过与进程内 `InProcess` 共享的契约测试。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn uds_client_passes_the_same_conformance_suite() {
+    let tmp = tempfile::tempdir().unwrap();
+    let apps =
+        AppService::start_with(&tmp.path().join("bytehost"), GatewayConfig { port: 0 }).await;
+    let d = start_daemon(apps).await;
+
+    let source = bytehost_client::conformance::write_app(
+        &tmp.path().join("src/conf"),
+        "conf",
+        "<h1>conf</h1>",
+    );
+    bytehost_client::conformance::run(&d.client, source, id("conf")).await;
 }

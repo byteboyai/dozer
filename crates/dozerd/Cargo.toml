@@ -24,4 +24,6 @@ tempfile = "3"
 
 [dev-dependencies]
 dozer-client = { path = "../dozer-client" }
+# 契约测试:UDS 实现要与进程内实现跑同一份断言。
+bytehost-client = { path = "../bytehost-client", features = ["conformance"] }
 uuid.workspace = true
