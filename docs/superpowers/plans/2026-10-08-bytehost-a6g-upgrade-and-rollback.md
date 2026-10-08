@@ -198,8 +198,8 @@
 - [x] **Step 2: 连跑 3 遍**,耗时如实记入报告 §1(实测:三遍全绿,单遍 8.4~8.5s)。
 - [x] **Step 3: 报告**:§0 环境;§1 自动化(命令 + 结果 + 实测耗时);§2 GUI 手工项(Task 4 Step 5,未执行保持未勾选);§3 缺陷与已知局限(据实,不预填)。
 - [x] **Step 4: CLAUDE.md** `bytehost-apps` 一行补:A6g 落地——升级保留"当前 + 上一版"(更早的清理)、运行中升级自动停→换→再启、升级后的首次启动有"试用期"(`probation` 落盘),失败由**独立线程**自动回滚(监管线程回调里绝不 `stop_locked`/`start_locked`)、回滚不得提升权限(手动被拒、自动跳过)、`AppRequest::Rollback`、应用数据不随版本回滚。规格 §7 表加 A6g 一行并链接本计划与报告。
-- [ ] **Step 5: 全量**:`cargo test -p bytehost-apps -p dozerd -p dozer-client -p dozer-app`(已知无关失败:`files::tests::delete_confirm_spec_reflects_pending_target`、`memory::tests::list_orders_by_updated_ms_desc`、`app_service::tests::the_first_run_is_unavailable_when_the_port_cannot_be_saved`——如仍存在逐个注明,不要顺手改)、`cargo clippy --all-targets`(A6g 触碰的文件无新警告)、`cargo fmt --check`、两个门禁脚本。
-- [ ] **Step 6: Commit** — 测试与报告各一个:`test(dozerd): real python and node apps upgrade, auto-rollback and manual rollback (A6g task 5)`、`docs(bytehost): A6g landed`。
+- [x] **Step 5: 全量**:`cargo test -p bytehost-apps -p dozerd -p dozer-client -p dozer-app`(已知无关失败:`files::tests::delete_confirm_spec_reflects_pending_target`、`memory::tests::list_orders_by_updated_ms_desc`、`app_service::tests::the_first_run_is_unavailable_when_the_port_cannot_be_saved`——如仍存在逐个注明,不要顺手改)、`cargo clippy --all-targets`(A6g 触碰的文件无新警告)、`cargo fmt --check`、两个门禁脚本。(实跑:`bytehost-apps` 335 passed、`dozer-client` 全 ok、`dozerd` lib 487 passed / 1 failed(仅偶发 `memory::tests::list_orders_by_updated_ms_desc`,单跑通过)、`dozer-app` 1975 passed / 1 failed(仅既有 `delete_confirm_spec_reflects_pending_target`);两个门禁脚本 + `fmt --check` 通过;`clippy -p dozerd -p bytehost-apps --all-targets` A6g 文件无新警告。)
+- [x] **Step 6: Commit** — 测试与报告各一个:`test(dozerd): real python and node apps upgrade, auto-rollback and manual rollback (A6g task 5)`(`89db2fae`)、`docs(bytehost): A6g landed`(`a355700c`)。
 
 ---
 
