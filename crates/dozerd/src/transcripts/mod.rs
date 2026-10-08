@@ -117,6 +117,11 @@ impl TranscriptStore {
     /// and rendered history in `state_N.sqlite` / `thread_history_N.sqlite`.
     /// Keeping this reader here (rather than teaching the UI about Codex-private
     /// storage) preserves the existing conversations/usage query contract.
+    ///
+    /// rollout JSONL 仍然存在时(当前 Codex 版本两者并存,2026-10 实测)以
+    /// JSONL 为准——它是唯一有 input/cache 拆分的精确口径;threads.id 键下的
+    /// 重复会话行(旧版本本函数落下的)会被清掉。JSONL 缺失才退回
+    /// `threads.tokens_used` 总量兜底。
     pub fn ingest_codex_sqlite(&self, cwd: Option<&str>) -> Result<u32> {
         self.ingest_codex_sqlite_in(&dozer_core::agent_paths::home_dir(), cwd)
     }
@@ -154,12 +159,15 @@ impl TranscriptStore {
         let history = Connection::open_with_flags(&history_path, flags)
             .with_context(|| format!("打开 Codex 历史库失败: {}", history_path.display()))?;
 
+        // 注意这里**不过滤 archived**：归档线程同样可能是旧版本 sqlite 路径
+        // 留下的重复会话行的来源,清理逻辑(见循环内)对它们也要生效;只是
+        // 归档线程不再走 tokens_used 兜底导入。
         let sql = if cwd.is_some() {
-            "SELECT id, cwd, title, created_at, updated_at, tokens_used, rollout_path
-             FROM threads WHERE cwd = ?1 AND archived = 0 ORDER BY updated_at"
+            "SELECT id, cwd, title, created_at, updated_at, tokens_used, rollout_path, archived
+             FROM threads WHERE cwd = ?1 ORDER BY updated_at"
         } else {
-            "SELECT id, cwd, title, created_at, updated_at, tokens_used, rollout_path
-             FROM threads WHERE archived = 0 ORDER BY updated_at"
+            "SELECT id, cwd, title, created_at, updated_at, tokens_used, rollout_path, archived
+             FROM threads ORDER BY updated_at"
         };
         let mut stmt = state.prepare(sql)?;
         let map_thread = |row: &rusqlite::Row<'_>| {
@@ -171,6 +179,7 @@ impl TranscriptStore {
                 row.get::<_, u64>(4)?,
                 row.get::<_, u64>(5)?,
                 row.get::<_, String>(6)?,
+                row.get::<_, u64>(7)?,
             ))
         };
         let threads: Vec<_> = if let Some(cwd) = cwd {
@@ -182,7 +191,56 @@ impl TranscriptStore {
         };
 
         let mut imported = 0u32;
-        for (id, thread_cwd, title, created, updated, tokens_used, rollout_path) in threads {
+        for (id, thread_cwd, title, created, updated, tokens_used, rollout_path, archived) in
+            threads
+        {
+            // Codex(2026-10 实测,rollout JSONL 与 state_N.sqlite 并存写入)
+            // 把逐次 API 用量的**精确拆分**(`token_usage_record` 行:
+            // input/cache_read/cache_write/output 互不重叠)写进 rollout,
+            // 而 `threads.tokens_used` 只是含缓存命中在内的总量。总量塞进
+            // tokens_in 会让 Input/Output 虚高、Cache 归零,且本函数用
+            // threads.id 当 conversation_id、rollout 摄取用文件名 stem,同一
+            // 会话会落成两行被用量汇总双重计入(2026-10-08 用户报告)。
+            // rollout 文件还在时一律走 JSONL 增量摄取,并清掉旧版本落在
+            // threads.id 键下的重复行;文件不在了才退回 tokens_used 兜底。
+            let rollout_file = std::path::Path::new(&rollout_path);
+            if rollout_file.is_file() && self.ingest_session(AgentKind::Codex, rollout_file).is_ok()
+            {
+                // 只有 twin(文件名 stem 会话)真拿到了 token 拆分行才删除
+                // UUID 重复行——极端情形(rollout 无 usage 行)下保留兜底,
+                // 不丢总量口径。
+                let twin_id = conversation_id_for_path(rollout_file);
+                let twin_has_usage = twin_id.is_some_and(|stem| {
+                    let conn = self.conn.lock().expect("db lock");
+                    conn.query_row(
+                        "SELECT 1 FROM conversation_turns
+                         WHERE conversation_id = ?1 AND role = 'token_usage' LIMIT 1",
+                        [&stem],
+                        |_| Ok(()),
+                    )
+                    .optional()
+                    .unwrap_or(None)
+                    .is_some()
+                });
+                if twin_has_usage {
+                    let mut conn = self.conn.lock().expect("db lock");
+                    let tx = conn.transaction()?;
+                    tx.execute(
+                        "DELETE FROM conversation_turns WHERE conversation_id = ?1",
+                        [&id],
+                    )?;
+                    tx.execute(
+                        "DELETE FROM conversations WHERE conversation_id = ?1",
+                        [&id],
+                    )?;
+                    tx.commit()?;
+                    imported += 1;
+                    continue;
+                }
+            }
+            if archived != 0 {
+                continue;
+            }
             let mut item_stmt = history.prepare(
                 "SELECT item_id, created_at_ms, item_type, item_json
                  FROM thread_items WHERE thread_id = ?1 ORDER BY rollout_ordinal",
@@ -964,11 +1022,10 @@ impl TranscriptStore {
             dozer_core::protocol::UsagePayload,
         )>,
     > {
-        // Codex 0.16x+ writes its live usage to state_N.sqlite instead of a
-        // rollout JSONL file. Startup/backfill ingestion alone therefore
-        // leaves a long-running daemon with a stale snapshot. Refresh this
-        // project immediately before reading our aggregate cache. Keep it
-        // best-effort so a Codex schema/read failure cannot hide other agents.
+        // Codex 的实时用量可能滞后于 daemon 上次摄取:rollout JSONL 持续追加
+        // (当前版本),state_N.sqlite 的 threads.tokens_used 也在更新。查询前
+        // 刷新一次(rollout 存在走 JSONL 增量摄取,否则 tokens_used 兜底)。
+        // Keep it best-effort so a Codex schema/read failure cannot hide other agents.
         if let Err(e) = self.ingest_codex_sqlite_in(home, Some(cwd)) {
             dozer_core::log_warn!(
                 LOG,
@@ -1180,6 +1237,100 @@ mod tests {
             .unwrap();
         assert_eq!(refreshed[0].1.tokens_in, 25);
         assert_eq!(refreshed[0].0.last_ts, 300_000);
+    }
+
+    #[test]
+    fn ingest_codex_sqlite_prefers_rollout_jsonl_breakdown_and_cleans_legacy_duplicate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let codex = tmp.path().join(".codex");
+        let sessions = codex.join("sessions/2026/10/08");
+        std::fs::create_dir_all(&sessions).unwrap();
+        // rollout 文件存在且带精确拆分:input 1500 里 1200 是缓存命中,
+        // cache_write 100,out 50。threads.tokens_used=1600 是含缓存的总量,
+        // 决不能整份塞进 tokens_in。
+        let rollout = sessions.join("rollout-2026-10-08T10-00-00-aaa.jsonl");
+        std::fs::write(
+            &rollout,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"/work/project\"}}\n",
+                "{\"timestamp\":\"2026-10-08T02:00:00.000Z\",\"type\":\"response_item\",",
+                "\"payload\":{\"type\":\"message\",\"role\":\"user\",",
+                "\"content\":[{\"type\":\"input_text\",\"text\":\"帮我修统计\"}]}}\n",
+                "{\"timestamp\":\"2026-10-08T02:00:05.000Z\",\"type\":\"token_usage_record\",",
+                "\"payload\":{\"response_id\":\"resp1\",\"usage\":{\"input_tokens\":1500,",
+                "\"cached_input_tokens\":1200,\"cache_write_input_tokens\":100,",
+                "\"output_tokens\":50,\"total_tokens\":1600}}}\n",
+            ),
+        )
+        .unwrap();
+        let state = rusqlite::Connection::open(codex.join("state_5.sqlite")).unwrap();
+        state
+            .execute_batch(&format!(
+                "CREATE TABLE threads (
+                id TEXT PRIMARY KEY, cwd TEXT NOT NULL, title TEXT NOT NULL,
+                created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+                tokens_used INTEGER NOT NULL, rollout_path TEXT NOT NULL,
+                archived INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO threads VALUES
+                ('c1','/work/project','最近的 Codex 会话',100,200,1600,'{}',0);",
+                rollout.display()
+            ))
+            .unwrap();
+        let history = rusqlite::Connection::open(codex.join("thread_history_1.sqlite")).unwrap();
+        history
+            .execute_batch(
+                "CREATE TABLE thread_items (
+                thread_id TEXT NOT NULL, item_id TEXT NOT NULL,
+                rollout_ordinal INTEGER NOT NULL, created_at_ms INTEGER NOT NULL,
+                item_type TEXT NOT NULL, item_json TEXT NOT NULL
+             );",
+            )
+            .unwrap();
+        drop(state);
+        drop(history);
+
+        let store = TranscriptStore::open(&tmp.path().join("dozer.db")).unwrap();
+        // 预置旧版本留下的 UUID 键重复会话行:同名 c1 会话 + 把总量塞进
+        // tokens_in 的 usage 行(旧 sqlite 路径的真实产物)。
+        let legacy = tmp.path().join("c1.jsonl");
+        std::fs::write(
+            &legacy,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"/work/project\"}}\n",
+                "{\"timestamp\":\"2026-10-08T02:00:05.000Z\",\"type\":\"token_usage_record\",",
+                "\"payload\":{\"response_id\":\"resp_legacy\",\"usage\":{\"input_tokens\":1600,",
+                "\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,",
+                "\"output_tokens\":0,\"total_tokens\":1600}}}\n",
+            ),
+        )
+        .unwrap();
+        store.ingest_session(AgentKind::Codex, &legacy).unwrap();
+
+        assert_eq!(
+            store
+                .ingest_codex_sqlite_in(tmp.path(), Some("/work/project"))
+                .unwrap(),
+            1
+        );
+        // UUID 键重复行被清掉,只剩 rollout 文件名 stem 那份。
+        let ids: Vec<String> = store
+            .list_conversations_in(tmp.path(), "/work/project", Some(AgentKind::Codex), 10, 0)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.conversation_id)
+            .collect();
+        assert_eq!(ids, ["rollout-2026-10-08T10-00-00-aaa"]);
+        // 用量来自 JSONL 精确拆分,而不是 tokens_used 总量。
+        let usage = store
+            .get_usage_summary_in(tmp.path(), "/work/project", None)
+            .unwrap();
+        assert_eq!(usage.len(), 1);
+        assert_eq!(usage[0].1.turns, 1);
+        assert_eq!(usage[0].1.tokens_in, 300);
+        assert_eq!(usage[0].1.tokens_out, 50);
+        assert_eq!(usage[0].1.tokens_cache_read, 1200);
+        assert_eq!(usage[0].1.tokens_cache_write, 100);
     }
 
     #[test]
