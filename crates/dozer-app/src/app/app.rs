@@ -1799,11 +1799,16 @@ impl App {
             .poll_wanted(!self.visible_app_slots().is_empty())
     }
 
-    /// `ResumeTimeReached` 时调用:到点就拉一次已安装应用列表。
+    /// 应用宿主下一拍唤醒的间隔:订阅就绪时是 30s 兜底,否则 2s。
+    pub fn app_host_poll_interval(&self) -> std::time::Duration {
+        self.app_host.poll_interval()
+    }
+
+    /// `ResumeTimeReached` 时调用:到点就拉一次已安装应用列表,并驱动订阅的发起/重订阅。
     pub fn poll_app_host_if_due(&mut self) {
-        let effects = self
-            .app_host
-            .poll_if_due(std::time::Instant::now(), &self.visible_app_slots());
+        let now = std::time::Instant::now();
+        let mut effects = self.app_host.subscribe_if_due(now);
+        effects.extend(self.app_host.poll_if_due(now, &self.visible_app_slots()));
         self.run_app_host_effects(effects);
     }
 
@@ -1879,6 +1884,33 @@ impl App {
                             .await
                             .map_err(|e| Failure::from_client_error(&e));
                         let _ = proxy.send_event(Message::AppHost(M::LogsLoaded(slot, result)));
+                    });
+                }
+                Effect::Subscribe => {
+                    // 订阅成功 → `Subscribed`(随后转 `Changed`/`SubscriptionLost`);
+                    // 失败(连不上 dozerd、宿主不可用)→ 直接 `SubscriptionLost`,走退避重订阅。
+                    // 失败只写日志(`module` 来源),不弹 Toast——这是"当前处于某状态",不是一次性事件。
+                    let (client, proxy) = (self.client.clone(), self.proxy.clone());
+                    self.handle.spawn(async move {
+                        match client.app_subscribe().await {
+                            Ok(mut rx) => {
+                                let _ = proxy.send_event(Message::AppHost(M::Subscribed));
+                                while let Some(change) = rx.recv().await {
+                                    let msg = match change {
+                                        dozer_client::AppChange::Changed(_)
+                                        | dozer_client::AppChange::Resync => M::Changed,
+                                        dozer_client::AppChange::Disconnected => M::SubscriptionLost,
+                                    };
+                                    if proxy.send_event(Message::AppHost(msg)).is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                dozer_core::log_warn!(LOG, error = %e, "应用变更订阅失败,将退避重试");
+                                let _ = proxy.send_event(Message::AppHost(M::SubscriptionLost));
+                            }
+                        }
                     });
                 }
                 Effect::OpenSettingsApps => {

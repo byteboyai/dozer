@@ -117,15 +117,15 @@
 - `Resync` 等同 `Changed` 但不依赖具体应用。
 - `disconnected()`(传输层失败)与订阅无关,保持原逻辑。
 
-- [ ] **Step 1: 写失败测试**(`app_host.rs`,沿用 `loaded(...)` fixture 风格)
+- [x] **Step 1: 写失败测试**(`app_host.rs`,沿用 `loaded(...)` fixture 风格)
   - `a_live_subscription_slows_polling_to_the_safety_interval`:`Subscribed` 后 `poll_if_due(t0+POLL_INTERVAL)` 为空,`t0+SAFETY_POLL_INTERVAL` 才发 `FetchList`。
   - `a_change_triggers_exactly_one_refetch_even_in_a_storm`:`Live`、无在途;连发 10 次 `Changed` → 只有第 1 次产出 `FetchList`;`ListLoaded` 回来后恰好再产出 1 次(因 `dirty`),再回来不再发。
   - `losing_the_subscription_goes_back_to_fast_polling_and_retries_with_backoff`:`SubscriptionLost` 后 `poll_if_due(t0+POLL_INTERVAL)` 发 `FetchList`;`retry_at` 前不发 `Subscribe`,之后发一次;连续 5 次失败后退避停在 30s。
   - `subscribe_is_requested_once_until_it_resolves`:`Pending` 时重复调用不重发。
   - `dozerd_restart_is_recovered`:`Live` → `SubscriptionLost` → 退避到期 → `Subscribe` → `Subscribed` → 恢复 `Live`,期间没有丢失 `Changed` 后的重拉(`Resync` 被 `Subscribed` 之后立刻补发一次 `FetchList`,因为断线期间可能漏了事件)。
   - `dozer-client`:对一个本地 `UnixListener` 假服务端,发 `Subscribed` + 两条 `Changed` + 关闭 → 收到 `Changed, Changed, Disconnected`;丢弃接收端后读任务退出(用 `tx.closed()` 的同款断言)。
-- [ ] **Step 2: 确认失败 → Step 3: 实现**;`app.rs::run_app_host_effects` 增 `Effect::Subscribe`:`client.app_subscribe().await`,成功则发 `M::Subscribed` 并 `spawn` 转发循环把 `AppChange` 映射成 `M::Changed`/`M::SubscriptionLost`(经 `proxy.send_event(Message::AppHost(..))`);失败直接 `M::SubscriptionLost`。失败只写日志(`module` 来源),**不弹 Toast**。
-- [ ] **Step 4: 通过** — `cargo test -p dozer-app app_host`、`cargo test -p dozer-client`;`cargo clippy -p dozer-app -p dozer-client --all-targets` 无新警告。变异:去掉 `dirty` 合并,风暴用例失败;让 `Live` 仍用 2s,第一个用例失败。
+- [x] **Step 2: 确认失败 → Step 3: 实现**;`app.rs::run_app_host_effects` 增 `Effect::Subscribe`:`client.app_subscribe().await`,成功则发 `M::Subscribed` 并 `spawn` 转发循环把 `AppChange` 映射成 `M::Changed`/`M::SubscriptionLost`(经 `proxy.send_event(Message::AppHost(..))`);失败直接 `M::SubscriptionLost`。失败只写日志(`module` 来源),**不弹 Toast**。
+- [x] **Step 4: 通过** — `cargo test -p dozer-app app_host`(34 passed)、`cargo test -p dozer-client`(7 passed);`cargo clippy -p dozer-app -p dozer-client --all-targets` 无新警告。变异:去掉 `dirty` 合并,风暴用例失败;让 `Live` 仍用 2s,第一个用例失败(均已实测确认)。
 - [ ] **Step 5: 手动验收**(需要 GUI;结果如实写进报告 §2,未做的不勾):装 `py-notes` → 点它的 `/crash` → 面板应在 <1s 内进入"启动中…"而不是等下一次 2s 轮询;`kill -9 $(pgrep dozerd)` 后 2s 内显示 dozerd 不可用,重启 dozerd 后自动恢复订阅(日志里能看到重订阅)。
 - [ ] **Step 6: Commit** — `feat(dozer-client,dozer-app): subscribe to app changes; polling becomes a safety net (A6f task 2)`。
 

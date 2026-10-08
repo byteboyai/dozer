@@ -2741,10 +2741,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     app.group_chat_poll_wanted(),
                     crate::extensions::group_chat::POLL_INTERVAL,
                 ),
-                (
-                    app.app_host_poll_wanted(),
-                    crate::extensions::app_host::POLL_INTERVAL,
-                ),
+                (app.app_host_poll_wanted(), app.app_host_poll_interval()),
                 (store_wake.is_some(), store_wake.unwrap_or_default()),
                 (app.dragging_tab().is_some(), DRAG_REDRAW_INTERVAL),
                 (

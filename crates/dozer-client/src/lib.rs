@@ -33,6 +33,17 @@ pub enum TermEvent {
     },
 }
 
+/// 应用变更订阅里的一条事件。都是**失效信号**:收到后重拉 `AppRequest::List` 即可。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppChange {
+    /// 某个应用的状态/端点/问题变了。
+    Changed(AppId),
+    /// 广播落后丢了事件(或服务刚恢复):整体重拉。
+    Resync,
+    /// 订阅连接断了:调用方应退避重订阅,并回退到轮询兜底。
+    Disconnected,
+}
+
 #[derive(Clone)]
 pub struct Client {
     socket: PathBuf,
@@ -271,6 +282,73 @@ impl Client {
             AppReply::Logs { text, truncated } => Ok((text, truncated)),
             other => bail!("意外应答: {other:?}"),
         }
+    }
+
+    /// 订阅应用变更。先发出 `Subscribe` 并等第一行应答(`Subscribed`)确认后返回事件流;
+    /// 之后 dozerd 在同一连接上把 `Changed`/`Resync` 推过来,分别映射成 `AppChange::Changed`/`Resync`。
+    /// 连接断开时流里最后一条是 `Disconnected`,随后关闭。读循环模仿 `attach`:`tx.closed()` 时退出,
+    /// 保证接收端被丢弃后连接与任务都不滞留。
+    pub async fn app_subscribe(&self) -> Result<mpsc::UnboundedReceiver<AppChange>> {
+        let stream = UnixStream::connect(&self.socket).await?;
+        let (r, mut w) = stream.into_split();
+        w.write_all(
+            encode_line(&Request::App {
+                request: AppRequest::Subscribe,
+            })
+            .as_bytes(),
+        )
+        .await?;
+        let mut lines = BufReader::new(r).lines();
+        let first = lines
+            .next_line()
+            .await?
+            .ok_or_else(|| anyhow!("daemon 断开"))?;
+        match decode_line::<Reply>(&first)? {
+            Reply::App {
+                reply: AppReply::Subscribed,
+            } => {}
+            Reply::App {
+                reply: AppReply::Failed { failure },
+            } => return Err(anyhow::Error::new(failure)),
+            Reply::Error { message } => bail!("订阅失败: {message}"),
+            other => bail!("意外应答: {other:?}"),
+        }
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let _keep_writer = w;
+            loop {
+                tokio::select! {
+                    // 接收端被丢弃(例如面板不再需要订阅):停读循环,连接两端随后关闭,
+                    // daemon 侧 handle_conn 才能在下一次 next_line() 收到 EOF 并退出。
+                    _ = tx.closed() => break,
+                    line = lines.next_line() => {
+                        match line {
+                            Ok(Some(line)) => {
+                                let change = match decode_line::<Reply>(&line) {
+                                    Ok(Reply::App { reply: AppReply::Changed { app } }) => {
+                                        AppChange::Changed(app)
+                                    }
+                                    Ok(Reply::App { reply: AppReply::Resync }) => AppChange::Resync,
+                                    Ok(Reply::Error { message }) if message.contains("lagged") => {
+                                        AppChange::Resync
+                                    }
+                                    // 其余(含一次行的 `Subscribed` 回显)忽略。
+                                    _ => continue,
+                                };
+                                if tx.send(change).is_err() {
+                                    break;
+                                }
+                            }
+                            _ => {
+                                let _ = tx.send(AppChange::Disconnected);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        Ok(rx)
     }
 
     /// 出一份运行时安装计划(不下载任何东西)。
@@ -1507,5 +1585,134 @@ mod shutdown_tests {
         .unwrap_err();
         let err = interpret_shutdown_reply(Err(elapsed)).unwrap_err();
         assert!(err.to_string().contains("超时"));
+    }
+}
+
+#[cfg(test)]
+mod app_subscribe_tests {
+    use super::*;
+
+    fn temp_sock(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "dz-app-sub-{tag}-{}.sock",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    /// 假服务端:读到 `Subscribe` 后回 `Subscribed`,再推 2 条 `Changed`,然后关连接。
+    async fn fake_server(listener: tokio::net::UnixListener) {
+        let (stream, _) = listener.accept().await.unwrap();
+        let (r, mut w) = stream.into_split();
+        let mut lines = BufReader::new(r).lines();
+        let _ = lines.next_line().await.unwrap();
+        w.write_all(
+            encode_line(&Reply::App {
+                reply: AppReply::Subscribed,
+            })
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+        for name in ["a", "b"] {
+            let reply = Reply::App {
+                reply: AppReply::Changed {
+                    app: AppId::new(name).unwrap(),
+                },
+            };
+            w.write_all(encode_line(&reply).as_bytes()).await.unwrap();
+        }
+        drop(w);
+    }
+
+    #[tokio::test]
+    async fn app_subscribe_yields_changes_then_disconnected() {
+        let sock = temp_sock("ok");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        let server = tokio::spawn(fake_server(listener));
+
+        let mut rx = Client::new(sock.clone()).app_subscribe().await.unwrap();
+        assert_eq!(
+            rx.recv().await,
+            Some(AppChange::Changed(AppId::new("a").unwrap()))
+        );
+        assert_eq!(
+            rx.recv().await,
+            Some(AppChange::Changed(AppId::new("b").unwrap()))
+        );
+        assert_eq!(rx.recv().await, Some(AppChange::Disconnected));
+        assert_eq!(rx.recv().await, None);
+        server.await.unwrap();
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    /// 接收端被丢弃后读任务必须退出(否则连接与 fd 滞留):服务端只发第一条
+    /// `Changed` 后就什么都不做,客户端 drop 接收端,随后读任务应因 `tx.closed()` 退出——
+    /// 表现为服务端下一行读取得到 EOF(连接被关)。
+    #[tokio::test]
+    async fn dropping_the_receiver_closes_the_connection() {
+        let sock = temp_sock("drop");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (r, mut w) = stream.into_split();
+            let mut lines = BufReader::new(r).lines();
+            let _ = lines.next_line().await.unwrap();
+            w.write_all(
+                encode_line(&Reply::App {
+                    reply: AppReply::Subscribed,
+                })
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+            // 客户端此后会 drop 接收端;连接应最终 EOF。
+            let line = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
+                .await
+                .expect("读任务应在丢弃接收端后退出")
+                .unwrap();
+            assert!(line.is_none(), "连接应被关闭(EOF),得到 {line:?}");
+        });
+
+        let rx = Client::new(sock.clone()).app_subscribe().await.unwrap();
+        drop(rx);
+        server.await.unwrap();
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn app_subscribe_propagates_a_failed_reply() {
+        let sock = temp_sock("fail");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (r, mut w) = stream.into_split();
+            let mut lines = BufReader::new(r).lines();
+            let _ = lines.next_line().await.unwrap();
+            let failure = bytehost_apps::proto::AppFailure::new(
+                bytehost_apps::proto::AppErrorKind::Unavailable,
+                "宿主不可用",
+            );
+            w.write_all(
+                encode_line(&Reply::App {
+                    reply: AppReply::Failed { failure },
+                })
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        });
+
+        let err = Client::new(sock.clone()).app_subscribe().await.unwrap_err();
+        let failure = err
+            .downcast_ref::<bytehost_apps::proto::AppFailure>()
+            .unwrap();
+        assert_eq!(
+            failure.kind,
+            bytehost_apps::proto::AppErrorKind::Unavailable
+        );
+        let _ = std::fs::remove_file(&sock);
     }
 }

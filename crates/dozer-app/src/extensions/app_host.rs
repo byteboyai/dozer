@@ -20,8 +20,19 @@ use bytehost_apps::state::{DesiredState, ObservedState};
 use crate::app::AppSlot;
 use crate::extensions::toast::Level;
 
-/// 应用面板可见时拉 `List` 的间隔。
+/// 应用面板可见、且**订阅未就绪**时拉 `List` 的间隔(兜底轮询的快速档)。
 pub const POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+/// 订阅已 `Live` 时拉 `List` 的兜底间隔:推送是主力,这只是防止极小概率的漏推。
+pub const SAFETY_POLL_INTERVAL: Duration = Duration::from_secs(30);
+
+/// 订阅断开后重订阅的退避序列(封顶取最后一个)。
+pub const RESUBSCRIBE_BACKOFF: [Duration; 4] = [
+    Duration::from_secs(2),
+    Duration::from_secs(5),
+    Duration::from_secs(15),
+    Duration::from_secs(30),
+];
 
 /// 一次请求的失败:宿主带类别的失败,或者传输/协议层的(连不上 dozerd、协议版本不符)。
 #[derive(Debug, Clone, PartialEq)]
@@ -73,6 +84,12 @@ pub enum Message {
     LogsLoaded(AppSlot, Result<(String, bool), Failure>),
     /// 用户点了运行时问题页的「去设置安装」。
     OpenRuntimeSettings,
+    /// 订阅已建立(dozerd 回了 `Subscribed`)。
+    Subscribed,
+    /// 收到一条变更失效信号(`Changed`/`Resync`)——都只是"去重拉一次列表"。
+    Changed,
+    /// 订阅连接断了 / 重订阅失败:回退到快速轮询并按退避重订阅。
+    SubscriptionLost,
 }
 
 /// 状态机要 `App` 去做的事。
@@ -90,6 +107,8 @@ pub enum Effect {
     FetchLogs(AppSlot, u32),
     /// 打开 设置 → 应用 页(运行时问题页的「去设置安装」)。
     OpenSettingsApps,
+    /// 建立应用变更订阅(`Client::app_subscribe`)。
+    Subscribe,
     Toast {
         level: Level,
         text: String,
@@ -130,6 +149,21 @@ enum Phase {
     Unavailable(String),
     /// 最近一次请求在传输层失败;已知的应用保留。
     Disconnected,
+}
+
+/// 变更订阅的状态。推送是主力、轮询是兜底:订阅就绪时轮询降到
+/// [`SAFETY_POLL_INTERVAL`],断开时回到 [`POLL_INTERVAL`] 并按 [`RESUBSCRIBE_BACKOFF`] 重订阅。
+#[derive(Debug, Clone, PartialEq, Default)]
+enum Subscription {
+    /// 还没发起第一次订阅。
+    #[default]
+    Idle,
+    /// 已发 `Subscribe`(或重订阅),等 `Subscribed` 确认。
+    Pending,
+    /// 订阅就绪:变更靠推送失效信号驱动。
+    Live,
+    /// 订阅断了,到 `retry_at` 再试;`attempt` 是退避档位(封顶在最后一档)。
+    Backoff { attempt: usize, retry_at: Instant },
 }
 
 /// 面板该画什么(`State::view_model` 的结果)。
@@ -177,6 +211,10 @@ pub struct State {
     /// 已经成功拉到过一次列表(并因此同步过图标栏)。首次必须无条件同步:磁盘里的布局可能留着已卸载应用的
     /// 条目,而 `order` 的初值也是空,不能靠"集合变了"来触发。
     synced_once: bool,
+    /// 变更订阅的状态(推送取代轮询的主力)。
+    subscription: Subscription,
+    /// 订阅/推送期间又来了变更,但当时有 `List` 在途:等它回来再补发一次(合并风暴)。
+    dirty: bool,
 }
 
 impl State {
@@ -185,13 +223,30 @@ impl State {
         matches!(self.phase, Some(Phase::Disconnected))
     }
 
-    /// 要不要排下一拍唤醒:从没拉过(启动后的第一次)、有应用面板可见(持续轮询)、或者连不上 dozerd
-    /// (自愈:dozerd 启动时没起、之后才起或被重启,不用等用户操作就能拿到应用列表)。
+    /// 要不要排下一拍唤醒:从没拉过(启动后的第一次,顺带发起首次订阅)、有应用面板可见(持续轮询)、
+    /// 连不上 dozerd(自愈),或者订阅正处于退避(到点要重订阅)。订阅 `Live`/`Pending` 时不需要
+    /// 空转——`Subscribed`/`Changed` 由订阅任务经 proxy 事件驱动,不依赖定时器。
     pub fn poll_wanted(&self, app_panel_visible: bool) -> bool {
-        !self.in_flight && (self.last_poll.is_none() || app_panel_visible || self.disconnected())
+        if self.in_flight {
+            return false;
+        }
+        self.last_poll.is_none()
+            || app_panel_visible
+            || self.disconnected()
+            || matches!(self.subscription, Subscription::Backoff { .. })
     }
 
-    /// `ResumeTimeReached` 时调用:到点就拉一次列表。
+    /// 下一拍唤醒的间隔:订阅 `Live` 时降到兜底档 [`SAFETY_POLL_INTERVAL`],否则用快速档 [`POLL_INTERVAL`]。
+    pub fn poll_interval(&self) -> Duration {
+        if matches!(self.subscription, Subscription::Live) {
+            SAFETY_POLL_INTERVAL
+        } else {
+            POLL_INTERVAL
+        }
+    }
+
+    /// `ResumeTimeReached` 时调用:到点就拉一次列表。**订阅的发起/重订阅不走这里**
+    /// (见 [`State::subscribe_if_due`]),所以这里的行为与 A6e 完全一致。
     pub fn poll_if_due(&mut self, now: Instant, visible: &[AppSlot]) -> Vec<Effect> {
         if self.in_flight {
             return Vec::new();
@@ -200,7 +255,7 @@ impl State {
             None => true,
             Some(t) => {
                 (!visible.is_empty() || self.disconnected())
-                    && now.duration_since(t) >= POLL_INTERVAL
+                    && now.duration_since(t) >= self.poll_interval()
             }
         };
         if !due {
@@ -210,6 +265,23 @@ impl State {
         vec![Effect::FetchList]
     }
 
+    /// 订阅的发起/重订阅:还没订就订一次,退避到点再订一次;`Live`/`Pending` 时什么都不做。
+    /// 与列表轮询分开,保证轮询逻辑与 A6e 逐字一致。
+    pub fn subscribe_if_due(&mut self, now: Instant) -> Vec<Effect> {
+        match &self.subscription {
+            Subscription::Idle => {
+                self.subscription = Subscription::Pending;
+                vec![Effect::Subscribe]
+            }
+            Subscription::Pending | Subscription::Live => Vec::new(),
+            Subscription::Backoff { retry_at, .. } if now >= *retry_at => {
+                self.subscription = Subscription::Pending;
+                vec![Effect::Subscribe]
+            }
+            Subscription::Backoff { .. } => Vec::new(),
+        }
+    }
+
     fn begin_fetch(&mut self, now: Instant) {
         self.in_flight = true;
         self.last_poll = Some(now);
@@ -217,7 +289,7 @@ impl State {
 
     pub fn update(&mut self, msg: Message, now: Instant, visible: &[AppSlot]) -> Vec<Effect> {
         match msg {
-            Message::ListLoaded(result) => self.list_loaded(result, visible),
+            Message::ListLoaded(result) => self.list_loaded(result, visible, now),
             Message::LaunchUrlLoaded(slot, result) => self.launch_url_loaded(slot, result),
             Message::Start(slot) => self.act(slot, Act::Start),
             Message::Stop(slot) => self.act(slot, Act::Stop),
@@ -260,7 +332,37 @@ impl State {
                 Vec::new()
             }
             Message::OpenRuntimeSettings => vec![Effect::OpenSettingsApps],
+            Message::Subscribed => {
+                self.subscription = Subscription::Live;
+                // 刚订上:断线/退避期间可能漏了变更,立刻重拉一次(有在途则合并)。
+                self.request_refetch(now)
+            }
+            Message::Changed => self.request_refetch(now),
+            Message::SubscriptionLost => {
+                // 退避档位:第一次丢失用第 0 档,重订阅再失败逐档递增(封顶最后一档)。
+                let attempt = match self.subscription {
+                    Subscription::Backoff { attempt, .. } => {
+                        (attempt + 1).min(RESUBSCRIBE_BACKOFF.len() - 1)
+                    }
+                    _ => 0,
+                };
+                self.subscription = Subscription::Backoff {
+                    attempt,
+                    retry_at: now + RESUBSCRIBE_BACKOFF[attempt],
+                };
+                Vec::new()
+            }
         }
+    }
+
+    /// 收到变更失效信号(或刚订阅上):有 `List` 在途就记 `dirty`,否则立刻重拉。
+    fn request_refetch(&mut self, now: Instant) -> Vec<Effect> {
+        if self.in_flight {
+            self.dirty = true;
+            return Vec::new();
+        }
+        self.begin_fetch(now);
+        vec![Effect::FetchList]
     }
 
     /// 读日志:未展开时置 `Loading` 并发一次请求;在途时重复点不重发。
@@ -277,6 +379,7 @@ impl State {
         &mut self,
         result: Result<Vec<AppSummary>, Failure>,
         visible: &[AppSlot],
+        now: Instant,
     ) -> Vec<Effect> {
         self.in_flight = false;
         let apps = match result {
@@ -364,6 +467,12 @@ impl State {
                 self.launching.insert(slot);
                 effects.push(Effect::FetchLaunchUrl(slot));
             }
+        }
+        // 拉列表期间又来了变更(合并风暴):补发一次,确保拿到最新状态。`in_flight` 已在开头清掉。
+        if self.dirty {
+            self.dirty = false;
+            self.begin_fetch(now);
+            effects.push(Effect::FetchList);
         }
         effects
     }
@@ -1194,5 +1303,155 @@ mod tests {
             assert_eq!(t, title, "{issue:?}");
             assert_eq!(d, detail, "{issue:?}");
         }
+    }
+
+    // ===== A6f Task 2:订阅取代轮询(轮询降为兜底) =====
+
+    /// 首次 tick 先发订阅;`Subscribed` 后轮询降到兜底档(30s),不再每 2s 拉。
+    #[test]
+    fn a_live_subscription_slows_polling_to_the_safety_interval() {
+        let mut s = State::default();
+        let t0 = Instant::now();
+        // 启动第一拍:发起订阅。
+        assert_eq!(s.subscribe_if_due(t0), vec![Effect::Subscribe]);
+        // 列表照旧拉一次。
+        assert_eq!(s.poll_if_due(t0, &[]), vec![Effect::FetchList]);
+        s.update(Message::ListLoaded(Ok(vec![])), t0, &[]);
+        // 订阅确认本身会补一次重拉,消化掉。
+        assert_eq!(
+            s.update(Message::Subscribed, t0, &[]),
+            vec![Effect::FetchList]
+        );
+        s.update(Message::ListLoaded(Ok(vec![])), t0, &[]);
+        assert_eq!(s.poll_interval(), SAFETY_POLL_INTERVAL);
+
+        let a = [slot("sub-a")];
+        assert!(
+            s.poll_if_due(t0 + POLL_INTERVAL, &a).is_empty(),
+            "订阅就绪后 2s 不该再拉"
+        );
+        assert_eq!(
+            s.poll_if_due(t0 + SAFETY_POLL_INTERVAL, &a),
+            vec![Effect::FetchList],
+            "到了兜底档才拉"
+        );
+    }
+
+    /// 订阅请求发出后到确认前,不重复发(Idle→Pending 只发一次)。
+    #[test]
+    fn subscribe_is_requested_once_until_it_resolves() {
+        let mut s = State::default();
+        let t0 = Instant::now();
+        assert_eq!(s.subscribe_if_due(t0), vec![Effect::Subscribe]);
+        assert!(
+            s.subscribe_if_due(t0 + POLL_INTERVAL).is_empty(),
+            "Pending 时不再发订阅"
+        );
+    }
+
+    /// 推送风暴:订阅就绪、无在途时连发 10 次 `Changed` → 只产出一次 `FetchList`;
+    /// 在途时再来 → 合并成 `dirty`,列表回来后恰好再补一次。
+    #[test]
+    fn a_change_triggers_exactly_one_refetch_even_in_a_storm() {
+        let mut s = State::default();
+        let t0 = Instant::now();
+        s.subscribe_if_due(t0);
+        s.poll_if_due(t0, &[]);
+        s.update(Message::ListLoaded(Ok(vec![])), t0, &[]);
+        s.update(Message::Subscribed, t0, &[]);
+        // 订阅确认自带的重拉,消化掉。
+        s.update(Message::ListLoaded(Ok(vec![])), t0, &[]);
+
+        // 第一次 Changed:立刻拉一次。
+        assert_eq!(s.update(Message::Changed, t0, &[]), vec![Effect::FetchList]);
+        // 之后在途时再来 10 次:全部合并成 dirty,不各自发请求。
+        for _ in 0..10 {
+            assert!(s.update(Message::Changed, t0, &[]).is_empty());
+        }
+        // 在途的 List 回来:合并后恰好再补一次。
+        assert_eq!(
+            s.update(Message::ListLoaded(Ok(vec![])), t0, &[]),
+            vec![Effect::FetchList]
+        );
+        // 再回来时没有脏标记:不再多发。
+        assert!(
+            s.update(Message::ListLoaded(Ok(vec![])), t0, &[])
+                .is_empty()
+        );
+    }
+
+    /// 丢订阅后回到 2s 快速轮询,并按退避重订阅;连续失败退避停在 30s。
+    #[test]
+    fn losing_the_subscription_goes_back_to_fast_polling_and_retries_with_backoff() {
+        let mut s = State::default();
+        let t0 = Instant::now();
+        s.subscribe_if_due(t0);
+        s.poll_if_due(t0, &[]);
+        s.update(Message::ListLoaded(Ok(vec![])), t0, &[]);
+        s.update(Message::Subscribed, t0, &[]);
+        s.update(Message::ListLoaded(Ok(vec![])), t0, &[]);
+
+        // 丢订阅:立刻回到快速档。
+        s.update(Message::SubscriptionLost, t0, &[]);
+        assert_eq!(s.poll_interval(), POLL_INTERVAL);
+        let a = [slot("lost-a")];
+        assert!(
+            s.subscribe_if_due(t0 + Duration::from_millis(1)).is_empty(),
+            "退避没到点不发订阅"
+        );
+        assert_eq!(
+            s.poll_if_due(t0 + POLL_INTERVAL, &a),
+            vec![Effect::FetchList],
+            "断开后按 2s 轮询"
+        );
+        s.update(Message::ListLoaded(Ok(vec![])), t0 + POLL_INTERVAL, &[]);
+
+        // 第 0 档到点:发一次订阅。
+        let retry0 = t0 + RESUBSCRIBE_BACKOFF[0] + Duration::from_millis(1);
+        assert_eq!(s.subscribe_if_due(retry0), vec![Effect::Subscribe]);
+
+        // 连续失败:退避逐档递增,封顶 30s。
+        let mut now = retry0;
+        for _ in 0..6 {
+            s.update(Message::SubscriptionLost, now, &[]);
+            now += Duration::from_secs(60);
+        }
+        assert_eq!(
+            s.poll_interval(),
+            POLL_INTERVAL,
+            "还没订阅上,轮询仍是快速档"
+        );
+        let (attempt, retry_at, at) = match s.subscription {
+            Subscription::Backoff { attempt, retry_at } => (attempt, retry_at, now),
+            ref other => panic!("{other:?}"),
+        };
+        assert_eq!(attempt, RESUBSCRIBE_BACKOFF.len() - 1, "封顶在最后一档");
+        assert_eq!(
+            retry_at.duration_since(at - Duration::from_secs(60)),
+            RESUBSCRIBE_BACKOFF[RESUBSCRIBE_BACKOFF.len() - 1]
+        );
+    }
+
+    /// dozerd 重启:订阅丢失 → 退避到期重订阅 → `Subscribed` 恢复 `Live`,
+    /// 且恢复那一刻补一次重拉(断线期间可能漏了事件)。
+    #[test]
+    fn dozerd_restart_is_recovered() {
+        let mut s = State::default();
+        let t0 = Instant::now();
+        s.subscribe_if_due(t0);
+        s.poll_if_due(t0, &[]);
+        s.update(Message::ListLoaded(Ok(vec![])), t0, &[]);
+        s.update(Message::Subscribed, t0, &[]);
+        s.update(Message::ListLoaded(Ok(vec![])), t0, &[]);
+
+        s.update(Message::SubscriptionLost, t0, &[]);
+        let retry = t0 + POLL_INTERVAL + RESUBSCRIBE_BACKOFF[0] + Duration::from_millis(1);
+        assert_eq!(s.subscribe_if_due(retry), vec![Effect::Subscribe]);
+        // 订阅恢复:补一次重拉。
+        assert_eq!(
+            s.update(Message::Subscribed, retry, &[]),
+            vec![Effect::FetchList]
+        );
+        assert_eq!(s.poll_interval(), SAFETY_POLL_INTERVAL);
     }
 }
