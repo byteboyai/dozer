@@ -248,15 +248,26 @@
 
 **Files:** Modify `crates/dozerd/tests/process_apps_live.rs`;Create `docs/superpowers/specs/2026-10-08-bytehost-a6h-acceptance-report.md`;Modify `CLAUDE.md`、规格 §7 表。
 
-- [ ] **Step 1: live 用例**(`#[ignore]`;沿用 A6e 的辅助;**所有"等 pid/等恢复"的断言要求纯数字 pid**——A6e 曾因接受网关错误页正文而假通过,任何"快得不可能"的耗时都要追到根因):
+- [x] **Step 1: live 用例**(`#[ignore]`;沿用 A6e 的辅助;**所有"等 pid/等恢复"的断言要求纯数字 pid**——A6e 曾因接受网关错误页正文而假通过,任何"快得不可能"的耗时都要追到根因):
   1. 把 `scripts/bytehost/samples/py-notes` 与 `node-notes` 在测试里**现场打成 zip 和 tar.gz**(临时目录,不提交二进制),经 `AppService` 走 `Plan(Archive)` → `Install` → `Start`,验证 A6e 的 11 步里与来源无关的核心几步(鉴权、SSE、计数持久化、崩溃重启)在压缩包来源下同样成立;
   2. 恶意压缩包(zip-slip、符号链接)经 `AppService` 被拒,且**数据根目录之外没有新文件**(用 `walkdir` 对测试根的父目录前后快照比较);
   3. `Url` 来源:用假 `Fetcher` 注入一个静态应用 zip,走完 Plan→Install→Start→经 gateway 取到页面;同一假 fetcher 供给 Node 应用 → 被拒。
-- [ ] **Step 2: 连跑 3 遍**,耗时如实记入报告 §1。
-- [ ] **Step 3: 报告**:§0 环境(含新增依赖版本);§1 自动化(命令 + 结果 + 实测耗时);§2 GUI 手工项(Task 5 Step 5,**含一次对真实 https 服务器的下载**——自动化测试里没有真实网络,这一项只能手工,未执行保持未勾选);§3 缺陷与已知局限(据实,不预填)。
-- [ ] **Step 4: CLAUDE.md** `bytehost-apps` 一行补:A6h 落地——`AppSource::{Archive, Url}`;压缩包**进程内**逐条目校验解压(拒符号/硬链接、`..`/绝对路径、重复/大小写折叠重复、炸弹,限额见 `archive::Limits`),不交给系统 `tar`;**信任由服务端按来源推导**(本机目录/压缩包 = `Local/Trusted`,URL = `ThirdParty/Untrusted`,客户端自报只能更严不能更松);**网络来源只允许静态应用**;URL 只认 https、拒凭据、整串不入日志;出计划时下载并缓存字节(`<root>/downloads/<sha256>.bin`),安装复用并重算校验;`InstallPlan.source_info` 参与 `verify`。规格 §7 表加 A6h 一行并链接计划与报告;注明 Git 仓库来源与"网络来源放开进程型应用(依赖沙箱)"仍未做。
-- [ ] **Step 5: 全量**:`cargo test -p bytehost-apps -p dozerd -p dozer-client -p dozer-app`(已知无关失败:`files::tests::delete_confirm_spec_reflects_pending_target`、`memory::tests::list_orders_by_updated_ms_desc`、`app_service::tests::the_first_run_is_unavailable_when_the_port_cannot_be_saved`——如仍存在逐个注明,不要顺手改)、`cargo clippy --all-targets`(A6h 触碰的文件无新警告)、`cargo fmt --check`、两个门禁脚本。
-- [ ] **Step 6: Commit** — 测试与报告各一个:`test(dozerd): archive-sourced apps end to end and hostile archives refused (A6h task 6)`、`docs(bytehost): A6h landed`。
+- [x] **Step 2: 连跑 3 遍**,耗时如实记入报告 §1。
+- [x] **Step 3: 报告**:§0 环境(含新增依赖版本);§1 自动化(命令 + 结果 + 实测耗时);§2 GUI 手工项(Task 5 Step 5,**含一次对真实 https 服务器的下载**——自动化测试里没有真实网络,这一项只能手工,未执行保持未勾选);§3 缺陷与已知局限(据实,不预填)。
+- [x] **Step 4: CLAUDE.md** `bytehost-apps` 一行补:A6h 落地——`AppSource::{Archive, Url}`;压缩包**进程内**逐条目校验解压(拒符号/硬链接、`..`/绝对路径、重复/大小写折叠重复、炸弹,限额见 `archive::Limits`),不交给系统 `tar`;**信任由服务端按来源推导**(本机目录/压缩包 = `Local/Trusted`,URL = `ThirdParty/Untrusted`,客户端自报只能更严不能更松);**网络来源只允许静态应用**;URL 只认 https、拒凭据、整串不入日志;出计划时下载并缓存字节(`<root>/downloads/<sha256>.bin`),安装复用并重算校验;`InstallPlan.source_info` 参与 `verify`。规格 §7 表加 A6h 一行并链接计划与报告;注明 Git 仓库来源与"网络来源放开进程型应用(依赖沙箱)"仍未做。
+- [x] **Step 5: 全量**:`cargo test -p bytehost-apps -p dozerd -p dozer-client -p dozer-app`(已知无关失败:`files::tests::delete_confirm_spec_reflects_pending_target`、`memory::tests::list_orders_by_updated_ms_desc`、`app_service::tests::the_first_run_is_unavailable_when_the_port_cannot_be_saved`——如仍存在逐个注明,不要顺手改)、`cargo clippy --all-targets`(A6h 触碰的文件无新警告)、`cargo fmt --check`、两个门禁脚本。
+- [x] **Step 6: Commit** — 测试与报告各一个:`test(dozerd): archive-sourced apps end to end and hostile archives refused (A6h task 6)`、`docs(bytehost): A6h landed`。
+
+**实施追记(Task 6)**:
+
+- **用 `snapshot_tree` 替代 `walkdir`**:仓库没有任何 crate 依赖 `walkdir`,新增依赖会污染不提交的 `Cargo.lock`。改用 `process_apps_live.rs` 内的本地递归 `snapshot_tree`(相对路径→类型的有序集合),语义等价。属等价手段替换,已记入报告 §3.2。
+- **打包形态**:macOS bsdtar 的 AppleDouble(`._*`)资源叉条目会在归档根部多出条目、破坏"唯一顶层目录"判定 → `NoManifest`。测试打包加 `--no-mac-metadata`(`zip` 加 `COPYFILE_DISABLE=1`)打干净形态;是否在解压层忽略 `._*` 属后续跟进。
+- **`tar -C src .` 形态被拒**:解压器按设计拒绝含 `.` 段的路径,`./manifest.toml` 这类常见归档会被拒。测试采用"单一顶层目录"形态;`./` 形态的支持属后续跟进(已记入报告 §3.3 与 CLAUDE.md 已知偏严项)。
+- **假 `Fetcher` 注入**:跨 crate 用 `AppService::finish_start_with_sources(root, gateway, rm, None, Some(fetcher))`(`#[doc(hidden)] pub`);`Fetcher`/`FetchMeta` 公有。
+- **静态应用清单**必须带 `[runtime] kind = "static_web"` / `source = "web/"`,否则 `missing field runtime`(首轮踩到,已修)。
+- **URL 用例的静态页**经真 gateway 取到 `GET /` 正文含 `hello-from-url`;假 fetcher `calls == 1`(证明只下载一次、安装复用缓存)。
+- **耗时**:单线程连跑 3 遍 `19.69s / 19.70s / 19.72s`;并行跑 7 个用例时偶发 1 例既有并行掉队(见报告 §3.1)。
+
 
 ---
 
