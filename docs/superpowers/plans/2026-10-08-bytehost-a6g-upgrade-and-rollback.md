@@ -86,7 +86,7 @@
   - 升级(`existing.is_some()`)时:记 `was_running = desired == Running`;若当前在跑,**先 `stop_locked`**(持着 `install_staged` 已拿的锁;该函数 join 监管线程,不会自锁);包落位 + 写记录:`previous_version = Some(旧 current)`、`probation = was_running`(没在跑就没有"首次启动"可试,不设试用期)、`last_rollback = None`、`grants = 新申请`;然后 `prune_versions()` 并删除被清理版本的包目录;发 `Upgraded`;若 `was_running` 则 `start_locked`——启动失败(同步返回 `Err`)时的处理见 Task 2。
   - 全新安装:三个新字段取默认。
 
-- [x] **Step 1: 写失败测试**(`manager.rs`,沿用 `rig`/`write_app`/静态应用 fixture;进程型用 `write_py_app` + `python3`,缺 python3 则 `return`)- [ ] **Step 1: 写失败测试**(`manager.rs`,沿用 `rig`/`write_app`/静态应用 fixture;进程型用 `write_py_app` + `python3`,缺 python3 则 `return`)
+- [x] **Step 1: 写失败测试**(`manager.rs`,沿用 `rig`/`write_app`/静态应用 fixture;进程型用 `write_py_app` + `python3`,缺 python3 则 `return`)
   - `an_upgrade_records_the_previous_version`:装 1.0.0 → 装 1.1.0 → `previous_version == Some(1.0.0)`、`current_version == 1.1.0`、`probation == false`(应用没在跑)。
   - `three_successive_upgrades_keep_only_current_and_previous`(Review Focus 4):装 1.0.0/1.1.0/1.2.0 → 1.0.0 的包目录与 `versions` 记录都没了,1.1.0 与 1.2.0 还在;再装 1.0.0 成功(不是 `AlreadyInstalled`)。(注:重装 1.0.0 后它成为 current,`prune_versions` 会把 1.1.0 清掉,所以不断言 1.1.0/1.2.0 仍是 `AlreadyInstalled`。)
   - `upgrading_a_running_static_app_stops_swaps_and_restarts_it`:装 1.0.0、`start`、经 gateway 请求拿到旧页面内容;装 1.1.0(不同页面内容)→ `observed == Running`、`desired == Running`、经 gateway 请求拿到**新**页面内容;事件顺序含 `Upgraded`。
@@ -124,7 +124,7 @@
 - `spawn_auto_rollback` 线程:`guard()` → 重新 `load_record` → 仅当 `probation && current_version == failed_version && observed 是 Failed{..} && !closed` 才调 `rollback_locked`;否则什么都不做(Review Focus 2)。`rollback_locked` 返回 `RollbackEscalates` 时:不动状态,把原因写进 `last_rollback`(`to == from`,`reason` 说明"回滚需要更高权限,未自动回滚"),`probation = false`,应用保持 `Failed`。
 - **Step 0(A6f 先落地时):** A6f 的 `AppTransitions::install_failed`(依赖安装失败)同样要在写完 `Failed` 后走第 2 点的触发逻辑——抽成私有 `fn after_failed(&self)` 供 `failed`/`down(None)`/`install_failed` 共用。A6g 先落地则 A6f 实现该方法时照此接入。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
   - `a_new_version_that_never_becomes_healthy_is_rolled_back_automatically`:python 应用 1.0.0 正常;1.1.0 的命令立即退出(`python3 -c "import sys; sys.exit(1)"`),用 `with_resolver_and_policy_for_test` 注入小退避让放弃在毫秒级完成 → 等到 `current_version == 1.0.0`、`observed == Running`、`last_rollback == Some{automatic: true, from: 1.1.0, to: 1.0.0}`、`probation == false`、`previous_version == None`、1.1.0 的包目录与记录已清;事件含 `RolledBack`。
   - `a_synchronous_start_failure_after_upgrade_rolls_back_in_the_same_call`:新版本声明 `python = ">=99"`(A6e 的版本校验同步失败)→ `install` 返回 `Ok`,返回时 `current_version` 已是旧版本、旧版本在跑。
   - `a_healthy_new_version_ends_probation_and_is_not_rolled_back`:新版本正常 → `ready` 后 `probation == false`,`previous_version` 仍是旧版(手动回滚还可用)。
@@ -132,8 +132,8 @@
   - `rollback_is_abandoned_when_the_user_acted_first`(Review Focus 2):让测试线程先占住 `lock`,等 `spawn_auto_rollback` 的线程阻塞在 `guard()` 上,再在占锁期间把应用 `stop`(改 desired/observed)后放锁 → 线程核对后放弃,应用仍是 `Stopped`、`current_version` 不变。变异:去掉核对,用例失败。
   - `probation_survives_a_daemon_restart`(Review Focus 1):升级到起不来的新版本,**在监管线程放弃前**用新的 `AppManager` 实例(同一 root)模拟 dozerd 重启并 `reconcile()` → 新实例启动对账里 `probation == true` 的应用启动失败后仍触发回滚;最终 `current_version == 旧版本`。
   - 现有 `supervisor`/`manager` 测试(崩溃重启、give-up、`stop` 不死锁)全部保持通过。
-- [ ] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(连跑 3 遍:`for i in 1 2 3; do cargo test -p bytehost-apps --all-features manager:: || break; done`——并发相关,不接受偶发)。变异:让 `failed` 里直接调 `rollback_locked`(不开线程),必须能复现自锁/死锁的失败(用例超时即视为失败);把 `ready` 里清 `probation` 去掉,"健康新版本"用例失败。
-- [ ] **Step 5: Commit** — `feat(bytehost-apps): probation after upgrade with automatic rollback on a separate thread (A6g task 2)`。
+- [x] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(连跑 3 遍:`for i in 1 2 3; do cargo test -p bytehost-apps --all-features manager:: || break; done`——并发相关,不接受偶发)。变异:让 `failed` 里直接调 `rollback_locked`(不开线程),必须能复现自锁/死锁的失败(用例超时即视为失败);把 `ready` 里清 `probation` 去掉,"健康新版本"用例失败。
+- [x] **Step 5: Commit** — `feat(bytehost-apps): probation after upgrade with automatic rollback on a separate thread (A6g task 2)`。
 
 ---
 
