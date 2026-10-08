@@ -1488,6 +1488,7 @@ mod tests {
             ],
             permission_diff: diff_permissions(&Permissions::default(), &requested),
             will_run: vec!["不执行任何命令".into()],
+            source_info: Default::default(),
         }
     }
 
