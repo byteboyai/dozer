@@ -826,3 +826,239 @@ async fn python_sample_end_to_end() {
 async fn node_sample_end_to_end() {
     run_sample(&NODE).await;
 }
+
+// ===== A6g Task 5:升级 → 自动回滚 → 手动回滚(真 python3) =====
+
+/// 把 manifest 的 `version = "..."` 改成给定值,并往 HTML 里塞一个可读的版本标记。
+/// 页面标记让"到底跑的是哪一版"可被外部观察(而不是只看记录)。
+fn stage_py_version(version: &str) -> AppSource {
+    let marker = format!("<p id=\"ver\">APPVERSION:{version}</p>");
+    let source = stage(&PY, {
+        let version = version.to_string();
+        move |manifest| {
+            manifest
+                .lines()
+                .map(|l| {
+                    if l.starts_with("version = ") {
+                        format!("version = \"{version}\"")
+                    } else {
+                        l.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    });
+    // `stage` 只改 manifest;这里再改页面,把版本写进 HTML。
+    let AppSource::LocalDir { path } = &source;
+    let server = path.join("server.py");
+    let text = std::fs::read_to_string(&server).unwrap();
+    let updated = text.replace("<h1>Py Notes</h1>", &format!("<h1>Py Notes</h1>\n{marker}"));
+    std::fs::write(&server, updated).unwrap();
+    source
+}
+
+/// 经 gateway 读页面正文(带令牌)。
+fn get_page(app: &AppId, port: u16, token: &str) -> String {
+    let resp = request(app, port, &Req::get("/").cookie(token));
+    assert_eq!(resp.status, 200, "读页面应 200:{}", resp.body);
+    resp.body
+}
+
+/// 页面上是否显示指定版本。
+fn page_shows_version(app: &AppId, port: u16, token: &str, version: &str) -> bool {
+    get_page(app, port, token).contains(&format!("APPVERSION:{version}"))
+}
+
+/// 等待页面显示指定版本(重启后 gateway 会短暂不可达)。
+async fn wait_page_version(
+    svc: &AppService,
+    app: &AppId,
+    version: &str,
+    secs: u64,
+) -> (u16, String) {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    loop {
+        if matches!(
+            list_one(svc, app).await.map(|a| a.observed),
+            Some(ObservedState::Running)
+        ) && let Ok(AppReply::LaunchUrl { url }) =
+            svc.handle(AppRequest::LaunchUrl { id: app.clone() }).await
+        {
+            let (port, token) = parse_launch(&url);
+            if page_shows_version(app, port, &token, version) {
+                return (port, token);
+            }
+        }
+        if Instant::now() >= deadline {
+            panic!("等待页面显示 {version} 超时({app})");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// 磁盘上 `apps/<id>/package/` 下的版本子目录名(排序后)。
+fn package_versions_on_disk(root: &Path, app: &AppId) -> Vec<String> {
+    let dir = root.join("apps").join(app.as_str()).join("package");
+    let mut out: Vec<String> = std::fs::read_dir(&dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "需要真 python3;人工运行时删除 --ignored"]
+async fn python_sample_upgrade_and_rollback() {
+    assert!(
+        have("python3"),
+        "缺少 python3 —— 本用例要求真运行时,不静默跳过"
+    );
+
+    let t_start = Instant::now();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("bytehost");
+    let svc = AppService::start_with_monitor_for_test(
+        &root,
+        GatewayConfig { port: 0 },
+        MonitorConfig {
+            interval: Duration::from_millis(300),
+            timeout: Duration::from_millis(400),
+            failures: 3,
+        },
+    )
+    .await;
+
+    let app = id("py-notes");
+
+    // 1. 装 1.0.0 → 启动 → 页面显示 1.0.0;经 gateway 计一次数。
+    install(&svc, stage_py_version("1.0.0")).await;
+    svc.handle(AppRequest::Start { id: app.clone() })
+        .await
+        .unwrap();
+    let (port, token) = wait_page_version(&svc, &app, "1.0.0", 20).await;
+    let own_origin = format!("http://{}", host_for(&app, port));
+    let hit = request(
+        &app,
+        port,
+        &Req::post("/hit").cookie(&token).origin(&own_origin),
+    );
+    assert_eq!(hit.status, 200, "{:?}", hit.body);
+    assert_eq!(read_counter(&root, &app), 1, "计数应为 1");
+    let pid_v1 = request(&app, port, &Req::get("/pid").cookie(&token)).body;
+    assert!(is_pid(&pid_v1), "1.0.0 应有真 pid:{pid_v1:?}");
+
+    // 2. 升级到 1.1.0(运行中):自动停→换→再启;页面显示 1.1.0、新 pid、计数仍为 1。
+    install(&svc, stage_py_version("1.1.0")).await;
+    let (port2, token2) = wait_page_version(&svc, &app, "1.1.0", 20).await;
+    let pid_v2 = request(&app, port2, &Req::get("/pid").cookie(&token2)).body;
+    assert!(is_pid(&pid_v2), "1.1.0 应有真 pid:{pid_v2:?}");
+    assert_ne!(pid_v1, pid_v2, "升级应换一个新进程");
+    assert_eq!(read_counter(&root, &app), 1, "计数应跨升级保留");
+    let after_upgrade = list_one(&svc, &app).await.expect("应列出 py-notes");
+    assert_eq!(
+        after_upgrade.previous_version,
+        Some(bytehost_apps::id::Version::new(1, 0, 0)),
+        "升级后应记下上一版"
+    );
+
+    // 3. 手动回滚 → 1.0.0(消耗"上一版");页面显示 1.0.0、计数仍 1;再回滚 → NotFound。
+    svc.handle(AppRequest::Rollback { id: app.clone() })
+        .await
+        .unwrap();
+    let (port3, token3) = wait_page_version(&svc, &app, "1.0.0", 20).await;
+    assert_eq!(read_counter(&root, &app), 1, "计数应跨手动回滚保留");
+    let after_manual = wait_satisfy(
+        &svc,
+        &app,
+        10,
+        |a| a.previous_version.is_none() && matches!(a.observed, ObservedState::Running),
+        "手动回滚后 previous_version 清空",
+    )
+    .await;
+    let manual_note = after_manual.rollback_note.clone().unwrap();
+    assert!(!manual_note.automatic, "应为手动回滚:{manual_note:?}");
+    assert_eq!(
+        manual_note.from,
+        bytehost_apps::id::Version::new(1, 1, 0),
+        "{manual_note:?}"
+    );
+    assert_eq!(
+        manual_note.to,
+        bytehost_apps::id::Version::new(1, 0, 0),
+        "{manual_note:?}"
+    );
+    let again = svc
+        .handle(AppRequest::Rollback { id: app.clone() })
+        .await
+        .unwrap_err();
+    assert_eq!(again.kind, AppErrorKind::NotFound, "{again:?}");
+
+    // 4. 升级到起不来的 1.2.0 → 数秒内自动回滚回 1.0.0,页面显示 1.0.0、rollback_note.automatic == true。
+    let broken = stage_py_version("1.2.0");
+    // 让 1.2.0 必起不来:把服务换成启动即退出的脚本(监管会连续失败 → 试用期内回滚)。
+    {
+        let AppSource::LocalDir { path } = &broken;
+        std::fs::write(
+            path.join("server.py"),
+            "import sys\nsys.stderr.write('boom: cannot start\\n')\nsys.exit(1)\n",
+        )
+        .unwrap();
+    }
+    install(&svc, broken).await;
+    let settled = wait_satisfy(
+        &svc,
+        &app,
+        30,
+        |a| {
+            a.rollback_note
+                .as_ref()
+                .is_some_and(|n| n.automatic && n.from == bytehost_apps::id::Version::new(1, 2, 0))
+                && a.previous_version.is_none()
+                && matches!(a.observed, ObservedState::Running)
+        },
+        "自动回滚回 1.0.0",
+    )
+    .await;
+    let note = settled.rollback_note.clone().unwrap();
+    assert!(note.automatic, "应为自动回滚:{note:?}");
+    assert_eq!(
+        note.from,
+        bytehost_apps::id::Version::new(1, 2, 0),
+        "{note:?}"
+    );
+    assert_eq!(
+        note.to,
+        bytehost_apps::id::Version::new(1, 0, 0),
+        "{note:?}"
+    );
+    let (port4, token4) = wait_page_version(&svc, &app, "1.0.0", 20).await;
+    assert_eq!(read_counter(&root, &app), 1, "计数应跨自动回滚保留");
+    // 自动回滚同样消耗"上一版":此刻没有可再回滚的目标。
+    let after_auto = svc
+        .handle(AppRequest::Rollback { id: app.clone() })
+        .await
+        .unwrap_err();
+    assert_eq!(after_auto.kind, AppErrorKind::NotFound, "{after_auto:?}");
+
+    // 5. 磁盘:只剩当前版本 1.0.0——1.1.0 在装 1.2.0 时被"当前+上一版"清理,1.2.0 在自动回滚时清掉。
+    let versions = package_versions_on_disk(&root, &app);
+    assert_eq!(
+        versions,
+        vec!["1.0.0".to_string()],
+        "包目录应只剩当前版本:{versions:?}"
+    );
+    assert!(page_shows_version(&app, port4, &token4, "1.0.0"));
+
+    eprintln!(
+        "[py-notes upgrade/rollback] 全流程耗时 {:.0}ms",
+        t_start.elapsed().as_secs_f64() * 1000.0
+    );
+    let _ = (port2, token2, port3, token3);
+    svc.shutdown().await;
+}
