@@ -29,6 +29,8 @@ mod tabular;
 mod term;
 mod theme;
 mod transcript;
+#[cfg(test)]
+mod usage_probe;
 mod webview_geometry;
 mod workspace;
 
