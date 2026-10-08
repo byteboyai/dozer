@@ -437,7 +437,7 @@ dozer 侧改动:
 - **不替 Digger 做 A8 裁决。** 本计划只证明"进程内嵌入"可行(Task 6 Step 4);Digger 若要自带守护进程,仍是它自己的切片。
 - **Tauri 侧的 webview 创建代码不在本切片。** `bytehost-webview` 只给纯策略;怎么在 Tauri 里建子 webview、拦截导航,属于 Digger 的工作(必须调用 `AppOrigin::allows_navigation` 与 `AppIpc::parse`)。
 - 展示文案(中文标签、审批卡措辞)仍在 `bytehost-panel` 里;Digger 若要换语言/措辞,下一步再抽成可注入的表。
-- 容器运行时、升级回滚(A6g)、压缩包/URL 来源(A6h)不在本切片。**A6g/A6h 的计划写在 dozer 仓库里,执行时要改在新仓库(`bytehost`)里做**——A7 完成后需要把这两份计划里的路径(`crates/bytehost-apps/...` 基本不变)和"提交到哪个仓库"更新一遍。
+- 容器运行时、升级回滚(A6g)、压缩包/URL 来源(A6h)不在本切片。**A6g/A6h 均在 dozer 里先执行完了**(所有 Task `[x]`),A7 收尾时已把这两份计划搬到新仓库 `bytehost/docs/superpowers/plans/`(bytehost 提交 `06306de`),并加了"两仓拆分"归档横幅(核心在 `crates/bytehost-apps/**` 现属 bytehost,消费者 `dozerd`/`dozer-client`/`dozer-app` 仍属 dozer;门禁改名 `scripts/check-deps.sh`)。本仓的原始计划文件保留为历史。
 - 新仓库的发布节奏/changelog 约定(SemVer、wire 只追加)只在 README 里声明,尚无自动化校验。
 
 ## 自检记录
