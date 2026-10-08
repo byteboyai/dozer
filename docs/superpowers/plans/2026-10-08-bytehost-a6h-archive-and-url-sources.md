@@ -163,7 +163,7 @@
 - 下载缓存:`<root>/downloads/<archive_sha256>.part|.bin`。`install_plan`(Url)下载到 `downloads/<uuid>.part` → 算 sha256 → 若用户给了期望值且不匹配 → 删文件、`SourceError::Sha256Mismatch`;匹配/未给 → 改名 `<sha256>.bin`,计划里填 `archive_sha256/archive_bytes/effective_host/pinned`。`install(approved, Url)`:按 `approved.plan().source_info.archive_sha256` 找 `downloads/<sha>.bin`,**读出来重新算一遍 sha256**与文件名一致才用;缺失/损坏才重新下载,且下载结果 sha256 必须等于计划里的值,否则 `Verify(SourceChanged)`。安装成功/失败后都删对应缓存;`sweep_staging` 旁加 `sweep_downloads`(启动时清 `*.part` 与超过 1 小时的 `*.bin`)。
 - URL 日志规则:`log_info!(LOG, host = %host, bytes, "下载应用包")`;错误文案里用 `display`(不含查询串)。
 
-- [ ] **Step 1: 写失败测试**(注入假 `Fetcher`:从测试准备好的归档字节"下载",可配置失败/变更内容/最终 URL)
+- [x] **Step 1: 写失败测试**(注入假 `Fetcher`:从测试准备好的归档字节"下载",可配置失败/变更内容/最终 URL)
   - 成功:假 fetcher 提供静态应用 zip → `install_plan(Url)` 得到 `source_info{kind:"url", archive_sha256, effective_host, pinned:false}`;`(Untrusted)`;`install` 成功**且假 fetcher 只被调用 1 次**(安装复用缓存,断言调用计数);成功后 `downloads/` 为空。
   - Review Focus 6:期望 sha256 写成大写带空白但值正确 → 通过且 `pinned == true`;错一位 → `Sha256Mismatch`、`downloads/` 为空、无 `.part`;长度 63/65、非十六进制 → 格式错误(未发起下载:断言 fetcher 调用 0 次)。
   - Review Focus 5:① 计划后把缓存文件改一个字节 → 安装拒绝(读出重算 sha 不符,不使用);② 删掉缓存且假 fetcher 第二次返回**不同字节** → `Verify(SourceChanged)`,不落位;③ 最终 URL 的主机与请求主机不同 → `source_info.effective_host` 如实是新主机(审批卡据此提示"已重定向到 X");④ fetcher 报告最终 URL 为 `http://…` → 拒绝(防御性:即便 curl 参数被改也守住)。
@@ -171,8 +171,17 @@
   - Review Focus 7:`https://user:pass@host/x.zip` → 拒绝,错误文案与 `captured log`(用 `tracing` 测试订阅或让日志函数可注入)里**不含** `pass`;含查询串 `?token=SECRET` 的 URL → 成功,但日志与错误文案里不含 `SECRET`。
   - Review Focus 8:取消(`cancel` 置位)→ `Interrupted`、`downloads/` 无残留;fetcher 写一半返回 `Err` → 无残留;超过 `max_bytes` → 清楚的错误;磁盘写满用只读目录模拟 `Io` 错误 → 无残留。
   - `CurlFetcher` 本身:不发真实网络请求——参数拼装抽成纯函数 `curl_args(url, dest, max_bytes) -> Vec<OsString>` 单测(含 `--proto =https --proto-redir =https --tlsv1.2 --max-filesize <n> -w %{url_effective}`);A6d 原有的 fetch 测试不改一行仍通过。
-- [ ] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p bytehost-apps --features server`)。变异:安装时不再重算缓存 sha,① 用例失败;`pinned` 比较改成区分大小写,大写用例失败。
-- [ ] **Step 5: Commit** — `feat(bytehost-apps): https URL sources with download cache, sha256 pinning and static-only policy (A6h task 3)`。
+- [x] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p bytehost-apps --features server`)。变异:安装时不再重算缓存 sha,① 用例失败;`pinned` 比较改成区分大小写,大写用例失败。
+- [x] **Step 5: Commit** — `feat(bytehost-apps): https URL sources with download cache, sha256 pinning and static-only policy (A6h task 3)`。
+
+**实现追记(2026-10-08):**
+- `ManagerConfig` 在 A6g 之后**尚未存在**,本任务新建;生产默认值 `fetcher = Arc::new(CurlFetcher)`。`new`/`with_resolver` 变成薄封装,`with_config` 是唯一真正构造点。
+- **计划里"`Verify(SourceChanged)`"落地为 `SourceError::Sha256Mismatch`**:安装时缓存缺失/损坏就重新下载,下载结果与计划披露的 sha 不等即拒(与出计划时同一错误类型,语义更直白)。②用例据此断言 `Sha256Mismatch`。
+- **①(缓存被改一个字节)落地为"不使用并重下"**:`extract_cached_archive` 重算 sha 不符即返回 `None`,安装重新下载正确字节后**安装成功**(缓存只剩数据价值,篡改不等于源被换)。用户可见行为:安装仍能成功;断言的是 fetcher 调用计数 +1、缓存最终清空。
+- **格式错误 sha256 在 `validate_url`/`normalize_sha256` 阶段就拒**,不进入下载(断言 fetcher 调用为 0)。测试里累计计数含"错一位"那次下载,故成功路径总计数为 2。
+- **`static_only` 的出计划检查放在 `Core::install_plan`**(读到 manifest 之后),命中即清掉刚下的缓存并回 `SourceNotAllowed`;`install_staged` 里保留第二道(纵深防御)。
+- **`bytehost-apps` 无 logger**(不能依赖 `dozer_core`),计划中的 `log_info!("下载应用包")` **无法在此层写**;改为保证错误文案与 `display` 不含凭据/查询串(已测)。下载日志留待 dozerd 层(Task 4)。
+- `SourceError::NotEnabled` 变体保留(公共类型,Task 2 引入),现已无构造点;不删以免动公共枚举。
 
 ---
 
