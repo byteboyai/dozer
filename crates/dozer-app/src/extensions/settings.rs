@@ -473,7 +473,6 @@ fn run_apps_message(
     use crate::extensions::settings_apps::{ActKind, Effect, Message as M};
     use bytehost_apps::id::AppId;
     use bytehost_apps::plan::{Provenance, TrustLevel};
-    use bytehost_apps::proto::AppSource;
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -511,16 +510,13 @@ fn run_apps_message(
                     send(M::ListLoaded(r));
                 });
             }
-            // 选目录对话框是阻塞的原生窗口,由 `window_events` 拦截 `InstallClicked` 在窗口层执行。
-            Effect::PickSource => {}
-            Effect::Plan(path) => {
+            // 选目录/选压缩包对话框是阻塞的原生窗口,由 `window_events` 拦截
+            // `InstallClicked`/`PickArchive` 在窗口层执行;这里只是记录意图。
+            Effect::PickSource | Effect::PickArchive => {}
+            Effect::Plan(source) => {
                 handle.spawn(async move {
                     let r = client
-                        .app_plan(
-                            AppSource::LocalDir { path },
-                            Provenance::Local,
-                            TrustLevel::Trusted,
-                        )
+                        .app_plan(source, Provenance::Local, TrustLevel::Trusted)
                         .await
                         .map(Box::new)
                         .map_err(|e| Failure::from_client_error(&e));
@@ -530,7 +526,7 @@ fn run_apps_message(
             Effect::Install { approved, source } => {
                 handle.spawn(async move {
                     let r = client
-                        .app_install(*approved, AppSource::LocalDir { path: source })
+                        .app_install(*approved, source)
                         .await
                         .map_err(|e| Failure::from_client_error(&e));
                     send(M::InstallDone(r));

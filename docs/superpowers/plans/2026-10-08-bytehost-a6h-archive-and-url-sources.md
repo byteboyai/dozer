@@ -225,13 +225,20 @@
 - 审批卡(`plan_view`)追加"来源"区块:来源类型、`display`、`archive_sha256`(完整 64 位,可复制不截断)、`archive_bytes`;URL 来源额外:醒目的"来自网络,不可信"标注 + "只允许静态应用,运行在严格 CSP 下"说明;`effective_host` 与请求主机不同 → 金色警告"已重定向到 X";`pinned == false` → "未提供期望 sha256,以上哈希是本次下载实际算出的";`pinned == true` → "已匹配你提供的 sha256"。进程型应用从本机压缩包来:沿用现有"将运行的命令"披露,**另加一行**"来自压缩包,内容已解压校验"。
 - `SourceNotAllowed`/`Sha256Mismatch`/格式错误等失败**留在安装区域内联显示**(不弹 Toast),并保留已填的 URL 与 sha256 以便修改重试。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
   - 来源切换:切到 `Url` 不丢已填的输入;切换来源会清掉上一次的计划与审批卡(避免"审批的是 A 来源、安装的是 B 来源");`UrlPlanClicked` 在 URL 为空/非 https 时**不发 Effect**,内联提示原因(客户端先行校验只是体验,真正的校验在服务端)。
   - `Sha256Changed` 即时格式提示(空 = 不钉死;非法 = 内联红字;合法 = 无提示),不改变其它状态。
   - 审批卡表驱动:四种 `source_info` 组合(local_dir / archive / url 未钉死 / url 钉死且重定向)各自的行文案与警告;`archive_sha256` 完整显示。
   - `Plan` 失败(`SourceNotAllowed`)→ 内联错误且输入保留;随后改成本机压缩包重试成功。
   - 并发:计划在途时重复点击不重发(沿用现有 `in_flight` 守卫)。
-- [ ] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p dozer-app settings_apps`;`cargo clippy -p dozer-app --all-targets` 无新警告)。变异:不清上一次计划,切换用例失败。
+- [x] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p dozer-app settings_apps`;`cargo clippy -p dozer-app --all-targets` 无新警告)。变异:不清上一次计划,切换用例失败。
+  - 实施追记:
+    1. `bytehost_apps::source`(含 `validate_url`/`normalize_sha256`)是 **`server` feature 门控**的,`dozer-app` 拿不到(它是 `dozerd` 才开的 feature)。客户端先行校验因此**在 GUI 内自带轻量实现**(`normalize_sha256_client`:trim + 小写 + 64 hex;URL 只查空/`https://` 前缀),真正的解析/校验仍在服务端 —— 与计划"客户端先行校验只是体验"的口径一致。
+    2. `SourceChoice{ Dir,Archive,Url }` 落在 `State.source_choice`;`url_input`/`sha_input`/`url_error` 也落 `State`(切来源/失败都不清,满足"输入保留")。`Flow::Picking` 带 `PickTarget{ Dir,Archive }`(Url 不弹对话框);`Flow::{Planning,Reviewing}` 与 `Effect::{Plan,Install}` 的 `source` 从 `PathBuf` 改成 `AppSource`。
+    3. 新增 `Message::{SourceChoiceChanged,PickArchive,UrlChanged,Sha256Changed,UrlPlanClicked}` + `Effect::PickArchive`。原生对话框拦截**发生在 Message 层**(与既有 `InstallClicked` 一致,不是拦截 Effect):`window_events` 现在同时拦 `InstallClicked`/`PickArchive`,按**状态机当前 `source_choice`** 决定弹"选目录"还是"选文件(过滤 zip/tar.gz/tgz)",结果仍经 `SourcePicked` 回状态机;`Effect::{PickSource,PickArchive}` 在 `settings.rs` 是 no-op。
+    4. 审批卡新增 `PlanView.source: SourceDisclosure`(`source_disclosure(info, runtime_kind)` 纯函数):来源类型/位置/完整 64 位哈希/大小/剥掉的顶层目录;URL 来源给"来自网络,不可信" + "只允许静态应用,运行在严格 CSP 下",未钉死说"未提供期望 sha256,以上哈希是本次下载实际算出的",钉死说"已匹配你提供的 sha256",`effective_host` 与请求主机不同给金色"已重定向到 X";进程型应用从本机压缩包来另加"来自压缩包,内容已解压校验"。URL/sha 输入框沿用 `byteui::form::input_text::view`(真 `text_input`,同分类树改名框),未新发明接线。
+    5. 变异验证:把 `SourceChoiceChanged` 里的"清旧计划"改成 `if false && …` → `switching_source_keeps_typed_input_but_clears_a_stale_plan` 与 `a_rejected_url_plan_stays_inline_and_keeps_input_then_archive_retries` 双双 FAILED;已 `cp` 还原。
+    6. 结果:`cargo test -p dozer-app settings_apps` 47 passed;`settings`(全设置页)76 passed;`cargo test -p dozer-app` 1981 passed(仅既有 `files::tests::delete_confirm_spec_reflects_pending_target` 与偶发 `assets::tests::serves_vendored_asset_with_mime` 失败,与 A6h 无关);`cargo clippy -p dozer-app --all-targets` 触碰文件零警告;`cargo fmt` 干净;两个门禁脚本绿。
 - [ ] **Step 5: 手动验收**(需要 GUI,如实记入报告 §2,未做的不勾):① 选本机目录安装仍正常;② 选 `py-notes` 打成的 zip 安装并启动;③ 填一个真实 https 的静态应用 zip(例如自己托管的 Excalidraw 打包产物)→ 审批卡显示来源、哈希、"不可信"标注 → 批准安装 → 能打开;④ 同一个 URL 填错 sha256 → 内联拒绝;⑤ 填一个 Node 应用的 URL → 内联"网络来源只能安装静态应用";⑥ 输入框里中文输入法(IME)与粘贴正常。
 - [ ] **Step 6: Commit** — `feat(dozer-app): archive and URL sources in the install flow with source disclosure (A6h task 5)`。
 

@@ -2230,18 +2230,56 @@ impl Runner {
                     app.update(Message::ProjectTabOpen(dir));
                 }
             }
-            // 设置「应用」页的「安装应用…」:先把状态机推进到"选目录中",再弹原生选目录对话框
-            // (阻塞,只能在窗口层做,同 `ProjectTabPickFolder`),结果经 `SourcePicked` 回到状态机。
+            // 设置「应用」页的「安装应用…」/「安装应用…(压缩包)」:先把状态机推进到"选择中",
+            // 再弹原生对话框(阻塞,只能在窗口层做,同 `ProjectTabPickFolder`),结果经 `SourcePicked`
+            // 回到状态机。对话框类型由**当前来源**决定(状态机在 `SourceChoice` 上持有它)。
             Message::Settings(crate::extensions::settings::Message::Apps(
                 crate::extensions::settings_apps::Message::InstallClicked,
+            ))
+            | Message::Settings(crate::extensions::settings::Message::Apps(
+                crate::extensions::settings_apps::Message::PickArchive,
             )) => {
-                use crate::extensions::{settings::Message as S, settings_apps::Message as A};
-                app.update(Message::Settings(S::Apps(A::InstallClicked)));
-                let picked = rfd::FileDialog::new()
-                    .set_title("选择应用目录(目录里要有 manifest.toml)")
-                    .pick_folder();
-                app.update(Message::Settings(S::Apps(A::SourcePicked(picked))));
-                window.request_redraw();
+                use crate::extensions::settings;
+                use crate::extensions::settings_apps::{Message as SA, SourceChoice};
+                let is_install = matches!(
+                    message,
+                    Message::Settings(settings::Message::Apps(SA::InstallClicked))
+                );
+                // 点压缩包按钮一律按 Archive 处理;点「安装应用…」按状态机当前来源处理。
+                let choice = if is_install {
+                    app.settings
+                        .as_ref()
+                        .map(|s| s.apps.source_choice)
+                        .unwrap_or_default()
+                } else {
+                    SourceChoice::Archive
+                };
+                match choice {
+                    SourceChoice::Dir | SourceChoice::Archive => {
+                        // 让状态机进入 `Picking { target }`(它据此解释 `SourcePicked` 的结果)。
+                        app.update(Message::Settings(settings::Message::Apps(match choice {
+                            SourceChoice::Dir => SA::InstallClicked,
+                            SourceChoice::Archive => SA::PickArchive,
+                            SourceChoice::Url => unreachable!(),
+                        })));
+                        let picked = match choice {
+                            SourceChoice::Dir => rfd::FileDialog::new()
+                                .set_title("选择应用目录(目录里要有 manifest.toml)")
+                                .pick_folder(),
+                            SourceChoice::Archive => rfd::FileDialog::new()
+                                .set_title("选择应用压缩包")
+                                .add_filter("压缩包", &["zip", "tar.gz", "tgz"])
+                                .pick_file(),
+                            SourceChoice::Url => unreachable!(),
+                        };
+                        app.update(Message::Settings(settings::Message::Apps(
+                            SA::SourcePicked(picked),
+                        )));
+                        window.request_redraw();
+                    }
+                    // 来源=URL 不弹对话框(URL 由输入框提交);理论上走不到这里。
+                    SourceChoice::Url => {}
+                }
             }
             Message::ProjectLinkPick(target) => {
                 // 单颗"＋"入口:打开根目录在项目根的文件浏览器,选中后按

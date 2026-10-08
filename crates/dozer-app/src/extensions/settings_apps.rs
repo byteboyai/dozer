@@ -9,16 +9,19 @@
 //!   必须看得出来;
 //! - 流程里的校验类失败(清单不合法、版本已装、审批后源码变了)**留在对话流程内**(同"移动对话框内的校验
 //!   错误"的先例),不弹 Toast;"刚发生的一件事"(安装成功、停止/卸载失败)走 Toast;
-//! - 来源只有"用户在本机选的目录"(`Provenance::Local`、`TrustLevel::Trusted`);Agent 生成/第三方来源的
-//!   安装不经这个界面。
+//! - 来源有三种(A6h):本机目录、本机压缩包(`.zip`/`.tar.gz`/`.tgz`)、https URL 压缩包。「信任」由
+//!   **服务端按来源推导**(客户端自报只能更严不能更松),审批卡如实披露来源、哈希与"是否来自网络";
+//!   URL 与 sha256 两个输入框的原始字符串由本状态机持有,客户端先行的格式校验只是体验,真正的校验在服务端。
 
 use std::path::PathBuf;
 
 use bytehost_apps::permissions::{Enforcement, PermissionKey};
 use bytehost_apps::plan::{Approval, ApprovedInstallPlan, InstallPlan, Provenance, TrustLevel};
 use bytehost_apps::proto::{
-    AppSummary, ManagedRuntime, RuntimeAvailability, RuntimeInstallPlan, RuntimeProbe,
+    AppSource, AppSummary, ManagedRuntime, RuntimeAvailability, RuntimeInstallPlan, RuntimeProbe,
+    SourceInfo,
 };
+
 use bytehost_apps::registry::{RollbackNote, UninstallMode};
 use bytehost_apps::state::ObservedState;
 
@@ -28,6 +31,46 @@ use crate::extensions::toast::Level;
 
 /// 批准记录里写的"谁批准的"(审计用,不防伪——见 `ApprovedInstallPlan` 文档)。
 pub const APPROVER: &str = "dozer-gui";
+
+/// 设置页「安装应用…」的来源切换(A6h)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SourceChoice {
+    /// 本机目录(目录里要有 `manifest.toml`)。
+    #[default]
+    Dir,
+    /// 本机压缩包(`.zip`/`.tar.gz`/`.tgz`)。
+    Archive,
+    /// https URL 指向的压缩包。
+    Url,
+}
+
+/// 弹原生选择对话框时选的是文件还是目录(Url 不走对话框)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickTarget {
+    Dir,
+    Archive,
+}
+
+impl SourceChoice {
+    /// 这条来源要不要弹"选文件"对话框;`None` = 不弹(Url 直接发计划)。
+    fn pick_target(self) -> Option<PickTarget> {
+        match self {
+            SourceChoice::Dir => Some(PickTarget::Dir),
+            SourceChoice::Archive => Some(PickTarget::Archive),
+            SourceChoice::Url => None,
+        }
+    }
+}
+
+impl PickTarget {
+    /// 用选中的路径拼出对应的 `AppSource`。
+    fn to_source(self, path: PathBuf) -> AppSource {
+        match self {
+            PickTarget::Dir => AppSource::LocalDir { path },
+            PickTarget::Archive => AppSource::Archive { path },
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum Load<T> {
@@ -42,15 +85,18 @@ pub enum Load<T> {
 pub enum Flow {
     #[default]
     Idle,
-    /// 原生选目录对话框开着(由窗口层执行,结果经 `SourcePicked` 回来)。
-    Picking,
+    /// 原生选目录/选压缩包对话框开着(由窗口层执行,结果经 `SourcePicked` 回来)。
+    Picking {
+        target: PickTarget,
+    },
+    /// 正在出安装计划(URL 来源已经先发过计划请求)。
     Planning {
-        source: PathBuf,
+        source: AppSource,
     },
     /// 计划已展示,等用户批准。
     Reviewing {
         plan: Box<InstallPlan>,
-        source: PathBuf,
+        source: AppSource,
     },
     Installing {
         plan: Box<InstallPlan>,
@@ -98,7 +144,17 @@ pub enum Message {
     ProbesLoaded(Result<Vec<RuntimeProbe>, Failure>),
     ListLoaded(Result<Vec<AppSummary>, Failure>),
     InstallClicked,
-    /// 选目录对话框的结果;`None` = 用户取消。
+    /// 切换安装来源(本机目录/本机压缩包/URL);切到 Url 不丢已填的输入,但会清掉上一次的计划。
+    SourceChoiceChanged(SourceChoice),
+    /// 点「安装应用…」(来源=本机压缩包):意图与 `InstallClicked` 同,只是弹的是"选文件"对话框。
+    PickArchive,
+    /// URL 输入框草稿变化(iced `text_input::on_input`,每次给全量当前字符串)。
+    UrlChanged(String),
+    /// sha256 输入框草稿变化(同上;空 = 不钉死)。
+    Sha256Changed(String),
+    /// 点「获取计划」(来源=URL):客户端先行校验通过后才发 `Effect::Plan`。
+    UrlPlanClicked,
+    /// 选目录/选压缩包对话框的结果;`None` = 用户取消。
     SourcePicked(Option<PathBuf>),
     PlanLoaded(Result<Box<InstallPlan>, Failure>),
     ApproveClicked,
@@ -143,10 +199,12 @@ pub enum Effect {
     List,
     /// 窗口层弹原生选目录对话框(`window_events` 拦截 `InstallClicked` 执行,这里只是记录意图)。
     PickSource,
-    Plan(PathBuf),
+    /// 窗口层弹原生选文件对话框(过滤 `.zip`/`.tar.gz`/`.tgz`;`window_events` 拦截 `PickArchive` 执行)。
+    PickArchive,
+    Plan(AppSource),
     Install {
         approved: Box<ApprovedInstallPlan>,
-        source: PathBuf,
+        source: AppSource,
     },
     Stop(String),
     /// 把某应用回滚到上一版(A6g)。
@@ -176,6 +234,14 @@ pub struct State {
     pub probes: Load<Vec<RuntimeProbe>>,
     pub apps: Load<Vec<AppSummary>>,
     pub flow: Flow,
+    /// 当前选中的安装来源(A6h)。
+    pub source_choice: SourceChoice,
+    /// URL 输入框的原始字符串(切来源不清,失败后保留以便修改重试)。
+    pub url_input: String,
+    /// sha256 输入框的原始字符串(空 = 不钉死)。
+    pub sha_input: String,
+    /// 客户端先行的内联校验提示(URL/sha256 格式);真正的校验在服务端。
+    pub url_error: Option<String>,
     acting: std::collections::HashMap<String, ActKind>,
     /// 已经报过结果(成功或失败 Toast)的运行时任务——避免每次轮询重复弹。
     reported_jobs: std::collections::HashSet<ManagedRuntime>,
@@ -221,23 +287,54 @@ impl State {
                 }
                 Vec::new()
             }
-            Message::InstallClicked => {
+            Message::SourceChoiceChanged(choice) => {
+                self.source_choice = choice;
+                self.url_error = None;
+                // 切换来源会清掉上一次的计划/审批卡,避免"审批的是 A 来源、安装的是 B 来源";
+                // 在途的规划/安装请求已经发出,不能撤,保持原样。已填的输入不清。
+                if matches!(self.flow, Flow::Reviewing { .. } | Flow::Failed { .. }) {
+                    self.flow = Flow::Idle;
+                }
+                Vec::new()
+            }
+            Message::InstallClicked | Message::PickArchive => {
                 if self.flow != Flow::Idle {
                     return Vec::new();
                 }
-                self.flow = Flow::Picking;
-                vec![Effect::PickSource]
+                let choice = self.source_choice;
+                let Some(target) = choice.pick_target() else {
+                    // 来源=URL 时不该走"弹对话框"这条路;按下即当"获取计划"处理。
+                    return self.url_plan();
+                };
+                self.flow = Flow::Picking { target };
+                vec![match target {
+                    PickTarget::Dir => Effect::PickSource,
+                    PickTarget::Archive => Effect::PickArchive,
+                }]
             }
+            Message::UrlChanged(s) => {
+                self.url_input = s;
+                // 用户开始改输入:清掉上一次的提示,等点「获取计划」再校验。
+                self.url_error = None;
+                Vec::new()
+            }
+            Message::Sha256Changed(s) => {
+                self.url_error = sha_format_error(&s);
+                self.sha_input = s;
+                Vec::new()
+            }
+            Message::UrlPlanClicked => self.url_plan(),
             Message::SourcePicked(picked) => {
-                if self.flow != Flow::Picking {
+                let Flow::Picking { target } = self.flow else {
                     return Vec::new();
-                }
+                };
                 match picked {
                     None => {
                         self.flow = Flow::Idle;
                         Vec::new()
                     }
-                    Some(source) => {
+                    Some(path) => {
+                        let source = target.to_source(path);
                         self.flow = Flow::Planning {
                             source: source.clone(),
                         };
@@ -522,6 +619,39 @@ impl State {
         }
     }
 
+    /// URL 来源点「获取计划」:客户端先校验格式,通过才发 `Effect::Plan`;失败把原因留在
+    /// `url_error`(内联显示,不弹 Toast),并保留已填的输入供修改重试。
+    fn url_plan(&mut self) -> Vec<Effect> {
+        if self.flow != Flow::Idle {
+            return Vec::new();
+        }
+        let url = self.url_input.trim().to_owned();
+        if url.is_empty() {
+            self.url_error = Some("请填写 https 压缩包地址".to_owned());
+            return Vec::new();
+        }
+        if !url.starts_with("https://") {
+            self.url_error = Some("地址必须以 https:// 开头(不接受 http)".to_owned());
+            return Vec::new();
+        }
+        let sha256 = match self.sha_input.trim() {
+            "" => None,
+            s => match normalize_sha256_client(s) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    self.url_error = Some(e);
+                    return Vec::new();
+                }
+            },
+        };
+        self.url_error = None;
+        let source = AppSource::Url { url, sha256 };
+        self.flow = Flow::Planning {
+            source: source.clone(),
+        };
+        vec![Effect::Plan(source)]
+    }
+
     /// 取走"把滚动钉到底部"的一次性请求:返回待滚到底的应用 id(消费即复位)。
     pub fn take_log_scroll(&mut self) -> Option<String> {
         let id = self.expanded_log.clone()?;
@@ -720,6 +850,26 @@ pub fn orphan_result_effects(msg: &Message) -> Vec<Effect> {
 // 展示用的纯函数(可测):计划 → 要给用户看的行;运行时探测 → 一行文案;观察态 → 文案。
 // ---------------------------------------------------------------------------------------------
 
+/// sha256 输入框的即时格式提示:空 = `None`(不钉死);非法 = 内联红字;合法 = `None`。
+/// 只做格式检查(客户端先行校验只是体验),真正的匹配在服务端。
+pub fn sha_format_error(input: &str) -> Option<String> {
+    match input.trim() {
+        "" => None,
+        s => normalize_sha256_client(s).err(),
+    }
+}
+
+/// 客户端版的 sha256 规范化(trim + 小写 + 64 hex 校验)。与 `bytehost_apps::source::normalize_sha256`
+/// 同规则,但那份在 `server` feature 下,GUI 拿不到;这里只用于先行提示,真正的校验在服务端。
+fn normalize_sha256_client(input: &str) -> Result<String, String> {
+    let s = input.trim().to_ascii_lowercase();
+    if s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(s)
+    } else {
+        Err("sha256 需要是 64 位十六进制字符".to_owned())
+    }
+}
+
 pub fn provenance_label(p: Provenance) -> &'static str {
     match p {
         Provenance::Local => "本地目录",
@@ -779,6 +929,15 @@ pub struct PermLine {
     pub enforcement: &'static str,
 }
 
+/// 审批卡"来源"区块(A6h):`(项, 值)` 事实行 + 金色警告(网络/重定向/未钉死哈希)。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceDisclosure {
+    pub rows: Vec<(&'static str, String)>,
+    pub warnings: Vec<String>,
+    /// 来自网络(URL 来源):用醒目颜色标"不可信"。
+    pub from_network: bool,
+}
+
 /// 安装计划里要展示给用户的全部内容。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanView {
@@ -790,6 +949,94 @@ pub struct PlanView {
     /// 安装/运行时会执行什么(原样展示)。
     pub will_run: Vec<String>,
     pub permissions: Vec<PermLine>,
+    /// 来源披露(A6h)。
+    pub source: SourceDisclosure,
+}
+
+/// 把 `plan.source_info` 映射成审批卡"来源"区块(纯函数,可测)。
+/// `runtime_kind` 用来判断进程型应用从本机压缩包来时要加"内容已解压校验"一行。
+pub fn source_disclosure(info: &SourceInfo, runtime_kind: &str) -> SourceDisclosure {
+    let mut rows: Vec<(&'static str, String)> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+    let kind_label = match info.kind.as_str() {
+        "local_dir" => "本机目录",
+        "archive" => "本机压缩包",
+        "url" => "网络(https)",
+        _ => "未知",
+    };
+    rows.push(("来源", kind_label.to_owned()));
+    if !info.display.is_empty() {
+        rows.push(("位置", info.display.clone()));
+    }
+    if let Some(sha) = &info.archive_sha256 {
+        // 完整 64 位,不截断(可复制)。
+        rows.push(("压缩包 SHA-256", sha.clone()));
+    }
+    if let Some(bytes) = info.archive_bytes {
+        rows.push(("压缩包大小", format_bytes(bytes)));
+    }
+    if let Some(top) = &info.stripped_top_dir {
+        rows.push(("顶层目录", format!("已剥掉 {top}")));
+    }
+    let from_network = info.kind == "url";
+    if from_network {
+        rows.push((
+            "完整性",
+            if info.pinned {
+                "已匹配你提供的 sha256".to_owned()
+            } else {
+                "未提供期望 sha256".to_owned()
+            },
+        ));
+        if info.pinned {
+            warnings.push("已匹配你提供的 sha256".to_owned());
+        } else {
+            warnings.push("未提供期望 sha256,以上哈希是本次下载实际算出的".to_owned());
+        }
+        // effective_host 与请求主机不同 → 提示被重定向。
+        if let Some(req_host) = host_of_display(&info.display)
+            && let Some(eff) = &info.effective_host
+            && !eff.eq_ignore_ascii_case(&req_host)
+        {
+            warnings.push(format!("已重定向到 {eff}"));
+        }
+    }
+    // 进程型应用从本机压缩包来:命令披露之外,另加一行说明内容已解压校验。
+    if info.kind == "archive" && runtime_kind != "static_web" {
+        warnings.push("来自压缩包,内容已解压校验".to_owned());
+    }
+    SourceDisclosure {
+        rows,
+        warnings,
+        from_network,
+    }
+}
+
+/// 取 `https://host/path` 里的 host(用于跟 effective_host 比较)。
+fn host_of_display(display: &str) -> Option<String> {
+    let rest = display
+        .strip_prefix("https://")
+        .or_else(|| display.strip_prefix("http://"))?;
+    let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    // 去掉端口与 userinfo(这里 display 已由服务端剥掉查询串,保守再处理一次)。
+    let host = host.rsplit('@').next().unwrap_or(host);
+    let host = host.split(':').next().unwrap_or(host);
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
+/// 人类可读的字节数(1 位小数)。
+fn format_bytes(bytes: u64) -> String {
+    const UNIT: f64 = 1024.0;
+    let b = bytes as f64;
+    if b < UNIT {
+        format!("{bytes} B")
+    } else if b < UNIT * UNIT {
+        format!("{:.1} KiB", b / UNIT)
+    } else if b < UNIT * UNIT * UNIT {
+        format!("{:.1} MiB", b / (UNIT * UNIT))
+    } else {
+        format!("{:.1} GiB", b / (UNIT * UNIT * UNIT))
+    }
 }
 
 /// `running` = 被升级/安装的应用当前是否在运行(决定要不要提醒"会短暂中断")。
@@ -831,6 +1078,7 @@ pub fn plan_view(plan: &InstallPlan, running: bool) -> PlanView {
         notices,
         will_run: plan.will_run.clone(),
         permissions,
+        source: source_disclosure(&plan.source_info, &plan.runtime_kind),
     }
 }
 
@@ -1264,12 +1512,103 @@ fn at_bottom(viewport: &scrollable::Viewport) -> bool {
     bottom >= viewport.content_bounds().height - 4.0
 }
 
+/// 来源单选行:三颗互斥按钮;当前选中那颗用金色。
+fn source_choice_row(current: SourceChoice) -> El<'static> {
+    let colors = byteui::theme::color::current();
+    let mk = |label: &'static str, choice: SourceChoice| -> El<'static> {
+        let selected = current == choice;
+        action_button(
+            label,
+            Message::SourceChoiceChanged(choice),
+            if selected { colors.gold } else { colors.dim },
+        )
+    };
+    row![
+        mk("本机目录", SourceChoice::Dir),
+        mk("本机压缩包", SourceChoice::Archive),
+        mk("网络 URL", SourceChoice::Url),
+    ]
+    .spacing(8)
+    .into()
+}
+
+/// 空闲时的安装表单:来源切换 + (视来源)各色输入框与主按钮。
+fn install_form(state: &State) -> El<'_> {
+    let colors = byteui::theme::color::current();
+    let mut col = column![source_choice_row(state.source_choice)]
+        .spacing(8)
+        .width(Length::Fill);
+    match state.source_choice {
+        SourceChoice::Dir => {
+            col = col.push(action_button(
+                "安装应用…",
+                Message::InstallClicked,
+                colors.gold,
+            ));
+        }
+        SourceChoice::Archive => {
+            col = col.push(action_button(
+                "安装应用…",
+                Message::PickArchive,
+                colors.gold,
+            ));
+        }
+        SourceChoice::Url => {
+            col = col.push(dim("https 压缩包地址(只允许静态应用)"));
+            // 输入框沿用 `byteui::form::input_text::view`(真 `text_input`,同分类树改名框)。
+            col = col.push(byteui::form::input_text::view(
+                "https://example.com/app.zip",
+                state.url_input.as_str(),
+                false,
+                None,
+                false,
+                None,
+                false,
+                Message::UrlChanged,
+            ));
+            col = col.push(dim(
+                "期望 sha256(可选;填了就钉死,不填则审批卡展示实际算出的哈希)",
+            ));
+            col = col.push(byteui::form::input_text::view(
+                "留空 = 不钉死",
+                state.sha_input.as_str(),
+                false,
+                None,
+                false,
+                None,
+                false,
+                Message::Sha256Changed,
+            ));
+            if let Some(err) = &state.url_error {
+                col = col.push(
+                    text(err.as_str())
+                        .size(byteui::theme::font::label())
+                        .color(colors.red),
+                );
+            }
+            col = col.push(action_button(
+                "获取计划",
+                Message::UrlPlanClicked,
+                colors.gold,
+            ));
+        }
+    }
+    container(col).width(Length::Fill).into()
+}
+
 fn flow_view(state: &State) -> El<'_> {
     let colors = byteui::theme::color::current();
     let flow = &state.flow;
     match flow {
-        Flow::Idle => action_button("安装应用…", Message::InstallClicked, colors.gold),
-        Flow::Picking => dim("请在弹出的对话框里选择应用目录(目录里要有 manifest.toml)…").into(),
+        Flow::Idle => install_form(state),
+        Flow::Picking { target } => match target {
+            PickTarget::Dir => {
+                dim("请在弹出的对话框里选择应用目录(目录里要有 manifest.toml)…").into()
+            }
+            PickTarget::Archive => {
+                dim("请在弹出的对话框里选择压缩包(.zip / .tar.gz / .tgz)…").into()
+            }
+        },
         Flow::Planning { .. } => dim("正在检查应用…").into(),
         Flow::Installing { .. } => dim("正在安装…").into(),
         Flow::Failed { message } => column![
@@ -1400,6 +1739,34 @@ fn review_view(plan: &InstallPlan, running: bool) -> El<'_> {
                     .color(colors.cream)
             ]
             .spacing(10),
+        );
+    }
+    // 来源披露(A6h):事实行原样画;来自网络时先给醒目的"不可信"标注。
+    col = col.push(dim("来源:"));
+    if view.source.from_network {
+        col = col.push(
+            text("来自网络,不可信")
+                .size(byteui::theme::font::label())
+                .color(colors.gold),
+        );
+        col = col.push(dim("只允许静态应用,运行在严格 CSP 下"));
+    }
+    for (k, v) in view.source.rows {
+        col = col.push(
+            row![
+                dim(k),
+                text(v)
+                    .size(byteui::theme::font::label())
+                    .color(colors.cream)
+            ]
+            .spacing(10),
+        );
+    }
+    for warning in view.source.warnings {
+        col = col.push(
+            text(warning)
+                .size(byteui::theme::font::label())
+                .color(colors.gold),
         );
     }
     col = col.push(dim("安装与运行时会执行:"));
@@ -1536,7 +1903,12 @@ mod tests {
             s.update(Message::InstallClicked, NOW),
             vec![Effect::PickSource]
         );
-        assert_eq!(s.flow, Flow::Picking);
+        assert_eq!(
+            s.flow,
+            Flow::Picking {
+                target: PickTarget::Dir
+            }
+        );
         assert!(
             s.update(Message::InstallClicked, NOW).is_empty(),
             "流程中不接受第二次安装"
@@ -1545,7 +1917,12 @@ mod tests {
         assert_eq!(s.flow, Flow::Idle);
         s.update(Message::InstallClicked, NOW);
         let effects = s.update(Message::SourcePicked(Some("/src/app".into())), NOW);
-        assert_eq!(effects, vec![Effect::Plan("/src/app".into())]);
+        assert_eq!(
+            effects,
+            vec![Effect::Plan(AppSource::LocalDir {
+                path: "/src/app".into()
+            })]
+        );
         s.update(Message::PlanLoaded(Ok(Box::new(plan()))), NOW);
         assert!(matches!(s.flow, Flow::Reviewing { .. }));
     }
@@ -1592,7 +1969,12 @@ mod tests {
         assert_eq!(approved.plan(), &plan());
         assert_eq!(approved.approval().approver, APPROVER);
         assert_eq!(approved.approval().approved_ms, NOW);
-        assert_eq!(source, &PathBuf::from("/src/app"));
+        assert_eq!(
+            source,
+            &AppSource::LocalDir {
+                path: "/src/app".into()
+            }
+        );
         assert!(matches!(s.flow, Flow::Installing { .. }));
         assert!(
             s.update(Message::ApproveClicked, NOW).is_empty(),
@@ -2445,5 +2827,214 @@ mod tests {
         s.update(Message::ListLoaded(Ok(Vec::new())), NOW);
         assert!(!s.is_log_open("alpha"));
         assert_eq!(s.logs_view("alpha"), LogsView::Hidden);
+    }
+
+    // ---- A6h Task 5:来源选择、审批卡披露、内联校验 -------------------------------------------
+
+    fn source_info(kind: &str, display: &str) -> SourceInfo {
+        SourceInfo {
+            kind: kind.to_owned(),
+            display: display.to_owned(),
+            ..SourceInfo::default()
+        }
+    }
+
+    /// 切到 URL 不丢已填的输入;但从「审批中」切来源会清掉上一次的计划(避免审批 A 装 B)。
+    #[test]
+    fn switching_source_keeps_typed_input_but_clears_a_stale_plan() {
+        let mut s = State::default();
+        s.update(Message::SourceChoiceChanged(SourceChoice::Url), NOW);
+        s.update(Message::UrlChanged("https://example.com/a.zip".into()), NOW);
+        s.update(Message::Sha256Changed("AB".into()), NOW);
+        // 切回目录再切回 URL:输入还在。
+        s.update(Message::SourceChoiceChanged(SourceChoice::Dir), NOW);
+        s.update(Message::SourceChoiceChanged(SourceChoice::Url), NOW);
+        assert_eq!(s.url_input, "https://example.com/a.zip");
+        assert_eq!(s.sha_input, "AB");
+        assert_eq!(s.source_choice, SourceChoice::Url);
+
+        // 从审批中切来源 → 计划/审批卡被清掉,Flow 回 Idle。
+        let mut s = reviewing();
+        s.update(Message::SourceChoiceChanged(SourceChoice::Archive), NOW);
+        assert_eq!(s.flow, Flow::Idle);
+        assert_eq!(s.source_choice, SourceChoice::Archive);
+    }
+
+    /// 空/非 https URL 点「获取计划」:不发任何 Effect,内联提示原因。
+    #[test]
+    fn url_plan_clicked_validates_locally_without_sending_an_effect() {
+        let mut s = State::default();
+        s.update(Message::SourceChoiceChanged(SourceChoice::Url), NOW);
+
+        assert!(s.update(Message::UrlPlanClicked, NOW).is_empty());
+        assert!(s.url_error.is_some(), "空 URL 要内联提示");
+        assert_eq!(s.flow, Flow::Idle);
+
+        s.update(Message::UrlChanged("http://example.com/a.zip".into()), NOW);
+        assert!(s.update(Message::UrlPlanClicked, NOW).is_empty());
+        assert!(
+            s.url_error.as_deref().is_some_and(|e| e.contains("https")),
+            "非 https 要内联提示:{:?}",
+            s.url_error
+        );
+
+        // 合法 https:发 `Effect::Plan(AppSource::Url{..})`,并进入 Planning。
+        s.update(Message::UrlChanged("https://example.com/a.zip".into()), NOW);
+        let fx = s.update(Message::UrlPlanClicked, NOW);
+        assert_eq!(
+            fx,
+            vec![Effect::Plan(AppSource::Url {
+                url: "https://example.com/a.zip".into(),
+                sha256: None,
+            })]
+        );
+        assert!(matches!(s.flow, Flow::Planning { .. }));
+        assert!(s.url_error.is_none());
+    }
+
+    /// URL 合法但 sha256 非法:同样不发 Effect,内联提示。
+    #[test]
+    fn a_bad_sha256_blocks_the_url_plan_with_an_inline_hint() {
+        let mut s = State::default();
+        s.update(Message::SourceChoiceChanged(SourceChoice::Url), NOW);
+        s.update(Message::UrlChanged("https://example.com/a.zip".into()), NOW);
+        s.update(Message::Sha256Changed("not-hex".into()), NOW);
+        assert!(s.update(Message::UrlPlanClicked, NOW).is_empty());
+        assert!(s.url_error.as_deref().is_some_and(|e| e.contains("sha256")));
+        assert_eq!(s.flow, Flow::Idle);
+    }
+
+    /// sha256 输入框即时格式提示:空=不钉死;非法=红字;合法=无提示;不改其它状态。
+    #[test]
+    fn sha256_input_shows_an_inline_format_hint_only() {
+        let mut s = State::default();
+        s.update(Message::Sha256Changed("".into()), NOW);
+        assert!(s.url_error.is_none(), "空 = 不钉死,无提示");
+        s.update(Message::Sha256Changed("xyz".into()), NOW);
+        assert!(s.url_error.is_some(), "非法 = 红字");
+        s.update(Message::Sha256Changed("AB".into()), NOW);
+        assert!(s.url_error.is_some(), "仍非法(太短)");
+        let good = "a".repeat(64);
+        s.update(Message::Sha256Changed(good.clone()), NOW);
+        assert!(s.url_error.is_none(), "合法 = 无提示");
+        assert_eq!(s.sha_input, good);
+        assert_eq!(s.source_choice, SourceChoice::Dir, "不改来源");
+        assert_eq!(s.flow, Flow::Idle, "不改流程");
+    }
+
+    /// 审批卡来源区块表驱动:四种组合各自的行文案与警告。
+    #[test]
+    fn the_review_card_discloses_each_source_shape() {
+        // ① 本机目录:只有来源/位置,无警告、非网络。
+        let d = source_disclosure(&source_info("local_dir", "/src/app"), "static_web");
+        assert_eq!(d.rows[0], ("来源", "本机目录".to_owned()));
+        assert_eq!(d.rows[1], ("位置", "/src/app".to_owned()));
+        assert!(!d.from_network);
+        assert!(d.warnings.is_empty());
+
+        // ② 本机压缩包(进程型应用):来源/位置/完整哈希/大小 + "内容已解压校验"。
+        let mut info = source_info("archive", "/tmp/app.zip");
+        info.archive_sha256 = Some("f".repeat(64));
+        info.archive_bytes = Some(2_500_000);
+        let d = source_disclosure(&info, "node");
+        assert_eq!(d.rows[0], ("来源", "本机压缩包".to_owned()));
+        let sha_row = d
+            .rows
+            .iter()
+            .find(|(k, _)| *k == "压缩包 SHA-256")
+            .expect("要有完整哈希行");
+        assert_eq!(sha_row.1.len(), 64, "哈希完整显示,不截断");
+        assert!(d.rows.iter().any(|(k, _)| *k == "压缩包大小"));
+        assert!(!d.from_network);
+        assert!(
+            d.warnings.iter().any(|w| w.contains("内容已解压校验")),
+            "进程型应用从压缩包来要说明:{:?}",
+            d.warnings
+        );
+
+        // ③ URL 未钉死:来自网络 + "未提供期望 sha256,实际算出的"。
+        let mut info = source_info("url", "https://example.com/app.zip");
+        info.archive_sha256 = Some("a".repeat(64));
+        info.pinned = false;
+        let d = source_disclosure(&info, "static_web");
+        assert!(d.from_network);
+        assert!(d.warnings.iter().any(|w| w.contains("未提供期望 sha256")));
+
+        // ④ URL 钉死且重定向:来源含请求主机,effective_host 不同 → 金色"已重定向到 X"。
+        let mut info = source_info("url", "https://origin.example/app.zip");
+        info.archive_sha256 = Some("b".repeat(64));
+        info.pinned = true;
+        info.effective_host = Some("cdn.example".to_owned());
+        let d = source_disclosure(&info, "static_web");
+        assert!(d.from_network);
+        assert!(
+            d.warnings
+                .iter()
+                .any(|w| w.contains("已匹配你提供的 sha256"))
+        );
+        assert!(
+            d.warnings.iter().any(|w| w == "已重定向到 cdn.example"),
+            "重定向要金色警告:{:?}",
+            d.warnings
+        );
+    }
+
+    /// URL 计划被服务端拒(`SourceNotAllowed`)→ 内联错误且输入保留;随后改成本机压缩包重试成功。
+    #[test]
+    fn a_rejected_url_plan_stays_inline_and_keeps_input_then_archive_retries() {
+        let mut s = State::default();
+        s.update(Message::SourceChoiceChanged(SourceChoice::Url), NOW);
+        s.update(
+            Message::UrlChanged("https://example.com/node.zip".into()),
+            NOW,
+        );
+        s.update(Message::Sha256Changed("A".repeat(64).as_str().into()), NOW);
+        s.update(Message::UrlPlanClicked, NOW);
+        let fx = s.update(
+            Message::PlanLoaded(Err(fail(
+                AppErrorKind::Rejected,
+                "网络来源只能安装静态应用",
+            ))),
+            NOW,
+        );
+        assert!(fx.is_empty(), "校验类失败不弹 Toast");
+        assert!(
+            matches!(&s.flow, Flow::Failed { message } if message.contains("静态应用")),
+            "{:?}",
+            s.flow
+        );
+        // 输入保留。
+        assert_eq!(s.url_input, "https://example.com/node.zip");
+        assert_eq!(s.sha_input, "A".repeat(64));
+
+        // 切到本机压缩包并重试:成功。
+        s.update(Message::SourceChoiceChanged(SourceChoice::Archive), NOW);
+        assert_eq!(s.flow, Flow::Idle);
+        let fx = s.update(Message::PickArchive, NOW);
+        assert_eq!(fx, vec![Effect::PickArchive]);
+        let fx = s.update(Message::SourcePicked(Some("/tmp/app.zip".into())), NOW);
+        assert_eq!(
+            fx,
+            vec![Effect::Plan(AppSource::Archive {
+                path: "/tmp/app.zip".into()
+            })]
+        );
+        s.update(Message::PlanLoaded(Ok(Box::new(plan()))), NOW);
+        assert!(matches!(s.flow, Flow::Reviewing { .. }));
+        // 让服务端推导的信任/来源如实进审批卡(服务端会覆盖自报值)。
+    }
+
+    /// 计划在途时重复点「获取计划」不重发(沿用 flow != Idle 守卫)。
+    #[test]
+    fn a_second_url_plan_click_while_in_flight_is_ignored() {
+        let mut s = State::default();
+        s.update(Message::SourceChoiceChanged(SourceChoice::Url), NOW);
+        s.update(Message::UrlChanged("https://example.com/a.zip".into()), NOW);
+        assert_eq!(s.update(Message::UrlPlanClicked, NOW).len(), 1);
+        assert!(matches!(s.flow, Flow::Planning { .. }));
+        assert!(
+            s.update(Message::UrlPlanClicked, NOW).is_empty(),
+            "在途不重发"
+        );
     }
 }
