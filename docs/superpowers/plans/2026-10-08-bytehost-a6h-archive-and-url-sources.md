@@ -135,12 +135,14 @@
 - `InstallPlan` 追加 `pub source_info: SourceInfo`(`#[serde(default)]`)。`ManagerError` 追加 `SourceNotAllowed(String)`、`Source(SourceError)`、`Archive(ArchiveError)`;`kind()` 映射:前两者与归档里的 `UnsafeEntry/Duplicate/Bomb/NoManifest/TooLarge/Corrupt/Unsupported` → `AppErrorKind::Rejected`,`ArchiveError::Io`/下载 I/O → `Internal`(**不新增 `AppErrorKind` 变体**,那是 wire 枚举)。
 - `Core::install_plan`/`install` 改为:`policy_for(source)` → 生效的 `(provenance, trust)` 覆盖入参 → `stage_source(source, &staging)`(`LocalDir` = 现有 `copy_tree`;`Archive` = `archive::extract`;`Url` 留给 Task 3,本任务里先返回 `BadSource("URL 来源尚未启用")`)→ `read_package` → **若 `static_only` 且 `manifest.runtime` 不是 `StaticWeb` → `SourceNotAllowed("网络来源只能安装静态应用")`**(在出计划时就拒,不等到安装)。`SourceInfo` 在 `stage_source` 里填(`archive_sha256` 用 `digest::sha256_file`)。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
   - `source.rs`:`validate_url` 表驱动——`https://example.com/a.zip` 通过;`http://…`、`file:///…`、`ftp://…`、`https://u:p@host/…`、`https://` 无主机、含 `\n`/空格/控制字符、2049 字符、大写 `HTTPS://` 通过(scheme 大小写不敏感)、带端口的 `https://example.com:8443/a.zip` 与 IP 字面量 `https://192.168.1.5/a.zip` 也通过(**不做**本机/内网地址过滤:内网分发与本机测试是合法场景,见已知局限,审批卡展示主机即可)。`normalize_sha256` 表驱动——大写、前后空白、63/65 位、非十六进制各一例。`policy_for`/`effective` 表驱动:客户端自报 `(Local, Trusted)` 的 `Url` → 生效 `(ThirdParty, Untrusted)`;`LocalDir` 自报 `(ThirdParty, Untrusted)` → 保留更严格的 `Untrusted`(**只升不降**)。
   - `manager.rs`(Review Focus 4、9):`Archive` zip 装静态应用成功,`list()` 里有该应用,`plan.source_info.kind == "archive"` 且 `archive_sha256` 等于 `sha256_file(zip)`;GitHub 风格 zip 成功且 `stripped_top_dir` 有值;`Archive` tar.gz 装 python 进程应用成功(缺 `python3` 则 `return`)——本机压缩包可装进程型;多顶层无清单 → 清楚的错误;**同一个 zip 先后改一个字节再装** → 摘要不符(`verify` 拒绝),旧审批对新内容无效;未知扩展名 → `BadSource`;相对路径 → `BadSource`(同 `LocalDir`);解压失败(恶意归档)后 `apps/` 下**没有** `.staging-*` 残留。
   - 兼容:旧形状 `InstallPlan` JSON(无 `source_info`)可解析、`verify` 在 `source_info` 默认值之间照常工作;`LocalDir` 的计划 `source_info.kind == "local_dir"`;现有全部 `LocalDir` 测试不改一行仍通过。
-- [ ] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p bytehost-apps --features server`;默认 feature 与依赖门禁)。变异:`effective` 改成"直接信客户端",Review Focus 4 的单测失败;去掉 `static_only` 检查,`Url`+python 的用例(Task 3 加入后)失败。
-- [ ] **Step 5: Commit** — `feat(bytehost-apps): archive sources with server-derived trust (A6h task 2)`。
+- [x] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p bytehost-apps --features server`;默认 feature 与依赖门禁)。变异:`effective` 改成"直接信客户端",Review Focus 4 的单测失败;去掉 `static_only` 检查,`Url`+python 的用例(Task 3 加入后)失败。
+- [x] **Step 5: Commit** — `feat(bytehost-apps): archive sources with server-derived trust (A6h task 2)`。
+
+> **实现追记(2026-10-08)**:① `SourceInfo` 加了容器级 `#[serde(default)]`,旧计划 JSON 缺字段也能解析(不止"整个字段缺失");② 相对路径仍映射为 `ManagerError::BadSource`(在 `manager.rs::ensure_absolute` 里对 `LocalDir`/`Archive` 先校验),`source.rs` 内部另有一份绝对路径校验兜底;③ `stage_source` 的错误经 `StageError::{Source,Archive,Io}` 映射到 `ManagerError::{Source,Archive,Io}`(Task 2 阶段 `Url` 返回 `SourceError::NotEnabled` → `Rejected`);④ `static_only` 检查放在 `install_staged`(出计划按来源落地时 `Url` 尚不可达,Task 3 起生效);⑤ zip 用的是 `CompressionMethod::Stored`(测试造包不依赖 deflate 编码器)。`Cargo.lock` 未提交。
 
 ---
 
