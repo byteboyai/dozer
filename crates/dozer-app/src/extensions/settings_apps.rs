@@ -23,6 +23,7 @@ use bytehost_apps::registry::UninstallMode;
 use bytehost_apps::state::ObservedState;
 
 use crate::extensions::app_host::Failure;
+use crate::extensions::app_logs::{self, LogsState, LogsView};
 use crate::extensions::toast::Level;
 
 /// 批准记录里写的"谁批准的"(审计用,不防伪——见 `ApprovedInstallPlan` 文档)。
@@ -113,6 +114,16 @@ pub enum Message {
     RuntimeUninstallDone(Result<(), Failure>),
     /// 安装进行中的定时刷新(由 `Effect::ProbeAfter` 转回)。
     PollProbes,
+    /// 展开某应用的日志查看器(同一时刻只展开一个)。
+    ShowLogs(String),
+    /// 收起当前展开的日志查看器。
+    HideLogs,
+    /// 日志读取的结果。
+    LogsLoaded(String, Result<(String, bool), Failure>),
+    /// 用户滚动了日志查看器:`true` = 当前贴底。
+    LogsScrolled(String, bool),
+    /// 定时刷新展开着的日志查看器(由调用方按 [`app_logs::REFRESH_INTERVAL`] 排期转回)。
+    Tick,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -136,6 +147,8 @@ pub enum Effect {
     UninstallRuntime(ManagedRuntime, String),
     /// 延时后再探测一次(安装进行中的进度轮询)。
     ProbeAfter(std::time::Duration),
+    /// 读某应用的日志末尾(`max_lines` 由状态机定)。
+    FetchLogs(String, u32),
     /// 已安装集合/运行状态变了:通知主窗口的应用宿主立刻刷新列表(同步图标栏)。
     HostChanged,
     Toast {
@@ -155,6 +168,9 @@ pub struct State {
     reported_jobs: std::collections::HashSet<ManagedRuntime>,
     /// 已发出但还没回结果的受管运行时卸载(去重)。
     uninstalling: std::collections::HashSet<(ManagedRuntime, String)>,
+    /// 每个应用的日志查看器(共享状态机);同一时刻只展开一个(`expanded_log`)。
+    logs: std::collections::HashMap<String, LogsState>,
+    expanded_log: Option<String>,
 }
 
 impl State {
@@ -177,6 +193,17 @@ impl State {
                     Ok(a) => Load::Loaded(a),
                     Err(f) => Load::Failed(f.text().to_owned()),
                 };
+                // 应用被卸载:清掉它的日志查看器(含当前展开的)。
+                if let Load::Loaded(apps) = &self.apps {
+                    let alive: std::collections::HashSet<&str> =
+                        apps.iter().map(|a| a.id.as_str()).collect();
+                    self.logs.retain(|id, _| alive.contains(id.as_str()));
+                    if let Some(open) = self.expanded_log.as_deref()
+                        && !alive.contains(open)
+                    {
+                        self.expanded_log = None;
+                    }
+                }
                 Vec::new()
             }
             Message::InstallClicked => {
@@ -397,7 +424,84 @@ impl State {
                 }
             }
             Message::PollProbes => vec![Effect::Probe],
+            Message::ShowLogs(id) => {
+                // 同一时刻只展开一个:先把别的收起。
+                if let Some(prev) = self.expanded_log.take()
+                    && prev != id
+                {
+                    self.logs.entry(prev).or_default().hide();
+                }
+                self.expanded_log = Some(id.clone());
+                self.logs
+                    .entry(id.clone())
+                    .or_default()
+                    .show(std::time::Instant::now())
+                    .into_iter()
+                    .map(|_| Effect::FetchLogs(id.clone(), app_logs::FETCH_LINES))
+                    .collect()
+            }
+            Message::HideLogs => {
+                if let Some(prev) = self.expanded_log.take() {
+                    self.logs.entry(prev).or_default().hide();
+                }
+                Vec::new()
+            }
+            Message::LogsLoaded(id, result) => {
+                let mapped = result.map_err(|f| f.text().to_owned());
+                self.logs
+                    .entry(id)
+                    .or_default()
+                    .loaded(std::time::Instant::now(), mapped);
+                Vec::new()
+            }
+            Message::LogsScrolled(id, at_bottom) => {
+                self.logs.entry(id).or_default().on_scrolled(at_bottom);
+                Vec::new()
+            }
+            Message::Tick => self.tick_logs(std::time::Instant::now()),
         }
+    }
+
+    /// 取走"把滚动钉到底部"的一次性请求:返回待滚到底的应用 id(消费即复位)。
+    pub fn take_log_scroll(&mut self) -> Option<String> {
+        let id = self.expanded_log.clone()?;
+        let want = self
+            .logs
+            .get_mut(&id)
+            .is_some_and(app_logs::LogsState::take_scroll);
+        want.then_some(id)
+    }
+
+    /// 有展开着的日志查看器吗(调用方据此决定要不要排下一次 `Tick`)。
+    pub fn log_tick_wanted(&self) -> bool {
+        self.expanded_log.is_some()
+    }
+
+    /// 到点刷新展开着的日志查看器(设置页可见时才调用),返回要执行的 `FetchLogs`。
+    pub fn tick_logs(&mut self, now: std::time::Instant) -> Vec<Effect> {
+        let Some(id) = self.expanded_log.clone() else {
+            return Vec::new();
+        };
+        self.logs
+            .entry(id.clone())
+            .or_default()
+            .tick(now)
+            .into_iter()
+            .map(|_| Effect::FetchLogs(id.clone(), app_logs::FETCH_LINES))
+            .collect()
+    }
+
+    /// 某应用日志查看器的当前状态。
+    pub fn logs_view(&self, id: &str) -> LogsView {
+        self.logs
+            .get(id)
+            .map(|s| s.view())
+            .unwrap_or(LogsView::Hidden)
+    }
+
+    /// 该应用是否正展开日志查看器。
+    pub fn is_log_open(&self, id: &str) -> bool {
+        self.expanded_log.as_deref() == Some(id)
     }
 
     /// `ProbesLoaded` 之后的副作用:安装进行中继续轮询;刚完成的任务报一次结果。
@@ -792,6 +896,10 @@ pub fn view(state: &State) -> El<'_> {
             let mut col = column![].spacing(6);
             for app in apps {
                 col = col.push(app_row(state, app));
+                // 展开着日志的应用:在该行下方画查看器。
+                if state.is_log_open(app.id.as_str()) {
+                    col = col.push(log_viewer(state.logs_view(app.id.as_str()), &app.id));
+                }
             }
             col.into()
         }
@@ -901,6 +1009,13 @@ fn app_row<'a>(state: &'a State, app: &'a AppSummary) -> El<'a> {
                     colors.dim,
                 ));
             }
+            // 运行中与失败都能看日志;展开着时按钮变「收起日志」。
+            let (log_label, log_msg) = if state.is_log_open(&id) {
+                ("收起日志", Message::HideLogs)
+            } else {
+                ("日志", Message::ShowLogs(id.clone()))
+            };
+            r = r.push(action_button(log_label, log_msg, colors.dim));
             if !app.observed.is_transient() {
                 r = r.push(action_button(
                     "卸载",
@@ -911,6 +1026,66 @@ fn app_row<'a>(state: &'a State, app: &'a AppSummary) -> El<'a> {
         }
     }
     r.into()
+}
+
+/// 一个应用的日志查看器(系统默认字体、可滚动;`truncated` 顶部提示;刷新失败标一行)。
+/// 滚动区带稳定 `Id`,贴底跟随时由 `App` 每帧钉到底部;`on_scroll` 回报是否贴底。
+fn log_viewer(view: LogsView, app_id: &bytehost_apps::id::AppId) -> El<'static> {
+    let colors = byteui::theme::color::current();
+    let mut col = column![].spacing(4).width(Length::Fill);
+    match view {
+        LogsView::Hidden => {}
+        LogsView::Loading => col = col.push(dim("读取日志…")),
+        LogsView::Failed(reason) => {
+            col = col.push(
+                text(reason)
+                    .size(byteui::theme::font::body())
+                    .color(colors.red),
+            )
+        }
+        LogsView::Loaded {
+            text: log_text,
+            truncated,
+            stale,
+        } => {
+            if truncated {
+                col = col.push(dim("仅显示末尾若干行"));
+            }
+            if stale {
+                col = col.push(dim("刷新失败,显示的是上一次的内容"));
+            }
+            let scrolled_id = app_id.to_string();
+            let lines = iced_widget::text(log_text)
+                .size(byteui::theme::font::body())
+                .shaping(iced_widget::core::text::Shaping::Advanced)
+                .width(Length::Fill);
+            col = col.push(
+                container(
+                    scrollable(lines)
+                        .id(app_logs::scroll_id(app_id.as_str()))
+                        .direction(scrollable::Direction::Vertical(
+                            byteui::interaction::scrollbar::scrollbar(),
+                        ))
+                        .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style())
+                        .width(Length::Fill)
+                        .on_scroll(move |viewport| {
+                            Message::LogsScrolled(scrolled_id.clone(), at_bottom(&viewport))
+                        }),
+                )
+                .height(Length::Fixed(200.0))
+                .width(Length::Fill)
+                .padding(6),
+            );
+        }
+    }
+    container(col).width(Length::Fill).padding(6).into()
+}
+
+/// 视口是否贴底(留 4px 容差)。
+fn at_bottom(viewport: &scrollable::Viewport) -> bool {
+    let abs = viewport.absolute_offset();
+    let bottom = abs.y + viewport.bounds().height;
+    bottom >= viewport.content_bounds().height - 4.0
 }
 
 fn flow_view(flow: &Flow) -> El<'_> {
@@ -1864,5 +2039,78 @@ mod tests {
     fn poll_probes_outside_the_settings_window_does_nothing_bad() {
         // PollProbes 在有窗口时只返回一个 Probe 意图;窗口没了时不产生任何孤儿副作用。
         assert!(orphan_result_effects(&Message::PollProbes).is_empty());
+    }
+
+    fn with_app(id: &str) -> State {
+        let mut s = State::default();
+        s.update(
+            Message::ListLoaded(Ok(vec![summary(id, ObservedState::Running)])),
+            NOW,
+        );
+        s
+    }
+
+    #[test]
+    fn showing_logs_fetches_once_and_only_one_viewer_is_open() {
+        let mut s = with_app("alpha");
+        let fx = s.update(Message::ShowLogs("alpha".into()), NOW);
+        assert_eq!(
+            fx,
+            vec![Effect::FetchLogs("alpha".into(), app_logs::FETCH_LINES)]
+        );
+        assert!(s.is_log_open("alpha"));
+        assert_eq!(s.logs_view("alpha"), LogsView::Loading);
+
+        // 展开另一个:前一个自动收起,只保留一个。
+        let fx = s.update(Message::ShowLogs("beta".into()), NOW);
+        assert_eq!(
+            fx,
+            vec![Effect::FetchLogs("beta".into(), app_logs::FETCH_LINES)]
+        );
+        assert!(s.is_log_open("beta"));
+        assert!(!s.is_log_open("alpha"));
+        assert_eq!(s.logs_view("alpha"), LogsView::Hidden);
+    }
+
+    #[test]
+    fn hiding_logs_closes_the_open_viewer() {
+        let mut s = with_app("alpha");
+        s.update(Message::ShowLogs("alpha".into()), NOW);
+        assert!(s.update(Message::HideLogs, NOW).is_empty());
+        assert!(!s.is_log_open("alpha"));
+    }
+
+    #[test]
+    fn a_tick_without_an_open_viewer_does_nothing() {
+        let mut s = with_app("alpha");
+        assert!(s.update(Message::Tick, NOW).is_empty());
+        assert!(!s.log_tick_wanted());
+
+        // 收起后 Tick 同样不发任何请求。
+        s.update(Message::ShowLogs("alpha".into()), NOW);
+        s.update(Message::HideLogs, NOW);
+        assert!(s.update(Message::Tick, NOW).is_empty());
+        assert!(!s.log_tick_wanted());
+    }
+
+    #[test]
+    fn showing_logs_asks_for_the_shared_fetch_line_budget() {
+        let mut s = with_app("alpha");
+        let fx = s.update(Message::ShowLogs("alpha".into()), NOW);
+        assert_eq!(
+            fx,
+            vec![Effect::FetchLogs("alpha".into(), app_logs::FETCH_LINES)]
+        );
+        assert!(s.log_tick_wanted());
+    }
+
+    #[test]
+    fn unloading_an_app_closes_its_log_viewer() {
+        let mut s = with_app("alpha");
+        s.update(Message::ShowLogs("alpha".into()), NOW);
+        assert!(s.is_log_open("alpha"));
+        s.update(Message::ListLoaded(Ok(Vec::new())), NOW);
+        assert!(!s.is_log_open("alpha"));
+        assert_eq!(s.logs_view("alpha"), LogsView::Hidden);
     }
 }

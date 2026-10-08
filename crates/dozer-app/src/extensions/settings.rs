@@ -592,7 +592,27 @@ fn run_apps_message(
                     send(M::PollProbes);
                 });
             }
+            Effect::FetchLogs(id, max_lines) => {
+                handle.spawn(async move {
+                    let r = match AppId::new(&id) {
+                        Ok(app) => client
+                            .app_logs(app, max_lines)
+                            .await
+                            .map_err(|e| Failure::from_client_error(&e)),
+                        Err(e) => Err(Failure::Transport(format!("{e}"))),
+                    };
+                    send(M::LogsLoaded(id, r));
+                });
+            }
         }
+    }
+    // 有展开着的日志查看器:排一拍 `Tick` 定时刷新(收起后不再排,不后台空转)。
+    if s.apps.log_tick_wanted() {
+        let send = send.clone();
+        handle.spawn(async move {
+            tokio::time::sleep(crate::extensions::app_logs::REFRESH_INTERVAL).await;
+            send(M::Tick);
+        });
     }
 }
 

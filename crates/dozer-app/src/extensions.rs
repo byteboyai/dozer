@@ -5,6 +5,7 @@
 
 pub mod agent_context;
 pub mod app_host;
+pub mod app_logs;
 pub mod browser;
 pub mod codehealth;
 pub mod conversations;

@@ -3646,6 +3646,10 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                 })
                                 .unwrap_or_default();
 
+                            // 应用日志查看器新内容到达且仍贴底跟随:本帧把滚动钉到底部
+                            // (一次性位,消费即复位;用户上滚后不再跟随,见 LogsState)。
+                            let log_scroll_ids = app.take_log_scroll_ids();
+
                             // Draw iced on top
                             let mut interface = UserInterface::build(
                                 app.view(),
@@ -3773,6 +3777,19 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                 let mut op = crate::runtime::UnfocusTargets {
                                     targets: editor_unfocus_targets.clone(),
                                 };
+                                crate::runtime::run_operate(&mut interface, renderer, &mut op);
+                            }
+
+                            // 应用日志查看器贴底跟随:把每个待滚的滚动区钉到底部
+                            // (只在有新内容且用户没上滚时才有待滚项,见 `take_log_scroll_ids`)。
+                            for id in log_scroll_ids {
+                                let mut op = iced_widget::core::widget::operation::scrollable::snap_to::<
+                                    (),
+                                >(
+                                    id,
+                                    iced_widget::core::widget::operation::scrollable::RelativeOffset::END
+                                        .into(),
+                                );
                                 crate::runtime::run_operate(&mut interface, renderer, &mut op);
                             }
 

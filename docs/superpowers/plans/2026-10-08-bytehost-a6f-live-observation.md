@@ -191,7 +191,7 @@
 - 设置页(`settings_apps.rs`):每个已安装的进程型应用行加「日志」按钮,展开后在该行下方显示查看器(同一时刻只展开一个应用),`Running` 与 `Failed` 都能看。新 `Effect::FetchLogs(String)`(应用 id)与 `Message::{ShowLogs(String), HideLogs, LogsLoaded(String, Result<..>)}`。
 - 刷新驱动:`app_host` 与 `settings_apps` 各在已有的"下一拍唤醒"里加 `tick`;**查看器不可见(面板被隐藏、设置页关闭)时不刷新**——`reset`/不调 `tick` 即可,不要后台空转。
 
-- [ ] **Step 1: 写失败测试**(`app_logs.rs`)
+- [x] **Step 1: 写失败测试**(`app_logs.rs`)
   - `show` 发一次 `Fetch` 并进入 `Loading`;在途时重复 `show`/`tick` 不重发。
   - `loaded` 之后 `tick` 在 `REFRESH_INTERVAL` 前为空、之后发一次 `Fetch`;刷新期间 `view()` 仍是旧 `Loaded`(不回 `Loading`)。
   - `hide` 后 `tick` 永远为空;`hide` 后迟到的 `loaded` 被丢弃(`view()` 仍 `Hidden`);`reset` 同理且下次 `show` 重新 `Fetch`(不显示旧内容)。
@@ -201,8 +201,8 @@
   - `settings_apps.rs`:展开 A 再展开 B → A 收起;应用被卸载 → 查看器复位;`Running` 的应用可展开。
   - **服务端 Review Focus 6**(`logs.rs`):读取期间 `app.log` 被轮转(用测试在读之前把 `app.log` 改名为 `app.log.1` 并新建空 `app.log`)→ 返回 `.1` 的内容,不报错;`app.log` 消失而 `.1` 在 → 同上;两者都没有 → 空文本(已有用例保持通过)。
   - **服务端 Review Focus 5**(`process_apps_live.rs` 或 `logs.rs` 单测):含 `\x1b[32m` 与 6000 字符单行的日志读回后无 `\x1b`、该行长度 ≤ `MAX_LINE_CHARS + 1`(`logs.rs` 已有 `an_overlong_line_is_cut_and_marked`,补一条含转义 + 超长的组合用例)。
-- [ ] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p dozer-app app_logs app_host settings_apps`、`cargo test -p bytehost-apps --all-features logs`;`cargo clippy -p dozer-app --all-targets` 无新警告)。变异:去掉 `loaded` 的"只接收在途"守卫,迟到用例失败;让刷新回到 `Loading`,保留旧文本用例失败。
-- [ ] **Step 5: 视图**:查看器用系统默认字体,`truncated` 时顶部一行"只显示末尾若干行";自动滚到底(iced `scrollable` 的 `snap_to`,**仅当用户没有手动上滚时**——用 `scrollable::on_scroll` 记录是否贴底,不贴底则保持位置)。
+- [x] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p dozer-app app_logs app_host settings_apps`、`cargo test -p bytehost-apps --all-features logs`;`cargo clippy -p dozer-app --all-targets` 无新警告)。变异:去掉 `loaded` 的"只接收在途"守卫,迟到用例失败;让刷新回到 `Loading`,保留旧文本用例失败。
+- [x] **Step 5: 视图**:查看器用系统默认字体,`truncated` 时顶部一行"只显示末尾若干行";自动滚到底(iced `scrollable` 的 `snap_to`,**仅当用户没有手动上滚时**——用 `scrollable::on_scroll` 记录是否贴底,不贴底则保持位置)。
 - [ ] **Step 6: 手动验收**(需要 GUI,如实记录):`py-notes` 运行中,在设置→应用里点「日志」,另开终端 `curl` 触发应用打印,日志在 ~1s 内出现新行;关闭设置页后用 `lsof`/日志确认不再有 `Logs` 请求;上滚后新行到来不被拉回底部。
 - [ ] **Step 7: Commit** — `feat(dozer-app): live-refreshing log viewer shared by the app panel and the settings page (A6f task 4)`。
 

@@ -1196,7 +1196,7 @@ fn app_panel_pane<'a>(
         ) {
             let logs = app.app_host.logs_view(slot);
             if logs != LogsView::Hidden {
-                body = body.push(render_logs_body(logs, colors.dim));
+                body = body.push(render_logs_body(logs, colors.dim, slot));
             }
         }
         return container(body)
@@ -1279,7 +1279,7 @@ fn app_panel_pane<'a>(
         );
         body = body.push(buttons);
         if logs != LogsView::Hidden {
-            body = body.push(render_logs_body(logs, colors.dim));
+            body = body.push(render_logs_body(logs, colors.dim, slot));
         }
     } else if let Some((label, msg)) = action {
         body = body.push(
@@ -1301,12 +1301,15 @@ fn app_panel_pane<'a>(
 }
 
 /// 应用崩溃页与依赖安装失败页共用的日志区:加载中/截断提示/失败原因/等宽正文
-/// (系统默认字体 + `Shaping::Advanced`,不贴边、可滚动)。
+/// (系统默认字体 + `Shaping::Advanced`,不贴边、可滚动)。滚动位置由滚动区自己的
+/// `Id` 定位,贴底跟随时由 `App::take_log_scroll` 每帧钉到底部;`on_scroll` 回报
+/// 是否贴底。
 fn render_logs_body<'a>(
     logs: crate::extensions::app_host::LogsView,
     dim: Color,
+    slot: AppSlot,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    use crate::extensions::app_host::LogsView;
+    use crate::extensions::app_host::{LogsView, Message as M};
     let item = |label: String| {
         text(label)
             .size(byteui::theme::font::body())
@@ -1327,14 +1330,25 @@ fn render_logs_body<'a>(
                 .width(Length::Fill);
             col = col.push(
                 iced_widget::scrollable(container(lines).width(Length::Fill).padding(8))
+                    .id(crate::extensions::app_logs::scroll_id(slot.id()))
                     .height(Length::Fixed(220.0))
-                    .width(Length::Fill),
+                    .width(Length::Fill)
+                    .on_scroll(move |viewport| {
+                        Message::AppHost(M::LogsScrolled(slot, at_bottom(&viewport)))
+                    }),
             );
             col.into()
         }
         LogsView::Failed(reason) => item(reason),
         LogsView::Hidden => column![].into(),
     }
+}
+
+/// 视口是否贴底(留 4px 容差,浮点/取整误差不误判)。
+fn at_bottom(viewport: &iced_widget::scrollable::Viewport) -> bool {
+    let abs = viewport.absolute_offset();
+    let bottom = abs.y + viewport.bounds().height;
+    bottom >= viewport.content_bounds().height - 4.0
 }
 
 /// 左面板区:按当前左视图组合"项目树+文件预览"配对或单个 Web 预览面板;

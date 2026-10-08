@@ -18,6 +18,7 @@ use bytehost_apps::proto::{AppErrorKind, AppFailure, AppIssue, AppSummary};
 use bytehost_apps::state::{DesiredState, ObservedState};
 
 use crate::app::AppSlot;
+use crate::extensions::app_logs;
 use crate::extensions::toast::Level;
 
 /// 应用面板可见、且**订阅未就绪**时拉 `List` 的间隔(兜底轮询的快速档)。
@@ -82,6 +83,8 @@ pub enum Message {
     HideLogs(AppSlot),
     /// 日志读取的结果。
     LogsLoaded(AppSlot, Result<(String, bool), Failure>),
+    /// 用户滚动了日志查看器:`true` = 当前贴底。
+    LogsScrolled(AppSlot, bool),
     /// 用户点了运行时问题页的「去设置安装」。
     OpenRuntimeSettings,
     /// 订阅已建立(dozerd 回了 `Subscribed`)。
@@ -116,7 +119,10 @@ pub enum Effect {
     },
 }
 
-/// 崩溃页下方日志查看器的状态。
+/// 崩溃页下方日志查看器的状态(应用面板对外的视图)。
+///
+/// 实际的刷新逻辑在共享状态机 [`crate::extensions::app_logs::LogsState`] 里(与设置页共用);
+/// 这里保留 A6e 就有的两字段形状,`stale`(刷新失败保留旧文本)只影响设置页的呈现。
 #[derive(Debug, Clone, PartialEq)]
 pub enum LogsView {
     /// 未展开。
@@ -127,6 +133,20 @@ pub enum LogsView {
     Loaded { text: String, truncated: bool },
     /// 读取失败(原因留在页面里,不弹 Toast)。
     Failed(String),
+}
+
+impl From<app_logs::LogsView> for LogsView {
+    fn from(v: app_logs::LogsView) -> Self {
+        use app_logs::LogsView as L;
+        match v {
+            L::Hidden => LogsView::Hidden,
+            L::Loading => LogsView::Loading,
+            L::Loaded {
+                text, truncated, ..
+            } => LogsView::Loaded { text, truncated },
+            L::Failed(reason) => LogsView::Failed(reason),
+        }
+    }
 }
 
 /// 一个应用在 dozerd 里的当前状况(只留面板要用的)。
@@ -206,8 +226,8 @@ pub struct State {
     /// 已经把启动地址交给 `AppViews` 的应用。
     url_set: HashSet<AppSlot>,
     acting: HashMap<AppSlot, Act>,
-    /// 每个应用崩溃页下方日志查看器的状态(A6e)。应用离开 `Failed` 时复位为 `Hidden`。
-    logs: HashMap<AppSlot, LogsView>,
+    /// 每个应用崩溃页下方日志查看器的状态(共享状态机,A6f Task 4)。应用离开 `Failed` 时复位。
+    logs: HashMap<AppSlot, app_logs::LogsState>,
     /// 已经成功拉到过一次列表(并因此同步过图标栏)。首次必须无条件同步:磁盘里的布局可能留着已卸载应用的
     /// 条目,而 `order` 的初值也是空,不能靠"集合变了"来触发。
     synced_once: bool,
@@ -313,22 +333,19 @@ impl State {
                 }
                 effects
             }
-            Message::ShowLogs(slot) => self.show_logs(slot),
+            Message::ShowLogs(slot) => self.show_logs(slot, now),
             Message::HideLogs(slot) => {
-                self.logs.insert(slot, LogsView::Hidden);
+                self.logs.entry(slot).or_default().hide();
                 Vec::new()
             }
             Message::LogsLoaded(slot, result) => {
-                // 只接收仍在等的那次读取:用户已收起、或应用已离开崩溃态(状态被复位)时,
-                // 迟到的结果不能把日志重新打开或留作陈旧内容。
-                if self.logs.get(&slot) != Some(&LogsView::Loading) {
-                    return Vec::new();
-                }
-                let view = match result {
-                    Ok((text, truncated)) => LogsView::Loaded { text, truncated },
-                    Err(failure) => LogsView::Failed(failure.text().to_owned()),
-                };
-                self.logs.insert(slot, view);
+                // 只接收仍在等的那次读取:共享状态机内部会丢弃收起/复位后迟到的结果。
+                let mapped = result.map_err(|f| f.text().to_owned());
+                self.logs.entry(slot).or_default().loaded(now, mapped);
+                Vec::new()
+            }
+            Message::LogsScrolled(slot, at_bottom) => {
+                self.logs.entry(slot).or_default().on_scrolled(at_bottom);
                 Vec::new()
             }
             Message::OpenRuntimeSettings => vec![Effect::OpenSettingsApps],
@@ -365,14 +382,21 @@ impl State {
         vec![Effect::FetchList]
     }
 
-    /// 读日志:未展开时置 `Loading` 并发一次请求;在途时重复点不重发。
-    fn show_logs(&mut self, slot: AppSlot) -> Vec<Effect> {
-        match self.logs.get(&slot) {
-            Some(LogsView::Loading) | Some(LogsView::Loaded { .. }) => return Vec::new(),
-            _ => {}
-        }
-        self.logs.insert(slot, LogsView::Loading);
-        vec![Effect::FetchLogs(slot, 200)]
+    /// 取走"把滚动钉到底部"的一次性请求:返回待滚到底的那个槽(消费即复位)。
+    /// 同一时刻通常只有一个查看器展开,遍历全部以容纳极端情况。
+    pub fn take_log_scroll(&mut self) -> Option<AppSlot> {
+        self.logs
+            .iter_mut()
+            .find_map(|(slot, s)| s.take_scroll().then_some(*slot))
+    }
+
+    /// 读日志:未展开时置 `Loading` 并发一次请求;在途时重复点不重发(逻辑在共享状态机)。
+    fn show_logs(&mut self, slot: AppSlot, now: Instant) -> Vec<Effect> {
+        let slot_effects = self.logs.entry(slot).or_default().show(now);
+        slot_effects
+            .into_iter()
+            .map(|_| Effect::FetchLogs(slot, app_logs::FETCH_LINES))
+            .collect()
     }
 
     fn list_loaded(
@@ -444,7 +468,7 @@ impl State {
             }
             // 离开崩溃态(被重启/运行/停止):旧日志查看器复位,防陈旧。
             if !matches!(row.observed, ObservedState::Failed { .. }) {
-                self.logs.remove(slot);
+                self.logs.entry(*slot).or_default().reset();
             }
         }
         let set_changed = !self.synced_once || order != self.order;
@@ -609,7 +633,27 @@ impl State {
 
     /// 崩溃页下方日志查看器的当前状态(未知应用按 `Hidden`)。
     pub fn logs_view(&self, slot: AppSlot) -> LogsView {
-        self.logs.get(&slot).cloned().unwrap_or(LogsView::Hidden)
+        self.logs
+            .get(&slot)
+            .map(|s| s.view().into())
+            .unwrap_or(LogsView::Hidden)
+    }
+
+    /// 到点刷新所有展开着的日志查看器(崩溃页/依赖失败页),返回要执行的 `FetchLogs`。
+    /// 没有展开的查看器时为空(不后台空转)。
+    pub fn tick_logs(&mut self, now: Instant) -> Vec<Effect> {
+        let mut effects = Vec::new();
+        for (&slot, state) in self.logs.iter_mut() {
+            for _ in state.tick(now) {
+                effects.push(Effect::FetchLogs(slot, app_logs::FETCH_LINES));
+            }
+        }
+        effects
+    }
+
+    /// 有展开着的日志查看器吗(据此决定要不要排下一拍唤醒)。
+    pub fn any_logs_open(&self) -> bool {
+        self.logs.values().any(|s| s.view().is_open())
     }
 
     /// 某应用的显示名(面板标题行用);未知时退回 id。
@@ -1267,12 +1311,33 @@ mod tests {
     }
 
     #[test]
+    fn an_open_log_viewer_is_refreshed_on_tick_and_closed_ones_are_not() {
+        let mut s = State::default();
+        let a = slot("tick-a");
+        loaded(&mut s, vec![app("tick-a", failed("崩了"))], &[]);
+        assert!(!s.any_logs_open());
+        let t0 = Instant::now();
+        s.update(Message::ShowLogs(a), t0, &[]);
+        s.update(Message::LogsLoaded(a, Ok(("x".into(), false))), t0, &[]);
+        assert!(s.any_logs_open());
+        // 间隔未到不发;到点发一次。
+        assert!(s.tick_logs(t0 + Duration::from_millis(500)).is_empty());
+        assert_eq!(
+            s.tick_logs(t0 + app_logs::REFRESH_INTERVAL),
+            vec![Effect::FetchLogs(a, app_logs::FETCH_LINES)]
+        );
+        // 收起后不再刷。
+        s.update(Message::HideLogs(a), t0, &[]);
+        assert!(!s.any_logs_open());
+        assert!(s.tick_logs(t0 + app_logs::REFRESH_INTERVAL * 5).is_empty());
+    }
+
+    #[test]
     fn open_runtime_settings_emits_exactly_one_effect() {
         let mut s = State::default();
         let effects = s.update(Message::OpenRuntimeSettings, Instant::now(), &[]);
         assert_eq!(effects, vec![Effect::OpenSettingsApps]);
     }
-
     #[test]
     fn retry_from_the_issue_page_starts_the_app() {
         let mut s = State::default();
