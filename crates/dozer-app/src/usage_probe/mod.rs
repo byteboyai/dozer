@@ -4,6 +4,7 @@
 mod fake_dozerd;
 mod fake_panel_host;
 mod host;
+mod scenarios;
 mod surface;
 
 use dozer_core::protocol::{AgentKind, ConversationSummary, UsagePayload};
