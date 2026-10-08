@@ -13,8 +13,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytehost_apps::HOST_VERSION;
 use bytehost_apps::gateway::{Gateway, GatewayConfig, GatewayError};
-use bytehost_apps::manager::{AppManager, ManagerError};
+use bytehost_apps::manager::{AppManager, ManagerError, MonitorConfig};
 use bytehost_apps::port::{load_port, persist_port, pick_port};
+use bytehost_apps::process::restart::RestartPolicy;
 use bytehost_apps::proto::{
     AppErrorKind, AppFailure, AppReply, AppRequest, ManagedRuntime, RuntimeProbe,
 };
@@ -102,16 +103,14 @@ impl AppService {
         Self::finish_start(root, gateway).await
     }
 
-    /// (仅测试)把周期健康检查的间隔/超时调小、
-    /// 让卡死进程在秒级被观察重启;其余与 `start_with` 一致。
+    /// (仅测试)调小周期健康检查参数与重启退避,让卡死/崩溃的进程在秒级被观察到;
+    /// 启动流程与 `start_with` 完全相同(同一个 `finish_start_with`)。
     /// 跨 crate 集成测试(`tests/`)要用,不能 `#[cfg(test)]`,故为 `#[doc(hidden)]`。
     #[doc(hidden)]
     pub async fn start_with_monitor_for_test(
         root: &Path,
         config: GatewayConfig,
-        monitor_interval: std::time::Duration,
-        monitor_timeout: std::time::Duration,
-        monitor_failures: u32,
+        monitor: MonitorConfig,
     ) -> Arc<Self> {
         let gateway = match Gateway::start(config).await {
             Ok(g) => Arc::new(g),
@@ -120,78 +119,22 @@ impl AppService {
                 return Self::unavailable(format!("应用宿主不可用:{e}"));
             }
         };
-        Self::finish_start_monitor_for_test(
-            root,
-            gateway,
-            monitor_interval,
-            monitor_timeout,
-            monitor_failures,
-        )
-        .await
-    }
-
-    async fn finish_start_monitor_for_test(
-        root: &Path,
-        gateway: Arc<Gateway>,
-        monitor_interval: std::time::Duration,
-        monitor_timeout: std::time::Duration,
-        monitor_failures: u32,
-    ) -> Arc<Self> {
         let runtime_manager = Arc::new(RuntimeManager::new(root.join("runtimes")));
-        let resolver = Arc::new(ChainResolver(vec![
-            Arc::new(ManagedResolver::new(RuntimeStore::new(
-                runtime_manager.store().root().to_path_buf(),
-            ))),
-            Arc::new(SystemResolver::new()),
-        ]));
-        let policy = bytehost_apps::process::restart::RestartPolicy {
-            base: std::time::Duration::from_millis(200),
-            ..bytehost_apps::process::restart::RestartPolicy::default()
-        };
-        let manager = match AppManager::with_monitor_for_test(
-            root,
-            HOST_VERSION,
-            gateway.clone(),
-            resolver,
-            policy,
-            Arc::new(bytehost_apps::runtime::SystemVersionProbe::new()),
-            monitor_interval,
-            monitor_timeout,
-            monitor_failures,
-        ) {
-            Ok(m) => Arc::new(m),
-            Err(e) => {
-                gateway.stop().await;
-                dozer_core::log_error!(LOG, error = %e, "应用目录不可用");
-                return Self::unavailable(format!("应用宿主不可用:应用目录打不开:{e}"));
-            }
-        };
-        spawn_event_logger(&manager);
-        let for_reconcile = manager.clone();
-        match tokio::task::spawn_blocking(move || for_reconcile.reconcile()).await {
-            Ok(report) => log_report(&report, "启动对账"),
-            Err(e) => dozer_core::log_error!(LOG, error = %e, "启动对账任务失败(panic?)"),
-        }
-        dozer_core::log_info!(LOG, port = gateway.port(), "应用宿主已启动");
-        Arc::new(Self {
-            state: State::Ready {
-                manager,
-                gateway,
-                runtime_manager,
-            },
-        })
+        Self::finish_start_with(root, gateway, runtime_manager, Some(monitor)).await
     }
 
     async fn finish_start(root: &Path, gateway: Arc<Gateway>) -> Arc<Self> {
         let runtime_manager = Arc::new(RuntimeManager::new(root.join("runtimes")));
-        Self::finish_start_with(root, gateway, runtime_manager).await
+        Self::finish_start_with(root, gateway, runtime_manager, None).await
     }
 
-    /// 真正的构造主体:`RuntimeManager` 可注入(测试用假 `Fetcher`)。
+    /// 真正的构造主体:`RuntimeManager` 可注入(测试用假 `Fetcher`);
+    /// `monitor` 只有测试会给(同时把重启退避调小),生产为 `None`。
     async fn finish_start_with(
         root: &Path,
         gateway: Arc<Gateway>,
         runtime_manager: Arc<RuntimeManager>,
+        monitor: Option<MonitorConfig>,
     ) -> Arc<Self> {
         // 受管运行时优先,系统兜底。
         let resolver = Arc::new(ChainResolver(vec![
@@ -200,8 +143,21 @@ impl AppService {
             ))),
             Arc::new(SystemResolver::new()),
         ]));
-        let manager = match AppManager::with_resolver(root, HOST_VERSION, gateway.clone(), resolver)
-        {
+        let built = match monitor {
+            None => AppManager::with_resolver(root, HOST_VERSION, gateway.clone(), resolver),
+            Some(monitor) => AppManager::with_monitor_for_test(
+                root,
+                HOST_VERSION,
+                gateway.clone(),
+                resolver,
+                RestartPolicy {
+                    base: std::time::Duration::from_millis(200),
+                    ..RestartPolicy::default()
+                },
+                monitor,
+            ),
+        };
+        let manager = match built {
             Ok(m) => Arc::new(m),
             Err(e) => {
                 gateway.stop().await;
@@ -1240,7 +1196,7 @@ port_env = "APP_PORT"
             Arc::new(FakeUv::default()),
             pins,
         ));
-        AppService::finish_start_with(root, gateway, rm).await
+        AppService::finish_start_with(root, gateway, rm, None).await
     }
 
     fn node_pins(url: &str, sha: String) -> &'static [bytehost_apps::runtime::managed::Pin] {

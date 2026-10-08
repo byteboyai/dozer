@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use bytehost_apps::gateway::GatewayConfig;
 use bytehost_apps::id::AppId;
+use bytehost_apps::manager::MonitorConfig;
 use bytehost_apps::plan::{Approval, Provenance, TrustLevel};
 use bytehost_apps::proto::{AppErrorKind, AppIssue, AppReply, AppRequest, AppSource, AppSummary};
 use bytehost_apps::registry::UninstallMode;
@@ -459,9 +460,11 @@ async fn run_sample(sample: &Sample) {
     let svc = AppService::start_with_monitor_for_test(
         &root,
         GatewayConfig { port: 0 },
-        Duration::from_millis(300),
-        Duration::from_millis(400),
-        3,
+        MonitorConfig {
+            interval: Duration::from_millis(300),
+            timeout: Duration::from_millis(400),
+            failures: 3,
+        },
     )
     .await;
 
@@ -531,9 +534,11 @@ async fn run_sample(sample: &Sample) {
 
     // 6. GET /pid → /crash → 监管重启 → 新 pid。
     let old_pid = request(&app, port, &Req::get("/pid").cookie(&token)).body;
+    assert!(is_pid(&old_pid), "崩溃前应拿到真实 pid:{old_pid:?}");
     let _ = request(&app, port, &Req::get("/crash").cookie(&token));
     let (port2, token2) = wait_new_pid_async(&svc, &app, &old_pid, 20).await;
     let new_pid = request(&app, port2, &Req::get("/pid").cookie(&token2)).body;
+    assert!(is_pid(&new_pid), "崩溃后应拿到真实 pid:{new_pid:?}");
     assert_ne!(old_pid, new_pid, "崩溃后应换一个新进程");
     mark("6 crash → restart (new pid)");
 
@@ -544,8 +549,14 @@ async fn run_sample(sample: &Sample) {
     // 8. GET /hang → 健康检查杀掉并重启;观察 pid 变化(监控 300ms×3 + 余量 → ≤10s)。
     let (port3, token3) = launch(&svc, &app).await;
     let pid_before_hang = request(&app, port3, &Req::get("/pid").cookie(&token3)).body;
+    assert!(
+        is_pid(&pid_before_hang),
+        "卡死前应拿到真实 pid:{pid_before_hang:?}"
+    );
     let _ = request(&app, port3, &Req::get("/hang").cookie(&token3)); // 让它卡住(此请求会读到 EOF 或超时)
-    let (_p, _t) = wait_new_pid_async(&svc, &app, &pid_before_hang, 12).await;
+    let (p8, t8) = wait_new_pid_async(&svc, &app, &pid_before_hang, 12).await;
+    let pid_after_hang = request(&app, p8, &Req::get("/pid").cookie(&t8)).body;
+    assert!(is_pid(&pid_after_hang) && pid_after_hang != pid_before_hang);
     mark("8 hang → health-check restart");
 
     // 10. 日志:含启动时打印的 `listening on`。
@@ -656,6 +667,11 @@ fn read_counter(root: &Path, app: &AppId) -> u64 {
         .unwrap_or(0)
 }
 
+/// `/pid` 的正文是不是一个真实的进程号。
+fn is_pid(body: &str) -> bool {
+    !body.is_empty() && body.chars().all(|c| c.is_ascii_digit())
+}
+
 async fn wait_new_pid_async(
     svc: &AppService,
     app: &AppId,
@@ -674,7 +690,9 @@ async fn wait_new_pid_async(
         {
             let (port, token) = parse_launch(&url);
             let pid = request(app, port, &Req::get("/pid").cookie(&token)).body;
-            if pid != old_pid && !pid.is_empty() {
+            // 必须是真 pid(纯数字):应用刚崩溃时,网关会对已死的上游返回
+            // "application is not reachable" 之类的错误页,那不是新进程。
+            if is_pid(&pid) && pid != old_pid {
                 return (port, token);
             }
         }
