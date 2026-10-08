@@ -265,6 +265,14 @@ impl Client {
         }
     }
 
+    /// 读某应用日志的末尾(有界、已清洗);返回 `(text, truncated)`。
+    pub async fn app_logs(&self, id: AppId, max_lines: u32) -> Result<(String, bool)> {
+        match self.app_request(AppRequest::Logs { id, max_lines }).await? {
+            AppReply::Logs { text, truncated } => Ok((text, truncated)),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
     /// 出一份运行时安装计划(不下载任何东西)。
     pub async fn app_runtime_plan(&self, runtime: ManagedRuntime) -> Result<RuntimeInstallPlan> {
         match self

@@ -266,6 +266,11 @@ impl AppService {
                     .map(|()| AppReply::Done)
                     .map_err(rt_failure)
             }
+            AppRequest::Logs { id, max_lines } => {
+                blocking(manager, move |m| m.logs(&id, max_lines))
+                    .await
+                    .map(|(text, truncated)| AppReply::Logs { text, truncated })
+            }
         }
     }
 
@@ -839,6 +844,17 @@ source = "web/"
                 .kind,
             AppErrorKind::NotFound
         );
+        // 读没装的应用的日志也是 NotFound(日志只在装了之后才存在)。
+        assert_eq!(
+            svc.handle(AppRequest::Logs {
+                id: id("ghost"),
+                max_lines: 100,
+            })
+            .await
+            .unwrap_err()
+            .kind,
+            AppErrorKind::NotFound
+        );
         svc.shutdown().await;
     }
 
@@ -883,6 +899,7 @@ port_env = "APP_PORT"
         std::fs::write(
             dir.join("server.py"),
             "import os, http.server\n\
+             print(\"listening on\", os.environ[\"APP_PORT\"], flush=True)\n\
              http.server.test(HandlerClass=http.server.SimpleHTTPRequestHandler, port=int(os.environ[\"APP_PORT\"]), bind=\"127.0.0.1\")\n",
         )
         .unwrap();
@@ -942,6 +959,19 @@ port_env = "APP_PORT"
         );
         let (status, _) = fetch(&url, "pyapp");
         assert_eq!(status, 200);
+
+        // 日志经线上协议读回,含应用启动时打印的一行(有界、已清洗)。
+        let AppReply::Logs { text, .. } = svc
+            .handle(AppRequest::Logs {
+                id: id("pyapp"),
+                max_lines: 100,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("期望 Logs 应答")
+        };
+        assert!(text.contains("listening on"), "{text:?}");
         let upstream_port: u16 = url
             .strip_prefix("http://")
             .unwrap()
