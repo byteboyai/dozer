@@ -307,6 +307,24 @@ impl AppService {
                     .await
                     .map(|(text, truncated)| AppReply::Logs { text, truncated })
             }
+            // `Subscribe` 在 server.rs 的连接循环里就被截住了(它要把本连接写侧改成持续流),
+            // 到不了这里。真到了说明有人绕过 server 直接调 handle——直接不实现。
+            AppRequest::Subscribe => Err(AppFailure::new(
+                AppErrorKind::Internal,
+                "订阅必须经连接循环处理",
+            )),
+        }
+    }
+
+    /// 订阅应用变更事件流(`AppManager::events()` 的 broadcast 接收者)。
+    /// `Unavailable` 状态返回 `None`——服务不可用时无处订阅,由调用方回一个失败。
+    /// 每个订阅者各拿一份独立接收者;容量有限,慢消费者会拿到 `Lagged`(调用方转成整体重拉)。
+    pub fn subscribe(
+        &self,
+    ) -> Option<tokio::sync::broadcast::Receiver<bytehost_apps::event::AppEvent>> {
+        match &self.state {
+            State::Ready { manager, .. } => Some(manager.events()),
+            State::Unavailable(_) => None,
         }
     }
 
@@ -381,6 +399,22 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// 把广播收到的一条应用事件(或错误)转成推给订阅连接的一行应答。
+/// - `Ok(event)` → `Changed{app}`(只带 app id,**不带状态**——GUI 收到即重拉 `List`)。
+/// - `Lagged(_)` → `Resync`(慢消费者漏了事件,让它整体重拉;不能静默漏掉)。
+/// - `Closed` → `None`(发送端没了:订阅结束)。
+pub fn change_reply(
+    event: Result<bytehost_apps::event::AppEvent, tokio::sync::broadcast::error::RecvError>,
+) -> Option<AppReply> {
+    match event {
+        Ok(event) => Some(AppReply::Changed {
+            app: event.app().clone(),
+        }),
+        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => Some(AppReply::Resync),
+        Err(tokio::sync::broadcast::error::RecvError::Closed) => None,
+    }
 }
 
 /// 把应用事件写进日志(事件里没有令牌:`EndpointChanged` 带的是不含令牌的站点地址)。
@@ -468,7 +502,6 @@ source = "web/"
     fn id(s: &str) -> AppId {
         AppId::new(s).unwrap()
     }
-
     /// 带着从 `launch_url` 里取出的令牌访问应用站点,返回(状态码, 正文)。
     fn fetch(launch_url: &str, id: &str) -> (u16, String) {
         let rest = launch_url.strip_prefix("http://").unwrap();
@@ -493,6 +526,55 @@ source = "web/"
             AppReply::LaunchUrl { url } => url,
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn change_reply_maps_events_to_invalidation_signals() {
+        use bytehost_apps::event::AppEvent;
+        use tokio::sync::broadcast::error::RecvError;
+
+        assert_eq!(
+            change_reply(Ok(AppEvent::StateChanged {
+                app: id("excalidraw"),
+                state: bytehost_apps::state::ObservedState::Running,
+            })),
+            Some(AppReply::Changed {
+                app: id("excalidraw")
+            })
+        );
+        assert_eq!(
+            change_reply(Err(RecvError::Lagged(3))),
+            Some(AppReply::Resync)
+        );
+        assert_eq!(change_reply(Err(RecvError::Closed)), None);
+    }
+
+    /// 广播落后(`Lagged`)必须整体重拉,不能静默漏掉——把广播灌满后消费者应收到 `Resync`。
+    #[tokio::test]
+    async fn a_lagging_consumer_gets_a_resync_instead_of_silently_missing_events() {
+        use bytehost_apps::event::AppEvent;
+
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<AppEvent>(2);
+        for _ in 0..5 {
+            let _ = tx.send(AppEvent::Installed { app: id("a") });
+        }
+        let mut saw_resync = false;
+        for _ in 0..5 {
+            match change_reply(rx.recv().await) {
+                Some(AppReply::Resync) => {
+                    saw_resync = true;
+                    break;
+                }
+                Some(_) => continue,
+                None => break,
+            }
+        }
+        assert!(saw_resync, "慢消费者必须收到 Resync");
+    }
+
+    #[tokio::test]
+    async fn subscribe_is_none_when_the_service_is_unavailable() {
+        assert!(AppService::unavailable("x").subscribe().is_none());
     }
 
     #[tokio::test]

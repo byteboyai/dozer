@@ -446,6 +446,9 @@ async fn handle_conn(
     let mut lines = BufReader::new(r).lines();
     // attach 状态：订阅 + 会话 id
     let mut sub: Option<(String, broadcast::Receiver<SessionEvent>)> = None;
+    // 应用变更订阅：`Subscribe` 之后把事件写成 `Changed`/`Resync` 推给本连接。
+    // 只是一条失效信号通道，不独占连接的读侧（之后仍可发普通请求）。
+    let mut app_sub: Option<broadcast::Receiver<bytehost_apps::event::AppEvent>> = None;
     // 已向本连接投递到的 offset 水位：过滤 snapshot 与 broadcast 之间重叠的字节
     let mut sent_until: u64 = 0;
 
@@ -457,9 +460,30 @@ async fn handle_conn(
                 let reply = match decode_line::<Request>(&line) {
                     Err(e) => Reply::Error { message: format!("协议错误: {e}") },
                     Ok(req) => match req {
-                        Request::App { request } => match apps.handle(request).await {
-                            Ok(reply) => Reply::App { reply },
-                            Err(failure) => Reply::App { reply: bytehost_apps::proto::AppReply::Failed { failure } },
+                        Request::App { request } => match request {
+                            // 订阅要接管本连接后续的推送，不能塞进 `apps.handle`(它是一问一答)。
+                            // 在这里拦截：拿到接收者就登记，之后由下方 select! 分支持续写出。
+                            bytehost_apps::proto::AppRequest::Subscribe => {
+                                match apps.subscribe() {
+                                    Some(rx) => {
+                                        // 重复 `Subscribe` 覆盖旧订阅(不累加)。
+                                        app_sub = Some(rx);
+                                        Reply::App { reply: bytehost_apps::proto::AppReply::Subscribed }
+                                    }
+                                    None => Reply::App {
+                                        reply: bytehost_apps::proto::AppReply::Failed {
+                                            failure: bytehost_apps::proto::AppFailure::new(
+                                                bytehost_apps::proto::AppErrorKind::Unavailable,
+                                                "应用宿主不可用",
+                                            ),
+                                        },
+                                    },
+                                }
+                            }
+                            request => match apps.handle(request).await {
+                                Ok(reply) => Reply::App { reply },
+                                Err(failure) => Reply::App { reply: bytehost_apps::proto::AppReply::Failed { failure } },
+                            },
                         },
                         Request::ListSessions => Reply::Sessions { sessions: registry.list() },
                         Request::CreateSession { name, command, args, cwd, cols, rows, project_id, agent } => {
@@ -1542,6 +1566,19 @@ async fn handle_conn(
                         sub = None;
                     }
                     Err(broadcast::error::RecvError::Closed) => { sub = None; }
+                }
+            }
+            ev = async {
+                match &mut app_sub {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            }, if app_sub.is_some() => {
+                match crate::app_service::change_reply(ev) {
+                    Some(reply) => {
+                        w.write_all(encode_line(&Reply::App { reply }).as_bytes()).await?;
+                    }
+                    None => { app_sub = None; }
                 }
             }
         }

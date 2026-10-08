@@ -21,6 +21,7 @@ impl Drop for CleanupGuard {
 
 struct TestDaemon {
     client: Client,
+    socket: PathBuf,
     _cleanup: CleanupGuard,
     _task: tokio::task::JoinHandle<anyhow::Result<()>>,
 }
@@ -63,6 +64,7 @@ async fn start_daemon(apps: Arc<AppService>) -> TestDaemon {
         if tokio::net::UnixStream::connect(&sock).await.is_ok() {
             return TestDaemon {
                 client: Client::new(sock.clone()),
+                socket: sock.clone(),
                 _cleanup: CleanupGuard(sock),
                 _task: task,
             };
@@ -233,4 +235,123 @@ async fn a_shutdown_request_takes_the_apps_down_but_keeps_what_the_user_wanted()
         "用户想要运行的意愿保留,下次启动自动恢复"
     );
     assert_eq!(state["observed"]["state"], "stopped");
+}
+
+/// 订阅的实际形状:发送 `Subscribe` 后先收到 `Subscribed`;随后同一连接上 —— 装一个应用 ——
+/// 收到 `Changed{app}`;且**同一连接**还能继续发普通 `List` 请求并得到应答(订阅不独占读侧)。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscribing_pushes_app_changes_and_does_not_hold_the_read_side() {
+    use bytehost_apps::proto::{AppReply, AppRequest};
+    use dozer_core::protocol::{Reply, Request, decode_line, encode_line};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let apps =
+        AppService::start_with(&tmp.path().join("bytehost"), GatewayConfig { port: 0 }).await;
+    let d = start_daemon(apps).await;
+
+    let stream = tokio::net::UnixStream::connect(&d.socket).await.unwrap();
+    let (r, mut w) = stream.into_split();
+    let mut lines = BufReader::new(r).lines();
+
+    w.write_all(
+        encode_line(&Request::App {
+            request: AppRequest::Subscribe,
+        })
+        .as_bytes(),
+    )
+    .await
+    .unwrap();
+    let first = lines.next_line().await.unwrap().expect("先有应答");
+    assert_eq!(
+        decode_line::<Reply>(&first).unwrap(),
+        Reply::App {
+            reply: AppReply::Subscribed
+        }
+    );
+
+    // 另一个连接安装一个静态应用:订阅连接应收到 Changed{excalidraw}。
+    let source = write_app(&tmp.path().join("src/a"), "excalidraw", "hi");
+    let plan = d
+        .client
+        .app_plan(source.clone(), Provenance::Local, TrustLevel::Trusted)
+        .await
+        .unwrap();
+    d.client
+        .app_install(
+            plan.approve(Approval {
+                approver: "t".into(),
+                approved_ms: 1,
+            }),
+            source,
+        )
+        .await
+        .unwrap();
+
+    let changed = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
+        .await
+        .expect("5s 内应收到推送")
+        .unwrap()
+        .expect("连接仍开着");
+    assert_eq!(
+        decode_line::<Reply>(&changed).unwrap(),
+        Reply::App {
+            reply: AppReply::Changed {
+                app: id("excalidraw")
+            }
+        }
+    );
+
+    // 同一连接继续发普通 List 请求,仍得到应答(订阅不独占读侧)。
+    w.write_all(
+        encode_line(&Request::App {
+            request: AppRequest::List,
+        })
+        .as_bytes(),
+    )
+    .await
+    .unwrap();
+    let listed = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
+        .await
+        .expect("List 应有应答")
+        .unwrap()
+        .expect("连接仍开着");
+    match decode_line::<Reply>(&listed).unwrap() {
+        Reply::App {
+            reply: AppReply::Apps { apps },
+        } => assert_eq!(apps.len(), 1),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// 应用宿主不可用时订阅必须立即失败(不可用),连接不挂。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscribing_to_an_unavailable_host_fails_without_hanging() {
+    use bytehost_apps::proto::{AppErrorKind, AppReply, AppRequest};
+    use dozer_core::protocol::{Reply, Request, decode_line, encode_line};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let d = start_daemon(AppService::unavailable("x")).await;
+    let stream = tokio::net::UnixStream::connect(&d.socket).await.unwrap();
+    let (r, mut w) = stream.into_split();
+    let mut lines = BufReader::new(r).lines();
+    w.write_all(
+        encode_line(&Request::App {
+            request: AppRequest::Subscribe,
+        })
+        .as_bytes(),
+    )
+    .await
+    .unwrap();
+    let line = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
+        .await
+        .expect("应答不应挂起")
+        .unwrap()
+        .expect("连接仍开着");
+    match decode_line::<Reply>(&line).unwrap() {
+        Reply::App {
+            reply: AppReply::Failed { failure },
+        } => assert_eq!(failure.kind, AppErrorKind::Unavailable),
+        other => panic!("{other:?}"),
+    }
 }

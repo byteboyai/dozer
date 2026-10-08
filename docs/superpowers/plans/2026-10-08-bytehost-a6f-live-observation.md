@@ -74,16 +74,16 @@
 - Produces(`AppService`):`pub fn subscribe(&self) -> Option<tokio::sync::broadcast::Receiver<AppEvent>>`(`Unavailable` 状态返回 `None`)。
 - Consumes:`AppManager::events()`(已有)。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
   - `proto.rs`:`Subscribe` → `{"op":"subscribe"}`;`Subscribed`/`Resync`/`Changed{app}` → `{"reply":"subscribed"}`、`{"reply":"resync"}`、`{"reply":"changed","app":"excalidraw"}`;旧 `AppReply` JSON 仍能解析(已有用例不改)。
   - `app_requests.rs`(沿用 `start_daemon(apps)`):直接用 `UnixStream` 连 daemon 发 `Request::App{Subscribe}`,第一行是 `Reply::App{Subscribed}`;之后安装一个静态应用 → 同一连接收到 `Changed{app}`(超时 5s 失败);**同一连接**之后再发普通 `List` 请求仍得到应答(订阅不独占连接的读侧)。
   - 不可用的 `AppService::unavailable("x")`:`Subscribe` 得到 `Failed{kind: Unavailable}`,连接不挂。
   - 落后:用 `AppService` 级单测,把广播容量灌满后消费者收到 `Lagged`;服务端转发函数(见 Step 3)对 `Lagged` 产出 `Resync`——把"事件 → 应答行"的转换抽成纯函数 `fn change_reply(Result<AppEvent, RecvError>) -> Option<AppReply>` 单测:`Ok(e)` → `Changed{e.app()}`;`Lagged(_)` → `Resync`;`Closed` → `None`。
-- [ ] **Step 2: 确认失败 → Step 3: 实现**:
+- [x] **Step 2: 确认失败 → Step 3: 实现**:
   - `server.rs` 连接循环加 `let mut app_sub: Option<broadcast::Receiver<AppEvent>> = None;`,`Request::App{request: AppRequest::Subscribe}` 在进入 `apps.handle` **之前**拦截(`handle` 保持"一问一答",不要把流塞进去):`apps.subscribe()` 为 `Some(rx)` → `app_sub = Some(rx)` 并回 `Subscribed`;`None` → 回 `Failed{Unavailable}`。`select!` 增加一个 `if app_sub.is_some()` 的分支,调 `change_reply` 写出;`Closed` 时 `app_sub = None`。重复 `Subscribe` 覆盖旧订阅(不累加)。
   - `Progress` 事件也转成 `Changed`(GUI 重拉很便宜;不在推送里区分事件种类,避免两套真相)。
-- [ ] **Step 4: 通过** — `cargo test -p bytehost-apps --all-features proto`、`cargo test -p dozerd --test app_requests`、`cargo test -p dozerd app_service`。变异:删掉 `Lagged → Resync` 分支,纯函数单测失败。
-- [ ] **Step 5: Commit** — `feat(bytehost-apps,dozerd): push app changes as invalidation signals over a subscribed connection (A6f task 1)`。
+- [x] **Step 4: 通过** — `cargo test -p bytehost-apps --all-features proto`、`cargo test -p dozerd --test app_requests`、`cargo test -p dozerd app_service`。变异:删掉 `Lagged → Resync` 分支,纯函数单测失败。
+- [x] **Step 5: Commit** — `feat(bytehost-apps,dozerd): push app changes as invalidation signals over a subscribed connection (A6f task 1)`。
 
 ---
 
