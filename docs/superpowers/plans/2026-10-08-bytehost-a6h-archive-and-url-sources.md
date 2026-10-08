@@ -130,11 +130,11 @@
   pub fn validate_url(url: &str) -> Result<ParsedUrl, SourceError>;         // https only、无 userinfo、非空主机、无控制字符、≤2048
   pub fn normalize_sha256(s: &str) -> Result<String, SourceError>;          // trim + 小写 + 必须 64 位十六进制
   ```
-- `InstallPlan` 追加 `pub source_info: SourceInfo`(`#[serde(default)]`)。`ManagerError` 追加 `SourceNotAllowed(String)`(`Conflict`/`Unavailable` 之外新增类别映射为 `BadRequest`——沿用现有 `AppErrorKind` 里最接近的一个,不新增类别)与 `Archive(ArchiveError)`。
+- `InstallPlan` 追加 `pub source_info: SourceInfo`(`#[serde(default)]`)。`ManagerError` 追加 `SourceNotAllowed(String)`、`Source(SourceError)`、`Archive(ArchiveError)`;`kind()` 映射:前两者与归档里的 `UnsafeEntry/Duplicate/Bomb/NoManifest/TooLarge/Corrupt/Unsupported` → `AppErrorKind::Rejected`,`ArchiveError::Io`/下载 I/O → `Internal`(**不新增 `AppErrorKind` 变体**,那是 wire 枚举)。
 - `Core::install_plan`/`install` 改为:`policy_for(source)` → 生效的 `(provenance, trust)` 覆盖入参 → `stage_source(source, &staging)`(`LocalDir` = 现有 `copy_tree`;`Archive` = `archive::extract`;`Url` 留给 Task 3,本任务里先返回 `BadSource("URL 来源尚未启用")`)→ `read_package` → **若 `static_only` 且 `manifest.runtime` 不是 `StaticWeb` → `SourceNotAllowed("网络来源只能安装静态应用")`**(在出计划时就拒,不等到安装)。`SourceInfo` 在 `stage_source` 里填(`archive_sha256` 用 `digest::sha256_file`)。
 
 - [ ] **Step 1: 写失败测试**
-  - `source.rs`:`validate_url` 表驱动——`https://example.com/a.zip` 通过;`http://…`、`file:///…`、`ftp://…`、`https://u:p@host/…`、`https://` 无主机、含 `\n`/空格/控制字符、2049 字符、大写 `HTTPS://` 通过(scheme 大小写不敏感)、IP 字面量与端口通过但**拒绝 `localhost`/`127.0.0.1`/`::1`/`169.254.*`/`10.*` 等本机与内网地址?**——**不做**:本机服务器是合法测试/内网分发场景,留作已知局限(审批卡展示主机即可)。`normalize_sha256` 表驱动——大写、前后空白、63/65 位、非十六进制各一例。`policy_for`/`effective` 表驱动:客户端自报 `(Local, Trusted)` 的 `Url` → 生效 `(ThirdParty, Untrusted)`;`LocalDir` 自报 `(ThirdParty, Untrusted)` → 保留更严格的 `Untrusted`(**只升不降**)。
+  - `source.rs`:`validate_url` 表驱动——`https://example.com/a.zip` 通过;`http://…`、`file:///…`、`ftp://…`、`https://u:p@host/…`、`https://` 无主机、含 `\n`/空格/控制字符、2049 字符、大写 `HTTPS://` 通过(scheme 大小写不敏感)、带端口的 `https://example.com:8443/a.zip` 与 IP 字面量 `https://192.168.1.5/a.zip` 也通过(**不做**本机/内网地址过滤:内网分发与本机测试是合法场景,见已知局限,审批卡展示主机即可)。`normalize_sha256` 表驱动——大写、前后空白、63/65 位、非十六进制各一例。`policy_for`/`effective` 表驱动:客户端自报 `(Local, Trusted)` 的 `Url` → 生效 `(ThirdParty, Untrusted)`;`LocalDir` 自报 `(ThirdParty, Untrusted)` → 保留更严格的 `Untrusted`(**只升不降**)。
   - `manager.rs`(Review Focus 4、9):`Archive` zip 装静态应用成功,`list()` 里有该应用,`plan.source_info.kind == "archive"` 且 `archive_sha256` 等于 `sha256_file(zip)`;GitHub 风格 zip 成功且 `stripped_top_dir` 有值;`Archive` tar.gz 装 python 进程应用成功(缺 `python3` 则 `return`)——本机压缩包可装进程型;多顶层无清单 → 清楚的错误;**同一个 zip 先后改一个字节再装** → 摘要不符(`verify` 拒绝),旧审批对新内容无效;未知扩展名 → `BadSource`;相对路径 → `BadSource`(同 `LocalDir`);解压失败(恶意归档)后 `apps/` 下**没有** `.staging-*` 残留。
   - 兼容:旧形状 `InstallPlan` JSON(无 `source_info`)可解析、`verify` 在 `source_info` 默认值之间照常工作;`LocalDir` 的计划 `source_info.kind == "local_dir"`;现有全部 `LocalDir` 测试不改一行仍通过。
 - [ ] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p bytehost-apps --features server`;默认 feature 与依赖门禁)。变异:`effective` 改成"直接信客户端",Review Focus 4 的单测失败;去掉 `static_only` 检查,`Url`+python 的用例(Task 3 加入后)失败。
@@ -176,7 +176,7 @@
 
 **Files:** Modify `crates/dozerd/src/app_service.rs`(错误映射)、`crates/dozer-client/src/lib.rs`(无新请求,仅确认 `Plan`/`Install` 透传新 `AppSource`);Test: `app_service.rs` 的 `mod tests`、`crates/dozerd/tests/app_requests.rs`。
 
-- `AppSource::{Archive, Url}` 已随 `AppRequest::{Plan, Install}` 序列化,dozerd 无需新请求。要做的:`ManagerError::{SourceNotAllowed, Archive(..), Source(..)}` → `AppErrorKind`(用户可修正的输入问题映射到现有的 `BadRequest`/`InvalidInput` 类;I/O 类映射 `Internal`),错误文案**不带 URL 查询串**。生产的 `AppService` 用 `CurlFetcher`;测试钩子允许注入假 `Fetcher`(沿用 `finish_start_with` 的可选参数做法,不复制启动流程)。
+- `AppSource::{Archive, Url}` 已随 `AppRequest::{Plan, Install}` 序列化,dozerd 无需新请求。要做的:`ManagerError::{SourceNotAllowed, Archive(..), Source(..)}` → `AppErrorKind`(用户可修正的输入问题映射到现有的 `Rejected`;I/O 类映射 `Internal`),错误文案**不带 URL 查询串**。生产的 `AppService` 用 `CurlFetcher`;测试钩子允许注入假 `Fetcher`(沿用 `finish_start_with` 的可选参数做法,不复制启动流程)。
 
 - [ ] **Step 1: 写失败测试**
   - `app_service.rs`:各新错误类别的映射表驱动;`Plan{ source: Archive }` 经 `handle` 得到带 `source_info` 的计划;`Plan{ source: Url }` + 注入的假 fetcher 得到 `ThirdParty/Untrusted`;客户端在请求里自报 `Local/Trusted` → 回来的计划是 `ThirdParty/Untrusted`(Review Focus 4 的端到端版本)。
