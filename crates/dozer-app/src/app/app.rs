@@ -1774,8 +1774,11 @@ impl App {
         &mut self,
         webview_in_pool: impl Fn(AppSlot) -> bool,
     ) -> Vec<(String, [u8; 16])> {
-        self.store_removals
-            .take_ready(std::time::Instant::now(), webview_in_pool)
+        crate::app_webview::take_store_removals_ready(
+            &mut self.store_removals,
+            std::time::Instant::now(),
+            webview_in_pool,
+        )
     }
 
     /// 当前可见(未收起、未被另一侧放大盖住)的应用面板——左右两栏可以同时各显示一个应用面板。

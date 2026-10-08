@@ -207,22 +207,22 @@ dozer 侧改动:
   `AppOrigin::from_url` 里原来调用 `crate::app::valid_app_id(id)` → 改为 `bytehost_apps::id::AppId::new(id).is_ok()`(两者同口径:1–63 个 `[a-z0-9-]`、首尾非 `-`;**先写一个等价性测试**遍历边界样例确认二者一致,再替换)。因此 `bytehost-webview` 依赖 `bytehost-apps`(默认 feature)。
 - Stays in dozer:`is_app_webview_id`、`webview_id`、`slot_for_webview_id`、`AppViews`、`app_webview_spec`、`host_os_major`(objc2)、`take_ready` 的适配(`AppSlot::intern(id).is_some_and(..)` 包成闭包传入)。
 
-- [ ] **Step 1: 先写等价性测试与"向量钉死"测试**
+- [x] **Step 1: 先写等价性测试与"向量钉死"测试**
   在 `bytehost-webview` 写 `valid_app_id_matches_appid_new`(边界:空串、63/64 字符、首尾 `-`、大写、下划线、`a--b`)与 `data_store_identifier_vector_is_pinned`(**直接复制原测试里的向量**)。
 
-- [ ] **Step 2: 搬代码与全部原单测**
+- [x] **Step 2: 搬代码与全部原单测**
   把 `AppOrigin`、`data_store_identifier`、`AppIpc`、`new_ipc_nonce`、`app_init_script`、`supports_store_removal`、`StoreRemovalOutcome`、`StoreRemovals` 及其 `#[cfg(test)]` 用例原样搬到新 crate;`dozer-app` 的 `app_webview.rs` 改为 `use bytehost_webview::*` 并保留绑定部分。搬后用例数 = 搬前纯策略用例数(搬前先 `grep -c "#\[test\]"` 记数)。
 
-- [ ] **Step 3: 钉"只有一份"的门禁测试**
+- [x] **Step 3: 钉"只有一份"的门禁测试**
   `crates/dozer-app` 里加测试 `no_second_copy_of_the_navigation_policy`:读取 `src/` 下所有 `.rs`,断言字符串 `fn allows_navigation` 只在 `bytehost-webview` 里出现(测试读文件路径可相对 `CARGO_MANIFEST_DIR`;在 Task 7 拆仓后改为断言 dozer-app 源码里**没有** `fn allows_navigation`)。
 
-- [ ] **Step 4: 验证**
+- [x] **Step 4: 验证**
   Run: `cargo test -p bytehost-webview`、`cargo test -p dozer-app -- app_webview build_app_webview`(含 `build_app_webview_pins_the_restrictive_settings`)、`cargo clippy --all-targets`。
 
-- [ ] **Step 5: 变异验证**
+- [x] **Step 5: 变异验证**
   ① 把 `allows_navigation` 里主机比较改成不区分端口 → origin 用例失败;② 把 FNV `PRIME` 末位改 1 → 向量测试失败;③ 让 `AppIpc::parse` 忽略 nonce → nonce 用例失败。恢复。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
   ```bash
   git add crates/bytehost-webview crates/dozer-app Cargo.toml
   git commit -m "refactor(bytehost-webview,dozer-app): app webview security policy as a pure crate shared by wry and Tauri hosts (A7 task 3)"

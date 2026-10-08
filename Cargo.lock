@@ -835,6 +835,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bytehost-webview"
+version = "0.1.0"
+dependencies = [
+ "bytehost-apps",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "bytemuck"
 version = "1.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1927,6 +1936,7 @@ dependencies = [
  "bytegit",
  "bytehost-apps",
  "bytehost-client",
+ "bytehost-webview",
  "byteui",
  "calamine",
  "csv",
