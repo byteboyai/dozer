@@ -155,7 +155,7 @@
   - Review Focus 5:安装命令输出含 `\x1b[32m` 进度条与 6000 字符的单行 → 通过 `Logs` 读回时已清洗、封顶(这条放进 Task 4 的用例,这里只确认 `summary` 本身不含输出)。
 - [x] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p bytehost-apps --all-features`;所有 `Transitions` 实现者——生产的 `AppTransitions` 与测试里的 `Rec`——都要补方法,编译器会指出)。变异:把 `install_failed` 改回只调 `failed`,manager 用例失败。
 - [x] **Step 5: live 用例**(`process_apps_live.rs`,`#[ignore]`):装一个 `command = ["python3","server.py"]` 且声明了一个**必然失败的依赖安装**的应用(node 样例:`package-lock.json` 引用不存在的包;python 样例用 `uv.lock` 需要 uv,若无 uv 则只跑 node 版)→ `Start` 后 `list` 里出现 `Failed` + `DependencyInstall`,`Logs` 含安装器的错误输出。如实记录运行结果。
-- [ ] **Step 6: Commit** — `feat(bytehost-apps,dozer-app): dependency-install failures get their own issue page (A6f task 3)`。
+- [x] **Step 6: Commit** — `feat(bytehost-apps,dozer-app): dependency-install failures get their own issue page (A6f task 3)`。
 
 ---
 
@@ -204,7 +204,7 @@
 - [x] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p dozer-app app_logs app_host settings_apps`、`cargo test -p bytehost-apps --all-features logs`;`cargo clippy -p dozer-app --all-targets` 无新警告)。变异:去掉 `loaded` 的"只接收在途"守卫,迟到用例失败;让刷新回到 `Loading`,保留旧文本用例失败。
 - [x] **Step 5: 视图**:查看器用系统默认字体,`truncated` 时顶部一行"只显示末尾若干行";自动滚到底(iced `scrollable` 的 `snap_to`,**仅当用户没有手动上滚时**——用 `scrollable::on_scroll` 记录是否贴底,不贴底则保持位置)。
 - [ ] **Step 6: 手动验收**(需要 GUI,如实记录):`py-notes` 运行中,在设置→应用里点「日志」,另开终端 `curl` 触发应用打印,日志在 ~1s 内出现新行;关闭设置页后用 `lsof`/日志确认不再有 `Logs` 请求;上滚后新行到来不被拉回底部。
-- [ ] **Step 7: Commit** — `feat(dozer-app): live-refreshing log viewer shared by the app panel and the settings page (A6f task 4)`。
+- [x] **Step 7: Commit** — `feat(dozer-app): live-refreshing log viewer shared by the app panel and the settings page (A6f task 4)`。
 
 ---
 
@@ -214,10 +214,10 @@
 
 报告结构(**§1/§3 由执行时按实际运行填写,不得预填;测试通过也要给出命令与实测耗时**):§0 环境;§1 自动化(`cargo test -p bytehost-apps --all-features`、`-p dozerd`(含 `process_apps_live -- --ignored`)、`-p dozer-client`、`-p dozer-app` 的结果与已知无关失败逐个注明);§2 GUI 手工项(Task 2 Step 5、Task 4 Step 6,未执行保持未勾选);§3 发现的缺陷与已知局限。
 
-- [ ] **Step 1: live 回归**:`cargo test -p dozerd --test process_apps_live -- --ignored --nocapture` 连跑 3 遍;A6e 修正后的 11 步必须仍通过(推送不得改变其行为);**审查报告里每个耗时是否合理**——A6e 曾因接受网关错误页正文而假通过,任何"快得不可能"的步骤都要追到根因。
-- [ ] **Step 2: CLAUDE.md** `bytehost-apps` 一行补:A6f 落地——`AppRequest::Subscribe` 推送"失效信号"(`Changed{app}`/`Resync`,不带状态,GUI 收到即重拉 `List`;订阅连接独立,轮询降为 30s 兜底,断开回 2s 并退避重订阅)、`AppIssue::DependencyInstall`(经 `Transitions::install_failed`,先记 issue 再改状态)、共享日志查看器 `extensions/app_logs.rs`(1s 刷新、保留旧文本、只接收在途结果,设置页每行可看)。规格 §7 表加 A6f 一行,并写明 A6g(升级与回滚)、A6h(非本机来源)待写计划,容器运行时继续推迟。
-- [ ] **Step 3: 全量**:`cargo test -p bytehost-apps -p dozerd -p dozer-client -p dozer-app`(已知无关的偶发/确定失败:`files::tests::delete_confirm_spec_reflects_pending_target`、`memory::tests::list_orders_by_updated_ms_desc`、`app_service::tests::the_first_run_is_unavailable_when_the_port_cannot_be_saved`——如仍存在逐个注明,不要顺手改)、`cargo clippy --all-targets`(A6f 触碰的文件无新警告)、`cargo fmt --check`、两个门禁脚本。
-- [ ] **Step 4: Commit** — `docs(bytehost): A6f landed`。
+- [x] **Step 1: live 回归**:`cargo test -p dozerd --test process_apps_live -- --ignored --nocapture` 连跑 3 遍;A6e 修正后的 11 步必须仍通过(推送不得改变其行为);**审查报告里每个耗时是否合理**——A6e 曾因接受网关错误页正文而假通过,任何"快得不可能"的步骤都要追到根因。
+- [x] **Step 2: CLAUDE.md** `bytehost-apps` 一行补:A6f 落地——`AppRequest::Subscribe` 推送"失效信号"(`Changed{app}`/`Resync`,不带状态,GUI 收到即重拉 `List`;订阅连接独立,轮询降为 30s 兜底,断开回 2s 并退避重订阅)、`AppIssue::DependencyInstall`(经 `Transitions::install_failed`,先记 issue 再改状态)、共享日志查看器 `extensions/app_logs.rs`(1s 刷新、保留旧文本、只接收在途结果,设置页每行可看)。规格 §7 表加 A6f 一行,并写明 A6g(升级与回滚)、A6h(非本机来源)待写计划,容器运行时继续推迟。
+- [x] **Step 3: 全量**:`cargo test -p bytehost-apps -p dozerd -p dozer-client -p dozer-app`(已知无关的偶发/确定失败:`files::tests::delete_confirm_spec_reflects_pending_target`、`memory::tests::list_orders_by_updated_ms_desc`、`app_service::tests::the_first_run_is_unavailable_when_the_port_cannot_be_saved`——如仍存在逐个注明,不要顺手改)、`cargo clippy --all-targets`(A6f 触碰的文件无新警告)、`cargo fmt --check`、两个门禁脚本。
+- [x] **Step 4: Commit** — `docs(bytehost): A6f landed`。
 
 ---
 
