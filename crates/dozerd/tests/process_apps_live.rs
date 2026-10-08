@@ -16,14 +16,18 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use bytehost_apps::gateway::GatewayConfig;
+use bytehost_apps::gateway::{Gateway, GatewayConfig};
 use bytehost_apps::id::AppId;
 use bytehost_apps::manager::MonitorConfig;
 use bytehost_apps::plan::{Approval, Provenance, TrustLevel};
 use bytehost_apps::proto::{AppErrorKind, AppIssue, AppReply, AppRequest, AppSource, AppSummary};
 use bytehost_apps::registry::UninstallMode;
+use bytehost_apps::runtime::managed::fetch::FetchMeta;
+use bytehost_apps::runtime::managed::{Fetcher, RuntimeManager};
 use bytehost_apps::state::ObservedState;
 use dozerd::app_service::AppService;
 
@@ -1069,4 +1073,448 @@ async fn python_sample_upgrade_and_rollback() {
     );
     let _ = (port2, token2, port3, token3);
     svc.shutdown().await;
+}
+
+// ===== A6h Task 6:压缩包来源与 URL 来源的端到端验收(真运行时,默认 `#[ignore]`) =====
+//
+// 覆盖:
+//   1. 把样例**现场**打成 zip 与 tar.gz(临时目录,不提交二进制),经 `Plan(Archive)` → `Install`
+//      → `Start`,验证 A6e 里与来源无关的核心几步(令牌门、SSE、计数跨重启、崩溃重启)同样成立;
+//   2. 恶意压缩包(zip-slip、符号链接)经 `AppService` 被拒,且**数据根目录之外没有新文件**
+//      (对测试根的父目录前后快照比较);
+//   3. `Url` 来源:用假 `Fetcher` 注入静态应用 zip,走完 Plan→Install→Start→经 gateway 取到页面;
+//      同一假 fetcher 供给进程型(Node)应用 → 出计划即被拒。
+
+/// 把一个源码目录打成 `.tar.gz`(用系统 `tar`;生产代码绝不调它,这里只是造测试输入)。
+///
+/// 打成**单一顶层目录**形态(`<name>/...`):这是 GitHub 风格、也是解压器明确支持的形态。
+/// (`tar -C src .` 会产生 `./` 与 `./file` 条目,解压器按设计拒绝含 `.` 段的路径——测试因此
+/// 不用那种形态,详见报告"已知局限"。)
+///
+/// `--no-mac-metadata` 关掉 macOS bsdtar 的 AppleDouble(`._*`)伴随文件:它们会在归档根部
+/// 多出条目、破坏"唯一顶层目录"的判定。真实用户若用会带 `._` 的工具打包,宁可先在解压层
+/// 拒绝(见报告"已知局限"),测试这里打成干净形态以聚焦来源流程。
+fn pack_targz(src: &Path, out: &Path) {
+    let name = src.file_name().unwrap().to_string_lossy().into_owned();
+    let parent = src.parent().unwrap();
+    let status = std::process::Command::new("/usr/bin/tar")
+        .args(["--no-mac-metadata", "-czf"])
+        .arg(out)
+        .arg("-C")
+        .arg(parent)
+        .arg(&name)
+        .status()
+        .unwrap();
+    assert!(status.success(), "打 tar.gz 失败:{out:?}");
+}
+
+/// 把一个源码目录打成 `.zip`(用系统 `zip`;同上,单一顶层目录形态)。
+fn pack_zip(src: &Path, out: &Path) {
+    let name = src.file_name().unwrap().to_string_lossy().into_owned();
+    let parent = src.parent().unwrap();
+    let status = std::process::Command::new("/usr/bin/zip")
+        .env("COPYFILE_DISABLE", "1")
+        .args(["-r", "-q", "-X", "--symlinks"])
+        .arg(out)
+        .arg(&name)
+        .current_dir(parent)
+        .status()
+        .unwrap();
+    assert!(status.success(), "打 zip 失败:{out:?}");
+}
+
+/// 把样例拷成可写副本并(可选)改 manifest;与 `stage` 相同,但结果仍是目录(供打包)。
+fn copy_sample(sample: &Sample, mutate_manifest: impl Fn(String) -> String) -> PathBuf {
+    let src = samples_dir().join(sample.name);
+    let dst = std::env::temp_dir().join(format!(
+        "pack-{}-{}",
+        sample.name,
+        std::process::id() as u64 ^ nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&dst);
+    copy_dir(&src, &dst);
+    let manifest = std::fs::read_to_string(dst.join("manifest.toml")).unwrap();
+    std::fs::write(dst.join("manifest.toml"), mutate_manifest(manifest)).unwrap();
+    dst
+}
+
+/// 递归收集一棵树的 `相对路径 -> 类型`;用于比较"根目录之外有没有新文件"。
+/// 不引入 `walkdir`(计划里的手段提示),用一个小小的本地递归即可。
+fn snapshot_tree(root: &Path) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    fn walk(base: &Path, dir: &Path, out: &mut std::collections::BTreeSet<String>) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            let rel = path
+                .strip_prefix(base)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .into_owned();
+            let ft = entry.file_type().unwrap();
+            if ft.is_dir() {
+                out.insert(format!("d {rel}"));
+                walk(base, &path, out);
+            } else if ft.is_symlink() {
+                out.insert(format!("l {rel}"));
+            } else {
+                out.insert(format!("f {rel}"));
+            }
+        }
+    }
+    walk(root, root, &mut out);
+    out
+}
+
+/// 假来源下载器:把给定字节"下载"到目标;`effective_url` 可配(默认与请求同 URL)。
+struct TestFetcher {
+    bytes: Vec<u8>,
+    effective_url: Option<String>,
+    calls: AtomicUsize,
+}
+
+impl TestFetcher {
+    fn new(bytes: Vec<u8>) -> Arc<Self> {
+        Arc::new(Self {
+            bytes,
+            effective_url: None,
+            calls: AtomicUsize::new(0),
+        })
+    }
+}
+
+impl Fetcher for TestFetcher {
+    fn fetch(
+        &self,
+        url: &str,
+        dest: &Path,
+        on_progress: &mut dyn FnMut(u64, Option<u64>),
+        cancel: &AtomicBool,
+    ) -> std::io::Result<()> {
+        self.fetch_meta(url, dest, 0, on_progress, cancel)
+            .map(|_| ())
+    }
+
+    fn fetch_meta(
+        &self,
+        url: &str,
+        dest: &Path,
+        _max_bytes: u64,
+        _on_progress: &mut dyn FnMut(u64, Option<u64>),
+        _cancel: &AtomicBool,
+    ) -> std::io::Result<FetchMeta> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        std::fs::write(dest, &self.bytes)?;
+        Ok(FetchMeta {
+            effective_url: self
+                .effective_url
+                .clone()
+                .unwrap_or_else(|| url.to_string()),
+            bytes: self.bytes.len() as u64,
+        })
+    }
+}
+
+/// 起一个只跑 AppManager、注入假来源下载器的服务(沿用 `finish_start_with_sources` 这个跨 crate 测试钩子)。
+async fn start_with_fetcher(root: &Path, fetcher: Arc<dyn Fetcher>) -> Arc<AppService> {
+    let gateway = Arc::new(Gateway::start(GatewayConfig { port: 0 }).await.unwrap());
+    let rm = Arc::new(RuntimeManager::new(root.join("runtimes")));
+    AppService::finish_start_with_sources(root, gateway, rm, None, Some(fetcher)).await
+}
+
+/// 用给定来源安装一个应用(受理与安装都与是否压缩包/URL 无关)。
+async fn install_source(svc: &AppService, source: AppSource) {
+    let reply = svc
+        .handle(AppRequest::Plan {
+            source: source.clone(),
+            provenance: Provenance::Local,
+            trust: TrustLevel::Trusted,
+        })
+        .await
+        .unwrap();
+    let AppReply::Plan { plan } = reply else {
+        panic!("{reply:?}")
+    };
+    let approved = plan.approve(Approval {
+        approver: "live-test".into(),
+        approved_ms: 1,
+    });
+    let done = svc
+        .handle(AppRequest::Install {
+            approved: Box::new(approved),
+            source,
+        })
+        .await
+        .unwrap();
+    assert_eq!(done, AppReply::Done);
+}
+
+/// 压缩包来源(zip 与 tar.gz 各一次)安装真 python 样例,验证 A6e 核心几步仍成立。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "需要真 python3;人工运行时删除 --ignored"]
+async fn archive_sourced_python_app_end_to_end() {
+    assert!(
+        have("python3"),
+        "缺少 python3 —— 本用例要求真运行时,不静默跳过"
+    );
+
+    for (label, pack) in [
+        ("tar.gz", pack_targz as fn(&Path, &Path)),
+        ("zip", pack_zip as fn(&Path, &Path)),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("bytehost");
+        let svc = AppService::start_with_monitor_for_test(
+            &root,
+            GatewayConfig { port: 0 },
+            MonitorConfig {
+                interval: Duration::from_millis(300),
+                timeout: Duration::from_millis(400),
+                failures: 3,
+            },
+        )
+        .await;
+
+        // 现场打包(临时目录,不进仓库)。
+        let src = copy_sample(&PY, |m| m);
+        let archive = tmp.path().join(format!("py-notes.{label}"));
+        pack(&src, &archive);
+
+        let app = id("py-notes");
+        install_source(
+            &svc,
+            AppSource::Archive {
+                path: archive.clone(),
+            },
+        )
+        .await;
+        svc.handle(AppRequest::Start { id: app.clone() })
+            .await
+            .unwrap();
+        wait_running_async(&svc, &app, 20).await;
+
+        // 令牌门:带 Cookie 200、无 Cookie 403 且计数不变。
+        let (port, token) = launch(&svc, &app).await;
+        let count_before = read_counter(&root, &app);
+        let ok = request(&app, port, &Req::get("/").cookie(&token));
+        assert_eq!(ok.status, 200, "[{label}] {:?}", ok.body);
+        let no_cookie = request(&app, port, &Req::get("/"));
+        assert_eq!(no_cookie.status, 403, "[{label}] 无令牌应 403");
+        assert_eq!(read_counter(&root, &app), count_before, "[{label}]");
+
+        // SSE:1.5s 内收到 ≥ 3 条 tick。
+        let ticks = read_sse(&app, port, &token, 3, Duration::from_millis(1500));
+        assert!(
+            ticks.len() >= 3,
+            "[{label}] SSE 应流式收到 ≥3 条 tick,实得 {ticks:?}"
+        );
+
+        // 计数持久化:同源 POST /hit → 1;崩溃重启后仍是 1。
+        let own_origin = format!("http://{}", host_for(&app, port));
+        let hit = request(
+            &app,
+            port,
+            &Req::post("/hit").cookie(&token).origin(&own_origin),
+        );
+        assert_eq!(hit.status, 200, "[{label}] {:?}", hit.body);
+        assert_eq!(read_counter(&root, &app), 1, "[{label}] 计数应为 1");
+        let old_pid = request(&app, port, &Req::get("/pid").cookie(&token)).body;
+        assert!(
+            is_pid(&old_pid),
+            "[{label}] 崩溃前应拿到真实 pid:{old_pid:?}"
+        );
+        let _ = request(&app, port, &Req::get("/crash").cookie(&token));
+        let (port2, token2) = wait_new_pid_async(&svc, &app, &old_pid, 20).await;
+        let new_pid = request(&app, port2, &Req::get("/pid").cookie(&token2)).body;
+        assert!(
+            is_pid(&new_pid) && new_pid != old_pid,
+            "[{label}] 崩溃后应换一个新进程:{new_pid:?}"
+        );
+        assert_eq!(read_counter(&root, &app), 1, "[{label}] 计数应跨重启保留");
+
+        svc.handle(AppRequest::Uninstall {
+            id: app.clone(),
+            mode: UninstallMode::ProgramAndData,
+        })
+        .await
+        .unwrap();
+        svc.shutdown().await;
+    }
+}
+
+/// 恶意压缩包被拒,且数据根目录之外没有新文件。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "需要 /usr/bin/tar;人工运行时删除 --ignored"]
+async fn hostile_archives_are_refused_with_no_files_outside_the_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let parent = tmp.path().join("parent");
+    std::fs::create_dir_all(&parent).unwrap();
+    let root = parent.join("bytehost");
+    let svc = AppService::start_with(&root, GatewayConfig { port: 0 }).await;
+
+    // 快照"根的父目录":任何越界的写入都会出现在这里。
+    let before = snapshot_tree(&parent);
+
+    // a) zip-slip:`../evil.txt`。
+    let stage = tmp.path().join("slip-stage");
+    std::fs::create_dir_all(stage.join("child")).unwrap();
+    std::fs::write(stage.join("evil.txt"), b"x").unwrap();
+    let slip = tmp.path().join("slip.tar.gz");
+    let status = std::process::Command::new("/usr/bin/tar")
+        .args(["-czf"])
+        .arg(&slip)
+        .arg("-C")
+        .arg(stage.join("child"))
+        .arg("../evil.txt")
+        .status()
+        .unwrap();
+    assert!(status.success());
+    // 先证明这个包确实含越界条目(否则测试会假通过)。
+    let listing = std::process::Command::new("/usr/bin/tar")
+        .args(["-tf"])
+        .arg(&slip)
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&listing.stdout).contains(".."),
+        "造的包应含 `..` 条目:{:?}",
+        String::from_utf8_lossy(&listing.stdout)
+    );
+    let err = svc
+        .handle(AppRequest::Plan {
+            source: AppSource::Archive { path: slip },
+            provenance: Provenance::Local,
+            trust: TrustLevel::Trusted,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, AppErrorKind::Rejected, "zip-slip 应被拒:{err:?}");
+
+    // b) 符号链接。
+    let link_stage = tmp.path().join("link-stage");
+    std::fs::create_dir_all(&link_stage).unwrap();
+    std::fs::write(
+        link_stage.join("manifest.toml"),
+        "schema_version = 1\nmin_host_version = \"0.1.0\"\nid = \"evil\"\nname = \"Evil\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("/etc/passwd", link_stage.join("link")).unwrap();
+    let link = tmp.path().join("link.tar.gz");
+    pack_targz(&link_stage, &link);
+    let err = svc
+        .handle(AppRequest::Plan {
+            source: AppSource::Archive { path: link },
+            provenance: Provenance::Local,
+            trust: TrustLevel::Trusted,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, AppErrorKind::Rejected, "符号链接应被拒:{err:?}");
+
+    // 两次拒绝后,根的父目录应与快照完全一致(无 `evil.txt`、无 `/etc/passwd` 落盘、无残留)。
+    let after = snapshot_tree(&parent);
+    assert_eq!(before, after, "数据根目录之外不得出现任何新文件/目录");
+    assert!(
+        !parent.join("evil.txt").exists(),
+        "zip-slip 不得在根外写文件"
+    );
+
+    svc.shutdown().await;
+}
+
+/// URL 来源:假 Fetcher 供静态应用 zip → Plan/Install/Start/取页面;
+/// 同一假 fetcher 供进程型(Node)应用 → 出计划即被拒(网络来源只允许静态应用)。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "需要真 node;人工运行时删除 --ignored"]
+async fn url_sourced_static_app_runs_and_a_process_app_is_rejected() {
+    // 1) 静态应用 zip → 能装能跑能取页面。
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("bytehost");
+    let src = tmp.path().join("static-src");
+    std::fs::create_dir_all(src.join("web")).unwrap();
+    std::fs::write(
+        src.join("manifest.toml"),
+        r#"schema_version = 1
+min_host_version = "0.1.0"
+id = "net-static"
+name = "Net Static"
+version = "1.0.0"
+
+[presentation]
+entrypoint = "main"
+
+[entrypoints.main]
+type = "web"
+path = "/"
+title = "Net Static"
+
+[runtime]
+kind = "static_web"
+source = "web/"
+"#,
+    )
+    .unwrap();
+    std::fs::write(src.join("web/index.html"), "<h1>hello-from-url</h1>").unwrap();
+    let zip = tmp.path().join("static.zip");
+    pack_zip(&src, &zip);
+    let bytes = std::fs::read(&zip).unwrap();
+    let fetcher = TestFetcher::new(bytes);
+    let svc = start_with_fetcher(&root, fetcher.clone()).await;
+
+    let app = id("net-static");
+    install_source(
+        &svc,
+        AppSource::Url {
+            url: "https://example.com/static.zip".into(),
+            sha256: None,
+        },
+    )
+    .await;
+    assert_eq!(fetcher.calls.load(Ordering::SeqCst), 1, "出计划下载一次");
+    svc.handle(AppRequest::Start { id: app.clone() })
+        .await
+        .unwrap();
+    wait_running_async(&svc, &app, 20).await;
+    let (port, token) = launch(&svc, &app).await;
+    let page = get_page(&app, port, &token);
+    assert!(
+        page.contains("hello-from-url"),
+        "URL 来源的静态应用页面应可取到:{page:?}"
+    );
+    svc.handle(AppRequest::Uninstall {
+        id: app.clone(),
+        mode: UninstallMode::ProgramAndData,
+    })
+    .await
+    .unwrap();
+    svc.shutdown().await;
+
+    // 2) 进程型(Node)应用 zip 走 URL 来源 → 出计划即被拒。
+    assert!(have("node"), "缺少 node —— 本用例要求真运行时,不静默跳过");
+    let tmp2 = tempfile::tempdir().unwrap();
+    let root2 = tmp2.path().join("bytehost");
+    let nsrc = copy_sample(&NODE, |m| m);
+    let nzip = tmp2.path().join("node.zip");
+    pack_zip(&nsrc, &nzip);
+    let nbytes = std::fs::read(&nzip).unwrap();
+    let svc2 = start_with_fetcher(&root2, TestFetcher::new(nbytes)).await;
+    let err = svc2
+        .handle(AppRequest::Plan {
+            source: AppSource::Url {
+                url: "https://example.com/node.zip".into(),
+                sha256: None,
+            },
+            provenance: Provenance::Local,
+            trust: TrustLevel::Trusted,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, AppErrorKind::Rejected, "{err:?}");
+    assert!(
+        err.message.contains("静态应用"),
+        "报文应说明只允许静态应用:{err}"
+    );
+    svc2.shutdown().await;
 }
