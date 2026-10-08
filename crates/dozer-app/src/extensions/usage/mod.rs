@@ -32,6 +32,10 @@ pub struct WorkspaceState {
     /// HEAD 可达提交按 UTC 提交日的逐日计数,供"每日行为统计"折线图用。
     /// 键是 `day_index_from_ms` 同口径的 UTC 日索引;窗口外/非 git 仓库为空。
     git_commits_by_day: BTreeMap<i64, u64>,
+    /// 已发出的最新一次刷新的代数(每次 `begin_refresh` 加一)。`Loaded` 带着发起时的代数回来,
+    /// 代数比这个小的就是被更新的刷新取代了的过期结果,`update` 直接丢弃——同一项目快速切入两次会
+    /// 并发两次刷新,较慢的旧结果后到时不能覆盖新结果(host 的 `with_project` 只按项目路由,不去重)。
+    refresh_generation: u64,
 }
 
 impl WorkspaceState {
@@ -57,6 +61,13 @@ impl WorkspaceState {
     /// 立即标记"统计中",不等 `spawn_refresh` 的异步结果落地才置真。
     pub fn set_loading(&mut self, loading: bool) {
         self.loading = loading;
+    }
+
+    /// 发起一次刷新:置“统计中”并返回这次刷新的代数,调用方把它带进 `spawn_refresh`。
+    pub fn begin_refresh(&mut self) -> u64 {
+        self.loading = true;
+        self.refresh_generation += 1;
+        self.refresh_generation
     }
 
     /// 有没有数据可展示 agent 筛选栏(`list_pane`)——加载中/还没数据时
@@ -109,11 +120,13 @@ impl WebviewPushState {
 /// `usage::on_activate` 自动刷新,不再需要面板内按钮。
 #[derive(Debug, Clone)]
 pub enum Message {
-    /// 第三字段是项目 git 提交总数(供"Git提交"格),第四字段是每日提交计数
+    /// 第二字段是发起这次刷新时的代数(见 `WorkspaceState::refresh_generation`)。
+    /// 第四字段是项目 git 提交总数(供"Git提交"格),第五字段是每日提交计数
     /// (供"每日行为统计"折线图)——两者都与 transcript 用量无关,顺手在同一个
     /// 刷新任务里算掉,避免再加一条异步链路。
     Loaded(
         i64,
+        u64,
         Vec<(ConversationMeta, ConversationUsage)>,
         u64,
         BTreeMap<i64, u64>,
@@ -130,7 +143,11 @@ pub enum Message {
 
 pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
     match msg {
-        Message::Loaded(_, rows, git_commits, git_commits_by_day) => {
+        Message::Loaded(_, generation, rows, git_commits, git_commits_by_day) => {
+            if generation < ws_state.refresh_generation {
+                // 被更新的刷新取代了:丢弃,且不动 `loading`(新的还在路上)。
+                return;
+            }
             ws_state.rows = rows;
             ws_state.git_commits = git_commits;
             ws_state.git_commits_by_day = git_commits_by_day;
@@ -154,6 +171,7 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
 /// 整条跳过、不计入汇总)。
 pub fn spawn_refresh(
     project_id: i64,
+    generation: u64,
     project_path: PathBuf,
     client: &dozer_client::Client,
     handle: &tokio::runtime::Handle,
@@ -185,6 +203,7 @@ pub fn spawn_refresh(
         .unwrap_or((0, BTreeMap::new()));
         emit(Message::Loaded(
             project_id,
+            generation,
             rows,
             git_commits,
             git_commits_by_day,
@@ -204,8 +223,10 @@ pub fn on_activate(
     let Some(path) = ctx.project_path.clone() else {
         return;
     };
+    let generation = state.begin_refresh();
     spawn_refresh(
         ctx.project_id,
+        generation,
         path,
         ctx.io.client(),
         ctx.io.handle(),
@@ -669,7 +690,7 @@ mod tests {
         )];
         update(
             &mut ws_state,
-            Message::Loaded(1, rows.clone(), 42, Default::default()),
+            Message::Loaded(1, 0, rows.clone(), 42, Default::default()),
         );
         assert!(!ws_state.loading());
         assert_eq!(ws_state.rows(), rows.as_slice());
@@ -972,6 +993,87 @@ mod tests {
             rx.recv_timeout(TIMEOUT).unwrap(),
             Message::Loaded(7, ..)
         ));
+    }
+
+    fn rows_of(n: usize) -> Vec<(ConversationMeta, ConversationUsage)> {
+        (0..n)
+            .map(|i| {
+                (
+                    meta(AgentKind::Claude, &format!("r{i}")),
+                    ConversationUsage::default(),
+                )
+            })
+            .collect()
+    }
+
+    /// G3b:同一项目快速切入两次会发起两次刷新;较早发起的那次后到时,不能覆盖较新的结果。
+    #[test]
+    fn a_stale_refresh_arriving_late_does_not_overwrite_the_newer_one() {
+        let mut state = WorkspaceState::default();
+        let first = state.begin_refresh();
+        let second = state.begin_refresh();
+        update(
+            &mut state,
+            Message::Loaded(1, second, rows_of(2), 5, Default::default()),
+        );
+        update(
+            &mut state,
+            Message::Loaded(1, first, rows_of(1), 9, Default::default()),
+        );
+        assert_eq!(state.rows().len(), 2, "较早发起的刷新后到,必须被丢弃");
+        assert_eq!(state.git_commits(), 5);
+        assert!(!state.loading());
+    }
+
+    /// 较旧的结果先到、较新的还在路上:不能把“统计中”提前清掉,也不能展示旧数据。
+    #[test]
+    fn a_stale_refresh_arriving_first_keeps_loading_until_the_newest_lands() {
+        let mut state = WorkspaceState::default();
+        let first = state.begin_refresh();
+        let second = state.begin_refresh();
+        update(
+            &mut state,
+            Message::Loaded(1, first, rows_of(1), 9, Default::default()),
+        );
+        assert!(state.loading());
+        assert!(state.rows().is_empty());
+        update(
+            &mut state,
+            Message::Loaded(1, second, rows_of(2), 5, Default::default()),
+        );
+        assert!(!state.loading());
+        assert_eq!(state.rows().len(), 2);
+    }
+
+    /// 同一代数的结果照常应用(单次刷新的正常路径)。
+    #[test]
+    fn the_latest_refresh_is_applied() {
+        let mut state = WorkspaceState::default();
+        let only = state.begin_refresh();
+        update(
+            &mut state,
+            Message::Loaded(1, only, rows_of(3), 0, Default::default()),
+        );
+        assert_eq!(state.rows().len(), 3);
+    }
+
+    /// 真实切入两次:两次发出的 `Loaded` 代数必须递增(host 路由不负责去重,代数是面板自己的)。
+    #[test]
+    fn each_activation_issues_a_newer_generation() {
+        let rt = runtime();
+        let (ctx, rx) = offline_ctx::<Message>(&rt, 7, Some(std::env::temp_dir()));
+        let mut state = WorkspaceState::default();
+        on_activate(&mut state, Some(&ctx));
+        on_activate(&mut state, Some(&ctx));
+        let mut gens = Vec::new();
+        for _ in 0..2 {
+            match rx.recv_timeout(TIMEOUT).unwrap() {
+                Message::Loaded(7, generation, ..) => gens.push(generation),
+                other => panic!("意外消息: {other:?}"),
+            }
+        }
+        gens.sort_unstable();
+        assert_eq!(gens, vec![1, 2]);
     }
 
     #[test]

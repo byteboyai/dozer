@@ -179,28 +179,38 @@ fn s5_webview_rebuild_resends_the_same_content() {
     );
 }
 
-/// S6:较早的结果后到 → 面板无法识别过期;跨项目结果面板自己也不区分。
+/// S6a(G3b 已修复,2026-10-08):较早发起的刷新后到 → 面板自己按代数丢弃,不再覆盖新结果。
 #[test]
-fn s6_characterizes_g3_panel_cannot_tell_stale_results() {
+fn s6_stale_refresh_is_dropped_by_the_panel_itself() {
     let mut host = ProbeHost::new(PROJECT);
+    let first = host.ws.begin_refresh();
+    let second = host.ws.begin_refresh();
     let newer = Message::Loaded(
         PROJECT,
+        second,
         vec![row(AgentKind::Claude, 1), row(AgentKind::Codex, 2)],
         0,
         BTreeMap::new(),
     );
-    let older = Message::Loaded(PROJECT, vec![row(AgentKind::Claude, 1)], 0, BTreeMap::new());
+    let older = Message::Loaded(
+        PROJECT,
+        first,
+        vec![row(AgentKind::Claude, 1)],
+        0,
+        BTreeMap::new(),
+    );
     host.deliver(newer);
     host.deliver(older);
-    assert_eq!(
-        host.ws.rows().len(),
-        1,
-        "缺口 G3:后到的旧结果覆盖了新结果——Loaded 没有序号/revision,面板自己无从判断;修复后应翻转本测试"
-    );
+    assert_eq!(host.ws.rows().len(), 2, "较早发起的刷新后到必须被面板丢弃");
+}
 
-    // 跨项目:host 的 `with_project` 负责丢弃;面板 `update` 本身不看 project_id。
+/// S6b:跨项目路由仍由 host 负责;面板 `update` 本身不看 project_id(缺口 G3a)。
+#[test]
+fn s6_characterizes_g3a_panel_does_not_check_the_project_id() {
+    let mut host = ProbeHost::new(PROJECT);
     host.deliver(Message::Loaded(
         99,
+        0,
         vec![row(AgentKind::Claude, 1)],
         0,
         BTreeMap::new(),
@@ -209,12 +219,12 @@ fn s6_characterizes_g3_panel_cannot_tell_stale_results() {
     let mut bare = usage::WorkspaceState::default();
     usage::update(
         &mut bare,
-        Message::Loaded(99, vec![row(AgentKind::Claude, 1)], 0, BTreeMap::new()),
+        Message::Loaded(99, 0, vec![row(AgentKind::Claude, 1)], 0, BTreeMap::new()),
     );
     assert_eq!(
         bare.rows().len(),
         1,
-        "缺口 G3:没有 host 路由时,面板会收下任何项目的结果"
+        "缺口 G3a:没有 host 路由时,面板会收下任何项目的结果;修复后应翻转本测试"
     );
 }
 

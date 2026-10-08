@@ -354,6 +354,7 @@ mod tests {
             &mut ws,
             Message::Loaded(
                 1,
+                0,
                 vec![(meta_at(AgentKind::Claude, 0), usage(1))],
                 0,
                 Default::default(),
@@ -375,6 +376,7 @@ mod tests {
             &mut ws,
             Message::Loaded(
                 1,
+                0,
                 vec![(meta_at(AgentKind::Claude, 0), usage(3))],
                 7,
                 Default::default(),
@@ -403,6 +405,7 @@ mod tests {
             &mut ws,
             Message::Loaded(
                 1,
+                0,
                 vec![(meta_at(AgentKind::Claude, 0), usage(3))],
                 0,
                 Default::default(),
@@ -425,6 +428,7 @@ mod tests {
             &mut ws,
             Message::Loaded(
                 1,
+                0,
                 vec![
                     (meta_at(AgentKind::Codebuddy, 0), token_usage(1)),
                     (meta_at(AgentKind::Claude, 0), token_usage(1)),
@@ -455,6 +459,7 @@ mod tests {
             &mut ws,
             Message::Loaded(
                 1,
+                0,
                 vec![(meta_at(AgentKind::Claude, 0), usage(1))],
                 0,
                 Default::default(),

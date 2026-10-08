@@ -39,7 +39,7 @@
 | G1 | webview 的身份/几何/入站/出站全是 host 里按 `PanelKind::Usage` 写死的一整套,缺通用"面板 webview 表面"契约 | `FramePush`、`DowngradeReady`、`ParseIpcAndMarkReady` 三项均"面板不能自己做"(§2);`FakeSurface` 只需 attach/detach/receive 三个动作即可模拟 | **CONFIRMED**(夹具只证明了契约的形状;几何、nonce、CSP 的真实代价**未验证**) |
 | G2 | 推送是每帧声明式比较,逻辑在 `App` 上 | `drift_guard_tick_mirrors_take_usage_content_script` 通过:`ProbeHost::tick` 必须手抄 8 步顺序;面板只提供 `WebviewPushState` 的去重 | **CONFIRMED** |
 | G3a | 跨项目路由("只对对应项目生效")在 host | `s6_characterizes_g3_*`:面板 `update` 收下 project_id=99 的结果;夹具里是 `ProbeHost::deliver` 丢弃;真实 `with_project`(app/app.rs:1626)按 project_id 找 Workspace | **CONFIRMED** |
-| G3b | 过期结果(同一项目、较早发起的刷新后到)由 host 丢弃 | 同一测试:后到的旧 `Loaded` 覆盖新结果。**读 `with_project`:它只按 project_id 找 Workspace 再应用,没有序号/revision 检查——host 也不丢弃** | **REFUTED(原假设错)——这是一个真实的生产缺陷,不是"职责放错了地方"**:快速切入 Usage、离开、再切入会发起两次 `spawn_refresh`,较慢的第一次后到时会覆盖较新的数据。该缺陷由 S6 在面板层面钉住;修复需要给 `Loaded` 加序号或在 host 路由处去重 |
+| G3b | 过期结果(同一项目、较早发起的刷新后到)由 host 丢弃 | 同一测试:后到的旧 `Loaded` 覆盖新结果。**读 `with_project`:它只按 project_id 找 Workspace 再应用,没有序号/revision 检查——host 也不丢弃** | **REFUTED(原假设错)——这是一个真实的生产缺陷,不是"职责放错了地方"**:快速切入 Usage、离开、再切入会发起两次 `spawn_refresh`,较慢的第一次后到时会覆盖较新的数据。**已修复(分支 `fix/usage-stale-refresh`):`Loaded` 带刷新代数,面板 `update` 丢弃代数低于最新的结果;S6 已翻转为 `s6_stale_refresh_is_dropped_by_the_panel_itself`,跨项目部分保留为 `s6_characterizes_g3a_*`** |
 | G4 | 数据服务是具体 `Client`,无接缝;错误被吞 | `s4_characterizes_g4_service_failure_looks_like_no_data`:`HangUp` 与 `ErrorReply` 都得到 `empty` payload;fake UDS 是不改生产代码的唯一手段(`FakeDozerd` 讲真实协议,零改动可用) | **CONFIRMED** |
 | G5 | `Message` 混有只能由 host 处理的变体 | 两个 `s7_characterizes_g5_*` 的 `should_panic("由内核拦截处理")` 均成立 | **CONFIRMED** |
 | G6 | `ConversationMeta`/`AgentKind` 属 O7 | 依赖边表有 `C` 类 2 项:`conversation::ConversationMeta`(6 次)、`dozer_core::protocol`(7 次) | **CONFIRMED** |
@@ -90,7 +90,7 @@
 
 1. **H8 不做全量动态化**,缩小为补齐下列四块契约(按收益排序):
    - **面板 webview 表面契约**(G1/G2):身份、几何、入站事件、出站推送。对应上面"约 4 个能力域"里的第 3、4 项,也是最大的一块。
-   - **面板结果路由契约**(G3a/G3b):给面板的异步结果带"项目 + 序号",让过期/跨项目判断可以在契约层完成。**其中 G3b 是现存的生产缺陷,与是否做 H8 无关,可以单独修。**
+   - **面板结果路由契约**(G3a/G3b):给面板的异步结果带"项目 + 序号",让过期/跨项目判断可以在契约层完成。**其中 G3b 是现存的生产缺陷,已单独修复(见 G3b 行);G3a 仍需契约。**
    - **数据服务接缝与降级约定**(G4,即 Q6):区分"没有数据"与"取数失败";引入接缝**需改生产代码,探针未做**。
    - **通用 UI helper 归位**(G8/B 类):`agent_icon`/`agent_dot_color` 等从 `workspace` 挪到 SDK/byteui。
    - 另:把 host 专属变体(`ToggleListCollapse`/`Hover`)从面板 `Message` 里分离(G5)。
