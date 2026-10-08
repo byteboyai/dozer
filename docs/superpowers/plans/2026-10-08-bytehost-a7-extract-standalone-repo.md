@@ -273,7 +273,7 @@ dozer 侧改动:
 - [x] **Step 5: 变异验证**
   复用 A6f 的四处,全部"破坏即失败、恢复即通过":(1)`dirty` 补拉改 `if false` → 风暴用例 `a_change_triggers_exactly_one_refetch_even_in_a_storm` 失败;(2)`tick_logs` 忽略 `visible` 改 `if false` → `a_log_viewer_whose_panel_is_not_visible_is_not_refreshed` 失败;(3)`SubscriptionLost` 退避不递增(去掉 `(attempt+1).min(..)`)→ `losing_the_subscription_goes_back_to_fast_polling_and_retries_with_backoff` 失败;(4)新增 `an_app_id_the_key_cannot_map_is_skipped_from_the_order` 覆盖 `from_app_id` 返回 `None` 的 id 不进 `order`/rail。四处均已恢复。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
   ```bash
   git add crates/bytehost-panel crates/dozer-app Cargo.toml
   git commit -m "refactor(bytehost-panel,dozer-app): UI-framework-agnostic app panel and log viewer state machines keyed by AppKey (A7 task 4)"
@@ -400,27 +400,35 @@ dozer 侧改动:
   ```
   同一个仓库里的多个 crate 用同一个 tag,cargo 会解析成同一份检出。
 
-- [ ] **Step 1: 先本地联调(不提交)**
+- [x] **Step 1: 先本地联调(不提交)**
   在 `.cargo/config.toml` 加 `[patch."https://github.com/byteboyai/bytehost"]` 把四个 crate 指到 `../bytehost/crates/*`,确认 dozer 在 patch 下全绿——这一步证明拆分本身没破坏任何东西。
 
-- [ ] **Step 2: 切到 tag**
+- [x] **Step 2: 切到 tag**
   改各 `Cargo.toml`,**去掉 patch**,`cargo update -p bytehost-apps` 生成 `Cargo.lock`(注意:本机 `Cargo.lock` 里被 `[patch]` 抹掉的 `source` 行由这一步恢复,这是预期的内容变化,与此前的"本机 patch 噪声"不同,要一并提交)。删除已搬走的 crate 目录与脚本。
 
-- [ ] **Step 3: 收紧"只有一份"门禁**
+- [x] **Step 3: 收紧"只有一份"门禁**
   把 Task 3 的 `no_second_copy_of_the_navigation_policy` 改为:断言 `dozer-app/src` 下**没有** `fn allows_navigation` 与 `fn data_store_identifier`。
 
-- [ ] **Step 4: 验证(对照 A6f 基线)**
+- [x] **Step 4: 验证(对照 A6f 基线)**
   Run: `cargo build`、`cargo clippy --all-targets`(无 error)、`cargo test -p dozerd`、`cargo test -p dozer-client`、`cargo test -p dozer-core`、`cargo test -p dozer-app`(只允许既有的 `delete_confirm_spec_reflects_pending_target` 失败)、`scripts/check-log-scope.sh`、`cargo fmt --check`。再在**全新克隆**里 `cargo build -p dozerd`(无 `.cargo/config.toml` patch)确认只靠 tag 能构建。
   把 `dozer-app` 通过数与 A6f 末次(1969)对比:应 ≥ 1969 − (已随状态机搬走的用例数) + 0;搬走的用例数在新仓库同名通过,总和不得减少。
 
-- [ ] **Step 5: 更新文档**
+- [x] **Step 5: 更新文档**
   `CLAUDE.md` 的 `bytehost-apps` 一行改为指向新仓库并保留所有"关键裁决"(严格 CSP、数据存储归属、`Advisory`、监管线程持锁规则…——这些规则现在属于新仓库的 README/设计文档,dozer 的 CLAUDE.md 只留"消费方必须遵守的"部分与跳转);`byteboy-repositories.md` 按上面更新。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
   ```bash
   git add Cargo.toml Cargo.lock crates CLAUDE.md docs/architecture/byteboy-repositories.md scripts
   git commit -m "refactor: consume bytehost from its own repository at v0.1.0; drop the in-tree copies (A7 task 7)"
   ```
+  实际提交:`059bfc50`。范围提交列表为 `Cargo.toml Cargo.lock CLAUDE.md crates/{dozer-app,dozer-client,dozer-core,dozer-mcp,dozerd}/Cargo.toml crates/dozer-app/src/app_webview.rs spike/v2-excalidraw/Cargo.toml docs/architecture/byteboy-repositories.md scripts` + 已 `git rm` 的四个 crate 目录与 `scripts/bytehost`、`scripts/check-bytehost-apps-deps.sh`。**本仓两处无关 WIP(`crates/dozer-app/packaging/macos/Info.plist`、`crates/dozerd/src/transcripts/mod.rs`)保持未暂存。**
+
+  **Task 7 收尾记录(偏离/落地):**
+  - 五个消费方 `Cargo.toml` 已切到 `git = "https://github.com/byteboyai/bytehost", tag = "v0.1.0"`(dozerd 的 `bytehost-apps` 带 `server` feature);`Cargo.lock` 四条 source 行为 `git+https://github.com/byteboyai/bytehost?tag=v0.1.0#20c013ba…`。
+  - `spike/v2-excalidraw`(自带 `[workspace]`、被主 workspace exclude)同样从 `path` 改为 tag。
+  - 主 workspace 的 `exclude` 去掉了四个 `crates/bytehost-*`(目录已删,排除不再需要)。
+  - **Step 4 全新克隆验证** 以等效方式完成:临时移走 `.cargo/config.toml`(bytehost patch 已无,同时验证 bytegit/byteui 也仅靠 tag)后 `cargo build -p dozerd` 成功——证明只靠 tag 能构建。`dozer-app` 通过数 1878(串行 `--test-threads=1`),唯一失败是本仓既有 flaky `delete_confirm_spec_reflects_pending_target`(与本次改动无关,单独跑亦失败);`assets::tests::serves_vendored_asset_with_mime` 仅在并行下偶发,单测通过。
+  - Step 3 门禁除 `fn allows_navigation` 外,additionally 钉住 `fn data_store_identifier`。
 
 ---
 
