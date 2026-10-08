@@ -247,6 +247,11 @@ impl State {
                 Vec::new()
             }
             Message::LogsLoaded(slot, result) => {
+                // 只接收仍在等的那次读取:用户已收起、或应用已离开崩溃态(状态被复位)时,
+                // 迟到的结果不能把日志重新打开或留作陈旧内容。
+                if self.logs.get(&slot) != Some(&LogsView::Loading) {
+                    return Vec::new();
+                }
                 let view = match result {
                     Ok((text, truncated)) => LogsView::Loaded { text, truncated },
                     Err(failure) => LogsView::Failed(failure.text().to_owned()),
@@ -1052,6 +1057,51 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(s.logs_view(a), LogsView::Hidden);
+    }
+
+    #[test]
+    fn a_late_logs_result_after_hiding_does_not_reopen_the_viewer() {
+        let mut s = State::default();
+        let a = slot("logs-late-hide");
+        loaded(&mut s, vec![app("logs-late-hide", failed("崩了"))], &[]);
+        s.update(Message::ShowLogs(a), Instant::now(), &[]);
+        s.update(Message::HideLogs(a), Instant::now(), &[]);
+        s.update(
+            Message::LogsLoaded(a, Ok(("late".into(), false))),
+            Instant::now(),
+            &[],
+        );
+        assert_eq!(s.logs_view(a), LogsView::Hidden);
+    }
+
+    #[test]
+    fn a_late_logs_result_after_the_app_recovered_is_dropped_not_kept_stale() {
+        let mut s = State::default();
+        let a = slot("logs-late-recover");
+        loaded(&mut s, vec![app("logs-late-recover", failed("崩了"))], &[]);
+        s.update(Message::ShowLogs(a), Instant::now(), &[]);
+        // 应用恢复运行:状态复位。
+        loaded(
+            &mut s,
+            vec![app("logs-late-recover", ObservedState::Running)],
+            &[],
+        );
+        s.update(
+            Message::LogsLoaded(a, Ok(("stale".into(), false))),
+            Instant::now(),
+            &[],
+        );
+        assert_eq!(s.logs_view(a), LogsView::Hidden);
+        // 下一次崩溃再点「查看日志」要重新读,而不是显示旧内容。
+        loaded(
+            &mut s,
+            vec![app("logs-late-recover", failed("又崩了"))],
+            &[],
+        );
+        assert_eq!(
+            s.update(Message::ShowLogs(a), Instant::now(), &[]),
+            vec![Effect::FetchLogs(a, 200)]
+        );
     }
 
     #[test]
