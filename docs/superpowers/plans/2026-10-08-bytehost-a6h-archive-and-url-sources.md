@@ -88,15 +88,17 @@
   ```
 - 实现要点:**先遍历全部条目元数据做校验**(路径规则、类型、重复键、条目数、声明的未压缩总量),再逐个写出;写出时用**实际读到的字节数**累计并随时对 `max_file`/`max_total`/压缩比设防(不信任头部声明的大小);目标路径用 `into.join(规范化相对路径)`,写之前再确认其父目录仍在 `into` 之下(`canonicalize` 比较);文件只以 `create_new` 打开;解压后权限统一为 `0o644`(目录 `0o755`),**不继承归档里的 setuid/可执行位**。顶层目录剥离在校验阶段决定。
 
-- [ ] **Step 1: 写失败测试**(用 `zip`/`tar` crate 在测试里**造恶意归档**,不要提交二进制 fixture)
+- [x] **Step 1: 写失败测试**(用 `zip`/`tar` crate 在测试里**造恶意归档**,不要提交二进制 fixture)
   - 正常:根上 `manifest.toml` + `web/index.html` 的 zip 与 tar.gz 都能解出,内容一致;GitHub 风格(唯一顶层 `app-1.0/`)被剥层,`stripped_top_dir == Some("app-1.0")`;多个顶层目录且根上无清单 → `NoManifest`。
   - Review Focus 1:条目名 `../evil`、`a/../../evil`、`/abs/evil`、`C:\evil`、`web\..\..\evil`、`a//b`、`./a`、含 NUL → 各一个用例,全部 `UnsafeEntry`;**断言 `into` 的父目录(用 `tempdir` 套一层)里没有新文件**。
   - Review Focus 2:zip 里符号链接条目(`unix_permissions` 设 `S_IFLNK`)、tar 里 symlink / hardlink / 字符设备 / FIFO 条目 → `UnsafeEntry`,且 `into` 被清空。
   - Review Focus 3:① 一个声明 2 GiB 的条目(头部撒谎的变体:头部写 10 字节、实际流 100 MiB)→ 写到超限那一刻中止(断言**磁盘上已写出的字节数 < max_file + 一个块**);② 20,001 个空文件 → `TooLarge("entries")`;③ 高压缩比(1 MiB 全零 deflate 出 ~1 KiB,重复到解压量 > 64 MiB)→ `Bomb`。
   - 其它:同一路径出现两次 → `Duplicate`;仅大小写不同(`Web/a` 与 `web/a`)→ `Duplicate`;非 UTF-8 条目名(tar)→ `UnsafeEntry`;路径深度 33 → `TooLarge("depth")`;压缩包本身 > `max_archive` → `TooLarge("archive")`(用小的自定义 `Limits` 测,别真造 200 MiB);损坏的 zip/gz → `Corrupt`;扩展名不认识 → `ArchiveKind::from_path` 为 `None`;`into` 非空 → `Io`/拒绝。
   - 权限:归档里 `0o4755`(setuid)的文件解出后模式是 `0o644`。
-- [ ] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p bytehost-apps --features server archive`;`cargo test -p bytehost-apps`(默认 feature)与 `scripts/check-bytehost-apps-deps.sh`;`cargo tree -p bytehost-apps` 默认 feature 下**不含** `zip`/`flate2`/`tar`)。变异:去掉路径含 `..` 的检查,Review Focus 1 的用例必须失败;把"实际字节累计"改成只信头部声明,炸弹用例失败;去掉 `Duplicate` 的小写折叠,大小写用例失败。
-- [ ] **Step 5: Commit**(`Cargo.toml`/`Cargo.lock` 的依赖变化与代码同一提交)— `feat(bytehost-apps): hardened zip and tar.gz extraction for untrusted archives (A6h task 1)`。
+- [x] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p bytehost-apps --features server archive`;`cargo test -p bytehost-apps`(默认 feature)与 `scripts/check-bytehost-apps-deps.sh`;`cargo tree -p bytehost-apps` 默认 feature 下**不含** `zip`/`flate2`/`tar`)。变异:去掉路径含 `..` 的检查,Review Focus 1 的用例必须失败;把"实际字节累计"改成只信头部声明,炸弹用例失败;去掉 `Duplicate` 的小写折叠,大小写用例失败。
+- [x] **Step 5: Commit**(`Cargo.toml`/`Cargo.lock` 的依赖变化与代码同一提交)— `feat(bytehost-apps): hardened zip and tar.gz extraction for untrusted archives (A6h task 1)`。
+
+> **实现追记(2026-10-08,`ecc8cce0`)**:Step 1 的用例覆盖了全部 Review Focus,但与原文有个别手段差异——① zip 符号链接用 `ZipWriter::add_symlink` 造(用 `start_file` + `unix_permissions` 无法表达,`unix_permissions` 会把 mode 与 `0o777`,丢掉 `S_IFLNK` 位);② 重复路径用例直接测纯函数 `plan_entries`(zip/tar 写入器本身即拒绝重复名,无法造出重复名归档);③ "setuid 位"用例改为"归档给 `0o755`、解出恒为 `0o644`"(同因 `unix_permissions` 会丢弃 setuid 位),断言的是同一性质(不继承归档模式位);④ 声明总量超 `max_total` 现在会**提前拒绝**(复用 `declared` 字段),实际字节累计仍是主防线。`Cargo.lock` 未提交(本地 `[patch]` 路径覆盖会改其 source 行)。
 
 ---
 
