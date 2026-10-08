@@ -2,6 +2,8 @@
 //! 只在测试里存在;放在 host 一侧而不是 `extensions/`,因为它扮演的是 host。
 
 mod fake_dozerd;
+mod fake_panel_host;
+mod surface;
 
 use dozer_core::protocol::{AgentKind, ConversationSummary, UsagePayload};
 use std::collections::BTreeSet;
