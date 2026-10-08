@@ -155,12 +155,12 @@
 - `Core::rollback(&self, id) -> Result<(), ManagerError>`:`guard()` → `rollback_locked(.., reason: "用户手动回滚", automatic: false, ..)`;`previous_version == None` → `NoPreviousVersion`(`NotFound`);`RollbackEscalates` → `Conflict`;其余状态门槛同 `stop`(`Busy` 视为 `Conflict`)。
 - `Client::app_rollback(&self, id: AppId) -> Result<()>`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
   - `proto.rs`:`Rollback` 序列化 `{"op":"rollback","id":"..."}`;`AppSummary` 新字段缺省时旧 JSON 照常解析、有值时形状固定。
   - `manager.rs`:装 1.0.0、1.1.0 → `rollback` 成功:`current_version == 1.0.0`、`previous_version == None`、`last_rollback.automatic == false`、1.1.0 包目录已清;**再次 `rollback`** → `NoPreviousVersion`(Review Focus 7);首次安装的应用 `rollback` → 同样;回滚会提升权限 → `RollbackEscalates` 且状态完全未变(逐字段比较前后记录);应用原本 `Running` → 回滚后仍 `Running`(新旧版本内容可区分);`list()` 的 `previous_version`/`rollback_note` 随之变化。
   - `app_service.rs`:`Rollback` 各错误类别映射(`NoPreviousVersion` → `NotFound`,`RollbackEscalates`/`Busy` → `Conflict`);`app_requests.rs`:经真实 UDS 走一遍 install → install → `Rollback` → `List`。
-- [ ] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p bytehost-apps --all-features`、`cargo test -p dozerd app_service`、`cargo test -p dozerd --test app_requests`、`cargo test -p dozer-client`)。
-- [ ] **Step 5: Commit** — `feat(bytehost-apps,dozerd,dozer-client): manual rollback request (A6g task 3)`。
+- [x] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p bytehost-apps --all-features`、`cargo test -p dozerd app_service`、`cargo test -p dozerd --test app_requests`、`cargo test -p dozer-client`)。
+- [x] **Step 5: Commit** — `feat(bytehost-apps,dozerd,dozer-client): manual rollback request (A6g task 3)`。
 
 ---
 

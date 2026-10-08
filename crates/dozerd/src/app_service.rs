@@ -216,6 +216,9 @@ impl AppService {
             AppRequest::Stop { id } => blocking(manager, move |m| m.stop(&id))
                 .await
                 .map(|()| AppReply::Done),
+            AppRequest::Rollback { id } => blocking(manager, move |m| m.rollback(&id))
+                .await
+                .map(|()| AppReply::Done),
             AppRequest::Uninstall { id, mode } => {
                 blocking(manager, move |m| m.uninstall(&id, mode))
                     .await
@@ -584,6 +587,7 @@ source = "web/"
             AppRequest::List,
             AppRequest::ProbeRuntimes,
             AppRequest::Stop { id: id("a") },
+            AppRequest::Rollback { id: id("a") },
         ] {
             let failure = svc.handle(req).await.unwrap_err();
             assert_eq!(failure.message, "原因 X");
@@ -971,6 +975,55 @@ source = "web/"
             .await
             .unwrap_err()
             .kind,
+            AppErrorKind::NotFound
+        );
+        // 回滚一个没装的应用 / 没有上一版的应用都是 NotFound。
+        assert_eq!(
+            svc.handle(AppRequest::Rollback { id: id("ghost") })
+                .await
+                .unwrap_err()
+                .kind,
+            AppErrorKind::NotFound
+        );
+        svc.shutdown().await;
+    }
+
+    /// 手动回滚经线上协议走通:装两版 → `Rollback` → `List` 反映回滚后的版本与记录。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_rollback_request_restores_the_previous_version_over_the_wire() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc =
+            AppService::start_with(&tmp.path().join("bytehost"), GatewayConfig { port: 0 }).await;
+        install(&svc, write_app(&tmp.path().join("src/v1"), "site", "V1")).await;
+        // 第二版:同 id、版本提到 1.1.0。
+        let v2 = tmp.path().join("src/v2");
+        write_app(&v2, "site", "V2");
+        let manifest = std::fs::read_to_string(v2.join("manifest.toml"))
+            .unwrap()
+            .replace("version = \"1.0.0\"", "version = \"1.1.0\"");
+        std::fs::write(v2.join("manifest.toml"), manifest).unwrap();
+        install(&svc, AppSource::LocalDir { path: v2.clone() }).await;
+
+        assert_eq!(
+            svc.handle(AppRequest::Rollback { id: id("site") })
+                .await
+                .unwrap(),
+            AppReply::Done
+        );
+        let AppReply::Apps { apps } = svc.handle(AppRequest::List).await.unwrap() else {
+            panic!("expected apps")
+        };
+        let row = apps.into_iter().find(|r| r.id == id("site")).unwrap();
+        assert_eq!(row.version, bytehost_apps::id::Version::new(1, 0, 0));
+        assert_eq!(row.previous_version, None);
+        let note = row.rollback_note.unwrap();
+        assert!(!note.automatic);
+        // 再回滚:上一版已消耗。
+        assert_eq!(
+            svc.handle(AppRequest::Rollback { id: id("site") })
+                .await
+                .unwrap_err()
+                .kind,
             AppErrorKind::NotFound
         );
         svc.shutdown().await;

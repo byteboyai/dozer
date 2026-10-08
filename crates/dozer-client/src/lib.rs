@@ -256,6 +256,11 @@ impl Client {
         self.app_expect_done(AppRequest::Stop { id }).await
     }
 
+    /// 手动回滚到上一版(仅当有可回滚的上一版时可用;回滚不得提升权限)。
+    pub async fn app_rollback(&self, id: AppId) -> Result<()> {
+        self.app_expect_done(AppRequest::Rollback { id }).await
+    }
+
     pub async fn app_uninstall(&self, id: AppId, mode: UninstallMode) -> Result<()> {
         self.app_expect_done(AppRequest::Uninstall { id, mode })
             .await

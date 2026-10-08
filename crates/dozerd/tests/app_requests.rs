@@ -175,6 +175,65 @@ async fn the_whole_install_run_stop_uninstall_cycle_works_over_the_socket() {
     assert_eq!(runtimes.len(), 3);
 }
 
+/// 手动回滚经真实 UDS + `dozer-client` 走一遍:装两版 → `app_rollback` → `app_list` 反映旧版本。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rollback_request_restores_the_previous_version_over_uds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let apps =
+        AppService::start_with(&tmp.path().join("bytehost"), GatewayConfig { port: 0 }).await;
+    let d = start_daemon(apps).await;
+    let c = &d.client;
+
+    let v1 = write_app(&tmp.path().join("src/v1"), "site", "OLD");
+    let plan = c
+        .app_plan(v1.clone(), Provenance::Local, TrustLevel::Trusted)
+        .await
+        .unwrap();
+    c.app_install(
+        plan.approve(Approval {
+            approver: "t".into(),
+            approved_ms: 1,
+        }),
+        v1,
+    )
+    .await
+    .unwrap();
+
+    let v2_dir = tmp.path().join("src/v2");
+    let v2 = write_app(&v2_dir, "site", "NEW");
+    let manifest = std::fs::read_to_string(v2_dir.join("manifest.toml"))
+        .unwrap()
+        .replace("version = \"1.0.0\"", "version = \"1.1.0\"");
+    std::fs::write(v2_dir.join("manifest.toml"), manifest).unwrap();
+    let plan = c
+        .app_plan(v2.clone(), Provenance::Local, TrustLevel::Trusted)
+        .await
+        .unwrap();
+    c.app_install(
+        plan.approve(Approval {
+            approver: "t".into(),
+            approved_ms: 1,
+        }),
+        v2,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        c.app_list().await.unwrap()[0].version,
+        bytehost_apps::id::Version::new(1, 1, 0)
+    );
+
+    c.app_rollback(id("site")).await.unwrap();
+    let listed = c.app_list().await.unwrap();
+    assert_eq!(listed[0].version, bytehost_apps::id::Version::new(1, 0, 0));
+    assert_eq!(listed[0].previous_version, None);
+    assert!(!listed[0].rollback_note.as_ref().unwrap().automatic);
+
+    let err = c.app_rollback(id("site")).await.unwrap_err();
+    let failure = err.downcast_ref::<AppFailure>().expect("带类别的失败");
+    assert_eq!(failure.kind, AppErrorKind::NotFound);
+}
+
 /// 应用宿主不可用(例如端口被占)不能影响会话等其他功能:其他请求照常工作,应用请求带着原因失败。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unavailable_app_host_does_not_break_the_rest_of_the_daemon() {
