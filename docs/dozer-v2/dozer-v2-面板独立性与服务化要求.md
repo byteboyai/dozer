@@ -177,4 +177,4 @@ Host（窗口 / 布局 / 焦点 / 浮层 / 主题 / 面板 Registry）
 
 12. **bytehost H7a 已完成（2026-10-04）：** 引入 `PanelCatalog`（描述符 + 默认布局 + 旧布局迁移钩子，构造时校验）与 Dozer 组合根 `product::dozer_catalog()`；`PanelKind::default_side()`、`RailLayout::default()`、图标栏的 `panel_meta`、`sanitize_rail_layout` 的“恰 12 个”校验不再写死面板名单，改由清单驱动（O5 落地）。落盘格式不变（`PanelKind` 仍序列化为枚举名，已有黄金测试）。`PanelKind` 换成 `PanelId`、把切入钩子放进清单两项留给 H7b/H8，理由见设计文档 §3.4 补注。
 
-13. **O12 Usage 探针已完成（2026-10-08）：** 能跑,但需要 host 提供 7 项面板自己做不了、且目前没有契约的能力(webview 表面、结果路由、host 专属消息拦截等);面板本体已独立,缺口集中在 host 围栏。夹具 `crates/dozer-app/src/usage_probe/`(仅测试),报告 `docs/dozer-v2/bytehost-H0/07-usage-probe-gaps.md`。
+13. **O12 Usage 探针已完成（2026-10-08）：** 能跑,但 host 需提供约 4 个能力域(结果路由、host 专属消息拦截、逐帧推送与 ready 生命周期、IPC 识别;夹具共记录 9 条职责);面板本体已独立,缺口集中在 host 围栏。另发现现存缺陷 G3b(过期刷新结果会覆盖新数据,host 也不去重)。夹具 `crates/dozer-app/src/usage_probe/`(仅测试),报告 `docs/dozer-v2/bytehost-H0/07-usage-probe-gaps.md`。
