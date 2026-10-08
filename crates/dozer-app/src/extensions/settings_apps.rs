@@ -533,6 +533,7 @@ impl State {
     }
 
     /// 有展开着的日志查看器吗(调用方据此决定要不要排下一次 `Tick`)。
+    #[cfg(test)]
     pub fn log_tick_wanted(&self) -> bool {
         self.expanded_log.is_some()
     }
@@ -866,6 +867,10 @@ pub fn observed_label(state: &ObservedState) -> String {
 
 /// 一行"回滚过"的持久说明(A6g):自动回滚点出原因,手动回滚只说落到哪版。
 pub fn rollback_note_label(note: &RollbackNote) -> String {
+    // 因权限提升而跳过的自动回滚:`from == to`,没有发生回滚,别说"回滚到"。
+    if note.from == note.to {
+        return format!("未自动回滚:{}", note.reason);
+    }
     if note.automatic {
         format!("已从 {} 自动回滚到 {}:{}", note.from, note.to, note.reason)
     } else {
@@ -1820,6 +1825,18 @@ mod tests {
             ..auto.clone()
         };
         assert_eq!(rollback_note_label(&manual), "已回滚到 1.0.0");
+        // 权限提升导致的跳过:from == to,不得写成"回滚到同一版本"。
+        let skipped = RollbackNote {
+            from: Version::new(2, 0, 0),
+            to: Version::new(2, 0, 0),
+            reason: "回滚到上一版需要更高权限".into(),
+            automatic: true,
+            at_ms: 0,
+        };
+        assert_eq!(
+            rollback_note_label(&skipped),
+            "未自动回滚:回滚到上一版需要更高权限"
+        );
     }
 
     #[test]
