@@ -1852,14 +1852,14 @@ impl App {
     /// 执行状态机吐出的副作用:发请求(结果经 `proxy` 回到 `Message::AppHost`)、同步 rail、写/清
     /// 启动地址、弹 Toast。**启动地址是秘密,不写日志。**
     fn run_app_host_effects(&mut self, effects: Vec<crate::extensions::app_host::Effect>) {
-        use crate::extensions::app_host::{Act, Effect, Failure, Message as M};
+        use crate::extensions::app_host::{Act, Effect, Message as M};
         use bytehost_client::AppHostApi;
         for effect in effects {
             match effect {
                 Effect::FetchList => {
                     let (client, proxy) = (self.client.clone(), self.proxy.clone());
                     self.handle.spawn(async move {
-                        let result = client.app_list().await.map_err(Failure::from);
+                        let result = client.app_list().await;
                         let _ = proxy.send_event(Message::AppHost(M::ListLoaded(result)));
                     });
                 }
@@ -1869,7 +1869,7 @@ impl App {
                     };
                     let (client, proxy) = (self.client.clone(), self.proxy.clone());
                     self.handle.spawn(async move {
-                        let result = client.app_launch_url(id).await.map_err(Failure::from);
+                        let result = client.app_launch_url(id).await;
                         let _ =
                             proxy.send_event(Message::AppHost(M::LaunchUrlLoaded(slot, result)));
                     });
@@ -1888,8 +1888,7 @@ impl App {
                         let result = match act {
                             Act::Start => client.app_start(id).await.map(|_url| ()),
                             Act::Stop => client.app_stop(id).await,
-                        }
-                        .map_err(Failure::from);
+                        };
                         let _ =
                             proxy.send_event(Message::AppHost(M::ActionDone(slot, act, result)));
                     });
@@ -1903,7 +1902,7 @@ impl App {
                     };
                     let (client, proxy) = (self.client.clone(), self.proxy.clone());
                     self.handle.spawn(async move {
-                        let result = client.app_logs(id, max_lines).await.map_err(Failure::from);
+                        let result = client.app_logs(id, max_lines).await;
                         let _ = proxy.send_event(Message::AppHost(M::LogsLoaded(slot, result)));
                     });
                 }
@@ -1946,7 +1945,8 @@ impl App {
                         ),
                     ));
                 }
-                Effect::Toast { level, text, key } => {
+                Effect::Notice { level, text, key } => {
+                    let level = crate::extensions::app_host::notice_level(level);
                     self.push_toast_keyed(LOG, level, text, &key);
                 }
             }

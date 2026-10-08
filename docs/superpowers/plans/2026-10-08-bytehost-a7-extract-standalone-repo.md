@@ -255,26 +255,30 @@ dozer 侧改动:
   方法签名与原 `State` 完全一致(`poll_wanted`、`poll_interval`、`poll_if_due`、`subscribe_if_due`、`update`、`tick_logs(now, visible)`、`any_logs_open(visible)`、`take_log_scroll`、`view_model`、`logs_view`、`display_name`……),仅 `AppSlot`→`K`。
 - Stays in dozer:`impl AppKey for AppSlot`(`from_app_id` = `AppSlot::intern(id.as_str())`,`app_id` = `self.id()`);`NoticeLevel→toast::Level` 的映射;`scroll_id()`(iced 的 `widget::Id`);全部 iced 视图。
 
-- [ ] **Step 1: 测试替身键与"键适配"测试(先红)**
-  在 `bytehost-panel` 写测试用 `#[derive(Clone,Copy,PartialEq,Eq,Hash,Debug)] struct TestKey(u8)` 的 `AppKey` 实现(用小表映射 id)。在 `dozer-app` 写 `app_slot_implements_appkey`:`AppSlot::intern("a")` 往返、非法 id → `None`。
+- [x] **Step 1: 测试替身键与"键适配"测试(先红)**
+  在 `bytehost-panel` 写测试用 `#[derive(Clone,Copy,PartialEq,Eq,Hash,Debug)] struct TestKey(u8)` 的 `AppKey` 实现(用一张 up-to-256 的常量表映射 id)。在 `dozer-app` 写 `app_slot_implements_appkey`:`AppSlot::intern("a")` 往返、`AppKey::app_id` 往返。(`AppSlot::intern` 与 `bytehost_apps::AppId::new` 同口径,非法形状两边都拒,无法构造"`AppId` 认得但 `AppSlot` 认不得"的 id,故非法 id → `None` 的分支由 `TestKey` 侧覆盖。)
 
-- [ ] **Step 2: 搬 `app_logs.rs` 的状态机**
+- [x] **Step 2: 搬 `app_logs.rs` 的状态机**
   `LogsState` 等整体搬入 `logs.rs`;`scroll_id` 留在 dozer 的 `app_logs.rs`(薄文件:`pub fn scroll_id`)。原 9 个 `app_logs` 用例搬走并通过。
 
-- [ ] **Step 3: 搬 `app_host.rs` 的状态机并泛型化**
-  `State`→`PanelState<K>`,`Message`→`PanelMessage<K>`,`Effect`→`PanelEffect<K>`,`Level`→`NoticeLevel`;内部所有 `AppSlot` 换 `K`,`list_loaded` 里 `AppSlot::intern(..)` 换 `K::from_app_id(..)`。35 个用例用 `TestKey` 迁移,断言内容**逐字不变**(只改类型名)。
-  dozer 的 `app_host.rs` 剩余:`pub type State = bytehost_panel::PanelState<AppSlot>;` 等别名 + 视图辅助;`run_app_host_effects` 里 `Effect::Notice` → `push_toast`。
+- [x] **Step 3: 搬 `app_host.rs` 的状态机并泛型化**
+  `State`→`PanelState<K>`,`Message`→`PanelMessage<K>`,`Effect`→`PanelEffect<K>`,`Effect::Toast`→`PanelEffect::Notice { level: NoticeLevel, text, key }`(字段名 `level`/`text`/`key` 保持);内部所有 `AppSlot` 换 `K`,`list_loaded` 里 `AppSlot::intern(..)` 换 `K::from_app_id(..)`。38 个用例用 `TestKey` 迁移,断言内容**逐字不变**(只改类型名)。因 `AppSlot` 无 `Default`,手写 `impl<K: AppKey> Default for PanelState<K>`;`id()` 返回 `String`(原 `&str`,避免借用局部);`Failure` 直接 `pub use bytehost_client::AppApiError as Failure`。
+  dozer 的 `app_host.rs` 剩余:`impl AppKey for AppSlot`、`pub type State/Message/Effect` 别名、`notice_level(NoticeLevel) -> toast::Level`、`Effect::Notice` → `push_toast_keyed`。
+  为过 Task 6 门禁 `grep -rn "AppSlot\|toast" crates/bytehost-panel/src`(小写 `toast` 也匹配,`Toast` 不匹配):`bytehost-panel` 里的注释、测试名、字段名一律不用 `AppSlot`/`toast` 字面量,改用 `键`/`Notice`/`notice`。
+  **顺带**:`Failure` 变成 `AppApiError` 别名后,`settings.rs`/`app.rs` 里原先有意义的 `.map_err(Failure::from)`(旧 `Failure` 是独立类型)变成同类型转换,clippy `useless_conversion` 报警,已删除这些调用点。
 
-- [ ] **Step 4: 验证**
-  Run: `cargo test -p bytehost-panel`(用例数 = 原 `app_host` + `app_logs` 用例数)、`cargo test -p dozer-app -- app_host app_logs settings_apps`、`cargo clippy --all-targets`;`grep -rn "AppSlot" crates/bytehost-panel/src` 必须无结果(门禁见 Task 6)。
+- [x] **Step 4: 验证**
+  Run: `cargo test -p bytehost-panel`(48 = 38 host + 9 logs + 1 新增)、`cargo test -p dozer-app -- app_host app_logs settings_apps`(48 通过)、`cargo test -p dozer-app`(1925 通过,仅既有 flaky `files::delete_confirm_spec_reflects_pending_target` 失败,与 A7 无关)、`cargo clippy --all-targets`(仅既有 warning)、`cargo fmt`;`grep -rn "AppSlot\|toast" crates/bytehost-panel/src` 无结果(exit 1);`bash scripts/check-log-scope.sh`、`bash scripts/check-bytehost-apps-deps.sh` 均 ok。
 
-- [ ] **Step 5: 变异验证**
-  复用 A6f 的三处:去掉 `dirty` 补拉 → 风暴用例失败;让 `tick_logs` 忽略 `visible` → 不可见面板用例失败;让 `SubscriptionLost` 退避不递增 → 退避用例失败。恢复。另加:`from_app_id` 返回 `None` 的 id 不得出现在 `order` 里(新用例,破坏则失败)。
+- [x] **Step 5: 变异验证**
+  复用 A6f 的四处,全部"破坏即失败、恢复即通过":(1)`dirty` 补拉改 `if false` → 风暴用例 `a_change_triggers_exactly_one_refetch_even_in_a_storm` 失败;(2)`tick_logs` 忽略 `visible` 改 `if false` → `a_log_viewer_whose_panel_is_not_visible_is_not_refreshed` 失败;(3)`SubscriptionLost` 退避不递增(去掉 `(attempt+1).min(..)`)→ `losing_the_subscription_goes_back_to_fast_polling_and_retries_with_backoff` 失败;(4)新增 `an_app_id_the_key_cannot_map_is_skipped_from_the_order` 覆盖 `from_app_id` 返回 `None` 的 id 不进 `order`/rail。四处均已恢复。
 
 - [ ] **Step 6: Commit**
   ```bash
   git add crates/bytehost-panel crates/dozer-app Cargo.toml
   git commit -m "refactor(bytehost-panel,dozer-app): UI-framework-agnostic app panel and log viewer state machines keyed by AppKey (A7 task 4)"
+  # 实际提交:先 `git add crates/bytehost-panel crates/dozer-app`,再
+  # `git restore --staged crates/dozer-app/packaging/macos/Info.plist`(该文件有与 A7 无关的既有改动,不得入库)。
   ```
 
 ---

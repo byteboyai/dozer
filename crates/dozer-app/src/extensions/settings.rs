@@ -495,13 +495,13 @@ fn run_apps_message(
         match effect {
             Effect::Probe => {
                 handle.spawn(async move {
-                    let r = client.app_probe_runtimes().await.map_err(Failure::from);
+                    let r = client.app_probe_runtimes().await;
                     send(M::ProbesLoaded(r));
                 });
             }
             Effect::List => {
                 handle.spawn(async move {
-                    let r = client.app_list().await.map_err(Failure::from);
+                    let r = client.app_list().await;
                     send(M::ListLoaded(r));
                 });
             }
@@ -513,24 +513,20 @@ fn run_apps_message(
                     let r = client
                         .app_plan(source, Provenance::Local, TrustLevel::Trusted)
                         .await
-                        .map(Box::new)
-                        .map_err(Failure::from);
+                        .map(Box::new);
                     send(M::PlanLoaded(r));
                 });
             }
             Effect::Install { approved, source } => {
                 handle.spawn(async move {
-                    let r = client
-                        .app_install(*approved, source)
-                        .await
-                        .map_err(Failure::from);
+                    let r = client.app_install(*approved, source).await;
                     send(M::InstallDone(r));
                 });
             }
             Effect::Stop(id) => {
                 handle.spawn(async move {
                     let r = match AppId::new(&id) {
-                        Ok(app) => client.app_stop(app).await.map_err(Failure::from),
+                        Ok(app) => client.app_stop(app).await,
                         Err(e) => Err(Failure::Transport(format!("{e}"))),
                     };
                     send(M::ActionDone(id, ActKind::Stop, r));
@@ -539,7 +535,7 @@ fn run_apps_message(
             Effect::Rollback(id) => {
                 handle.spawn(async move {
                     let r = match AppId::new(&id) {
-                        Ok(app) => client.app_rollback(app).await.map_err(Failure::from),
+                        Ok(app) => client.app_rollback(app).await,
                         Err(e) => Err(Failure::Transport(format!("{e}"))),
                     };
                     send(M::RolledBack(id, r));
@@ -548,7 +544,7 @@ fn run_apps_message(
             Effect::Uninstall(id, mode) => {
                 handle.spawn(async move {
                     let r = match AppId::new(&id) {
-                        Ok(app) => client.app_uninstall(app, mode).await.map_err(Failure::from),
+                        Ok(app) => client.app_uninstall(app, mode).await,
                         Err(e) => Err(Failure::Transport(format!("{e}"))),
                     };
                     send(M::ActionDone(id, ActKind::Uninstall, r));
@@ -558,29 +554,19 @@ fn run_apps_message(
             Effect::Toast { level, text, key } => s.outbox.push_keyed(LOG, level, text, key),
             Effect::RuntimePlan(runtime) => {
                 handle.spawn(async move {
-                    let r = client
-                        .app_runtime_plan(runtime)
-                        .await
-                        .map(Box::new)
-                        .map_err(Failure::from);
+                    let r = client.app_runtime_plan(runtime).await.map(Box::new);
                     send(M::RuntimePlanLoaded(r));
                 });
             }
             Effect::InstallRuntime(plan) => {
                 handle.spawn(async move {
-                    let r = client
-                        .app_install_runtime(*plan)
-                        .await
-                        .map_err(Failure::from);
+                    let r = client.app_install_runtime(*plan).await;
                     send(M::RuntimeInstallStarted(r));
                 });
             }
             Effect::UninstallRuntime(runtime, version) => {
                 handle.spawn(async move {
-                    let r = client
-                        .app_uninstall_runtime(runtime, &version)
-                        .await
-                        .map_err(Failure::from);
+                    let r = client.app_uninstall_runtime(runtime, &version).await;
                     send(M::RuntimeUninstallDone(r));
                 });
             }
@@ -593,7 +579,7 @@ fn run_apps_message(
             Effect::FetchLogs(id, max_lines) => {
                 handle.spawn(async move {
                     let r = match AppId::new(&id) {
-                        Ok(app) => client.app_logs(app, max_lines).await.map_err(Failure::from),
+                        Ok(app) => client.app_logs(app, max_lines).await,
                         Err(e) => Err(Failure::Transport(format!("{e}"))),
                     };
                     send(M::LogsLoaded(id, r));

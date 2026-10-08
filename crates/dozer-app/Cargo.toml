@@ -17,6 +17,7 @@ dozer-client = { path = "../dozer-client" }
 bytehost-apps = { path = "../bytehost-apps" }
 bytehost-client = { path = "../bytehost-client" }
 bytehost-webview = { path = "../bytehost-webview" }
+bytehost-panel = { path = "../bytehost-panel" }
 dozer-codehealth = { path = "../dozer-codehealth" }
 # 复用 dozer-hook 的 hook 安装逻辑(install::run_at/opencode_install::run_at)，
 # 新建 agent 会话时静默注册对应 CLI 的 hook，不必用户手动跑 `dozer-hook install`。
