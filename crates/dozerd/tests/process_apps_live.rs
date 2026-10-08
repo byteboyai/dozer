@@ -638,7 +638,9 @@ async fn run_sample(sample: &Sample) {
 
 /// 改名:改 manifest 的 `id`(样例里 id 与目录名一致)。
 fn rename_manifest_id(source: AppSource, new_id: &str) -> AppSource {
-    let AppSource::LocalDir { path } = source;
+    let AppSource::LocalDir { path } = source else {
+        panic!("本用例只处理本机目录来源")
+    };
     let manifest = std::fs::read_to_string(path.join("manifest.toml")).unwrap();
     let updated = manifest
         .lines()
@@ -735,7 +737,9 @@ async fn a_failing_dependency_install_surfaces_a_dependency_issue() {
             "command = [\"node\", \"server.js\"]\nlockfile = \"package-lock.json\"",
         )
     });
-    let AppSource::LocalDir { path } = &source;
+    let AppSource::LocalDir { path } = &source else {
+        panic!("本用例只处理本机目录来源")
+    };
     std::fs::write(
         path.join("package-lock.json"),
         r#"{
@@ -850,7 +854,9 @@ fn stage_py_version(version: &str) -> AppSource {
         }
     });
     // `stage` 只改 manifest;这里再改页面,把版本写进 HTML。
-    let AppSource::LocalDir { path } = &source;
+    let AppSource::LocalDir { path } = &source else {
+        panic!("本用例只处理本机目录来源")
+    };
     let server = path.join("server.py");
     let text = std::fs::read_to_string(&server).unwrap();
     let updated = text.replace("<h1>Py Notes</h1>", &format!("<h1>Py Notes</h1>\n{marker}"));
@@ -1003,7 +1009,9 @@ async fn python_sample_upgrade_and_rollback() {
     let broken = stage_py_version("1.2.0");
     // 让 1.2.0 必起不来:把服务换成启动即退出的脚本(监管会连续失败 → 试用期内回滚)。
     {
-        let AppSource::LocalDir { path } = &broken;
+        let AppSource::LocalDir { path } = &broken else {
+            panic!("本用例只处理本机目录来源")
+        };
         std::fs::write(
             path.join("server.py"),
             "import sys\nsys.stderr.write('boom: cannot start\\n')\nsys.exit(1)\n",

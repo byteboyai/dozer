@@ -191,11 +191,20 @@
 
 - `AppSource::{Archive, Url}` 已随 `AppRequest::{Plan, Install}` 序列化,dozerd 无需新请求。要做的:`ManagerError::{SourceNotAllowed, Archive(..), Source(..)}` → `AppErrorKind`(用户可修正的输入问题映射到现有的 `Rejected`;I/O 类映射 `Internal`),错误文案**不带 URL 查询串**。生产的 `AppService` 用 `CurlFetcher`;测试钩子允许注入假 `Fetcher`(沿用 `finish_start_with` 的可选参数做法,不复制启动流程)。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
   - `app_service.rs`:各新错误类别的映射表驱动;`Plan{ source: Archive }` 经 `handle` 得到带 `source_info` 的计划;`Plan{ source: Url }` + 注入的假 fetcher 得到 `ThirdParty/Untrusted`;客户端在请求里自报 `Local/Trusted` → 回来的计划是 `ThirdParty/Untrusted`(Review Focus 4 的端到端版本)。
   - `app_requests.rs`:经真实 UDS 走 `Plan(Archive)` → `Install` → `List`;旧客户端形状(只有 `LocalDir`)照常工作。
-- [ ] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p dozerd app_service`、`cargo test -p dozerd --test app_requests`、`cargo test -p dozer-client`)。
-- [ ] **Step 5: Commit** — `feat(dozerd): carry archive and URL sources end to end (A6h task 4)`。
+- [x] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p dozerd app_service`、`cargo test -p dozerd --test app_requests`、`cargo test -p dozer-client`)。
+- [x] **Step 5: Commit** — `feat(dozerd): carry archive and URL sources end to end (A6h task 4)`。
+
+**实施追记(Task 4):**
+1. **错误映射其实在 Task 2 就做完了**:`ManagerError::{SourceNotAllowed, Archive, Source}::kind()`(manager.rs:128-154)已把输入类问题映射 `Rejected`、`Io`/`Source::Io`/`Archive::Io` 映射 `Internal`。本 Task 只在此基线上补测试与下载器注入,未再改映射代码。
+2. **新增下载器注入点**:把启动主体抽成 `AppService::finish_start_with_sources(root, gateway, runtime_manager, monitor, app_fetcher: Option<Arc<dyn Fetcher>>)`(`#[doc(hidden)]`),原 `finish_start_with` 只是转发 `None`;构造从 `with_resolver`/`with_monitor_for_test` 改为统一走 `AppManager::with_config`,注入的 fetcher 覆盖默认 `CurlFetcher`(不复制启动流程)。生产 `main` 仍走 `finish_start_with` → 真实 `CurlFetcher`。
+3. **`dozer-client` 零改动**:`app_plan`/`app_install` 直接透传 `AppSource`,新变体自动随之。
+4. **`process_apps_live.rs` 4 处 `let AppSource::LocalDir{..} = ..` 因 Task 2 扩枚举而编译失败**,本 Task 一并补 `else { panic!(..) }`(这些 helper 只处理本机目录)。
+5. **dozerd 测试造压缩包不引新依赖**:复用 `/usr/bin/tar -czf <a> -C <src> manifest.toml web`(只 tar 具名条目,避免 `.`/`./` 段被解压器判为不安全)。`SourceFetcher`(内存字节→dest,可配 `effective_url`)实现 `Fetcher::fetch/fetch_meta`。
+6. **变异验证**:①`source::effective` 直信客户端 trust → `a_url_source_is_untrusted_no_matter_what_the_client_claims` FAILED;②`manager` 两处 `policy.static_only` 检查短路 → `a_url_source_of_a_process_app_is_rejected_over_the_wire` FAILED。均已还原。
+7. `cargo test -p dozerd` 全绿(492 lib + 集成);fmt/两门禁绿;clippy 仅剩既有 `preview_commands.rs:152` 警告。已知偶发:`memory::tests::list_orders_by_updated_ms_desc`、`a_python_app_runs_through_the_wire_and_dies_with_dozerd`(并行偶发,单跑通过)。
 
 ---
 

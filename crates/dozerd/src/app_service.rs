@@ -13,14 +13,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytehost_apps::HOST_VERSION;
 use bytehost_apps::gateway::{Gateway, GatewayConfig, GatewayError};
-use bytehost_apps::manager::{AppManager, ManagerError, MonitorConfig};
+use bytehost_apps::manager::{AppManager, ManagerConfig, ManagerError, MonitorConfig};
 use bytehost_apps::port::{load_port, persist_port, pick_port};
 use bytehost_apps::process::restart::RestartPolicy;
 use bytehost_apps::proto::{
     AppErrorKind, AppFailure, AppReply, AppRequest, ManagedRuntime, RuntimeProbe,
 };
 use bytehost_apps::runtime::managed::{
-    ChainResolver, ManagedResolver, RtError, RuntimeManager, RuntimeStore,
+    ChainResolver, Fetcher, ManagedResolver, RtError, RuntimeManager, RuntimeStore,
 };
 use bytehost_apps::runtime::{SystemResolver, SystemRunner, probe_all};
 
@@ -129,12 +129,25 @@ impl AppService {
     }
 
     /// 真正的构造主体:`RuntimeManager` 可注入(测试用假 `Fetcher`);
-    /// `monitor` 只有测试会给(同时把重启退避调小),生产为 `None`。
+    /// `monitor` 只有测试会给(同时把重启退避调小),生产为 `None`;
+    /// `app_fetcher` 只有测试会给(注入假的来源下载器,替代真实的 `CurlFetcher`),生产为 `None`。
     async fn finish_start_with(
         root: &Path,
         gateway: Arc<Gateway>,
         runtime_manager: Arc<RuntimeManager>,
         monitor: Option<MonitorConfig>,
+    ) -> Arc<Self> {
+        Self::finish_start_with_sources(root, gateway, runtime_manager, monitor, None).await
+    }
+
+    /// 同 `finish_start_with`,再允许注入应用**来源**的下载器(测试 URL 来源用,不落真实网络)。
+    #[doc(hidden)]
+    pub async fn finish_start_with_sources(
+        root: &Path,
+        gateway: Arc<Gateway>,
+        runtime_manager: Arc<RuntimeManager>,
+        monitor: Option<MonitorConfig>,
+        app_fetcher: Option<Arc<dyn Fetcher>>,
     ) -> Arc<Self> {
         // 受管运行时优先,系统兜底。
         let resolver = Arc::new(ChainResolver(vec![
@@ -143,21 +156,21 @@ impl AppService {
             ))),
             Arc::new(SystemResolver::new()),
         ]));
-        let built = match monitor {
-            None => AppManager::with_resolver(root, HOST_VERSION, gateway.clone(), resolver),
-            Some(monitor) => AppManager::with_monitor_for_test(
-                root,
-                HOST_VERSION,
-                gateway.clone(),
-                resolver,
-                RestartPolicy {
-                    base: std::time::Duration::from_millis(200),
-                    ..RestartPolicy::default()
-                },
-                monitor,
-            ),
+        let mut config = ManagerConfig {
+            resolver,
+            ..ManagerConfig::default()
         };
-        let manager = match built {
+        if let Some(fetcher) = app_fetcher {
+            config.fetcher = fetcher;
+        }
+        if let Some(monitor) = monitor {
+            config.monitor = monitor;
+            config.policy = RestartPolicy {
+                base: std::time::Duration::from_millis(200),
+                ..RestartPolicy::default()
+            };
+        }
+        let manager = match AppManager::with_config(root, HOST_VERSION, gateway.clone(), config) {
             Ok(m) => Arc::new(m),
             Err(e) => {
                 gateway.stop().await;
@@ -1233,7 +1246,7 @@ port_env = "APP_PORT"
             .arg(&archive)
             .arg("-C")
             .arg(&src)
-            .arg("bin")
+            .arg(".")
             .status()
             .unwrap();
         assert!(status.success());
@@ -1543,6 +1556,268 @@ port_env = "APP_PORT"
         .await;
         assert!(running.url.is_some(), "{running:?}");
         assert!(marker.exists(), "受管 python 被使用(标记文件应存在)");
+        svc.shutdown().await;
+    }
+
+    // ===== A6h Task 4:压缩包 / URL 来源经 dozerd 线上协议 =====
+
+    /// 在 `dir` 下造一个静态应用的顶层目录,打成 `.tar.gz`(与 `tool_tar` 同一手法,不新增依赖)。
+    fn static_app_targz(dir: &Path, id: &str, body: &str) -> std::path::PathBuf {
+        let src = dir.join(format!("{id}-src-{}", std::process::id()));
+        std::fs::create_dir_all(src.join("web")).unwrap();
+        std::fs::write(
+            src.join("manifest.toml"),
+            format!(
+                r#"schema_version = 1
+min_host_version = "0.1.0"
+id = "{id}"
+name = "{id} app"
+version = "1.0.0"
+
+[presentation]
+entrypoint = "main"
+
+[entrypoints.main]
+type = "web"
+path = "/"
+
+[runtime]
+kind = "static_web"
+source = "web/"
+"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(src.join("web/index.html"), body).unwrap();
+        let archive = dir.join(format!("{id}-{}.tar.gz", std::process::id()));
+        let status = std::process::Command::new("/usr/bin/tar")
+            .args(["-czf"])
+            .arg(&archive)
+            .arg("-C")
+            .arg(&src)
+            .args(["manifest.toml", "web"])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        archive
+    }
+
+    /// 从内存字节"下载"到 `dest` 的假来源下载器;`effective_url` 可配。
+    struct SourceFetcher {
+        bytes: Vec<u8>,
+        effective_url: String,
+        calls: AtomicUsize,
+    }
+
+    impl SourceFetcher {
+        fn new(bytes: Vec<u8>) -> Arc<Self> {
+            Arc::new(Self {
+                bytes,
+                effective_url: "https://example.com/app.tar.gz".into(),
+                calls: AtomicUsize::new(0),
+            })
+        }
+    }
+
+    impl Fetcher for SourceFetcher {
+        fn fetch(
+            &self,
+            url: &str,
+            dest: &Path,
+            on_progress: &mut dyn FnMut(u64, Option<u64>),
+            cancel: &AtomicBool,
+        ) -> std::io::Result<()> {
+            self.fetch_meta(url, dest, 0, on_progress, cancel)
+                .map(|_| ())
+        }
+
+        fn fetch_meta(
+            &self,
+            _url: &str,
+            dest: &Path,
+            _max_bytes: u64,
+            _on_progress: &mut dyn FnMut(u64, Option<u64>),
+            _cancel: &AtomicBool,
+        ) -> std::io::Result<bytehost_apps::runtime::managed::fetch::FetchMeta> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            std::fs::write(dest, &self.bytes)?;
+            Ok(bytehost_apps::runtime::managed::fetch::FetchMeta {
+                effective_url: self.effective_url.clone(),
+                bytes: self.bytes.len() as u64,
+            })
+        }
+    }
+
+    /// 造一个只跑 AppManager、可注入来源下载器的服务(不复制启动流程)。
+    async fn start_with_source_fetcher(root: &Path, fetcher: Arc<dyn Fetcher>) -> Arc<AppService> {
+        let gateway = Arc::new(Gateway::start(GatewayConfig { port: 0 }).await.unwrap());
+        let rm = Arc::new(RuntimeManager::new(root.join("runtimes")));
+        AppService::finish_start_with_sources(root, gateway, rm, None, Some(fetcher)).await
+    }
+
+    /// 各新错误类别的线上映射:`SourceNotAllowed`/`Archive`/`Source` 的输入类问题都是 `Rejected`。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn archive_and_url_source_errors_are_classified_on_the_wire() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc =
+            AppService::start_with(&tmp.path().join("bytehost"), GatewayConfig { port: 0 }).await;
+
+        // 相对路径的压缩包 → Rejected。
+        let rel = AppRequest::Plan {
+            source: AppSource::Archive {
+                path: "relative/app.zip".into(),
+            },
+            provenance: Provenance::Local,
+            trust: TrustLevel::Trusted,
+        };
+        assert_eq!(
+            svc.handle(rel).await.unwrap_err().kind,
+            AppErrorKind::Rejected
+        );
+
+        // 不认识扩展名的压缩包 → Rejected(Source 类)。
+        let bogus = tmp.path().join("app.rar");
+        std::fs::write(&bogus, b"x").unwrap();
+        let unknown = AppRequest::Plan {
+            source: AppSource::Archive { path: bogus },
+            provenance: Provenance::Local,
+            trust: TrustLevel::Trusted,
+        };
+        assert_eq!(
+            svc.handle(unknown).await.unwrap_err().kind,
+            AppErrorKind::Rejected
+        );
+
+        // 坏的 https URL(格式错)→ Rejected,且未发起下载。
+        let badurl = AppRequest::Plan {
+            source: AppSource::Url {
+                url: "http://example.com/a.zip".into(),
+                sha256: None,
+            },
+            provenance: Provenance::Local,
+            trust: TrustLevel::Trusted,
+        };
+        assert_eq!(
+            svc.handle(badurl).await.unwrap_err().kind,
+            AppErrorKind::Rejected
+        );
+        svc.shutdown().await;
+    }
+
+    /// `Plan{Archive}` 经 `handle` 得到带 `source_info` 的计划(本机压缩包 = `Local/Trusted`)。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_archive_source_plans_over_the_wire_with_source_info() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc =
+            AppService::start_with(&tmp.path().join("bytehost"), GatewayConfig { port: 0 }).await;
+        let archive = static_app_targz(tmp.path(), "alpha", "A");
+        let reply = svc
+            .handle(AppRequest::Plan {
+                source: AppSource::Archive { path: archive },
+                provenance: Provenance::Local,
+                trust: TrustLevel::Trusted,
+            })
+            .await
+            .unwrap();
+        let AppReply::Plan { plan } = reply else {
+            panic!("{reply:?}")
+        };
+        assert_eq!(plan.source_info.kind, "archive");
+        assert!(plan.source_info.archive_sha256.is_some());
+        assert_eq!(plan.provenance, Provenance::Local);
+        assert_eq!(plan.trust, TrustLevel::Trusted);
+        svc.shutdown().await;
+    }
+
+    /// `Plan{Url}` + 注入的假下载器:得到 `ThirdParty/Untrusted`;客户端在请求里自报 `Local/Trusted`
+    /// 也被服务端覆盖(端到端版的 Review Focus 4)。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_url_source_is_untrusted_no_matter_what_the_client_claims() {
+        let tmp = tempfile::tempdir().unwrap();
+        let archive = static_app_targz(tmp.path(), "alpha", "A");
+        let bytes = std::fs::read(&archive).unwrap();
+        let fetcher = SourceFetcher::new(bytes);
+        let svc = start_with_source_fetcher(&tmp.path().join("bytehost"), fetcher.clone()).await;
+        let reply = svc
+            .handle(AppRequest::Plan {
+                source: AppSource::Url {
+                    url: "https://example.com/app.tar.gz".into(),
+                    sha256: None,
+                },
+                // 客户端谎报受信,服务端必须按来源推导。
+                provenance: Provenance::Local,
+                trust: TrustLevel::Trusted,
+            })
+            .await
+            .unwrap();
+        let AppReply::Plan { plan } = reply else {
+            panic!("{reply:?}")
+        };
+        assert_eq!(plan.source_info.kind, "url");
+        assert_eq!(plan.provenance, Provenance::ThirdParty);
+        assert_eq!(plan.trust, TrustLevel::Untrusted);
+        assert_eq!(fetcher.calls.load(Ordering::SeqCst), 1, "出计划下载一次");
+        svc.shutdown().await;
+    }
+
+    /// URL 来源的**进程型**应用出计划即被拒(网络来源只允许静态应用),经线上协议验证。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_url_source_of_a_process_app_is_rejected_over_the_wire() {
+        let tmp = tempfile::tempdir().unwrap();
+        // python 应用的 tar.gz。
+        let src = tmp.path().join("pysrc");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            src.join("manifest.toml"),
+            r#"schema_version = 1
+min_host_version = "0.1.0"
+id = "pypkg"
+name = "Py"
+version = "1.0.0"
+
+[presentation]
+entrypoint = "main"
+
+[entrypoints.main]
+type = "web"
+path = "/"
+
+[runtime]
+kind = "python"
+command = ["python3", "server.py"]
+
+[runtime.http]
+port_env = "APP_PORT"
+"#,
+        )
+        .unwrap();
+        std::fs::write(src.join("server.py"), "print('hi')\n").unwrap();
+        let archive = tmp.path().join("py.tar.gz");
+        let status = std::process::Command::new("/usr/bin/tar")
+            .args(["-czf"])
+            .arg(&archive)
+            .arg("-C")
+            .arg(&src)
+            .args(["manifest.toml", "server.py"])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let bytes = std::fs::read(&archive).unwrap();
+        let fetcher = SourceFetcher::new(bytes);
+        let svc = start_with_source_fetcher(&tmp.path().join("bytehost"), fetcher).await;
+        let err = svc
+            .handle(AppRequest::Plan {
+                source: AppSource::Url {
+                    url: "https://example.com/app.tar.gz".into(),
+                    sha256: None,
+                },
+                provenance: Provenance::Local,
+                trust: TrustLevel::Trusted,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, AppErrorKind::Rejected);
+        assert!(err.message.contains("静态应用"), "{err}");
         svc.shutdown().await;
     }
 }

@@ -414,3 +414,97 @@ async fn subscribing_to_an_unavailable_host_fails_without_hanging() {
         other => panic!("{other:?}"),
     }
 }
+
+/// 把顶层目录里的静态应用打成 `.tar.gz`,当作"本机压缩包"来源。
+fn targz_static_app(dir: &Path, id: &str, body: &str) -> AppSource {
+    let src = dir.join(format!("{id}-src"));
+    std::fs::create_dir_all(src.join("web")).unwrap();
+    std::fs::write(
+        src.join("manifest.toml"),
+        format!(
+            "schema_version = 1\nmin_host_version = \"0.1.0\"\nid = \"{id}\"\nname = \"{id} app\"\nversion = \"1.0.0\"\n\n\
+             [presentation]\nentrypoint = \"main\"\n\n[entrypoints.main]\ntype = \"web\"\npath = \"/\"\n\n\
+             [runtime]\nkind = \"static_web\"\nsource = \"web/\"\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(src.join("web/index.html"), body).unwrap();
+    let archive = dir.join(format!("{id}.tar.gz"));
+    let status = std::process::Command::new("/usr/bin/tar")
+        .args(["-czf"])
+        .arg(&archive)
+        .arg("-C")
+        .arg(&src)
+        .args(["manifest.toml", "web"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    AppSource::Archive { path: archive }
+}
+
+/// 本机压缩包来源经真实 UDS + `dozer-client`:`Plan(Archive)` → `Install` → `List` → 起站可访问。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_archive_source_installs_over_the_socket() {
+    let tmp = tempfile::tempdir().unwrap();
+    let apps =
+        AppService::start_with(&tmp.path().join("bytehost"), GatewayConfig { port: 0 }).await;
+    let d = start_daemon(apps).await;
+    let c = &d.client;
+
+    let source = targz_static_app(&tmp.path().join("src/a"), "zippy", "<h1>zip</h1>");
+    let plan = c
+        .app_plan(source.clone(), Provenance::Local, TrustLevel::Trusted)
+        .await
+        .unwrap();
+    assert_eq!(plan.app_id, id("zippy"));
+    assert_eq!(plan.source_info.kind, "archive");
+    assert!(plan.source_info.archive_sha256.is_some());
+    assert_eq!(plan.provenance, Provenance::Local);
+    assert_eq!(plan.trust, TrustLevel::Trusted);
+    assert!(c.app_list().await.unwrap().is_empty(), "出计划不安装");
+
+    c.app_install(
+        plan.approve(Approval {
+            approver: "test".into(),
+            approved_ms: 1,
+        }),
+        source,
+    )
+    .await
+    .unwrap();
+    let listed = c.app_list().await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].name, "zippy app");
+
+    let url = c.app_start(id("zippy")).await.unwrap();
+    assert!(url.starts_with("http://zippy.localhost:"), "{url}");
+    let launch = c.app_launch_url(id("zippy")).await.unwrap();
+    assert_eq!(fetch(&launch, "zippy"), (200, "<h1>zip</h1>".to_string()));
+}
+
+/// 本机目录来源照常工作(新增压缩包/URL 来源不动既有 `LocalDir` 路径)。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_directory_source_still_works_alongside_the_new_kinds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let apps =
+        AppService::start_with(&tmp.path().join("bytehost"), GatewayConfig { port: 0 }).await;
+    let d = start_daemon(apps).await;
+    let c = &d.client;
+
+    let source = write_app(&tmp.path().join("src/a"), "old", "hi");
+    let plan = c
+        .app_plan(source.clone(), Provenance::Local, TrustLevel::Trusted)
+        .await
+        .unwrap();
+    assert_eq!(plan.app_id, id("old"));
+    c.app_install(
+        plan.approve(Approval {
+            approver: "t".into(),
+            approved_ms: 1,
+        }),
+        source,
+    )
+    .await
+    .unwrap();
+    assert_eq!(c.app_list().await.unwrap().len(), 1);
+}
