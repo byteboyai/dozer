@@ -102,6 +102,86 @@ impl AppService {
         Self::finish_start(root, gateway).await
     }
 
+    /// (仅测试)把周期健康检查的间隔/超时调小、
+    /// 让卡死进程在秒级被观察重启;其余与 `start_with` 一致。
+    /// 跨 crate 集成测试(`tests/`)要用,不能 `#[cfg(test)]`,故为 `#[doc(hidden)]`。
+    #[doc(hidden)]
+    pub async fn start_with_monitor_for_test(
+        root: &Path,
+        config: GatewayConfig,
+        monitor_interval: std::time::Duration,
+        monitor_timeout: std::time::Duration,
+        monitor_failures: u32,
+    ) -> Arc<Self> {
+        let gateway = match Gateway::start(config).await {
+            Ok(g) => Arc::new(g),
+            Err(e) => {
+                dozer_core::log_error!(LOG, error = %e, "gateway 启动失败,应用宿主不可用");
+                return Self::unavailable(format!("应用宿主不可用:{e}"));
+            }
+        };
+        Self::finish_start_monitor_for_test(
+            root,
+            gateway,
+            monitor_interval,
+            monitor_timeout,
+            monitor_failures,
+        )
+        .await
+    }
+
+    async fn finish_start_monitor_for_test(
+        root: &Path,
+        gateway: Arc<Gateway>,
+        monitor_interval: std::time::Duration,
+        monitor_timeout: std::time::Duration,
+        monitor_failures: u32,
+    ) -> Arc<Self> {
+        let runtime_manager = Arc::new(RuntimeManager::new(root.join("runtimes")));
+        let resolver = Arc::new(ChainResolver(vec![
+            Arc::new(ManagedResolver::new(RuntimeStore::new(
+                runtime_manager.store().root().to_path_buf(),
+            ))),
+            Arc::new(SystemResolver::new()),
+        ]));
+        let policy = bytehost_apps::process::restart::RestartPolicy {
+            base: std::time::Duration::from_millis(200),
+            ..bytehost_apps::process::restart::RestartPolicy::default()
+        };
+        let manager = match AppManager::with_monitor_for_test(
+            root,
+            HOST_VERSION,
+            gateway.clone(),
+            resolver,
+            policy,
+            Arc::new(bytehost_apps::runtime::SystemVersionProbe::new()),
+            monitor_interval,
+            monitor_timeout,
+            monitor_failures,
+        ) {
+            Ok(m) => Arc::new(m),
+            Err(e) => {
+                gateway.stop().await;
+                dozer_core::log_error!(LOG, error = %e, "应用目录不可用");
+                return Self::unavailable(format!("应用宿主不可用:应用目录打不开:{e}"));
+            }
+        };
+        spawn_event_logger(&manager);
+        let for_reconcile = manager.clone();
+        match tokio::task::spawn_blocking(move || for_reconcile.reconcile()).await {
+            Ok(report) => log_report(&report, "启动对账"),
+            Err(e) => dozer_core::log_error!(LOG, error = %e, "启动对账任务失败(panic?)"),
+        }
+        dozer_core::log_info!(LOG, port = gateway.port(), "应用宿主已启动");
+        Arc::new(Self {
+            state: State::Ready {
+                manager,
+                gateway,
+                runtime_manager,
+            },
+        })
+    }
+
     async fn finish_start(root: &Path, gateway: Arc<Gateway>) -> Arc<Self> {
         let runtime_manager = Arc::new(RuntimeManager::new(root.join("runtimes")));
         Self::finish_start_with(root, gateway, runtime_manager).await
