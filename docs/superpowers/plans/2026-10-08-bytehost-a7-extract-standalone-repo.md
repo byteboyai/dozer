@@ -322,11 +322,22 @@ dozer 侧改动:
 - Create: 新仓库 `README.md`、`.github/workflows/ci.yml`、`scripts/check-deps.sh`(原 `check-bytehost-apps-deps.sh` 扩展)、`docs/`(复制设计规格与 A0–A6 验收报告)、`examples/embed.rs`
 - Test: `crates/bytehost-apps/tests/embedded_host.rs`
 
+> **执行结果(2026-10-08,全部完成):** 新仓库 `https://github.com/byteboyai/bytehost`,`main` = tag `v0.1.0` =
+> `20c013ba3262ff25309c58b9c40a2834d3cd31f2`,CI 全绿(run `37758759810`)。详见
+> `docs/superpowers/specs/2026-10-08-bytehost-a7-acceptance-report.md`。**相对本文的偏差:**
+> 1. dozer 里只存在 a5/a6e–a6h 五份验收报告(无 a0–a4),glob 照实搬迁;
+> 2. CI 首跑失败——Python 3.14 的 `http.server.HTTPServer.server_bind`/`ThreadingHTTPServer` 会调
+>    `socket.getfqdn`,在无反向 DNS 的 runner 上阻塞约 35s,导致 15 个"真起 python 服务器"的用例超时;
+>    已把测试片段与 `py-notes` 样例改用 `socketserver.ThreadingTCPServer`(语义不变)并转绿;
+> 3. `embedded_host.rs` 实际放在 `crates/bytehost-client/tests/`(验证的是 client 的 `InProcess` 端到端),
+>    且需 `#[tokio::test(flavor = "multi_thread")]`;
+> 4. 额外新增 `.gitignore`(`/target`,filter-repo 产物不自带)。
+
 **Interfaces:**
 - 新仓库顶层 `Cargo.toml`:`[workspace] members = ["crates/*"]`,`[workspace.package] edition = "2024"`,`[workspace.dependencies]` 抄 dozer 的 `serde/serde_json/tokio/tracing/uuid` 版本;`rust-toolchain` 不固定(CI 用 stable)。
 - `scripts/check-deps.sh` 门禁(全部对 `cargo tree -e normal,build --target all --all-features` 执行):① 任一 crate 依赖树不得出现 `dozer*`、`iced*`、`wry`、`tauri*`、`objc2*`(`bytehost-webview` 也不得有 `objc2`);② `bytehost-apps` 默认 feature 依赖闭包只能是 serde 家族;③ `bytehost-panel` 的依赖只能是 `bytehost-apps`、`bytehost-client` 及其传递依赖;④ `grep -rn "AppSlot\|toast" crates/bytehost-panel/src` 必须无结果。
 
-- [ ] **Step 1: 在 dozer 里确认 Task 1–5 全绿后,做一个克隆来拆**
+- [x] **Step 1: 在 dozer 里确认 Task 1–5 全绿后,做一个克隆来拆**
   ```bash
   git clone --no-local . /tmp/claude-501/bytehost-extract && cd /tmp/claude-501/bytehost-extract
   git filter-repo \
@@ -340,27 +351,27 @@ dozer 侧改动:
   ```
   Expected:`git log --oneline | wc -l` ≥ 41(原 bytehost-apps 历史保留);`ls` 只剩上述路径。**这一步在一次性克隆里做,不碰 dozer 仓库。**
 
-- [ ] **Step 2: 补顶层文件**
+- [x] **Step 2: 补顶层文件**
   写顶层 `Cargo.toml`、`README.md`(公开 API 列表:四个 crate 各一句话 + "谁是消费者:Dozer(已接入)、Digger(嵌入待做)" + 兼容性承诺:wire 只追加、落盘格式版本、tag 即发布)、`.github/workflows/ci.yml`(仿 `byteui`:`fmt --check`、`clippy --all-targets --all-features -- -D warnings`、`test --all-features`、`scripts/check-deps.sh`;runner `macos-latest`)。
 
-- [ ] **Step 3: 独立构建(无 dozer 在旁)**
+- [x] **Step 3: 独立构建(无 dozer 在旁)**
   在**一个全新目录**(例如 `/tmp/claude-501/bytehost-clean`,`git clone` 刚才的结果)里依次运行:`cargo fmt --check`、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo test --all-features`、`bash scripts/check-deps.sh`、`cargo test -p bytehost-apps --all-features --test process_apps_live -- --ignored`(需要 python3/node)。
   Expected:全绿。**若 clippy 在 dozer 里是 warning 但这里 `-D warnings` 失败,在新仓库修掉(只改告警,不改逻辑)。**
 
-- [ ] **Step 4: 嵌入验证(Digger 的用法,没有 dozerd)**
+- [x] **Step 4: 嵌入验证(Digger 的用法,没有 dozerd)**
   `tests/embedded_host.rs`:不依赖任何 dozer 代码,用 `AppService::start_with(tmp, GatewayConfig{port:0})` + `InProcess`,装并启动 `scripts/samples/py-notes`,经 gateway 带 Cookie 请求拿到 200 与 `runtime:`,断言不带 Cookie 为 403,`shutdown()` 后端口关闭。`examples/embed.rs` 是同样流程的 30 行演示(作为文档)。
 
-- [ ] **Step 5: 变异验证(门禁本身)**
+- [x] **Step 5: 变异验证(门禁本身)**
   临时给 `bytehost-panel` 的 `Cargo.toml` 加一个 `iced_core` 依赖 → `check-deps.sh` 必须失败;在 `bytehost-panel/src` 里写一个 `AppSlot` 字样 → 必须失败。恢复。
 
-- [ ] **Step 6: 🔒 发布(停下来问用户)**
+- [x] **Step 6: 🔒 发布(停下来问用户)**
   需要用户确认并执行(或明确授权后由执行者执行):
   1. 在 GitHub 建 `byteboyai/bytehost`(空仓库);
   2. `git remote add origin … && git push origin main`;
   3. `git tag v0.1.0 && git push origin v0.1.0`。
   执行者在此**停下**,把 `git log --oneline | head`、`git tag`、验收输出贴给用户,等回复。
 
-- [ ] **Step 7: Commit(在 dozer 仓库)**
+- [x] **Step 7: Commit(在 dozer 仓库)**
   在 `docs/superpowers/specs/` 新建 `2026-10-08-bytehost-a7-acceptance-report.md`,记录 Step 3–5 的真实输出与新仓库首个提交 id/tag,然后:
   ```bash
   git add docs/superpowers/specs/2026-10-08-bytehost-a7-acceptance-report.md
