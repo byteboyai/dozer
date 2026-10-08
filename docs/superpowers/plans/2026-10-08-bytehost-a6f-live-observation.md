@@ -127,7 +127,7 @@
 - [x] **Step 2: 确认失败 → Step 3: 实现**;`app.rs::run_app_host_effects` 增 `Effect::Subscribe`:`client.app_subscribe().await`,成功则发 `M::Subscribed` 并 `spawn` 转发循环把 `AppChange` 映射成 `M::Changed`/`M::SubscriptionLost`(经 `proxy.send_event(Message::AppHost(..))`);失败直接 `M::SubscriptionLost`。失败只写日志(`module` 来源),**不弹 Toast**。
 - [x] **Step 4: 通过** — `cargo test -p dozer-app app_host`(34 passed)、`cargo test -p dozer-client`(7 passed);`cargo clippy -p dozer-app -p dozer-client --all-targets` 无新警告。变异:去掉 `dirty` 合并,风暴用例失败;让 `Live` 仍用 2s,第一个用例失败(均已实测确认)。
 - [ ] **Step 5: 手动验收**(需要 GUI;结果如实写进报告 §2,未做的不勾):装 `py-notes` → 点它的 `/crash` → 面板应在 <1s 内进入"启动中…"而不是等下一次 2s 轮询;`kill -9 $(pgrep dozerd)` 后 2s 内显示 dozerd 不可用,重启 dozerd 后自动恢复订阅(日志里能看到重订阅)。
-- [ ] **Step 6: Commit** — `feat(dozer-client,dozer-app): subscribe to app changes; polling becomes a safety net (A6f task 2)`。
+- [x] **Step 6: Commit** — `feat(dozer-client,dozer-app): subscribe to app changes; polling becomes a safety net (A6f task 2)`。
 
 ---
 
