@@ -23,6 +23,7 @@ pub mod project_create;
 pub mod search;
 pub mod settings;
 pub mod settings_apps;
+pub mod settings_apps_view;
 pub mod ssh;
 pub mod toast;
 pub mod todo;

@@ -551,7 +551,10 @@ fn run_apps_message(
                 });
             }
             Effect::HostChanged => s.host_changed = true,
-            Effect::Toast { level, text, key } => s.outbox.push_keyed(LOG, level, text, key),
+            Effect::Notice { level, text, key } => {
+                let level = crate::extensions::app_host::notice_level(level);
+                s.outbox.push_keyed(LOG, level, text, key);
+            }
             Effect::RuntimePlan(runtime) => {
                 handle.spawn(async move {
                     let r = client.app_runtime_plan(runtime).await.map(Box::new);

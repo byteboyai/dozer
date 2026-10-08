@@ -3964,7 +3964,8 @@ impl App {
                         crate::extensions::settings_apps::Effect::HostChanged => {
                             self.app_host_update(crate::extensions::app_host::Message::Refresh);
                         }
-                        crate::extensions::settings_apps::Effect::Toast { level, text, key } => {
+                        crate::extensions::settings_apps::Effect::Notice { level, text, key } => {
+                            let level = crate::extensions::app_host::notice_level(level);
                             self.push_toast_keyed(LOG, level, text, &key);
                         }
                         _ => {}

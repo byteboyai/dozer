@@ -294,21 +294,23 @@ dozer 侧改动:
 - Stays in dozer:全部 `iced_widget` 视图(`view`、`app_row`、`log_viewer`、`flow_view`、`review_view`…)与 `at_bottom`;`settings.rs::run_apps_message` 的副作用执行(`Effect`→`Client` 调用,改用 `AppHostApi`);`tick_armed`/`arm_tick` 仍是状态机的一部分(随状态机搬走,测试 `only_one_tick_is_ever_armed_until_it_fires` 随行)。
 - 注意:安装来源/信任等级今天固定为本机目录(`Local`/`Trusted`)——本任务**不改**这一点(A6h 才扩展),只是把"点了安装→出计划→审批→安装"的状态机搬走,让 Digger 的前端可以驱动同一流程。
 
-- [ ] **Step 1: 记录基线**
-  `cargo test -p dozer-app -- settings_apps 2>&1 | grep "test result"`(35 个),搬后总数必须不少于它。
+- [x] **Step 1: 记录基线**
+  `cargo test -p dozer-app -- settings_apps 2>&1 | grep "test result"` = **47 个**(计划写 35,是 A6h 之后增长;以实测 47 为准),搬后总数必须不少于它。
 
-- [ ] **Step 2: 拆文件并搬状态机**
-  `git mv` 不适用(拆分),手工:新建 `install.rs` 放原 1–858 行与 `#[cfg(test)]` 全部非视图用例;`settings_apps_view.rs` 放视图;`settings_apps.rs` 变成 `pub use bytehost_panel::install::*;` + `pub use super::settings_apps_view::view;`。`Effect::Toast` 的使用点(`settings.rs`)改为 `Effect::Notice` 并映射 `NoticeLevel`。
+- [x] **Step 2: 拆文件并搬状态机**
+  `git mv` 不适用(拆分),手工:新建 `install.rs` 放原 **1–1215 行(机器 + 纯展示函数)与整个 `#[cfg(test)]` 用例**(实测:全部 47 个用例都不构建 iced `El`,都属状态机/纯展示,全部搬走;计划写的 1–858 是 A6h 前的旧边界);`settings_apps_view.rs` 放视图(1217–1815);`settings_apps.rs` 变成 `pub use bytehost_panel::install::*;` + `pub type State = InstallFlowState;` + `pub use super::settings_apps_view::view;`。`Effect::Toast` 的使用点(`settings.rs`、`app/update.rs`)改为 `Effect::Notice`,经 `app_host::notice_level` 映射 `NoticeLevel`→`toast::Level`。
+  **偏差**:`State`→`InstallFlowState`,但 dozer 侧保留 `settings_apps::State` 别名(调用点不动);`managed_runtime_of`/`observed_running`/`runtime_uninstalling`(由原视图内联的 `state.uninstalling.contains` 抽出)是三处新 `pub`(视图要用);`install.rs` 里所有 `iced` 字面量(含 `noticed` 子串的测试名)已清,过 Task 6 门禁 `grep -rn "iced" crates/bytehost-panel`。
 
-- [ ] **Step 3: 验证**
-  Run: `cargo test -p bytehost-panel`、`cargo test -p dozer-app -- settings_apps app_host`、`cargo clippy --all-targets`。`grep -rn "iced" crates/bytehost-panel` 无结果。
+- [x] **Step 3: 验证**
+  Run: `cargo test -p bytehost-panel`(**95** = 48 + 47)、`cargo test -p dozer-app`(1878 通过,仅既有 flaky `files::delete_confirm_spec_reflects_pending_target` 失败)、`cargo clippy --all-targets`(仅既有 warning)、`cargo fmt`;`grep -rn "iced" crates/bytehost-panel` 无结果(exit 1);两个门禁脚本均 ok。
 
-- [ ] **Step 4: 变异验证**
-  ① 让 `update(InstallClicked)` 跳过审批直接装 → 对应用例失败(审批卡展示的就是被批准的那份计划);② 让 `ProbesLoaded` 不再报告完成的任务 → 失败。恢复。
+- [x] **Step 4: 变异验证**
+  ① 让 `ApproveClicked` 安装的不是展示的那份计划(把 `name` 改成 `"MUTATED"`)→ `approving_sends_exactly_the_plan_that_was_shown` 失败;② 让 `probe_side_effects` 把每个任务都当未完成(`if !job.finished` → `if true`)→ `a_finished_job_notices_once_and_a_failed_one_notices_its_reason_once` 与 `polling_continues_only_while_a_job_is_unfinished_and_stops_after` 失败。两处均已恢复,95 用例全绿。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   ```bash
   git add crates/bytehost-panel crates/dozer-app
+  # 同样先 `git restore --staged crates/dozer-app/packaging/macos/Info.plist` 再提交。
   git commit -m "refactor(bytehost-panel,dozer-app): install/approval/runtime flow state machine without iced (A7 task 5)"
   ```
 
