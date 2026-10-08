@@ -149,12 +149,12 @@ mod tests {
         assert!(views.spec(slot, true).is_none());
     }
 
-    /// 应用 webview 的导航策略只在 `bytehost-webview` 里有**一份**:dozer 宿主不得再抄一份
-    /// (`runtime.rs` 的命令是 `allows_navigation`,外层适配在 `take_store_removals_ready`)。
+    /// 应用 webview 的导航策略与每应用存储标识只在 `bytehost-webview` 里有**一份**:dozer 宿主不得
+    /// 再抄一份(`allows_navigation` 与 `data_store_identifier` 都从该 crate 引入,见本文件顶部的 `use`)。
     #[test]
     fn no_second_copy_of_the_navigation_policy() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        // 本文件是这条门禁的宿主,自身含 `fn allows_navigation` 字面量——跳过它。
+        // 本文件是这条门禁的宿主,自身含这两个字面量(在断言里)——跳过它。
         let this = std::path::Path::new(file!()).file_name();
         let mut checked = 0;
         for entry in walk_rs(&root) {
@@ -165,6 +165,11 @@ mod tests {
             assert!(
                 !src.contains("fn allows_navigation"),
                 "{} 里出现了导航策略的第二份实现;唯一真相在 bytehost-webview",
+                entry.display()
+            );
+            assert!(
+                !src.contains("fn data_store_identifier"),
+                "{} 里出现了每应用存储标识的第二份实现;唯一真相在 bytehost-webview",
                 entry.display()
             );
             checked += 1;

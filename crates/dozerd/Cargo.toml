@@ -6,7 +6,7 @@ edition.workspace = true
 [dependencies]
 dozer-core = { path = "../dozer-core", features = ["logging"] }
 # 应用宿主:`server` feature = gateway + AppManager(只有 dozerd 打开)
-bytehost-apps = { path = "../bytehost-apps", features = ["server"] }
+bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.0", features = ["server"] }
 bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.7.0" }
 anyhow.workspace = true
 tokio.workspace = true
@@ -25,5 +25,5 @@ tempfile = "3"
 [dev-dependencies]
 dozer-client = { path = "../dozer-client" }
 # 契约测试:UDS 实现要与进程内实现跑同一份断言。
-bytehost-client = { path = "../bytehost-client", features = ["conformance"] }
+bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.0", features = ["conformance"] }
 uuid.workspace = true

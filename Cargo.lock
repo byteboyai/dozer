@@ -805,6 +805,7 @@ dependencies = [
 [[package]]
 name = "bytehost-apps"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.1.0#20c013ba3262ff25309c58b9c40a2834d3cd31f2"
 dependencies = [
  "bytes",
  "flate2",
@@ -816,7 +817,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tar",
- "tempfile",
  "tokio",
  "toml 0.8.2",
  "tracing",
@@ -827,9 +827,9 @@ dependencies = [
 [[package]]
 name = "bytehost-client"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.1.0#20c013ba3262ff25309c58b9c40a2834d3cd31f2"
 dependencies = [
  "bytehost-apps",
- "tempfile",
  "tokio",
  "tracing",
 ]
@@ -837,6 +837,7 @@ dependencies = [
 [[package]]
 name = "bytehost-panel"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.1.0#20c013ba3262ff25309c58b9c40a2834d3cd31f2"
 dependencies = [
  "bytehost-apps",
  "bytehost-client",
@@ -845,6 +846,7 @@ dependencies = [
 [[package]]
 name = "bytehost-webview"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.1.0#20c013ba3262ff25309c58b9c40a2834d3cd31f2"
 dependencies = [
  "bytehost-apps",
  "url",

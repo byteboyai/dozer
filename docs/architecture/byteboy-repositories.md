@@ -1,6 +1,6 @@
 # ByteBoy 多仓治理
 
-> 状态：生效。最后更新：2026-10-03。
+> 状态：生效。最后更新：2026-10-08。
 
 ## 仓库边界
 
@@ -11,7 +11,7 @@ polyrepo 结构：
 |---|---|---|
 | `byteui` | 平台库 | 原生 UI 组件、主题与交互原语 |
 | `bytegit` | 平台库 | 本地 Git 数据与操作能力 |
-| `bytehost` | 平台库（待建立） | agent、进程、PTY、session 与 Host 契约 |
+| `bytehost` | 平台库 | 应用宿主平台库：应用模型/安装计划/生命周期/来源、进程型应用监管、受管运行时、origin gateway,以及界面框架无关的应用面板与 webview 安全策略。dozer 已接入 `v0.1.0` |
 | `dozer` | 产品 | AI 工作治理与验收 |
 | `digger` | 产品 | 内容生产产品；只复用平台能力，不依赖 dozer 内部实现 |
 | `byteboy-workspace` | 集成（待建立） | 固定一组已验证的仓库提交并运行跨仓测试，不承载产品代码 |
@@ -52,8 +52,10 @@ polyrepo 结构：
 
 1. `byteui`：已独立，dozer 当前固定 `v0.4.1`。
 2. `bytegit`：已完成 `v0.1.0` 骨架；从 `repo_root` 开始按纵向切片迁移。
-3. `bytehost`：先定义 Host SDK 与进程边界，再建仓，禁止直接搬运
-   `dozer-app`/`dozerd` 的混合代码。
+3. `bytehost`：已建仓并发布 `v0.1.0`（应用宿主平台库），dozer 已改为按 tag 消费。
+   注意：`bytehost` 目前的职责是**应用宿主平台库**（见上表）；早期设想的
+   “agent、进程、PTY、session 与 Host 契约”那条职责尚未落位，单独标为待定，
+   不要再用 `bytehost` 这个名字指代那部分。
 4. `digger`：在 Host 契约稳定前保持产品设计仓，不复制 dozer 面板实现。
 5. `byteboy-workspace`：至少三个可构建仓库接入后建立，负责组合版本和跨仓 CI。
 
