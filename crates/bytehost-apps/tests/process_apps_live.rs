@@ -1,7 +1,7 @@
 //! A6e Task 6:真实示例应用端到端验收(需要真 `python3` 与 `node`,默认 `#[ignore]`)。
 //!
 //! 用手工要求的命令运行:
-//! `cargo test -p dozerd --test process_apps_live -- --ignored --nocapture`
+//! `cargo test -p bytehost-apps --test process_apps_live -- --ignored --nocapture`
 //!
 //! 这里用真 `SystemResolver`、真 gateway、真监管线程,对 `scripts/bytehost/samples/`
 //! 里的 `py-notes`(Python)与 `node-notes`(Node)各跑同一条流程:安装 → 启动 →
@@ -12,6 +12,7 @@
 //! 环境没准备齐就必须醒目地失败。
 
 #![cfg(unix)]
+#![cfg(feature = "server")]
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -28,8 +29,8 @@ use bytehost_apps::proto::{AppErrorKind, AppIssue, AppReply, AppRequest, AppSour
 use bytehost_apps::registry::UninstallMode;
 use bytehost_apps::runtime::managed::fetch::FetchMeta;
 use bytehost_apps::runtime::managed::{Fetcher, RuntimeManager};
+use bytehost_apps::service::AppService;
 use bytehost_apps::state::ObservedState;
-use dozerd::app_service::AppService;
 
 fn id(s: &str) -> AppId {
     AppId::new(s).unwrap()

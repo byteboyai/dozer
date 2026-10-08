@@ -76,7 +76,7 @@ async fn session_survives_client_disconnect() {
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
                     groups: test_group_service(),
-                    apps: dozerd::app_service::AppService::unavailable("test"),
+                    apps: bytehost_apps::service::AppService::unavailable("test"),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -226,7 +226,7 @@ async fn unknown_session_returns_error_reply() {
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
                     groups: test_group_service(),
-                    apps: dozerd::app_service::AppService::unavailable("test"),
+                    apps: bytehost_apps::service::AppService::unavailable("test"),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -280,7 +280,7 @@ async fn attach_delivers_marker_exactly_once() {
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
                     groups: test_group_service(),
-                    apps: dozerd::app_service::AppService::unavailable("test"),
+                    apps: bytehost_apps::service::AppService::unavailable("test"),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -371,7 +371,7 @@ async fn attach_from_offset_resumes_within_window() {
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
                     groups: test_group_service(),
-                    apps: dozerd::app_service::AppService::unavailable("test"),
+                    apps: bytehost_apps::service::AppService::unavailable("test"),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -491,7 +491,7 @@ async fn attach_stream_offset_invariant_under_load() {
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
                     groups: test_group_service(),
-                    apps: dozerd::app_service::AppService::unavailable("test"),
+                    apps: bytehost_apps::service::AppService::unavailable("test"),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -598,7 +598,7 @@ async fn attach_from_offset_out_of_window_falls_back_to_full_snapshot() {
                     memories: test_memories(),
                     file_edit_history: test_file_edit_history(),
                     groups: test_group_service(),
-                    apps: dozerd::app_service::AppService::unavailable("test"),
+                    apps: bytehost_apps::service::AppService::unavailable("test"),
                 },
                 dozerd::task_poller::new_in_flight(),
             )

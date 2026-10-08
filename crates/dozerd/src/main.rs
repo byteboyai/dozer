@@ -97,7 +97,7 @@ async fn main() -> Result<()> {
     };
     // 应用宿主:启动永不失败(端口被占用等只会让它"不可用",不影响会话功能);启动时对账,退出时收尾
     let apps =
-        dozerd::app_service::AppService::start(&dozer_core::paths::state_dir().join("bytehost"))
+        bytehost_apps::service::AppService::start(&dozer_core::paths::state_dir().join("bytehost"))
             .await;
     let in_flight = dozerd::task_poller::new_in_flight();
     {

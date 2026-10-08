@@ -91,7 +91,7 @@ pub struct Stores {
     pub memories: std::sync::Arc<crate::memory::MemoryStore>,
     pub file_edit_history: std::sync::Arc<crate::file_edit_history::FileEditHistoryStore>,
     pub groups: std::sync::Arc<crate::group_service::GroupService>,
-    pub apps: std::sync::Arc<crate::app_service::AppService>,
+    pub apps: std::sync::Arc<bytehost_apps::service::AppService>,
 }
 
 /// 单实例检查:`socket` 背后已经有活着的监听者就报错。**启动期要尽早调用**(在做任何有副作用的启动工作——
@@ -1574,7 +1574,7 @@ async fn handle_conn(
                     None => std::future::pending().await,
                 }
             }, if app_sub.is_some() => {
-                match crate::app_service::change_reply(ev) {
+                match bytehost_apps::service::change_reply(ev) {
                     Some(reply) => {
                         w.write_all(encode_line(&Reply::App { reply }).as_bytes()).await?;
                     }
@@ -1811,7 +1811,7 @@ mod tests {
                     memories,
                     file_edit_history,
                     groups,
-                    apps: crate::app_service::AppService::unavailable("test"),
+                    apps: bytehost_apps::service::AppService::unavailable("test"),
                 },
                 crate::task_poller::new_in_flight(),
             );

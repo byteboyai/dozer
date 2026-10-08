@@ -62,7 +62,7 @@ async fn start_test_daemon() -> PathBuf {
                 memories: test_memories(),
                 file_edit_history: test_file_edit_history(),
                 groups: test_group_service(),
-                apps: dozerd::app_service::AppService::unavailable("test"),
+                apps: bytehost_apps::service::AppService::unavailable("test"),
             },
             dozerd::task_poller::new_in_flight(),
         )

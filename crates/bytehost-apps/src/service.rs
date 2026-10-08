@@ -11,20 +11,16 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use bytehost_apps::HOST_VERSION;
-use bytehost_apps::gateway::{Gateway, GatewayConfig, GatewayError};
-use bytehost_apps::manager::{AppManager, ManagerConfig, ManagerError, MonitorConfig};
-use bytehost_apps::port::{load_port, persist_port, pick_port};
-use bytehost_apps::process::restart::RestartPolicy;
-use bytehost_apps::proto::{
-    AppErrorKind, AppFailure, AppReply, AppRequest, ManagedRuntime, RuntimeProbe,
-};
-use bytehost_apps::runtime::managed::{
+use crate::HOST_VERSION;
+use crate::gateway::{Gateway, GatewayConfig, GatewayError};
+use crate::manager::{AppManager, ManagerConfig, ManagerError, MonitorConfig};
+use crate::port::{load_port, persist_port, pick_port};
+use crate::process::restart::RestartPolicy;
+use crate::proto::{AppErrorKind, AppFailure, AppReply, AppRequest, ManagedRuntime, RuntimeProbe};
+use crate::runtime::managed::{
     ChainResolver, Fetcher, ManagedResolver, RtError, RuntimeManager, RuntimeStore,
 };
-use bytehost_apps::runtime::{SystemResolver, SystemRunner, probe_all};
-
-dozer_core::scope!(LOG, module, "apps");
+use crate::runtime::{SystemResolver, SystemRunner, probe_all};
 
 enum State {
     Ready {
@@ -54,7 +50,7 @@ impl AppService {
             Ok(Some(port)) => Self::start_with(root, GatewayConfig { port }).await,
             Ok(None) => Self::first_run(root, pick_port).await,
             Err(e) => {
-                dozer_core::log_error!(LOG, error = %e, "读取 gateway 端口失败,应用宿主不可用");
+                tracing::error!(target: "bytehost::service", error = %e, "读取 gateway 端口失败,应用宿主不可用");
                 Self::unavailable(format!("应用宿主不可用:{e}"))
             }
         }
@@ -71,16 +67,16 @@ impl AppService {
                     // 绑定成功才记住;写不进去就不能继续——否则下次启动换端口,所有应用的本地存储都会丢。
                     if let Err(e) = persist_port(root, port) {
                         gateway.stop().await;
-                        dozer_core::log_error!(LOG, error = %e, "gateway 端口写盘失败,应用宿主不可用");
+                        tracing::error!(target: "bytehost::service", error = %e, "gateway 端口写盘失败,应用宿主不可用");
                         return Self::unavailable(format!("应用宿主不可用:端口无法保存:{e}"));
                     }
                     return Self::finish_start(root, Arc::new(gateway)).await;
                 }
                 Err(GatewayError::PortInUse(p)) => {
-                    dozer_core::log_warn!(LOG, port = p, "首次选的端口被占用,换一个重试");
+                    tracing::warn!(target: "bytehost::service", port = p, "首次选的端口被占用,换一个重试");
                 }
                 Err(e) => {
-                    dozer_core::log_error!(LOG, error = %e, "gateway 启动失败,应用宿主不可用");
+                    tracing::error!(target: "bytehost::service", error = %e, "gateway 启动失败,应用宿主不可用");
                     return Self::unavailable(format!("应用宿主不可用:{e}"));
                 }
             }
@@ -96,7 +92,7 @@ impl AppService {
         let gateway = match Gateway::start(config).await {
             Ok(g) => Arc::new(g),
             Err(e) => {
-                dozer_core::log_error!(LOG, error = %e, "gateway 启动失败,应用宿主不可用");
+                tracing::error!(target: "bytehost::service", error = %e, "gateway 启动失败,应用宿主不可用");
                 return Self::unavailable(format!("应用宿主不可用:{e}"));
             }
         };
@@ -115,7 +111,7 @@ impl AppService {
         let gateway = match Gateway::start(config).await {
             Ok(g) => Arc::new(g),
             Err(e) => {
-                dozer_core::log_error!(LOG, error = %e, "gateway 启动失败,应用宿主不可用");
+                tracing::error!(target: "bytehost::service", error = %e, "gateway 启动失败,应用宿主不可用");
                 return Self::unavailable(format!("应用宿主不可用:{e}"));
             }
         };
@@ -174,7 +170,7 @@ impl AppService {
             Ok(m) => Arc::new(m),
             Err(e) => {
                 gateway.stop().await;
-                dozer_core::log_error!(LOG, error = %e, "应用目录不可用");
+                tracing::error!(target: "bytehost::service", error = %e, "应用目录不可用");
                 return Self::unavailable(format!("应用宿主不可用:应用目录打不开:{e}"));
             }
         };
@@ -182,9 +178,11 @@ impl AppService {
         let for_reconcile = manager.clone();
         match tokio::task::spawn_blocking(move || for_reconcile.reconcile()).await {
             Ok(report) => log_report(&report, "启动对账"),
-            Err(e) => dozer_core::log_error!(LOG, error = %e, "启动对账任务失败(panic?)"),
+            Err(e) => {
+                tracing::error!(target: "bytehost::service", error = %e, "启动对账任务失败(panic?)")
+            }
         }
-        dozer_core::log_info!(LOG, port = gateway.port(), "应用宿主已启动");
+        tracing::info!(target: "bytehost::service", port = gateway.port(), "应用宿主已启动");
         Arc::new(Self {
             state: State::Ready {
                 manager,
@@ -250,8 +248,7 @@ impl AppService {
                         AppFailure::new(AppErrorKind::Internal, format!("探测任务失败: {e}"))
                     })?;
                 let runtime_manager = runtime_manager.clone();
-                let installable_target =
-                    bytehost_apps::runtime::managed::Target::current().is_some();
+                let installable_target = crate::runtime::managed::Target::current().is_some();
                 let jobs = runtime_manager.jobs();
                 Ok(AppReply::Runtimes {
                     runtimes: probes
@@ -335,9 +332,7 @@ impl AppService {
     /// 订阅应用变更事件流(`AppManager::events()` 的 broadcast 接收者)。
     /// `Unavailable` 状态返回 `None`——服务不可用时无处订阅,由调用方回一个失败。
     /// 每个订阅者各拿一份独立接收者;容量有限,慢消费者会拿到 `Lagged`(调用方转成整体重拉)。
-    pub fn subscribe(
-        &self,
-    ) -> Option<tokio::sync::broadcast::Receiver<bytehost_apps::event::AppEvent>> {
+    pub fn subscribe(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::AppEvent>> {
         match &self.state {
             State::Ready { manager, .. } => Some(manager.events()),
             State::Unavailable(_) => None,
@@ -369,19 +364,21 @@ impl AppService {
         let m = manager.clone();
         match tokio::task::spawn_blocking(move || m.suspend_all()).await {
             Ok(report) => log_report(&report, "退出收尾"),
-            Err(e) => dozer_core::log_error!(LOG, error = %e, "退出收尾任务失败(panic?)"),
+            Err(e) => {
+                tracing::error!(target: "bytehost::service", error = %e, "退出收尾任务失败(panic?)")
+            }
         }
         gateway.stop().await;
     }
 }
 
 /// 把对账/收尾的结果写进日志:单个应用的失败,以及读不出来的记录(损坏的 `state.json`)。
-fn log_report(report: &bytehost_apps::manager::ReconcileReport, what: &str) {
+fn log_report(report: &crate::manager::ReconcileReport, what: &str) {
     for (app, error) in &report.failures {
-        dozer_core::log_warn!(LOG, app = %app, error = %error, "{what}:应用处理失败");
+        tracing::warn!(target: "bytehost::service", app = %app, error = %error, "{what}:应用处理失败");
     }
     for (dir, error) in &report.problems {
-        dozer_core::log_warn!(LOG, dir = %dir, error = %error, "{what}:读不出应用记录");
+        tracing::warn!(target: "bytehost::service", dir = %dir, error = %error, "{what}:读不出应用记录");
     }
 }
 
@@ -422,7 +419,7 @@ fn now_ms() -> u64 {
 /// - `Lagged(_)` → `Resync`(慢消费者漏了事件,让它整体重拉;不能静默漏掉)。
 /// - `Closed` → `None`(发送端没了:订阅结束)。
 pub fn change_reply(
-    event: Result<bytehost_apps::event::AppEvent, tokio::sync::broadcast::error::RecvError>,
+    event: Result<crate::event::AppEvent, tokio::sync::broadcast::error::RecvError>,
 ) -> Option<AppReply> {
     match event {
         Ok(event) => Some(AppReply::Changed {
@@ -440,7 +437,7 @@ fn spawn_event_logger(manager: &Arc<AppManager>) {
         loop {
             match rx.recv().await {
                 Ok(event) => {
-                    dozer_core::log_info!(LOG, app = %event.app(), event = ?event, "应用事件")
+                    tracing::info!(target: "bytehost::service", app = %event.app(), event = ?event, "应用事件")
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -452,10 +449,10 @@ fn spawn_event_logger(manager: &Arc<AppManager>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytehost_apps::id::AppId;
-    use bytehost_apps::plan::{Approval, Provenance, TrustLevel};
-    use bytehost_apps::proto::{AppRequest, AppSource};
-    use bytehost_apps::registry::UninstallMode;
+    use crate::id::AppId;
+    use crate::plan::{Approval, Provenance, TrustLevel};
+    use crate::proto::{AppRequest, AppSource};
+    use crate::registry::UninstallMode;
     use std::io::{Read, Write};
 
     fn write_app(dir: &Path, id: &str, body: &str) -> AppSource {
@@ -546,13 +543,13 @@ source = "web/"
 
     #[test]
     fn change_reply_maps_events_to_invalidation_signals() {
-        use bytehost_apps::event::AppEvent;
+        use crate::event::AppEvent;
         use tokio::sync::broadcast::error::RecvError;
 
         assert_eq!(
             change_reply(Ok(AppEvent::StateChanged {
                 app: id("excalidraw"),
-                state: bytehost_apps::state::ObservedState::Running,
+                state: crate::state::ObservedState::Running,
             })),
             Some(AppReply::Changed {
                 app: id("excalidraw")
@@ -568,7 +565,7 @@ source = "web/"
     /// 广播落后(`Lagged`)必须整体重拉,不能静默漏掉——把广播灌满后消费者应收到 `Resync`。
     #[tokio::test]
     async fn a_lagging_consumer_gets_a_resync_instead_of_silently_missing_events() {
-        use bytehost_apps::event::AppEvent;
+        use crate::event::AppEvent;
 
         let (tx, mut rx) = tokio::sync::broadcast::channel::<AppEvent>(2);
         for _ in 0..5 {
@@ -907,7 +904,7 @@ source = "web/"
     }
 
     fn persisted_port(root: &Path) -> Option<u16> {
-        bytehost_apps::port::load_port(root).unwrap()
+        crate::port::load_port(root).unwrap()
     }
 
     /// 首次运行选中的端口恰好被占:换一个再试,**只记住真正绑上的那个**。
@@ -1027,7 +1024,7 @@ source = "web/"
             panic!("expected apps")
         };
         let row = apps.into_iter().find(|r| r.id == id("site")).unwrap();
-        assert_eq!(row.version, bytehost_apps::id::Version::new(1, 0, 0));
+        assert_eq!(row.version, crate::id::Version::new(1, 0, 0));
         assert_eq!(row.previous_version, None);
         let note = row.rollback_note.unwrap();
         assert!(!note.automatic);
@@ -1094,12 +1091,12 @@ port_env = "APP_PORT"
 
     /// 轮询 `List` 直到该应用满足 `pred`(最多 `secs` 秒)。
     #[cfg(unix)]
-    async fn wait_app<F: Fn(&bytehost_apps::proto::AppSummary) -> bool>(
+    async fn wait_app<F: Fn(&crate::proto::AppSummary) -> bool>(
         svc: &AppService,
         app: &AppId,
         secs: u64,
         pred: F,
-    ) -> bytehost_apps::proto::AppSummary {
+    ) -> crate::proto::AppSummary {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
         loop {
             let AppReply::Apps { apps } = svc.handle(AppRequest::List).await.unwrap() else {
@@ -1120,7 +1117,7 @@ port_env = "APP_PORT"
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_python_app_runs_through_the_wire_and_dies_with_dozerd() {
-        use bytehost_apps::state::{DesiredState, ObservedState};
+        use crate::state::{DesiredState, ObservedState};
         if !have_python3() {
             return;
         }
@@ -1201,14 +1198,14 @@ port_env = "APP_PORT"
             .await
             .unwrap();
         wait_app(&first, &id("pyapp"), 15, |a| {
-            matches!(a.observed, bytehost_apps::state::ObservedState::Running)
+            matches!(a.observed, crate::state::ObservedState::Running)
         })
         .await;
         first.shutdown().await;
 
         let second = AppService::start_with(&root, GatewayConfig { port: 0 }).await;
         wait_app(&second, &id("pyapp"), 15, |a| {
-            matches!(a.observed, bytehost_apps::state::ObservedState::Running)
+            matches!(a.observed, crate::state::ObservedState::Running)
         })
         .await;
         let url = running_url(
@@ -1222,9 +1219,9 @@ port_env = "APP_PORT"
     }
 
     // ===== A6d Task 4:运行时安装经 dozerd 线上协议 =====
-    use bytehost_apps::digest::sha256_hex;
-    use bytehost_apps::proto::RuntimeDownload;
-    use bytehost_apps::runtime::managed::{Fetcher, UvRunner};
+    use crate::digest::sha256_hex;
+    use crate::proto::RuntimeDownload;
+    use crate::runtime::managed::{Fetcher, UvRunner};
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -1333,22 +1330,22 @@ port_env = "APP_PORT"
     async fn start_with_fake_runtime(
         root: &Path,
         fetcher: Arc<dyn Fetcher>,
-        pins: &'static [bytehost_apps::runtime::managed::Pin],
+        pins: &'static [crate::runtime::managed::Pin],
     ) -> Arc<AppService> {
         let gateway = Arc::new(Gateway::start(GatewayConfig { port: 0 }).await.unwrap());
         let rm = Arc::new(RuntimeManager::with_parts(
             root.join("runtimes"),
             fetcher,
-            Arc::new(bytehost_apps::runtime::managed::TarArchive),
-            Some(bytehost_apps::runtime::managed::Target::Aarch64Apple),
+            Arc::new(crate::runtime::managed::TarArchive),
+            Some(crate::runtime::managed::Target::Aarch64Apple),
             Arc::new(FakeUv::default()),
             pins,
         ));
         AppService::finish_start_with(root, gateway, rm, None).await
     }
 
-    fn node_pins(url: &str, sha: String) -> &'static [bytehost_apps::runtime::managed::Pin] {
-        use bytehost_apps::runtime::managed::{Pin, Target};
+    fn node_pins(url: &str, sha: String) -> &'static [crate::runtime::managed::Pin] {
+        use crate::runtime::managed::{Pin, Target};
         Box::leak(
             vec![Pin {
                 name: "node",
@@ -1504,8 +1501,8 @@ port_env = "APP_PORT"
         if !have_python3() {
             return;
         }
-        use bytehost_apps::runtime::managed::Pin;
-        use bytehost_apps::runtime::managed::Target;
+        use crate::runtime::managed::Pin;
+        use crate::runtime::managed::Target;
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("bytehost");
         // 受管的 python3 包装脚本:内部转调系统 python3,并留下"我是受管版本"的标记。
@@ -1551,7 +1548,7 @@ port_env = "APP_PORT"
             .await
             .unwrap();
         let running = wait_app(&svc, &id("pyapp"), 15, |a| {
-            matches!(a.observed, bytehost_apps::state::ObservedState::Running)
+            matches!(a.observed, crate::state::ObservedState::Running)
         })
         .await;
         assert!(running.url.is_some(), "{running:?}");
@@ -1638,10 +1635,10 @@ source = "web/"
             _max_bytes: u64,
             _on_progress: &mut dyn FnMut(u64, Option<u64>),
             _cancel: &AtomicBool,
-        ) -> std::io::Result<bytehost_apps::runtime::managed::fetch::FetchMeta> {
+        ) -> std::io::Result<crate::runtime::managed::fetch::FetchMeta> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             std::fs::write(dest, &self.bytes)?;
-            Ok(bytehost_apps::runtime::managed::fetch::FetchMeta {
+            Ok(crate::runtime::managed::fetch::FetchMeta {
                 effective_url: self.effective_url.clone(),
                 bytes: self.bytes.len() as u64,
             })
