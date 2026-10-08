@@ -1145,34 +1145,78 @@ fn app_panel_pane<'a>(
     slot: AppSlot,
     border: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    use crate::extensions::app_host::{Message as M, PanelView as V};
+    use crate::extensions::app_host::{LogsView, Message as M, PanelView as V};
     let colors = byteui::theme::color::current();
     let on_press = |m: M| Message::AppHost(m);
-    let (headline, detail, action): (String, Option<String>, Option<(&'static str, M)>) =
-        match app.app_host.view_model(slot) {
-            V::HostUnavailable(reason) => ("应用宿主不可用".into(), Some(reason), None),
-            V::Loading => ("正在读取应用状态…".into(), None, None),
-            V::Disconnected => (
-                "无法连接 dozerd".into(),
-                Some("应用状态暂时读不到,连上后会自动恢复".into()),
-                None,
-            ),
-            V::Missing => ("这个应用已不在已安装列表里".into(), None, None),
-            V::Stopped => ("应用未运行".into(), None, Some(("启动", M::Start(slot)))),
-            V::Busy(text) => (text.into(), None, None),
-            V::Opening => ("正在打开…".into(), None, None),
-            V::OpenFailed => (
-                "打开失败".into(),
-                Some("再次点击侧栏图标重试,或先停止应用".into()),
-                Some(("停止", M::Stop(slot))),
-            ),
-            V::Running => ("应用运行中".into(), None, None),
-            V::Crashed(reason) => (
-                "应用已退出".into(),
-                Some(reason),
-                Some(("重新启动", M::Start(slot))),
-            ),
-        };
+    let view = app.app_host.view_model(slot);
+
+    // 运行时问题页:标题/详情来自 `issue_texts`,两个按钮(去设置安装 / 重试)。
+    if let V::RuntimeIssue(issue) = &view {
+        let (headline, detail) = crate::extensions::app_host::issue_texts(issue);
+        let mut body = column![
+            text(app.app_host.display_name(slot))
+                .size(byteui::theme::font::body())
+                .color(colors.cream),
+            text(headline)
+                .size(byteui::theme::font::body())
+                .color(colors.dim),
+            text(detail)
+                .size(byteui::theme::font::body())
+                .color(colors.dim),
+        ]
+        .spacing(8)
+        .align_x(iced_widget::core::alignment::Horizontal::Center);
+        body = body.push(
+            row![
+                iced_widget::button(text("去设置安装").size(byteui::theme::font::body()))
+                    .padding([4, 12])
+                    .on_press(on_press(M::OpenRuntimeSettings))
+                    .style(byteui::feedback::dialog::action_button_style(colors.gold)),
+                iced_widget::button(text("重试").size(byteui::theme::font::body()))
+                    .padding([4, 12])
+                    .on_press(on_press(M::Start(slot)))
+                    .style(byteui::feedback::dialog::action_button_style(colors.dim)),
+            ]
+            .spacing(8),
+        );
+        return container(body)
+            .center(Length::Fill)
+            .style(move |_t: &iced_widget::Theme| container::Style {
+                background: Some(byteui::theme::color::current().panel.into()),
+                border,
+                ..container::Style::default()
+            })
+            .into();
+    }
+
+    let crashed = matches!(view, V::Crashed(_));
+    let (headline, detail, action): (String, Option<String>, Option<(&'static str, M)>) = match view
+    {
+        V::HostUnavailable(reason) => ("应用宿主不可用".into(), Some(reason), None),
+        V::Loading => ("正在读取应用状态…".into(), None, None),
+        V::Disconnected => (
+            "无法连接 dozerd".into(),
+            Some("应用状态暂时读不到,连上后会自动恢复".into()),
+            None,
+        ),
+        V::Missing => ("这个应用已不在已安装列表里".into(), None, None),
+        V::Stopped => ("应用未运行".into(), None, Some(("启动", M::Start(slot)))),
+        V::Busy(text) => (text.into(), None, None),
+        V::Opening => ("正在打开…".into(), None, None),
+        V::OpenFailed => (
+            "打开失败".into(),
+            Some("再次点击侧栏图标重试,或先停止应用".into()),
+            Some(("停止", M::Stop(slot))),
+        ),
+        V::Running => ("应用运行中".into(), None, None),
+        V::Crashed(reason) => (
+            "应用已退出".into(),
+            Some(reason),
+            Some(("重新启动", M::Start(slot))),
+        ),
+        // 上面已单独处理(带两个按钮),这里不会到达。
+        V::RuntimeIssue(_) => ("需要运行时".into(), None, None),
+    };
     let mut body = column![
         text(app.app_host.display_name(slot))
             .size(byteui::theme::font::body())
@@ -1190,7 +1234,70 @@ fn app_panel_pane<'a>(
                 .color(colors.dim),
         );
     }
-    if let Some((label, msg)) = action {
+
+    // 崩溃页才有日志区:按钮行 + (展开时)日志文本。
+    let logs = app.app_host.logs_view(slot);
+    if crashed {
+        let mut buttons = row![].spacing(8);
+        if let Some((label, msg)) = action {
+            buttons = buttons.push(
+                iced_widget::button(text(label).size(byteui::theme::font::body()))
+                    .padding([4, 12])
+                    .on_press(on_press(msg))
+                    .style(byteui::feedback::dialog::action_button_style(colors.gold)),
+            );
+        }
+        let (log_label, log_msg) = match logs {
+            LogsView::Hidden | LogsView::Loading => ("查看日志", M::ShowLogs(slot)),
+            _ => ("收起日志", M::HideLogs(slot)),
+        };
+        buttons = buttons.push(
+            iced_widget::button(text(log_label).size(byteui::theme::font::body()))
+                .padding([4, 12])
+                .on_press(on_press(log_msg))
+                .style(byteui::feedback::dialog::action_button_style(colors.dim)),
+        );
+        body = body.push(buttons);
+        match logs {
+            LogsView::Loading => {
+                body = body.push(
+                    text("读取日志…")
+                        .size(byteui::theme::font::body())
+                        .color(colors.dim),
+                );
+            }
+            LogsView::Loaded {
+                text: log_text,
+                truncated,
+            } => {
+                if truncated {
+                    body = body.push(
+                        text("仅显示最后若干行")
+                            .size(byteui::theme::font::body())
+                            .color(colors.dim),
+                    );
+                }
+                let lines = iced_widget::text(log_text)
+                    .size(byteui::theme::font::body())
+                    .font(Font::default())
+                    .shaping(iced_widget::core::text::Shaping::Advanced)
+                    .width(Length::Fill);
+                body = body.push(
+                    iced_widget::scrollable(container(lines).width(Length::Fill).padding(8))
+                        .height(Length::Fixed(220.0))
+                        .width(Length::Fill),
+                );
+            }
+            LogsView::Failed(reason) => {
+                body = body.push(
+                    text(reason)
+                        .size(byteui::theme::font::body())
+                        .color(colors.dim),
+                );
+            }
+            LogsView::Hidden => {}
+        }
+    } else if let Some((label, msg)) = action {
         body = body.push(
             iced_widget::button(text(label).size(byteui::theme::font::body()))
                 .padding([4, 12])
@@ -1198,6 +1305,7 @@ fn app_panel_pane<'a>(
                 .style(byteui::feedback::dialog::action_button_style(colors.gold)),
         );
     }
+
     container(body)
         .center(Length::Fill)
         .style(move |_t: &iced_widget::Theme| container::Style {

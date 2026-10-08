@@ -1139,6 +1139,7 @@ mod tests {
             desired: DesiredState::Running,
             observed,
             url: None,
+            issue: None,
         }
     }
 

@@ -104,6 +104,11 @@ impl State {
     /// 幂等(daemon 其实活着时 `list()` 立刻成功返回 `Ok`),即便传进来的是
     /// 过期的 `daemon_unavailable` 也不会误伤。
     pub fn load(daemon_unavailable: Option<&str>) -> State {
+        Self::load_with_tab(daemon_unavailable, SettingsTab::Theme)
+    }
+
+    /// 同 [`State::load`],但预选某个左栏 tab(如从应用面板「去设置安装」直接落在「应用」页)。
+    pub fn load_with_tab(daemon_unavailable: Option<&str>, tab: SettingsTab) -> State {
         let accounts = git_accounts::load();
         State {
             github: ConnectState::from_accounts(&accounts, GitProvider::GitHub),
@@ -111,7 +116,7 @@ impl State {
             gitee: ConnectState::from_accounts(&accounts, GitProvider::Gitee),
             connect_tasks: HashMap::new(),
             advanced: advanced_state_for_daemon(daemon_unavailable),
-            selected: SettingsTab::Theme,
+            selected: tab,
             tab_hover: None,
             close_hover: false,
             outbox: Default::default(),

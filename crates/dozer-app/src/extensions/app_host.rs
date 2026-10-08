@@ -14,7 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use bytehost_apps::proto::{AppErrorKind, AppFailure, AppSummary};
+use bytehost_apps::proto::{AppErrorKind, AppFailure, AppIssue, AppSummary};
 use bytehost_apps::state::{DesiredState, ObservedState};
 
 use crate::app::AppSlot;
@@ -65,6 +65,14 @@ pub enum Message {
     PanelShown(AppSlot),
     /// 别处(设置里的安装/停止/卸载)改了已安装集合或运行状态:立刻拉一次列表。
     Refresh,
+    /// 用户点了崩溃页的「查看日志」。
+    ShowLogs(AppSlot),
+    /// 用户点了「收起日志」。
+    HideLogs(AppSlot),
+    /// 日志读取的结果。
+    LogsLoaded(AppSlot, Result<(String, bool), Failure>),
+    /// 用户点了运行时问题页的「去设置安装」。
+    OpenRuntimeSettings,
 }
 
 /// 状态机要 `App` 去做的事。
@@ -78,11 +86,28 @@ pub enum Effect {
     SyncRail(Vec<AppSlot>),
     SetUrl(AppSlot, String),
     ClearUrl(AppSlot),
+    /// 读某应用日志末尾(`max_lines` 由状态机定,服务端还会再夹一次)。
+    FetchLogs(AppSlot, u32),
+    /// 打开 设置 → 应用 页(运行时问题页的「去设置安装」)。
+    OpenSettingsApps,
     Toast {
         level: Level,
         text: String,
         key: String,
     },
+}
+
+/// 崩溃页下方日志查看器的状态。
+#[derive(Debug, Clone, PartialEq)]
+pub enum LogsView {
+    /// 未展开。
+    Hidden,
+    /// 正在读。
+    Loading,
+    /// 已读到:`truncated` 表示只显示了末尾若干行。
+    Loaded { text: String, truncated: bool },
+    /// 读取失败(原因留在页面里,不弹 Toast)。
+    Failed(String),
 }
 
 /// 一个应用在 dozerd 里的当前状况(只留面板要用的)。
@@ -93,6 +118,8 @@ struct Row {
     #[allow(dead_code)] // 目前面板只看观察态;期望态留给 A4c 的"开机自启"之类展示
     desired: DesiredState,
     observed: ObservedState,
+    /// 崩溃/起不来时的"看得懂的问题"(运行时缺失/版本不符);仅 `Failed` 时带出。
+    issue: Option<AppIssue>,
 }
 
 /// 整个列表的状况(`State::phase` 为 `None` = 还没拿到过列表)。
@@ -127,6 +154,8 @@ pub enum PanelView {
     Running,
     /// 应用崩溃/启动失败,带原因。
     Crashed(String),
+    /// 应用因运行时缺失/版本不符而起不来:显示专门的提示页(规格 §6.3)。
+    RuntimeIssue(AppIssue),
 }
 
 #[derive(Debug, Default)]
@@ -143,6 +172,8 @@ pub struct State {
     /// 已经把启动地址交给 `AppViews` 的应用。
     url_set: HashSet<AppSlot>,
     acting: HashMap<AppSlot, Act>,
+    /// 每个应用崩溃页下方日志查看器的状态(A6e)。应用离开 `Failed` 时复位为 `Hidden`。
+    logs: HashMap<AppSlot, LogsView>,
     /// 已经成功拉到过一次列表(并因此同步过图标栏)。首次必须无条件同步:磁盘里的布局可能留着已卸载应用的
     /// 条目,而 `order` 的初值也是空,不能靠"集合变了"来触发。
     synced_once: bool,
@@ -210,7 +241,31 @@ impl State {
                 }
                 effects
             }
+            Message::ShowLogs(slot) => self.show_logs(slot),
+            Message::HideLogs(slot) => {
+                self.logs.insert(slot, LogsView::Hidden);
+                Vec::new()
+            }
+            Message::LogsLoaded(slot, result) => {
+                let view = match result {
+                    Ok((text, truncated)) => LogsView::Loaded { text, truncated },
+                    Err(failure) => LogsView::Failed(failure.text().to_owned()),
+                };
+                self.logs.insert(slot, view);
+                Vec::new()
+            }
+            Message::OpenRuntimeSettings => vec![Effect::OpenSettingsApps],
         }
+    }
+
+    /// 读日志:未展开时置 `Loading` 并发一次请求;在途时重复点不重发。
+    fn show_logs(&mut self, slot: AppSlot) -> Vec<Effect> {
+        match self.logs.get(&slot) {
+            Some(LogsView::Loading) | Some(LogsView::Loaded { .. }) => return Vec::new(),
+            _ => {}
+        }
+        self.logs.insert(slot, LogsView::Loading);
+        vec![Effect::FetchLogs(slot, 200)]
     }
 
     fn list_loaded(
@@ -256,6 +311,7 @@ impl State {
                     name: app.name,
                     desired: app.desired,
                     observed: app.observed,
+                    issue: app.issue,
                 },
             );
         }
@@ -277,6 +333,10 @@ impl State {
                 if self.url_set.remove(slot) {
                     effects.push(Effect::ClearUrl(*slot));
                 }
+            }
+            // 离开崩溃态(被重启/运行/停止):旧日志查看器复位,防陈旧。
+            if !matches!(row.observed, ObservedState::Failed { .. }) {
+                self.logs.remove(slot);
             }
         }
         let set_changed = !self.synced_once || order != self.order;
@@ -307,6 +367,7 @@ impl State {
         self.launching.remove(&slot);
         self.launch_failed.remove(&slot);
         self.acting.remove(&slot);
+        self.logs.remove(&slot);
         if self.url_set.remove(&slot) {
             effects.push(Effect::ClearUrl(slot));
         }
@@ -421,16 +482,53 @@ impl State {
                 PanelView::Busy("启动中…")
             }
             ObservedState::Stopping | ObservedState::Uninstalling => PanelView::Busy("停止中…"),
-            ObservedState::Failed { reason, .. } => PanelView::Crashed(reason.clone()),
+            ObservedState::Failed { reason, .. } => match &row.issue {
+                // 有"看得懂的问题"→ 专门的运行时提示页;否则普通崩溃页(可看日志)。
+                Some(issue) => PanelView::RuntimeIssue(issue.clone()),
+                None => PanelView::Crashed(reason.clone()),
+            },
             ObservedState::Installed | ObservedState::Stopped | ObservedState::NotInstalled => {
                 PanelView::Stopped
             }
         }
     }
 
+    /// 崩溃页下方日志查看器的当前状态(未知应用按 `Hidden`)。
+    pub fn logs_view(&self, slot: AppSlot) -> LogsView {
+        self.logs.get(&slot).cloned().unwrap_or(LogsView::Hidden)
+    }
+
     /// 某应用的显示名(面板标题行用);未知时退回 id。
     pub fn display_name(&self, slot: AppSlot) -> String {
         self.name(slot)
+    }
+}
+
+/// 把解释器名映射成给人看的运行时名。
+fn runtime_display_name(runtime: &str) -> &str {
+    match runtime {
+        "node" | "nodejs" => "Node.js",
+        "python" | "python3" => "Python",
+        "uv" => "uv",
+        other => other,
+    }
+}
+
+/// 运行时问题页的标题与详情(纯函数,便于表驱动测试)。
+pub fn issue_texts(issue: &AppIssue) -> (String, String) {
+    match issue {
+        AppIssue::RuntimeMissing { runtime } => (
+            format!("需要 {}", runtime_display_name(runtime)),
+            "尚未安装,可在 设置 → 应用 里一键安装".into(),
+        ),
+        AppIssue::RuntimeVersion {
+            runtime,
+            required,
+            found,
+        } => (
+            format!("需要 {}", runtime_display_name(runtime)),
+            format!("要求 {required},当前 {found}"),
+        ),
     }
 }
 
@@ -451,6 +549,29 @@ mod tests {
             desired: DesiredState::Running,
             observed,
             url: None,
+            issue: None,
+        }
+    }
+
+    fn app_with_issue(id: &str, observed: ObservedState, issue: AppIssue) -> AppSummary {
+        AppSummary {
+            issue: Some(issue),
+            ..app(id, observed)
+        }
+    }
+
+    fn failed(reason: &str) -> ObservedState {
+        ObservedState::Failed {
+            reason: reason.into(),
+            retryable: true,
+        }
+    }
+
+    fn runtime_version_issue() -> AppIssue {
+        AppIssue::RuntimeVersion {
+            runtime: "python3".into(),
+            required: ">=99".into(),
+            found: "3.13.0".into(),
         }
     }
 
@@ -857,5 +978,171 @@ mod tests {
         s.update(Message::ListLoaded(Ok(vec![])), t0 + POLL_INTERVAL, &[]);
         assert!(!s.poll_wanted(false), "连上以后恢复到不轮询");
         assert!(s.poll_if_due(t0 + POLL_INTERVAL * 9, &[]).is_empty());
+    }
+
+    // ===== A6e Task 5:运行时问题页 / 日志查看器 / 跳设置 =====
+
+    #[test]
+    fn a_failed_app_with_a_runtime_issue_shows_the_issue_page_not_the_crash_page() {
+        let mut s = State::default();
+        let a = slot("issue-a");
+        loaded(
+            &mut s,
+            vec![app_with_issue(
+                "issue-a",
+                failed("需要 python3 >=99,当前 3.13.0"),
+                runtime_version_issue(),
+            )],
+            &[],
+        );
+        assert_eq!(
+            s.view_model(a),
+            PanelView::RuntimeIssue(runtime_version_issue())
+        );
+
+        // 无 issue 的 Failed 仍是普通崩溃页。
+        let b = slot("issue-b");
+        loaded(&mut s, vec![app("issue-b", failed("崩了"))], &[]);
+        assert_eq!(s.view_model(b), PanelView::Crashed("崩了".into()));
+
+        // 陈旧问题:应用已经跑起来了,就不该再显示问题页。
+        let c = slot("issue-c");
+        loaded(
+            &mut s,
+            vec![app_with_issue(
+                "issue-c",
+                ObservedState::Running,
+                runtime_version_issue(),
+            )],
+            &[],
+        );
+        assert_eq!(s.view_model(c), PanelView::Opening);
+    }
+
+    #[test]
+    fn showing_logs_fetches_once_and_stores_the_result() {
+        let mut s = State::default();
+        let a = slot("logs-a");
+        loaded(&mut s, vec![app("logs-a", failed("崩了"))], &[]);
+        assert_eq!(s.logs_view(a), LogsView::Hidden);
+
+        let effects = s.update(Message::ShowLogs(a), Instant::now(), &[]);
+        assert_eq!(effects, vec![Effect::FetchLogs(a, 200)]);
+        assert_eq!(s.logs_view(a), LogsView::Loading);
+        // 在途时重复点不重复发。
+        assert!(
+            s.update(Message::ShowLogs(a), Instant::now(), &[])
+                .is_empty()
+        );
+
+        s.update(
+            Message::LogsLoaded(a, Ok(("line1\nline2".into(), true))),
+            Instant::now(),
+            &[],
+        );
+        assert_eq!(
+            s.logs_view(a),
+            LogsView::Loaded {
+                text: "line1\nline2".into(),
+                truncated: true
+            }
+        );
+        assert!(
+            s.update(Message::HideLogs(a), Instant::now(), &[])
+                .is_empty()
+        );
+        assert_eq!(s.logs_view(a), LogsView::Hidden);
+    }
+
+    #[test]
+    fn logs_failure_is_kept_in_place_not_toasted() {
+        let mut s = State::default();
+        let a = slot("logsfail-a");
+        loaded(&mut s, vec![app("logsfail-a", failed("崩了"))], &[]);
+        s.update(Message::ShowLogs(a), Instant::now(), &[]);
+        let effects = s.update(
+            Message::LogsLoaded(a, Err(host_failure(AppErrorKind::NotFound, "没有这个应用"))),
+            Instant::now(),
+            &[],
+        );
+        assert!(effects.is_empty(), "日志失败不进 Toast:{effects:?}");
+        assert_eq!(s.logs_view(a), LogsView::Failed("没有这个应用".into()));
+    }
+
+    #[test]
+    fn logs_are_hidden_again_when_the_app_leaves_the_failed_state() {
+        let mut s = State::default();
+        let a = slot("reset-a");
+        loaded(&mut s, vec![app("reset-a", failed("崩了"))], &[]);
+        s.update(Message::ShowLogs(a), Instant::now(), &[]);
+        s.update(
+            Message::LogsLoaded(a, Ok(("x".into(), false))),
+            Instant::now(),
+            &[],
+        );
+        assert!(matches!(s.logs_view(a), LogsView::Loaded { .. }));
+
+        // 被重启回 Starting/Running:日志查看器复位。
+        loaded(&mut s, vec![app("reset-a", ObservedState::Running)], &[]);
+        assert_eq!(s.logs_view(a), LogsView::Hidden);
+    }
+
+    #[test]
+    fn open_runtime_settings_emits_exactly_one_effect() {
+        let mut s = State::default();
+        let effects = s.update(Message::OpenRuntimeSettings, Instant::now(), &[]);
+        assert_eq!(effects, vec![Effect::OpenSettingsApps]);
+    }
+
+    #[test]
+    fn retry_from_the_issue_page_starts_the_app() {
+        let mut s = State::default();
+        let a = slot("retry-a");
+        loaded(
+            &mut s,
+            vec![app_with_issue(
+                "retry-a",
+                failed("需要 python3"),
+                AppIssue::RuntimeMissing {
+                    runtime: "python3".into(),
+                },
+            )],
+            &[],
+        );
+        let effects = s.update(Message::Start(a), Instant::now(), &[]);
+        assert_eq!(effects, vec![Effect::StartApp(a)]);
+        // issue 页下 acting 优先 → 显示"启动中…"。
+        assert_eq!(s.view_model(a), PanelView::Busy("启动中…"));
+    }
+
+    #[test]
+    fn issue_texts_cover_missing_and_version_mismatch() {
+        let cases = [
+            (
+                AppIssue::RuntimeMissing {
+                    runtime: "node".into(),
+                },
+                ("需要 Node.js", "尚未安装,可在 设置 → 应用 里一键安装"),
+            ),
+            (
+                AppIssue::RuntimeMissing {
+                    runtime: "python3".into(),
+                },
+                ("需要 Python", "尚未安装,可在 设置 → 应用 里一键安装"),
+            ),
+            (
+                AppIssue::RuntimeVersion {
+                    runtime: "node".into(),
+                    required: ">=18".into(),
+                    found: "16.0.0".into(),
+                },
+                ("需要 Node.js", "要求 >=18,当前 16.0.0"),
+            ),
+        ];
+        for (issue, (title, detail)) in cases {
+            let (t, d) = issue_texts(&issue);
+            assert_eq!(t, title, "{issue:?}");
+            assert_eq!(d, detail, "{issue:?}");
+        }
     }
 }

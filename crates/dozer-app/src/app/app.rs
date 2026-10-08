@@ -1868,6 +1868,31 @@ impl App {
                 Effect::SyncRail(slots) => self.sync_installed_apps(&slots),
                 Effect::SetUrl(slot, url) => self.app_views.set_url(slot, url),
                 Effect::ClearUrl(slot) => self.app_views.clear(slot),
+                Effect::FetchLogs(slot, max_lines) => {
+                    let Ok(id) = bytehost_apps::id::AppId::new(slot.id()) else {
+                        continue;
+                    };
+                    let (client, proxy) = (self.client.clone(), self.proxy.clone());
+                    self.handle.spawn(async move {
+                        let result = client
+                            .app_logs(id, max_lines)
+                            .await
+                            .map_err(|e| Failure::from_client_error(&e));
+                        let _ = proxy.send_event(Message::AppHost(M::LogsLoaded(slot, result)));
+                    });
+                }
+                Effect::OpenSettingsApps => {
+                    self.settings = Some(crate::extensions::settings::State::load_with_tab(
+                        self.daemon_unavailable.as_deref(),
+                        crate::extensions::settings::SettingsTab::Apps,
+                    ));
+                    // 触发「应用」页的数据加载(切到 Apps 页会现拉探测与列表)。
+                    let _ = self.proxy.send_event(Message::Settings(
+                        crate::extensions::settings::Message::TabSelected(
+                            crate::extensions::settings::SettingsTab::Apps,
+                        ),
+                    ));
+                }
                 Effect::Toast { level, text, key } => {
                     self.push_toast_keyed(LOG, level, text, &key);
                 }
