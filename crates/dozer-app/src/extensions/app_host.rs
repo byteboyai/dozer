@@ -640,10 +640,13 @@ impl State {
     }
 
     /// 到点刷新所有展开着的日志查看器(崩溃页/依赖失败页),返回要执行的 `FetchLogs`。
-    /// 没有展开的查看器时为空(不后台空转)。
-    pub fn tick_logs(&mut self, now: Instant) -> Vec<Effect> {
+    /// 没有展开的查看器、或其面板不在 `visible` 里时为空(不后台空转)。
+    pub fn tick_logs(&mut self, now: Instant, visible: &[AppSlot]) -> Vec<Effect> {
         let mut effects = Vec::new();
         for (&slot, state) in self.logs.iter_mut() {
+            if !visible.contains(&slot) {
+                continue;
+            }
             for _ in state.tick(now) {
                 effects.push(Effect::FetchLogs(slot, app_logs::FETCH_LINES));
             }
@@ -651,9 +654,11 @@ impl State {
         effects
     }
 
-    /// 有展开着的日志查看器吗(据此决定要不要排下一拍唤醒)。
-    pub fn any_logs_open(&self) -> bool {
-        self.logs.values().any(|s| s.view().is_open())
+    /// 有面板可见、且展开着日志查看器吗(据此决定要不要排下一拍唤醒)。
+    pub fn any_logs_open(&self, visible: &[AppSlot]) -> bool {
+        self.logs
+            .iter()
+            .any(|(slot, s)| visible.contains(slot) && s.view().is_open())
     }
 
     /// 某应用的显示名(面板标题行用);未知时退回 id。
@@ -1315,21 +1320,45 @@ mod tests {
         let mut s = State::default();
         let a = slot("tick-a");
         loaded(&mut s, vec![app("tick-a", failed("崩了"))], &[]);
-        assert!(!s.any_logs_open());
+        assert!(!s.any_logs_open(&[a]));
         let t0 = Instant::now();
         s.update(Message::ShowLogs(a), t0, &[]);
         s.update(Message::LogsLoaded(a, Ok(("x".into(), false))), t0, &[]);
-        assert!(s.any_logs_open());
+        assert!(s.any_logs_open(&[a]));
         // 间隔未到不发;到点发一次。
-        assert!(s.tick_logs(t0 + Duration::from_millis(500)).is_empty());
+        assert!(
+            s.tick_logs(t0 + Duration::from_millis(500), &[a])
+                .is_empty()
+        );
         assert_eq!(
-            s.tick_logs(t0 + app_logs::REFRESH_INTERVAL),
+            s.tick_logs(t0 + app_logs::REFRESH_INTERVAL, &[a]),
             vec![Effect::FetchLogs(a, app_logs::FETCH_LINES)]
         );
         // 收起后不再刷。
         s.update(Message::HideLogs(a), t0, &[]);
-        assert!(!s.any_logs_open());
-        assert!(s.tick_logs(t0 + app_logs::REFRESH_INTERVAL * 5).is_empty());
+        assert!(!s.any_logs_open(&[a]));
+        assert!(
+            s.tick_logs(t0 + app_logs::REFRESH_INTERVAL * 5, &[a])
+                .is_empty()
+        );
+    }
+
+    /// 面板不可见(被关掉/切走)时,展开着的日志查看器不刷新、也不要求唤醒;重新可见后立刻续上。
+    #[test]
+    fn a_log_viewer_whose_panel_is_not_visible_is_not_refreshed() {
+        let mut s = State::default();
+        let a = slot("hid-a");
+        loaded(&mut s, vec![app("hid-a", failed("崩了"))], &[]);
+        let t0 = Instant::now();
+        s.update(Message::ShowLogs(a), t0, &[]);
+        s.update(Message::LogsLoaded(a, Ok(("x".into(), false))), t0, &[]);
+        let later = t0 + app_logs::REFRESH_INTERVAL * 5;
+        assert!(s.tick_logs(later, &[]).is_empty());
+        assert!(!s.any_logs_open(&[]));
+        assert_eq!(
+            s.tick_logs(later, &[a]),
+            vec![Effect::FetchLogs(a, app_logs::FETCH_LINES)]
+        );
     }
 
     #[test]

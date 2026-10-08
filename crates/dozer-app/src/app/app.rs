@@ -1796,10 +1796,8 @@ impl App {
     /// `about_to_wait` 是否要为应用宿主排下一拍唤醒(见 `app_host::State::poll_wanted`)。
     /// 有展开着的日志查看器时也要排(否则 1s 刷新不会触发)。
     pub fn app_host_poll_wanted(&self) -> bool {
-        self.app_host.any_logs_open()
-            || self
-                .app_host
-                .poll_wanted(!self.visible_app_slots().is_empty())
+        let visible = self.visible_app_slots();
+        self.app_host.any_logs_open(&visible) || self.app_host.poll_wanted(!visible.is_empty())
     }
 
     /// 取走所有"把日志滚动钉到底部"的一次性请求(应用面板 + 设置页),返回待滚的滚动区 `Id`。
@@ -1823,7 +1821,7 @@ impl App {
     /// (1s 刷新);否则订阅就绪时是 30s 兜底,断开时 2s。
     pub fn app_host_poll_interval(&self) -> std::time::Duration {
         use crate::extensions::app_logs::REFRESH_INTERVAL;
-        if self.app_host.any_logs_open() {
+        if self.app_host.any_logs_open(&self.visible_app_slots()) {
             REFRESH_INTERVAL
         } else {
             self.app_host.poll_interval()
@@ -1833,9 +1831,10 @@ impl App {
     /// `ResumeTimeReached` 时调用:到点就拉一次已安装应用列表,并驱动订阅的发起/重订阅与日志刷新。
     pub fn poll_app_host_if_due(&mut self) {
         let now = std::time::Instant::now();
+        let visible = self.visible_app_slots();
         let mut effects = self.app_host.subscribe_if_due(now);
-        effects.extend(self.app_host.poll_if_due(now, &self.visible_app_slots()));
-        effects.extend(self.app_host.tick_logs(now));
+        effects.extend(self.app_host.poll_if_due(now, &visible));
+        effects.extend(self.app_host.tick_logs(now, &visible));
         self.run_app_host_effects(effects);
     }
 

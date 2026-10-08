@@ -171,6 +171,8 @@ pub struct State {
     /// 每个应用的日志查看器(共享状态机);同一时刻只展开一个(`expanded_log`)。
     logs: std::collections::HashMap<String, LogsState>,
     expanded_log: Option<String>,
+    /// 已经有一拍 `Tick` 定时器在路上:同一时刻只允许一条定时链,否则每条消息都多起一条、越积越多。
+    tick_armed: bool,
 }
 
 impl State {
@@ -458,7 +460,10 @@ impl State {
                 self.logs.entry(id).or_default().on_scrolled(at_bottom);
                 Vec::new()
             }
-            Message::Tick => self.tick_logs(std::time::Instant::now()),
+            Message::Tick => {
+                self.tick_armed = false;
+                self.tick_logs(std::time::Instant::now())
+            }
         }
     }
 
@@ -475,6 +480,17 @@ impl State {
     /// 有展开着的日志查看器吗(调用方据此决定要不要排下一次 `Tick`)。
     pub fn log_tick_wanted(&self) -> bool {
         self.expanded_log.is_some()
+    }
+
+    /// 要不要现在排一拍 `Tick`:有展开的查看器、且还没有定时器在路上。返回 `true` 即视为已排
+    /// (调用方必须真的排);`Tick` 到达时复位,再按需续排。
+    pub fn arm_tick(&mut self) -> bool {
+        if self.expanded_log.is_some() && !self.tick_armed {
+            self.tick_armed = true;
+            true
+        } else {
+            false
+        }
     }
 
     /// 到点刷新展开着的日志查看器(设置页可见时才调用),返回要执行的 `FetchLogs`。
@@ -2102,6 +2118,32 @@ mod tests {
             vec![Effect::FetchLogs("alpha".into(), app_logs::FETCH_LINES)]
         );
         assert!(s.log_tick_wanted());
+    }
+
+    /// 任何消息(滚动、加载结果…)都不能多排定时器:只有一条在路上的 `Tick` 链。
+    #[test]
+    fn only_one_tick_is_ever_armed_until_it_fires() {
+        let mut s = with_app("alpha");
+        assert!(!s.arm_tick(), "没有展开的查看器不排");
+        s.update(Message::ShowLogs("alpha".into()), NOW);
+        assert!(s.arm_tick());
+        for _ in 0..20 {
+            s.update(Message::LogsScrolled("alpha".into(), false), NOW);
+            s.update(
+                Message::LogsLoaded("alpha".into(), Ok(("x".into(), false))),
+                NOW,
+            );
+            assert!(!s.arm_tick(), "已有一拍在路上");
+        }
+        // 切换到另一个应用的查看器也不多排。
+        s.update(Message::ShowLogs("beta".into()), NOW);
+        assert!(!s.arm_tick());
+        // Tick 到达后复位,可以续排一拍;收起后不再排。
+        s.update(Message::Tick, NOW);
+        assert!(s.arm_tick());
+        s.update(Message::HideLogs, NOW);
+        s.update(Message::Tick, NOW);
+        assert!(!s.arm_tick());
     }
 
     #[test]

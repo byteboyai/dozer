@@ -1611,6 +1611,9 @@ mod tests {
                 runtimes: vec![RuntimeProbe {
                     runtime: "docker".into(),
                     availability: RuntimeAvailability::NotInstalled,
+                    managed: vec!["22.11.0".into()],
+                    installable: true,
+                    job: None,
                 }],
             },
         };

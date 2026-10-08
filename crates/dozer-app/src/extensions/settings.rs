@@ -607,7 +607,7 @@ fn run_apps_message(
         }
     }
     // 有展开着的日志查看器:排一拍 `Tick` 定时刷新(收起后不再排,不后台空转)。
-    if s.apps.log_tick_wanted() {
+    if s.apps.arm_tick() {
         let send = send.clone();
         handle.spawn(async move {
             tokio::time::sleep(crate::extensions::app_logs::REFRESH_INTERVAL).await;
