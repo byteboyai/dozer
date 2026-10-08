@@ -174,13 +174,13 @@
 - Produces(`app_host`):行变化时若同一应用的 `version` 与上一次 `List` 不同,且面板已加载过该应用 → 等价于"重新启动"——清掉旧的 launch URL 并重新 `FetchLaunchUrl`(webview 重载),**即使两次 `List` 之间看到的 `observed` 都是 `Running`**(Review Focus 6)。
 - 升级审批卡(`plan_view`,已显示 `upgrading_from`)补两行:应用正在运行时"升级会短暂中断并自动重启";始终显示"新版本起不来会自动回到上一版"。运行状态来自设置页已有的 `List` 结果。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
   - `settings_apps`:无 `previous_version` 的行没有回滚按钮(Review Focus 7);点击回滚 → 进入确认态且**不**发 `Effect::Rollback`;确认 → 发一次(在途时重复确认不重发);取消 → 回到普通态;回滚成功 → 刷新列表 + Toast;`Conflict` 失败 → Toast 带后端原文;`rollback_note` 有值时行内文案表驱动(自动/手动/权限提升跳过三种)。
   - `app_host`:`List` 两次中同一应用 `Running` 但 `version` 变了 → 产出 `FetchLaunchUrl(slot)`;版本不变的两次 `List` 不产出;应用第一次出现(没有上一次)不算变化。
   - 升级审批卡:`plan_view` 的行表驱动加两行(运行中/非运行中)。
-- [ ] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p dozer-app app_host settings_apps`;`cargo clippy -p dozer-app --all-targets` 无新警告)。变异:去掉版本比较,重载用例失败。
+- [x] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p dozer-app app_host settings_apps`;`cargo clippy -p dozer-app --all-targets` 无新警告)。变异:去掉版本比较,重载用例失败。
 - [ ] **Step 5: 手动验收**(需要 GUI,如实记入报告 §2,未做的不勾):装 `py-notes` 1.0.0 并启动、点几次让计数增加 → 把样例 `manifest.toml` 版本改成 1.1.0 并改页面文字后再装 → 审批卡显示"正在运行,会短暂中断"→ 批准后面板自动显示新页面、计数还在;装一个起不来的 1.2.0 → 数秒内设置页该行出现"已从 1.2.0 自动回滚到 1.1.0",面板回到 1.1.0;点「回滚到 1.0.0」→ 确认文案如上 → 面板回到 1.0.0。
-- [ ] **Step 6: Commit** — `feat(dozer-app): upgrade and rollback in the settings page; panel reloads when the version changes (A6g task 4)`。
+- [x] **Step 6: Commit** — `feat(dozer-app): upgrade and rollback in the settings page; panel reloads when the version changes (A6g task 4)`。
 
 ---
 

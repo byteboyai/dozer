@@ -19,7 +19,7 @@ use bytehost_apps::plan::{Approval, ApprovedInstallPlan, InstallPlan, Provenance
 use bytehost_apps::proto::{
     AppSummary, ManagedRuntime, RuntimeAvailability, RuntimeInstallPlan, RuntimeProbe,
 };
-use bytehost_apps::registry::UninstallMode;
+use bytehost_apps::registry::{RollbackNote, UninstallMode};
 use bytehost_apps::state::ObservedState;
 
 use crate::extensions::app_host::Failure;
@@ -64,6 +64,12 @@ pub enum Flow {
         id: String,
         name: String,
     },
+    /// 回滚确认:行内二次确认(不用 Toast)。
+    ConfirmRollback {
+        id: String,
+        name: String,
+        to: bytehost_apps::id::Version,
+    },
     /// 正在出一份运行时安装计划(不下载任何东西)。
     RuntimePlanning {
         runtime: ManagedRuntime,
@@ -100,6 +106,11 @@ pub enum Message {
     FlowDismissed,
     InstallDone(Result<(), Failure>),
     StopClicked(String),
+    /// 点某应用行的「回滚到 Y」:进入行内二次确认。
+    RollbackClicked(String),
+    RollbackConfirmed(String),
+    RollbackCancelled,
+    RolledBack(String, Result<(), Failure>),
     UninstallClicked(String),
     UninstallConfirmed(UninstallMode),
     ActionDone(String, ActKind, Result<(), Failure>),
@@ -138,6 +149,8 @@ pub enum Effect {
         source: PathBuf,
     },
     Stop(String),
+    /// 把某应用回滚到上一版(A6g)。
+    Rollback(String),
     Uninstall(String, UninstallMode),
     /// 为一个运行时出一份安装计划(不下载)。
     RuntimePlan(ManagedRuntime),
@@ -268,6 +281,7 @@ impl State {
                     Flow::Reviewing { .. }
                         | Flow::Failed { .. }
                         | Flow::ConfirmUninstall { .. }
+                        | Flow::ConfirmRollback { .. }
                         | Flow::RuntimeReviewing { .. }
                         | Flow::ConfirmRuntimeUninstall { .. }
                 ) {
@@ -308,6 +322,47 @@ impl State {
                 }
                 self.acting.insert(id.clone(), ActKind::Stop);
                 vec![Effect::Stop(id)]
+            }
+            Message::RollbackClicked(id) => {
+                if self.acting.contains_key(&id) || self.flow != Flow::Idle {
+                    return Vec::new();
+                }
+                let Some(to) = self.previous_version(&id) else {
+                    return Vec::new();
+                };
+                let name = self.display_name(&id);
+                self.flow = Flow::ConfirmRollback { id, name, to };
+                Vec::new()
+            }
+            Message::RollbackCancelled => {
+                if matches!(self.flow, Flow::ConfirmRollback { .. }) {
+                    self.flow = Flow::Idle;
+                }
+                Vec::new()
+            }
+            Message::RollbackConfirmed(id) => {
+                let Flow::ConfirmRollback { id: pending, .. } = &self.flow else {
+                    return Vec::new();
+                };
+                if *pending != id {
+                    return Vec::new();
+                }
+                self.flow = Flow::Idle;
+                vec![Effect::Rollback(id)]
+            }
+            Message::RolledBack(id, result) => {
+                let mut effects = Vec::new();
+                if let Err(f) = result {
+                    effects.push(Effect::Toast {
+                        level: Level::Error,
+                        text: format!("回滚应用 {} 失败:{}", self.display_name(&id), f.text()),
+                        key: format!("apps:rollback:{id}"),
+                    });
+                }
+                // 成败都刷新:列表反映真相,图标栏同步。
+                effects.push(Effect::List);
+                effects.push(Effect::HostChanged);
+                effects
             }
             Message::UninstallClicked(id) => {
                 if self.acting.contains_key(&id) || self.flow != Flow::Idle {
@@ -574,6 +629,28 @@ impl State {
             _ => id.to_owned(),
         }
     }
+
+    /// 某应用当前是否在运行(升级审批卡据此决定要不要提醒"会短暂中断")。
+    fn observed_running(&self, id: &str) -> bool {
+        match &self.apps {
+            Load::Loaded(apps) => apps
+                .iter()
+                .find(|a| a.id.as_str() == id)
+                .is_some_and(|a| a.observed == ObservedState::Running),
+            _ => false,
+        }
+    }
+
+    /// 某应用可回滚到的上一版;没有(全新安装 / 已回滚过)则 `None`。
+    fn previous_version(&self, id: &str) -> Option<bytehost_apps::id::Version> {
+        match &self.apps {
+            Load::Loaded(apps) => apps
+                .iter()
+                .find(|a| a.id.as_str() == id)
+                .and_then(|a| a.previous_version),
+            _ => None,
+        }
+    }
 }
 
 /// 设置窗口已经关掉(状态没了)时到达的安装/停止/卸载结果:状态机已不存在,但事情照样发生了——
@@ -607,6 +684,18 @@ pub fn orphan_result_effects(msg: &Message) -> Vec<Effect> {
                     level: Level::Error,
                     text: format!("{verb}应用 {id} 失败:{}", f.text()),
                     key: format!("apps:act:{id}"),
+                });
+            }
+            effects.push(Effect::HostChanged);
+            effects
+        }
+        Message::RolledBack(id, result) => {
+            let mut effects = Vec::new();
+            if let Err(f) = result {
+                effects.push(Effect::Toast {
+                    level: Level::Error,
+                    text: format!("回滚应用 {id} 失败:{}", f.text()),
+                    key: format!("apps:rollback:{id}"),
                 });
             }
             effects.push(Effect::HostChanged);
@@ -695,16 +784,26 @@ pub struct PlanView {
     pub title: String,
     /// `(项, 值)` 事实行:来源、信任、运行方式、版本变化。
     pub facts: Vec<(&'static str, String)>,
+    /// 升级时要额外说清的提示(A6g):自动重启、起不来会回滚。
+    pub notices: Vec<String>,
     /// 安装/运行时会执行什么(原样展示)。
     pub will_run: Vec<String>,
     pub permissions: Vec<PermLine>,
 }
 
-pub fn plan_view(plan: &InstallPlan) -> PlanView {
+/// `running` = 被升级/安装的应用当前是否在运行(决定要不要提醒"会短暂中断")。
+pub fn plan_view(plan: &InstallPlan, running: bool) -> PlanView {
     let version = match &plan.upgrading_from {
         Some(from) => format!("{from} → {}", plan.version),
         None => plan.version.to_string(),
     };
+    let mut notices = Vec::new();
+    if plan.upgrading_from.is_some() {
+        if running {
+            notices.push("升级会短暂中断并自动重启。".to_owned());
+        }
+        notices.push("新版本起不来会自动回到上一版。".to_owned());
+    }
     let permissions = plan
         .permission_diff
         .iter()
@@ -728,6 +827,7 @@ pub fn plan_view(plan: &InstallPlan) -> PlanView {
             ("信任", trust_label(plan.trust).to_owned()),
             ("运行方式", plan.runtime_kind.clone()),
         ],
+        notices,
         will_run: plan.will_run.clone(),
         permissions,
     }
@@ -761,6 +861,15 @@ pub fn observed_label(state: &ObservedState) -> String {
         ObservedState::Stopping | ObservedState::Uninstalling => "停止中".into(),
         ObservedState::NotInstalled => "未安装".into(),
         ObservedState::Failed { reason, .. } => format!("已退出 · {reason}"),
+    }
+}
+
+/// 一行"回滚过"的持久说明(A6g):自动回滚点出原因,手动回滚只说落到哪版。
+pub fn rollback_note_label(note: &RollbackNote) -> String {
+    if note.automatic {
+        format!("已从 {} 自动回滚到 {}:{}", note.from, note.to, note.reason)
+    } else {
+        format!("已回滚到 {}", note.to)
     }
 }
 
@@ -861,7 +970,11 @@ use iced_widget::{Space, button, column, container, row, scrollable, text};
 
 type El<'a> = Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>;
 
-fn action_button<'a>(label: &'static str, msg: Message, color: iced_widget::core::Color) -> El<'a> {
+fn action_button<'a>(
+    label: impl text::IntoFragment<'a>,
+    msg: Message,
+    color: iced_widget::core::Color,
+) -> El<'a> {
     button(text(label).size(byteui::theme::font::body()))
         .padding([4, 12])
         .on_press(msg)
@@ -923,7 +1036,7 @@ pub fn view(state: &State) -> El<'_> {
     body = body.push(apps_view);
 
     // 安装/卸载流程。
-    body = body.push(flow_view(&state.flow));
+    body = body.push(flow_view(state));
 
     scrollable(body)
         .direction(scrollable::Direction::Vertical(
@@ -1004,7 +1117,7 @@ fn app_row<'a>(state: &'a State, app: &'a AppSummary) -> El<'a> {
             .size(byteui::theme::font::body())
             .color(colors.cream),
         dim(format!(
-            "{} · {}",
+            "版本 {} · {}",
             app.version,
             observed_label(&app.observed)
         )),
@@ -1025,6 +1138,14 @@ fn app_row<'a>(state: &'a State, app: &'a AppSummary) -> El<'a> {
                     colors.dim,
                 ));
             }
+            // 有上一版才给回滚入口(A6g)。
+            if let Some(to) = app.previous_version {
+                r = r.push(action_button(
+                    format!("回滚到 {}", to),
+                    Message::RollbackClicked(id.clone()),
+                    colors.dim,
+                ));
+            }
             // 运行中与失败都能看日志;展开着时按钮变「收起日志」。
             let (log_label, log_msg) = if state.is_log_open(&id) {
                 ("收起日志", Message::HideLogs)
@@ -1035,13 +1156,47 @@ fn app_row<'a>(state: &'a State, app: &'a AppSummary) -> El<'a> {
             if !app.observed.is_transient() {
                 r = r.push(action_button(
                     "卸载",
-                    Message::UninstallClicked(id),
+                    Message::UninstallClicked(id.clone()),
                     colors.red,
                 ));
             }
         }
     }
-    r.into()
+
+    let first: El<'a> = r.into();
+    let mut col = column![first].spacing(6).width(Length::Fill);
+    // 该应用的回滚确认开着:行内二次确认(不用 Toast)。
+    if let Flow::ConfirmRollback {
+        id: pending, to, ..
+    } = &state.flow
+        && pending == &id
+    {
+        col = col.push(
+            column![
+                text(format!(
+                    "回滚到 {to}:应用数据不会一起回滚,旧版本可能无法读取新版本写过的数据。确定回滚?"
+                ))
+                .size(byteui::theme::font::body())
+                .color(colors.cream),
+                row![
+                    action_button("取消", Message::RollbackCancelled, colors.dim),
+                    action_button(
+                        "确定回滚",
+                        Message::RollbackConfirmed(id.clone()),
+                        colors.gold,
+                    ),
+                ]
+                .spacing(10),
+            ]
+            .spacing(6)
+            .width(Length::Fill),
+        );
+    }
+    // 回滚过(自动/手动)的持久说明,留在行下方。
+    if let Some(note) = &app.rollback_note {
+        col = col.push(dim(rollback_note_label(note)));
+    }
+    col.into()
 }
 
 /// 一个应用的日志查看器(系统默认字体、可滚动;`truncated` 顶部提示;刷新失败标一行)。
@@ -1104,8 +1259,9 @@ fn at_bottom(viewport: &scrollable::Viewport) -> bool {
     bottom >= viewport.content_bounds().height - 4.0
 }
 
-fn flow_view(flow: &Flow) -> El<'_> {
+fn flow_view(state: &State) -> El<'_> {
     let colors = byteui::theme::color::current();
+    let flow = &state.flow;
     match flow {
         Flow::Idle => action_button("安装应用…", Message::InstallClicked, colors.gold),
         Flow::Picking => dim("请在弹出的对话框里选择应用目录(目录里要有 manifest.toml)…").into(),
@@ -1141,7 +1297,12 @@ fn flow_view(flow: &Flow) -> El<'_> {
         ]
         .spacing(8)
         .into(),
-        Flow::Reviewing { plan, .. } => review_view(plan),
+        // 回滚确认画在对应应用行下方(行内),这里不出内容。
+        Flow::ConfirmRollback { .. } => Space::new().height(Length::Fixed(0.0)).into(),
+        Flow::Reviewing { plan, .. } => {
+            let running = state.observed_running(plan.app_id.as_str());
+            review_view(plan, running)
+        }
         Flow::RuntimePlanning { runtime } => dim(format!(
             "正在准备 {} 运行时的安装计划…",
             managed_runtime_label(*runtime)
@@ -1209,15 +1370,22 @@ fn runtime_review_view(plan: &RuntimeInstallPlan) -> El<'_> {
 }
 
 /// 审批卡:把 `plan_view` 的每一行如实画出来;升级(申请比已授予更多)的权限用金色标 `↑`。
-fn review_view(plan: &InstallPlan) -> El<'_> {
+fn review_view(plan: &InstallPlan, running: bool) -> El<'_> {
     let colors = byteui::theme::color::current();
-    let view = plan_view(plan);
+    let view = plan_view(plan, running);
     let mut col = column![
         text(format!("安装 {}", view.title))
             .size(byteui::theme::font::body())
             .color(colors.cream),
     ]
     .spacing(6);
+    for notice in view.notices.clone() {
+        col = col.push(
+            text(notice)
+                .size(byteui::theme::font::label())
+                .color(colors.gold),
+        );
+    }
     for (k, v) in view.facts {
         col = col.push(
             row![
@@ -1331,6 +1499,8 @@ mod tests {
             observed,
             url: None,
             issue: None,
+            previous_version: None,
+            rollback_note: None,
         }
     }
 
@@ -1557,6 +1727,101 @@ mod tests {
         );
     }
 
+    fn summary_prev(id: &str, version: (u32, u32, u32), prev: (u32, u32, u32)) -> AppSummary {
+        AppSummary {
+            version: Version::new(version.0, version.1, version.2),
+            previous_version: Some(Version::new(prev.0, prev.1, prev.2)),
+            ..summary(id, ObservedState::Running)
+        }
+    }
+
+    #[test]
+    fn rollback_goes_through_an_inline_confirmation_then_fires_the_effect() {
+        let mut s = State::default();
+        s.update(
+            Message::ListLoaded(Ok(vec![summary_prev("rb-a", (2, 0, 0), (1, 0, 0))])),
+            NOW,
+        );
+        // 点「回滚到 1.0.0」进入行内确认,不发请求。
+        assert!(
+            s.update(Message::RollbackClicked("rb-a".into()), NOW)
+                .is_empty()
+        );
+        assert_eq!(
+            s.flow,
+            Flow::ConfirmRollback {
+                id: "rb-a".into(),
+                name: "name-rb-a".into(),
+                to: Version::new(1, 0, 0),
+            }
+        );
+        // 取消:回 Idle,无副作用。
+        assert!(s.update(Message::RollbackCancelled, NOW).is_empty());
+        assert_eq!(s.flow, Flow::Idle);
+        // 再来一次并确认。
+        s.update(Message::RollbackClicked("rb-a".into()), NOW);
+        assert_eq!(
+            s.update(Message::RollbackConfirmed("rb-a".into()), NOW),
+            vec![Effect::Rollback("rb-a".into())]
+        );
+        assert_eq!(s.flow, Flow::Idle);
+    }
+
+    #[test]
+    fn rollback_click_is_ignored_when_there_is_no_previous_version() {
+        let mut s = State::default();
+        s.update(
+            Message::ListLoaded(Ok(vec![summary("fresh-a", ObservedState::Running)])),
+            NOW,
+        );
+        assert!(
+            s.update(Message::RollbackClicked("fresh-a".into()), NOW)
+                .is_empty()
+        );
+        assert_eq!(s.flow, Flow::Idle);
+    }
+
+    #[test]
+    fn a_failed_rollback_toasts_the_conflict_text_and_still_refreshes() {
+        let mut s = State::default();
+        s.update(
+            Message::ListLoaded(Ok(vec![summary_prev("rb-a", (2, 0, 0), (1, 0, 0))])),
+            NOW,
+        );
+        let effects = s.update(
+            Message::RolledBack(
+                "rb-a".into(),
+                Err(fail(AppErrorKind::Conflict, "回滚会提升权限,已拒绝")),
+            ),
+            NOW,
+        );
+        assert!(
+            matches!(&effects[0], Effect::Toast { level: Level::Error, text, .. }
+                if text.contains("回滚") && text.contains("name-rb-a") && text.contains("回滚会提升权限"))
+        );
+        assert_eq!(&effects[1..], &[Effect::List, Effect::HostChanged]);
+    }
+
+    #[test]
+    fn rollback_note_labels_automatic_and_manual_differently() {
+        let auto = RollbackNote {
+            from: Version::new(2, 0, 0),
+            to: Version::new(1, 0, 0),
+            reason: "启动失败".into(),
+            automatic: true,
+            at_ms: 0,
+        };
+        assert_eq!(
+            rollback_note_label(&auto),
+            "已从 2.0.0 自动回滚到 1.0.0:启动失败"
+        );
+        let manual = RollbackNote {
+            automatic: false,
+            ..auto.clone()
+        };
+        assert_eq!(rollback_note_label(&manual), "已回滚到 1.0.0");
+    }
+
     #[test]
     fn load_failures_are_kept_as_text_not_raised() {
         let mut s = State::default();
@@ -1574,7 +1839,8 @@ mod tests {
 
     #[test]
     fn the_plan_view_shows_every_requested_change_with_its_real_enforcement() {
-        let v = plan_view(&plan());
+        let v = plan_view(&plan(), false);
+        assert!(v.notices.is_empty(), "全新安装不该有升级提示");
         assert_eq!(v.title, "Excalidraw(excalidraw)");
         assert!(v.facts.contains(&("版本", "0.17.0".to_string())));
         assert!(v.facts.contains(&("来源", "本地目录".to_string())));
@@ -1614,8 +1880,15 @@ mod tests {
                 ..Permissions::default()
             },
         );
-        let v = plan_view(&p);
+        let v = plan_view(&p, true);
         assert!(v.facts.contains(&("版本", "0.16.0 → 0.17.0".to_string())));
+        assert_eq!(
+            v.notices,
+            vec![
+                "升级会短暂中断并自动重启。".to_string(),
+                "新版本起不来会自动回到上一版。".to_string(),
+            ]
+        );
         assert_eq!(
             v.permissions,
             vec![PermLine {

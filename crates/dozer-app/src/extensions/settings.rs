@@ -546,6 +546,16 @@ fn run_apps_message(
                     send(M::ActionDone(id, ActKind::Stop, r));
                 });
             }
+            Effect::Rollback(id) => {
+                handle.spawn(async move {
+                    let r = match AppId::new(&id) {
+                        Ok(app) => client.app_rollback(app).await,
+                        Err(e) => Err(anyhow::anyhow!("{e}")),
+                    }
+                    .map_err(|e| Failure::from_client_error(&e));
+                    send(M::RolledBack(id, r));
+                });
+            }
             Effect::Uninstall(id, mode) => {
                 handle.spawn(async move {
                     let r = match AppId::new(&id) {

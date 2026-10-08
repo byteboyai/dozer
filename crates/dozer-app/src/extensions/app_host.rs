@@ -14,6 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
+use bytehost_apps::id::Version;
 use bytehost_apps::proto::{AppErrorKind, AppFailure, AppIssue, AppSummary};
 use bytehost_apps::state::{DesiredState, ObservedState};
 
@@ -157,6 +158,8 @@ struct Row {
     #[allow(dead_code)] // 目前面板只看观察态;期望态留给 A4c 的"开机自启"之类展示
     desired: DesiredState,
     observed: ObservedState,
+    /// 生效版本:升级后即使 `observed` 都是 `Running`,版本变了也要重载面板(A6g Task 4)。
+    version: Version,
     /// 崩溃/起不来时的"看得懂的问题"(运行时缺失/版本不符);仅 `Failed` 时带出。
     issue: Option<AppIssue>,
 }
@@ -443,6 +446,7 @@ impl State {
                     name: app.name,
                     desired: app.desired,
                     observed: app.observed,
+                    version: app.version,
                     issue: app.issue,
                 },
             );
@@ -469,6 +473,21 @@ impl State {
             // 离开崩溃态(被重启/运行/停止):旧日志查看器复位,防陈旧。
             if !matches!(row.observed, ObservedState::Failed { .. }) {
                 self.logs.entry(*slot).or_default().reset();
+            }
+        }
+        // 升级后版本变了:即使两次 `List` 之间 `observed` 都是 `Running`,面板上盖着的
+        // 还是旧版本的页面,必须当作"重新启动"——撤掉旧地址、重新取一次(webview 重载)。
+        // 首次出现(没有上一行)不算变化。
+        for (slot, row) in &rows {
+            let Some(old) = self.rows.get(slot) else {
+                continue;
+            };
+            if old.version != row.version {
+                self.launching.remove(slot);
+                self.launch_failed.remove(slot);
+                if self.url_set.remove(slot) {
+                    effects.push(Effect::ClearUrl(*slot));
+                }
             }
         }
         let set_changed = !self.synced_once || order != self.order;
@@ -717,6 +736,8 @@ mod tests {
             observed,
             url: None,
             issue: None,
+            previous_version: None,
+            rollback_note: None,
         }
     }
 
@@ -940,6 +961,49 @@ mod tests {
         assert!(effects.contains(&Effect::ClearUrl(b)), "没了");
         assert!(effects.contains(&Effect::SyncRail(vec![a])));
         assert_eq!(s.view_model(b), PanelView::Missing);
+    }
+
+    #[test]
+    fn a_version_change_while_still_running_reloads_the_panel() {
+        let mut s = State::default();
+        let a = slot("upg-a");
+        loaded(&mut s, vec![app("upg-a", ObservedState::Running)], &[a]);
+        s.update(
+            Message::LaunchUrlLoaded(a, Ok("http://upg-a.localhost:1/?bh_token=old".into())),
+            Instant::now(),
+            &[a],
+        );
+        assert_eq!(s.view_model(a), PanelView::Running);
+        // 升级:两次都是 Running,只有版本变了。
+        let upgraded = AppSummary {
+            version: Version::new(2, 0, 0),
+            ..running("upg-a")
+        };
+        let effects = loaded(&mut s, vec![upgraded], &[a]);
+        assert!(
+            effects.contains(&Effect::ClearUrl(a)),
+            "升级后要撤掉旧版本的地址"
+        );
+        assert!(
+            effects.contains(&Effect::FetchLaunchUrl(a)),
+            "并立刻重取(webview 重载)"
+        );
+        assert_eq!(s.view_model(a), PanelView::Opening);
+    }
+
+    #[test]
+    fn the_same_version_keeps_the_address() {
+        let mut s = State::default();
+        let a = slot("same-a");
+        loaded(&mut s, vec![running("same-a")], &[a]);
+        s.update(
+            Message::LaunchUrlLoaded(a, Ok("http://same-a.localhost:1/".into())),
+            Instant::now(),
+            &[a],
+        );
+        let effects = loaded(&mut s, vec![running("same-a")], &[a]);
+        assert_eq!(effects, Vec::new(), "版本没变就不动地址");
+        assert_eq!(s.view_model(a), PanelView::Running);
     }
 
     #[test]
