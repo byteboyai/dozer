@@ -176,3 +176,5 @@ Host（窗口 / 布局 / 焦点 / 浮层 / 主题 / 面板 Registry）
 11. **bytehost H6 已完成（2026-10-04）：** 引入 `ActivationCtx` 与 `PanelIo` 的 `client()`/`handle()`/`emitter()`；Todo、Project 记忆刷新、Usage、CodeHealth、Conversations、GroupChat 六个面板的“切入时动作”迁进各自的 `on_activate` 并补上首批单测（含“CodeHealth 切入不自动扫描”这条此前只写在注释里的 spec 差异）；`Workspace` 少了两个无人再调用的包装。`fire_panel_switch_in` 仍是按 `PanelKind` 的 `match`，等 H7 注册制。
 
 12. **bytehost H7a 已完成（2026-10-04）：** 引入 `PanelCatalog`（描述符 + 默认布局 + 旧布局迁移钩子，构造时校验）与 Dozer 组合根 `product::dozer_catalog()`；`PanelKind::default_side()`、`RailLayout::default()`、图标栏的 `panel_meta`、`sanitize_rail_layout` 的“恰 12 个”校验不再写死面板名单，改由清单驱动（O5 落地）。落盘格式不变（`PanelKind` 仍序列化为枚举名，已有黄金测试）。`PanelKind` 换成 `PanelId`、把切入钩子放进清单两项留给 H7b/H8，理由见设计文档 §3.4 补注。
+
+13. **O12 Usage 探针已完成（2026-10-08）：** 能跑,但需要 host 提供 7 项面板自己做不了、且目前没有契约的能力(webview 表面、结果路由、host 专属消息拦截等);面板本体已独立,缺口集中在 host 围栏。夹具 `crates/dozer-app/src/usage_probe/`(仅测试),报告 `docs/dozer-v2/bytehost-H0/07-usage-probe-gaps.md`。

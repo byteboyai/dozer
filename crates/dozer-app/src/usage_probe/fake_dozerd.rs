@@ -46,8 +46,7 @@ impl FakeDozerd {
                 let Ok(Some(line)) = lines.next_line().await else {
                     continue;
                 };
-                let Ok(Request::GetUsageSummary { cwd, .. }) = decode_line::<Request>(&line)
-                else {
+                let Ok(Request::GetUsageSummary { cwd, .. }) = decode_line::<Request>(&line) else {
                     continue;
                 };
                 seen.lock().unwrap().push(cwd);
@@ -94,8 +93,7 @@ mod tests {
         let d = FakeDozerd::start(&rt, Behavior::Rows(rows));
         let got = rt
             .block_on(async {
-                tokio::time::timeout(TIMEOUT, client_for(&d).get_usage_summary("/proj", None))
-                    .await
+                tokio::time::timeout(TIMEOUT, client_for(&d).get_usage_summary("/proj", None)).await
             })
             .unwrap()
             .unwrap();
@@ -126,6 +124,9 @@ mod tests {
         let a = FakeDozerd::start(&rt, Behavior::Rows(vec![]));
         let b = FakeDozerd::start(&rt, Behavior::Rows(vec![]));
         assert_ne!(a.socket(), b.socket());
-        assert!(a.socket().as_os_str().len() < 100, "UDS 路径过长会 bind 失败");
+        assert!(
+            a.socket().as_os_str().len() < 100,
+            "UDS 路径过长会 bind 失败"
+        );
     }
 }

@@ -189,12 +189,7 @@ fn s6_characterizes_g3_panel_cannot_tell_stale_results() {
         0,
         BTreeMap::new(),
     );
-    let older = Message::Loaded(
-        PROJECT,
-        vec![row(AgentKind::Claude, 1)],
-        0,
-        BTreeMap::new(),
-    );
+    let older = Message::Loaded(PROJECT, vec![row(AgentKind::Claude, 1)], 0, BTreeMap::new());
     host.deliver(newer);
     host.deliver(older);
     assert_eq!(

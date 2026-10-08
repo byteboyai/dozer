@@ -2,6 +2,7 @@
 
 > 日期:2026-10-08。性质:**探针规格,不是迁移规格**。只定义"一个面板 + 最小 host + fake 服务能跑"的形式、验收场景和产出物,**不改任何生产代码,不动 `PanelKind`,不做 H8**。
 > 来源:`docs/dozer-v2/bytehost-H8-evaluation.md` §5 的 A+B 方案(用户 2026-10-08 裁决:停在 H7a,先做 B)。O12 的原始定义见 `docs/superpowers/specs/2026-10-03-bytehost-boundary-design.md` §O12 与 `docs/dozer-v2/bytehost-H0/00-summary.md` §4 第 5 项。
+> 状态:探针已执行(2026-10-08),结论见 `docs/dozer-v2/bytehost-H0/07-usage-probe-gaps.md`。
 > 本文里"读代码得到"的事实带 `文件:行号`,**未经运行验证**;探针执行后以其结论为准。
 
 ## 0. 对目标的理解(待你纠正)
@@ -103,6 +104,7 @@ Usage 有且仅有两个数据源:
 | G5 | `Message` 里有只能由 host 处理的变体(S7)。 | 契约污染 |
 | G6 | `ConversationMeta`/`AgentKind` 属于 O7 范围,Usage 离开 `dozer-app` 就必须解决。 | O7 |
 | G7 | 分栏(`usage_split`、折叠、镜像)是 host 的布局状态,面板只有"两块 pane"的约定,没有"我是两栏面板"的声明。 | 缺声明 |
+| G8 | Usage 视图借用 `workspace::agent_icon`/`agent_dot_color`(规格 §1 漏列) | 缺契约(通用 UI helper 住在 Workspace 模块) |
 
 若 G1–G7 里有 ≥3 条被证实且归类为"缺契约/缺接缝",则 H8 的范围应当**缩小为"补齐这几块契约"**而不是全量动态化。这是对 H8 评估 §3 "收益为零"判断的直接检验。
 
