@@ -188,15 +188,16 @@
 
 **Files:** Modify `crates/dozerd/tests/process_apps_live.rs`;Create `docs/superpowers/specs/2026-10-08-bytehost-a6g-acceptance-report.md`;Modify `CLAUDE.md`、规格 §7 表。
 
-- [ ] **Step 1: live 用例**(`#[ignore]`,真 python3 + node 各一;沿用 A6e 的 `stage`/`install`/`launch`/`wait_*` 辅助。**所有"等新 pid / 等恢复"的断言必须要求纯数字 pid**——A6e 曾因接受网关错误页正文而假通过,任何"快得不可能"的耗时都要追到根因):
+- [x] **Step 1: live 用例**(`#[ignore]`,真 python3 + node 各一;沿用 A6e 的 `stage`/`install`/`launch`/`wait_*` 辅助。**所有"等新 pid / 等恢复"的断言必须要求纯数字 pid**——A6e 曾因接受网关错误页正文而假通过,任何"快得不可能"的耗时都要追到根因):
   1. 装样例 1.0.0 → 启动 → `POST /hit` 计数 1;
   2. 升级到 1.1.0(样例 `/` 页面带版本字符串,`stage` 里替换)→ 等到页面显示 1.1.0、pid 与升级前不同、计数仍为 1(`BYTEHOST_DATA_DIR` 持久);记录 `previous_version == 1.0.0`;
-  3. 升级到起不来的 1.2.0 → 自动回到 1.1.0,页面显示 1.1.0、`last_rollback.automatic == true`;
-  4. 手动 `Rollback` → 1.0.0,页面显示 1.0.0,计数仍为 1;再 `Rollback` → `NotFound`;
-  5. 磁盘:`apps/<id>/package/` 下只剩当前版本(与 `previous_version` 若有)的子目录(`Paths::package_dir`)。
-- [ ] **Step 2: 连跑 3 遍**,耗时如实记入报告 §1。
-- [ ] **Step 3: 报告**:§0 环境;§1 自动化(命令 + 结果 + 实测耗时);§2 GUI 手工项(Task 4 Step 5,未执行保持未勾选);§3 缺陷与已知局限(据实,不预填)。
-- [ ] **Step 4: CLAUDE.md** `bytehost-apps` 一行补:A6g 落地——升级保留"当前 + 上一版"(更早的清理)、运行中升级自动停→换→再启、升级后的首次启动有"试用期"(`probation` 落盘),失败由**独立线程**自动回滚(监管线程回调里绝不 `stop_locked`/`start_locked`)、回滚不得提升权限(手动被拒、自动跳过)、`AppRequest::Rollback`、应用数据不随版本回滚。规格 §7 表加 A6g 一行并链接本计划与报告。
+  3. 手动 `Rollback` → 1.0.0,页面显示 1.0.0,计数仍为 1;`previous_version` 被消耗;再 `Rollback` → `NotFound`。
+     (追记:原第 3/4 条把"手动回滚"排在自动回滚之后,期望自动回滚到 1.1.0 后还能手动回 1.0.0——与 Task 1「只保留当前+上一版(装 1.2.0 时 1.0.0 已清)」和 Task 2「回滚消耗上一版」两处裁决自相矛盾,不可能成立。按实现改成:手动回滚先做,自动回滚用例回到手动回滚后的当前版本。)
+  4. 升级到起不来的 1.2.0 → 自动回到当前(1.0.0),页面显示 1.0.0、`rollback_note.automatic == true` 且 `from == 1.2.0`、`to == 1.0.0`;再 `Rollback` 同样消耗上一版 → `NotFound`;
+  5. 磁盘:`apps/<id>/package/` 下只剩当前版本的子目录(`Paths::package_dir`)——1.1.0 在装 1.2.0 时被"当前+上一版"清理,1.2.0 在自动回滚时清掉。
+- [x] **Step 2: 连跑 3 遍**,耗时如实记入报告 §1(实测:三遍全绿,单遍 8.4~8.5s)。
+- [x] **Step 3: 报告**:§0 环境;§1 自动化(命令 + 结果 + 实测耗时);§2 GUI 手工项(Task 4 Step 5,未执行保持未勾选);§3 缺陷与已知局限(据实,不预填)。
+- [x] **Step 4: CLAUDE.md** `bytehost-apps` 一行补:A6g 落地——升级保留"当前 + 上一版"(更早的清理)、运行中升级自动停→换→再启、升级后的首次启动有"试用期"(`probation` 落盘),失败由**独立线程**自动回滚(监管线程回调里绝不 `stop_locked`/`start_locked`)、回滚不得提升权限(手动被拒、自动跳过)、`AppRequest::Rollback`、应用数据不随版本回滚。规格 §7 表加 A6g 一行并链接本计划与报告。
 - [ ] **Step 5: 全量**:`cargo test -p bytehost-apps -p dozerd -p dozer-client -p dozer-app`(已知无关失败:`files::tests::delete_confirm_spec_reflects_pending_target`、`memory::tests::list_orders_by_updated_ms_desc`、`app_service::tests::the_first_run_is_unavailable_when_the_port_cannot_be_saved`——如仍存在逐个注明,不要顺手改)、`cargo clippy --all-targets`(A6g 触碰的文件无新警告)、`cargo fmt --check`、两个门禁脚本。
 - [ ] **Step 6: Commit** — 测试与报告各一个:`test(dozerd): real python and node apps upgrade, auto-rollback and manual rollback (A6g task 5)`、`docs(bytehost): A6g landed`。
 
