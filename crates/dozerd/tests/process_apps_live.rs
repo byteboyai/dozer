@@ -704,6 +704,118 @@ async fn wait_new_pid_async(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "需要真 node/npm;人工运行时删除 --ignored"]
+async fn a_failing_dependency_install_surfaces_a_dependency_issue() {
+    // 目标:声明 `package-lock.json` 且 lock 里引用了不存在的包 → `npm ci` 必然失败。
+    // 断言 `Start` 之后 `list` 出现 `Failed{retryable:true}` + `DependencyInstall`,
+    // 且 `Logs` 里能看到安装器的错误输出(证明输出进了 app.log,没被吞掉)。
+    assert!(
+        have("node") && have("npm"),
+        "缺少 node/npm —— 本用例要求真运行时,不静默跳过"
+    );
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("bytehost");
+    let svc = AppService::start_with_monitor_for_test(
+        &root,
+        GatewayConfig { port: 0 },
+        MonitorConfig {
+            interval: Duration::from_millis(300),
+            timeout: Duration::from_millis(400),
+            failures: 3,
+        },
+    )
+    .await;
+
+    // 在 manifest 的运行时块里声明 lockfile(样例本身没声明),并写入一份引用了
+    // 不存在依赖的 lock 文件:`npm ci` 起不来。
+    let source = stage(&NODE, |m| {
+        m.replace(
+            "command = [\"node\", \"server.js\"]",
+            "command = [\"node\", \"server.js\"]\nlockfile = \"package-lock.json\"",
+        )
+    });
+    let AppSource::LocalDir { path } = &source;
+    std::fs::write(
+        path.join("package-lock.json"),
+        r#"{
+  "name": "node-notes",
+  "version": "1.0.0",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "node-notes",
+      "version": "1.0.0",
+      "dependencies": { "this-package-does-not-exist-anywhere-xyz": "1.0.0" }
+    },
+    "node_modules/this-package-does-not-exist-anywhere-xyz": {
+      "version": "1.0.0",
+      "resolved": "https://registry.npmjs.org/this-package-does-not-exist-anywhere-xyz/-/this-package-does-not-exist-anywhere-xyz-1.0.0.tgz",
+      "integrity": "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+    }
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let app = id("node-notes");
+    install(&svc, source).await;
+    svc.handle(AppRequest::Start { id: app.clone() })
+        .await
+        .unwrap();
+
+    let summary = wait_satisfy(
+        &svc,
+        &app,
+        60,
+        |a| matches!(a.observed, ObservedState::Failed { .. }) && a.issue.is_some(),
+        "依赖安装失败 → Failed+issue,开始等待",
+    )
+    .await;
+    assert!(
+        matches!(
+            &summary.observed,
+            ObservedState::Failed {
+                retryable: true,
+                ..
+            }
+        ),
+        "{:?}",
+        summary.observed
+    );
+    let Some(AppIssue::DependencyInstall { summary: why }) = &summary.issue else {
+        panic!("应为 DependencyInstall,得到 {:?}", summary.issue);
+    };
+    assert!(!why.is_empty(), "summary 不能为空");
+
+    let AppReply::Logs { text, .. } = svc
+        .handle(AppRequest::Logs {
+            id: app.clone(),
+            max_lines: 200,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("Logs 应回 Logs")
+    };
+    assert!(
+        text.to_lowercase().contains("npm")
+            || text.contains("this-package-does-not-exist-anywhere-xyz")
+            || text.to_lowercase().contains("err"),
+        "安装输出应在应用日志里,得到:\n{text}"
+    );
+    // 输出里的转义序列必须已被清洗(应用日志经 logs.rs 逐行清洗)。
+    assert!(
+        !text.contains('\u{1b}'),
+        "应用日志不应含 ANSI 转义:{text:?}"
+    );
+
+    svc.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "需要真 python3 与 node;人工运行时删除 --ignored"]
 async fn python_sample_end_to_end() {
     run_sample(&PY).await;

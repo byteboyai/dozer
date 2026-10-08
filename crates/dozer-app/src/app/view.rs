@@ -1150,7 +1150,8 @@ fn app_panel_pane<'a>(
     let on_press = |m: M| Message::AppHost(m);
     let view = app.app_host.view_model(slot);
 
-    // 运行时问题页:标题/详情来自 `issue_texts`,两个按钮(去设置安装 / 重试)。
+    // 运行时/依赖问题页:标题/详情来自 `issue_texts`。运行时缺失给「去设置安装」,
+    // 依赖安装失败没有可"去设置"的东西,改成「查看日志」(安装输出在应用日志里)。
     if let V::RuntimeIssue(issue) = &view {
         let (headline, detail) = crate::extensions::app_host::issue_texts(issue);
         let mut body = column![
@@ -1166,12 +1167,21 @@ fn app_panel_pane<'a>(
         ]
         .spacing(8)
         .align_x(iced_widget::core::alignment::Horizontal::Center);
+        let primary = match issue {
+            bytehost_apps::proto::AppIssue::DependencyInstall { .. } => {
+                iced_widget::button(text("查看日志").size(byteui::theme::font::body()))
+                    .padding([4, 12])
+                    .on_press(on_press(M::ShowLogs(slot)))
+                    .style(byteui::feedback::dialog::action_button_style(colors.gold))
+            }
+            _ => iced_widget::button(text("去设置安装").size(byteui::theme::font::body()))
+                .padding([4, 12])
+                .on_press(on_press(M::OpenRuntimeSettings))
+                .style(byteui::feedback::dialog::action_button_style(colors.gold)),
+        };
         body = body.push(
             row![
-                iced_widget::button(text("去设置安装").size(byteui::theme::font::body()))
-                    .padding([4, 12])
-                    .on_press(on_press(M::OpenRuntimeSettings))
-                    .style(byteui::feedback::dialog::action_button_style(colors.gold)),
+                primary,
                 iced_widget::button(text("重试").size(byteui::theme::font::body()))
                     .padding([4, 12])
                     .on_press(on_press(M::Start(slot)))
@@ -1179,6 +1189,16 @@ fn app_panel_pane<'a>(
             ]
             .spacing(8),
         );
+        // 依赖安装失败页可以展开应用日志看安装输出;运行时缺失页没有日志含义。
+        if matches!(
+            issue,
+            bytehost_apps::proto::AppIssue::DependencyInstall { .. }
+        ) {
+            let logs = app.app_host.logs_view(slot);
+            if logs != LogsView::Hidden {
+                body = body.push(render_logs_body(logs, colors.dim));
+            }
+        }
         return container(body)
             .center(Length::Fill)
             .style(move |_t: &iced_widget::Theme| container::Style {
@@ -1258,44 +1278,8 @@ fn app_panel_pane<'a>(
                 .style(byteui::feedback::dialog::action_button_style(colors.dim)),
         );
         body = body.push(buttons);
-        match logs {
-            LogsView::Loading => {
-                body = body.push(
-                    text("读取日志…")
-                        .size(byteui::theme::font::body())
-                        .color(colors.dim),
-                );
-            }
-            LogsView::Loaded {
-                text: log_text,
-                truncated,
-            } => {
-                if truncated {
-                    body = body.push(
-                        text("仅显示最后若干行")
-                            .size(byteui::theme::font::body())
-                            .color(colors.dim),
-                    );
-                }
-                let lines = iced_widget::text(log_text)
-                    .size(byteui::theme::font::body())
-                    .font(Font::default())
-                    .shaping(iced_widget::core::text::Shaping::Advanced)
-                    .width(Length::Fill);
-                body = body.push(
-                    iced_widget::scrollable(container(lines).width(Length::Fill).padding(8))
-                        .height(Length::Fixed(220.0))
-                        .width(Length::Fill),
-                );
-            }
-            LogsView::Failed(reason) => {
-                body = body.push(
-                    text(reason)
-                        .size(byteui::theme::font::body())
-                        .color(colors.dim),
-                );
-            }
-            LogsView::Hidden => {}
+        if logs != LogsView::Hidden {
+            body = body.push(render_logs_body(logs, colors.dim));
         }
     } else if let Some((label, msg)) = action {
         body = body.push(
@@ -1314,6 +1298,43 @@ fn app_panel_pane<'a>(
             ..container::Style::default()
         })
         .into()
+}
+
+/// 应用崩溃页与依赖安装失败页共用的日志区:加载中/截断提示/失败原因/等宽正文
+/// (系统默认字体 + `Shaping::Advanced`,不贴边、可滚动)。
+fn render_logs_body<'a>(
+    logs: crate::extensions::app_host::LogsView,
+    dim: Color,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    use crate::extensions::app_host::LogsView;
+    let item = |label: String| {
+        text(label)
+            .size(byteui::theme::font::body())
+            .color(dim)
+            .into()
+    };
+    match logs {
+        LogsView::Loading => item("读取日志…".into()),
+        LogsView::Loaded { text, truncated } => {
+            let mut col = column![].spacing(8).width(Length::Fill);
+            if truncated {
+                col = col.push(item("仅显示最后若干行".into()));
+            }
+            let lines = iced_widget::text(text)
+                .size(byteui::theme::font::body())
+                .font(Font::default())
+                .shaping(iced_widget::core::text::Shaping::Advanced)
+                .width(Length::Fill);
+            col = col.push(
+                iced_widget::scrollable(container(lines).width(Length::Fill).padding(8))
+                    .height(Length::Fixed(220.0))
+                    .width(Length::Fill),
+            );
+            col.into()
+        }
+        LogsView::Failed(reason) => item(reason),
+        LogsView::Hidden => column![].into(),
+    }
 }
 
 /// 左面板区:按当前左视图组合"项目树+文件预览"配对或单个 Web 预览面板;

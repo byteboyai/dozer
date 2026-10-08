@@ -643,6 +643,10 @@ pub fn issue_texts(issue: &AppIssue) -> (String, String) {
             format!("需要 {}", runtime_display_name(runtime)),
             format!("要求 {required},当前 {found}"),
         ),
+        AppIssue::DependencyInstall { summary } => (
+            "依赖安装失败".into(),
+            format!("{summary}\n查看日志了解安装输出"),
+        ),
     }
 }
 
@@ -1119,6 +1123,22 @@ mod tests {
         loaded(&mut s, vec![app("issue-b", failed("崩了"))], &[]);
         assert_eq!(s.view_model(b), PanelView::Crashed("崩了".into()));
 
+        // 依赖安装失败也是一个"看得懂的问题" → 走问题页(不是崩溃页)。
+        let d = slot("dep-a");
+        let dep = AppIssue::DependencyInstall {
+            summary: "npm ci 失败(退出码 1)".into(),
+        };
+        loaded(
+            &mut s,
+            vec![app_with_issue(
+                "dep-a",
+                failed("npm ci 失败(退出码 1)"),
+                dep.clone(),
+            )],
+            &[],
+        );
+        assert_eq!(s.view_model(d), PanelView::RuntimeIssue(dep));
+
         // 陈旧问题:应用已经跑起来了,就不该再显示问题页。
         let c = slot("issue-c");
         loaded(
@@ -1296,6 +1316,15 @@ mod tests {
                     found: "16.0.0".into(),
                 },
                 ("需要 Node.js", "要求 >=18,当前 16.0.0"),
+            ),
+            (
+                AppIssue::DependencyInstall {
+                    summary: "npm ci 失败(退出码 1)".into(),
+                },
+                (
+                    "依赖安装失败",
+                    "npm ci 失败(退出码 1)\n查看日志了解安装输出",
+                ),
             ),
         ];
         for (issue, (title, detail)) in cases {

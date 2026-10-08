@@ -147,14 +147,14 @@
 - `run` 里 `InstallOutcome::Failed(why)` 改调 `tr.install_failed(why)`(原来是 `tr.failed(why, true)`);`install_failed` 在 `AppTransitions` 里:持锁 + 核对取消 → `set_issue(DependencyInstall{summary})` → 与 `failed(reason, true)` 同样撤站点、置 `Failed{retryable: true}`。**顺序:先 `set_issue` 再 `set_observed`**,让 GUI 因 `Changed` 重拉时一定看得到 issue(推送与 issue 的竞态)。
 - `issue_texts(DependencyInstall{summary})` → 标题"依赖安装失败",详情 = `summary` + "查看日志了解安装输出"。问题页对该 issue 的动作:「查看日志」(展开日志,Task 4 的查看器)、「重试」。**没有"去设置安装"**——这不是运行时缺失。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
   - `proto.rs`:`DependencyInstall` 序列化形状 `{"issue":"dependency_install","summary":"..."}`;旧 JSON 解析不受影响。
   - `supervisor.rs`:安装命令退出码非 0 → 记录到的 `Transitions` 调用是 `install_failed`,**不是** `failed`;超时、起不来、写标记失败同样走 `install_failed`(四个分支各一个断言,用 `python3 -c "import sys; sys.exit(3)"` 之类的真命令,缺 python3 则 `return`)。
   - `manager.rs`:依赖安装失败的应用 → `list()` 里 `observed == Failed{retryable:true}` 且 `issue == Some(DependencyInstall{..})`;重试成功后(换掉会失败的命令)`issue` 清除;`issue` 在应用 `Running` 时不带出(A6e 规则不变)。
   - `app_host.rs`:`Failed` + `DependencyInstall` → `PanelView::RuntimeIssue(..)`;`issue_texts` 表驱动。
   - Review Focus 5:安装命令输出含 `\x1b[32m` 进度条与 6000 字符的单行 → 通过 `Logs` 读回时已清洗、封顶(这条放进 Task 4 的用例,这里只确认 `summary` 本身不含输出)。
-- [ ] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p bytehost-apps --all-features`;所有 `Transitions` 实现者——生产的 `AppTransitions` 与测试里的 `Rec`——都要补方法,编译器会指出)。变异:把 `install_failed` 改回只调 `failed`,manager 用例失败。
-- [ ] **Step 5: live 用例**(`process_apps_live.rs`,`#[ignore]`):装一个 `command = ["python3","server.py"]` 且声明了一个**必然失败的依赖安装**的应用(node 样例:`package-lock.json` 引用不存在的包;python 样例用 `uv.lock` 需要 uv,若无 uv 则只跑 node 版)→ `Start` 后 `list` 里出现 `Failed` + `DependencyInstall`,`Logs` 含安装器的错误输出。如实记录运行结果。
+- [x] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p bytehost-apps --all-features`;所有 `Transitions` 实现者——生产的 `AppTransitions` 与测试里的 `Rec`——都要补方法,编译器会指出)。变异:把 `install_failed` 改回只调 `failed`,manager 用例失败。
+- [x] **Step 5: live 用例**(`process_apps_live.rs`,`#[ignore]`):装一个 `command = ["python3","server.py"]` 且声明了一个**必然失败的依赖安装**的应用(node 样例:`package-lock.json` 引用不存在的包;python 样例用 `uv.lock` 需要 uv,若无 uv 则只跑 node 版)→ `Start` 后 `list` 里出现 `Failed` + `DependencyInstall`,`Logs` 含安装器的错误输出。如实记录运行结果。
 - [ ] **Step 6: Commit** — `feat(bytehost-apps,dozer-app): dependency-install failures get their own issue page (A6f task 3)`。
 
 ---
