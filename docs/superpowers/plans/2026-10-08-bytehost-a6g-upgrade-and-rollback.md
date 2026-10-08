@@ -86,15 +86,15 @@
   - 升级(`existing.is_some()`)时:记 `was_running = desired == Running`;若当前在跑,**先 `stop_locked`**(持着 `install_staged` 已拿的锁;该函数 join 监管线程,不会自锁);包落位 + 写记录:`previous_version = Some(旧 current)`、`probation = was_running`(没在跑就没有"首次启动"可试,不设试用期)、`last_rollback = None`、`grants = 新申请`;然后 `prune_versions()` 并删除被清理版本的包目录;发 `Upgraded`;若 `was_running` 则 `start_locked`——启动失败(同步返回 `Err`)时的处理见 Task 2。
   - 全新安装:三个新字段取默认。
 
-- [ ] **Step 1: 写失败测试**(`manager.rs`,沿用 `rig`/`write_app`/静态应用 fixture;进程型用 `write_py_app` + `python3`,缺 python3 则 `return`)
+- [x] **Step 1: 写失败测试**(`manager.rs`,沿用 `rig`/`write_app`/静态应用 fixture;进程型用 `write_py_app` + `python3`,缺 python3 则 `return`)- [ ] **Step 1: 写失败测试**(`manager.rs`,沿用 `rig`/`write_app`/静态应用 fixture;进程型用 `write_py_app` + `python3`,缺 python3 则 `return`)
   - `an_upgrade_records_the_previous_version`:装 1.0.0 → 装 1.1.0 → `previous_version == Some(1.0.0)`、`current_version == 1.1.0`、`probation == false`(应用没在跑)。
-  - `three_successive_upgrades_keep_only_current_and_previous`(Review Focus 4):装 1.0.0/1.1.0/1.2.0 → 1.0.0 的包目录与 `versions` 记录都没了,1.1.0 与 1.2.0 还在;再装 1.0.0 成功(不是 `AlreadyInstalled`),再装 1.1.0 / 1.2.0 仍是 `AlreadyInstalled`。
+  - `three_successive_upgrades_keep_only_current_and_previous`(Review Focus 4):装 1.0.0/1.1.0/1.2.0 → 1.0.0 的包目录与 `versions` 记录都没了,1.1.0 与 1.2.0 还在;再装 1.0.0 成功(不是 `AlreadyInstalled`)。(注:重装 1.0.0 后它成为 current,`prune_versions` 会把 1.1.0 清掉,所以不断言 1.1.0/1.2.0 仍是 `AlreadyInstalled`。)
   - `upgrading_a_running_static_app_stops_swaps_and_restarts_it`:装 1.0.0、`start`、经 gateway 请求拿到旧页面内容;装 1.1.0(不同页面内容)→ `observed == Running`、`desired == Running`、经 gateway 请求拿到**新**页面内容;事件顺序含 `Upgraded`。
   - `upgrading_a_running_process_app_sets_probation_until_ready`:python 应用升级后记录 `probation == true`,等到 `Running` 后 `probation == false`(`ready` 清除,见 Task 2 Step 3;本用例在 Task 2 才能全绿,Task 1 里先断言"升级后立刻 `probation == true`")。
   - `an_upgrade_interrupted_after_rename_keeps_the_old_version_startable`(Review Focus 5):复用现有 `debris_from_a_crashed_install_never_blocks_a_retry_or_an_upgrade` 的构造,断言 `previous_version`/`probation` 没被半写(记录要么全是旧的,要么全是新的)。
   - `registry.rs`:旧 `state.json`(无三个新字段)读出为 `previous_version: None, probation: false, last_rollback: None`;新字段 round-trip;`prune_versions` 在 `previous_version = None` 时只留 current,在有 previous 时留两个,返回被移除版本且不含 current/previous。
-- [ ] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p bytehost-apps --all-features manager registry event`;`cargo test -p bytehost-apps`(默认 feature)与依赖门禁)。变异:去掉 `prune_versions` 调用,用例 `three_successive...` 失败;去掉运行中升级前的 `stop_locked`,静态应用用例失败。
-- [ ] **Step 5: Commit** — `feat(bytehost-apps): upgrade keeps current and previous versions and handles running apps (A6g task 1)`。
+- [x] **Step 2: 确认失败 → Step 3: 实现 → Step 4: 通过**(`cargo test -p bytehost-apps --all-features manager registry event`;`cargo test -p bytehost-apps`(默认 feature)与依赖门禁)。变异:去掉 `prune_versions` 调用,用例 `three_successive...` 失败;去掉运行中升级前的 `stop_locked`,静态应用用例失败。
+- [x] **Step 5: Commit** — `feat(bytehost-apps): upgrade keeps current and previous versions and handles running apps (A6g task 1)`。
 
 ---
 
