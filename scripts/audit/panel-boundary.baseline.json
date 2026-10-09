@@ -6,6 +6,45 @@
   "R-HOST-PANEL-ARMS": 95,
   "R-PANE-PICK": 1
  },
+ "extensions/agent_context.rs": {
+  "R-CLIENT": 3
+ },
+ "extensions/browser.rs": {
+  "R-CLIENT": 1
+ },
+ "extensions/codehealth/aggregate.rs": {
+  "R-CLIENT": 2
+ },
+ "extensions/conversations.rs": {
+  "R-CLIENT": 1
+ },
+ "extensions/edit_history.rs": {
+  "R-CLIENT": 2
+ },
+ "extensions/group_chat/mod.rs": {
+  "R-CLIENT": 1
+ },
+ "extensions/project.rs": {
+  "R-CLIENT": 3
+ },
+ "extensions/project/delete.rs": {
+  "R-CLIENT": 1
+ },
+ "extensions/project/update.rs": {
+  "R-CLIENT": 5
+ },
+ "extensions/project_create.rs": {
+  "R-CLIENT": 1
+ },
+ "extensions/settings.rs": {
+  "R-CLIENT": 2
+ },
+ "extensions/todo/state.rs": {
+  "R-CLIENT": 1
+ },
+ "extensions/todo/update.rs": {
+  "R-CLIENT": 1
+ },
  "panel_host.rs": {
   "R-HOVERSLOT-VARIANTS": 9
  },

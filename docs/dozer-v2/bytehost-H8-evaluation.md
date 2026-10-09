@@ -70,3 +70,5 @@ H8 的收益只有在**存在第二个消费者**时才兑现:
 Q-H8-1 已按 A+B 裁决(停在 H7a,先做 O12 探针)。Usage 探针结论:**面板本体已独立,能在最小 host + fake 服务里跑通 S1、S2、S3、S5、S8,并用 S4/S6/S7 钉住三处现状缺口;夹具记录了 9 条 host 职责,折算约 4 个能力域(结果路由、host 专属消息拦截、逐帧推送与 ready 生命周期、IPC 识别),缺口集中在 host 围着它的 webview 表面与消息路由。**按规格原判据(G1–G7 中 ≥3 条"缺契约/缺接缝")实测为 2 条,未达阈值**,下面的"缩小范围"是判断而非阈值结论;另外探针发现了一个现存缺陷:较早发起的刷新后到会覆盖较新数据,host 的 `with_project` 也不去重(报告 G3b)。** 因此 H8 的合理范围不是 §2 的全量动态化,而是补齐几块契约;O7(`protocol` 归属)应在 Digger 复用面板之前先解。详见 `docs/dozer-v2/bytehost-H0/07-usage-probe-gaps.md`。
 
 **O7 已解(2026-10-09):** 数据类型已在 `crates/dozer-model`,面板(`extensions/**`)对 `dozer_core::protocol` 的引用为 0(`R-PROTOCOL` 门禁)。规格 `docs/superpowers/specs/2026-10-09-dozer-model-crate-design.md`。
+
+**X0 试点已落地(2026-10-09):** Usage 经 `dozer-services` 取数(见 `docs/superpowers/specs/2026-10-09-dozer-services-x0-design.md`);其余面板按纵向切片迁移。

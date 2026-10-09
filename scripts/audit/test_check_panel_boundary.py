@@ -104,6 +104,26 @@ class ProtocolCoupling(unittest.TestCase):
         self.assertEqual(self.scan1("extensions/todo.rs", "use dozer_model::AgentKind;\n"), {})
 
 
+class ClientCoupling(unittest.TestCase):
+    """R-CLIENT:面板代码对 dozer_client 的引用只许减不许增(X0:面板改吃 dozer-services 的 trait)。"""
+    def scan1(self, rel, text):
+        return g.scan({rel: text}).get(rel, {})
+
+    def test_use_and_qualified_path_in_extensions_are_counted(self):
+        text = "use dozer_client::Client;\nfn f(_: &dozer_client::Client) {}\n"
+        self.assertEqual(self.scan1("extensions/todo.rs", text), {"R-CLIENT": 2})
+
+    def test_comments_and_strings_are_not_counted(self):
+        text = '// dozer_client::Client\nconst S: &str = "dozer_client::Client";\n'
+        self.assertEqual(self.scan1("extensions/todo.rs", text), {})
+
+    def test_other_directories_are_not_counted(self):
+        self.assertEqual(self.scan1("app/update.rs", "use dozer_client::Client;\n"), {})
+
+    def test_dozer_services_paths_are_not_counted(self):
+        self.assertEqual(self.scan1("extensions/usage/mod.rs", "use dozer_services::UsageService;\n"), {})
+
+
 class Compare(unittest.TestCase):
     def test_decrease_and_equal_pass(self):
         base = {"extensions/a.rs": {"R-APP": 3}}

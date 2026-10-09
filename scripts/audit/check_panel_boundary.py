@@ -8,6 +8,7 @@
 规则 R-HOST-PANEL-ARMS / R-HOST-EXECUTORS: `app/update.rs` 里面板专属消息臂条数 / `app/` 下 `run_<面板>_effects` 执行器个数
 
 规则 R-PROTOCOL: extensions 下对 dozer_core::protocol 的引用次数(O7,基线 0)
+规则 R-CLIENT: extensions 下对 dozer_client 的引用次数(X0,只降不升;面板应经 dozer-services 的 trait 取数)
 
 用法:
   check_panel_boundary.py            对照基线检查,有文件的引用数上升(或新文件出现违规)则退出 1
@@ -108,6 +109,9 @@ HOST_EXECUTOR_RE = re.compile(r"\bfn run_[a-z_]+_effects\b")
 # R-PROTOCOL(O7):面板代码里对 `dozer_core::protocol` 的引用次数。数据类型已搬进 dozer-model,
 # 面板应写 `dozer_model::…`;只许降不许增(基线 0)。注释与字符串字面量不计。
 PROTOCOL_RE = re.compile(r"\bdozer_core::protocol\b")
+# R-CLIENT(X0):面板代码对 `dozer_client` 的引用次数。面板应经 `dozer-services` 的 trait 取数;
+# 只许降不许增。注释与字符串字面量不计。
+CLIENT_RE = re.compile(r"\bdozer_client\b")
 
 
 def scan(files):
@@ -120,9 +124,13 @@ def scan(files):
                 n = count_uses(text, mod, name)
                 if n:
                     hit[rule] = n
-            k = len(PROTOCOL_RE.findall(STRING_RE.sub('""', edges.strip_comments(text))))
+            code = STRING_RE.sub('""', edges.strip_comments(text))
+            k = len(PROTOCOL_RE.findall(code))
             if k:
                 hit["R-PROTOCOL"] = k
+            k = len(CLIENT_RE.findall(code))
+            if k:
+                hit["R-CLIENT"] = k
         for (path, name), rule in ENUM_RULES.items():
             if rel == path:
                 k = enum_variant_count(text, name)
