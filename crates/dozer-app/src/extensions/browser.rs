@@ -15,7 +15,7 @@ use crate::theme;
 use crate::workspace::{lh, split_portions};
 use byteui::interaction::icons;
 use dozer_client::Client;
-use dozer_core::protocol::{BookmarkInfo, BookmarkScope};
+use dozer_model::{BookmarkInfo, BookmarkScope};
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
 use iced_widget::core::{Border, Element, Length, Rectangle};

@@ -1,9 +1,9 @@
 //! 用量面板的 view:content_pane/list_pane/agent 筛选栏/汇总卡片。
 
 use crate::chrome::homespace::home_panel_head;
-use crate::conversation::ConversationMeta;
 use byteui::interaction::icons;
-use dozer_core::protocol::AgentKind;
+use dozer_model::AgentKind;
+use dozer_model::ConversationMeta;
 use iced_widget::core::{Border, Color, Element, Length};
 use iced_widget::{button, column, container, text};
 

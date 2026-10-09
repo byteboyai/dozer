@@ -3,7 +3,7 @@
 //! 见 `app/layout.rs::tree_drag_past_threshold` / `tree_drag_held_long_enough`。
 
 use super::category_descendants;
-use dozer_core::protocol::CategoryInfo;
+use dozer_model::CategoryInfo;
 
 /// 拖拽放置目标:顶层(「全部」伪节点)或某个真实分类节点。「未分类」伪节点
 /// 不是合法目标(它不对应真实节点),所以没有对应变体。

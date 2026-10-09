@@ -1,7 +1,7 @@
 //! Todo 面板 update 消息分发 + 日历日期纯函数。
 
 use dozer_client::Client;
-use dozer_core::protocol::TodoInfo;
+use dozer_model::TodoInfo;
 
 use super::*;
 
@@ -274,9 +274,9 @@ pub fn update(
                 return;
             };
             let stored_target = match target {
-                TodoState::Pending => dozer_core::protocol::TodoStoredStatus::Todo,
-                TodoState::Done => dozer_core::protocol::TodoStoredStatus::Done,
-                TodoState::Suspended => dozer_core::protocol::TodoStoredStatus::Suspended,
+                TodoState::Pending => dozer_model::TodoStoredStatus::Todo,
+                TodoState::Done => dozer_model::TodoStoredStatus::Done,
+                TodoState::Suspended => dozer_model::TodoStoredStatus::Suspended,
                 TodoState::InProgress => return,
             };
             let client = client.clone();

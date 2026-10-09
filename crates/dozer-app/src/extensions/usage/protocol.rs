@@ -4,7 +4,7 @@
 //! 不动。
 
 use super::*;
-use dozer_core::protocol::AgentKind;
+use dozer_model::AgentKind;
 use serde::{Deserialize, Serialize};
 
 /// 没有 `Loading` 变体——"统计中…"是 `byteui::feedback::math_curve` 动画
@@ -258,7 +258,7 @@ pub fn current_view_payload(ws_state: &WorkspaceState) -> UsageViewPayload {
 
 fn single_agent_token_trend(
     agent: AgentKind,
-    rows: &[(crate::conversation::ConversationMeta, ConversationUsage)],
+    rows: &[(dozer_model::ConversationMeta, ConversationUsage)],
     today_index: i64,
 ) -> Option<TokenTrendSection> {
     let io = io_trend(rows, agent, today_index);
@@ -313,7 +313,7 @@ pub fn encode_usage_push(payload: UsageViewPayload) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conversation::ConversationMeta;
+    use dozer_model::ConversationMeta;
     use std::path::PathBuf;
 
     fn meta_at(agent: AgentKind, ms: u64) -> ConversationMeta {

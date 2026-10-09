@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use byteui::interaction::icons;
-use dozer_core::protocol::ContextItemInfo;
+use dozer_model::ContextItemInfo;
 use iced_widget::core::{Alignment, Element, Length};
 use iced_widget::{button, column, container, row, scrollable, text};
 

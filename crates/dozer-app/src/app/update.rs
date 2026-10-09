@@ -61,7 +61,7 @@ pub(crate) fn mark_review_loaded(review: &mut Option<crate::workspace::ReviewVie
 fn refresh_open_conversation_summary(
     review: &mut Option<ReviewView>,
     review_nonce: &mut u64,
-    row: &crate::conversation::SessionRow,
+    row: &dozer_model::SessionRow,
 ) -> Option<String> {
     let rv = review.as_mut()?;
     if !matches!(&rv.source, ReviewSource::Conversation(cid) if cid == &row.conversation_id) {
@@ -6234,7 +6234,7 @@ impl App {
                 .await
                 .map(|rows| {
                     rows.iter()
-                        .map(|(c, s)| crate::conversation::SessionRow::from_row(c, s.as_ref()))
+                        .map(|(c, s)| dozer_model::SessionRow::from_row(c, s.as_ref()))
                         .collect()
                 })
                 .map_err(|e| e.to_string());
@@ -6593,7 +6593,7 @@ mod review_trace_tests {
     fn refreshed_summary_rebuilds_snapshot_and_advances_nonce() {
         let mut review = Some(review(5, Some(5)));
         let mut nonce = 5;
-        let row = crate::conversation::SessionRow {
+        let row = dozer_model::SessionRow {
             conversation_id: "c1".into(),
             agent: AgentKind::Claude,
             last_ts: 1,
@@ -6627,7 +6627,7 @@ mod review_trace_tests {
         value.summary_text = Some("已有总结".into());
         let mut review = Some(value);
         let mut nonce = 5;
-        let row = crate::conversation::SessionRow {
+        let row = dozer_model::SessionRow {
             conversation_id: "c1".into(),
             agent: AgentKind::Claude,
             last_ts: 1,

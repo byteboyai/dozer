@@ -23,8 +23,8 @@ INTERNAL = {
     ("workspace", "agent_dot_color"): "B",
     ("conversation", "ConversationMeta"): "C",
 }
-EXTERNAL = {"dozer_core": "C", "dozer_client": "S", "bytegit": "S", "byteui": "B"}
-EXTERNAL_RE = re.compile(r"\b(dozer_core|dozer_client|bytegit|byteui)::([A-Za-z_][A-Za-z0-9_]*)")
+EXTERNAL = {"dozer_core": "C", "dozer_model": "C", "dozer_client": "S", "bytegit": "S", "byteui": "B"}
+EXTERNAL_RE = re.compile(r"\b(dozer_core|dozer_model|dozer_client|bytegit|byteui)::([A-Za-z_][A-Za-z0-9_]*)")
 
 
 def classify(mod, sym):

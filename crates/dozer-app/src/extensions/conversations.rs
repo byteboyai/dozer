@@ -1,6 +1,6 @@
 // crates/dozer-app/src/extensions/conversations.rs
 //! 对话(Conversations)面板列表侧:当前项目全部 session 的搜索/agent 筛选/
-//! 客户端分页/卡片列表。命名用复数——`crate::conversation` 已经是历史对话
+//! 客户端分页/卡片列表。命名用复数——`dozer_model::conversation` 已经是历史对话
 //! 展示用的中间表示数据层(`SessionRow`/`ConversationMeta` 等,Usage 面板
 //! 也用),这里是另一回事,用复数避免和它读混。
 //!
@@ -11,14 +11,14 @@
 
 use crate::app::{HoverId, PanelKind, ProjectId, TextInputTarget};
 use crate::chrome::homespace::home_panel_head;
-use crate::conversation::SessionRow;
 use crate::panel_host::PanelHost;
 use crate::theme;
 use crate::workspace::{agent_dot_color, agent_icon, lh, relative_time_text};
 use byteui::interaction::icons;
 use byteui::interaction::icons::IconKind;
-use dozer_core::protocol::AgentKind;
-use dozer_core::protocol::TodoInfo;
+use dozer_model::AgentKind;
+use dozer_model::SessionRow;
+use dozer_model::TodoInfo;
 use iced_widget::core::Rectangle;
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};

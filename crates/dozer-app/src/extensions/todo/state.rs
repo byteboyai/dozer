@@ -4,7 +4,7 @@
 use crate::app::HoverId;
 
 use dozer_client::Client;
-use dozer_core::protocol::{CategoryInfo, TodoInfo};
+use dozer_model::{CategoryInfo, TodoInfo};
 use iced_widget::core::Rectangle;
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
@@ -140,7 +140,7 @@ pub struct WorkspaceState {
     /// `calendar_open` 同一种"同时只能有一个"模型。
     pub(crate) detail_open: Option<usize>,
     /// 详情弹窗拉到的回合列表(`GetTodoDetail` 应答),弹窗关闭时清空。
-    pub(crate) detail_turns: Vec<dozer_core::protocol::TurnRecord>,
+    pub(crate) detail_turns: Vec<dozer_model::TurnRecord>,
     /// 回复框草稿(`text_input` 的 value)。
     pub(crate) detail_reply_draft: String,
     /// 回复框是否持有 iced 内部真实焦点,每帧由 `CaptureDetailReplyFocus`
@@ -389,7 +389,7 @@ impl WorkspaceState {
         self.clear_confirm
     }
 
-    pub fn detail_turns(&self) -> &[dozer_core::protocol::TurnRecord] {
+    pub fn detail_turns(&self) -> &[dozer_model::TurnRecord] {
         &self.detail_turns
     }
 
@@ -426,7 +426,7 @@ impl WorkspaceState {
     }
 
     /// `App::todo_detail_open` 拉到 `GetTodoDetail` 应答后写回本地状态。
-    pub fn open_detail(&mut self, idx: usize, turns: Vec<dozer_core::protocol::TurnRecord>) {
+    pub fn open_detail(&mut self, idx: usize, turns: Vec<dozer_model::TurnRecord>) {
         self.detail_open = Some(idx);
         self.detail_turns = turns;
         self.detail_reply_draft.clear();
@@ -446,7 +446,7 @@ impl WorkspaceState {
             .last()
             .map(|t| t.turn_index + 1)
             .unwrap_or(0);
-        self.detail_turns.push(dozer_core::protocol::TurnRecord {
+        self.detail_turns.push(dozer_model::TurnRecord {
             turn_index: next_index,
             role: "human".into(),
             content,
@@ -467,7 +467,7 @@ impl WorkspaceState {
     /// `ProcessTodoNow` RPC 权威结果回来后,用服务端最新回合列表整体替换
     /// (替换掉乐观插入的那条,避免和服务端最终写入的 `turn_index`/
     /// `message_key` 不一致)。
-    pub fn replace_detail_turns(&mut self, turns: Vec<dozer_core::protocol::TurnRecord>) {
+    pub fn replace_detail_turns(&mut self, turns: Vec<dozer_model::TurnRecord>) {
         self.detail_turns = turns;
         self.detail_processing = false;
     }
@@ -558,7 +558,7 @@ pub enum Message {
     /// `App::set_category_rename_focused`)。
     CategoryRenameSubmit,
     /// 与前一个/后一个同级节点交换顺序。
-    CategoryMoveSibling(i64, dozer_core::protocol::CategoryMoveDirection),
+    CategoryMoveSibling(i64, dozer_model::CategoryMoveDirection),
     /// 分类行被按下(武装拖拽;内核拦截以取 `last_cursor`)。
     CategoryRowPress(i64),
     /// 拖拽已确认期间光标悬停到候选目标(`None` = 离开所有目标)。

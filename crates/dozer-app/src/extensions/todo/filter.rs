@@ -1,7 +1,7 @@
 //! Todo 纯过滤/分类函数:关键字过滤、分类树行、后代分类、按分类过滤、
 //! 完成时间戳。
 
-use dozer_core::protocol::{CategoryInfo, TodoInfo};
+use dozer_model::{CategoryInfo, TodoInfo};
 
 use super::*;
 

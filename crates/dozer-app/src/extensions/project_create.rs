@@ -246,8 +246,8 @@ pub enum Message {
     Done(
         Result<
             (
-                Option<dozer_core::protocol::ProjectInfo>,
-                Vec<dozer_core::protocol::ProjectInfo>,
+                Option<dozer_model::ProjectInfo>,
+                Vec<dozer_model::ProjectInfo>,
                 bool,
             ),
             String,
@@ -1070,8 +1070,8 @@ pub(crate) fn project_create_card(state: &State) -> Element<'_> {
 
 type SubmitResult = Result<
     (
-        Option<dozer_core::protocol::ProjectInfo>,
-        Vec<dozer_core::protocol::ProjectInfo>,
+        Option<dozer_model::ProjectInfo>,
+        Vec<dozer_model::ProjectInfo>,
         bool,
     ),
     String,

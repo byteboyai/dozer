@@ -7,6 +7,8 @@
 规则 R-HOVERID-VARIANTS / R-HOVERSLOT-VARIANTS: `HoverId`(app/state.rs)与 `HoverSlot`(panel_host.rs)的变体数
 规则 R-HOST-PANEL-ARMS / R-HOST-EXECUTORS: `app/update.rs` 里面板专属消息臂条数 / `app/` 下 `run_<面板>_effects` 执行器个数
 
+规则 R-PROTOCOL: extensions 下对 dozer_core::protocol 的引用次数(O7,基线 0)
+
 用法:
   check_panel_boundary.py            对照基线检查,有文件的引用数上升(或新文件出现违规)则退出 1
   check_panel_boundary.py --update   用当前扫描结果重写基线(只在引用数下降或经评审的迁移后使用)
@@ -103,6 +105,9 @@ HOST_PANEL_ARM_RE = re.compile(
     re.M,
 )
 HOST_EXECUTOR_RE = re.compile(r"\bfn run_[a-z_]+_effects\b")
+# R-PROTOCOL(O7):面板代码里对 `dozer_core::protocol` 的引用次数。数据类型已搬进 dozer-model,
+# 面板应写 `dozer_model::…`;只许降不许增(基线 0)。注释与字符串字面量不计。
+PROTOCOL_RE = re.compile(r"\bdozer_core::protocol\b")
 
 
 def scan(files):
@@ -115,6 +120,9 @@ def scan(files):
                 n = count_uses(text, mod, name)
                 if n:
                     hit[rule] = n
+            k = len(PROTOCOL_RE.findall(STRING_RE.sub('""', edges.strip_comments(text))))
+            if k:
+                hit["R-PROTOCOL"] = k
         for (path, name), rule in ENUM_RULES.items():
             if rel == path:
                 k = enum_variant_count(text, name)

@@ -7,13 +7,13 @@
 
 use crate::app::{App, HoverId, Message, PaneCorner, zone_pane_border};
 use crate::chrome::rail::RailButton;
-use crate::conversation::ConversationMeta;
 use crate::extensions::browser;
 use crate::extensions::files::git_status;
 use crate::theme;
 use crate::workspace::{agent_dot_color, agent_icon, lh, relative_time_text};
 use byteui::interaction::icons;
 use dozer_core::protocol::ProjectInfo;
+use dozer_model::ConversationMeta;
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
 use iced_widget::core::{Border, Color, Element, Length, Padding, Rectangle};
