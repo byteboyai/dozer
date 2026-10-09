@@ -2087,6 +2087,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dozer-services"
+version = "0.1.0"
+dependencies = [
+ "dozer-model",
+ "tokio",
+]
+
+[[package]]
 name = "dozerd"
 version = "0.3.3"
 dependencies = [
