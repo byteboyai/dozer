@@ -28,7 +28,8 @@ interface Palette {
 
 const DARK: Palette = {
   bg: '#0a0e16',
-  fg: '#FFE5B4',
+  // 默认代码文本色与 markdown 预览正文一致(GitHub 暗色 #f0f6fc),不再用奶油色。
+  fg: '#f0f6fc',
   gutterBg: '#0a0e16',
   gutterFg: '#6B7F8F',
   activeLine: 'rgba(255,229,180,0.05)',
@@ -48,7 +49,8 @@ const DARK: Palette = {
 
 const LIGHT: Palette = {
   bg: '#fef2e4',
-  fg: '#3a3226',
+  // 与 markdown 预览正文一致(GitHub 亮色 #1f2328)。
+  fg: '#1f2328',
   gutterBg: '#fef2e4',
   gutterFg: '#9a8f7d',
   activeLine: 'rgba(0,0,0,0.04)',
