@@ -13,7 +13,7 @@ pub enum PathKind {
 }
 
 /// 文件树里恒不显示的目录/文件名。
-pub const HIDDEN: [&str; 4] = [".git", "target", "node_modules", ".DS_Store"];
+pub const HIDDEN: [&str; 5] = [".git", "target", "node_modules", ".DS_Store", "__pycache__"];
 
 #[derive(Debug, Clone, PartialEq)]
 struct Entry {
