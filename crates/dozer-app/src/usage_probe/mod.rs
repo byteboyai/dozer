@@ -4,6 +4,7 @@
 mod client_adapter;
 mod fake_dozerd;
 mod fake_panel_host;
+pub(crate) mod fake_usage;
 mod host;
 mod scenarios;
 mod surface;

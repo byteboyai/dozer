@@ -9,6 +9,7 @@
 
 use crate::app::{App, HoverId, PanelKind};
 use dozer_client::Client;
+use dozer_services::Services;
 use iced_widget::core::Element;
 use std::future::Future;
 use std::path::PathBuf;
@@ -24,6 +25,7 @@ use tokio::runtime::Handle;
 /// 测试里用 `PanelIo::new` 配一个收进 channel 的 `emit` 即可。
 pub(crate) struct PanelIo<M> {
     client: Client,
+    services: Services,
     handle: Handle,
     emit: Arc<dyn Fn(M) + Send + Sync + 'static>,
 }
@@ -32,6 +34,7 @@ impl<M> Clone for PanelIo<M> {
     fn clone(&self) -> Self {
         Self {
             client: self.client.clone(),
+            services: self.services.clone(),
             handle: self.handle.clone(),
             emit: Arc::clone(&self.emit),
         }
@@ -45,10 +48,26 @@ impl<M: Send + 'static> PanelIo<M> {
         emit: impl Fn(M) + Send + Sync + 'static,
     ) -> Self {
         Self {
+            services: Services {
+                usage: Arc::new(client.clone()),
+            },
             client,
             handle,
             emit: Arc::new(emit),
         }
+    }
+
+    /// host 给面板的服务束(默认由 `Client` 适配;测试可用 `with_services` 换成进程内假实现)。
+    #[allow(dead_code)] // Task 5 起 Usage 面板使用
+    pub(crate) fn services(&self) -> &Services {
+        &self.services
+    }
+
+    /// 仅测试替换服务束用。
+    #[allow(dead_code)]
+    pub(crate) fn with_services(mut self, services: Services) -> Self {
+        self.services = services;
+        self
     }
 
     /// 同步投回一条面板消息。
@@ -406,6 +425,34 @@ mod tests {
             let _ = tx.lock().unwrap().send(m);
         });
         (io, rx)
+    }
+
+    #[test]
+    fn with_services_replaces_the_default_client_adapter() {
+        use crate::usage_probe::fake_usage::FakeUsage;
+        let rt = test_runtime();
+        let (io, _rx) = recording_io(&rt);
+        // 默认服务指向不存在的 socket → Unavailable
+        let default_err = rt
+            .block_on(io.services().usage.usage_summary("/p".into(), None))
+            .unwrap_err();
+        assert_eq!(
+            default_err.kind,
+            dozer_services::ServiceErrorKind::Unavailable
+        );
+        // 替换后走假实现
+        let fake = FakeUsage::ok(vec![]);
+        let io = io.with_services(fake.clone().into_services());
+        assert_eq!(
+            rt.block_on(io.services().usage.usage_summary("/p".into(), Some(3))),
+            Ok(vec![])
+        );
+        assert_eq!(fake.calls(), vec![("/p".to_string(), Some(3))]);
+        // clone 之后仍用替换后的服务
+        let again = io.clone();
+        rt.block_on(again.services().usage.usage_summary("/q".into(), None))
+            .unwrap();
+        assert_eq!(fake.calls().len(), 2);
     }
 
     #[test]
