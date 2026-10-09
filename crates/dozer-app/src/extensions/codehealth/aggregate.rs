@@ -10,7 +10,7 @@ use dozer_codehealth::{
     ArchitectureDiffOutcome, ImpactInput, ImpactScope, ProjectReport, architecture_diff,
     diff_reports, impact_scope,
 };
-use dozer_core::protocol::CodeHealthReportInfo;
+use dozer_model::CodeHealthReportInfo;
 use std::path::{Path, PathBuf};
 
 /// 把报告反序列化（失败返回 `None`——旧报告解析失败不影响展示其它状态）。

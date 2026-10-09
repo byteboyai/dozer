@@ -2,7 +2,7 @@
 
 use crate::chrome::homespace::home_panel_head;
 use byteui::interaction::icons;
-use dozer_core::protocol::AgentKind;
+use dozer_model::AgentKind;
 use dozer_model::ConversationMeta;
 use iced_widget::core::{Border, Color, Element, Length};
 use iced_widget::{button, column, container, text};

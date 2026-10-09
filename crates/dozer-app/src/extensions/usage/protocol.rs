@@ -4,7 +4,7 @@
 //! 不动。
 
 use super::*;
-use dozer_core::protocol::AgentKind;
+use dozer_model::AgentKind;
 use serde::{Deserialize, Serialize};
 
 /// 没有 `Loading` 变体——"统计中…"是 `byteui::feedback::math_curve` 动画

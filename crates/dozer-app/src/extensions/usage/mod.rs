@@ -4,7 +4,7 @@
 //! `dozerd`/`dozer-core::protocol` 完全不参与——所有数据直接读磁盘上的
 //! agent transcript JSONL。
 
-use dozer_core::protocol::AgentKind;
+use dozer_model::AgentKind;
 use dozer_model::ConversationMeta;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn conversation_usage_from_payload_maps_all_fields() {
-        let payload = dozer_core::protocol::UsagePayload {
+        let payload = dozer_model::UsagePayload {
             turns: 2,
             tool_calls: 1,
             mutating_tool_calls: 1,

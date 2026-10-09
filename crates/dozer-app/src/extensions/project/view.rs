@@ -1,7 +1,7 @@
 //! 项目面板的 view:主视图/footer/scaffold 进度弹层/删除确认/文档链接段。
 
 use byteui::interaction::icons;
-use dozer_core::protocol::ProjectInfo;
+use dozer_model::ProjectInfo;
 use iced_widget::core::{Border, Element, Length};
 use iced_widget::{MouseArea, button, column, container, row, text};
 use std::path::PathBuf;
@@ -758,7 +758,7 @@ fn now_ms() -> u64 {
 /// 图标 + cream 标签 + `icon_button_entry` 的"＋"按钮)+ 可选的新建表单 +
 /// 列表。列表行点击进详情(`Message::MemoryDetailOpen`)。
 fn memory_section<'a>(
-    memories: &'a [dozer_core::protocol::MemoryInfo],
+    memories: &'a [dozer_model::MemoryInfo],
     draft: Option<&'a MemoryDraft>,
     hover_t: f32,
     now_ms: u64,
@@ -886,7 +886,7 @@ fn memory_section<'a>(
 /// 共享记忆详情面板:返回/编辑/删除 + 可选编辑表单/删除二次确认 +
 /// 历史时间线。
 fn memory_detail_view<'a>(
-    detail: &'a dozer_core::protocol::MemoryDetail,
+    detail: &'a dozer_model::MemoryDetail,
     edit_draft: Option<&'a MemoryDraft>,
     delete_pending: bool,
     now_ms: u64,

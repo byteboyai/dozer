@@ -4,7 +4,7 @@
 //! `docs/superpowers/specs/2026-09-30-agent-native-file-editor-phase3-context-history-design.md`。
 
 use byteui::interaction::icons;
-use dozer_core::protocol::{FileEditHistoryInfo, MutationOutcome};
+use dozer_model::{FileEditHistoryInfo, MutationOutcome};
 use iced_widget::core::{Alignment, Element, Length};
 use iced_widget::{button, column, container, row, scrollable, text};
 

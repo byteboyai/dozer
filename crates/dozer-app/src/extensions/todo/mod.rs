@@ -23,7 +23,7 @@ pub(crate) use view::*;
 mod tests {
     use super::*;
 
-    use dozer_core::protocol::{CategoryInfo, TodoInfo};
+    use dozer_model::{CategoryInfo, TodoInfo};
 
     fn todo_info(id: i64, text: &str, done: bool) -> TodoInfo {
         TodoInfo {

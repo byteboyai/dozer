@@ -286,14 +286,11 @@ pub(crate) fn keyring_password(project_id: i64, host_id: &str) -> Option<String>
         .and_then(|e| e.get_password().ok())
 }
 
-/// 合成 SSH tab 的 `SessionInfo`(`dozer_core::protocol::SessionInfo` 没有
+/// 合成 SSH tab 的 `SessionInfo`(`dozer_model::SessionInfo` 没有
 /// `Default` impl,9 个字段全要给值)。`command`/`created_ms` 现状全仓库
 /// 没有任何地方读取,给有意义但不影响功能的值,不留空。
-pub(crate) fn synth_session_info(
-    host: &SshHost,
-    project_id: i64,
-) -> dozer_core::protocol::SessionInfo {
-    dozer_core::protocol::SessionInfo {
+pub(crate) fn synth_session_info(host: &SshHost, project_id: i64) -> dozer_model::SessionInfo {
+    dozer_model::SessionInfo {
         id: format!("ssh:{}", host.id),
         name: format!("ssh: {}", host.name),
         command: format!("ssh {}@{}:{}", host.username, host.host, host.port),
@@ -303,10 +300,10 @@ pub(crate) fn synth_session_info(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0),
-        agent_state: dozer_core::protocol::AgentState::Idle,
+        agent_state: dozer_model::AgentState::Idle,
         transcript_path: None,
         project_id: Some(project_id),
-        agent: dozer_core::protocol::AgentKind::Unknown,
+        agent: dozer_model::AgentKind::Unknown,
     }
 }
 
@@ -1670,7 +1667,7 @@ mod tests {
         assert!(info.name.starts_with("ssh: "));
         assert_eq!(info.project_id, Some(7));
         assert!(info.alive);
-        assert_eq!(info.agent, dozer_core::protocol::AgentKind::Unknown);
+        assert_eq!(info.agent, dozer_model::AgentKind::Unknown);
     }
 
     #[test]

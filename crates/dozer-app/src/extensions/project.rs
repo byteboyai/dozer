@@ -129,11 +129,11 @@ pub struct WorkspaceState {
     /// `None`=无选中(新开项目默认)。
     selected_link: Option<PathBuf>,
     /// 共享记忆列表(不含正文),`RequestMemoriesRefresh` 拉取后写入。
-    memories: Vec<dozer_core::protocol::MemoryInfo>,
+    memories: Vec<dozer_model::MemoryInfo>,
     /// 新建记忆的表单草稿(`None` = 表单未打开)。
     memory_create_draft: Option<MemoryDraft>,
     /// 当前打开的记忆详情(`None` = 未打开详情面板)。
-    memory_detail: Option<dozer_core::protocol::MemoryDetail>,
+    memory_detail: Option<dozer_model::MemoryDetail>,
     /// 详情页的编辑草稿(`None` = 只读展示态,未进入编辑)。
     memory_edit_draft: Option<MemoryDraft>,
     /// 待删除确认的记忆 id(`None` = 未在确认删除)。同 `delete_pending`
@@ -318,7 +318,7 @@ pub enum Message {
     /// 磁盘占用统计结果(排除构建产物后的字节数)。
     DiskUsageLoaded(i64, u64),
     /// daemon 改名结果。带 `project_id`,走 `with_project` 路由。
-    NameRenamed(i64, Result<dozer_core::protocol::ProjectInfo, String>),
+    NameRenamed(i64, Result<dozer_model::ProjectInfo, String>),
     /// 点项目名进入编辑态(`name_edit_focus_pending` 置位)。
     NameEditStart,
     /// 名称编辑框草稿变化(iced `text_input::on_input`)。
@@ -407,7 +407,7 @@ pub enum Message {
     /// 弹窗"关闭"按钮(全部完成才可点)。
     ScaffoldPopupClose,
     /// 共享记忆列表拉取结果。
-    MemoriesLoaded(Vec<dozer_core::protocol::MemoryInfo>),
+    MemoriesLoaded(Vec<dozer_model::MemoryInfo>),
     /// 打开"新建记忆"表单。
     MemoryCreateStart,
     /// 新建表单四个字段的输入变化。
@@ -426,7 +426,7 @@ pub enum Message {
     /// 点列表行,打开详情(先设 loading 态,再异步拉正文)。
     MemoryDetailOpen(i64),
     /// 详情拉取完成。
-    MemoryDetailLoaded(dozer_core::protocol::MemoryDetail),
+    MemoryDetailLoaded(dozer_model::MemoryDetail),
     /// 读取记忆详情失败(打开一条记忆,或编辑成功后刷新详情)。此前失败时静默不动,用户
     /// 点了没反应。沿用该面板既有的内联 `error` 展示("保存记忆失败"同款)。
     MemoryDetailLoadFailed(String),
@@ -542,7 +542,7 @@ fn dir_size_and_count(root: &std::path::Path, exclude: &[&str]) -> (u64, u64) {
 /// 把一次 `get_memory` 的结果变成要回给 `update` 的消息:成功 → `MemoryDetailLoaded`,
 /// 失败 → `MemoryDetailLoadFailed`(而不是像过去那样在 `if let Ok(..)` 里静默丢掉)。
 pub(crate) fn memory_detail_message<E: std::fmt::Display>(
-    res: Result<dozer_core::protocol::MemoryDetail, E>,
+    res: Result<dozer_model::MemoryDetail, E>,
 ) -> Message {
     match res {
         Ok(detail) => Message::MemoryDetailLoaded(detail),
@@ -661,7 +661,7 @@ mod tests {
         let mut ws = new_ws();
         ws.name_editing = Some("新名字".into());
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let project = dozer_core::protocol::ProjectInfo {
+        let project = dozer_model::ProjectInfo {
             id: 1,
             path: "/repo".into(),
             name: "新名字".into(),
@@ -1325,8 +1325,8 @@ mod tests {
         assert!(info.modified.is_none());
     }
 
-    fn sample_memory_detail() -> dozer_core::protocol::MemoryDetail {
-        dozer_core::protocol::MemoryDetail {
+    fn sample_memory_detail() -> dozer_model::MemoryDetail {
+        dozer_model::MemoryDetail {
             id: 1,
             project_id: 1,
             title: "t".into(),
@@ -1347,7 +1347,7 @@ mod tests {
             memory_detail_message(Ok::<_, String>(sample_memory_detail())),
             Message::MemoryDetailLoaded(_)
         ));
-        match memory_detail_message(Err::<dozer_core::protocol::MemoryDetail, _>("连接被拒")) {
+        match memory_detail_message(Err::<dozer_model::MemoryDetail, _>("连接被拒")) {
             Message::MemoryDetailLoadFailed(e) => assert_eq!(e, "连接被拒"),
             other => panic!("期望 MemoryDetailLoadFailed,得到 {other:?}"),
         }

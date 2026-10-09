@@ -9,7 +9,7 @@ use super::{
     visible_category_rows,
 };
 use crate::workspace::agent_icon;
-use dozer_core::protocol::{AgentKind, TodoInfo};
+use dozer_model::{AgentKind, TodoInfo};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
@@ -475,7 +475,7 @@ impl WebviewPushState {
 mod tests {
     use super::*;
     use crate::extensions::todo::{CategoryFilter, Message};
-    use dozer_core::protocol::CategoryInfo;
+    use dozer_model::CategoryInfo;
     use serde_json::json;
 
     fn todo(id: i64, text: &str) -> TodoInfo {

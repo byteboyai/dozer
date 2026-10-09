@@ -7,7 +7,7 @@
 use super::{Message, WorkspaceState};
 use crate::chrome::homespace::home_panel_head;
 use byteui::interaction::icons;
-use dozer_core::protocol::GroupInfo;
+use dozer_model::GroupInfo;
 use iced_widget::core::{Border, Element, Length};
 use iced_widget::{button, column, container, row, text};
 

@@ -17,6 +17,7 @@ class Classify(unittest.TestCase):
         self.assertEqual(unit_edges.classify("workspace", "agent_icon"), "B")
         self.assertEqual(unit_edges.classify("conversation", "ConversationMeta"), "C")
         self.assertEqual(unit_edges.classify("dozer_core", "protocol"), "C")
+        self.assertEqual(unit_edges.classify("dozer_model", "AgentKind"), "C")
         self.assertEqual(unit_edges.classify("dozer_client", "Client"), "S")
         self.assertEqual(unit_edges.classify("bytegit", "Repo"), "S")
 

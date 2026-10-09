@@ -717,7 +717,7 @@ fn provider_row(
 /// 全量快照——daemon 侧从不摘除已退出的会话,所以直接 `len()` 会把用户早就
 /// 关掉的 tab 也算进"正在运行",既虚报数字又让 N==0 那条分支几乎永远走不到。
 /// 抽成纯函数是为了不起 daemon 就能测。
-fn count_live_sessions(sessions: &[dozer_core::protocol::SessionInfo]) -> u32 {
+fn count_live_sessions(sessions: &[dozer_model::SessionInfo]) -> u32 {
     sessions.iter().filter(|s| s.alive).count() as u32
 }
 
@@ -1301,17 +1301,17 @@ mod tests {
 
     #[test]
     fn count_live_sessions_ignores_dead_sessions_in_registry_snapshot() {
-        let session = |id: &str, alive: bool| dozer_core::protocol::SessionInfo {
+        let session = |id: &str, alive: bool| dozer_model::SessionInfo {
             id: id.to_string(),
             name: id.to_string(),
             command: "/bin/sh".to_string(),
             cwd: "/tmp".to_string(),
             alive,
             created_ms: 0,
-            agent_state: dozer_core::protocol::AgentState::Idle,
+            agent_state: dozer_model::AgentState::Idle,
             transcript_path: None,
             project_id: Some(1),
-            agent: dozer_core::protocol::AgentKind::Unknown,
+            agent: dozer_model::AgentKind::Unknown,
         };
 
         assert_eq!(count_live_sessions(&[]), 0);

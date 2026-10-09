@@ -5,9 +5,7 @@
 //! (声明式比较 + 固定单槽)。
 
 use super::WorkspaceState;
-use dozer_core::protocol::{
-    AgentKind, GroupAuthor, GroupCancelScope, GroupInfo, GroupMessageStatus,
-};
+use dozer_model::{AgentKind, GroupAuthor, GroupCancelScope, GroupInfo, GroupMessageStatus};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
@@ -528,7 +526,7 @@ impl WebviewPushState {
 mod tests {
     use super::*;
     use crate::extensions::group_chat::{Message, update};
-    use dozer_core::protocol::{
+    use dozer_model::{
         AgentKind, GroupAuthor, GroupCancelScope, GroupInfo, GroupMemberInfo, GroupMessageInfo,
         GroupMessageStatus,
     };

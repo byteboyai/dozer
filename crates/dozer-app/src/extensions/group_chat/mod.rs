@@ -7,7 +7,7 @@
 
 use crate::extensions::toast::{Level, Outbox, Pending};
 use crate::panel_host::PanelIo;
-use dozer_core::protocol::{GroupInfo, GroupMessageInfo, GroupMessageStatus};
+use dozer_model::{GroupInfo, GroupMessageInfo, GroupMessageStatus};
 use std::time::{Duration, Instant};
 
 mod protocol;
@@ -590,7 +590,7 @@ pub fn on_activate(state: &mut WorkspaceState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dozer_core::protocol::{AgentKind, GroupAuthor, GroupMemberInfo};
+    use dozer_model::{AgentKind, GroupAuthor, GroupMemberInfo};
 
     fn member(id: i64, handle: &str) -> GroupMemberInfo {
         GroupMemberInfo {
@@ -1131,7 +1131,7 @@ mod tests {
             (
                 Command::AddMember {
                     group_id: 5,
-                    agent: dozer_core::protocol::AgentKind::Claude,
+                    agent: dozer_model::AgentKind::Claude,
                     handle: "h".into(),
                     role_prompt: String::new(),
                 },
@@ -1156,7 +1156,7 @@ mod tests {
             (
                 Command::Cancel {
                     group_id: 5,
-                    scope: dozer_core::protocol::GroupCancelScope::Turn,
+                    scope: dozer_model::GroupCancelScope::Turn,
                 },
                 "停止失败",
             ),
