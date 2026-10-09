@@ -1,6 +1,7 @@
 //! Usage 面板可行性探针(O12)的夹具,规格 `docs/superpowers/specs/2026-10-08-usage-panel-probe-design.md`。
 //! 只在测试里存在;放在 host 一侧而不是 `extensions/`,因为它扮演的是 host。
 
+mod client_adapter;
 mod fake_dozerd;
 mod fake_panel_host;
 mod host;

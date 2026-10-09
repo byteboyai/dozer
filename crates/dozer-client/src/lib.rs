@@ -8,6 +8,7 @@ use dozer_core::protocol::{
     PreviewCommand, PreviewContext, ProjectInfo, Reply, Request, SessionInfo,
     SessionSummaryPayload, TodoInfo, TurnRecord, UsagePayload, decode_line, encode_line,
 };
+use dozer_services::{BoxFuture, ServiceError, ServiceErrorKind, UsageRows, UsageService};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -46,13 +47,18 @@ impl Client {
         let (r, mut w) = stream.into_split();
         w.write_all(encode_line(req).as_bytes()).await?;
         let mut lines = BufReader::new(r).lines();
-        let line = lines
-            .next_line()
-            .await?
-            .ok_or_else(|| anyhow!("daemon 断开"))?;
+        let line = lines.next_line().await?.ok_or_else(|| {
+            anyhow::Error::new(ServiceError::new(
+                ServiceErrorKind::Unavailable,
+                "daemon 断开",
+            ))
+        })?;
         let reply: Reply = decode_line(&line)?;
         if let Reply::Error { message } = &reply {
-            bail!("daemon 错误: {message}");
+            return Err(anyhow::Error::new(ServiceError::new(
+                ServiceErrorKind::Rejected,
+                format!("daemon 错误: {message}"),
+            )));
         }
         Ok(reply)
     }
@@ -1428,6 +1434,32 @@ fn interpret_shutdown_reply(
     }
 }
 
+/// 把 `Client` 内部的 `anyhow::Error` 归类成面板可区分的 `ServiceError`:带类型的原样返回,
+/// IO 错误(连不上/读写断开)归 `Unavailable`,其余(意外应答、解码失败)归 `Protocol`。
+pub fn into_service_error(e: anyhow::Error) -> ServiceError {
+    match e.downcast::<ServiceError>() {
+        Ok(se) => se,
+        Err(e) if e.downcast_ref::<std::io::Error>().is_some() => {
+            ServiceError::new(ServiceErrorKind::Unavailable, e.to_string())
+        }
+        Err(e) => ServiceError::new(ServiceErrorKind::Protocol, e.to_string()),
+    }
+}
+
+impl UsageService for Client {
+    fn usage_summary(
+        &self,
+        cwd: String,
+        since_ts: Option<u64>,
+    ) -> BoxFuture<'_, Result<UsageRows, ServiceError>> {
+        Box::pin(async move {
+            self.get_usage_summary(&cwd, since_ts)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+}
+
 #[cfg(test)]
 mod shutdown_tests {
     use super::*;
@@ -1591,5 +1623,40 @@ mod app_subscribe_tests {
             Some(bytehost_apps::proto::AppErrorKind::Unavailable)
         );
         let _ = std::fs::remove_file(&sock);
+    }
+}
+
+#[cfg(test)]
+mod service_error_tests {
+    use super::*;
+    use dozer_services::{ServiceError, ServiceErrorKind};
+
+    #[test]
+    fn io_errors_are_unavailable() {
+        let e = anyhow::Error::from(std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "refused",
+        ));
+        assert_eq!(into_service_error(e).kind, ServiceErrorKind::Unavailable);
+    }
+
+    #[test]
+    fn typed_service_errors_pass_through_with_the_same_text() {
+        let e = anyhow::Error::new(ServiceError::new(
+            ServiceErrorKind::Rejected,
+            "daemon 错误: boom",
+        ));
+        let s = into_service_error(e);
+        assert_eq!(
+            (s.kind, s.message.as_str()),
+            (ServiceErrorKind::Rejected, "daemon 错误: boom")
+        );
+    }
+
+    #[test]
+    fn anything_else_is_protocol() {
+        let s = into_service_error(anyhow::anyhow!("意外应答: Ok"));
+        assert_eq!(s.kind, ServiceErrorKind::Protocol);
+        assert_eq!(s.message, "意外应答: Ok");
     }
 }
