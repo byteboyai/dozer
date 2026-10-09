@@ -80,6 +80,30 @@ class HostPanelCoupling(unittest.TestCase):
     def test_executors_outside_app_are_not_counted(self):
         text = "pub fn run_group_chat_effects() {}\n"
         self.assertEqual(self.scan1("extensions/group_chat/mod.rs", text), {})
+class ProtocolCoupling(unittest.TestCase):
+    """R-PROTOCOL:面板代码不得再依赖 dozer_core::protocol(数据类型走 dozer_model,O7)。"""
+    def scan1(self, rel, text):
+        return g.scan({rel: text}).get(rel, {})
+
+    def test_use_and_qualified_path_in_extensions_are_counted(self):
+        text = (
+            "use dozer_core::protocol::AgentKind;\n"
+            "fn f(_: dozer_core::protocol::TodoInfo) {}\n"
+        )
+        self.assertEqual(self.scan1("extensions/todo.rs", text), {"R-PROTOCOL": 2})
+
+    def test_comments_and_strings_are_not_counted(self):
+        text = '// dozer_core::protocol::X\nconst S: &str = "dozer_core::protocol::Y";\n'
+        self.assertEqual(self.scan1("extensions/todo.rs", text), {})
+
+    def test_other_directories_are_not_counted(self):
+        text = "use dozer_core::protocol::AgentKind;\n"
+        self.assertEqual(self.scan1("app/update.rs", text), {})
+
+    def test_dozer_model_paths_are_not_counted(self):
+        self.assertEqual(self.scan1("extensions/todo.rs", "use dozer_model::AgentKind;\n"), {})
+
+
 class Compare(unittest.TestCase):
     def test_decrease_and_equal_pass(self):
         base = {"extensions/a.rs": {"R-APP": 3}}

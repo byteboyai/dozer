@@ -42,7 +42,7 @@
 | G3b | 过期结果(同一项目、较早发起的刷新后到)由 host 丢弃 | 同一测试:后到的旧 `Loaded` 覆盖新结果。**读 `with_project`:它只按 project_id 找 Workspace 再应用,没有序号/revision 检查——host 也不丢弃** | **REFUTED(原假设错)——这是一个真实的生产缺陷,不是"职责放错了地方"**:快速切入 Usage、离开、再切入会发起两次 `spawn_refresh`,较慢的第一次后到时会覆盖较新的数据。**已修复(分支 `fix/usage-stale-refresh`):`Loaded` 带刷新代数,面板 `update` 丢弃代数低于最新的结果;S6 已翻转为 `s6_stale_refresh_is_dropped_by_the_panel_itself`,跨项目部分保留为 `s6_characterizes_g3a_*`** |
 | G4 | 数据服务是具体 `Client`,无接缝;错误被吞 | `s4_characterizes_g4_service_failure_looks_like_no_data`:`HangUp` 与 `ErrorReply` 都得到 `empty` payload;fake UDS 是不改生产代码的唯一手段(`FakeDozerd` 讲真实协议,零改动可用) | **CONFIRMED** |
 | G5 | `Message` 混有只能由 host 处理的变体 | 两个 `s7_characterizes_g5_*` 的 `should_panic("由内核拦截处理")` 均成立 | **CONFIRMED** |
-| G6 | `ConversationMeta`/`AgentKind` 属 O7 | 依赖边表有 `C` 类 2 项:`conversation::ConversationMeta`(6 次)、`dozer_core::protocol`(7 次) | **CONFIRMED** |
+| G6 | `ConversationMeta`/`AgentKind` 属 O7 | 依赖边表有 `C` 类 2 项:`conversation::ConversationMeta`(6 次)、`dozer_core::protocol`(7 次) | **CONFIRMED**;已解(O7,2026-10-09):类型迁入 `dozer-model`,重判后 `ext:usage` 的 C 类边只剩 `dozer_model`(AgentKind、ConversationMeta、UsagePayload),`conversation::`/`dozer_core::protocol` 均为 0 |
 | G7 | 分栏(`usage_split`、折叠、镜像)是 host 的布局状态 | 夹具没实现任何分栏/折叠状态,S1–S5 照样跑通 → 面板逻辑不依赖它;但"布局由 host 持有"这一点来自读代码 | **PARTIAL**(未由探针直接验证) |
 | G8 | (规格漏列)`view.rs` 借用 `workspace::agent_icon`/`agent_dot_color` | 依赖边表 `B` 类有这两项(各 1 次,均在 view.rs) | **CONFIRMED** |
 
@@ -94,6 +94,6 @@
    - **数据服务接缝与降级约定**(G4,即 Q6):区分"没有数据"与"取数失败";引入接缝**需改生产代码,探针未做**。
    - **通用 UI helper 归位**(G8/B 类):`agent_icon`/`agent_dot_color` 等从 `workspace` 挪到 SDK/byteui。
    - 另:把 host 专属变体(`ToggleListCollapse`/`Hover`)从面板 `Message` 里分离(G5)。
-2. **O7 应提前解**(G6):Usage 一离开 `dozer-app` 就同时被 `conversation::ConversationMeta` 和 `dozer_core::protocol` 卡住。若 Digger 复用面板是近期要事,O7 比 H8 更先。
+2. **O7 应提前解**(G6):Usage 一离开 `dozer-app` 就同时被 `conversation::ConversationMeta` 和 `dozer_core::protocol` 卡住。若 Digger 复用面板是近期要事,O7 比 H8 更先。(**已解,2026-10-09**:见 `docs/superpowers/specs/2026-10-09-dozer-model-crate-design.md`。)
 3. **仍未回答的:** 真实 webview 下 G1 的代价(几何、遮挡、nonce、CSP)。探针是无头的,这部分需要第二个探针或在补契约时验证。
 4. 与 H8 评估 §3 的关系:该评估判断"收益为零";探针表明**面板本体已独立、缺口集中在 host 的 webview 与路由围栏上**,所以收益并非为零,但**对应的是几块契约而不是 2.7 万行文件的重写**。
