@@ -4,10 +4,12 @@ use dozer_services::{
 };
 use std::sync::{Arc, Mutex};
 
+type CallLog = Arc<Mutex<Vec<(String, Option<u64>)>>>;
+
 #[derive(Clone)]
 pub(crate) struct FakeUsage {
     reply: Result<UsageRows, ServiceError>,
-    calls: Arc<Mutex<Vec<(String, Option<u64>)>>>,
+    calls: CallLog,
 }
 
 impl FakeUsage {
@@ -17,7 +19,6 @@ impl FakeUsage {
             calls: Default::default(),
         }
     }
-    #[allow(dead_code)] // Task 5 起被 Usage 失败场景使用
     pub(crate) fn failing(kind: ServiceErrorKind, message: &str) -> Self {
         Self {
             reply: Err(ServiceError::new(kind, message)),

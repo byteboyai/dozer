@@ -2,12 +2,14 @@
 
 use super::fake_dozerd::{Behavior, FakeDozerd};
 use super::fake_panel_host::FakePanelHost;
+use super::fake_usage::FakeUsage;
 use super::host::{Duty, ProbeHost};
 use super::{NOW_MS, payload, summary};
 use crate::extensions::usage::{self, ConversationUsage, Message};
 use crate::panel_host::testing::{TIMEOUT, runtime};
 use dozer_core::protocol::AgentKind;
 use dozer_model::ConversationMeta;
+use dozer_services::ServiceErrorKind;
 use iced_widget::core::{Border, Length};
 use std::collections::BTreeMap;
 
@@ -122,31 +124,44 @@ fn s3_no_project_path_marks_loading_but_never_calls_the_service() {
     assert!(dozerd.cwds().is_empty());
 }
 
-/// S4:服务不可达/报错 → 面板不 panic,结果与“没有数据”无法区分。
+/// S4a:进程内服务失败 → 面板退出“统计中”、git 数据照常、恰有一条 Error Toast,而不是静默的“无数据”(G4 已修)。
 #[test]
-fn s4_characterizes_g4_service_failure_looks_like_no_data() {
+fn s4a_service_failure_is_reported_not_swallowed() {
+    for kind in [ServiceErrorKind::Unavailable, ServiceErrorKind::Rejected] {
+        let rt = runtime();
+        let repo = repo_with_one_commit();
+        let fake = FakeUsage::failing(kind, "boom");
+        let mut host = ProbeHost::new(PROJECT);
+        host.surface.attach();
+        host.webview_ready();
+        let rx = host.activate_with(
+            &rt,
+            fake.clone().into_services(),
+            Some(repo.path().to_path_buf()),
+        );
+        host.deliver(rx.recv_timeout(TIMEOUT).unwrap());
+        assert!(!host.ws.loading());
+        assert!(host.ws.rows().is_empty());
+        assert_eq!(host.ws.git_commits(), 1);
+        let toasts = host.drain_toasts();
+        assert_eq!(toasts.len(), 1, "{kind:?}");
+        assert!(toasts[0].text.contains("boom"));
+        assert_eq!(fake.calls().len(), 1);
+    }
+}
+
+/// S4b:同一件事端到端——真实 `Client` 对 `FakeDozerd` 的 HangUp / ErrorReply 也走到 Toast。
+#[test]
+fn s4b_real_client_failures_surface_as_toasts() {
     for behavior in [Behavior::HangUp, Behavior::ErrorReply("boom".into())] {
         let rt = runtime();
         let repo = repo_with_one_commit();
         let dozerd = FakeDozerd::start(&rt, behavior);
         let mut host = ProbeHost::new(PROJECT);
-        host.surface.attach();
-        host.webview_ready();
         let rx = host.activate(&rt, &dozerd, Some(repo.path().to_path_buf()));
         host.deliver(rx.recv_timeout(TIMEOUT).unwrap());
-        assert!(!host.ws.loading(), "失败后仍要退出“统计中”");
-        assert!(host.ws.rows().is_empty());
-        assert_eq!(
-            host.ws.git_commits(),
-            1,
-            "git 这条独立数据源不受 dozerd 失败影响"
-        );
-        host.tick();
-        assert_eq!(
-            host.surface.kinds(),
-            vec!["empty".to_string()],
-            "缺口 G4:服务失败被 unwrap_or_default 吞掉,用户看到的是“无数据”而非错误;修复后应翻转本测试"
-        );
+        assert!(!host.ws.loading());
+        assert_eq!(host.drain_toasts().len(), 1);
     }
 }
 

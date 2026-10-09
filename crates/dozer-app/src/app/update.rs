@@ -217,6 +217,7 @@ impl App {
                 pending.extend(ws.ssh.take_outbox());
                 pending.extend(ws.database.take_outbox());
                 pending.extend(ws.agent_context.take_outbox());
+                pending.extend(ws.usage.take_outbox());
             }
         }
         pending.extend(self.database.take_outbox());
@@ -1618,7 +1619,10 @@ impl App {
                     self.prune_recent_projects(project_id);
                 }
             }
-            Message::Usage(msg @ usage::Message::Loaded(project_id, ..)) => {
+            Message::Usage(
+                msg @ (usage::Message::Loaded(project_id, ..)
+                | usage::Message::LoadFailed(project_id, ..)),
+            ) => {
                 self.with_project(project_id, move |ws, _io| {
                     usage::update(&mut ws.usage, msg);
                 });

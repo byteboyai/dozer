@@ -58,7 +58,6 @@ impl<M: Send + 'static> PanelIo<M> {
     }
 
     /// host 给面板的服务束(默认由 `Client` 适配;测试可用 `with_services` 换成进程内假实现)。
-    #[allow(dead_code)] // Task 5 起 Usage 面板使用
     pub(crate) fn services(&self) -> &Services {
         &self.services
     }
