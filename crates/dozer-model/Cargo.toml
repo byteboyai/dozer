@@ -1,0 +1,11 @@
+[package]
+name = "dozer-model"
+version = "0.1.0"
+edition.workspace = true
+
+# 纯数据类型:只许依赖 serde。不要加 dozer-core / bytehost-* / 运行时依赖(spec 2026-10-09)。
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
