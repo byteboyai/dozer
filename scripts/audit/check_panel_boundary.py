@@ -111,7 +111,8 @@ HOST_EXECUTOR_RE = re.compile(r"\bfn run_[a-z_]+_effects\b")
 PROTOCOL_RE = re.compile(r"\bdozer_core::protocol\b")
 # R-CLIENT(X0):面板代码对 `dozer_client` 的引用次数。面板应经 `dozer-services` 的 trait 取数;
 # 只许降不许增。注释与字符串字面量不计。
-CLIENT_RE = re.compile(r"\bdozer_client\b")
+# 也数 `io.client()`:不写 crate 名也能经 PanelIo 拿到 Client(类型推断),同样算耦合。
+CLIENT_RE = re.compile(r"\bdozer_client\b|\bio\.client\(\)")
 
 
 def scan(files):

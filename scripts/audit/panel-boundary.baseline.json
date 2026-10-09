@@ -13,10 +13,10 @@
   "R-CLIENT": 1
  },
  "extensions/codehealth/aggregate.rs": {
-  "R-CLIENT": 2
+  "R-CLIENT": 3
  },
  "extensions/conversations.rs": {
-  "R-CLIENT": 1
+  "R-CLIENT": 2
  },
  "extensions/edit_history.rs": {
   "R-CLIENT": 2
@@ -31,7 +31,7 @@
   "R-CLIENT": 1
  },
  "extensions/project/update.rs": {
-  "R-CLIENT": 5
+  "R-CLIENT": 6
  },
  "extensions/project_create.rs": {
   "R-CLIENT": 1
@@ -40,7 +40,7 @@
   "R-CLIENT": 2
  },
  "extensions/todo/state.rs": {
-  "R-CLIENT": 1
+  "R-CLIENT": 3
  },
  "extensions/todo/update.rs": {
   "R-CLIENT": 1

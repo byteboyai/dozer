@@ -113,6 +113,10 @@ class ClientCoupling(unittest.TestCase):
         text = "use dozer_client::Client;\nfn f(_: &dozer_client::Client) {}\n"
         self.assertEqual(self.scan1("extensions/todo.rs", text), {"R-CLIENT": 2})
 
+    def test_io_client_accessor_is_counted_without_naming_the_crate(self):
+        text = "fn f(ctx: &C) { ctx.io.client().get_usage_summary(\"/p\", None); }\n"
+        self.assertEqual(self.scan1("extensions/usage/mod.rs", text), {"R-CLIENT": 1})
+
     def test_comments_and_strings_are_not_counted(self):
         text = '// dozer_client::Client\nconst S: &str = "dozer_client::Client";\n'
         self.assertEqual(self.scan1("extensions/todo.rs", text), {})
