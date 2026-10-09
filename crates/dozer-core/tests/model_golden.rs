@@ -92,7 +92,11 @@ fn conversation_group() {
     );
     decodes(
         json!({"summary":"s","input_json":null}),
-        ToolCallInfo { summary: "s".into(), input_json: None, id: None },
+        ToolCallInfo {
+            summary: "s".into(),
+            input_json: None,
+            id: None,
+        },
     );
     golden(
         TurnRecord {
@@ -130,8 +134,14 @@ fn conversation_group() {
 #[test]
 fn summary_group() {
     golden(SummaryStatus::AiGenerated, json!("ai_generated"));
-    golden(SummaryStatus::HeuristicFallback, json!("heuristic_fallback"));
-    golden(SummaryErrorKind::ConfigurationRequired, json!("configuration_required"));
+    golden(
+        SummaryStatus::HeuristicFallback,
+        json!("heuristic_fallback"),
+    );
+    golden(
+        SummaryErrorKind::ConfigurationRequired,
+        json!("configuration_required"),
+    );
     golden(SummaryErrorKind::RateLimit, json!("rate_limit"));
     golden(SummaryErrorKind::NonzeroExit, json!("nonzero_exit"));
     golden(SummaryJobStatus::Succeeded, json!("succeeded"));
@@ -405,11 +415,17 @@ fn preview_group() {
     );
     // 老 JSON 缺新增可选字段时回落;可选字段为 None 时不输出
     golden(
-        PreviewContext { path: "/b".into(), ..Default::default() },
+        PreviewContext {
+            path: "/b".into(),
+            ..Default::default()
+        },
         json!({"path":"/b","start_line":0,"start_col":0,"end_line":0,"end_col":0,"has_selection":false,
                "updated_at_ms":0,"revision":0,"read_only":false}),
     );
-    let t = PreviewTabularContext { selected_range: Some((2, 3, 2, 3)), ..Default::default() };
+    let t = PreviewTabularContext {
+        selected_range: Some((2, 3, 2, 3)),
+        ..Default::default()
+    };
     assert_eq!(t.selected_cell_from_range(), Some((2, 3)));
     let mut c = PreviewContext::default();
     c.set_selected_text(Some("a".repeat(5000)));
@@ -418,12 +434,22 @@ fn preview_group() {
     assert_eq!(c.selected_text, None);
 
     golden(
-        PreviewCommandTarget::Tab { panel: "files".into(), tab_id: 2 },
+        PreviewCommandTarget::Tab {
+            panel: "files".into(),
+            tab_id: 2,
+        },
         json!({"by":"tab","panel":"files","tab_id":2}),
     );
-    golden(PreviewCommandTarget::Path { path: "/x".into() }, json!({"by":"path","path":"/x"}));
     golden(
-        PreviewCommandAction::RevealCell { sheet: 0, row: 1, col: 2 },
+        PreviewCommandTarget::Path { path: "/x".into() },
+        json!({"by":"path","path":"/x"}),
+    );
+    golden(
+        PreviewCommandAction::RevealCell {
+            sheet: 0,
+            row: 1,
+            col: 2,
+        },
         json!({"kind":"reveal_cell","sheet":0,"row":1,"col":2}),
     );
     golden(
@@ -447,11 +473,23 @@ fn preview_group() {
         json!({"request_id":"r1","project_id":1,"target":{"by":"path","path":"/x"},
                "action":{"kind":"reveal","line":1,"column":1}}),
     );
-    let o = PreviewCommandOutcome::StaleRevision { request_id: "r".into(), current_revision: 4 };
+    let o = PreviewCommandOutcome::StaleRevision {
+        request_id: "r".into(),
+        current_revision: 4,
+    };
     assert_eq!(o.request_id(), "r");
-    golden(o, json!({"status":"stale_revision","request_id":"r","current_revision":4}));
     golden(
-        LocateMatch { start_line: 1, start_col: 2, end_line: 3, end_col: 4, context: "c".into() },
+        o,
+        json!({"status":"stale_revision","request_id":"r","current_revision":4}),
+    );
+    golden(
+        LocateMatch {
+            start_line: 1,
+            start_col: 2,
+            end_line: 3,
+            end_col: 4,
+            context: "c".into(),
+        },
         json!({"start_line":1,"start_col":2,"end_line":3,"end_col":4,"context":"c"}),
     );
     golden(
@@ -465,9 +503,14 @@ fn preview_group() {
         json!({"kind":"applied","new_start_line":1,"new_start_col":2,"new_end_line":3,"new_end_col":4,"history_id":9}),
     );
     golden(MutationOutcome::NotFound, json!({"kind":"not_found"}));
-    golden(MutationOutcome::PathOutOfBounds, json!({"kind":"path_out_of_bounds"}));
     golden(
-        MutationOutcome::Conflict { actual_text: "t".into() },
+        MutationOutcome::PathOutOfBounds,
+        json!({"kind":"path_out_of_bounds"}),
+    );
+    golden(
+        MutationOutcome::Conflict {
+            actual_text: "t".into(),
+        },
         json!({"kind":"conflict","actual_text":"t"}),
     );
     golden(
@@ -480,7 +523,10 @@ fn preview_group() {
 fn group_chat_group() {
     golden(GroupCancelScope::Round, json!("round"));
     golden(GroupAuthor::Human, json!({"kind":"human"}));
-    golden(GroupAuthor::Member { member_id: 3 }, json!({"kind":"member","member_id":3}));
+    golden(
+        GroupAuthor::Member { member_id: 3 },
+        json!({"kind":"member","member_id":3}),
+    );
     golden(GroupMessageStatus::Queued, json!({"state":"queued"}));
     golden(
         GroupMessageStatus::Failed { reason: "x".into() },
@@ -498,7 +544,13 @@ fn group_chat_group() {
         json!({"id":1,"group_id":2,"agent":"claude","handle":"cc","role_prompt":"p"}),
     );
     golden(
-        GroupInfo { id: 2, project_id: 1, topic: "t".into(), created_ms: 5, members: vec![m] },
+        GroupInfo {
+            id: 2,
+            project_id: 1,
+            topic: "t".into(),
+            created_ms: 5,
+            members: vec![m],
+        },
         json!({"id":2,"project_id":1,"topic":"t","created_ms":5,
                "members":[{"id":1,"group_id":2,"agent":"claude","handle":"cc","role_prompt":"p"}]}),
     );
@@ -621,7 +673,10 @@ fn request_and_reply_lines_are_byte_stable() {
         json!({"type":"create_session","name":"主线","command":"/bin/sh","args":["-c","cat"],"cwd":"/tmp",
                "cols":80,"rows":24,"project_id":1,"agent":"codex"}),
     );
-    let req = Request::SetTodoStatus { id: 5, status: TodoStoredStatus::Suspended };
+    let req = Request::SetTodoStatus {
+        id: 5,
+        status: TodoStoredStatus::Suspended,
+    };
     assert_eq!(
         serde_json::from_str::<Value>(encode_line(&req).trim()).unwrap(),
         json!({"type":"set_todo_status","id":5,"status":"suspended"}),
