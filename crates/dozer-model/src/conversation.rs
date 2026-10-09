@@ -1,5 +1,7 @@
 use crate::AgentKind;
+use crate::{SessionSummaryPayload, SummaryStatus};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// 单个历史会话(=一份 agent transcript 文件)的索引摘要;由 dozerd 的
 /// `TranscriptStore` 摄取落库维护(spec 2026-08-20)。
@@ -66,4 +68,130 @@ pub struct TurnRecord {
     pub tokens_cache_read: u64,
     #[serde(default)]
     pub tokens_cache_write: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConversationMeta {
+    pub path: PathBuf,
+    pub title: String,
+    pub modified_ms: u64,
+    pub agent: AgentKind,
+}
+
+impl ConversationMeta {
+    pub fn from_summary(s: &ConversationSummary) -> Self {
+        Self {
+            path: PathBuf::from(&s.file_path),
+            title: s.title.clone(),
+            modified_ms: s.last_ts,
+            agent: s.agent,
+        }
+    }
+}
+
+/// 会话列表一行(2026-08-27,取代按回合分组的 `TurnGroupRow`)。有总结用
+/// 总结的标题/全文,没有降级用 `ConversationSummary.title`(旧数据/纯
+/// shell/SSH/Codex)。`summary` 存全文不截断——列表渲染时截断成
+/// 预览,详情页直接整段展示,不为详情页单独发一次查询。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionRow {
+    pub conversation_id: String,
+    pub agent: AgentKind,
+    pub last_ts: u64,
+    pub display_title: String,
+    pub summary: Option<String>,
+    pub summary_status: Option<SummaryStatus>,
+    /// 该会话关联的 Todo 任务 id(有则来自 `SessionSummaryPayload.task_id`),
+    /// 会话面板据此展示"关联任务"标签。`None` = 与任务无关的普通交互式
+    /// 会话。
+    pub task_id: Option<i64>,
+}
+
+impl SessionRow {
+    pub fn from_row(c: &ConversationSummary, s: Option<&SessionSummaryPayload>) -> Self {
+        Self {
+            conversation_id: c.conversation_id.clone(),
+            agent: c.agent,
+            last_ts: c.last_ts,
+            display_title: s
+                .map(|s| s.title.clone())
+                .unwrap_or_else(|| c.title.clone()),
+            summary: s.map(|s| s.summary.clone()),
+            summary_status: s.map(|s| s.status),
+            task_id: s.and_then(|s| s.task_id),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_summary_maps_fields() {
+        let s = ConversationSummary {
+            conversation_id: "abc".into(),
+            agent: AgentKind::Claude,
+            file_path: "/h/.claude/projects/x/abc.jsonl".into(),
+            title: "标题".into(),
+            first_ts: 1,
+            last_ts: 2,
+            turn_count: 3,
+        };
+        let meta = ConversationMeta::from_summary(&s);
+        assert_eq!(
+            meta.path,
+            std::path::PathBuf::from("/h/.claude/projects/x/abc.jsonl")
+        );
+        assert_eq!(meta.title, "标题");
+        assert_eq!(meta.modified_ms, 2);
+        assert_eq!(meta.agent, AgentKind::Claude);
+    }
+
+    #[test]
+    fn session_row_from_row_uses_summary_title_and_text_when_present() {
+        let c = ConversationSummary {
+            conversation_id: "c1".into(),
+            agent: AgentKind::Claude,
+            file_path: "/h/.claude/projects/x/c1.jsonl".into(),
+            title: "原始标题".into(),
+            first_ts: 1,
+            last_ts: 100,
+            turn_count: 3,
+        };
+        let s = SessionSummaryPayload {
+            session_id: "s1".into(),
+            agent_kind: AgentKind::Claude,
+            conversation_id: Some("c1".into()),
+            title: "总结标题".into(),
+            summary: "总结全文".into(),
+            status: SummaryStatus::AiGenerated,
+            created_ts_ms: 1,
+            task_id: None,
+        };
+        let row = SessionRow::from_row(&c, Some(&s));
+        assert_eq!(row.conversation_id, "c1");
+        assert_eq!(row.agent, AgentKind::Claude);
+        assert_eq!(row.last_ts, 100);
+        assert_eq!(row.display_title, "总结标题");
+        assert_eq!(row.summary.as_deref(), Some("总结全文"));
+        assert_eq!(row.summary_status, Some(SummaryStatus::AiGenerated));
+    }
+
+    #[test]
+    fn session_row_from_row_falls_back_to_conversation_title_without_summary() {
+        let c = ConversationSummary {
+            conversation_id: "c2".into(),
+            agent: AgentKind::Codex,
+            file_path: "/h/.codex/x/c2.jsonl".into(),
+            title: "原始标题".into(),
+            first_ts: 1,
+            last_ts: 100,
+            turn_count: 1,
+        };
+        let row = SessionRow::from_row(&c, None);
+        assert_eq!(row.display_title, "原始标题");
+        assert_eq!(row.summary, None);
+        assert_eq!(row.summary_status, None);
+    }
 }

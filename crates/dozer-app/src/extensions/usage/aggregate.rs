@@ -1,8 +1,8 @@
 //! 用量统计的纯聚合计算:ConversationUsage/ProjectUsageTotals/DailySeries
 //! 及 agent 份额、趋势序列等纯函数(不碰 iced/IO)。
 
-use crate::conversation::ConversationMeta;
 use dozer_core::protocol::AgentKind;
+use dozer_model::ConversationMeta;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// 单个会话（= 一份 transcript 文件）的用量统计。

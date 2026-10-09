@@ -1956,6 +1956,7 @@ dependencies = [
  "dozer-core",
  "dozer-hook",
  "dozer-mcp",
+ "dozer-model",
  "futures",
  "gleisbau",
  "grep-regex",

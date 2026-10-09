@@ -3,7 +3,6 @@ mod app_webview;
 mod assets;
 mod capabilities;
 mod chrome;
-mod conversation;
 mod event;
 mod extensions;
 mod external_apps;

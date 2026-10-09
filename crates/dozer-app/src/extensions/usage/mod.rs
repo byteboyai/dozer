@@ -4,8 +4,8 @@
 //! `dozerd`/`dozer-core::protocol` 完全不参与——所有数据直接读磁盘上的
 //! agent transcript JSONL。
 
-use crate::conversation::ConversationMeta;
 use dozer_core::protocol::AgentKind;
+use dozer_model::ConversationMeta;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -187,7 +187,7 @@ pub fn spawn_refresh(
             .iter()
             .map(|(summary, payload)| {
                 (
-                    crate::conversation::ConversationMeta::from_summary(summary),
+                    dozer_model::ConversationMeta::from_summary(summary),
                     ConversationUsage::from(payload),
                 )
             })

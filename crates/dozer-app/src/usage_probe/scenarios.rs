@@ -4,10 +4,10 @@ use super::fake_dozerd::{Behavior, FakeDozerd};
 use super::fake_panel_host::FakePanelHost;
 use super::host::{Duty, ProbeHost};
 use super::{NOW_MS, payload, summary};
-use crate::conversation::ConversationMeta;
 use crate::extensions::usage::{self, ConversationUsage, Message};
 use crate::panel_host::testing::{TIMEOUT, runtime};
 use dozer_core::protocol::AgentKind;
+use dozer_model::ConversationMeta;
 use iced_widget::core::{Border, Length};
 use std::collections::BTreeMap;
 
