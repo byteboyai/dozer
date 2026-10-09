@@ -21,21 +21,23 @@ pub(crate) enum Duty {
     DowngradeReady,
     SkipWhileLoading,
     ParseIpcAndMarkReady,
+    DrainToastOutbox,
 }
 
 impl Duty {
     /// 真实 host 里承担这件事的位置(读代码得到,2026-10-08)。
     pub(crate) fn host_site(self) -> &'static str {
         match self {
-            Duty::BuildActivationCtx => "app/update.rs:5250",
-            Duty::RouteLoaded => "app/update.rs:1621 (with_project)",
-            Duty::DropOtherProject => "app/update.rs:1621 (with_project 路由到别的 Workspace)",
-            Duty::InterceptCollapse => "app/update.rs:1626",
-            Duty::InterceptHover => "app/update.rs:1629",
+            Duty::BuildActivationCtx => "app/update.rs:5254",
+            Duty::RouteLoaded => "app/update.rs:1623 (with_project)",
+            Duty::DropOtherProject => "app/update.rs:1623 (with_project 路由到别的 Workspace)",
+            Duty::InterceptCollapse => "app/update.rs:1630",
+            Duty::InterceptHover => "app/update.rs:1633",
             Duty::FramePush => "app/app.rs:1242 take_usage_content_script",
             Duty::DowngradeReady => "app/app.rs:1251",
             Duty::SkipWhileLoading => "app/app.rs:1257",
-            Duty::ParseIpcAndMarkReady => "runtime.rs:705 + app/update.rs:261",
+            Duty::ParseIpcAndMarkReady => "runtime.rs:705 + app/update.rs:262",
+            Duty::DrainToastOutbox => "app/update.rs:220 (drain_outboxes)",
         }
     }
 }
@@ -59,7 +61,7 @@ impl ProbeHost {
         }
     }
 
-    /// 对应 `app/update.rs:5250`:host 构造 `ActivationCtx` 再调面板的 `on_activate`。
+    /// 对应 `app/update.rs:5254`:host 构造 `ActivationCtx` 再调面板的 `on_activate`。
     pub(crate) fn activate(
         &mut self,
         rt: &tokio::runtime::Runtime,
@@ -82,7 +84,37 @@ impl ProbeHost {
         rx
     }
 
-    /// 对应 `app/update.rs:1621-1633` 的路由:`Loaded` 按 `project_id` 路由(这里只有一个 Workspace,
+    /// 与 `activate` 同,但服务由调用方给(进程内假实现),不经 UDS。
+    pub(crate) fn activate_with(
+        &mut self,
+        rt: &tokio::runtime::Runtime,
+        services: dozer_services::Services,
+        path: Option<PathBuf>,
+    ) -> mpsc::Receiver<Message> {
+        let (tx, rx) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        let client = dozer_client::Client::new(PathBuf::from("/tmp/dozer-probe-unused.sock"));
+        let io = PanelIo::new(client, rt.handle().clone(), move |m| {
+            let _ = tx.lock().unwrap().send(m);
+        })
+        .with_services(services);
+        let ctx = ActivationCtx {
+            project_id: self.project_id,
+            project_path: path,
+            io,
+        };
+        self.duties.push(Duty::BuildActivationCtx);
+        usage::on_activate(&mut self.ws, Some(&ctx));
+        rx
+    }
+
+    /// 对应 `App::drain_outboxes`(`app/update.rs`)里 `pending.extend(ws.usage.take_outbox())`。
+    pub(crate) fn drain_toasts(&mut self) -> Vec<crate::extensions::toast::Pending> {
+        self.duties.push(Duty::DrainToastOutbox);
+        self.ws.take_outbox()
+    }
+
+    /// 对应 `app/update.rs:1622-1637` 的路由:`Loaded`/`LoadFailed` 按 `project_id` 路由(这里只有一个 Workspace,
     /// 非本项目的等价于"路由到别的 Workspace",对本面板即丢弃);`ToggleListCollapse`/`Hover` 由 host
     /// 拦截,不进面板的 `update`。
     pub(crate) fn deliver(&mut self, msg: Message) {
@@ -91,6 +123,13 @@ impl ProbeHost {
                 self.duties.push(Duty::DropOtherProject);
             }
             msg @ Message::Loaded(..) => {
+                self.duties.push(Duty::RouteLoaded);
+                usage::update(&mut self.ws, msg);
+            }
+            Message::LoadFailed(project_id, ..) if project_id != self.project_id => {
+                self.duties.push(Duty::DropOtherProject);
+            }
+            msg @ Message::LoadFailed(..) => {
                 self.duties.push(Duty::RouteLoaded);
                 usage::update(&mut self.ws, msg);
             }
@@ -121,7 +160,7 @@ impl ProbeHost {
         self.surface.receive(envelope);
     }
 
-    /// 对应 `runtime.rs:705` 的 IPC 识别 + `app/update.rs:261` 的 `Ready` 处理。
+    /// 对应 `runtime.rs:705` 的 IPC 识别 + `app/update.rs:262` 的 `Ready` 处理。
     pub(crate) fn webview_ready(&mut self) {
         self.duties.push(Duty::ParseIpcAndMarkReady);
         let event = usage::parse_usage_event(r#"{"kind":"ready"}"#).unwrap();
@@ -205,11 +244,11 @@ mod tests {
             ),
             (
                 Duty::RouteLoaded,
-                &["Message::Usage(msg @ usage::Message::Loaded(project_id, ..))"],
+                &["msg @ (usage::Message::Loaded(project_id, ..)"],
             ),
             (
                 Duty::DropOtherProject,
-                &["Message::Usage(msg @ usage::Message::Loaded(project_id, ..))"],
+                &["msg @ (usage::Message::Loaded(project_id, ..)"],
             ),
             (
                 Duty::InterceptCollapse,
@@ -225,6 +264,10 @@ mod tests {
                 &["self.usage_webview.set_ready(false)"],
             ),
             (Duty::SkipWhileLoading, &["if ws.usage.loading()"]),
+            (
+                Duty::DrainToastOutbox,
+                &["pending.extend(ws.usage.take_outbox())"],
+            ),
             (
                 Duty::ParseIpcAndMarkReady,
                 &[
@@ -278,7 +321,8 @@ mod tests {
             "update.rs 路由",
             update,
             &[
-                "Message::Usage(msg @ usage::Message::Loaded(project_id, ..))",
+                "msg @ (usage::Message::Loaded(project_id, ..)",
+                "| usage::Message::LoadFailed(project_id, ..)",
                 "self.with_project(project_id",
                 "Message::Usage(usage::Message::ToggleListCollapse)",
                 "Message::Usage(usage::Message::Hover(id, h))",

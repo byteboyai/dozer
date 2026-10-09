@@ -1,0 +1,11 @@
+[package]
+name = "dozer-services"
+version = "0.1.0"
+edition.workspace = true
+
+# 面板服务 trait:只许依赖 dozer-model(spec 2026-10-09)。不要加 dozer-core / dozer-client / tokio。
+[dependencies]
+dozer-model = { path = "../dozer-model" }
+
+[dev-dependencies]
+tokio = { workspace = true }

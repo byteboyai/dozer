@@ -13,6 +13,8 @@ mod aggregate;
 mod protocol;
 mod view;
 
+dozer_core::scope!(LOG, panel, "usage");
+
 pub(crate) use aggregate::*;
 pub(crate) use protocol::*;
 pub(crate) use view::*;
@@ -36,9 +38,15 @@ pub struct WorkspaceState {
     /// 代数比这个小的就是被更新的刷新取代了的过期结果,`update` 直接丢弃——同一项目快速切入两次会
     /// 并发两次刷新,较慢的旧结果后到时不能覆盖新结果(host 的 `with_project` 只按项目路由,不去重)。
     refresh_generation: u64,
+    /// 取数失败等一次性提示;`App::drain_outboxes` 排空成 Toast。
+    outbox: crate::extensions::toast::Outbox,
 }
 
 impl WorkspaceState {
+    pub fn take_outbox(&mut self) -> Vec<crate::extensions::toast::Pending> {
+        self.outbox.take()
+    }
+
     pub fn rows(&self) -> &[(ConversationMeta, ConversationUsage)] {
         &self.rows
     }
@@ -131,6 +139,9 @@ pub enum Message {
         u64,
         BTreeMap<i64, u64>,
     ),
+    /// 取数失败(G4):与 `Loaded` 区分开,不再把失败当成空数据。第三字段是失败文本;
+    /// 第四、五字段仍带 git 数据——它是本地仓库遍历,不依赖 dozerd。
+    LoadFailed(i64, u64, String, u64, BTreeMap<i64, u64>),
     /// 右侧 agent 筛选栏点击(2026-08-28):`None` 选"全部agent"。
     AgentFilterSet(Option<AgentKind>),
     /// 内容侧"收起/展开列表列"按钮:内核拦截,不进 `update`——转发成顶层
@@ -153,6 +164,20 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
             ws_state.git_commits_by_day = git_commits_by_day;
             ws_state.loading = false;
         }
+        Message::LoadFailed(_, generation, message, git_commits, git_commits_by_day) => {
+            if generation < ws_state.refresh_generation {
+                return;
+            }
+            ws_state.git_commits = git_commits;
+            ws_state.git_commits_by_day = git_commits_by_day;
+            ws_state.loading = false;
+            ws_state.outbox.push_keyed(
+                LOG,
+                crate::extensions::toast::Level::Error,
+                format!("用量统计失败: {message}"),
+                "usage-load",
+            );
+        }
         Message::AgentFilterSet(agent) => {
             ws_state.agent_filter = agent;
         }
@@ -173,27 +198,15 @@ pub fn spawn_refresh(
     project_id: i64,
     generation: u64,
     project_path: PathBuf,
-    client: &dozer_client::Client,
+    service: std::sync::Arc<dyn dozer_services::UsageService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
-    let client = client.clone();
     handle.spawn(async move {
         let cwd = project_path.to_string_lossy().into_owned();
-        let rows = client
-            .get_usage_summary(&cwd, None)
-            .await
-            .unwrap_or_default()
-            .iter()
-            .map(|(summary, payload)| {
-                (
-                    dozer_model::ConversationMeta::from_summary(summary),
-                    ConversationUsage::from(payload),
-                )
-            })
-            .collect::<Vec<_>>();
-        // git 提交数(总数 + 每日分桶)是纯本地仓库遍历,丢进 spawn_blocking
-        // 不占异步 worker。
+        let result = service.usage_summary(cwd, None).await;
+        // git 提交数(总数 + 每日分桶)是纯本地仓库遍历,与 dozerd 成败无关,两条路径都要算;
+        // 丢进 spawn_blocking 不占异步 worker。
         let (git_commits, git_commits_by_day) = tokio::task::spawn_blocking(move || {
             let total = count_git_commits(&project_path);
             let by_day = count_git_commits_by_day(&project_path);
@@ -201,13 +214,33 @@ pub fn spawn_refresh(
         })
         .await
         .unwrap_or((0, BTreeMap::new()));
-        emit(Message::Loaded(
-            project_id,
-            generation,
-            rows,
-            git_commits,
-            git_commits_by_day,
-        ));
+        match result {
+            Ok(rows) => {
+                let rows = rows
+                    .iter()
+                    .map(|(summary, payload)| {
+                        (
+                            dozer_model::ConversationMeta::from_summary(summary),
+                            ConversationUsage::from(payload),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                emit(Message::Loaded(
+                    project_id,
+                    generation,
+                    rows,
+                    git_commits,
+                    git_commits_by_day,
+                ));
+            }
+            Err(e) => emit(Message::LoadFailed(
+                project_id,
+                generation,
+                e.message,
+                git_commits,
+                git_commits_by_day,
+            )),
+        }
     });
 }
 
@@ -228,7 +261,7 @@ pub fn on_activate(
         ctx.project_id,
         generation,
         path,
-        ctx.io.client(),
+        ctx.io.services().usage.clone(),
         ctx.io.handle(),
         ctx.io.emitter(),
     );
@@ -986,6 +1019,7 @@ mod tests {
     fn on_activate_marks_loading_and_requests_a_refresh_for_that_project() {
         let rt = runtime();
         let (ctx, rx) = offline_ctx::<Message>(&rt, 7, Some(std::env::temp_dir()));
+        let ctx = ok_services(ctx);
         let mut state = WorkspaceState::default();
         on_activate(&mut state, Some(&ctx));
         assert!(state.loading());
@@ -993,6 +1027,18 @@ mod tests {
             rx.recv_timeout(TIMEOUT).unwrap(),
             Message::Loaded(7, ..)
         ));
+    }
+
+    /// 激活测试关心“发出了刷新”,不关心 dozerd:换成进程内假实现(否则指向不存在的 socket 会得到 `LoadFailed`)。
+    fn ok_services(
+        ctx: crate::panel_host::ActivationCtx<Message>,
+    ) -> crate::panel_host::ActivationCtx<Message> {
+        crate::panel_host::ActivationCtx {
+            io: ctx.io.with_services(
+                crate::usage_probe::fake_usage::FakeUsage::ok(vec![]).into_services(),
+            ),
+            ..ctx
+        }
     }
 
     fn rows_of(n: usize) -> Vec<(ConversationMeta, ConversationUsage)> {
@@ -1062,6 +1108,7 @@ mod tests {
     fn each_activation_issues_a_newer_generation() {
         let rt = runtime();
         let (ctx, rx) = offline_ctx::<Message>(&rt, 7, Some(std::env::temp_dir()));
+        let ctx = ok_services(ctx);
         let mut state = WorkspaceState::default();
         on_activate(&mut state, Some(&ctx));
         on_activate(&mut state, Some(&ctx));
@@ -1081,5 +1128,49 @@ mod tests {
         let mut state = WorkspaceState::default();
         on_activate(&mut state, None);
         assert!(state.loading(), "迁移前的行为:先置 loading,再看有没有项目");
+    }
+
+    #[test]
+    fn load_failed_keeps_rows_updates_git_and_queues_one_error_toast() {
+        let mut ws = WorkspaceState::default();
+        let g1 = ws.begin_refresh();
+        update(
+            &mut ws,
+            Message::Loaded(1, g1, rows_of(2), 5, Default::default()),
+        );
+        let g2 = ws.begin_refresh();
+        update(
+            &mut ws,
+            Message::LoadFailed(1, g2, "daemon 断开".into(), 9, Default::default()),
+        );
+        assert_eq!(ws.rows().len(), 2, "失败不得抹掉上次成功的数据");
+        assert_eq!(ws.git_commits(), 9, "git 提交数是独立数据源,照常更新");
+        assert!(!ws.loading(), "失败后要退出“统计中”");
+        let toasts = ws.take_outbox();
+        assert_eq!(toasts.len(), 1);
+        assert_eq!(toasts[0].level, crate::extensions::toast::Level::Error);
+        assert!(toasts[0].text.contains("daemon 断开"));
+        assert_eq!(toasts[0].key.as_deref(), Some("usage-load"));
+        assert!(ws.take_outbox().is_empty(), "排空后不重复");
+    }
+
+    #[test]
+    fn stale_load_failed_is_dropped_without_touching_loading() {
+        let mut ws = WorkspaceState::default();
+        let first = ws.begin_refresh();
+        let second = ws.begin_refresh();
+        update(
+            &mut ws,
+            Message::LoadFailed(1, first, "旧的失败".into(), 9, Default::default()),
+        );
+        assert!(ws.loading(), "新的刷新还在路上");
+        assert_eq!(ws.git_commits(), 0);
+        assert!(ws.take_outbox().is_empty());
+        update(
+            &mut ws,
+            Message::LoadFailed(1, second, "新的失败".into(), 1, Default::default()),
+        );
+        assert!(!ws.loading());
+        assert_eq!(ws.take_outbox().len(), 1);
     }
 }

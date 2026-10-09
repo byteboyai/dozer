@@ -1957,6 +1957,7 @@ dependencies = [
  "dozer-hook",
  "dozer-mcp",
  "dozer-model",
+ "dozer-services",
  "futures",
  "gleisbau",
  "grep-regex",
@@ -2008,6 +2009,7 @@ dependencies = [
  "bytehost-apps",
  "bytehost-client",
  "dozer-core",
+ "dozer-services",
  "dozerd",
  "tempfile",
  "tokio",
@@ -2084,6 +2086,14 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "dozer-services"
+version = "0.1.0"
+dependencies = [
+ "dozer-model",
+ "tokio",
 ]
 
 [[package]]
