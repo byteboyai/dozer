@@ -370,7 +370,8 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
             return; // 无系统 git(bytegit::clone 内部调用 git 可执行文件),跳过
         }
         let rt = runtime();
-        let remote = bytegit::testutil::TempRepo::with_one_commit();
+        let remote = bytegit::testutil::TempRepo::new();
+        remote.commit_file("a.txt", "x", "c1");
         let root = tempfile::tempdir().unwrap();
         let target = root.path().join("cloned");
         let info = project_info(6, &target.to_string_lossy());
@@ -427,7 +428,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
         }
     }
 ```
-(`bytegit::testutil::TempRepo` 的"带一个提交"构造器名以 `usage_probe/scenarios.rs` 里 `repo_with_one_commit()` 的写法为准——先读那个函数,照它的调用方式建远程仓库,不要凭空起名;`LocalForm` 的 `create_git` 默认值以 `LocalForm::default()` 为准,`submit_local_end_to_end_delivers_done` 断言的 `skip` 随之取 `!create_git`——若默认 `create_git` 为 `true`,则 `skip == false`。)
+(远程仓库的建法与 `usage_probe/scenarios.rs` 的 `repo_with_one_commit()` 一致:`TempRepo::new()` 加 `commit_file("a.txt", "x", "c1")`。`submit_local_end_to_end_delivers_done` 里 `skip` 取 `!create_git`;执行时先读 `LocalForm::default()` 的 `create_git` 默认值,若为 `true` 则断言 `skip == false`,若为 `false` 则 `skip == true`,按实际默认值写死,不要两个都接受。)
 
 Run: `cargo test -p dozer-app extensions::project_create 2>&1 | grep -E '^error' | head -5` → Expected: 编译失败(`spawn_create_local`/`spawn_clone`/`update` 的参数类型不符)(RED)。
 
