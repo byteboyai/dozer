@@ -6,9 +6,6 @@
   "R-HOST-PANEL-ARMS": 95,
   "R-PANE-PICK": 1
  },
- "extensions/agent_context.rs": {
-  "R-CLIENT": 3
- },
  "extensions/browser.rs": {
   "R-CLIENT": 1
  },

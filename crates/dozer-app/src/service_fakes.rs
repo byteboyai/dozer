@@ -1,13 +1,13 @@
 //! 进程内服务假实现(只在测试里):不起 UDS,返回固定结果并记录调用。
 use dozer_model::{
-    AgentKind, CategoryInfo, CategoryMoveDirection, CodeHealthReportInfo, ConversationSummary,
-    GroupAuthor, GroupCancelScope, GroupInfo, GroupMessageInfo, MemoryDetail, MemoryInfo,
-    ProjectInfo, SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus,
+    AgentKind, CategoryInfo, CategoryMoveDirection, CodeHealthReportInfo, ContextItemInfo,
+    ConversationSummary, GroupAuthor, GroupCancelScope, GroupInfo, GroupMessageInfo, MemoryDetail,
+    MemoryInfo, ProjectInfo, SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus,
 };
 use dozer_services::{
-    BoxFuture, CodeHealthService, ConversationRows, ConversationService, GroupChatService,
-    MemoryService, PostedMessages, ProjectService, ServiceError, ServiceErrorKind, Services,
-    TodoService,
+    BoxFuture, CodeHealthService, ContextService, ConversationRows, ConversationService,
+    GroupChatService, MemoryService, PostedMessages, ProjectService, ServiceError,
+    ServiceErrorKind, Services, TodoService,
 };
 use std::sync::{Arc, Mutex};
 
@@ -188,6 +188,7 @@ pub(crate) fn base_services() -> Services {
         group_chat: Arc::new(FakeGroupChat::default()),
         conversation: Arc::new(FakeConversation::default()),
         codehealth: Arc::new(FakeCodeHealth::default()),
+        context: Arc::new(FakeContext::default()),
     }
 }
 
@@ -866,6 +867,98 @@ impl CodeHealthService for FakeCodeHealth {
         s.calls
             .push(format!("save_code_health_report({project_id})"));
         let r = match &s.save_error {
+            Some(e) => Err(e.clone()),
+            None => Ok(()),
+        };
+        Box::pin(async move { r })
+    }
+}
+
+// ---- FakeContext ----
+
+#[derive(Default)]
+struct ContextState {
+    items: Vec<ContextItemInfo>,
+    list_error: Option<ServiceError>,
+    write_error: Option<ServiceError>,
+    calls: Vec<String>,
+}
+
+/// 克隆共享同一份状态。`Default` = 全部成功、列表为空。
+#[derive(Clone, Default)]
+pub(crate) struct FakeContext {
+    state: Arc<Mutex<ContextState>>,
+}
+
+impl FakeContext {
+    pub(crate) fn with_items(self, items: Vec<ContextItemInfo>) -> Self {
+        self.state.lock().unwrap().items = items;
+        self
+    }
+    pub(crate) fn with_list_error(self, kind: ServiceErrorKind, message: &str) -> Self {
+        self.state.lock().unwrap().list_error = Some(ServiceError::new(kind, message));
+        self
+    }
+    /// add 与 remove 共用。
+    pub(crate) fn with_write_error(self, kind: ServiceErrorKind, message: &str) -> Self {
+        self.state.lock().unwrap().write_error = Some(ServiceError::new(kind, message));
+        self
+    }
+    pub(crate) fn calls(&self) -> Vec<String> {
+        self.state.lock().unwrap().calls.clone()
+    }
+    pub(crate) fn into_services(self) -> Services {
+        Services {
+            context: Arc::new(self),
+            ..base_services()
+        }
+    }
+}
+
+impl ContextService for FakeContext {
+    fn list_context_items(
+        &self,
+        project_id: i64,
+    ) -> BoxFuture<'_, Result<Vec<ContextItemInfo>, ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls.push(format!("list_context_items({project_id})"));
+        let r = match &s.list_error {
+            Some(e) => Err(e.clone()),
+            None => Ok(s.items.clone()),
+        };
+        Box::pin(async move { r })
+    }
+    fn add_context_item(
+        &self,
+        project_id: i64,
+        entity_kind: String,
+        entity_ref: String,
+    ) -> BoxFuture<'_, Result<ContextItemInfo, ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls.push(format!(
+            "add_context_item({project_id},{entity_kind},{entity_ref})"
+        ));
+        let r = match &s.write_error {
+            Some(e) => Err(e.clone()),
+            None => Ok(ContextItemInfo {
+                id: 77,
+                project_id,
+                entity_kind,
+                entity_ref,
+                created_ms: 0,
+            }),
+        };
+        Box::pin(async move { r })
+    }
+    fn remove_context_item(
+        &self,
+        project_id: i64,
+        id: i64,
+    ) -> BoxFuture<'_, Result<(), ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls
+            .push(format!("remove_context_item({project_id},{id})"));
+        let r = match &s.write_error {
             Some(e) => Err(e.clone()),
             None => Ok(()),
         };

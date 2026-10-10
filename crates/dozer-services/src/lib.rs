@@ -2,9 +2,9 @@
 //! 不知道对面是 dozerd 还是内存假实现。生产实现在 `dozer-client`(为 `Client` 适配)。
 
 use dozer_model::{
-    AgentKind, CategoryInfo, CategoryMoveDirection, CodeHealthReportInfo, ConversationSummary,
-    GroupCancelScope, GroupInfo, GroupMessageInfo, MemoryDetail, MemoryInfo, ProjectInfo,
-    SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus, UsagePayload,
+    AgentKind, CategoryInfo, CategoryMoveDirection, CodeHealthReportInfo, ContextItemInfo,
+    ConversationSummary, GroupCancelScope, GroupInfo, GroupMessageInfo, MemoryDetail, MemoryInfo,
+    ProjectInfo, SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus, UsagePayload,
 };
 use std::fmt;
 use std::future::Future;
@@ -249,6 +249,25 @@ pub trait CodeHealthService: Send + Sync {
     ) -> BoxFuture<'_, Result<(), ServiceError>>;
 }
 
+/// Agent 上下文条的读写。参数按值传。
+pub trait ContextService: Send + Sync {
+    fn list_context_items(
+        &self,
+        project_id: i64,
+    ) -> BoxFuture<'_, Result<Vec<ContextItemInfo>, ServiceError>>;
+    fn add_context_item(
+        &self,
+        project_id: i64,
+        entity_kind: String,
+        entity_ref: String,
+    ) -> BoxFuture<'_, Result<ContextItemInfo, ServiceError>>;
+    fn remove_context_item(
+        &self,
+        project_id: i64,
+        id: i64,
+    ) -> BoxFuture<'_, Result<(), ServiceError>>;
+}
+
 /// 各能力 trait 的 `Arc<dyn>` 束;host 构造,经 `PanelIo` 交给面板。其余能力 trait 随各面板迁移逐个加入。
 #[derive(Clone)]
 pub struct Services {
@@ -259,6 +278,7 @@ pub struct Services {
     pub group_chat: Arc<dyn GroupChatService>,
     pub conversation: Arc<dyn ConversationService>,
     pub codehealth: Arc<dyn CodeHealthService>,
+    pub context: Arc<dyn ContextService>,
 }
 
 #[cfg(test)]
@@ -319,6 +339,7 @@ mod tests {
             group_chat: Arc::new(MemGroupChat(Ok(vec![]))),
             conversation: Arc::new(MemConversation(Ok(vec![]))),
             codehealth: Arc::new(MemCodeHealth(Ok(None))),
+            context: Arc::new(MemContext(Ok(vec![]))),
         };
         let t = s.clone();
         assert!(Arc::ptr_eq(&s.usage, &t.usage));
@@ -328,6 +349,7 @@ mod tests {
         assert!(Arc::ptr_eq(&s.group_chat, &t.group_chat));
         assert!(Arc::ptr_eq(&s.conversation, &t.conversation));
         assert!(Arc::ptr_eq(&s.codehealth, &t.codehealth));
+        assert!(Arc::ptr_eq(&s.context, &t.context));
     }
 
     // ---- TodoService 契约 ----
@@ -805,6 +827,67 @@ mod tests {
             rt.block_on(down.get_code_health_report(1))
                 .unwrap_err()
                 .kind,
+            ServiceErrorKind::Unavailable
+        );
+    }
+
+    // ---- ContextService 契约 ----
+
+    use dozer_model::ContextItemInfo;
+
+    struct MemContext(Result<Vec<ContextItemInfo>, ServiceError>);
+
+    impl ContextService for MemContext {
+        fn list_context_items(
+            &self,
+            _p: i64,
+        ) -> BoxFuture<'_, Result<Vec<ContextItemInfo>, ServiceError>> {
+            let r = self.0.clone();
+            Box::pin(async move { r })
+        }
+        fn add_context_item(
+            &self,
+            _p: i64,
+            _k: String,
+            _r: String,
+        ) -> BoxFuture<'_, Result<ContextItemInfo, ServiceError>> {
+            Box::pin(async { Err(ServiceError::new(ServiceErrorKind::Protocol, "mem")) })
+        }
+        fn remove_context_item(&self, _p: i64, _i: i64) -> BoxFuture<'_, Result<(), ServiceError>> {
+            unit()
+        }
+    }
+
+    /// `handle.spawn` 要 `'static + Send`:持有 `Arc<dyn ContextService>` 的 async 块必须满足。
+    #[test]
+    fn dyn_context_futures_run_inside_tokio_spawn() {
+        let svc: Arc<dyn ContextService> = Arc::new(MemContext(Ok(vec![])));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let (list, removed) = rt.block_on(async move {
+            tokio::spawn(async move {
+                let list = svc.list_context_items(7).await;
+                let removed = svc.remove_context_item(7, 3).await;
+                (list, removed)
+            })
+            .await
+            .unwrap()
+        });
+        assert_eq!(list, Ok(vec![]));
+        assert_eq!(removed, Ok(()));
+    }
+
+    #[test]
+    fn context_read_failure_is_distinguishable_from_an_empty_list() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let empty = MemContext(Ok(vec![]));
+        let down = MemContext(Err(ServiceError::new(ServiceErrorKind::Unavailable, "x")));
+        assert!(rt.block_on(empty.list_context_items(1)).is_ok());
+        assert_eq!(
+            rt.block_on(down.list_context_items(1)).unwrap_err().kind,
             ServiceErrorKind::Unavailable
         );
     }

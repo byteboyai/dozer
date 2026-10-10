@@ -103,3 +103,11 @@
 - `Loaded` / `Scanned` 没有代数保护(慢的旧结果可能覆盖新结果)。
 - 读失败冷却逻辑在 Todo / Project / Conversations / CodeHealth 各有一份(`LOAD_FAILURE_TOAST_COOLDOWN`),可抽到 `toast::Outbox`。
 - 剩余直接使用 `Client` 的面板:`agent_context`、`browser`、`edit_history`、`settings`、`project_create`。
+
+## AgentContext 迁移(2026-10-11)
+
+`extensions/agent_context.rs`(终端下方的 Agent 上下文条)已经 `ContextService`(`dozer-services`)取数与写入;`R-CLIENT` 基线中 `agent_context.rs` 已清零。用户可见行为零变化(失败本来就可见:`Loaded(Err)` 弹 Error 且不替换已有列表,`Added(Err)` 弹 Warning,`Removed(Err)` 弹 Error)。规格 `docs/superpowers/specs/2026-10-11-context-services-design.md`。
+
+**后续项(未修):**
+- `Loaded` 没有代数保护(慢的旧结果可能覆盖新结果)。
+- 剩余直接使用 `Client` 的面板:`browser`、`edit_history`、`settings`、`project_create`。

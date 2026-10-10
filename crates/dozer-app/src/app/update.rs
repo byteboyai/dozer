@@ -3317,14 +3317,14 @@ impl App {
                 // 显示"已发送到终端,但未能记录到上下文列表"(见
                 // `agent_context::apply`)。
                 if let Some(project_id) = self.active_project_id {
-                    let client = self.client.clone();
+                    let context = crate::panel_host::services_for(&self.client).context;
                     let handle = self.handle.clone();
                     let proxy = self.proxy.clone();
                     crate::extensions::agent_context::request_add(
                         project_id,
                         is_dir,
                         relative,
-                        &client,
+                        context,
                         &handle,
                         move |m| {
                             let _ = proxy.send_event(Message::AgentContext(project_id, m));
@@ -5598,7 +5598,7 @@ impl App {
                 self.open_edit_history(project_id, filter);
             }
             other => {
-                let client = self.client.clone();
+                let context = crate::panel_host::services_for(&self.client).context;
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
                 let emit = move |m| {
@@ -5612,7 +5612,7 @@ impl App {
                     project_id,
                     root,
                     other,
-                    &client,
+                    context,
                     &handle,
                     emit,
                 );
@@ -5627,13 +5627,13 @@ impl App {
         else {
             return;
         };
-        let client = self.client.clone();
+        let context = crate::panel_host::services_for(&self.client).context;
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
         crate::extensions::agent_context::request_refresh(
             project_id,
             root,
-            &client,
+            context,
             &handle,
             move |m| {
                 let _ = proxy.send_event(Message::AgentContext(project_id, m));
