@@ -167,7 +167,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: 写失败测试**
 
-先读 `Client::list_context_items` / `add_context_item` / `remove_context_item` 的 `match`(`dozer-client/src/lib.rs` 约 819–862 行)确认应答变体:`list` → `Reply::ContextItems { items }`(以代码为准),`add` → `Reply::ContextItem { item }`(以代码为准),`remove` → `Reply::Ok`。在文件末尾追加(变体名按读到的写):
+应答变体已核对(`dozer-client/src/lib.rs` 约 819–862 行):`list` → `Reply::ContextItems { items }`,`add` → `Reply::ContextItem { item }`,`remove` → `Reply::Ok`。在文件末尾追加:
 
 ```rust
 #[cfg(test)]
@@ -234,7 +234,7 @@ mod context_service_tests {
     }
 }
 ```
-Run: `cargo test -p dozer-client context_service_tests 2>&1 | grep -E '^error' | head -3` → Expected: 编译失败(`Client: ContextService` 未实现)(RED)。若 `Reply` 变体名与上面不同,先按 `match` 里读到的修正测试,再看 RED。
+Run: `cargo test -p dozer-client context_service_tests 2>&1 | grep -E '^error' | head -3` → Expected: 编译失败(`Client: ContextService` 未实现)(RED)。
 
 - [ ] **Step 2: 实现**
 
