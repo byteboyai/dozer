@@ -43,7 +43,7 @@
 | `reparent_category(id, new_parent_id: Option<i64>)` | `()` |
 | `move_category_sibling(id, direction: CategoryMoveDirection)` | `()` |
 
-`TodoInfo`/`CategoryInfo`/`CategoryMoveDirection` 已在 `dozer-model`(`TodoStoredStatus` 是否在其中,T1 先核对,不在则随 O7 同法下沉);`dozer-services` 仍只依赖 `dozer-model`。`Services` 增加 `todo: Arc<dyn TodoService>`。`Client` 实现该 trait:调用现有方法并 `.map(|_| ())`、`map_err(into_service_error)`。错误文本即 `ServiceError.message`,与原来 `e.to_string()` 逐字相同(X0 已钉住 `roundtrip` 的 Display)。
+`TodoInfo`/`CategoryInfo`/`CategoryMoveDirection`/`TodoStoredStatus` 均已在 `dozer-model`;`dozer-services` 仍只依赖 `dozer-model`。`Services` 增加 `todo: Arc<dyn TodoService>`。`Client` 实现该 trait:调用现有方法并 `.map(|_| ())`、`map_err(into_service_error)`。错误文本即 `ServiceError.message`,与原来 `e.to_string()` 逐字相同(X0 已钉住 `roundtrip` 的 Display)。
 
 ### 3.2 面板与 host
 
