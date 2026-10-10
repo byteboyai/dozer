@@ -1173,7 +1173,6 @@ impl BookmarkService for FakeBookmark {
 }
 
 /// 固定 `ProjectInfo`。
-#[allow(dead_code)] // Task 4 起被创建项目对话框测试使用,届时去掉。
 pub(crate) fn project_info(id: i64, path: &str) -> ProjectInfo {
     ProjectInfo {
         id,
