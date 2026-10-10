@@ -9,9 +9,9 @@ use dozer_core::protocol::{
     SessionSummaryPayload, TodoInfo, TurnRecord, UsagePayload, decode_line, encode_line,
 };
 use dozer_services::{
-    BoxFuture, CodeHealthService, ConversationRows, ConversationService, GroupChatService,
-    MemoryService, ProjectService, ServiceError, ServiceErrorKind, TodoService, UsageRows,
-    UsageService,
+    BoxFuture, CodeHealthService, ContextService, ConversationRows, ConversationService,
+    GroupChatService, MemoryService, ProjectService, ServiceError, ServiceErrorKind, TodoService,
+    UsageRows, UsageService,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -2058,6 +2058,42 @@ impl CodeHealthService for Client {
     }
 }
 
+impl ContextService for Client {
+    fn list_context_items(
+        &self,
+        project_id: i64,
+    ) -> BoxFuture<'_, Result<Vec<dozer_core::protocol::ContextItemInfo>, ServiceError>> {
+        Box::pin(async move {
+            Client::list_context_items(self, project_id)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn add_context_item(
+        &self,
+        project_id: i64,
+        entity_kind: String,
+        entity_ref: String,
+    ) -> BoxFuture<'_, Result<dozer_core::protocol::ContextItemInfo, ServiceError>> {
+        Box::pin(async move {
+            Client::add_context_item(self, project_id, &entity_kind, &entity_ref)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn remove_context_item(
+        &self,
+        project_id: i64,
+        id: i64,
+    ) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            Client::remove_context_item(self, project_id, id)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+}
+
 #[cfg(test)]
 mod service_error_tests {
     use super::*;
@@ -2430,6 +2466,81 @@ mod code_health_service_tests {
             (e.kind, e.message.as_str()),
             (ServiceErrorKind::Rejected, "daemon 错误: boom")
         );
+        let _ = std::fs::remove_file(&sock);
+    }
+}
+
+#[cfg(test)]
+mod context_service_tests {
+    use super::todo_service_tests::serve_once;
+    use super::*;
+    use dozer_services::{ContextService, ServiceErrorKind};
+
+    #[tokio::test]
+    async fn list_comes_back_as_ok() {
+        let sock = serve_once("ctx-list", Some(Reply::ContextItems { items: vec![] }));
+        let got = ContextService::list_context_items(&Client::new(sock.clone()), 7).await;
+        assert_eq!(got, Ok(vec![]));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn remove_returns_unit_on_success() {
+        let sock = serve_once("ctx-remove", Some(Reply::Ok));
+        let got = ContextService::remove_context_item(&Client::new(sock.clone()), 7, 3).await;
+        assert_eq!(got, Ok(()));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn hang_up_is_unavailable_with_the_legacy_text() {
+        let sock = serve_once("ctx-hangup", None);
+        let e = ContextService::list_context_items(&Client::new(sock.clone()), 7)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.kind, e.message.as_str()),
+            (ServiceErrorKind::Unavailable, "daemon 断开")
+        );
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn error_reply_is_rejected_with_the_legacy_prefix() {
+        let sock = serve_once(
+            "ctx-reject",
+            Some(Reply::Error {
+                message: "boom".into(),
+            }),
+        );
+        let e = ContextService::remove_context_item(&Client::new(sock.clone()), 7, 3)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.kind, e.message.as_str()),
+            (ServiceErrorKind::Rejected, "daemon 错误: boom")
+        );
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn add_carries_the_item_back_unchanged() {
+        let item = dozer_core::protocol::ContextItemInfo {
+            id: 5,
+            project_id: 7,
+            entity_kind: "file".into(),
+            entity_ref: "src/a.rs".into(),
+            created_ms: 9,
+        };
+        let sock = serve_once("ctx-add", Some(Reply::ContextItem { item: item.clone() }));
+        let got = ContextService::add_context_item(
+            &Client::new(sock.clone()),
+            7,
+            "file".into(),
+            "src/a.rs".into(),
+        )
+        .await;
+        assert_eq!(got, Ok(item));
         let _ = std::fs::remove_file(&sock);
     }
 }
