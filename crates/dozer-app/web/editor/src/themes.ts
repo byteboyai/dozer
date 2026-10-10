@@ -104,6 +104,8 @@ function baseTheme(p: Palette): Extension {
         color: p.fg,
         backgroundColor: p.bg,
         height: '100%',
+        // 编辑区整体用 I 形插入光标(scroller / gutter 也会回退成箭头,一并声明)。
+        cursor: 'text',
       },
       '.cm-scroller': {
         fontFamily: 'JetBrains Mono, ui-monospace, SFMono-Regular, monospace',
@@ -112,7 +114,9 @@ function baseTheme(p: Palette): Extension {
       },
       // 可编辑正文用 I 形文本光标;只读档(EditorView.editable.of(false) 会把
       // contenteditable 置为 false)保持箭头,避免误导用户以为能改。WKWebView
-      // 对 contenteditable 不一定给 I 形光标,故这里显式声明。
+      // 对 contenteditable 不一定给 I 形光标,故这里显式声明。`&`(编辑区整体)
+      // 也已声明 text,使 hover 滚动容器/行号 gutter 等区域同样呈 I 形插入光标,
+      // 而不只落在文字字形上;只读正文再用下面的规则覆盖回箭头。
       '.cm-content[contenteditable=true]': { cursor: 'text' },
       '.cm-content[contenteditable=false]': { cursor: 'default' },
       '.cm-content': { caretColor: p.cursor },

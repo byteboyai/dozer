@@ -298,6 +298,9 @@ pub fn update(
         }
         Message::SearchSubmit => {
             ws_state.search_query = ws_state.tree_search.clone();
+            if let Some(tree) = &mut ws_state.file_tree {
+                tree.clear_search();
+            }
         }
         Message::ToggleDotfiles => {
             if let Some(tree) = &mut ws_state.file_tree {

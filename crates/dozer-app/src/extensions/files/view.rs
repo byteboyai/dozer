@@ -222,13 +222,9 @@ pub fn view<'a>(
     }
 
     if let Some(tree) = &ws_state.file_tree {
-        // 搜索激活时走全树搜索(递归遍历含未展开深层目录),否则走当前展开
-        // 的可见行。`search_rows` 只读不写缓存/展开态,view 的不变借用即可。
-        let rows: Vec<crate::project::TreeRow> = if search_active {
-            tree.search_rows(&ws_state.search_query)
-        } else {
-            tree.visible_rows()
-        };
+        // 仅已提交的非空查询过滤文件树；聚焦输入框不改变树的展示。
+        // 搜索结果缓存于 FileTree，重绘不重复读盘。
+        let rows = ws_state.visible_tree_rows();
         for row in rows {
             let is_renaming = matches!(
                 &ws_state.tree_edit,

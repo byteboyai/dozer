@@ -706,7 +706,13 @@ impl WorkspaceState {
     pub fn visible_tree_rows(&self) -> Vec<crate::project::TreeRow> {
         self.file_tree
             .as_ref()
-            .map(|t| t.visible_rows())
+            .map(|t| {
+                if self.search_query.is_empty() {
+                    t.visible_rows()
+                } else {
+                    t.search_rows(&self.search_query)
+                }
+            })
             .unwrap_or_default()
     }
 
