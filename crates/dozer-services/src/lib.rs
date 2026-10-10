@@ -162,6 +162,13 @@ pub trait ProjectService: Send + Sync {
         &self,
         batch_id: i64,
     ) -> BoxFuture<'_, Result<Option<SummaryBatchInfo>, ServiceError>>;
+    /// 登记(或取回)一个项目;路径不存在等情形服务端返回 `Ok(None)` 或 `Err`,面板按原样展示。
+    fn open_project(
+        &self,
+        path: String,
+    ) -> BoxFuture<'_, Result<Option<ProjectInfo>, ServiceError>>;
+    /// 项目列表(最近优先),供创建后刷新最近项目。
+    fn list_projects(&self) -> BoxFuture<'_, Result<Vec<ProjectInfo>, ServiceError>>;
 }
 
 /// `post_group_message` 的结果:(人类消息, 排队中的 agent 占位消息, 未识别的 @ 句柄)。
@@ -607,6 +614,16 @@ mod tests {
             _b: i64,
         ) -> BoxFuture<'_, Result<Option<SummaryBatchInfo>, ServiceError>> {
             Box::pin(async { Ok(None) })
+        }
+
+        fn open_project(
+            &self,
+            _p: String,
+        ) -> BoxFuture<'_, Result<Option<ProjectInfo>, ServiceError>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn list_projects(&self) -> BoxFuture<'_, Result<Vec<ProjectInfo>, ServiceError>> {
+            Box::pin(async { Ok(vec![]) })
         }
     }
 
@@ -1101,5 +1118,25 @@ mod tests {
             rt.block_on(down.list_bookmarks(None)).unwrap_err().kind,
             ServiceErrorKind::Unavailable
         );
+    }
+
+    /// 新增的两个方法同样能在 `tokio::spawn` 里使用(`Arc<dyn ProjectService>` 的 future 要 `Send + 'static`)。
+    #[test]
+    fn dyn_project_open_and_list_run_inside_tokio_spawn() {
+        let project: Arc<dyn ProjectService> = Arc::new(MemProject);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let (opened, listed) = rt.block_on(async move {
+            tokio::spawn(async move {
+                let opened = project.open_project("/p".into()).await;
+                let listed = project.list_projects().await;
+                (opened, listed)
+            })
+            .await
+            .unwrap()
+        });
+        assert_eq!(opened, Ok(None));
+        assert_eq!(listed, Ok(vec![]));
     }
 }
