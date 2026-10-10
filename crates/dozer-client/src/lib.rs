@@ -9,8 +9,8 @@ use dozer_core::protocol::{
     SessionSummaryPayload, TodoInfo, TurnRecord, UsagePayload, decode_line, encode_line,
 };
 use dozer_services::{
-    BoxFuture, GroupChatService, MemoryService, ProjectService, ServiceError, ServiceErrorKind,
-    TodoService, UsageRows, UsageService,
+    BoxFuture, ConversationRows, ConversationService, GroupChatService, MemoryService,
+    ProjectService, ServiceError, ServiceErrorKind, TodoService, UsageRows, UsageService,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -2005,6 +2005,22 @@ impl GroupChatService for Client {
     }
 }
 
+impl ConversationService for Client {
+    fn list_conversations_with_summaries(
+        &self,
+        cwd: String,
+        agent: Option<dozer_core::protocol::AgentKind>,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'_, Result<ConversationRows, ServiceError>> {
+        Box::pin(async move {
+            Client::list_conversations_with_summaries(self, &cwd, agent, limit, offset)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+}
+
 #[cfg(test)]
 mod service_error_tests {
     use super::*;
@@ -2251,6 +2267,74 @@ mod group_chat_service_tests {
         let got =
             GroupChatService::list_group_messages(&Client::new(sock.clone()), 5, 3, 200).await;
         assert_eq!(got, Ok((vec![], 42)));
+        let _ = std::fs::remove_file(&sock);
+    }
+}
+
+#[cfg(test)]
+mod conversation_service_tests {
+    use super::todo_service_tests::serve_once;
+    use super::*;
+    use dozer_services::{ConversationService, ServiceErrorKind};
+
+    #[tokio::test]
+    async fn rows_come_back_as_ok() {
+        let sock = serve_once(
+            "conv-ok",
+            Some(Reply::ConversationsWithSummaries { rows: vec![] }),
+        );
+        let got = ConversationService::list_conversations_with_summaries(
+            &Client::new(sock.clone()),
+            "/p".into(),
+            None,
+            500,
+            0,
+        )
+        .await;
+        assert_eq!(got, Ok(vec![]));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn hang_up_is_unavailable_with_the_legacy_text() {
+        let sock = serve_once("conv-hangup", None);
+        let e = ConversationService::list_conversations_with_summaries(
+            &Client::new(sock.clone()),
+            "/p".into(),
+            None,
+            500,
+            0,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            (e.kind, e.message.as_str()),
+            (ServiceErrorKind::Unavailable, "daemon 断开")
+        );
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn error_reply_is_rejected_with_the_legacy_prefix() {
+        let sock = serve_once(
+            "conv-reject",
+            Some(Reply::Error {
+                message: "boom".into(),
+            }),
+        );
+        let e = ConversationService::list_conversations_with_summaries(
+            &Client::new(sock.clone()),
+            "/p".into(),
+            None,
+            500,
+            0,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            (e.kind, e.message.as_str()),
+            (ServiceErrorKind::Rejected, "daemon 错误: boom")
+        );
         let _ = std::fs::remove_file(&sock);
     }
 }
