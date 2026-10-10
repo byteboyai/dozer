@@ -15,9 +15,6 @@
  "extensions/codehealth/aggregate.rs": {
   "R-CLIENT": 3
  },
- "extensions/conversations.rs": {
-  "R-CLIENT": 2
- },
  "extensions/edit_history.rs": {
   "R-CLIENT": 2
  },
