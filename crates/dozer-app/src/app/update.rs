@@ -213,6 +213,7 @@ impl App {
             if let WorkspaceSlot::Loaded(ws) = slot {
                 pending.extend(ws.files.take_outbox());
                 pending.extend(ws.todo.take_outbox());
+                pending.extend(ws.project_panel.take_outbox());
                 pending.extend(ws.group_chat.take_outbox());
                 pending.extend(ws.ssh.take_outbox());
                 pending.extend(ws.database.take_outbox());
@@ -3391,7 +3392,7 @@ impl App {
                         ..
                     ) if completed >= total
                 );
-                let client = self.client.clone();
+                let services = crate::panel_host::services_for(&self.client);
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
                 let emit = move |m| {
@@ -3403,7 +3404,7 @@ impl App {
                     project_id,
                     &current_name,
                     &repo_path,
-                    &client,
+                    &services,
                     &handle,
                     emit,
                 );
@@ -3447,7 +3448,7 @@ impl App {
                 };
                 let current_name = project.name.clone();
                 let repo_path = std::path::PathBuf::from(&project.path);
-                let client = self.client.clone();
+                let services = crate::panel_host::services_for(&self.client);
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
                 let emit = move |m| {
@@ -3459,7 +3460,7 @@ impl App {
                     project_id,
                     &current_name,
                     &repo_path,
-                    &client,
+                    &services,
                     &handle,
                     emit,
                 );
@@ -3499,7 +3500,7 @@ impl App {
                 };
                 let current_name = project.name.clone();
                 let repo_path = std::path::PathBuf::from(&project.path);
-                let client = self.client.clone();
+                let services = crate::panel_host::services_for(&self.client);
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
                 let emit = move |m| {
@@ -3511,7 +3512,7 @@ impl App {
                     project_id,
                     &current_name,
                     &repo_path,
-                    &client,
+                    &services,
                     &handle,
                     emit,
                 );
@@ -4124,13 +4125,13 @@ impl App {
         // 新开的项目 tab(区别于"已开着、只是前台化"那条 `focus_project_tab`
         // 早退分支):静默跑一次 ensure(README/.dozer/git/agent 历史),不
         // 展示结果(见 project_scaffold 设计"打开即 ensure"一节)。
-        let client = self.client.clone();
+        let project = crate::panel_host::services_for(&self.client).project;
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
         let emit = move |m| {
             let _ = proxy.send_event(Message::Project(m));
         };
-        project::spawn_scaffold_run(repo_path, client, &handle, emit, skip_git_init);
+        project::spawn_scaffold_run(repo_path, project, &handle, emit, skip_git_init);
     }
 
     pub(crate) fn project_tab_switch(&mut self, id: i64) {
@@ -4245,7 +4246,7 @@ impl App {
         // 关 tab 必须在发起删除请求之前——删除一旦成功,这个项目在
         // dozerd/磁盘上都可能已经不存在了,`Workspace` 不该继续留着。
         self.project_tab_close(project_id);
-        let client = self.client.clone();
+        let project = crate::panel_host::services_for(&self.client).project;
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
         let on_done = move |project_id, deregistered, errors: Vec<String>| {
@@ -4256,7 +4257,7 @@ impl App {
             });
         };
         project::delete::spawn_delete_project(
-            project_id, repo_path, scope, client, &handle, on_done,
+            project_id, repo_path, scope, project, &handle, on_done,
         );
     }
 

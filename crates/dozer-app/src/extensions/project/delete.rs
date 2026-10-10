@@ -30,18 +30,18 @@ pub fn spawn_delete_project(
     project_id: i64,
     repo_path: PathBuf,
     scope: DeleteScope,
-    client: dozer_client::Client,
+    project: std::sync::Arc<dyn dozer_services::ProjectService>,
     handle: &tokio::runtime::Handle,
     on_done: impl Fn(i64, bool, Vec<String>) + Send + 'static,
 ) {
     let cwd = repo_path.to_string_lossy().into_owned();
     handle.spawn(async move {
-        if let Err(e) = client.remove_project(project_id).await {
+        if let Err(e) = project.remove_project(project_id).await {
             on_done(project_id, false, vec![format!("取消项目登记失败: {e}")]);
             return;
         }
         if scope != DeleteScope::DozerOnly
-            && let Err(e) = client.delete_project_transcripts(&cwd).await
+            && let Err(e) = project.delete_project_transcripts(cwd.clone()).await
         {
             on_done(project_id, true, vec![format!("删除 agent 历史失败: {e}")]);
             return;

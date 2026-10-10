@@ -203,7 +203,6 @@ pub(crate) fn memory_detail(id: i64, title: &str) -> MemoryDetail {
 }
 
 /// 固定 `SummaryBatchInfo`(其余字段取固定值)。
-#[allow(dead_code)] // Task 4 起被使用,届时去掉。
 pub(crate) fn batch(
     total: u32,
     queued: u32,
@@ -239,7 +238,6 @@ struct MemoryState {
 
 /// 克隆共享同一份状态。`Default` = 读写都成功、空列表。
 #[derive(Clone)]
-#[allow(dead_code)] // Task 4 起被 Project 面板测试使用,届时去掉。
 pub(crate) struct FakeMemory {
     state: Arc<Mutex<MemoryState>>,
 }
@@ -250,7 +248,6 @@ impl Default for FakeMemory {
     }
 }
 
-#[allow(dead_code)] // Task 4 起被使用,届时去掉。
 impl FakeMemory {
     pub(crate) fn ok(list: Vec<MemoryInfo>) -> Self {
         Self::with(Ok(list), None, None)
@@ -359,7 +356,6 @@ struct ProjectState {
 /// 克隆共享同一份状态。`Default` = 全部成功(rename → `Ok(None)`、transcripts → `Ok(0)`、
 /// submit → `Ok((1, 1))`、`get_summary_batch` → `Ok(None)`)。
 #[derive(Clone)]
-#[allow(dead_code)] // Task 4 起被使用,届时去掉。
 pub(crate) struct FakeProject {
     state: Arc<Mutex<ProjectState>>,
 }
@@ -381,18 +377,9 @@ impl Default for FakeProject {
     }
 }
 
-#[allow(dead_code)] // Task 4 起被使用,届时去掉。
 impl FakeProject {
-    pub(crate) fn with_rename(self, r: Result<Option<ProjectInfo>, ServiceError>) -> Self {
-        self.state.lock().unwrap().rename = r;
-        self
-    }
     pub(crate) fn with_remove(self, r: Result<(), ServiceError>) -> Self {
         self.state.lock().unwrap().remove = r;
-        self
-    }
-    pub(crate) fn with_delete_transcripts(self, r: Result<u32, ServiceError>) -> Self {
-        self.state.lock().unwrap().delete_transcripts = r;
         self
     }
     pub(crate) fn with_backfill(self, r: Result<u32, ServiceError>) -> Self {

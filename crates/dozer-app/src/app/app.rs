@@ -2414,7 +2414,7 @@ impl App {
     /// set_todo_content_focused` 的既有手法,`submit_name_edit` 走这条
     /// 而不是重新手写一份 `rename_project` 调用)。
     pub fn set_project_name_focused(&mut self, focused: bool) {
-        let client = self.client.clone();
+        let project_service = crate::panel_host::services_for(&self.client).project;
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
         let Some(ws) = self.active_workspace_mut() else {
@@ -2432,7 +2432,7 @@ impl App {
                 &mut ws.project_panel,
                 project.id,
                 &project.name,
-                client,
+                project_service,
                 &handle,
                 emit,
             );
