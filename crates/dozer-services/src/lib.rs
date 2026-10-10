@@ -2,10 +2,10 @@
 //! 不知道对面是 dozerd 还是内存假实现。生产实现在 `dozer-client`(为 `Client` 适配)。
 
 use dozer_model::{
-    AgentKind, CategoryInfo, CategoryMoveDirection, CodeHealthReportInfo, ContextItemInfo,
-    ConversationSummary, FileEditHistoryInfo, GroupCancelScope, GroupInfo, GroupMessageInfo,
-    MemoryDetail, MemoryInfo, MutationOutcome, ProjectInfo, SessionSummaryPayload,
-    SummaryBatchInfo, TodoInfo, TodoStoredStatus, UsagePayload,
+    AgentKind, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
+    CodeHealthReportInfo, ContextItemInfo, ConversationSummary, FileEditHistoryInfo,
+    GroupCancelScope, GroupInfo, GroupMessageInfo, MemoryDetail, MemoryInfo, MutationOutcome,
+    ProjectInfo, SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus, UsagePayload,
 };
 use std::fmt;
 use std::future::Future;
@@ -299,6 +299,22 @@ pub trait EditHistoryService: Send + Sync {
         &self,
         edit: PreciseEdit,
     ) -> BoxFuture<'_, Result<MutationOutcome, ServiceError>>;
+}
+
+/// 浏览器收藏夹的读写。参数按值传。
+pub trait BookmarkService: Send + Sync {
+    fn list_bookmarks(
+        &self,
+        project_id: Option<i64>,
+    ) -> BoxFuture<'_, Result<Vec<BookmarkInfo>, ServiceError>>;
+    fn add_bookmark(
+        &self,
+        scope: BookmarkScope,
+        project_id: Option<i64>,
+        url: String,
+        title: String,
+    ) -> BoxFuture<'_, Result<(), ServiceError>>;
+    fn remove_bookmark(&self, id: i64) -> BoxFuture<'_, Result<(), ServiceError>>;
 }
 
 /// 各能力 trait 的 `Arc<dyn>` 束;host 构造,经 `PanelIo` 交给面板。其余能力 trait 随各面板迁移逐个加入。
@@ -1011,6 +1027,75 @@ mod tests {
             rt.block_on(down.list_file_edit_history(1, None, 1))
                 .unwrap_err()
                 .kind,
+            ServiceErrorKind::Unavailable
+        );
+    }
+
+    // ---- BookmarkService 契约 ----
+
+    use dozer_model::{BookmarkInfo, BookmarkScope};
+
+    struct MemBookmark(Result<Vec<BookmarkInfo>, ServiceError>);
+
+    impl BookmarkService for MemBookmark {
+        fn list_bookmarks(
+            &self,
+            _p: Option<i64>,
+        ) -> BoxFuture<'_, Result<Vec<BookmarkInfo>, ServiceError>> {
+            let r = self.0.clone();
+            Box::pin(async move { r })
+        }
+        fn add_bookmark(
+            &self,
+            _s: BookmarkScope,
+            _p: Option<i64>,
+            _u: String,
+            _t: String,
+        ) -> BoxFuture<'_, Result<(), ServiceError>> {
+            unit()
+        }
+        fn remove_bookmark(&self, _i: i64) -> BoxFuture<'_, Result<(), ServiceError>> {
+            unit()
+        }
+    }
+
+    /// `handle.spawn` 要 `'static + Send`:持有 `Arc<dyn BookmarkService>` 的 async 块必须满足。
+    #[test]
+    fn dyn_bookmark_futures_run_inside_tokio_spawn() {
+        let svc: Arc<dyn BookmarkService> = Arc::new(MemBookmark(Ok(vec![])));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let (list, added) = rt.block_on(async move {
+            tokio::spawn(async move {
+                let list = svc.list_bookmarks(Some(7)).await;
+                let added = svc
+                    .add_bookmark(
+                        BookmarkScope::Global,
+                        None,
+                        "http://a.com".into(),
+                        "A".into(),
+                    )
+                    .await;
+                (list, added)
+            })
+            .await
+            .unwrap()
+        });
+        assert_eq!(list, Ok(vec![]));
+        assert_eq!(added, Ok(()));
+    }
+
+    #[test]
+    fn bookmark_read_failure_is_distinguishable_from_an_empty_list() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let empty = MemBookmark(Ok(vec![]));
+        let down = MemBookmark(Err(ServiceError::new(ServiceErrorKind::Unavailable, "x")));
+        assert!(rt.block_on(empty.list_bookmarks(None)).is_ok());
+        assert_eq!(
+            rt.block_on(down.list_bookmarks(None)).unwrap_err().kind,
             ServiceErrorKind::Unavailable
         );
     }
