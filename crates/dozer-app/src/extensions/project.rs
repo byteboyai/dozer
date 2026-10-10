@@ -95,10 +95,6 @@ pub struct MemoryDraft {
     pub body: String,
 }
 
-/// 相同读失败文本再次提示的最短间隔。
-pub(crate) const LOAD_FAILURE_TOAST_COOLDOWN: std::time::Duration =
-    std::time::Duration::from_secs(60);
-
 /// 挂在每个 Workspace 上的项目信息面板状态。
 #[derive(Default)]
 pub struct WorkspaceState {
@@ -136,8 +132,6 @@ pub struct WorkspaceState {
     memories: Vec<dozer_model::MemoryInfo>,
     /// 待发提示;`App::drain_outboxes` 排空成 Toast。
     pub(crate) outbox: crate::extensions::toast::Outbox,
-    /// 上一次已提示的读失败(文本 + 时刻),用于冷却去重。
-    pub(crate) last_load_failure: Option<(String, std::time::Instant)>,
     /// 新建记忆的表单草稿(`None` = 表单未打开)。
     memory_create_draft: Option<MemoryDraft>,
     /// 当前打开的记忆详情(`None` = 未打开详情面板)。
@@ -426,7 +420,7 @@ pub enum Message {
     /// 共享记忆列表拉取结果。
     MemoriesLoaded(Vec<dozer_model::MemoryInfo>),
     /// 记忆列表读取失败:**不改任何列表**。`Unavailable` 静默(顶栏徽标已表达"dozerd 不可用");
-    /// 其余弹带 key 的 Error Toast,相同文本 60 秒内只提示一次(见 `last_load_failure`)。
+    /// 其余弹带 key 的 Error Toast,相同文本 60 秒内只提示一次(见 `Outbox::push_keyed_cooldown`)。
     MemoriesLoadFailed(dozer_services::ServiceErrorKind, String),
     /// 打开"新建记忆"表单。
     MemoryCreateStart,

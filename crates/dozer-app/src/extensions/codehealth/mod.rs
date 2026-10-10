@@ -27,10 +27,6 @@ use dozer_services::ServiceErrorKind;
 
 dozer_core::scope!(pub(crate) LOG, panel, "code_health");
 
-/// 相同缓存读取失败文本再次提示的最短间隔。
-pub(crate) const LOAD_FAILURE_TOAST_COOLDOWN: std::time::Duration =
-    std::time::Duration::from_secs(60);
-
 /// 面板右侧分类导航的四个分类：总览 / 结构复杂度 / UI 一致性 / 扫描范围。
 /// 左侧内容区按当前选中分类切换展示（见 `view.rs`）。spec「信息架构与 UI」。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -96,8 +92,6 @@ pub struct WorkspaceState {
     category: CodeHealthCategory,
     /// 待发提示;`App::drain_outboxes` 排空成 Toast。
     outbox: crate::extensions::toast::Outbox,
-    /// 上一次已提示的缓存读取失败(文本 + 时刻),用于冷却去重。
-    last_load_failure: Option<(String, std::time::Instant)>,
 }
 
 impl WorkspaceState {
@@ -186,21 +180,13 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
             if kind == ServiceErrorKind::Unavailable {
                 dozer_core::log_debug!(LOG, "代码健康度缓存读取失败(dozerd 不可用): {message}");
             } else {
-                let now = std::time::Instant::now();
-                let repeat = matches!(
-                    &ws_state.last_load_failure,
-                    Some((last, at)) if *last == message
-                        && now.duration_since(*at) < LOAD_FAILURE_TOAST_COOLDOWN
+                ws_state.outbox.push_keyed_cooldown(
+                    LOG,
+                    crate::extensions::toast::Level::Error,
+                    format!("代码健康度加载失败: {message}"),
+                    "codehealth-load",
+                    std::time::Instant::now(),
                 );
-                if !repeat {
-                    ws_state.outbox.push_keyed(
-                        LOG,
-                        crate::extensions::toast::Level::Error,
-                        format!("代码健康度加载失败: {message}"),
-                        "codehealth-load",
-                    );
-                    ws_state.last_load_failure = Some((message, now));
-                }
             }
         }
         Message::Scanned(_project_id, Ok(panel)) => {

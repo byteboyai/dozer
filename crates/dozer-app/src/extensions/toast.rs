@@ -12,6 +12,10 @@ dozer_core::scope!(LOG, module, "toast");
 /// 同屏最多显示的 Toast 条数;超出时挤掉最旧的(瞬时消息过期即无意义,不排队)。
 pub const MAX_VISIBLE: usize = 3;
 
+/// 读失败类提示的冷却:轮询会每秒重试一次,持续性失败若每次都弹,Toast 会一直被续期且每次写日志;
+/// 相同 key 下相同文本在这段时间内只提示一次(见 [`Outbox::push_keyed_cooldown`])。
+pub const LOAD_FAILURE_COOLDOWN: Duration = Duration::from_secs(60);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
     // 预留的级别:目前的调用点都是失败/警告,成功/信息类提示暂无调用点。
@@ -121,6 +125,9 @@ pub struct Pending {
 #[derive(Debug, Default)]
 pub struct Outbox {
     items: Vec<Pending>,
+    /// 每个 key 上一次经 [`Outbox::push_keyed_cooldown`] 推出的文本与时刻。排空(`take`)不清它,
+    /// 否则每帧排空一次就等于没有冷却。
+    cooldowns: std::collections::HashMap<String, (String, Instant)>,
 }
 
 impl Outbox {
@@ -147,6 +154,29 @@ impl Outbox {
             text: text.into(),
             key: Some(key.into()),
         });
+    }
+
+    /// 带冷却的 `push_keyed`:同一 key 下,与上一次推出的文本相同且距今不足
+    /// [`LOAD_FAILURE_COOLDOWN`] 则不推;文本变了或已过冷却则推并更新记录。`now` 由调用方注入。
+    pub fn push_keyed_cooldown(
+        &mut self,
+        scope: Scope,
+        level: Level,
+        text: impl Into<String>,
+        key: impl Into<String>,
+        now: Instant,
+    ) {
+        let text = text.into();
+        let key = key.into();
+        let repeat = matches!(
+            self.cooldowns.get(&key),
+            Some((last, at)) if *last == text && now.duration_since(*at) < LOAD_FAILURE_COOLDOWN
+        );
+        if repeat {
+            return;
+        }
+        self.cooldowns.insert(key.clone(), (text.clone(), now));
+        self.push_keyed(scope, level, text, key);
     }
 
     /// `Err(e)` 时推一条 `Error` 级 `"{what}: {e}"`;`Ok` 什么都不做。
@@ -483,5 +513,72 @@ mod tests {
         assert_eq!(level, Level::Error);
         assert_eq!(text, "处理任务失败: daemon 超时");
         assert_eq!(key, None);
+    }
+
+    // ---- Outbox::push_keyed_cooldown ----
+
+    dozer_core::scope!(TEST_SCOPE, module, "toast_test");
+
+    fn cooldown_push(out: &mut Outbox, key: &str, text: &str, now: Instant) {
+        out.push_keyed_cooldown(TEST_SCOPE, Level::Error, text, key, now);
+    }
+
+    #[test]
+    fn the_same_text_under_one_key_is_pushed_once_within_the_cooldown() {
+        let mut out = Outbox::default();
+        let t0 = Instant::now();
+        cooldown_push(&mut out, "k", "加载失败: boom", t0);
+        cooldown_push(&mut out, "k", "加载失败: boom", t0 + Duration::from_secs(1));
+        cooldown_push(
+            &mut out,
+            "k",
+            "加载失败: boom",
+            t0 + LOAD_FAILURE_COOLDOWN - Duration::from_millis(1),
+        );
+        let pending = out.take();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].key.as_deref(), Some("k"));
+        assert_eq!(pending[0].level, Level::Error);
+        assert_eq!(pending[0].text, "加载失败: boom");
+    }
+
+    #[test]
+    fn a_different_text_is_pushed_again_immediately() {
+        let mut out = Outbox::default();
+        let t0 = Instant::now();
+        cooldown_push(&mut out, "k", "加载失败: a", t0);
+        cooldown_push(&mut out, "k", "加载失败: b", t0 + Duration::from_secs(1));
+        assert_eq!(out.take().len(), 2);
+    }
+
+    #[test]
+    fn the_same_text_is_pushed_again_once_the_cooldown_has_passed() {
+        let mut out = Outbox::default();
+        let t0 = Instant::now();
+        cooldown_push(&mut out, "k", "加载失败: boom", t0);
+        cooldown_push(&mut out, "k", "加载失败: boom", t0 + LOAD_FAILURE_COOLDOWN);
+        assert_eq!(out.take().len(), 2);
+    }
+
+    #[test]
+    fn different_keys_do_not_share_a_cooldown() {
+        let mut out = Outbox::default();
+        let t0 = Instant::now();
+        cooldown_push(&mut out, "a", "加载失败: boom", t0);
+        cooldown_push(&mut out, "b", "加载失败: boom", t0);
+        assert_eq!(out.take().len(), 2);
+    }
+
+    #[test]
+    fn draining_the_outbox_keeps_the_cooldown_memory() {
+        let mut out = Outbox::default();
+        let t0 = Instant::now();
+        cooldown_push(&mut out, "k", "加载失败: boom", t0);
+        assert_eq!(out.take().len(), 1);
+        cooldown_push(&mut out, "k", "加载失败: boom", t0 + Duration::from_secs(1));
+        assert!(
+            out.take().is_empty(),
+            "排空后冷却记录仍在:轮询每秒失败一次也不重复提示"
+        );
     }
 }

@@ -130,13 +130,7 @@ pub struct WorkspaceState {
     summary_errors: HashMap<String, String>,
     /// 待发提示;`App::drain_outboxes` 排空成 Toast。
     outbox: crate::extensions::toast::Outbox,
-    /// 上一次已提示的刷新失败(文本 + 时刻),用于冷却去重。
-    last_load_failure: Option<(String, std::time::Instant)>,
 }
-
-/// 相同刷新失败文本再次提示的最短间隔。
-pub(crate) const LOAD_FAILURE_TOAST_COOLDOWN: std::time::Duration =
-    std::time::Duration::from_secs(60);
 
 impl WorkspaceState {
     pub fn take_outbox(&mut self) -> Vec<crate::extensions::toast::Pending> {
@@ -248,21 +242,13 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
                         e.message
                     );
                 } else {
-                    let now = std::time::Instant::now();
-                    let repeat = matches!(
-                        &ws_state.last_load_failure,
-                        Some((last, at)) if *last == e.message
-                            && now.duration_since(*at) < LOAD_FAILURE_TOAST_COOLDOWN
+                    ws_state.outbox.push_keyed_cooldown(
+                        LOG,
+                        crate::extensions::toast::Level::Error,
+                        format!("会话列表加载失败: {}", e.message),
+                        "conversations-load",
+                        std::time::Instant::now(),
                     );
-                    if !repeat {
-                        ws_state.outbox.push_keyed(
-                            LOG,
-                            crate::extensions::toast::Level::Error,
-                            format!("会话列表加载失败: {}", e.message),
-                            "conversations-load",
-                        );
-                        ws_state.last_load_failure = Some((e.message, now));
-                    }
                 }
             }
         },
