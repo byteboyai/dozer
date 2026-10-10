@@ -167,6 +167,8 @@ pub trait ProjectService: Send + Sync {
 pub struct Services {
     pub usage: Arc<dyn UsageService>,
     pub todo: Arc<dyn TodoService>,
+    pub project: Arc<dyn ProjectService>,
+    pub memory: Arc<dyn MemoryService>,
 }
 
 #[cfg(test)]
@@ -222,10 +224,14 @@ mod tests {
         let s = Services {
             usage: Arc::new(Mem(Ok(vec![]))),
             todo: Arc::new(MemTodo(Ok(vec![]))),
+            project: Arc::new(MemProject),
+            memory: Arc::new(MemMemory(Ok(vec![]))),
         };
         let t = s.clone();
         assert!(Arc::ptr_eq(&s.usage, &t.usage));
         assert!(Arc::ptr_eq(&s.todo, &t.todo));
+        assert!(Arc::ptr_eq(&s.project, &t.project));
+        assert!(Arc::ptr_eq(&s.memory, &t.memory));
     }
 
     // ---- TodoService 契约 ----
