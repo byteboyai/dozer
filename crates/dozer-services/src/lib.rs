@@ -2,8 +2,9 @@
 //! 不知道对面是 dozerd 还是内存假实现。生产实现在 `dozer-client`(为 `Client` 适配)。
 
 use dozer_model::{
-    AgentKind, CategoryInfo, CategoryMoveDirection, ConversationSummary, MemoryDetail, MemoryInfo,
-    ProjectInfo, SummaryBatchInfo, TodoInfo, TodoStoredStatus, UsagePayload,
+    AgentKind, CategoryInfo, CategoryMoveDirection, ConversationSummary, GroupCancelScope,
+    GroupInfo, GroupMessageInfo, MemoryDetail, MemoryInfo, ProjectInfo, SummaryBatchInfo, TodoInfo,
+    TodoStoredStatus, UsagePayload,
 };
 use std::fmt;
 use std::future::Future;
@@ -160,6 +161,60 @@ pub trait ProjectService: Send + Sync {
         &self,
         batch_id: i64,
     ) -> BoxFuture<'_, Result<Option<SummaryBatchInfo>, ServiceError>>;
+}
+
+/// `post_group_message` 的结果:(人类消息, 排队中的 agent 占位消息, 未识别的 @ 句柄)。
+pub type PostedMessages = (GroupMessageInfo, Vec<GroupMessageInfo>, Vec<String>);
+
+/// 群聊面板的读写。参数按值传。返回值保持 `Client` 原样(面板确实使用)。
+pub trait GroupChatService: Send + Sync {
+    fn list_groups(&self, project_id: i64) -> BoxFuture<'_, Result<Vec<GroupInfo>, ServiceError>>;
+    fn list_group_messages(
+        &self,
+        group_id: i64,
+        after_rev: i64,
+        limit: u32,
+    ) -> BoxFuture<'_, Result<(Vec<GroupMessageInfo>, i64), ServiceError>>;
+    fn create_group(
+        &self,
+        project_id: i64,
+        topic: String,
+    ) -> BoxFuture<'_, Result<GroupInfo, ServiceError>>;
+    fn delete_group(&self, group_id: i64) -> BoxFuture<'_, Result<(), ServiceError>>;
+    fn add_group_member(
+        &self,
+        group_id: i64,
+        agent: AgentKind,
+        handle: String,
+        role_prompt: String,
+    ) -> BoxFuture<'_, Result<GroupInfo, ServiceError>>;
+    fn update_group_member(
+        &self,
+        member_id: i64,
+        handle: String,
+        role_prompt: String,
+    ) -> BoxFuture<'_, Result<GroupInfo, ServiceError>>;
+    fn remove_group_member(&self, member_id: i64)
+    -> BoxFuture<'_, Result<GroupInfo, ServiceError>>;
+    fn post_group_message(
+        &self,
+        group_id: i64,
+        text: String,
+    ) -> BoxFuture<'_, Result<PostedMessages, ServiceError>>;
+    fn cancel_group(
+        &self,
+        group_id: i64,
+        scope: GroupCancelScope,
+    ) -> BoxFuture<'_, Result<(), ServiceError>>;
+    fn retry_group_message(
+        &self,
+        message_id: i64,
+    ) -> BoxFuture<'_, Result<GroupMessageInfo, ServiceError>>;
+    fn push_group_message_to_todo(
+        &self,
+        message_id: i64,
+        text: String,
+    ) -> BoxFuture<'_, Result<TodoInfo, ServiceError>>;
 }
 
 /// 各能力 trait 的 `Arc<dyn>` 束;host 构造,经 `PanelIo` 交给面板。其余能力 trait 随各面板迁移逐个加入。
@@ -470,6 +525,125 @@ mod tests {
         assert!(rt.block_on(empty.list_memories(1)).is_ok());
         assert_eq!(
             rt.block_on(down.list_memories(1)).unwrap_err().kind,
+            ServiceErrorKind::Unavailable
+        );
+    }
+
+    // ---- GroupChatService 契约 ----
+
+    use dozer_model::{GroupCancelScope, GroupInfo, GroupMessageInfo};
+
+    struct MemGroupChat(Result<Vec<GroupInfo>, ServiceError>);
+
+    fn proto(m: &'static str) -> ServiceError {
+        ServiceError::new(ServiceErrorKind::Protocol, m)
+    }
+
+    impl GroupChatService for MemGroupChat {
+        fn list_groups(&self, _p: i64) -> BoxFuture<'_, Result<Vec<GroupInfo>, ServiceError>> {
+            let r = self.0.clone();
+            Box::pin(async move { r })
+        }
+        fn list_group_messages(
+            &self,
+            _g: i64,
+            _a: i64,
+            _l: u32,
+        ) -> BoxFuture<'_, Result<(Vec<GroupMessageInfo>, i64), ServiceError>> {
+            Box::pin(async { Ok((vec![], 0)) })
+        }
+        fn create_group(
+            &self,
+            _p: i64,
+            _t: String,
+        ) -> BoxFuture<'_, Result<GroupInfo, ServiceError>> {
+            Box::pin(async { Err(proto("mem")) })
+        }
+        fn delete_group(&self, _g: i64) -> BoxFuture<'_, Result<(), ServiceError>> {
+            unit()
+        }
+        fn add_group_member(
+            &self,
+            _g: i64,
+            _a: AgentKind,
+            _h: String,
+            _r: String,
+        ) -> BoxFuture<'_, Result<GroupInfo, ServiceError>> {
+            Box::pin(async { Err(proto("mem")) })
+        }
+        fn update_group_member(
+            &self,
+            _m: i64,
+            _h: String,
+            _r: String,
+        ) -> BoxFuture<'_, Result<GroupInfo, ServiceError>> {
+            Box::pin(async { Err(proto("mem")) })
+        }
+        fn remove_group_member(&self, _m: i64) -> BoxFuture<'_, Result<GroupInfo, ServiceError>> {
+            Box::pin(async { Err(proto("mem")) })
+        }
+        fn post_group_message(
+            &self,
+            _g: i64,
+            _t: String,
+        ) -> BoxFuture<
+            '_,
+            Result<(GroupMessageInfo, Vec<GroupMessageInfo>, Vec<String>), ServiceError>,
+        > {
+            Box::pin(async { Err(proto("mem")) })
+        }
+        fn cancel_group(
+            &self,
+            _g: i64,
+            _s: GroupCancelScope,
+        ) -> BoxFuture<'_, Result<(), ServiceError>> {
+            unit()
+        }
+        fn retry_group_message(
+            &self,
+            _m: i64,
+        ) -> BoxFuture<'_, Result<GroupMessageInfo, ServiceError>> {
+            Box::pin(async { Err(proto("mem")) })
+        }
+        fn push_group_message_to_todo(
+            &self,
+            _m: i64,
+            _t: String,
+        ) -> BoxFuture<'_, Result<TodoInfo, ServiceError>> {
+            Box::pin(async { Err(proto("mem")) })
+        }
+    }
+
+    /// `handle.spawn` 要 `'static + Send`:持有 `Arc<dyn GroupChatService>` 的 async 块必须满足。
+    #[test]
+    fn dyn_group_chat_futures_run_inside_tokio_spawn() {
+        let svc: Arc<dyn GroupChatService> = Arc::new(MemGroupChat(Ok(vec![])));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let (groups, cancel) = rt.block_on(async move {
+            tokio::spawn(async move {
+                let groups = svc.list_groups(7).await;
+                let cancel = svc.cancel_group(5, GroupCancelScope::Turn).await;
+                (groups, cancel)
+            })
+            .await
+            .unwrap()
+        });
+        assert_eq!(groups, Ok(vec![]));
+        assert_eq!(cancel, Ok(()));
+    }
+
+    #[test]
+    fn group_read_failure_is_distinguishable_from_an_empty_list() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let empty = MemGroupChat(Ok(vec![]));
+        let down = MemGroupChat(Err(ServiceError::new(ServiceErrorKind::Unavailable, "x")));
+        assert!(rt.block_on(empty.list_groups(1)).is_ok());
+        assert_eq!(
+            rt.block_on(down.list_groups(1)).unwrap_err().kind,
             ServiceErrorKind::Unavailable
         );
     }
