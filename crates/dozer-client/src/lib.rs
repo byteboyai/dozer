@@ -8,7 +8,9 @@ use dozer_core::protocol::{
     PreviewCommand, PreviewContext, ProjectInfo, Reply, Request, SessionInfo,
     SessionSummaryPayload, TodoInfo, TurnRecord, UsagePayload, decode_line, encode_line,
 };
-use dozer_services::{BoxFuture, ServiceError, ServiceErrorKind, UsageRows, UsageService};
+use dozer_services::{
+    BoxFuture, ServiceError, ServiceErrorKind, TodoService, UsageRows, UsageService,
+};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -1626,6 +1628,149 @@ mod app_subscribe_tests {
     }
 }
 
+impl TodoService for Client {
+    fn list_todos(&self, project_id: i64) -> BoxFuture<'_, Result<Vec<TodoInfo>, ServiceError>> {
+        Box::pin(async move {
+            Client::list_todos(self, project_id)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn list_categories(
+        &self,
+        project_id: i64,
+    ) -> BoxFuture<'_, Result<Vec<CategoryInfo>, ServiceError>> {
+        Box::pin(async move {
+            Client::list_categories(self, project_id)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn add_todo(&self, project_id: i64, text: String) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            Client::add_todo(self, project_id, &text)
+                .await
+                .map(|_| ())
+                .map_err(into_service_error)
+        })
+    }
+    fn toggle_todo(&self, id: i64, done: bool) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            Client::toggle_todo(self, id, done)
+                .await
+                .map(|_| ())
+                .map_err(into_service_error)
+        })
+    }
+    fn edit_todo_text(&self, id: i64, text: String) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            Client::edit_todo_text(self, id, &text)
+                .await
+                .map(|_| ())
+                .map_err(into_service_error)
+        })
+    }
+    fn reorder_todo(
+        &self,
+        id: i64,
+        after_id: Option<i64>,
+    ) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            Client::reorder_todo(self, id, after_id)
+                .await
+                .map(|_| ())
+                .map_err(into_service_error)
+        })
+    }
+    fn set_todo_plan_date(
+        &self,
+        id: i64,
+        plan_date: Option<String>,
+    ) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            Client::set_todo_plan_date(self, id, plan_date.as_deref())
+                .await
+                .map(|_| ())
+                .map_err(into_service_error)
+        })
+    }
+    fn set_todo_status(
+        &self,
+        id: i64,
+        status: dozer_core::protocol::TodoStoredStatus,
+    ) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            Client::set_todo_status(self, id, status)
+                .await
+                .map(|_| ())
+                .map_err(into_service_error)
+        })
+    }
+    fn set_todo_category(
+        &self,
+        id: i64,
+        category_id: Option<i64>,
+    ) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            Client::set_todo_category(self, id, category_id)
+                .await
+                .map(|_| ())
+                .map_err(into_service_error)
+        })
+    }
+    fn add_category(
+        &self,
+        project_id: i64,
+        parent_id: Option<i64>,
+        name: String,
+    ) -> BoxFuture<'_, Result<CategoryInfo, ServiceError>> {
+        Box::pin(async move {
+            Client::add_category(self, project_id, parent_id, &name)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn rename_category(&self, id: i64, name: String) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            Client::rename_category(self, id, &name)
+                .await
+                .map(|_| ())
+                .map_err(into_service_error)
+        })
+    }
+    fn delete_category(&self, id: i64) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            Client::delete_category(self, id)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn reparent_category(
+        &self,
+        id: i64,
+        new_parent_id: Option<i64>,
+    ) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            Client::reparent_category(self, id, new_parent_id)
+                .await
+                .map(|_| ())
+                .map_err(into_service_error)
+        })
+    }
+    fn move_category_sibling(
+        &self,
+        id: i64,
+        direction: CategoryMoveDirection,
+    ) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            Client::move_category_sibling(self, id, direction)
+                .await
+                .map(|_| ())
+                .map_err(into_service_error)
+        })
+    }
+}
+
 #[cfg(test)]
 mod service_error_tests {
     use super::*;
@@ -1658,5 +1803,84 @@ mod service_error_tests {
         let s = into_service_error(anyhow::anyhow!("意外应答: Ok"));
         assert_eq!(s.kind, ServiceErrorKind::Protocol);
         assert_eq!(s.message, "意外应答: Ok");
+    }
+}
+
+#[cfg(test)]
+mod todo_service_tests {
+    use super::*;
+    use dozer_services::{ServiceErrorKind, TodoService};
+
+    fn temp_sock(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "dz-todo-svc-{tag}-{}.sock",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    /// 读一行请求后回 `reply`;`None` = 不应答直接挂断。
+    fn serve_once(tag: &str, reply: Option<Reply>) -> PathBuf {
+        let sock = temp_sock(tag);
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (r, mut w) = stream.into_split();
+            let mut lines = BufReader::new(r).lines();
+            let _ = lines.next_line().await;
+            if let Some(reply) = reply {
+                let _ = w.write_all(encode_line(&reply).as_bytes()).await;
+            }
+        });
+        sock
+    }
+
+    #[tokio::test]
+    async fn list_todos_comes_back_as_ok() {
+        let sock = serve_once("list", Some(Reply::Todos { todos: vec![] }));
+        let got = TodoService::list_todos(&Client::new(sock.clone()), 7).await;
+        assert_eq!(got, Ok(vec![]));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn a_write_returns_unit_on_success() {
+        let sock = serve_once("write", Some(Reply::Ok));
+        let got = TodoService::delete_category(&Client::new(sock.clone()), 3).await;
+        assert_eq!(got, Ok(()));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn hang_up_is_unavailable_with_the_legacy_text() {
+        let sock = serve_once("hangup", None);
+        let e = TodoService::list_todos(&Client::new(sock.clone()), 7)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.kind, e.message.as_str()),
+            (ServiceErrorKind::Unavailable, "daemon 断开")
+        );
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn error_reply_is_rejected_with_the_legacy_prefix() {
+        let sock = serve_once(
+            "reject",
+            Some(Reply::Error {
+                message: "boom".into(),
+            }),
+        );
+        let e = TodoService::delete_category(&Client::new(sock.clone()), 3)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.kind, e.message.as_str()),
+            (ServiceErrorKind::Rejected, "daemon 错误: boom")
+        );
+        let _ = std::fs::remove_file(&sock);
     }
 }
