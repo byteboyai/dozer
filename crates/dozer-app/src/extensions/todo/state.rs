@@ -98,19 +98,12 @@ pub(crate) struct Flash {
 /// 的清除)。
 pub(crate) const ADD_SELECT_HIGHLIGHT: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// 相同读失败文本再次提示的最短间隔。
-pub(crate) const LOAD_FAILURE_TOAST_COOLDOWN: std::time::Duration =
-    std::time::Duration::from_secs(60);
-
 /// Todo 面板挂在每个 `Workspace` 上的状态。
 #[derive(Default)]
 pub struct WorkspaceState {
     /// 待发提示(失败/被拒等一次性反馈)。`App::update` 的包装函数每次处理完消息后
     /// 统一排空成 Toast,见 `extensions::toast::Outbox`。
     pub(crate) outbox: crate::extensions::toast::Outbox,
-    /// 上一次已提示的读失败(文本 + 时刻)。轮询每秒重试一次,持续性失败若每次都弹,
-    /// Toast 会一直被续期且每次写日志;相同文本在 [`LOAD_FAILURE_TOAST_COOLDOWN`] 内只提示一次。
-    pub(crate) last_load_failure: Option<(String, std::time::Instant)>,
     pub(crate) items: Vec<TodoInfo>,
     /// 新增任务框高度(逻辑像素)。前端拖拽手柄调高后经 `AddHeight` 事件写回,
     /// 0 表示"未拖过、用默认高",视图侧一律 `max(ADD_INPUT_MIN_HEIGHT)` 兜底。

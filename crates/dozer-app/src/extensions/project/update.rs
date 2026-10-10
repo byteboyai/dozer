@@ -283,21 +283,13 @@ pub fn update(
             if kind == ServiceErrorKind::Unavailable {
                 dozer_core::log_debug!(LOG, "记忆列表读取失败(dozerd 不可用): {message}");
             } else {
-                let now = std::time::Instant::now();
-                let repeat = matches!(
-                    &ws_state.last_load_failure,
-                    Some((last, at)) if *last == message
-                        && now.duration_since(*at) < LOAD_FAILURE_TOAST_COOLDOWN
+                ws_state.outbox.push_keyed_cooldown(
+                    LOG,
+                    crate::extensions::toast::Level::Error,
+                    format!("记忆加载失败: {message}"),
+                    "project-memories-load",
+                    std::time::Instant::now(),
                 );
-                if !repeat {
-                    ws_state.outbox.push_keyed(
-                        LOG,
-                        crate::extensions::toast::Level::Error,
-                        format!("记忆加载失败: {message}"),
-                        "project-memories-load",
-                    );
-                    ws_state.last_load_failure = Some((message, now));
-                }
             }
         }
         Message::MemoryDetailOpen(id) => {
