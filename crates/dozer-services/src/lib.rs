@@ -3,8 +3,8 @@
 
 use dozer_model::{
     AgentKind, CategoryInfo, CategoryMoveDirection, ConversationSummary, GroupCancelScope,
-    GroupInfo, GroupMessageInfo, MemoryDetail, MemoryInfo, ProjectInfo, SummaryBatchInfo, TodoInfo,
-    TodoStoredStatus, UsagePayload,
+    GroupInfo, GroupMessageInfo, MemoryDetail, MemoryInfo, ProjectInfo, SessionSummaryPayload,
+    SummaryBatchInfo, TodoInfo, TodoStoredStatus, UsagePayload,
 };
 use std::fmt;
 use std::future::Future;
@@ -215,6 +215,20 @@ pub trait GroupChatService: Send + Sync {
         message_id: i64,
         text: String,
     ) -> BoxFuture<'_, Result<TodoInfo, ServiceError>>;
+}
+
+/// `list_conversations_with_summaries` 的结果:每行一个会话及其可选的总结。
+pub type ConversationRows = Vec<(ConversationSummary, Option<SessionSummaryPayload>)>;
+
+/// 会话列表面板的读取。参数按值传。目前只有这一个方法;host 侧的会话相关调用随各自迁移再加入。
+pub trait ConversationService: Send + Sync {
+    fn list_conversations_with_summaries(
+        &self,
+        cwd: String,
+        agent: Option<AgentKind>,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'_, Result<ConversationRows, ServiceError>>;
 }
 
 /// 各能力 trait 的 `Arc<dyn>` 束;host 构造,经 `PanelIo` 交给面板。其余能力 trait 随各面板迁移逐个加入。
@@ -647,6 +661,60 @@ mod tests {
         assert!(rt.block_on(empty.list_groups(1)).is_ok());
         assert_eq!(
             rt.block_on(down.list_groups(1)).unwrap_err().kind,
+            ServiceErrorKind::Unavailable
+        );
+    }
+
+    // ---- ConversationService 契约 ----
+
+    struct MemConversation(Result<ConversationRows, ServiceError>);
+
+    impl ConversationService for MemConversation {
+        fn list_conversations_with_summaries(
+            &self,
+            _cwd: String,
+            _agent: Option<AgentKind>,
+            _limit: u32,
+            _offset: u32,
+        ) -> BoxFuture<'_, Result<ConversationRows, ServiceError>> {
+            let r = self.0.clone();
+            Box::pin(async move { r })
+        }
+    }
+
+    /// `handle.spawn` 要 `'static + Send`:持有 `Arc<dyn ConversationService>` 的 async 块必须满足。
+    #[test]
+    fn dyn_conversation_future_runs_inside_tokio_spawn() {
+        let svc: Arc<dyn ConversationService> = Arc::new(MemConversation(Ok(vec![])));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let out = rt.block_on(async move {
+            tokio::spawn(async move {
+                svc.list_conversations_with_summaries("/p".into(), None, 500, 0)
+                    .await
+            })
+            .await
+            .unwrap()
+        });
+        assert_eq!(out, Ok(vec![]));
+    }
+
+    #[test]
+    fn conversation_read_failure_is_distinguishable_from_an_empty_list() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let empty = MemConversation(Ok(vec![]));
+        let down = MemConversation(Err(ServiceError::new(ServiceErrorKind::Unavailable, "x")));
+        assert!(
+            rt.block_on(empty.list_conversations_with_summaries("/p".into(), None, 1, 0))
+                .is_ok()
+        );
+        assert_eq!(
+            rt.block_on(down.list_conversations_with_summaries("/p".into(), None, 1, 0))
+                .unwrap_err()
+                .kind,
             ServiceErrorKind::Unavailable
         );
     }
