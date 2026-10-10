@@ -981,7 +981,6 @@ struct EditHistoryState {
 
 /// 克隆共享同一份状态。`Default` = 全部成功(list → `Ok(vec![])`、apply → `Ok(Applied{全 0})`)。
 #[derive(Clone)]
-#[allow(dead_code)] // Task 4 起被修改历史弹窗测试使用,届时去掉。
 pub(crate) struct FakeEditHistory {
     state: Arc<Mutex<EditHistoryState>>,
 }
@@ -1007,7 +1006,6 @@ impl Default for FakeEditHistory {
     }
 }
 
-#[allow(dead_code)] // Task 4 起被使用,届时去掉。
 impl FakeEditHistory {
     pub(crate) fn with_entries(self, entries: Vec<FileEditHistoryInfo>) -> Self {
         self.state.lock().unwrap().entries = entries;
@@ -1015,10 +1013,6 @@ impl FakeEditHistory {
     }
     pub(crate) fn with_list_error(self, kind: ServiceErrorKind, message: &str) -> Self {
         self.state.lock().unwrap().list_error = Some(ServiceError::new(kind, message));
-        self
-    }
-    pub(crate) fn with_outcome(self, outcome: MutationOutcome) -> Self {
-        self.state.lock().unwrap().outcome = outcome;
         self
     }
     pub(crate) fn with_edit_error(self, kind: ServiceErrorKind, message: &str) -> Self {
