@@ -2,9 +2,9 @@
 //! 不知道对面是 dozerd 还是内存假实现。生产实现在 `dozer-client`(为 `Client` 适配)。
 
 use dozer_model::{
-    AgentKind, CategoryInfo, CategoryMoveDirection, ConversationSummary, GroupCancelScope,
-    GroupInfo, GroupMessageInfo, MemoryDetail, MemoryInfo, ProjectInfo, SessionSummaryPayload,
-    SummaryBatchInfo, TodoInfo, TodoStoredStatus, UsagePayload,
+    AgentKind, CategoryInfo, CategoryMoveDirection, CodeHealthReportInfo, ConversationSummary,
+    GroupCancelScope, GroupInfo, GroupMessageInfo, MemoryDetail, MemoryInfo, ProjectInfo,
+    SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus, UsagePayload,
 };
 use std::fmt;
 use std::future::Future;
@@ -229,6 +229,24 @@ pub trait ConversationService: Send + Sync {
         limit: u32,
         offset: u32,
     ) -> BoxFuture<'_, Result<ConversationRows, ServiceError>>;
+}
+
+/// 代码健康度面板的落盘读写。参数按值传。
+pub trait CodeHealthService: Send + Sync {
+    fn get_code_health_report(
+        &self,
+        project_id: i64,
+    ) -> BoxFuture<'_, Result<Option<CodeHealthReportInfo>, ServiceError>>;
+    fn list_code_health_reports(
+        &self,
+        project_id: i64,
+        limit: u32,
+    ) -> BoxFuture<'_, Result<Vec<CodeHealthReportInfo>, ServiceError>>;
+    fn save_code_health_report(
+        &self,
+        project_id: i64,
+        info: CodeHealthReportInfo,
+    ) -> BoxFuture<'_, Result<(), ServiceError>>;
 }
 
 /// 各能力 trait 的 `Arc<dyn>` 束;host 构造,经 `PanelIo` 交给面板。其余能力 trait 随各面板迁移逐个加入。
@@ -716,6 +734,72 @@ mod tests {
         );
         assert_eq!(
             rt.block_on(down.list_conversations_with_summaries("/p".into(), None, 1, 0))
+                .unwrap_err()
+                .kind,
+            ServiceErrorKind::Unavailable
+        );
+    }
+
+    // ---- CodeHealthService 契约 ----
+
+    use dozer_model::CodeHealthReportInfo;
+
+    struct MemCodeHealth(Result<Option<CodeHealthReportInfo>, ServiceError>);
+
+    impl CodeHealthService for MemCodeHealth {
+        fn get_code_health_report(
+            &self,
+            _p: i64,
+        ) -> BoxFuture<'_, Result<Option<CodeHealthReportInfo>, ServiceError>> {
+            let r = self.0.clone();
+            Box::pin(async move { r })
+        }
+        fn list_code_health_reports(
+            &self,
+            _p: i64,
+            _l: u32,
+        ) -> BoxFuture<'_, Result<Vec<CodeHealthReportInfo>, ServiceError>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+        fn save_code_health_report(
+            &self,
+            _p: i64,
+            _i: CodeHealthReportInfo,
+        ) -> BoxFuture<'_, Result<(), ServiceError>> {
+            unit()
+        }
+    }
+
+    /// `handle.spawn` 要 `'static + Send`:持有 `Arc<dyn CodeHealthService>` 的 async 块必须满足。
+    #[test]
+    fn dyn_code_health_futures_run_inside_tokio_spawn() {
+        let svc: Arc<dyn CodeHealthService> = Arc::new(MemCodeHealth(Ok(None)));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let (got, list) = rt.block_on(async move {
+            tokio::spawn(async move {
+                let got = svc.get_code_health_report(7).await;
+                let list = svc.list_code_health_reports(7, 2).await;
+                (got, list)
+            })
+            .await
+            .unwrap()
+        });
+        assert_eq!(got, Ok(None));
+        assert_eq!(list, Ok(vec![]));
+    }
+
+    #[test]
+    fn code_health_read_failure_is_distinguishable_from_no_report() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let none = MemCodeHealth(Ok(None));
+        let down = MemCodeHealth(Err(ServiceError::new(ServiceErrorKind::Unavailable, "x")));
+        assert_eq!(rt.block_on(none.get_code_health_report(1)), Ok(None));
+        assert_eq!(
+            rt.block_on(down.get_code_health_report(1))
                 .unwrap_err()
                 .kind,
             ServiceErrorKind::Unavailable
