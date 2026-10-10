@@ -119,3 +119,11 @@
 **后续项(未修):**
 - `Loaded` 靠 `project_id`/`filter` 比对丢弃过期结果(没有代数,但已有等价保护)。
 - 剩余直接使用 `Client` 的面板:`browser`、`settings`、`project_create`。
+
+## Browser(收藏夹)迁移(2026-10-11)
+
+`extensions/browser.rs` 的收藏夹已经 `BookmarkService`(`dozer-services`)取数与写入;`R-CLIENT` 基线中 `browser.rs` 已清零。`Message::BookmarksLoaded` 的载荷改为 `Result<Vec<BookmarkInfo>, ServiceError>`:读失败不再清空本地缓存(此前 `unwrap_or_default()` 会整体替换成空列表,dozerd 不可用时一次增删失败加刷新失败就会清空整个收藏夹);`Unavailable` 静默(debug 日志),其余写进内联 `state.error`(`收藏夹加载失败: …`)。写失败文本与乐观更新不变。面板日志来源名为 `web`。规格 `docs/superpowers/specs/2026-10-11-bookmark-services-design.md`。
+
+**后续项(未修):**
+- `BookmarksLoaded` / `BookmarksMutated` 没有代数保护(慢的旧结果可能覆盖新结果)。
+- 剩余直接使用 `Client` 的面板:`settings`、`project_create`。
