@@ -883,7 +883,13 @@ impl Workspace {
         let emit = move |m| {
             let _ = proxy.send_event(Message::CodeHealth(m));
         };
-        codehealth::spawn_scan(project_id, project_path, &io.client, &io.handle, emit);
+        codehealth::spawn_scan(
+            project_id,
+            project_path,
+            crate::panel_host::services_for(&io.client).codehealth,
+            &io.handle,
+            emit,
+        );
     }
 
     /// 本 `Workspace` 归属的项目 id。所有"发起时已知项目、结果晚些才回来"的

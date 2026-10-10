@@ -5,13 +5,16 @@
 //! 加载与扫描都产出完整 [`PanelState`]（当前报告 + 上一份 + 差异 + 热点 +
 //! Git + 保存错误），差异与热点在 blocking 任务里算（spec Task 6）。
 
+use super::LOG;
 use super::{Message, PanelState};
 use dozer_codehealth::{
     ArchitectureDiffOutcome, ImpactInput, ImpactScope, ProjectReport, architecture_diff,
     diff_reports, impact_scope,
 };
 use dozer_model::CodeHealthReportInfo;
+use dozer_services::CodeHealthService;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// 把报告反序列化（失败返回 `None`——旧报告解析失败不影响展示其它状态）。
 fn parse_report(json: &str) -> Option<ProjectReport> {
@@ -120,22 +123,23 @@ const MAX_IMPACT_VISITED: usize = 2000;
 pub fn spawn_load_cached(
     project_id: i64,
     project_path: PathBuf,
-    client: &dozer_client::Client,
+    service: Arc<dyn CodeHealthService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
-    let client = client.clone();
     handle.spawn(async move {
-        let latest = client
-            .get_code_health_report(project_id)
-            .await
-            .ok()
-            .flatten();
-        let history = client
-            .list_code_health_reports(project_id, 2)
-            .await
-            .ok()
-            .unwrap_or_default();
+        let latest = service.get_code_health_report(project_id).await;
+        let history = match service.list_code_health_reports(project_id, 2).await {
+            Ok(h) => h,
+            Err(e) => {
+                dozer_core::log_warn!(LOG, error = %e, "读取历史健康度报告失败,对比降级为无基线");
+                Vec::new()
+            }
+        };
+        let (load_error, latest) = match latest {
+            Ok(l) => (None, l),
+            Err(e) => (Some(e), None),
+        };
 
         let current = latest.and_then(|info| {
             let ts = info.scanned_at_ms;
@@ -151,7 +155,15 @@ pub fn spawn_load_cached(
         .await
         .unwrap_or_default();
 
-        emit(Message::Loaded(project_id, Box::new(panel)));
+        match load_error {
+            None => emit(Message::Loaded(project_id, Box::new(panel))),
+            Some(e) => emit(Message::LoadFailed(
+                project_id,
+                e.kind,
+                e.message,
+                Box::new(panel),
+            )),
+        }
     });
 }
 
@@ -164,7 +176,7 @@ pub fn on_activate(ctx: &crate::panel_host::ActivationCtx<Message>) {
     spawn_load_cached(
         ctx.project_id,
         path,
-        ctx.io.client(),
+        ctx.io.services().codehealth.clone(),
         ctx.io.handle(),
         ctx.io.emitter(),
     );
@@ -175,18 +187,19 @@ pub fn on_activate(ctx: &crate::panel_host::ActivationCtx<Message>) {
 pub fn spawn_scan(
     project_id: i64,
     project_path: PathBuf,
-    client: &dozer_client::Client,
+    service: Arc<dyn CodeHealthService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
-    let client = client.clone();
     handle.spawn(async move {
         // 扫描前加载上一份报告（用于差异比较）。
-        let history = client
-            .list_code_health_reports(project_id, 2)
-            .await
-            .ok()
-            .unwrap_or_default();
+        let history = match service.list_code_health_reports(project_id, 2).await {
+            Ok(h) => h,
+            Err(e) => {
+                dozer_core::log_warn!(LOG, error = %e, "读取上一份健康度报告失败,本次扫描不含对比");
+                Vec::new()
+            }
+        };
         // 新报告尚未保存，倒序历史的第 0 项就是本次扫描应比较的直接前驱。
         let previous = history
             .first()
@@ -212,8 +225,8 @@ pub fn spawn_scan(
                 let save_error = match &panel.report {
                     Some(report) => {
                         let info = to_info(report);
-                        client
-                            .save_code_health_report(project_id, &info)
+                        service
+                            .save_code_health_report(project_id, info)
                             .await
                             .err()
                             .map(|e| format!("未保存，无法用于下次比较：{e}"))
@@ -235,4 +248,166 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::panel_host::testing::{TIMEOUT, runtime};
+    use crate::service_fakes::FakeCodeHealth;
+    use dozer_services::ServiceErrorKind;
+    use std::sync::{Mutex, mpsc};
+
+    fn collect() -> (impl Fn(Message) + Send + 'static, mpsc::Receiver<Message>) {
+        let (tx, rx) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        (
+            move |m| {
+                let _ = tx.lock().unwrap().send(m);
+            },
+            rx,
+        )
+    }
+
+    #[test]
+    fn a_cached_report_loads_into_the_panel() {
+        let rt = runtime();
+        let dir = tempfile::tempdir().unwrap();
+        let info = to_info(&crate::extensions::codehealth::tests::sample_report());
+        let fake = FakeCodeHealth::default().with_latest(info);
+        let (emit, rx) = collect();
+        spawn_load_cached(
+            7,
+            dir.path().to_path_buf(),
+            fake.clone().into_services().codehealth,
+            rt.handle(),
+            emit,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::Loaded(7, panel) => assert!(panel.report.is_some()),
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(
+            fake.calls(),
+            vec![
+                "get_code_health_report(7)".to_string(),
+                "list_code_health_reports(7,2)".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_failed_cache_read_emits_load_failed_with_a_fallback_panel() {
+        let rt = runtime();
+        let dir = tempfile::tempdir().unwrap();
+        let fake = FakeCodeHealth::default()
+            .with_get_error(ServiceErrorKind::Rejected, "daemon 错误: boom");
+        let (emit, rx) = collect();
+        spawn_load_cached(
+            7,
+            dir.path().to_path_buf(),
+            fake.into_services().codehealth,
+            rt.handle(),
+            emit,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::LoadFailed(7, kind, text, panel) => {
+                assert_eq!(
+                    (kind, text.as_str()),
+                    (ServiceErrorKind::Rejected, "daemon 错误: boom")
+                );
+                assert!(panel.report.is_none());
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_failed_history_read_still_loads_the_report() {
+        let rt = runtime();
+        let dir = tempfile::tempdir().unwrap();
+        let info = to_info(&crate::extensions::codehealth::tests::sample_report());
+        let fake = FakeCodeHealth::default()
+            .with_latest(info)
+            .with_list_error(ServiceErrorKind::Unavailable, "daemon 断开");
+        let (emit, rx) = collect();
+        spawn_load_cached(
+            7,
+            dir.path().to_path_buf(),
+            fake.into_services().codehealth,
+            rt.handle(),
+            emit,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::Loaded(7, panel) => {
+                assert!(panel.report.is_some());
+                assert!(
+                    panel.previous_report.is_none(),
+                    "历史读失败:对比降级为无基线"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    /// 一个能被扫描的最小项目目录。
+    fn tiny_project() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_failed_save_text_is_prefix_plus_the_service_message_unchanged() {
+        let rt = runtime();
+        let dir = tiny_project();
+        let fake = FakeCodeHealth::default()
+            .with_save_error(ServiceErrorKind::Rejected, "daemon 错误: boom");
+        let (emit, rx) = collect();
+        spawn_scan(
+            7,
+            dir.path().to_path_buf(),
+            fake.into_services().codehealth,
+            rt.handle(),
+            emit,
+        );
+        match rx.recv_timeout(TIMEOUT * 6).unwrap() {
+            Message::Scanned(7, Ok(panel)) => assert_eq!(
+                panel.save_error.as_deref(),
+                Some("未保存，无法用于下次比较：daemon 错误: boom")
+            ),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_failed_history_read_does_not_block_the_scan() {
+        let rt = runtime();
+        let dir = tiny_project();
+        let fake =
+            FakeCodeHealth::default().with_list_error(ServiceErrorKind::Unavailable, "daemon 断开");
+        let (emit, rx) = collect();
+        spawn_scan(
+            7,
+            dir.path().to_path_buf(),
+            fake.clone().into_services().codehealth,
+            rt.handle(),
+            emit,
+        );
+        match rx.recv_timeout(TIMEOUT * 6).unwrap() {
+            Message::Scanned(7, Ok(panel)) => {
+                assert!(panel.report.is_some());
+                assert!(panel.save_error.is_none());
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert!(
+            fake.calls()
+                .iter()
+                .any(|c| c == "save_code_health_report(7)"),
+            "{:?}",
+            fake.calls()
+        );
+    }
 }

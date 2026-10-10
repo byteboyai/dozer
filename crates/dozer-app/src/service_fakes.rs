@@ -797,12 +797,10 @@ struct CodeHealthState {
 
 /// 克隆共享同一份状态。`Default` = 全部成功(get → `Ok(None)`、list → `Ok(vec![])`、save → `Ok(())`)。
 #[derive(Clone, Default)]
-#[allow(dead_code)] // Task 4 起被代码健康度面板测试使用,届时去掉。
 pub(crate) struct FakeCodeHealth {
     state: Arc<Mutex<CodeHealthState>>,
 }
 
-#[allow(dead_code)] // Task 4 起被使用,届时去掉。
 impl FakeCodeHealth {
     pub(crate) fn with_latest(self, info: CodeHealthReportInfo) -> Self {
         self.state.lock().unwrap().latest = Some(info);

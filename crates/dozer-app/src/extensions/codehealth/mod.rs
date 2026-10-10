@@ -23,6 +23,13 @@ pub(crate) use protocol::*;
 use dozer_codehealth::{
     ArchitectureDiffOutcome, GitSnapshot, ImpactScope, ProjectReport, ReportDiff,
 };
+use dozer_services::ServiceErrorKind;
+
+dozer_core::scope!(pub(crate) LOG, panel, "code_health");
+
+/// 相同缓存读取失败文本再次提示的最短间隔。
+pub(crate) const LOAD_FAILURE_TOAST_COOLDOWN: std::time::Duration =
+    std::time::Duration::from_secs(60);
 
 /// 面板右侧分类导航的四个分类：总览 / 结构复杂度 / UI 一致性 / 扫描范围。
 /// 左侧内容区按当前选中分类切换展示（见 `view.rs`）。spec「信息架构与 UI」。
@@ -87,9 +94,17 @@ pub struct WorkspaceState {
     scan_error: Option<String>,
     /// 右侧分类导航当前选中的分类（默认总览）。
     category: CodeHealthCategory,
+    /// 待发提示;`App::drain_outboxes` 排空成 Toast。
+    outbox: crate::extensions::toast::Outbox,
+    /// 上一次已提示的缓存读取失败(文本 + 时刻),用于冷却去重。
+    last_load_failure: Option<(String, std::time::Instant)>,
 }
 
 impl WorkspaceState {
+    pub fn take_outbox(&mut self) -> Vec<crate::extensions::toast::Pending> {
+        self.outbox.take()
+    }
+
     pub fn report(&self) -> Option<&ProjectReport> {
         self.panel.report.as_ref()
     }
@@ -144,6 +159,10 @@ pub enum Message {
     /// 面板打开时读落盘缓存（最新 + 上一份）并计算差异/热点后的完整状态。
     /// `PanelState` 较大，装箱避免撑大外层 `Message` 枚举。
     Loaded(i64, Box<PanelState>),
+    /// 缓存读取失败(`get` 失败):携带照旧算出的"无报告"面板(含 git 数据)。从未成功加载过则采用它;
+    /// 已有报告则**保持现有面板**。`Unavailable` 静默(顶栏徽标已表达"dozerd 不可用");其余弹带 key 的
+    /// Error Toast,相同文本 60 秒内只提示一次。
+    LoadFailed(i64, ServiceErrorKind, String, Box<PanelState>),
     /// 手动扫描结果回灌（含差异/热点/Git/保存错误）。`Err` = 扫描本身失败。
     Scanned(i64, Result<Box<PanelState>, String>),
     /// 点"扫描"按钮。
@@ -159,6 +178,30 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
     match msg {
         Message::Loaded(_project_id, panel) => {
             ws_state.panel = *panel;
+        }
+        Message::LoadFailed(_project_id, kind, message, fallback) => {
+            if ws_state.panel.report.is_none() {
+                ws_state.panel = *fallback;
+            }
+            if kind == ServiceErrorKind::Unavailable {
+                dozer_core::log_debug!(LOG, "代码健康度缓存读取失败(dozerd 不可用): {message}");
+            } else {
+                let now = std::time::Instant::now();
+                let repeat = matches!(
+                    &ws_state.last_load_failure,
+                    Some((last, at)) if *last == message
+                        && now.duration_since(*at) < LOAD_FAILURE_TOAST_COOLDOWN
+                );
+                if !repeat {
+                    ws_state.outbox.push_keyed(
+                        LOG,
+                        crate::extensions::toast::Level::Error,
+                        format!("代码健康度加载失败: {message}"),
+                        "codehealth-load",
+                    );
+                    ws_state.last_load_failure = Some((message, now));
+                }
+            }
         }
         Message::Scanned(_project_id, Ok(panel)) => {
             ws_state.scanning = false;
@@ -188,7 +231,7 @@ mod tests {
     use super::*;
     use dozer_codehealth::{HealthTier, SCHEMA_VERSION, ScanMetadata, ScanStatus};
 
-    fn sample_report() -> ProjectReport {
+    pub(crate) fn sample_report() -> ProjectReport {
         ProjectReport {
             schema_version: SCHEMA_VERSION,
             scan: ScanMetadata {
@@ -358,11 +401,18 @@ mod tests {
     // ---- H6:切入钩子 ----
 
     use crate::panel_host::testing::{TIMEOUT, offline_ctx, runtime};
+    use dozer_services::ServiceErrorKind;
 
     #[test]
     fn on_activate_only_loads_the_cached_report_and_never_starts_a_scan() {
         let rt = runtime();
         let (ctx, rx) = offline_ctx::<Message>(&rt, 7, Some(std::env::temp_dir()));
+        let ctx = crate::panel_host::ActivationCtx {
+            io: ctx
+                .io
+                .with_services(crate::service_fakes::FakeCodeHealth::default().into_services()),
+            ..ctx
+        };
         on_activate(&ctx);
         assert!(matches!(
             rx.recv_timeout(TIMEOUT).unwrap(),
@@ -384,5 +434,83 @@ mod tests {
             rx.recv_timeout(std::time::Duration::from_millis(200))
                 .is_err()
         );
+    }
+
+    fn failed(kind: ServiceErrorKind, text: &str, marker: u64) -> Message {
+        Message::LoadFailed(
+            7,
+            kind,
+            text.into(),
+            Box::new(PanelState {
+                scanned_at_ms: Some(marker),
+                ..PanelState::default()
+            }),
+        )
+    }
+
+    #[test]
+    fn first_load_failure_adopts_the_carried_panel() {
+        let mut ws = WorkspaceState::default();
+        update(
+            &mut ws,
+            failed(ServiceErrorKind::Unavailable, "daemon 断开", 1),
+        );
+        assert_eq!(
+            ws.panel.scanned_at_ms,
+            Some(1),
+            "从未加载过:采用携带的 panel(含 git 数据),同现状"
+        );
+        assert!(
+            ws.take_outbox().is_empty(),
+            "Unavailable 由顶栏徽标表达,不弹 Toast"
+        );
+    }
+
+    #[test]
+    fn a_load_failure_keeps_the_report_already_shown() {
+        let mut ws = WorkspaceState {
+            panel: PanelState {
+                report: Some(sample_report()),
+                scanned_at_ms: Some(9),
+                ..PanelState::default()
+            },
+            ..WorkspaceState::default()
+        };
+        update(
+            &mut ws,
+            failed(ServiceErrorKind::Unavailable, "daemon 断开", 1),
+        );
+        assert!(ws.report().is_some(), "读失败不得把已显示的报告换成空面板");
+        assert_eq!(ws.panel.scanned_at_ms, Some(9));
+    }
+
+    #[test]
+    fn repeated_rejected_load_failures_toast_once_per_text_with_a_key() {
+        let mut ws = WorkspaceState::default();
+        for _ in 0..3 {
+            update(
+                &mut ws,
+                failed(ServiceErrorKind::Rejected, "daemon 错误: boom", 1),
+            );
+        }
+        let toasts = ws.take_outbox();
+        assert_eq!(toasts.len(), 1, "相同文本 60 秒内只提示一次");
+        assert_eq!(toasts[0].level, crate::extensions::toast::Level::Error);
+        assert!(toasts[0].text.contains("daemon 错误: boom"));
+        assert_eq!(toasts[0].key.as_deref(), Some("codehealth-load"));
+        update(&mut ws, failed(ServiceErrorKind::Protocol, "另一种错误", 1));
+        assert_eq!(ws.take_outbox().len(), 1, "换了文本要再提示");
+    }
+
+    #[test]
+    fn on_activate_reports_a_failed_cache_read_as_load_failed() {
+        let rt = runtime();
+        // 默认服务束指向不存在的 socket → get 失败 → LoadFailed(7, Unavailable, ..)
+        let (ctx, rx) = offline_ctx::<Message>(&rt, 7, Some(std::env::temp_dir()));
+        on_activate(&ctx);
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::LoadFailed(7, ServiceErrorKind::Unavailable, _, _)
+        ));
     }
 }
