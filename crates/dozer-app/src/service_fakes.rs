@@ -701,7 +701,6 @@ impl GroupChatService for FakeGroupChat {
 }
 
 /// 固定的会话行(Claude、无总结)。
-#[allow(dead_code)] // Task 4 起被使用,届时去掉。
 pub(crate) fn conversation_row(
     id: &str,
     title: &str,
@@ -729,7 +728,6 @@ struct ConversationState {
 
 /// 克隆共享同一份状态。`Default` = 成功且空。
 #[derive(Clone)]
-#[allow(dead_code)] // Task 4 起被会话面板测试使用,届时去掉。
 pub(crate) struct FakeConversation {
     state: Arc<Mutex<ConversationState>>,
 }
@@ -740,7 +738,6 @@ impl Default for FakeConversation {
     }
 }
 
-#[allow(dead_code)] // Task 4 起被使用,届时去掉。
 impl FakeConversation {
     fn with(rows: Result<ConversationRows, ServiceError>) -> Self {
         Self {
