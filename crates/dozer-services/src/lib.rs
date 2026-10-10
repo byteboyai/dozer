@@ -278,6 +278,7 @@ pub struct Services {
     pub group_chat: Arc<dyn GroupChatService>,
     pub conversation: Arc<dyn ConversationService>,
     pub codehealth: Arc<dyn CodeHealthService>,
+    pub context: Arc<dyn ContextService>,
 }
 
 #[cfg(test)]
@@ -338,6 +339,7 @@ mod tests {
             group_chat: Arc::new(MemGroupChat(Ok(vec![]))),
             conversation: Arc::new(MemConversation(Ok(vec![]))),
             codehealth: Arc::new(MemCodeHealth(Ok(None))),
+            context: Arc::new(MemContext(Ok(vec![]))),
         };
         let t = s.clone();
         assert!(Arc::ptr_eq(&s.usage, &t.usage));
@@ -347,6 +349,7 @@ mod tests {
         assert!(Arc::ptr_eq(&s.group_chat, &t.group_chat));
         assert!(Arc::ptr_eq(&s.conversation, &t.conversation));
         assert!(Arc::ptr_eq(&s.codehealth, &t.codehealth));
+        assert!(Arc::ptr_eq(&s.context, &t.context));
     }
 
     // ---- TodoService 契约 ----
