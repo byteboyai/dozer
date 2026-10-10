@@ -530,7 +530,6 @@ struct GroupChatState {
 
 /// 克隆共享同一份状态。`Default` = 读写都成功、空。
 #[derive(Clone)]
-#[allow(dead_code)] // Task 4 起被群聊面板测试使用,届时去掉。
 pub(crate) struct FakeGroupChat {
     state: Arc<Mutex<GroupChatState>>,
 }
@@ -541,7 +540,6 @@ impl Default for FakeGroupChat {
     }
 }
 
-#[allow(dead_code)] // Task 4 起被使用,届时去掉。
 impl FakeGroupChat {
     fn with(
         groups: Result<Vec<GroupInfo>, ServiceError>,
@@ -556,10 +554,6 @@ impl FakeGroupChat {
                 calls: vec![],
             })),
         }
-    }
-    pub(crate) fn with_groups(self, groups: Vec<GroupInfo>) -> Self {
-        self.state.lock().unwrap().groups = Ok(groups);
-        self
     }
     pub(crate) fn with_messages(self, messages: Vec<GroupMessageInfo>, latest_rev: i64) -> Self {
         self.state.lock().unwrap().messages = Ok((messages, latest_rev));

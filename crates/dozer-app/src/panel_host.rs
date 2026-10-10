@@ -100,16 +100,16 @@ impl<M: Send + 'static> PanelIo<M> {
         move |message| emit(message)
     }
 
-    /// 在 host 的 runtime 上跑一个后台任务。任务拿到 host 的 `Client` 和一份 `PanelIo` 副本,
+    /// 在 host 的 runtime 上跑一个后台任务。任务拿到 host 的服务束 `Services` 和一份 `PanelIo` 副本,
     /// 想发多少条消息(包括零条:只在失败时才发的命令)由任务自己决定。
     pub(crate) fn spawn<F, Fut>(&self, task: F)
     where
-        F: FnOnce(Client, PanelIo<M>) -> Fut + Send + 'static,
+        F: FnOnce(Services, PanelIo<M>) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        let client = self.client.clone();
+        let services = self.services.clone();
         let io = self.clone();
-        self.handle.spawn(async move { task(client, io).await });
+        self.handle.spawn(async move { task(services, io).await });
     }
 }
 
@@ -521,12 +521,12 @@ mod tests {
     fn spawn_runs_on_the_runtime_and_the_task_may_emit_any_number_of_times() {
         let rt = test_runtime();
         let (io, rx) = recording_io(&rt);
-        io.spawn(|_client, io| async move {
+        io.spawn(|_services, io| async move {
             io.emit(10);
             io.emit(11);
         });
         io.spawn(
-            |_client, _io| async move { /* 零条也合法(例如只在失败时才发消息的命令) */
+            |_services, _io| async move { /* 零条也合法(例如只在失败时才发消息的命令) */
             },
         );
         let got = [
@@ -541,12 +541,12 @@ mod tests {
     }
 
     #[test]
-    fn spawn_hands_the_task_the_hosts_client() {
+    fn spawn_hands_the_task_the_hosts_services() {
         let rt = test_runtime();
         let (io, rx) = recording_io(&rt);
-        io.spawn(|client, io| async move {
-            // 指向不存在 socket 的 Client:真的发请求必然失败——证明拿到的是 host 的那个 Client。
-            let failed = client.list_groups(1).await.is_err();
+        io.spawn(|services, io| async move {
+            // 指向不存在 socket 的 Client 适配出的服务:真的发请求必然失败——证明拿到的是 host 的服务束。
+            let failed = services.group_chat.list_groups(1).await.is_err();
             io.emit(u32::from(failed));
         });
         assert_eq!(
