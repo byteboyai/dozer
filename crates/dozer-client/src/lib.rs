@@ -9,9 +9,9 @@ use dozer_core::protocol::{
     SessionSummaryPayload, TodoInfo, TurnRecord, UsagePayload, decode_line, encode_line,
 };
 use dozer_services::{
-    BoxFuture, CodeHealthService, ContextService, ConversationRows, ConversationService,
-    EditHistoryService, GroupChatService, MemoryService, PreciseEdit, ProjectService, ServiceError,
-    ServiceErrorKind, TodoService, UsageRows, UsageService,
+    BookmarkService, BoxFuture, CodeHealthService, ContextService, ConversationRows,
+    ConversationService, EditHistoryService, GroupChatService, MemoryService, PreciseEdit,
+    ProjectService, ServiceError, ServiceErrorKind, TodoService, UsageRows, UsageService,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -2145,6 +2145,39 @@ impl EditHistoryService for Client {
     }
 }
 
+impl BookmarkService for Client {
+    fn list_bookmarks(
+        &self,
+        project_id: Option<i64>,
+    ) -> BoxFuture<'_, Result<Vec<dozer_core::protocol::BookmarkInfo>, ServiceError>> {
+        Box::pin(async move {
+            Client::list_bookmarks(self, project_id)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn add_bookmark(
+        &self,
+        scope: dozer_core::protocol::BookmarkScope,
+        project_id: Option<i64>,
+        url: String,
+        title: String,
+    ) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            Client::add_bookmark(self, scope, project_id, &url, &title)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn remove_bookmark(&self, id: i64) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            Client::remove_bookmark(self, id)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+}
+
 #[cfg(test)]
 mod service_error_tests {
     use super::*;
@@ -2745,6 +2778,72 @@ mod edit_history_service_tests {
             }),
         );
         let e = EditHistoryService::apply_precise_edit(&Client::new(sock.clone()), edit())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.kind, e.message.as_str()),
+            (ServiceErrorKind::Rejected, "daemon 错误: boom")
+        );
+        let _ = std::fs::remove_file(&sock);
+    }
+}
+
+#[cfg(test)]
+mod bookmark_service_tests {
+    use super::todo_service_tests::serve_once;
+    use super::*;
+    use dozer_services::{BookmarkService, ServiceErrorKind};
+
+    #[tokio::test]
+    async fn list_comes_back_as_ok() {
+        let sock = serve_once("bm-list", Some(Reply::Bookmarks { bookmarks: vec![] }));
+        let got = BookmarkService::list_bookmarks(&Client::new(sock.clone()), Some(7)).await;
+        assert_eq!(got, Ok(vec![]));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn add_and_remove_return_unit_on_success() {
+        let sock = serve_once("bm-add", Some(Reply::Ok));
+        let got = BookmarkService::add_bookmark(
+            &Client::new(sock.clone()),
+            dozer_core::protocol::BookmarkScope::Global,
+            None,
+            "http://a.com".into(),
+            "A".into(),
+        )
+        .await;
+        assert_eq!(got, Ok(()));
+        let _ = std::fs::remove_file(&sock);
+
+        let sock = serve_once("bm-remove", Some(Reply::Ok));
+        let got = BookmarkService::remove_bookmark(&Client::new(sock.clone()), 3).await;
+        assert_eq!(got, Ok(()));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn hang_up_is_unavailable_with_the_legacy_text() {
+        let sock = serve_once("bm-hangup", None);
+        let e = BookmarkService::list_bookmarks(&Client::new(sock.clone()), None)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.kind, e.message.as_str()),
+            (ServiceErrorKind::Unavailable, "daemon 断开")
+        );
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn error_reply_is_rejected_with_the_legacy_prefix() {
+        let sock = serve_once(
+            "bm-reject",
+            Some(Reply::Error {
+                message: "boom".into(),
+            }),
+        );
+        let e = BookmarkService::remove_bookmark(&Client::new(sock.clone()), 3)
             .await
             .unwrap_err();
         assert_eq!(
