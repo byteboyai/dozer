@@ -10,8 +10,8 @@ use dozer_core::protocol::{
 };
 use dozer_services::{
     BoxFuture, CodeHealthService, ContextService, ConversationRows, ConversationService,
-    GroupChatService, MemoryService, ProjectService, ServiceError, ServiceErrorKind, TodoService,
-    UsageRows, UsageService,
+    EditHistoryService, GroupChatService, MemoryService, PreciseEdit, ProjectService, ServiceError,
+    ServiceErrorKind, TodoService, UsageRows, UsageService,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -2094,6 +2094,57 @@ impl ContextService for Client {
     }
 }
 
+impl EditHistoryService for Client {
+    fn list_file_edit_history(
+        &self,
+        project_id: i64,
+        path_filter: Option<String>,
+        limit: u32,
+    ) -> BoxFuture<'_, Result<Vec<dozer_core::protocol::FileEditHistoryInfo>, ServiceError>> {
+        Box::pin(async move {
+            Client::list_file_edit_history(self, project_id, path_filter.as_deref(), limit)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn apply_precise_edit(
+        &self,
+        edit: PreciseEdit,
+    ) -> BoxFuture<'_, Result<dozer_core::protocol::MutationOutcome, ServiceError>> {
+        Box::pin(async move {
+            let PreciseEdit {
+                project_id,
+                path,
+                start_line,
+                start_col,
+                end_line,
+                end_col,
+                expected_text,
+                new_text,
+                summary,
+                actor,
+                session_id,
+            } = edit;
+            Client::apply_precise_edit(
+                self,
+                project_id,
+                &path,
+                start_line,
+                start_col,
+                end_line,
+                end_col,
+                &expected_text,
+                &new_text,
+                &summary,
+                &actor,
+                &session_id,
+            )
+            .await
+            .map_err(into_service_error)
+        })
+    }
+}
+
 #[cfg(test)]
 mod service_error_tests {
     use super::*;
@@ -2541,6 +2592,165 @@ mod context_service_tests {
         )
         .await;
         assert_eq!(got, Ok(item));
+        let _ = std::fs::remove_file(&sock);
+    }
+}
+
+#[cfg(test)]
+mod edit_history_service_tests {
+    use super::todo_service_tests::{serve_once, temp_sock};
+    use super::*;
+    use dozer_core::protocol::MutationOutcome;
+    use dozer_services::{EditHistoryService, PreciseEdit, ServiceErrorKind};
+    use std::sync::{Arc, Mutex};
+
+    /// 读一行请求,记下它,再回 `reply`。返回 (socket 路径, 记录请求行的共享槽)。
+    fn serve_capture(tag: &str, reply: Reply) -> (PathBuf, Arc<Mutex<Option<String>>>) {
+        let sock = temp_sock(tag);
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        let seen = Arc::new(Mutex::new(None));
+        let slot = Arc::clone(&seen);
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (r, mut w) = stream.into_split();
+            let mut lines = BufReader::new(r).lines();
+            if let Ok(Some(line)) = lines.next_line().await {
+                *slot.lock().unwrap() = Some(line);
+            }
+            let _ = w.write_all(encode_line(&reply).as_bytes()).await;
+        });
+        (sock, seen)
+    }
+
+    fn edit() -> PreciseEdit {
+        PreciseEdit {
+            project_id: 7,
+            path: "src/a.rs".into(),
+            start_line: 1,
+            start_col: 2,
+            end_line: 3,
+            end_col: 4,
+            expected_text: "NEW".into(),
+            new_text: "OLD".into(),
+            summary: "撤销:改".into(),
+            actor: "dozer".into(),
+            session_id: "dozer-gui".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn list_comes_back_as_ok() {
+        let sock = serve_once("eh-list", Some(Reply::FileEditHistory { entries: vec![] }));
+        let got =
+            EditHistoryService::list_file_edit_history(&Client::new(sock.clone()), 7, None, 200)
+                .await;
+        assert_eq!(got, Ok(vec![]));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn list_sends_the_filter_and_limit_it_was_given() {
+        let (sock, seen) = serve_capture("eh-list-req", Reply::FileEditHistory { entries: vec![] });
+        let _ = EditHistoryService::list_file_edit_history(
+            &Client::new(sock.clone()),
+            7,
+            Some("src/a.rs".into()),
+            200,
+        )
+        .await;
+        let line = seen.lock().unwrap().clone().expect("服务端应收到请求");
+        match decode_line::<Request>(&line).unwrap() {
+            Request::ListFileEditHistory {
+                project_id,
+                path_filter,
+                limit,
+            } => {
+                assert_eq!(
+                    (project_id, path_filter.as_deref(), limit),
+                    (7, Some("src/a.rs"), 200)
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn apply_sends_every_field_in_the_right_place() {
+        let (sock, seen) = serve_capture(
+            "eh-apply-req",
+            Reply::MutationResult {
+                outcome: MutationOutcome::NotFound,
+            },
+        );
+        let got = EditHistoryService::apply_precise_edit(&Client::new(sock.clone()), edit()).await;
+        assert_eq!(got, Ok(MutationOutcome::NotFound), "outcome 原样带回");
+        let line = seen.lock().unwrap().clone().expect("服务端应收到请求");
+        match decode_line::<Request>(&line).unwrap() {
+            Request::ApplyPreciseEdit {
+                project_id,
+                path,
+                start_line,
+                start_col,
+                end_line,
+                end_col,
+                expected_text,
+                new_text,
+                summary,
+                actor,
+                session_id,
+            } => {
+                assert_eq!(
+                    (
+                        project_id,
+                        path.as_str(),
+                        start_line,
+                        start_col,
+                        end_line,
+                        end_col
+                    ),
+                    (7, "src/a.rs", 1, 2, 3, 4)
+                );
+                assert_eq!((expected_text.as_str(), new_text.as_str()), ("NEW", "OLD"));
+                assert_eq!(
+                    (summary.as_str(), actor.as_str(), session_id.as_str()),
+                    ("撤销:改", "dozer", "dozer-gui")
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn hang_up_is_unavailable_with_the_legacy_text() {
+        let sock = serve_once("eh-hangup", None);
+        let e =
+            EditHistoryService::list_file_edit_history(&Client::new(sock.clone()), 7, None, 200)
+                .await
+                .unwrap_err();
+        assert_eq!(
+            (e.kind, e.message.as_str()),
+            (ServiceErrorKind::Unavailable, "daemon 断开")
+        );
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn error_reply_is_rejected_with_the_legacy_prefix() {
+        let sock = serve_once(
+            "eh-reject",
+            Some(Reply::Error {
+                message: "boom".into(),
+            }),
+        );
+        let e = EditHistoryService::apply_precise_edit(&Client::new(sock.clone()), edit())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.kind, e.message.as_str()),
+            (ServiceErrorKind::Rejected, "daemon 错误: boom")
+        );
         let _ = std::fs::remove_file(&sock);
     }
 }
