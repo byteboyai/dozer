@@ -24,6 +24,8 @@ mod project;
 mod project_meta;
 mod runtime;
 mod secrets;
+#[cfg(test)]
+mod service_fakes;
 mod tabular;
 mod term;
 mod theme;

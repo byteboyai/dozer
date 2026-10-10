@@ -114,7 +114,9 @@ pub trait TodoService: Send + Sync {
 #[derive(Clone)]
 pub struct Services {
     pub usage: Arc<dyn UsageService>,
+    pub todo: Arc<dyn TodoService>,
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,9 +169,11 @@ mod tests {
     fn services_is_cloneable_and_shares_the_service() {
         let s = Services {
             usage: Arc::new(Mem(Ok(vec![]))),
+            todo: Arc::new(MemTodo(Ok(vec![]))),
         };
         let t = s.clone();
         assert!(Arc::ptr_eq(&s.usage, &t.usage));
+        assert!(Arc::ptr_eq(&s.todo, &t.todo));
     }
 
     // ---- TodoService 契约 ----
