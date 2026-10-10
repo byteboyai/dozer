@@ -5650,13 +5650,13 @@ impl App {
             filter.clone(),
             self.terminal_visible(),
         ));
-        let client = self.client.clone();
+        let edit_history = crate::panel_host::services_for(&self.client).edit_history;
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
         crate::extensions::edit_history::request_load(
             project_id,
             filter,
-            &client,
+            edit_history,
             &handle,
             move |m| {
                 let _ = proxy.send_event(Message::EditHistory(m));
@@ -5705,12 +5705,18 @@ impl App {
                 self.term_paste(terminal::TermTarget::Shared, text);
             }
             other => {
-                let client = self.client.clone();
+                let edit_history = crate::panel_host::services_for(&self.client).edit_history;
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
-                eh::update(&mut self.edit_history, other, &client, &handle, move |m| {
-                    let _ = proxy.send_event(Message::EditHistory(m));
-                });
+                eh::update(
+                    &mut self.edit_history,
+                    other,
+                    edit_history,
+                    &handle,
+                    move |m| {
+                        let _ = proxy.send_event(Message::EditHistory(m));
+                    },
+                );
             }
         }
     }

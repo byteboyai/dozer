@@ -5,8 +5,10 @@
 
 use byteui::interaction::icons;
 use dozer_model::{FileEditHistoryInfo, MutationOutcome};
+use dozer_services::{EditHistoryService, PreciseEdit};
 use iced_widget::core::{Alignment, Element, Length};
 use iced_widget::{button, column, container, row, scrollable, text};
+use std::sync::Arc;
 
 /// 列表栏宽与底部操作栏高。视图与宿主里的 diff 区几何计算共用这两个常量。
 pub const LIST_WIDTH: f32 = 300.0;
@@ -229,16 +231,15 @@ pub fn ask_agent_text(e: &FileEditHistoryInfo) -> String {
 pub fn request_load(
     project_id: i64,
     filter: Option<String>,
-    client: &dozer_client::Client,
+    service: Arc<dyn EditHistoryService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
-    let client = client.clone();
     handle.spawn(async move {
-        let result = client
-            .list_file_edit_history(project_id, filter.as_deref(), DEFAULT_LIMIT)
+        let result = service
+            .list_file_edit_history(project_id, filter.clone(), DEFAULT_LIMIT)
             .await
-            .map_err(|e| e.to_string());
+            .map_err(|e| e.message);
         emit(Message::Loaded {
             project_id,
             filter,
@@ -255,7 +256,7 @@ pub fn request_load(
 pub fn update(
     state: &mut Option<State>,
     msg: Message,
-    client: &dozer_client::Client,
+    service: Arc<dyn EditHistoryService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
@@ -263,27 +264,26 @@ pub fn update(
         Followup::None => {}
         Followup::Reload => {
             let Some(s) = state.as_ref() else { return };
-            request_load(s.project_id, s.filter.clone(), client, handle, emit);
+            request_load(s.project_id, s.filter.clone(), service, handle, emit);
         }
         Followup::Revert(e) => {
-            let client = client.clone();
             handle.spawn(async move {
-                let result = client
-                    .apply_precise_edit(
-                        e.project_id,
-                        &e.target_path,
-                        e.start_line,
-                        e.start_col,
-                        e.new_end_line,
-                        e.new_end_col,
-                        &e.new_text,
-                        &e.old_text,
-                        &format!("撤销:{}", e.summary),
-                        "dozer",
-                        "dozer-gui",
-                    )
+                let result = service
+                    .apply_precise_edit(PreciseEdit {
+                        project_id: e.project_id,
+                        path: e.target_path.clone(),
+                        start_line: e.start_line,
+                        start_col: e.start_col,
+                        end_line: e.new_end_line,
+                        end_col: e.new_end_col,
+                        expected_text: e.new_text.clone(),
+                        new_text: e.old_text.clone(),
+                        summary: format!("撤销:{}", e.summary),
+                        actor: "dozer".to_string(),
+                        session_id: "dozer-gui".to_string(),
+                    })
                     .await
-                    .map_err(|err| err.to_string());
+                    .map_err(|err| err.message);
                 emit(Message::RevertDone { id: e.id, result });
             });
         }
@@ -491,6 +491,10 @@ fn detail_view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_r
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::panel_host::testing::{TIMEOUT, runtime};
+    use crate::service_fakes::FakeEditHistory;
+    use dozer_services::{PreciseEdit, ServiceErrorKind};
+    use std::sync::mpsc;
 
     fn info(id: i64, path: &str) -> FileEditHistoryInfo {
         FileEditHistoryInfo {
@@ -744,5 +748,181 @@ mod tests {
             ),
             Followup::None
         );
+    }
+
+    fn collect() -> (impl Fn(Message) + Send + 'static, mpsc::Receiver<Message>) {
+        let (tx, rx) = mpsc::channel();
+        (
+            move |m| {
+                let _ = tx.send(m);
+            },
+            rx,
+        )
+    }
+
+    /// 已加载出一条记录(坐标故意互不相同,用来核对撤销的字段映射)并选中它的弹窗状态。
+    fn loaded_state() -> Option<State> {
+        let mut e = info(5, "src/a.rs");
+        e.start_line = 10;
+        e.start_col = 11;
+        e.end_line = 12;
+        e.end_col = 13;
+        e.new_end_line = 20;
+        e.new_end_col = 21;
+        e.old_text = "OLD".into();
+        e.new_text = "NEW".into();
+        e.summary = "改了".into();
+        let mut s = open(None);
+        apply(
+            &mut s,
+            Message::Loaded {
+                project_id: 1,
+                filter: None,
+                result: Ok(vec![e]),
+            },
+        );
+        s
+    }
+
+    #[test]
+    fn request_load_passes_the_filter_and_default_limit_to_the_service() {
+        let rt = runtime();
+        let fake = FakeEditHistory::default().with_entries(vec![info(1, "src/a.rs")]);
+        let (emit, rx) = collect();
+        request_load(
+            1,
+            Some("src/a.rs".into()),
+            fake.clone().into_services().edit_history,
+            rt.handle(),
+            emit,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::Loaded {
+                project_id: 1,
+                filter,
+                result: Ok(v),
+            } => {
+                assert_eq!(filter.as_deref(), Some("src/a.rs"));
+                assert_eq!(v.len(), 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(
+            fake.list_calls(),
+            vec![(1, Some("src/a.rs".to_string()), DEFAULT_LIMIT)]
+        );
+        assert_eq!(DEFAULT_LIMIT, 200);
+    }
+
+    #[test]
+    fn a_failed_load_carries_the_service_text_unchanged() {
+        let rt = runtime();
+        let fake = FakeEditHistory::default()
+            .with_list_error(ServiceErrorKind::Rejected, "daemon 错误: boom");
+        let (emit, rx) = collect();
+        request_load(
+            1,
+            None,
+            fake.into_services().edit_history,
+            rt.handle(),
+            emit,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::Loaded {
+                result: Err(text), ..
+            } => assert_eq!(text, "daemon 错误: boom"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn revert_sends_the_inverse_edit_with_the_exact_field_mapping() {
+        let rt = runtime();
+        let fake = FakeEditHistory::default();
+        let mut state = loaded_state();
+        let (emit, rx) = collect();
+        update(
+            &mut state,
+            Message::Revert(5),
+            fake.clone().into_services().edit_history,
+            rt.handle(),
+            emit,
+        );
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::RevertDone {
+                id: 5,
+                result: Ok(_)
+            }
+        ));
+        assert_eq!(
+            fake.edits(),
+            vec![PreciseEdit {
+                project_id: 1,
+                path: "src/a.rs".into(),
+                start_line: 10,
+                start_col: 11,
+                end_line: 20, // 结束坐标取修改后的 new_end_*
+                end_col: 21,
+                expected_text: "NEW".into(), // 对调:expected = 该条 new_text
+                new_text: "OLD".into(),      // new = 该条 old_text
+                summary: "撤销:改了".into(),
+                actor: "dozer".into(),
+                session_id: "dozer-gui".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_failed_revert_carries_the_service_text_unchanged() {
+        let rt = runtime();
+        let fake = FakeEditHistory::default()
+            .with_edit_error(ServiceErrorKind::Unavailable, "daemon 断开");
+        let mut state = loaded_state();
+        let (emit, rx) = collect();
+        update(
+            &mut state,
+            Message::Revert(5),
+            fake.into_services().edit_history,
+            rt.handle(),
+            emit,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::RevertDone {
+                id: 5,
+                result: Err(text),
+            } => assert_eq!(text, "daemon 断开"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_successful_revert_reloads_the_list() {
+        let rt = runtime();
+        let fake = FakeEditHistory::default();
+        let mut state = loaded_state();
+        let (emit, rx) = collect();
+        let applied = MutationOutcome::Applied {
+            new_start_line: 1,
+            new_start_col: 1,
+            new_end_line: 1,
+            new_end_col: 1,
+            history_id: 9,
+        };
+        update(
+            &mut state,
+            Message::RevertDone {
+                id: 5,
+                result: Ok(applied),
+            },
+            fake.clone().into_services().edit_history,
+            rt.handle(),
+            emit,
+        );
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::Loaded { .. }
+        ));
+        assert_eq!(fake.list_calls().len(), 1, "撤销成功后应重新加载一次");
     }
 }

@@ -111,3 +111,11 @@
 **后续项(未修):**
 - `Loaded` 没有代数保护(慢的旧结果可能覆盖新结果)。
 - 剩余直接使用 `Client` 的面板:`browser`、`edit_history`、`settings`、`project_create`。
+
+## EditHistory 迁移(2026-10-11)
+
+`extensions/edit_history.rs`(Agent 修改历史弹窗)已经 `EditHistoryService`(`dozer-services`)取数与撤销;`R-CLIENT` 基线中 `edit_history.rs` 已清零。`apply_precise_edit` 的 11 个位置参数在接缝上收成 `PreciseEdit` 结构体(`Client::apply_precise_edit` 的 inherent 签名不变,`dozer-mcp` 不受影响);`Client` 层有"捕获请求行"测试证明字段不错位。用户可见行为零变化(加载失败显示在弹窗、撤销失败进 `RevertStatus::Failed`)。规格 `docs/superpowers/specs/2026-10-11-edit-history-services-design.md`。
+
+**后续项(未修):**
+- `Loaded` 靠 `project_id`/`filter` 比对丢弃过期结果(没有代数,但已有等价保护)。
+- 剩余直接使用 `Client` 的面板:`browser`、`settings`、`project_create`。

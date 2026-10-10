@@ -1,13 +1,14 @@
 //! 进程内服务假实现(只在测试里):不起 UDS,返回固定结果并记录调用。
 use dozer_model::{
     AgentKind, CategoryInfo, CategoryMoveDirection, CodeHealthReportInfo, ContextItemInfo,
-    ConversationSummary, GroupAuthor, GroupCancelScope, GroupInfo, GroupMessageInfo, MemoryDetail,
-    MemoryInfo, ProjectInfo, SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus,
+    ConversationSummary, FileEditHistoryInfo, GroupAuthor, GroupCancelScope, GroupInfo,
+    GroupMessageInfo, MemoryDetail, MemoryInfo, MutationOutcome, ProjectInfo,
+    SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus,
 };
 use dozer_services::{
     BoxFuture, CodeHealthService, ContextService, ConversationRows, ConversationService,
-    GroupChatService, MemoryService, PostedMessages, ProjectService, ServiceError,
-    ServiceErrorKind, Services, TodoService,
+    EditHistoryService, GroupChatService, MemoryService, PostedMessages, PreciseEdit,
+    ProjectService, ServiceError, ServiceErrorKind, Services, TodoService,
 };
 use std::sync::{Arc, Mutex};
 
@@ -189,6 +190,7 @@ pub(crate) fn base_services() -> Services {
         conversation: Arc::new(FakeConversation::default()),
         codehealth: Arc::new(FakeCodeHealth::default()),
         context: Arc::new(FakeContext::default()),
+        edit_history: Arc::new(FakeEditHistory::default()),
     }
 }
 
@@ -961,6 +963,100 @@ impl ContextService for FakeContext {
         let r = match &s.write_error {
             Some(e) => Err(e.clone()),
             None => Ok(()),
+        };
+        Box::pin(async move { r })
+    }
+}
+
+// ---- FakeEditHistory ----
+
+struct EditHistoryState {
+    entries: Vec<FileEditHistoryInfo>,
+    list_error: Option<ServiceError>,
+    outcome: MutationOutcome,
+    edit_error: Option<ServiceError>,
+    list_calls: Vec<(i64, Option<String>, u32)>,
+    edits: Vec<PreciseEdit>,
+}
+
+/// 克隆共享同一份状态。`Default` = 全部成功(list → `Ok(vec![])`、apply → `Ok(Applied{全 0})`)。
+#[derive(Clone)]
+pub(crate) struct FakeEditHistory {
+    state: Arc<Mutex<EditHistoryState>>,
+}
+
+impl Default for FakeEditHistory {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(EditHistoryState {
+                entries: vec![],
+                list_error: None,
+                outcome: MutationOutcome::Applied {
+                    new_start_line: 0,
+                    new_start_col: 0,
+                    new_end_line: 0,
+                    new_end_col: 0,
+                    history_id: 0,
+                },
+                edit_error: None,
+                list_calls: vec![],
+                edits: vec![],
+            })),
+        }
+    }
+}
+
+impl FakeEditHistory {
+    pub(crate) fn with_entries(self, entries: Vec<FileEditHistoryInfo>) -> Self {
+        self.state.lock().unwrap().entries = entries;
+        self
+    }
+    pub(crate) fn with_list_error(self, kind: ServiceErrorKind, message: &str) -> Self {
+        self.state.lock().unwrap().list_error = Some(ServiceError::new(kind, message));
+        self
+    }
+    pub(crate) fn with_edit_error(self, kind: ServiceErrorKind, message: &str) -> Self {
+        self.state.lock().unwrap().edit_error = Some(ServiceError::new(kind, message));
+        self
+    }
+    pub(crate) fn list_calls(&self) -> Vec<(i64, Option<String>, u32)> {
+        self.state.lock().unwrap().list_calls.clone()
+    }
+    pub(crate) fn edits(&self) -> Vec<PreciseEdit> {
+        self.state.lock().unwrap().edits.clone()
+    }
+    pub(crate) fn into_services(self) -> Services {
+        Services {
+            edit_history: Arc::new(self),
+            ..base_services()
+        }
+    }
+}
+
+impl EditHistoryService for FakeEditHistory {
+    fn list_file_edit_history(
+        &self,
+        project_id: i64,
+        path_filter: Option<String>,
+        limit: u32,
+    ) -> BoxFuture<'_, Result<Vec<FileEditHistoryInfo>, ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.list_calls.push((project_id, path_filter, limit));
+        let r = match &s.list_error {
+            Some(e) => Err(e.clone()),
+            None => Ok(s.entries.clone()),
+        };
+        Box::pin(async move { r })
+    }
+    fn apply_precise_edit(
+        &self,
+        edit: PreciseEdit,
+    ) -> BoxFuture<'_, Result<MutationOutcome, ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.edits.push(edit);
+        let r = match &s.edit_error {
+            Some(e) => Err(e.clone()),
+            None => Ok(s.outcome.clone()),
         };
         Box::pin(async move { r })
     }
