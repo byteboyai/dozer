@@ -9,8 +9,8 @@ use dozer_core::protocol::{
     SessionSummaryPayload, TodoInfo, TurnRecord, UsagePayload, decode_line, encode_line,
 };
 use dozer_services::{
-    BoxFuture, MemoryService, ProjectService, ServiceError, ServiceErrorKind, TodoService,
-    UsageRows, UsageService,
+    BoxFuture, GroupChatService, MemoryService, ProjectService, ServiceError, ServiceErrorKind,
+    TodoService, UsageRows, UsageService,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -1883,6 +1883,128 @@ impl ProjectService for Client {
     }
 }
 
+impl GroupChatService for Client {
+    fn list_groups(
+        &self,
+        project_id: i64,
+    ) -> BoxFuture<'_, Result<Vec<dozer_core::protocol::GroupInfo>, ServiceError>> {
+        Box::pin(async move {
+            Client::list_groups(self, project_id)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn list_group_messages(
+        &self,
+        group_id: i64,
+        after_rev: i64,
+        limit: u32,
+    ) -> BoxFuture<'_, Result<(Vec<dozer_core::protocol::GroupMessageInfo>, i64), ServiceError>>
+    {
+        Box::pin(async move {
+            Client::list_group_messages(self, group_id, after_rev, limit)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn create_group(
+        &self,
+        project_id: i64,
+        topic: String,
+    ) -> BoxFuture<'_, Result<dozer_core::protocol::GroupInfo, ServiceError>> {
+        Box::pin(async move {
+            Client::create_group(self, project_id, &topic)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn delete_group(&self, group_id: i64) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            Client::delete_group(self, group_id)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn add_group_member(
+        &self,
+        group_id: i64,
+        agent: dozer_core::protocol::AgentKind,
+        handle: String,
+        role_prompt: String,
+    ) -> BoxFuture<'_, Result<dozer_core::protocol::GroupInfo, ServiceError>> {
+        Box::pin(async move {
+            Client::add_group_member(self, group_id, agent, &handle, &role_prompt)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn update_group_member(
+        &self,
+        member_id: i64,
+        handle: String,
+        role_prompt: String,
+    ) -> BoxFuture<'_, Result<dozer_core::protocol::GroupInfo, ServiceError>> {
+        Box::pin(async move {
+            Client::update_group_member(self, member_id, &handle, &role_prompt)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn remove_group_member(
+        &self,
+        member_id: i64,
+    ) -> BoxFuture<'_, Result<dozer_core::protocol::GroupInfo, ServiceError>> {
+        Box::pin(async move {
+            Client::remove_group_member(self, member_id)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn post_group_message(
+        &self,
+        group_id: i64,
+        text: String,
+    ) -> BoxFuture<'_, Result<dozer_services::PostedMessages, ServiceError>> {
+        Box::pin(async move {
+            Client::post_group_message(self, group_id, &text)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn cancel_group(
+        &self,
+        group_id: i64,
+        scope: dozer_core::protocol::GroupCancelScope,
+    ) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            Client::cancel_group(self, group_id, scope)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn retry_group_message(
+        &self,
+        message_id: i64,
+    ) -> BoxFuture<'_, Result<dozer_core::protocol::GroupMessageInfo, ServiceError>> {
+        Box::pin(async move {
+            Client::retry_group_message(self, message_id)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn push_group_message_to_todo(
+        &self,
+        message_id: i64,
+        text: String,
+    ) -> BoxFuture<'_, Result<dozer_core::protocol::TodoInfo, ServiceError>> {
+        Box::pin(async move {
+            Client::push_group_message_to_todo(self, message_id, &text)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+}
+
 #[cfg(test)]
 mod service_error_tests {
     use super::*;
@@ -2060,6 +2182,75 @@ mod project_service_tests {
             (e.kind, e.message.as_str()),
             (ServiceErrorKind::Rejected, "daemon 错误: boom")
         );
+        let _ = std::fs::remove_file(&sock);
+    }
+}
+
+#[cfg(test)]
+mod group_chat_service_tests {
+    use super::todo_service_tests::serve_once;
+    use super::*;
+    use dozer_services::{GroupChatService, ServiceErrorKind};
+
+    #[tokio::test]
+    async fn list_groups_comes_back_as_ok() {
+        let sock = serve_once("gc-list", Some(Reply::Groups { groups: vec![] }));
+        let got = GroupChatService::list_groups(&Client::new(sock.clone()), 7).await;
+        assert_eq!(got, Ok(vec![]));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn a_unit_write_returns_unit_on_success() {
+        let sock = serve_once("gc-delete", Some(Reply::Ok));
+        let got = GroupChatService::delete_group(&Client::new(sock.clone()), 3).await;
+        assert_eq!(got, Ok(()));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn hang_up_is_unavailable_with_the_legacy_text() {
+        let sock = serve_once("gc-hangup", None);
+        let e = GroupChatService::list_groups(&Client::new(sock.clone()), 7)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.kind, e.message.as_str()),
+            (ServiceErrorKind::Unavailable, "daemon 断开")
+        );
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn error_reply_is_rejected_with_the_legacy_prefix() {
+        let sock = serve_once(
+            "gc-reject",
+            Some(Reply::Error {
+                message: "boom".into(),
+            }),
+        );
+        let e = GroupChatService::delete_group(&Client::new(sock.clone()), 3)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.kind, e.message.as_str()),
+            (ServiceErrorKind::Rejected, "daemon 错误: boom")
+        );
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn a_tuple_result_is_carried_back_unchanged() {
+        let sock = serve_once(
+            "gc-msgs",
+            Some(Reply::GroupMessages {
+                messages: vec![],
+                latest_rev: 42,
+            }),
+        );
+        let got =
+            GroupChatService::list_group_messages(&Client::new(sock.clone()), 5, 3, 200).await;
+        assert_eq!(got, Ok((vec![], 42)));
         let _ = std::fs::remove_file(&sock);
     }
 }
