@@ -224,6 +224,7 @@ pub struct Services {
     pub todo: Arc<dyn TodoService>,
     pub project: Arc<dyn ProjectService>,
     pub memory: Arc<dyn MemoryService>,
+    pub group_chat: Arc<dyn GroupChatService>,
 }
 
 #[cfg(test)]
@@ -281,12 +282,14 @@ mod tests {
             todo: Arc::new(MemTodo(Ok(vec![]))),
             project: Arc::new(MemProject),
             memory: Arc::new(MemMemory(Ok(vec![]))),
+            group_chat: Arc::new(MemGroupChat(Ok(vec![]))),
         };
         let t = s.clone();
         assert!(Arc::ptr_eq(&s.usage, &t.usage));
         assert!(Arc::ptr_eq(&s.todo, &t.todo));
         assert!(Arc::ptr_eq(&s.project, &t.project));
         assert!(Arc::ptr_eq(&s.memory, &t.memory));
+        assert!(Arc::ptr_eq(&s.group_chat, &t.group_chat));
     }
 
     // ---- TodoService 契约 ----
