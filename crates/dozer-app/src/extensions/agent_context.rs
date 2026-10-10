@@ -7,8 +7,10 @@ use std::path::PathBuf;
 
 use byteui::interaction::icons;
 use dozer_model::ContextItemInfo;
+use dozer_services::ContextService;
 use iced_widget::core::{Alignment, Element, Length};
 use iced_widget::{button, column, container, row, scrollable, text};
+use std::sync::Arc;
 
 dozer_core::scope!(pub(crate) LOG, panel, "agent");
 
@@ -129,14 +131,13 @@ pub fn apply(state: &mut State, msg: Message) -> Followup {
 pub fn request_refresh(
     project_id: i64,
     root: PathBuf,
-    client: &dozer_client::Client,
+    service: Arc<dyn ContextService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
-    let client = client.clone();
     handle.spawn(async move {
-        let res = match client.list_context_items(project_id).await {
-            Err(e) => Err(e.to_string()),
+        let res = match service.list_context_items(project_id).await {
+            Err(e) => Err(e.message),
             Ok(items) => tokio::task::spawn_blocking(move || {
                 items
                     .into_iter()
@@ -158,17 +159,16 @@ pub fn request_add(
     project_id: i64,
     is_dir: bool,
     relative: String,
-    client: &dozer_client::Client,
+    service: Arc<dyn ContextService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
-    let client = client.clone();
     let kind = if is_dir { "dir" } else { "file" };
     handle.spawn(async move {
-        let res = client
-            .add_context_item(project_id, kind, &relative)
+        let res = service
+            .add_context_item(project_id, kind.to_string(), relative)
             .await
-            .map_err(|e| e.to_string());
+            .map_err(|e| e.message);
         emit(Message::Added(res));
     });
 }
@@ -181,20 +181,19 @@ pub fn update(
     project_id: i64,
     root: PathBuf,
     msg: Message,
-    client: &dozer_client::Client,
+    service: Arc<dyn ContextService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Clone + Send + 'static,
 ) {
     match apply(state, msg) {
         Followup::None => {}
-        Followup::Refresh => request_refresh(project_id, root, client, handle, emit),
+        Followup::Refresh => request_refresh(project_id, root, service, handle, emit),
         Followup::RemoveItem(id) => {
-            let client = client.clone();
             handle.spawn(async move {
-                let res = client
+                let res = service
                     .remove_context_item(project_id, id)
                     .await
-                    .map_err(|e| e.to_string());
+                    .map_err(|e| e.message);
                 emit(Message::Removed(res));
             });
         }
@@ -323,6 +322,10 @@ pub fn expanded_panel(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::panel_host::testing::{TIMEOUT, runtime};
+    use crate::service_fakes::FakeContext;
+    use dozer_services::ServiceErrorKind;
+    use std::sync::mpsc;
 
     fn entry(id: i64, r: &str, missing: bool) -> ContextEntry {
         ContextEntry {
@@ -428,5 +431,184 @@ mod tests {
             strip_reserved_height() > STRIP_HEIGHT,
             "必须包含 column 间距"
         );
+    }
+
+    fn collect() -> (
+        impl Fn(Message) + Clone + Send + 'static,
+        mpsc::Receiver<Message>,
+    ) {
+        let (tx, rx) = mpsc::channel();
+        (
+            move |m| {
+                let _ = tx.send(m);
+            },
+            rx,
+        )
+    }
+
+    fn info(id: i64, entity_ref: &str) -> ContextItemInfo {
+        ContextItemInfo {
+            id,
+            project_id: 7,
+            entity_kind: "file".into(),
+            entity_ref: entity_ref.into(),
+            created_ms: 0,
+        }
+    }
+
+    #[test]
+    fn refresh_marks_entries_missing_when_the_path_is_gone() {
+        let rt = runtime();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("here.txt"), "x").unwrap();
+        let fake =
+            FakeContext::default().with_items(vec![info(1, "here.txt"), info(2, "gone.txt")]);
+        let (emit, rx) = collect();
+        request_refresh(
+            7,
+            dir.path().to_path_buf(),
+            fake.clone().into_services().context,
+            rt.handle(),
+            emit,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::Loaded(Ok(entries)) => {
+                assert_eq!(entries.len(), 2);
+                assert!(!entries[0].missing, "存在的文件不算缺失");
+                assert!(entries[1].missing, "不存在的路径算缺失");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(fake.calls(), vec!["list_context_items(7)".to_string()]);
+    }
+
+    #[test]
+    fn a_failed_refresh_carries_the_service_text_unchanged() {
+        let rt = runtime();
+        let fake =
+            FakeContext::default().with_list_error(ServiceErrorKind::Rejected, "daemon 错误: boom");
+        let (emit, rx) = collect();
+        request_refresh(
+            7,
+            std::env::temp_dir(),
+            fake.into_services().context,
+            rt.handle(),
+            emit,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::Loaded(Err(text)) => assert_eq!(text, "daemon 错误: boom"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn add_passes_the_kind_and_relative_path_through() {
+        let rt = runtime();
+        for (is_dir, kind) in [(false, "file"), (true, "dir")] {
+            let fake = FakeContext::default();
+            let (emit, rx) = collect();
+            request_add(
+                7,
+                is_dir,
+                "src/a".into(),
+                fake.clone().into_services().context,
+                rt.handle(),
+                emit,
+            );
+            match rx.recv_timeout(TIMEOUT).unwrap() {
+                Message::Added(Ok(item)) => assert_eq!(item.id, 77),
+                other => panic!("unexpected: {other:?}"),
+            }
+            assert_eq!(
+                fake.calls(),
+                vec![format!("add_context_item(7,{kind},src/a)")]
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_add_carries_the_service_text_unchanged() {
+        let rt = runtime();
+        let fake =
+            FakeContext::default().with_write_error(ServiceErrorKind::Unavailable, "daemon 断开");
+        let (emit, rx) = collect();
+        request_add(
+            7,
+            false,
+            "a".into(),
+            fake.into_services().context,
+            rt.handle(),
+            emit,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::Added(Err(text)) => assert_eq!(text, "daemon 断开"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn update_remove_calls_the_service_and_reports_removed() {
+        let rt = runtime();
+        let fake = FakeContext::default();
+        let mut state = State::default();
+        let (emit, rx) = collect();
+        update(
+            &mut state,
+            7,
+            std::env::temp_dir(),
+            Message::Remove(3),
+            fake.clone().into_services().context,
+            rt.handle(),
+            emit,
+        );
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::Removed(Ok(()))
+        ));
+        assert_eq!(fake.calls(), vec!["remove_context_item(7,3)".to_string()]);
+    }
+
+    #[test]
+    fn update_failed_remove_carries_the_service_text_unchanged() {
+        let rt = runtime();
+        let fake = FakeContext::default()
+            .with_write_error(ServiceErrorKind::Rejected, "daemon 错误: nope");
+        let mut state = State::default();
+        let (emit, rx) = collect();
+        update(
+            &mut state,
+            7,
+            std::env::temp_dir(),
+            Message::Remove(3),
+            fake.into_services().context,
+            rt.handle(),
+            emit,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::Removed(Err(text)) => assert_eq!(text, "daemon 错误: nope"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn update_refresh_followup_lists_from_the_service() {
+        let rt = runtime();
+        let fake = FakeContext::default();
+        let mut state = State::default();
+        let (emit, rx) = collect();
+        update(
+            &mut state,
+            7,
+            std::env::temp_dir(),
+            Message::Removed(Ok(())),
+            fake.clone().into_services().context,
+            rt.handle(),
+            emit,
+        );
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::Loaded(Ok(_))
+        ));
+        assert_eq!(fake.calls(), vec!["list_context_items(7)".to_string()]);
     }
 }

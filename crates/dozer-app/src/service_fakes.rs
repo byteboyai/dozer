@@ -886,12 +886,10 @@ struct ContextState {
 
 /// 克隆共享同一份状态。`Default` = 全部成功、列表为空。
 #[derive(Clone, Default)]
-#[allow(dead_code)] // Task 4 起被上下文条测试使用,届时去掉。
 pub(crate) struct FakeContext {
     state: Arc<Mutex<ContextState>>,
 }
 
-#[allow(dead_code)] // Task 4 起被使用,届时去掉。
 impl FakeContext {
     pub(crate) fn with_items(self, items: Vec<ContextItemInfo>) -> Self {
         self.state.lock().unwrap().items = items;
