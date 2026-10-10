@@ -1,6 +1,8 @@
 //! 项目面板的 update 消息分发 + scaffold 运行/repair/名称提交的异步 spawn。
 
 use super::*;
+use dozer_services::{MemoryService, ProjectService, ServiceErrorKind, Services};
+use std::sync::Arc;
 
 dozer_core::scope!(LOG, panel, "project");
 
@@ -14,7 +16,7 @@ pub fn update(
     project_id: i64,
     current_name: &str,
     repo_path: &std::path::Path,
-    client: &dozer_client::Client,
+    services: &Services,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
@@ -45,7 +47,7 @@ pub fn update(
                 ws_state,
                 project_id,
                 current_name,
-                client.clone(),
+                services.project.clone(),
                 handle,
                 emit,
             );
@@ -147,7 +149,7 @@ pub fn update(
             spawn_repair_run(
                 repo_path.to_path_buf(),
                 project_id,
-                client.clone(),
+                services.project.clone(),
                 handle,
                 emit,
             );
@@ -252,20 +254,20 @@ pub fn update(
             let Some(draft) = ws_state.memory_create_draft.take() else {
                 return;
             };
-            let client = client.clone();
+            let memory = services.memory.clone();
             handle.spawn(async move {
-                let res = client
+                let res = memory
                     .write_memory(
                         project_id,
-                        &draft.title,
-                        &draft.kind,
-                        &draft.description,
-                        &draft.body,
-                        "user",
+                        draft.title,
+                        draft.kind,
+                        draft.description,
+                        draft.body,
+                        "user".to_string(),
                     )
                     .await
                     .map(|_| ())
-                    .map_err(|e| e.to_string());
+                    .map_err(|e| e.message);
                 emit(Message::MemoryMutated(res));
             });
         }
@@ -275,20 +277,37 @@ pub fn update(
             } else {
                 ws_state.error = None;
             }
-            let client = client.clone();
-            handle.spawn(async move {
-                let memories = client.list_memories(project_id).await.unwrap_or_default();
-                emit(Message::MemoriesLoaded(memories));
-            });
+            request_memories_refresh(project_id, &services.memory, handle, emit);
+        }
+        Message::MemoriesLoadFailed(kind, message) => {
+            if kind == ServiceErrorKind::Unavailable {
+                dozer_core::log_debug!(LOG, "记忆列表读取失败(dozerd 不可用): {message}");
+            } else {
+                let now = std::time::Instant::now();
+                let repeat = matches!(
+                    &ws_state.last_load_failure,
+                    Some((last, at)) if *last == message
+                        && now.duration_since(*at) < LOAD_FAILURE_TOAST_COOLDOWN
+                );
+                if !repeat {
+                    ws_state.outbox.push_keyed(
+                        LOG,
+                        crate::extensions::toast::Level::Error,
+                        format!("记忆加载失败: {message}"),
+                        "project-memories-load",
+                    );
+                    ws_state.last_load_failure = Some((message, now));
+                }
+            }
         }
         Message::MemoryDetailOpen(id) => {
             ws_state.memory_detail = None;
             ws_state.memory_edit_draft = None;
-            let client = client.clone();
+            let memory = services.memory.clone();
             handle.spawn(async move {
                 // 先 await 再调用 `emit`:`emit` 是 `Fn + Send`(非 `Sync`),
                 // 写成 `emit(f(x.await))` 会让 `&emit` 横跨 await,future 就不是 `Send` 了。
-                let res = client.get_memory(project_id, id).await;
+                let res = memory.get_memory(project_id, id).await;
                 emit(memory_detail_message(res));
             });
         }
@@ -340,16 +359,16 @@ pub fn update(
             let Some(draft) = ws_state.memory_edit_draft.take() else {
                 return;
             };
-            let client = client.clone();
+            let memory = services.memory.clone();
             handle.spawn(async move {
-                match client
+                match memory
                     .write_memory(
                         project_id,
-                        &draft.title,
-                        &draft.kind,
-                        &draft.description,
-                        &draft.body,
-                        "user",
+                        draft.title,
+                        draft.kind,
+                        draft.description,
+                        draft.body,
+                        "user".to_string(),
                     )
                     .await
                 {
@@ -357,11 +376,11 @@ pub fn update(
                         // 编辑成功后重拉详情(带历史),覆盖 `MemoryMutated`
                         // 只刷新列表的局限——否则详情面板会停在编辑前的内容,
                         // 必须退回列表再点进去才看得到新值。
-                        let fresh = client.get_memory(project_id, detail.id).await;
+                        let fresh = memory.get_memory(project_id, detail.id).await;
                         emit(memory_detail_message(fresh));
                         emit(Message::MemoryMutated(Ok(())));
                     }
-                    Err(e) => emit(Message::MemoryMutated(Err(e.to_string()))),
+                    Err(e) => emit(Message::MemoryMutated(Err(e.message))),
                 }
             });
         }
@@ -376,12 +395,12 @@ pub fn update(
                 return;
             };
             ws_state.memory_detail = None;
-            let client = client.clone();
+            let memory = services.memory.clone();
             handle.spawn(async move {
-                let res = client
-                    .delete_memory(project_id, id, "user")
+                let res = memory
+                    .delete_memory(project_id, id, "user".to_string())
                     .await
-                    .map_err(|e| e.to_string());
+                    .map_err(|e| e.message);
                 emit(Message::MemoryMutated(res));
             });
         }
@@ -396,7 +415,7 @@ pub fn update(
 /// 2026-08-28,避免每次静默打开项目都真实拉起 agent 进程)。
 pub fn spawn_scaffold_run(
     repo_path: std::path::PathBuf,
-    client: dozer_client::Client,
+    project: Arc<dyn ProjectService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
     skip_git_init: bool,
@@ -408,7 +427,9 @@ pub fn spawn_scaffold_run(
             scaffold::run_sync_steps(&repo_path2, skip_git_init)
         })
         .await;
-        let _ = client.backfill_project_transcripts(&cwd).await;
+        if let Err(e) = project.backfill_project_transcripts(cwd.clone()).await {
+            dozer_core::log_warn!(LOG, error = %e, "补录转录失败");
+        }
         emit(Message::ScaffoldDone);
     });
 }
@@ -418,14 +439,16 @@ pub fn spawn_scaffold_run(
 /// 时机);之后的刷新走 `Message::MemoryMutated` 分支。
 pub fn request_memories_refresh(
     project_id: i64,
-    client: &dozer_client::Client,
+    memory: &Arc<dyn MemoryService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
-    let client = client.clone();
+    let memory = memory.clone();
     handle.spawn(async move {
-        let memories = client.list_memories(project_id).await.unwrap_or_default();
-        emit(Message::MemoriesLoaded(memories));
+        match memory.list_memories(project_id).await {
+            Ok(memories) => emit(Message::MemoriesLoaded(memories)),
+            Err(e) => emit(Message::MemoriesLoadFailed(e.kind, e.message)),
+        }
     });
 }
 
@@ -433,13 +456,17 @@ pub fn request_memories_refresh(
 pub fn on_activate(ctx: &crate::panel_host::ActivationCtx<Message>) {
     request_memories_refresh(
         ctx.project_id,
-        ctx.io.client(),
+        &ctx.io.services().memory,
         ctx.io.handle(),
         ctx.io.emitter(),
     );
 }
 
-const SUMMARY_BACKFILL_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+const SUMMARY_BACKFILL_POLL_INTERVAL: std::time::Duration = if cfg!(test) {
+    std::time::Duration::from_millis(5)
+} else {
+    std::time::Duration::from_secs(2)
+};
 
 /// "修复项目"按钮触发的完整跑法:4 个同步步骤逐个 Started/Finished、
 /// 转录历史补录 Started/Finished、再触发补总结并轮询进度,全部实时
@@ -450,7 +477,7 @@ const SUMMARY_BACKFILL_POLL_INTERVAL: std::time::Duration = std::time::Duration:
 pub fn spawn_repair_run(
     repo_path: std::path::PathBuf,
     project_id: i64,
-    client: dozer_client::Client,
+    project: Arc<dyn ProjectService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
@@ -467,10 +494,10 @@ pub fn spawn_repair_run(
         }
 
         emit(Message::TranscriptBackfillStarted(project_id));
-        let backfill_result = match client.backfill_project_transcripts(&cwd).await {
+        let backfill_result = match project.backfill_project_transcripts(cwd.clone()).await {
             Ok(0) => scaffold::ScaffoldStepResult::AlreadyOk,
             Ok(n) => scaffold::ScaffoldStepResult::Created(format!("导入 {n} 个历史文件")),
-            Err(e) => scaffold::ScaffoldStepResult::Failed(e.to_string()),
+            Err(e) => scaffold::ScaffoldStepResult::Failed(e.message),
         };
         emit(Message::TranscriptBackfillFinished(
             project_id,
@@ -479,17 +506,17 @@ pub fn spawn_repair_run(
 
         // 总结步骤改用 V2 批次协议:提交批次 → 轮询批次状态,展示成功/失败/
         // 跳过计数,不再用旧 0/0 进度掩盖失败(spec 2026-09-26 A7)。
-        let (batch_id, _total) = match client.submit_summary_batch(&cwd, None, None).await {
+        let (batch_id, _total) = match project.submit_summary_batch(cwd.clone(), None, None).await {
             Ok(pair) => pair,
             Err(e) => {
                 dozer_core::log_warn!(LOG, error = %e, "提交总结批次失败");
-                emit(Message::SummaryBackfillFailed(project_id, e.to_string()));
+                emit(Message::SummaryBackfillFailed(project_id, e.message));
                 return;
             }
         };
         loop {
             tokio::time::sleep(SUMMARY_BACKFILL_POLL_INTERVAL).await;
-            match client.get_summary_batch(batch_id).await {
+            match project.get_summary_batch(batch_id).await {
                 Ok(Some(batch)) => {
                     let completed = batch
                         .total
@@ -517,7 +544,7 @@ pub fn spawn_repair_run(
                 }
                 Err(e) => {
                     dozer_core::log_warn!(LOG, error = %e, "查询总结批次失败,停止轮询");
-                    emit(Message::SummaryBackfillFailed(project_id, e.to_string()));
+                    emit(Message::SummaryBackfillFailed(project_id, e.message));
                     break;
                 }
             }
@@ -533,7 +560,7 @@ pub fn submit_name_edit(
     ws_state: &mut WorkspaceState,
     project_id: i64,
     current_name: &str,
-    client: dozer_client::Client,
+    project: Arc<dyn ProjectService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
@@ -545,10 +572,10 @@ pub fn submit_name_edit(
         return;
     }
     handle.spawn(async move {
-        let result = client
-            .rename_project(project_id, &name)
+        let result = project
+            .rename_project(project_id, name)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.message)
             .and_then(|opt| opt.ok_or_else(|| "项目不存在".to_string()));
         emit(Message::NameRenamed(project_id, result));
     });

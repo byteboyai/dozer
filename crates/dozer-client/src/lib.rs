@@ -9,7 +9,8 @@ use dozer_core::protocol::{
     SessionSummaryPayload, TodoInfo, TurnRecord, UsagePayload, decode_line, encode_line,
 };
 use dozer_services::{
-    BoxFuture, ServiceError, ServiceErrorKind, TodoService, UsageRows, UsageService,
+    BoxFuture, MemoryService, ProjectService, ServiceError, ServiceErrorKind, TodoService,
+    UsageRows, UsageService,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -1771,6 +1772,117 @@ impl TodoService for Client {
     }
 }
 
+impl MemoryService for Client {
+    fn list_memories(
+        &self,
+        project_id: i64,
+    ) -> BoxFuture<'_, Result<Vec<dozer_core::protocol::MemoryInfo>, ServiceError>> {
+        Box::pin(async move {
+            Client::list_memories(self, project_id)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn get_memory(
+        &self,
+        project_id: i64,
+        id: i64,
+    ) -> BoxFuture<'_, Result<dozer_core::protocol::MemoryDetail, ServiceError>> {
+        Box::pin(async move {
+            Client::get_memory(self, project_id, id)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn write_memory(
+        &self,
+        project_id: i64,
+        title: String,
+        kind: String,
+        description: String,
+        body: String,
+        actor: String,
+    ) -> BoxFuture<'_, Result<dozer_core::protocol::MemoryDetail, ServiceError>> {
+        Box::pin(async move {
+            Client::write_memory(self, project_id, &title, &kind, &description, &body, &actor)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn delete_memory(
+        &self,
+        project_id: i64,
+        id: i64,
+        actor: String,
+    ) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            Client::delete_memory(self, project_id, id, &actor)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+}
+
+impl ProjectService for Client {
+    fn rename_project(
+        &self,
+        id: i64,
+        name: String,
+    ) -> BoxFuture<'_, Result<Option<dozer_core::protocol::ProjectInfo>, ServiceError>> {
+        Box::pin(async move {
+            Client::rename_project(self, id, &name)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn remove_project(&self, id: i64) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            Client::remove_project(self, id)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn delete_project_transcripts(&self, cwd: String) -> BoxFuture<'_, Result<u32, ServiceError>> {
+        Box::pin(async move {
+            Client::delete_project_transcripts(self, &cwd)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn backfill_project_transcripts(
+        &self,
+        cwd: String,
+    ) -> BoxFuture<'_, Result<u32, ServiceError>> {
+        Box::pin(async move {
+            Client::backfill_project_transcripts(self, &cwd)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn submit_summary_batch(
+        &self,
+        cwd: String,
+        provider: Option<dozer_core::protocol::AgentKind>,
+        model: Option<String>,
+    ) -> BoxFuture<'_, Result<(i64, u32), ServiceError>> {
+        Box::pin(async move {
+            Client::submit_summary_batch(self, &cwd, provider, model.as_deref())
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn get_summary_batch(
+        &self,
+        batch_id: i64,
+    ) -> BoxFuture<'_, Result<Option<dozer_core::protocol::SummaryBatchInfo>, ServiceError>> {
+        Box::pin(async move {
+            Client::get_summary_batch(self, batch_id)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+}
+
 #[cfg(test)]
 mod service_error_tests {
     use super::*;
@@ -1811,7 +1923,7 @@ mod todo_service_tests {
     use super::*;
     use dozer_services::{ServiceErrorKind, TodoService};
 
-    fn temp_sock(tag: &str) -> PathBuf {
+    pub(super) fn temp_sock(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "dz-todo-svc-{tag}-{}.sock",
             std::time::SystemTime::now()
@@ -1822,7 +1934,7 @@ mod todo_service_tests {
     }
 
     /// 读一行请求后回 `reply`;`None` = 不应答直接挂断。
-    fn serve_once(tag: &str, reply: Option<Reply>) -> PathBuf {
+    pub(super) fn serve_once(tag: &str, reply: Option<Reply>) -> PathBuf {
         let sock = temp_sock(tag);
         let listener = tokio::net::UnixListener::bind(&sock).unwrap();
         tokio::spawn(async move {
@@ -1875,6 +1987,73 @@ mod todo_service_tests {
             }),
         );
         let e = TodoService::delete_category(&Client::new(sock.clone()), 3)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.kind, e.message.as_str()),
+            (ServiceErrorKind::Rejected, "daemon 错误: boom")
+        );
+        let _ = std::fs::remove_file(&sock);
+    }
+}
+
+#[cfg(test)]
+mod project_service_tests {
+    use super::todo_service_tests::serve_once;
+    use super::*;
+    use dozer_services::{MemoryService, ProjectService, ServiceErrorKind};
+
+    #[tokio::test]
+    async fn list_memories_comes_back_as_ok() {
+        let sock = serve_once("mem-list", Some(Reply::Memories { memories: vec![] }));
+        let got = MemoryService::list_memories(&Client::new(sock.clone()), 7).await;
+        assert_eq!(got, Ok(vec![]));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn a_unit_write_returns_unit_on_success() {
+        let sock = serve_once("proj-remove", Some(Reply::Ok));
+        let got = ProjectService::remove_project(&Client::new(sock.clone()), 3).await;
+        assert_eq!(got, Ok(()));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn a_count_is_carried_back_unchanged() {
+        let sock = serve_once(
+            "proj-backfill",
+            Some(Reply::BackfillDone { imported_files: 3 }),
+        );
+        let got =
+            ProjectService::backfill_project_transcripts(&Client::new(sock.clone()), "/p".into())
+                .await;
+        assert_eq!(got, Ok(3));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn hang_up_is_unavailable_with_the_legacy_text() {
+        let sock = serve_once("proj-hangup", None);
+        let e = MemoryService::list_memories(&Client::new(sock.clone()), 7)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.kind, e.message.as_str()),
+            (ServiceErrorKind::Unavailable, "daemon 断开")
+        );
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn error_reply_is_rejected_with_the_legacy_prefix() {
+        let sock = serve_once(
+            "proj-reject",
+            Some(Reply::Error {
+                message: "boom".into(),
+            }),
+        );
+        let e = ProjectService::remove_project(&Client::new(sock.clone()), 3)
             .await
             .unwrap_err();
         assert_eq!(

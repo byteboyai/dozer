@@ -22,6 +22,8 @@ pub(crate) fn services_for(client: &Client) -> Services {
     Services {
         usage: Arc::new(client.clone()),
         todo: Arc::new(client.clone()),
+        project: Arc::new(client.clone()),
+        memory: Arc::new(client.clone()),
     }
 }
 
@@ -467,6 +469,21 @@ mod tests {
         let (io, _rx) = recording_io(&rt);
         // recording_io 的 Client 指向不存在的 socket → Unavailable
         let e = rt.block_on(io.services().todo.list_todos(1)).unwrap_err();
+        assert_eq!(e.kind, dozer_services::ServiceErrorKind::Unavailable);
+    }
+
+    #[test]
+    fn default_services_route_project_and_memory_through_the_client_adapter() {
+        let rt = test_runtime();
+        let (io, _rx) = recording_io(&rt);
+        // recording_io 的 Client 指向不存在的 socket → Unavailable
+        let e = rt
+            .block_on(io.services().memory.list_memories(1))
+            .unwrap_err();
+        assert_eq!(e.kind, dozer_services::ServiceErrorKind::Unavailable);
+        let e = rt
+            .block_on(io.services().project.remove_project(1))
+            .unwrap_err();
         assert_eq!(e.kind, dozer_services::ServiceErrorKind::Unavailable);
     }
 

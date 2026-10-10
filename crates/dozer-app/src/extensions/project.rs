@@ -95,6 +95,10 @@ pub struct MemoryDraft {
     pub body: String,
 }
 
+/// 相同读失败文本再次提示的最短间隔。
+pub(crate) const LOAD_FAILURE_TOAST_COOLDOWN: std::time::Duration =
+    std::time::Duration::from_secs(60);
+
 /// 挂在每个 Workspace 上的项目信息面板状态。
 #[derive(Default)]
 pub struct WorkspaceState {
@@ -130,6 +134,10 @@ pub struct WorkspaceState {
     selected_link: Option<PathBuf>,
     /// 共享记忆列表(不含正文),`RequestMemoriesRefresh` 拉取后写入。
     memories: Vec<dozer_model::MemoryInfo>,
+    /// 待发提示;`App::drain_outboxes` 排空成 Toast。
+    pub(crate) outbox: crate::extensions::toast::Outbox,
+    /// 上一次已提示的读失败(文本 + 时刻),用于冷却去重。
+    pub(crate) last_load_failure: Option<(String, std::time::Instant)>,
     /// 新建记忆的表单草稿(`None` = 表单未打开)。
     memory_create_draft: Option<MemoryDraft>,
     /// 当前打开的记忆详情(`None` = 未打开详情面板)。
@@ -145,6 +153,15 @@ pub struct WorkspaceState {
 }
 
 impl WorkspaceState {
+    #[cfg(test)]
+    pub fn memories(&self) -> &[dozer_model::MemoryInfo] {
+        &self.memories
+    }
+
+    pub fn take_outbox(&mut self) -> Vec<crate::extensions::toast::Pending> {
+        self.outbox.take()
+    }
+
     /// 打开一个新项目时构造。`description`/`links` 由调用方在构造之前分别
     /// 调 `project_meta::load_description`/`links::load_or_discover` 拿到
     /// (同现有 `files::WorkspaceState::new(FileTree::new(..))` 那种"调用方
@@ -408,6 +425,9 @@ pub enum Message {
     ScaffoldPopupClose,
     /// 共享记忆列表拉取结果。
     MemoriesLoaded(Vec<dozer_model::MemoryInfo>),
+    /// 记忆列表读取失败:**不改任何列表**。`Unavailable` 静默(顶栏徽标已表达"dozerd 不可用");
+    /// 其余弹带 key 的 Error Toast,相同文本 60 秒内只提示一次(见 `last_load_failure`)。
+    MemoriesLoadFailed(dozer_services::ServiceErrorKind, String),
     /// 打开"新建记忆"表单。
     MemoryCreateStart,
     /// 新建表单四个字段的输入变化。
@@ -553,6 +573,9 @@ pub(crate) fn memory_detail_message<E: std::fmt::Display>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::service_fakes::{FakeMemory, FakeProject, batch};
+    use dozer_services::{ServiceError, ServiceErrorKind};
+    use std::sync::{Mutex, mpsc};
 
     fn new_ws() -> WorkspaceState {
         WorkspaceState::default()
@@ -564,8 +587,8 @@ mod tests {
         dir
     }
 
-    fn test_client() -> dozer_client::Client {
-        dozer_client::Client::new(std::path::PathBuf::from("/tmp/dozer-project-test.sock"))
+    fn test_services() -> dozer_services::Services {
+        crate::service_fakes::base_services()
     }
 
     #[test]
@@ -583,7 +606,7 @@ mod tests {
             1,
             "名字",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -602,7 +625,7 @@ mod tests {
             1,
             "名字",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -620,7 +643,7 @@ mod tests {
             1,
             "旧名字",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -637,7 +660,7 @@ mod tests {
             1,
             "同名",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -648,7 +671,7 @@ mod tests {
             1,
             "同名",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -675,7 +698,7 @@ mod tests {
             1,
             "旧名字",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -694,7 +717,7 @@ mod tests {
             1,
             "旧名字",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -730,7 +753,7 @@ mod tests {
             1,
             "名字",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -748,7 +771,7 @@ mod tests {
             1,
             "名字",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -770,7 +793,7 @@ mod tests {
             1,
             "名字",
             dir.path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -780,7 +803,7 @@ mod tests {
             1,
             "名字",
             dir.path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -790,7 +813,7 @@ mod tests {
             1,
             "名字",
             dir.path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -812,7 +835,7 @@ mod tests {
             1,
             "名字",
             dir.path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -823,7 +846,7 @@ mod tests {
             1,
             "名字",
             dir.path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -847,7 +870,7 @@ mod tests {
             1,
             "名字",
             repo.path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -875,7 +898,7 @@ mod tests {
             1,
             "名字",
             repo.path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -901,7 +924,7 @@ mod tests {
             1,
             "名字",
             repo.path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -926,7 +949,7 @@ mod tests {
             1,
             "名字",
             repo.path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -943,7 +966,7 @@ mod tests {
             1,
             "名字",
             repo.path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -966,7 +989,7 @@ mod tests {
             1,
             "名字",
             repo.path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -988,7 +1011,7 @@ mod tests {
             1,
             "名字",
             repo.path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -1006,7 +1029,7 @@ mod tests {
             1,
             "名字",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -1023,7 +1046,7 @@ mod tests {
             1,
             "名字",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -1048,7 +1071,7 @@ mod tests {
             1,
             "名字",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -1062,7 +1085,7 @@ mod tests {
             1,
             "名字",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -1084,7 +1107,7 @@ mod tests {
             1,
             "名字",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -1102,7 +1125,7 @@ mod tests {
             1,
             "名字",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -1126,7 +1149,7 @@ mod tests {
             1,
             "名字",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -1147,7 +1170,7 @@ mod tests {
             1,
             "名字",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -1174,7 +1197,7 @@ mod tests {
             1,
             "名字",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -1201,7 +1224,7 @@ mod tests {
             1,
             "名字",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -1230,7 +1253,7 @@ mod tests {
             1,
             "名字",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -1240,7 +1263,7 @@ mod tests {
     #[test]
     fn delete_project_request_then_scope_select_then_cancel() {
         let mut ws_state = WorkspaceState::new(None, links::LinksState::default());
-        let noop_client = dozer_client::Client::new(std::path::PathBuf::from("/tmp/dozer.sock"));
+        let noop_services = crate::service_fakes::base_services();
         let handle = tokio::runtime::Handle::try_current()
             .unwrap_or_else(|_| tokio::runtime::Runtime::new().unwrap().handle().clone());
         let repo = std::path::Path::new("/tmp/demo");
@@ -1251,7 +1274,7 @@ mod tests {
             1,
             "demo",
             repo,
-            &noop_client,
+            &noop_services,
             &handle,
             |_| {},
         );
@@ -1266,7 +1289,7 @@ mod tests {
             1,
             "demo",
             repo,
-            &noop_client,
+            &noop_services,
             &handle,
             |_| {},
         );
@@ -1281,7 +1304,7 @@ mod tests {
             1,
             "demo",
             repo,
-            &noop_client,
+            &noop_services,
             &handle,
             |_| {},
         );
@@ -1363,7 +1386,7 @@ mod tests {
             1,
             "名字",
             &test_repo_path(),
-            &test_client(),
+            &test_services(),
             rt.handle(),
             |_| {},
         );
@@ -1379,10 +1402,309 @@ mod tests {
     fn on_activate_requests_the_shared_memories() {
         let rt = runtime();
         let (ctx, rx) = offline_ctx::<Message>(&rt, 7, None);
+        let ctx = crate::panel_host::ActivationCtx {
+            io: ctx.io.with_services(FakeMemory::default().into_services()),
+            ..ctx
+        };
         on_activate(&ctx);
         assert!(matches!(
             rx.recv_timeout(TIMEOUT).unwrap(),
             Message::MemoriesLoaded(_)
         ));
+    }
+
+    fn collect() -> (
+        impl Fn(Message) + Send + Sync + 'static,
+        mpsc::Receiver<Message>,
+    ) {
+        let (tx, rx) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        (
+            move |m| {
+                let _ = tx.lock().unwrap().send(m);
+            },
+            rx,
+        )
+    }
+
+    fn memory_info(id: i64, title: &str) -> dozer_model::MemoryInfo {
+        dozer_model::MemoryInfo {
+            id,
+            project_id: 1,
+            title: title.into(),
+            kind: "project".into(),
+            description: String::new(),
+            updated_ms: 0,
+            updated_by: "user".into(),
+        }
+    }
+
+    #[test]
+    fn unavailable_memory_read_failure_keeps_the_list_and_stays_silent() {
+        let mut ws = WorkspaceState::new(None, links::LinksState::default());
+        let rt = runtime();
+        let services = FakeMemory::default().into_services();
+        let (e1, _r1) = collect();
+        update(
+            &mut ws,
+            Message::MemoriesLoaded(vec![memory_info(1, "a")]),
+            1,
+            "demo",
+            std::path::Path::new("/tmp/demo"),
+            &services,
+            rt.handle(),
+            e1,
+        );
+        let (e2, _r2) = collect();
+        update(
+            &mut ws,
+            Message::MemoriesLoadFailed(ServiceErrorKind::Unavailable, "daemon 断开".into()),
+            1,
+            "demo",
+            std::path::Path::new("/tmp/demo"),
+            &services,
+            rt.handle(),
+            e2,
+        );
+        assert_eq!(ws.memories().len(), 1, "读失败不得清空已有记忆");
+        assert!(
+            ws.take_outbox().is_empty(),
+            "Unavailable 由顶栏徽标表达,不弹 Toast"
+        );
+    }
+
+    #[test]
+    fn repeated_rejected_memory_read_failures_toast_once_per_text() {
+        let mut ws = WorkspaceState::new(None, links::LinksState::default());
+        let rt = runtime();
+        let services = FakeMemory::default().into_services();
+        for _ in 0..3 {
+            let (e, _r) = collect();
+            update(
+                &mut ws,
+                Message::MemoriesLoadFailed(ServiceErrorKind::Rejected, "daemon 错误: boom".into()),
+                1,
+                "demo",
+                std::path::Path::new("/tmp/demo"),
+                &services,
+                rt.handle(),
+                e,
+            );
+        }
+        let toasts = ws.take_outbox();
+        assert_eq!(toasts.len(), 1, "相同文本 60 秒内只提示一次");
+        assert_eq!(toasts[0].level, crate::extensions::toast::Level::Error);
+        assert!(toasts[0].text.contains("daemon 错误: boom"));
+        assert_eq!(toasts[0].key.as_deref(), Some("project-memories-load"));
+        let (e, _r) = collect();
+        update(
+            &mut ws,
+            Message::MemoriesLoadFailed(ServiceErrorKind::Protocol, "另一种错误".into()),
+            1,
+            "demo",
+            std::path::Path::new("/tmp/demo"),
+            &services,
+            rt.handle(),
+            e,
+        );
+        assert_eq!(ws.take_outbox().len(), 1, "换了文本要再提示");
+    }
+
+    #[test]
+    fn failing_memory_list_emits_load_failed_instead_of_an_empty_loaded() {
+        let rt = runtime();
+        let memory = FakeMemory::failing_list(ServiceErrorKind::Unavailable, "x")
+            .into_services()
+            .memory;
+        let (emit, rx) = collect();
+        request_memories_refresh(1, &memory, rt.handle(), emit);
+        assert!(
+            matches!(
+                rx.recv_timeout(TIMEOUT).unwrap(),
+                Message::MemoriesLoadFailed(ServiceErrorKind::Unavailable, _)
+            ),
+            "读失败必须发 MemoriesLoadFailed,不得发 MemoriesLoaded(vec![])"
+        );
+    }
+
+    #[test]
+    fn memory_write_failure_text_is_the_service_message_unchanged() {
+        let rt = runtime();
+        let fake = FakeMemory::failing_writes(ServiceErrorKind::Rejected, "daemon 错误: boom");
+        let services = fake.clone().into_services();
+        let mut ws = WorkspaceState::new(None, links::LinksState::default());
+        let repo = std::path::Path::new("/tmp/demo");
+        let (e, _r) = collect();
+        update(
+            &mut ws,
+            Message::MemoryCreateStart,
+            1,
+            "demo",
+            repo,
+            &services,
+            rt.handle(),
+            e,
+        );
+        let (e, _r) = collect();
+        update(
+            &mut ws,
+            Message::MemoryCreateTitleInput("标题".into()),
+            1,
+            "demo",
+            repo,
+            &services,
+            rt.handle(),
+            e,
+        );
+        let (e, rx) = collect();
+        update(
+            &mut ws,
+            Message::MemoryCreateSubmit,
+            1,
+            "demo",
+            repo,
+            &services,
+            rt.handle(),
+            e,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::MemoryMutated(Err(text)) => assert_eq!(text, "daemon 错误: boom"),
+            other => panic!("意外消息: {other:?}"),
+        }
+        assert_eq!(fake.calls(), vec!["write_memory(1,标题)".to_string()]);
+    }
+
+    #[test]
+    fn renaming_to_a_missing_project_reports_it_does_not_exist() {
+        let rt = runtime();
+        let project = FakeProject::default().into_services().project; // rename → Ok(None)
+        let mut ws = WorkspaceState::new(None, links::LinksState::default());
+        ws.name_editing = Some("新名".into());
+        let (emit, rx) = collect();
+        submit_name_edit(&mut ws, 1, "旧名", project, rt.handle(), emit);
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::NameRenamed(1, Err(text)) => assert_eq!(text, "项目不存在"),
+            other => panic!("意外消息: {other:?}"),
+        }
+    }
+
+    /// 收集 `spawn_repair_run` 的全部消息,直到出现 `SummaryBackfillFailed` 或批次全部完成的 `SummaryBackfillProgress`。
+    fn run_repair(project: FakeProject) -> Vec<Message> {
+        let rt = runtime();
+        let dir = tempfile::tempdir().unwrap();
+        let (emit, rx) = collect();
+        spawn_repair_run(
+            dir.path().to_path_buf(),
+            1,
+            project.into_services().project,
+            rt.handle(),
+            emit,
+        );
+        let mut out = Vec::new();
+        loop {
+            let m = rx.recv_timeout(TIMEOUT).expect("修复流程应在超时内结束");
+            let done = matches!(&m, Message::SummaryBackfillFailed(..))
+                || matches!(&m, Message::SummaryBackfillProgress(_, completed, total, ..) if completed >= total);
+            out.push(m);
+            if done {
+                return out;
+            }
+        }
+    }
+
+    #[test]
+    fn repair_run_success_reports_the_import_count_and_final_progress() {
+        let project = FakeProject::default()
+            .with_backfill(Ok(2))
+            .with_submit(Ok((7, 3)))
+            .with_batches(vec![Ok(Some(batch(3, 0, 0, 3, 0, 0)))]);
+        let msgs = run_repair(project);
+        assert!(msgs.iter().any(|m| matches!(
+            m,
+            Message::TranscriptBackfillFinished(1, scaffold::ScaffoldStepResult::Created(t)) if t == "导入 2 个历史文件"
+        )), "{msgs:?}");
+        assert!(
+            matches!(
+                msgs.last().unwrap(),
+                Message::SummaryBackfillProgress(1, 3, 3, 3, 0, 0)
+            ),
+            "{msgs:?}"
+        );
+    }
+
+    #[test]
+    fn repair_run_reports_a_missing_batch() {
+        let project = FakeProject::default().with_batches(vec![Ok(None)]);
+        let msgs = run_repair(project);
+        assert!(
+            matches!(msgs.last().unwrap(),
+            Message::SummaryBackfillFailed(1, t) if t == "总结批次不存在，请重试"),
+            "{msgs:?}"
+        );
+    }
+
+    #[test]
+    fn repair_run_reports_a_failed_batch_query_with_the_service_text() {
+        let project = FakeProject::default().with_batches(vec![Err(ServiceError::new(
+            ServiceErrorKind::Rejected,
+            "daemon 错误: nope",
+        ))]);
+        let msgs = run_repair(project);
+        assert!(
+            matches!(msgs.last().unwrap(),
+            Message::SummaryBackfillFailed(1, t) if t == "daemon 错误: nope"),
+            "{msgs:?}"
+        );
+    }
+
+    #[test]
+    fn scaffold_run_still_finishes_when_the_backfill_fails() {
+        let rt = runtime();
+        let dir = tempfile::tempdir().unwrap();
+        let fake = FakeProject::default().with_backfill(Err(ServiceError::new(
+            ServiceErrorKind::Unavailable,
+            "daemon 断开",
+        )));
+        let (emit, rx) = collect();
+        spawn_scaffold_run(
+            dir.path().to_path_buf(),
+            fake.clone().into_services().project,
+            rt.handle(),
+            emit,
+            true,
+        );
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::ScaffoldDone
+        ));
+        assert_eq!(fake.calls().len(), 1, "补录失败不阻止流程结束,也不重试");
+    }
+
+    #[test]
+    fn delete_stops_after_a_failed_deregistration() {
+        let rt = runtime();
+        let dir = tempfile::tempdir().unwrap();
+        let fake = FakeProject::default()
+            .with_remove(Err(ServiceError::new(ServiceErrorKind::Rejected, "boom")));
+        let (tx, rx) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        delete::spawn_delete_project(
+            1,
+            dir.path().to_path_buf(),
+            delete::DeleteScope::WithAgentCache,
+            fake.clone().into_services().project,
+            rt.handle(),
+            move |id, dereg, errors| {
+                let _ = tx.lock().unwrap().send((id, dereg, errors));
+            },
+        );
+        let (id, dereg, errors) = rx.recv_timeout(TIMEOUT).unwrap();
+        assert_eq!((id, dereg), (1, false));
+        assert_eq!(errors, vec!["取消项目登记失败: boom".to_string()]);
+        assert_eq!(
+            fake.calls(),
+            vec!["remove_project(1)".to_string()],
+            "不得继续删转录"
+        );
     }
 }
