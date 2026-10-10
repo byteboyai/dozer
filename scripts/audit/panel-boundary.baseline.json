@@ -12,9 +12,6 @@
  "extensions/browser.rs": {
   "R-CLIENT": 1
  },
- "extensions/codehealth/aggregate.rs": {
-  "R-CLIENT": 3
- },
  "extensions/edit_history.rs": {
   "R-CLIENT": 2
  },
