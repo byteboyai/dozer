@@ -3121,13 +3121,13 @@ impl App {
             // 一起丢掉(代码评审 finding:Failed clone/create always
             // discards the dialog)。
             Message::ProjectCreate(msg) => {
-                let client = self.client.clone();
+                let project = crate::panel_host::services_for(&self.client).project;
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
                 let emit = move |m| {
                     let _ = proxy.send_event(Message::ProjectCreate(m));
                 };
-                project_create::update(&mut self.project_create, msg, &client, &handle, emit);
+                project_create::update(&mut self.project_create, msg, project, &handle, emit);
             }
             Message::Files(files::Message::CopyPath(path, kind)) => {
                 let _ = (path, kind); // main.rs 拦截处理写剪贴板,这里维持现状空分支

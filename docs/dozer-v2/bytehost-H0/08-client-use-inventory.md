@@ -127,3 +127,11 @@
 **后续项(未修):**
 - `BookmarksLoaded` / `BookmarksMutated` 没有代数保护(慢的旧结果可能覆盖新结果)。
 - 剩余直接使用 `Client` 的面板:`settings`、`project_create`。
+
+## ProjectCreate 迁移(2026-10-11)
+
+`extensions/project_create.rs`(创建/克隆项目对话框)已经 `ProjectService`(新增 `open_project` / `list_projects` 两个方法,`Services` 字段不变)登记项目;`R-CLIENT` 基线中 `project_create.rs` 已清零。用户可见行为零变化(`注册项目失败: …` 文案不变);`list_projects` 失败仍当空列表,但改写 warn 日志(来源 `project_create`,`module` 来源)。规格 `docs/superpowers/specs/2026-10-11-project-create-services-design.md`。
+
+**后续项(未修):**
+- `list_projects` 失败时 host 的 `project_tab_opened` 会把工作区最近项目设为空(可考虑失败时保留旧列表)。
+- 只剩 `settings` 一个面板还直接用 `Client`:Advanced 页的 `list` / `shutdown_daemon` / `ensure_daemon`,以及走 bytehost 非 dyn 兼容的 `AppHostApi` 的「应用」页(需单独设计:Advanced 页需要 dozer-app 内的适配器去实现包含 `ensure_daemon` 的服务;「应用」页倾向于对 `A: AppHostApi` 做泛型)。

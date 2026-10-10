@@ -360,6 +360,8 @@ struct ProjectState {
     submit: Result<(i64, u32), ServiceError>,
     batches: Vec<Result<Option<SummaryBatchInfo>, ServiceError>>,
     batch_calls: usize,
+    open: Result<Option<ProjectInfo>, ServiceError>,
+    projects: Result<Vec<ProjectInfo>, ServiceError>,
     calls: Vec<String>,
 }
 
@@ -381,6 +383,8 @@ impl Default for FakeProject {
                 submit: Ok((1, 1)),
                 batches: vec![],
                 batch_calls: 0,
+                open: Ok(None),
+                projects: Ok(vec![]),
                 calls: vec![],
             })),
         }
@@ -388,6 +392,14 @@ impl Default for FakeProject {
 }
 
 impl FakeProject {
+    pub(crate) fn with_open(self, r: Result<Option<ProjectInfo>, ServiceError>) -> Self {
+        self.state.lock().unwrap().open = r;
+        self
+    }
+    pub(crate) fn with_list_projects(self, r: Result<Vec<ProjectInfo>, ServiceError>) -> Self {
+        self.state.lock().unwrap().projects = r;
+        self
+    }
     pub(crate) fn with_remove(self, r: Result<(), ServiceError>) -> Self {
         self.state.lock().unwrap().remove = r;
         self
@@ -475,6 +487,21 @@ impl ProjectService for FakeProject {
             s.batches[i].clone()
         };
         s.batch_calls += 1;
+        Box::pin(async move { r })
+    }
+    fn open_project(
+        &self,
+        path: String,
+    ) -> BoxFuture<'_, Result<Option<ProjectInfo>, ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls.push(format!("open_project({path})"));
+        let r = s.open.clone();
+        Box::pin(async move { r })
+    }
+    fn list_projects(&self) -> BoxFuture<'_, Result<Vec<ProjectInfo>, ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls.push("list_projects()".to_string());
+        let r = s.projects.clone();
         Box::pin(async move { r })
     }
 }
@@ -1142,5 +1169,17 @@ impl BookmarkService for FakeBookmark {
             None => Ok(()),
         };
         Box::pin(async move { r })
+    }
+}
+
+/// 固定 `ProjectInfo`。
+pub(crate) fn project_info(id: i64, path: &str) -> ProjectInfo {
+    ProjectInfo {
+        id,
+        path: path.into(),
+        name: "demo".into(),
+        last_active_ms: 1,
+        created_ms: 2,
+        updated_ms: 3,
     }
 }

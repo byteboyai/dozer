@@ -7,10 +7,14 @@
 use crate::git_accounts::{self, GitProvider, RemoteRepo};
 use crate::panel_host::HostRequest;
 use byteui::interaction::icons;
+use dozer_services::ProjectService;
 use iced_widget::core::{Border, Color, Length, Padding};
 use iced_widget::{MouseArea, Space, button, column, container, row, text};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+dozer_core::scope!(LOG, module, "project_create");
 
 /// 最终项目路径 = 根目录/项目名称;但项目名称与根目录最后一段同名时,
 /// 根目录本身就是项目目录,直接返回根目录,不再在其下创建同名子目录
@@ -255,9 +259,9 @@ pub enum Message {
     ),
 }
 
-/// 处理不需要 `client`/`handle` 的字段编辑类消息,返回 `true` 表示消息
+/// 处理不需要 `project`/`handle` 的字段编辑类消息,返回 `true` 表示消息
 /// 已经在这里处理完(调用方不用再往下走提交类分支)。纯状态转换,方便
-/// 单测不用真的构造 `dozer_client::Client`。
+/// 单测不用真的构造 `project`/`handle`。
 fn apply_field_message(state: &mut State, msg: &Message) -> bool {
     match msg {
         Message::TabSelected(tab) => {
@@ -378,7 +382,7 @@ fn plan_source_selection(
 pub fn update(
     state: &mut Option<State>,
     msg: Message,
-    client: &dozer_client::Client,
+    project: Arc<dyn ProjectService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
@@ -408,9 +412,8 @@ pub fn update(
             }
             s.error = None;
             s.busy = true;
-            let client = client.clone();
             handle.spawn(async move {
-                let result = spawn_create_local(target, description, create_git, &client).await;
+                let result = spawn_create_local(target, description, create_git, &project).await;
                 emit(Message::Done(result));
             });
         }
@@ -442,9 +445,8 @@ pub fn update(
             }
             s.error = None;
             s.busy = true;
-            let client = client.clone();
             handle.spawn(async move {
-                let result = spawn_clone(url, target, description, &client).await;
+                let result = spawn_clone(url, target, description, &project).await;
                 emit(Message::Done(result));
             });
         }
@@ -1081,7 +1083,7 @@ async fn spawn_create_local(
     target: PathBuf,
     description: String,
     create_git: bool,
-    client: &dozer_client::Client,
+    project: &Arc<dyn ProjectService>,
 ) -> SubmitResult {
     let target2 = target.clone();
     let description2 = description.clone();
@@ -1094,11 +1096,17 @@ async fn spawn_create_local(
     .unwrap_or_else(|e| Err(format!("内部错误: {e}")));
     fs_result?;
     let path_s = target.to_string_lossy().into_owned();
-    let opened = client
-        .open_project(&path_s)
+    let opened = project
+        .open_project(path_s)
         .await
         .map_err(|e| format!("注册项目失败: {e}"))?;
-    let recent = client.list_projects().await.unwrap_or_default();
+    let recent = match project.list_projects().await {
+        Ok(v) => v,
+        Err(e) => {
+            dozer_core::log_warn!(LOG, error = %e, "创建项目后读取最近项目失败,最近项目当空");
+            Vec::new()
+        }
+    };
     Ok((opened, recent, !create_git))
 }
 
@@ -1106,7 +1114,7 @@ async fn spawn_clone(
     url: String,
     target: PathBuf,
     description: String,
-    client: &dozer_client::Client,
+    project: &Arc<dyn ProjectService>,
 ) -> SubmitResult {
     let url2 = url.clone();
     let target2 = target.clone();
@@ -1128,11 +1136,17 @@ async fn spawn_clone(
     .unwrap_or_else(|e| Err(format!("内部错误: {e}")));
     write_result?;
     let path_s = target.to_string_lossy().into_owned();
-    let opened = client
-        .open_project(&path_s)
+    let opened = project
+        .open_project(path_s)
         .await
         .map_err(|e| format!("注册项目失败: {e}"))?;
-    let recent = client.list_projects().await.unwrap_or_default();
+    let recent = match project.list_projects().await {
+        Ok(v) => v,
+        Err(e) => {
+            dozer_core::log_warn!(LOG, error = %e, "创建项目后读取最近项目失败,最近项目当空");
+            Vec::new()
+        }
+    };
     // 克隆下来的仓库天然带 `.git`,`ensure_git_repo` 会 AlreadyOk 跳过,
     // 不需要 skip_git_init,固定传 false。
     Ok((opened, recent, false))
@@ -1141,6 +1155,10 @@ async fn spawn_clone(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::panel_host::testing::{TIMEOUT, runtime};
+    use crate::service_fakes::{FakeProject, project_info};
+    use dozer_services::{ServiceError, ServiceErrorKind};
+    use std::sync::mpsc;
 
     #[test]
     fn target_path_joins_root_and_name() {
@@ -1331,7 +1349,7 @@ mod tests {
         // 直接复用 SubmitLocal 分支里"先校验名称"这段逻辑的等价路径:
         // 校验函数本身已经在 Task 3 覆盖,这里补一条"校验失败时 state.error
         // 被设置、state.busy 保持 false"的行为断言,验证 update() 的短路
-        // 顺序(先校验、后 spawn),不需要真的跑 client/handle。
+        // 顺序(先校验、后 spawn),不需要真的跑 project/handle。
         assert!(validate_project_name(&state.local.name).is_err());
         state.error = Some("项目名称不能包含 / 或 \\".to_string());
         assert!(!state.busy);
@@ -1418,7 +1436,7 @@ mod tests {
     fn go_to_settings_closes_dialog_like_close() {
         let mut state = Some(State::default());
         // 直接测顶层 `if let Message::Close | Message::GoToSettings` 分支
-        // 的等价行为——不需要真的构造 `dozer_client::Client`/`handle`,
+        // 的等价行为——不需要真的构造 `project`/`handle`,
         // 因为这条分支在 `update()` 顶部就 return,不会往下走。
         if let Message::Close | Message::GoToSettings = Message::GoToSettings {
             state = None;
@@ -1453,6 +1471,191 @@ mod tests {
                 }
                 _ => panic!("expected PickDirectory"),
             }
+        }
+    }
+
+    fn project(fake: &FakeProject) -> Arc<dyn dozer_services::ProjectService> {
+        fake.clone().into_services().project
+    }
+
+    #[test]
+    fn create_local_registers_the_target_and_returns_recent() {
+        let rt = runtime();
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("demo");
+        let info = project_info(5, &target.to_string_lossy());
+        let fake = FakeProject::default()
+            .with_open(Ok(Some(info.clone())))
+            .with_list_projects(Ok(vec![info.clone()]));
+        let got = rt.block_on(spawn_create_local(
+            target.clone(),
+            "说明".into(),
+            true,
+            &project(&fake),
+        ));
+        assert_eq!(
+            got,
+            Ok((Some(info.clone()), vec![info], false)),
+            "create_git=true → skip_git_init=false"
+        );
+        assert!(target.is_dir(), "先建目录再登记");
+        assert_eq!(
+            fake.calls(),
+            vec![
+                format!("open_project({})", target.to_string_lossy()),
+                "list_projects()".to_string()
+            ]
+        );
+
+        let target2 = root.path().join("demo2");
+        let fake = FakeProject::default();
+        let got = rt.block_on(spawn_create_local(
+            target2,
+            String::new(),
+            false,
+            &project(&fake),
+        ));
+        assert_eq!(
+            got,
+            Ok((None, vec![], true)),
+            "create_git=false → skip_git_init=true"
+        );
+    }
+
+    #[test]
+    fn create_local_open_failure_has_the_legacy_text_and_skips_the_list() {
+        let rt = runtime();
+        let root = tempfile::tempdir().unwrap();
+        let fake = FakeProject::default().with_open(Err(ServiceError::new(
+            ServiceErrorKind::Rejected,
+            "daemon 错误: boom",
+        )));
+        let got = rt.block_on(spawn_create_local(
+            root.path().join("demo"),
+            String::new(),
+            true,
+            &project(&fake),
+        ));
+        assert_eq!(got, Err("注册项目失败: daemon 错误: boom".to_string()));
+        assert_eq!(fake.calls().len(), 1, "open 失败后不再读最近项目");
+    }
+
+    #[test]
+    fn create_local_still_succeeds_with_empty_recent_when_the_list_fails() {
+        let rt = runtime();
+        let root = tempfile::tempdir().unwrap();
+        let info = project_info(5, "/p/demo");
+        let fake = FakeProject::default()
+            .with_open(Ok(Some(info.clone())))
+            .with_list_projects(Err(ServiceError::new(
+                ServiceErrorKind::Unavailable,
+                "daemon 断开",
+            )));
+        let got = rt.block_on(spawn_create_local(
+            root.path().join("demo"),
+            String::new(),
+            true,
+            &project(&fake),
+        ));
+        assert_eq!(
+            got,
+            Ok((Some(info), vec![], false)),
+            "最近项目读取失败:当空,整体仍成功"
+        );
+    }
+
+    #[test]
+    fn clone_registers_the_cloned_directory() {
+        if !bytegit::git_available() {
+            return; // 无系统 git(bytegit::clone 内部调用 git 可执行文件),跳过
+        }
+        let rt = runtime();
+        let remote = bytegit::testutil::TempRepo::new();
+        remote.commit_file("a.txt", "x", "c1");
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("cloned");
+        let info = project_info(6, &target.to_string_lossy());
+        let fake = FakeProject::default()
+            .with_open(Ok(Some(info.clone())))
+            .with_list_projects(Ok(vec![info.clone()]));
+        let got = rt.block_on(spawn_clone(
+            remote.path().to_string_lossy().into_owned(),
+            target.clone(),
+            "说明".into(),
+            &project(&fake),
+        ));
+        assert_eq!(
+            got,
+            Ok((Some(info.clone()), vec![info], false)),
+            "克隆自带 .git,skip_git_init 恒 false"
+        );
+        assert!(target.join(".git").exists());
+        assert_eq!(
+            fake.calls()[0],
+            format!("open_project({})", target.to_string_lossy())
+        );
+    }
+
+    #[test]
+    fn submit_local_validation_failure_makes_no_service_call() {
+        let rt = runtime();
+        let fake = FakeProject::default();
+        let mut state = Some(State {
+            local: LocalForm {
+                root_dir: "/tmp".into(),
+                name: "bad/name".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let (tx, rx) = mpsc::channel();
+        update(
+            &mut state,
+            Message::SubmitLocal,
+            project(&fake),
+            rt.handle(),
+            move |m| {
+                let _ = tx.send(m);
+            },
+        );
+        assert!(state.as_ref().unwrap().error.is_some());
+        assert!(!state.as_ref().unwrap().busy);
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(300))
+                .is_err(),
+            "校验失败不 spawn"
+        );
+        assert!(fake.calls().is_empty());
+    }
+
+    #[test]
+    fn submit_local_end_to_end_delivers_done() {
+        let rt = runtime();
+        let root = tempfile::tempdir().unwrap();
+        let info = project_info(5, "/p/demo");
+        let fake = FakeProject::default().with_open(Ok(Some(info.clone())));
+        let mut state = Some(State {
+            local: LocalForm {
+                root_dir: root.path().to_string_lossy().into_owned(),
+                name: "demo".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let (tx, rx) = mpsc::channel();
+        update(
+            &mut state,
+            Message::SubmitLocal,
+            project(&fake),
+            rt.handle(),
+            move |m| {
+                let _ = tx.send(m);
+            },
+        );
+        assert!(state.as_ref().unwrap().busy);
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::Done(Ok((opened, _, skip))) => assert_eq!((opened, skip), (Some(info), false)),
+            other => panic!("unexpected: {other:?}"),
         }
     }
 }
