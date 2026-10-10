@@ -94,3 +94,12 @@
 - 读失败冷却逻辑在 Todo / Project / Conversations 各有一份(`LOAD_FAILURE_TOAST_COOLDOWN`),可抽到 `toast::Outbox`。
 - host 侧其余会话调用(打开、翻页、总结任务、homespace、hook)仍直接用 `Client`。
 - 剩余直接用 `Client` 的面板:`codehealth`、`agent_context`、`browser`、`edit_history`、`settings`、`project_create`。
+
+## CodeHealth 迁移(2026-10-11)
+
+`extensions/codehealth/**` 已经 `CodeHealthService`(`dozer-services`)取数与保存;`R-CLIENT` 基线中 `codehealth/aggregate.rs` 已清零。缓存读取失败改为 `LoadFailed`(携带无报告的 panel):已有报告保留、首次失败采用携带的 panel、`Unavailable` 静默、其余弹 `codehealth-load` Toast(同文本 60 秒内一次)。历史读取失败改为写 warn 日志(对比降级为无基线,扫描照常);保存失败的内联提示文本不变。面板日志来源名为 `code_health`。`PanelIo::client()` 随最后一个使用者迁走而删除(`PanelIo::new` 签名不变)。规格 `docs/superpowers/specs/2026-10-11-codehealth-services-design.md`。
+
+**后续项(未修):**
+- `Loaded` / `Scanned` 没有代数保护(慢的旧结果可能覆盖新结果)。
+- 读失败冷却逻辑在 Todo / Project / Conversations / CodeHealth 各有一份(`LOAD_FAILURE_TOAST_COOLDOWN`),可抽到 `toast::Outbox`。
+- 剩余直接使用 `Client` 的面板:`agent_context`、`browser`、`edit_history`、`settings`、`project_create`。

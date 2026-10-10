@@ -215,6 +215,7 @@ impl App {
                 pending.extend(ws.todo.take_outbox());
                 pending.extend(ws.project_panel.take_outbox());
                 pending.extend(ws.conversations.take_outbox());
+                pending.extend(ws.codehealth.take_outbox());
                 pending.extend(ws.group_chat.take_outbox());
                 pending.extend(ws.ssh.take_outbox());
                 pending.extend(ws.database.take_outbox());
@@ -1650,7 +1651,10 @@ impl App {
                 toast::log_toast(scope, level, text);
                 toast::update(&mut self.toast, msg, std::time::Instant::now());
             }
-            Message::CodeHealth(msg @ codehealth::Message::Loaded(project_id, ..)) => {
+            Message::CodeHealth(
+                msg @ (codehealth::Message::Loaded(project_id, ..)
+                | codehealth::Message::LoadFailed(project_id, ..)),
+            ) => {
                 self.with_project(project_id, move |ws, _io| {
                     codehealth::update(&mut ws.codehealth, msg);
                 });

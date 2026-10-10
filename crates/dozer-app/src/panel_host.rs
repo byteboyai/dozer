@@ -26,10 +26,11 @@ pub(crate) fn services_for(client: &Client) -> Services {
         memory: Arc::new(client.clone()),
         group_chat: Arc::new(client.clone()),
         conversation: Arc::new(client.clone()),
+        codehealth: Arc::new(client.clone()),
     }
 }
 
-/// host 给面板的**执行原语**:面板要在后台跑任务,需要三样东西——`Client`(dozerd 连接)、
+/// host 给面板的**执行原语**:面板要在后台跑任务,需要三样东西——`Services`(经 dozerd 连接适配出的服务束)、
 /// `Handle`(tokio runtime)、"把结果包成该面板的 `Message` 投回事件循环"。收成一个值,由 host
 /// 构造、传给面板模块里的执行器(`group_chat::run_effect` 等);host 不再认识面板的具体 Effect。
 ///
@@ -37,7 +38,6 @@ pub(crate) fn services_for(client: &Client) -> Services {
 /// "让 host 替我跑东西"。是具体结构体而不是 trait(规格 §1:不为未来的第二个宿主预先抽象);
 /// 测试里用 `PanelIo::new` 配一个收进 channel 的 `emit` 即可。
 pub(crate) struct PanelIo<M> {
-    client: Client,
     services: Services,
     handle: Handle,
     emit: Arc<dyn Fn(M) + Send + Sync + 'static>,
@@ -46,7 +46,6 @@ pub(crate) struct PanelIo<M> {
 impl<M> Clone for PanelIo<M> {
     fn clone(&self) -> Self {
         Self {
-            client: self.client.clone(),
             services: self.services.clone(),
             handle: self.handle.clone(),
             emit: Arc::clone(&self.emit),
@@ -62,7 +61,6 @@ impl<M: Send + 'static> PanelIo<M> {
     ) -> Self {
         Self {
             services: services_for(&client),
-            client,
             handle,
             emit: Arc::new(emit),
         }
@@ -83,11 +81,6 @@ impl<M: Send + 'static> PanelIo<M> {
     /// 同步投回一条面板消息。
     pub(crate) fn emit(&self, message: M) {
         (self.emit)(message);
-    }
-
-    /// host 的 dozerd 连接(给仍然吃 `(client, handle, emit)` 三件套的面板 `spawn_*` 函数用)。
-    pub(crate) fn client(&self) -> &Client {
-        &self.client
     }
 
     /// host 的 tokio runtime 句柄(给仍然吃 `(client, handle, emit)` 三件套的面板 `spawn_*` 函数用)。
@@ -511,6 +504,17 @@ mod tests {
                     .conversation
                     .list_conversations_with_summaries("/p".into(), None, 500, 0),
             )
+            .unwrap_err();
+        assert_eq!(e.kind, dozer_services::ServiceErrorKind::Unavailable);
+    }
+
+    #[test]
+    fn default_services_route_codehealth_through_the_client_adapter() {
+        let rt = test_runtime();
+        let (io, _rx) = recording_io(&rt);
+        // recording_io 的 Client 指向不存在的 socket → Unavailable
+        let e = rt
+            .block_on(io.services().codehealth.get_code_health_report(1))
             .unwrap_err();
         assert_eq!(e.kind, dozer_services::ServiceErrorKind::Unavailable);
     }

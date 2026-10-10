@@ -1,12 +1,13 @@
 //! 进程内服务假实现(只在测试里):不起 UDS,返回固定结果并记录调用。
 use dozer_model::{
-    AgentKind, CategoryInfo, CategoryMoveDirection, ConversationSummary, GroupAuthor,
-    GroupCancelScope, GroupInfo, GroupMessageInfo, MemoryDetail, MemoryInfo, ProjectInfo,
-    SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus,
+    AgentKind, CategoryInfo, CategoryMoveDirection, CodeHealthReportInfo, ConversationSummary,
+    GroupAuthor, GroupCancelScope, GroupInfo, GroupMessageInfo, MemoryDetail, MemoryInfo,
+    ProjectInfo, SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus,
 };
 use dozer_services::{
-    BoxFuture, ConversationRows, ConversationService, GroupChatService, MemoryService,
-    PostedMessages, ProjectService, ServiceError, ServiceErrorKind, Services, TodoService,
+    BoxFuture, CodeHealthService, ConversationRows, ConversationService, GroupChatService,
+    MemoryService, PostedMessages, ProjectService, ServiceError, ServiceErrorKind, Services,
+    TodoService,
 };
 use std::sync::{Arc, Mutex};
 
@@ -186,6 +187,7 @@ pub(crate) fn base_services() -> Services {
         memory: Arc::new(FakeMemory::default()),
         group_chat: Arc::new(FakeGroupChat::default()),
         conversation: Arc::new(FakeConversation::default()),
+        codehealth: Arc::new(FakeCodeHealth::default()),
     }
 }
 
@@ -778,6 +780,95 @@ impl ConversationService for FakeConversation {
             "list_conversations_with_summaries({cwd},{agent:?},{limit},{offset})"
         ));
         let r = s.rows.clone();
+        Box::pin(async move { r })
+    }
+}
+
+// ---- FakeCodeHealth ----
+
+#[derive(Default)]
+struct CodeHealthState {
+    latest: Option<CodeHealthReportInfo>,
+    get_error: Option<ServiceError>,
+    list_error: Option<ServiceError>,
+    save_error: Option<ServiceError>,
+    calls: Vec<String>,
+}
+
+/// 克隆共享同一份状态。`Default` = 全部成功(get → `Ok(None)`、list → `Ok(vec![])`、save → `Ok(())`)。
+#[derive(Clone, Default)]
+pub(crate) struct FakeCodeHealth {
+    state: Arc<Mutex<CodeHealthState>>,
+}
+
+impl FakeCodeHealth {
+    pub(crate) fn with_latest(self, info: CodeHealthReportInfo) -> Self {
+        self.state.lock().unwrap().latest = Some(info);
+        self
+    }
+    pub(crate) fn with_get_error(self, kind: ServiceErrorKind, message: &str) -> Self {
+        self.state.lock().unwrap().get_error = Some(ServiceError::new(kind, message));
+        self
+    }
+    pub(crate) fn with_list_error(self, kind: ServiceErrorKind, message: &str) -> Self {
+        self.state.lock().unwrap().list_error = Some(ServiceError::new(kind, message));
+        self
+    }
+    pub(crate) fn with_save_error(self, kind: ServiceErrorKind, message: &str) -> Self {
+        self.state.lock().unwrap().save_error = Some(ServiceError::new(kind, message));
+        self
+    }
+    pub(crate) fn calls(&self) -> Vec<String> {
+        self.state.lock().unwrap().calls.clone()
+    }
+    pub(crate) fn into_services(self) -> Services {
+        Services {
+            codehealth: Arc::new(self),
+            ..base_services()
+        }
+    }
+}
+
+impl CodeHealthService for FakeCodeHealth {
+    fn get_code_health_report(
+        &self,
+        project_id: i64,
+    ) -> BoxFuture<'_, Result<Option<CodeHealthReportInfo>, ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls
+            .push(format!("get_code_health_report({project_id})"));
+        let r = match &s.get_error {
+            Some(e) => Err(e.clone()),
+            None => Ok(s.latest.clone()),
+        };
+        Box::pin(async move { r })
+    }
+    fn list_code_health_reports(
+        &self,
+        project_id: i64,
+        limit: u32,
+    ) -> BoxFuture<'_, Result<Vec<CodeHealthReportInfo>, ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls
+            .push(format!("list_code_health_reports({project_id},{limit})"));
+        let r = match &s.list_error {
+            Some(e) => Err(e.clone()),
+            None => Ok(vec![]),
+        };
+        Box::pin(async move { r })
+    }
+    fn save_code_health_report(
+        &self,
+        project_id: i64,
+        _info: CodeHealthReportInfo,
+    ) -> BoxFuture<'_, Result<(), ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls
+            .push(format!("save_code_health_report({project_id})"));
+        let r = match &s.save_error {
+            Some(e) => Err(e.clone()),
+            None => Ok(()),
+        };
         Box::pin(async move { r })
     }
 }
