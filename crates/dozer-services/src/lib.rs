@@ -3,8 +3,9 @@
 
 use dozer_model::{
     AgentKind, CategoryInfo, CategoryMoveDirection, CodeHealthReportInfo, ContextItemInfo,
-    ConversationSummary, GroupCancelScope, GroupInfo, GroupMessageInfo, MemoryDetail, MemoryInfo,
-    ProjectInfo, SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus, UsagePayload,
+    ConversationSummary, FileEditHistoryInfo, GroupCancelScope, GroupInfo, GroupMessageInfo,
+    MemoryDetail, MemoryInfo, MutationOutcome, ProjectInfo, SessionSummaryPayload,
+    SummaryBatchInfo, TodoInfo, TodoStoredStatus, UsagePayload,
 };
 use std::fmt;
 use std::future::Future;
@@ -266,6 +267,38 @@ pub trait ContextService: Send + Sync {
         project_id: i64,
         id: i64,
     ) -> BoxFuture<'_, Result<(), ServiceError>>;
+}
+
+/// `apply_precise_edit` 的调用参数。原 inherent 方法有 11 个位置参数(连续 4 个 `u32` 坐标、多个 `String`),
+/// 顺序传错编译器发现不了,所以在接缝上用具名字段结构体(仓库约定:参数 ≥7 且同类型相邻)。
+/// 这是调用参数,不是线上形状,所以不放 `dozer-model`。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreciseEdit {
+    pub project_id: i64,
+    pub path: String,
+    pub start_line: u32,
+    pub start_col: u32,
+    pub end_line: u32,
+    pub end_col: u32,
+    pub expected_text: String,
+    pub new_text: String,
+    pub summary: String,
+    pub actor: String,
+    pub session_id: String,
+}
+
+/// 修改历史弹窗的读写。参数按值传。
+pub trait EditHistoryService: Send + Sync {
+    fn list_file_edit_history(
+        &self,
+        project_id: i64,
+        path_filter: Option<String>,
+        limit: u32,
+    ) -> BoxFuture<'_, Result<Vec<FileEditHistoryInfo>, ServiceError>>;
+    fn apply_precise_edit(
+        &self,
+        edit: PreciseEdit,
+    ) -> BoxFuture<'_, Result<MutationOutcome, ServiceError>>;
 }
 
 /// 各能力 trait 的 `Arc<dyn>` 束;host 构造,经 `PanelIo` 交给面板。其余能力 trait 随各面板迁移逐个加入。
@@ -888,6 +921,93 @@ mod tests {
         assert!(rt.block_on(empty.list_context_items(1)).is_ok());
         assert_eq!(
             rt.block_on(down.list_context_items(1)).unwrap_err().kind,
+            ServiceErrorKind::Unavailable
+        );
+    }
+
+    // ---- EditHistoryService 契约 ----
+
+    use dozer_model::{FileEditHistoryInfo, MutationOutcome};
+
+    fn sample_edit() -> PreciseEdit {
+        PreciseEdit {
+            project_id: 1,
+            path: "src/a.rs".into(),
+            start_line: 2,
+            start_col: 1,
+            end_line: 2,
+            end_col: 9,
+            expected_text: "new".into(),
+            new_text: "old".into(),
+            summary: "撤销:改".into(),
+            actor: "dozer".into(),
+            session_id: "dozer-gui".into(),
+        }
+    }
+
+    struct MemEditHistory(Result<Vec<FileEditHistoryInfo>, ServiceError>);
+
+    impl EditHistoryService for MemEditHistory {
+        fn list_file_edit_history(
+            &self,
+            _p: i64,
+            _f: Option<String>,
+            _l: u32,
+        ) -> BoxFuture<'_, Result<Vec<FileEditHistoryInfo>, ServiceError>> {
+            let r = self.0.clone();
+            Box::pin(async move { r })
+        }
+        fn apply_precise_edit(
+            &self,
+            _e: PreciseEdit,
+        ) -> BoxFuture<'_, Result<MutationOutcome, ServiceError>> {
+            Box::pin(async { Ok(MutationOutcome::NotFound) })
+        }
+    }
+
+    #[test]
+    fn precise_edit_is_cloneable_and_comparable() {
+        let a = sample_edit();
+        let b = a.clone();
+        assert_eq!(a, b);
+        assert_ne!(a, PreciseEdit { end_col: 10, ..b });
+    }
+
+    /// `handle.spawn` 要 `'static + Send`:持有 `Arc<dyn EditHistoryService>` 的 async 块必须满足。
+    #[test]
+    fn dyn_edit_history_futures_run_inside_tokio_spawn() {
+        let svc: Arc<dyn EditHistoryService> = Arc::new(MemEditHistory(Ok(vec![])));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let (list, outcome) = rt.block_on(async move {
+            tokio::spawn(async move {
+                let list = svc.list_file_edit_history(1, None, 200).await;
+                let outcome = svc.apply_precise_edit(sample_edit()).await;
+                (list, outcome)
+            })
+            .await
+            .unwrap()
+        });
+        assert_eq!(list, Ok(vec![]));
+        assert_eq!(outcome, Ok(MutationOutcome::NotFound));
+    }
+
+    #[test]
+    fn edit_history_read_failure_is_distinguishable_from_an_empty_list() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let empty = MemEditHistory(Ok(vec![]));
+        let down = MemEditHistory(Err(ServiceError::new(ServiceErrorKind::Unavailable, "x")));
+        assert!(
+            rt.block_on(empty.list_file_edit_history(1, None, 1))
+                .is_ok()
+        );
+        assert_eq!(
+            rt.block_on(down.list_file_edit_history(1, None, 1))
+                .unwrap_err()
+                .kind,
             ServiceErrorKind::Unavailable
         );
     }
