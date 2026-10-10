@@ -16,6 +16,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 
+/// 默认的服务束:各能力都由 `Client` 适配。host 的其它入口(`App` 的消息处理/轮询)也用它,
+/// 保证"面板拿到的服务"只有一处构造。
+pub(crate) fn services_for(client: &Client) -> Services {
+    Services {
+        usage: Arc::new(client.clone()),
+        todo: Arc::new(client.clone()),
+    }
+}
+
 /// host 给面板的**执行原语**:面板要在后台跑任务,需要三样东西——`Client`(dozerd 连接)、
 /// `Handle`(tokio runtime)、"把结果包成该面板的 `Message` 投回事件循环"。收成一个值,由 host
 /// 构造、传给面板模块里的执行器(`group_chat::run_effect` 等);host 不再认识面板的具体 Effect。
@@ -48,9 +57,7 @@ impl<M: Send + 'static> PanelIo<M> {
         emit: impl Fn(M) + Send + Sync + 'static,
     ) -> Self {
         Self {
-            services: Services {
-                usage: Arc::new(client.clone()),
-            },
+            services: services_for(&client),
             client,
             handle,
             emit: Arc::new(emit),
@@ -452,6 +459,15 @@ mod tests {
         rt.block_on(again.services().usage.usage_summary("/q".into(), None))
             .unwrap();
         assert_eq!(fake.calls().len(), 2);
+    }
+
+    #[test]
+    fn default_services_route_todo_through_the_client_adapter() {
+        let rt = test_runtime();
+        let (io, _rx) = recording_io(&rt);
+        // recording_io 的 Client 指向不存在的 socket → Unavailable
+        let e = rt.block_on(io.services().todo.list_todos(1)).unwrap_err();
+        assert_eq!(e.kind, dozer_services::ServiceErrorKind::Unavailable);
     }
 
     #[test]

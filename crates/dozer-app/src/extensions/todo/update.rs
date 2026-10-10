@@ -1,7 +1,8 @@
 //! Todo 面板 update 消息分发 + 日历日期纯函数。
 
-use dozer_client::Client;
 use dozer_model::TodoInfo;
+use dozer_services::{ServiceErrorKind, TodoService};
+use std::sync::Arc;
 
 use super::*;
 
@@ -86,18 +87,17 @@ fn submit_new_todo(
     ws_state: &mut WorkspaceState,
     text: String,
     project_id: i64,
-    client: &Client,
+    service: &Arc<dyn TodoService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + Sync + 'static,
 ) {
     insert_optimistic_todo(ws_state, project_id, text.clone());
-    let client = client.clone();
+    let service = service.clone();
     handle.spawn(async move {
-        let res = client
-            .add_todo(project_id, &text)
+        let res = service
+            .add_todo(project_id, text)
             .await
-            .map(|_| ())
-            .map_err(|e| e.to_string());
+            .map_err(|e| e.message);
         emit(Message::Mutated(res));
     });
 }
@@ -118,7 +118,7 @@ pub fn update(
     ws_state: &mut WorkspaceState,
     msg: Message,
     project_id: i64,
-    client: &Client,
+    service: &Arc<dyn TodoService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + Sync + 'static,
 ) {
@@ -138,22 +138,45 @@ pub fn update(
         Message::Mutated(res) => {
             // 失败时列表随后会按磁盘状态刷新回旧样子,用户会以为没生效——Toast 说明。
             ws_state.outbox.push_err(LOG, "Todo 操作失败", &res);
-            request_todos_refresh(project_id, client, handle, emit);
+            request_todos_refresh(project_id, service, handle, emit);
         }
         Message::CategoriesLoaded(categories) => ws_state.categories = categories,
+        Message::LoadFailed(kind, message) => {
+            if kind == ServiceErrorKind::Unavailable {
+                dozer_core::log_debug!(LOG, "任务/分类读取失败(dozerd 不可用): {message}");
+            } else {
+                let now = std::time::Instant::now();
+                let repeat = matches!(
+                    &ws_state.last_load_failure,
+                    Some((last, at)) if *last == message
+                        && now.duration_since(*at) < LOAD_FAILURE_TOAST_COOLDOWN
+                );
+                if !repeat {
+                    ws_state.outbox.push_keyed(
+                        LOG,
+                        crate::extensions::toast::Level::Error,
+                        format!("任务加载失败: {message}"),
+                        "todo-load",
+                    );
+                    ws_state.last_load_failure = Some((message, now));
+                }
+            }
+        }
         Message::CategoryMutated(res) => {
             ws_state.outbox.push_err(LOG, "分类操作失败", &res);
-            let client1 = client.clone();
-            let client2 = client.clone();
+            let service1 = service.clone();
+            let service2 = service.clone();
             let handle1 = handle.clone();
             let handle2 = handle.clone();
             let emit = std::sync::Arc::new(emit);
             let emit1 = emit.clone();
             let emit2 = emit;
-            request_categories_refresh(project_id, &client1, &handle1, move |m| emit1(m));
+            request_categories_refresh(project_id, &service1, &handle1, move |m| emit1(m));
             handle2.spawn(async move {
-                let todos = client2.list_todos(project_id).await.unwrap_or_default();
-                emit2(Message::Loaded(todos));
+                match service2.list_todos(project_id).await {
+                    Ok(todos) => emit2(Message::Loaded(todos)),
+                    Err(e) => emit2(Message::LoadFailed(e.kind, e.message)),
+                }
             });
         }
         Message::CategoryToggleExpand(id) => ws_state.toggle_category_expanded(id),
@@ -173,13 +196,12 @@ pub fn update(
                 }
                 ReleaseAction::Reparent { id, new_parent } => {
                     ws_state.expand_for_reparent(new_parent);
-                    let client = client.clone();
+                    let service = service.clone();
                     handle.spawn(async move {
-                        let res = client
+                        let res = service
                             .reparent_category(id, new_parent)
                             .await
-                            .map(|_| ())
-                            .map_err(|e| e.to_string());
+                            .map_err(|e| e.message);
                         emit(Message::CategoryMutated(res));
                     });
                 }
@@ -187,41 +209,41 @@ pub fn update(
             }
         }
         Message::CategoryNewChild(parent_id) => {
-            let client = client.clone();
+            let service = service.clone();
             let project_id_owned = project_id;
             handle.spawn(async move {
-                let res = client
-                    .add_category(project_id_owned, Some(parent_id), "新分类")
+                let res = service
+                    .add_category(project_id_owned, Some(parent_id), "新分类".to_string())
                     .await;
                 match res {
                     Ok(category) => {
                         emit(Message::CategoryRenameStart(category.id));
                         emit(Message::CategoryMutated(Ok(())));
                     }
-                    Err(e) => emit(Message::CategoryMutated(Err(e.to_string()))),
+                    Err(e) => emit(Message::CategoryMutated(Err(e.message))),
                 }
             });
         }
         Message::CategoryNewSibling(parent_id) => {
-            let client = client.clone();
+            let service = service.clone();
             let project_id_owned = project_id;
             handle.spawn(async move {
-                let res = client
-                    .add_category(project_id_owned, parent_id, "新分类")
+                let res = service
+                    .add_category(project_id_owned, parent_id, "新分类".to_string())
                     .await;
                 match res {
                     Ok(category) => {
                         emit(Message::CategoryRenameStart(category.id));
                         emit(Message::CategoryMutated(Ok(())));
                     }
-                    Err(e) => emit(Message::CategoryMutated(Err(e.to_string()))),
+                    Err(e) => emit(Message::CategoryMutated(Err(e.message))),
                 }
             });
         }
         Message::CategoryDelete(id) => {
-            let client = client.clone();
+            let service = service.clone();
             handle.spawn(async move {
-                let res = client.delete_category(id).await.map_err(|e| e.to_string());
+                let res = service.delete_category(id).await.map_err(|e| e.message);
                 emit(Message::CategoryMutated(res));
             });
         }
@@ -235,25 +257,23 @@ pub fn update(
         Message::CategoryRenameEdit(text) => ws_state.set_category_rename_draft(text),
         Message::CategoryRenameSubmit => {
             if let Some((id, new_name)) = ws_state.commit_category_rename() {
-                let client = client.clone();
+                let service = service.clone();
                 handle.spawn(async move {
-                    let res = client
-                        .rename_category(id, &new_name)
+                    let res = service
+                        .rename_category(id, new_name)
                         .await
-                        .map(|_| ())
-                        .map_err(|e| e.to_string());
+                        .map_err(|e| e.message);
                     emit(Message::CategoryMutated(res));
                 });
             }
         }
         Message::CategoryMoveSibling(id, direction) => {
-            let client = client.clone();
+            let service = service.clone();
             handle.spawn(async move {
-                let res = client
+                let res = service
                     .move_category_sibling(id, direction)
                     .await
-                    .map(|_| ())
-                    .map_err(|e| e.to_string());
+                    .map_err(|e| e.message);
                 emit(Message::CategoryMutated(res));
             });
         }
@@ -279,27 +299,25 @@ pub fn update(
                 TodoState::Suspended => dozer_model::TodoStoredStatus::Suspended,
                 TodoState::InProgress => return,
             };
-            let client = client.clone();
+            let service = service.clone();
             let id = item.id;
             handle.spawn(async move {
-                let res = client
+                let res = service
                     .set_todo_status(id, stored_target)
                     .await
-                    .map(|_| ())
-                    .map_err(|e| e.to_string());
+                    .map_err(|e| e.message);
                 emit(Message::Mutated(res));
             });
         }
         Message::CalendarPick(idx, day) => {
             if let Some(item) = ws_state.items.get(idx) {
                 let id = item.id;
-                let client = client.clone();
+                let service = service.clone();
                 handle.spawn(async move {
-                    let res = client
-                        .set_todo_plan_date(id, Some(&day))
+                    let res = service
+                        .set_todo_plan_date(id, Some(day))
                         .await
-                        .map(|_| ())
-                        .map_err(|e| e.to_string());
+                        .map_err(|e| e.message);
                     emit(Message::Mutated(res));
                 });
             }
@@ -323,18 +341,14 @@ pub fn update(
                             .as_millis() as u64
                     });
             }
-            let client = client.clone();
+            let service = service.clone();
             handle.spawn(async move {
-                let res = client
-                    .toggle_todo(id, target)
-                    .await
-                    .map(|_| ())
-                    .map_err(|e| e.to_string());
+                let res = service.toggle_todo(id, target).await.map_err(|e| e.message);
                 emit(Message::Mutated(res));
             });
         }
         Message::AddText(text) => {
-            submit_new_todo(ws_state, text, project_id, client, handle, emit);
+            submit_new_todo(ws_state, text, project_id, service, handle, emit);
         }
         Message::EditText(id, text) => {
             let text = text.trim().to_string();
@@ -344,35 +358,32 @@ pub fn update(
             if text.is_empty() || item.text == text {
                 return;
             }
-            let client = client.clone();
+            let service = service.clone();
             handle.spawn(async move {
-                let res = client
-                    .edit_todo_text(id, &text)
+                let res = service
+                    .edit_todo_text(id, text)
                     .await
-                    .map(|_| ())
-                    .map_err(|e| e.to_string());
+                    .map_err(|e| e.message);
                 emit(Message::Mutated(res));
             });
         }
         Message::ReorderTo { id, after_id } => {
-            let client = client.clone();
+            let service = service.clone();
             handle.spawn(async move {
-                let res = client
+                let res = service
                     .reorder_todo(id, after_id)
                     .await
-                    .map(|_| ())
-                    .map_err(|e| e.to_string());
+                    .map_err(|e| e.message);
                 emit(Message::Mutated(res));
             });
         }
         Message::SetCategory(id, category_id) => {
-            let client = client.clone();
+            let service = service.clone();
             handle.spawn(async move {
-                let res = client
+                let res = service
                     .set_todo_category(id, category_id)
                     .await
-                    .map(|_| ())
-                    .map_err(|e| e.to_string());
+                    .map_err(|e| e.message);
                 // 与原分类选择器同一条刷新路径:分类与任务列表一并重拉。
                 emit(Message::CategoryMutated(res));
             });

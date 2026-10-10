@@ -39,12 +39,6 @@
  "extensions/settings.rs": {
   "R-CLIENT": 2
  },
- "extensions/todo/state.rs": {
-  "R-CLIENT": 3
- },
- "extensions/todo/update.rs": {
-  "R-CLIENT": 1
- },
  "panel_host.rs": {
   "R-HOVERSLOT-VARIANTS": 9
  },

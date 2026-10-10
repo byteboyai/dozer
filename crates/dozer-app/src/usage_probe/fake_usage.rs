@@ -31,6 +31,7 @@ impl FakeUsage {
     pub(crate) fn into_services(self) -> Services {
         Services {
             usage: Arc::new(self),
+            todo: Arc::new(crate::service_fakes::FakeTodo::default()),
         }
     }
 }

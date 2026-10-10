@@ -319,11 +319,18 @@ mod tests {
     // ---- H6:切入钩子 ----
 
     use crate::panel_host::testing::{TIMEOUT, offline_ctx, runtime};
+    use crate::service_fakes::FakeTodo;
+    use dozer_services::ServiceErrorKind;
+    use std::sync::{Mutex, mpsc};
 
     #[test]
     fn on_activate_requests_both_the_todo_list_and_the_category_tree() {
         let rt = runtime();
         let (ctx, rx) = offline_ctx::<Message>(&rt, 7, None);
+        let ctx = crate::panel_host::ActivationCtx {
+            io: ctx.io.with_services(FakeTodo::default().into_services()),
+            ..ctx
+        };
         on_activate(&ctx);
         let first = rx.recv_timeout(TIMEOUT).unwrap();
         let second = rx.recv_timeout(TIMEOUT).unwrap();
@@ -333,5 +340,208 @@ mod tests {
             (loaded(&first) && categories(&second)) || (categories(&first) && loaded(&second)),
             "两个请求各回一条消息"
         );
+    }
+
+    fn svc(fake: &FakeTodo) -> std::sync::Arc<dyn dozer_services::TodoService> {
+        fake.clone().into_services().todo
+    }
+
+    fn collect() -> (
+        impl Fn(Message) + Send + Sync + 'static,
+        mpsc::Receiver<Message>,
+    ) {
+        let (tx, rx) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        (
+            move |m| {
+                let _ = tx.lock().unwrap().send(m);
+            },
+            rx,
+        )
+    }
+
+    #[test]
+    fn unavailable_read_failure_keeps_both_lists_and_stays_silent() {
+        let rt = runtime();
+        let service = svc(&FakeTodo::default());
+        let mut ws = WorkspaceState::default();
+        let (e1, _r1) = collect();
+        update(
+            &mut ws,
+            Message::Loaded(vec![todo_info(1, "a", false)]),
+            7,
+            &service,
+            rt.handle(),
+            e1,
+        );
+        let (e2, _r2) = collect();
+        update(
+            &mut ws,
+            Message::LoadFailed(ServiceErrorKind::Unavailable, "daemon 断开".into()),
+            7,
+            &service,
+            rt.handle(),
+            e2,
+        );
+        assert_eq!(ws.items().len(), 1, "读失败不得清空已有任务");
+        assert!(
+            ws.take_outbox().is_empty(),
+            "Unavailable 由顶栏徽标表达,不弹 Toast"
+        );
+    }
+
+    #[test]
+    fn rejected_read_failure_keeps_lists_and_toasts_once_with_a_key() {
+        let rt = runtime();
+        let service = svc(&FakeTodo::default());
+        let mut ws = WorkspaceState::default();
+        let (e1, _r1) = collect();
+        update(
+            &mut ws,
+            Message::Loaded(vec![todo_info(1, "a", false)]),
+            7,
+            &service,
+            rt.handle(),
+            e1,
+        );
+        let (e2, _r2) = collect();
+        update(
+            &mut ws,
+            Message::LoadFailed(ServiceErrorKind::Rejected, "daemon 错误: boom".into()),
+            7,
+            &service,
+            rt.handle(),
+            e2,
+        );
+        assert_eq!(ws.items().len(), 1);
+        let toasts = ws.take_outbox();
+        assert_eq!(toasts.len(), 1);
+        assert_eq!(toasts[0].level, crate::extensions::toast::Level::Error);
+        assert!(toasts[0].text.contains("daemon 错误: boom"));
+        assert_eq!(toasts[0].key.as_deref(), Some("todo-load"));
+    }
+
+    #[test]
+    fn failing_reads_emit_load_failed_instead_of_an_empty_loaded() {
+        let rt = runtime();
+        let service = svc(&FakeTodo::failing_reads(ServiceErrorKind::Unavailable, "x"));
+        let (emit, rx) = collect();
+        let emit = std::sync::Arc::new(emit);
+        let e1 = emit.clone();
+        request_todos_refresh(7, &service, rt.handle(), move |m| e1(m));
+        request_categories_refresh(7, &service, rt.handle(), move |m| emit(m));
+        for _ in 0..2 {
+            assert!(
+                matches!(
+                    rx.recv_timeout(TIMEOUT).unwrap(),
+                    Message::LoadFailed(ServiceErrorKind::Unavailable, _)
+                ),
+                "读失败必须发 LoadFailed,不得发 Loaded(vec![])"
+            );
+        }
+    }
+
+    #[test]
+    fn write_failure_text_is_the_service_message_unchanged() {
+        let rt = runtime();
+        let fake = FakeTodo::failing_writes(ServiceErrorKind::Rejected, "daemon 错误: boom");
+        let mut ws = WorkspaceState::default();
+        let (emit, rx) = collect();
+        update(
+            &mut ws,
+            Message::ReorderTo {
+                id: 1,
+                after_id: None,
+            },
+            7,
+            &svc(&fake),
+            rt.handle(),
+            emit,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::Mutated(Err(text)) => assert_eq!(text, "daemon 错误: boom"),
+            other => panic!("意外消息: {other:?}"),
+        }
+        assert_eq!(fake.calls(), vec!["reorder_todo(1,None)".to_string()]);
+    }
+
+    #[test]
+    fn new_category_enters_rename_with_the_id_the_service_returned() {
+        let rt = runtime();
+        let fake = FakeTodo::default();
+        let mut ws = WorkspaceState::default();
+        let (emit, rx) = collect();
+        update(
+            &mut ws,
+            Message::CategoryNewSibling(None),
+            7,
+            &svc(&fake),
+            rt.handle(),
+            emit,
+        );
+        let first = rx.recv_timeout(TIMEOUT).unwrap();
+        let second = rx.recv_timeout(TIMEOUT).unwrap();
+        assert!(
+            matches!(first, Message::CategoryRenameStart(900)),
+            "{first:?}"
+        );
+        assert!(
+            matches!(second, Message::CategoryMutated(Ok(()))),
+            "{second:?}"
+        );
+        assert_eq!(
+            fake.calls(),
+            vec!["add_category(7,None,新分类)".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_failed_category_mutation_refreshes_both_lists_from_the_service() {
+        let rt = runtime();
+        let fake = FakeTodo::failing_writes(ServiceErrorKind::Rejected, "daemon 错误: nope");
+        let mut ws = WorkspaceState::default();
+        let (emit, rx) = collect();
+        update(
+            &mut ws,
+            Message::CategoryMutated(Err("daemon 错误: nope".into())),
+            7,
+            &svc(&fake),
+            rt.handle(),
+            emit,
+        );
+        let a = rx.recv_timeout(TIMEOUT).unwrap();
+        let b = rx.recv_timeout(TIMEOUT).unwrap();
+        let kinds = |m: &Message| matches!(m, Message::Loaded(_) | Message::CategoriesLoaded(_));
+        assert!(kinds(&a) && kinds(&b), "{a:?} {b:?}");
+        assert_eq!(ws.take_outbox().len(), 1, "分类操作失败的 Toast 保持不变");
+    }
+
+    #[test]
+    fn repeated_identical_read_failures_toast_only_once() {
+        let rt = runtime();
+        let service = svc(&FakeTodo::default());
+        let mut ws = WorkspaceState::default();
+        for _ in 0..3 {
+            let (emit, _rx) = collect();
+            update(
+                &mut ws,
+                Message::LoadFailed(ServiceErrorKind::Protocol, "解码失败".into()),
+                7,
+                &service,
+                rt.handle(),
+                emit,
+            );
+        }
+        assert_eq!(ws.take_outbox().len(), 1, "轮询每秒失败一次也只提示一次");
+        let (emit, _rx) = collect();
+        update(
+            &mut ws,
+            Message::LoadFailed(ServiceErrorKind::Rejected, "另一种错误".into()),
+            7,
+            &service,
+            rt.handle(),
+            emit,
+        );
+        assert_eq!(ws.take_outbox().len(), 1, "换了一种错误要再提示");
     }
 }

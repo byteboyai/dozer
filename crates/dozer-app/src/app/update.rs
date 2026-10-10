@@ -4799,17 +4799,17 @@ impl App {
         let Some(project_id) = self.active_project_id else {
             return;
         };
-        let client = self.client.clone();
+        let service = crate::panel_host::services_for(&self.client).todo;
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
         // 异步结果/写确认透过 `proxy` 重发回主循环,回调里会借用 `self`
-        // 的 client/handle ——闭包捕获是 move 出来的副本,行得通(同
+        // 的 service/handle ——闭包捕获是 move 出来的副本,行得通(同
         // `Message::Search` 分支的既有手法)。
         let emit = move |m: todo::Message| {
             let _ = proxy.send_event(Message::Todo(m));
         };
         self.with_focused_project(move |ws, _io| {
-            todo::update(&mut ws.todo, msg, project_id, &client, &handle, emit);
+            todo::update(&mut ws.todo, msg, project_id, &service, &handle, emit);
         });
     }
 

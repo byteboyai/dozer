@@ -1,7 +1,10 @@
 //! 面板服务 trait 接缝(X0,spec 2026-10-09)。面板只依赖这里的小 trait 和 `dozer-model`,
 //! 不知道对面是 dozerd 还是内存假实现。生产实现在 `dozer-client`(为 `Client` 适配)。
 
-use dozer_model::{ConversationSummary, UsagePayload};
+use dozer_model::{
+    CategoryInfo, CategoryMoveDirection, ConversationSummary, TodoInfo, TodoStoredStatus,
+    UsagePayload,
+};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -55,11 +58,65 @@ pub trait UsageService: Send + Sync {
     ) -> BoxFuture<'_, Result<UsageRows, ServiceError>>;
 }
 
+/// Todo 面板的读写。参数按值传(future 不借用调用方局部变量,能进 `handle.spawn`)。
+/// 写操作成功只返回 `()`——面板靠随后重新拉列表拿权威状态;唯一例外 `add_category`,
+/// 面板要用新分类的 id 立刻进入重命名。
+pub trait TodoService: Send + Sync {
+    fn list_todos(&self, project_id: i64) -> BoxFuture<'_, Result<Vec<TodoInfo>, ServiceError>>;
+    fn list_categories(
+        &self,
+        project_id: i64,
+    ) -> BoxFuture<'_, Result<Vec<CategoryInfo>, ServiceError>>;
+    fn add_todo(&self, project_id: i64, text: String) -> BoxFuture<'_, Result<(), ServiceError>>;
+    fn toggle_todo(&self, id: i64, done: bool) -> BoxFuture<'_, Result<(), ServiceError>>;
+    fn edit_todo_text(&self, id: i64, text: String) -> BoxFuture<'_, Result<(), ServiceError>>;
+    fn reorder_todo(
+        &self,
+        id: i64,
+        after_id: Option<i64>,
+    ) -> BoxFuture<'_, Result<(), ServiceError>>;
+    fn set_todo_plan_date(
+        &self,
+        id: i64,
+        plan_date: Option<String>,
+    ) -> BoxFuture<'_, Result<(), ServiceError>>;
+    fn set_todo_status(
+        &self,
+        id: i64,
+        status: TodoStoredStatus,
+    ) -> BoxFuture<'_, Result<(), ServiceError>>;
+    fn set_todo_category(
+        &self,
+        id: i64,
+        category_id: Option<i64>,
+    ) -> BoxFuture<'_, Result<(), ServiceError>>;
+    fn add_category(
+        &self,
+        project_id: i64,
+        parent_id: Option<i64>,
+        name: String,
+    ) -> BoxFuture<'_, Result<CategoryInfo, ServiceError>>;
+    fn rename_category(&self, id: i64, name: String) -> BoxFuture<'_, Result<(), ServiceError>>;
+    fn delete_category(&self, id: i64) -> BoxFuture<'_, Result<(), ServiceError>>;
+    fn reparent_category(
+        &self,
+        id: i64,
+        new_parent_id: Option<i64>,
+    ) -> BoxFuture<'_, Result<(), ServiceError>>;
+    fn move_category_sibling(
+        &self,
+        id: i64,
+        direction: CategoryMoveDirection,
+    ) -> BoxFuture<'_, Result<(), ServiceError>>;
+}
+
 /// 各能力 trait 的 `Arc<dyn>` 束;host 构造,经 `PanelIo` 交给面板。其余能力 trait 随各面板迁移逐个加入。
 #[derive(Clone)]
 pub struct Services {
     pub usage: Arc<dyn UsageService>,
+    pub todo: Arc<dyn TodoService>,
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,8 +169,133 @@ mod tests {
     fn services_is_cloneable_and_shares_the_service() {
         let s = Services {
             usage: Arc::new(Mem(Ok(vec![]))),
+            todo: Arc::new(MemTodo(Ok(vec![]))),
         };
         let t = s.clone();
         assert!(Arc::ptr_eq(&s.usage, &t.usage));
+        assert!(Arc::ptr_eq(&s.todo, &t.todo));
+    }
+
+    // ---- TodoService 契约 ----
+
+    use dozer_model::{CategoryInfo, CategoryMoveDirection, TodoInfo, TodoStoredStatus};
+
+    fn unit() -> BoxFuture<'static, Result<(), ServiceError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// 内存实现:读返回预设结果,写一律成功。
+    struct MemTodo(Result<Vec<TodoInfo>, ServiceError>);
+
+    impl TodoService for MemTodo {
+        fn list_todos(&self, _p: i64) -> BoxFuture<'_, Result<Vec<TodoInfo>, ServiceError>> {
+            let r = self.0.clone();
+            Box::pin(async move { r })
+        }
+        fn list_categories(
+            &self,
+            _p: i64,
+        ) -> BoxFuture<'_, Result<Vec<CategoryInfo>, ServiceError>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+        fn add_todo(&self, _p: i64, _t: String) -> BoxFuture<'_, Result<(), ServiceError>> {
+            unit()
+        }
+        fn toggle_todo(&self, _i: i64, _d: bool) -> BoxFuture<'_, Result<(), ServiceError>> {
+            unit()
+        }
+        fn edit_todo_text(&self, _i: i64, _t: String) -> BoxFuture<'_, Result<(), ServiceError>> {
+            unit()
+        }
+        fn reorder_todo(
+            &self,
+            _i: i64,
+            _a: Option<i64>,
+        ) -> BoxFuture<'_, Result<(), ServiceError>> {
+            unit()
+        }
+        fn set_todo_plan_date(
+            &self,
+            _i: i64,
+            _d: Option<String>,
+        ) -> BoxFuture<'_, Result<(), ServiceError>> {
+            unit()
+        }
+        fn set_todo_status(
+            &self,
+            _i: i64,
+            _s: TodoStoredStatus,
+        ) -> BoxFuture<'_, Result<(), ServiceError>> {
+            unit()
+        }
+        fn set_todo_category(
+            &self,
+            _i: i64,
+            _c: Option<i64>,
+        ) -> BoxFuture<'_, Result<(), ServiceError>> {
+            unit()
+        }
+        fn add_category(
+            &self,
+            _p: i64,
+            _par: Option<i64>,
+            _n: String,
+        ) -> BoxFuture<'_, Result<CategoryInfo, ServiceError>> {
+            Box::pin(async { Err(ServiceError::new(ServiceErrorKind::Protocol, "mem")) })
+        }
+        fn rename_category(&self, _i: i64, _n: String) -> BoxFuture<'_, Result<(), ServiceError>> {
+            unit()
+        }
+        fn delete_category(&self, _i: i64) -> BoxFuture<'_, Result<(), ServiceError>> {
+            unit()
+        }
+        fn reparent_category(
+            &self,
+            _i: i64,
+            _p: Option<i64>,
+        ) -> BoxFuture<'_, Result<(), ServiceError>> {
+            unit()
+        }
+        fn move_category_sibling(
+            &self,
+            _i: i64,
+            _d: CategoryMoveDirection,
+        ) -> BoxFuture<'_, Result<(), ServiceError>> {
+            unit()
+        }
+    }
+
+    /// `handle.spawn` 要 `'static + Send`:持有 `Arc<dyn TodoService>` 的 async 块必须满足。
+    #[test]
+    fn dyn_todo_service_futures_run_inside_tokio_spawn() {
+        let svc: Arc<dyn TodoService> = Arc::new(MemTodo(Ok(vec![])));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let (list, write) = rt.block_on(async move {
+            tokio::spawn(async move {
+                let list = svc.list_todos(7).await;
+                let write = svc.add_todo(7, "x".into()).await;
+                (list, write)
+            })
+            .await
+            .unwrap()
+        });
+        assert_eq!(list, Ok(vec![]));
+        assert_eq!(write, Ok(()));
+    }
+
+    #[test]
+    fn todo_read_failure_is_distinguishable_from_an_empty_list() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let empty = MemTodo(Ok(vec![]));
+        let down = MemTodo(Err(ServiceError::new(ServiceErrorKind::Unavailable, "x")));
+        assert!(rt.block_on(empty.list_todos(1)).is_ok());
+        assert_eq!(
+            rt.block_on(down.list_todos(1)).unwrap_err().kind,
+            ServiceErrorKind::Unavailable
+        );
     }
 }

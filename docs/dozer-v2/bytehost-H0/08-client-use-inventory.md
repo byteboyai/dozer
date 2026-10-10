@@ -61,3 +61,9 @@
 | 不抽 | `database`、终端流 | 一致 |
 
 以盘点为准;分组修订只作登记,不改本轮范围(仅 Usage)。
+
+## Todo 迁移(2026-10-10)
+
+`extensions/todo/**` 已经 `TodoService`(`dozer-services`)取数与写入;`R-CLIENT` 基线中 `todo/*` 已清零。读失败改为 `LoadFailed`:保留旧列表,`Unavailable` 静默,`Rejected`/`Protocol` 弹 `todo-load` Toast。`add_category` 返回 `CategoryInfo`(面板要用新分类 id 进入重命名),其余写操作返回 `()`。规格 `docs/superpowers/specs/2026-10-10-todo-services-design.md`。
+
+**后续项(未修):** `todo::Message::Loaded` / `CategoriesLoaded` 没有 project_id 与代数保护(同 Usage 已修的 G3b),慢的旧结果可能覆盖新结果。

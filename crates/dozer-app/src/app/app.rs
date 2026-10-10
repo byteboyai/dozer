@@ -1661,15 +1661,15 @@ impl App {
         let Some(project_id) = self.active_project_id else {
             return;
         };
-        let client = self.client.clone();
+        let service = crate::panel_host::services_for(&self.client).todo;
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
         let emit = move |m: todo::Message| {
             let _ = proxy.send_event(Message::Todo(m));
         };
         let emit_todos = emit.clone();
-        todo::request_todos_refresh(project_id, &client, &handle, emit_todos);
-        todo::request_categories_refresh(project_id, &client, &handle, emit);
+        todo::request_todos_refresh(project_id, &service, &handle, emit_todos);
+        todo::request_categories_refresh(project_id, &service, &handle, emit);
     }
 
     /// 群聊面板当前是否"正被看着":在某一侧显示、该侧未收起,且没有被另一侧的

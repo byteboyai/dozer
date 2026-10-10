@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |-------|------|
 | `crates/dozer-core` | 共享类型、路径、UDS 协议 |
 | `crates/dozer-model` | 领域数据类型(线上 JSON 形状的唯一定义处,仅依赖 serde);面板代码从这里取数据类型,不再引用 `dozer_core::protocol`(`R-PROTOCOL` 门禁);`dozer-core::protocol` 保留兼容出口 |
-| `crates/dozer-services` | 面板服务 trait 接缝(仅依赖 dozer-model);面板经 `PanelIo.services()` 取数,不再直接依赖 `dozer_client`(`R-CLIENT` 门禁,Usage 已迁,其余面板待迁);生产实现在 `dozer-client` |
+| `crates/dozer-services` | 面板服务 trait 接缝(仅依赖 dozer-model);面板经 `PanelIo.services()` 取数,不再直接依赖 `dozer_client`(`R-CLIENT` 门禁,Usage、Todo 已迁,其余面板待迁);生产实现在 `dozer-client` |
 | `crates/dozerd` | session daemon：PTY 池、会话存活（bin: `dozerd`） |
 | `crates/dozer-app` | iced 0.14 GUI（bin: `dozer`） |
 | `crates/dozer-hook` | 被 agent hooks 调用的零依赖小二进制（bin: `dozer-hook`） |
