@@ -8,6 +8,7 @@
 use crate::extensions::toast::{Level, Outbox, Pending};
 use crate::panel_host::PanelIo;
 use dozer_model::{GroupInfo, GroupMessageInfo, GroupMessageStatus};
+use dozer_services::ServiceError;
 use std::time::{Duration, Instant};
 
 mod protocol;
@@ -427,22 +428,23 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
 
 /// 加载某项目的群聊列表。
 pub fn spawn_load_groups(project_id: i64, io: &PanelIo<Message>) {
-    io.spawn(move |client, io| async move {
-        let result = client
+    io.spawn(move |services, io| async move {
+        let result = services
+            .group_chat
             .list_groups(project_id)
             .await
-            .map_err(|e| e.to_string());
+            .map_err(|e| e.message);
         io.emit(Message::GroupsLoaded(project_id, result));
     });
 }
 
-/// 取某群 `rev > after_rev` 的消息(`after_rev = 0` 即全量)。
 pub fn spawn_fetch_messages(project_id: i64, group_id: i64, after_rev: i64, io: &PanelIo<Message>) {
-    io.spawn(move |client, io| async move {
-        let result = client
+    io.spawn(move |services, io| async move {
+        let result = services
+            .group_chat
             .list_group_messages(group_id, after_rev, POLL_LIMIT)
             .await
-            .map_err(|e| e.to_string());
+            .map_err(|e| e.message);
         io.emit(Message::Polled {
             project_id,
             group_id,
@@ -454,15 +456,16 @@ pub fn spawn_fetch_messages(project_id: i64, group_id: i64, after_rev: i64, io: 
 /// 执行一条经 `route_event` 校验过的命令。`SelectGroup`/`OpenTodo` 不走这里
 /// (前者是同步状态变更,见 [`select_group`];后者是切面板,由 host 处理)。
 pub fn spawn_command(project_id: i64, cmd: Command, io: &PanelIo<Message>) {
-    io.spawn(move |client, io| async move {
+    io.spawn(move |services, io| async move {
+        let chat = services.group_chat;
         let fail =
-            |what: &str, e: anyhow::Error| Message::Failed(project_id, format!("{what}: {e}"));
+            |what: &str, e: ServiceError| Message::Failed(project_id, format!("{what}: {e}"));
         match cmd {
-            Command::CreateGroup { topic } => match client.create_group(project_id, &topic).await {
+            Command::CreateGroup { topic } => match chat.create_group(project_id, topic).await {
                 Ok(group) => io.emit(Message::GroupCreated(project_id, group)),
                 Err(e) => io.emit(fail("新建群聊失败", e)),
             },
-            Command::DeleteGroup { group_id } => match client.delete_group(group_id).await {
+            Command::DeleteGroup { group_id } => match chat.delete_group(group_id).await {
                 Ok(()) => io.emit(Message::GroupDeleted(project_id, group_id)),
                 Err(e) => io.emit(fail("删除群聊失败", e)),
             },
@@ -471,8 +474,8 @@ pub fn spawn_command(project_id: i64, cmd: Command, io: &PanelIo<Message>) {
                 agent,
                 handle,
                 role_prompt,
-            } => match client
-                .add_group_member(group_id, agent, &handle, &role_prompt)
+            } => match chat
+                .add_group_member(group_id, agent, handle, role_prompt)
                 .await
             {
                 Ok(group) => io.emit(Message::GroupChanged(project_id, group)),
@@ -482,21 +485,21 @@ pub fn spawn_command(project_id: i64, cmd: Command, io: &PanelIo<Message>) {
                 member_id,
                 handle,
                 role_prompt,
-            } => match client
-                .update_group_member(member_id, &handle, &role_prompt)
+            } => match chat
+                .update_group_member(member_id, handle, role_prompt)
                 .await
             {
                 Ok(group) => io.emit(Message::GroupChanged(project_id, group)),
                 Err(e) => io.emit(fail("修改成员失败", e)),
             },
             Command::RemoveMember { member_id } => {
-                match client.remove_group_member(member_id).await {
+                match chat.remove_group_member(member_id).await {
                     Ok(group) => io.emit(Message::GroupChanged(project_id, group)),
                     Err(e) => io.emit(fail("移除成员失败", e)),
                 }
             }
             Command::Post { group_id, text } => {
-                match client.post_group_message(group_id, &text).await {
+                match chat.post_group_message(group_id, text).await {
                     Ok((human, placeholders, unknown)) => io.emit(Message::Posted {
                         project_id,
                         group_id,
@@ -508,11 +511,11 @@ pub fn spawn_command(project_id: i64, cmd: Command, io: &PanelIo<Message>) {
                 }
             }
             Command::Cancel { group_id, scope } => {
-                if let Err(e) = client.cancel_group(group_id, scope).await {
+                if let Err(e) = chat.cancel_group(group_id, scope).await {
                     io.emit(fail("停止失败", e));
                 }
             }
-            Command::Retry { message_id } => match client.retry_group_message(message_id).await {
+            Command::Retry { message_id } => match chat.retry_group_message(message_id).await {
                 Ok(message) => io.emit(Message::MessageUpdated(project_id, message)),
                 Err(e) => io.emit(fail("重试失败", e)),
             },
@@ -520,7 +523,7 @@ pub fn spawn_command(project_id: i64, cmd: Command, io: &PanelIo<Message>) {
                 group_id,
                 message_id,
                 text,
-            } => match client.push_group_message_to_todo(message_id, &text).await {
+            } => match chat.push_group_message_to_todo(message_id, text).await {
                 Ok(todo) => io.emit(Message::TodoPushed {
                     project_id,
                     group_id,
@@ -1070,23 +1073,27 @@ mod tests {
     // ---- H4:Effect/Command 的执行器随面板走(host 只给 PanelIo) ----
 
     use crate::panel_host::PanelIo;
-    use std::sync::mpsc::{Receiver, channel};
-    use std::sync::{Arc, Mutex};
+    use crate::service_fakes::FakeGroupChat;
+    use dozer_services::ServiceErrorKind;
+    use std::sync::mpsc::Receiver;
 
     const TIMEOUT: Duration = Duration::from_secs(5);
 
-    /// `Client` 指向不存在的 socket:所有请求都会快速失败,于是每个任务都恰好发出一条"失败"
+    /// 默认服务束由指向不存在 socket 的 `Client` 适配:所有请求都会快速失败,于是每个任务都恰好发出一条"失败"
     /// 形态的消息——不需要 dozerd 就能断言"哪个 Effect/Command 触发了哪个任务、报什么错"。
     fn offline_io(rt: &tokio::runtime::Runtime) -> (PanelIo<Message>, Receiver<Message>) {
-        let (tx, rx) = channel();
-        let tx = Arc::new(Mutex::new(tx));
-        let client = dozer_client::Client::new(std::path::PathBuf::from(
-            "/tmp/dozer-group-chat-test-nonexistent.sock",
-        ));
-        let io = PanelIo::new(client, rt.handle().clone(), move |m| {
-            let _ = tx.lock().unwrap().send(m);
-        });
-        (io, rx)
+        // 默认服务束由指向不存在 socket 的 Client 适配:所有请求快速失败,语义同迁移前。
+        let (ctx, rx) = crate::panel_host::testing::offline_ctx::<Message>(rt, 7, None);
+        (ctx.io, rx)
+    }
+
+    /// 用进程内 `FakeGroupChat` 构造 io(不起任何 socket)。
+    fn fake_io(
+        rt: &tokio::runtime::Runtime,
+        fake: &FakeGroupChat,
+    ) -> (PanelIo<Message>, Receiver<Message>) {
+        let (ctx, rx) = crate::panel_host::testing::offline_ctx::<Message>(rt, 7, None);
+        (ctx.io.with_services(fake.clone().into_services()), rx)
     }
 
     fn runtime() -> tokio::runtime::Runtime {
@@ -1298,5 +1305,213 @@ mod tests {
         assert!(s.load_pending(), "切入后下次轮询要重新加载群列表");
         assert_eq!(s.groups().len(), 1, "不清已有内容,免得切入瞬间闪成没有群聊");
         assert!(s.loaded(), "ever_loaded 不回退,前端不闪回加载中");
+    }
+
+    #[test]
+    fn successful_commands_emit_their_messages() {
+        let rt = runtime();
+        let fake = FakeGroupChat::default();
+        let (io, rx) = fake_io(&rt, &fake);
+        spawn_command(
+            7,
+            Command::CreateGroup {
+                topic: "主题".into(),
+            },
+            &io,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::GroupCreated(7, g) => assert_eq!((g.id, g.topic.as_str()), (900, "主题")),
+            other => panic!("unexpected: {other:?}"),
+        }
+        spawn_command(7, Command::DeleteGroup { group_id: 5 }, &io);
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::GroupDeleted(7, 5)
+        ));
+        for cmd in [
+            Command::AddMember {
+                group_id: 5,
+                agent: dozer_model::AgentKind::Claude,
+                handle: "h".into(),
+                role_prompt: String::new(),
+            },
+            Command::UpdateMember {
+                member_id: 1,
+                handle: "h".into(),
+                role_prompt: String::new(),
+            },
+            Command::RemoveMember { member_id: 1 },
+        ] {
+            spawn_command(7, cmd.clone(), &io);
+            assert!(
+                matches!(
+                    rx.recv_timeout(TIMEOUT).unwrap(),
+                    Message::GroupChanged(7, _)
+                ),
+                "{cmd:?}"
+            );
+        }
+        spawn_command(
+            7,
+            Command::Post {
+                group_id: 5,
+                text: "hi".into(),
+            },
+            &io,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::Posted {
+                project_id: 7,
+                group_id: 5,
+                human,
+                placeholders,
+                unknown,
+            } => {
+                assert_eq!(human.id, 901);
+                assert_eq!(placeholders.len(), 1);
+                assert_eq!(unknown, vec!["unknown".to_string()]);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        spawn_command(7, Command::Retry { message_id: 9 }, &io);
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::MessageUpdated(7, m) => assert_eq!(m.id, 9),
+            other => panic!("unexpected: {other:?}"),
+        }
+        spawn_command(
+            7,
+            Command::PushTodo {
+                group_id: 5,
+                message_id: 9,
+                text: "x".into(),
+            },
+            &io,
+        );
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::TodoPushed {
+                project_id: 7,
+                group_id: 5,
+                message_id: 9,
+                todo_id: 77
+            }
+        ));
+    }
+
+    #[test]
+    fn a_successful_cancel_emits_nothing() {
+        let rt = runtime();
+        let fake = FakeGroupChat::default();
+        let (io, rx) = fake_io(&rt, &fake);
+        spawn_command(
+            7,
+            Command::Cancel {
+                group_id: 5,
+                scope: dozer_model::GroupCancelScope::Turn,
+            },
+            &io,
+        );
+        assert!(
+            rx.recv_timeout(Duration::from_millis(300)).is_err(),
+            "成功的停止不发任何消息"
+        );
+        assert_eq!(fake.calls(), vec!["cancel_group(5,Turn)".to_string()]);
+    }
+
+    #[test]
+    fn command_failure_text_is_prefix_plus_the_service_message_unchanged() {
+        let cases: Vec<(Command, &str)> = vec![
+            (Command::CreateGroup { topic: "t".into() }, "新建群聊失败"),
+            (Command::DeleteGroup { group_id: 5 }, "删除群聊失败"),
+            (
+                Command::AddMember {
+                    group_id: 5,
+                    agent: dozer_model::AgentKind::Claude,
+                    handle: "h".into(),
+                    role_prompt: String::new(),
+                },
+                "添加成员失败",
+            ),
+            (
+                Command::UpdateMember {
+                    member_id: 1,
+                    handle: "h".into(),
+                    role_prompt: String::new(),
+                },
+                "修改成员失败",
+            ),
+            (Command::RemoveMember { member_id: 1 }, "移除成员失败"),
+            (
+                Command::Post {
+                    group_id: 5,
+                    text: "hi".into(),
+                },
+                "发送失败",
+            ),
+            (
+                Command::Cancel {
+                    group_id: 5,
+                    scope: dozer_model::GroupCancelScope::Turn,
+                },
+                "停止失败",
+            ),
+            (Command::Retry { message_id: 9 }, "重试失败"),
+            (
+                Command::PushTodo {
+                    group_id: 5,
+                    message_id: 9,
+                    text: "x".into(),
+                },
+                "转为待办失败",
+            ),
+        ];
+        let rt = runtime();
+        for (cmd, wording) in cases {
+            let fake =
+                FakeGroupChat::failing_writes(ServiceErrorKind::Rejected, "daemon 错误: boom");
+            let (io, rx) = fake_io(&rt, &fake);
+            spawn_command(7, cmd.clone(), &io);
+            match rx.recv_timeout(TIMEOUT).unwrap() {
+                Message::Failed(7, text) => {
+                    assert_eq!(text, format!("{wording}: daemon 错误: boom"), "{cmd:?}")
+                }
+                other => panic!("{cmd:?}: unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn fetch_messages_passes_after_rev_and_the_poll_limit_to_the_service() {
+        let rt = runtime();
+        let fake = FakeGroupChat::default().with_messages(vec![], 42);
+        let (io, rx) = fake_io(&rt, &fake);
+        spawn_fetch_messages(7, 5, 3, &io);
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::Polled {
+                project_id: 7,
+                group_id: 5,
+                result: Ok((msgs, latest)),
+            } => {
+                assert!(msgs.is_empty());
+                assert_eq!(latest, 42);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(
+            fake.calls(),
+            vec![format!("list_group_messages(5,3,{POLL_LIMIT})")]
+        );
+    }
+
+    #[test]
+    fn load_groups_failure_text_is_the_service_message_unchanged() {
+        let rt = runtime();
+        let fake = FakeGroupChat::failing_reads(ServiceErrorKind::Unavailable, "daemon 断开");
+        let (io, rx) = fake_io(&rt, &fake);
+        spawn_load_groups(7, &io);
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::GroupsLoaded(7, Err(text)) => assert_eq!(text, "daemon 断开"),
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 }

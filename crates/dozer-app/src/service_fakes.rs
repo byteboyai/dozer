@@ -1,10 +1,12 @@
 //! 进程内服务假实现(只在测试里):不起 UDS,返回固定结果并记录调用。
 use dozer_model::{
-    AgentKind, CategoryInfo, CategoryMoveDirection, MemoryDetail, MemoryInfo, ProjectInfo,
-    SummaryBatchInfo, TodoInfo, TodoStoredStatus,
+    AgentKind, CategoryInfo, CategoryMoveDirection, GroupAuthor, GroupCancelScope, GroupInfo,
+    GroupMessageInfo, MemoryDetail, MemoryInfo, ProjectInfo, SummaryBatchInfo, TodoInfo,
+    TodoStoredStatus,
 };
 use dozer_services::{
-    BoxFuture, MemoryService, ProjectService, ServiceError, ServiceErrorKind, Services, TodoService,
+    BoxFuture, GroupChatService, MemoryService, PostedMessages, ProjectService, ServiceError,
+    ServiceErrorKind, Services, TodoService,
 };
 use std::sync::{Arc, Mutex};
 
@@ -182,6 +184,7 @@ pub(crate) fn base_services() -> Services {
         todo: Arc::new(FakeTodo::default()),
         project: Arc::new(FakeProject::default()),
         memory: Arc::new(FakeMemory::default()),
+        group_chat: Arc::new(FakeGroupChat::default()),
     }
 }
 
@@ -466,5 +469,232 @@ impl ProjectService for FakeProject {
         };
         s.batch_calls += 1;
         Box::pin(async move { r })
+    }
+}
+
+/// 固定 `GroupInfo`(无成员)。
+pub(crate) fn group_info(id: i64, topic: &str) -> GroupInfo {
+    GroupInfo {
+        id,
+        project_id: 1,
+        topic: topic.into(),
+        created_ms: 0,
+        members: vec![],
+    }
+}
+
+/// 固定 `GroupMessageInfo`(人类发言,无状态)。
+pub(crate) fn group_message(id: i64, group_id: i64, rev: i64) -> GroupMessageInfo {
+    GroupMessageInfo {
+        id,
+        group_id,
+        seq: rev,
+        rev,
+        author: GroupAuthor::Human,
+        text: format!("m{id}"),
+        mentions: vec![],
+        status: None,
+        duration_ms: None,
+        created_ms: 0,
+        todo_id: None,
+    }
+}
+
+/// 固定 `TodoInfo`。
+pub(crate) fn todo_info(id: i64) -> TodoInfo {
+    TodoInfo {
+        id,
+        project_id: 1,
+        text: "t".into(),
+        done: false,
+        paused: false,
+        rank: 0,
+        created_ms: 0,
+        completed_at_ms: None,
+        plan_date: None,
+        dispatch_session_id: None,
+        dispatch_at_ms: None,
+        category_id: None,
+        assigned_agent: None,
+    }
+}
+
+// ---- FakeGroupChat ----
+
+struct GroupChatState {
+    groups: Result<Vec<GroupInfo>, ServiceError>,
+    messages: Result<(Vec<GroupMessageInfo>, i64), ServiceError>,
+    write_error: Option<ServiceError>,
+    calls: Vec<String>,
+}
+
+/// 克隆共享同一份状态。`Default` = 读写都成功、空。
+#[derive(Clone)]
+pub(crate) struct FakeGroupChat {
+    state: Arc<Mutex<GroupChatState>>,
+}
+
+impl Default for FakeGroupChat {
+    fn default() -> Self {
+        Self::with(Ok(vec![]), Ok((vec![], 0)), None)
+    }
+}
+
+impl FakeGroupChat {
+    fn with(
+        groups: Result<Vec<GroupInfo>, ServiceError>,
+        messages: Result<(Vec<GroupMessageInfo>, i64), ServiceError>,
+        write_error: Option<ServiceError>,
+    ) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(GroupChatState {
+                groups,
+                messages,
+                write_error,
+                calls: vec![],
+            })),
+        }
+    }
+    pub(crate) fn with_messages(self, messages: Vec<GroupMessageInfo>, latest_rev: i64) -> Self {
+        self.state.lock().unwrap().messages = Ok((messages, latest_rev));
+        self
+    }
+    pub(crate) fn failing_reads(kind: ServiceErrorKind, message: &str) -> Self {
+        let e = ServiceError::new(kind, message);
+        Self::with(Err(e.clone()), Err(e), None)
+    }
+    pub(crate) fn failing_writes(kind: ServiceErrorKind, message: &str) -> Self {
+        Self::with(
+            Ok(vec![]),
+            Ok((vec![], 0)),
+            Some(ServiceError::new(kind, message)),
+        )
+    }
+    pub(crate) fn calls(&self) -> Vec<String> {
+        self.state.lock().unwrap().calls.clone()
+    }
+    pub(crate) fn into_services(self) -> Services {
+        Services {
+            group_chat: Arc::new(self),
+            ..base_services()
+        }
+    }
+    /// 记录一次写调用并按预设返回:有 `write_error` 则失败,否则 `ok()`。
+    fn write<T: Send + 'static>(
+        &self,
+        call: String,
+        ok: impl FnOnce() -> T,
+    ) -> BoxFuture<'_, Result<T, ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls.push(call);
+        let r = match &s.write_error {
+            Some(e) => Err(e.clone()),
+            None => Ok(ok()),
+        };
+        Box::pin(async move { r })
+    }
+}
+
+impl GroupChatService for FakeGroupChat {
+    fn list_groups(&self, project_id: i64) -> BoxFuture<'_, Result<Vec<GroupInfo>, ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls.push(format!("list_groups({project_id})"));
+        let r = s.groups.clone();
+        Box::pin(async move { r })
+    }
+    fn list_group_messages(
+        &self,
+        group_id: i64,
+        after_rev: i64,
+        limit: u32,
+    ) -> BoxFuture<'_, Result<(Vec<GroupMessageInfo>, i64), ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls.push(format!(
+            "list_group_messages({group_id},{after_rev},{limit})"
+        ));
+        let r = s.messages.clone();
+        Box::pin(async move { r })
+    }
+    fn create_group(
+        &self,
+        project_id: i64,
+        topic: String,
+    ) -> BoxFuture<'_, Result<GroupInfo, ServiceError>> {
+        let call = format!("create_group({project_id},{topic})");
+        self.write(call, move || group_info(900, &topic))
+    }
+    fn delete_group(&self, group_id: i64) -> BoxFuture<'_, Result<(), ServiceError>> {
+        self.write(format!("delete_group({group_id})"), || ())
+    }
+    fn add_group_member(
+        &self,
+        group_id: i64,
+        agent: AgentKind,
+        handle: String,
+        _role_prompt: String,
+    ) -> BoxFuture<'_, Result<GroupInfo, ServiceError>> {
+        self.write(
+            format!("add_group_member({group_id},{agent:?},{handle})"),
+            || group_info(1, "g"),
+        )
+    }
+    fn update_group_member(
+        &self,
+        member_id: i64,
+        handle: String,
+        _role_prompt: String,
+    ) -> BoxFuture<'_, Result<GroupInfo, ServiceError>> {
+        self.write(format!("update_group_member({member_id},{handle})"), || {
+            group_info(1, "g")
+        })
+    }
+    fn remove_group_member(
+        &self,
+        member_id: i64,
+    ) -> BoxFuture<'_, Result<GroupInfo, ServiceError>> {
+        self.write(format!("remove_group_member({member_id})"), || {
+            group_info(1, "g")
+        })
+    }
+    fn post_group_message(
+        &self,
+        group_id: i64,
+        text: String,
+    ) -> BoxFuture<'_, Result<PostedMessages, ServiceError>> {
+        self.write(
+            format!("post_group_message({group_id},{text})"),
+            move || {
+                (
+                    group_message(901, group_id, 1),
+                    vec![group_message(902, group_id, 2)],
+                    vec!["unknown".to_string()],
+                )
+            },
+        )
+    }
+    fn cancel_group(
+        &self,
+        group_id: i64,
+        scope: GroupCancelScope,
+    ) -> BoxFuture<'_, Result<(), ServiceError>> {
+        self.write(format!("cancel_group({group_id},{scope:?})"), || ())
+    }
+    fn retry_group_message(
+        &self,
+        message_id: i64,
+    ) -> BoxFuture<'_, Result<GroupMessageInfo, ServiceError>> {
+        self.write(format!("retry_group_message({message_id})"), move || {
+            group_message(message_id, 1, 1)
+        })
+    }
+    fn push_group_message_to_todo(
+        &self,
+        message_id: i64,
+        text: String,
+    ) -> BoxFuture<'_, Result<TodoInfo, ServiceError>> {
+        self.write(
+            format!("push_group_message_to_todo({message_id},{text})"),
+            || todo_info(77),
+        )
     }
 }

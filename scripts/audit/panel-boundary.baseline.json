@@ -21,9 +21,6 @@
  "extensions/edit_history.rs": {
   "R-CLIENT": 2
  },
- "extensions/group_chat/mod.rs": {
-  "R-CLIENT": 1
- },
  "extensions/project_create.rs": {
   "R-CLIENT": 1
  },
