@@ -84,3 +84,13 @@
 **后续项(未修):**
 - `GroupsLoaded` 没有项目/代数保护(`Polled` 靠 `selected` 比对)。
 - 剩余直接使用 `Client` 的面板:`conversations`、`codehealth`、`agent_context`、`browser`、`edit_history`、`settings`、`project_create`。
+
+## Conversations 迁移(2026-10-11)
+
+`extensions/conversations.rs` 已经 `ConversationService`(`dozer-services`)取数;`R-CLIENT` 基线中 `conversations.rs` 已清零。刷新失败改为分档:已有列表保留(此前会整体清空)、首次失败仍显示空列表(不卡在"加载中")、`Unavailable` 静默、其余弹 `conversations-load` Toast(同文本 60 秒内一次)。host 的 `conversation_summary_generate` 里那一次列表刷新调用随 `SessionsRefreshed` 的结果类型一起改用服务。规格 `docs/superpowers/specs/2026-10-11-conversation-services-design.md`。
+
+**后续项(未修):**
+- `SessionsRefreshed` 没有代数保护(慢的旧结果可能覆盖新结果)。
+- 读失败冷却逻辑在 Todo / Project / Conversations 各有一份(`LOAD_FAILURE_TOAST_COOLDOWN`),可抽到 `toast::Outbox`。
+- host 侧其余会话调用(打开、翻页、总结任务、homespace、hook)仍直接用 `Client`。
+- 剩余直接用 `Client` 的面板:`codehealth`、`agent_context`、`browser`、`edit_history`、`settings`、`project_create`。

@@ -19,6 +19,7 @@ use byteui::interaction::icons::IconKind;
 use dozer_model::AgentKind;
 use dozer_model::SessionRow;
 use dozer_model::TodoInfo;
+use dozer_services::{ConversationService, ServiceError, ServiceErrorKind};
 use iced_widget::core::Rectangle;
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
@@ -26,7 +27,7 @@ use iced_widget::core::{Border, Element, Length};
 use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 dozer_core::scope!(LOG, panel, "conversations");
 
@@ -127,9 +128,21 @@ pub struct WorkspaceState {
     agent_picker_open: bool,
     summary_generating: HashSet<String>,
     summary_errors: HashMap<String, String>,
+    /// 待发提示;`App::drain_outboxes` 排空成 Toast。
+    outbox: crate::extensions::toast::Outbox,
+    /// 上一次已提示的刷新失败(文本 + 时刻),用于冷却去重。
+    last_load_failure: Option<(String, std::time::Instant)>,
 }
 
+/// 相同刷新失败文本再次提示的最短间隔。
+pub(crate) const LOAD_FAILURE_TOAST_COOLDOWN: std::time::Duration =
+    std::time::Duration::from_secs(60);
+
 impl WorkspaceState {
+    pub fn take_outbox(&mut self) -> Vec<crate::extensions::toast::Pending> {
+        self.outbox.take()
+    }
+
     pub fn summary_generating(&self, conversation_id: &str) -> bool {
         self.summary_generating.contains(conversation_id)
     }
@@ -186,7 +199,7 @@ impl WorkspaceState {
 pub enum Message {
     /// 会话列表刷新结果:当前项目全部 session(联查总结),按最后活跃时间
     /// 倒序。按自带的 `ProjectId` 走 `with_project` 路由。
-    SessionsRefreshed(ProjectId, Result<Vec<SessionRow>, String>),
+    SessionsRefreshed(ProjectId, Result<Vec<SessionRow>, ServiceError>),
     /// 点击某一行打开该 session 的详情审阅。由内核 `App::update` 直接拦截
     /// 处理(要写进跨面板共享的 `ws.review`),不会到达 `update()`。
     SessionOpen(String, AgentKind),
@@ -221,15 +234,38 @@ pub enum Message {
 
 pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
     match msg {
-        Message::SessionsRefreshed(_, result) => {
-            ws_state.sessions = Some(match result {
-                Ok(rows) => rows,
-                Err(e) => {
-                    dozer_core::log_warn!(LOG, error = %e, "对话会话列表查询失败");
-                    Vec::new()
+        Message::SessionsRefreshed(_, result) => match result {
+            Ok(rows) => ws_state.sessions = Some(rows),
+            Err(e) => {
+                // 首次加载失败:置空列表(不停在 None,界面不会一直"加载中");已有列表则保留。
+                if ws_state.sessions.is_none() {
+                    ws_state.sessions = Some(Vec::new());
                 }
-            });
-        }
+                if e.kind == ServiceErrorKind::Unavailable {
+                    dozer_core::log_debug!(
+                        LOG,
+                        "对话会话列表查询失败(dozerd 不可用): {}",
+                        e.message
+                    );
+                } else {
+                    let now = std::time::Instant::now();
+                    let repeat = matches!(
+                        &ws_state.last_load_failure,
+                        Some((last, at)) if *last == e.message
+                            && now.duration_since(*at) < LOAD_FAILURE_TOAST_COOLDOWN
+                    );
+                    if !repeat {
+                        ws_state.outbox.push_keyed(
+                            LOG,
+                            crate::extensions::toast::Level::Error,
+                            format!("会话列表加载失败: {}", e.message),
+                            "conversations-load",
+                        );
+                        ws_state.last_load_failure = Some((e.message, now));
+                    }
+                }
+            }
+        },
         Message::ListMore => ws_state.pages += 1,
         Message::SearchInput(s) => ws_state.search_draft = s,
         Message::SearchSubmit => {
@@ -260,21 +296,19 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
 pub fn spawn_refresh(
     project_id: i64,
     cwd: PathBuf,
-    client: &dozer_client::Client,
+    service: Arc<dyn ConversationService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
-    let client = client.clone();
     handle.spawn(async move {
-        let result = client
-            .list_conversations_with_summaries(&cwd.to_string_lossy(), None, 500, 0)
+        let result = service
+            .list_conversations_with_summaries(cwd.to_string_lossy().into_owned(), None, 500, 0)
             .await
             .map(|rows| {
                 rows.iter()
                     .map(|(c, s)| SessionRow::from_row(c, s.as_ref()))
                     .collect()
-            })
-            .map_err(|e| e.to_string());
+            });
         emit(Message::SessionsRefreshed(project_id, result));
     });
 }
@@ -288,7 +322,7 @@ pub fn on_activate(ctx: &crate::panel_host::ActivationCtx<Message>) {
     spawn_refresh(
         ctx.project_id,
         cwd,
-        ctx.io.client(),
+        ctx.io.services().conversation.clone(),
         ctx.io.handle(),
         ctx.io.emitter(),
     );
@@ -704,7 +738,10 @@ mod tests {
         let mut ws_state = WorkspaceState::default();
         update(
             &mut ws_state,
-            Message::SessionsRefreshed(1, Err("boom".into())),
+            Message::SessionsRefreshed(
+                1,
+                Err(ServiceError::new(ServiceErrorKind::Protocol, "boom")),
+            ),
         );
         assert_eq!(ws_state.sessions(), Some([].as_slice()));
     }
@@ -881,6 +918,8 @@ mod tests {
     // ---- H6:切入钩子 ----
 
     use crate::panel_host::testing::{TIMEOUT, offline_ctx, runtime};
+    use crate::service_fakes::{FakeConversation, conversation_row};
+    use dozer_services::{ServiceError, ServiceErrorKind};
 
     #[test]
     fn on_activate_refreshes_the_session_list_of_that_project() {
@@ -902,5 +941,144 @@ mod tests {
             rx.recv_timeout(std::time::Duration::from_millis(200))
                 .is_err()
         );
+    }
+
+    fn sample_session(id: &str) -> SessionRow {
+        let (c, s) = conversation_row(id, "标题");
+        SessionRow::from_row(&c, s.as_ref())
+    }
+
+    #[test]
+    fn spawn_refresh_maps_rows_and_passes_the_arguments_through() {
+        let rt = runtime();
+        let fake = FakeConversation::default().with_rows(vec![conversation_row("c1", "标题")]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        spawn_refresh(
+            7,
+            PathBuf::from("/tmp/p"),
+            fake.clone().into_services().conversation,
+            rt.handle(),
+            move |m| {
+                let _ = tx.lock().unwrap().send(m);
+            },
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::SessionsRefreshed(7, Ok(rows)) => {
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].conversation_id, "c1");
+                assert_eq!(rows[0].display_title, "标题");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(
+            fake.calls(),
+            vec!["list_conversations_with_summaries(/tmp/p,None,500,0)".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_failing_service_emits_the_error_unchanged() {
+        let rt = runtime();
+        let fake = FakeConversation::failing(ServiceErrorKind::Rejected, "daemon 错误: boom");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        spawn_refresh(
+            7,
+            PathBuf::from("/tmp/p"),
+            fake.into_services().conversation,
+            rt.handle(),
+            move |m| {
+                let _ = tx.lock().unwrap().send(m);
+            },
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::SessionsRefreshed(7, Err(e)) => {
+                assert_eq!(
+                    (e.kind, e.message.as_str()),
+                    (ServiceErrorKind::Rejected, "daemon 错误: boom")
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn first_load_failure_shows_an_empty_list_not_a_stuck_loading_state() {
+        let mut ws = WorkspaceState::default();
+        update(
+            &mut ws,
+            Message::SessionsRefreshed(
+                1,
+                Err(ServiceError::new(
+                    ServiceErrorKind::Unavailable,
+                    "daemon 断开",
+                )),
+            ),
+        );
+        assert_eq!(ws.sessions(), Some([].as_slice()));
+        assert!(
+            ws.take_outbox().is_empty(),
+            "Unavailable 由顶栏徽标表达,不弹 Toast"
+        );
+    }
+
+    #[test]
+    fn a_failed_refresh_keeps_the_sessions_already_shown() {
+        let mut ws = WorkspaceState::default();
+        update(
+            &mut ws,
+            Message::SessionsRefreshed(1, Ok(vec![sample_session("c1")])),
+        );
+        update(
+            &mut ws,
+            Message::SessionsRefreshed(
+                1,
+                Err(ServiceError::new(
+                    ServiceErrorKind::Unavailable,
+                    "daemon 断开",
+                )),
+            ),
+        );
+        assert_eq!(
+            ws.sessions().map(|s| s.len()),
+            Some(1),
+            "刷新失败不得抹掉已显示的会话"
+        );
+    }
+
+    #[test]
+    fn repeated_rejected_failures_toast_once_per_text_with_a_key() {
+        let mut ws = WorkspaceState::default();
+        update(
+            &mut ws,
+            Message::SessionsRefreshed(1, Ok(vec![sample_session("c1")])),
+        );
+        for _ in 0..3 {
+            update(
+                &mut ws,
+                Message::SessionsRefreshed(
+                    1,
+                    Err(ServiceError::new(
+                        ServiceErrorKind::Rejected,
+                        "daemon 错误: boom",
+                    )),
+                ),
+            );
+        }
+        let toasts = ws.take_outbox();
+        assert_eq!(toasts.len(), 1, "相同文本 60 秒内只提示一次");
+        assert_eq!(toasts[0].level, crate::extensions::toast::Level::Error);
+        assert!(toasts[0].text.contains("daemon 错误: boom"));
+        assert_eq!(toasts[0].key.as_deref(), Some("conversations-load"));
+        assert_eq!(ws.sessions().map(|s| s.len()), Some(1));
+        update(
+            &mut ws,
+            Message::SessionsRefreshed(
+                1,
+                Err(ServiceError::new(ServiceErrorKind::Protocol, "另一种错误")),
+            ),
+        );
+        assert_eq!(ws.take_outbox().len(), 1, "换了文本要再提示");
     }
 }

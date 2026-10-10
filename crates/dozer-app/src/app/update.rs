@@ -214,6 +214,7 @@ impl App {
                 pending.extend(ws.files.take_outbox());
                 pending.extend(ws.todo.take_outbox());
                 pending.extend(ws.project_panel.take_outbox());
+                pending.extend(ws.conversations.take_outbox());
                 pending.extend(ws.group_chat.take_outbox());
                 pending.extend(ws.ssh.take_outbox());
                 pending.extend(ws.database.take_outbox());
@@ -6157,6 +6158,7 @@ impl App {
         let client = self.client.clone();
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
+        let conversation = crate::panel_host::services_for(&client).conversation;
         let cid = conversation_id.clone();
         handle.spawn(async move {
             let job_id = match client
@@ -6234,15 +6236,15 @@ impl App {
                     }
                 }
             }
-            let result = client
-                .list_conversations_with_summaries(&cwd, None, 500, 0)
-                .await
-                .map(|rows| {
-                    rows.iter()
-                        .map(|(c, s)| dozer_model::SessionRow::from_row(c, s.as_ref()))
-                        .collect()
-                })
-                .map_err(|e| e.to_string());
+            let result: Result<Vec<dozer_model::SessionRow>, dozer_services::ServiceError> =
+                conversation
+                    .list_conversations_with_summaries(cwd.clone(), None, 500, 0)
+                    .await
+                    .map(|rows| {
+                        rows.iter()
+                            .map(|(c, s)| dozer_model::SessionRow::from_row(c, s.as_ref()))
+                            .collect()
+                    });
             let completion = result
                 .as_ref()
                 .map(|_| ())

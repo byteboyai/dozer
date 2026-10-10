@@ -862,7 +862,13 @@ impl Workspace {
         let emit = move |m| {
             let _ = proxy.send_event(Message::Conversations(m));
         };
-        conversations::spawn_refresh(project_id, cwd, &io.client, &io.handle, emit);
+        conversations::spawn_refresh(
+            project_id,
+            cwd,
+            crate::panel_host::services_for(&io.client).conversation,
+            &io.handle,
+            emit,
+        );
     }
 
     /// 点"扫描"按钮：本地跑 `dozer_codehealth::scan_project`（CPU/IO 密集，
