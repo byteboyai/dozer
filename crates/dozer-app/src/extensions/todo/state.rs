@@ -3,11 +3,12 @@
 
 use crate::app::HoverId;
 
-use dozer_client::Client;
 use dozer_model::{CategoryInfo, TodoInfo};
+use dozer_services::{ServiceErrorKind, TodoService};
 use iced_widget::core::Rectangle;
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
+use std::sync::Arc;
 
 use super::*;
 
@@ -522,6 +523,9 @@ pub enum Message {
     /// 拉取分类树的异步结果(轮询、或任一分类写操作成功后的刷新都落
     /// 这里),与 `Loaded` 同构。
     CategoriesLoaded(Vec<CategoryInfo>),
+    /// 读失败(任务列表或分类树):**不改任何列表**。`Unavailable` 静默(顶栏徽标已表达
+    /// "dozerd 不可用");其余弹带 key 的 Error Toast。轮询时反复失败靠 key 去重。
+    LoadFailed(ServiceErrorKind, String),
     /// 分类写操作(增/改/删/reparent/上移下移/挂任务分类)的异步确认;
     /// 不管成功失败都触发一次 `CategoriesLoaded` + `Loaded` 双刷新——
     /// `SetTodoCategory` 改的是任务的 `category_id`,单刷分类树看不到
@@ -644,28 +648,32 @@ pub(crate) fn is_optimistic_id(id: i64) -> bool {
 /// 列表。轮询(`App::poll_todo_if_visible`)和任一写操作成功后都调它。
 pub fn request_todos_refresh(
     project_id: i64,
-    client: &Client,
+    service: &Arc<dyn TodoService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
-    let client = client.clone();
+    let service = service.clone();
     handle.spawn(async move {
-        let todos = client.list_todos(project_id).await.unwrap_or_default();
-        emit(Message::Loaded(todos));
+        match service.list_todos(project_id).await {
+            Ok(todos) => emit(Message::Loaded(todos)),
+            Err(e) => emit(Message::LoadFailed(e.kind, e.message)),
+        }
     });
 }
 
 /// `request_todos_refresh` 的分类树版本:异步拉取某项目的全部分类节点。
 pub fn request_categories_refresh(
     project_id: i64,
-    client: &Client,
+    service: &Arc<dyn TodoService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
-    let client = client.clone();
+    let service = service.clone();
     handle.spawn(async move {
-        let categories = client.list_categories(project_id).await.unwrap_or_default();
-        emit(Message::CategoriesLoaded(categories));
+        match service.list_categories(project_id).await {
+            Ok(categories) => emit(Message::CategoriesLoaded(categories)),
+            Err(e) => emit(Message::LoadFailed(e.kind, e.message)),
+        }
     });
 }
 
@@ -674,9 +682,14 @@ pub fn on_activate(ctx: &crate::panel_host::ActivationCtx<Message>) {
     let emit = ctx.io.emitter();
     request_todos_refresh(
         ctx.project_id,
-        ctx.io.client(),
+        &ctx.io.services().todo,
         ctx.io.handle(),
         emit.clone(),
     );
-    request_categories_refresh(ctx.project_id, ctx.io.client(), ctx.io.handle(), emit);
+    request_categories_refresh(
+        ctx.project_id,
+        &ctx.io.services().todo,
+        ctx.io.handle(),
+        emit,
+    );
 }

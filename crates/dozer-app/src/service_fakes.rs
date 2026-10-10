@@ -22,8 +22,6 @@ impl Default for FakeTodo {
     }
 }
 
-// Task 4 起被 Todo 面板测试使用,届时去掉。
-#[allow(dead_code)]
 impl FakeTodo {
     pub(crate) fn ok(todos: Vec<TodoInfo>, categories: Vec<CategoryInfo>) -> Self {
         Self::with(Ok(todos), Ok(categories), None)
