@@ -14,13 +14,16 @@ use crate::preview::WebviewSpec;
 use crate::theme;
 use crate::workspace::{lh, split_portions};
 use byteui::interaction::icons;
-use dozer_client::Client;
 use dozer_model::{BookmarkInfo, BookmarkScope};
+use dozer_services::{BookmarkService, ServiceErrorKind};
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
 use iced_widget::core::{Border, Element, Length, Rectangle};
 use iced_widget::{MouseArea, button, column, container, row, text};
 use std::collections::HashMap;
+use std::sync::Arc;
+
+dozer_core::scope!(LOG, panel, "web");
 
 /// 一个浏览器 tab。
 #[derive(Debug, Clone, PartialEq)]
@@ -325,6 +328,10 @@ fn has_explicit_scheme(input: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::panel_host::testing::{TIMEOUT, runtime};
+    use crate::service_fakes::FakeBookmark;
+    use dozer_services::ServiceErrorKind;
+    use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -467,10 +474,10 @@ mod tests {
         assert!(specs[1].visible);
     }
 
-    fn client_for_test() -> Client {
-        Client::new(std::path::PathBuf::from(
-            "/tmp/dozer-browser-test-nonexistent.sock",
-        ))
+    fn service_for_test() -> std::sync::Arc<dyn dozer_services::BookmarkService> {
+        crate::service_fakes::FakeBookmark::default()
+            .into_services()
+            .bookmark
     }
 
     fn bm(id: i64, scope: BookmarkScope, project_id: Option<i64>, url: &str) -> BookmarkInfo {
@@ -603,12 +610,12 @@ mod tests {
             ..State::default()
         };
         let handle = tokio::runtime::Handle::current();
-        let client = client_for_test();
+        let service = service_for_test();
         update(
             &mut state,
             Message::OpenUrl("http://a.com".into()),
             Some(1),
-            &client,
+            &service,
             &handle,
             |_| {},
         );
@@ -629,12 +636,12 @@ mod tests {
         };
         let id = state.tabs.open_url("https://example.com".into());
         let handle = tokio::runtime::Handle::current();
-        let client = client_for_test();
+        let service = service_for_test();
         update(
             &mut state,
             Message::TitleLoaded(id, "Example Home".into()),
             Some(1),
-            &client,
+            &service,
             &handle,
             |_| {},
         );
@@ -644,7 +651,7 @@ mod tests {
             &mut state,
             Message::TitleLoaded(id, "".into()),
             Some(1),
-            &client,
+            &service,
             &handle,
             |_| {},
         );
@@ -655,12 +662,12 @@ mod tests {
     async fn update_addr_submit_opens_in_active_tab() {
         let mut state = State::default();
         let handle = tokio::runtime::Handle::current();
-        let client = client_for_test();
+        let service = service_for_test();
         update(
             &mut state,
             Message::AddrInput("http://a.com".to_string()),
             Some(1),
-            &client,
+            &service,
             &handle,
             |_| {},
         );
@@ -668,7 +675,7 @@ mod tests {
             &mut state,
             Message::AddrSubmit,
             Some(1),
-            &client,
+            &service,
             &handle,
             |_| {},
         );
@@ -718,12 +725,12 @@ mod tests {
     async fn update_addr_submit_local_path_sets_error_without_opening_tab() {
         let mut state = State::default();
         let handle = tokio::runtime::Handle::current();
-        let client = client_for_test();
+        let service = service_for_test();
         update(
             &mut state,
             Message::AddrInput("/tmp/x".to_string()),
             Some(1),
-            &client,
+            &service,
             &handle,
             |_| {},
         );
@@ -731,7 +738,7 @@ mod tests {
             &mut state,
             Message::AddrSubmit,
             Some(1),
-            &client,
+            &service,
             &handle,
             |_| {},
         );
@@ -751,7 +758,7 @@ mod tests {
         };
         state.tabs.open_url("http://a.com".into());
         let handle = tokio::runtime::Handle::current();
-        let client = client_for_test();
+        let service = service_for_test();
 
         // 未收藏 → 点击星标直接加入全局收藏(并清掉旧错误)。
         let emitted = Arc::new(Mutex::new(Vec::new()));
@@ -760,14 +767,14 @@ mod tests {
             &mut state,
             Message::StarClick,
             Some(1),
-            &client,
+            &service,
             &handle,
             move |m| sink.lock().unwrap().push(m),
         );
         assert!(state.error.is_none());
         // 内核会把这些派发消息继续喂回 update(模拟 dispatch)。
         for m in emitted.lock().unwrap().drain(..) {
-            update(&mut state, m, Some(1), &client, &handle, |_| {});
+            update(&mut state, m, Some(1), &service, &handle, |_| {});
         }
         assert_eq!(state.bookmarks.len(), 1);
         assert_eq!(state.bookmarks[0].scope, BookmarkScope::Global);
@@ -780,12 +787,12 @@ mod tests {
             &mut state,
             Message::StarClick,
             Some(1),
-            &client,
+            &service,
             &handle,
             move |m| sink.lock().unwrap().push(m),
         );
         for m in emitted.lock().unwrap().drain(..) {
-            update(&mut state, m, Some(1), &client, &handle, |_| {});
+            update(&mut state, m, Some(1), &service, &handle, |_| {});
         }
         assert!(state.bookmarks.is_empty());
     }
@@ -794,12 +801,12 @@ mod tests {
     async fn update_bookmarks_toggle_flips_panel() {
         let mut state = State::default();
         let handle = tokio::runtime::Handle::current();
-        let client = client_for_test();
+        let service = service_for_test();
         update(
             &mut state,
             Message::BookmarksToggle,
             Some(1),
-            &client,
+            &service,
             &handle,
             |_| {},
         );
@@ -820,12 +827,12 @@ mod tests {
             addr_select_all_pending: false,
         };
         let handle = tokio::runtime::Handle::current();
-        let client = client_for_test();
+        let service = service_for_test();
         update(
             &mut state,
             Message::BookmarkAdd(BookmarkScope::Global),
             Some(1),
-            &client,
+            &service,
             &handle,
             |_| panic!("无 tab 时不该 emit"),
         );
@@ -837,12 +844,12 @@ mod tests {
         let mut state = State::default();
         state.tabs.open_url("http://a.com".into());
         let handle = tokio::runtime::Handle::current();
-        let client = client_for_test();
+        let service = service_for_test();
         update(
             &mut state,
             Message::BookmarkAdd(BookmarkScope::Global),
             Some(1),
-            &client,
+            &service,
             &handle,
             |_| {},
         );
@@ -856,12 +863,12 @@ mod tests {
         let mut state = State::default();
         state.tabs.open_url("http://a.com".into());
         let handle = tokio::runtime::Handle::current();
-        let client = client_for_test();
+        let service = service_for_test();
         update(
             &mut state,
             Message::BookmarkAdd(BookmarkScope::Project),
             None,
-            &client,
+            &service,
             &handle,
             |_| panic!("project_id 为 None 时不该 emit 网络请求"),
         );
@@ -875,12 +882,12 @@ mod tests {
             ..State::default()
         };
         let handle = tokio::runtime::Handle::current();
-        let client = client_for_test();
+        let service = service_for_test();
         update(
             &mut state,
             Message::BookmarkRemove(1),
             Some(1),
-            &client,
+            &service,
             &handle,
             |_| {},
         );
@@ -895,12 +902,12 @@ mod tests {
         };
         let fresh = vec![bm(2, BookmarkScope::Global, None, "https://fresh.com")];
         let handle = tokio::runtime::Handle::current();
-        let client = client_for_test();
+        let service = service_for_test();
         update(
             &mut state,
-            Message::BookmarksLoaded(Some(1), fresh.clone()),
+            Message::BookmarksLoaded(Some(1), Ok(fresh.clone())),
             Some(1),
-            &client,
+            &service,
             &handle,
             |_| {},
         );
@@ -911,12 +918,12 @@ mod tests {
     async fn update_bookmarks_mutated_error_sets_state_error() {
         let mut state = State::default();
         let handle = tokio::runtime::Handle::current();
-        let client = client_for_test();
+        let service = service_for_test();
         update(
             &mut state,
             Message::BookmarksMutated(Some(1), Err("boom".to_string())),
             Some(1),
-            &client,
+            &service,
             &handle,
             |_| {},
         );
@@ -938,6 +945,226 @@ mod tests {
         // 新开的 a.com 成为激活 tab,空标签仍在列表里
         assert_eq!(state.active_webview_id(), Some(1));
         assert_eq!(state.desired_webviews().len(), 2);
+    }
+
+    fn collect() -> (impl Fn(Message) + Send + 'static, mpsc::Receiver<Message>) {
+        let (tx, rx) = mpsc::channel();
+        (
+            move |m| {
+                let _ = tx.send(m);
+            },
+            rx,
+        )
+    }
+
+    fn fake_service(fake: &FakeBookmark) -> std::sync::Arc<dyn dozer_services::BookmarkService> {
+        fake.clone().into_services().bookmark
+    }
+
+    #[test]
+    fn refresh_emits_the_list_or_the_service_error() {
+        let rt = runtime();
+        let fake = FakeBookmark::default().with_items(vec![bm(
+            1,
+            BookmarkScope::Global,
+            None,
+            "https://a.com",
+        )]);
+        let (emit, rx) = collect();
+        request_bookmarks_refresh(Some(1), &fake_service(&fake), rt.handle(), emit);
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::BookmarksLoaded(Some(1), Ok(v)) => assert_eq!(v.len(), 1),
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(fake.calls(), vec!["list_bookmarks(Some(1))".to_string()]);
+
+        let fake = FakeBookmark::default()
+            .with_list_error(ServiceErrorKind::Rejected, "daemon 错误: boom");
+        let (emit, rx) = collect();
+        request_bookmarks_refresh(None, &fake_service(&fake), rt.handle(), emit);
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::BookmarksLoaded(None, Err(e)) => {
+                assert_eq!(
+                    (e.kind, e.message.as_str()),
+                    (ServiceErrorKind::Rejected, "daemon 错误: boom")
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_failed_load_keeps_the_cache_and_unavailable_stays_silent() {
+        let rt = runtime();
+        let cached = vec![bm(1, BookmarkScope::Global, None, "https://a.com")];
+        let mut state = State {
+            bookmarks: cached.clone(),
+            ..State::default()
+        };
+        let (emit, _rx) = collect();
+        update(
+            &mut state,
+            Message::BookmarksLoaded(
+                Some(1),
+                Err(dozer_services::ServiceError::new(
+                    ServiceErrorKind::Unavailable,
+                    "daemon 断开",
+                )),
+            ),
+            Some(1),
+            &fake_service(&FakeBookmark::default()),
+            rt.handle(),
+            emit,
+        );
+        assert_eq!(state.bookmarks, cached, "读失败不得清空缓存");
+        assert!(
+            state.error.is_none(),
+            "Unavailable 由顶栏徽标表达,不写内联错误"
+        );
+    }
+
+    #[test]
+    fn a_rejected_load_keeps_the_cache_and_sets_the_inline_error() {
+        let rt = runtime();
+        let cached = vec![bm(1, BookmarkScope::Global, None, "https://a.com")];
+        let mut state = State {
+            bookmarks: cached.clone(),
+            ..State::default()
+        };
+        let (emit, _rx) = collect();
+        update(
+            &mut state,
+            Message::BookmarksLoaded(
+                Some(1),
+                Err(dozer_services::ServiceError::new(
+                    ServiceErrorKind::Rejected,
+                    "daemon 错误: boom",
+                )),
+            ),
+            Some(1),
+            &fake_service(&FakeBookmark::default()),
+            rt.handle(),
+            emit,
+        );
+        assert_eq!(state.bookmarks, cached);
+        assert_eq!(
+            state.error.as_deref(),
+            Some("收藏夹加载失败: daemon 错误: boom")
+        );
+    }
+
+    #[test]
+    fn add_passes_scope_target_project_url_and_title_to_the_service() {
+        let rt = runtime();
+        let fake = FakeBookmark::default();
+        let mut state = State::default();
+        let id = state.tabs.open_url("http://a.com".into());
+        let _ = id;
+        let (url, title) = {
+            let t = &state.tabs.tabs()[state.tabs.active_idx()];
+            (t.url.clone(), t.title.clone())
+        };
+        let (emit, rx) = collect();
+        update(
+            &mut state,
+            Message::BookmarkAdd(BookmarkScope::Project),
+            Some(7),
+            &fake_service(&fake),
+            rt.handle(),
+            emit,
+        );
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::BookmarksMutated(Some(7), Ok(()))
+        ));
+        assert_eq!(
+            fake.calls(),
+            vec![format!("add_bookmark(Project,Some(7),{url},{title})")]
+        );
+
+        let fake = FakeBookmark::default();
+        let (emit, rx) = collect();
+        update(
+            &mut state,
+            Message::BookmarkAdd(BookmarkScope::Global),
+            Some(7),
+            &fake_service(&fake),
+            rt.handle(),
+            emit,
+        );
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::BookmarksMutated(Some(7), Ok(()))
+        ));
+        assert_eq!(
+            fake.calls(),
+            vec![format!("add_bookmark(Global,None,{url},{title})")],
+            "Global 收藏的目标项目恒为 None"
+        );
+    }
+
+    #[test]
+    fn add_failure_text_is_the_service_message_unchanged() {
+        let rt = runtime();
+        let fake = FakeBookmark::default()
+            .with_write_error(ServiceErrorKind::Rejected, "daemon 错误: boom");
+        let mut state = State::default();
+        state.tabs.open_url("http://a.com".into());
+        let (emit, rx) = collect();
+        update(
+            &mut state,
+            Message::BookmarkAdd(BookmarkScope::Global),
+            Some(1),
+            &fake_service(&fake),
+            rt.handle(),
+            emit,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::BookmarksMutated(Some(1), Err(text)) => assert_eq!(text, "daemon 错误: boom"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remove_calls_the_service_and_mutated_triggers_one_list() {
+        let rt = runtime();
+        let fake = FakeBookmark::default();
+        let mut state = State {
+            bookmarks: vec![bm(3, BookmarkScope::Global, None, "https://a.com")],
+            ..State::default()
+        };
+        let (emit, rx) = collect();
+        update(
+            &mut state,
+            Message::BookmarkRemove(3),
+            Some(1),
+            &fake_service(&fake),
+            rt.handle(),
+            emit,
+        );
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::BookmarksMutated(Some(1), Ok(()))
+        ));
+        assert_eq!(fake.calls(), vec!["remove_bookmark(3)".to_string()]);
+
+        let (emit, rx) = collect();
+        update(
+            &mut state,
+            Message::BookmarksMutated(Some(1), Ok(())),
+            Some(1),
+            &fake_service(&fake),
+            rt.handle(),
+            emit,
+        );
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::BookmarksLoaded(Some(1), Ok(_))
+        ));
+        assert_eq!(
+            fake.calls().last().map(String::as_str),
+            Some("list_bookmarks(Some(1))")
+        );
     }
 }
 
@@ -1057,7 +1284,11 @@ pub enum Message {
     BookmarkRemove(i64),
     BookmarksToggle,
     /// `project_id` 用 `None` 表示首页全局浏览器/无项目工作区的全局收藏。
-    BookmarksLoaded(Option<i64>, Vec<BookmarkInfo>),
+    /// 收藏夹刷新结果。读失败时 `update` 保持本地缓存不动(此前失败被 `unwrap_or_default()` 吞成空列表整体替换)。
+    BookmarksLoaded(
+        Option<i64>,
+        Result<Vec<BookmarkInfo>, dozer_services::ServiceError>,
+    ),
     BookmarksMutated(Option<i64>, Result<(), String>),
     /// tab 标题/关闭按钮的 hover 进入/离开(idx = tab 序号, bool = 是否关闭
     /// 按钮, 最后 bool = 进入/离开)。浏览器面板有独立 `State`,无法复用顶栏
@@ -1337,14 +1568,14 @@ const NEW_TAB_KEY: usize = usize::MAX - 4;
 
 /// 处理浏览器面板的全部消息。`project_id` 由内核每次调用时从
 /// `ws.project.as_ref().map(|p| p.id)` 现取传入(`State` 本身不存这个,
-/// 避免状态冗余/漂移)。`client` 用于收藏夹的 dozerd RPC 往返——这是跟
+/// 避免状态冗余/漂移)。`service` 用于收藏夹的 dozerd RPC 往返——这是跟
 /// Git Log 试点 `update` 签名的主要差异(Git Log 只有本地 `git2` 阻塞
 /// 调用,不需要网络)。
 pub fn update(
     state: &mut State,
     msg: Message,
     project_id: Option<i64>,
-    client: &Client,
+    service: &Arc<dyn BookmarkService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
@@ -1433,29 +1664,37 @@ pub fn update(
             if matches!(scope, BookmarkScope::Project) && project_id.is_none() {
                 return;
             }
-            let client = client.clone();
+            let service = service.clone();
             handle.spawn(async move {
-                let res = client
-                    .add_bookmark(scope, target_project_id, &url, &title)
+                let res = service
+                    .add_bookmark(scope, target_project_id, url, title)
                     .await
-                    .map_err(|e| e.to_string());
+                    .map_err(|e| e.message);
                 emit(Message::BookmarksMutated(project_id, res));
             });
         }
         Message::BookmarkRemove(id) => {
             optimistic_remove(&mut state.bookmarks, id);
-            let client = client.clone();
+            let service = service.clone();
             handle.spawn(async move {
-                let res = client.remove_bookmark(id).await.map_err(|e| e.to_string());
+                let res = service.remove_bookmark(id).await.map_err(|e| e.message);
                 emit(Message::BookmarksMutated(project_id, res));
             });
         }
-        Message::BookmarksLoaded(_, bookmarks) => state.bookmarks = bookmarks,
+        Message::BookmarksLoaded(_, Ok(bookmarks)) => state.bookmarks = bookmarks,
+        Message::BookmarksLoaded(_, Err(e)) => {
+            // 读失败:缓存保持不动(此前 `unwrap_or_default()` 会把失败变成空列表整体替换)。
+            if e.kind == ServiceErrorKind::Unavailable {
+                dozer_core::log_debug!(LOG, "收藏夹读取失败(dozerd 不可用): {}", e.message);
+            } else {
+                state.error = Some(format!("收藏夹加载失败: {}", e.message));
+            }
+        }
         Message::BookmarksMutated(_, res) => {
             if let Err(message) = res {
                 state.error = Some(message);
             }
-            request_bookmarks_refresh(project_id, client, handle, emit);
+            request_bookmarks_refresh(project_id, service, handle, emit);
         }
         Message::ColumnDragStart => {
             debug_assert!(
@@ -1475,14 +1714,14 @@ pub fn update(
 /// 只返回全局收藏(用于首页全局浏览器/无项目工作区)。
 pub fn request_bookmarks_refresh(
     project_id: Option<i64>,
-    client: &Client,
+    service: &Arc<dyn BookmarkService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
-    let client = client.clone();
+    let service = service.clone();
     handle.spawn(async move {
-        let bookmarks = client.list_bookmarks(project_id).await.unwrap_or_default();
-        emit(Message::BookmarksLoaded(project_id, bookmarks));
+        let result = service.list_bookmarks(project_id).await;
+        emit(Message::BookmarksLoaded(project_id, result));
     });
 }
 

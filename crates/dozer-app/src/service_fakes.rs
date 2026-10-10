@@ -1075,12 +1075,10 @@ struct BookmarkState {
 
 /// 克隆共享同一份状态。`Default` = 全部成功、列表为空。
 #[derive(Clone, Default)]
-#[allow(dead_code)] // Task 4 起被浏览器收藏夹测试使用,届时去掉。
 pub(crate) struct FakeBookmark {
     state: Arc<Mutex<BookmarkState>>,
 }
 
-#[allow(dead_code)] // Task 4 起被使用,届时去掉。
 impl FakeBookmark {
     pub(crate) fn with_items(self, items: Vec<BookmarkInfo>) -> Self {
         self.state.lock().unwrap().items = items;
