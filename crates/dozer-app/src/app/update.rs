@@ -2109,7 +2109,14 @@ impl App {
                 let emit = move |m| {
                     let _ = proxy.send_event(Message::HomeBrowser(m));
                 };
-                browser::update(&mut self.home_browser, msg, None, &client, &handle, emit);
+                browser::update(
+                    &mut self.home_browser,
+                    msg,
+                    None,
+                    &crate::panel_host::services_for(&client).bookmark,
+                    &handle,
+                    emit,
+                );
             }
             Message::BrowserTitle(id, title) => {
                 let msg = browser::Message::TitleLoaded(id, title);
@@ -2119,7 +2126,7 @@ impl App {
                         &mut self.home_browser,
                         msg,
                         None,
-                        &self.client,
+                        &crate::panel_host::services_for(&self.client).bookmark,
                         &self.handle,
                         |_| {},
                     );
@@ -2130,7 +2137,7 @@ impl App {
                             &mut ws.browser,
                             msg,
                             ws.project.as_ref().map(|p| p.id),
-                            &io.client,
+                            &crate::panel_host::services_for(&io.client).bookmark,
                             &io.handle,
                             |_| {},
                         );
@@ -2144,7 +2151,7 @@ impl App {
                         &mut self.home_browser,
                         msg,
                         None,
-                        &self.client,
+                        &crate::panel_host::services_for(&self.client).bookmark,
                         &self.handle,
                         |_| {},
                     );
@@ -2154,7 +2161,7 @@ impl App {
                             &mut ws.browser,
                             msg,
                             ws.project.as_ref().map(|p| p.id),
-                            &io.client,
+                            &crate::panel_host::services_for(&io.client).bookmark,
                             &io.handle,
                             |_| {},
                         );
@@ -2168,7 +2175,7 @@ impl App {
                         &mut self.home_browser,
                         msg,
                         None,
-                        &self.client,
+                        &crate::panel_host::services_for(&self.client).bookmark,
                         &self.handle,
                         |_| {},
                     );
@@ -2178,7 +2185,7 @@ impl App {
                             &mut ws.browser,
                             msg,
                             ws.project.as_ref().map(|p| p.id),
-                            &io.client,
+                            &crate::panel_host::services_for(&io.client).bookmark,
                             &io.handle,
                             |_| {},
                         );
@@ -4910,7 +4917,7 @@ impl App {
     pub(crate) fn browser_bookmarks_loaded(
         &mut self,
         pid: Option<i64>,
-        bookmarks: Vec<BookmarkInfo>,
+        bookmarks: Result<Vec<BookmarkInfo>, dozer_services::ServiceError>,
     ) {
         if pid.is_none() {
             // 首页全局浏览器(或无项目工作区)的收藏列表刷新。
@@ -4924,7 +4931,7 @@ impl App {
                 &mut self.home_browser,
                 browser::Message::BookmarksLoaded(None, bookmarks),
                 None,
-                &client,
+                &crate::panel_host::services_for(&client).bookmark,
                 &handle,
                 emit,
             );
@@ -4942,7 +4949,7 @@ impl App {
                 &mut ws.browser,
                 browser::Message::BookmarksLoaded(Some(pid), bookmarks),
                 Some(pid),
-                &client,
+                &crate::panel_host::services_for(&client).bookmark,
                 &handle,
                 emit,
             );
@@ -4962,7 +4969,7 @@ impl App {
                 &mut self.home_browser,
                 browser::Message::BookmarksMutated(None, res),
                 None,
-                &client,
+                &crate::panel_host::services_for(&client).bookmark,
                 &handle,
                 emit,
             );
@@ -4980,7 +4987,7 @@ impl App {
                 &mut ws.browser,
                 browser::Message::BookmarksMutated(Some(pid), res),
                 Some(pid),
-                &client,
+                &crate::panel_host::services_for(&client).bookmark,
                 &handle,
                 emit,
             );
@@ -4999,7 +5006,14 @@ impl App {
             let emit = move |m| {
                 let _ = proxy.send_event(Message::Browser(m));
             };
-            browser::update(&mut ws.browser, msg, project_id, &client, &handle, emit);
+            browser::update(
+                &mut ws.browser,
+                msg,
+                project_id,
+                &crate::panel_host::services_for(&client).bookmark,
+                &handle,
+                emit,
+            );
         });
         if was_select
             && let Some(ws) = self.active_workspace()

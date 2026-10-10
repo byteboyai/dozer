@@ -28,7 +28,7 @@ impl Duty {
     /// 真实 host 里承担这件事的位置(读代码得到,2026-10-08)。
     pub(crate) fn host_site(self) -> &'static str {
         match self {
-            Duty::BuildActivationCtx => "app/update.rs:5260",
+            Duty::BuildActivationCtx => "app/update.rs:5274",
             Duty::RouteLoaded => "app/update.rs:1626 (with_project)",
             Duty::DropOtherProject => "app/update.rs:1626 (with_project 路由到别的 Workspace)",
             Duty::InterceptCollapse => "app/update.rs:1633",
@@ -61,7 +61,7 @@ impl ProbeHost {
         }
     }
 
-    /// 对应 `app/update.rs:5260`:host 构造 `ActivationCtx` 再调面板的 `on_activate`。
+    /// 对应 `app/update.rs:5274`:host 构造 `ActivationCtx` 再调面板的 `on_activate`。
     pub(crate) fn activate(
         &mut self,
         rt: &tokio::runtime::Runtime,

@@ -649,7 +649,7 @@ impl Workspace {
         ws.spawn_conversations_refresh(io);
         browser::request_bookmarks_refresh(
             ws.project.as_ref().map(|p| p.id),
-            &io.client,
+            &crate::panel_host::services_for(&io.client).bookmark,
             &io.handle,
             {
                 let proxy = io.proxy.clone();
@@ -1105,7 +1105,7 @@ impl Workspace {
         self.spawn_conversations_refresh(io);
         browser::request_bookmarks_refresh(
             self.project.as_ref().map(|p| p.id),
-            &io.client,
+            &crate::panel_host::services_for(&io.client).bookmark,
             &io.handle,
             {
                 let proxy = io.proxy.clone();
