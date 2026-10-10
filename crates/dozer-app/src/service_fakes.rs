@@ -1,14 +1,14 @@
 //! 进程内服务假实现(只在测试里):不起 UDS,返回固定结果并记录调用。
 use dozer_model::{
-    AgentKind, CategoryInfo, CategoryMoveDirection, CodeHealthReportInfo, ContextItemInfo,
-    ConversationSummary, FileEditHistoryInfo, GroupAuthor, GroupCancelScope, GroupInfo,
-    GroupMessageInfo, MemoryDetail, MemoryInfo, MutationOutcome, ProjectInfo,
-    SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus,
+    AgentKind, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
+    CodeHealthReportInfo, ContextItemInfo, ConversationSummary, FileEditHistoryInfo, GroupAuthor,
+    GroupCancelScope, GroupInfo, GroupMessageInfo, MemoryDetail, MemoryInfo, MutationOutcome,
+    ProjectInfo, SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus,
 };
 use dozer_services::{
-    BoxFuture, CodeHealthService, ContextService, ConversationRows, ConversationService,
-    EditHistoryService, GroupChatService, MemoryService, PostedMessages, PreciseEdit,
-    ProjectService, ServiceError, ServiceErrorKind, Services, TodoService,
+    BookmarkService, BoxFuture, CodeHealthService, ContextService, ConversationRows,
+    ConversationService, EditHistoryService, GroupChatService, MemoryService, PostedMessages,
+    PreciseEdit, ProjectService, ServiceError, ServiceErrorKind, Services, TodoService,
 };
 use std::sync::{Arc, Mutex};
 
@@ -191,6 +191,7 @@ pub(crate) fn base_services() -> Services {
         codehealth: Arc::new(FakeCodeHealth::default()),
         context: Arc::new(FakeContext::default()),
         edit_history: Arc::new(FakeEditHistory::default()),
+        bookmark: Arc::new(FakeBookmark::default()),
     }
 }
 
@@ -1057,6 +1058,90 @@ impl EditHistoryService for FakeEditHistory {
         let r = match &s.edit_error {
             Some(e) => Err(e.clone()),
             None => Ok(s.outcome.clone()),
+        };
+        Box::pin(async move { r })
+    }
+}
+
+// ---- FakeBookmark ----
+
+#[derive(Default)]
+struct BookmarkState {
+    items: Vec<BookmarkInfo>,
+    list_error: Option<ServiceError>,
+    write_error: Option<ServiceError>,
+    calls: Vec<String>,
+}
+
+/// 克隆共享同一份状态。`Default` = 全部成功、列表为空。
+#[derive(Clone, Default)]
+#[allow(dead_code)] // Task 4 起被浏览器收藏夹测试使用,届时去掉。
+pub(crate) struct FakeBookmark {
+    state: Arc<Mutex<BookmarkState>>,
+}
+
+#[allow(dead_code)] // Task 4 起被使用,届时去掉。
+impl FakeBookmark {
+    pub(crate) fn with_items(self, items: Vec<BookmarkInfo>) -> Self {
+        self.state.lock().unwrap().items = items;
+        self
+    }
+    pub(crate) fn with_list_error(self, kind: ServiceErrorKind, message: &str) -> Self {
+        self.state.lock().unwrap().list_error = Some(ServiceError::new(kind, message));
+        self
+    }
+    /// add 与 remove 共用。
+    pub(crate) fn with_write_error(self, kind: ServiceErrorKind, message: &str) -> Self {
+        self.state.lock().unwrap().write_error = Some(ServiceError::new(kind, message));
+        self
+    }
+    pub(crate) fn calls(&self) -> Vec<String> {
+        self.state.lock().unwrap().calls.clone()
+    }
+    pub(crate) fn into_services(self) -> Services {
+        Services {
+            bookmark: Arc::new(self),
+            ..base_services()
+        }
+    }
+}
+
+impl BookmarkService for FakeBookmark {
+    fn list_bookmarks(
+        &self,
+        project_id: Option<i64>,
+    ) -> BoxFuture<'_, Result<Vec<BookmarkInfo>, ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls.push(format!("list_bookmarks({project_id:?})"));
+        let r = match &s.list_error {
+            Some(e) => Err(e.clone()),
+            None => Ok(s.items.clone()),
+        };
+        Box::pin(async move { r })
+    }
+    fn add_bookmark(
+        &self,
+        scope: BookmarkScope,
+        project_id: Option<i64>,
+        url: String,
+        title: String,
+    ) -> BoxFuture<'_, Result<(), ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls.push(format!(
+            "add_bookmark({scope:?},{project_id:?},{url},{title})"
+        ));
+        let r = match &s.write_error {
+            Some(e) => Err(e.clone()),
+            None => Ok(()),
+        };
+        Box::pin(async move { r })
+    }
+    fn remove_bookmark(&self, id: i64) -> BoxFuture<'_, Result<(), ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls.push(format!("remove_bookmark({id})"));
+        let r = match &s.write_error {
+            Some(e) => Err(e.clone()),
+            None => Ok(()),
         };
         Box::pin(async move { r })
     }

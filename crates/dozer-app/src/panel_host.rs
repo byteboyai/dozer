@@ -29,6 +29,7 @@ pub(crate) fn services_for(client: &Client) -> Services {
         codehealth: Arc::new(client.clone()),
         context: Arc::new(client.clone()),
         edit_history: Arc::new(client.clone()),
+        bookmark: Arc::new(client.clone()),
     }
 }
 
@@ -543,6 +544,17 @@ mod tests {
                     .edit_history
                     .list_file_edit_history(1, None, 200),
             )
+            .unwrap_err();
+        assert_eq!(e.kind, dozer_services::ServiceErrorKind::Unavailable);
+    }
+
+    #[test]
+    fn default_services_route_bookmark_through_the_client_adapter() {
+        let rt = test_runtime();
+        let (io, _rx) = recording_io(&rt);
+        // recording_io 的 Client 指向不存在的 socket → Unavailable
+        let e = rt
+            .block_on(io.services().bookmark.list_bookmarks(None))
             .unwrap_err();
         assert_eq!(e.kind, dozer_services::ServiceErrorKind::Unavailable);
     }
