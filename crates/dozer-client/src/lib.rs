@@ -1882,6 +1882,25 @@ impl ProjectService for Client {
                 .map_err(into_service_error)
         })
     }
+    fn open_project(
+        &self,
+        path: String,
+    ) -> BoxFuture<'_, Result<Option<dozer_core::protocol::ProjectInfo>, ServiceError>> {
+        Box::pin(async move {
+            Client::open_project(self, &path)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn list_projects(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<dozer_core::protocol::ProjectInfo>, ServiceError>> {
+        Box::pin(async move {
+            Client::list_projects(self)
+                .await
+                .map_err(into_service_error)
+        })
+    }
 }
 
 impl GroupChatService for Client {
@@ -2349,6 +2368,78 @@ mod project_service_tests {
             }),
         );
         let e = ProjectService::remove_project(&Client::new(sock.clone()), 3)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.kind, e.message.as_str()),
+            (ServiceErrorKind::Rejected, "daemon 错误: boom")
+        );
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    fn project_info(id: i64, path: &str) -> dozer_core::protocol::ProjectInfo {
+        dozer_core::protocol::ProjectInfo {
+            id,
+            path: path.into(),
+            name: "demo".into(),
+            last_active_ms: 1,
+            created_ms: 2,
+            updated_ms: 3,
+        }
+    }
+
+    #[tokio::test]
+    async fn open_project_carries_some_and_none_back_unchanged() {
+        let info = project_info(5, "/p/demo");
+        let sock = serve_once(
+            "pc-open-some",
+            Some(Reply::Project {
+                project: Some(info.clone()),
+            }),
+        );
+        let got = ProjectService::open_project(&Client::new(sock.clone()), "/p/demo".into()).await;
+        assert_eq!(got, Ok(Some(info)));
+        let _ = std::fs::remove_file(&sock);
+
+        let sock = serve_once("pc-open-none", Some(Reply::Project { project: None }));
+        let got = ProjectService::open_project(&Client::new(sock.clone()), "/p/none".into()).await;
+        assert_eq!(got, Ok(None));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn list_projects_comes_back_as_ok() {
+        let info = project_info(5, "/p/demo");
+        let sock = serve_once(
+            "pc-list",
+            Some(Reply::Projects {
+                projects: vec![info.clone()],
+            }),
+        );
+        let got = ProjectService::list_projects(&Client::new(sock.clone())).await;
+        assert_eq!(got, Ok(vec![info]));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn new_methods_map_hang_up_and_error_reply_like_the_others() {
+        let sock = serve_once("pc-hangup", None);
+        let e = ProjectService::list_projects(&Client::new(sock.clone()))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.kind, e.message.as_str()),
+            (ServiceErrorKind::Unavailable, "daemon 断开")
+        );
+        let _ = std::fs::remove_file(&sock);
+
+        let sock = serve_once(
+            "pc-reject",
+            Some(Reply::Error {
+                message: "boom".into(),
+            }),
+        );
+        let e = ProjectService::open_project(&Client::new(sock.clone()), "/p".into())
             .await
             .unwrap_err();
         assert_eq!(
