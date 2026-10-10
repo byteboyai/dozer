@@ -67,3 +67,12 @@
 `extensions/todo/**` 已经 `TodoService`(`dozer-services`)取数与写入;`R-CLIENT` 基线中 `todo/*` 已清零。读失败改为 `LoadFailed`:保留旧列表,`Unavailable` 静默,`Rejected`/`Protocol` 弹 `todo-load` Toast。`add_category` 返回 `CategoryInfo`(面板要用新分类 id 进入重命名),其余写操作返回 `()`。规格 `docs/superpowers/specs/2026-10-10-todo-services-design.md`。
 
 **后续项(未修):** `todo::Message::Loaded` / `CategoriesLoaded` 没有 project_id 与代数保护(同 Usage 已修的 G3b),慢的旧结果可能覆盖新结果。
+
+## Project 迁移(2026-10-10)
+
+`extensions/project.rs` 与 `extensions/project/**` 已经 `MemoryService`/`ProjectService`(`dozer-services`)取数与写入;`R-CLIENT` 基线中 `project*` 已清零。记忆读失败改为 `MemoriesLoadFailed`:保留旧列表,`Unavailable` 静默,其余弹 `project-memories-load` Toast(同文本 60 秒内一次);`spawn_scaffold_run` 的补录失败改写 warn 日志。规格 `docs/superpowers/specs/2026-10-10-project-services-design.md`。
+
+**后续项(未修):**
+- `MemoriesLoaded` / `MemoryDetailLoaded` 没有项目/代数保护(同 Usage 已修的 G3b)。
+- 读失败冷却逻辑在 Todo 与 Project 各有一份(`LOAD_FAILURE_TOAST_COOLDOWN`),可抽到 `toast::Outbox`。
+- `extensions/project_create.rs` 仍直接用 `Client`(`open_project`/`list_projects`)。
