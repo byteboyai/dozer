@@ -2,8 +2,8 @@
 //! 不知道对面是 dozerd 还是内存假实现。生产实现在 `dozer-client`(为 `Client` 适配)。
 
 use dozer_model::{
-    CategoryInfo, CategoryMoveDirection, ConversationSummary, TodoInfo, TodoStoredStatus,
-    UsagePayload,
+    AgentKind, CategoryInfo, CategoryMoveDirection, ConversationSummary, MemoryDetail, MemoryInfo,
+    ProjectInfo, SummaryBatchInfo, TodoInfo, TodoStoredStatus, UsagePayload,
 };
 use std::fmt;
 use std::future::Future;
@@ -108,6 +108,58 @@ pub trait TodoService: Send + Sync {
         id: i64,
         direction: CategoryMoveDirection,
     ) -> BoxFuture<'_, Result<(), ServiceError>>;
+}
+
+/// 共享记忆 CRUD(Project 面板)。参数按值传。
+pub trait MemoryService: Send + Sync {
+    fn list_memories(
+        &self,
+        project_id: i64,
+    ) -> BoxFuture<'_, Result<Vec<MemoryInfo>, ServiceError>>;
+    fn get_memory(
+        &self,
+        project_id: i64,
+        id: i64,
+    ) -> BoxFuture<'_, Result<MemoryDetail, ServiceError>>;
+    fn write_memory(
+        &self,
+        project_id: i64,
+        title: String,
+        kind: String,
+        description: String,
+        body: String,
+        actor: String,
+    ) -> BoxFuture<'_, Result<MemoryDetail, ServiceError>>;
+    fn delete_memory(
+        &self,
+        project_id: i64,
+        id: i64,
+        actor: String,
+    ) -> BoxFuture<'_, Result<(), ServiceError>>;
+}
+
+/// 项目维护(Project 面板):改名、取消登记、转录补录/删除、总结批次。
+/// 返回值保持 `Client` 原样——面板用到补录条数、批次 id/进度、改名结果。
+pub trait ProjectService: Send + Sync {
+    fn rename_project(
+        &self,
+        id: i64,
+        name: String,
+    ) -> BoxFuture<'_, Result<Option<ProjectInfo>, ServiceError>>;
+    fn remove_project(&self, id: i64) -> BoxFuture<'_, Result<(), ServiceError>>;
+    fn delete_project_transcripts(&self, cwd: String) -> BoxFuture<'_, Result<u32, ServiceError>>;
+    fn backfill_project_transcripts(&self, cwd: String)
+    -> BoxFuture<'_, Result<u32, ServiceError>>;
+    fn submit_summary_batch(
+        &self,
+        cwd: String,
+        provider: Option<AgentKind>,
+        model: Option<String>,
+    ) -> BoxFuture<'_, Result<(i64, u32), ServiceError>>;
+    fn get_summary_batch(
+        &self,
+        batch_id: i64,
+    ) -> BoxFuture<'_, Result<Option<SummaryBatchInfo>, ServiceError>>;
 }
 
 /// 各能力 trait 的 `Arc<dyn>` 束;host 构造,经 `PanelIo` 交给面板。其余能力 trait 随各面板迁移逐个加入。
@@ -295,6 +347,123 @@ mod tests {
         assert!(rt.block_on(empty.list_todos(1)).is_ok());
         assert_eq!(
             rt.block_on(down.list_todos(1)).unwrap_err().kind,
+            ServiceErrorKind::Unavailable
+        );
+    }
+
+    // ---- MemoryService / ProjectService 契约 ----
+
+    use dozer_model::{AgentKind, MemoryDetail, MemoryInfo, ProjectInfo, SummaryBatchInfo};
+
+    struct MemMemory(Result<Vec<MemoryInfo>, ServiceError>);
+
+    impl MemoryService for MemMemory {
+        fn list_memories(&self, _p: i64) -> BoxFuture<'_, Result<Vec<MemoryInfo>, ServiceError>> {
+            let r = self.0.clone();
+            Box::pin(async move { r })
+        }
+        fn get_memory(
+            &self,
+            _p: i64,
+            _i: i64,
+        ) -> BoxFuture<'_, Result<MemoryDetail, ServiceError>> {
+            Box::pin(async { Err(ServiceError::new(ServiceErrorKind::Protocol, "mem")) })
+        }
+        fn write_memory(
+            &self,
+            _p: i64,
+            _t: String,
+            _k: String,
+            _d: String,
+            _b: String,
+            _a: String,
+        ) -> BoxFuture<'_, Result<MemoryDetail, ServiceError>> {
+            Box::pin(async { Err(ServiceError::new(ServiceErrorKind::Protocol, "mem")) })
+        }
+        fn delete_memory(
+            &self,
+            _p: i64,
+            _i: i64,
+            _a: String,
+        ) -> BoxFuture<'_, Result<(), ServiceError>> {
+            unit()
+        }
+    }
+
+    struct MemProject;
+
+    impl ProjectService for MemProject {
+        fn rename_project(
+            &self,
+            _i: i64,
+            _n: String,
+        ) -> BoxFuture<'_, Result<Option<ProjectInfo>, ServiceError>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn remove_project(&self, _i: i64) -> BoxFuture<'_, Result<(), ServiceError>> {
+            unit()
+        }
+        fn delete_project_transcripts(
+            &self,
+            _c: String,
+        ) -> BoxFuture<'_, Result<u32, ServiceError>> {
+            Box::pin(async { Ok(3) })
+        }
+        fn backfill_project_transcripts(
+            &self,
+            _c: String,
+        ) -> BoxFuture<'_, Result<u32, ServiceError>> {
+            Box::pin(async { Ok(5) })
+        }
+        fn submit_summary_batch(
+            &self,
+            _c: String,
+            _p: Option<AgentKind>,
+            _m: Option<String>,
+        ) -> BoxFuture<'_, Result<(i64, u32), ServiceError>> {
+            Box::pin(async { Ok((7, 2)) })
+        }
+        fn get_summary_batch(
+            &self,
+            _b: i64,
+        ) -> BoxFuture<'_, Result<Option<SummaryBatchInfo>, ServiceError>> {
+            Box::pin(async { Ok(None) })
+        }
+    }
+
+    /// `handle.spawn` 要 `'static + Send`:持有 `Arc<dyn …>` 的 async 块必须满足。
+    #[test]
+    fn dyn_project_and_memory_futures_run_inside_tokio_spawn() {
+        let memory: Arc<dyn MemoryService> = Arc::new(MemMemory(Ok(vec![])));
+        let project: Arc<dyn ProjectService> = Arc::new(MemProject);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let (list, backfilled, batch) = rt.block_on(async move {
+            tokio::spawn(async move {
+                let list = memory.list_memories(7).await;
+                let backfilled = project.backfill_project_transcripts("/p".into()).await;
+                let batch = project.submit_summary_batch("/p".into(), None, None).await;
+                (list, backfilled, batch)
+            })
+            .await
+            .unwrap()
+        });
+        assert_eq!(list, Ok(vec![]));
+        assert_eq!(backfilled, Ok(5));
+        assert_eq!(batch, Ok((7, 2)));
+    }
+
+    #[test]
+    fn memory_read_failure_is_distinguishable_from_an_empty_list() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let empty = MemMemory(Ok(vec![]));
+        let down = MemMemory(Err(ServiceError::new(ServiceErrorKind::Unavailable, "x")));
+        assert!(rt.block_on(empty.list_memories(1)).is_ok());
+        assert_eq!(
+            rt.block_on(down.list_memories(1)).unwrap_err().kind,
             ServiceErrorKind::Unavailable
         );
     }
