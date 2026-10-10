@@ -1,12 +1,12 @@
 //! 进程内服务假实现(只在测试里):不起 UDS,返回固定结果并记录调用。
 use dozer_model::{
-    AgentKind, CategoryInfo, CategoryMoveDirection, GroupAuthor, GroupCancelScope, GroupInfo,
-    GroupMessageInfo, MemoryDetail, MemoryInfo, ProjectInfo, SummaryBatchInfo, TodoInfo,
-    TodoStoredStatus,
+    AgentKind, CategoryInfo, CategoryMoveDirection, ConversationSummary, GroupAuthor,
+    GroupCancelScope, GroupInfo, GroupMessageInfo, MemoryDetail, MemoryInfo, ProjectInfo,
+    SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus,
 };
 use dozer_services::{
-    BoxFuture, GroupChatService, MemoryService, PostedMessages, ProjectService, ServiceError,
-    ServiceErrorKind, Services, TodoService,
+    BoxFuture, ConversationRows, ConversationService, GroupChatService, MemoryService,
+    PostedMessages, ProjectService, ServiceError, ServiceErrorKind, Services, TodoService,
 };
 use std::sync::{Arc, Mutex};
 
@@ -185,6 +185,7 @@ pub(crate) fn base_services() -> Services {
         project: Arc::new(FakeProject::default()),
         memory: Arc::new(FakeMemory::default()),
         group_chat: Arc::new(FakeGroupChat::default()),
+        conversation: Arc::new(FakeConversation::default()),
     }
 }
 
@@ -696,5 +697,90 @@ impl GroupChatService for FakeGroupChat {
             format!("push_group_message_to_todo({message_id},{text})"),
             || todo_info(77),
         )
+    }
+}
+
+/// 固定的会话行(Claude、无总结)。
+#[allow(dead_code)] // Task 4 起被使用,届时去掉。
+pub(crate) fn conversation_row(
+    id: &str,
+    title: &str,
+) -> (ConversationSummary, Option<SessionSummaryPayload>) {
+    (
+        ConversationSummary {
+            conversation_id: id.into(),
+            agent: AgentKind::Claude,
+            file_path: format!("/t/{id}.jsonl"),
+            title: title.into(),
+            first_ts: 0,
+            last_ts: 0,
+            turn_count: 1,
+        },
+        None,
+    )
+}
+
+// ---- FakeConversation ----
+
+struct ConversationState {
+    rows: Result<ConversationRows, ServiceError>,
+    calls: Vec<String>,
+}
+
+/// 克隆共享同一份状态。`Default` = 成功且空。
+#[derive(Clone)]
+#[allow(dead_code)] // Task 4 起被会话面板测试使用,届时去掉。
+pub(crate) struct FakeConversation {
+    state: Arc<Mutex<ConversationState>>,
+}
+
+impl Default for FakeConversation {
+    fn default() -> Self {
+        Self::with(Ok(vec![]))
+    }
+}
+
+#[allow(dead_code)] // Task 4 起被使用,届时去掉。
+impl FakeConversation {
+    fn with(rows: Result<ConversationRows, ServiceError>) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(ConversationState {
+                rows,
+                calls: vec![],
+            })),
+        }
+    }
+    pub(crate) fn with_rows(self, rows: ConversationRows) -> Self {
+        self.state.lock().unwrap().rows = Ok(rows);
+        self
+    }
+    pub(crate) fn failing(kind: ServiceErrorKind, message: &str) -> Self {
+        Self::with(Err(ServiceError::new(kind, message)))
+    }
+    pub(crate) fn calls(&self) -> Vec<String> {
+        self.state.lock().unwrap().calls.clone()
+    }
+    pub(crate) fn into_services(self) -> Services {
+        Services {
+            conversation: Arc::new(self),
+            ..base_services()
+        }
+    }
+}
+
+impl ConversationService for FakeConversation {
+    fn list_conversations_with_summaries(
+        &self,
+        cwd: String,
+        agent: Option<AgentKind>,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'_, Result<ConversationRows, ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls.push(format!(
+            "list_conversations_with_summaries({cwd},{agent:?},{limit},{offset})"
+        ));
+        let r = s.rows.clone();
+        Box::pin(async move { r })
     }
 }

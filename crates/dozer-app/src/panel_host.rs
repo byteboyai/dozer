@@ -25,6 +25,7 @@ pub(crate) fn services_for(client: &Client) -> Services {
         project: Arc::new(client.clone()),
         memory: Arc::new(client.clone()),
         group_chat: Arc::new(client.clone()),
+        conversation: Arc::new(client.clone()),
     }
 }
 
@@ -495,6 +496,21 @@ mod tests {
         // recording_io 的 Client 指向不存在的 socket → Unavailable
         let e = rt
             .block_on(io.services().group_chat.list_groups(1))
+            .unwrap_err();
+        assert_eq!(e.kind, dozer_services::ServiceErrorKind::Unavailable);
+    }
+
+    #[test]
+    fn default_services_route_conversation_through_the_client_adapter() {
+        let rt = test_runtime();
+        let (io, _rx) = recording_io(&rt);
+        // recording_io 的 Client 指向不存在的 socket → Unavailable
+        let e = rt
+            .block_on(
+                io.services()
+                    .conversation
+                    .list_conversations_with_summaries("/p".into(), None, 500, 0),
+            )
             .unwrap_err();
         assert_eq!(e.kind, dozer_services::ServiceErrorKind::Unavailable);
     }
