@@ -9,8 +9,9 @@ use dozer_core::protocol::{
     SessionSummaryPayload, TodoInfo, TurnRecord, UsagePayload, decode_line, encode_line,
 };
 use dozer_services::{
-    BoxFuture, ConversationRows, ConversationService, GroupChatService, MemoryService,
-    ProjectService, ServiceError, ServiceErrorKind, TodoService, UsageRows, UsageService,
+    BoxFuture, CodeHealthService, ConversationRows, ConversationService, GroupChatService,
+    MemoryService, ProjectService, ServiceError, ServiceErrorKind, TodoService, UsageRows,
+    UsageService,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -2021,6 +2022,42 @@ impl ConversationService for Client {
     }
 }
 
+impl CodeHealthService for Client {
+    fn get_code_health_report(
+        &self,
+        project_id: i64,
+    ) -> BoxFuture<'_, Result<Option<dozer_core::protocol::CodeHealthReportInfo>, ServiceError>>
+    {
+        Box::pin(async move {
+            Client::get_code_health_report(self, project_id)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn list_code_health_reports(
+        &self,
+        project_id: i64,
+        limit: u32,
+    ) -> BoxFuture<'_, Result<Vec<dozer_core::protocol::CodeHealthReportInfo>, ServiceError>> {
+        Box::pin(async move {
+            Client::list_code_health_reports(self, project_id, limit)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn save_code_health_report(
+        &self,
+        project_id: i64,
+        info: dozer_core::protocol::CodeHealthReportInfo,
+    ) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async move {
+            Client::save_code_health_report(self, project_id, &info)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+}
+
 #[cfg(test)]
 mod service_error_tests {
     use super::*;
@@ -2331,6 +2368,64 @@ mod conversation_service_tests {
         )
         .await
         .unwrap_err();
+        assert_eq!(
+            (e.kind, e.message.as_str()),
+            (ServiceErrorKind::Rejected, "daemon 错误: boom")
+        );
+        let _ = std::fs::remove_file(&sock);
+    }
+}
+
+#[cfg(test)]
+mod code_health_service_tests {
+    use super::todo_service_tests::serve_once;
+    use super::*;
+    use dozer_services::{CodeHealthService, ServiceErrorKind};
+
+    #[tokio::test]
+    async fn get_returns_the_option_unchanged() {
+        let sock = serve_once("ch-get", Some(Reply::CodeHealthReport { report: None }));
+        let got = CodeHealthService::get_code_health_report(&Client::new(sock.clone()), 7).await;
+        assert_eq!(got, Ok(None));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn list_comes_back_as_ok() {
+        let sock = serve_once(
+            "ch-list",
+            Some(Reply::CodeHealthReports { reports: vec![] }),
+        );
+        let got =
+            CodeHealthService::list_code_health_reports(&Client::new(sock.clone()), 7, 2).await;
+        assert_eq!(got, Ok(vec![]));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn hang_up_is_unavailable_with_the_legacy_text() {
+        let sock = serve_once("ch-hangup", None);
+        let e = CodeHealthService::get_code_health_report(&Client::new(sock.clone()), 7)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.kind, e.message.as_str()),
+            (ServiceErrorKind::Unavailable, "daemon 断开")
+        );
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn error_reply_is_rejected_with_the_legacy_prefix() {
+        let sock = serve_once(
+            "ch-reject",
+            Some(Reply::Error {
+                message: "boom".into(),
+            }),
+        );
+        let e = CodeHealthService::list_code_health_reports(&Client::new(sock.clone()), 7, 2)
+            .await
+            .unwrap_err();
         assert_eq!(
             (e.kind, e.message.as_str()),
             (ServiceErrorKind::Rejected, "daemon 错误: boom")
