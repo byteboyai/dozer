@@ -145,12 +145,21 @@ pub fn update(
             if kind == ServiceErrorKind::Unavailable {
                 dozer_core::log_debug!(LOG, "任务/分类读取失败(dozerd 不可用): {message}");
             } else {
-                ws_state.outbox.push_keyed(
-                    LOG,
-                    crate::extensions::toast::Level::Error,
-                    format!("任务加载失败: {message}"),
-                    "todo-load",
+                let now = std::time::Instant::now();
+                let repeat = matches!(
+                    &ws_state.last_load_failure,
+                    Some((last, at)) if *last == message
+                        && now.duration_since(*at) < LOAD_FAILURE_TOAST_COOLDOWN
                 );
+                if !repeat {
+                    ws_state.outbox.push_keyed(
+                        LOG,
+                        crate::extensions::toast::Level::Error,
+                        format!("任务加载失败: {message}"),
+                        "todo-load",
+                    );
+                    ws_state.last_load_failure = Some((message, now));
+                }
             }
         }
         Message::CategoryMutated(res) => {

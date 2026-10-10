@@ -515,4 +515,33 @@ mod tests {
         assert!(kinds(&a) && kinds(&b), "{a:?} {b:?}");
         assert_eq!(ws.take_outbox().len(), 1, "分类操作失败的 Toast 保持不变");
     }
+
+    #[test]
+    fn repeated_identical_read_failures_toast_only_once() {
+        let rt = runtime();
+        let service = svc(&FakeTodo::default());
+        let mut ws = WorkspaceState::default();
+        for _ in 0..3 {
+            let (emit, _rx) = collect();
+            update(
+                &mut ws,
+                Message::LoadFailed(ServiceErrorKind::Protocol, "解码失败".into()),
+                7,
+                &service,
+                rt.handle(),
+                emit,
+            );
+        }
+        assert_eq!(ws.take_outbox().len(), 1, "轮询每秒失败一次也只提示一次");
+        let (emit, _rx) = collect();
+        update(
+            &mut ws,
+            Message::LoadFailed(ServiceErrorKind::Rejected, "另一种错误".into()),
+            7,
+            &service,
+            rt.handle(),
+            emit,
+        );
+        assert_eq!(ws.take_outbox().len(), 1, "换了一种错误要再提示");
+    }
 }
