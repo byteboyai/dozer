@@ -76,3 +76,11 @@
 - `MemoriesLoaded` / `MemoryDetailLoaded` 没有项目/代数保护(同 Usage 已修的 G3b)。
 - 读失败冷却逻辑在 Todo 与 Project 各有一份(`LOAD_FAILURE_TOAST_COOLDOWN`),可抽到 `toast::Outbox`。
 - `extensions/project_create.rs` 仍直接用 `Client`(`open_project`/`list_projects`)。
+
+## GroupChat 迁移(2026-10-11)
+
+`extensions/group_chat/**` 已经 `GroupChatService`(`dozer-services`)取数与写入;`R-CLIENT` 基线中 `group_chat/mod.rs` 已清零。用户可见行为零变化(群聊的读写失败本来就可见,不新增 `LoadFailed`);`PanelIo::spawn` 的闭包改拿 `Services`。规格 `docs/superpowers/specs/2026-10-11-groupchat-services-design.md`。
+
+**后续项(未修):**
+- `GroupsLoaded` 没有项目/代数保护(`Polled` 靠 `selected` 比对)。
+- 剩余直接使用 `Client` 的面板:`conversations`、`codehealth`、`agent_context`、`browser`、`edit_history`、`settings`、`project_create`。
