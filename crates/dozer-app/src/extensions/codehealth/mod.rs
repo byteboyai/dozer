@@ -82,6 +82,7 @@ pub struct PanelState {
 
 #[derive(Default)]
 pub struct WorkspaceState {
+    pub(crate) requests: crate::request_tracker::RequestTracker,
     panel: PanelState,
     scanning: bool,
     /// 上一次 `Message::Scanned(_, Err(_))` 的错误文案，成功扫描或重新点
@@ -150,6 +151,7 @@ impl WorkspaceState {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    AsyncResult(crate::request_tracker::RequestToken, Box<Message>),
     /// 面板打开时读落盘缓存（最新 + 上一份）并计算差异/热点后的完整状态。
     /// `PanelState` 较大，装箱避免撑大外层 `Message` 枚举。
     Loaded(i64, Box<PanelState>),
@@ -169,7 +171,15 @@ pub enum Message {
 }
 
 pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
+    let mut msg = msg;
+    while let Message::AsyncResult(token, inner) = msg {
+        if !ws_state.requests.accepts(token) {
+            return;
+        }
+        msg = *inner;
+    }
     match msg {
+        Message::AsyncResult(..) => unreachable!("nested async result"),
         Message::Loaded(_project_id, panel) => {
             ws_state.panel = *panel;
         }
@@ -208,6 +218,29 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
         }
         Message::ContentRetry => {
             unreachable!("由内核拦截处理,见 codehealth::Message::ContentRetry 文档")
+        }
+    }
+}
+
+#[cfg(test)]
+impl Message {
+    // Existing payload tests inspect service conversion separately from delivery guards.
+    pub(crate) fn result_payload(self) -> Self {
+        match self {
+            Self::AsyncResult(_, inner) => inner.result_payload(),
+            other => other,
+        }
+    }
+}
+
+impl Message {
+    pub(crate) fn result_project(&self) -> Option<i64> {
+        match self {
+            Self::AsyncResult(token, _) => token.project_id,
+            Message::Loaded(id, _) | Message::LoadFailed(id, ..) | Message::Scanned(id, _) => {
+                Some(*id)
+            }
+            _ => None,
         }
     }
 }
@@ -399,9 +432,9 @@ mod tests {
                 .with_services(crate::service_fakes::FakeCodeHealth::default().into_services()),
             ..ctx
         };
-        on_activate(&ctx);
+        on_activate(&WorkspaceState::default(), &ctx);
         assert!(matches!(
-            rx.recv_timeout(TIMEOUT).unwrap(),
+            rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
             Message::Loaded(7, _)
         ));
         // 切入不自动扫描(spec:手动触发):缓存加载之后不应再有任何消息
@@ -415,7 +448,7 @@ mod tests {
     fn on_activate_without_a_project_path_does_nothing() {
         let rt = runtime();
         let (ctx, rx) = offline_ctx::<Message>(&rt, 7, None);
-        on_activate(&ctx);
+        on_activate(&WorkspaceState::default(), &ctx);
         assert!(
             rx.recv_timeout(std::time::Duration::from_millis(200))
                 .is_err()
@@ -493,10 +526,68 @@ mod tests {
         let rt = runtime();
         // 默认服务束指向不存在的 socket → get 失败 → LoadFailed(7, Unavailable, ..)
         let (ctx, rx) = offline_ctx::<Message>(&rt, 7, Some(std::env::temp_dir()));
-        on_activate(&ctx);
+        on_activate(&WorkspaceState::default(), &ctx);
         assert!(matches!(
-            rx.recv_timeout(TIMEOUT).unwrap(),
+            rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
             Message::LoadFailed(7, ServiceErrorKind::Unavailable, _, _)
         ));
+    }
+
+    #[test]
+    fn stale_cache_and_scan_results_do_not_overwrite_latest_report() {
+        let mut state = WorkspaceState::default();
+        let cache = state.requests.begin(Some(1), "report");
+        update(&mut state, Message::ScanRequested);
+        let scan = state.requests.begin(Some(1), "report");
+        update(
+            &mut state,
+            Message::AsyncResult(cache, Box::new(Message::Loaded(1, Box::default()))),
+        );
+        assert!(state.scanning());
+        let panel = PanelState {
+            scanned_at_ms: Some(42),
+            ..Default::default()
+        };
+        update(
+            &mut state,
+            Message::AsyncResult(scan, Box::new(Message::Scanned(1, Ok(Box::new(panel))))),
+        );
+        update(
+            &mut state,
+            Message::AsyncResult(cache, Box::new(Message::Loaded(1, Box::default()))),
+        );
+        assert_eq!(state.scanned_at_ms(), Some(42));
+        let next = state.requests.begin(Some(1), "report");
+        update(&mut state, Message::ScanRequested);
+        update(
+            &mut state,
+            Message::AsyncResult(
+                scan,
+                Box::new(Message::Scanned(1, Err("old failure".into()))),
+            ),
+        );
+        assert!(state.scanning());
+        assert!(state.scan_error().is_none());
+        update(
+            &mut state,
+            Message::AsyncResult(
+                next,
+                Box::new(Message::Scanned(1, Err("current failure".into()))),
+            ),
+        );
+        assert!(!state.scanning());
+        assert_eq!(state.scan_error(), Some("current failure"));
+    }
+
+    #[test]
+    fn activating_during_scan_does_not_supersede_scan_with_cache() {
+        let rt = runtime();
+        let (ctx, rx) = offline_ctx::<Message>(&rt, 7, Some(std::env::temp_dir()));
+        let mut state = WorkspaceState::default();
+        update(&mut state, Message::ScanRequested);
+        let scan = state.requests.begin(Some(7), "report");
+        on_activate(&state, &ctx);
+        assert!(state.requests.accepts(scan));
+        assert!(rx.try_recv().is_err());
     }
 }

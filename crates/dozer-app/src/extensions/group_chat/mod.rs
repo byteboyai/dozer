@@ -32,6 +32,7 @@ pub const POLL_LIMIT: u32 = 200;
 
 #[derive(Debug, Default)]
 pub struct WorkspaceState {
+    pub(crate) requests: crate::request_tracker::RequestTracker,
     groups: Vec<GroupInfo>,
     selected: Option<i64>,
     /// 当前选中群的消息,按 `seq` 升序。
@@ -58,6 +59,7 @@ pub struct WorkspaceState {
 #[derive(Debug, Clone)]
 #[allow(clippy::enum_variant_names)]
 pub enum Message {
+    AsyncResult(crate::request_tracker::RequestToken, Box<Message>),
     GroupsLoaded(i64, Result<Vec<GroupInfo>, String>),
     /// 新建群成功:排最前并自动选中。
     GroupCreated(i64, GroupInfo),
@@ -108,6 +110,7 @@ pub enum Message {
 impl Message {
     pub fn project_id(&self) -> i64 {
         match self {
+            Message::AsyncResult(token, _) => token.project_id.expect("group project"),
             Message::GroupsLoaded(p, _)
             | Message::GroupCreated(p, _)
             | Message::GroupChanged(p, _)
@@ -211,6 +214,7 @@ impl WorkspaceState {
     }
 
     fn reset_messages(&mut self) {
+        self.requests.invalidate("messages");
         self.messages.clear();
         self.latest_rev = 0;
         self.hint = None;
@@ -249,6 +253,8 @@ impl WorkspaceState {
     /// 切入面板时调用:下次 `load_due` 重新加载群列表。不清已有的群与消息,
     /// 避免切入瞬间闪成"没有群聊"。
     pub(crate) fn mark_stale(&mut self) {
+        self.requests.invalidate("groups");
+        self.load_in_flight = false;
         self.fresh = false;
     }
 
@@ -274,7 +280,15 @@ impl WorkspaceState {
 }
 
 pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
+    let mut msg = msg;
+    while let Message::AsyncResult(token, inner) = msg {
+        if !state.requests.accepts(token) {
+            return Vec::new();
+        }
+        msg = *inner;
+    }
     match msg {
+        Message::AsyncResult(..) => unreachable!("nested async result"),
         Message::GroupsLoaded(_, result) => {
             state.load_in_flight = false;
             state.ever_loaded = true;
@@ -293,6 +307,7 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
             }
         }
         Message::GroupCreated(_, group) => {
+            state.mark_stale();
             let id = group.id;
             state.groups.retain(|g| g.id != id);
             state.groups.insert(0, group);
@@ -301,12 +316,14 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
             vec![Effect::FetchMessages { group_id: id }]
         }
         Message::GroupChanged(_, group) => {
+            state.mark_stale();
             if let Some(slot) = state.groups.iter_mut().find(|g| g.id == group.id) {
                 *slot = group;
             }
             Vec::new()
         }
         Message::GroupDeleted(_, id) => {
+            state.mark_stale();
             state.groups.retain(|g| g.id != id);
             if state.delete_confirm == Some(id) {
                 state.delete_confirm = None;
@@ -427,7 +444,15 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
 // ---------------------------------------------------------------------------
 
 /// 加载某项目的群聊列表。
-pub fn spawn_load_groups(project_id: i64, io: &PanelIo<Message>) {
+pub fn spawn_load_groups(
+    requests: &crate::request_tracker::RequestTracker,
+    project_id: i64,
+    io: &PanelIo<Message>,
+) {
+    let io = io.with_request(
+        requests.begin(Some(project_id), "groups"),
+        Message::AsyncResult,
+    );
     io.spawn(move |services, io| async move {
         let result = services
             .group_chat
@@ -438,7 +463,17 @@ pub fn spawn_load_groups(project_id: i64, io: &PanelIo<Message>) {
     });
 }
 
-pub fn spawn_fetch_messages(project_id: i64, group_id: i64, after_rev: i64, io: &PanelIo<Message>) {
+pub fn spawn_fetch_messages(
+    requests: &crate::request_tracker::RequestTracker,
+    project_id: i64,
+    group_id: i64,
+    after_rev: i64,
+    io: &PanelIo<Message>,
+) {
+    let io = io.with_request(
+        requests.begin(Some(project_id), "messages"),
+        Message::AsyncResult,
+    );
     io.spawn(move |services, io| async move {
         let result = services
             .group_chat
@@ -455,7 +490,13 @@ pub fn spawn_fetch_messages(project_id: i64, group_id: i64, after_rev: i64, io: 
 
 /// 执行一条经 `route_event` 校验过的命令。`SelectGroup`/`OpenTodo` 不走这里
 /// (前者是同步状态变更,见 [`select_group`];后者是切面板,由 host 处理)。
-pub fn spawn_command(project_id: i64, cmd: Command, io: &PanelIo<Message>) {
+pub fn spawn_command(
+    requests: &crate::request_tracker::RequestTracker,
+    project_id: i64,
+    cmd: Command,
+    io: &PanelIo<Message>,
+) {
+    let io = io.with_request(requests.scope(Some(project_id)), Message::AsyncResult);
     io.spawn(move |services, io| async move {
         let chat = services.group_chat;
         let fail =
@@ -538,14 +579,21 @@ pub fn spawn_command(project_id: i64, cmd: Command, io: &PanelIo<Message>) {
 }
 
 /// 面板 `Effect` 的执行器:host 不认识这些变体,只负责给 `PanelIo`。
-pub fn run_effect(effect: Effect, project_id: i64, io: &PanelIo<Message>) {
+pub fn run_effect(
+    requests: &crate::request_tracker::RequestTracker,
+    effect: Effect,
+    project_id: i64,
+    io: &PanelIo<Message>,
+) {
     match effect {
-        Effect::FetchMessages { group_id } => spawn_fetch_messages(project_id, group_id, 0, io),
+        Effect::FetchMessages { group_id } => {
+            spawn_fetch_messages(requests, project_id, group_id, 0, io)
+        }
         Effect::CreateGroup { topic } => {
-            spawn_command(project_id, Command::CreateGroup { topic }, io)
+            spawn_command(requests, project_id, Command::CreateGroup { topic }, io)
         }
         Effect::DeleteGroup { group_id } => {
-            spawn_command(project_id, Command::DeleteGroup { group_id }, io)
+            spawn_command(requests, project_id, Command::DeleteGroup { group_id }, io)
         }
     }
 }
@@ -559,7 +607,7 @@ pub fn select_group(
     io: &PanelIo<Message>,
 ) {
     for effect in state.select(group_id) {
-        run_effect(effect, project_id, io);
+        run_effect(&state.requests, effect, project_id, io);
     }
 }
 
@@ -572,7 +620,7 @@ pub fn poll_if_due(
     io: &PanelIo<Message>,
 ) {
     if state.load_due() {
-        spawn_load_groups(project_id, io);
+        spawn_load_groups(&state.requests, project_id, io);
         return;
     }
     let (Some(group_id), true) = (state.selected(), state.has_active_turn()) else {
@@ -580,7 +628,7 @@ pub fn poll_if_due(
     };
     if state.poll_due(now) {
         let after_rev = state.latest_rev();
-        spawn_fetch_messages(project_id, group_id, after_rev, io);
+        spawn_fetch_messages(&state.requests, project_id, group_id, after_rev, io);
     }
 }
 
@@ -588,6 +636,17 @@ pub fn poll_if_due(
 /// "没有群聊";实际加载由 host 的轮询(`poll_if_due`)发起。
 pub fn on_activate(state: &mut WorkspaceState) {
     state.mark_stale();
+}
+
+#[cfg(test)]
+impl Message {
+    // Existing payload tests inspect service conversion separately from delivery guards.
+    pub(crate) fn result_payload(self) -> Self {
+        match self {
+            Self::AsyncResult(_, inner) => inner.result_payload(),
+            other => other,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1108,8 +1167,8 @@ mod tests {
     fn load_groups_against_an_unreachable_daemon_reports_an_error_for_that_project() {
         let rt = runtime();
         let (io, rx) = offline_io(&rt);
-        spawn_load_groups(7, &io);
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        spawn_load_groups(&Default::default(), 7, &io);
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::GroupsLoaded(7, Err(_)) => {}
             other => panic!("unexpected: {other:?}"),
         }
@@ -1119,8 +1178,8 @@ mod tests {
     fn fetch_messages_against_an_unreachable_daemon_reports_an_error_poll_for_that_group() {
         let rt = runtime();
         let (io, rx) = offline_io(&rt);
-        spawn_fetch_messages(7, 5, 3, &io);
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        spawn_fetch_messages(&Default::default(), 7, 5, 3, &io);
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::Polled {
                 project_id: 7,
                 group_id: 5,
@@ -1180,8 +1239,8 @@ mod tests {
         let rt = runtime();
         for (cmd, wording) in cases {
             let (io, rx) = offline_io(&rt);
-            spawn_command(7, cmd.clone(), &io);
-            match rx.recv_timeout(TIMEOUT).unwrap() {
+            spawn_command(&Default::default(), 7, cmd.clone(), &io);
+            match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
                 Message::Failed(7, text) => {
                     assert!(text.starts_with(wording), "{cmd:?}: {text}");
                 }
@@ -1194,8 +1253,18 @@ mod tests {
     fn select_and_open_todo_commands_do_not_spawn_anything() {
         let rt = runtime();
         let (io, rx) = offline_io(&rt);
-        spawn_command(7, Command::SelectGroup { group_id: 5 }, &io);
-        spawn_command(7, Command::OpenTodo { todo_id: 1 }, &io);
+        spawn_command(
+            &Default::default(),
+            7,
+            Command::SelectGroup { group_id: 5 },
+            &io,
+        );
+        spawn_command(
+            &Default::default(),
+            7,
+            Command::OpenTodo { todo_id: 1 },
+            &io,
+        );
         assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
     }
 
@@ -1203,8 +1272,13 @@ mod tests {
     fn run_effect_maps_each_effect_to_its_task() {
         let rt = runtime();
         let (io, rx) = offline_io(&rt);
-        run_effect(Effect::FetchMessages { group_id: 5 }, 7, &io);
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        run_effect(
+            &Default::default(),
+            Effect::FetchMessages { group_id: 5 },
+            7,
+            &io,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::Polled {
                 project_id: 7,
                 group_id: 5,
@@ -1212,14 +1286,24 @@ mod tests {
             } => {}
             other => panic!("unexpected: {other:?}"),
         }
-        run_effect(Effect::CreateGroup { topic: "t".into() }, 7, &io);
+        run_effect(
+            &Default::default(),
+            Effect::CreateGroup { topic: "t".into() },
+            7,
+            &io,
+        );
         assert!(matches!(
-            rx.recv_timeout(TIMEOUT).unwrap(),
+            rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
             Message::Failed(7, ref t) if t.starts_with("新建群聊失败")
         ));
-        run_effect(Effect::DeleteGroup { group_id: 5 }, 7, &io);
+        run_effect(
+            &Default::default(),
+            Effect::DeleteGroup { group_id: 5 },
+            7,
+            &io,
+        );
         assert!(matches!(
-            rx.recv_timeout(TIMEOUT).unwrap(),
+            rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
             Message::Failed(7, ref t) if t.starts_with("删除群聊失败")
         ));
     }
@@ -1231,7 +1315,7 @@ mod tests {
         let mut s = loaded(vec![group(5, "A"), group(6, "B")]);
         select_group(&mut s, 7, 6, &io);
         assert_eq!(s.selected(), Some(6));
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::Polled {
                 project_id: 7,
                 group_id: 6,
@@ -1259,7 +1343,7 @@ mod tests {
         let mut s = WorkspaceState::default(); // 从未加载:load_due
         poll_if_due(&mut s, 7, Instant::now(), &io);
         assert!(matches!(
-            rx.recv_timeout(TIMEOUT).unwrap(),
+            rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
             Message::GroupsLoaded(7, Err(_))
         ));
         // 在途期间不重复发起
@@ -1285,7 +1369,7 @@ mod tests {
             },
         );
         poll_if_due(&mut s, 7, Instant::now(), &io);
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::Polled {
                 project_id: 7,
                 group_id: 5,
@@ -1313,19 +1397,25 @@ mod tests {
         let fake = FakeGroupChat::default();
         let (io, rx) = fake_io(&rt, &fake);
         spawn_command(
+            &Default::default(),
             7,
             Command::CreateGroup {
                 topic: "主题".into(),
             },
             &io,
         );
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::GroupCreated(7, g) => assert_eq!((g.id, g.topic.as_str()), (900, "主题")),
             other => panic!("unexpected: {other:?}"),
         }
-        spawn_command(7, Command::DeleteGroup { group_id: 5 }, &io);
+        spawn_command(
+            &Default::default(),
+            7,
+            Command::DeleteGroup { group_id: 5 },
+            &io,
+        );
         assert!(matches!(
-            rx.recv_timeout(TIMEOUT).unwrap(),
+            rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
             Message::GroupDeleted(7, 5)
         ));
         for cmd in [
@@ -1342,16 +1432,17 @@ mod tests {
             },
             Command::RemoveMember { member_id: 1 },
         ] {
-            spawn_command(7, cmd.clone(), &io);
+            spawn_command(&Default::default(), 7, cmd.clone(), &io);
             assert!(
                 matches!(
-                    rx.recv_timeout(TIMEOUT).unwrap(),
+                    rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
                     Message::GroupChanged(7, _)
                 ),
                 "{cmd:?}"
             );
         }
         spawn_command(
+            &Default::default(),
             7,
             Command::Post {
                 group_id: 5,
@@ -1359,7 +1450,7 @@ mod tests {
             },
             &io,
         );
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::Posted {
                 project_id: 7,
                 group_id: 5,
@@ -1373,12 +1464,18 @@ mod tests {
             }
             other => panic!("unexpected: {other:?}"),
         }
-        spawn_command(7, Command::Retry { message_id: 9 }, &io);
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        spawn_command(
+            &Default::default(),
+            7,
+            Command::Retry { message_id: 9 },
+            &io,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::MessageUpdated(7, m) => assert_eq!(m.id, 9),
             other => panic!("unexpected: {other:?}"),
         }
         spawn_command(
+            &Default::default(),
             7,
             Command::PushTodo {
                 group_id: 5,
@@ -1388,7 +1485,7 @@ mod tests {
             &io,
         );
         assert!(matches!(
-            rx.recv_timeout(TIMEOUT).unwrap(),
+            rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
             Message::TodoPushed {
                 project_id: 7,
                 group_id: 5,
@@ -1404,6 +1501,7 @@ mod tests {
         let fake = FakeGroupChat::default();
         let (io, rx) = fake_io(&rt, &fake);
         spawn_command(
+            &Default::default(),
             7,
             Command::Cancel {
                 group_id: 5,
@@ -1470,8 +1568,8 @@ mod tests {
             let fake =
                 FakeGroupChat::failing_writes(ServiceErrorKind::Rejected, "daemon 错误: boom");
             let (io, rx) = fake_io(&rt, &fake);
-            spawn_command(7, cmd.clone(), &io);
-            match rx.recv_timeout(TIMEOUT).unwrap() {
+            spawn_command(&Default::default(), 7, cmd.clone(), &io);
+            match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
                 Message::Failed(7, text) => {
                     assert_eq!(text, format!("{wording}: daemon 错误: boom"), "{cmd:?}")
                 }
@@ -1485,8 +1583,8 @@ mod tests {
         let rt = runtime();
         let fake = FakeGroupChat::default().with_messages(vec![], 42);
         let (io, rx) = fake_io(&rt, &fake);
-        spawn_fetch_messages(7, 5, 3, &io);
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        spawn_fetch_messages(&Default::default(), 7, 5, 3, &io);
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::Polled {
                 project_id: 7,
                 group_id: 5,
@@ -1508,10 +1606,55 @@ mod tests {
         let rt = runtime();
         let fake = FakeGroupChat::failing_reads(ServiceErrorKind::Unavailable, "daemon 断开");
         let (io, rx) = fake_io(&rt, &fake);
-        spawn_load_groups(7, &io);
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        spawn_load_groups(&Default::default(), 7, &io);
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::GroupsLoaded(7, Err(text)) => assert_eq!(text, "daemon 断开"),
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[test]
+    fn stale_groups_do_not_undo_create_and_old_poll_cannot_reenter_selected_group() {
+        let mut state = loaded(vec![group(5, "A"), group(6, "B")]);
+        let old = state.requests.begin(Some(1), "groups");
+        update(&mut state, Message::GroupCreated(1, group(7, "new")));
+        update(
+            &mut state,
+            Message::AsyncResult(old, Box::new(Message::GroupsLoaded(1, Ok(vec![])))),
+        );
+        assert_eq!(state.groups[0].id, 7);
+        let old_poll = state.requests.begin(Some(1), "messages");
+        state.select(5);
+        state.select(7);
+        update(
+            &mut state,
+            Message::AsyncResult(
+                old_poll,
+                Box::new(Message::Polled {
+                    project_id: 1,
+                    group_id: 7,
+                    result: Err("old poll".into()),
+                }),
+            ),
+        );
+        assert!(state.take_outbox().is_empty());
+        let old_list = state.requests.begin(Some(1), "groups");
+        let new_list = state.requests.begin(Some(1), "groups");
+        update(
+            &mut state,
+            Message::AsyncResult(
+                new_list,
+                Box::new(Message::GroupsLoaded(1, Ok(vec![group(8, "latest")]))),
+            ),
+        );
+        update(
+            &mut state,
+            Message::AsyncResult(
+                old_list,
+                Box::new(Message::GroupsLoaded(1, Err("old list".into()))),
+            ),
+        );
+        assert_eq!(state.groups[0].id, 8);
+        assert!(state.take_outbox().is_empty());
     }
 }

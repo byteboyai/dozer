@@ -648,6 +648,7 @@ impl Workspace {
         spawn_disk_usage_refresh(project_id, repo_path, io);
         ws.spawn_conversations_refresh(io);
         browser::request_bookmarks_refresh(
+            &ws.browser.requests,
             ws.project.as_ref().map(|p| p.id),
             &crate::panel_host::services_for(&io.client).bookmark,
             &io.handle,
@@ -863,6 +864,7 @@ impl Workspace {
             let _ = proxy.send_event(Message::Conversations(m));
         };
         conversations::spawn_refresh(
+            &self.conversations.requests,
             project_id,
             cwd,
             crate::panel_host::services_for(&io.client).conversation,
@@ -884,6 +886,7 @@ impl Workspace {
             let _ = proxy.send_event(Message::CodeHealth(m));
         };
         codehealth::spawn_scan(
+            &self.codehealth.requests,
             project_id,
             project_path,
             crate::panel_host::services_for(&io.client).codehealth,
@@ -1104,6 +1107,7 @@ impl Workspace {
         spawn_disk_usage_refresh(project_id, repo_path, io);
         self.spawn_conversations_refresh(io);
         browser::request_bookmarks_refresh(
+            &self.browser.requests,
             self.project.as_ref().map(|p| p.id),
             &crate::panel_host::services_for(&io.client).bookmark,
             &io.handle,

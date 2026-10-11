@@ -35,6 +35,7 @@ pub struct ContextEntry {
 
 #[derive(Debug, Default)]
 pub struct State {
+    pub(crate) requests: crate::request_tracker::RequestTracker,
     /// 待发提示(失败/被拒等一次性反馈)。`App::update` 的包装函数每次处理完消息后
     /// 统一排空成 Toast,见 `extensions::toast::Outbox`。
     pub(crate) outbox: crate::extensions::toast::Outbox,
@@ -63,6 +64,7 @@ impl State {
 /// 项目 id 路由到对应 `Workspace`——异步结果不会写进"当前聚焦项目"。
 #[derive(Debug, Clone)]
 pub enum Message {
+    AsyncResult(crate::request_tracker::RequestToken, Box<Message>),
     Loaded(Result<Vec<ContextEntry>, String>),
     ToggleExpanded,
     Remove(i64),
@@ -84,7 +86,15 @@ pub enum Followup {
 
 /// 纯状态转移(可单测);IO 由 `update` 按 `Followup` 执行。
 pub fn apply(state: &mut State, msg: Message) -> Followup {
+    let mut msg = msg;
+    while let Message::AsyncResult(token, inner) = msg {
+        if !state.requests.accepts(token) {
+            return Followup::None;
+        }
+        msg = *inner;
+    }
     match msg {
+        Message::AsyncResult(..) => unreachable!("nested async result"),
         Message::Loaded(Ok(items)) => {
             state.items = items;
             Followup::None
@@ -129,12 +139,16 @@ pub fn apply(state: &mut State, msg: Message) -> Followup {
 
 /// 拉取列表并在后台线程判定每项是否已缺失,完成后 `emit(Loaded)`。
 pub fn request_refresh(
+    requests: &crate::request_tracker::RequestTracker,
     project_id: i64,
     root: PathBuf,
     service: Arc<dyn ContextService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
+    let emit = requests
+        .begin(Some(project_id), "context")
+        .wrap(emit, Message::AsyncResult);
     handle.spawn(async move {
         let res = match service.list_context_items(project_id).await {
             Err(e) => Err(e.message),
@@ -156,6 +170,7 @@ pub fn request_refresh(
 
 /// 把文件/目录加入项目上下文,完成后 `emit(Added)`。`relative` 不带尾部 `/`。
 pub fn request_add(
+    requests: &crate::request_tracker::RequestTracker,
     project_id: i64,
     is_dir: bool,
     relative: String,
@@ -163,6 +178,10 @@ pub fn request_add(
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
+    requests.invalidate("context");
+    let emit = requests
+        .scope(Some(project_id))
+        .wrap(emit, Message::AsyncResult);
     let kind = if is_dir { "dir" } else { "file" };
     handle.spawn(async move {
         let res = service
@@ -185,10 +204,17 @@ pub fn update(
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Clone + Send + 'static,
 ) {
+    let emit = state
+        .requests
+        .scope(Some(project_id))
+        .wrap(emit, Message::AsyncResult);
     match apply(state, msg) {
         Followup::None => {}
-        Followup::Refresh => request_refresh(project_id, root, service, handle, emit),
+        Followup::Refresh => {
+            request_refresh(&state.requests, project_id, root, service, handle, emit)
+        }
         Followup::RemoveItem(id) => {
+            state.requests.invalidate("context");
             handle.spawn(async move {
                 let res = service
                     .remove_context_item(project_id, id)
@@ -317,6 +343,17 @@ pub fn expanded_panel(
             .style(byteui::feedback::dialog::card_style)
             .into(),
     )
+}
+
+#[cfg(test)]
+impl Message {
+    // Existing payload tests inspect service conversion separately from delivery guards.
+    pub(crate) fn result_payload(self) -> Self {
+        match self {
+            Self::AsyncResult(_, inner) => inner.result_payload(),
+            other => other,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -465,13 +502,14 @@ mod tests {
             FakeContext::default().with_items(vec![info(1, "here.txt"), info(2, "gone.txt")]);
         let (emit, rx) = collect();
         request_refresh(
+            &Default::default(),
             7,
             dir.path().to_path_buf(),
             fake.clone().into_services().context,
             rt.handle(),
             emit,
         );
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::Loaded(Ok(entries)) => {
                 assert_eq!(entries.len(), 2);
                 assert!(!entries[0].missing, "存在的文件不算缺失");
@@ -489,13 +527,14 @@ mod tests {
             FakeContext::default().with_list_error(ServiceErrorKind::Rejected, "daemon 错误: boom");
         let (emit, rx) = collect();
         request_refresh(
+            &Default::default(),
             7,
             std::env::temp_dir(),
             fake.into_services().context,
             rt.handle(),
             emit,
         );
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::Loaded(Err(text)) => assert_eq!(text, "daemon 错误: boom"),
             other => panic!("unexpected: {other:?}"),
         }
@@ -508,6 +547,7 @@ mod tests {
             let fake = FakeContext::default();
             let (emit, rx) = collect();
             request_add(
+                &Default::default(),
                 7,
                 is_dir,
                 "src/a".into(),
@@ -515,7 +555,7 @@ mod tests {
                 rt.handle(),
                 emit,
             );
-            match rx.recv_timeout(TIMEOUT).unwrap() {
+            match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
                 Message::Added(Ok(item)) => assert_eq!(item.id, 77),
                 other => panic!("unexpected: {other:?}"),
             }
@@ -533,6 +573,7 @@ mod tests {
             FakeContext::default().with_write_error(ServiceErrorKind::Unavailable, "daemon 断开");
         let (emit, rx) = collect();
         request_add(
+            &Default::default(),
             7,
             false,
             "a".into(),
@@ -540,7 +581,7 @@ mod tests {
             rt.handle(),
             emit,
         );
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::Added(Err(text)) => assert_eq!(text, "daemon 断开"),
             other => panic!("unexpected: {other:?}"),
         }
@@ -562,7 +603,7 @@ mod tests {
             emit,
         );
         assert!(matches!(
-            rx.recv_timeout(TIMEOUT).unwrap(),
+            rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
             Message::Removed(Ok(()))
         ));
         assert_eq!(fake.calls(), vec!["remove_context_item(7,3)".to_string()]);
@@ -584,7 +625,7 @@ mod tests {
             rt.handle(),
             emit,
         );
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::Removed(Err(text)) => assert_eq!(text, "daemon 错误: nope"),
             other => panic!("unexpected: {other:?}"),
         }
@@ -606,9 +647,42 @@ mod tests {
             emit,
         );
         assert!(matches!(
-            rx.recv_timeout(TIMEOUT).unwrap(),
+            rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
             Message::Loaded(Ok(_))
         ));
         assert_eq!(fake.calls(), vec!["list_context_items(7)".to_string()]);
+    }
+
+    #[test]
+    fn stale_async_context_result_and_failure_are_ignored() {
+        let mut state = State::default();
+        let old = state.requests.begin(Some(1), "context");
+        let new = state.requests.begin(Some(1), "context");
+        apply(
+            &mut state,
+            Message::AsyncResult(
+                new,
+                Box::new(Message::Loaded(Ok(vec![entry(2, "new", false)]))),
+            ),
+        );
+        apply(
+            &mut state,
+            Message::AsyncResult(old, Box::new(Message::Loaded(Ok(vec![])))),
+        );
+        apply(
+            &mut state,
+            Message::AsyncResult(old, Box::new(Message::Loaded(Err("old failure".into())))),
+        );
+        assert_eq!(state.items()[0].info.id, 2);
+        assert!(state.take_outbox().is_empty());
+        let mut other = State::default();
+        apply(
+            &mut other,
+            Message::AsyncResult(
+                new,
+                Box::new(Message::Loaded(Ok(vec![entry(2, "wrong project", false)]))),
+            ),
+        );
+        assert!(other.items().is_empty());
     }
 }

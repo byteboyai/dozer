@@ -1668,8 +1668,22 @@ impl App {
             let _ = proxy.send_event(Message::Todo(m));
         };
         let emit_todos = emit.clone();
-        todo::request_todos_refresh(project_id, &service, &handle, emit_todos);
-        todo::request_categories_refresh(project_id, &service, &handle, emit);
+        self.with_project(project_id, |ws, _io| {
+            todo::request_todos_refresh(
+                &ws.todo.requests,
+                project_id,
+                &service,
+                &handle,
+                emit_todos,
+            );
+            todo::request_categories_refresh(
+                &ws.todo.requests,
+                project_id,
+                &service,
+                &handle,
+                emit,
+            );
+        });
     }
 
     /// 群聊面板当前是否"正被看着":在某一侧显示、该侧未收起,且没有被另一侧的

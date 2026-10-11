@@ -122,7 +122,43 @@ pub fn update(
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + Sync + 'static,
 ) {
+    let mut msg = msg;
+    while let Message::AsyncResult(token, inner) = msg {
+        if token.project_id != Some(project_id) || !ws_state.requests.accepts(token) {
+            return;
+        }
+        msg = *inner;
+    }
+    if matches!(
+        &msg,
+        Message::CategoryDragRelease(_)
+            | Message::CategoryNewChild(_)
+            | Message::CategoryNewSibling(_)
+            | Message::CategoryDelete(_)
+            | Message::CategoryRenameSubmit
+            | Message::CategoryMoveSibling(..)
+            | Message::SetCategory(..)
+    ) {
+        ws_state.requests.invalidate("categories");
+        ws_state.requests.invalidate("todos");
+    }
+    if matches!(
+        &msg,
+        Message::StatusPick(..)
+            | Message::CalendarPick(..)
+            | Message::Toggle(_)
+            | Message::AddText(_)
+            | Message::EditText(..)
+            | Message::ReorderTo { .. }
+    ) {
+        ws_state.requests.invalidate("todos");
+    }
+    let emit = ws_state
+        .requests
+        .scope(Some(project_id))
+        .wrap(emit, Message::AsyncResult);
     match msg {
+        Message::AsyncResult(..) => unreachable!("nested async result"),
         // 卡片悬停由内核 `App::update` 拦截转发到 `set_hover`,不会到这。
         Message::Hover(_, _) => {}
         // footbar"清空列表"按钮:弹出确认框,不直接清空。
@@ -138,7 +174,7 @@ pub fn update(
         Message::Mutated(res) => {
             // 失败时列表随后会按磁盘状态刷新回旧样子,用户会以为没生效——Toast 说明。
             ws_state.outbox.push_err(LOG, "Todo 操作失败", &res);
-            request_todos_refresh(project_id, service, handle, emit);
+            request_todos_refresh(&ws_state.requests, project_id, service, handle, emit);
         }
         Message::CategoriesLoaded(categories) => ws_state.categories = categories,
         Message::LoadFailed(kind, message) => {
@@ -163,13 +199,20 @@ pub fn update(
             let emit = std::sync::Arc::new(emit);
             let emit1 = emit.clone();
             let emit2 = emit;
-            request_categories_refresh(project_id, &service1, &handle1, move |m| emit1(m));
-            handle2.spawn(async move {
-                match service2.list_todos(project_id).await {
-                    Ok(todos) => emit2(Message::Loaded(todos)),
-                    Err(e) => emit2(Message::LoadFailed(e.kind, e.message)),
-                }
-            });
+            request_categories_refresh(
+                &ws_state.requests,
+                project_id,
+                &service1,
+                &handle1,
+                move |m| emit1(m),
+            );
+            request_todos_refresh(
+                &ws_state.requests,
+                project_id,
+                &service2,
+                &handle2,
+                move |m| emit2(m),
+            );
         }
         Message::CategoryToggleExpand(id) => ws_state.toggle_category_expanded(id),
         Message::SelectView(view) => ws_state.view = view,

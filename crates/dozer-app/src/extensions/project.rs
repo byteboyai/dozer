@@ -98,6 +98,7 @@ pub struct MemoryDraft {
 /// 挂在每个 Workspace 上的项目信息面板状态。
 #[derive(Default)]
 pub struct WorkspaceState {
+    pub(crate) requests: crate::request_tracker::RequestTracker,
     branch: Option<String>,
     dirty: bool,
     /// git remote 的 fetch URL 列表(`bytegit::Repo::remotes`,去重后)。空 = 无 remote/
@@ -319,6 +320,7 @@ pub enum ProjectToolbarTarget {
 /// 走 `with_project`;其余是用户交互消息。
 #[derive(Debug, Clone)]
 pub enum Message {
+    AsyncResult(crate::request_tracker::RequestToken, Box<Message>),
     /// 占位:非交互态图标按钮(如 Git 远程仓库"＋",功能未接入前)的
     /// `icon_button_entry` 仍需要一个具体的 `on_select` 值,但 `interactive`
     /// 为假时该值不会真的被 `on_press` 调用——这个变体只为满足类型签名。
@@ -561,6 +563,26 @@ pub(crate) fn memory_detail_message<E: std::fmt::Display>(
     match res {
         Ok(detail) => Message::MemoryDetailLoaded(detail),
         Err(e) => Message::MemoryDetailLoadFailed(e.to_string()),
+    }
+}
+
+#[cfg(test)]
+impl Message {
+    // Existing payload tests inspect service conversion separately from delivery guards.
+    pub(crate) fn result_payload(self) -> Self {
+        match self {
+            Self::AsyncResult(_, inner) => inner.result_payload(),
+            other => other,
+        }
+    }
+}
+
+impl Message {
+    pub(crate) fn result_project(&self) -> Option<i64> {
+        match self {
+            Self::AsyncResult(token, _) => token.project_id,
+            _ => None,
+        }
     }
 }
 
@@ -1400,9 +1422,9 @@ mod tests {
             io: ctx.io.with_services(FakeMemory::default().into_services()),
             ..ctx
         };
-        on_activate(&ctx);
+        on_activate(&WorkspaceState::default(), &ctx);
         assert!(matches!(
-            rx.recv_timeout(TIMEOUT).unwrap(),
+            rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
             Message::MemoriesLoaded(_)
         ));
     }
@@ -1511,10 +1533,10 @@ mod tests {
             .into_services()
             .memory;
         let (emit, rx) = collect();
-        request_memories_refresh(1, &memory, rt.handle(), emit);
+        request_memories_refresh(&Default::default(), 1, &memory, rt.handle(), emit);
         assert!(
             matches!(
-                rx.recv_timeout(TIMEOUT).unwrap(),
+                rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
                 Message::MemoriesLoadFailed(ServiceErrorKind::Unavailable, _)
             ),
             "读失败必须发 MemoriesLoadFailed,不得发 MemoriesLoaded(vec![])"
@@ -1561,7 +1583,7 @@ mod tests {
             rt.handle(),
             e,
         );
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::MemoryMutated(Err(text)) => assert_eq!(text, "daemon 错误: boom"),
             other => panic!("意外消息: {other:?}"),
         }
@@ -1576,7 +1598,7 @@ mod tests {
         ws.name_editing = Some("新名".into());
         let (emit, rx) = collect();
         submit_name_edit(&mut ws, 1, "旧名", project, rt.handle(), emit);
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::NameRenamed(1, Err(text)) => assert_eq!(text, "项目不存在"),
             other => panic!("意外消息: {other:?}"),
         }
@@ -1668,7 +1690,7 @@ mod tests {
             true,
         );
         assert!(matches!(
-            rx.recv_timeout(TIMEOUT).unwrap(),
+            rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
             Message::ScaffoldDone
         ));
         assert_eq!(fake.calls().len(), 1, "补录失败不阻止流程结束,也不重试");
@@ -1700,5 +1722,81 @@ mod tests {
             vec!["remove_project(1)".to_string()],
             "不得继续删转录"
         );
+    }
+
+    #[test]
+    fn stale_memory_detail_cannot_replace_new_selection_or_reopen_closed_detail() {
+        let rt = runtime();
+        let services = test_services();
+        let repo = test_repo_path();
+        let mut state = new_ws();
+        let apply = |state: &mut WorkspaceState, msg| {
+            update(
+                state,
+                msg,
+                1,
+                "project",
+                &repo,
+                &services,
+                rt.handle(),
+                |_| {},
+            )
+        };
+        let old = state.requests.begin(Some(1), "detail");
+        let new = state.requests.begin(Some(1), "detail");
+        let mut detail = sample_memory_detail();
+        detail.id = 2;
+        apply(
+            &mut state,
+            Message::AsyncResult(new, Box::new(Message::MemoryDetailLoaded(detail.clone()))),
+        );
+        apply(
+            &mut state,
+            Message::AsyncResult(
+                old,
+                Box::new(Message::MemoryDetailLoaded(sample_memory_detail())),
+            ),
+        );
+        apply(
+            &mut state,
+            Message::AsyncResult(
+                old,
+                Box::new(Message::MemoryDetailLoadFailed("old failure".into())),
+            ),
+        );
+        assert_eq!(state.memory_detail.as_ref().unwrap().id, 2);
+        assert!(state.error.is_none());
+        apply(&mut state, Message::MemoryDetailClose);
+        apply(
+            &mut state,
+            Message::AsyncResult(new, Box::new(Message::MemoryDetailLoaded(detail))),
+        );
+        assert!(state.memory_detail.is_none());
+        let old_list = state.requests.begin(Some(1), "memories");
+        let new_list = state.requests.begin(Some(1), "memories");
+        apply(
+            &mut state,
+            Message::AsyncResult(
+                new_list,
+                Box::new(Message::MemoriesLoaded(vec![memory_info(2, "new")])),
+            ),
+        );
+        apply(
+            &mut state,
+            Message::AsyncResult(old_list, Box::new(Message::MemoriesLoaded(vec![]))),
+        );
+        assert_eq!(state.memories[0].id, 2);
+        let mut reopened = new_ws();
+        apply(
+            &mut reopened,
+            Message::AsyncResult(
+                new_list,
+                Box::new(Message::MemoriesLoaded(vec![memory_info(
+                    3,
+                    "old workspace",
+                )])),
+            ),
+        );
+        assert!(reopened.memories.is_empty());
     }
 }

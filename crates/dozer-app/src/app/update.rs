@@ -1513,15 +1513,13 @@ impl App {
                     }
                 });
             }
-            Message::Conversations(conversations::Message::SessionsRefreshed(
-                project_id,
-                result,
-            )) => {
+            Message::Conversations(
+                msg @ (conversations::Message::SessionsRefreshed(..)
+                | conversations::Message::AsyncResult(..)),
+            ) => {
+                let project_id = msg.result_project().expect("conversation result project");
                 self.with_project(project_id, move |ws, _io| {
-                    conversations::update(
-                        &mut ws.conversations,
-                        conversations::Message::SessionsRefreshed(project_id, result),
-                    );
+                    conversations::update(&mut ws.conversations, msg);
                     let open_cid = ws.review.as_ref().and_then(|rv| match &rv.source {
                         ReviewSource::Conversation(cid) => Some(cid.clone()),
                         ReviewSource::Session(_) => None,
@@ -1652,9 +1650,11 @@ impl App {
                 toast::update(&mut self.toast, msg, std::time::Instant::now());
             }
             Message::CodeHealth(
-                msg @ (codehealth::Message::Loaded(project_id, ..)
-                | codehealth::Message::LoadFailed(project_id, ..)),
+                msg @ (codehealth::Message::Loaded(..)
+                | codehealth::Message::LoadFailed(..)
+                | codehealth::Message::AsyncResult(..)),
             ) => {
+                let project_id = msg.result_project().expect("codehealth result project");
                 self.with_project(project_id, move |ws, _io| {
                     codehealth::update(&mut ws.codehealth, msg);
                 });
@@ -1934,7 +1934,12 @@ impl App {
                 self.with_project(project_id, |ws, io| {
                     let pio = io.panel_io(Message::GroupChat);
                     for effect in crate::extensions::group_chat::update(&mut ws.group_chat, msg) {
-                        crate::extensions::group_chat::run_effect(effect, project_id, &pio);
+                        crate::extensions::group_chat::run_effect(
+                            &ws.group_chat.requests,
+                            effect,
+                            project_id,
+                            &pio,
+                        );
                     }
                 });
             }
@@ -3330,7 +3335,11 @@ impl App {
                     let context = crate::panel_host::services_for(&self.client).context;
                     let handle = self.handle.clone();
                     let proxy = self.proxy.clone();
+                    let Some(ws) = self.active_workspace() else {
+                        return;
+                    };
                     crate::extensions::agent_context::request_add(
+                        &ws.agent_context.requests,
                         project_id,
                         is_dir,
                         relative,
@@ -3504,7 +3513,7 @@ impl App {
                 self.set_hover(id, hovered);
             }
             Message::Project(msg) => {
-                let Some(project_id) = self.active_project_id else {
+                let Some(project_id) = msg.result_project().or(self.active_project_id) else {
                     return;
                 };
                 let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
@@ -4726,13 +4735,21 @@ impl App {
         let handle = self.handle.clone();
         let client = self.client.clone();
         let proxy = self.proxy.clone();
+        let Some(ws) = self.active_workspace() else {
+            return;
+        };
+        ws.todo.requests.invalidate("todos");
+        let request = ws.todo.requests.scope(self.active_project_id);
         handle.spawn(async move {
             let res = client
                 .assign_todo_agent(id, agent)
                 .await
                 .map(|_| ())
                 .map_err(|e| e.to_string());
-            let _ = proxy.send_event(Message::Todo(todo::Message::Mutated(res)));
+            let _ = proxy.send_event(Message::Todo(todo::Message::AsyncResult(
+                request,
+                Box::new(todo::Message::Mutated(res)),
+            )));
         });
     }
 
@@ -4813,7 +4830,7 @@ impl App {
     }
 
     pub(crate) fn todo_message(&mut self, msg: todo::Message) {
-        let Some(project_id) = self.active_project_id else {
+        let Some(project_id) = msg.result_project().or(self.active_project_id) else {
             return;
         };
         let service = crate::panel_host::services_for(&self.client).todo;
@@ -4825,7 +4842,7 @@ impl App {
         let emit = move |m: todo::Message| {
             let _ = proxy.send_event(Message::Todo(m));
         };
-        self.with_focused_project(move |ws, _io| {
+        self.with_project(project_id, move |ws, _io| {
             todo::update(&mut ws.todo, msg, project_id, &service, &handle, emit);
         });
     }
@@ -4913,8 +4930,15 @@ impl App {
                 // 还会武装图标栏拖拽。(跨面板动作,留在 host。)
                 self.show_panel(PanelKind::Todo);
             }
-            // 其余命令不依赖工作区状态,直接 spawn(与迁移前一致:项目工作区没加载也照常执行)。
-            other => gc::spawn_command(project_id, other, &self.panel_io(Message::GroupChat)),
+            // 命令结果绑定发起时的工作区实例;已关闭的项目不再发起命令。
+            other => self.with_project(project_id, |ws, io| {
+                gc::spawn_command(
+                    &ws.group_chat.requests,
+                    project_id,
+                    other,
+                    &io.panel_io(Message::GroupChat),
+                );
+            }),
         }
     }
 
@@ -5002,7 +5026,10 @@ impl App {
         // 按下浏览器页签＝选中＋准备被拖走(`SelectTab` 在
         // `browser::update` 里真正选中为 `active`,这里按它记下拖起源)。
         let was_select = matches!(msg, browser::Message::SelectTab(_));
-        self.with_focused_project(|ws, io| {
+        let Some(pid) = msg.result_project().or(self.active_project_id) else {
+            return;
+        };
+        self.with_project(pid, |ws, io| {
             let project_id = ws.project.as_ref().map(|p| p.id);
             let client = io.client.clone();
             let handle = io.handle.clone();
@@ -5242,15 +5269,11 @@ impl App {
     fn fire_panel_switch_in(&mut self, kind: PanelKind) {
         match kind {
             PanelKind::GitLog => self.sync_git_log_to_active_project(),
-            PanelKind::Todo => {
-                if let Some(project_id) = self.active_project_id {
-                    todo::on_activate(&ActivationCtx {
-                        project_id,
-                        project_path: None,
-                        io: self.panel_io(Message::Todo),
-                    });
+            PanelKind::Todo => self.with_focused_project(|ws, io| {
+                if let Some(ctx) = workspace_activation_ctx(ws, io, Message::Todo) {
+                    todo::on_activate(&ws.todo, &ctx);
                 }
-            }
+            }),
             PanelKind::Database => self.with_focused_project(|ws, _io| {
                 if let Some(project) = ws.project.as_ref() {
                     database::reload_from_disk(
@@ -5261,13 +5284,11 @@ impl App {
             }),
             PanelKind::Project => {
                 self.ensure_project_readme_and_reveal();
-                if let Some(project_id) = self.active_project_id {
-                    project::on_activate(&ActivationCtx {
-                        project_id,
-                        project_path: None,
-                        io: self.panel_io(Message::Project),
-                    });
-                }
+                self.with_focused_project(|ws, io| {
+                    if let Some(ctx) = workspace_activation_ctx(ws, io, Message::Project) {
+                        project::on_activate(&ws.project_panel, &ctx);
+                    }
+                });
             }
             PanelKind::Ssh => self.with_focused_project(|ws, _io| {
                 if let Some(project) = ws.project.as_ref() {
@@ -5282,7 +5303,7 @@ impl App {
             // 手动触发，与 Usage 的"打开即自动扫"是明确的行为差异）。
             PanelKind::CodeHealth => self.with_focused_project(|ws, io| {
                 if let Some(ctx) = workspace_activation_ctx(ws, io, Message::CodeHealth) {
-                    codehealth::on_activate(&ctx);
+                    codehealth::on_activate(&ws.codehealth, &ctx);
                 }
             }),
             // 会话列表原本只在项目打开时和回合结束时刷新,切进这个面板时
@@ -5290,7 +5311,7 @@ impl App {
             // 快照。补一次切入即刷新,同 `Usage` 面板的既有口径。
             PanelKind::Conversations => self.with_focused_project(|ws, io| {
                 if let Some(ctx) = workspace_activation_ctx(ws, io, Message::Conversations) {
-                    conversations::on_activate(&ctx);
+                    conversations::on_activate(&ws.conversations, &ctx);
                 }
             }),
             // 切入时刷新群列表(别的入口可能新增过群);`mark_stale` 不清已有内容,
@@ -5648,7 +5669,11 @@ impl App {
         let context = crate::panel_host::services_for(&self.client).context;
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
+        let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
+            return;
+        };
         crate::extensions::agent_context::request_refresh(
+            &ws.agent_context.requests,
             project_id,
             root,
             context,
@@ -5815,6 +5840,9 @@ impl App {
     /// 点"扫描"(原生按钮与 webview 事件共用入口)。
     pub(crate) fn code_health_request_scan(&mut self) {
         self.with_focused_project(|ws, io| {
+            if ws.codehealth.scanning() {
+                return;
+            }
             codehealth::update(&mut ws.codehealth, codehealth::Message::ScanRequested);
             ws.spawn_codehealth_scan(io);
         });
@@ -6187,6 +6215,12 @@ impl App {
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
         let conversation = crate::panel_host::services_for(&client).conversation;
+        let requests = self
+            .active_workspace()
+            .unwrap()
+            .conversations
+            .requests
+            .clone();
         let cid = conversation_id.clone();
         handle.spawn(async move {
             let job_id = match client
@@ -6264,6 +6298,7 @@ impl App {
                     }
                 }
             }
+            let request = requests.begin(Some(project_id), "sessions");
             let result: Result<Vec<dozer_model::SessionRow>, dozer_services::ServiceError> =
                 conversation
                     .list_conversations_with_summaries(cwd.clone(), None, 500, 0)
@@ -6277,9 +6312,12 @@ impl App {
                 .as_ref()
                 .map(|_| ())
                 .map_err(|e| format!("总结已生成，但刷新会话失败：{e}"));
-            let _ = proxy.send_event(Message::Conversations(
-                conversations::Message::SessionsRefreshed(project_id, result),
-            ));
+            let _ = proxy.send_event(Message::Conversations(conversations::Message::AsyncResult(
+                request,
+                Box::new(conversations::Message::SessionsRefreshed(
+                    project_id, result,
+                )),
+            )));
             let _ = proxy.send_event(Message::Conversations(
                 conversations::Message::SummaryGenerateFinished(project_id, cid, completion),
             ));

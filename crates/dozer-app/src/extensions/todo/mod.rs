@@ -331,9 +331,9 @@ mod tests {
             io: ctx.io.with_services(FakeTodo::default().into_services()),
             ..ctx
         };
-        on_activate(&ctx);
-        let first = rx.recv_timeout(TIMEOUT).unwrap();
-        let second = rx.recv_timeout(TIMEOUT).unwrap();
+        on_activate(&WorkspaceState::default(), &ctx);
+        let first = rx.recv_timeout(TIMEOUT).unwrap().result_payload();
+        let second = rx.recv_timeout(TIMEOUT).unwrap().result_payload();
         let loaded = |m: &Message| matches!(m, Message::Loaded(_));
         let categories = |m: &Message| matches!(m, Message::CategoriesLoaded(_));
         assert!(
@@ -428,12 +428,16 @@ mod tests {
         let (emit, rx) = collect();
         let emit = std::sync::Arc::new(emit);
         let e1 = emit.clone();
-        request_todos_refresh(7, &service, rt.handle(), move |m| e1(m));
-        request_categories_refresh(7, &service, rt.handle(), move |m| emit(m));
+        request_todos_refresh(&Default::default(), 7, &service, rt.handle(), move |m| {
+            e1(m)
+        });
+        request_categories_refresh(&Default::default(), 7, &service, rt.handle(), move |m| {
+            emit(m)
+        });
         for _ in 0..2 {
             assert!(
                 matches!(
-                    rx.recv_timeout(TIMEOUT).unwrap(),
+                    rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
                     Message::LoadFailed(ServiceErrorKind::Unavailable, _)
                 ),
                 "读失败必须发 LoadFailed,不得发 Loaded(vec![])"
@@ -458,7 +462,7 @@ mod tests {
             rt.handle(),
             emit,
         );
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::Mutated(Err(text)) => assert_eq!(text, "daemon 错误: boom"),
             other => panic!("意外消息: {other:?}"),
         }
@@ -479,8 +483,8 @@ mod tests {
             rt.handle(),
             emit,
         );
-        let first = rx.recv_timeout(TIMEOUT).unwrap();
-        let second = rx.recv_timeout(TIMEOUT).unwrap();
+        let first = rx.recv_timeout(TIMEOUT).unwrap().result_payload();
+        let second = rx.recv_timeout(TIMEOUT).unwrap().result_payload();
         assert!(
             matches!(first, Message::CategoryRenameStart(900)),
             "{first:?}"
@@ -509,8 +513,8 @@ mod tests {
             rt.handle(),
             emit,
         );
-        let a = rx.recv_timeout(TIMEOUT).unwrap();
-        let b = rx.recv_timeout(TIMEOUT).unwrap();
+        let a = rx.recv_timeout(TIMEOUT).unwrap().result_payload();
+        let b = rx.recv_timeout(TIMEOUT).unwrap().result_payload();
         let kinds = |m: &Message| matches!(m, Message::Loaded(_) | Message::CategoriesLoaded(_));
         assert!(kinds(&a) && kinds(&b), "{a:?} {b:?}");
         assert_eq!(ws.take_outbox().len(), 1, "分类操作失败的 Toast 保持不变");
@@ -543,5 +547,99 @@ mod tests {
             emit,
         );
         assert_eq!(ws.take_outbox().len(), 1, "换了一种错误要再提示");
+    }
+
+    #[test]
+    fn stale_async_results_preserve_todos_categories_and_errors() {
+        let rt = runtime();
+        let service = svc(&FakeTodo::default());
+        let mut state = WorkspaceState::default();
+        let apply =
+            |state: &mut WorkspaceState, msg| update(state, msg, 7, &service, rt.handle(), |_| {});
+        let old = state.requests.begin(Some(7), "todos");
+        let category = state.requests.begin(Some(7), "categories");
+        let new = state.requests.begin(Some(7), "todos");
+        apply(
+            &mut state,
+            Message::AsyncResult(
+                new,
+                Box::new(Message::Loaded(vec![todo_info(2, "new", false)])),
+            ),
+        );
+        apply(
+            &mut state,
+            Message::AsyncResult(old, Box::new(Message::Loaded(vec![]))),
+        );
+        apply(
+            &mut state,
+            Message::AsyncResult(
+                old,
+                Box::new(Message::LoadFailed(
+                    ServiceErrorKind::Rejected,
+                    "old failure".into(),
+                )),
+            ),
+        );
+        apply(
+            &mut state,
+            Message::AsyncResult(
+                category,
+                Box::new(Message::LoadFailed(
+                    ServiceErrorKind::Rejected,
+                    "category failure".into(),
+                )),
+            ),
+        );
+        assert_eq!(state.items()[0].id, 2);
+        let notices = state.take_outbox();
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].text.contains("category failure"));
+        let mut other = WorkspaceState::default();
+        apply(
+            &mut other,
+            Message::AsyncResult(
+                new,
+                Box::new(Message::Loaded(vec![todo_info(2, "wrong project", false)])),
+            ),
+        );
+        assert!(other.items().is_empty());
+    }
+    #[test]
+    fn queued_refresh_is_rejected_after_new_request_even_before_new_result_arrives() {
+        let rt = runtime();
+        let service = svc(&FakeTodo::ok(vec![todo_info(2, "new", false)], vec![]));
+        let mut state = WorkspaceState::default();
+        update(
+            &mut state,
+            Message::Loaded(vec![todo_info(1, "existing", false)]),
+            7,
+            &service,
+            rt.handle(),
+            |_| {},
+        );
+        let (emit, rx) = collect();
+        request_todos_refresh(&state.requests, 7, &service, rt.handle(), emit);
+        let queued = rx.recv_timeout(TIMEOUT).unwrap();
+        assert_eq!(queued.result_project(), Some(7));
+        let (emit, rx) = collect();
+        request_todos_refresh(&state.requests, 7, &service, rt.handle(), emit);
+        update(&mut state, queued, 7, &service, rt.handle(), |_| {});
+        assert_eq!(state.items()[0].id, 1);
+        let current = rx.recv_timeout(TIMEOUT).unwrap();
+        update(
+            &mut state,
+            current.clone(),
+            99,
+            &service,
+            rt.handle(),
+            |_| {},
+        );
+        assert_eq!(
+            state.items()[0].id,
+            1,
+            "wrong project rejected even with same panel"
+        );
+        update(&mut state, current, 7, &service, rt.handle(), |_| {});
+        assert_eq!(state.items()[0].id, 2);
     }
 }

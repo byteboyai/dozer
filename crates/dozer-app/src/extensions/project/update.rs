@@ -20,7 +20,15 @@ pub fn update(
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
+    let mut msg = msg;
+    while let Message::AsyncResult(token, inner) = msg {
+        if token.project_id != Some(project_id) || !ws_state.requests.accepts(token) {
+            return;
+        }
+        msg = *inner;
+    }
     match msg {
+        Message::AsyncResult(..) => unreachable!("nested async result"),
         Message::Noop => {}
         Message::ToolbarHover(..) => {
             unreachable!("由内核拦截处理,见 project::Message::ToolbarHover 文档")
@@ -251,6 +259,11 @@ pub fn update(
             }
         }
         Message::MemoryCreateSubmit => {
+            ws_state.requests.invalidate("memories");
+            let emit = ws_state
+                .requests
+                .scope(Some(project_id))
+                .wrap(emit, Message::AsyncResult);
             let Some(draft) = ws_state.memory_create_draft.take() else {
                 return;
             };
@@ -277,7 +290,13 @@ pub fn update(
             } else {
                 ws_state.error = None;
             }
-            request_memories_refresh(project_id, &services.memory, handle, emit);
+            request_memories_refresh(
+                &ws_state.requests,
+                project_id,
+                &services.memory,
+                handle,
+                emit,
+            );
         }
         Message::MemoriesLoadFailed(kind, message) => {
             if kind == ServiceErrorKind::Unavailable {
@@ -293,6 +312,10 @@ pub fn update(
             }
         }
         Message::MemoryDetailOpen(id) => {
+            let emit = ws_state
+                .requests
+                .begin(Some(project_id), "detail")
+                .wrap(emit, Message::AsyncResult);
             ws_state.memory_detail = None;
             ws_state.memory_edit_draft = None;
             let memory = services.memory.clone();
@@ -310,6 +333,7 @@ pub fn update(
             ws_state.error = Some(format!("读取记忆失败: {e}"));
         }
         Message::MemoryDetailClose => {
+            ws_state.requests.invalidate("detail");
             ws_state.memory_detail = None;
             ws_state.memory_edit_draft = None;
             ws_state.memory_delete_pending = None;
@@ -348,9 +372,18 @@ pub fn update(
             }
         }
         Message::MemoryEditSubmit => {
+            ws_state.requests.invalidate("memories");
+            let emit = ws_state
+                .requests
+                .scope(Some(project_id))
+                .wrap(emit, Message::AsyncResult);
             let Some(draft) = ws_state.memory_edit_draft.take() else {
                 return;
             };
+            let detail_emit = ws_state
+                .requests
+                .begin(Some(project_id), "detail")
+                .wrap(emit.clone(), Message::AsyncResult);
             let memory = services.memory.clone();
             handle.spawn(async move {
                 match memory
@@ -369,7 +402,7 @@ pub fn update(
                         // 只刷新列表的局限——否则详情面板会停在编辑前的内容,
                         // 必须退回列表再点进去才看得到新值。
                         let fresh = memory.get_memory(project_id, detail.id).await;
-                        emit(memory_detail_message(fresh));
+                        detail_emit(memory_detail_message(fresh));
                         emit(Message::MemoryMutated(Ok(())));
                     }
                     Err(e) => emit(Message::MemoryMutated(Err(e.message))),
@@ -383,6 +416,12 @@ pub fn update(
             ws_state.memory_delete_pending = None;
         }
         Message::MemoryDeleteConfirm => {
+            ws_state.requests.invalidate("memories");
+            let emit = ws_state
+                .requests
+                .scope(Some(project_id))
+                .wrap(emit, Message::AsyncResult);
+            ws_state.requests.invalidate("detail");
             let Some(id) = ws_state.memory_delete_pending.take() else {
                 return;
             };
@@ -430,11 +469,15 @@ pub fn spawn_scaffold_run(
 /// 打开/切入 Project 面板时触发一次(同 Todo 面板的 `request_todos_refresh`
 /// 时机);之后的刷新走 `Message::MemoryMutated` 分支。
 pub fn request_memories_refresh(
+    requests: &crate::request_tracker::RequestTracker,
     project_id: i64,
     memory: &Arc<dyn MemoryService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
+    let emit = requests
+        .begin(Some(project_id), "memories")
+        .wrap(emit, Message::AsyncResult);
     let memory = memory.clone();
     handle.spawn(async move {
         match memory.list_memories(project_id).await {
@@ -445,8 +488,9 @@ pub fn request_memories_refresh(
 }
 
 /// 面板切入:刷新共享记忆列表(README 的展开/定位是 host 的预览动作,不在这里)。
-pub fn on_activate(ctx: &crate::panel_host::ActivationCtx<Message>) {
+pub fn on_activate(state: &WorkspaceState, ctx: &crate::panel_host::ActivationCtx<Message>) {
     request_memories_refresh(
+        &state.requests,
         ctx.project_id,
         &ctx.io.services().memory,
         ctx.io.handle(),

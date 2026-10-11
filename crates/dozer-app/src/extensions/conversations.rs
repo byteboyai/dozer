@@ -119,6 +119,7 @@ impl Operation<()> for CaptureConversationSearchFocus {
 /// 平铺的 `conversation_*` 字段。
 #[derive(Default)]
 pub struct WorkspaceState {
+    pub(crate) requests: crate::request_tracker::RequestTracker,
     sessions: Option<Vec<SessionRow>>,
     pages: usize,
     search: String,
@@ -191,6 +192,7 @@ impl WorkspaceState {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    AsyncResult(crate::request_tracker::RequestToken, Box<Message>),
     /// 会话列表刷新结果:当前项目全部 session(联查总结),按最后活跃时间
     /// 倒序。按自带的 `ProjectId` 走 `with_project` 路由。
     SessionsRefreshed(ProjectId, Result<Vec<SessionRow>, ServiceError>),
@@ -227,7 +229,15 @@ pub enum Message {
 }
 
 pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
+    let mut msg = msg;
+    while let Message::AsyncResult(token, inner) = msg {
+        if !ws_state.requests.accepts(token) {
+            return;
+        }
+        msg = *inner;
+    }
     match msg {
+        Message::AsyncResult(..) => unreachable!("nested async result"),
         Message::SessionsRefreshed(_, result) => match result {
             Ok(rows) => ws_state.sessions = Some(rows),
             Err(e) => {
@@ -280,12 +290,16 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
 /// 照搬现有 `Workspace::spawn_conversations_refresh`,`client` 参数传入方式
 /// 对齐 Usage 试点既有 `usage::spawn_refresh`。
 pub fn spawn_refresh(
+    requests: &crate::request_tracker::RequestTracker,
     project_id: i64,
     cwd: PathBuf,
     service: Arc<dyn ConversationService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
+    let emit = requests
+        .begin(Some(project_id), "sessions")
+        .wrap(emit, Message::AsyncResult);
     handle.spawn(async move {
         let result = service
             .list_conversations_with_summaries(cwd.to_string_lossy().into_owned(), None, 500, 0)
@@ -301,11 +315,12 @@ pub fn spawn_refresh(
 
 /// 面板切入:刷新会话列表(离开一段时间再切回来不会看到陈旧快照,同 Usage 的既有口径)。
 /// 没有项目路径时什么都不做。
-pub fn on_activate(ctx: &crate::panel_host::ActivationCtx<Message>) {
+pub fn on_activate(state: &WorkspaceState, ctx: &crate::panel_host::ActivationCtx<Message>) {
     let Some(cwd) = ctx.project_path.clone() else {
         return;
     };
     spawn_refresh(
+        &state.requests,
         ctx.project_id,
         cwd,
         ctx.io.services().conversation.clone(),
@@ -669,6 +684,27 @@ pub fn view<'a>(
 }
 
 #[cfg(test)]
+impl Message {
+    // Existing payload tests inspect service conversion separately from delivery guards.
+    pub(crate) fn result_payload(self) -> Self {
+        match self {
+            Self::AsyncResult(_, inner) => inner.result_payload(),
+            other => other,
+        }
+    }
+}
+
+impl Message {
+    pub(crate) fn result_project(&self) -> Option<i64> {
+        match self {
+            Self::AsyncResult(token, _) => token.project_id,
+            Message::SessionsRefreshed(id, _) => Some(*id),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -911,9 +947,9 @@ mod tests {
     fn on_activate_refreshes_the_session_list_of_that_project() {
         let rt = runtime();
         let (ctx, rx) = offline_ctx::<Message>(&rt, 7, Some(std::env::temp_dir()));
-        on_activate(&ctx);
+        on_activate(&WorkspaceState::default(), &ctx);
         assert!(matches!(
-            rx.recv_timeout(TIMEOUT).unwrap(),
+            rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
             Message::SessionsRefreshed(7, Err(_))
         ));
     }
@@ -922,7 +958,7 @@ mod tests {
     fn on_activate_without_a_project_path_does_nothing() {
         let rt = runtime();
         let (ctx, rx) = offline_ctx::<Message>(&rt, 7, None);
-        on_activate(&ctx);
+        on_activate(&WorkspaceState::default(), &ctx);
         assert!(
             rx.recv_timeout(std::time::Duration::from_millis(200))
                 .is_err()
@@ -941,6 +977,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         spawn_refresh(
+            &Default::default(),
             7,
             PathBuf::from("/tmp/p"),
             fake.clone().into_services().conversation,
@@ -949,7 +986,7 @@ mod tests {
                 let _ = tx.lock().unwrap().send(m);
             },
         );
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::SessionsRefreshed(7, Ok(rows)) => {
                 assert_eq!(rows.len(), 1);
                 assert_eq!(rows[0].conversation_id, "c1");
@@ -970,6 +1007,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         spawn_refresh(
+            &Default::default(),
             7,
             PathBuf::from("/tmp/p"),
             fake.into_services().conversation,
@@ -978,7 +1016,7 @@ mod tests {
                 let _ = tx.lock().unwrap().send(m);
             },
         );
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::SessionsRefreshed(7, Err(e)) => {
                 assert_eq!(
                     (e.kind, e.message.as_str()),
@@ -1066,5 +1104,44 @@ mod tests {
             ),
         );
         assert_eq!(ws.take_outbox().len(), 1, "换了文本要再提示");
+    }
+
+    #[test]
+    fn stale_async_sessions_and_failure_do_not_replace_latest_rows() {
+        let mut state = WorkspaceState::default();
+        let old = state.requests.begin(Some(1), "sessions");
+        let new = state.requests.begin(Some(1), "sessions");
+        update(
+            &mut state,
+            Message::AsyncResult(
+                new,
+                Box::new(Message::SessionsRefreshed(
+                    1,
+                    Ok(vec![sample_session("new")]),
+                )),
+            ),
+        );
+        update(
+            &mut state,
+            Message::AsyncResult(old, Box::new(Message::SessionsRefreshed(1, Ok(vec![])))),
+        );
+        update(
+            &mut state,
+            Message::AsyncResult(
+                old,
+                Box::new(Message::SessionsRefreshed(
+                    1,
+                    Err(ServiceError::new(ServiceErrorKind::Rejected, "old failure")),
+                )),
+            ),
+        );
+        assert_eq!(state.sessions().unwrap()[0].conversation_id, "new");
+        assert!(state.take_outbox().is_empty());
+        let mut reopened = WorkspaceState::default();
+        update(
+            &mut reopened,
+            Message::AsyncResult(new, Box::new(Message::SessionsRefreshed(1, Ok(vec![])))),
+        );
+        assert!(reopened.sessions().is_none());
     }
 }

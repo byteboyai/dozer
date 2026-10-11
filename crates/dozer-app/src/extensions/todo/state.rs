@@ -101,6 +101,7 @@ pub(crate) const ADD_SELECT_HIGHLIGHT: std::time::Duration = std::time::Duration
 /// Todo 面板挂在每个 `Workspace` 上的状态。
 #[derive(Default)]
 pub struct WorkspaceState {
+    pub(crate) requests: crate::request_tracker::RequestTracker,
     /// 待发提示(失败/被拒等一次性反馈)。`App::update` 的包装函数每次处理完消息后
     /// 统一排空成 Toast,见 `extensions::toast::Outbox`。
     pub(crate) outbox: crate::extensions::toast::Outbox,
@@ -480,6 +481,7 @@ impl WorkspaceState {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    AsyncResult(crate::request_tracker::RequestToken, Box<Message>),
     Toggle(usize),
     /// 内容侧"收起/展开列表列"按钮:内核拦截,不进 `update`——转发成顶层
     /// `Message::TogglePanelListCollapse(PanelKind::Todo)`(见 app.rs)。
@@ -647,11 +649,15 @@ pub(crate) fn is_optimistic_id(id: i64) -> bool {
 /// request_bookmarks_refresh`)同款手法的搬家版本:异步拉取某项目的任务
 /// 列表。轮询(`App::poll_todo_if_visible`)和任一写操作成功后都调它。
 pub fn request_todos_refresh(
+    requests: &crate::request_tracker::RequestTracker,
     project_id: i64,
     service: &Arc<dyn TodoService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
+    let emit = requests
+        .begin(Some(project_id), "todos")
+        .wrap(emit, Message::AsyncResult);
     let service = service.clone();
     handle.spawn(async move {
         match service.list_todos(project_id).await {
@@ -663,11 +669,15 @@ pub fn request_todos_refresh(
 
 /// `request_todos_refresh` 的分类树版本:异步拉取某项目的全部分类节点。
 pub fn request_categories_refresh(
+    requests: &crate::request_tracker::RequestTracker,
     project_id: i64,
     service: &Arc<dyn TodoService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
+    let emit = requests
+        .begin(Some(project_id), "categories")
+        .wrap(emit, Message::AsyncResult);
     let service = service.clone();
     handle.spawn(async move {
         match service.list_categories(project_id).await {
@@ -678,18 +688,40 @@ pub fn request_categories_refresh(
 }
 
 /// 面板切入:刷新任务列表与分类树(两个请求各回一条消息)。
-pub fn on_activate(ctx: &crate::panel_host::ActivationCtx<Message>) {
+pub fn on_activate(state: &WorkspaceState, ctx: &crate::panel_host::ActivationCtx<Message>) {
     let emit = ctx.io.emitter();
     request_todos_refresh(
+        &state.requests,
         ctx.project_id,
         &ctx.io.services().todo,
         ctx.io.handle(),
         emit.clone(),
     );
     request_categories_refresh(
+        &state.requests,
         ctx.project_id,
         &ctx.io.services().todo,
         ctx.io.handle(),
         emit,
     );
+}
+
+#[cfg(test)]
+impl Message {
+    // Existing payload tests inspect service conversion separately from delivery guards.
+    pub(crate) fn result_payload(self) -> Self {
+        match self {
+            Self::AsyncResult(_, inner) => inner.result_payload(),
+            other => other,
+        }
+    }
+}
+
+impl Message {
+    pub(crate) fn result_project(&self) -> Option<i64> {
+        match self {
+            Self::AsyncResult(token, _) => token.project_id,
+            _ => None,
+        }
+    }
 }

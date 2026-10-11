@@ -626,6 +626,7 @@ mod tests {
     #[tokio::test]
     async fn update_title_loaded_applies_html_title() {
         let mut state = State {
+            requests: Default::default(),
             tabs: Tabs::default(),
             error: None,
             bookmarks: Vec::new(),
@@ -818,6 +819,7 @@ mod tests {
         // `State::default()` 现在自带一个 about:blank 标签页,不再是空标签;
         // 要测"无激活 tab 时收藏是 no-op"的守卫分支,显式构造一个空标签状态。
         let mut state = State {
+            requests: Default::default(),
             tabs: Tabs::default(),
             error: None,
             bookmarks: Vec::new(),
@@ -971,8 +973,14 @@ mod tests {
             "https://a.com",
         )]);
         let (emit, rx) = collect();
-        request_bookmarks_refresh(Some(1), &fake_service(&fake), rt.handle(), emit);
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        request_bookmarks_refresh(
+            &Default::default(),
+            Some(1),
+            &fake_service(&fake),
+            rt.handle(),
+            emit,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::BookmarksLoaded(Some(1), Ok(v)) => assert_eq!(v.len(), 1),
             other => panic!("unexpected: {other:?}"),
         }
@@ -981,8 +989,14 @@ mod tests {
         let fake = FakeBookmark::default()
             .with_list_error(ServiceErrorKind::Rejected, "daemon 错误: boom");
         let (emit, rx) = collect();
-        request_bookmarks_refresh(None, &fake_service(&fake), rt.handle(), emit);
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        request_bookmarks_refresh(
+            &Default::default(),
+            None,
+            &fake_service(&fake),
+            rt.handle(),
+            emit,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::BookmarksLoaded(None, Err(e)) => {
                 assert_eq!(
                     (e.kind, e.message.as_str()),
@@ -1074,7 +1088,7 @@ mod tests {
             emit,
         );
         assert!(matches!(
-            rx.recv_timeout(TIMEOUT).unwrap(),
+            rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
             Message::BookmarksMutated(Some(7), Ok(()))
         ));
         assert_eq!(
@@ -1093,7 +1107,7 @@ mod tests {
             emit,
         );
         assert!(matches!(
-            rx.recv_timeout(TIMEOUT).unwrap(),
+            rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
             Message::BookmarksMutated(Some(7), Ok(()))
         ));
         assert_eq!(
@@ -1119,7 +1133,7 @@ mod tests {
             rt.handle(),
             emit,
         );
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::BookmarksMutated(Some(1), Err(text)) => assert_eq!(text, "daemon 错误: boom"),
             other => panic!("unexpected: {other:?}"),
         }
@@ -1143,7 +1157,7 @@ mod tests {
             emit,
         );
         assert!(matches!(
-            rx.recv_timeout(TIMEOUT).unwrap(),
+            rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
             Message::BookmarksMutated(Some(1), Ok(()))
         ));
         assert_eq!(fake.calls(), vec!["remove_bookmark(3)".to_string()]);
@@ -1158,13 +1172,102 @@ mod tests {
             emit,
         );
         assert!(matches!(
-            rx.recv_timeout(TIMEOUT).unwrap(),
+            rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
             Message::BookmarksLoaded(Some(1), Ok(_))
         ));
         assert_eq!(
             fake.calls().last().map(String::as_str),
             Some("list_bookmarks(Some(1))")
         );
+    }
+
+    #[test]
+    fn stale_bookmark_reads_and_reopened_panel_mutations_are_ignored() {
+        let rt = runtime();
+        let service = fake_service(&FakeBookmark::default());
+        let mut state = State::default();
+        let old = state.requests.begin(Some(1), "bookmarks");
+        let new = state.requests.begin(Some(1), "bookmarks");
+        let apply =
+            |state: &mut State, msg| update(state, msg, Some(1), &service, rt.handle(), |_| {});
+        apply(
+            &mut state,
+            Message::AsyncResult(
+                new,
+                Box::new(Message::BookmarksLoaded(
+                    Some(1),
+                    Err(dozer_services::ServiceError::new(
+                        ServiceErrorKind::Rejected,
+                        "current",
+                    )),
+                )),
+            ),
+        );
+        apply(
+            &mut state,
+            Message::AsyncResult(
+                old,
+                Box::new(Message::BookmarksLoaded(
+                    Some(1),
+                    Err(dozer_services::ServiceError::new(
+                        ServiceErrorKind::Rejected,
+                        "old",
+                    )),
+                )),
+            ),
+        );
+        assert!(state.error.as_ref().unwrap().contains("current"));
+        apply(
+            &mut state,
+            Message::AsyncResult(
+                new,
+                Box::new(Message::BookmarksLoaded(
+                    Some(1),
+                    Ok(vec![bm(2, BookmarkScope::Global, None, "https://new")]),
+                )),
+            ),
+        );
+        apply(
+            &mut state,
+            Message::AsyncResult(old, Box::new(Message::BookmarksLoaded(Some(1), Ok(vec![])))),
+        );
+        assert_eq!(state.bookmarks[0].id, 2);
+        let mut home = State::default();
+        let home_request = home.requests.begin(None, "bookmarks");
+        update(
+            &mut home,
+            Message::AsyncResult(
+                home_request,
+                Box::new(Message::BookmarksLoaded(
+                    None,
+                    Ok(vec![bm(3, BookmarkScope::Global, None, "https://home")]),
+                )),
+            ),
+            None,
+            &service,
+            rt.handle(),
+            |_| {},
+        );
+        assert_eq!(home.bookmarks[0].id, 3);
+        let mut reopened = State::default();
+        apply(
+            &mut reopened,
+            Message::AsyncResult(
+                state.requests.scope(Some(1)),
+                Box::new(Message::BookmarksMutated(
+                    Some(1),
+                    Err("old mutation".into()),
+                )),
+            ),
+        );
+        assert!(reopened.error.is_none());
+        let global = state.requests.begin(None, "bookmarks");
+        assert_eq!(global.project_id, None);
+        apply(
+            &mut reopened,
+            Message::AsyncResult(global, Box::new(Message::BookmarksLoaded(None, Ok(vec![])))),
+        );
+        assert!(reopened.error.is_none());
     }
 }
 
@@ -1254,6 +1357,7 @@ pub enum NavAction {
 /// Todo MARKDOWN 键盘路由移除(2026-09-01 SQLite 迁移),不再引用。
 #[derive(Debug, Clone)]
 pub enum Message {
+    AsyncResult(crate::request_tracker::RequestToken, Box<Message>),
     OpenUrl(String),
     /// 页面加载完成后,渲染进程经 IPC 报回 HTML `document.title`(`id` 是
     /// webview/tab id,`title` 是页面标题)——覆盖 `open_url` 初建的 URL 标题。
@@ -1330,6 +1434,7 @@ impl TabHover {
 }
 
 pub struct State {
+    pub(crate) requests: crate::request_tracker::RequestTracker,
     tabs: Tabs,
     error: Option<String>,
     bookmarks: Vec<BookmarkInfo>,
@@ -1363,6 +1468,7 @@ impl State {
     /// "单一初始标签页"语义,不带多余空标签。
     pub fn with_initial_url(url: &str) -> Self {
         let mut s = State {
+            requests: Default::default(),
             tabs: Tabs::default(),
             error: None,
             bookmarks: Vec::new(),
@@ -1579,7 +1685,19 @@ pub fn update(
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
+    let mut msg = msg;
+    while let Message::AsyncResult(token, inner) = msg {
+        if token.project_id != project_id || !state.requests.accepts(token) {
+            return;
+        }
+        msg = *inner;
+    }
+    let emit = state
+        .requests
+        .scope(project_id)
+        .wrap(emit, Message::AsyncResult);
     match msg {
+        Message::AsyncResult(..) => unreachable!("nested async result"),
         Message::OpenUrl(url) => {
             state.error = None;
             state.tabs.open_url(url);
@@ -1637,6 +1755,7 @@ pub fn update(
         }
         Message::BookmarksToggle => state.bookmarks_open = !state.bookmarks_open,
         Message::BookmarkAdd(scope) => {
+            state.requests.invalidate("bookmarks");
             let Some(tab) = state.tabs.tabs().get(state.tabs.active_idx()) else {
                 return;
             };
@@ -1674,6 +1793,7 @@ pub fn update(
             });
         }
         Message::BookmarkRemove(id) => {
+            state.requests.invalidate("bookmarks");
             optimistic_remove(&mut state.bookmarks, id);
             let service = service.clone();
             handle.spawn(async move {
@@ -1694,7 +1814,7 @@ pub fn update(
             if let Err(message) = res {
                 state.error = Some(message);
             }
-            request_bookmarks_refresh(project_id, service, handle, emit);
+            request_bookmarks_refresh(&state.requests, project_id, service, handle, emit);
         }
         Message::ColumnDragStart => {
             debug_assert!(
@@ -1713,11 +1833,15 @@ pub fn update(
 /// 收藏夹合集。`project_id = Some(pid)` 时返回"全局 + pid 项目";`None` 时
 /// 只返回全局收藏(用于首页全局浏览器/无项目工作区)。
 pub fn request_bookmarks_refresh(
+    requests: &crate::request_tracker::RequestTracker,
     project_id: Option<i64>,
     service: &Arc<dyn BookmarkService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
+    let emit = requests
+        .begin(project_id, "bookmarks")
+        .wrap(emit, Message::AsyncResult);
     let service = service.clone();
     handle.spawn(async move {
         let result = service.list_bookmarks(project_id).await;
@@ -2125,4 +2249,24 @@ fn bookmarks_toggle_button(
         |hovered| Message::Hover(STAR_HOVER_KEY, true, hovered),
         "收藏夹",
     )
+}
+
+#[cfg(test)]
+impl Message {
+    // Existing payload tests inspect service conversion separately from delivery guards.
+    pub(crate) fn result_payload(self) -> Self {
+        match self {
+            Self::AsyncResult(_, inner) => inner.result_payload(),
+            other => other,
+        }
+    }
+}
+
+impl Message {
+    pub(crate) fn result_project(&self) -> Option<i64> {
+        match self {
+            Self::AsyncResult(token, _) => token.project_id,
+            _ => None,
+        }
+    }
 }

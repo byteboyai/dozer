@@ -66,14 +66,14 @@
 
 `extensions/todo/**` 已经 `TodoService`(`dozer-services`)取数与写入;`R-CLIENT` 基线中 `todo/*` 已清零。读失败改为 `LoadFailed`:保留旧列表,`Unavailable` 静默,`Rejected`/`Protocol` 弹 `todo-load` Toast。`add_category` 返回 `CategoryInfo`(面板要用新分类 id 进入重命名),其余写操作返回 `()`。规格 `docs/superpowers/specs/2026-10-10-todo-services-design.md`。
 
-**后续项(未修):** `todo::Message::Loaded` / `CategoriesLoaded` 没有 project_id 与代数保护(同 Usage 已修的 G3b),慢的旧结果可能覆盖新结果。
+**2026-10-11 补齐:** 任务和分类读取分别带项目、面板实例、请求版本;结果按原项目路由,旧成功/失败均丢弃。
 
 ## Project 迁移(2026-10-10)
 
 `extensions/project.rs` 与 `extensions/project/**` 已经 `MemoryService`/`ProjectService`(`dozer-services`)取数与写入;`R-CLIENT` 基线中 `project*` 已清零。记忆读失败改为 `MemoriesLoadFailed`:保留旧列表,`Unavailable` 静默,其余弹 `project-memories-load` Toast(同文本 60 秒内一次);`spawn_scaffold_run` 的补录失败改写 warn 日志。规格 `docs/superpowers/specs/2026-10-10-project-services-design.md`。
 
 **后续项(未修):**
-- `MemoriesLoaded` / `MemoryDetailLoaded` 没有项目/代数保护(同 Usage 已修的 G3b)。
+- 已补齐记忆列表与详情的项目/请求版本校验;切换详情、关闭详情会使旧请求失效。
 - 读失败冷却逻辑在 Todo 与 Project 各有一份(`LOAD_FAILURE_TOAST_COOLDOWN`),可抽到 `toast::Outbox`。
 - `extensions/project_create.rs` 仍直接用 `Client`(`open_project`/`list_projects`)。
 
@@ -82,7 +82,7 @@
 `extensions/group_chat/**` 已经 `GroupChatService`(`dozer-services`)取数与写入;`R-CLIENT` 基线中 `group_chat/mod.rs` 已清零。用户可见行为零变化(群聊的读写失败本来就可见,不新增 `LoadFailed`);`PanelIo::spawn` 的闭包改拿 `Services`。规格 `docs/superpowers/specs/2026-10-11-groupchat-services-design.md`。
 
 **后续项(未修):**
-- `GroupsLoaded` 没有项目/代数保护(`Polled` 靠 `selected` 比对)。
+- 已补齐群列表与消息轮询的请求版本校验;切群后再切回也不会接收上一轮轮询,群增删改会使在途旧列表失效。
 - 剩余直接使用 `Client` 的面板:`conversations`、`codehealth`、`agent_context`、`browser`、`edit_history`、`settings`、`project_create`。
 
 ## Conversations 迁移(2026-10-11)
@@ -90,7 +90,7 @@
 `extensions/conversations.rs` 已经 `ConversationService`(`dozer-services`)取数;`R-CLIENT` 基线中 `conversations.rs` 已清零。刷新失败改为分档:已有列表保留(此前会整体清空)、首次失败仍显示空列表(不卡在"加载中")、`Unavailable` 静默、其余弹 `conversations-load` Toast(同文本 60 秒内一次)。host 的 `conversation_summary_generate` 里那一次列表刷新调用随 `SessionsRefreshed` 的结果类型一起改用服务。规格 `docs/superpowers/specs/2026-10-11-conversation-services-design.md`。
 
 **后续项(未修):**
-- `SessionsRefreshed` 没有代数保护(慢的旧结果可能覆盖新结果)。
+- 已补齐会话列表请求版本校验,包括总结完成后的列表刷新。
 - 读失败冷却逻辑在 Todo / Project / Conversations 各有一份(`LOAD_FAILURE_TOAST_COOLDOWN`),可抽到 `toast::Outbox`。
 - host 侧其余会话调用(打开、翻页、总结任务、homespace、hook)仍直接用 `Client`。
 - 剩余直接用 `Client` 的面板:`codehealth`、`agent_context`、`browser`、`edit_history`、`settings`、`project_create`。
@@ -100,7 +100,7 @@
 `extensions/codehealth/**` 已经 `CodeHealthService`(`dozer-services`)取数与保存;`R-CLIENT` 基线中 `codehealth/aggregate.rs` 已清零。缓存读取失败改为 `LoadFailed`(携带无报告的 panel):已有报告保留、首次失败采用携带的 panel、`Unavailable` 静默、其余弹 `codehealth-load` Toast(同文本 60 秒内一次)。历史读取失败改为写 warn 日志(对比降级为无基线,扫描照常);保存失败的内联提示文本不变。面板日志来源名为 `code_health`。`PanelIo::client()` 随最后一个使用者迁走而删除(`PanelIo::new` 签名不变)。规格 `docs/superpowers/specs/2026-10-11-codehealth-services-design.md`。
 
 **后续项(未修):**
-- `Loaded` / `Scanned` 没有代数保护(慢的旧结果可能覆盖新结果)。
+- 已补齐缓存/扫描共享的结果版本校验;扫描进行中切入面板不再发起可覆盖扫描结果的缓存请求。
 - 读失败冷却逻辑在 Todo / Project / Conversations / CodeHealth 各有一份(`LOAD_FAILURE_TOAST_COOLDOWN`),可抽到 `toast::Outbox`。
 - 剩余直接使用 `Client` 的面板:`agent_context`、`browser`、`edit_history`、`settings`、`project_create`。
 
@@ -109,7 +109,7 @@
 `extensions/agent_context.rs`(终端下方的 Agent 上下文条)已经 `ContextService`(`dozer-services`)取数与写入;`R-CLIENT` 基线中 `agent_context.rs` 已清零。用户可见行为零变化(失败本来就可见:`Loaded(Err)` 弹 Error 且不替换已有列表,`Added(Err)` 弹 Warning,`Removed(Err)` 弹 Error)。规格 `docs/superpowers/specs/2026-10-11-context-services-design.md`。
 
 **后续项(未修):**
-- `Loaded` 没有代数保护(慢的旧结果可能覆盖新结果)。
+- 已补齐上下文列表请求版本校验,同时隔离同一项目关闭重开前的结果。
 - 剩余直接使用 `Client` 的面板:`browser`、`edit_history`、`settings`、`project_create`。
 
 ## EditHistory 迁移(2026-10-11)
@@ -125,7 +125,7 @@
 `extensions/browser.rs` 的收藏夹已经 `BookmarkService`(`dozer-services`)取数与写入;`R-CLIENT` 基线中 `browser.rs` 已清零。`Message::BookmarksLoaded` 的载荷改为 `Result<Vec<BookmarkInfo>, ServiceError>`:读失败不再清空本地缓存(此前 `unwrap_or_default()` 会整体替换成空列表,dozerd 不可用时一次增删失败加刷新失败就会清空整个收藏夹);`Unavailable` 静默(debug 日志),其余写进内联 `state.error`(`收藏夹加载失败: …`)。写失败文本与乐观更新不变。面板日志来源名为 `web`。规格 `docs/superpowers/specs/2026-10-11-bookmark-services-design.md`。
 
 **后续项(未修):**
-- `BookmarksLoaded` / `BookmarksMutated` 没有代数保护(慢的旧结果可能覆盖新结果)。
+- 已补齐收藏夹读取版本校验与写入回调的面板实例校验;每次写入确认都触发带版本的新读取,独立写操作的确认不会互相丢弃。
 - 剩余直接使用 `Client` 的面板:`settings`、`project_create`。
 
 ## ProjectCreate 迁移(2026-10-11)
@@ -145,3 +145,13 @@
 **后续项:**
 - `window_events` / `run_app_host_effects` 不在 `extensions/`,仍直接调用应用宿主 `Client`,不计入该门禁。
 - `ClientDaemon::ensure_running` 会启动真实进程,不在自动化测试中调用;仅验证其错误转换函数原样保留消息。
+
+## 异步结果项目与请求版本校验（2026-10-11）
+
+Todo、Project 记忆、GroupChat、Conversations、CodeHealth、AgentContext、Browser 收藏夹共用 `request_tracker`。每个面板实例拥有独立身份,刷新按数据类别分配请求版本;后台结果携带项目 id,在主线程消费时检查实例和版本,因此已经排队的旧成功或失败结果也不会覆盖新状态或弹出过期错误。关闭后重新打开同一项目会生成新实例身份。
+
+任务/分类、记忆列表/详情、群列表/群消息使用独立版本,互不取消。写操作回调保留实例校验,不以“只接受最后一次写入”丢弃独立操作的确认;其后续读取仍执行最新版本校验。详情关闭及相关写操作会使在途读取失效。首页浏览器用 `None` 项目身份,与项目浏览器实例隔离。
+
+本次只改变 UI 回调的有效性和路由,不取消已提交的后台写操作,不修改 daemon 协议。Usage 既有版本校验、终端流及其他宿主会话操作不在本次范围内。
+
+验证: `cargo test -p dozer-app --no-fail-fast` 为 2007 通过、1 个既有文件删除文案失败、2 个忽略;新增 11 项请求身份/乱序测试通过。Clippy 完成,无本次新增警告;格式、日志来源和边界脚本自测通过,边界门禁仅保留既有 `R-HOST-EXECUTORS 0 -> 1`。

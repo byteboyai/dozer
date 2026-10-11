@@ -125,6 +125,18 @@ impl<M: Send + 'static> PanelIo<M> {
         self
     }
 
+    pub(crate) fn with_request(
+        &self,
+        token: crate::request_tracker::RequestToken,
+        envelope: fn(crate::request_tracker::RequestToken, Box<M>) -> M,
+    ) -> Self {
+        Self {
+            services: self.services.clone(),
+            handle: self.handle.clone(),
+            emit: Arc::new(token.wrap(self.emitter(), envelope)),
+        }
+    }
+
     /// 同步投回一条面板消息。
     pub(crate) fn emit(&self, message: M) {
         (self.emit)(message);

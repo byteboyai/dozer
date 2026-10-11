@@ -6,6 +6,7 @@
 //! Git + 保存错误），差异与热点在 blocking 任务里算（spec Task 6）。
 
 use super::LOG;
+use super::WorkspaceState;
 use super::{Message, PanelState};
 use dozer_codehealth::{
     ArchitectureDiffOutcome, ImpactInput, ImpactScope, ProjectReport, architecture_diff,
@@ -121,12 +122,16 @@ const MAX_IMPACT_VISITED: usize = 2000;
 
 /// 面板打开时调用：只读落盘缓存（最新 + 上一份），不触发扫描（spec：手动触发）。
 pub fn spawn_load_cached(
+    requests: &crate::request_tracker::RequestTracker,
     project_id: i64,
     project_path: PathBuf,
     service: Arc<dyn CodeHealthService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
+    let emit = requests
+        .begin(Some(project_id), "report")
+        .wrap(emit, Message::AsyncResult);
     handle.spawn(async move {
         let latest = service.get_code_health_report(project_id).await;
         let history = match service.list_code_health_reports(project_id, 2).await {
@@ -169,11 +174,15 @@ pub fn spawn_load_cached(
 
 /// 面板切入:只读上次落盘的扫描结果,**不**自动扫描(spec:手动触发,与 Usage 的"打开即自动扫"
 /// 是明确的行为差异)。没有项目路径时什么都不做。
-pub fn on_activate(ctx: &crate::panel_host::ActivationCtx<Message>) {
+pub fn on_activate(state: &WorkspaceState, ctx: &crate::panel_host::ActivationCtx<Message>) {
+    if state.scanning() {
+        return;
+    }
     let Some(path) = ctx.project_path.clone() else {
         return;
     };
     spawn_load_cached(
+        &state.requests,
         ctx.project_id,
         path,
         ctx.io.services().codehealth.clone(),
@@ -185,12 +194,16 @@ pub fn on_activate(ctx: &crate::panel_host::ActivationCtx<Message>) {
 /// 点"扫描"按钮：本地跑 `dozer_codehealth::scan_project`（CPU/IO 密集），
 /// 成功后采集 Git + 计算差异/热点，再异步落盘 dozerd，最后回灌 UI。
 pub fn spawn_scan(
+    requests: &crate::request_tracker::RequestTracker,
     project_id: i64,
     project_path: PathBuf,
     service: Arc<dyn CodeHealthService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
+    let emit = requests
+        .begin(Some(project_id), "report")
+        .wrap(emit, Message::AsyncResult);
     handle.spawn(async move {
         // 扫描前加载上一份报告（用于差异比较）。
         let history = match service.list_code_health_reports(project_id, 2).await {
@@ -277,13 +290,14 @@ mod tests {
         let fake = FakeCodeHealth::default().with_latest(info);
         let (emit, rx) = collect();
         spawn_load_cached(
+            &Default::default(),
             7,
             dir.path().to_path_buf(),
             fake.clone().into_services().codehealth,
             rt.handle(),
             emit,
         );
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::Loaded(7, panel) => assert!(panel.report.is_some()),
             other => panic!("unexpected: {other:?}"),
         }
@@ -304,13 +318,14 @@ mod tests {
             .with_get_error(ServiceErrorKind::Rejected, "daemon 错误: boom");
         let (emit, rx) = collect();
         spawn_load_cached(
+            &Default::default(),
             7,
             dir.path().to_path_buf(),
             fake.into_services().codehealth,
             rt.handle(),
             emit,
         );
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::LoadFailed(7, kind, text, panel) => {
                 assert_eq!(
                     (kind, text.as_str()),
@@ -332,13 +347,14 @@ mod tests {
             .with_list_error(ServiceErrorKind::Unavailable, "daemon 断开");
         let (emit, rx) = collect();
         spawn_load_cached(
+            &Default::default(),
             7,
             dir.path().to_path_buf(),
             fake.into_services().codehealth,
             rt.handle(),
             emit,
         );
-        match rx.recv_timeout(TIMEOUT).unwrap() {
+        match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
             Message::Loaded(7, panel) => {
                 assert!(panel.report.is_some());
                 assert!(
@@ -366,13 +382,14 @@ mod tests {
             .with_save_error(ServiceErrorKind::Rejected, "daemon 错误: boom");
         let (emit, rx) = collect();
         spawn_scan(
+            &Default::default(),
             7,
             dir.path().to_path_buf(),
             fake.into_services().codehealth,
             rt.handle(),
             emit,
         );
-        match rx.recv_timeout(TIMEOUT * 6).unwrap() {
+        match rx.recv_timeout(TIMEOUT * 6).unwrap().result_payload() {
             Message::Scanned(7, Ok(panel)) => assert_eq!(
                 panel.save_error.as_deref(),
                 Some("未保存，无法用于下次比较：daemon 错误: boom")
@@ -389,13 +406,14 @@ mod tests {
             FakeCodeHealth::default().with_list_error(ServiceErrorKind::Unavailable, "daemon 断开");
         let (emit, rx) = collect();
         spawn_scan(
+            &Default::default(),
             7,
             dir.path().to_path_buf(),
             fake.clone().into_services().codehealth,
             rt.handle(),
             emit,
         );
-        match rx.recv_timeout(TIMEOUT * 6).unwrap() {
+        match rx.recv_timeout(TIMEOUT * 6).unwrap().result_payload() {
             Message::Scanned(7, Ok(panel)) => {
                 assert!(panel.report.is_some());
                 assert!(panel.save_error.is_none());
