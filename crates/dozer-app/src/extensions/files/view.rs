@@ -122,7 +122,7 @@ pub fn view<'a>(
         // (`tab_hover` 底)都要有——此前只有拖拽落点的金框,点/划过根目录
         // 完全没有反馈(2026-09 用户反馈)。判定口径与下方行循环逐字一致:
         // 选中取 `tree_selected`、悬停取 `tree_hover`。
-        let root_is_selected = ws_state.tree_selected.as_deref() == Some(root);
+        let root_is_selected = ws_state.tree_selected.contains(root);
         let root_is_hovered =
             !ws_state.tree_drag_confirmed() && ws_state.tree_hover.as_deref() == Some(root);
         let root_icon_color = if root_is_selected {
@@ -258,7 +258,7 @@ pub fn view<'a>(
                     .map(git_status::TreeState::from)
                     .unwrap_or(git_status::TreeState::Unchanged)
             };
-            let is_selected = ws_state.tree_selected.as_deref() == Some(row.path.as_path());
+            let is_selected = ws_state.tree_selected.contains(row.path.as_path());
             // 选中行背景改半透明奶油色(见下方 `row_btn` 的 `background`,
             // alpha 0.3)——不再是实底亮底,深色 `bg` 顶替字/图标反而看不清,
             // 改用 `cream`(同 hover/active 页签既有配色),半透明底上亮字

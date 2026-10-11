@@ -563,8 +563,11 @@ impl Runner {
                 button: winit::event::MouseButton::Left,
                 ..
             } if app.dragging_tree_item() => {
+                // 松开瞬间是否按住 Shift——树内点选那一下若是"单击"(未越过
+                // 拖拽确认阈值)就用来做区间多选,见 `TreeDragEnd` 文档。
+                let shift = modifiers.shift_key();
                 app.update(Message::Files(
-                    crate::extensions::files::Message::TreeDragRelease,
+                    crate::extensions::files::Message::TreeDragRelease { shift },
                 ));
                 window.request_redraw();
             }

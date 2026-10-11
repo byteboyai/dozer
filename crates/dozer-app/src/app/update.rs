@@ -3271,11 +3271,14 @@ impl App {
             // 不住 trackpad 快速点按的真实位移,才改成阈值判断只在
             // `Pending → Dragging` 转换时做一次、结果落进状态机里的这个
             // 设计,见 `TreeDragPhase` 文档)。
-            Message::Files(files::Message::TreeDragRelease) => {
+            Message::Files(files::Message::TreeDragRelease { shift }) => {
                 let confirmed = self
                     .active_workspace()
                     .is_some_and(|ws| ws.files.tree_drag_confirmed());
-                self.update(Message::Files(files::Message::TreeDragEnd(confirmed)));
+                self.update(Message::Files(files::Message::TreeDragEnd {
+                    confirmed,
+                    shift,
+                }));
             }
             // 树行双击:目录复用 `Message::Toggle` 那条本地消息直接切换展开
             // 态(同点箭头效果),文件跨到 `PreviewOpenPath`——该面板本身

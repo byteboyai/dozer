@@ -322,7 +322,7 @@ mod tests {
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
         );
-        assert_eq!(ws_state.tree_selected, Some(sub.clone()));
+        assert!(ws_state.tree_selected.contains(&sub));
         assert!(
             ws_state
                 .visible_tree_rows()
@@ -344,7 +344,8 @@ mod tests {
         let other = dir.path().join("other.txt");
         std::fs::write(&other, b"x").unwrap();
         let mut ws_state = ws_with_tree(dir.path().to_path_buf());
-        ws_state.tree_selected = Some(other.clone());
+        ws_state.tree_selected.insert(other.clone());
+        ws_state.tree_selection_anchor = Some(other.clone());
         let mut app_state = AppState::default();
         let handle = tokio::runtime::Handle::current();
         update(
@@ -357,7 +358,7 @@ mod tests {
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
         );
-        assert_eq!(ws_state.tree_selected, Some(other));
+        assert!(ws_state.tree_selected.contains(&other));
         assert!(
             ws_state
                 .visible_tree_rows()
@@ -431,14 +432,21 @@ mod tests {
         update(
             &mut ws_state,
             &mut AppState::default(),
-            Message::TreeDragEnd(false),
+            Message::TreeDragEnd {
+                confirmed: false,
+                shift: false,
+            },
             1,
             &handle,
             |_| panic!("单击不该 emit 任何消息"),
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
         );
-        assert_eq!(ws_state.tree_selected, Some(PathBuf::from("/proj/f.rs")));
+        assert!(
+            ws_state
+                .tree_selected
+                .contains(&PathBuf::from("/proj/f.rs"))
+        );
     }
 
     /// 悬停命中一个折叠目录不立即展开——只武装计时(见 `drag_expand_
@@ -690,7 +698,10 @@ mod tests {
         update(
             &mut ws_state,
             &mut app_state,
-            Message::TreeDragEnd(false),
+            Message::TreeDragEnd {
+                confirmed: false,
+                shift: false,
+            },
             1,
             &handle,
             |_| panic!("no target armed, TreeDragEnd 不该 emit 任何消息"),
@@ -808,7 +819,10 @@ mod tests {
         update(
             &mut ws_state,
             &mut app_state,
-            Message::TreeDragEnd(true),
+            Message::TreeDragEnd {
+                confirmed: true,
+                shift: false,
+            },
             1,
             &handle,
             |_| panic!("弹确认框不该 emit 任何消息"),
@@ -1175,7 +1189,10 @@ mod tests {
         update(
             &mut ws_state,
             &mut app_state,
-            Message::TreeDragEnd(false),
+            Message::TreeDragEnd {
+                confirmed: false,
+                shift: false,
+            },
             1,
             &handle,
             |_| panic!("confirmed=false,TreeDragEnd 不该 emit 任何消息"),
@@ -1205,7 +1222,10 @@ mod tests {
         update(
             &mut ws_state,
             &mut app_state,
-            Message::TreeDragEnd(false),
+            Message::TreeDragEnd {
+                confirmed: false,
+                shift: false,
+            },
             1,
             &handle,
             |_| {},
@@ -1213,7 +1233,7 @@ mod tests {
             true,
         );
 
-        assert_eq!(ws_state.tree_selected, Some(sub.clone()));
+        assert!(ws_state.tree_selected.contains(&sub));
         assert!(
             !ws_state
                 .visible_tree_rows()
@@ -1236,7 +1256,10 @@ mod tests {
         update(
             &mut ws_state,
             &mut app_state,
-            Message::TreeDragEnd(true),
+            Message::TreeDragEnd {
+                confirmed: true,
+                shift: false,
+            },
             1,
             &handle,
             |_| {},
@@ -1312,7 +1335,7 @@ mod tests {
             true,
         );
         assert!(app_state.context_menu_is_some());
-        assert_eq!(ws_state.tree_selected, Some(target));
+        assert!(ws_state.tree_selected.contains(&target));
     }
 
     #[tokio::test]

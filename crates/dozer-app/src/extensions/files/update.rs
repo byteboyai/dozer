@@ -34,7 +34,7 @@ pub fn update(
 ) {
     match msg {
         Message::Toggle(dir) => {
-            ws_state.tree_selected = Some(dir.clone());
+            ws_state.select_single(dir.clone());
             if let Some(tree) = &mut ws_state.file_tree {
                 tree.toggle(&dir);
             }
@@ -55,7 +55,16 @@ pub fn update(
             app_state.last_right_click = (x, y);
         }
         Message::ContextMenuOpen { path, is_dir } => {
-            ws_state.tree_selected = Some(path.clone());
+            // 右键落在已有选区内:保留现有多选(高亮不变),只把锚点挪到被右
+            // 键的那一项,方便后续 Shift+点击以它为起点延展;右键落在选区外:
+            // 退化为单选这一项(同普通点击,避免右键把整片多选悄悄改成只选
+            // 一个又没高亮反馈)。右键菜单项动作本身仍只针对 `path` 这一个
+            // 目标——批量操作(多选后删/复制整组)超出本次范围。
+            if !ws_state.tree_selected.contains(&path) {
+                ws_state.select_single(path.clone());
+            } else {
+                ws_state.tree_selection_anchor = Some(path.clone());
+            }
             // 与分支切换弹层互斥:开右键菜单时收起分支弹层,避免两个浮层
             // 同时挂着(同 `PreviewTabContextMenu` 关文件树右键菜单的约定)。
             ws_state.branch_picker_open = false;
@@ -594,7 +603,7 @@ pub fn update(
         Message::TreeRowPress { .. } => {
             unreachable!("由内核拦截处理,见 files::Message::TreeRowPress 文档")
         }
-        Message::TreeDragRelease => {
+        Message::TreeDragRelease { .. } => {
             unreachable!("由内核拦截处理,见 files::Message::TreeDragRelease 文档")
         }
         Message::TreeRowDoubleClick { .. } => {
@@ -664,13 +673,18 @@ pub fn update(
         // (`Message::Toggle`),不在这里做。
         // `confirmed` 且有合法待定目标:不立即移动,弹 `PendingMove` 确认框
         // (同 `FileDrop` 单文件那支,见其文档)——用户点"确定"才真正提交。
-        Message::TreeDragEnd(confirmed) => {
+        Message::TreeDragEnd { confirmed, shift } => {
             let Some(drag) = ws_state.tree_drag.take() else {
                 return;
             };
             ws_state.drag_hover = HashSet::new();
             if !confirmed {
-                ws_state.tree_selected = Some(drag.source.clone());
+                // 只是一次单击:按住 Shift 走区间多选,否则单选被点项。
+                if shift {
+                    ws_state.select_shift_range(drag.source.clone());
+                } else {
+                    ws_state.select_single(drag.source.clone());
+                }
                 return;
             }
             let TreeDragPhase::Dragging { target } = drag.phase else {

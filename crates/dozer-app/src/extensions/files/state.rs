@@ -76,7 +76,14 @@ pub struct WorkspaceState {
     /// `StatusesRefreshed` 时一并算出),文件树渲染 O(1) 查表,取代每行
     /// 一次 `dir_status` 的全表扫描(2026-09-17 性能优化)。
     pub(crate) dir_statuses: HashMap<PathBuf, git_status::TreeState>,
-    pub(crate) tree_selected: Option<PathBuf>,
+    /// 当前选中的文件/目录集合(支持 Shift 多选,见 `select_shift_range`)。
+    /// 单选(普通点击)时这个集合里只有唯一一项;`is_selected`/`root_is_selected`
+    /// 都按集合成员判断,不再是比较单一路径。
+    pub(crate) tree_selected: HashSet<PathBuf>,
+    /// Shift 多选的区间起点(锚点):普通点击把它设成被点的那一项,Shift+点击
+    /// 时以它为起点、把锚点到被点项之间的可见行整段纳入选中。锚点不在当前
+    /// 可见行里时(比如中途折叠了它所在的目录)`select_shift_range` 退化为单选。
+    pub(crate) tree_selection_anchor: Option<PathBuf>,
     pub(crate) tree_clipboard: Option<(PathBuf, bool)>,
     /// **仅**移动对话框(`pending_move`)内的校验错误,在对话框里内联显示(对话框保持
     /// 打开,用户就地改正)。其余文件操作的失败/被拒(粘贴、回滚、新建/重命名/删除、
@@ -431,16 +438,30 @@ pub enum Message {
     /// 拿 `App::last_cursor` 和武装时的 `press_pos` 比对,算出下面
     /// `TreeDragEnd` 要带的 `confirmed`),由 `App::update` 拦截转发,
     /// `files::update()` 收到会 `unreachable!`。
-    TreeDragRelease,
+    /// 树内拖拽松开左键:main.rs 全局 `MouseInput::Released` 在
+    /// `App::dragging_tree_item()` 为真时发出。`shift` 是松开瞬间的 Shift
+    /// 修饰键状态(由 `window_events.rs` 在原生事件层读 `modifiers` 带下来)——
+    /// 真正点选那一下要不要用它做区间多选,由下游 `TreeDragEnd` 决定。这条
+    /// 本身跨内核边界(内核要拿 `App::last_cursor` 和武装时的 `press_pos`
+    /// 比对,算出下面 `TreeDragEnd` 要带的 `confirmed`),由 `App::update`
+    /// 拦截转发,`files::update()` 收到会 `unreachable!`。
+    TreeDragRelease {
+        shift: bool,
+    },
     /// 树内拖拽真正的收尾:`confirmed` = 松开时光标是否已越过
-    /// [`crate::app`] 的确认阈值(同 tab/rail 拖拽的既有手法)。只有
+    /// [`crate::app`] 的确认阈值(同 tab/rail 拖拽的既有手法);`shift` = 松开
+    /// 时是否按住 Shift——仅当 `!confirmed`(这只不过是一次单击)且 `shift` 为真
+    /// 时,点选走区间多选(`select_shift_range`),否则单选被点项。只有
     /// `confirmed` 且有合法待定目标才提交移动(复用 `FileDrop` 的
     /// `move_item` + `FileDropDone` 收尾);`!confirmed` 时这其实只是一次
     /// 单击,目录的展开/折叠推迟到这里才执行——`TreeRowPress` 按下不再
     /// 立即展开,避免布局位移把静止光标误判成"划到了旁边那一行"
     /// (2026-09 用户实测反馈:点一个目录就'进入拖拽态',点另一个目录会把
     /// 前者错误地移进去)。
-    TreeDragEnd(bool),
+    TreeDragEnd {
+        confirmed: bool,
+        shift: bool,
+    },
 }
 
 /// 文件树工具行里带 hover 动画的 icon 按钮。与内核 `HoverId` 一一对应
@@ -564,7 +585,8 @@ impl WorkspaceState {
     /// `tree_delete_confirm`/`tree_edit` 这一点,纯迁移不新增行为)。
     pub fn reset_for_project(&mut self, file_tree: FileTree) {
         self.file_tree = Some(file_tree);
-        self.tree_selected = None;
+        self.tree_selected = HashSet::new();
+        self.tree_selection_anchor = None;
         self.git_statuses = HashMap::new();
         self.dir_statuses = HashMap::new();
         self.tree_search.clear();
@@ -666,9 +688,53 @@ impl WorkspaceState {
 
     /// 供内核 `Message::PreviewOpenPath` 处理器调用——打开预览的同时把该
     /// 文件标记为项目树里的"选中"行(点击文件行→打开预览→该行高亮,是
-    /// 现状既有的联动效果,不是这次重构新增的)。
+    /// 现状既有的联动效果,不是这次重构新增的)。这里走**单选**:清空现有
+    /// 多选,只留 `path` 一项,并把锚点也设到 `path`(后续 Shift+点击以它为
+    /// 起点延展区间)。
     pub fn set_tree_selected(&mut self, path: PathBuf) {
-        self.tree_selected = Some(path);
+        self.select_single(path);
+    }
+
+    /// 单选:清空选中集、只保留 `path`,并把多选锚点设成 `path`。普通点击、
+    /// 双击目录(`Toggle`)、右键落在选区外、打开预览都用它。
+    pub(crate) fn select_single(&mut self, path: PathBuf) {
+        self.tree_selected.clear();
+        self.tree_selected.insert(path.clone());
+        self.tree_selection_anchor = Some(path);
+    }
+
+    /// Shift+点击:以 `tree_selection_anchor` 为起点,把锚点到 `path` 之间的
+    /// 全部可见行纳入选中(替换原有选中集,标准文件管理器区间选)。锚点缺失、
+    /// 锚点或被点项不在当前可见行里时,退化为单选 `path`(锚点同步更新到
+    /// `path`)。锚点本身**保持不动**,这样连续多次 Shift+点击会一直以最初
+    /// 那一项为起点延展。
+    pub(crate) fn select_shift_range(&mut self, path: PathBuf) {
+        let Some(anchor) = self.tree_selection_anchor.clone() else {
+            self.select_single(path);
+            return;
+        };
+        let rows = self.visible_tree_rows();
+        // 同一行可能既匹配锚点又匹配被点项(两者相同),用 `positions` 收集索引、
+        // 用 `len()==2` 判定是否是"两个不同行"。
+        let positions: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.path == anchor || r.path == path)
+            .map(|(i, _)| i)
+            .collect();
+        let anchor_visible = rows.iter().any(|r| r.path == anchor);
+        if positions.len() != 2 || !anchor_visible {
+            self.select_single(path);
+            return;
+        }
+        let (lo, hi) = (
+            positions[0].min(positions[1]),
+            positions[0].max(positions[1]),
+        );
+        self.tree_selected.clear();
+        for r in &rows[lo..=hi] {
+            self.tree_selected.insert(r.path.clone());
+        }
     }
 
     /// 移动对话框内的校验错误文案,供内核测试用作槽位内容的身份标记(见
