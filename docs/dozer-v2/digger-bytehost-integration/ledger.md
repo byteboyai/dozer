@@ -45,13 +45,53 @@
 
 ## Task 02 — 真实窗口入口与类型契约探针
 
-- **状态：** TODO-（详见后续条目）
-- **blocked-by：** 无
+- **状态：** DONE
+- **输入 revision：**
+  - Z `d5ab7f83` 之上一提交（Task 01 后主线）；依据 `D/spike/editor-host/`（`8ef11953`）
+  - B `6fdca5dc` → `0ca8320`（新增探针）
+- **输出 revision：**
+  - B `0ca8320` `spike(desktop-contract): iced×wry 桌面契约探针(Task 02 §11 闸门1)`
+  - Z `d5ab7f83` `docs(integration): Task 02 窗口入口与泛型 API 决策`
+- **产出文件：**
+  - `Z/docs/dozer-v2/digger-bytehost-integration/api-decisions.md`
+  - `B/spike/desktop-contract/{Cargo.toml,Cargo.lock,.gitignore,README.md,src/lib.rs,src/main.rs}`（独立 `[workspace]`，工作区外，避开 `check-deps.sh` 的 iced/wry 禁令）
+- **运行命令与退出码：**
+
+| 仓库 | 命令 | 退出码 | 结果 |
+|---|---|---|---|
+| B | `cargo build`（spike） | 0 | 编译通过（iced 0.14.0 / iced_winit 0.14.1 / wry 0.55.1） |
+| B | `cargo test --lib`（spike） | 0 | 3/3 证据测试通过 |
+| B | `SELFTEST=1 cargo run`（spike） | 0 | 真实窗口入口建窗后退出，无 panic |
+| B | `cargo clippy --all-targets -- -D warnings`（spike） | 0 | 干净 |
+| B | `cargo fmt --check`（spike） | 0 | 干净 |
+| B | `bash scripts/check-deps.sh` | 0 | 通过（spike 在工作区外，未污染） |
+| Z | （文档任务，未跑代码） | — | — |
+- **结果：** 规格 §11 闸门 1 回填为"成立"。锁定 iced/wry 版本；入口模式（`iced::application` 单循环 + `window::run` + thread_local + channel↔Subscription）；几何/DPI/overlay 分工；`Product<M>`/`HostMessage<M>` 对两个不同产品消息类型成立；同一 Surface 描述表达 Usage 与 CodeHealth 两类推送；core/desktop 分层签名与编译证据。
+- **偏差：**
+  - 探针窗口入口用 `window::oldest()` 取窗口 id（非 `Id::MAIN`，后者在 iced 0.14 不存在）；与 `D/spike/editor-host` 一致。
+  - `block v0.1.6` 触发 future-incompat 警告（传递依赖，非本探针代码；digger spike 同样存在）。
+- **未决项 / 阻塞：** 无。
 
 ## Task 03 — AppService 缺口与 Digger 数据源调查
 
-- **状态：** TODO
-- **blocked-by：** Task 01（已完成）
+- **状态：** DONE
+- **输入 revision：**
+  - B `0ca8320`（`service.rs`/`port.rs`/`in_process.rs` 未改）
+  - Z 主线（`docs/dozer-v2/bytehost-H0/{07,08}`、规格 §11）
+  - D `8ef11953`（领域/技术架构 + ADR-011）
+- **输出 revision：** Z 见 §提交记录（`docs(integration): Task 03 §11 闸门回填`）
+- **产出文件：** `Z/docs/dozer-v2/digger-bytehost-integration/gates.md`
+- **运行命令与退出码：**
+
+| 仓库 | 命令 | 退出码 | 结果 |
+|---|---|---|---|
+| Z/B/D | `rg`/`read` 调查（只读，未改代码） | 0 | 证据见 gates.md |
+- **结果：**
+  - **闸门 2：** Digger 侧无真实 Usage 账本，仅领域占位与架构意图（`Logical_Domain_Model_v0.3:1661-1668,1688`；`Technical_Architecture_v0.1:676,698,781`）；无生产 workspace。**缺口已定位**（Rust 持久化账本→映射 `UsagePayload`，不连 dozerd；未实现时须返回 Unavailable）。**S6/S7 不得声称取数完成。**
+  - **闸门 3：** AppService 多数够用（启动永不失败→Unavailable；端口不静默重选、冲突可观测、损坏报错不静默；`desired` 保留、reconcile 回收）。**不足 2 项**：`shutdown()` 返回 `()`（退出失败不可观测，规格 `:134`）、缺端口重置管理接口（规格 `:138`）。二者须在 bytehost 增补受测接口（只追加，不改 wire 形状）。
+  - **闸门 1** 已在 Task 02 回填；**闸门 4/5** 留后续 Task。
+- **偏差：** 无。
+- **未决项 / 阻塞：** 无（bytehost 增补接口属后续 Task，非本任务阻塞）。
 
 ---
 
@@ -60,7 +100,7 @@
 | Task | 提交 | 仓库 | 说明 |
 |---|---|---|---|
 | 01 | `a9af4903` | Z | `docs(integration): record host extraction baseline` |
-
-## 0602 — Task 02 输入（进行中）
-
-Task 02 将以 `D/spike/editor-host/`（`src/main.rs` 1230、`hosts.rs` 331、`bridge.rs` 135、`probes.rs` 169、`doc.rs` 496、`history.rs` 555、`merge.rs` 154、`store.rs` 47）为真实窗口入口依据，在 `B/spike/desktop-contract/` 建独立验证工程，并在 `api-decisions.md` 记录窗口入口/生命周期/泛型决策。
+| 01 | `7924dc6c` | Z | `docs(integration): record Task 01 commit hash in ledger` |
+| 02 | `0ca8320` | B | `spike(desktop-contract): iced×wry 桌面契约探针(Task 02 §11 闸门1)` |
+| 02 | `d5ab7f83` | Z | `docs(integration): Task 02 窗口入口与泛型 API 决策` |
+| 03 | （见下） | Z | `docs(integration): Task 03 §11 闸门回填` |
