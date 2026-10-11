@@ -5,7 +5,8 @@ use dozer_model::{
     AgentKind, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
     CodeHealthReportInfo, ContextItemInfo, ConversationSummary, FileEditHistoryInfo,
     GroupCancelScope, GroupInfo, GroupMessageInfo, MemoryDetail, MemoryInfo, MutationOutcome,
-    ProjectInfo, SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus, UsagePayload,
+    ProjectInfo, SessionInfo, SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus,
+    UsagePayload,
 };
 use std::fmt;
 use std::future::Future;
@@ -324,6 +325,15 @@ pub trait BookmarkService: Send + Sync {
     fn remove_bookmark(&self, id: i64) -> BoxFuture<'_, Result<(), ServiceError>>;
 }
 
+/// dozerd 自身的生命周期(设置 → 高级)。无参数,future 不借用调用方局部变量。
+/// `ensure_running`:daemon 已响应则直接成功,否则拉起并重试;拉起进程属宿主职责,
+/// 因此生产实现在 `dozer-app`,不在 `dozer-client`。
+pub trait DaemonService: Send + Sync {
+    fn list_sessions(&self) -> BoxFuture<'_, Result<Vec<SessionInfo>, ServiceError>>;
+    fn shutdown_daemon(&self) -> BoxFuture<'_, Result<(), ServiceError>>;
+    fn ensure_running(&self) -> BoxFuture<'_, Result<(), ServiceError>>;
+}
+
 /// 各能力 trait 的 `Arc<dyn>` 束;host 构造,经 `PanelIo` 交给面板。其余能力 trait 随各面板迁移逐个加入。
 #[derive(Clone)]
 pub struct Services {
@@ -337,6 +347,7 @@ pub struct Services {
     pub context: Arc<dyn ContextService>,
     pub edit_history: Arc<dyn EditHistoryService>,
     pub bookmark: Arc<dyn BookmarkService>,
+    pub daemon: Arc<dyn DaemonService>,
 }
 
 #[cfg(test)]
@@ -400,6 +411,11 @@ mod tests {
             context: Arc::new(MemContext(Ok(vec![]))),
             edit_history: Arc::new(MemEditHistory(Ok(vec![]))),
             bookmark: Arc::new(MemBookmark(Ok(vec![]))),
+            daemon: Arc::new(MemDaemon {
+                list: Ok(Vec::new()),
+                stop: Ok(()),
+                ensure: Ok(()),
+            }),
         };
         let t = s.clone();
         assert!(Arc::ptr_eq(&s.usage, &t.usage));
@@ -412,6 +428,7 @@ mod tests {
         assert!(Arc::ptr_eq(&s.context, &t.context));
         assert!(Arc::ptr_eq(&s.edit_history, &t.edit_history));
         assert!(Arc::ptr_eq(&s.bookmark, &t.bookmark));
+        assert!(Arc::ptr_eq(&s.daemon, &t.daemon));
     }
 
     // ---- TodoService 契约 ----
@@ -1138,5 +1155,77 @@ mod tests {
         });
         assert_eq!(opened, Ok(None));
         assert_eq!(listed, Ok(vec![]));
+    }
+
+    // ---- DaemonService 契约 ----
+
+    struct MemDaemon {
+        list: Result<Vec<SessionInfo>, ServiceError>,
+        stop: Result<(), ServiceError>,
+        ensure: Result<(), ServiceError>,
+    }
+    impl DaemonService for MemDaemon {
+        fn list_sessions(&self) -> BoxFuture<'_, Result<Vec<SessionInfo>, ServiceError>> {
+            let r = self.list.clone();
+            Box::pin(async move { r })
+        }
+        fn shutdown_daemon(&self) -> BoxFuture<'_, Result<(), ServiceError>> {
+            let r = self.stop.clone();
+            Box::pin(async move { r })
+        }
+        fn ensure_running(&self) -> BoxFuture<'_, Result<(), ServiceError>> {
+            let r = self.ensure.clone();
+            Box::pin(async move { r })
+        }
+    }
+
+    /// `handle.spawn` 要 `'static + Send`:持有 `Arc<dyn DaemonService>` 的 async 块必须满足。
+    #[test]
+    fn dyn_daemon_service_futures_run_inside_tokio_spawn() {
+        let svc: Arc<dyn DaemonService> = Arc::new(MemDaemon {
+            list: Ok(Vec::new()),
+            stop: Ok(()),
+            ensure: Ok(()),
+        });
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let (l, s, e) = rt.block_on(async move {
+            tokio::spawn(async move {
+                (
+                    svc.list_sessions().await,
+                    svc.shutdown_daemon().await,
+                    svc.ensure_running().await,
+                )
+            })
+            .await
+            .unwrap()
+        });
+        assert_eq!((l, s, e), (Ok(Vec::new()), Ok(()), Ok(())));
+    }
+
+    #[test]
+    fn daemon_list_failure_is_distinguishable_from_no_sessions() {
+        let ok = MemDaemon {
+            list: Ok(Vec::new()),
+            stop: Ok(()),
+            ensure: Ok(()),
+        };
+        let down = MemDaemon {
+            list: Err(ServiceError::new(
+                ServiceErrorKind::Unavailable,
+                "daemon 断开",
+            )),
+            stop: Ok(()),
+            ensure: Ok(()),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        assert_eq!(rt.block_on(ok.list_sessions()), Ok(Vec::new()));
+        assert_eq!(
+            rt.block_on(down.list_sessions()).unwrap_err().kind,
+            ServiceErrorKind::Unavailable
+        );
     }
 }
