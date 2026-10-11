@@ -3,12 +3,13 @@ use dozer_model::{
     AgentKind, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
     CodeHealthReportInfo, ContextItemInfo, ConversationSummary, FileEditHistoryInfo, GroupAuthor,
     GroupCancelScope, GroupInfo, GroupMessageInfo, MemoryDetail, MemoryInfo, MutationOutcome,
-    ProjectInfo, SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus,
+    ProjectInfo, SessionInfo, SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus,
 };
 use dozer_services::{
     BookmarkService, BoxFuture, CodeHealthService, ContextService, ConversationRows,
-    ConversationService, EditHistoryService, GroupChatService, MemoryService, PostedMessages,
-    PreciseEdit, ProjectService, ServiceError, ServiceErrorKind, Services, TodoService,
+    ConversationService, DaemonService, EditHistoryService, GroupChatService, MemoryService,
+    PostedMessages, PreciseEdit, ProjectService, ServiceError, ServiceErrorKind, Services,
+    TodoService,
 };
 use std::sync::{Arc, Mutex};
 
@@ -192,6 +193,7 @@ pub(crate) fn base_services() -> Services {
         context: Arc::new(FakeContext::default()),
         edit_history: Arc::new(FakeEditHistory::default()),
         bookmark: Arc::new(FakeBookmark::default()),
+        daemon: Arc::new(FakeDaemon::default()),
     }
 }
 
@@ -1181,5 +1183,94 @@ pub(crate) fn project_info(id: i64, path: &str) -> ProjectInfo {
         last_active_ms: 1,
         created_ms: 2,
         updated_ms: 3,
+    }
+}
+
+struct DaemonState {
+    list: Result<Vec<SessionInfo>, ServiceError>,
+    stop: Result<(), ServiceError>,
+    ensure: Result<(), ServiceError>,
+    calls: Vec<String>,
+}
+
+/// 克隆共享同一份状态。`Default` = 全部成功(无会话、停止成功、重启成功)。
+#[derive(Clone)]
+pub(crate) struct FakeDaemon {
+    state: Arc<Mutex<DaemonState>>,
+}
+
+impl Default for FakeDaemon {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(DaemonState {
+                list: Ok(vec![]),
+                stop: Ok(()),
+                ensure: Ok(()),
+                calls: vec![],
+            })),
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl FakeDaemon {
+    pub(crate) fn with_sessions(self, r: Result<Vec<SessionInfo>, ServiceError>) -> Self {
+        self.state.lock().unwrap().list = r;
+        self
+    }
+    pub(crate) fn with_stop(self, r: Result<(), ServiceError>) -> Self {
+        self.state.lock().unwrap().stop = r;
+        self
+    }
+    pub(crate) fn with_ensure(self, r: Result<(), ServiceError>) -> Self {
+        self.state.lock().unwrap().ensure = r;
+        self
+    }
+    pub(crate) fn calls(&self) -> Vec<String> {
+        self.state.lock().unwrap().calls.clone()
+    }
+    pub(crate) fn into_services(self) -> Services {
+        Services {
+            daemon: Arc::new(self),
+            ..base_services()
+        }
+    }
+}
+
+impl DaemonService for FakeDaemon {
+    fn list_sessions(&self) -> BoxFuture<'_, Result<Vec<SessionInfo>, ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls.push("list_sessions()".to_string());
+        let r = s.list.clone();
+        Box::pin(async move { r })
+    }
+    fn shutdown_daemon(&self) -> BoxFuture<'_, Result<(), ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls.push("shutdown_daemon()".to_string());
+        let r = s.stop.clone();
+        Box::pin(async move { r })
+    }
+    fn ensure_running(&self) -> BoxFuture<'_, Result<(), ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls.push("ensure_running()".to_string());
+        let r = s.ensure.clone();
+        Box::pin(async move { r })
+    }
+}
+
+/// 固定 `SessionInfo`(只有 id/alive 有意义)。
+#[allow(dead_code)]
+pub(crate) fn session(id: &str, alive: bool) -> SessionInfo {
+    SessionInfo {
+        id: id.to_string(),
+        name: id.to_string(),
+        command: "/bin/sh".to_string(),
+        cwd: "/tmp".to_string(),
+        alive,
+        created_ms: 0,
+        agent_state: dozer_model::AgentState::Idle,
+        transcript_path: None,
+        project_id: Some(1),
+        agent: dozer_model::AgentKind::Unknown,
     }
 }
