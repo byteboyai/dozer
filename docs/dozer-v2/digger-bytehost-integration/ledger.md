@@ -103,4 +103,4 @@
 | 01 | `7924dc6c` | Z | `docs(integration): record Task 01 commit hash in ledger` |
 | 02 | `0ca8320` | B | `spike(desktop-contract): iced×wry 桌面契约探针(Task 02 §11 闸门1)` |
 | 02 | `d5ab7f83` | Z | `docs(integration): Task 02 窗口入口与泛型 API 决策` |
-| 03 | （见下） | Z | `docs(integration): Task 03 §11 闸门回填` |
+| 03 | `45f95ce0` | Z | `docs(integration): Task 03 §11 闸门回填` |
