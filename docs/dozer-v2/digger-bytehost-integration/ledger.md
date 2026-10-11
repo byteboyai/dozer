@@ -59,4 +59,8 @@
 
 | Task | 提交 | 仓库 | 说明 |
 |---|---|---|---|
-| 01 | （待填） | Z | `docs(integration): record host extraction baseline` |
+| 01 | `a9af4903` | Z | `docs(integration): record host extraction baseline` |
+
+## 0602 — Task 02 输入（进行中）
+
+Task 02 将以 `D/spike/editor-host/`（`src/main.rs` 1230、`hosts.rs` 331、`bridge.rs` 135、`probes.rs` 169、`doc.rs` 496、`history.rs` 555、`merge.rs` 154、`store.rs` 47）为真实窗口入口依据，在 `B/spike/desktop-contract/` 建独立验证工程，并在 `api-decisions.md` 记录窗口入口/生命周期/泛型决策。
