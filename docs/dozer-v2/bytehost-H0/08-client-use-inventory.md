@@ -135,3 +135,13 @@
 **后续项(未修):**
 - `list_projects` 失败时 host 的 `project_tab_opened` 会把工作区最近项目设为空(可考虑失败时保留旧列表)。
 - 只剩 `settings` 一个面板还直接用 `Client`:Advanced 页的 `list` / `shutdown_daemon` / `ensure_daemon`,以及走 bytehost 非 dyn 兼容的 `AppHostApi` 的「应用」页(需单独设计:Advanced 页需要 dozer-app 内的适配器去实现包含 `ensure_daemon` 的服务;「应用」页倾向于对 `A: AppHostApi` 做泛型)。
+
+## Settings 迁移(2026-10-11)
+
+设置弹窗 Advanced 页已经 `DaemonService`(`list_sessions` / `shutdown_daemon` / `ensure_running`)管理 daemon 生命周期。生产适配器 `ClientDaemon` 位于 `dozer-app`:启动进程仍由 `runtime::ensure_daemon` 负责。「应用」页 `run_apps_message` 对 `AppHostApi` 泛型化,host 传入 `Client` 副本;该 trait 使用 RPITIT、非 dyn 兼容,因此不放入 `Services`。用户可见行为不变,服务错误消息原样传递。
+
+`settings.rs` 的 `R-CLIENT` 基线已清零,至此 `extensions/**` 的 `R-CLIENT` 全部清零。
+
+**后续项:**
+- `window_events` / `run_app_host_effects` 不在 `extensions/`,仍直接调用应用宿主 `Client`,不计入该门禁。
+- `ClientDaemon::ensure_running` 会启动真实进程,不在自动化测试中调用;仅验证其错误转换函数原样保留消息。

@@ -548,3 +548,17 @@ git commit -m "chore(audit): Settings S4 R-CLIENT 基线清零 + 文档回填
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
+
+## 完成记录（2026-10-11）
+
+S1–S4 已完成。审核补齐了 usage probe 的引用行号、Rollback/Uninstall/FetchLogs 的非法 AppId 无请求测试,并将安装计划与来源改为完整字段比较。`extensions/**` 的 `R-CLIENT` 实测与基线均为零。
+
+验收结果:
+- Settings 31 项通过;daemon 适配器与服务契约测试通过。
+- 全量测试 2961 通过、1 失败:仅既有 `extensions::files::tests::delete_confirm_spec_reflects_pending_target`;探针行号守卫已通过。model_golden 通过。
+- Clippy 警告行数 22,与实施前基线相同;格式检查、日志来源检查通过。
+- 边界脚本自测 32 项通过;边界检查仅剩既有 `R-HOST-EXECUTORS 0 -> 1`。
+- dozer-services 正常依赖仅 dozer-model 及 serde 系;协议文件与黄金测试未修改。
+- `ClientDaemon::ensure_running` 未实际启动进程测试,保留计划明确的覆盖限制。
+
+完整运行日志保存在 `.superpowers/sdd/2026-10-11-settings-services/final-tests.txt` 与 `final-clippy.txt`（本地验收记录）。

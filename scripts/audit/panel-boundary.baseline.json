@@ -6,9 +6,6 @@
   "R-HOST-PANEL-ARMS": 95,
   "R-PANE-PICK": 1
  },
- "extensions/settings.rs": {
-  "R-CLIENT": 2
- },
  "panel_host.rs": {
   "R-HOVERSLOT-VARIANTS": 9
  },
