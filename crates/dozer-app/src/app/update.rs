@@ -3963,13 +3963,14 @@ impl App {
                     }
                     _ => Vec::new(),
                 };
-                let client = self.client.clone();
+                let daemon = crate::panel_host::services_for(&self.client).daemon;
+                let apps = self.client.clone();
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
                 let emit = move |m| {
                     let _ = proxy.send_event(Message::Settings(m));
                 };
-                settings::update(&mut self.settings, msg, &client, &handle, emit);
+                settings::update(&mut self.settings, msg, daemon, apps, &handle, emit);
                 if let Some((id, ok)) = uninstall_result
                     && self.purge_intents.remove(&id)
                     && ok

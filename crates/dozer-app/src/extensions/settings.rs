@@ -4,8 +4,10 @@
 
 use crate::extensions::settings_apps;
 use crate::git_accounts::{self, GitAccountsState, GitProvider};
+use bytehost_client::AppHostApi;
 use byteui::interaction::icons;
 use byteui::theme::color::ColorScheme;
+use dozer_services::DaemonService;
 use iced_widget::core::{Alignment, Border, Element, Length, Padding};
 use iced_widget::{MouseArea, Space, button, column, container, row, text};
 use std::collections::HashMap;
@@ -351,20 +353,23 @@ fn apply_sync_message(state: &mut State, msg: &Message) -> bool {
 /// `state` 是 `&mut Option<State>`(不是 `&mut State`)——`Message::Close`
 /// 需要能把它整个置回 `None`,同 `file_history::update`/`project_create::
 /// update` 的既有写法。
-pub fn update(
+pub fn update<A>(
     state: &mut Option<State>,
     msg: Message,
-    client: &dozer_client::Client,
+    daemon: std::sync::Arc<dyn DaemonService>,
+    apps: A,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Clone + Send + 'static,
-) {
+) where
+    A: AppHostApi + Clone + Send + Sync + 'static,
+{
     if let Message::Close = msg {
         *state = None;
         return;
     }
     let Some(s) = state else { return };
     if let Message::Apps(apps_msg) = msg {
-        run_apps_message(s, apps_msg, client, handle, emit.clone());
+        run_apps_message(s, apps_msg, apps, handle, emit.clone());
         return;
     }
     // 切到「应用」页要现拉探测与列表(其余页纯本地,没有加载)。
@@ -374,7 +379,7 @@ pub fn update(
             run_apps_message(
                 s,
                 settings_apps::Message::Opened,
-                client,
+                apps,
                 handle,
                 emit.clone(),
             );
@@ -388,13 +393,12 @@ pub fn update(
                 return;
             }
             s.advanced = AdvancedState::FetchingCount;
-            let client = client.clone();
             handle.spawn(async move {
-                let result = client
-                    .list()
+                let result = daemon
+                    .list_sessions()
                     .await
                     .map(|sessions| count_live_sessions(&sessions))
-                    .map_err(|e| e.to_string());
+                    .map_err(|e| e.message);
                 emit(Message::AdvancedSessionCountReady(result));
             });
             return;
@@ -404,9 +408,8 @@ pub fn update(
                 return;
             }
             s.advanced = AdvancedState::Stopping;
-            let client = client.clone();
             handle.spawn(async move {
-                let result = client.shutdown_daemon().await.map_err(|e| e.to_string());
+                let result = daemon.shutdown_daemon().await.map_err(|e| e.message);
                 emit(Message::AdvancedStopResult(result));
             });
             return;
@@ -416,9 +419,8 @@ pub fn update(
                 return;
             }
             s.advanced = AdvancedState::RestartingDozerd;
-            let client = client.clone();
             handle.spawn(async move {
-                let result = crate::runtime::ensure_daemon(&client).await;
+                let result = daemon.ensure_running().await.map_err(|e| e.message);
                 emit(Message::AdvancedRestartResult(result));
             });
             return;
@@ -462,18 +464,19 @@ pub fn update(
 }
 
 /// 「应用」页的消息:先过纯状态机,再执行它吐出的副作用(发请求/弹 Toast/标记主窗口刷新)。
-fn run_apps_message(
+fn run_apps_message<A>(
     s: &mut State,
     msg: settings_apps::Message,
-    client: &dozer_client::Client,
+    apps: A,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
-) {
+) where
+    A: AppHostApi + Clone + Send + Sync + 'static,
+{
     use crate::extensions::app_host::Failure;
     use crate::extensions::settings_apps::{ActKind, Effect, Message as M};
     use bytehost_apps::id::AppId;
     use bytehost_apps::plan::{Provenance, TrustLevel};
-    use bytehost_client::AppHostApi;
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -490,18 +493,18 @@ fn run_apps_message(
         }
     };
     for effect in effects {
-        let client = client.clone();
+        let api = apps.clone();
         let send = send.clone();
         match effect {
             Effect::Probe => {
                 handle.spawn(async move {
-                    let r = client.app_probe_runtimes().await;
+                    let r = api.app_probe_runtimes().await;
                     send(M::ProbesLoaded(r));
                 });
             }
             Effect::List => {
                 handle.spawn(async move {
-                    let r = client.app_list().await;
+                    let r = api.app_list().await;
                     send(M::ListLoaded(r));
                 });
             }
@@ -510,7 +513,7 @@ fn run_apps_message(
             Effect::PickSource | Effect::PickArchive => {}
             Effect::Plan(source) => {
                 handle.spawn(async move {
-                    let r = client
+                    let r = api
                         .app_plan(source, Provenance::Local, TrustLevel::Trusted)
                         .await
                         .map(Box::new);
@@ -519,14 +522,14 @@ fn run_apps_message(
             }
             Effect::Install { approved, source } => {
                 handle.spawn(async move {
-                    let r = client.app_install(*approved, source).await;
+                    let r = api.app_install(*approved, source).await;
                     send(M::InstallDone(r));
                 });
             }
             Effect::Stop(id) => {
                 handle.spawn(async move {
                     let r = match AppId::new(&id) {
-                        Ok(app) => client.app_stop(app).await,
+                        Ok(app) => api.app_stop(app).await,
                         Err(e) => Err(Failure::Transport(format!("{e}"))),
                     };
                     send(M::ActionDone(id, ActKind::Stop, r));
@@ -535,7 +538,7 @@ fn run_apps_message(
             Effect::Rollback(id) => {
                 handle.spawn(async move {
                     let r = match AppId::new(&id) {
-                        Ok(app) => client.app_rollback(app).await,
+                        Ok(app) => api.app_rollback(app).await,
                         Err(e) => Err(Failure::Transport(format!("{e}"))),
                     };
                     send(M::RolledBack(id, r));
@@ -544,7 +547,7 @@ fn run_apps_message(
             Effect::Uninstall(id, mode) => {
                 handle.spawn(async move {
                     let r = match AppId::new(&id) {
-                        Ok(app) => client.app_uninstall(app, mode).await,
+                        Ok(app) => api.app_uninstall(app, mode).await,
                         Err(e) => Err(Failure::Transport(format!("{e}"))),
                     };
                     send(M::ActionDone(id, ActKind::Uninstall, r));
@@ -557,19 +560,19 @@ fn run_apps_message(
             }
             Effect::RuntimePlan(runtime) => {
                 handle.spawn(async move {
-                    let r = client.app_runtime_plan(runtime).await.map(Box::new);
+                    let r = api.app_runtime_plan(runtime).await.map(Box::new);
                     send(M::RuntimePlanLoaded(r));
                 });
             }
             Effect::InstallRuntime(plan) => {
                 handle.spawn(async move {
-                    let r = client.app_install_runtime(*plan).await;
+                    let r = api.app_install_runtime(*plan).await;
                     send(M::RuntimeInstallStarted(r));
                 });
             }
             Effect::UninstallRuntime(runtime, version) => {
                 handle.spawn(async move {
-                    let r = client.app_uninstall_runtime(runtime, &version).await;
+                    let r = api.app_uninstall_runtime(runtime, &version).await;
                     send(M::RuntimeUninstallDone(r));
                 });
             }
@@ -582,7 +585,7 @@ fn run_apps_message(
             Effect::FetchLogs(id, max_lines) => {
                 handle.spawn(async move {
                     let r = match AppId::new(&id) {
-                        Ok(app) => client.app_logs(app, max_lines).await,
+                        Ok(app) => api.app_logs(app, max_lines).await,
                         Err(e) => Err(Failure::Transport(format!("{e}"))),
                     };
                     send(M::LogsLoaded(id, r));
@@ -1422,5 +1425,393 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].level, crate::extensions::toast::Level::Error);
         assert!(got[0].text.contains("磁盘满"));
+    }
+
+    // ---- 服务接缝:Advanced 页(DaemonService)与「应用」页(AppHostApi 泛型)----
+
+    use crate::panel_host::testing::{TIMEOUT, runtime};
+    use crate::service_fakes::{FakeApps, FakeDaemon, session};
+    use bytehost_apps::proto::{AppReply, AppRequest};
+    use bytehost_client::AppApiError;
+    use dozer_services::{ServiceError, ServiceErrorKind};
+    use std::sync::{Arc, mpsc};
+
+    fn daemon(fake: &FakeDaemon) -> Arc<dyn dozer_services::DaemonService> {
+        fake.clone().into_services().daemon
+    }
+
+    fn open_state(advanced: AdvancedState) -> Option<State> {
+        let mut s = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        s.advanced = advanced;
+        Some(s)
+    }
+
+    fn run(
+        state: &mut Option<State>,
+        msg: Message,
+        fake: &FakeDaemon,
+        apps: &FakeApps,
+        rt: &tokio::runtime::Runtime,
+    ) -> mpsc::Receiver<Message> {
+        let (tx, rx) = mpsc::channel();
+        update(
+            state,
+            msg,
+            daemon(fake),
+            apps.clone(),
+            rt.handle(),
+            move |m| {
+                let _ = tx.send(m);
+            },
+        );
+        rx
+    }
+
+    const QUIET: std::time::Duration = std::time::Duration::from_millis(300);
+
+    #[test]
+    fn stop_clicked_counts_only_alive_sessions() {
+        let rt = runtime();
+        let fake = FakeDaemon::default().with_sessions(Ok(vec![
+            session("a", true),
+            session("b", false),
+            session("c", true),
+        ]));
+        let mut st = open_state(AdvancedState::Idle { error: None });
+        let rx = run(
+            &mut st,
+            Message::AdvancedStopClicked,
+            &fake,
+            &FakeApps::unscripted(),
+            &rt,
+        );
+        assert!(matches!(
+            st.as_ref().unwrap().advanced,
+            AdvancedState::FetchingCount
+        ));
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::AdvancedSessionCountReady(r) => assert_eq!(r, Ok(2)),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stop_clicked_is_ignored_unless_idle() {
+        let rt = runtime();
+        let fake = FakeDaemon::default();
+        let mut st = open_state(AdvancedState::Stopping);
+        let rx = run(
+            &mut st,
+            Message::AdvancedStopClicked,
+            &fake,
+            &FakeApps::unscripted(),
+            &rt,
+        );
+        assert!(rx.recv_timeout(QUIET).is_err());
+        assert!(fake.calls().is_empty());
+    }
+
+    #[test]
+    fn stop_clicked_failure_text_is_the_service_message_verbatim() {
+        let rt = runtime();
+        let fake = FakeDaemon::default().with_sessions(Err(ServiceError::new(
+            ServiceErrorKind::Unavailable,
+            "daemon 断开",
+        )));
+        let mut st = open_state(AdvancedState::Idle { error: None });
+        let rx = run(
+            &mut st,
+            Message::AdvancedStopClicked,
+            &fake,
+            &FakeApps::unscripted(),
+            &rt,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::AdvancedSessionCountReady(r) => assert_eq!(r, Err("daemon 断开".to_string())),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stop_confirm_calls_shutdown_only_from_confirming_state() {
+        let rt = runtime();
+        let fake = FakeDaemon::default();
+        let mut st = open_state(AdvancedState::Idle { error: None });
+        let rx = run(
+            &mut st,
+            Message::AdvancedStopConfirm,
+            &fake,
+            &FakeApps::unscripted(),
+            &rt,
+        );
+        assert!(rx.recv_timeout(QUIET).is_err());
+        assert!(fake.calls().is_empty());
+
+        let mut st = open_state(AdvancedState::ConfirmingStop { session_count: 2 });
+        let rx = run(
+            &mut st,
+            Message::AdvancedStopConfirm,
+            &fake,
+            &FakeApps::unscripted(),
+            &rt,
+        );
+        assert!(matches!(
+            st.as_ref().unwrap().advanced,
+            AdvancedState::Stopping
+        ));
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::AdvancedStopResult(Ok(()))
+        ));
+        assert_eq!(fake.calls(), vec!["shutdown_daemon()".to_string()]);
+    }
+
+    #[test]
+    fn stop_confirm_failure_text_is_verbatim() {
+        let rt = runtime();
+        let fake = FakeDaemon::default().with_stop(Err(ServiceError::new(
+            ServiceErrorKind::Protocol,
+            "等待 dozerd 停止超时",
+        )));
+        let mut st = open_state(AdvancedState::ConfirmingStop { session_count: 0 });
+        let rx = run(
+            &mut st,
+            Message::AdvancedStopConfirm,
+            &fake,
+            &FakeApps::unscripted(),
+            &rt,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::AdvancedStopResult(r) => {
+                assert_eq!(r, Err("等待 dozerd 停止超时".to_string()))
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn restart_calls_ensure_running_only_from_stopped_and_keeps_error_text() {
+        let rt = runtime();
+        let fake = FakeDaemon::default().with_ensure(Err(ServiceError::new(
+            ServiceErrorKind::Unavailable,
+            "无法连接 dozerd（已重试 3 次）：x",
+        )));
+        let mut st = open_state(AdvancedState::Idle { error: None });
+        let rx = run(
+            &mut st,
+            Message::AdvancedRestartClicked,
+            &fake,
+            &FakeApps::unscripted(),
+            &rt,
+        );
+        assert!(rx.recv_timeout(QUIET).is_err());
+        assert!(fake.calls().is_empty());
+
+        let mut st = open_state(AdvancedState::Stopped { error: None });
+        let rx = run(
+            &mut st,
+            Message::AdvancedRestartClicked,
+            &fake,
+            &FakeApps::unscripted(),
+            &rt,
+        );
+        assert!(matches!(
+            st.as_ref().unwrap().advanced,
+            AdvancedState::RestartingDozerd
+        ));
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::AdvancedRestartResult(r) => {
+                assert_eq!(r, Err("无法连接 dozerd（已重试 3 次）：x".to_string()))
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(fake.calls(), vec!["ensure_running()".to_string()]);
+    }
+
+    fn apps_ok() -> FakeApps {
+        FakeApps::new(|req| match req {
+            AppRequest::List => Ok(AppReply::Apps { apps: vec![] }),
+            AppRequest::ProbeRuntimes => Ok(AppReply::Runtimes { runtimes: vec![] }),
+            _ => Err(AppApiError::Transport("未预设".into())),
+        })
+    }
+
+    #[test]
+    fn opening_the_apps_tab_probes_runtimes_and_lists_apps() {
+        let rt = runtime();
+        let apps = apps_ok();
+        let mut st = open_state(AdvancedState::Idle { error: None });
+        let rx = run(
+            &mut st,
+            Message::TabSelected(SettingsTab::Apps),
+            &FakeDaemon::default(),
+            &apps,
+            &rt,
+        );
+        let mut got = 0;
+        while got < 2 {
+            match rx.recv_timeout(TIMEOUT).unwrap() {
+                Message::Apps(_) => got += 1,
+                other => panic!("unexpected: {other:?}"),
+            }
+        }
+        let reqs = apps.requests();
+        assert!(reqs.iter().any(|r| r.contains("ProbeRuntimes")), "{reqs:?}");
+        assert!(reqs.iter().any(|r| r.starts_with("List")), "{reqs:?}");
+    }
+
+    #[test]
+    fn stop_with_an_invalid_id_fails_as_transport_and_sends_no_request() {
+        let rt = runtime();
+        let apps = FakeApps::unscripted();
+        let mut st = open_state(AdvancedState::Idle { error: None });
+        let rx = run(
+            &mut st,
+            Message::Apps(settings_apps::Message::StopClicked("Bad Id!".into())),
+            &FakeDaemon::default(),
+            &apps,
+            &rt,
+        );
+        match rx.recv_timeout(TIMEOUT).unwrap() {
+            Message::Apps(settings_apps::Message::ActionDone(
+                id,
+                _,
+                Err(AppApiError::Transport(_)),
+            )) => {
+                assert_eq!(id, "Bad Id!")
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert!(apps.requests().is_empty(), "非法 id 不发请求");
+    }
+
+    #[test]
+    fn invalid_ids_for_rollback_uninstall_and_logs_send_no_requests() {
+        use bytehost_apps::registry::UninstallMode;
+        use settings_apps::{Flow, Message as M};
+        let rt = runtime();
+        let id = "Bad Id!";
+        for case in 0..3 {
+            let apps = FakeApps::unscripted();
+            let mut st = open_state(AdvancedState::Idle { error: None });
+            let msg = match case {
+                0 => {
+                    st.as_mut().unwrap().apps.flow = Flow::ConfirmRollback {
+                        id: id.into(),
+                        name: "invalid".into(),
+                        to: bytehost_apps::id::Version::new(0, 1, 0),
+                    };
+                    M::RollbackConfirmed(id.into())
+                }
+                1 => {
+                    st.as_mut()
+                        .unwrap()
+                        .apps
+                        .update(M::UninstallClicked(id.into()), 0);
+                    M::UninstallConfirmed(UninstallMode::Program)
+                }
+                _ => M::ShowLogs(id.into()),
+            };
+            let rx = run(
+                &mut st,
+                Message::Apps(msg),
+                &FakeDaemon::default(),
+                &apps,
+                &rt,
+            );
+            let expected = bytehost_apps::id::AppId::new(id).unwrap_err().to_string();
+            match (case, rx.recv_timeout(TIMEOUT).unwrap()) {
+                (0, Message::Apps(M::RolledBack(got, Err(AppApiError::Transport(e)))))
+                | (
+                    1,
+                    Message::Apps(M::ActionDone(
+                        got,
+                        settings_apps::ActKind::Uninstall,
+                        Err(AppApiError::Transport(e)),
+                    )),
+                )
+                | (2, Message::Apps(M::LogsLoaded(got, Err(AppApiError::Transport(e))))) => {
+                    assert_eq!(got, id);
+                    assert_eq!(e, expected);
+                }
+                (_, other) => panic!("unexpected: {other:?}"),
+            }
+            assert!(
+                apps.requests().is_empty(),
+                "case {case}: invalid id must not send requests"
+            );
+        }
+    }
+
+    #[test]
+    fn install_forwards_the_approved_plan_and_source_unchanged() {
+        use bytehost_apps::id::{AppId, Version};
+        use bytehost_apps::permissions::{Permissions, diff_permissions};
+        use bytehost_apps::plan::{InstallPlan, Provenance, TrustLevel};
+        let rt = runtime();
+        let plan = InstallPlan {
+            app_id: AppId::new("excalidraw").unwrap(),
+            name: "Excalidraw".into(),
+            version: Version::new(0, 17, 0),
+            upgrading_from: None,
+            provenance: Provenance::Local,
+            trust: TrustLevel::Trusted,
+            runtime_kind: "static_web".into(),
+            manifest_digest: "m".into(),
+            source_digest: "s".into(),
+            requested: Permissions::default(),
+            enforcement: vec![],
+            permission_diff: diff_permissions(&Permissions::default(), &Permissions::default()),
+            will_run: vec!["不执行任何命令".into()],
+            source_info: Default::default(),
+        };
+        let expected_plan = plan.clone();
+        let mut st = open_state(AdvancedState::Idle { error: None });
+        {
+            let s = st.as_mut().unwrap();
+            s.apps.update(settings_apps::Message::InstallClicked, 0);
+            s.apps.update(
+                settings_apps::Message::SourcePicked(Some("/src/app".into())),
+                0,
+            );
+            s.apps
+                .update(settings_apps::Message::PlanLoaded(Ok(Box::new(plan))), 0);
+        }
+        let apps = FakeApps::new(move |req| match req {
+            AppRequest::Install { approved, source } => {
+                assert_eq!(approved.plan(), &expected_plan);
+                assert_eq!(
+                    source,
+                    &bytehost_apps::proto::AppSource::LocalDir {
+                        path: "/src/app".into()
+                    }
+                );
+                Ok(AppReply::Done)
+            }
+            _ => Err(AppApiError::Transport("未预设".into())),
+        });
+        let rx = run(
+            &mut st,
+            Message::Apps(settings_apps::Message::ApproveClicked),
+            &FakeDaemon::default(),
+            &apps,
+            &rt,
+        );
+        assert!(matches!(
+            rx.recv_timeout(TIMEOUT).unwrap(),
+            Message::Apps(settings_apps::Message::InstallDone(Ok(())))
+        ));
+        let reqs = apps.requests();
+        assert_eq!(reqs.len(), 1, "{reqs:?}");
+        assert!(reqs[0].starts_with("Install"), "{reqs:?}");
+        assert!(
+            reqs[0].contains("excalidraw"),
+            "批准的计划原样送入: {reqs:?}"
+        );
+        assert!(reqs[0].contains("/src/app"), "来源原样送入: {reqs:?}");
     }
 }

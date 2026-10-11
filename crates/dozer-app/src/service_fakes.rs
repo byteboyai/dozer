@@ -1212,7 +1212,6 @@ impl Default for FakeDaemon {
     }
 }
 
-#[allow(dead_code)]
 impl FakeDaemon {
     pub(crate) fn with_sessions(self, r: Result<Vec<SessionInfo>, ServiceError>) -> Self {
         self.state.lock().unwrap().list = r;
@@ -1259,7 +1258,6 @@ impl DaemonService for FakeDaemon {
 }
 
 /// 固定 `SessionInfo`(只有 id/alive 有意义)。
-#[allow(dead_code)]
 pub(crate) fn session(id: &str, alive: bool) -> SessionInfo {
     SessionInfo {
         id: id.to_string(),
@@ -1272,5 +1270,65 @@ pub(crate) fn session(id: &str, alive: bool) -> SessionInfo {
         transcript_path: None,
         project_id: Some(1),
         agent: dozer_model::AgentKind::Unknown,
+    }
+}
+
+/// 「应用」页的 `AppHostApi` 假实现:只实现 `request`/`subscribe`(其余方法用 trait 默认实现),
+/// 按 `handler` 回 `AppReply`,并把每个请求的 `Debug` 文本按到达顺序记下。
+#[derive(Clone)]
+pub(crate) struct FakeApps {
+    handler: ReplyHandler,
+    seen: Arc<Mutex<Vec<String>>>,
+}
+
+type ReplyHandler = Arc<
+    dyn Fn(
+            &bytehost_apps::proto::AppRequest,
+        ) -> Result<bytehost_apps::proto::AppReply, bytehost_client::AppApiError>
+        + Send
+        + Sync,
+>;
+
+impl FakeApps {
+    pub(crate) fn new(
+        h: impl Fn(
+            &bytehost_apps::proto::AppRequest,
+        ) -> Result<bytehost_apps::proto::AppReply, bytehost_client::AppApiError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            handler: Arc::new(h),
+            seen: Arc::default(),
+        }
+    }
+    /// 任何请求都返回 `Transport("未预设")`,避免未预设的调用被静默放过。
+    pub(crate) fn unscripted() -> Self {
+        Self::new(|_| Err(bytehost_client::AppApiError::Transport("未预设".into())))
+    }
+    pub(crate) fn requests(&self) -> Vec<String> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+impl bytehost_client::AppHostApi for FakeApps {
+    fn request(
+        &self,
+        request: bytehost_apps::proto::AppRequest,
+    ) -> impl std::future::Future<
+        Output = Result<bytehost_apps::proto::AppReply, bytehost_client::AppApiError>,
+    > + Send {
+        self.seen.lock().unwrap().push(format!("{request:?}"));
+        let r = (self.handler)(&request);
+        async move { r }
+    }
+    async fn subscribe(
+        &self,
+    ) -> Result<
+        tokio::sync::mpsc::UnboundedReceiver<bytehost_client::AppChange>,
+        bytehost_client::AppApiError,
+    > {
+        Err(bytehost_client::AppApiError::Transport("未预设".into()))
     }
 }
