@@ -95,6 +95,37 @@
 
 ---
 
+## Task 04 — 引入 bytehost-core 纯契约层与三组依赖门禁
+
+- **状态：** DONE
+- **输入 revision：**
+  - B `0ca8320`（Task 02 探针之上）
+  - Z 主线（计划 §Task 04 `:79-90`；规格 §4/§5）
+- **输出 revision：** B `972e461` `feat(core): introduce product-neutral panel identities`
+- **产出文件：**
+  - `B/crates/bytehost-core/{Cargo.toml,src/lib.rs,src/id.rs,src/registry.rs,src/layout.rs,tests/catalog.rs}`
+  - `B/scripts/check-deps.sh`（改为 apps/core/desktop 三组 + `--self-test` 变异测试）
+  - `B/.github/workflows/ci.yml`（接入 `--self-test`）
+- **运行命令与退出码：**
+
+| 仓库 | 命令 | 退出码 | 结果 |
+|---|---|---|---|
+| B | `cargo test -p bytehost-core` | 0 | 22 通过（15 单测 + 7 集成） |
+| B | `cargo test --workspace --all-features` | 0 | 全通过（default feature 下 `bytehost-client` 示例既缺 feature，非本任务） |
+| B | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | 干净 |
+| B | `cargo fmt --all --check` | 0 | 干净（提交前已 fmt） |
+| B | `bash scripts/check-deps.sh` | 0 | 通过；desktop 组尚未创建（Task 07 起自动纳入） |
+| B | `bash scripts/check-deps.sh --self-test` | 0 | 变异 1（core→iced）、变异 2（apps→digger-*）均被拦下；恢复即通过 |
+- **结果：**
+  - 新增 `bytehost-core` 纯契约层:`PanelId`（`<ns>.<name>` / `<ns>:<name>`，应用面板 `app:<validated-id>`）、`ScopeId`（不透明、产品提供）、`PanelInstanceId`（slot+generation，重建递增）、`SurfaceSlot`；`PanelCatalog` 注册目录（重复 id 立即报错、未知历史 id 保留）；`Layout` DTO（schema version、尺寸钳制到 `[160,4000]`、未知更高版本拒绝覆盖、产品默认布局作为输入）。
+  - 依赖门禁扩为三组:apps（四 crate，禁 `dozer*`/`digger*`/iced/wry/tauri/objc2）、core（只允许 serde 家族）、desktop（允许 iced/wry，禁产品与 tauri/objc2）。新增 `--self-test` 证明门禁非恒真,并接入 CI。
+- **偏差：**
+  - `cargo test --workspace`（不加 `--all-features`）的失败来自 `bytehost-client/examples/embed.rs` 需 `in-process` feature,属既有现状,与本次改动无关;CI 与验证用 `--all-features`。
+  - `scripts/check-deps.sh` 中 `bytehost-desktop` 组在 crate 出现前打印 note 并跳过（Task 07 自动纳入）。
+- **未决项 / 阻塞：** 无。
+
+---
+
 ## 提交记录
 
 | Task | 提交 | 仓库 | 说明 |
@@ -104,3 +135,4 @@
 | 02 | `0ca8320` | B | `spike(desktop-contract): iced×wry 桌面契约探针(Task 02 §11 闸门1)` |
 | 02 | `d5ab7f83` | Z | `docs(integration): Task 02 窗口入口与泛型 API 决策` |
 | 03 | `45f95ce0` | Z | `docs(integration): Task 03 §11 闸门回填` |
+| 04 | `972e461` | B | `feat(core): introduce product-neutral panel identities` |
