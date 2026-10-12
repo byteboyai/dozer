@@ -702,7 +702,7 @@
 ## Task 21 — 迁移剩余通用 Host 路径并删除兼容桥(计划 §Task 21 `:286+`)
 
 - **目标（计划 §Task 21 `:286+`）：** 按应用 WebView → Todo/GroupChat → editor/preview 承载 → 通用窗口事件顺序逐组切共享实现,每组独立提交回归;宿主不存产品专属字段/不解析业务协议/不 match 产品面板名;清理兼容桥台账(每项以无调用者+行为测试+单一实现证据关闭,不靠移动文件或放宽扫描目录降门禁);回归 Dozer 新旧布局/面板激活/产品命令/原生菜单/窗口退出。**验证:** 同口径结构度量、公共 Host 反向依赖为零、兼容桥零、两产品同用 Host crate。
-- **实施进度:** (切片 1 应用面板 Effect 执行器外移 DONE);(切片 2 C5 预览窗格选择统一 DONE);其余切片待续。
+- **实施进度:** (切片 1 应用面板 Effect 执行器外移 DONE);(切片 2 C5 预览窗格选择统一 DONE);(切片 3 C8 请求身份改挂 core `RequestToken`/`ScopedTrackers`,含设计 move 1+2 DONE);其余切片(C7/C10/C11/C12)待续。
 
 
 ### 切片 1 — 应用面板 Effect 执行器外移出 `app/`(DONE)
@@ -734,6 +734,29 @@
 - **未决项 / 阻塞:** 无新增;其余桥(C7/C8/C10/C11/C12)待后续切片。
 
 
+### 切片 3 — 面板请求身份改挂 core `RequestToken`/`ScopedTrackers`(C8,含设计 move 1+2,DONE)
+
+- **动机 / 桥:** **C8**(`acceptance.md:46`:「使用 core 请求身份且 delete 该文件后编译通过」):产品 `crates/dozer-app/src/request_tracker.rs` 自持 `RequestToken` 包装,唯一目的就是给 core token 外挂 `project_id: Option<i64>`。用途二:①**路由键**——`App::update` 的 `msg.project_id()`(`app/update.rs:1951`)选 `with_project` 目标;②**守卫**——`browser.rs:1691`/`todo/update.rs:127`/`project/update.rs:25` 三处 `token.project_id != Some(project_id)`。
+- **前置(bytehost,已提交 `f50ad77`):** `bytehost-core` 新增中立的 [`ScopedTrackers`](`crates/bytehost-core/src/request.rs`):`new(owner, instance, generation)` / `begin(&ScopeId, RequestKey)` / `scope(&ScopeId)` / `invalidate(RequestKey)`(广播全部已知 scope)/ `accepts(&RequestToken)`(按 `token.scope()` 判)。它把产品"每 scope 一张在途表"的行为一般化,使包装类型可删。含 4 单测 + 1 集成测试(`scoped_trackers_route_dual_lane_panel_by_scope`),`cargo test -p bytehost-core request` 15+7 passed,clippy 干净。
+- **改动(dozer,`300c7dab`):**
+  - **删除 `crates/dozer-app/src/request_tracker.rs`**(整文件,含其 3 个单测),`main.rs` 去掉 `mod request_tracker;`。
+  - **`panel_host.rs` 成为产品唯一收口:**
+    - `scope_of(Option<i64>) -> ScopeId`(业务 → 中性:`Some(id)→"project:{id}"`、`None→"global"`)与 `project_of(&ScopeId) -> Option<i64>`(逆)。**业务含义只在产品这一处**,Host 不见 `project:5` 的业务意义。
+    - `RequestTrackers` 产品 newtype(内包 `ScopedTrackers`),`Default` 每次经 `next_request_owner()` 取新 owner(保留旧 `NEXT` 语义:重开的同 slot 面板互不接受在途结果),转发 `begin(Option<i64>, &str)`/`scope`/`invalidate`/`accepts`——**签名保持产品友好**(吃 `project_id`/lane 名),故 ~46 处调用点**零改动**。
+    - `wrap()` 从产品 `RequestToken` 移到 `panel_host::wrap_token` + 扩展 trait `RequestTokenWrapExt`,面板 `.begin(..).wrap(emit, Message::AsyncResult)` 链式写法不变。
+  - 7 个面板(`project`/`agent_context`/`browser`/`todo/state`/`group_chat/mod`/`conversations`/`codehealth`)的 `AsyncResult` 载荷、`State.requests` 字段、spawn 形参改 `bytehost_core::request::RequestToken` / `crate::panel_host::RequestTrackers`。
+  - 守卫改比 scope:`token.scope() != &scope_of(Some(project_id))`;`result_project()`/`project_id()` getter 改 `project_of(token.scope())`(group_chat 仍 `.expect("group project")`)。
+  - 一处浏览器测试断言从 `global.project_id == None` 改 `project_of(global.scope()) == None`。
+- **验证:**
+  - `cargo build -p dozer-app` 绿;`cargo build -p dozer-app --bin dozer --tests` 绿。
+  - `cargo clippy -p dozer-app --bin dozer --all-targets`:16 warning,**全为既有**(git_accounts `ALL`、project `move_item`、homespace doc list 等),本切片文件(含 `panel_host.rs`)零新增。
+  - `cargo test -p dozer-app --bin dozer` **1967 passed / 1 failed**(测试数由 1970 降 3 即删掉的 `request_tracker` 3 个单测);唯一失败仍是**既有用户 WIP(`app/update.rs` 行号位移)**引起的 `usage_probe::host::tests::host_site_citations_point_at_the_code_they_name`(`app/update.rs:5318`),本切片未触碰该文件,非本切片。
+  - `python3 scripts/audit/check_panel_boundary.py` → **ok(116 refs in 4 files)**,基线未改。
+  - C8 验收证据:git 历史可见 `D crates/dozer-app/src/request_tracker.rs`(整文件删除,非移动),删除后编译通过;全仓 `grep request_tracker` 只剩函数名 `new_request_trackers`(非模块引用)。
+- **偏差 / 发现:** 设计 move 2「`App` 维护 `PanelInstanceId → 区域` 路由表」中,**C8 所需的部分未新建表**——因保留了 `RequestTrackers` 的产品友好签名与 `project_of` 反解,`msg.project_id()` 路由(`app/update.rs:1951`)语义不变即可工作。完整的「`PanelInstanceId → 区域/焦点`注册表」留到 C11/C12 落地时再建,避免此处先造一套键控(与设计"一次设计、分步入地"一致)。
+- **未决项 / 阻塞:** 产品面板仍传 `PanelInstanceId::new(0,0)`(惰性 scope 表不依赖它);把真实 `PanelInstanceId` 线程进 `PanelIo` 是 C11 的工作。C7/C10/C11/C12 待续。
+
+
 
 ### 设计:C8 + C11 + C12 共同的"PanelId/Scope 键控"缺口(DONE — 设计待裁决)
 
@@ -753,7 +776,7 @@
 
 **为何一次设计而非三片:** C8 的"面板按 scope 路由"落地物就是 C11/C12 所需的"实例→区域/焦点"注册表;分三次会各造一套键控。**风险/未决:** ① home-pane `RailButton` 变体是否进通用控件;② `Side`/`maximized` 是否移入 `bytehost-core`;③ `RightPairSplit`(Agent/Conversations/Usage 轮转,`layout.rs:779`)无通用等价,留产品;④ 真窗像素回归受 Task 08 权限阻塞,只能靠现有几何单测(A4 部分)。**跨仓:** 均需 bytehost 侧新增(按 tag 发布),本地用 uncommitted patch 联调;正式 pin 归 Task 22。
 
-**状态:** 侦察与设计成稿;**待用户裁决**是否按此方向实现(建议先落 (1)+(2) 关 C8,再以 (3) 关 C12,最后 (4) 关 C11)。任一实现片需独立提交+回归。
+**状态:** 侦察与设计成稿;用户已裁决按此方向实现,建议顺序 **(1)+(2) 关 C8 → (3) 关 C12 → (4) 关 C11**。move (1)+(2) 的 C8 部分已成切片 3(`300c7dab`,见上);(3)/(4) 待后续切片,任一实现片需独立提交+回归。
 
 
 ## 提交记录
@@ -805,4 +828,9 @@
 | 20 | `8daf437` | D | `feat(usage): connect Digger task usage to shared panel` |
 | 20 | `09111352` | Z | `docs(integration): record Task 20 Digger task usage loop (api-decisions §14)` |
 | 21 | `a77af9bb` | Z | `refactor(host): move app-panel effect executor to host_adapters (Task 21 slice 1)` |
+| 21 | `6668ce8f` | Z | `docs(integration): record Task 21 slice 1 app-panel executor move` |
 | 21 | `ec0f912c` | Z | `refactor(panel): route preview-pane selection through Workspace accessors (Task 21 slice 2)` |
+| 21 | `182195a7` | Z | `docs(integration): record Task 21 slice 2 preview-pane unification` |
+| 21 | `db2779b9` | Z | `docs(integration): design the shared PanelId/Scope routing seam for bridges C8/C11/C12` |
+| 21 | `f50ad77` | B | `feat(core): add ScopedTrackers for product-neutral per-scope request routing` |
+| 21 | `300c7dab` | Z | `refactor(host): move panel request identity onto core RequestToken/ScopedTrackers (C8)` |
