@@ -11,6 +11,7 @@
 规则 R-CLIENT: extensions 下对 dozer_client 的引用次数(X0,只降不升;面板应经 dozer-services 的 trait 取数)
 规则 R-FOCUS-PRODUCT-KEYS: platform/window_events.rs 里业务焦点键 `FocusIntent` 的出现次数(C12,只降不升)
 规则 R-PANE-KEYED-FIELDS: app/layout.rs 里逐面板命名的 pane 维度字段出现次数(C11,只降不升)
+规则 R-PREVIEW-NAMING: webview_geometry.rs 里"文件预览"业务词几何函数名残留(C7,目标 0)
 
 用法:
   check_panel_boundary.py            对照基线检查,有文件的引用数上升(或新文件出现违规)则退出 1
@@ -136,6 +137,13 @@ PANE_KEYED_FIELD_RE = re.compile(
     r"|group_chat_list_collapsed|usage_list_collapsed)\b"
 )
 
+# R-PREVIEW-NAMING(C7):webview_geometry.rs 里的几何函数名不得回退到"文件预览"业务词。
+# 这些函数算的是面板内容列/列表列矩形,与文件预览业务无关;历史命名 `preview_content_bounds`/
+# `is_in_preview_column`/`left_files_tree_bounds_for` 已改中立名，计数目标恒为 0(不进基线)。
+PREVIEW_NAMING_RE = re.compile(
+    r"\b(?:preview_content_bounds(?:_for)?|is_in_preview_column|left_files_tree_bounds_for)\b"
+)
+
 
 def scan(files):
     """files: {相对路径: 源码文本} -> {相对路径: {规则: 次数}},只含 extensions/ 下且有违规的文件。"""
@@ -176,6 +184,10 @@ def scan(files):
             k = len(PANE_KEYED_FIELD_RE.findall(code))
             if k:
                 hit["R-PANE-KEYED-FIELDS"] = k
+        if rel == "webview_geometry.rs":
+            k = len(PREVIEW_NAMING_RE.findall(code))
+            if k:
+                hit["R-PREVIEW-NAMING"] = k
         n = len(PANE_PICK_RE.findall(edges.strip_comments(text)))
         if n:
             hit["R-PANE-PICK"] = n
