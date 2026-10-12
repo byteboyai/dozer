@@ -249,11 +249,11 @@
 
 **新增：**`D/crates/app-host/tests/recovery.rs`、desktop 真实窗口恢复夹具；bytehost 对应故障注入测试。
 
-- [ ] 在独立根启动应用，正常关闭窗口后证明 gateway 端口关闭、子进程停止，desired 状态仍按库约定恢复。
-- [ ] 强杀测试专用 Digger 进程，重启同根并检查孤儿回收；测试无关进程绝不被回收。
-- [ ] 同根双启动拒绝；不同根的 Dozer/Digger 同时运行，不串端口、应用、浏览器数据。
-- [ ] shutdown 故障应有 UI/报告可见结果；测超时与用户选择强退，不静默等待无限时间。
-- [ ] 无 Project 启动应用；Project 导出/移动若已有实现则做真实验证，未有实现必须在 Task 23 标为未验收，不能以路径检查代替功能测试。
+- [x] 在独立根启动应用，正常关闭窗口后证明 gateway 端口关闭、子进程停止，desired 状态仍按库约定恢复。
+- [~] 强杀测试专用 Digger 进程，重启同根并检查孤儿回收；测试无关进程绝不被回收。（孤儿回收按记录核对身份的机制与表格测试已做（`tests/recovery.rs` + bytehost `reconcile_reaps_a_leftover_process_recorded_in_the_run_dir`）；真实"强杀子进程 → 重启"需真实进程夹具，并入 Task 08 人工项，不以"丢弃句柄"冒充。）
+- [x] 同根双启动拒绝；不同根的 Dozer/Digger 同时运行，不串端口、应用、浏览器数据。
+- [~] shutdown 故障应有 UI/报告可见结果；测超时与用户选择强退，不静默等待无限时间。（报告/超时/不静默的机制与表格测试已做（`tests/recovery.rs` + bytehost `a_shutdown_that_overruns_the_timeout_is_reported_not_swallowed`）；UI 呈现强退选择并入 Task 08 人工项。）
+- [~] 无 Project 启动应用；Project 导出/移动若已有实现则做真实验证，未有实现必须在 Task 23 标为未验收，不能以路径检查代替功能测试。（无 Project 启动已验证；Project 导出/移动产品层尚无实现，按计划在 Task 23 标未验收。）
 
 **验证：**A14/A15/A16；所有 kill 目标由夹具创建并记录身份。提交 `test(apps): verify shutdown and crash recovery`。
 

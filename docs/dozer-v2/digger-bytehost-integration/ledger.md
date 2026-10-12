@@ -644,6 +644,25 @@
 
 ---
 
+## Task 18 — 正常退出、崩溃恢复与双产品并行运行(计划 §Task 18 `:248-258`)
+
+- **目标（计划 §Task 18 `:248-258`）：** (1) 独立根起应用，正常关窗后证明 gateway 端口关闭、子进程停止、desired 按库约定恢复。(2) 强杀测试专用 Digger 进程，重启同根查孤儿回收；测试无关进程绝不被回收。(3) 同根双启动拒绝；不同根 Dozer/Digger 并行不串端口/应用/浏览器数据。(4) shutdown 故障有可见结果；测超时与强退，不静默无限等待。(5) 无 Project 启动应用；Project 导出/移动有实现则真实验证，无实现必须在 Task 23 标未验收。**验证:** A14/A15/A16；所有 kill 目标由夹具创建并记录身份。
+- **范围裁决:** 孤儿回收/双启动/端口释放/shutdown 报告的**机制层**在 Digger 集成测试覆盖;"强杀真实子进程 → 重启"与真实窗口的强退 UI 需要真实进程/窗口夹具,并入 Task 08 人工项(同 Tasks 14–17),**不以"丢弃 in-process 句柄"冒充强退**。
+- **实现(仓库 D — `crates/app-host/tests/recovery.rs`,7 用例):**
+  - **第 1 条**:`a_normal_close_releases_the_gateway_port_and_keeps_the_persisted_port` —— 真实 `InProcess::start` 起服务,轮询确认 gateway 监听;`host.await_shutdown()` 得 `Reported` 且 `report.is_clean()`、`gateway_released`;轮询确认端口**不再接受连接**;重启沿用同一持久化端口(不静默换,换了丢所有 origin 存储)。
+  - **第 2 条**:`a_restart_after_a_kill_reaps_the_recorded_orphan_and_leaves_unrelated_processes_alone` + `reaping_a_stale_record_never_kills_a_pid_that_does_not_match_the_record` —— 造进程组组长(`pre_exec(setpgid)`)的遗留进程 + `run_dir/process.json`;`reap_orphan` 按**命令行 + 启动时刻 + 组长**三重复核,记录相符者 `Killed`,命令行不符者 `Stale`(只清记录,**不杀**被复用 pid 的无关进程)。无关进程 `try_wait()` 全程 `None`(绝不被误伤)。
+  - **第 3 条**:`one_root_refuses_a_second_owner_while_different_roots_run_side_by_side` —— 同根第二个 `InProcess::start` 不可用(经真实 API 探测 `app_list()` 回 `Unavailable`),不改写端口文件,第一个服务端口仍可连;不同根并行、端口互不相同。
+  - **第 4 条**:`a_shutdown_result_is_observable_and_never_hangs` —— 零超时 `shutdown_reporting_within` 要么干净要么 `TimedOut`,**一定返回**(不静默挂住)。
+  - **第 5 条**:`the_app_service_starts_without_any_project_directory` —— 数据根由产品路径给出,不依赖任何 Project 目录。
+  - **强退边界**:`force_quit_recovery_is_verified_at_the_process_level_not_by_dropping_a_handle` —— 显式记录"in-process 句柄丢弃 ≠ 进程被杀"(库内后台任务持有服务的 Arc,丢外层句柄释放不了),真实强杀留进程级夹具。
+  - 测试加 `libc` dev-dependency(仅测试用 `setpgid` 造组长)。
+- **bytehost 侧(既有,无需新增):** `service.rs::a_shutdown_that_overruns_the_timeout_is_reported_not_swallowed`(超时可见)、`a_clean_shutdown_reports_gateway_released_and_no_failures`、`requests_arriving_after_shutdown_do_not_start_or_install_anything`、`shutdown_cancels_a_running_download`;`manager.rs::reconcile_reaps_a_leftover_process_recorded_in_the_run_dir`(孤儿回收)、`a_crashing_app_ends_up_failed_and_not_retryable_and_its_site_is_gone`、`after_a_supervisor_restart_reconcile_restarts_apps_that_wanted_to_run`(desired 恢复)、`service_lock.rs` 跨进程 flock 用例。Task 18 的 bytehost 故障注入已由这些覆盖。
+- **验证:** `cargo fmt --all`;`cargo clippy -p digger-app-host --all-targets -D warnings` 干净;`cargo test --workspace` 全绿(app-host 集成 7、lib 37;desktop 33)。
+- **偏差:** (a) "强杀真实子进程"与"强退 UI"按裁决并入 Task 08 人工项;(b) 新增 `libc` 仅 dev-dependency(测试造进程组组长),不进生产依赖。
+- **未决项 / 阻塞:** 真实进程级强杀夹具 + 真实窗口强退选择并入 Task 08 人工项。Project 导出/移动产品层无实现,Task 23 标未验收。
+
+---
+
 ## 提交记录
 | Task | 提交 | 仓库 | 说明 |
 |---|---|---|---|
