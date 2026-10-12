@@ -298,3 +298,37 @@ Task 03 `gates.md` 闸门 3 登记的两处 `AppService` 缺口 + 现场核实�
 - `cargo test -p digger-app-host`：21 单测 + 12 集成全绿（含真实临时数据根嵌入 `InProcess`）。
 - `cargo test --workspace` / `cargo fmt --all -- --check` / `cargo clippy --workspace --all-targets -- -D warnings` / `scripts/check-host-deps.sh` 全绿。
 - 待 Task 14 接入 `digger-desktop` UI（本 crate 尚未被 `desktop` 依赖）。
+
+## 13. Task 14 设计：产品信任策略与安装审批 UI（产品裁决只在适配层）
+
+### 13.1 决定 1：产品信任裁决只在 Rust 适配层（`trust.rs`）
+
+`trust::policy_for(SourceChoice) -> SourcePolicy{provenance,trust}` 给出**本机来源** `Local/Trusted`、**URL** `ThirdParty/Untrusted`；组合根在派发 `Effect::Plan` 时把它注入 `run_install_with_policy(.., Option<SourcePolicy>)`。返回的计划再经 `trust::review(&InstallPlan) -> Review{Allowed,Rejected}` 复核：不受信来源 + 进程型 runtime(`node`/`python`) 一律拒绝，只允许 `static_web`。**GUI 不自己算信任级别**——服务端对 `AppSource::Url` 无论调用方传什么都会重解析为 `ThirdParty/Untrusted`（本地来源保留调用方值），故 `trust.rs` 提供的是本机默认。这条把"产品信任决策"固定在适配层，与规格 §6.3 clause `:161`（本轮允许用户明确批准的本地可信 Python/Node 应用；Agent/URL 按 Untrusted 仅 static_web）一致。
+
+### 13.2 决定 2：`Effect::Plan` 的信任级别需经旁路注入
+
+共享状态机的 `Effect::Plan(AppSource)` **只带来源、不带信任级别**（信任级别是产品语义，不属于宿主通用状态机）。因此执行器新增 `run_install_with_policy(scope,panel,generation,effect,Option<SourcePolicy>)`，`run_install` 委托并传 `None`（默认 `LOCAL_TRUSTED`）。组合根在 `dispatch` 里按用户当前来源算出策略传入。
+
+### 13.3 决定 3：审批身份 == 展示计划；签名与防重在状态机
+
+批准走状态机自身逻辑：`ApproveClicked` 只在 `Reviewing` 生效，就地 `plan.clone().approve(Approval{approver: "dozer-gui", ..})` 后进 `Installing`，**不重算、不改写**；重复点击此时不在 `Reviewing`，不再吐 `Install` effect。来源切换会清掉 `Reviewing|Failed`（审批卡立刻作废），迟到计划结果按当前 flow 丢弃。**已知共享状态机在 `Planning` 窗口内不清理来源切换**，但 Digger 的来源单选行**只在 `Flow::Idle` 渲染**（`Planning` 期间被"正在检查应用…"取代），该窗口在 UI 里不可达，身份端到端成立——不属 Task 14 的适配层缺陷，不在本层额外兜底。
+
+### 13.4 决定 4：修复 `install_service` 的 `try_write().expect` panic 风险（Task 13 遗留）
+
+`HostService::install_service` 原用 `try_write().expect("no concurrent readers")` 换后端——有并发读即 panic。改为：**genesis 任务在 tokio 工作线程用 `api.write().await` 换后端**（窗口线程不能阻塞等锁），再回 `ServiceReady`；`install_service` 只记录 `Arc<AppService>` 供 shutdown，并在锁空闲时做等价的就地后备写入（`try_write` 失败即跳过，后端已是真服务）。新增测试钉住时序："`ServiceReady` 到达时共享后端已是真服务"。
+
+### 13.5 决定 5：`Outcome` 回流用 `Task::stream`；应用服务延迟到首次打开
+
+`AppsState::new()` **不在构造期** `start_service`（会脱离 tokio 运行时 panic），改在首次 `Message::Opened`（永远在 iced 运行时内）触发。回流通道的接收端唯一、不该反复重建，用 `iced::Task::stream` 在 `boot` 挂一次（而非 `Subscription`），并 `Task::batch` 进 boot task。`Message` 需 `Clone + Debug`，故 `Outcome` 以 `Arc<Outcome>` 携带（自带手写 `Debug`）；`ServiceReady`/`ServiceFailed` 不经 `Message` 中转，直接在 `deliver` 内按 `Arc` 借用处理。原生选目录/压缩包用 `rfd::AsyncFileDialog` + `Task::perform`（iced 0.14 无 winit 主线程钩子）。
+
+### 13.6 提交切片
+
+`a21b730`(D) 单提交：`trust.rs` + `run_install_with_policy`/`InstallAction` + `service.rs` 修复 + `testing.rs` 便捷构造 + `install_flow.rs`/`embedded.rs` + `desktop/src/apps/*` UI + `product.rs`/`main.rs` 接线。
+
+### 13.7 实施结果（2026-10-12）
+
+- `cargo test -p digger-app-host`：28 单测（含 `trust` 5 + `InstallAction` 2）+ 14 `embedded` + 6 `install_flow` 全绿。
+- `cargo test -p digger-desktop`：9 单测全绿；`cargo test --workspace` 全绿。
+- `cargo fmt --all -- --check` / `cargo clippy --workspace --all-targets -- -D warnings` / `scripts/check-host-deps.sh` 全绿。
+- **真实窗口交互验收与 Task 08 人工项合并**（受 OS 权限限制）；运行时/日志/回滚/卸载 UI 为 Task 15 占位。
+

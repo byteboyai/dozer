@@ -201,11 +201,11 @@
 
 **新增：**`D/crates/desktop/src/apps/{mod,management,approval}.rs`；app-host `trust.rs`、`tests/install_flow.rs`。
 
-- [ ] 接列表、详情和本地目录/归档/URL 选择；计划生成失败、空列表和服务不可用分别显示。
-- [ ] 展示实际计划、来源、摘要、权限和 enforcement；LocalDir 整目录复制提示保留。
-- [ ] 人类确认只接受当前发出的计划身份；重复点击防重；内容或来源变化需重新计划。
-- [ ] 本地可信进程应用经明确批准可安装；Agent/URL Untrusted 仅 static_web，产品信任决策只在 Rust 适配层。
-- [ ] 安装后刷新 rail，新增应用使用稳定 ID，应用不绑定当前 Project。
+- [x] 接列表、详情和本地目录/归档/URL 选择；计划生成失败、空列表和服务不可用分别显示。
+- [x] 展示实际计划、来源、摘要、权限和 enforcement；LocalDir 整目录复制提示保留。
+- [x] 人类确认只接受当前发出的计划身份；重复点击防重；内容或来源变化需重新计划。
+- [x] 本地可信进程应用经明确批准可安装；Agent/URL Untrusted 仅 static_web，产品信任决策只在 Rust 适配层。
+- [x] 安装后刷新 rail，新增应用使用稳定 ID，应用不绑定当前 Project。
 
 **验证：**fake 测试覆盖拒绝/取消/过期/重复批准；真实静态应用从选择来源到安装显示。提交 `feat(apps): add reviewed install and management flow`。
 

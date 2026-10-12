@@ -475,6 +475,45 @@
 
 ---
 
+## Task 14 — 安装审批与管理界面(计划 §Task 14 `:200-210`)
+
+- **目标（计划 §Task 14 `:200-210`）：** 新增 Digger 的 `crates/desktop/src/apps/{mod,management,approval}.rs` 与 app-host 的 `trust.rs`、`tests/install_flow.rs`。(1) 列表/详情 + 本机目录/压缩包/URL 三种选择;计划生成失败 / 空列表 / 服务不可用各自可见。(2) 展示真实计划、来源、摘要、权限、强制等级;保留 LocalDir "整目录复制" 警示。(3) 人工确认**只接受当前这一份计划的身份**;重复点击防重;内容/来源变了要重新出计划。(4) LocalDir 可信**进程**应用经明确批准可装;Agent/URL 的 Untrusted 来源**只允许 static_web**;产品信任裁决**只在 Rust 适配层**。(5) 装完刷新列表;新应用用稳定 id;应用不绑定当前 Project。**验证:** fake 测试覆盖拒绝/取消/过期/重复批准;真实 static 应用从选来源到装完可见。
+- **规格依据:** §4 `:67-70`(依赖方向);§5.2 `:97-103`;§5.3(身份与失效);§5.4;§6.1 `:134`、`:138`(端口重置);§6.2 `:140-155`(能力矩阵);§6.3 `:157-163`(审批/来源策略);§6.4 `:165-172`(应用 WebView);§11 闸门。
+
+**关键设计裁决:**
+- **产品信任裁决只在 Rust 适配层**:`trust::policy_for(SourceChoice) -> SourcePolicy{provenance,trust}`(Dir/Archive → Local/Trusted;Url → ThirdParty/Untrusted)在组合根派发 `Effect::Plan` 时注入(`run_install_with_policy`),返回的计划再经 `trust::review(&InstallPlan) -> Review` 复核(不受信来源的进程型 runtime 一律 `Rejected`)。**GUI 不自己算信任级别**;服务端 `AppSource::Url` 无论调用方传什么都会重解析为 ThirdParty/Untrusted,本机来源保留调用方值——Digger 的 `trust.rs` 提供本机默认。
+- **`Effect::Plan` 的信任级别需要产品输入**:共享状态机的 `Effect::Plan(AppSource)` 只带来源,不带信任级别,故执行器新增 `run_install_with_policy(.., Option<SourcePolicy>)`;`run_install` 委托给它并传 `None`(默认 Local/Trusted)。
+- **审批身份 == 展示的计划**:批准走状态机自身逻辑——`ApproveClicked` 只在 `Reviewing` 生效,就地 `plan.clone().approve(..)` 后进 `Installing`,**不重算**;重复点击此时不在 `Reviewing`,不再吐 `Install`。(**注:** 来源切换在 `Planning` 窗口内状态机不清理,但 GUI 的来源单选行只在 `Flow::Idle` 渲染,`Planning` 期间被 "正在检查应用…" 取代,用户无法在窗口内改来源,故该窗口在 Digger 里不可达——身份端到端成立。)
+- **修复 Task 13 遗留的 `try_write().expect` panic 风险**:`HostService::install_service` 不再 `try_write().expect`(有并发读即 panic)。改为 **genesis 任务在 tokio 工作线程用 `api.write().await` 换后端**(窗口线程不能阻塞等锁),`install_service` 只记录 `Arc<AppService>` 供 shutdown,并在锁空闲时做等价的就地后备写入,`try_write` 失败即跳过(后端已是真服务)。新增测试 `the_start_service_task_installs_the_backend_before_announcing_ready` 钉住"`ServiceReady` 到达时共享后端已是真服务"的时序。
+- **应用面板启动延迟到首次打开**:`AppsState::new()` 不再在构造期 `start_service`(那会在单元测试里脱离 tokio 运行时 panic);改在首次 `Message::Opened`(永远在 iced 运行时内)触发,`ServiceReady` 到达后经 `service_ready()` 再喂一次 `Opened` 做真正的探测 + 拉列表。
+- **`Outcome` 回流用 `iced::Task::stream` 而非 `Subscription`**:接收端唯一、不该反复重建;`Task::stream` 只在 `boot` 挂一次。`Message` 需 `Clone + Debug`,故 `Outcome` 以 `Arc<Outcome>` 携带(自带手写 `Debug`),`ServiceReady`/`ServiceFailed` 不再经 `Message` 中转,直接在 `deliver` 内按 `Arc` 借用处理。
+- **原生选目录/压缩包走 `rfd::AsyncFileDialog`**:iced 0.14 无 winit 主线程钩子(Dozer 在 `window_events.rs` 拦截),故用 rfd 的 async API 在既有 AppKit run loop 内跑,经 `Task::perform` 挂到窗口。
+
+**实现(Digger 仓库):**
+- **`crates/app-host/src/trust.rs`(新):** `SourcePolicy{provenance,trust}` + `LOCAL_TRUSTED`/`THIRD_PARTY_UNTRUSTED`;`policy_for(SourceChoice)`;`Review{Allowed,Rejected(String)}` + `is_allowed()`;`PROCESS_RUNTIMES = ["node","python"]`;`review(&InstallPlan)`;`provenance_label`。模块文档声明产品信任裁决只在本适配层。5 单测。
+- **`crates/app-host/src/effects.rs`:** `run_install_with_policy(...)` 新增;`run_install` 委托并传 `None`;`Outcome::Install` 增 `plan: Option<Box<InstallPlan>>`;`PLAN_ACTION = u64::MAX - 6`;`pub enum InstallAction {Plan,Install,Stop,Rollback,Uninstall,Probe,Genesis}` + `from_key(RequestKey)`(单一来源:把私有 action-id 常量映射到变体,组合根不再抄 id)。2 单测(7 个完成动作往返 + `List`/未知 `Action` → `None`)。`start_service` 改为在工作线程换后端再回 `ServiceReady`。
+- **`crates/app-host/src/service.rs`:** `install_service` 去 panic(见上)。
+- **`crates/app-host/src/testing.rs`:** `FakeHost` 增 `on_plan`/`on_install`/`on_uninstall`/`on_probe`;`canned_for` 映射 `AppRequest::Plan/Install/Uninstall/ProbeRuntimes`;pub `plan(id,version,kind,trust,provenance)` 便捷构造(手写 JSON,含 `upgrading_from: null`、`source_info`);`serde_json` 提到 `[dependencies]`(库内 `testing` 模块供集成测试复用)。
+- **`crates/app-host/tests/install_flow.rs`(新):** 6 测试——本机进程应用到 `Reviewing` 且计划身份绑定;重复批准只装一次;取消不装;来源切换作废旧审批卡且迟到计划不复活;不受信来源的进程应用变流程内失败而非审批卡;计划请求失败在流程内呈现。
+- **`crates/app-host/tests/embedded.rs`:** +2——`start_service` 先装后端再宣告就绪;真实 static 应用从本机来源 `app_plan` → 批准 → `app_install` → `app_list` 可见(稳定 id)。
+- **`crates/desktop/src/apps/mod.rs`(新):** `Startup{Starting,Ready,Unavailable(String)}`;`Message{Opened,Install(InstallMessage),Outcome(Arc<Outcome>),SourcePicked(Option<PathBuf>)}`;`AppsState`(组合根:状态机 + 执行器 + 请求台账 + 回流通道 + 服务宿主);`update`/`step`/`dispatch`(PickSource/PickArchive → rfd 任务;`Plan` 注入 `trust::policy_for`)/`deliver`(按 `requests.accept(ticket)` 身份核验)/`install_outcome`(按 `InstallAction` 分支:Plan→`trust::review`→`PlanLoaded` 或拒绝失败,Install→`InstallDone`,Probe→`ProbesLoaded`)/`pick_task`(rfd async)/`take_reply_receiver`/`reply_stream`/失败翻译。
+- **`crates/desktop/src/apps/approval.rs`(新):** `review_view(plan, running)` 渲染 `plan_view` —— 升级 notices(金)、facts、来源块(`from_network` → "来自网络,不可信" + "只允许静态应用,运行在严格 CSP 下"、`SourceDisclosure.rows/warnings`)、`will_run`(LocalDir 整目录复制警示经此带出)、权限(升级标 `↑` 金、`enforcement` 右对齐)、按钮 取消(`FlowDismissed`)/批准并安装(`ApproveClicked`)。
+- **`crates/desktop/src/apps/management.rs`(新):** `view(state)` —— 顶部 `Unavailable` 原因(红)+ "修复后重开此面板会再试。" 且不出安装表单;`Starting` → "应用服务正在启动…";已装区(`Loading`/`Failed`/空/行=名称 + "版本 v · 稳定 id");安装表单(来源单选行、`InstallClicked`/`PickArchive`、URL 模式用 `byteui::form::input_text::view` + `url_error` 红 + "获取计划");`flow_view` 映射 Idle→表单、Picking→对话框提示、Planning→"正在检查应用…"、Installing→"正在安装…"、Failed→红 + "知道了"、Reviewing→`review_view`、运行时/确认分支 → Task 15 占位。`scrollable` + byteui 滚动条。
+- **`crates/desktop/src/product.rs`:** `Msg` 增 `Apps(crate::apps::Message)`;`ProductShell` 增 `apps`;`SelectPanel(Apps)` 触发 `Opened`;`view` 接 `apps_view`;`boot` 把 `reply_stream` 挂成 `Task::stream` 与窗口尺寸任务 `Task::batch`。
+- **`crates/desktop/{Cargo.toml,src/main.rs}`:** 依赖 `bytehost-apps`(server)/`bytehost-client`(in-process)/`bytehost-panel`/`digger-app-host`/`rfd`;`mod apps;`。
+
+**测试(增量):** app-host 单测 28(含 `trust` 5 + `InstallAction` 2,原 21);集成 `embedded.rs` 14(原 12);集成 `install_flow.rs` 6(新);desktop 单测 9。
+
+**验证(Digger):**
+- `cargo test -p digger-app-host`(28 + 14 + 6)、`cargo test -p digger-desktop`(9)、`cargo test --workspace` 全绿。
+- `cargo fmt --all -- --check` 干净;`cargo clippy --workspace --all-targets -- -D warnings` 干净;`scripts/check-host-deps.sh` ok(桌面依赖白名单含 `digger-desktop`/`digger-app-host`)。
+
+- **提交:** `a21b730` feat(apps): add reviewed install and management flow(D)。
+- **偏差:** `Effect::Plan` 不携带产品信任级别,逼出 `run_install_with_policy` 旁路(计划未预设);`install_service` 的 `try_write().expect` 改为工作线程 `write().await` 换后端 + 后备就地写入(修复 Task 13 遗留风险,计划未预设);回流用 `Task::stream` 而非 `Subscription`(接收端唯一,计划未预设);`Message` 携带 `Arc<Outcome>` 以同时满足 `Clone`/`Debug`。
+- **未决项 / 阻塞:** **iced UI 是 build + 源码级验证;真实窗口交互验收受 Task 08 同一 OS 权限限制,待人工确认**(与 Task 08 人工项合并)。运行时装卸 / 回滚确认 / 卸载确认为 Task 15 占位。
+
+---
+
 ## 提交记录
 | Task | 提交 | 仓库 | 说明 |
 |---|---|---|---|
@@ -502,6 +541,7 @@
 | 12 | `7daa064` | B | `feat(apps): observable shutdown result without breaking callers` |
 | 12 | `3ab1c34` | B | `fix(apps): release the service lock explicitly on drop` |
 | 13 | `2305775` | D | `feat(app-host): wire InProcess effects and subscriptions` |
+| 14 | `a21b730` | D | `feat(apps): add reviewed install and management flow` |
 | R3–R6 | `ba52c94` | B | `fix(core): harden Surface lifecycle, panel identity and request routing` |
 | R2 | `fc3a636` | B | `fix(desktop): make physical-slot replacement atomic and unregister occupant-checked` |
 | R7 | `2d924d9` | B | `fix(spike): SELFTEST must build the wry child and fail nonzero` |
