@@ -419,6 +419,39 @@
 
 ---
 
+## Task 13 — Digger app-host 适配与事件闭环(计划 §Task 13 `:188-198`)
+
+- **目标（计划 §Task 13 `:188-198`）：** 在 Digger 侧新增 `crates/app-host`(包名 `digger-app-host`),把 `bytehost-panel` 的状态机、`bytehost-client` 的后端 API 与 Digger 的产品语义接成闭环:a) fake `AppHostApi`;b) 泛型 effect 执行器,生产用 `InProcess`,启动服务异步不阻塞窗口;c) 复用 host/install/logs 状态,`Changed`/`Resync` 合并刷新、`Disconnected` 按共享退避重订阅;d) 列表/launch URL/日志结果带 scope/request 身份,卸载与面板关闭使 UI 结果失效而写操作仍由服务完成;e) 单一服务实例 + 取消令牌,退出先停新操作再 `await shutdown`。
+- **规格依据:** §4/§5.2(`:67-70`/`:97-103`);§5.3(身份与失效);§5.4;§6.1 `:134`("退出失败显示可操作错误,不静默遗留子进程")、`:138`(端口重置流程);§11 闸门。
+
+**关键设计裁决(编译期逼出,非计划预设):**
+- **`AppHostApi` 是 RPITIT(`impl Future` 返回),不是 dyn-safe** → 不能 `Arc<dyn AppHostApi>`。因此 `Executor`/`HostService` **全程泛型于 `A: AppHostApi`**:生产 `A = InProcess`,测试 `A = FakeHost`。后端句柄放 `Arc<tokio::sync::RwLock<A>>` 之后,使"启动占位 → 真正服务"就地替换(`*guard = new_value`)不改类型。
+- **`InProcess` 不是 `Clone`** → `install_service` 拿其内部 `Arc<AppService>` 经 `InProcess::new(service)` 重建等价后端。
+- **`AppKeyId`(Digger 的 `AppKey`)**:`bytehost_apps::id::AppId` 持有 `String`、非 `Copy`,而面板状态机要求 `K: AppKey + Copy`。故 `digger-app-host` 定义 `pub struct AppKeyId(u32)` + 进程级驻留表(`Mutex<OnceLock<Table>>`,`Box::leak` id 串,`HashMap<String,AppKeyId>` ↔ `Vec<&'static str>`),使 `AppKeyId` 为 `Copy + 'static`。注意:`slot.app_id()` 解析到 **trait** 方法返回 `&str`;要 `owned AppId` 用 `slot.into_app_id()`。
+
+**实现(Digger 仓库,新):**
+- **`Cargo.toml`:** 包 `digger-app-host`;依赖 `bytehost-apps`(features `["server"]`)、`bytehost-client`(features `["in-process"]`,蕴含 `bytehost-apps/server`)、`bytehost-panel`、`tokio`、`serde`;dev-dep `serde_json`。
+- **`src/lib.rs`:** crate 文档(Task 13、规格 §5.3/§6.1、依赖方向);模块接线(`effects`/`request`/`service`/`subscription`/`testing`);`AppKeyId` + `AppKey` impl + `into_app_id`;驻留表。
+- **`src/request.rs`(身份台账):** `ScopeId`/`PanelInstanceId`/`RequestTicket{scope,panel,generation,key,sequence}`/`RequestKey{List,LaunchUrl,Logs,Action}`(`latest_only()` 仅对同键的最新一次有效);`RequestTable::dispatch`/`accept`(一次性消费)/`invalidate_panel`/`invalidate_app`/`bump_generation`。**卸载 `invalidate_app` 只作废该应用的 UI 结果,写操作(如卸载本身)身份不受影响;面板关闭 `invalidate_panel` 作废该实例全部结果。** 7 单测。
+- **`src/subscription.rs`:** `change_to_message(AppChange) -> PanelMessage<AppKeyId>`(`Changed`/`Resync` → `PanelMessage::Changed`;`Disconnected` → `PanelMessage::SubscriptionLost`);`SUBSCRIBED` 常量。2 单测。
+- **`src/service.rs`:** `ShutdownOutcome{Reported,Failed,NeverStarted}`;`HostService<A>{api,service,cancelled}`;生产 `impl HostService<InProcess>` 的 `starting()`/`unavailable(reason)`/`install_service(Arc<InProcess>)`;泛型 `with_api`/`with_api_lock`/`api()`/`cancel_token()`/`is_shutting_down()`/`begin_shutdown()`/`await_shutdown()`;`CancelToken{Arc<AtomicBool>}`。4 单测。
+- **`src/testing.rs`:** `FakeHost`——可编程 `AppHostApi`(成功 / `Host` 带类别失败 / `Transport` 无类别失败;`SubscribeMode{Live,Disconnected,Unavailable}`;请求日志与计数);未预设调用**显式失败**(`Transport("意外应答: …")`)。8 单测。
+- **`src/effects.rs`:** 泛型 `Executor<A>{api,requests,sink,cancel}`;`Outcome`(`List`/`LaunchUrl`/`Action`/`Logs`/`Install`/`ServiceReady`/`ServiceFailed`,手写 `Debug`,不打印句柄/秘密);`ReplySink` trait;`run(scope,panel,generation,PanelEffect)` 处理 `FetchList`/`FetchLaunchUrl`/`StartApp`/`StopApp`/`FetchLogs`,UI-only 效果返回 `false` 交组合根;`run_install(...)` 处理 `Probe`/`List`/`Install`/`Stop`/`Rollback`/`Uninstall`/`FetchLogs`;**审批门仍由组合根把守**,执行器只发已批准的请求;`Executor<InProcess>::start_service` 异步建服务、回 `Outcome::ServiceReady`,不阻塞窗口。派发前核对取消令牌:退出已开始一律拒绝。
+
+**测试(增量):**
+- 单测 21:身份台账(7)、订阅映射(2)、宿主生命周期(4)、fake 后端(8)。
+- 集成 `tests/embedded.rs` 12:状态机 → 执行器 → fake 后端 → 回信 → 状态机完整回路;在途时 `Changed` 合并成一次补拉;`Disconnected` 退避到点重订阅;跨代迟到回包按身份丢弃;卸载作废该应用 UI 结果而写操作照旧、面板关闭作废该实例全部结果;`begin_shutdown` 拒绝新派发;安装流 `Probe` effect 派发并带回信身份;UI-only effect 留给组合根;推送变更转成状态机消息;**真实临时数据根嵌入 `InProcess`**(退出干净 + 空根列表可达)。
+
+**验证(Digger):**
+- `cargo test -p digger-app-host`:21 + 12 全绿。
+- `cargo test --workspace`:全绿;`cargo fmt --all -- --check` 干净;`cargo clippy --workspace --all-targets -- -D warnings` 干净;`scripts/check-host-deps.sh` ok。
+
+- **提交:** `2305775` feat(app-host): wire InProcess effects and subscriptions(D)。
+- **偏差:** `AppHostApi` 非 dyn-safe 与 `InProcess: !Clone` 逼出"全程泛型 + `Arc<RwLock<A>>` 就地替换"设计(计划未预设);`AppKeyId` 驻留表为满足 `Copy` 约束新增(计划未预设);`HostService::install_service` 用 `try_write().expect(..)`——启动占位读取窗口极短,列 Task 14 复核,当前测试全绿。crate 尚未接入 `digger-desktop` UI(计划归 Task 14)。
+- **未决项 / 阻塞:** 无。GUI 编排(接列表/审批/日志/退出呈现)由 Task 14 消费本 crate。
+
+---
+
 ## Review 修复 (2026-10-12, R1–R7)
 
 > 来源：`review-2026-10-12-tasks-01-08.md`（快照 Dozer `b8ae6bb3` / bytehost `f4639bb`）。七项均经真实代码复核为**有效缺陷**（非误报）。修复顺序 R5/R6 → R4 → R2 → R3 → R1 → R7。
@@ -468,6 +501,7 @@
 | 12 | `b332684` | B | `feat(apps): controlled gateway port reset management API` |
 | 12 | `7daa064` | B | `feat(apps): observable shutdown result without breaking callers` |
 | 12 | `3ab1c34` | B | `fix(apps): release the service lock explicitly on drop` |
+| 13 | `2305775` | D | `feat(app-host): wire InProcess effects and subscriptions` |
 | R3–R6 | `ba52c94` | B | `fix(core): harden Surface lifecycle, panel identity and request routing` |
 | R2 | `fc3a636` | B | `fix(desktop): make physical-slot replacement atomic and unregister occupant-checked` |
 | R7 | `2d924d9` | B | `fix(spike): SELFTEST must build the wry child and fail nonzero` |

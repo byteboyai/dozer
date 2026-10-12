@@ -270,3 +270,31 @@ Task 03 `gates.md` 闸门 3 登记的两处 `AppService` 缺口 + 现场核实�
 ### 11.5 提交切片
 
 `ccb32a8` 互斥 → `b332684` 管理接口 → `7daa064` 退出观测 → `3ab1c34` 锁释放修正(B)。
+
+## 12. Task 13 设计：Digger app-host 适配层（泛型边界与身份）
+
+### 12.1 决定 1：`AppHostApi` 非 dyn-safe → 全程泛型，不用 `dyn`
+
+`bytehost_client::AppHostApi` 用 RPITIT 返回 `impl Future`，**不是 dyn-compatible**，不能 `Arc<dyn AppHostApi>`。因此 `digger-app-host` 的 `Executor<A: AppHostApi>` / `HostService<A>` 全程泛型：生产 `A = InProcess`（Digger 进程内嵌入的真实服务），测试 `A = FakeHost`。后端句柄放 `Arc<tokio::sync::RwLock<A>>` 之后，"启动占位 → 真正服务"经 `*guard = new_value` 就地替换而不改类型；`InProcess` 非 `Clone`，替换时用其内部 `Arc<AppService>` 重建。
+
+### 12.2 决定 2：`AppKeyId`（`Copy` 的稳定面板键）
+
+面板状态机要求 `K: AppKey + Copy`；`bytehost_apps::id::AppId` 持 `String`、非 `Copy`。`digger-app-host` 定义 `AppKeyId(u32)` + 进程级驻留表（`Box::leak` id 串），实现 `bytehost_panel::key::AppKey`，并带 `into_app_id()`。**注意 `slot.app_id()` 解析到 trait 方法返回 `&str`；需 owned `AppId` 时用 `slot.into_app_id()`。**
+
+### 12.3 决定 3：身份台账在 Digger 侧，不在 bytehost
+
+`RequestTable`（`ScopeId`/`PanelInstanceId`/`generation`/`sequence`）落在 `digger-app-host`，与 Dozer 的 `bytehost_core::request::run_scoped`（R3）同构但独立——scope/panel 身份是产品编排概念。**卸载 `invalidate_app` 只作废该应用的 UI 结果；写操作（卸载本身）身份不受影响，仍由服务完成。面板关闭 `invalidate_panel` 作废该实例全部结果。**
+
+### 12.4 决定 4：执行器只发"已批准"请求，审批门留给组合根
+
+`Executor::run` / `run_install` 只把 `bytehost-panel` 状态机吐出的 effect 翻成对 `AppHostApi` 的异步调用；`Install{approved,source}` 里的 `approved` 由安装审批状态机（组合根，Task 14）把守。执行器不碰状态机、不替产品做信任决策。
+
+### 12.5 提交切片
+
+`2305775`(D) 单提交：crate 骨架 + fake + 泛型执行器 + 身份台账 + 订阅映射 + 生命周期 + 单测/集成测试。
+
+### 12.6 实施结果（2026-10-12）
+
+- `cargo test -p digger-app-host`：21 单测 + 12 集成全绿（含真实临时数据根嵌入 `InProcess`）。
+- `cargo test --workspace` / `cargo fmt --all -- --check` / `cargo clippy --workspace --all-targets -- -D warnings` / `scripts/check-host-deps.sh` 全绿。
+- 待 Task 14 接入 `digger-desktop` UI（本 crate 尚未被 `desktop` 依赖）。

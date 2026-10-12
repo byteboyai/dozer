@@ -189,11 +189,11 @@
 
 **新增：**`D/crates/app-host/{Cargo.toml,src/lib.rs,src/service.rs,src/effects.rs,src/subscription.rs,src/testing.rs}`，包名 `digger-app-host`。
 
-- [ ] 写 fake AppHostApi：成功、Host/Transport 失败、断订阅、Resync 与迟到回包；未预设调用显式失败。
-- [ ] 实现泛型 effect 执行器，生产使用 InProcess；启动应用服务异步执行，不阻塞窗口。
-- [ ] 复用 bytehost-panel host/install/logs 状态；Changed/Resync 合并刷新，Disconnected 按共享退避规则重订阅与轮询。
-- [ ] 列表/launch URL/日志结果带 scope/request 身份；卸载和面板关闭使 UI 结果失效，写操作继续由服务完成。
-- [ ] 管理单一服务实例及取消令牌；退出先停止新操作、撤 Surface、停止订阅，再 await shutdown。
+- [x] 写 fake AppHostApi：成功、Host/Transport 失败、断订阅、Resync 与迟到回包；未预设调用显式失败。
+- [x] 实现泛型 effect 执行器，生产使用 InProcess；启动应用服务异步执行，不阻塞窗口。
+- [x] 复用 bytehost-panel host/install/logs 状态；Changed/Resync 合并刷新，Disconnected 按共享退避规则重订阅与轮询。
+- [x] 列表/launch URL/日志结果带 scope/request 身份；卸载和面板关闭使 UI 结果失效，写操作继续由服务完成。
+- [x] 管理单一服务实例及取消令牌；退出先停止新操作、撤 Surface、停止订阅，再 await shutdown。
 
 **验证：**`cargo test -p digger-app-host`；真实临时数据根嵌入测试。提交 `feat(app-host): wire InProcess effects and subscriptions`。
 
