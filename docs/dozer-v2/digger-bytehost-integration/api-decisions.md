@@ -332,3 +332,100 @@ Task 03 `gates.md` 闸门 3 登记的两处 `AppService` 缺口 + 现场核实�
 - `cargo fmt --all -- --check` / `cargo clippy --workspace --all-targets -- -D warnings` / `scripts/check-host-deps.sh` 全绿。
 - **真实窗口交互验收与 Task 08 人工项合并**（受 OS 权限限制）；运行时/日志/回滚/卸载 UI 为 Task 15 占位。
 
+## 14. Task 20 设计：Digger 真实任务用量回路（业务 crate + 真实执行器钩子）
+
+### 14.1 决定 1：用量归属"Digger 运行时",不进 Project 内容模型,也不进 Host
+
+任务用量属于 **Digger 运行时架构**（谁在跑、跑了多久、触及什么），不是某个 Project 的内容，
+也不该藏在 bytehost 宿主里。落地为一个新的业务 crate **`digger-store`**（前缀匹配
+`^digger-(domain|store|persistence|runtime|writing|editor|project|agent)(-.*)?$`，属业务 crate，
+**不得依赖 `bytehost-*`**——由 `scripts/check-host-deps.sh` 门禁强制）。
+
+- 业务层（`digger-store`）：`UsageLedger`（落盘账本）+ `LedgerUsageService`（`UsageService` 实现）+
+  `TaskRunner`/`RunningTasks`（真实任务运行的生产者）。
+- 宿主适配层（`digger/crates/desktop/src/adapters/usage.rs`）：把共享面板库
+  `dozer-panel-usage` 接到 Digger 的原生壳，注入**真实** `UsageService`。
+- 组合根（`digger/crates/desktop/src/product.rs`）：构造唯一共享账本，注入生产者与面板。
+
+### 14.2 决定 2：真实任务运行 == 一次经真实 `Executor` 的用户发起应用操作
+
+用户裁决（第 4 轮）：真实生产者身份 = **一次在真实 `Executor` 里派发的应用操作**
+（安装 / 启动(安装后启动) / 停止 / 卸载 / 回滚 / 运行时安装 / 运行时卸载）。
+记录的是**真实测量的**墙上时钟；**token 如实为 0**（Digger 当前无 agent 运行时，
+不伪造数字），`turns`/`tool_calls` 同理；`files_touched` 一期无从得知（操作由 app-host
+执行、不回传文件清单），留空不伪造。事件**只在真实用户操作**上触发——只读的
+出计划 / 探针 / genesis / 列表**不计**。
+
+- 事件源：`digger-app-host` 的 `Executor::run_install_traced(...) -> Option<RequestTicket>`
+  （新增；`run_install`/`run_install_with_policy` 变为它的薄封装，签名不变）。
+- 触发点：`AppsState::dispatch` 在用户动作分支拿到 `Some(ticket)` 后
+  `begin_usage_for(action, ticket.sequence, title)` 登记在途运行；
+  `AppsState::deliver` 的 `Outcome::Install` 分支在 `requests.accept(ticket)` 后
+  `settle_usage_for(ticket.sequence)` 结算（写账本）。
+- 在途键：**`RequestTicket.sequence`**（每次派发唯一，同一动作的并发实例不撞车）。
+
+### 14.3 决定 3：`UsageService` 由业务 crate 实现,宿主适配层注入
+
+`digger-store::LedgerUsageService` 实现 `dozer_services::UsageService`
+（`usage_summary(cwd, since_ts) -> Result<UsageRows, ServiceError>`）；组合根构造后以
+`Arc<dyn UsageService>` 注入 `UsagePanel`，面板不感知实现。
+`cwd` 精确匹配记录里的 `project_path` 做 **scope 隔离**（两个 scope 互不相串）。
+Digger 一期无 Project：scope 路径取**产品数据根**（`paths::config_dir()`），
+生产者与面板查询用同一路径。
+
+### 14.4 决定 4：账本形状 / 单位 / 时区 / 幂等键 / 错误
+
+- **文件**：`<config>/digger/usage_ledger.json`（`paths::usage_ledger_path()`）。
+  磁盘形状 `{ "runs": { "<run_id>": { ... } } }`。
+- **幂等键**：`run_id`。产品内约定 `digger:<action-run-label>:<ticket.sequence>`
+  （如 `digger:uninstall:11`）。同键**upsert**，重复事件不产生第二条。
+- **单位 / 时区**：`started_ts_ms` / `finished_ts_ms` 为 **Unix 毫秒（UTC）**；
+  `since_ts` 同为 Unix ms，过滤 `finished_ts_ms >= since_ts`（与 dozerd 语义对齐）。
+- **真实测量**：起止时刻由 `Clock` 提供（生产 `SystemClock`，测试注入确定性时钟），
+  记录真实时长而非占位。
+- **落盘**：原子写（临时文件 + rename），避免半截 JSON。
+- **错误与恢复**：
+  - `load`：文件不存在 → 空账本（首次运行）；文件在但解析不了 → `Corrupt`；
+    I/O 失败 → `Io`。
+  - `record`：落盘失败返回错误，但内存已更新——调用方提示"可能没落盘，重启后不保证"。
+  - `usage_summary`：读失败（锁被污染 / 损坏）→ `ServiceErrorKind::Unavailable`
+    （**不是**空结果）；确实为空 → `Ok(空)`。**"读失败"与"确实没用量"严格区分**
+    （闸门 2：不得恒空假实现）。
+  - 组合根启动时若账本损坏：不 panic，退回落空的临时账本并在 `boot_note` 提示，
+    不静默把损坏当"没有记录"。
+
+### 14.5 决定 5：面板后台结果回流用 `Task::stream`（与 apps 同型）
+
+库的 `on_activate` 经 `emit` 把 `Loaded`/`LoadFailed` 投回。Digger 用与
+`AppsState` 相同的机制：`UsagePanel` 持一条 `mpsc::UnboundedChannel`，`emit` 把库
+消息投进发送端；组合根在 `boot()` 用 `take_receiver()` 取走接收端，接成
+`iced::Task::stream(receiver_stream(rx).map(Msg::Usage))`，持续到进程结束。
+运行时句柄在 `boot()`（iced 运行时内）用 `tokio::runtime::Handle::current()` 补挂；
+`ProductShell::new()` 不要求句柄（可在无运行时处被测试构造）。
+
+### 14.6 决定 6：面板注册与视图
+
+`PanelCatalog` 注册第三个面板 `digger.usage`（`usage_panel_id()`）；`ActivePanel::Usage`
+分支激活面板并渲染 `UsagePanel::view()`（原生 `content_pane`：面板头 + 加载态）。
+四态图表内容在 `dozer://usage-content` webview 中，Digger 一期尚未接 webview Surface，
+只渲染原生壳（与库 `NoGitStats` 同样的"显式最小"口径，不伪造）。agent 一律用公共
+`Bot` 图标 + 主题 `dim` 色（无品牌资产，显式回落）。outbox 提示一期落地到 stderr
+（Digger 尚无 Toast）。
+
+### 14.7 依赖消费与门禁
+
+- `digger-store` 依赖 `dozer-model` / `dozer-services`（共享类型契约）与
+  `dozer-panel-usage`（面板库）；dozer 以 **bare git（无 `rev`）** + `.cargo/config.toml`
+  `[patch."https://github.com/byteboyai/dozer"]` 本地联调，正式 pin 见 Task 22。
+- `digger-store` **不依赖 `bytehost-*`**，由 `check-host-deps.sh` 强制。
+- 独立 integration 测试（`digger-desktop` 内 `apps::tests`）：真实事件 → 账本 →
+  经**真实** `LedgerUsageService` 可查、重启后仍可查、重复事件不双记、两 scope 不串、
+  读失败与确实为空区分。
+
+### 14.8 提交切片
+
+1. `feat(store): digger-store 业务 crate——任务用量账本/服务/生产者`
+2. `feat(app-host): Executor::run_install_traced 暴露请求 ticket`
+3. `feat(usage): connect Digger task usage to shared panel`（适配层 + 组合根接线 + 测试 + §14）
+
+

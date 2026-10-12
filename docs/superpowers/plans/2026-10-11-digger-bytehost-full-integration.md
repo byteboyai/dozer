@@ -275,13 +275,15 @@
 
 **文件：**Task 03 指定的 Digger 用量账本/生产者模块；`D/crates/desktop/src/adapters/usage.rs`；独立集成测试。
 
-- [ ] 若生产者/账本已有，接查询；若不存在，先补最小真实任务完成事件→幂等持久记录→区间查询链路，按 Digger runtime 架构归属，不写进 Project 内容模型或 Host。
-- [ ] 为该链路在 `api-decisions.md` 写清文件、事件来源、去重键、单位/时区、错误与恢复；若需要新业务 ADR，先落决定再实施存储。
-- [ ] 实现 UsageService 与 Task 19 其他必要数据接口；不存在的能力明确呈现，不以假数或恒空掩盖。
-- [ ] 真任务结束后生成可查记录，重启后仍在；重复事件不翻倍；两个 scope 不串用量，读取失败与成功空集合区分。
-- [ ] 将同一个 Usage 库注册进 Digger，用真实服务展示；开发 fake 仅在测试/演示配置启用。
+- [x] 若生产者/账本已有，接查询；若不存在，先补最小真实任务完成事件→幂等持久记录→区间查询链路，按 Digger runtime 架构归属，不写进 Project 内容模型或 Host。（新业务 crate `digger-store`：`UsageLedger`/`LedgerUsageService`/`TaskRunner`+`RunningTasks`；`digger/crates/store/src/{ledger,service,runner}.rs`）
+- [x] 为该链路在 `api-decisions.md` 写清文件、事件来源、去重键、单位/时区、错误与恢复；若需要新业务 ADR，先落决定再实施存储。（`api-decisions.md` §14）
+- [x] 实现 UsageService 与 Task 19 其他必要数据接口；不存在的能力明确呈现，不以假数或恒空掩盖。（`LedgerUsageService` 实现 `UsageService`；读失败→`Unavailable`、确实为空→`Ok(空)`；无 agent 运行时→token 如实 0，不伪造）
+- [x] 真任务结束后生成可查记录，重启后仍在；重复事件不翻倍；两个 scope 不串用量，读取失败与成功空集合区分。（`apps::tests` 五个集成测试 + `digger-store` 15 单测）
+- [x] 将同一个 Usage 库注册进 Digger，用真实服务展示；开发 fake 仅在测试/演示配置启用。（`digger.usage` 面板 + `adapters/usage.rs`；注入真实 `LedgerUsageService`，无 fake）
 
 **验证：**A17 必须从真实生产事件驱动；只插测试记录可证明查询，但不能完成 A17。若任务运行/账本尚不具备，记录具体缺口，S6/S7 保持未完成。提交 `feat(usage): connect Digger task usage to shared panel`。
+
+**实施结果（2026-10-12）：**A17 由**真实用户发起的应用操作**经真实 `Executor::run_install_traced` 驱动（非测试插入）；token 如实为 0、代表应用操作而非 agent 会话——无真实 token 运行，**S6/S7 保持未完成**（计划 `:284`）。`cargo test -p digger-desktop`（41）/-p digger-store`（15）全绿；`check-host-deps.sh` EXIT=0；`cargo clippy --all-targets` 无警告；`cargo build --workspace` 全绿。dozer 依赖仍走本地 uncommitted patch，正式 pin 见 Task 22。
 
 ### Task 21：迁移剩余通用 Host 路径并删除兼容桥
 
