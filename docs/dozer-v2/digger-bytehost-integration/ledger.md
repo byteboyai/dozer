@@ -821,6 +821,22 @@
 
 
 
+### 切片 7 — webview 几何函数命名中立化(C7,DONE)
+
+- **动机 / 桥:** **C7**(`acceptance.md:45`):"几何与文件预览业务命名混同"——要求几何函数用宿主通用名、无 "preview" 命名残留。
+- **核对 / 口径:** 依 Task 08 既有裁决(ledger `:286`),`webview_geometry.rs` 的几何计算**留在产品侧**(它吃 `ShellState`,搬进宿主会动像素行为、收益低,bytehost 只提供 shell 级通用 `Placement`)。故 C7 的可执行部分是**纯改名**——把"文件预览"业务词换成中立的"内容列/列表列"口径。
+- **改动(`0f9ecc44`):** 三处公开函数改名,调用点/文档/测试名同步:
+  - `preview_content_bounds_for` → `content_pane_bounds_for`
+  - `is_in_preview_column` → `is_in_content_column`
+  - `left_files_tree_bounds_for` → `left_list_pane_bounds_for`
+  连带 `pair_content_pane_bounds_for` 等派生名与约 30 处测试名。触及 11 个文件、111/111 行对称改(零行为变化)。产品 API 名 `App::preview_desired`/`ws.preview` 等**保留**(它们是真实的预览业务入口,不是几何命名)。
+- **门禁(`6ecadf22`):** 新增 `R-PREVIEW-NAMING`——扫 `webview_geometry.rs` 里 `preview_content_bounds*`/`is_in_preview_column`/`left_files_tree_bounds_for` 三个旧名残留,目标恒为 0(不进基线);已单测证明"旧名重现即命中、新名不命中"。
+- **验证:** dozer `cargo build`/`--tests` 绿、`cargo clippy -p dozer-app --all-targets` 对 `webview_geometry.rs` 零告警、`cargo test -p dozer-app --bin dozer` **1971 passed / 1 failed**(唯一失败仍是既有用户 WIP 行号漂移)、`check-log-scope.sh` ok、`check_panel_boundary.py` ok(213/5,新规则贡献 0)。
+- **偏差 / 发现:** C7 的真正"移入宿主"被 Task 08 明确否决,故本片只关"命名中立"这半边;若日后要把 `ShellState` 相关几何上收宿主,需先设计 shell 级几何接缝(C10 同域)。
+- **未决项 / 阻塞:** 无。C7 收口。**C10 待续。**
+
+
+
 ### 设计:C8 + C11 + C12 共同的"PanelId/Scope 键控"缺口(DONE — 设计待裁决)
 
 **背景。** 三个剩余桥(C8 请求身份路由、C11 rail/pane 容器、C12 焦点路由)共享同一根因:**Host 已有稳定中性身份(`bytehost_core::id::{PanelId,ScopeId,PanelInstanceId}`、`Layout/Rail{items:Vec<PanelId>}`、`PanelCatalog`),但产品从未把身份线程到面板运行时**。因此每处都退化成以产品 `PanelKind`/`project_id` 为键。核对结论:
@@ -839,7 +855,7 @@
 
 **为何一次设计而非三片:** C8 的"面板按 scope 路由"落地物就是 C11/C12 所需的"实例→区域/焦点"注册表;分三次会各造一套键控。**风险/未决:** ① home-pane `RailButton` 变体是否进通用控件;② `Side`/`maximized` 是否移入 `bytehost-core`;③ `RightPairSplit`(Agent/Conversations/Usage 轮转,`layout.rs:779`)无通用等价,留产品;④ 真窗像素回归受 Task 08 权限阻塞,只能靠现有几何单测(A4 部分)。**跨仓:** 均需 bytehost 侧新增(按 tag 发布),本地用 uncommitted patch 联调;正式 pin 归 Task 22。
 
-**状态:** 侦察与设计成稿;用户已裁决按此方向实现,建议顺序 **(1)+(2) 关 C8 → (3) 关 C12 → (4) 关 C11**。move (1)+(2) 的 C8 部分已成切片 3(`300c7dab`,见上);move (3) 的 C12 已成切片 4(`c80d443` + `fa9f37a2`,见上);move (4) 的 C11 已成切片 5(`3dad53e` + `b50b5ca0`,见上)。至此设计 move 1–4 全部落地;C9 已成切片 6(`17c0736` + `5669776c`,见上)。任一实现片需独立提交+回归。
+**状态:** 侦察与设计成稿;用户已裁决按此方向实现,建议顺序 **(1)+(2) 关 C8 → (3) 关 C12 → (4) 关 C11**。move (1)+(2) 的 C8 部分已成切片 3(`300c7dab`,见上);move (3) 的 C12 已成切片 4(`c80d443` + `fa9f37a2`,见上);move (4) 的 C11 已成切片 5(`3dad53e` + `b50b5ca0`,见上)。至此设计 move 1–4 全部落地;C9 已成切片 6(`17c0736` + `5669776c`,见上);C7 已成切片 7(`0f9ecc44` + `6ecadf22`,见上)但仅关"命名中立"(几何上收宿主经 Task 08 裁决不做)。任一实现片需独立提交+回归。
 
 
 ## 提交记录
@@ -903,3 +919,5 @@
 | 21 | `b50b5ca0` | Z | `refactor(host): route pane split/collapse and rail lookup onto shared PanelId container (C11)` |
 | 21 | `17c0736` | B | `feat(desktop): add product-neutral HoverSlot vocabulary` |
 | 21 | `5669776c` | Z | `refactor(host): adopt shared HoverSlot vocabulary (C9)` |
+| 21 | `0f9ecc44` | Z | `refactor(geometry): rename webview geometry helpers to neutral host-generic names (C7)` |
+| 21 | `6ecadf22` | Z | `chore(audit): add R-PREVIEW-NAMING gate for webview geometry naming (C7)` |
