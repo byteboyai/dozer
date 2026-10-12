@@ -724,3 +724,4 @@
 | R1 | `870817b6` | Z | `fix(usage): open a new Surface generation on same-frame slot replacement` |
 | 19 | `d2fd25cc` | Z | `feat(panel-usage): extract shared Usage panel library (Task 19 stage 1)` |
 | 19 | `4f2ce8be` | Z | `refactor(panel-usage): move usage-content bundle into shared crate (Task 19 stage 2)` |
+| 19 | `df0f0e59` | Z | `refactor(panel-usage): wire Dozer onto shared Usage panel library (Task 19 stage 3)` |
