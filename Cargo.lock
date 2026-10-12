@@ -843,6 +843,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bytehost-desktop"
+version = "0.1.0"
+dependencies = [
+ "bytehost-core",
+ "iced",
+ "tokio",
+ "wry",
+]
+
+[[package]]
 name = "bytehost-panel"
 version = "0.1.0"
 source = "git+https://github.com/byteboyai/bytehost?tag=v0.1.1#6fdca5dcfad12472244ef05a7550c6060d3a0342"
@@ -1955,6 +1965,7 @@ dependencies = [
  "bytehost-apps",
  "bytehost-client",
  "bytehost-core",
+ "bytehost-desktop",
  "bytehost-panel",
  "bytehost-webview",
  "byteui",
@@ -3590,6 +3601,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f31827a206f56af32e590ba56d5d2d085f558508192593743f16b2306495269f"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "iced"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "000e01026c93ba643f8357a3db3ada0e6555265a377f6f9291c472f6dd701fb3"
+dependencies = [
+ "iced_core",
+ "iced_debug",
+ "iced_futures",
+ "iced_renderer",
+ "iced_runtime",
+ "iced_widget",
+ "iced_winit",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

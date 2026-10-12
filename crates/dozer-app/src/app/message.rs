@@ -618,10 +618,14 @@ pub enum Message {
         crate::preview::WebviewEnvelope<crate::preview::EditorEvent>,
     ),
     /// 用量面板内容侧 Preact webview 发回的已解析事件(目前只有 `ready`)。
-    /// 不带 binding——固定单槽、不按项目分,没有 tab/document 身份需要校验
-    /// (同 `usage::WebviewPushState` 不按项目分的理由一致),直接携带已解析
-    /// 事件。
-    UsageContentWebviewEvent(crate::extensions::usage::UsageWebviewEvent),
+    /// 第二字段是 webview 创建时登记的 Surface 身份(instance/slot/generation),
+    /// `App::update` 经共享宿主的路由层校验归属——旧代数/未知来源一律丢弃
+    /// (见 `extensions::usage::UsageSurface`)。不按项目分、无 tab/document
+    /// 身份需要携带。
+    UsageContentWebviewEvent(
+        crate::extensions::usage::UsageWebviewEvent,
+        Option<bytehost_core::SurfaceId>,
+    ),
     /// 代码健康度内容侧 webview 发回的已解析事件(ready/扫描/跳转/交给 Agent/失败)。
     /// 不带 binding——固定单槽、不按项目分,同 `UsageContentWebviewEvent`。
     CodeHealthContentWebviewEvent(crate::extensions::codehealth::CodeHealthWebviewEvent),

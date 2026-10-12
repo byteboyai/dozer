@@ -43,6 +43,12 @@ pub struct WebviewSpec {
     /// 调用方,由 `apply_preview_pool_outcome` 世代校验后推进到 `CreatingHost`;
     /// 仅 host 类(editor/JSON)且在途加载时为 `Some`。
     pub loading_generation: Option<u64>,
+    /// 该 webview 归属的共享宿主 Surface 身份(instance/slot/generation)。
+    ///
+    /// 走 `bytehost-desktop` Surface 管理的固定单槽面板(目前仅 Usage)在这里
+    /// 带上身份,IPC 回传时据此校验归属;旧代数的在途事件被路由层拒绝。
+    /// 其余 webview 为 `None`(沿用各自的 binding/URL 归属机制)。
+    pub surface: Option<bytehost_core::SurfaceId>,
     /// 「创建但尚未就绪」的 Rendered 宿主(Flyfish/隔离 HTML)用**离屏停放**
     /// 代替 `set_visible(false)`。
     ///

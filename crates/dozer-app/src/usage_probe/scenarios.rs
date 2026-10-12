@@ -43,6 +43,8 @@ fn s1_activate_loads_rows_and_pushes_one_payload() {
     let dozerd = FakeDozerd::start(&rt, two_agent_rows());
     let mut host = ProbeHost::new(PROJECT);
     host.surface.attach();
+    // 原生实例进池先于一帧 tick(宿主每帧 reconcile → 建 webview → 之后才收 ready)。
+    host.tick();
     host.webview_ready();
 
     let rx = host.activate(&rt, &dozerd, Some(repo.path().to_path_buf()));
@@ -95,6 +97,7 @@ fn s2_agent_filter_changes_payload_once() {
     let dozerd = FakeDozerd::start(&rt, two_agent_rows());
     let mut host = ProbeHost::new(PROJECT);
     host.surface.attach();
+    host.tick();
     host.webview_ready();
     let rx = host.activate(&rt, &dozerd, Some(repo.path().to_path_buf()));
     host.deliver(rx.recv_timeout(TIMEOUT).unwrap());
@@ -133,6 +136,7 @@ fn s4a_service_failure_is_reported_not_swallowed() {
         let fake = FakeUsage::failing(kind, "boom");
         let mut host = ProbeHost::new(PROJECT);
         host.surface.attach();
+        host.tick();
         host.webview_ready();
         let rx = host.activate_with(
             &rt,
@@ -173,12 +177,14 @@ fn s5_webview_rebuild_resends_the_same_content() {
     let dozerd = FakeDozerd::start(&rt, two_agent_rows());
     let mut host = ProbeHost::new(PROJECT);
     host.surface.attach();
+    host.tick();
     host.webview_ready();
     let rx = host.activate(&rt, &dozerd, Some(repo.path().to_path_buf()));
     host.deliver(rx.recv_timeout(TIMEOUT).unwrap());
     host.tick();
     assert_eq!(host.surface.count(), 1);
 
+    // 离池 → Destroyed 并递增代数;重新进池 → 新实例,Ready 前不推。
     host.surface.detach();
     host.tick();
     host.surface.attach();
@@ -190,7 +196,7 @@ fn s5_webview_rebuild_resends_the_same_content() {
     assert_eq!(
         host.surface.kinds(),
         vec!["all_agents".to_string(), "all_agents".to_string()],
-        "Ready 清空 last_sent,强制重发当前内容"
+        "新实例 Ready 握手后强制重发当前内容"
     );
 }
 

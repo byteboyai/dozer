@@ -495,6 +495,10 @@ pub(crate) fn sync_webview_pool(
                 let nav_proxy = proxy.clone();
                 let webview_id = spec.id;
                 let editor_binding = spec.editor_binding.clone();
+                // 该 webview 归属的共享宿主 Surface 身份(固定单槽面板,目前仅
+                // Usage)。IPC 回传时带上它,由 `App::update` 经 Surface 路由层
+                // 校验归属——旧代数的在途事件被拒。
+                let surface = spec.surface;
                 let is_json_host = crate::preview::is_json_editor_url(&spec.url);
                 let is_tabular_host = crate::preview::is_tabular_url(&spec.url);
                 // T9:Flyfish host 的绑定从 URL 查询串解析(proj/panel/tab/doc),
@@ -708,11 +712,13 @@ pub(crate) fn sync_webview_pool(
                                     // usage-content 不是 CodeMirror/JSON/Flyfish
                                     // 家族,不复用那三者任何一个 binding,直接按固定
                                     // webview id 判断(单槽面板,没有 tab/document 身份
-                                    // 需要携带)。
+                                    // 需要携带)。归属由共享宿主 Surface 显式校验:
+                                    // 带上创建时登记的身份,`App::update` 经路由层
+                                    // 拒绝旧代数/未知来源。
                                     match crate::extensions::usage::parse_usage_event(body) {
                                         Ok(event) => {
                                             let _ = ipc_proxy.send_event(
-                                                Message::UsageContentWebviewEvent(event),
+                                                Message::UsageContentWebviewEvent(event, surface),
                                             );
                                         }
                                         Err(error) => {

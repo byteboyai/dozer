@@ -456,9 +456,9 @@ pub struct App {
     /// `extensions::git_log`。`App` 级共享、不按项目分(现状,纯重构不改,
     /// 见 `sync_git_log_to_active_project`)。
     pub(crate) git_log: git_log::State,
-    /// 用量面板内容侧 Preact webview 的推送判定状态(固定单槽、不按项目分,
-    /// 见 `extensions::usage::WebviewPushState`)。
-    pub(crate) usage_webview: crate::extensions::usage::WebviewPushState,
+    /// 用量面板内容侧 Preact webview 的 Surface(固定单槽、不按项目分,
+    /// 统一管理生命周期/路由/推送,见 `extensions::usage::UsageSurface`)。
+    pub(crate) usage_surface: crate::extensions::usage::UsageSurface,
     /// 代码健康度内容侧 webview 推送状态(App 级,固定单槽)。
     pub(crate) codehealth_webview: crate::extensions::codehealth::WebviewPushState,
     /// Todo 内容区 webview 推送状态(App 级,固定单槽)。
@@ -857,7 +857,7 @@ impl App {
             home_right_view: homespace::HomeRightView::default(),
             home_browser: browser::State::with_initial_url("https://byteboy.ai"),
             git_log: git_log::State::default(),
-            usage_webview: crate::extensions::usage::WebviewPushState::default(),
+            usage_surface: crate::extensions::usage::UsageSurface::new(),
             codehealth_webview: crate::extensions::codehealth::WebviewPushState::default(),
             todo_webview: crate::extensions::todo::WebviewPushState::default(),
             group_chat_webview: crate::extensions::group_chat::WebviewPushState::default(),
@@ -1244,26 +1244,23 @@ impl App {
         available_webview_ids: &std::collections::HashSet<usize>,
     ) -> Vec<(usize, String)> {
         let webview_id = USAGE_CONTENT_ID_OFFSET;
-        if !available_webview_ids.contains(&webview_id) {
-            // webview 尚未进池/已被销毁:降级 ready,下次真正 ready 事件到达
-            // 前不再尝试推送(同 `pending_diff_push` 系列先例的"重试不丢内容"
-            // 语义,只是这里改用主动降级而不是等待外部信号)。
-            self.usage_webview.set_ready(false);
-            return Vec::new();
-        }
+        // 原生实例是否在池中 → 驱动 Surface 生命周期(进池:Created/新实例;
+        // 离池:Destroyed 并递增代数,旧实例在途 IPC 从此被路由层判过期)。
+        self.usage_surface
+            .observe_instance(available_webview_ids.contains(&webview_id));
         let Some(ws) = self.active_workspace() else {
             return Vec::new();
         };
         if ws.usage.loading() {
+            // 统计中(math_curve 动画)不推——原生 iced 继续播动画。
             return Vec::new();
         }
         let desired = crate::extensions::usage::current_view_payload(&ws.usage);
-        let Some(payload) = self.usage_webview.pending_push(&desired) else {
-            return Vec::new();
-        };
-        let envelope = crate::extensions::usage::encode_usage_push(payload.clone());
-        self.usage_webview.mark_sent(payload);
-        vec![(webview_id, crate::preview::dispatch_script(&envelope))]
+        self.usage_surface.set_desired(desired);
+        match self.usage_surface.take_pending_script() {
+            Some(pair) => vec![pair],
+            None => Vec::new(),
+        }
     }
 
     /// 代码健康度内容侧待下发推送。声明式:每帧比较"当前该显示什么"
@@ -3763,6 +3760,7 @@ impl App {
                             // Git Log diff 是固定单槽 webview、不走 tab 的
                             // `Reserving`/`CreatingHost` 加载阶段,故无世代。
                             loading_generation: None,
+                            surface: None,
                             // 可见性只由 `app_modal_open` 决定(浮层遮挡时真隐藏),
                             // 无「隐藏预创建」语义,不需要离屏停放。
                             park_offscreen: false,
@@ -3797,6 +3795,9 @@ impl App {
                         editor_binding: None,
                         reserve: None,
                         loading_generation: None,
+                        // 归属由共享宿主 Surface 显式校验(instance/slot/generation),
+                        // 不带 URL/binding 猜测。
+                        surface: Some(self.usage_surface.id()),
                         // 用量内容 webview 无隐藏预创建,不涉及离屏停放。
                         park_offscreen: false,
                     };
@@ -3827,6 +3828,7 @@ impl App {
                         editor_binding: None,
                         reserve: None,
                         loading_generation: None,
+                        surface: None,
                         park_offscreen: false,
                     };
                     out.push((spec, bounds));
@@ -3857,6 +3859,7 @@ impl App {
                         editor_binding: None,
                         reserve: None,
                         loading_generation: None,
+                        surface: None,
                         park_offscreen: false,
                     };
                     out.push((spec, bounds));
@@ -3905,6 +3908,7 @@ impl App {
                         editor_binding: None,
                         reserve: None,
                         loading_generation: None,
+                        surface: None,
                         park_offscreen: false,
                     };
                     out.push((spec, bounds));

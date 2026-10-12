@@ -228,8 +228,66 @@
 
 ---
 
-## 提交记录
+## Task 08 — Surface 状态机、原生执行与 Usage 接入
 
+- **状态：** IN_PROGRESS（bytehost 部分 DONE，Dozer 接入部分代码完成、待提交与真实窗口人工确认）
+- **输入 revision：**
+  - B `4a8dba0`（Task 07 之上）
+  - 计划 §Task 08 `:127-138`；规格 §5.4 `:85-170`、§11 闸门
+- **输出 revision（bytehost 两部分已落地）：**
+  - B `17c4ad4` `feat(core): add Surface lifecycle state machine`
+  - B `2aaf935` `feat(desktop): execute Surface lifecycle, routing and geometry`
+  - B `f4639bb` `fix(desktop): stop forcing iced renderer features on consumers`（接入使能修复）
+- **产出文件：**
+  - `B/crates/bytehost-core/src/surface.rs`（新；状态机 + `PushState` + `ReadyPolicy`）+ `lib.rs` 导出
+  - `B/crates/bytehost-desktop/src/surface/{mod,lifecycle,geometry,routing}.rs`（新）+ `lib.rs` 注册
+  - `B/crates/bytehost-desktop/tests/surface_lifecycle.rs`（新）
+  - `Z/crates/dozer-app/src/extensions/usage/surface.rs`（新；`UsageSurface` 适配层，固定单槽）
+  - `Z/crates/dozer-app/src/preview/webview.rs`（`WebviewSpec.surface: Option<SurfaceId>`）
+  - `Z/crates/dozer-app/src/app/app.rs`（`take_usage_content_script` 走 `observe_instance`/`set_desired`/`take_pending_script`；Usage spec 带 `surface`）
+  - `Z/crates/dozer-app/src/app/update.rs`（Ready 先经 `accepts` 路由校验再 `apply_ready`）
+  - `Z/crates/dozer-app/src/app/message.rs`（`UsageContentWebviewEvent(.., Option<SurfaceId>)`）
+  - `Z/crates/dozer-app/src/runtime.rs`（IPC 带 spec 的 `surface` 身份）
+  - `Z/crates/dozer-app/src/usage_probe/{host.rs,surface.rs,scenarios.rs}`（探针/漂移守卫改到 Surface 模型）
+- **运行命令与退出码：**
+
+| 仓库 | 命令 | 退出码 | 结果 |
+|---|---|---|---|
+| B | `cargo test -p bytehost-core` | 0 | 全通过（surface 10 新单测） |
+| B | `cargo test -p bytehost-desktop` | 0 | 全通过（surface 24 单测 + surface_lifecycle 8 集成） |
+| B | `cargo test --workspace --all-features` | 0 | 全通过（408+…） |
+| B | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | 干净 |
+| B | `cargo fmt --all --check` | 0 | 干净 |
+| B | `bash scripts/check-deps.sh` + `--self-test` | 0 | 通过 |
+| B | `SELFTEST=1 cargo run -p bytehost-desktop --example minimal` | 0 | 真实窗口示例自退，无 panic |
+| Z | `cargo check -p dozer-app` | 0 | 通过（仅既有 2 warning） |
+| Z | `cargo test -p dozer-app --bin dozer usage` | 0 | 100 通过（含 6 个 UsageSurface 状态测试 + 迁移后探针） |
+| Z | `cargo test -p dozer-app --bin dozer` | 1 | 2009 通过；1 既有失败（`extensions::files::tests::delete_confirm_spec_reflects_pending_target`，非本任务） |
+| Z | `cargo clippy -p dozer-app --all-targets` | 0 | 仅既有 warning（`agent_token_share`/`GitProvider::ALL` 等） |
+| Z | `cargo fmt -p dozer-app -- --check` | 0 | 干净 |
+| Z | `python3 scripts/audit/check_panel_boundary.py` | 1 | 仅既有回退 `app/app.rs: R-HOST-EXECUTORS 0 -> 1`（`run_app_host_effects`，非本任务） |
+| Z | `bash scripts/build-macos-app.sh release` + 安装运行 | 0 | 0.5.29x 真实启动、无 panic（日志见下） |
+- **结果（bytehost 部分）：**
+  - `bytehost-core::surface`：`SurfaceId{instance,slot,generation}`、`SurfaceKind{Builtin,Application}`、`ReadyPolicy{Handshake,NavigationCompleted}`、`SurfaceState`（`Absent→Creating→WaitingReady→Ready→Hidden/Destroyed`，失败进可重试 `Failed`）、`PushState`（首次全量、去重、隐藏缓存、重建重发、`has_unsent`）、`StaleGeneration` 丢弃。
+  - `bytehost-desktop::surface`：`routing`（`(instance,slot,generation)` 显式归属，`Routed::{Accepted,UnknownSurface,StaleGeneration}`，重建驱逐旧代）；`geometry`（`Placement`/`surface_rect`/`rect_after_overlay`，insets/split/零面积/浮层还原）；`lifecycle`（`LifecycleAction` + `actions_for` + `execute_on_handle`；创建唯一入口仍是 `panel::build_child`）；`SurfaceExecutor`（组合状态 + 路由 + 载荷缓存，载荷→脚本由产品委托 `ScriptBuilder`）。
+- **结果（Dozer 接入部分）：**
+  - `UsageSurface` 内部持有 `SurfaceExecutor<UsageViewPayload>`，身份固定 `PanelInstanceId(0,0)` + `SurfaceSlot(USAGE_CONTENT_ID_OFFSET)` + 递增 `generation`。
+  - 每帧 `observe_instance(句柄在池中)` 驱动生命周期：进池 → `Created`/`WaitingReady`；离池 → `Destroyed` 并递增代数（旧实例在途 IPC 自此被判过期）。
+  - Ready IPC 先经 `accepts(Option<SurfaceId>)`（路由层校验代数/槽）再 `apply_ready()`；非当前代数 `log_warn` 丢弃。
+  - 载荷构造（`current_view_payload`/`encode_usage_push`）仍留在 `extensions::usage`，executor 只按 `PushState` 语义决定何时推；`take_pending_script` 与旧 `pending_push`+`mark_sent` 契约一致（附带物理槽 id）。
+  - `WebviewSpec` 增加 `surface: Option<SurfaceId>`，仅 Usage 槽填 `Some(...)`，其余 14 处填 `None`；`runtime.rs` IPC 回传带上创建时登记的身份。
+  - 删除被替代的 `extensions::usage::WebviewPushState`；漂移守卫（`usage_probe`）改到 Surface 模型，仍钉住真实 host 的步骤顺序、提前返回个数与行号引用。
+- **真实窗口人工确认（未完成，需人工）：**
+  - 自动化验证受环境限制：`screencapture` 无屏幕录制权限；Orca 辅助 App 无辅助功能权限，`lsappinfo windowInfo=[NULL]`，无法读取 Dozer 窗口控件树。
+  - 已确认：新二进制 0.5.29x 真实启动、无 panic/ERROR 日志（`dozer-app.log.2026-10-12`：字体剔除、runtime 能力快照、预览 tab ready 均正常）。
+  - **待人工执行：** 打开 Usage 面板确认首帧渲染；切换项目确认内容随之更新且旧项目数据不残留；快速隐藏/恢复面板确认恢复后重发当前内容、无空白。步骤与预期记录于 `acceptance.md`。
+- **偏差：** 无（bytehost 部分）。真实窗口确认因宿主权限缺失转人工，已在 acceptance 记录。
+  - 计划 Task 08 把 `webview_geometry.rs` 列入"修改"，但本任务把几何仍留在产品侧：Usage 窗格矩形由 `ShellState`/`dims.usage_split`/`theme::geometry` 常量算出（2.1k 行、多面板共用），bytehost `surface::geometry` 提供的是 shell 级通用 `Placement`/`surface_rect`/`rect_after_overlay`，为它改造会动像素行为、收益低。计划的具体要求（clause 135）只针对逐帧推送/ready/IPC 经 Surface；几何经 spec 的零面积裁剪与 `observe_instance` 已与 Surface 生命周期联动。此口径待 Task 后续或用户裁决，见 `api-decisions.md`。
+- **未决项 / 阻塞：** 真实窗口确认待人工；其余无。
+
+---
+
+## 提交记录
 | Task | 提交 | 仓库 | 说明 |
 |---|---|---|---|
 | 01 | `a9af4903` | Z | `docs(integration): record host extraction baseline` |
@@ -241,3 +299,7 @@
 | 05 | `4c4d748` | B | `feat(core): preserve scoped writes and reject stale reads` |
 | 06 | `d9b90deb` | Z | `refactor(host): move service adapters to host_adapters and adopt core request identity` |
 | 07 | `4a8dba0` | B | `feat(desktop): add reusable shell and product callbacks` |
+| 08 | `17c4ad4` | B | `feat(core): add Surface lifecycle state machine` |
+| 08 | `2aaf935` | B | `feat(desktop): execute Surface lifecycle, routing and geometry` |
+| 08 | `f4639bb` | B | `fix(desktop): stop forcing iced renderer features on consumers` |
+| 08 | （待提交） | Z | `refactor(usage): route Usage content host through shared Surface` |

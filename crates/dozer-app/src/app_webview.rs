@@ -88,6 +88,7 @@ pub(crate) fn app_webview_spec(slot: AppSlot, url: &str, visible: bool) -> Webvi
         editor_binding: None,
         reserve: None,
         loading_generation: None,
+        surface: None,
         park_offscreen: false,
     }
 }

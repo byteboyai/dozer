@@ -4,7 +4,7 @@
 
 use super::fake_dozerd::FakeDozerd;
 use super::surface::FakeSurface;
-use crate::extensions::usage::{self, Message, WebviewPushState, WorkspaceState};
+use crate::extensions::usage::{self, Message, UsageSurface, WorkspaceState};
 use crate::panel_host::{ActivationCtx, PanelIo};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -28,15 +28,15 @@ impl Duty {
     /// 真实 host 里承担这件事的位置(读代码得到,2026-10-08)。
     pub(crate) fn host_site(self) -> &'static str {
         match self {
-            Duty::BuildActivationCtx => "app/update.rs:5299",
-            Duty::RouteLoaded => "app/update.rs:1624 (with_project)",
-            Duty::DropOtherProject => "app/update.rs:1624 (with_project 路由到别的 Workspace)",
-            Duty::InterceptCollapse => "app/update.rs:1631",
-            Duty::InterceptHover => "app/update.rs:1634",
+            Duty::BuildActivationCtx => "app/update.rs:5307",
+            Duty::RouteLoaded => "app/update.rs:1631 (with_project)",
+            Duty::DropOtherProject => "app/update.rs:1631 (with_project 路由到别的 Workspace)",
+            Duty::InterceptCollapse => "app/update.rs:1638",
+            Duty::InterceptHover => "app/update.rs:1641",
             Duty::FramePush => "app/app.rs:1242 take_usage_content_script",
-            Duty::DowngradeReady => "app/app.rs:1251",
-            Duty::SkipWhileLoading => "app/app.rs:1257",
-            Duty::ParseIpcAndMarkReady => "runtime.rs:705 + app/update.rs:265",
+            Duty::DowngradeReady => "app/app.rs:1249",
+            Duty::SkipWhileLoading => "app/app.rs:1254",
+            Duty::ParseIpcAndMarkReady => "runtime.rs:709 + app/update.rs:265",
             Duty::DrainToastOutbox => "app/update.rs:223 (drain_outboxes)",
         }
     }
@@ -44,7 +44,7 @@ impl Duty {
 
 pub(crate) struct ProbeHost {
     pub ws: WorkspaceState,
-    pub push: WebviewPushState,
+    pub push: UsageSurface,
     pub surface: FakeSurface,
     pub duties: Vec<Duty>,
     project_id: i64,
@@ -54,14 +54,14 @@ impl ProbeHost {
     pub(crate) fn new(project_id: i64) -> Self {
         Self {
             ws: WorkspaceState::default(),
-            push: WebviewPushState::default(),
+            push: UsageSurface::new(),
             surface: FakeSurface::default(),
             duties: Vec::new(),
             project_id,
         }
     }
 
-    /// 对应 `app/update.rs:5299`:host 构造 `ActivationCtx` 再调面板的 `on_activate`。
+    /// 对应 `app/update.rs:5307`:host 构造 `ActivationCtx` 再调面板的 `on_activate`。
     pub(crate) fn activate(
         &mut self,
         rt: &tokio::runtime::Runtime,
@@ -116,7 +116,7 @@ impl ProbeHost {
         self.ws.take_outbox()
     }
 
-    /// 对应 `app/update.rs:1623-1640` 的路由:`Loaded`/`LoadFailed` 按 `project_id` 路由(这里只有一个 Workspace,
+    /// 对应 `app/update.rs:1630-1641` 的路由:`Loaded`/`LoadFailed` 按 `project_id` 路由(这里只有一个 Workspace,
     /// 非本项目的等价于"路由到别的 Workspace",对本面板即丢弃);`ToggleListCollapse`/`Hover` 由 host
     /// 拦截,不进面板的 `update`。
     pub(crate) fn deliver(&mut self, msg: Message) {
@@ -141,11 +141,14 @@ impl ProbeHost {
         }
     }
 
-    /// 对应 `App::take_usage_content_script`(`app/app.rs:1242`):每帧声明式比较"该显示什么"与"上次送达什么"。
+    /// 对应 `App::take_usage_content_script`(`app/app.rs`):每帧先用"原生实例
+    /// 是否在池中"驱动 Surface 生命周期,再声明式比较"该显示什么"与"上次送达
+    /// 什么"。
     pub(crate) fn tick(&mut self) {
         self.duties.push(Duty::FramePush);
+        // 进池/离池 → Created / Destroyed(离池时递增代数,旧实例在途 IPC 作废)。
+        self.push.observe_instance(self.surface.is_attached());
         if !self.surface.is_attached() {
-            self.push.set_ready(false);
             self.duties.push(Duty::DowngradeReady);
             return;
         }
@@ -154,20 +157,23 @@ impl ProbeHost {
             return;
         }
         let desired = usage::current_view_payload(&self.ws);
-        let Some(payload) = self.push.pending_push(&desired) else {
+        self.push.set_desired(desired);
+        let Some((_, script)) = self.push.take_pending_script() else {
             return;
         };
-        let envelope = usage::encode_usage_push(payload.clone());
-        self.push.mark_sent(payload);
-        self.surface.receive(envelope);
+        self.surface.receive_script(script);
     }
 
-    /// 对应 `runtime.rs:705` 的 IPC 识别 + `app/update.rs:265` 的 `Ready` 处理。
+    /// 对应 `runtime.rs` 的 IPC 识别 + `app/update.rs` 的 `Ready` 处理:
+    /// 先经路由层校验归属,再交 Surface 状态机推进到 Ready。
     pub(crate) fn webview_ready(&mut self) {
         self.duties.push(Duty::ParseIpcAndMarkReady);
         let event = usage::parse_usage_event(r#"{"kind":"ready"}"#).unwrap();
+        if !self.push.accepts(Some(self.push.id())) {
+            return;
+        }
         if matches!(event, usage::UsageWebviewEvent::Ready) {
-            self.push.set_ready(true);
+            self.push.apply_ready();
         }
     }
 
@@ -179,25 +185,22 @@ impl ProbeHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extensions::usage::UsageViewPayload;
 
     #[test]
     fn tick_without_a_surface_downgrades_ready_and_pushes_nothing() {
+        // 没有原生实例时:tick 把 Surface 推入/维持"无实例"态,不推内容。
         let mut h = ProbeHost::new(1);
-        h.push.set_ready(true);
         h.tick();
         assert_eq!(h.surface.count(), 0);
         assert!(h.duty_set().contains(&Duty::DowngradeReady));
-        assert!(
-            h.push.pending_push(&UsageViewPayload::Empty).is_none(),
-            "ready 已被降级"
-        );
+        assert!(h.push.take_pending_script().is_none(), "无实例时没有待推送");
     }
 
     #[test]
     fn webview_ready_then_tick_pushes_once_and_dedups() {
         let mut h = ProbeHost::new(1);
         h.surface.attach();
+        h.tick();
         h.webview_ready();
         h.tick();
         h.tick();
@@ -215,14 +218,12 @@ mod tests {
         let body = &src[start..];
         let body = &body[..body.find("pub fn take_codehealth_content_script").unwrap()];
         let order = [
-            "available_webview_ids.contains",
-            "set_ready(false)",
+            "observe_instance",
             "active_workspace()",
             "usage.loading()",
             "current_view_payload",
-            "pending_push",
-            "encode_usage_push",
-            "mark_sent",
+            "set_desired",
+            "take_pending_script",
         ];
         let mut at = 0;
         for needle in order {
@@ -261,10 +262,7 @@ mod tests {
                 &["Message::Usage(usage::Message::Hover(id, h))"],
             ),
             (Duty::FramePush, &["pub fn take_usage_content_script("]),
-            (
-                Duty::DowngradeReady,
-                &["self.usage_webview.set_ready(false)"],
-            ),
+            (Duty::DowngradeReady, &["self.usage_surface"]),
             (Duty::SkipWhileLoading, &["if ws.usage.loading()"]),
             (
                 Duty::DrainToastOutbox,
@@ -274,7 +272,7 @@ mod tests {
                 Duty::ParseIpcAndMarkReady,
                 &[
                     "webview_id == crate::app::USAGE_CONTENT_ID_OFFSET",
-                    "Message::UsageContentWebviewEvent(event)",
+                    "Message::UsageContentWebviewEvent(event, surface)",
                 ],
             ),
         ];
@@ -336,9 +334,10 @@ mod tests {
             "update.rs Ready 处理",
             update,
             &[
-                "Message::UsageContentWebviewEvent(event)",
+                "Message::UsageContentWebviewEvent(event, surface)",
+                "self.usage_surface.accepts(surface)",
                 "UsageWebviewEvent::Ready",
-                "self.usage_webview.set_ready(true)",
+                "self.usage_surface.apply_ready()",
             ],
         );
         in_order(
@@ -356,30 +355,29 @@ mod tests {
                     .unwrap()];
         assert_eq!(
             real.matches("return Vec::new()").count(),
-            4,
+            2,
             "真实函数的提前返回个数变了,夹具 tick 需同步"
         );
         // 夹具侧同样钉住:tick 的步骤顺序与提前返回个数。
         let me = include_str!("host.rs");
         let s = me.find("pub(crate) fn tick").unwrap();
-        let ours = &me[s..s + me[s..].find("/// 对应 `runtime.rs:705`").unwrap()];
+        let ours = &me[s..s + me[s..].find("/// 对应 `runtime.rs` 的 IPC 识别").unwrap()];
         in_order(
             "ProbeHost::tick",
             ours,
             &[
+                "observe_instance",
                 "is_attached()",
-                "set_ready(false)",
                 "loading()",
                 "current_view_payload",
-                "pending_push",
-                "encode_usage_push",
-                "mark_sent",
+                "set_desired",
+                "take_pending_script",
             ],
         );
         assert_eq!(
             ours.matches("return;").count(),
             3,
-            "夹具 tick 的提前返回个数变了"
+            "夹具 tick 的提前返回个数变了(离池 + 加载中 + 无待发脚本)"
         );
     }
 }

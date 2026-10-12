@@ -47,3 +47,16 @@
 | C9 | `HoverId`/`PanelKind` 作为宿主类型 | `panel_host.rs` / `app/state.rs` | 词汇尚未命名空间化/注册制 | `HoverSlot`/`PanelKind` 变体表纳入注册制后门禁计数只降 | 09 |
 
 **门禁约束：** 上述计数类删除条件与 `scripts/audit/panel-boundary.baseline.json` 及 `R-PROTOCOL`/`R-CLIENT` 门禁一一对应；删除桥时只允许基线**下降**，禁止上调阈值掩盖。
+
+## 3. Task 08 真实窗口人工确认（L3+L4，待人工）
+
+自动化受限：`screencapture` 缺屏幕录制权限；Orca 辅助 App 缺辅助功能权限（`lsappinfo windowInfo=[NULL]`），无法读取 Dozer 控件树。以下需人工在真实窗口执行：
+
+| 步骤 | 操作 | 预期 |
+|---|---|---|
+| M1 | 打开 Usage 面板（有 agent 数据的项目） | 内容侧图表首帧渲染；无空白/无 `all_agents` 旧值残留 |
+| M2 | 在项目 A（已渲染）切换到项目 B | 内容随 B 更新；B 未发过的 payload 也推送（不因单槽 `last_sent` 漏推） |
+| M3 | 快速隐藏 Usage 面板再恢复 | 恢复后重发当前内容，不空白；隐藏期间不推（`PushState` 缓存最新，恢复一次补齐） |
+| M4 | 切走再切回同一项目（webview 销毁重建） | 新实例 Ready 后强制重发同一内容（代数递增，旧实例在途 IPC 不复写新实例） |
+
+已完成的自动化前置：`cargo test -p dozer-app --bin dozer usage`（100 通过，含上述语义的状态测试）；新二进制真实启动无 panic/ERROR（日志 `dozer-app.log.2026-10-12`）。

@@ -262,12 +262,19 @@ impl App {
                     s.set_diff_webview_ready(true);
                 }
             }
-            Message::UsageContentWebviewEvent(event) => {
-                if matches!(event, crate::extensions::usage::UsageWebviewEvent::Ready) {
-                    // `set_ready(true)` 内部已经清空 `last_sent`,强制下一帧重发
-                    // 一次当前内容(覆盖"webview 被销毁重建,新实例第一次 ready"的
-                    // 场景),不需要在这里再显式清一次。
-                    self.usage_webview.set_ready(true);
+            Message::UsageContentWebviewEvent(event, surface) => {
+                // 先经共享宿主路由层校验归属:旧代数/未知来源的事件一律丢弃
+                // (webview 已销毁重建后,旧实例的在途事件不能写进新实例)。
+                if !self.usage_surface.accepts(surface) {
+                    dozer_core::log_warn!(
+                        LOG,
+                        panel = "usage",
+                        "拒绝非当前代数的 usage-content IPC"
+                    );
+                } else if matches!(event, crate::extensions::usage::UsageWebviewEvent::Ready) {
+                    // 内置面板走 Ready 握手:推进到 Ready 后下一帧会重发当前内容
+                    // (覆盖"webview 被销毁重建,新实例第一次 ready"的场景)。
+                    self.usage_surface.apply_ready();
                 }
             }
             Message::CodeHealthContentWebviewEvent(event) => {

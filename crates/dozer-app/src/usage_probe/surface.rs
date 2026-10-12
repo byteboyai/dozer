@@ -19,6 +19,18 @@ impl FakeSurface {
     pub(crate) fn receive(&mut self, envelope_json: String) {
         self.received.push(envelope_json);
     }
+    /// 记录一条 `dispatch_script` 注入脚本:从中还原出 envelope JSON(去 JS 包装)。
+    pub(crate) fn receive_script(&mut self, script: String) {
+        // `dispatch_script` 形状:`...dispatch("<json>"...);`——取出第一个 JS
+        // 字符串字面量并反转义回 JSON。
+        let open = script.find('"').expect("dispatch 脚本含字符串字面量") + 1;
+        let rest = &script[open..];
+        let close = rest.rfind('"').expect("字符串字面量有收尾引号");
+        let literal = &rest[..close];
+        let json = serde_json::from_str::<String>(&format!("\"{literal}\""))
+            .expect("dispatch 里的 envelope 是合法 JS 字符串");
+        self.received.push(json);
+    }
     pub(crate) fn count(&self) -> usize {
         self.received.len()
     }

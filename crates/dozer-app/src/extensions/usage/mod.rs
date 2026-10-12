@@ -11,12 +11,14 @@ use std::path::PathBuf;
 
 mod aggregate;
 mod protocol;
+mod surface;
 mod view;
 
 dozer_core::scope!(LOG, panel, "usage");
 
 pub(crate) use aggregate::*;
 pub(crate) use protocol::*;
+pub(crate) use surface::UsageSurface;
 pub(crate) use view::*;
 
 /// 挂在每个 Workspace 上的 Usage 面板状态,对应现有 `Workspace` 上
@@ -83,43 +85,6 @@ impl WorkspaceState {
     /// 时的行为(见 app.rs `PanelKind::Usage` 分支)。
     pub fn has_agent_filter(&self) -> bool {
         !self.loading && !self.rows.is_empty()
-    }
-}
-
-/// App 级(不按项目分,同 `git_log::State` 先例)内容侧 webview 推送状态:
-/// `ready`(JS `window.__dozer.dispatch` 已注册)+ `last_sent`(最近一次
-/// 真正 `evaluate_script` 成功的 payload)。纯状态,可单测,不碰 webview 池
-/// ——调用方(`App::take_usage_content_script`,Task 15)拿 `pending_push`
-/// 的结果去组 envelope,只有真正 `evaluate_script` 成功才调 `mark_sent`。
-#[derive(Default)]
-pub struct WebviewPushState {
-    ready: bool,
-    last_sent: Option<UsageViewPayload>,
-}
-
-impl WebviewPushState {
-    pub fn set_ready(&mut self, ready: bool) {
-        self.ready = ready;
-        if ready {
-            // 新实例(或重新确认 ready)一律强制重发一次当前内容,同
-            // `git_log::State::set_diff_webview_ready` 配
-            // `clear_diff_sent_for` 的先例。
-            self.last_sent = None;
-        }
-    }
-
-    pub fn pending_push(&self, desired: &UsageViewPayload) -> Option<UsageViewPayload> {
-        if !self.ready {
-            return None;
-        }
-        if self.last_sent.as_ref() == Some(desired) {
-            return None;
-        }
-        Some(desired.clone())
-    }
-
-    pub fn mark_sent(&mut self, payload: UsageViewPayload) {
-        self.last_sent = Some(payload);
     }
 }
 
@@ -830,23 +795,34 @@ mod tests {
 
     #[test]
     fn pending_push_none_when_not_ready() {
-        let state = WebviewPushState::default();
-        assert!(state.pending_push(&payload_a()).is_none());
+        // 未 ready(webview 进池但握手没到)前不推。
+        let mut surface = UsageSurface::new();
+        surface.observe_instance(true);
+        surface.set_desired(payload_a());
+        assert!(surface.take_pending_script().is_none());
     }
 
     #[test]
     fn pending_push_some_when_ready_and_never_sent() {
-        let mut state = WebviewPushState::default();
-        state.set_ready(true);
-        assert_eq!(state.pending_push(&payload_a()), Some(payload_a()));
+        let mut surface = UsageSurface::new();
+        surface.observe_instance(true);
+        surface.apply_ready();
+        surface.set_desired(payload_a());
+        let (slot, script) = surface.take_pending_script().expect("ready 首推");
+        assert_eq!(slot, super::surface::USAGE_SURFACE_SLOT as usize);
+        assert!(script.contains("agent_empty"));
     }
 
     #[test]
     fn pending_push_none_once_marked_sent_and_desired_unchanged() {
-        let mut state = WebviewPushState::default();
-        state.set_ready(true);
-        state.mark_sent(payload_a());
-        assert!(state.pending_push(&payload_a()).is_none());
+        let mut surface = UsageSurface::new();
+        surface.observe_instance(true);
+        surface.apply_ready();
+        surface.set_desired(payload_a());
+        assert!(surface.take_pending_script().is_some());
+        // 同一 desired 再取:已送达,去重。
+        surface.set_desired(payload_a());
+        assert!(surface.take_pending_script().is_none());
     }
 
     /// 对应本计划 Review Focus"多 agent 筛选切换的最新覆盖旧语义":desired
@@ -854,45 +830,66 @@ mod tests {
     /// 不能因为"A 以前发过一次"就误判成不用重发。
     #[test]
     fn pending_push_resends_when_desired_flips_back_to_a_previously_sent_value() {
-        let mut state = WebviewPushState::default();
-        state.set_ready(true);
-        state.mark_sent(payload_a());
-        assert_eq!(state.pending_push(&payload_b()), Some(payload_b()));
-        state.mark_sent(payload_b());
-        assert_eq!(
-            state.pending_push(&payload_a()),
-            Some(payload_a()),
+        let mut surface = UsageSurface::new();
+        surface.observe_instance(true);
+        surface.apply_ready();
+        surface.set_desired(payload_a());
+        assert!(surface.take_pending_script().is_some());
+        surface.set_desired(payload_b());
+        assert!(surface.take_pending_script().is_some());
+        surface.set_desired(payload_a());
+        assert!(
+            surface.take_pending_script().is_some(),
             "desired 变回 A(即便 A 是更早发过的值)也必须判定为待推"
         );
     }
 
     /// 对应本计划 Review Focus"切换项目后 webview 显示旧项目数据":这里用
     /// "desired 突然换成另一个 workspace 算出来的、从未出现过的 payload"模拟
-    /// 项目切换——`last_sent` 是 App 级单槽,不按项目分,天然不会因为
+    /// 项目切换——`PushState::last_sent` 是单槽,不按项目分,天然不会因为
     /// "这个项目以前没发过"而漏推。
     #[test]
     fn pending_push_treats_a_different_workspaces_payload_as_new() {
-        let mut state = WebviewPushState::default();
-        state.set_ready(true);
-        state.mark_sent(payload_a()); // 上一个显示这个 webview 的项目留下的内容
+        let mut surface = UsageSurface::new();
+        surface.observe_instance(true);
+        surface.apply_ready();
+        surface.set_desired(payload_a()); // 上一个显示这个 webview 的项目留下的内容
+        assert!(surface.take_pending_script().is_some());
         let other_project_payload = UsageViewPayload::Empty; // 切到的新项目,当前态
-        assert_eq!(
-            state.pending_push(&other_project_payload),
-            Some(UsageViewPayload::Empty)
-        );
+        surface.set_desired(other_project_payload);
+        assert!(surface.take_pending_script().is_some());
     }
 
     #[test]
-    fn set_ready_true_clears_last_sent_forcing_a_resend() {
-        let mut state = WebviewPushState::default();
-        state.set_ready(true);
-        state.mark_sent(payload_a());
-        assert!(state.pending_push(&payload_a()).is_none());
+    fn rebuild_forces_a_resend_even_when_desired_unchanged() {
+        let mut surface = UsageSurface::new();
+        surface.observe_instance(true);
+        surface.apply_ready();
+        surface.set_desired(payload_a());
+        assert!(surface.take_pending_script().is_some());
         // webview 被销毁重建(全新实例),重新 ready——即便 desired 没变,也要
         // 强制重发一次,因为新实例的 JS 端状态是空的(同 git_log 的先例)。
-        state.set_ready(false);
-        state.set_ready(true);
-        assert_eq!(state.pending_push(&payload_a()), Some(payload_a()));
+        surface.observe_instance(false); // 离池 → Destroyed + 递增代数
+        surface.observe_instance(true); // 重新进池 → 新实例
+        surface.apply_ready();
+        surface.set_desired(payload_a());
+        assert!(
+            surface.take_pending_script().is_some(),
+            "重建后新实例必须重发"
+        );
+    }
+
+    /// 旧代数的 IPC 在 webview 重建后被路由层拒绝(不能写进新实例)。
+    #[test]
+    fn stale_generation_ipc_is_rejected_after_rebuild() {
+        let mut surface = UsageSurface::new();
+        surface.observe_instance(true);
+        surface.apply_ready();
+        let old = surface.id();
+        surface.observe_instance(false);
+        surface.observe_instance(true);
+        assert!(!surface.route_of(old).is_accepted(), "旧代数归属被拒");
+        assert!(surface.route_of(surface.id()).is_accepted(), "当前代数接受");
     }
 
     // ---- bytegit P3:git 提交计数迁移前后必须一致的口径 ----
