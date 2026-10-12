@@ -189,3 +189,11 @@ Dozer 目前有 **六条** wry 构造路径，但真正的信任分界只有两�
 ### 9.6 提交切片
 
 按计划"一个可审阅提交组"：`refactor(codehealth): adopt shared surface lifecycle`（Dozer）。bytehost 若因 9.4 暴露的通用缺口需要改动，**单独一个** `feat(desktop): …` 提交，不与 Dozer 接入混在一起。若第二消费者**未**暴露通用缺口（很可能：Usage 已把 Surface 打磨到够用），则 bytehost 本轮零改动，实现记录里写明"无通用缺口，公共层未改"。
+
+### 9.7 实施结果（2026-10-12）
+
+- **bytehost 零改动（符合 9.6 预期）。** 第二消费方未暴露 `bytehost-desktop`/`bytehost-core` 的通用缺口——`SurfaceExecutor` 接口对 CodeHealth 的形状完全够用。本任务 bytehost 无提交。
+- **信任建模落地 Dozer：** `preview::trust::WebviewTrust` + `WebviewTrust::of(&WebviewSpec)`（见 9.2/9.3）；`runtime.rs` 池分派改用 `is_application()`；可信宿主分支 `debug_assert!(trust.allows_custom_protocol())` 后装 `dozer://`（9.5-1 由类型派生层保证，`build_app_webview_pins_the_restrictive_settings` 交叉验证）。
+- **CodeHealth 接入 Surface：** `extensions::codehealth::surface::CodeHealthSurface`；`WebviewPushState` 收敛为面板级降级（`waiting_since`/`failed`），ready/revision/去重/重建重发移入 Surface（9.4）。
+- **测试：** 9.5 三条全部落地——(1) `WebviewTrust::app_id_derives_application` 断言 `allows_custom_protocol()==false` + 既有 `build_app_webview` 源码扫描；(2) 既有 nonce 白名单源码扫描（`AppIpc::parse(`）；(3) `CodeHealthSurface::stale_generation_ipc_is_rejected_after_rebuild`。
+- **提交：** `9b7b5121`（Dozer）。

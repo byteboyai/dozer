@@ -288,6 +288,36 @@
 
 ---
 
+## Task 09 — CodeHealth 接入共享 Surface(第二消费方)
+
+- **目标（计划 §Task 09 `:140-149`）：** 让 CodeHealth 作为 Surface API 的第二个消费方,在不改变既有行为(进面板不自动扫描)的前提下接入共享生命周期;编辑器/预览/应用三类维持各自独立的信任配置与构建路径;以测试证明应用够不到编辑器/预览的自定义协议与业务 IPC、未知 Surface/旧代数是拒绝的;把第二个消费方暴露出来的通用缺口补进公共层,禁止新增 `if panel == codehealth`。
+- **规格依据:** §5.4 `:85-170`;设计 `api-decisions.md` §9(提交 `b8ae6bb3`)。
+
+**实现：**
+- **共享层零改动(`api-decisions §9.6`)。** 第二消费方未暴露 `bytehost-desktop`/`bytehost-core` 的通用缺口——Usage 已验证的 `SurfaceExecutor` 接口(register/observe/`set_desired`/`take_pending_script(true)`/路由)对 CodeHealth 的形状完全够用。故本任务 bytehost 无提交。
+- **信任建模落在 Dozer,不进 bytehost。** 新增 `preview::trust::WebviewTrust{Application,Editor,Preview,BuiltinPanel}`,由 `WebviewTrust::of(&WebviewSpec)` 从既有字段**唯一**派生(不新增易漏填字段):应用 id 区间 → `Application`;固定槽 id 或带 `surface` → `BuiltinPanel`;带 `editor_binding` → `Editor`;其余 → `Preview`。`runtime.rs` 的池分派由 `is_app_webview_id(spec.id)` 改为 `WebviewTrust::of(&spec).is_application()`,并在可信宿主分支 `debug_assert!(trust.allows_custom_protocol())` 后安装 `dozer://`——把"应用拿不到 `dozer://`"从字符串判断升级为类型/派生层的保证。`bytehost-desktop` 仍只认 core 的 `SurfaceKind{Builtin,Application}`,不认识 editor/preview。
+- **CodeHealth 接入 Surface:** 新增 `extensions::codehealth::surface::CodeHealthSurface`(包裹 `SurfaceExecutor<CodeHealthViewPayload>`,固定 `PanelInstanceId(0,0)` + `SurfaceSlot(CODEHEALTH_CONTENT_ID_OFFSET)`,持有 `generation` 与单调 `revision: Arc<AtomicU64>`)。
+- **面板级降级留在面板侧:** `WebviewPushState` 收敛为只持 `waiting_since` + `failed`,`observe_availability(available, ready, now)` 增一个 `ready` 入参(由 `surface.is_ready()` 供给);ready/revision/去重/重建重发全部移交 Surface。`failed` 时 `take_codehealth_content_script` 早退,原生占位页接管。
+- **接线:** `app.rs`(`codehealth_surface` 字段 + 重写 `take_codehealth_content_script` + `WebviewSpec.surface`)、`app/message.rs`(`CodeHealthContentWebviewEvent(event, Option<SurfaceId>)`)、`app/update.rs`(经 `codehealth_surface.accepts(surface)` 校验归属,`Ready => apply_ready()`)、`runtime.rs`(IPC 回传送 `spec.surface`)、`platform/window_events.rs`(传 `pool_dropped_ids`)。
+
+**测试:**
+- `extensions/codehealth/surface.rs`:`pending_push_requires_ready_and_changes`;`rebuild_forces_a_resend_even_when_desired_unchanged`;`same_frame_destroy_and_recreate_opens_a_new_generation`(R1 同型);`stale_generation_ipc_is_rejected_after_rebuild`(旧代数 `route_of`/`accepts` 均拒);`revision_is_monotonic_across_rebuilds`(跨重建继续递增,新 host 计数从零恒接受)。
+- `preview/trust.rs`:`app_id_derives_application`(含 `allows_custom_protocol()==false`);`fixed_slot_derives_builtin_panel`;`surface_marks_builtin_panel_even_without_offset`;`editor_binding_derives_editor`;`plain_host_derives_preview`。
+- `app_webview::build_app_webview_pins_the_restrictive_settings`(既有,源码扫描)持续钉住应用路径无 `with_custom_protocol`、无 `APP_INIT_SCRIPT`、devtools/下载/新窗口关闭、走 `AppIpc::parse` nonce 白名单——与 `WebviewTrust::Application` 互为交叉验证。
+- 未新增 `if panel == codehealth` 生命周期门控(既有的 `if kind == PanelKind::CodeHealth` 是逐面板 spec 发射,与 Usage 同形,非本任务新增)。
+
+**验证:**
+- `cargo fmt -p dozer-app` 干净;`cargo clippy -p dozer-app --all-targets` 干净(仅两条预存在 `agent_token_share`/`GitProvider::ALL` 未用告警)。
+- `cargo test -p dozer-app --bin dozer`:**2018 通过 / 1 预存在失败**(`extensions::files::tests::delete_confirm_spec_reflects_pending_target`,非本次改动);codehealth 子集 102 通过;trust 5 通过。
+- 边界门禁 `scripts/audit/check_panel_boundary.py`:仅预存在 `app/app.rs: R-HOST-EXECUTORS 0 -> 1`。
+- 漂移守卫 `usage_probe::host::host_site_citations_point_at_the_code_they_name`:因本次改动使 `update.rs`/`app.rs`/`runtime.rs` 行号位移,同步修正 7 处引用(`app/update.rs` 5307→5317、1631/1638/1641→1641/1648/1651;`app/app.rs` 1242/1252/1259→1247/1257/1264;`runtime.rs` 725→729)后通过。
+
+- **提交:** `9b7b5121` refactor(codehealth): adopt shared surface lifecycle (Z)
+- **偏差:** 无。
+- **未决项 / 阻塞:** 无。
+
+---
+
 ## Review 修复 (2026-10-12, R1–R7)
 
 > 来源：`review-2026-10-12-tasks-01-08.md`（快照 Dozer `b8ae6bb3` / bytehost `f4639bb`）。七项均经真实代码复核为**有效缺陷**（非误报）。修复顺序 R5/R6 → R4 → R2 → R3 → R1 → R7。
@@ -327,6 +357,7 @@
 | 08 | `2aaf935` | B | `feat(desktop): execute Surface lifecycle, routing and geometry` |
 | 08 | `f4639bb` | B | `fix(desktop): stop forcing iced renderer features on consumers` |
 | 08 | `5b940f11` | Z | `refactor(usage): route Usage content host through shared Surface` |
+| 09 | `9b7b5121` | Z | `refactor(codehealth): adopt shared surface lifecycle` |
 | R3–R6 | `ba52c94` | B | `fix(core): harden Surface lifecycle, panel identity and request routing` |
 | R2 | `fc3a636` | B | `fix(desktop): make physical-slot replacement atomic and unregister occupant-checked` |
 | R7 | `2d924d9` | B | `fix(spike): SELFTEST must build the wry child and fail nonzero` |
