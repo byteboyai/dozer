@@ -20,7 +20,7 @@ pub fn tree_row_h() -> f32 {
 
 /// 文件树 Scrollable 之上（容器上内边距 + 面板头 + 搜索/工具栏 + 根目录头部 +
 /// 三段行间距）的 chrome 高度（逻辑像素），已含全局 scale。`left_files_tree_bounds`
-/// 用它与 `preview_content_bounds` 同源的谱系换算树视口的纵向起点；同样地，
+/// 用它与 `content_pane_bounds` 同源的谱系换算树视口的纵向起点；同样地，
 /// 它底下（git 脚注栏 + 行间距 + 容器下内边距）由 `tree_chrome_bottom_px` 承担。
 ///
 /// 这里**复刻** `files::view` 的固定堆栈，不另起字面量——内里每一项都取自

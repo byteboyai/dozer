@@ -1075,7 +1075,7 @@ pub(crate) fn context_menu_spec(params: FileContextMenuParams) -> MenuSpec<Messa
 /// 右键菜单浮层本体:纵向按钮列表,`container` 用 `Padding{top,left,..}`
 /// 手算定位到点击坐标——`Stack` 各层共享同一份 bounds,不像原生系统菜单
 /// 那样自带绝对定位,这是本仓一贯的手算像素定位风格(`ime_cursor_area`/
-/// `preview_content_bounds` 同款)。
+/// `content_pane_bounds` 同款)。
 pub fn context_menu_popup<'a>(
     app_state: &'a AppState,
     ws_state: &'a WorkspaceState,

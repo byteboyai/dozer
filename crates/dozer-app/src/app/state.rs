@@ -362,10 +362,10 @@ pub struct ShellState {
     pub left_collapsed: bool,
     pub right_view: PanelKind,
     pub right_collapsed: bool,
-    /// 浏览器收藏夹侧栏是否展开——`preview_content_bounds` 的
+    /// 浏览器收藏夹侧栏是否展开——`content_pane_bounds` 的
     /// `PanelKind::Web` 分支据此决定网页 webview 要不要让出侧栏宽度。
     pub browser_bookmarks_open: bool,
-    /// 当前放大态。`preview_content_bounds`/`is_in_preview_column`/
+    /// 当前放大态。`content_pane_bounds`/`is_in_content_column`/
     /// `terminal_pane_pixel_size` 靠这个字段才能感知"这块内容其实被放大
     /// 遮罩盖住了/放大到了整个 maximize 区域"——没有它,离屏 webview 摆位、
     /// 焦点路由、终端 PTY 网格都会对着放大前的旧几何算,和 `maximize_overlay`

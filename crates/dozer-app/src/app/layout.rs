@@ -530,8 +530,8 @@ pub(crate) fn pair_list_content_width(pair_w: f32, split: f32) -> (f32, f32) {
 /// 配对视图内 list/content 两列相对**所在 zone/盒子内容区左边界**的
 /// 横向偏移与宽度(不含 zone/盒子自己的 x0——调用方自己加)。`mirrored`
 /// = false 时 list 在前(x=0)、content 在后(x=list_w+divider_width);
-/// `mirrored` = true 时反过来。`preview_content_bounds_for`/
-/// `left_files_tree_bounds_for`/`is_in_preview_column` 三个函数(webview
+/// `mirrored` = true 时反过来。`content_pane_bounds_for`/
+/// `left_list_pane_bounds_for`/`is_in_content_column` 三个函数(webview
 /// 矩形、文件树命中、焦点路由)都靠这一份算,不许各写各的偏移公式。
 pub(crate) struct PairColumns {
     pub(crate) list_x: f32,
@@ -869,7 +869,7 @@ pub(crate) fn apply_row_drag(
 /// 之间,`bordered` 再铺满其内边距之内),所以这一份公式两侧共用:三层留白
 /// 累加 = 图标栏宽 + `maximize_overlay` 里 dim_bg 的内边距——`bordered`
 /// 容器本身无内边距、宽度铺满,所以到这里为止。
-/// `preview_content_bounds_for`/`is_in_preview_column`/`terminal_pane_pixel_size`
+/// `content_pane_bounds_for`/`is_in_content_column`/`terminal_pane_pixel_size`
 /// 都靠它换算放大态几何,不能各写各的字面量,否则和 `maximize_overlay`
 /// 实际渲染的画面对不上。
 pub(crate) fn maximized_box_x_range(window_width: f32) -> (f32, f32) {
@@ -885,7 +885,7 @@ pub(crate) fn maximized_box_x_range(window_width: f32) -> (f32, f32) {
 /// 放大态金色描边盒子的纵向可用高度(逻辑像素)。`maximize_overlay` 顶部
 /// 垫了一条 `byteui::theme::geometry::top_bar_height()` 高的 Space 把遮罩钉在顶栏之下,盒子上下各留
 /// `byteui::theme::geometry::maximize_overlay_padding()`;遮罩铺到窗口底边(状态栏也被盖住),所以这里
-/// **不**扣 `byteui::theme::geometry::status_bar_height()`——与 `preview_content_bounds` 放大分支同源。
+/// **不**扣 `byteui::theme::geometry::status_bar_height()`——与 `content_pane_bounds` 放大分支同源。
 pub(crate) fn maximized_box_height(window_height: f32) -> f32 {
     (window_height
         - byteui::theme::geometry::top_bar_height()

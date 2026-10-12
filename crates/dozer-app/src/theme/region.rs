@@ -196,7 +196,7 @@ pub struct RegionStyle {
     pub gap: f32,
     /// 区域整体相对外围容器的外边距(默认零,仅 `left_zone`/
     /// `right_zone` 用它做上下留白)。渲染时套一层外容器做 inset,
-    /// 几何侧(`preview_content_bounds`/`terminal_pane_pixel_size`)要同步
+    /// 几何侧(`content_pane_bounds`/`terminal_pane_pixel_size`)要同步
     /// 扣减,否则原生子视图(webview/PTY)会戳出边框。
     pub margin: Padding,
 }

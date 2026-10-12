@@ -3873,7 +3873,7 @@ impl App {
                 // 闭包外:换算窗口坐标(webview 本地 + webview 原点),判断当前
                 // 是否有可见/激活的 agent 终端(无则菜单项置灰,不报错)。
                 let side = self.shell_state().layout.rail_layout.side_of(panel);
-                let (x0, y0, _, _) = crate::webview_geometry::preview_content_bounds_for(
+                let (x0, y0, _, _) = crate::webview_geometry::content_pane_bounds_for(
                     side,
                     self.window_size.0,
                     self.window_size.1,

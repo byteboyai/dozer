@@ -567,7 +567,7 @@ fn dot_color_states() {
 fn open_missing_file_sets_preview_error_and_no_tab() {
     // Workspace 全量构造依赖 daemon/EventLoop,headless 里只验状态机
     // 侧的可测部分:错误字段与 tab 数经由 update 的行为契约。
-    // 若 Workspace 无法在测试中直接构造,则改为验证 preview_content_bounds
+    // 若 Workspace 无法在测试中直接构造,则改为验证 content_pane_bounds
     // 之外新增一个纯函数不现实——此时降级为:仅确认编译期字段存在,
     // 测试留待 Task 6 人工验收覆盖,并在报告中写明。
 }

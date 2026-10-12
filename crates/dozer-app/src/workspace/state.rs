@@ -2228,7 +2228,7 @@ impl Workspace {
         self.browser.addr_focused()
     }
 
-    /// `kind` 是 `is_in_preview_column` 命中的面板(`Files` 或
+    /// `kind` 是 `is_in_content_column` 命中的面板(`Files` 或
     /// `Project`)。此前硬编码只查 `self.preview`(Files)——`Project`
     /// 面板的预览 webview 点击后一直拿不到键盘焦点(⌘C 复制不了),
     /// 这是这次 Stage 4b 才第一次让它变得可测、可发现的一个独立预存

@@ -508,9 +508,9 @@ impl Runner {
                 app.set_active_zone(logical_x, logical_w);
                 let state = app.shell_state();
                 // 文件预览与浏览器分别挂在 `Files`/`Project`/`Web` 面板上,
-                // 可能已拖到任一栏:`is_in_preview_column` 返回命中的面板,
+                // 可能已拖到任一栏:`is_in_content_column` 返回命中的面板,
                 // 据此区分交给哪个 webview 池(浏览器池 vs 预览池)。
-                let intent = match crate::webview_geometry::is_in_preview_column(
+                let intent = match crate::webview_geometry::is_in_content_column(
                     logical_x, logical_w, &state,
                 ) {
                     Some(PanelKind::Web) => FocusIntent::Browser,
@@ -2124,7 +2124,7 @@ impl Runner {
     /// 首页右栏全局浏览器(`home_browser`)的 webview 像素边界:占满右侧
     /// 面板区(左图标栏 + 首页侧栏 + 分隔线之后,到右侧图标栏之前),扣掉
     /// right_zone 的 margin、顶栏/footbar 高度与浏览器地址栏高度。原生
-    /// 子视图不听 iced 布局,逐像素算(同 `preview_content_bounds` 的思路)。
+    /// 子视图不听 iced 布局,逐像素算(同 `content_pane_bounds` 的思路)。
     /// 返回逻辑 `(x, y, w, h)`,并顺带给出 `wry::Rect` 供摆放。
     fn home_browser_bounds(
         window_width: f32,
@@ -2220,7 +2220,7 @@ impl Runner {
             // 消息。它不携带面板信息(预览池/浏览器池共用同一 IPC 代理),
             // 只能从状态反推:先看左/右栏哪个面板是 `Web`(→ 浏览器池),
             // 否则落到预览池——`Files` 预览 webview 在左栏、`Project`
-            // 预览 webview 在右栏可各自独立存在,需要 `is_in_preview_column`
+            // 预览 webview 在右栏可各自独立存在,需要 `is_in_content_column`
             // 那样按侧判断,但这里没有鼠标坐标,只能用
             // `active_preview_panel_kind()`(见其注释:双面板同时活跃时
             // 优先 `Files`)。

@@ -927,8 +927,8 @@ impl App {
     /// `CursorMoved`/`DroppedFile` 上调用它——只要不在文件树上就返回
     /// `None`（此时拖入按现状落给终端）。
     ///
-    /// 不做任何像素布局复制：文件树列的矩形由 [`left_files_tree_bounds_for`]
-    /// 按 `preview_content_bounds_for` 同源的谱系换算，可见行集合从当前项目
+    /// 不做任何像素布局复制：文件树列的矩形由 [`left_list_pane_bounds_for`]
+    /// 按 `content_pane_bounds_for` 同源的谱系换算，可见行集合从当前项目
     /// `WorkspaceState` 现取现算，二者与渲染侧 `files::view` 同源。
     pub fn files_drop_target(
         &self,
@@ -954,7 +954,7 @@ impl App {
             return None;
         }
         let ws = self.active_workspace()?;
-        let bounds = webview_geometry::left_files_tree_bounds_for(
+        let bounds = webview_geometry::left_list_pane_bounds_for(
             side,
             window_w,
             window_h,
@@ -2575,7 +2575,7 @@ impl App {
             .is_some_and(|ws| ws.active_app_cursor_mode())
     }
 
-    /// `kind` 是 `is_in_preview_column` 命中的面板(`Files` 或 `Project`),
+    /// `kind` 是 `is_in_content_column` 命中的面板(`Files` 或 `Project`),
     /// 据此查 `ws.preview`(Files)还是 `ws.project_preview`(Project)——后者
     /// 的 id 已加 `PROJECT_PREVIEW_ID_OFFSET`(见 workspace.rs 同名方法)。
     /// main.rs 焦点路由取句柄用。
@@ -3540,7 +3540,7 @@ impl App {
 
     /// `kind`(`Files`/`Project`)预览面板当前**实际渲染宽度**(逻辑像素),
     /// 供 tab 栏分页(`byteui::interaction::tab_strip::tab_window`)当可用宽度预算——复用 webview
-    /// 定位同源的 `preview_content_bounds_for`,不再用
+    /// 定位同源的 `content_pane_bounds_for`,不再用
     /// `byteui::theme::geometry::tab_bar_avail_px()` 那个跟真实面板宽度
     /// 完全无关的静态估算常量(2026-09-14 用户反馈:明明面板里还有大把
     /// 空白,tab 栏却只显示第一个、其余全甩进溢出下拉——`tab_bar_avail_px`
@@ -3572,7 +3572,7 @@ impl App {
         } else {
             return byteui::theme::geometry::tab_bar_avail_px();
         };
-        let (_, _, w, _) = webview_geometry::preview_content_bounds_for(
+        let (_, _, w, _) = webview_geometry::content_pane_bounds_for(
             side,
             self.window_size.0,
             self.window_size.1,
@@ -3786,7 +3786,7 @@ impl App {
             // 应用面板(bytehost A4b1):单栏 webview,地址由 `app_views` 给(A4b2 的启动流程写入,没写
             // 之前没有 spec,面板显示占位页)。被 iced 内浮层盖住时同样要隐藏。
             if let PanelKind::App(slot) = kind {
-                let bounds = webview_geometry::preview_content_bounds_for(
+                let bounds = webview_geometry::content_pane_bounds_for(
                     side,
                     window_width,
                     window_height,
@@ -3935,7 +3935,7 @@ impl App {
                 ws.conversations.agent_picker_open(),
                 preview_menu_covers_this,
             );
-            let mut bounds = webview_geometry::preview_content_bounds_for(
+            let mut bounds = webview_geometry::content_pane_bounds_for(
                 side,
                 window_width,
                 window_height,
@@ -4008,7 +4008,7 @@ impl App {
         let Some(ws) = self.active_workspace() else {
             return Vec::new();
         };
-        let bounds = webview_geometry::preview_content_bounds_for(
+        let bounds = webview_geometry::content_pane_bounds_for(
             side,
             window_width,
             window_height,
