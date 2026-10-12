@@ -12,6 +12,7 @@
 规则 R-FOCUS-PRODUCT-KEYS: platform/window_events.rs 里业务焦点键 `FocusIntent` 的出现次数(C12,只降不升)
 规则 R-PANE-KEYED-FIELDS: app/layout.rs 里逐面板命名的 pane 维度字段出现次数(C11,只降不升)
 规则 R-PREVIEW-NAMING: webview_geometry.rs 里"文件预览"业务词几何函数名残留(C7,目标 0)
+规则 R-OVERLAY-DUP: platform 下浮层文件里"建窗/透明/穿透/alpha 模式"特征串的出现次数(C10,只降不升)
 
 用法:
   check_panel_boundary.py            对照基线检查,有文件的引用数上升(或新文件出现违规)则退出 1
@@ -143,6 +144,16 @@ PANE_KEYED_FIELD_RE = re.compile(
 PREVIEW_NAMING_RE = re.compile(
     r"\b(?:preview_content_bounds(?:_for)?|is_in_preview_column|left_files_tree_bounds_for)\b"
 )
+# R-OVERLAY-DUP(C10):浮层文件里"建窗/透明/穿透/alpha 模式"这类**已上收宿主**的
+# 机制特征串。方案 B 已把"建窗胶水 + 定位几何 + 鼠标穿透/圆角遮罩"上收
+# `bytehost_desktop::overlay`;这里数产品侧仍自写的部分(`OverlayGpu` 的 wgpu
+# surface 配置按方案 B 有意保留产品侧)。计数**只许降不许增**——新增浮层机制
+# 应调宿主 API,不再各写一份。
+OVERLAY_DUP_RE = re.compile(
+    r"with_parent_window|with_decorations\s*\(\s*false\s*\)|with_transparent\s*\(\s*true\s*\)"
+    r"|set_cursor_hittest|setAcceptsMouseMovedEvents"
+    r"|create_surface|CompositeAlphaMode::PostMultiplied"
+)
 
 
 def scan(files):
@@ -188,6 +199,10 @@ def scan(files):
             k = len(PREVIEW_NAMING_RE.findall(code))
             if k:
                 hit["R-PREVIEW-NAMING"] = k
+        if rel.startswith("platform/") and "overlay" in rel:
+            k = len(OVERLAY_DUP_RE.findall(code))
+            if k:
+                hit["R-OVERLAY-DUP"] = k
         n = len(PANE_PICK_RE.findall(edges.strip_comments(text)))
         if n:
             hit["R-PANE-PICK"] = n

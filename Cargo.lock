@@ -805,6 +805,14 @@ dependencies = [
 [[package]]
 name = "bytehost-apps"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "bytehost-apps"
+version = "0.1.0"
 source = "git+https://github.com/byteboyai/bytehost?tag=v0.1.1#6fdca5dcfad12472244ef05a7550c6060d3a0342"
 dependencies = [
  "bytes",
@@ -829,7 +837,7 @@ name = "bytehost-client"
 version = "0.1.0"
 source = "git+https://github.com/byteboyai/bytehost?tag=v0.1.1#6fdca5dcfad12472244ef05a7550c6060d3a0342"
 dependencies = [
- "bytehost-apps",
+ "bytehost-apps 0.1.0 (git+https://github.com/byteboyai/bytehost?tag=v0.1.1)",
  "tokio",
  "tracing",
 ]
@@ -847,8 +855,15 @@ name = "bytehost-desktop"
 version = "0.1.0"
 dependencies = [
  "bytehost-core",
+ "bytehost-webview 0.1.0",
  "iced",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "raw-window-handle",
+ "serde",
+ "serde_json",
  "tokio",
+ "winit",
  "wry",
 ]
 
@@ -857,8 +872,17 @@ name = "bytehost-panel"
 version = "0.1.0"
 source = "git+https://github.com/byteboyai/bytehost?tag=v0.1.1#6fdca5dcfad12472244ef05a7550c6060d3a0342"
 dependencies = [
- "bytehost-apps",
+ "bytehost-apps 0.1.0 (git+https://github.com/byteboyai/bytehost?tag=v0.1.1)",
  "bytehost-client",
+]
+
+[[package]]
+name = "bytehost-webview"
+version = "0.1.0"
+dependencies = [
+ "bytehost-apps 0.1.0",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -866,7 +890,7 @@ name = "bytehost-webview"
 version = "0.1.0"
 source = "git+https://github.com/byteboyai/bytehost?tag=v0.1.1#6fdca5dcfad12472244ef05a7550c6060d3a0342"
 dependencies = [
- "bytehost-apps",
+ "bytehost-apps 0.1.0 (git+https://github.com/byteboyai/bytehost?tag=v0.1.1)",
  "url",
  "uuid",
 ]
@@ -1955,19 +1979,19 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "dozer-app"
-version = "0.5.290"
+version = "0.5.291"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
  "arboard",
  "block2 0.6.2",
  "bytegit",
- "bytehost-apps",
+ "bytehost-apps 0.1.0 (git+https://github.com/byteboyai/bytehost?tag=v0.1.1)",
  "bytehost-client",
  "bytehost-core",
  "bytehost-desktop",
  "bytehost-panel",
- "bytehost-webview",
+ "bytehost-webview 0.1.0 (git+https://github.com/byteboyai/bytehost?tag=v0.1.1)",
  "byteui",
  "calamine",
  "csv",
@@ -2027,7 +2051,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "bytehost-apps",
+ "bytehost-apps 0.1.0 (git+https://github.com/byteboyai/bytehost?tag=v0.1.1)",
  "bytehost-client",
  "dozer-core",
  "dozer-services",
@@ -2060,7 +2084,7 @@ name = "dozer-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bytehost-apps",
+ "bytehost-apps 0.1.0 (git+https://github.com/byteboyai/bytehost?tag=v0.1.1)",
  "directories",
  "dozer-model",
  "serde",
@@ -2086,7 +2110,7 @@ name = "dozer-mcp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bytehost-apps",
+ "bytehost-apps 0.1.0 (git+https://github.com/byteboyai/bytehost?tag=v0.1.1)",
  "dozer-client",
  "dozer-core",
  "dozerd",
@@ -2141,7 +2165,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "bytegit",
- "bytehost-apps",
+ "bytehost-apps 0.1.0 (git+https://github.com/byteboyai/bytehost?tag=v0.1.1)",
  "bytehost-client",
  "dozer-client",
  "dozer-core",

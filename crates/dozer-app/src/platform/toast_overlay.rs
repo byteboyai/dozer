@@ -45,26 +45,24 @@ pub(crate) fn stamps_of(items: &[Toast]) -> Vec<Stamp> {
 /// 窗口尺寸钳到主窗口内且 ≥1(主窗口被缩得比 Toast 还小也不出 0/负尺寸,
 /// 否则 wgpu surface 配置会失败)。`count == 0` 按 1 处理。定位约定与
 /// `overlay_window::full_window_overlay_bounds` 一致:以 `outer_position`
-/// 为原点、`inner_size` 为范围。
+/// 为原点、`inner_size` 为范围。算法已上收 `bytehost_desktop::overlay`
+/// (C10),这里只绑定 Dozer 的像素常量。
 pub(crate) fn stack_bounds(
     main_outer_pos: PhysicalPosition<i32>,
     main_inner_size: PhysicalSize<u32>,
     scale: f64,
     count: usize,
 ) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
-    let n = count.max(1);
-    let px = |logical: f32| (f64::from(logical) * scale).round() as i64;
-    let main_w = i64::from(main_inner_size.width);
-    let main_h = i64::from(main_inner_size.height);
-    let w = px(TOAST_WIDTH).min(main_w).max(1);
-    let h = px(TOAST_HEIGHT * n as f32 + TOAST_GAP * (n - 1) as f32)
-        .min(main_h)
-        .max(1);
-    let x = i64::from(main_outer_pos.x) + (main_w - w - px(MARGIN_RIGHT)).max(0);
-    let y = i64::from(main_outer_pos.y) + (main_h - h - px(MARGIN_BOTTOM)).max(0);
-    (
-        PhysicalPosition::new(x as i32, y as i32),
-        PhysicalSize::new(w as u32, h as u32),
+    bytehost_desktop::overlay::stack_bounds(
+        main_outer_pos,
+        main_inner_size,
+        scale,
+        count,
+        TOAST_WIDTH,
+        TOAST_HEIGHT,
+        TOAST_GAP,
+        MARGIN_RIGHT,
+        MARGIN_BOTTOM,
     )
 }
 
