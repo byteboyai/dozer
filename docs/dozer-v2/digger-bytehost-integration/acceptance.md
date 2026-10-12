@@ -5,6 +5,8 @@
 > 验证层级：**L1** 纯状态/契约测试 · **L2** 进程与 Gateway 集成测试 · **L3** 真实 WKWebView/窗口行为 · **L4** 人工（视觉/真实鼠标焦点/浮层/IME）。禁止把 handler 直接调用当作真实点击验证。
 > 所有条目当前状态为 **未完成（Unmet）**。
 
+> **Task 23 最终验收（2026-10-12）见文末 [§4](#4-task-23-最终验收报告2026-10-12)。** §1 状态列为 Task 01 建台时的初始值，保留不改；最终判据以 §4 为准。
+
 ## 1. A1–A18 台账
 
 | 编号 | 场景 | 验证层级 | 平台 | 所需夹具 | 状态 |
@@ -63,3 +65,113 @@
 | M4 | 切走再切回同一项目（webview 销毁重建） | 新实例 Ready 后强制重发同一内容（代数递增，旧实例在途 IPC 不复写新实例） |
 
 已完成的自动化前置：`cargo test -p dozer-app --bin dozer usage`（100 通过，含上述语义的状态测试）；新二进制真实启动无 panic/ERROR（日志 `dozer-app.log.2026-10-12`）。
+
+---
+
+## 4. Task 23 最终验收报告（2026-10-12）
+
+> 口径：**不把 handler 直接调用当真实点击；不以编译成功代替运行；未实机/无凭据者明确标 not-run 或 partial，整体不标"完全接入"。** 证据为三仓库本地 HEAD；未推送远端。
+
+### 4.1 三仓库 revision
+
+| 仓库 | HEAD | 说明 |
+|---|---|---|
+| `bytehost` | `fe9373d` | 本地；**未发新 tag**。最新 tag 仍为 `v0.1.1`（落后 `fe9373d` 24 提交）。DoD 的 C5–C12 host 侧改动均在此区间。 |
+| `dozer` | `8ff87cba` | 本地；`origin/main` = `ca0a279e`，**落后本仓 176 提交**且无 `dozer-panel-usage`。 |
+| `digger` | `99ad282` | 本地；新建 workspace 已固定 bytehost/dozer 的**本地 patch**（`.cargo/config.toml`，不提交），非 tag。 |
+
+> 三仓当前均经**不提交的本地 `[patch]`** 联调（`digger/.cargo/config.toml`、`dozer/.cargo/config.toml`）。A1「固定依赖可解析、无兄弟目录 patch」的**代码层证据已具备**（依赖闭包无产品依赖，见 4.2），但**发布层证据缺失**（见 A1 行）。
+
+### 4.2 §4 命令执行结果（本机实跑）
+
+**bytehost**（`fe9373d` 前为 `cbb4719`/`b7183bb`；下列为该区间实跑）：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo fmt --all --check` | ✅ clean |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | ✅ 0 error（修复 `stack_bounds` 9 参数 → `ToastMetrics` 结构体后） |
+| `cargo test --workspace --all-features` | ✅ 421 + 其余目标全过，0 failed（7 处 ignored 见下） |
+| `bash scripts/check-deps.sh` | ✅ ok（desktop 组零产品依赖） |
+| `cargo test -p bytehost-apps --test process_apps_live -- --ignored` | ✅ 7 passed（Python/Node/archive/升级回滚/敌意压缩包，真实进程） |
+| `cargo test -p bytehost-client --test embedded_host -- --ignored` | ✅ 1 passed（进程内嵌入无守护进程） |
+
+**dozer**（`8ff87cba`）：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo fmt --all --check` | ⚠️ 见 4.3 说明（既有 import 排序差异，非本次引入；未新增 diff） |
+| `cargo test --workspace --no-fail-fast` | ⚠️ 1 target failed：`dozer-app --bin dozer` = **1968 passed / 1 failed**，失败为既有 `usage_probe::host::tests::host_site_citations_point_at_the_code_they_name`（基线 §4.1.3，指向用户 WIP 的 `app/update.rs`，非本次回归） |
+| `cargo clippy -p dozer-app --all-targets` | ⚠️ 剩余 warning 全在用户 WIP 文件（`chrome/homespace.rs`/`confirm_overlay.rs`/`extensions/files/*`）；本次触碰的 `overlay_window.rs`/`toast_overlay.rs` 零 warning |
+| `python3 scripts/audit/check_panel_boundary.py` | ✅ `ok (216 refs in 6 files, baseline ratchet)`（C10 后 R-OVERLAY-DUP 基线 3） |
+| `python3 -m unittest discover -s scripts/audit -p 'test_*.py'` | ⚠️ 45 项中 **2** 失败，均为既有 `test_unit_edges.ScanUsage`（Usage 迁库后审计脚本扫旧路径，见 4.4）；本次修掉 1 项 C9 遗留陈旧测试（`test_slot_enum_counted_in_panel_host`） |
+| `bash scripts/check-log-scope.sh` | ✅ ok |
+
+**digger**（`99ad282`）：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo fmt --all --check` | ✅ clean（修复 `product.rs` 迁移测试格式后） |
+| `cargo test --workspace --no-fail-fast` | ✅ 全目标 0 failed（desktop bin 42 passed，含新增迁移单测） |
+| `cargo clippy --workspace --all-targets -- -D warnings` | ✅ 0 error |
+| `bash scripts/check-host-deps.sh` | ✅ ok（审视 1 个业务 crate） |
+| `cargo build -p digger-desktop --release` | ✅ 产出 `target/aarch64-apple-darwin/release/digger`（Mach-O thin arm64，adhoc-sign） |
+
+**Usage Web**（`crates/dozer-panel-usage/web/usage-content`）：`npm run typecheck` ✅ · `npm test` ✅ 14 passed · `npm run build` ✅ 产物无 git diff（提交资产与源一致）。
+
+### 4.3 fmt 说明（dozer）
+
+`rustfmt --check` 对 `overlay_window.rs` 报 2 处 import 排序差异，**HEAD 版本同样报 2 处**（本次未增加）；`toast_overlay.rs` HEAD 本就 clean。dozer 仓库根无 `rustfmt.toml`，此为既有历史差异，非本次引入，按"只降不升"口径记录，未强行全仓重排（会混入用户 WIP）。
+
+### 4.4 已知失败基线（贯穿，不计新增）
+
+- 审计单测 `test_unit_edges.ScanUsage` **2 项**失败：`test_usage_has_no_unclassified_edges`、`test_usage_depends_on_workspace_helpers`。根因同一：Task 19/20 把 Usage 迁到 `dozer-panel-usage` 后，`scripts/audit/unit_edges.py` 仍扫旧 `host_adapters/usage_panel` 路径（`baseline.md` §4.1.2 记 1 项，实际 2 项，为文档漂移）。**非本次回归**。
+- `dozer-app` 单测 `usage_probe::host::tests::host_site_citations_point_at_the_code_they_name`（`baseline.md` §4.1.3），指向用户 WIP 的 `app/update.rs`。
+- 环境噪声（忽略）：`libLLVM.dylib` strip 警告、`block v0.1.6` future-incompat。
+
+### 4.5 A1–A18 最终判定
+
+| 编号 | 判定 | 依据 / 缺口 |
+|---|---|---|
+| A1 独立构建 | **partial** ⚠️ | 代码层：`check-deps.sh`（两仓）✅、desktop 组零产品依赖 ✅、依赖闭包可解析 ✅。发布层：**未发 bytehost tag、未 pin dozer revision**，三仓仍靠不提交 `[patch]` → 「干净 clone 不依赖 patch」**未达成**（Task 22 阻塞）。 |
+| A3 请求身份 | **pass** ✅ | core 请求身份（Task 05/06）+ C8 收口（`RequestToken` 挂 core，`ScopedTrackers` 去产品包装）；`dozer-app` 全量单测含乱序/scope/实例重建语义通过。 |
+| A4 布局 | **partial** ⚠️ | `bytehost-core` 布局 DTO + Digger 迁移单测 + 旧布局黄金文件（Task 04/10）✅；「空栏真窗口」属 L4 人工，见 §3。 |
+| A5 Surface 生命周期 | **partial** ⚠️ | 状态机/旧 IPC 丢弃/实例代际（Task 08/09 L2）✅；真实 WKWebView 首帧/恢复快照（L3）受窗口服务器权限限制 → not-run（并入 §3 人工项）。 |
+| A6 几何与浮层 | **partial** ⚠️ | 几何纯函数（resize/DPI/分栏）+ C10 宿主建窗机制 ✅；真实浮层遮挡/点击/焦点（L3+L4）→ not-run（权限，并入 §3）。 |
+| A7 三种运行时应用 | **pass（L2）** ✅ | `process_apps_live` 7/7：静态拒进程、Python 端到端、Node 端到端、archive 源自 Python、依赖安装失败上报、敌意压缩包拒绝、Python 升级回滚。真实**显示/交互**（L3）→ not-run。 |
+| A8 版本与卸载 | **partial** ⚠️ | 升级失败/回滚（`process_apps_live::python_sample_upgrade_and_rollback`）✅；Digger 侧升级/降级/回滚三场景**实机演练全过**（隔离 HOME，见 ledger Task 22）；「含数据卸载」两种模式未逐项实跑 → partial。 |
+| A9 运行时问题 | **partial** ⚠️ | 依赖安装失败→持久问题上报（L2）✅；运行时缺失/卸载的持久状态页（L3+L4）→ not-run。 |
+| A10 鉴权/导航 | **pass（L2）** ✅ | bytehost gateway 集成（合法 200/无凭据 403/未知 Host 拒/跨 app 拒）+ `AppOrigin::allows_navigation` 唯一真相 + dozer 门禁测试。真实 WKWebView 探针（L3）→ not-run。 |
+| A11 IPC/权限 | **pass（L2）** ✅ | `AppIpc::parse` 随机 nonce、`build_app_webview_pins_the_restrictive_settings` 钉死 wry 限制项、CSP 不放宽；「token 不出现在产物」经 log-scope 门禁 ✅。对抗页面真机（L3）→ not-run。 |
+| A12 存储隔离 | **pass（L2）** ✅ | 每应用 `data_store_identifier`（算法钉死）+ `StoreRemovals` 清队列；dozer `app_webview.rs` 门禁测试。两应用跨重启实机（L3）→ not-run。 |
+| A13 订阅与迟到结果 | **partial** ⚠️ | 断线重订阅/Resync/乱序状态测试（Task 13/19）✅；Gateway 断连实机（L2/L3）→ not-run。 |
+| A14 退出/恢复 | **partial** ⚠️ | 正常/强杀/双启动：同根互斥、端口重置、可观察 shutdown（Task 12/14/15，L2）✅；**真实进程强杀/双启动实机** → not-run（并入 §3）。 |
+| A15 两产品并行 | **partial** ⚠️ | 独立根/端口/存储逻辑（Task 18）✅；Dozer 与 Digger **同时运行**实机 → not-run。 |
+| A16 Project 隔离 | **partial** ⚠️ | 应用不进 Project 内容、无 Project 也能管理应用（逻辑/单测）✅；**Project 真实导出/移动**与无 Project 窗口实机 → not-run（用户裁决未跑）。 |
+| A17 真实 Usage | **partial** ⚠️ | Digger 用量账本迁移（Task 19/20）✅、Usage Web 14 测试 ✅；**真实生产事件→账本→UI、跨重启**未实跑 → not-run。**应用运行携带 token 诚实为 0 → S6/S7 仍不完整**（计划 `:284`）。 |
+| A18 发布包 | **partial** ⚠️ | Digger release 构建 ✅、候选包 `Digger.app`（`ai.byteboy.digger`, min-OS 12.0, arm64, adhoc-sign）冷启动/资源/退出演练 ✅（Task 22，隔离 HOME）；**无签名身份（0 有效 codesigning identity）→ 只能 ad-hoc 候选包，不是已分发发行版**；Dozer 发布包未在本次重跑。 |
+
+**合计：pass 6 · partial 12 · not-run 0（归入 partial 内的 not-run 项见 §3/§4.5 备注）。整体不标"完全接入"**——A1 发布层、A17 生产端、A18 签名三处硬缺口。
+
+### 4.6 未验项明确清单（不得标"完全接入"）
+
+1. **A1 发布层**：bytehost 未发 tag、dozer 未 pin revision；三仓依赖不提交 `[patch]`——需**远端写授权**。
+2. **A17 生产端**：真实 Usage 生产者事件→账本→UI→跨重启；应用运行 token 诚实为 0（S6/S7）。
+3. **A18 签名**：无 Developer ID（本机 0 有效身份）→ 仅 ad-hoc 候选包；未公证、未分发。
+4. **§3 真实窗口人工项（M1–M4）**：屏幕录制/辅助功能权限缺失，`screencapture` 与 Orca 辅助 App 均不可用 → 需人工在真实窗口执行。
+5. **L3 真实 WKWebView 项**：A5/A6/A7(显示交互)/A9/A10/A11/A12/A13/A14/A15/A16 的真机探针 → 无 GUI runner，移交可用 macOS 环境。
+
+### 4.7 ADR 与 README 收口
+
+- **bytehost README** 已修：Digger 消费者条目原写「**Tauri 宿主,嵌入待做**」——两处均错，改为「iced + wry 宿主,**进程内嵌入已实现**（本地候选）」，并注明 Tauri 方案已撤回（`fe9373d`）。
+- **Digger ADR-001 / ADR-011**：**保持 `Status: Proposed`**，未升 Accepted——按 Task 23「ADR 仅在其全部必需验证通过后标 Accepted」，而 A1 发布层与 A18 签名未过。ADR-001/011 正文本身已正确声明"不使用 Tauri"，无需改。Digger Technical Architecture §21 亦已写明"Tauri and React are not used"。
+
+### 4.8 新增公共 API / 剩余产品代码 / 兼容格式 / 回滚（总结）
+
+- **bytehost 新增公共 API**（C5–C12 收口）：`bytehost-desktop::hover::HoverSlot`（C9）、`panes::{PaneDims,PaneSpec,PaneStore,RailItems,apply_pane_split_drag}`（C11）、`focus::{FocusRouter,FocusTarget}`（C12）、`overlay::{open_overlay,reposition_overlay,open_child_window[_unfocused],full_window_overlay_bounds,centered_card_offset,popup_card_size,stack_bounds,ToastMetrics,...}`（C10）、`bytehost-core` 布局 DTO + `bytehost_core::request` 请求身份。
+- **剩余产品代码**：Dozer 侧 `PanelKind` 业务键（`stable_id()`）、`FocusIntent` 业务路由、rail/pane 落盘命名兼容面、`overlay_window.rs`/`toast_overlay.rs` 薄壳（仅内容与主题色）。
+- **兼容格式**：布局 DTO 保留命名字段兼容面；`schema_version` 未知高版本拒覆盖、低版本迁移；`retained_unknown` 保留未知面板键。
+- **回滚**：升级失败保留原文件（SHA 不变，Task 22 演练）；用户 `bytehost/apps/<app>/state.json` 跨回滚存活；卸载「含数据」走 `StoreRemovals` 清 WKWebsiteDataStore。
+
+### 4.9 兼容桥收口状态
+
+C1–C12 见 §2。C1/C2/C3/C4 已归零（早期 Task）；C5/C6/C7/C8/C9/C11/C12 于 Task 21 收敛（对应门禁规则退役或棘轮下降）。**C10 未归零**：依用户裁决走**方案 B**，`R-OVERLAY-DUP` 残留 **3**（基线上限，只降不升）——到 0 需方案 A/C，列为**开放后续决策**。全部兼容桥的删除条件仍可测。

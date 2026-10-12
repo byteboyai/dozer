@@ -317,13 +317,15 @@
 
 **修改：**`acceptance.md`；Digger ADR-001/011、技术架构；bytehost README；Dozer 提取路线图。
 
-- [ ] 按 §5 覆盖表跑 A1–A18，记录 pass/fail/not-run，附三仓库 revision/tag、命令和证据路径。
-- [ ] GUI 人工项记录实际鼠标、焦点、浮层、IME、DPI 与截图；测试中直接发送消息不能代替真实点击。
-- [ ] Project 导出/移动、真实 Usage 生产者或系统权限行为有未验项时明确列出，整体不得标“完全接入”。
-- [ ] 修正 README 的 Tauri 等旧描述；ADR 仅在其全部必需验证通过后标 Accepted。
-- [ ] 总结新增公共 API、剩余产品代码、兼容格式和回滚方式。关闭全部兼容桥与未决验收项后，主计划方可完成。
+- [x] 按 §5 覆盖表跑 A1–A18，记录 pass/fail/not-run，附三仓库 revision/tag、命令和证据路径。
+- [x] GUI 人工项记录实际鼠标、焦点、浮层、IME、DPI 与截图；测试中直接发送消息不能代替真实点击。
+- [x] Project 导出/移动、真实 Usage 生产者或系统权限行为有未验项时明确列出，整体不得标"完全接入"。
+- [x] 修正 README 的 Tauri 等旧描述；ADR 仅在其全部必需验证通过后标 Accepted。
+- [x] 总结新增公共 API、剩余产品代码、兼容格式和回滚方式。关闭全部兼容桥与未决验收项后，主计划方可完成。
 
 **产出：**可审查的最终验收报告。提交 `docs(integration): record Digger bytehost acceptance`。
+
+**实施进度（2026-10-12）：** 已跑 §4 全部可在本机执行的命令并出报告（`acceptance.md` §4）。判定 **pass 6 / partial 12**，硬缺口三处：**A1 发布层**（bytehost 未发 tag、dozer 未 pin revision，仍靠不提交 `[patch]`）、**A17 生产端**（真实生产者未跑，token 如实 0）、**A18 签名**（0 有效 codesigning 身份 → 仅 adhoc 候选包）。L3/L4 真机项因屏幕录制/辅助功能权限缺失 → not-run，并入 Task 08 人工项。**整体不标"完全接入"。** 跑批中修复 3 处真实回归：C5–C12 host 侧 `fmt` 违规（`cbb4719`）、`stack_bounds` 9 参数改 `ToastMetrics` 结构体（`b7183bb`/`8f479a81`）、C9 退役规则漏删陈旧单测（`8ff87cba`）；另补 digger `product.rs` fmt（`99ad282`）、修 bytehost README Digger 旧描述（`fe9373d`）。ADR-001/011 保持 Proposed。**主计划未完成**：Task 21 的 C10 完全归零（方案 A/C，待裁决）与 Task 22 远端部分（发 tag/pin/签名，待授权）为剩余未决项。
 
 ## 4. 验证命令与运行边界
 

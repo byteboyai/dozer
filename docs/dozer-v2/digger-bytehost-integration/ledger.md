@@ -902,6 +902,28 @@
   - **第 3 条真实"安装"**:冷启动已做,但未做全系统范围的安装(拷贝到 `/Applications`);候选包范畴。
 
 
+## Task 23 — 最终验收与文档收口(计划 §Task 23 `:316+`)— DONE
+
+- **改动:** `acceptance.md` 增 §4 最终验收报告(A1–A18 判定 + 证据 + 未验清单 + API/回滚总结 + 桥收口);bytehost README 修正 Digger 消费者条目;并修复跑批中暴露的两处**真实回归**(见下)。
+- **§4 命令实跑结果(本机):**
+  - **bytehost** (`fe9373d` 区间): `fmt` clean、`clippy --workspace --all-targets --all-features -D warnings` 0 error、`test --workspace --all-features` 全过、`check-deps.sh` ok、**`process_apps_live` 7/7**(含 Python/Node/archive/升级回滚/敌意压缩包真实进程)、**`embedded_host` 1/1**(进程内无守护进程嵌入)。
+  - **dozer** (`8ff87cba`): `check_panel_boundary.py` **ok (216/6)**、`check-log-scope.sh` ok、`test --workspace --no-fail-fast` 仅 `dozer-app --bin dozer` 1 项既有失败(1968 passed/1 failed = `usage_probe::host::host_site_citations...`,基线 §4.1.3,指向用户 WIP)、审计单测 45 项 2 失败(既有 `ScanUsage` 迁库后扫旧路径)。
+  - **digger** (`99ad282`): `fmt` clean、`test --workspace --no-fail-fast` 全过、`clippy --workspace --all-targets -D warnings` 0 error、`check-host-deps.sh` ok、`build -p digger-desktop --release` 产出 arm64 adhoc 二进制。
+  - **Usage Web**: `typecheck`/`test`(14)/`build` 全过,产物无 diff。
+- **跑批中修复的真实回归(本次新增提交):**
+  - **bytehost `cbb4719`**: C5–C12 host 侧改动带入的 **`cargo fmt` 违规**(`focus.rs`/`lib.rs` 未 fmt 即提交)——此前切片批漏跑 `fmt`。纯重排,无语义变化。
+  - **bytehost `b7183bb` + dozer `8f479a81`**: `clippy -D warnings` 报 `bytehost-desktop::overlay::stack_bounds` **9 参数超阈值**;按仓库约定(**≥7 且相邻同类型参数**用具名字段结构体)重构为 `ToastMetrics{width,height,gap,margin_right,margin_bottom}`,dozer `toast_overlay.rs` 适配,并删 `overlay_window.rs` 未用的 `window_logical_size` 重导出。
+  - **dozer `8ff87cba`**: C9 切片 6 退役 `R-HOVERSLOT-VARIANTS` 规则时**漏删陈旧单测** `test_slot_enum_counted_in_panel_host`(仍断言已退役规则);删除该测试并同步 `ENUM` 夹具去掉 `HoverSlot`。
+  - **digger `99ad282`**: Task 22 迁移测试 `product.rs` **未 fmt 即提交**,补 fmt。
+  - **bytehost `fe9373d`**: README 消费者条目原写「Tauri 宿主,嵌入待做」(两处均误),改为 iced+wry / 进程内嵌入已实现。
+- **判定汇总:** **pass 6**(A3/A7/A10/A11/A12 + A1 代码层)· **partial 12**;硬缺口三处——**A1 发布层**(无 tag/revision,靠不提交 patch)、**A17 生产端**(真实生产者未跑、token 如实 0)、**A18 签名**(0 有效身份→仅 adhoc 候选包)。**整体不标"完全接入"。** L3/L4 真机项(A5/A6/A9/A14/A15/A16 等)因屏幕录制/辅助功能权限与无 GUI runner → not-run,并入 §3 人工项。
+- **ADR:**Digger ADR-001/011 **保持 Proposed**(A1/A18 未过,不升 Accepted);正文已正确声明"不用 Tauri",未改。
+- **未决项 / 阻塞(移交用户裁决):**
+  - **C10 完全归零**:方案 B 落地后 `R-OVERLAY-DUP` 残留 **3**(基线上限);到 0 需方案 A/C——**开放后续决策**。
+  - **Task 22 远端部分**:bytehost 发 tag、dozer pin revision、签名——**均待远端写授权/Developer ID 凭据**。
+- **提交记录(本任务):** bytehost `cbb4719`/`b7183bb`/`fe9373d`;dozer `8f479a81`/`8ff87cba` + 本验收提交;digger `99ad282`。
+
+
 ## 提交记录
 | Task | 提交 | 仓库 | 说明 |
 |---|---|---|---|
@@ -969,3 +991,10 @@
 | 21 | `147285f` | B | `feat(desktop): add product-neutral overlay windowing glue` |
 | 21 | `ea1202a0` | Z | `refactor(platform): route overlay windowing glue through shared host API (C10)` |
 | 22 | `f718e76` | D | `build(digger): pin shared host and package desktop (Task 22, local)` |
+| 22 | `031eb956` | Z | `docs(integration): record Task 22 local packaging progress and blockers` |
+| 23 | `cbb4719` | B | `style(desktop): cargo fmt focus.rs and lib.rs` |
+| 23 | `b7183bb` | B | `refactor(desktop): pass toast geometry via ToastMetrics struct` |
+| 23 | `99ad282` | D | `style(digger): cargo fmt product.rs migration test` |
+| 23 | `fe9373d` | B | `docs(readme): correct Digger consumer entry (iced+wry, in-process embedding done)` |
+| 23 | `8f479a81` | Z | `style(dozer-app): adapt toast overlay to ToastMetrics, drop unused reexport` |
+| 23 | `8ff87cba` | Z | `test(audit): drop stale HOVERSLOT test after C9 retired the rule` |
