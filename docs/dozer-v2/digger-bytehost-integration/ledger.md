@@ -808,6 +808,19 @@
 
 
 
+### 切片 6 — 面板内槽位词汇移入宿主(C9,DONE)
+
+- **动机 / 桥:** **C9**(`acceptance.md:47`):`HoverId`(`app/state.rs`)与 `HoverSlot`(`panel_host.rs`)的词汇尚未命名空间化/注册制。验收要求:`HoverSlot`/`PanelKind` 变体表纳入注册制后**门禁计数只降**。
+- **核对:** `HoverSlot` 本就是产品中立词汇(9 个通用槽位 + `Named` 兜底,注释即写"词汇通用,不含任何面板名"),与具体面板无关——是天然的宿主类型;`PanelKind` 的注册制已由 `panel_registry::PanelCatalog` 落地(Task 04+)。产品专属部分(`HoverId` 的 `Topbar`/`ProjectTab*`/`HomeTab`/`TermTab*` 等)必须留产品侧(它们绑定产品 UI 结构),`HoverId::Panel(PanelKind, HoverSlot)` 是"产品身份 + 宿主槽位"的组合点。
+- **改动(bytehost,`17c0736`):** 新增 `bytehost-desktop/src/hover.rs`,产品中立的 `HoverSlot`(9 通用变体 + `Named(&'static str)`);`lib.rs` 注册 `pub mod hover;` + `pub use hover::HoverSlot;`。
+- **改动(dozer,`5669776c`):** `panel_host.rs` 删除本地 `HoverSlot` 定义,改为 `pub use bytehost_desktop::HoverSlot;`(调用点零改动,`HoverId::Panel`/`HoverId::named(..)` 自动指向宿主类型);新增测试 `hover_slot_vocabulary_is_the_host_type` 钉住"槽位词汇即宿主类型"。
+- **门禁:** 退役 `R-HOVERSLOT-VARIANTS` 规则(主体已移入宿主,`panel_host.rs` 里该枚举为 0),`ENUM_RULES` 只留 `HoverId`;基线按棘轮下降删除 `panel_host.rs` 条目(9→无),其余值未动(`222 refs/6 files` → `213 refs/5 files`,仅少去该条目)。
+- **验证:** bytehost `cargo test -p bytehost-desktop` 全绿(50+8+3+8)、`cargo clippy` 零告警、`check-deps.sh` ok;dozer `cargo build`/`--tests` 绿、`cargo clippy -p dozer-app --all-targets` 对本片文件零告警、`cargo test -p dozer-app --bin dozer` **1970 passed / 1 failed**(唯一失败仍是既有用户 WIP 行号漂移)、`panel_host` 22 passed(含新测试)、`check-log-scope.sh` ok、`check_panel_boundary.py` ok(213/5)。
+- **偏差 / 发现:** 本片是纯"搬类型 + 重导出",零调用点改动——`HoverSlot` 本就是中立词汇,只是错放在产品 crate。
+- **未决项 / 阻塞:** 无。C9 收口。**C7/C10 待续。**
+
+
+
 ### 设计:C8 + C11 + C12 共同的"PanelId/Scope 键控"缺口(DONE — 设计待裁决)
 
 **背景。** 三个剩余桥(C8 请求身份路由、C11 rail/pane 容器、C12 焦点路由)共享同一根因:**Host 已有稳定中性身份(`bytehost_core::id::{PanelId,ScopeId,PanelInstanceId}`、`Layout/Rail{items:Vec<PanelId>}`、`PanelCatalog`),但产品从未把身份线程到面板运行时**。因此每处都退化成以产品 `PanelKind`/`project_id` 为键。核对结论:
@@ -826,7 +839,7 @@
 
 **为何一次设计而非三片:** C8 的"面板按 scope 路由"落地物就是 C11/C12 所需的"实例→区域/焦点"注册表;分三次会各造一套键控。**风险/未决:** ① home-pane `RailButton` 变体是否进通用控件;② `Side`/`maximized` 是否移入 `bytehost-core`;③ `RightPairSplit`(Agent/Conversations/Usage 轮转,`layout.rs:779`)无通用等价,留产品;④ 真窗像素回归受 Task 08 权限阻塞,只能靠现有几何单测(A4 部分)。**跨仓:** 均需 bytehost 侧新增(按 tag 发布),本地用 uncommitted patch 联调;正式 pin 归 Task 22。
 
-**状态:** 侦察与设计成稿;用户已裁决按此方向实现,建议顺序 **(1)+(2) 关 C8 → (3) 关 C12 → (4) 关 C11**。move (1)+(2) 的 C8 部分已成切片 3(`300c7dab`,见上);move (3) 的 C12 已成切片 4(`c80d443` + `fa9f37a2`,见上);move (4) 的 C11 已成切片 5(`3dad53e` + `b50b5ca0`,见上)。至此设计 move 1–4 全部落地;任一实现片需独立提交+回归。
+**状态:** 侦察与设计成稿;用户已裁决按此方向实现,建议顺序 **(1)+(2) 关 C8 → (3) 关 C12 → (4) 关 C11**。move (1)+(2) 的 C8 部分已成切片 3(`300c7dab`,见上);move (3) 的 C12 已成切片 4(`c80d443` + `fa9f37a2`,见上);move (4) 的 C11 已成切片 5(`3dad53e` + `b50b5ca0`,见上)。至此设计 move 1–4 全部落地;C9 已成切片 6(`17c0736` + `5669776c`,见上)。任一实现片需独立提交+回归。
 
 
 ## 提交记录
@@ -888,3 +901,5 @@
 | 21 | `fa9f37a2` | Z | `refactor(platform): route keyboard focus through shared FocusRouter (C12)` |
 | 21 | `3dad53e` | B | `feat(desktop): add product-neutral PanelId-keyed pane/rail container` |
 | 21 | `b50b5ca0` | Z | `refactor(host): route pane split/collapse and rail lookup onto shared PanelId container (C11)` |
+| 21 | `17c0736` | B | `feat(desktop): add product-neutral HoverSlot vocabulary` |
+| 21 | `5669776c` | Z | `refactor(host): adopt shared HoverSlot vocabulary (C9)` |
