@@ -2109,6 +2109,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "dozer-panel-usage"
+version = "0.1.0"
+dependencies = [
+ "bytehost-core",
+ "bytehost-desktop",
+ "byteui",
+ "dozer-model",
+ "dozer-services",
+ "iced_renderer",
+ "iced_widget",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "dozer-services"
 version = "0.1.0"
 dependencies = [
