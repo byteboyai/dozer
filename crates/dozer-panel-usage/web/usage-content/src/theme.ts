@@ -1,8 +1,9 @@
 import type { AgentKind, TrendChartKind } from './types.ts';
 
-// 移植自 workspace/hook.rs::agent_dot_color——每个 agent 固定映射到一个
-// 主题 CSS 变量名(见 Task 1 styles.css 的 :root[data-theme] 定义),不是
-// 写死的十六进制,明暗切换时自动跟随。
+// 每个 agent 固定映射到一个主题 CSS 变量名(见 Task 1 styles.css 的
+// :root[data-theme] 定义),不是写死的十六进制,明暗切换时自动跟随。
+// Rust 侧同源映射由产品的 `PanelDisplay::agent_icon_color` 提供(Dozer 移植自
+// 其 `workspace/hook.rs::agent_dot_color`),两边须一致,见 theme.test.ts。
 export const AGENT_COLOR_VAR: Record<AgentKind, string> = {
   claude: '--cyan',
   codebuddy: '--purple',

@@ -115,8 +115,9 @@ cp -R "$ROOT_DIR/crates/dozer-app/assets/review-trace" "$APP_DIR/Contents/Resour
 # 用量面板内容侧图表 host。`dozer://usage-content/` 从 flyfish 根的兄弟
 # 目录 `Contents/Resources/usage-content` 读,漏拷会导致分发后用量面板
 # 整个 404 "not found"(2026-09-26 用户实测复现:只装了 flyfish/editor/
-# json-editor/review-trace 四者,独漏 usage-content)。
-cp -R "$ROOT_DIR/crates/dozer-app/assets/usage-content" "$APP_DIR/Contents/Resources/usage-content"
+# json-editor/review-trace 四者,独漏 usage-content)。产物唯一来源是
+# `dozer-panel-usage` crate(Task 19 起,不再从 dozer-app 下取)。
+cp -R "$ROOT_DIR/crates/dozer-panel-usage/assets/usage-content" "$APP_DIR/Contents/Resources/usage-content"
 # 图片标注 host(OpenSeadragon + Annotorious)。`dozer://image-annotate/` 从
 # flyfish 根的兄弟目录 `Contents/Resources/image-annotate` 读(vendor JS + 导航
 # 图标),漏拷会导致分发后 png/jpg/jpeg/webp/bmp/ico 预览整个 404(同

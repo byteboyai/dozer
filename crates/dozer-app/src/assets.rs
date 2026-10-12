@@ -170,10 +170,18 @@ fn review_trace_root_for(flyfish_root: &Path) -> PathBuf {
     flyfish_root.with_file_name("review-trace")
 }
 
-/// usage-content host(用量面板内容侧图表)静态资源根 = flyfish 根的兄弟
-/// 目录 `usage-content`。同 `editor_root_for`/`review_trace_root_for`。
+/// usage-content host(用量面板内容侧图表)静态资源根。产物唯一来源在
+/// `dozer-panel-usage` crate(Task 19 起);打包分发时 `build-macos-app.sh`
+/// 把它拷进 `Contents/Resources/usage-content`,此时 `flyfish_root` 的兄弟
+/// 目录 `usage-content` 存在,优先用它;dev 态(兄弟目录不存在)回退到
+/// crate 自带资源根。同 `editor_root_for`/`review_trace_root_for`。
 fn usage_content_root_for(flyfish_root: &Path) -> PathBuf {
-    flyfish_root.with_file_name("usage-content")
+    let bundled = flyfish_root.with_file_name("usage-content");
+    if bundled.is_dir() {
+        bundled
+    } else {
+        dozer_panel_usage::web_assets_root()
+    }
 }
 
 /// codehealth-content host(代码健康度内容侧)静态资源根 = flyfish 根的兄弟
@@ -488,7 +496,7 @@ mod tests {
     /// 提交的 usage-content 产物必须齐全(防止忘记 `npm run build` 就提交)。
     #[test]
     fn usage_content_bundle_assets_are_present() {
-        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/usage-content"));
+        let root = dozer_panel_usage::web_assets_root();
         for f in ["host.html", "usage-content.js", "usage-content.css"] {
             let p = root.join(f);
             assert!(p.is_file(), "缺少 usage-content 产物 {f}: {}", p.display());
@@ -502,7 +510,7 @@ mod tests {
     /// 严格 CSP、无 connect-src(没有 fetch 端点,数据全靠推送)、无网络。
     #[test]
     fn usage_content_host_has_strict_csp_and_no_external_refs() {
-        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/usage-content"));
+        let root = dozer_panel_usage::web_assets_root();
         let html = std::fs::read_to_string(root.join("host.html")).expect("读 host.html");
         assert!(html.contains("default-src 'none'"));
         assert!(html.contains("script-src 'self'"));

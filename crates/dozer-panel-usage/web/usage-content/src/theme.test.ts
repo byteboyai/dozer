@@ -9,7 +9,7 @@ test('AGENT_COLOR_VAR covers all eight AgentKind values', () => {
   }
 });
 
-test('AGENT_COLOR_VAR matches workspace/hook.rs::agent_dot_color mapping', () => {
+test('AGENT_COLOR_VAR matches PanelDisplay::agent_icon_color mapping', () => {
   assert.equal(AGENT_COLOR_VAR.claude, '--cyan');
   assert.equal(AGENT_COLOR_VAR.codebuddy, '--purple');
   assert.equal(AGENT_COLOR_VAR.opencode, '--green');

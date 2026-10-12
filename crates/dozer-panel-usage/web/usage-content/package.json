@@ -1,9 +1,9 @@
 {
-  "name": "dozer-usage-content",
+  "name": "dozer-panel-usage-content",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Dozer 用量面板内容侧(usage-content),Preact 离线打包,无 CDN/无运行时 Node。",
+  "description": "dozer-panel-usage 用量面板内容侧(usage-content),Preact 离线打包,无 CDN/无运行时 Node。",
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",

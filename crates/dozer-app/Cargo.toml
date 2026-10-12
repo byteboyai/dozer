@@ -1,6 +1,6 @@
 [package]
 name = "dozer-app"
-version = "0.5.290"
+version = "0.5.291"
 edition.workspace = true
 
 [[bin]]
@@ -25,6 +25,9 @@ bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" 
 # 共享桌面宿主执行层:Surface 生命周期/路由/几何(iced + wry 平台实现)。
 bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
 dozer-codehealth = { path = "../dozer-codehealth" }
+# 同源 Usage 面板库(Task 19):Dozer 只做 ctor/重导出包装,数据层/视图层/资源
+# 都在此 crate;其依赖闭包不含 dozer-app(见 crate 文档)。
+dozer-panel-usage = { path = "../dozer-panel-usage" }
 # 复用 dozer-hook 的 hook 安装逻辑(install::run_at/opencode_install::run_at)，
 # 新建 agent 会话时静默注册对应 CLI 的 hook，不必用户手动跑 `dozer-hook install`。
 dozer-hook = { path = "../dozer-hook" }

@@ -1,6 +1,10 @@
 // 生产构建:把用量面板内容侧打包成离线、无 CDN、无运行时 Node 的确定性
-// 产物到 `crates/dozer-app/assets/usage-content/`。不输出 source map;
-// minify 后去掉所有 legal comments。
+// 产物到同 crate 的 `crates/dozer-panel-usage/assets/usage-content/`。不输出
+// source map;minify 后去掉所有 legal comments。
+//
+// 产物全是本仓(firet-party)代码,不含第三方 legal comment(见同目录
+// `NOTICE.md`)。消费方(Dozer / Digger)从本 crate 的 `assets/usage-content/`
+// 单一来源服务该 host,不各自留副本。
 
 import { build } from 'esbuild';
 import { cp, mkdir, rm } from 'node:fs/promises';

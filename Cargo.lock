@@ -1977,6 +1977,7 @@ dependencies = [
  "dozer-hook",
  "dozer-mcp",
  "dozer-model",
+ "dozer-panel-usage",
  "dozer-services",
  "futures",
  "gleisbau",

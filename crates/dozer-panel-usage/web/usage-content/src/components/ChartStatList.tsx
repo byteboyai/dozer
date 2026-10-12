@@ -2,8 +2,8 @@ import type { AgentShare } from '../types.ts';
 import { formatCount } from '../format.ts';
 import { agentColorVar } from '../theme.ts';
 
-// agent 展示名——同 `AgentKind::label()`(dozer_core::protocol,
-// crates/dozer-core/src/protocol.rs),与 Rust 侧逐一对应。
+// agent 展示名——同 `AgentKind::label()`(crates/dozer-model/src/agent.rs),
+// 与 Rust 侧逐一对应。
 const AGENT_LABEL: Record<string, string> = {
   claude: 'claude',
   codebuddy: 'codebuddy',
