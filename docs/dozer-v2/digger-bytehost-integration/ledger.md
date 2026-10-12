@@ -734,6 +734,28 @@
 - **未决项 / 阻塞:** 无新增;其余桥(C7/C8/C10/C11/C12)待后续切片。
 
 
+
+### 设计:C8 + C11 + C12 共同的"PanelId/Scope 键控"缺口(DONE — 设计待裁决)
+
+**背景。** 三个剩余桥(C8 请求身份路由、C11 rail/pane 容器、C12 焦点路由)共享同一根因:**Host 已有稳定中性身份(`bytehost_core::id::{PanelId,ScopeId,PanelInstanceId}`、`Layout/Rail{items:Vec<PanelId>}`、`PanelCatalog`),但产品从未把身份线程到面板运行时**。因此每处都退化成以产品 `PanelKind`/`project_id` 为键。核对结论:
+
+- `panel_host.rs` **完全不含** `PanelInstanceId`/`ScopeId`;产品 `RequestTracker` 内部只固定 `PanelInstanceId::new(0,0)` 靠惰性 scope 表工作。面板运行时拿不到 host 身份。
+- C8:`request_tracker.rs` 的 `RequestToken` 包装只为携带 `project_id: Option<i64>`。用途二:①**路由键**——`App::update` 里 `msg.project_id()`(`app/update.rs:1951`)决定 `with_project(project_id, …)` 把回包投给哪个工作区;②**守卫**——3 处 `token.project_id != Some(project_id)`(`browser.rs:1691`/`todo/update.rs:127`/`project/update.rs:25`)。其余 4 面板(codehealth/agent_context/conversations/group_chat)只用 `requests.accepts(&token)`,不读 project_id。`CoreToken` 有 `scope(): &ScopeId`(值形如 `project:5`/`global`),无 `project_id`。
+- C11:`PanelKind` 是 13 变体闭枚举(仅 `App(AppSlot)` 带数据),几何/折叠是 `PanelDims` 的**逐面板具名字段 + 巨型 match**(`app/layout.rs:161/179/199/214/631`),`Divider` 12 个面板/配对变体 + 1 个 `LeftRight`(`app/layout.rs:343`)。`RailLayout{left/right:Vec<PanelKind>}` 与 `bytehost_core::Layout.rails:Vec<Rail{items:Vec<PanelId>}>` 近似 1:1,但 host 侧**无 iced rail/pane/divider 控件**、`Rail` 也只有 `width` 无每面板 split/collapsed。`chrome/rail.rs` 自述仅"物理搬迁",状态留在 `App`/`ShellLayout`。
+- C12:`FocusIntent{Preview(PanelKind),Browser,Terminal}`(`window_events.rs:273`)全以 `PanelKind` 为键;`apply_pending_focus`(`:2418`)按 `Preview(kind)` 查 `active_preview_webview_id(kind)`;纯 `FocusTracker` 已抽(host),但"焦点去向"未抽。
+
+**提议的最小公共 API(待用户裁决,方向以既能关 C8 又能喂 C11/C12 为准):**
+
+1. **身份线程(基础)。** `PanelIo` 在绑定时携带其 `PanelInstanceId` + `ScopeId`(由产品组合根按 `project_id→scope` 映射给出,映射仍只活在产品侧);`CoreToken` 已自带 scope,故**无需包装**。`Message::AsyncResult` 载荷由 `crate::request_tracker::RequestToken` 改为 `bytehost_core::request::RequestToken`(直接携带 scope+instance)。→ **C8 收口**:删除 `request_tracker.rs`;面板守卫改为 `token.scope() != expected_scope`(expected_scope 由面板在 `on_activate` 拿到并存下),`accepts` 直接吃 `CoreToken`。
+2. **产品路由表。** `App` 维护 `PanelInstanceId → 路由目标(project_id / 区域)` 的**产品侧注册表**,`msg.project_id()` 改为查该表——`project_id` 不再搭在 token 上,Host 不解析 `project:5` 业务含义。→ 喂 C11 的"面板实例归属"与 C12 的"焦点去向"。
+3. **通用焦点目标(喂 C12)。** host 抽 `FocusTarget`(数据槽/内容槽/window 三类,`PanelInstanceId` 键控);产品只留业务路由(SearchIn/ShowFileHistory 仍映射到具体内容槽)。
+4. **PanelId 键控容器(喂 C11)。** host 增 iced rail/pane/divider 控件 + `PanelId→split/collapsed` 通用 dims 存储;产品提供 descriptor(图标/标题/命令)与排序规则。像素布局需真窗回归(A4)。
+
+**为何一次设计而非三片:** C8 的"面板按 scope 路由"落地物就是 C11/C12 所需的"实例→区域/焦点"注册表;分三次会各造一套键控。**风险/未决:** ① home-pane `RailButton` 变体是否进通用控件;② `Side`/`maximized` 是否移入 `bytehost-core`;③ `RightPairSplit`(Agent/Conversations/Usage 轮转,`layout.rs:779`)无通用等价,留产品;④ 真窗像素回归受 Task 08 权限阻塞,只能靠现有几何单测(A4 部分)。**跨仓:** 均需 bytehost 侧新增(按 tag 发布),本地用 uncommitted patch 联调;正式 pin 归 Task 22。
+
+**状态:** 侦察与设计成稿;**待用户裁决**是否按此方向实现(建议先落 (1)+(2) 关 C8,再以 (3) 关 C12,最后 (4) 关 C11)。任一实现片需独立提交+回归。
+
+
 ## 提交记录
 | Task | 提交 | 仓库 | 说明 |
 |---|---|---|---|
