@@ -663,6 +663,23 @@
 
 ---
 
+## Task 19 — 提取同源 Usage 面板库(计划 §Task 19 `:260-272`)
+
+- **目标（计划 §Task 19 `:260-272`）：** (1) 先列明现有行为/资源契约,连同现有测试迁入库;不能在两处各留完整实现。(2) 把 workspace/chrome UI helper 依赖换成公共 UI 或注入的产品展示适配。(3) 审计本地 Git 统计路径:直接 `bytegit` Repo 读取改为面板所需的窄数据提供接口;Dozer 实现保持现状,Digger 明确其能提供的语义,不把 Git 实现塞进 Host。(4) 迁移离线 Web bundle、构建脚本、许可证与资源版本;运行原 npm typecheck/test/build,实际使用迁后 bundle。(5) Dozer 仅保留重新导出/注册包装;库依赖闭包无 dozer-app/dozer-client/dozer-core,允许领域 model/services 与公共 UI。(6) 以可固定 revision 提供 Digger 引用,验证依赖中的领域类型不出现两份不兼容来源。**验证:** Usage 旧测试、fake 独立面板真窗口、Dozer 真数据行为对照;A2。**提交按 Rust 提取、资源提取、Dozer 接入拆分。**
+- **范围裁决(用户已定,4 项):** (a) 方式=先确认决策再分阶段实现(Rust 提取 → 资源提取 → Dozer 接入,三个提交);(b) crate 位置=**在 dozer 仓**(`dozer/crates/dozer-panel-usage`),Digger 在 `digger/Cargo.toml` 固定 git rev;(c) 展示适配=**注入适配 trait + 泛型 Message**(库定义窄 trait:agent 图标/颜色、面板头、折叠按钮,泛型于宿主 Message,Dozer 实现);(d) Git 数据=**注入窄 provider trait**(`GitStatsProvider{commit_count, commits_by_day}`,Dozer 实现包 `bytegit`,Digger 自备或 `NoGitStats`)。
+- **阶段 1 — Rust 提取(DONE):** 新增 crate `dozer/crates/dozer-panel-usage`,内含 `aggregate.rs`/`protocol.rs`(纯数据/线协议,仅 `dozer-model`)、`state.rs`/`activation.rs`/`surface.rs`/`view.rs`/`adapter.rs`/`lib_tests.rs`。`extensions/usage/`(mod 1205 + aggregate 416 + protocol 481 + view 217 + surface 165 行)的数据层/视图层全部迁入。
+  - **接缝(计划第 2/3/5 条):** `adapter.rs` 定义 `GitStatsProvider`(+`NoGitStats` 默认)、`UsageOutbox`/`UsageNotice`/`NoticeLevel`(替代 `toast::Outbox`;库**不**硬编码 `dozer_core::log::Scope`)、`ScriptDispatch = fn(&str)->String`(替代 `preview::dispatch_script`)、`PanelDisplay<M>`(agent_icon_color/agent_icon/panel_head/list_collapse_button/collapse_hover/toggle_list_collapse/**wrap**);`activation.rs` 提供库自有 `ActivationCtx<M>`。
+  - **依赖闭包(第 5 条):** `cargo tree -p dozer-panel-usage` 仅 `dozer-model`、`dozer-services`、`byteui`(v0.4.1)、`bytehost-core`/`bytehost-desktop`(v0.1.1)+ iced/serde/tokio。**无** `dozer-app`/`dozer-client`/`dozer-core`/`bytegit`。
+  - **验证:** `cargo test -p dozer-panel-usage` **52 passed**;`cargo clippy -p dozer-panel-usage --all-targets` 干净。行为契约(固定单槽 Surface 代数、payload 构造在面板内、宿主只决定推送时机等)逐条保留。
+- **阶段 2 — 资源提取(DONE):** web 源码 `dozer-app/web/usage-content/` → `dozer-panel-usage/web/usage-content/`;产物 `dozer-app/assets/usage-content/` → `dozer-panel-usage/assets/usage-content/`(唯一来源,删旧副本)。`build.mjs` outdir 改指本 crate;新增 `NOTICE.md`(一手代码、`legalComments:none`、无 CDN、重建流程)与 `.gitignore`(node_modules)。
+  - **消费方接入:** dozer-app `assets.rs::usage_content_root_for` 优先打包态 `Resources/usage-content`,dev 态回退 `dozer_panel_usage::web_assets_root()`;打包脚本 `build-macos-app.sh` 改从本 crate 拷;bundle/CSP 测试改指 `web_assets_root()`。
+  - **验证:** `npm ci && npm run typecheck && npm test`(14 passed)`&& npm run build` —— 产物**确定性**,哈希(host.html `9cf50280`、usage-content.css `e5f67c70`、usage-content.js `59184938`)**与迁移前逐字节一致**;`cargo test -p dozer-app` 2023 passed(仅既有无关失败 `files::delete_confirm_spec_reflects_pending_target` + 一次并行 scratch 抖动);边界门禁 `check_panel_boundary.py` exit 0(仅既有 `R-HOST-EXECUTORS 0->1`)。
+- **阶段 3 — Dozer 接入(进行中):** 待实现 `PanelDisplay<Message>`/`GitStatsProvider`(包 `bytegit`)/Toast 适配(`UsageNotice`→`toast::Pending`,带 `LOG` scope),删除旧 `extensions/usage/`,保持行为一致。
+- **偏差:** 阶段 2 顺带把 dozer-app 的 serve/packaging 指向新 crate(计划把"实际使用迁后 bundle"归阶段 2、把面板逻辑接入归阶段 3);Cargo.lock 只提交 `dozer-panel-usage` 相关 hunk,本地 `[patch]` 注入的 bytehost 重复项与既有 0.5.291 版本 bump 均**不**入库。
+- **未决项 / 阻塞:** 阶段 3 未完成(fake 独立面板真窗口、Dozer 真数据对照);Digger 侧引用(Task 20)与可固定 revision 待在阶段 3 后处理。
+
+---
+
 ## 提交记录
 | Task | 提交 | 仓库 | 说明 |
 |---|---|---|---|
@@ -702,3 +719,5 @@
 | R2 | `fc3a636` | B | `fix(desktop): make physical-slot replacement atomic and unregister occupant-checked` |
 | R7 | `2d924d9` | B | `fix(spike): SELFTEST must build the wry child and fail nonzero` |
 | R1 | `870817b6` | Z | `fix(usage): open a new Surface generation on same-frame slot replacement` |
+| 19 | `d2fd25cc` | Z | `feat(panel-usage): extract shared Usage panel library (Task 19 stage 1)` |
+| 19 | `4f2ce8be` | Z | `refactor(panel-usage): move usage-content bundle into shared crate (Task 19 stage 2)` |
