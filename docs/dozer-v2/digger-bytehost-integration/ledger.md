@@ -777,6 +777,37 @@
 
 
 
+### 切片 5 — rail/pane 容器改挂 `PanelId` 键控宿主容器(C11,设计 move 4,DONE)
+
+- **动机 / 桥:** **C11**(`acceptance.md:49`):`chrome/rail.rs` 的 `RailLayout{left/right:Vec<PanelKind>}` 与 `app/layout.rs` 的 `PanelDims`(逐面板具名 `_split`/`_list_collapsed` 字段 + 巨型 `match`)与产品 `PanelKind`/`App`/`ShellState` 深度耦合;bytehost-desktop 侧**无 `PanelId` 键控的 rail/pane/drag API**。验收要求:设计出 `PanelId` 键控的 rail/pane 容器后 Dozer 适配接上,且像素布局回归通过(A4/real-window)。
+- **改动(bytehost,`3dad53e`):** 新增 `bytehost-desktop/src/panes.rs`,产品中立:
+  - `PanelId` 是唯一键(来自 `bytehost_core::id::PanelId`);host 完全不认 `PanelKind`。
+  - `PaneDims{split, collapsed}`、`PaneSpec{default_first_first, collapsible}`、`PaneStore`(`BTreeMap<PanelId, PaneDims>`,`#[serde(transparent)]`,提供 `new/get/get_or/ensure/set/set_split/set_collapsed/len/is_empty`)。
+  - `RailItems = Vec<PanelId>`(rail 顺序)。
+  - `apply_pane_split_drag(current: PaneDims, spec: PaneSpec, mirrored, input: PaneDragInput) -> PaneDragOutcome`——把 Dozer `apply_pair_split_drag` 的几何(夹取 min/max 比例、`default_first_first != mirrored` 的镜像换算、拖窄到 `min_first_px` 即收起并冻结 split)逐字外移。`PaneDragInput` 用具名字段承载 6 个几何参数(仓库"参数结构体"约定,避免多个 `f32` 位置参数相邻易传错)。
+  - 含 8 个单测(拖拽镜像/夹取/收起/展开/不可收起面板永不收起/`PaneStore` 读写)。
+- **改动(dozer,`b50b5ca0`):**
+  - `PanelKind::stable_id() -> PanelId`(`app/state.rs`):产品业务枚举 → 中立身份的唯一映射点,命名空间 `dozer.`+小写名(`dozer.files`/`dozer.gitlog`…),应用面板走 `app:<id>`。新增 `PanelKind::ALL_BUILTIN` 常量。
+  - `panel_registry`:`PanelCatalog::panel_id(kind)` + 自由函数 `panel_id(kind)`(经当前清单),`PanelKind → PanelId` 经描述符/`stable_id`。
+  - `PanelDims::to_pane_store(self) -> PaneStore` / `apply_pane_store(&mut self, &PaneStore)`:命名字段(落盘真相)与宿主 `PanelId` 键控容器的**互逆投影**。
+  - `apply_pair_split_drag` 的算术**改为调 `bytehost_desktop::apply_pane_split_drag`**——Dozer 只提供 `pane_spec(kind)`(是否可收起 + 默认哪个 slot 在前)与当前 `PaneDims`,宿主算新状态;结果经 `to_pane_store → set → apply_pane_store` 回写。原 `list_rendered_first`(镜像换算)删除(逻辑已在宿主)。
+  - `RailLayout::side_of(kind)` 改为 `side_of_id(kind.stable_id())`;新增 `side_of_id(PanelId)` 与 `to_rail_items(Side) -> RailItems`(rail 投影成 `PanelId` 键控条目)。
+  - 新增门禁规则 **`R-PANE-KEYED-FIELDS`**:`app/layout.rs` 里逐面板命名的 pane 维度字段出现次数(残留的**产品侧落盘兼容面**),基线建为 81,只降不升——新维度应进宿主 `PanelId` 容器,不再新增 named 字段。
+- **验证:**
+  - bytehost:`cargo test -p bytehost-desktop panes` **8 passed**;`cargo test -p bytehost-desktop focus` 6 passed(未回归);`bash scripts/check-deps.sh` **ok**。
+  - dozer:`cargo build -p dozer-app` + `--tests` 绿;`cargo clippy -p dozer-app --all-targets` 对我的四文件零告警(仅剩既有 `GitProvider::ALL`/`move_item` dead-code);`cargo test -p dozer-app --bin dozer` **1970 passed / 1 failed**(唯一失败仍是既有用户 WIP 引起的 `usage_probe::host` 引用行号漂移;新增 3 个 C11 单测:`panel_dims_accessor_tests::pane_store_round_trips_every_builtin_panel`/`panel_id_is_stable_dozer_namespace`、`chrome::rail::tests::side_of_id_matches_kind_side`);`bash scripts/check-log-scope.sh` **ok**。
+  - `python3 scripts/audit/check_panel_boundary.py` → **ok(222 refs in 6 files)**;新增 `app/layout.rs R-PANE-KEYED-FIELDS 81`,其余基线值未动(141→222 仅新增本规则)。
+- **偏差 / 发现:**
+  - **命名字段未做 store 整体重写。** `PanelDims` 的逐面板 named `_split`/`_list_collapsed` 字段保留为**落盘序列化面**(`panel_layouts.json` 形状不变),宿主容器是键控适配视图;全字段→store 重写会波及约 660 处引用(含 `view.rs`/`webview_geometry.rs`/`app.rs`),在 A4 像素回归受 Task 08 权限阻塞时风险过高。故采"宿主容器 + 投影"的渐进接法,`R-PANE-KEYED-FIELDS` 棘轮锁住残留面只降不升。
+  - `Divider` 的 12 个面板/配对变体、`Side`/`MaximizedPane` 未移入 host(设计 move 4 未决项 ②③:`RightPairSplit` 无通用等价,留产品)。
+  - 本片四文件不含用户 WIP(已校验 staged diff 无 `TreeDragRelease`/`command` token);`layout.rs`/`state.rs`/`chrome/rail.rs`/`panel_registry.rs` 全属本片。
+- **未决项 / 阻塞:**
+  - **A4 真窗像素回归**仍受 Task 08(OS 权限)阻塞,本片只以既有几何单测 + 像素无关的算术等价(逐字外移)担保;真窗回归待 Task 08 解除后补。
+  - `PanelInstanceId` 线程进 `PanelIo`(切片 3 遗留)未在本片完成;`PanelId` 键控容器已是其前置。
+  - `Divider`/`Side`/`maximized` 中性化(设计 move 4 未决 ②③)未做。**C7/C10 待续。**
+
+
+
 ### 设计:C8 + C11 + C12 共同的"PanelId/Scope 键控"缺口(DONE — 设计待裁决)
 
 **背景。** 三个剩余桥(C8 请求身份路由、C11 rail/pane 容器、C12 焦点路由)共享同一根因:**Host 已有稳定中性身份(`bytehost_core::id::{PanelId,ScopeId,PanelInstanceId}`、`Layout/Rail{items:Vec<PanelId>}`、`PanelCatalog`),但产品从未把身份线程到面板运行时**。因此每处都退化成以产品 `PanelKind`/`project_id` 为键。核对结论:
@@ -795,7 +826,7 @@
 
 **为何一次设计而非三片:** C8 的"面板按 scope 路由"落地物就是 C11/C12 所需的"实例→区域/焦点"注册表;分三次会各造一套键控。**风险/未决:** ① home-pane `RailButton` 变体是否进通用控件;② `Side`/`maximized` 是否移入 `bytehost-core`;③ `RightPairSplit`(Agent/Conversations/Usage 轮转,`layout.rs:779`)无通用等价,留产品;④ 真窗像素回归受 Task 08 权限阻塞,只能靠现有几何单测(A4 部分)。**跨仓:** 均需 bytehost 侧新增(按 tag 发布),本地用 uncommitted patch 联调;正式 pin 归 Task 22。
 
-**状态:** 侦察与设计成稿;用户已裁决按此方向实现,建议顺序 **(1)+(2) 关 C8 → (3) 关 C12 → (4) 关 C11**。move (1)+(2) 的 C8 部分已成切片 3(`300c7dab`,见上);move (3) 的 C12 已成切片 4(`c80d443` + `fa9f37a2`,见上);(4) 待后续切片,任一实现片需独立提交+回归。
+**状态:** 侦察与设计成稿;用户已裁决按此方向实现,建议顺序 **(1)+(2) 关 C8 → (3) 关 C12 → (4) 关 C11**。move (1)+(2) 的 C8 部分已成切片 3(`300c7dab`,见上);move (3) 的 C12 已成切片 4(`c80d443` + `fa9f37a2`,见上);move (4) 的 C11 已成切片 5(`3dad53e` + `b50b5ca0`,见上)。至此设计 move 1–4 全部落地;任一实现片需独立提交+回归。
 
 
 ## 提交记录
@@ -855,3 +886,5 @@
 | 21 | `300c7dab` | Z | `refactor(host): move panel request identity onto core RequestToken/ScopedTrackers (C8)` |
 | 21 | `c80d443` | B | `feat(desktop): add product-neutral FocusRouter for keyboard focus routing` |
 | 21 | `fa9f37a2` | Z | `refactor(platform): route keyboard focus through shared FocusRouter (C12)` |
+| 21 | `3dad53e` | B | `feat(desktop): add product-neutral PanelId-keyed pane/rail container` |
+| 21 | `b50b5ca0` | Z | `refactor(host): route pane split/collapse and rail lookup onto shared PanelId container (C11)` |
