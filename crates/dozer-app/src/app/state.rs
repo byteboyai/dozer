@@ -96,6 +96,22 @@ impl<'de> Deserialize<'de> for PanelKind {
 }
 
 impl PanelKind {
+    /// 全部内置面板(不含应用面板),顺序与 `BUILTIN_NAMES` 一致。
+    pub const ALL_BUILTIN: [PanelKind; 12] = [
+        PanelKind::Files,
+        PanelKind::GitLog,
+        PanelKind::Todo,
+        PanelKind::Project,
+        PanelKind::Database,
+        PanelKind::Ssh,
+        PanelKind::Web,
+        PanelKind::Agent,
+        PanelKind::GroupChat,
+        PanelKind::Conversations,
+        PanelKind::Usage,
+        PanelKind::CodeHealth,
+    ];
+
     /// 面板默认挂在哪条栏——`RailLayout::default()`、以及镜像判断
     /// ("是否偏离了默认栏")共用这一份真相,不要在两处各写一份可能
     /// 不同步的列表。
@@ -103,6 +119,26 @@ impl PanelKind {
         crate::panel_registry::catalog()
             .default_side(self)
             .unwrap_or_else(|| panic!("{self:?} 没有在面板清单里注册"))
+    }
+
+    /// 产品业务枚举 → 宿主中立的稳定 `PanelId`(C11)。命名空间 `dozer.`,
+    /// 名字段小写;应用面板用 `app:<id>`。这是"产品把业务面板映射到 host 身份"
+    /// 的唯一入口,宿主不解释这些名字的业务含义。
+    pub fn stable_id(self) -> bytehost_core::id::PanelId {
+        match self {
+            PanelKind::App(slot) => {
+                bytehost_core::id::PanelId::for_app(slot.id()).expect("AppId 已校验,for_app 必成")
+            }
+            other => {
+                let name = BUILTIN_NAMES
+                    .iter()
+                    .find(|(k, _)| *k == other)
+                    .map(|(_, n)| *n)
+                    .expect("BUILTIN_NAMES 覆盖全部内置面板");
+                bytehost_core::id::PanelId::new(format!("dozer.{}", name.to_ascii_lowercase()))
+                    .expect("dozer.<小写名> 是合法 PanelId")
+            }
+        }
     }
 }
 

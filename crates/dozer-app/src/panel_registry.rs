@@ -11,6 +11,7 @@
 
 use std::sync::OnceLock;
 
+use bytehost_core::id::PanelId;
 use byteui::interaction::icons::IconKind;
 
 use crate::app::{PanelKind, Side};
@@ -72,6 +73,15 @@ impl PanelCatalog {
 
     pub(crate) fn descriptor(&self, id: PanelKind) -> Option<&PanelDescriptor> {
         self.descriptors.iter().find(|d| d.id == id)
+    }
+
+    /// 面板的稳定中立身份(C11):内置面板来自描述符,应用面板构造成 `app:<id>`。
+    /// 未注册的面板返回 `None`。
+    pub(crate) fn panel_id(&self, id: PanelKind) -> Option<PanelId> {
+        match id {
+            PanelKind::App(slot) => PanelId::for_app(slot.id()).ok(),
+            _ => self.descriptor(id).map(|d| d.id.stable_id()),
+        }
     }
 
     /// 产品给的默认布局(两栏各自的面板与顺序)。
@@ -158,6 +168,11 @@ pub(crate) fn catalog() -> &'static PanelCatalog {
             .get()
             .expect("面板清单未注册:main() 必须在任何布局读取之前调用 panel_registry::install")
     }
+}
+
+/// `PanelKind → PanelId` 的便捷入口(经当前清单)。未注册返回 `None`。
+pub(crate) fn panel_id(id: PanelKind) -> Option<PanelId> {
+    catalog().panel_id(id)
 }
 
 #[cfg(test)]

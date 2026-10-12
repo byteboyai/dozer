@@ -1,4 +1,7 @@
 {
+ "app/layout.rs": {
+  "R-PANE-KEYED-FIELDS": 81
+ },
  "app/state.rs": {
   "R-HOVERID-VARIANTS": 12
  },

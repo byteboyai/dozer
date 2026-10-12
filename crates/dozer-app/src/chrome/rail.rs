@@ -89,17 +89,36 @@ impl RailLayout {
     /// 通不过消毒就已经在 `layout::load_from` 里回落 `default()` 了,
     /// 不会带着"某个面板哪条栏都不在"的坏数据流到这里。
     pub fn side_of(&self, kind: PanelKind) -> Side {
-        if self.left.contains(&kind) {
+        self.side_of_id(kind.stable_id())
+    }
+
+    /// `PanelId` 口径的栏位反查(C11):产品先把 `PanelKind` 映射成中立的
+    /// `PanelId` 再问宿主式的 rail 模型,host 只认 id 不认识 `PanelKind`。
+    /// 合法不变式下内置面板必命中;应用面板不在 `RailLayout` 里(它们是同一
+    /// 条 rail 上动态同步的条目),应由调用方在 rail 之外单独判定。
+    pub(crate) fn side_of_id(&self, id: bytehost_core::id::PanelId) -> Side {
+        if self.to_rail_items(Side::Left).contains(&id) {
             Side::Left
-        } else if self.right.contains(&kind) {
+        } else if self.to_rail_items(Side::Right).contains(&id) {
             Side::Right
         } else {
             unreachable!(
-                "RailLayout 不变式被破坏:{kind:?} 不在任何一条栏——\
+                "RailLayout 不变式被破坏:{id} 不在任何一条栏——\
                  sanitize_rail_layout 应该已经挡掉这种坏数据"
             )
         }
     }
+
+    /// 把这条 rail 投影成宿主的中立模型:`PanelId` 键控、按渲染顺序的条目
+    /// 列表(C11)。产品自己保留 `PanelKind` 的业务枚举,只在交给宿主容器时
+    /// 转成 `PanelId`。
+    pub(crate) fn to_rail_items(&self, side: Side) -> bytehost_desktop::RailItems {
+        self.side(side)
+            .iter()
+            .filter_map(|k| crate::panel_registry::panel_id(*k))
+            .collect()
+    }
+
 }
 
 impl RailLayout {
@@ -960,6 +979,18 @@ mod tests {
         assert_eq!(rail.side_of(PanelKind::Files), Side::Left);
         assert_eq!(rail.side_of(PanelKind::Web), Side::Left);
         assert_eq!(rail.side_of(PanelKind::Agent), Side::Right);
+    }
+
+    /// C11:`PanelId` 口径的栏位反查与 `PanelKind` 口径同结果,且 rail 投影出
+    /// 的条目 id 与逐面板映射一致。
+    #[test]
+    fn side_of_id_matches_kind_side() {
+        let rail = RailLayout::default();
+        for kind in PanelKind::ALL_BUILTIN {
+            assert_eq!(rail.side_of_id(kind.stable_id()), rail.side_of(kind), "{kind:?}");
+        }
+        let left: Vec<_> = rail.to_rail_items(Side::Left);
+        assert_eq!(left, rail.left.iter().map(|k| k.stable_id()).collect::<Vec<_>>());
     }
 
     /// `sanitize_rail_layout` 对坏数据回落默认:任一栏为空、面板重复、

@@ -225,6 +225,37 @@ impl PanelDims {
             PanelKind::GitLog | PanelKind::Web | PanelKind::CodeHealth | PanelKind::App(_) => None,
         }
     }
+
+    /// 把这对命名分割/收起字段投影成宿主的中立 `PaneStore`(`PanelId` 键控,见
+    /// `bytehost_desktop::panes`)。命名字段仍是落盘的唯一真相,这里是给宿主
+    /// 容器用的适配视图(C11):产品不把 `PanelKind` 泄漏进 host,只把稳定的
+    /// `PanelId`(`dozer.files` 等)连同 `PaneDims` 交出去。
+    pub(crate) fn to_pane_store(self) -> bytehost_desktop::PaneStore {
+        let mut store = bytehost_desktop::PaneStore::new();
+        for kind in PanelKind::ALL_BUILTIN {
+            store.set(
+                kind.stable_id(),
+                bytehost_desktop::PaneDims::new(
+                    self.split(kind),
+                    self.collapsed(kind).unwrap_or(false),
+                ),
+            );
+        }
+        store
+    }
+
+    /// `to_pane_store` 的逆:把宿主容器的值写回命名分割/收起字段。只处理内置
+    /// 面板(应用面板共享 `app_split`,不参与命名映射)。
+    pub(crate) fn apply_pane_store(&mut self, store: &bytehost_desktop::PaneStore) {
+        for kind in PanelKind::ALL_BUILTIN {
+            if let Some(d) = store.get(&kind.stable_id()) {
+                *self.split_mut(kind) = d.split;
+                if let Some(flag) = self.collapsed_mut(kind) {
+                    *flag = d.collapsed;
+                }
+            }
+        }
+    }
 }
 
 impl Default for PanelDims {
@@ -600,16 +631,6 @@ pub(crate) fn pair_x0_and_width(side: Side, window_width: f32, state: &ShellStat
     }
 }
 
-/// 给定面板默认(未镜像)态下"列表侧是否渲染在前(pair 内第一个元素,
-/// 几何上更靠左)"与当前是否处于镜像态,算出"列表侧现在是否渲染在前"。
-/// `apply_column_drag` 算出的 `ratio` 恒是"pair 内第一个元素的宽度占比"
-/// (鼠标左侧的宽度 / pair 总宽)——只有列表侧现在确实渲染在前时,
-/// `ratio` 才能直接当"列表侧占比"写回 split 字段;渲染在后时要写
-/// `1.0 - ratio`。
-pub(crate) fn list_rendered_first(default_list_first: bool, mirrored: bool) -> bool {
-    default_list_first != mirrored
-}
-
 /// 给定 `PanelKind`,取它在 `PanelDims` 里对应的配对分割比例字段——统一
 /// 口径是"pair 内第一个 slot 的占比"(`pair_list_content_width` 的
 /// `split` 参数,不区分这个 slot 语义上是"列表"还是"内容",Browser 的
@@ -649,11 +670,10 @@ fn default_list_first(kind: PanelKind) -> bool {
 /// 拖拽 `kind` 面板的配对分割线到窗口逻辑 x 坐标 `logical_x` 后的新 `PanelDims`
 /// (`apply_column_drag` 里所有"面板分割线"分支的共用实现)。
 ///
-/// 有收起能力的面板(`PanelDims::collapsed(kind)` 为 `Some`):拖窄到列表列宽度小于
-/// `project::footer_min_width`(所有可收纳面板统一走这一份估算,不各面板各算一套)时直接收起
-/// ——冻结 `split` 里上一次仍够宽的比例,不让它被拖成挤爆按钮的小数值;拖回超过阈值时用当前
-/// 光标位置连续算出新比例并展开,对称、可逆(拖拽是逐帧调用本函数,不是一次性判定)。
-/// 没有收起能力的面板只写 `split`。
+/// **算术已外移到宿主** `bytehost_desktop::apply_pane_split_drag`(C11):产品只
+/// 提供该面板的 `PaneSpec`(是否可收起、默认哪个 slot 在前)与当前 `PaneDims`,
+/// 宿主算新状态。Dozer 侧行为与迁移前逐字一致(拖窄到列表列小于
+/// `project::footer_min_width` 即收起、冻结上次比例;拖回即展开)。
 fn apply_pair_split_drag(
     state: &ShellState,
     kind: PanelKind,
@@ -665,27 +685,55 @@ fn apply_pair_split_drag(
     if pair_w <= 0.0 {
         return state.dims;
     }
-    let raw_ratio = ((logical_x - x0) / pair_w).clamp(
-        byteui::theme::geometry::min_split_ratio(),
-        byteui::theme::geometry::max_split_ratio(),
-    );
     let mirrored = side != kind.default_side();
-    let ratio = if list_rendered_first(default_list_first(kind), mirrored) {
-        raw_ratio
-    } else {
-        1.0 - raw_ratio
-    };
+    let current = bytehost_desktop::PaneDims::new(
+        state.dims.split(kind),
+        state.dims.collapsed(kind).unwrap_or(false),
+    );
+    let out = bytehost_desktop::apply_pane_split_drag(
+        current,
+        pane_spec(kind),
+        mirrored,
+        bytehost_desktop::PaneDragInput {
+            x0,
+            pair_w,
+            logical_x,
+            min_ratio: byteui::theme::geometry::min_split_ratio(),
+            max_ratio: byteui::theme::geometry::max_split_ratio(),
+            min_first_px: project::footer_min_width(),
+        },
+    );
     let mut dims = state.dims;
-    if let Some(flag) = dims.collapsed_mut(kind) {
-        let (list_w, _) = pair_list_content_width(pair_w, ratio);
-        if list_w < project::footer_min_width() {
-            *flag = true;
-            return dims;
-        }
-        *flag = false;
-    }
-    *dims.split_mut(kind) = ratio;
+    // 通过宿主容器回写(C11):先投影成 `PanelId` 键控的 `PaneStore`,把本次
+    // 拖拽结果落进该面板的条目,再应用回命名字段。命名字段仍是落盘真相。
+    let mut store = dims.to_pane_store();
+    store.set(
+        kind.stable_id(),
+        bytehost_desktop::PaneDims::new(out.split, out.collapsed),
+    );
+    dims.apply_pane_store(&store);
     dims
+}
+
+/// 面板的 `PaneSpec`(C11):是否具备"拖窄即收起"能力,以及默认(未镜像)态下
+/// pair 内第一个 slot 是否渲染在前。与 `PanelDims::collapsed` 的 `None` 口径
+/// 保持一致(`None` ⇒ 不可收起)。
+pub(crate) fn pane_spec(kind: PanelKind) -> bytehost_desktop::PaneSpec {
+    bytehost_desktop::PaneSpec::new(
+        default_list_first(kind),
+        matches!(
+            kind,
+            PanelKind::Files
+                | PanelKind::Project
+                | PanelKind::Todo
+                | PanelKind::Database
+                | PanelKind::Ssh
+                | PanelKind::Agent
+                | PanelKind::Conversations
+                | PanelKind::GroupChat
+                | PanelKind::Usage
+        ),
+    )
 }
 
 /// 拖拽某条分隔线到窗口逻辑 x 坐标 `logical_x` 后的新 `ShellLayout`。
@@ -1441,20 +1489,49 @@ mod panel_dims_accessor_tests {
     use super::*;
     use crate::app::PanelKind;
 
-    const ALL: [PanelKind; 12] = [
-        PanelKind::Files,
-        PanelKind::GitLog,
-        PanelKind::Todo,
-        PanelKind::Project,
-        PanelKind::Database,
-        PanelKind::Ssh,
-        PanelKind::Web,
-        PanelKind::Agent,
-        PanelKind::GroupChat,
-        PanelKind::Conversations,
-        PanelKind::Usage,
-        PanelKind::CodeHealth,
-    ];
+    const ALL: [PanelKind; 12] = PanelKind::ALL_BUILTIN;
+
+    /// C11:`PanelDims` 与宿主 `PaneStore` 的投影/回写是一对互逆操作——把当前
+    /// 分割/收起存进 `PanelId` 键控的容器再原样应用回来,所有字段不变。
+    #[test]
+    fn pane_store_round_trips_every_builtin_panel() {
+        let mut dims = PanelDims::default();
+        for (i, kind) in ALL.into_iter().enumerate() {
+            *dims.split_mut(kind) = 0.21 + i as f32 * 0.03;
+            if let Some(flag) = dims.collapsed_mut(kind) {
+                *flag = i % 2 == 0;
+            }
+        }
+        let store = dims.to_pane_store();
+        // 每个内置面板都在容器里有条目,键是稳定的 `dozer.<名>`。
+        for kind in ALL {
+            assert_eq!(
+                store.get(&kind.stable_id()).map(|d| d.split),
+                Some(dims.split(kind)),
+                "{kind:?}"
+            );
+        }
+        let mut back = PanelDims::default();
+        back.apply_pane_store(&store);
+        assert_eq!(back.split(PanelKind::Files), dims.split(PanelKind::Files));
+        assert_eq!(back.collapsed(PanelKind::Agent), dims.collapsed(PanelKind::Agent));
+        assert_eq!(
+            back.collapsed(PanelKind::GitLog),
+            None,
+            "不可收起面板的收起位不能被容器置位"
+        );
+    }
+
+    /// C11:`PanelKind → PanelId` 的映射稳定且命名空间是 `dozer.` 小写名。
+    #[test]
+    fn panel_id_is_stable_dozer_namespace() {
+        assert_eq!(PanelKind::Files.stable_id().as_str(), "dozer.files");
+        assert_eq!(PanelKind::GitLog.stable_id().as_str(), "dozer.gitlog");
+        assert_eq!(
+            PanelKind::CodeHealth.stable_id().as_str(),
+            "dozer.codehealth"
+        );
+    }
 
     #[test]
     fn split_mut_writes_exactly_the_field_split_reads() {

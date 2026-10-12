@@ -10,6 +10,7 @@
 规则 R-PROTOCOL: extensions 下对 dozer_core::protocol 的引用次数(O7,基线 0)
 规则 R-CLIENT: extensions 下对 dozer_client 的引用次数(X0,只降不升;面板应经 dozer-services 的 trait 取数)
 规则 R-FOCUS-PRODUCT-KEYS: platform/window_events.rs 里业务焦点键 `FocusIntent` 的出现次数(C12,只降不升)
+规则 R-PANE-KEYED-FIELDS: app/layout.rs 里逐面板命名的 pane 维度字段出现次数(C11,只降不升)
 
 用法:
   check_panel_boundary.py            对照基线检查,有文件的引用数上升(或新文件出现违规)则退出 1
@@ -119,6 +120,20 @@ CLIENT_RE = re.compile(r"\bdozer_client\b|\bio\.client\(\)")
 # bytehost-desktop 的 `FocusRouter`;产品只保留"业务键 → 中立焦点去向"的映射与解算(这是
 # 允许的业务路由),故此计数**只许降不许增**——防止把 host 机制又摊回产品。
 FOCUS_PRODUCT_KEY_RE = re.compile(r"\bFocusIntent\b")
+# R-PANE-KEYED-FIELDS(C11):app/layout.rs 里**逐面板命名的 pane 维度字段**
+# (`files_split`/`project_list_collapsed`/`files_tree_collapsed`…)。拖拽几何与
+# split/collapsed 语义已外移宿主(`bytehost_desktop::apply_pane_split_drag` +
+# `PaneStore`/`PaneSpec`),这些命名字段退化成"产品侧落盘兼容面",宿主容器按
+# 稳定 `PanelId`(`dozer.files`…)键控同一份数据。计数**只许降不许增**:新维度
+# 应加进宿主容器/`PanelId` 键控的存储,不再新增一个 named 字段。
+PANE_KEYED_FIELD_RE = re.compile(
+    r"\b(?:self|[a-z_]+)\.(?:files_split|project_split|ssh_split|database_split|todo_split"
+    r"|git_log_split|git_log_file_diff_split|browser_bookmarks_split|agent_split|group_chat_split"
+    r"|conversations_split|usage_split|codehealth_split|app_split"
+    r"|files_tree_collapsed|project_list_collapsed|todo_list_collapsed|database_list_collapsed"
+    r"|ssh_list_collapsed|agent_list_collapsed|conversations_list_collapsed"
+    r"|group_chat_list_collapsed|usage_list_collapsed)\b"
+)
 
 
 def scan(files):
@@ -156,6 +171,10 @@ def scan(files):
             k = len(FOCUS_PRODUCT_KEY_RE.findall(code))
             if k:
                 hit["R-FOCUS-PRODUCT-KEYS"] = k
+        if rel == "app/layout.rs":
+            k = len(PANE_KEYED_FIELD_RE.findall(code))
+            if k:
+                hit["R-PANE-KEYED-FIELDS"] = k
         n = len(PANE_PICK_RE.findall(edges.strip_comments(text)))
         if n:
             hit["R-PANE-PICK"] = n
