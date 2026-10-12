@@ -757,6 +757,25 @@
 - **未决项 / 阻塞:** 产品面板仍传 `PanelInstanceId::new(0,0)`(惰性 scope 表不依赖它);把真实 `PanelInstanceId` 线程进 `PanelIo` 是 C11 的工作。C7/C10/C11/C12 待续。
 
 
+### 切片 4 — 焦点路由抽通用 `FocusRouter`(C12,设计 move 3,DONE)
+
+- **动机 / 桥:** **C12**(`acceptance.md:50`):`platform/window_events.rs` 的焦点路由(`FocusIntent`/`pending_focus`/`current_focus`/`apply_pending_focus`)全以产品 `PanelKind` 为键,**通用"焦点去向"机制未抽**(纯 `FocusTracker` 已于 Task 10 抽取,但与焦点去向无关)。验收要求:通用焦点目标类型进 bytehost-desktop,产品只留业务路由(SearchIn/ShowFileHistory 等),门禁计数只降。
+- **改动(bytehost,`c80d443`):** `bytehost-desktop/src/focus.rs` 新增产品中立的 `FocusRouter<K>` + `FocusTarget<K>{ Native(K), Window }`:
+  - `FocusRouter` 内部即原产品 `pending_focus`/`current_focus` 两字段(泛型键 `K`),提供 `set`(排待处理+设当前)、`set_current`(只设当前)、`current`/`current_native`、`take_pending`、`apply(resolve_native, focus_native, focus_window)`(消费待处理:解 `K→u64` 原生句柄,命中则聚焦,否则回落窗口)。`FocusTarget::Window` 为 `Default`。宿主对 `K` 完全不透明、零业务依赖。含 6 个单测(原 `FocusTracker` 2 + 新 `FocusRouter` 4)。
+- **改动(dozer,`fa9f37a2`):**
+  - `window_events.rs` 的 `Runner::Ready` 两字段 `pending_focus: Option<FocusIntent>` + `current_focus: FocusIntent` **合并为 `focus: bytehost_desktop::FocusRouter<FocusIntent>`**(产品键仍是 `FocusIntent`;宿主管机制)。
+  - 新增 `FocusIntent::target() -> FocusTarget<FocusIntent>`(产品把业务键喂给 host 的唯一转换点:`Terminal → Window`,其余 `→ Native(intent)`)。所有 `*pending_focus = Some(x); *current_focus = x;` 调用点改为 `focus.set(x.target())`(含鼠标点击、`dispatch` 各分支、Search Pick)。
+  - `apply_pending_focus` 改为:`resolve` 闭包把 `FocusIntent` 解成 webview id(`active_preview_webview_id`/`active_browser_webview_id`),`focus_native` 在预览/浏览器两池里查并聚焦,`focus_window` 兜底——行为与迁移前逐字等价(解析不到/池中缺失均回落窗口)。
+  - 按键闸门 `if let FocusIntent::Preview(kind) = *current_focus` 改 `focus.current_native()`;测试初始化改 `FocusRouter` + `set_current`。
+  - 新增门禁规则 **`R-FOCUS-PRODUCT-KEYS`**:`platform/window_events.rs` 里业务键 `FocusIntent` 的出现次数(C12 后宿主机机制已不在产品,残留产品键是**允许的业务路由**),基线建为 25,只降不升。
+- **验证:**
+  - bytehost:`cargo test -p bytehost-desktop focus` 6 passed;`cargo clippy -p bytehost-desktop` 零告警;`bash scripts/check-deps.sh` **ok**(desktop 组仍无产品依赖)。
+  - dozer:`cargo build -p dozer-app` 绿;`cargo clippy -p dozer-app --bin dozer --all-targets` 对 `window_events.rs` 零告警;`cargo test -p dozer-app --bin dozer` **1967 passed / 1 failed**(唯一失败仍是既有用户 WIP 引起的 `usage_probe::host` 引用行号漂移)。
+  - `python3 scripts/audit/check_panel_boundary.py` → **ok(141 refs in 5 files)**;新增 `R-FOCUS-PRODUCT-KEYS 25`,其余基线值未动。
+- **偏差 / 发现:** `window_events.rs` 同时含用户 WIP(命令修饰键 `command`/`TreeDragRelease { shift, command }` 那一处 hunk);本切片用 `git add -p` 只暂存 C12 的 13 个 hunk,未触碰该 WIP。
+- **未决项 / 阻塞:** `FocusIntent`/`PanelKind` 仍是产品的焦点业务键(符合 C12 "产品只留业务路由"口径);把它们进一步中性化不在本桥范围。C7/C10/C11 待续。
+
+
 
 ### 设计:C8 + C11 + C12 共同的"PanelId/Scope 键控"缺口(DONE — 设计待裁决)
 
@@ -776,7 +795,7 @@
 
 **为何一次设计而非三片:** C8 的"面板按 scope 路由"落地物就是 C11/C12 所需的"实例→区域/焦点"注册表;分三次会各造一套键控。**风险/未决:** ① home-pane `RailButton` 变体是否进通用控件;② `Side`/`maximized` 是否移入 `bytehost-core`;③ `RightPairSplit`(Agent/Conversations/Usage 轮转,`layout.rs:779`)无通用等价,留产品;④ 真窗像素回归受 Task 08 权限阻塞,只能靠现有几何单测(A4 部分)。**跨仓:** 均需 bytehost 侧新增(按 tag 发布),本地用 uncommitted patch 联调;正式 pin 归 Task 22。
 
-**状态:** 侦察与设计成稿;用户已裁决按此方向实现,建议顺序 **(1)+(2) 关 C8 → (3) 关 C12 → (4) 关 C11**。move (1)+(2) 的 C8 部分已成切片 3(`300c7dab`,见上);(3)/(4) 待后续切片,任一实现片需独立提交+回归。
+**状态:** 侦察与设计成稿;用户已裁决按此方向实现,建议顺序 **(1)+(2) 关 C8 → (3) 关 C12 → (4) 关 C11**。move (1)+(2) 的 C8 部分已成切片 3(`300c7dab`,见上);move (3) 的 C12 已成切片 4(`c80d443` + `fa9f37a2`,见上);(4) 待后续切片,任一实现片需独立提交+回归。
 
 
 ## 提交记录
@@ -834,3 +853,5 @@
 | 21 | `db2779b9` | Z | `docs(integration): design the shared PanelId/Scope routing seam for bridges C8/C11/C12` |
 | 21 | `f50ad77` | B | `feat(core): add ScopedTrackers for product-neutral per-scope request routing` |
 | 21 | `300c7dab` | Z | `refactor(host): move panel request identity onto core RequestToken/ScopedTrackers (C8)` |
+| 21 | `c80d443` | B | `feat(desktop): add product-neutral FocusRouter for keyboard focus routing` |
+| 21 | `fa9f37a2` | Z | `refactor(platform): route keyboard focus through shared FocusRouter (C12)` |
