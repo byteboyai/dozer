@@ -4,7 +4,7 @@
 规则 R-APP:  extensions 下文件对 `crate::app::App` 的**使用次数**(import 行 + 每个 `&App` 参数/限定路径)
 规则 R-WS:   extensions 下文件对 `crate::workspace::Workspace` 的使用次数
 规则 R-PANE-PICK: 全库手写"按 PanelKind::Project 选预览窗格"的写法条数(应走 `Workspace::preview_pane[_mut]`)
-规则 R-HOVERID-VARIANTS / R-HOVERSLOT-VARIANTS: `HoverId`(app/state.rs)与 `HoverSlot`(panel_host.rs)的变体数
+规则 R-HOVERID-VARIANTS: `HoverId`(app/state.rs)的变体数(HoverSlot 已移入宿主,C9)
 规则 R-HOST-PANEL-ARMS / R-HOST-EXECUTORS: `app/update.rs` 里面板专属消息臂条数 / `app/` 下 `run_<面板>_effects` 执行器个数
 
 规则 R-PROTOCOL: extensions 下对 dozer_core::protocol 的引用次数(O7,基线 0)
@@ -79,11 +79,12 @@ PANE_PICK_RE = re.compile(
 )
 
 
-# 枚举变体数棘轮:(文件, 枚举名) -> 规则名。HoverId 是宿主的悬停键枚举,HoverSlot 是面板作用域下的通用槽位词汇;
-# 两者的变体数只许减不许增,新增悬停元素先用 `HoverId::named(panel, "..")`。
+# 枚举变体数棘轮:(文件, 枚举名) -> 规则名。
+# HoverId 是产品的悬停键枚举(含业务变体),只许减不许增:新增悬停元素先用 `HoverId::named(panel, "..")`。
+# HoverSlot(面板内通用槽位词汇)已移入宿主 `bytehost_desktop::hover::HoverSlot`(C9),变体表随之中立化,
+# 产品侧不再有该枚举,故此处只留 `HoverId`。
 ENUM_RULES = {
     ("app/state.rs", "HoverId"): "R-HOVERID-VARIANTS",
-    ("panel_host.rs", "HoverSlot"): "R-HOVERSLOT-VARIANTS",
 }
 
 

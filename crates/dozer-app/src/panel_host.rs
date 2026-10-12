@@ -279,27 +279,10 @@ impl<M> HostOutbox<M> {
 
 /// 面板内一个可悬停元素的**槽位**——词汇通用,不含任何面板名(规格 E2:宿主公开类型里不出现业务类型)。
 /// 与面板(`PanelKind`)一起构成 `HoverId::Panel(panel, slot)`。新增槽位种类前先看能不能用 `Named`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum HoverSlot {
-    /// 列表列折叠按钮。
-    ListCollapse,
-    /// 搜索框提交按钮。
-    SearchSubmit,
-    /// "更多…"翻页按钮。
-    More,
-    /// 页签标题(下标或稳定 id)。
-    TabItem(u64),
-    /// 页签关闭按钮。
-    TabClose(u64),
-    /// 页签溢出菜单按钮。
-    TabOverflow,
-    /// 列表行/卡片。
-    Row(u64),
-    /// 一组互斥选项里的一项。
-    Choice(u64),
-    /// 面板内一次性的具名按钮(同一面板内唯一)。
-    Named(&'static str),
-}
+///
+/// C9:槽位词汇已移入宿主 `bytehost_desktop::HoverSlot`(产品中立、注册制收敛),
+/// 这里只重导出,产品侧不再各留一份。
+pub use bytehost_desktop::HoverSlot;
 
 pub trait PanelHost {
     /// 某个按钮/页签的悬停动画进度 0.0..=1.0。
@@ -533,6 +516,18 @@ mod tests {
         assert_ne!(
             HoverId::list_collapse(PanelKind::Todo),
             HoverId::list_collapse(PanelKind::Usage)
+        );
+    }
+
+    /// C9:面板内槽位词汇即宿主的 `bytehost_desktop::HoverSlot`,产品不各留一份。
+    #[test]
+    fn hover_slot_vocabulary_is_the_host_type() {
+        let slot: bytehost_desktop::HoverSlot = HoverSlot::ListCollapse;
+        assert_eq!(slot, HoverSlot::ListCollapse);
+        // 具名兜底仍是收敛新槽位的首选。
+        assert_eq!(
+            HoverId::named(PanelKind::Files, "find_prev"),
+            HoverId::Panel(PanelKind::Files, bytehost_desktop::HoverSlot::Named("find_prev"))
         );
     }
 
