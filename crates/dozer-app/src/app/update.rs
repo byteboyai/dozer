@@ -277,33 +277,43 @@ impl App {
                     self.usage_surface.apply_ready();
                 }
             }
-            Message::CodeHealthContentWebviewEvent(event) => {
+            Message::CodeHealthContentWebviewEvent(event, surface) => {
                 use crate::extensions::codehealth::CodeHealthWebviewEvent as Ev;
-                match event {
-                    Ev::Ready => self.codehealth_webview.set_ready(true),
-                    Ev::ScanRequested => self.code_health_request_scan(),
-                    Ev::AnalyzeFinding { id } => self.code_health_analyze_finding(id),
-                    Ev::OpenLocation { path, line } => {
-                        // webview 内容不可信:拒绝绝对路径与 `..`。
-                        if codehealth::is_safe_relative_path(&path) {
-                            self.code_health_open_location(path, line);
-                        } else {
+                // 先经共享宿主路由层校验归属:旧代数/未知来源的事件一律丢弃
+                // (webview 已销毁重建后,旧实例的在途事件不能写进新实例)。
+                if !self.codehealth_surface.accepts(surface) {
+                    dozer_core::log_warn!(
+                        LOG,
+                        panel = "code_health",
+                        "拒绝非当前代数的 codehealth-content IPC"
+                    );
+                } else {
+                    match event {
+                        Ev::Ready => self.codehealth_surface.apply_ready(),
+                        Ev::ScanRequested => self.code_health_request_scan(),
+                        Ev::AnalyzeFinding { id } => self.code_health_analyze_finding(id),
+                        Ev::OpenLocation { path, line } => {
+                            // webview 内容不可信:拒绝绝对路径与 `..`。
+                            if codehealth::is_safe_relative_path(&path) {
+                                self.code_health_open_location(path, line);
+                            } else {
+                                dozer_core::log_warn!(
+                                    LOG,
+                                    panel = "code_health",
+                                    path = %path.display(),
+                                    "拒绝 webview 发来的非相对路径跳转"
+                                );
+                            }
+                        }
+                        Ev::Failed { reason } => {
                             dozer_core::log_warn!(
                                 LOG,
                                 panel = "code_health",
-                                path = %path.display(),
-                                "拒绝 webview 发来的非相对路径跳转"
+                                %reason,
+                                "代码健康度内容页渲染失败,回落原生占位"
                             );
+                            self.codehealth_webview.set_failed(reason);
                         }
-                    }
-                    Ev::Failed { reason } => {
-                        dozer_core::log_warn!(
-                            LOG,
-                            panel = "code_health",
-                            %reason,
-                            "代码健康度内容页渲染失败,回落原生占位"
-                        );
-                        self.codehealth_webview.set_failed(reason);
                     }
                 }
             }

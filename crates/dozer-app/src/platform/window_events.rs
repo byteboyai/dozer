@@ -2587,10 +2587,12 @@ impl Runner {
                 let _ = view.evaluate_script(&js);
             }
         }
-        // 代码健康度内容侧 webview(单固定槽):声明式推送,同用量面板节奏。
-        for (webview_id, js) in
-            app.take_codehealth_content_script(&available_webview_ids, std::time::Instant::now())
-        {
+        // 代码健康度内容侧 webview(单固定槽):Surface 驱动生命周期,同用量面板节奏。
+        for (webview_id, js) in app.take_codehealth_content_script(
+            &available_webview_ids,
+            pool_dropped_ids,
+            std::time::Instant::now(),
+        ) {
             if let Some((view, _)) = webviews.get(&webview_id) {
                 let _ = view.evaluate_script(&js);
             }

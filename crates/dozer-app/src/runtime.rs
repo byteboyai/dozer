@@ -495,7 +495,7 @@ pub(crate) fn sync_webview_pool(
                 // rAF 的渲染器又会卡死(见 `WebviewSpec::park_offscreen`)。
                 let _ = view.set_visible(spec.visible || spec.park_offscreen);
             }
-            None if crate::app_webview::is_app_webview_id(spec.id) => {
+            None if crate::preview::WebviewTrust::of(&spec).is_application() => {
                 // 应用面板(第三方/agent 生成的代码):走**单独的受限构建路径**,不装 `dozer://` 协议。
                 if let Some(view) = build_app_webview(window, &spec, bounds, proxy.clone()) {
                     let _ = view.zoom(byteui::theme::icon_size::scale() as f64);
@@ -504,6 +504,10 @@ pub(crate) fn sync_webview_pool(
                 }
             }
             None => {
+                // 信任类别:本分支只服务可信宿主(Editor/Preview/BuiltinPanel),
+                // 应用走上面的受限路径。类型层保证"应用拿不到 dozer:// 协议"。
+                let trust = crate::preview::WebviewTrust::of(&spec);
+                debug_assert!(trust.allows_custom_protocol());
                 let allowed = std::sync::Arc::clone(&allowed_files);
                 let review_snapshot = std::sync::Arc::clone(&review_snapshot);
                 let root = crate::assets::assets_root();
@@ -745,11 +749,12 @@ pub(crate) fn sync_webview_pool(
                                     && looks_like_envelope
                                 {
                                     // codehealth-content 同 usage-content:固定单槽,按固定
-                                    // webview id 识别,不复用任何 binding。
+                                    // webview id 识别,不复用任何 binding。归属由共享宿主
+                                    // Surface 显式校验(带上创建时登记的身份)。
                                     match crate::extensions::codehealth::parse_codehealth_event(body) {
                                         Ok(event) => {
                                             let _ = ipc_proxy.send_event(
-                                                Message::CodeHealthContentWebviewEvent(event),
+                                                Message::CodeHealthContentWebviewEvent(event, surface),
                                             );
                                         }
                                         Err(error) => {
@@ -910,6 +915,9 @@ pub(crate) fn sync_webview_pool(
                             wry::NewWindowResponse::Deny
                         });
                 }
+                // `dozer://` 自定义协议只对可信宿主安装(trust 派生,不散落判断;
+                // 应用在 `build_app_webview` 里从不安装)。
+                debug_assert!(trust.allows_custom_protocol());
                 let built = builder
                     .with_custom_protocol("dozer".into(), move |_id, request| {
                         let allowed = allowed.lock().expect("allowed_files 锁");

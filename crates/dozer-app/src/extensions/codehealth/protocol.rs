@@ -526,14 +526,15 @@ pub fn encode_codehealth_push(revision: u64, payload: CodeHealthViewPayload) -> 
     .unwrap_or_else(|_| "null".to_string())
 }
 
-/// App 级(固定单槽,不按项目分)内容侧 webview 推送状态。纯状态,可单测,
-/// 不碰 webview 池——调用方(`App::take_codehealth_content_script`)据
-/// `pending_push` 组 envelope,真正注入后调 `mark_sent`。
+/// 代码健康度内容侧**面板级降级**状态(Task 09 / api-decisions §9.4)。
+///
+/// webview 生命周期、ready 归属、逐帧推送去重与 envelope `revision` 已收进
+/// `extensions::codehealth::CodeHealthSurface`(共享宿主 Surface)。本结构只保留
+/// **面板业务语义**:加载超时判定(`waiting_since`)与"超时/渲染失败 → 回落原生
+/// 占位"(`failed`)。`ready` 由 Surface 持有,`observe_availability` 每帧由消费点
+/// 传入,不再在本结构里记账。
 #[derive(Default)]
 pub struct WebviewPushState {
-    ready: bool,
-    last_sent: Option<CodeHealthViewPayload>,
-    revision: u64,
     /// webview 已进池但尚未 ready 的起点,用于判定加载超时。
     waiting_since: Option<Instant>,
     /// 加载失败/超时原因;`Some` 时内容区回落原生占位页(重试清除)。
@@ -541,23 +542,10 @@ pub struct WebviewPushState {
 }
 
 impl WebviewPushState {
-    pub fn set_ready(&mut self, ready: bool) {
-        self.ready = ready;
-        if ready {
-            // 新实例(或重新确认 ready)一律强制重发当前内容。
-            self.last_sent = None;
-            self.waiting_since = None;
-        }
-    }
-
-    /// 每帧由消费点调用:`available` = webview 当前在池里。
-    pub fn observe_availability(&mut self, available: bool, now: Instant) {
-        if !available {
-            self.ready = false;
-            self.waiting_since = None;
-            return;
-        }
-        if self.ready {
+    /// 每帧由消费点调用:`available` = webview 当前在池里;`ready` = Surface 已握手。
+    /// 只有"在池但还没 ready"这段时间才计入加载超时。
+    pub fn observe_availability(&mut self, available: bool, ready: bool, now: Instant) {
+        if !available || ready {
             self.waiting_since = None;
             return;
         }
@@ -567,28 +555,12 @@ impl WebviewPushState {
         }
     }
 
-    pub fn pending_push(&self, desired: &CodeHealthViewPayload) -> Option<CodeHealthViewPayload> {
-        if !self.ready || self.last_sent.as_ref() == Some(desired) {
-            return None;
-        }
-        Some(desired.clone())
-    }
-
-    /// 记录已送达并返回本次 revision(从 1 起)。
-    pub fn mark_sent(&mut self, payload: CodeHealthViewPayload) -> u64 {
-        self.revision += 1;
-        self.last_sent = Some(payload);
-        self.revision
-    }
-
     pub fn failed(&self) -> Option<&str> {
         self.failed.as_deref()
     }
 
     pub fn set_failed(&mut self, reason: String) {
         self.failed = Some(reason);
-        self.ready = false;
-        self.last_sent = None;
         self.waiting_since = None;
     }
 
@@ -839,43 +811,10 @@ mod tests {
         assert!(!is_safe_relative_path(Path::new("")));
     }
 
-    // ---- 推送状态 ----
+    // ---- 面板级降级状态(超时/失败);推送/ready/revision 已移至 CodeHealthSurface ----
 
     fn payload() -> CodeHealthViewPayload {
         current_view_payload(&WorkspaceState::default())
-    }
-
-    #[test]
-    fn pending_push_requires_ready_and_changes() {
-        let mut s = WebviewPushState::default();
-        assert_eq!(s.pending_push(&payload()), None, "未 ready 不推");
-        s.set_ready(true);
-        let p = payload();
-        assert_eq!(s.pending_push(&p), Some(p.clone()));
-        let rev = s.mark_sent(p.clone());
-        assert_eq!(rev, 1);
-        assert_eq!(s.pending_push(&p), None, "同值不重推");
-    }
-
-    /// Review Focus 6:webview 重建后新实例第一次 ready 必须强制重发。
-    #[test]
-    fn set_ready_true_forces_resend() {
-        let mut s = WebviewPushState::default();
-        s.set_ready(true);
-        let p = payload();
-        s.mark_sent(p.clone());
-        assert_eq!(s.pending_push(&p), None);
-        s.set_ready(true);
-        assert_eq!(s.pending_push(&p), Some(p));
-    }
-
-    /// Review Focus 3:revision 单调递增。
-    #[test]
-    fn revision_increments_per_send() {
-        let mut s = WebviewPushState::default();
-        s.set_ready(true);
-        assert_eq!(s.mark_sent(payload()), 1);
-        assert_eq!(s.mark_sent(payload()), 2);
     }
 
     /// Review Focus 2:一直不 ready 超时 → failed。
@@ -883,9 +822,9 @@ mod tests {
     fn never_ready_times_out_to_failed() {
         let mut s = WebviewPushState::default();
         let t0 = Instant::now();
-        s.observe_availability(true, t0);
+        s.observe_availability(true, false, t0);
         assert_eq!(s.failed(), None);
-        s.observe_availability(true, t0 + READY_TIMEOUT + Duration::from_millis(1));
+        s.observe_availability(true, false, t0 + READY_TIMEOUT + Duration::from_millis(1));
         assert!(s.failed().is_some());
         s.clear_failed();
         assert_eq!(s.failed(), None);
@@ -895,18 +834,20 @@ mod tests {
     fn ready_before_timeout_never_fails() {
         let mut s = WebviewPushState::default();
         let t0 = Instant::now();
-        s.observe_availability(true, t0);
-        s.set_ready(true);
-        s.observe_availability(true, t0 + READY_TIMEOUT * 10);
+        s.observe_availability(true, false, t0);
+        // 已握手 → 不计超时。
+        s.observe_availability(true, true, t0 + READY_TIMEOUT * 10);
         assert_eq!(s.failed(), None);
     }
 
+    /// 不在池中(没挂载)不计超时——只有"在池但还没 ready"才算。
     #[test]
-    fn unavailable_resets_ready() {
+    fn unavailable_does_not_tick_the_timeout() {
         let mut s = WebviewPushState::default();
-        s.set_ready(true);
-        s.observe_availability(false, Instant::now());
-        assert_eq!(s.pending_push(&payload()), None);
+        let t0 = Instant::now();
+        s.observe_availability(false, false, t0);
+        s.observe_availability(false, false, t0 + READY_TIMEOUT * 10);
+        assert_eq!(s.failed(), None);
     }
 
     #[test]

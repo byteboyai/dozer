@@ -627,8 +627,14 @@ pub enum Message {
         Option<bytehost_core::SurfaceId>,
     ),
     /// 代码健康度内容侧 webview 发回的已解析事件(ready/扫描/跳转/交给 Agent/失败)。
-    /// 不带 binding——固定单槽、不按项目分,同 `UsageContentWebviewEvent`。
-    CodeHealthContentWebviewEvent(crate::extensions::codehealth::CodeHealthWebviewEvent),
+    /// 第二字段是 webview 创建时登记的 Surface 身份(instance/slot/generation),
+    /// `App::update` 经共享宿主的路由层校验归属——旧代数/未知来源一律丢弃
+    /// (见 `extensions::codehealth::CodeHealthSurface`)。固定单槽、不按项目分,
+    /// 同 `UsageContentWebviewEvent`。
+    CodeHealthContentWebviewEvent(
+        crate::extensions::codehealth::CodeHealthWebviewEvent,
+        Option<bytehost_core::SurfaceId>,
+    ),
     /// Todo 内容区 webview 发回的事件(固定单槽,按固定 webview id 识别)。
     TodoContentWebviewEvent(crate::extensions::todo::TodoWebviewEvent),
     /// 群聊面板 webview 发回的事件(固定单槽,按固定 webview id 识别)。

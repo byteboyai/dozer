@@ -22,6 +22,7 @@ mod router;
 mod startup;
 mod state;
 mod text_save;
+mod trust;
 mod view;
 mod webview;
 mod webview_protocol;
@@ -33,6 +34,7 @@ pub(crate) use native_editor::*;
 pub(crate) use router::*;
 pub(crate) use state::*;
 pub(crate) use text_save::*;
+pub(crate) use trust::WebviewTrust;
 pub(crate) use view::*;
 pub(crate) use webview::*;
 // `code_host` / `webview_protocol`(Phase B 契约)与 `file_policy` /

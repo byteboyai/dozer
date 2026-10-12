@@ -459,7 +459,11 @@ pub struct App {
     /// 用量面板内容侧 Preact webview 的 Surface(固定单槽、不按项目分,
     /// 统一管理生命周期/路由/推送,见 `extensions::usage::UsageSurface`)。
     pub(crate) usage_surface: crate::extensions::usage::UsageSurface,
-    /// 代码健康度内容侧 webview 推送状态(App 级,固定单槽)。
+    /// 代码健康度内容侧 webview 的 Surface(固定单槽、不按项目分,统一管理
+    /// 生命周期/路由/推送,见 `extensions::codehealth::CodeHealthSurface`)。
+    pub(crate) codehealth_surface: crate::extensions::codehealth::CodeHealthSurface,
+    /// 代码健康度内容侧 webview 的面板级降级状态(加载超时 → 回落原生占位)。
+    /// webview 生命周期/ready/推送去重已收进 `codehealth_surface`。
     pub(crate) codehealth_webview: crate::extensions::codehealth::WebviewPushState,
     /// Todo 内容区 webview 推送状态(App 级,固定单槽)。
     pub(crate) todo_webview: crate::extensions::todo::WebviewPushState,
@@ -858,6 +862,7 @@ impl App {
             home_browser: browser::State::with_initial_url("https://byteboy.ai"),
             git_log: git_log::State::default(),
             usage_surface: crate::extensions::usage::UsageSurface::new(),
+            codehealth_surface: crate::extensions::codehealth::CodeHealthSurface::new(),
             codehealth_webview: crate::extensions::codehealth::WebviewPushState::default(),
             todo_webview: crate::extensions::todo::WebviewPushState::default(),
             group_chat_webview: crate::extensions::group_chat::WebviewPushState::default(),
@@ -1268,18 +1273,27 @@ impl App {
         }
     }
 
-    /// 代码健康度内容侧待下发推送。声明式:每帧比较"当前该显示什么"
-    /// (`current_view_payload`)与"上次送达的"(`codehealth_webview.pending_push`)。
-    /// 同时驱动加载超时判定(`observe_availability`)。已失败(`failed`)时不推送——
-    /// 原生占位页接管。
+    /// 代码健康度内容侧待下发推送。Surface 逐帧驱动生命周期与去重;面板级
+    /// 加载超时判定(`observe_availability`)与失败早退(回落原生占位)留在本层。
+    /// 已失败(`failed`)时不推送——原生占位页接管。
     pub fn take_codehealth_content_script(
         &mut self,
         available_webview_ids: &std::collections::HashSet<usize>,
+        replaced_webview_ids: &std::collections::HashSet<usize>,
         now: std::time::Instant,
     ) -> Vec<(usize, String)> {
         let webview_id = CODEHEALTH_CONTENT_ID_OFFSET;
-        self.codehealth_webview
-            .observe_availability(available_webview_ids.contains(&webview_id), now);
+        // 原生实例是否在池中 → 驱动 Surface 生命周期(进池:Created/新实例;
+        // 离池:Destroyed 并递增代数;同帧销毁+重建由 replaced 显式告知)。
+        self.codehealth_surface.observe_instance(
+            available_webview_ids.contains(&webview_id),
+            replaced_webview_ids.contains(&webview_id),
+        );
+        self.codehealth_webview.observe_availability(
+            available_webview_ids.contains(&webview_id),
+            self.codehealth_surface.is_ready(),
+            now,
+        );
         if !available_webview_ids.contains(&webview_id)
             || self.codehealth_webview.failed().is_some()
         {
@@ -1289,12 +1303,11 @@ impl App {
             return Vec::new();
         };
         let desired = crate::extensions::codehealth::current_view_payload(&ws.codehealth);
-        let Some(payload) = self.codehealth_webview.pending_push(&desired) else {
-            return Vec::new();
-        };
-        let revision = self.codehealth_webview.mark_sent(payload.clone());
-        let envelope = crate::extensions::codehealth::encode_codehealth_push(revision, payload);
-        vec![(webview_id, crate::preview::dispatch_script(&envelope))]
+        self.codehealth_surface.set_desired(desired);
+        match self.codehealth_surface.take_pending_script() {
+            Some(pair) => vec![pair],
+            None => Vec::new(),
+        }
     }
 
     /// Todo 内容区待下发推送。声明式:每帧比较"当前该显示什么"
@@ -3833,7 +3846,8 @@ impl App {
                         editor_binding: None,
                         reserve: None,
                         loading_generation: None,
-                        surface: None,
+                        // 归属由共享宿主 Surface 显式校验(instance/slot/generation)。
+                        surface: Some(self.codehealth_surface.id()),
                         park_offscreen: false,
                     };
                     out.push((spec, bounds));

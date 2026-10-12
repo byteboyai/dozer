@@ -28,15 +28,15 @@ impl Duty {
     /// 真实 host 里承担这件事的位置(读代码得到,2026-10-08)。
     pub(crate) fn host_site(self) -> &'static str {
         match self {
-            Duty::BuildActivationCtx => "app/update.rs:5307",
-            Duty::RouteLoaded => "app/update.rs:1631 (with_project)",
-            Duty::DropOtherProject => "app/update.rs:1631 (with_project 路由到别的 Workspace)",
-            Duty::InterceptCollapse => "app/update.rs:1638",
-            Duty::InterceptHover => "app/update.rs:1641",
-            Duty::FramePush => "app/app.rs:1242 take_usage_content_script",
-            Duty::DowngradeReady => "app/app.rs:1252",
-            Duty::SkipWhileLoading => "app/app.rs:1259",
-            Duty::ParseIpcAndMarkReady => "runtime.rs:725 + app/update.rs:265",
+            Duty::BuildActivationCtx => "app/update.rs:5317",
+            Duty::RouteLoaded => "app/update.rs:1641 (with_project)",
+            Duty::DropOtherProject => "app/update.rs:1641 (with_project 路由到别的 Workspace)",
+            Duty::InterceptCollapse => "app/update.rs:1648",
+            Duty::InterceptHover => "app/update.rs:1651",
+            Duty::FramePush => "app/app.rs:1247 take_usage_content_script",
+            Duty::DowngradeReady => "app/app.rs:1257",
+            Duty::SkipWhileLoading => "app/app.rs:1264",
+            Duty::ParseIpcAndMarkReady => "runtime.rs:729 + app/update.rs:265",
             Duty::DrainToastOutbox => "app/update.rs:223 (drain_outboxes)",
         }
     }
@@ -61,7 +61,7 @@ impl ProbeHost {
         }
     }
 
-    /// 对应 `app/update.rs:5307`:host 构造 `ActivationCtx` 再调面板的 `on_activate`。
+    /// 对应 `app/update.rs:5317`:host 构造 `ActivationCtx` 再调面板的 `on_activate`。
     pub(crate) fn activate(
         &mut self,
         rt: &tokio::runtime::Runtime,
@@ -116,7 +116,7 @@ impl ProbeHost {
         self.ws.take_outbox()
     }
 
-    /// 对应 `app/update.rs:1630-1641` 的路由:`Loaded`/`LoadFailed` 按 `project_id` 路由(这里只有一个 Workspace,
+    /// 对应 `app/update.rs:1640-1651` 的路由:`Loaded`/`LoadFailed` 按 `project_id` 路由(这里只有一个 Workspace,
     /// 非本项目的等价于"路由到别的 Workspace",对本面板即丢弃);`ToggleListCollapse`/`Hover` 由 host
     /// 拦截,不进面板的 `update`。
     pub(crate) fn deliver(&mut self, msg: Message) {

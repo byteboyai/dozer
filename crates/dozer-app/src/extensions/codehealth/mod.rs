@@ -20,6 +20,9 @@ pub(crate) mod view_model;
 pub(crate) mod protocol;
 pub(crate) use protocol::*;
 
+mod surface;
+pub(crate) use surface::CodeHealthSurface;
+
 use dozer_codehealth::{
     ArchitectureDiffOutcome, GitSnapshot, ImpactScope, ProjectReport, ReportDiff,
 };
