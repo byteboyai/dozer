@@ -702,7 +702,7 @@
 ## Task 21 — 迁移剩余通用 Host 路径并删除兼容桥(计划 §Task 21 `:286+`)
 
 - **目标（计划 §Task 21 `:286+`）：** 按应用 WebView → Todo/GroupChat → editor/preview 承载 → 通用窗口事件顺序逐组切共享实现,每组独立提交回归;宿主不存产品专属字段/不解析业务协议/不 match 产品面板名;清理兼容桥台账(每项以无调用者+行为测试+单一实现证据关闭,不靠移动文件或放宽扫描目录降门禁);回归 Dozer 新旧布局/面板激活/产品命令/原生菜单/窗口退出。**验证:** 同口径结构度量、公共 Host 反向依赖为零、兼容桥零、两产品同用 Host crate。
-- **实施进度:** (切片 1 应用面板 Effect 执行器外移 DONE);其余切片待续。
+- **实施进度:** (切片 1 应用面板 Effect 执行器外移 DONE);(切片 2 C5 预览窗格选择统一 DONE);其余切片待续。
 
 
 ### 切片 1 — 应用面板 Effect 执行器外移出 `app/`(DONE)
@@ -716,6 +716,22 @@
   - `cargo test -p dozer-app --bin dozer` **1970 passed**;唯一失败 `usage_probe::host::tests::host_site_citations_point_at_the_code_they_name` 经核实由**用户 WIP(`app/update.rs` 行号位移)**引起,非本切片——把该 WIP 暂存后该测试即通过,已复原 WIP。
 - **偏差 / 发现:** 未动用户 WIP(`app/update.rs`、`extensions/files/**`、`platform/*`、`dozerd/*`、`Info.plist`、`Cargo.lock`)。
 - **未决项 / 阻塞:** C6 计数已归零;但"宿主不 match 产品面板名/不存产品专属字段"的更彻底口径(A4b2 剩余)与其余桥(C5/C7/C8/C10/C11/C12)待后续切片。
+
+
+### 切片 2 — 预览窗格选择统一(C5,DONE)
+
+- **动机 / 桥:** **C5**(`R-PANE-PICK`):`workspace/state.rs`(2)、`app/update.rs`(1)、`platform/window_events.rs`(3) 手写"按 `PanelKind::Project` 选预览窗格/判可见"的写法未走 `Workspace::preview_pane[_mut]`。
+- **改动:**
+  - 新 `App::panel_in_either_view(kind) -> bool`(`app/app.rs`):统一"某面板是否在左右任一栏"判断,取代散落的 `matches!(left_view, ..) || right_view == PanelKind::Project`。
+  - `platform/window_events.rs` 三处(Find 面板可见性、项目名称/描述编辑框焦点)改用该访问器。
+  - `app/update.rs` 的 `PreviewLargeFileSearchGo` 改为 `ws.preview_pane_mut(kind)` + 末尾 `ws.preview_error_mut(kind)`,把原来并存借用两字段改为**顺序借用**(pane 借用在取错误槽前结束),不再手写 match。
+- **验证:**
+  - `python3 scripts/audit/check_panel_boundary.py` → **ok(116 refs in 4 files)**;`R-PANE-PICK` 由 6 处降至 **2**(仅剩 `preview_pane`/`preview_pane_mut` 两个访问器本体,即单一实现);调用点文件条目从基线移除,基线**只降不升**。
+  - `cargo build -p dozer-app` 绿;`cargo clippy -p dozer-app --bin dozer` 对本切片改动零告警。
+  - `cargo test -p dozer-app --bin dozer` **1970 passed**;唯一失败仍是既有 WIP 引起的 `usage_probe::host` 引用行号漂移(与切片 1 同因,非本切片)。
+  - **基线附带修正:** `R-HOST-PANEL-ARMS` 95→93——以 `git show HEAD:...update.rs` 复核,HEAD 真实为 93(95 为 Task 01 遗留的陈旧值,已由后续已提交工作降到 93,非本次改动亦非 WIP),顺带收紧棘轮。
+- **偏差 / 发现:** C5 验收文案"三处计数归零"按字面无法达成(2 处在访问器本体,是**目标**单一实现而非违规);本切片把**调用点**归零,`state.rs` 保留 2 为唯一实现,已在台账注明口径。
+- **未决项 / 阻塞:** 无新增;其余桥(C7/C8/C10/C11/C12)待后续切片。
 
 
 ## 提交记录
@@ -767,3 +783,4 @@
 | 20 | `8daf437` | D | `feat(usage): connect Digger task usage to shared panel` |
 | 20 | `09111352` | Z | `docs(integration): record Task 20 Digger task usage loop (api-decisions §14)` |
 | 21 | `a77af9bb` | Z | `refactor(host): move app-panel effect executor to host_adapters (Task 21 slice 1)` |
+| 21 | `ec0f912c` | Z | `refactor(panel): route preview-pane selection through Workspace accessors (Task 21 slice 2)` |
