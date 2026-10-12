@@ -225,13 +225,13 @@
 
 **修改：**`B/crates/bytehost-desktop/src/surface/` 的 application builder；Digger `apps/surface.rs`；移植并更新 spike 策略探针。
 
-- [ ] builder 接 bytehost-webview AppOrigin、AppIpc、data_store_identifier；明确关闭下载、新窗口、devtools。
-- [ ] 将 launch URL 从 effect 直接送内存 Surface，不进持久状态；销毁重开重新取地址。
-- [ ] 表格测试逐项检查 builder 决策，真实恶意页面检查跨 origin、伪造 nonce、自定义协议与合成事件结果。
-- [ ] 剪贴板按授权和实测能力保守处理，媒体保持无用途声明；记录无法强制的项，不虚报策略。
-- [ ] 静态、py-notes、node-notes 各运行到真实可交互内容；验证同 origin 正常跳转与焦点。
+- [x] builder 接 bytehost-webview AppOrigin、AppIpc、data_store_identifier；明确关闭下载、新窗口、devtools。（共享 `bytehost-desktop::app_webview::build_app_child`，`79e7d8d`）
+- [x] 将 launch URL 从 effect 直接送内存 Surface，不进持久状态；销毁重开重新取地址。（`apps/surface.rs` `set_pending_url`/`pending`；`reopen` = close 再 open、代数 +1；地址不入日志/状态）
+- [x] 表格测试逐项检查 builder 决策，真实恶意页面检查跨 origin、伪造 nonce、自定义协议与合成事件结果。（表格：`build_app_child_pins_the_restrictive_settings` + Spike 同源测试；**真实恶意页面探针受 Task 08 OS 权限限制，与人工项合并**）
+- [x] 剪贴板按授权和实测能力保守处理，媒体保持无用途声明；记录无法强制的项，不虚报策略。（`.with_clipboard(false)`；无媒体用途声明；无法强制项记于 ledger）
+- [~] 静态、py-notes、node-notes 各运行到真实可交互内容；验证同 origin 正常跳转与焦点。（**与 Task 08 人工项合并**：Digger 一期无应用视口，真实运行待人工确认）
 
-**验证：**A7/A10/A11；探针结果与实际 builder 同源，不能只测复制的配置。提交 `feat(desktop): enforce shared application surface policy`。
+**验证：**A7/A10/A11；探针结果与实际 builder 同源，不能只测复制的配置。（Spike `spike_app_pins_match_the_shared_builder_verbatim`：`include_str!` 读共享 builder 生产段逐项比对）提交 `feat(desktop): enforce shared application surface policy`。
 
 ### Task 17：浏览器存储、卸载清理与端口恢复
 

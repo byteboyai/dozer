@@ -563,6 +563,69 @@
 
 ---
 
+## Task 16 — 真实应用 Surface 与 builder 强制策略(计划 §Task 16 `:224-234`)
+
+- **目标（计划 §Task 16 `:224-234`）：** (1) builder 接 `bytehost-webview` 的 `AppOrigin`/`AppIpc`/`data_store_identifier`;明确关闭下载、新窗口、devtools。(2) launch URL 从 effect 直接送内存 Surface,不进持久状态;销毁重开重新取地址。(3) 表格测试逐项检查 builder 决策;真实恶意页面检查跨 origin、伪造 nonce、自定义协议与合成事件结果。(4) 剪贴板按授权和实测能力保守处理,媒体保持无用途声明;记录无法强制的项,不虚报策略。(5) 静态/py-notes/node-notes 各运行到真实可交互内容;验证同 origin 正常跳转与焦点。**验证:** A7/A10/A11;探针结果与实际 builder 同源,不能只测复制的配置。
+- **规格依据（§6.4 `:165-172`,决定性）：** "新 desktop 层统一实现 builder,产品只给策略配置与资源,不各自复制 wry 初始化代码" —— builder **必须**住在共享 desktop 层(`bytehost-desktop`),不注入产品自定义协议或业务 IPC,拒绝跨 origin 导航/新窗口/下载,devtools 所有构建下关闭,不声明摄像头/麦克风用途,剪贴板按授权+平台能力(无法强制则保守禁用),CSP 复用 Gateway 共享策略,launch URL 中 token 只驻内存。
+
+**架构决策(锁定):**
+- **builder 落在 `bytehost-desktop`(非仅适配层)**,依赖 `bytehost-webview`;Digger `apps/surface.rs` 驱动它。对 Dozer 纯增量、不破坏。bytehost 提交 `79e7d8d`;正式接入前 Digger 经本地兄弟仓库 patch(`digger/.cargo/config.toml`)解析 bytehost,不提交。
+- **Digger 范围 = 控制器 + 接线,不做真实挂载**(用户裁决):Digger 一期无应用视口(无布局渲染、`PanelMeta.surfaces: vec![]`、应用面板 `HostState` 未驱动)→ 没有窗口 id + 矩形可挂真实 webview。故只交付 `AppSurfaces` 控制器 + `SurfaceAction → iced::Task` 助手(接窗口+矩形),仅表格测试;真实挂载与真实 WebView 运行与 Task 08 人工项合并(同 Tasks 14/15 口径)。
+
+**实现(bytehost 仓库 B):**
+- **`crates/bytehost-desktop/src/app_webview.rs`(新):** 共享受限应用 webview builder。
+  - 类型:`AppSurfaceSpec{slot,url,rect,visible}`;`AppSurfaceBuilt{slot,result: Result<(),String>}`;`AppSurfaceIpc{Focus,MouseUp,ZoomIn,ZoomOut,ZoomReset}` + `From<AppIpc>`;线程局部 `APP_HANDLES: RefCell<HashMap<SurfaceSlot, wry::WebView>>`。
+  - `build_app_child<M>(window_id, spec, on_ipc, on_ready, wrap) -> Task<M>`(经 `iced::window::run`)+ `set_app_bounds`/`evaluate_app`/`destroy_app`/`app_handle_count`。
+  - 钉死的受限设置(逐项显式):`AppOrigin::from_url`(fail-closed)、`.with_download_started_handler(|_, _| false)`(wry 默认**放行**)、`.with_devtools(false)`(debug 默认**开**)、`.with_allow_link_preview(false)`(需 `use wry::WebViewBuilderExtDarwin;`)、`.with_clipboard(false)`(保守关闭;wry 的 clipboard 只影响 Linux/Windows,macOS 归系统,但显式写 false 让跨平台一致)、`.with_data_store_identifier(...)`、`.with_initialization_script(app_init_script(&nonce))`、`.with_ipc_handler`(只认 `AppIpc::parse(body,&nonce)`)、`.with_navigation_handler(origin.allows_navigation)`、`.with_new_window_req_handler(|_,_| Deny)`、`.with_on_page_load_handler`(Finished→`on_ready`)。
+  - 测试:`build_app_child_pins_the_restrictive_settings` + `no_second_copy_of_the_navigation_policy`(均只扫生产源码:`&src[..src.find("#[cfg(test)]")]`,函数体从 `prod.find("pub fn build_app_child<M>(")` 起;**不可**用 `\n}\n` 作结束标记);`app_surface_ipc_maps_every_whitelisted_verb`。
+- **`crates/bytehost-desktop/src/panel.rs`:** `rect_to_wry` 改 `pub(crate)`。
+- **`crates/bytehost-desktop/src/lib.rs` + `Cargo.toml`:** 导出 `app_webview` 模块与类型;增 `bytehost-webview = { path = "../bytehost-webview" }` 依赖。
+
+**实现(Digger 仓库 D):**
+- **`crates/desktop/src/apps/surface.rs`(新):** `AppSurfaces` 控制器 + `SurfaceAction`。
+  - `OpenApp{app,slot,generation,rect,open_error: Option<String>}`;`SurfaceAction::{Create{app,slot,generation,url,rect}, Resize{slot,rect}, Destroy{slot}}`。
+  - `AppSurfaces{open,next_generation: HashMap<String,u64>,next_slot(起 4096),pending}`;方法 `new/is_open/get/slot_of/len/is_empty/open/reopen/close/close_all/resize/accepts/report_open_result/open_error/set_pending_url/pending_url/open_pending/take_pending/alloc_slot`;自由函数 `ipc_label(AppSurfaceIpc)->&'static str`。
+  - **代数按 per-app 计**(不是 per-slot):`close` 使该应用 `next_generation` +1,旧实例的迟到回包被 `accepts(app,generation)` 拒;`open` 每次取新槽(不别名旧实例)。`close` 先丢 `pending`(不留过期地址);`reopen`/`open_pending` = `close` 再 `open`,代数 +1;已打开时 `open` 幂等。
+  - 文件级 `#![allow(dead_code)]`(模块文档后),理由:机制就绪、视口后续接入。
+- **`crates/desktop/src/apps/mod.rs`:** `mod surface;`;`use ... LogicalRect` + `surface::{AppSurfaces, SurfaceAction}`;`Message::SurfaceOpened(String, Result<(),String>)`;`AppsState.surfaces`;`deliver` 的 `Outcome::LaunchUrl{ticket,app,result}`:接单后 `Ok(url)→set_pending_url`、`Err→close`(不留凭证);`Message::SurfaceOpened→report_open_result`(持久状态,非 Toast——Digger 无 Toast/日志框架);表面访问器 `surfaces/surface_close/surface_open_pending/surface_resize/surface_close_all/take_pending_surfaces`(均 `#[allow(dead_code)]` + 注释);自由函数 `surface_task(window, action) -> iced::Task<Message>`(Digger 侧**唯一**碰 `bytehost_desktop::app_webview` 处;`on_ipc`/`on_ready` 暂 no-op,接入视口后改为经 `UnboundedSender<Message>` 回流)。
+- **`crates/desktop/src/product.rs`:** `update_surface` 注释更新(应用 Surface 结果已在 `apps` 组合根处理)。
+
+**实现(探针,Digger 仓库 D):**
+- **`spike/editor-host/src/hosts.rs`:** 应用类别 `clipboard` 由 `true` 改 `false`(保守,与共享 builder 对齐);新增 **同源测试** `spike_app_pins_match_the_shared_builder_verbatim` —— `include_str!` 读共享 `bytehost-desktop/src/app_webview.rs`(只取 `#[cfg(test)]` 之前的生产段),断言其中确实写下 Spike 期望的每一项受限设置(`.with_download_started_handler(|_, _| false)`/`.with_devtools(false)`/`.with_clipboard(false)`/`.with_new_window_req_handler(`/`.with_navigation_handler(`/`.with_data_store_identifier(`/`.with_initialization_script(app_init_script(`/`AppIpc::parse(`/`AppOrigin::from_url(`),并断言**无** `with_custom_protocol`。任何一方漂移即失败 → 探针测的是真实 builder,不是复制配置。
+
+**能力矩阵接线记录(计划 §Task 16 第 3/4 条):**
+| 决策 | 强制点 | 表格测试 | 真实页面探针 |
+|---|---|---|---|
+| 仅本应用 origin 导航 | 共享 builder `.with_navigation_handler` + `AppOrigin::allows_navigation` | `build_app_child_pins_the_restrictive_settings`;`no_second_copy_of_the_navigation_policy`;Spike 同源测试 | 待 Task 08 人工项 |
+| 拒绝新窗口 | 共享 builder `.with_new_window_req_handler(Deny)` | 同上 | 待 Task 08 人工项 |
+| 拒绝下载(wry 默认放行) | 共享 builder `.with_download_started_handler(|_,_| false)` | 同上 | 待 Task 08 人工项 |
+| devtools 全关(debug 默认开) | 共享 builder `.with_devtools(false)` | 同上 | 待 Task 08 人工项 |
+| IPC 白名单 + per-webview nonce | 共享 builder `.with_initialization_script`+`.with_ipc_handler`(`AppIpc::parse`) | `app_surface_ipc_maps_every_whitelisted_verb`;Spike 同源测试 | 伪造 nonce 探针待 Task 08 人工项 |
+| 无自定义协议 | 共享 builder 全程无 `with_custom_protocol` | `build_app_child_pins_the_restrictive_settings`(forbidden)+ Spike 同源测试 | 待 Task 08 人工项 |
+| 每应用独立存储 | 共享 builder `.with_data_store_identifier`(实现只在 `bytehost-webview`) | `no_second_copy_of_the_navigation_policy`;Spike 同源测试 | 待 Task 08 人工项 |
+| 剪贴板保守关闭 | 共享 builder `.with_clipboard(false)` | `build_app_child_pins_the_restrictive_settings`;Spike `app_webview_is_the_most_restricted_class`+同源测试 | 待 Task 08 人工项 |
+| 媒体**无**用途声明 | 无 `Info.plist` 用途键(Digger 本阶段无 bundle;不新增) | — | 无法强制项,见下 |
+| launch URL 只驻内存 | `handlers.rs` surface 登记;`deliver` 只送控制器;不入日志/布局/错误详情 | `surface.rs` 单测(下) | — |
+
+- **无法强制的项(不虚报策略):** (a) macOS 剪贴板归系统管辖,wry 的 `clipboard` 开关对 macOS 无效 → 显式 `false` 只是跨平台一致性,不宣称"应用剪贴板已被强制禁用";(b) 应用 webview 媒体权限:代码未做任何媒体声明/授权闸门,保持"无用途声明";(c) 出站网络仍是 `Advisory`(静态应用),未升为 `Enforced`;(d) 真实恶意页面探针(跨 origin 跳转、伪造 nonce、自定义协议、合成事件)受窗口服务器/OS 权限限制,与 Task 08 人工项合并执行。
+
+**测试(增量):**
+- bytehost `bytehost-desktop`:`cargo test -p bytehost-desktop` → 37 + 8 + 3 + 8 pass(含 `build_app_child_pins_the_restrictive_settings`/`no_second_copy_of_the_navigation_policy`/`app_surface_ipc_maps_every_whitelisted_verb` 及 `with_clipboard(false)` 钉死)。
+- Digger `digger-desktop`:desktop 单测 9 → 21(`apps::surface` +12:重开换代、迟到回包拒绝、待创建契约、换地址只留最新、无实例关闭丢弃地址、创建失败保留/清除等;`apps::surface::tests` 全绿)。
+- Digger Spike `editor-host-spike`:37 pass(含新同源测试)。
+
+**验证:**
+- bytehost:`cargo build/test -p bytehost-desktop` 绿;`cargo fmt` + `clippy --all-targets -D warnings` 干净;`scripts/check-deps.sh` exit 0(`bytehost-webview` 在 desktop 组内已放行)。
+- Digger:`cargo test --workspace` 全绿;`cargo fmt --all` + `clippy --workspace --all-targets -D warnings` 干净;`scripts/check-host-deps.sh` exit 0。
+- Spike:`cargo test -p editor-host-spike` 绿(同源测试证明探针与真实 builder 一致)。
+
+- **偏差:** (a) `AppSurfaces` 代数判据用 **per-app** 而非计划未预设的 per-slot —— 新实例开新槽、代数按应用递增,更简单且杜绝槽别名;(b) Digger 一期无应用视口,`surface_task` 的 `on_ipc`/`on_ready` 暂 no-op,真实回流留待视口接入(计划 §Task 16 第 5 条的真实运行与 Task 08 人工项合并,同 Tasks 14/15);(c) 3 处 dormant 接线(`surface_task`、`AppsState` 表面访问器)与 `surface.rs` 模块用 `#[allow(dead_code)]` + 注释记录"机制就绪、视口后续接入"——先行机制性是用户裁决的范围内产品。
+- **未决项 / 阻塞:** **真实 WebView 交互验收(静态/py-notes/node-notes 真实可交互内容、同 origin 跳转与焦点、恶意页面跨 origin/伪造 nonce/合成事件探针、剪贴板实测能力)受 Task 08 同一 OS 权限/窗口服务器限制,与 Task 08 人工项合并待人工确认**。bytehost 当前经本地兄弟仓库 patch 解析;正式验收固定一个 bytehost tag(计划 §:13)。
+
+- **提交(仓库 B + D):** `79e7d8d` bytehost 共享 builder;`57378a9` Digger 控制器 + 接线 + 探针。
+
+---
+
 ## 提交记录
 | Task | 提交 | 仓库 | 说明 |
 |---|---|---|---|
@@ -594,6 +657,8 @@
 | 15 | `b24dd20` | D | `feat(apps): wire runtime probe and install effects` |
 | 15 | `8a098d4` | D | `feat(apps): add follow-aware log viewer` |
 | 15 | `aa91dfd` | D | `feat(apps): wire start-stop, rollback, uninstall and log wiring` |
+| 16 | `79e7d8d` | B | `feat(desktop): add the shared restricted application webview builder` |
+| 16 | `57378a9` | D | `feat(desktop): enforce shared application surface policy` |
 | R3–R6 | `ba52c94` | B | `fix(core): harden Surface lifecycle, panel identity and request routing` |
 | R2 | `fc3a636` | B | `fix(desktop): make physical-slot replacement atomic and unregister occupant-checked` |
 | R7 | `2d924d9` | B | `fix(spike): SELFTEST must build the wry child and fail nonzero` |
