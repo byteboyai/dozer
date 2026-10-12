@@ -327,3 +327,7 @@
 | 08 | `2aaf935` | B | `feat(desktop): execute Surface lifecycle, routing and geometry` |
 | 08 | `f4639bb` | B | `fix(desktop): stop forcing iced renderer features on consumers` |
 | 08 | `5b940f11` | Z | `refactor(usage): route Usage content host through shared Surface` |
+| R3–R6 | `ba52c94` | B | `fix(core): harden Surface lifecycle, panel identity and request routing` |
+| R2 | `fc3a636` | B | `fix(desktop): make physical-slot replacement atomic and unregister occupant-checked` |
+| R7 | `2d924d9` | B | `fix(spike): SELFTEST must build the wry child and fail nonzero` |
+| R1 | `870817b6` | Z | `fix(usage): open a new Surface generation on same-frame slot replacement` |
