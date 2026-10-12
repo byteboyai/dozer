@@ -45,6 +45,9 @@
 | C7 | `webview_geometry.rs` 的"文件预览"命名遗留 | `crates/dozer-app/src/webview_geometry.rs` | 几何与文件预览业务命名混同 | 几何函数迁入 Host 通用名；无"preview"命名残留 | 08 / 09 |
 | C8 | `request_tracker.rs` 原型迁移后删除 | `crates/dozer-app/src/request_tracker.rs` | 是 core 请求身份的移植来源 | 使用 core 请求身份且 delete 该文件后编译通过 | 05 / 21（06 已接入 core；`RequestToken` 产品包装待 21 删除） |
 | C9 | `HoverId`/`PanelKind` 作为宿主类型 | `panel_host.rs` / `app/state.rs` | 词汇尚未命名空间化/注册制 | `HoverSlot`/`PanelKind` 变体表纳入注册制后门禁计数只降 | 09 |
+| C10 | 原生浮层建窗/渲染机制（`overlay_window.rs`/`overlay_gpu.rs`/`toast_overlay.rs`） | `crates/dozer-app/src/platform/*_overlay*.rs` | 建窗需绑定 `iced_wgpu`/`iced_widget`/`iced_renderer`/`winit` 与渲染器类型 + `theme` 遮罩色；bytehost-desktop 刻意不绑渲染器 feature（`Cargo.toml:12-14`，R2 修复 `fbc3a636`），且 winit 尚非其依赖 | 把建窗/GPU/遮罩机制抽入 bytehost-desktop **且**产品接缝只留内容与主题色，或产品侧浮层全量改用共享建窗 API；届时 `R-OVERLAY-DUP`（新门禁）归零 | 21 |
+| C11 | rail/pane 容器、尺寸/折叠、拖拽（`chrome/rail.rs`、`app/layout.rs`、`app/view.rs`） | `crates/dozer-app/src/chrome/rail.rs` 等 | 与 `PanelKind`/`App`/`ShellState` 深度耦合；`RailLayout` 直接持 `Vec<PanelKind>`，`Divider` 有 13 个面板专属变体；bytehost-desktop 尚无 `PanelId` 键控的 rail/pane/drag API | 设计出 `PanelId` 键控的 rail/pane 容器后 Dozer 适配接上，且像素布局回归通过（A4/real-window） | 21 |
+| C12 | 焦点路由（`FocusIntent`/`pending_focus`/`apply_pending_focus`） | `crates/dozer-app/src/platform/window_events.rs` | 全部以 `PanelKind` 为键；通用"焦点去向"机制未抽（纯 `FocusTracker` 已于本任务抽取，见 ledger Task 10） | 通用焦点目标类型进 bytehost-desktop，产品只留业务路由（SearchIn/ShowFileHistory 等）；门禁计数只降 | 21 |
 
 **门禁约束：** 上述计数类删除条件与 `scripts/audit/panel-boundary.baseline.json` 及 `R-PROTOCOL`/`R-CLIENT` 门禁一一对应；删除桥时只允许基线**下降**，禁止上调阈值掩盖。
 

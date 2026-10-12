@@ -233,3 +233,9 @@ Dozer 目前有 **六条** wry 构造路径，但真正的信任分界只有两�
 - **dozer（`a152a51d`）**：`app/layout_compat.rs`（映射 + 黄金样本 7）+ `app/state.rs::builtin_kind_by_token` + `app/mod.rs` 注册。
 - **验证：** bytehost fmt/clippy(`-D warnings`)/全 workspace 测试/`check-deps.sh` 全绿；dozer fmt/clippy 干净、`cargo test -p dozer-app --bin dozer` 2025 通过 / 1 预存在失败、边界门禁仅预存在项。
 - **未决：** 真实读盘路径接线、rail/pane/focus/overlay 兼容桥登记。
+
+### 10.7 焦点/浮层/rail 抽取裁决（2026-10-12）
+
+- **只抽零依赖机制。** 侦察后确认：建窗机制（`open_overlay`/`open_child_window`/`backdrop_card`）会把 `iced_wgpu`/`iced_widget`/`iced_renderer`/`winit` 与**渲染器类型**一起拉进 bytehost-desktop，与该 crate 刻意"不打开渲染器 feature、不改消费方 `iced_renderer` 类型"的约束直接冲突（`Cargo.toml:12-14`；这正是 R2 修复 `fbc3a636` 移除的 `iced_wgpu` 强绑）。且 `winit` 尚非其依赖，`winit::dpi::*`/`winit::Window` 类型会引入新依赖面。rail/pane 需要尚不存在的 `PanelId` 键控容器/拖拽/折叠 API；焦点路由整体以 `PanelKind` 为键。**故本轮只抽纯 `FocusTracker`**。
+- **决定：** bytehost-desktop `focus.rs`（`FocusTracker`/`focus_transition`，与产品无关，仅记聚焦历史）；Dozer 删私有副本并改引宿主类型。建窗、rail/pane、焦点路由三项**登记为兼容桥 C10/C11/C12**（`acceptance.md` §2），待 Task 21 收口或后续设计出 `PanelId` 键控 API 后再抽。
+- **实施结果（2026-10-12）：** bytehost `93b2ac3`（`focus.rs` + 注册/再导出）；dozer `239aa399`（删 `platform/overlay_focus.rs`，10 宿主改引 `bytehost_desktop::FocusTracker`）。验证见 ledger「Task 10 续」。

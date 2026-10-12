@@ -342,6 +342,16 @@
 - **偏差:** 模块暂未接线(见上);rail/pane 渲染与 focus/overlay 抽取留待后续兼容桥条目。
 - **未决项 / 阻塞:** 真实样本已以黄金单测固定但尚未接入真实读盘路径;整体验收仍受 Task 08 真实窗口人工确认阻塞。
 
+### Task 10 续 — 焦点机制抽取(2026-10-12)
+
+- **裁决（用户批准,推荐项）：** 只抽取**零依赖、与产品无关**的机制。侦察结论:建窗机制把 `iced_wgpu`/`iced_widget`/`iced_renderer`/`winit` 与渲染器类型一起拉进来,与 bytehost-desktop 刻意不绑渲染器 feature 的约束冲突(`Cargo.toml:12-14`,即 R2 修复 `fbc3a636` 移除的东西);rail/pane 需要尚不存在的 `PanelId` 键控 API。故本续只做纯 `FocusTracker`。
+- **实现:** bytehost-desktop 新增 `src/focus.rs`(`FocusTracker` + `focus_transition`,`lib.rs` 注册/再导出);Dozer 删除 `platform/overlay_focus.rs`,10 个原生浮层宿主改 `use bytehost_desktop::FocusTracker;`,`platform/mod.rs` 摘除模块,`search_overlay.rs` 文档引用同步。
+- **登记:** 建窗机制(C10)、rail/pane 容器(C11)、焦点路由(C12)登记为待收口兼容桥,写入 `acceptance.md` §2。
+- **验证:** bytehost fmt/`clippy -D warnings` 干净;`cargo test --workspace --all-features` 全绿(bytehost-desktop 34,含 focus 2;`bytehost-apps` 的 `a_python_app_runs_through_the_wire_and_dies_with_dozerd` 为既有偶发,单跑通过);`scripts/check-deps.sh` ok。dozer fmt/clippy 干净(仅两条预存在告警);`cargo test -p dozer-app --bin dozer` 2023 通过 / 1 预存在失败;边界门禁仅预存在项。
+- **提交:** `93b2ac3` feat(desktop): extract product-neutral overlay focus tracker (B);`239aa399` refactor(platform): use shared overlay focus tracker (Z)
+- **偏差:** overlay 建窗/rail/pane/焦点路由三项**未抽取**(理由见上,已登记 C10–C12)。
+- **未决项 / 阻塞:** 上述三项待 Task 21 收口;整体验收仍受 Task 08 真实窗口人工确认阻塞。
+
 ---
 
 ## Review 修复 (2026-10-12, R1–R7)
@@ -386,6 +396,8 @@
 | 09 | `9b7b5121` | Z | `refactor(codehealth): adopt shared surface lifecycle` |
 | 10 | `f3edcef` | B | `feat(desktop): migrate legacy layouts to stable Layout` |
 | 10 | `a152a51d` | Z | `feat(app): compat bridge from legacy Dozer layout to shared Layout` |
+| 10 | `93b2ac3` | B | `feat(desktop): extract product-neutral overlay focus tracker` |
+| 10 | `239aa399` | Z | `refactor(platform): use shared overlay focus tracker` |
 | R3–R6 | `ba52c94` | B | `fix(core): harden Surface lifecycle, panel identity and request routing` |
 | R2 | `fc3a636` | B | `fix(desktop): make physical-slot replacement atomic and unregister occupant-checked` |
 | R7 | `2d924d9` | B | `fix(spike): SELFTEST must build the wry child and fail nonzero` |
