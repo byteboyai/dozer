@@ -699,6 +699,25 @@
 - **未决项 / 阻塞:** **A17** 由真实用户发起的应用操作驱动(非测试插入),但 token 如实为 0、代表应用操作而非 agent 会话——无真实 token 承载的 agent 运行时,**S6/S7 保持未完成**(计划 `:284`)。dozer 固定 revision(计划 Task 19 第 6 条)仍阻塞,归 Task 22。
 
 
+## Task 21 — 迁移剩余通用 Host 路径并删除兼容桥(计划 §Task 21 `:286+`)
+
+- **目标（计划 §Task 21 `:286+`）：** 按应用 WebView → Todo/GroupChat → editor/preview 承载 → 通用窗口事件顺序逐组切共享实现,每组独立提交回归;宿主不存产品专属字段/不解析业务协议/不 match 产品面板名;清理兼容桥台账(每项以无调用者+行为测试+单一实现证据关闭,不靠移动文件或放宽扫描目录降门禁);回归 Dozer 新旧布局/面板激活/产品命令/原生菜单/窗口退出。**验证:** 同口径结构度量、公共 Host 反向依赖为零、兼容桥零、两产品同用 Host crate。
+- **实施进度:** (切片 1 应用面板 Effect 执行器外移 DONE);其余切片待续。
+
+
+### 切片 1 — 应用面板 Effect 执行器外移出 `app/`(DONE)
+
+- **动机 / 桥:** **C6**(`R-HOST-EXECUTORS` 实测 1,**回退项**):`app/app.rs` 的 `fn run_app_host_effects` 是 host 替应用面板执行副作用,规格 §6 验收 2 要求 host 只给 `PanelIo`。
+- **改动:** 新 `crates/dozer-app/src/host_adapters/app_host.rs`(产品侧适配层,非 `app/` 也非 `extensions/`——避开 `R-HOST-EXECUTORS` 与 `R-APP`/`R-WS` 棘轮),承载应用面板 [`Effect`](`bytehost_panel::host::PanelEffect`) 的**产品执行器**:顶层 `apply_effects(app, effects)` + 两个入口 `update(app, msg)`/`poll_if_due(app)`。`app/app.rs` 的 `poll_app_host_if_due`/`app_host_update` 改为一行转发,`run_app_host_effects` 整体删除(净 -114 行)。语义**逐字一致**(同批 Effect、同 `proxy` 回传形状、同 Toast 键去重、同"启动地址是秘密不写日志")。
+- **验证:**
+  - `python3 scripts/audit/check_panel_boundary.py` → **ok(120 refs in 5 files)**,`R-HOST-EXECUTORS` 回退**消失**(0),基线未改(棘轮回落到基线,非上调阈值)。
+  - `cargo build -p dozer-app` 绿(仅既有 warning)。
+  - `cargo clippy -p dozer-app --bin dozer` 对新文件零告警(其余 warning 为既有:workspace/state.rs、preview 等)。
+  - `cargo test -p dozer-app --bin dozer` **1970 passed**;唯一失败 `usage_probe::host::tests::host_site_citations_point_at_the_code_they_name` 经核实由**用户 WIP(`app/update.rs` 行号位移)**引起,非本切片——把该 WIP 暂存后该测试即通过,已复原 WIP。
+- **偏差 / 发现:** 未动用户 WIP(`app/update.rs`、`extensions/files/**`、`platform/*`、`dozerd/*`、`Info.plist`、`Cargo.lock`)。
+- **未决项 / 阻塞:** C6 计数已归零;但"宿主不 match 产品面板名/不存产品专属字段"的更彻底口径(A4b2 剩余)与其余桥(C5/C7/C8/C10/C11/C12)待后续切片。
+
+
 ## 提交记录
 | Task | 提交 | 仓库 | 说明 |
 |---|---|---|---|
@@ -747,3 +766,4 @@
 | 20 | `f529b72` | D | `feat(app-host): expose request ticket from run_install_traced` |
 | 20 | `8daf437` | D | `feat(usage): connect Digger task usage to shared panel` |
 | 20 | `09111352` | Z | `docs(integration): record Task 20 Digger task usage loop (api-decisions §14)` |
+| 21 | `a77af9bb` | Z | `refactor(host): move app-panel effect executor to host_adapters (Task 21 slice 1)` |

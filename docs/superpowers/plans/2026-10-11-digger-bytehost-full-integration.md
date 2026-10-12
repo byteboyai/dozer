@@ -297,6 +297,8 @@
 
 **验证：**同口径结构度量；公共 Host 反向依赖为零；兼容桥零；两产品使用同一 Host crate。提交按表面/容器切片，最后一次仅删除已无调用代码。
 
+**实施进度（2026-10-12，切片 1 起）：** 应用面板 Effect 执行器(`App::run_app_host_effects`)已外移出 `app/` 到 `crates/dozer-app/src/host_adapters/app_host.rs`,`R-HOST-EXECUTORS` 回退归零(基线未改);见 ledger Task 21 切片 1。其余桥(C5/C7/C8/C10/C11/C12)与各表面切换待后续切片。
+
 ### Task 22：固定依赖、独立构建与发布包
 
 **修改：**三仓库 Cargo/锁文件、CI；Digger `packaging/macos/`、`scripts/package-macos.sh`（新增）。
