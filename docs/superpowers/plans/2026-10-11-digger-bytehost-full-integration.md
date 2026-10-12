@@ -266,7 +266,7 @@
 - [x] 将 workspace/chrome UI helper 依赖替换为公共 UI 或注入的产品展示适配。（`PanelDisplay<M>` 接缝）
 - [x] 审计本地 Git 统计路径：直接 bytegit Repo 读取改为面板所需的窄数据提供接口，Dozer 实现保持现状，Digger 明确其可提供的语义，不把 Git 实现塞进 Host。（`GitStatsProvider` / `NoGitStats`；Dozer 侧包 bytegit 待阶段 3）
 - [x] 迁移离线 Web bundle、构建脚本、许可证和资源版本；运行原 npm typecheck/test/build，实际使用迁后 bundle。（阶段 2 完成，产物逐字节一致）
-- [~] Dozer 仅保留重新导出/注册包装；库依赖闭包无 dozer-app、dozer-client、dozer-core，允许领域 model/services 和公共 UI。（闭包已满足；包装/注册在阶段 3）
+- [x] Dozer 仅保留重新导出/注册包装；库依赖闭包无 dozer-app、dozer-client、dozer-core，允许领域 model/services 和公共 UI。（闭包已满足；Dozer 接入完成——`extensions/usage.rs` 纯重导出，产品展示适配在 host 侧 `host_adapters/usage_panel.rs`）
 - [ ] 以可固定 revision 提供 Digger 引用，验证依赖中的领域类型不出现两份不兼容来源。（阶段 3 后 + Task 20）
 
 **验证：**Usage 旧测试、fake 独立面板真窗口、Dozer 真数据行为对照；A2。提交按 Rust 提取、资源提取、Dozer 接入拆分。

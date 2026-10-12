@@ -341,12 +341,60 @@ mod tests {
         }
     }
 
+    /// 面板展示适配(`PanelDisplay`)在假宿主上的最小实现:证明"面板 view + 宿主
+    /// 展示适配契约"就能构造出 view,无需真的 `App`(库化后 `content_pane` 的第一
+    /// 参数是 `impl PanelDisplay<Message>` 而非 `impl PanelHost`)。
+    impl crate::extensions::usage::adapter::PanelDisplay<crate::app::Message> for FakeHost {
+        fn wrap(&self, message: crate::extensions::usage::Message) -> crate::app::Message {
+            crate::app::Message::Usage(message)
+        }
+        fn agent_icon_color(&self, _agent: dozer_model::AgentKind) -> iced_widget::core::Color {
+            iced_widget::core::Color::BLACK
+        }
+        fn agent_icon(
+            &self,
+            _agent: dozer_model::AgentKind,
+            _color: iced_widget::core::Color,
+        ) -> Element<'static, crate::app::Message, iced_widget::Theme, iced_renderer::Renderer>
+        {
+            iced_widget::Space::new().into()
+        }
+        fn panel_head<'a>(
+            &self,
+            _title: &'a str,
+            _actions: Option<
+                Element<'a, crate::app::Message, iced_widget::Theme, iced_renderer::Renderer>,
+            >,
+        ) -> Element<'a, crate::app::Message, iced_widget::Theme, iced_renderer::Renderer> {
+            iced_widget::Space::new().into()
+        }
+        fn list_collapse_button<'a>(
+            &self,
+            _collapsed: bool,
+            _tooltip_collapse: &'a str,
+            _tooltip_expand: &'a str,
+            _on_select: crate::app::Message,
+            _on_hover: impl Fn(bool) -> crate::app::Message + 'a,
+        ) -> Element<'a, crate::app::Message, iced_widget::Theme, iced_renderer::Renderer> {
+            self.collapse_buttons_asked
+                .set(self.collapse_buttons_asked.get() + 1);
+            iced_widget::Space::new().into()
+        }
+        fn collapse_hover(&self, _hovered: bool) -> crate::app::Message {
+            crate::app::Message::Noop
+        }
+        fn toggle_list_collapse(&self) -> crate::app::Message {
+            crate::app::Message::Noop
+        }
+    }
+
     #[test]
     fn usage_content_pane_builds_against_a_fake_host_and_asks_it_for_the_collapse_button() {
         let host = FakeHost::default();
         let ws_state = crate::extensions::usage::WorkspaceState::default();
         let _view = crate::extensions::usage::content_pane(
             &host,
+            false,
             &ws_state,
             Length::Fill,
             Border::default(),

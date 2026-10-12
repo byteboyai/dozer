@@ -28,14 +28,14 @@ impl Duty {
     /// 真实 host 里承担这件事的位置(读代码得到,2026-10-08)。
     pub(crate) fn host_site(self) -> &'static str {
         match self {
-            Duty::BuildActivationCtx => "app/update.rs:5317",
+            Duty::BuildActivationCtx => "app/update.rs:5318",
             Duty::RouteLoaded => "app/update.rs:1641 (with_project)",
             Duty::DropOtherProject => "app/update.rs:1641 (with_project 路由到别的 Workspace)",
-            Duty::InterceptCollapse => "app/update.rs:1648",
-            Duty::InterceptHover => "app/update.rs:1651",
-            Duty::FramePush => "app/app.rs:1247 take_usage_content_script",
-            Duty::DowngradeReady => "app/app.rs:1257",
-            Duty::SkipWhileLoading => "app/app.rs:1264",
+            Duty::InterceptCollapse => "host_adapters/usage_panel.rs:88",
+            Duty::InterceptHover => "host_adapters/usage_panel.rs:84",
+            Duty::FramePush => "app/app.rs:1250 take_usage_content_script",
+            Duty::DowngradeReady => "app/app.rs:1260",
+            Duty::SkipWhileLoading => "app/app.rs:1267",
             Duty::ParseIpcAndMarkReady => "runtime.rs:729 + app/update.rs:265",
             Duty::DrainToastOutbox => "app/update.rs:223 (drain_outboxes)",
         }
@@ -54,7 +54,10 @@ impl ProbeHost {
     pub(crate) fn new(project_id: i64) -> Self {
         Self {
             ws: WorkspaceState::default(),
-            push: UsageSurface::new(),
+            push: UsageSurface::new(
+                crate::app::USAGE_CONTENT_ID_OFFSET as u32,
+                crate::preview::dispatch_script,
+            ),
             surface: FakeSurface::default(),
             duties: Vec::new(),
             project_id,
@@ -84,7 +87,7 @@ impl ProbeHost {
             io,
         };
         self.duties.push(Duty::BuildActivationCtx);
-        usage::on_activate(&mut self.ws, Some(&ctx));
+        usage::activate(&mut self.ws, Some(ctx));
         rx
     }
 
@@ -106,14 +109,14 @@ impl ProbeHost {
             io,
         };
         self.duties.push(Duty::BuildActivationCtx);
-        usage::on_activate(&mut self.ws, Some(&ctx));
+        usage::activate(&mut self.ws, Some(ctx));
         rx
     }
 
     /// 对应 `App::drain_outboxes`(`app/update.rs`)里 `pending.extend(ws.usage.take_outbox())`。
     pub(crate) fn drain_toasts(&mut self) -> Vec<crate::extensions::toast::Pending> {
         self.duties.push(Duty::DrainToastOutbox);
-        self.ws.take_outbox()
+        usage::notices_to_pending(self.ws.take_outbox())
     }
 
     /// 对应 `app/update.rs:1640-1651` 的路由:`Loaded`/`LoadFailed` 按 `project_id` 路由(这里只有一个 Workspace,
@@ -136,7 +139,7 @@ impl ProbeHost {
                 usage::update(&mut self.ws, msg);
             }
             Message::ToggleListCollapse => self.duties.push(Duty::InterceptCollapse),
-            Message::Hover(..) => self.duties.push(Duty::InterceptHover),
+            Message::CollapseHover(..) => self.duties.push(Duty::InterceptHover),
             msg => usage::update(&mut self.ws, msg),
         }
     }
@@ -242,6 +245,7 @@ mod tests {
         let update = include_str!("../app/update.rs");
         let app = include_str!("../app/app.rs");
         let runtime = include_str!("../runtime.rs");
+        let usage = include_str!("../host_adapters/usage_panel.rs");
         let table: &[(Duty, &[&str])] = &[
             (
                 Duty::BuildActivationCtx,
@@ -257,18 +261,18 @@ mod tests {
             ),
             (
                 Duty::InterceptCollapse,
-                &["Message::Usage(usage::Message::ToggleListCollapse)"],
+                &["AppMessage::TogglePanelListCollapse(PanelKind::Usage)"],
             ),
             (
                 Duty::InterceptHover,
-                &["Message::Usage(usage::Message::Hover(id, h))"],
+                &["Message::Hover(HoverId::list_collapse(PanelKind::Usage), hovered)"],
             ),
             (Duty::FramePush, &["pub fn take_usage_content_script("]),
             (Duty::DowngradeReady, &["self.usage_surface"]),
             (Duty::SkipWhileLoading, &["if ws.usage.loading()"]),
             (
                 Duty::DrainToastOutbox,
-                &["pending.extend(ws.usage.take_outbox())"],
+                &["pending.extend(usage::notices_to_pending(ws.usage.take_outbox()))"],
             ),
             (
                 Duty::ParseIpcAndMarkReady,
@@ -293,6 +297,7 @@ mod tests {
                     "app/update.rs" => update,
                     "app/app.rs" => app,
                     "runtime.rs" => runtime,
+                    "extensions/usage.rs" | "host_adapters/usage_panel.rs" => usage,
                     other => panic!("{duty:?}: 未知文件 {other}"),
                 };
                 let text = src.lines().nth(line - 1).unwrap_or("");
@@ -326,10 +331,19 @@ mod tests {
                 "msg @ (usage::Message::Loaded(project_id, ..)",
                 "| usage::Message::LoadFailed(project_id, ..)",
                 "self.with_project(project_id",
-                "Message::Usage(usage::Message::ToggleListCollapse)",
-                "Message::Usage(usage::Message::Hover(id, h))",
                 "Message::Usage(msg) =>",
                 "self.with_focused_project",
+            ],
+        );
+        // 折叠/悬停拦截已从 update.rs 的 `Message::Usage` 分支迁到产品展示适配
+        // (`host_adapters/usage_panel.rs` 的 `PanelDisplay` 把库内 `ToggleListCollapse`/
+        // `CollapseHover` 直接映射成顶层 `Message::TogglePanelListCollapse`/`Message::Hover`)。
+        in_order(
+            "host_adapters/usage_panel.rs 折叠/悬停映射",
+            include_str!("../host_adapters/usage_panel.rs"),
+            &[
+                "AppMessage::Hover(HoverId::list_collapse(PanelKind::Usage), hovered)",
+                "AppMessage::TogglePanelListCollapse(PanelKind::Usage)",
             ],
         );
         in_order(

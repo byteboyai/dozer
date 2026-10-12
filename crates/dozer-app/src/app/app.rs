@@ -861,7 +861,10 @@ impl App {
             home_right_view: homespace::HomeRightView::default(),
             home_browser: browser::State::with_initial_url("https://byteboy.ai"),
             git_log: git_log::State::default(),
-            usage_surface: crate::extensions::usage::UsageSurface::new(),
+            usage_surface: crate::extensions::usage::UsageSurface::new(
+                USAGE_CONTENT_ID_OFFSET as u32,
+                crate::preview::dispatch_script,
+            ),
             codehealth_surface: crate::extensions::codehealth::CodeHealthSurface::new(),
             codehealth_webview: crate::extensions::codehealth::WebviewPushState::default(),
             todo_webview: crate::extensions::todo::WebviewPushState::default(),

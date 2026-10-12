@@ -69,10 +69,10 @@ fn s1_activate_loads_rows_and_pushes_one_payload() {
         vec![repo.path().to_string_lossy().into_owned()]
     );
 
-    // 视图也能在假 host 上构造(规格 §1:面板只靠 PanelHost 契约就能画)。
+    // 视图也能在假 host 上构造(规格 §1:面板只靠 PanelHost + PanelDisplay 契约就能画)。
     let fake = FakePanelHost::default();
-    let _c = usage::content_pane(&fake, &host.ws, Length::Fill, Border::default());
-    let _l = usage::list_pane(&host.ws, Length::Fill, Border::default());
+    let _c = usage::content_pane(&fake, false, &host.ws, Length::Fill, Border::default());
+    let _l = usage::list_pane(&fake, &host.ws, Length::Fill, Border::default());
     assert_eq!(fake.collapse_buttons_asked(), 1);
 
     // 这个场景里 host 替面板做的事,就是缺口报告“host 能力清单”的底稿。
@@ -296,24 +296,16 @@ fn s7_characterizes_g5_toggle_list_collapse_must_never_reach_the_panel() {
 #[test]
 #[should_panic(expected = "由内核拦截处理")]
 fn s7_characterizes_g5_hover_must_never_reach_the_panel() {
-    use crate::app::{HoverId, PanelKind};
     let mut ws = usage::WorkspaceState::default();
-    usage::update(
-        &mut ws,
-        Message::Hover(HoverId::list_collapse(PanelKind::Usage), true),
-    );
+    usage::update(&mut ws, Message::CollapseHover(true));
 }
 
 /// S7 的另一面:夹具里 host 拦截后,这两条消息不会进面板。
 #[test]
 fn s7_host_intercepts_collapse_and_hover() {
-    use crate::app::{HoverId, PanelKind};
     let mut host = ProbeHost::new(PROJECT);
     host.deliver(Message::ToggleListCollapse);
-    host.deliver(Message::Hover(
-        HoverId::list_collapse(PanelKind::Usage),
-        true,
-    ));
+    host.deliver(Message::CollapseHover(true));
     let duties = host.duty_set();
     assert!(duties.contains(&Duty::InterceptCollapse));
     assert!(duties.contains(&Duty::InterceptHover));

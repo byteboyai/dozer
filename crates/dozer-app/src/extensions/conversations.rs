@@ -219,7 +219,8 @@ pub enum Message {
     /// 收起 agent 筛选下拉。
     AgentPickerClose,
     /// 搜索框/翻页按钮的 hover 进度条动画。由内核直接拦截转发给
-    /// `App::set_hover`(同 `usage::Message::Hover` 的既有写法),不会到达
+    /// `App::set_hover`(同 `usage::Message::CollapseHover` 转发到顶层
+    /// `Message::Hover` 的既有写法),不会到达
     /// `update()`。
     Hover(HoverId, bool),
     /// 搜索框右键菜单目标。由内核直接拦截转发给顶层

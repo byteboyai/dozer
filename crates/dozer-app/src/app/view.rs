@@ -970,35 +970,37 @@ pub(crate) fn panel_body<'a>(
             if !ws.usage.has_agent_filter() {
                 return usage::content_pane(
                     app,
+                    app.list_collapsed(PanelKind::Usage),
                     &ws.usage,
                     Length::Fill,
                     zone_pane_border(zone, ac),
-                )
-                .map(Message::Usage);
+                );
             }
             if app.list_collapsed(PanelKind::Usage) {
                 return usage::content_pane(
                     app,
+                    true,
                     &ws.usage,
                     Length::Fill,
                     zone_pane_border(zone, ac),
-                )
-                .map(Message::Usage);
+                );
             }
             let (list_portion, content_portion) = split_portions(app.dims.usage_split);
             let content_pane = usage::content_pane(
                 app,
+                false,
                 &ws.usage,
                 Length::FillPortion(content_portion),
                 zone_pane_border(zone, lc),
-            )
-            .map(Message::Usage);
+            );
+
             let list_pane = usage::list_pane(
+                app,
                 &ws.usage,
                 Length::FillPortion(list_portion),
                 zone_pane_border(zone, rc),
-            )
-            .map(Message::Usage);
+            );
+
             let content_bg = byteui::theme::color::current().panel;
             let list_bg = byteui::theme::color::current().bg;
             if app.panel_mirrored(PanelKind::Usage) {

@@ -220,7 +220,7 @@ impl App {
                 pending.extend(ws.ssh.take_outbox());
                 pending.extend(ws.database.take_outbox());
                 pending.extend(ws.agent_context.take_outbox());
-                pending.extend(ws.usage.take_outbox());
+                pending.extend(usage::notices_to_pending(ws.usage.take_outbox()));
             }
         }
         pending.extend(self.database.take_outbox());
@@ -1645,10 +1645,11 @@ impl App {
                     usage::update(&mut ws.usage, msg);
                 });
             }
-            Message::Usage(usage::Message::ToggleListCollapse) => {
-                self.toggle_panel_list_collapse(PanelKind::Usage);
-            }
-            Message::Usage(usage::Message::Hover(id, h)) => self.set_hover(id, h),
+            // `ToggleListCollapse`/`CollapseHover` 不再经 `Message::Usage` 上桌:
+            // 面板 view 的 `[adapter::PanelDisplay]`(见 extensions/usage.rs)直接把
+            // 折叠按钮点击/悬停映射成顶层 `Message::TogglePanelListCollapse` /
+            // `Message::Hover`,不进本分支。库 `update` 对这两个变体保 `unreachable!`
+            // 维持 match 穷尽。
             Message::Usage(msg) => {
                 self.with_focused_project(|ws, _io| {
                     usage::update(&mut ws.usage, msg);
@@ -5315,7 +5316,7 @@ impl App {
             }),
             PanelKind::Usage => self.with_focused_project(|ws, io| {
                 let ctx = workspace_activation_ctx(ws, io, Message::Usage);
-                usage::on_activate(&mut ws.usage, ctx.as_ref());
+                usage::activate(&mut ws.usage, ctx);
             }),
             // 代码健康度面板切入时只读上次落盘结果，不自动扫描（spec：
             // 手动触发，与 Usage 的"打开即自动扫"是明确的行为差异）。

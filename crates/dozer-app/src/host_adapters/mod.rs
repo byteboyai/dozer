@@ -6,3 +6,4 @@
 //! 使 host 不再直接依赖具体 `Client` 的适配细节(兼容桥 C4)。
 
 pub(crate) mod services;
+pub(crate) mod usage_panel;
