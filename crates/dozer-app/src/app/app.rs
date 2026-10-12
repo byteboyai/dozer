@@ -1865,124 +1865,12 @@ impl App {
 
     /// `ResumeTimeReached` 时调用:到点就拉一次已安装应用列表,并驱动订阅的发起/重订阅与日志刷新。
     pub fn poll_app_host_if_due(&mut self) {
-        let now = std::time::Instant::now();
-        let visible = self.visible_app_slots();
-        let mut effects = self.app_host.subscribe_if_due(now);
-        effects.extend(self.app_host.poll_if_due(now, &visible));
-        effects.extend(self.app_host.tick_logs(now, &visible));
-        self.run_app_host_effects(effects);
+        crate::host_adapters::app_host::poll_if_due(self);
     }
 
     /// 应用宿主状态机的消息入口(异步结果、点击、面板切入都走这里)。
     pub(crate) fn app_host_update(&mut self, msg: crate::extensions::app_host::Message) {
-        let effects =
-            self.app_host
-                .update(msg, std::time::Instant::now(), &self.visible_app_slots());
-        self.run_app_host_effects(effects);
-    }
-
-    /// 执行状态机吐出的副作用:发请求(结果经 `proxy` 回到 `Message::AppHost`)、同步 rail、写/清
-    /// 启动地址、弹 Toast。**启动地址是秘密,不写日志。**
-    fn run_app_host_effects(&mut self, effects: Vec<crate::extensions::app_host::Effect>) {
-        use crate::extensions::app_host::{Act, Effect, Message as M};
-        use bytehost_client::AppHostApi;
-        for effect in effects {
-            match effect {
-                Effect::FetchList => {
-                    let (client, proxy) = (self.client.clone(), self.proxy.clone());
-                    self.handle.spawn(async move {
-                        let result = client.app_list().await;
-                        let _ = proxy.send_event(Message::AppHost(M::ListLoaded(result)));
-                    });
-                }
-                Effect::FetchLaunchUrl(slot) => {
-                    let Ok(id) = bytehost_apps::id::AppId::new(slot.id()) else {
-                        continue;
-                    };
-                    let (client, proxy) = (self.client.clone(), self.proxy.clone());
-                    self.handle.spawn(async move {
-                        let result = client.app_launch_url(id).await;
-                        let _ =
-                            proxy.send_event(Message::AppHost(M::LaunchUrlLoaded(slot, result)));
-                    });
-                }
-                Effect::StartApp(slot) | Effect::StopApp(slot) => {
-                    let act = if matches!(effect, Effect::StartApp(_)) {
-                        Act::Start
-                    } else {
-                        Act::Stop
-                    };
-                    let Ok(id) = bytehost_apps::id::AppId::new(slot.id()) else {
-                        continue;
-                    };
-                    let (client, proxy) = (self.client.clone(), self.proxy.clone());
-                    self.handle.spawn(async move {
-                        let result = match act {
-                            Act::Start => client.app_start(id).await.map(|_url| ()),
-                            Act::Stop => client.app_stop(id).await,
-                        };
-                        let _ =
-                            proxy.send_event(Message::AppHost(M::ActionDone(slot, act, result)));
-                    });
-                }
-                Effect::SyncRail(slots) => self.sync_installed_apps(&slots),
-                Effect::SetUrl(slot, url) => self.app_views.set_url(slot, url),
-                Effect::ClearUrl(slot) => self.app_views.clear(slot),
-                Effect::FetchLogs(slot, max_lines) => {
-                    let Ok(id) = bytehost_apps::id::AppId::new(slot.id()) else {
-                        continue;
-                    };
-                    let (client, proxy) = (self.client.clone(), self.proxy.clone());
-                    self.handle.spawn(async move {
-                        let result = client.app_logs(id, max_lines).await;
-                        let _ = proxy.send_event(Message::AppHost(M::LogsLoaded(slot, result)));
-                    });
-                }
-                Effect::Subscribe => {
-                    // 订阅成功 → `Subscribed`(随后转 `Changed`/`SubscriptionLost`);
-                    // 失败(连不上 dozerd、宿主不可用)→ 直接 `SubscriptionLost`,走退避重订阅。
-                    // 失败只写日志(`module` 来源),不弹 Toast——这是"当前处于某状态",不是一次性事件。
-                    let (client, proxy) = (self.client.clone(), self.proxy.clone());
-                    self.handle.spawn(async move {
-                        match client.subscribe().await {
-                            Ok(mut rx) => {
-                                let _ = proxy.send_event(Message::AppHost(M::Subscribed));
-                                while let Some(change) = rx.recv().await {
-                                    let msg = match change {
-                                        dozer_client::AppChange::Changed(_)
-                                        | dozer_client::AppChange::Resync => M::Changed,
-                                        dozer_client::AppChange::Disconnected => M::SubscriptionLost,
-                                    };
-                                    if proxy.send_event(Message::AppHost(msg)).is_err() {
-                                        break;
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                dozer_core::log_warn!(LOG, error = %e, "应用变更订阅失败,将退避重试");
-                                let _ = proxy.send_event(Message::AppHost(M::SubscriptionLost));
-                            }
-                        }
-                    });
-                }
-                Effect::OpenSettingsApps => {
-                    self.settings = Some(crate::extensions::settings::State::load_with_tab(
-                        self.daemon_unavailable.as_deref(),
-                        crate::extensions::settings::SettingsTab::Apps,
-                    ));
-                    // 触发「应用」页的数据加载(切到 Apps 页会现拉探测与列表)。
-                    let _ = self.proxy.send_event(Message::Settings(
-                        crate::extensions::settings::Message::TabSelected(
-                            crate::extensions::settings::SettingsTab::Apps,
-                        ),
-                    ));
-                }
-                Effect::Notice { level, text, key } => {
-                    let level = crate::extensions::app_host::notice_level(level);
-                    self.push_toast_keyed(LOG, level, text, &key);
-                }
-            }
-        }
+        crate::host_adapters::app_host::update(self, msg);
     }
 
     /// 设置某按钮的悬停目标（`true`=进入,`false`=离开）；动画由

@@ -5,5 +5,6 @@
 //! `panel_host.rs` 只保留宿主只读视图契约与执行原语 `PanelIo`;服务构造挪到本层,
 //! 使 host 不再直接依赖具体 `Client` 的适配细节(兼容桥 C4)。
 
+pub(crate) mod app_host;
 pub(crate) mod services;
 pub(crate) mod usage_panel;
