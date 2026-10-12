@@ -311,6 +311,8 @@
 
 **验证：**A1/A18；发布包可显示 Web 内容与运行应用，退出无残留。未经实际发布的结果称候选包。提交 `build(digger): pin shared host and package desktop`。
 
+**实施进度（2026-10-12，本地部分）：** 用户裁决**本地打包 only**。已做清单第 3/4(部分)/5 条：修 release 构建(`iced` facade 加 `wgpu` feature,`iced_renderer` 缺后端 feature 会 `compile_error!`)、新增 `crates/desktop/packaging/macos/Info.plist`(`ai.byteboy.digger`,min macOS 12.0,本期无图标)与 `scripts/package-macos.sh`(单二进制 `Digger.app`,ad-hoc 签名候选包)、升级/降级/回滚三场景实机演练(隔离 HOME)全过,新增迁移单测。**未做第 1/2 条**(发布 bytehost tag、把 dozer 固定 revision pin 到远端)与签名:均需**远端写授权 / Developer ID 凭据**——bytehost 待发新 tag、dozer `origin/main` 落后 176 提交且无 `dozer-panel-usage`、本机 0 有效 codesigning 身份;故当前三仓仍经不提交的本地 `[patch]` 联调,**"干净 clone 不依赖 patch"目标未达成**。详见 ledger Task 22。
+
 ### Task 23：最终验收与文档收口
 
 **修改：**`acceptance.md`；Digger ADR-001/011、技术架构；bytehost README；Dozer 提取路线图。
