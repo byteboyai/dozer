@@ -67,8 +67,25 @@ impl UsageSurface {
     /// - 离池:有实例 → `Destroyed`,并递增 generation,使旧实例的在途 IPC
     ///   从这一刻起被路由层判为过期。
     ///
+    /// **`native_replaced`**:本帧原生侧丢弃并重建了该槽的实例(预算淘汰、
+    /// host 种类切换、项目切换整池清空后重建等)。不能仅凭"数字槽还在池里"
+    /// 判断实例未变——同帧销毁+重建时槽号不变,但原生实例已换,旧实例已
+    /// 发过的 ready/已送达状态绝不能继承给新实例。此标志为真时,先把旧身份
+    /// 判死(销毁并递增 generation),再走创建路径。
+    ///
     /// 幂等:同一状态重复调用不产生额外转移。
-    pub(crate) fn observe_instance(&mut self, in_pool: bool) {
+    pub(crate) fn observe_instance(&mut self, in_pool: bool, native_replaced: bool) {
+        if native_replaced {
+            let id = self.id();
+            let has_instance = self
+                .executor
+                .state(id)
+                .is_some_and(bytehost_core::SurfaceState::has_instance);
+            if has_instance {
+                self.executor.apply(id, SurfaceEvent::Destroyed);
+                self.rebuild();
+            }
+        }
         let id = self.id();
         if in_pool {
             let state = self.executor.state(id).cloned();

@@ -215,6 +215,12 @@ pub(crate) struct PoolSyncOutcome {
     /// T10:reserve 被拒的 host,携带其 loading `generation`,由调用方把该
     /// tab 迁到可解释的 Failed 终态并作废该世代(不再无限动画)。
     pub denied: Vec<(crate::preview::ViewerKey, u64)>,
+    /// 本次调用中**原生实例被丢弃或替换**的池槽 id(预算淘汰、host 种类
+    /// 变化、项目切换整池清空等)。单固定槽面板(Usage/CodeHealth)据此把
+    /// 其 Surface 推到 `Destroyed` 并递增代数——不能靠"下一帧同一个数字
+    /// 槽还在池里"来推断实例未变(同帧销毁+重建时数字槽不变,但原生实例
+    /// 已换)。
+    pub dropped: Vec<usize>,
 }
 
 /// 创建一个应用 webview(`app_webview` 模块文档说明了信任模型)。与 `sync_webview_pool` 里给预览/浏览器
@@ -370,6 +376,7 @@ pub(crate) fn sync_webview_pool(
                         .collect();
                     for id in ids {
                         pool.remove(&id);
+                        outcome.dropped.push(id);
                     }
                     manager.release((project, panel, tab));
                     outcome.evicted.push((project, panel, tab));
@@ -443,11 +450,19 @@ pub(crate) fn sync_webview_pool(
         .collect();
     // IPC handler 捕获了创建时的 editor binding，因此同一个池 key 从
     // flyfish 切成 editor（或反向）时必须重建，不能只 load_url。
-    pool.retain(|id, (_, loaded_url)| {
-        desired_hosts.get(id).is_some_and(|expects_editor| {
-            *expects_editor == crate::preview::is_host_url(loaded_url)
+    let removed_for_kind: Vec<usize> = pool
+        .iter()
+        .filter(|(id, (_, loaded_url))| {
+            !desired_hosts.get(id).is_some_and(|expects_editor| {
+                *expects_editor == crate::preview::is_host_url(loaded_url)
+            })
         })
-    });
+        .map(|(id, _)| *id)
+        .collect();
+    for id in removed_for_kind {
+        pool.remove(&id);
+        outcome.dropped.push(id);
+    }
 
     for (spec, bounds) in specs {
         match pool.get_mut(&spec.id) {
@@ -485,6 +500,7 @@ pub(crate) fn sync_webview_pool(
                 if let Some(view) = build_app_webview(window, &spec, bounds, proxy.clone()) {
                     let _ = view.zoom(byteui::theme::icon_size::scale() as f64);
                     pool.insert(spec.id, (view, spec.url.clone()));
+                    outcome.dropped.push(spec.id);
                 }
             }
             None => {
@@ -918,6 +934,8 @@ pub(crate) fn sync_webview_pool(
                         // macOS 11+ 走 WKWebView 的 pageZoom)。
                         let _ = view.zoom(byteui::theme::icon_size::scale() as f64);
                         pool.insert(spec.id, (view, spec.url.clone()));
+                        // 新建即"本槽的原生实例被替换":单固定槽面板据此开新代数。
+                        outcome.dropped.push(spec.id);
                     }
                     Err(e) => dozer_core::log_error!(LOG, "创建预览 webview 失败: {e}"),
                 }

@@ -167,6 +167,12 @@ pub(crate) enum Runner {
         /// 把光标控制权让给 WKWebView——否则 iced 每帧把窗口光标强制刷成
         /// 箭头,会盖掉 WKWebView 自己在超链接上显示的握手光标。
         webview_rects: Vec<(f32, f32, f32, f32)>,
+        /// 本次 `sync_previews` 中**被丢弃或替换原生实例**的池槽 id(来自两个
+        /// 池的 `PoolSyncOutcome::dropped`:预算淘汰、host 种类切换、项目切换
+        /// 整池清空后重建等)。单固定槽面板(Usage/CodeHealth)在紧随其后的
+        /// `apply_pending_editor_commands` 里据此把 Surface 推到 `Destroyed`
+        /// 并递增代数——不能仅凭"下一帧数字槽还在池里"推断实例未变。
+        pool_dropped_ids: std::collections::HashSet<usize>,
         /// 最近一次光标物理位置(CursorMoved 更新),鼠标点击时用于命中测试。
         cursor_phys: winit::dpi::PhysicalPosition<f64>,
         /// 是否有外部 OS 文件正处于拖拽过程(winit `HoveredFile` 置
@@ -1038,6 +1044,7 @@ impl Runner {
             browser_webviews,
             webview_project,
             webview_rects,
+            pool_dropped_ids,
             proxy,
             ..
         } = self
@@ -1045,9 +1052,14 @@ impl Runner {
             return;
         };
 
+        // 每帧重算:本帧被丢弃/替换的原生实例槽 id(两个池合并)。
+        pool_dropped_ids.clear();
+
         // 换了聚焦项目 → 整池清空,理由见 `webview_project` 字段文档
         // (跨项目 tab id 撞 key 会复用捕获了别的项目白名单的 webview)。
         if *webview_project != app.active_project_id() {
+            pool_dropped_ids.extend(webviews.keys().copied());
+            pool_dropped_ids.extend(browser_webviews.keys().copied());
             webviews.clear();
             browser_webviews.clear();
             crate::preview::global_manager()
@@ -1106,6 +1118,7 @@ impl Runner {
         );
         // T3:把被淘汰 / reserve 被拒的 tab 真正迁到 Suspended/Failed,避免
         // 下一帧又重新 desired(销毁/重建抖动)。
+        pool_dropped_ids.extend(preview_pool_outcome.dropped.iter().copied());
         app.apply_preview_pool_evictions(preview_pool_outcome);
         // 首页右栏浏览器(`home_browser`)占的是右面板区,不是工作区的左
         // 面板预览区,所以单独算一套边界(见 `home_browser_bounds`);工作区
@@ -1135,7 +1148,7 @@ impl Runner {
                 })
                 .collect()
         };
-        crate::runtime::sync_webview_pool(
+        let browser_pool_outcome = crate::runtime::sync_webview_pool(
             window.as_ref(),
             browser_webviews,
             browser_specs,
@@ -1146,6 +1159,9 @@ impl Runner {
             // 从 URL 切到 HTML `<title>`。
             true,
         );
+        // 浏览器池的丢弃/替换也要记入(浏览器槽与单固定槽面板 id 空间不重叠,
+        // 但保持两个池口径一致,避免将来复用槽号时漏判)。
+        pool_dropped_ids.extend(browser_pool_outcome.dropped.iter().copied());
         // 卸载"连数据一起删"的应用:它的 webview 已经不在池里了才能清它的 WKWebsiteDataStore
         // (wry 要求先 drop 所有用这个存储的 WebView;`remove_data_store` 需在主线程且有事件循环)。
         for (app_id, store) in app.take_ready_store_removals(|slot| {
@@ -2517,7 +2533,13 @@ impl Runner {
     /// envelope,`evaluate_script` 注入 `window.__dozer.dispatch(...)`——句柄只
     /// 在这里拿得到,同 `apply_pending_preview_find` 的"派发完消息后轮询"节奏。
     pub(crate) fn apply_pending_editor_commands(&mut self) {
-        let Self::Ready { app, webviews, .. } = self else {
+        let Self::Ready {
+            app,
+            webviews,
+            pool_dropped_ids,
+            ..
+        } = self
+        else {
             return;
         };
         let available_webview_ids: std::collections::HashSet<usize> =
@@ -2558,7 +2580,9 @@ impl Runner {
         // 用量面板内容侧 webview(单固定槽,不在 PreviewPane tab 模型里):
         // 内容经声明式比较(`WebviewPushState::pending_push`)推送,与上面的
         // Git Log diff 命令同一注入节奏。
-        for (webview_id, js) in app.take_usage_content_script(&available_webview_ids) {
+        for (webview_id, js) in
+            app.take_usage_content_script(&available_webview_ids, pool_dropped_ids)
+        {
             if let Some((view, _)) = webviews.get(&webview_id) {
                 let _ = view.evaluate_script(&js);
             }
@@ -2986,6 +3010,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 // 当前项目(清空空池是 no-op)。
                 webview_project: None,
                 webview_rects: Vec::new(),
+                pool_dropped_ids: std::collections::HashSet::new(),
                 cursor_phys: winit::dpi::PhysicalPosition::new(0.0, 0.0),
                 files_dragging: false,
                 left_mouse_down: false,

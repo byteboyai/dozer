@@ -169,6 +169,42 @@ fn s4b_real_client_failures_surface_as_toasts() {
     }
 }
 
+/// S5b(R1):同一帧"销毁+重建"(槽号不变、原生实例已换,如项目切换整池 clear
+/// 后同帧重建)→ 必须开新代数:旧实例的 ready/已送达状态不得继承,新实例须重发。
+#[test]
+fn s5b_same_frame_replacement_opens_new_generation_and_resends() {
+    let rt = runtime();
+    let repo = repo_with_one_commit();
+    let dozerd = FakeDozerd::start(&rt, two_agent_rows());
+    let mut host = ProbeHost::new(PROJECT);
+    host.surface.attach();
+    host.tick();
+    host.webview_ready();
+    let rx = host.activate(&rt, &dozerd, Some(repo.path().to_path_buf()));
+    host.deliver(rx.recv_timeout(TIMEOUT).unwrap());
+    host.tick();
+    assert_eq!(host.surface.count(), 1, "旧实例已推一次");
+    let old = host.push.id();
+
+    // 同帧销毁并重建:attach 保持 true,replace 一次。
+    host.surface.replace();
+    host.tick();
+    assert_ne!(host.push.id(), old, "原生实例替换必须换代数");
+    assert_eq!(
+        host.surface.count(),
+        1,
+        "新实例握手前不推(旧实例状态不继承)"
+    );
+
+    host.webview_ready();
+    host.tick();
+    assert_eq!(
+        host.surface.kinds(),
+        vec!["all_agents".to_string(), "all_agents".to_string()],
+        "新实例 Ready 后必须重发快照"
+    );
+}
+
 /// S5:webview 销毁重建 → 同一内容重发。
 #[test]
 fn s5_webview_rebuild_resends_the_same_content() {

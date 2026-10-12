@@ -3,6 +3,8 @@
 #[derive(Default)]
 pub(crate) struct FakeSurface {
     attached: bool,
+    /// 本帧原生实例被销毁并重建(槽号不变但实例已换)。取走后清零——一次性。
+    replaced: bool,
     received: Vec<String>,
 }
 
@@ -12,6 +14,15 @@ impl FakeSurface {
     }
     pub(crate) fn detach(&mut self) {
         self.attached = false;
+    }
+    /// 模拟"同帧销毁并重建":实例被替换,槽号仍是同一个。
+    pub(crate) fn replace(&mut self) {
+        self.attached = true;
+        self.replaced = true;
+    }
+    /// 取走本帧的"已替换"标记(读取即清零)。
+    pub(crate) fn take_replaced(&mut self) -> bool {
+        std::mem::take(&mut self.replaced)
     }
     pub(crate) fn is_attached(&self) -> bool {
         self.attached

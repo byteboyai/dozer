@@ -1242,12 +1242,17 @@ impl App {
     pub fn take_usage_content_script(
         &mut self,
         available_webview_ids: &std::collections::HashSet<usize>,
+        replaced_webview_ids: &std::collections::HashSet<usize>,
     ) -> Vec<(usize, String)> {
         let webview_id = USAGE_CONTENT_ID_OFFSET;
         // 原生实例是否在池中 → 驱动 Surface 生命周期(进池:Created/新实例;
         // 离池:Destroyed 并递增代数,旧实例在途 IPC 从此被路由层判过期)。
-        self.usage_surface
-            .observe_instance(available_webview_ids.contains(&webview_id));
+        // `replaced` 捕获"同帧销毁+重建"(槽号不变但原生实例已换):必须开
+        // 新代数,旧实例的 ready/已送达状态不得继承。
+        self.usage_surface.observe_instance(
+            available_webview_ids.contains(&webview_id),
+            replaced_webview_ids.contains(&webview_id),
+        );
         let Some(ws) = self.active_workspace() else {
             return Vec::new();
         };

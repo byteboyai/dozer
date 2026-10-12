@@ -61,12 +61,12 @@
 |---|---|---|---|
 | B | `cargo build`（spike） | 0 | 编译通过（iced 0.14.0 / iced_winit 0.14.1 / wry 0.55.1） |
 | B | `cargo test --lib`（spike） | 0 | 3/3 证据测试通过 |
-| B | `SELFTEST=1 cargo run`（spike） | 0 | 真实窗口入口建窗后退出，无 panic |
+| B | `SELFTEST=1 cargo run`（spike） | 0 | 建窗**并真建 wry 子视图**（等待 `HostBuilt(Ok)`）后自退；建窗或子视图创建失败以非零码退出（见 §Review 修复 R7） |
 | B | `cargo clippy --all-targets -- -D warnings`（spike） | 0 | 干净 |
 | B | `cargo fmt --check`（spike） | 0 | 干净 |
 | B | `bash scripts/check-deps.sh` | 0 | 通过（spike 在工作区外，未污染） |
 | Z | （文档任务，未跑代码） | — | — |
-- **结果：** 规格 §11 闸门 1 回填为"成立"。锁定 iced/wry 版本；入口模式（`iced::application` 单循环 + `window::run` + thread_local + channel↔Subscription）；几何/DPI/overlay 分工；`Product<M>`/`HostMessage<M>` 对两个不同产品消息类型成立；同一 Surface 描述表达 Usage 与 CodeHealth 两类推送；core/desktop 分层签名与编译证据。
+- **结果：** 规格 §11 闸门 1 回填为"成立"。锁定 iced/wry 版本；入口模式（`iced::application` 单循环 + `window::run` + thread_local + channel↔Subscription）；几何/DPI/overlay 分工；`Product<M>`/`HostMessage<M>` 对两个不同产品消息类型成立；同一 Surface 描述表达 Usage 与 CodeHealth 两类推送；core/desktop 分层签名与编译证据。**证据边界（R7 修订）：** `SELFTEST=1 cargo run` 只证明 iced 窗口入口可启动且 wry 子视图可建（`HostBuilt(Ok)`），**不**证明 resize、隐藏恢复、原生浮层等行为——那些属真实窗口人工确认（见 Task 08）。
 - **偏差：**
   - 探针窗口入口用 `window::oldest()` 取窗口 id（非 `Id::MAIN`，后者在 iced 0.14 不存在）；与 `D/spike/editor-host` 一致。
   - `block v0.1.6` 触发 future-incompat 警告（传递依赖，非本探针代码；digger spike 同样存在）。
@@ -90,8 +90,8 @@
   - **闸门 2：** Digger 侧无真实 Usage 账本，仅领域占位与架构意图（`Logical_Domain_Model_v0.3:1661-1668,1688`；`Technical_Architecture_v0.1:676,698,781`）；无生产 workspace。**缺口已定位**（Rust 持久化账本→映射 `UsagePayload`，不连 dozerd；未实现时须返回 Unavailable）。**S6/S7 不得声称取数完成。**
   - **闸门 3：** AppService 多数够用（启动永不失败→Unavailable；端口不静默重选、冲突可观测、损坏报错不静默；`desired` 保留、reconcile 回收）。**不足 2 项**：`shutdown()` 返回 `()`（退出失败不可观测，规格 `:134`）、缺端口重置管理接口（规格 `:138`）。二者须在 bytehost 增补受测接口（只追加，不改 wire 形状）。
   - **闸门 1** 已在 Task 02 回填；**闸门 4/5** 留后续 Task。
-- **偏差：** 无。
-- **未决项 / 阻塞：** 无（bytehost 增补接口属后续 Task，非本任务阻塞）。
+- **偏差：** 本任务只做了只读调查（`rg`/`read`），**未**执行计划该 Task 要求的隔离双启动/退出实验（`B/spike/desktop-contract` 的独立进程双启动）；该实验仍缺（R7 指出）。
+- **未决项 / 阻塞：** 无阻塞。隔离双启动/退出实验待补（可并入 Task 04 之后的 bytehost 生命周期工作，或 Task 08 真实窗口确认）。
 
 ---
 
@@ -285,6 +285,29 @@
 - **偏差：** 无（bytehost 部分）。真实窗口确认因宿主权限缺失转人工，已在 acceptance 记录。
   - 计划 Task 08 把 `webview_geometry.rs` 列入"修改"，但本任务把几何仍留在产品侧：Usage 窗格矩形由 `ShellState`/`dims.usage_split`/`theme::geometry` 常量算出（2.1k 行、多面板共用），bytehost `surface::geometry` 提供的是 shell 级通用 `Placement`/`surface_rect`/`rect_after_overlay`，为它改造会动像素行为、收益低。计划的具体要求（clause 135）只针对逐帧推送/ready/IPC 经 Surface；几何经 spec 的零面积裁剪与 `observe_instance` 已与 Surface 生命周期联动。此口径待 Task 后续或用户裁决，见 `api-decisions.md`。
 - **未决项 / 阻塞：** 真实窗口确认待人工；其余无。
+
+---
+
+## Review 修复 (2026-10-12, R1–R7)
+
+> 来源：`review-2026-10-12-tasks-01-08.md`（快照 Dozer `b8ae6bb3` / bytehost `f4639bb`）。七项均经真实代码复核为**有效缺陷**（非误报）。修复顺序 R5/R6 → R4 → R2 → R3 → R1 → R7。
+
+| 编号 | 位置 | 修复 | 仓库 |
+|---|---|---|---|
+| R5 | `bytehost-core/src/registry.rs` `register` | 允许零 Surface（纯 iced 面板）；`NoSurfaces` 错误替换为 `DuplicateSurface{id,slot}`（同一面板内槽位重复） | B |
+| R6 | `bytehost-core/src/id.rs` `PanelId::new` | `app:` 命名空间用 `valid_app_name_segment`（允许数字开头、`[a-z0-9-]`、不含 `_`），与已校验 `AppId` 形状兼容 | B |
+| R4 | `bytehost-core/src/surface.rs` | 新增 `ready_once`：`Hidden + Resumed` 仅在曾握手过时 → Ready，否则 WaitingReady；`Hidden + Ready` 记住握手、清 push、保持 Hidden | B |
+| R2 | `bytehost-desktop/src/surface/mod.rs` | `register` 原子清除同 id/同物理槽的旧 entry 与路由；`unregister` 加占用者检查（旧 id 的迟到注销不得摘掉新实例路由） | B |
+| R3 | `bytehost-core/src/request.rs` `run_scoped` | 更正文档契约：`accepts` 是**尽力而为的入队前预过滤**，权威校验必须在消费点（Dozer `group_chat` 已在消费处再校验，确认为既有行为）；补边界测试 | B |
+| R1 | `dozer-app` `runtime.rs`/`window_events.rs`/`app.rs`/`extensions/usage/surface.rs` | 同帧"销毁+重建"（整池 clear 后同帧重建）经 `PoolSyncOutcome.dropped` → `observe_instance(in_pool, native_replaced)` 显式通知，开新代数；不再仅凭"下一帧数字槽还在池里"推断实例未变 | Z |
+| R7 | `bytehost/spike/desktop-contract/src/main.rs` | SELFTEST 返回并真正执行 `build`（建 wry 子视图），等待 `HostBuilt(Ok)` 后退出；失败/建窗失败以非零码退出。Task 02/03 证据与状态据实修订 | B |
+
+**验证（修复后）：**
+- bytehost：`cargo fmt --all --check` 干净；`cargo clippy --workspace --all-features --all-targets -- -D warnings` 干净；`cargo test --workspace --all-features` 全绿（bytehost-core 43 单测 + 7 + 6；bytehost-desktop 32 + 3 + 8）。
+- dozer：`cargo fmt -p dozer-app --check` 干净；`cargo test -p dozer-app --bin dozer` 2011 通过 / 1 预存在失败（`extensions::files::tests::delete_confirm_spec_reflects_pending_target`，非本次改动）；usage 子集 101 通过（含新增 R1 单测与 `s5b` 场景）。
+- spike：`SELFTEST=1 cargo run` 退出码 0 且已真建子视图（失败路径结构性非零退出）。
+
+**结论：** R1–R7 全部修复并有测试/证据。Task 01–08 验收仍受 Task 08 真实窗口人工确认阻塞（见上）；除该人工项外，review 提出的代码缺陷已清除。
 
 ---
 

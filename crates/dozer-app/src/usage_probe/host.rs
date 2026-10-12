@@ -34,9 +34,9 @@ impl Duty {
             Duty::InterceptCollapse => "app/update.rs:1638",
             Duty::InterceptHover => "app/update.rs:1641",
             Duty::FramePush => "app/app.rs:1242 take_usage_content_script",
-            Duty::DowngradeReady => "app/app.rs:1249",
-            Duty::SkipWhileLoading => "app/app.rs:1254",
-            Duty::ParseIpcAndMarkReady => "runtime.rs:709 + app/update.rs:265",
+            Duty::DowngradeReady => "app/app.rs:1252",
+            Duty::SkipWhileLoading => "app/app.rs:1259",
+            Duty::ParseIpcAndMarkReady => "runtime.rs:725 + app/update.rs:265",
             Duty::DrainToastOutbox => "app/update.rs:223 (drain_outboxes)",
         }
     }
@@ -146,8 +146,10 @@ impl ProbeHost {
     /// 什么"。
     pub(crate) fn tick(&mut self) {
         self.duties.push(Duty::FramePush);
-        // 进池/离池 → Created / Destroyed(离池时递增代数,旧实例在途 IPC 作废)。
-        self.push.observe_instance(self.surface.is_attached());
+        // 进池/离池 → Created / Destroyed(离池时递增代数,旧实例在途 IPC 作废);
+        // 原生实例同帧被替换(replaced)→ 先判死旧身份再重建。
+        self.push
+            .observe_instance(self.surface.is_attached(), self.surface.take_replaced());
         if !self.surface.is_attached() {
             self.duties.push(Duty::DowngradeReady);
             return;

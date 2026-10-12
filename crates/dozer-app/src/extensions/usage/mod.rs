@@ -797,7 +797,7 @@ mod tests {
     fn pending_push_none_when_not_ready() {
         // 未 ready(webview 进池但握手没到)前不推。
         let mut surface = UsageSurface::new();
-        surface.observe_instance(true);
+        surface.observe_instance(true, false);
         surface.set_desired(payload_a());
         assert!(surface.take_pending_script().is_none());
     }
@@ -805,7 +805,7 @@ mod tests {
     #[test]
     fn pending_push_some_when_ready_and_never_sent() {
         let mut surface = UsageSurface::new();
-        surface.observe_instance(true);
+        surface.observe_instance(true, false);
         surface.apply_ready();
         surface.set_desired(payload_a());
         let (slot, script) = surface.take_pending_script().expect("ready 首推");
@@ -816,7 +816,7 @@ mod tests {
     #[test]
     fn pending_push_none_once_marked_sent_and_desired_unchanged() {
         let mut surface = UsageSurface::new();
-        surface.observe_instance(true);
+        surface.observe_instance(true, false);
         surface.apply_ready();
         surface.set_desired(payload_a());
         assert!(surface.take_pending_script().is_some());
@@ -831,7 +831,7 @@ mod tests {
     #[test]
     fn pending_push_resends_when_desired_flips_back_to_a_previously_sent_value() {
         let mut surface = UsageSurface::new();
-        surface.observe_instance(true);
+        surface.observe_instance(true, false);
         surface.apply_ready();
         surface.set_desired(payload_a());
         assert!(surface.take_pending_script().is_some());
@@ -851,7 +851,7 @@ mod tests {
     #[test]
     fn pending_push_treats_a_different_workspaces_payload_as_new() {
         let mut surface = UsageSurface::new();
-        surface.observe_instance(true);
+        surface.observe_instance(true, false);
         surface.apply_ready();
         surface.set_desired(payload_a()); // 上一个显示这个 webview 的项目留下的内容
         assert!(surface.take_pending_script().is_some());
@@ -863,14 +863,14 @@ mod tests {
     #[test]
     fn rebuild_forces_a_resend_even_when_desired_unchanged() {
         let mut surface = UsageSurface::new();
-        surface.observe_instance(true);
+        surface.observe_instance(true, false);
         surface.apply_ready();
         surface.set_desired(payload_a());
         assert!(surface.take_pending_script().is_some());
         // webview 被销毁重建(全新实例),重新 ready——即便 desired 没变,也要
         // 强制重发一次,因为新实例的 JS 端状态是空的(同 git_log 的先例)。
-        surface.observe_instance(false); // 离池 → Destroyed + 递增代数
-        surface.observe_instance(true); // 重新进池 → 新实例
+        surface.observe_instance(false, false); // 离池 → Destroyed + 递增代数
+        surface.observe_instance(true, false); // 重新进池 → 新实例
         surface.apply_ready();
         surface.set_desired(payload_a());
         assert!(
@@ -883,13 +883,45 @@ mod tests {
     #[test]
     fn stale_generation_ipc_is_rejected_after_rebuild() {
         let mut surface = UsageSurface::new();
-        surface.observe_instance(true);
+        surface.observe_instance(true, false);
         surface.apply_ready();
         let old = surface.id();
-        surface.observe_instance(false);
-        surface.observe_instance(true);
+        surface.observe_instance(false, false);
+        surface.observe_instance(true, false);
         assert!(!surface.route_of(old).is_accepted(), "旧代数归属被拒");
         assert!(surface.route_of(surface.id()).is_accepted(), "当前代数接受");
+    }
+
+    /// R1(P1):同帧"销毁+重建"必须开新代数。真实触发:`sync_previews` 里项目
+    /// 切换整池 `clear()` 后同一帧又重建同槽 webview——数字槽号不变,帧间只看到
+    /// `in_pool` 一直是 true,不能据此认定实例未变。`replaced=true` 显式告知
+    /// Surface 原生实例已换:旧身份的 ready/已送达状态不得继承给新实例。
+    #[test]
+    fn same_frame_destroy_and_recreate_opens_a_new_generation() {
+        let mut surface = UsageSurface::new();
+        surface.observe_instance(true, false);
+        surface.apply_ready();
+        surface.set_desired(payload_a());
+        assert!(surface.take_pending_script().is_some(), "旧实例已推快照");
+        let old = surface.id();
+        // 同一帧:池丢弃旧实例又立刻建了新实例(槽号不变)。
+        surface.observe_instance(true, true);
+        assert!(
+            !surface.route_of(old).is_accepted(),
+            "旧实例的 ready/IPC 必须被拒(不能写进新实例)"
+        );
+        assert_ne!(surface.id(), old, "原生实例替换必须换代数");
+        assert!(
+            surface.take_pending_script().is_none(),
+            "新实例尚未握手,不得推"
+        );
+        // 新实例握手后才推(且必须重发快照,尽管 desired 与旧实例相同)。
+        surface.apply_ready();
+        surface.set_desired(payload_a());
+        assert!(
+            surface.take_pending_script().is_some(),
+            "新实例必须重发快照,不能继承旧实例的已送达状态"
+        );
     }
 
     // ---- bytegit P3:git 提交计数迁移前后必须一致的口径 ----
