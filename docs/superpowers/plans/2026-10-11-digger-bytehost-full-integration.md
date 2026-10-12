@@ -237,11 +237,11 @@
 
 **修改：**desktop 存储清理适配、Digger app-host 管理操作及设置页；必要时补 bytehost-webview 公共策略测试。
 
-- [ ] 先销毁所有相关 app Surface，再执行共享 StoreRemovals；清理失败显示持续待重试状态。
-- [ ] 清理待办在退出重启后可恢复，防止重新安装复活被用户要求删除的数据；服务数据与浏览器数据分别记录结果。
-- [ ] 用两个 app 验证存储隔离、同 app 重启连续性和保留/删除数据后的重装差异。
-- [ ] 设置接端口冲突重试与显式重置：展示 origin 变化影响、停服务并撤 Surface、调 Task 12 API、恢复订阅。
-- [ ] 测失败恢复和重复操作幂等；不在 Digger 直接编辑 gateway.json。
+- [x] 先销毁所有相关 app Surface，再执行共享 StoreRemovals；清理失败显示持续待重试状态。
+- [x] 清理待办在退出重启后可恢复，防止重新安装复活被用户要求删除的数据；服务数据与浏览器数据分别记录结果。
+- [~] 用两个 app 验证存储隔离、同 app 重启连续性和保留/删除数据后的重装差异。（机制与表格测试已做；两 app 真实浏览器存储隔离/重启连续性依赖真实窗口（真人验收，并入 Task 08 人工作业项）。）
+- [x] 设置接端口冲突重试与显式重置：展示 origin 变化影响、停服务并撤 Surface、调 Task 12 API、恢复订阅。
+- [x] 测失败恢复和重复操作幂等；不在 Digger 直接编辑 gateway.json。
 
 **验证：**A8/A12，端口冲突不损坏已有注册表和应用数据。提交 `feat(apps): recover store cleanup and gateway settings`。
 

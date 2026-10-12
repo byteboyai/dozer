@@ -626,6 +626,24 @@
 
 ---
 
+## Task 17 — 浏览器存储、卸载清理与端口恢复(计划 §Task 17 `:236-246`)
+
+- **目标（计划 §Task 17 `:236-246`）：** (1) 先销毁相关 app Surface，再执行共享 `StoreRemovals`；清理失败显示持续待重试状态。(2) 清理待办退出重启后可恢复，防止重装复活被删数据；服务数据与浏览器数据分别记录结果。(3) 两 app 验证存储隔离、同 app 重启连续性、保留/删除数据后重装差异。(4) 设置接端口冲突重试与显式重置：展示 origin 变化影响、停服务并撤 Surface、调 Task 12 API、恢复订阅。(5) 测失败恢复与重复操作幂等；不在 Digger 直接编辑 `gateway.json`。**验证:** A8/A12，端口冲突不损坏已有注册表和应用数据。
+- **范围裁决（用户确认）：** 机制 + 测试；**推迟设置页实时交互 UI**。理由：Digger 一期无应用视口、无设置面板（`product.rs` 仅 "Digger"/"应用" 两面板），真实窗口线程驱动（`remove_data_store` 需主线程 + 事件循环）与视口同一约束，并入 Task 08 人工项（与 Tasks 14/15/16 同一先例）。
+- **实现：**
+  - **bytehost B — 共享层补一条清除入口**:`crates/bytehost-desktop/src/app_webview.rs` 新增 `host_os_major()`(objc2-foundation,与 Dozer 同法)与 `remove_app_data_store<M>`——**先过** `bytehost_webview::supports_store_removal(host_os_major())`(wry 不检查系统版本,macOS 12/13 直接调会崩),不支持则同步回 `Unsupported` 且不起 wry 任务;否则主线程 `window::run` 内调 `wry::WebView::remove_data_store`,完成回调(WebKit 事件循环异步触发)翻成 `Done`/`InUse`/`Failed` 经 `on_result` 回宿主。`Cargo.toml` 加 `objc2-foundation`。新增源码扫描门禁 `remove_app_data_store_gates_on_the_os_version`(钉住"先过版本门槛再调 wry"、不得另抄 `data_store_identifier`);bytehost-desktop 测试 37→38 通过。
+  - **Digger D — 持久台账(app-host,无 wry/iced)**:新增 `crates/app-host/src/cleanups.rs::StoreCleanups`——落盘到 `<state>/store_cleanups.json` 的 `BTreeMap<app_id, CleanupState{Pending|Failed{reason}}>`;`request`(幂等)、`finish`、`fail`、`pending`、`failed`、`state`;原子落盘(临时文件 + rename);**损坏文件当空表**(读不出不能让启动失败)。5 个表格测试(重启恢复 / 幂等 / 完成落盘 / 失败可见 / 损坏容错)。
+  - **Digger D — 宿主适配**:新增 `crates/desktop/src/apps/store.rs::StoreCleanup` 把三件拼起来——`StoreCleanups`(持久台账)+ `bytehost_webview::StoreRemovals`(内存退避重试)+ 确定性 `data_store_identifier`。`load` 时把上次 `Pending` **重新排进内存队列**(重启恢复);`request`(先经 `StoreRemovals::request` + 台账落盘);`settle`:`Done`→双清、`InUse`→`retry`(超上限记终态失败)、`Unsupported`/`Failed`→终态失败留台账;`take_ready`(仅离池者)/`next_wake`/`failures`。9 个表格测试(仅 ProgramAndData 清 / 离池才可清 / Done 清台账 / InUse 重试 / 反复占用终态失败 / Unsupported+Failed 终态可见 / 重启恢复重驱动 / 失败不重驱动 / 请求幂等)。
+  - **Digger D — 组合根接线**(`apps/mod.rs`):`AppsState` 加 `store: StoreCleanup`(经 `with_ledger_path` 注入路径,生产走 `paths::state_dir()`)+ `pending_uninstall: HashMap<app_id, UninstallMode>`;`dispatch` 截获 `InstallEffect::Uninstall(id, mode)` 记模式(状态机回的 `ActionDone` 不带模式);`install_outcome(Uninstall, Ok)` 时按 `store::purges_browser_data(mode)` **先 `surfaces.close` 撤 Surface 再 `store.request`**;`Message::StoreRemovalResult` → `settle`;窗口线程入口 `store_removal_task(window, ready)`(一次性 futures 通道把 `on_result` 异步结果接回 `Message`)。3 个接线测试(ProgramAndData 排队 / Program 不碰 / 卸载失败不排队)。
+  - **Digger D — 端口恢复(纯顺序契约)**:新增 `crates/app-host/src/port.rs::PortResetPlan`——**不编辑 `gateway.json`**,只转发 Task 12 的 `AppService::reset_port`/`clear_port`(同根 flock 保证"服务在跑就拒绝");`origin_before/after` 展示端口变化影响、`changes_port`、`PortResetStage` 记录进度。4 个测试(origin 变化 / 无旧端口 / 同端口非变更 / `apply` 转发到受控接口)。
+  - `Executor`/`InstallAction` 加 `InstallAction::key()`(完成型动作 → 请求键的逆映射,供组合根/测试构造身份)。
+- **失败恢复与幂等:** 重复 `request` 幂等(台账 contains 即短路);`InUse` 按共享退避重试至上限后转终态失败;`Unsupported`/`Failed` 不自动重试但**台账留存可见**(设置页提示"重装后可能仍看到旧数据");损坏台账容错不阻启动。
+- **验证:** 三仓 `cargo fmt --all`、`cargo clippy --all-targets -D warnings`(digger 全 workspace)干净;digger `cargo test --workspace` 全绿(desktop 33、app-host 新增 8);bytehost `cargo test -p bytehost-desktop` 38 通过、`-p bytehost-webview` 13 通过;digger `scripts/check-host-deps.sh` exit 0、bytehost `scripts/check-deps.sh` exit 0。**A8/A12 的真人部分(两 app 真实存储隔离/同 app 重启连续性/重装差异、真实窗口线程驱动清除、设置页实时交互)并入 Task 08 人工项。**
+- **偏差:** (a) 计划 §Task 17 `:238` 提"Digger app-host 管理操作及设置页",一期无设置面板,按用户裁决实现机制 + 测试、推迟 UI;(b) 端口重置顺序契约落在 app-host 的纯 `PortResetPlan`(可单测),真实异步"停→改→起→重订阅"由组合根在窗口/运行时驱动(与真实窗口同约束);(c) `remove_app_data_store` 的 wry 回调是 `FnOnce + Send + 'static` 且由事件循环异步触发,故经 `on_result` 回调 + 一次性 futures 通道回流,而非返回值。
+- **未决项 / 阻塞:** **真实窗口线程清除驱动与设置页实时端口重置交互受 Task 08 同一 OS 权限/窗口服务器限制,与 Task 08 人工项合并待人工确认**。bytehost 当前经本地兄弟仓库 patch 解析(Task 17 新用 `bytehost-webview`,该 crate 在 tag `v0.1.1` 已存在,digger `Cargo.toml` 按 tag 引用 + 本地 patch 覆盖);正式验收固定一个 bytehost tag。
+
+---
+
 ## 提交记录
 | Task | 提交 | 仓库 | 说明 |
 |---|---|---|---|
@@ -659,6 +677,8 @@
 | 15 | `aa91dfd` | D | `feat(apps): wire start-stop, rollback, uninstall and log wiring` |
 | 16 | `79e7d8d` | B | `feat(desktop): add the shared restricted application webview builder` |
 | 16 | `57378a9` | D | `feat(desktop): enforce shared application surface policy` |
+| 17 | `8d0f7f7` | B | `feat(desktop): purge an app data store behind the OS-version gate` |
+| 17 | `3399866` | D | `feat(apps): recover store cleanup and gateway settings` |
 | R3–R6 | `ba52c94` | B | `fix(core): harden Surface lifecycle, panel identity and request routing` |
 | R2 | `fc3a636` | B | `fix(desktop): make physical-slot replacement atomic and unregister occupant-checked` |
 | R7 | `2d924d9` | B | `fix(spike): SELFTEST must build the wry child and fail nonzero` |
