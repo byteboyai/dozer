@@ -20,6 +20,8 @@ bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" 
 bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
 bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
 bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
+# 公共桌面宿主契约:稳定身份、请求身份、布局 DTO(bytehost-core,本地 patch 联调)。
+bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
 dozer-codehealth = { path = "../dozer-codehealth" }
 # 复用 dozer-hook 的 hook 安装逻辑(install::run_at/opencode_install::run_at)，
 # 新建 agent 会话时静默注册对应 CLI 的 hook，不必用户手动跑 `dozer-hook install`。

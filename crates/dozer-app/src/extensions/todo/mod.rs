@@ -562,13 +562,13 @@ mod tests {
         apply(
             &mut state,
             Message::AsyncResult(
-                new,
+                new.clone(),
                 Box::new(Message::Loaded(vec![todo_info(2, "new", false)])),
             ),
         );
         apply(
             &mut state,
-            Message::AsyncResult(old, Box::new(Message::Loaded(vec![]))),
+            Message::AsyncResult(old.clone(), Box::new(Message::Loaded(vec![]))),
         );
         apply(
             &mut state,

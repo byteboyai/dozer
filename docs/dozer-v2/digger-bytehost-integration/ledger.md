@@ -126,6 +126,70 @@
 
 ---
 
+## Task 05 — bytehost-core 请求身份与执行上下文
+
+- **状态：** DONE
+- **输入 revision：**
+  - B `972e461`（Task 04 之上）
+  - Z 主线（计划 §Task 05 `:92+`；规格 §5.3 请求信封与结果路由）
+  - 原型输入：`Z/crates/dozer-app/src/request_tracker.rs`（迁移前行为已由既有单测钉住）
+- **输出 revision：** B `4c4d748` `feat(core): preserve scoped writes and reject stale reads`
+- **产出文件：**
+  - `B/crates/bytehost-core/src/request.rs`
+  - `B/crates/bytehost-core/tests/request_routing.rs`
+  - `B/crates/bytehost-core/src/lib.rs`（导出 `request`）
+- **运行命令与退出码：**
+
+| 仓库 | 命令 | 退出码 | 结果 |
+|---|---|---|---|
+| B | `cargo test -p bytehost-core` | 0 | 38 通过（含既有 + 请求路由单测/集成） |
+| B | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | 干净 |
+| B | `cargo fmt --all --check` | 0 | 干净 |
+| B | `bash scripts/check-deps.sh` | 0 | 通过 |
+- **结果：**
+  - 新增中性请求身份：`Generation`（`ZERO`/`new`/`get`/`next`）、`RequestKey(&'static str)`、`RequestToken{owner,scope,instance,generation,key:Option<RequestKey>,seq}`（`Clone`，非 `Copy`，持 `ScopeId`）、`RequestTracker::new(owner,scope,instance,generation)` 提供 `begin(key)`（latest-only）、`scope()`（作用域写入，不被新读作废）、`invalidate(key)`、`accepts(&token)`（校验 owner+instance+generation+scope+按键 seq）；`ResultEnvelope<T>`；执行器/发射器抽象 `BackgroundExecutor`/`Emitter`；执行原语 `run_scoped` 在**派发路径**校验、超期结果丢弃。
+  - core 不含 Tokio/iced 具体实现；具体实现留待 `bytehost-desktop`（Task 07）。
+- **偏差：** 无（原型 `request_tracker.rs` 的行为——旧回包失效、lane 独立、重开面板拒绝旧结果——由 core 单测逐一对应）。
+- **未决项 / 阻塞：** 无。
+
+---
+
+## Task 06 — 拆分 Dozer 客户端适配 + 接入公共请求身份
+
+- **状态：** DONE
+- **输入 revision：**
+  - B `4c4d748`（`bytehost-core` 含 `id`/`request`）
+  - Z 主线 `9959bd4e`（Task 04 记录之上）
+- **输出 revision：** 本任务随提交组落地；提交 hash 见 §提交记录。
+- **产出文件：**
+  - `Z/crates/dozer-app/src/host_adapters/{mod.rs,services.rs}`（新）
+  - `Z/crates/dozer-app/src/panel_host.rs`（`services_for`/`ClientDaemon`/`ensure_error_to_service` 移出；`PanelIo::new` 改为接收 `Services`）
+  - `Z/crates/dozer-app/src/request_tracker.rs`（改为 `bytehost_core::request` 之上的产品适配层）
+  - 调用点更新：`app/app.rs`、`app/update.rs`、`workspace/state.rs`、`usage_probe/host.rs`、`main.rs`，及各扩展测试
+  - `Z/crates/dozer-app/Cargo.toml`（新增 `bytehost-core` 依赖；`.cargo/config.toml` 本地 `[patch]` 指向 `../bytehost`，**不提交**）
+- **运行命令与退出码：**
+
+| 仓库 | 命令 | 退出码 | 结果 |
+|---|---|---|---|
+| Z | `cargo check -p dozer-app` | 0 | 通过 |
+| Z | `cargo test -p dozer-app --bin dozer request_tracker` | 0 | 3 通过（含新增"一 tracker 服务多 scope 互不接受"） |
+| Z | `cargo test -p dozer-app --bin dozer -- host_adapters panel_host extensions::…` | 0 | 508 通过（settings/usage/group_chat/todo/project/browser/conversations/agent_context/codehealth） |
+| Z | `cargo test -p dozer-app --bin dozer` | 1 | 仅既有失败 `extensions::files::tests::delete_confirm_spec_reflects_pending_target`（2008 通过） |
+| Z | `cargo clippy -p dozer-app --all-targets` | 0 | 无新告警（既有 `agent_token_share`/`GitProvider::ALL` 未用告警） |
+| Z | `cargo fmt -p dozer-app -- --check` | 0 | 干净 |
+| Z | `python3 scripts/audit/check_panel_boundary.py` | 0 | 仅既有回退 `app/app.rs: R-HOST-EXECUTORS 0 -> 1` |
+- **结果：**
+  - 服务构造从 `panel_host.rs`（宿主机制）移入 `host_adapters/services.rs`（产品适配层），组合根不再在 host 里直接构造适配（兼容桥 **C4** 收口）；`PanelIo::new` 改收 `Services`。
+  - 测试夹具不再"先构造离线 `Client` 再 `.with_services(...)` 覆盖"：`offline_ctx`/`recording_io`/`usage_probe::activate_with` 直接用 `Services`（兼容桥 **C3** 收口）。
+  - `request_tracker.rs` 改为 `bytehost_core::request` 之上的**产品适配层**：`ProjectId(i64) → ScopeId` 的转换只在此文件（`scope_of`），一 tracker 惰性持有每个 scope 的 core tracker（支持浏览器"全局 + 项目"多条 lane）。
+  - `RequestToken` 保留为**遗留类型包装**（compat bridge **C8** → Task 21），因 Dozer 面板 `Message::AsyncResult` 需 `project_id` 做跨项目路由；core 身份已在其内。
+- **偏差：**
+  - `bytehost-core` 尚未随 tag 发布（正式发布在 Task 22），本地以不提交的 `[patch."https://github.com/byteboyai/bytehost"]` 指向 `../bytehost` 联调；`Cargo.lock` 新增 `bytehost-core` 条目。
+  - `accepts` 由按值改为按引用（core 同形），相应测试调用点补 `&`/`.clone()`（`RequestToken` 现为 `Clone` 非 `Copy`）。
+- **未决项 / 阻塞：** 无。C8 的真正删除在 Task 21。
+
+---
+
 ## 提交记录
 
 | Task | 提交 | 仓库 | 说明 |
@@ -136,3 +200,4 @@
 | 02 | `d5ab7f83` | Z | `docs(integration): Task 02 窗口入口与泛型 API 决策` |
 | 03 | `45f95ce0` | Z | `docs(integration): Task 03 §11 闸门回填` |
 | 04 | `972e461` | B | `feat(core): introduce product-neutral panel identities` |
+| 05 | `4c4d748` | B | `feat(core): preserve scoped writes and reject stale reads` |

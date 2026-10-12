@@ -1193,7 +1193,7 @@ mod tests {
         apply(
             &mut state,
             Message::AsyncResult(
-                new,
+                new.clone(),
                 Box::new(Message::BookmarksLoaded(
                     Some(1),
                     Err(dozer_services::ServiceError::new(
@@ -1206,7 +1206,7 @@ mod tests {
         apply(
             &mut state,
             Message::AsyncResult(
-                old,
+                old.clone(),
                 Box::new(Message::BookmarksLoaded(
                     Some(1),
                     Err(dozer_services::ServiceError::new(
@@ -1687,7 +1687,7 @@ pub fn update(
 ) {
     let mut msg = msg;
     while let Message::AsyncResult(token, inner) = msg {
-        if token.project_id != project_id || !state.requests.accepts(token) {
+        if token.project_id != project_id || !state.requests.accepts(&token) {
             return;
         }
         msg = *inner;

@@ -88,7 +88,7 @@ pub enum Followup {
 pub fn apply(state: &mut State, msg: Message) -> Followup {
     let mut msg = msg;
     while let Message::AsyncResult(token, inner) = msg {
-        if !state.requests.accepts(token) {
+        if !state.requests.accepts(&token) {
             return Followup::None;
         }
         msg = *inner;
@@ -661,13 +661,13 @@ mod tests {
         apply(
             &mut state,
             Message::AsyncResult(
-                new,
+                new.clone(),
                 Box::new(Message::Loaded(Ok(vec![entry(2, "new", false)]))),
             ),
         );
         apply(
             &mut state,
-            Message::AsyncResult(old, Box::new(Message::Loaded(Ok(vec![])))),
+            Message::AsyncResult(old.clone(), Box::new(Message::Loaded(Ok(vec![])))),
         );
         apply(
             &mut state,

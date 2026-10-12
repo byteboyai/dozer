@@ -835,6 +835,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bytehost-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bytehost-panel"
 version = "0.1.0"
 source = "git+https://github.com/byteboyai/bytehost?tag=v0.1.1#6fdca5dcfad12472244ef05a7550c6060d3a0342"
@@ -1946,6 +1954,7 @@ dependencies = [
  "bytegit",
  "bytehost-apps",
  "bytehost-client",
+ "bytehost-core",
  "bytehost-panel",
  "bytehost-webview",
  "byteui",

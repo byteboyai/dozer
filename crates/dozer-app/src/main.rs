@@ -8,6 +8,7 @@ mod extensions;
 mod external_apps;
 mod frosted;
 mod git_accounts;
+mod host_adapters;
 mod keymap;
 mod layout;
 mod menu_spec;

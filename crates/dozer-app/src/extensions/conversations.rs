@@ -231,7 +231,7 @@ pub enum Message {
 pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
     let mut msg = msg;
     while let Message::AsyncResult(token, inner) = msg {
-        if !ws_state.requests.accepts(token) {
+        if !ws_state.requests.accepts(&token) {
             return;
         }
         msg = *inner;
@@ -1114,7 +1114,7 @@ mod tests {
         update(
             &mut state,
             Message::AsyncResult(
-                new,
+                new.clone(),
                 Box::new(Message::SessionsRefreshed(
                     1,
                     Ok(vec![sample_session("new")]),
@@ -1123,7 +1123,10 @@ mod tests {
         );
         update(
             &mut state,
-            Message::AsyncResult(old, Box::new(Message::SessionsRefreshed(1, Ok(vec![])))),
+            Message::AsyncResult(
+                old.clone(),
+                Box::new(Message::SessionsRefreshed(1, Ok(vec![]))),
+            ),
         );
         update(
             &mut state,

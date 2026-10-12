@@ -2118,7 +2118,7 @@ impl App {
                     &mut self.home_browser,
                     msg,
                     None,
-                    &crate::panel_host::services_for(&client).bookmark,
+                    &crate::host_adapters::services::services_for(&client).bookmark,
                     &handle,
                     emit,
                 );
@@ -2131,7 +2131,7 @@ impl App {
                         &mut self.home_browser,
                         msg,
                         None,
-                        &crate::panel_host::services_for(&self.client).bookmark,
+                        &crate::host_adapters::services::services_for(&self.client).bookmark,
                         &self.handle,
                         |_| {},
                     );
@@ -2142,7 +2142,7 @@ impl App {
                             &mut ws.browser,
                             msg,
                             ws.project.as_ref().map(|p| p.id),
-                            &crate::panel_host::services_for(&io.client).bookmark,
+                            &crate::host_adapters::services::services_for(&io.client).bookmark,
                             &io.handle,
                             |_| {},
                         );
@@ -2156,7 +2156,7 @@ impl App {
                         &mut self.home_browser,
                         msg,
                         None,
-                        &crate::panel_host::services_for(&self.client).bookmark,
+                        &crate::host_adapters::services::services_for(&self.client).bookmark,
                         &self.handle,
                         |_| {},
                     );
@@ -2166,7 +2166,7 @@ impl App {
                             &mut ws.browser,
                             msg,
                             ws.project.as_ref().map(|p| p.id),
-                            &crate::panel_host::services_for(&io.client).bookmark,
+                            &crate::host_adapters::services::services_for(&io.client).bookmark,
                             &io.handle,
                             |_| {},
                         );
@@ -2180,7 +2180,7 @@ impl App {
                         &mut self.home_browser,
                         msg,
                         None,
-                        &crate::panel_host::services_for(&self.client).bookmark,
+                        &crate::host_adapters::services::services_for(&self.client).bookmark,
                         &self.handle,
                         |_| {},
                     );
@@ -2190,7 +2190,7 @@ impl App {
                             &mut ws.browser,
                             msg,
                             ws.project.as_ref().map(|p| p.id),
-                            &crate::panel_host::services_for(&io.client).bookmark,
+                            &crate::host_adapters::services::services_for(&io.client).bookmark,
                             &io.handle,
                             |_| {},
                         );
@@ -3126,7 +3126,7 @@ impl App {
             // 一起丢掉(代码评审 finding:Failed clone/create always
             // discards the dialog)。
             Message::ProjectCreate(msg) => {
-                let project = crate::panel_host::services_for(&self.client).project;
+                let project = crate::host_adapters::services::services_for(&self.client).project;
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
                 let emit = move |m| {
@@ -3332,7 +3332,8 @@ impl App {
                 // 显示"已发送到终端,但未能记录到上下文列表"(见
                 // `agent_context::apply`)。
                 if let Some(project_id) = self.active_project_id {
-                    let context = crate::panel_host::services_for(&self.client).context;
+                    let context =
+                        crate::host_adapters::services::services_for(&self.client).context;
                     let handle = self.handle.clone();
                     let proxy = self.proxy.clone();
                     let Some(ws) = self.active_workspace() else {
@@ -3416,7 +3417,7 @@ impl App {
                         ..
                     ) if completed >= total
                 );
-                let services = crate::panel_host::services_for(&self.client);
+                let services = crate::host_adapters::services::services_for(&self.client);
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
                 let emit = move |m| {
@@ -3472,7 +3473,7 @@ impl App {
                 };
                 let current_name = project.name.clone();
                 let repo_path = std::path::PathBuf::from(&project.path);
-                let services = crate::panel_host::services_for(&self.client);
+                let services = crate::host_adapters::services::services_for(&self.client);
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
                 let emit = move |m| {
@@ -3524,7 +3525,7 @@ impl App {
                 };
                 let current_name = project.name.clone();
                 let repo_path = std::path::PathBuf::from(&project.path);
-                let services = crate::panel_host::services_for(&self.client);
+                let services = crate::host_adapters::services::services_for(&self.client);
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
                 let emit = move |m| {
@@ -3975,7 +3976,7 @@ impl App {
                     }
                     _ => Vec::new(),
                 };
-                let daemon = crate::panel_host::services_for(&self.client).daemon;
+                let daemon = crate::host_adapters::services::services_for(&self.client).daemon;
                 let apps = self.client.clone();
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
@@ -4150,7 +4151,7 @@ impl App {
         // 新开的项目 tab(区别于"已开着、只是前台化"那条 `focus_project_tab`
         // 早退分支):静默跑一次 ensure(README/.dozer/git/agent 历史),不
         // 展示结果(见 project_scaffold 设计"打开即 ensure"一节)。
-        let project = crate::panel_host::services_for(&self.client).project;
+        let project = crate::host_adapters::services::services_for(&self.client).project;
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
         let emit = move |m| {
@@ -4271,7 +4272,7 @@ impl App {
         // 关 tab 必须在发起删除请求之前——删除一旦成功,这个项目在
         // dozerd/磁盘上都可能已经不存在了,`Workspace` 不该继续留着。
         self.project_tab_close(project_id);
-        let project = crate::panel_host::services_for(&self.client).project;
+        let project = crate::host_adapters::services::services_for(&self.client).project;
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
         let on_done = move |project_id, deregistered, errors: Vec<String>| {
@@ -4833,7 +4834,7 @@ impl App {
         let Some(project_id) = msg.result_project().or(self.active_project_id) else {
             return;
         };
-        let service = crate::panel_host::services_for(&self.client).todo;
+        let service = crate::host_adapters::services::services_for(&self.client).todo;
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
         // 异步结果/写确认透过 `proxy` 重发回主循环,回调里会借用 `self`
@@ -4959,7 +4960,7 @@ impl App {
                 &mut self.home_browser,
                 browser::Message::BookmarksLoaded(None, bookmarks),
                 None,
-                &crate::panel_host::services_for(&client).bookmark,
+                &crate::host_adapters::services::services_for(&client).bookmark,
                 &handle,
                 emit,
             );
@@ -4977,7 +4978,7 @@ impl App {
                 &mut ws.browser,
                 browser::Message::BookmarksLoaded(Some(pid), bookmarks),
                 Some(pid),
-                &crate::panel_host::services_for(&client).bookmark,
+                &crate::host_adapters::services::services_for(&client).bookmark,
                 &handle,
                 emit,
             );
@@ -4997,7 +4998,7 @@ impl App {
                 &mut self.home_browser,
                 browser::Message::BookmarksMutated(None, res),
                 None,
-                &crate::panel_host::services_for(&client).bookmark,
+                &crate::host_adapters::services::services_for(&client).bookmark,
                 &handle,
                 emit,
             );
@@ -5015,7 +5016,7 @@ impl App {
                 &mut ws.browser,
                 browser::Message::BookmarksMutated(Some(pid), res),
                 Some(pid),
-                &crate::panel_host::services_for(&client).bookmark,
+                &crate::host_adapters::services::services_for(&client).bookmark,
                 &handle,
                 emit,
             );
@@ -5041,7 +5042,7 @@ impl App {
                 &mut ws.browser,
                 msg,
                 project_id,
-                &crate::panel_host::services_for(&client).bookmark,
+                &crate::host_adapters::services::services_for(&client).bookmark,
                 &handle,
                 emit,
             );
@@ -5637,7 +5638,7 @@ impl App {
                 self.open_edit_history(project_id, filter);
             }
             other => {
-                let context = crate::panel_host::services_for(&self.client).context;
+                let context = crate::host_adapters::services::services_for(&self.client).context;
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
                 let emit = move |m| {
@@ -5666,7 +5667,7 @@ impl App {
         else {
             return;
         };
-        let context = crate::panel_host::services_for(&self.client).context;
+        let context = crate::host_adapters::services::services_for(&self.client).context;
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
         let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
@@ -5693,7 +5694,7 @@ impl App {
             filter.clone(),
             self.terminal_visible(),
         ));
-        let edit_history = crate::panel_host::services_for(&self.client).edit_history;
+        let edit_history = crate::host_adapters::services::services_for(&self.client).edit_history;
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
         crate::extensions::edit_history::request_load(
@@ -5748,7 +5749,8 @@ impl App {
                 self.term_paste(terminal::TermTarget::Shared, text);
             }
             other => {
-                let edit_history = crate::panel_host::services_for(&self.client).edit_history;
+                let edit_history =
+                    crate::host_adapters::services::services_for(&self.client).edit_history;
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
                 eh::update(
@@ -6214,7 +6216,7 @@ impl App {
         let client = self.client.clone();
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
-        let conversation = crate::panel_host::services_for(&client).conversation;
+        let conversation = crate::host_adapters::services::services_for(&client).conversation;
         let requests = self
             .active_workspace()
             .unwrap()

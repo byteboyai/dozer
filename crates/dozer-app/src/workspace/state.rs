@@ -336,9 +336,13 @@ impl ShellIo {
         wrap: fn(M) -> Message,
     ) -> crate::panel_host::PanelIo<M> {
         let proxy = self.proxy.clone();
-        crate::panel_host::PanelIo::new(self.client.clone(), self.handle.clone(), move |m| {
-            let _ = proxy.send_event(wrap(m));
-        })
+        crate::panel_host::PanelIo::new(
+            crate::host_adapters::services::services_for(&self.client),
+            self.handle.clone(),
+            move |m| {
+                let _ = proxy.send_event(wrap(m));
+            },
+        )
     }
 
     /// 登记一个"退出前必须等完"的 spawn 任务。调用方仍按 fire-and-forget
@@ -650,7 +654,7 @@ impl Workspace {
         browser::request_bookmarks_refresh(
             &ws.browser.requests,
             ws.project.as_ref().map(|p| p.id),
-            &crate::panel_host::services_for(&io.client).bookmark,
+            &crate::host_adapters::services::services_for(&io.client).bookmark,
             &io.handle,
             {
                 let proxy = io.proxy.clone();
@@ -867,7 +871,7 @@ impl Workspace {
             &self.conversations.requests,
             project_id,
             cwd,
-            crate::panel_host::services_for(&io.client).conversation,
+            crate::host_adapters::services::services_for(&io.client).conversation,
             &io.handle,
             emit,
         );
@@ -889,7 +893,7 @@ impl Workspace {
             &self.codehealth.requests,
             project_id,
             project_path,
-            crate::panel_host::services_for(&io.client).codehealth,
+            crate::host_adapters::services::services_for(&io.client).codehealth,
             &io.handle,
             emit,
         );
@@ -1109,7 +1113,7 @@ impl Workspace {
         browser::request_bookmarks_refresh(
             &self.browser.requests,
             self.project.as_ref().map(|p| p.id),
-            &crate::panel_host::services_for(&io.client).bookmark,
+            &crate::host_adapters::services::services_for(&io.client).bookmark,
             &io.handle,
             {
                 let proxy = io.proxy.clone();

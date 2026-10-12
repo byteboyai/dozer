@@ -282,7 +282,7 @@ impl WorkspaceState {
 pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
     let mut msg = msg;
     while let Message::AsyncResult(token, inner) = msg {
-        if !state.requests.accepts(token) {
+        if !state.requests.accepts(&token) {
             return Vec::new();
         }
         msg = *inner;

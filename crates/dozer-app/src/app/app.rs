@@ -1661,7 +1661,7 @@ impl App {
         let Some(project_id) = self.active_project_id else {
             return;
         };
-        let service = crate::panel_host::services_for(&self.client).todo;
+        let service = crate::host_adapters::services::services_for(&self.client).todo;
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
         let emit = move |m: todo::Message| {
@@ -2428,7 +2428,7 @@ impl App {
     /// set_todo_content_focused` 的既有手法,`submit_name_edit` 走这条
     /// 而不是重新手写一份 `rename_project` 调用)。
     pub fn set_project_name_focused(&mut self, focused: bool) {
-        let project_service = crate::panel_host::services_for(&self.client).project;
+        let project_service = crate::host_adapters::services::services_for(&self.client).project;
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
         let Some(ws) = self.active_workspace_mut() else {

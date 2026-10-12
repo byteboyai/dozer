@@ -1748,12 +1748,15 @@ mod tests {
         detail.id = 2;
         apply(
             &mut state,
-            Message::AsyncResult(new, Box::new(Message::MemoryDetailLoaded(detail.clone()))),
+            Message::AsyncResult(
+                new.clone(),
+                Box::new(Message::MemoryDetailLoaded(detail.clone())),
+            ),
         );
         apply(
             &mut state,
             Message::AsyncResult(
-                old,
+                old.clone(),
                 Box::new(Message::MemoryDetailLoaded(sample_memory_detail())),
             ),
         );
@@ -1777,7 +1780,7 @@ mod tests {
         apply(
             &mut state,
             Message::AsyncResult(
-                new_list,
+                new_list.clone(),
                 Box::new(Message::MemoriesLoaded(vec![memory_info(2, "new")])),
             ),
         );

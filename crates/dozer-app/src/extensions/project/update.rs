@@ -22,7 +22,7 @@ pub fn update(
 ) {
     let mut msg = msg;
     while let Message::AsyncResult(token, inner) = msg {
-        if token.project_id != Some(project_id) || !ws_state.requests.accepts(token) {
+        if token.project_id != Some(project_id) || !ws_state.requests.accepts(&token) {
             return;
         }
         msg = *inner;

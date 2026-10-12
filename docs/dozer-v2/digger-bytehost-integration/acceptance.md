@@ -38,12 +38,12 @@
 |---|---|---|---|---|---|
 | C1 | `dozer_core::protocol` 兼容出口（线上类型） | `crates/dozer-core/src/protocol` | 面板代码历史上从 `dozer_core::protocol` 取类型 | 无面板/模块再 `use dozer_core::protocol`（`R-PROTOCOL` 门禁计数归零） | 21 |
 | C2 | `Client` 直连面板 | `crates/dozer-app/src/extensions/**` | 渐进迁移到 `Services` 接缝 | `extensions/**` 不再出现 `dozer_client::Client`（`R-CLIENT` 门禁归零） | 06 / 21 |
-| C3 | `service_fakes.rs` 先构造离线 `Client` 再覆盖 | `crates/dozer-app/src/service_fakes.rs` | 旧 fake 构造路径 | fake 不再构造 `Client`（构造点断言） | 06 |
-| C4 | `services_for`/`ClientDaemon` 在产品组合根 | `crates/dozer-app/src/product.rs` | 服务构造尚未移入产品适配层 | 移入 `host_adapters/services.rs` 且组合根不再直接构造 | 06 |
+| C3 | `service_fakes.rs` 先构造离线 `Client` 再覆盖 | `crates/dozer-app/src/service_fakes.rs` | 旧 fake 构造路径 | fake 不再构造 `Client`（构造点断言） | 06 ✅ |
+| C4 | `services_for`/`ClientDaemon` 在产品组合根 | `crates/dozer-app/src/panel_host.rs`（Task 01 实测位置；ownership 记 `product.rs`） | 服务构造尚未移入产品适配层 | 移入 `host_adapters/services.rs` 且组合根不再直接构造 | 06 ✅ |
 | C5 | 预览窗格按 `PanelKind::Project` 手写选择 | `workspace/state.rs`（`R-PANE-PICK` 2）、`app/update.rs`（1）、`platform/window_events.rs`（3） | 未走 `Workspace::preview_pane[_mut]` | `R-PANE-PICK` 三处计数归零 | 21 |
 | C6 | `app/` 下 `run_<面板>_effects` 执行器 | `app/app.rs`（`R-HOST-EXECUTORS` 实测 1） | host 替面板做事，未外移 | `R-HOST-EXECUTORS` 计数归零（≤ 基线 0） | 06 / 08 / 09 / 21 |
 | C7 | `webview_geometry.rs` 的"文件预览"命名遗留 | `crates/dozer-app/src/webview_geometry.rs` | 几何与文件预览业务命名混同 | 几何函数迁入 Host 通用名；无"preview"命名残留 | 08 / 09 |
-| C8 | `request_tracker.rs` 原型迁移后删除 | `crates/dozer-app/src/request_tracker.rs` | 是 core 请求身份的移植来源 | 使用 core 请求身份且 delete 该文件后编译通过 | 05 / 21 |
+| C8 | `request_tracker.rs` 原型迁移后删除 | `crates/dozer-app/src/request_tracker.rs` | 是 core 请求身份的移植来源 | 使用 core 请求身份且 delete 该文件后编译通过 | 05 / 21（06 已接入 core；`RequestToken` 产品包装待 21 删除） |
 | C9 | `HoverId`/`PanelKind` 作为宿主类型 | `panel_host.rs` / `app/state.rs` | 词汇尚未命名空间化/注册制 | `HoverSlot`/`PanelKind` 变体表纳入注册制后门禁计数只降 | 09 |
 
 **门禁约束：** 上述计数类删除条件与 `scripts/audit/panel-boundary.baseline.json` 及 `R-PROTOCOL`/`R-CLIENT` 门禁一一对应；删除桥时只允许基线**下降**，禁止上调阈值掩盖。

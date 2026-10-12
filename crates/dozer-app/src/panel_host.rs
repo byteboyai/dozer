@@ -8,7 +8,6 @@
 //! 目前只有 `App` 一个实现;不为未来的第二个实现预先抽象更多方法——面板需要什么才加什么。
 
 use crate::app::{App, HoverId, PanelKind};
-use dozer_client::Client;
 use dozer_services::Services;
 use iced_widget::core::Element;
 use std::future::Future;
@@ -16,68 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 
-/// 默认的服务束:各能力都由 `Client` 适配。host 的其它入口(`App` 的消息处理/轮询)也用它,
-/// 保证"面板拿到的服务"只有一处构造。
-pub(crate) fn services_for(client: &Client) -> Services {
-    Services {
-        usage: Arc::new(client.clone()),
-        todo: Arc::new(client.clone()),
-        project: Arc::new(client.clone()),
-        memory: Arc::new(client.clone()),
-        group_chat: Arc::new(client.clone()),
-        conversation: Arc::new(client.clone()),
-        codehealth: Arc::new(client.clone()),
-        context: Arc::new(client.clone()),
-        edit_history: Arc::new(client.clone()),
-        bookmark: Arc::new(client.clone()),
-        daemon: Arc::new(ClientDaemon(client.clone())),
-    }
-}
-
-/// 把 `Client` 适配成 `DaemonService`。`ensure_running` 要拉起 dozerd 进程(`runtime::ensure_daemon`),
-/// 那段在 dozer-app,`dozer-client` 够不着,所以适配器放在这里。
-pub(crate) struct ClientDaemon(pub(crate) Client);
-
-fn ensure_error_to_service(msg: String) -> dozer_services::ServiceError {
-    dozer_services::ServiceError::new(dozer_services::ServiceErrorKind::Unavailable, msg)
-}
-
-impl dozer_services::DaemonService for ClientDaemon {
-    fn list_sessions(
-        &self,
-    ) -> dozer_services::BoxFuture<
-        '_,
-        Result<Vec<dozer_model::SessionInfo>, dozer_services::ServiceError>,
-    > {
-        Box::pin(async move {
-            self.0
-                .list()
-                .await
-                .map_err(dozer_client::into_service_error)
-        })
-    }
-    fn shutdown_daemon(
-        &self,
-    ) -> dozer_services::BoxFuture<'_, Result<(), dozer_services::ServiceError>> {
-        Box::pin(async move {
-            self.0
-                .shutdown_daemon()
-                .await
-                .map_err(dozer_client::into_service_error)
-        })
-    }
-    fn ensure_running(
-        &self,
-    ) -> dozer_services::BoxFuture<'_, Result<(), dozer_services::ServiceError>> {
-        Box::pin(async move {
-            crate::runtime::ensure_daemon(&self.0)
-                .await
-                .map_err(ensure_error_to_service)
-        })
-    }
-}
-
-/// host 给面板的**执行原语**:面板要在后台跑任务,需要三样东西——`Services`(经 dozerd 连接适配出的服务束)、
+/// 面板"切入"(被用户切到前台)时 host 交给它的上下文:当前项目 id、项目路径(项目还没有路径时为
 /// `Handle`(tokio runtime)、"把结果包成该面板的 `Message` 投回事件循环"。收成一个值,由 host
 /// 构造、传给面板模块里的执行器(`group_chat::run_effect` 等);host 不再认识面板的具体 Effect。
 ///
@@ -101,19 +39,22 @@ impl<M> Clone for PanelIo<M> {
 }
 
 impl<M: Send + 'static> PanelIo<M> {
+    /// 用**已构造好的服务束**构造执行原语。产品组合根经
+    /// [`crate::host_adapters::services::services_for`] 把 `Client` 适配成 `Services` 后传入
+    /// (兼容桥 C3:fake 直接在测试里给 `Services`,不再"先构造离线 `Client` 再覆盖")。
     pub(crate) fn new(
-        client: Client,
+        services: Services,
         handle: Handle,
         emit: impl Fn(M) + Send + Sync + 'static,
     ) -> Self {
         Self {
-            services: services_for(&client),
+            services,
             handle,
             emit: Arc::new(emit),
         }
     }
 
-    /// host 给面板的服务束(默认由 `Client` 适配;测试可用 `with_services` 换成进程内假实现)。
+    /// host 给面板的服务束(由产品组合根构造;测试可直接给进程内假实现)。
     pub(crate) fn services(&self) -> &Services {
         &self.services
     }
@@ -338,10 +279,13 @@ pub(crate) mod testing {
     ) -> (ActivationCtx<M>, mpsc::Receiver<M>) {
         let (tx, rx) = mpsc::channel();
         let tx = Mutex::new(tx);
-        let client = Client::new(PathBuf::from("/tmp/dozer-activation-test-nonexistent.sock"));
-        let io = PanelIo::new(client, rt.handle().clone(), move |m| {
-            let _ = tx.lock().unwrap().send(m);
-        });
+        let io = PanelIo::new(
+            crate::host_adapters::services::offline_services(),
+            rt.handle().clone(),
+            move |m| {
+                let _ = tx.lock().unwrap().send(m);
+            },
+        );
         (
             ActivationCtx {
                 project_id,
@@ -474,23 +418,24 @@ mod tests {
             .unwrap()
     }
 
-    /// 一个把 `emit` 都收进 channel 的 `PanelIo<u32>`(`Client` 指向不存在的 socket,本组测试不用它)。
+    /// 一个把 `emit` 都收进 channel 的 `PanelIo<u32>`(服务指向不存在的 socket,本组测试不用它)。
     fn recording_io(
         rt: &tokio::runtime::Runtime,
     ) -> (PanelIo<u32>, std::sync::mpsc::Receiver<u32>) {
         let (tx, rx) = std::sync::mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
-        let client = dozer_client::Client::new(std::path::PathBuf::from(
-            "/tmp/dozer-panel-io-test-nonexistent.sock",
-        ));
-        let io = PanelIo::new(client, rt.handle().clone(), move |m| {
-            let _ = tx.lock().unwrap().send(m);
-        });
+        let io = PanelIo::new(
+            crate::host_adapters::services::offline_services(),
+            rt.handle().clone(),
+            move |m| {
+                let _ = tx.lock().unwrap().send(m);
+            },
+        );
         (io, rx)
     }
 
     #[test]
-    fn with_services_replaces_the_default_client_adapter() {
+    fn with_services_replaces_the_offline_adapter() {
         use crate::usage_probe::fake_usage::FakeUsage;
         let rt = test_runtime();
         let (io, _rx) = recording_io(&rt);
@@ -731,37 +676,5 @@ mod tests {
                 .unwrap(),
             42
         );
-    }
-
-    mod daemon_adapter {
-        use super::*;
-        use dozer_services::{DaemonService, ServiceErrorKind};
-
-        fn offline() -> ClientDaemon {
-            ClientDaemon(Client::new(std::path::PathBuf::from(
-                "/tmp/dozer-settings-daemon-nonexistent.sock",
-            )))
-        }
-
-        #[test]
-        fn client_daemon_reports_unavailable_when_the_socket_is_missing() {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            let d = offline();
-            let e = rt.block_on(d.list_sessions()).unwrap_err();
-            assert_eq!(e.kind, ServiceErrorKind::Unavailable);
-            let e = rt.block_on(d.shutdown_daemon()).unwrap_err();
-            assert_eq!(e.kind, ServiceErrorKind::Unavailable);
-        }
-
-        #[test]
-        fn ensure_error_text_is_preserved_verbatim() {
-            let e = ensure_error_to_service("无法连接 dozerd（已重试 3 次）：x".into());
-            assert_eq!(e.kind, ServiceErrorKind::Unavailable);
-            assert_eq!(e.message, "无法连接 dozerd（已重试 3 次）：x");
-            assert_eq!(e.to_string(), "无法连接 dozerd（已重试 3 次）：x");
-        }
     }
 }

@@ -71,9 +71,13 @@ impl ProbeHost {
         let (tx, rx) = mpsc::channel();
         let tx = Mutex::new(tx);
         let client = dozer_client::Client::new(dozerd.socket().to_path_buf());
-        let io = PanelIo::new(client, rt.handle().clone(), move |m| {
-            let _ = tx.lock().unwrap().send(m);
-        });
+        let io = PanelIo::new(
+            crate::host_adapters::services::services_for(&client),
+            rt.handle().clone(),
+            move |m| {
+                let _ = tx.lock().unwrap().send(m);
+            },
+        );
         let ctx = ActivationCtx {
             project_id: self.project_id,
             project_path: path,
@@ -93,11 +97,9 @@ impl ProbeHost {
     ) -> mpsc::Receiver<Message> {
         let (tx, rx) = mpsc::channel();
         let tx = Mutex::new(tx);
-        let client = dozer_client::Client::new(PathBuf::from("/tmp/dozer-probe-unused.sock"));
-        let io = PanelIo::new(client, rt.handle().clone(), move |m| {
+        let io = PanelIo::new(services, rt.handle().clone(), move |m| {
             let _ = tx.lock().unwrap().send(m);
-        })
-        .with_services(services);
+        });
         let ctx = ActivationCtx {
             project_id: self.project_id,
             project_path: path,

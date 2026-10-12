@@ -173,7 +173,7 @@ pub enum Message {
 pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
     let mut msg = msg;
     while let Message::AsyncResult(token, inner) = msg {
-        if !ws_state.requests.accepts(token) {
+        if !ws_state.requests.accepts(&token) {
             return;
         }
         msg = *inner;
@@ -541,7 +541,7 @@ mod tests {
         let scan = state.requests.begin(Some(1), "report");
         update(
             &mut state,
-            Message::AsyncResult(cache, Box::new(Message::Loaded(1, Box::default()))),
+            Message::AsyncResult(cache.clone(), Box::new(Message::Loaded(1, Box::default()))),
         );
         assert!(state.scanning());
         let panel = PanelState {
@@ -550,7 +550,10 @@ mod tests {
         };
         update(
             &mut state,
-            Message::AsyncResult(scan, Box::new(Message::Scanned(1, Ok(Box::new(panel))))),
+            Message::AsyncResult(
+                scan.clone(),
+                Box::new(Message::Scanned(1, Ok(Box::new(panel)))),
+            ),
         );
         update(
             &mut state,
@@ -587,7 +590,7 @@ mod tests {
         update(&mut state, Message::ScanRequested);
         let scan = state.requests.begin(Some(7), "report");
         on_activate(&state, &ctx);
-        assert!(state.requests.accepts(scan));
+        assert!(state.requests.accepts(&scan));
         assert!(rx.try_recv().is_err());
     }
 }
