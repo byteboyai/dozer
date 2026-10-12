@@ -58,11 +58,13 @@ pub(crate) fn stack_bounds(
         main_inner_size,
         scale,
         count,
-        TOAST_WIDTH,
-        TOAST_HEIGHT,
-        TOAST_GAP,
-        MARGIN_RIGHT,
-        MARGIN_BOTTOM,
+        bytehost_desktop::overlay::ToastMetrics {
+            width: TOAST_WIDTH,
+            height: TOAST_HEIGHT,
+            gap: TOAST_GAP,
+            margin_right: MARGIN_RIGHT,
+            margin_bottom: MARGIN_BOTTOM,
+        },
     )
 }
 

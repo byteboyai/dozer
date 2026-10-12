@@ -24,7 +24,7 @@ use crate::platform::overlay_gpu::OverlayGpu;
 // 渲染器无关的建窗/定位机制重导出(C10 上收 bytehost-desktop::overlay)。
 pub(crate) use bytehost_desktop::overlay::{
     BACKDROP_CORNER_RADIUS, POPUP_WIDTH_FRACTION, centered_card_offset, full_window_overlay_bounds,
-    open_child_window, open_child_window_unfocused, popup_card_size, window_logical_size,
+    open_child_window, open_child_window_unfocused, popup_card_size,
 };
 
 /// 给卡片元素套一层"整窗口居中 + 半透明背景遮罩"的外壳——遮罩色复用
