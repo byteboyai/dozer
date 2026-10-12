@@ -238,6 +238,7 @@
   - B `17c4ad4` `feat(core): add Surface lifecycle state machine`
   - B `2aaf935` `feat(desktop): execute Surface lifecycle, routing and geometry`
   - B `f4639bb` `fix(desktop): stop forcing iced renderer features on consumers`（接入使能修复）
+  - Z `5b940f11` `refactor(usage): route Usage content host through shared Surface`（Dozer 接入部分）
 - **产出文件：**
   - `B/crates/bytehost-core/src/surface.rs`（新；状态机 + `PushState` + `ReadyPolicy`）+ `lib.rs` 导出
   - `B/crates/bytehost-desktop/src/surface/{mod,lifecycle,geometry,routing}.rs`（新）+ `lib.rs` 注册
@@ -302,4 +303,4 @@
 | 08 | `17c4ad4` | B | `feat(core): add Surface lifecycle state machine` |
 | 08 | `2aaf935` | B | `feat(desktop): execute Surface lifecycle, routing and geometry` |
 | 08 | `f4639bb` | B | `fix(desktop): stop forcing iced renderer features on consumers` |
-| 08 | （待提交） | Z | `refactor(usage): route Usage content host through shared Surface` |
+| 08 | `5b940f11` | Z | `refactor(usage): route Usage content host through shared Surface` |
