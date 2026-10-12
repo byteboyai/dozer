@@ -126,3 +126,66 @@ Task 02 要求：用 **Usage**（推 token/成本/时间序列）与 **CodeHealt
 ## 8. 对规格 §11 闸门 1 的回填结论
 
 **闸门 1（iced×wry 窗口集成）：** 已由 `D/spike/editor-host`（真实窗口）+ `B/spike/desktop-contract`（双产品类型编译）解决。锁定版本 `iced 0.14` / `wry 0.55.1`；入口 `iced::application` 单循环 + `window::run` 建 wry 子视图；主线程所有权 thread_local；几何逻辑值 + DPI 由 wry 处理；webview 恒在 iced 之上由 desktop 层统一下推。**结论：成立，可开始 Task 04+ 的搬文件。**
+
+## 9. Task 09 设计：CodeHealth 第二消费者与信任类别分离
+
+> 计划 §Task 09 `:140-149`。本节是动手前的设计闸门，锁定三件事：CodeHealth 如何接入既有 Surface API、信任类别在**哪一层**建模、以及信任边界用什么测试钉住。
+
+### 9.1 现状（设计输入）
+
+Dozer 目前有 **六条** wry 构造路径，但真正的信任分界只有两类：
+
+| 类别 | 构造入口 | `dozer://` 自定义协议 | IPC 形状 | 代表 kind |
+|---|---|---|---|---|
+| **应用（不可信）** | `runtime.rs::build_app_webview` | **无** | nonce 白名单（`focus`/`mouseup`/`zoom_*`），`AppIpc::parse` | `PanelKind::App` |
+| **宿主/预览（可信）** | `runtime.rs::sync_webview_pool` 内联 builder | **有**（`assets::handle_protocol`） | 字符串 + envelope（`parse_*_event` + `HostBinding`） | editor / JSON / tabular / flyfish / html / image-annotate / plantuml / review-trace / git-log diff / usage-content / codehealth-content / todo-content / group-chat-content / browser |
+
+- 预览池这条 builder 供 **14+ 种** kind 共用，仅靠 `spec.url`/`spec.editor_binding` 在 IPC fallback 里分支（`runtime.rs:502-518`、`:649-857`）。
+- `WebviewSpec`（`preview/webview.rs:32`）已带 `surface: Option<SurfaceId>`（Task 08 加入），仅 Usage 槽为 `Some`。
+- `bytehost-desktop` 只知道 core 的 `SurfaceKind{Builtin,Application}`，**且只用它算 `ready_policy`**；`panel::build_child` 是单一 HTML builder，不知道信任类别，也不接受 URL / 协议 / IPC 配置（`panel.rs:60-63`）。
+
+**CodeHealth 与 Usage 同形**：都由 `sync_webview_pool` 通用 builder 建造，走 `dozer://…-content/host.html`，唯一差别是 CodeHealth 的 `WebviewPushState` 更"重"（`revision` 单调计数嵌进 envelope、`READY_TIMEOUT` 加载超时→`failed`、`waiting_since`）。这几个字段是 **CodeHealth 的业务/协议语义**（envelope 版本 + 面板级降级），**不是** Surface 生命周期语义。
+
+### 9.2 决定 1：信任类别建模在 **Dozer 的 builder 分派**，不在 bytehost-desktop
+
+规格 §5.4 `:124` "信任类别决定不同 builder；第三方应用 builder 不复用带编辑权限的 editor builder" 是**产品侧**约束：内容协议、IPC 白名单、CSP、nonce、data store 全是 Dozer 的产品语义，bytehost 只是机制层。因此：
+
+- **不**在 `bytehost-desktop` 引入 `Editor/Preview/Application` 四值信任枚举，也**不**让 `panel::build_child` 长出 URL/协议/IPC 参数——那会把 Dozer 的产品策略塞进宿主库，违反 §5.4 `:126` "编辑器内容协议、Preview 渲染和业务数据不会因此移入 Host"。
+- 信任类别落在 **Dozer 新建的 `preview::trust`（或 `webview_build`）模块**：一个 `WebviewTrust` 枚举 + 每类一个**构造配置**（builder 参数集），是唯一分派点。`runtime.rs::sync_webview_pool` 的 `None` 分支改为按 `spec.trust` 取配置，而不是继续堆 `if is_*_host`。目的：让"应用 builder 不带 `dozer://`、带 nonce-IPC"成为**类型/构造层**的保证，而非散落的字符串判断。
+
+### 9.3 决定 2：信任类别取值与归属
+
+`WebviewTrust`（Dozer 产品枚举，非 bytehost）：
+
+| 值 | `dozer://` | IPC | devtools/download/new-window | 归属的 kind |
+|---|---|---|---|---|
+| `Application` | 否 | nonce 白名单 | 严格关闭 | `PanelKind::App` |
+| `Editor` | 是 | envelope（`HostBinding`/`editor_binding`） | 现状 | editor / JSON / tabular / git-log diff |
+| `Preview` | 是 | envelope（`HostBinding` 或固定槽 id） | 现状 | flyfish / html / image-annotate / plantuml / review-trace / browser |
+| `BuiltinPanel` | 是 | 固定槽 id + `parse_*_event` | 现状 | usage-content / codehealth-content / todo-content / group-chat-content |
+
+- `Application` 与其余三类的**真正差异**是"自定义协议 + 业务 IPC 是否可得"，这正是 §Task 09 clause 146 要测试的边界。
+- `Editor`/`Preview`/`BuiltinPanel` 共享几何与生命周期（都走预览池 + `WebviewSpec`），差异只在内容协议（editor 绑定 vs rendered host 绑定 vs 固定槽），**分的是构造配置不是三种 builder 实现**——符合 §145 "公共几何与生命周期共享，产品内容协议分离"。
+- `WebviewTrust` 可由 `spec` 的既有字段**派生**（app id 区间 → Application；固定槽 id → BuiltinPanel；`editor_binding.is_some()`→Editor；否则 Preview），避免新增易漏填的字段。派生函数 `WebviewTrust::of(&WebviewSpec)` 是唯一入口。
+
+### 9.4 决定 3：CodeHealth 接入 Surface（对齐 Usage，业务字段留在面板）
+
+`WebviewPushState` 的 `revision`/`READY_TIMEOUT`/`failed` 保留在 `extensions::codehealth`，**Surface 只接管**：逐帧 desired 推送、ready 归属校验、旧代 IPC 丢弃、几何联动。做法与 `UsageSurface` 同构：
+
+- 新增 `extensions::codehealth::CodeHealthSurface`：持有 `SurfaceExecutor<CodeHealthViewPayload>`，固定身份 `PanelInstanceId(0,0)` + `SurfaceSlot(CODEHEALTH_CONTENT_ID_OFFSET)`。
+- `revision` 语义：**保持现状（单调递增，不随 generation 重置）**，除非实现时验证到前端会跨实例保留计数。前端注释（`protocol.rs:515`）是"丢弃小于已应用值的推送"——它按 host 实例的 JS 上下文记账，新实例计数自然从零开始，故持续递增的 `revision` 对新 host 是"大于已应用值"，可安全接受。决定：`revision` 由 `CodeHealthSurface` 内持有、单调递增；**不**在 `observe_instance` 归零（改动会凭空引入一个未验证的前端契约依赖）。payload 构造仍在 `extensions::codehealth::current_view_payload`。
+- `READY_TIMEOUT`/`failed`：**不进 Surface**。Surface 的 `SurfaceState::Failed{error}` 表达创建失败；CodeHealth 的"加载超时→落回原生占位"是**面板级**降级，继续由面板持有并在 `take_codehealth_content_script` 里早退（与 Usage 的 `loading()` 早退同型）。
+- `WebviewSpec.surface` 对 CodeHealth 槽填 `Some(self.codehealth_surface.id())`；`CodeHealthContentWebviewEvent` 携带 `Option<SurfaceId>`（对齐 Usage Task 08 的 `UsageContentWebviewEvent(.., Option<SurfaceId>)`），Ready 先经 `accepts` 再 `apply_ready`。
+- **禁止**新增 `if panel == codehealth`：第二消费者暴露的通用缺口修到 `SurfaceExecutor`（例如若 CodeHealth 需要"进池时业务钩子"，则给 executor 加 `observe_instance` 返回值/回调，而非在 Dozer 侧特判）。
+
+### 9.5 决定 4：信任边界测试（clause 146）
+
+三条钉死测试，全部 source-scan + 行为双管：
+
+1. **应用拿不到自定义协议**：已有 `app_webview::build_app_webview_pins_the_restrictive_settings`（断言 `build_app_webview` 体内**无** `with_custom_protocol`）。Task 09 增补：断言信任分派点（新模块）中 `Application` 分支构造的配置**不含** `dozer` scheme，且 `sync_webview_pool` 只在非 `Application` 分支 `with_custom_protocol`。
+2. **应用拿不到业务 IPC**：断言 `Application` 配置的 IPC 只接 `AppIpc::parse`（nonce 白名单），且 `runtime.rs` 的 envelope fallback 分支（`parse_usage_event`/`parse_codehealth_event`/`parse_event`…）在 `is_app_webview_id` 守卫之后，永不触达应用 webview（现有结构已满足，加断言钉住）。
+3. **未知 Surface/消息拒绝**：Unit 测试 `SurfaceExecutor::route` 对未知 `SurfaceId` 返回 `UnknownSurface`、对旧代数返回 `StaleGeneration`（bytehost 侧已有）；Dozer 侧新增：`accepts(Option<SurfaceId>)` 对 `None`（老消息/无身份）与错代数返回 false 且不 `apply_ready`（Usage 已有测试，CodeHealth 复用同型）。
+
+### 9.6 提交切片
+
+按计划"一个可审阅提交组"：`refactor(codehealth): adopt shared surface lifecycle`（Dozer）。bytehost 若因 9.4 暴露的通用缺口需要改动，**单独一个** `feat(desktop): …` 提交，不与 Dozer 接入混在一起。若第二消费者**未**暴露通用缺口（很可能：Usage 已把 Surface 打磨到够用），则 bytehost 本轮零改动，实现记录里写明"无通用缺口，公共层未改"。
