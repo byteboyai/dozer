@@ -3,6 +3,7 @@
 //! 本模块只持有每项目一份的展示状态。设计见
 //! `docs/superpowers/specs/2026-09-30-agent-native-file-editor-phase3-context-history-design.md`。
 
+use crate::panel_host::RequestTokenWrapExt;
 use std::path::PathBuf;
 
 use byteui::interaction::icons;
@@ -35,7 +36,7 @@ pub struct ContextEntry {
 
 #[derive(Debug, Default)]
 pub struct State {
-    pub(crate) requests: crate::request_tracker::RequestTracker,
+    pub(crate) requests: crate::panel_host::RequestTrackers,
     /// 待发提示(失败/被拒等一次性反馈)。`App::update` 的包装函数每次处理完消息后
     /// 统一排空成 Toast,见 `extensions::toast::Outbox`。
     pub(crate) outbox: crate::extensions::toast::Outbox,
@@ -64,7 +65,7 @@ impl State {
 /// 项目 id 路由到对应 `Workspace`——异步结果不会写进"当前聚焦项目"。
 #[derive(Debug, Clone)]
 pub enum Message {
-    AsyncResult(crate::request_tracker::RequestToken, Box<Message>),
+    AsyncResult(bytehost_core::request::RequestToken, Box<Message>),
     Loaded(Result<Vec<ContextEntry>, String>),
     ToggleExpanded,
     Remove(i64),
@@ -139,7 +140,7 @@ pub fn apply(state: &mut State, msg: Message) -> Followup {
 
 /// 拉取列表并在后台线程判定每项是否已缺失,完成后 `emit(Loaded)`。
 pub fn request_refresh(
-    requests: &crate::request_tracker::RequestTracker,
+    requests: &crate::panel_host::RequestTrackers,
     project_id: i64,
     root: PathBuf,
     service: Arc<dyn ContextService>,
@@ -170,7 +171,7 @@ pub fn request_refresh(
 
 /// 把文件/目录加入项目上下文,完成后 `emit(Added)`。`relative` 不带尾部 `/`。
 pub fn request_add(
-    requests: &crate::request_tracker::RequestTracker,
+    requests: &crate::panel_host::RequestTrackers,
     project_id: i64,
     is_dir: bool,
     relative: String,

@@ -8,12 +8,127 @@
 //! 目前只有 `App` 一个实现;不为未来的第二个实现预先抽象更多方法——面板需要什么才加什么。
 
 use crate::app::{App, HoverId, PanelKind};
+use bytehost_core::id::ScopeId;
 use dozer_services::Services;
 use iced_widget::core::Element;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::runtime::Handle;
+
+/// Dozer 的业务作用域 → 中性 `ScopeId` 的**唯一转换点**(compat bridge C8 收口)。
+///
+/// 面板绑定某个项目:`project_id = Some(id)`;全局(跨项目)面板:`None`(如浏览器书签的全局 lane)。
+/// Host/共享内核看不到 `ScopeId` 里的业务含义——只有本模块知道 `"project:{id}"` 该怎么解。
+pub(crate) fn scope_of(project_id: Option<i64>) -> ScopeId {
+    match project_id {
+        Some(id) => ScopeId::new(format!("project:{id}")).expect("project scope 合法"),
+        None => ScopeId::new("global").expect("global scope 合法"),
+    }
+}
+
+/// [`scope_of`] 的逆:从结果回包的 token scope 还原业务 `project_id`。
+///
+/// 非 `"project:{N}"`(如全局 lane)返回 `None`。这是**产品路由**层的唯一解析点——
+/// 回包 `Message::AsyncResult` 不再携带 `project_id`,改由 scope 反解,故 Host 侧无业务字段。
+pub(crate) fn project_of(scope: &ScopeId) -> Option<i64> {
+    scope.as_str().strip_prefix("project:")?.parse().ok()
+}
+
+/// 把一条面板内层消息包成 `envelope(token, Box<M>)`:后台结果回包时自动带上请求身份。
+/// (原 `request_tracker::RequestToken::wrap` 的实现移到这里——core `RequestToken` 无此方法,
+/// 且它本就属于 host 的 `PanelIo` 收口,而非请求身份本身。)
+pub(crate) fn wrap_token<M: 'static>(
+    token: bytehost_core::request::RequestToken,
+    emit: impl Fn(M) + Send + 'static,
+    envelope: fn(bytehost_core::request::RequestToken, Box<M>) -> M,
+) -> impl Fn(M) + Clone + Send + Sync + 'static {
+    let emit = Arc::new(std::sync::Mutex::new(emit));
+    move |msg| (emit.lock().unwrap())(envelope(token.clone(), Box::new(msg)))
+}
+
+/// `CoreToken::wrap(...)` 的产品侧扩展:让面板沿用 `.begin(..).wrap(emit, Message::AsyncResult)`
+/// 的链式写法不变(实现就是 [`wrap_token`])。C8 删除产品 `RequestToken` 包装后,面板不再能直接
+/// 调 `.wrap`,改由此扩展 trait 提供。
+pub(crate) trait RequestTokenWrapExt: Sized + Clone + Send + Sync + 'static {
+    fn wrap<M: 'static>(
+        self,
+        emit: impl Fn(M) + Send + 'static,
+        envelope: fn(Self, Box<M>) -> M,
+    ) -> impl Fn(M) + Clone + Send + Sync + 'static;
+}
+
+impl RequestTokenWrapExt for bytehost_core::request::RequestToken {
+    fn wrap<M: 'static>(
+        self,
+        emit: impl Fn(M) + Send + 'static,
+        envelope: fn(Self, Box<M>) -> M,
+    ) -> impl Fn(M) + Clone + Send + Sync + 'static {
+        wrap_token(self, emit, envelope)
+    }
+}
+
+/// 面板请求身份的进程内唯一 owner 分配器。
+///
+/// 每个面板 state 构造一份 `ScopedTrackers` 时取一个新 owner,使**重开的同 slot 面板**
+/// (owner 不同)互不接受对方在途结果——语义与迁移前 `request_tracker.rs` 的 `NEXT` 一致。
+pub(crate) fn next_request_owner() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// 给面板 state 构造一份请求身份集合(多 scope)。这是产品侧对
+/// [`bytehost_core::request::ScopedTrackers`] 的唯一构造封装——面板不再自持包装类型。
+pub(crate) fn new_request_trackers() -> bytehost_core::request::ScopedTrackers {
+    use bytehost_core::id::PanelInstanceId;
+    use bytehost_core::request::Generation;
+    bytehost_core::request::ScopedTrackers::new(
+        next_request_owner(),
+        PanelInstanceId::new(0, 0),
+        Generation::new(0),
+    )
+}
+
+/// 面板 state 持有的请求身份集合的产品包装。
+///
+/// 它 `Default`(每次新建取一个新 owner),故面板 state 可以继续 `#[derive(Default)]`;
+/// 其余行为直接转发到中立的 [`bytehost_core::request::ScopedTrackers`]。scope 由产品按
+/// `project_id` 经 [`scope_of`] 给出,取回时经 [`project_of`] 还原,Host 不见业务字段。
+#[derive(Debug, Clone)]
+pub(crate) struct RequestTrackers(bytehost_core::request::ScopedTrackers);
+
+impl Default for RequestTrackers {
+    fn default() -> Self {
+        Self(new_request_trackers())
+    }
+}
+
+impl RequestTrackers {
+    pub(crate) fn begin(
+        &self,
+        project_id: Option<i64>,
+        lane: &'static str,
+    ) -> bytehost_core::request::RequestToken {
+        self.0.begin(
+            &scope_of(project_id),
+            bytehost_core::request::RequestKey::new(lane),
+        )
+    }
+
+    pub(crate) fn scope(&self, project_id: Option<i64>) -> bytehost_core::request::RequestToken {
+        self.0.scope(&scope_of(project_id))
+    }
+
+    pub(crate) fn invalidate(&self, lane: &'static str) {
+        self.0
+            .invalidate(bytehost_core::request::RequestKey::new(lane));
+    }
+
+    pub(crate) fn accepts(&self, token: &bytehost_core::request::RequestToken) -> bool {
+        self.0.accepts(token)
+    }
+}
 
 /// 面板"切入"(被用户切到前台)时 host 交给它的上下文:当前项目 id、项目路径(项目还没有路径时为
 /// `Handle`(tokio runtime)、"把结果包成该面板的 `Message` 投回事件循环"。收成一个值,由 host
@@ -68,13 +183,13 @@ impl<M: Send + 'static> PanelIo<M> {
 
     pub(crate) fn with_request(
         &self,
-        token: crate::request_tracker::RequestToken,
-        envelope: fn(crate::request_tracker::RequestToken, Box<M>) -> M,
+        token: bytehost_core::request::RequestToken,
+        envelope: fn(bytehost_core::request::RequestToken, Box<M>) -> M,
     ) -> Self {
         Self {
             services: self.services.clone(),
             handle: self.handle.clone(),
-            emit: Arc::new(token.wrap(self.emitter(), envelope)),
+            emit: Arc::new(wrap_token(token, self.emitter(), envelope)),
         }
     }
 

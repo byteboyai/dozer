@@ -32,7 +32,7 @@ pub const POLL_LIMIT: u32 = 200;
 
 #[derive(Debug, Default)]
 pub struct WorkspaceState {
-    pub(crate) requests: crate::request_tracker::RequestTracker,
+    pub(crate) requests: crate::panel_host::RequestTrackers,
     groups: Vec<GroupInfo>,
     selected: Option<i64>,
     /// 当前选中群的消息,按 `seq` 升序。
@@ -59,7 +59,7 @@ pub struct WorkspaceState {
 #[derive(Debug, Clone)]
 #[allow(clippy::enum_variant_names)]
 pub enum Message {
-    AsyncResult(crate::request_tracker::RequestToken, Box<Message>),
+    AsyncResult(bytehost_core::request::RequestToken, Box<Message>),
     GroupsLoaded(i64, Result<Vec<GroupInfo>, String>),
     /// 新建群成功:排最前并自动选中。
     GroupCreated(i64, GroupInfo),
@@ -110,7 +110,9 @@ pub enum Message {
 impl Message {
     pub fn project_id(&self) -> i64 {
         match self {
-            Message::AsyncResult(token, _) => token.project_id.expect("group project"),
+            Message::AsyncResult(token, _) => {
+                crate::panel_host::project_of(token.scope()).expect("group project")
+            }
             Message::GroupsLoaded(p, _)
             | Message::GroupCreated(p, _)
             | Message::GroupChanged(p, _)
@@ -445,7 +447,7 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
 
 /// 加载某项目的群聊列表。
 pub fn spawn_load_groups(
-    requests: &crate::request_tracker::RequestTracker,
+    requests: &crate::panel_host::RequestTrackers,
     project_id: i64,
     io: &PanelIo<Message>,
 ) {
@@ -464,7 +466,7 @@ pub fn spawn_load_groups(
 }
 
 pub fn spawn_fetch_messages(
-    requests: &crate::request_tracker::RequestTracker,
+    requests: &crate::panel_host::RequestTrackers,
     project_id: i64,
     group_id: i64,
     after_rev: i64,
@@ -491,7 +493,7 @@ pub fn spawn_fetch_messages(
 /// 执行一条经 `route_event` 校验过的命令。`SelectGroup`/`OpenTodo` 不走这里
 /// (前者是同步状态变更,见 [`select_group`];后者是切面板,由 host 处理)。
 pub fn spawn_command(
-    requests: &crate::request_tracker::RequestTracker,
+    requests: &crate::panel_host::RequestTrackers,
     project_id: i64,
     cmd: Command,
     io: &PanelIo<Message>,
@@ -580,7 +582,7 @@ pub fn spawn_command(
 
 /// 面板 `Effect` 的执行器:host 不认识这些变体,只负责给 `PanelIo`。
 pub fn run_effect(
-    requests: &crate::request_tracker::RequestTracker,
+    requests: &crate::panel_host::RequestTrackers,
     effect: Effect,
     project_id: i64,
     io: &PanelIo<Message>,

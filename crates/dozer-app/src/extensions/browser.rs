@@ -10,6 +10,7 @@
 
 use crate::app::tab_divider;
 use crate::chrome::tab_widget::{PanelTabArgs, panel_tab};
+use crate::panel_host::RequestTokenWrapExt;
 use crate::preview::WebviewSpec;
 use crate::theme;
 use crate::workspace::{lh, split_portions};
@@ -1263,7 +1264,7 @@ mod tests {
         );
         assert!(reopened.error.is_none());
         let global = state.requests.begin(None, "bookmarks");
-        assert_eq!(global.project_id, None);
+        assert_eq!(crate::panel_host::project_of(global.scope()), None);
         apply(
             &mut reopened,
             Message::AsyncResult(global, Box::new(Message::BookmarksLoaded(None, Ok(vec![])))),
@@ -1358,7 +1359,7 @@ pub enum NavAction {
 /// Todo MARKDOWN 键盘路由移除(2026-09-01 SQLite 迁移),不再引用。
 #[derive(Debug, Clone)]
 pub enum Message {
-    AsyncResult(crate::request_tracker::RequestToken, Box<Message>),
+    AsyncResult(bytehost_core::request::RequestToken, Box<Message>),
     OpenUrl(String),
     /// 页面加载完成后,渲染进程经 IPC 报回 HTML `document.title`(`id` 是
     /// webview/tab id,`title` 是页面标题)——覆盖 `open_url` 初建的 URL 标题。
@@ -1435,7 +1436,7 @@ impl TabHover {
 }
 
 pub struct State {
-    pub(crate) requests: crate::request_tracker::RequestTracker,
+    pub(crate) requests: crate::panel_host::RequestTrackers,
     tabs: Tabs,
     error: Option<String>,
     bookmarks: Vec<BookmarkInfo>,
@@ -1688,7 +1689,9 @@ pub fn update(
 ) {
     let mut msg = msg;
     while let Message::AsyncResult(token, inner) = msg {
-        if token.project_id != project_id || !state.requests.accepts(&token) {
+        if token.scope() != &crate::panel_host::scope_of(project_id)
+            || !state.requests.accepts(&token)
+        {
             return;
         }
         msg = *inner;
@@ -1834,7 +1837,7 @@ pub fn update(
 /// 收藏夹合集。`project_id = Some(pid)` 时返回"全局 + pid 项目";`None` 时
 /// 只返回全局收藏(用于首页全局浏览器/无项目工作区)。
 pub fn request_bookmarks_refresh(
-    requests: &crate::request_tracker::RequestTracker,
+    requests: &crate::panel_host::RequestTrackers,
     project_id: Option<i64>,
     service: &Arc<dyn BookmarkService>,
     handle: &tokio::runtime::Handle,
@@ -2266,7 +2269,7 @@ impl Message {
 impl Message {
     pub(crate) fn result_project(&self) -> Option<i64> {
         match self {
-            Self::AsyncResult(token, _) => token.project_id,
+            Self::AsyncResult(token, _) => crate::panel_host::project_of(token.scope()),
             _ => None,
         }
     }

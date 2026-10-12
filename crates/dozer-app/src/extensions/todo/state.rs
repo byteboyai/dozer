@@ -2,6 +2,7 @@
 //! WorkspaceState/Message/焦点捕获/刷新请求。
 
 use crate::app::HoverId;
+use crate::panel_host::RequestTokenWrapExt;
 
 use dozer_model::{CategoryInfo, TodoInfo};
 use dozer_services::{ServiceErrorKind, TodoService};
@@ -101,7 +102,7 @@ pub(crate) const ADD_SELECT_HIGHLIGHT: std::time::Duration = std::time::Duration
 /// Todo 面板挂在每个 `Workspace` 上的状态。
 #[derive(Default)]
 pub struct WorkspaceState {
-    pub(crate) requests: crate::request_tracker::RequestTracker,
+    pub(crate) requests: crate::panel_host::RequestTrackers,
     /// 待发提示(失败/被拒等一次性反馈)。`App::update` 的包装函数每次处理完消息后
     /// 统一排空成 Toast,见 `extensions::toast::Outbox`。
     pub(crate) outbox: crate::extensions::toast::Outbox,
@@ -481,7 +482,7 @@ impl WorkspaceState {
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    AsyncResult(crate::request_tracker::RequestToken, Box<Message>),
+    AsyncResult(bytehost_core::request::RequestToken, Box<Message>),
     Toggle(usize),
     /// 内容侧"收起/展开列表列"按钮:内核拦截,不进 `update`——转发成顶层
     /// `Message::TogglePanelListCollapse(PanelKind::Todo)`(见 app.rs)。
@@ -649,7 +650,7 @@ pub(crate) fn is_optimistic_id(id: i64) -> bool {
 /// request_bookmarks_refresh`)同款手法的搬家版本:异步拉取某项目的任务
 /// 列表。轮询(`App::poll_todo_if_visible`)和任一写操作成功后都调它。
 pub fn request_todos_refresh(
-    requests: &crate::request_tracker::RequestTracker,
+    requests: &crate::panel_host::RequestTrackers,
     project_id: i64,
     service: &Arc<dyn TodoService>,
     handle: &tokio::runtime::Handle,
@@ -669,7 +670,7 @@ pub fn request_todos_refresh(
 
 /// `request_todos_refresh` 的分类树版本:异步拉取某项目的全部分类节点。
 pub fn request_categories_refresh(
-    requests: &crate::request_tracker::RequestTracker,
+    requests: &crate::panel_host::RequestTrackers,
     project_id: i64,
     service: &Arc<dyn TodoService>,
     handle: &tokio::runtime::Handle,
@@ -720,7 +721,7 @@ impl Message {
 impl Message {
     pub(crate) fn result_project(&self) -> Option<i64> {
         match self {
-            Self::AsyncResult(token, _) => token.project_id,
+            Self::AsyncResult(token, _) => crate::panel_host::project_of(token.scope()),
             _ => None,
         }
     }

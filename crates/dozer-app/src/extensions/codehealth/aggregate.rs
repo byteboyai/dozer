@@ -8,6 +8,7 @@
 use super::LOG;
 use super::WorkspaceState;
 use super::{Message, PanelState};
+use crate::panel_host::RequestTokenWrapExt;
 use dozer_codehealth::{
     ArchitectureDiffOutcome, ImpactInput, ImpactScope, ProjectReport, architecture_diff,
     diff_reports, impact_scope,
@@ -122,7 +123,7 @@ const MAX_IMPACT_VISITED: usize = 2000;
 
 /// 面板打开时调用：只读落盘缓存（最新 + 上一份），不触发扫描（spec：手动触发）。
 pub fn spawn_load_cached(
-    requests: &crate::request_tracker::RequestTracker,
+    requests: &crate::panel_host::RequestTrackers,
     project_id: i64,
     project_path: PathBuf,
     service: Arc<dyn CodeHealthService>,
@@ -194,7 +195,7 @@ pub fn on_activate(state: &WorkspaceState, ctx: &crate::panel_host::ActivationCt
 /// 点"扫描"按钮：本地跑 `dozer_codehealth::scan_project`（CPU/IO 密集），
 /// 成功后采集 Git + 计算差异/热点，再异步落盘 dozerd，最后回灌 UI。
 pub fn spawn_scan(
-    requests: &crate::request_tracker::RequestTracker,
+    requests: &crate::panel_host::RequestTrackers,
     project_id: i64,
     project_path: PathBuf,
     service: Arc<dyn CodeHealthService>,

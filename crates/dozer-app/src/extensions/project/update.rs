@@ -1,6 +1,7 @@
 //! 项目面板的 update 消息分发 + scaffold 运行/repair/名称提交的异步 spawn。
 
 use super::*;
+use crate::panel_host::RequestTokenWrapExt;
 use dozer_services::{MemoryService, ProjectService, ServiceErrorKind, Services};
 use std::sync::Arc;
 
@@ -22,7 +23,9 @@ pub fn update(
 ) {
     let mut msg = msg;
     while let Message::AsyncResult(token, inner) = msg {
-        if token.project_id != Some(project_id) || !ws_state.requests.accepts(&token) {
+        if token.scope() != &crate::panel_host::scope_of(Some(project_id))
+            || !ws_state.requests.accepts(&token)
+        {
             return;
         }
         msg = *inner;
@@ -469,7 +472,7 @@ pub fn spawn_scaffold_run(
 /// 打开/切入 Project 面板时触发一次(同 Todo 面板的 `request_todos_refresh`
 /// 时机);之后的刷新走 `Message::MemoryMutated` 分支。
 pub fn request_memories_refresh(
-    requests: &crate::request_tracker::RequestTracker,
+    requests: &crate::panel_host::RequestTrackers,
     project_id: i64,
     memory: &Arc<dyn MemoryService>,
     handle: &tokio::runtime::Handle,

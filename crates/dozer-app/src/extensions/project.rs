@@ -98,7 +98,7 @@ pub struct MemoryDraft {
 /// 挂在每个 Workspace 上的项目信息面板状态。
 #[derive(Default)]
 pub struct WorkspaceState {
-    pub(crate) requests: crate::request_tracker::RequestTracker,
+    pub(crate) requests: crate::panel_host::RequestTrackers,
     branch: Option<String>,
     dirty: bool,
     /// git remote 的 fetch URL 列表(`bytegit::Repo::remotes`,去重后)。空 = 无 remote/
@@ -320,7 +320,7 @@ pub enum ProjectToolbarTarget {
 /// 走 `with_project`;其余是用户交互消息。
 #[derive(Debug, Clone)]
 pub enum Message {
-    AsyncResult(crate::request_tracker::RequestToken, Box<Message>),
+    AsyncResult(bytehost_core::request::RequestToken, Box<Message>),
     /// 占位:非交互态图标按钮(如 Git 远程仓库"＋",功能未接入前)的
     /// `icon_button_entry` 仍需要一个具体的 `on_select` 值,但 `interactive`
     /// 为假时该值不会真的被 `on_press` 调用——这个变体只为满足类型签名。
@@ -580,7 +580,7 @@ impl Message {
 impl Message {
     pub(crate) fn result_project(&self) -> Option<i64> {
         match self {
-            Self::AsyncResult(token, _) => token.project_id,
+            Self::AsyncResult(token, _) => crate::panel_host::project_of(token.scope()),
             _ => None,
         }
     }

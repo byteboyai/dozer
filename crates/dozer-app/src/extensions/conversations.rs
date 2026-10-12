@@ -12,6 +12,7 @@
 use crate::app::{HoverId, PanelKind, ProjectId, TextInputTarget};
 use crate::chrome::homespace::home_panel_head;
 use crate::panel_host::PanelHost;
+use crate::panel_host::RequestTokenWrapExt;
 use crate::theme;
 use crate::workspace::{agent_dot_color, agent_icon, lh, relative_time_text};
 use byteui::interaction::icons;
@@ -119,7 +120,7 @@ impl Operation<()> for CaptureConversationSearchFocus {
 /// 平铺的 `conversation_*` 字段。
 #[derive(Default)]
 pub struct WorkspaceState {
-    pub(crate) requests: crate::request_tracker::RequestTracker,
+    pub(crate) requests: crate::panel_host::RequestTrackers,
     sessions: Option<Vec<SessionRow>>,
     pages: usize,
     search: String,
@@ -192,7 +193,7 @@ impl WorkspaceState {
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    AsyncResult(crate::request_tracker::RequestToken, Box<Message>),
+    AsyncResult(bytehost_core::request::RequestToken, Box<Message>),
     /// 会话列表刷新结果:当前项目全部 session(联查总结),按最后活跃时间
     /// 倒序。按自带的 `ProjectId` 走 `with_project` 路由。
     SessionsRefreshed(ProjectId, Result<Vec<SessionRow>, ServiceError>),
@@ -291,7 +292,7 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
 /// 照搬现有 `Workspace::spawn_conversations_refresh`,`client` 参数传入方式
 /// 对齐 Usage 试点既有 `usage::spawn_refresh`。
 pub fn spawn_refresh(
-    requests: &crate::request_tracker::RequestTracker,
+    requests: &crate::panel_host::RequestTrackers,
     project_id: i64,
     cwd: PathBuf,
     service: Arc<dyn ConversationService>,
@@ -698,7 +699,7 @@ impl Message {
 impl Message {
     pub(crate) fn result_project(&self) -> Option<i64> {
         match self {
-            Self::AsyncResult(token, _) => token.project_id,
+            Self::AsyncResult(token, _) => crate::panel_host::project_of(token.scope()),
             Message::SessionsRefreshed(id, _) => Some(*id),
             _ => None,
         }

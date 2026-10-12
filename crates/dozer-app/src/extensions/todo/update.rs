@@ -1,5 +1,6 @@
 //! Todo 面板 update 消息分发 + 日历日期纯函数。
 
+use crate::panel_host::RequestTokenWrapExt;
 use dozer_model::TodoInfo;
 use dozer_services::{ServiceErrorKind, TodoService};
 use std::sync::Arc;
@@ -124,7 +125,9 @@ pub fn update(
 ) {
     let mut msg = msg;
     while let Message::AsyncResult(token, inner) = msg {
-        if token.project_id != Some(project_id) || !ws_state.requests.accepts(&token) {
+        if token.scope() != &crate::panel_host::scope_of(Some(project_id))
+            || !ws_state.requests.accepts(&token)
+        {
             return;
         }
         msg = *inner;

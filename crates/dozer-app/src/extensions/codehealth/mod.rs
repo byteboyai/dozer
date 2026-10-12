@@ -85,7 +85,7 @@ pub struct PanelState {
 
 #[derive(Default)]
 pub struct WorkspaceState {
-    pub(crate) requests: crate::request_tracker::RequestTracker,
+    pub(crate) requests: crate::panel_host::RequestTrackers,
     panel: PanelState,
     scanning: bool,
     /// 上一次 `Message::Scanned(_, Err(_))` 的错误文案，成功扫描或重新点
@@ -154,7 +154,7 @@ impl WorkspaceState {
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    AsyncResult(crate::request_tracker::RequestToken, Box<Message>),
+    AsyncResult(bytehost_core::request::RequestToken, Box<Message>),
     /// 面板打开时读落盘缓存（最新 + 上一份）并计算差异/热点后的完整状态。
     /// `PanelState` 较大，装箱避免撑大外层 `Message` 枚举。
     Loaded(i64, Box<PanelState>),
@@ -239,7 +239,7 @@ impl Message {
 impl Message {
     pub(crate) fn result_project(&self) -> Option<i64> {
         match self {
-            Self::AsyncResult(token, _) => token.project_id,
+            Self::AsyncResult(token, _) => crate::panel_host::project_of(token.scope()),
             Message::Loaded(id, _) | Message::LoadFailed(id, ..) | Message::Scanned(id, _) => {
                 Some(*id)
             }
