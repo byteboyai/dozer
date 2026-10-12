@@ -514,6 +514,55 @@
 
 ---
 
+## Task 15 — 运行时、日志、升级回滚和卸载操作(计划 §Task 15 `:212-222`)
+
+- **目标（计划 §Task 15 `:212-222`）：** 新增/修改 Digger desktop `apps/{runtime,logs,actions}.rs` 与 app-host effects tests。(1) 接运行时 probe/plan/install/uninstall;显示依赖应用、失败原因和持续问题页。(2) 接 start/stop、upgrade plan、rollback;升级失败后再次拉取权威状态,不由 UI 猜运行版本。(3) 复用 `LogsState`:跟随/取消跟随、首次失败、保留旧文本、迟到回包丢弃。(4) 卸载 UI 明确保留数据与删除数据两种行为;先调用共享业务流程,浏览器清理接 Task 17。(5) 为能力矩阵每行记录 UI 入口、effect、API、成功和失败测试名称;无入口的 API 不算接通。**验证:** 管理界面状态测试、进程应用真实安装/启停;A8/A9/A13 的服务与 UI 部分。提交按运行时、日志、版本/卸载三组。
+- **规格依据:** §4 `:67-70`;§5.2 `:97-103`;§5.3(身份与失效);§5.4;§6.1 `:134`、`:138`;§6.2 `:140-155`(能力矩阵);§6.3 `:157-163`;§6.4 `:165-172`;§11 闸门。
+
+**关键设计裁决:**
+- **扩展适配层而非共享 crate**:任务要求接运行时/日志/动作,但共享 `bytehost-panel::install` 的 `Outcome`/`InstallAction` 只覆盖 Task 14 的出计划/安装。**不修改 bytehost 与 `bytehost-panel`**(保持共享 crate 不动,避免版本 bump 与 Dozer 波及面),改为在 `digger-app-host` 内扩展 `Outcome`(新增 `Runtimes`、`Install.detail: InstallDetail`)与 `InstallAction`(新增 `Probe`/`RuntimePlan`/`RuntimeInstall`/`RuntimeUninstall`/`Stop`/`Rollback`/`Uninstall`,共 10 变体)。组合根只认适配层类型。
+- **`Probe` 复用 `Outcome::Runtimes` 而非空占位**:执行器 `Probe` 分支返回真实 `Vec<RuntimeProbe>`(修掉 Task 14 `ProbesLoaded(result.map(|()| Vec::new()))` 的丢弃 bug);`InstallDetail::App(id)` 让每个 per-app 动作(Stop/Rollback/Uninstall)带回目标 id,组合根据此路由到对应 `Message`。
+- **升级/回滚以"再次拉权威状态"为准**:回滚走 `RollbackClicked → ConfirmRollback → RollbackConfirmed → Effect::Rollback`;成功后状态机吐 `List` 刷新(权威 `AppSummary.previous_version`/`observed` 重取),UI 不猜运行版本。运行版本一律来自 `AppSummary.observed`,不由回滚结果推断。
+- **日志复用共享 `LogsState`,不新建**:桌面侧 `logs.rs` 只把 `bytehost_panel::logs::LogsView` 渲染成 iced 视图;跟随/取消跟随、`stale` 保留旧文本、首次失败 vs 刷新失败、迟到回包(经 `requests.accept(ticket)` 身份核验)全在共享状态机 + 请求台账里。刷新定时由组合根 `arm_tick`/`Tick` 排一拍(`REFRESH_INTERVAL`),滚动钉底由 `take_log_scroll()` 一次性消费生成 `scroll_to` 任务。
+- **卸载保留/删除数据二选一显式呈现**:`UninstallClicked → ConfirmUninstall → UninstallConfirmed(UninstallMode::{Program,ProgramAndData})`;UI 两个按钮文案明确"保留数据"/"删除数据",经共享状态机发起,浏览器数据清理归 Task 17。
+- **提交按三组**:运行时(`effects.rs`/`testing.rs`/`embedded.rs`/`runtime.rs`)、日志(`logs.rs`)、版本/卸载(`actions.rs`/`management.rs`/`mod.rs` 共享接线/`install_flow.rs`)。`mod.rs` 含跨组共享接线(step 任务批处理、`log_scroll_id`),依计划"可独立审查"口径放在最后一组;各组 diff 自洽。
+
+**能力矩阵接线记录(计划 §Task 15 第 5 条,每行:UI 入口 / effect / API / 成功测试 / 失败测试):**
+| 能力 | UI 入口 | effect | API | 成功测试 | 失败测试 |
+|---|---|---|---|---|---|
+| 列表/详情/刷新 | `management.rs` 已装区(行=名称/版本/observed/id) | `Effect::List` | `app_list` | `embedded::install_then_list...`(Task 14) | `install_flow::...`(服务不可用页) |
+| 本地目录/归档/URL 安装 | 安装表单来源单选 + `InstallClicked`/`PickArchive` | `Effect::Plan`→审批→`Effect::Install` | `app_plan`/`app_install` | `install_flow::a_local_process_app_reaches_review...` | `install_flow::a_rejected_source_becomes_a_flow_failure...` |
+| 启动/停止/重新打开 | `actions.rs` 行按钮(过渡态不给卸载) | `Effect::Stop`;启动在 `bytehost_panel::host` | `app_stop`(启动 `app_start`) | `install_flow::stopping_an_app_reports_action_done` | — |
+| 升级/回滚 | `actions.rs` 行"回滚到 X"(仅 `previous_version` 为 Some) | `Effect::Rollback` | `app_rollback` | `install_flow::rolling_back_an_app_requires_confirmation` | — |
+| 卸载(保留/删除数据) | `actions.rs` 行"卸载"→确认二选一 | `Effect::Uninstall(id, mode)` | `app_uninstall` | `install_flow::uninstalling_an_app_goes_through_confirmation_and_reports_done` | — |
+| 运行时探测/安装/卸载 | `runtime.rs` 运行时区块(装/卸按钮、job 进度、持续问题页) | `Effect::Probe`/`RuntimePlan`/`InstallRuntime`/`UninstallRuntime` | `app_probe_runtimes`/`app_runtime_plan`/`app_install_runtime`/`app_uninstall_runtime` | `install_flow::a_runtime_install_flows_from_click_through_approval_to_done`;`embedded::runtime_effects_carry_their_action_identity_and_payload` | `install_flow::a_runtime_plan_failure_is_shown_in_the_flow`;`uninstalling_a_runtime_requires_confirmation` |
+| 日志 | `actions.rs` 行"日志/收起日志"(任意状态可用) | `Effect::FetchLogs` + `ProbeAfter`/`Tick` | `app_logs` | 共享 `logs::LogsState` 单测;`runtime.rs`/`logs.rs` 渲染 | 共享 `logs::LogsState` 单测(首次失败 vs 刷新失败) |
+| 崩溃/依赖缺失/宿主不可用 | `runtime.rs`/`management.rs` 原生持久状态页(`AppIssue` 经 `issue_texts`) | — | — | `runtime.rs` 渲染 + 共享视图模型 | `management.rs::Unavailable` 页 |
+
+**实现(Digger 仓库):**
+- **`crates/app-host/src/effects.rs`:** `InstallDetail{None,Plan,App(String),RuntimePlan}`;`Outcome::Runtimes{ticket,result}`、`Outcome::Install.detail`;手写 `Debug` 覆盖 `Install`/`Runtimes`;动作常量 `PROBE_ACTION`/`RUNTIME_PLAN_ACTION`/`RUNTIME_INSTALL_ACTION`/`RUNTIME_UNINSTALL_ACTION`/`STOP_ACTION`/`ROLLBACK_ACTION`/`UNINSTALL_ACTION`;`InstallAction` 10 变体 + `from_key`(单测 `every_completion_action_round_trips_through_its_key` 覆盖全部);`run_install_with_policy` 各 effect 分支:`Probe→Runtimes`、`Stop/Rollback/Uninstall→App(id)`、`RuntimePlan→RuntimePlan`、`InstallRuntime`/`UninstallRuntime`、`FetchLogs`。
+- **`crates/app-host/src/testing.rs`:** `FakeHost` 增 `on_probe`/`on_probe_host_fail`/`on_rollback`/`on_runtime_plan`/`on_runtime_install`/`on_runtime_uninstall`;`canned_for` 映射 `ProbeRuntimes`/`Rollback{id}`/`RuntimePlan`/`InstallRuntime`/`UninstallRuntime`。
+- **`crates/app-host/tests/embedded.rs`:** +2——`runtime_effects_carry_their_action_identity_and_payload`(Probe→`Outcome::Runtimes` + `InstallAction::Probe`;RuntimePlan→`Outcome::Install` + `InstallDetail::RuntimePlan`);`per_app_actions_carry_their_kind_and_target_id`(Stop/Rollback/Uninstall 各带 `InstallDetail::App("notes")` 与正确 `InstallAction`)。(14→16)
+- **`crates/app-host/tests/install_flow.rs`:** `Rig::dispatch` 增 `RuntimePlan`/`InstallRuntime`/`UninstallRuntime`/`Stop`/`Rollback`/`Uninstall` 分支;+6 测试(共 12):运行时安装全流程、运行时计划失败入流程、卸载运行时需确认、回滚应用需确认(先 `ListLoaded` 带 `previous_version`)、卸载应用经确认并报完成、停止应用报完成。
+- **`crates/desktop/src/apps/runtime.rs`(新):** `runtime_section` 渲染 `RuntimePlanning`/`RuntimeReviewing`/`ConfirmRuntimeUninstall`,否则按 `probes: Load` 给 Loading / 持续问题页(红 + 重试 `PollProbes`)/ 逐行 `probe_row`;`probe_row` 用 `runtime_line`/`progress_text`/`managed_runtime_label`,job 失败内联红显示(不走 Toast),受管版本行带 `RuntimeUninstallClicked`,可自动安装者给"安装 X"(进行中→"安装中…"、docker→"此平台不支持由 Digger 自动安装")。
+- **`crates/desktop/src/apps/logs.rs`(新):** `log_viewer(LogsView, app_id)` —— `Hidden→[]`、`Loading→"加载日志…"`、`Failed→红 + 保留文案`、`Loaded→` 滚动容器(`id = log_scroll_id`、`on_scroll` 回 `LogsScrolled`)+ "跟随/取消跟随" 切换 + `stale`/`truncated` 提示;`Shaping::Advanced` 保证中文正常。
+- **`crates/desktop/src/apps/actions.rs`(新):** `app_row(state, app)` —— 名称/版本/`observed_label` + id、`AppIssue` 经 `issue_texts` 渲染、动作行(过渡态不给卸载;回滚仅 `previous_version` 为 Some;日志入口任意状态可用且展开时变"收起日志");展开时就地渲染 `log_viewer`。
+- **`crates/desktop/src/apps/mod.rs`:** `update` 批处理 `step` 任务 + `log_scroll_task` + `log_tick_task`;`dispatch` 增 `ProbeAfter→sleep→PollProbes`;`deliver` 增 `Outcome::Runtimes`/`Outcome::Logs`(含滚动钉底);`install_outcome` 增 `RuntimePlan`/`RuntimeInstall`/`RuntimeUninstall`/`Rollback`/`Stop`/`Uninstall` 分支(按 `InstallAction` + `InstallDetail::App(id)`);新增 `log_scroll_id`。
+- **`crates/desktop/src/apps/management.rs`:** 已装行改用 `actions::app_row`;`flow_view` 的运行时分支护到 `runtime_section`。
+- **`crates/desktop/Cargo.toml` + 根 `Cargo.toml`:** 直接依赖 `iced_core`(iced 0.14 未公开重导出 `text::Shaping`,组合根按需依赖同版本)。
+
+**测试(增量):** app-host 单测 28(不变);集成 `embedded.rs` 16(原 14);集成 `install_flow.rs` 12(原 6);desktop 单测 9。
+
+**验证(Digger):**
+- `cargo test -p digger-app-host`(28 + 16 + 12)、`cargo test -p digger-desktop`(9)、`cargo test --workspace` 全绿。
+- `cargo fmt --all -- --check` 干净;`cargo clippy --workspace --all-targets -- -D warnings` 干净(修掉 `runtime.rs` 一处 `collapsible_if`);`scripts/check-host-deps.sh` ok。
+
+- **提交(三组,仓库 D):** `b24dd20` 运行时;`8a098d4` 日志;`aa91dfd` 版本/卸载 + 共享接线。
+- **偏差:** 共享 `bytehost-panel` 状态机对"打开日志时迟到回包丢弃"依赖请求台账身份核验而非状态机内计数(与 Task 14 同口径,计划未预设具体机制);`iced_core` 直接依赖为绕开 iced 0.14 未导出 `text::Shaping` 的替代(计划未预设);`mod.rs` 共享接线随最后一组提交(见上"提交按三组")。
+- **未决项 / 阻塞:** **iced UI 是 build + 源码级验证;真实窗口交互验收(含运行时真实安装/启停、回滚、卸载点击流)受 Task 08 同一 OS 权限限制,与 Task 08 人工项合并待人工确认**(与 Task 14 同口径)。
+
+---
+
 ## 提交记录
 | Task | 提交 | 仓库 | 说明 |
 |---|---|---|---|
@@ -542,6 +591,9 @@
 | 12 | `3ab1c34` | B | `fix(apps): release the service lock explicitly on drop` |
 | 13 | `2305775` | D | `feat(app-host): wire InProcess effects and subscriptions` |
 | 14 | `a21b730` | D | `feat(apps): add reviewed install and management flow` |
+| 15 | `b24dd20` | D | `feat(apps): wire runtime probe and install effects` |
+| 15 | `8a098d4` | D | `feat(apps): add follow-aware log viewer` |
+| 15 | `aa91dfd` | D | `feat(apps): wire start-stop, rollback, uninstall and log wiring` |
 | R3–R6 | `ba52c94` | B | `fix(core): harden Surface lifecycle, panel identity and request routing` |
 | R2 | `fc3a636` | B | `fix(desktop): make physical-slot replacement atomic and unregister occupant-checked` |
 | R7 | `2d924d9` | B | `fix(spike): SELFTEST must build the wry child and fail nonzero` |

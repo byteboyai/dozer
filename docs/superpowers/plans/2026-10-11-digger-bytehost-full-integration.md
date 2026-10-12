@@ -213,11 +213,11 @@
 
 **新增/修改：**Digger desktop `apps/{runtime,logs,actions}.rs` 与 app-host effects tests。
 
-- [ ] 接运行时 probe/plan/install/uninstall；显示依赖应用、失败原因和持续问题页。
-- [ ] 接 start/stop、upgrade plan、rollback；升级失败后再次拉取权威状态，不由 UI 猜运行版本。
-- [ ] 复用 LogsState：跟随/取消跟随、首次失败、保留旧文本、迟到回包丢弃。
-- [ ] 卸载 UI 明确保留数据与删除数据两种行为；先调用共享业务流程，浏览器清理接 Task 17。
-- [ ] 为能力矩阵每一行记录 UI 入口、effect、API、成功和失败测试名称；无入口的 API 不算接通。
+- [x] 接运行时 probe/plan/install/uninstall；显示依赖应用、失败原因和持续问题页。
+- [x] 接 start/stop、upgrade plan、rollback；升级失败后再次拉取权威状态，不由 UI 猜运行版本。
+- [x] 复用 LogsState：跟随/取消跟随、首次失败、保留旧文本、迟到回包丢弃。
+- [x] 卸载 UI 明确保留数据与删除数据两种行为；先调用共享业务流程，浏览器清理接 Task 17。
+- [x] 为能力矩阵每一行记录 UI 入口、effect、API、成功和失败测试名称；无入口的 API 不算接通。
 
 **验证：**管理界面状态测试、进程应用真实安装/启停；A8/A9/A13 的服务与 UI 部分。提交按运行时、日志、版本/卸载三组。
 
