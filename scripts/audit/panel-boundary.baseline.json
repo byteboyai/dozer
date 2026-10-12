@@ -3,14 +3,10 @@
   "R-HOVERID-VARIANTS": 12
  },
  "app/update.rs": {
-  "R-HOST-PANEL-ARMS": 95,
-  "R-PANE-PICK": 1
+  "R-HOST-PANEL-ARMS": 93
  },
  "panel_host.rs": {
   "R-HOVERSLOT-VARIANTS": 9
- },
- "platform/window_events.rs": {
-  "R-PANE-PICK": 3
  },
  "workspace/state.rs": {
   "R-PANE-PICK": 2

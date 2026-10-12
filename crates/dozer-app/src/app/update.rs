@@ -2490,12 +2490,7 @@ impl App {
             }
             Message::PreviewLargeFileSearchGo(kind, forward) => {
                 self.with_focused_project(move |ws, _io| {
-                    // 这里要同时可变借用 `pane` 与 `ws.*_preview_error` 两个不相交字段,
-                    // 访问器会借走整个 `ws`,所以保留按字段的写法。
-                    let pane = match kind {
-                        PanelKind::Project => &mut ws.project_preview,
-                        _ => &mut ws.preview,
-                    };
+                    let pane = ws.preview_pane_mut(kind);
                     let Some(session) = pane.large_file_search.clone() else {
                         return;
                     };
@@ -2508,10 +2503,6 @@ impl App {
                         (session.current + session.hits.len() - 1) % session.hits.len()
                     };
                     let hit = session.hits[next].clone();
-                    let error_slot = match kind {
-                        PanelKind::Project => &mut ws.project_preview_error,
-                        _ => &mut ws.preview_error,
-                    };
                     // 窗口化只读:命中在未加载区,先装窗口再全局 reveal。
                     let line = hit.line_no.max(1) as u32;
                     pane.queue_windowed_view(session.tab_id, line);
@@ -2519,10 +2510,11 @@ impl App {
                         session.tab_id,
                         crate::preview::EditorCommand::RevealPosition { line, column: 1 },
                     );
-                    *error_slot = None;
                     if let Some(s) = pane.large_file_search.as_mut() {
                         s.current = next;
                     }
+                    // `pane` 的可变借用到此结束,再取不相交的错误槽(两步借用不重叠)。
+                    *ws.preview_error_mut(kind) = None;
                 });
             }
             Message::PreviewSelectTab(idx) => self.preview_select_tab(idx),

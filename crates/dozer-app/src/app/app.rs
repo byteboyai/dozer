@@ -2491,6 +2491,13 @@ impl App {
         self.right_view
     }
 
+    /// `kind` 面板当前是否显示在左栏或右栏——面板可被拖到任一栏,判断"某面板是否
+    /// 可见"必须两栏都查。统一入口,取代散落的
+    /// `matches!(left_view, ..) || matches!(right_view, ..)` / `== PanelKind::X` 写法。
+    pub fn panel_in_either_view(&self, kind: PanelKind) -> bool {
+        self.left_view == kind || self.right_view == kind
+    }
+
     /// 距新增闪光自动清除的剩余时间:main.rs 据此排下次唤醒,恰好到点重绘
     /// 一次清除高亮(同 `next_tooltip_wake` 的定时范式)。
     pub fn next_todo_flash_wake(&self) -> Option<std::time::Duration> {

@@ -3919,9 +3919,9 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             // 条可能同帧都存在,`CaptureFindFocus` 一次遍历按
                             // id 分别写回两个面板各自的 static,这里一次取走
                             // 两份结果。
-                            let find_panel_visible = files_in_either_view
-                                || matches!(app.left_view(), crate::app::PanelKind::Project)
-                                || app.right_view == crate::app::PanelKind::Project;
+                            let find_panel_visible = app
+                                .panel_in_either_view(crate::app::PanelKind::Files)
+                                || app.panel_in_either_view(crate::app::PanelKind::Project);
                             let (files_find_focused, project_find_focused) = if find_panel_visible {
                                 crate::runtime::run_operate(
                                     &mut interface,
@@ -4082,9 +4082,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             // 的聚焦态永远为假,键盘放行闸门不触发,输入的
                             // 字符会同时落进 PTY(agent 输入框)。
                             let name_edit_focused =
-                                if matches!(app.left_view(), crate::app::PanelKind::Project)
-                                    || app.right_view == crate::app::PanelKind::Project
-                                {
+                                if app.panel_in_either_view(crate::app::PanelKind::Project) {
                                     crate::runtime::run_operate(
                                         &mut interface,
                                         renderer,
@@ -4099,9 +4097,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             // `PanelKind::Project`,每帧查真实焦点态,两侧都查
                             // (同上面的既有处理)。
                             let description_edit_focused =
-                                if matches!(app.left_view(), crate::app::PanelKind::Project)
-                                    || app.right_view == crate::app::PanelKind::Project
-                                {
+                                if app.panel_in_either_view(crate::app::PanelKind::Project) {
                                     crate::runtime::run_operate(
                                         &mut interface,
                                         renderer,
