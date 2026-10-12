@@ -998,3 +998,4 @@
 | 23 | `fe9373d` | B | `docs(readme): correct Digger consumer entry (iced+wry, in-process embedding done)` |
 | 23 | `8f479a81` | Z | `style(dozer-app): adapt toast overlay to ToastMetrics, drop unused reexport` |
 | 23 | `8ff87cba` | Z | `test(audit): drop stale HOVERSLOT test after C9 retired the rule` |
+| 23 | `191ab6a9` | Z | `docs(integration): record Digger bytehost acceptance` |
