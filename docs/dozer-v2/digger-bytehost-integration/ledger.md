@@ -201,3 +201,4 @@
 | 03 | `45f95ce0` | Z | `docs(integration): Task 03 §11 闸门回填` |
 | 04 | `972e461` | B | `feat(core): introduce product-neutral panel identities` |
 | 05 | `4c4d748` | B | `feat(core): preserve scoped writes and reject stale reads` |
+| 06 | `d9b90deb` | Z | `refactor(host): move service adapters to host_adapters and adopt core request identity` |
