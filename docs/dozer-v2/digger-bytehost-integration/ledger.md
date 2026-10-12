@@ -385,6 +385,40 @@
 
 ---
 
+## Task 12 — 补齐共享应用服务的管理能力(计划 §Task 12 `:176-186`)
+
+- **目标（计划 §Task 12 `:176-186`）：** 以 Task 03 结论(`gates.md` 闸门 3,两处 AppService 缺口)为准,在 `bytehost-apps` 补齐:a) 同根双服务互斥;b) 受控端口重置 API;c) 可观察 shutdown 结果;d) 孤儿回收核对进程身份;e) 只补缺失测试,不写第二套 API,更新公共 API 兼容记录。
+- **规格依据:** §6.1 `:134`("退出失败显示可操作错误,不静默遗留子进程")、`:138`(端口重置流程);§11 闸门。
+
+**现场核实(Task 12 开工前):**
+- (a) 同根互斥 **缺失** → 实现。
+- (b) 受控端口重置 API **缺失** → 实现。
+- (c) `shutdown()` 返回 `()`、无可观察结果 → 补兼容入口。
+- (d) 孤儿回收核对进程身份 **已实现且有测试**(`process/supervise.rs` `reap_orphan`:命令行 + `lstart` + 进程组组长三重比对;测试 `orphans_are_matched_by_start_time_and_never_by_a_bogus_or_non_leader_pid` @ `:676`,故障场景仅针对测试自建的 `sleep` 进程组)→ **只验证,零代码改动**。
+
+**实现(bytehost 仓库,新/改):**
+- **`bytehost-apps/src/service_lock.rs`(新,`#[cfg(all(feature="server",unix))]`):** `<root>/service.lock` 上一把 `flock(2)` 独占锁(`LOCK_EX|LOCK_NB`,`EWOULDBLOCK` → `AlreadyOwned`),fd 显式 `O_CLOEXEC` + `fcntl(F_SETFD,FD_CLOEXEC)` 双保险,spawn 的应用进程不会继承持有;不新引入 crate 依赖。
+- **`service.rs`:** `AppService` 增 `lock: Mutex<Option<ServiceLock>>`;`start`/`start_with`/`start_with_monitor_for_test` 先 `acquire_lock` 再进 `start_with_locked`;拿不到(同根已有所有者)→ `Unavailable("…已有一个应用服务在运行")`,**绝不触碰第一方**;`shutdown`/超时/panic 各路径都 `release_lock`(内核进程退出也自动释放,崩溃安全)。
+- **受控端口重置(新公共 API):** `AppService::reset_port(root, requested) -> Result<u16, PortResetError>` 与 `clear_port(root)`:先做**占有权校验**(取同一把锁,服务在跑即 `ServiceRunning` 拒绝),再经 `port::persist_port`(临时文件 + rename,原子)**只改 `<root>/gateway.json`**;写失败时旧文件原样保留(可恢复);范围校验 → `OutOfRange`;不暴露任意写内部文件能力。
+- **可观察 shutdown(新公共 API,保留兼容):** `shutdown()` 仍是 `()` 包装(失败记日志,现有调用方不动);新增 `shutdown_reporting() -> Result<ShutdownReport, ShutdownError>`(及可配超时的 `shutdown_reporting_within`):`ShutdownReport{app_failures, problems, gateway_released}`、`ShutdownError{TaskFailed, TimedOut, GatewayNotReleased}`;收尾上界 `AppService::SHUTDOWN_TIMEOUT`(30s,`suspend_all` 按应用给 `DEFAULT_GRACE` 后留足余量)。超时/失败也放锁让进程能退出,遗留子进程由下次启动的孤儿回收兜底。
+
+**测试(增量,不写第二套 API):**
+- `service_lock`(3):同进程二次 `acquire` 被拒直至首个 `drop`;锁文件落在 `<root>/service.lock`;跨进程(`python3 -c 'fcntl.flock'` 持锁)被拒、其退出后可拿。
+- `service`(6):`a_second_service_on_the_same_root_is_unavailable_and_never_disturbs_the_first`(第二个 `Unavailable`、第一个 gateway/应用不受影响、首个 shutdown 后第三个可接管);`reset_port_changes_the_persisted_port_when…`、`reset_port_is_refused_while_a_service_owns_the_root`、`reset_port_rejects_out_of_range_ports_without_touching_the_file`、`reset_port_keeps_the_old_file_when_persisting_fails`、`clear_port_forgets_the_port_but_only_when_nobody_owns_the_root`;`a_clean_shutdown_reports_gateway_released_and_no_failures`、`a_shutdown_that_overruns_the_timeout_is_reported_not_swallowed`、`a_stop_failure_shows_up_in_the_report_not_only_in_logs`(目录置 0o500 令 `set_observed` 落盘失败 → 逐应用报进 `app_failures`)、`shutdown_reporting_on_an_unavailable_service_is_clean`。退出结果与失败**由返回结构证明,不用日志推断**。
+- **锁释放修正(实测发现,非计划项):** `flock` 锁隶属"打开文件描述",`fork`→`exec` 窗口内被并发 `Command::spawn` 的子进程短暂共享,导致 `drop` 单靠 close 偶发不释放、同根重启偶发误判 `Unavailable`。`ServiceLock` 的 `Drop` 改显式 `LOCK_UN` 再关 fd(close 仍兜底)。
+
+**验证(bytehost):**
+- `cargo test -p bytehost-apps --all-features --lib`:421 通过 / 0 失败(并行 `service::tests` 反复跑不再抖动)。
+- `cargo test --workspace --all-features`:全绿(唯一 `FAILED` 为既有事件时序 flaky `manager::tests::a_python_app_installs_starts_runs_behind_the_gateway_and_stops`,单独跑稳定通过,非本次改动)。
+- `bytehost-client --all-features`(embedded_host / in_process / conformance)全绿。
+- `cargo fmt --all -- --check` 干净;`cargo clippy --workspace --all-features --all-targets -- -D warnings` 干净;`scripts/check-deps.sh` ok。
+
+- **提交:** `ccb32a8` feat(apps): one service owner per data root via flock;`b332684` feat(apps): controlled gateway port reset management API;`7daa064` feat(apps): observable shutdown result without breaking callers;`3ab1c34` fix(apps): release the service lock explicitly on drop(B)。按互斥 / 管理接口 / 退出观测拆分。
+- **偏差:** `shutdown()` 保持 `()` 兼容入口(计划要求"保留现有调用方兼容"),Dozen `dozerd/src/main.rs:181` 调用点**不改**;`SHUTDOWN_TIMEOUT` 常量名取自定义项(计划未指定);孤儿回收项按现场核实为"已实现",未新增代码。
+- **未决项 / 阻塞:** 无。端口重置的 GUI 流程(停服务 → 撤 Surface → 说明 origin 影响 → 确认 → 重启)由 Task 13 app-host 编排消费本 API。
+
+---
+
 ## Review 修复 (2026-10-12, R1–R7)
 
 > 来源：`review-2026-10-12-tasks-01-08.md`（快照 Dozer `b8ae6bb3` / bytehost `f4639bb`）。七项均经真实代码复核为**有效缺陷**（非误报）。修复顺序 R5/R6 → R4 → R2 → R3 → R1 → R7。
@@ -430,6 +464,10 @@
 | 10 | `93b2ac3` | B | `feat(desktop): extract product-neutral overlay focus tracker` |
 | 10 | `239aa399` | Z | `refactor(platform): use shared overlay focus tracker` |
 | 11 | `3072d62` | D | `feat(desktop): bootstrap Digger on bytehost shell` |
+| 12 | `ccb32a8` | B | `feat(apps): one service owner per data root via flock` |
+| 12 | `b332684` | B | `feat(apps): controlled gateway port reset management API` |
+| 12 | `7daa064` | B | `feat(apps): observable shutdown result without breaking callers` |
+| 12 | `3ab1c34` | B | `fix(apps): release the service lock explicitly on drop` |
 | R3–R6 | `ba52c94` | B | `fix(core): harden Surface lifecycle, panel identity and request routing` |
 | R2 | `fc3a636` | B | `fix(desktop): make physical-slot replacement atomic and unregister occupant-checked` |
 | R7 | `2d924d9` | B | `fix(spike): SELFTEST must build the wry child and fail nonzero` |

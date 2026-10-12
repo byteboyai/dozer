@@ -54,6 +54,11 @@
 
 **结论：闸门 3 成立；3 个子项中 4 项够用，2 项（退出可观测、端口重置接口）需在 bytehost 增补受测接口。** 该增补不阻塞 S0/S1 的独立应用平台适配与契约测试（规格 `:248`）。
 
+**回填（Task 12，2026-10-12）：两项缺口已闭合。**
+- 退出可观测 → `AppService::shutdown_reporting() -> Result<ShutdownReport, ShutdownError>`（`shutdown()` 保留 `()` 兼容包装），失败/超时/gateway 释放由返回结构证明,不靠日志;提交 `7daa064`。
+- 端口重置 → `AppService::reset_port(root, requested)` / `clear_port(root)`（占有权校验 + 原子持久化 + 失败保留可恢复状态 + 只改 `gateway.json`）;提交 `b332684`。
+- 附带:同根互斥 `service_lock`（`ccb32a8`）与锁释放修正（`3ab1c34`）。详见 ledger「Task 12」/ `api-decisions.md` §11。wire 形状未动。
+
 ## 闸门 4、5 — 未回填（后续 Task）
 
 - 闸门 4（desktop 层对 macOS 存储清理、剪贴板、媒体权限的实际强制能力）：属 S2/S3（desktop 层搬移后），需系统行为测试，不能用配置表代替。**本任务未做。**

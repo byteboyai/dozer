@@ -239,3 +239,34 @@ Dozer 目前有 **六条** wry 构造路径，但真正的信任分界只有两�
 - **只抽零依赖机制。** 侦察后确认：建窗机制（`open_overlay`/`open_child_window`/`backdrop_card`）会把 `iced_wgpu`/`iced_widget`/`iced_renderer`/`winit` 与**渲染器类型**一起拉进 bytehost-desktop，与该 crate 刻意"不打开渲染器 feature、不改消费方 `iced_renderer` 类型"的约束直接冲突（`Cargo.toml:12-14`；这正是 R2 修复 `fbc3a636` 移除的 `iced_wgpu` 强绑）。且 `winit` 尚非其依赖，`winit::dpi::*`/`winit::Window` 类型会引入新依赖面。rail/pane 需要尚不存在的 `PanelId` 键控容器/拖拽/折叠 API；焦点路由整体以 `PanelKind` 为键。**故本轮只抽纯 `FocusTracker`**。
 - **决定：** bytehost-desktop `focus.rs`（`FocusTracker`/`focus_transition`，与产品无关，仅记聚焦历史）；Dozer 删私有副本并改引宿主类型。建窗、rail/pane、焦点路由三项**登记为兼容桥 C10/C11/C12**（`acceptance.md` §2），待 Task 21 收口或后续设计出 `PanelId` 键控 API 后再抽。
 - **实施结果（2026-10-12）：** bytehost `93b2ac3`（`focus.rs` + 注册/再导出）；dozer `239aa399`（删 `platform/overlay_focus.rs`，10 宿主改引 `bytehost_desktop::FocusTracker`）。验证见 ledger「Task 10 续」。
+
+## 11. Task 12 设计：共享应用服务的管理能力（公共 API 兼容记录）
+
+Task 03 `gates.md` 闸门 3 登记的两处 `AppService` 缺口 + 现场核实的第三项，落到 `bytehost-apps`。以下三组为新增/变更的公共 API，**均为追加式**（既有签名保持或改为兼容包装），wire 形状（`AppRequest`/`AppReply`）不动。
+
+### 11.1 同根服务所有者互斥（新增 `service_lock`）
+
+- **决定：** 用 `flock(2)` 而非 pid 文件。内核在持有者进程退出（含崩溃/kill）时自动释放 → 无需"陈旧锁"清理，也不会误判"还活着"；锁按打开文件描述归属，同进程另开 fd 再 `LOCK_EX|LOCK_NB` 同样失败 → 同进程双启动也挡住。
+- **公共面：** `service_lock::{ServiceLock::acquire(root) -> Result<Self, LockError>, LockError::{AlreadyOwned, Io}}`，`#[cfg(all(feature="server", unix))]`。
+- **契约：** `AppService::start` 保持"永不失败"——锁冲突与"端口被占/目录不可用"同路 → `State::Unavailable(reason)`，失败方**绝不**触碰第一方 gateway/进程。fd 显式 `O_CLOEXEC`（含 `fcntl` 双保险），spawn 的应用进程不继承锁。
+- **`Drop` 语义：** 显式 `LOCK_UN` 再关 fd。原因：`flock` 锁隶打开文件描述，`fork`→`exec` 窗口内被并发 `Command::spawn` 的子进程短暂共享，单靠 close 偶发不释放（实测复现，非计划项，见 ledger）。
+
+### 11.2 受控端口重置（新增，`AppService` 关联函数）
+
+- **决定：** 重置是"服务停着时改一个既定文件"的管理动作，做成**与数据根绑定**的关联函数，不新增 wire 请求（重置的前提是服务已停，wire 请求本身打不到活着的服务）。
+- **公共面：** `AppService::reset_port(root, requested) -> Result<u16, PortResetError>`、`clear_port(root) -> Result<(), PortResetError>`；`PortResetError::{ServiceRunning, OutOfRange, Io}`。
+- **契约：** 三步——占有权校验（取同一把锁，服务在跑即 `ServiceRunning`）→ 原子持久化（复用 `port::persist_port`，临时文件 + rename）→ 返回新端口；写失败时旧 `gateway.json` 原样保留（可恢复）。**只改 `<root>/gateway.json`**，不暴露任意写内部文件。`clear_port` 用于"忘掉坏端口、下次重选"。规格式重试/重启流程（撤 Surface、说明 origin 影响、确认、重启）由 Task 13 app-host 编排。
+
+### 11.3 可观察 shutdown（保留兼容入口）
+
+- **决定：** 不改 `shutdown()` 的 `()` 签名（否则现有调用方 `apps.shutdown().await;` 会因 unused `Result` 在 `-D warnings` 下报错）；改为在其旁新增可观察入口。
+- **公共面：** `shutdown_reporting() -> Result<ShutdownReport, ShutdownError>`、`shutdown_reporting_within(timeout)`；`ShutdownReport{app_failures: Vec<(AppId, String)>, problems: Vec<(String, String)>, gateway_released: bool}`（含 `is_clean()`）、`ShutdownError::{TaskFailed, TimedOut, GatewayNotReleased}`、常量 `AppService::SHUTDOWN_TIMEOUT`（30s）。
+- **契约：** `shutdown()` 是 `shutdown_reporting()` 的日志包装；超时/收尾 panic 也**必释放所有者锁**（否则进程退出后数据根再起不来），遗留子进程交由下次启动的孤儿回收（按进程身份核对，不信可复用的 PID）兜底。测试以返回结构证明，不靠日志推断。
+
+### 11.4 孤儿回收（已实现，只验证）
+
+- `process/supervise.rs` `reap_orphan` 已按命令行 + `lstart` + 进程组组长三重比对；测试 `orphans_are_matched_by_start_time_and_never_by_a_bogus_or_non_leader_pid`（`:676`）覆盖起始时间不符 / 伪造 PID（0、1、`u32::MAX`）/ 非组长 PID，故障场景仅针对测试自建的 `sleep` 进程组。**零代码改动。**
+
+### 11.5 提交切片
+
+`ccb32a8` 互斥 → `b332684` 管理接口 → `7daa064` 退出观测 → `3ab1c34` 锁释放修正(B)。
