@@ -837,6 +837,18 @@
 
 
 
+### 切片 8 — C10 原生浮层建窗机制上收:设计成稿(待裁决,未实现)
+
+- **动机 / 桥:** **C10**(`acceptance.md:48`):原生浮层建窗/渲染机制(`overlay_window.rs`/`overlay_gpu.rs`/`toast_overlay.rs`)上收 `bytehost-desktop`,届时 `R-OVERLAY-DUP`(新门禁)归零。
+- **障碍(核心约束):** `bytehost-desktop` 刻意不绑渲染器 feature(iced 只 `default-features=false` + `tokio`,R2 修复 `fbc3a636`)且**不依赖 winit**。整体搬迁必然给 desktop 加 `iced_wgpu`/`iced_winit`/`winit`,改变其依赖性质。
+- **成稿:** `docs/superpowers/specs/2026-10-12-c10-overlay-windowing-seam-design.md`(`1b1f858f`)。三文件拆分依据 + 方案 A(feature-gated 整搬)/B(只搬无渲染器依赖的一半:
+  建窗胶水 + 纯几何 + 鼠标穿透/圆角遮罩 + Toast 堆叠定位,`OverlayGpu` 留产品侧)/C(B 起步再续 A);**推荐 B 先行**,
+  `R-OVERLAY-DUP` 门禁无论 A/B 都先立(方案 B 基线为剩余数,方案 A/C 归零)。含落地 5 步与未决项。
+- **状态:** **设计待用户裁决**,未写实现代码。裁决点:是否要求 `R-OVERLAY-DUP` 完全归零(决定停 B 还是续 A/C)。
+- **未决项 / 阻塞:** C10 实现**阻塞于方案裁决**。**C10 落地后 Task 21 全部桥收口;之后进 Task 22(依赖钉版 + 独立构建/发布打包)。**
+
+
+
 ### 设计:C8 + C11 + C12 共同的"PanelId/Scope 键控"缺口(DONE — 设计待裁决)
 
 **背景。** 三个剩余桥(C8 请求身份路由、C11 rail/pane 容器、C12 焦点路由)共享同一根因:**Host 已有稳定中性身份(`bytehost_core::id::{PanelId,ScopeId,PanelInstanceId}`、`Layout/Rail{items:Vec<PanelId>}`、`PanelCatalog`),但产品从未把身份线程到面板运行时**。因此每处都退化成以产品 `PanelKind`/`project_id` 为键。核对结论:
@@ -855,7 +867,7 @@
 
 **为何一次设计而非三片:** C8 的"面板按 scope 路由"落地物就是 C11/C12 所需的"实例→区域/焦点"注册表;分三次会各造一套键控。**风险/未决:** ① home-pane `RailButton` 变体是否进通用控件;② `Side`/`maximized` 是否移入 `bytehost-core`;③ `RightPairSplit`(Agent/Conversations/Usage 轮转,`layout.rs:779`)无通用等价,留产品;④ 真窗像素回归受 Task 08 权限阻塞,只能靠现有几何单测(A4 部分)。**跨仓:** 均需 bytehost 侧新增(按 tag 发布),本地用 uncommitted patch 联调;正式 pin 归 Task 22。
 
-**状态:** 侦察与设计成稿;用户已裁决按此方向实现,建议顺序 **(1)+(2) 关 C8 → (3) 关 C12 → (4) 关 C11**。move (1)+(2) 的 C8 部分已成切片 3(`300c7dab`,见上);move (3) 的 C12 已成切片 4(`c80d443` + `fa9f37a2`,见上);move (4) 的 C11 已成切片 5(`3dad53e` + `b50b5ca0`,见上)。至此设计 move 1–4 全部落地;C9 已成切片 6(`17c0736` + `5669776c`,见上);C7 已成切片 7(`0f9ecc44` + `6ecadf22`,见上)但仅关"命名中立"(几何上收宿主经 Task 08 裁决不做)。任一实现片需独立提交+回归。
+**状态:** 侦察与设计成稿;用户已裁决按此方向实现,建议顺序 **(1)+(2) 关 C8 → (3) 关 C12 → (4) 关 C11**。move (1)+(2) 的 C8 部分已成切片 3(`300c7dab`,见上);move (3) 的 C12 已成切片 4(`c80d443` + `fa9f37a2`,见上);move (4) 的 C11 已成切片 5(`3dad53e` + `b50b5ca0`,见上)。至此设计 move 1–4 全部落地;C9 已成切片 6(`17c0736` + `5669776c`,见上);C7 已成切片 7(`0f9ecc44` + `6ecadf22`,见上)但仅关"命名中立"(几何上收宿主经 Task 08 裁决不做)。C10 已成切片 8 的**设计成稿**(`1b1f858f`,方案待裁决,未实现)。任一实现片需独立提交+回归。
 
 
 ## 提交记录
@@ -921,3 +933,4 @@
 | 21 | `5669776c` | Z | `refactor(host): adopt shared HoverSlot vocabulary (C9)` |
 | 21 | `0f9ecc44` | Z | `refactor(geometry): rename webview geometry helpers to neutral host-generic names (C7)` |
 | 21 | `6ecadf22` | Z | `chore(audit): add R-PREVIEW-NAMING gate for webview geometry naming (C7)` |
+| 21 | `1b1f858f` | Z | `docs(spec): C10 overlay windowing seam design note (pending decision)` |
