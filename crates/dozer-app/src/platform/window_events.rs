@@ -193,15 +193,12 @@ pub(crate) enum Runner {
         /// 标志位是自愈:没有物理按住左键,`maybe_confirm_tree_drag`
         /// 直接拒绝确认并顺手清掉任何残留的 `tree_drag`。
         left_mouse_down: bool,
-        /// 待应用的焦点意图(点击/消息设置,sync_previews 之后统一 apply,
-        /// 确保新建 webview 已入池)。一次性:apply 完就被 `.take()` 走。
-        pending_focus: Option<FocusIntent>,
-        /// 当前键盘焦点归属,跟 `pending_focus` 同一批地方一起设,但常驻
-        /// 不被消费——原生预览 tab(`iced-code-editor` 直接画在窗口里,
-        /// 不像旧 wry 预览那样有 OS 级 webview 抢走键盘)要靠这个字段
-        /// 才能在 `window_event` 的按键分发链里判断"键盘现在真的该给
-        /// 预览列,还是该给终端",见键盘路由那段注释。
-        current_focus: FocusIntent,
+        /// 键盘焦点去向路由(host 侧产品中立的 [`bytehost_desktop::FocusRouter`],
+        /// 键为产品业务意图 [`FocusIntent`])。内部同时承载"待应用的一次性意图"
+        /// 与"常驻的当前归属"——原来是 `pending_focus`/`current_focus` 两个字段,
+        /// 现由 host 统一管理,见兼容桥 C12。待处理意图在 `sync_previews`
+        /// 之后由 `apply_pending_focus` 统一消费(确保新建 webview 已入池)。
+        focus: bytehost_desktop::FocusRouter<FocusIntent>,
         /// 事件循环代理:webview IPC handler 用它把 `WebViewFocused` 送回
         /// UI 线程(winit 收不到子 webview 上的鼠标点击)。
         proxy: winit::event_loop::EventLoopProxy<Message>,
@@ -276,6 +273,19 @@ pub(crate) enum FocusIntent {
     Terminal,
 }
 
+impl FocusIntent {
+    /// 业务意图 → host 中立的焦点去向:`Terminal` 是"窗口本身",其余是
+    /// "某扇原生子视图"(键仍是产品 `FocusIntent`,由 `apply_pending_focus`
+    /// 的解算器解成 webview 句柄)。这是产品把业务键喂给 host `FocusRouter`
+    /// 的唯一转换点。
+    fn target(self) -> bytehost_desktop::FocusTarget<FocusIntent> {
+        match self {
+            FocusIntent::Terminal => bytehost_desktop::FocusTarget::Window,
+            other => bytehost_desktop::FocusTarget::Native(other),
+        }
+    }
+}
+
 /// 独立窗口弹窗的种类,给"开一个就关掉其它已开的"这条互斥规则用(见
 /// `docs/superpowers/specs/2026-09-18-overlay-window-shared-abstraction-
 /// design.md`「架构」第 2 节)。
@@ -345,8 +355,7 @@ impl Runner {
             cursor_phys,
             files_dragging,
             left_mouse_down,
-            pending_focus,
-            current_focus,
+            focus,
             ..
         } = self
         else {
@@ -520,8 +529,7 @@ impl Runner {
                     FocusIntent::Preview(kind) if app.preview_active_tab_is_native(kind)
                 );
                 app.blur_inputs(keep_native_preview_editor);
-                *pending_focus = Some(intent);
-                *current_focus = intent;
+                focus.set(intent.target());
                 window.request_redraw();
             }
             WindowEvent::MouseInput {
@@ -774,13 +782,13 @@ impl Runner {
         // 不再是旧版 wry 预览那种能抢走 OS 级键盘焦点的子视图)打开且
         // 键盘焦点确实在预览列时,同上一道闸门的道理放行——键盘事件走
         // 标准 iced 管线直达 `CodeEditor`,不再往下落进 ⌘ 快捷键/终端
-        // 转发分支。多了 `current_focus == Preview` 这层判断是因为原生
+        // 转发分支。多了 `current == Preview` 这层判断是因为原生
         // 预览不是模态弹层:用户切去终端敲字时,背景里开着的原生预览
         // tab 不该继续偷键盘(不加这层判断会把这类按键错误地拦在这里,
-        // 而不是送进终端)。`current_focus` 携带的 `PanelKind` 决定查
+        // 而不是送进终端)。当前焦点键携带的 `PanelKind` 决定查
         // `Files` 还是 `Project` 那个 `PreviewPane`——此前恒查 Files,
         // Project 预览面板里的原生编辑器 tab 一直收不到键盘。
-        if let FocusIntent::Preview(kind) = *current_focus
+        if let Some(FocusIntent::Preview(kind)) = focus.current_native().copied()
             && app.active_preview_tab_has_native_editor(kind)
         {
             // 原生预览闸门内的应用级快捷键:原生编辑器/Find 输入框都是真 iced
@@ -2158,8 +2166,7 @@ impl Runner {
             app,
             window,
             cursor_phys: _,
-            pending_focus,
-            current_focus,
+            focus,
             clipboard,
             browser_webviews,
             webviews,
@@ -2175,21 +2182,18 @@ impl Runner {
             message,
             Message::PreviewOpenPath(_) | Message::PreviewSelectTab(_)
         ) {
-            *pending_focus = Some(FocusIntent::Preview(PanelKind::Files));
-            *current_focus = FocusIntent::Preview(PanelKind::Files);
+            focus.set(FocusIntent::Preview(PanelKind::Files).target());
         } else if matches!(
             message,
             Message::ProjectPreviewOpenPath(_) | Message::ProjectPreviewSelectTab(_)
         ) {
-            *pending_focus = Some(FocusIntent::Preview(PanelKind::Project));
-            *current_focus = FocusIntent::Preview(PanelKind::Project);
+            focus.set(FocusIntent::Preview(PanelKind::Project).target());
         } else if matches!(
             message,
             Message::Browser(crate::extensions::browser::Message::OpenUrl(_))
                 | Message::Browser(crate::extensions::browser::Message::SelectTab(_))
         ) {
-            *pending_focus = Some(FocusIntent::Browser);
-            *current_focus = FocusIntent::Browser;
+            focus.set(FocusIntent::Browser.target());
             // 没经过鼠标点击的 `blur_inputs()`,原生预览编辑器不会自己
             // 让出焦点——见 `App::blur_preview_editors` 的说明。
             app.blur_preview_editors();
@@ -2200,8 +2204,7 @@ impl Runner {
                 | Message::TabAttached(_, _, _, _, _)
                 | Message::AgentPickerSelect(_)
         ) {
-            *pending_focus = Some(FocusIntent::Terminal);
-            *current_focus = FocusIntent::Terminal;
+            focus.set(FocusIntent::Terminal.target());
             app.blur_preview_editors();
         } else if let Message::AppWebViewFocused(id) = &message {
             // 应用 webview 拿到焦点:意图是"那个应用面板的 webview"(池里的 id 由槽号决定,见
@@ -2210,8 +2213,7 @@ impl Runner {
                 Some(slot) => FocusIntent::Preview(PanelKind::App(slot)),
                 None => FocusIntent::Terminal,
             };
-            *pending_focus = Some(intent);
-            *current_focus = intent;
+            focus.set(intent.target());
             app.blur_preview_editors();
         } else if matches!(message, Message::WebViewFocused) {
             // 子 webview 上的 mousedown winit 收不到,JS 经 IPC 发来这条
@@ -2231,8 +2233,7 @@ impl Runner {
             } else {
                 FocusIntent::Terminal
             };
-            *pending_focus = Some(intent);
-            *current_focus = intent;
+            focus.set(intent.target());
             // `WebViewFocused` 恒是某个 wry webview 收到了焦点(原生
             // `iced-code-editor` tab 走的是另一条渲染路径,不会发这条
             // 消息)——不管 `intent` 落在 Preview 还是 Browser,收到焦点
@@ -2346,8 +2347,7 @@ impl Runner {
                 app.update(Message::Search(
                     crate::extensions::search::Message::SearchClose,
                 ));
-                *pending_focus = Some(FocusIntent::Preview(PanelKind::Files));
-                *current_focus = FocusIntent::Preview(PanelKind::Files);
+                focus.set(FocusIntent::Preview(PanelKind::Files).target());
                 app.update(Message::PreviewOpenPath(hit.path));
                 window.request_redraw();
             }
@@ -2415,36 +2415,39 @@ impl Runner {
             window,
             webviews,
             browser_webviews,
-            pending_focus,
+            focus,
             ..
         } = self
         else {
             return;
         };
-        match pending_focus.take() {
-            Some(FocusIntent::Preview(kind)) => match app.active_preview_webview_id(kind) {
-                Some(id) => {
-                    if let Some((view, _)) = webviews.get(&id) {
-                        let _ = view.focus(); // 返回 Result,忽略
-                    } else {
-                        window.focus_window();
-                    }
+        // 产品业务键 → 原生子视图句柄(webview id)。预览/浏览器分属两个池,
+        // 各自把 `FocusIntent` 解成池内 id;终端无原生子视图(返回 `None`,
+        // 由 router 回落窗口)。
+        let resolve = |intent: &FocusIntent| -> Option<u64> {
+            match intent {
+                FocusIntent::Preview(kind) => app.active_preview_webview_id(*kind).map(|id| id as u64),
+                FocusIntent::Browser => app.active_browser_webview_id().map(|id| id as u64),
+                FocusIntent::Terminal => None,
+            }
+        };
+        focus.apply(
+            resolve,
+            |id| {
+                let id = id as usize;
+                // 预览与浏览器各持一池,同一 id 只会命中其一(池 id 段不重叠)。
+                if let Some((view, _)) = webviews.get(&id) {
+                    let _ = view.focus(); // 返回 Result,忽略
+                    true
+                } else if let Some((view, _)) = browser_webviews.get(&id) {
+                    let _ = view.focus();
+                    true
+                } else {
+                    false
                 }
-                None => window.focus_window(),
             },
-            Some(FocusIntent::Browser) => match app.active_browser_webview_id() {
-                Some(id) => {
-                    if let Some((view, _)) = browser_webviews.get(&id) {
-                        let _ = view.focus();
-                    } else {
-                        window.focus_window();
-                    }
-                }
-                None => window.focus_window(),
-            },
-            Some(FocusIntent::Terminal) => window.focus_window(),
-            None => {}
-        }
+            || window.focus_window(),
+        );
     }
 
     /// 双击顶栏空白处缩放窗口(`Message::TopBarDoubleClick` →
@@ -3016,9 +3019,12 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 cursor_phys: winit::dpi::PhysicalPosition::new(0.0, 0.0),
                 files_dragging: false,
                 left_mouse_down: false,
-                pending_focus: None,
                 // 默认终端拿键盘,跟现状(启动时终端可打字)一致。
-                current_focus: FocusIntent::Terminal,
+                focus: {
+                    let mut f = bytehost_desktop::FocusRouter::default();
+                    f.set_current(FocusIntent::Terminal.target());
+                    f
+                },
                 proxy: proxy.clone(),
                 search_overlay: None,
                 file_history_overlay: None,

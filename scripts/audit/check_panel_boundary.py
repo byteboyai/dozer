@@ -9,6 +9,7 @@
 
 规则 R-PROTOCOL: extensions 下对 dozer_core::protocol 的引用次数(O7,基线 0)
 规则 R-CLIENT: extensions 下对 dozer_client 的引用次数(X0,只降不升;面板应经 dozer-services 的 trait 取数)
+规则 R-FOCUS-PRODUCT-KEYS: platform/window_events.rs 里业务焦点键 `FocusIntent` 的出现次数(C12,只降不升)
 
 用法:
   check_panel_boundary.py            对照基线检查,有文件的引用数上升(或新文件出现违规)则退出 1
@@ -113,6 +114,11 @@ PROTOCOL_RE = re.compile(r"\bdozer_core::protocol\b")
 # 只许降不许增。注释与字符串字面量不计。
 # 也数 `io.client()`:不写 crate 名也能经 PanelIo 拿到 Client(类型推断),同样算耦合。
 CLIENT_RE = re.compile(r"\bdozer_client\b|\bio\.client\(\)")
+# R-FOCUS-PRODUCT-KEYS(C12):焦点路由的产品键(业务 `FocusIntent`)在 window_events.rs 里的
+# 出现次数。C12 后**宿主的焦点机制**(待处理/当前去向字段与 apply 循环)已搬进
+# bytehost-desktop 的 `FocusRouter`;产品只保留"业务键 → 中立焦点去向"的映射与解算(这是
+# 允许的业务路由),故此计数**只许降不许增**——防止把 host 机制又摊回产品。
+FOCUS_PRODUCT_KEY_RE = re.compile(r"\bFocusIntent\b")
 
 
 def scan(files):
@@ -146,6 +152,10 @@ def scan(files):
             k = len(HOST_EXECUTOR_RE.findall(code))
             if k:
                 hit["R-HOST-EXECUTORS"] = k
+        if rel == "platform/window_events.rs":
+            k = len(FOCUS_PRODUCT_KEY_RE.findall(code))
+            if k:
+                hit["R-FOCUS-PRODUCT-KEYS"] = k
         n = len(PANE_PICK_RE.findall(edges.strip_comments(text)))
         if n:
             hit["R-PANE-PICK"] = n
