@@ -31,6 +31,10 @@
 
 **结论：闸门 2 成立为"缺失且已定位"，非"已解决"。** S6/S7 不得声称 Digger Usage 取数完成，除非 Task 20 落地真实账本。
 
+**Task 20 实施结果（2026-10-12）：** 真实账本已落地为业务 crate `digger-store`（`D/crates/store`）：`UsageLedger` 落盘 `<config>/digger/usage_ledger.json`、`run_id` 幂等、原子写；`LedgerUsageService` 实现 `UsageService`，读失败→`Unavailable`、确实为空→`Ok(空)`（**不搞恒空假实现**）。生产者 = 一次经真实 `Executor` 派发的用户发起应用操作（真实测量墙上时钟；**token 如实 0**，无 agent 运行时、不伪造）。映射到既有 `UsagePayload`，**不连接 dozerd**。
+- `unavailable` 语义已满足：读失败/损坏走 `Unavailable`；确实无记录的"成功空集合"与"读失败"严格区分（集成测试钉住）。
+- **但 S6/S7 仍不宣布完成：** A17 由真实用户操作驱动，token 恒 0、代表应用操作而非 agent 会话；无**真实 token 承载**的 agent 运行时之前，S6/S7 保持未完成（计划 `:284` 口径）。
+
 ## 闸门 3（AppService 同根互斥、端口重置、退出错误可观测性是否够用）
 
 **调查结论：现有 AppService 在多数点上够用；"同根互斥/端口占用可观测"够用（带类别错误），但"退出错误可观测性"不足——`shutdown()` 返回 `()`，无法表达失败。需在 bytehost 增补受测接口。**

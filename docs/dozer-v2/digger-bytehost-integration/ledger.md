@@ -683,6 +683,22 @@
 
 ---
 
+## Task 20 — Digger 真实 Usage 数据闭环(计划 §Task 20 `:274-284`)
+
+- **目标（计划 §Task 20 `:274-284`）：** 若账本/生产者已有接查询,否则补最小真实任务完成事件→幂等持久记录→区间查询链路(按 Digger runtime 架构归属,不写进 Project 内容模型或 Host);写清文件/事件来源/去重键/单位时区/错误恢复;实现 `UsageService` 与 Task 19 其他数据接口,不存在的能力明确呈现(不假数/不恒空);真任务结束生成可查记录、重启仍在、重复不翻倍、两 scope 不串、读失败与成功空区分;同一 Usage 库注册进 Digger 用真实服务展示,fake 仅在测试/演示。
+- **范围裁决(用户已定,4 轮):** (a) 生产者范围=**新 digger-store 业务 crate + 真实执行器钩子**;(b) 共享库消费=**本地 patch 联调,Task 22 正式 pin**;(c) `UsageService` 位置=**业务 crate 实现,宿主适配层注入**;(d) 真实生产者身份=**一次经真实 Executor 派发的用户发起应用操作**(安装/启动/停止/卸载/回滚/运行时安装/卸载);记录**真实测量**墙上时钟;**token 如实 0**(无 agent 运行时,不伪造);只在真实用户操作触发。
+- **业务层 — 新 crate `digger-store`(DONE):** `crates/store/src/{lib,ledger,service,runner}.rs`。
+  - `UsageLedger`:落盘 `<config>/digger/usage_ledger.json`(形状 `{"runs":{run_id:{...}}}`)、原子写(临时+rename)、`run_id` 幂等 upsert;`load` 不存在→空、解析失败→`Corrupt`、I/O→`Io`。
+  - `LedgerUsageService`:实现 `dozer_services::UsageService`;`cwd` 精确匹配 `project_path` 隔离 scope;`since_ts` 为 Unix ms,过滤 `finished_ts_ms >= since_ts`;锁污染/读失败→`Unavailable`(非空结果)。
+  - `TaskRunner`/`RunningTasks`/`Clock`:在途运行登记(键 = ticket sequence),`finish` 以新时刻为结束时刻结算成 `CompletionEvent`(真实测量)。
+  - **门禁:** `scripts/check-host-deps.sh` EXIT=0(`digger-store` 属业务前缀、**不依赖 `bytehost-*`**)。
+- **宿主适配层 — `crates/desktop/src/adapters/{mod,usage}.rs`(DONE):** `UsagePanel` 持库 `WorkspaceState` + 注入 `Arc<dyn UsageService>` + scope 路径 + 可选运行时句柄 + 回流 `mpsc`;`activate()` 构造库 `ActivationCtx`(注入 `NoGitStats`,`emit` 投回通道);`impl PanelDisplay<Msg>`(agent 一律公共 `Bot` + 主题 `dim` 色,面板头 byteui 原语拼接);`receiver_stream` 供组合根接成 `Task::stream`。
+- **组合根 — `product.rs`/`apps/mod.rs`(DONE):** 构造唯一共享 `Arc<Mutex<UsageLedger>>`(载入损坏→回落空账本 + `boot_note` 提示,不 panic);`LedgerUsageService` 注入 `UsagePanel`;`AppsState::attach_usage` 共享同账本同 scope;`dispatch` 用 `run_install_traced` 对用户动作 `begin_usage_for`、`deliver` 的 `Outcome::Install` 在 `accept(ticket)` 后 `settle_usage_for(ticket.sequence)`;注册 `digger.usage` 面板 + `ActivePanel::Usage` + `Msg::Usage`;`boot()` 挂运行时句柄与 usage 回流流。
+- **验证:** `cargo test -p digger-store` **15 passed**;`cargo test -p digger-desktop` **41 passed**(含 5 个新集成测试:真实事件→真实服务可查 / 重启仍可查 / 重复不双记 / 两 scope 不串 / 读失败≠空);`cargo clippy -p digger-store -p digger-desktop --all-targets` 无警告;`cargo fmt --check` ok;`cargo build --workspace` 全绿;`check-host-deps.sh` EXIT=0。
+- **偏差 / 发现:** dozer 远端尚无含 `dozer-panel-usage` 的 revision(`origin/main` = `ca0a279e`,`main` 领先 154 提交,`c3d57928` 不在远端),故 Digger 对 dozer 依赖走 **bare git + 本地 uncommitted `[patch]`** 联调;正式 pin 归 Task 22。`digger-store` 命中 cargo `patch not used` 警告(属预期:该 crate 不直接依赖 `dozer-panel-usage`)。
+- **未决项 / 阻塞:** **A17** 由真实用户发起的应用操作驱动(非测试插入),但 token 如实为 0、代表应用操作而非 agent 会话——无真实 token 承载的 agent 运行时,**S6/S7 保持未完成**(计划 `:284`)。dozer 固定 revision(计划 Task 19 第 6 条)仍阻塞,归 Task 22。
+
+
 ## 提交记录
 | Task | 提交 | 仓库 | 说明 |
 |---|---|---|---|
@@ -725,3 +741,9 @@
 | 19 | `d2fd25cc` | Z | `feat(panel-usage): extract shared Usage panel library (Task 19 stage 1)` |
 | 19 | `4f2ce8be` | Z | `refactor(panel-usage): move usage-content bundle into shared crate (Task 19 stage 2)` |
 | 19 | `df0f0e59` | Z | `refactor(panel-usage): wire Dozer onto shared Usage panel library (Task 19 stage 3)` |
+| 19 | `9d0b7278` | Z | `docs(integration): record Task 19 shared Usage panel extraction (stages 1-2)` |
+| 19 | `c3d57928` | Z | `docs(integration): record Task 19 stage 3 commit hash in ledger` |
+| 20 | `a4c0e5a` | D | `feat(store): introduce digger-store business crate for task usage ledger` |
+| 20 | `f529b72` | D | `feat(app-host): expose request ticket from run_install_traced` |
+| 20 | `8daf437` | D | `feat(usage): connect Digger task usage to shared panel` |
+| 20 | `09111352` | Z | `docs(integration): record Task 20 Digger task usage loop (api-decisions §14)` |
