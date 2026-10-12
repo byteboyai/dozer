@@ -54,6 +54,15 @@ const BUILTIN_NAMES: [(PanelKind, &str); 12] = [
     (PanelKind::CodeHealth, "CodeHealth"),
 ];
 
+/// 落盘 token(`"Files"` 等)→ 内置 `PanelKind`。应用面板(`app:`)不走这里。
+/// 与 `BUILTIN_NAMES` 同源,供布局兼容桥复用,避免第二份真相。
+pub(crate) fn builtin_kind_by_token(token: &str) -> Option<PanelKind> {
+    BUILTIN_NAMES
+        .iter()
+        .find(|(_, n)| *n == token)
+        .map(|(k, _)| *k)
+}
+
 impl Serialize for PanelKind {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         match self {
