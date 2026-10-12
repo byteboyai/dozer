@@ -190,6 +190,44 @@
 
 ---
 
+## Task 07 — bytehost-desktop 窗口壳与产品回调
+
+- **状态：** DONE
+- **输入 revision：**
+  - B `4c4d748`（Task 05 之上）
+  - 计划 §Task 07 `:116-125`；规格 §4/§5；Task 02 决策 `api-decisions.md`（窗口入口、泛型契约）
+  - 参考实现：`D/spike/editor-host`（真实 iced 窗口 + wry，ADR-001）、`B/spike/desktop-contract`（双产品类型编译探针）
+- **输出 revision：** B `4a8dba0` `feat(desktop): add reusable shell and product callbacks`
+- **产出文件：**
+  - `B/crates/bytehost-desktop/{Cargo.toml,src/lib.rs,src/shell.rs,src/panel.rs,src/dispatch.rs,examples/minimal.rs,tests/product_contract.rs}`
+  - `B/crates/bytehost-core/src/geometry.rs`（新增 `Insets`/`LogicalRect`/`host_rect`）+ `lib.rs` 导出
+  - `B/Cargo.toml`（workspace 依赖加 `bytehost-core` path）
+  - `B/scripts/check-deps.sh`（desktop 组 objc2 误禁修正）
+- **运行命令与退出码：**
+
+| 仓库 | 命令 | 退出码 | 结果 |
+|---|---|---|---|
+| B | `cargo test -p bytehost-core` | 0 | 41 通过（含新增 geometry 3） |
+| B | `cargo test -p bytehost-desktop` | 0 | 15 通过（6 单测 + 6 dispatch/panel + 3 product_contract） |
+| B | `cargo test --workspace --all-features` | 0 | 全通过 |
+| B | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | 干净 |
+| B | `cargo fmt --all --check` | 0 | 干净 |
+| B | `bash scripts/check-deps.sh` | 0 | 通过（desktop 组已自动纳入并校验） |
+| B | `bash scripts/check-deps.sh --self-test` | 0 | 两处变异仍被拦下；恢复即通过 |
+| B | `SELFTEST=1 cargo run -p bytehost-desktop --example minimal` | 0 | 真实窗口示例启动并自退（无 panic） |
+- **结果：**
+  - `bytehost-desktop` 提供**框架壳**，产品以泛型消息 `M` + 回调接入：`HostMessage<M>`（仅 `Product(M)` / `Surface(事件)` 两类，业务命令不进宿主 enum）、`Product<M>` trait（`update`/`view`/`on_activated`/`on_closed`）、`route_lifecycle`。
+  - `panel` 模块实现 Task 02 锁定的入口：`window::run` + `build_as_child` 建 wry 子视图、非 `Send` 句柄 thread_local、`set_bounds`/`evaluate`/`destroy`；创建失败经 `ChildBuilt.result=Err` 回传，不 panic。
+  - `dispatch` 提供 `TokioExecutor`（`BackgroundExecutor`）与 `ProxyEmitter`（iced `futures::channel::mpsc::Sender`，`Send+Clone`），接 core `run_scoped` 的**派发前**身份校验。
+  - `bytehost-core` 补 `geometry`（`host_rect` 顶部条下推，纯函数，无 iced 依赖）。
+  - 双消费者夹具 `tests/product_contract.rs`：两个不同产品消息类型 + 两个不同服务上下文类型实例化同一 Host 接口，均不引用 Dozer。
+- **偏差：**
+  - **门禁修正：** Task 04 的 desktop 组误禁 `objc2*`——`objc2` 是 wry/winit 在 macOS 的**传递**平台依赖，禁它等于禁 wry；规格 §67 的 desktop 白名单（iced/wry/byteui/core）并未禁平台绑定。本次从 desktop 组移除 `objc2*` 禁项，保留 `tauri*` 禁项，并更新脚本注释。apps/core 两组仍禁 objc2（它们不应出现 iced/wry，故传递也不会出现）。
+  - iced 0.14 的跨线程回灌通道是 `iced::futures::channel::mpsc::Sender`（非 `iced::task::Sender`）；`ProxyEmitter` 按此定形。
+- **未决项 / 阻塞：** 无。本任务只做机制，Surface 状态机与真实面板接入在 Task 08。
+
+---
+
 ## 提交记录
 
 | Task | 提交 | 仓库 | 说明 |
@@ -202,3 +240,4 @@
 | 04 | `972e461` | B | `feat(core): introduce product-neutral panel identities` |
 | 05 | `4c4d748` | B | `feat(core): preserve scoped writes and reject stale reads` |
 | 06 | `d9b90deb` | Z | `refactor(host): move service adapters to host_adapters and adopt core request identity` |
+| 07 | `4a8dba0` | B | `feat(desktop): add reusable shell and product callbacks` |
