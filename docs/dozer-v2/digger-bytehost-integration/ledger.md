@@ -318,6 +318,32 @@
 
 ---
 
+## Task 10 — 兼容桥 + 黄金样本(计划 §Task 10 `:151-162`)
+
+- **目标（计划 §Task 10 `:151-162`）：** 把 Dozer 历史布局迁移到共享 `Layout`;先存真实样本与黄金期望;产品提供"枚举 → 稳定 `PanelId`"映射与默认布局,宿主提供与产品无关的迁移流程(版本闸门 / 未知保留 / 原子落盘 + 备份)。
+- **范围裁决（用户批准,2026-10-12）：** 选"兼容桥 + 黄金样本"——**只抽取可移植的布局 DTO 映射**(Dozer 历史 `layout.json`/`rail_layout` → `bytehost-core::Layout`),配黄金样本、迁移前备份、未知更高版本拒绝、原子落盘。rail/pane 渲染与 focus/overlay **暂留 Dozer**,作为已记录、待逐条登记的兼容桥(clause 160:不把"文件搬走"当作行为验证;`chrome/rail.rs` 1444 行、`app/layout.rs` 1514 行与 `PanelKind`/`App`/`ShellState` 深度耦合,整块抽取有像素行为风险)。不做完整抽取/overlay 抽取,除非再获批准。
+- **规格依据:** §5.2 `:97-103`;`api-decisions.md` §9。
+
+**实现:**
+- **宿主侧通用流程(`bytehost-desktop/src/layout.rs`,新):** `trait LegacyPanelAdapter{ rails_from_legacy(&Value)->Vec<Vec<String>>; map_token(&str)->Option<PanelId>; default_rail_width()->f32 }`;`migrate_legacy_layout`(版本闸门:`schema_version > LAYOUT_SCHEMA_VERSION` → 拒绝;产品切栏 + 逐 token 映射;映射不出 `PanelId` 的历史 token 收进 `MigrationOutcome.retained`);`migrate_legacy_file`(缺失/损坏 → `Ok(None)`);`atomic_save_layout`(建目录;`<stem>.json.bak` 一次性备份;写 `.json.tmp` 再 `rename`);`reconcile_with_catalog`(序列化再走 core `Layout::load`,做钳制 + 未知摘进 `retained_unknown`)。`lib.rs` 注册模块与再导出;新增 `serde_json` 依赖。
+- **产品侧薄包装(`dozer-app/src/app/layout_compat.rs`,新):** `panel_id_for(PanelKind)->PanelId`(内置 → `dozer.<slug>`,`slug` 为小写 kebab;应用 → `PanelId::for_app(slot.id())`)、`builtin_for_panel_id`/`app_slot_for`/`panel_kind_for`(反向)、`token_to_panel_id`(历史 `"Files"`/`"app:<id>"` → 稳定 id)、`DozerLayoutAdapter`(切 `rail_layout.left/right`)、`default_layout(&RailLayout, width)`。`builtin_kind_by_token` 加在 `app/state.rs`,与 `BUILTIN_NAMES` 同源(避免第二份真相)。
+- **接线状态:** 本模块是计划 clause 160 的"Dozer 先以薄包装接入"步骤,**尚未接入 app 启动/落盘路径**(真实接入需真实窗口布局回归,单列后续提交),故模块级 `#![allow(dead_code)]` + 注释说明。
+
+**测试:**
+- bytehost `tests/layout_compat.rs`(8):假产品适配器(两栏 + `"Files"`/`"Usage"`/`"Agent"` token)钉住——`legacy_rails_translate_to_stable_ids`;`unknown_tokens_are_retained_not_dropped`;`newer_schema_version_is_rejected`;`non_object_legacy_is_rejected`;`migrate_file_missing_or_corrupt_yields_none`;`unknown_valid_ids_go_to_retained_unknown_via_catalog`;`atomic_save_writes_and_backs_up_once`(首次无备份、二次生成且保留旧内容、再存不覆盖);`empty_and_single_rail_legacy_is_legal`。
+- dozer `app/layout_compat.rs` 内嵌黄金样本(7):`golden_current_layout_json_maps_builtin_rails_in_order`(现役双栏形状 → `dozer.*` 顺序保持);`golden_app_token_maps_to_app_namespace`;`golden_legacy_dims_only_yields_empty_rails`(老尺寸字段被忽略、缺 `rail_layout` 退化空栏);`golden_newer_schema_is_rejected`;`golden_unknown_token_is_retained`;`panel_id_and_kind_round_trip_for_all_builtins`;`default_layout_mirrors_default_rail_order`。
+
+**验证:**
+- bytehost:`cargo fmt --all` 干净;`cargo clippy --workspace --all-features --all-targets -- -D warnings` 干净;`cargo test --workspace --all-features` 全绿(含 layout_compat 8 通过);`scripts/check-deps.sh` ok。
+- dozer:`cargo fmt -p dozer-app` 干净;`cargo clippy -p dozer-app --all-targets` 干净(仅两条预存在 `agent_token_share`/`GitProvider::ALL` 未用告警);`cargo test -p dozer-app --bin dozer`:**2025 通过 / 1 预存在失败**(`extensions::files::tests::delete_confirm_spec_reflects_pending_target`,非本次改动);layout_compat 子集 7 通过。
+- 边界门禁 `scripts/audit/check_panel_boundary.py`:仅预存在 `app/app.rs: R-HOST-EXECUTORS 0 -> 1`。
+
+- **提交:** `f3edcef` feat(desktop): migrate legacy layouts to stable Layout (B);`a152a51d` feat(app): compat bridge from legacy Dozer layout to shared Layout (Z)
+- **偏差:** 模块暂未接线(见上);rail/pane 渲染与 focus/overlay 抽取留待后续兼容桥条目。
+- **未决项 / 阻塞:** 真实样本已以黄金单测固定但尚未接入真实读盘路径;整体验收仍受 Task 08 真实窗口人工确认阻塞。
+
+---
+
 ## Review 修复 (2026-10-12, R1–R7)
 
 > 来源：`review-2026-10-12-tasks-01-08.md`（快照 Dozer `b8ae6bb3` / bytehost `f4639bb`）。七项均经真实代码复核为**有效缺陷**（非误报）。修复顺序 R5/R6 → R4 → R2 → R3 → R1 → R7。
@@ -358,6 +384,8 @@
 | 08 | `f4639bb` | B | `fix(desktop): stop forcing iced renderer features on consumers` |
 | 08 | `5b940f11` | Z | `refactor(usage): route Usage content host through shared Surface` |
 | 09 | `9b7b5121` | Z | `refactor(codehealth): adopt shared surface lifecycle` |
+| 10 | `f3edcef` | B | `feat(desktop): migrate legacy layouts to stable Layout` |
+| 10 | `a152a51d` | Z | `feat(app): compat bridge from legacy Dozer layout to shared Layout` |
 | R3–R6 | `ba52c94` | B | `fix(core): harden Surface lifecycle, panel identity and request routing` |
 | R2 | `fc3a636` | B | `fix(desktop): make physical-slot replacement atomic and unregister occupant-checked` |
 | R7 | `2d924d9` | B | `fix(spike): SELFTEST must build the wry child and fail nonzero` |

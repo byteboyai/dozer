@@ -197,3 +197,39 @@ Dozer 目前有 **六条** wry 构造路径，但真正的信任分界只有两�
 - **CodeHealth 接入 Surface：** `extensions::codehealth::surface::CodeHealthSurface`；`WebviewPushState` 收敛为面板级降级（`waiting_since`/`failed`），ready/revision/去重/重建重发移入 Surface（9.4）。
 - **测试：** 9.5 三条全部落地——(1) `WebviewTrust::app_id_derives_application` 断言 `allows_custom_protocol()==false` + 既有 `build_app_webview` 源码扫描；(2) 既有 nonce 白名单源码扫描（`AppIpc::parse(`）；(3) `CodeHealthSurface::stale_generation_ipc_is_rejected_after_rebuild`。
 - **提交：** `9b7b5121`（Dozer）。
+- **漂移守卫：** `usage_probe::host::host_site_citations_point_at_the_code_they_name` 因本任务行号位移同步修正 7 处引用后通过。
+
+## 10. Task 10 设计：历史布局迁移的分工与范围
+
+### 10.1 范围裁决
+
+用户批准"兼容桥 + 黄金样本"：只抽取可移植的 **布局 DTO 映射**（Dozer 历史 `layout.json`/`rail_layout` → `bytehost-core::Layout`），含迁移前备份、未知更高版本拒绝、原子落盘。rail/pane 渲染与 focus/overlay **暂留 Dozer**，作为已记录、待逐条登记的兼容桥。理由：`chrome/rail.rs`（1444 行）与 `app/layout.rs`（1514 行）与 `PanelKind`/`App`/`ShellState` 深度耦合，整块抽取有像素行为风险；clause 160 明令不把"文件搬走"当作行为验证。
+
+### 10.2 决定 1：分工——产品给映射，宿主给流程（计划 clause 157）
+
+- **宿主（`bytehost-desktop::layout`）**：与产品无关的迁移机制——版本闸门、未知 token 保留、尺寸钳制、原子落盘 + 一次性备份。
+- **产品（`dozer-app::app::layout_compat`）**：`PanelKind` ↔ 稳定 `PanelId` 映射与默认栏序/栏宽。
+- **接缝 `LegacyPanelAdapter`**：`rails_from_legacy`（切产品历史 JSON 的栏 token）+ `map_token`（token → `PanelId`，`None` = 已下线）+ `default_rail_width`。宿主不解释任何产品 token。
+
+### 10.3 决定 2：稳定 id 命名
+
+- 内置面板 → `dozer.<slug>`，`slug` 为**小写 kebab**（`files`/`git-log`/`group-chat`/`code-health`…）。**不能用落盘 token**（PascalCase）：`PanelId` 只接受小写字母/数字/`-`/`_`，且每段以字母开头。
+- 应用面板 → `app:<validated-id>`（`PanelId::for_app`），沿用现有 `AppSlot::id` 形状。
+- 历史 token（`"Files"`、`"app:<id>"`）经 `token_to_panel_id` 翻译；`builtin_kind_by_token` 与 `state.rs::BUILTIN_NAMES` 同源，避免第二份真相。
+
+### 10.4 决定 3：未知保留的两层语义
+
+- 连 `PanelId` 形状都构不出（产品彻底不认识）→ 宿主 `MigrationOutcome.retained: Vec<String>`（原始 token，供提示）。
+- 是合法 `PanelId` 但当前目录未注册 → `Layout::retained_unknown`（由 `reconcile_with_catalog` / 真实读盘 `Layout::load` 摘取）。
+- 两者都不静默丢弃、不阻塞开窗。
+
+### 10.5 决定 4：接线分期
+
+薄包装先行（clause 160），**本提交不接入 app 启动/落盘路径**——真实接入需在真实窗口上做布局回归，单列后续提交。故模块级 `#![allow(dead_code)]` + 注释；黄金样本测试经 `#[cfg(test)]` 验证机制本身。
+
+### 10.6 实施结果（2026-10-12）
+
+- **bytehost（`f3edcef`）**：`bytehost-desktop/src/layout.rs`（`LegacyPanelAdapter`/`migrate_legacy_layout`/`migrate_legacy_file`/`atomic_save_layout`/`reconcile_with_catalog`）+ `tests/layout_compat.rs`（8 测试，假产品适配器）+ `lib.rs` 注册/再导出 + `serde_json` 依赖。
+- **dozer（`a152a51d`）**：`app/layout_compat.rs`（映射 + 黄金样本 7）+ `app/state.rs::builtin_kind_by_token` + `app/mod.rs` 注册。
+- **验证：** bytehost fmt/clippy(`-D warnings`)/全 workspace 测试/`check-deps.sh` 全绿；dozer fmt/clippy 干净、`cargo test -p dozer-app --bin dozer` 2025 通过 / 1 预存在失败、边界门禁仅预存在项。
+- **未决：** 真实读盘路径接线、rail/pane/focus/overlay 兼容桥登记。
