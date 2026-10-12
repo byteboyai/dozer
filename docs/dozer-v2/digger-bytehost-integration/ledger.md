@@ -354,6 +354,37 @@
 
 ---
 
+## Task 11 — Digger 正式 workspace 与桌面组合根(计划 §Task 11 `:164-174`)
+
+- **目标（计划 §Task 11 `:164-174`）：** 建 Digger 正式 workspace 与桌面组合根,接共享 Host + byteui;显式排除一次性 spike;注册产品信息/状态面板 + 应用区占位(明示未接服务);自有数据根/主题/布局保存/退出,**不复制** Dozer `App`/`Workspace`;建依赖门禁。
+- **规格依据:** §4 所有权 `:67-70`;§5.2 布局 `:97-103`;§6 Digger 应用平台 `:128+`;§8 S3 `:193`;§9 A1/A15/A16;ADR-001/011/012。
+
+**实现（Digger 仓库,新）：**
+- **根 workspace(`Cargo.toml`,`Cargo.lock`):** `members = ["crates/*"]`,`resolver = "3"`,edition 2024;`exclude` 显式列出全部 `spike/*`(各自带 `[workspace]`,不进生产锁文件)。`.gitignore` 排除 `/target`、`.cargo/config.toml`(本地兄弟目录 patch,不提交)、`.digger/`。
+- **`crates/desktop`(`digger-desktop`,bin `digger`):** 依赖 `bytehost-core`/`bytehost-desktop`(tag `v0.1.1`,本地 patch 兄弟目录)、`byteui`(tag `v0.4.1`)、`iced`/`wry`/`serde`/`tokio`/`directories`。
+  - `src/paths.rs`:独立产品数据根——`config_dir()` = `ai.byteboy.digger`(与 Dozer 的 `ai.byteboy.dozer` 不同),`bytehost_root()` = `<config>/digger/bytehost/`(ADR-011 / 架构 §6),`layout_path()`/`state_dir()`/`logs_dir()`;`ensure_data_root()` 启动建目录。
+  - `src/product.rs`:`ProductShell` 实现 `bytehost_desktop::Product<Msg>`,**无 Project 启动**;`PanelCatalog` 注册 `digger.info`/`digger.apps`(零 Surface 的纯 iced 面板);信息面板显示数据根/宿主根/无 Project/启动说明,应用区占位明确标注"服务尚未接通(Task 12/13)"、"不会伪造任何安装或运行能力";`DiggerLayoutAdapter` 实现 `LegacyPanelAdapter`(稳定 id 透传),`load_layout` 走 `migrate_legacy_file` + `Layout::load` 回落 `default_layout`;`atomic_save_layout` 退出时落盘;`boot()` 设 ByteBoy2077 主题(`color`/`font`)+ 确保数据根。
+  - `src/main.rs`:`iced::application(boot, update, view)`,产品消息经 `HostMessage<Product>` 包装进入宿主(证明产品消息不进宿主 enum)。
+- **`scripts/check-host-deps.sh`（新）：** 业务层 crate(`BUSINESS_PREFIX` 前缀)不得依赖 `bytehost-*`;宿主适配层白名单 `digger-desktop`/`digger-app-host`。当前仅 `digger-desktop` 存在,门禁审视 0 个业务 crate 并**打印 COVERAGE GAP**:领域/持久化/业务运行时 crate 尚未创建,新建后落入前缀即自动纳入。`--self-test` 在 `crates/_host_deps_probe` 注入一个依赖 `bytehost-core` 的 `digger-domain-probe`,断言门禁**必须失败**,移除后必须通过。
+
+**测试(`digger-desktop` 内嵌,9 通过):**
+- paths(5):`config_dir_ends_with_digger`;`config_dir_is_not_dozer`(A15);`bytehost_root_is_under_config`;`layout_path_is_under_config`;`state_and_logs_dirs_are_under_digger_root`。
+- product(4):`starts_without_project`(A16);`registers_product_panels`;`has_default_layout`;`layout_round_trips_through_adapter`。
+
+**验证:**
+- `cargo check -p digger-desktop`:干净。
+- `cargo test --workspace`:9 通过 / 0 失败。
+- `cargo clippy --workspace --all-targets -- -D warnings`:干净。
+- `cargo fmt --all -- --check`:干净。
+- `scripts/check-host-deps.sh`:ok;`--self-test`:ok(注入即失败、恢复即通过)。
+- **最小窗口手动运行:** `target/aarch64-apple-darwin/debug/digger` 启动 5s 保持运行、日志空(无 panic);数据根 `~/Library/Application Support/ai.byteboy.digger/{bytehost,logs}` 被创建,与 `ai.byteboy.dozer` 分离(A15)。
+
+- **提交:** `3072d62` feat(desktop): bootstrap Digger on bytehost shell (D)
+- **偏差:** 应用服务/app-host 未接(计划 Task 12/13);应用区为纯 iced 占位,不创建 wry 子视图(无 Surface 承载);`FocusTracker` 等浮层机制未引入(本壳无独立浮层窗口,避免未接线死代码)。
+- **未决项 / 阻塞:** 依赖门禁当前无业务 crate 可查(已记录 COVERAGE GAP);整体验收仍受 Task 08 真实窗口人工确认阻塞。
+
+---
+
 ## Review 修复 (2026-10-12, R1–R7)
 
 > 来源：`review-2026-10-12-tasks-01-08.md`（快照 Dozer `b8ae6bb3` / bytehost `f4639bb`）。七项均经真实代码复核为**有效缺陷**（非误报）。修复顺序 R5/R6 → R4 → R2 → R3 → R1 → R7。
@@ -398,6 +429,7 @@
 | 10 | `a152a51d` | Z | `feat(app): compat bridge from legacy Dozer layout to shared Layout` |
 | 10 | `93b2ac3` | B | `feat(desktop): extract product-neutral overlay focus tracker` |
 | 10 | `239aa399` | Z | `refactor(platform): use shared overlay focus tracker` |
+| 11 | `3072d62` | D | `feat(desktop): bootstrap Digger on bytehost shell` |
 | R3–R6 | `ba52c94` | B | `fix(core): harden Surface lifecycle, panel identity and request routing` |
 | R2 | `fc3a636` | B | `fix(desktop): make physical-slot replacement atomic and unregister occupant-checked` |
 | R7 | `2d924d9` | B | `fix(spike): SELFTEST must build the wry child and fail nonzero` |

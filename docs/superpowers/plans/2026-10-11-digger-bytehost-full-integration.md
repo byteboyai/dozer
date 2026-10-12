@@ -165,11 +165,11 @@
 
 **新增：**`D/Cargo.toml`、`Cargo.lock`、`crates/desktop/{Cargo.toml,src/main.rs,src/product.rs,src/paths.rs}`、`scripts/check-host-deps.sh`。
 
-- [ ] 明确 workspace members/exclude，让已有独立 spike 不被意外纳入生产工作区。
-- [ ] desktop 包名定为 `digger-desktop`，使用共享 Host + byteui；创建无 Project 也能启动的产品壳。
-- [ ] 注册一个产品信息/状态面板和应用区域占位；占位明确标示未接服务，不虚构写作功能。
-- [ ] 接独立产品数据根、主题、布局保存与退出；不能复制 Dozer App/Workspace。
-- [ ] 建依赖门禁：产品 Domain/持久化/业务 runtime 不依赖 bytehost；对尚未存在的 crate 记录覆盖缺口，新建后必须纳入。
+- [x] 明确 workspace members/exclude，让已有独立 spike 不被意外纳入生产工作区。
+- [x] desktop 包名定为 `digger-desktop`，使用共享 Host + byteui；创建无 Project 也能启动的产品壳。
+- [x] 注册一个产品信息/状态面板和应用区域占位；占位明确标示未接服务，不虚构写作功能。
+- [x] 接独立产品数据根、主题、布局保存与退出；不能复制 Dozer App/Workspace。
+- [x] 建依赖门禁：产品 Domain/持久化/业务 runtime 不依赖 bytehost；对尚未存在的 crate 记录覆盖缺口，新建后必须纳入。
 
 **验证：**`cargo check -p digger-desktop`、`cargo test --workspace`、最小窗口手动运行。提交 `feat(desktop): bootstrap Digger on bytehost shell`。
 
