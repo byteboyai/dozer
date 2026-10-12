@@ -22,11 +22,11 @@ use winit::window::{Window, WindowId};
 
 use crate::app::{App, Message};
 use crate::extensions::file_history;
-use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
 use crate::platform::overlay_window::{
     backdrop_card, centered_card_offset, full_window_overlay_bounds, open_child_window,
 };
+use bytehost_desktop::FocusTracker;
 
 dozer_core::scope!(LOG, module, "platform");
 

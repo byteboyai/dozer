@@ -15,11 +15,11 @@ use winit::window::{Window, WindowId};
 
 use crate::app::{App, Message};
 use crate::extensions::ssh;
-use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
 use crate::platform::overlay_window::{
     backdrop_card, open_overlay, popup_card_size, reposition_overlay,
 };
+use bytehost_desktop::FocusTracker;
 
 fn card_logical_size(window: &Window) -> LogicalSize<f32> {
     popup_card_size(window, 480.0)

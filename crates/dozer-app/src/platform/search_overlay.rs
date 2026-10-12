@@ -22,11 +22,11 @@ use winit::window::{Window, WindowId};
 
 use crate::app::{App, Message};
 use crate::extensions::search;
-use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
 use crate::platform::overlay_window::{
     backdrop_card, full_window_overlay_bounds, open_child_window,
 };
+use bytehost_desktop::FocusTracker;
 
 /// overlay 卡片的固定逻辑高度,对应现状 `search_modal` 的
 /// `max_height(640.0)`。宽度不固定,随主窗口宽度变化(整窗 40%,见
@@ -60,7 +60,8 @@ pub(crate) fn sync_action(search_open: bool, overlay_present: bool) -> SyncActio
 }
 
 /// 独立原生窗口宿主——`search_card()` 的独立渲染管线。`gpu`/`focus` 组合
-/// 了 `overlay_gpu`/`overlay_focus` 两个共享件(见
+/// 了 Dozer 的 `overlay_gpu` 与共享宿主的 `bytehost_desktop::FocusTracker`
+/// 两个共享件(见
 /// `docs/superpowers/specs/2026-09-18-overlay-window-shared-abstraction-
 /// design.md`「架构」第 1 节的取舍:不做一个泛型大一统类型包办一切)。
 pub(crate) struct SearchOverlay {

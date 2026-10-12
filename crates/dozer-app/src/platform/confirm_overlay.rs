@@ -16,11 +16,11 @@ use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
 use crate::app::Message;
-use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
 use crate::platform::overlay_window::{
     backdrop_card, open_overlay, popup_card_size, reposition_overlay,
 };
+use bytehost_desktop::FocusTracker;
 use byteui::feedback::dialog;
 
 /// 五个 confirm 形态弹窗的判别标签——只用来在 `sync_confirm_overlay` 里

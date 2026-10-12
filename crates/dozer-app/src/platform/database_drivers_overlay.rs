@@ -15,11 +15,11 @@ use winit::window::{Window, WindowId};
 
 use crate::app::{App, Message};
 use crate::extensions::database;
-use crate::platform::overlay_focus::FocusTracker;
 use crate::platform::overlay_gpu::OverlayGpu;
 use crate::platform::overlay_window::{
     backdrop_card, open_overlay, popup_card_size, reposition_overlay,
 };
+use bytehost_desktop::FocusTracker;
 
 /// 卡片逻辑尺寸——固定值,不随主窗口宽高缩放(设置/驱动列表内容量有限,
 /// 取舍同 `settings_overlay`/`search_overlay`)。
