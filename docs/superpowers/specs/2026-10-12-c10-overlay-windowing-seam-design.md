@@ -1,6 +1,6 @@
 # C10 设计注记：原生浮层建窗/渲染机制上收 bytehost-desktop 的接缝选择
 
-**状态：** 设计待裁决（未实现）。对应验收 `acceptance.md:48` 的 **C10** 行、任务列 `21`。
+**状态：** 已实现（方案 B；C10 的"完全归零"续做留待是否再做方案 A/C 的裁决）。对应验收 `acceptance.md:48` 的 **C10** 行、任务列 `21`。
 
 ## 1. 问题
 
@@ -119,9 +119,14 @@ C10 的目标：**把"建窗 + GPU 管线 + 遮罩"这三块机制抽进 `byteho
 
 ## 7. 未决项
 
-- **是否要求 `R-OVERLAY-DUP` 完全归零**（决定停 B 还是续 A/C）。
-- `OverlayGpu::open` 的抽法：泛型参数 vs `Box<dyn FnOnce(&Window, size, scale) -> G>`——倾向前者
-  （零成本），但会让 `open_overlay` 对 `G` 泛型化。
-- `backdrop_card*` 是否搬（依赖 `iced_widget`，desktop 已依赖其 widget feature，但需确认不连带 renderer）。
-- Toast 窗口的"点击穿透 + 不聚焦"语义（`set_cursor_hittest(false)` 等）搬进宿主后，宿主 API 是否要为它
-  单独留一个 `unfocused/passthrough` 变体（现状 `open_child_window_unfocused` 已是独立函数，倾向保留该形状）。
+### 7.1 落地记录(方案 B,已实现)
+
+- **bytehost `147285f`:** `bytehost-desktop/src/overlay.rs` 新增(Cargo.toml 加 `winit`/`raw-window-handle`/`objc2-app-kit`,**不**加渲染器 feature);`full_window_overlay_bounds`/`centered_card_offset`/`window_logical_size`/`popup_card_size`/`POPUP_WIDTH_FRACTION`/`BACKDROP_CORNER_RADIUS`/`open_child_window`/`open_child_window_unfocused`/`enable_overlay_mouse_moved_events`/`open_overlay<G>`/`reposition_overlay`/`stack_bounds`;7 个单测(3 几何 + 4 Toast 定位)。
+- **dozer `ea1202a0`:** `overlay_window.rs` 缩为薄壳(重导出宿主建窗/几何 + 保留 `backdrop_card*` + 两个注入 `OverlayGpu` 的包装);`toast_overlay.rs` 的 `stack_bounds` 改调宿主。新增 `R-OVERLAY-DUP` 门禁,基线 `platform/overlay_gpu.rs R-OVERLAY-DUP 3`(create_surface + 2× PostMultiplied,方案 B 有意保留产品侧)。
+- **验证:** bytehost `cargo test -p bytehost-desktop` 57+8+3+8 全绿、`check-deps.sh` ok;dozer build/`--tests` 绿、clippy 对两文件零告警、`cargo test -p dozer-app --bin dozer` 1968 passed / 1 failed(既有 WIP 漂移)、`check_panel_boundary.py` ok(216/6)、`check-log-scope.sh` ok。
+
+### 7.2 仍未决
+
+- **是否要求 `R-OVERLAY-DUP` 完全归零**（决定停 B 还是续 A/C 把 `OverlayGpu` 也上收——届时基线 3→0）。
+- `OverlayGpu::open` 的抽法已按泛型工厂落地(`open_overlay<G>`);`backdrop_card*`(依赖 `iced_widget`)按方案 B 留产品侧。
+- Toast 的"点击穿透 + 不聚焦"用独立的 `open_child_window_unfocused`(形状与原来一致)。
