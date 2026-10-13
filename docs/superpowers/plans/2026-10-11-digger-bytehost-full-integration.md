@@ -303,15 +303,17 @@
 
 **修改：**三仓库 Cargo/锁文件、CI；Digger `packaging/macos/`、`scripts/package-macos.sh`（新增）。
 
-- [ ] bytehost 完成测试后形成可发布提交，按会话授权发布新 tag；两个产品的所有 bytehost crate 使用同一 tag。
-- [ ] Usage 库与 model/services 固定同一兼容来源；干净 clone 不依赖本地 patch、兄弟目录或未提交资源。
-- [ ] 为 Digger 添加 macOS bundle、资源嵌入、产品标识与最小系统版本；构建 release，实际安装并冷启动。
-- [ ] 记录实际支持架构；签名/公证依环境凭据落实，未完成不能写成已分发发行版。
-- [ ] 用包含旧布局和旧应用数据的测试副本做升级/降级演练；未知格式拒绝覆盖，回滚不自动删除用户数据。
+- [x] bytehost 完成测试后形成可发布提交，按会话授权发布新 tag；两个产品的所有 bytehost crate 使用同一 tag。
+- [x] Usage 库与 model/services 固定同一兼容来源；干净 clone 不依赖本地 patch、兄弟目录或未提交资源。
+- [x] 为 Digger 添加 macOS bundle、资源嵌入、产品标识与最小系统版本；构建 release，实际安装并冷启动。
+- [x] 记录实际支持架构；签名/公证依环境凭据落实，未完成不能写成已分发发行版。
+- [x] 用包含旧布局和旧应用数据的测试副本做升级/降级演练；未知格式拒绝覆盖，回滚不自动删除用户数据。
 
 **验证：**A1/A18；发布包可显示 Web 内容与运行应用，退出无残留。未经实际发布的结果称候选包。提交 `build(digger): pin shared host and package desktop`。
 
-**实施进度（2026-10-12，本地部分）：** 用户裁决**本地打包 only**。已做清单第 3/4(部分)/5 条：修 release 构建(`iced` facade 加 `wgpu` feature,`iced_renderer` 缺后端 feature 会 `compile_error!`)、新增 `crates/desktop/packaging/macos/Info.plist`(`ai.byteboy.digger`,min macOS 12.0,本期无图标)与 `scripts/package-macos.sh`(单二进制 `Digger.app`,ad-hoc 签名候选包)、升级/降级/回滚三场景实机演练(隔离 HOME)全过,新增迁移单测。**未做第 1/2 条**(发布 bytehost tag、把 dozer 固定 revision pin 到远端)与签名:均需**远端写授权 / Developer ID 凭据**——bytehost 待发新 tag、dozer `origin/main` 落后 176 提交且无 `dozer-panel-usage`、本机 0 有效 codesigning 身份;故当前三仓仍经不提交的本地 `[patch]` 联调,**"干净 clone 不依赖 patch"目标未达成**。详见 ledger Task 22。
+**实施进度（2026-10-12，本地部分）：** 用户裁决**本地打包 only**。已做清单第 3/4(部分)/5 条：修 release 构建(`iced` facade 加 `wgpu` feature,`iced_renderer` 缺后端 feature 会 `compile_error!`)、新增 `crates/desktop/packaging/macos/Info.plist`(`ai.byteboy.digger`,min macOS 12.0,本期无图标)与 `scripts/package-macos.sh`(单二进制 `Digger.app`,ad-hoc 签名候选包)、升级/降级/回滚三场景实机演练(隔离 HOME)全过,新增迁移单测。详见 ledger Task 22。
+
+**实施进度（2026-10-13，远端补齐，用户授权）：** 补做第 1/2 条——bytehost `main` 推远端并打 annotated tag **`v0.2.0`**(`7f25d71`,28 提交含 C10 方案 C `overlay` feature);dozer `main` 推远端(`862421aa`,含 `dozer-panel-usage`)并追加 `67ab0e65` 全仓 bytehost 依赖 `v0.1.1 -> v0.2.0`;Digger 钉 bytehost tag + dozer revision `67ab0e65`,三仓本地 `[patch]` **已删**。干净解析构建通过:dozer `cargo build --workspace`、digger `cargo fetch`/`build --workspace`/`test --workspace`(全绿)/`check-host-deps.sh` ok,均**不依赖兄弟目录 patch**——**"干净 clone 不依赖 patch"目标达成,A1 发布层转 pass**。**唯余第 4 条签名阻塞**(0 有效 codesigning 身份,仅 ad-hoc 候选包)。提交:bytehost `7f25d71`+tag `v0.2.0`、dozer `862421aa`/`67ab0e65`、digger `71280a7`(该仓无远端,本地提交)。
 
 ### Task 23：最终验收与文档收口
 
@@ -326,6 +328,8 @@
 **产出：**可审查的最终验收报告。提交 `docs(integration): record Digger bytehost acceptance`。
 
 **实施进度（2026-10-12）：** 已跑 §4 全部可在本机执行的命令并出报告（`acceptance.md` §4）。判定 **pass 6 / partial 12**，硬缺口三处：**A1 发布层**（bytehost 未发 tag、dozer 未 pin revision，仍靠不提交 `[patch]`）、**A17 生产端**（真实生产者未跑，token 如实 0）、**A18 签名**（0 有效 codesigning 身份 → 仅 adhoc 候选包）。L3/L4 真机项因屏幕录制/辅助功能权限缺失 → not-run，并入 Task 08 人工项。**整体不标"完全接入"。** 跑批中修复 3 处真实回归：C5–C12 host 侧 `fmt` 违规（`cbb4719`）、`stack_bounds` 9 参数改 `ToastMetrics` 结构体（`b7183bb`/`8f479a81`）、C9 退役规则漏删陈旧单测（`8ff87cba`）；另补 digger `product.rs` fmt（`99ad282`）、修 bytehost README Digger 旧描述（`fe9373d`）。ADR-001/011 保持 Proposed。**主计划未完成**：Task 21 的 C10 完全归零（方案 A/C，待裁决）与 Task 22 远端部分（发 tag/pin/签名，待授权）为剩余未决项。
+
+**复评（2026-10-13）：** C10 方案 C 已落地（`R-OVERLAY-DUP` 3→0）；Task 22 远端部分已补齐（bytehost tag `v0.2.0`、dozer revision `67ab0e65`、三仓 `[patch]` 删除）。判定升为 **pass 7 / partial 11**，硬缺口剩两处：**A17 生产端**、**A18 签名**。ADR-001/011 仍保持 Proposed（A18 未过）。
 
 ## 4. 验证命令与运行边界
 

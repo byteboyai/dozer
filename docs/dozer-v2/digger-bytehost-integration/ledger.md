@@ -888,9 +888,9 @@
 **状态:** 侦察与设计成稿;用户已裁决按此方向实现,建议顺序 **(1)+(2) 关 C8 → (3) 关 C12 → (4) 关 C11**。move (1)+(2) 的 C8 部分已成切片 3(`300c7dab`,见上);move (3) 的 C12 已成切片 4(`c80d443` + `fa9f37a2`,见上);move (4) 的 C11 已成切片 5(`3dad53e` + `b50b5ca0`,见上)。至此设计 move 1–4 全部落地;C9 已成切片 6(`17c0736` + `5669776c`,见上);C7 已成切片 7(`0f9ecc44` + `6ecadf22`,见上)但仅关"命名中立"(几何上收宿主经 Task 08 裁决不做)。C10 已成切片 8 的**设计成稿**(`1b1f858f`)并按**方案 B 落地**(切片 9:`147285f` + `ea1202a0`)。任一实现片需独立提交+回归。
 
 
-## Task 22 — 固定依赖、独立构建与发布包(计划 §Task 22 `:302+`)— 本地部分 DONE,远端部分阻塞
+## Task 22 — 固定依赖、独立构建与发布包(计划 §Task 22 `:302+`)— DONE(本地 + 远端)
 
-- **范围裁决(用户已定):** **本地打包 only**——做计划清单第 3/4(部分)/5 条;第 1/2 条(发布 bytehost tag、把 dozer 固定 revision pin 到远端)需**远端写授权**,未做,见阻塞。
+- **范围裁决(用户已定):** 先做计划清单第 3/4(部分)/5 条(本地打包);**用户后续授权远端写**(2026-10-13),补做第 1/2 条(发布 bytehost tag、把 dozer 推远端并固定 revision)。仅第 4 条签名仍阻塞(无 Developer ID)。
 - **改动(digger `f718e76`):**
   - **release 构建修复:** `iced` facade 加 `wgpu` feature(`iced_renderer` 在 release 下无后端 feature 会 `compile_error!`);此前 Digger 仅声明 `iced_renderer`(default-features=false、无后端),故 **release 构建从未真正可用**。与 Dozer 同栈。
   - **打包:** 新增 `crates/desktop/packaging/macos/Info.plist`(`ai.byteboy.digger`、可执行 `digger`、`LSMinimumSystemVersion 12.0`、放开 ATS;**本期无图标**,不设 `CFBundleIconFile`;用户裁决)与 `scripts/package-macos.sh`(仿 Dozer `build-macos-app.sh` 的 JSON 取产物路径 + 整体 ad-hoc 重签 + `lsregister`)。Digger 为单二进制应用(无 dozerd/hook/mcp 兄弟),usage-content 等 web 资源树**尚未接通**故不打包。
@@ -907,10 +907,11 @@
   - `has_default_layout` 单测**非 hermetic**(直接读真实 `~/Library/.../digger` 配置根):演练污染该目录会让它失败。已恢复配置并改为**隔离 HOME** 复跑;该非 hermetic 属既有问题,未改(不在本任务范围)。
   - 打包需 `jq`(与 Dozer 一致)。
 - **未决项 / 阻塞:**
-  - **第 1 条(bytehost 发布 tag):** bytehost 领先 `v0.1.1` 若干提交(C5/C8/C9/C10/C11/C12 宿主侧 + Task 12 管理能力),需**发布新 tag**并两产品统一引用——**待会话授权**(计划 `:13`/`:306`)。当前三仓经**不提交的本地 `[patch]`** 联调。
-  - **第 2 条(dozer 固定 revision):** `origin/main`(`ca0a279e`)落后 **176 提交**且**不含 `dozer-panel-usage`**;Digger 对 dozer 的三个 crate 现走本地 patch。正式 pin 需**推送 dozer 到远端**——待授权。干净 clone 不依赖 patch 的目标**未达成**。
-  - **第 4 条(签名/公证):** `security find-identity -v -p codesigning` = **0 valid identities**;因无 Developer ID 凭据,**只能产出 ad-hoc 签名的候选包**,不得称"已分发发行版"。
+  - **第 1 条(bytehost 发布 tag):** ✅ **已完成(2026-10-13)**——bytehost `main` 推远端(`6fdca5d..7f25d71`),打 annotated tag **`v0.2.0`** 并推(28 提交:core 身份/Surface/请求身份/布局 DTO、desktop shell/执行器/焦点/rail-pane/浮层 + `overlay` feature、apps 受限 webview/服务单持有/数据存储清除、client 订阅转发退出)。两产品统一引用。
+  - **第 2 条(dozer 固定 revision):** ✅ **已完成(2026-10-13)**——dozer `main` 推远端(`ca0a279e..862421aa`,含 `dozer-panel-usage`),并追加提交 `67ab0e65` 把全仓 15 处 bytehost 依赖 `v0.1.1 -> v0.2.0`;Digger 对 dozer 三 crate 钉到 revision `67ab0e65`;三仓本地 `[patch]`(bytehost/dozer)已**删除**。**干净 clone 不再依赖 patch**——`cargo fetch`/`build --workspace` 从已发布 tag + revision 解析(bytehost `v0.2.0#7f25d71f`、dozer `67ab0e65`)。
+  - **第 4 条(签名/公证):** ❌ 仍阻塞——`security find-identity -v -p codesigning` = **0 valid identities**;因无 Developer ID 凭据,**只能产出 ad-hoc 签名的候选包**,不得称"已分发发行版"。
   - **第 3 条真实"安装"**:冷启动已做,但未做全系统范围的安装(拷贝到 `/Applications`);候选包范畴。
+- **远端写提交(2026-10-13):** bytehost `7f25d71`(main)+ tag `v0.2.0`;dozer `862421aa`、`67ab0e65`;digger `71280a7`(**无远端**,本地提交钉版)。
 
 
 ## Task 23 — 最终验收与文档收口(计划 §Task 23 `:316+`)— DONE

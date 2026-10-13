@@ -11,7 +11,7 @@
 
 | 编号 | 场景 | 验证层级 | 平台 | 所需夹具 | 状态 |
 |---|---|---|---|---|---|
-| A1 | 独立构建 Digger/Dozer：固定依赖可解析、无兄弟目录 patch、共享 Host 无产品依赖 | L1+L2 | macOS | Digger 正式 workspace（尚不存在）；bytehost tag；`scripts/check-deps.sh` 分组门禁 | Unmet |
+| A1 | 独立构建 Digger/Dozer：固定依赖可解析、无兄弟目录 patch、共享 Host 无产品依赖 | L1+L2 | macOS | Digger 正式 workspace（尚不存在）；bytehost tag；`scripts/check-deps.sh` 分组门禁 | Met（发布层）：bytehost `v0.2.0` tag + dozer revision `67ab0e65`，`[patch]` 已删，干净解析构建通过 |
 | A2 | 一个面板 + Host + fake 服务：真实显示/激活/关闭，不加载其他面板 | L2+L3 | macOS | `bytehost-desktop` + fake Services + 最小面板夹具 | Unmet |
 | A3 | 切 scope/关闭重建/乱序回包：错 scope、旧实例、旧请求结果不改变状态 | L1 | 跨平台 | core 请求身份测试（Task 05） | Unmet |
 | A4 | 旧布局迁移、单面板与空栏：Dozer 布局等价；Digger 布局不受固定清单约束 | L1+L2 | macOS | 旧落盘布局样本；`bytehost-core` 布局 DTO（Task 04） | Unmet |
@@ -76,11 +76,11 @@
 
 | 仓库 | HEAD | 说明 |
 |---|---|---|
-| `bytehost` | `fe9373d` | 本地；**未发新 tag**。最新 tag 仍为 `v0.1.1`（落后 `fe9373d` 24 提交）。DoD 的 C5–C12 host 侧改动均在此区间。 |
-| `dozer` | `8ff87cba` | 本地；`origin/main` = `ca0a279e`，**落后本仓 176 提交**且无 `dozer-panel-usage`。 |
-| `digger` | `99ad282` | 本地；新建 workspace 已固定 bytehost/dozer 的**本地 patch**（`.cargo/config.toml`，不提交），非 tag。 |
+| `bytehost` | `7f25d71` | **已推远端 + tag `v0.2.0`**（`6fdca5d..7f25d71`，28 提交）。C5–C12 host 侧与 C10 方案 C `overlay` feature 均在此区间。 |
+| `dozer` | `67ab0e65` | **已推远端**（`ca0a279e..862421aa`，含 `dozer-panel-usage`；再追加 `67ab0e65` 全仓 bytehost 依赖 `v0.1.1 -> v0.2.0`）。 |
+| `digger` | `71280a7` | 本地（**该仓无远端**）；已钉 bytehost `v0.2.0` tag + dozer revision `67ab0e65`，本地 `[patch]` 已删。 |
 
-> 三仓当前均经**不提交的本地 `[patch]`** 联调（`digger/.cargo/config.toml`、`dozer/.cargo/config.toml`）。A1「固定依赖可解析、无兄弟目录 patch」的**代码层证据已具备**（依赖闭包无产品依赖，见 4.2），但**发布层证据缺失**（见 A1 行）。
+> 三仓的 bytehost/dozer `[patch]` 已**删除**；`cargo fetch`/`build --workspace` 从已发布 tag（bytehost `v0.2.0#7f25d71f`）+ revision（dozer `67ab0e65`）解析。A1「固定依赖可解析、无兄弟目录 patch」的**代码层与发布层证据均已具备**（依赖闭包无产品依赖，见 4.2）；A1 判定见 4.6。
 
 ### 4.2 §4 命令执行结果（本机实跑）
 
@@ -118,6 +118,15 @@
 
 **Usage Web**（`crates/dozer-panel-usage/web/usage-content`）：`npm run typecheck` ✅ · `npm test` ✅ 14 passed · `npm run build` ✅ 产物无 git diff（提交资产与源一致）。
 
+**Task 22 远端 pin 后（2026-10-13，无任何本地 `[patch]`）**：
+
+| 命令 | 结果 |
+|---|---|
+| dozer `cargo build --workspace` | ✅ 从 tag `v0.2.0#7f25d71f` 解析，`Finished`（无 bytehost patch） |
+| digger `cargo fetch` / `cargo build --workspace` | ✅ 从 tag `v0.2.0` + revision `67ab0e65` 解析，`Finished` |
+| digger `cargo test --workspace` | ✅ 全绿（39/16/12/7/42/15，0 failed） |
+| digger `bash scripts/check-host-deps.sh` | ✅ ok（审视 1 个业务 crate） |
+
 ### 4.3 fmt 说明（dozer）
 
 `rustfmt --check` 对 `overlay_window.rs` 报 2 处 import 排序差异，**HEAD 版本同样报 2 处**（本次未增加）；`toast_overlay.rs` HEAD 本就 clean。dozer 仓库根无 `rustfmt.toml`，此为既有历史差异，非本次引入，按"只降不升"口径记录，未强行全仓重排（会混入用户 WIP）。
@@ -132,7 +141,7 @@
 
 | 编号 | 判定 | 依据 / 缺口 |
 |---|---|---|
-| A1 独立构建 | **partial** ⚠️ | 代码层：`check-deps.sh`（两仓）✅、desktop 组零产品依赖 ✅、依赖闭包可解析 ✅。发布层：**未发 bytehost tag、未 pin dozer revision**，三仓仍靠不提交 `[patch]` → 「干净 clone 不依赖 patch」**未达成**（Task 22 阻塞）。 |
+| A1 独立构建 | **pass** ✅ | 代码层：`check-deps.sh`（两仓）✅、desktop 组零产品依赖 ✅、依赖闭包可解析 ✅。发布层：bytehost **tag `v0.2.0`**（推远端）+ dozer revision `67ab0e65`（推远端）、三仓 `[patch]` 已删 → 「干净 clone 不依赖 patch」**达成**（2026-10-13，Task 22 远端补齐；`cargo fetch`/`build --workspace` 全绿）。 |
 | A3 请求身份 | **pass** ✅ | core 请求身份（Task 05/06）+ C8 收口（`RequestToken` 挂 core，`ScopedTrackers` 去产品包装）；`dozer-app` 全量单测含乱序/scope/实例重建语义通过。 |
 | A4 布局 | **partial** ⚠️ | `bytehost-core` 布局 DTO + Digger 迁移单测 + 旧布局黄金文件（Task 04/10）✅；「空栏真窗口」属 L4 人工，见 §3。 |
 | A5 Surface 生命周期 | **partial** ⚠️ | 状态机/旧 IPC 丢弃/实例代际（Task 08/09 L2）✅；真实 WKWebView 首帧/恢复快照（L3）受窗口服务器权限限制 → not-run（并入 §3 人工项）。 |
@@ -150,11 +159,11 @@
 | A17 真实 Usage | **partial** ⚠️ | Digger 用量账本迁移（Task 19/20）✅、Usage Web 14 测试 ✅；**真实生产事件→账本→UI、跨重启**未实跑 → not-run。**应用运行携带 token 诚实为 0 → S6/S7 仍不完整**（计划 `:284`）。 |
 | A18 发布包 | **partial** ⚠️ | Digger release 构建 ✅、候选包 `Digger.app`（`ai.byteboy.digger`, min-OS 12.0, arm64, adhoc-sign）冷启动/资源/退出演练 ✅（Task 22，隔离 HOME）；**无签名身份（0 有效 codesigning identity）→ 只能 ad-hoc 候选包，不是已分发发行版**；Dozer 发布包未在本次重跑。 |
 
-**合计：pass 6 · partial 12 · not-run 0（归入 partial 内的 not-run 项见 §3/§4.5 备注）。整体不标"完全接入"**——A1 发布层、A17 生产端、A18 签名三处硬缺口。
+**合计：pass 7 · partial 11 · not-run 0（归入 partial 内的 not-run 项见 §3/§4.5 备注）。整体不标"完全接入"**——A17 生产端、A18 签名两处硬缺口（A1 发布层已于 2026-10-13 补齐）。
 
 ### 4.6 未验项明确清单（不得标"完全接入"）
 
-1. **A1 发布层**：bytehost 未发 tag、dozer 未 pin revision；三仓依赖不提交 `[patch]`——需**远端写授权**。
+1. ~~**A1 发布层**：bytehost 未发 tag、dozer 未 pin revision；三仓依赖不提交 `[patch]`——需**远端写授权**。~~ ✅ **已完成（2026-10-13）**：bytehost tag `v0.2.0`、dozer revision `67ab0e65` 均推远端，`[patch]` 已删，干净解析构建通过。
 2. **A17 生产端**：真实 Usage 生产者事件→账本→UI→跨重启；应用运行 token 诚实为 0（S6/S7）。
 3. **A18 签名**：无 Developer ID（本机 0 有效身份）→ 仅 ad-hoc 候选包；未公证、未分发。
 4. **§3 真实窗口人工项（M1–M4）**：屏幕录制/辅助功能权限缺失，`screencapture` 与 Orca 辅助 App 均不可用 → 需人工在真实窗口执行。
@@ -163,7 +172,7 @@
 ### 4.7 ADR 与 README 收口
 
 - **bytehost README** 已修：Digger 消费者条目原写「**Tauri 宿主,嵌入待做**」——两处均错，改为「iced + wry 宿主,**进程内嵌入已实现**（本地候选）」，并注明 Tauri 方案已撤回（`fe9373d`）。
-- **Digger ADR-001 / ADR-011**：**保持 `Status: Proposed`**，未升 Accepted——按 Task 23「ADR 仅在其全部必需验证通过后标 Accepted」，而 A1 发布层与 A18 签名未过。ADR-001/011 正文本身已正确声明"不使用 Tauri"，无需改。Digger Technical Architecture §21 亦已写明"Tauri and React are not used"。
+- **Digger ADR-001 / ADR-011**：**保持 `Status: Proposed`**，未升 Accepted——按 Task 23「ADR 仅在其全部必需验证通过后标 Accepted」，而 **A18 签名**未过（A1 发布层已于 2026-10-13 补齐）。ADR-001/011 正文本身已正确声明"不使用 Tauri"，无需改。Digger Technical Architecture §21 亦已写明"Tauri and React are not used"。
 
 ### 4.8 新增公共 API / 剩余产品代码 / 兼容格式 / 回滚（总结）
 
