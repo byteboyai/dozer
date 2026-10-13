@@ -157,7 +157,7 @@
 | A15 两产品并行 | **partial** ⚠️ | 独立根/端口/存储逻辑（Task 18）✅；Dozer 与 Digger **同时运行**实机 → not-run。 |
 | A16 Project 隔离 | **partial** ⚠️ | 应用不进 Project 内容、无 Project 也能管理应用（逻辑/单测）✅；**Project 真实导出/移动**与无 Project 窗口实机 → not-run（用户裁决未跑）。 |
 | A17 真实 Usage | **partial** ⚠️ | Digger 用量账本迁移（Task 19/20）✅、Usage Web 14 测试 ✅；**真实生产事件→账本→UI、跨重启**未实跑 → not-run。**应用运行携带 token 诚实为 0 → S6/S7 仍不完整**（计划 `:284`）。 |
-| A18 发布包 | **partial** ⚠️ | Digger release 构建 ✅、候选包 `Digger.app`（`ai.byteboy.digger`, min-OS 12.0, arm64, adhoc-sign）冷启动/资源/退出演练 ✅（Task 22，隔离 HOME）；**无签名身份（0 有效 codesigning identity）→ 只能 ad-hoc 候选包，不是已分发发行版**；Dozer 发布包未在本次重跑。 |
+| A18 发布包 | **partial** ⚠️ | Digger release 构建 ✅、候选包 `Digger.app`（`ai.byteboy.digger`, min-OS 12.0, arm64, adhoc-sign）冷启动/资源/退出演练 ✅（Task 22，隔离 HOME）；**无 Developer ID Application 证书（2026-10-13 诊断：仅有过期 Apple Development 证书与中间 CA）→ 只能 ad-hoc 候选包，不是已分发发行版**；用户裁决不申请 Developer ID；Dozer 发布包未在本次重跑。 |
 
 **合计：pass 7 · partial 11 · not-run 0（归入 partial 内的 not-run 项见 §3/§4.5 备注）。整体不标"完全接入"**——A17 生产端、A18 签名两处硬缺口（A1 发布层已于 2026-10-13 补齐）。
 
@@ -165,7 +165,7 @@
 
 1. ~~**A1 发布层**：bytehost 未发 tag、dozer 未 pin revision；三仓依赖不提交 `[patch]`——需**远端写授权**。~~ ✅ **已完成（2026-10-13）**：bytehost tag `v0.2.0`、dozer revision `67ab0e65` 均推远端，`[patch]` 已删，干净解析构建通过。
 2. **A17 生产端**：真实 Usage 生产者事件→账本→UI→跨重启；应用运行 token 诚实为 0（S6/S7）。
-3. **A18 签名**：无 Developer ID（本机 0 有效身份）→ 仅 ad-hoc 候选包；未公证、未分发。
+3. **A18 签名**：**无 Developer ID Application 证书可用**——本机诊断（2026-10-13）：Apple ID `chrischiang@live.cn` / Team `38K4BYSQTE` 已登录，但 keychain 内仅有 ①Apple 的 *Developer ID Certification Authority* 中间 CA（不可用于签名）与 ②已**过期**的 *Apple Development: Chuan Jiang*（`notAfter 2023-01-17`），`security find-identity -v -p codesigning` = **0**。用户裁决**不申请 Developer ID**（需付费 Apple Developer Program）→ 维持 ad-hoc 候选包，**不公证、不分发**；`package-macos.sh` 保持 ad-hoc-only 设计（`codesign --force --deep --sign -`，脚本注释已声明需真实身份与凭据方为发行版）。
 4. **§3 真实窗口人工项（M1–M4）**：屏幕录制/辅助功能权限缺失，`screencapture` 与 Orca 辅助 App 均不可用 → 需人工在真实窗口执行。
 5. **L3 真实 WKWebView 项**：A5/A6/A7(显示交互)/A9/A10/A11/A12/A13/A14/A15/A16 的真机探针 → 无 GUI runner，移交可用 macOS 环境。
 

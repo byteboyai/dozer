@@ -909,7 +909,7 @@
 - **未决项 / 阻塞:**
   - **第 1 条(bytehost 发布 tag):** ✅ **已完成(2026-10-13)**——bytehost `main` 推远端(`6fdca5d..7f25d71`),打 annotated tag **`v0.2.0`** 并推(28 提交:core 身份/Surface/请求身份/布局 DTO、desktop shell/执行器/焦点/rail-pane/浮层 + `overlay` feature、apps 受限 webview/服务单持有/数据存储清除、client 订阅转发退出)。两产品统一引用。
   - **第 2 条(dozer 固定 revision):** ✅ **已完成(2026-10-13)**——dozer `main` 推远端(`ca0a279e..862421aa`,含 `dozer-panel-usage`),并追加提交 `67ab0e65` 把全仓 15 处 bytehost 依赖 `v0.1.1 -> v0.2.0`;Digger 对 dozer 三 crate 钉到 revision `67ab0e65`;三仓本地 `[patch]`(bytehost/dozer)已**删除**。**干净 clone 不再依赖 patch**——`cargo fetch`/`build --workspace` 从已发布 tag + revision 解析(bytehost `v0.2.0#7f25d71f`、dozer `67ab0e65`)。
-  - **第 4 条(签名/公证):** ❌ 仍阻塞——`security find-identity -v -p codesigning` = **0 valid identities**;因无 Developer ID 凭据,**只能产出 ad-hoc 签名的候选包**,不得称"已分发发行版"。
+  - **第 4 条(签名/公证):** ❌ 仍阻塞——`security find-identity -v -p codesigning` = **0 valid identities**;本机诊断(2026-10-13):Apple ID `chrischiang@live.cn`/Team `38K4BYSQTE` 已登录,但 keychain 仅有 ①Developer ID **CA**(中间证书)与 ②已**过期**的 Apple Development 证书(`notAfter 2023-01-17`)。**用户裁决不申请 Developer ID**→ 只能产出 ad-hoc 签名的候选包,不得称"已分发发行版"。
   - **第 3 条真实"安装"**:冷启动已做,但未做全系统范围的安装(拷贝到 `/Applications`);候选包范畴。
 - **远端写提交(2026-10-13):** bytehost `7f25d71`(main)+ tag `v0.2.0`;dozer `862421aa`、`67ab0e65`;digger `71280a7`(**无远端**,本地提交钉版)。
 
