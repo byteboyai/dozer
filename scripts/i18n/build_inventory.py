@@ -119,8 +119,23 @@ NON_UI_STRINGS = {
 # 相关面板任务处理;这里统一标为排除理由,"UI 文案"仍由面板/宿主边界决定。
 BACKEND_REASON = "后端 crate 非 UI 字符串(错误/协议/日志);如经服务边界展示给用户,由 Task 07 适配稳定 code + 本地化摘要"
 
+# 个别字符串的**任务归属覆写**:文件级 FILE_TASK 默认按文件划分,但若某文件里
+# 有少量字符串本质属于别的 Task(典型:host chrome 文件里经 Toast/错误通道展示的
+# 文案,归 Task 07 统一做 toast/error 本地化),在此逐条改派,避免同一字符串被
+# 两个 Task 分别改一遍。(path, text) → task。
+STRING_TASK_OVERRIDES = {
+    # app/app.rs 里经 Toast / 预览错误条展示的文案,归 Task 07(toast & errors)。
+    ("crates/dozer-app/src/app/app.rs", "项目页签未能保存,下次启动可能丢失: {e}"): "07",
+    ("crates/dozer-app/src/app/app.rs", "预览资源预算不足(可关闭其它大文件后重试)"): "07",
+    ("crates/dozer-app/src/app/app.rs", "清除应用 {app_id} 的页面数据失败(数据仍被占用),重装后可能还会看到旧数据"): "07",
+    ("crates/dozer-app/src/app/app.rs", "此系统版本(低于 macOS 14)无法清除应用 {app_id} 的页面数据,重装后可能还会看到旧数据"): "07",
+    ("crates/dozer-app/src/app/app.rs", "清除应用 {app_id} 的页面数据失败:{why}"): "07",
+}
 
-def task_of(path: str) -> str | None:
+
+def task_of(path: str, text: str | None = None) -> str | None:
+    if text is not None and (path, text) in STRING_TASK_OVERRIDES:
+        return STRING_TASK_OVERRIDES[(path, text)]
     best = None
     for prefix, task in FILE_TASK:
         if path.startswith(prefix) and (best is None or len(prefix) > best[1]):
@@ -165,7 +180,7 @@ def build():
             "kind": r["kind"],
             "usage": r["usage"],
             "text": r["text"],
-            "task": task_of(r["path"]) if status == "unresolved" else None,
+            "task": task_of(r["path"], r["text"]) if status == "unresolved" else None,
             "key": None,
             "status": status,
             "reason": reason,

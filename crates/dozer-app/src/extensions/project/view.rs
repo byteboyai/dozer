@@ -32,6 +32,7 @@ pub fn view<'a>(
     width: Length,
     outer: Border,
     hover: ProjectPaneHover,
+    locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(p) = project else {
         return container(iced_widget::Space::new())
@@ -280,12 +281,14 @@ pub fn view<'a>(
             ws_state.memory_edit_draft.as_ref(),
             ws_state.memory_delete_pending.is_some(),
             now_ms(),
+            locale,
         ),
         None => memory_section(
             &ws_state.memories,
             ws_state.memory_create_draft.as_ref(),
             hover.memory_add,
             now_ms(),
+            locale,
         ),
     });
 
@@ -762,6 +765,7 @@ fn memory_section<'a>(
     draft: Option<&'a MemoryDraft>,
     hover_t: f32,
     now_ms: u64,
+    locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![].spacing(6).width(Length::Fill);
     col = col.push(
@@ -850,7 +854,7 @@ fn memory_section<'a>(
         let updated_line = format!(
             "上次由 {} 于 {} 更新",
             m.updated_by,
-            crate::workspace::relative_time_text(m.updated_ms, now_ms)
+            crate::workspace::relative_time_text(m.updated_ms, now_ms, locale)
         );
         col = col.push(
             button(
@@ -890,6 +894,7 @@ fn memory_detail_view<'a>(
     edit_draft: Option<&'a MemoryDraft>,
     delete_pending: bool,
     now_ms: u64,
+    locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![].spacing(8).padding(8).width(Length::Fill);
 
@@ -983,7 +988,7 @@ fn memory_detail_view<'a>(
             .color(byteui::theme::color::current().body),
     );
     for h in &detail.history {
-        let when = crate::workspace::relative_time_text(h.changed_ms, now_ms);
+        let when = crate::workspace::relative_time_text(h.changed_ms, now_ms, locale);
         col = col.push(row![
             text(format!("{when} · {} · {}", h.changed_by, h.change_kind))
                 .size(byteui::theme::font::caption())

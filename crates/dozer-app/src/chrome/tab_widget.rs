@@ -315,11 +315,18 @@ pub(crate) fn tab_tabular_mode_button<'a, M: Clone + 'a>(
     hover_t: f32,
     on_press: M,
     on_hover: impl Fn(bool) -> M + 'a,
+    locale: &str,
 ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
     let (icon, tooltip) = if in_text {
-        (icons::IconKind::Table, "查看表格")
+        (
+            icons::IconKind::Table,
+            crate::i18n::host_text("tab.view_table", "View table", locale),
+        )
     } else {
-        (icons::IconKind::FileCode, "查看原文")
+        (
+            icons::IconKind::FileCode,
+            crate::i18n::host_text("tab.view_source", "View source", locale),
+        )
     };
     icons::icon_button_entry(
         icon,
@@ -344,11 +351,18 @@ pub(crate) fn tab_json_mode_button<'a, M: Clone + 'a>(
     hover_t: f32,
     on_press: M,
     on_hover: impl Fn(bool) -> M + 'a,
+    locale: &str,
 ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
     let (icon, tooltip) = if in_text {
-        (icons::IconKind::Table, "查看树视图")
+        (
+            icons::IconKind::Table,
+            crate::i18n::host_text("tab.view_tree", "View tree", locale),
+        )
     } else {
-        (icons::IconKind::FileCode, "查看文本")
+        (
+            icons::IconKind::FileCode,
+            crate::i18n::host_text("tab.view_text", "View text", locale),
+        )
     };
     icons::icon_button_entry(
         icon,

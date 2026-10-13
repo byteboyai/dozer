@@ -118,8 +118,8 @@ pub trait PanelDisplay<M> {
     fn list_collapse_button<'a>(
         &self,
         collapsed: bool,
-        tooltip_collapse: &'a str,
-        tooltip_expand: &'a str,
+        tooltip_collapse: impl Into<std::borrow::Cow<'a, str>>,
+        tooltip_expand: impl Into<std::borrow::Cow<'a, str>>,
         on_select: M,
         on_hover: impl Fn(bool) -> M + 'a,
     ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>;

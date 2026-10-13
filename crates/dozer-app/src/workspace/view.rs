@@ -30,11 +30,16 @@ use super::*;
 pub(crate) fn load_more_button<'a>(
     conversation_id: &'a str,
     after_turn_index: i64,
+    locale: &str,
 ) -> iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let btn = iced_widget::button(
-        text("加载更多…")
-            .size(byteui::theme::font::caption_sm())
-            .color(byteui::theme::color::current().dim),
+        text(crate::i18n::host_text(
+            "conversations.load_more",
+            "Load more…",
+            locale,
+        ))
+        .size(byteui::theme::font::caption_sm())
+        .color(byteui::theme::color::current().dim),
     )
     .on_press(Message::Conversations(
         conversations::Message::DetailLoadMore(conversation_id.to_string(), after_turn_index),
@@ -98,6 +103,7 @@ pub(crate) fn agent_list_pane<'a>(
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::agent_list_pane();
+    let locale = app.locale.active_locale();
     let mut content = column![
         // 套用统一 panel head:暖金 `#dcc9a3` 的 Bot 图标 + "Agent" 标题 +
         // 1px 分割线;新建 agent 的"＋"按钮放到标题同一行的右侧(见
@@ -111,9 +117,13 @@ pub(crate) fn agent_list_pane<'a>(
     .spacing(region.gap);
 
     if ws.tabs.is_empty() {
-        content = content.push(lh(text("暂无会话")
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().dim)));
+        content = content.push(lh(text(crate::i18n::host_text(
+            "agent.no_conversations",
+            "No conversations",
+            locale,
+        ))
+        .size(byteui::theme::font::body())
+        .color(byteui::theme::color::current().dim)));
     } else {
         for (agent, idxs) in group_tabs_by_agent(&ws.tabs) {
             content = content.push(
@@ -269,7 +279,11 @@ pub(crate) fn agent_picker_toggle_button<'a>(
         true,
         Message::AgentPickerToggle,
         |hovered| Message::Hover(HoverId::named(PanelKind::Agent, "picker_toggle"), hovered),
-        "新建 Agent 会话",
+        crate::i18n::host_text(
+            "agent.new_session",
+            "New agent session",
+            app.locale.active_locale(),
+        ),
     )
 }
 
@@ -415,6 +429,7 @@ pub(crate) fn agent_picker_popup(
 /// 份渲染。`None` 表示当前没有待确认的关闭。
 pub(crate) fn agent_close_confirm_spec(
     ws: &Workspace,
+    locale: &str,
 ) -> Option<byteui::feedback::dialog::ConfirmDialog<Message>> {
     let id = ws.pending_close_tab.as_ref()?;
     let agent_label = ws
@@ -425,13 +440,21 @@ pub(crate) fn agent_close_confirm_spec(
         .unwrap_or_else(|| "agent".to_string());
     Some(byteui::feedback::dialog::ConfirmDialog {
         icon: Some(IconKind::CircleAlert),
-        title: format!("关闭\"{agent_label}\" Agent吗？"),
-        description: format!(
-            "\"{agent_label}\" Agent 当前正处于活动状态，关闭后会结束会话，并清空会话上下文。"
+        title: crate::i18n::host_text_args(
+            "agent.close_tab_title",
+            "Close the \"{agent}\" Agent?",
+            locale,
+            &[("agent", agent_label.as_str())],
         ),
-        cancel_label: "取消".to_string(),
+        description: crate::i18n::host_text_args(
+            "agent.close_tab_description",
+            "The \"{agent}\" Agent is currently active. Closing it ends the session and clears its context.",
+            locale,
+            &[("agent", agent_label.as_str())],
+        ),
+        cancel_label: crate::i18n::host_text("common.cancel", "Cancel", locale),
         cancel_msg: Message::TermTabCloseCancel,
-        confirm_label: "关闭".to_string(),
+        confirm_label: crate::i18n::host_text("common.close", "Close", locale),
         confirm_msg: Message::TermTabCloseConfirm,
         close_msg: Some(Message::TermTabCloseCancel),
         confirm_color: byteui::theme::color::current().red,
@@ -504,6 +527,7 @@ pub(crate) fn review_content_pane<'a>(
     outer: Border,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::review_content_pane();
+    let locale = app.locale.active_locale();
     // 内容侧标题栏:左侧名字信息面板(会话/agent 态) + 右侧"生成总结"按钮
     // (会话详情手动生成/重试,spec 2026-09-26 第 8 节)+ "收起/展开列表列"
     // 按钮(与 Todo/Database/SSH/Agent 内容侧统一)。
@@ -511,8 +535,8 @@ pub(crate) fn review_content_pane<'a>(
         PanelKind::Conversations,
         app.list_collapsed(PanelKind::Conversations),
         HoverId::list_collapse(PanelKind::Conversations),
-        "收起列表",
-        "展开列表",
+        crate::i18n::host_text("panel.collapse_list", "Collapse list", locale),
+        crate::i18n::host_text("panel.expand_list", "Expand list", locale),
         Message::TogglePanelListCollapse(PanelKind::Conversations),
         move |h| Message::Hover(HoverId::list_collapse(PanelKind::Conversations), h),
     );
@@ -522,9 +546,13 @@ pub(crate) fn review_content_pane<'a>(
                 let generating = ws.conversations.summary_generating(cid);
                 let generate = button(
                     text(if generating {
-                        "生成中…"
+                        crate::i18n::host_text("conversations.generating", "Generating…", locale)
                     } else {
-                        "生成总结"
+                        crate::i18n::host_text(
+                            "conversations.generate_summary",
+                            "Generate Summary",
+                            locale,
+                        )
                     })
                     .size(byteui::theme::font::label())
                     .color(byteui::theme::color::current().cream),
@@ -544,7 +572,7 @@ pub(crate) fn review_content_pane<'a>(
     let header = container(
         row![home_panel_head_with_actions(
             IconKind::BotMessageSquare,
-            "会话",
+            crate::i18n::host_text("conversations.pane_title", "Conversations", locale),
             Some(actions),
         )]
         .width(Length::Fill),
@@ -557,16 +585,25 @@ pub(crate) fn review_content_pane<'a>(
         ReviewSource::Session(_) => None,
     }) {
         content = content.push(
-            text(format!("⚠ 生成总结失败：{error}"))
-                .size(byteui::theme::font::body())
-                .color(byteui::theme::color::current().red),
+            text(crate::i18n::host_text_args(
+                "conversations.summary_failed",
+                "⚠ Failed to generate summary: {error}",
+                locale,
+                &[("error", error)],
+            ))
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().red),
         );
     }
 
     match review_pane_state(ws.review.as_ref()) {
         ReviewPaneState::Empty => {
             content = content.push(
-                container(lh(text("暂无审阅内容——点击左侧对话列表中的对话开始审阅")
+                container(lh(text(crate::i18n::host_text(
+                    "conversations.no_review_content",
+                    "No review content—click a conversation in the list on the left to start reviewing",
+                    locale,
+                ))
                     .size(byteui::theme::font::subtitle())
                     .color(byteui::theme::color::current().dim)))
                 .width(Length::Fill)
@@ -578,17 +615,29 @@ pub(crate) fn review_content_pane<'a>(
             // "加载中",让 webview 隐藏期间这块区域有意义的提示而不是空的可
             // 滚动区域(同用量面板"统计中…"分支的写法,视觉基调统一)。
             content = content.push(
-                container(byteui::feedback::math_curve::loading_hint(
-                    byteui::feedback::math_curve::Curve::RoseThree,
-                    "加载中…",
-                    64.0,
-                ))
-                .width(Length::Fill)
-                .height(Length::Fill),
+                container(
+                    iced_widget::column![
+                        byteui::feedback::math_curve::view_animated::<Message>(
+                            byteui::feedback::math_curve::Curve::RoseThree,
+                            64.0,
+                        ),
+                        iced_widget::text(crate::i18n::host_text(
+                            "common.loading",
+                            "Loading…",
+                            locale,
+                        ))
+                        .size(byteui::theme::font::body())
+                        .color(byteui::theme::color::current().dim),
+                    ]
+                    .spacing(12)
+                    .align_x(iced_widget::core::alignment::Horizontal::Center),
+                )
+                .center_x(Length::Fill)
+                .center_y(Length::Fill),
             );
         }
         ReviewPaneState::Ready => {
-            let body = review_content(column![].spacing(region.gap), ws);
+            let body = review_content(column![].spacing(region.gap), ws, locale);
             content = content.push(
                 Scrollable::new(body)
                     .width(Length::Fill)
@@ -644,14 +693,19 @@ pub(crate) fn no_project_placeholder<'a>(
     ws: &'a Workspace,
     width: Length,
     outer: Border,
+    locale: &str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::project_pane();
     let mut header = column![].spacing(region.gap).width(Length::Fill);
     let tree_col = column![].spacing(region.gap);
     header = header.push(
-        text("未打开项目")
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().dim),
+        text(crate::i18n::host_text(
+            "files.no_project",
+            "No project open",
+            locale,
+        ))
+        .size(byteui::theme::font::body())
+        .color(byteui::theme::color::current().dim),
     );
     for p in &ws.recent_projects {
         header = header.push(
@@ -775,6 +829,7 @@ pub(crate) fn project_preview_pane<'a>(
 fn preview_blank_info_card<'a>(
     ws: &'a Workspace,
     preview: &'a PreviewPane,
+    locale: &str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let theme_colors = byteui::theme::color::current();
     // 头部名称取**项目根目录 basename**(`path.file_name()`)而不是
@@ -832,20 +887,24 @@ fn preview_blank_info_card<'a>(
 
     let info = preview.blank_info.as_ref();
     let size_value = info.map_or("—".to_string(), |i| {
-        format!(
-            "{} (磁盘上 {} 字节),共 {} 个项目",
-            format_human_size(i.size_bytes),
-            with_thousands_separator(i.size_bytes),
-            with_thousands_separator(i.file_count)
+        crate::i18n::host_text_args(
+            "preview.blank_size_value",
+            "{human} ({bytes} bytes on disk), {count} items",
+            locale,
+            &[
+                ("human", format_human_size(i.size_bytes).as_str()),
+                ("bytes", with_thousands_separator(i.size_bytes).as_str()),
+                ("count", with_thousands_separator(i.file_count).as_str()),
+            ],
         )
     });
     let created_value = info
         .and_then(|i| i.created)
-        .map(format_time_cn)
+        .map(|t| format_time(t, locale))
         .unwrap_or_else(|| "—".to_string());
     let modified_value = info
         .and_then(|i| i.modified)
-        .map(format_time_cn)
+        .map(|t| format_time(t, locale))
         .unwrap_or_else(|| "—".to_string());
 
     let dim = theme_colors.dim;
@@ -860,30 +919,58 @@ fn preview_blank_info_card<'a>(
     // 的右缘上——两条锚线由上面的 `icon_slot_w` 绑成同一条。
     let stats = column![
         row![
-            container(text("位置:").size(body_font).color(dim))
-                .width(Length::Fixed(label_colon_w))
-                .align_x(iced_widget::core::alignment::Horizontal::Right),
+            container(
+                text(crate::i18n::host_text(
+                    "preview.info_location",
+                    "Location:",
+                    locale
+                ))
+                .size(body_font)
+                .color(dim)
+            )
+            .width(Length::Fixed(label_colon_w))
+            .align_x(iced_widget::core::alignment::Horizontal::Right),
             text(project.path.clone()).size(body_font).color(cream),
         ]
         .spacing(8),
         row![
-            container(text("大小:").size(body_font).color(dim))
-                .width(Length::Fixed(label_colon_w))
-                .align_x(iced_widget::core::alignment::Horizontal::Right),
+            container(
+                text(crate::i18n::host_text("preview.info_size", "Size:", locale))
+                    .size(body_font)
+                    .color(dim)
+            )
+            .width(Length::Fixed(label_colon_w))
+            .align_x(iced_widget::core::alignment::Horizontal::Right),
             text(size_value).size(body_font).color(cream),
         ]
         .spacing(8),
         row![
-            container(text("创建时间:").size(body_font).color(dim))
-                .width(Length::Fixed(label_colon_w))
-                .align_x(iced_widget::core::alignment::Horizontal::Right),
+            container(
+                text(crate::i18n::host_text(
+                    "preview.info_created",
+                    "Created:",
+                    locale
+                ))
+                .size(body_font)
+                .color(dim)
+            )
+            .width(Length::Fixed(label_colon_w))
+            .align_x(iced_widget::core::alignment::Horizontal::Right),
             text(created_value).size(body_font).color(cream),
         ]
         .spacing(8),
         row![
-            container(text("修改时间:").size(body_font).color(dim))
-                .width(Length::Fixed(label_colon_w))
-                .align_x(iced_widget::core::alignment::Horizontal::Right),
+            container(
+                text(crate::i18n::host_text(
+                    "preview.info_modified",
+                    "Modified:",
+                    locale
+                ))
+                .size(body_font)
+                .color(dim)
+            )
+            .width(Length::Fixed(label_colon_w))
+            .align_x(iced_widget::core::alignment::Horizontal::Right),
             text(modified_value).size(body_font).color(cream),
         ]
         .spacing(8),
@@ -947,11 +1034,12 @@ fn format_human_size(bytes: u64) -> String {
     }
 }
 
-/// SystemTime → 中文 `"YYYY年M月D日 星期X HH:MM"` 形式(无秒)。Howard
+/// SystemTime → 本地化日期串(无秒)。中文为
+/// `"YYYY年M月D日 星期X HH:MM"`,英文为 `"Mon, D MMM YYYY HH:MM"`。Howard
 /// Hinnant 的 `civil_from_days` 同款算法(见 `extensions/git_log.rs::1283`,
-/// 那里只输出 `YYYY-MM-DD HH:MM:SS`,这里改成中文 + 加星期)。失败(平台不
-/// 支持 / 1970 之前)时回退 `"未知"`。
-fn format_time_cn(t: std::time::SystemTime) -> String {
+/// 那里只输出 `YYYY-MM-DD HH:MM:SS`,这里加星期)。失败(平台不支持 /
+/// 1970 之前)时回退 `"未知"` / `"Unknown"`。
+fn format_time(t: std::time::SystemTime, locale: &str) -> String {
     let dur = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     let total_secs = dur.as_secs();
     let days = (total_secs / 86_400) as i64;
@@ -964,24 +1052,52 @@ fn format_time_cn(t: std::time::SystemTime) -> String {
     let (y, mo, d) = civil_from_days(days);
     // 1970-01-01 是星期四,加天数 mod 7 拿到 0..6,offset = 周一 = 0
     let weekday = (((days + 3) % 7) + 7) % 7;
-    let weekday_cn = [
-        "星期一",
-        "星期二",
-        "星期三",
-        "星期四",
-        "星期五",
-        "星期六",
-        "星期日",
+    let weekday_key = [
+        "date.weekday_mon",
+        "date.weekday_tue",
+        "date.weekday_wed",
+        "date.weekday_thu",
+        "date.weekday_fri",
+        "date.weekday_sat",
+        "date.weekday_sun",
     ][weekday as usize];
-    format!(
-        "{y}年{mo}月{d}日 {weekday_cn} {h:02}:{m:02}",
-        y = y,
-        mo = mo,
-        d = d,
-        weekday_cn = weekday_cn,
-        h = h,
-        m = m,
+    let weekday_fallback = [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    ][weekday as usize];
+    let weekday_name = crate::i18n::host_text(weekday_key, weekday_fallback, locale);
+    // 占位符名在两种语言的模板里必须一致(资源校验要求 key 集合逐个相同),
+    // 差异只在模板形状与取值:英文月份给缩写、中文给数字月。
+    let month_value = if locale.starts_with("zh") {
+        mo.to_string()
+    } else {
+        month_name_en(mo).to_string()
+    };
+    crate::i18n::host_text_args(
+        "date.datetime",
+        "{weekday}, {day} {month} {y} {hh}:{mm}",
+        locale,
+        &[
+            ("weekday", weekday_name.as_str()),
+            ("y", &y.to_string()),
+            ("month", month_value.as_str()),
+            ("day", &d.to_string()),
+            ("hh", &format!("{h:02}")),
+            ("mm", &format!("{m:02}")),
+        ],
     )
+}
+
+/// 英文月份缩写(英文日期串用;中文串不用月份名,直接 `M月`)。
+fn month_name_en(mo: u32) -> &'static str {
+    [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ][(mo as usize).saturating_sub(1).min(11)]
 }
 
 /// Howard Hinnant 的 `civil_from_days`:Unix epoch 起的天数 → (年, 月, 日)。
@@ -1246,6 +1362,7 @@ pub(crate) fn preview_pane_for<'a>(
             app.hover_progress(tabular_mode_hover()),
             Message::PreviewTabularTextModeToggle(find_panel(), tab_id),
             move |hovered| Message::Hover(tabular_mode_hover(), hovered),
+            app.locale.active_locale(),
         ))
     });
     // 严格 `.json` 的「树 / 文本」切换:仅激活 tab 是 JSON 且 route 支持双视图
@@ -1276,6 +1393,7 @@ pub(crate) fn preview_pane_for<'a>(
             app.hover_progress(json_mode_hover()),
             Message::PreviewJsonModeToggle(find_panel(), tab_id),
             move |hovered| Message::Hover(json_mode_hover(), hovered),
+            app.locale.active_locale(),
         ))
     });
     let overflow_button = tab_overflow_button(
@@ -1293,8 +1411,16 @@ pub(crate) fn preview_pane_for<'a>(
             PanelKind::Files,
             app.files_tree_collapsed(),
             HoverId::list_collapse(PanelKind::Files),
-            "收起文件树",
-            "展开文件树",
+            crate::i18n::host_text(
+                "files.collapse_tree",
+                "Collapse file tree",
+                app.locale.active_locale(),
+            ),
+            crate::i18n::host_text(
+                "files.expand_tree",
+                "Expand file tree",
+                app.locale.active_locale(),
+            ),
             Message::ToggleFileTreeCollapse,
             move |hovered| Message::Hover(HoverId::list_collapse(PanelKind::Files), hovered),
         ),
@@ -1302,8 +1428,16 @@ pub(crate) fn preview_pane_for<'a>(
             PanelKind::Project,
             app.list_collapsed(PanelKind::Project),
             HoverId::list_collapse(PanelKind::Project),
-            "收起列表",
-            "展开列表",
+            crate::i18n::host_text(
+                "panel.collapse_list",
+                "Collapse list",
+                app.locale.active_locale(),
+            ),
+            crate::i18n::host_text(
+                "panel.expand_list",
+                "Expand list",
+                app.locale.active_locale(),
+            ),
             Message::TogglePanelListCollapse(PanelKind::Project),
             move |hovered| Message::Hover(HoverId::list_collapse(PanelKind::Project), hovered),
         ),
@@ -1343,14 +1477,21 @@ pub(crate) fn preview_pane_for<'a>(
             };
             // 与 fallback 页同一套系统操作按钮样式,避免这里落 iced 默认蓝底。
             content = content.push(
-                iced_widget::button(text("在系统应用中打开").size(byteui::theme::font::label()))
-                    .on_press(Message::PreviewOpenExternal(panel, tab_id))
-                    .padding([8, 20])
-                    .style(
-                        crate::extensions::project_create::action_button_hover_style(
-                            byteui::theme::color::current().dim,
-                        ),
+                iced_widget::button(
+                    text(crate::i18n::host_text(
+                        "preview.open_external",
+                        "Open in system app",
+                        app.locale.active_locale(),
+                    ))
+                    .size(byteui::theme::font::label()),
+                )
+                .on_press(Message::PreviewOpenExternal(panel, tab_id))
+                .padding([8, 20])
+                .style(
+                    crate::extensions::project_create::action_button_hover_style(
+                        byteui::theme::color::current().dim,
                     ),
+                ),
             );
         }
     }
@@ -1367,7 +1508,7 @@ pub(crate) fn preview_pane_for<'a>(
         );
     } else {
         let active_tab = &preview.tabs()[preview.active_idx()];
-        if let Some(page) = preview_fallback_page(kind, active_tab) {
+        if let Some(page) = preview_fallback_page(kind, active_tab, app.locale.active_locale()) {
             // T1:External / Unsupported(及 Failed)统一 fallback 页——不再
             // 依赖 Flyfish 偶然兜底或空白。失败优先于 loading:终态不能被动画盖住。
             content = content.push(page);
@@ -1387,7 +1528,11 @@ pub(crate) fn preview_pane_for<'a>(
             // 用 `—` 占位,数据回来再渲染真实值。无项目(`ws.project` 为
             // `None`)时只画头部,不画 stats——避免给空指针编出"位置: —"
             // 这种半成品。
-            content = content.push(preview_blank_info_card(ws, preview));
+            content = content.push(preview_blank_info_card(
+                ws,
+                preview,
+                app.locale.active_locale(),
+            ));
         }
         // webview(flyfish)档 Find 条:渲染在内容区顶部,给已被 `preview_desired`
         // 下推的 webview 矩形让出固定高度的那一条。复用原生 Find 条(隐藏替换),
@@ -1408,7 +1553,12 @@ pub(crate) fn preview_pane_for<'a>(
         // `large_text::stream_search`(整文件,不只搜持有窗口)。窗口化 host
         // 同样是原生 webview,条渲染时必须显式把它的矩形下推一个条高让位。
         if let Some(session) = preview.large_file_search_state() {
-            let bar = preview_large_file_search_bar_widget(preview, kind, session.tab_id);
+            let bar = preview_large_file_search_bar_widget(
+                preview,
+                kind,
+                session.tab_id,
+                app.locale.active_locale(),
+            );
             content = content.push(
                 container(bar)
                     .width(Length::Fill)
@@ -1419,7 +1569,12 @@ pub(crate) fn preview_pane_for<'a>(
         // 「保留我的修改 / 重载磁盘」两键。webview 由 `preview_desired` 下推
         // 一条高度让位(原生子视图不听 iced 绘制顺序)。
         if let Some((conflict_tab_id, armed)) = preview.active_conflict() {
-            let bar = preview_conflict_bar_widget(find_panel(), conflict_tab_id, armed);
+            let bar = preview_conflict_bar_widget(
+                find_panel(),
+                conflict_tab_id,
+                armed,
+                app.locale.active_locale(),
+            );
             content = content.push(
                 container(bar)
                     .width(Length::Fill)
@@ -1481,7 +1636,11 @@ pub(crate) fn preview_find_bar_widget<'a>(
     };
     let input = byteui::form::input_text::view_with_suffix_unframed_at_size(
         find_font,
-        "搜索",
+        &crate::i18n::host_text(
+            "find.search_placeholder",
+            "Search",
+            app.locale.active_locale(),
+        ),
         &find.query,
         false,
         Some(crate::preview::find_field_id(panel)),
@@ -1500,10 +1659,14 @@ pub(crate) fn preview_find_bar_widget<'a>(
                 .color(colors.dim)
                 .into()
         } else if !find.query.is_empty() {
-            text("0 个结果")
-                .size(byteui::theme::font::body())
-                .color(colors.red)
-                .into()
+            text(crate::i18n::host_text(
+                "find.no_results",
+                "0 results",
+                app.locale.active_locale(),
+            ))
+            .size(byteui::theme::font::body())
+            .color(colors.red)
+            .into()
         } else {
             container(iced_widget::Row::<
                 Message,
@@ -1549,7 +1712,11 @@ pub(crate) fn preview_find_bar_widget<'a>(
                 (false, _) => Message::PreviewFindGo(PanelKind::Files, false),
             },
             move |hovered| Message::Hover(hid, hovered),
-            if next { "下一个" } else { "上一个" },
+            if next {
+                crate::i18n::host_text("find.next", "Next", app.locale.active_locale())
+            } else {
+                crate::i18n::host_text("find.prev", "Previous", app.locale.active_locale())
+            },
         );
         container(btn)
             .style(
@@ -1594,9 +1761,17 @@ pub(crate) fn preview_find_bar_widget<'a>(
             },
             move |hovered| Message::Hover(replace_toggle_hid, hovered),
             if replace_open {
-                "收起替换"
+                crate::i18n::host_text(
+                    "find.collapse_replace",
+                    "Hide replace",
+                    app.locale.active_locale(),
+                )
             } else {
-                "展开替换"
+                crate::i18n::host_text(
+                    "find.expand_replace",
+                    "Show replace",
+                    app.locale.active_locale(),
+                )
             },
         ))
     } else {
@@ -1630,7 +1805,11 @@ pub(crate) fn preview_find_bar_widget<'a>(
         let armed = find.count > 0;
         let replacement_input = byteui::form::input_text::view_at_size(
             find_font,
-            "替换",
+            &crate::i18n::host_text(
+                "find.replace_placeholder",
+                "Replace",
+                app.locale.active_locale(),
+            ),
             &find.replacement,
             false,
             None,
@@ -1645,7 +1824,7 @@ pub(crate) fn preview_find_bar_widget<'a>(
         let replace_icon_button = |kind: icons::IconKind,
                                    hid: HoverId,
                                    msg: Message,
-                                   tooltip: &'static str,
+                                   tooltip: String,
                                    disabled: bool|
          -> iced_widget::core::Element<
             'static,
@@ -1695,7 +1874,11 @@ pub(crate) fn preview_find_bar_widget<'a>(
                             Message::PreviewFindReplaceCurrent(PanelKind::Project),
                         _ => Message::PreviewFindReplaceCurrent(PanelKind::Files),
                     },
-                    "替换当前",
+                    crate::i18n::host_text(
+                        "find.replace_current",
+                        "Replace",
+                        app.locale.active_locale()
+                    ),
                     !armed,
                 ),
                 replace_icon_button(
@@ -1709,7 +1892,11 @@ pub(crate) fn preview_find_bar_widget<'a>(
                         PanelKind::Project => Message::PreviewFindReplaceAll(PanelKind::Project),
                         _ => Message::PreviewFindReplaceAll(PanelKind::Files),
                     },
-                    "替换全部",
+                    crate::i18n::host_text(
+                        "find.replace_all",
+                        "Replace All",
+                        app.locale.active_locale()
+                    ),
                     !armed,
                 ),
             ]
@@ -1765,6 +1952,7 @@ pub(crate) fn preview_large_file_search_bar_widget<'a>(
     preview: &'a PreviewPane,
     kind: PreviewPaneKind,
     tab_id: usize,
+    locale: &str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(session) = preview.large_file_search_state() else {
         return iced_widget::Space::new().into();
@@ -1778,21 +1966,31 @@ pub(crate) fn preview_large_file_search_bar_widget<'a>(
     // T9 bullet 1:搜索在途时只在**搜索条**内显示一个小尺寸 math_curve +
     // "搜索中…"(正文窗口保持可见可滚),不占用/遮挡内容区。
     let status_label = if session.running {
-        let mut label = String::from("搜索中…");
+        let mut label = crate::i18n::host_text("find.searching", "Searching…", locale);
         if let Some(p) = session.progress
             && let Some(total) = p.total
             && total > 0
         {
             let pct = (p.completed.saturating_mul(100) / total).min(100);
-            label = format!("搜索中… {pct}%");
+            label = crate::i18n::host_text_args(
+                "find.searching_pct",
+                "Searching… {pct}%",
+                locale,
+                &[("pct", &pct.to_string())],
+            );
         }
         text(label)
             .size(byteui::theme::font::body())
             .color(colors.dim)
     } else if let Some(error) = &session.error {
-        text(format!("搜索失败:{error}"))
-            .size(byteui::theme::font::body())
-            .color(colors.gold)
+        text(crate::i18n::host_text_args(
+            "find.search_failed",
+            "Search failed: {error}",
+            locale,
+            &[("error", error)],
+        ))
+        .size(byteui::theme::font::body())
+        .color(colors.gold)
     } else {
         // 命中计数:截断时总数标注为 `total_matches+`(命中列表封顶但总数仍
         // 统计,T9 bullet 4)。
@@ -1821,7 +2019,11 @@ pub(crate) fn preview_large_file_search_bar_widget<'a>(
     }
     status_row = status_row.push(status_label);
     let input = byteui::form::input_text::view(
-        "搜索文件内容…",
+        &crate::i18n::host_text(
+            "find.search_file_placeholder",
+            "Search file contents…",
+            locale,
+        ),
         &session.query,
         false,
         Some(crate::preview::large_file_search_field_id(panel)),
@@ -1917,16 +2119,31 @@ pub(crate) fn preview_tab_overflow_popup<'a>(
 /// 相对时间文案：刚刚/N 分钟前/N 小时前/N 天前（D5，从 `conversation_sub`
 /// 抽出为独立纯函数）。H0 项目卡"活跃时间"、文件卡、对话卡三处复用，
 /// 不要三份重复 switch。
-pub(crate) fn relative_time_text(modified_ms: u64, now_ms: u64) -> String {
+pub(crate) fn relative_time_text(modified_ms: u64, now_ms: u64, locale: &str) -> String {
     let ago = now_ms.saturating_sub(modified_ms) / 1000; // 秒
     if ago < 60 {
-        "刚刚".to_string()
+        crate::i18n::host_text("time.just_now", "Just now", locale)
     } else if ago < 3600 {
-        format!("{} 分钟前", ago / 60)
+        crate::i18n::host_text_args(
+            "time.minutes_ago",
+            "{n} minutes ago",
+            locale,
+            &[("n", &(ago / 60).to_string())],
+        )
     } else if ago < 86400 {
-        format!("{} 小时前", ago / 3600)
+        crate::i18n::host_text_args(
+            "time.hours_ago",
+            "{n} hours ago",
+            locale,
+            &[("n", &(ago / 3600).to_string())],
+        )
     } else {
-        format!("{} 天前", ago / 86400)
+        crate::i18n::host_text_args(
+            "time.days_ago",
+            "{n} days ago",
+            locale,
+            &[("n", &(ago / 86400).to_string())],
+        )
     }
 }
 
@@ -2011,6 +2228,7 @@ fn preview_loading_view<'a>(
 fn preview_fallback_page<'a>(
     kind: PreviewPaneKind,
     tab: &'a PreviewTab,
+    locale: &str,
 ) -> Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> {
     let backend = tab.backend.as_ref()?;
     let is_ext = matches!(
@@ -2053,9 +2271,13 @@ fn preview_fallback_page<'a>(
         text(tab.title.clone())
             .size(byteui::theme::font::title())
             .color(colors.cream),
-        text("无法在 Dozer 内嵌预览该文件")
-            .size(body)
-            .color(colors.dim),
+        text(crate::i18n::host_text(
+            "preview.fallback_title",
+            "Cannot preview this file inside Dozer",
+            locale,
+        ))
+        .size(body)
+        .color(colors.dim),
     ]
     .spacing(8)
     .align_x(iced_widget::core::Alignment::Start);
@@ -2064,18 +2286,36 @@ fn preview_fallback_page<'a>(
     }
     if !reason.is_empty() {
         col = col.push(
-            text(format!("路由:{reason}"))
-                .size(caption)
-                .color(colors.dim),
+            text(crate::i18n::host_text_args(
+                "preview.fallback_route",
+                "Route: {reason}",
+                locale,
+                &[("reason", reason.as_str())],
+            ))
+            .size(caption)
+            .color(colors.dim),
         );
     }
     if let Some(err) = failure {
-        col = col.push(text(format!("原因:{err}")).size(caption).color(colors.red));
+        col = col.push(
+            text(crate::i18n::host_text_args(
+                "preview.fallback_reason",
+                "Reason: {error}",
+                locale,
+                &[("error", err.as_str())],
+            ))
+            .size(caption)
+            .color(colors.red),
+        );
     }
     col = col.push(
-        text("出于安全考虑,Dozer 不会在此内嵌执行或解码该文件。")
-            .size(caption)
-            .color(colors.dim),
+        text(crate::i18n::host_text(
+            "preview.fallback_security_note",
+            "For safety, Dozer will not execute or decode this file inline.",
+            locale,
+        ))
+        .size(caption)
+        .color(colors.dim),
     );
 
     // 三个动作按钮走系统统一的操作按钮样式(`action_button_hover_style`:
@@ -2087,7 +2327,7 @@ fn preview_fallback_page<'a>(
         .align_y(iced_widget::core::Alignment::Center);
     if actions.retry {
         actions_row = actions_row.push(
-            button(text("重试").size(label))
+            button(text(crate::i18n::host_text("common.retry", "Retry", locale)).size(label))
                 .on_press(Message::PreviewRetry(panel, tab_id))
                 .padding([8, 20])
                 .style(crate::extensions::project_create::action_button_hover_style(colors.cream)),
@@ -2095,18 +2335,32 @@ fn preview_fallback_page<'a>(
     }
     if actions.plain_text_read_only {
         actions_row = actions_row.push(
-            button(text("以纯文本只读尝试").size(label))
-                .on_press(Message::PreviewPlainTextOpen(panel, tab_id))
-                .padding([8, 20])
-                .style(crate::extensions::project_create::action_button_hover_style(colors.dim)),
+            button(
+                text(crate::i18n::host_text(
+                    "preview.fallback_try_plain_text",
+                    "Try as read-only plain text",
+                    locale,
+                ))
+                .size(label),
+            )
+            .on_press(Message::PreviewPlainTextOpen(panel, tab_id))
+            .padding([8, 20])
+            .style(crate::extensions::project_create::action_button_hover_style(colors.dim)),
         );
     }
     if actions.external_open {
         actions_row = actions_row.push(
-            button(text("在系统应用中打开").size(label))
-                .on_press(Message::PreviewOpenExternal(panel, tab_id))
-                .padding([8, 20])
-                .style(crate::extensions::project_create::action_button_hover_style(colors.dim)),
+            button(
+                text(crate::i18n::host_text(
+                    "preview.open_external",
+                    "Open in system app",
+                    locale,
+                ))
+                .size(label),
+            )
+            .on_press(Message::PreviewOpenExternal(panel, tab_id))
+            .padding([8, 20])
+            .style(crate::extensions::project_create::action_button_hover_style(colors.dim)),
         );
     }
     col = col.push(actions_row);
@@ -2127,21 +2381,39 @@ fn preview_conflict_bar_widget<'a>(
     panel: PanelKind,
     tab_id: usize,
     armed: bool,
+    locale: &str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = byteui::theme::color::current();
     let body = byteui::theme::font::body();
-    let keep = iced_widget::button(text("保留我的修改").size(body))
-        .on_press(Message::PreviewConflictKeep(panel, tab_id));
+    let keep = iced_widget::button(
+        text(crate::i18n::host_text(
+            "preview.conflict_keep",
+            "Keep my changes",
+            locale,
+        ))
+        .size(body),
+    )
+    .on_press(Message::PreviewConflictKeep(panel, tab_id));
     let reload_label = if armed {
-        "确认重载磁盘(丢弃我的修改)"
+        crate::i18n::host_text(
+            "preview.conflict_reload_confirm",
+            "Reload from disk (discard my changes)",
+            locale,
+        )
     } else {
-        "重载磁盘"
+        crate::i18n::host_text("preview.conflict_reload", "Reload from disk", locale)
     };
     let reload = iced_widget::button(text(reload_label).size(body))
         .on_press(Message::PreviewConflictReload(panel, tab_id));
     container(
         row![
-            text("磁盘文件已被外部修改").size(body).color(colors.red),
+            text(crate::i18n::host_text(
+                "preview.conflict_notice",
+                "File on disk changed externally",
+                locale,
+            ))
+            .size(body)
+            .color(colors.red),
             iced_widget::space::horizontal(),
             keep,
             reload,

@@ -1612,7 +1612,7 @@ impl Runner {
             let Self::Ready { app, .. } = self else {
                 return;
             };
-            confirm_overlay::desired_confirm(app.active_workspace())
+            confirm_overlay::desired_confirm(app.active_workspace(), app.locale.active_locale())
         };
         let current_trigger = match self {
             Self::Ready {

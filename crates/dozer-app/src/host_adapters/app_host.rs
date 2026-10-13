@@ -101,7 +101,7 @@ pub(crate) fn apply_effects(app: &mut App, effects: Vec<Effect>) {
             }
             Effect::OpenSettingsApps => {
                 app.settings = Some(crate::extensions::settings::State::load_with_tab(
-                    app.daemon_unavailable.as_deref(),
+                    app.daemon_unavailable.is_some(),
                     crate::extensions::settings::SettingsTab::Apps,
                 ));
                 // 触发「应用」页的数据加载(切到 Apps 页会现拉探测与列表)。

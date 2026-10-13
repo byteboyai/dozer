@@ -444,13 +444,14 @@ fn chrome_constants_exclude_removed_header() {
 
 #[test]
 fn relative_time_text_boundaries() {
-    assert_eq!(relative_time_text(1000, 1000), "刚刚");
-    assert_eq!(relative_time_text(0, 59_000), "刚刚");
-    assert_eq!(relative_time_text(0, 60_000), "1 分钟前");
-    assert_eq!(relative_time_text(0, 3_599_000), "59 分钟前");
-    assert_eq!(relative_time_text(0, 3_600_000), "1 小时前");
-    assert_eq!(relative_time_text(0, 86_399_000), "23 小时前");
-    assert_eq!(relative_time_text(0, 86_400_000), "1 天前");
+    assert_eq!(relative_time_text(1000, 1000, "zh-CN"), "刚刚");
+    assert_eq!(relative_time_text(0, 59_000, "zh-CN"), "刚刚");
+    assert_eq!(relative_time_text(0, 60_000, "zh-CN"), "1 分钟前");
+    assert_eq!(relative_time_text(0, 3_599_000, "zh-CN"), "59 分钟前");
+    assert_eq!(relative_time_text(0, 3_600_000, "zh-CN"), "1 小时前");
+    assert_eq!(relative_time_text(0, 86_399_000, "zh-CN"), "23 小时前");
+    assert_eq!(relative_time_text(0, 86_400_000, "zh-CN"), "1 天前");
+    assert_eq!(relative_time_text(0, 86_400_000, "en"), "1 days ago");
 }
 
 #[test]

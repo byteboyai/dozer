@@ -516,6 +516,7 @@ pub fn view<'a>(
     current_review_id: Option<&str>,
     width: Length,
     outer: Border,
+    locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::conversation_list_pane();
     let mut content =
@@ -597,12 +598,12 @@ pub fn view<'a>(
         let sub = if current {
             format!(
                 "● 当前 · {agent_label} · {}{task_suffix}",
-                relative_time_text(g.last_ts, now_ms)
+                relative_time_text(g.last_ts, now_ms, locale)
             )
         } else {
             format!(
                 "{agent_label} · {}{task_suffix}",
-                relative_time_text(g.last_ts, now_ms)
+                relative_time_text(g.last_ts, now_ms, locale)
             )
         };
         let sub_color = if current {

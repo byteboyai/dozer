@@ -47,15 +47,17 @@ pub fn host_text(key: &str, fallback: &str, locale: &str) -> String {
     host_resolver().resolve(&t, locale).text
 }
 
-/// 便捷:对一条已解析文案做一次性参数插值(spec §6.2)。
+/// 便捷:按当前 locale 解析一条带具名参数的 Host 文案模板。
 ///
-/// 插值失败(缺参/非法模板)时**原样返回模板**——绝不返回空白或 panic。
-pub fn interpolate(template: &str, args: &[(&str, &str)]) -> String {
-    let map: std::collections::BTreeMap<String, String> = args
-        .iter()
-        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-        .collect();
-    dozer_i18n::interpolate(template, &map).unwrap_or_else(|_| template.to_string())
+/// 必须走这条(而不是先取模板再单独插值):`Resolver::resolve` 只有在**模板
+/// 参数齐全**时才认语言包里的值,否则含 `{name}` 的条目会被判为不可渲染并回落。
+/// 缺参时返回 fallback(经插值),绝不 panic。
+pub fn host_text_args(key: &str, fallback: &str, locale: &str, args: &[(&str, &str)]) -> String {
+    let mut t = dozer_model::LocalizedText::keyed(HOST_OWNER, key, fallback);
+    for (name, value) in args {
+        t = t.with_arg(*name, *value);
+    }
+    host_resolver().resolve(&t, locale).text
 }
 
 #[cfg(test)]
@@ -102,5 +104,22 @@ mod tests {
     #[test]
     fn unknown_locale_falls_back_to_english() {
         assert_eq!(host_text("settings.title", "Settings", "fr"), "Settings");
+    }
+
+    #[test]
+    fn host_text_args_resolves_pack_template_with_params() {
+        assert_eq!(
+            host_text_args(
+                "time.minutes_ago",
+                "{n} minutes ago",
+                "zh-CN",
+                &[("n", "3")]
+            ),
+            "3 分钟前"
+        );
+        assert_eq!(
+            host_text_args("time.minutes_ago", "{n} minutes ago", "en", &[("n", "3")]),
+            "3 minutes ago"
+        );
     }
 }

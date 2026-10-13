@@ -83,11 +83,12 @@ pub(crate) fn merge_review_entries(
 pub(crate) fn project_link_menu_items(
     target: project::links::LinkTarget,
     index: usize,
+    locale: &str,
 ) -> Vec<crate::chrome::native_menu::Item<Message>> {
     vec![crate::chrome::native_menu::Item::Entry {
         icon: Some(icons::IconKind::Trash),
         icon_color: None,
-        label: "删除".into(),
+        label: crate::i18n::host_text("menu.delete", "Delete", locale),
         color: byteui::theme::color::current().body,
         enabled: true,
         msg: Message::Project(project::Message::LinkRemove { target, index }),
@@ -99,6 +100,7 @@ pub(crate) fn project_link_menu_items(
 #[cfg(target_os = "macos")]
 pub(crate) fn text_input_menu_items(
     target: &TextInputTarget,
+    locale: &str,
 ) -> Vec<crate::chrome::native_menu::Item<Message>> {
     use crate::chrome::native_menu::Item;
     let body = byteui::theme::color::current().body;
@@ -112,7 +114,7 @@ pub(crate) fn text_input_menu_items(
         Item::Entry {
             icon: Some(icons::IconKind::Scissors),
             icon_color: None,
-            label: "剪切".into(),
+            label: crate::i18n::host_text("menu.cut", "Cut", locale),
             color: cut_copy_color,
             enabled: cut_copy_enabled,
             msg: Message::TextInputMenuCut,
@@ -120,7 +122,7 @@ pub(crate) fn text_input_menu_items(
         Item::Entry {
             icon: Some(icons::IconKind::Copy),
             icon_color: None,
-            label: "复制".into(),
+            label: crate::i18n::host_text("menu.copy", "Copy", locale),
             color: cut_copy_color,
             enabled: cut_copy_enabled,
             msg: Message::TextInputMenuCopy,
@@ -128,7 +130,7 @@ pub(crate) fn text_input_menu_items(
         Item::Entry {
             icon: Some(icons::IconKind::ClipboardPaste),
             icon_color: None,
-            label: "粘贴".into(),
+            label: crate::i18n::host_text("menu.paste", "Paste", locale),
             color: body,
             enabled: true,
             msg: Message::TextInputMenuPaste,
@@ -136,7 +138,7 @@ pub(crate) fn text_input_menu_items(
         Item::Entry {
             icon: Some(icons::IconKind::SelectAll),
             icon_color: None,
-            label: "全选".into(),
+            label: crate::i18n::host_text("menu.select_all", "Select All", locale),
             color: body,
             enabled: true,
             msg: Message::TextInputMenuSelectAll,
@@ -150,6 +152,7 @@ pub(crate) fn text_input_menu_items(
 pub(crate) fn database_source_menu_items(
     source_id: &str,
     expanded: bool,
+    locale: &str,
 ) -> Vec<crate::chrome::native_menu::Item<Message>> {
     use crate::chrome::native_menu::Item;
     let dim = byteui::theme::color::current().dim;
@@ -157,23 +160,23 @@ pub(crate) fn database_source_menu_items(
     vec![
         Item::entry(
             Some(icons::IconKind::RefreshCw),
-            "测试连接",
+            crate::i18n::host_text("menu.test_connection", "Test Connection", locale),
             Message::Database(database::Message::TestConnection(id.clone())),
         ),
         Item::entry(
             Some(icons::IconKind::Settings),
-            "编辑",
+            crate::i18n::host_text("menu.edit", "Edit", locale),
             Message::Database(database::Message::EditSourceStart(id.clone())),
         ),
         Item::entry(
             Some(icons::IconKind::Trash),
-            "删除",
+            crate::i18n::host_text("menu.delete", "Delete", locale),
             Message::Database(database::Message::DeleteSourceRequest(id.clone())),
         ),
         Item::Entry {
             icon: Some(icons::IconKind::RotateCw),
             icon_color: None,
-            label: "刷新".into(),
+            label: crate::i18n::host_text("menu.refresh", "Refresh", locale),
             color: if expanded {
                 byteui::theme::color::current().body
             } else {
@@ -190,28 +193,29 @@ pub(crate) fn database_source_menu_items(
 pub(crate) fn category_context_menu_items(
     id: Option<i64>,
     sibling_parent_id: Option<i64>,
+    locale: &str,
 ) -> Vec<crate::chrome::native_menu::Item<Message>> {
     use crate::chrome::native_menu::Item;
     match id {
         None => vec![Item::entry(
             Some(icons::IconKind::SquarePlus),
-            "新建分类",
+            crate::i18n::host_text("menu.new_category", "New Category", locale),
             Message::Todo(todo::Message::CategoryNewSibling(None)),
         )],
         Some(id) => vec![
             Item::entry(
                 Some(icons::IconKind::SquarePlus),
-                "新建子分类",
+                crate::i18n::host_text("menu.new_subcategory", "New Subcategory", locale),
                 Message::Todo(todo::Message::CategoryNewChild(id)),
             ),
             Item::entry(
                 Some(icons::IconKind::SquarePlus),
-                "新建同级分类",
+                crate::i18n::host_text("menu.new_sibling_category", "New Sibling Category", locale),
                 Message::Todo(todo::Message::CategoryNewSibling(sibling_parent_id)),
             ),
             Item::entry(
                 Some(icons::IconKind::ChevronUp),
-                "上移",
+                crate::i18n::host_text("menu.move_up", "Move Up", locale),
                 Message::Todo(todo::Message::CategoryMoveSibling(
                     id,
                     dozer_core::protocol::CategoryMoveDirection::Up,
@@ -219,7 +223,7 @@ pub(crate) fn category_context_menu_items(
             ),
             Item::entry(
                 Some(icons::IconKind::ChevronDown),
-                "下移",
+                crate::i18n::host_text("menu.move_down", "Move Down", locale),
                 Message::Todo(todo::Message::CategoryMoveSibling(
                     id,
                     dozer_core::protocol::CategoryMoveDirection::Down,
@@ -227,17 +231,27 @@ pub(crate) fn category_context_menu_items(
             ),
             Item::entry(
                 Some(icons::IconKind::Rename),
-                "重命名",
+                crate::i18n::host_text("menu.rename", "Rename", locale),
                 Message::Todo(todo::Message::CategoryRenameStart(id)),
             ),
             Item::entry(
                 Some(icons::IconKind::Trash),
-                "删除",
+                crate::i18n::host_text("menu.delete", "Delete", locale),
                 Message::Todo(todo::Message::CategoryDelete(id)),
             ),
         ],
     }
 }
+/// dozerd 不可用的**持久状态**原因(i18n Task 06)。存语义而非已渲染文案,切换语言
+/// 时顶栏徽标随之刷新;启动失败附带的原始错误详情是诊断内容,不翻译。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DaemonUnavailable {
+    /// 启动时连不上:附原始连接错误详情(可能为空)。
+    StartupError(String),
+    /// 设置里主动停止 dozerd。
+    Stopped,
+}
+
 pub struct App {
     pub(crate) client: Client,
     pub(crate) handle: Handle,
@@ -276,12 +290,12 @@ pub struct App {
     /// 指向的那个终端 pane 生效(见两处 `term_view::view` 调用处按
     /// `focused` 决定是否传入)。
     pub(crate) term_ime_preedit: Option<String>,
-    /// **持久状态**:dozerd 当前不可用的原因文案(`None` = 可用)。只有三种写入:
+    /// **持久状态**:dozerd 当前不可用的原因(`None` = 可用)。只有三种写入:
     /// 启动时连不上(`with_daemon_error`)、设置里停止 dozerd、以及"打开项目成功
     /// 即清除"。整个程序共享一份:daemon 连不连得上不是某个项目自己的状态。
     /// 由顶栏徽标(`topbar::daemon_badge`)展示。**一次性事件**(打开项目失败、
     /// 新建会话失败…)不要写这里,走 Toast。
-    pub(crate) daemon_unavailable: Option<String>,
+    pub(crate) daemon_unavailable: Option<DaemonUnavailable>,
     /// 上次真正执行 Todo 面板磁盘轮询(`poll_todo_if_visible`)的时刻:
     /// 按 `TODO_POLL_INTERVAL` 自限速,未到点的调用直接 no-op。现在靠
     /// mtime 检查已经安全(没变化就早退,见该方法文档),这里补上限速是为了
@@ -784,7 +798,7 @@ impl App {
             client,
             handle,
             proxy,
-            Some(message),
+            Some(DaemonUnavailable::StartupError(message)),
             capabilities,
             safe_startup,
         );
@@ -805,7 +819,7 @@ impl App {
         client: Client,
         handle: Handle,
         proxy: EventLoopProxy<Message>,
-        daemon_unavailable: Option<String>,
+        daemon_unavailable: Option<DaemonUnavailable>,
         capabilities: Arc<crate::capabilities::ClientCapabilities>,
         safe_startup: bool,
     ) -> Self {
@@ -1968,7 +1982,7 @@ impl App {
 
     /// 打开设置窗口,并把当前权威语言偏好注入「语言」页作已确认值。
     pub(crate) fn open_settings(&mut self) {
-        let mut state = settings::State::load(self.daemon_unavailable.as_deref());
+        let mut state = settings::State::load(self.daemon_unavailable.is_some());
         state.language.confirmed = self.locale.snapshot().preference.clone();
         self.settings = Some(state);
     }
@@ -3419,7 +3433,8 @@ impl App {
             let expanded = self
                 .active_workspace()
                 .is_some_and(|ws| ws.database.is_expanded(&source_id));
-            let items = database_source_menu_items(&source_id, expanded);
+            let items =
+                database_source_menu_items(&source_id, expanded, self.locale.active_locale());
             if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
                 self.update(msg);
             }
@@ -3452,7 +3467,7 @@ impl App {
         #[cfg(target_os = "macos")]
         {
             let (x, y) = self.files.last_right_click();
-            let items = project_link_menu_items(target, index);
+            let items = project_link_menu_items(target, index, self.locale.active_locale());
             if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
                 self.update(msg);
             }
@@ -3485,7 +3500,8 @@ impl App {
                         .and_then(|c| c.parent_id)
                 })
             });
-            let items = category_context_menu_items(id, sibling_parent_id);
+            let items =
+                category_context_menu_items(id, sibling_parent_id, self.locale.active_locale());
             if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
                 self.update(msg);
             }
@@ -4475,7 +4491,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn project_link_menu_items_has_single_delete_entry() {
-        let items = project_link_menu_items(project::links::LinkTarget::Docs, 2);
+        let items = project_link_menu_items(project::links::LinkTarget::Docs, 2, "en");
         assert_eq!(items.len(), 1);
         assert!(matches!(
             items[0],
@@ -4493,7 +4509,7 @@ mod tests {
             id: iced_widget::core::widget::Id::new("x"),
             secure: true,
         };
-        let items = text_input_menu_items(&target);
+        let items = text_input_menu_items(&target, "en");
         let cut_enabled = items.iter().find_map(|i| match i {
             crate::chrome::native_menu::Item::Entry {
                 msg: Message::TextInputMenuCut,
@@ -4512,7 +4528,7 @@ mod tests {
             id: iced_widget::core::widget::Id::new("x"),
             secure: false,
         };
-        let items = text_input_menu_items(&target);
+        let items = text_input_menu_items(&target, "en");
         let cut_enabled = items.iter().find_map(|i| match i {
             crate::chrome::native_menu::Item::Entry {
                 msg: Message::TextInputMenuCut,
@@ -4531,13 +4547,13 @@ mod tests {
             id: iced_widget::core::widget::Id::new("x"),
             secure: false,
         };
-        assert_eq!(text_input_menu_items(&target).len(), 4);
+        assert_eq!(text_input_menu_items(&target, "en").len(), 4);
     }
 
     #[cfg(target_os = "macos")]
     #[test]
     fn database_source_menu_items_locks_refresh_when_not_expanded() {
-        let items = database_source_menu_items("pg-main", false);
+        let items = database_source_menu_items("pg-main", false, "en");
         let refresh_enabled = items.iter().find_map(|i| match i {
             crate::chrome::native_menu::Item::Entry {
                 msg: Message::Database(database::Message::SchemaRefresh(_)),
@@ -4552,7 +4568,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn database_source_menu_items_enables_refresh_when_expanded() {
-        let items = database_source_menu_items("pg-main", true);
+        let items = database_source_menu_items("pg-main", true, "en");
         let refresh_enabled = items.iter().find_map(|i| match i {
             crate::chrome::native_menu::Item::Entry {
                 msg: Message::Database(database::Message::SchemaRefresh(_)),
@@ -4567,13 +4583,13 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn database_source_menu_items_always_has_four_entries() {
-        assert_eq!(database_source_menu_items("pg-main", false).len(), 4);
+        assert_eq!(database_source_menu_items("pg-main", false, "en").len(), 4);
     }
 
     #[cfg(target_os = "macos")]
     #[test]
     fn category_context_menu_items_root_pseudo_node_has_only_new_category() {
-        let items = category_context_menu_items(None, None);
+        let items = category_context_menu_items(None, None, "en");
         assert_eq!(items.len(), 1);
         assert!(matches!(
             items[0],
@@ -4587,7 +4603,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn category_context_menu_items_real_node_has_full_action_set() {
-        let items = category_context_menu_items(Some(7), Some(3));
+        let items = category_context_menu_items(Some(7), Some(3), "en");
         assert_eq!(items.len(), 6, "新建子/同级、上移、下移、重命名、删除");
         let has_sibling_with_parent = items.iter().any(|i| {
             matches!(

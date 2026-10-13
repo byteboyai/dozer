@@ -173,6 +173,7 @@ impl ConfirmOverlay {
 /// 这五个弹窗互斥展示,顺序决定"用户在别的面板还点了别的确认操作"时谁赢。
 pub(crate) fn desired_confirm(
     ws: Option<&crate::workspace::Workspace>,
+    locale: &str,
 ) -> Option<(ConfirmTrigger, dialog::ConfirmDialog<Message>)> {
     let ws = ws?;
     if let Some(spec) = crate::extensions::files::delete_confirm_spec(&ws.files) {
@@ -189,7 +190,7 @@ pub(crate) fn desired_confirm(
     {
         return Some((ConfirmTrigger::SshDelete, map_ssh_spec(spec)));
     }
-    if let Some(spec) = crate::workspace::agent_close_confirm_spec(ws) {
+    if let Some(spec) = crate::workspace::agent_close_confirm_spec(ws, locale) {
         return Some((ConfirmTrigger::AgentTabClose, spec));
     }
     if ws.todo.clear_confirm_open() {

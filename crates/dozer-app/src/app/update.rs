@@ -1797,6 +1797,7 @@ impl App {
                         &self.recent_projects,
                         &open_ids,
                         active_project_id,
+                        self.locale.active_locale(),
                     );
                     if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
                         // 经事件循环代理回送选择结果,使其重新走 `Runner::dispatch`
@@ -2060,7 +2061,7 @@ impl App {
                 #[cfg(target_os = "macos")]
                 {
                     let (x, y) = self.files.last_right_click();
-                    let items = text_input_menu_items(&target);
+                    let items = text_input_menu_items(&target, self.locale.active_locale());
                     if let Some(msg) = crate::chrome::native_menu::show(items, (x, y))
                         && let Some(ch) = crate::platform::window_events::menu_edit_key(&msg)
                     {
@@ -4050,7 +4051,7 @@ impl App {
                     self.spawn_locale_write(pref);
                 }
                 if stop_succeeded {
-                    self.daemon_unavailable = Some("dozerd 已停止,部分功能不可用".to_string());
+                    self.daemon_unavailable = Some(crate::app::DaemonUnavailable::Stopped);
                 }
                 if restart_succeeded {
                     self.daemon_unavailable = None;
@@ -5534,12 +5535,14 @@ impl App {
         kind: PanelKind,
         collapsed: bool,
         hover_id: HoverId,
-        tooltip_collapse: &'a str,
-        tooltip_expand: &'a str,
+        tooltip_collapse: impl Into<std::borrow::Cow<'a, str>>,
+        tooltip_expand: impl Into<std::borrow::Cow<'a, str>>,
         on_select: M,
         on_hover: impl Fn(bool) -> M + 'a,
     ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
         let side = self.shell_layout.rail_layout.side_of(kind);
+        let tooltip_collapse = tooltip_collapse.into();
+        let tooltip_expand = tooltip_expand.into();
         let (icon, tooltip) = match (side, collapsed) {
             (Side::Left, false) => (icons::IconKind::PanelLeftClose, tooltip_collapse),
             (Side::Left, true) => (icons::IconKind::PanelLeftOpen, tooltip_expand),
@@ -6192,6 +6195,7 @@ impl App {
     /// 列表 + 总结展示区(标题/全文)。`agent` 由调用方随行内数据一并传入。
     /// 总结数据直接取自已加载的 `SessionRow`,不为此单独发请求(2026-08-27)。
     pub(crate) fn conversation_session_open(&mut self, conversation_id: String, agent: AgentKind) {
+        let locale = self.locale.active_locale().to_owned();
         self.with_focused_project(move |ws, io| {
             let Some(row) = ws
                 .conversations
@@ -6218,7 +6222,7 @@ impl App {
                 nonce: 0,
                 summary_title: Some(summary_title),
                 summary_text,
-                summary_time: Some(relative_time_text(last_ts, now_ms)),
+                summary_time: Some(relative_time_text(last_ts, now_ms, &locale)),
                 loaded_nonce: None,
             });
             ws.spawn_review_load_conversation(

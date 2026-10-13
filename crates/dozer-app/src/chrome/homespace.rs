@@ -162,6 +162,7 @@ fn home_left_icon_rail(
     app: &App,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::left_icon_rail();
+    let locale = app.locale.active_locale();
     let content = column![
         icons::icon_button_entry(
             icons::IconKind::LayoutList,
@@ -174,7 +175,7 @@ fn home_left_icon_rail(
             true,
             Message::HomeLeftIconSelect(HomeLeftView::ProjectList),
             |hovered| Message::Hover(HoverId::Rail(RailButton::HomeProjectList), hovered),
-            "项目列表",
+            crate::i18n::host_text("home.project_list", "Project list", locale),
         ),
         icons::icon_button_entry(
             icons::IconKind::History,
@@ -187,7 +188,7 @@ fn home_left_icon_rail(
             true,
             Message::HomeLeftIconSelect(HomeLeftView::Recents),
             |hovered| Message::Hover(HoverId::Rail(RailButton::HomeRecents), hovered),
-            "最近记录",
+            crate::i18n::host_text("home.recents", "Recents", locale),
         ),
     ]
     .spacing(region.gap)
@@ -220,7 +221,7 @@ fn home_right_icon_rail(
         true,
         Message::HomeRightIconSelect(HomeRightView::Browser),
         |hovered| Message::Hover(HoverId::Rail(RailButton::HomeBrowser), hovered),
-        "浏览器",
+        crate::i18n::host_text("panel.web", "Browser", app.locale.active_locale(),),
     ),]
     .spacing(region.gap)
     .padding(region.padding);
@@ -330,12 +331,13 @@ fn panel_head_accent() -> Color {
 /// 间隔撑开),用于面板头部右侧的操作按钮(如 Agent 面板的"＋"新建)。
 pub(crate) fn home_panel_head_with_actions<'a, Message>(
     icon: icons::IconKind,
-    title: &'a str,
+    title: impl Into<std::borrow::Cow<'a, str>>,
     actions: Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>
 where
     Message: 'a,
 {
+    let title = title.into();
     // 高度钉死到跟预览/终端 tab 栏一样高(`tab_button_size`,tab 页签里 ×
     // 关闭按钮的固定命中区尺寸,是那条 tab 栏实际渲染高度的下限)——此前只
     // 靠图标/文字自身撑开,比 tab 栏矮了一截,导致 Files/Todo/Project/Git/
@@ -380,7 +382,7 @@ where
 /// 不带右侧操作的 `home_panel_head_with_actions` 简写,其余面板照旧调用它。
 pub(crate) fn home_panel_head<'a, Message>(
     icon: icons::IconKind,
-    title: &'a str,
+    title: impl Into<std::borrow::Cow<'a, str>>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>
 where
     Message: 'a,
@@ -395,11 +397,12 @@ where
 /// 一样对 `Message` 泛型(2026-08-23 起 `pub(crate)`,供 `extensions::usage`
 /// 复用,不是只有首页用得上——纯展示、不产生消息,泛型化零风险)。
 pub(crate) fn home_section_head<'a, Message>(
-    title: &'a str,
+    title: impl Into<std::borrow::Cow<'a, str>>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>
 where
     Message: 'a,
 {
+    let title = title.into();
     row![
         icons::view(
             icons::IconKind::CircleSmall,
@@ -452,8 +455,12 @@ fn home_project_list_view(
     now_ms: u64,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let mut col = column![].spacing(16);
+    let locale = app.locale.active_locale();
 
-    col = col.push(home_panel_head(icons::IconKind::LayoutList, "项目"));
+    col = col.push(home_panel_head(
+        icons::IconKind::LayoutList,
+        crate::i18n::host_text("home.projects", "Projects", locale),
+    ));
 
     // 搜索框:原为手写实现(不经共享组件),现收敛到
     // `byteui::form::search_box`——所有面板搜索框统一样式的基准就是这份
@@ -461,7 +468,7 @@ fn home_project_list_view(
     let editing = app.home_project_search_focused();
     let highlight = editing || !app.home_project_search.is_empty();
     let search_box = byteui::form::search_box::view(
-        "搜索项目…",
+        &crate::i18n::host_text("home.search_projects", "Search projects…", locale),
         &app.home_project_search_draft,
         Some(home_search_field_id()),
         highlight,
@@ -501,12 +508,12 @@ fn home_project_list_view(
                 row![
                     home_footbar_button(
                         icons::IconKind::FolderOpenDot,
-                        "打开项目",
+                        crate::i18n::host_text("topbar.open_project", "Open Project", locale),
                         Message::ProjectTabPickFolder
                     ),
                     home_footbar_button(
                         icons::IconKind::FolderPlus,
-                        "创建项目",
+                        crate::i18n::host_text("topbar.create_project", "Create Project", locale),
                         Message::ProjectCreateOpen
                     ),
                 ]
@@ -524,16 +531,24 @@ fn home_project_list_view(
 
     if app.recent_projects.is_empty() {
         col = col.push(
-            text("还没有项目")
-                .size(theme::homespace_font::body())
-                .color(theme::homespace_color::dim()),
+            text(crate::i18n::host_text(
+                "home.no_projects",
+                "No projects yet",
+                locale,
+            ))
+            .size(theme::homespace_font::body())
+            .color(theme::homespace_color::dim()),
         );
         col = col.push(iced_widget::Space::new().height(Length::Fill));
     } else if filtered.is_empty() {
         col = col.push(
-            text("没有匹配的项目")
-                .size(theme::homespace_font::body())
-                .color(theme::homespace_color::dim()),
+            text(crate::i18n::host_text(
+                "home.no_matching_projects",
+                "No matching projects",
+                locale,
+            ))
+            .size(theme::homespace_font::body())
+            .color(theme::homespace_color::dim()),
         );
         col = col.push(iced_widget::Space::new().height(Length::Fill));
     } else {
@@ -547,9 +562,11 @@ fn home_project_list_view(
                     lh(text(p.name.clone())
                         .size(theme::homespace_font::body())
                         .color(theme::homespace_color::cream())),
-                    lh(text(format!(
-                        "更新于{}",
-                        relative_time_text(p.updated_ms, now_ms)
+                    lh(text(crate::i18n::host_text_args(
+                        "home.updated_at",
+                        "Updated {time}",
+                        locale,
+                        &[("time", &relative_time_text(p.updated_ms, now_ms, locale))],
                     ))
                     .size(theme::homespace_font::caption_sm())
                     .color(theme::homespace_color::dim())),
@@ -584,7 +601,7 @@ fn home_project_list_view(
                 true,
                 Message::HomeMoreProjects,
                 |hovered| Message::Hover(HoverId::HomeProjectMore, hovered),
-                "更多",
+                crate::i18n::host_text("common.more", "More", locale),
             );
             list = list.push(
                 container(more_button)
@@ -628,7 +645,7 @@ fn home_project_list_view(
 /// 文件夹,名不副实)。
 fn home_footbar_button(
     icon: icons::IconKind,
-    label: &'static str,
+    label: String,
     msg: Message,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 按钮内容用 `container` 撑满 + `align_x(Center)` 居中标题文字——`button`
@@ -686,7 +703,10 @@ fn home_recents_view(
     // 与 project list 面板同款:外层 `zone_box` 仅留 1px 圆角裁切余量,这里
     // 再补一层标准内距,让两张卡片(含各自的标题)四周都不顶圆角边框。
     let inner = column![
-        home_panel_head(icons::IconKind::History, "最近"),
+        home_panel_head(
+            icons::IconKind::History,
+            crate::i18n::host_text("home.recents", "Recents", app.locale.active_locale()),
+        ),
         home_recent_conversations_card(app, now_ms),
         home_recent_files_card(app, now_ms)
     ]
@@ -705,7 +725,13 @@ fn home_recent_files_card(
     app: &App,
     now_ms: u64,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let mut col = column![home_section_head("最近的文件")].spacing(8);
+    let locale = app.locale.active_locale();
+    let mut col = column![home_section_head(crate::i18n::host_text(
+        "home.recent_files",
+        "Recent files",
+        locale,
+    ))]
+    .spacing(8);
 
     if !app.home_recents_loaded {
         col = col.push(
@@ -714,7 +740,7 @@ fn home_recent_files_card(
                     byteui::feedback::math_curve::Curve::RoseThree,
                     24.0,
                 ),
-                text("加载中…")
+                text(crate::i18n::host_text("common.loading", "Loading…", locale))
                     .size(theme::homespace_font::body())
                     .color(theme::homespace_color::dim()),
             ]
@@ -723,9 +749,13 @@ fn home_recent_files_card(
         );
     } else if app.home_recent_files.is_empty() {
         col = col.push(
-            text("暂无最近改动的文件")
-                .size(theme::homespace_font::body())
-                .color(theme::homespace_color::dim()),
+            text(crate::i18n::host_text(
+                "home.no_recent_files",
+                "No recently changed files",
+                locale,
+            ))
+            .size(theme::homespace_font::body())
+            .color(theme::homespace_color::dim()),
         );
     } else {
         for f in &app.home_recent_files {
@@ -747,7 +777,7 @@ fn home_recent_files_card(
                     lh(text(format!(
                         "{} · {}",
                         f.project_name,
-                        relative_time_text(f.modified_ms, now_ms)
+                        relative_time_text(f.modified_ms, now_ms, locale)
                     ))
                     .size(theme::homespace_font::caption_sm())
                     .color(theme::homespace_color::dim())),
@@ -789,7 +819,13 @@ fn home_recent_conversations_card(
     app: &App,
     now_ms: u64,
 ) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let mut col = column![home_section_head("最近的对话")].spacing(8);
+    let locale = app.locale.active_locale();
+    let mut col = column![home_section_head(crate::i18n::host_text(
+        "home.recent_conversations",
+        "Recent conversations",
+        locale,
+    ))]
+    .spacing(8);
 
     if !app.home_recents_loaded {
         col = col.push(
@@ -798,7 +834,7 @@ fn home_recent_conversations_card(
                     byteui::feedback::math_curve::Curve::RoseThree,
                     24.0,
                 ),
-                text("加载中…")
+                text(crate::i18n::host_text("common.loading", "Loading…", locale))
                     .size(theme::homespace_font::body())
                     .color(theme::homespace_color::dim()),
             ]
@@ -807,9 +843,13 @@ fn home_recent_conversations_card(
         );
     } else if app.home_recent_conversations.is_empty() {
         col = col.push(
-            text("暂无对话记录")
-                .size(theme::homespace_font::body())
-                .color(theme::homespace_color::dim()),
+            text(crate::i18n::host_text(
+                "home.no_recent_conversations",
+                "No recent conversations",
+                locale,
+            ))
+            .size(theme::homespace_font::body())
+            .color(theme::homespace_color::dim()),
         );
     } else {
         for c in &app.home_recent_conversations {
@@ -822,7 +862,7 @@ fn home_recent_conversations_card(
                 "{} · {} · {}",
                 c.meta.agent.label(),
                 c.project_name,
-                relative_time_text(c.meta.modified_ms, now_ms)
+                relative_time_text(c.meta.modified_ms, now_ms, locale)
             );
             col = col.push(
                 button(

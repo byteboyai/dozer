@@ -167,12 +167,12 @@ impl State {
     /// 可达推导初值——真相源是可达性,不是上次 UI 停在哪。`ensure_daemon`
     /// 幂等(daemon 其实活着时 `list()` 立刻成功返回 `Ok`),即便传进来的是
     /// 过期的 `daemon_unavailable` 也不会误伤。
-    pub fn load(daemon_unavailable: Option<&str>) -> State {
+    pub fn load(daemon_unavailable: bool) -> State {
         Self::load_with_tab(daemon_unavailable, SettingsTab::Theme)
     }
 
     /// 同 [`State::load`],但预选某个左栏 tab(如从应用面板「去设置安装」直接落在「应用」页)。
-    pub fn load_with_tab(daemon_unavailable: Option<&str>, tab: SettingsTab) -> State {
+    pub fn load_with_tab(daemon_unavailable: bool, tab: SettingsTab) -> State {
         let accounts = git_accounts::load();
         State {
             github: ConnectState::from_accounts(&accounts, GitProvider::GitHub),
@@ -246,10 +246,10 @@ pub(crate) fn finish_disconnect(
 /// 开窗时"高级"区块的初始态:`daemon_unavailable` 有值 = daemon 不可达 = 该给
 /// "重新启动 dozerd";否则给默认的"停止 dozerd"。抽成纯函数是为了不起
 /// daemon 就能测两个分支。
-fn advanced_state_for_daemon(daemon_unavailable: Option<&str>) -> AdvancedState {
+fn advanced_state_for_daemon(daemon_unavailable: bool) -> AdvancedState {
     match daemon_unavailable {
-        Some(_) => AdvancedState::Stopped { error: None },
-        None => AdvancedState::Idle { error: None },
+        true => AdvancedState::Stopped { error: None },
+        false => AdvancedState::Idle { error: None },
     }
 }
 
@@ -875,8 +875,10 @@ fn provider_row<'a>(
                 .into()
         }
         ConnectState::Connected { username } => {
-            let status = text(crate::i18n::interpolate(
-                &t("settings.git.connected", "Connected: {username}"),
+            let status = text(crate::i18n::host_text_args(
+                "settings.git.connected",
+                "Connected: {username}",
+                locale,
                 &[("username", username.as_str())],
             ))
             .size(byteui::theme::font::label())
@@ -1021,11 +1023,10 @@ fn advanced_row<'a>(
                     "No sessions are running; dozerd will stop immediately.",
                 )
             } else {
-                crate::i18n::interpolate(
-                    &t(
-                        "settings.advanced.stop_confirm_some",
-                        "This ends the {session_count} running agent sessions and generates summaries (may take about a minute).",
-                    ),
+                crate::i18n::host_text_args(
+                    "settings.advanced.stop_confirm_some",
+                    "This ends the {session_count} running agent sessions and generates summaries (may take about a minute).",
+                    locale,
                     &[("session_count", &session_count.to_string())],
                 )
             };
@@ -1798,12 +1799,12 @@ mod tests {
     #[test]
     fn advanced_state_for_daemon_offers_restart_only_when_daemon_unreachable() {
         assert_eq!(
-            advanced_state_for_daemon(None),
+            advanced_state_for_daemon(false),
             AdvancedState::Idle { error: None },
             "daemon 可达时应该给「停止 dozerd」"
         );
         assert_eq!(
-            advanced_state_for_daemon(Some("dozerd 已停止,部分功能不可用")),
+            advanced_state_for_daemon(true),
             AdvancedState::Stopped { error: None },
             "daemon 不可达时必须给「重新启动 dozerd」,否则关窗重开后入口丢失"
         );

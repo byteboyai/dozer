@@ -169,15 +169,29 @@ fn dozer_home_tab<'a>(
 
 /// 顶栏 daemon 状态徽标的内容:`App.daemon_unavailable` 有值(dozerd 不可用这个**持久
 /// 状态**)才显示,返回 `(标签, 悬停详情)`。详情为空白时给兜底文案——状态本身是真的,
-/// 不能因为没有文案就把徽标藏起来。
-pub(crate) fn daemon_badge(unavailable: Option<&str>) -> Option<(&'static str, &str)> {
-    const LABEL: &str = "dozerd 不可用";
-    unavailable.map(|detail| {
-        if detail.trim().is_empty() {
-            (LABEL, "无法连接到 dozerd")
-        } else {
-            (LABEL, detail)
-        }
+/// 不能因为没有文案就把徽标藏起来。文案按 `locale` 现取(i18n Task 06),切换语言即刷新。
+pub(crate) fn daemon_badge(
+    unavailable: Option<&crate::app::DaemonUnavailable>,
+    locale: &str,
+) -> Option<(String, String)> {
+    use crate::app::DaemonUnavailable;
+    use crate::i18n::host_text;
+    let label = host_text("topbar.daemon_unavailable", "dozerd unavailable", locale);
+    unavailable.map(|state| {
+        let detail = match state {
+            DaemonUnavailable::Stopped => host_text(
+                "topbar.daemon_stopped_detail",
+                "dozerd is stopped; some features are unavailable",
+                locale,
+            ),
+            DaemonUnavailable::StartupError(detail) if detail.trim().is_empty() => host_text(
+                "topbar.daemon_unreachable_detail",
+                "Cannot connect to dozerd",
+                locale,
+            ),
+            DaemonUnavailable::StartupError(detail) => detail.clone(),
+        };
+        (label.clone(), detail)
     })
 }
 
@@ -190,7 +204,8 @@ pub(crate) fn daemon_badge(unavailable: Option<&str>) -> Option<(&'static str, &
 fn daemon_badge_view(
     app: &App,
 ) -> Option<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> {
-    let (label, detail) = daemon_badge(app.daemon_unavailable.as_deref())?;
+    let (label, detail) =
+        daemon_badge(app.daemon_unavailable.as_ref(), app.locale.active_locale())?;
     let colors = byteui::theme::color::current();
     let red = colors.red;
     let chip = button(
@@ -277,7 +292,7 @@ pub(crate) fn top_bar(
         true,
         Message::SettingsOpen,
         move |hovered| Message::Hover(HoverId::Topbar(TopbarButton::Settings), hovered),
-        "设置",
+        crate::i18n::host_text("topbar.settings", "Settings", app.locale.active_locale()),
     ));
 
     let region = theme::region::top_bar();
@@ -334,7 +349,13 @@ fn project_tab_entries(app: &App) -> Vec<ProjectTabEntry> {
                     .project
                     .as_ref()
                     .map(|p| p.name.clone())
-                    .unwrap_or_else(|| "加载中…".to_string()),
+                    .unwrap_or_else(|| {
+                        crate::i18n::host_text(
+                            "common.loading",
+                            "Loading…",
+                            app.locale.active_locale(),
+                        )
+                    }),
                 dot: project_tab_dot(ws),
             },
         })
@@ -459,7 +480,11 @@ fn project_tabs_row(
             true,
             Message::ProjectAddMenuToggle,
             move |hovered| Message::Hover(HoverId::Topbar(TopbarButton::AddProject), hovered),
-            "打开项目",
+            crate::i18n::host_text(
+                "topbar.open_project",
+                "Open project",
+                app.locale.active_locale(),
+            ),
         );
 
         // 页签(固定宽,左对齐) + "＋"紧邻最后一片页签之后(不再用弹性留白把
@@ -490,11 +515,13 @@ pub(crate) fn project_add_menu_items(
     recent_projects: &[ProjectInfo],
     open_project_ids: &std::collections::HashSet<i64>,
     active_project_id: Option<i64>,
+    locale: &str,
 ) -> Vec<crate::chrome::native_menu::Item<Message>> {
     crate::menu_spec::to_native(project_add_menu_spec(
         recent_projects,
         open_project_ids,
         active_project_id,
+        locale,
     ))
 }
 
@@ -516,6 +543,7 @@ pub(crate) fn project_add_menu_spec(
     recent_projects: &[ProjectInfo],
     open_project_ids: &std::collections::HashSet<i64>,
     active_project_id: Option<i64>,
+    locale: &str,
 ) -> MenuSpec<Message> {
     let mut spec: MenuSpec<Message> = Vec::new();
     // 当前激活页签置顶 + 选中态(cream + `>`),与 tab 溢出菜单同口径。
@@ -547,12 +575,12 @@ pub(crate) fn project_add_menu_spec(
     }
     spec.push(MenuSpecItem::entry(
         Some(icons::IconKind::FolderOpenDot),
-        "打开项目",
+        crate::i18n::host_text("topbar.open_project", "Open Project", locale),
         Message::ProjectTabPickFolder,
     ));
     spec.push(MenuSpecItem::entry(
         Some(icons::IconKind::FolderPlus),
-        "创建项目",
+        crate::i18n::host_text("topbar.create_project", "Create Project", locale),
         Message::ProjectCreateOpen,
     ));
     spec
@@ -587,7 +615,12 @@ pub(crate) fn project_add_menu_popup(
     let active_project_id = (app.current_page == AppPage::Workspace)
         .then_some(app.active_project_id)
         .flatten();
-    let spec = project_add_menu_spec(&app.recent_projects, &open_ids, active_project_id);
+    let spec = project_add_menu_spec(
+        &app.recent_projects,
+        &open_ids,
+        active_project_id,
+        app.locale.active_locale(),
+    );
     let row_count = spec.len();
     let list = crate::menu_spec::to_iced(
         spec,
@@ -870,23 +903,43 @@ fn project_tab_dot(ws: &Workspace) -> Option<Color> {
 mod tests {
     #[test]
     fn daemon_badge_hidden_when_daemon_is_available() {
-        assert_eq!(daemon_badge(None), None);
+        assert_eq!(daemon_badge(None, "en"), None);
     }
 
     #[test]
     fn daemon_badge_shows_label_and_detail_when_unavailable() {
+        use crate::app::DaemonUnavailable;
         assert_eq!(
-            daemon_badge(Some("dozerd 已停止,部分功能不可用")),
-            Some(("dozerd 不可用", "dozerd 已停止,部分功能不可用"))
+            daemon_badge(Some(&DaemonUnavailable::Stopped), "zh-CN"),
+            Some((
+                "dozerd 不可用".to_string(),
+                "dozerd 已停止,部分功能不可用".to_string()
+            ))
+        );
+        assert_eq!(
+            daemon_badge(Some(&DaemonUnavailable::Stopped), "en"),
+            Some((
+                "dozerd unavailable".to_string(),
+                "dozerd is stopped; some features are unavailable".to_string()
+            ))
         );
     }
 
     #[test]
     fn daemon_badge_falls_back_when_the_detail_is_blank() {
+        use crate::app::DaemonUnavailable;
         // 状态为"不可用"但没有文案:徽标仍要显示(状态本身是真的),详情给个兜底。
         assert_eq!(
-            daemon_badge(Some("  ")),
-            Some(("dozerd 不可用", "无法连接到 dozerd"))
+            daemon_badge(Some(&DaemonUnavailable::StartupError("  ".into())), "zh-CN"),
+            Some(("dozerd 不可用".to_string(), "无法连接到 dozerd".to_string()))
+        );
+        // 启动失败附带的原始诊断详情原样显示,不翻译。
+        assert_eq!(
+            daemon_badge(
+                Some(&DaemonUnavailable::StartupError("io error".into())),
+                "zh-CN"
+            ),
+            Some(("dozerd 不可用".to_string(), "io error".to_string()))
         );
     }
 
@@ -908,7 +961,7 @@ mod tests {
     fn project_add_menu_items_excludes_already_open_projects() {
         let recent = [project(1, "a", 100), project(2, "b", 200)];
         let open: std::collections::HashSet<i64> = [2].into_iter().collect();
-        let items = project_add_menu_items(&recent, &open, None);
+        let items = project_add_menu_items(&recent, &open, None, "en");
         let has_b = items.iter().any(|i| {
             matches!(
                 i,
@@ -925,7 +978,7 @@ mod tests {
     #[test]
     fn project_add_menu_items_sorts_recent_projects_by_updated_ms_desc() {
         let recent = [project(1, "older", 100), project(2, "newer", 200)];
-        let items = project_add_menu_items(&recent, &std::collections::HashSet::new(), None);
+        let items = project_add_menu_items(&recent, &std::collections::HashSet::new(), None, "en");
         let msg_at = |idx: usize| match &items[idx] {
             crate::chrome::native_menu::Item::Entry { msg, .. } => msg.clone(),
             crate::chrome::native_menu::Item::Separator => panic!("expected entry at {idx}"),
@@ -937,7 +990,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn project_add_menu_items_always_ends_with_create_project_action() {
-        let items = project_add_menu_items(&[], &std::collections::HashSet::new(), None);
+        let items = project_add_menu_items(&[], &std::collections::HashSet::new(), None, "en");
         assert!(matches!(
             items.last(),
             Some(crate::chrome::native_menu::Item::Entry {
@@ -950,7 +1003,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn project_add_menu_items_no_separator_when_no_recent_projects() {
-        let items = project_add_menu_items(&[], &std::collections::HashSet::new(), None);
+        let items = project_add_menu_items(&[], &std::collections::HashSet::new(), None, "en");
         assert_eq!(
             items.len(),
             2,
@@ -969,7 +1022,7 @@ mod tests {
         let recent = [project(1, "a", 100), project(2, "b", 200)];
         // 激活项 id=2 同时也在 open 集合里——正是真实场景(激活页签必然已开)。
         let open: std::collections::HashSet<i64> = [1, 2].into_iter().collect();
-        let items = project_add_menu_items(&recent, &open, Some(2));
+        let items = project_add_menu_items(&recent, &open, Some(2), "en");
         let (Some(first), Some(second)) = (items.first(), items.get(1)) else {
             panic!("菜单至少应有激活项 + 打开项目两项");
         };
@@ -997,7 +1050,7 @@ mod tests {
         ));
 
         // 激活 id 不在 recent_projects 里:不画选中项,菜单回到原样。
-        let items = project_add_menu_items(&recent, &open, Some(99));
+        let items = project_add_menu_items(&recent, &open, Some(99), "en");
         assert!(
             items.iter().all(|i| !matches!(
                 i,

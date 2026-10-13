@@ -62,9 +62,13 @@ impl App {
             // 里都存在,所以状态只有这一个展示位。"打开项目失败"这类一次性事件
             // 走 Toast。
             let hint_col = column![
-                text("未打开任何项目——点顶栏的 ＋ 打开一个")
-                    .size(byteui::theme::font::subtitle())
-                    .color(byteui::theme::color::current().dim)
+                text(crate::i18n::host_text(
+                    "app.no_project_open",
+                    "No project open—click ＋ in the top bar to open one",
+                    self.locale.active_locale(),
+                ))
+                .size(byteui::theme::font::subtitle())
+                .color(byteui::theme::color::current().dim)
             ]
             .spacing(8);
             let hint = container(hint_col.padding(16))
@@ -558,6 +562,7 @@ pub(crate) fn panel_body<'a>(
                         ws,
                         Length::FillPortion(list_portion),
                         zone_pane_border(zone, lc),
+                        app.locale.active_locale(),
                     )
                 };
             let preview = preview_pane(
@@ -689,6 +694,7 @@ pub(crate) fn panel_body<'a>(
                         memory_add: app
                             .hover_progress(HoverId::named(PanelKind::Project, "memory_add")),
                     },
+                    app.locale.active_locale(),
                 )
                 .map(Message::Project);
             let preview = project_preview_pane(
@@ -928,6 +934,7 @@ pub(crate) fn panel_body<'a>(
                 ws.current_review_conversation_id().as_deref(),
                 Length::FillPortion(list_portion),
                 zone_pane_border(zone, rc),
+                app.locale.active_locale(),
             )
             .map(Message::Conversations);
             let review_bg = theme::region::review_content_pane()
@@ -1149,6 +1156,7 @@ fn app_panel_pane<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     use crate::extensions::app_host::{LogsView, Message as M, PanelView as V};
     let colors = byteui::theme::color::current();
+    let locale = app.locale.active_locale();
     let on_press = |m: M| Message::AppHost(m);
     let view = app.app_host.view_model(slot);
 
@@ -1170,24 +1178,35 @@ fn app_panel_pane<'a>(
         .spacing(8)
         .align_x(iced_widget::core::alignment::Horizontal::Center);
         let primary = match issue {
-            bytehost_apps::proto::AppIssue::DependencyInstall { .. } => {
-                iced_widget::button(text("查看日志").size(byteui::theme::font::body()))
-                    .padding([4, 12])
-                    .on_press(on_press(M::ShowLogs(slot)))
-                    .style(byteui::feedback::dialog::action_button_style(colors.gold))
-            }
-            _ => iced_widget::button(text("去设置安装").size(byteui::theme::font::body()))
-                .padding([4, 12])
-                .on_press(on_press(M::OpenRuntimeSettings))
-                .style(byteui::feedback::dialog::action_button_style(colors.gold)),
+            bytehost_apps::proto::AppIssue::DependencyInstall { .. } => iced_widget::button(
+                text(crate::i18n::host_text("app.view_logs", "View Logs", locale))
+                    .size(byteui::theme::font::body()),
+            )
+            .padding([4, 12])
+            .on_press(on_press(M::ShowLogs(slot)))
+            .style(byteui::feedback::dialog::action_button_style(colors.gold)),
+            _ => iced_widget::button(
+                text(crate::i18n::host_text(
+                    "app.install_in_settings",
+                    "Install in Settings",
+                    locale,
+                ))
+                .size(byteui::theme::font::body()),
+            )
+            .padding([4, 12])
+            .on_press(on_press(M::OpenRuntimeSettings))
+            .style(byteui::feedback::dialog::action_button_style(colors.gold)),
         };
         body = body.push(
             row![
                 primary,
-                iced_widget::button(text("重试").size(byteui::theme::font::body()))
-                    .padding([4, 12])
-                    .on_press(on_press(M::Start(slot)))
-                    .style(byteui::feedback::dialog::action_button_style(colors.dim)),
+                iced_widget::button(
+                    text(crate::i18n::host_text("common.retry", "Retry", locale))
+                        .size(byteui::theme::font::body()),
+                )
+                .padding([4, 12])
+                .on_press(on_press(M::Start(slot)))
+                .style(byteui::feedback::dialog::action_button_style(colors.dim)),
             ]
             .spacing(8),
         );
@@ -1198,7 +1217,7 @@ fn app_panel_pane<'a>(
         ) {
             let logs = app.app_host.logs_view(slot);
             if logs != LogsView::Hidden {
-                body = body.push(render_logs_body(logs, colors.dim, slot));
+                body = body.push(render_logs_body(logs, colors.dim, slot, locale));
             }
         }
         return container(body)
@@ -1212,32 +1231,84 @@ fn app_panel_pane<'a>(
     }
 
     let crashed = matches!(view, V::Crashed(_));
-    let (headline, detail, action): (String, Option<String>, Option<(&'static str, M)>) = match view
-    {
-        V::HostUnavailable(reason) => ("应用宿主不可用".into(), Some(reason), None),
-        V::Loading => ("正在读取应用状态…".into(), None, None),
-        V::Disconnected => (
-            "无法连接 dozerd".into(),
-            Some("应用状态暂时读不到,连上后会自动恢复".into()),
+    let (headline, detail, action): (String, Option<String>, Option<(String, M)>) = match view {
+        V::HostUnavailable(reason) => (
+            crate::i18n::host_text("app.host_unavailable", "App host unavailable", locale),
+            Some(reason),
             None,
         ),
-        V::Missing => ("这个应用已不在已安装列表里".into(), None, None),
-        V::Stopped => ("应用未运行".into(), None, Some(("启动", M::Start(slot)))),
-        V::Busy(text) => (text.into(), None, None),
-        V::Opening => ("正在打开…".into(), None, None),
-        V::OpenFailed => (
-            "打开失败".into(),
-            Some("再次点击侧栏图标重试,或先停止应用".into()),
-            Some(("停止", M::Stop(slot))),
+        V::Loading => (
+            crate::i18n::host_text("app.reading_state", "Reading app state…", locale),
+            None,
+            None,
         ),
-        V::Running => ("应用运行中".into(), None, None),
+        V::Disconnected => (
+            crate::i18n::host_text(
+                "app.cannot_connect_dozerd",
+                "Cannot connect to dozerd",
+                locale,
+            ),
+            Some(crate::i18n::host_text(
+                "app.state_unavailable_detail",
+                "App state is temporarily unavailable; it will recover once connected",
+                locale,
+            )),
+            None,
+        ),
+        V::Missing => (
+            crate::i18n::host_text(
+                "app.not_in_installed_list",
+                "This app is no longer in the installed list",
+                locale,
+            ),
+            None,
+            None,
+        ),
+        V::Stopped => (
+            crate::i18n::host_text("app.not_running", "App not running", locale),
+            None,
+            Some((
+                crate::i18n::host_text("app.start", "Start", locale),
+                M::Start(slot),
+            )),
+        ),
+        V::Busy(text) => (text.into(), None, None),
+        V::Opening => (
+            crate::i18n::host_text("app.opening", "Opening…", locale),
+            None,
+            None,
+        ),
+        V::OpenFailed => (
+            crate::i18n::host_text("app.open_failed", "Open failed", locale),
+            Some(crate::i18n::host_text(
+                "app.open_failed_detail",
+                "Click the sidebar icon again to retry, or stop the app first",
+                locale,
+            )),
+            Some((
+                crate::i18n::host_text("app.stop", "Stop", locale),
+                M::Stop(slot),
+            )),
+        ),
+        V::Running => (
+            crate::i18n::host_text("app.running", "App running", locale),
+            None,
+            None,
+        ),
         V::Crashed(reason) => (
-            "应用已退出".into(),
+            crate::i18n::host_text("app.exited", "App exited", locale),
             Some(reason),
-            Some(("重新启动", M::Start(slot))),
+            Some((
+                crate::i18n::host_text("app.restart", "Restart", locale),
+                M::Start(slot),
+            )),
         ),
         // 上面已单独处理(带两个按钮),这里不会到达。
-        V::RuntimeIssue(_) => ("需要运行时".into(), None, None),
+        V::RuntimeIssue(_) => (
+            crate::i18n::host_text("app.runtime_required", "Runtime required", locale),
+            None,
+            None,
+        ),
     };
     let mut body = column![
         text(app.app_host.display_name(slot))
@@ -1270,8 +1341,14 @@ fn app_panel_pane<'a>(
             );
         }
         let (log_label, log_msg) = match logs {
-            LogsView::Hidden | LogsView::Loading => ("查看日志", M::ShowLogs(slot)),
-            _ => ("收起日志", M::HideLogs(slot)),
+            LogsView::Hidden | LogsView::Loading => (
+                crate::i18n::host_text("app.view_logs", "View Logs", locale),
+                M::ShowLogs(slot),
+            ),
+            _ => (
+                crate::i18n::host_text("app.hide_logs", "Hide Logs", locale),
+                M::HideLogs(slot),
+            ),
         };
         buttons = buttons.push(
             iced_widget::button(text(log_label).size(byteui::theme::font::body()))
@@ -1281,7 +1358,7 @@ fn app_panel_pane<'a>(
         );
         body = body.push(buttons);
         if logs != LogsView::Hidden {
-            body = body.push(render_logs_body(logs, colors.dim, slot));
+            body = body.push(render_logs_body(logs, colors.dim, slot, locale));
         }
     } else if let Some((label, msg)) = action {
         body = body.push(
@@ -1310,6 +1387,7 @@ fn render_logs_body<'a>(
     logs: crate::extensions::app_host::LogsView,
     dim: Color,
     slot: AppSlot,
+    locale: &str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     use crate::extensions::app_host::{LogsView, Message as M};
     let item = |label: String| {
@@ -1319,11 +1397,19 @@ fn render_logs_body<'a>(
             .into()
     };
     match logs {
-        LogsView::Loading => item("读取日志…".into()),
+        LogsView::Loading => item(crate::i18n::host_text(
+            "app.reading_logs",
+            "Reading logs…",
+            locale,
+        )),
         LogsView::Loaded { text, truncated } => {
             let mut col = column![].spacing(8).width(Length::Fill);
             if truncated {
-                col = col.push(item("仅显示最后若干行".into()));
+                col = col.push(item(crate::i18n::host_text(
+                    "app.logs_truncated",
+                    "Showing only the last lines",
+                    locale,
+                )));
             }
             let lines = iced_widget::text(text)
                 .size(byteui::theme::font::body())
@@ -1780,10 +1866,11 @@ pub(crate) fn ssh_tab_bar<'a>(
     // key(真实 host_id 是 UUID,不会是空串,不会撞)。
     let blank_key = ssh_tab_hover_key("");
     let blank_active = ws.ssh_active.is_none();
+    let blank_title = crate::i18n::host_text("ssh.blank_tab", "Blank", app.locale.active_locale());
     entries.push((
-        tab_display_width("空白"),
+        tab_display_width(&blank_title),
         tab_widget::panel_tab(tab_widget::PanelTabArgs {
-            title: "空白".to_string(),
+            title: blank_title,
             active: blank_active,
             hover_t: app.hover_progress(HoverId::tab_item(PanelKind::Ssh, blank_key)),
             close_hover_t: app.hover_progress(HoverId::tab_close(PanelKind::Ssh, blank_key)),
@@ -1942,8 +2029,16 @@ pub(crate) fn ssh_tab_bar<'a>(
         PanelKind::Ssh,
         app.list_collapsed(PanelKind::Ssh),
         HoverId::list_collapse(PanelKind::Ssh),
-        "收起列表",
-        "展开列表",
+        crate::i18n::host_text(
+            "panel.collapse_list",
+            "Collapse list",
+            app.locale.active_locale(),
+        ),
+        crate::i18n::host_text(
+            "panel.expand_list",
+            "Expand list",
+            app.locale.active_locale(),
+        ),
         Message::TogglePanelListCollapse(PanelKind::Ssh),
         move |hovered| Message::Hover(HoverId::list_collapse(PanelKind::Ssh), hovered),
     );
@@ -2120,16 +2215,16 @@ pub(crate) fn ssh_terminal_pane<'a>(
                             focused.then(|| app.term_ime_preedit()).flatten(),
                         )
                     }
-                    None => ssh_empty_state(),
+                    None => ssh_empty_state(app.locale.active_locale()),
                 }
             }
             Some((host_id, ssh::SshTabKind::Sftp)) => match ws.sftp_tabs.get(host_id) {
                 Some(state) => {
                     ssh::sftp::sftp_pane_view(state).map(|m| Message::Ssh(ssh::Message::Sftp(m)))
                 }
-                None => ssh_empty_state(),
+                None => ssh_empty_state(app.locale.active_locale()),
             },
-            None => ssh_empty_state(),
+            None => ssh_empty_state(app.locale.active_locale()),
         };
     container(
         column![ssh_tab_bar(app, ws), tab_divider(), body]
@@ -2153,8 +2248,9 @@ pub(crate) fn ssh_terminal_pane<'a>(
 /// 表示"空白",所以"空白" tab 只在 `ssh_tab_bar()` 里画一个固定条目,
 /// 内容侧靠 `ssh_active == None` 这个分支渲染,不是真的建一个 tab 结构体
 /// (对照 preview 那边"tab 数据里有一个 `TabKind::Blank` 变体"的做法)。
-pub(crate) fn ssh_empty_state<'a>()
--> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+pub(crate) fn ssh_empty_state<'a>(
+    locale: &str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     container(
         column![
             icons::view(
@@ -2162,9 +2258,13 @@ pub(crate) fn ssh_empty_state<'a>()
                 72.0,
                 byteui::theme::color::current().dim,
             ),
-            text("点主机卡片的终端/文件传输图标开始")
-                .size(byteui::theme::font::body())
-                .color(byteui::theme::color::current().dim),
+            text(crate::i18n::host_text(
+                "ssh.empty_hint",
+                "Click a host card's terminal/file-transfer icon to start",
+                locale,
+            ))
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().dim),
         ]
         .spacing(14)
         .align_x(iced_widget::core::alignment::Horizontal::Center),

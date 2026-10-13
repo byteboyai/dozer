@@ -31,8 +31,8 @@ impl PanelHost for FakePanelHost {
         _kind: PanelKind,
         _collapsed: bool,
         _hover_id: HoverId,
-        _tooltip_collapse: &'a str,
-        _tooltip_expand: &'a str,
+        _tooltip_collapse: impl Into<std::borrow::Cow<'a, str>>,
+        _tooltip_expand: impl Into<std::borrow::Cow<'a, str>>,
         _on_select: M,
         _on_hover: impl Fn(bool) -> M + 'a,
     ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
@@ -76,8 +76,8 @@ impl crate::extensions::usage::adapter::PanelDisplay<crate::app::Message> for Fa
     fn list_collapse_button<'a>(
         &self,
         _collapsed: bool,
-        _tooltip_collapse: &'a str,
-        _tooltip_expand: &'a str,
+        _tooltip_collapse: impl Into<std::borrow::Cow<'a, str>>,
+        _tooltip_expand: impl Into<std::borrow::Cow<'a, str>>,
         _on_select: crate::app::Message,
         _on_hover: impl Fn(bool) -> crate::app::Message + 'a,
     ) -> Element<'a, crate::app::Message, iced_widget::Theme, iced_renderer::Renderer> {

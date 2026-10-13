@@ -3202,6 +3202,7 @@ pub(crate) fn exited_marker() -> Vec<u8> {
 pub(crate) fn review_content<'a>(
     mut content: iced_widget::Column<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
     ws: &'a Workspace,
+    locale: &str,
 ) -> iced_widget::Column<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(rv) = &ws.review else {
         return content;
@@ -3230,7 +3231,11 @@ pub(crate) fn review_content<'a>(
     if let ReviewSource::Conversation(conversation_id) = &rv.source
         && !rv.entries.is_empty()
     {
-        content = content.push(load_more_button(conversation_id, rv.entries.len() as i64));
+        content = content.push(load_more_button(
+            conversation_id,
+            rv.entries.len() as i64,
+            locale,
+        ));
     }
     content
 }
