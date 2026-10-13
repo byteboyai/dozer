@@ -164,7 +164,7 @@
 ### 4.6 未验项明确清单（不得标"完全接入"）
 
 1. ~~**A1 发布层**：bytehost 未发 tag、dozer 未 pin revision；三仓依赖不提交 `[patch]`——需**远端写授权**。~~ ✅ **已完成（2026-10-13）**：bytehost tag `v0.2.0`、dozer revision `67ab0e65` 均推远端，`[patch]` 已删，干净解析构建通过。
-2. **A17 生产端**：真实 Usage 生产者事件→账本→UI→跨重启；应用运行 token 诚实为 0（S6/S7）。
+2. **A17 生产端**：真实 Usage 生产者事件→账本→UI→跨重启；应用运行 token 诚实为 0（S6/S7）。**注（2026-10-13 复审）**：账本侧一致性缺陷 #1/#9 已修（见 §4.10），#3/#4 仍属 A17 缺口（应用视口未接 / Usage webview 未挂载）。
 3. **A18 签名**：**无 Developer ID Application 证书可用**——本机诊断（2026-10-13）：Apple ID `chrischiang@live.cn` / Team `38K4BYSQTE` 已登录，但 keychain 内仅有 ①Apple 的 *Developer ID Certification Authority* 中间 CA（不可用于签名）与 ②已**过期**的 *Apple Development: Chuan Jiang*（`notAfter 2023-01-17`），`security find-identity -v -p codesigning` = **0**。用户裁决**不申请 Developer ID**（需付费 Apple Developer Program）→ 维持 ad-hoc 候选包，**不公证、不分发**；`package-macos.sh` 保持 ad-hoc-only 设计（`codesign --force --deep --sign -`，脚本注释已声明需真实身份与凭据方为发行版）。
 4. **§3 真实窗口人工项（M1–M4）**：屏幕录制/辅助功能权限缺失，`screencapture` 与 Orca 辅助 App 均不可用 → 需人工在真实窗口执行。
 5. **L3 真实 WKWebView 项**：A5/A6/A7(显示交互)/A9/A10/A11/A12/A13/A14/A15/A16 的真机探针 → 无 GUI runner，移交可用 macOS 环境。
@@ -184,3 +184,21 @@
 ### 4.9 兼容桥收口状态
 
 C1–C12 见 §2。C1/C2/C3/C4 已归零（早期 Task）；C5/C6/C7/C8/C9/C11/C12 于 Task 21 收敛（对应门禁规则退役或棘轮下降）。**C10 已归零**：依用户裁决先后走方案 B（建窗/几何上收）与**方案 C**（feature-gated 上收 `OverlayGpu`/`backdrop_card*`），`R-OVERLAY-DUP` **3 → 0**（`platform/overlay_gpu.rs` 从扫描消失，基线 216/6 → 213/5）。全部兼容桥的删除条件均已满足。
+
+### 4.10 复审（2026-10-13）9 项发现的处置
+
+复审文件 `review-2026-10-13-full.md` 对「Task 01–23 全部 DONE」的结论提出 9 项异议；本体与复审就 A17/#3/#4 及 A17/A18 属已记录缺口的判断一致。处置：**「小修复优先」**——先修 #1/#7/#8/#9，大面 #2/#3/#4/#5/#6 归入后续计划。
+
+| # | 级别 | 结论 | 处置 |
+|---|------|------|------|
+| 1 | P1 | `run_id` 跨重启碰撞（`action+sequence`，而 `RequestTable` 每启动从 0 计数）→ 账本按 `run_id` upsert 会覆盖上一次真实操作 | ✅ **已修**（digger `99d5aee`）：`UsageRuntime` 加 `boot_id`（nanos+pid），`run_id = digger:{boot_id}:{action}:{key}`；回归测试 `distinct_ops_across_restarts_do_not_overwrite_each_other`（修复前失败） |
+| 2 | P1 | 无真实 shutdown（退出仅 `save_layout()`+`iced::exit()`） | ⏸ 归入后续计划（大面） |
+| 3 | P1 | 无应用启动/视口（真机 `LaunchUrl` 未接） | ⏸ 归入后续计划（A17/§4.6 已记录） |
+| 4 | P1 | Usage webview 未挂载（无 Surface/资源/payload） | ⏸ 归入后续计划（与 #3 独立，见 §4.6/复审） |
+| 5 | P1 | 「含数据卸载」未接线（`take_ready`/`store_removal_task` 生产端） | ⏸ 归入后续计划（中面） |
+| 6 | P2 | 事件订阅未接 | ⏸ 归入后续计划（大面） |
+| 7 | P2 | 启动失败不可重试（`Opened` 提前置位、`ServiceFailed` 不复位） | ✅ **已修**（`8e75212`）：`ServiceFailed` 复位 `opened`；新增 `Message::RetryService` + 界面「重试」；回归测试 `a_failed_service_start_can_retry` |
+| 8 | P2 | 状态机 `Effect::Notice` 落 `_ => None` 被静默丢弃（回滚/运行时卸载失败无提示） | ✅ **已修**（`743f452`）：组合根接住 `Notice` → 面板顶部可关闭提示条；回归测试 `a_notice_effect_becomes_a_visible_notice` |
+| 9 | P2 | 损坏账本退回 PID 临时空账本：查询 `Ok(empty)`、新记录写进无引用临时文件 | ✅ **已修**（`1fd286c`）：新增 `UnavailableUsageService`（查询恒 `Unavailable`）；损坏时**不接线**生产者、原文件不动；回归测试 store+desktop 各一 |
+
+**修订后的整体判定不变**：pass 7 · partial 11；#1/#7/#8/#9 四项真实缺陷已闭合，硬缺口仍为 **A17**（生产端）与 **A18**（签名）；#2/#3/#4/#5/#6 作为后续计划清单登记。

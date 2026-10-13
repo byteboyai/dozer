@@ -931,6 +931,12 @@
 - **判定汇总(2026-10-12 首次):** **pass 6** / **partial 12**;硬缺口三处——**A1 发布层**、**A17 生产端**(真实生产者未跑、token 如实 0)、**A18 签名**。**整体不标"完全接入"。** L3/L4 真机项(A5/A6/A9/A14/A15/A16 等)因屏幕录制/辅助功能权限与无 GUI runner → not-run,并入 §3 人工项。
 - **判定复评(2026-10-13):** C10 方案 C 归零(`R-OVERLAY-DUP` 3→0)、Task 22 远端补齐(bytehost tag `v0.2.0` + dozer revision `67ab0e65`,三仓 `[patch]` 删除)→ **pass 7 · partial 11**;硬缺口剩两处——**A17 生产端**、**A18 签名**。A18 于同日本机诊断为不可用(仅过期 Apple Development 证书 + CA,无 Developer ID Application;用户裁决不申请)→ 永久阻塞,维持 ad-hoc 候选包。
 - **ADR:**Digger ADR-001/011 **保持 Proposed**(A18 未过,不升 Accepted);正文已正确声明"不用 Tauri",未改。
+- **复审处置(2026-10-13,`review-2026-10-13-full.md` 9 项):** 采用"小修复优先"。✅ 已修四项真实缺陷,digger 全部提交并 workspace 全绿:
+  - **#1 P1 `run_id` 跨重启碰撞**(`99d5aee`):`UsageRuntime` 加 `boot_id`(nanos+pid),`run_id` 带它;回归 `distinct_ops_across_restarts_do_not_overwrite_each_other`。
+  - **#7 P2 启动失败不可重试**(`8e75212`):`ServiceFailed` 复位 `opened`;新增 `Message::RetryService` + 界面「重试」;回归 `a_failed_service_start_can_retry`。
+  - **#8 P2 `Notice` 被静默丢弃**(`743f452`):组合根接住 `Effect::Notice` → 面板顶部可关闭提示条;回归 `a_notice_effect_becomes_a_visible_notice`。
+  - **#9 P2 损坏账本退回临时空账本**(`1fd286c`):新增 `UnavailableUsageService`;损坏时**不接线**生产者、原文件不动;回归 store+desktop 各一。
+  - ⏸ 大面 **#2/#3/#4/#5/#6**(真实 shutdown / 应用视口 / Usage webview 挂载 / 含数据卸载接线 / 事件订阅)登记为后续计划;判定见 `acceptance.md` §4.10。
 - **未决项 / 阻塞(移交用户裁决):**
   - **C10 完全归零**:✅ 已解决(2026-10-13 方案 C,`R-OVERLAY-DUP` 0;见 Task 21 切片 10)。
   - **Task 22 远端部分**:✅ 已解决(2026-10-13 用户授权远端写:bytehost tag `v0.2.0`、dozer revision `67ab0e65`、digger 钉版)。仅第 4 条签名永久阻塞(见上)。
@@ -1012,3 +1018,7 @@
 | 23 | `8f479a81` | Z | `style(dozer-app): adapt toast overlay to ToastMetrics, drop unused reexport` |
 | 23 | `8ff87cba` | Z | `test(audit): drop stale HOVERSLOT test after C9 retired the rule` |
 | 23 | `191ab6a9` | Z | `docs(integration): record Digger bytehost acceptance` |
+| 复审 #1 | `99d5aee` | D | `fix(apps): make task run ids unique across restarts` |
+| 复审 #7 | `8e75212` | D | `fix(apps): make service-start failure retryable` |
+| 复审 #8 | `743f452` | D | `fix(apps): surface state-machine notices instead of dropping them` |
+| 复审 #9 | `1fd286c` | D | `fix(usage): corrupt ledger is unavailable, not a silent temp ledger` |
