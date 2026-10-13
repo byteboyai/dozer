@@ -435,6 +435,7 @@ mod tests {
             Message::TreeDragEnd {
                 confirmed: false,
                 shift: false,
+                command: false,
             },
             1,
             &handle,
@@ -701,6 +702,7 @@ mod tests {
             Message::TreeDragEnd {
                 confirmed: false,
                 shift: false,
+                command: false,
             },
             1,
             &handle,
@@ -747,8 +749,7 @@ mod tests {
         assert_eq!(
             ws_state.pending_move,
             Some(PendingMove {
-                source,
-                source_is_dir: false,
+                sources: vec![(source, false)],
                 name_draft: "outside.txt".to_string(),
                 dir_draft: target.display().to_string(),
             })
@@ -822,6 +823,7 @@ mod tests {
             Message::TreeDragEnd {
                 confirmed: true,
                 shift: false,
+                command: false,
             },
             1,
             &handle,
@@ -835,8 +837,7 @@ mod tests {
         assert_eq!(
             ws_state.pending_move,
             Some(PendingMove {
-                source: file,
-                source_is_dir: false,
+                sources: vec![(file, false)],
                 name_draft: "f.txt".to_string(),
                 dir_draft: sub.display().to_string(),
             })
@@ -857,8 +858,7 @@ mod tests {
         let mut app_state = AppState::default();
         let handle = tokio::runtime::Handle::current();
         ws_state.pending_move = Some(PendingMove {
-            source: file.clone(),
-            source_is_dir: false,
+            sources: vec![(file.clone(), false)],
             name_draft: "f.txt".to_string(),
             dir_draft: sub.display().to_string(),
         });
@@ -910,8 +910,7 @@ mod tests {
         let mut app_state = AppState::default();
         let handle = tokio::runtime::Handle::current();
         ws_state.pending_move = Some(PendingMove {
-            source: file.clone(),
-            source_is_dir: false,
+            sources: vec![(file.clone(), false)],
             name_draft: "renamed.txt".to_string(),
             dir_draft: sub_b.display().to_string(),
         });
@@ -961,8 +960,7 @@ mod tests {
         let mut app_state = AppState::default();
         let handle = tokio::runtime::Handle::current();
         ws_state.pending_move = Some(PendingMove {
-            source: file.clone(),
-            source_is_dir: false,
+            sources: vec![(file.clone(), false)],
             name_draft: "a/b.txt".to_string(),
             dir_draft: dir.path().display().to_string(),
         });
@@ -994,8 +992,7 @@ mod tests {
         let mut app_state = AppState::default();
         let handle = tokio::runtime::Handle::current();
         ws_state.pending_move = Some(PendingMove {
-            source: file.clone(),
-            source_is_dir: false,
+            sources: vec![(file.clone(), false)],
             name_draft: "f.txt".to_string(),
             dir_draft: dir.path().join("does-not-exist").display().to_string(),
         });
@@ -1030,8 +1027,7 @@ mod tests {
         let mut app_state = AppState::default();
         let handle = tokio::runtime::Handle::current();
         ws_state.pending_move = Some(PendingMove {
-            source: file.clone(),
-            source_is_dir: false,
+            sources: vec![(file.clone(), false)],
             name_draft: "f.txt".to_string(),
             dir_draft: dir.path().display().to_string(),
         });
@@ -1065,8 +1061,7 @@ mod tests {
         let mut app_state = AppState::default();
         let handle = tokio::runtime::Handle::current();
         ws_state.pending_move = Some(PendingMove {
-            source: src_dir.clone(),
-            source_is_dir: true,
+            sources: vec![(src_dir.clone(), true)],
             name_draft: "parent".to_string(),
             dir_draft: nested.display().to_string(),
         });
@@ -1098,8 +1093,7 @@ mod tests {
         let mut app_state = AppState::default();
         let handle = tokio::runtime::Handle::current();
         ws_state.pending_move = Some(PendingMove {
-            source: file.clone(),
-            source_is_dir: false,
+            sources: vec![(file.clone(), false)],
             name_draft: "f.txt".to_string(),
             dir_draft: dir.path().display().to_string(),
         });
@@ -1192,6 +1186,7 @@ mod tests {
             Message::TreeDragEnd {
                 confirmed: false,
                 shift: false,
+                command: false,
             },
             1,
             &handle,
@@ -1225,6 +1220,7 @@ mod tests {
             Message::TreeDragEnd {
                 confirmed: false,
                 shift: false,
+                command: false,
             },
             1,
             &handle,
@@ -1259,6 +1255,7 @@ mod tests {
             Message::TreeDragEnd {
                 confirmed: true,
                 shift: false,
+                command: false,
             },
             1,
             &handle,
@@ -1537,11 +1534,114 @@ mod tests {
     fn delete_confirm_spec_reflects_pending_target() {
         let mut ws_state = ws_with_tree(std::env::temp_dir());
         assert!(delete_confirm_spec(&ws_state).is_none());
-        ws_state.tree_delete_confirm = Some((PathBuf::from("/tmp/报告.pdf"), false));
+        ws_state.tree_delete_confirm = Some(vec![(PathBuf::from("/tmp/报告.pdf"), false)]);
         let spec = delete_confirm_spec(&ws_state).expect("spec present");
         assert_eq!(spec.title, "删除文件 \"报告.pdf\"?");
         assert!(matches!(spec.confirm_msg, Message::DeleteConfirm));
         assert!(matches!(spec.cancel_msg, Message::DeleteCancel));
+    }
+
+    /// 多文件删除确认框要列出**全部**待删项的相对路径(用户原话:同时操作
+    /// 多个文件时提示窗口应显示所有文件名),不再只显示其中一个。
+    #[test]
+    fn multi_delete_confirm_spec_lists_every_target() {
+        let mut ws_state = ws_with_tree(std::env::temp_dir());
+        assert!(delete_confirm_spec(&ws_state).is_none());
+        ws_state.tree_delete_confirm = Some(vec![
+            (PathBuf::from("/tmp/a.rs"), false),
+            (PathBuf::from("/tmp/b.rs"), false),
+            (PathBuf::from("/tmp/sub"), true),
+        ]);
+        let spec = delete_confirm_spec(&ws_state).expect("spec present");
+        assert_eq!(spec.title, "删除 3 个文件/文件夹？");
+        // 每个待删项都应以 `• <路径>` 形式出现在说明里。
+        assert!(spec.description.contains("• /tmp/a.rs"));
+        assert!(spec.description.contains("• /tmp/b.rs"));
+        assert!(spec.description.contains("• /tmp/sub"));
+    }
+
+    /// 右键菜单对"选中集里的一项"发起 `DeleteRequest`,且选中多于一项时,
+    /// 应把整组选中项一并纳入待删除(`tree_delete_confirm`),实现"多选后删整组"。
+    #[tokio::test]
+    async fn delete_request_from_item_in_multiselection_queues_all_selected() {
+        let mut ws_state = WorkspaceState::default();
+        let a = PathBuf::from("/proj/a.rs");
+        let b = PathBuf::from("/proj/b.rs");
+        let c = PathBuf::from("/proj/sub");
+        ws_state.tree_selected.insert(a.clone());
+        ws_state.tree_selected.insert(b.clone());
+        ws_state.tree_selected.insert(c.clone());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::DeleteRequest(a.clone(), false),
+            1,
+            &handle,
+            |_| panic!("删确认不该 emit 任何消息"),
+            &crate::external_apps::ExternalAppsConfig::default(),
+            true,
+        );
+        let targets = ws_state.tree_delete_confirm.expect("确认框应弹出");
+        assert_eq!(targets.len(), 3);
+        assert!(targets.iter().any(|(p, _)| p == &a));
+        assert!(targets.iter().any(|(p, _)| p == &b));
+        assert!(targets.iter().any(|(p, _)| p == &c));
+    }
+
+    /// 单击(未越过拖拽阈值)按住 Cmd/Ctrl 走不连续多选:复用 `select_toggle`
+    /// 切换被点项的选中态,而不是整组替换(见 `Message::TreeDragEnd` 文档)。
+    #[tokio::test]
+    async fn tree_drag_end_unconfirmed_with_command_toggles_selection() {
+        let mut ws_state = WorkspaceState::default();
+        let target = PathBuf::from("/proj/f.rs");
+        let other = PathBuf::from("/proj/other.rs");
+        ws_state.tree_selected.insert(other.clone());
+        ws_state.arm_tree_drag(target.clone(), false, (0.0, 0.0), std::time::Instant::now());
+        let mut app_state = AppState::default();
+        let handle = tokio::runtime::Handle::current();
+        update(
+            &mut ws_state,
+            &mut app_state,
+            Message::TreeDragEnd {
+                confirmed: false,
+                shift: false,
+                command: true,
+            },
+            1,
+            &handle,
+            |_| panic!("单击不该 emit 任何消息"),
+            &crate::external_apps::ExternalAppsConfig::default(),
+            true,
+        );
+        // `target` 被 toggle 进选中集,`other` 不受影响——不连续多选。
+        assert!(ws_state.tree_selected.contains(&target));
+        assert!(ws_state.tree_selected.contains(&other));
+    }
+
+    /// 在被按项属于当前多选集、且选中多于一项时,`arm_tree_drag` 应把整组
+    /// 选中项装进 `drag.sources`,使随后的拖拽移动一并带走整组(多文件移动)。
+    #[tokio::test]
+    async fn arm_tree_drag_with_item_in_selection_carries_whole_selection() {
+        let mut ws_state = WorkspaceState::default();
+        let a = PathBuf::from("/proj/a.rs");
+        let b = PathBuf::from("/proj/b.rs");
+        let c = PathBuf::from("/proj/c.rs");
+        ws_state.tree_selected.insert(a.clone());
+        ws_state.tree_selected.insert(b.clone());
+        ws_state.tree_selected.insert(c.clone());
+        ws_state.arm_tree_drag(a.clone(), false, (0.0, 0.0), std::time::Instant::now());
+        let sources = ws_state
+            .tree_drag
+            .as_ref()
+            .expect("拖拽应已武装")
+            .sources
+            .clone();
+        assert_eq!(sources.len(), 3);
+        assert!(sources.contains(&(a.clone(), false)));
+        assert!(sources.contains(&(b.clone(), false)));
+        assert!(sources.contains(&(c.clone(), false)));
     }
 
     #[tokio::test]
@@ -2279,8 +2379,7 @@ mod tests {
     async fn move_dir_browse_asks_the_host_for_a_directory_starting_at_the_draft() {
         let mut ws_state = ws_with_tree(std::env::temp_dir());
         ws_state.pending_move = Some(PendingMove {
-            source: PathBuf::from("/a/b.txt"),
-            source_is_dir: false,
+            sources: vec![(PathBuf::from("/a/b.txt"), false)],
             name_draft: "b.txt".into(),
             dir_draft: "/tmp/x".into(),
         });

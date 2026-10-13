@@ -3,7 +3,7 @@
 use super::git_status;
 use crate::extensions::toast;
 use crate::panel_host::{HostRequest, PanelCommand};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::*;
@@ -247,33 +247,83 @@ pub fn update(
         },
         Message::DeleteRequest(path, is_dir) => {
             app_state.context_menu = None;
-            ws_state.tree_delete_confirm = Some((path, is_dir));
+            // 右键菜单只携带单一 `path`,但若 `path` 属于当前多选集(且选中多于
+            // 一项),则把整组选中项一并纳入待删除——实现"多选后删整组"。项目
+            // 根恒排除(不能删项目根)。单选(或 `path` 不在选中集里)时退化为只
+            // 删 `path` 这一项。
+            let root = ws_state.file_tree.as_ref().map(|t| t.root().to_path_buf());
+            let targets: Vec<(PathBuf, bool)> =
+                if ws_state.tree_selected.contains(&path) && ws_state.tree_selected.len() > 1 {
+                    let visible: HashMap<PathBuf, bool> = ws_state
+                        .visible_tree_rows()
+                        .into_iter()
+                        .map(|r| (r.path, r.is_dir))
+                        .collect();
+                    ws_state
+                        .tree_selected
+                        .iter()
+                        .filter(|p| Some(p.as_path()) != root.as_deref())
+                        .map(|p| {
+                            let is_dir = visible.get(p).copied().unwrap_or_else(|| p.is_dir());
+                            (p.clone(), is_dir)
+                        })
+                        .collect()
+                } else {
+                    vec![(path, is_dir)]
+                };
+            if targets.is_empty() {
+                // 极端情况:整组只剩根——无任何可删项,不弹确认框。
+                return;
+            }
+            ws_state.tree_delete_confirm = Some(targets);
         }
         Message::DeleteCancel => {
             ws_state.tree_delete_confirm = None;
         }
         Message::DeleteConfirm => {
-            let Some((path, _)) = ws_state.tree_delete_confirm.take() else {
+            let Some(targets) = ws_state.tree_delete_confirm.take() else {
                 return;
             };
+            if targets.is_empty() {
+                return;
+            }
             handle.spawn(async move {
-                let parent = path.parent().map(|p| p.to_path_buf());
-                let result = tokio::task::spawn_blocking(move || {
-                    trash::delete(&path).map_err(|e| e.to_string())
-                })
-                .await
-                .unwrap_or_else(|e| Err(e.to_string()));
-                let outcome = match (result, parent) {
-                    (Ok(()), Some(p)) => Ok(p),
-                    (Ok(()), None) => Err("删除的是项目根,无父目录可刷新".to_string()),
-                    (Err(e), _) => Err(e),
-                };
-                emit(Message::OpDone {
-                    project_id,
-                    parent: outcome,
-                    expand: false,
-                });
+                let results: Vec<(PathBuf, std::result::Result<(), String>)> =
+                    tokio::task::spawn_blocking(move || {
+                        targets
+                            .into_iter()
+                            .map(|(path, _)| {
+                                let result = trash::delete(&path).map_err(|e| e.to_string());
+                                (path, result)
+                            })
+                            .collect()
+                    })
+                    .await
+                    .unwrap_or_else(|e| vec![(PathBuf::new(), Err(e.to_string()))]);
+                emit(Message::DeleteApplied(results));
             });
+        }
+        Message::DeleteApplied(results) => {
+            for (path, result) in results {
+                match result {
+                    Ok(()) => {
+                        if let Some(parent) = path.parent()
+                            && let Some(tree) = &mut ws_state.file_tree
+                        {
+                            tree.refresh(parent);
+                        }
+                    }
+                    Err(e) => {
+                        if path != std::path::Path::new("") {
+                            ws_state.outbox.push(
+                                LOG,
+                                crate::extensions::toast::Level::Error,
+                                format!("删除 {} 失败: {e}", path.display()),
+                            );
+                        }
+                    }
+                }
+            }
         }
         Message::OpDone { parent, expand, .. } => match parent {
             Ok(parent) => {
@@ -493,28 +543,27 @@ pub fn update(
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 ws_state.pending_move = Some(PendingMove {
-                    source: only.clone(),
-                    source_is_dir: only.is_dir(),
+                    sources: vec![(only.clone(), only.is_dir())],
                     name_draft: name,
                     dir_draft: target.display().to_string(),
                 });
                 ws_state.move_focus_pending = true;
                 return;
             }
-            // 理论上不会走到这里(见上面 `Message::FileDrop` 文档),多文件
-            // 批量改名弹一个框没有意义,原地保留旧的"直接移动"兜底行为。
-            let drop_target = target.clone();
-            handle.spawn(async move {
-                let result = tokio::task::spawn_blocking(move || {
-                    for p in &paths {
-                        let is_dir = std::fs::metadata(p).map(|m| m.is_dir()).unwrap_or(false);
-                        crate::project::move_item(p, is_dir, &target)?;
-                    }
-                    Ok::<(), String>(())
-                })
-                .await
-                .unwrap_or_else(|e| Err(e.to_string()));
-                emit(Message::FileDropDone(project_id, drop_target, result));
+            // 多文件拖入(理论上今天走不到——main.rs 每次 `DroppedFile` 恒只带
+            // 一个路径,但 `paths` 留了多元素口子):与单文件同走 `PendingMove`
+            // 确认框——全部待移动源列进 `sources`,确认时只让用户指目标目录、
+            // 不改名(各用原名)。不再"直接移动",与单文件"拖拽移动要确认"的
+            // 2026-09 既定行为保持一致。
+            let mut sources: Vec<(PathBuf, bool)> = Vec::with_capacity(paths.len());
+            for p in &paths {
+                let is_dir = std::fs::metadata(p).map(|m| m.is_dir()).unwrap_or(false);
+                sources.push((p.clone(), is_dir));
+            }
+            ws_state.pending_move = Some(PendingMove {
+                sources,
+                name_draft: String::new(),
+                dir_draft: target.display().to_string(),
             });
         }
         Message::FileDropDone(_, target, result) => match result {
@@ -558,9 +607,11 @@ pub fn update(
                 return;
             };
             ws_state.move_error = None;
+            let single = pending.sources.len() == 1;
             let name = pending.name_draft.trim().to_string();
             let dir_text = pending.dir_draft.trim().to_string();
-            if name.is_empty() || !crate::project::is_single_path_component(&name) {
+            // 只有单文件移动才校验"新名称"字段(多文件移动不改名,忽略它)。
+            if single && (name.is_empty() || !crate::project::is_single_path_component(&name)) {
                 ws_state.move_error = Some("名字不能为空或包含路径分隔符".to_string());
                 ws_state.pending_move = Some(PendingMove {
                     name_draft: name,
@@ -577,26 +628,43 @@ pub fn update(
                 });
                 return;
             }
-            let dest = target_dir.join(&name);
-            let source = pending.source;
-            let is_dir = pending.source_is_dir;
-            // 路径压根没变(没改名也没改目录,原地确认)、或目录被改成要移进
-            // 它自己的子树——这两种在 `move_item_to` 里都会撞上"已存在同名
-            // 项"/"不能移到它自己或其子树"的校验失败,但对用户来说这不是
-            // "出错了",只是"什么都没变"或"这么改没有意义"——静默当取消处理
-            // (不提示错误、不动磁盘),不吓用户一跳(2026-09 用户实测反馈:
-            // 这类情形不该弹错误)。
-            if dest == source || (is_dir && dest.starts_with(&source)) {
+            // 为每个源算出目标路径:单文件用 `name`(允许改名),多文件用各自原名。
+            // 跳过无意义/非法落点(原地、移进自身子树),其余交给 `move_item_to`。
+            let mut ops: Vec<(PathBuf, bool, PathBuf)> = Vec::with_capacity(pending.sources.len());
+            for (src, is_dir) in &pending.sources {
+                let dest_name = if single {
+                    name.clone()
+                } else {
+                    src.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                };
+                let dest = target_dir.join(&dest_name);
+                // 路径压根没变(没改名也没改目录,原地确认)、或目录被改成要移进
+                // 它自己的子树——这类对单文件是"什么都没变",对多文件是其中一种
+                // 源碰巧原地;都静默跳过(不提示错误、不动磁盘),不吓用户一跳
+                // (2026-09 用户实测反馈:这类情形不该弹错误)。
+                if dest == *src || (*is_dir && dest.starts_with(src)) {
+                    continue;
+                }
+                ops.push((src.clone(), *is_dir, dest));
+            }
+            if ops.is_empty() {
                 return;
             }
             let refresh_target = target_dir.clone();
             handle.spawn(async move {
-                let result = tokio::task::spawn_blocking(move || {
-                    crate::project::move_item_to(&source, is_dir, &dest)?;
-                    Ok::<(), String>(())
-                })
-                .await
-                .unwrap_or_else(|e| Err(e.to_string()));
+                let mut errs: Vec<String> = Vec::new();
+                for (src, is_dir, dest) in ops {
+                    if let Err(e) = crate::project::move_item_to(&src, is_dir, &dest) {
+                        errs.push(format!("{}: {e}", src.display()));
+                    }
+                }
+                let result = if errs.is_empty() {
+                    Ok(())
+                } else {
+                    Err(errs.join("；"))
+                };
                 emit(Message::FileDropDone(project_id, refresh_target, result));
             });
         }
@@ -673,14 +741,22 @@ pub fn update(
         // (`Message::Toggle`),不在这里做。
         // `confirmed` 且有合法待定目标:不立即移动,弹 `PendingMove` 确认框
         // (同 `FileDrop` 单文件那支,见其文档)——用户点"确定"才真正提交。
-        Message::TreeDragEnd { confirmed, shift } => {
+        Message::TreeDragEnd {
+            confirmed,
+            shift,
+            command,
+        } => {
             let Some(drag) = ws_state.tree_drag.take() else {
                 return;
             };
             ws_state.drag_hover = HashSet::new();
             if !confirmed {
-                // 只是一次单击:按住 Shift 走区间多选,否则单选被点项。
-                if shift {
+                // 只是一次单击:按住 Cmd/Ctrl 走不连续多选,按住 Shift 走区间
+                // 多选,否则单选被点项。注意 `drag.source` 永远是"被按下的那一项",
+                // 多选取这个锚点即可。
+                if command {
+                    ws_state.select_toggle(drag.source.clone());
+                } else if shift {
                     ws_state.select_shift_range(drag.source.clone());
                 } else {
                     ws_state.select_single(drag.source.clone());
@@ -693,19 +769,25 @@ pub fn update(
             let Some(target) = target else {
                 return;
             };
+            // `drag.sources` 已被 `arm_tree_drag` 填好:若被按下项在选区里且
+            // 选区>1,它就是整组选中项;否则就是单文件 `[被按项]`。
             let name = drag
-                .source
-                .file_name()
+                .sources
+                .first()
+                .and_then(|(p, _)| p.file_name())
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            let single = drag.sources.len() == 1;
             ws_state.move_error = None;
             ws_state.pending_move = Some(PendingMove {
-                source: drag.source,
-                source_is_dir: drag.source_is_dir,
+                sources: drag.sources,
                 name_draft: name,
                 dir_draft: target.display().to_string(),
             });
-            ws_state.move_focus_pending = true;
+            // 多文件移动不能重命名,自然也用不着抢焦点;单文件才进"新名称"输入框。
+            if single {
+                ws_state.move_focus_pending = true;
+            }
         }
         // `TabReloadFromDisk` 由 app 层(`App::update`)拦截处理:在 Files/
         // Project 两个预览面板按路径找 tab 调 `PreviewPane::bump_reload`,不进

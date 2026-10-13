@@ -43,18 +43,19 @@ pub(crate) struct ContextMenu {
     pub(crate) agent_terminal_visible: bool,
 }
 
-/// 拖拽移动待确认——内部树拖拽落点合法、或外部 OS 单文件拖入命中树上
-/// 某一行后,不立即移动,而是弹这个确认框:用户可在框里改文件名/改
-/// 目标目录,取消则整场拖拽作废(磁盘不会有任何改动),点确定才真正提交
-/// (`Message::MoveConfirm`)。2026-09 用户实测反馈:拖拽移动不该悄无声息
-/// 直接改路径,得让用户确认。多文件外部拖入(理论上今天走不到——
-/// main.rs 每次 `DroppedFile` 只带一个路径,见 `Message::FileDrop`
-/// 文档)不弹这个框,批量改名没有意义,原地保留旧的"直接移动"行为。
+/// 拖拽移动待确认——内部树拖拽(可一次多文件)落点合法、或外部 OS 文件拖入
+/// 命中树上某一行后,不立即移动,而是弹这个确认框:用户可在框里改目标目录
+/// (多文件时还会列出全部待移动项),取消则整场拖拽作废(磁盘不会有任何改动),
+/// 点确定才真正提交(`Message::MoveConfirm`)。2026-09 用户实测反馈:拖拽
+/// 移动不该悄无声息直接改路径,得让用户确认。单文件移动时 `sources` 长度为
+/// 1,确认框里还允许在 `name_draft` 改文件名;多文件移动时 `sources` 多于一个,
+/// 确认框只展示列表、不改名(各自保留原名)。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingMove {
-    pub(crate) source: PathBuf,
-    pub(crate) source_is_dir: bool,
-    /// 编辑框草稿:新文件名(不含路径,默认原文件名)。
+    /// 全部待移动源(支持一次移动多个选中项):`路径 + 是否目录`。
+    pub(crate) sources: Vec<(PathBuf, bool)>,
+    /// 编辑框草稿:新文件名(不含路径,默认单文件移动时源文件名)。多文件
+    /// 移动时此字段忽略,各源直接用各自原名。
     pub(crate) name_draft: String,
     /// 编辑框草稿:目标目录路径文本(默认落点目录,允许手改或用
     /// `MoveDirBrowse` 选)。
@@ -90,7 +91,11 @@ pub struct WorkspaceState {
     /// 拖拽移动、行内命名校验)不进这里,走 `outbox` → Toast。(原名 `tree_error`,
     /// 曾同时承载这两类语义。)
     pub(crate) move_error: Option<String>,
-    pub(crate) tree_delete_confirm: Option<(PathBuf, bool)>,
+    /// 待确认的删除目标(支持一次删除多个选中项):`路径 + 是否目录` 列表。
+    /// 单文件删除时长度为 1;右键菜单点"删除"时若被右键项属于当前多选集,
+    /// 整组选中项一起进入待删除(项目根会被过滤掉)。见 `delete_confirm_spec`
+    /// 的标题/列表渲染与 `Message::DeleteConfirm` 的批量删除逻辑。
+    pub(crate) tree_delete_confirm: Option<Vec<(PathBuf, bool)>>,
     pub(crate) tree_edit: Option<TreeEdit>,
     /// 项目树行内编辑框是否持有 iced 内部真实焦点,每帧由 `CaptureTreeEditFocus`
     /// 写入。
@@ -309,6 +314,11 @@ pub enum Message {
     DeleteRequest(PathBuf, bool),
     DeleteConfirm,
     DeleteCancel,
+    /// 批量删除确认框"确定"后,`DeleteConfirm` 异步完成全部删除的收尾:
+    /// `results` 逐项是 `(被删路径, 删除结果)`,成功项刷新其父目录、失败项
+    /// 推 Toast。比单文件时用的 `OpDone` 更通用——多文件会命中多个不同父目录,
+    /// 需要逐个刷新。
+    DeleteApplied(Vec<(PathBuf, std::result::Result<(), String>)>),
     OpDone {
         project_id: i64,
         parent: Result<PathBuf, String>,
@@ -447,6 +457,9 @@ pub enum Message {
     /// 拦截转发,`files::update()` 收到会 `unreachable!`。
     TreeDragRelease {
         shift: bool,
+        /// 松开瞬间是否按住 Cmd(macOS)/Ctrl(非 mac)——用于点选那一下做
+        /// 不连续多选切换(`select_toggle`),见 `TreeDragEnd` 文档。
+        command: bool,
     },
     /// 树内拖拽真正的收尾:`confirmed` = 松开时光标是否已越过
     /// [`crate::app`] 的确认阈值(同 tab/rail 拖拽的既有手法);`shift` = 松开
@@ -461,6 +474,10 @@ pub enum Message {
     TreeDragEnd {
         confirmed: bool,
         shift: bool,
+        /// 松开瞬间是否按住 Cmd(macOS)/Ctrl(非 mac)——仅当 `!confirmed`
+        /// (这只不过是一次单击)时用来做不连续多选切换,否则忽略。见
+        /// `Message::TreeDragRelease` 对 `command` 的说明。
+        command: bool,
     },
 }
 
@@ -700,6 +717,18 @@ impl WorkspaceState {
     pub(crate) fn select_single(&mut self, path: PathBuf) {
         self.tree_selected.clear();
         self.tree_selected.insert(path.clone());
+        self.tree_selection_anchor = Some(path);
+    }
+
+    /// Cmd/Ctrl+点击(非 mac 为 Ctrl)的单键切换:在选中集里"切换"一项——
+    /// 命中已选项则移除(剩下空集时退回锚点空),未命中则加入并保持锚点。
+    /// 用于挑出任意不连续的多项,配合 `select_shift_range`(连续区间)两类
+    /// 多选互补。空点击(点在文件树空白处)由 `App::update` 端清掉选中集,不
+    /// 走这里。
+    pub(crate) fn select_toggle(&mut self, path: PathBuf) {
+        if !self.tree_selected.remove(&path) {
+            self.tree_selected.insert(path.clone());
+        }
         self.tree_selection_anchor = Some(path);
     }
 
@@ -946,9 +975,39 @@ impl WorkspaceState {
         press_pos: (f32, f32),
         armed_at: std::time::Instant,
     ) {
+        // 多选拖拽:若按下的这一项已在当前多选集里、且选中多于一项,整组一起
+        // 拖(用户拖任意选中项都带走整组);否则只拖这一项。项目根永远排除——
+        // 不能移动/删除项目根。选中项是否目录取可见行表,取不到(如已折叠的
+        // 子树项)时退回 `Path::is_dir()`。
+        let root = self.file_tree.as_ref().map(|t| t.root().to_path_buf());
+        let sources: Vec<(PathBuf, bool)> =
+            if self.tree_selected.contains(&source) && self.tree_selected.len() > 1 {
+                let visible: std::collections::HashMap<PathBuf, bool> = self
+                    .visible_tree_rows()
+                    .into_iter()
+                    .map(|r| (r.path, r.is_dir))
+                    .collect();
+                self.tree_selected
+                    .iter()
+                    .filter(|p| Some(p.as_path()) != root.as_deref())
+                    .map(|p| {
+                        let is_dir = visible.get(p).copied().unwrap_or_else(|| p.is_dir());
+                        (p.clone(), is_dir)
+                    })
+                    .collect()
+            } else {
+                vec![(source.clone(), source_is_dir)]
+            };
+        // 兜底:整组过滤后若只剩根(极端情况),退回只拖被按下的这一项。
+        let sources = if sources.is_empty() {
+            vec![(source.clone(), source_is_dir)]
+        } else {
+            sources
+        };
         self.tree_drag = Some(TreeDrag {
             source,
             source_is_dir,
+            sources,
             phase: TreeDragPhase::Pending,
             press_pos,
             armed_at,
@@ -1050,13 +1109,17 @@ impl WorkspaceState {
         )
     }
 
-    /// `Dragging` 中源的路径 + 是否目录(`None` = 没有确认中的拖拽)——供
-    /// `App::tree_drag_ghost` 取图标/文件名。`Pending` 期间也返回 `None`:
+    /// `Dragging` 中主源的路径 + 是否目录 + 本次拖拽源总数(`None` = 没有
+    /// 确认中的拖拽)——供 `App::tree_drag_ghost` 取图标/文件名/项数。多文件
+    /// 拖拽时 `count > 1`,胶囊显示"name 等 N 项"。`Pending` 期间返回 `None`:
     /// 幽灵胶囊只在确认后才画,同 `tree_drag_confirmed` 的理由。
-    pub(crate) fn tree_drag_ghost_source(&self) -> Option<(&std::path::Path, bool)> {
+    pub(crate) fn tree_drag_ghost_source(&self) -> Option<(&std::path::Path, bool, usize)> {
         let drag = self.tree_drag.as_ref()?;
-        matches!(drag.phase, TreeDragPhase::Dragging { .. })
-            .then_some((drag.source.as_path(), drag.source_is_dir))
+        matches!(drag.phase, TreeDragPhase::Dragging { .. }).then_some((
+            drag.source.as_path(),
+            drag.source_is_dir,
+            drag.sources.len(),
+        ))
     }
 
     /// 当前这场树内拖拽按下瞬间的光标位置(`None` = 没有拖拽在进行)——供

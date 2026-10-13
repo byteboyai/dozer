@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use iced_wgpu::wgpu;
 use iced_winit::core::mouse;
-use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
+use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::ModifiersState;
@@ -18,7 +18,7 @@ use winit::window::{Window, WindowId};
 use crate::app::Message;
 use crate::platform::overlay_gpu::OverlayGpu;
 use crate::platform::overlay_window::{
-    backdrop_card, open_overlay, popup_card_size, reposition_overlay,
+    backdrop_card_shrink, open_overlay, popup_card_size, reposition_overlay,
 };
 use bytehost_desktop::FocusTracker;
 use byteui::feedback::dialog;
@@ -35,10 +35,12 @@ pub(crate) enum ConfirmTrigger {
     TodoClear,
 }
 
-/// 内容有界(1-3 行说明 + 两个按钮),高度固定;宽度随主窗口走
-/// `POPUP_WIDTH_FRACTION`(整窗 40%,见 `overlay_window`)。
-fn card_logical_size(window: &Window) -> LogicalSize<f32> {
-    popup_card_size(window, 200.0)
+/// 卡片宽度:随主窗口走 `POPUP_WIDTH_FRACTION`(整窗 40%,见 `overlay_window`)。
+/// 高度不再写死——`redraw`/`handle_input` 改用 `backdrop_card_shrink`,由 iced
+/// 按内容真实排版结果自适应,多文件删除确认列出长文件名也不会被裁切(见
+/// `backdrop_card_shrink` 文档)。这里只收敛宽度占比这一项。
+fn card_logical_width(window: &Window) -> f32 {
+    popup_card_size(window, 0.0).width
 }
 
 pub(crate) struct ConfirmOverlay {
@@ -117,9 +119,9 @@ impl ConfirmOverlay {
     }
 
     pub(crate) fn redraw(&mut self) {
-        let card = backdrop_card(
+        let card = backdrop_card_shrink(
             dialog::confirm(self.spec.clone()),
-            card_logical_size(&self.window),
+            card_logical_width(&self.window),
         );
         self.gpu.redraw(&self.window, self.cursor, card);
     }
@@ -147,9 +149,9 @@ impl ConfirmOverlay {
         else {
             return Vec::new();
         };
-        let card = backdrop_card(
+        let card = backdrop_card_shrink(
             dialog::confirm(self.spec.clone()),
-            card_logical_size(&self.window),
+            card_logical_width(&self.window),
         );
         self.gpu
             .dispatch(&self.window, self.cursor, card, iced_event)

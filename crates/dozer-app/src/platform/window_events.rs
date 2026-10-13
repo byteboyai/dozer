@@ -580,8 +580,14 @@ impl Runner {
                 // 松开瞬间是否按住 Shift——树内点选那一下若是"单击"(未越过
                 // 拖拽确认阈值)就用来做区间多选,见 `TreeDragEnd` 文档。
                 let shift = modifiers.shift_key();
+                // "命令键"在 mac 上是 ⌘(`super_key`),其余平台是 Ctrl
+                // (`control_key`)——与 keymap/app 层对"命令修饰键"的口径一致。
+                #[cfg(target_os = "macos")]
+                let command = modifiers.super_key();
+                #[cfg(not(target_os = "macos"))]
+                let command = modifiers.control_key();
                 app.update(Message::Files(
-                    crate::extensions::files::Message::TreeDragRelease { shift },
+                    crate::extensions::files::Message::TreeDragRelease { shift, command },
                 ));
                 window.request_redraw();
             }
@@ -2426,7 +2432,9 @@ impl Runner {
         // 由 router 回落窗口)。
         let resolve = |intent: &FocusIntent| -> Option<u64> {
             match intent {
-                FocusIntent::Preview(kind) => app.active_preview_webview_id(*kind).map(|id| id as u64),
+                FocusIntent::Preview(kind) => {
+                    app.active_preview_webview_id(*kind).map(|id| id as u64)
+                }
                 FocusIntent::Browser => app.active_browser_webview_id().map(|id| id as u64),
                 FocusIntent::Terminal => None,
             }

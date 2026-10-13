@@ -1300,24 +1300,57 @@ pub fn tab_context_menu_popup<'a>(
 
 /// 删除确认框的内容描述——宿主(`platform::confirm_overlay`)取这一份渲染,
 /// 保证文案/消息不因迁移而分叉。`None` 表示当前没有待确认的删除。
+/// 多个待删除项时,标题显示数量、说明里逐项列出每个文件的(相对项目根的)
+/// 路径,确保用户操作多个文件时能看到全部文件名(2026-10 用户反馈)。
 pub(crate) fn delete_confirm_spec(
     ws_state: &WorkspaceState,
 ) -> Option<byteui::feedback::dialog::ConfirmDialog<Message>> {
-    let (path, is_dir) = ws_state.tree_delete_confirm.as_ref()?;
-    let kind = if *is_dir { "文件夹" } else { "文件" };
-    // 标题用相对项目根的完整路径(同 `files_move_card` 的 source_display
+    let targets = ws_state.tree_delete_confirm.as_ref()?;
+    if targets.is_empty() {
+        return None;
+    }
+    // 各待删除项的相对项目根路径(同 `files_move_card` 的 source_display
     // 手法),比单文件名更能定位目标——同名文件散在不同子目录时不再有歧义;
     // 文件树尚未加载/路径不在根下时兜底完整路径原文。
-    let rel_path = ws_state
-        .file_tree
-        .as_ref()
-        .and_then(|t| path.strip_prefix(t.root()).ok())
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string());
+    let rel_paths: Vec<String> = targets
+        .iter()
+        .map(|(p, _)| {
+            ws_state
+                .file_tree
+                .as_ref()
+                .and_then(|t| p.strip_prefix(t.root()).ok())
+                .map(|rp| rp.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.display().to_string())
+        })
+        .collect();
+    let (title, description) = if targets.len() == 1 {
+        let kind = if targets[0].1 { "文件夹" } else { "文件" };
+        // 单文件沿用旧版"只显示文件名"(basename)的口径,保持交互习惯不变;
+        // 多文件才列出全部相对路径(见下方 `else` 分支),两者职责不同。
+        let name = targets[0]
+            .0
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| targets[0].0.display().to_string());
+        (
+            format!("删除{kind} \"{name}\"?"),
+            format!("{kind}将会被放入系统回收站，如需恢复可从系统回收站找回。"),
+        )
+    } else {
+        let list = rel_paths
+            .iter()
+            .map(|r| format!("• {r}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        (
+            format!("删除 {} 个文件/文件夹？", targets.len()),
+            format!("{list}\n\n这些文件/文件夹将会被放入系统回收站，如需恢复可从系统回收站找回。"),
+        )
+    };
     Some(byteui::feedback::dialog::ConfirmDialog {
         icon: Some(icons::IconKind::CircleAlert),
-        title: format!("删除{kind} \"{rel_path}\"?"),
-        description: format!("{kind}将会被放入系统回收站，如需恢复可从系统回收站找回。"),
+        title,
+        description,
         cancel_label: "取消".to_string(),
         cancel_msg: Message::DeleteCancel,
         confirm_label: "删除".to_string(),
@@ -1339,17 +1372,27 @@ pub fn files_move_card(
     let Some(pending) = &ws_state.pending_move else {
         return column![].into();
     };
-    let kind = if pending.source_is_dir {
-        "文件夹"
+    let sources = &pending.sources;
+    let single = sources.len() == 1;
+    let kind = if single {
+        if sources[0].1 { "文件夹" } else { "文件" }
     } else {
-        "文件"
+        "文件/文件夹"
     };
-    let source_display = ws_state
-        .file_tree
-        .as_ref()
-        .and_then(|t| pending.source.strip_prefix(t.root()).ok())
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| pending.source.display().to_string());
+    let source_display = {
+        let first = sources.first().map(|(p, _)| p.clone());
+        first
+            .as_ref()
+            .and_then(|p| {
+                ws_state
+                    .file_tree
+                    .as_ref()
+                    .and_then(|t| p.strip_prefix(t.root()).ok())
+                    .map(|rp| rp.to_string_lossy().into_owned())
+            })
+            .or_else(|| first.map(|p| p.display().to_string()))
+            .unwrap_or_default()
+    };
 
     let label = |s: &str| {
         text(s.to_string())
@@ -1424,6 +1467,59 @@ pub fn files_move_card(
         ..button::Style::default()
     });
 
+    // 待移动项标题:单文件沿用"移动文件/文件夹 \"name\"";多文件改为数量提示。
+    let title_text = if single {
+        format!("移动{kind} \"{source_display}\"")
+    } else {
+        format!("移动 {} 个文件/文件夹？", sources.len())
+    };
+
+    // 单文件:展示可改名的"新名称"输入框;多文件:列出全部待移动项的
+    // (图标 + 相对路径)供用户核对,不提供改名(各自保留原名)。多文件列表
+    // 可滚动,避免项数很多时撑爆卡片(卡片高度在 `files_move_overlay::
+    // card_logical_size` 固定)。
+    let source_block: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> = if single
+    {
+        column![label("新名称:"), name_field].spacing(4).into()
+    } else {
+        let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = sources
+            .iter()
+            .map(|(p, is_dir)| {
+                let rel = ws_state
+                    .file_tree
+                    .as_ref()
+                    .and_then(|t| p.strip_prefix(t.root()).ok())
+                    .map(|rp| rp.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| p.display().to_string());
+                let name = p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| rel.clone());
+                let icon_kind = if *is_dir {
+                    icons::IconKind::Folder
+                } else {
+                    icons::icon_for_file(&name)
+                };
+                row![
+                    icons::view(icon_kind, byteui::theme::icon_size::row(), colors.dim),
+                    text(rel)
+                        .size(byteui::theme::font::label())
+                        .color(byteui::theme::color::current().body),
+                ]
+                .spacing(6)
+                .align_y(iced_widget::core::Alignment::Center)
+                .into()
+            })
+            .collect();
+        Scrollable::new(column(items).spacing(4))
+            .height(Length::Fixed(140.0))
+            .direction(scrollable::Direction::Vertical(
+                byteui::interaction::scrollbar::scrollbar(),
+            ))
+            .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style())
+            .into()
+    };
+
     let mut body = column![
         row![
             icons::view(
@@ -1431,7 +1527,7 @@ pub fn files_move_card(
                 byteui::theme::icon_size::row(),
                 colors.cream,
             ),
-            text(format!("移动{kind} \"{source_display}\""))
+            text(title_text)
                 .size(byteui::theme::font::subtitle())
                 .color(byteui::theme::color::current().cream),
             iced_widget::space::horizontal(),
@@ -1440,7 +1536,7 @@ pub fn files_move_card(
         .spacing(6)
         .align_y(iced_widget::core::Alignment::Center)
         .width(Length::Fill),
-        column![label("新名称:"), name_field].spacing(4),
+        source_block,
         column![
             label("到目录:"),
             row![dir_field, browse_btn]

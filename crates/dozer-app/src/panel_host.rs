@@ -527,7 +527,10 @@ mod tests {
         // 具名兜底仍是收敛新槽位的首选。
         assert_eq!(
             HoverId::named(PanelKind::Files, "find_prev"),
-            HoverId::Panel(PanelKind::Files, bytehost_desktop::HoverSlot::Named("find_prev"))
+            HoverId::Panel(
+                PanelKind::Files,
+                bytehost_desktop::HoverSlot::Named("find_prev")
+            )
         );
     }
 

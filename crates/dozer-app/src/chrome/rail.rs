@@ -118,7 +118,6 @@ impl RailLayout {
             .filter_map(|k| crate::panel_registry::panel_id(*k))
             .collect()
     }
-
 }
 
 impl RailLayout {
@@ -987,10 +986,17 @@ mod tests {
     fn side_of_id_matches_kind_side() {
         let rail = RailLayout::default();
         for kind in PanelKind::ALL_BUILTIN {
-            assert_eq!(rail.side_of_id(kind.stable_id()), rail.side_of(kind), "{kind:?}");
+            assert_eq!(
+                rail.side_of_id(kind.stable_id()),
+                rail.side_of(kind),
+                "{kind:?}"
+            );
         }
         let left: Vec<_> = rail.to_rail_items(Side::Left);
-        assert_eq!(left, rail.left.iter().map(|k| k.stable_id()).collect::<Vec<_>>());
+        assert_eq!(
+            left,
+            rail.left.iter().map(|k| k.stable_id()).collect::<Vec<_>>()
+        );
     }
 
     /// `sanitize_rail_layout` 对坏数据回落默认:任一栏为空、面板重复、

@@ -1514,7 +1514,10 @@ mod panel_dims_accessor_tests {
         let mut back = PanelDims::default();
         back.apply_pane_store(&store);
         assert_eq!(back.split(PanelKind::Files), dims.split(PanelKind::Files));
-        assert_eq!(back.collapsed(PanelKind::Agent), dims.collapsed(PanelKind::Agent));
+        assert_eq!(
+            back.collapsed(PanelKind::Agent),
+            dims.collapsed(PanelKind::Agent)
+        );
         assert_eq!(
             back.collapsed(PanelKind::GitLog),
             None,

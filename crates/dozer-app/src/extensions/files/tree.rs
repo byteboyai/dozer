@@ -36,6 +36,10 @@ pub(crate) enum TreeDragPhase {
 pub(crate) struct TreeDrag {
     pub(crate) source: PathBuf,
     pub(crate) source_is_dir: bool,
+    /// 本次拖拽的全部源(支持一次拖多个选中项)——`source` 是按下那一项,
+    /// `sources` 在被按下的项属于多选集时为整组、否则就是 `[source]`。
+    /// `TreeDragEnd` 据此弹多文件移动确认框。
+    pub(crate) sources: Vec<(PathBuf, bool)>,
     pub(crate) phase: TreeDragPhase,
     /// 按下瞬间的 `App::last_cursor`(窗口逻辑坐标),拖拽期间不更新——
     /// 内核用它和当前光标算位移,判断是否已越过 `Pending → Dragging` 的
@@ -142,26 +146,34 @@ pub(crate) fn is_valid_move_target(
 pub(crate) fn tree_drag_ghost<'a>(
     host: &impl crate::panel_host::PanelHost,
     // `WorkspaceState::tree_drag_ghost_source()` 的结果,由调用方取了传进来(面板 view 不再
-    // 自己去宿主里翻"当前活动工作区")。
-    source: Option<(&std::path::Path, bool)>,
+    // 自己去宿主里翻"当前活动工作区")。第三个元素是本次拖拽源总数,>1 时胶囊显示
+    // "name 等 N 项"。
+    source: Option<(&std::path::Path, bool, usize)>,
 ) -> Element<'a, crate::app::Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let Some((source, is_dir)) = source else {
+    let Some((source, is_dir, count)) = source else {
         return column![].into();
     };
     let name = source
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| source.display().to_string());
+    // 多文件拖拽:胶囊显示"首个文件名 等 N 项",暗示整组一起移动。
+    // 先借用 `name` 算图标(不移动),再在 `label` 里把 `name` 整体移走。
     let icon_kind = if is_dir {
         icons::IconKind::Folder
     } else {
         icons::icon_for_file(&name)
     };
+    let label = if count > 1 {
+        format!("{name} 等 {count} 项")
+    } else {
+        name
+    };
     let colors = byteui::theme::color::current();
     let chip = container(
         row![
             icons::view(icon_kind, byteui::theme::icon_size::row(), colors.gold),
-            text(name)
+            text(label)
                 .size(byteui::theme::font::body())
                 .color(colors.cream),
         ]
