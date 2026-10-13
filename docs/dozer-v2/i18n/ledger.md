@@ -60,7 +60,7 @@
 | 01 清单与生产入口基线 | ✅ 完成 | 本文件、`baseline.md`、`glossary.md`、`inventory.json`、`scripts/i18n/` | 迁移尚未开始，见 `acceptance.md` |
 | 02 双语资源、解析器与资源校验 | ✅ 完成 | `dozer-model/src/i18n.rs`、`dozer-i18n/`(解析/校验/插值/向量)、`dozer-app/locales/host/`、`web/shared/i18n/`、`scripts/i18n/check_resources.py` | 标题接入 `PanelDescriptor`/设置页在 Task 04/05 |
 | 03 语言持久化、服务与兼容传输 | ✅ 完成 | `dozerd/src/locale_settings.rs`(CAS/原子落盘/损坏恢复/溢出失败/无变化不推进 revision)、`dozer-model` 的 `LocaleSnapshot`/`LocaleWriteOutcome`、`dozer-services::LocaleService`、`protocol` 的 `Get/SetLocale`+`Locale/LocaleWrite`、`Client` 适配、`dozerd/tests/locale_requests.rs`、`dozer-client` 降级测试 | 系统探测(`system_candidates` 来源)、App 快照与窗口同步在 Task 04 |
-| 04 App 语言快照、系统探测和窗口同步 | 未开始 | — | 依赖 03 |
+| 04 App 语言快照、系统探测和窗口同步 | ✅ 完成 | `dozer-app/src/platform/locale.rs`(macOS `NSLocale.preferredLanguages` 有序探测 + 非 mac 环境变量回落)、`dozer-app/src/app/locale.rs`(`LocaleController`:epoch/序号/display generation/2s 节拍/在途合并/迟到丢弃/revision 防回退)、`dozer-app/src/locale_cache.rs`(最后确认快照缓存)、`app/{app,message,update}.rs` 接线、`platform/window_events.rs` 节拍与获焦刷新 | 文案渲染接缝(`host_resolver`/`host_text`)的**消费**在 Task 05;webview locale 注入在 Task 08 |
 | 05 | 未开始 | — | 依赖 04 |
 | 06–08 | 未开始 | — | 依赖 05 |
 | 09–11 | 未开始 | — | 依赖 06/07/08 |

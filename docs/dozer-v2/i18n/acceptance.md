@@ -102,6 +102,44 @@ python3 scripts/i18n/build_inventory.py
 - 「启动 System 刷新带 expected_revision 提交」的完整循环（读取后提交、陈旧探测回包不覆盖显式偏好）由 Task 04 的平台探测 + 哨兵驱动实现；本任务保证 CAS 语义到位。
 - 既有无关测试失败保留：`usage_probe::host::tests::host_site_citations_point_at_the_code_they_name`。
 
+## Task 04 验收
+
+计划 Task 04 验收条件：**正常网络/服务延迟下按约定周期发起同步，断线与乱序测试通过，两个窗口一致。对应 L01/L04/L14。**
+
+### 证据
+
+| 验收要点 | 证据 |
+|---|---|
+| 平台隔离的有序系统语言探测（不依赖 `LANG`；macOS `NSLocale.preferredLanguages`） | `crates/dozer-app/src/platform/locale.rs`：macOS 经 objc2 autoreleasepool 读 `NSLocale::preferredLanguages()`（有序），非 mac 回落到 `LC_ALL`/`LC_MESSAGES`/`LANG`；`system_supported_locale()` 经 `dozer_i18n::resolve_from_candidates` 归一。2 单测通过 |
+| `zh-Hans-TW`/`zh-Hant-CN` 等冲突输入 | 归一规则由 `dozer-i18n::locale` 单点实现并在 Task 02 以共享向量覆盖（Hant/TW/HK/MO → None，不映射简体）；探测层复用同一函数 |
+| App 快照 + 连接 epoch + 请求序号 + display generation；迟到回包检查 epoch/序号 | `crates/dozer-app/src/app/locale.rs` `LocaleController`：`apply_fetch` 丢弃错 seq（`late_reply_with_wrong_seq_is_dropped`）、同 epoch 拒绝 revision 回退（`same_epoch_never_regresses_revision`）、仅 active 变化时推进 generation（`generation_only_advances_when_active_changes`） |
+| 缓存仅写最后确认快照；断线用缓存/临时系统值；重连以 daemon 为准并重建 revision 基线 | `crates/dozer-app/src/locale_cache.rs`（`load`/`save`，损坏/版本不符→None）+ `apply_fetch` 仅在 `source == Daemon` 时回写缓存；`on_reconnect` 推进 epoch 清在途并强制立即刷新（`reconnect_resets_baseline_and_forces_immediate_fetch`）；daemon 离线启动走 `with_daemon_error` 只采纳缓存/系统临时值，不在离线时发起读取 |
+| 每 2 秒跨进程读取（在途合并），获焦立即刷新 | `REFRESH_INTERVAL = 2s`；`begin_fetch` 合并在途（`cadence_limits_to_refresh_interval`）；`platform/window_events.rs` `about_to_wait` 的 wakes 数组加第 11 项恒 active 的 `next_locale_wake()`；`ResumeTimeReached` 调 `poll_locale_if_due()`；新增 `WindowEvent::Focused(true)` 调 `refresh_locale_now()` 绕过节拍 |
+| 单次 App 状态更新广播，不各自轮询 | 生效值变化经 `App::locale_fetched` → `locale_broadcast_change()` 单点；独立 overlay/webview 各自渲染路径读取共享 `App` 快照 |
+| 文案上下文可注入、不引用全局可变 App | `LocaleController` 为纯度状态机（不依赖 `App`/`Client`，输入为 `FetchOutcome`）；`fetch` 的 I/O 由 `App::spawn_locale_fetch` 承担，控制器单测在无 App 环境下运行 |
+
+### 交付物
+
+- `crates/dozer-app/src/platform/locale.rs`（新）：`system_language_candidates`、`system_supported_locale`；注册于 `platform/mod.rs`。
+- `crates/dozer-app/src/app/locale.rs`（新）：`LocaleController` + `SnapshotSource`/`FetchOutcome`/`ApplyEffect`；11 单测。
+- `crates/dozer-app/src/locale_cache.rs`（新）：最后确认快照缓存；3 单测。
+- `crates/dozer-app/src/app/{app,message,update}.rs`：`LocaleController` 字段与启动/轮询/获焦/重连接线；`Message::LocaleFetched`。
+- `crates/dozer-app/src/platform/window_events.rs`：2s 节拍唤醒 + 获焦立即刷新。
+- `crates/dozer-app/src/main.rs`：`mod locale_cache;`。
+
+### 验证命令与结果
+
+- `cargo test -p dozer-app -- app::locale locale_cache`：11 passed（含 `cadence_limits_to_refresh_interval`、`late_reply_with_wrong_seq_is_dropped`、`reconnect_resets_baseline_and_forces_immediate_fetch`、`same_epoch_never_regresses_revision`、`generation_only_advances_when_active_changes`）。
+- `cargo test -p dozer-app`：1985 passed / 1 failed（既有无关 citation 测试）/ 2 ignored。
+- `cargo fmt --all -- --check`、`cargo clippy -p dozer-app --all-targets`（新文件零告警）、`scripts/check-log-scope.sh`、`scripts/i18n/check_resources.py`、`scripts/audit/check_panel_boundary.py`：全绿。
+
+### 残留问题
+
+- 文案渲染接缝（`i18n::host_resolver`/`host_text`）目前只被测试消费；实际消费（设置页与面板标题）在 Task 05。
+- webview 的 locale 注入与去重键的完整机制在 Task 08；本任务只保证快照与广播到位。
+- 2s 节拍恒 active：空闲时也会每 2s 唤醒一次（仅为发起读取，语言无变化不触发重绘；重绘只由 `locale_broadcast_change` 触发）。
+- 既有无关测试失败保留：`usage_probe::host::tests::host_site_citations_point_at_the_code_they_name`。
+
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |
 |---|---|---|

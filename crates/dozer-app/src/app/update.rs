@@ -3939,6 +3939,7 @@ impl App {
             Message::PreviewSelectionMenuClose => {
                 self.preview_context_menu = None;
             }
+            Message::LocaleFetched { seq, outcome } => self.locale_fetched(seq, outcome),
             Message::SettingsOpen => {
                 self.settings = Some(settings::State::load(self.daemon_unavailable.as_deref()));
             }
@@ -4028,6 +4029,8 @@ impl App {
                     self.daemon_unavailable = None;
                     // dozerd 刚被重新拉起:立刻拉一次应用列表(同步图标栏),不等下一次轮询。
                     self.app_host_update(crate::extensions::app_host::Message::Refresh);
+                    // i18n Task 04:连接换代——重建 revision 基线并立即刷新语言快照。
+                    self.on_locale_reconnect();
                 }
                 if theme_changed {
                     self.with_focused_project(|ws, io| {

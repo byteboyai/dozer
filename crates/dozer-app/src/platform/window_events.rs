@@ -2768,6 +2768,8 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             app.poll_group_chat_if_active();
             // 已安装应用列表:启动后拉一次;应用面板可见时按 `app_host::POLL_INTERVAL` 持续拉。
             app.poll_app_host_if_due();
+            // i18n Task 04:按 2s 节拍同步语言快照(控制器内限速/合并/序号校验)。
+            app.poll_locale_if_due();
             // 新增任务闪光倒计时:到点且用户未手动改选就自动清除选中高亮
             // (每次都调,内部按 `until` 自己短路,不再显式判断 `flash_active`)。
             app.advance_todo_flash();
@@ -2809,7 +2811,8 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             let next_drag_expand = app.next_drag_hover_expand_wake();
             let next_toast = app.next_toast_wake();
             let store_wake = app.store_removal_wake();
-            let wakes: [(bool, Duration); 10] = [
+            let next_locale = app.next_locale_wake();
+            let wakes: [(bool, Duration); 11] = [
                 (
                     app.any_hover_anim_active(),
                     crate::event::HOVER_ANIM_INTERVAL,
@@ -2835,6 +2838,10 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     next_drag_expand.unwrap_or(extensions::files::DRAG_HOVER_EXPAND_DELAY),
                 ),
                 (next_toast.is_some(), next_toast.unwrap_or(Duration::ZERO)),
+                // i18n Task 04:跨进程语言快照同步按固定 2s 周期节拍。恒为
+                // active(本地快照随时可能因别处窗口/daemon 变更而更新),由
+                // `poll_locale_if_due` 自己在控制器里做限速与在途合并。
+                (true, next_locale),
             ];
             if let Some(interval) = wakes
                 .into_iter()
@@ -4474,6 +4481,11 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                         );
                     }
                     // bounds 同步由本函数末尾的 sync_previews 统一执行
+                }
+                WindowEvent::Focused(true) => {
+                    // i18n Task 04:主窗口获焦立即刷新语言快照(跨 GUI 进程
+                    // 同步的即时点,spec §4.3),绕过 2s 节拍。
+                    app.refresh_locale_now();
                 }
                 WindowEvent::CloseRequested => {
                     // 图干净,不是正确性要求——Drop 本身就会释放。

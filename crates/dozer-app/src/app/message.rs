@@ -761,6 +761,12 @@ pub enum Message {
     },
     /// 关闭预览选区右键浮层(点菜单项后/Esc/点外部)。
     PreviewSelectionMenuClose,
+    /// i18n Task 04:一次跨进程读取语言快照的回包。`seq` 是发起时的请求序号,
+    /// 控制器据此丢弃被更新请求取代的迟到回包(见 `app::locale::LocaleController`)。
+    LocaleFetched {
+        seq: u64,
+        outcome: crate::app::FetchOutcome,
+    },
 }
 pub(crate) struct ProjectLinkMenu {
     pub(crate) x: f32,

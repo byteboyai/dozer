@@ -12,6 +12,7 @@ mod host_adapters;
 mod i18n;
 mod keymap;
 mod layout;
+mod locale_cache;
 mod menu_spec;
 mod open_projects;
 mod osc;

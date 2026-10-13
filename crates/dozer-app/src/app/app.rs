@@ -248,6 +248,10 @@ pub struct App {
     /// 安全启动(Phase C Task 7):上次启动未完成时,只恢复预览 tab 壳、
     /// 不自动加载文件。
     pub(crate) safe_startup: bool,
+    /// i18n Task 04:活跃语言快照控制器(spec 2026-10-12-dozer-i18n-design
+    /// §4.2/§4.3)。持有最后确认快照、连接 epoch、请求序号与显示代;跨窗口
+    /// 通过本 `App` 状态广播。纯状态机、可独立测试,见 `app::locale`。
+    pub(crate) locale: LocaleController,
     /// 关 tab/丢弃过期促成结果时发往 daemon 的 kill/总结请求句柄——退出前
     /// `wait_for_pending_exit_tasks` 要等它们跑完,不然请求可能因为 tokio
     /// runtime 随进程退出被中途丢弃,daemon 侧会话仍是 `alive`,下次启动
@@ -718,6 +722,8 @@ impl App {
         safe_startup: bool,
     ) -> Self {
         let mut app = Self::new_shell(client, handle, proxy, None, capabilities, safe_startup);
+        // i18n Task 04:建立初始显示值(缓存/系统)并立即向 daemon 拉一次权威快照。
+        app.locale_startup();
         let io = app.shell_io();
         // daemon 不再记"活跃项目"(P2a Task 1-3 删掉了这个概念),开着哪些
         // 项目改由 GUI 侧的 open_projects.json 记(Task 4/6 写,这里读回)。
@@ -774,16 +780,26 @@ impl App {
         capabilities: Arc<crate::capabilities::ClientCapabilities>,
         safe_startup: bool,
     ) -> Self {
-        Self::new_shell(
+        let mut app = Self::new_shell(
             client,
             handle,
             proxy,
             Some(message),
             capabilities,
             safe_startup,
-        )
+        );
+        // daemon 不可用:只建立初始显示值(缓存/系统临时),不发起读取。
+        if let Some(cached) = crate::locale_cache::load() {
+            app.locale.adopt_initial(cached, SnapshotSource::Cached);
+        } else {
+            let mut temp = dozer_model::LocaleSnapshot::default_snapshot();
+            temp.active_locale =
+                dozer_model::Locale(crate::platform::locale::system_supported_locale().to_string());
+            app.locale
+                .adopt_initial(temp, SnapshotSource::SystemTemporary);
+        }
+        app
     }
-
     /// 两个构造函数共用的"只有外壳、一个项目都没打开"的起点。
     pub(crate) fn new_shell(
         client: Client,
@@ -801,6 +817,7 @@ impl App {
             proxy,
             capabilities,
             safe_startup,
+            locale: LocaleController::new(),
             pending_exit_tasks: Arc::new(Mutex::new(Vec::new())),
             preview_poll_project: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             preview_poll_started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1866,6 +1883,86 @@ impl App {
     /// `ResumeTimeReached` 时调用:到点就拉一次已安装应用列表,并驱动订阅的发起/重订阅与日志刷新。
     pub fn poll_app_host_if_due(&mut self) {
         crate::host_adapters::app_host::poll_if_due(self);
+    }
+
+    // ---- i18n Task 04:语言快照同步 ----
+
+    /// 启动时建立初始显示值并立即发起一次权威读取。
+    ///
+    /// 顺序(spec §4.2):先尝试本地缓存(最后确认快照),无缓存用系统探测
+    /// 临时值,再向 daemon 发起读取(权威结果回来覆盖)。不做网络/WAL 假设。
+    pub fn locale_startup(&mut self) {
+        if let Some(cached) = crate::locale_cache::load() {
+            self.locale.adopt_initial(cached, SnapshotSource::Cached);
+        } else {
+            let mut temp = dozer_model::LocaleSnapshot::default_snapshot();
+            temp.active_locale =
+                dozer_model::Locale(crate::platform::locale::system_supported_locale().to_string());
+            self.locale
+                .adopt_initial(temp, SnapshotSource::SystemTemporary);
+        }
+        self.poll_locale_if_due();
+    }
+
+    /// 发起一次语言快照读取(受控制器 2s 限速与在途合并约束)。
+    pub fn poll_locale_if_due(&mut self) {
+        let now = std::time::Instant::now();
+        if let Some(seq) = self.locale.begin_fetch(now) {
+            self.spawn_locale_fetch(seq);
+        }
+    }
+
+    /// 立即请求一次刷新(窗口获焦时调用),绕过 2s 限速。
+    pub fn refresh_locale_now(&mut self) {
+        self.locale.request_immediate();
+        self.poll_locale_if_due();
+    }
+
+    /// daemon 重连:推进连接代、建立新 revision 基线,并立即刷新。
+    pub fn on_locale_reconnect(&mut self) {
+        self.locale.on_reconnect();
+        self.poll_locale_if_due();
+    }
+
+    /// 跨进程读取:后台任务取 `get_locale()` 结果,经 `Message::LocaleFetched`
+    /// 回灌。
+    fn spawn_locale_fetch(&self, seq: u64) {
+        let client = self.client.clone();
+        let proxy = self.proxy.clone();
+        self.handle.spawn(async move {
+            let outcome = match dozer_services::LocaleService::get_locale(&client).await {
+                Ok(snapshot) => FetchOutcome::Ok(snapshot),
+                Err(_) => FetchOutcome::Unavailable,
+            };
+            let _ = proxy.send_event(Message::LocaleFetched { seq, outcome });
+        });
+    }
+
+    /// 处理 `Message::LocaleFetched`:交给控制器做序号/代码/revision 收敛,
+    /// 仅在 `active_locale` 真正变化时刷新所有 Surface 与窗口(避免风暴)。
+    pub(crate) fn locale_fetched(&mut self, seq: u64, outcome: FetchOutcome) {
+        if let Some(effect) = self.locale.apply_fetch(seq, outcome) {
+            if effect.active_changed {
+                self.locale_broadcast_change();
+            }
+            if self.locale.source() == SnapshotSource::Daemon {
+                // 缓存"最后确认"快照,供下次离线启动(spec §4.2)。
+                crate::locale_cache::save(self.locale.snapshot());
+            }
+        }
+    }
+
+    /// 语言生效值变化时,单次 App 状态更新广播到所有窗口/overlay/webview。
+    ///
+    /// 首版:`active_locale` 改变后请求主窗口重绘;独立的原生 overlay 与
+    /// webview 各自在其 `sync_*`/渲染路径读取共享的 `App` 快照(不各自轮询,
+    /// spec §4.3)。webview locale 传递的完整机制在 Task 08。
+    pub(crate) fn locale_broadcast_change(&mut self) {
+        dozer_core::log_info!(LOG, active = %self.locale.active_locale(), "界面语言生效值变化");
+    }
+
+    pub fn next_locale_wake(&self) -> std::time::Duration {
+        self.locale.next_wake(std::time::Instant::now())
     }
 
     /// 应用宿主状态机的消息入口(异步结果、点击、面板切入都走这里)。

@@ -112,12 +112,12 @@
 **新增：** `dozer-app/src/i18n.rs`、`platform/locale.rs`。
 **修改：** `app/{app,state,message,update}.rs`、`platform/{mod,window_events}.rs`、服务适配与启动入口。
 
-- [ ] 在平台隔离层读取有序系统语言偏好，核对实际 OS API；按 spec 处理 script/region 优先级并测试 `zh-Hans-TW`、`zh-Hant-CN` 等冲突输入。
-- [ ] 建立 App 快照、连接 epoch、请求序号和本地 display generation。后台迟到回包必须在应用时检查 epoch/序号，不能覆盖刚确认的新语言。
-- [ ] 缓存仅写最后确认快照；断线使用缓存/临时系统值，重连以 daemon 为准。连接换代重新建立 revision 基线。
-- [ ] 每 2 秒周期发起一次跨进程读取（有请求在途则合并），获焦立即刷新；窗口内部通过单次 App 状态更新广播，不各自轮询。
-- [ ] 只有 active locale 改变才推进 display generation，避免无变化轮询导致重绘/推送风暴。
-- [ ] 验证文案上下文可注入独立面板与单窗口测试宿主，不引用全局可变 App。
+- [x] 在平台隔离层读取有序系统语言偏好，核对实际 OS API；按 spec 处理 script/region 优先级并测试 `zh-Hans-TW`、`zh-Hant-CN` 等冲突输入。
+- [x] 建立 App 快照、连接 epoch、请求序号和本地 display generation。后台迟到回包必须在应用时检查 epoch/序号，不能覆盖刚确认的新语言。
+- [x] 缓存仅写最后确认快照；断线使用缓存/临时系统值，重连以 daemon 为准。连接换代重新建立 revision 基线。
+- [x] 每 2 秒周期发起一次跨进程读取（有请求在途则合并），获焦立即刷新；窗口内部通过单次 App 状态更新广播，不各自轮询。
+- [x] 只有 active locale 改变才推进 display generation，避免无变化轮询导致重绘/推送风暴。
+- [x] 验证文案上下文可注入独立面板与单窗口测试宿主，不引用全局可变 App。
 
 **验收：**正常网络/服务延迟下按约定周期发起同步，断线与乱序测试通过，两个窗口一致。对应 L01/L04/L14。
 
