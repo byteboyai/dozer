@@ -47,7 +47,7 @@
 | C7 | `webview_geometry.rs` 的"文件预览"命名遗留 | `crates/dozer-app/src/webview_geometry.rs` | 几何与文件预览业务命名混同 | 几何函数迁入 Host 通用名；无"preview"命名残留 | 08 / 09 |
 | C8 | `request_tracker.rs` 原型迁移后删除 | `crates/dozer-app/src/request_tracker.rs` | 是 core 请求身份的移植来源 | 使用 core 请求身份且 delete 该文件后编译通过 | 05 / 21（06 已接入 core；`RequestToken` 产品包装待 21 删除） |
 | C9 | `HoverId`/`PanelKind` 作为宿主类型 | `panel_host.rs` / `app/state.rs` | 词汇尚未命名空间化/注册制 | `HoverSlot`/`PanelKind` 变体表纳入注册制后门禁计数只降 | 09 |
-| C10 | 原生浮层建窗/渲染机制（`overlay_window.rs`/`overlay_gpu.rs`/`toast_overlay.rs`） | `crates/dozer-app/src/platform/*_overlay*.rs` | 建窗需绑定 `iced_wgpu`/`iced_widget`/`iced_renderer`/`winit` 与渲染器类型 + `theme` 遮罩色；bytehost-desktop 刻意不绑渲染器 feature（`Cargo.toml:12-14`，R2 修复 `fbc3a636`），且 winit 尚非其依赖 | 把建窗/GPU/遮罩机制抽入 bytehost-desktop **且**产品接缝只留内容与主题色，或产品侧浮层全量改用共享建窗 API；届时 `R-OVERLAY-DUP`（新门禁）归零 | 21 |
+| C10 | 原生浮层建窗/渲染机制（`overlay_window.rs`/`overlay_gpu.rs`/`toast_overlay.rs`） | `crates/dozer-app/src/platform/*_overlay*.rs` | 建窗需绑定 `iced_wgpu`/`iced_widget`/`iced_renderer`/`winit` 与渲染器类型 + `theme` 遮罩色；bytehost-desktop 刻意不绑渲染器 feature（`Cargo.toml:12-14`，R2 修复 `fbc3a636`），且 winit 尚非其依赖 | 把建窗/GPU/遮罩机制抽入 bytehost-desktop **且**产品接缝只留内容与主题色，或产品侧浮层全量改用共享建窗 API；届时 `R-OVERLAY-DUP`（新门禁）归零 | 21（**已收口**：方案 B 建窗/几何上收；方案 C 加 `overlay` feature 上收 `OverlayGpu`/`backdrop_card*`，`R-OVERLAY-DUP` 3→0。see ledger Task 21 切片 9–10） |
 | C11 | rail/pane 容器、尺寸/折叠、拖拽（`chrome/rail.rs`、`app/layout.rs`、`app/view.rs`） | `crates/dozer-app/src/chrome/rail.rs` 等 | 与 `PanelKind`/`App`/`ShellState` 深度耦合；`RailLayout` 直接持 `Vec<PanelKind>`，`Divider` 有 13 个面板专属变体；bytehost-desktop 尚无 `PanelId` 键控的 rail/pane/drag API | 设计出 `PanelId` 键控的 rail/pane 容器后 Dozer 适配接上，且像素布局回归通过（A4/real-window） | 21 |
 | C12 | 焦点路由（`FocusIntent`/`pending_focus`/`apply_pending_focus`） | `crates/dozer-app/src/platform/window_events.rs` | 全部以 `PanelKind` 为键；通用"焦点去向"机制未抽（纯 `FocusTracker` 已于本任务抽取，见 ledger Task 10） | 通用焦点目标类型进 bytehost-desktop，产品只留业务路由（SearchIn/ShowFileHistory 等）；门禁计数只降 | 21 |
 
@@ -102,7 +102,7 @@
 | `cargo fmt --all --check` | ⚠️ 见 4.3 说明（既有 import 排序差异，非本次引入；未新增 diff） |
 | `cargo test --workspace --no-fail-fast` | ⚠️ 1 target failed：`dozer-app --bin dozer` = **1968 passed / 1 failed**，失败为既有 `usage_probe::host::tests::host_site_citations_point_at_the_code_they_name`（基线 §4.1.3，指向用户 WIP 的 `app/update.rs`，非本次回归） |
 | `cargo clippy -p dozer-app --all-targets` | ⚠️ 剩余 warning 全在用户 WIP 文件（`chrome/homespace.rs`/`confirm_overlay.rs`/`extensions/files/*`）；本次触碰的 `overlay_window.rs`/`toast_overlay.rs` 零 warning |
-| `python3 scripts/audit/check_panel_boundary.py` | ✅ `ok (216 refs in 6 files, baseline ratchet)`（C10 后 R-OVERLAY-DUP 基线 3） |
+| `python3 scripts/audit/check_panel_boundary.py` | ✅ `ok (213 refs in 5 files, baseline ratchet)`（C10 方案 C 后 `platform/overlay_gpu.rs` 从扫描消失，`R-OVERLAY-DUP` **3 → 0**） |
 | `python3 -m unittest discover -s scripts/audit -p 'test_*.py'` | ⚠️ 45 项中 **2** 失败，均为既有 `test_unit_edges.ScanUsage`（Usage 迁库后审计脚本扫旧路径，见 4.4）；本次修掉 1 项 C9 遗留陈旧测试（`test_slot_enum_counted_in_panel_host`） |
 | `bash scripts/check-log-scope.sh` | ✅ ok |
 
@@ -167,11 +167,11 @@
 
 ### 4.8 新增公共 API / 剩余产品代码 / 兼容格式 / 回滚（总结）
 
-- **bytehost 新增公共 API**（C5–C12 收口）：`bytehost-desktop::hover::HoverSlot`（C9）、`panes::{PaneDims,PaneSpec,PaneStore,RailItems,apply_pane_split_drag}`（C11）、`focus::{FocusRouter,FocusTarget}`（C12）、`overlay::{open_overlay,reposition_overlay,open_child_window[_unfocused],full_window_overlay_bounds,centered_card_offset,popup_card_size,stack_bounds,ToastMetrics,...}`（C10）、`bytehost-core` 布局 DTO + `bytehost_core::request` 请求身份。
-- **剩余产品代码**：Dozer 侧 `PanelKind` 业务键（`stable_id()`）、`FocusIntent` 业务路由、rail/pane 落盘命名兼容面、`overlay_window.rs`/`toast_overlay.rs` 薄壳（仅内容与主题色）。
+- **bytehost 新增公共 API**（C5–C12 收口）：`bytehost-desktop::hover::HoverSlot`（C9）、`panes::{PaneDims,PaneSpec,PaneStore,RailItems,apply_pane_split_drag}`（C11）、`focus::{FocusRouter,FocusTarget}`（C12）、`overlay::{open_overlay,reposition_overlay,open_child_window[_unfocused],full_window_overlay_bounds,centered_card_offset,popup_card_size,stack_bounds,ToastMetrics,...}`（C10 方案 B）、`overlay_gpu::{OverlayGpu,apply_cursor,backdrop_card,backdrop_card_shrink}`（C10 方案 C，feature `overlay`）、`bytehost-core` 布局 DTO + `bytehost_core::request` 请求身份。
+- **剩余产品代码**：Dozer 侧 `PanelKind` 业务键（`stable_id()`）、`FocusIntent` 业务路由、rail/pane 落盘命名兼容面、`overlay_window.rs`（薄适配：注入主题遮罩色 + wgpu 工厂）、`toast_overlay.rs` 薄壳（仅内容与主题色）。
 - **兼容格式**：布局 DTO 保留命名字段兼容面；`schema_version` 未知高版本拒覆盖、低版本迁移；`retained_unknown` 保留未知面板键。
 - **回滚**：升级失败保留原文件（SHA 不变，Task 22 演练）；用户 `bytehost/apps/<app>/state.json` 跨回滚存活；卸载「含数据」走 `StoreRemovals` 清 WKWebsiteDataStore。
 
 ### 4.9 兼容桥收口状态
 
-C1–C12 见 §2。C1/C2/C3/C4 已归零（早期 Task）；C5/C6/C7/C8/C9/C11/C12 于 Task 21 收敛（对应门禁规则退役或棘轮下降）。**C10 未归零**：依用户裁决走**方案 B**，`R-OVERLAY-DUP` 残留 **3**（基线上限，只降不升）——到 0 需方案 A/C，列为**开放后续决策**。全部兼容桥的删除条件仍可测。
+C1–C12 见 §2。C1/C2/C3/C4 已归零（早期 Task）；C5/C6/C7/C8/C9/C11/C12 于 Task 21 收敛（对应门禁规则退役或棘轮下降）。**C10 已归零**：依用户裁决先后走方案 B（建窗/几何上收）与**方案 C**（feature-gated 上收 `OverlayGpu`/`backdrop_card*`），`R-OVERLAY-DUP` **3 → 0**（`platform/overlay_gpu.rs` 从扫描消失，基线 216/6 → 213/5）。全部兼容桥的删除条件均已满足。

@@ -854,6 +854,17 @@
 - **偏差 / 发现:** 方案 B 达不到"`R-OVERLAY-DUP` 归零"——`OverlayGpu` 的 wgpu surface 配置有意留产品侧;要归零须续做方案 A/C(给 desktop 加 feature-gated 渲染器依赖 + 把 `OverlayGpu` 也上收)。
 - **未决项 / 阻塞:** C10 的"完全归零"续做待裁决(A/C)。**至此 Task 21 全部已知桥(C5/C6/C7/C8/C9/C10/C11/C12)收口;后续进 Task 22(依赖钉版 + 独立构建/发布打包)。**
 
+### 切片 10 — C10 原生浮层建窗机制上收:方案 C 落地(`R-OVERLAY-DUP` 归零,DONE)
+
+- **裁决:** 用户选 **方案 C**(方案 B + feature-gated 上收 `OverlayGpu`/`backdrop_card*`),要求 `R-OVERLAY-DUP` **完全归零**。
+- **改动(bytehost):** `bytehost-desktop/Cargo.toml` 新增 `overlay` feature(默认关),开启时才引入 `iced_wgpu`/`iced_winit`/`iced_widget`/`iced_renderer`(optional)。**默认 build 依赖树不变**——`cargo tree` 对比 HEAD 确认 `iced_wgpu`/`tiny-skia` 默认树下均**不出现**(`iced_renderer`/`iced_widget`/`iced_winit` 本就在,经 `iced` facade + wry),R2 红线保持。新增 `src/overlay_gpu.rs`(`#[cfg(feature="overlay")]`):搬入 `OverlayGpu`(`open`/`reconfigure`/`redraw`/`dispatch`/`track_and_convert`)、`apply_cursor`、`backdrop_card`/`backdrop_card_shrink`。**产品接缝收窄**——`backdrop_card*` 的遮罩色改为显式参数 `scrim: Color`(宿主不认识主题 token)。`lib.rs` 门控注册 + 重导出。
+- **改动(dozer):** `platform/overlay_gpu.rs` 退化为**纯重导出**(`OverlayGpu`/`apply_cursor`);`platform/overlay_window.rs` 退化为**薄适配**(重导出宿主建窗/几何 + 两个注入 `OverlayGpu` 工厂的包装 + 给 `backdrop_card*` 注入 `theme::region::maximize_overlay().scrim_background`)——**24 处 `backdrop_card` 调用点签名不变**。`dozer-app/Cargo.toml` 的 `bytehost-desktop` 打开 `features = ["overlay"]`。
+- **门禁:** `panel-boundary.baseline.json` 由 216/6 → **213/5**——`platform/overlay_gpu.rs` 整个从扫描里消失(`R-OVERLAY-DUP` **3 → 0**,`--update` 重定基线)。
+- **验证:** bytehost `cargo test -p bytehost-desktop`(默认 **与** `--features overlay`)均 57+8+3+8 全绿、`check-deps.sh` ok、`clippy --features overlay -D warnings` 零告警;dozer `cargo build --workspace` 绿、`cargo clippy -p dozer-app --all-targets` 零告警、`cargo test -p dozer-app --bin dozer` **1968 passed / 1 failed**(唯一失败仍是既有用户 WIP 漂移,与 C10 无关)、`check_panel_boundary.py` ok(213/5)。
+- **偏差 / 发现:** `overlay` feature 引入"消费方必须与宿主 iced 类型同源"的硬约束(同版本+同 feature 集),现状 dozer/bytehost 都以各自 tag 锁 iced 0.14 默认 feature,满足;升级 iced 时两仓要一起升(见设计规格 §7.3)。
+- **未决项 / 阻塞:** 无。**C10 收口(C1–C12 全部归零)。**
+
+
 
 
 ### 设计:C8 + C11 + C12 共同的"PanelId/Scope 键控"缺口(DONE — 设计待裁决)

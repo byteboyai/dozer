@@ -125,8 +125,36 @@ C10 的目标：**把"建窗 + GPU 管线 + 遮罩"这三块机制抽进 `byteho
 - **dozer `ea1202a0`:** `overlay_window.rs` 缩为薄壳(重导出宿主建窗/几何 + 保留 `backdrop_card*` + 两个注入 `OverlayGpu` 的包装);`toast_overlay.rs` 的 `stack_bounds` 改调宿主。新增 `R-OVERLAY-DUP` 门禁,基线 `platform/overlay_gpu.rs R-OVERLAY-DUP 3`(create_surface + 2× PostMultiplied,方案 B 有意保留产品侧)。
 - **验证:** bytehost `cargo test -p bytehost-desktop` 57+8+3+8 全绿、`check-deps.sh` ok;dozer build/`--tests` 绿、clippy 对两文件零告警、`cargo test -p dozer-app --bin dozer` 1968 passed / 1 failed(既有 WIP 漂移)、`check_panel_boundary.py` ok(216/6)、`check-log-scope.sh` ok。
 
-### 7.2 仍未决
+### 7.2 落地记录(方案 C,已实现——`R-OVERLAY-DUP` 归零)
 
-- **是否要求 `R-OVERLAY-DUP` 完全归零**（决定停 B 还是续 A/C 把 `OverlayGpu` 也上收——届时基线 3→0）。
-- `OverlayGpu::open` 的抽法已按泛型工厂落地(`open_overlay<G>`);`backdrop_card*`(依赖 `iced_widget`)按方案 B 留产品侧。
+用户裁决"必须归零",按方案 C(方案 B + feature-gated 上收 `OverlayGpu`/`backdrop_card*`)。
+
+- **bytehost-desktop Cargo.toml:** 新增 `overlay` feature(默认关)。开启时才引入
+  `iced_wgpu`/`iced_winit`/`iced_widget`/`iced_renderer`(optional)。**默认 build 依赖树不变**——
+  已用 `cargo tree` 在 HEAD 与改动后对比确认:`iced_wgpu`/`tiny-skia` 在默认树下均**不出现**
+  (`iced_renderer`/`iced_widget`/`iced_winit` 本就在默认树里,经 `iced` facade + wry,非本次引入),
+  R2 红线(不把 tiny-skia fallback renderer 并进消费方)保持。
+- **bytehost `src/overlay_gpu.rs`(新,`#[cfg(feature="overlay")]`):** 搬入 dozer 的
+  `OverlayGpu`(`open`/`reconfigure`/`redraw`/`dispatch`/`track_and_convert`)、`apply_cursor`,
+  以及 `backdrop_card`/`backdrop_card_shrink`。**产品接缝收窄**:`backdrop_card*` 的遮罩色
+  改为显式参数 `scrim: Color`(宿主不认识产品主题 token)。`lib.rs` 门控重导出。
+- **dozer-app:** `platform/overlay_gpu.rs` 退化为**纯重导出**(`OverlayGpu`/`apply_cursor`,消费方
+  `crate::platform::overlay_gpu::*` 路径不变);`platform/overlay_window.rs` 退化为**薄适配**
+  (重导出宿主建窗/几何 + 两个注入 `OverlayGpu` 工厂的包装 + 给 `backdrop_card*` 注入
+  `theme::region::maximize_overlay().scrim_background`)——24 处 `backdrop_card` 调用点签名不变。
+  `dozer-app/Cargo.toml` 的 `bytehost-desktop` 打开 `features = ["overlay"]`。
+- **门禁:** `panel-boundary.baseline.json` 更新为 213 refs / 5 files——`platform/overlay_gpu.rs`
+  整个从扫描里消失(`R-OVERLAY-DUP` **3 → 0**)。
+- **验证:** bytehost `cargo test -p bytehost-desktop`(默认 + `--features overlay`)均 57+8+3+8 全绿、
+  `check-deps.sh` ok、`clippy --features overlay -D warnings` 零告警;dozer `cargo build --workspace` 绿、
+  `cargo test -p dozer-app --bin dozer` 1968 passed / 1 failed(既有 WIP 漂移,与 C10 无关)、
+  `check_panel_boundary.py` ok(213/5)、clippy 零告警。
+
+### 7.3 仍未决
+
+- `OverlayGpu::open` 的抽法已按泛型工厂落地(`open_overlay<G>`);`OverlayGpu`/`backdrop_card*`
+  现按方案 C 上收宿主(`overlay` feature)。
 - Toast 的"点击穿透 + 不聚焦"用独立的 `open_child_window_unfocused`(形状与原来一致)。
+- **`overlay` feature 的类型同源约束**:开启该 feature 的消费方必须与宿主用**同一份**
+  `iced_wgpu`/`iced_winit`/`iced_renderer`(同一版本+feature 集),否则 `Renderer` 类型不匹配。
+  现状 dozer 与 bytehost 都以各自 tag 锁 iced 0.14(默认 feature),可满足;升级 iced 时要一起升
