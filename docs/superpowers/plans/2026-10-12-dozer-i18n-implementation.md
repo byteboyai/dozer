@@ -1,6 +1,6 @@
 # Dozer 多语言支持实施计划
 
-> 日期：2026-10-12。状态：待实施，所有任务复选框均未完成。
+> 日期：2026-10-12。状态：Task 01 已完成（清单与生产入口基线），其余任务待实施，未完成的复选框仍未勾选。
 > 规格：[多语言支持 spec](../specs/2026-10-12-dozer-i18n-design.md)。
 > 补充要求：必须将当前代码中属于界面文案的中文迁入中文语言包，并替换原调用点；不能只为新增功能添加翻译接口。
 > 本次交付为计划，不执行功能实现、依赖发布或打包。以下新增文件、命令入口均为待实现项。
@@ -70,12 +70,12 @@
 **读取：** `product.rs`、`panel_registry.rs`、全部 `src/{app,workspace,chrome,platform,extensions,preview}`、两个 HTML host、所有 Web 包、`assets.rs`、打包脚本与独立面板目录。
 **新增：** §1.3 的记录文件；`scripts/i18n/scan_sources.py`（候选扫描工具）。
 
-- [ ] 记录实际工作区 revision/WIP、现有测试结果及 package scripts；定位 Usage 迁移后的真实构建与资源引用。
-- [ ] 扫描全部自有生产源文件中的中文候选，并检查用户可见英文；对 multiline/raw string、模板字符串、JSX、HTML 属性分别处理，避免把注释行数当文案数。
-- [ ] 沿 view/presenter、payload、错误和 Toast 调用链人工分类，建立 owner/key 映射；列出所有无静态字面量但可显示文本的入口。
-- [ ] 为每个面板、overlay、HTML host、自有 Web 包分配 Task；动态新文件须重新进入清单。
-- [ ] 确定 Rust/TS 资源单一来源、共享 TS 解析模块的打包边界；独立面板不得依赖 app。若 Usage 库需要共享 TS 包，将通用解析器移至中立目录并同步 spec，不复制实现。
-- [ ] 对迁移中的路径与规格差异写回 spec；记录当前版本 schema 兼容测试夹具，不把未提交代码当稳定发布版本。
+- [x] 记录实际工作区 revision/WIP、现有测试结果及 package scripts；定位 Usage 迁移后的真实构建与资源引用。
+- [x] 扫描全部自有生产源文件中的中文候选，并检查用户可见英文；对 multiline/raw string、模板字符串、JSX、HTML 属性分别处理，避免把注释行数当文案数。
+- [x] 沿 view/presenter、payload、错误和 Toast 调用链人工分类，建立 owner/key 映射；列出所有无静态字面量但可显示文本的入口。
+- [x] 为每个面板、overlay、HTML host、自有 Web 包分配 Task；动态新文件须重新进入清单。
+- [x] 确定 Rust/TS 资源单一来源、共享 TS 解析模块的打包边界；独立面板不得依赖 app。若 Usage 库需要共享 TS 包，将通用解析器移至中立目录并同步 spec，不复制实现。
+- [x] 对迁移中的路径与规格差异写回 spec；记录当前版本 schema 兼容测试夹具，不把未提交代码当稳定发布版本。
 
 **验收：**无未分配的 UI 区域；候选有分类/负责人任务；未迁移清单可重跑。尚未审计项保持 unresolved。
 

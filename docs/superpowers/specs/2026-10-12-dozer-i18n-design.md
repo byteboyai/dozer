@@ -97,10 +97,14 @@ GUI 可在自己的缓存文件保存最后确认快照以支持离线启动；�
 
 ```text
 crates/dozer-app/locales/host/{en,zh-CN}.json
-crates/dozer-app/locales/panels/<panel-id>/{en,zh-CN}.json
+crates/dozer-app/locales/panels/<panel-id>/{en,zh-CN}.json   # 仍在 app 内的面板
+crates/dozer-panel-usage/locales/{en,zh-CN}.json             # 已独立的面板随其 crate
 crates/dozer-app/web/shared/i18n/       # TS 解析器与一致性测试
 crates/dozer-i18n/                     # Rust 解析器与一致性测试
 ```
+
+资源目录跟随资源所有者：位于 `dozer-app` 内的 Host 与面板资源在 `crates/dozer-app/locales/`；已拆为独立 crate 的面板（当前为 `crates/dozer-panel-usage/`）在其自身 `locales/` 下携带资源，locale 由 Host 注入，不得反向依赖 `dozer-app` 的目录，也不得在 app 内维护第二份译文。共享 TS 解析器位于中立目录（`web/shared/i18n/`），各 Web 包静态 import，独立面板的构建可从任意 cwd 定位它，不依赖兄弟工作区运行路径。
+
 
 同一面板 Rust 与 WebView 从同一组 JSON 取资源，构建时分别打入二进制/前端 bundle，不维护两套译文。资源离线可用，不产生启动网络依赖；具体前端构建入口逐个接线，不假设当前存在共享 npm workspace。byteui 组件通过调用方传入标签，不能持有 Dozer 产品词表。
 
