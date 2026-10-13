@@ -2290,11 +2290,26 @@ impl Runner {
                         })));
                         let picked = match choice {
                             SourceChoice::Dir => rfd::FileDialog::new()
-                                .set_title("选择应用目录(目录里要有 manifest.toml)")
+                                .set_title(crate::i18n::host_text(
+                                    "settings.apps.pick_dir_title",
+                                    "Choose an app directory (must contain manifest.toml)",
+                                    app.locale.active_locale(),
+                                ))
                                 .pick_folder(),
                             SourceChoice::Archive => rfd::FileDialog::new()
-                                .set_title("选择应用压缩包")
-                                .add_filter("压缩包", &["zip", "tar.gz", "tgz"])
+                                .set_title(crate::i18n::host_text(
+                                    "settings.apps.pick_archive_title",
+                                    "Choose an app archive",
+                                    app.locale.active_locale(),
+                                ))
+                                .add_filter(
+                                    crate::i18n::host_text(
+                                        "settings.apps.archive_filter",
+                                        "Archive",
+                                        app.locale.active_locale(),
+                                    ),
+                                    &["zip", "tar.gz", "tgz"],
+                                )
                                 .pick_file(),
                             SourceChoice::Url => unreachable!(),
                         };

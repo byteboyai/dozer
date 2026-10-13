@@ -132,7 +132,7 @@ pub fn search_scope(scope: &Scope, query: &str) -> Result<Vec<(String, Vec<Searc
     let matcher = grep_regex::RegexMatcherBuilder::new()
         .case_insensitive(true)
         .build(query)
-        .map_err(|e| format!("搜索模式无效: {e}"))?;
+        .map_err(|e| e.to_string())?;
 
     // 文件作用域:单文件,无需并行遍历,直接扫。
     if let Scope::File(p) = scope {
@@ -314,13 +314,15 @@ pub fn update(
 
 /// 查询框(真正的 iced `text_input`,经由 `byteui::form::input_text::view` 渲染)。
 /// 弹窗一打开就自动聚焦(见 `open()` 置位的一次性聚焦标记)。
-fn query_box(
-    ws: &WorkspaceState,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+fn query_box<'a>(
+    ws: &'a WorkspaceState,
+    locale: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let active = ws.query_focused() || ws.running;
+    let placeholder = crate::i18n::host_text("search.query_placeholder", "Search…", locale);
     byteui::interaction::context_menu::wrap(
         byteui::form::input_text::view(
-            "搜索内容…",
+            &placeholder,
             &ws.query,
             false,
             Some(query_field_id()),
@@ -405,6 +407,7 @@ fn results_list<'a>(
 pub(crate) fn search_card<'a>(
     ws: &'a WorkspaceState,
     project_root: Option<&'a Path>,
+    locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     if !ws.open {
         return column![].into();
@@ -413,11 +416,21 @@ pub(crate) fn search_card<'a>(
     let scope_label = match &ws.scope {
         Some(Scope::Dir(p)) => {
             let rel = rel_to_root(p, project_root);
-            format!("目录: {}", rel.display())
+            crate::i18n::host_text_args(
+                "search.scope_dir",
+                "Directory: {path}",
+                locale,
+                &[("path", &rel.display().to_string())],
+            )
         }
         Some(Scope::File(p)) => {
             let rel = rel_to_root(p, project_root);
-            format!("文件: {}", rel.display())
+            crate::i18n::host_text_args(
+                "search.scope_file",
+                "File: {path}",
+                locale,
+                &[("path", &rel.display().to_string())],
+            )
         }
         None => String::new(),
     };
@@ -443,9 +456,13 @@ pub(crate) fn search_card<'a>(
     .align_y(iced_widget::core::Alignment::Center);
 
     let submit_btn = button(
-        text(if ws.running { "搜索中…" } else { "搜索" })
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().cream),
+        text(if ws.running {
+            crate::i18n::host_text("search.searching", "Searching…", locale)
+        } else {
+            crate::i18n::host_text("search.search", "Search", locale)
+        })
+        .size(byteui::theme::font::body())
+        .color(byteui::theme::color::current().cream),
     )
     .on_press(Message::QuerySubmit)
     .padding([6, 12])
@@ -453,7 +470,7 @@ pub(crate) fn search_card<'a>(
         byteui::theme::color::current().cream,
     ));
 
-    let query_row = row![query_box(ws), submit_btn]
+    let query_row = row![query_box(ws, locale), submit_btn]
         .spacing(8)
         .align_y(iced_widget::core::Alignment::Center);
 
@@ -463,25 +480,47 @@ pub(crate) fn search_card<'a>(
         .height(Length::Fill);
 
     if ws.running {
-        body = body.push(byteui::feedback::math_curve::loading_hint(
-            byteui::feedback::math_curve::Curve::RoseThree,
-            "搜索中…",
-            48.0,
-        ));
-    } else if ws.has_searched && ws.results.is_empty() && ws.error.is_none() {
+        // `loading_hint` 的 label 形参是 `&'static str`,本地化文案拿不到,
+        // 直接手拼动画 + 文本(与 workspace/view.rs 同款)。
         body = body.push(
-            text("无匹配")
+            column![
+                byteui::feedback::math_curve::view_animated::<Message>(
+                    byteui::feedback::math_curve::Curve::RoseThree,
+                    48.0,
+                ),
+                text(crate::i18n::host_text(
+                    "search.searching",
+                    "Searching…",
+                    locale
+                ))
                 .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim),
+            ]
+            .align_x(iced_widget::core::Alignment::Center),
+        );
+    } else if ws.has_searched && ws.results.is_empty() && ws.error.is_none() {
+        body = body.push(
+            text(crate::i18n::host_text(
+                "search.no_match",
+                "No matches",
+                locale,
+            ))
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().dim),
         );
     } else if !ws.results.is_empty() {
         body = body.push(results_list(ws, project_root));
     }
     if let Some(err) = &ws.error {
         body = body.push(
-            text(format!("⚠ {err}"))
-                .size(byteui::theme::font::body())
-                .color(byteui::theme::color::current().red),
+            text(crate::i18n::host_text_args(
+                "search.error",
+                "⚠ Search failed: {message}",
+                locale,
+                &[("message", err.as_str())],
+            ))
+            .size(byteui::theme::font::body())
+            .color(byteui::theme::color::current().red),
         );
     }
 

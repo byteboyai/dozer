@@ -3111,7 +3111,13 @@ impl App {
                 let emit = move |m| {
                     let _ = proxy.send_event(Message::FileHistory(m));
                 };
-                file_history::update(&mut self.file_history, msg, &handle, emit);
+                file_history::update(
+                    &mut self.file_history,
+                    msg,
+                    self.locale.active_locale(),
+                    &handle,
+                    emit,
+                );
             }
             Message::AgentContext(project_id, msg) => self.agent_context_message(project_id, msg),
             Message::ProjectCreateOpen => {
@@ -3168,17 +3174,26 @@ impl App {
                 };
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
+                let locale = self.locale.active_locale().to_owned();
                 handle.spawn(async move {
                     let repo_path2 = repo_path.clone();
                     let file_path2 = file_path.clone();
                     let path2 = path.clone();
+                    let locale_task = locale.clone();
                     let result = tokio::task::spawn_blocking(move || {
                         file_history::previous_commit(&repo_path2, &file_path2).and_then(|opt| {
                             match opt {
-                                Some(oid) => {
-                                    file_history::rollback_to(&repo_path2, &file_path2, oid)
-                                }
-                                None => Err("该文件没有可回滚的历史版本".to_string()),
+                                Some(oid) => file_history::rollback_to(
+                                    &repo_path2,
+                                    &file_path2,
+                                    oid,
+                                    &locale_task,
+                                ),
+                                None => Err(crate::i18n::host_text(
+                                    "file_history.no_version_to_rollback",
+                                    "This file has no version to roll back to",
+                                    &locale_task,
+                                )),
                             }
                         })
                     })
@@ -5785,7 +5800,10 @@ impl App {
                     .edit_history
                     .as_ref()
                     .filter(|s| s.agent_terminal_visible())
-                    .and_then(|s| s.entry(id).map(eh::ask_agent_text))
+                    .and_then(|s| {
+                        s.entry(id)
+                            .map(|e| eh::ask_agent_text(e, self.locale.active_locale()))
+                    })
                 else {
                     return;
                 };
@@ -5800,6 +5818,7 @@ impl App {
                 eh::update(
                     &mut self.edit_history,
                     other,
+                    self.locale.active_locale(),
                     edit_history,
                     &handle,
                     move |m| {

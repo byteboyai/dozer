@@ -203,6 +203,7 @@ pub enum Message {
 pub fn update(
     state: &mut Option<State>,
     msg: Message,
+    locale: &str,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + Sync + 'static,
 ) {
@@ -230,8 +231,8 @@ pub fn update(
                 s.diff_content_generation += 1;
                 let generation = s.diff_content_generation;
                 let target = s.target.as_ref().expect("刚核对过 target 非空");
-                spawn_diff(target, oid, handle, &emit);
-                spawn_diff_content(target, oid, generation, handle, &emit);
+                spawn_diff(target, oid, locale, handle, &emit);
+                spawn_diff_content(target, oid, generation, locale, handle, &emit);
             }
         }
         Message::SelectCommit(oid) => {
@@ -245,10 +246,10 @@ pub fn update(
             if !s.diff_cache.contains_key(&oid)
                 && let Some(target) = &s.target
             {
-                spawn_diff(target, oid, handle, &emit);
+                spawn_diff(target, oid, locale, handle, &emit);
             }
             if let Some(target) = &s.target {
-                spawn_diff_content(target, oid, generation, handle, &emit);
+                spawn_diff_content(target, oid, generation, locale, handle, &emit);
             }
         }
         Message::DiffLoaded(repo_path, file_path, oid, result) => {
@@ -292,13 +293,23 @@ pub fn update(
             s.rollback_error = None;
             let repo_path = target.repo_path.clone();
             let file_path = target.file_path.clone();
+            let locale = locale.to_owned();
             handle.spawn(async move {
                 let repo_path2 = repo_path.clone();
                 let file_path2 = file_path.clone();
-                let result =
-                    tokio::task::spawn_blocking(move || rollback_to(&repo_path2, &file_path2, oid))
-                        .await
-                        .unwrap_or_else(|e| Err(format!("回滚任务失败: {e}")));
+                let locale_task = locale.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    rollback_to(&repo_path2, &file_path2, oid, &locale_task)
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    Err(crate::i18n::host_text_args(
+                        "file_history.rollback_task_failed",
+                        "Rollback task failed: {error}",
+                        &locale,
+                        &[("error", &e.to_string())],
+                    ))
+                });
                 emit(Message::RollbackDone(oid, result));
             });
         }
@@ -319,8 +330,8 @@ pub fn update(
                     if let Some(target) = &s.target
                         && let Some(selected) = s.selected
                     {
-                        spawn_diff(target, selected, handle, &emit);
-                        spawn_diff_content(target, selected, generation, handle, &emit);
+                        spawn_diff(target, selected, locale, handle, &emit);
+                        spawn_diff_content(target, selected, generation, locale, handle, &emit);
                     }
                 }
                 Err(err) => {
@@ -334,6 +345,7 @@ pub fn update(
 fn spawn_diff<E>(
     target: &FileHistoryTarget,
     oid: CommitId,
+    locale: &str,
     handle: &tokio::runtime::Handle,
     emit: &std::sync::Arc<E>,
 ) where
@@ -341,6 +353,7 @@ fn spawn_diff<E>(
 {
     let repo_path = target.repo_path.clone();
     let file_path = target.file_path.clone();
+    let locale = locale.to_owned();
     let emit = emit.clone();
     handle.spawn(async move {
         let repo_path2 = repo_path.clone();
@@ -349,7 +362,14 @@ fn spawn_diff<E>(
             diff_against_current(&repo_path2, &file_path2, oid)
         })
         .await
-        .unwrap_or_else(|e| Err(format!("diff 加载任务失败: {e}")));
+        .unwrap_or_else(|e| {
+            Err(crate::i18n::host_text_args(
+                "file_history.diff_task_failed",
+                "Diff load task failed: {error}",
+                &locale,
+                &[("error", &e.to_string())],
+            ))
+        });
         emit(Message::DiffLoaded(repo_path, file_path, oid, result));
     });
 }
@@ -358,6 +378,7 @@ fn spawn_diff_content<E>(
     target: &FileHistoryTarget,
     oid: CommitId,
     generation: u64,
+    locale: &str,
     handle: &tokio::runtime::Handle,
     emit: &std::sync::Arc<E>,
 ) where
@@ -365,6 +386,7 @@ fn spawn_diff_content<E>(
 {
     let repo_path = target.repo_path.clone();
     let file_path = target.file_path.clone();
+    let locale = locale.to_owned();
     let emit = emit.clone();
     handle.spawn(async move {
         let repo_path2 = repo_path.clone();
@@ -374,7 +396,14 @@ fn spawn_diff_content<E>(
             workdir_content(&repo, oid, &file_path2)
         })
         .await
-        .unwrap_or_else(|e| Err(format!("diff 内容加载任务失败: {e}")));
+        .unwrap_or_else(|e| {
+            Err(crate::i18n::host_text_args(
+                "file_history.diff_content_task_failed",
+                "Diff content load task failed: {error}",
+                &locale,
+                &[("error", &e.to_string())],
+            ))
+        });
         emit(Message::DiffContentLoaded(
             repo_path, file_path, oid, generation, result,
         ));
@@ -443,13 +472,32 @@ pub fn diff_against_current(
 /// 取 `id` 对应提交里 `file_path` 的原始字节,写入 `repo_path.join(file_path)`。
 /// 不碰 git 索引,不 `git add`,是纯粹的文件系统写入——回滚后 git status 会显示这是一处
 /// 未提交改动,交给用户/agent 自行决定要不要提交。二进制、超大、非 UTF-8 的文件也原样写回。
-pub fn rollback_to(repo_path: &Path, file_path: &Path, id: CommitId) -> Result<(), String> {
+pub fn rollback_to(
+    repo_path: &Path,
+    file_path: &Path,
+    id: CommitId,
+    locale: &str,
+) -> Result<(), String> {
     let repo = open_exact_repo(repo_path)?;
     let bytes = repo
         .file_bytes_at(id, file_path)
         .map_err(|e| e.message().to_string())?
-        .ok_or_else(|| format!("该历史版本里没有文件 {}", file_path.display()))?;
-    std::fs::write(repo_path.join(file_path), bytes).map_err(|e| format!("写入文件失败: {e}"))?;
+        .ok_or_else(|| {
+            crate::i18n::host_text_args(
+                "file_history.no_file_in_version",
+                "No such file in this historical version: {path}",
+                locale,
+                &[("path", &file_path.display().to_string())],
+            )
+        })?;
+    std::fs::write(repo_path.join(file_path), bytes).map_err(|e| {
+        crate::i18n::host_text_args(
+            "file_history.write_failed",
+            "Failed to write file: {error}",
+            locale,
+            &[("error", &e.to_string())],
+        )
+    })?;
     Ok(())
 }
 
@@ -471,18 +519,23 @@ pub fn previous_commit(repo_path: &Path, file_path: &Path) -> Result<Option<Comm
 /// `window_width`/`window_height` 算 `Length::Fixed` 像素值再居中的
 /// 语义(那部分逻辑挪进 `FileHistoryOverlay::open`/`reposition` 的
 /// 窗口尺寸计算,不在这里)。
-pub fn file_history_card(
-    state: &State,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+pub fn file_history_card<'a>(
+    state: &'a State,
+    locale: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let title = row![
         icons::view(
             icons::IconKind::History,
             byteui::theme::icon_size::row(),
             byteui::theme::color::current().cream,
         ),
-        text("文件历史")
-            .size(byteui::theme::font::subtitle())
-            .color(byteui::theme::color::current().cream),
+        text(crate::i18n::host_text(
+            "file_history.title",
+            "File History",
+            locale
+        ))
+        .size(byteui::theme::font::subtitle())
+        .color(byteui::theme::color::current().cream),
         iced_widget::space::horizontal(),
         button(
             text("×")
@@ -500,10 +553,10 @@ pub fn file_history_card(
     .align_y(iced_widget::core::Alignment::Center);
 
     let body = row![
-        container(commit_list_view(state))
+        container(commit_list_view(state, locale))
             .width(Length::Fixed(240.0))
             .height(Length::Fill),
-        diff_area_view(state),
+        diff_area_view(state, locale),
     ]
     .spacing(12)
     .height(Length::Fill);
@@ -518,13 +571,28 @@ pub fn file_history_card(
 
 fn commit_list_view<'a>(
     state: &'a State,
+    locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(snapshot) = state.snapshot() else {
-        return byteui::feedback::math_curve::loading_hint(
-            byteui::feedback::math_curve::Curve::RoseThree,
-            "加载中…",
-            36.0,
-        );
+        return container(
+            column![
+                byteui::feedback::math_curve::view_animated::<Message>(
+                    byteui::feedback::math_curve::Curve::RoseThree,
+                    36.0,
+                ),
+                text(crate::i18n::host_text(
+                    "common.loading_ellipsis",
+                    "Loading…",
+                    locale
+                ))
+                .size(byteui::theme::font::caption())
+                .color(byteui::theme::color::current().dim),
+            ]
+            .spacing(6)
+            .align_x(iced_widget::core::Alignment::Center),
+        )
+        .padding(8)
+        .into();
     };
     let entries = match snapshot {
         Ok(s) => &s.entries,
@@ -540,9 +608,13 @@ fn commit_list_view<'a>(
     };
     if entries.is_empty() {
         return container(
-            text("该文件没有提交记录")
-                .size(byteui::theme::font::caption())
-                .color(byteui::theme::color::current().dim),
+            text(crate::i18n::host_text(
+                "file_history.no_commits",
+                "No commits for this file",
+                locale,
+            ))
+            .size(byteui::theme::font::caption())
+            .color(byteui::theme::color::current().dim),
         )
         .padding(8)
         .into();
@@ -586,12 +658,17 @@ fn commit_list_view<'a>(
 
 fn diff_area_view<'a>(
     state: &'a State,
+    locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(oid) = state.selected() else {
         return container(
-            text("未选中版本")
-                .size(byteui::theme::font::caption())
-                .color(byteui::theme::color::current().dim),
+            text(crate::i18n::host_text(
+                "file_history.no_selected_version",
+                "No version selected",
+                locale,
+            ))
+            .size(byteui::theme::font::caption())
+            .color(byteui::theme::color::current().dim),
         )
         .padding(8)
         .width(Length::Fill)
@@ -600,69 +677,97 @@ fn diff_area_view<'a>(
     };
 
     let header = row![
-        text(format!("当前 vs {}", short_sha_of(state, oid)))
-            .size(byteui::theme::font::label())
-            .color(byteui::theme::color::current().cream),
+        text(crate::i18n::host_text_args(
+            "file_history.current_vs",
+            "Current vs {sha}",
+            locale,
+            &[("sha", &short_sha_of(state, oid))],
+        ))
+        .size(byteui::theme::font::label())
+        .color(byteui::theme::color::current().cream),
         iced_widget::space::horizontal(),
-        rollback_button(state, oid),
+        rollback_button(state, oid, locale),
     ]
     .spacing(8)
     .align_y(iced_widget::core::Alignment::Center);
 
-    let content: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        match state.loaded_diff() {
-            Some(loaded)
-                if loaded.oid == oid && matches!(loaded.content, DiffBlobContent::Text { .. }) =>
-            {
-                // CodeMirror 常开:留一块空区域给 Task 3 挂的 webview 合成
-                // (同 git-log-diff 计划 Task 7 的手法)。
-                container(iced_widget::Space::new())
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into()
-            }
-            Some(loaded) if loaded.oid == oid => {
-                // 已加载但判定不可渲染(二进制/超限/磁盘文件缺失)。
-                container(
-                    text("(二进制文件、超出大小上限,或磁盘文件当前不存在,不支持预览)")
-                        .size(byteui::theme::font::caption())
+    let content: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = match state
+        .loaded_diff()
+    {
+        Some(loaded)
+            if loaded.oid == oid && matches!(loaded.content, DiffBlobContent::Text { .. }) =>
+        {
+            // CodeMirror 常开:留一块空区域给 Task 3 挂的 webview 合成
+            // (同 git-log-diff 计划 Task 7 的手法)。
+            container(iced_widget::Space::new())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        }
+        Some(loaded) if loaded.oid == oid => {
+            // 已加载但判定不可渲染(二进制/超限/磁盘文件缺失)。
+            container(
+                    text(crate::i18n::host_text(
+                        "file_history.unrenderable",
+                        "(Binary file, over the size limit, or the on-disk file is missing; preview unavailable)",
+                        locale,
+                    ))
+                    .size(byteui::theme::font::caption())
                         .color(byteui::theme::color::current().dim),
                 )
                 .padding(8)
                 .into()
+        }
+        _ => match state.diff_for(oid) {
+            None => container(
+                column![
+                    byteui::feedback::math_curve::view_animated::<Message>(
+                        byteui::feedback::math_curve::Curve::RoseThree,
+                        48.0,
+                    ),
+                    text(crate::i18n::host_text(
+                        "common.loading_ellipsis",
+                        "Loading…",
+                        locale,
+                    ))
+                    .size(byteui::theme::font::caption())
+                    .color(byteui::theme::color::current().dim),
+                ]
+                .spacing(6)
+                .align_x(iced_widget::core::Alignment::Center),
+            )
+            .padding(8)
+            .into(),
+            Some(Err(err)) => container(
+                text(err.clone())
+                    .size(byteui::theme::font::caption())
+                    .color(byteui::theme::color::current().red),
+            )
+            .padding(8)
+            .into(),
+            Some(Ok(patch)) if patch.is_empty() => container(
+                text(crate::i18n::host_text(
+                    "file_history.content_same",
+                    "Identical content",
+                    locale,
+                ))
+                .size(byteui::theme::font::caption())
+                .color(byteui::theme::color::current().dim),
+            )
+            .padding(8)
+            .into(),
+            Some(Ok(patch)) => {
+                scrollable(crate::extensions::diff_render::colored_diff_lines(patch))
+                    .direction(scrollable::Direction::Vertical(
+                        byteui::interaction::scrollbar::scrollbar(),
+                    ))
+                    .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style())
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
             }
-            _ => match state.diff_for(oid) {
-                None => byteui::feedback::math_curve::loading_hint(
-                    byteui::feedback::math_curve::Curve::RoseThree,
-                    "加载中…",
-                    48.0,
-                ),
-                Some(Err(err)) => container(
-                    text(err.clone())
-                        .size(byteui::theme::font::caption())
-                        .color(byteui::theme::color::current().red),
-                )
-                .padding(8)
-                .into(),
-                Some(Ok(patch)) if patch.is_empty() => container(
-                    text("内容相同")
-                        .size(byteui::theme::font::caption())
-                        .color(byteui::theme::color::current().dim),
-                )
-                .padding(8)
-                .into(),
-                Some(Ok(patch)) => {
-                    scrollable(crate::extensions::diff_render::colored_diff_lines(patch))
-                        .direction(scrollable::Direction::Vertical(
-                            byteui::interaction::scrollbar::scrollbar(),
-                        ))
-                        .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style())
-                        .width(Length::Fill)
-                        .height(Length::Fill)
-                        .into()
-                }
-            },
-        };
+        },
+    };
 
     let mut col = column![header, content]
         .spacing(8)
@@ -670,9 +775,14 @@ fn diff_area_view<'a>(
         .height(Length::Fill);
     if let Some(err) = state.rollback_error() {
         col = col.push(
-            text(format!("回滚失败: {err}"))
-                .size(byteui::theme::font::caption())
-                .color(byteui::theme::color::current().red),
+            text(crate::i18n::host_text_args(
+                "file_history.rollback_failed",
+                "Rollback failed: {error}",
+                locale,
+                &[("error", err)],
+            ))
+            .size(byteui::theme::font::caption())
+            .color(byteui::theme::color::current().red),
         );
     }
     col.into()
@@ -681,12 +791,17 @@ fn diff_area_view<'a>(
 fn rollback_button<'a>(
     state: &'a State,
     oid: CommitId,
+    locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let disabled = state.rollback_pending().is_some();
     button(
-        text("回滚")
-            .size(byteui::theme::font::label())
-            .color(byteui::theme::color::current().cream),
+        text(crate::i18n::host_text(
+            "file_history.rollback",
+            "Roll back",
+            locale,
+        ))
+        .size(byteui::theme::font::label())
+        .color(byteui::theme::color::current().cream),
     )
     .on_press_maybe((!disabled).then_some(Message::RollbackRequest(oid)))
     .padding([4, 10])
@@ -912,7 +1027,7 @@ mod tests {
         let (_d, repo) = mkrepo();
         let snapshot = build(&repo, Path::new("a.txt"), 10).unwrap();
         let c1_oid = snapshot.entries[1].oid; // c1: a.txt == "one\n"
-        rollback_to(&repo, Path::new("a.txt"), c1_oid).expect("回滚应成功");
+        rollback_to(&repo, Path::new("a.txt"), c1_oid, "zh-CN").expect("回滚应成功");
         let content = std::fs::read_to_string(repo.join("a.txt")).unwrap();
         assert_eq!(content, "one\n", "回滚后磁盘内容应变回 c1 时的字节");
     }
@@ -922,7 +1037,7 @@ mod tests {
         let (_d, repo) = mkrepo();
         let snapshot = build(&repo, Path::new("a.txt"), 10).unwrap();
         let c1_oid = snapshot.entries[1].oid;
-        rollback_to(&repo, Path::new("a.txt"), c1_oid).unwrap();
+        rollback_to(&repo, Path::new("a.txt"), c1_oid, "zh-CN").unwrap();
         let patch = diff_against_current(&repo, Path::new("a.txt"), c1_oid).unwrap();
         assert!(
             patch.is_empty(),
@@ -994,7 +1109,7 @@ mod tests {
         commit_bytes(&repo, "img.bin", b"changed\0", "change binary");
         let snapshot = build(&repo, Path::new("img.bin"), 10).unwrap();
         let first = snapshot.entries[1].oid;
-        rollback_to(&repo, Path::new("img.bin"), first).expect("二进制文件也应能回滚");
+        rollback_to(&repo, Path::new("img.bin"), first, "zh-CN").expect("二进制文件也应能回滚");
         assert_eq!(std::fs::read(repo.join("img.bin")).unwrap(), bin);
     }
 
@@ -1003,7 +1118,7 @@ mod tests {
         let (_d, repo) = mkrepo();
         let snapshot = build(&repo, Path::new("b.txt"), 10).unwrap();
         let c2 = snapshot.entries[0].oid;
-        assert!(rollback_to(&repo, Path::new("never-existed.txt"), c2).is_err());
+        assert!(rollback_to(&repo, Path::new("never-existed.txt"), c2, "zh-CN").is_err());
         assert!(
             !repo.join("never-existed.txt").exists(),
             "出错时不能写出文件"
@@ -1018,7 +1133,7 @@ mod tests {
         commit_bytes(&repo, "sub/a.txt", b"x\n", "add");
         let snapshot = build(&repo, Path::new("sub/a.txt"), 10).unwrap();
         let c = snapshot.entries[0].oid;
-        assert!(rollback_to(&repo, Path::new("sub"), c).is_err());
+        assert!(rollback_to(&repo, Path::new("sub"), c, "zh-CN").is_err());
     }
 
     #[test]
@@ -1073,7 +1188,7 @@ mod tests {
     async fn close_clears_state() {
         let mut state = Some(State::new(target()));
         let handle = tokio::runtime::Handle::current();
-        update(&mut state, Message::Close, &handle, |_| {});
+        update(&mut state, Message::Close, "zh-CN", &handle, |_| {});
         assert!(state.is_none());
     }
 
@@ -1089,6 +1204,7 @@ mod tests {
                 target().file_path,
                 Ok(snapshot_with(vec![fake_entry(fake_oid(1), "s")])),
             ),
+            "zh-CN",
             &handle,
             |_| panic!("过期目标的结果不该触发任何 emit"),
         );
@@ -1109,6 +1225,7 @@ mod tests {
                 target().file_path,
                 Ok(snapshot_with(Vec::new())),
             ),
+            "zh-CN",
             &handle,
             |_| panic!("空历史列表不该触发 diff 查询"),
         );
@@ -1133,6 +1250,7 @@ mod tests {
                     fake_entry(oid2, "older"),
                 ])),
             ),
+            "zh-CN",
             &handle,
             |_| {},
         );
@@ -1148,9 +1266,13 @@ mod tests {
             s.diff_cache.insert(oid, Ok("cached".to_string()));
         }
         let handle = tokio::runtime::Handle::current();
-        update(&mut state, Message::SelectCommit(oid), &handle, |_| {
-            panic!("已缓存的 diff 不该重新触发查询")
-        });
+        update(
+            &mut state,
+            Message::SelectCommit(oid),
+            "zh-CN",
+            &handle,
+            |_| panic!("已缓存的 diff 不该重新触发查询"),
+        );
         assert_eq!(state.unwrap().selected(), Some(oid));
     }
 
@@ -1167,6 +1289,7 @@ mod tests {
                 oid,
                 Ok("patch text".to_string()),
             ),
+            "zh-CN",
             &handle,
             |_| {},
         );
@@ -1193,6 +1316,7 @@ mod tests {
                 oid,
                 Ok("diff for a different file".to_string()),
             ),
+            "zh-CN",
             &handle,
             |_| {},
         );
@@ -1211,7 +1335,13 @@ mod tests {
         }
         let oid = fake_oid(5);
         let handle = tokio::runtime::Handle::current();
-        update(&mut state, Message::RollbackRequest(oid), &handle, |_| {});
+        update(
+            &mut state,
+            Message::RollbackRequest(oid),
+            "zh-CN",
+            &handle,
+            |_| {},
+        );
         let s = state.unwrap();
         assert_eq!(s.rollback_pending(), Some(oid));
         assert!(s.rollback_error().is_none());
@@ -1229,6 +1359,7 @@ mod tests {
         update(
             &mut state,
             Message::RollbackDone(oid, Err("写入失败".to_string())),
+            "zh-CN",
             &handle,
             |_| {},
         );
@@ -1256,6 +1387,7 @@ mod tests {
         update(
             &mut state,
             Message::RollbackDone(rolled_back_oid, Ok(())),
+            "zh-CN",
             &handle,
             |_| {},
         );
@@ -1284,6 +1416,7 @@ mod tests {
                     new_text: "b".into(),
                 }),
             ),
+            "zh-CN",
             &handle,
             |_| {},
         );
@@ -1312,6 +1445,7 @@ mod tests {
                     new_text: "b".into(),
                 }),
             ),
+            "zh-CN",
             &handle,
             |_| {},
         );
@@ -1343,6 +1477,7 @@ mod tests {
                     new_text: "b".into(),
                 }),
             ),
+            "zh-CN",
             &handle,
             |_| {},
         );
@@ -1382,6 +1517,7 @@ mod tests {
                     new_text: "pre-rollback".into(),
                 }),
             ),
+            "zh-CN",
             &handle,
             |_| {},
         );
@@ -1412,6 +1548,7 @@ mod tests {
         update(
             &mut state,
             Message::SelectCommit(fake_oid(2)),
+            "zh-CN",
             &handle,
             |_| {},
         );
@@ -1438,6 +1575,7 @@ mod tests {
         update(
             &mut state,
             Message::RollbackDone(fake_oid(3), Ok(())),
+            "zh-CN",
             &handle,
             |_| {},
         );
@@ -1467,6 +1605,7 @@ mod tests {
                 0,
                 Err("磁盘文件已不存在".to_string()),
             ),
+            "zh-CN",
             &handle,
             |_| {},
         );

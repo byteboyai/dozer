@@ -167,6 +167,7 @@ impl SearchOverlay {
         // 借 `ws` 之前先取窗宽——`active_workspace_mut()` 整体可变借用
         // `app`,借出后就够不着 `app.window_size` 了。
         let window_width = app.window_size.0;
+        let locale = app.locale.active_locale().to_owned();
         let Some(ws) = app.active_workspace_mut() else {
             return;
         };
@@ -180,7 +181,8 @@ impl SearchOverlay {
 
         let mut interface = UserInterface::build(
             backdrop_card(
-                search::search_card(&ws.search, project_root.as_deref()).map(Message::Search),
+                search::search_card(&ws.search, project_root.as_deref(), &locale)
+                    .map(Message::Search),
                 card_logical_size(window_width),
             ),
             self.gpu.viewport.logical_size(),
@@ -292,6 +294,7 @@ impl SearchOverlay {
         };
         let events: [Event; 1] = [iced_event];
         let window_width = app.window_size.0;
+        let locale = app.locale.active_locale().to_owned();
         let Some(ws) = app.active_workspace_mut() else {
             return Vec::new();
         };
@@ -301,7 +304,8 @@ impl SearchOverlay {
             .map(|p| std::path::Path::new(&p.path).to_path_buf());
         let mut interface = UserInterface::build(
             backdrop_card(
-                search::search_card(&ws.search, project_root.as_deref()).map(Message::Search),
+                search::search_card(&ws.search, project_root.as_deref(), &locale)
+                    .map(Message::Search),
                 card_logical_size(window_width),
             ),
             self.gpu.viewport.logical_size(),
@@ -348,6 +352,7 @@ impl SearchOverlay {
             return;
         };
         let window_width = app.window_size.0;
+        let locale = app.locale.active_locale().to_owned();
         let Some(ws) = app.active_workspace_mut() else {
             return;
         };
@@ -357,7 +362,8 @@ impl SearchOverlay {
             .map(|p| std::path::Path::new(&p.path).to_path_buf());
         let mut interface = UserInterface::build(
             backdrop_card(
-                search::search_card(&ws.search, project_root.as_deref()).map(Message::Search),
+                search::search_card(&ws.search, project_root.as_deref(), &locale)
+                    .map(Message::Search),
                 card_logical_size(window_width),
             ),
             self.gpu.viewport.logical_size(),

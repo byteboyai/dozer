@@ -168,7 +168,8 @@ impl FileHistoryOverlay {
         let card_logical = card_logical_size(logical_size.width, logical_size.height);
         let mut interface = UserInterface::build(
             backdrop_card(
-                file_history::file_history_card(state).map(Message::FileHistory),
+                file_history::file_history_card(state, app.locale.active_locale())
+                    .map(Message::FileHistory),
                 card_logical,
             ),
             self.gpu.viewport.logical_size(),
@@ -413,7 +414,8 @@ impl FileHistoryOverlay {
         let card_logical = card_logical_size(logical_size.width, logical_size.height);
         let mut interface = UserInterface::build(
             backdrop_card(
-                file_history::file_history_card(state).map(Message::FileHistory),
+                file_history::file_history_card(state, app.locale.active_locale())
+                    .map(Message::FileHistory),
                 card_logical,
             ),
             self.gpu.viewport.logical_size(),

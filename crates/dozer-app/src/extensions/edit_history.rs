@@ -20,7 +20,19 @@ pub const DEFAULT_LIMIT: u32 = 200;
 pub enum RevertStatus {
     Pending,
     Done,
-    Failed(String),
+    Failed(RevertFailure),
+}
+
+/// 撤销失败的结构化原因(本地化在视图层做,`apply` 保持纯函数、不带 locale)。
+#[derive(Debug, Clone, PartialEq)]
+pub enum RevertFailure {
+    Conflict,
+    NotFound,
+    PathOutOfBounds,
+    /// 写盘失败(带 daemon 给的原因文本)。
+    Unwritable(String),
+    /// 服务层错误(daemon 断连等)原文。
+    Service(String),
 }
 
 pub struct State {
@@ -121,14 +133,42 @@ pub enum Followup {
     Revert(FileEditHistoryInfo),
 }
 
-/// 撤销失败的用户可读原因。
-fn revert_failure(outcome: MutationOutcome) -> Option<String> {
+/// 撤销失败的结构化原因。
+fn revert_failure(outcome: MutationOutcome) -> Option<RevertFailure> {
     match outcome {
         MutationOutcome::Applied { .. } => None,
-        MutationOutcome::Conflict { .. } => Some("文件已在此后被修改,无法撤销".into()),
-        MutationOutcome::NotFound => Some("文件已不存在,无法撤销".into()),
-        MutationOutcome::PathOutOfBounds => Some("路径越界,无法撤销".into()),
-        MutationOutcome::Unwritable { reason } => Some(format!("无法写入: {reason}")),
+        MutationOutcome::Conflict { .. } => Some(RevertFailure::Conflict),
+        MutationOutcome::NotFound => Some(RevertFailure::NotFound),
+        MutationOutcome::PathOutOfBounds => Some(RevertFailure::PathOutOfBounds),
+        MutationOutcome::Unwritable { reason } => Some(RevertFailure::Unwritable(reason)),
+    }
+}
+
+/// 把失败原因按 locale 渲染成用户可读文案(视图层调用)。
+fn revert_failure_text(f: &RevertFailure, locale: &str) -> String {
+    match f {
+        RevertFailure::Conflict => crate::i18n::host_text(
+            "edit_history.revert_conflict",
+            "The file changed afterwards; cannot revert",
+            locale,
+        ),
+        RevertFailure::NotFound => crate::i18n::host_text(
+            "edit_history.revert_not_found",
+            "The file no longer exists; cannot revert",
+            locale,
+        ),
+        RevertFailure::PathOutOfBounds => crate::i18n::host_text(
+            "edit_history.revert_out_of_bounds",
+            "Path is out of bounds; cannot revert",
+            locale,
+        ),
+        RevertFailure::Unwritable(reason) => crate::i18n::host_text_args(
+            "edit_history.revert_unwritable",
+            "Cannot write: {reason}",
+            locale,
+            &[("reason", reason.as_str())],
+        ),
+        RevertFailure::Service(text) => text.clone(),
     }
 }
 
@@ -205,7 +245,7 @@ pub fn apply(state: &mut Option<State>, msg: Message) -> Followup {
                 }
             },
             Err(e) => {
-                s.revert = Some((id, RevertStatus::Failed(e)));
+                s.revert = Some((id, RevertStatus::Failed(RevertFailure::Service(e))));
                 Followup::None
             }
         },
@@ -214,17 +254,21 @@ pub fn apply(state: &mut Option<State>, msg: Message) -> Followup {
 
 /// "Ask Agent"要写进终端的文本。不使用代码围栏(原文可能含反引号/diff),
 /// 原样拼接;结束坐标用修改**后**的 `new_end_*`,与 Locate/Revert 一致。
-pub fn ask_agent_text(e: &FileEditHistoryInfo) -> String {
-    format!(
-        "关于 {path}:{sl}:{sc}-{el}:{ec} 的这次修改({summary}):\n\n修改前:\n{old}\n\n修改后:\n{new}",
-        path = e.target_path,
-        sl = e.start_line,
-        sc = e.start_col,
-        el = e.new_end_line,
-        ec = e.new_end_col,
-        summary = e.summary,
-        old = e.old_text,
-        new = e.new_text,
+pub fn ask_agent_text(e: &FileEditHistoryInfo, locale: &str) -> String {
+    crate::i18n::host_text_args(
+        "edit_history.ask_agent_text",
+        "About the change at {path}:{sl}:{sc}-{el}:{ec} ({summary}):\n\nBefore:\n{old}\n\nAfter:\n{new}",
+        locale,
+        &[
+            ("path", e.target_path.as_str()),
+            ("sl", &e.start_line.to_string()),
+            ("sc", &e.start_col.to_string()),
+            ("el", &e.new_end_line.to_string()),
+            ("ec", &e.new_end_col.to_string()),
+            ("summary", e.summary.as_str()),
+            ("old", e.old_text.as_str()),
+            ("new", e.new_text.as_str()),
+        ],
     )
 }
 
@@ -248,6 +292,16 @@ pub fn request_load(
     });
 }
 
+/// 写进 dozerd 历史记录的撤销摘要(带 locale 前缀)。
+fn revert_summary(original: &str, locale: &str) -> String {
+    crate::i18n::host_text_args(
+        "edit_history.revert_summary",
+        "Revert: {summary}",
+        locale,
+        &[("summary", original)],
+    )
+}
+
 /// 执行 `apply` 并按 `Followup` 做 IO。Revert:反向调用 `apply_precise_edit`——
 /// `expected_text` = 该条 `new_text`,`new_text` = 该条 `old_text`,坐标用该条
 /// **修改后**的区间(起点不变,结束坐标取 `new_end_*`)。署名 `actor = "dozer"`
@@ -256,6 +310,7 @@ pub fn request_load(
 pub fn update(
     state: &mut Option<State>,
     msg: Message,
+    locale: &str,
     service: Arc<dyn EditHistoryService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
@@ -267,6 +322,7 @@ pub fn update(
             request_load(s.project_id, s.filter.clone(), service, handle, emit);
         }
         Followup::Revert(e) => {
+            let locale = locale.to_owned();
             handle.spawn(async move {
                 let result = service
                     .apply_precise_edit(PreciseEdit {
@@ -278,7 +334,7 @@ pub fn update(
                         end_col: e.new_end_col,
                         expected_text: e.new_text.clone(),
                         new_text: e.old_text.clone(),
-                        summary: format!("撤销:{}", e.summary),
+                        summary: revert_summary(&e.summary, &locale),
                         actor: "dozer".to_string(),
                         session_id: "dozer-gui".to_string(),
                     })
@@ -304,9 +360,10 @@ fn when(ms: u64) -> String {
     crate::extensions::file_history::format_commit_time((ms / 1000) as i64)
 }
 
-pub fn edit_history_card(
-    state: &State,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+pub fn edit_history_card<'a>(
+    state: &'a State,
+    locale: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = byteui::theme::color::current();
 
     let mut title = row![
@@ -315,18 +372,30 @@ pub fn edit_history_card(
             byteui::theme::icon_size::row(),
             colors.cream
         ),
-        text("Agent 修改历史")
-            .size(byteui::theme::font::subtitle())
-            .color(colors.cream),
+        text(crate::i18n::host_text(
+            "edit_history.title",
+            "Agent Edit History",
+            locale,
+        ))
+        .size(byteui::theme::font::subtitle())
+        .color(colors.cream),
     ]
     .spacing(6)
     .align_y(Alignment::Center);
     if let Some(f) = state.filter() {
         title = title.push(
             button(
-                text(format!("过滤: {f}  ×"))
-                    .size(byteui::theme::font::label())
-                    .color(colors.gold),
+                text(format!(
+                    "{}  ×",
+                    crate::i18n::host_text_args(
+                        "edit_history.filter",
+                        "Filter: {filter}",
+                        locale,
+                        &[("filter", f)]
+                    )
+                ))
+                .size(byteui::theme::font::label())
+                .color(colors.gold),
             )
             .padding(0)
             .on_press(Message::SetFilter(None))
@@ -344,10 +413,10 @@ pub fn edit_history_card(
     );
 
     let body = row![
-        container(list_view(state))
+        container(list_view(state, locale))
             .width(Length::Fixed(LIST_WIDTH))
             .height(Length::Fill),
-        detail_view(state),
+        detail_view(state, locale),
     ]
     .spacing(12)
     .height(Length::Fill);
@@ -360,15 +429,36 @@ pub fn edit_history_card(
         .into()
 }
 
-fn list_view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+fn list_view<'a>(
+    state: &'a State,
+    locale: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = byteui::theme::color::current();
     let msg = |s: String, c| -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
         text(s).size(byteui::theme::font::body()).color(c).into()
     };
     match state.entries() {
-        None => msg("加载中…".into(), colors.dim),
-        Some(Err(e)) => msg(format!("加载失败: {e}"), colors.red),
-        Some(Ok(v)) if v.is_empty() => msg("还没有 agent 修改记录".into(), colors.dim),
+        None => msg(
+            crate::i18n::host_text("common.loading_ellipsis", "Loading…", locale),
+            colors.dim,
+        ),
+        Some(Err(e)) => msg(
+            crate::i18n::host_text_args(
+                "edit_history.load_failed",
+                "Load failed: {error}",
+                locale,
+                &[("error", e)],
+            ),
+            colors.red,
+        ),
+        Some(Ok(v)) if v.is_empty() => msg(
+            crate::i18n::host_text(
+                "edit_history.no_records",
+                "No agent edit records yet",
+                locale,
+            ),
+            colors.dim,
+        ),
         Some(Ok(v)) => {
             let mut col = column![].spacing(4);
             for e in v {
@@ -402,13 +492,20 @@ fn list_view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_ren
     }
 }
 
-fn detail_view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+fn detail_view<'a>(
+    state: &'a State,
+    locale: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = byteui::theme::color::current();
     let Some(e) = state.selected_entry() else {
         return container(
-            text("选择左侧一条修改查看详情")
-                .size(byteui::theme::font::body())
-                .color(colors.dim),
+            text(crate::i18n::host_text(
+                "edit_history.select_hint",
+                "Select a change on the left to view details",
+                locale,
+            ))
+            .size(byteui::theme::font::body())
+            .color(colors.dim),
         )
         .width(Length::Fill)
         .height(Length::Fill)
@@ -424,7 +521,7 @@ fn detail_view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_r
     // diff 占位:Task 7 的 wry webview 叠在这块区域上,几何见宿主的 `diff_area_bounds`。
     let diff_slot = container(text("")).width(Length::Fill).height(Length::Fill);
 
-    let action = |label: &'static str, msg: Option<Message>, c| {
+    let action = |label: String, msg: Option<Message>, c| {
         let mut b = button(text(label).size(byteui::theme::font::label()).color(c))
             .padding([4, 10])
             .style(flat(c));
@@ -433,17 +530,30 @@ fn detail_view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_r
         }
         b
     };
+    let ask_label = crate::i18n::host_text("edit_history.ask_agent", "Ask Agent", locale);
     let ask = if state.agent_terminal_visible() {
-        action("Ask Agent", Some(Message::AskAgent(e.id)), colors.gold)
+        action(
+            ask_label.clone(),
+            Some(Message::AskAgent(e.id)),
+            colors.gold,
+        )
     } else {
-        action("Ask Agent", None, colors.dim)
+        action(ask_label, None, colors.dim)
     };
     let mut actions = row![
-        action("Locate", Some(Message::Locate(e.id)), colors.gold),
-        ask,
-        action("Revert", Some(Message::Revert(e.id)), colors.gold),
         action(
-            "只看此文件",
+            crate::i18n::host_text("edit_history.locate", "Locate", locale),
+            Some(Message::Locate(e.id)),
+            colors.gold
+        ),
+        ask,
+        action(
+            crate::i18n::host_text("edit_history.revert", "Revert", locale),
+            Some(Message::Revert(e.id)),
+            colors.gold
+        ),
+        action(
+            crate::i18n::host_text("edit_history.filter_to_file", "Only this file", locale),
             Some(Message::SetFilter(Some(e.target_path.clone()))),
             colors.cream
         ),
@@ -453,21 +563,29 @@ fn detail_view(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_r
     match state.revert_status() {
         Some((id, RevertStatus::Pending)) if *id == e.id => {
             actions = actions.push(
-                text("撤销中…")
-                    .size(byteui::theme::font::label())
-                    .color(colors.dim),
+                text(crate::i18n::host_text(
+                    "edit_history.reverting",
+                    "Reverting…",
+                    locale,
+                ))
+                .size(byteui::theme::font::label())
+                .color(colors.dim),
             );
         }
         Some((id, RevertStatus::Done)) if *id == e.id => {
             actions = actions.push(
-                text("已撤销")
-                    .size(byteui::theme::font::label())
-                    .color(colors.green),
+                text(crate::i18n::host_text(
+                    "edit_history.reverted",
+                    "Reverted",
+                    locale,
+                ))
+                .size(byteui::theme::font::label())
+                .color(colors.green),
             );
         }
-        Some((id, RevertStatus::Failed(m))) if *id == e.id => {
+        Some((id, RevertStatus::Failed(f))) if *id == e.id => {
             actions = actions.push(
-                text(m.clone())
+                text(revert_failure_text(f, locale))
                     .size(byteui::theme::font::label())
                     .color(colors.red),
             );
@@ -531,7 +649,7 @@ mod tests {
         e.old_text = "teh".into();
         e.new_text = "the".into();
         assert_eq!(
-            ask_agent_text(&e),
+            ask_agent_text(&e, "zh-CN"),
             "关于 src/a.rs:3:5-4:2 的这次修改(修正拼写):\n\n修改前:\nteh\n\n修改后:\nthe"
         );
     }
@@ -541,7 +659,7 @@ mod tests {
         let mut e = info(1, "我的 报告/d.md");
         e.old_text = String::new(); // 纯插入
         e.new_text = "```rust\nfn main() {}\n```\n中文".into();
-        let t = ask_agent_text(&e);
+        let t = ask_agent_text(&e, "zh-CN");
         assert!(
             t.contains("修改前:\n\n\n修改后:\n```rust\nfn main() {}\n```\n中文"),
             "{t}"
@@ -710,7 +828,7 @@ mod tests {
             },
         );
         match st.as_ref().unwrap().revert_status() {
-            Some((7, RevertStatus::Failed(m))) => assert!(m.contains("已在此后被修改"), "{m}"),
+            Some((7, RevertStatus::Failed(RevertFailure::Conflict))) => {}
             other => panic!("{other:?}"),
         }
         apply(&mut st, Message::Revert(7));
@@ -721,9 +839,10 @@ mod tests {
                 result: Err("连接断了".into()),
             },
         );
-        assert!(
-            matches!(st.as_ref().unwrap().revert_status(), Some((7, RevertStatus::Failed(m))) if m.contains("连接断了"))
-        );
+        assert!(matches!(
+            st.as_ref().unwrap().revert_status(),
+            Some((7, RevertStatus::Failed(RevertFailure::Service(m)))) if m.contains("连接断了")
+        ));
     }
 
     #[test]
@@ -844,6 +963,7 @@ mod tests {
         update(
             &mut state,
             Message::Revert(5),
+            "zh-CN",
             fake.clone().into_services().edit_history,
             rt.handle(),
             emit,
@@ -883,6 +1003,7 @@ mod tests {
         update(
             &mut state,
             Message::Revert(5),
+            "zh-CN",
             fake.into_services().edit_history,
             rt.handle(),
             emit,
@@ -915,6 +1036,7 @@ mod tests {
                 id: 5,
                 result: Ok(applied),
             },
+            "zh-CN",
             fake.clone().into_services().edit_history,
             rt.handle(),
             emit,
