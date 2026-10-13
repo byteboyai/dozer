@@ -16,16 +16,16 @@ dozer-core = { path = "../dozer-core", features = ["logging"] }
 dozer-model = { path = "../dozer-model" }
 dozer-client = { path = "../dozer-client" }
 dozer-services = { path = "../dozer-services" }
-bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
-bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
-bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
-bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
+bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
+bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
+bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
+bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
 # 公共桌面宿主契约:稳定身份、请求身份、布局 DTO(bytehost-core,本地 patch 联调)。
-bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
+bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
 # 共享桌面宿主执行层:Surface 生命周期/路由/几何(iced + wry 平台实现)。
 # `overlay` feature(C10 方案 C):浮层共用 wgpu 渲染管线 + 遮罩外壳
 # (`bytehost_desktop::overlay_gpu`),dozer-app 侧不再自写建窗/alpha 机制。
-bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1", features = ["overlay"] }
+bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0", features = ["overlay"] }
 dozer-codehealth = { path = "../dozer-codehealth" }
 # 同源 Usage 面板库(Task 19):Dozer 只做 ctor/重导出包装,数据层/视图层/资源
 # 都在此 crate;其依赖闭包不含 dozer-app(见 crate 文档)。
