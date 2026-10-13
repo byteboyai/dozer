@@ -168,6 +168,38 @@ python3 scripts/i18n/build_inventory.py
 - inventory：Task 05 未解决候选 28→3，剩余 3 条（`settings.rs` 断开账号两处 Toast + 写本地记录失败）属 Toast/错误呈现迁移，归 Task 07；4 条面板清单构造器不变量错误按非 UI 显式排除。
 - 既有无关测试失败保留：`usage_probe::host::tests::host_site_citations_point_at_the_code_they_name`。
 
+## Task 06：Host chrome、菜单、原生 overlay 与项目创建
+
+### 交付物
+
+- `crates/dozer-app/src/chrome/{rail.rs,topbar.rs,tab_widget.rs,homespace.rs}`：顶部/底部状态、tab、空态经 `host_text`/`host_text_args`。
+- `crates/dozer-app/src/app/{view.rs,app.rs}`：`app/view.rs` 展示入口迁移；`app/app.rs` 原生右键菜单 builder 带 `locale`（`project_link_menu_items`/`text_input_menu_items`/`database_source_menu_items`/`category_context_menu_items`）；`list_collapse_button` tooltip 放宽为 `impl Into<Cow<'a,str>>`（`dozer-panel-usage` trait + `usage_panel`/`fake_panel_host` 两处实现）。
+- `crates/dozer-app/src/workspace/view.rs`：`relative_time_text`/`format_time` 带 `locale`；预览 fallback 页、T10 冲突条、脏重载提示迁移。
+- `crates/dozer-app/src/workspace/state.rs`：`review_content(content, ws, locale)`。
+- `crates/dozer-app/src/extensions/{settings.rs,project_create.rs,search.rs,edit_history.rs,file_history.rs,settings_apps_view.rs,conversations.rs,project/view.rs}`：全部改为带 `locale` 的视图/状态更新入口。
+- `crates/dozer-app/src/platform/{project_create_overlay.rs,search_overlay.rs,edit_history_overlay.rs,file_history_overlay.rs,confirm_overlay.rs,window_events.rs}`：overlay 宿主在 `redraw`/`handle_input` 先取 `locale` 再借用可变状态；`window_events.rs` 文件选择器文案经 `host_text`。
+- `crates/dozer-app/src/menu_spec.rs`：`MenuSpecItem::entry(icon, label: impl Into<String>, msg)`。
+- `crates/dozer-app/src/i18n.rs`：新增 `host_text_args(key, fallback, locale, &[(&str,&str)]) -> String`；**删除** `interpolate` 及其测试（无法渲染具名模板会落到 `SAFE_FALLBACK`）。
+- `crates/dozer-app/locales/host/{en,zh-CN}.json`：Task 06 新增 `host.*`/`project_create.*`/`search.*`/`edit_history.*`/`file_history.*`/`settings.apps.*` 等 key（两包 key 集与占位符集一致）。
+- `scripts/i18n/build_inventory.py`：`STRING_TASK_OVERRIDES` 把 `app/app.rs` 的 5 条 Toast/错误文案改判 Task 07。
+- byteui（独立仓库）：`text_area::view`/`checkbox::view`/`switch::view`/`form::button::view` 的 label/placeholder 放宽为 `&str`（v0.4.2）；dozer 两侧 Cargo pin 升到 `v0.4.2`。
+
+### 验证命令与结果
+
+- `cargo fmt --all -- --check`：全绿。
+- `cargo clippy -p dozer-app --all-targets`：仅既有无关告警（`GitProvider::ALL`、`project::move_item`、`confirm_overlay` 参数过多、`homespace` 文档缩进等）；无新增。
+- `python3 scripts/i18n/check_resources.py`：ok（两包 key/占位符一致）。
+- `bash scripts/check-log-scope.sh`、`python3 scripts/audit/check_panel_boundary.py`：全绿。
+- `cargo test -p dozer-app`：1993 passed / 1 failed（既有无关 citation 测试）/ 2 ignored。
+
+### 残留问题
+
+- inventory 中 Task 06 未解决候选清零；重投影后归入 07/08/09/10/11。
+- 结构化错误（`edit_history::RevertFailure`、搜索正则错误）保存结构化原因、视图层按 `locale` 本地化；不做服务 message 文本匹配。
+- 应用页文字中来自 `bytehost_panel::install`（`plan_lines`/`plan_view`/`observed_label`/`progress_text`/`rollback_note_label`/`runtime_line`/`managed_runtime_label`）的数据保持 bytehost 自产，不在本任务范围；`agent_picker_spec()` 的 agent 品牌名、`issue_texts(issue)` 同样不在范围。
+- 缓存译文以 key/参数语义存储（`list_collapse_button` tooltip 存 key），切换后独立窗口在 `redraw` 重取 locale。
+- 既有无关测试失败保留：`usage_probe::host::tests::host_site_citations_point_at_the_code_they_name`。
+
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |
 |---|---|---|

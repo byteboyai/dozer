@@ -3146,10 +3146,18 @@ impl App {
                 let project = crate::host_adapters::services::services_for(&self.client).project;
                 let handle = self.handle.clone();
                 let proxy = self.proxy.clone();
+                let locale = self.locale.active_locale().to_owned();
                 let emit = move |m| {
                     let _ = proxy.send_event(Message::ProjectCreate(m));
                 };
-                project_create::update(&mut self.project_create, msg, project, &handle, emit);
+                project_create::update(
+                    &mut self.project_create,
+                    msg,
+                    &locale,
+                    project,
+                    &handle,
+                    emit,
+                );
             }
             Message::Files(files::Message::CopyPath(path, kind)) => {
                 let _ = (path, kind); // main.rs 拦截处理写剪贴板,这里维持现状空分支

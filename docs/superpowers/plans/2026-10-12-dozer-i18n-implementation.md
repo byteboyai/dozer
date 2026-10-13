@@ -138,13 +138,15 @@
 
 **修改：** `chrome/`、`workspace/` 与 `app/` 中展示入口、`menu_spec.rs`、`platform/*_overlay.rs`、`extensions/footbar.rs` 等。
 
-- [ ] 按 inventory 迁移 Rail/Tab/顶部底部状态、tooltip、空态、搜索、项目创建/删除、文件移动、SSH/数据库配置、确认框、历史及待办详情 overlay。
-- [ ] 连同 placeholder、窗口标题、无障碍标签、文件选择器传入文案一起迁移；稳定 action/快捷键/ID 不变。
-- [ ] 原生/iced 菜单共用本地化 MenuSpec，处理已打开原生菜单安全关闭；可翻译标题不能成为查找 action 的键。
-- [ ] 清理缓存译文：存 key/参数或缓存键带 display generation；切换后所有独立窗口请求重绘。
-- [ ] 用长英文和中文检查布局及 CJK shaping，不改用户项目名、路径和动态 Tab 名称。
+- [x] 按 inventory 迁移 Rail/Tab/顶部底部状态、tooltip、空态、搜索、项目创建/删除、文件移动、SSH/数据库配置、确认框、历史及待办详情 overlay。
+- [x] 连同 placeholder、窗口标题、无障碍标签、文件选择器传入文案一起迁移；稳定 action/快捷键/ID 不变。
+- [x] 原生/iced 菜单共用本地化 MenuSpec，处理已打开原生菜单安全关闭；可翻译标题不能成为查找 action 的键。
+- [x] 清理缓存译文：存 key/参数或缓存键带 display generation；切换后所有独立窗口请求重绘。
+- [x] 用长英文和中文检查布局及 CJK shaping，不改用户项目名、路径和动态 Tab 名称。
 
 **验收：**Host 范围所有清单项有资源和调用点证据；L08/L11 覆盖，两种菜单后端均有适当测试。
+
+> Task 06 收尾说明：inventory 中 Task 06 的候选已清零（未决项按任务重投影后归入 07/08/09/10/11）。Host chrome（rail/topbar/tab/homespace）、`app/view.rs`、`workspace/view.rs`、原生右键菜单、daemon 徽标、Find/搜索条、预览 fallback 页、T10 冲突条、agent 关闭确认框、`project_create.rs`、`settings_apps_view.rs`（应用页视图，61 项）、`search.rs`、`edit_history.rs`、`file_history.rs`、`window_events.rs` 文件选择器文案均已迁至 `host_text`/`host_text_args`。新增 `host_text_args(key, fallback, locale, &[(&str,&str)])` 并删除无法渲染具名模板的 `i18n::interpolate`；`list_collapse_button` tooltip 放宽为 `Into<Cow<str>>`。结构化错误（`edit_history::RevertFailure`、搜索正则错误）保存结构化原因、在视图层按 locale 本地化。应用页文字中来自 `bytehost_panel::install`（`plan_lines`/`plan_view`/`observed_label`/`progress_text`/`rollback_note_label`/`runtime_line`/`managed_runtime_label`）的数据保持 bytehost 自产，不在本任务范围。byteui 放宽 `text_area/checkbox/switch/form::button` 的 label/placeholder 为 `&str`（v0.4.2，独立仓库）。`settings.rs` 的 Apps tab 调用点随 `view(&state.apps, locale)` 更新。
 
 ### Task 07：Toast 与错误呈现迁移
 

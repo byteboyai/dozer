@@ -1240,35 +1240,36 @@ pub fn settings_card<'a>(
 
     // 右侧内容区:只渲染左栏选中那一组,其余两组收起(互斥视图切换,与
     // 「新建项目」弹窗的 Tab::Local/Clone 同一思路)。
-    let body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        match state.selected {
-            SettingsTab::Theme => column![
-                theme_title,
-                scheme_row(
-                    t("settings.theme.dark", "Dark · ByteBoy2077"),
-                    ColorScheme::Dark,
-                    current
-                ),
-                scheme_row(
-                    t("settings.theme.light", "Light · ByteBoy2077-Light"),
-                    ColorScheme::Light,
-                    current
-                ),
-            ],
-            SettingsTab::Git => column![
-                git_title,
-                provider_row(GitProvider::GitHub, &state.github, locale),
-                provider_row(GitProvider::GitLab, &state.gitlab, locale),
-                provider_row(GitProvider::Gitee, &state.gitee, locale),
-            ],
-            SettingsTab::Advanced => column![advanced_title, advanced_row(&state.advanced, locale)],
-            SettingsTab::Apps => {
-                column![crate::extensions::settings_apps::view(&state.apps).map(Message::Apps)]
-            }
-            SettingsTab::Language => column![language_page(&state.language, locale)],
+    let body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> = match state
+        .selected
+    {
+        SettingsTab::Theme => column![
+            theme_title,
+            scheme_row(
+                t("settings.theme.dark", "Dark · ByteBoy2077"),
+                ColorScheme::Dark,
+                current
+            ),
+            scheme_row(
+                t("settings.theme.light", "Light · ByteBoy2077-Light"),
+                ColorScheme::Light,
+                current
+            ),
+        ],
+        SettingsTab::Git => column![
+            git_title,
+            provider_row(GitProvider::GitHub, &state.github, locale),
+            provider_row(GitProvider::GitLab, &state.gitlab, locale),
+            provider_row(GitProvider::Gitee, &state.gitee, locale),
+        ],
+        SettingsTab::Advanced => column![advanced_title, advanced_row(&state.advanced, locale)],
+        SettingsTab::Apps => {
+            column![crate::extensions::settings_apps::view(&state.apps, locale).map(Message::Apps)]
         }
-        .spacing(14)
-        .into();
+        SettingsTab::Language => column![language_page(&state.language, locale)],
+    }
+    .spacing(14)
+    .into();
 
     // 左栏 tab + 1px 分割线 + 右侧内容区;分割线左右各 16,与内容左缘对齐。
     let main = row![

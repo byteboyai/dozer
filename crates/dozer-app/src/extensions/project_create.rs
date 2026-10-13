@@ -38,25 +38,42 @@ pub(crate) fn target_collapses_to_root(root_dir: &str, name: &str) -> bool {
 }
 
 /// 项目名称合法性:非空、首尾无空白、不含路径分隔符。
-pub(crate) fn validate_project_name(name: &str) -> Result<(), String> {
+pub(crate) fn validate_project_name(name: &str, locale: &str) -> Result<(), String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
-        return Err("项目名称不能为空".to_string());
+        return Err(crate::i18n::host_text(
+            "project_create.name_empty",
+            "Project name cannot be empty",
+            locale,
+        ));
     }
     if trimmed != name {
-        return Err("项目名称首尾不能有空白字符".to_string());
+        return Err(crate::i18n::host_text(
+            "project_create.name_whitespace",
+            "Project name cannot start or end with whitespace",
+            locale,
+        ));
     }
     if name.contains('/') || name.contains('\\') {
-        return Err("项目名称不能包含 / 或 \\".to_string());
+        return Err(crate::i18n::host_text(
+            "project_create.name_separator",
+            "Project name cannot contain / or \\",
+            locale,
+        ));
     }
     Ok(())
 }
 
 /// 目标目录不能已存在——创建/签出只认全新目录,"已存在则复用"是"打开
 /// 项目"该管的语义(见 spec「数据流」一节)。
-pub(crate) fn validate_target_not_exists(path: &Path) -> Result<(), String> {
+pub(crate) fn validate_target_not_exists(path: &Path, locale: &str) -> Result<(), String> {
     if path.exists() {
-        Err(format!("目标目录已存在: {}", path.display()))
+        Err(crate::i18n::host_text_args(
+            "project_create.target_exists",
+            "Target directory already exists: {path}",
+            locale,
+            &[("path", &path.display().to_string())],
+        ))
     } else {
         Ok(())
     }
@@ -75,22 +92,33 @@ pub(crate) fn validate_target(
     path: &Path,
     collapses_to_root: bool,
     for_clone: bool,
+    locale: &str,
 ) -> Result<(), String> {
     if !path.exists() {
         return Ok(());
     }
     if !collapses_to_root {
-        return validate_target_not_exists(path);
+        return validate_target_not_exists(path, locale);
     }
     if !path.is_dir() {
-        return Err(format!("目标路径已存在同名文件: {}", path.display()));
+        return Err(crate::i18n::host_text_args(
+            "project_create.target_is_file",
+            "A file with the same name already exists at the target path: {path}",
+            locale,
+            &[("path", &path.display().to_string())],
+        ));
     }
     if for_clone {
         let empty = std::fs::read_dir(path)
             .map(|mut entries| entries.next().is_none())
             .unwrap_or(false);
         if !empty {
-            return Err(format!("目标目录非空,无法签出到该目录: {}", path.display()));
+            return Err(crate::i18n::host_text_args(
+                "project_create.target_not_empty",
+                "Target directory is not empty; cannot check out into it: {path}",
+                locale,
+                &[("path", &path.display().to_string())],
+            ));
         }
     }
     Ok(())
@@ -382,6 +410,7 @@ fn plan_source_selection(
 pub fn update(
     state: &mut Option<State>,
     msg: Message,
+    locale: &str,
     project: Arc<dyn ProjectService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
@@ -400,20 +429,22 @@ pub fn update(
             let name = s.local.name.clone();
             let description = s.local.description.text();
             let create_git = s.local.create_git;
-            if let Err(e) = validate_project_name(&name) {
+            if let Err(e) = validate_project_name(&name, locale) {
                 s.error = Some(e);
                 return;
             }
             let target = target_path(&root_dir, &name);
             let collapses = target_collapses_to_root(&root_dir, &name);
-            if let Err(e) = validate_target(&target, collapses, false) {
+            if let Err(e) = validate_target(&target, collapses, false, locale) {
                 s.error = Some(e);
                 return;
             }
             s.error = None;
             s.busy = true;
+            let locale = locale.to_owned();
             handle.spawn(async move {
-                let result = spawn_create_local(target, description, create_git, &project).await;
+                let result =
+                    spawn_create_local(target, description, create_git, &project, &locale).await;
                 emit(Message::Done(result));
             });
         }
@@ -423,30 +454,36 @@ pub fn update(
             let name = s.clone_form.name.clone();
             let description = s.clone_form.description.text();
             if url.trim().is_empty() {
-                s.error = Some("远程仓库地址不能为空".to_string());
+                s.error = Some(crate::i18n::host_text(
+                    "project_create.url_empty",
+                    "Remote repository URL cannot be empty",
+                    locale,
+                ));
                 return;
             }
-            if let Err(e) = validate_project_name(&name) {
+            if let Err(e) = validate_project_name(&name, locale) {
                 s.error = Some(e);
                 return;
             }
             let target = target_path(&root_dir, &name);
             let collapses = target_collapses_to_root(&root_dir, &name);
-            if let Err(e) = validate_target(&target, collapses, true) {
+            if let Err(e) = validate_target(&target, collapses, true, locale) {
                 s.error = Some(e);
                 return;
             }
             if !bytegit::git_available() {
-                s.error = Some(
-                    "未检测到系统 git,请先安装 Xcode Command Line Tools(终端执行: xcode-select --install)后重试"
-                        .to_string(),
-                );
+                s.error = Some(crate::i18n::host_text(
+                    "project_create.git_missing",
+                    "System git was not found. Install Xcode Command Line Tools (run: xcode-select --install) and retry",
+                    locale,
+                ));
                 return;
             }
             s.error = None;
             s.busy = true;
+            let locale = locale.to_owned();
             handle.spawn(async move {
-                let result = spawn_clone(url, target, description, &project).await;
+                let result = spawn_clone(url, target, description, &project, &locale).await;
                 emit(Message::Done(result));
             });
         }
@@ -522,7 +559,7 @@ fn tab_hover_t(hover: Option<Tab>, tab: Tab) -> f32 {
     if hover == Some(tab) { 1.0 } else { 0.0 }
 }
 
-fn tab_button<'a>(label: &'a str, active: bool, tab: Tab, hover_t: f32) -> Element<'a> {
+fn tab_button(label: String, active: bool, tab: Tab, hover_t: f32) -> Element<'static> {
     // 弹窗内两枚互斥视图切换 tab 的自绘标题(2026-09-27 起不再复用共享
     // `tab_label`):字号降到 `caption()`(12px,比共享面板页签的 `label` 还小
     // 一档,与表单字段标签拉开层级),配色公式不变——选中 CREAM、未选中
@@ -536,11 +573,11 @@ fn tab_button<'a>(label: &'a str, active: bool, tab: Tab, hover_t: f32) -> Eleme
     } else {
         byteui::theme::color::mix(colors.dim, colors.gold, hover_t)
     };
-    let content = text(label.to_string())
+    let content = text(label)
         .font(crate::app::top_bar_font())
         .size(byteui::theme::font::caption())
         .color(title_color);
-    let el: Element<'a> = MouseArea::new(content)
+    let el: Element<'static> = MouseArea::new(content)
         .on_press(Message::TabSelected(tab))
         .on_enter(Message::TabHover(Some(tab)))
         .on_exit(Message::TabHover(None))
@@ -600,16 +637,23 @@ pub(crate) fn dialog_tab_style(
     }
 }
 
-fn tab_row(active: Tab, hover: Option<Tab>) -> Element<'static> {
+fn tab_row(active: Tab, hover: Option<Tab>, locale: &str) -> Element<'static> {
+    let local_label =
+        crate::i18n::host_text("project_create.tab_local", "New local project", locale);
+    let clone_label = crate::i18n::host_text(
+        "project_create.tab_clone",
+        "Check out from a Git remote",
+        locale,
+    );
     row![
         tab_button(
-            "新建本地项目",
+            local_label,
             active == Tab::Local,
             Tab::Local,
             tab_hover_t(hover, Tab::Local),
         ),
         tab_button(
-            "签出Git远程仓库的项目",
+            clone_label,
             active == Tab::Clone,
             Tab::Clone,
             tab_hover_t(hover, Tab::Clone),
@@ -629,6 +673,7 @@ fn field_label(label: &str) -> Element<'static> {
 fn root_dir_row<'a>(
     value: &'a str,
     hovered: bool,
+    locale: &str,
     on_change: impl Fn(String) -> Message + 'a,
     on_pick: Message,
 ) -> Element<'a> {
@@ -667,8 +712,13 @@ fn root_dir_row<'a>(
             ..button::Style::default()
         }
     });
+    let placeholder = crate::i18n::host_text(
+        "project_create.pick_root_dir",
+        "Choose project root directory…",
+        locale,
+    );
     let field = byteui::form::input_text::view_with_suffix(
-        "选择项目根目录…",
+        &placeholder,
         value,
         false,
         None,
@@ -683,26 +733,42 @@ fn root_dir_row<'a>(
         .into()
 }
 
-fn local_form_view(form: &LocalForm, root_dir_hover: bool) -> Element<'_> {
+fn local_form_view<'a>(form: &'a LocalForm, root_dir_hover: bool, locale: &str) -> Element<'a> {
+    let description_placeholder = crate::i18n::host_text(
+        "project_create.description_placeholder",
+        "Project description…",
+        locale,
+    );
     let description_editor = byteui::form::text_area::view(
         &form.description,
-        "项目描述…",
+        &description_placeholder,
         None,
         false,
         Some(96.0),
         Message::LocalDescriptionAction,
     );
+    let name_placeholder =
+        crate::i18n::host_text("project_create.name_placeholder", "Project name", locale);
     column![
-        field_label("项目根目录"),
+        field_label(&crate::i18n::host_text(
+            "project_create.root_dir_label",
+            "Project root directory",
+            locale
+        )),
         root_dir_row(
             &form.root_dir,
             root_dir_hover,
+            locale,
             Message::LocalRootDirChanged,
             Message::LocalRootDirPick
         ),
-        field_label("项目名称"),
+        field_label(&crate::i18n::host_text(
+            "project_create.name_label",
+            "Project name",
+            locale
+        )),
         byteui::form::input_text::view(
-            "项目名称",
+            &name_placeholder,
             &form.name,
             false,
             None,
@@ -711,12 +777,20 @@ fn local_form_view(form: &LocalForm, root_dir_hover: bool) -> Element<'_> {
             false,
             Message::LocalNameChanged,
         ),
-        field_label("项目描述"),
+        field_label(&crate::i18n::host_text(
+            "project_create.description_label",
+            "Project description",
+            locale
+        )),
         description_editor,
         row![
             Space::new().width(Length::Fill),
             byteui::form::checkbox::view(
-                "创建Git仓库",
+                &crate::i18n::host_text(
+                    "project_create.create_git",
+                    "Initialize a Git repository",
+                    locale
+                ),
                 form.create_git,
                 Message::LocalCreateGitToggled
             ),
@@ -731,13 +805,13 @@ fn local_form_view(form: &LocalForm, root_dir_hover: bool) -> Element<'_> {
 /// 接入已经落地,不再有占位禁用项——见
 /// `docs/superpowers/specs/2026-09-18-project-create-remote-repo-picker-
 /// design.md`)。
-fn sidebar_entry(label: &'static str, selected: bool, on_press: Message) -> Element<'static> {
+fn sidebar_entry(label: &str, selected: bool, on_press: Message) -> Element<'static> {
     // 左栏这组 provider 切换 tab(仓库URL / GitHub / GitLab / Gitee):字号降到
     // `caption()`(12px,与弹窗顶部「本地新建 / Git仓库签出」切换 tab 同档),
     // 容器加 8 圆角——选中 CARD 实底、未选中 BG 实底,各成一枚圆角胶囊,与
     // 弹窗内其它 tab 的圆角观感一致。此前是直角 `body()` 字号。
     let colors = byteui::theme::color::current();
-    let label_el = text(label)
+    let label_el = text(label.to_string())
         .size(byteui::theme::font::caption())
         .color(if selected { colors.cream } else { colors.dim });
     let cell = container(label_el)
@@ -757,10 +831,11 @@ fn sidebar_entry(label: &'static str, selected: bool, on_press: Message) -> Elem
         .into()
 }
 
-fn clone_sidebar(source: CloneSource) -> Element<'static> {
+fn clone_sidebar(source: CloneSource, locale: &str) -> Element<'static> {
+    let url_label = crate::i18n::host_text("project_create.sidebar_url", "Repository URL", locale);
     column![
         sidebar_entry(
-            "仓库URL",
+            &url_label,
             source == CloneSource::Url,
             Message::SourceSelected(CloneSource::Url)
         ),
@@ -830,7 +905,7 @@ fn repo_radio_row(repo: &RemoteRepo, current_url: &str) -> Element<'static> {
 
 /// "远程仓库"字段的内容——`CloneSource::Url` 时是手填输入框(原有行为),
 /// `CloneSource::Provider` 时按加载态切换成引导/加载中/报错/单选列表。
-fn remote_repo_field(form: &CloneForm) -> Element<'_> {
+fn remote_repo_field<'a>(form: &'a CloneForm, locale: &str) -> Element<'a> {
     let colors = byteui::theme::color::current();
     match form.source {
         CloneSource::Url => byteui::form::input_text::view(
@@ -845,37 +920,69 @@ fn remote_repo_field(form: &CloneForm) -> Element<'_> {
         ),
         CloneSource::Provider(provider) => match form.repo_lists.get(&provider) {
             None | Some(RepoListState::NotConnected) => {
-                let hint = text(format!("未连接 {} 账户", provider.display_name()))
-                    .size(byteui::theme::font::body())
-                    .color(colors.dim);
-                let go_btn = button(text("去设置连接").size(byteui::theme::font::body()))
-                    .on_press(Message::GoToSettings)
-                    .padding([6, 14])
-                    .style(action_button_hover_style(
-                        byteui::theme::color::current().cream,
-                    ));
+                let hint = text(crate::i18n::host_text_args(
+                    "project_create.account_not_connected",
+                    "Not connected to a {provider} account",
+                    locale,
+                    &[("provider", provider.display_name())],
+                ))
+                .size(byteui::theme::font::body())
+                .color(colors.dim);
+                let go_btn = button(
+                    text(crate::i18n::host_text(
+                        "project_create.go_to_settings",
+                        "Connect in Settings",
+                        locale,
+                    ))
+                    .size(byteui::theme::font::body()),
+                )
+                .on_press(Message::GoToSettings)
+                .padding([6, 14])
+                .style(action_button_hover_style(
+                    byteui::theme::color::current().cream,
+                ));
                 column![hint, go_btn].spacing(8).into()
             }
-            Some(RepoListState::Loading) => text("加载仓库列表中…")
-                .size(byteui::theme::font::body())
-                .color(colors.dim)
-                .into(),
+            Some(RepoListState::Loading) => text(crate::i18n::host_text(
+                "project_create.repo_list_loading",
+                "Loading repositories…",
+                locale,
+            ))
+            .size(byteui::theme::font::body())
+            .color(colors.dim)
+            .into(),
             Some(RepoListState::Error(e)) => {
-                let msg = text(format!("仓库列表加载失败: {e}"))
-                    .size(byteui::theme::font::body())
-                    .color(colors.red);
-                let retry = button(text("重试").size(byteui::theme::font::body()))
-                    .on_press(Message::SourceSelected(CloneSource::Provider(provider)))
-                    .padding([6, 14])
-                    .style(action_button_hover_style(
-                        byteui::theme::color::current().cream,
-                    ));
+                let msg = text(crate::i18n::host_text_args(
+                    "project_create.repo_list_failed",
+                    "Failed to load repositories: {e}",
+                    locale,
+                    &[("e", e)],
+                ))
+                .size(byteui::theme::font::body())
+                .color(colors.red);
+                let retry = button(
+                    text(crate::i18n::host_text(
+                        "project_create.retry",
+                        "Retry",
+                        locale,
+                    ))
+                    .size(byteui::theme::font::body()),
+                )
+                .on_press(Message::SourceSelected(CloneSource::Provider(provider)))
+                .padding([6, 14])
+                .style(action_button_hover_style(
+                    byteui::theme::color::current().cream,
+                ));
                 column![msg, retry].spacing(8).into()
             }
-            Some(RepoListState::Loaded(repos)) if repos.is_empty() => text("该账户名下没有仓库")
-                .size(byteui::theme::font::body())
-                .color(colors.dim)
-                .into(),
+            Some(RepoListState::Loaded(repos)) if repos.is_empty() => text(crate::i18n::host_text(
+                "project_create.no_repos",
+                "This account has no repositories",
+                locale,
+            ))
+            .size(byteui::theme::font::body())
+            .color(colors.dim)
+            .into(),
             Some(RepoListState::Loaded(repos)) => {
                 let rows: Vec<Element<'_>> = repos
                     .iter()
@@ -887,28 +994,48 @@ fn remote_repo_field(form: &CloneForm) -> Element<'_> {
     }
 }
 
-fn clone_form_view(form: &CloneForm, root_dir_hover: bool) -> Element<'_> {
+fn clone_form_view<'a>(form: &'a CloneForm, root_dir_hover: bool, locale: &str) -> Element<'a> {
+    let description_placeholder = crate::i18n::host_text(
+        "project_create.description_placeholder",
+        "Project description…",
+        locale,
+    );
     let description_editor = byteui::form::text_area::view(
         &form.description,
-        "项目描述…",
+        &description_placeholder,
         None,
         false,
         Some(96.0),
         Message::CloneDescriptionAction,
     );
+    let name_placeholder =
+        crate::i18n::host_text("project_create.name_placeholder", "Project name", locale);
     let fields = column![
-        field_label("远程仓库"),
-        remote_repo_field(form),
-        field_label("项目根目录"),
+        field_label(&crate::i18n::host_text(
+            "project_create.remote_repo_label",
+            "Remote repository",
+            locale
+        )),
+        remote_repo_field(form, locale),
+        field_label(&crate::i18n::host_text(
+            "project_create.root_dir_label",
+            "Project root directory",
+            locale
+        )),
         root_dir_row(
             &form.root_dir,
             root_dir_hover,
+            locale,
             Message::CloneRootDirChanged,
             Message::CloneRootDirPick
         ),
-        field_label("项目名称"),
+        field_label(&crate::i18n::host_text(
+            "project_create.name_label",
+            "Project name",
+            locale
+        )),
         byteui::form::input_text::view(
-            "项目名称",
+            &name_placeholder,
             &form.name,
             false,
             None,
@@ -917,11 +1044,17 @@ fn clone_form_view(form: &CloneForm, root_dir_hover: bool) -> Element<'_> {
             false,
             Message::CloneNameChanged,
         ),
-        field_label("项目描述"),
+        field_label(&crate::i18n::host_text(
+            "project_create.description_label",
+            "Project description",
+            locale
+        )),
         description_editor,
     ]
     .spacing(10);
-    row![clone_sidebar(form.source), fields].spacing(16).into()
+    row![clone_sidebar(form.source, locale), fields]
+        .spacing(16)
+        .into()
 }
 
 /// 弹窗底部操作按钮(取消 / 创建)的 hover 样式:静止态文字色由 `text_color`
@@ -955,8 +1088,13 @@ pub(crate) fn action_button_hover_style(
     }
 }
 
-fn primary_button(label: &'static str, msg: Message, busy: bool) -> Element<'static> {
-    let btn = button(text(if busy { "处理中…" } else { label }).size(byteui::theme::font::label()))
+fn primary_button(label: &str, msg: Message, busy: bool, locale: &str) -> Element<'static> {
+    let text_value = if busy {
+        crate::i18n::host_text("project_create.processing", "Processing…", locale)
+    } else {
+        label.to_string()
+    };
+    let btn = button(text(text_value).size(byteui::theme::font::label()))
         .style(action_button_hover_style(
             byteui::theme::color::current().cream,
         ))
@@ -968,14 +1106,28 @@ fn primary_button(label: &'static str, msg: Message, busy: bool) -> Element<'sta
     }
 }
 
-pub(crate) fn project_create_card(state: &State) -> Element<'_> {
+pub(crate) fn project_create_card<'a>(state: &'a State, locale: &str) -> Element<'a> {
     let body = match state.tab {
-        Tab::Local => local_form_view(&state.local, state.root_dir_hover),
-        Tab::Clone => clone_form_view(&state.clone_form, state.root_dir_hover),
+        Tab::Local => local_form_view(&state.local, state.root_dir_hover, locale),
+        Tab::Clone => clone_form_view(&state.clone_form, state.root_dir_hover, locale),
     };
     let submit = match state.tab {
-        Tab::Local => primary_button("创建项目", Message::SubmitLocal, state.busy),
-        Tab::Clone => primary_button("签出项目", Message::SubmitClone, state.busy),
+        Tab::Local => primary_button(
+            &crate::i18n::host_text("project_create.create_project", "Create project", locale),
+            Message::SubmitLocal,
+            state.busy,
+            locale,
+        ),
+        Tab::Clone => primary_button(
+            &crate::i18n::host_text(
+                "project_create.checkout_project",
+                "Check out project",
+                locale,
+            ),
+            Message::SubmitClone,
+            state.busy,
+            locale,
+        ),
     };
     let error_row: Element<'_> = if let Some(err) = &state.error {
         text(err.clone())
@@ -985,12 +1137,15 @@ pub(crate) fn project_create_card(state: &State) -> Element<'_> {
     } else {
         Space::new().into()
     };
-    let cancel = button(text("取消").size(byteui::theme::font::label()))
-        .on_press(Message::Close)
-        .padding([8, 20])
-        .style(action_button_hover_style(
-            byteui::theme::color::current().dim,
-        ));
+    let cancel = button(
+        text(crate::i18n::host_text("common.cancel", "Cancel", locale))
+            .size(byteui::theme::font::label()),
+    )
+    .on_press(Message::Close)
+    .padding([8, 20])
+    .style(action_button_hover_style(
+        byteui::theme::color::current().dim,
+    ));
     let colors = byteui::theme::color::current();
     // 标题:briefcase 图标 + 奶油色标题文本,垂直居中对齐。
     let title = row![
@@ -999,9 +1154,13 @@ pub(crate) fn project_create_card(state: &State) -> Element<'_> {
             byteui::theme::font::title() as f32,
             colors.cream,
         ),
-        text("新建项目")
-            .size(byteui::theme::font::title())
-            .color(colors.cream),
+        text(crate::i18n::host_text(
+            "project_create.title",
+            "New project",
+            locale
+        ))
+        .size(byteui::theme::font::title())
+        .color(colors.cream),
     ]
     .spacing(8)
     .align_y(iced_widget::core::alignment::Vertical::Center);
@@ -1019,7 +1178,7 @@ pub(crate) fn project_create_card(state: &State) -> Element<'_> {
         true,
         Message::Close,
         Message::CloseHover,
-        "关闭",
+        crate::i18n::host_text("common.close", "Close", locale),
     );
     let header = row![title, Space::new().width(Length::Fill), close_icon]
         .align_y(iced_widget::core::alignment::Vertical::Center);
@@ -1028,7 +1187,7 @@ pub(crate) fn project_create_card(state: &State) -> Element<'_> {
     // (同文件树 footer-bar / ssh footer-bar 的分隔线手法)。分割线左右各缩进
     // 16,与表单字段的左右内边距一致——线宽与表单内容对齐,不再比表单宽。
     let tab_bar = column![
-        container(tab_row(state.tab, state.tab_hover)).padding(Padding {
+        container(tab_row(state.tab, state.tab_hover, locale)).padding(Padding {
             top: 0.0,
             right: 0.0,
             bottom: 0.0,
@@ -1084,22 +1243,48 @@ async fn spawn_create_local(
     description: String,
     create_git: bool,
     project: &Arc<dyn ProjectService>,
+    locale: &str,
 ) -> SubmitResult {
     let target2 = target.clone();
     let description2 = description.clone();
+    let locale2 = locale.to_owned();
     let fs_result = tokio::task::spawn_blocking(move || {
-        std::fs::create_dir_all(&target2).map_err(|e| format!("创建目录失败: {e}"))?;
-        crate::project_meta::write_description(&target2, &description2)
-            .map_err(|e| format!("写入项目描述失败: {e}"))
+        std::fs::create_dir_all(&target2).map_err(|e| {
+            crate::i18n::host_text_args(
+                "project_create.create_dir_failed",
+                "Failed to create directory: {e}",
+                &locale2,
+                &[("e", &e.to_string())],
+            )
+        })?;
+        crate::project_meta::write_description(&target2, &description2).map_err(|e| {
+            crate::i18n::host_text_args(
+                "project_create.write_description_failed",
+                "Failed to write project description: {e}",
+                &locale2,
+                &[("e", &e.to_string())],
+            )
+        })
     })
     .await
-    .unwrap_or_else(|e| Err(format!("内部错误: {e}")));
+    .unwrap_or_else(|e| {
+        Err(crate::i18n::host_text_args(
+            "project_create.internal_error",
+            "Internal error: {e}",
+            locale,
+            &[("e", &e.to_string())],
+        ))
+    });
     fs_result?;
     let path_s = target.to_string_lossy().into_owned();
-    let opened = project
-        .open_project(path_s)
-        .await
-        .map_err(|e| format!("注册项目失败: {e}"))?;
+    let opened = project.open_project(path_s).await.map_err(|e| {
+        crate::i18n::host_text_args(
+            "project_create.register_failed",
+            "Failed to register project: {e}",
+            locale,
+            &[("e", &e.to_string())],
+        )
+    })?;
     let recent = match project.list_projects().await {
         Ok(v) => v,
         Err(e) => {
@@ -1115,6 +1300,7 @@ async fn spawn_clone(
     target: PathBuf,
     description: String,
     project: &Arc<dyn ProjectService>,
+    locale: &str,
 ) -> SubmitResult {
     let url2 = url.clone();
     let target2 = target.clone();
@@ -1124,22 +1310,47 @@ async fn spawn_clone(
             .map_err(|e| e.message().to_string())
     })
     .await
-    .unwrap_or_else(|e| Err(format!("内部错误: {e}")));
+    .unwrap_or_else(|e| {
+        Err(crate::i18n::host_text_args(
+            "project_create.internal_error",
+            "Internal error: {e}",
+            locale,
+            &[("e", &e.to_string())],
+        ))
+    });
     clone_result?;
     let target3 = target.clone();
     let description2 = description.clone();
+    let locale2 = locale.to_owned();
     let write_result = tokio::task::spawn_blocking(move || {
-        crate::project_meta::write_description(&target3, &description2)
-            .map_err(|e| format!("写入项目描述失败: {e}"))
+        crate::project_meta::write_description(&target3, &description2).map_err(|e| {
+            crate::i18n::host_text_args(
+                "project_create.write_description_failed",
+                "Failed to write project description: {e}",
+                &locale2,
+                &[("e", &e.to_string())],
+            )
+        })
     })
     .await
-    .unwrap_or_else(|e| Err(format!("内部错误: {e}")));
+    .unwrap_or_else(|e| {
+        Err(crate::i18n::host_text_args(
+            "project_create.internal_error",
+            "Internal error: {e}",
+            locale,
+            &[("e", &e.to_string())],
+        ))
+    });
     write_result?;
     let path_s = target.to_string_lossy().into_owned();
-    let opened = project
-        .open_project(path_s)
-        .await
-        .map_err(|e| format!("注册项目失败: {e}"))?;
+    let opened = project.open_project(path_s).await.map_err(|e| {
+        crate::i18n::host_text_args(
+            "project_create.register_failed",
+            "Failed to register project: {e}",
+            locale,
+            &[("e", &e.to_string())],
+        )
+    })?;
     let recent = match project.list_projects().await {
         Ok(v) => v,
         Err(e) => {
@@ -1200,45 +1411,45 @@ mod tests {
         std::fs::write(root.join("existing.txt"), b"x").unwrap();
 
         // 折叠路径 + 已存在非空目录:本地创建放行(直接复用),签出拒绝。
-        assert!(validate_target(&root, true, false).is_ok());
-        assert!(validate_target(&root, true, true).is_err());
+        assert!(validate_target(&root, true, false, "zh-CN").is_ok());
+        assert!(validate_target(&root, true, true, "zh-CN").is_err());
 
         // 折叠路径 + 已存在空目录:本地/签出都放行。
         let empty = tmp.path().join("empty");
         std::fs::create_dir(&empty).unwrap();
-        assert!(validate_target(&empty, true, false).is_ok());
-        assert!(validate_target(&empty, true, true).is_ok());
+        assert!(validate_target(&empty, true, false, "zh-CN").is_ok());
+        assert!(validate_target(&empty, true, true, "zh-CN").is_ok());
 
         // 非折叠路径 + 已存在:一律拒绝(既有语义)。
-        assert!(validate_target(&root, false, false).is_err());
-        assert!(validate_target(&root, false, true).is_err());
+        assert!(validate_target(&root, false, false, "zh-CN").is_err());
+        assert!(validate_target(&root, false, true, "zh-CN").is_err());
 
         // 不存在的目标:一律放行。
-        assert!(validate_target(&tmp.path().join("nope"), false, false).is_ok());
-        assert!(validate_target(&tmp.path().join("nope"), true, true).is_ok());
+        assert!(validate_target(&tmp.path().join("nope"), false, false, "zh-CN").is_ok());
+        assert!(validate_target(&tmp.path().join("nope"), true, true, "zh-CN").is_ok());
 
         // 折叠路径 + 目标是同名文件:拒绝。
         let file = tmp.path().join("a-file");
         std::fs::write(&file, b"x").unwrap();
-        assert!(validate_target(&file, true, false).is_err());
+        assert!(validate_target(&file, true, false, "zh-CN").is_err());
     }
 
     #[test]
     fn validate_project_name_rejects_empty_and_whitespace_and_slash() {
-        assert!(validate_project_name("").is_err());
-        assert!(validate_project_name("   ").is_err());
-        assert!(validate_project_name(" foo").is_err());
-        assert!(validate_project_name("foo ").is_err());
-        assert!(validate_project_name("a/b").is_err());
-        assert!(validate_project_name("a\\b").is_err());
-        assert!(validate_project_name("foo").is_ok());
+        assert!(validate_project_name("", "zh-CN").is_err());
+        assert!(validate_project_name("   ", "zh-CN").is_err());
+        assert!(validate_project_name(" foo", "zh-CN").is_err());
+        assert!(validate_project_name("foo ", "zh-CN").is_err());
+        assert!(validate_project_name("a/b", "zh-CN").is_err());
+        assert!(validate_project_name("a\\b", "zh-CN").is_err());
+        assert!(validate_project_name("foo", "zh-CN").is_ok());
     }
 
     #[test]
     fn validate_target_not_exists_rejects_existing_path() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(validate_target_not_exists(tmp.path()).is_err());
-        assert!(validate_target_not_exists(&tmp.path().join("does-not-exist")).is_ok());
+        assert!(validate_target_not_exists(tmp.path(), "zh-CN").is_err());
+        assert!(validate_target_not_exists(&tmp.path().join("does-not-exist"), "zh-CN").is_ok());
     }
 
     #[test]
@@ -1350,7 +1561,7 @@ mod tests {
         // 校验函数本身已经在 Task 3 覆盖,这里补一条"校验失败时 state.error
         // 被设置、state.busy 保持 false"的行为断言,验证 update() 的短路
         // 顺序(先校验、后 spawn),不需要真的跑 project/handle。
-        assert!(validate_project_name(&state.local.name).is_err());
+        assert!(validate_project_name(&state.local.name, "zh-CN").is_err());
         state.error = Some("项目名称不能包含 / 或 \\".to_string());
         assert!(!state.busy);
     }
@@ -1492,6 +1703,7 @@ mod tests {
             "说明".into(),
             true,
             &project(&fake),
+            "zh-CN",
         ));
         assert_eq!(
             got,
@@ -1514,6 +1726,7 @@ mod tests {
             String::new(),
             false,
             &project(&fake),
+            "zh-CN",
         ));
         assert_eq!(
             got,
@@ -1535,8 +1748,12 @@ mod tests {
             String::new(),
             true,
             &project(&fake),
+            "en",
         ));
-        assert_eq!(got, Err("注册项目失败: daemon 错误: boom".to_string()));
+        assert_eq!(
+            got,
+            Err("Failed to register project: daemon 错误: boom".to_string())
+        );
         assert_eq!(fake.calls().len(), 1, "open 失败后不再读最近项目");
     }
 
@@ -1556,6 +1773,7 @@ mod tests {
             String::new(),
             true,
             &project(&fake),
+            "zh-CN",
         ));
         assert_eq!(
             got,
@@ -1583,6 +1801,7 @@ mod tests {
             target.clone(),
             "说明".into(),
             &project(&fake),
+            "zh-CN",
         ));
         assert_eq!(
             got,
@@ -1612,6 +1831,7 @@ mod tests {
         update(
             &mut state,
             Message::SubmitLocal,
+            "zh-CN",
             project(&fake),
             rt.handle(),
             move |m| {
@@ -1646,6 +1866,7 @@ mod tests {
         update(
             &mut state,
             Message::SubmitLocal,
+            "zh-CN",
             project(&fake),
             rt.handle(),
             move |m| {

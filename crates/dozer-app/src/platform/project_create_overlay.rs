@@ -119,6 +119,7 @@ impl ProjectCreateOverlay {
     /// redraw` 用的正是这个"先 `let Some(state) = ... else { return }`
     /// 绑定局部变量、再用这个局部变量"的写法,原样照抄。
     pub(crate) fn redraw(&mut self, app: &mut App) {
+        let locale = app.locale.active_locale().to_owned();
         let Some(state) = app.project_create.as_ref() else {
             return;
         };
@@ -129,7 +130,7 @@ impl ProjectCreateOverlay {
         let card_logical = card_logical_size(logical_size.width, logical_size.height);
         let mut interface = UserInterface::build(
             backdrop_card(
-                project_create::project_create_card(state).map(Message::ProjectCreate),
+                project_create::project_create_card(state, &locale).map(Message::ProjectCreate),
                 card_logical,
             ),
             self.gpu.viewport.logical_size(),
@@ -203,6 +204,7 @@ impl ProjectCreateOverlay {
             return Vec::new();
         };
         let events: [Event; 1] = [iced_event];
+        let locale = app.locale.active_locale().to_owned();
         let Some(state) = app.project_create.as_ref() else {
             return Vec::new();
         };
@@ -213,7 +215,7 @@ impl ProjectCreateOverlay {
         let card_logical = card_logical_size(logical_size.width, logical_size.height);
         let mut interface = UserInterface::build(
             backdrop_card(
-                project_create::project_create_card(state).map(Message::ProjectCreate),
+                project_create::project_create_card(state, &locale).map(Message::ProjectCreate),
                 card_logical,
             ),
             self.gpu.viewport.logical_size(),

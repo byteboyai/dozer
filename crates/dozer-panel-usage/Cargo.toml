@@ -10,7 +10,7 @@ publish = false
 [dependencies]
 dozer-model = { path = "../dozer-model" }
 dozer-services = { path = "../dozer-services" }
-byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.1" }
+byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.2" }
 # Surface 是公共机制(bytehost-core/desktop),产品只给策略与资源;不在库里复刻 wry 初始化。
 bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
 bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
