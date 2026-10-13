@@ -47,6 +47,17 @@ pub fn host_text(key: &str, fallback: &str, locale: &str) -> String {
     host_resolver().resolve(&t, locale).text
 }
 
+/// 便捷:对一条已解析文案做一次性参数插值(spec §6.2)。
+///
+/// 插值失败(缺参/非法模板)时**原样返回模板**——绝不返回空白或 panic。
+pub fn interpolate(template: &str, args: &[(&str, &str)]) -> String {
+    let map: std::collections::BTreeMap<String, String> = args
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect();
+    dozer_i18n::interpolate(template, &map).unwrap_or_else(|_| template.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

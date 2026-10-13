@@ -470,7 +470,7 @@ pub(crate) fn icon_rail(
     let step = button_size + region.gap;
     let mut layers = Vec::new();
     for (idx, &kind) in app.shell_layout.rail_layout.side(side).iter().enumerate() {
-        let (icon, tooltip) = panel_meta(kind);
+        let (icon, tooltip) = panel_meta(kind, app.locale.active_locale());
         // `interactive: false`——按下选中不走这里内层的
         // `iced_widget::button::on_press`(松手才触发,时机不对,见
         // `rail_drag_surface` 的注释),改由外层 `rail_drag_surface` 的
@@ -613,15 +613,16 @@ pub(crate) fn icon_rail(
 }
 
 /// 面板 → (图标, 图标栏 tooltip 文案),取自面板清单(见 `product::dozer_catalog`)。
-fn panel_meta(kind: PanelKind) -> (icons::IconKind, &'static str) {
+/// 标题按 `locale` 解析(见 `PanelDescriptor::title`):切换语言后重新求值即得新文案。
+fn panel_meta(kind: PanelKind, locale: &str) -> (icons::IconKind, String) {
     // 应用面板不在清单里:标题是应用 id,图标 A3 先用通用的列表图标(应用自带图标由 A4 接入)。
     if let PanelKind::App(slot) = kind {
-        return (icons::IconKind::LayoutList, slot.id());
+        return (icons::IconKind::LayoutList, slot.id().to_string());
     }
     let d = crate::panel_registry::catalog()
         .descriptor(kind)
         .unwrap_or_else(|| panic!("{kind:?} 没有在面板清单里注册"));
-    (d.icon, d.title)
+    (d.icon, d.title(locale))
 }
 
 /// 给一个图标栏按钮包上"拖拽换栏/换位"的感应层,手法同 `tab_core::select`
@@ -701,7 +702,7 @@ pub(crate) fn rail_drag_ghost(
     let Some(kind) = app.dragged_panel_kind() else {
         return column![].into();
     };
-    let (icon, _tooltip) = panel_meta(kind);
+    let (icon, _tooltip) = panel_meta(kind, app.locale.active_locale());
     let size = byteui::theme::geometry::rail_button_size();
     let colors = byteui::theme::color::current();
 
@@ -961,8 +962,10 @@ mod tests {
 
     #[test]
     fn group_chat_has_rail_meta() {
-        let (_icon, tip) = panel_meta(PanelKind::GroupChat);
-        assert_eq!(tip, "群聊");
+        let (_icon, tip_zh) = panel_meta(PanelKind::GroupChat, "zh-CN");
+        assert_eq!(tip_zh, "群聊");
+        let (_icon, tip_en) = panel_meta(PanelKind::GroupChat, "en");
+        assert_eq!(tip_en, "Group Chat");
     }
 
     #[test]
@@ -1336,29 +1339,32 @@ mod tests {
         }
     }
 
-    /// 12 个面板的图标与 tooltip 文案的字面值。
+    /// 12 个面板的图标与双语 tooltip 文案。中文取自旧字面值(迁移前后一致),
+    /// 英文取自 `panel.*` 的英文包,证明标题确实走 i18n 而非冻结中文。
     #[test]
     fn golden_panel_icons_and_titles() {
         use PanelKind::*;
         use icons::IconKind as I;
         let expected = [
-            (Files, I::FolderTree, "文件"),
-            (GitLog, I::GitGraph, "Git Log"),
-            (Todo, I::ListTodo, "待办"),
-            (Project, I::Briefcase, "项目"),
-            (Database, I::Database, "数据库"),
-            (Ssh, I::Server, "SSH 主机"),
-            (Web, I::Globe, "浏览器"),
-            (Agent, I::Brain, "代理"),
-            (GroupChat, I::SquareSparkles, "群聊"),
-            (Conversations, I::BotMessageSquare, "对话"),
-            (Usage, I::BarChart3, "用量"),
-            (CodeHealth, I::SquareActivity, "代码健康度"),
+            (Files, I::FolderTree, "文件", "Files"),
+            (GitLog, I::GitGraph, "Git Log", "Git Log"),
+            (Todo, I::ListTodo, "待办", "Todo"),
+            (Project, I::Briefcase, "项目", "Project"),
+            (Database, I::Database, "数据库", "Database"),
+            (Ssh, I::Server, "SSH 主机", "SSH Hosts"),
+            (Web, I::Globe, "浏览器", "Browser"),
+            (Agent, I::Brain, "代理", "Agent"),
+            (GroupChat, I::SquareSparkles, "群聊", "Group Chat"),
+            (Conversations, I::BotMessageSquare, "对话", "Conversations"),
+            (Usage, I::BarChart3, "用量", "Usage"),
+            (CodeHealth, I::SquareActivity, "代码健康度", "Code Health"),
         ];
-        for (kind, icon, title) in expected {
-            let (got_icon, got_title) = panel_meta(kind);
+        for (kind, icon, title_zh, title_en) in expected {
+            let (got_icon, got_zh) = panel_meta(kind, "zh-CN");
             assert_eq!(got_icon, icon, "{kind:?} 图标");
-            assert_eq!(got_title, title, "{kind:?} 文案");
+            assert_eq!(got_zh, title_zh, "{kind:?} 中文文案");
+            let (_icon, got_en) = panel_meta(kind, "en");
+            assert_eq!(got_en, title_en, "{kind:?} 英文文案");
         }
     }
 
@@ -1473,7 +1479,7 @@ mod tests {
     #[test]
     fn app_entries_have_title_icon_and_default_side() {
         let a = slot("rail-meta");
-        let (icon, title) = panel_meta(PanelKind::App(a));
+        let (icon, title) = panel_meta(PanelKind::App(a), "zh-CN");
         assert_eq!(title, "rail-meta");
         assert_eq!(icon, icons::IconKind::LayoutList);
         assert_eq!(PanelKind::App(a).default_side(), Side::Left);

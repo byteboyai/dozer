@@ -3118,7 +3118,7 @@ impl App {
             }
             Message::ProjectCreate(project_create::Message::GoToSettings) => {
                 self.project_create = None;
-                self.settings = Some(settings::State::load(self.daemon_unavailable.as_deref()));
+                self.open_settings();
             }
             Message::ProjectCreate(project_create::Message::Done(Ok((
                 project,
@@ -3941,7 +3941,7 @@ impl App {
             }
             Message::LocaleFetched { seq, outcome } => self.locale_fetched(seq, outcome),
             Message::SettingsOpen => {
-                self.settings = Some(settings::State::load(self.daemon_unavailable.as_deref()));
+                self.open_settings();
             }
             Message::Settings(msg) => {
                 // 主题切换要在设置 update(它会 set_scheme 改全局配色)之后,把
@@ -3978,6 +3978,28 @@ impl App {
                             result,
                         ),
                     ) => Some((id.clone(), result.is_ok())),
+                    _ => None,
+                };
+                // 语言写入结果(i18n Task 05):App 先采纳权威快照(更新
+                // 显示语言/广播/清缓存),再交给设置状态机更新它的 UI 状态。
+                if let settings::Message::LanguageSaveOutcome(outcome) = &msg {
+                    match outcome {
+                        settings::LanguageSaveOutcome::Applied(snapshot)
+                        | settings::LanguageSaveOutcome::Conflict(snapshot) => {
+                            let effect = self.locale.apply_local_write(snapshot.clone());
+                            self.locale_cache_save();
+                            if effect.active_changed {
+                                self.locale_broadcast_change();
+                            }
+                        }
+                        settings::LanguageSaveOutcome::Failed(_)
+                        | settings::LanguageSaveOutcome::Unsupported => {}
+                    }
+                }
+                // 用户在语言页点了新偏好:设置状态机做乐观显示,真正的
+                // `set_locale` 由下面这段发起(需要权威 revision + 系统候选)。
+                let language_selected = match &msg {
+                    settings::Message::LanguageSelected(p) => Some(p.clone()),
                     _ => None,
                 };
                 // 设置窗口已经关了(状态是 `None`)时才到达的安装/停止/卸载结果:状态机不在了,事情照样发生了,
@@ -4021,6 +4043,11 @@ impl App {
                     .is_some_and(|s| s.take_host_changed())
                 {
                     self.app_host_update(crate::extensions::app_host::Message::Refresh);
+                }
+                // 语言页提交:用权威 revision + 系统候选发起 set_locale;结果经
+                // `Message::Settings(LanguageSaveOutcome(..))` 回灌。
+                if let Some(pref) = language_selected {
+                    self.spawn_locale_write(pref);
                 }
                 if stop_succeeded {
                     self.daemon_unavailable = Some("dozerd 已停止,部分功能不可用".to_string());

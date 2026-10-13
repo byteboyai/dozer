@@ -21,9 +21,19 @@ use crate::chrome::rail::RailLayout;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct PanelDescriptor {
     pub id: PanelKind,
-    /// 图标栏 tooltip 文案。
-    pub title: &'static str,
+    /// 图标栏 tooltip 文案的 i18n key(host owner,见 `crate::i18n`)。
+    pub title_key: &'static str,
+    /// key 缺译时的英文回退(不得是中文的"第二真相源",只作解析兜底)。
+    pub title_fallback: &'static str,
     pub icon: IconKind,
+}
+
+impl PanelDescriptor {
+    /// 按当前显示语言解析面板标题。key/fallback 都在描述符里,译文不在这里
+    /// 冻结(spec §7):语言切换后重新解析即得新文案。
+    pub(crate) fn title(&self, locale: &str) -> String {
+        crate::i18n::host_text(self.title_key, self.title_fallback, locale)
+    }
 }
 
 /// 产品给 host 的面板清单:描述符 + 默认布局 + 旧版落盘布局的迁移钩子。
@@ -185,7 +195,8 @@ mod tests {
     fn desc(id: PanelKind) -> PanelDescriptor {
         PanelDescriptor {
             id,
-            title: "t",
+            title_key: "panel.files",
+            title_fallback: "t",
             icon: IconKind::Globe,
         }
     }

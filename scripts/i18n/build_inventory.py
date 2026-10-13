@@ -106,6 +106,15 @@ EXCLUDED_FILES = [
 ]
 EXCLUDED_FILE_REASON = "测试/黄金值工具/诊断探针/内部常量;非面向用户文案"
 
+# 个别 UI 文件里"不是 UI 文案"的具体字符串:面板清单构造器的自检不变量错误——
+# 只在产品组合根 `.expect(...)` 时以 panic 形式暴露,是开发者错误,不给最终用户看。
+NON_UI_STRINGS = {
+    ("crates/dozer-app/src/panel_registry.rs", "面板清单为空"): "面板清单构造器不变量错误;仅 `.expect` 时 panic,不面向用户",
+    ("crates/dozer-app/src/panel_registry.rs", "面板描述符里有重复的面板"): "面板清单构造器不变量错误;仅 `.expect` 时 panic,不面向用户",
+    ("crates/dozer-app/src/panel_registry.rs", "默认布局不合法:两栏都要非空,且恰好覆盖全部已注册面板、不重复、不含未注册面板"): "面板清单构造器不变量错误;仅 `.expect` 时 panic,不面向用户",
+    ("crates/dozer-app/src/panel_registry.rs", "面板清单已经注册过"): "面板清单构造器不变量错误;仅 `.expect` 时 panic,不面向用户",
+}
+
 # 非 app 的后端 crate:字符串不是 UI,按 §10 归为"错误/诊断适配",由 Task 07 与
 # 相关面板任务处理;这里统一标为排除理由,"UI 文案"仍由面板/宿主边界决定。
 BACKEND_REASON = "后端 crate 非 UI 字符串(错误/协议/日志);如经服务边界展示给用户,由 Task 07 适配稳定 code + 本地化摘要"
@@ -135,6 +144,8 @@ def classify_status(rec) -> tuple[str, str | None]:
         return "excluded", "开发期诊断宏(assert/expect/panic);不面向用户"
     if any(path == f for f in EXCLUDED_FILES):
         return "excluded", EXCLUDED_FILE_REASON
+    if (path, rec["text"]) in NON_UI_STRINGS:
+        return "excluded", NON_UI_STRINGS[(path, rec["text"])]
     # usage == ui
     if path.startswith(("crates/dozer-client/", "crates/dozerd/", "crates/dozer-mcp/", "crates/dozer-hook/")):
         return "excluded", BACKEND_REASON

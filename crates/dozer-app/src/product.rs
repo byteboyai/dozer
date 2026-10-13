@@ -10,21 +10,43 @@ use crate::panel_registry::{PanelCatalog, PanelDescriptor};
 
 pub(crate) fn dozer_catalog() -> PanelCatalog {
     use PanelKind::*;
-    let d = |id, icon, title| PanelDescriptor { id, title, icon };
+    // 面板标题走 i18n key + 英文回退(见 `PanelDescriptor` 与 `crate::i18n`);
+    // 中文译文在 `locales/host/zh-CN.json` 的 `panel.*`,这里不再内嵌中文。
+    let d = |id, icon, title_key, title_fallback| PanelDescriptor {
+        id,
+        title_key,
+        title_fallback,
+        icon,
+    };
     PanelCatalog::new(
         vec![
-            d(Files, IconKind::FolderTree, "文件"),
-            d(GitLog, IconKind::GitGraph, "Git Log"),
-            d(Todo, IconKind::ListTodo, "待办"),
-            d(Project, IconKind::Briefcase, "项目"),
-            d(Database, IconKind::Database, "数据库"),
-            d(Ssh, IconKind::Server, "SSH 主机"),
-            d(Web, IconKind::Globe, "浏览器"),
-            d(Agent, IconKind::Brain, "代理"),
-            d(GroupChat, IconKind::SquareSparkles, "群聊"),
-            d(Conversations, IconKind::BotMessageSquare, "对话"),
-            d(Usage, IconKind::BarChart3, "用量"),
-            d(CodeHealth, IconKind::SquareActivity, "代码健康度"),
+            d(Files, IconKind::FolderTree, "panel.files", "Files"),
+            d(GitLog, IconKind::GitGraph, "panel.git_log", "Git Log"),
+            d(Todo, IconKind::ListTodo, "panel.todo", "Todo"),
+            d(Project, IconKind::Briefcase, "panel.project", "Project"),
+            d(Database, IconKind::Database, "panel.database", "Database"),
+            d(Ssh, IconKind::Server, "panel.ssh", "SSH Hosts"),
+            d(Web, IconKind::Globe, "panel.web", "Browser"),
+            d(Agent, IconKind::Brain, "panel.agent", "Agent"),
+            d(
+                GroupChat,
+                IconKind::SquareSparkles,
+                "panel.group_chat",
+                "Group Chat",
+            ),
+            d(
+                Conversations,
+                IconKind::BotMessageSquare,
+                "panel.conversations",
+                "Conversations",
+            ),
+            d(Usage, IconKind::BarChart3, "panel.usage", "Usage"),
+            d(
+                CodeHealth,
+                IconKind::SquareActivity,
+                "panel.code_health",
+                "Code Health",
+            ),
         ],
         vec![Project, Todo, Files, GitLog, Database, Ssh, Web],
         vec![Agent, GroupChat, Conversations, Usage, CodeHealth],

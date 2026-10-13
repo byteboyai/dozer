@@ -139,6 +139,34 @@ python3 scripts/i18n/build_inventory.py
 - webview 的 locale 注入与去重键的完整机制在 Task 08；本任务只保证快照与广播到位。
 - 2s 节拍恒 active：空闲时也会每 2s 唤醒一次（仅为发起读取，语言无变化不触发重绘；重绘只由 `locale_broadcast_change` 触发）。
 - 既有无关测试失败保留：`usage_probe::host::tests::host_site_citations_point_at_the_code_they_name`。
+## Task 05：设置入口与面板标题纵向交付
+
+### 交付物
+
+- `crates/dozer-app/src/panel_registry.rs`：`PanelDescriptor` 改为 `{id, title_key, title_fallback, icon}` + `title(locale) -> String`（不在 `OnceLock` 冻结译文、不 `Box::leak`）；测试构造器同步。
+- `crates/dozer-app/src/product.rs`：`dozer_catalog` 提供 `panel.*` key + 英文 fallback（不再内联中文）。
+- `crates/dozer-app/src/chrome/rail.rs`：`panel_meta(kind, locale: &str) -> (IconKind, String)`；调用点与 3 组标题测试显式传 locale。
+- `crates/dozer-app/src/extensions/settings.rs`：新增 `SettingsTab::Language`；`LanguageStatus`（Idle/Saving/Failed/Conflict/Unsupported）+ `LanguageState`（confirmed/pending/shown）；`Message::LanguageSelected`/`LanguageSaveOutcome`；`language_page` 三选项 + 状态行；`settings_card(state, locale)`；tab 按钮/主题行/`provider_row`/`advanced_row` 经 `host_text`（`provider_row`/`advanced_row`/`settings_tab_button` 改为带 `locale`/`'a`）。
+- `crates/dozer-app/src/i18n.rs`：`interpolate(template, &[(&str,&str)])` 便捷插值（失败原样返回模板）。
+- `scripts/i18n/build_inventory.py`：`NON_UI_STRINGS` 显式排除 4 条面板清单构造器不变量错误（仅 `.expect` panic）。
+- `crates/dozer-app/src/platform/settings_overlay.rs`：`settings_card(state, app.locale.active_locale())`（两处）。
+- `crates/dozer-app/src/app/app.rs`：`open_settings`（注入已确认偏好）、`sync_settings_locale`、`locale_cache_save`、`spawn_locale_write`（权威 revision + 系统候选 → `set_locale`）、`LocaleController::apply_local_write`。
+- `crates/dozer-app/src/app/update.rs`：拦截 `LanguageSelected` 提交；`LanguageSaveOutcome` 先采纳快照（`apply_local_write` + 缓存 + 广播）再交设置状态机；`open_settings` 替换两处 `State::load`。
+- `crates/dozer-app/locales/host/{en,zh-CN}.json`：`settings.*`/`settings.language.*`/`panel.*` key。
+
+### 验证命令与结果
+
+- `cargo test -p dozer-app -- language_`：7 passed（乐观选择、Saving 防重复、Applied 清 pending、Failed 保留重试、Conflict 采纳服务端、Unsupported 清 pending、shown 回退）。
+- `cargo test -p dozer-app`：1992 passed / 1 failed（既有无关 citation 测试）/ 2 ignored。
+- `cargo fmt --all -- --check`、`cargo clippy -p dozer-app --all-targets`（新改文件零告警）、`python3 scripts/i18n/check_resources.py`：全绿。
+
+### 残留问题
+
+- 语言页保存失败文案使用通用文案（不透传服务 message），避免把服务原文直接呈现为 UI 文案。
+- 面板标题纵向交付完成的是 Rail 标题；chrome/菜单/overlay 的其余文案在 Task 06。
+- 冲突态提示后用户需重新点选（不自动重提交），符合 spec。
+- inventory：Task 05 未解决候选 28→3，剩余 3 条（`settings.rs` 断开账号两处 Toast + 写本地记录失败）属 Toast/错误呈现迁移，归 Task 07；4 条面板清单构造器不变量错误按非 UI 显式排除。
+- 既有无关测试失败保留：`usage_probe::host::tests::host_site_citations_point_at_the_code_they_name`。
 
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |

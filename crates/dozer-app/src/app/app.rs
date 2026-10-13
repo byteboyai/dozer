@@ -1949,6 +1949,7 @@ impl App {
                 // 缓存"最后确认"快照,供下次离线启动(spec §4.2)。
                 crate::locale_cache::save(self.locale.snapshot());
             }
+            self.sync_settings_locale();
         }
     }
 
@@ -1963,6 +1964,63 @@ impl App {
 
     pub fn next_locale_wake(&self) -> std::time::Duration {
         self.locale.next_wake(std::time::Instant::now())
+    }
+
+    /// 打开设置窗口,并把当前权威语言偏好注入「语言」页作已确认值。
+    pub(crate) fn open_settings(&mut self) {
+        let mut state = settings::State::load(self.daemon_unavailable.as_deref());
+        state.language.confirmed = self.locale.snapshot().preference.clone();
+        self.settings = Some(state);
+    }
+
+    /// 语言权威快照变化后同步设置页的已确认偏好(保存中的乐观值不受影响)。
+    pub(crate) fn sync_settings_locale(&mut self) {
+        if let Some(s) = self.settings.as_mut()
+            && s.language.status != settings::LanguageStatus::Saving
+        {
+            s.language.confirmed = self.locale.snapshot().preference.clone();
+        }
+    }
+
+    /// 缓存当前已确认快照(离线启动用,spec §4.2)。
+    pub(crate) fn locale_cache_save(&self) {
+        crate::locale_cache::save(self.locale.snapshot());
+    }
+
+    /// 发起一次 `set_locale`(设置页改语言)。用控制器当前的权威 revision 做
+    /// 乐观并发控制,并带上宿主平台的系统语言候选(System 偏好解析需要)。
+    /// 结果经 `Message::Settings(LanguageSaveOutcome(..))` 回灌。
+    pub(crate) fn spawn_locale_write(&self, pref: dozer_model::LocalePreference) {
+        let client = self.client.clone();
+        let proxy = self.proxy.clone();
+        let expected_revision = self.locale.snapshot().revision;
+        let candidates = crate::platform::locale::system_language_candidates();
+        self.handle.spawn(async move {
+            let outcome = match dozer_services::LocaleService::set_locale(
+                &client,
+                pref,
+                expected_revision,
+                candidates,
+            )
+            .await
+            {
+                Ok(dozer_model::LocaleWriteOutcome::Applied { snapshot }) => {
+                    settings::LanguageSaveOutcome::Applied(snapshot)
+                }
+                Ok(dozer_model::LocaleWriteOutcome::Conflict { snapshot }) => {
+                    settings::LanguageSaveOutcome::Conflict(snapshot)
+                }
+                // 协议错多半是旧 daemon 不认识 `SetLocale`(spec Task 05 的
+                // "服务不支持"态);其余(连不上/被拒)是"这次没存上",可重试。
+                Err(e) if e.kind == dozer_services::ServiceErrorKind::Protocol => {
+                    settings::LanguageSaveOutcome::Unsupported
+                }
+                Err(e) => settings::LanguageSaveOutcome::Failed(e.message),
+            };
+            let _ = proxy.send_event(Message::Settings(settings::Message::LanguageSaveOutcome(
+                outcome,
+            )));
+        });
     }
 
     /// 应用宿主状态机的消息入口(异步结果、点击、面板切入都走这里)。

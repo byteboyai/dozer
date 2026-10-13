@@ -7,6 +7,7 @@ use crate::git_accounts::{self, GitAccountsState, GitProvider};
 use bytehost_client::AppHostApi;
 use byteui::interaction::icons;
 use byteui::theme::color::ColorScheme;
+use dozer_model::{Locale, LocalePreference, LocaleSnapshot};
 use dozer_services::DaemonService;
 use iced_widget::core::{Alignment, Border, Element, Length, Padding};
 use iced_widget::{MouseArea, Space, button, column, container, row, text};
@@ -53,8 +54,8 @@ pub enum AdvancedState {
     RestartingDozerd,
 }
 
-/// 设置弹窗左栏三组切换 tab:主题 / Git 账户 / 高级。点击切换右侧内容区,
-/// 样式与「新建项目」弹窗左侧 tab 一致(`dialog_tab_style` + caption 字号)。
+/// 设置弹窗左栏切换 tab:主题 / Git 账户 / 高级 / 应用 / 语言。点击切换右侧
+/// 内容区,样式与「新建项目」弹窗左侧 tab 一致(`dialog_tab_style` + caption 字号)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
     Theme,
@@ -62,6 +63,65 @@ pub enum SettingsTab {
     Advanced,
     /// 应用宿主:运行时探测、已安装应用、安装流程(bytehost A4c)。
     Apps,
+    /// 界面语言:跟随系统 / English / 简体中文。
+    Language,
+}
+
+/// 「语言」页的保存状态(i18n Task 05)。只承载"这次提交"的瞬时反馈;真正
+/// 生效的偏好/语言以 daemon 权威快照为准(见 `LocalizedText` 与 `App.locale`)。
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum LanguageStatus {
+    /// 空闲:显示当前已确认的选择。
+    #[default]
+    Idle,
+    /// 已提交,等待 daemon 回包(此间禁用选项,防重复提交)。
+    Saving,
+    /// 保存失败(可重试)。
+    Failed(String),
+    /// revision 冲突:语言在别处被改,已采纳服务端快照,提示重选。
+    Conflict,
+    /// 当前服务不支持语言设置(旧 daemon)。
+    Unsupported,
+}
+
+/// 「语言」页状态:待确认的乐观选择 + 保存状态。
+#[derive(Debug, Clone, PartialEq)]
+pub struct LanguageState {
+    /// 已确认的当前偏好(打开设置时由 `App` 从权威快照注入;成功/冲突后更新)。
+    pub confirmed: LocalePreference,
+    /// 用户刚点选、尚未被 daemon 确认的偏好(乐观显示;确认/失败/冲突后清空)。
+    pub pending: Option<LocalePreference>,
+    pub status: LanguageStatus,
+}
+
+impl LanguageState {
+    /// 当前应显示为"已选"的偏好:有乐观值用乐观值,否则用已确认值。
+    pub fn shown(&self) -> &LocalePreference {
+        self.pending.as_ref().unwrap_or(&self.confirmed)
+    }
+}
+
+impl Default for LanguageState {
+    fn default() -> Self {
+        LanguageState {
+            confirmed: LocalePreference::System,
+            pending: None,
+            status: LanguageStatus::Idle,
+        }
+    }
+}
+
+/// 语言写入结果(由 `App::update` 发起 `set_locale` 后回灌,统一走设置消息通道)。
+#[derive(Debug, Clone, PartialEq)]
+pub enum LanguageSaveOutcome {
+    /// 提交成功,携带落盘后的权威快照。
+    Applied(LocaleSnapshot),
+    /// revision 冲突,携带服务端当前快照。
+    Conflict(LocaleSnapshot),
+    /// 保存失败(网络/IO)。
+    Failed(String),
+    /// 服务不支持语言设置。
+    Unsupported,
 }
 
 pub struct State {
@@ -89,6 +149,8 @@ pub struct State {
     pub(crate) outbox: crate::extensions::toast::Outbox,
     /// 「应用」页的状态(运行时探测/已安装应用/安装流程)。
     pub apps: settings_apps::State,
+    /// 「语言」页的状态(乐观选择 + 保存状态)。
+    pub language: LanguageState,
     /// 应用页改了已安装集合或运行状态,主窗口的应用宿主需要立刻刷新(`App::update` 的包装函数取走)。
     host_changed: bool,
 }
@@ -123,6 +185,7 @@ impl State {
             close_hover: false,
             outbox: Default::default(),
             apps: Default::default(),
+            language: LanguageState::default(),
             host_changed: false,
         }
     }
@@ -215,6 +278,11 @@ pub enum Message {
     TabHover(Option<SettingsTab>),
     /// 「应用」页的全部消息(见 `settings_apps`)。
     Apps(settings_apps::Message),
+    /// 用户点选一个语言偏好(跟随系统 / English / 简体中文)。真正的 `set_locale`
+    /// 由 `App::update` 发起(需要当前权威 revision 与系统候选),这里只做乐观显示。
+    LanguageSelected(LocalePreference),
+    /// 语言写入结果回灌(见 `LanguageSaveOutcome`)。
+    LanguageSaveOutcome(LanguageSaveOutcome),
 }
 
 /// 处理不需要 `handle`(异步)的消息,返回 `true` 表示已处理完。纯状态
@@ -338,6 +406,39 @@ fn apply_sync_message(state: &mut State, msg: &Message) -> bool {
         }
         Message::TabHover(h) => {
             state.tab_hover = *h;
+            true
+        }
+        Message::LanguageSelected(pref) => {
+            // 乐观显示用户的选择,进入 Saving;防重复提交:已保存中忽略新点击。
+            if state.language.status == LanguageStatus::Saving {
+                return true;
+            }
+            state.language.pending = Some(pref.clone());
+            state.language.status = LanguageStatus::Saving;
+            true
+        }
+        Message::LanguageSaveOutcome(outcome) => {
+            match outcome {
+                LanguageSaveOutcome::Applied(snapshot) => {
+                    state.language.confirmed = snapshot.preference.clone();
+                    state.language.pending = None;
+                    state.language.status = LanguageStatus::Idle;
+                }
+                LanguageSaveOutcome::Conflict(snapshot) => {
+                    // 语言在别处被改:采纳服务端快照,提示重选。
+                    state.language.confirmed = snapshot.preference.clone();
+                    state.language.pending = None;
+                    state.language.status = LanguageStatus::Conflict;
+                }
+                LanguageSaveOutcome::Failed(e) => {
+                    // 保存失败:保留乐观选择但显示错误,允许重试。
+                    state.language.status = LanguageStatus::Failed(e.clone());
+                }
+                LanguageSaveOutcome::Unsupported => {
+                    state.language.pending = None;
+                    state.language.status = LanguageStatus::Unsupported;
+                }
+            }
             true
         }
         Message::Close
@@ -604,7 +705,7 @@ fn run_apps_message<A>(
 }
 
 fn scheme_row<'a>(
-    label: &'static str,
+    label: impl Into<String>,
     scheme: ColorScheme,
     current: ColorScheme,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -625,36 +726,167 @@ fn scheme_row<'a>(
     )
 }
 
-fn provider_row(
-    provider: GitProvider,
-    state: &ConnectState,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+/// 一个语言选项行(单选):左侧 ✓ 标记,右侧标签。点击提交该偏好。
+fn language_option_row<'a>(
+    label: String,
+    selected: bool,
+    disabled: bool,
+    pref: LocalePreference,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = byteui::theme::color::current();
+    let mark: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
+        text(if selected { "✓" } else { " " })
+            .size(byteui::theme::font::body())
+            .color(if disabled { colors.dim } else { colors.gold })
+            .into();
+    let color = if disabled {
+        colors.dim
+    } else if selected {
+        colors.gold
+    } else {
+        colors.body
+    };
+    let msg = if disabled {
+        None
+    } else {
+        Some(Message::LanguageSelected(pref))
+    };
+    crate::chrome::menu::item_row_fill(Some(mark), label, color, msg)
+}
+
+/// 「语言」页:跟随系统 / English / 简体中文 三选一,附保存状态行。
+///
+/// - 选项的"已选"态来自 `LanguageState::shown`(乐观值优先)。
+/// - `Saving` 期间禁用全部选项防重复提交(spec Task 05)。
+/// - 保存失败/冲突/不支持时在选项下方给一行说明;失败保留乐观选择可重试。
+fn language_page<'a>(
+    state: &LanguageState,
+    locale: &str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let colors = byteui::theme::color::current();
+    let t = |key: &str, fallback: &str| crate::i18n::host_text(key, fallback, locale);
+    let saving = state.status == LanguageStatus::Saving;
+    let shown = state.shown().clone();
+    let title = text(t("settings.language.title", "Language"))
+        .size(byteui::theme::font::subtitle())
+        .color(colors.cream);
+
+    let rows = column![
+        language_option_row(
+            t("settings.language.follow_system", "Follow System"),
+            shown == LocalePreference::System,
+            saving,
+            LocalePreference::System,
+        ),
+        language_option_row(
+            t("settings.language.english", "English"),
+            shown
+                == LocalePreference::Explicit {
+                    locale: Locale(Locale::EN.into())
+                },
+            saving,
+            LocalePreference::Explicit {
+                locale: Locale(Locale::EN.into())
+            },
+        ),
+        language_option_row(
+            t("settings.language.simplified_chinese", "Simplified Chinese"),
+            shown
+                == LocalePreference::Explicit {
+                    locale: Locale(Locale::ZH_CN.into())
+                },
+            saving,
+            LocalePreference::Explicit {
+                locale: Locale(Locale::ZH_CN.into())
+            },
+        ),
+    ]
+    .spacing(6);
+
+    let status_line: Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> =
+        match &state.status {
+            LanguageStatus::Idle => None,
+            LanguageStatus::Saving => Some(
+                text(t("settings.language.saving", "Saving…"))
+                    .size(byteui::theme::font::caption())
+                    .color(colors.dim)
+                    .into(),
+            ),
+            LanguageStatus::Failed(_e) => Some(
+                text(t(
+                    "settings.language.save_failed",
+                    "Couldn't save. Try again.",
+                ))
+                .size(byteui::theme::font::caption())
+                .color(colors.gold)
+                .into(),
+            ),
+            LanguageStatus::Conflict => Some(
+                text(t(
+                    "settings.language.conflict",
+                    "Language changed elsewhere — review your choice.",
+                ))
+                .size(byteui::theme::font::caption())
+                .color(colors.gold)
+                .into(),
+            ),
+            LanguageStatus::Unsupported => Some(
+                text(t(
+                    "settings.language.unsupported",
+                    "This service doesn't support language settings.",
+                ))
+                .size(byteui::theme::font::caption())
+                .color(colors.dim)
+                .into(),
+            ),
+        };
+
+    let mut col = column![title, rows].spacing(14);
+    if let Some(line) = status_line {
+        col = col.push(line);
+    }
+    col.into()
+}
+
+fn provider_row<'a>(
+    provider: GitProvider,
+    state: &'a ConnectState,
+    locale: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let colors = byteui::theme::color::current();
+    let t = |key: &str, fallback: &str| crate::i18n::host_text(key, fallback, locale);
     let title = text(provider.display_name())
         .size(byteui::theme::font::body())
         .color(colors.cream);
     match state {
         ConnectState::NotConnected => {
-            let status = text("未连接")
+            let status = text(t("settings.git.not_connected", "Not connected"))
                 .size(byteui::theme::font::label())
                 .color(colors.dim);
-            let connect_btn = button(text("连接").size(byteui::theme::font::body()))
-                .on_press(Message::ConnectClicked(provider))
-                .padding([6, 14])
-                .style(crate::extensions::project_create::action_button_hover_style(colors.cream));
+            let connect_btn = button(
+                text(t("settings.git.connect", "Connect")).size(byteui::theme::font::body()),
+            )
+            .on_press(Message::ConnectClicked(provider))
+            .padding([6, 14])
+            .style(crate::extensions::project_create::action_button_hover_style(colors.cream));
             row![title, status, Space::new().width(Length::Fill), connect_btn]
                 .spacing(10)
                 .align_y(Alignment::Center)
                 .into()
         }
         ConnectState::Connected { username } => {
-            let status = text(format!("已连接: {username}"))
-                .size(byteui::theme::font::label())
-                .color(colors.gold);
-            let disconnect_btn = button(text("断开连接").size(byteui::theme::font::body()))
-                .on_press(Message::Disconnect(provider))
-                .padding([6, 14])
-                .style(crate::extensions::project_create::action_button_hover_style(colors.dim));
+            let status = text(crate::i18n::interpolate(
+                &t("settings.git.connected", "Connected: {username}"),
+                &[("username", username.as_str())],
+            ))
+            .size(byteui::theme::font::label())
+            .color(colors.gold);
+            let disconnect_btn = button(
+                text(t("settings.git.disconnect", "Disconnect")).size(byteui::theme::font::body()),
+            )
+            .on_press(Message::Disconnect(provider))
+            .padding([6, 14])
+            .style(crate::extensions::project_create::action_button_hover_style(colors.dim));
             row![
                 title,
                 status,
@@ -677,13 +909,17 @@ fn provider_row(
                 move |v| Message::TokenChanged(provider, v),
             );
             let hint = iced_widget::MouseArea::new(
-                text("没有 PAT?点此生成")
+                text(t("settings.git.generate_pat", "No PAT? Generate one"))
                     .size(byteui::theme::font::label())
                     .color(colors.gold),
             )
             .interaction(iced_widget::core::mouse::Interaction::Pointer)
             .on_press(Message::OpenTokenPage(provider));
-            let confirm_label = if *busy { "校验中…" } else { "确认" };
+            let confirm_label = if *busy {
+                t("settings.git.validating", "Validating…")
+            } else {
+                t("settings.git.confirm", "Confirm")
+            };
             let confirm = button(text(confirm_label).size(byteui::theme::font::body()))
                 .style(crate::extensions::project_create::action_button_hover_style(colors.cream));
             let confirm = if *busy {
@@ -691,9 +927,12 @@ fn provider_row(
             } else {
                 confirm.on_press(Message::ConnectSubmit(provider))
             };
-            let cancel = button(text("取消").size(byteui::theme::font::body()))
-                .on_press(Message::ConnectCancel(provider))
-                .style(crate::extensions::project_create::action_button_hover_style(colors.dim));
+            let cancel =
+                button(text(t("settings.git.cancel", "Cancel")).size(byteui::theme::font::body()))
+                    .on_press(Message::ConnectCancel(provider))
+                    .style(
+                        crate::extensions::project_create::action_button_hover_style(colors.dim),
+                    );
             let error_row: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
                 if let Some(e) = error {
                     text(e.clone())
@@ -724,10 +963,12 @@ fn count_live_sessions(sessions: &[dozer_model::SessionInfo]) -> u32 {
     sessions.iter().filter(|s| s.alive).count() as u32
 }
 
-fn advanced_row(
-    state: &AdvancedState,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+fn advanced_row<'a>(
+    state: &'a AdvancedState,
+    locale: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = byteui::theme::color::current();
+    let t = |key: &str, fallback: &str| crate::i18n::host_text(key, fallback, locale);
     let hint = |s: String| text(s).size(byteui::theme::font::label()).color(colors.dim);
     let error_line =
         |e: &Option<String>| -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -739,14 +980,23 @@ fn advanced_row(
                 None => Space::new().into(),
             }
         };
+    let stop_hint = || {
+        t(
+            "settings.advanced.stop_hint",
+            "Stopping ends all running agent sessions and generates summaries; you can restart anytime.",
+        )
+    };
     match state {
         AdvancedState::Idle { error } => {
-            let btn = button(text("停止 dozerd").size(byteui::theme::font::body()))
-                .on_press(Message::AdvancedStopClicked)
-                .padding([6, 14])
-                .style(crate::extensions::project_create::action_button_hover_style(colors.cream));
+            let btn = button(
+                text(t("settings.advanced.stop_dozerd", "Stop dozerd"))
+                    .size(byteui::theme::font::body()),
+            )
+            .on_press(Message::AdvancedStopClicked)
+            .padding([6, 14])
+            .style(crate::extensions::project_create::action_button_hover_style(colors.cream));
             column![
-                hint("停止后所有正在运行的 agent 会话会结束并生成总结,可随时重新启动。".into()),
+                hint(stop_hint()),
                 row![Space::new().width(Length::Fill), btn],
                 error_line(error),
             ]
@@ -754,30 +1004,39 @@ fn advanced_row(
             .into()
         }
         AdvancedState::FetchingCount => {
-            let btn = button(text("检查中…").size(byteui::theme::font::body())).padding([6, 14]);
-            row![
-                hint("停止后所有正在运行的 agent 会话会结束并生成总结,可随时重新启动。".into()),
-                Space::new().width(Length::Fill),
-                btn
-            ]
-            .spacing(6)
-            .align_y(Alignment::Center)
-            .into()
+            let btn = button(
+                text(t("settings.advanced.checking", "Checking…"))
+                    .size(byteui::theme::font::body()),
+            )
+            .padding([6, 14]);
+            row![hint(stop_hint()), Space::new().width(Length::Fill), btn]
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .into()
         }
         AdvancedState::ConfirmingStop { session_count } => {
             let body = if *session_count == 0 {
-                "当前没有正在运行的会话,dozerd 会直接停止。".to_string()
+                t(
+                    "settings.advanced.stop_confirm_none",
+                    "No sessions are running; dozerd will stop immediately.",
+                )
             } else {
-                format!(
-                    "这会结束当前 {session_count} 个正在运行的 agent 会话并生成总结(可能需要约 1 分钟)。"
+                crate::i18n::interpolate(
+                    &t(
+                        "settings.advanced.stop_confirm_some",
+                        "This ends the {session_count} running agent sessions and generates summaries (may take about a minute).",
+                    ),
+                    &[("session_count", &session_count.to_string())],
                 )
             };
-            let cancel = button(text("取消").size(byteui::theme::font::body()))
-                .on_press(Message::AdvancedStopCancel)
-                .padding([6, 14])
-                .style(crate::extensions::project_create::action_button_hover_style(colors.dim));
+            let cancel = button(
+                text(t("settings.advanced.cancel", "Cancel")).size(byteui::theme::font::body()),
+            )
+            .on_press(Message::AdvancedStopCancel)
+            .padding([6, 14])
+            .style(crate::extensions::project_create::action_button_hover_style(colors.dim));
             let confirm = button(
-                text("确认停止")
+                text(t("settings.advanced.confirm_stop", "Confirm Stop"))
                     .size(byteui::theme::font::body())
                     .color(colors.red),
             )
@@ -793,18 +1052,28 @@ fn advanced_row(
         }
         AdvancedState::Stopping => {
             let btn = button(
-                text("停止中…(等待会话总结,最长约 1 分钟)").size(byteui::theme::font::body()),
+                text(t(
+                    "settings.advanced.stopping",
+                    "Stopping… (waiting for session summaries, up to about a minute)",
+                ))
+                .size(byteui::theme::font::body()),
             )
             .padding([6, 14]);
             row![Space::new().width(Length::Fill), btn].into()
         }
         AdvancedState::Stopped { error } => {
-            let btn = button(text("重新启动 dozerd").size(byteui::theme::font::body()))
-                .on_press(Message::AdvancedRestartClicked)
-                .padding([6, 14])
-                .style(crate::extensions::project_create::action_button_hover_style(colors.cream));
+            let btn = button(
+                text(t("settings.advanced.restart_dozerd", "Restart dozerd"))
+                    .size(byteui::theme::font::body()),
+            )
+            .on_press(Message::AdvancedRestartClicked)
+            .padding([6, 14])
+            .style(crate::extensions::project_create::action_button_hover_style(colors.cream));
             column![
-                hint("dozerd 已停止,部分功能不可用。".into()),
+                hint(t(
+                    "settings.advanced.stopped_hint",
+                    "dozerd is stopped; some features are unavailable."
+                )),
                 row![Space::new().width(Length::Fill), btn],
                 error_line(error),
             ]
@@ -812,7 +1081,11 @@ fn advanced_row(
             .into()
         }
         AdvancedState::RestartingDozerd => {
-            let btn = button(text("启动中…").size(byteui::theme::font::body())).padding([6, 14]);
+            let btn = button(
+                text(t("settings.advanced.starting", "Starting…"))
+                    .size(byteui::theme::font::body()),
+            )
+            .padding([6, 14]);
             row![Space::new().width(Length::Fill), btn].into()
         }
     }
@@ -822,16 +1095,16 @@ fn advanced_row(
 /// 弹窗左侧 `sidebar_entry` 完全一致:caption 字号,选中 CARD 实底、未选中
 /// BG 实底,8 圆角胶囊(无边框),选中 CREAM、未选中 DIM,无 hover 配色漂移
 /// (与「新建项目」左侧 tab 同一套观感)。
-fn settings_tab_button(
-    label: &'static str,
+fn settings_tab_button<'a>(
+    label: impl Into<String>,
     active: bool,
     _hover_t: f32,
     on_press: Message,
-    on_enter: impl Fn(bool) -> Message + 'static,
-    on_exit: impl Fn(bool) -> Message + 'static,
-) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    on_enter: impl Fn(bool) -> Message + 'a,
+    on_exit: impl Fn(bool) -> Message + 'a,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = byteui::theme::color::current();
-    let label_el = text(label.to_string())
+    let label_el = text(label.into())
         .size(byteui::theme::font::caption())
         .color(if active { colors.cream } else { colors.dim });
     let cell = container(label_el)
@@ -853,19 +1126,21 @@ fn settings_tab_button(
         .into()
 }
 
-pub fn settings_card(
-    state: &State,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+pub fn settings_card<'a>(
+    state: &'a State,
+    locale: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = byteui::theme::color::current();
     let current = byteui::theme::color::current_scheme();
-    let theme_title = text("主题")
+    let t = |key: &str, fallback: &str| crate::i18n::host_text(key, fallback, locale);
+    let theme_title = text(t("settings.tab.theme", "Theme"))
         .size(byteui::theme::font::subtitle())
         .color(colors.cream);
-    let git_title = text("Git 账户")
+    let git_title = text(t("settings.git.title", "Git Accounts"))
         .size(byteui::theme::font::subtitle())
         .color(colors.cream);
     let close = button(
-        text("关闭")
+        text(t("settings.close", "Close"))
             .size(byteui::theme::font::label())
             .color(colors.dim),
     )
@@ -883,10 +1158,10 @@ pub fn settings_card(
         true,
         Message::Close,
         Message::CloseHover,
-        "关闭",
+        t("settings.close", "Close"),
     );
 
-    let advanced_title = text("高级")
+    let advanced_title = text(t("settings.tab.advanced", "Advanced"))
         .size(byteui::theme::font::subtitle())
         .color(colors.cream);
     // 标题行:settings 图标 + 奶油色标题文本,右上角 X 关闭按钮——与"新建
@@ -898,7 +1173,7 @@ pub fn settings_card(
             byteui::theme::font::title() as f32,
             colors.cream,
         ),
-        text("设置")
+        text(t("settings.title", "Settings"))
             .size(byteui::theme::font::title())
             .color(colors.cream),
     ]
@@ -919,7 +1194,7 @@ pub fn settings_card(
     };
     let tab_col = column![
         settings_tab_button(
-            "主题",
+            t("settings.tab.theme", "Theme"),
             state.selected == SettingsTab::Theme,
             tab_hover_t(SettingsTab::Theme),
             Message::TabSelected(SettingsTab::Theme),
@@ -927,7 +1202,7 @@ pub fn settings_card(
             |_| Message::TabHover(None),
         ),
         settings_tab_button(
-            "Git 账户",
+            t("settings.tab.git", "Git Accounts"),
             state.selected == SettingsTab::Git,
             tab_hover_t(SettingsTab::Git),
             Message::TabSelected(SettingsTab::Git),
@@ -935,7 +1210,7 @@ pub fn settings_card(
             |_| Message::TabHover(None),
         ),
         settings_tab_button(
-            "高级",
+            t("settings.tab.advanced", "Advanced"),
             state.selected == SettingsTab::Advanced,
             tab_hover_t(SettingsTab::Advanced),
             Message::TabSelected(SettingsTab::Advanced),
@@ -943,11 +1218,19 @@ pub fn settings_card(
             |_| Message::TabHover(None),
         ),
         settings_tab_button(
-            "应用",
+            t("settings.tab.apps", "Apps"),
             state.selected == SettingsTab::Apps,
             tab_hover_t(SettingsTab::Apps),
             Message::TabSelected(SettingsTab::Apps),
             |h| Message::TabHover(if h { Some(SettingsTab::Apps) } else { None }),
+            |_| Message::TabHover(None),
+        ),
+        settings_tab_button(
+            t("settings.tab.language", "Language"),
+            state.selected == SettingsTab::Language,
+            tab_hover_t(SettingsTab::Language),
+            Message::TabSelected(SettingsTab::Language),
+            |h| { Message::TabHover(if h { Some(SettingsTab::Language) } else { None }) },
             |_| Message::TabHover(None),
         ),
     ]
@@ -960,19 +1243,28 @@ pub fn settings_card(
         match state.selected {
             SettingsTab::Theme => column![
                 theme_title,
-                scheme_row("深色 · ByteBoy2077", ColorScheme::Dark, current),
-                scheme_row("浅色 · ByteBoy2077-Light", ColorScheme::Light, current),
+                scheme_row(
+                    t("settings.theme.dark", "Dark · ByteBoy2077"),
+                    ColorScheme::Dark,
+                    current
+                ),
+                scheme_row(
+                    t("settings.theme.light", "Light · ByteBoy2077-Light"),
+                    ColorScheme::Light,
+                    current
+                ),
             ],
             SettingsTab::Git => column![
                 git_title,
-                provider_row(GitProvider::GitHub, &state.github),
-                provider_row(GitProvider::GitLab, &state.gitlab),
-                provider_row(GitProvider::Gitee, &state.gitee),
+                provider_row(GitProvider::GitHub, &state.github, locale),
+                provider_row(GitProvider::GitLab, &state.gitlab, locale),
+                provider_row(GitProvider::Gitee, &state.gitee, locale),
             ],
-            SettingsTab::Advanced => column![advanced_title, advanced_row(&state.advanced)],
+            SettingsTab::Advanced => column![advanced_title, advanced_row(&state.advanced, locale)],
             SettingsTab::Apps => {
                 column![crate::extensions::settings_apps::view(&state.apps).map(Message::Apps)]
             }
+            SettingsTab::Language => column![language_page(&state.language, locale)],
         }
         .spacing(14)
         .into();
@@ -1026,8 +1318,158 @@ mod tests {
             close_hover: false,
             outbox: Default::default(),
             apps: Default::default(),
+            language: LanguageState::default(),
             host_changed: false,
         }
+    }
+
+    fn snap(pref: LocalePreference, active: &str, rev: u64) -> LocaleSnapshot {
+        LocaleSnapshot {
+            preference: pref,
+            active_locale: Locale(active.into()),
+            revision: rev,
+            ..LocaleSnapshot::default_snapshot()
+        }
+    }
+
+    #[test]
+    fn language_selected_sets_pending_and_saving() {
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        let pref = LocalePreference::Explicit {
+            locale: Locale(Locale::ZH_CN.into()),
+        };
+        apply_sync_message(&mut state, &Message::LanguageSelected(pref.clone()));
+        assert_eq!(state.language.pending, Some(pref.clone()));
+        assert_eq!(state.language.status, LanguageStatus::Saving);
+        // 乐观显示优先于已确认值。
+        assert_eq!(state.language.shown(), &pref);
+    }
+
+    #[test]
+    fn language_selected_ignored_while_saving() {
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        let zh = LocalePreference::Explicit {
+            locale: Locale(Locale::ZH_CN.into()),
+        };
+        let en = LocalePreference::Explicit {
+            locale: Locale(Locale::EN.into()),
+        };
+        apply_sync_message(&mut state, &Message::LanguageSelected(zh.clone()));
+        apply_sync_message(&mut state, &Message::LanguageSelected(en));
+        assert_eq!(state.language.pending, Some(zh));
+        assert_eq!(state.language.status, LanguageStatus::Saving);
+    }
+
+    #[test]
+    fn language_applied_clears_pending_and_updates_confirmed() {
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        let zh = LocalePreference::Explicit {
+            locale: Locale(Locale::ZH_CN.into()),
+        };
+        apply_sync_message(&mut state, &Message::LanguageSelected(zh.clone()));
+        apply_sync_message(
+            &mut state,
+            &Message::LanguageSaveOutcome(LanguageSaveOutcome::Applied(snap(
+                zh.clone(),
+                "zh-CN",
+                3,
+            ))),
+        );
+        assert_eq!(state.language.pending, None);
+        assert_eq!(state.language.status, LanguageStatus::Idle);
+        assert_eq!(state.language.confirmed, zh);
+        assert_eq!(state.language.shown(), &zh);
+    }
+
+    #[test]
+    fn language_failed_keeps_pending_for_retry() {
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        let zh = LocalePreference::Explicit {
+            locale: Locale(Locale::ZH_CN.into()),
+        };
+        apply_sync_message(&mut state, &Message::LanguageSelected(zh.clone()));
+        apply_sync_message(
+            &mut state,
+            &Message::LanguageSaveOutcome(LanguageSaveOutcome::Failed("io".into())),
+        );
+        // 乐观选择保留(可重试),但状态是失败。
+        assert_eq!(state.language.pending, Some(zh));
+        assert!(matches!(state.language.status, LanguageStatus::Failed(_)));
+    }
+
+    #[test]
+    fn language_conflict_adopts_server_and_prompts() {
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        let zh = LocalePreference::Explicit {
+            locale: Locale(Locale::ZH_CN.into()),
+        };
+        let en = LocalePreference::Explicit {
+            locale: Locale(Locale::EN.into()),
+        };
+        state.language.confirmed = en.clone();
+        apply_sync_message(&mut state, &Message::LanguageSelected(zh));
+        // 服务端其实已是 en(revision 被别处推进)。
+        apply_sync_message(
+            &mut state,
+            &Message::LanguageSaveOutcome(LanguageSaveOutcome::Conflict(snap(en.clone(), "en", 9))),
+        );
+        assert_eq!(state.language.pending, None);
+        assert_eq!(state.language.status, LanguageStatus::Conflict);
+        assert_eq!(state.language.confirmed, en);
+    }
+
+    #[test]
+    fn language_unsupported_clears_pending() {
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        state.language.confirmed = LocalePreference::System;
+        apply_sync_message(
+            &mut state,
+            &Message::LanguageSelected(LocalePreference::System),
+        );
+        apply_sync_message(
+            &mut state,
+            &Message::LanguageSaveOutcome(LanguageSaveOutcome::Unsupported),
+        );
+        assert_eq!(state.language.pending, None);
+        assert_eq!(state.language.status, LanguageStatus::Unsupported);
+    }
+
+    #[test]
+    fn language_shown_falls_back_to_confirmed() {
+        let mut state = test_state(
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+            ConnectState::NotConnected,
+        );
+        let zh = LocalePreference::Explicit {
+            locale: Locale(Locale::ZH_CN.into()),
+        };
+        state.language.confirmed = zh.clone();
+        assert_eq!(state.language.shown(), &zh);
     }
 
     #[test]

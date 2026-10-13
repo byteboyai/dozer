@@ -121,7 +121,7 @@ impl SettingsOverlay {
         };
         let mut interface = UserInterface::build(
             backdrop_card(
-                settings::settings_card(state).map(Message::Settings),
+                settings::settings_card(state, app.locale.active_locale()).map(Message::Settings),
                 card_logical_size(&self.window),
             ),
             self.gpu.viewport.logical_size(),
@@ -200,7 +200,7 @@ impl SettingsOverlay {
         };
         let mut interface = UserInterface::build(
             backdrop_card(
-                settings::settings_card(state).map(Message::Settings),
+                settings::settings_card(state, app.locale.active_locale()).map(Message::Settings),
                 card_logical_size(&self.window),
             ),
             self.gpu.viewport.logical_size(),

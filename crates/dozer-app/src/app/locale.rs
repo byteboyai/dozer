@@ -234,6 +234,29 @@ impl LocaleController {
         }
     }
 
+    /// 应用一次**本地发起**的写入结果(设置页改语言)。
+    ///
+    /// 与 `apply_fetch` 的差别:本地写入的权威性不靠 revision 比较(用户刚提交,
+    /// 结果里带的就是最新快照),直接采纳并更新基线;同时作废任何在途读取的旧
+    /// 回包(写入已确立新值,之前发起的读取是旧的)。`Conflict` 也带回了服务端
+    /// 当前快照,同样采纳(spec §4.2:冲突时以服务端为准,提示重选)。
+    ///
+    /// 返回 `ApplyEffect`(active 是否变化 + 新显示代),调用方据此广播/清缓存。
+    pub fn apply_local_write(&mut self, snapshot: LocaleSnapshot) -> ApplyEffect {
+        self.in_flight = None;
+        let active_changed = self.snapshot.active_locale != snapshot.active_locale;
+        self.snapshot = snapshot;
+        self.source = SnapshotSource::Daemon;
+        self.applied_epoch = self.epoch;
+        if active_changed {
+            self.display_generation += 1;
+        }
+        ApplyEffect {
+            active_changed,
+            generation: self.display_generation,
+        }
+    }
+
     /// 测试/诊断:直接读取当前偏好。
     #[allow(dead_code)]
     pub fn preference(&self) -> &LocalePreference {

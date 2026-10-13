@@ -125,13 +125,14 @@
 
 **修改：** `extensions/settings.rs`、`platform/settings_overlay.rs`、`product.rs`、`panel_registry.rs`、`chrome/rail.rs` 及标题消费点。
 
-- [ ] 将现有面板标题中文逐项原样搬入语言包，加入设置语言页的全部英中文案。
-- [ ] PanelDescriptor 保存 key/fallback，不在 OnceLock 中冻结译文；替换要求静态字符串的消费签名，不使用 Box::leak。
-- [ ] 增加 System/English/简体中文、保存中/失败/冲突/服务不支持状态；保存期间防重复提交，确认成功才更新选择。
-- [ ] 设置页自身和已打开面板标题同步变换，保存失败沿用旧语言；保留当前设置 tab、输入及窗口状态。
-- [ ] 更新 inventory，记录标题/settings 已清零，不将其他尚未迁移区域标为支持双语。
-
+- [x] 将现有面板标题中文逐项原样搬入语言包，加入设置语言页的全部英中文案。
+- [x] PanelDescriptor 保存 key/fallback，不在 OnceLock 中冻结译文；替换要求静态字符串的消费签名，不使用 Box::leak。
+- [x] 增加 System/English/简体中文、保存中/失败/冲突/服务不支持状态；保存期间防重复提交，确认成功才更新选择。
+- [x] 设置页自身和已打开面板标题同步变换，保存失败沿用旧语言；保留当前设置 tab、输入及窗口状态。
+- [x] 更新 inventory，记录标题/settings 已清零，不将其他尚未迁移区域标为支持双语。
 **验收：**首次选择→daemon→多窗口→重启恢复真实链路通过；I1 仅宣布部分支持。
+
+> Task 05 收尾说明：设置页渲染文案（tab/标题/主题行/Git 连接流程/高级区块/语言页）已全部经 `host_text` 走语言包；`panel_registry.rs` 的 4 条构造器不变量错误（仅 `.expect` panic，不面向用户）在 `build_inventory.py` 的 `NON_UI_STRINGS` 里显式排除并注明理由；`settings.rs` 剩余 3 条（断开账号两处 Toast 文案 + 保存本地记录失败文案）属 Toast/错误呈现迁移，归 Task 07。
 
 ### Task 06：Host chrome、菜单和全部原生 overlay
 
