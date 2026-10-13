@@ -71,6 +71,17 @@ impl LocaleSnapshot {
     }
 }
 
+/// `set_locale` 的结果(spec §4.2):提交成功返回新快照;期望 revision 不匹配
+/// 时返回当前最新快照并标记冲突,提示重新选择,不自动覆盖另一个窗口的操作。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum LocaleWriteOutcome {
+    /// 提交成功,`snapshot` 为落盘后的权威快照。
+    Applied { snapshot: LocaleSnapshot },
+    /// revision 冲突;`snapshot` 为服务端当前最新快照,调用方应据此重新选择。
+    Conflict { snapshot: LocaleSnapshot },
+}
+
 /// 渲染一条界面文案所需的最小描述(spec §6.1)。
 ///
 /// - `owner`:文案所有者,如 `dozer.host`/`dozer.todo`;由注册来源绑定,

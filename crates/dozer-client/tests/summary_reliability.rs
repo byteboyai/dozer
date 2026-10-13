@@ -109,6 +109,12 @@ async fn generated_summary_is_visible_through_panel_query_and_shared_batches_fin
         ),
         groups: dozerd::group_service::GroupService::for_tests(),
         apps: bytehost_apps::service::AppService::unavailable("test"),
+        locale: std::sync::Arc::new(
+            dozerd::locale_settings::LocaleSettingsStore::open(
+                &std::env::temp_dir().join(format!("dz-locale-{}.json", uuid::Uuid::new_v4())),
+            )
+            .unwrap(),
+        ),
     };
     let server = tokio::spawn({
         let sock = sock.clone();

@@ -63,6 +63,13 @@ async fn start_test_daemon() -> PathBuf {
                 file_edit_history: test_file_edit_history(),
                 groups: test_group_service(),
                 apps: bytehost_apps::service::AppService::unavailable("test"),
+                locale: std::sync::Arc::new(
+                    dozerd::locale_settings::LocaleSettingsStore::open(
+                        &std::env::temp_dir()
+                            .join(format!("dz-locale-{}.json", uuid::Uuid::new_v4())),
+                    )
+                    .unwrap(),
+                ),
             },
             dozerd::task_poller::new_in_flight(),
         )

@@ -92,6 +92,7 @@ pub struct Stores {
     pub file_edit_history: std::sync::Arc<crate::file_edit_history::FileEditHistoryStore>,
     pub groups: std::sync::Arc<crate::group_service::GroupService>,
     pub apps: std::sync::Arc<bytehost_apps::service::AppService>,
+    pub locale: std::sync::Arc<crate::locale_settings::LocaleSettingsStore>,
 }
 
 /// 单实例检查:`socket` 背后已经有活着的监听者就报错。**启动期要尽早调用**(在做任何有副作用的启动工作——
@@ -147,6 +148,7 @@ pub async fn serve(
         file_edit_history,
         groups,
         apps,
+        locale,
     } = stores;
     let preview_contexts = Arc::new(PreviewContextStore::new());
     let preview_commands = Arc::new(crate::preview_commands::PreviewCommandBus::new());
@@ -186,6 +188,7 @@ pub async fn serve(
         file_edit_history,
         groups,
         apps,
+        locale,
     };
     loop {
         tokio::select! {
@@ -433,6 +436,7 @@ async fn handle_conn(
         file_edit_history,
         groups,
         apps,
+        locale,
     } = stores;
     // 总结调度服务:提交/查询走持久化表,状态在 SQLite 里,跨连接可见。每个
     // 连接构造一份轻量句柄(只是 Arc 引用 + 一个 scratch 根路径)。
@@ -672,6 +676,17 @@ async fn handle_conn(
                                 Ok(bookmarks) => Reply::Bookmarks { bookmarks },
                                 Err(e) => Reply::Error {
                                     message: format!("列收藏失败: {e}"),
+                                },
+                            }
+                        }
+                        Request::GetLocale => Reply::Locale {
+                            snapshot: locale.get(),
+                        },
+                        Request::SetLocale { preference, expected_revision, system_candidates } => {
+                            match locale.set(preference, expected_revision, system_candidates) {
+                                Ok(outcome) => Reply::LocaleWrite { outcome },
+                                Err(e) => Reply::Error {
+                                    message: format!("写入语言设置失败: {e}"),
                                 },
                             }
                         }
@@ -1812,6 +1827,12 @@ mod tests {
                     file_edit_history,
                     groups,
                     apps: bytehost_apps::service::AppService::unavailable("test"),
+                    locale: std::sync::Arc::new(
+                        crate::locale_settings::LocaleSettingsStore::open(
+                            &std::env::temp_dir().join("dozer-test-locale-settings.json"),
+                        )
+                        .unwrap(),
+                    ),
                 },
                 crate::task_poller::new_in_flight(),
             );

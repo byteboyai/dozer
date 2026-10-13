@@ -59,7 +59,9 @@
 |---|---|---|---|
 | 01 清单与生产入口基线 | ✅ 完成 | 本文件、`baseline.md`、`glossary.md`、`inventory.json`、`scripts/i18n/` | 迁移尚未开始，见 `acceptance.md` |
 | 02 双语资源、解析器与资源校验 | ✅ 完成 | `dozer-model/src/i18n.rs`、`dozer-i18n/`(解析/校验/插值/向量)、`dozer-app/locales/host/`、`web/shared/i18n/`、`scripts/i18n/check_resources.py` | 标题接入 `PanelDescriptor`/设置页在 Task 04/05 |
-| 03–05 | 未开始 | — | 依赖 02 |
+| 03 语言持久化、服务与兼容传输 | ✅ 完成 | `dozerd/src/locale_settings.rs`(CAS/原子落盘/损坏恢复/溢出失败/无变化不推进 revision)、`dozer-model` 的 `LocaleSnapshot`/`LocaleWriteOutcome`、`dozer-services::LocaleService`、`protocol` 的 `Get/SetLocale`+`Locale/LocaleWrite`、`Client` 适配、`dozerd/tests/locale_requests.rs`、`dozer-client` 降级测试 | 系统探测(`system_candidates` 来源)、App 快照与窗口同步在 Task 04 |
+| 04 App 语言快照、系统探测和窗口同步 | 未开始 | — | 依赖 03 |
+| 05 | 未开始 | — | 依赖 04 |
 | 06–08 | 未开始 | — | 依赖 05 |
 | 09–11 | 未开始 | — | 依赖 06/07/08 |
 | 12–14 | 未开始 | — | 见计划 §2 |

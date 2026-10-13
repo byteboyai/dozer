@@ -4,13 +4,13 @@ pub use dozer_model::{
     AgentKind, AgentState, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
     CodeHealthReportInfo, ContextItemInfo, ConversationSummary, ConversationSummaryResult,
     FileEditHistoryInfo, GroupAuthor, GroupCancelScope, GroupInfo, GroupMemberInfo,
-    GroupMessageInfo, GroupMessageStatus, LocateMatch, MemoryDetail, MemoryHistoryEntry,
-    MemoryInfo, MutationOutcome, PREVIEW_COMMAND_TIMEOUT_MS, PREVIEW_SELECTED_TEXT_MAX_CHARS,
-    PreviewCommand, PreviewCommandAction, PreviewCommandOutcome, PreviewCommandTarget,
-    PreviewContext, PreviewTabularContext, ProjectInfo, SessionInfo, SessionSummaryPayload,
-    SummaryBatchInfo, SummaryErrorKind, SummaryJobInfo, SummaryJobStatus, SummaryProviderInfo,
-    SummaryStatus, SummaryTrigger, TodoInfo, TodoStoredStatus, ToolCallInfo, TurnRecord,
-    UsagePayload,
+    GroupMessageInfo, GroupMessageStatus, Locale, LocalePreference, LocaleSnapshot,
+    LocaleWriteOutcome, LocateMatch, MemoryDetail, MemoryHistoryEntry, MemoryInfo, MutationOutcome,
+    PREVIEW_COMMAND_TIMEOUT_MS, PREVIEW_SELECTED_TEXT_MAX_CHARS, PreviewCommand,
+    PreviewCommandAction, PreviewCommandOutcome, PreviewCommandTarget, PreviewContext,
+    PreviewTabularContext, ProjectInfo, SessionInfo, SessionSummaryPayload, SummaryBatchInfo,
+    SummaryErrorKind, SummaryJobInfo, SummaryJobStatus, SummaryProviderInfo, SummaryStatus,
+    SummaryTrigger, TodoInfo, TodoStoredStatus, ToolCallInfo, TurnRecord, UsagePayload,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -505,6 +505,19 @@ pub enum Request {
         message_id: i64,
         text: String,
     },
+    /// 读取界面语言设置(spec 2026-10-12-dozer-i18n-design §4.2)。daemon 返回
+    /// 持久化的 `LocaleSnapshot`;无文件时返回默认快照(system/en/revision 0)。
+    GetLocale,
+    /// 写入界面语言设置。`expected_revision` 做 CAS:失配不回 `Error`,而是回
+    /// `Reply::LocaleWrite { outcome: Conflict }` 并带上最新快照。`system_candidates`
+    /// 仅在 System 偏好下用于解析生效语言,不改变显式偏好。该字段为后期追加,
+    /// 旧客户端不传时按空候选处理。
+    SetLocale {
+        preference: LocalePreference,
+        expected_revision: u64,
+        #[serde(default)]
+        system_candidates: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -718,6 +731,14 @@ pub enum Reply {
     GroupMessages {
         messages: Vec<GroupMessageInfo>,
         latest_rev: i64,
+    },
+    /// `GetLocale` 应答:当前权威快照。
+    Locale {
+        snapshot: LocaleSnapshot,
+    },
+    /// `SetLocale` 应答:Applied(已落盘)或 Conflict(带最新快照)。
+    LocaleWrite {
+        outcome: LocaleWriteOutcome,
     },
 }
 
@@ -991,6 +1012,68 @@ mod tests {
             next_offset: 2,
         });
         assert!(line.contains(r#""type":"attached""#));
+    }
+
+    #[test]
+    fn locale_request_and_replies_roundtrip() {
+        let get = Request::GetLocale;
+        assert_eq!(
+            decode_line::<Request>(encode_line(&get).trim()).unwrap(),
+            get
+        );
+
+        let set = Request::SetLocale {
+            preference: LocalePreference::Explicit {
+                locale: Locale(Locale::ZH_CN.into()),
+            },
+            expected_revision: 3,
+            system_candidates: vec!["zh-HK".into(), "en-US".into()],
+        };
+        assert_eq!(
+            decode_line::<Request>(encode_line(&set).trim()).unwrap(),
+            set
+        );
+
+        let snap = LocaleSnapshot {
+            schema_version: 1,
+            preference: LocalePreference::System,
+            active_locale: Locale(Locale::EN.into()),
+            revision: 4,
+        };
+        let reply = Reply::Locale {
+            snapshot: snap.clone(),
+        };
+        assert_eq!(
+            decode_line::<Reply>(encode_line(&reply).trim()).unwrap(),
+            reply
+        );
+
+        let write = Reply::LocaleWrite {
+            outcome: LocaleWriteOutcome::Conflict { snapshot: snap },
+        };
+        assert_eq!(
+            decode_line::<Reply>(encode_line(&write).trim()).unwrap(),
+            write
+        );
+    }
+
+    #[test]
+    fn set_locale_without_system_candidates_decodes_empty() {
+        // `system_candidates` 为后期追加字段;老客户端不发时按空候选处理,
+        // 而不是报 "missing field"。
+        let old = r#"{"type":"set_locale","preference":{"kind":"system"},"expected_revision":0}"#;
+        match decode_line::<Request>(old).unwrap() {
+            Request::SetLocale {
+                preference,
+                expected_revision,
+                system_candidates,
+            } => {
+                assert_eq!(preference, LocalePreference::System);
+                assert_eq!(expected_revision, 0);
+                assert!(system_candidates.is_empty());
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     #[test]

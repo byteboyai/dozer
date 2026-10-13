@@ -2168,6 +2168,7 @@ dependencies = [
  "bytehost-client",
  "dozer-client",
  "dozer-core",
+ "dozer-i18n",
  "futures-util",
  "libc",
  "portable-pty",

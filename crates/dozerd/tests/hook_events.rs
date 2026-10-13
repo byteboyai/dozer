@@ -57,6 +57,13 @@ async fn hook_event_reaches_attached_client_and_list() {
                     file_edit_history: test_file_edit_history(),
                     groups: test_group_service(),
                     apps: bytehost_apps::service::AppService::unavailable("test"),
+                    locale: std::sync::Arc::new(
+                        dozerd::locale_settings::LocaleSettingsStore::open(
+                            &std::env::temp_dir()
+                                .join(format!("dz-locale-{}.json", uuid::Uuid::new_v4())),
+                        )
+                        .unwrap(),
+                    ),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -296,6 +303,13 @@ async fn project_open_and_list_roundtrip() {
                     file_edit_history: test_file_edit_history(),
                     groups: test_group_service(),
                     apps: bytehost_apps::service::AppService::unavailable("test"),
+                    locale: std::sync::Arc::new(
+                        dozerd::locale_settings::LocaleSettingsStore::open(
+                            &std::env::temp_dir()
+                                .join(format!("dz-locale-{}.json", uuid::Uuid::new_v4())),
+                        )
+                        .unwrap(),
+                    ),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -362,6 +376,13 @@ async fn record_and_get_session_summary_roundtrip() {
                     file_edit_history: test_file_edit_history(),
                     groups: test_group_service(),
                     apps: bytehost_apps::service::AppService::unavailable("test"),
+                    locale: std::sync::Arc::new(
+                        dozerd::locale_settings::LocaleSettingsStore::open(
+                            &std::env::temp_dir()
+                                .join(format!("dz-locale-{}.json", uuid::Uuid::new_v4())),
+                        )
+                        .unwrap(),
+                    ),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -467,6 +488,13 @@ async fn close_with_summary_kills_session_after_ai_summary_recorded() {
                     file_edit_history: test_file_edit_history(),
                     groups: test_group_service(),
                     apps: bytehost_apps::service::AppService::unavailable("test"),
+                    locale: std::sync::Arc::new(
+                        dozerd::locale_settings::LocaleSettingsStore::open(
+                            &std::env::temp_dir()
+                                .join(format!("dz-locale-{}.json", uuid::Uuid::new_v4())),
+                        )
+                        .unwrap(),
+                    ),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -580,6 +608,13 @@ async fn list_conversations_with_summaries_joins_correctly() {
                     file_edit_history: test_file_edit_history(),
                     groups: test_group_service(),
                     apps: bytehost_apps::service::AppService::unavailable("test"),
+                    locale: std::sync::Arc::new(
+                        dozerd::locale_settings::LocaleSettingsStore::open(
+                            &std::env::temp_dir()
+                                .join(format!("dz-locale-{}.json", uuid::Uuid::new_v4())),
+                        )
+                        .unwrap(),
+                    ),
                 },
                 dozerd::task_poller::new_in_flight(),
             )
@@ -693,6 +728,13 @@ async fn aider_hook_sequence_drives_state_machine() {
                     file_edit_history: test_file_edit_history(),
                     groups: test_group_service(),
                     apps: bytehost_apps::service::AppService::unavailable("test"),
+                    locale: std::sync::Arc::new(
+                        dozerd::locale_settings::LocaleSettingsStore::open(
+                            &std::env::temp_dir()
+                                .join(format!("dz-locale-{}.json", uuid::Uuid::new_v4())),
+                        )
+                        .unwrap(),
+                    ),
                 },
                 dozerd::task_poller::new_in_flight(),
             )

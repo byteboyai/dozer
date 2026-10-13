@@ -5,13 +5,15 @@ use bytehost_apps::proto::{AppReply, AppRequest};
 use dozer_core::protocol::{
     AgentKind, AgentState, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
     CodeHealthReportInfo, ConversationSummary, GroupCancelScope, GroupInfo, GroupMessageInfo,
-    PreviewCommand, PreviewContext, ProjectInfo, Reply, Request, SessionInfo,
-    SessionSummaryPayload, TodoInfo, TurnRecord, UsagePayload, decode_line, encode_line,
+    LocalePreference, LocaleSnapshot, LocaleWriteOutcome, PreviewCommand, PreviewContext,
+    ProjectInfo, Reply, Request, SessionInfo, SessionSummaryPayload, TodoInfo, TurnRecord,
+    UsagePayload, decode_line, encode_line,
 };
 use dozer_services::{
     BookmarkService, BoxFuture, CodeHealthService, ContextService, ConversationRows,
-    ConversationService, EditHistoryService, GroupChatService, MemoryService, PreciseEdit,
-    ProjectService, ServiceError, ServiceErrorKind, TodoService, UsageRows, UsageService,
+    ConversationService, EditHistoryService, GroupChatService, LocaleService, MemoryService,
+    PreciseEdit, ProjectService, ServiceError, ServiceErrorKind, TodoService, UsageRows,
+    UsageService,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -403,6 +405,32 @@ impl Client {
             .await?
         {
             Reply::Bookmarks { bookmarks } => Ok(bookmarks),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn get_locale(&self) -> Result<LocaleSnapshot> {
+        match self.roundtrip(&Request::GetLocale).await? {
+            Reply::Locale { snapshot } => Ok(snapshot),
+            other => bail!("意外应答: {other:?}"),
+        }
+    }
+
+    pub async fn set_locale(
+        &self,
+        preference: LocalePreference,
+        expected_revision: u64,
+        system_candidates: Vec<String>,
+    ) -> Result<LocaleWriteOutcome> {
+        match self
+            .roundtrip(&Request::SetLocale {
+                preference,
+                expected_revision,
+                system_candidates,
+            })
+            .await?
+        {
+            Reply::LocaleWrite { outcome } => Ok(outcome),
             other => bail!("意外应答: {other:?}"),
         }
     }
@@ -2197,6 +2225,24 @@ impl BookmarkService for Client {
     }
 }
 
+impl LocaleService for Client {
+    fn get_locale(&self) -> BoxFuture<'_, Result<LocaleSnapshot, ServiceError>> {
+        Box::pin(async move { Client::get_locale(self).await.map_err(into_service_error) })
+    }
+    fn set_locale(
+        &self,
+        preference: LocalePreference,
+        expected_revision: u64,
+        system_candidates: Vec<String>,
+    ) -> BoxFuture<'_, Result<LocaleWriteOutcome, ServiceError>> {
+        Box::pin(async move {
+            Client::set_locale(self, preference, expected_revision, system_candidates)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+}
+
 #[cfg(test)]
 mod service_error_tests {
     use super::*;
@@ -2312,11 +2358,109 @@ mod todo_service_tests {
 }
 
 #[cfg(test)]
+mod locale_service_tests {
+    use super::todo_service_tests::serve_once;
+    use super::*;
+    use dozer_core::protocol::Locale;
+    use dozer_services::{LocaleService, ServiceErrorKind};
+
+    fn snap(rev: u64, loc: &str) -> LocaleSnapshot {
+        LocaleSnapshot {
+            schema_version: 1,
+            preference: LocalePreference::Explicit {
+                locale: Locale(loc.into()),
+            },
+            active_locale: Locale(loc.into()),
+            revision: rev,
+        }
+    }
+
+    #[tokio::test]
+    async fn get_locale_comes_back_as_snapshot() {
+        let sock = serve_once(
+            "locale-get",
+            Some(Reply::Locale {
+                snapshot: snap(2, "zh-CN"),
+            }),
+        );
+        let got = LocaleService::get_locale(&Client::new(sock.clone())).await;
+        assert_eq!(got, Ok(snap(2, "zh-CN")));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn set_locale_returns_applied_outcome() {
+        let sock = serve_once(
+            "locale-set",
+            Some(Reply::LocaleWrite {
+                outcome: LocaleWriteOutcome::Applied {
+                    snapshot: snap(1, "zh-CN"),
+                },
+            }),
+        );
+        let got = LocaleService::set_locale(
+            &Client::new(sock.clone()),
+            LocalePreference::Explicit {
+                locale: Locale("zh-CN".into()),
+            },
+            0,
+            vec![],
+        )
+        .await;
+        assert_eq!(
+            got,
+            Ok(LocaleWriteOutcome::Applied {
+                snapshot: snap(1, "zh-CN")
+            })
+        );
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    /// 旧 daemon 不认识 `GetLocale`,回 `Reply::Error` → 客户端分类为 `Rejected`,
+    /// 不无限重试、不 panic。
+    #[tokio::test]
+    async fn old_daemon_error_reply_is_rejected() {
+        let sock = serve_once(
+            "locale-old",
+            Some(Reply::Error {
+                message: "协议错误: unknown variant `get_locale`".into(),
+            }),
+        );
+        let e = LocaleService::get_locale(&Client::new(sock.clone()))
+            .await
+            .unwrap_err();
+        assert_eq!(e.kind, ServiceErrorKind::Rejected);
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    /// 旧 daemon 直接断连 → `Unavailable`。
+    #[tokio::test]
+    async fn old_daemon_hang_up_is_unavailable() {
+        let sock = serve_once("locale-hangup", None);
+        let e = LocaleService::get_locale(&Client::new(sock.clone()))
+            .await
+            .unwrap_err();
+        assert_eq!(e.kind, ServiceErrorKind::Unavailable);
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    /// 意外应答形状 → `Protocol`,不当作空结果吞掉。
+    #[tokio::test]
+    async fn unexpected_reply_is_protocol() {
+        let sock = serve_once("locale-wrong", Some(Reply::Ok));
+        let e = LocaleService::get_locale(&Client::new(sock.clone()))
+            .await
+            .unwrap_err();
+        assert_eq!(e.kind, ServiceErrorKind::Protocol);
+        let _ = std::fs::remove_file(&sock);
+    }
+}
+
+#[cfg(test)]
 mod project_service_tests {
     use super::todo_service_tests::serve_once;
     use super::*;
     use dozer_services::{MemoryService, ProjectService, ServiceErrorKind};
-
     #[tokio::test]
     async fn list_memories_comes_back_as_ok() {
         let sock = serve_once("mem-list", Some(Reply::Memories { memories: vec![] }));

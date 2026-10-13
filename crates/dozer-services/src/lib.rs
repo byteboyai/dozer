@@ -4,9 +4,9 @@
 use dozer_model::{
     AgentKind, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
     CodeHealthReportInfo, ContextItemInfo, ConversationSummary, FileEditHistoryInfo,
-    GroupCancelScope, GroupInfo, GroupMessageInfo, MemoryDetail, MemoryInfo, MutationOutcome,
-    ProjectInfo, SessionInfo, SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus,
-    UsagePayload,
+    GroupCancelScope, GroupInfo, GroupMessageInfo, LocalePreference, LocaleSnapshot,
+    LocaleWriteOutcome, MemoryDetail, MemoryInfo, MutationOutcome, ProjectInfo, SessionInfo,
+    SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus, UsagePayload,
 };
 use std::fmt;
 use std::future::Future;
@@ -325,6 +325,19 @@ pub trait BookmarkService: Send + Sync {
     fn remove_bookmark(&self, id: i64) -> BoxFuture<'_, Result<(), ServiceError>>;
 }
 
+/// 界面语言设置的读写(spec 2026-10-12-dozer-i18n-design §4.2)。daemon 为唯一
+/// 写入者;`set_locale` 用期望 revision 做 CAS,冲突返回最新快照。`system_candidates`
+/// 仅在 System 偏好下用于解析,无权更改显式偏好。参数按值传,future 不借用局部变量。
+pub trait LocaleService: Send + Sync {
+    fn get_locale(&self) -> BoxFuture<'_, Result<LocaleSnapshot, ServiceError>>;
+    fn set_locale(
+        &self,
+        preference: LocalePreference,
+        expected_revision: u64,
+        system_candidates: Vec<String>,
+    ) -> BoxFuture<'_, Result<LocaleWriteOutcome, ServiceError>>;
+}
+
 /// dozerd 自身的生命周期(设置 → 高级)。无参数,future 不借用调用方局部变量。
 /// `ensure_running`:daemon 已响应则直接成功,否则拉起并重试;拉起进程属宿主职责,
 /// 因此生产实现在 `dozer-app`,不在 `dozer-client`。
@@ -347,6 +360,7 @@ pub struct Services {
     pub context: Arc<dyn ContextService>,
     pub edit_history: Arc<dyn EditHistoryService>,
     pub bookmark: Arc<dyn BookmarkService>,
+    pub locale: Arc<dyn LocaleService>,
     pub daemon: Arc<dyn DaemonService>,
 }
 
@@ -411,6 +425,7 @@ mod tests {
             context: Arc::new(MemContext(Ok(vec![]))),
             edit_history: Arc::new(MemEditHistory(Ok(vec![]))),
             bookmark: Arc::new(MemBookmark(Ok(vec![]))),
+            locale: Arc::new(MemLocale(Ok(LocaleSnapshot::default_snapshot()))),
             daemon: Arc::new(MemDaemon {
                 list: Ok(Vec::new()),
                 stop: Ok(()),
@@ -428,6 +443,7 @@ mod tests {
         assert!(Arc::ptr_eq(&s.context, &t.context));
         assert!(Arc::ptr_eq(&s.edit_history, &t.edit_history));
         assert!(Arc::ptr_eq(&s.bookmark, &t.bookmark));
+        assert!(Arc::ptr_eq(&s.locale, &t.locale));
         assert!(Arc::ptr_eq(&s.daemon, &t.daemon));
     }
 
@@ -1093,6 +1109,26 @@ mod tests {
         }
         fn remove_bookmark(&self, _i: i64) -> BoxFuture<'_, Result<(), ServiceError>> {
             unit()
+        }
+    }
+
+    // ---- LocaleService 契约 ----
+
+    struct MemLocale(Result<LocaleSnapshot, ServiceError>);
+
+    impl LocaleService for MemLocale {
+        fn get_locale(&self) -> BoxFuture<'_, Result<LocaleSnapshot, ServiceError>> {
+            let r = self.0.clone();
+            Box::pin(async move { r })
+        }
+        fn set_locale(
+            &self,
+            _p: LocalePreference,
+            _rev: u64,
+            _c: Vec<String>,
+        ) -> BoxFuture<'_, Result<LocaleWriteOutcome, ServiceError>> {
+            let s = LocaleSnapshot::default_snapshot();
+            Box::pin(async move { Ok(LocaleWriteOutcome::Applied { snapshot: s }) })
         }
     }
 

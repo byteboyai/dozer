@@ -67,8 +67,42 @@ python3 scripts/i18n/build_inventory.py
 - 复数变体（`.zero`/`.one`/`.other`）由调用点选择，解析器不内建 ICU；具体规则见 spec §6.2 与 `glossary.md` §5。
 - TS 解析器目前无包内 `npm test` 接线（各 Web 包接线在 Task 08/11）。
 
-## 规格 L01–L14 验收（Task 13 执行，当前未开始）
+## Task 03 验收
 
+计划 Task 03 验收条件：**离线/IO 失败/并发写/重启恢复通过；用户项目数据与终端配置不变。对应 L02/L03/L04/L12。**
+
+| 检查项 | 命令/证据 | 结果 |
+|---|---|---|
+| LocaleService 接入 Services 全部构造点 | `crates/dozer-services` `Services.locale`；`dozer-app` `service_fakes::FakeLocale`/`host_adapters`；`dozerd` `Stores.locale` + 全部测试构造点 | ✅；`check_panel_boundary.py` 仍 ok（面板不新增 client 引用） |
+| 追加 get/set 请求且旧形状不变 | `cargo test -p dozer-core locale`：`locale_request_and_replies_roundtrip`、`set_locale_without_system_candidates_decodes_empty` | ✅ 别名追加，旧 Request/Reply 未改 |
+| 串行 CAS | `cargo test -p dozerd --lib locale`：`concurrent_cas_only_one_wins` | ✅ 8 并发提交仅 1 Applied / 7 Conflict |
+| 原子持久化 + 重启恢复 | `cargo test -p dozerd --test locale_requests setting_survives_daemon_restart` | ✅ 重启后 snapshot/revision 保留 |
+| 配置缺失/损坏恢复 | `... missing_file_uses_default`、`... corrupt_file_recovers_to_default` | ✅ 缺失/损坏均告警回落默认，不 panic |
+| 无变化不推进 revision | `... no_op_set_does_not_advance_revision` | ✅ 相同偏好重提 → revision 不变、不落盘 |
+| revision 冲突不覆盖 | `... stale_revision_is_conflict` | ✅ 过期 expected_revision → Conflict + 最新快照 |
+| 计数溢出明确失败不回绕 | `... revision_overflow_fails_instead_of_wrapping` | ✅ `Err` 含「溢出」，内存保持 `u64::MAX` |
+| System 解析用候选 | `... system_preference_resolved_from_candidates`、`... system_falls_back_to_en` | ✅ `resolve_from_candidates` 决定 active |
+| 旧 daemon 拒绝/断连 → 客户端分类 | `cargo test -p dozer-client locale`：`old_daemon_error_reply_is_rejected`(Rejected)、`old_daemon_hang_up_is_unavailable`(Unavailable) | ✅ 不无限重试、不 panic |
+| 意外应答 → Protocol 降级 | `... unexpected_reply_is_protocol` | ✅ 不吞成空结果 |
+| 旧业务请求仍可用 | `cargo test -p dozer-client`、`-p dozerd` 全绿 | ✅ 旧 Request/Reply 路径未受影响 |
+| 用户项目数据/终端配置不变 | 语言设置独立文件 `config_dir()/locale_settings.json`，不触碰项目/终端配置 | ✅ 无交叉写入 |
+
+### 交付物
+
+- `crates/dozer-model/src/i18n.rs`：`LocaleWriteOutcome`（`Applied`/`Conflict`，带 snapshot）+ `LocaleSnapshot::SCHEMA_VERSION`/`default_snapshot()`。
+- `crates/dozer-services/src/lib.rs`：`LocaleService` trait（`get_locale`/`set_locale`）+ `Services.locale` + `MemLocale` 假服务。
+- `crates/dozer-core/src/protocol.rs`：`Request::GetLocale`/`SetLocale`、`Reply::Locale`/`LocaleWrite` 及类型重导出。
+- `crates/dozer-client/src/lib.rs`：`Client::get_locale`/`set_locale` + `impl LocaleService` + 降级测试。
+- `crates/dozerd/src/locale_settings.rs`：`LocaleSettingsStore`（CAS/原子 temp+rename+fsync/损坏恢复/溢出失败/无变化不推进）+ 10 单测；`dozerd/src/{lib,main,server}.rs` 接线。
+- `crates/dozerd/tests/locale_requests.rs`：4 条 UDS 契约测试。
+
+### 残留问题
+
+- 系统语言候选（`system_candidates`）的实际来源（读取 OS 有序语言偏好）与 App 快照/窗口同步在 Task 04；本任务只定义字段与解析。
+- 「启动 System 刷新带 expected_revision 提交」的完整循环（读取后提交、陈旧探测回包不覆盖显式偏好）由 Task 04 的平台探测 + 哨兵驱动实现；本任务保证 CAS 语义到位。
+- 既有无关测试失败保留：`usage_probe::host::tests::host_site_citations_point_at_the_code_they_name`。
+
+## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |
 |---|---|---|
 | L01 | 系统语言匹配（en-US / zh-Hans-CN / zh-TW / 未知 / 空） | ⬜ 待实施 |

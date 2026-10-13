@@ -12,6 +12,7 @@ pub mod group_service;
 pub mod group_store;
 pub mod headless_agent;
 pub mod ide_bridge;
+pub mod locale_settings;
 pub mod memory;
 pub mod preview_commands;
 pub mod preview_context;

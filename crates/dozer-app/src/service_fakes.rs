@@ -2,14 +2,15 @@
 use dozer_model::{
     AgentKind, BookmarkInfo, BookmarkScope, CategoryInfo, CategoryMoveDirection,
     CodeHealthReportInfo, ContextItemInfo, ConversationSummary, FileEditHistoryInfo, GroupAuthor,
-    GroupCancelScope, GroupInfo, GroupMessageInfo, MemoryDetail, MemoryInfo, MutationOutcome,
-    ProjectInfo, SessionInfo, SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus,
+    GroupCancelScope, GroupInfo, GroupMessageInfo, LocalePreference, LocaleSnapshot,
+    LocaleWriteOutcome, MemoryDetail, MemoryInfo, MutationOutcome, ProjectInfo, SessionInfo,
+    SessionSummaryPayload, SummaryBatchInfo, TodoInfo, TodoStoredStatus,
 };
 use dozer_services::{
     BookmarkService, BoxFuture, CodeHealthService, ContextService, ConversationRows,
-    ConversationService, DaemonService, EditHistoryService, GroupChatService, MemoryService,
-    PostedMessages, PreciseEdit, ProjectService, ServiceError, ServiceErrorKind, Services,
-    TodoService,
+    ConversationService, DaemonService, EditHistoryService, GroupChatService, LocaleService,
+    MemoryService, PostedMessages, PreciseEdit, ProjectService, ServiceError, ServiceErrorKind,
+    Services, TodoService,
 };
 use std::sync::{Arc, Mutex};
 
@@ -193,6 +194,7 @@ pub(crate) fn base_services() -> Services {
         context: Arc::new(FakeContext::default()),
         edit_history: Arc::new(FakeEditHistory::default()),
         bookmark: Arc::new(FakeBookmark::default()),
+        locale: Arc::new(FakeLocale::default()),
         daemon: Arc::new(FakeDaemon::default()),
     }
 }
@@ -1254,6 +1256,59 @@ impl DaemonService for FakeDaemon {
         s.calls.push("ensure_running()".to_string());
         let r = s.ensure.clone();
         Box::pin(async move { r })
+    }
+}
+
+// ---- FakeLocale ----
+
+/// `Clone` 共享状态。`Default` = 跟随系统、生效 en、revision 0;`set_locale` 正常提交。
+#[derive(Clone)]
+pub(crate) struct FakeLocale {
+    snapshot: LocaleSnapshot,
+    calls: Vec<String>,
+}
+
+impl Default for FakeLocale {
+    fn default() -> Self {
+        Self {
+            snapshot: LocaleSnapshot::default_snapshot(),
+            calls: vec![],
+        }
+    }
+}
+
+impl FakeLocale {
+    pub(crate) fn snapshot(&self) -> LocaleSnapshot {
+        self.snapshot.clone()
+    }
+    pub(crate) fn calls(&self) -> Vec<String> {
+        self.calls.clone()
+    }
+    pub(crate) fn into_services(self) -> Services {
+        Services {
+            locale: Arc::new(self),
+            ..base_services()
+        }
+    }
+}
+
+impl LocaleService for FakeLocale {
+    fn get_locale(&self) -> BoxFuture<'_, Result<LocaleSnapshot, ServiceError>> {
+        let s = self.snapshot.clone();
+        Box::pin(async move { Ok(s) })
+    }
+    fn set_locale(
+        &self,
+        preference: LocalePreference,
+        expected_revision: u64,
+        _system_candidates: Vec<String>,
+    ) -> BoxFuture<'_, Result<LocaleWriteOutcome, ServiceError>> {
+        let _ = expected_revision;
+        let mut next = self.snapshot.clone();
+        next.preference = preference;
+        next.revision = self.snapshot.revision + 1;
+        let outcome = LocaleWriteOutcome::Applied { snapshot: next };
+        Box::pin(async move { Ok(outcome) })
     }
 }
 

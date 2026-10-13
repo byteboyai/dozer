@@ -77,6 +77,9 @@ async fn main() -> Result<()> {
     let file_edit_history = Arc::new(dozerd::file_edit_history::FileEditHistoryStore::new(
         &dozer_core::paths::state_dir().join("dozer.db"),
     )?);
+    let locale = Arc::new(dozerd::locale_settings::LocaleSettingsStore::open(
+        &dozerd::locale_settings::LocaleSettingsStore::default_path(),
+    )?);
     let groups = {
         let store = Arc::new(dozerd::group_store::GroupStore::new(
             &dozer_core::paths::state_dir().join("dozer.db"),
@@ -168,6 +171,7 @@ async fn main() -> Result<()> {
             file_edit_history,
             groups,
             apps: apps.clone(),
+            locale,
         },
         in_flight,
     );

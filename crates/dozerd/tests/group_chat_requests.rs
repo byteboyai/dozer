@@ -81,6 +81,12 @@ async fn start_daemon() -> TestDaemon {
         ),
         groups,
         apps: bytehost_apps::service::AppService::unavailable("test"),
+        locale: std::sync::Arc::new(
+            dozerd::locale_settings::LocaleSettingsStore::open(
+                &std::env::temp_dir().join(format!("dz-locale-{}.json", uuid::Uuid::new_v4())),
+            )
+            .unwrap(),
+        ),
     };
     let ide_lock_dir = tempfile::tempdir().expect("ide_lock_dir tempdir");
     let s = sock.clone();

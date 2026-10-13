@@ -98,12 +98,12 @@
 **修改：** `dozer-services/src/lib.rs`、`dozer-client/src/lib.rs`、`dozer-core/src/{protocol,paths}.rs`、`dozerd/src/{lib,main,server}.rs`。
 **新增：** `dozerd/src/locale_settings.rs` 及服务/协议测试。
 
-- [ ] LocaleService 接入 Services 及全部真实/假服务构造点；面板不新增 `dozer_client` 引用。
-- [ ] 追加 get/set 请求与带 snapshot 的冲突结果，保留旧 Request/Reply 形状；旧服务不支持新请求时客户端明确分类。
-- [ ] 实现 daemon 串行 CAS、原子持久化、配置缺失/损坏恢复；注入文件系统失败测试，不依赖 chmod 在不同环境中的偶然效果。
-- [ ] 无变化的偏好及解析结果不推进 revision；revision 冲突不覆盖。处理计数溢出为明确失败，不回绕。
-- [ ] 启动 System 刷新采用读取后带 expected_revision 的提交；显式偏好不被陈旧探测回包覆盖；同一配置恢复流程只由 daemon 写入。
-- [ ] 测试旧业务请求仍可用、旧 daemon 拒绝/断连新请求、新客户端降级，不自动进入无界重试。
+- [x] LocaleService 接入 Services 及全部真实/假服务构造点；面板不新增 `dozer_client` 引用。
+- [x] 追加 get/set 请求与带 snapshot 的冲突结果，保留旧 Request/Reply 形状；旧服务不支持新请求时客户端明确分类。
+- [x] 实现 daemon 串行 CAS、原子持久化、配置缺失/损坏恢复；注入文件系统失败测试，不依赖 chmod 在不同环境中的偶然效果。
+- [x] 无变化的偏好及解析结果不推进 revision；revision 冲突不覆盖。处理计数溢出为明确失败，不回绕。
+- [x] 启动 System 刷新采用读取后带 expected_revision 的提交；显式偏好不被陈旧探测回包覆盖；同一配置恢复流程只由 daemon 写入。
+- [x] 测试旧业务请求仍可用、旧 daemon 拒绝/断连新请求、新客户端降级，不自动进入无界重试。
 
 **验收：**离线/IO 失败/并发写/重启恢复通过；用户项目数据与终端配置不变。对应 L02/L03/L04/L12。
 
