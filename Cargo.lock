@@ -1988,6 +1988,7 @@ dependencies = [
  "dozer-codehealth",
  "dozer-core",
  "dozer-hook",
+ "dozer-i18n",
  "dozer-mcp",
  "dozer-model",
  "dozer-panel-usage",
@@ -2092,6 +2093,15 @@ dependencies = [
  "libc",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "dozer-i18n"
+version = "0.1.0"
+dependencies = [
+ "dozer-model",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

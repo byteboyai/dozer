@@ -39,6 +39,34 @@ python3 scripts/i18n/build_inventory.py
 - 扫描器以静态字面量为主；无静态字面量但可显示文本的入口（如 Rust 拼接 payload、服务 message）由各迁移任务沿调用链人工补登。
 - 既有无关测试失败保留：`usage_probe::host::tests::host_site_citations_point_at_the_code_they_name`。
 
+## Task 02 验收
+
+计划 Task 02 验收条件：**Rust/TS 共享向量同结果；注入缺 key/参数不一致会检查失败；中文展示确实来自 zh-CN 资源。对应 L05/L06。**
+
+| 检查项 | 命令 | 结果 |
+|---|---|---|
+| Rust/TS 共享向量同结果 | `cargo test -p dozer-i18n --test vectors` + `node crates/dozer-app/web/shared/i18n/i18n.test.ts` | ✅ 两读 `vectors/interpolation.json`，同结果 |
+| 缺 key 检查失败 | `python3 scripts/i18n/check_resources.py <临时目录>` | ✅ 注入缺 key/多余 key → FAIL |
+| 参数不一致检查失败 | 同上（占位符集不同） | ✅ FAIL |
+| 重复 key 覆盖前发现 | 同上（`object_pairs_hook`） | ✅ FAIL |
+| 中文来自 zh-CN 资源 | `cargo test -p dozer-app i18n::` | ✅ `settings.title`→「设置」来自 `zh-CN.json`，非 fallback |
+| 解析器一致性单测 | `cargo test -p dozer-i18n` | ✅ 18 单测 + 1 向量测试通过 |
+
+### 交付物
+
+- `crates/dozer-model/src/i18n.rs`：`Locale`/`LocalePreference`/`LocaleSnapshot`/`LocalizedText` + 具名参数。
+- `crates/dozer-i18n/`：`bundle.rs`(装载/校验/parity)、`interp.rs`(插值)、`locale.rs`(规范化)、`lib.rs`(Resolver/fallback)、`vectors/interpolation.json`、`tests/`。
+- `crates/dozer-app/locales/host/{en,zh-CN}.json`：最小 Host 词表。
+- `crates/dozer-app/src/i18n.rs`：编译期嵌入 + `host_resolver()` 接缝。
+- `crates/dozer-app/web/shared/i18n/i18n.ts`、`i18n.test.ts`：中立共享 TS 解析器。
+- `scripts/i18n/check_resources.py`：资源完整性检查。
+
+### 残留问题
+
+- 面板标题尚未接入 `PanelDescriptor`/`product.rs`/设置页（Task 04/05）。
+- 复数变体（`.zero`/`.one`/`.other`）由调用点选择，解析器不内建 ICU；具体规则见 spec §6.2 与 `glossary.md` §5。
+- TS 解析器目前无包内 `npm test` 接线（各 Web 包接线在 Task 08/11）。
+
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 
 | ID | 场景 | 状态 |

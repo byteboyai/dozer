@@ -1,0 +1,26 @@
+{
+  "settings.title": "设置",
+  "settings.language.title": "语言",
+  "settings.language.follow_system": "跟随系统",
+  "settings.language.english": "English",
+  "settings.language.simplified_chinese": "简体中文",
+  "settings.language.saving": "保存中…",
+  "settings.language.save_failed": "语言设置保存失败",
+  "settings.language.conflict": "语言已在别处被修改，请重新选择。",
+  "settings.language.unsupported": "当前服务版本不支持语言设置，请升级。",
+
+  "panel.files": "文件",
+  "panel.todo": "待办",
+  "panel.project": "项目",
+  "panel.database": "数据库",
+  "panel.ssh": "SSH 主机",
+  "panel.web": "浏览器",
+  "panel.agent": "代理",
+  "panel.group_chat": "群聊",
+  "panel.conversations": "对话",
+  "panel.usage": "用量",
+  "panel.code_health": "代码健康度",
+
+  "error.save_failed": "保存失败：{message}",
+  "error.generic": "出了点问题"
+}

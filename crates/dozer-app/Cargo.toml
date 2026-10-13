@@ -14,6 +14,7 @@ default = []
 [dependencies]
 dozer-core = { path = "../dozer-core", features = ["logging"] }
 dozer-model = { path = "../dozer-model" }
+dozer-i18n = { path = "../dozer-i18n" }
 dozer-client = { path = "../dozer-client" }
 dozer-services = { path = "../dozer-services" }
 bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }

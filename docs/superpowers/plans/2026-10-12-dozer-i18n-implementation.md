@@ -84,12 +84,12 @@
 **新增：** `crates/dozer-model/src/i18n.rs`、`crates/dozer-i18n/{Cargo.toml,src/lib.rs,tests/}`、Host/面板 locale 目录、共享 TS 解析模块、`scripts/i18n/check_resources.py`。
 **修改：** model 导出及相关 Cargo 依赖；workspace 现有 `crates/*` 自动纳入新 crate，无需重复枚举。
 
-- [ ] 定义 Locale、LocalePreference、LocaleSnapshot、LocalizedText、具名参数；用具名请求结构代替易混淆的同类型位置参数。
-- [ ] 先写 fallback、空值、模板错误、转义、缺参数、未知 owner、恶意 HTML、Unicode 的共享 JSON 测试向量，再实现 Rust/TS 同规则解析。
-- [ ] 建立最小 Host 词表：语言设置、面板标题、通用保存失败。现有中文迁入 zh-CN，同 key 补英文；使用 Typed key/常量或受检查的字面量，避免拼接动态 key 无法审计。
-- [ ] 校验重复 key、空字符串、非字符串值、占位符/key 集差异；duplicate key 必须在 JSON 反序列化覆盖前发现。
-- [ ] 提供目录/owner 注册方式，使独立面板可随自身资源使用解析器；编译期嵌入 Rust 资源，前端静态 import，运行离线。
-- [ ] 明确格式化、复数变体及术语规则；不把 UI locale 接入 PTY 环境或 MCP。
+- [x] 定义 Locale、LocalePreference、LocaleSnapshot、LocalizedText、具名参数；用具名请求结构代替易混淆的同类型位置参数。
+- [x] 先写 fallback、空值、模板错误、转义、缺参数、未知 owner、恶意 HTML、Unicode 的共享 JSON 测试向量，再实现 Rust/TS 同规则解析。
+- [x] 建立最小 Host 词表：语言设置、面板标题、通用保存失败。现有中文迁入 zh-CN，同 key 补英文；使用 Typed key/常量或受检查的字面量，避免拼接动态 key 无法审计。
+- [x] 校验重复 key、空字符串、非字符串值、占位符/key 集差异；duplicate key 必须在 JSON 反序列化覆盖前发现。
+- [x] 提供目录/owner 注册方式，使独立面板可随自身资源使用解析器；编译期嵌入 Rust 资源，前端静态 import，运行离线。
+- [x] 明确格式化、复数变体及术语规则；不把 UI locale 接入 PTY 环境或 MCP。
 
 **验收：**Rust/TS 共享向量同结果；注入缺 key/参数不一致会检查失败；中文展示确实来自 zh-CN 资源。对应 L05/L06。
 

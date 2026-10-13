@@ -58,7 +58,8 @@
 | Task | 状态 | 证据 | 残留 |
 |---|---|---|---|
 | 01 清单与生产入口基线 | ✅ 完成 | 本文件、`baseline.md`、`glossary.md`、`inventory.json`、`scripts/i18n/` | 迁移尚未开始，见 `acceptance.md` |
-| 02–05 | 未开始 | — | 依赖 01 |
+| 02 双语资源、解析器与资源校验 | ✅ 完成 | `dozer-model/src/i18n.rs`、`dozer-i18n/`(解析/校验/插值/向量)、`dozer-app/locales/host/`、`web/shared/i18n/`、`scripts/i18n/check_resources.py` | 标题接入 `PanelDescriptor`/设置页在 Task 04/05 |
+| 03–05 | 未开始 | — | 依赖 02 |
 | 06–08 | 未开始 | — | 依赖 05 |
 | 09–11 | 未开始 | — | 依赖 06/07/08 |
 | 12–14 | 未开始 | — | 见计划 §2 |
@@ -70,7 +71,7 @@
 | 候选扫描 | `scripts/i18n/scan_sources.py` | 提取 CJK 候选并分类（Task 01） |
 | 清单生成 | `scripts/i18n/build_inventory.py` | 生成 `inventory.json`、校验任务分配（Task 01） |
 | 面板边界 | `scripts/audit/check_panel_boundary.py` | 既有；面板不得新增 client 依赖 |
-| 资源校验 | `scripts/i18n/check_resources.py` | 待 Task 02 新增 |
+| 资源校验 | `scripts/i18n/check_resources.py` | key/占位符/空值/重复 key 对齐（Task 02） |
 | 迁移门禁 | `scripts/check-i18n.sh` | 待 Task 12 新增 |
 
 ## 6. 完成定义提醒

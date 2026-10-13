@@ -1,0 +1,97 @@
+{
+  "schema": 1,
+  "_comment": "Rust 与 TS 解析器共用的一致性测试向量。两边读同一文件,必须得到相同的 resolved 结果。template 为资源字符串,args 为具名参数,expect 为渲染结果;若 expect 为 null,表示不可渲染(缺参数/非法模板),调用方须回落。",
+  "interpolate": [
+    { "name": "plain", "template": "Hello, world", "args": {}, "expect": "Hello, world" },
+    {
+      "name": "single_arg",
+      "template": "已删除 {count} 个文件",
+      "args": { "count": "3" },
+      "expect": "已删除 3 个文件"
+    },
+    {
+      "name": "multi_arg",
+      "template": "从 {from} 移动到 {to}",
+      "args": { "from": "a.txt", "to": "b.txt" },
+      "expect": "从 a.txt 移动到 b.txt"
+    },
+    {
+      "name": "repeated_arg",
+      "template": "{x} 与 {x}",
+      "args": { "x": "yes" },
+      "expect": "yes 与 yes"
+    },
+    {
+      "name": "literal_braces_open",
+      "template": "{{literal}}",
+      "args": {},
+      "expect": "{literal}"
+    },
+    {
+      "name": "literal_and_arg",
+      "template": "{{{name}}}",
+      "args": { "name": "x" },
+      "expect": "{x}"
+    },
+    {
+      "name": "missing_arg_is_unrenderable",
+      "template": "共 {count} 项",
+      "args": {},
+      "expect": null
+    },
+    {
+      "name": "unbalanced_open_is_unrenderable",
+      "template": "oops {",
+      "args": {},
+      "expect": null
+    },
+    {
+      "name": "unbalanced_close_is_unrenderable",
+      "template": "oops }",
+      "args": {},
+      "expect": null
+    },
+    {
+      "name": "numeric_first_char_invalid_name",
+      "template": "{1x}",
+      "args": { "1x": "v" },
+      "expect": null
+    },
+    {
+      "name": "dash_in_name_invalid",
+      "template": "{a-b}",
+      "args": { "a-b": "v" },
+      "expect": null
+    },
+    {
+      "name": "unicode_arg_value",
+      "template": "你好 {name}",
+      "args": { "name": "世界" },
+      "expect": "你好 世界"
+    },
+    {
+      "name": "html_arg_not_escaped_by_parser",
+      "template": "<b>{v}</b>",
+      "args": { "v": "<script>alert(1)</script>" },
+      "expect": "<b><script>alert(1)</script></b>"
+    },
+    {
+      "name": "extra_args_ignored",
+      "template": "hi {a}",
+      "args": { "a": "1", "b": "2" },
+      "expect": "hi 1"
+    },
+    {
+      "name": "arg_value_braces_not_expanded",
+      "template": "{a}",
+      "args": { "a": "{b}" },
+      "expect": "{b}"
+    },
+    {
+      "name": "empty_template",
+      "template": "",
+      "args": {},
+      "expect": ""
+    }
+  ]
+}

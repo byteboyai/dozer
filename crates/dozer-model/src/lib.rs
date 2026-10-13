@@ -3,6 +3,7 @@
 mod agent;
 mod conversation;
 mod group_chat;
+mod i18n;
 mod misc;
 mod preview;
 mod project;
@@ -13,6 +14,7 @@ mod usage;
 pub use agent::*;
 pub use conversation::*;
 pub use group_chat::*;
+pub use i18n::*;
 pub use misc::*;
 pub use preview::*;
 pub use project::*;

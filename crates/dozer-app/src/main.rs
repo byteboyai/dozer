@@ -9,6 +9,7 @@ mod external_apps;
 mod frosted;
 mod git_accounts;
 mod host_adapters;
+mod i18n;
 mod keymap;
 mod layout;
 mod menu_spec;
