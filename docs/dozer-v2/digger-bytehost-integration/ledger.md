@@ -928,11 +928,12 @@
   - **dozer `8ff87cba`**: C9 切片 6 退役 `R-HOVERSLOT-VARIANTS` 规则时**漏删陈旧单测** `test_slot_enum_counted_in_panel_host`(仍断言已退役规则);删除该测试并同步 `ENUM` 夹具去掉 `HoverSlot`。
   - **digger `99ad282`**: Task 22 迁移测试 `product.rs` **未 fmt 即提交**,补 fmt。
   - **bytehost `fe9373d`**: README 消费者条目原写「Tauri 宿主,嵌入待做」(两处均误),改为 iced+wry / 进程内嵌入已实现。
-- **判定汇总:** **pass 6**(A3/A7/A10/A11/A12 + A1 代码层)· **partial 12**;硬缺口三处——**A1 发布层**(无 tag/revision,靠不提交 patch)、**A17 生产端**(真实生产者未跑、token 如实 0)、**A18 签名**(0 有效身份→仅 adhoc 候选包)。**整体不标"完全接入"。** L3/L4 真机项(A5/A6/A9/A14/A15/A16 等)因屏幕录制/辅助功能权限与无 GUI runner → not-run,并入 §3 人工项。
-- **ADR:**Digger ADR-001/011 **保持 Proposed**(A1/A18 未过,不升 Accepted);正文已正确声明"不用 Tauri",未改。
+- **判定汇总(2026-10-12 首次):** **pass 6** / **partial 12**;硬缺口三处——**A1 发布层**、**A17 生产端**(真实生产者未跑、token 如实 0)、**A18 签名**。**整体不标"完全接入"。** L3/L4 真机项(A5/A6/A9/A14/A15/A16 等)因屏幕录制/辅助功能权限与无 GUI runner → not-run,并入 §3 人工项。
+- **判定复评(2026-10-13):** C10 方案 C 归零(`R-OVERLAY-DUP` 3→0)、Task 22 远端补齐(bytehost tag `v0.2.0` + dozer revision `67ab0e65`,三仓 `[patch]` 删除)→ **pass 7 · partial 11**;硬缺口剩两处——**A17 生产端**、**A18 签名**。A18 于同日本机诊断为不可用(仅过期 Apple Development 证书 + CA,无 Developer ID Application;用户裁决不申请)→ 永久阻塞,维持 ad-hoc 候选包。
+- **ADR:**Digger ADR-001/011 **保持 Proposed**(A18 未过,不升 Accepted);正文已正确声明"不用 Tauri",未改。
 - **未决项 / 阻塞(移交用户裁决):**
-  - **C10 完全归零**:方案 B 落地后 `R-OVERLAY-DUP` 残留 **3**(基线上限);到 0 需方案 A/C——**开放后续决策**。
-  - **Task 22 远端部分**:bytehost 发 tag、dozer pin revision、签名——**均待远端写授权/Developer ID 凭据**。
+  - **C10 完全归零**:✅ 已解决(2026-10-13 方案 C,`R-OVERLAY-DUP` 0;见 Task 21 切片 10)。
+  - **Task 22 远端部分**:✅ 已解决(2026-10-13 用户授权远端写:bytehost tag `v0.2.0`、dozer revision `67ab0e65`、digger 钉版)。仅第 4 条签名永久阻塞(见上)。
 - **提交记录(本任务):** bytehost `cbb4719`/`b7183bb`/`fe9373d`;dozer `8f479a81`/`8ff87cba` + 本验收提交;digger `99ad282`。
 
 
