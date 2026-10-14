@@ -130,7 +130,7 @@ pub fn notices_to_pending(notices: Vec<UsageNotice>) -> Vec<crate::extensions::t
             crate::extensions::toast::Pending {
                 scope: LOG,
                 level,
-                text: notice.text,
+                text: crate::extensions::toast::literal(notice.text),
                 key: notice.key,
             }
         })

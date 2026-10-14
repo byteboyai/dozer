@@ -104,7 +104,7 @@ pub fn apply(state: &mut State, msg: Message) -> Followup {
             state.outbox.push(
                 LOG,
                 crate::extensions::toast::Level::Error,
-                format!("加载上下文列表失败: {e}"),
+                crate::extensions::toast::literal(format!("加载上下文列表失败: {e}")),
             );
             Followup::None
         }
@@ -118,7 +118,7 @@ pub fn apply(state: &mut State, msg: Message) -> Followup {
                 state.outbox.push(
                     LOG,
                     crate::extensions::toast::Level::Error,
-                    format!("移除失败: {e}"),
+                    crate::extensions::toast::literal(format!("移除失败: {e}")),
                 );
             }
             Followup::Refresh
@@ -129,7 +129,9 @@ pub fn apply(state: &mut State, msg: Message) -> Followup {
                 state.outbox.push(
                     LOG,
                     crate::extensions::toast::Level::Warning,
-                    format!("已发送到终端,但未能记录到上下文列表: {e}"),
+                    crate::extensions::toast::literal(format!(
+                        "已发送到终端,但未能记录到上下文列表: {e}"
+                    )),
                 );
             }
             Followup::Refresh
@@ -387,7 +389,7 @@ mod tests {
         );
         assert_eq!(s.items().len(), 1);
         apply(&mut s, Message::Loaded(Err("boom".into())));
-        assert!(s.take_outbox()[0].text.contains("boom"));
+        assert!(s.take_outbox()[0].text_stable().contains("boom"));
         assert_eq!(s.items().len(), 1, "加载失败不清空已有列表");
     }
 
@@ -410,7 +412,7 @@ mod tests {
             apply(&mut s, Message::Removed(Err("x".into()))),
             Followup::Refresh
         );
-        assert!(s.take_outbox()[0].text.contains("x"));
+        assert!(s.take_outbox()[0].text_stable().contains("x"));
     }
 
     #[test]
@@ -431,7 +433,7 @@ mod tests {
         );
         let got = s.take_outbox();
         assert_eq!(got.len(), 1);
-        let n = &got[0].text;
+        let n = &got[0].text_stable();
         assert!(n.contains("已发送到终端") && n.contains("db 挂了"), "{n}");
         // 终端粘贴已经发生、只是记录失败:是警告而不是错误。
         assert_eq!(got[0].level, crate::extensions::toast::Level::Warning);
@@ -445,14 +447,14 @@ mod tests {
         assert_eq!(apply(&mut s, Message::OpenHistory(None)), Followup::None);
         apply(&mut s, Message::Loaded(Err("e".into())));
         let got = s.take_outbox();
-        assert!(got[0].text.contains("e"));
+        assert!(got[0].text_stable().contains("e"));
     }
 
     #[test]
     fn take_outbox_returns_once_then_empty() {
         let mut s = State::default();
         apply(&mut s, Message::Loaded(Err("boom".into())));
-        assert!(s.take_outbox()[0].text.contains("boom"));
+        assert!(s.take_outbox()[0].text_stable().contains("boom"));
         assert!(s.take_outbox().is_empty());
     }
 

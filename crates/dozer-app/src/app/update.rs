@@ -197,7 +197,7 @@ impl App {
                 file_history::build(&repo_path2, &file_path2, file_history::DEFAULT_MAX_COUNT)
             })
             .await
-            .unwrap_or_else(|e| Err(format!("加载失败: {e}")));
+            .unwrap_or_else(|e| Err(e.to_string()));
             let _ = proxy.send_event(Message::FileHistory(file_history::Message::SnapshotLoaded(
                 repo_path, file_path, result,
             )));
@@ -1625,7 +1625,12 @@ impl App {
                     self.push_toast(
                         LOG,
                         toast::Level::Warning,
-                        format!("删除项目未完全成功: {}", errors.join("; ")),
+                        dozer_model::LocalizedText::keyed(
+                            crate::i18n::HOST_OWNER,
+                            "toast.delete_projects_incomplete",
+                            "Some projects could not be deleted: {errors}",
+                        )
+                        .with_arg("errors", errors.join("; ")),
                     );
                 }
                 // 登记一取消就把这个项目从所有 recent 列表里剪掉——
@@ -1664,7 +1669,7 @@ impl App {
                     ref text,
                     ..
                 } = msg;
-                toast::log_toast(scope, level, text);
+                toast::log_toast(scope, level, text.clone());
                 toast::update(&mut self.toast, msg, std::time::Instant::now());
             }
             Message::CodeHealth(
@@ -2547,7 +2552,12 @@ impl App {
                             crate::external_apps::run_open_command(command)
                         })
                         .await
-                        .unwrap_or_else(|e| Err(e.to_string()));
+                        .unwrap_or_else(|e| {
+                            Err(crate::external_apps::OpenError::Spawn {
+                                program: program.to_string(),
+                                error: e.to_string(),
+                            })
+                        });
                         if let Err(reason) = result {
                             let _ = proxy.send_event(Message::Toast(toast::Message::Push {
                                 scope: PREVIEW_LOG,
@@ -3206,7 +3216,7 @@ impl App {
                         })
                     })
                     .await
-                    .unwrap_or_else(|e| Err(format!("回滚任务失败: {e}")));
+                    .unwrap_or_else(|e| Err(e.to_string()));
                     let _ = proxy.send_event(Message::Files(
                         files::Message::FileHistoryRollbackDone(project_id, path2, result),
                     ));
@@ -4055,7 +4065,12 @@ impl App {
                         }
                         crate::extensions::settings_apps::Effect::Notice { level, text, key } => {
                             let level = crate::extensions::app_host::notice_level(level);
-                            self.push_toast_keyed(LOG, level, text, &key);
+                            self.push_toast_keyed(
+                                LOG,
+                                level,
+                                crate::extensions::toast::literal(text),
+                                &key,
+                            );
                         }
                         _ => {}
                     }
@@ -4162,7 +4177,11 @@ impl App {
             self.push_toast_keyed(
                 LOG,
                 toast::Level::Error,
-                "打开项目失败,请确认 dozerd 正常后重试",
+                dozer_model::LocalizedText::keyed(
+                    crate::i18n::HOST_OWNER,
+                    "error.open_project_failed",
+                    "Could not open the project; make sure dozerd is running and try again",
+                ),
                 "open-project-failed",
             );
             self.with_focused_project(move |ws, _io| {
@@ -4847,7 +4866,12 @@ impl App {
                     let _ = proxy.send_event(Message::Toast(toast::Message::Push {
                         scope: todo::LOG,
                         level: toast::Level::Error,
-                        text: format!("读取任务详情失败: {e}"),
+                        text: dozer_model::LocalizedText::keyed(
+                            crate::i18n::HOST_OWNER,
+                            "toast.todo_detail_load_failed",
+                            "Could not load task details: {error}",
+                        )
+                        .with_arg("error", e.to_string()),
                         key: None,
                     }));
                 }
@@ -4873,7 +4897,12 @@ impl App {
             // 失败此前被 `let _ =` 吞掉,随后照常刷新详情,用户看到的是"点了什么都没发生"。
             let processed = client.process_todo_now(id, reply_text.as_deref()).await;
             let failed = processed.is_err();
-            if let Some(msg) = toast::failure_message(todo::LOG, "处理任务失败", &processed) {
+            if let Some(msg) = toast::failure_message(
+                todo::LOG,
+                "todo.process_failed",
+                "Failed to process task: {e}",
+                &processed,
+            ) {
                 let _ = proxy.send_event(Message::Toast(msg));
             }
             // 无论处理成败都用服务端权威回合列表刷新;刷新本身也失败时,只有在"处理成功"的
@@ -4886,7 +4915,12 @@ impl App {
                     let _ = proxy.send_event(Message::Toast(toast::Message::Push {
                         scope: todo::LOG,
                         level: toast::Level::Error,
-                        text: format!("刷新任务详情失败: {e}"),
+                        text: dozer_model::LocalizedText::keyed(
+                            crate::i18n::HOST_OWNER,
+                            "toast.todo_detail_refresh_failed",
+                            "Could not refresh task details: {error}",
+                        )
+                        .with_arg("error", e.to_string()),
                         key: None,
                     }));
                 }
@@ -5798,8 +5832,14 @@ impl App {
                     self.preview_open_path_at(path, Some(entry.start_line as usize));
                 } else {
                     self.with_project(project_id, move |ws, _io| {
-                        ws.preview_error =
-                            Some(format!("文件已不存在,无法定位: {}", path.display()));
+                        ws.preview_error = Some(
+                            dozer_model::LocalizedText::keyed(
+                                crate::i18n::HOST_OWNER,
+                                "preview.file_missing_locate",
+                                "The file no longer exists; cannot locate: {path}",
+                            )
+                            .with_arg("path", path.display().to_string()),
+                        );
                     });
                 }
             }
@@ -5846,7 +5886,14 @@ impl App {
         }
         self.with_focused_project(move |ws, io| {
             if !path.is_file() {
-                ws.preview_error = Some(format!("文件不存在或不可读: {}", path.display()));
+                ws.preview_error = Some(
+                    dozer_model::LocalizedText::keyed(
+                        crate::i18n::HOST_OWNER,
+                        "preview.file_unreadable",
+                        "The file does not exist or is unreadable: {path}",
+                    )
+                    .with_arg("path", path.display().to_string()),
+                );
                 return;
             }
             ws.preview_error = None;
@@ -6042,7 +6089,14 @@ impl App {
         }
         self.with_focused_project(move |ws, io| {
             if !path.is_file() {
-                ws.project_preview_error = Some(format!("文件不存在或不可读: {}", path.display()));
+                ws.project_preview_error = Some(
+                    dozer_model::LocalizedText::keyed(
+                        crate::i18n::HOST_OWNER,
+                        "preview.file_unreadable",
+                        "The file does not exist or is unreadable: {path}",
+                    )
+                    .with_arg("path", path.display().to_string()),
+                );
                 return;
             }
             ws.project_preview_error = None;
@@ -6308,7 +6362,11 @@ impl App {
                         conversations::Message::SummaryGenerateFinished(
                             project_id,
                             cid.clone(),
-                            Err(e.to_string()),
+                            Err(crate::i18n::host_keyed_args(
+                                "conversations.summary_submit_failed",
+                                "⚠ Failed to submit summary task: {error}",
+                                &[("error", &e.to_string())],
+                            )),
                         ),
                     ));
                     return;
@@ -6319,12 +6377,22 @@ impl App {
                 match client.get_summary_job(job_id).await {
                     Ok(Some(job)) => {
                         if job.status == SummaryJobStatus::Failed {
-                            let error = job.error_detail.unwrap_or_else(|| "未知错误".into());
+                            let err = match job.error_detail {
+                                Some(detail) => crate::i18n::host_keyed_args(
+                                    "conversations.summary_failed",
+                                    "⚠ Failed to generate summary: {error}",
+                                    &[("error", &detail)],
+                                ),
+                                None => crate::i18n::host_keyed(
+                                    "conversations.summary_failed_unknown",
+                                    "⚠ Failed to generate summary",
+                                ),
+                            };
                             let _ = proxy.send_event(Message::Conversations(
                                 conversations::Message::SummaryGenerateFinished(
                                     project_id,
                                     cid.clone(),
-                                    Err(error),
+                                    Err(err),
                                 ),
                             ));
                             return;
@@ -6334,7 +6402,10 @@ impl App {
                                 conversations::Message::SummaryGenerateFinished(
                                     project_id,
                                     cid.clone(),
-                                    Err("任务已取消".into()),
+                                    Err(crate::i18n::host_keyed(
+                                        "conversations.summary_cancelled",
+                                        "Summary task cancelled",
+                                    )),
                                 ),
                             ));
                             return;
@@ -6354,7 +6425,10 @@ impl App {
                             conversations::Message::SummaryGenerateFinished(
                                 project_id,
                                 cid.clone(),
-                                Err("总结任务不存在，请重试".into()),
+                                Err(crate::i18n::host_keyed(
+                                    "conversations.summary_job_missing",
+                                    "Summary task not found, please retry",
+                                )),
                             ),
                         ));
                         return;
@@ -6365,7 +6439,11 @@ impl App {
                             conversations::Message::SummaryGenerateFinished(
                                 project_id,
                                 cid.clone(),
-                                Err(format!("查询总结失败：{e}")),
+                                Err(crate::i18n::host_keyed_args(
+                                    "conversations.summary_poll_failed",
+                                    "Failed to query summary: {error}",
+                                    &[("error", &e.to_string())],
+                                )),
                             ),
                         ));
                         return;
@@ -6382,10 +6460,13 @@ impl App {
                             .map(|(c, s)| dozer_model::SessionRow::from_row(c, s.as_ref()))
                             .collect()
                     });
-            let completion = result
-                .as_ref()
-                .map(|_| ())
-                .map_err(|e| format!("总结已生成，但刷新会话失败：{e}"));
+            let completion = result.as_ref().map(|_| ()).map_err(|e| {
+                crate::i18n::host_keyed_args(
+                    "conversations.summary_refresh_failed",
+                    "Summary generated, but refreshing sessions failed: {error}",
+                    &[("error", &e.to_string())],
+                )
+            });
             let _ = proxy.send_event(Message::Conversations(conversations::Message::AsyncResult(
                 request,
                 Box::new(conversations::Message::SessionsRefreshed(
@@ -6456,7 +6537,7 @@ impl App {
         let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
             vec![crate::chrome::menu::item::<Message>(
                 Some(icons::IconKind::Trash),
-                "删除",
+                crate::i18n::host_text("menu.delete", "Delete", self.locale.active_locale()),
                 Message::Project(project::Message::LinkRemove {
                     target: menu.target,
                     index: menu.index,
@@ -6486,6 +6567,7 @@ impl App {
             Some(m) => m,
             None => return column![].into(),
         };
+        let locale = self.locale.active_locale();
         // 右键的是"全部"/"未分类"伪节点:菜单只含"新建分类"(新建顶层
         // 分类,不挂在任何真实名字下——那两个只是视图桶)。真实节点才给
         // 完整节点操作集。
@@ -6493,7 +6575,7 @@ impl App {
             match menu.id {
                 None => vec![crate::chrome::menu::item::<Message>(
                     Some(icons::IconKind::SquarePlus),
-                    "新建分类",
+                    crate::i18n::host_text("menu.new_category", "New category", locale),
                     Message::Todo(todo::Message::CategoryNewSibling(None)),
                 )],
                 Some(id) => {
@@ -6509,17 +6591,25 @@ impl App {
                     vec![
                         crate::chrome::menu::item::<Message>(
                             Some(icons::IconKind::SquarePlus),
-                            "新建子分类",
+                            crate::i18n::host_text(
+                                "menu.new_subcategory",
+                                "New subcategory",
+                                locale,
+                            ),
                             Message::Todo(todo::Message::CategoryNewChild(id)),
                         ),
                         crate::chrome::menu::item::<Message>(
                             Some(icons::IconKind::SquarePlus),
-                            "新建同级分类",
+                            crate::i18n::host_text(
+                                "menu.new_sibling_category",
+                                "New sibling category",
+                                locale,
+                            ),
                             Message::Todo(todo::Message::CategoryNewSibling(sibling_parent_id)),
                         ),
                         crate::chrome::menu::item::<Message>(
                             Some(icons::IconKind::ChevronUp),
-                            "上移",
+                            crate::i18n::host_text("menu.move_up", "Move up", locale),
                             Message::Todo(todo::Message::CategoryMoveSibling(
                                 id,
                                 dozer_core::protocol::CategoryMoveDirection::Up,
@@ -6527,7 +6617,7 @@ impl App {
                         ),
                         crate::chrome::menu::item::<Message>(
                             Some(icons::IconKind::ChevronDown),
-                            "下移",
+                            crate::i18n::host_text("menu.move_down", "Move down", locale),
                             Message::Todo(todo::Message::CategoryMoveSibling(
                                 id,
                                 dozer_core::protocol::CategoryMoveDirection::Down,
@@ -6535,12 +6625,12 @@ impl App {
                         ),
                         crate::chrome::menu::item::<Message>(
                             Some(icons::IconKind::Rename),
-                            "重命名",
+                            crate::i18n::host_text("menu.rename", "Rename", locale),
                             Message::Todo(todo::Message::CategoryRenameStart(id)),
                         ),
                         crate::chrome::menu::item::<Message>(
                             Some(icons::IconKind::Trash),
-                            "删除",
+                            crate::i18n::host_text("menu.delete", "Delete", locale),
                             Message::Todo(todo::Message::CategoryDelete(id)),
                         ),
                     ]
@@ -6577,31 +6667,36 @@ impl App {
             .active_workspace()
             .is_some_and(|ws| ws.database.is_expanded(&source_id));
         let dim = byteui::theme::color::current().dim;
+        let locale = self.locale.active_locale();
         let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = vec![
             crate::chrome::menu::item::<Message>(
                 Some(icons::IconKind::RefreshCw),
-                "测试连接",
+                crate::i18n::host_text("menu.test_connection", "Test connection", locale),
                 Message::Database(database::Message::TestConnection(source_id.clone())),
             ),
             crate::chrome::menu::item::<Message>(
                 Some(icons::IconKind::Settings),
-                "编辑",
+                crate::i18n::host_text("menu.edit", "Edit", locale),
                 Message::Database(database::Message::EditSourceStart(source_id.clone())),
             ),
             crate::chrome::menu::item::<Message>(
                 Some(icons::IconKind::Trash),
-                "删除",
+                crate::i18n::host_text("menu.delete", "Delete", locale),
                 Message::Database(database::Message::DeleteSourceRequest(source_id.clone())),
             ),
         ];
         items.push(if expanded {
             crate::chrome::menu::item::<Message>(
                 Some(icons::IconKind::RotateCw),
-                "刷新",
+                crate::i18n::host_text("menu.refresh", "Refresh", locale),
                 Message::Database(database::Message::SchemaRefresh(source_id.clone())),
             )
         } else {
-            crate::chrome::menu::item_locked(Some(icons::IconKind::RotateCw), "刷新", dim)
+            crate::chrome::menu::item_locked(
+                Some(icons::IconKind::RotateCw),
+                crate::i18n::host_text("menu.refresh", "Refresh", locale),
+                dim,
+            )
         });
 
         let list: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
@@ -6633,40 +6728,41 @@ impl App {
             None => return column![].into(),
         };
         let dim = byteui::theme::color::current().dim;
+        let locale = self.locale.active_locale();
         let mut items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> =
             Vec::new();
         if menu.target.secure {
             // 密码框:复制/剪切同原生快捷键一样被禁用,置灰不可点。
             items.push(crate::chrome::menu::item_locked(
                 Some(icons::IconKind::Scissors),
-                "剪切",
+                crate::i18n::host_text("menu.cut", "Cut", locale),
                 dim,
             ));
             items.push(crate::chrome::menu::item_locked(
                 Some(icons::IconKind::Copy),
-                "复制",
+                crate::i18n::host_text("menu.copy", "Copy", locale),
                 dim,
             ));
         } else {
             items.push(crate::chrome::menu::item(
                 Some(icons::IconKind::Scissors),
-                "剪切",
+                crate::i18n::host_text("menu.cut", "Cut", locale),
                 Message::TextInputMenuCut,
             ));
             items.push(crate::chrome::menu::item(
                 Some(icons::IconKind::Copy),
-                "复制",
+                crate::i18n::host_text("menu.copy", "Copy", locale),
                 Message::TextInputMenuCopy,
             ));
         }
         items.push(crate::chrome::menu::item(
             Some(icons::IconKind::ClipboardPaste),
-            "粘贴",
+            crate::i18n::host_text("menu.paste", "Paste", locale),
             Message::TextInputMenuPaste,
         ));
         items.push(crate::chrome::menu::item(
             Some(icons::IconKind::SelectAll),
-            "全选",
+            crate::i18n::host_text("menu.select_all", "Select All", locale),
             Message::TextInputMenuSelectAll,
         ));
 

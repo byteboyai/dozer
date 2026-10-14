@@ -200,6 +200,30 @@ python3 scripts/i18n/build_inventory.py
 - 缓存译文以 key/参数语义存储（`list_collapse_button` tooltip 存 key），切换后独立窗口在 `redraw` 重取 locale。
 - 既有无关测试失败保留：`usage_probe::host::tests::host_site_citations_point_at_the_code_they_name`。
 
+## Task 07：Toast 与错误呈现迁移
+
+### 交付物
+
+- `crates/dozer-app/src/extensions/toast.rs`：`Toast.text`/`Outbox::Pending.text` 由裸 `String` 改为 `LocalizedText`（owner = `dozer.host`）；`ToastCenter::push` 与 `log_toast` 收 `impl Into<LocalizedText>`；空判定与去重基于语言无关稳定值 `stable_value`（无 key 的裸字符串 fallback 空白时返回空，不落 `SAFE_FALLBACK`）；渲染在 `platform/toast_overlay.rs`（`host_render` 后 `normalize` 折叠空白），日志走 `host_render_stable`。`failure_message(scope, key, fallback, res)` 改为操作语义 key 形态。测试辅助 `Toast::text_stable`/`Pending::text_stable`。
+- `crates/dozer-app/src/i18n.rs`：新增 `host_render`/`host_render_stable`/`host_keyed`/`host_keyed_args`（后台产出无 locale 时构造 keyed 文案，视图层再渲染）。
+- `crates/dozer-model/src/i18n.rs`：`LocalizedText::DEFAULT_OWNER` 与 `impl From<&str>`/`From<String>`（便利实现，让 `impl Into<LocalizedText>` 入口直接收裸字符串）。
+- 结构化错误字段：`GitAccountError`（`git_accounts.rs`）、`ProjectFsError`/`FsOp`（`project.rs`）、`RepoListState::Error(LocalizedText)`（`project_create.rs`）、`WorkspaceState::preview_error`/`project_preview_error: Option<LocalizedText>`、`summary_errors: HashMap<String, LocalizedText>`（`conversations.rs`）；`workspace/hook.rs::agent_state_label(state, locale)`；`term/terminal.rs`。
+- `crates/dozer-app/locales/host/{en,zh-CN}.json`：新增 `error.*`（keychain/network/token/git_account/open_with_app_failed/open_with_default_failed）、`preview.enter_code_mode_failed`/`file_missing_locate`/`file_unreadable`、`review.no_conversation`、`agent.state_*`、`term.no_sessions`、`file_history.load_failed`、`todo.process_failed`、`conversations.summary_*` 等 key（两包 key 集与占位符集一致）。
+- `scripts/i18n/build_inventory.py`：新增 NON_UI 条目（`runtime.rs`/`app/state.rs`/`workspace/state.rs`/`app/update.rs`）与预览组改判 Task 11、SSH 连接错误改判 Task 10；`web/shared/i18n/i18n.ts`（运行时 `I18nError` 诊断文案）按非 UI 文件排除。
+
+### 验证命令与结果
+
+- `cargo fmt --all -- --check`：全绿。
+- `cargo clippy -p dozer-app --all-targets`：仅既有无关告警；无新增。
+- `python3 scripts/i18n/check_resources.py`：ok（两包 key/占位符一致）。
+- `bash scripts/check-log-scope.sh`、`python3 scripts/audit/check_panel_boundary.py`：全绿。
+- `cargo test -p dozer-app`：1993 passed / 1 failed（既有无关 citation 测试）/ 2 ignored。
+
+### 残留问题
+
+- inventory 中 Task 07 未解决候选清零；预览组（`web_error`/`PreviewError.message`/T10 冲突/资源预算 6 条）与 SSH 连接错误 4 条按任务重投影到 Task 11/10。
+- 既有无关测试失败保留：`usage_probe::host::tests::host_site_citations_point_at_the_code_they_name`。
+
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |
 |---|---|---|

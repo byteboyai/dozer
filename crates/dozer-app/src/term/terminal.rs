@@ -128,6 +128,7 @@ pub(crate) fn tab_bar<'a>(
     app: &'a App,
     ws: &'a Workspace,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let locale = app.locale.active_locale();
     let widths: Vec<f32> = ws
         .tabs
         .iter()
@@ -188,8 +189,8 @@ pub(crate) fn tab_bar<'a>(
         PanelKind::Agent,
         app.list_collapsed(PanelKind::Agent),
         HoverId::list_collapse(PanelKind::Agent),
-        "收起列表",
-        "展开列表",
+        crate::i18n::host_text("panel.collapse_list", "Collapse list", locale),
+        crate::i18n::host_text("panel.expand_list", "Expand list", locale),
         Message::TogglePanelListCollapse(PanelKind::Agent),
         move |hovered| Message::Hover(HoverId::list_collapse(PanelKind::Agent), hovered),
     ));
@@ -311,9 +312,13 @@ pub(crate) fn active_tab_view<'a>(
             )
         }
         None => container(
-            text("暂无会话——到 Agent 面板点「＋」")
-                .size(byteui::theme::font::subtitle())
-                .color(byteui::theme::color::current().dim),
+            text(crate::i18n::host_text(
+                "term.no_sessions",
+                "No sessions yet — click “+” in the Agent panel",
+                app.locale.active_locale(),
+            ))
+            .size(byteui::theme::font::subtitle())
+            .color(byteui::theme::color::current().dim),
         )
         .width(Length::Fill)
         .height(Length::Fill)

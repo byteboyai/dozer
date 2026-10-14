@@ -273,29 +273,82 @@ impl FileTree {
     }
 }
 
+/// 文件系统操作(复制/粘贴/移动)的结构化错误(Task 07:操作语义 + 原始诊断
+/// 分离)。`project.rs` 的这些函数在工作线程里跑、拿不到 locale,故返回结构化
+/// 原因,由呈现层按当前 locale 渲染。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectFsError {
+    /// 目标已存在(粘贴/移动冲突);`path` 是完整目标路径。
+    AlreadyExists { path: PathBuf },
+    /// 目录被移动/粘贴进它自己或其子目录。
+    IntoOwnSubtree { op: FsOp },
+    /// 已复制到目标,但删除源失败;`detail` 为系统报错原文。
+    CopiedButDeleteFailed { detail: String },
+    /// 底层 I/O 失败;`detail` 为系统报错原文。
+    Io { detail: String },
+}
+
+/// 触发 `IntoOwnSubtree` 的操作,文案据此区分"移动"/"粘贴"。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FsOp {
+    Move,
+    Paste,
+}
+
+impl ProjectFsError {
+    /// 语言无关的稳定诊断串(英文),用于日志/去重。
+    pub fn stable(&self) -> String {
+        match self {
+            ProjectFsError::AlreadyExists { path } => {
+                format!(
+                    "An item with the same name already exists: {}",
+                    path.display()
+                )
+            }
+            ProjectFsError::IntoOwnSubtree { op } => match op {
+                FsOp::Move => {
+                    "Cannot move a directory into itself or its own subdirectory".to_string()
+                }
+                FsOp::Paste => {
+                    "Cannot paste a directory into itself or its own subdirectory".to_string()
+                }
+            },
+            ProjectFsError::CopiedButDeleteFailed { detail } => {
+                format!("Copied to the target, but deleting the source failed: {detail}")
+            }
+            ProjectFsError::Io { detail } => detail.clone(),
+        }
+    }
+}
+
 /// 递归复制目录（文件树"粘贴"目标是目录时用）。目标已存在 → `Err`，不覆盖、
 /// 不做部分复制后中止的脏状态清理（失败时目标目录可能已建但不完整——
 /// 调用方(`paste_item`)已在动手前检查过存在性，这里的检查是防御递归过程中
 /// 子目录层面的二次冲突）。
-pub fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), ProjectFsError> {
     if dst.exists() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            format!("{} 已存在", dst.display()),
-        ));
+        return Err(ProjectFsError::AlreadyExists {
+            path: dst.to_path_buf(),
+        });
     }
-    std::fs::create_dir(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
+    std::fs::create_dir(dst).map_err(io_err)?;
+    for entry in std::fs::read_dir(src).map_err(io_err)? {
+        let entry = entry.map_err(io_err)?;
+        let file_type = entry.file_type().map_err(io_err)?;
         let target = dst.join(entry.file_name());
         if file_type.is_dir() {
             copy_dir_recursive(&entry.path(), &target)?;
         } else {
-            std::fs::copy(entry.path(), &target)?;
+            std::fs::copy(entry.path(), &target).map_err(io_err)?;
         }
     }
     Ok(())
+}
+
+fn io_err(e: std::io::Error) -> ProjectFsError {
+    ProjectFsError::Io {
+        detail: e.to_string(),
+    }
 }
 
 /// 把 `source`（文件或目录）复制进 `target_dir` 下，用源的文件名。目标已
@@ -304,24 +357,24 @@ pub fn paste_item(
     source: &Path,
     source_is_dir: bool,
     target_dir: &Path,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, ProjectFsError> {
     let dest = target_dir.join(source.file_name().unwrap_or_default());
     // 目录粘贴进自己或自己的子目录 → dest 落在 source 树内,
     // copy_dir_recursive 会边建目录边把刚建出来的目标又递归进去复制,
     // 无界自增长直至 ENAMETOOLONG/磁盘写满。文件不可能出现这种情况
     // (文件没有"子目录"可落入自身)。
     if source_is_dir && (dest.starts_with(source) || dest == source) {
-        return Err("不能把目录粘贴到它自己或其子目录里".to_string());
+        return Err(ProjectFsError::IntoOwnSubtree { op: FsOp::Paste });
     }
     if dest.exists() {
-        return Err(format!("{} 已存在同名项", dest.display()));
+        return Err(ProjectFsError::AlreadyExists { path: dest });
     }
     let result = if source_is_dir {
         copy_dir_recursive(source, &dest)
     } else {
-        std::fs::copy(source, &dest).map(|_| ())
+        std::fs::copy(source, &dest).map(|_| ()).map_err(io_err)
     };
-    result.map(|_| dest).map_err(|e| e.to_string())
+    result.map(|_| dest)
 }
 
 /// 把 `source` 移动到明确指定的完整目标路径 `dest`(目录 + 文件名都由
@@ -333,13 +386,19 @@ pub fn paste_item(
 /// 自身子树 → `Err`。成功返回 `dest`。供"拖拽移动确认框"(用户可在确认
 /// 前改文件名/改目标目录,见 `files::PendingMove`)和 `move_item`(不改名
 /// 的既有场景)共用。
-pub fn move_item_to(source: &Path, source_is_dir: bool, dest: &Path) -> Result<PathBuf, String> {
+pub fn move_item_to(
+    source: &Path,
+    source_is_dir: bool,
+    dest: &Path,
+) -> Result<PathBuf, ProjectFsError> {
     // 同 `paste_item`:目录不能移进自己或自己的子目录(无界自增长)。
     if source_is_dir && (dest.starts_with(source) || dest == source) {
-        return Err("不能把目录移到它自己或其子目录里".to_string());
+        return Err(ProjectFsError::IntoOwnSubtree { op: FsOp::Move });
     }
     if dest.exists() {
-        return Err(format!("{} 已存在同名项", dest.display()));
+        return Err(ProjectFsError::AlreadyExists {
+            path: dest.to_path_buf(),
+        });
     }
     match std::fs::rename(source, dest) {
         Ok(()) => Ok(dest.to_path_buf()),
@@ -348,7 +407,7 @@ pub fn move_item_to(source: &Path, source_is_dir: bool, dest: &Path) -> Result<P
             let copied = if source_is_dir {
                 copy_dir_recursive(source, dest)
             } else {
-                std::fs::copy(source, dest).map(|_| ())
+                std::fs::copy(source, dest).map(|_| ()).map_err(io_err)
             };
             match copied {
                 Ok(()) => {
@@ -357,20 +416,26 @@ pub fn move_item_to(source: &Path, source_is_dir: bool, dest: &Path) -> Result<P
                     } else {
                         std::fs::remove_file(source)
                     };
-                    cleanup
-                        .map(|()| dest.to_path_buf())
-                        .map_err(|e| format!("已复制到目标,但删除源失败: {e}"))
+                    cleanup.map(|()| dest.to_path_buf()).map_err(|e| {
+                        ProjectFsError::CopiedButDeleteFailed {
+                            detail: e.to_string(),
+                        }
+                    })
                 }
-                Err(e) => Err(e.to_string()),
+                Err(e) => Err(e),
             }
         }
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(io_err(e)),
     }
 }
 
 /// 把 `source`(文件或目录)移动到 `target_dir` 下,用源的文件名——
 /// `move_item_to` 的常用简写,不改名的既有拖拽场景用它。
-pub fn move_item(source: &Path, source_is_dir: bool, target_dir: &Path) -> Result<PathBuf, String> {
+pub fn move_item(
+    source: &Path,
+    source_is_dir: bool,
+    target_dir: &Path,
+) -> Result<PathBuf, ProjectFsError> {
     let dest = target_dir.join(source.file_name().unwrap_or_default());
     move_item_to(source, source_is_dir, &dest)
 }

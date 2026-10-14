@@ -1510,7 +1510,7 @@ mod tests {
         let toasts = ws.take_outbox();
         assert_eq!(toasts.len(), 1, "相同文本 60 秒内只提示一次");
         assert_eq!(toasts[0].level, crate::extensions::toast::Level::Error);
-        assert!(toasts[0].text.contains("daemon 错误: boom"));
+        assert!(toasts[0].text_stable().contains("daemon 错误: boom"));
         assert_eq!(toasts[0].key.as_deref(), Some("project-memories-load"));
         let (e, _r) = collect();
         update(

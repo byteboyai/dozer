@@ -56,7 +56,7 @@ pub(crate) fn persist_sources(ws_state: &mut WorkspaceState, repo_path: &Path) {
         ws_state.outbox.push(
             LOG,
             crate::extensions::toast::Level::Error,
-            format!("数据库连接配置未能保存到磁盘: {e}"),
+            crate::extensions::toast::literal(format!("数据库连接配置未能保存到磁盘: {e}")),
         );
     }
 }

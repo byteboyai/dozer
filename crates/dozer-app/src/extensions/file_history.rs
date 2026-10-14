@@ -598,9 +598,14 @@ fn commit_list_view<'a>(
         Ok(s) => &s.entries,
         Err(err) => {
             return container(
-                text(err.clone())
-                    .size(byteui::theme::font::caption())
-                    .color(byteui::theme::color::current().red),
+                text(crate::i18n::host_text_args(
+                    "file_history.load_failed",
+                    "Failed to load: {error}",
+                    locale,
+                    &[("error", err)],
+                ))
+                .size(byteui::theme::font::caption())
+                .color(byteui::theme::color::current().red),
             )
             .padding(8)
             .into();

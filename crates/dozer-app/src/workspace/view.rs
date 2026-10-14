@@ -141,7 +141,7 @@ pub(crate) fn agent_list_pane<'a>(
                 .spacing(8),
             );
             for idx in idxs {
-                content = content.push(agent_card(ws, idx));
+                content = content.push(agent_card(ws, idx, locale));
             }
         }
     }
@@ -168,6 +168,7 @@ pub(crate) fn agent_list_pane<'a>(
 pub(crate) fn agent_card<'a>(
     ws: &'a Workspace,
     idx: usize,
+    locale: &str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let tab = &ws.tabs[idx];
     let active = idx == ws.active;
@@ -212,7 +213,7 @@ pub(crate) fn agent_card<'a>(
     lines = lines.push(
         row![
             byteui::feedback::status::dot(dot_color(tab.agent_state, tab.alive)),
-            text(agent_state_label(tab.agent_state))
+            text(agent_state_label(tab.agent_state, locale))
                 .size(byteui::theme::font::caption_sm())
                 .color(byteui::theme::color::current().dim),
         ]
@@ -585,14 +586,9 @@ pub(crate) fn review_content_pane<'a>(
         ReviewSource::Session(_) => None,
     }) {
         content = content.push(
-            text(crate::i18n::host_text_args(
-                "conversations.summary_failed",
-                "⚠ Failed to generate summary: {error}",
-                locale,
-                &[("error", error)],
-            ))
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().red),
+            text(crate::i18n::host_render(error, locale))
+                .size(byteui::theme::font::body())
+                .color(byteui::theme::color::current().red),
         );
     }
 
@@ -1463,9 +1459,12 @@ pub(crate) fn preview_pane_for<'a>(
     let mut content = column![tab_bar, tab_divider()].spacing(region.gap);
 
     if let Some(err) = error {
-        content = content.push(lh(text(format!("⚠ {err}"))
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().red)));
+        content = content.push(lh(text(format!(
+            "⚠ {}",
+            crate::i18n::host_render(err, app.locale.active_locale())
+        ))
+        .size(byteui::theme::font::body())
+        .color(byteui::theme::color::current().red)));
         // 失败时的外部打开 fallback:路径取自当前文件 tab(不隐式执行文件本身)。
         if let Some(tab) = preview.tabs().get(preview.active_idx())
             && matches!(tab.kind, crate::preview::TabKind::File(_))

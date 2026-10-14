@@ -1573,7 +1573,12 @@ impl App {
                 let _ = proxy.send_event(Message::Toast(toast::Message::Push {
                     scope: LOG,
                     level: toast::Level::Warning,
-                    text: format!("项目页签未能保存,下次启动可能丢失: {e}"),
+                    text: dozer_model::LocalizedText::keyed(
+                        crate::i18n::HOST_OWNER,
+                        "toast.open_projects_save_failed",
+                        "Project tabs could not be saved; they may be lost on next launch: {error}",
+                    )
+                    .with_arg("error", e.to_string()),
                     key: Some("persist-open-projects".to_string()),
                 }));
             }
@@ -1801,7 +1806,12 @@ impl App {
                     self.push_toast_keyed(
                         LOG,
                         Level::Error,
-                        format!("清除应用 {app_id} 的页面数据失败(数据仍被占用),重装后可能还会看到旧数据"),
+                        dozer_model::LocalizedText::keyed(
+                            crate::i18n::HOST_OWNER,
+                            "toast.app_store_clear_in_use",
+                            "Failed to clear page data for app {app} (still in use); old data may reappear after reinstall",
+                        )
+                        .with_arg("app", app_id.to_string()),
                         &key,
                     );
                 }
@@ -1811,7 +1821,12 @@ impl App {
                 self.push_toast_keyed(
                     LOG,
                     Level::Warning,
-                    format!("此系统版本(低于 macOS 14)无法清除应用 {app_id} 的页面数据,重装后可能还会看到旧数据"),
+                    dozer_model::LocalizedText::keyed(
+                        crate::i18n::HOST_OWNER,
+                        "toast.app_store_clear_unsupported",
+                        "This OS version (older than macOS 14) cannot clear page data for app {app}; old data may reappear after reinstall",
+                    )
+                    .with_arg("app", app_id.to_string()),
                     &key,
                 );
             }
@@ -1820,7 +1835,13 @@ impl App {
                 self.push_toast_keyed(
                     LOG,
                     Level::Error,
-                    format!("清除应用 {app_id} 的页面数据失败:{why}"),
+                    dozer_model::LocalizedText::keyed(
+                        crate::i18n::HOST_OWNER,
+                        "toast.app_store_clear_failed",
+                        "Failed to clear page data for app {app}: {reason}",
+                    )
+                    .with_arg("app", app_id.to_string())
+                    .with_arg("reason", why.to_string()),
                     &key,
                 );
             }
@@ -2679,11 +2700,12 @@ impl App {
         &mut self,
         scope: dozer_core::log::Scope,
         level: toast::Level,
-        text: &str,
+        text: &dozer_model::LocalizedText,
         key: Option<String>,
     ) {
-        toast::log_toast(scope, level, text);
-        self.toast.push(level, text, key, std::time::Instant::now());
+        toast::log_toast(scope, level, text.clone());
+        self.toast
+            .push(level, text.clone(), key, std::time::Instant::now());
     }
 
     /// 推一条 Toast(无去重键:同 level+文本会去重),并写日志。
@@ -2691,9 +2713,9 @@ impl App {
         &mut self,
         scope: dozer_core::log::Scope,
         level: toast::Level,
-        text: impl AsRef<str>,
+        text: dozer_model::LocalizedText,
     ) {
-        self.emit_toast(scope, level, text.as_ref(), None);
+        self.emit_toast(scope, level, &text, None);
     }
 
     /// 推一条带去重键的 Toast:同 key 再推只刷新文本与计时(日志每次都写)。
@@ -2701,10 +2723,10 @@ impl App {
         &mut self,
         scope: dozer_core::log::Scope,
         level: toast::Level,
-        text: impl AsRef<str>,
+        text: dozer_model::LocalizedText,
         key: &str,
     ) {
-        self.emit_toast(scope, level, text.as_ref(), Some(key.to_string()));
+        self.emit_toast(scope, level, &text, Some(key.to_string()));
     }
 
     /// 把各 extension outbox 里排出来的待发提示推成 Toast。

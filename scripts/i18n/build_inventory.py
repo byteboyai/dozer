@@ -103,6 +103,9 @@ EXCLUDED_FILES = [
     "crates/dozer-app/src/service_fakes.rs",
     "crates/dozer-app/src/term/term_model.rs",
     "crates/dozer-core/src/log.rs",
+    # WebView 侧共享 i18n 运行时的 `I18nError` 异常文案:开发者诊断(模板/资源
+    # 非法时抛出),不面向最终用户;页面文案由各 surface 自己的资源与任务负责。
+    "crates/dozer-app/web/shared/i18n/i18n.ts",
 ]
 EXCLUDED_FILE_REASON = "测试/黄金值工具/诊断探针/内部常量;非面向用户文案"
 
@@ -113,6 +116,11 @@ NON_UI_STRINGS = {
     ("crates/dozer-app/src/panel_registry.rs", "面板描述符里有重复的面板"): "面板清单构造器不变量错误;仅 `.expect` 时 panic,不面向用户",
     ("crates/dozer-app/src/panel_registry.rs", "默认布局不合法:两栏都要非空,且恰好覆盖全部已注册面板、不重复、不含未注册面板"): "面板清单构造器不变量错误;仅 `.expect` 时 panic,不面向用户",
     ("crates/dozer-app/src/panel_registry.rs", "面板清单已经注册过"): "面板清单构造器不变量错误;仅 `.expect` 时 panic,不面向用户",
+    ("crates/dozer-app/src/runtime.rs", "无法解析的地址"): "应用 webview 导航拒绝路径的日志字段占位;仅写入日志,不面向用户(日志保持中文/原文)",
+    ("crates/dozer-app/src/app/state.rs", "非法的应用面板 id {id:?}"): "布局持久化反序列化错误;`serde::de::Error::custom`,损坏数据诊断,不面向用户",
+    ("crates/dozer-app/src/app/state.rs", "未知面板 {name:?}"): "布局持久化反序列化错误;`serde::de::Error::custom`,损坏数据诊断,不面向用户",
+    ("crates/dozer-app/src/workspace/state.rs", "找不到该路径对应的预览 tab"): "`PreviewCommandOutcome::NotFound` 的协议诊断 detail,回传给外部 MCP/CLI 调用方,非 GUI 文案",
+    ("crates/dozer-app/src/app/update.rs", "空白"): "SSH tab 栏宽度估算用的固定占位文本(只为对齐首个空白占位 tab 的宽度),不渲染给用户",
 }
 
 # 非 app 的后端 crate:字符串不是 UI,按 §10 归为"错误/诊断适配",由 Task 07 与
@@ -126,10 +134,25 @@ BACKEND_REASON = "后端 crate 非 UI 字符串(错误/协议/日志);如经服�
 STRING_TASK_OVERRIDES = {
     # app/app.rs 里经 Toast / 预览错误条展示的文案,归 Task 07(toast & errors)。
     ("crates/dozer-app/src/app/app.rs", "项目页签未能保存,下次启动可能丢失: {e}"): "07",
-    ("crates/dozer-app/src/app/app.rs", "预览资源预算不足(可关闭其它大文件后重试)"): "07",
+    ("crates/dozer-app/src/app/app.rs", "预览资源预算不足(可关闭其它大文件后重试)"): "11",
     ("crates/dozer-app/src/app/app.rs", "清除应用 {app_id} 的页面数据失败(数据仍被占用),重装后可能还会看到旧数据"): "07",
     ("crates/dozer-app/src/app/app.rs", "此系统版本(低于 macOS 14)无法清除应用 {app_id} 的页面数据,重装后可能还会看到旧数据"): "07",
     ("crates/dozer-app/src/app/app.rs", "清除应用 {app_id} 的页面数据失败:{why}"): "07",
+    # workspace/state.rs 里 SSH 连接任务构造的错误文案,经 `ssh::Message`
+    # 落到 SSH 面板的 `TestStatus::Err`,本质属 SSH 面板,改派 Task 10。
+    ("crates/dozer-app/src/workspace/state.rs", "未知主机,指纹 {fingerprint}——需要确认信任"): "10",
+    ("crates/dozer-app/src/workspace/state.rs", "主机指纹已变化({fingerprint}),拒绝连接"): "10",
+    ("crates/dozer-app/src/workspace/state.rs", "连接超时(10 秒)"): "10",
+    ("crates/dozer-app/src/workspace/state.rs", "采集操作系统超时"): "10",
+    # app/update.rs 里经 `preview` 的 `web_error`/`PreviewError` 呈现的保存/加载
+    # 失败文案,本质属预览查看器(Task 11),与 `web_error: Option<String>`
+    # 的类型改造一并处理,改派 Task 11。
+    ("crates/dozer-app/src/app/update.rs", "该文件为只读/非 UTF-8 文本,已禁用保存以免破坏原文件"): "11",
+    ("crates/dozer-app/src/app/update.rs", "磁盘文件已被外部修改,请先选择「保留我的修改」或「重载磁盘」。"): "11",
+    ("crates/dozer-app/src/app/update.rs", "保存失败: {error}"): "11",
+    ("crates/dozer-app/src/app/update.rs", "建立行索引失败: {error}"): "11",
+    ("crates/dozer-app/src/app/update.rs", "预览加载超时,请重试"): "11",
+    ("crates/dozer-app/src/app/update.rs", "{message}(已连续失败 {count} 次,请改用纯文本/外部打开)"): "11",
 }
 
 

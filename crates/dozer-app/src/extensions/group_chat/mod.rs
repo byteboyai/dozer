@@ -301,9 +301,11 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
                     state.ensure_selection()
                 }
                 Err(e) => {
-                    state
-                        .outbox
-                        .push(LOG, Level::Error, format!("加载群聊失败: {e}"));
+                    state.outbox.push(
+                        LOG,
+                        Level::Error,
+                        crate::extensions::toast::literal(format!("加载群聊失败: {e}")),
+                    );
                     Vec::new()
                 }
             }
@@ -352,9 +354,11 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
                 }
                 Err(e) => {
                     state.backoff_until = Some(Instant::now() + POLL_BACKOFF);
-                    state
-                        .outbox
-                        .push(LOG, Level::Error, format!("刷新群聊失败: {e}"));
+                    state.outbox.push(
+                        LOG,
+                        Level::Error,
+                        crate::extensions::toast::literal(format!("刷新群聊失败: {e}")),
+                    );
                 }
             }
             Vec::new()
@@ -434,7 +438,9 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
         }
         Message::Noop(_) => Vec::new(),
         Message::Failed(_, text) => {
-            state.outbox.push(LOG, Level::Error, text);
+            state
+                .outbox
+                .push(LOG, Level::Error, crate::extensions::toast::literal(text));
             Vec::new()
         }
     }
@@ -764,7 +770,7 @@ mod tests {
         );
         let pending = s.take_outbox();
         assert_eq!(pending.len(), 1);
-        assert!(pending[0].text.contains("boom"));
+        assert!(pending[0].text_stable().contains("boom"));
     }
 
     #[test]
@@ -1092,7 +1098,7 @@ mod tests {
         );
         let p = s.take_outbox();
         assert_eq!(p.len(), 1);
-        assert!(p[0].text.contains("群主题不能为空"));
+        assert!(p[0].text_stable().contains("群主题不能为空"));
         assert!(s.take_outbox().is_empty(), "取走后清空");
     }
 

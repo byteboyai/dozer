@@ -60,47 +60,86 @@ fn save_to(path: &Path, config: &ExternalAppsConfig) -> io::Result<()> {
     std::fs::write(path, json)
 }
 
+/// "外部打开"失败的原始诊断(Task 07:操作语义结构化,呈现时才本地化)。
+///
+/// `run_open_command` 在阻塞线程里产生它,拿不到 locale,所以返回结构化的原因,
+/// 由 `open_failure_message` 按当前 locale 渲染;`stderr` 是外部程序/系统的原始
+/// 输出,原样保留、不翻译。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum OpenError {
+    /// 无法启动外部打开程序;`program` 是程序名,`error` 是系统报错原文。
+    Spawn { program: String, error: String },
+    /// 程序启动了但以非零退出码结束。
+    ExitCode(i32),
+    /// 程序被信号终止(拿不到退出码)。
+    Signal,
+    /// 程序以非零状态退出并把原因写到了 stderr(优先展示)。
+    Stderr(String),
+}
+
 /// 运行"外部打开"命令并**等它退出**。`open -a 不存在的App` 这类失败发生在 `open`
 /// 进程退出之后(`spawn()` 本身会成功),所以只看 `spawn` 的结果永远发现不了;必须
-/// 看退出状态。会阻塞,调用方放到 `spawn_blocking`。返回给用户看的原因(优先 stderr,
-/// 为空退回退出码)。
-pub(crate) fn run_open_command(mut command: std::process::Command) -> Result<(), String> {
+/// 看退出状态。会阻塞,调用方放到 `spawn_blocking`。返回结构化原因供上层本地化。
+pub(crate) fn run_open_command(mut command: std::process::Command) -> Result<(), OpenError> {
     match command.output() {
-        Err(e) => Err(format!(
-            "无法启动 {}: {e}",
-            command.get_program().to_string_lossy()
-        )),
+        Err(e) => Err(OpenError::Spawn {
+            program: command.get_program().to_string_lossy().into_owned(),
+            error: e.to_string(),
+        }),
         Ok(out) if out.status.success() => Ok(()),
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
             Err(if stderr.is_empty() {
                 match out.status.code() {
-                    Some(code) => format!("退出码 {code}"),
-                    None => "被信号终止".to_string(),
+                    Some(code) => OpenError::ExitCode(code),
+                    None => OpenError::Signal,
                 }
             } else {
-                stderr
+                OpenError::Stderr(stderr)
             })
         }
     }
 }
 
-/// 外部打开失败时给用户看的一句话。`reason` 为空时不带冒号。
-pub(crate) fn open_failure_message(app_name: Option<&str>, path: &Path, reason: &str) -> String {
+/// 把 [`OpenError`] 渲染成语言无关的稳定诊断串(英文),用于日志/去重比较。
+fn open_error_stable(err: &OpenError) -> String {
+    match err {
+        OpenError::Spawn { program, error } => format!("Failed to launch {program}: {error}"),
+        OpenError::ExitCode(code) => format!("exit code {code}"),
+        OpenError::Signal => "terminated by signal".to_string(),
+        OpenError::Stderr(s) => s.clone(),
+    }
+}
+
+/// 外部打开失败时给用户看的一句话(Task 07:存为 `LocalizedText`,渲染时按 locale
+/// 解析)。`app_name` 为 `Some` 时是外部 App 名(多为拉丁字母),`None` 时用
+/// "系统默认应用" 的本地化文案;`reason` 是原始诊断,原样拼进 `{reason}`。
+pub(crate) fn open_failure_message(
+    app_name: Option<&str>,
+    path: &Path,
+    reason: &OpenError,
+) -> dozer_model::LocalizedText {
     let file = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string());
-    // App 名字多是拉丁字母,两侧留空格;默认应用是纯中文,不留。
-    let who = match app_name {
-        Some(app) => format!(" {app} "),
-        None => "系统默认应用".to_string(),
-    };
-    let base = format!("无法用{who}打开 {file}");
-    if reason.is_empty() {
-        base
-    } else {
-        format!("{base}: {reason}")
+    let reason = open_error_stable(reason);
+    match app_name {
+        Some(app) => dozer_model::LocalizedText::keyed(
+            crate::i18n::HOST_OWNER,
+            "error.open_with_app_failed",
+            "Could not open {file} with {app}: {reason}",
+        )
+        .with_arg("file", file)
+        .with_arg("app", app.to_string())
+        .with_arg("reason", reason),
+        None => dozer_model::LocalizedText::keyed(
+            crate::i18n::HOST_OWNER,
+            "error.open_with_default_failed",
+            "Could not open {file} with the system default app: {reason}",
+        )
+        .with_arg("file", file)
+        .with_arg("reason", reason),
     }
 }
 
@@ -120,7 +159,7 @@ mod tests {
         cmd.args(["-c", "echo 'Unable to find application' >&2; exit 1"]);
         assert_eq!(
             run_open_command(cmd),
-            Err("Unable to find application".to_string())
+            Err(OpenError::Stderr("Unable to find application".to_string()))
         );
     }
 
@@ -128,35 +167,48 @@ mod tests {
     fn run_open_command_falls_back_to_exit_code_when_stderr_is_empty() {
         let mut cmd = std::process::Command::new("sh");
         cmd.args(["-c", "exit 3"]);
-        assert_eq!(run_open_command(cmd), Err("退出码 3".to_string()));
+        assert_eq!(run_open_command(cmd), Err(OpenError::ExitCode(3)));
     }
 
     #[test]
     fn run_open_command_reports_spawn_failure() {
         let err = run_open_command(std::process::Command::new("/nonexistent/dozer-open-xyz"))
             .unwrap_err();
-        assert!(err.starts_with("无法启动"), "{err}");
+        assert!(matches!(err, OpenError::Spawn { .. }), "{err:?}");
     }
 
     #[test]
     fn open_failure_message_names_app_file_and_reason() {
+        use crate::i18n::host_render;
         assert_eq!(
-            open_failure_message(Some("Typora"), Path::new("/p/a/notes.md"), "not found"),
-            "无法用 Typora 打开 notes.md: not found"
+            host_render(
+                &open_failure_message(
+                    Some("Typora"),
+                    Path::new("/p/a/notes.md"),
+                    &OpenError::Stderr("not found".into())
+                ),
+                "en"
+            ),
+            "Could not open notes.md with Typora: not found"
         );
         assert_eq!(
-            open_failure_message(None, Path::new("/p/a/notes.md"), "not found"),
-            "无法用系统默认应用打开 notes.md: not found"
-        );
-        // 原因为空时不留悬空的冒号。
-        assert_eq!(
-            open_failure_message(None, Path::new("/p/a/notes.md"), ""),
-            "无法用系统默认应用打开 notes.md"
+            host_render(
+                &open_failure_message(
+                    None,
+                    Path::new("/p/a/notes.md"),
+                    &OpenError::Stderr("not found".into())
+                ),
+                "zh-CN"
+            ),
+            "无法用系统默认应用打开 notes.md：not found"
         );
         // 没有文件名(如根路径)时退回完整路径,不 panic。
         assert_eq!(
-            open_failure_message(None, Path::new("/"), ""),
-            "无法用系统默认应用打开 /"
+            host_render(
+                &open_failure_message(None, Path::new("/"), &OpenError::Signal),
+                "en"
+            ),
+            "Could not open / with the system default app: terminated by signal"
         );
     }
 

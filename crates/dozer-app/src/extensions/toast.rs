@@ -6,6 +6,7 @@
 use std::time::{Duration, Instant};
 
 use dozer_core::log::Scope;
+use dozer_model::LocalizedText;
 
 dozer_core::scope!(LOG, module, "toast");
 
@@ -44,10 +45,21 @@ pub struct Toast {
     /// 单调递增,窗口宿主用它判断"堆叠是否变了"。
     pub id: u64,
     pub level: Level,
-    pub text: String,
+    /// 文案存为 `LocalizedText`(owner = `dozer.host`),渲染时才按当前 locale
+    /// 解析——因此切换语言只需重绘,不新增通知、不改 id/去重键/到期时间(spec §4.3)。
+    pub text: LocalizedText,
     /// 去重键:同 key 再推 = 刷新文本/级别/计时,不新增。
     pub key: Option<String>,
     pub expires: Instant,
+}
+
+impl Toast {
+    /// 语言无关的稳定渲染值(英文 fallback + 已插值参数、折叠空白),供测试与
+    /// 去重比較,与界面显示一致。
+    #[cfg(test)]
+    pub fn text_stable(&self) -> String {
+        normalize(&crate::i18n::host_render_stable(&self.text))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -64,7 +76,7 @@ pub enum Message {
         /// 调用方的日志来源(只用于写日志,不进入 `ToastCenter`)。
         scope: Scope,
         level: Level,
-        text: String,
+        text: LocalizedText,
         key: Option<String>,
     },
 }
@@ -74,40 +86,60 @@ pub fn update(state: &mut ToastCenter, msg: Message, now: Instant) {
         Message::Push {
             level, text, key, ..
         } => {
-            state.push(level, &text, key, now);
+            state.push(level, text, key, now);
         }
     }
 }
 
 /// 每条 Toast 自动写一条日志。`tracing` 的 `target:` 必须是常量,而这里的
 /// `scope` 是运行时形参,所以固定用 `module::toast` 作 target,调用方来源放进
-/// 字段 `scope`(值是它的 target 字符串,如 `dozer::panel::agent`)。写**原始
-/// 完整文本**(未折叠空白、未被固定卡片高度裁剪);归一化后为空的不写。
-pub fn log_toast(scope: Scope, level: Level, text: &str) {
-    if normalize(text).is_empty() {
+/// 字段 `scope`(值是它的 target 字符串,如 `dozer::panel::agent`)。
+///
+/// 日志写**语言无关的稳定值**:Host 兜底文案(英文 fallback)插值后的完整文本,
+/// 不随当前 locale 变化(spec「日志记录稳定事件,渲染使用当前快照」)。写完整
+/// 文本(未折叠空白、未被固定卡片高度裁剪);归一化后为空的不写。
+pub fn log_toast(scope: Scope, level: Level, text: impl Into<LocalizedText>) {
+    let text = text.into();
+    let stable = stable_value(&text);
+    if stable.is_empty() {
         return;
     }
     let from = scope.target;
     match level {
-        Level::Info | Level::Success => dozer_core::log_info!(LOG, scope = from, "{text}"),
-        Level::Warning => dozer_core::log_warn!(LOG, scope = from, "{text}"),
-        Level::Error => dozer_core::log_error!(LOG, scope = from, "{text}"),
+        Level::Info | Level::Success => dozer_core::log_info!(LOG, scope = from, "{stable}"),
+        Level::Warning => dozer_core::log_warn!(LOG, scope = from, "{stable}"),
+        Level::Error => dozer_core::log_error!(LOG, scope = from, "{stable}"),
     }
 }
 
 /// 后台任务(拿不到 `App`)里把一次失败变成可经 `proxy.send_event(Message::Toast(..))`
-/// 发回主线程的 Toast 消息;`Ok` 返回 `None`(什么都不发)。文案是 `"{what}: {e}"`。
+/// 发回主线程的 Toast 消息;`Ok` 返回 `None`(什么都不发)。
+///
+/// `key`/`fallback` 是**操作语义**的模板(如 `"todo.process_failed"` /
+/// `"Failed to process task: {e}"`),渲染时按当前 locale 解析;`e` 是服务返回的
+/// 原始诊断(原样保留、不翻译)。生产端拿不到 locale,故只存 keyed `LocalizedText`。
 pub fn failure_message<T, E: std::fmt::Display>(
     scope: Scope,
-    what: &str,
+    key: &str,
+    fallback: &str,
     res: &Result<T, E>,
 ) -> Option<Message> {
     res.as_ref().err().map(|e| Message::Push {
         scope,
         level: Level::Error,
-        text: format!("{what}: {e}"),
+        text: LocalizedText::keyed(crate::i18n::HOST_OWNER, key, fallback)
+            .with_arg("e", e.to_string()),
         key: None,
     })
+}
+
+/// 便捷构造一条 Host 归属、无 key 的文案(fallback 即字面文本)。
+///
+/// 供尚未迁移的调用点过渡使用:把裸字符串(含已本地化好的中文)作为 fallback
+/// 包成 `LocalizedText`,渲染时直接显示。迁移到资源 key 的面板/宿主代码应改用
+/// `LocalizedText::keyed(HOST_OWNER, key, fallback)` 或 `i18n::host_text*`。
+pub fn literal(text: impl Into<String>) -> LocalizedText {
+    LocalizedText::literal(crate::i18n::HOST_OWNER, text)
 }
 
 /// 一条待发的提示。
@@ -115,8 +147,17 @@ pub fn failure_message<T, E: std::fmt::Display>(
 pub struct Pending {
     pub scope: Scope,
     pub level: Level,
-    pub text: String,
+    pub text: LocalizedText,
     pub key: Option<String>,
+}
+
+impl Pending {
+    /// 语言无关的稳定渲染值(英文 fallback + 已插值参数、折叠空白),供测试与
+    /// 去重比較,与界面显示一致。
+    #[cfg(test)]
+    pub fn text_stable(&self) -> String {
+        normalize(&crate::i18n::host_render_stable(&self.text))
+    }
 }
 
 /// extension state 里的待发提示。extension 的 `update` 拿不到 `App`,失败时往
@@ -126,12 +167,12 @@ pub struct Pending {
 pub struct Outbox {
     items: Vec<Pending>,
     /// 每个 key 上一次经 [`Outbox::push_keyed_cooldown`] 推出的文本与时刻。排空(`take`)不清它,
-    /// 否则每帧排空一次就等于没有冷却。
+    /// 否则每帧排空一次就等于没有冷却。存语言无关的稳定值,locale 切换不影响冷却。
     cooldowns: std::collections::HashMap<String, (String, Instant)>,
 }
 
 impl Outbox {
-    pub fn push(&mut self, scope: Scope, level: Level, text: impl Into<String>) {
+    pub fn push(&mut self, scope: Scope, level: Level, text: impl Into<LocalizedText>) {
         self.items.push(Pending {
             scope,
             level,
@@ -145,7 +186,7 @@ impl Outbox {
         &mut self,
         scope: Scope,
         level: Level,
-        text: impl Into<String>,
+        text: impl Into<LocalizedText>,
         key: impl Into<String>,
     ) {
         self.items.push(Pending {
@@ -158,28 +199,31 @@ impl Outbox {
 
     /// 带冷却的 `push_keyed`:同一 key 下,与上一次推出的文本相同且距今不足
     /// [`LOAD_FAILURE_COOLDOWN`] 则不推;文本变了或已过冷却则推并更新记录。`now` 由调用方注入。
+    /// 比较用语言无关的稳定值,切换 locale 后同一失败不会重新弹。
     pub fn push_keyed_cooldown(
         &mut self,
         scope: Scope,
         level: Level,
-        text: impl Into<String>,
+        text: impl Into<LocalizedText>,
         key: impl Into<String>,
         now: Instant,
     ) {
         let text = text.into();
         let key = key.into();
+        let stable = crate::i18n::host_render_stable(&text);
         let repeat = matches!(
             self.cooldowns.get(&key),
-            Some((last, at)) if *last == text && now.duration_since(*at) < LOAD_FAILURE_COOLDOWN
+            Some((last, at)) if *last == stable && now.duration_since(*at) < LOAD_FAILURE_COOLDOWN
         );
         if repeat {
             return;
         }
-        self.cooldowns.insert(key.clone(), (text.clone(), now));
+        self.cooldowns.insert(key.clone(), (stable, now));
         self.push_keyed(scope, level, text, key);
     }
 
-    /// `Err(e)` 时推一条 `Error` 级 `"{what}: {e}"`;`Ok` 什么都不做。
+    /// `Err(e)` 时推一条 `Error` 级 `"{what}: {e}"`;`Ok` 什么都不做。`what` 为已
+    /// 本地化的动作名,`e` 为原样保留的原始诊断。
     pub fn push_err<T, E: std::fmt::Display>(
         &mut self,
         scope: Scope,
@@ -187,7 +231,13 @@ impl Outbox {
         res: &Result<T, E>,
     ) {
         if let Err(e) = res {
-            self.push(scope, Level::Error, format!("{what}: {e}"));
+            self.push(
+                scope,
+                Level::Error,
+                LocalizedText::keyed(crate::i18n::HOST_OWNER, "toast.failure", "{what}: {e}")
+                    .with_arg("what", what)
+                    .with_arg("e", e.to_string()),
+            );
         }
     }
 
@@ -198,8 +248,18 @@ impl Outbox {
 
 /// 折叠所有空白(含换行)成单个空格并去首尾:Toast 是固定高度的单/双行卡片,
 /// 多行文本会撑坏几何。
-fn normalize(text: &str) -> String {
+pub(crate) fn normalize(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Toast 的空判定/去重用的稳定值:无 key 的裸字符串(literal)若 fallback
+/// 为空白,视为"没有内容"返回空——避免经 `host_render_stable` 被安全兜底文案
+/// (`Something went wrong`)顶替成一条有内容的提示。有 key 的文案仍走完整解析。
+fn stable_value(text: &LocalizedText) -> String {
+    if text.key.is_none() && text.fallback.trim().is_empty() {
+        return String::new();
+    }
+    crate::i18n::host_render_stable(text)
 }
 
 impl ToastCenter {
@@ -207,27 +267,30 @@ impl ToastCenter {
         &self.items
     }
 
-    /// 推一条。返回条目 id;文本归一化后为空则忽略返回 `None`。
+    /// 推一条。返回条目 id;文本归一化后为空则忽略返回 `None`。空判定与无 key
+    /// 去重都基于语言无关的稳定值(`host_render_stable`),保证 locale 切换不改变
+    /// 去重行为。存入的 `LocalizedText` 保留原文案,渲染时才按 locale 解析。
     pub fn push(
         &mut self,
         level: Level,
-        text: &str,
+        text: impl Into<LocalizedText>,
         key: Option<String>,
         now: Instant,
     ) -> Option<u64> {
-        let text = normalize(text);
-        if text.is_empty() {
+        let text = text.into();
+        let stable = normalize(&stable_value(&text));
+        if stable.is_empty() {
             return None;
         }
         let expires = now + level.duration();
         let existing = self.items.iter_mut().find(|t| match (&key, &t.key) {
             (Some(k), Some(tk)) => k == tk,
-            (None, None) => t.level == level && t.text == text,
+            (None, None) => t.level == level && normalize(&stable_value(&t.text)) == stable,
             _ => false,
         });
         if let Some(t) = existing {
             t.level = level;
-            t.text = text;
+            t.text = text.clone();
             t.expires = expires;
             return Some(t.id);
         }
@@ -236,7 +299,7 @@ impl ToastCenter {
         self.items.push(Toast {
             id,
             level,
-            text,
+            text: text.clone(),
             key,
             expires,
         });
@@ -271,6 +334,10 @@ mod tests {
         (ToastCenter::default(), Instant::now())
     }
 
+    fn stable(t: &LocalizedText) -> String {
+        super::normalize(&crate::i18n::host_render_stable(t))
+    }
+
     #[test]
     fn level_durations_follow_spec() {
         assert_eq!(Level::Info.duration(), Duration::from_secs(3));
@@ -302,7 +369,7 @@ mod tests {
     fn newlines_and_runs_of_whitespace_collapse_to_single_spaces() {
         let (mut c, now) = center();
         c.push(Level::Error, "第一行\n  第二行\t\t第三行", None, now);
-        assert_eq!(c.items()[0].text, "第一行 第二行 第三行");
+        assert_eq!(stable(&c.items()[0].text), "第一行 第二行 第三行");
     }
 
     #[test]
@@ -315,7 +382,7 @@ mod tests {
             .unwrap();
         assert_eq!(a, b);
         assert_eq!(c.items().len(), 1);
-        assert_eq!(c.items()[0].text, "new");
+        assert_eq!(stable(&c.items()[0].text), "new");
         assert_eq!(c.items()[0].level, Level::Warning);
         assert_eq!(c.items()[0].expires, later + Duration::from_secs(5));
     }
@@ -344,7 +411,7 @@ mod tests {
         for t in ["1", "2", "3", "4"] {
             c.push(Level::Info, t, None, now);
         }
-        let texts: Vec<_> = c.items().iter().map(|t| t.text.as_str()).collect();
+        let texts: Vec<_> = c.items().iter().map(|t| stable(&t.text)).collect();
         assert_eq!(texts, ["2", "3", "4"]);
         assert_eq!(c.items().len(), MAX_VISIBLE);
     }
@@ -358,7 +425,7 @@ mod tests {
         // 恰好到点(expires == now)也要移除,否则 next_wake 会返回 ZERO 造成空转。
         assert!(c.expire(now + Duration::from_secs(3)));
         assert_eq!(c.items().len(), 1);
-        assert_eq!(c.items()[0].text, "long");
+        assert_eq!(stable(&c.items()[0].text), "long");
         assert!(c.expire(now + Duration::from_secs(8)));
         assert!(c.items().is_empty());
         assert!(!c.expire(now + Duration::from_secs(60)));
@@ -409,9 +476,9 @@ mod tests {
         o.push(TEST_TODO, Level::Warning, "b");
         let got = o.take();
         assert_eq!(got.len(), 2);
-        assert_eq!(got[0].text, "a");
+        assert_eq!(stable(&got[0].text), "a");
         assert_eq!(got[0].key, None);
-        assert_eq!(got[1].text, "b");
+        assert_eq!(stable(&got[1].text), "b");
         assert_eq!(got[1].level, Level::Warning);
         assert_eq!(got[1].scope, TEST_TODO);
         assert!(o.take().is_empty(), "取走后应为空");
@@ -424,7 +491,7 @@ mod tests {
         let got = o.take();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].key.as_deref(), Some("apps:act:x"));
-        assert_eq!(got[0].text, "停止失败");
+        assert_eq!(stable(&got[0].text), "停止失败");
         assert_eq!(got[0].level, Level::Error);
     }
 
@@ -437,7 +504,7 @@ mod tests {
         let got = o.take();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].level, Level::Error);
-        assert_eq!(got[0].text, "保存失败: 磁盘满");
+        assert_eq!(stable(&got[0].text), "保存失败: 磁盘满");
     }
 
     #[derive(Clone, Default)]
@@ -496,13 +563,26 @@ mod tests {
 
     #[test]
     fn failure_message_is_none_on_ok() {
-        assert!(failure_message(TEST_TODO, "处理任务失败", &Ok::<(), String>(())).is_none());
+        assert!(
+            failure_message(
+                TEST_TODO,
+                "todo.process_failed",
+                "Failed to process task: {e}",
+                &Ok::<(), String>(())
+            )
+            .is_none()
+        );
     }
 
     #[test]
-    fn failure_message_builds_an_error_push_with_what_prefix() {
-        let msg = failure_message(TEST_TODO, "处理任务失败", &Err::<(), _>("daemon 超时"))
-            .expect("Err 应产生消息");
+    fn failure_message_builds_an_error_push_with_operation_key() {
+        let msg = failure_message(
+            TEST_TODO,
+            "todo.process_failed",
+            "Failed to process task: {e}",
+            &Err::<(), _>("daemon 超时"),
+        )
+        .expect("Err 应产生消息");
         let Message::Push {
             scope,
             level,
@@ -511,7 +591,10 @@ mod tests {
         } = msg;
         assert_eq!(scope, TEST_TODO);
         assert_eq!(level, Level::Error);
-        assert_eq!(text, "处理任务失败: daemon 超时");
+        assert_eq!(
+            crate::i18n::host_render_stable(&text),
+            "Failed to process task: daemon 超时"
+        );
         assert_eq!(key, None);
     }
 
@@ -539,7 +622,7 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].key.as_deref(), Some("k"));
         assert_eq!(pending[0].level, Level::Error);
-        assert_eq!(pending[0].text, "加载失败: boom");
+        assert_eq!(stable(&pending[0].text), "加载失败: boom");
     }
 
     #[test]

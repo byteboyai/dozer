@@ -575,10 +575,15 @@ fn open_missing_file_sets_preview_error_and_no_tab() {
 
 #[test]
 fn agent_state_label_covers_all() {
-    assert_eq!(agent_state_label(AgentState::Running), "运行中");
-    assert_eq!(agent_state_label(AgentState::AwaitingInput), "待输入");
-    assert_eq!(agent_state_label(AgentState::TurnEnded), "回合毕");
-    assert_eq!(agent_state_label(AgentState::Idle), "空闲");
+    assert_eq!(agent_state_label(AgentState::Running, "zh-CN"), "运行中");
+    assert_eq!(
+        agent_state_label(AgentState::AwaitingInput, "zh-CN"),
+        "待输入"
+    );
+    assert_eq!(agent_state_label(AgentState::TurnEnded, "zh-CN"), "回合毕");
+    assert_eq!(agent_state_label(AgentState::Idle, "zh-CN"), "空闲");
+    assert_eq!(agent_state_label(AgentState::Running, "en"), "Running");
+    assert_eq!(agent_state_label(AgentState::Idle, "en"), "Idle");
 }
 
 #[test]
@@ -1499,6 +1504,14 @@ fn per_pane_companion_slots_follow_the_same_selection() {
     assert_eq!((ws.project_preview_tab_first, ws.preview_tab_first), (3, 5));
     *ws.preview_error_mut(PanelKind::Project) = Some("p".into());
     *ws.preview_error_mut(PanelKind::Files) = Some("f".into());
-    assert_eq!(ws.project_preview_error.as_deref(), Some("p"));
-    assert_eq!(ws.preview_error.as_deref(), Some("f"));
+    assert_eq!(
+        ws.project_preview_error
+            .as_ref()
+            .map(|t| t.fallback.as_str()),
+        Some("p")
+    );
+    assert_eq!(
+        ws.preview_error.as_ref().map(|t| t.fallback.as_str()),
+        Some("f")
+    );
 }

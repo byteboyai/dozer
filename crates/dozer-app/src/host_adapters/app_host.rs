@@ -113,7 +113,7 @@ pub(crate) fn apply_effects(app: &mut App, effects: Vec<Effect>) {
             }
             Effect::Notice { level, text, key } => {
                 let level = crate::extensions::app_host::notice_level(level);
-                app.push_toast_keyed(LOG, level, text, &key);
+                app.push_toast_keyed(LOG, level, crate::extensions::toast::literal(text), &key);
             }
         }
     }

@@ -189,7 +189,12 @@ pub fn update(
                     crate::external_apps::run_open_command(command)
                 })
                 .await
-                .unwrap_or_else(|e| Err(e.to_string()));
+                .unwrap_or_else(|e| {
+                    Err(crate::external_apps::OpenError::Spawn {
+                        program: "open".to_string(),
+                        error: e.to_string(),
+                    })
+                });
                 emit(Message::OpenWithDefaultDone(
                     project_id, path, app_name, result,
                 ));
@@ -219,7 +224,11 @@ pub fn update(
                     crate::project::paste_item(&source, source_is_dir, &target_dir)
                 })
                 .await
-                .unwrap_or_else(|e| Err(e.to_string()));
+                .unwrap_or_else(|e| {
+                    Err(crate::project::ProjectFsError::Io {
+                        detail: e.to_string(),
+                    })
+                });
                 emit(Message::PasteDone(project_id, result));
             });
         }
@@ -229,9 +238,11 @@ pub fn update(
                     tree.refresh(parent);
                 }
             }
-            Err(e) => ws_state
-                .outbox
-                .push(LOG, toast::Level::Error, format!("粘贴失败: {e}")),
+            Err(e) => ws_state.outbox.push(
+                LOG,
+                toast::Level::Error,
+                crate::extensions::toast::literal(format!("粘贴失败: {}", e.stable())),
+            ),
         },
         Message::FileHistoryRollbackDone(_project_id, abs_path, result) => match result {
             Ok(()) => {
@@ -241,9 +252,11 @@ pub fn update(
                     tree.refresh(parent);
                 }
             }
-            Err(e) => ws_state
-                .outbox
-                .push(LOG, toast::Level::Error, format!("还原文件失败: {e}")),
+            Err(e) => ws_state.outbox.push(
+                LOG,
+                toast::Level::Error,
+                crate::extensions::toast::literal(format!("还原文件失败: {e}")),
+            ),
         },
         Message::DeleteRequest(path, is_dir) => {
             app_state.context_menu = None;
@@ -318,7 +331,10 @@ pub fn update(
                             ws_state.outbox.push(
                                 LOG,
                                 crate::extensions::toast::Level::Error,
-                                format!("删除 {} 失败: {e}", path.display()),
+                                crate::extensions::toast::literal(format!(
+                                    "删除 {} 失败: {e}",
+                                    path.display()
+                                )),
                             );
                         }
                     }
@@ -334,9 +350,11 @@ pub fn update(
                     }
                 }
             }
-            Err(e) => ws_state
-                .outbox
-                .push(LOG, toast::Level::Error, format!("文件操作失败: {e}")),
+            Err(e) => ws_state.outbox.push(
+                LOG,
+                toast::Level::Error,
+                crate::extensions::toast::literal(format!("文件操作失败: {e}")),
+            ),
         },
         Message::NewFile(parent) => {
             app_state.context_menu = None;
@@ -531,7 +549,10 @@ pub fn update(
                 ws_state.outbox.push(
                     LOG,
                     toast::Level::Warning,
-                    format!("{} 已在项目内,不支持用拖拽移动项目内文件", bad.display()),
+                    crate::extensions::toast::literal(format!(
+                        "{} 已在项目内,不支持用拖拽移动项目内文件",
+                        bad.display()
+                    )),
                 );
                 return;
             }
@@ -572,9 +593,11 @@ pub fn update(
                     tree.refresh(&target);
                 }
             }
-            Err(e) => ws_state
-                .outbox
-                .push(LOG, toast::Level::Error, format!("拖拽移动失败: {e}")),
+            Err(e) => ws_state.outbox.push(
+                LOG,
+                toast::Level::Error,
+                crate::extensions::toast::literal(format!("拖拽移动失败: {e}")),
+            ),
         },
         Message::MoveNameInput(s) => {
             if let Some(pending) = &mut ws_state.pending_move {
@@ -657,7 +680,7 @@ pub fn update(
                 let mut errs: Vec<String> = Vec::new();
                 for (src, is_dir, dest) in ops {
                     if let Err(e) = crate::project::move_item_to(&src, is_dir, &dest) {
-                        errs.push(format!("{}: {e}", src.display()));
+                        errs.push(format!("{}: {}", src.display(), e.stable()));
                     }
                 }
                 let result = if errs.is_empty() {

@@ -196,7 +196,7 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
                 ws_state.outbox.push_keyed_cooldown(
                     LOG,
                     crate::extensions::toast::Level::Error,
-                    format!("代码健康度加载失败: {message}"),
+                    crate::extensions::toast::literal(format!("代码健康度加载失败: {message}")),
                     "codehealth-load",
                     std::time::Instant::now(),
                 );
@@ -518,7 +518,7 @@ mod tests {
         let toasts = ws.take_outbox();
         assert_eq!(toasts.len(), 1, "相同文本 60 秒内只提示一次");
         assert_eq!(toasts[0].level, crate::extensions::toast::Level::Error);
-        assert!(toasts[0].text.contains("daemon 错误: boom"));
+        assert!(toasts[0].text_stable().contains("daemon 错误: boom"));
         assert_eq!(toasts[0].key.as_deref(), Some("codehealth-load"));
         update(&mut ws, failed(ServiceErrorKind::Protocol, "另一种错误", 1));
         assert_eq!(ws.take_outbox().len(), 1, "换了文本要再提示");

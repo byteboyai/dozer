@@ -152,11 +152,13 @@
 
 **修改：** `extensions/toast.rs`、`platform/toast_overlay.rs`、App 的 push_toast 入口、各面板错误调用点及必要的 service DTO。
 
-- [ ] 将 UI Toast 文案从裸 String 迁至 LocalizedText（过渡期原文变体只用于有理由保留的外部内容），raw diagnostic 单独保存。
-- [ ] 迁移所有中文一次性提示与持续错误摘要，建立操作语义 key，禁止按服务 message 的中文文本匹配错误类型。
-- [ ] 日志记录稳定事件与诊断，渲染使用当前快照；保留旧日志原文。
-- [ ] 验证切换只改变显示，不新增通知，不更新 id/去重键/expire，不额外写日志；含敏感参数的缺译日志不得打印参数。
-- [ ] 需要新增结构化错误字段时先补兼容测试，不顺手改写所有旧 Reply；未知错误有可复制原始详情。
+- [x] 将 UI Toast 文案从裸 String 迁至 LocalizedText（过渡期原文变体只用于有理由保留的外部内容），raw diagnostic 单独保存。
+- [x] 迁移所有中文一次性提示与持续错误摘要，建立操作语义 key，禁止按服务 message 的中文文本匹配错误类型。
+- [x] 日志记录稳定事件与诊断，渲染使用当前快照；保留旧日志原文。
+- [x] 验证切换只改变显示，不新增通知，不更新 id/去重键/expire，不额外写日志；含敏感参数的缺译日志不得打印参数。
+- [x] 需要新增结构化错误字段时先补兼容测试，不顺手改写所有旧 Reply；未知错误有可复制原始详情。
+
+> Task 07 收尾说明（2026-10-14）：`Toast.text`/`Outbox::Pending.text` 全面改为 `LocalizedText`（owner = `dozer.host`），`ToastCenter::push`/`log_toast` 收 `impl Into<LocalizedText>`；渲染在 `platform/toast_overlay.rs`（`host_render` 后 `normalize` 折叠空白），日志/去重走 `host_render_stable` 稳定值。空判定/去重对**无 key 的裸字符串**（literal，fallback 空白）返回空、不落安全兜底文案（`stable_value`）。新增 `LocalizedText::DEFAULT_OWNER` 与 `From<&str>`/`From<String>` 便利实现（`crates/dozer-model/src/i18n.rs`）。`toast::failure_message` 改为操作语义 key 形态 `(scope, key, fallback, res)`。`i18n.rs` 新增 `host_render`/`host_render_stable`/`host_keyed`/`host_keyed_args`（后台产出无 locale 时构造 keyed 文案）。结构化错误：`GitAccountError`、`ProjectFsError`/`FsOp`、`RepoListState::Error(LocalizedText)`、`WorkspaceState::{preview_error,summary_errors}` 等改持 `LocalizedText`，视图层本地化。需 locale 的 `agent_state_label(state, locale)`。**预览组（`web_error`/`PreviewError.message`/T10 冲突三条/资源预算等 6 条）与 SSH tab-bar 相关按任务重投影到 Task 11/10**（inventory 覆盖）。新增 host key：`error.*`（keychain/network/token/git_account/open_with_*）、`preview.enter_code_mode_failed`、`preview.file_missing_locate`、`preview.file_unreadable`、`review.no_conversation`、`agent.state_*`、`term.no_sessions`、`file_history.load_failed`、`todo.process_failed`、`conversations.summary_*`。
 
 **验收：**L03/L08/L10/L13；中文 UI 错误没有因属于服务层而漏迁。
 

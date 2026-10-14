@@ -21,7 +21,7 @@ pub enum ConnectState {
     Editing {
         token: String,
         busy: bool,
-        error: Option<String>,
+        error: Option<dozer_model::LocalizedText>,
     },
     Connected {
         username: String,
@@ -219,8 +219,8 @@ impl State {
 pub(crate) fn finish_disconnect(
     state: &mut State,
     provider: GitProvider,
-    saved: Result<(), String>,
-    delete_token: impl FnOnce() -> Result<(), String>,
+    saved: Result<(), std::io::Error>,
+    delete_token: impl FnOnce() -> Result<(), crate::git_accounts::GitAccountError>,
 ) {
     match saved {
         Ok(()) => {
@@ -228,7 +228,12 @@ pub(crate) fn finish_disconnect(
                 state.outbox.push(
                     LOG,
                     crate::extensions::toast::Level::Warning,
-                    format!("账户已断开,但系统钥匙串里的 token 未能删除: {e}"),
+                    dozer_model::LocalizedText::keyed(
+                        crate::i18n::HOST_OWNER,
+                        "error.disconnect_token_delete_failed",
+                        "The account was disconnected, but the token could not be removed from the system keychain: {detail}",
+                    )
+                    .with_arg("detail", e.stable()),
                 );
             }
             *state.slot_mut(provider) = ConnectState::NotConnected;
@@ -237,7 +242,12 @@ pub(crate) fn finish_disconnect(
             state.outbox.push(
                 LOG,
                 crate::extensions::toast::Level::Error,
-                format!("断开账户失败:写入本地记录出错({e}),已保留原有连接状态"),
+                dozer_model::LocalizedText::keyed(
+                    crate::i18n::HOST_OWNER,
+                    "error.disconnect_local_save_failed",
+                    "Could not disconnect the account: writing the local record failed ({detail}); the existing connection is kept",
+                )
+                .with_arg("detail", e.to_string()),
             );
         }
     }
@@ -263,7 +273,7 @@ pub enum Message {
     ConnectCancel(GitProvider),
     OpenTokenPage(GitProvider),
     ConnectSubmit(GitProvider),
-    ConnectResult(GitProvider, Result<String, String>),
+    ConnectResult(GitProvider, Result<String, dozer_model::LocalizedText>),
     Disconnect(GitProvider),
     AdvancedStopClicked,
     AdvancedSessionCountReady(Result<u32, String>),
@@ -338,7 +348,7 @@ fn apply_sync_message(state: &mut State, msg: &Message) -> bool {
             // 原有已连接展示并告知用户(见 `finish_disconnect`)。
             let mut accounts = git_accounts::load();
             accounts.set(*provider, None);
-            let saved = git_accounts::save(&accounts).map_err(|e| e.to_string());
+            let saved = git_accounts::save(&accounts);
             finish_disconnect(state, *provider, saved, || {
                 git_accounts::delete_token(*provider)
             });
@@ -546,9 +556,11 @@ pub fn update<A>(
         old.abort();
     }
     let join_handle = handle.spawn(async move {
-        let result = git_accounts::validate_token(provider, &token).await;
+        let result = git_accounts::validate_token(provider, &token)
+            .await
+            .map_err(|e| e.localized());
         let result = result.and_then(|username| {
-            git_accounts::set_token(provider, &token)?;
+            git_accounts::set_token(provider, &token).map_err(|e| e.localized())?;
             let mut accounts = git_accounts::load();
             accounts.set(
                 provider,
@@ -556,7 +568,14 @@ pub fn update<A>(
                     username: username.clone(),
                 }),
             );
-            git_accounts::save(&accounts).map_err(|e| format!("写入本地记录失败: {e}"))?;
+            git_accounts::save(&accounts).map_err(|e| {
+                dozer_model::LocalizedText::keyed(
+                    crate::i18n::HOST_OWNER,
+                    "error.git_account_local_save_failed",
+                    "Could not write the local record: {detail}",
+                )
+                .with_arg("detail", e.to_string())
+            })?;
             Ok(username)
         });
         emit(Message::ConnectResult(provider, result));
@@ -657,7 +676,8 @@ fn run_apps_message<A>(
             Effect::HostChanged => s.host_changed = true,
             Effect::Notice { level, text, key } => {
                 let level = crate::extensions::app_host::notice_level(level);
-                s.outbox.push_keyed(LOG, level, text, key);
+                s.outbox
+                    .push_keyed(LOG, level, crate::extensions::toast::literal(text), key);
             }
             Effect::RuntimePlan(runtime) => {
                 handle.spawn(async move {
@@ -937,7 +957,7 @@ fn provider_row<'a>(
                     );
             let error_row: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
                 if let Some(e) = error {
-                    text(e.clone())
+                    text(crate::i18n::host_render(e, locale))
                         .size(byteui::theme::font::label())
                         .color(colors.red)
                         .into()
@@ -1592,16 +1612,21 @@ mod tests {
             ConnectState::NotConnected,
             ConnectState::NotConnected,
         );
+        let err = dozer_model::LocalizedText::keyed(
+            crate::i18n::HOST_OWNER,
+            "error.token_invalid",
+            "The token is invalid or has expired",
+        );
         apply_sync_message(
             &mut state,
-            &Message::ConnectResult(GitProvider::GitHub, Err("令牌无效或已过期".into())),
+            &Message::ConnectResult(GitProvider::GitHub, Err(err.clone())),
         );
         assert_eq!(
             state.github,
             ConnectState::Editing {
                 token: "x".into(),
                 busy: false,
-                error: Some("令牌无效或已过期".into()),
+                error: Some(err),
             }
         );
     }
@@ -1834,13 +1859,16 @@ mod tests {
     fn disconnect_token_delete_failure_still_disconnects_but_warns() {
         let mut s = blank_state();
         finish_disconnect(&mut s, GitProvider::GitHub, Ok(()), || {
-            Err("系统钥匙串删除失败: 拒绝访问".to_string())
+            Err(crate::git_accounts::GitAccountError::KeychainDelete {
+                detail: "access denied".to_string(),
+            })
         });
         assert_eq!(s.github, ConnectState::NotConnected, "本地记录已断开");
         let got = s.take_outbox();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].level, crate::extensions::toast::Level::Warning);
-        assert!(got[0].text.contains("token 未能删除"), "{}", got[0].text);
+        let rendered = crate::i18n::host_render_stable(&got[0].text);
+        assert!(rendered.contains("access denied"), "{rendered}");
         assert_eq!(got[0].scope.name, "settings");
     }
 
@@ -1851,7 +1879,7 @@ mod tests {
         finish_disconnect(
             &mut s,
             GitProvider::GitHub,
-            Err("磁盘满".to_string()),
+            Err(std::io::Error::other("disk full")),
             || {
                 token_delete_called = true;
                 Ok(())
@@ -1868,7 +1896,7 @@ mod tests {
         let got = s.take_outbox();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].level, crate::extensions::toast::Level::Error);
-        assert!(got[0].text.contains("磁盘满"));
+        assert!(crate::i18n::host_render_stable(&got[0].text).contains("disk full"));
     }
 
     // ---- 服务接缝:Advanced 页(DaemonService)与「应用」页(AppHostApi 泛型)----

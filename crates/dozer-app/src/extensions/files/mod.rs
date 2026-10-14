@@ -787,7 +787,11 @@ mod tests {
         assert!(ws_state.move_error.is_none(), "被拒不是对话框内的校验错误");
         let toasts = ws_state.take_outbox();
         assert_eq!(toasts.len(), 1);
-        assert!(toasts[0].text.contains("已在项目内"), "{}", toasts[0].text);
+        assert!(
+            toasts[0].text_stable().contains("已在项目内"),
+            "{}",
+            toasts[0].text_stable()
+        );
         assert!(inside.exists());
     }
 
@@ -1393,7 +1397,12 @@ mod tests {
         update(
             &mut ws_state,
             &mut app_state,
-            Message::PasteDone(1, Err("boom".to_string())),
+            Message::PasteDone(
+                1,
+                Err(crate::project::ProjectFsError::Io {
+                    detail: "boom".to_string(),
+                }),
+            ),
             1,
             &handle,
             |_| {},
@@ -1402,7 +1411,10 @@ mod tests {
         );
         let toasts = ws_state.take_outbox();
         assert_eq!(toasts.len(), 1);
-        assert_eq!(toasts[0].text, "粘贴失败: boom");
+        assert_eq!(
+            crate::i18n::host_render_stable(&toasts[0].text),
+            "粘贴失败: boom"
+        );
         assert_eq!(toasts[0].level, crate::extensions::toast::Level::Error);
         assert_eq!(toasts[0].scope.name, "files");
         assert!(ws_state.move_error.is_none());
@@ -1426,7 +1438,10 @@ mod tests {
         );
         let toasts = ws_state.take_outbox();
         assert_eq!(toasts.len(), 1);
-        assert_eq!(toasts[0].text, "拖拽移动失败: disk full");
+        assert_eq!(
+            crate::i18n::host_render_stable(&toasts[0].text),
+            "拖拽移动失败: disk full"
+        );
         assert!(ws_state.move_error.is_none());
     }
 
@@ -1452,7 +1467,10 @@ mod tests {
         );
         let toasts = ws_state.take_outbox();
         assert_eq!(toasts.len(), 1);
-        assert_eq!(toasts[0].text, "还原文件失败: 该文件没有可回滚的历史版本");
+        assert_eq!(
+            toasts[0].text_stable(),
+            "还原文件失败: 该文件没有可回滚的历史版本"
+        );
     }
 
     #[tokio::test]
@@ -1666,7 +1684,7 @@ mod tests {
         );
         let toasts = ws_state.take_outbox();
         assert_eq!(toasts.len(), 1);
-        assert_eq!(toasts[0].text, "文件操作失败: nope");
+        assert_eq!(toasts[0].text_stable(), "文件操作失败: nope");
         update(
             &mut ws_state,
             &mut app_state,
@@ -1874,7 +1892,7 @@ mod tests {
         );
         let toasts = ws_state.take_outbox();
         assert_eq!(toasts.len(), 1);
-        assert_eq!(toasts[0].text, "名字不能包含路径分隔符");
+        assert_eq!(toasts[0].text_stable(), "名字不能包含路径分隔符");
         assert!(
             ws_state.move_error.is_none(),
             "行内校验不写移动对话框的错误位"
@@ -1907,9 +1925,9 @@ mod tests {
         let toasts = ws_state.take_outbox();
         assert_eq!(toasts.len(), 1);
         assert!(
-            toasts[0].text.contains("已存在同名项"),
+            toasts[0].text_stable().contains("已存在同名项"),
             "{}",
-            toasts[0].text
+            toasts[0].text_stable()
         );
     }
 

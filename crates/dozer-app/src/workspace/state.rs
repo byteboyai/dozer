@@ -413,9 +413,9 @@ pub struct Workspace {
     /// Files 预览(见 `Project::OpenLink` 的路由)。
     pub(crate) project_preview: PreviewPane,
     /// 预览域错误文案(打开文件失败等), RED 显示在预览栏地址栏下方。
-    pub(crate) preview_error: Option<String>,
+    pub(crate) preview_error: Option<dozer_model::LocalizedText>,
     /// Project 面板右配对预览的错误文案,语义同 `preview_error`。
-    pub(crate) project_preview_error: Option<String>,
+    pub(crate) project_preview_error: Option<dozer_model::LocalizedText>,
     /// 预览上下文推送的防抖 nonce:每次变化时自增，延迟任务醒来后只有
     /// "自己发起时的值仍是最新值"才真正推送，否则说明中途又有新变化，
     /// 让更晚的那次任务去做(trailing-edge 防抖，见
@@ -1716,7 +1716,12 @@ impl Workspace {
                         proxy.send_event(Message::Toast(crate::extensions::toast::Message::Push {
                             scope: LOG,
                             level: crate::extensions::toast::Level::Error,
-                            text: format!("新建会话失败: {e}"),
+                            text: dozer_model::LocalizedText::keyed(
+                                crate::i18n::HOST_OWNER,
+                                "error.new_session_failed",
+                                "Could not create a new session: {error}",
+                            )
+                            .with_arg("error", e.to_string()),
                             key: Some("new-session-failed".to_string()),
                         }));
                     return;
@@ -1748,7 +1753,12 @@ impl Workspace {
                                 crate::extensions::toast::Message::Push {
                                     scope: LOG,
                                     level: crate::extensions::toast::Level::Error,
-                                    text: format!("未能把启动命令写入终端: {e}"),
+text: dozer_model::LocalizedText::keyed(
+                                crate::i18n::HOST_OWNER,
+                                "error.term_initial_write_failed",
+                                "Could not write the launch command to the terminal: {error}",
+                            )
+                            .with_arg("error", e.to_string()),
                                     key: Some("term-initial-write".to_string()),
                                 },
                             ));
@@ -1761,7 +1771,12 @@ impl Workspace {
                                 crate::extensions::toast::Message::Push {
                                     scope: LOG,
                                     level: crate::extensions::toast::Level::Error,
-                                    text: format!("未能把任务文本写入终端: {e}"),
+                                    text: dozer_model::LocalizedText::keyed(
+                                        crate::i18n::HOST_OWNER,
+                                        "error.term_dispatch_write_failed",
+                                        "Could not write the task text to the terminal: {error}",
+                                    )
+                                    .with_arg("error", e.to_string()),
                                     key: Some("term-dispatch-write".to_string()),
                                 },
                             ));
@@ -1774,7 +1789,12 @@ impl Workspace {
                         proxy.send_event(Message::Toast(crate::extensions::toast::Message::Push {
                             scope: LOG,
                             level: crate::extensions::toast::Level::Error,
-                            text: format!("attach 新会话失败: {e}"),
+                            text: dozer_model::LocalizedText::keyed(
+                                crate::i18n::HOST_OWNER,
+                                "error.attach_session_failed",
+                                "Could not attach the new session: {error}",
+                            )
+                            .with_arg("error", e.to_string()),
                             key: Some("attach-session-failed".to_string()),
                         }));
                 }
@@ -2281,7 +2301,10 @@ impl Workspace {
     }
 
     /// `kind` 对应面板的预览错误槽(`preview_error` / `project_preview_error`)。
-    pub(crate) fn preview_error_mut(&mut self, kind: PanelKind) -> &mut Option<String> {
+    pub(crate) fn preview_error_mut(
+        &mut self,
+        kind: PanelKind,
+    ) -> &mut Option<dozer_model::LocalizedText> {
         match kind {
             PanelKind::Project => &mut self.project_preview_error,
             _ => &mut self.preview_error,
@@ -2667,7 +2690,14 @@ impl Workspace {
         } else {
             let pane = self.preview_pane_mut(kind);
             if let Err(e) = pane.enter_code_mode(idx) {
-                let err = Some(format!("打开代码模式失败: {e}"));
+                let err = Some(
+                    dozer_model::LocalizedText::keyed(
+                        crate::i18n::HOST_OWNER,
+                        "preview.enter_code_mode_failed",
+                        "Failed to switch to code mode: {e}",
+                    )
+                    .with_arg("e", e.to_string()),
+                );
                 *self.preview_error_mut(kind) = err;
                 return None;
             }
@@ -3215,9 +3245,13 @@ pub(crate) fn review_content<'a>(
         );
     }
     if rv.entries.is_empty() {
-        content = content.push(lh(text("暂无对话")
-            .size(byteui::theme::font::subtitle())
-            .color(byteui::theme::color::current().dim)));
+        content = content.push(lh(text(crate::i18n::host_text(
+            "review.no_conversation",
+            "No conversation",
+            locale,
+        ))
+        .size(byteui::theme::font::subtitle())
+        .color(byteui::theme::color::current().dim)));
     }
     // 有内容时:真正的渲染由 review_content_pane 区域叠加的 wry webview
     // 负责(dozer://review-trace/host.html,数据经 dozer://review-trace/

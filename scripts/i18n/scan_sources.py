@@ -331,14 +331,28 @@ def extract_html(text: str, rel: str, records: list):
         _maybe_record(m.group(0).strip(), 0, rel, text, records, "html_text")
 
 
+def _statement_start(text: str, pos: int, back: int = 4000) -> int:
+    """返回 pos 之前最近的语句边界(`;`/`{`/`}`)之后的偏移。
+
+    宏调用(尤其 `dozer_core::log_warn!` 这类多行字段列表)里,字符串可能是最后一个
+    实参,离宏名远超固定窗口;用语句边界兜住整条调用,避免把日志/诊断误判为 UI。
+    """
+    start = max(0, pos - back)
+    seg = text[start:pos]
+    cut = max(seg.rfind(";"), seg.rfind("{"), seg.rfind("}"))
+    return start + cut + 1
+
+
 def classify(rel: str, text: str, pos: int, kind: str) -> tuple[str, str | None]:
     """返回 (usage, note)。pos 为字符串在文件中的近似偏移(用于日志/诊断/测试判定)。"""
     window = text[max(0, pos - 120):pos]
+    # 日志/诊断宏的实参可能跨多行(字段列表在前),用整条语句兜底。
+    stmt = text[_statement_start(text, pos):pos]
     if is_test_context(rel, text, pos):
         return "test", "测试/fixture 内(默认排除)"
-    if LOG_MACRO_RE.search(window):
+    if LOG_MACRO_RE.search(window) or LOG_MACRO_RE.search(stmt):
         return "log", "日志宏参数(默认排除)"
-    if DIAG_MACRO_RE.search(window):
+    if DIAG_MACRO_RE.search(window) or DIAG_MACRO_RE.search(stmt):
         return "diag", "开发期诊断宏(默认排除)"
     return "ui", None
 

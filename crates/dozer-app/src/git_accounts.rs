@@ -7,6 +7,106 @@ use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// Git 账户操作的结构化错误(Task 07:操作语义 + 原始诊断分离)。
+///
+/// `git_accounts` 在阻塞/网络线程里产生它,拿不到 locale,所以返回结构化的
+/// 原因,由呈现层按当前 locale 渲染;`detail` 是底层系统/网络报错原文,原样
+/// 保留、不翻译。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitAccountError {
+    /// 写入系统钥匙串失败;`detail` 为系统报错原文。
+    KeychainWrite { detail: String },
+    /// 删除系统钥匙串条目失败;`detail` 为系统报错原文。
+    KeychainDelete { detail: String },
+    /// 网络请求(发起/读取)失败;`detail` 为底层报错原文。
+    Network { detail: String },
+    /// 解析服务商响应失败;`detail` 为解析器报错原文。
+    ParseResponse { detail: String },
+    /// 令牌无效或已过期(whoami 非 2xx)。
+    TokenInvalid,
+    /// whoami 响应缺少 `login` 字段。
+    MissingLoginField,
+    /// 仓库列表响应不是数组。
+    NotArray,
+    /// 拉取仓库列表时令牌失效(非 2xx)。
+    RepoListTokenExpired,
+}
+
+impl GitAccountError {
+    /// 语言无关的稳定诊断串(英文),用于日志/去重;含原始 `detail`,不翻译。
+    pub fn stable(&self) -> String {
+        match self {
+            GitAccountError::KeychainWrite { detail } => {
+                format!("Failed to write to the system keychain: {detail}")
+            }
+            GitAccountError::KeychainDelete { detail } => {
+                format!("Failed to delete from the system keychain: {detail}")
+            }
+            GitAccountError::Network { detail } => format!("Network request failed: {detail}"),
+            GitAccountError::ParseResponse { detail } => format!("Failed to parse response: {detail}"),
+            GitAccountError::TokenInvalid => "Token is invalid or has expired".to_string(),
+            GitAccountError::MissingLoginField => "Response is missing the login field".to_string(),
+            GitAccountError::NotArray => "Response is not an array".to_string(),
+            GitAccountError::RepoListTokenExpired => {
+                "Failed to load the repository list: the token may have expired; reconnect the account"
+                    .to_string()
+            }
+        }
+    }
+
+    /// 渲染成当前 locale 的宿主文案(key + fallback + 原始诊断参数)。
+    pub fn localized(&self) -> dozer_model::LocalizedText {
+        use dozer_model::LocalizedText;
+        let owner = crate::i18n::HOST_OWNER;
+        match self {
+            GitAccountError::KeychainWrite { detail } => LocalizedText::keyed(
+                owner,
+                "error.keychain_write_failed",
+                "Failed to write to the system keychain: {detail}",
+            )
+            .with_arg("detail", detail.clone()),
+            GitAccountError::KeychainDelete { detail } => LocalizedText::keyed(
+                owner,
+                "error.keychain_delete_failed",
+                "Failed to delete from the system keychain: {detail}",
+            )
+            .with_arg("detail", detail.clone()),
+            GitAccountError::Network { detail } => LocalizedText::keyed(
+                owner,
+                "error.network_request_failed",
+                "Network request failed: {detail}",
+            )
+            .with_arg("detail", detail.clone()),
+            GitAccountError::ParseResponse { detail } => LocalizedText::keyed(
+                owner,
+                "error.parse_response_failed",
+                "Failed to parse the response: {detail}",
+            )
+            .with_arg("detail", detail.clone()),
+            GitAccountError::TokenInvalid => LocalizedText::keyed(
+                owner,
+                "error.token_invalid",
+                "The token is invalid or has expired",
+            ),
+            GitAccountError::MissingLoginField => LocalizedText::keyed(
+                owner,
+                "error.response_missing_login",
+                "The response is missing the login field",
+            ),
+            GitAccountError::NotArray => LocalizedText::keyed(
+                owner,
+                "error.response_not_array",
+                "The response is not an array",
+            ),
+            GitAccountError::RepoListTokenExpired => LocalizedText::keyed(
+                owner,
+                "error.repo_list_token_expired",
+                "Failed to load the repository list: the token may have expired; reconnect the account",
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GitProvider {
     GitHub,
@@ -120,42 +220,50 @@ pub fn get_token(provider: GitProvider) -> Option<String> {
         .and_then(|e| e.get_password().ok())
 }
 
-pub fn set_token(provider: GitProvider, token: &str) -> Result<(), String> {
+pub fn set_token(provider: GitProvider, token: &str) -> Result<(), GitAccountError> {
     keyring_entry(provider)
         .and_then(|e| e.set_password(token))
-        .map_err(|e| format!("系统钥匙串写入失败: {e}"))
+        .map_err(|e| GitAccountError::KeychainWrite {
+            detail: e.to_string(),
+        })
 }
 
 /// 条目本来就不存在(`keyring::Error::NoEntry`)视为成功——"断开一个从没
 /// 真正连上的账户"不应该报错。
-pub fn delete_token(provider: GitProvider) -> Result<(), String> {
+pub fn delete_token(provider: GitProvider) -> Result<(), GitAccountError> {
     match keyring_entry(provider) {
         Ok(entry) => match entry.delete_credential() {
             Ok(()) => Ok(()),
             Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(format!("系统钥匙串删除失败: {e}")),
+            Err(e) => Err(GitAccountError::KeychainDelete {
+                detail: e.to_string(),
+            }),
         },
-        Err(e) => Err(format!("系统钥匙串删除失败: {e}")),
+        Err(e) => Err(GitAccountError::KeychainDelete {
+            detail: e.to_string(),
+        }),
     }
 }
 
 /// 三家 whoami 接口(GitHub `/user`、GitLab `/api/v4/user`、Gitee
 /// `/api/v5/user`)返回的用户名字段都叫 `login`,不需要按 provider 分支。
-pub(crate) fn extract_username(json: &str) -> Result<String, String> {
+pub(crate) fn extract_username(json: &str) -> Result<String, GitAccountError> {
     let value: serde_json::Value =
-        serde_json::from_str(json).map_err(|e| format!("解析响应失败: {e}"))?;
+        serde_json::from_str(json).map_err(|e| GitAccountError::ParseResponse {
+            detail: e.to_string(),
+        })?;
     value
         .get("login")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| "响应中缺少 login 字段".to_string())
+        .ok_or(GitAccountError::MissingLoginField)
 }
 
 /// 调用服务商 whoami 接口校验 `token` 有效,成功返回用户名。三家鉴权方式
 /// 不同:GitHub 用 `Authorization: Bearer`,GitLab 用 `PRIVATE-TOKEN` 头,
 /// Gitee 用 `access_token` query 参数(Gitee API v5 的既定用法)。不做
 /// 401/403/404 的文案区分(YAGNI),非 2xx 一律归为"令牌无效或已过期"。
-pub async fn validate_token(provider: GitProvider, token: &str) -> Result<String, String> {
+pub async fn validate_token(provider: GitProvider, token: &str) -> Result<String, GitAccountError> {
     let client = reqwest::Client::new();
     let mut req = client
         .get(provider.whoami_url())
@@ -165,14 +273,15 @@ pub async fn validate_token(provider: GitProvider, token: &str) -> Result<String
         GitProvider::GitLab => req.header("PRIVATE-TOKEN", token),
         GitProvider::Gitee => req.query(&[("access_token", token)]),
     };
-    let resp = req.send().await.map_err(|e| format!("网络请求失败: {e}"))?;
+    let resp = req.send().await.map_err(|e| GitAccountError::Network {
+        detail: e.to_string(),
+    })?;
     if !resp.status().is_success() {
-        return Err("令牌无效或已过期".to_string());
+        return Err(GitAccountError::TokenInvalid);
     }
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| format!("读取响应失败: {e}"))?;
+    let body = resp.text().await.map_err(|e| GitAccountError::Network {
+        detail: e.to_string(),
+    })?;
     extract_username(&body)
 }
 
@@ -200,12 +309,12 @@ fn list_repos_url(provider: GitProvider) -> &'static str {
 pub(crate) fn parse_repo_list(
     provider: GitProvider,
     json: &str,
-) -> Result<Vec<RemoteRepo>, String> {
+) -> Result<Vec<RemoteRepo>, GitAccountError> {
     let value: serde_json::Value =
-        serde_json::from_str(json).map_err(|e| format!("解析响应失败: {e}"))?;
-    let items = value
-        .as_array()
-        .ok_or_else(|| "响应格式不是数组".to_string())?;
+        serde_json::from_str(json).map_err(|e| GitAccountError::ParseResponse {
+            detail: e.to_string(),
+        })?;
+    let items = value.as_array().ok_or(GitAccountError::NotArray)?;
     let (name_field, url_field) = match provider {
         GitProvider::GitHub => ("full_name", "clone_url"),
         GitProvider::GitLab => ("path_with_namespace", "http_url_to_repo"),
@@ -228,7 +337,10 @@ pub(crate) fn parse_repo_list(
 /// 拉取 `provider` 账户名下的个人仓库(不含组织/团队,只取第一页,见
 /// `docs/superpowers/specs/2026-09-18-project-create-remote-repo-picker-
 /// design.md`「非目标」)。鉴权头写法同 `validate_token`。
-pub async fn list_repos(provider: GitProvider, token: &str) -> Result<Vec<RemoteRepo>, String> {
+pub async fn list_repos(
+    provider: GitProvider,
+    token: &str,
+) -> Result<Vec<RemoteRepo>, GitAccountError> {
     let client = reqwest::Client::new();
     let mut req = client
         .get(list_repos_url(provider))
@@ -238,14 +350,15 @@ pub async fn list_repos(provider: GitProvider, token: &str) -> Result<Vec<Remote
         GitProvider::GitLab => req.header("PRIVATE-TOKEN", token),
         GitProvider::Gitee => req.query(&[("access_token", token)]),
     };
-    let resp = req.send().await.map_err(|e| format!("网络请求失败: {e}"))?;
+    let resp = req.send().await.map_err(|e| GitAccountError::Network {
+        detail: e.to_string(),
+    })?;
     if !resp.status().is_success() {
-        return Err("仓库列表加载失败: 令牌可能已失效,请重新连接账户".to_string());
+        return Err(GitAccountError::RepoListTokenExpired);
     }
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| format!("读取响应失败: {e}"))?;
+    let body = resp.text().await.map_err(|e| GitAccountError::Network {
+        detail: e.to_string(),
+    })?;
     parse_repo_list(provider, &body)
 }
 

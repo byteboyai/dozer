@@ -308,7 +308,7 @@ pub fn update(
                 ws_state.outbox.push_keyed_cooldown(
                     LOG,
                     crate::extensions::toast::Level::Error,
-                    format!("记忆加载失败: {message}"),
+                    crate::extensions::toast::literal(format!("记忆加载失败: {message}")),
                     "project-memories-load",
                     std::time::Instant::now(),
                 );

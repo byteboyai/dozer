@@ -218,7 +218,7 @@ pub(crate) fn persist_hosts(ws_state: &mut WorkspaceState, repo_path: &Path) {
         ws_state.outbox.push(
             LOG,
             crate::extensions::toast::Level::Error,
-            format!("SSH 主机未能保存到磁盘: {e}"),
+            crate::extensions::toast::literal(format!("SSH 主机未能保存到磁盘: {e}")),
         );
     }
 }
@@ -1556,7 +1556,11 @@ mod tests {
         persist_hosts(&mut ws, &blocker);
         let got = ws.take_outbox();
         assert_eq!(got.len(), 1);
-        assert!(got[0].text.contains("SSH"), "{}", got[0].text);
+        assert!(
+            got[0].text_stable().contains("SSH"),
+            "{}",
+            got[0].text_stable()
+        );
         assert_eq!(got[0].scope.name, "ssh");
         assert_eq!(got[0].level, crate::extensions::toast::Level::Error);
     }
@@ -1589,8 +1593,8 @@ mod tests {
         let got = ws.take_outbox();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].scope.name, "ssh");
-        assert!(got[0].text.contains("钥匙串已锁定"));
-        assert!(!got[0].text.contains("pw-secret"));
+        assert!(got[0].text_stable().contains("钥匙串已锁定"));
+        assert!(!got[0].text_stable().contains("pw-secret"));
     }
 
     #[test]

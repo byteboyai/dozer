@@ -286,7 +286,7 @@ impl AppState {
             self.outbox.push(
                 LOG,
                 crate::extensions::toast::Level::Error,
-                format!("数据库驱动配置未能保存到磁盘: {e}"),
+                crate::extensions::toast::literal(format!("数据库驱动配置未能保存到磁盘: {e}")),
             );
         }
     }

@@ -129,7 +129,7 @@ pub struct WorkspaceState {
     agent_filter: Option<AgentKind>,
     agent_picker_open: bool,
     summary_generating: HashSet<String>,
-    summary_errors: HashMap<String, String>,
+    summary_errors: HashMap<String, dozer_model::LocalizedText>,
     /// 待发提示;`App::drain_outboxes` 排空成 Toast。
     outbox: crate::extensions::toast::Outbox,
 }
@@ -143,8 +143,8 @@ impl WorkspaceState {
         self.summary_generating.contains(conversation_id)
     }
 
-    pub fn summary_error(&self, conversation_id: &str) -> Option<&str> {
-        self.summary_errors.get(conversation_id).map(String::as_str)
+    pub fn summary_error(&self, conversation_id: &str) -> Option<&dozer_model::LocalizedText> {
+        self.summary_errors.get(conversation_id)
     }
 
     pub fn start_summary_generation(&mut self, conversation_id: String) -> bool {
@@ -155,7 +155,7 @@ impl WorkspaceState {
     pub fn finish_summary_generation(
         &mut self,
         conversation_id: String,
-        result: Result<(), String>,
+        result: Result<(), dozer_model::LocalizedText>,
     ) {
         self.summary_generating.remove(&conversation_id);
         if let Err(error) = result {
@@ -206,7 +206,7 @@ pub enum Message {
     /// (Manual + force),随后轮询并刷新。内核直接拦截处理。
     SummaryGenerate(String, AgentKind),
     /// 后台总结任务结束；用于恢复按钮并在详情页就地显示错误。
-    SummaryGenerateFinished(ProjectId, String, Result<(), String>),
+    SummaryGenerateFinished(ProjectId, String, Result<(), dozer_model::LocalizedText>),
     /// 列表底部"更多..."翻页,纯客户端状态。
     ListMore,
     /// 搜索框草稿变化。
@@ -257,7 +257,10 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
                     ws_state.outbox.push_keyed_cooldown(
                         LOG,
                         crate::extensions::toast::Level::Error,
-                        format!("会话列表加载失败: {}", e.message),
+                        crate::extensions::toast::literal(format!(
+                            "会话列表加载失败: {}",
+                            e.message
+                        )),
                         "conversations-load",
                         std::time::Instant::now(),
                     );
@@ -719,9 +722,20 @@ mod tests {
         assert!(state.summary_generating("conversation-1"));
         assert!(!state.start_summary_generation("conversation-1".into()));
 
-        state.finish_summary_generation("conversation-1".into(), Err("provider 超时".into()));
+        state.finish_summary_generation(
+            "conversation-1".into(),
+            Err(crate::i18n::host_keyed(
+                "test.summary_error",
+                "provider 超时",
+            )),
+        );
         assert!(!state.summary_generating("conversation-1"));
-        assert_eq!(state.summary_error("conversation-1"), Some("provider 超时"));
+        assert_eq!(
+            state
+                .summary_error("conversation-1")
+                .map(|t| crate::i18n::host_render_stable(t)),
+            Some("provider 超时".to_string())
+        );
 
         assert!(state.start_summary_generation("conversation-1".into()));
         assert_eq!(state.summary_error("conversation-1"), None);
@@ -1096,7 +1110,7 @@ mod tests {
         let toasts = ws.take_outbox();
         assert_eq!(toasts.len(), 1, "相同文本 60 秒内只提示一次");
         assert_eq!(toasts[0].level, crate::extensions::toast::Level::Error);
-        assert!(toasts[0].text.contains("daemon 错误: boom"));
+        assert!(toasts[0].text_stable().contains("daemon 错误: boom"));
         assert_eq!(toasts[0].key.as_deref(), Some("conversations-load"));
         assert_eq!(ws.sessions().map(|s| s.len()), Some(1));
         update(

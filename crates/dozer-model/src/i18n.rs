@@ -100,6 +100,9 @@ pub struct LocalizedText {
 }
 
 impl LocalizedText {
+    /// 裸字符串转成 `LocalizedText` 时使用的默认 owner(host 词表)。
+    pub const DEFAULT_OWNER: &'static str = "dozer.host";
+
     /// 只带 fallback 的文案(无 key、无参数)。
     pub fn literal(owner: impl Into<String>, fallback: impl Into<String>) -> Self {
         LocalizedText {
@@ -128,5 +131,20 @@ impl LocalizedText {
     pub fn with_arg(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.args.insert(name.into(), value.into());
         self
+    }
+}
+
+/// 裸字符串按 host owner 包成无 key 的 literals:让 `impl Into<LocalizedText>`
+/// 的入口(如 `Outbox::push`)能直接收 `&str`/`String`。迁移期便利,渲染时直接
+/// 显示原文本;已迁到资源 key 的调用点仍应用 `keyed`/`host_text*`。
+impl From<&str> for LocalizedText {
+    fn from(value: &str) -> Self {
+        LocalizedText::literal(Self::DEFAULT_OWNER, value)
+    }
+}
+
+impl From<String> for LocalizedText {
+    fn from(value: String) -> Self {
+        LocalizedText::literal(Self::DEFAULT_OWNER, value)
     }
 }

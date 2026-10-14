@@ -149,7 +149,7 @@ fn s4a_service_failure_is_reported_not_swallowed() {
         assert_eq!(host.ws.git_commits(), 1);
         let toasts = host.drain_toasts();
         assert_eq!(toasts.len(), 1, "{kind:?}");
-        assert!(toasts[0].text.contains("boom"));
+        assert!(toasts[0].text_stable().contains("boom"));
         assert_eq!(fake.calls().len(), 1);
     }
 }

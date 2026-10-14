@@ -70,9 +70,11 @@ pub(crate) fn stack_bounds(
 
 /// 纯视图:一列固定尺寸卡片(左侧色条 + 文本)。窗口背景透明,圆角与边框
 /// 由 iced 自己画。文本用系统默认字体 + `Shaping::Advanced`(中文回退)。
-pub(crate) fn view(
-    items: &[Toast],
-) -> Element<'_, (), iced_widget::Theme, iced_renderer::Renderer> {
+/// `locale` 决定文案解析语言:切换语言只重绘本窗口,不重推提示(spec §4.3)。
+pub(crate) fn view<'a>(
+    items: &'a [Toast],
+    locale: &str,
+) -> Element<'a, (), iced_widget::Theme, iced_renderer::Renderer> {
     let colors = byteui::theme::color::current();
     let mut col = column![]
         .spacing(TOAST_GAP)
@@ -92,10 +94,12 @@ pub(crate) fn view(
                 ..container::Style::default()
             });
         let body = container(
-            text(t.text.as_str())
-                .size(byteui::theme::font::body())
-                .color(colors.cream)
-                .shaping(text::Shaping::Advanced),
+            text(crate::extensions::toast::normalize(
+                &crate::i18n::host_render(&t.text, locale),
+            ))
+            .size(byteui::theme::font::body())
+            .color(colors.cream)
+            .shaping(text::Shaping::Advanced),
         )
         .padding(Padding {
             top: 0.0,
@@ -200,9 +204,12 @@ impl ToastOverlay {
         }
     }
 
-    pub(crate) fn redraw(&mut self, items: &[Toast]) {
-        self.gpu
-            .redraw(&self.window, mouse::Cursor::Unavailable, view(items));
+    pub(crate) fn redraw(&mut self, items: &[Toast], locale: &str) {
+        self.gpu.redraw(
+            &self.window,
+            mouse::Cursor::Unavailable,
+            view(items, locale),
+        );
     }
 }
 

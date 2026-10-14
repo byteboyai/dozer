@@ -55,7 +55,12 @@ pub(crate) fn save(
         outbox.push(
             scope,
             Level::Error,
-            format!("密码未能保存到系统钥匙串: {e}"),
+            dozer_model::LocalizedText::keyed(
+                crate::i18n::HOST_OWNER,
+                "error.secret_save_failed",
+                "Could not save the password to the system keychain: {error}",
+            )
+            .with_arg("error", e.to_string()),
         );
     }
 }
@@ -71,7 +76,12 @@ pub(crate) fn remove(
         outbox.push(
             scope,
             Level::Warning,
-            format!("系统钥匙串里的凭据未能删除: {e}"),
+            dozer_model::LocalizedText::keyed(
+                crate::i18n::HOST_OWNER,
+                "error.secret_delete_failed",
+                "Could not delete the credential from the system keychain: {error}",
+            )
+            .with_arg("error", e.to_string()),
         );
     }
 }
@@ -155,8 +165,10 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].level, Level::Error);
         assert_eq!(got[0].scope, TEST_SSH);
-        assert_eq!(got[0].text, "密码未能保存到系统钥匙串: 钥匙串已锁定");
-        assert!(!got[0].text.contains("pw-secret"), "文案不得含秘密本身");
+        // 语言无关的稳定值:英文兜底 + 原始诊断。
+        let stable = crate::i18n::host_render_stable(&got[0].text);
+        assert!(stable.contains("钥匙串已锁定"), "{stable}");
+        assert!(!stable.contains("pw-secret"), "文案不得含秘密本身");
     }
 
     #[test]
@@ -176,7 +188,8 @@ mod tests {
         let got = outbox.take();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].level, Level::Warning);
-        assert_eq!(got[0].text, "系统钥匙串里的凭据未能删除: 拒绝访问");
+        let stable = crate::i18n::host_render_stable(&got[0].text);
+        assert!(stable.contains("拒绝访问"), "{stable}");
     }
 
     /// 真钥匙串:删除一个不存在的条目必须当成功(密钥认证的主机从没存过密码)。

@@ -23,14 +23,14 @@
 
 | Task | 主题 | 未解决候选 |
 |---|---|---|
-| 05 | 设置入口与面板标题 | 3 |
+| 05 | 设置入口与面板标题 | 0 |
 | 06 | Host chrome/菜单/原生 overlay | 0 |
-| 07 | Toast 与错误呈现 | 105 |
+| 07 | Toast 与错误呈现 | 0 |
 | 08 | WebView locale 传递基础 | 8 |
 | 09 | Todo / Usage / Code Health 首批面板 | 240 |
-| 10 | 其余官方面板与辅助界面 | 413 |
-| 11 | 编辑/预览 Web 与 HTML 模板 | 112 |
-| **合计** | | **881** |
+| 10 | 其余官方面板与辅助界面 | 418 |
+| 11 | 编辑/预览 Web 与 HTML 模板 | 115 |
+| **合计** | | **781** |
 
 未分配的 UI 区域：**0**（生成器 `build_inventory.py` 在存在无任务候选时报警并列出）。
 
@@ -63,7 +63,8 @@
 | 04 App 语言快照、系统探测和窗口同步 | ✅ 完成 | `dozer-app/src/platform/locale.rs`(macOS `NSLocale.preferredLanguages` 有序探测 + 非 mac 环境变量回落)、`dozer-app/src/app/locale.rs`(`LocaleController`:epoch/序号/display generation/2s 节拍/在途合并/迟到丢弃/revision 防回退)、`dozer-app/src/locale_cache.rs`(最后确认快照缓存)、`app/{app,message,update}.rs` 接线、`platform/window_events.rs` 节拍与获焦刷新 | 文案渲染接缝(`host_resolver`/`host_text`)的**消费**在 Task 05;webview locale 注入在 Task 08 |
 | 05 设置入口与面板标题纵向交付 | ✅ 完成 | `panel_registry.rs`(`PanelDescriptor{title_key,title_fallback}`+`title(locale)`)、`product.rs`(`panel.*` key+英文 fallback)、`chrome/rail.rs::panel_meta(kind,locale)`、`extensions/settings.rs`(语言页 + `LanguageStatus` 状态机 + `LanguageSelected`/`LanguageSaveOutcome`;Git/高级文案经 `host_text`)、`app/update.rs`(拦截提交→`spawn_locale_write`)、`app/app.rs`(`open_settings`/`sync_settings_locale`/`spawn_locale_write`/`apply_local_write`)、`settings_overlay.rs`(传 locale)、`i18n.rs::interpolate`、`locales/host/{en,zh-CN}.json`、`build_inventory.py` 的 `NON_UI_STRINGS` | Task 05 未解决候选 28→3：剩余 3 条是断开账号 Toast + 本地记录写失败文案,归 Task 07;4 条面板清单构造器不变量错误按非 UI 排除;其余 chrome/菜单/overlay 文案在 Task 06;webview 注入在 Task 08 |
 | 06 Host chrome、菜单、原生 overlay 与项目创建 | ✅ 完成 | `chrome/{rail,topbar,tab_widget,homespace}`、`app/{view,app,update}.rs`、`workspace/view.rs`、`extensions/{settings,project_create,search,edit_history,file_history,settings_apps_view,conversations,project/view}.rs`、`platform/*_overlay.rs` 与 `window_events.rs`、`menu_spec.rs`、`i18n.rs::host_text_args`（删除 `interpolate`）、`locales/host/{en,zh-CN}.json`、`build_inventory.py` 的 `STRING_TASK_OVERRIDES`;byteui v0.4.2 放宽 label/placeholder 为 `&str` | Task 06 未解决候选清零(重投影后归 07/08/09/10/11);bytehost 自产的应用页文字与 agent 品牌名不在范围 |
-| 07–08 | 未开始 | — | 依赖 06 |
+| 07 Toast 与错误呈现迁移 | ✅ 完成 | `extensions/toast.rs`(`Toast.text`/`Pending.text: LocalizedText`、`push`/`log_toast` 收 `impl Into<LocalizedText>`、`failure_message(scope,key,fallback,res)`、`stable_value` 空判定/去重)、`platform/toast_overlay.rs`(渲染后 `normalize`)、`i18n.rs`(`host_render`/`host_render_stable`/`host_keyed`/`host_keyed_args`)、`dozer-model/src/i18n.rs`(`DEFAULT_OWNER`+`From<&str>`/`From<String>`)、结构化错误(`GitAccountError`/`ProjectFsError`/`RepoListState::Error(LocalizedText)`/`WorkspaceState::{preview_error,summary_errors}`)、`workspace/hook.rs::agent_state_label(state,locale)`、`locales/host/{en,zh-CN}.json`、`build_inventory.py`(NON_UI/OVERRIDE) | Task 07 未解决候选清零;预览组(`web_error`/`PreviewError.message`/T10 冲突/资源预算 6 条)与 SSH 连接错误 4 条按任务重投影到 Task 11/10 |
+| 08 | 未开始 | — | 依赖 07;WebView locale 传递基础 |
 | 09–11 | 未开始 | — | 依赖 07/08 |
 | 12–14 | 未开始 | — | 见计划 §2 |
 

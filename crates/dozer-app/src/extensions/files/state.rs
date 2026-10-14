@@ -307,10 +307,15 @@ pub enum Message {
     OpenWithDefault(PathBuf, Option<String>),
     /// `OpenWithDefault` 后台等 `open` 退出后的结果(项目 id,路径,App 名,结果)。
     /// `open -a 不存在的App` 的失败在进程退出之后才出现,所以必须等退出状态。
-    OpenWithDefaultDone(i64, PathBuf, Option<String>, Result<(), String>),
+    OpenWithDefaultDone(
+        i64,
+        PathBuf,
+        Option<String>,
+        Result<(), crate::external_apps::OpenError>,
+    ),
     Copy(PathBuf, bool),
     Paste(PathBuf),
-    PasteDone(i64, Result<PathBuf, String>),
+    PasteDone(i64, Result<PathBuf, crate::project::ProjectFsError>),
     DeleteRequest(PathBuf, bool),
     DeleteConfirm,
     DeleteCancel,
@@ -857,7 +862,7 @@ impl WorkspaceState {
             self.outbox.push(
                 LOG,
                 crate::extensions::toast::Level::Error,
-                "名字不能包含路径分隔符",
+                crate::extensions::toast::literal("名字不能包含路径分隔符"),
             );
             self.tree_edit = Some(TreeEdit {
                 parent_dir: edit.parent_dir,
@@ -876,7 +881,10 @@ impl WorkspaceState {
                     self.outbox.push(
                         LOG,
                         crate::extensions::toast::Level::Error,
-                        format!("{} 已存在同名项", new_path.display()),
+                        crate::extensions::toast::literal(format!(
+                            "{} 已存在同名项",
+                            new_path.display()
+                        )),
                     );
                     self.tree_edit = Some(TreeEdit {
                         parent_dir: edit.parent_dir,
@@ -905,7 +913,10 @@ impl WorkspaceState {
                     self.outbox.push(
                         LOG,
                         crate::extensions::toast::Level::Error,
-                        format!("{} 已存在同名项", new_path.display()),
+                        crate::extensions::toast::literal(format!(
+                            "{} 已存在同名项",
+                            new_path.display()
+                        )),
                     );
                     self.tree_edit = Some(TreeEdit {
                         parent_dir: edit.parent_dir,
@@ -936,7 +947,10 @@ impl WorkspaceState {
                     self.outbox.push(
                         LOG,
                         crate::extensions::toast::Level::Error,
-                        format!("{} 已存在同名项", new_path.display()),
+                        crate::extensions::toast::literal(format!(
+                            "{} 已存在同名项",
+                            new_path.display()
+                        )),
                     );
                     self.tree_edit = Some(TreeEdit {
                         parent_dir: edit.parent_dir,

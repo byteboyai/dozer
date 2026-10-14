@@ -417,7 +417,7 @@ mod tests {
         let toasts = ws.take_outbox();
         assert_eq!(toasts.len(), 1);
         assert_eq!(toasts[0].level, crate::extensions::toast::Level::Error);
-        assert!(toasts[0].text.contains("daemon 错误: boom"));
+        assert!(toasts[0].text_stable().contains("daemon 错误: boom"));
         assert_eq!(toasts[0].key.as_deref(), Some("todo-load"));
     }
 
@@ -593,7 +593,7 @@ mod tests {
         assert_eq!(state.items()[0].id, 2);
         let notices = state.take_outbox();
         assert_eq!(notices.len(), 1);
-        assert!(notices[0].text.contains("category failure"));
+        assert!(notices[0].text_stable().contains("category failure"));
         let mut other = WorkspaceState::default();
         apply(
             &mut other,

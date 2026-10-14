@@ -164,7 +164,7 @@ pub enum CloneSource {
 pub enum RepoListState {
     Loading,
     Loaded(Vec<RemoteRepo>),
-    Error(String),
+    Error(dozer_model::LocalizedText),
     NotConnected,
 }
 
@@ -265,7 +265,10 @@ pub enum Message {
     CloneDescriptionAction(iced_widget::text_editor::Action),
     SubmitClone,
     SourceSelected(CloneSource),
-    RepoListLoaded(GitProvider, Result<Vec<RemoteRepo>, String>),
+    RepoListLoaded(
+        GitProvider,
+        Result<Vec<RemoteRepo>, crate::git_accounts::GitAccountError>,
+    ),
     /// 未连接账户时"去设置连接"按钮——不在本模块内部处理,由 `App::update`
     /// 顶层拦截(关本对话框、开设置弹窗),但顶部的 `if let Message::Close
     /// | Message::GoToSettings` 仍会先把 `state` 清空,保持"直接调用本模块
@@ -341,7 +344,7 @@ fn apply_field_message(state: &mut State, msg: &Message) -> bool {
         Message::RepoListLoaded(provider, result) => {
             let repo_state = match result {
                 Ok(repos) => RepoListState::Loaded(repos.clone()),
-                Err(e) => RepoListState::Error(e.clone()),
+                Err(e) => RepoListState::Error(e.localized()),
             };
             state.clone_form.repo_lists.insert(*provider, repo_state);
             true
@@ -952,11 +955,12 @@ fn remote_repo_field<'a>(form: &'a CloneForm, locale: &str) -> Element<'a> {
             .color(colors.dim)
             .into(),
             Some(RepoListState::Error(e)) => {
+                let detail = crate::i18n::host_render(e, locale);
                 let msg = text(crate::i18n::host_text_args(
                     "project_create.repo_list_failed",
                     "Failed to load repositories: {e}",
                     locale,
-                    &[("e", e)],
+                    &[("e", &detail)],
                 ))
                 .size(byteui::theme::font::body())
                 .color(colors.red);
@@ -1598,7 +1602,10 @@ mod tests {
 
     #[test]
     fn plan_source_selection_retries_after_error() {
-        let existing = RepoListState::Error("x".into());
+        let existing = RepoListState::Error(dozer_model::LocalizedText::literal(
+            crate::i18n::HOST_OWNER,
+            "x",
+        ));
         assert_eq!(
             plan_source_selection(Some(&existing), true),
             Some(RepoListState::Loading)
@@ -1632,14 +1639,17 @@ mod tests {
 
     #[test]
     fn repo_list_loaded_err_stores_error_state() {
+        let err = crate::git_accounts::GitAccountError::Network {
+            detail: "connection reset".to_string(),
+        };
         let mut state = State::default();
         apply_field_message(
             &mut state,
-            &Message::RepoListLoaded(GitProvider::GitLab, Err("网络请求失败".into())),
+            &Message::RepoListLoaded(GitProvider::GitLab, Err(err.clone())),
         );
         assert_eq!(
             state.clone_form.repo_lists.get(&GitProvider::GitLab),
-            Some(&RepoListState::Error("网络请求失败".into()))
+            Some(&RepoListState::Error(err.localized()))
         );
     }
 

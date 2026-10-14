@@ -1311,7 +1311,11 @@ mod persist_tests {
         update::persist_sources(&mut ws, &blocker);
         let got = ws.take_outbox();
         assert_eq!(got.len(), 1);
-        assert!(got[0].text.contains("数据库"), "{}", got[0].text);
+        assert!(
+            got[0].text_stable().contains("数据库"),
+            "{}",
+            got[0].text_stable()
+        );
         assert_eq!(got[0].scope.name, "database");
     }
 
@@ -1332,7 +1336,11 @@ mod persist_tests {
         app.save_to(&blocker.join("database_drivers.json"));
         let got = app.take_outbox();
         assert_eq!(got.len(), 1);
-        assert!(got[0].text.contains("数据库驱动"), "{}", got[0].text);
+        assert!(
+            got[0].text_stable().contains("数据库驱动"),
+            "{}",
+            got[0].text_stable()
+        );
         assert_eq!(got[0].scope.name, "database");
     }
 
@@ -1355,8 +1363,8 @@ mod persist_tests {
         let got = ws.take_outbox();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].scope.name, "database");
-        assert!(got[0].text.contains("钥匙串已锁定"));
-        assert!(!got[0].text.contains("pw-secret"));
+        assert!(got[0].text_stable().contains("钥匙串已锁定"));
+        assert!(!got[0].text_stable().contains("pw-secret"));
     }
 
     #[test]

@@ -3209,7 +3209,8 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             && window_id == overlay.window_id()
         {
             if matches!(event, WindowEvent::RedrawRequested) {
-                overlay.redraw(app.toast.items());
+                let locale = app.locale.active_locale().to_owned();
+                overlay.redraw(app.toast.items(), &locale);
             }
             return;
         }

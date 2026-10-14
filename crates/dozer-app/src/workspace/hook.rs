@@ -223,14 +223,15 @@ pub(crate) fn preview_tab_display_width(title: &str) -> f32 {
     text_width_units(title) * 8.0 + 18.0 + 12.0
 }
 
-/// agent 四态中文（终端状态栏用）。
-pub(crate) fn agent_state_label(state: AgentState) -> &'static str {
-    match state {
-        AgentState::Running => "运行中",
-        AgentState::AwaitingInput => "待输入",
-        AgentState::TurnEnded => "回合毕",
-        AgentState::Idle => "空闲",
-    }
+/// agent 四态文案（终端状态栏用，按当前 locale 渲染）。
+pub(crate) fn agent_state_label(state: AgentState, locale: &str) -> String {
+    let (key, fallback) = match state {
+        AgentState::Running => ("agent.state_running", "Running"),
+        AgentState::AwaitingInput => ("agent.state_awaiting_input", "Awaiting input"),
+        AgentState::TurnEnded => ("agent.state_turn_ended", "Turn ended"),
+        AgentState::Idle => ("agent.state_idle", "Idle"),
+    };
+    crate::i18n::host_text(key, fallback, locale)
 }
 
 /// tab 前状态点配色：死会话灰；存活按 agent 状态——绿=空闲/运行、

@@ -187,7 +187,7 @@ pub fn update(
                 ws_state.outbox.push_keyed_cooldown(
                     LOG,
                     crate::extensions::toast::Level::Error,
-                    format!("任务加载失败: {message}"),
+                    crate::extensions::toast::literal(format!("任务加载失败: {message}")),
                     "todo-load",
                     std::time::Instant::now(),
                 );
