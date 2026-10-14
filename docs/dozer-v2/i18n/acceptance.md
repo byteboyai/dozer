@@ -609,20 +609,69 @@ python3 scripts/i18n/build_inventory.py
 - 双语**运行期视觉核对**与打包产物运行验收（切双语）随 Task 13 的 L01–L14 执行。
 - `.github/` CI 未见：按计划先用 `build-macos-app.sh`（release）接入 `check-i18n.sh`，不虚构现成 CI；如后续新增 CI，复用同一入口。
 
-## 规格 L01–L14 验收（Task 13 执行，当前未开始）
-| ID | 场景 | 状态 |
+## Task 13：内置双语完整验收与交付（L01–L14）
+
+> 口径：自动检查**不能替代** GUI 热切换验收（计划 Task 13、规格 §12）。下表把每条
+> 拆成「自动证据（已跑/可跑）」与「人工 GUI 证据（待执行）」两栏；人工项在真实
+> `Dozer.app` 上逐条操作并记录（截图/命令输出）。**在人工项全部签署前，I1–I3 不标完成。**
+
+### 13.1 L01–L14 逐条矩阵
+
+| ID | 场景（规格 §12） | 自动证据（机器可验证） | 人工 GUI 证据（待执行） | 状态 |
+|---|---|---|---|---|
+| L01 | 新装；系统 en-US / zh-Hans-CN / zh-TW / 未知 / 空候选 | ✅ `dozer-i18n/tests/unit.rs::{normalize_en_family,normalize_zh_simplified_variants,normalize_zh_traditional_not_mapped,normalize_unknown_and_empty,resolve_candidates_falls_back_to_en}`；`dozerd/src/locale_settings.rs::{system_preference_resolves_from_candidates,system_without_supported_candidates_falls_back_to_en}`；`dozerd/tests/locale_requests.rs::system_preference_is_resolved_from_candidates` | 新装态分别把 OS 语言设为 en-US / zh-Hans-CN / zh-TW / 某未知语言，首启观察界面语言；记录 `NSLocale.preferredLanguages` 探测结果 | ⬜ |
+| L02 | 选 zh-CN → 重启 GUI+daemon → 再改 OS 语言 | ✅ `dozerd/src/locale_settings.rs::{explicit_set_applies_and_persists_revision,snapshot_survives_reopen}`；`dozerd/tests/locale_requests.rs::setting_survives_daemon_restart`；`dozer-app/src/locale_cache.rs::roundtrips_snapshot`；`app/locale.rs::{default_is_system_en_rev0,adopt_initial_from_system_temporary}` | 选 zh-CN → 退出并重启 GUI/daemon → 界面仍中文；再改 OS 语言，显式选择不被改写；切「System」后下次启动重算 | ⬜ |
+| L03 | 配置缺失/损坏/写入失败/服务离线 | ✅ `dozerd/src/locale_settings.rs::{missing_file_yields_default_snapshot,corrupt_file_recovers_to_default,revision_overflow_fails_instead_of_wrapping}`；`locale_cache.rs::{missing_file_is_none,corrupt_or_wrong_version_is_none}`；`app/locale.rs::unavailable_keeps_snapshot`；`extensions/settings.rs::language_failed_keeps_pending_for_retry` | 手删/写坏 locale 配置文件后启动不崩；daemon 离线时语言页可打开且不假报保存成功 | ⬜ |
+| L04 | 两窗口/两进程提交冲突；断线重连 | ✅ `dozerd/src/locale_settings.rs::{concurrent_cas_only_one_wins,set_with_stale_revision_conflicts_and_does_not_change,no_op_set_does_not_advance_revision,revision_increases_monotonically_across_sets}`；`dozerd/tests/locale_requests.rs::stale_revision_conflicts_with_latest_snapshot`；`app/locale.rs::{cadence_limits_to_refresh_interval,late_reply_with_wrong_seq_is_dropped,same_epoch_never_regresses_revision,reconnect_resets_baseline_and_forces_immediate_fetch,generation_only_advances_when_active_changes}`；`extensions/settings.rs::language_conflict_adopts_server_and_prompts` | 开两个 GUI 进程/两窗口，各自提交不同语言观察冲突提示；断 daemon 后重启，观察 2 秒内重新同步并取回完整快照 | ⬜ |
+| L05 | 缺当前 key/缺默认 key/空翻译/重复 key/错参数/未知 owner | ✅ `dozer-i18n/tests/unit.rs::{resolve_missing_key_uses_fallback_with_interpolation,resolve_missing_arg_falls_back_then_safe,resolve_unknown_owner_uses_fallback_not_panic,resolve_literal_without_key_uses_fallback,bundle_rejects_duplicate_key,bundle_rejects_non_string_and_empty,resolve_uses_current_locale_then_default_then_fallback}`；`dozer-panel-usage/src/i18n.rs::falls_back_to_english_literal_for_unknown_key`；`dozer-app/src/i18n.rs::unknown_locale_falls_back_to_english` | 手工摘除一条 key 观察回退（无空标题、无 panic）；确认资源错误可诊断 | ⬜ |
+| L06 | Rust/TS 相同测试向量（Unicode/花括号/恶意 HTML 参数） | ✅ `dozer-i18n/vectors/interpolation.json`（唯一向量源）；`dozer-i18n/tests/vectors.rs::interpolation_vectors_match`；`dozer-app/web/shared/i18n/i18n.test.ts::interpolation vectors match`；`dozer-i18n/tests/unit.rs::interpolate_malicious_html_is_not_executed_by_parser` | WebView 内实际传入含 `<script>` 的参数，确认按文本渲染不执行 | ⬜ |
+| L07 | 有编辑输入/滚动/终端/任务时切换，工作状态保留 | ⚠️ 无直接断言（切换为纯重绘设计：`app/locale.rs::display_generation`；相邻覆盖见 L09 推送去重） | 在文件预览有未保存编辑、列表已滚动、终端会话运行、Agent 任务运行中，切换语言：三者状态保留、终端/任务不重启、用户内容不修改 | ⬜ |
+| L08 | 所有 overlay 打开；原生/iced 菜单；现存 Toast | ⚠️ 相邻证据：菜单文案已按 locale 参数化（`extensions/files/view.rs::context_menu_spec(.., locale)`）；Toast 为 `LocalizedText`（`extensions/toast.rs`，`host_render` 渲染） | 打开全部 overlay、弹出原生/iced 菜单、保留一条现存 Toast，切换语言：文案更新（菜单可安全关闭），动作/快捷键/id/到期不变 | ⬜ |
+| L09 | WebView ready 前切换/隐藏后切换/重建/旧包晚到/仅语言改变 | ✅ `extensions/todo/protocol.rs::{push_state_waits_for_ready_then_sends_once,push_state_set_ready_forces_resend,push_state_times_out_when_never_ready_and_blocks_push,push_state_resends_when_only_locale_changes,encode_push_omits_locale_when_absent}`；`extensions/group_chat/protocol.rs::{push_state_only_pushes_when_ready_and_changed,push_state_resends_when_only_locale_changes,push_state_failed_event_blocks_pushes}`；TS `web/{todo,group-chat,codehealth}-content/src/protocol.test.ts` 的 locale-only/old-Host 用例 | 在 WebView ready 前、隐藏后、重建后、旧包晚到各时机切换语言，最终均为新语言；无去重漏推、无旧包回退、无整页 reload | ⬜ |
+| L10 | 计数/日期/金额及服务失败 | ✅ `dozer-panel-usage/src/i18n.rs::{translates_known_keys_for_both_locales,interpolates_named_args,en_and_zh_share_the_same_key_set}`；`web/usage-content/src/i18n.test.ts`；`web/usage-content/src/format.test.ts`；**新增** `dozer-app/src/i18n.rs::host_text_args_keeps_raw_numeric_args_unchanged_across_locales`（数值不被本地化） | Code Health/Usage 面板双语下核对计数/日期/金额单位与摘要已翻译，原始数值/精度/诊断不变 | ⬜ |
+| L11 | en/zh-CN + 明暗主题 + 最小窗口 + UI 缩放 | ⚠️ 无自动布局断言（规格 §12：伪本地化仅为人工辅助） | 四组合（en/zh-CN × 明/暗）在最小窗口与 UI 缩放下的标签可读性、确认按钮/金额不截断、CJK 无方块、溢出有明确策略 | ⬜ |
+| L12 | 新旧 GUI/daemon/前端配对；旧第三方应用 | ✅ `dozer-client/src/lib.rs::locale_service_tests::{old_daemon_error_reply_is_rejected,get_locale_comes_back_as_snapshot,set_locale_returns_applied_outcome}`；TS old-Host 缺失字段回退（todo/group-chat/codehealth `protocol.test.ts`）；`extensions/settings.rs::language_unsupported_clears_pending` | 用旧版 GUI/daemon/前端配对启动，确认既有业务可用、不支持语言能力时明确降级；旧第三方应用仍可安装/启动 | ⬜ |
+| L13 | MCP/日志/存储快照切换前后对比 | ⚠️ 相邻证据：`dozer-app/src/i18n.rs::host_render_stable`（语言无关稳定渲染，**新增** `host_render_stable_is_language_invariant`）；持久化快照 round-trip 见 L02/L03 | 切换前后对比 MCP 输出、日志行、存储快照：机器标识/schema/审计原文/项目数据不因 UI 语言改变 | ⬜ |
+| L14 | 单面板 + Host 测试组合 | ✅ `dozer-panel-usage/src/i18n.rs::en_and_zh_share_the_same_key_set`（独立 crate 自带资源）；`dozer-app/src/i18n.rs::{host_resolver_renders_independent_crate_panel_owner,host_panel_titles_localized,host_bundle_parses_and_resolves_from_locale_pack}`；`scripts/check-i18n.sh`（`check_resources` 14 owner + `check_migration --assets` + 检查器单测） | 单独加载某面板（含 Host 组合）确认可独立加载资源与服务、无其他面板依赖 | ⬜ |
+
+### 13.2 自动证据复跑命令（本机可执行，Task 13 收口时重跑并留档）
+
+| 命令 | 覆盖 | 预期 |
 |---|---|---|
-| L01 | 系统语言匹配（en-US / zh-Hans-CN / zh-TW / 未知 / 空） | ⬜ 待实施 |
-| L02 | 选择 zh-CN 后重启 GUI/daemon，再改 OS 语言 | ⬜ 待实施 |
-| L03 | 配置缺失/损坏/写入失败/服务离线 | ⬜ 待实施 |
-| L04 | 两窗口/两进程提交冲突，断线重连 | ⬜ 待实施 |
-| L05 | 缺 key/空翻译/重复 key/错参数/未知 owner | ⬜ 待实施 |
-| L06 | Rust/TS 共享测试向量（Unicode/花括号/恶意 HTML） | ⬜ 待实施 |
-| L07 | 有编辑/滚动/终端/任务时切换，工作状态保留 | ⬜ 待实施 |
-| L08 | 所有 overlay/菜单/现存 Toast | ⬜ 待实施 |
-| L09 | WebView ready 前切换/隐藏后切换/重建/旧包晚到 | ⬜ 待实施 |
-| L10 | Code Health/Usage 计数、日期、金额及服务失败 | ⬜ 待实施 |
-| L11 | en/zh-CN + 明暗主题 + 最小窗口 + 缩放，CJK 无方块 | ⬜ 待实施 |
-| L12 | 新旧 GUI/daemon/前端配对，旧第三方应用 | ⬜ 待实施 |
-| L13 | MCP/日志/存储快照切换前后对比 | ⬜ 待实施 |
-| L14 | 单面板 + Host 测试组合 | ⬜ 待实施 |
+| `cargo test -p dozer-app` | L01–L06/L09/L10/L12/L13/L14 的原生侧断言 | 2003 passed / 0 failed / 2 ignored（Task 13 新增 2 项后计数 +2） |
+| `cargo test -p dozer-i18n -p dozerd` | L01/L02/L03/L05/L06 解析与持久化 | 全绿 |
+| 各 web 包 `npm run typecheck` / `npm test` / `npm run build` | L06/L09/L10/L12/L14 前端侧 | 全绿 |
+| `bash scripts/check-i18n.sh` | L05/L14 + 硬编码门禁 | `check_resources: ok (14)`；`check_migration: ok`；单测 27 passed |
+| `python3 scripts/i18n/build_inventory.py` | 总账闭合（未解决=0、残留硬编码=0） | `unresolved: 0` |
+| `python3 scripts/i18n/check_resources.py` | 官方两包 key/占位符一致 | ok |
+
+### 13.3 人工 GUI 验收清单（在真实 `Dozer.app` 上执行）
+
+> 执行方式：`scripts/build-macos-app.sh release` 出包 → 安装 → 按下列步骤逐条操作，
+> 每步记录「语言切换前 / 切换后」截图与观察。**未全部签署前 I1–I3 不标完成。**
+
+- [ ] **新装 / OS 语言**（L01）：改 OS 语言为 en-US、zh-Hans-CN、zh-TW、未知，各首启一次，记录界面语言与探测。
+- [ ] **显式选择持久化**（L02）：选 zh-CN → 重启 GUI/daemon → 仍 zh-CN；改 OS 语言不影响显式选择；切 System 后下次启动重算。
+- [ ] **异常与离线**（L03）：手工写坏 locale 配置文件后启动不崩；daemon 离线时语言页不假报保存成功。
+- [ ] **多窗口/多进程/重连**（L04）：两 GUI 进程提交冲突可见；断 daemon 重启后 ≤2s 重新同步并取回完整快照。
+- [ ] **回退与诊断**（L05）：摘除一条 key 观察确定性回退（无空标题、无 panic）。
+- [ ] **恶意参数**（L06）：WebView 内传入 `<script>` 参数，按文本渲染不执行。
+- [ ] **工作状态保留**（L07）：未保存编辑 + 滚动位置 + 运行中的终端会话 + 运行中的 Agent 任务，切换语言全部保留，终端/任务不重启，用户内容不改。
+- [ ] **overlay/菜单/Toast**（L08）：全部 overlay + 原生/iced 菜单 + 现存 Toast，切换后文案更新、动作/快捷键/id/到期不变。
+- [ ] **WebView 时机**（L09）：ready 前 / 隐藏后 / 重建 / 旧包晚到 / 仅语言变化，最终均为新语言，无漏推、无回退、无 reload。
+- [ ] **计数/日期/金额**（L10）：Code Health/Usage 双语下单位/摘要已译，数值/精度/诊断不变。
+- [ ] **布局矩阵**（L11）：en/zh-CN × 明/暗 × 最小窗口 × UI 缩放，标签可读、按钮/金额不截断、CJK 无方块、溢出有明确策略。
+- [ ] **新旧配对**（L12）：旧 GUI/daemon/前端 + 旧第三方应用可用；不支持能力时明确降级。
+- [ ] **机器身份不变**（L13）：切换前后对比 MCP 输出 / 日志 / 存储快照，机器标识、schema、审计原文、项目数据不变。
+- [ ] **单面板独立**（L14）：单独加载某面板 + Host 组合，可独立加载资源与服务、无其他面板依赖。
+
+### 13.4 交付说明（I1–I3 完成判定）
+
+- I1（解析/校验/插值）/ I2（持久化与恢复）/ I3（官方面板与预览壳层）：**自动证据全绿**（见 13.2），**待 13.3 人工项全部签署后**方可标「Dozer 内置界面支持英语/简体中文」发布。
+- OS / 外部应用语言属例外：只保证 Dozer 内置界面双语；bytehost 应用界面随应用自身（I4，Task 14 独立阶段）。
+- I4（bytehost 应用 i18n 契约）**独立验收**，不阻塞本文档。
+
+### 13.5 残留
+
+- L07/L08/L11/L13 无完整自动断言（部分为相邻证据），依赖 13.3 人工验收。
+- `.github/` CI 未建：自动门禁经 `scripts/check-i18n.sh`（并已接入 `build-macos-app.sh` release 分支）；如后续新增 CI，复用同一入口。

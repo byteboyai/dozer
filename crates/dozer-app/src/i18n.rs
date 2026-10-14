@@ -287,6 +287,33 @@ mod tests {
     }
 
     #[test]
+    fn host_render_stable_is_language_invariant() {
+        // L13:稳定渲染(机器日志/去重键)必须只取一份语言无关的正文,不随当前
+        // 语言变化——同一 keyed 内容在任意 interface locale 下得到同一字符串。
+        let t = dozer_model::LocalizedText::keyed(
+            HOST_OWNER,
+            "error.save_failed",
+            "Save failed: {message}",
+        )
+        .with_arg("message", "disk full");
+        let stable = host_render_stable(&t);
+        assert_eq!(stable, "Save failed: disk full");
+        // 语言无关:即便同一条内容在 zh-CN 解析下是中文,稳定值仍取英文。
+        assert_ne!(host_resolver().resolve(&t, "zh-CN").text, stable);
+    }
+
+    #[test]
+    fn host_text_args_keeps_raw_numeric_args_unchanged_across_locales() {
+        // L10:计数/日期等原始数值经插值不应本地化或改精度,只有单位/摘要被翻译。
+        let args = [("n", "12345")];
+        let en = host_text_args("time.minutes_ago", "{n} minutes ago", "en", &args);
+        let zh = host_text_args("time.minutes_ago", "{n} minutes ago", "zh-CN", &args);
+        assert!(en.contains("12345"));
+        assert!(zh.contains("12345"));
+        assert_ne!(en, zh, "只有包裹文案被翻译,数值原样保留");
+    }
+
+    #[test]
     fn host_resolver_renders_independent_crate_panel_owner() {
         // 独立 crate(dozer.usage)的风险:它经 `outbox` 推给 Host Toast 的
         // `LocalizedText` 由 Host 解析器渲染,故其 owner 必须登记在此,
