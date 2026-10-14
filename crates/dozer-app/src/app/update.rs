@@ -3832,7 +3832,11 @@ impl App {
                         );
                     });
                     let (x, y) = self.files.last_right_click();
-                    let items = ssh::sftp::context_menu_items(&host_id, is_local);
+                    let items = ssh::sftp::context_menu_items(
+                        &host_id,
+                        is_local,
+                        self.locale.active_locale(),
+                    );
                     if let Some(msg) = crate::chrome::native_menu::show(items, (x, y)) {
                         self.update(Message::Ssh(ssh::Message::Sftp(msg)));
                     }
@@ -4709,7 +4713,7 @@ impl App {
         &mut self,
         project_id: i64,
         host_id: String,
-        result: Result<(), String>,
+        result: Result<(), dozer_model::LocalizedText>,
     ) {
         self.with_project(project_id, move |ws, io| {
             let handle = io.handle.clone();
@@ -4795,7 +4799,7 @@ impl App {
         project_id: i64,
         host_id: String,
         tab_id: usize,
-        err: String,
+        err: dozer_model::LocalizedText,
     ) {
         self.with_project(project_id, move |ws, io| {
             ws.pending.remove(&tab_id);

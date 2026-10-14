@@ -157,7 +157,7 @@ pub struct SftpTabState {
     pub remote_tree: RemoteTree,
     pub selected_local: Option<std::path::PathBuf>,
     pub selected_remote: Option<String>,
-    pub status: Option<(String, bool)>, // 文案 + 是否为错误(true=红)
+    pub status: Option<(dozer_model::LocalizedText, bool)>, // 文案 + 是否为错误(true=红)
     /// 右键菜单展开态:`true` = 本地行触发,`false` = 远程行触发,配上
     /// 那一行的路径。`None` = 未展开(Task 8)。
     pub context_menu: Option<(bool, String)>,
@@ -258,7 +258,15 @@ pub(crate) fn route(
                     }
                 }
                 Err(e) => {
-                    state.status = Some((format!("SFTP 连接失败: {e}"), true));
+                    state.status = Some((
+                        crate::i18n::panel_keyed_args(
+                            super::SSH_OWNER,
+                            "sftp.connect_failed",
+                            "SFTP connection failed: {e}",
+                            &[("e", e.as_str())],
+                        ),
+                        true,
+                    ));
                 }
             }
         }
@@ -307,7 +315,10 @@ pub(crate) fn route(
                 return;
             };
             let _ = tx.send(SftpCmd::Upload { local, remote_dir });
-            state.status = Some(("正在上传…".to_string(), false));
+            state.status = Some((
+                crate::i18n::panel_keyed(super::SSH_OWNER, "sftp.uploading", "Uploading…"),
+                false,
+            ));
         }
         Message::Download(host_id) => {
             let Some(state) = sftp_tabs.get_mut(&host_id) else {
@@ -321,15 +332,29 @@ pub(crate) fn route(
                 return;
             };
             let _ = tx.send(SftpCmd::Download { remote, local_dir });
-            state.status = Some(("正在下载…".to_string(), false));
+            state.status = Some((
+                crate::i18n::panel_keyed(super::SSH_OWNER, "sftp.downloading", "Downloading…"),
+                false,
+            ));
         }
         Message::TransferResult(host_id, result) => {
             let Some(state) = sftp_tabs.get_mut(&host_id) else {
                 return;
             };
             state.status = Some(match &result {
-                Ok(()) => ("传输完成".to_string(), false),
-                Err(e) => (format!("传输失败: {e}"), true),
+                Ok(()) => (
+                    crate::i18n::panel_keyed(super::SSH_OWNER, "sftp.done", "Transfer complete"),
+                    false,
+                ),
+                Err(e) => (
+                    crate::i18n::panel_keyed_args(
+                        super::SSH_OWNER,
+                        "sftp.failed",
+                        "Transfer failed: {e}",
+                        &[("e", e.as_str())],
+                    ),
+                    true,
+                ),
             });
             // 上传成功后重新拉一次远程根目录,让新文件出现在远程树里;
             // 下载成功后本地树重读根目录,让新文件出现在本地树里。
@@ -390,7 +415,7 @@ pub(crate) async fn upload(
         let name = local
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
-            .ok_or_else(|| "无效的本地路径".to_string())?;
+            .ok_or_else(|| "Invalid local path".to_string())?;
         let target_dir = remote_join(remote_dir, &name);
         sftp.create_dir(&target_dir)
             .await
@@ -405,7 +430,7 @@ pub(crate) async fn upload(
         let name = local
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
-            .ok_or_else(|| "无效的本地路径".to_string())?;
+            .ok_or_else(|| "Invalid local path".to_string())?;
         let target = remote_join(remote_dir, &name);
         let bytes = std::fs::read(local).map_err(|e| e.to_string())?;
         sftp.write(target, &bytes).await.map_err(|e| e.to_string())
@@ -441,7 +466,7 @@ pub(crate) async fn download(
 /// 共用同一份实现。`on_toggle`(仅目录行触发)/`on_select` 由调用方
 /// 传入,决定发的是 `Local*` 还是 `Remote*` 消息。
 fn tree_column<'a>(
-    title: &'a str,
+    title: String,
     rows: Vec<crate::project::TreeRow>,
     selected: Option<&std::path::Path>,
     error_for: impl Fn(&str) -> Option<String> + 'a,
@@ -528,6 +553,7 @@ fn tree_column<'a>(
 /// SFTP tab 主视图:左右两栏文件树(本地项目 / 远程主机)。
 pub fn sftp_pane_view<'a>(
     state: &'a SftpTabState,
+    locale: &str,
 ) -> iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     use iced_widget::{MouseArea, column, container, row, stack, text};
     let local_rows = state.local_tree.visible_rows();
@@ -541,7 +567,7 @@ pub fn sftp_pane_view<'a>(
         iced_renderer::Renderer,
     > = row![
         tree_column(
-            "本地机器项目文件树",
+            super::t("sftp.local_tree", "Local project files", locale),
             local_rows,
             state.selected_local.as_deref(),
             |_p| None,
@@ -557,7 +583,7 @@ pub fn sftp_pane_view<'a>(
             },
         ),
         tree_column(
-            "远程主机文件树",
+            super::t("sftp.remote_tree", "Remote host files", locale),
             remote_rows,
             state.selected_remote.as_deref().map(std::path::Path::new),
             |p| state.remote_tree.error_for(p).map(str::to_string),
@@ -587,7 +613,7 @@ pub fn sftp_pane_view<'a>(
     let mut base_col = column![].spacing(6);
     if let Some((msg, is_err)) = &state.status {
         base_col = base_col.push(
-            text(msg.clone())
+            text(crate::i18n::render_localized(msg, locale))
                 .size(byteui::theme::font::caption())
                 .color(if *is_err {
                     byteui::theme::color::current().red
@@ -622,7 +648,7 @@ pub fn sftp_pane_view<'a>(
         Message,
         iced_widget::Theme,
         iced_renderer::Renderer,
-    > = sftp_context_menu(state);
+    > = sftp_context_menu(state, locale);
 
     stack![base, dismiss, popup]
         .width(iced_widget::core::Length::Fill)
@@ -636,6 +662,7 @@ pub fn sftp_pane_view<'a>(
 /// 表面/单项样式统一走 `crate::chrome::menu`(基准即文件树右键菜单)。
 fn sftp_context_menu<'a>(
     state: &'a SftpTabState,
+    locale: &str,
 ) -> iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     use iced_widget::{column, container};
     let Some((is_local, _path)) = &state.context_menu else {
@@ -645,13 +672,13 @@ fn sftp_context_menu<'a>(
     let (icon, label, msg) = if *is_local {
         (
             byteui::interaction::icons::IconKind::ChevronUp,
-            "上传",
+            super::t("sftp.upload", "Upload", locale),
             Message::Upload(host_id),
         )
     } else {
         (
             byteui::interaction::icons::IconKind::ChevronDown,
-            "下载",
+            super::t("sftp.download", "Download", locale),
             Message::Download(host_id),
         )
     };
@@ -669,17 +696,18 @@ fn sftp_context_menu<'a>(
 pub(crate) fn context_menu_items(
     host_id: &str,
     is_local: bool,
+    locale: &str,
 ) -> Vec<crate::chrome::native_menu::Item<Message>> {
     let (icon, label, msg) = if is_local {
         (
             byteui::interaction::icons::IconKind::ChevronUp,
-            "上传",
+            super::t("sftp.upload", "Upload", locale),
             Message::Upload(host_id.to_string()),
         )
     } else {
         (
             byteui::interaction::icons::IconKind::ChevronDown,
-            "下载",
+            super::t("sftp.download", "Download", locale),
             Message::Download(host_id.to_string()),
         )
     };
@@ -823,7 +851,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_local_row_offers_upload() {
-        let items = context_menu_items("host-1", true);
+        let items = context_menu_items("host-1", true, "en");
         assert_eq!(items.len(), 1);
         assert!(matches!(
             items[0],
@@ -837,7 +865,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_remote_row_offers_download() {
-        let items = context_menu_items("host-1", false);
+        let items = context_menu_items("host-1", false, "en");
         assert_eq!(items.len(), 1);
         assert!(matches!(
             items[0],

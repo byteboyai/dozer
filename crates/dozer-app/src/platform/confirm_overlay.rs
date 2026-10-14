@@ -186,7 +186,7 @@ pub(crate) fn desired_confirm(
         return Some((ConfirmTrigger::DatabaseDelete, map_database_spec(spec)));
     }
     if let Some(host_id) = ws.ssh.delete_confirm()
-        && let Some(spec) = crate::extensions::ssh::delete_confirm_spec(&ws.ssh, host_id)
+        && let Some(spec) = crate::extensions::ssh::delete_confirm_spec(&ws.ssh, host_id, locale)
     {
         return Some((ConfirmTrigger::SshDelete, map_ssh_spec(spec)));
     }

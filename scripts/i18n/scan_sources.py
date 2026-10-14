@@ -164,6 +164,27 @@ def strip_rust_comments(text: str) -> str:
             out.append(text[i:j])
             i = j
             continue
+        if c == "'":
+            # Rust 字符字面量 'x' / '\n' / '\'' / '"'——必须整段跳过,否则其中的
+            # `"`(如 trim_matches('"'))会被当成字符串开头,吞掉其后一大段代码,
+            # 令该区间内的真实 UI 文案全部落入"被吞的字符串体"而漏扫、注释检测错位。
+            if i + 1 < n and text[i + 1] == "\\":
+                j = i + 2
+                if j < n and text[j] == "u" and j + 1 < n and text[j + 1] == "{":
+                    k = text.find("}", j)
+                    j = n if k < 0 else k + 1
+                else:
+                    j += 1
+            else:
+                j = i + 2
+            if j < n and text[j] == "'":
+                out.append(text[i:j + 1])
+                i = j + 1
+                continue
+            # 不是合法字符字面量(可能是生命周期 'a),按普通字符处理。
+            out.append(c)
+            i += 1
+            continue
         if c == "/" and i + 1 < n and text[i + 1] == "/":
             j = text.find("\n", i)
             j = n if j < 0 else j

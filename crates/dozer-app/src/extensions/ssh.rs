@@ -16,6 +16,90 @@ use std::path::{Path, PathBuf};
 
 dozer_core::scope!(LOG, panel, "ssh");
 
+/// 面板 owner id(spec §5,资源在 `locales/panels/ssh/`)。
+pub(crate) const SSH_OWNER: &str = "dozer.ssh";
+
+/// 按当前 locale 解析一条本面板文案。
+pub(crate) fn t(key: &str, fallback: &str, locale: &str) -> String {
+    crate::i18n::panel_text(SSH_OWNER, key, fallback, locale)
+}
+
+/// 把 `SshError` 映射成可本地化的 keyed 文案(后台任务拿不到 locale)。未知
+/// 变体(如 russh 的原始 `Display`)按英文兜底,不退化成中文。
+pub(crate) fn ssh_error_localized(e: &SshError) -> dozer_model::LocalizedText {
+    match e {
+        SshError::UnknownHostKey { .. } => crate::i18n::panel_keyed(
+            SSH_OWNER,
+            "error.unknown_host_key",
+            "Unknown host, fingerprint confirmation required",
+        ),
+        SshError::KeyChanged { fingerprint } => crate::i18n::panel_keyed_args(
+            SSH_OWNER,
+            "error.key_changed",
+            "Host key changed ({fingerprint}), possible man-in-the-middle attack, refusing to connect",
+            &[("fingerprint", fingerprint)],
+        ),
+        SshError::AuthFailed => crate::i18n::panel_keyed(
+            SSH_OWNER,
+            "error.auth_failed",
+            "Authentication failed (wrong password or key)",
+        ),
+        SshError::Russh(_) | SshError::Sftp(_) => {
+            dozer_model::LocalizedText::literal(SSH_OWNER, e.to_string())
+        }
+    }
+}
+
+/// 终端建连失败时的兜底文案(未知主机)。owner 一并留在这——供
+/// `workspace::state` 的 SSH 任务复用,避免那里出现裸中文字面量。
+pub(crate) fn terminal_error_unknown_host(fingerprint: &str) -> dozer_model::LocalizedText {
+    crate::i18n::panel_keyed_args(
+        SSH_OWNER,
+        "error.os_untrusted",
+        "Unknown host, fingerprint {fingerprint} — trust confirmation required",
+        &[("fingerprint", fingerprint)],
+    )
+}
+
+/// 终端建连失败(host key 变化)。
+pub(crate) fn terminal_error_key_changed(fingerprint: &str) -> dozer_model::LocalizedText {
+    crate::i18n::panel_keyed_args(
+        SSH_OWNER,
+        "error.key_changed_short",
+        "Host key changed ({fingerprint}), refusing to connect",
+        &[("fingerprint", fingerprint)],
+    )
+}
+
+/// 终端建连超时(10 秒,与 SSH 测试连接的 5 秒不同)。
+pub(crate) fn terminal_error_timeout() -> dozer_model::LocalizedText {
+    crate::i18n::panel_keyed(
+        SSH_OWNER,
+        "error.timeout_terminal",
+        "Connection timed out (10s)",
+    )
+}
+
+/// 采集操作系统信息超时(外壳 5 秒超时罩住 `fetch_os_info`)。
+pub(crate) fn os_probe_timeout() -> dozer_model::LocalizedText {
+    crate::i18n::panel_keyed(
+        SSH_OWNER,
+        "error.os_probe_timeout",
+        "Timed out probing operating system",
+    )
+}
+
+/// 终端建连后在 `channel_open_session` / `request_pty` / `request_shell`
+/// 环节失败的文案(底层 russh 错误,统一一条模板)。
+pub(crate) fn terminal_error_channel(e: impl std::fmt::Display) -> dozer_model::LocalizedText {
+    crate::i18n::panel_keyed_args(
+        SSH_OWNER,
+        "error.channel_failed",
+        "Failed to open terminal channel: {e}",
+        &[("e", &e.to_string())],
+    )
+}
+
 /// 阶段 3:SFTP 文件传输(数据模型 + 连接生命周期 + 消息路由 + 渲染)。
 /// 独立子模块避免 `ssh.rs` 继续膨胀(镜像 `extensions/project/links.rs`)。
 pub mod sftp;
@@ -64,7 +148,7 @@ pub enum TestStatus {
     KeyChanged {
         fingerprint: String,
     },
-    Err(String),
+    Err(dozer_model::LocalizedText),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -218,7 +302,12 @@ pub(crate) fn persist_hosts(ws_state: &mut WorkspaceState, repo_path: &Path) {
         ws_state.outbox.push(
             LOG,
             crate::extensions::toast::Level::Error,
-            crate::extensions::toast::literal(format!("SSH 主机未能保存到磁盘: {e}")),
+            dozer_model::LocalizedText::keyed(
+                SSH_OWNER,
+                "error.save_failed",
+                "Failed to save SSH hosts to disk: {e}",
+            )
+            .with_arg("e", e.to_string()),
         );
     }
 }
@@ -329,14 +418,16 @@ impl std::fmt::Display for SshError {
         match self {
             SshError::Russh(e) => write!(f, "{e}"),
             SshError::Sftp(e) => write!(f, "SFTP: {e}"),
-            SshError::UnknownHostKey { .. } => write!(f, "未知主机,需要确认指纹"),
+            SshError::UnknownHostKey { .. } => {
+                write!(f, "Unknown host, fingerprint confirmation required")
+            }
             SshError::KeyChanged { fingerprint } => {
                 write!(
                     f,
-                    "主机指纹已变化({fingerprint}),可能存在中间人攻击风险,拒绝连接"
+                    "Host key changed ({fingerprint}), possible man-in-the-middle attack, refusing to connect"
                 )
             }
-            SshError::AuthFailed => write!(f, "认证失败(密码或密钥不正确)"),
+            SshError::AuthFailed => write!(f, "Authentication failed (wrong password or key)"),
         }
     }
 }
@@ -440,15 +531,26 @@ async fn test_connection(host: SshHost, password: Option<String>) -> Result<(), 
 /// 的降级,不值得为它撑起一套错误类型。
 pub(crate) async fn fetch_os_info(
     handle: &russh::client::Handle<TestHandler>,
-) -> Result<String, String> {
-    let mut channel = handle
-        .channel_open_session()
-        .await
-        .map_err(|e| e.to_string())?;
+) -> Result<String, dozer_model::LocalizedText> {
+    let mut channel = handle.channel_open_session().await.map_err(|e| {
+        crate::i18n::panel_keyed_args(
+            SSH_OWNER,
+            "error.os_probe_failed",
+            "Failed to probe operating system: {e}",
+            &[("e", &e.to_string())],
+        )
+    })?;
     channel
         .exec(true, "cat /etc/os-release")
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            crate::i18n::panel_keyed_args(
+                SSH_OWNER,
+                "error.os_probe_failed",
+                "Failed to probe operating system: {e}",
+                &[("e", &e.to_string())],
+            )
+        })?;
     let mut buf = String::new();
     loop {
         match channel.wait().await {
@@ -474,7 +576,11 @@ pub(crate) async fn fetch_os_info(
     if let (Some(name), Some(version)) = (parse("NAME="), parse("VERSION=")) {
         return Ok(format!("{name} {version}"));
     }
-    Err("无法识别操作系统".to_string())
+    Err(crate::i18n::panel_keyed(
+        SSH_OWNER,
+        "error.os_unknown",
+        "Unable to identify operating system",
+    ))
 }
 
 #[derive(Debug, Clone)]
@@ -505,7 +611,7 @@ pub enum Message {
     /// 聚焦项目没变)。`Result` 的 `Err` 用一个精简过的字符串描述——真正
     /// 携带指纹/公钥字节的是下面 `UnknownKeyDetected`,这两条经常一起触发
     /// (一次测试失败,同时是"未知主机"这个具体原因)。
-    TestConnectionResult(i64, String, Result<(), String>),
+    TestConnectionResult(i64, String, Result<(), dozer_model::LocalizedText>),
     /// 测试过程中遇到未知 host key,携带指纹文案(给 UI 显示)+ 公钥原始
     /// 字节(存进 `pending_unknown_keys`,点"信任并重试"时要用)。
     UnknownKeyDetected(i64, String, String, Vec<u8>),
@@ -544,14 +650,14 @@ pub enum Message {
     /// 之前会先做 `pending`/`ssh_out_pending` 清理,这里只负责落卡片
     /// 状态(与 `TestConnectionResult`/`UnknownKeyDetected`/`KeyChanged`
     /// 共用同一列卡片状态,不新增第二列)。
-    TerminalConnectFailed(i64, String, usize, String),
+    TerminalConnectFailed(i64, String, usize, dozer_model::LocalizedText),
     /// 主机登录成功后采集操作系统信息(`cat /etc/os-release` 的
     /// `PRETTY_NAME`)的异步结果。采集在 `Workspace::spawn_ssh_tab`/
     /// SFTP 建连成功后的异步任务里内联做(那里持有活的 `handle`),
     /// 完成后经 `emit` 送回这条消息落卡片状态。携带 `project_id`(同
     /// `TestConnectionResult` 的理由)+ `host_id` + 发行版字符串
     /// (`ubuntu 22.04.5 LTS`)。`Err` 时卡片保持不展示 OS 段。
-    FetchOsResult(i64, String, Result<String, String>),
+    FetchOsResult(i64, String, Result<String, dozer_model::LocalizedText>),
     /// SFTP tab 内部交互,嵌套消息(见 `sftp::Message`)。内核按 host_id
     /// 路由到对应 `ws.sftp_tabs` 条目,不会转发到这个模块自己的
     /// `update()`(同 `OpenSshTab`/`CloseSshTab` 的既有拦截模式——大部分
@@ -694,7 +800,12 @@ pub fn update(
                         emit(Message::TestConnectionResult(
                             project_id,
                             id,
-                            Err(format!("未知主机,指纹 {fingerprint}——需要确认信任")),
+                            Err(crate::i18n::panel_keyed_args(
+                                SSH_OWNER,
+                                "error.os_untrusted",
+                                "Unknown host, fingerprint {fingerprint} — trust confirmation required",
+                                &[("fingerprint", &fingerprint)],
+                            )),
                         ));
                     }
                     Ok(Err(SshError::KeyChanged { fingerprint })) => {
@@ -709,21 +820,30 @@ pub fn update(
                         emit(Message::TestConnectionResult(
                             project_id,
                             id,
-                            Err(format!("主机指纹已变化({fingerprint}),拒绝连接")),
+                            Err(crate::i18n::panel_keyed_args(
+                                SSH_OWNER,
+                                "error.key_changed_short",
+                                "Host key changed ({fingerprint}), refusing to connect",
+                                &[("fingerprint", &fingerprint)],
+                            )),
                         ));
                     }
                     Ok(Err(e)) => {
                         emit(Message::TestConnectionResult(
                             project_id,
                             id,
-                            Err(e.to_string()),
+                            Err(ssh_error_localized(&e)),
                         ));
                     }
                     Err(_) => {
                         emit(Message::TestConnectionResult(
                             project_id,
                             id,
-                            Err("连接超时(5秒)".to_string()),
+                            Err(crate::i18n::panel_keyed(
+                                SSH_OWNER,
+                                "error.timeout",
+                                "Connection timed out (5s)",
+                            )),
                         ));
                     }
                 }
@@ -834,6 +954,7 @@ fn host_card<'a>(
     hover_action: &'a Option<(String, u8)>,
     os_info: Option<&'a str>,
     hovered: bool,
+    locale: &str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 卡片上三个图标按钮的悬停高亮:只有"正在 hover 的那颗"是满 GOLD,
     // 其余 DIM。按钮位约定:0=文件传输、1=终端、2=设置、3=删除。
@@ -842,7 +963,7 @@ fn host_card<'a>(
             .as_ref()
             .is_some_and(|(h, i)| h == &host.id && *i == idx)
     };
-    let icon_btn = |kind: icons::IconKind, on_select: Message, tooltip: &'a str, idx: u8| {
+    let icon_btn = |kind: icons::IconKind, on_select: Message, tooltip: String, idx: u8| {
         byteui::interaction::icons::icon_button_entry(
             kind,
             byteui::theme::icon_size::row(),
@@ -869,25 +990,25 @@ fn host_card<'a>(
         icon_btn(
             byteui::interaction::icons::IconKind::FolderSync,
             Message::OpenSshTab(host.id.clone(), SshTabKind::Sftp),
-            "文件传输",
+            t("card.transfer", "File transfer", locale),
             0,
         ),
         icon_btn(
             byteui::interaction::icons::IconKind::Terminal,
             Message::OpenSshTab(host.id.clone(), SshTabKind::Terminal),
-            "终端",
+            t("card.terminal", "Terminal", locale),
             1,
         ),
         icon_btn(
             byteui::interaction::icons::IconKind::Settings,
             Message::EditHostStart(host.id.clone()),
-            "设置",
+            t("card.settings", "Settings", locale),
             2,
         ),
         icon_btn(
             byteui::interaction::icons::IconKind::Trash,
             Message::DeleteHostRequest(host.id.clone()),
-            "删除",
+            t("card.delete", "Delete", locale),
             3,
         ),
     ]
@@ -895,7 +1016,7 @@ fn host_card<'a>(
     if matches!(status, TestStatus::UnknownHostKey { .. }) {
         actions = actions.push(
             button(
-                text("信任并重试")
+                text(t("card.trust_retry", "Trust and retry", locale))
                     .size(byteui::theme::font::caption())
                     .color(byteui::theme::color::current().cream),
             )
@@ -958,7 +1079,7 @@ fn host_card<'a>(
 /// 单选圆点:选中态 `GOLD` 实心 + `GOLD` 描边,未选中态空心 `BORDER`
 /// 描边。iced 没有原生 radio 部件,手绘一个圆形 `container` + `MouseArea`。
 fn radio_dot<'a>(
-    label: &'a str,
+    label: String,
     selected: bool,
     on_select: Message,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -1091,11 +1212,12 @@ impl iced_widget::core::widget::Operation<()> for CaptureFormFocus {
 pub fn ssh_host_card<'a>(
     draft: &'a SshHostDraft,
     status: &'a TestStatus,
+    locale: &str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let title_text = if draft.id.is_some() {
-        "编辑主机"
+        t("form.edit_title", "Edit host", locale)
     } else {
-        "添加主机"
+        t("form.add_title", "Add host", locale)
     };
     let title = row![
         icons::view(
@@ -1110,11 +1232,30 @@ pub fn ssh_host_card<'a>(
     .spacing(6)
     .align_y(iced_widget::core::Alignment::Center);
 
+    let name_label = t("form.name", "Host name", locale);
+    let key_path_label = t(
+        "form.key_path",
+        "Private key file path, e.g. ~/.ssh/id_ed25519",
+        locale,
+    );
+    let key_passphrase_label = t(
+        "form.key_passphrase",
+        "Key passphrase (leave blank to keep unchanged / no passphrase)",
+        locale,
+    );
+    let password_label = t(
+        "form.password",
+        "password (leave blank to keep unchanged)",
+        locale,
+    );
+    let password_auth_label = t("form.auth_password", "Password", locale);
+    let private_key_label = t("form.auth_private_key", "Private key", locale);
+
     let mut col = column![
         title,
         wrap_ssh_field(
             byteui::form::input_text::view_on_bg(
-                "主机名称",
+                &name_label,
                 &draft.name,
                 false,
                 Some(iced_widget::core::widget::Id::new("ssh-form-name")),
@@ -1170,12 +1311,12 @@ pub fn ssh_host_card<'a>(
         ),
         row![
             radio_dot(
-                "密码",
+                password_auth_label.clone(),
                 !draft.use_private_key,
                 Message::DraftAuthMethodToggled(false)
             ),
             radio_dot(
-                "私钥",
+                private_key_label.clone(),
                 draft.use_private_key,
                 Message::DraftAuthMethodToggled(true)
             ),
@@ -1187,7 +1328,7 @@ pub fn ssh_host_card<'a>(
     if draft.use_private_key {
         col = col.push(wrap_ssh_field(
             byteui::form::input_text::view_on_bg(
-                "私钥文件路径,如 ~/.ssh/id_ed25519",
+                &key_path_label,
                 &draft.key_path,
                 false,
                 Some(iced_widget::core::widget::Id::new("ssh-form-key-path")),
@@ -1201,7 +1342,7 @@ pub fn ssh_host_card<'a>(
         ));
         col = col.push(wrap_ssh_field(
             byteui::form::input_text::view_on_bg(
-                "私钥口令(留空则不修改/无口令)",
+                &key_passphrase_label,
                 &draft.password,
                 true,
                 Some(iced_widget::core::widget::Id::new(
@@ -1218,7 +1359,7 @@ pub fn ssh_host_card<'a>(
     } else {
         col = col.push(wrap_ssh_field(
             byteui::form::input_text::view_on_bg(
-                "password(留空则不修改)",
+                &password_label,
                 &draft.password,
                 true,
                 Some(iced_widget::core::widget::Id::new("ssh-form-password")),
@@ -1232,7 +1373,7 @@ pub fn ssh_host_card<'a>(
         ));
     }
 
-    let text_btn = |label: &'a str, color: iced_widget::core::Color, msg: Message| {
+    let text_btn = |label: String, color: iced_widget::core::Color, msg: Message| {
         button(text(label).size(byteui::theme::font::label()).color(color))
             .on_press(msg)
             .padding([6, 12])
@@ -1258,7 +1399,7 @@ pub fn ssh_host_card<'a>(
     // 按钮分两组:"测试连接"靠左;保存/取消(以及编辑态才有的删除)靠右,
     // 中间用 `Fill` 空位把两组顶到卡片两端。
     let left = row![text_btn(
-        "测试连接",
+        t("form.test", "Test connection", locale),
         byteui::theme::color::current().cream,
         Message::TestConnection(draft.id.clone().unwrap_or_default(),)
     )]
@@ -1269,18 +1410,18 @@ pub fn ssh_host_card<'a>(
     let mut right = row![].spacing(6);
     if let Some(id) = &draft.id {
         right = right.push(text_btn(
-            "删除",
+            t("form.delete", "Delete", locale),
             byteui::theme::color::current().red,
             Message::DeleteHost(id.clone()),
         ));
     }
     right = right.push(text_btn(
-        "保存",
+        t("form.save", "Save", locale),
         byteui::theme::color::current().cream,
         Message::DraftSave,
     ));
     right = right.push(text_btn(
-        "取消",
+        t("form.cancel", "Cancel", locale),
         byteui::theme::color::current().dim,
         Message::DraftCancel,
     ));
@@ -1295,20 +1436,47 @@ pub fn ssh_host_card<'a>(
 
     let (status_text, status_color) = match status {
         TestStatus::Idle => (String::new(), byteui::theme::color::current().dim),
-        TestStatus::Testing => ("测试中…".to_string(), byteui::theme::color::current().dim),
+        TestStatus::Testing => (
+            t("status.testing", "Testing…", locale),
+            byteui::theme::color::current().dim,
+        ),
         TestStatus::Ok => (
-            "✓ 连接成功".to_string(),
+            t("status.ok", "✓ Connected", locale),
             byteui::theme::color::current().green,
         ),
         TestStatus::UnknownHostKey { fingerprint } => (
-            format!("⚠ 未知主机,指纹 {fingerprint}"),
+            crate::i18n::panel_text_args(
+                SSH_OWNER,
+                "status.unknown_host_key",
+                "⚠ Unknown host, fingerprint {fingerprint}",
+                locale,
+                &[("fingerprint", fingerprint)],
+            ),
             byteui::theme::color::current().gold,
         ),
         TestStatus::KeyChanged { fingerprint } => (
-            format!("✗ 主机指纹已变化({fingerprint}),拒绝连接"),
+            crate::i18n::panel_text_args(
+                SSH_OWNER,
+                "status.key_changed",
+                "✗ Host key changed ({fingerprint}), refusing to connect",
+                locale,
+                &[("fingerprint", fingerprint)],
+            ),
             byteui::theme::color::current().red,
         ),
-        TestStatus::Err(e) => (format!("✗ {e}"), byteui::theme::color::current().red),
+        TestStatus::Err(e) => {
+            let inner = crate::i18n::render_localized(e, locale);
+            (
+                crate::i18n::panel_text_args(
+                    SSH_OWNER,
+                    "status.err",
+                    "✗ {err}",
+                    locale,
+                    &[("err", &inner)],
+                ),
+                byteui::theme::color::current().red,
+            )
+        }
     };
     if !status_text.is_empty() {
         col = col.push(
@@ -1321,7 +1489,7 @@ pub fn ssh_host_card<'a>(
         && let Some(id) = &draft.id
     {
         col = col.push(text_btn(
-            "信任并重试",
+            t("card.trust_retry", "Trust and retry", locale),
             byteui::theme::color::current().cream,
             Message::TrustHostKey(id.clone()),
         ));
@@ -1366,9 +1534,10 @@ pub fn view<'a>(
     // `project_pane` padding 就会跟它们的内距重复叠加,导致卡片左右边距比
     // todo 面板宽了 8px、footbar 分割线两端也比 todo 面板多缩进 8px(验收
     // 反馈:主机卡片边距/footbar 分割线长度、按钮位置跟 todo 面板不一致)。
+    let locale = app.locale();
     let head = container(crate::chrome::homespace::home_panel_head(
         byteui::interaction::icons::IconKind::Server,
-        "主机",
+        t("head.title", "Hosts", locale),
     ))
     .padding(crate::theme::region::project_pane().padding);
 
@@ -1376,7 +1545,7 @@ pub fn view<'a>(
 
     if ws_state.hosts().is_empty() {
         list = list.push(
-            text("还没有主机")
+            text(t("empty.no_hosts", "No hosts yet", locale))
                 .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim),
         );
@@ -1390,6 +1559,7 @@ pub fn view<'a>(
                 ws_state.hover_action(),
                 ws_state.os_info(&h.id),
                 hovered,
+                locale,
             ));
         }
     }
@@ -1404,7 +1574,7 @@ pub fn view<'a>(
 
     // 顶部面板标题固定、中间主机列表可滚动、底部「＋添加」footer-bar 固定
     // 在面板最下方——footer-bar 不随主机列表滚动,始终可见(见 `ssh_footer_bar`)。
-    let body = column![head, scroll, ssh_footer_bar()].spacing(0);
+    let body = column![head, scroll, ssh_footer_bar(locale)].spacing(0);
 
     // 不再在这里叠一层 `project_pane` padding——标题的垂直对齐已经改由
     // `head` 自己套 `project_pane().padding` 解决(同 todo 左栏 `header`
@@ -1435,6 +1605,7 @@ pub fn view<'a>(
 pub(crate) fn delete_confirm_spec(
     ws_state: &WorkspaceState,
     host_id: &str,
+    locale: &str,
 ) -> Option<byteui::feedback::dialog::ConfirmDialog<Message>> {
     let name = ws_state
         .hosts()
@@ -1444,11 +1615,21 @@ pub(crate) fn delete_confirm_spec(
         .unwrap_or(host_id);
     Some(byteui::feedback::dialog::ConfirmDialog {
         icon: None,
-        title: format!("删除主机 \"{name}\"?"),
-        description: "这会永久删除这台主机的连接记录。".to_string(),
-        cancel_label: "取消".to_string(),
+        title: crate::i18n::panel_text_args(
+            SSH_OWNER,
+            "confirm.title",
+            "Delete host \"{name}\"?",
+            locale,
+            &[("name", name)],
+        ),
+        description: t(
+            "confirm.description",
+            "This permanently removes the connection record for this host.",
+            locale,
+        ),
+        cancel_label: t("confirm.cancel", "Cancel", locale),
         cancel_msg: Message::DeleteHostCancel,
-        confirm_label: "删除".to_string(),
+        confirm_label: t("confirm.delete", "Delete", locale),
         confirm_msg: Message::DeleteHost(host_id.to_string()),
         close_msg: None,
         confirm_color: byteui::theme::color::current().red,
@@ -1462,7 +1643,9 @@ pub(crate) fn delete_confirm_spec(
 /// 操作,按统一按钮规范(见 `dialog::action_button_border_color` 文档)
 /// 走灰字 + 描边静止态 `border`、悬浮/按下态变 `gold`(此前固定奶油字 +
 /// 不响应 hover 的静态描边)。
-fn ssh_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+fn ssh_footer_bar(
+    locale: &str,
+) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 内容套一层 `width(Fill).align_x(Center)` 容器,让图标+文字在撑满整行
     // 的按钮里整体居中(与 `project/view.rs::footer_button_label` 同款手法)。
     let add_label = container(
@@ -1472,7 +1655,7 @@ fn ssh_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_render
                 byteui::theme::icon_size::row(),
                 byteui::theme::color::current().dim,
             ),
-            text("添加主机")
+            text(t("footer.add_host", "Add host", locale))
                 .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().dim),
         ]
@@ -1614,8 +1797,8 @@ mod tests {
         let mut ws_state = WorkspaceState::default();
         ws_state.hosts = vec![host("h1")];
         ws_state.delete_confirm = Some("h1".into());
-        let spec = delete_confirm_spec(&ws_state, "h1").expect("spec present");
-        assert_eq!(spec.title, "删除主机 \"test-h1\"?");
+        let spec = delete_confirm_spec(&ws_state, "h1", "en").expect("spec present");
+        assert_eq!(spec.title, "Delete host \"test-h1\"?");
         assert!(matches!(
             spec.confirm_msg,
             Message::DeleteHost(id) if id == "h1"

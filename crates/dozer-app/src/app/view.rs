@@ -2225,9 +2225,8 @@ pub(crate) fn ssh_terminal_pane<'a>(
                 }
             }
             Some((host_id, ssh::SshTabKind::Sftp)) => match ws.sftp_tabs.get(host_id) {
-                Some(state) => {
-                    ssh::sftp::sftp_pane_view(state).map(|m| Message::Ssh(ssh::Message::Sftp(m)))
-                }
+                Some(state) => ssh::sftp::sftp_pane_view(state, app.locale.active_locale())
+                    .map(|m| Message::Ssh(ssh::Message::Sftp(m))),
                 None => ssh_empty_state(app.locale.active_locale()),
             },
             None => ssh_empty_state(app.locale.active_locale()),

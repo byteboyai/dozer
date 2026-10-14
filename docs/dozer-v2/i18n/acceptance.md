@@ -350,6 +350,26 @@ python3 scripts/i18n/build_inventory.py
 - Task 10 其余面板（host/ssh/web/conversations/agent/files/database/project/group_chat）按面板逐个提交。
 - 双语运行期视觉核对随 Task 13 执行。
 
+## Task 10 验收（ssh 面板，按面板拆分提交）
+
+### 交付内容
+
+- 资源：`crates/dozer-app/locales/panels/ssh/{en,zh-CN}.json`（owner `dozer.ssh`）。
+- 迁移：`extensions/ssh.rs`（`SSH_OWNER` + 本地 `t()`；`ssh_error_localized`/`terminal_error_{unknown_host,key_changed,timeout,channel}`/`os_probe_timeout` 供后台任务造 keyed 文案；`TestStatus::Err` 与 `Message::{TestConnectionResult,TerminalConnectFailed}` 错误改 `LocalizedText`、`FetchOsResult` 错误改 `LocalizedText`；`host_card`/`ssh_host_card`/`radio_dot`/`text_btn` 收 `String` 标签并穿 `locale`；`view`/`ssh_footer_bar`/`delete_confirm_spec` 穿 `locale`；`persist_hosts` 失败 Toast 改 keyed）、`extensions/ssh/sftp.rs`（`SftpTabState.status` 改 `LocalizedText`、树标题/上传下载菜单/连接失败/传输状态全 keyed；`sftp_pane_view`/`sftp_context_menu`/`context_menu_items`/`tree_column` 收 `locale`）、`app/{view,update}.rs`（`sftp_pane_view`/`context_menu_items` 传 `active_locale()`；`ssh_test_connection_result`/`ssh_terminal_connect_failed` 收 `LocalizedText`）、`workspace/state.rs`（终端建连各错误点改调 `ssh::terminal_error_*`/`ssh_error_localized`，移除裸中文）、`platform/{ssh_host_overlay,confirm_overlay}.rs`（穿 `locale`）。
+- 附带修复：`scripts/i18n/scan_sources.py` 的 `strip_rust_comments` 未跳过含引号的 Rust 字符字面量（如 `trim_matches('"')`），导致 ssh.rs 从该处起的真实 UI 字符串被误判为注释吞掉；修复后 ssh.rs 候选由 25 恢复为 40。
+
+### 验证命令与结果
+
+- `cargo build -p dozer-app`：通过。
+- `cargo test -p dozer-app`：**2001 passed / 0 failed**（含更新后的 `delete_confirm_spec_*` 与 `context_menu_items_*` 用例）。
+- `cargo fmt --all -- --check`、`cargo clippy -p dozer-panel-usage -p dozer-app --all-targets`（仅既有告警）、`python3 scripts/i18n/check_resources.py`（6 个 owner 目录）、`bash scripts/check-log-scope.sh`、`python3 scripts/audit/check_panel_boundary.py`：全绿。
+- `python3 scripts/i18n/build_inventory.py`：ssh 面板路径候选**清零**（`counts: {"excluded": 3111, "migrated": 0, "unresolved": 466}`；`unresolved by task: {"10": 351, "11": 115}`；`dozer.ssh` 0 条）。
+
+### 残留
+
+- Task 10 其余面板（host/web/conversations/agent/files/database/project/group_chat）按面板逐个提交。
+- 双语运行期视觉核对随 Task 13 执行。
+
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |
 |---|---|---|

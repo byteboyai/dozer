@@ -1846,7 +1846,7 @@ text: dozer_model::LocalizedText::keyed(
                         project_id,
                         host_id,
                         tab_id,
-                        format!("未知主机,指纹 {fingerprint}——需要确认信任"),
+                        ssh::terminal_error_unknown_host(&fingerprint),
                     )));
                     return;
                 }
@@ -1860,7 +1860,7 @@ text: dozer_model::LocalizedText::keyed(
                         project_id,
                         host_id,
                         tab_id,
-                        format!("主机指纹已变化({fingerprint}),拒绝连接"),
+                        ssh::terminal_error_key_changed(&fingerprint),
                     )));
                     return;
                 }
@@ -1869,7 +1869,7 @@ text: dozer_model::LocalizedText::keyed(
                         project_id,
                         host_id,
                         tab_id,
-                        e.to_string(),
+                        ssh::ssh_error_localized(&e),
                     )));
                     return;
                 }
@@ -1878,7 +1878,7 @@ text: dozer_model::LocalizedText::keyed(
                         project_id,
                         host_id,
                         tab_id,
-                        "连接超时(10 秒)".to_string(),
+                        ssh::terminal_error_timeout(),
                     )));
                     return;
                 }
@@ -1892,7 +1892,7 @@ text: dozer_model::LocalizedText::keyed(
                         project_id,
                         host_id,
                         tab_id,
-                        e.to_string(),
+                        ssh::terminal_error_channel(e),
                     )));
                     return;
                 }
@@ -1906,7 +1906,7 @@ text: dozer_model::LocalizedText::keyed(
                     project_id,
                     host_id,
                     tab_id,
-                    e.to_string(),
+                    ssh::terminal_error_channel(e),
                 )));
                 return;
             }
@@ -1915,7 +1915,7 @@ text: dozer_model::LocalizedText::keyed(
                     project_id,
                     host_id,
                     tab_id,
-                    e.to_string(),
+                    ssh::terminal_error_channel(e),
                 )));
                 return;
             }
@@ -1945,7 +1945,7 @@ text: dozer_model::LocalizedText::keyed(
                 ssh::fetch_os_info(&handle),
             )
             .await
-            .unwrap_or_else(|_| Err("采集操作系统超时".to_string()));
+            .unwrap_or_else(|_| Err(ssh::os_probe_timeout()));
             let _ = proxy.send_event(Message::Ssh(ssh::Message::FetchOsResult(
                 project_id,
                 os_host_id,

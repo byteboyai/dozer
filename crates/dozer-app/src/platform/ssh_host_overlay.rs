@@ -121,6 +121,7 @@ impl SshHostOverlay {
     /// `None` 表示表单已经在别处被关掉(过期一帧),直接不画。
     fn card<'a>(
         ws: &'a crate::workspace::Workspace,
+        locale: &str,
     ) -> Option<
         iced_widget::core::Element<'a, ssh::Message, iced_widget::Theme, iced_renderer::Renderer>,
     > {
@@ -130,14 +131,14 @@ impl SshHostOverlay {
             .as_deref()
             .map(|id| ws.ssh.test_status(id))
             .unwrap_or(&ssh::TestStatus::Idle);
-        Some(ssh::ssh_host_card(draft, status))
+        Some(ssh::ssh_host_card(draft, status, locale))
     }
 
     pub(crate) fn redraw(&mut self, app: &mut App) {
         let Some(ws) = app.active_workspace() else {
             return;
         };
-        let Some(card) = Self::card(ws) else {
+        let Some(card) = Self::card(ws, app.locale.active_locale()) else {
             return;
         };
         self.gpu.redraw(
@@ -168,7 +169,7 @@ impl SshHostOverlay {
         let Some(ws) = app.active_workspace() else {
             return Vec::new();
         };
-        let Some(card) = Self::card(ws) else {
+        let Some(card) = Self::card(ws, app.locale.active_locale()) else {
             return Vec::new();
         };
         self.gpu.dispatch(
