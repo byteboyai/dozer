@@ -2,7 +2,7 @@ import { render } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
 import './styles.css';
 import { App } from './components/App.tsx';
-import { applyEnvelope, type PushState } from './protocol.ts';
+import { applyEnvelope, DEFAULT_LOCALE, type PushState } from './protocol.ts';
 import { send } from './ipc.ts';
 import { shouldReportError } from './errors.ts';
 
@@ -13,7 +13,12 @@ function applyThemeFromUrl() {
 }
 
 function Root() {
-  const [state, setState] = useState<PushState>({ revision: 0, payload: null });
+  const [state, setState] = useState<PushState>({
+    revision: 0,
+    payload: null,
+    locale: DEFAULT_LOCALE,
+    localeRevision: 0,
+  });
 
   useEffect(() => {
     window.__dozer = {

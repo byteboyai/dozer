@@ -5,7 +5,7 @@
 
 use crate::aggregate::*;
 use crate::state::WorkspaceState;
-use dozer_model::AgentKind;
+use dozer_model::{AgentKind, LocaleStamp};
 use serde::{Deserialize, Serialize};
 
 /// 没有 `Loading` 变体——"统计中…"是 `byteui::feedback::math_curve` 动画
@@ -298,14 +298,18 @@ pub fn parse_usage_event(body: &str) -> Result<UsageWebviewEvent, String> {
 #[derive(Debug, Clone, Serialize)]
 pub struct UsagePushEnvelope {
     pub protocol_version: u32,
+    /// 语言上下文(spec §8)。缺省(None)表示旧 Host,前端按 `en` 处理。
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<LocaleStamp>,
     pub payload: UsageViewPayload,
 }
 
 pub const USAGE_PROTOCOL_VERSION: u32 = 1;
 
-pub fn encode_usage_push(payload: UsageViewPayload) -> String {
+pub fn encode_usage_push(locale: Option<LocaleStamp>, payload: UsageViewPayload) -> String {
     serde_json::to_string(&UsagePushEnvelope {
         protocol_version: USAGE_PROTOCOL_VERSION,
+        locale,
         payload,
     })
     .unwrap_or_else(|_| "null".to_string())
@@ -476,8 +480,25 @@ mod tests {
 
     #[test]
     fn encode_usage_push_embeds_protocol_version_and_payload() {
-        let json = encode_usage_push(UsageViewPayload::Empty);
+        let json = encode_usage_push(None, UsageViewPayload::Empty);
         assert!(json.contains(r#""protocol_version":1"#));
         assert!(json.contains(r#""kind":"empty""#));
+        assert!(
+            !json.contains("ui_locale"),
+            "无语言上下文时不内联 locale 字段"
+        );
+    }
+
+    #[test]
+    fn encode_usage_push_embeds_locale_stamp_flat() {
+        let stamp = LocaleStamp {
+            ui_locale: dozer_model::Locale(dozer_model::Locale::ZH_CN.to_string()),
+            locale_revision: 7,
+        };
+        let json = encode_usage_push(Some(stamp), UsageViewPayload::Empty);
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["ui_locale"], "zh-CN");
+        assert_eq!(v["locale_revision"], 7);
+        assert_eq!(v["payload"]["kind"], "empty");
     }
 }

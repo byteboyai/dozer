@@ -5,7 +5,9 @@
 //! (声明式比较 + 固定单槽)。
 
 use super::WorkspaceState;
-use dozer_model::{AgentKind, GroupAuthor, GroupCancelScope, GroupInfo, GroupMessageStatus};
+use dozer_model::{
+    AgentKind, GroupAuthor, GroupCancelScope, GroupInfo, GroupMessageStatus, LocaleStamp, Stamped,
+};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
@@ -215,13 +217,21 @@ pub fn current_view_payload(state: &WorkspaceState, project_id: i64) -> GroupCha
 struct GroupChatPushEnvelope {
     protocol_version: u32,
     revision: u64,
+    /// 语言上下文(spec §8)。缺省(None)表示旧 Host,前端按 `en` 处理。
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    locale: Option<LocaleStamp>,
     payload: GroupChatViewPayload,
 }
 
-pub fn encode_group_chat_push(revision: u64, payload: GroupChatViewPayload) -> String {
+pub fn encode_group_chat_push(
+    revision: u64,
+    locale: Option<LocaleStamp>,
+    payload: GroupChatViewPayload,
+) -> String {
     serde_json::to_string(&GroupChatPushEnvelope {
         protocol_version: GROUP_CHAT_PROTOCOL_VERSION,
         revision,
+        locale,
         payload,
     })
     .unwrap_or_else(|_| "null".to_string())
@@ -456,7 +466,9 @@ fn role_prompt_of(text: &str) -> Option<String> {
 #[derive(Debug, Default)]
 pub struct WebviewPushState {
     ready: bool,
-    last_sent: Option<GroupChatViewPayload>,
+    /// 上次送达的(载荷 + 语言上下文)。语言上下文纳入比较,使"业务数据不变、
+    /// 仅语言切换"也触发一次推送(spec §8)。
+    last_sent: Option<Stamped<GroupChatViewPayload>>,
     revision: u64,
     /// webview 已进池但尚未 ready 的起点,用于判定加载超时。
     waiting_since: Option<Instant>,
@@ -491,7 +503,10 @@ impl WebviewPushState {
         }
     }
 
-    pub fn pending_push(&self, desired: &GroupChatViewPayload) -> Option<GroupChatViewPayload> {
+    pub fn pending_push(
+        &self,
+        desired: &Stamped<GroupChatViewPayload>,
+    ) -> Option<Stamped<GroupChatViewPayload>> {
         if !self.ready || self.last_sent.as_ref() == Some(desired) {
             return None;
         }
@@ -499,7 +514,7 @@ impl WebviewPushState {
     }
 
     /// 记录已送达并返回本次 revision(从 1 起)。
-    pub fn mark_sent(&mut self, payload: GroupChatViewPayload) -> u64 {
+    pub fn mark_sent(&mut self, payload: Stamped<GroupChatViewPayload>) -> u64 {
         self.revision += 1;
         self.last_sent = Some(payload);
         self.revision
@@ -701,7 +716,7 @@ mod tests {
         let s = state_with_messages(vec![msg(1, 1, GroupAuthor::Human, None)]);
         let p = current_view_payload(&s, 7);
         let v: serde_json::Value =
-            serde_json::from_str(&encode_group_chat_push(3, p.clone())).unwrap();
+            serde_json::from_str(&encode_group_chat_push(3, None, p.clone())).unwrap();
         assert_eq!(v["protocol_version"], 1);
         assert_eq!(v["revision"], 3);
         assert_eq!(v["payload"]["selected_group_id"], 1);
@@ -1053,19 +1068,48 @@ mod tests {
 
     // ---- 声明式推送状态 ----
 
+    fn stamp() -> LocaleStamp {
+        LocaleStamp {
+            ui_locale: dozer_model::Locale::default_locale(),
+            locale_revision: 0,
+        }
+    }
+
+    fn stamped(p: GroupChatViewPayload) -> Stamped<GroupChatViewPayload> {
+        Stamped::new(stamp(), p)
+    }
+
     #[test]
     fn push_state_only_pushes_when_ready_and_changed() {
         let mut ps = WebviewPushState::default();
-        let a = current_view_payload(&WorkspaceState::default(), 7);
+        let a = stamped(current_view_payload(&WorkspaceState::default(), 7));
         assert!(ps.pending_push(&a).is_none(), "未 ready 不推");
         ps.set_ready(true);
         assert!(ps.pending_push(&a).is_some());
         assert_eq!(ps.mark_sent(a.clone()), 1);
         assert!(ps.pending_push(&a).is_none(), "未变化不重推");
-        let b = current_view_payload(&state_with_messages(vec![]), 7);
+        let b = stamped(current_view_payload(&state_with_messages(vec![]), 7));
         assert!(ps.pending_push(&b).is_some());
         ps.set_ready(true);
         assert!(ps.pending_push(&b).is_some(), "重新 ready 强制重发");
+    }
+
+    /// spec §8:业务数据不变、仅语言上下文变化时也必须推送。
+    #[test]
+    fn push_state_resends_when_only_locale_changes() {
+        let mut ps = WebviewPushState::default();
+        ps.set_ready(true);
+        let a = stamped(current_view_payload(&WorkspaceState::default(), 7));
+        ps.mark_sent(a.clone());
+        assert!(ps.pending_push(&a).is_none());
+        let switched = Stamped::new(
+            LocaleStamp {
+                ui_locale: dozer_model::Locale(dozer_model::Locale::ZH_CN.to_string()),
+                locale_revision: 1,
+            },
+            a.payload.clone(),
+        );
+        assert!(ps.pending_push(&switched).is_some(), "仅语言变也要重推");
     }
 
     #[test]
@@ -1085,7 +1129,7 @@ mod tests {
         let mut ps = WebviewPushState::default();
         ps.set_ready(true);
         ps.set_failed("渲染异常".into());
-        let a = current_view_payload(&WorkspaceState::default(), 7);
+        let a = stamped(current_view_payload(&WorkspaceState::default(), 7));
         assert!(ps.pending_push(&a).is_none());
         assert_eq!(ps.failed(), Some("渲染异常"));
     }

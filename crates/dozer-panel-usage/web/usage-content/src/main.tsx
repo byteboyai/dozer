@@ -20,13 +20,24 @@ function applyThemeFromUrl() {
 
 function Root() {
   const [payload, setPayload] = useState<UsageViewPayload | null>(null);
+  const [locale, setLocale] = useState<string>('en');
 
   useEffect(() => {
     window.__dozer = {
       dispatch(json: string) {
         try {
-          const envelope = JSON.parse(json) as { payload?: UsageViewPayload };
+          const envelope = JSON.parse(json) as {
+            payload?: UsageViewPayload;
+            ui_locale?: string;
+          };
           if (envelope.payload) setPayload(envelope.payload);
+          // spec §8:语言上下文缺省(旧 Host)按 `en` 处理。locale 是响应式信号,
+          // 供后续语言包接入;当前驱动 `document.documentElement.lang`。
+          const uiLocale = typeof envelope.ui_locale === 'string' ? envelope.ui_locale : 'en';
+          setLocale(uiLocale);
+          if (typeof document !== 'undefined' && document.documentElement) {
+            document.documentElement.lang = uiLocale;
+          }
         } catch {
           // 忽略无法解析的推送——Rust 侧 `dispatch_script` 只在
           // `__dozer.dispatch` 已注册时才会注入,理论上不该收到坏 JSON。
@@ -41,6 +52,8 @@ function Root() {
       delete window.__dozer;
     };
   }, []);
+
+  void locale;
 
   if (!payload) {
     return null;

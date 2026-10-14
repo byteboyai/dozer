@@ -67,7 +67,7 @@ mod tests {
         assert!(!s.is_attached());
         s.attach();
         assert!(s.is_attached());
-        s.receive(encode_usage_push(UsageViewPayload::Empty));
+        s.receive(encode_usage_push(None, UsageViewPayload::Empty));
         assert_eq!(s.count(), 1);
         assert_eq!(s.kinds(), vec!["empty".to_string()]);
         s.detach();

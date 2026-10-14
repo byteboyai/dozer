@@ -22,13 +22,18 @@ use bytehost_desktop::surface::SurfaceExecutor;
 
 use super::protocol::{CodeHealthViewPayload, encode_codehealth_push};
 
+/// 推送载荷 = 业务 payload + 语言上下文(spec §8)。把语言上下文并入 `T` 使
+/// Surface 的逐帧去重把 locale 也纳入比较:"业务数据不变、仅语言切换"同样触发
+/// 一次推送。载荷 → 脚本的转换从 `Stamped` 同时取 stamp 与 payload。
+type CodeHealthStamped = dozer_model::Stamped<CodeHealthViewPayload>;
+
 /// 代码健康度内容侧固定单槽。物理槽 id 复用既有 `CODEHEALTH_CONTENT_ID_OFFSET`,
 /// 确保 webview 池、`runtime.rs` IPC 与 Surface 路由三者指向同一槽。
 pub(crate) const CODEHEALTH_SURFACE_SLOT: u32 = crate::app::CODEHEALTH_CONTENT_ID_OFFSET as u32;
 
 /// 代码健康度内容侧 webview 的 Surface 管理器。
 pub(crate) struct CodeHealthSurface {
-    executor: SurfaceExecutor<CodeHealthViewPayload>,
+    executor: SurfaceExecutor<CodeHealthStamped>,
     instance: PanelInstanceId,
     slot: SurfaceSlot,
     generation: u64,
@@ -115,7 +120,7 @@ impl CodeHealthSurface {
     }
 
     /// 更新期望载荷(产品每帧算出新状态都调用)。载荷构造留在面板。
-    pub(crate) fn set_desired(&mut self, payload: CodeHealthViewPayload) {
+    pub(crate) fn set_desired(&mut self, payload: CodeHealthStamped) {
         let id = self.id();
         self.executor.set_desired(id, payload);
     }
@@ -170,10 +175,11 @@ impl CodeHealthSurface {
 
 fn build_script(
     revision: Arc<AtomicU64>,
-) -> bytehost_desktop::surface::ScriptBuilder<CodeHealthViewPayload> {
-    Box::new(move |payload: &CodeHealthViewPayload| {
+) -> bytehost_desktop::surface::ScriptBuilder<CodeHealthStamped> {
+    Box::new(move |stamped: &CodeHealthStamped| {
         let rev = revision.fetch_add(1, Ordering::Relaxed) + 1;
-        crate::preview::dispatch_script(&encode_codehealth_push(rev, payload.clone()))
+        let (locale, payload) = stamped.clone().into_parts();
+        crate::preview::dispatch_script(&encode_codehealth_push(rev, Some(locale), payload))
     })
 }
 
@@ -184,10 +190,18 @@ fn surface_id(instance: PanelInstanceId, slot: SurfaceSlot, generation: u64) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extensions::codehealth::{CodeHealthViewPayload, current_view_payload};
+    use crate::extensions::codehealth::current_view_payload;
 
-    fn payload() -> CodeHealthViewPayload {
-        current_view_payload(&crate::extensions::codehealth::WorkspaceState::default())
+    fn payload() -> CodeHealthStamped {
+        let p = current_view_payload(&crate::extensions::codehealth::WorkspaceState::default());
+        dozer_model::Stamped::new(stamp(), p)
+    }
+
+    fn stamp() -> dozer_model::LocaleStamp {
+        dozer_model::LocaleStamp {
+            ui_locale: dozer_model::Locale::default_locale(),
+            locale_revision: 0,
+        }
     }
 
     #[test]

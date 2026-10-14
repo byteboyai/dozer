@@ -166,12 +166,16 @@
 
 **修改：** `preview/webview_protocol.rs`、各 `extensions/*/protocol.rs`、`surface.rs`、前端协议/入口与实际 Surface 适配点。
 
-- [ ] 按当前代码确认每种 envelope 与 PushState；为业务 payload 加语言上下文包装，使去重比较包含 locale/generation。
-- [ ] 自有 envelope 追加兼容字段并递增自身 revision；公共 executor 保持框架中立，若仅包装产品 payload 就能解决，不修改公共 API。
-- [ ] ready/隐藏恢复/销毁重建发送最新完整快照；旧 Surface generation、旧包、旧异步请求不能回退 locale。
-- [ ] 前端以响应式 locale 信号重新渲染，不只在模块初始化时调用一次 t；设置 html lang，不 reload。
+- [x] 按当前代码确认每种 envelope 与 PushState；为业务 payload 加语言上下文包装，使去重比较包含 locale/generation。
+- [x] 自有 envelope 追加兼容字段并递增自身 revision；公共 executor 保持框架中立，若仅包装产品 payload 就能解决，不修改公共 API。
+- [x] ready/隐藏恢复/销毁重建发送最新完整快照；旧 Surface generation、旧包、旧异步请求不能回退 locale。
+- [x] 前端以响应式 locale 信号重新渲染，不只在模块初始化时调用一次 t；设置 html lang，不 reload。
 - [ ] 翻译资源并入现有 build.mjs，资源缺失令构建失败；从任意构建 cwd 可定位资源，不依赖兄弟工作区运行路径。
 - [ ] 给没有正式 envelope 的自有 HTML/预览 chrome 接入最小语言消息，不能把文案注入用户页面；迁移下阶段完成。
+
+> Task 08 收尾说明（2026-10-14）：按审阅确认的范围，本任务落**前三项 + 响应式 locale 信号/html lang**，字符串抽取与资源打包延期（见下）。**实现要点：** `LocaleStamp{ui_locale,locale_revision}` + 泛型载体 `Stamped<T>` 落在 `dozer-model/src/i18n.rs`（中性 crate，`dozer-panel-usage` 与 `dozer-app` 共用；`dozer-panel-usage` 不得依赖 `dozer-app`，`check_panel_boundary.py` 通过）。四种 envelope（todo/codehealth/group_chat、Usage）追加 `#[serde(flatten, skip_serializing_if="Option::is_none")] Option<LocaleStamp>`——缺省即旧 Host，前端按 `en` 处理；Usage envelope 原缺 `revision`，本任务补齐并在前端恢复 `revision` 语义。CodeHealth `SurfaceExecutor<Stamped<CodeHealthViewPayload>>`、Usage `SurfaceExecutor<Stamped<UsageViewPayload>>` 把 locale 并入 `T` 的 `PartialEq`，使**业务 payload 不变、仅语言切换**也被逐帧去重判为变化而重推（spec §8 硬要求，已补测试）。todo/group_chat 的 `WebviewPushState.last_sent` 改 `Option<Stamped<..>>`，`pending_push`/`mark_sent` 同时比较/保存 stamp。`App::locale_stamp()` 统一取 `active_locale()` + `display_generation()`（GUI 本地显示代，不与 daemon revision 比大小），四处推送点接入。前端 `PushState` 增 `locale`/`localeRevision`，`applyEnvelope` 原子应用并把 `document.documentElement.lang` 同步为当前语言；缺字段（旧 Host）沿用上一语言。preview IPC 校验错误的 `Display` 8 条按非 UI 排除（只在 `log_warn!` 里格式化，不面向用户）。
+>
+> **本任务显式延期（用户裁决，记于此以免误判已完成）：**（1）**字符串抽取**按计划归 Task 09–11，本任务不抽；（2）**共享前端解析器接线**（`web/shared/i18n` 的 `Resolver` 实际查表渲染）留待字符串抽取之后；（3）**`locales/` 面板资源目录与 `build.mjs` 资源打包/构建失败门禁**（本列表第 5 项）未做——在资源尚未产出的阶段打包无内容可打包，随 Task 09 首批面板资源一并落地；（4）**自有 HTML/预览 chrome 的最小语言消息**（第 6 项）同理随 Task 11 迁移。
 
 **验收：**L06/L09/L12；业务 payload 不变时的语言推送测试必须通过。
 

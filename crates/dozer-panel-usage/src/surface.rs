@@ -18,14 +18,20 @@
 
 use bytehost_core::{PanelInstanceId, SurfaceEvent, SurfaceId, SurfaceKind, SurfaceSlot};
 use bytehost_desktop::surface::SurfaceExecutor;
+use dozer_model::Stamped;
 
 use crate::adapter::ScriptDispatch;
 use crate::protocol::{UsageViewPayload, encode_usage_push};
 
+/// 推送载荷 = 业务 payload + 语言上下文(spec §8)。把语言上下文并入 `T` 使
+/// Surface 的逐帧去重把 locale 也纳入比较:"业务数据不变、仅语言切换"同样触发
+/// 一次推送。载荷 → 脚本的转换从 `Stamped` 同时取 stamp 与 payload。
+type UsageStamped = Stamped<UsageViewPayload>;
+
 /// Usage 内容侧固定单槽的物理槽 id 由产品注入(保证与产品 webview 池、
 /// IPC 路由指向同一槽)。
 pub struct UsageSurface {
-    executor: SurfaceExecutor<UsageViewPayload>,
+    executor: SurfaceExecutor<UsageStamped>,
     instance: PanelInstanceId,
     slot: SurfaceSlot,
     /// 物理槽 id(产品 webview 池/IPC 路由用),与 `slot` 同值。
@@ -46,8 +52,9 @@ impl UsageSurface {
             surface_id(instance, slot, 0),
             SurfaceKind::Builtin,
             slot,
-            Box::new(move |payload: &UsageViewPayload| {
-                dispatch(&encode_usage_push(payload.clone()))
+            Box::new(move |stamped: &UsageStamped| {
+                let (locale, payload) = stamped.clone().into_parts();
+                dispatch(&encode_usage_push(Some(locale), payload))
             }),
         );
         Self {
@@ -124,7 +131,7 @@ impl UsageSurface {
     }
 
     /// 更新期望载荷(产品每帧算出新状态都调用)。载荷构造留在面板。
-    pub fn set_desired(&mut self, payload: UsageViewPayload) {
+    pub fn set_desired(&mut self, payload: UsageStamped) {
         let id = self.id();
         self.executor.set_desired(id, payload);
     }
@@ -158,8 +165,9 @@ impl UsageSurface {
             id,
             SurfaceKind::Builtin,
             self.slot,
-            Box::new(move |payload: &UsageViewPayload| {
-                dispatch(&encode_usage_push(payload.clone()))
+            Box::new(move |stamped: &UsageStamped| {
+                let (locale, payload) = stamped.clone().into_parts();
+                dispatch(&encode_usage_push(Some(locale), payload))
             }),
         );
     }

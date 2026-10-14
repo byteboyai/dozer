@@ -121,6 +121,14 @@ NON_UI_STRINGS = {
     ("crates/dozer-app/src/app/state.rs", "未知面板 {name:?}"): "布局持久化反序列化错误;`serde::de::Error::custom`,损坏数据诊断,不面向用户",
     ("crates/dozer-app/src/workspace/state.rs", "找不到该路径对应的预览 tab"): "`PreviewCommandOutcome::NotFound` 的协议诊断 detail,回传给外部 MCP/CLI 调用方,非 GUI 文案",
     ("crates/dozer-app/src/app/update.rs", "空白"): "SSH tab 栏宽度估算用的固定占位文本(只为对齐首个空白占位 tab 的宽度),不渲染给用户",
+    ("crates/dozer-app/src/preview/webview_protocol.rs", "消息过大({bytes} 字节)"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
+    ("crates/dozer-app/src/preview/webview_protocol.rs", "消息非合法 JSON: {e}"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
+    ("crates/dozer-app/src/preview/webview_protocol.rs", "协议版本不匹配(收到 {got},期望 {expected})"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
+    ("crates/dozer-app/src/preview/webview_protocol.rs", "project_id 不匹配(收到 {got},期望 {expected})"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
+    ("crates/dozer-app/src/preview/webview_protocol.rs", "panel 不匹配(收到 {got},期望 {expected})"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
+    ("crates/dozer-app/src/preview/webview_protocol.rs", "tab_id 不匹配(收到 {got},期望 {expected})"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
+    ("crates/dozer-app/src/preview/webview_protocol.rs", "document_id 不匹配(收到 {got},期望 {expected})"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
+    ("crates/dozer-app/src/preview/webview_protocol.rs", "未知 payload kind: {k}"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
 }
 
 # 非 app 的后端 crate:字符串不是 UI,按 §10 归为"错误/诊断适配",由 Task 07 与

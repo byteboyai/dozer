@@ -134,6 +134,42 @@ impl LocalizedText {
     }
 }
 
+/// 内置 webview 推送 envelope 的语言上下文(spec §8)。
+///
+/// 追加到既有 envelope 的可选字段,**不改变** `payload` 字段意义:
+/// - `ui_locale`:当前生效语言(`en`/`zh-CN`),供前端查表渲染。
+/// - `locale_revision`:GUI **本地显示代**(`LocaleController::display_generation`),
+///   仅在生效语言真正变化时递增;**不与** daemon 的持久化 revision 比大小。
+///
+/// 序列化形状与 spec §8 示例一致(`{"ui_locale":"zh-CN","locale_revision":3}`),
+/// 由各 envelope 以 `#[serde(flatten)]` 内联。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocaleStamp {
+    pub ui_locale: Locale,
+    pub locale_revision: u64,
+}
+
+/// 携带语言上下文的推送载荷载体(非线上形状,仅供宿主本地比较)。
+///
+/// `SurfaceExecutor<T>` 的逐帧去重比较的是 `T` 本身;把语言上下文并入 `T`,就能让
+/// "业务数据不变、仅语言变"也触发一次推送(spec §8:**业务数据没变也要推送**)。
+/// 载荷 → 注入脚本的转换(`build_script`)从本载体同时取 `stamp` 与 `payload`。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stamped<T> {
+    pub stamp: LocaleStamp,
+    pub payload: T,
+}
+
+impl<T> Stamped<T> {
+    pub fn new(stamp: LocaleStamp, payload: T) -> Self {
+        Stamped { stamp, payload }
+    }
+
+    pub fn into_parts(self) -> (LocaleStamp, T) {
+        (self.stamp, self.payload)
+    }
+}
+
 /// 裸字符串按 host owner 包成无 key 的 literals:让 `impl Into<LocalizedText>`
 /// 的入口(如 `Outbox::push`)能直接收 `&str`/`String`。迁移期便利,渲染时直接
 /// 显示原文本;已迁到资源 key 的调用点仍应用 `keyed`/`host_text*`。

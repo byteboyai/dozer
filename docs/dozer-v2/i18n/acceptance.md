@@ -224,6 +224,35 @@ python3 scripts/i18n/build_inventory.py
 - inventory 中 Task 07 未解决候选清零；预览组（`web_error`/`PreviewError.message`/T10 冲突/资源预算 6 条）与 SSH 连接错误 4 条按任务重投影到 Task 11/10。
 - 既有无关测试失败保留：`usage_probe::host::tests::host_site_citations_point_at_the_code_they_name`。
 
+## Task 08：WebView locale 传递与资源打包基础
+
+### 交付物
+
+- `crates/dozer-model/src/i18n.rs`：新增 `LocaleStamp{ui_locale: Locale, locale_revision: u64}`（serde，线上形状即 spec §8 示例）+ 泛型载体 `Stamped<T>{stamp, payload}`（**非**线上形状，仅宿主本地比较用）。落在此中性 crate 因 `dozer-panel-usage` 不得依赖 `dozer-app`（`check_panel_boundary.py` 通过）。
+- 四种推送 envelope 追加兼容字段 `#[serde(flatten, skip_serializing_if = "Option::is_none")] locale: Option<LocaleStamp>`：`extensions/todo/protocol.rs`（`encode_todo_push`）、`extensions/codehealth/protocol.rs`（`encode_codehealth_push`）、`extensions/group_chat/protocol.rs`（`encode_group_chat_push`）、`dozer-panel-usage/src/protocol.rs`（`encode_usage_push`，**同步补 `revision`**，此前 Usage envelope 无 revision）。缺字段 = 旧 Host，前端按 `en` 处理。
+- Surface 去重改含 locale：`extensions/codehealth/surface.rs` 与 `dozer-panel-usage/src/surface.rs` 的 `SurfaceExecutor<Stamped<ViewPayload>>`，`build_script` 从 `Stamped` 同时取 stamp 与 payload。公共 `SurfaceExecutor<T>` 未改（框架中立，仅包装产品 payload 即解决）。
+- `WebviewPushState.last_sent: Option<Stamped<..>>`（todo/group_chat）：`pending_push`/`mark_sent` 同时比较/保存 stamp。
+- `crates/dozer-app/src/app/app.rs`：`App::locale_stamp()`（`active_locale()` + `display_generation()`，GUI 本地显示代，不与 daemon revision 比大小）；四处推送点（`take_usage_content_script`/`take_codehealth_content_script`/`take_todo_content_script`/群聊推送）接入。
+- 前端：`web/{todo,group-chat,codehealth}-content/src/protocol.ts` 的 `PushState` 增 `locale`/`localeRevision`，`applyEnvelope` 原子应用并把 `document.documentElement.lang` 同步为当前语言；各自 `main.tsx` 初始态补齐；`dozer-panel-usage/web/usage-content/src/main.tsx` 增响应式 locale 信号 + html lang。
+- `scripts/i18n/build_inventory.py`：`NON_UI_STRINGS` 新增 `preview/webview_protocol.rs` 的 8 条 IPC 校验 `Display`（只在 `log_warn!` 里格式化，不面向用户）。
+
+### 验证命令与结果
+
+- `cargo build -p dozer-app -p dozer-panel-usage --tests`：通过。
+- `cargo test -p dozer-panel-usage`：54 passed。
+- `cargo test -p dozer-app`：1996 passed / 1 failed（既有无关 citation 测试）/ 2 ignored；新增用例含 todo/group_chat/usage/codehealth 的"业务 payload 不变、仅语言变仍推送"与 envelope locale 内联/缺省。
+- `node --test`：todo `protocol.test.ts`（7）、group_chat `protocol.test.ts`（6）、codehealth `protocol.test.ts`（5）全绿（含 locale 原子应用、旧 Host 沿用上一语言、同 revision 语言推送）。
+- `cargo fmt --all -- --check`、`cargo clippy -p dozer-app -p dozer-panel-usage --all-targets`（无新增告警）、`python3 scripts/i18n/check_resources.py`、`bash scripts/check-log-scope.sh`、`python3 scripts/audit/check_panel_boundary.py`：全绿。
+- `python3 scripts/i18n/build_inventory.py`：Task 08 未解决候选清零（`counts: {"excluded": 3077, "migrated": 0, "unresolved": 773}`；`unresolved by task: {"09": 240, "10": 418, "11": 115}`；未分配 0）。
+
+### 残留问题（本任务显式延期，用户裁决）
+
+- **字符串抽取**：按计划归 Task 09–11，本任务不抽任何面板/前端文案。
+- **共享前端解析器接线**：`web/shared/i18n` 的 `Resolver` 实际查表渲染留待抽取之后；本任务只把 locale 作为响应式信号落到 `PushState` 与 `document.documentElement.lang`。
+- **`locales/` 面板资源目录与 `build.mjs` 资源打包 / 构建失败门禁**（计划 Task 08 第 5 项）：资源尚未产出，随 Task 09 首批面板资源一并落地。
+- **自有 HTML/预览 chrome 的最小语言消息**（计划 Task 08 第 6 项）：随 Task 11 迁移。
+- 既有无关测试失败保留：`usage_probe::host::tests::host_site_citations_point_at_the_code_they_name`。
+
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |
 |---|---|---|

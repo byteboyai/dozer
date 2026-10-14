@@ -162,11 +162,19 @@ impl ProbeHost {
             return;
         }
         let desired = usage::current_view_payload(&self.ws);
-        self.push.set_desired(desired);
+        self.push
+            .set_desired(dozer_model::Stamped::new(Self::probe_stamp(), desired));
         let Some((_, script)) = self.push.take_pending_script() else {
             return;
         };
         self.surface.receive_script(script);
+    }
+
+    fn probe_stamp() -> dozer_model::LocaleStamp {
+        dozer_model::LocaleStamp {
+            ui_locale: dozer_model::Locale::default_locale(),
+            locale_revision: 0,
+        }
     }
 
     /// 对应 `runtime.rs` 的 IPC 识别 + `app/update.rs` 的 `Ready` 处理:

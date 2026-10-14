@@ -6,6 +6,7 @@
 use super::view_model::{self, ChangeSummary, EmptyState};
 use super::{CodeHealthCategory, WorkspaceState};
 use dozer_codehealth::{FindingChange, FindingEvidence, FindingSeverity, HealthTier, rule_ids};
+use dozer_model::LocaleStamp;
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -514,13 +515,21 @@ pub struct CodeHealthPushEnvelope {
     pub protocol_version: u32,
     /// 单调递增;前端丢弃小于已应用值的推送。
     pub revision: u64,
+    /// 语言上下文(spec §8)。缺省(None)表示旧 Host,前端按 `en` 处理。
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<LocaleStamp>,
     pub payload: CodeHealthViewPayload,
 }
 
-pub fn encode_codehealth_push(revision: u64, payload: CodeHealthViewPayload) -> String {
+pub fn encode_codehealth_push(
+    revision: u64,
+    locale: Option<LocaleStamp>,
+    payload: CodeHealthViewPayload,
+) -> String {
     serde_json::to_string(&CodeHealthPushEnvelope {
         protocol_version: CODEHEALTH_PROTOCOL_VERSION,
         revision,
+        locale,
         payload,
     })
     .unwrap_or_else(|_| "null".to_string())
@@ -853,9 +862,13 @@ mod tests {
     #[test]
     fn envelope_carries_version_and_revision() {
         let json: serde_json::Value =
-            serde_json::from_str(&encode_codehealth_push(5, payload())).unwrap();
+            serde_json::from_str(&encode_codehealth_push(5, None, payload())).unwrap();
         assert_eq!(json["protocol_version"], CODEHEALTH_PROTOCOL_VERSION);
         assert_eq!(json["revision"], 5);
+        assert!(
+            json["ui_locale"].is_null(),
+            "无语言上下文时不内联 locale 字段"
+        );
         assert!(json["payload"]["scan"].is_object());
     }
 }

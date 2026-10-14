@@ -9,7 +9,7 @@ use super::{
     visible_category_rows,
 };
 use crate::workspace::agent_icon;
-use dozer_model::{AgentKind, TodoInfo};
+use dozer_model::{AgentKind, LocaleStamp, Stamped, TodoInfo};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
@@ -257,13 +257,21 @@ pub struct TodoPushEnvelope {
     pub protocol_version: u32,
     /// 单调递增;前端丢弃小于已应用值的推送。
     pub revision: u64,
+    /// 语言上下文(spec §8)。缺省(None)表示旧 Host,前端按 `en` 处理。
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<LocaleStamp>,
     pub payload: TodoViewPayload,
 }
 
-pub fn encode_todo_push(revision: u64, payload: TodoViewPayload) -> String {
+pub fn encode_todo_push(
+    revision: u64,
+    locale: Option<LocaleStamp>,
+    payload: TodoViewPayload,
+) -> String {
     serde_json::to_string(&TodoPushEnvelope {
         protocol_version: TODO_PROTOCOL_VERSION,
         revision,
+        locale,
         payload,
     })
     .unwrap_or_else(|_| "null".to_string())
@@ -406,7 +414,9 @@ pub(crate) fn route_event(items: &[TodoInfo], event: TodoWebviewEvent) -> Option
 #[derive(Debug, Default)]
 pub struct WebviewPushState {
     ready: bool,
-    last_sent: Option<TodoViewPayload>,
+    /// 上次送达的(载荷 + 语言上下文)。把语言上下文纳入比较,使"业务数据不变、
+    /// 仅语言切换"也触发一次推送(spec §8)。
+    last_sent: Option<Stamped<TodoViewPayload>>,
     revision: u64,
     /// webview 已进池但尚未 ready 的起点,用于判定加载超时。
     waiting_since: Option<Instant>,
@@ -441,7 +451,10 @@ impl WebviewPushState {
         }
     }
 
-    pub fn pending_push(&self, desired: &TodoViewPayload) -> Option<TodoViewPayload> {
+    pub fn pending_push(
+        &self,
+        desired: &Stamped<TodoViewPayload>,
+    ) -> Option<Stamped<TodoViewPayload>> {
         if !self.ready || self.last_sent.as_ref() == Some(desired) {
             return None;
         }
@@ -449,7 +462,7 @@ impl WebviewPushState {
     }
 
     /// 记录已送达并返回本次 revision(从 1 起)。
-    pub fn mark_sent(&mut self, payload: TodoViewPayload) -> u64 {
+    pub fn mark_sent(&mut self, payload: Stamped<TodoViewPayload>) -> u64 {
         self.revision += 1;
         self.last_sent = Some(payload);
         self.revision
@@ -1035,8 +1048,18 @@ mod tests {
 
     // ---- push state ----
 
-    fn payload(project_id: i64) -> TodoViewPayload {
-        build_payload(&state_with(vec![]), &[], project_id, (2026, 10, 2), vec![])
+    fn stamp() -> LocaleStamp {
+        LocaleStamp {
+            ui_locale: dozer_model::Locale::default_locale(),
+            locale_revision: 0,
+        }
+    }
+
+    fn payload(project_id: i64) -> Stamped<TodoViewPayload> {
+        Stamped::new(
+            stamp(),
+            build_payload(&state_with(vec![]), &[], project_id, (2026, 10, 2), vec![]),
+        )
     }
 
     #[test]
@@ -1088,12 +1111,39 @@ mod tests {
         assert!(s.pending_push(&payload(1)).is_none());
     }
 
+    /// spec §8:业务数据不变、仅语言上下文变化时也必须推送。语言上下文并入
+    /// `last_sent` 比较后,desired 的 stamp 变了就不再被去重。
+    #[test]
+    fn push_state_resends_when_only_locale_changes() {
+        let mut s = WebviewPushState::default();
+        s.set_ready(true);
+        let p = payload(1);
+        s.mark_sent(s.pending_push(&p).unwrap());
+        assert!(s.pending_push(&p).is_none(), "完全同值不重推");
+        let switched = Stamped::new(
+            LocaleStamp {
+                ui_locale: dozer_model::Locale(dozer_model::Locale::ZH_CN.to_string()),
+                locale_revision: 1,
+            },
+            p.payload.clone(),
+        );
+        assert!(s.pending_push(&switched).is_some(), "仅语言变也要重推");
+    }
+
     #[test]
     fn encode_push_wraps_revision_and_version() {
-        let out = encode_todo_push(5, payload(9));
+        let out = encode_todo_push(5, Some(stamp()), payload(9).payload);
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["protocol_version"], TODO_PROTOCOL_VERSION);
         assert_eq!(v["revision"], 5);
+        assert_eq!(v["ui_locale"], dozer_model::Locale::EN);
         assert_eq!(v["payload"]["project_id"], 9);
+    }
+
+    #[test]
+    fn encode_push_omits_locale_when_absent() {
+        let out = encode_todo_push(1, None, payload(1).payload);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(v["ui_locale"].is_null(), "旧 Host 无语言上下文时不内联字段");
     }
 }

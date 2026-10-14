@@ -1300,7 +1300,9 @@ impl App {
             return Vec::new();
         }
         let desired = crate::extensions::usage::current_view_payload(&ws.usage);
-        self.usage_surface.set_desired(desired);
+        let stamp = self.locale_stamp();
+        self.usage_surface
+            .set_desired(dozer_model::Stamped::new(stamp, desired));
         match self.usage_surface.take_pending_script() {
             Some(pair) => vec![pair],
             None => Vec::new(),
@@ -1337,7 +1339,9 @@ impl App {
             return Vec::new();
         };
         let desired = crate::extensions::codehealth::current_view_payload(&ws.codehealth);
-        self.codehealth_surface.set_desired(desired);
+        let stamp = self.locale_stamp();
+        self.codehealth_surface
+            .set_desired(dozer_model::Stamped::new(stamp, desired));
         match self.codehealth_surface.take_pending_script() {
             Some(pair) => vec![pair],
             None => Vec::new(),
@@ -1375,11 +1379,14 @@ impl App {
             project_id,
             crate::extensions::todo::today_ymd(),
         );
+        let stamp = self.locale_stamp();
+        let desired = dozer_model::Stamped::new(stamp, desired);
         let Some(payload) = self.todo_webview.pending_push(&desired) else {
             return Vec::new();
         };
         let revision = self.todo_webview.mark_sent(payload.clone());
-        let envelope = crate::extensions::todo::encode_todo_push(revision, payload);
+        let (locale, payload) = payload.into_parts();
+        let envelope = crate::extensions::todo::encode_todo_push(revision, Some(locale), payload);
         vec![(webview_id, crate::preview::dispatch_script(&envelope))]
     }
 
@@ -1407,11 +1414,15 @@ impl App {
         };
         let desired =
             crate::extensions::group_chat::current_view_payload(&ws.group_chat, project_id);
+        let stamp = self.locale_stamp();
+        let desired = dozer_model::Stamped::new(stamp, desired);
         let Some(payload) = self.group_chat_webview.pending_push(&desired) else {
             return Vec::new();
         };
         let revision = self.group_chat_webview.mark_sent(payload.clone());
-        let envelope = crate::extensions::group_chat::encode_group_chat_push(revision, payload);
+        let (locale, payload) = payload.into_parts();
+        let envelope =
+            crate::extensions::group_chat::encode_group_chat_push(revision, Some(locale), payload);
         vec![(webview_id, crate::preview::dispatch_script(&envelope))]
     }
 
@@ -1999,6 +2010,18 @@ impl App {
 
     pub fn next_locale_wake(&self) -> std::time::Duration {
         self.locale.next_wake(std::time::Instant::now())
+    }
+
+    /// 当前语言上下文,供所有 webview 推送 envelope 内联(spec §8)。
+    ///
+    /// `ui_locale` = 当前生效语言,`locale_revision` = 本地显示代(仅在生效语言
+    /// 真正变化时递增)。各推送点把它并入 desired,使"业务数据不变、仅语言变"
+    /// 也会被 `last_sent`/`pending` 判为变化而重推。
+    pub(crate) fn locale_stamp(&self) -> dozer_model::LocaleStamp {
+        dozer_model::LocaleStamp {
+            ui_locale: dozer_model::Locale(self.locale.active_locale().to_string()),
+            locale_revision: self.locale.display_generation(),
+        }
     }
 
     /// 打开设置窗口,并把当前权威语言偏好注入「语言」页作已确认值。

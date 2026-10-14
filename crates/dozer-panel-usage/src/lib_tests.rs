@@ -457,16 +457,29 @@ fn window_axis_is_self_contained_when_recent_days_idle() {
 
 // ---- Surface 去重/重建语义(迁移自原 mod.rs) ----
 
-fn payload_a() -> crate::protocol::UsageViewPayload {
-    crate::protocol::UsageViewPayload::AgentEmpty {
-        agent: AgentKind::Claude,
+fn stamp() -> dozer_model::LocaleStamp {
+    dozer_model::LocaleStamp {
+        ui_locale: dozer_model::Locale::default_locale(),
+        locale_revision: 0,
     }
 }
 
-fn payload_b() -> crate::protocol::UsageViewPayload {
-    crate::protocol::UsageViewPayload::AgentEmpty {
-        agent: AgentKind::Codebuddy,
-    }
+fn payload_a() -> dozer_model::Stamped<crate::protocol::UsageViewPayload> {
+    dozer_model::Stamped::new(
+        stamp(),
+        crate::protocol::UsageViewPayload::AgentEmpty {
+            agent: AgentKind::Claude,
+        },
+    )
+}
+
+fn payload_b() -> dozer_model::Stamped<crate::protocol::UsageViewPayload> {
+    dozer_model::Stamped::new(
+        stamp(),
+        crate::protocol::UsageViewPayload::AgentEmpty {
+            agent: AgentKind::Codebuddy,
+        },
+    )
 }
 
 fn new_surface() -> crate::surface::UsageSurface {
@@ -523,8 +536,33 @@ fn pending_push_treats_a_different_workspaces_payload_as_new() {
     surface.apply_ready();
     surface.set_desired(payload_a());
     assert!(surface.take_pending_script().is_some());
-    surface.set_desired(crate::protocol::UsageViewPayload::Empty);
+    surface.set_desired(dozer_model::Stamped::new(
+        stamp(),
+        crate::protocol::UsageViewPayload::Empty,
+    ));
     assert!(surface.take_pending_script().is_some());
+}
+
+/// spec §8:业务 payload 不变、仅语言上下文变化时也必须推送。
+#[test]
+fn pending_push_resends_when_only_locale_changes() {
+    let mut surface = new_surface();
+    surface.observe_instance(true, false);
+    surface.apply_ready();
+    let payload = payload_a();
+    surface.set_desired(payload.clone());
+    assert!(surface.take_pending_script().is_some());
+    surface.set_desired(payload.clone());
+    assert!(surface.take_pending_script().is_none(), "完全同值不重推");
+    let switched = dozer_model::Stamped::new(
+        dozer_model::LocaleStamp {
+            ui_locale: dozer_model::Locale(dozer_model::Locale::ZH_CN.to_string()),
+            locale_revision: 1,
+        },
+        payload.payload,
+    );
+    surface.set_desired(switched);
+    assert!(surface.take_pending_script().is_some(), "仅语言变也要重推");
 }
 
 #[test]
