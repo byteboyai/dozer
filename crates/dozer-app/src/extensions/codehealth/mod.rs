@@ -30,6 +30,9 @@ use dozer_services::ServiceErrorKind;
 
 dozer_core::scope!(pub(crate) LOG, panel, "code_health");
 
+/// 面板 owner id(spec §6.1,glossary§「代码健康度」)。
+pub(crate) const CODE_HEALTH_OWNER: &str = "dozer.code_health";
+
 /// 面板右侧分类导航的四个分类：总览 / 结构复杂度 / UI 一致性 / 扫描范围。
 /// 左侧内容区按当前选中分类切换展示（见 `view.rs`）。spec「信息架构与 UI」。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -43,14 +46,22 @@ pub enum CodeHealthCategory {
 }
 
 impl CodeHealthCategory {
-    pub fn label(self) -> &'static str {
+    /// 分类导航文案的稳定 key 与英文 fallback(spec §6.1)。中文只在
+    /// `locales/panels/codehealth/zh-CN.json`,源码内不出现中文。
+    pub fn label_key(self) -> (&'static str, &'static str) {
         match self {
-            CodeHealthCategory::Overview => "总览",
-            CodeHealthCategory::Structure => "结构复杂度",
-            CodeHealthCategory::UiConsistency => "UI 一致性",
-            CodeHealthCategory::ScanScope => "扫描范围",
-            CodeHealthCategory::Architecture => "架构",
+            CodeHealthCategory::Overview => ("tab.overview", "Overview"),
+            CodeHealthCategory::Structure => ("tab.structure", "Structure Complexity"),
+            CodeHealthCategory::UiConsistency => ("tab.ui_consistency", "UI Consistency"),
+            CodeHealthCategory::ScanScope => ("tab.scan_scope", "Scan Scope"),
+            CodeHealthCategory::Architecture => ("tab.architecture", "Architecture"),
         }
+    }
+
+    /// 按 locale 解析分类导航文案。
+    pub fn label(self, locale: &str) -> String {
+        let (key, fallback) = self.label_key();
+        crate::i18n::panel_text(CODE_HEALTH_OWNER, key, fallback, locale)
     }
 
     pub fn all() -> [CodeHealthCategory; 5] {
@@ -81,6 +92,8 @@ pub struct PanelState {
     pub scanned_at_ms: Option<u64>,
     /// 快照保存失败提示（本次结果仍可展示，但不能用于下次比较）。
     pub save_error: Option<String>,
+    /// 保存错误的稳定 key + 参数(spec §10);前端优先用它本地化。
+    pub save_error_key: Option<protocol::ErrorDto>,
 }
 
 #[derive(Default)]
@@ -92,6 +105,8 @@ pub struct WorkspaceState {
     /// "扫描"都会清掉（spec「错误处理」）：保留上一次成功结果的同时要能看到
     /// 这次失败了。
     scan_error: Option<String>,
+    /// 扫描错误的稳定 key + 参数(spec §10);前端优先用它本地化。
+    scan_error_key: Option<protocol::ErrorDto>,
     /// 右侧分类导航当前选中的分类（默认总览）。
     category: CodeHealthCategory,
     /// 待发提示;`App::drain_outboxes` 排空成 Toast。
@@ -143,8 +158,16 @@ impl WorkspaceState {
         self.scan_error.as_deref()
     }
 
+    pub fn scan_error_key(&self) -> Option<&protocol::ErrorDto> {
+        self.scan_error_key.as_ref()
+    }
+
     pub fn save_error(&self) -> Option<&str> {
         self.panel.save_error.as_deref()
+    }
+
+    pub fn save_error_key(&self) -> Option<&protocol::ErrorDto> {
+        self.panel.save_error_key.as_ref()
     }
 
     pub fn category(&self) -> CodeHealthCategory {
@@ -162,8 +185,9 @@ pub enum Message {
     /// 已有报告则**保持现有面板**。`Unavailable` 静默(顶栏徽标已表达"dozerd 不可用");其余弹带 key 的
     /// Error Toast,相同文本 60 秒内只提示一次。
     LoadFailed(i64, ServiceErrorKind, String, Box<PanelState>),
-    /// 手动扫描结果回灌（含差异/热点/Git/保存错误）。`Err` = 扫描本身失败。
-    Scanned(i64, Result<Box<PanelState>, String>),
+    /// 手动扫描结果回灌（含差异/热点/Git/保存错误）。`Err` = 扫描本身失败，
+    /// 携带稳定 key + 参数(spec §10)与英文兜底文案。
+    Scanned(i64, Result<Box<PanelState>, (protocol::ErrorDto, String)>),
     /// 点"扫描"按钮。
     ScanRequested,
     /// 右侧分类导航点击。
@@ -196,7 +220,12 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
                 ws_state.outbox.push_keyed_cooldown(
                     LOG,
                     crate::extensions::toast::Level::Error,
-                    crate::extensions::toast::literal(format!("代码健康度加载失败: {message}")),
+                    dozer_model::LocalizedText::keyed(
+                        CODE_HEALTH_OWNER,
+                        "error.load_failed",
+                        "Failed to load Code Health: {message}",
+                    )
+                    .with_arg("message", message.clone()),
                     "codehealth-load",
                     std::time::Instant::now(),
                 );
@@ -205,16 +234,19 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
         Message::Scanned(_project_id, Ok(panel)) => {
             ws_state.scanning = false;
             ws_state.scan_error = None;
+            ws_state.scan_error_key = None;
             ws_state.panel = *panel;
         }
-        Message::Scanned(_project_id, Err(e)) => {
+        Message::Scanned(_project_id, Err((dto, e))) => {
             ws_state.scanning = false;
             ws_state.scan_error = Some(e);
+            ws_state.scan_error_key = Some(dto);
             // 保留上一次成功结果不被覆盖。
         }
         Message::ScanRequested => {
             ws_state.scanning = true;
             ws_state.scan_error = None;
+            ws_state.scan_error_key = None;
         }
         Message::CategorySet(category) => {
             ws_state.category = category;
@@ -339,7 +371,18 @@ mod tests {
         };
         update(&mut ws, Message::Loaded(1, Box::new(panel)));
         update(&mut ws, Message::ScanRequested);
-        update(&mut ws, Message::Scanned(1, Err("扫描失败".into())));
+        update(
+            &mut ws,
+            Message::Scanned(
+                1,
+                Err((
+                    protocol::ErrorDto::ScanFailed {
+                        message: "boom".into(),
+                    },
+                    "扫描失败".into(),
+                )),
+            ),
+        );
         assert!(!ws.scanning());
         assert!(ws.report().is_some(), "失败时应保留上一次成功结果");
         assert_eq!(ws.scanned_at_ms(), Some(1), "失败不应更新时间戳");
@@ -349,7 +392,18 @@ mod tests {
     #[test]
     fn scan_requested_clears_previous_error() {
         let mut ws = WorkspaceState::default();
-        update(&mut ws, Message::Scanned(1, Err("扫描失败".into())));
+        update(
+            &mut ws,
+            Message::Scanned(
+                1,
+                Err((
+                    protocol::ErrorDto::ScanFailed {
+                        message: "boom".into(),
+                    },
+                    "扫描失败".into(),
+                )),
+            ),
+        );
         assert_eq!(ws.scan_error(), Some("扫描失败"));
         update(&mut ws, Message::ScanRequested);
         assert_eq!(ws.scan_error(), None);
@@ -358,7 +412,18 @@ mod tests {
     #[test]
     fn scanned_ok_clears_previous_error() {
         let mut ws = WorkspaceState::default();
-        update(&mut ws, Message::Scanned(1, Err("扫描失败".into())));
+        update(
+            &mut ws,
+            Message::Scanned(
+                1,
+                Err((
+                    protocol::ErrorDto::ScanFailed {
+                        message: "boom".into(),
+                    },
+                    "扫描失败".into(),
+                )),
+            ),
+        );
         let panel = PanelState {
             report: Some(sample_report()),
             ..PanelState::default()
@@ -569,7 +634,15 @@ mod tests {
             &mut state,
             Message::AsyncResult(
                 scan,
-                Box::new(Message::Scanned(1, Err("old failure".into()))),
+                Box::new(Message::Scanned(
+                    1,
+                    Err((
+                        protocol::ErrorDto::ScanFailed {
+                            message: "old failure".into(),
+                        },
+                        "old failure".into(),
+                    )),
+                )),
             ),
         );
         assert!(state.scanning());
@@ -578,7 +651,15 @@ mod tests {
             &mut state,
             Message::AsyncResult(
                 next,
-                Box::new(Message::Scanned(1, Err("current failure".into()))),
+                Box::new(Message::Scanned(
+                    1,
+                    Err((
+                        protocol::ErrorDto::ScanFailed {
+                            message: "current failure".into(),
+                        },
+                        "current failure".into(),
+                    )),
+                )),
             ),
         );
         assert!(!state.scanning());

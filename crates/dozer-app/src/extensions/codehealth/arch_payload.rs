@@ -3,7 +3,7 @@
 //! 全部在 Rust 里算好;前端只做可见子图投影与渲染。
 
 use super::WorkspaceState;
-use super::protocol::{FindingRowDto, row_dto};
+use super::protocol::{FindingRowDto, RowInput, row_dto};
 use dozer_codehealth::{
     ArchitectureDiffOutcome, ArchitectureEdgeKind, ArchitectureNodeKind, ArchitectureStatus,
     FindingEvidence, ProjectReport,
@@ -83,7 +83,12 @@ pub struct ArchitectureBody {
     /// `complete` | `partial` | `not_applicable`。
     pub status: &'static str,
     pub status_note: Option<String>,
+    /// `status_note` 的稳定 key(spec §167,`arch.status_note.partial`/
+    /// `arch.status_note.not_applicable`);前端优先用它本地化。
+    pub status_note_key: Option<&'static str>,
     pub truncated_note: Option<String>,
+    /// 截断说明里的节点总数(`arch.truncated_note{total}`);未截断为 `None`。
+    pub truncated_note_total: Option<usize>,
     pub nodes: Vec<ArchNodeDto>,
     pub edges: Vec<ArchEdgeDto>,
     pub cycles: Vec<ArchCycleDto>,
@@ -140,18 +145,23 @@ fn diff_dto(outcome: &ArchitectureDiffOutcome) -> ArchDiffDto {
 
 pub fn architecture_body(ws: &WorkspaceState, report: &ProjectReport) -> ArchitectureBody {
     let arch = &report.architecture;
-    let (status, status_note) = match arch.status {
-        ArchitectureStatus::Complete => ("complete", None),
+    let (status, status_note, status_note_key) = match arch.status {
+        ArchitectureStatus::Complete => ("complete", None, None),
         ArchitectureStatus::Partial => (
             "partial",
-            Some("架构分析不完整(见扫描范围或下方错误),不能据此判断没有风险。".to_string()),
+            Some(
+                "Architecture analysis is incomplete (see Scan Scope or errors below); do not conclude there are no risks from this."
+                    .to_string(),
+            ),
+            Some("arch.status_note.partial"),
         ),
         ArchitectureStatus::NotApplicable => (
             "not_applicable",
             Some(
-                "没有可用的架构数据(旧版报告或项目内没有可分析的 Rust 代码),请重新扫描。"
+                "No architecture data available (legacy report or no analyzable Rust code in the project); please rescan."
                     .to_string(),
             ),
+            Some("arch.status_note.not_applicable"),
         ),
     };
 
@@ -169,12 +179,14 @@ pub fn architecture_body(ws: &WorkspaceState, report: &ProjectReport) -> Archite
         .collect();
 
     let mut truncated_note = None;
+    let mut truncated_note_total = None;
     if kept_nodes.len() > MAX_PAYLOAD_NODES {
         let total = kept_nodes.len();
         kept_nodes.retain(|n| n.kind == ArchitectureNodeKind::Crate);
         truncated_note = Some(format!(
-            "模块图过大({total} 个节点),仅显示 crate 层;分析结果(循环/枢纽/越界)仍基于完整图。"
+            "Module graph too large ({total} nodes); showing crate layer only. Analyses (cycles/hubs/boundaries) still use the full graph."
         ));
+        truncated_note_total = Some(total);
     }
     let kept_ids: BTreeSet<&str> = kept_nodes.iter().map(|n| n.id.as_str()).collect();
 
@@ -230,8 +242,12 @@ pub fn architecture_body(ws: &WorkspaceState, report: &ProjectReport) -> Archite
         .iter()
         .filter(|f| matches!(f.category, dozer_codehealth::FindingCategory::Architecture))
     {
-        let (kind, node_ids, edge_ids): (&'static str, Vec<String>, Vec<String>) = match &f.evidence
-        {
+        let (kind, title_key, node_ids, edge_ids): (
+            &'static str,
+            &'static str,
+            Vec<String>,
+            Vec<String>,
+        ) = match &f.evidence {
             FindingEvidence::ArchitectureCycle { node_ids } => {
                 let set: BTreeSet<&str> = node_ids.iter().map(String::as_str).collect();
                 let eids = arch
@@ -240,31 +256,40 @@ pub fn architecture_body(ws: &WorkspaceState, report: &ProjectReport) -> Archite
                     .filter(|e| set.contains(e.from.as_str()) && set.contains(e.to.as_str()))
                     .map(|e| e.id.clone())
                     .collect();
-                ("cycle", node_ids.clone(), eids)
+                ("cycle", "arch.risk.cycle", node_ids.clone(), eids)
             }
             FindingEvidence::ArchitectureHub { node_id, .. } => {
-                ("hub", vec![node_id.clone()], Vec::new())
+                ("hub", "arch.risk.hub", vec![node_id.clone()], Vec::new())
             }
             FindingEvidence::ArchitectureBoundary { edge_id, .. } => {
                 let nids = endpoints
                     .get(edge_id.as_str())
                     .map(|(a, b)| vec![a.to_string(), b.to_string()])
                     .unwrap_or_default();
-                ("boundary", nids, vec![edge_id.clone()])
+                (
+                    "boundary",
+                    "arch.risk.boundary",
+                    nids,
+                    vec![edge_id.clone()],
+                )
             }
             _ => continue,
         };
         risks.push(ArchRiskDto {
             kind,
-            finding: row_dto(
-                f.id.clone(),
-                f.title.clone(),
-                &f.path,
-                f.start_line,
-                f.severity,
-                None,
-                Vec::new(),
-            ),
+            finding: row_dto(RowInput {
+                id: f.id.clone(),
+                title: f.title.clone(),
+                path: &f.path,
+                line: f.start_line,
+                severity: f.severity,
+                change: None,
+                reasons: Vec::new(),
+                reason_items: Vec::new(),
+                title_key: Some(title_key),
+                symbol: None,
+                metric: None,
+            }),
             node_ids,
             edge_ids,
         });
@@ -283,7 +308,9 @@ pub fn architecture_body(ws: &WorkspaceState, report: &ProjectReport) -> Archite
     ArchitectureBody {
         status,
         status_note,
+        status_note_key,
         truncated_note,
+        truncated_note_total,
         nodes,
         edges,
         cycles,
@@ -420,7 +447,7 @@ mod tests {
         let ws = ws_with(report_with(ArchitectureReport::not_applicable(), vec![]));
         let b = architecture_body(&ws, ws.report().unwrap());
         assert_eq!(b.status, "not_applicable");
-        assert!(b.status_note.as_deref().unwrap().contains("重新扫描"));
+        assert!(b.status_note.as_deref().unwrap().contains("rescan"));
         assert!(b.nodes.is_empty());
     }
 

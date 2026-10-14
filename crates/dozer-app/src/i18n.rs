@@ -36,6 +36,11 @@ const PANEL_OWNERS: &[(&str, &str, &str)] = &[
         include_str!("../../dozer-panel-usage/locales/en.json"),
         include_str!("../../dozer-panel-usage/locales/zh-CN.json"),
     ),
+    (
+        "dozer.code_health",
+        include_str!("../locales/panels/codehealth/en.json"),
+        include_str!("../locales/panels/codehealth/zh-CN.json"),
+    ),
 ];
 
 fn build_host_resolver() -> Resolver {

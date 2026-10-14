@@ -5,6 +5,7 @@ import { projectGraph } from '../graph/projection.ts';
 import { addedNodeIds, impactNodeIds, riskForNode, riskIndex } from '../graph/linking.ts';
 import { GraphCanvas } from './GraphCanvas.tsx';
 import { FindingRowView } from './FindingRow.tsx';
+import { t } from '../i18n.ts';
 
 export function ArchitecturePage({ body }: { body: ArchitectureBody }) {
   const [storedLayer, setLayer] = useViewState<'crate' | 'module'>('arch.layer', 'crate');
@@ -40,11 +41,24 @@ export function ArchitecturePage({ body }: { body: ArchitectureBody }) {
   const selectedRisks = selected ? riskForNode(body.risks, selected.representedIds) : [];
   const activeRiskIds = new Set(selectedRisks.map((r) => r.finding.id));
 
+  // spec §167:优先语义 key,旧 Host 缺字段时回落预格式化文案。
+  const statusNote = body.status_note_key
+    ? t(body.status_note_key, body.status_note ?? '')
+    : body.status_note;
+  const truncatedNote =
+    body.truncated_note_total !== undefined && body.truncated_note_total !== null
+      ? t(
+          'arch.truncated_note',
+          'Module graph too large ({total} nodes); showing crate layer only. Analyses (cycles/hubs/boundaries) still use the full graph.',
+          { total: String(body.truncated_note_total) },
+        )
+      : body.truncated_note;
+
   if (body.status === 'not_applicable') {
     return (
       <div>
-        <h2>架构地图</h2>
-        <div class="banner note">{body.status_note}</div>
+        <h2>{t('arch.title', 'Architecture Map')}</h2>
+        <div class="banner note">{statusNote}</div>
       </div>
     );
   }
@@ -79,7 +93,7 @@ export function ArchitecturePage({ body }: { body: ArchitectureBody }) {
   return (
     <div class="arch-layout">
       <div class="arch-toolbar">
-        <h2>架构地图</h2>
+        <h2>{t('arch.title', 'Architecture Map')}</h2>
         <div class="seg">
           <button
             class={layer === 'crate' ? 'active' : ''}
@@ -90,7 +104,7 @@ export function ArchitecturePage({ body }: { body: ArchitectureBody }) {
           <button
             class={layer === 'module' ? 'active' : ''}
             disabled={!hasModules}
-            title={hasModules ? undefined : '没有可显示的模块节点'}
+            title={hasModules ? undefined : t('arch.no_modules', 'No module nodes to display')}
             onClick={() => switchLayer('module')}
           >
             module
@@ -106,35 +120,44 @@ export function ArchitecturePage({ body }: { body: ArchitectureBody }) {
               setFitSignal((n) => n + 1);
             }}
           />
-          仅看风险
+          {t('arch.risk_only', 'Risks only')}
         </label>
         <button class="btn small" onClick={() => setFitSignal((n) => n + 1)}>
-          适配窗口
+          {t('arch.fit', 'Fit to window')}
         </button>
         <span class="legend">
           <span>
-            <i class="dot risk" />风险
+            <i class="dot risk" />
+            {t('arch.legend.risk', 'Risk')}
           </span>
           <span>
-            <i class="dot impact" />本轮影响范围
+            <i class="dot impact" />
+            {t('arch.legend.impact', 'Impact this scan')}
           </span>
           <span>
-            <i class="dot added" />本轮新增
+            <i class="dot added" />
+            {t('arch.legend.added', 'Added this scan')}
           </span>
         </span>
       </div>
 
-      {body.status_note && <div class="banner note">{body.status_note}</div>}
-      {body.truncated_note && <div class="banner note">{body.truncated_note}</div>}
+      {statusNote && <div class="banner note">{statusNote}</div>}
+      {truncatedNote && <div class="banner note">{truncatedNote}</div>}
       {body.errors.map((e) => (
         <div class="banner error" key={e}>
           {e}
         </div>
       ))}
       {body.diff.state === 'no_baseline' && (
-        <div class="dim small">首次扫描(或旧报告),暂无架构变化可比对。</div>
+        <div class="dim small">
+          {t('arch.diff_no_baseline', 'First scan (or legacy report); no architecture changes to compare yet.')}
+        </div>
       )}
-      {body.impact.truncated && <div class="dim small">影响范围因访问上限被截断。</div>}
+      {body.impact.truncated && (
+        <div class="dim small">
+          {t('arch.impact_truncated', 'Impact scope was truncated by the traversal limit.')}
+        </div>
+      )}
 
       <div class="arch-main">
         <GraphCanvas
@@ -155,15 +178,18 @@ export function ArchitecturePage({ body }: { body: ArchitectureBody }) {
             <div class="card detail">
               <b>{selected.label}</b>
               <dl>
-                <dt>类型</dt>
+                <dt>{t('arch.detail.type', 'Type')}</dt>
                 <dd>{selected.kind}</dd>
-                <dt>代码行</dt>
+                <dt>{t('arch.detail.loc', 'Lines')}</dt>
                 <dd>{selected.loc}</dd>
                 {selected.childCount > 0 && (
                   <>
-                    <dt>子模块</dt>
+                    <dt>{t('arch.detail.children', 'Submodules')}</dt>
                     <dd>
-                      {selected.childCount} 个(
+                      {t('arch.detail.children_count', '{count}', {
+                        count: String(selected.childCount),
+                      })}
+                      (
                       <a
                         href="#"
                         onClick={(e) => {
@@ -171,7 +197,9 @@ export function ArchitecturePage({ body }: { body: ArchitectureBody }) {
                           toggleExpand(selected.id);
                         }}
                       >
-                        {selected.collapsed ? '展开' : '折叠'}
+                        {selected.collapsed
+                          ? t('arch.detail.expand', 'Expand')
+                          : t('arch.detail.collapse', 'Collapse')}
                       </a>
                       )
                     </dd>
@@ -180,9 +208,9 @@ export function ArchitecturePage({ body }: { body: ArchitectureBody }) {
               </dl>
             </div>
           )}
-          <h3>风险</h3>
+          <h3>{t('arch.risks_heading', 'Risks')}</h3>
           {body.risks.length === 0 ? (
-            <div class="dim">没有发现架构风险。</div>
+            <div class="dim">{t('arch.risks_empty', 'No architecture risks found.')}</div>
           ) : (
             body.risks.map((r) => (
               <div

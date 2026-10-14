@@ -3,6 +3,7 @@ import { useState, useEffect } from 'preact/hooks';
 import './styles.css';
 import { App } from './components/App.tsx';
 import { applyEnvelope, DEFAULT_LOCALE, type PushState } from './protocol.ts';
+import { setLocale } from './i18n.ts';
 import { send } from './ipc.ts';
 import { shouldReportError } from './errors.ts';
 
@@ -23,7 +24,13 @@ function Root() {
   useEffect(() => {
     window.__dozer = {
       dispatch(json: string) {
-        setState((prev) => applyEnvelope(prev, json));
+        setState((prev) => {
+          const next = applyEnvelope(prev, json);
+          // spec §8:语言上下文既是响应式信号,也注入前端资源解析器;
+          // 组件重渲染即换文案。
+          setLocale(next.locale);
+          return next;
+        });
       },
     };
     const onError = (e: ErrorEvent) => {

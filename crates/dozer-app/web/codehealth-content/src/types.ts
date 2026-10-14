@@ -8,12 +8,39 @@ export type SeverityKey = 'critical' | 'watch';
 export type ChangeKey = 'new' | 'worsened' | 'improved' | 'persisting' | 'resolved';
 export type TierKey = 'healthy' | 'watch' | 'critical';
 
+export type ErrorDto =
+  | { kind: 'path_unavailable' }
+  | { kind: 'scan_cancelled'; message: string }
+  | { kind: 'scan_failed'; message: string }
+  | { kind: 'save_failed'; message: string };
+
 export interface ScanBar {
   scanning: boolean;
   scanned_at: string | null;
   scan_error: string | null;
+  scan_error_key: ErrorDto | null;
   save_error: string | null;
+  save_error_key: ErrorDto | null;
 }
+
+export type SkipReasonKey =
+  | 'ignored'
+  | 'unsupported_language'
+  | 'generated'
+  | 'non_utf8'
+  | 'read_failed'
+  | 'parse_failed';
+export type ScanStatusKey = 'complete' | 'partial' | 'failed';
+export type EmptyStateKey =
+  | 'scanning'
+  | 'never_scanned'
+  | 'no_supported_code'
+  | 'partial_failure'
+  | 'scan_failed';
+
+export type ReasonDto =
+  | { kind: 'metric'; delta: number; unit: string }
+  | { kind: 'recent_commits'; count: number };
 
 export interface FindingRow {
   id: string;
@@ -25,6 +52,13 @@ export interface FindingRow {
   change: ChangeKey | null;
   change_label: string | null;
   reasons: string[];
+  /** 结构化成因(spec §167,可能缺省 = 旧 Host);优先用它本地化。 */
+  reason_items?: ReasonDto[];
+  /** 标题 key(如架构风险 `arch.risk.cycle`);优先用它本地化。 */
+  title_key?: string | null;
+  /** 结构复杂度行的函数名与指标值。 */
+  symbol?: string | null;
+  metric?: number | null;
 }
 
 export type ChangeDto =
@@ -37,17 +71,40 @@ export type ChangeDto =
       resolved_risks: number;
       worsened: number;
       improved: number;
+      loc_delta?: number;
+      functions_delta?: number;
     };
+
+export interface GitLineDto {
+  branch: string | null;
+  head: string | null;
+  dirty: boolean;
+}
+
+export interface SummaryDto {
+  loc: number;
+  functions: number;
+}
+
+export interface ScopeSummaryDto {
+  analyzed_files: number;
+  excluded_files: number;
+  skipped_files: number;
+  languages: string;
+}
 
 export interface OverviewBody {
   kind: 'overview';
   git_line: string | null;
+  git?: GitLineDto | null;
   tier: TierKey;
   tier_label: string;
   summary: string;
+  summary_parts?: SummaryDto;
   change: ChangeDto;
   priorities: FindingRow[];
   scope_line: string;
+  scope_parts?: ScopeSummaryDto | null;
   legacy_note: string | null;
 }
 
@@ -59,6 +116,7 @@ export interface StructureBody {
 
 export interface UiGroup {
   title: string;
+  group_key?: string;
   findings: FindingRow[];
 }
 
@@ -71,15 +129,24 @@ export interface UiBody {
 export interface SkippedDto {
   path: string;
   reason: string;
+  reason_key?: SkipReasonKey;
+}
+
+export interface LanguageDto {
+  language: string;
+  files: number;
+  analyzed: boolean;
 }
 
 export interface ScopeBody {
   kind: 'scan_scope';
   status_label: string;
+  status?: ScanStatusKey;
   analyzed_files: number;
   excluded_files: number;
   skipped_count: number;
   languages_detail: string;
+  languages?: LanguageDto[];
   duration_ms: number;
   schema_version: number;
   git_baseline: string | null;
@@ -89,6 +156,7 @@ export interface ScopeBody {
 export interface EmptyBody {
   kind: 'empty';
   message: string;
+  empty_state?: EmptyStateKey;
 }
 
 export interface ArchNode {
@@ -128,7 +196,9 @@ export interface ArchitectureBody {
   kind: 'architecture';
   status: 'complete' | 'partial' | 'not_applicable';
   status_note: string | null;
+  status_note_key?: string | null;
   truncated_note: string | null;
+  truncated_note_total?: number | null;
   nodes: ArchNode[];
   edges: ArchEdge[];
   cycles: { id: string; node_ids: string[]; edge_ids: string[] }[];

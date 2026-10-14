@@ -1048,12 +1048,14 @@ pub(crate) fn panel_body<'a>(
             let (list_portion, content_portion) = split_portions(app.dims.codehealth_split);
             let content_pane = codehealth::content_pane(
                 app.codehealth_webview.failed(),
+                app.locale.active_locale(),
                 Length::FillPortion(content_portion),
                 zone_pane_border(zone, lc),
             )
             .map(Message::CodeHealth);
             let list_pane = codehealth::list_pane(
                 &ws.codehealth,
+                app.locale.active_locale(),
                 Length::FillPortion(list_portion),
                 zone_pane_border(zone, rc),
             )

@@ -658,27 +658,6 @@ pub(crate) fn category_pseudo_row<'a>(
     .into()
 }
 
-#[cfg(test)]
-mod clear_confirm_tests {
-    use super::*;
-
-    #[test]
-    fn clear_confirm_spec_carries_cancel_and_confirm_messages() {
-        let spec = clear_confirm_spec("en");
-        assert_eq!(spec.title, "Clear list");
-        assert_eq!(spec.confirm_label, "Clear");
-        assert_eq!(spec.cancel_label, "Cancel");
-        assert!(matches!(spec.confirm_msg, Message::ClearListConfirm));
-        assert!(matches!(spec.cancel_msg, Message::ClearListCancel));
-        assert_eq!(spec.content_spacing, 12.0);
-
-        let zh = clear_confirm_spec("zh-CN");
-        assert_eq!(zh.title, "清空列表");
-        assert_eq!(zh.confirm_label, "清空");
-        assert_eq!(zh.cancel_label, "取消");
-    }
-}
-
 /// 任务详情弹窗的卡片本体:由独立原生窗口宿主
 /// `platform::todo_detail_overlay` 渲染。原生 iced 渲染(不复用会话面板的
 /// webview trace——那套渲染实际内容在 `dozer://review-trace/host.html` 里,
@@ -757,7 +736,7 @@ pub fn todo_detail_card<'a>(
         false,
         None,
         false,
-        |s| Message::DetailReplyInput(s),
+        Message::DetailReplyInput,
     ))
     .width(Length::Fill);
     let submit_label = if todo.detail_processing() {
@@ -784,4 +763,25 @@ pub fn todo_detail_card<'a>(
         .align_x(iced_widget::core::alignment::Horizontal::Center)
         .align_y(iced_widget::core::alignment::Vertical::Center)
         .into()
+}
+
+#[cfg(test)]
+mod clear_confirm_tests {
+    use super::*;
+
+    #[test]
+    fn clear_confirm_spec_carries_cancel_and_confirm_messages() {
+        let spec = clear_confirm_spec("en");
+        assert_eq!(spec.title, "Clear list");
+        assert_eq!(spec.confirm_label, "Clear");
+        assert_eq!(spec.cancel_label, "Cancel");
+        assert!(matches!(spec.confirm_msg, Message::ClearListConfirm));
+        assert!(matches!(spec.cancel_msg, Message::ClearListCancel));
+        assert_eq!(spec.content_spacing, 12.0);
+
+        let zh = clear_confirm_spec("zh-CN");
+        assert_eq!(zh.title, "清空列表");
+        assert_eq!(zh.confirm_label, "清空");
+        assert_eq!(zh.cancel_label, "取消");
+    }
 }

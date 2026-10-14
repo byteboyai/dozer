@@ -5995,6 +5995,7 @@ impl App {
     /// 只读诊断上下文，送入当前 agent 会话输入区（不自动发送，用户仍需主动
     /// 回车）。报告更新后找不到 ID 时降级为无操作（不伪造发现）。
     pub(crate) fn code_health_analyze_finding(&mut self, id: String) {
+        let locale = self.locale.active_locale().to_string();
         // 先只读解析出诊断文本（不可变借用，离开块即释放）。
         let text = {
             let Some(ws) = self.active_workspace() else {
@@ -6025,7 +6026,13 @@ impl App {
                 .map(codehealth::view_model::hotspot_reasons)
                 .unwrap_or_default();
             let scope = codehealth::view_model::scope_summary(&ws.codehealth);
-            codehealth::view_model::analyze_finding_text(finding, change, &reasons, scope.as_ref())
+            codehealth::view_model::analyze_finding_text(
+                finding,
+                change,
+                &reasons,
+                scope.as_ref(),
+                &locale,
+            )
         };
 
         // 送入当前会话输入区（无换行 → 不自动发送）。

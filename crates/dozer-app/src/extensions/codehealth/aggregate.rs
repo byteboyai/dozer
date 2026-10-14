@@ -115,6 +115,7 @@ fn finish_panel(
         git,
         scanned_at_ms,
         save_error,
+        save_error_key: None,
     }
 }
 
@@ -222,37 +223,62 @@ pub fn spawn_scan(
         let scan_path = project_path.clone();
         let prev_for_scan = previous.clone();
         let scanned = tokio::task::spawn_blocking(move || {
-            let mut report =
-                dozer_codehealth::scan_project(&scan_path).map_err(|e| e.to_string())?;
+            let mut report = dozer_codehealth::scan_project(&scan_path).map_err(|e| {
+                let message = e.to_string();
+                (
+                    super::protocol::ErrorDto::ScanFailed {
+                        message: message.clone(),
+                    },
+                    message,
+                )
+            })?;
             if report.scan.status == dozer_codehealth::ScanStatus::Failed {
-                return Err("扫描失败：项目路径不可用".to_string());
+                return Err((
+                    super::protocol::ErrorDto::PathUnavailable,
+                    "Scan failed: project path unavailable".to_string(),
+                ));
             }
             report.git = super::git_hotspots::git_snapshot(&scan_path);
             let panel = finish_panel(&scan_path, Some((report, None)), prev_for_scan, None);
-            Ok::<PanelState, String>(panel)
+            Ok::<PanelState, (super::protocol::ErrorDto, String)>(panel)
         })
         .await
-        .unwrap_or_else(|e| Err(format!("扫描任务被取消: {e}")));
+        .unwrap_or_else(|e| {
+            let message = e.to_string();
+            Err((
+                super::protocol::ErrorDto::ScanCancelled {
+                    message: message.clone(),
+                },
+                format!("Scan task cancelled: {message}"),
+            ))
+        });
 
         match scanned {
             Ok(panel) => {
-                let save_error = match &panel.report {
+                let (save_error, save_error_key) = match &panel.report {
                     Some(report) => {
                         let info = to_info(report);
-                        service
-                            .save_code_health_report(project_id, info)
-                            .await
-                            .err()
-                            .map(|e| format!("未保存，无法用于下次比较：{e}"))
+                        match service.save_code_health_report(project_id, info).await {
+                            Ok(()) => (None, None),
+                            Err(e) => (
+                                Some(format!(
+                                    "Not saved; cannot be used for the next comparison: {e}"
+                                )),
+                                Some(super::protocol::ErrorDto::SaveFailed {
+                                    message: e.to_string(),
+                                }),
+                            ),
+                        }
                     }
-                    None => None,
+                    None => (None, None),
                 };
                 let mut panel = panel;
                 panel.scanned_at_ms = Some(now_ms());
                 panel.save_error = save_error;
+                panel.save_error_key = save_error_key;
                 emit(Message::Scanned(project_id, Ok(Box::new(panel))));
             }
-            Err(e) => emit(Message::Scanned(project_id, Err(e))),
+            Err((dto, text)) => emit(Message::Scanned(project_id, Err((dto, text)))),
         }
     });
 }
@@ -393,7 +419,7 @@ mod tests {
         match rx.recv_timeout(TIMEOUT * 6).unwrap().result_payload() {
             Message::Scanned(7, Ok(panel)) => assert_eq!(
                 panel.save_error.as_deref(),
-                Some("未保存，无法用于下次比较：daemon 错误: boom")
+                Some("Not saved; cannot be used for the next comparison: daemon 错误: boom")
             ),
             other => panic!("unexpected: {other:?}"),
         }

@@ -188,9 +188,10 @@
   - 本轮完成 Rust（`extensions/todo/{view,update,protocol}.rs`、`platform/{confirm,todo_detail}_overlay.rs`）+ Web（`web/todo-content/src/{i18n.ts,statusMeta.ts,components/*}`），owner `dozer.todo`，资源 `crates/dozer-app/locales/panels/todo/{en,zh-CN}.json`。Webview 加载超时是通用宿主文案，落 `dozer.host` 的 `webview.load_timeout`。新建分类默认名 `新分类` 按“保留用户分类名”豁免（`NON_UI_STRINGS`）。inventory Task 09 todo 项已清零。
 - [x] Usage：原生加载/错误状态、统计单位、图例、tooltip、空态及 Web 图表；数字/金额/聚合与数据排序不变。
   - 本轮完成独立 crate 自带资源（owner `dozer.usage`，`crates/dozer-panel-usage/locales/{en,zh-CN}.json`）与 `src/i18n.rs`（复用中性 `dozer-i18n` 解析器，不反向依赖 dozer-app）；原生 `PanelHeadKind{Content,AgentFilter}` 令图标按语义选而非标题字面；Web 侧静态打包同一份 JSON（经 `web/shared/i18n` 相对 import）。数字/聚合/排序未改动。inventory Task 09 usage 项已清零。
-- [ ] Code Health：原生壳、分类/严重度/扫描状态、`view_model.rs`/`protocol.rs` 已拼中文的计数及详情；追加语义字段并由渲染端翻译，保留旧字段兼容。
-- [ ] 独立 Usage 库自行携带资源，locale 由 Host 注入；单面板测试宿主不需要依赖 dozer-app/daemon 才能渲染。
-- [ ] 更新 UI fixture/渲染 smoke 测试，中文用户内容 fixture 保持不变；验证切换后的状态保留。
+- [x] Code Health：原生壳、分类/严重度/扫描状态、`view_model.rs`/`protocol.rs` 已拼中文的计数及详情；追加语义字段并由渲染端翻译，保留旧字段兼容。
+  - 本轮完成 owner `dozer.code_health`，资源 `crates/dozer-app/locales/panels/codehealth/{en,zh-CN}.json`（含 `analyze.*`/`error.*`）；Rust 侧 `hotspot_reasons`/`scope_summary`/`tier_label`/`sev_label`/`change_label` 经 key，`analyze_finding_text` 改 locale-aware，旧 `*_label`/`*_text` 兼容字段统一改英文兜底；`ScanBar` 增稳定 key 的 `ErrorDto`（spec §10）。Web 静态打包同一份 JSON，语义字段优先、旧 Host 字段兜底。inventory Task 09 code health 项已清零。
+- [x] 独立 Usage 库自行携带资源，locale 由 Host 注入；单面板测试宿主不需要依赖 dozer-app/daemon 才能渲染。
+- [x] 更新 UI fixture/渲染 smoke 测试，中文用户内容 fixture 保持不变；验证切换后的状态保留。双语运行期视觉核对随 Task 13 的 L07/L09/L10/L14。
 
 **验收：**三个面板每项源中文均对应 zh-CN key；原生和 Web 同步切换，L07/L09/L10/L14 通过。
 

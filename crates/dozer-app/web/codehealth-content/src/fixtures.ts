@@ -11,7 +11,9 @@ export const scanIdle: ScanBar = {
   scanning: false,
   scanned_at: '2026-10-01 08:00:00 UTC',
   scan_error: null,
+  scan_error_key: null,
   save_error: null,
+  save_error_key: null,
 };
 
 export const row = (over: Partial<FindingRow> = {}): FindingRow => ({
@@ -24,13 +26,16 @@ export const row = (over: Partial<FindingRow> = {}): FindingRow => ({
   change: 'new',
   change_label: '本轮新增',
   reasons: ['本轮新增', '近 30 天修改 3 次'],
+  reason_items: [{ kind: 'recent_commits', count: 3 }],
+  symbol: 'run',
+  metric: 12,
   ...over,
 });
 
 export const emptyFixture: ViewPayload = {
   scan: { ...scanIdle, scanned_at: null },
   category: 'overview',
-  body: { kind: 'empty', message: '这个项目还没有扫描过。' },
+  body: { kind: 'empty', message: '这个项目还没有扫描过。', empty_state: 'never_scanned' },
 };
 
 export const overviewFixture: ViewPayload = {
@@ -39,9 +44,11 @@ export const overviewFixture: ViewPayload = {
   body: {
     kind: 'overview',
     git_line: 'main · abc123 · 有未提交改动',
+    git: { branch: 'main', head: 'abc123', dirty: true },
     tier: 'watch',
     tier_label: '需要关注',
     summary: '核心代码 100 行 · 1 个函数存在明显结构问题',
+    summary_parts: { loc: 100, functions: 1 },
     change: {
       kind: 'has_change',
       loc_delta_text: '+12',
@@ -50,9 +57,12 @@ export const overviewFixture: ViewPayload = {
       resolved_risks: 1,
       worsened: 1,
       improved: 0,
+      loc_delta: 12,
+      functions_delta: -1,
     },
     priorities: [row(), row({ id: 'f2', title: '颜色硬编码', change: null, change_label: null, reasons: [] })],
     scope_line: '已分析 3 个文件 · Rust · 排除 0 · 跳过 0',
+    scope_parts: { analyzed_files: 3, excluded_files: 0, skipped_files: 0, languages: 'Rust' },
     legacy_note: null,
   },
 };
@@ -66,7 +76,7 @@ export const overviewLegacyFixture: ViewPayload = {
   ...overviewFixture,
   body: {
     ...(overviewFixture.body as object),
-    legacy_note: '旧版报告,重新扫描可查看变化与范围',
+    legacy_note: 'overview.legacy_note',
   } as unknown as ViewPayload['body'],
 };
 
@@ -87,8 +97,12 @@ export const uiFixture: ViewPayload = {
     kind: 'ui_consistency',
     applicable: true,
     groups: [
-      { title: '颜色硬编码', findings: [row({ id: 'u1', title: '#ff0000', change: null, change_label: null, reasons: [] })] },
-      { title: '边距硬编码', findings: [] },
+      {
+        title: '颜色硬编码',
+        group_key: 'ui.group.color_hardcode',
+        findings: [row({ id: 'u1', title: '#ff0000', change: null, change_label: null, reasons: [] })],
+      },
+      { title: '边距硬编码', group_key: 'ui.group.spacing_hardcode', findings: [] },
     ],
   },
 };
@@ -105,14 +119,16 @@ export const scopeFixture: ViewPayload = {
   body: {
     kind: 'scan_scope',
     status_label: '部分完成',
+    status: 'partial',
     analyzed_files: 3,
     excluded_files: 1,
     skipped_count: 1,
     languages_detail: 'Rust(3 个文件,结构分析)',
+    languages: [{ language: 'Rust', files: 3, analyzed: true }],
     duration_ms: 420,
     schema_version: 3,
     git_baseline: 'main @ abc123',
-    skipped: [{ path: 'src/bad.rs', reason: '解析失败' }],
+    skipped: [{ path: 'src/bad.rs', reason: '解析失败', reason_key: 'parse_failed' }],
   },
 };
 
@@ -123,8 +139,8 @@ export const scanningWithOldResultFixture: ViewPayload = {
 
 export const scanFailedFixture: ViewPayload = {
   ...emptyFixture,
-  scan: { ...scanIdle, scanned_at: null, scan_error: 'boom' },
-  body: { kind: 'empty', message: '扫描失败。' },
+  scan: { ...scanIdle, scanned_at: null, scan_error: 'boom', scan_error_key: { kind: 'scan_failed', message: 'boom' } },
+  body: { kind: 'empty', message: '扫描失败。', empty_state: 'scan_failed' },
 };
 
 const an = (id: string, kind: ArchNode['kind'], parent: string | null): ArchNode => ({
@@ -171,6 +187,7 @@ export const archBody: ArchitectureBody = {
       finding: row({
         id: 'arch-cycle-1',
         title: '循环依赖',
+        title_key: 'arch.risk.cycle',
         change: null,
         change_label: null,
         reasons: [],
@@ -209,6 +226,7 @@ export const archNotApplicableFixture: ViewPayload = {
     cycles: [],
     risks: [],
     status_note: '没有可用的架构数据(旧版报告或项目内没有可分析的 Rust 代码),请重新扫描。',
+    status_note_key: 'arch.status.not_applicable',
   },
 };
 export const archPartialFixture: ViewPayload = {
@@ -218,6 +236,7 @@ export const archPartialFixture: ViewPayload = {
     ...archBody,
     status: 'partial',
     status_note: '架构分析不完整(见扫描范围或下方错误),不能据此判断没有风险。',
+    status_note_key: 'arch.status.partial',
     errors: ['cargo metadata 失败'],
   },
 };
@@ -227,6 +246,7 @@ export const archTruncatedFixture: ViewPayload = {
   body: {
     ...archBody,
     truncated_note: '模块图过大(3005 个节点),仅显示 crate 层;分析结果(循环/枢纽/越界)仍基于完整图。',
+    truncated_note_total: 3005,
   },
 };
 
@@ -238,5 +258,6 @@ export const archCrateOnlyFixture: ViewPayload = {
     nodes: archBody.nodes.filter((n) => n.kind === 'crate'),
     edges: archBody.edges.filter((e) => e.kind === 'cargo_dependency'),
     truncated_note: '模块图过大(3005 个节点),仅显示 crate 层;分析结果(循环/枢纽/越界)仍基于完整图。',
+    truncated_note_total: 3005,
   },
 };

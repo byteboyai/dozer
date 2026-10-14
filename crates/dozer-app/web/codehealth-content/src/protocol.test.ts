@@ -7,7 +7,7 @@ const env = (revision: number, message: string) =>
     protocol_version: 1,
     revision,
     payload: {
-      scan: { scanning: false, scanned_at: null, scan_error: null, save_error: null },
+      scan: { scanning: false, scanned_at: null, scan_error: null, scan_error_key: null, save_error: null, save_error_key: null },
       category: 'overview',
       body: { kind: 'empty', message },
     },
@@ -53,7 +53,7 @@ test('carries ui_locale and locale_revision into the state', () => {
       ui_locale: 'zh-CN',
       locale_revision: 3,
       payload: {
-        scan: { scanning: false, scanned_at: null, scan_error: null, save_error: null },
+        scan: { scanning: false, scanned_at: null, scan_error: null, scan_error_key: null, save_error: null, save_error_key: null },
         category: 'overview',
         body: { kind: 'empty', message: 'x' },
       },

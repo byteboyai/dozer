@@ -43,10 +43,11 @@ pub fn change_summary(
     })
 }
 
-/// 旧报告（schema_version < 2）提示文案。新版报告返回 `None`。
+/// 旧报告（schema_version < 2）提示的稳定 key（spec §167,前端按 locale 渲染）。
+/// 新版报告返回 `None`。
 pub fn legacy_report_note(schema_version: u32) -> Option<&'static str> {
     if schema_version < 2 {
-        Some("旧版报告，重新扫描可查看变化与范围")
+        Some("overview.legacy_note")
     } else {
         None
     }
@@ -71,6 +72,10 @@ pub struct HotspotRow {
     pub severity: FindingSeverity,
     pub change: FindingChange,
     pub reasons: Vec<String>,
+    /// 结构化成因(spec §167):`(kind, delta, count)`;kind ∈ metric/recent_commits。
+    /// 前端按 locale 渲染,避免 Rust 侧缓存中文。`metric_delta` 为 `None` 时无指标项。
+    pub metric_delta: Option<i64>,
+    pub recent_commits: usize,
 }
 
 pub fn hotspot_rows(hotspots: &[HotspotView], limit: usize) -> Vec<HotspotRow> {
@@ -85,30 +90,31 @@ pub fn hotspot_rows(hotspots: &[HotspotView], limit: usize) -> Vec<HotspotRow> {
             severity: h.finding.severity,
             change: h.change,
             reasons: hotspot_reasons(h),
+            metric_delta: h.metric_delta,
+            recent_commits: h.recent_commits,
         })
         .collect()
 }
 
 /// 热点排序原因展开成文本（spec「UI 将排序原因展开为文本」）。
+///
+/// 迁移期(规范 §167)保留给旧 Host/Web 的预格式化文案;**英文兜底**(中文只在
+/// 语言包,前端按语义字段本地化)。新调用方应改用 `hotspot_reason_items`。
 pub fn hotspot_reasons(h: &HotspotView) -> Vec<String> {
     let mut reasons = Vec::new();
-    let change = match h.change {
-        FindingChange::New => "本轮新增",
-        FindingChange::Worsened => "本轮恶化",
-        FindingChange::Improved => "本轮改善",
-        FindingChange::Persisting => "持续存在",
-        FindingChange::Resolved => "已解决",
-    };
-    reasons.push(change.to_string());
+    reasons.push(change_label(h.change).to_string());
     if let Some(delta) = h.metric_delta {
         reasons.push(format!(
-            "指标 {}{}",
+            "Metric {}{}",
             signed_delta(delta),
             metric_unit(&h.finding)
         ));
     }
     if h.recent_commits > 0 {
-        reasons.push(format!("近 30 天修改 {} 次", h.recent_commits));
+        reasons.push(format!(
+            "Modified {} times in the last 30 days",
+            h.recent_commits
+        ));
     }
     reasons
 }
@@ -135,9 +141,9 @@ pub fn scope_summary(ws: &WorkspaceState) -> Option<ScopeSummary> {
     let report = ws.report()?;
     let scan = &report.scan;
     let status_label = match scan.status {
-        dozer_codehealth::ScanStatus::Complete => "完整",
-        dozer_codehealth::ScanStatus::Partial => "部分完成",
-        dozer_codehealth::ScanStatus::Failed => "失败",
+        dozer_codehealth::ScanStatus::Complete => "Complete",
+        dozer_codehealth::ScanStatus::Partial => "Partially complete",
+        dozer_codehealth::ScanStatus::Failed => "Failed",
     };
     let languages = scan
         .languages
@@ -146,7 +152,7 @@ pub fn scope_summary(ws: &WorkspaceState) -> Option<ScopeSummary> {
             if l.analyzed {
                 l.language.clone()
             } else {
-                format!("{}（仅统计）", l.language)
+                format!("{} (counted only)", l.language)
             }
         })
         .collect::<Vec<_>>()
@@ -182,25 +188,39 @@ pub enum EmptyState {
     ScanFailed,
 }
 
-/// 生成“交给 Agent 分析”的只读诊断上下文（spec「Agent 诊断上下文」）。
+/// 生成"交给 Agent 分析"的只读诊断上下文（spec「Agent 诊断上下文」）。
 /// 只携带位置、规则、证据、变化、热点原因与验收目标，**不**包含自动编辑
 /// 命令、不包含项目根外的敏感信息。返回多行文本，送入 agent 输入区由用户
 /// 审阅后主动发送。
+///
+/// 文案按 `locale` 本地化(spec §167);中文只在语言包,fallback 为英文。
 pub fn analyze_finding_text(
     finding: &dozer_codehealth::Finding,
     change: Option<FindingChange>,
     reasons: &[String],
     scope: Option<&ScopeSummary>,
+    locale: &str,
 ) -> String {
+    use crate::i18n::panel_text_args;
+    let t = |key: &str, fallback: &str, args: &[(&str, &str)]| {
+        panel_text_args(super::CODE_HEALTH_OWNER, key, fallback, locale, args)
+    };
     let mut lines: Vec<String> = Vec::new();
-    lines.push(format!(
-        "请分析这条代码健康发现：{}:{}",
-        finding.path.display(),
-        finding.start_line
+    lines.push(t(
+        "analyze.heading",
+        "Please analyze this Code Health finding: {path}:{line}",
+        &[
+            ("path", &finding.path.display().to_string()),
+            ("line", &finding.start_line.to_string()),
+        ],
     ));
-    lines.push(format!("规则：{}", finding.rule_id));
+    lines.push(t(
+        "analyze.rule",
+        "Rule: {rule}",
+        &[("rule", finding.rule_id.as_str())],
+    ));
     if let Some(sym) = &finding.symbol {
-        lines.push(format!("符号：{sym}"));
+        lines.push(t("analyze.symbol", "Symbol: {symbol}", &[("symbol", sym)]));
     }
     match &finding.evidence {
         dozer_codehealth::FindingEvidence::Structure {
@@ -208,65 +228,109 @@ pub fn analyze_finding_text(
             loc,
             ..
         } => {
-            lines.push(format!(
-                "证据：控制流信号 {complexity_signal}，函数 {loc} 行"
+            lines.push(t(
+                "analyze.evidence.structure",
+                "Evidence: control-flow signal {complexity_signal}, function {loc} lines",
+                &[
+                    ("complexity_signal", &complexity_signal.to_string()),
+                    ("loc", &loc.to_string()),
+                ],
             ));
         }
         dozer_codehealth::FindingEvidence::Literal { snippet } => {
-            lines.push(format!("证据：{snippet}"));
+            lines.push(t(
+                "analyze.evidence.literal",
+                "Evidence: {snippet}",
+                &[("snippet", snippet)],
+            ));
         }
         dozer_codehealth::FindingEvidence::Duplicate { occurrences } => {
-            lines.push(format!("证据：同结构出现 {occurrences} 次"));
+            lines.push(t(
+                "analyze.evidence.duplicate",
+                "Evidence: same structure appears {occurrences} times",
+                &[("occurrences", &occurrences.to_string())],
+            ));
         }
         dozer_codehealth::FindingEvidence::NestingDepth { depth } => {
-            lines.push(format!("证据：组件树嵌套深度 {depth}"));
+            lines.push(t(
+                "analyze.evidence.nesting",
+                "Evidence: component tree nesting depth {depth}",
+                &[("depth", &depth.to_string())],
+            ));
         }
         dozer_codehealth::FindingEvidence::EventHandlers { count } => {
-            lines.push(format!("证据：事件回调 {count} 个"));
+            lines.push(t(
+                "analyze.evidence.event_handlers",
+                "Evidence: {count} event handlers",
+                &[("count", &count.to_string())],
+            ));
         }
         dozer_codehealth::FindingEvidence::ArchitectureCycle { node_ids } => {
-            lines.push(format!("证据：循环依赖，涉及 {} 个模块", node_ids.len()));
+            lines.push(t(
+                "analyze.evidence.cycle",
+                "Evidence: dependency cycle involving {count} modules",
+                &[("count", &node_ids.len().to_string())],
+            ));
             for id in node_ids {
                 lines.push(format!("  - {id}"));
             }
         }
         dozer_codehealth::FindingEvidence::ArchitectureHub { node_id, fan_out } => {
-            lines.push(format!("证据：依赖枢纽 {node_id}，扇出 {fan_out}"));
+            lines.push(t(
+                "analyze.evidence.hub",
+                "Evidence: dependency hub {node_id}, fan-out {fan_out}",
+                &[
+                    ("node_id", node_id.as_str()),
+                    ("fan_out", &fan_out.to_string()),
+                ],
+            ));
         }
         dozer_codehealth::FindingEvidence::ArchitectureBoundary {
             edge_id,
             from_layer,
             to_layer,
         } => {
-            lines.push(format!(
-                "证据：越层依赖 {from_layer} → {to_layer}（边 {edge_id}）"
+            lines.push(t(
+                "analyze.evidence.boundary",
+                "Evidence: layer violation {from_layer} → {to_layer} (edge {edge_id})",
+                &[
+                    ("from_layer", from_layer.as_str()),
+                    ("to_layer", to_layer.as_str()),
+                    ("edge_id", edge_id.as_str()),
+                ],
             ));
         }
     }
     if let Some(c) = change {
-        lines.push(format!("变化：{}", change_label_text(c)));
-    }
-    if !reasons.is_empty() {
-        lines.push(format!("热点原因：{}", reasons.join("、")));
-    }
-    if let Some(s) = scope {
-        lines.push(format!(
-            "扫描范围：已分析 {} 个文件（{}）",
-            s.analyzed_files, s.languages
+        lines.push(t(
+            "analyze.change",
+            "Change: {change}",
+            &[("change", change_label(c))],
         ));
     }
-    lines.push("验收目标：相关指标下降且无新增同类发现。".to_string());
-    lines.join("\n")
-}
-
-fn change_label_text(c: FindingChange) -> &'static str {
-    match c {
-        FindingChange::New => "本轮新增",
-        FindingChange::Worsened => "本轮恶化",
-        FindingChange::Improved => "本轮改善",
-        FindingChange::Persisting => "持续存在",
-        FindingChange::Resolved => "已解决",
+    if !reasons.is_empty() {
+        lines.push(t(
+            "analyze.reasons",
+            "Hotspot reasons: {reasons}",
+            &[("reasons", &reasons.join(", "))],
+        ));
     }
+    if let Some(s) = scope {
+        lines.push(t(
+            "analyze.scope",
+            "Scan scope: analyzed {analyzed} files ({languages})",
+            &[
+                ("analyzed", &s.analyzed_files.to_string()),
+                ("languages", &s.languages),
+            ],
+        ));
+    }
+    lines.push(t(
+        "analyze.acceptance",
+        "Acceptance target: related metrics decrease and no new findings of the same kind appear.",
+        &[],
+    ));
+    lines.join("\n")
 }
 
 /// 归类空状态。`report` 为 `None` → 尚未扫描（或扫描失败时由 `scan_error` 优先）。
@@ -293,26 +357,26 @@ pub fn empty_state(ws: &WorkspaceState) -> EmptyState {
 
 pub(super) fn tier_label(tier: HealthTier) -> &'static str {
     match tier {
-        HealthTier::Healthy => "健康",
-        HealthTier::Watch => "需要关注",
-        HealthTier::Critical => "警戒",
+        HealthTier::Healthy => "Healthy",
+        HealthTier::Watch => "Needs attention",
+        HealthTier::Critical => "Critical",
     }
 }
 
 pub(super) fn sev_label(s: FindingSeverity) -> &'static str {
     match s {
-        FindingSeverity::Critical => "警戒",
-        FindingSeverity::Watch => "关注",
+        FindingSeverity::Critical => "Critical",
+        FindingSeverity::Watch => "Watch",
     }
 }
 
 pub(super) fn change_label(c: FindingChange) -> &'static str {
     match c {
-        FindingChange::New => "本轮新增",
-        FindingChange::Worsened => "本轮恶化",
-        FindingChange::Improved => "本轮改善",
-        FindingChange::Persisting => "持续存在",
-        FindingChange::Resolved => "已解决",
+        FindingChange::New => "New this scan",
+        FindingChange::Worsened => "Worsened this scan",
+        FindingChange::Improved => "Improved this scan",
+        FindingChange::Persisting => "Persisting",
+        FindingChange::Resolved => "Resolved",
     }
 }
 
@@ -434,10 +498,7 @@ mod tests {
 
     #[test]
     fn legacy_report_note_for_schema_v1() {
-        assert_eq!(
-            legacy_report_note(1),
-            Some("旧版报告，重新扫描可查看变化与范围")
-        );
+        assert_eq!(legacy_report_note(1), Some("overview.legacy_note"));
         assert_eq!(legacy_report_note(2), None);
     }
 
@@ -468,19 +529,32 @@ mod tests {
         let text = analyze_finding_text(
             &f,
             Some(FindingChange::Worsened),
-            &["近 30 天修改 3 次".into()],
+            &["Modified 3 times in the last 30 days".into()],
             None,
+            "en",
         );
         assert!(text.contains("a.rs:1"), "应包含位置：{text}");
-        assert!(text.contains("控制流信号 41"), "应包含证据：{text}");
-        assert!(text.contains("本轮恶化"), "应包含变化：{text}");
-        assert!(text.contains("验收目标"), "应包含验收目标：{text}");
+        assert!(
+            text.contains("control-flow signal 41"),
+            "应包含证据：{text}"
+        );
+        assert!(text.contains("Worsened this scan"), "应包含变化：{text}");
+        assert!(text.contains("Acceptance target"), "应包含验收目标：{text}");
+    }
+
+    #[test]
+    fn analyze_text_localizes_to_chinese() {
+        let f = finding("a", 41);
+        let text = analyze_finding_text(&f, Some(FindingChange::New), &[], None, "zh-CN");
+        assert!(text.contains("请分析这条代码健康发现"), "{text}");
+        assert!(text.contains("控制流信号 41"), "{text}");
+        assert!(text.contains("验收目标"), "{text}");
     }
 
     #[test]
     fn analyze_text_has_no_auto_edit_commands_and_no_absolute_path() {
         let f = finding("a", 41);
-        let text = analyze_finding_text(&f, None, &[], None);
+        let text = analyze_finding_text(&f, None, &[], None, "en");
         for banned in [
             "edit",
             "Edit",
@@ -506,8 +580,8 @@ mod tests {
 
     #[test]
     fn tier_labels_include_text_for_all_states() {
-        assert_eq!(tier_label(HealthTier::Healthy), "健康");
-        assert_eq!(tier_label(HealthTier::Watch), "需要关注");
-        assert_eq!(tier_label(HealthTier::Critical), "警戒");
+        assert_eq!(tier_label(HealthTier::Healthy), "Healthy");
+        assert_eq!(tier_label(HealthTier::Watch), "Needs attention");
+        assert_eq!(tier_label(HealthTier::Critical), "Critical");
     }
 }

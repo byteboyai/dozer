@@ -46,7 +46,26 @@ pub struct ScanBar {
     /// 已格式化的"2026-09-20 07:58:06 UTC";`None` = 尚未扫描。
     pub scanned_at: Option<String>,
     pub scan_error: Option<String>,
+    /// 扫描错误的稳定 key + 参数(spec §10);前端优先用它本地化。
+    pub scan_error_key: Option<ErrorDto>,
     pub save_error: Option<String>,
+    /// 保存错误的稳定 key + 参数(spec §10);前端优先用它本地化。
+    pub save_error_key: Option<ErrorDto>,
+}
+
+/// 面板错误的稳定 key + 插值参数(spec §10)。旧 `*_error` 文案保留兼容,
+/// 前端优先用本字段按 locale 渲染。
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ErrorDto {
+    /// 项目路径不可用。
+    PathUnavailable,
+    /// 扫描任务被取消:`{message}`。
+    ScanCancelled { message: String },
+    /// 扫描失败(来自服务/扫描器的原始消息,`{message}` 不翻译)。
+    ScanFailed { message: String },
+    /// 报告未保存,无法用于下次比较:`{message}`。
+    SaveFailed { message: String },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -105,8 +124,19 @@ impl From<HealthTier> for TierKey {
     }
 }
 
-/// 一条发现行(总览优先处理、结构复杂度、UI 一致性共用)。文案在 Rust 里
-/// 算好,前端不拼业务文案。
+/// 发现行的一条「成因」的结构化形态(spec §167):前端按 locale 渲染。
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReasonDto {
+    /// 指标变化:`{delta}{unit}`。
+    Metric { delta: i64, unit: String },
+    /// 近 30 天修改次数。
+    RecentCommits { count: usize },
+}
+
+/// 一条发现行(总览优先处理、结构复杂度、UI 一致性共用)。**迁移期保留**
+/// `severity_label`/`change_label`/`reasons`(已格式化文案)兼容旧 Host/Web,
+/// 新增结构化字段供前端按 locale 渲染(spec §167)。
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct FindingRowDto {
     pub id: String,
@@ -119,6 +149,13 @@ pub struct FindingRowDto {
     pub change: Option<ChangeKey>,
     pub change_label: Option<&'static str>,
     pub reasons: Vec<String>,
+    /// 结构化成因(与 `reasons` 一一对应);前端优先用它本地化。
+    pub reason_items: Vec<ReasonDto>,
+    /// 标题的稳定 key(如架构风险 `arch.risk.cycle`);无则为 `None`。
+    pub title_key: Option<&'static str>,
+    /// 结构复杂度行的函数名与指标值(其它规则为 `None`)。
+    pub symbol: Option<String>,
+    pub metric: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -132,20 +169,52 @@ pub enum ChangeDto {
         resolved_risks: usize,
         worsened: usize,
         improved: usize,
+        /// 原始计数(前端本地化 `{delta}` 用;迁移期与 `*_text` 并存)。
+        loc_delta: i64,
+        functions_delta: i64,
     },
+}
+
+/// 概览页头和副标题的结构化片段(spec §167)。
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct GitLineDto {
+    pub branch: Option<String>,
+    pub head: Option<String>,
+    pub dirty: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct SummaryDto {
+    pub loc: usize,
+    pub functions: usize,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ScopeSummaryDto {
+    pub analyzed_files: usize,
+    pub excluded_files: usize,
+    pub skipped_files: usize,
+    pub languages: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct OverviewBody {
     /// "main · abc123 · 有未提交改动";无 Git 时为 `None`。
     pub git_line: Option<String>,
+    /// 结构化 Git 行片段;前端优先用它本地化。
+    pub git: Option<GitLineDto>,
     pub tier: TierKey,
     pub tier_label: &'static str,
     pub summary: String,
+    /// 结构化核心指标(行数 / 问题函数数);前端优先用它本地化。
+    pub summary_parts: SummaryDto,
     pub change: ChangeDto,
     pub priorities: Vec<FindingRowDto>,
     /// "已分析 N 个文件 · … · 排除 N · 跳过 N";无摘要时为空串。
     pub scope_line: String,
+    /// 结构化扫描可信度;无摘要时为 `None`。
+    pub scope_parts: Option<ScopeSummaryDto>,
+    /// 旧版报告提示的 key(前端本地化)。
     pub legacy_note: Option<&'static str>,
 }
 
@@ -160,6 +229,8 @@ pub struct StructureBody {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct UiGroup {
     pub title: &'static str,
+    /// UI 分组文案的稳定 key(spec §167);前端优先用它本地化。
+    pub group_key: &'static str,
     pub findings: Vec<FindingRowDto>,
 }
 
@@ -169,29 +240,75 @@ pub struct UiBody {
     pub groups: Vec<UiGroup>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SkipReasonKey {
+    Ignored,
+    UnsupportedLanguage,
+    Generated,
+    NonUtf8,
+    ReadFailed,
+    ParseFailed,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct SkippedDto {
     pub path: String,
     pub reason: &'static str,
+    /// 跳过原因 key(spec §167);前端优先用它本地化。
+    pub reason_key: SkipReasonKey,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanStatusKey {
+    Complete,
+    Partial,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct LanguageDto {
+    pub language: String,
+    pub files: usize,
+    pub analyzed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ScopeBody {
     pub status_label: &'static str,
+    /// 扫描状态 key(spec §167);前端优先用它本地化。
+    pub status: ScanStatusKey,
     pub analyzed_files: usize,
     pub excluded_files: usize,
     pub skipped_count: usize,
     pub languages_detail: String,
+    /// 结构化语言明细;前端优先用它本地化。
+    pub languages: Vec<LanguageDto>,
     pub duration_ms: u64,
     pub schema_version: u32,
     pub git_baseline: Option<String>,
     pub skipped: Vec<SkippedDto>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EmptyStateKey {
+    Scanning,
+    NeverScanned,
+    NoSupportedCode,
+    PartialFailure,
+    ScanFailed,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Body {
-    Empty { message: String },
+    Empty {
+        message: String,
+        /// 空态 key(spec §167);前端优先用它本地化。
+        empty_state: EmptyStateKey,
+    },
     Overview(OverviewBody),
     Structure(StructureBody),
     UiConsistency(UiBody),
@@ -220,25 +337,62 @@ fn finding_change(ws: &WorkspaceState, id: &str) -> Option<FindingChange> {
     })
 }
 
-pub(super) fn row_dto(
-    id: String,
-    title: String,
-    path: &Path,
-    line: usize,
-    severity: FindingSeverity,
-    change: Option<FindingChange>,
-    reasons: Vec<String>,
-) -> FindingRowDto {
+/// `row_dto` 的具名参数(spec:参数多且同类型相邻,用具名字段结构体防顺序传错)。
+pub(super) struct RowInput<'a> {
+    pub id: String,
+    pub title: String,
+    pub path: &'a Path,
+    pub line: usize,
+    pub severity: FindingSeverity,
+    pub change: Option<FindingChange>,
+    pub reasons: Vec<String>,
+    pub reason_items: Vec<ReasonDto>,
+    pub title_key: Option<&'static str>,
+    pub symbol: Option<String>,
+    pub metric: Option<i64>,
+}
+
+impl<'a> RowInput<'a> {
+    /// 无结构化附加信息(成因/标题 key/指标)的最小构造。
+    pub(super) fn plain(
+        id: String,
+        title: String,
+        path: &'a Path,
+        line: usize,
+        severity: FindingSeverity,
+        change: Option<FindingChange>,
+    ) -> Self {
+        RowInput {
+            id,
+            title,
+            path,
+            line,
+            severity,
+            change,
+            reasons: Vec::new(),
+            reason_items: Vec::new(),
+            title_key: None,
+            symbol: None,
+            metric: None,
+        }
+    }
+}
+
+pub(super) fn row_dto(r: RowInput<'_>) -> FindingRowDto {
     FindingRowDto {
-        id,
-        title,
-        path: path.to_string_lossy().into_owned(),
-        line,
-        severity: severity.into(),
-        severity_label: view_model::sev_label(severity),
-        change: change.map(Into::into),
-        change_label: change.map(view_model::change_label),
-        reasons,
+        id: r.id,
+        title: r.title,
+        path: r.path.to_string_lossy().into_owned(),
+        line: r.line,
+        severity: r.severity.into(),
+        severity_label: view_model::sev_label(r.severity),
+        change: r.change.map(Into::into),
+        change_label: r.change.map(view_model::change_label),
+        reasons: r.reasons,
+        reason_items: r.reason_items,
+        title_key: r.title_key,
+        symbol: r.symbol,
+        metric: r.metric,
     }
 }
 
@@ -248,18 +402,29 @@ fn overview_body(ws: &WorkspaceState, report: &dozer_codehealth::ProjectReport) 
         let head = git.head.clone().unwrap_or_default();
         let mut s = format!("{branch} · {head}");
         if git.dirty {
-            s.push_str(" · 有未提交改动");
+            s.push_str(" · uncommitted changes");
         }
         s
+    });
+    let git = ws.git().map(|git| GitLineDto {
+        branch: git.branch.clone(),
+        head: git.head.clone(),
+        dirty: git.dirty,
     });
     let scope_line = view_model::scope_summary(ws)
         .map(|s| {
             format!(
-                "已分析 {} 个文件 · {} · 排除 {} · 跳过 {}",
+                "Analyzed {} files · {} · Excluded {} · Skipped {}",
                 s.analyzed_files, s.languages, s.excluded_files, s.skipped_files
             )
         })
         .unwrap_or_default();
+    let scope_parts = view_model::scope_summary(ws).map(|s| ScopeSummaryDto {
+        analyzed_files: s.analyzed_files,
+        excluded_files: s.excluded_files,
+        skipped_files: s.skipped_files,
+        languages: s.languages,
+    });
     let change = match view_model::change_summary(report, ws.previous_report(), ws.diff()) {
         ChangeSummary::FirstScan => ChangeDto::FirstScan,
         ChangeSummary::HasChange(c) => ChangeDto::HasChange {
@@ -269,35 +434,66 @@ fn overview_body(ws: &WorkspaceState, report: &dozer_codehealth::ProjectReport) 
             resolved_risks: c.resolved_risks,
             worsened: c.worsened,
             improved: c.improved,
+            loc_delta: c.loc_delta,
+            functions_delta: c.functions_delta,
         },
     };
     let priorities = view_model::hotspot_rows(ws.hotspots(), 50)
         .into_iter()
         .map(|r| {
-            row_dto(
-                r.finding_id,
-                r.title,
-                &r.path,
-                r.line,
-                r.severity,
-                Some(r.change),
-                r.reasons,
-            )
+            row_dto(RowInput {
+                reason_items: hotspot_reason_items(&r),
+                reasons: r.reasons,
+                id: r.finding_id,
+                title: r.title,
+                path: &r.path,
+                line: r.line,
+                severity: r.severity,
+                change: Some(r.change),
+                title_key: None,
+                symbol: None,
+                metric: None,
+            })
         })
         .collect();
     OverviewBody {
         git_line,
+        git,
         tier: report.overall_tier.into(),
         tier_label: view_model::tier_label(report.overall_tier),
         summary: format!(
-            "核心代码 {} 行 · {} 个函数存在明显结构问题",
+            "Core code {} lines · {} functions with obvious structural issues",
             report.total_loc, report.critical_functions
         ),
+        summary_parts: SummaryDto {
+            loc: report.total_loc,
+            functions: report.critical_functions,
+        },
         change,
         priorities,
         scope_line,
+        scope_parts,
         legacy_note: view_model::legacy_report_note(report.schema_version),
     }
+}
+
+/// 把热点成因转成结构化条目(spec §167),顺序与 `hotspot_reasons` 对齐:
+/// change 标签由 `FindingRowDto.change`/`change_label` 单独携带,此处置
+/// 指标与近 30 天修改两项。
+fn hotspot_reason_items(r: &view_model::HotspotRow) -> Vec<ReasonDto> {
+    let mut items = Vec::new();
+    if let Some(delta) = r.metric_delta {
+        items.push(ReasonDto::Metric {
+            delta,
+            unit: String::new(),
+        });
+    }
+    if r.recent_commits > 0 {
+        items.push(ReasonDto::RecentCommits {
+            count: r.recent_commits,
+        });
+    }
+    items
 }
 
 fn structure_body(ws: &WorkspaceState, report: &dozer_codehealth::ProjectReport) -> StructureBody {
@@ -312,23 +508,27 @@ fn structure_body(ws: &WorkspaceState, report: &dozer_codehealth::ProjectReport)
                 } => *complexity_signal,
                 _ => 0,
             };
-            row_dto(
-                f.id.clone(),
-                format!(
-                    "{} 控制流信号 {}",
+            row_dto(RowInput {
+                id: f.id.clone(),
+                title: format!(
+                    "{} control-flow signal {}",
                     f.symbol.as_deref().unwrap_or("?"),
                     metric
                 ),
-                &f.path,
-                f.start_line,
-                f.severity,
-                finding_change(ws, &f.id),
-                Vec::new(),
-            )
+                path: &f.path,
+                line: f.start_line,
+                severity: f.severity,
+                change: finding_change(ws, &f.id),
+                reasons: Vec::new(),
+                reason_items: Vec::new(),
+                title_key: None,
+                symbol: f.symbol.clone(),
+                metric: Some(metric as i64),
+            })
         })
         .collect();
     StructureBody {
-        metric_note: "指标口径:控制流信号(非标准圈复杂度)",
+        metric_note: "Metric definition: control-flow signal (not standard cyclomatic complexity)",
         findings,
     }
 }
@@ -340,32 +540,56 @@ fn ui_body(report: &dozer_codehealth::ProjectReport) -> UiBody {
             groups: Vec::new(),
         };
     }
-    let rules: [(&'static str, &str); 6] = [
-        ("颜色硬编码", rule_ids::COLOR_HARDCODE),
-        ("边距硬编码", rule_ids::SPACING_HARDCODE),
-        ("字体硬编码", rule_ids::FONT_HARDCODE),
-        ("组件树嵌套深度", rule_ids::NESTING_DEPTH),
-        ("事件回调密度", rule_ids::EVENT_HANDLER_DENSITY),
-        ("组件化重复结构", rule_ids::DUPLICATE_STRUCTURE),
+    let rules: [(&'static str, &'static str, &str); 6] = [
+        (
+            "Hardcoded color",
+            "ui.group.color_hardcode",
+            rule_ids::COLOR_HARDCODE,
+        ),
+        (
+            "Hardcoded spacing",
+            "ui.group.spacing_hardcode",
+            rule_ids::SPACING_HARDCODE,
+        ),
+        (
+            "Hardcoded font",
+            "ui.group.font_hardcode",
+            rule_ids::FONT_HARDCODE,
+        ),
+        (
+            "Component tree nesting depth",
+            "ui.group.nesting_depth",
+            rule_ids::NESTING_DEPTH,
+        ),
+        (
+            "Event handler density",
+            "ui.group.event_handler_density",
+            rule_ids::EVENT_HANDLER_DENSITY,
+        ),
+        (
+            "Duplicated component structure",
+            "ui.group.duplicate_structure",
+            rule_ids::DUPLICATE_STRUCTURE,
+        ),
     ];
     let groups = rules
         .iter()
-        .map(|(title, rule)| UiGroup {
+        .map(|(title, group_key, rule)| UiGroup {
             title,
+            group_key,
             findings: report
                 .findings
                 .iter()
                 .filter(|f| f.rule_id == *rule)
                 .map(|f| {
-                    row_dto(
+                    row_dto(RowInput::plain(
                         f.id.clone(),
                         f.title.clone(),
                         &f.path,
                         f.start_line,
                         f.severity,
                         None,
-                        Vec::new(),
-                    )
+                    ))
                 })
                 .collect(),
         })
@@ -379,22 +603,36 @@ fn ui_body(report: &dozer_codehealth::ProjectReport) -> UiBody {
 fn scope_body(ws: &WorkspaceState, report: &dozer_codehealth::ProjectReport) -> ScopeBody {
     let scan = &report.scan;
     let status_label = match scan.status {
-        dozer_codehealth::ScanStatus::Complete => "完整",
-        dozer_codehealth::ScanStatus::Partial => "部分完成",
-        dozer_codehealth::ScanStatus::Failed => "失败",
+        dozer_codehealth::ScanStatus::Complete => "Complete",
+        dozer_codehealth::ScanStatus::Partial => "Partially complete",
+        dozer_codehealth::ScanStatus::Failed => "Failed",
+    };
+    let status = match scan.status {
+        dozer_codehealth::ScanStatus::Complete => ScanStatusKey::Complete,
+        dozer_codehealth::ScanStatus::Partial => ScanStatusKey::Partial,
+        dozer_codehealth::ScanStatus::Failed => ScanStatusKey::Failed,
     };
     let languages_detail = scan
         .languages
         .iter()
         .map(|l| {
             if l.analyzed {
-                format!("{}({} 个文件,结构分析)", l.language, l.files)
+                format!("{} ({} files, structurally analyzed)", l.language, l.files)
             } else {
-                format!("{}({} 个文件,仅统计)", l.language, l.files)
+                format!("{} ({} files, counted only)", l.language, l.files)
             }
         })
         .collect::<Vec<_>>()
         .join(" · ");
+    let languages = scan
+        .languages
+        .iter()
+        .map(|l| LanguageDto {
+            language: l.language.clone(),
+            files: l.files,
+            analyzed: l.analyzed,
+        })
+        .collect();
     let git_baseline = ws.git().map(|git| {
         format!(
             "{}{}",
@@ -411,21 +649,33 @@ fn scope_body(ws: &WorkspaceState, report: &dozer_codehealth::ProjectReport) -> 
         .map(|s| SkippedDto {
             path: s.path.to_string_lossy().into_owned(),
             reason: match s.reason {
-                dozer_codehealth::SkipReason::Ignored => "忽略规则",
-                dozer_codehealth::SkipReason::UnsupportedLanguage => "不支持的语言",
-                dozer_codehealth::SkipReason::Generated => "生成文件",
-                dozer_codehealth::SkipReason::NonUtf8 => "非 UTF-8",
-                dozer_codehealth::SkipReason::ReadFailed => "读取失败",
-                dozer_codehealth::SkipReason::ParseFailed => "解析失败",
+                dozer_codehealth::SkipReason::Ignored => "Ignore rule",
+                dozer_codehealth::SkipReason::UnsupportedLanguage => "Unsupported language",
+                dozer_codehealth::SkipReason::Generated => "Generated file",
+                dozer_codehealth::SkipReason::NonUtf8 => "Non-UTF-8",
+                dozer_codehealth::SkipReason::ReadFailed => "Read failed",
+                dozer_codehealth::SkipReason::ParseFailed => "Parse failed",
+            },
+            reason_key: match s.reason {
+                dozer_codehealth::SkipReason::Ignored => SkipReasonKey::Ignored,
+                dozer_codehealth::SkipReason::UnsupportedLanguage => {
+                    SkipReasonKey::UnsupportedLanguage
+                }
+                dozer_codehealth::SkipReason::Generated => SkipReasonKey::Generated,
+                dozer_codehealth::SkipReason::NonUtf8 => SkipReasonKey::NonUtf8,
+                dozer_codehealth::SkipReason::ReadFailed => SkipReasonKey::ReadFailed,
+                dozer_codehealth::SkipReason::ParseFailed => SkipReasonKey::ParseFailed,
             },
         })
         .collect();
     ScopeBody {
         status_label,
+        status,
         analyzed_files: scan.analyzed_files,
         excluded_files: scan.excluded_files,
         skipped_count: scan.skipped_files.len(),
         languages_detail,
+        languages,
         duration_ms: scan.duration_ms,
         schema_version: report.schema_version,
         git_baseline,
@@ -433,17 +683,25 @@ fn scope_body(ws: &WorkspaceState, report: &dozer_codehealth::ProjectReport) -> 
     }
 }
 
-fn empty_message(ws: &WorkspaceState) -> String {
+fn empty_state(ws: &WorkspaceState) -> (EmptyStateKey, &'static str) {
     if ws.scanning() {
-        return "扫描中…".to_string();
+        return (EmptyStateKey::Scanning, "Scanning...");
     }
     match view_model::empty_state(ws) {
-        EmptyState::NeverScanned => "这个项目还没有扫描过。",
-        EmptyState::NoSupportedCode => "没有发现受支持的代码。",
-        EmptyState::PartialFailure => "扫描部分完成,部分文件失败(见扫描范围)。",
-        EmptyState::ScanFailed => "扫描失败。",
+        EmptyState::NeverScanned => (
+            EmptyStateKey::NeverScanned,
+            "This project has not been scanned yet.",
+        ),
+        EmptyState::NoSupportedCode => (
+            EmptyStateKey::NoSupportedCode,
+            "No supported code was found.",
+        ),
+        EmptyState::PartialFailure => (
+            EmptyStateKey::PartialFailure,
+            "Scan partially completed; some files failed (see Scan Scope).",
+        ),
+        EmptyState::ScanFailed => (EmptyStateKey::ScanFailed, "Scan failed."),
     }
-    .to_string()
 }
 
 /// 当前该显示什么。**唯一权威实现**:`view.rs` 旧渲染删除后不再有第二份判定。
@@ -452,12 +710,15 @@ pub fn current_view_payload(ws: &WorkspaceState) -> CodeHealthViewPayload {
         scanning: ws.scanning(),
         scanned_at: ws.scanned_at_ms().map(view_model::format_ms),
         scan_error: ws.scan_error().map(str::to_owned),
+        scan_error_key: ws.scan_error_key().cloned(),
         save_error: ws.save_error().map(str::to_owned),
+        save_error_key: ws.save_error_key().cloned(),
     };
     let category: CategoryKey = ws.category().into();
     let body = match ws.report() {
         None => Body::Empty {
-            message: empty_message(ws),
+            message: empty_state(ws).1.to_string(),
+            empty_state: empty_state(ws).0,
         },
         Some(report) => match category {
             CategoryKey::Overview => Body::Overview(overview_body(ws, report)),
@@ -560,7 +821,7 @@ impl WebviewPushState {
         }
         let since = *self.waiting_since.get_or_insert(now);
         if self.failed.is_none() && now.duration_since(since) > READY_TIMEOUT {
-            self.failed = Some("面板页面加载超时".to_string());
+            self.failed = Some("Code Health page failed to load".to_string());
         }
     }
 
@@ -670,7 +931,7 @@ mod tests {
         let mut ws = WorkspaceState::default();
         super::super::update(&mut ws, super::super::Message::ScanRequested);
         match current_view_payload(&ws).body {
-            Body::Empty { message } => assert_eq!(message, "扫描中…"),
+            Body::Empty { message, .. } => assert_eq!(message, "Scanning..."),
             other => panic!("expected Empty, got {other:?}"),
         }
     }
@@ -680,12 +941,20 @@ mod tests {
         let mut ws = WorkspaceState::default();
         super::super::update(
             &mut ws,
-            super::super::Message::Scanned(1, Err("boom".into())),
+            super::super::Message::Scanned(
+                1,
+                Err((
+                    ErrorDto::ScanFailed {
+                        message: "boom".into(),
+                    },
+                    "boom".into(),
+                )),
+            ),
         );
         let p = current_view_payload(&ws);
         assert_eq!(p.scan.scan_error.as_deref(), Some("boom"));
         match p.body {
-            Body::Empty { message } => assert_eq!(message, "扫描失败。"),
+            Body::Empty { message, .. } => assert_eq!(message, "Scan failed."),
             other => panic!("expected Empty, got {other:?}"),
         }
     }
@@ -701,8 +970,11 @@ mod tests {
         );
         match p.body {
             Body::Overview(o) => {
-                assert_eq!(o.tier_label, "需要关注");
-                assert_eq!(o.summary, "核心代码 100 行 · 1 个函数存在明显结构问题");
+                assert_eq!(o.tier_label, "Needs attention");
+                assert_eq!(
+                    o.summary,
+                    "Core code 100 lines · 1 functions with obvious structural issues"
+                );
                 assert!(matches!(o.change, ChangeDto::FirstScan));
                 assert!(o.priorities.is_empty());
             }
@@ -721,12 +993,15 @@ mod tests {
         );
         match current_view_payload(&ws).body {
             Body::Structure(s) => {
-                assert_eq!(s.metric_note, "指标口径:控制流信号(非标准圈复杂度)");
+                assert_eq!(
+                    s.metric_note,
+                    "Metric definition: control-flow signal (not standard cyclomatic complexity)"
+                );
                 assert_eq!(s.findings.len(), 1);
-                assert_eq!(s.findings[0].title, "run 控制流信号 12");
+                assert_eq!(s.findings[0].title, "run control-flow signal 12");
                 assert_eq!(s.findings[0].path, "src/a.rs");
                 assert_eq!(s.findings[0].line, 7);
-                assert_eq!(s.findings[0].severity_label, "警戒");
+                assert_eq!(s.findings[0].severity_label, "Critical");
                 assert_eq!(s.findings[0].change, None);
             }
             other => panic!("expected Structure, got {other:?}"),
@@ -758,7 +1033,7 @@ mod tests {
         );
         match current_view_payload(&ws).body {
             Body::ScanScope(s) => {
-                assert_eq!(s.status_label, "完整");
+                assert_eq!(s.status_label, "Complete");
                 assert_eq!(s.analyzed_files, 3);
                 assert_eq!(s.schema_version, SCHEMA_VERSION);
                 assert!(s.skipped.is_empty());
@@ -775,6 +1050,61 @@ mod tests {
         assert_eq!(json["body"]["kind"], "overview");
         assert_eq!(json["body"]["change"]["kind"], "first_scan");
         assert_eq!(json["scan"]["scanning"], false);
+    }
+
+    /// spec §167 / §10:迁移期旧字段(预格式化文案)保留,同时追加语义字段,
+    /// 前端按 locale 渲染。此测试钉住"旧+新并存"的兼容契约。
+    #[test]
+    fn overview_keeps_legacy_fields_and_appends_semantic_fields() {
+        let ws = ws_with(sample_report());
+        let json = serde_json::to_value(current_view_payload(&ws)).unwrap();
+        let body = &json["body"];
+        // 旧字段仍在(兼容旧 Web)。
+        assert!(body["summary"].is_string());
+        assert!(body["scope_line"].is_string());
+        // 新语义字段。
+        assert_eq!(body["summary_parts"]["loc"], sample_report().total_loc);
+        assert!(
+            body["summary_parts"]["functions"].is_number(),
+            "summary_parts.functions 应为原始计数"
+        );
+        assert!(body["scope_parts"].is_null() || body["scope_parts"]["analyzed_files"].is_number());
+        assert!(body["git"].is_null() || body["git"].is_object());
+    }
+
+    #[test]
+    fn scan_scope_appends_status_key_and_language_rows() {
+        let mut ws = ws_with(sample_report());
+        super::super::update(
+            &mut ws,
+            super::super::Message::CategorySet(CodeHealthCategory::ScanScope),
+        );
+        let json = serde_json::to_value(current_view_payload(&ws)).unwrap();
+        let body = &json["body"];
+        assert_eq!(body["status_label"], "Complete");
+        assert_eq!(body["status"], "complete");
+        assert!(body["languages"].is_array());
+    }
+
+    #[test]
+    fn empty_body_appends_empty_state_key() {
+        let mut ws = WorkspaceState::default();
+        super::super::update(
+            &mut ws,
+            super::super::Message::Scanned(
+                1,
+                Err((
+                    ErrorDto::ScanFailed {
+                        message: "boom".into(),
+                    },
+                    "boom".into(),
+                )),
+            ),
+        );
+        let json = serde_json::to_value(current_view_payload(&ws)).unwrap();
+        assert_eq!(json["body"]["kind"], "empty");
+        assert_eq!(json["body"]["message"], "Scan failed.");
+        assert_eq!(json["body"]["empty_state"], "scan_failed");
     }
 
     // ---- 事件 ----

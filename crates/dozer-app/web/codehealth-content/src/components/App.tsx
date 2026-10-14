@@ -12,7 +12,7 @@ export function App({ payload }: { payload: ViewPayload }) {
   return (
     <div>
       <ScanHeader scan={scan} hasReport={body.kind !== 'empty'} />
-      {body.kind === 'empty' && <EmptyState message={body.message} />}
+      {body.kind === 'empty' && <EmptyState body={body} />}
       {body.kind === 'overview' && <OverviewPage body={body} />}
       {body.kind === 'structure' && <StructurePage body={body} />}
       {body.kind === 'ui_consistency' && <UiPage body={body} />}

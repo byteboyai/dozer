@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { render } from 'preact-render-to-string';
 import { App } from './components/App.tsx';
+import { setLocale } from './i18n.ts';
 import { emptyFixture, scanFailedFixture, scanningWithOldResultFixture } from './fixtures.ts';
 import {
   overviewFixture,
@@ -22,6 +23,8 @@ import type { ViewPayload } from './types.ts';
 
 const html = (p: ViewPayload) => render(<App payload={p} />);
 
+test.beforeEach(() => setLocale('zh-CN'));
+
 test('empty: never scanned shows message and a scan button', () => {
   const out = html(emptyFixture);
   assert.match(out, /这个项目还没有扫描过。/);
@@ -30,7 +33,7 @@ test('empty: never scanned shows message and a scan button', () => {
 
 test('empty: scan error shows banner', () => {
   const out = html(scanFailedFixture);
-  assert.match(out, /扫描失败,请重试:boom/);
+  assert.match(out, /扫描失败,请重试:扫描失败：boom/);
 });
 
 test('scanning disables the button', () => {
@@ -61,7 +64,7 @@ test('overview: first scan never fakes zero change', () => {
 });
 
 test('overview: legacy report note is shown', () => {
-  assert.match(html(overviewLegacyFixture), /旧版报告,重新扫描可查看变化与范围/);
+  assert.match(html(overviewLegacyFixture), /旧版报告，重新扫描可查看变化与范围/);
 });
 
 test('structure: default filter is new-only; severity and change use text labels', () => {
@@ -160,4 +163,14 @@ test('architecture: crate-only payload disables the module layer and falls back 
   assert.match(out, /class="active"[^>]*>\s*crate/);
   assert.match(out, /仅显示 crate 层/);
   resetViewState();
+});
+
+// spec §8:语言上下文驱动 Web 渲染;en 默认渲染英文文案。
+test('locale en: architecture and ui render English copy', () => {
+  setLocale('en');
+  assert.match(html(archFixture), /Architecture Map/);
+  assert.match(html(archFixture), /Risks only/);
+  assert.match(html(uiFixture), /UI Consistency/);
+  assert.match(html(scopeFixture), /Scan Scope/);
+  setLocale('zh-CN');
 });

@@ -2,7 +2,7 @@
 //! 的占位)。内容渲染全部在 `dozer://codehealth-content` webview 里
 //! (见 `web/codehealth-content/` 与 `protocol.rs`)。
 
-use super::{CodeHealthCategory, Message, WorkspaceState};
+use super::{CODE_HEALTH_OWNER, CodeHealthCategory, Message, WorkspaceState};
 use byteui::interaction::icons;
 use iced_widget::core::{Border, Color, Element, Length};
 use iced_widget::{button, column, container, row, space, text};
@@ -20,6 +20,7 @@ fn category_icon(category: CodeHealthCategory) -> icons::IconKind {
 fn category_button(
     category: CodeHealthCategory,
     current: CodeHealthCategory,
+    locale: &str,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let active = category == current;
     let c = byteui::theme::color::current();
@@ -32,7 +33,7 @@ fn category_button(
                 byteui::theme::icon_size::row(),
                 icon_color
             ),
-            text(category.label())
+            text(category.label(locale))
                 .size(byteui::theme::font::body())
                 .color(fg),
             space::Space::new()
@@ -66,14 +67,15 @@ fn category_button(
     .into()
 }
 
-pub fn list_pane(
-    ws_state: &WorkspaceState,
+pub fn list_pane<'a>(
+    ws_state: &'a WorkspaceState,
+    locale: &str,
     width: Length,
     outer: Border,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let header = container(crate::chrome::homespace::home_panel_head(
         icons::IconKind::SquareActivity,
-        "代码健康度",
+        crate::i18n::panel_text(CODE_HEALTH_OWNER, "title", "Code Health", locale),
     ))
     .padding(iced_widget::core::Padding {
         top: 12.0,
@@ -90,7 +92,7 @@ pub fn list_pane(
         left: 8.0,
     });
     for category in CodeHealthCategory::all() {
-        nav = nav.push(category_button(category, current));
+        nav = nav.push(category_button(category, current, locale));
     }
 
     container(column![header, nav])
@@ -109,6 +111,7 @@ pub fn list_pane(
 /// 失败原因与"重试"。
 pub fn content_pane(
     failed: Option<&str>,
+    locale: &str,
     width: Length,
     outer: Border,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -116,9 +119,25 @@ pub fn content_pane(
     let body: Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> = match failed
     {
         Some(reason) => column![
-            text("代码健康度页面加载失败").size(14).color(tokens.body),
+            text(crate::i18n::panel_text(
+                CODE_HEALTH_OWNER,
+                "content.load_failed",
+                "Code Health page failed to load",
+                locale,
+            ))
+            .size(14)
+            .color(tokens.body),
             text(reason.to_string()).size(12).color(tokens.dim),
-            button(text("重试").size(13)).on_press(Message::ContentRetry),
+            button(
+                text(crate::i18n::panel_text(
+                    CODE_HEALTH_OWNER,
+                    "retry",
+                    "Retry",
+                    locale,
+                ))
+                .size(13)
+            )
+            .on_press(Message::ContentRetry),
         ]
         .spacing(10)
         .padding(16)
@@ -143,10 +162,14 @@ mod tests {
     #[test]
     fn category_labels_and_all_cover_five_categories() {
         assert_eq!(CodeHealthCategory::all().len(), 5);
-        assert_eq!(CodeHealthCategory::Overview.label(), "总览");
-        assert_eq!(CodeHealthCategory::Structure.label(), "结构复杂度");
-        assert_eq!(CodeHealthCategory::UiConsistency.label(), "UI 一致性");
-        assert_eq!(CodeHealthCategory::ScanScope.label(), "扫描范围");
-        assert_eq!(CodeHealthCategory::Architecture.label(), "架构");
+        assert_eq!(CodeHealthCategory::Overview.label("zh-CN"), "总览");
+        assert_eq!(CodeHealthCategory::Structure.label("zh-CN"), "结构复杂度");
+        assert_eq!(
+            CodeHealthCategory::UiConsistency.label("zh-CN"),
+            "UI 一致性"
+        );
+        assert_eq!(CodeHealthCategory::ScanScope.label("zh-CN"), "扫描范围");
+        assert_eq!(CodeHealthCategory::Architecture.label("zh-CN"), "架构");
+        assert_eq!(CodeHealthCategory::Overview.label("en"), "Overview");
     }
 }

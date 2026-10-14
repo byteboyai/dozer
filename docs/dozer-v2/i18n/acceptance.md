@@ -305,6 +305,30 @@ python3 scripts/i18n/build_inventory.py
 - Task 09 剩余 123 条全部属 **Code Health**，按面板后续单独提交。
 - 双语**运行期视觉核对**（切换后原生/Web 同步）随 Task 13 的 L07/L09/L10/L14 执行。
 
+## Task 09 验收（Code Health 面板，按面板拆分提交）
+
+计划 Task 09 面向 Todo/Usage/Code Health 三个首批面板。本记录覆盖 **Code Health 面板**（Todo/Usage 见上两节），任务 §Task 09 第 3 条（spec §167）在此完整落地。
+
+### 交付内容
+
+- **资源**：`crates/dozer-app/locales/panels/codehealth/{en,zh-CN}.json`（owner `dozer.code_health`，含 `analyze.*` 与 `error.*`）。
+- **Rust 迁移（keyed 语义 + 英文兜底）**：`extensions/codehealth/mod.rs`（`CODE_HEALTH_OWNER`、`CodeHealthCategory::label_key`/`label(locale)`、加载失败改 keyed `error.load_failed`）、`view.rs`（locale-aware `list_pane`/`content_pane`/`category_button`）、`view_model.rs`（`hotspot_reasons`/`scope_summary`/`tier_label`/`sev_label`/`change_label` 经 key，`analyze_finding_text` 收 `locale` 并按 `analyze.*` 渲染）、`protocol.rs`/`arch_payload.rs`（`ScanBar` 增 `ErrorDto`；旧 `*_label`/`*_text` 兼容字段统一改**英文**）、`aggregate.rs`（扫描/保存错误改带稳定 key 的 `ErrorDto` + 英文兜底文案，spec §10）。
+- **Rust 接缝**：`app/update.rs`（`code_health_analyze_finding` 取 `self.locale.active_locale()` 传入）、`i18n.rs`（`PANEL_OWNERS` 增 `dozer.code_health`）。
+- **Web 迁移**：`web/codehealth-content/src/i18n.ts`（新增；静态 import 共享 `web/shared/i18n` 解析器 + 面板 JSON、`errorText(ErrorDto)`）、`types.ts`（`ErrorDto`）、`main.tsx`（dispatch 后 `setLocale`）、`components/{App,ScanHeader,EmptyState,FindingRow,OverviewPage,StructurePage,UiPage,ScopePage,ArchitecturePage}.tsx`（旧 Host 预格式化字段保留为兜底，语义字段优先）。
+
+### 验证命令与结果
+
+- `cargo build -p dozer-app`：通过。
+- `cargo test -p dozer-app codehealth`：106 passed / 0 failed（含改写为英文断言的 `view_model`/`protocol`/`arch_payload` 用例与 `analyze_text_localizes_to_chinese`）。
+- `node --test src/*.test.ts`（codehealth-content）：18 passed；`npm run typecheck`、`npm run build`（重建 `assets/codehealth-content/codehealth-content.js`）：通过。
+- `cargo fmt --all -- --check`、`cargo clippy -p dozer-panel-usage -p dozer-app --all-targets`、`python3 scripts/i18n/check_resources.py`、`bash scripts/check-log-scope.sh`、`python3 scripts/audit/check_panel_boundary.py`：全绿。
+- `python3 scripts/i18n/build_inventory.py`：Task 09 内 code health 项候选**清零**（`counts: {"excluded": 3111, "migrated": 0, "unresolved": 533}`；`unresolved by task: {"10": 418, "11": 115}`，无 `09`）。
+
+### 残留
+
+- Task 09 三个面板（Todo/Usage/Code Health）全部完成。
+- 双语**运行期视觉核对**（切换后原生/Web 同步）随 Task 13 的 L07/L09/L10/L14 执行。
+
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |
 |---|---|---|
