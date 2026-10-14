@@ -584,6 +584,31 @@ python3 scripts/i18n/build_inventory.py
 
 - 双语**运行期视觉核对**（切换后原生/Web 同步）随 Task 13 的 L07/L09/L10/L14 执行。
 
+## Task 12 验收（硬编码门禁与资源构建收口）
+
+### 交付内容
+
+- **迁移门禁**：`scripts/i18n/check_migration.py`（新）——四部分：(1) 重跑 `build_inventory.build()`，要求 `unresolved == 0`；(2) 抽取生产源里的 keyed 调用（Rust `panel_text/keyed` + owner 常量、`host_text/keyed`→`dozer.host`、文件内本地 `t()`；TS 各 web 包 `src/i18n.ts` 的 `OWNER` 字面量驱动的 `t('k'`），逐一断言 `(owner, key)` 在 en + zh-CN 两份资源里都存在；(3) keyed 调用的第二实参（英文 fallback）不得含 CJK；(4) `--assets` 额外扫描 `assets/**` 产物，禁止出现指向仓库 `locales/` 的运行期读盘（`readFile`/`fetch`/`__dirname` … `locales/`）。测试上下文（`#[cfg(test)]`/`mod tests`/`.test.ts`/fixtures）用一次性探针 key 与中文 fallback，按**上下文精确豁免**，不做整文件/整面板豁免。
+- **统一入口**：`scripts/check-i18n.sh`（新）一次跑「`check_resources.py`（资源完整性）+ `check_migration.py --assets`（迁移收口）+ 检查器单测」；`scripts/build-macos-app.sh` 在 **release** 分支（版本 bump 之后、真正打包之前）调用它，把缺译/残留硬编码拦在产物固化点（debug 迭代不拦，与 version bump 同类）。
+- **检查器回归测试**：`scripts/i18n/test_scan_sources.py`（15 项）——普通/raw 字符串、字符串内 `//` 不断链、字符字面量 `'"'` 不吞后续串、注释不误报、JSX 文本、HTML 属性/文本、HTML 注释与 `<script>`/`<style>` 剥离、多行模板与 URL 被"泄漏防护"丢弃的**既有边界**钉样例。`scripts/i18n/test_check_migration.py`（12 项）——纯函数层钉"缺 key（含某语言单独缺）"、"未知 owner"、"未分类候选"；正则层钉中文 fallback 命中/英文干净；**反向注入层**往临时源码树写真实 Rust，验证 (1) 新硬编码中文 UI 落 `unresolved`、(2) 缺译 key、(3) 中文 fallback 三类都必须被拦下，且测试上下文探针 key 不计入缺译。
+- **补齐 Task 06 遗留的 13 个 host key**（门禁首次跑发现）：`locales/host/{en,zh-CN}.json` 增 `conversations.{load_more,pane_title,generating,generate_summary,no_review_content}`、`agent.{new_session,no_conversations}`、`files.no_project`、`preview.{blank_size_value,info_location,info_size,info_created,info_modified}`。这些 key 在 `workspace/view.rs` 里经 `host_text`/`host_text_args` 调用，但从未写进 host 包——纯资源完整性检查（只看包内自洽）覆盖不到「有引用无资源」，故由 Task 12 的 key-引用↔资源核对揪出；中文取自 Task 06 提交 `4481763a^` 的原文（如 `conversations.no_review_content`→"暂无审阅内容——点击左侧对话列表中的对话开始审阅"、`preview.blank_size_value`→"{human} (磁盘上 {bytes} 字节),共 {count} 个项目"）。
+- **格式修补**：`preview/view.rs` 补一处 Task 11 漏下的 `cargo fmt` 行宽换行（`cargo fmt --all -- --check` 在 Task 11 后失败的唯一处）。
+- **assets 重建**：全部自有 Web 包（editor/json-editor/plantuml-viewer/tabular-host/review-trace/flyfish/codehealth-content/group-chat-content/todo-content/usage-content）重跑 `npm run build` 产物**无差异**（确认资源可复现、静态内联语言包、无运行期读 `locales/`）。
+
+### 验证命令与结果
+
+- `bash scripts/check-i18n.sh`：`check_resources: ok (14 个 owner 目录)`；`check_migration: ok`（`inventory: total=3042 unresolved=0`；`key refs checked: 471 (owners: 14)`）；单测 **27 passed**。全绿。
+- 反向注入（`test_check_migration.py::Injection`）：硬编码中文 UI（`classify_status`→`unresolved`）、缺译 key（`find_missing_keys` 命中 en+zh-CN）、中文 fallback（`check_english_fallbacks` 命中）、测试上下文探针 key（不计入缺译）四例均符合预期。
+- `cargo test -p dozer-app`：**2001 passed / 0 failed / 2 ignored**（与 Task 11 基线一致）。
+- `cargo fmt --all -- --check`：通过；`cargo clippy -p dozer-app --all-targets`：0 error；`bash scripts/check-log-scope.sh`：ok；`python3 scripts/audit/check_panel_boundary.py`：213 refs / 5 files ratchet 不变。
+- `python3 scripts/i18n/build_inventory.py`：`counts: {"excluded": 3042, "migrated": 0, "unresolved": 0}`；`unresolved by task: {}`。
+- `python3 -m unittest discover -s scripts/audit -p 'test_*.py'`：45 项中 **2** 失败，均为既有 `test_unit_edges.ScanUsage`（Usage 迁库后审计脚本扫旧路径，非本次引入，见基线）。
+
+### 残留
+
+- 双语**运行期视觉核对**与打包产物运行验收（切双语）随 Task 13 的 L01–L14 执行。
+- `.github/` CI 未见：按计划先用 `build-macos-app.sh`（release）接入 `check-i18n.sh`，不虚构现成 CI；如后续新增 CI，复用同一入口。
+
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |
 |---|---|---|

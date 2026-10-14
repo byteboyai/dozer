@@ -4026,7 +4026,8 @@ mod tests {
         assert_eq!(p.tabs()[2].reload_nonce, 1, "b.md 命中,webview 推进");
         let specs = p.desired_webviews(1, crate::app::PanelKind::Files, "en");
         assert_eq!(
-            specs[1].url, "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&theme=dark&locale=en&ln=1&fs=14&_r=1",
+            specs[1].url,
+            "dozer://flyfish/host.html?p=%2Ftmp%2Fb.md&theme=dark&locale=en&ln=1&fs=14&_r=1",
             "命中的 webview 换 URL 重载"
         );
 

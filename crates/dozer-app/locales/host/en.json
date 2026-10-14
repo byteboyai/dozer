@@ -323,5 +323,18 @@
   "conversations.summary_poll_failed": "Failed to query summary: {error}",
   "conversations.summary_refresh_failed": "Summary generated, but refreshing sessions failed: {error}",
   "webview.load_timeout": "Panel page load timed out",
-  "file_history.unrenderable_workdir": "The file is not text, exceeds the size limit, or is missing on disk; CodeMirror rendering is not supported"
+  "file_history.unrenderable_workdir": "The file is not text, exceeds the size limit, or is missing on disk; CodeMirror rendering is not supported",
+  "conversations.load_more": "Load more…",
+  "conversations.pane_title": "Conversations",
+  "conversations.generating": "Generating…",
+  "conversations.generate_summary": "Generate Summary",
+  "conversations.no_review_content": "No review content—click a conversation in the list on the left to start reviewing",
+  "agent.new_session": "New agent session",
+  "agent.no_conversations": "No conversations",
+  "files.no_project": "No project open",
+  "preview.blank_size_value": "{human} ({bytes} bytes on disk), {count} items",
+  "preview.info_location": "Location:",
+  "preview.info_size": "Size:",
+  "preview.info_created": "Created:",
+  "preview.info_modified": "Modified:"
 }

@@ -323,5 +323,18 @@
   "conversations.summary_poll_failed": "查询总结失败: {error}",
   "conversations.summary_refresh_failed": "总结已生成，但刷新会话失败: {error}",
   "webview.load_timeout": "面板页面加载超时",
-  "file_history.unrenderable_workdir": "文件不是文本、超过大小上限,或磁盘文件当前不存在,不支持 CodeMirror 渲染"
+  "file_history.unrenderable_workdir": "文件不是文本、超过大小上限,或磁盘文件当前不存在,不支持 CodeMirror 渲染",
+  "conversations.load_more": "加载更多…",
+  "conversations.pane_title": "对话",
+  "conversations.generating": "生成中…",
+  "conversations.generate_summary": "生成总结",
+  "conversations.no_review_content": "暂无审阅内容——点击左侧对话列表中的对话开始审阅",
+  "agent.new_session": "新建 Agent 会话",
+  "agent.no_conversations": "暂无会话",
+  "files.no_project": "未打开项目",
+  "preview.blank_size_value": "{human} (磁盘上 {bytes} 字节),共 {count} 个项目",
+  "preview.info_location": "位置:",
+  "preview.info_size": "大小:",
+  "preview.info_created": "创建时间:",
+  "preview.info_modified": "修改时间:"
 }

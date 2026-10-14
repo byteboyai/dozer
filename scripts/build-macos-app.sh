@@ -18,6 +18,13 @@ if [[ "$PROFILE" == "release" ]]; then
   "$(dirname "${BASH_SOURCE[0]}")/bump-version.sh"
 fi
 
+# i18n 门禁:资源完整性 + 存量迁移收口 + 构建产物不运行期读 locales。
+# 打包是把界面资源固化进 bundle 的点,漏翻/缺译/残留硬编码在这里拦下最划算;
+# debug 迭代不栏(和 version bump 同类:发布动作才做重核对)。
+if [[ "$PROFILE" == "release" ]]; then
+  "$(dirname "${BASH_SOURCE[0]}")/check-i18n.sh"
+fi
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PACKAGING_DIR="$ROOT_DIR/crates/dozer-app/packaging/macos"
 APP_NAME="Dozer AI Coder"
