@@ -117,8 +117,13 @@ impl App {
             stack![
                 base,
                 dismiss,
-                files::context_menu_popup(&self.files, &ws.files, &self.external_apps)
-                    .map(Message::Files)
+                files::context_menu_popup(
+                    &self.files,
+                    &ws.files,
+                    &self.external_apps,
+                    self.locale.active_locale(),
+                )
+                .map(Message::Files)
             ]
             .width(Length::Fill)
             .height(Length::Fill)
@@ -133,8 +138,13 @@ impl App {
             stack![
                 base,
                 dismiss,
-                files::tab_context_menu_popup(&self.files, &ws.files, &self.external_apps)
-                    .map(Message::Files)
+                files::tab_context_menu_popup(
+                    &self.files,
+                    &ws.files,
+                    &self.external_apps,
+                    self.locale.active_locale(),
+                )
+                .map(Message::Files)
             ]
             .width(Length::Fill)
             .height(Length::Fill)
@@ -151,7 +161,10 @@ impl App {
             stack![
                 base,
                 dismiss,
-                files::preview_selection_context_menu_popup(&self.preview_context_menu)
+                files::preview_selection_context_menu_popup(
+                    &self.preview_context_menu,
+                    self.locale.active_locale(),
+                )
             ]
             .width(Length::Fill)
             .height(Length::Fill)
@@ -169,7 +182,8 @@ impl App {
             stack![
                 base,
                 dismiss,
-                files::branch_picker_popup(&ws.files).map(Message::Files)
+                files::branch_picker_popup(&ws.files, self.locale.active_locale())
+                    .map(Message::Files)
             ]
             .width(Length::Fill)
             .height(Length::Fill)
@@ -555,6 +569,7 @@ pub(crate) fn panel_body<'a>(
                         app.hover_progress(HoverId::search_submit(PanelKind::Files)),
                         app.hover_progress(HoverId::named(PanelKind::Files, "dotfiles")),
                         app.hover_progress(HoverId::named(PanelKind::Files, "branch_switch")),
+                        app.locale.active_locale(),
                     )
                     .map(Message::Files)
                 } else {

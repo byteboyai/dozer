@@ -11,17 +11,20 @@ use super::*;
 dozer_core::scope!(pub(crate) LOG, panel, "files");
 
 /// 右键"添加到 Agent 上下文"的负载:项目内相对路径(与"复制相对路径"同一套
-/// `path_string` 逻辑,原样不转义)+ 要写进终端的模板文本。
-fn send_payload(root: &Path, target: &Path, is_dir: bool) -> (String, String) {
+/// `path_string` 逻辑,原样不转义)。模板文本留给内核层按当前 locale 拼
+/// (见 `App::update` 的 `RequestSendToAgentTerminal` 分支)。
+fn send_payload(root: &Path, target: &Path, is_dir: bool) -> (String, bool) {
     let relative = crate::project::path_string(crate::project::PathKind::Relative, target, root);
-    let text = super::agent_context_reference_text(&relative, is_dir);
-    (relative, text)
+    (relative, is_dir)
 }
 
 /// 处理 `CopyPath` 之外的全部消息。内核在到达这里之前已经拦截了
 /// `CopyPath`(真正的剪贴板写入需要 `main.rs` 的 `Clipboard` 句柄),它传
 /// 进来会 `unreachable!`(同 Todo 试点 `DispatchToExisting`/`DispatchNew`
 /// 的处理方式)。`project_id` 由内核路由时已经解析出正确值传入。
+/// 参数天然异质(状态/消息/句柄/回调/配置/locale),无相邻同型易错位,
+/// 保持位置参数、不加具名字段结构体(见 `database/update.rs` 同款处理)。
+#[allow(clippy::too_many_arguments)]
 pub fn update(
     ws_state: &mut WorkspaceState,
     app_state: &mut AppState,
@@ -31,6 +34,7 @@ pub fn update(
     emit: impl Fn(Message) + Send + 'static,
     external_apps: &crate::external_apps::ExternalAppsConfig,
     agent_terminal_visible: bool,
+    locale: &str,
 ) {
     match msg {
         Message::Toggle(dir) => {
@@ -80,15 +84,18 @@ pub fn update(
                     .map(|t| t.root() == path.as_path())
                     .unwrap_or(false);
                 let has_clipboard = ws_state.tree_clipboard.is_some();
-                let items = context_menu_items(FileContextMenuParams {
-                    target: &path,
-                    is_dir,
-                    is_root,
-                    has_clipboard,
-                    is_git_repo: ws_state.git_is_repo,
-                    agent_terminal_visible,
-                    external_apps,
-                });
+                let items = context_menu_items(
+                    FileContextMenuParams {
+                        target: &path,
+                        is_dir,
+                        is_root,
+                        has_clipboard,
+                        is_git_repo: ws_state.git_is_repo,
+                        agent_terminal_visible,
+                        external_apps,
+                    },
+                    locale,
+                );
                 if let Some(msg) =
                     crate::chrome::native_menu::show_align_no_icon_left(items, (x, y))
                 {
@@ -127,12 +134,8 @@ pub fn update(
             let Some(tree) = ws_state.file_tree.as_ref() else {
                 return;
             };
-            let (relative, text) = send_payload(tree.root(), &target, is_dir);
-            emit(Message::RequestSendToAgentTerminal {
-                text,
-                is_dir,
-                relative,
-            });
+            let (relative, is_dir) = send_payload(tree.root(), &target, is_dir);
+            emit(Message::RequestSendToAgentTerminal { is_dir, relative });
         }
         Message::RequestSendToAgentTerminal { .. } => {
             // 内核拦截处理(`App::update` 的 `Message::Files(files::Message::
@@ -157,7 +160,7 @@ pub fn update(
                 // `CopyPath`/`FileHistoryOpen` 等需要顶层 `App::update` 拦截的
                 // 消息(`TabReloadFromDisk` 也是 app 层拦截)。
                 let is_git_repo = ws_state.git_is_repo;
-                let items = tab_context_menu_items(kind, &path, is_git_repo, external_apps);
+                let items = tab_context_menu_items(kind, &path, is_git_repo, external_apps, locale);
                 if let Some(msg) =
                     crate::chrome::native_menu::show_align_no_icon_left(items, (x, y))
                 {
@@ -241,7 +244,12 @@ pub fn update(
             Err(e) => ws_state.outbox.push(
                 LOG,
                 toast::Level::Error,
-                crate::extensions::toast::literal(format!("粘贴失败: {}", e.stable())),
+                crate::i18n::panel_keyed_args(
+                    FILES_OWNER,
+                    "toast.paste_failed",
+                    "Paste failed: {e}",
+                    &[("e", e.stable().as_str())],
+                ),
             ),
         },
         Message::FileHistoryRollbackDone(_project_id, abs_path, result) => match result {
@@ -255,7 +263,12 @@ pub fn update(
             Err(e) => ws_state.outbox.push(
                 LOG,
                 toast::Level::Error,
-                crate::extensions::toast::literal(format!("还原文件失败: {e}")),
+                crate::i18n::panel_keyed_args(
+                    FILES_OWNER,
+                    "toast.rollback_failed",
+                    "Restore file failed: {e}",
+                    &[("e", e.as_str())],
+                ),
             ),
         },
         Message::DeleteRequest(path, is_dir) => {
@@ -331,10 +344,15 @@ pub fn update(
                             ws_state.outbox.push(
                                 LOG,
                                 crate::extensions::toast::Level::Error,
-                                crate::extensions::toast::literal(format!(
-                                    "删除 {} 失败: {e}",
-                                    path.display()
-                                )),
+                                crate::i18n::panel_keyed_args(
+                                    FILES_OWNER,
+                                    "toast.delete_failed",
+                                    "Delete {name} failed: {e}",
+                                    &[
+                                        ("name", path.display().to_string().as_str()),
+                                        ("e", e.as_str()),
+                                    ],
+                                ),
                             );
                         }
                     }
@@ -353,7 +371,12 @@ pub fn update(
             Err(e) => ws_state.outbox.push(
                 LOG,
                 toast::Level::Error,
-                crate::extensions::toast::literal(format!("文件操作失败: {e}")),
+                crate::i18n::panel_keyed_args(
+                    FILES_OWNER,
+                    "toast.op_failed",
+                    "File operation failed: {e}",
+                    &[("e", e.as_str())],
+                ),
             ),
         },
         Message::NewFile(parent) => {
@@ -549,10 +572,12 @@ pub fn update(
                 ws_state.outbox.push(
                     LOG,
                     toast::Level::Warning,
-                    crate::extensions::toast::literal(format!(
-                        "{} 已在项目内,不支持用拖拽移动项目内文件",
-                        bad.display()
-                    )),
+                    crate::i18n::panel_keyed_args(
+                        FILES_OWNER,
+                        "toast.drop_in_project",
+                        "{name} is already in the project; dragging to move files inside the project is not supported",
+                        &[("name", bad.display().to_string().as_str())],
+                    ),
                 );
                 return;
             }
@@ -596,7 +621,12 @@ pub fn update(
             Err(e) => ws_state.outbox.push(
                 LOG,
                 toast::Level::Error,
-                crate::extensions::toast::literal(format!("拖拽移动失败: {e}")),
+                crate::i18n::panel_keyed_args(
+                    FILES_OWNER,
+                    "toast.drop_failed",
+                    "Drag-move failed: {e}",
+                    &[("e", e.as_str())],
+                ),
             ),
         },
         Message::MoveNameInput(s) => {
@@ -635,7 +665,11 @@ pub fn update(
             let dir_text = pending.dir_draft.trim().to_string();
             // 只有单文件移动才校验"新名称"字段(多文件移动不改名,忽略它)。
             if single && (name.is_empty() || !crate::project::is_single_path_component(&name)) {
-                ws_state.move_error = Some("名字不能为空或包含路径分隔符".to_string());
+                ws_state.move_error = Some(crate::i18n::panel_keyed(
+                    FILES_OWNER,
+                    "move.error.name",
+                    "Name cannot be empty or contain a path separator",
+                ));
                 ws_state.pending_move = Some(PendingMove {
                     name_draft: name,
                     ..pending
@@ -644,7 +678,12 @@ pub fn update(
             }
             let target_dir = PathBuf::from(&dir_text);
             if !target_dir.is_dir() {
-                ws_state.move_error = Some(format!("{} 不是有效目录", target_dir.display()));
+                ws_state.move_error = Some(crate::i18n::panel_keyed_args(
+                    FILES_OWNER,
+                    "move.error.dir",
+                    "{path} is not a valid directory",
+                    &[("path", target_dir.display().to_string().as_str())],
+                ));
                 ws_state.pending_move = Some(PendingMove {
                     dir_draft: dir_text,
                     ..pending
@@ -946,21 +985,21 @@ mod send_payload_tests {
     use std::path::Path;
 
     #[test]
-    fn relative_path_and_text_for_file_and_dir() {
+    fn relative_path_for_file_and_dir() {
         let root = Path::new("/proj");
-        let (rel, text) = send_payload(root, Path::new("/proj/src/main.rs"), false);
+        let (rel, is_dir) = send_payload(root, Path::new("/proj/src/main.rs"), false);
         assert_eq!(rel, "src/main.rs");
-        assert_eq!(text, "请将 src/main.rs 文件纳入你的工作上下文。");
-        let (rel, text) = send_payload(root, Path::new("/proj/research"), true);
+        assert!(!is_dir);
+        let (rel, is_dir) = send_payload(root, Path::new("/proj/research"), true);
         assert_eq!(rel, "research", "落库用的相对路径不带尾部 /");
-        assert_eq!(text, "请将 research/ 目录纳入你的工作上下文。");
+        assert!(is_dir);
     }
 
     #[test]
     fn keeps_spaces_and_unicode_verbatim() {
         let root = Path::new("/proj");
-        let (rel, text) = send_payload(root, Path::new("/proj/我的 报告/draft v2.md"), false);
+        let (rel, is_dir) = send_payload(root, Path::new("/proj/我的 报告/draft v2.md"), false);
         assert_eq!(rel, "我的 报告/draft v2.md");
-        assert_eq!(text, "请将 我的 报告/draft v2.md 文件纳入你的工作上下文。");
+        assert!(!is_dir);
     }
 }

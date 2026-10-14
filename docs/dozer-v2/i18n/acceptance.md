@@ -450,8 +450,34 @@ python3 scripts/i18n/build_inventory.py
 
 ### 残留
 
-- Task 10 其余面板（files/database/project/group_chat）按面板逐个提交。
+- Task 10 其余面板（database/project/group_chat）按面板逐个提交。
 - `dozer.host`/`dozer.agent` 的 Task 11 部分随 Task 11 迁移。
+- 双语运行期视觉核对随 Task 13 执行。
+
+## Task 10 验收（files 面板，按面板拆分提交）
+
+### 交付内容
+
+- 资源：`crates/dozer-app/locales/panels/files/{en,zh-CN}.json`（owner `dozer.files`；`head`/`search`/`dotfiles`/`drag_ghost`/`git.*`/`agent.ref_*`/`menu.*`/`kind.*`/`confirm.delete.*`/`move.*`/`edit.error.*`/`toast.*`）。
+- `extensions/files/mod.rs`：`FILES_OWNER` + 本地 `t()`/`t_args()`。
+- `extensions/files/view.rs`：`view`/`git_footer_bar`/`branch_picker_popup`/`context_menu_spec`/`context_menu_items`/`context_menu_popup`/`preview_selection_context_menu_spec`/`preview_selection_context_menu_items`/`preview_selection_context_menu_popup`/`tab_context_menu_spec`/`tab_context_menu_items`/`tab_context_menu_popup`/`delete_confirm_spec`/`files_move_card` 全穿 `locale`；`agent_context_reference_text`/`selection_reference_text` 增 `locale`；`move_error` 经 `crate::i18n::render_localized`。
+- `extensions/files/tree.rs`：`tree_drag_ghost` 多选文案 keyed（`drag_ghost.multi`）。
+- `extensions/files/state.rs`：`move_error` 由 `Option<String>` 改 `Option<dozer_model::LocalizedText>`（`set_move_error` 包 `LocalizedText::literal(FILES_OWNER, ..)`；accessor 返回 fallback）；`submit_tree_edit` 两条行内校验 Toast 改 keyed（`edit.error.invalid_name`/`edit.error.exists`）；`Message::RequestSendToAgentTerminal` 由携带成品文本改为 `{ is_dir, relative }`，模板由内核按 locale 拼。
+- `extensions/files/update.rs`：6 条 Toast 与 2 条 `move_error` 改 `panel_keyed`/`panel_keyed_args`；`send_payload` 返回 `(String, bool)`；`update` 增 `locale` 形参（加 `#[allow(clippy::too_many_arguments)]`，与 `database/update.rs` 同款）。
+- `app/{view,update}.rs`：全部 files 视图/菜单/确认/移动卡入口与 `files::update` 传 `app.locale.active_locale()`；`RequestSendToAgentTerminal` 处理改按 locale 拼模板；`app/update.rs` 行号迁移致 `usage_probe/host.rs` 引用 5426→5437。
+- `platform/{files_move_overlay,confirm_overlay}.rs`：`files_move_card`/`delete_confirm_spec` 传 `locale`。
+- `scripts/i18n/scan_sources.py`：`is_test_context` 改逐项语义（`#[cfg(test)]` 只标记所装饰项；module → 整个模块 brace 匹配；fn/impl/const → 该项），新增 `_skip_ws_and_comments`/`_item_span_end`，修 `files/state.rs` 中 `#[cfg(test)]` 方法之后再出现的生产串被误判的边界 bug（`dozer.files` 62→65）。
+
+### 验证命令与结果
+
+- `cargo build -p dozer-app`：通过。
+- `cargo test -p dozer-app`：**2001 passed / 0 failed**。
+- `cargo fmt --all -- --check`、`cargo clippy -p dozer-app --all-targets`（files 路径无新告警）、`python3 scripts/i18n/check_resources.py`（10 个 owner 目录）、`bash scripts/check-log-scope.sh`、`python3 scripts/audit/check_panel_boundary.py`：全绿。
+- `python3 scripts/i18n/build_inventory.py`：`counts: {"excluded": 3095, "migrated": 0, "unresolved": 362}`；`unresolved by task: {"10": 240, "11": 122}`；`dozer.files` **0 条**。
+
+### 残留
+
+- Task 10 其余面板（database/project/group_chat）按面板逐个提交。
 - 双语运行期视觉核对随 Task 13 执行。
 
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）

@@ -14,6 +14,21 @@ pub(crate) use tree::*;
 pub(crate) use update::*;
 pub(crate) use view::*;
 
+/// 本面板 i18n owner(`crate::i18n::PANEL_OWNERS` 之一;资源在
+/// `locales/panels/files/`)。文件树右键菜单/确认框/底栏等文案都归它。
+pub(crate) const FILES_OWNER: &str = "dozer.files";
+
+/// 取一条本面板文案(见 `crate::i18n::panel_text`)。`fallback` 必须是英文,
+/// 且与 `locales/panels/files/en.json` 一致。
+pub(crate) fn t(key: &str, fallback: &str, locale: &str) -> String {
+    crate::i18n::panel_text(FILES_OWNER, key, fallback, locale)
+}
+
+/// 同上,带 `{name}` 占位参数。
+pub(crate) fn t_args(key: &str, fallback: &str, locale: &str, args: &[(&str, &str)]) -> String {
+    crate::i18n::panel_text_args(FILES_OWNER, key, fallback, locale, args)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,6 +271,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         assert_eq!(ws_state.tree_search, "main");
         assert!(ws_state.search_query.is_empty());
@@ -271,6 +287,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         assert_eq!(ws_state.search_query, "main");
 
@@ -321,6 +338,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         assert!(ws_state.tree_selected.contains(&sub));
         assert!(
@@ -357,6 +375,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         assert!(ws_state.tree_selected.contains(&other));
         assert!(
@@ -442,6 +461,7 @@ mod tests {
             |_| panic!("单击不该 emit 任何消息"),
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         assert!(
             ws_state
@@ -480,6 +500,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         assert!(
@@ -566,6 +587,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         // 已展开的目录不该被再 toggle 一次(那会变成收起)。
@@ -604,6 +626,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         assert_eq!(
@@ -643,6 +666,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         assert_eq!(
@@ -677,6 +701,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         assert_eq!(
@@ -709,6 +734,7 @@ mod tests {
             |_| panic!("no target armed, TreeDragEnd 不该 emit 任何消息"),
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         assert!(!ws_state.is_dragging_tree_item());
@@ -743,6 +769,7 @@ mod tests {
             |_| panic!("弹确认框不该 emit 任何消息"),
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         assert!(source.exists());
@@ -781,6 +808,7 @@ mod tests {
             |_| panic!("拒绝不该 emit 任何消息"),
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         assert!(ws_state.pending_move.is_none());
@@ -788,7 +816,7 @@ mod tests {
         let toasts = ws_state.take_outbox();
         assert_eq!(toasts.len(), 1);
         assert!(
-            toasts[0].text_stable().contains("已在项目内"),
+            toasts[0].text_stable().contains("already in the project"),
             "{}",
             toasts[0].text_stable()
         );
@@ -819,6 +847,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         update(
@@ -834,6 +863,7 @@ mod tests {
             |_| panic!("弹确认框不该 emit 任何消息"),
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         assert!(!ws_state.is_dragging_tree_item());
@@ -882,6 +912,7 @@ mod tests {
             },
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         assert!(ws_state.pending_move.is_none());
         let done_msg = rx.await.unwrap();
@@ -894,6 +925,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         assert!(!file.exists());
@@ -934,6 +966,7 @@ mod tests {
             },
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         let done_msg = rx.await.unwrap();
         update(
@@ -945,6 +978,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         assert!(!file.exists());
@@ -978,6 +1012,7 @@ mod tests {
             |_| panic!("校验失败不该 emit 任何消息"),
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         assert!(file.exists());
@@ -1010,6 +1045,7 @@ mod tests {
             |_| panic!("校验失败不该 emit 任何消息"),
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         assert!(file.exists());
@@ -1045,6 +1081,7 @@ mod tests {
             |_| panic!("路径未变不该 emit 任何消息"),
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         assert!(file.exists());
@@ -1079,6 +1116,7 @@ mod tests {
             |_| panic!("移进自己子树不该 emit 任何消息"),
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         assert!(src_dir.exists());
@@ -1111,6 +1149,7 @@ mod tests {
             |_| panic!("取消不该 emit 任何消息"),
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         assert!(ws_state.pending_move.is_none());
@@ -1143,6 +1182,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         assert_eq!(
@@ -1176,6 +1216,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         assert_eq!(
             ws_state.tree_drag.as_ref().map(|d| &d.phase),
@@ -1197,6 +1238,7 @@ mod tests {
             |_| panic!("confirmed=false,TreeDragEnd 不该 emit 任何消息"),
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         assert!(!ws_state.is_dragging_tree_item());
@@ -1231,6 +1273,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         assert!(ws_state.tree_selected.contains(&sub));
@@ -1266,6 +1309,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
 
         assert!(
@@ -1321,6 +1365,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         update(
             &mut ws_state,
@@ -1334,6 +1379,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         assert!(app_state.context_menu_is_some());
         assert!(ws_state.tree_selected.contains(&target));
@@ -1362,6 +1408,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         assert!(!app_state.context_menu_is_some());
     }
@@ -1381,6 +1428,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         assert_eq!(
             ws_state.tree_clipboard,
@@ -1408,12 +1456,13 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         let toasts = ws_state.take_outbox();
         assert_eq!(toasts.len(), 1);
         assert_eq!(
             crate::i18n::host_render_stable(&toasts[0].text),
-            "粘贴失败: boom"
+            "Paste failed: boom"
         );
         assert_eq!(toasts[0].level, crate::extensions::toast::Level::Error);
         assert_eq!(toasts[0].scope.name, "files");
@@ -1435,12 +1484,13 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         let toasts = ws_state.take_outbox();
         assert_eq!(toasts.len(), 1);
         assert_eq!(
             crate::i18n::host_render_stable(&toasts[0].text),
-            "拖拽移动失败: disk full"
+            "Drag-move failed: disk full"
         );
         assert!(ws_state.move_error.is_none());
     }
@@ -1464,12 +1514,13 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         let toasts = ws_state.take_outbox();
         assert_eq!(toasts.len(), 1);
         assert_eq!(
             toasts[0].text_stable(),
-            "还原文件失败: 该文件没有可回滚的历史版本"
+            "Restore file failed: 该文件没有可回滚的历史版本"
         );
     }
 
@@ -1478,7 +1529,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ws_state = ws_with_tree(dir.path().to_path_buf());
         let mut app_state = AppState::default();
-        ws_state.move_error = Some("上次的校验错误".to_string());
+        ws_state.move_error = Some(dozer_model::LocalizedText::literal(
+            FILES_OWNER,
+            "last validation error",
+        ));
         let handle = tokio::runtime::Handle::current();
         update(
             &mut ws_state,
@@ -1489,6 +1543,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         assert!(
             ws_state.move_error.is_none(),
@@ -1515,6 +1570,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         assert!(ws_state.take_outbox().is_empty(), "粘贴成功不该有提示");
     }
@@ -1533,6 +1589,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         assert!(ws_state.tree_delete_confirm_is_some());
         update(
@@ -1544,6 +1601,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         assert!(!ws_state.tree_delete_confirm_is_some());
     }
@@ -1551,10 +1609,10 @@ mod tests {
     #[test]
     fn delete_confirm_spec_reflects_pending_target() {
         let mut ws_state = ws_with_tree(std::env::temp_dir());
-        assert!(delete_confirm_spec(&ws_state).is_none());
+        assert!(delete_confirm_spec(&ws_state, "en").is_none());
         ws_state.tree_delete_confirm = Some(vec![(PathBuf::from("/tmp/报告.pdf"), false)]);
-        let spec = delete_confirm_spec(&ws_state).expect("spec present");
-        assert_eq!(spec.title, "删除文件 \"报告.pdf\"?");
+        let spec = delete_confirm_spec(&ws_state, "en").expect("spec present");
+        assert_eq!(spec.title, "Delete file \"报告.pdf\"?");
         assert!(matches!(spec.confirm_msg, Message::DeleteConfirm));
         assert!(matches!(spec.cancel_msg, Message::DeleteCancel));
     }
@@ -1564,14 +1622,14 @@ mod tests {
     #[test]
     fn multi_delete_confirm_spec_lists_every_target() {
         let mut ws_state = ws_with_tree(std::env::temp_dir());
-        assert!(delete_confirm_spec(&ws_state).is_none());
+        assert!(delete_confirm_spec(&ws_state, "en").is_none());
         ws_state.tree_delete_confirm = Some(vec![
             (PathBuf::from("/tmp/a.rs"), false),
             (PathBuf::from("/tmp/b.rs"), false),
             (PathBuf::from("/tmp/sub"), true),
         ]);
-        let spec = delete_confirm_spec(&ws_state).expect("spec present");
-        assert_eq!(spec.title, "删除 3 个文件/文件夹？");
+        let spec = delete_confirm_spec(&ws_state, "en").expect("spec present");
+        assert_eq!(spec.title, "Delete 3 files/folders?");
         // 每个待删项都应以 `• <路径>` 形式出现在说明里。
         assert!(spec.description.contains("• /tmp/a.rs"));
         assert!(spec.description.contains("• /tmp/b.rs"));
@@ -1600,6 +1658,7 @@ mod tests {
             |_| panic!("删确认不该 emit 任何消息"),
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         let targets = ws_state.tree_delete_confirm.expect("确认框应弹出");
         assert_eq!(targets.len(), 3);
@@ -1632,6 +1691,7 @@ mod tests {
             |_| panic!("单击不该 emit 任何消息"),
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         // `target` 被 toggle 进选中集,`other` 不受影响——不连续多选。
         assert!(ws_state.tree_selected.contains(&target));
@@ -1681,10 +1741,11 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         let toasts = ws_state.take_outbox();
         assert_eq!(toasts.len(), 1);
-        assert_eq!(toasts[0].text_stable(), "文件操作失败: nope");
+        assert_eq!(toasts[0].text_stable(), "File operation failed: nope");
         update(
             &mut ws_state,
             &mut app_state,
@@ -1698,6 +1759,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         assert!(ws_state.take_outbox().is_empty(), "OpDone(Ok) 不该有提示");
     }
@@ -1726,6 +1788,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         assert!(!app_state.context_menu_is_some());
         assert!(ws_state.tree_edit.is_some());
@@ -1748,6 +1811,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         let edit = ws_state.tree_edit.as_ref().unwrap();
         assert_eq!(edit.buffer, "old.txt");
@@ -1774,6 +1838,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         assert_eq!(ws_state.tree_edit.as_ref().unwrap().buffer, "ab");
         // iced text_input 每次 on_input 给全量当前字符串,不是逐字符追加。
@@ -1786,6 +1851,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         assert_eq!(ws_state.tree_edit.as_ref().unwrap().buffer, "a");
     }
@@ -1832,6 +1898,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         // 提交即取走编辑态(退出行内编辑框)。
         assert!(ws_state.tree_edit.is_none());
@@ -1862,6 +1929,7 @@ mod tests {
             |_| panic!("空名字不该发起任何异步操作"),
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         // 现有 `submit_tree_edit` 先 `take()` 再判断空名字,空名字直接 `return`
         // 时 `tree_edit` 已经被取走——提交空名字会关闭行内编辑框(等价于取消),
@@ -1889,10 +1957,14 @@ mod tests {
             |_| panic!("名字非法时不该发起任何异步操作"),
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         let toasts = ws_state.take_outbox();
         assert_eq!(toasts.len(), 1);
-        assert_eq!(toasts[0].text_stable(), "名字不能包含路径分隔符");
+        assert_eq!(
+            toasts[0].text_stable(),
+            "Name cannot contain a path separator"
+        );
         assert!(
             ws_state.move_error.is_none(),
             "行内校验不写移动对话框的错误位"
@@ -1921,11 +1993,12 @@ mod tests {
             |_| panic!("已存在同名项时不该发起任何异步操作"),
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         let toasts = ws_state.take_outbox();
         assert_eq!(toasts.len(), 1);
         assert!(
-            toasts[0].text_stable().contains("已存在同名项"),
+            toasts[0].text_stable().contains("already exists"),
             "{}",
             toasts[0].text_stable()
         );
@@ -1955,6 +2028,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
         assert_eq!(ws_state.git_statuses.len(), 1);
     }
@@ -1974,21 +2048,25 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
     }
 
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_hides_delete_rename_for_root() {
-        let items = context_menu_items(FileContextMenuParams {
-            target: Path::new("/proj"),
-            is_dir: true,
-            is_root: true,
-            has_clipboard: false,
-            is_git_repo: true,
-            agent_terminal_visible: true,
-            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
-        });
+        let items = context_menu_items(
+            FileContextMenuParams {
+                target: Path::new("/proj"),
+                is_dir: true,
+                is_root: true,
+                has_clipboard: false,
+                is_git_repo: true,
+                agent_terminal_visible: true,
+                external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+            },
+            "en",
+        );
         let has_delete = items.iter().any(|i| {
             matches!(
                 i,
@@ -2004,15 +2082,18 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_shows_delete_rename_for_non_root() {
-        let items = context_menu_items(FileContextMenuParams {
-            target: Path::new("/proj/src"),
-            is_dir: true,
-            is_root: false,
-            has_clipboard: false,
-            is_git_repo: true,
-            agent_terminal_visible: true,
-            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
-        });
+        let items = context_menu_items(
+            FileContextMenuParams {
+                target: Path::new("/proj/src"),
+                is_dir: true,
+                is_root: false,
+                has_clipboard: false,
+                is_git_repo: true,
+                agent_terminal_visible: true,
+                external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+            },
+            "en",
+        );
         let has_delete = items.iter().any(|i| {
             matches!(
                 i,
@@ -2028,15 +2109,18 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_paste_locked_when_clipboard_empty() {
-        let items = context_menu_items(FileContextMenuParams {
-            target: Path::new("/proj/src"),
-            is_dir: true,
-            is_root: false,
-            has_clipboard: false,
-            is_git_repo: true,
-            agent_terminal_visible: true,
-            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
-        });
+        let items = context_menu_items(
+            FileContextMenuParams {
+                target: Path::new("/proj/src"),
+                is_dir: true,
+                is_root: false,
+                has_clipboard: false,
+                is_git_repo: true,
+                agent_terminal_visible: true,
+                external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+            },
+            "en",
+        );
         let paste = items.iter().find_map(|i| match i {
             crate::chrome::native_menu::Item::Entry {
                 msg: Message::Paste(_),
@@ -2051,15 +2135,18 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_paste_enabled_when_clipboard_has_content() {
-        let items = context_menu_items(FileContextMenuParams {
-            target: Path::new("/proj/src"),
-            is_dir: true,
-            is_root: false,
-            has_clipboard: true,
-            is_git_repo: true,
-            agent_terminal_visible: true,
-            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
-        });
+        let items = context_menu_items(
+            FileContextMenuParams {
+                target: Path::new("/proj/src"),
+                is_dir: true,
+                is_root: false,
+                has_clipboard: true,
+                is_git_repo: true,
+                agent_terminal_visible: true,
+                external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+            },
+            "en",
+        );
         let paste = items.iter().find_map(|i| match i {
             crate::chrome::native_menu::Item::Entry {
                 msg: Message::Paste(_),
@@ -2074,15 +2161,18 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_file_target_has_no_new_file_or_paste() {
-        let items = context_menu_items(FileContextMenuParams {
-            target: Path::new("/proj/src/main.rs"),
-            is_dir: false,
-            is_root: false,
-            has_clipboard: false,
-            is_git_repo: true,
-            agent_terminal_visible: true,
-            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
-        });
+        let items = context_menu_items(
+            FileContextMenuParams {
+                target: Path::new("/proj/src/main.rs"),
+                is_dir: false,
+                is_root: false,
+                has_clipboard: false,
+                is_git_repo: true,
+                agent_terminal_visible: true,
+                external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+            },
+            "en",
+        );
         let has_new_file = items.iter().any(|i| {
             matches!(
                 i,
@@ -2107,15 +2197,18 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_shows_file_history_for_git_repo_file() {
-        let items = context_menu_items(FileContextMenuParams {
-            target: Path::new("/proj/src/main.rs"),
-            is_dir: false,
-            is_root: false,
-            has_clipboard: false,
-            is_git_repo: true,
-            agent_terminal_visible: true,
-            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
-        });
+        let items = context_menu_items(
+            FileContextMenuParams {
+                target: Path::new("/proj/src/main.rs"),
+                is_dir: false,
+                is_root: false,
+                has_clipboard: false,
+                is_git_repo: true,
+                agent_terminal_visible: true,
+                external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+            },
+            "en",
+        );
         let has_history = items.iter().any(|i| {
             matches!(
                 i,
@@ -2131,15 +2224,18 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_hides_file_history_for_non_git_repo() {
-        let items = context_menu_items(FileContextMenuParams {
-            target: Path::new("/proj/src/main.rs"),
-            is_dir: false,
-            is_root: false,
-            has_clipboard: false,
-            is_git_repo: false,
-            agent_terminal_visible: true,
-            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
-        });
+        let items = context_menu_items(
+            FileContextMenuParams {
+                target: Path::new("/proj/src/main.rs"),
+                is_dir: false,
+                is_root: false,
+                has_clipboard: false,
+                is_git_repo: false,
+                agent_terminal_visible: true,
+                external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+            },
+            "en",
+        );
         let has_history = items.iter().any(|i| {
             matches!(
                 i,
@@ -2155,15 +2251,18 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_hides_file_history_for_directory() {
-        let items = context_menu_items(FileContextMenuParams {
-            target: Path::new("/proj/src"),
-            is_dir: true,
-            is_root: false,
-            has_clipboard: false,
-            is_git_repo: true,
-            agent_terminal_visible: true,
-            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
-        });
+        let items = context_menu_items(
+            FileContextMenuParams {
+                target: Path::new("/proj/src"),
+                is_dir: true,
+                is_root: false,
+                has_clipboard: false,
+                is_git_repo: true,
+                agent_terminal_visible: true,
+                external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+            },
+            "en",
+        );
         let has_history = items.iter().any(|i| {
             matches!(
                 i,
@@ -2179,15 +2278,18 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_dir_first_item_is_search_not_separator() {
-        let items = context_menu_items(FileContextMenuParams {
-            target: Path::new("/proj/src"),
-            is_dir: true,
-            is_root: false,
-            has_clipboard: false,
-            is_git_repo: true,
-            agent_terminal_visible: true,
-            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
-        });
+        let items = context_menu_items(
+            FileContextMenuParams {
+                target: Path::new("/proj/src"),
+                is_dir: true,
+                is_root: false,
+                has_clipboard: false,
+                is_git_repo: true,
+                agent_terminal_visible: true,
+                external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+            },
+            "en",
+        );
         // 文件夹菜单:顶部组(添加到 Agent 上下文/搜索/新建)紧贴,组前无分隔线
         // ——第一项应是「添加到 Agent 上下文」之后的「搜索」。
         let first_after_agent = items.iter().find(|i| {
@@ -2214,15 +2316,18 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_file_has_no_search_or_paste() {
-        let items = context_menu_items(FileContextMenuParams {
-            target: Path::new("/proj/src/main.rs"),
-            is_dir: false,
-            is_root: false,
-            has_clipboard: true,
-            is_git_repo: true,
-            agent_terminal_visible: true,
-            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
-        });
+        let items = context_menu_items(
+            FileContextMenuParams {
+                target: Path::new("/proj/src/main.rs"),
+                is_dir: false,
+                is_root: false,
+                has_clipboard: true,
+                is_git_repo: true,
+                agent_terminal_visible: true,
+                external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+            },
+            "en",
+        );
         let has_search = items.iter().any(|i| {
             matches!(
                 i,
@@ -2247,33 +2352,42 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_rollback_for_git_file_only() {
-        let git_file = context_menu_items(FileContextMenuParams {
-            target: Path::new("/proj/src/main.rs"),
-            is_dir: false,
-            is_root: false,
-            has_clipboard: false,
-            is_git_repo: true,
-            agent_terminal_visible: true,
-            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
-        });
-        let non_git_file = context_menu_items(FileContextMenuParams {
-            target: Path::new("/proj/src/main.rs"),
-            is_dir: false,
-            is_root: false,
-            has_clipboard: false,
-            is_git_repo: false,
-            agent_terminal_visible: true,
-            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
-        });
-        let dir = context_menu_items(FileContextMenuParams {
-            target: Path::new("/proj/src"),
-            is_dir: true,
-            is_root: false,
-            has_clipboard: false,
-            is_git_repo: true,
-            agent_terminal_visible: true,
-            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
-        });
+        let git_file = context_menu_items(
+            FileContextMenuParams {
+                target: Path::new("/proj/src/main.rs"),
+                is_dir: false,
+                is_root: false,
+                has_clipboard: false,
+                is_git_repo: true,
+                agent_terminal_visible: true,
+                external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+            },
+            "en",
+        );
+        let non_git_file = context_menu_items(
+            FileContextMenuParams {
+                target: Path::new("/proj/src/main.rs"),
+                is_dir: false,
+                is_root: false,
+                has_clipboard: false,
+                is_git_repo: false,
+                agent_terminal_visible: true,
+                external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+            },
+            "en",
+        );
+        let dir = context_menu_items(
+            FileContextMenuParams {
+                target: Path::new("/proj/src"),
+                is_dir: true,
+                is_root: false,
+                has_clipboard: false,
+                is_git_repo: true,
+                agent_terminal_visible: true,
+                external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+            },
+            "en",
+        );
         let rollback = |items: &[crate::chrome::native_menu::Item<Message>]| {
             items.iter().any(|i| {
                 matches!(
@@ -2295,15 +2409,18 @@ mod tests {
     fn context_menu_items_file_starts_with_agent_item_not_separator() {
         // 非 git 文件顶部组只剩「添加到 Agent 上下文」(无回滚/历史),组前
         // 分隔线不应悬空——第一项应是该条目,而非分隔线。
-        let items = context_menu_items(FileContextMenuParams {
-            target: Path::new("/proj/src/main.rs"),
-            is_dir: false,
-            is_root: false,
-            has_clipboard: false,
-            is_git_repo: false,
-            agent_terminal_visible: true,
-            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
-        });
+        let items = context_menu_items(
+            FileContextMenuParams {
+                target: Path::new("/proj/src/main.rs"),
+                is_dir: false,
+                is_root: false,
+                has_clipboard: false,
+                is_git_repo: false,
+                agent_terminal_visible: true,
+                external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+            },
+            "en",
+        );
         assert!(
             matches!(
                 items.first(),
@@ -2319,15 +2436,18 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_disables_send_to_context_without_terminal() {
-        let items = context_menu_items(FileContextMenuParams {
-            target: Path::new("/proj/src"),
-            is_dir: false,
-            is_root: false,
-            has_clipboard: false,
-            is_git_repo: false,
-            agent_terminal_visible: false,
-            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
-        });
+        let items = context_menu_items(
+            FileContextMenuParams {
+                target: Path::new("/proj/src"),
+                is_dir: false,
+                is_root: false,
+                has_clipboard: false,
+                is_git_repo: false,
+                agent_terminal_visible: false,
+                external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+            },
+            "en",
+        );
         let send = items.iter().find_map(|i| match i {
             crate::chrome::native_menu::Item::Entry {
                 msg: Message::SendToAgentContext(..),
@@ -2342,15 +2462,18 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn context_menu_items_enables_send_to_context_with_terminal() {
-        let items = context_menu_items(FileContextMenuParams {
-            target: Path::new("/proj/src"),
-            is_dir: false,
-            is_root: false,
-            has_clipboard: false,
-            is_git_repo: false,
-            agent_terminal_visible: true,
-            external_apps: &crate::external_apps::ExternalAppsConfig::default(),
-        });
+        let items = context_menu_items(
+            FileContextMenuParams {
+                target: Path::new("/proj/src"),
+                is_dir: false,
+                is_root: false,
+                has_clipboard: false,
+                is_git_repo: false,
+                agent_terminal_visible: true,
+                external_apps: &crate::external_apps::ExternalAppsConfig::default(),
+            },
+            "en",
+        );
         let send = items.iter().find_map(|i| match i {
             crate::chrome::native_menu::Item::Entry {
                 msg: Message::SendToAgentContext(..),
@@ -2377,6 +2500,7 @@ mod tests {
             |_| {},
             &crate::external_apps::ExternalAppsConfig::default(),
             true,
+            "en",
         );
     }
 

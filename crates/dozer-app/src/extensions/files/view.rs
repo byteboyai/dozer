@@ -24,6 +24,7 @@ pub fn view<'a>(
     search_hover_t: f32,
     dotfiles_hover_t: f32,
     branch_hover_t: f32,
+    locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::project_pane();
     let mut header = column![].spacing(region.gap).width(Length::Fill);
@@ -43,7 +44,7 @@ pub fn view<'a>(
     let search_active = ws_state.search_focused() || !ws_state.search_query.is_empty();
     let box_len = byteui::theme::icon_size::row() + 12.0;
     let search_box = byteui::form::search_box::view(
-        "搜索目录…",
+        &t("search.placeholder", "Search directory…", locale),
         &ws_state.tree_search,
         Some(search_field_id()),
         search_active,
@@ -84,7 +85,7 @@ pub fn view<'a>(
         true,
         Message::ToggleDotfiles,
         |hovered| Message::ToolbarHover(FilesToolbarTarget::Dotfiles, hovered),
-        "切换点文件",
+        t("dotfiles.toggle", "Toggle dotfiles", locale),
     );
     header = header.push(
         row![search_box, dotfiles_button]
@@ -508,7 +509,10 @@ pub fn view<'a>(
 
     let body = container(
         column![
-            crate::chrome::homespace::home_panel_head(icons::IconKind::FolderTree, "文件"),
+            crate::chrome::homespace::home_panel_head(
+                icons::IconKind::FolderTree,
+                t("head.title", "Files", locale),
+            ),
             header,
             Scrollable::new(tree_col)
                 .width(Length::Fill)
@@ -518,7 +522,7 @@ pub fn view<'a>(
                 ))
                 .on_scroll(|viewport| { Message::TreeScroll(viewport.absolute_offset().y) })
                 .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
-            git_footer_bar(ws_state, branch_hover_t),
+            git_footer_bar(ws_state, branch_hover_t, locale),
         ]
         .spacing(region.gap),
     )
@@ -585,15 +589,16 @@ type GitFooterTriple<'a> = (
 /// `folder-minus 未受Git保护 〔新建Git仓库〕`;仓库信息尚未加载显示中性
 /// 占位。最左图标与文字之间、右缘切换/新建按钮始终可见;整栏无底色、
 /// 顶部一条 BORDER 分隔线,与上方滚动树区隔。
-fn git_footer_bar(
-    ws_state: &WorkspaceState,
+fn git_footer_bar<'a>(
+    ws_state: &'a WorkspaceState,
     branch_hover_t: f32,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    locale: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let box_len = byteui::theme::icon_size::row() + 12.0;
     let (icon, label, action): GitFooterTriple<'_> = if !ws_state.git_loaded {
         (
             icons::IconKind::GitBranch,
-            text("加载仓库信息…")
+            text(t("git.loading", "Loading repository info…", locale))
                 .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().cream)
                 .into(),
@@ -612,7 +617,7 @@ fn git_footer_bar(
         let branch_name = ws_state
             .current_branch
             .clone()
-            .unwrap_or_else(|| "无分支".to_string());
+            .unwrap_or_else(|| t("git.no_branch", "No branch", locale));
         let label_color = if let Some(st) = dirty_state {
             tree_state_color(st)
         } else {
@@ -633,7 +638,7 @@ fn git_footer_bar(
             true,
             Message::BranchPickerOpen,
             |hovered| Message::ToolbarHover(FilesToolbarTarget::BranchSwitch, hovered),
-            "切换分支",
+            t("git.switch_branch", "Switch branch", locale),
         );
         (
             icons::IconKind::FolderGit2,
@@ -652,7 +657,7 @@ fn git_footer_bar(
                     byteui::theme::icon_size::row(),
                     byteui::theme::color::current().cream
                 ),
-                text("新建Git仓库")
+                text(t("git.init", "Init Git repo", locale))
                     .size(byteui::theme::font::label())
                     .color(byteui::theme::color::current().cream),
             ]
@@ -673,7 +678,7 @@ fn git_footer_bar(
         });
         (
             icons::IconKind::FolderMinus,
-            text("未受Git保护")
+            text(t("git.not_protected", "Not under Git", locale))
                 .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().cream)
                 .into(),
@@ -747,9 +752,10 @@ fn git_footer_bar(
 /// 当前分支带未提交改动(dirty)时,除当前分支外的其余分支全部置灰且
 /// 不可点——dirty 下切分支会被 git 拒绝(checkout 报错),提前禁用避免
 /// 触发错误;同时给当前分支行追加 "(Uncommitted)" 提示。
-pub fn branch_picker_popup(
-    ws_state: &WorkspaceState,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+pub fn branch_picker_popup<'a>(
+    ws_state: &'a WorkspaceState,
+    locale: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     if !ws_state.git_loaded || !ws_state.git_is_repo || !ws_state.branch_picker_open {
         return iced_widget::space::Space::new().into();
     }
@@ -764,7 +770,7 @@ pub fn branch_picker_popup(
         Vec::new();
     if ws_state.git_branches.is_empty() {
         items.push(
-            text("暂无本地分支")
+            text(t("git.no_local_branches", "No local branches", locale))
                 .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim)
                 .into(),
@@ -876,18 +882,33 @@ pub(crate) struct FileContextMenuParams<'a> {
 #[cfg(target_os = "macos")]
 pub fn context_menu_items(
     params: FileContextMenuParams,
+    locale: &str,
 ) -> Vec<crate::chrome::native_menu::Item<Message>> {
-    crate::menu_spec::to_native(context_menu_spec(params))
+    crate::menu_spec::to_native(context_menu_spec(params, locale))
 }
 
 /// 文件树"添加到 Agent 上下文"发送的引用文本——纯路径引用,不展开列举
 /// 目录下的文件(agent 自己有 ls/glob 可以探索)。`relative_path` 不做
 /// 任何转义,原样拼接(路径含空格/中文时也不处理)。
-pub(crate) fn agent_context_reference_text(relative_path: &str, is_dir: bool) -> String {
+pub(crate) fn agent_context_reference_text(
+    relative_path: &str,
+    is_dir: bool,
+    locale: &str,
+) -> String {
     if is_dir {
-        format!("请将 {relative_path}/ 目录纳入你的工作上下文。")
+        t_args(
+            "agent.ref_dir",
+            "Include directory {relative_path}/ in your working context.",
+            locale,
+            &[("relative_path", relative_path)],
+        )
     } else {
-        format!("请将 {relative_path} 文件纳入你的工作上下文。")
+        t_args(
+            "agent.ref_file",
+            "Include file {relative_path} in your working context.",
+            locale,
+            &[("relative_path", relative_path)],
+        )
     }
 }
 
@@ -899,10 +920,20 @@ pub(crate) fn selection_reference_text(
     relative_path: &str,
     range: crate::preview::TextRange,
     selected_text: &str,
+    locale: &str,
 ) -> String {
-    format!(
-        "参考 {relative_path}:{}:{}-{}:{} 这段内容:\n\n{selected_text}",
-        range.start.line, range.start.column, range.end.line, range.end.column
+    t_args(
+        "agent.ref_selection",
+        "Refer to {relative_path}:{sl}:{sc}-{el}:{ec} this content:\n\n{selected_text}",
+        locale,
+        &[
+            ("relative_path", relative_path),
+            ("sl", range.start.line.to_string().as_str()),
+            ("sc", range.start.column.to_string().as_str()),
+            ("el", range.end.line.to_string().as_str()),
+            ("ec", range.end.column.to_string().as_str()),
+            ("selected_text", selected_text),
+        ],
     )
 }
 
@@ -922,7 +953,7 @@ pub(crate) fn selection_reference_text(
 ///   悬空一条线。底部五项按设计纯文字:复制路径/名称三项本就无图标,"用
 ///   外部软件打开"/"从磁盘重新加载" 的 FolderOpen/RefreshCw 图标也在此
 ///   去掉,与顶部带图标的操作项区分开。
-pub(crate) fn context_menu_spec(params: FileContextMenuParams) -> MenuSpec<Message> {
+pub(crate) fn context_menu_spec(params: FileContextMenuParams, locale: &str) -> MenuSpec<Message> {
     let FileContextMenuParams {
         target,
         is_dir,
@@ -946,9 +977,14 @@ pub(crate) fn context_menu_spec(params: FileContextMenuParams) -> MenuSpec<Messa
         external_apps.lookup_for_path(&target).map(str::to_string)
     };
     let open_label = match &open_app_name {
-        _ if is_dir => "在Finder中打开".to_string(),
-        Some(name) => format!("用 {name} 打开"),
-        None => "用外部软件打开".to_string(),
+        _ if is_dir => t("menu.open_in_finder", "Open in Finder", locale),
+        Some(name) => t_args(
+            "menu.open_with_app",
+            "Open with {name}",
+            locale,
+            &[("name", name.as_str())],
+        ),
+        None => t("menu.open_with_external", "Open with external app", locale),
     };
 
     // 顶部操作组:文件夹=搜索/新建;文件=回滚/历史(git 才有)。
@@ -956,7 +992,7 @@ pub(crate) fn context_menu_spec(params: FileContextMenuParams) -> MenuSpec<Messa
     top.push(MenuSpecItem::Entry {
         icon: Some(icons::IconKind::MessageSquare),
         icon_color: None,
-        label: "添加到 Agent 上下文".into(),
+        label: t("menu.add_to_agent_context", "Add to Agent context", locale),
         color: if agent_terminal_visible {
             byteui::theme::color::current().body
         } else {
@@ -968,28 +1004,28 @@ pub(crate) fn context_menu_spec(params: FileContextMenuParams) -> MenuSpec<Messa
     if is_dir {
         top.push(MenuSpecItem::entry(
             Some(icons::IconKind::Search),
-            "搜索",
+            t("menu.search", "Search", locale),
             Message::OpenSearch(target.clone(), is_dir),
         ));
         top.push(MenuSpecItem::entry(
             Some(icons::IconKind::FilePlus),
-            "新建文件",
+            t("menu.new_file", "New file", locale),
             Message::NewFile(target.clone()),
         ));
         top.push(MenuSpecItem::entry(
             Some(icons::IconKind::FolderPlus),
-            "新建文件夹",
+            t("menu.new_folder", "New folder", locale),
             Message::NewFolder(target.clone()),
         ));
     } else if is_git_repo {
         top.push(MenuSpecItem::entry(
             Some(icons::IconKind::Undo2),
-            "回滚",
+            t("menu.rollback", "Roll back", locale),
             Message::FileHistoryRollbackPrevious(target.clone()),
         ));
         top.push(MenuSpecItem::entry(
             Some(icons::IconKind::FileClock),
-            "历史",
+            t("menu.history", "History", locale),
             Message::FileHistoryOpen(target.clone()),
         ));
     }
@@ -999,14 +1035,14 @@ pub(crate) fn context_menu_spec(params: FileContextMenuParams) -> MenuSpec<Messa
     let mut mid: Vec<MenuSpecItem<Message>> = Vec::new();
     mid.push(MenuSpecItem::entry(
         Some(icons::IconKind::Copy),
-        "复制",
+        t("menu.copy", "Copy", locale),
         Message::Copy(target.clone(), is_dir),
     ));
     if is_dir {
         mid.push(MenuSpecItem::Entry {
             icon: Some(icons::IconKind::ClipboardPaste),
             icon_color: None,
-            label: "粘贴".into(),
+            label: t("menu.paste", "Paste", locale),
             color: if has_clipboard {
                 byteui::theme::color::current().body
             } else {
@@ -1019,12 +1055,12 @@ pub(crate) fn context_menu_spec(params: FileContextMenuParams) -> MenuSpec<Messa
     if !is_root {
         mid.push(MenuSpecItem::entry(
             Some(icons::IconKind::Trash),
-            "删除",
+            t("menu.delete", "Delete", locale),
             Message::DeleteRequest(target.clone(), is_dir),
         ));
         mid.push(MenuSpecItem::entry(
             Some(icons::IconKind::Rename),
-            "重命名",
+            t("menu.rename", "Rename", locale),
             Message::RenameStart(target.clone()),
         ));
     }
@@ -1032,24 +1068,24 @@ pub(crate) fn context_menu_spec(params: FileContextMenuParams) -> MenuSpec<Messa
     // 底部工具组:纯文字(无图标)。"复制目录名称"/"复制文件名称"按目标类型
     // 二选一,复制最后一段名字(文件含后缀)。
     let name_label = if is_dir {
-        "复制目录名称"
+        t("menu.copy_dir_name", "Copy folder name", locale)
     } else {
-        "复制文件名称"
+        t("menu.copy_file_name", "Copy file name", locale)
     };
     let bottom: Vec<MenuSpecItem<Message>> = vec![
         MenuSpecItem::entry(
             None,
-            name_label,
+            &name_label,
             Message::CopyPath(target.clone(), PathKind::Name),
         ),
         MenuSpecItem::entry(
             None,
-            "复制相对路径",
+            t("menu.copy_relative_path", "Copy relative path", locale),
             Message::CopyPath(target.clone(), PathKind::Relative),
         ),
         MenuSpecItem::entry(
             None,
-            "复制绝对路径",
+            t("menu.copy_absolute_path", "Copy absolute path", locale),
             Message::CopyPath(target.clone(), PathKind::Absolute),
         ),
         MenuSpecItem::entry(
@@ -1057,7 +1093,11 @@ pub(crate) fn context_menu_spec(params: FileContextMenuParams) -> MenuSpec<Messa
             &open_label,
             Message::OpenWithDefault(target.clone(), open_app_name),
         ),
-        MenuSpecItem::entry(None, "从磁盘重新加载", Message::ReloadFromDisk),
+        MenuSpecItem::entry(
+            None,
+            t("menu.reload_from_disk", "Reload from disk", locale),
+            Message::ReloadFromDisk,
+        ),
     ];
 
     let mut items = Vec::new();
@@ -1080,6 +1120,7 @@ pub fn context_menu_popup<'a>(
     app_state: &'a AppState,
     ws_state: &'a WorkspaceState,
     external_apps: &'a crate::external_apps::ExternalAppsConfig,
+    locale: &str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(menu) = &app_state.context_menu else {
         return column![].into();
@@ -1094,15 +1135,18 @@ pub fn context_menu_popup<'a>(
     let has_clipboard = ws_state.tree_clipboard.is_some();
     // 菜单内容组装收拢到 `context_menu_spec()`(与 native 版共用同一份
     // 条件分支),这里只做 iced 转换。注意宽度保持原值 `Length::Shrink`。
-    let spec = context_menu_spec(FileContextMenuParams {
-        target: &menu.target,
-        is_dir: menu.is_dir,
-        is_root,
-        has_clipboard,
-        is_git_repo: ws_state.git_is_repo,
-        agent_terminal_visible: menu.agent_terminal_visible,
-        external_apps,
-    });
+    let spec = context_menu_spec(
+        FileContextMenuParams {
+            target: &menu.target,
+            is_dir: menu.is_dir,
+            is_root,
+            has_clipboard,
+            is_git_repo: ws_state.git_is_repo,
+            agent_terminal_visible: menu.agent_terminal_visible,
+            external_apps,
+        },
+        locale,
+    );
     let list = crate::menu_spec::to_iced(spec, Length::Shrink);
 
     container(list)
@@ -1123,12 +1167,13 @@ pub fn context_menu_popup<'a>(
 /// ——触发源是 `EditorEvent` 分发而不是文件树右键。
 pub(crate) fn preview_selection_context_menu_spec(
     menu: &crate::app::PreviewSelectionContextMenu,
+    locale: &str,
 ) -> MenuSpec<crate::app::Message> {
     let dim = byteui::theme::color::current().dim;
     vec![MenuSpecItem::Entry {
         icon: Some(icons::IconKind::MessageSquare),
         icon_color: None,
-        label: "发送给 Agent".into(),
+        label: t("menu.send_to_agent", "Send to Agent", locale),
         color: if menu.agent_terminal_visible {
             byteui::theme::color::current().body
         } else {
@@ -1147,20 +1192,22 @@ pub(crate) fn preview_selection_context_menu_spec(
 #[cfg(target_os = "macos")]
 pub fn preview_selection_context_menu_items(
     menu: &crate::app::PreviewSelectionContextMenu,
+    locale: &str,
 ) -> Vec<crate::chrome::native_menu::Item<crate::app::Message>> {
-    crate::menu_spec::to_native(preview_selection_context_menu_spec(menu))
+    crate::menu_spec::to_native(preview_selection_context_menu_spec(menu, locale))
 }
 
 /// 非 mac 的 iced fallback 渲染——恒可调用(内部自己判空),与
 /// `context_menu_popup` 同一约定。mac 上 `preview_context_menu` 恒为
 /// `None`(原生菜单不存状态),此函数在 mac 编译但不被走到。
-pub fn preview_selection_context_menu_popup(
-    preview_context_menu: &Option<crate::app::PreviewSelectionContextMenu>,
-) -> Element<'_, crate::app::Message, iced_widget::Theme, iced_renderer::Renderer> {
+pub fn preview_selection_context_menu_popup<'a>(
+    preview_context_menu: &'a Option<crate::app::PreviewSelectionContextMenu>,
+    locale: &'a str,
+) -> Element<'a, crate::app::Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(menu) = preview_context_menu else {
         return column![].into();
     };
-    let spec = preview_selection_context_menu_spec(menu);
+    let spec = preview_selection_context_menu_spec(menu, locale);
     let list = crate::menu_spec::to_iced(spec, Length::Shrink);
     container(list)
         .width(Length::Fill)
@@ -1187,18 +1234,24 @@ pub(crate) fn tab_context_menu_spec(
     path: &Path,
     is_git_repo: bool,
     external_apps: &crate::external_apps::ExternalAppsConfig,
+    locale: &str,
 ) -> MenuSpec<Message> {
     let target = path.to_path_buf();
     let open_app_name = external_apps.lookup_for_path(&target).map(str::to_string);
     let open_label = match &open_app_name {
-        Some(name) => format!("用 {name} 打开"),
-        None => "用外部软件打开".to_string(),
+        Some(name) => t_args(
+            "menu.open_with_app",
+            "Open with {name}",
+            locale,
+            &[("name", name.as_str())],
+        ),
+        None => t("menu.open_with_external", "Open with external app", locale),
     };
 
     // 顶部第一项恒为"关闭"(circle-x):关掉右键目标对应的那个预览 tab。
     let mut items: Vec<MenuSpecItem<Message>> = vec![MenuSpecItem::entry(
         Some(icons::IconKind::CircleX),
-        "关闭",
+        t("menu.close", "Close", locale),
         Message::TabContextMenuCloseTab(kind, target.clone()),
     )];
     items.push(MenuSpecItem::separator());
@@ -1209,12 +1262,12 @@ pub(crate) fn tab_context_menu_spec(
     if is_git_repo {
         top.push(MenuSpecItem::entry(
             Some(icons::IconKind::Undo2),
-            "回滚",
+            t("menu.rollback", "Roll back", locale),
             Message::FileHistoryRollbackPrevious(target.clone()),
         ));
         top.push(MenuSpecItem::entry(
             Some(icons::IconKind::FileClock),
-            "历史",
+            t("menu.history", "History", locale),
             Message::FileHistoryOpen(target.clone()),
         ));
     }
@@ -1228,17 +1281,17 @@ pub(crate) fn tab_context_menu_spec(
     let bottom: Vec<MenuSpecItem<Message>> = vec![
         MenuSpecItem::entry(
             None,
-            "复制文件名称",
+            t("menu.copy_file_name", "Copy file name", locale),
             Message::CopyPath(target.clone(), PathKind::Name),
         ),
         MenuSpecItem::entry(
             None,
-            "复制相对路径",
+            t("menu.copy_relative_path", "Copy relative path", locale),
             Message::CopyPath(target.clone(), PathKind::Relative),
         ),
         MenuSpecItem::entry(
             None,
-            "复制绝对路径",
+            t("menu.copy_absolute_path", "Copy absolute path", locale),
             Message::CopyPath(target.clone(), PathKind::Absolute),
         ),
         MenuSpecItem::entry(
@@ -1248,7 +1301,7 @@ pub(crate) fn tab_context_menu_spec(
         ),
         MenuSpecItem::entry(
             None,
-            "从磁盘重新加载",
+            t("menu.reload_from_disk", "Reload from disk", locale),
             Message::TabReloadFromDisk(target.clone()),
         ),
     ];
@@ -1265,12 +1318,14 @@ pub(crate) fn tab_context_menu_items(
     path: &Path,
     is_git_repo: bool,
     external_apps: &crate::external_apps::ExternalAppsConfig,
+    locale: &str,
 ) -> Vec<crate::chrome::native_menu::Item<Message>> {
     crate::menu_spec::to_native(tab_context_menu_spec(
         kind,
         path,
         is_git_repo,
         external_apps,
+        locale,
     ))
 }
 
@@ -1280,11 +1335,18 @@ pub fn tab_context_menu_popup<'a>(
     app_state: &'a AppState,
     ws_state: &'a WorkspaceState,
     external_apps: &'a crate::external_apps::ExternalAppsConfig,
+    locale: &str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(menu) = app_state.tab_context_menu() else {
         return column![].into();
     };
-    let spec = tab_context_menu_spec(menu.kind, &menu.path, ws_state.git_is_repo, external_apps);
+    let spec = tab_context_menu_spec(
+        menu.kind,
+        &menu.path,
+        ws_state.git_is_repo,
+        external_apps,
+        locale,
+    );
     let list = crate::menu_spec::to_iced(spec, Length::Shrink);
     container(list)
         .width(Length::Fill)
@@ -1304,6 +1366,7 @@ pub fn tab_context_menu_popup<'a>(
 /// 路径,确保用户操作多个文件时能看到全部文件名(2026-10 用户反馈)。
 pub(crate) fn delete_confirm_spec(
     ws_state: &WorkspaceState,
+    locale: &str,
 ) -> Option<byteui::feedback::dialog::ConfirmDialog<Message>> {
     let targets = ws_state.tree_delete_confirm.as_ref()?;
     if targets.is_empty() {
@@ -1324,7 +1387,11 @@ pub(crate) fn delete_confirm_spec(
         })
         .collect();
     let (title, description) = if targets.len() == 1 {
-        let kind = if targets[0].1 { "文件夹" } else { "文件" };
+        let kind = if targets[0].1 {
+            t("kind.folder", "folder", locale)
+        } else {
+            t("kind.file", "file", locale)
+        };
         // 单文件沿用旧版"只显示文件名"(basename)的口径,保持交互习惯不变;
         // 多文件才列出全部相对路径(见下方 `else` 分支),两者职责不同。
         let name = targets[0]
@@ -1333,8 +1400,18 @@ pub(crate) fn delete_confirm_spec(
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| targets[0].0.display().to_string());
         (
-            format!("删除{kind} \"{name}\"?"),
-            format!("{kind}将会被放入系统回收站，如需恢复可从系统回收站找回。"),
+            t_args(
+                "confirm.delete.title_single",
+                "Delete {kind} \"{name}\"?",
+                locale,
+                &[("kind", kind.as_str()), ("name", name.as_str())],
+            ),
+            t_args(
+                "confirm.delete.desc_single",
+                "The {kind} will be moved to the Trash. You can restore it from the Trash.",
+                locale,
+                &[("kind", kind.as_str())],
+            ),
         )
     } else {
         let list = rel_paths
@@ -1343,17 +1420,27 @@ pub(crate) fn delete_confirm_spec(
             .collect::<Vec<_>>()
             .join("\n");
         (
-            format!("删除 {} 个文件/文件夹？", targets.len()),
-            format!("{list}\n\n这些文件/文件夹将会被放入系统回收站，如需恢复可从系统回收站找回。"),
+            t_args(
+                "confirm.delete.title_multi",
+                "Delete {count} files/folders?",
+                locale,
+                &[("count", targets.len().to_string().as_str())],
+            ),
+            t_args(
+                "confirm.delete.desc_multi",
+                "{list}\n\nThese files/folders will be moved to the Trash. You can restore them from the Trash.",
+                locale,
+                &[("list", list.as_str())],
+            ),
         )
     };
     Some(byteui::feedback::dialog::ConfirmDialog {
         icon: Some(icons::IconKind::CircleAlert),
         title,
         description,
-        cancel_label: "取消".to_string(),
+        cancel_label: t("confirm.delete.cancel", "Cancel", locale),
         cancel_msg: Message::DeleteCancel,
-        confirm_label: "删除".to_string(),
+        confirm_label: t("confirm.delete.confirm", "Delete", locale),
         confirm_msg: Message::DeleteConfirm,
         close_msg: Some(Message::DeleteCancel),
         confirm_color: byteui::theme::color::current().red,
@@ -1366,18 +1453,23 @@ pub(crate) fn delete_confirm_spec(
 /// `iced_widget::text_input`(复用 `byteui::form::input_text::view`),用户
 /// 可在确认前改文件名/改目标目录——2026-09 用户实测反馈:拖拽移动不该悄无
 /// 声息直接改路径,得让用户确认,见 `PendingMove` 文档。
-pub fn files_move_card(
-    ws_state: &WorkspaceState,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+pub fn files_move_card<'a>(
+    ws_state: &'a WorkspaceState,
+    locale: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(pending) = &ws_state.pending_move else {
         return column![].into();
     };
     let sources = &pending.sources;
     let single = sources.len() == 1;
     let kind = if single {
-        if sources[0].1 { "文件夹" } else { "文件" }
+        if sources[0].1 {
+            t("kind.folder", "folder", locale)
+        } else {
+            t("kind.file", "file", locale)
+        }
     } else {
-        "文件/文件夹"
+        t("move.kind_both", "file/folder", locale)
     };
     let source_display = {
         let first = sources.first().map(|(p, _)| p.clone());
@@ -1469,9 +1561,19 @@ pub fn files_move_card(
 
     // 待移动项标题:单文件沿用"移动文件/文件夹 \"name\"";多文件改为数量提示。
     let title_text = if single {
-        format!("移动{kind} \"{source_display}\"")
+        t_args(
+            "move.title_single",
+            "Move {kind} \"{name}\"",
+            locale,
+            &[("kind", kind.as_str()), ("name", source_display.as_str())],
+        )
     } else {
-        format!("移动 {} 个文件/文件夹？", sources.len())
+        t_args(
+            "move.title_multi",
+            "Move {count} files/folders?",
+            locale,
+            &[("count", sources.len().to_string().as_str())],
+        )
     };
 
     // 单文件:展示可改名的"新名称"输入框;多文件:列出全部待移动项的
@@ -1480,7 +1582,12 @@ pub fn files_move_card(
     // card_logical_size` 固定)。
     let source_block: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> = if single
     {
-        column![label("新名称:"), name_field].spacing(4).into()
+        column![
+            label(&t("move.new_name_label", "New name:", locale)),
+            name_field
+        ]
+        .spacing(4)
+        .into()
     } else {
         let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = sources
             .iter()
@@ -1538,7 +1645,7 @@ pub fn files_move_card(
         .width(Length::Fill),
         source_block,
         column![
-            label("到目录:"),
+            label(&t("move.to_dir_label", "To folder:", locale)),
             row![dir_field, browse_btn]
                 .spacing(6)
                 .align_y(iced_widget::core::Alignment::Center)
@@ -1551,7 +1658,7 @@ pub fn files_move_card(
 
     if let Some(err) = &ws_state.move_error {
         body = body.push(
-            text(err.clone())
+            text(crate::i18n::render_localized(err, locale))
                 .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().red),
         );
@@ -1560,7 +1667,7 @@ pub fn files_move_card(
     body = body.push(byteui::feedback::dialog::actions(
         row![
             button(
-                text("取消")
+                text(t("move.cancel", "Cancel", locale))
                     .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().dim)
             )
@@ -1570,7 +1677,7 @@ pub fn files_move_card(
                 byteui::theme::color::current().dim
             )),
             button(
-                text("确定")
+                text(t("move.confirm", "OK", locale))
                     .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().cream)
             )
@@ -1606,24 +1713,24 @@ mod tests {
     #[test]
     fn agent_context_reference_text_for_file() {
         assert_eq!(
-            agent_context_reference_text("src/main.rs", false),
-            "请将 src/main.rs 文件纳入你的工作上下文。"
+            agent_context_reference_text("src/main.rs", false, "en"),
+            "Include file src/main.rs in your working context."
         );
     }
 
     #[test]
     fn agent_context_reference_text_for_dir() {
         assert_eq!(
-            agent_context_reference_text("research", true),
-            "请将 research/ 目录纳入你的工作上下文。"
+            agent_context_reference_text("research", true, "en"),
+            "Include directory research/ in your working context."
         );
     }
 
     #[test]
     fn agent_context_reference_text_keeps_unicode_and_spaces_verbatim() {
         assert_eq!(
-            agent_context_reference_text("我的 报告/draft v2.md", false),
-            "请将 我的 报告/draft v2.md 文件纳入你的工作上下文。"
+            agent_context_reference_text("我的 报告/draft v2.md", false, "en"),
+            "Include file 我的 报告/draft v2.md in your working context."
         );
     }
 
@@ -1633,8 +1740,11 @@ mod tests {
             start: crate::preview::TextPosition { line: 3, column: 1 },
             end: crate::preview::TextPosition { line: 5, column: 4 },
         };
-        let text = selection_reference_text("src/main.rs", range, "let x = 1;");
-        assert_eq!(text, "参考 src/main.rs:3:1-5:4 这段内容:\n\nlet x = 1;");
+        let text = selection_reference_text("src/main.rs", range, "let x = 1;", "en");
+        assert_eq!(
+            text,
+            "Refer to src/main.rs:3:1-5:4 this content:\n\nlet x = 1;"
+        );
     }
 
     #[test]
@@ -1644,7 +1754,7 @@ mod tests {
             end: crate::preview::TextPosition { line: 2, column: 1 },
         };
         let body = "```diff\n- old\n+ new\n```";
-        let text = selection_reference_text("a.md", range, body);
+        let text = selection_reference_text("a.md", range, body, "en");
         assert!(text.ends_with(body), "选中内容需原样保留,不被模板转义/截断");
     }
 
@@ -1670,7 +1780,7 @@ mod tests {
     #[test]
     fn preview_selection_menu_disabled_without_agent_terminal() {
         let menu = sample_selection_menu(false);
-        let spec = preview_selection_context_menu_spec(&menu);
+        let spec = preview_selection_context_menu_spec(&menu, "en");
         let enabled = spec.iter().find_map(|item| match item {
             MenuSpecItem::Entry { enabled, .. } => Some(*enabled),
             _ => None,
@@ -1681,7 +1791,7 @@ mod tests {
     #[test]
     fn preview_selection_menu_enabled_with_agent_terminal() {
         let menu = sample_selection_menu(true);
-        let spec = preview_selection_context_menu_spec(&menu);
+        let spec = preview_selection_context_menu_spec(&menu, "en");
         let enabled = spec.iter().find_map(|item| match item {
             MenuSpecItem::Entry { enabled, .. } => Some(*enabled),
             _ => None,
@@ -1696,7 +1806,7 @@ mod tests {
     #[test]
     fn preview_selection_menu_click_carries_originating_project_id() {
         let menu = sample_selection_menu(true);
-        let spec = preview_selection_context_menu_spec(&menu);
+        let spec = preview_selection_context_menu_spec(&menu, "en");
         let msg = spec.iter().find_map(|item| match item {
             MenuSpecItem::Entry { msg, .. } => Some(msg.clone()),
             _ => None,

@@ -90,7 +90,7 @@ pub struct WorkspaceState {
     /// 打开,用户就地改正)。其余文件操作的失败/被拒(粘贴、回滚、新建/重命名/删除、
     /// 拖拽移动、行内命名校验)不进这里,走 `outbox` → Toast。(原名 `tree_error`,
     /// 曾同时承载这两类语义。)
-    pub(crate) move_error: Option<String>,
+    pub(crate) move_error: Option<dozer_model::LocalizedText>,
     /// 待确认的删除目标(支持一次删除多个选中项):`路径 + 是否目录` 列表。
     /// 单文件删除时长度为 1;右键菜单点"删除"时若被右键项属于当前多选集,
     /// 整组选中项一起进入待删除(项目根会被过滤掉)。见 `delete_confirm_spec`
@@ -286,11 +286,10 @@ pub enum Message {
     /// (`RequestSendToAgentTerminal`)。
     SendToAgentContext(PathBuf, bool),
     /// 内核拦截,不进 `update`——`SendToAgentContext` 在 `files::update` 里
-    /// 拼好模板文本后,经 `emit` 送回内核顶层,由 `App::update` 调
-    /// `term_paste` 写进当前激活的 agent 终端(真正的 PTY 句柄只有内核有)。
-    /// 同时携带落库所需的 `is_dir`/`relative`。
+    /// 算出项目内相对路径后,经 `emit` 送回内核顶层,由 `App::update` 按当前
+    /// locale 拼模板文本并调 `term_paste` 写进当前激活的 agent 终端(真正的
+    /// PTY 句柄只有内核有)。同时携带落库所需的 `is_dir`/`relative`。
     RequestSendToAgentTerminal {
-        text: String,
         is_dir: bool,
         /// 项目内相对路径,目录不带尾部 `/`,落库用。
         relative: String,
@@ -776,13 +775,13 @@ impl WorkspaceState {
     /// 需要读它(渲染走 `files::view` 内部,不经这个访问器)。
     #[cfg(test)]
     pub fn move_error(&self) -> Option<&str> {
-        self.move_error.as_deref()
+        self.move_error.as_ref().map(|t| t.fallback.as_str())
     }
 
     /// 同上,供测试构造带标记的槽位用。
     #[cfg(test)]
     pub fn set_move_error(&mut self, e: Option<String>) {
-        self.move_error = e;
+        self.move_error = e.map(|t| dozer_model::LocalizedText::literal(FILES_OWNER, t));
     }
 
     /// 文件树是否已建立(供内核测试断言"占位构造立刻有文件树根,不需要
@@ -862,7 +861,11 @@ impl WorkspaceState {
             self.outbox.push(
                 LOG,
                 crate::extensions::toast::Level::Error,
-                crate::extensions::toast::literal("名字不能包含路径分隔符"),
+                crate::i18n::panel_keyed(
+                    FILES_OWNER,
+                    "edit.error.invalid_name",
+                    "Name cannot contain a path separator",
+                ),
             );
             self.tree_edit = Some(TreeEdit {
                 parent_dir: edit.parent_dir,
@@ -881,10 +884,12 @@ impl WorkspaceState {
                     self.outbox.push(
                         LOG,
                         crate::extensions::toast::Level::Error,
-                        crate::extensions::toast::literal(format!(
-                            "{} 已存在同名项",
-                            new_path.display()
-                        )),
+                        crate::i18n::panel_keyed_args(
+                            FILES_OWNER,
+                            "edit.error.exists",
+                            "{name} already exists",
+                            &[("name", new_path.display().to_string().as_str())],
+                        ),
                     );
                     self.tree_edit = Some(TreeEdit {
                         parent_dir: edit.parent_dir,
@@ -913,10 +918,12 @@ impl WorkspaceState {
                     self.outbox.push(
                         LOG,
                         crate::extensions::toast::Level::Error,
-                        crate::extensions::toast::literal(format!(
-                            "{} 已存在同名项",
-                            new_path.display()
-                        )),
+                        crate::i18n::panel_keyed_args(
+                            FILES_OWNER,
+                            "edit.error.exists",
+                            "{name} already exists",
+                            &[("name", new_path.display().to_string().as_str())],
+                        ),
                     );
                     self.tree_edit = Some(TreeEdit {
                         parent_dir: edit.parent_dir,
@@ -947,10 +954,12 @@ impl WorkspaceState {
                     self.outbox.push(
                         LOG,
                         crate::extensions::toast::Level::Error,
-                        crate::extensions::toast::literal(format!(
-                            "{} 已存在同名项",
-                            new_path.display()
-                        )),
+                        crate::i18n::panel_keyed_args(
+                            FILES_OWNER,
+                            "edit.error.exists",
+                            "{name} already exists",
+                            &[("name", new_path.display().to_string().as_str())],
+                        ),
                     );
                     self.tree_edit = Some(TreeEdit {
                         parent_dir: edit.parent_dir,

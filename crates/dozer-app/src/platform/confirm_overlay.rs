@@ -176,7 +176,7 @@ pub(crate) fn desired_confirm(
     locale: &str,
 ) -> Option<(ConfirmTrigger, dialog::ConfirmDialog<Message>)> {
     let ws = ws?;
-    if let Some(spec) = crate::extensions::files::delete_confirm_spec(&ws.files) {
+    if let Some(spec) = crate::extensions::files::delete_confirm_spec(&ws.files, locale) {
         return Some((ConfirmTrigger::FilesDelete, map_files_spec(spec)));
     }
     if let Some(source_id) = ws.database.delete_confirm()

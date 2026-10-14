@@ -122,7 +122,7 @@ impl FilesMoveOverlay {
             &self.window,
             self.cursor,
             backdrop_card(
-                files::files_move_card(&ws.files).map(Message::Files),
+                files::files_move_card(&ws.files, app.locale.active_locale()).map(Message::Files),
                 card_logical_size(&self.window),
             ),
         );
@@ -153,7 +153,7 @@ impl FilesMoveOverlay {
             &self.window,
             self.cursor,
             backdrop_card(
-                files::files_move_card(&ws.files).map(Message::Files),
+                files::files_move_card(&ws.files, app.locale.active_locale()).map(Message::Files),
                 card_logical_size(&self.window),
             ),
             iced_event,

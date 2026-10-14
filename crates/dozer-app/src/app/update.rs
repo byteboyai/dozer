@@ -3383,18 +3383,19 @@ impl App {
                     self.update(Message::Files(msg));
                 }
             }
-            Message::Files(files::Message::RequestSendToAgentTerminal {
-                text,
-                is_dir,
-                relative,
-            }) => {
-                // 文件树右键"添加到 Agent 上下文":`files::update` 拼好模板文本
-                // 后经 `emit` 送回内核,这里写进当前激活的 agent 终端输入框
-                // (真正的 PTY 句柄只有内核有)。
+            Message::Files(files::Message::RequestSendToAgentTerminal { is_dir, relative }) => {
+                // 文件树右键"添加到 Agent 上下文":`files::update` 算出相对路径
+                // 后经 `emit` 送回内核,这里按当前 locale 拼模板文本并写进当前
+                // 激活的 agent 终端输入框(真正的 PTY 句柄只有内核有)。
                 //
                 // 先发起落库(异步),再写终端;落库失败不影响粘贴——上下文条会
                 // 显示"已发送到终端,但未能记录到上下文列表"(见
                 // `agent_context::apply`)。
+                let text = files::agent_context_reference_text(
+                    &relative,
+                    is_dir,
+                    self.locale.active_locale(),
+                );
                 if let Some(project_id) = self.active_project_id {
                     let context =
                         crate::host_adapters::services::services_for(&self.client).context;
@@ -3428,6 +3429,7 @@ impl App {
                 };
                 let external_apps = self.external_apps.clone();
                 let agent_terminal_visible = self.terminal_visible();
+                let locale = self.locale.active_locale().to_string();
                 let app_files = &mut self.files;
                 let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
                     return;
@@ -3441,6 +3443,7 @@ impl App {
                     emit,
                     &external_apps,
                     agent_terminal_visible,
+                    &locale,
                 );
             }
             Message::Project(
@@ -3951,7 +3954,10 @@ impl App {
                 #[cfg(target_os = "macos")]
                 {
                     // 原生菜单阻塞弹出,mac 不存状态,弹完即取返回值。
-                    let items = files::preview_selection_context_menu_items(&menu);
+                    let items = files::preview_selection_context_menu_items(
+                        &menu,
+                        self.locale.active_locale(),
+                    );
                     let pos = (menu.x, menu.y);
                     if let Some(msg) =
                         crate::chrome::native_menu::show_align_no_icon_left(items, pos)
@@ -3990,7 +3996,12 @@ impl App {
                     &path,
                     tree.root(),
                 );
-                let text = files::selection_reference_text(&relative, range, &selected_text);
+                let text = files::selection_reference_text(
+                    &relative,
+                    range,
+                    &selected_text,
+                    self.locale.active_locale(),
+                );
                 self.term_paste(terminal::TermTarget::Shared, text);
             }
             Message::PreviewSelectionMenuClose => {
@@ -6538,6 +6549,7 @@ impl App {
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
         let agent_terminal_visible = self.terminal_visible();
+        let locale = self.locale.active_locale().to_string();
         let emit = move |m| {
             let _ = proxy.send_event(Message::Files(m));
         };
@@ -6555,6 +6567,7 @@ impl App {
             emit,
             &external_apps,
             agent_terminal_visible,
+            &locale,
         );
     }
 

@@ -241,26 +241,126 @@ def in_ranges(pos: int, ranges) -> bool:
     return any(s <= pos < e for (s, e), _ in ranges)
 
 
+def _skip_ws_and_comments(text: str, i: int) -> int:
+    """从 `i` 起跳过空白与注释,返回下一个非空白/注释字符的位置。"""
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c in " \t\r\n":
+            i += 1
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            j = text.find("\n", i)
+            i = n if j < 0 else j + 1
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            j = text.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        break
+    return i
+
+
+def _item_span_end(text: str, start: int) -> int:
+    """给定 item 起点,返回其结束位置(闭括号后或分号后)。
+
+    对含 `{}` 块的 item(mod/impl/fn/enum/struct/trait/union)做花括号配对,
+    返回匹配 `}` 之后一位;块内联无花括号的 item(如 `const X: u8 = 1;`)则
+    返回到第一个 `;` 之后。跳过字符串/字符字面量与注释,避免被其内的括号
+    干扰。
+    """
+    n = len(text)
+    i = start
+    in_str = None
+    while i < n:
+        c = text[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == in_str:
+                in_str = None
+            i += 1
+            continue
+        if c in "\"'":
+            in_str = c
+            i += 1
+            continue
+        if c == "r" and i + 1 < n and text[i + 1] in '#"':
+            j = i + 1
+            hashes = 0
+            while j < n and text[j] == "#":
+                hashes += 1
+                j += 1
+            if j < n and text[j] == '"':
+                close = '"' + "#" * hashes
+                k = text.find(close, j + 1)
+                i = n if k < 0 else k + len(close)
+                continue
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            j = text.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        if c == "{":
+            depth = 1
+            i += 1
+            while i < n and depth:
+                c2 = text[i]
+                if in_str:
+                    if c2 == "\\":
+                        i += 2
+                        continue
+                    if c2 == in_str:
+                        in_str = None
+                    i += 1
+                    continue
+                if c2 in "\"'":
+                    in_str = c2
+                    i += 1
+                    continue
+                if c2 == "/" and i + 1 < n and text[i + 1] == "/":
+                    j = text.find("\n", i)
+                    i = n if j < 0 else j
+                    continue
+                if c2 == "/" and i + 1 < n and text[i + 1] == "*":
+                    j = text.find("*/", i + 2)
+                    i = n if j < 0 else j + 2
+                    continue
+                if c2 == "{":
+                    depth += 1
+                elif c2 == "}":
+                    depth -= 1
+                i += 1
+            return i
+        if c == ";":
+            return i + 1
+        i += 1
+    return n
+
+
 def is_test_context(rel: str, text: str, pos: int) -> bool:
     if re.search(r"_test\.(?:rs)$", rel) or ".test." in rel:
         return True
-    # `#[cfg(test)]` 引入的测试模块或测试辅助项之后视为测试区。
+    # `#[cfg(test)]` 绑定到**紧随其后的那一个 item**,不是"其后全部内容"。
     #
-    # 之前用"最后一个 `#[cfg(test)]` 位置"做粗判,会在测试模块之后还有别的
-    # `#[cfg(test)]` 项(如 `#[cfg(test)] impl Message { .. }`)的文件里把边界
-    # 推到文件末尾,导致测试模块内的字面量被误判成 UI 文案。
-    # 改为:(a) 若存在 `#[cfg(test)]\s*mod .. {`,取该模块 `{` 之后为测试区;
-    # (b) 否则退回"最后一个 `#[cfg(test)]` 之后"。
-    mod_m = None
-    for m2 in re.finditer(r"#\[cfg\(test\)\]\s*mod\s+\w+\s*\{", text):
-        mod_m = m2
-        break
-    if mod_m is not None:
-        return pos > mod_m.end() - 1
-    m = None
-    for m2 in re.finditer(r"#\[cfg\(test\)\]", text):
-        m = m2
-    return m is not None and pos > m.start()
+    # 旧实现用"最后一个 `#[cfg(test)]` 之后视为测试区"做粗判,在
+    # `#[cfg(test)] fn helper() {}` 之类测试辅助方法之后**仍跟着生产代码**的文件
+    # (如 files/state.rs:测试方法 790 行,生产 `submit_tree_edit` 848 行)里,会把
+    # 生产代码误判成测试区,漏掉真实 UI 文案。
+    # 现改为:逐个 `#[cfg(test)]` 找它装饰的 item 的 span,`pos` 落在任一 span
+    # 内才算测试区——`mod tests {..}` 取整个模块,`fn/impl/const..` 取该 item。
+    for m in re.finditer(r"#\[cfg\(test\)\]", text):
+        item_start = _skip_ws_and_comments(text, m.end())
+        if item_start >= len(text):
+            continue
+        end = _item_span_end(text, item_start)
+        if m.start() <= pos < end:
+            return True
+    return False
 
 
 # ---- 字符串抽取 ----

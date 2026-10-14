@@ -165,7 +165,16 @@ pub(crate) fn tree_drag_ghost<'a>(
         icons::icon_for_file(&name)
     };
     let label = if count > 1 {
-        format!("{name} 等 {count} 项")
+        crate::i18n::panel_text_args(
+            super::FILES_OWNER,
+            "drag_ghost.multi",
+            "{name} and {count} items",
+            host.locale(),
+            &[
+                ("name", name.as_str()),
+                ("count", count.to_string().as_str()),
+            ],
+        )
     } else {
         name
     };
