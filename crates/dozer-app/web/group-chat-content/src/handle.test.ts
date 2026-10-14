@@ -4,6 +4,9 @@ import {
   validateHandle, handleKey, suggestHandle, mentionContext, filterMembers, applyMention,
   mentionMenuOpen, nextDismissed,
 } from './handle.ts';
+import { setLocale } from './i18n.ts';
+
+setLocale('en');
 
 test('validateHandle accepts normal handles incl. chinese', () => {
   assert.equal(validateHandle('claude', []), null);
@@ -11,7 +14,7 @@ test('validateHandle accepts normal handles incl. chinese', () => {
 });
 
 test('validateHandle rejects empty, too long, whitespace, @, terminator punctuation', () => {
-  assert.match(validateHandle('', [])!, /不能为空/);
+  assert.match(validateHandle('', [])!, /cannot be empty/i);
   assert.match(validateHandle('x'.repeat(33), [])!, /32/);
   assert.ok(validateHandle('a b', []));
   assert.ok(validateHandle('a@b', []));
@@ -20,7 +23,7 @@ test('validateHandle rejects empty, too long, whitespace, @, terminator punctuat
 });
 
 test('validateHandle rejects duplicates ignoring case', () => {
-  assert.match(validateHandle('Claude', ['claude'])!, /已有/);
+  assert.match(validateHandle('Claude', ['claude'])!, /already has a member/i);
   assert.equal(validateHandle('claude2', ['claude']), null);
 });
 

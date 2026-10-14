@@ -1,3 +1,5 @@
+import { t } from './i18n.ts';
+
 // handle 校验(镜像 Rust `dozerd::group_mentions::validate_handle`,Rust 为权威)与
 // `@` 补全的纯逻辑。**终止标点集合必须与 Rust `TERMINATORS` 保持一致。**
 
@@ -15,13 +17,23 @@ export function handleKey(handle: string): string {
   return handle.toLowerCase();
 }
 
-/** 返回给用户看的中文错误,合法返回 null。`takenKeys` 是本群已有 handle 的 `handleKey`。 */
+/** 返回给用户看的错误文案,合法返回 null。`takenKeys` 是本群已有 handle 的 `handleKey`。 */
 export function validateHandle(handle: string, takenKeys: string[]): string | null {
-  if (handle.length === 0) return '名称不能为空';
-  if ([...handle].length > HANDLE_MAX_CHARS) return `名称不能超过 ${HANDLE_MAX_CHARS} 个字符`;
+  if (handle.length === 0)
+    return t('handle.error.empty', 'Name cannot be empty');
+  if ([...handle].length > HANDLE_MAX_CHARS)
+    return t('handle.error.too_long', 'Name cannot exceed {max} characters', {
+      max: String(HANDLE_MAX_CHARS),
+    });
   const bad = [...handle].find((c) => !isHandleChar(c));
-  if (bad !== undefined) return `名称不能包含 ${JSON.stringify(bad)}`;
-  if (takenKeys.includes(handleKey(handle))) return `群里已有名为 ${handle} 的成员`;
+  if (bad !== undefined)
+    return t('handle.error.bad_char', 'Name cannot contain {char}', {
+      char: JSON.stringify(bad),
+    });
+  if (takenKeys.includes(handleKey(handle)))
+    return t('handle.error.taken', 'The group already has a member named {handle}', {
+      handle,
+    });
   return null;
 }
 

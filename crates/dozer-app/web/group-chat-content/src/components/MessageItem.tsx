@@ -4,13 +4,22 @@ import { send } from '../ipc.ts';
 import { cancelEvent } from '../events.ts';
 import { renderMarkdown } from '../markdown.ts';
 import { formatDuration, formatElapsed, runningPhase } from '../format.ts';
+import { t } from '../i18n.ts';
 
-const STATUS_LABEL: Record<string, string> = {
-  queued: '排队中',
-  running: '正在发言',
-  failed: '发言失败',
-  cancelled: '已取消',
-};
+function statusLabel(status: string): string {
+  switch (status) {
+    case 'queued':
+      return t('status.queued', 'Queued');
+    case 'running':
+      return t('status.running', 'Speaking');
+    case 'failed':
+      return t('status.failed', 'Failed');
+    case 'cancelled':
+      return t('status.cancelled', 'Cancelled');
+    default:
+      return status;
+  }
+}
 
 // 消息首次以 running 出现的客户端时刻;模块级是为了列表重渲/重挂载不让计时归零。
 const runningSince = new Map<number, number>();
@@ -20,8 +29,8 @@ function RunningIndicator({ id }: { id: number }) {
   if (!runningSince.has(id)) runningSince.set(id, Date.now());
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
   }, []);
   const elapsed = now - (runningSince.get(id) ?? now);
   return (
@@ -51,7 +60,7 @@ export function MessageItem({
         {m.status && m.status !== 'done' && (
           <span class={`gc-status is-${m.status}`}>
             {m.status === 'running' && <span class="gc-dots" aria-hidden="true"><i /><i /><i /></span>}
-            {STATUS_LABEL[m.status]}
+            {statusLabel(m.status)}
           </span>
         )}
         {dur && m.status === 'done' && <span class="gc-dim">{dur}</span>}
@@ -64,18 +73,18 @@ export function MessageItem({
       <div class="gc-msg-actions">
         {m.status === 'running' && (
           <button class="gc-link" onClick={() => send(cancelEvent(groupId, 'turn'))}>
-            停止
+            {t('message.stop', 'Stop')}
           </button>
         )}
         {canRetry && (
-          <button class="gc-link" onClick={() => send({ kind: 'retry', message_id: m.id })}>重试</button>
+          <button class="gc-link" onClick={() => send({ kind: 'retry', message_id: m.id })}>{t('message.retry', 'Retry')}</button>
         )}
         {canPush && (
-          <button class="gc-link" onClick={() => onPushTodo(m)}>转为待办</button>
+          <button class="gc-link" onClick={() => onPushTodo(m)}>{t('message.push_todo', 'To to-do')}</button>
         )}
         {m.todo_id !== null && (
           <button class="gc-link gc-badge" onClick={() => send({ kind: 'open_todo', todo_id: m.todo_id! })}>
-            已转待办 ↗
+            {t('message.pushed_todo', 'Added to to-do ↗')}
           </button>
         )}
       </div>

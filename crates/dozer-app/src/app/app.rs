@@ -1412,8 +1412,11 @@ impl App {
         let Some(ws) = self.active_workspace() else {
             return Vec::new();
         };
-        let desired =
-            crate::extensions::group_chat::current_view_payload(&ws.group_chat, project_id);
+        let desired = crate::extensions::group_chat::current_view_payload(
+            &ws.group_chat,
+            project_id,
+            self.locale.active_locale(),
+        );
         let stamp = self.locale_stamp();
         let desired = dozer_model::Stamped::new(stamp, desired);
         let Some(payload) = self.group_chat_webview.pending_push(&desired) else {

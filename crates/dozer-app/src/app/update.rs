@@ -5051,7 +5051,11 @@ impl App {
                     %reason,
                     "群聊内容页渲染失败,回落原生占位"
                 );
-                self.group_chat_webview.set_failed(reason.clone());
+                self.group_chat_webview
+                    .set_failed(dozer_model::LocalizedText::literal(
+                        crate::i18n::HOST_OWNER,
+                        reason.clone(),
+                    ));
                 return;
             }
             _ => {}

@@ -532,6 +532,31 @@ python3 scripts/i18n/build_inventory.py
 - Task 10 剩余 `dozer.group_chat`（92）按面板提交。
 - 双语运行期视觉核对随 Task 13 执行。
 
+## Task 10 验收（group_chat 面板，按面板拆分提交）
+
+### 交付内容
+
+- 资源：`crates/dozer-app/locales/panels/group_chat/{en,zh-CN}.json`（owner `dozer.group_chat`；`head.list`/`empty.no_groups`/`new_group.*`/`delete.*`/`cancel.button`/`members.*`/`content.*`/`retry`/`author.*`/`hint.*`/`list.*`/`messages.*`/`member_bar.*`/`composer.*`/`status.*`/`message.*`/`dialog.*`/`handle.error.*`/`duration.*`/`phase.*`/`elapsed.*`/`error.*`）。
+- `extensions/group_chat/mod.rs`：`GROUP_CHAT_OWNER` + 本地 `t()`/`t_args()`/`keyed`/`keyed_args`；`hint` 改 `Option<LocalizedText>`、`Message::Failed(i64, LocalizedText)`、`hint()` 返回 `Option<&LocalizedText>`；`spawn_command` 的 `fail()` 对 10 条命令统一 keyed（`error.*`，`{e}` 带服务原文）。
+- `extensions/group_chat/protocol.rs`：`AuthorVm.label` 按 locale 解析（`author.you`/`author.system`/（`@handle`）/`author.removed`）；`current_view_payload` 增 `locale` 形参；`hint` 经 `render_localized`；`WebviewPushState.failed` 改 `Option<LocalizedText>`、`set_failed` 收 `LocalizedText`；超时用 host `webview.load_timeout`。
+- `extensions/group_chat/view.rs`：`list_pane<'a>`/`group_row<'a>`/`new_group_row<'a>` 显式 `<'a>` 并穿 `locale`；`content_pane` 收 `Option<&LocalizedText>`+`locale`，渲染经 `host_render`。
+- `app/view.rs`：GroupChat arm 传 `app.locale.active_locale()`；`app/app.rs`：`current_view_payload(.., active_locale())`；`app/update.rs`：webview `failed` 事件 → `LocalizedText::literal(HOST_OWNER, ..)`。
+- `i18n.rs`：`PANEL_OWNERS` 增 `dozer.group_chat`；`usage_probe/host.rs` 引用表因 `app/update.rs` 行号顺移更新。
+- Web：`web/group-chat-content/src/{i18n.ts(new),main.tsx,components/{App,Composer,Dialogs,MemberBar,MessageItem,MessageList}.tsx,format.ts,handle.ts,fixtures.ts,render-smoke.tsx}`（静态打包面板 JSON、`setLocale` 随 envelope 注入、`statusLabel()` 按 key 查表、`fixtures.ts` 改英文）；`npm run build` 产物重生成。
+
+### 验证命令与结果
+
+- `cargo build -p dozer-app`：通过。
+- `cargo test -p dozer-app`：**2001 passed / 0 failed / 2 ignored**（group_chat 用例断言改按 `render_localized(.., "en")` 校验）。
+- `cargo fmt --all -- --check`、`cargo clippy -p dozer-app --all-targets`（0 error）、`python3 scripts/i18n/check_resources.py`（**13 个 owner 目录**）、`bash scripts/check-log-scope.sh`、`python3 scripts/audit/check_panel_boundary.py`（213 refs / 5 files）：全绿。
+- webview：`npm test`（`node --test` 52 + render-smoke 12，全绿）、`npm run build` 成功。
+- `python3 scripts/i18n/build_inventory.py`：`counts: {"excluded": 3042, "migrated": 0, "unresolved": 122}`；`unresolved by task: {"11": 122}`；`dozer.group_chat` **0 条**。
+
+### 残留
+
+- Task 11（122：`dozer.preview` 79 / `dozer.host` 36 / `dozer.agent` 7）未开始。
+- 双语运行期视觉核对随 Task 13 执行。
+
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |
 |---|---|---|

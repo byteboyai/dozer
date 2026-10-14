@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Member } from '../types.ts';
 import { send } from '../ipc.ts';
+import { t } from '../i18n.ts';
 import { cancelEvent } from '../events.ts';
 import {
   applyMention, filterMembers, mentionContext, mentionMenuOpen, nextDismissed,
@@ -90,7 +91,10 @@ export function Composer({
           class="gc-input"
           rows={2}
           value={text}
-          placeholder="输入消息,@ 点名成员发言;Enter 发送,Shift+Enter 换行"
+          placeholder={t(
+            'composer.placeholder',
+            'Type a message; use @ to call on members; Enter to send, Shift+Enter for a new line',
+          )}
           onInput={(e) => {
             const el = e.currentTarget;
             update(el.value, el.selectionStart ?? el.value.length);
@@ -102,10 +106,10 @@ export function Composer({
         <div class="gc-composer-actions">
           {running && (
             <button class="gc-stop" onClick={() => send(cancelEvent(groupId, 'round'))}>
-              停止本轮
+              {t('composer.stop_round', 'Stop this round')}
             </button>
           )}
-          <button class="gc-send" disabled={text.trim() === ''} onClick={submit}>发送</button>
+          <button class="gc-send" disabled={text.trim() === ''} onClick={submit}>{t('composer.send', 'Send')}</button>
         </div>
       </div>
     </div>

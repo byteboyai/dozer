@@ -1116,6 +1116,7 @@ pub(crate) fn panel_body<'a>(
             if app.list_collapsed(PanelKind::GroupChat) {
                 return group_chat::content_pane(
                     app.group_chat_webview.failed(),
+                    app.locale.active_locale(),
                     Length::Fill,
                     zone_pane_border(zone, ac),
                 )
@@ -1124,6 +1125,7 @@ pub(crate) fn panel_body<'a>(
             let (list_portion, content_portion) = split_portions(app.dims.group_chat_split);
             let content_pane = group_chat::content_pane(
                 app.group_chat_webview.failed(),
+                app.locale.active_locale(),
                 Length::FillPortion(content_portion),
                 zone_pane_border(zone, lc),
             )
@@ -1131,6 +1133,7 @@ pub(crate) fn panel_body<'a>(
             let list_pane = group_chat::list_pane(
                 &ws.group_chat,
                 ws.project.as_ref().map(|p| p.id).unwrap_or_default(),
+                app.locale.active_locale(),
                 Length::FillPortion(list_portion),
                 zone_pane_border(zone, rc),
             )

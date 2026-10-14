@@ -1,4 +1,5 @@
 import type { Member } from '../types.ts';
+import { t } from '../i18n.ts';
 
 export function MemberBar({
   members, onAdd, onEdit,
@@ -13,13 +14,15 @@ export function MemberBar({
         <button
           class={`gc-chip gc-c${m.color_slot}`}
           key={m.id}
-          title={m.role_prompt || '没有角色设定'}
+          title={m.role_prompt || t('member_bar.no_role', 'No role set')}
           onClick={() => onEdit(m)}
         >
           @{m.handle}<span class="gc-chip-agent">{m.agent_label}</span>
         </button>
       ))}
-      <button class="gc-chip gc-chip-add" onClick={onAdd}>＋ 添加成员</button>
+      <button class="gc-chip gc-chip-add" onClick={onAdd}>
+        {t('member_bar.add', '＋ Add member')}
+      </button>
     </div>
   );
 }

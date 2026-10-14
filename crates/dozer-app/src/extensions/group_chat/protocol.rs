@@ -6,7 +6,8 @@
 
 use super::WorkspaceState;
 use dozer_model::{
-    AgentKind, GroupAuthor, GroupCancelScope, GroupInfo, GroupMessageStatus, LocaleStamp, Stamped,
+    AgentKind, GroupAuthor, GroupCancelScope, GroupInfo, GroupMessageStatus, LocaleStamp,
+    LocalizedText, Stamped,
 };
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
@@ -52,9 +53,9 @@ pub enum AuthorKind {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct AuthorVm {
     pub kind: AuthorKind,
-    /// 显示名:"你" / "@handle" / "已移除成员" / "系统"。
+    /// 显示名:"You" / "@handle" / "Removed member" / "System",按 locale 解析。
     pub label: String,
-    /// "Claude"/"Codex",成员消息才有。
+    /// "Claude"/"Codex"(品牌名,不翻译),成员消息才有。
     pub agent_label: Option<String>,
     /// 成员颜色槽位(0..COLOR_SLOTS),已移除成员/非成员为 `None`。
     pub color_slot: Option<u8>,
@@ -123,7 +124,11 @@ fn status_of(status: &GroupMessageStatus) -> StatusKey {
     }
 }
 
-pub fn current_view_payload(state: &WorkspaceState, project_id: i64) -> GroupChatViewPayload {
+pub fn current_view_payload(
+    state: &WorkspaceState,
+    project_id: i64,
+    locale: &str,
+) -> GroupChatViewPayload {
     let groups: Vec<GroupVm> = state
         .groups()
         .iter()
@@ -157,13 +162,13 @@ pub fn current_view_payload(state: &WorkspaceState, project_id: i64) -> GroupCha
             let author = match &m.author {
                 GroupAuthor::Human => AuthorVm {
                     kind: AuthorKind::Human,
-                    label: "你".to_string(),
+                    label: super::t("author.you", "You", locale),
                     agent_label: None,
                     color_slot: None,
                 },
                 GroupAuthor::System => AuthorVm {
                     kind: AuthorKind::System,
-                    label: "系统".to_string(),
+                    label: super::t("author.system", "System", locale),
                     agent_label: None,
                     color_slot: None,
                 },
@@ -179,7 +184,7 @@ pub fn current_view_payload(state: &WorkspaceState, project_id: i64) -> GroupCha
                         },
                         None => AuthorVm {
                             kind: AuthorKind::Member,
-                            label: "已移除成员".to_string(),
+                            label: super::t("author.removed", "Removed member", locale),
                             agent_label: None,
                             color_slot: None,
                         },
@@ -208,7 +213,9 @@ pub fn current_view_payload(state: &WorkspaceState, project_id: i64) -> GroupCha
         groups,
         selected_group_id: state.selected(),
         messages,
-        hint: state.hint().map(str::to_string),
+        hint: state
+            .hint()
+            .map(|t| crate::i18n::render_localized(t, locale)),
         running: state.has_active_turn(),
     }
 }
@@ -472,8 +479,9 @@ pub struct WebviewPushState {
     revision: u64,
     /// webview 已进池但尚未 ready 的起点,用于判定加载超时。
     waiting_since: Option<Instant>,
-    /// 加载失败/超时原因;`Some` 时内容区回落原生占位页(重试清除)。
-    failed: Option<String>,
+    /// 加载失败/超时原因;`Some` 时内容区回落原生占位页(重试清除)。存 keyed
+    /// 文案,渲染端按当前 locale 解析(超时用 host 词表,webview 报错原样透传)。
+    failed: Option<LocalizedText>,
 }
 
 impl WebviewPushState {
@@ -499,7 +507,11 @@ impl WebviewPushState {
         }
         let since = *self.waiting_since.get_or_insert(now);
         if self.failed.is_none() && now.duration_since(since) > READY_TIMEOUT {
-            self.failed = Some("面板页面加载超时".to_string());
+            self.failed = Some(LocalizedText::keyed(
+                crate::i18n::HOST_OWNER,
+                "webview.load_timeout",
+                "Panel page load timed out",
+            ));
         }
     }
 
@@ -520,11 +532,11 @@ impl WebviewPushState {
         self.revision
     }
 
-    pub fn failed(&self) -> Option<&str> {
-        self.failed.as_deref()
+    pub fn failed(&self) -> Option<&LocalizedText> {
+        self.failed.as_ref()
     }
 
-    pub fn set_failed(&mut self, reason: String) {
+    pub fn set_failed(&mut self, reason: LocalizedText) {
         self.failed = Some(reason);
         self.ready = false;
         self.last_sent = None;
@@ -609,7 +621,7 @@ mod tests {
 
     #[test]
     fn payload_for_unloaded_state_is_empty_but_marks_not_loaded() {
-        let p = current_view_payload(&WorkspaceState::default(), 7);
+        let p = current_view_payload(&WorkspaceState::default(), 7, "en");
         assert!(!p.loaded);
         assert!(p.groups.is_empty());
         assert_eq!(p.selected_group_id, None);
@@ -639,15 +651,15 @@ mod tests {
                 Some(GroupMessageStatus::Done),
             ),
         ]);
-        let p = current_view_payload(&s, 7);
+        let p = current_view_payload(&s, 7, "en");
         assert_eq!(p.messages[0].author.kind, AuthorKind::Human);
-        assert_eq!(p.messages[0].author.label, "你");
+        assert_eq!(p.messages[0].author.label, "You");
         assert_eq!(p.messages[1].author.label, "@架构师");
         assert_eq!(p.messages[1].author.agent_label.as_deref(), Some("Claude"));
         assert_eq!(p.messages[1].author.color_slot, Some(0));
         assert_eq!(p.messages[2].author.agent_label.as_deref(), Some("Codex"));
         assert_eq!(p.messages[2].author.color_slot, Some(1));
-        assert_eq!(p.messages[3].author.label, "已移除成员");
+        assert_eq!(p.messages[3].author.label, "Removed member");
         assert_eq!(p.messages[3].author.color_slot, None);
     }
 
@@ -682,7 +694,7 @@ mod tests {
             ),
             msg(5, 5, GroupAuthor::Human, None),
         ]);
-        let p = current_view_payload(&s, 7);
+        let p = current_view_payload(&s, 7, "en");
         let states: Vec<_> = p.messages.iter().map(|m| m.status).collect();
         assert_eq!(
             states,
@@ -701,7 +713,7 @@ mod tests {
     #[test]
     fn payload_members_carry_agent_label_and_role() {
         let s = state_with_messages(vec![]);
-        let p = current_view_payload(&s, 7);
+        let p = current_view_payload(&s, 7, "en");
         let g = &p.groups[0];
         assert_eq!(g.topic, "评审登录方案");
         assert_eq!(g.members[0].agent, AgentKind::Claude);
@@ -714,7 +726,7 @@ mod tests {
     #[test]
     fn payload_serializes_with_snake_case_keys_and_roundtrips_equality() {
         let s = state_with_messages(vec![msg(1, 1, GroupAuthor::Human, None)]);
-        let p = current_view_payload(&s, 7);
+        let p = current_view_payload(&s, 7, "en");
         let v: serde_json::Value =
             serde_json::from_str(&encode_group_chat_push(3, None, p.clone())).unwrap();
         assert_eq!(v["protocol_version"], 1);
@@ -723,7 +735,7 @@ mod tests {
         assert_eq!(v["payload"]["groups"][0]["members"][0]["agent"], "claude");
         assert_eq!(v["payload"]["messages"][0]["author"]["kind"], "human");
         assert_eq!(
-            current_view_payload(&s, 7),
+            current_view_payload(&s, 7, "en"),
             p,
             "同一状态两次计算相等(声明式去重依赖它)"
         );
@@ -743,8 +755,8 @@ mod tests {
             },
         );
         assert_eq!(
-            current_view_payload(&s, 7).hint.as_deref(),
-            Some("无人被点名,仅作为上下文")
+            current_view_payload(&s, 7, "en").hint.as_deref(),
+            Some("No one was mentioned; posted as context only")
         );
     }
 
@@ -1082,13 +1094,13 @@ mod tests {
     #[test]
     fn push_state_only_pushes_when_ready_and_changed() {
         let mut ps = WebviewPushState::default();
-        let a = stamped(current_view_payload(&WorkspaceState::default(), 7));
+        let a = stamped(current_view_payload(&WorkspaceState::default(), 7, "en"));
         assert!(ps.pending_push(&a).is_none(), "未 ready 不推");
         ps.set_ready(true);
         assert!(ps.pending_push(&a).is_some());
         assert_eq!(ps.mark_sent(a.clone()), 1);
         assert!(ps.pending_push(&a).is_none(), "未变化不重推");
-        let b = stamped(current_view_payload(&state_with_messages(vec![]), 7));
+        let b = stamped(current_view_payload(&state_with_messages(vec![]), 7, "en"));
         assert!(ps.pending_push(&b).is_some());
         ps.set_ready(true);
         assert!(ps.pending_push(&b).is_some(), "重新 ready 强制重发");
@@ -1099,7 +1111,7 @@ mod tests {
     fn push_state_resends_when_only_locale_changes() {
         let mut ps = WebviewPushState::default();
         ps.set_ready(true);
-        let a = stamped(current_view_payload(&WorkspaceState::default(), 7));
+        let a = stamped(current_view_payload(&WorkspaceState::default(), 7, "en"));
         ps.mark_sent(a.clone());
         assert!(ps.pending_push(&a).is_none());
         let switched = Stamped::new(
@@ -1128,9 +1140,15 @@ mod tests {
     fn push_state_failed_event_blocks_pushes() {
         let mut ps = WebviewPushState::default();
         ps.set_ready(true);
-        ps.set_failed("渲染异常".into());
-        let a = stamped(current_view_payload(&WorkspaceState::default(), 7));
+        ps.set_failed(dozer_model::LocalizedText::literal(
+            crate::i18n::HOST_OWNER,
+            "渲染异常",
+        ));
+        let a = stamped(current_view_payload(&WorkspaceState::default(), 7, "en"));
         assert!(ps.pending_push(&a).is_none());
-        assert_eq!(ps.failed(), Some("渲染异常"));
+        assert_eq!(
+            ps.failed().map(|t| crate::i18n::render_localized(t, "en")),
+            Some("渲染异常".to_string())
+        );
     }
 }

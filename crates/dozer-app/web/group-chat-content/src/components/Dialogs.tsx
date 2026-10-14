@@ -3,6 +3,7 @@ import { useEffect, useState } from 'preact/hooks';
 import type { AgentKey, Group, Member, Message } from '../types.ts';
 import { send } from '../ipc.ts';
 import { handleKey, suggestHandle, validateHandle } from '../handle.ts';
+import { t } from '../i18n.ts';
 
 export type DialogState =
   | null
@@ -45,10 +46,17 @@ function MemberForm({
     onClose();
   };
   return (
-    <Shell title={editing ? `编辑 @${editing.handle}` : '添加成员'} onClose={onClose}>
+    <Shell
+      title={
+        editing
+          ? t('dialog.edit_member.title', 'Edit @{handle}', { handle: editing.handle })
+          : t('dialog.add_member.title', 'Add member')
+      }
+      onClose={onClose}
+    >
       {!editing && (
         <label class="gc-field">
-          <span>Agent</span>
+          <span>{t('dialog.agent', 'Agent')}</span>
           <select
             class="gc-text" value={agent}
             onChange={(e) => {
@@ -64,23 +72,28 @@ function MemberForm({
         </label>
       )}
       <label class="gc-field">
-        <span>群内名称(用 @ 点名)</span>
+        <span>{t('dialog.handle', 'In-group name (use @ to call on it)')}</span>
         <input class="gc-text" value={handle} onInput={(e) => setHandle(e.currentTarget.value)} />
         {err && <em class="gc-err">{err}</em>}
       </label>
       <label class="gc-field">
-        <span>角色设定(可选)</span>
-        <textarea class="gc-text" rows={4} value={role} placeholder="例如:你负责挑方案的漏洞,只提问题不提方案。"
+        <span>{t('dialog.role', 'Role prompt (optional)')}</span>
+        <textarea class="gc-text" rows={4} value={role} placeholder={t(
+            'dialog.role_placeholder',
+            "e.g. You look for holes in the plan; only raise questions, don't propose solutions.",
+          )}
           onInput={(e) => setRole(e.currentTarget.value)} />
       </label>
       <div class="gc-modal-actions">
         {editing && (
           <button class="gc-danger gc-left" onClick={() => { send({ kind: 'remove_member', member_id: editing.id }); onClose(); }}>
-            移出群聊
+            {t('dialog.remove_member', 'Remove from group')}
           </button>
         )}
-        <button onClick={onClose}>取消</button>
-        <button class="gc-primary" disabled={err !== null} onClick={submit}>{editing ? '保存' : '添加'}</button>
+        <button onClick={onClose}>{t('cancel.button', 'Cancel')}</button>
+        <button class="gc-primary" disabled={err !== null} onClick={submit}>
+          {editing ? t('dialog.save', 'Save') : t('dialog.add', 'Add')}
+        </button>
       </div>
     </Shell>
   );
@@ -90,14 +103,14 @@ function PushTodo({ message, onClose }: { message: Message; onClose: () => void 
   const [text, setText] = useState(message.text.trim());
   const ok = text.trim() !== '';
   return (
-    <Shell title="转为待办" onClose={onClose}>
-      <p class="gc-dim">会在 Todo 面板新建一条待办;由哪个 agent 来做,在 Todo 里指派。</p>
+    <Shell title={t('dialog.push_todo.title', 'To to-do')} onClose={onClose}>
+      <p class="gc-dim">{t('dialog.push_todo.description', 'This creates a to-do in the Todo panel; assign who does it in Todo.')}</p>
       <textarea class="gc-text" rows={6} value={text} onInput={(e) => setText(e.currentTarget.value)} />
       <div class="gc-modal-actions">
-        <button onClick={onClose}>取消</button>
+        <button onClick={onClose}>{t('cancel.button', 'Cancel')}</button>
         <button class="gc-primary" disabled={!ok}
           onClick={() => { send({ kind: 'push_todo', message_id: message.id, text: text.trim() }); onClose(); }}>
-          创建待办
+          {t('dialog.push_todo.confirm', 'Create to-do')}
         </button>
       </div>
     </Shell>

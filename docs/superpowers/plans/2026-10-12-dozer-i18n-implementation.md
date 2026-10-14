@@ -209,6 +209,7 @@
 > 已完成：`dozer.files`（`extensions/files/` 全模块：文件树、右键菜单、删除确认、移动卡；随附 `scan_sources.py` 的 `is_test_context` 逐项语义重写）——见 ledger/acceptance。
 > 已完成：`dozer.database`（`extensions/database/` 全模块：数据源/驱动表单、浏览/查询视图、schema 树、状态与错误；`update` 增 `locale` 形参，`loading_hint` 复刻为 `loading_hint_localized`）——见 ledger/acceptance。
 > 已完成：`dozer.project`（`extensions/project/` 全模块：描述/共享记忆/链接、脚手架进度、删除确认流程；`ScaffoldStep` 改 `label_key`+英文 fallback 查表，`NameRenamed` 错误改 `Option<String>`，删除流程后台错误按规则走英文）——见 ledger/acceptance。
+> 已完成：`dozer.group_chat`（`extensions/group_chat/{mod.rs,view.rs,protocol.rs}` 与 `web/group-chat-content/`：列表/成员/消息状态、发送/停止/重试/转待办控件、对话框、handle 校验、耗时与阶段文案；新增前端 `i18n.ts`，`statusMeta` 式 key 查表；`set_failed` 改收 `LocalizedText`，`current_view_payload` 增 `locale` 形参；`app/update.rs` 引用顺移致 `usage_probe/host.rs` 引用表相应更新）——见 ledger/acceptance。
 
 - [ ] Files/Project/Git：工具栏、空态、上下文菜单、提交/变更/历史说明、创建及删除流程，包含跨 overlay 的同一操作。
 - [ ] Agent/Conversations/GroupChat：会话状态、发送控制、错误、上下文操作、群聊 Web 控件；不翻译消息正文、摘要和 prompt。

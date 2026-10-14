@@ -7,7 +7,7 @@
 
 use crate::extensions::toast::{Level, Outbox, Pending};
 use crate::panel_host::PanelIo;
-use dozer_model::{GroupInfo, GroupMessageInfo, GroupMessageStatus};
+use dozer_model::{GroupInfo, GroupMessageInfo, GroupMessageStatus, LocalizedText};
 use dozer_services::ServiceError;
 use std::time::{Duration, Instant};
 
@@ -21,6 +21,29 @@ pub use protocol::{
 pub use view::{ShellMessage, content_pane, list_pane};
 
 dozer_core::scope!(pub(crate) LOG, panel, "group_chat");
+
+/// 面板 owner(spec 2026-10-12-dozer-i18n-design §5)。
+pub const GROUP_CHAT_OWNER: &str = "dozer.group_chat";
+
+/// 解析一条群聊面板文案(渲染端拿得到 locale 时用)。
+pub(crate) fn t(key: &str, fallback: &str, locale: &str) -> String {
+    crate::i18n::panel_text(GROUP_CHAT_OWNER, key, fallback, locale)
+}
+
+/// 解析一条带具名参数的群聊面板文案。
+pub(crate) fn t_args(key: &str, fallback: &str, locale: &str, args: &[(&str, &str)]) -> String {
+    crate::i18n::panel_text_args(GROUP_CHAT_OWNER, key, fallback, locale, args)
+}
+
+/// 后台任务(拿不到 locale)构造一条 keyed 文案,渲染端再按 locale 解析。
+pub(crate) fn keyed(key: &str, fallback: &str) -> LocalizedText {
+    crate::i18n::panel_keyed(GROUP_CHAT_OWNER, key, fallback)
+}
+
+/// 后台任务构造一条带具名参数的 keyed 文案。
+pub(crate) fn keyed_args(key: &str, fallback: &str, args: &[(&str, &str)]) -> LocalizedText {
+    crate::i18n::panel_keyed_args(GROUP_CHAT_OWNER, key, fallback, args)
+}
 
 /// 有发言进行中时,两次轮询的最小间隔。本地 UDS 往返亚毫秒级,这个间隔只是为了
 /// 让流式感觉足够跟手又不空转。
@@ -48,7 +71,7 @@ pub struct WorkspaceState {
     poll_in_flight: bool,
     last_poll: Option<Instant>,
     backoff_until: Option<Instant>,
-    hint: Option<String>,
+    hint: Option<LocalizedText>,
     /// 原生群列表侧"新建群聊"内联输入框的草稿。空串 = 未在新建。
     new_group_topic: String,
     /// 原生群列表侧待确认删除的群 id(内联二次确认,不弹独立窗口)。
@@ -103,8 +126,9 @@ pub enum Message {
     DeleteCancelled(i64),
     /// 原生列表交互的悬停/无操作占位。
     Noop(i64),
-    /// 一次性失败(新建群失败、发送失败…),进 Toast。
-    Failed(i64, String),
+    /// 一次性失败(新建群失败、发送失败…),进 Toast。后台任务(拿不到 locale)
+    /// 构造 keyed 文案,渲染端解析。
+    Failed(i64, LocalizedText),
 }
 
 impl Message {
@@ -184,8 +208,8 @@ impl WorkspaceState {
     pub fn load_pending(&self) -> bool {
         !self.fresh && !self.load_in_flight
     }
-    pub fn hint(&self) -> Option<&str> {
-        self.hint.as_deref()
+    pub fn hint(&self) -> Option<&LocalizedText> {
+        self.hint.as_ref()
     }
     /// 原生群列表"新建群聊"内联输入框的当前草稿。
     pub fn new_group_topic(&self) -> &str {
@@ -304,7 +328,11 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
                     state.outbox.push(
                         LOG,
                         Level::Error,
-                        crate::extensions::toast::literal(format!("加载群聊失败: {e}")),
+                        keyed_args(
+                            "error.load_failed",
+                            "Failed to load group chats: {e}",
+                            &[("e", &e)],
+                        ),
                     );
                     Vec::new()
                 }
@@ -357,7 +385,11 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
                     state.outbox.push(
                         LOG,
                         Level::Error,
-                        crate::extensions::toast::literal(format!("刷新群聊失败: {e}")),
+                        keyed_args(
+                            "error.refresh_failed",
+                            "Failed to refresh group chats: {e}",
+                            &[("e", &e)],
+                        ),
                     );
                 }
             }
@@ -379,9 +411,16 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
                     .map(|n| format!("@{n}"))
                     .collect::<Vec<_>>()
                     .join("、");
-                Some(format!("未找到成员 {names}"))
+                Some(keyed_args(
+                    "hint.unknown_members",
+                    "Members not found: {names}",
+                    &[("names", &names)],
+                ))
             } else if placeholders.is_empty() {
-                Some("无人被点名,仅作为上下文".to_string())
+                Some(keyed(
+                    "hint.nobody_mentioned",
+                    "No one was mentioned; posted as context only",
+                ))
             } else {
                 None
             };
@@ -438,9 +477,7 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
         }
         Message::Noop(_) => Vec::new(),
         Message::Failed(_, text) => {
-            state
-                .outbox
-                .push(LOG, Level::Error, crate::extensions::toast::literal(text));
+            state.outbox.push(LOG, Level::Error, text);
             Vec::new()
         }
     }
@@ -507,16 +544,28 @@ pub fn spawn_command(
     let io = io.with_request(requests.scope(Some(project_id)), Message::AsyncResult);
     io.spawn(move |services, io| async move {
         let chat = services.group_chat;
-        let fail =
-            |what: &str, e: ServiceError| Message::Failed(project_id, format!("{what}: {e}"));
+        let fail = |key: &str, fallback: &str, e: ServiceError| {
+            Message::Failed(
+                project_id,
+                keyed_args(key, fallback, &[("e", &e.to_string())]),
+            )
+        };
         match cmd {
             Command::CreateGroup { topic } => match chat.create_group(project_id, topic).await {
                 Ok(group) => io.emit(Message::GroupCreated(project_id, group)),
-                Err(e) => io.emit(fail("新建群聊失败", e)),
+                Err(e) => io.emit(fail(
+                    "error.create_failed",
+                    "Failed to create group chat: {e}",
+                    e,
+                )),
             },
             Command::DeleteGroup { group_id } => match chat.delete_group(group_id).await {
                 Ok(()) => io.emit(Message::GroupDeleted(project_id, group_id)),
-                Err(e) => io.emit(fail("删除群聊失败", e)),
+                Err(e) => io.emit(fail(
+                    "error.delete_failed",
+                    "Failed to delete group chat: {e}",
+                    e,
+                )),
             },
             Command::AddMember {
                 group_id,
@@ -528,7 +577,11 @@ pub fn spawn_command(
                 .await
             {
                 Ok(group) => io.emit(Message::GroupChanged(project_id, group)),
-                Err(e) => io.emit(fail("添加成员失败", e)),
+                Err(e) => io.emit(fail(
+                    "error.add_member_failed",
+                    "Failed to add member: {e}",
+                    e,
+                )),
             },
             Command::UpdateMember {
                 member_id,
@@ -539,12 +592,20 @@ pub fn spawn_command(
                 .await
             {
                 Ok(group) => io.emit(Message::GroupChanged(project_id, group)),
-                Err(e) => io.emit(fail("修改成员失败", e)),
+                Err(e) => io.emit(fail(
+                    "error.update_member_failed",
+                    "Failed to update member: {e}",
+                    e,
+                )),
             },
             Command::RemoveMember { member_id } => {
                 match chat.remove_group_member(member_id).await {
                     Ok(group) => io.emit(Message::GroupChanged(project_id, group)),
-                    Err(e) => io.emit(fail("移除成员失败", e)),
+                    Err(e) => io.emit(fail(
+                        "error.remove_member_failed",
+                        "Failed to remove member: {e}",
+                        e,
+                    )),
                 }
             }
             Command::Post { group_id, text } => {
@@ -556,17 +617,17 @@ pub fn spawn_command(
                         placeholders,
                         unknown,
                     }),
-                    Err(e) => io.emit(fail("发送失败", e)),
+                    Err(e) => io.emit(fail("error.post_failed", "Failed to send: {e}", e)),
                 }
             }
             Command::Cancel { group_id, scope } => {
                 if let Err(e) = chat.cancel_group(group_id, scope).await {
-                    io.emit(fail("停止失败", e));
+                    io.emit(fail("error.cancel_failed", "Failed to stop: {e}", e));
                 }
             }
             Command::Retry { message_id } => match chat.retry_group_message(message_id).await {
                 Ok(message) => io.emit(Message::MessageUpdated(project_id, message)),
-                Err(e) => io.emit(fail("重试失败", e)),
+                Err(e) => io.emit(fail("error.retry_failed", "Failed to retry: {e}", e)),
             },
             Command::PushTodo {
                 group_id,
@@ -579,7 +640,11 @@ pub fn spawn_command(
                     message_id,
                     todo_id: todo.id,
                 }),
-                Err(e) => io.emit(fail("转为待办失败", e)),
+                Err(e) => io.emit(fail(
+                    "error.push_todo_failed",
+                    "Failed to add to to-do: {e}",
+                    e,
+                )),
             },
             Command::SelectGroup { .. } | Command::OpenTodo { .. } => {}
         }
@@ -1014,7 +1079,10 @@ mod tests {
                 unknown: vec![],
             },
         );
-        assert_eq!(s.hint(), Some("无人被点名,仅作为上下文"));
+        assert_eq!(
+            s.hint().map(|t| crate::i18n::render_localized(t, "en")),
+            Some("No one was mentioned; posted as context only".to_string())
+        );
         update(
             &mut s,
             Message::Posted {
@@ -1025,7 +1093,10 @@ mod tests {
                 unknown: vec!["nobody".into(), "Override".into()],
             },
         );
-        assert_eq!(s.hint(), Some("未找到成员 @nobody、@Override"));
+        assert_eq!(
+            s.hint().map(|t| crate::i18n::render_localized(t, "en")),
+            Some("Members not found: @nobody、@Override".to_string())
+        );
         update(
             &mut s,
             Message::Posted {
@@ -1094,11 +1165,18 @@ mod tests {
         let mut s = WorkspaceState::default();
         update(
             &mut s,
-            Message::Failed(1, "新建群聊失败: 群主题不能为空".into()),
+            Message::Failed(
+                1,
+                keyed_args(
+                    "error.create_failed",
+                    "Failed to create group chat: {e}",
+                    &[("e", "group topic cannot be empty")],
+                ),
+            ),
         );
         let p = s.take_outbox();
         assert_eq!(p.len(), 1);
-        assert!(p[0].text_stable().contains("群主题不能为空"));
+        assert!(p[0].text_stable().contains("group topic cannot be empty"));
         assert!(s.take_outbox().is_empty(), "取走后清空");
     }
 
@@ -1200,8 +1278,14 @@ mod tests {
     #[test]
     fn every_async_command_reports_failure_with_its_own_wording() {
         let cases: Vec<(Command, &str)> = vec![
-            (Command::CreateGroup { topic: "t".into() }, "新建群聊失败"),
-            (Command::DeleteGroup { group_id: 5 }, "删除群聊失败"),
+            (
+                Command::CreateGroup { topic: "t".into() },
+                "Failed to create group chat",
+            ),
+            (
+                Command::DeleteGroup { group_id: 5 },
+                "Failed to delete group chat",
+            ),
             (
                 Command::AddMember {
                     group_id: 5,
@@ -1209,7 +1293,7 @@ mod tests {
                     handle: "h".into(),
                     role_prompt: String::new(),
                 },
-                "添加成员失败",
+                "Failed to add member",
             ),
             (
                 Command::UpdateMember {
@@ -1217,31 +1301,34 @@ mod tests {
                     handle: "h".into(),
                     role_prompt: String::new(),
                 },
-                "修改成员失败",
+                "Failed to update member",
             ),
-            (Command::RemoveMember { member_id: 1 }, "移除成员失败"),
+            (
+                Command::RemoveMember { member_id: 1 },
+                "Failed to remove member",
+            ),
             (
                 Command::Post {
                     group_id: 5,
                     text: "hi".into(),
                 },
-                "发送失败",
+                "Failed to send",
             ),
             (
                 Command::Cancel {
                     group_id: 5,
                     scope: dozer_model::GroupCancelScope::Turn,
                 },
-                "停止失败",
+                "Failed to stop",
             ),
-            (Command::Retry { message_id: 9 }, "重试失败"),
+            (Command::Retry { message_id: 9 }, "Failed to retry"),
             (
                 Command::PushTodo {
                     group_id: 5,
                     message_id: 9,
                     text: "x".into(),
                 },
-                "转为待办失败",
+                "Failed to add to to-do",
             ),
         ];
         let rt = runtime();
@@ -1250,7 +1337,8 @@ mod tests {
             spawn_command(&Default::default(), 7, cmd.clone(), &io);
             match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
                 Message::Failed(7, text) => {
-                    assert!(text.starts_with(wording), "{cmd:?}: {text}");
+                    let rendered = crate::i18n::render_localized(&text, "en");
+                    assert!(rendered.starts_with(wording), "{cmd:?}: {rendered}");
                 }
                 other => panic!("{cmd:?}: unexpected {other:?}"),
             }
@@ -1302,7 +1390,8 @@ mod tests {
         );
         assert!(matches!(
             rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
-            Message::Failed(7, ref t) if t.starts_with("新建群聊失败")
+            Message::Failed(7, ref t)
+                if crate::i18n::render_localized(t, "en").starts_with("Failed to create group chat")
         ));
         run_effect(
             &Default::default(),
@@ -1312,7 +1401,8 @@ mod tests {
         );
         assert!(matches!(
             rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
-            Message::Failed(7, ref t) if t.starts_with("删除群聊失败")
+            Message::Failed(7, ref t)
+                if crate::i18n::render_localized(t, "en").starts_with("Failed to delete group chat")
         ));
     }
 
@@ -1527,8 +1617,14 @@ mod tests {
     #[test]
     fn command_failure_text_is_prefix_plus_the_service_message_unchanged() {
         let cases: Vec<(Command, &str)> = vec![
-            (Command::CreateGroup { topic: "t".into() }, "新建群聊失败"),
-            (Command::DeleteGroup { group_id: 5 }, "删除群聊失败"),
+            (
+                Command::CreateGroup { topic: "t".into() },
+                "Failed to create group chat",
+            ),
+            (
+                Command::DeleteGroup { group_id: 5 },
+                "Failed to delete group chat",
+            ),
             (
                 Command::AddMember {
                     group_id: 5,
@@ -1536,7 +1632,7 @@ mod tests {
                     handle: "h".into(),
                     role_prompt: String::new(),
                 },
-                "添加成员失败",
+                "Failed to add member",
             ),
             (
                 Command::UpdateMember {
@@ -1544,31 +1640,34 @@ mod tests {
                     handle: "h".into(),
                     role_prompt: String::new(),
                 },
-                "修改成员失败",
+                "Failed to update member",
             ),
-            (Command::RemoveMember { member_id: 1 }, "移除成员失败"),
+            (
+                Command::RemoveMember { member_id: 1 },
+                "Failed to remove member",
+            ),
             (
                 Command::Post {
                     group_id: 5,
                     text: "hi".into(),
                 },
-                "发送失败",
+                "Failed to send",
             ),
             (
                 Command::Cancel {
                     group_id: 5,
                     scope: dozer_model::GroupCancelScope::Turn,
                 },
-                "停止失败",
+                "Failed to stop",
             ),
-            (Command::Retry { message_id: 9 }, "重试失败"),
+            (Command::Retry { message_id: 9 }, "Failed to retry"),
             (
                 Command::PushTodo {
                     group_id: 5,
                     message_id: 9,
                     text: "x".into(),
                 },
-                "转为待办失败",
+                "Failed to add to to-do",
             ),
         ];
         let rt = runtime();
@@ -1579,7 +1678,8 @@ mod tests {
             spawn_command(&Default::default(), 7, cmd.clone(), &io);
             match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
                 Message::Failed(7, text) => {
-                    assert_eq!(text, format!("{wording}: daemon 错误: boom"), "{cmd:?}")
+                    let rendered = crate::i18n::render_localized(&text, "en");
+                    assert_eq!(rendered, format!("{wording}: daemon 错误: boom"), "{cmd:?}");
                 }
                 other => panic!("{cmd:?}: unexpected {other:?}"),
             }

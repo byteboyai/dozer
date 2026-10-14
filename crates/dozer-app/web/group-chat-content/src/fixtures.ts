@@ -6,14 +6,14 @@ export const unloadedFixture: ViewPayload = {
 export const noGroupsFixture: ViewPayload = { ...unloadedFixture, loaded: true };
 
 const members = [
-  { id: 10, agent: 'claude' as const, agent_label: 'Claude', handle: '架构师', role_prompt: '负责整体方案', color_slot: 0 },
-  { id: 11, agent: 'codex' as const, agent_label: 'Codex', handle: '审阅者', role_prompt: '', color_slot: 1 },
+  { id: 10, agent: 'claude' as const, agent_label: 'Claude', handle: 'architect', role_prompt: 'Owns the overall plan', color_slot: 0 },
+  { id: 11, agent: 'codex' as const, agent_label: 'Codex', handle: 'reviewer', role_prompt: '', color_slot: 1 },
 ];
-const group: Group = { id: 1, topic: '评审登录方案', members };
+const group: Group = { id: 1, topic: 'Review the login plan', members };
 
 const human = (id: number, seq: number, text: string): Message => ({
   id, seq, text, status: null, reason: null, duration_ms: null, todo_id: null,
-  author: { kind: 'human', label: '你', agent_label: null, color_slot: null },
+  author: { kind: 'human', label: 'You', agent_label: null, color_slot: null },
 });
 const agent = (
   id: number, seq: number, memberIdx: number, text: string, status: Message['status'],
@@ -30,16 +30,16 @@ const agent = (
 export const conversationFixture: ViewPayload = {
   project_id: 1, loaded: true, groups: [group], selected_group_id: 1, hint: null, running: false,
   messages: [
-    human(1, 1, '@架构师 @审阅者 登录要不要加验证码？'),
-    agent(2, 2, 0, '建议加。**理由**:\n- 防撞库\n- 成本低', 'done'),
-    agent(3, 3, 1, '同意,但要 `限流` 兜底。', 'done', { todo_id: 9 }),
+    human(1, 1, '@architect @reviewer Should login require a captcha?'),
+    agent(2, 2, 0, 'Recommend yes. **Reasons**:\n- Blocks credential stuffing\n- Low cost', 'done'),
+    agent(3, 3, 1, 'Agreed, but add `rate limiting` as a fallback.', 'done', { todo_id: 9 }),
   ],
 };
 
 export const runningFixture: ViewPayload = {
   ...conversationFixture, running: true,
   messages: [
-    human(1, 1, '@架构师 @审阅者 看下'),
+    human(1, 1, '@architect @reviewer take a look'),
     agent(2, 2, 0, '', 'running', { duration_ms: null }),
     agent(3, 3, 1, '', 'queued', { duration_ms: null }),
   ],
@@ -48,8 +48,8 @@ export const runningFixture: ViewPayload = {
 export const failedFixture: ViewPayload = {
   ...conversationFixture,
   messages: [
-    human(1, 1, '@架构师 看下'),
-    agent(2, 2, 0, '', 'failed', { reason: '发言超时' }),
+    human(1, 1, '@architect take a look'),
+    agent(2, 2, 0, '', 'failed', { reason: 'Speaking timed out' }),
     agent(3, 3, 1, '', 'cancelled'),
   ],
 };
@@ -62,11 +62,11 @@ export const maliciousFixture: ViewPayload = {
   ],
 };
 
-export const hintFixture: ViewPayload = { ...conversationFixture, hint: '未找到成员 @nobody' };
+export const hintFixture: ViewPayload = { ...conversationFixture, hint: 'Members not found: @nobody' };
 
 export const noMembersFixture: ViewPayload = {
   ...conversationFixture, messages: [],
-  groups: [{ id: 1, topic: '空群', members: [] }],
+  groups: [{ id: 1, topic: 'Empty group', members: [] }],
 };
 
 export const noSelectionFixture: ViewPayload = {

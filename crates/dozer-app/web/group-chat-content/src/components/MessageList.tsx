@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'preact/hooks';
 import type { Message } from '../types.ts';
 import { MessageItem } from './MessageItem.tsx';
+import { t } from '../i18n.ts';
 
 const NEAR_BOTTOM_PX = 80;
 
@@ -32,7 +33,12 @@ export function MessageList({
     >
       {messages.length === 0 ? (
         <div class="gc-empty-inline">
-          {hasMembers ? '发一条消息,用 @ 点名成员发言。' : '这个群还没有成员,先点上方「添加成员」。'}
+          {hasMembers
+            ? t('messages.empty_with_members', 'Send a message and use @ to call on members.')
+            : t(
+                'messages.empty_no_members',
+                'This group has no members yet; click "Add member" above first.',
+              )}
         </div>
       ) : (
         messages.map((m) => (

@@ -10,7 +10,6 @@ use byteui::interaction::icons;
 use dozer_model::GroupInfo;
 use iced_widget::core::{Border, Element, Length};
 use iced_widget::{button, column, container, row, text};
-
 /// 原生壳发出的消息:只有"重试"。
 #[derive(Debug, Clone)]
 pub enum ShellMessage {
@@ -24,31 +23,35 @@ pub fn new_group_topic_field_id() -> iced_widget::core::widget::Id {
 
 /// 右侧群列表列:群标题卡片列表(当前选中高亮)+ 底部"新建群聊"内联输入。
 /// 每行右侧有删除入口;处于删除确认态的群显示"删除/取消"两个按钮。
-pub fn list_pane(
-    ws_state: &WorkspaceState,
+pub fn list_pane<'a>(
+    ws_state: &'a WorkspaceState,
     project_id: i64,
+    locale: &'a str,
     width: Length,
     outer: Border,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = crate::theme::region::group_chat_list_pane();
-    let mut content =
-        column![home_panel_head(icons::IconKind::SquareSparkles, "群聊")].spacing(region.gap);
+    let mut content = column![home_panel_head(
+        icons::IconKind::SquareSparkles,
+        super::t("head.list", "Group chat", locale)
+    )]
+    .spacing(region.gap);
 
     if ws_state.groups().is_empty() {
         content = content.push(
-            text("还没有群聊")
+            text(super::t("empty.no_groups", "No group chats yet", locale))
                 .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim),
         );
     } else {
         let mut cards = column![].spacing(region.gap);
         for group in ws_state.groups() {
-            cards = cards.push(group_row(group, ws_state, project_id));
+            cards = cards.push(group_row(group, ws_state, project_id, locale));
         }
         content = content.push(cards);
     }
 
-    content = content.push(new_group_row(ws_state, project_id));
+    content = content.push(new_group_row(ws_state, project_id, locale));
 
     container(content.padding(region.padding))
         .width(width)
@@ -66,22 +69,34 @@ fn group_row<'a>(
     group: &'a GroupInfo,
     ws_state: &'a WorkspaceState,
     project_id: i64,
+    locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let c = byteui::theme::color::current();
     if ws_state.delete_confirm() == Some(group.id) {
         return row![
-            text(format!("删除「{}」?", group.topic))
-                .size(byteui::theme::font::body())
-                .color(c.cream)
-                .width(Length::Fill),
-            button(text("删除").size(byteui::theme::font::caption_sm()))
-                .on_press(Message::DeleteConfirmed(project_id))
-                .padding([4, 8])
-                .style(delete_confirm_button_style()),
-            button(text("取消").size(byteui::theme::font::caption_sm()))
-                .on_press(Message::DeleteCancelled(project_id))
-                .padding([4, 8])
-                .style(cancel_button_style()),
+            text(super::t_args(
+                "delete.confirm",
+                "Delete \"{topic}\"?",
+                locale,
+                &[("topic", &group.topic)]
+            ))
+            .size(byteui::theme::font::body())
+            .color(c.cream)
+            .width(Length::Fill),
+            button(
+                text(super::t("delete.button", "Delete", locale))
+                    .size(byteui::theme::font::caption_sm())
+            )
+            .on_press(Message::DeleteConfirmed(project_id))
+            .padding([4, 8])
+            .style(delete_confirm_button_style()),
+            button(
+                text(super::t("cancel.button", "Cancel", locale))
+                    .size(byteui::theme::font::caption_sm())
+            )
+            .on_press(Message::DeleteCancelled(project_id))
+            .padding([4, 8])
+            .style(cancel_button_style()),
         ]
         .spacing(6)
         .align_y(iced_widget::core::Alignment::Center)
@@ -91,9 +106,14 @@ fn group_row<'a>(
     let current = ws_state.selected() == Some(group.id);
     let member_count = group.members.len();
     let sub = if member_count == 0 {
-        "还没有成员".to_string()
+        super::t("members.none", "No members yet", locale)
     } else {
-        format!("{member_count} 位成员")
+        super::t_args(
+            "members.count",
+            "{n} members",
+            locale,
+            &[("n", &member_count.to_string())],
+        )
     };
     let sub_color = if current { c.green } else { c.dim };
     let title_color = if current { c.green } else { c.cream };
@@ -129,7 +149,7 @@ fn group_row<'a>(
         true,
         Message::DeleteRequested(project_id, group.id),
         move |_h| Message::Noop(project_id),
-        "删除群聊",
+        super::t("delete.tooltip", "Delete group chat", locale),
     );
 
     row![main, del]
@@ -139,12 +159,13 @@ fn group_row<'a>(
 }
 
 /// 底部"新建群聊"内联输入:placeholder + 回车/＋ 提交。
-fn new_group_row(
-    ws_state: &WorkspaceState,
+fn new_group_row<'a>(
+    ws_state: &'a WorkspaceState,
     project_id: i64,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    locale: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let input = byteui::form::input_text::view(
-        "新建群聊主题…",
+        &super::t("new_group.placeholder", "New group topic…", locale),
         ws_state.new_group_topic(),
         false,
         Some(new_group_topic_field_id()),
@@ -164,7 +185,7 @@ fn new_group_row(
         true,
         Message::NewGroupSubmit(project_id),
         move |_h| Message::Noop(project_id),
-        "新建群聊",
+        super::t("new_group.tooltip", "New group chat", locale),
     );
     row![input, add]
         .spacing(6)
@@ -193,7 +214,8 @@ fn cancel_button_style() -> impl Fn(&iced_widget::Theme, button::Status) -> butt
 }
 
 pub fn content_pane(
-    failed: Option<&str>,
+    failed: Option<&dozer_model::LocalizedText>,
+    locale: &str,
     width: Length,
     outer: Border,
 ) -> Element<'static, ShellMessage, iced_widget::Theme, iced_renderer::Renderer> {
@@ -201,9 +223,18 @@ pub fn content_pane(
     let body: Element<'static, ShellMessage, iced_widget::Theme, iced_renderer::Renderer> =
         match failed {
             Some(reason) => column![
-                text("群聊页面加载失败").size(14).color(tokens.body),
-                text(reason.to_string()).size(12).color(tokens.dim),
-                button(text("重试").size(13)).on_press(ShellMessage::Retry),
+                text(super::t(
+                    "content.load_failed",
+                    "Group chat page failed to load",
+                    locale
+                ))
+                .size(14)
+                .color(tokens.body),
+                text(crate::i18n::host_render(reason, locale))
+                    .size(12)
+                    .color(tokens.dim),
+                button(text(super::t("retry", "Retry", locale)).size(13))
+                    .on_press(ShellMessage::Retry),
             ]
             .spacing(10)
             .padding(16)

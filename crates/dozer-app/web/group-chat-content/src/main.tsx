@@ -5,6 +5,7 @@ import { App } from './components/App.tsx';
 import { applyEnvelope, DEFAULT_LOCALE, type PushState } from './protocol.ts';
 import { send } from './ipc.ts';
 import { shouldReportError } from './errors.ts';
+import { setLocale } from './i18n.ts';
 
 // 主题由 URL `?theme=light|dark` 注入(同 dozer://group-chat-content),缺省回落 dark。
 function applyThemeFromUrl() {
@@ -23,7 +24,11 @@ function Root() {
   useEffect(() => {
     window.__dozer = {
       dispatch(json: string) {
-        setState((prev) => applyEnvelope(prev, json));
+        setState((prev) => {
+          const next = applyEnvelope(prev, json);
+          setLocale(next.locale);
+          return next;
+        });
       },
     };
     const onError = (e: ErrorEvent) => {
