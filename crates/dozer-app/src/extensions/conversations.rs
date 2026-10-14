@@ -32,6 +32,44 @@ use std::sync::{Arc, Mutex};
 
 dozer_core::scope!(LOG, panel, "conversations");
 
+/// 会话面板的 i18n owner(`locales/panels/conversations/`)。
+pub(crate) const CONVERSATIONS_OWNER: &str = "dozer.conversations";
+
+/// 按当前 locale 取一条本面板文案。
+fn t(key: &str, fallback: &str, locale: &str) -> String {
+    crate::i18n::panel_text(CONVERSATIONS_OWNER, key, fallback, locale)
+}
+
+/// 带具名参数的 [`t`]。
+fn t_args(key: &str, fallback: &str, locale: &str, args: &[(&str, &str)]) -> String {
+    crate::i18n::panel_text_args(CONVERSATIONS_OWNER, key, fallback, locale, args)
+}
+
+/// 本面板的 loading 提示:`byteui::feedback::math_curve::loading_hint` 的
+/// `label` 是 `&'static str`,吃不下运行时本地化字符串,故复刻其结构
+/// (曲线动画 + 一行 dim 文案竖排、整体居中),文案经 `t()` 取。
+fn loading_hint_localized<'a>(
+    curve: byteui::feedback::math_curve::Curve,
+    key: &str,
+    fallback: &str,
+    locale: &str,
+    size: f32,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    container(
+        column![
+            byteui::feedback::math_curve::view_animated(curve, size),
+            text(t(key, fallback, locale))
+                .size(byteui::theme::font::body())
+                .color(byteui::theme::color::current().dim),
+        ]
+        .spacing(12)
+        .align_x(iced_widget::core::alignment::Horizontal::Center),
+    )
+    .center_x(Length::Fill)
+    .center_y(Length::Fill)
+    .into()
+}
+
 /// 会话列表(对话面板扁平列表)一页显示的条数,与 Git Log commit 列表的
 /// `COMMIT_PAGE_SIZE` 保持一致。首帧 1 页,点"更多..."页数递增。
 pub(crate) const CONVERSATION_PAGE_SIZE: usize = 20;
@@ -257,10 +295,12 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
                     ws_state.outbox.push_keyed_cooldown(
                         LOG,
                         crate::extensions::toast::Level::Error,
-                        crate::extensions::toast::literal(format!(
-                            "会话列表加载失败: {}",
-                            e.message
-                        )),
+                        crate::i18n::panel_keyed_args(
+                            CONVERSATIONS_OWNER,
+                            "error.list_load_failed",
+                            "Failed to load conversations: {e}",
+                            &[("e", e.message.as_str())],
+                        ),
                         "conversations-load",
                         std::time::Instant::now(),
                     );
@@ -340,6 +380,7 @@ pub fn on_activate(state: &WorkspaceState, ctx: &crate::panel_host::ActivationCt
 fn footer_bar<'a>(
     ws_state: &WorkspaceState,
     agents: &[AgentKind],
+    locale: &str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     if agents.is_empty() {
         return column![].into();
@@ -348,7 +389,7 @@ fn footer_bar<'a>(
     let current_label = ws_state
         .agent_filter
         .map(|a| a.label().to_string())
-        .unwrap_or_else(|| "全部".to_string());
+        .unwrap_or_else(|| t("filter.all", "All", locale));
     let switch = button(icons::view(
         if ws_state.agent_picker_open {
             IconKind::ChevronUp
@@ -413,6 +454,7 @@ fn footer_bar<'a>(
 #[cfg(target_os = "macos")]
 pub(crate) fn agent_picker_items(
     ws_state: &WorkspaceState,
+    locale: &str,
 ) -> Vec<crate::chrome::native_menu::Item<Message>> {
     use crate::chrome::native_menu::Item;
     let gold = byteui::theme::color::current().gold;
@@ -423,7 +465,7 @@ pub(crate) fn agent_picker_items(
     items.push(Item::Entry {
         icon: None,
         icon_color: None,
-        label: "全部".into(),
+        label: t("filter.all", "All", locale),
         color: if is_all_current { gold } else { body },
         enabled: !is_all_current,
         msg: Message::AgentFilterSelect(None),
@@ -448,6 +490,7 @@ pub(crate) fn agent_picker_items(
 fn agent_picker_view(
     ws_state: &WorkspaceState,
     agents: &[AgentKind],
+    locale: &str,
 ) -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
     if !ws_state.agent_picker_open {
         return iced_widget::Space::new().into();
@@ -457,7 +500,7 @@ fn agent_picker_view(
         Vec::new();
     items.push(crate::chrome::menu::item_row_fill(
         None,
-        "全部",
+        t("filter.all", "All", locale),
         if is_all_current {
             byteui::theme::color::current().gold
         } else {
@@ -522,12 +565,20 @@ pub fn view<'a>(
     locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::conversation_list_pane();
-    let mut content =
-        column![home_panel_head(IconKind::BotMessageSquare, "会话"),].spacing(region.gap);
+    let mut content = column![home_panel_head(
+        IconKind::BotMessageSquare,
+        t("head.title", "Conversations", locale),
+    )]
+    .spacing(region.gap);
 
     let search_active = ws_state.search_focused || !ws_state.search.is_empty();
+    let search_placeholder = t(
+        "search.placeholder",
+        "Search conversation title/summary…",
+        locale,
+    );
     let search_box = byteui::form::search_box::view(
-        "搜索会话标题/摘要…",
+        &search_placeholder,
         &ws_state.search_draft,
         Some(conversation_search_field_id()),
         search_active,
@@ -545,9 +596,11 @@ pub fn view<'a>(
     ));
 
     let Some(rows) = ws_state.sessions.as_ref() else {
-        content = content.push(byteui::feedback::math_curve::loading_hint(
+        content = content.push(loading_hint_localized(
             byteui::feedback::math_curve::Curve::RoseThree,
-            "加载中…",
+            "loading",
+            "Loading…",
+            locale,
             48.0,
         ));
         return container(content.padding(region.padding))
@@ -564,11 +617,15 @@ pub fn view<'a>(
     let agents_present = conversation_agents_present(rows);
     let filtered = filter_sessions(rows, &ws_state.search, ws_state.agent_filter);
     if rows.is_empty() {
-        content = content.push(lh(text("暂无对话记录")
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().dim)));
+        content = content.push(lh(text(t(
+            "empty.no_sessions",
+            "No conversations yet",
+            locale,
+        ))
+        .size(byteui::theme::font::body())
+        .color(byteui::theme::color::current().dim)));
     } else if filtered.is_empty() {
-        content = content.push(lh(text("无匹配结果")
+        content = content.push(lh(text(t("empty.no_match", "No matching results", locale))
             .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().dim)));
     }
@@ -592,21 +649,44 @@ pub fn view<'a>(
             .map(|text| {
                 let truncated: String = text.chars().take(30).collect();
                 if text.chars().count() > 30 {
-                    format!(" · 关联任务:{truncated}…")
+                    t_args(
+                        "row.task_suffix_truncated",
+                        " · Linked todo: {text}…",
+                        locale,
+                        &[("text", truncated.as_str())],
+                    )
                 } else {
-                    format!(" · 关联任务:{truncated}")
+                    t_args(
+                        "row.task_suffix",
+                        " · Linked todo: {text}",
+                        locale,
+                        &[("text", truncated.as_str())],
+                    )
                 }
             })
             .unwrap_or_default();
+        let time = relative_time_text(g.last_ts, now_ms, locale);
         let sub = if current {
-            format!(
-                "● 当前 · {agent_label} · {}{task_suffix}",
-                relative_time_text(g.last_ts, now_ms, locale)
+            t_args(
+                "row.current",
+                "● Current · {agent} · {time}{task}",
+                locale,
+                &[
+                    ("agent", agent_label),
+                    ("time", time.as_str()),
+                    ("task", task_suffix.as_str()),
+                ],
             )
         } else {
-            format!(
-                "{agent_label} · {}{task_suffix}",
-                relative_time_text(g.last_ts, now_ms, locale)
+            t_args(
+                "row.normal",
+                "{agent} · {time}{task}",
+                locale,
+                &[
+                    ("agent", agent_label),
+                    ("time", time.as_str()),
+                    ("task", task_suffix.as_str()),
+                ],
             )
         };
         let sub_color = if current {
@@ -655,7 +735,7 @@ pub fn view<'a>(
             true,
             Message::ListMore,
             |hovered| Message::Hover(HoverId::more(PanelKind::Conversations), hovered),
-            "更多",
+            t("more", "More", locale),
         );
         cards = cards.push(
             container(more_button)
@@ -672,7 +752,7 @@ pub fn view<'a>(
             ))
             .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style()),
     );
-    content = content.push(footer_bar(ws_state, &agents_present));
+    content = content.push(footer_bar(ws_state, &agents_present, locale));
 
     let panel = container(content.padding(region.padding))
         .width(width)
@@ -683,7 +763,7 @@ pub fn view<'a>(
             ..container::Style::default()
         });
 
-    iced_widget::stack![panel, agent_picker_view(ws_state, &agents_present)]
+    iced_widget::stack![panel, agent_picker_view(ws_state, &agents_present, locale)]
         .width(width)
         .height(Length::Fill)
         .into()
@@ -918,7 +998,7 @@ mod tests {
             agent_filter: None,
             ..WorkspaceState::default()
         };
-        let all_enabled = |ws: &WorkspaceState| match &agent_picker_items(ws)[0] {
+        let all_enabled = |ws: &WorkspaceState| match &agent_picker_items(ws, "en")[0] {
             crate::chrome::native_menu::Item::Entry { enabled, .. } => *enabled,
             crate::chrome::native_menu::Item::Separator => panic!("expected entry"),
         };
@@ -943,7 +1023,7 @@ mod tests {
             agent_filter: Some(AgentKind::Claude),
             ..WorkspaceState::default()
         };
-        let items = agent_picker_items(&ws_state);
+        let items = agent_picker_items(&ws_state, "en");
         // items[0] = "全部",之后按 conversation_agents_present 的稳定顺序
         // (Claude 先于 Opencode)排列。
         let enabled_at = |i: usize| match &items[i] {

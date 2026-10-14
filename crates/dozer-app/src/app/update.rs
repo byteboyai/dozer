@@ -1595,7 +1595,12 @@ impl App {
                     let last_cursor = self.last_cursor;
                     let items = self
                         .active_workspace()
-                        .map(|ws| conversations::agent_picker_items(&ws.conversations))
+                        .map(|ws| {
+                            conversations::agent_picker_items(
+                                &ws.conversations,
+                                self.locale.active_locale(),
+                            )
+                        })
                         .unwrap_or_default();
                     if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
                         self.update(Message::Conversations(msg));

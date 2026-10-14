@@ -390,6 +390,27 @@ python3 scripts/i18n/build_inventory.py
 - Task 10 其余面板（host/conversations/agent/files/database/project/group_chat）按面板逐个提交。
 - 双语运行期视觉核对随 Task 13 执行。
 
+## Task 10 验收（conversations 面板，按面板拆分提交）
+
+### 交付内容
+
+- 资源：`crates/dozer-app/locales/panels/conversations/{en,zh-CN}.json`（owner `dozer.conversations`）。
+- 迁移：`extensions/conversations.rs`（`CONVERSATIONS_OWNER` + 本地 `t()`/`t_args()`；`loading_hint_localized()` 复刻 `byteui` 的 `loading_hint` 以吃下运行时本地化文案；列表读失败 Toast 经 `i18n::panel_keyed_args` 改 keyed（`error.list_load_failed`）；`footer_bar`/`agent_picker_items`/`agent_picker_view` 收 `locale`（"全部"→`filter.all`）；`view` 的面板标题、搜索占位、加载提示、空态（`empty.no_sessions`/`empty.no_match`）、行副标题（`row.current`/`row.normal` + `row.task_suffix`/`row.task_suffix_truncated` 经 `t_args` 插值）、"更多" tooltip 全 keyed）。
+- 接线：`app/update.rs`（`agent_picker_items` 传 `self.locale.active_locale()`）。
+- 附带：`usage_probe/host.rs` 的职责引用行号随 `app/update.rs` 行位移同步（`BuildActivationCtx` 5421→5426、`RouteLoaded`/`DropOtherProject` 1646→1651）。
+
+### 验证命令与结果
+
+- `cargo build -p dozer-app`：通过。
+- `cargo test -p dozer-app`：**2001 passed / 0 failed**（含 `agent_picker_items_*` 用例更新为传 `"en"`）。
+- `cargo fmt --all -- --check`、`cargo clippy -p dozer-panel-usage -p dozer-app --all-targets`（仅既有告警）、`python3 scripts/i18n/check_resources.py`（8 个 owner 目录）、`bash scripts/check-log-scope.sh`、`python3 scripts/audit/check_panel_boundary.py`：全绿。
+- `python3 scripts/i18n/build_inventory.py`：conversations 面板路径候选**清零**（`counts: {"excluded": 3114, "migrated": 0, "unresolved": 432}`；`unresolved by task: {"10": 317, "11": 115}`；`dozer.conversations` 0 条）。
+
+### 残留
+
+- Task 10 其余面板（host/agent/files/database/project/group_chat）按面板逐个提交。
+- 双语运行期视觉核对随 Task 13 执行。
+
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |
 |---|---|---|

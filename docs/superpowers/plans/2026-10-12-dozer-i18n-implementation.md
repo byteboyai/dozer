@@ -203,6 +203,7 @@
 > 已完成：`dozer.git_log`（含共享 `diff_content.rs` 的两条 host 文案）——见 ledger/acceptance。
 > 已完成：`dozer.ssh`（含 `extensions/ssh/sftp.rs`；随附 `scan_sources.py` 字符字面量扫描 bug 修复）——见 ledger/acceptance。
 > 已完成：`dozer.web`（`extensions/browser.rs`；随附 `scan_sources.py` 的 `is_test_context` 边界 bug 修复）——见 ledger/acceptance。
+> 已完成：`dozer.conversations`（`extensions/conversations.rs`）——见 ledger/acceptance。
 
 - [ ] Files/Project/Git：工具栏、空态、上下文菜单、提交/变更/历史说明、创建及删除流程，包含跨 overlay 的同一操作。
 - [ ] Agent/Conversations/GroupChat：会话状态、发送控制、错误、上下文操作、群聊 Web 控件；不翻译消息正文、摘要和 prompt。

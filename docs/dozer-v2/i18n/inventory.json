@@ -3,7 +3,7 @@
  "counts": {
   "excluded": 3114,
   "migrated": 0,
-  "unresolved": 445
+  "unresolved": 432
  },
  "records": [
   {
@@ -1751,7 +1751,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
    "status": "excluded",
-   "symbol_hint": "string@offset 137071",
+   "symbol_hint": "string@offset 137251",
    "task": null,
    "text": "表格加载已取消",
    "usage": "log"
@@ -1765,7 +1765,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
    "status": "excluded",
-   "symbol_hint": "string@offset 137255",
+   "symbol_hint": "string@offset 137435",
    "task": null,
    "text": "表格首次加载失败",
    "usage": "log"
@@ -1779,7 +1779,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
    "status": "excluded",
-   "symbol_hint": "string@offset 137624",
+   "symbol_hint": "string@offset 137804",
    "task": null,
    "text": "表格首次加载完成",
    "usage": "log"
@@ -1793,7 +1793,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "SSH tab 栏宽度估算用的固定占位文本(只为对齐首个空白占位 tab 的宽度),不渲染给用户",
    "status": "excluded",
-   "symbol_hint": "string@offset 180040",
+   "symbol_hint": "string@offset 180220",
    "task": null,
    "text": "空白",
    "usage": "ui"
@@ -1807,7 +1807,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "SSH tab 栏宽度估算用的固定占位文本(只为对齐首个空白占位 tab 的宽度),不渲染给用户",
    "status": "excluded",
-   "symbol_hint": "string@offset 182276",
+   "symbol_hint": "string@offset 182456",
    "task": null,
    "text": "空白",
    "usage": "ui"
@@ -1821,7 +1821,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
    "status": "excluded",
-   "symbol_hint": "string@offset 204086",
+   "symbol_hint": "string@offset 204266",
    "task": null,
    "text": "打开项目页签失败,页签集合保持不变",
    "usage": "log"
@@ -1835,7 +1835,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
    "status": "excluded",
-   "symbol_hint": "string@offset 213622",
+   "symbol_hint": "string@offset 213802",
    "task": null,
    "text": "丢弃过期促成结果时结束会话失败: {e}",
    "usage": "log"
@@ -1863,7 +1863,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
    "status": "excluded",
-   "symbol_hint": "string@offset 233092",
+   "symbol_hint": "string@offset 233272",
    "task": null,
    "text": "Todo 内容页渲染失败,回落原生占位",
    "usage": "log"
@@ -1877,7 +1877,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
    "status": "excluded",
-   "symbol_hint": "string@offset 234612",
+   "symbol_hint": "string@offset 234792",
    "task": null,
    "text": "群聊内容页渲染失败,回落原生占位",
    "usage": "log"
@@ -1891,7 +1891,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
    "status": "excluded",
-   "symbol_hint": "string@offset 242639",
+   "symbol_hint": "string@offset 242819",
    "task": null,
    "text": "回写终端查询应答失败: {e}",
    "usage": "log"
@@ -1905,7 +1905,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
    "status": "excluded",
-   "symbol_hint": "string@offset 253171",
+   "symbol_hint": "string@offset 253351",
    "task": null,
    "text": "kind 应该在 side_of 返回的那一侧里,sanitize 已保证不变式",
    "usage": "diag"
@@ -1919,7 +1919,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
    "status": "excluded",
-   "symbol_hint": "string@offset 269983",
+   "symbol_hint": "string@offset 270163",
    "task": null,
    "text": "allowed_files 锁",
    "usage": "diag"
@@ -1933,7 +1933,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
    "status": "excluded",
-   "symbol_hint": "string@offset 278372",
+   "symbol_hint": "string@offset 278552",
    "task": null,
    "text": "allowed_files 锁",
    "usage": "diag"
@@ -1947,7 +1947,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
    "status": "excluded",
-   "symbol_hint": "string@offset 283158",
+   "symbol_hint": "string@offset 283338",
    "task": null,
    "text": "agent 状态变更",
    "usage": "log"
@@ -1961,7 +1961,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
    "status": "excluded",
-   "symbol_hint": "string@offset 288426",
+   "symbol_hint": "string@offset 288606",
    "task": null,
    "text": "提交总结任务失败",
    "usage": "log"
@@ -1975,7 +1975,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
    "status": "excluded",
-   "symbol_hint": "string@offset 291591",
+   "symbol_hint": "string@offset 291771",
    "task": null,
    "text": "总结任务不存在",
    "usage": "log"
@@ -1989,7 +1989,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
    "status": "excluded",
-   "symbol_hint": "string@offset 292310",
+   "symbol_hint": "string@offset 292490",
    "task": null,
    "text": "查询总结任务失败",
    "usage": "log"
@@ -2003,7 +2003,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 308937",
+   "symbol_hint": "string@offset 309117",
    "task": null,
    "text": "新标题",
    "usage": "test"
@@ -2017,7 +2017,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 308977",
+   "symbol_hint": "string@offset 309157",
    "task": null,
    "text": "新总结",
    "usage": "test"
@@ -2031,7 +2031,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 309219",
+   "symbol_hint": "string@offset 309399",
    "task": null,
    "text": "总结变化应重建快照",
    "usage": "test"
@@ -2045,7 +2045,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 309330",
+   "symbol_hint": "string@offset 309510",
    "task": null,
    "text": "新标题",
    "usage": "test"
@@ -2059,7 +2059,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 309391",
+   "symbol_hint": "string@offset 309571",
    "task": null,
    "text": "新总结",
    "usage": "test"
@@ -2073,7 +2073,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 309545",
+   "symbol_hint": "string@offset 309725",
    "task": null,
    "text": "旧加载水位应使新 WebView 进入加载态",
    "usage": "test"
@@ -2087,7 +2087,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 309611",
+   "symbol_hint": "string@offset 309791",
    "task": null,
    "text": "新标题",
    "usage": "test"
@@ -2101,7 +2101,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 309650",
+   "symbol_hint": "string@offset 309830",
    "task": null,
    "text": "新总结",
    "usage": "test"
@@ -2115,7 +2115,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 309810",
+   "symbol_hint": "string@offset 309990",
    "task": null,
    "text": "已有标题",
    "usage": "test"
@@ -2129,7 +2129,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 309860",
+   "symbol_hint": "string@offset 310040",
    "task": null,
    "text": "已有总结",
    "usage": "test"
@@ -2143,7 +2143,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 310116",
+   "symbol_hint": "string@offset 310296",
    "task": null,
    "text": "已有标题",
    "usage": "test"
@@ -2157,7 +2157,7 @@
    "path": "crates/dozer-app/src/app/update.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 310157",
+   "symbol_hint": "string@offset 310337",
    "task": null,
    "text": "已有总结",
    "usage": "test"
@@ -6364,6 +6364,20 @@
   },
   {
    "evidence": null,
+   "id": "cand-bdedde6b5496",
+   "key": null,
+   "kind": "string",
+   "owner": "dozer.conversations",
+   "path": "crates/dozer-app/src/extensions/conversations.rs",
+   "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
+   "status": "excluded",
+   "symbol_hint": "string@offset 10228",
+   "task": null,
+   "text": "对话会话列表查询失败(dozerd 不可用): {}",
+   "usage": "log"
+  },
+  {
+   "evidence": null,
    "id": "cand-6ec47f9790ac",
    "key": null,
    "kind": "string",
@@ -6371,7 +6385,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
    "status": "excluded",
-   "symbol_hint": "string@offset 10377",
+   "symbol_hint": "string@offset 11792",
    "task": null,
    "text": "由内核 App::update 直接拦截处理,不会转发到这里",
    "usage": "diag"
@@ -6385,7 +6399,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 25543",
+   "symbol_hint": "string@offset 28222",
    "task": null,
    "text": "provider 超时",
    "usage": "test"
@@ -6399,7 +6413,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 25813",
+   "symbol_hint": "string@offset 28492",
    "task": null,
    "text": "provider 超时",
    "usage": "test"
@@ -6413,7 +6427,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 28845",
+   "symbol_hint": "string@offset 31524",
    "task": null,
    "text": "修复登录 bug",
    "usage": "test"
@@ -6427,7 +6441,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 28901",
+   "symbol_hint": "string@offset 31580",
    "task": null,
    "text": "重构解析器",
    "usage": "test"
@@ -6441,7 +6455,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 29204",
+   "symbol_hint": "string@offset 31883",
    "task": null,
    "text": "重构解析器",
    "usage": "test"
@@ -6455,7 +6469,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 29544",
+   "symbol_hint": "string@offset 32223",
    "task": null,
    "text": "修复登录 bug",
    "usage": "test"
@@ -6469,7 +6483,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 29738",
+   "symbol_hint": "string@offset 32417",
    "task": null,
    "text": "重构解析器",
    "usage": "test"
@@ -6483,7 +6497,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 29928",
+   "symbol_hint": "string@offset 32607",
    "task": null,
    "text": "修复登录 bug",
    "usage": "test"
@@ -6497,7 +6511,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 30066",
+   "symbol_hint": "string@offset 32745",
    "task": null,
    "text": "修复登录 bug",
    "usage": "test"
@@ -6511,7 +6525,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 30278",
+   "symbol_hint": "string@offset 32957",
    "task": null,
    "text": "会话 A",
    "usage": "test"
@@ -6525,7 +6539,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 30330",
+   "symbol_hint": "string@offset 33009",
    "task": null,
    "text": "会话 B",
    "usage": "test"
@@ -6539,7 +6553,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 30536",
+   "symbol_hint": "string@offset 33215",
    "task": null,
    "text": "会话 B",
    "usage": "test"
@@ -6553,7 +6567,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 30665",
+   "symbol_hint": "string@offset 33344",
    "task": null,
    "text": "修复登录 bug",
    "usage": "test"
@@ -6567,7 +6581,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 30721",
+   "symbol_hint": "string@offset 33400",
    "task": null,
    "text": "修复登录 bug",
    "usage": "test"
@@ -6581,7 +6595,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 30813",
+   "symbol_hint": "string@offset 33492",
    "task": null,
    "text": "登录",
    "usage": "test"
@@ -6595,7 +6609,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 31046",
+   "symbol_hint": "string@offset 33725",
    "task": null,
    "text": "会话 A",
    "usage": "test"
@@ -6609,7 +6623,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 31114",
+   "symbol_hint": "string@offset 33793",
    "task": null,
    "text": "不存在",
    "usage": "test"
@@ -6623,7 +6637,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 32337",
+   "symbol_hint": "string@offset 35022",
    "task": null,
    "text": "已经是'全部'时该项自身该锁定",
    "usage": "test"
@@ -6637,7 +6651,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 32580",
+   "symbol_hint": "string@offset 35265",
    "task": null,
    "text": "筛了某个 agent 时'全部'项该可点",
    "usage": "test"
@@ -6651,7 +6665,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 33430",
+   "symbol_hint": "string@offset 36121",
    "task": null,
    "text": "当前选中的 Claude 该锁定",
    "usage": "test"
@@ -6665,7 +6679,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 33482",
+   "symbol_hint": "string@offset 36173",
    "task": null,
    "text": "未选中的 Opencode 该可点",
    "usage": "test"
@@ -6679,7 +6693,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 34571",
+   "symbol_hint": "string@offset 37262",
    "task": null,
    "text": "标题",
    "usage": "test"
@@ -6693,7 +6707,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 34823",
+   "symbol_hint": "string@offset 37514",
    "task": null,
    "text": "标题",
    "usage": "test"
@@ -6707,7 +6721,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 35492",
+   "symbol_hint": "string@offset 38183",
    "task": null,
    "text": "标题",
    "usage": "test"
@@ -6721,7 +6735,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 35894",
+   "symbol_hint": "string@offset 38585",
    "task": null,
    "text": "daemon 错误: boom",
    "usage": "test"
@@ -6735,7 +6749,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 36539",
+   "symbol_hint": "string@offset 39230",
    "task": null,
    "text": "daemon 错误: boom",
    "usage": "test"
@@ -6749,7 +6763,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 37004",
+   "symbol_hint": "string@offset 39695",
    "task": null,
    "text": "daemon 断开",
    "usage": "test"
@@ -6763,7 +6777,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 37189",
+   "symbol_hint": "string@offset 39880",
    "task": null,
    "text": "Unavailable 由顶栏徽标表达,不弹 Toast",
    "usage": "test"
@@ -6777,7 +6791,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 37688",
+   "symbol_hint": "string@offset 40379",
    "task": null,
    "text": "daemon 断开",
    "usage": "test"
@@ -6791,7 +6805,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 37844",
+   "symbol_hint": "string@offset 40535",
    "task": null,
    "text": "刷新失败不得抹掉已显示的会话",
    "usage": "test"
@@ -6805,7 +6819,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 38386",
+   "symbol_hint": "string@offset 41077",
    "task": null,
    "text": "daemon 错误: boom",
    "usage": "test"
@@ -6819,7 +6833,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 38548",
+   "symbol_hint": "string@offset 41239",
    "task": null,
    "text": "相同文本 60 秒内只提示一次",
    "usage": "test"
@@ -6833,7 +6847,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 38694",
+   "symbol_hint": "string@offset 41385",
    "task": null,
    "text": "daemon 错误: boom",
    "usage": "test"
@@ -6847,7 +6861,7 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 39012",
+   "symbol_hint": "string@offset 41703",
    "task": null,
    "text": "另一种错误",
    "usage": "test"
@@ -6861,24 +6875,10 @@
    "path": "crates/dozer-app/src/extensions/conversations.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 39095",
+   "symbol_hint": "string@offset 41786",
    "task": null,
    "text": "换了文本要再提示",
    "usage": "test"
-  },
-  {
-   "evidence": null,
-   "id": "cand-bdedde6b5496",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.conversations",
-   "path": "crates/dozer-app/src/extensions/conversations.rs",
-   "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
-   "status": "excluded",
-   "symbol_hint": "string@offset 8944",
-   "task": null,
-   "text": "对话会话列表查询失败(dozerd 不可用): {}",
-   "usage": "log"
   },
   {
    "evidence": null,
@@ -15471,7 +15471,7 @@
    "path": "crates/dozer-app/src/i18n.rs",
    "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
    "status": "excluded",
-   "symbol_hint": "string@offset 2595",
+   "symbol_hint": "string@offset 2772",
    "task": null,
    "text": "内嵌语言包必须是合法扁平原",
    "usage": "diag"
@@ -15485,7 +15485,7 @@
    "path": "crates/dozer-app/src/i18n.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 6706",
+   "symbol_hint": "string@offset 6883",
    "task": null,
    "text": "设置",
    "usage": "test"
@@ -15499,7 +15499,7 @@
    "path": "crates/dozer-app/src/i18n.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 6896",
+   "symbol_hint": "string@offset 7073",
    "task": null,
    "text": "文件",
    "usage": "test"
@@ -15513,7 +15513,7 @@
    "path": "crates/dozer-app/src/i18n.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 7073",
+   "symbol_hint": "string@offset 7250",
    "task": null,
    "text": "代码健康度",
    "usage": "test"
@@ -15527,7 +15527,7 @@
    "path": "crates/dozer-app/src/i18n.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 7437",
+   "symbol_hint": "string@offset 7614",
    "task": null,
    "text": "保存失败：disk full",
    "usage": "test"
@@ -15541,7 +15541,7 @@
    "path": "crates/dozer-app/src/i18n.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 8012",
+   "symbol_hint": "string@offset 8189",
    "task": null,
    "text": "3 分钟前",
    "usage": "test"
@@ -15555,7 +15555,7 @@
    "path": "crates/dozer-app/src/i18n.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 8612",
+   "symbol_hint": "string@offset 8789",
    "task": null,
    "text": "断线",
    "usage": "test"
@@ -15569,7 +15569,7 @@
    "path": "crates/dozer-app/src/i18n.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 8706",
+   "symbol_hint": "string@offset 8883",
    "task": null,
    "text": "用量统计失败: 断线",
    "usage": "test"
@@ -15583,7 +15583,7 @@
    "path": "crates/dozer-app/src/i18n.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 8814",
+   "symbol_hint": "string@offset 8991",
    "task": null,
    "text": "Failed to load usage: 断线",
    "usage": "test"
@@ -23080,7 +23080,7 @@
   },
   {
    "evidence": null,
-   "id": "cand-80aa7214b8e8",
+   "id": "cand-dd3c455731a1",
    "key": null,
    "kind": "string",
    "owner": "dozer.host",
@@ -23089,7 +23089,7 @@
    "status": "excluded",
    "symbol_hint": "string@offset 1034",
    "task": null,
-   "text": "app/update.rs:1646 (with_project 路由到别的 Workspace)",
+   "text": "app/update.rs:1651 (with_project 路由到别的 Workspace)",
    "usage": "ui"
   },
   {
@@ -43814,188 +43814,6 @@
   },
   {
    "evidence": null,
-   "id": "cand-ae4da95e790e",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.conversations",
-   "path": "crates/dozer-app/src/extensions/conversations.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 12246",
-   "task": "10",
-   "text": "全部",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-ae4da95e790e",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.conversations",
-   "path": "crates/dozer-app/src/extensions/conversations.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 14743",
-   "task": "10",
-   "text": "全部",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-ae4da95e790e",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.conversations",
-   "path": "crates/dozer-app/src/extensions/conversations.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 15970",
-   "task": "10",
-   "text": "全部",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-a865b7078555",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.conversations",
-   "path": "crates/dozer-app/src/extensions/conversations.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 18298",
-   "task": "10",
-   "text": "会话",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-f581099af750",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.conversations",
-   "path": "crates/dozer-app/src/extensions/conversations.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 18469",
-   "task": "10",
-   "text": "搜索会话标题/摘要…",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-24198e921b30",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.conversations",
-   "path": "crates/dozer-app/src/extensions/conversations.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 19268",
-   "task": "10",
-   "text": "加载中…",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-2c7bb5a1cd2f",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.conversations",
-   "path": "crates/dozer-app/src/extensions/conversations.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 19884",
-   "task": "10",
-   "text": "暂无对话记录",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-df473bc16811",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.conversations",
-   "path": "crates/dozer-app/src/extensions/conversations.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 20075",
-   "task": "10",
-   "text": "无匹配结果",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-68f1d3e71072",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.conversations",
-   "path": "crates/dozer-app/src/extensions/conversations.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 21049",
-   "task": "10",
-   "text": " · 关联任务:{truncated}…",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-831f4aa847b7",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.conversations",
-   "path": "crates/dozer-app/src/extensions/conversations.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 21126",
-   "task": "10",
-   "text": " · 关联任务:{truncated}",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-29e187fd5062",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.conversations",
-   "path": "crates/dozer-app/src/extensions/conversations.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 21284",
-   "task": "10",
-   "text": "● 当前 · {agent_label} · {}{task_suffix}",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-8cce8ca6d3b4",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.conversations",
-   "path": "crates/dozer-app/src/extensions/conversations.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 23296",
-   "task": "10",
-   "text": "更多",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-64deebff4cc4",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.conversations",
-   "path": "crates/dozer-app/src/extensions/conversations.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 9301",
-   "task": "10",
-   "text": "会话列表加载失败: {}",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
    "id": "cand-d7b0ad5497eb",
    "key": null,
    "kind": "string",
@@ -49834,10 +49652,10 @@
   }
  ],
  "schema": 1,
- "total": 3559,
+ "total": 3546,
  "unassigned_unresolved": 0,
  "unresolved_by_task": {
-  "10": 330,
+  "10": 317,
   "11": 115
  }
 }

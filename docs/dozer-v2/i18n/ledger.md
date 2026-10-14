@@ -36,7 +36,7 @@
 
 ## 3. 未解决 UI 候选按 owner 分布
 
-当前快照（`build_inventory.py`，共 445 条；已完成面板已从表中移除）：
+当前快照（`build_inventory.py`，共 432 条；已完成面板已从表中移除）：
 
 | owner | 数量 |
 |---|---|
@@ -47,10 +47,10 @@
 | dozer.files | 62 |
 | dozer.host | 37 |
 | dozer.agent | 15 |
-| dozer.conversations | 13 |
 | dozer.todo | 0 |
 | dozer.ssh | 0 |
 | dozer.web | 0 |
+| dozer.conversations | 0 |
 
 ## 4. 任务进度
 
@@ -70,6 +70,7 @@
 | 10 (git_log 面板) | ✅ 完成（按面板一提交） | `crates/dozer-app/locales/panels/git_log/{en,zh-CN}.json`(owner `dozer.git_log`，含 `search.*`/`filter.*`/`empty.*`/`branch.*`/`error.*`)、Rust：`extensions/git_log.rs`(`GIT_LOG_OWNER` + 本地 `t()`/`loading_hint_localized()`；`State.{error,detail,diff_load_error}` 改存 `LocalizedText`，`Message::{DetailLoaded,SnapshotLoaded,DiffContentLoaded,BranchSwitchDone}` 错误改 `LocalizedText`，后台任务用 `i18n::panel_keyed_args` 造 keyed 文案、渲染端 `render_localized`；`view`/`file_list_view`/`diff_pane_view`/`git_panel_footer_bar`/`branch_picker_view` 穿 `locale`)、`extensions/diff_content.rs`(`NotRenderable.reason` 由 `String` 改 `LocalizedText`——blob 键 `dozer.git_log.empty.diff_unrenderable_blob`、workdir 键 `dozer.host.file_history.unrenderable_workdir`)、`i18n.rs`(`PANEL_OWNERS` 增 `dozer.git_log`；新增 `panel_keyed_args`/`render_localized`)、`app/update.rs`(分支切换错误 keyed) | Task 10 内 git_log 路径候选清零;`diff_content.rs` 的两条 host 文案一并迁走(host 候选清零) |
 | 10 (ssh 面板) | ✅ 完成（按面板一提交） | `crates/dozer-app/locales/panels/ssh/{en,zh-CN}.json`(owner `dozer.ssh`，含 `head`/`empty`/`card`/`footer`/`form`/`status`/`confirm`/`error`/`sftp`)、Rust：`extensions/ssh.rs`(`SSH_OWNER` + 本地 `t()`；`ssh_error_localized`/`terminal_error_{unknown_host,key_changed,timeout,channel}`/`os_probe_timeout` 供后台任务造 keyed 文案；`TestStatus::Err` 与 `Message::{TestConnectionResult,TerminalConnectFailed}` 错误改 `LocalizedText`、`FetchOsResult` 错误改 `LocalizedText`；`host_card`/`ssh_host_card`/`radio_dot`/`text_btn`/`tree_column` 收 `String` 标签并穿 `locale`；`view`/`ssh_footer_bar`/`delete_confirm_spec` 穿 `locale`；`persist_hosts` 失败 Toast 改 keyed)、`extensions/ssh/sftp.rs`(`SftpTabState.status` 改 `LocalizedText`、树标题/上传下载菜单/连接失败/传输状态全 keyed；`sftp_pane_view`/`sftp_context_menu`/`context_menu_items`/`tree_column` 收 `locale`)、`app/{view,update}.rs`(`sftp_pane_view`/`context_menu_items` 传 `active_locale()`；`ssh_test_connection_result`/`ssh_terminal_connect_failed` 收 `LocalizedText`)、`workspace/state.rs`(终端建连各错误点改调 `ssh::terminal_error_*`/`ssh_error_localized`，移除裸中文)、`platform/{ssh_host_overlay,confirm_overlay}.rs`(穿 `locale`)、`app/update.rs` 顶层 `ssh_host_card` 键构造)、`scripts/i18n/scan_sources.py`(`strip_rust_comments` 修字符字面量 `'"'` 吞字符串的扫描 bug，使 ssh.rs 候选由 25 恢复到 40) | Task 10 内 ssh 面板候选清零(ssh.rs + sftp.rs);`dozer.host` 同批下降 41→37 |
 | 10 (web/browser 面板) | ✅ 完成（按面板一提交） | `crates/dozer-app/locales/panels/web/{en,zh-CN}.json`(owner `dozer.web`，含 `nav.*`/`addr.placeholder`/`star.tooltip`/`bookmarks.tooltip`/`sidebar.*`/`tab.new`/`empty.no_page`/`error.*`)、Rust：`extensions/browser.rs`(`WEB_OWNER` + 本地 `t()`；`Tabs::addr_submit` 返回 `Err(LocalizedText)`(`error.local_path`)；`State.error` 由 `Option<String>` 改 `Option<LocalizedText>`，收藏夹读/写失败经 `panel_keyed_args`(`error.bookmarks_load_failed`/`error.bookmarks_op_failed`)；`view`/`nav_button`/`star_button`/`bookmarks_toggle_button`/`bookmarks_panel`/`bookmark_group` 穿 `locale`，`bookmark_group` 标题改收 `String`；导航/星标/收藏夹/新标签页 tooltip、地址占位、侧栏分组/空态、空页面、错误行经 `t`/`render_localized`)、`app/view.rs` 与 `chrome/homespace.rs`(`browser::view` 传 `app.locale.active_locale()`)、`i18n.rs`(`PANEL_OWNERS` 增 `dozer.web`)、`scripts/i18n/scan_sources.py`(`is_test_context` 修 `#[cfg(test)] mod tests` 之后再出现 `#[cfg(test)]` 项导致测试模块字面量被误判的边界 bug) | Task 10 内 browser 路径候选清零;测试夹具字面量随扫描器修正一并归为 excluded，`dozer.database` 同批下降 69→68 |
+| 10 (conversations 面板) | ✅ 完成（按面板一提交） | `crates/dozer-app/locales/panels/conversations/{en,zh-CN}.json`(owner `dozer.conversations`，含 `head.title`/`search.placeholder`/`loading`/`empty.*`/`filter.all`/`row.*`/`more`/`error.list_load_failed`)、Rust：`extensions/conversations.rs`(`CONVERSATIONS_OWNER` + 本地 `t()`/`t_args()`/`loading_hint_localized()`——`byteui` 的 `loading_hint` label 是 `&'static str` 故复刻；列表读失败 Toast 改 `panel_keyed_args` keyed(`error.list_load_failed`)；`footer_bar`/`agent_picker_items`/`agent_picker_view` 收 `locale`("全部"→key)；`view` 的标题/搜索占位/加载/空态/行副标题(`row.current`/`row.normal`/`row.task_suffix*` 经 `t_args` 插值)/"更多" tooltip 全 keyed)、`app/update.rs`(`agent_picker_items` 传 `self.locale.active_locale()`；`usage_probe/host.rs` 引用行号随迁 5421→5426、1646→1651)、`i18n.rs`(`PANEL_OWNERS` 增 `dozer.conversations`) | Task 10 内 conversations 面板路径候选清零 |
 | 10–11 (其余) | 未开始 | — | 依赖 07/08 |
 | 12–14 | 未开始 | — | 见计划 §2 |
 
