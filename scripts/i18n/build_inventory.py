@@ -106,6 +106,13 @@ EXCLUDED_FILES = [
     # WebView 侧共享 i18n 运行时的 `I18nError` 异常文案:开发者诊断(模板/资源
     # 非法时抛出),不面向最终用户;页面文案由各 surface 自己的资源与任务负责。
     "crates/dozer-app/web/shared/i18n/i18n.ts",
+    # Web 面板的测试支撑模块:fixtures.ts 是 wire payload 样例(含用户任务文本/
+    # 分类名等用户内容),render-smoke.tsx 是渲染 smoke 用例的断言描述;都不是
+    # 发布 UI,文案按 spec 保持不变(smoke 描述是开发者断言,不必本地化)。
+    "crates/dozer-app/web/todo-content/src/fixtures.ts",
+    "crates/dozer-app/web/todo-content/src/render-smoke.tsx",
+    "crates/dozer-app/web/codehealth-content/src/fixtures.ts",
+    "crates/dozer-app/web/codehealth-content/src/render-smoke.tsx",
 ]
 EXCLUDED_FILE_REASON = "测试/黄金值工具/诊断探针/内部常量;非面向用户文案"
 
@@ -129,6 +136,7 @@ NON_UI_STRINGS = {
     ("crates/dozer-app/src/preview/webview_protocol.rs", "tab_id 不匹配(收到 {got},期望 {expected})"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
     ("crates/dozer-app/src/preview/webview_protocol.rs", "document_id 不匹配(收到 {got},期望 {expected})"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
     ("crates/dozer-app/src/preview/webview_protocol.rs", "未知 payload kind: {k}"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
+    ("crates/dozer-app/src/extensions/todo/update.rs", "新分类"): "新建分类的默认名,是**用户数据的初始值**(落库后立即进入改名态);按计划「保留用户分类名」,不本地化",
 }
 
 # 非 app 的后端 crate:字符串不是 UI,按 §10 归为"错误/诊断适配",由 Task 07 与

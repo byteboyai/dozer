@@ -196,7 +196,7 @@ pub(crate) fn desired_confirm(
     if ws.todo.clear_confirm_open() {
         return Some((
             ConfirmTrigger::TodoClear,
-            map_todo_spec(crate::extensions::todo::clear_confirm_spec()),
+            map_todo_spec(crate::extensions::todo::clear_confirm_spec(locale)),
         ));
     }
     None

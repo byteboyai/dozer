@@ -1,9 +1,10 @@
 import { useEffect, useRef } from 'preact/hooks';
 import type { TodoCard as Card } from '../types.ts';
-import { STATUS_META } from '../statusMeta.ts';
+import { STATUS_META, statusLabel } from '../statusMeta.ts';
 import { formatNumber } from '../segments.ts';
 import { isCancel, isInlineCommit } from '../compose.ts';
 import { MAX_TEXT_CHARS } from '../limits.ts';
+import { t } from '../i18n.ts';
 
 export interface CardProps {
   item: Card;
@@ -56,7 +57,7 @@ export function TodoCard(p: CardProps) {
       <div class="card-top">
         <span class="card-number">{formatNumber(p.number)}</span>
         <button type="button" class="chip" onClick={(e) => p.onOpenCategory(rectOf(e))}>
-          {item.category_name ?? '未分类'}
+          {item.category_name ?? t('category.uncategorized', 'Uncategorized')}
         </button>
         <span class="spacer" />
         <button type="button" class="date-badge" onClick={(e) => p.onOpenCalendar(rectOf(e))}>
@@ -68,7 +69,7 @@ export function TodoCard(p: CardProps) {
         <button
           type="button"
           class={`checkbox${done ? ' is-checked' : ''}`}
-          aria-label="切换完成"
+          aria-label={t('card.toggle_done', 'Toggle done')}
           onClick={() => p.onToggle()}
         >
           {done ? '✓' : ''}
@@ -77,7 +78,7 @@ export function TodoCard(p: CardProps) {
           <textarea
             ref={taRef}
             class="edit-area"
-            placeholder="任务内容…"
+            placeholder={t('card.text_placeholder', 'Task content...')}
             maxLength={MAX_TEXT_CHARS}
             defaultValue={item.text}
             rows={1}
@@ -105,17 +106,17 @@ export function TodoCard(p: CardProps) {
           style={{ color: meta.color }}
           onClick={(e) => p.onOpenStatus(rectOf(e))}
         >
-          <span>{meta.label}</span>
+          <span>{statusLabel(item.state)}</span>
           <span class="chevron" aria-hidden="true">▾</span>
         </button>
         {showDetail ? (
           <button type="button" class="detail-btn" onClick={() => p.onOpenDetail()}>
-            详情
+            {t('card.detail', 'Details')}
           </button>
         ) : null}
         {showAssign ? (
           <button type="button" class="assign-btn" onClick={(e) => p.onOpenDispatch(rectOf(e))}>
-            <span>指派</span>
+            <span>{t('card.assign', 'Assign')}</span>
             <span aria-hidden="true">›</span>
           </button>
         ) : null}

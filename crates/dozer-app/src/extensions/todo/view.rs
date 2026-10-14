@@ -12,6 +12,17 @@ use super::*;
 
 /// Todo 面板渲染成两个独立的边框 pane(镜像 Files/Project 面板已有的
 /// "侧栏 + 内容区，中间一条可拖拽分隔线"两栏模式，不再是单个面板内部一个
+/// 按面板 owner 解析一条自带英文 fallback 的文案(owner = `dozer.todo`)。
+fn t(app: &impl PanelHost, key: &str, fallback: &str) -> String {
+    crate::i18n::panel_text(TODO_OWNER, key, fallback, app.locale())
+}
+
+/// 同 [`t`],带具名参数。
+#[allow(dead_code)]
+fn t_args(app: &impl PanelHost, key: &str, fallback: &str, args: &[(&str, &str)]) -> String {
+    crate::i18n::panel_text_args(TODO_OWNER, key, fallback, app.locale(), args)
+}
+
 /// `row![sidebar, body]`)——调用方(`app.rs` 的 `PanelKind::Todo` 分支)负责
 /// 拼 `row![sidebar_pane, divider_bar(Divider::TodoSplit, ..), content_pane]`。
 /// 左栏：面板头 + 分类导航。右栏：列表视图主体 + 底部新增输入。
@@ -21,7 +32,7 @@ pub fn view<'a>(
     ws_state: &'a WorkspaceState,
     // 内容区 webview 宿主的失败原因(`App.todo_webview.failed()`,由调用方取了传进来:
     // 面板 view 不再读宿主的 `App` 字段)。
-    webview_failed: Option<&'a str>,
+    webview_failed: Option<&'a dozer_model::LocalizedText>,
     sidebar_width: Length,
     sidebar_outer: Border,
     content_width: Length,
@@ -36,7 +47,7 @@ pub fn view<'a>(
     // 被大 padding 顶下去,与文件面板头部高度/分割线位置一致。
     let header = container(crate::chrome::homespace::home_panel_head(
         icons::IconKind::ListTodo,
-        "Todo",
+        t(app, "title", "Todo"),
     ))
     .padding(theme::region::project_pane().padding);
 
@@ -53,7 +64,7 @@ pub fn view<'a>(
                 header,
                 category_nav,
                 space::Space::new().height(Length::Fill),
-                todo_clear_footer_bar(ws_state),
+                todo_clear_footer_bar(app, ws_state),
             ]
             .height(Length::Fill),
         )
@@ -76,8 +87,8 @@ pub fn view<'a>(
         crate::app::PanelKind::Todo,
         app.list_collapsed(crate::app::PanelKind::Todo),
         crate::app::HoverId::list_collapse(crate::app::PanelKind::Todo),
-        "收起",
-        "展开",
+        t(app, "collapse", "Collapse"),
+        t(app, "expand", "Expand"),
         Message::ToggleListCollapse,
         move |hovered| {
             Message::Hover(
@@ -94,12 +105,12 @@ pub fn view<'a>(
     let top_row = container(
         row![
             todo_view_tab(
-                "列表视图",
+                t(app, "view.list", "List"),
                 TodoView::List,
                 ws_state.view() == TodoView::List
             ),
             todo_view_tab(
-                "看板视图",
+                t(app, "view.kanban", "Board"),
                 TodoView::Kanban,
                 ws_state.view() == TodoView::Kanban
             ),
@@ -116,10 +127,18 @@ pub fn view<'a>(
     .align_y(iced_widget::core::alignment::Vertical::Center);
     let body: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         match ws_state.view() {
-            TodoView::List => todo_content_slot(webview_failed),
+            TodoView::List => todo_content_slot(
+                webview_failed.map(|text| crate::i18n::host_render(text, app.locale())),
+                t(app, "content.load_failed", "Todo page failed to load"),
+                t(app, "retry", "Retry"),
+            ),
             // 看板视图一期仅占位:此时 webview 不挂载(`preview_desired` 的
             // `content_desired` 为假),原生占位可见。
-            TodoView::Kanban => kanban_placeholder(),
+            TodoView::Kanban => kanban_placeholder(t(
+                app,
+                "view.kanban_placeholder",
+                "Board view is not implemented yet",
+            )),
         };
     let content_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
         container(column![top_row, crate::app::tab_divider(), body].height(Length::Fill))
@@ -147,7 +166,7 @@ pub fn view<'a>(
 /// `panel_tab` 那个关不掉关闭按钮的带 close 形状,只 `button::status` 做同一套
 /// 静止/hover 两态。点击下发 `Message::SelectView`,切换列表/看板视图。
 pub(crate) fn todo_view_tab<'a>(
-    label: &'static str,
+    label: String,
     view: TodoView,
     active: bool,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -201,10 +220,11 @@ pub(crate) fn todo_view_tab<'a>(
 /// 看板视图的一期占位:视觉几列状态分区我们不渲染任何任务(功能未实现),
 /// 只在内容区中央给一行淡淡的提示文字,说明该视图待实现。等接入了真正
 /// 的看板渲染(按状态分列的那批 `todo_card`)再替换这里。
-pub(crate) fn kanban_placeholder<'a>()
--> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+pub(crate) fn kanban_placeholder<'a>(
+    label: String,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     container(
-        text("看板视图待实现")
+        text(label)
             .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().dim),
     )
@@ -219,19 +239,21 @@ pub(crate) fn kanban_placeholder<'a>()
 /// 这里只放一个撑满的透明占位;webview 加载失败时改显示原因与「重试」
 /// (不保留旧 iced 列表作回退)。
 pub(crate) fn todo_content_slot<'a>(
-    failed: Option<&str>,
+    failed: Option<String>,
+    load_failed: String,
+    retry: String,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let tokens = byteui::theme::color::current();
     match failed {
         Some(reason) => container(
             column![
-                text("Todo 页面加载失败")
+                text(load_failed)
                     .size(byteui::theme::font::body())
                     .color(tokens.body),
-                text(reason.to_string())
+                text(reason)
                     .size(byteui::theme::font::caption())
                     .color(tokens.dim),
-                button(text("重试").size(byteui::theme::font::label()))
+                button(text(retry).size(byteui::theme::font::label()))
                     .on_press(Message::ContentRetry),
             ]
             .spacing(10)
@@ -266,6 +288,7 @@ pub const ADD_INPUT_MAX_HEIGHT: f32 = 400.0;
 /// `update` 里只收起弹窗,是 no-op,仅占位——弹窗流程已就位,后续接入
 /// 清空逻辑时在此落地。
 pub(crate) fn todo_clear_footer_bar<'a>(
+    app: &impl PanelHost,
     _ws_state: &'a WorkspaceState,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 内容套一层 `width(Fill).align_x(Center)` 容器,让图标+文字在撑满整行
@@ -277,7 +300,7 @@ pub(crate) fn todo_clear_footer_bar<'a>(
                 byteui::theme::icon_size::row(),
                 byteui::theme::color::current().red,
             ),
-            text("清空列表")
+            text(t(app, "clear_list", "Clear list"))
                 .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().red),
         ]
@@ -342,14 +365,24 @@ pub(crate) fn todo_clear_footer_bar<'a>(
 /// 由红色"清空"按钮本身表达,不需要标题图标重复。
 /// "清空列表"确认弹窗的内容描述——宿主(`platform::confirm_overlay`)取这
 /// 一份渲染,保证文案/消息不因迁移而分叉。
-pub(crate) fn clear_confirm_spec() -> byteui::feedback::dialog::ConfirmDialog<Message> {
+pub(crate) fn clear_confirm_spec(locale: &str) -> byteui::feedback::dialog::ConfirmDialog<Message> {
     byteui::feedback::dialog::ConfirmDialog {
         icon: Some(icons::IconKind::ListTodo),
-        title: "清空列表".to_string(),
-        description: "这会清空当前项目的全部任务,操作不可撤销。".to_string(),
-        cancel_label: "取消".to_string(),
+        title: crate::i18n::panel_text(TODO_OWNER, "clear_confirm.title", "Clear list", locale),
+        description: crate::i18n::panel_text(
+            TODO_OWNER,
+            "clear_confirm.description",
+            "This clears all tasks in the current project and cannot be undone.",
+            locale,
+        ),
+        cancel_label: crate::i18n::panel_text(TODO_OWNER, "clear_confirm.cancel", "Cancel", locale),
         cancel_msg: Message::ClearListCancel,
-        confirm_label: "清空".to_string(),
+        confirm_label: crate::i18n::panel_text(
+            TODO_OWNER,
+            "clear_confirm.confirm",
+            "Clear",
+            locale,
+        ),
         confirm_msg: Message::ClearListConfirm,
         close_msg: None,
         confirm_color: byteui::theme::color::current().red,
@@ -381,7 +414,7 @@ pub(crate) fn category_tree_nav<'a>(
         .is_some_and(|d| d.over == Some(DropTarget::Root));
     let mut all_area = MouseArea::new(category_pseudo_row(
         icons::IconKind::CircleSmall,
-        "全部",
+        t(app, "category.all", "All"),
         ws_state.category_selected() == CategoryFilter::All,
         Message::CategorySelect(CategoryFilter::All),
     ));
@@ -412,7 +445,7 @@ pub(crate) fn category_tree_nav<'a>(
 
     let mut uncat_area = MouseArea::new(category_pseudo_row(
         icons::IconKind::CircleSmall,
-        "未分类",
+        t(app, "category.uncategorized", "Uncategorized"),
         ws_state.category_selected() == CategoryFilter::Uncategorized,
         Message::CategorySelect(CategoryFilter::Uncategorized),
     ));
@@ -464,7 +497,11 @@ pub(crate) fn category_tree_nav<'a>(
                     move |hovered| {
                         Message::Hover(HoverId::row(PanelKind::Todo, row.id as u64), hovered)
                     },
-                    if row.expanded { "收起" } else { "展开" },
+                    if row.expanded {
+                        t(app, "collapse", "Collapse")
+                    } else {
+                        t(app, "expand", "Expand")
+                    },
                 )
             } else {
                 space::Space::new()
@@ -572,7 +609,7 @@ pub(crate) fn category_rename_row<'a>(
 /// 节点但没有展开箭头。
 pub(crate) fn category_pseudo_row<'a>(
     icon: icons::IconKind,
-    label: &'a str,
+    label: String,
     active: bool,
     on_press: Message,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
@@ -627,13 +664,18 @@ mod clear_confirm_tests {
 
     #[test]
     fn clear_confirm_spec_carries_cancel_and_confirm_messages() {
-        let spec = clear_confirm_spec();
-        assert_eq!(spec.title, "清空列表");
-        assert_eq!(spec.confirm_label, "清空");
-        assert_eq!(spec.cancel_label, "取消");
+        let spec = clear_confirm_spec("en");
+        assert_eq!(spec.title, "Clear list");
+        assert_eq!(spec.confirm_label, "Clear");
+        assert_eq!(spec.cancel_label, "Cancel");
         assert!(matches!(spec.confirm_msg, Message::ClearListConfirm));
         assert!(matches!(spec.cancel_msg, Message::ClearListCancel));
         assert_eq!(spec.content_spacing, 12.0);
+
+        let zh = clear_confirm_spec("zh-CN");
+        assert_eq!(zh.title, "清空列表");
+        assert_eq!(zh.confirm_label, "清空");
+        assert_eq!(zh.cancel_label, "取消");
     }
 }
 
@@ -644,9 +686,10 @@ mod clear_confirm_tests {
 /// 塞进一个跟随光标定位、随时开合的原生弹窗里没有必要也不合适)。
 /// 宽度撑满宿主窗口(整窗逻辑尺寸由 `todo_detail_overlay::card_logical_size`
 /// 给定)。
-pub fn todo_detail_card(
-    todo: &WorkspaceState,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+pub fn todo_detail_card<'a>(
+    todo: &'a WorkspaceState,
+    locale: &str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(idx) = todo.detail_open_idx() else {
         return column![].into();
     };
@@ -658,8 +701,19 @@ pub fn todo_detail_card(
         text(item.text.clone()).size(byteui::theme::font::subtitle()),
         text(
             item.assigned_agent
-                .map(|a| format!("指派给:{}", a.label()))
-                .unwrap_or_else(|| "未指派".to_string())
+                .map(|a| crate::i18n::panel_text_args(
+                    TODO_OWNER,
+                    "detail.assigned_to",
+                    "Assigned to: {agent}",
+                    locale,
+                    &[("agent", a.label())]
+                ))
+                .unwrap_or_else(|| crate::i18n::panel_text(
+                    TODO_OWNER,
+                    "detail.unassigned",
+                    "Unassigned",
+                    locale
+                ))
         )
         .size(byteui::theme::font::body())
         .color(byteui::theme::color::current().dim),
@@ -669,11 +723,11 @@ pub fn todo_detail_card(
     let mut turns_col = column![].spacing(8);
     for turn in todo.detail_turns() {
         let label = if turn.role == "human" {
-            "你".to_string()
+            crate::i18n::panel_text(TODO_OWNER, "detail.you", "You", locale)
         } else {
             item.assigned_agent
                 .map(|a| a.label().to_string())
-                .unwrap_or_else(|| "AI".to_string())
+                .unwrap_or_else(|| crate::i18n::panel_text(TODO_OWNER, "detail.ai", "AI", locale))
         };
         turns_col = turns_col.push(
             column![
@@ -696,7 +750,7 @@ pub fn todo_detail_card(
         .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style());
 
     let reply_box = container(byteui::form::input_text::view(
-        "回复...",
+        &crate::i18n::panel_text(TODO_OWNER, "detail.reply_placeholder", "Reply...", locale),
         todo.detail_reply_draft(),
         false,
         Some(detail_reply_field_id()),
@@ -707,9 +761,9 @@ pub fn todo_detail_card(
     ))
     .width(Length::Fill);
     let submit_label = if todo.detail_processing() {
-        "处理中…"
+        crate::i18n::panel_text(TODO_OWNER, "detail.processing", "Processing...", locale)
     } else {
-        "处理"
+        crate::i18n::panel_text(TODO_OWNER, "detail.submit", "Send", locale)
     };
     let submit = button(text(submit_label))
         .on_press_maybe((!todo.detail_processing()).then_some(Message::DetailReplySubmit))

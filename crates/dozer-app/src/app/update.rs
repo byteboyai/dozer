@@ -4963,7 +4963,11 @@ impl App {
                     %reason,
                     "Todo 内容页渲染失败,回落原生占位"
                 );
-                self.todo_webview.set_failed(reason.clone());
+                self.todo_webview
+                    .set_failed(dozer_model::LocalizedText::literal(
+                        crate::i18n::HOST_OWNER,
+                        reason.clone(),
+                    ));
                 return;
             }
             _ => {}

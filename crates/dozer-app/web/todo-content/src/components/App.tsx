@@ -11,6 +11,7 @@ import { TodoCard } from './TodoCard.tsx';
 import { AddBox } from './AddBox.tsx';
 import { Popover, type PopoverState } from './Popovers.tsx';
 import { SegmentDivider, EmptyHint } from './Segment.tsx';
+import { t } from '../i18n.ts';
 
 const DRAG_THRESHOLD = 4;
 
@@ -207,19 +208,19 @@ export function App({ payload }: { payload: ViewPayload }) {
       />
       <div class="todo-scroll" ref={scrollRef} onScroll={(e) => (ui.scrollTop = (e.currentTarget as HTMLElement).scrollTop)}>
         {!hasAny ? (
-          <EmptyHint>没有匹配的任务</EmptyHint>
+          <EmptyHint>{t('empty.no_match', 'No matching tasks')}</EmptyHint>
         ) : (
           <>
             <div class="segment segment-active">{activeOrdered.map((it) => renderCard(it, true))}</div>
             {segs.paused.length > 0 ? (
               <div class="segment segment-paused">
-                <SegmentDivider label="搁置" />
+                <SegmentDivider label={t('status.suspended', 'Suspended')} />
                 {segs.paused.map((it) => renderCard(it, false))}
               </div>
             ) : null}
             {segs.done.length > 0 ? (
               <div class="segment segment-done">
-                <SegmentDivider label="已完成" />
+                <SegmentDivider label={t('status.done', 'Done')} />
                 {segs.done.map((it) => renderCard(it, false))}
               </div>
             ) : null}

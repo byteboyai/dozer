@@ -184,7 +184,8 @@
 **文件：** Todo/CodeHealth 原生目录与各自 web 包；Usage 以 Task 01 确认的 `dozer-panel-usage/src/`、`web/usage-content/`、`locales/` 为准。
 
 - [ ] 每个面板单独完成“盘点→中文抽取→英文补齐→调用替换→双语测试→清单关闭”，不要一次巨型替换后才测试。
-- [ ] Todo：状态/筛选/分类操作/详情/拖拽提示/确认、WebView 空态及菜单；保留任务文本与用户分类名。
+- [x] Todo：状态/筛选/分类操作/详情/拖拽提示/确认、WebView 空态及菜单；保留任务文本与用户分类名。
+  - 本轮完成 Rust（`extensions/todo/{view,update,protocol}.rs`、`platform/{confirm,todo_detail}_overlay.rs`）+ Web（`web/todo-content/src/{i18n.ts,statusMeta.ts,components/*}`），owner `dozer.todo`，资源 `crates/dozer-app/locales/panels/todo/{en,zh-CN}.json`。Webview 加载超时是通用宿主文案，落 `dozer.host` 的 `webview.load_timeout`。新建分类默认名 `新分类` 按“保留用户分类名”豁免（`NON_UI_STRINGS`）。inventory Task 09 todo 项已清零。
 - [ ] Usage：原生加载/错误状态、统计单位、图例、tooltip、空态及 Web 图表；数字/金额/聚合与数据排序不变。
 - [ ] Code Health：原生壳、分类/严重度/扫描状态、`view_model.rs`/`protocol.rs` 已拼中文的计数及详情；追加语义字段并由渲染端翻译，保留旧字段兼容。
 - [ ] 独立 Usage 库自行携带资源，locale 由 Host 注入；单面板测试宿主不需要依赖 dozer-app/daemon 才能渲染。

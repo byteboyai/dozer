@@ -222,25 +222,6 @@ impl Outbox {
         self.push_keyed(scope, level, text, key);
     }
 
-    /// `Err(e)` 时推一条 `Error` 级 `"{what}: {e}"`;`Ok` 什么都不做。`what` 为已
-    /// 本地化的动作名,`e` 为原样保留的原始诊断。
-    pub fn push_err<T, E: std::fmt::Display>(
-        &mut self,
-        scope: Scope,
-        what: &str,
-        res: &Result<T, E>,
-    ) {
-        if let Err(e) = res {
-            self.push(
-                scope,
-                Level::Error,
-                LocalizedText::keyed(crate::i18n::HOST_OWNER, "toast.failure", "{what}: {e}")
-                    .with_arg("what", what)
-                    .with_arg("e", e.to_string()),
-            );
-        }
-    }
-
     pub fn take(&mut self) -> Vec<Pending> {
         std::mem::take(&mut self.items)
     }
@@ -493,18 +474,6 @@ mod tests {
         assert_eq!(got[0].key.as_deref(), Some("apps:act:x"));
         assert_eq!(stable(&got[0].text), "停止失败");
         assert_eq!(got[0].level, Level::Error);
-    }
-
-    #[test]
-    fn outbox_push_err_pushes_only_on_err_with_what_prefix() {
-        let mut o = Outbox::default();
-        o.push_err(TEST_TODO, "保存失败", &Ok::<(), String>(()));
-        assert!(o.take().is_empty(), "Ok 不应推提示");
-        o.push_err(TEST_TODO, "保存失败", &Err::<(), _>("磁盘满"));
-        let got = o.take();
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].level, Level::Error);
-        assert_eq!(stable(&got[0].text), "保存失败: 磁盘满");
     }
 
     #[derive(Clone, Default)]

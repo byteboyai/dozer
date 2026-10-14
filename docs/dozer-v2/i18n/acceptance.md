@@ -253,6 +253,31 @@ python3 scripts/i18n/build_inventory.py
 - **自有 HTML/预览 chrome 的最小语言消息**（计划 Task 08 第 6 项）：随 Task 11 迁移。
 - 既有无关测试失败保留：`usage_probe::host::tests::host_site_citations_point_at_the_code_they_name`。
 
+## Task 09 验收（Todo 面板，按面板拆分提交）
+
+计划 Task 09 面向 Todo/Usage/Code Health 三个首批面板，按"每个面板单独盘点→抽取→替换→双语测试→清零"。本记录只覆盖 **Todo 面板**。
+
+### 交付内容
+
+- **资源**：`crates/dozer-app/locales/panels/todo/{en,zh-CN}.json`（owner `dozer.todo`）；宿主通用文案 `webview.load_timeout` 落 `crates/dozer-app/locales/host/{en,zh-CN}.json`。
+- **Rust 接缝**：`i18n.rs` 增 `PANEL_OWNERS` + `panel_text`/`panel_text_args` + `build_host_resolver` 载入面板 owner；`panel_host.rs` 的 `PanelHost` 增 `locale()`（默认 `"en"`，`App` 返回 `active_locale()`）。
+- **Rust 迁移**：`extensions/todo/view.rs`（标题/视图 tab/看板占位/折叠展开/加载失败+重试/清空列表/分类导航/详情卡/日历/确认弹窗）、`extensions/todo/update.rs`（三类操作失败 + 加载失败，改为面板 keyed `LocalizedText`）、`extensions/todo/protocol.rs`（加载超时改 keyed，`failed: Option<LocalizedText>`，`set_failed` 收 `LocalizedText`）、`platform/confirm_overlay.rs`、`platform/todo_detail_overlay.rs`（传 `active_locale()`）、`app/update.rs` 的 `set_failed`。
+- **Web 迁移**：`web/todo-content/src/i18n.ts`（静态打包面板 JSON + `setLocale`/`t`，复用 `web/shared/i18n` 的 `Resolver`）、`main.tsx`（dispatch 时 `setLocale`）、`statusMeta.ts`（改存 `labelKey` + `statusLabel`）、`components/{App,AddBox,Popovers,TodoCard,Toolbar}.tsx`。兑现 Task 08 延后的"共享解析器接线 + `locales/` 目录"。
+- **豁免**：`新分类`（新建分类默认名，用户数据初始值，按"保留用户分类名"）记入 `build_inventory.py` 的 `NON_UI_STRINGS`。
+
+### 验证命令与结果
+
+- `cargo build -p dozer-app`：通过。
+- `cargo test -p dozer-app`：1994/1996 passed；2 failed = 既有无关 citation 测试 + 既有 flaky `assets::tests::serves_vendored_asset_with_mime`（单测隔离通过，`scratch()` 按进程 id 共享目录，并行下偶发）。
+- `node --test src/*.test.ts`（todo-content）：60 passed（含新增 `i18n.test.ts`、改写 `statusMeta.test.ts` 的双语与回退用例）。
+- `cargo fmt --all -- --check`、`cargo clippy -p dozer-app --all-targets`（无新增告警；顺带移除因迁移而孤立的 `Outbox::push_err`）、`python3 scripts/i18n/check_resources.py`、`bash scripts/check-log-scope.sh`、`python3 scripts/audit/check_panel_boundary.py`：全绿。
+- `python3 scripts/i18n/build_inventory.py`：Task 09 内 todo 项候选清零（`counts: {"excluded": 3117, "migrated": 0, "unresolved": 683}`；`unresolved by task: {"09": 150, "10": 418, "11": 115}`；未分配 0）。
+
+### 残留
+
+- Task 09 剩余 150 条属 **Usage（27）** 与 **Code Health（123）**，各按面板后续单独提交。
+- 双语**运行期视觉核对**（切换后原生/Web 同步）随 Task 13 的 L07/L09/L10/L14 执行。
+
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |
 |---|---|---|

@@ -315,5 +315,6 @@
   "conversations.summary_cancelled": "总结任务已取消",
   "conversations.summary_job_missing": "总结任务不存在，请重试",
   "conversations.summary_poll_failed": "查询总结失败: {error}",
-  "conversations.summary_refresh_failed": "总结已生成，但刷新会话失败: {error}"
+  "conversations.summary_refresh_failed": "总结已生成，但刷新会话失败: {error}",
+  "webview.load_timeout": "面板页面加载超时"
 }

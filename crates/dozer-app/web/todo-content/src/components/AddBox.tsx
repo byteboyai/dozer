@@ -1,6 +1,7 @@
 import { useRef } from 'preact/hooks';
 import { isAddSubmit } from '../compose.ts';
 import { MAX_TEXT_CHARS } from '../limits.ts';
+import { t } from '../i18n.ts';
 
 const MIN_H = 44;
 const MAX_H = 360;
@@ -46,7 +47,7 @@ export function AddBox(p: Props) {
         <textarea
           class="add-input"
           style={{ height: `${p.height}px` }}
-          placeholder="添加新任务"
+          placeholder={t('add.placeholder', 'Add a new task')}
           maxLength={MAX_TEXT_CHARS}
           value={p.draft}
           onInput={(e) => p.onDraft((e.currentTarget as HTMLTextAreaElement).value)}
@@ -57,7 +58,7 @@ export function AddBox(p: Props) {
             }
           }}
         />
-        <button type="button" class="add-submit" aria-label="添加" onClick={() => p.onSubmit()}>
+        <button type="button" class="add-submit" aria-label={t('add.submit', 'Add')} onClick={() => p.onSubmit()}>
           ↑
         </button>
       </div>

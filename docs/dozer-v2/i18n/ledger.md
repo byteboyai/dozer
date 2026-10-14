@@ -27,7 +27,7 @@
 | 06 | Host chrome/菜单/原生 overlay | 0 |
 | 07 | Toast 与错误呈现 | 0 |
 | 08 | WebView locale 传递基础 | 8 |
-| 09 | Todo / Usage / Code Health 首批面板 | 240 |
+| 09 | Todo / Usage / Code Health 首批面板 | 150 |
 | 10 | 其余官方面板与辅助界面 | 418 |
 | 11 | 编辑/预览 Web 与 HTML 模板 | 115 |
 | **合计** | | **781** |
@@ -45,7 +45,7 @@
 | dozer.preview | 91 |
 | dozer.database | 69 |
 | dozer.files | 62 |
-| dozer.todo | 60 |
+| dozer.todo | 0 |
 | dozer.ssh | 34 |
 | dozer.git_log | 27 |
 | dozer.usage | 27 |
@@ -65,7 +65,9 @@
 | 06 Host chrome、菜单、原生 overlay 与项目创建 | ✅ 完成 | `chrome/{rail,topbar,tab_widget,homespace}`、`app/{view,app,update}.rs`、`workspace/view.rs`、`extensions/{settings,project_create,search,edit_history,file_history,settings_apps_view,conversations,project/view}.rs`、`platform/*_overlay.rs` 与 `window_events.rs`、`menu_spec.rs`、`i18n.rs::host_text_args`（删除 `interpolate`）、`locales/host/{en,zh-CN}.json`、`build_inventory.py` 的 `STRING_TASK_OVERRIDES`;byteui v0.4.2 放宽 label/placeholder 为 `&str` | Task 06 未解决候选清零(重投影后归 07/08/09/10/11);bytehost 自产的应用页文字与 agent 品牌名不在范围 |
 | 07 Toast 与错误呈现迁移 | ✅ 完成 | `extensions/toast.rs`(`Toast.text`/`Pending.text: LocalizedText`、`push`/`log_toast` 收 `impl Into<LocalizedText>`、`failure_message(scope,key,fallback,res)`、`stable_value` 空判定/去重)、`platform/toast_overlay.rs`(渲染后 `normalize`)、`i18n.rs`(`host_render`/`host_render_stable`/`host_keyed`/`host_keyed_args`)、`dozer-model/src/i18n.rs`(`DEFAULT_OWNER`+`From<&str>`/`From<String>`)、结构化错误(`GitAccountError`/`ProjectFsError`/`RepoListState::Error(LocalizedText)`/`WorkspaceState::{preview_error,summary_errors}`)、`workspace/hook.rs::agent_state_label(state,locale)`、`locales/host/{en,zh-CN}.json`、`build_inventory.py`(NON_UI/OVERRIDE) | Task 07 未解决候选清零;预览组(`web_error`/`PreviewError.message`/T10 冲突/资源预算 6 条)与 SSH 连接错误 4 条按任务重投影到 Task 11/10 |
 | 08 WebView locale 传递与资源打包基础 | ✅ 完成 | `dozer-model/src/i18n.rs`(`LocaleStamp{ui_locale,locale_revision}`+泛型载体 `Stamped<T>`)、`extensions/{todo,codehealth,group_chat}/protocol.rs` 与 `dozer-panel-usage/src/protocol.rs` envelope 追加 `#[serde(flatten)] Option<LocaleStamp>`(Usage 同步补 `revision`)、`extensions/codehealth/surface.rs`/`dozer-panel-usage/src/surface.rs` 的 `SurfaceExecutor<Stamped<ViewPayload>>`(locale 参与逐帧去重)、todo/group_chat `WebviewPushState.last_sent: Option<Stamped<..>>`、`app/app.rs::locale_stamp()` + 四处推送点传当前 `active_locale()`/`display_generation()`、前端 `web/{todo,group-chat,codehealth}-content/src/{protocol.ts,main.tsx}`(PushState 带 `locale`/`localeRevision`、`document.documentElement.lang`)与 `dozer-panel-usage/web/usage-content/src/main.tsx`(响应式 locale 信号 + html lang)、各 `protocol.test.ts`/`lib_tests.rs` 新增"业务 payload 不变、仅语言变也推送"用例、`build_inventory.py` 的 `NON_UI_STRINGS`(preview IPC 校验 `Display` 8 条) | Task 08 未解决候选清零。**本任务范围内仅做 envelope + 响应式 locale 信号 + html lang;字符串抽取(09–11)、共享解析器接线、`locales/` 目录与 build.mjs 资源打包按用户裁决延后**,见本表 §2 与 `acceptance.md` Task 08 说明 |
-| 09–11 | 未开始 | — | 依赖 07/08 |
+| 09 (Todo) | ✅ 完成（按面板一提交） | `crates/dozer-app/locales/panels/todo/{en,zh-CN}.json`(owner `dozer.todo`)、Rust：`extensions/todo/{view,update,protocol}.rs`、`platform/confirm_overlay.rs`、`platform/todo_detail_overlay.rs`、`app/update.rs`(`set_failed` 收 `LocalizedText`)、`i18n.rs`(`PANEL_OWNERS`+`panel_text`/`panel_text_args`+`build_host_resolver` 载入面板 owner)、`panel_host.rs`(`PanelHost::locale()`)、Web：`web/todo-content/src/{i18n.ts(new),statusMeta.ts,components/{App,AddBox,Popovers,TodoCard,Toolbar}.tsx,main.tsx}`(静态打包面板 JSON、`setLocale` 随 envelope 注入)、`i18n.test.ts`/`statusMeta.test.ts`、宿主通用文案 `webview.load_timeout` 落 host 资源、`build_inventory.py`(`NON_UI_STRINGS` 增 `新分类`) | Task 09 内 todo 项候选清零;`新分类` 按"保留用户分类名"排除;**共享 `web/shared/i18n` 解析器接线 + 资源打包**在本面板落地(兑现 Task 08 延后项) |
+| 09 (Usage / Code Health) | 未开始 | — | 依赖 07/08/09(Todo) |
+| 10–11 | 未开始 | — | 依赖 07/08 |
 | 12–14 | 未开始 | — | 见计划 §2 |
 
 ## 5. 门禁与工具

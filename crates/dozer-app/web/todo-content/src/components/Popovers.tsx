@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { AgentInfo, CategoryRow, StatusFilter, SetStatusTarget } from '../types.ts';
-import { STATUS_META, STATUS_FILTER_OPTIONS, statusFilterLabel } from '../statusMeta.ts';
+import { STATUS_META, STATUS_FILTER_OPTIONS, statusFilterLabel, statusLabel } from '../statusMeta.ts';
+import { t } from '../i18n.ts';
 import { placePopover, type Rect } from '../popover.ts';
 import { formatMonthDay, monthGrid, parseMonthDay, shiftMonth } from '../calendar.ts';
 
@@ -78,7 +79,7 @@ function renderBody(p: Props) {
           style={{ color: STATUS_META[st].color }}
           onClick={() => p.onPickStatus(s.id, st)}
         >
-          {STATUS_META[st].label}
+          {statusLabel(st)}
         </button>
       ));
     case 'dispatch':
@@ -106,7 +107,7 @@ function renderBody(p: Props) {
       return (
         <>
           <button type="button" class={`menu-item${s.currentId === null ? ' is-current' : ''}`} onClick={() => p.onPickCategory(s.id, null)}>
-            未分类
+            {t('category.uncategorized', 'Uncategorized')}
           </button>
           {p.categories.map((c) => (
             <button
@@ -124,6 +125,16 @@ function renderBody(p: Props) {
       return <Calendar id={s.id} planDate={s.planDate} today={p.today} onPick={p.onPickDate} />;
   }
 }
+
+const WEEKDAY_KEYS: Array<[string, string]> = [
+  ['weekday.0', 'Su'],
+  ['weekday.1', 'Mo'],
+  ['weekday.2', 'Tu'],
+  ['weekday.3', 'We'],
+  ['weekday.4', 'Th'],
+  ['weekday.5', 'Fr'],
+  ['weekday.6', 'Sa'],
+];
 
 function Calendar(props: {
   id: number;
@@ -149,8 +160,8 @@ function Calendar(props: {
         </button>
       </div>
       <div class="calendar-grid">
-        {['日', '一', '二', '三', '四', '五', '六'].map((w) => (
-          <span class="calendar-weekday">{w}</span>
+        {WEEKDAY_KEYS.map(([k, fb]) => (
+          <span class="calendar-weekday">{t(k, fb)}</span>
         ))}
         {cells.map((d) =>
           d === null ? (

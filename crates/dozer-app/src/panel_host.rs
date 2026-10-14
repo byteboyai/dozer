@@ -307,6 +307,11 @@ pub trait PanelHost {
     fn window_size(&self) -> (f32, f32);
     /// 最近一次光标位置 `(x, y)`(窗口坐标)。
     fn last_cursor(&self) -> (f32, f32);
+    /// 当前生效语言(BCP-47,如 `en`/`zh-CN`),供面板渲染自有文案时查表。
+    /// 默认 `en`:测试桩不需要实现就能渲染。
+    fn locale(&self) -> &str {
+        "en"
+    }
 }
 
 impl PanelHost for App {
@@ -320,6 +325,10 @@ impl PanelHost for App {
 
     fn list_collapsed(&self, kind: PanelKind) -> bool {
         App::list_collapsed(self, kind)
+    }
+
+    fn locale(&self) -> &str {
+        self.locale.active_locale()
     }
 
     fn list_collapse_button<'a, M: Clone + 'a>(

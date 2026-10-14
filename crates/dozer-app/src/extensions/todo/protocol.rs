@@ -9,7 +9,7 @@ use super::{
     visible_category_rows,
 };
 use crate::workspace::agent_icon;
-use dozer_model::{AgentKind, LocaleStamp, Stamped, TodoInfo};
+use dozer_model::{AgentKind, LocaleStamp, LocalizedText, Stamped, TodoInfo};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
@@ -420,8 +420,9 @@ pub struct WebviewPushState {
     revision: u64,
     /// webview 已进池但尚未 ready 的起点,用于判定加载超时。
     waiting_since: Option<Instant>,
-    /// 加载失败/超时原因;`Some` 时内容区回落原生占位页(重试清除)。
-    failed: Option<String>,
+    /// 加载失败/超时原因;`Some` 时内容区回落原生占位页(重试清除)。超时是宿主
+    /// 文案(keyed),后端上报的渲染失败是原样诊断(字面量),故存 `LocalizedText`。
+    failed: Option<LocalizedText>,
 }
 
 impl WebviewPushState {
@@ -447,7 +448,11 @@ impl WebviewPushState {
         }
         let since = *self.waiting_since.get_or_insert(now);
         if self.failed.is_none() && now.duration_since(since) > READY_TIMEOUT {
-            self.failed = Some("面板页面加载超时".to_string());
+            self.failed = Some(LocalizedText::keyed(
+                crate::i18n::HOST_OWNER,
+                "webview.load_timeout",
+                "Panel page load timed out",
+            ));
         }
     }
 
@@ -468,11 +473,11 @@ impl WebviewPushState {
         self.revision
     }
 
-    pub fn failed(&self) -> Option<&str> {
-        self.failed.as_deref()
+    pub fn failed(&self) -> Option<&LocalizedText> {
+        self.failed.as_ref()
     }
 
-    pub fn set_failed(&mut self, reason: String) {
+    pub fn set_failed(&mut self, reason: LocalizedText) {
         self.failed = Some(reason);
         self.ready = false;
         self.last_sent = None;

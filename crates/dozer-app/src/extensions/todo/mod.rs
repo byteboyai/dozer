@@ -12,6 +12,9 @@ mod state;
 mod update;
 mod view;
 
+/// 面板 owner id(spec §5):`crates/dozer-app/locales/panels/todo/`。
+pub(crate) const TODO_OWNER: &str = "dozer.todo";
+
 pub(crate) use category_drag::*;
 pub(crate) use filter::*;
 pub(crate) use protocol::*;

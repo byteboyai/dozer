@@ -176,7 +176,18 @@ pub fn update(
         Message::Loaded(todos) => ws_state.items = todos,
         Message::Mutated(res) => {
             // 失败时列表随后会按磁盘状态刷新回旧样子,用户会以为没生效——Toast 说明。
-            ws_state.outbox.push_err(LOG, "Todo 操作失败", &res);
+            if let Err(e) = &res {
+                ws_state.outbox.push(
+                    LOG,
+                    crate::extensions::toast::Level::Error,
+                    dozer_model::LocalizedText::keyed(
+                        TODO_OWNER,
+                        "error.action_failed",
+                        "Todo operation failed: {e}",
+                    )
+                    .with_arg("e", e.to_string()),
+                );
+            }
             request_todos_refresh(&ws_state.requests, project_id, service, handle, emit);
         }
         Message::CategoriesLoaded(categories) => ws_state.categories = categories,
@@ -187,14 +198,30 @@ pub fn update(
                 ws_state.outbox.push_keyed_cooldown(
                     LOG,
                     crate::extensions::toast::Level::Error,
-                    crate::extensions::toast::literal(format!("任务加载失败: {message}")),
+                    dozer_model::LocalizedText::keyed(
+                        TODO_OWNER,
+                        "error.tasks_load_failed",
+                        "Failed to load tasks: {message}",
+                    )
+                    .with_arg("message", message.clone()),
                     "todo-load",
                     std::time::Instant::now(),
                 );
             }
         }
         Message::CategoryMutated(res) => {
-            ws_state.outbox.push_err(LOG, "分类操作失败", &res);
+            if let Err(e) = &res {
+                ws_state.outbox.push(
+                    LOG,
+                    crate::extensions::toast::Level::Error,
+                    dozer_model::LocalizedText::keyed(
+                        TODO_OWNER,
+                        "error.category_failed",
+                        "Category operation failed: {e}",
+                    )
+                    .with_arg("e", e.to_string()),
+                );
+            }
             let service1 = service.clone();
             let service2 = service.clone();
             let handle1 = handle.clone();

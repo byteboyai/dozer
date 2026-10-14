@@ -19,8 +19,17 @@ pub const HOST_OWNER: &str = "dozer.host";
 const HOST_EN: &str = include_str!("../locales/host/en.json");
 const HOST_ZH_CN: &str = include_str!("../locales/host/zh-CN.json");
 
+/// 面板 owner(spec §5):仍在 `dozer-app` 内的面板资源在 `locales/panels/<id>/`。
+/// 每项 `(owner_id, en, zh-CN)`。独立 crate 的面板(`dozer-panel-usage`)自带
+/// 资源,不经此处。
+const PANEL_OWNERS: &[(&str, &str, &str)] = &[(
+    "dozer.todo",
+    include_str!("../locales/panels/todo/en.json"),
+    include_str!("../locales/panels/todo/zh-CN.json"),
+)];
+
 fn build_host_resolver() -> Resolver {
-    resolver_from_json([
+    let mut entries: Vec<(String, String, String)> = vec![
         (
             HOST_OWNER.to_string(),
             "en".to_string(),
@@ -31,8 +40,12 @@ fn build_host_resolver() -> Resolver {
             "zh-CN".to_string(),
             HOST_ZH_CN.to_string(),
         ),
-    ])
-    .expect("内嵌 Host 语言包必须是合法扁平原")
+    ];
+    for (owner, en, zh_cn) in PANEL_OWNERS {
+        entries.push((owner.to_string(), "en".to_string(), en.to_string()));
+        entries.push((owner.to_string(), "zh-CN".to_string(), zh_cn.to_string()));
+    }
+    resolver_from_json(entries).expect("内嵌语言包必须是合法扁平原")
 }
 
 /// 进程内 Host 词表解析器单例。
@@ -94,6 +107,27 @@ pub fn host_render(text: &dozer_model::LocalizedText, locale: &str) -> String {
 /// 写日志/去重比较等需要语言无关稳定值的场景(见 spec「日志记录稳定事件")。
 pub fn host_render_stable(text: &dozer_model::LocalizedText) -> String {
     host_resolver().resolve(text, dozer_model::Locale::EN).text
+}
+
+/// 便捷:按当前 locale 解析一条**面板**文案(owner 如 `dozer.todo`)。
+pub fn panel_text(owner: &str, key: &str, fallback: &str, locale: &str) -> String {
+    let t = dozer_model::LocalizedText::keyed(owner, key, fallback);
+    host_resolver().resolve(&t, locale).text
+}
+
+/// 便捷:按当前 locale 解析一条带具名参数的面板文案模板。
+pub fn panel_text_args(
+    owner: &str,
+    key: &str,
+    fallback: &str,
+    locale: &str,
+    args: &[(&str, &str)],
+) -> String {
+    let mut t = dozer_model::LocalizedText::keyed(owner, key, fallback);
+    for (name, value) in args {
+        t = t.with_arg(*name, *value);
+    }
+    host_resolver().resolve(&t, locale).text
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 import type { StatusFilter } from '../types.ts';
 import { statusFilterLabel, STATUS_META } from '../statusMeta.ts';
 import { isInlineCommit } from '../compose.ts';
+import { t } from '../i18n.ts';
 
 interface Props {
   searchDraft: string;
@@ -27,7 +28,7 @@ export function Toolbar(p: Props) {
       <input
         class="search-input"
         type="text"
-        placeholder="搜索任务…"
+        placeholder={t('toolbar.search_placeholder', 'Search tasks...')}
         value={p.searchDraft}
         onInput={(e) => p.onDraft((e.currentTarget as HTMLInputElement).value)}
         onKeyDown={(e) => {
@@ -38,7 +39,7 @@ export function Toolbar(p: Props) {
         }}
         onBlur={() => p.onSubmit()}
       />
-      <button type="button" class="icon-btn" aria-label="搜索" onClick={() => p.onSubmit()}>
+      <button type="button" class="icon-btn" aria-label={t('toolbar.search', 'Search')} onClick={() => p.onSubmit()}>
         ⌕
       </button>
     </div>
