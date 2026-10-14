@@ -316,5 +316,6 @@
   "conversations.summary_job_missing": "Summary task not found, please retry",
   "conversations.summary_poll_failed": "Failed to query summary: {error}",
   "conversations.summary_refresh_failed": "Summary generated, but refreshing sessions failed: {error}",
-  "webview.load_timeout": "Panel page load timed out"
+  "webview.load_timeout": "Panel page load timed out",
+  "file_history.unrenderable_workdir": "The file is not text, exceeds the size limit, or is missing on disk; CodeMirror rendering is not supported"
 }

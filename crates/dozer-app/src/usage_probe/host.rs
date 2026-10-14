@@ -28,14 +28,14 @@ impl Duty {
     /// 真实 host 里承担这件事的位置(读代码得到,2026-10-08)。
     pub(crate) fn host_site(self) -> &'static str {
         match self {
-            Duty::BuildActivationCtx => "app/update.rs:5318",
-            Duty::RouteLoaded => "app/update.rs:1641 (with_project)",
-            Duty::DropOtherProject => "app/update.rs:1641 (with_project 路由到别的 Workspace)",
-            Duty::InterceptCollapse => "host_adapters/usage_panel.rs:88",
-            Duty::InterceptHover => "host_adapters/usage_panel.rs:84",
-            Duty::FramePush => "app/app.rs:1250 take_usage_content_script",
-            Duty::DowngradeReady => "app/app.rs:1260",
-            Duty::SkipWhileLoading => "app/app.rs:1267",
+            Duty::BuildActivationCtx => "app/update.rs:5417",
+            Duty::RouteLoaded => "app/update.rs:1646 (with_project)",
+            Duty::DropOtherProject => "app/update.rs:1646 (with_project 路由到别的 Workspace)",
+            Duty::InterceptCollapse => "host_adapters/usage_panel.rs:92",
+            Duty::InterceptHover => "host_adapters/usage_panel.rs:88",
+            Duty::FramePush => "app/app.rs:1281 take_usage_content_script",
+            Duty::DowngradeReady => "app/app.rs:1291",
+            Duty::SkipWhileLoading => "app/app.rs:1298",
             Duty::ParseIpcAndMarkReady => "runtime.rs:729 + app/update.rs:265",
             Duty::DrainToastOutbox => "app/update.rs:223 (drain_outboxes)",
         }

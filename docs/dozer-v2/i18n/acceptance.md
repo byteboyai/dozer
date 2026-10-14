@@ -329,6 +329,27 @@ python3 scripts/i18n/build_inventory.py
 - Task 09 三个面板（Todo/Usage/Code Health）全部完成。
 - 双语**运行期视觉核对**（切换后原生/Web 同步）随 Task 13 的 L07/L09/L10/L14 执行。
 
+## Task 10 验收（git_log 面板，按面板拆分提交）
+
+### 交付内容
+
+- 资源：`crates/dozer-app/locales/panels/git_log/{en,zh-CN}.json`（owner `dozer.git_log`）。
+- 迁移：`extensions/git_log.rs`（`GIT_LOG_OWNER`、本地 `t()`、`loading_hint_localized()`；`State.{error,detail,diff_load_error}` 与 `Message::{DetailLoaded,SnapshotLoaded,DiffContentLoaded,BranchSwitchDone}` 的错误改携带 `LocalizedText`；后台任务经 `i18n::panel_keyed_args` 造 keyed 文案、渲染端 `render_localized` 解析；`view`/`file_list_view`/`diff_pane_view`/`git_panel_footer_bar`/`branch_picker_view` 穿 `locale`）、`extensions/diff_content.rs`（`NotRenderable.reason` 由 `String` 改 `LocalizedText`）、`i18n.rs`（`PANEL_OWNERS` 增 `dozer.git_log`、新增 `panel_keyed_args`/`render_localized`）、`app/update.rs`（分支切换失败 keyed）。
+- 附带修复：`usage_probe/host.rs` 的 `host_site()` 引用行号（`BuildActivationCtx`/`RouteLoaded`/`DropOtherProject`/`Intercept*`/`FramePush`/`DowngradeReady`/`SkipWhileLoading`）更新为当前实际行——该 `host_site_citations_*` 测试在提交 `e75a251d` 时**已因既有漂移失败**，此处一并修正。
+
+### 验证命令与结果
+
+- `cargo build -p dozer-app`：通过。
+- `cargo test -p dozer-app git_log`：78 passed / 0 failed。
+- `cargo test -p dozer-app`：**2001 passed / 0 failed**（含修复后的 `usage_probe::host::tests`）。
+- `cargo fmt --all -- --check`、`cargo clippy -p dozer-panel-usage -p dozer-app --all-targets`（仅既有告警）、`python3 scripts/i18n/check_resources.py`（5 个 owner 目录）、`bash scripts/check-log-scope.sh`、`python3 scripts/audit/check_panel_boundary.py`：全绿。
+- `python3 scripts/i18n/build_inventory.py`：git_log 与 diff_content 路径候选**清零**（`counts: {"excluded": 3111, "migrated": 0, "unresolved": 504}`；`unresolved by task: {"10": 389, "11": 115}`，无 git_log/host 残留）。
+
+### 残留
+
+- Task 10 其余面板（host/ssh/web/conversations/agent/files/database/project/group_chat）按面板逐个提交。
+- 双语运行期视觉核对随 Task 13 执行。
+
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |
 |---|---|---|

@@ -24,6 +24,39 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Mutex;
 
+/// 面板 owner id(spec §5,资源在 `locales/panels/git_log/`)。
+pub(crate) const GIT_LOG_OWNER: &str = "dozer.git_log";
+
+/// 按当前 locale 解析一条本面板文案。
+fn t(key: &str, fallback: &str, locale: &str) -> String {
+    crate::i18n::panel_text(GIT_LOG_OWNER, key, fallback, locale)
+}
+
+/// 同 `byteui::feedback::math_curve::loading_hint`,但文案按 locale 运行时解析
+/// (该组件的 `label` 是 `&'static str`,吃不下运行时字符串),故在此复刻其
+/// 结构:曲线动画 + 一行 dim 文案竖排、整体居中。
+fn loading_hint_localized<'a>(
+    curve: byteui::feedback::math_curve::Curve,
+    key: &str,
+    fallback: &str,
+    locale: &str,
+    size: f32,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    container(
+        column![
+            byteui::feedback::math_curve::view_animated(curve, size),
+            text(t(key, fallback, locale))
+                .size(byteui::theme::font::body())
+                .color(byteui::theme::color::current().dim),
+        ]
+        .spacing(12)
+        .align_x(alignment::Horizontal::Center),
+    )
+    .center_x(Length::Fill)
+    .center_y(Length::Fill)
+    .into()
+}
+
 /// 首次打开面板拉多少个 commit——够看出分叉/合并的形状,又不至于让
 /// revwalk + 分支归属分析在大仓库上明显卡顿(gleisbau 的 API 是"从头按
 /// max_count 走一遍 revwalk",没有增量/游标接口——见 build() 文档)。这是
@@ -273,8 +306,16 @@ pub enum Message {
     /// commit 搜索框被右键:内核拦截,不进 `update`——转发成顶层
     /// `Message::TextInputMenuOpen` 弹出通用输入框右键菜单(见 app.rs)。
     TextInputMenuOpen(crate::app::TextInputTarget),
-    DetailLoaded(PathBuf, CommitId, Result<CommitDetail, String>),
-    SnapshotLoaded(PathBuf, usize, Result<GitLogSnapshot, String>),
+    DetailLoaded(
+        PathBuf,
+        CommitId,
+        Result<CommitDetail, dozer_model::LocalizedText>,
+    ),
+    SnapshotLoaded(
+        PathBuf,
+        usize,
+        Result<GitLogSnapshot, dozer_model::LocalizedText>,
+    ),
     /// 点文件列表某一行,选中它(右下面板据此展示该文件的 diff)。
     SelectFile(String),
     /// 点文件列表上方的分类 tab,切换文件列表的筛选维度。
@@ -282,7 +323,11 @@ pub enum Message {
     /// 选中文件的 blob 内容异步加载完成。`CommitId`/`String` 是加载发起时
     /// 的 commit/路径快照,落地前核对仍匹配当前选择,不匹配则丢弃(用户
     /// 手快切换选择后的迟到结果)。
-    DiffContentLoaded(CommitId, String, Result<DiffBlobContent, String>),
+    DiffContentLoaded(
+        CommitId,
+        String,
+        Result<DiffBlobContent, dozer_model::LocalizedText>,
+    ),
     /// 展开左侧面板底部的分支切换下拉(首次展开时内核顺带异步查一次
     /// `bytegit::Repo::local_branches`)。
     BranchPickerOpen,
@@ -293,7 +338,7 @@ pub enum Message {
     /// 点某个分支——内核截获处理(同 `ProjectTabOpen` 的既有例外模式),
     /// 不会转发到 `update`(见其 `unreachable!` 分支)。
     BranchSwitch(String),
-    BranchSwitchDone(Result<(), String>),
+    BranchSwitchDone(Result<(), dozer_model::LocalizedText>),
     /// 三栏布局里左右分割线开始拖拽——内核截获,转成 app 级
     /// `ColumnDragStart(GitLogSplit)`(分割线拖拽是 app 级 PanelDims 状态,
     /// 扩展自己发不了 app::Message,靠这条例外消息让内核代发)。
@@ -324,9 +369,9 @@ pub struct LoadedDiff {
 #[derive(Default)]
 pub struct State {
     cache: Option<GitLogSnapshot>,
-    error: Option<String>,
+    error: Option<dozer_model::LocalizedText>,
     selected: Option<CommitId>,
-    detail: Option<Result<CommitDetail, String>>,
+    detail: Option<Result<CommitDetail, dozer_model::LocalizedText>>,
     /// 右上文件列表当前选中的文件路径(`CommitDetail.files[].path`)。切
     /// commit 时先清空,新 `detail` 落地后预选第一个改动文件。
     selected_file: Option<String>,
@@ -342,7 +387,7 @@ pub struct State {
     /// `Err` 时落地,如并发操作导致仓库状态变化)。与 `loaded_diff` 互斥:
     /// 失败时 `loaded_diff` 为 `None`、这里为 `Some`,UI 展示错误占位而不
     /// 是无限"加载中";切 commit/文件时清空。
-    diff_load_error: Option<String>,
+    diff_load_error: Option<dozer_model::LocalizedText>,
     /// 当前挂载的 diff webview 是否已经真正 `ready`(JS 端 `__dozer.dispatch`
     /// 已注册)。只由 `Message::GitLogDiffWebviewEvent` 的 `Ready` 分支置
     /// true;`loaded_diff` 被清空(见 `SelectCommit`/`SelectFile`)时连带置回
@@ -529,9 +574,25 @@ pub fn update(
             let repo_path = state.cache.as_ref().map(|c| c.repo_path().to_path_buf())?;
             handle.spawn(async move {
                 let repo_path2 = repo_path.clone();
-                let result = tokio::task::spawn_blocking(move || commit_detail(&repo_path2, oid))
-                    .await
-                    .unwrap_or_else(|e| Err(format!("详情加载任务失败: {e}")));
+                let result = match tokio::task::spawn_blocking(move || {
+                    commit_detail(&repo_path2, oid)
+                })
+                .await
+                {
+                    Ok(Ok(detail)) => Ok(detail),
+                    Ok(Err(raw)) => Err(crate::i18n::panel_keyed_args(
+                        GIT_LOG_OWNER,
+                        "error.detail_load_failed",
+                        "Failed to load detail: {err}",
+                        &[("err", &raw)],
+                    )),
+                    Err(e) => Err(crate::i18n::panel_keyed_args(
+                        GIT_LOG_OWNER,
+                        "error.detail_task_failed",
+                        "Detail load task failed: {e}",
+                        &[("e", &e.to_string())],
+                    )),
+                };
                 emit(Message::DetailLoaded(repo_path, oid, result));
             });
             None
@@ -550,12 +611,26 @@ pub fn update(
             let (old_blob, new_blob) = (entry.old_blob, entry.new_blob);
             let repo_path = state.cache.as_ref().map(|c| c.repo_path().to_path_buf())?;
             handle.spawn(async move {
-                let result = tokio::task::spawn_blocking(move || {
+                let result = match tokio::task::spawn_blocking(move || {
                     let repo = open_exact_repo(&repo_path)?;
                     blob_pair_content(&repo, old_blob, new_blob)
                 })
                 .await
-                .unwrap_or_else(|e| Err(format!("diff 内容加载任务失败: {e}")));
+                {
+                    Ok(Ok(content)) => Ok(content),
+                    Ok(Err(raw)) => Err(crate::i18n::panel_keyed_args(
+                        GIT_LOG_OWNER,
+                        "error.diff_load_failed",
+                        "Failed to load diff content",
+                        &[("err", &raw)],
+                    )),
+                    Err(e) => Err(crate::i18n::panel_keyed_args(
+                        GIT_LOG_OWNER,
+                        "error.diff_task_failed",
+                        "Diff content load task failed: {e}",
+                        &[("e", &e.to_string())],
+                    )),
+                };
                 emit(Message::DiffContentLoaded(commit, path, result));
             });
             None
@@ -703,9 +778,22 @@ pub fn request_refresh(
     state.pending = Some((repo_path.clone(), max_count));
     handle.spawn(async move {
         let repo_path2 = repo_path.clone();
-        let result = tokio::task::spawn_blocking(move || build(&repo_path2, max_count))
-            .await
-            .unwrap_or_else(|e| Err(format!("Git Log 加载任务失败: {e}")));
+        let result = match tokio::task::spawn_blocking(move || build(&repo_path2, max_count)).await
+        {
+            Ok(Ok(snapshot)) => Ok(snapshot),
+            Ok(Err(raw)) => Err(crate::i18n::panel_keyed_args(
+                GIT_LOG_OWNER,
+                "error.read_failed",
+                "Failed to read git log: {err}",
+                &[("err", &raw)],
+            )),
+            Err(e) => Err(crate::i18n::panel_keyed_args(
+                GIT_LOG_OWNER,
+                "error.list_task_failed",
+                "Git Log load task failed: {e}",
+                &[("e", &e.to_string())],
+            )),
+        };
         emit(Message::SnapshotLoaded(repo_path, max_count, result));
     });
 }
@@ -829,7 +917,7 @@ fn commit_search_box<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let search_active = state.search_focused() || !state.search.is_empty();
     let box_el = byteui::form::search_box::view(
-        "搜索提交内容…",
+        &t("search.placeholder", "Search commits…", app.locale()),
         &state.search_draft,
         Some(search_field_id()),
         search_active,
@@ -988,7 +1076,7 @@ fn commit_list_view<'a>(
             true,
             Message::CommitListMore,
             |hovered| Message::Hover(HoverId::more(PanelKind::GitLog), hovered),
-            "更多",
+            t("common.more", "More", app.locale()),
         );
         list = list.push(
             container(more_button)
@@ -1022,11 +1110,20 @@ fn file_filter_tabs<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 顺序与用户给的示例一致:「全部」放最前当默认项。
     let candidates = [
-        (FileFilter::All, "全部"),
-        (FileFilter::Modified, "修改"),
-        (FileFilter::Added, "新增"),
-        (FileFilter::Deleted, "删除"),
-        (FileFilter::Renamed, "重命名"),
+        (FileFilter::All, t("filter.all", "All", app.locale())),
+        (
+            FileFilter::Modified,
+            t("filter.modified", "Modified", app.locale()),
+        ),
+        (FileFilter::Added, t("filter.added", "Added", app.locale())),
+        (
+            FileFilter::Deleted,
+            t("filter.deleted", "Deleted", app.locale()),
+        ),
+        (
+            FileFilter::Renamed,
+            t("filter.renamed", "Renamed", app.locale()),
+        ),
     ];
     let mut bar = row![].spacing(6);
     for (filter, label) in candidates {
@@ -1082,20 +1179,20 @@ fn file_filter_tabs<'a>(
 /// 维度,只渲染匹配的行。
 fn file_list_view<'a>(
     app: &impl PanelHost,
-    detail: &'a Result<CommitDetail, String>,
+    detail: &'a Result<CommitDetail, dozer_model::LocalizedText>,
     selected_file: Option<&'a str>,
     filter: FileFilter,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     match detail {
         Err(err) => container(
-            text(format!("详情加载失败: {err}"))
+            text(crate::i18n::render_localized(err, app.locale()))
                 .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().red),
         )
         .padding(8)
         .into(),
         Ok(detail) if detail.files.is_empty() => container(
-            text("无文件改动")
+            text(t("empty.no_files", "No file changes", app.locale()))
                 .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().dim),
         )
@@ -1174,7 +1271,11 @@ pub fn view<'a>(
     git_log_file_diff_split: f32,
     mirror: bool,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let error = state.error.as_deref();
+    let locale = app.locale().to_string();
+    let error = state
+        .error
+        .as_ref()
+        .map(|e| crate::i18n::render_localized(e, &locale));
     // 内容列(右侧文件列表/diff)内边距对齐文件树面板(`project_pane`,8):
     // header/body/footer 的分隔线与内容容器统一按同一水平 inset 排布,避免
     // Git 面板自己另起一套 → 0 的 padding 与文件树/项目面板错位。列表列另走
@@ -1202,9 +1303,11 @@ pub fn view<'a>(
             return container(
                 column![
                     head,
-                    byteui::feedback::math_curve::loading_hint(
+                    loading_hint_localized(
                         byteui::feedback::math_curve::Curve::RoseThree,
-                        "加载中…",
+                        "empty.loading",
+                        "Loading…",
+                        &locale,
                         48.0,
                     ),
                 ]
@@ -1217,7 +1320,7 @@ pub fn view<'a>(
         return container(
             column![
                 head,
-                text("未打开项目")
+                text(t("empty.no_project", "No project open", &locale))
                     .size(byteui::theme::font::caption())
                     .color(byteui::theme::color::current().dim)
             ]
@@ -1230,7 +1333,7 @@ pub fn view<'a>(
         return container(
             column![
                 head,
-                text("没有可显示的提交")
+                text(t("empty.no_commits", "No commits to show", &locale))
                     .size(byteui::theme::font::caption())
                     .color(byteui::theme::color::current().dim)
             ]
@@ -1244,7 +1347,7 @@ pub fn view<'a>(
     let mut left = column![head].spacing(8);
     if let Some(err) = error {
         left = left.push(
-            text(format!("git log 读取失败: {err}"))
+            text(err)
                 .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().red),
         );
@@ -1253,7 +1356,7 @@ pub fn view<'a>(
     let filtered = filter_commit_rows(&snapshot.rows, &state.search);
     if filtered.is_empty() {
         left = left.push(
-            text("无匹配结果")
+            text(t("empty.no_match", "No matches", &locale))
                 .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().dim),
         );
@@ -1266,10 +1369,10 @@ pub fn view<'a>(
             state.commit_visible_count(),
         ));
     }
-    left = left.push(git_panel_footer_bar(state, head_branch));
+    left = left.push(git_panel_footer_bar(state, head_branch, &locale));
     let left_with_picker = iced_widget::stack![
         container(left).width(Length::Fill).height(Length::Fill),
-        branch_picker_view(state, head_branch),
+        branch_picker_view(state, head_branch, &locale),
     ];
 
     let (list_portion, content_portion) = crate::workspace::split_portions(git_log_split);
@@ -1283,7 +1386,7 @@ pub fn view<'a>(
             let filter_bar: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
                 match detail {
                     Ok(d) => file_filter_tabs(app, d, state.file_filter),
-                    Err(_) => text("0 个修改的文件")
+                    Err(_) => text(t("empty.files_count_unknown", "0 changed files", &locale))
                         .size(byteui::theme::font::caption())
                         .color(byteui::theme::color::current().dim)
                         .into(),
@@ -1321,7 +1424,8 @@ pub fn view<'a>(
                 container(diff_pane_view(
                     state,
                     detail,
-                    state.selected_file.as_deref()
+                    state.selected_file.as_deref(),
+                    &locale,
                 ))
                 .height(Length::FillPortion(bottom_portion)),
             ]
@@ -1329,9 +1433,13 @@ pub fn view<'a>(
             .into()
         } else {
             container(
-                text("选择一个提交查看改动")
-                    .size(byteui::theme::font::caption())
-                    .color(byteui::theme::color::current().dim),
+                text(t(
+                    "empty.select_commit",
+                    "Select a commit to view changes",
+                    &locale,
+                ))
+                .size(byteui::theme::font::caption())
+                .color(byteui::theme::color::current().dim),
             )
             .padding(12)
             .into()
@@ -1401,8 +1509,9 @@ pub fn view<'a>(
 /// 不同,会给用户"能看"的错觉),而是明确给只读原因。
 fn diff_pane_view<'a>(
     state: &'a State,
-    detail: &'a Result<CommitDetail, String>,
+    detail: &'a Result<CommitDetail, dozer_model::LocalizedText>,
     selected_file: Option<&'a str>,
+    locale: &str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 情形 1:webview 会挂载 → iced 侧留空,不重复绘制。
     if state.diff_webview_desired().is_some() {
@@ -1415,10 +1524,14 @@ fn diff_pane_view<'a>(
     {
         return container(
             column![
-                text("该文件无法在 diff 视图中渲染")
-                    .size(byteui::theme::font::caption())
-                    .color(byteui::theme::color::current().dim),
-                text(reason.clone())
+                text(t(
+                    "empty.diff_unrenderable",
+                    "This file cannot be rendered in the diff view",
+                    locale,
+                ))
+                .size(byteui::theme::font::caption())
+                .color(byteui::theme::color::current().dim),
+                text(crate::i18n::render_localized(reason, locale))
                     .size(byteui::theme::font::caption_sm())
                     .color(byteui::theme::color::current().dim),
             ]
@@ -1431,10 +1544,10 @@ fn diff_pane_view<'a>(
     if let Some(err) = state.diff_load_error.as_ref() {
         return container(
             column![
-                text("diff 内容加载失败")
+                text(t("empty.diff_load_failed", "Failed to load diff", locale))
                     .size(byteui::theme::font::caption())
                     .color(byteui::theme::color::current().dim),
-                text(err.clone())
+                text(crate::i18n::render_localized(err, locale))
                     .size(byteui::theme::font::caption_sm())
                     .color(byteui::theme::color::current().dim),
             ]
@@ -1450,7 +1563,7 @@ fn diff_pane_view<'a>(
     };
     let Some(path) = selected_file else {
         return container(
-            text("未选中文件")
+            text(t("empty.no_file_selected", "No file selected", locale))
                 .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().dim),
         )
@@ -1459,7 +1572,7 @@ fn diff_pane_view<'a>(
     };
     let Some(_entry) = detail.files.iter().find(|f| f.path == path) else {
         return container(
-            text("未选中文件")
+            text(t("empty.no_file_selected", "No file selected", locale))
                 .size(byteui::theme::font::caption())
                 .color(byteui::theme::color::current().dim),
         )
@@ -1470,7 +1583,7 @@ fn diff_pane_view<'a>(
     // CodeMirror webview 是唯一渲染路径,这一帧不退回旧的 iced 染色(既与
     // "CodeMirror 接管"矛盾,又会在内容到达后闪一下),给中性加载态即可。
     container(
-        text("加载 diff 中…")
+        text(t("empty.loading_diff", "Loading diff…", locale))
             .size(byteui::theme::font::caption())
             .color(byteui::theme::color::current().dim),
     )
@@ -1486,10 +1599,15 @@ fn diff_pane_view<'a>(
 fn git_panel_footer_bar<'a>(
     state: &'a State,
     head_branch: Option<&'a str>,
+    locale: &str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let branch_label = text(head_branch.unwrap_or("(无分支)"))
-        .size(byteui::theme::font::label())
-        .color(byteui::theme::color::current().cream);
+    let branch_label = text(
+        head_branch
+            .map(str::to_string)
+            .unwrap_or_else(|| t("branch.none", "(no branch)", locale)),
+    )
+    .size(byteui::theme::font::label())
+    .color(byteui::theme::color::current().cream);
 
     let switch = iced_widget::button(byteui::interaction::icons::view(
         if state.branch_picker_open {
@@ -1557,6 +1675,7 @@ fn git_panel_footer_bar<'a>(
 fn branch_picker_view<'a>(
     state: &'a State,
     head_branch: Option<&'a str>,
+    locale: &str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     if !state.branch_picker_open {
         return iced_widget::Space::new().into();
@@ -1566,7 +1685,7 @@ fn branch_picker_view<'a>(
         Vec::new();
     if state.branch_switch_pending {
         items.push(
-            text("切换中…")
+            text(t("branch.switching", "Switching…", locale))
                 .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim)
                 .into(),
@@ -1574,7 +1693,7 @@ fn branch_picker_view<'a>(
     }
     if state.branches.is_empty() {
         items.push(
-            text("暂无本地分支")
+            text(t("branch.empty", "No local branches", locale))
                 .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim)
                 .into(),
@@ -2668,7 +2787,7 @@ mod tests {
                 commit,
                 path: "bin.dat".to_string(),
                 content: DiffBlobContent::NotRenderable {
-                    reason: "二进制".to_string(),
+                    reason: dozer_model::LocalizedText::literal(GIT_LOG_OWNER, "二进制"),
                 },
             }),
             diff_webview_ready: true,
@@ -2700,7 +2819,7 @@ mod tests {
                 commit,
                 path: "bin.dat".to_string(),
                 content: DiffBlobContent::NotRenderable {
-                    reason: "二进制".to_string(),
+                    reason: dozer_model::LocalizedText::literal(GIT_LOG_OWNER, "二进制"),
                 },
             }),
             ..State::default()
@@ -2733,12 +2852,23 @@ mod tests {
         let handle = tokio::runtime::Handle::current();
         update(
             &mut state,
-            Message::DiffContentLoaded(commit, "a.txt".to_string(), Err("boom".to_string())),
+            Message::DiffContentLoaded(
+                commit,
+                "a.txt".to_string(),
+                Err(dozer_model::LocalizedText::literal(GIT_LOG_OWNER, "boom")),
+            ),
             &handle,
             |_| {},
         );
         assert!(state.loaded_diff.is_none(), "失败后旧内容必须清空");
-        assert_eq!(state.diff_load_error.as_deref(), Some("boom"));
+        assert_eq!(
+            state
+                .diff_load_error
+                .as_ref()
+                .map(|e| crate::i18n::render_localized(e, "zh-CN"))
+                .as_deref(),
+            Some("boom")
+        );
     }
 
     #[tokio::test]
@@ -2755,7 +2885,7 @@ mod tests {
                     new_blob: None,
                 }],
             })),
-            diff_load_error: Some("boom".to_string()),
+            diff_load_error: Some(dozer_model::LocalizedText::literal(GIT_LOG_OWNER, "boom")),
             ..State::default()
         };
         let handle = tokio::runtime::Handle::current();
@@ -2884,12 +3014,22 @@ mod tests {
         let handle = tokio::runtime::Handle::current();
         update(
             &mut state,
-            Message::BranchSwitchDone(Err("checkout 失败".to_string())),
+            Message::BranchSwitchDone(Err(dozer_model::LocalizedText::literal(
+                GIT_LOG_OWNER,
+                "checkout 失败",
+            ))),
             &handle,
             |_| {},
         );
         assert!(!state.branch_switch_pending);
-        assert_eq!(state.error.as_deref(), Some("checkout 失败"));
+        assert_eq!(
+            state
+                .error
+                .as_ref()
+                .map(|e| crate::i18n::render_localized(e, "zh-CN"))
+                .as_deref(),
+            Some("checkout 失败")
+        );
     }
 
     #[tokio::test]
@@ -2941,12 +3081,23 @@ mod tests {
         let handle = tokio::runtime::Handle::current();
         update(
             &mut state,
-            Message::SnapshotLoaded(repo_path, 10, Err("boom".to_string())),
+            Message::SnapshotLoaded(
+                repo_path,
+                10,
+                Err(dozer_model::LocalizedText::literal(GIT_LOG_OWNER, "boom")),
+            ),
             &handle,
             |_| {},
         );
         assert!(state.cache.is_none());
-        assert_eq!(state.error.as_deref(), Some("boom"));
+        assert_eq!(
+            state
+                .error
+                .as_ref()
+                .map(|e| crate::i18n::render_localized(e, "zh-CN"))
+                .as_deref(),
+            Some("boom")
+        );
     }
 
     #[test]

@@ -13,23 +13,22 @@ pub const MAX_DIFF_BLOB_BYTES: usize = 512 * 1024;
 
 const LIMITS: ContentLimits = ContentLimits::new(MAX_DIFF_BLOB_BYTES);
 
-/// 提交 vs 提交的不可渲染占位文案。
-const REASON_BLOB: &str = "文件不是文本,或超过大小上限,不支持 diff 渲染";
+/// 提交 vs 提交的不可渲染占位文案(owner/key,渲染端按 locale 解析)。
+const REASON_BLOB_KEY: (&str, &str) = ("dozer.git_log", "empty.diff_unrenderable_blob");
 
 /// 提交 vs 磁盘的不可渲染占位文案(多一种"磁盘文件不存在"的原因)。
-const REASON_WORKDIR: &str =
-    "文件不是文本、超过大小上限,或磁盘文件当前不存在,不支持 CodeMirror 渲染";
+const REASON_WORKDIR_KEY: (&str, &str) = ("dozer.host", "file_history.unrenderable_workdir");
 
 /// 要么是可渲染的双侧文本,要么给出原因(供 UI 占位文案使用)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiffBlobContent {
     Text { old_text: String, new_text: String },
-    NotRenderable { reason: String },
+    NotRenderable { reason: dozer_model::LocalizedText },
 }
 
-fn not_renderable(reason: &str) -> DiffBlobContent {
+fn not_renderable((owner, key): (&str, &str)) -> DiffBlobContent {
     DiffBlobContent::NotRenderable {
-        reason: reason.to_string(),
+        reason: dozer_model::LocalizedText::keyed(owner, key, ""),
     }
 }
 
@@ -58,7 +57,7 @@ pub fn blob_pair_content(
     };
     match (side(old_blob)?, side(new_blob)?) {
         (Some(old_text), Some(new_text)) => Ok(DiffBlobContent::Text { old_text, new_text }),
-        _ => Ok(not_renderable(REASON_BLOB)),
+        _ => Ok(not_renderable(REASON_BLOB_KEY)),
     }
 }
 
@@ -79,6 +78,6 @@ pub fn workdir_content(
     let new_text = new.and_then(Content::into_text);
     match (old_text, new_text) {
         (Some(old_text), Some(new_text)) => Ok(DiffBlobContent::Text { old_text, new_text }),
-        _ => Ok(not_renderable(REASON_WORKDIR)),
+        _ => Ok(not_renderable(REASON_WORKDIR_KEY)),
     }
 }

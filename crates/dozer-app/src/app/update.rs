@@ -3073,10 +3073,24 @@ impl App {
                     let result = tokio::task::spawn_blocking(move || {
                         bytegit::Repo::discover(&repo_path2)
                             .and_then(|repo| repo.checkout_branch(&name))
-                            .map_err(|e| e.message().to_string())
+                            .map_err(|e| {
+                                crate::i18n::panel_keyed_args(
+                                    git_log::GIT_LOG_OWNER,
+                                    "error.branch_switch_failed",
+                                    "Failed to switch branch: {err}",
+                                    &[("err", e.message())],
+                                )
+                            })
                     })
                     .await
-                    .unwrap_or_else(|e| Err(e.to_string()));
+                    .unwrap_or_else(|e| {
+                        Err(crate::i18n::panel_keyed_args(
+                            git_log::GIT_LOG_OWNER,
+                            "error.branch_switch_failed",
+                            "Failed to switch branch: {err}",
+                            &[("err", &e.to_string())],
+                        ))
+                    });
                     let _ = proxy
                         .send_event(Message::GitLog(git_log::Message::BranchSwitchDone(result)));
                 });

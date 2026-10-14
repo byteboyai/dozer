@@ -41,6 +41,11 @@ const PANEL_OWNERS: &[(&str, &str, &str)] = &[
         include_str!("../locales/panels/codehealth/en.json"),
         include_str!("../locales/panels/codehealth/zh-CN.json"),
     ),
+    (
+        "dozer.git_log",
+        include_str!("../locales/panels/git_log/en.json"),
+        include_str!("../locales/panels/git_log/zh-CN.json"),
+    ),
 ];
 
 fn build_host_resolver() -> Resolver {
@@ -143,6 +148,27 @@ pub fn panel_text_args(
         t = t.with_arg(*name, *value);
     }
     host_resolver().resolve(&t, locale).text
+}
+
+/// 构造一条**面板** `LocalizedText`(owner 如 `dozer.git_log`)但不解析:用于
+/// 后台任务(拿不到 locale)把文案存进状态,渲染端再用 [`panel_text`] 或
+/// [`render_localized`] 按当前 locale 解析。带具名参数版本。
+pub fn panel_keyed_args(
+    owner: &str,
+    key: &str,
+    fallback: &str,
+    args: &[(&str, &str)],
+) -> dozer_model::LocalizedText {
+    let mut t = dozer_model::LocalizedText::keyed(owner, key, fallback);
+    for (name, value) in args {
+        t = t.with_arg(*name, *value);
+    }
+    t
+}
+
+/// 按当前 locale 渲染任意 owner 的 `LocalizedText`(面板状态里存的 keyed 文案)。
+pub fn render_localized(text: &dozer_model::LocalizedText, locale: &str) -> String {
+    host_resolver().resolve(text, locale).text
 }
 
 #[cfg(test)]

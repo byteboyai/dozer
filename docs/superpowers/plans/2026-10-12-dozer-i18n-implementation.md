@@ -199,6 +199,9 @@
 
 **修改：** `extensions/{files,project,database,ssh}/`、`ssh.rs`、`git_log.rs`、`browser.rs`、`conversations.rs`、`group_chat/`、`agent_context.rs`、历史/搜索/应用日志等相关模块及 Agent 在 app/workspace 中的视图。
 
+> 按面板逐个提交（与 Task 09 一致，用户确认）。
+> 已完成：`dozer.git_log`（含共享 `diff_content.rs` 的两条 host 文案）——见 ledger/acceptance。
+
 - [ ] Files/Project/Git：工具栏、空态、上下文菜单、提交/变更/历史说明、创建及删除流程，包含跨 overlay 的同一操作。
 - [ ] Agent/Conversations/GroupChat：会话状态、发送控制、错误、上下文操作、群聊 Web 控件；不翻译消息正文、摘要和 prompt。
 - [ ] Database/SSH/Browser：连接/驱动/SFTP/书签/导航状态与失败说明；查询结果、远端输出、网页内容不变。
