@@ -2026,7 +2026,10 @@ text: dozer_model::LocalizedText::keyed(
                 Ok(Ok(pair)) => pair,
                 Ok(Err(e)) => {
                     let _ = proxy.send_event(Message::Ssh(ssh::Message::Sftp(
-                        ssh::sftp::Message::Connected(host_id_for_task, Err(e.to_string())),
+                        ssh::sftp::Message::Connected(
+                            host_id_for_task,
+                            Err(ssh::sftp_connect_failed(&e)),
+                        ),
                     )));
                     return;
                 }
@@ -2034,7 +2037,7 @@ text: dozer_model::LocalizedText::keyed(
                     let _ = proxy.send_event(Message::Ssh(ssh::Message::Sftp(
                         ssh::sftp::Message::Connected(
                             host_id_for_task,
-                            Err("连接超时(10 秒)".to_string()),
+                            Err(ssh::terminal_error_timeout()),
                         ),
                     )));
                     return;
@@ -2045,7 +2048,10 @@ text: dozer_model::LocalizedText::keyed(
             // 当成真实文件名去找,几乎总是 "No such file",导致远程文件树
             // 读不出来。改用 `canonicalize(".")`(SFTP REALPATH 请求)问
             // 服务端要真实的 home 绝对路径。
-            let root_result = sftp.canonicalize(".").await.map_err(|e| e.to_string());
+            let root_result = sftp
+                .canonicalize(".")
+                .await
+                .map_err(|e| ssh::sftp_connect_failed(&e));
             let _ = proxy.send_event(Message::Ssh(ssh::Message::Sftp(
                 ssh::sftp::Message::Connected(host_id_for_task.clone(), root_result),
             )));

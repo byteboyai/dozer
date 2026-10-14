@@ -36,7 +36,7 @@
 
 ## 3. 未解决 UI 候选按 owner 分布
 
-当前快照（`build_inventory.py`，共 424 条；已完成面板已从表中移除）：
+当前快照（`build_inventory.py`，共 423 条；已完成面板已从表中移除）：
 
 | owner | 数量 |
 |---|---|
@@ -45,7 +45,7 @@
 | dozer.preview | 79 |
 | dozer.database | 68 |
 | dozer.files | 62 |
-| dozer.host | 37 |
+| dozer.host | 37（全在 Task 11：`html_host.html`/`image_annotate_host.html`/预览预算等；Task 10 已清零） |
 | dozer.agent | 8（全在 Task 11 的 `web/review-trace/`；Task 10 的 Rust `agent_context.rs` 已清零） |
 | dozer.todo | 0 |
 | dozer.ssh | 0 |
@@ -72,6 +72,7 @@
 | 10 (web/browser 面板) | ✅ 完成（按面板一提交） | `crates/dozer-app/locales/panels/web/{en,zh-CN}.json`(owner `dozer.web`，含 `nav.*`/`addr.placeholder`/`star.tooltip`/`bookmarks.tooltip`/`sidebar.*`/`tab.new`/`empty.no_page`/`error.*`)、Rust：`extensions/browser.rs`(`WEB_OWNER` + 本地 `t()`；`Tabs::addr_submit` 返回 `Err(LocalizedText)`(`error.local_path`)；`State.error` 由 `Option<String>` 改 `Option<LocalizedText>`，收藏夹读/写失败经 `panel_keyed_args`(`error.bookmarks_load_failed`/`error.bookmarks_op_failed`)；`view`/`nav_button`/`star_button`/`bookmarks_toggle_button`/`bookmarks_panel`/`bookmark_group` 穿 `locale`，`bookmark_group` 标题改收 `String`；导航/星标/收藏夹/新标签页 tooltip、地址占位、侧栏分组/空态、空页面、错误行经 `t`/`render_localized`)、`app/view.rs` 与 `chrome/homespace.rs`(`browser::view` 传 `app.locale.active_locale()`)、`i18n.rs`(`PANEL_OWNERS` 增 `dozer.web`)、`scripts/i18n/scan_sources.py`(`is_test_context` 修 `#[cfg(test)] mod tests` 之后再出现 `#[cfg(test)]` 项导致测试模块字面量被误判的边界 bug) | Task 10 内 browser 路径候选清零;测试夹具字面量随扫描器修正一并归为 excluded，`dozer.database` 同批下降 69→68 |
 | 10 (conversations 面板) | ✅ 完成（按面板一提交） | `crates/dozer-app/locales/panels/conversations/{en,zh-CN}.json`(owner `dozer.conversations`，含 `head.title`/`search.placeholder`/`loading`/`empty.*`/`filter.all`/`row.*`/`more`/`error.list_load_failed`)、Rust：`extensions/conversations.rs`(`CONVERSATIONS_OWNER` + 本地 `t()`/`t_args()`/`loading_hint_localized()`——`byteui` 的 `loading_hint` label 是 `&'static str` 故复刻；列表读失败 Toast 改 `panel_keyed_args` keyed(`error.list_load_failed`)；`footer_bar`/`agent_picker_items`/`agent_picker_view` 收 `locale`("全部"→key)；`view` 的标题/搜索占位/加载/空态/行副标题(`row.current`/`row.normal`/`row.task_suffix*` 经 `t_args` 插值)/"更多" tooltip 全 keyed)、`app/update.rs`(`agent_picker_items` 传 `self.locale.active_locale()`；`usage_probe/host.rs` 引用行号随迁 5421→5426、1646→1651)、`i18n.rs`(`PANEL_OWNERS` 增 `dozer.conversations`) | Task 10 内 conversations 面板路径候选清零 |
 | 10 (agent 面板 Rust) | ✅ 完成（按面板一提交） | `crates/dozer-app/locales/panels/agent/{en,zh-CN}.json`(owner `dozer.agent`，含 `strip.label`/`action.history`/`action.remove`/`entry.missing`/`error.*`)、Rust：`extensions/agent_context.rs`(`AGENT_OWNER` + 本地 `t()`/`t_args()`；三条 outbox Toast(加载失败/移除失败/落库失败)改 `i18n::panel_keyed_args` keyed(`error.list_load_failed`/`error.remove_failed`/`error.add_record_failed`)；`strip`/`expanded_panel` 收 `locale`(条标题计数、修改历史、逐项历史/移除/缺失标记全 keyed，`expanded_panel` 加显式 `<'a>` 绑 `state: &'a State`))、`term/terminal.rs`(`strip`/`expanded_panel` 传 `app.locale.active_locale()`)、`i18n.rs`(`PANEL_OWNERS` 增 `dozer.agent`) | 裁决(2026-10-14)：`web/review-trace/` 归 **Task 11**(owner 仍 `dozer.agent`)，`build_inventory.py` 任务号 10→11；本面板 Task 10 Rust 路径清零 |
+| 10 (host: SFTP 建连超时) | ✅ 完成（按面板一提交） | `extensions/ssh.rs`(新增 `sftp_connect_failed(e)` 供后台任务造 keyed 文案 `sftp.connect_failed`；复用已提交的 `terminal_error_timeout()`)、`extensions/ssh/sftp.rs`(`Message::Connected` 的 `Err` 臂由 `String` 改 `dozer_model::LocalizedText`，`Err(e)` 直接作 status)、`workspace/state.rs`(`spawn_sftp_tab` 握手失败用 `ssh::sftp_connect_failed`、超时用 `ssh::terminal_error_timeout()`、`canonicalize` 失败用 `sftp_connect_failed`，移除裸中文"连接超时(10 秒)") | Task 10 内 `dozer.host` 候选清零；余 37 条全在 Task 11(HTML 模板/预览预算) |
 | 10–11 (其余) | 未开始 | — | 依赖 07/08 |
 | 12–14 | 未开始 | — | 见计划 §2 |
 

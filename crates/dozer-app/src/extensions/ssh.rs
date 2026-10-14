@@ -80,6 +80,16 @@ pub(crate) fn terminal_error_timeout() -> dozer_model::LocalizedText {
     )
 }
 
+/// SFTP 会话建立失败(`spawn_sftp_tab` 的握手或 `canonicalize` 环节)。
+pub(crate) fn sftp_connect_failed(e: impl std::fmt::Display) -> dozer_model::LocalizedText {
+    crate::i18n::panel_keyed_args(
+        SSH_OWNER,
+        "sftp.connect_failed",
+        "SFTP connection failed: {e}",
+        &[("e", &e.to_string())],
+    )
+}
+
 /// 采集操作系统信息超时(外壳 5 秒超时罩住 `fetch_os_info`)。
 pub(crate) fn os_probe_timeout() -> dozer_model::LocalizedText {
     crate::i18n::panel_keyed(

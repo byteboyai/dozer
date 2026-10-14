@@ -211,7 +211,7 @@ pub enum Message {
     /// 类型)。
     Connected(
         String, /* host_id */
-        Result<String /* remote home 绝对路径 */, String>,
+        Result<String /* remote home 绝对路径 */, dozer_model::LocalizedText>,
     ),
     LocalToggle(String /* host_id */, std::path::PathBuf),
     LocalSelect(String /* host_id */, std::path::PathBuf),
@@ -258,15 +258,7 @@ pub(crate) fn route(
                     }
                 }
                 Err(e) => {
-                    state.status = Some((
-                        crate::i18n::panel_keyed_args(
-                            super::SSH_OWNER,
-                            "sftp.connect_failed",
-                            "SFTP connection failed: {e}",
-                            &[("e", e.as_str())],
-                        ),
-                        true,
-                    ));
+                    state.status = Some((e, true));
                 }
             }
         }

@@ -204,6 +204,8 @@
 > 已完成：`dozer.ssh`（含 `extensions/ssh/sftp.rs`；随附 `scan_sources.py` 字符字面量扫描 bug 修复）——见 ledger/acceptance。
 > 已完成：`dozer.web`（`extensions/browser.rs`；随附 `scan_sources.py` 的 `is_test_context` 边界 bug 修复）——见 ledger/acceptance。
 > 已完成：`dozer.conversations`（`extensions/conversations.rs`）——见 ledger/acceptance。
+> 已完成：`dozer.agent`（`extensions/agent_context.rs`；`web/review-trace/` 裁决归 Task 11）——见 ledger/acceptance。
+> 已完成：host 的 SFTP 建连超时（`workspace/state.rs` + `extensions/ssh.rs`/`sftp.rs`）——见 ledger/acceptance。
 
 - [ ] Files/Project/Git：工具栏、空态、上下文菜单、提交/变更/历史说明、创建及删除流程，包含跨 overlay 的同一操作。
 - [ ] Agent/Conversations/GroupChat：会话状态、发送控制、错误、上下文操作、群聊 Web 控件；不翻译消息正文、摘要和 prompt。

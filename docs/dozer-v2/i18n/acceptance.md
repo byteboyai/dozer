@@ -433,6 +433,27 @@ python3 scripts/i18n/build_inventory.py
 - `web/review-trace/` 在 Task 11 迁移。
 - 双语运行期视觉核对随 Task 13 执行。
 
+## Task 10 验收（host：SFTP 建连超时文案，按面板拆分提交）
+
+### 交付内容
+
+- 迁移：`extensions/ssh.rs`（新增 `sftp_connect_failed(e)` → keyed `sftp.connect_failed`；复用已提交的 `terminal_error_timeout()` → `error.timeout_terminal`）。
+- `extensions/ssh/sftp.rs`（`Message::Connected` 的 `Err` 臂由 `String` 改 `dozer_model::LocalizedText`，`Err(e)` 直接作 status 文案）。
+- `workspace/state.rs`（`spawn_sftp_tab` 握手失败经 `ssh::sftp_connect_failed`、10 秒超时经 `ssh::terminal_error_timeout()`、`canonicalize` 失败经 `sftp_connect_failed`；删除裸中文 `"连接超时(10 秒)"`）。
+
+### 验证命令与结果
+
+- `cargo build -p dozer-app`：通过。
+- `cargo test -p dozer-app`：**2001 passed / 0 failed**。
+- `cargo fmt --all -- --check`、`cargo clippy -p dozer-app --all-targets`（仅既有告警）、`python3 scripts/i18n/check_resources.py`（9 个 owner 目录）、`bash scripts/check-log-scope.sh`、`python3 scripts/audit/check_panel_boundary.py`：全绿。
+- `python3 scripts/i18n/build_inventory.py`：`counts: {"excluded": 3113, "migrated": 0, "unresolved": 423}`；`unresolved by task: {"10": 301, "11": 122}`；`dozer.host` Task 10 路径 **0 条**（余 37 条全在 Task 11 的 HTML 模板/预览预算）。
+
+### 残留
+
+- Task 10 其余面板（files/database/project/group_chat）按面板逐个提交。
+- `dozer.host`/`dozer.agent` 的 Task 11 部分随 Task 11 迁移。
+- 双语运行期视觉核对随 Task 13 执行。
+
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |
 |---|---|---|
