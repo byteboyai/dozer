@@ -4,19 +4,33 @@
 //! (`extensions::project::spawn_repair_run`)驱动、逐步骤实时反馈进弹窗
 //! (spec 2026-08-28)。
 
-use crate::extensions::project::links;
+use crate::extensions::project::{keyed, keyed_args, links};
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScaffoldStepResult {
     AlreadyOk,
-    Created(String),
-    Failed(String),
+    Created(dozer_model::LocalizedText),
+    Failed(dozer_model::LocalizedText),
 }
 
+/// 一个同步 scaffold 步骤:标签用 i18n key(`label_key` + 英文 `label_fallback`)
+/// 表示,渲染端按 locale 解析;`run` 在后台跑,结果里的文案用 `keyed` 构造。
 pub struct ScaffoldStep {
-    pub label: &'static str,
+    pub label_key: &'static str,
     pub run: fn(&Path) -> ScaffoldStepResult,
+}
+
+/// 步骤标签 key 的英文 fallback 查表(渲染端 `scaffold_step_row` 用)。
+pub fn step_label_fallback(key: &'static str) -> &'static str {
+    match key {
+        "scaffold.step.dir" => "Cache directory",
+        "scaffold.step.readme" => "README",
+        "scaffold.step.git" => "Git repository",
+        "scaffold.step.docs" => "Project docs",
+        "scaffold.step.agent_history" => "Agent history",
+        _ => key,
+    }
 }
 
 fn ensure_dozer_dir(repo: &Path) -> ScaffoldStepResult {
@@ -25,8 +39,11 @@ fn ensure_dozer_dir(repo: &Path) -> ScaffoldStepResult {
         return ScaffoldStepResult::AlreadyOk;
     }
     match std::fs::create_dir_all(&dir) {
-        Ok(()) => ScaffoldStepResult::Created("已创建 .dozer 目录".into()),
-        Err(e) => ScaffoldStepResult::Failed(e.to_string()),
+        Ok(()) => ScaffoldStepResult::Created(keyed(
+            "scaffold.result.dir_created",
+            "Created .dozer directory",
+        )),
+        Err(e) => ScaffoldStepResult::Failed(e.to_string().into()),
     }
 }
 
@@ -44,11 +61,14 @@ fn ensure_readme(repo: &Path) -> ScaffoldStepResult {
     let name = repo
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "项目".to_string());
+        .unwrap_or_else(|| "Project".to_string());
     let content = format!("# {name}\n");
     match std::fs::write(repo.join("README.md"), content) {
-        Ok(()) => ScaffoldStepResult::Created("已创建 README.md".into()),
-        Err(e) => ScaffoldStepResult::Failed(e.to_string()),
+        Ok(()) => ScaffoldStepResult::Created(keyed(
+            "scaffold.result.readme_created",
+            "Created README.md",
+        )),
+        Err(e) => ScaffoldStepResult::Failed(e.to_string().into()),
     }
 }
 
@@ -57,8 +77,11 @@ fn ensure_git_repo(repo: &Path) -> ScaffoldStepResult {
         return ScaffoldStepResult::AlreadyOk;
     }
     match bytegit::init(repo) {
-        Ok(_) => ScaffoldStepResult::Created("已初始化 git 仓库".into()),
-        Err(e) => ScaffoldStepResult::Failed(e.message().to_string()),
+        Ok(_) => ScaffoldStepResult::Created(keyed(
+            "scaffold.result.git_created",
+            "Initialized git repository",
+        )),
+        Err(e) => ScaffoldStepResult::Failed(e.message().to_string().into()),
     }
 }
 
@@ -74,8 +97,12 @@ fn ensure_project_docs(repo: &Path) -> ScaffoldStepResult {
         return ScaffoldStepResult::AlreadyOk;
     }
     match links::save(repo, &state) {
-        Ok(()) => ScaffoldStepResult::Created(format!("补充了 {added} 条项目文档")),
-        Err(e) => ScaffoldStepResult::Failed(e.to_string()),
+        Ok(()) => ScaffoldStepResult::Created(keyed_args(
+            "scaffold.result.docs_added",
+            "Added {n} project docs",
+            &[("n", &added.to_string())],
+        )),
+        Err(e) => ScaffoldStepResult::Failed(e.to_string().into()),
     }
 }
 
@@ -85,19 +112,19 @@ fn ensure_project_docs(repo: &Path) -> ScaffoldStepResult {
 pub fn scaffold_steps() -> Vec<ScaffoldStep> {
     vec![
         ScaffoldStep {
-            label: "缓存目录",
+            label_key: "scaffold.step.dir",
             run: ensure_dozer_dir,
         },
         ScaffoldStep {
-            label: "README",
+            label_key: "scaffold.step.readme",
             run: ensure_readme,
         },
         ScaffoldStep {
-            label: "git 仓库",
+            label_key: "scaffold.step.git",
             run: ensure_git_repo,
         },
         ScaffoldStep {
-            label: "项目文档",
+            label_key: "scaffold.step.docs",
             run: ensure_project_docs,
         },
     ]
@@ -115,8 +142,8 @@ pub fn scaffold_steps() -> Vec<ScaffoldStep> {
 pub fn run_sync_steps(repo: &Path, skip_git_init: bool) -> Vec<(String, ScaffoldStepResult)> {
     scaffold_steps()
         .into_iter()
-        .filter(|step| !(skip_git_init && step.label == "git 仓库"))
-        .map(|step| (step.label.to_string(), (step.run)(repo)))
+        .filter(|step| !(skip_git_init && step.label_key == "scaffold.step.git"))
+        .map(|step| (step.label_key.to_string(), (step.run)(repo)))
         .collect()
 }
 
@@ -129,7 +156,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         assert_eq!(
             ensure_dozer_dir(tmp.path()),
-            ScaffoldStepResult::Created("已创建 .dozer 目录".into())
+            ScaffoldStepResult::Created(keyed(
+                "scaffold.result.dir_created",
+                "Created .dozer directory"
+            ))
         );
         assert!(tmp.path().join(".dozer").is_dir());
         assert_eq!(ensure_dozer_dir(tmp.path()), ScaffoldStepResult::AlreadyOk);
@@ -177,7 +207,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let results = run_sync_steps(tmp.path(), false);
         let labels: Vec<&str> = results.iter().map(|(l, _)| l.as_str()).collect();
-        assert_eq!(labels, vec!["缓存目录", "README", "git 仓库", "项目文档"]);
+        assert_eq!(
+            labels,
+            vec![
+                "scaffold.step.dir",
+                "scaffold.step.readme",
+                "scaffold.step.git",
+                "scaffold.step.docs"
+            ]
+        );
     }
 
     #[test]
@@ -185,7 +223,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let results = run_sync_steps(tmp.path(), true);
         assert!(
-            !results.iter().any(|(label, _)| label == "git 仓库"),
+            !results
+                .iter()
+                .any(|(label, _)| label == "scaffold.step.git"),
             "skip_git_init=true 时不应该出现 git 仓库这一步"
         );
         assert!(!tmp.path().join(".git").exists());
@@ -195,7 +235,11 @@ mod tests {
     fn run_sync_steps_runs_git_step_by_default() {
         let tmp = tempfile::tempdir().unwrap();
         let results = run_sync_steps(tmp.path(), false);
-        assert!(results.iter().any(|(label, _)| label == "git 仓库"));
+        assert!(
+            results
+                .iter()
+                .any(|(label, _)| label == "scaffold.step.git")
+        );
         assert!(tmp.path().join(".git").exists());
     }
 
@@ -222,7 +266,11 @@ mod tests {
         let result = ensure_project_docs(tmp.path());
         assert_eq!(
             result,
-            ScaffoldStepResult::Created("补充了 1 条项目文档".into())
+            ScaffoldStepResult::Created(keyed_args(
+                "scaffold.result.docs_added",
+                "Added {n} project docs",
+                &[("n", "1")]
+            ))
         );
         let state = links::load(tmp.path()).unwrap();
         assert_eq!(state.docs.len(), 2);

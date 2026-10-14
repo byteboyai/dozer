@@ -49,7 +49,7 @@ pub fn view<'a>(
 
     content = content.push(crate::chrome::homespace::home_panel_head(
         icons::IconKind::Briefcase,
-        "项目",
+        t("panel.title", "Project", locale),
     ));
 
     let editing = ws_state.name_edit_focused();
@@ -110,7 +110,7 @@ pub fn view<'a>(
             let editor: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
                 iced_widget::text_editor(editing)
                     .id(description_field_id())
-                    .placeholder("项目描述信息…")
+                    .placeholder(t("desc.placeholder", "Project description…", locale))
                     .on_action(Message::DescriptionEditAction)
                     .height(Length::Fixed(96.0))
                     .style(|_t, _s| iced_widget::text_editor::Style {
@@ -136,7 +136,7 @@ pub fn view<'a>(
             let label = ws_state
                 .description
                 .clone()
-                .unwrap_or_else(|| "点击添加项目描述…".to_string());
+                .unwrap_or_else(|| t("desc.add", "Click to add a project description…", locale));
             let color = if ws_state.description.is_some() {
                 byteui::theme::color::current().body
             } else {
@@ -161,8 +161,15 @@ pub fn view<'a>(
 
     let usage_label = ws_state
         .disk_usage_bytes
-        .map(|b| format!("文件存储 ({} MB)", b / 1_000_000))
-        .unwrap_or_else(|| "文件存储".to_string());
+        .map(|b| {
+            t_args(
+                "usage.with_size",
+                "Project storage ({size} MB)",
+                locale,
+                &[("size", &(b / 1_000_000).to_string())],
+            )
+        })
+        .unwrap_or_else(|| t("usage.label", "Project storage", locale));
     content = content.push(
         row![
             icons::view(
@@ -190,7 +197,7 @@ pub fn view<'a>(
                     byteui::theme::icon_size::row(),
                     byteui::theme::color::current().dim
                 ),
-                text("项目根目录")
+                text(t("root_dir", "Project root", locale))
                     .size(byteui::theme::font::label())
                     .color(byteui::theme::color::current().dim),
             ]
@@ -216,7 +223,7 @@ pub fn view<'a>(
                     byteui::theme::icon_size::row(),
                     byteui::theme::color::current().dim
                 ),
-                text("Git 远程仓库")
+                text(t("git_remote", "Git remote", locale))
                     .size(byteui::theme::font::label())
                     .color(byteui::theme::color::current().dim),
                 iced_widget::space::horizontal(),
@@ -246,7 +253,7 @@ pub fn view<'a>(
         content = content.push(
             row![
                 iced_widget::Space::new().width(Length::Fixed(value_indent)),
-                text("未设置")
+                text(t("unset", "Not set", locale))
                     .size(byteui::theme::font::caption())
                     .color(byteui::theme::color::current().dim),
             ]
@@ -267,13 +274,14 @@ pub fn view<'a>(
     }
 
     content = content.push(links_section(
-        "项目文档",
+        t("docs.title", "Project docs", locale),
         links::LinkTarget::Docs,
         ProjectToolbarTarget::Docs,
         hover.docs_add,
         &ws_state.links,
         &ws_state.expanded_link_dirs,
         &ws_state.selected_link,
+        locale,
     ));
     content = content.push(match &ws_state.memory_detail {
         Some(detail) => memory_detail_view(
@@ -294,13 +302,13 @@ pub fn view<'a>(
 
     if let Some(err) = &ws_state.error {
         content = content.push(
-            text(format!("⚠ {err}"))
+            text(format!("⚠ {}", crate::i18n::render_localized(err, locale)))
                 .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().red),
         );
     }
 
-    let body = column![content, project_footer_bar()].spacing(0);
+    let body = column![content, project_footer_bar(locale)].spacing(0);
 
     let base =
         container(body)
@@ -340,7 +348,7 @@ pub fn view<'a>(
 /// `Length::Fill` 再 `align_x(Center)` 才能让图标+文字这组内容整体居中。
 fn footer_button_label<'a>(
     icon: icons::IconKind,
-    label: &'a str,
+    label: String,
     color: iced_widget::core::Color,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     container(
@@ -371,10 +379,12 @@ pub(crate) fn footer_min_width() -> f32 {
     button_w * 2.0 + 6.0 + 16.0
 }
 
-fn project_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_renderer::Renderer> {
+fn project_footer_bar<'a>(
+    locale: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let repair = button(footer_button_label(
         icons::IconKind::BriefcaseMedical,
-        "修复项目",
+        t("footer.repair", "Repair project", locale),
         byteui::theme::color::current().dim,
     ))
     .on_press(Message::RepairProject)
@@ -393,7 +403,7 @@ fn project_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_re
 
     let delete = button(footer_button_label(
         icons::IconKind::FolderX,
-        "删除项目",
+        t("footer.delete", "Delete project", locale),
         byteui::theme::color::current().red,
     ))
     .on_press(Message::DeleteProjectRequest)
@@ -436,28 +446,34 @@ fn project_footer_bar() -> Element<'static, Message, iced_widget::Theme, iced_re
 
 /// "修复项目"弹窗单行:左侧状态符号 + 步骤名 + 右侧简短详情文字。
 fn scaffold_step_row<'a>(
-    label: &'a str,
+    label_key: &'static str,
     state: &'a ScaffoldStepState,
+    locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let (glyph, glyph_color, detail): (&str, iced_widget::core::Color, String) = match state {
         ScaffoldStepState::Pending => ("○", byteui::theme::color::current().dim, String::new()),
         ScaffoldStepState::Running => (
             "…",
             byteui::theme::color::current().gold,
-            "进行中".to_string(),
+            t("scaffold.running", "In progress", locale),
         ),
         ScaffoldStepState::Done(scaffold::ScaffoldStepResult::AlreadyOk) => (
             "✓",
             byteui::theme::color::current().green,
-            "已是最新".to_string(),
+            t("scaffold.already_ok", "Up to date", locale),
         ),
-        ScaffoldStepState::Done(scaffold::ScaffoldStepResult::Created(msg)) => {
-            ("✓", byteui::theme::color::current().green, msg.clone())
-        }
-        ScaffoldStepState::Done(scaffold::ScaffoldStepResult::Failed(msg)) => {
-            ("✗", byteui::theme::color::current().red, msg.clone())
-        }
+        ScaffoldStepState::Done(scaffold::ScaffoldStepResult::Created(msg)) => (
+            "✓",
+            byteui::theme::color::current().green,
+            crate::i18n::render_localized(msg, locale),
+        ),
+        ScaffoldStepState::Done(scaffold::ScaffoldStepResult::Failed(msg)) => (
+            "✗",
+            byteui::theme::color::current().red,
+            crate::i18n::render_localized(msg, locale),
+        ),
     };
+    let label = t(label_key, scaffold::step_label_fallback(label_key), locale);
     row![
         text(glyph)
             .size(byteui::theme::font::body())
@@ -475,9 +491,10 @@ fn scaffold_step_row<'a>(
     .into()
 }
 
-fn scaffold_backfill_row(
-    state: &BackfillStepState,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+fn scaffold_backfill_row<'a>(
+    state: &'a BackfillStepState,
+    locale: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let (glyph, glyph_color, detail) = match state {
         BackfillStepState::Pending => (
             "○".to_string(),
@@ -492,32 +509,46 @@ fn scaffold_backfill_row(
         BackfillStepState::Failed(error) => (
             "!".to_string(),
             byteui::theme::color::current().red,
-            error.clone(),
+            crate::i18n::render_localized(error, locale),
         ),
         BackfillStepState::Done(p) if p.total == 0 => (
             "✓".to_string(),
             byteui::theme::color::current().green,
-            "无需补".to_string(),
+            t("scaffold.backfill_none", "Nothing to backfill", locale),
         ),
         BackfillStepState::Done(p) if p.failed > 0 => (
             "!".to_string(),
             byteui::theme::color::current().red,
-            format!(
-                "成功 {} / 失败 {} / 跳过 {}",
-                p.succeeded, p.failed, p.skipped
+            t_args(
+                "scaffold.backfill_done_failed",
+                "Succeeded {succeeded} / failed {failed} / skipped {skipped}",
+                locale,
+                &[
+                    ("succeeded", &p.succeeded.to_string()),
+                    ("failed", &p.failed.to_string()),
+                    ("skipped", &p.skipped.to_string()),
+                ],
             ),
         ),
         BackfillStepState::Done(p) => (
             "✓".to_string(),
             byteui::theme::color::current().green,
-            format!("成功 {} / 跳过 {}", p.succeeded, p.skipped),
+            t_args(
+                "scaffold.backfill_done",
+                "Succeeded {succeeded} / skipped {skipped}",
+                locale,
+                &[
+                    ("succeeded", &p.succeeded.to_string()),
+                    ("skipped", &p.skipped.to_string()),
+                ],
+            ),
         ),
     };
     row![
         text(glyph)
             .size(byteui::theme::font::body())
             .color(glyph_color),
-        text("补总结")
+        text(t("scaffold.backfill_label", "Summarize", locale))
             .size(byteui::theme::font::label())
             .color(byteui::theme::color::current().cream)
             .width(Length::Fixed(140.0)),
@@ -534,20 +565,25 @@ fn scaffold_backfill_row(
 /// `platform::project_scaffold_overlay` 渲染。进行中时"关闭"按钮不可点
 /// (`on_press_maybe`),全部完成(`ScaffoldRunState::all_done`)才激活。
 /// `scrim_blocking` 语义由宿主保留(进行中不可 Esc/失焦/关窗)。
-pub fn project_scaffold_card(
-    ws_state: &WorkspaceState,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+pub fn project_scaffold_card<'a>(
+    ws_state: &'a WorkspaceState,
+    locale: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(run) = &ws_state.scaffold_run else {
         return container(column![]).into();
     };
     let mut rows = column![].spacing(10);
-    for (label, state) in &run.steps {
-        rows = rows.push(scaffold_step_row(label, state));
+    for (label_key, state) in &run.steps {
+        rows = rows.push(scaffold_step_row(label_key, state, locale));
     }
-    rows = rows.push(scaffold_backfill_row(&run.backfill));
+    rows = rows.push(scaffold_backfill_row(&run.backfill, locale));
 
     let done = run.all_done();
-    let close_label = if done { "关闭" } else { "进行中…" };
+    let close_label = if done {
+        t("scaffold.close", "Close", locale)
+    } else {
+        t("scaffold.closing", "In progress…", locale)
+    };
     let close_btn = button(
         text(close_label)
             .size(byteui::theme::font::label())
@@ -565,7 +601,7 @@ pub fn project_scaffold_card(
             byteui::theme::icon_size::row(),
             byteui::theme::color::current().cream,
         ),
-        text("修复项目")
+        text(t("scaffold.title", "Repair project", locale))
             .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().cream),
     ]
@@ -608,14 +644,15 @@ pub fn project_scaffold_card(
 /// 绑定在 `ssh::Message` 上、跨模块复用不了类型,这里就地画一份同样的视觉。
 /// 窗口级 overlay,由 `platform::project_delete_overlay` 的独立原生窗口
 /// 宿主渲染(见其调用点注释),`pub` 是为了让那边能调到。
-pub fn project_delete_card(
-    ws_state: &WorkspaceState,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+pub fn project_delete_card<'a>(
+    ws_state: &'a WorkspaceState,
+    locale: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let selected = ws_state
         .delete_pending
         .unwrap_or(delete::DeleteScope::DozerOnly);
 
-    let radio_row = |scope: delete::DeleteScope, label: &'static str| {
+    let radio_row = |scope: delete::DeleteScope, label: String| {
         let is_selected = selected == scope;
         let dot = container(iced_widget::Space::new())
             .width(Length::Fixed(10.0))
@@ -663,7 +700,7 @@ pub fn project_delete_card(
     };
 
     let cancel = button(
-        text("取消")
+        text(t("delete.cancel", "Cancel", locale))
             .size(byteui::theme::font::label())
             .color(byteui::theme::color::current().dim),
     )
@@ -673,7 +710,7 @@ pub fn project_delete_card(
         byteui::theme::color::current().dim,
     ));
     let confirm = button(
-        text("删除")
+        text(t("delete.confirm", "Delete", locale))
             .size(byteui::theme::font::label())
             .color(byteui::theme::color::current().red),
     )
@@ -689,7 +726,7 @@ pub fn project_delete_card(
             byteui::theme::icon_size::row(),
             byteui::theme::color::current().cream,
         ),
-        text("删除项目")
+        text(t("delete.title", "Delete project", locale))
             .size(byteui::theme::font::subtitle())
             .color(byteui::theme::color::current().cream),
     ]
@@ -699,18 +736,37 @@ pub fn project_delete_card(
     let dialog = container(
         column![
             title,
-            text("选择删除范围,操作会把对应内容移入系统回收站(可找回)。")
-                .size(byteui::theme::font::label())
-                .color(byteui::theme::color::current().dim),
+            text(t(
+                "delete.hint",
+                "Choose a scope; items are moved to the system Trash (recoverable).",
+                locale,
+            ))
+            .size(byteui::theme::font::label())
+            .color(byteui::theme::color::current().dim),
             column![
-                radio_row(delete::DeleteScope::DozerOnly, "只删 dozer 关联与缓存文件"),
+                radio_row(
+                    delete::DeleteScope::DozerOnly,
+                    t(
+                        "delete.scope.dozer",
+                        "Only dozer registration and cache files",
+                        locale
+                    )
+                ),
                 radio_row(
                     delete::DeleteScope::WithAgentCache,
-                    "以上 + 所有 agent 缓存数据"
+                    t(
+                        "delete.scope.agent",
+                        "Above + all agent cached data",
+                        locale
+                    )
                 ),
                 radio_row(
                     delete::DeleteScope::WithProjectFiles,
-                    "以上 + 项目文件与版本仓库"
+                    t(
+                        "delete.scope.project",
+                        "Above + project files and VCS repository",
+                        locale
+                    )
                 ),
             ]
             .spacing(8),
@@ -775,7 +831,7 @@ fn memory_section<'a>(
                 byteui::theme::icon_size::row(),
                 byteui::theme::color::current().cream
             ),
-            text("共享记忆")
+            text(t("memory.title", "Shared memory", locale))
                 .size(byteui::theme::font::label())
                 .color(byteui::theme::color::current().cream),
             iced_widget::space::horizontal(),
@@ -790,7 +846,7 @@ fn memory_section<'a>(
                 true,
                 Message::MemoryCreateStart,
                 |hovered| Message::ToolbarHover(ProjectToolbarTarget::Memory, hovered),
-                "新建记忆",
+                t("memory.new", "New memory", locale),
             ),
         ]
         .spacing(6)
@@ -801,7 +857,7 @@ fn memory_section<'a>(
         col = col.push(
             column![
                 byteui::form::input_text::view(
-                    "标题",
+                    &t("memory.field.title", "Title", locale),
                     &draft.title,
                     false,
                     None,
@@ -811,7 +867,11 @@ fn memory_section<'a>(
                     Message::MemoryCreateTitleInput,
                 ),
                 byteui::form::input_text::view(
-                    "分类(user/feedback/project/reference)",
+                    &t(
+                        "memory.field.kind",
+                        "Category (user/feedback/project/reference)",
+                        locale
+                    ),
                     &draft.kind,
                     false,
                     None,
@@ -821,7 +881,7 @@ fn memory_section<'a>(
                     Message::MemoryCreateKindInput,
                 ),
                 byteui::form::input_text::view(
-                    "一句话摘要",
+                    &t("memory.field.description", "One-line summary", locale),
                     &draft.description,
                     false,
                     None,
@@ -831,7 +891,7 @@ fn memory_section<'a>(
                     Message::MemoryCreateDescriptionInput,
                 ),
                 byteui::form::input_text::view(
-                    "正文",
+                    &t("memory.field.body", "Body", locale),
                     &draft.body,
                     false,
                     None,
@@ -841,8 +901,10 @@ fn memory_section<'a>(
                     Message::MemoryCreateBodyInput,
                 ),
                 row![
-                    button(text("保存")).on_press(Message::MemoryCreateSubmit),
-                    button(text("取消")).on_press(Message::MemoryCreateCancel),
+                    button(text(t("memory.save", "Save", locale)))
+                        .on_press(Message::MemoryCreateSubmit),
+                    button(text(t("memory.cancel", "Cancel", locale)))
+                        .on_press(Message::MemoryCreateCancel),
                 ]
                 .spacing(8),
             ]
@@ -851,10 +913,17 @@ fn memory_section<'a>(
     }
 
     for m in memories {
-        let updated_line = format!(
-            "上次由 {} 于 {} 更新",
-            m.updated_by,
-            crate::workspace::relative_time_text(m.updated_ms, now_ms, locale)
+        let updated_line = t_args(
+            "memory.updated_by",
+            "Last updated by {author} at {time}",
+            locale,
+            &[
+                ("author", &m.updated_by),
+                (
+                    "time",
+                    &crate::workspace::relative_time_text(m.updated_ms, now_ms, locale),
+                ),
+            ],
         );
         col = col.push(
             button(
@@ -900,10 +969,13 @@ fn memory_detail_view<'a>(
 
     col = col.push(
         row![
-            button(text("← 返回")).on_press(Message::MemoryDetailClose),
+            button(text(t("memory.detail.back", "← Back", locale)))
+                .on_press(Message::MemoryDetailClose),
             iced_widget::Space::new().width(Length::Fill),
-            button(text("编辑")).on_press(Message::MemoryEditStart),
-            button(text("删除")).on_press(Message::MemoryDeleteRequest(detail.id)),
+            button(text(t("memory.detail.edit", "Edit", locale)))
+                .on_press(Message::MemoryEditStart),
+            button(text(t("memory.detail.delete", "Delete", locale)))
+                .on_press(Message::MemoryDeleteRequest(detail.id)),
         ]
         .spacing(8)
         .align_y(iced_widget::core::Alignment::Center),
@@ -912,10 +984,16 @@ fn memory_detail_view<'a>(
     if delete_pending {
         col = col.push(
             row![
-                text("确定删除这条记忆?历史记录会保留可查。")
-                    .color(byteui::theme::color::current().body),
-                button(text("确认删除")).on_press(Message::MemoryDeleteConfirm),
-                button(text("取消")).on_press(Message::MemoryDeleteCancel),
+                text(t(
+                    "memory.delete.confirm_text",
+                    "Delete this memory? Its history will be kept.",
+                    locale,
+                ))
+                .color(byteui::theme::color::current().body),
+                button(text(t("memory.delete.confirm", "Confirm delete", locale)))
+                    .on_press(Message::MemoryDeleteConfirm),
+                button(text(t("memory.cancel", "Cancel", locale)))
+                    .on_press(Message::MemoryDeleteCancel),
             ]
             .spacing(8)
             .align_y(iced_widget::core::Alignment::Center),
@@ -926,7 +1004,7 @@ fn memory_detail_view<'a>(
         col = col.push(
             column![
                 byteui::form::input_text::view(
-                    "标题",
+                    &t("memory.field.title", "Title", locale),
                     &draft.title,
                     false,
                     None,
@@ -936,7 +1014,7 @@ fn memory_detail_view<'a>(
                     Message::MemoryEditTitleInput,
                 ),
                 byteui::form::input_text::view(
-                    "分类",
+                    &t("memory.detail.kind", "Category", locale),
                     &draft.kind,
                     false,
                     None,
@@ -946,7 +1024,7 @@ fn memory_detail_view<'a>(
                     Message::MemoryEditKindInput,
                 ),
                 byteui::form::input_text::view(
-                    "一句话摘要",
+                    &t("memory.field.description", "One-line summary", locale),
                     &draft.description,
                     false,
                     None,
@@ -956,7 +1034,7 @@ fn memory_detail_view<'a>(
                     Message::MemoryEditDescriptionInput,
                 ),
                 byteui::form::input_text::view(
-                    "正文",
+                    &t("memory.field.body", "Body", locale),
                     &draft.body,
                     false,
                     None,
@@ -966,8 +1044,10 @@ fn memory_detail_view<'a>(
                     Message::MemoryEditBodyInput,
                 ),
                 row![
-                    button(text("保存")).on_press(Message::MemoryEditSubmit),
-                    button(text("取消")).on_press(Message::MemoryEditCancel),
+                    button(text(t("memory.save", "Save", locale)))
+                        .on_press(Message::MemoryEditSubmit),
+                    button(text(t("memory.cancel", "Cancel", locale)))
+                        .on_press(Message::MemoryEditCancel),
                 ]
                 .spacing(8),
             ]
@@ -983,7 +1063,7 @@ fn memory_detail_view<'a>(
     }
 
     col = col.push(
-        text("历史")
+        text(t("memory.history", "History", locale))
             .size(byteui::theme::font::body())
             .color(byteui::theme::color::current().body),
     );
@@ -1000,16 +1080,17 @@ fn memory_detail_view<'a>(
 }
 
 fn links_section<'a>(
-    title: &'static str,
+    title: String,
     target: links::LinkTarget,
     toolbar_target: ProjectToolbarTarget,
     hover_t: f32,
     links_state: &'a links::LinksState,
     expanded: &'a std::collections::HashMap<PathBuf, Vec<links::DirRow>>,
     selected_link: &'a Option<PathBuf>,
+    locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let tooltip = match target {
-        links::LinkTarget::Docs => "添加文档",
+        links::LinkTarget::Docs => t("docs.tooltip", "Add document", locale),
     };
     let mut col = column![].spacing(6);
     col = col.push(

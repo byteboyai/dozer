@@ -10,6 +10,36 @@ pub mod view;
 pub use update::*;
 pub use view::*;
 
+/// 本面板 i18n owner(`crate::i18n::PANEL_OWNERS` 之一;资源在
+/// `locales/panels/project/`)。项目信息/文档链接/共享记忆/修复/删除文案归它。
+pub(crate) const PROJECT_OWNER: &str = "dozer.project";
+
+/// 取一条本面板文案(见 `crate::i18n::panel_text`)。`fallback` 必须是英文,
+/// 且与 `locales/panels/project/en.json` 一致。
+pub(crate) fn t(key: &str, fallback: &str, locale: &str) -> String {
+    crate::i18n::panel_text(PROJECT_OWNER, key, fallback, locale)
+}
+
+/// 同上,带 `{}` 位置参数(见 `crate::i18n::panel_text_args`)。
+pub(crate) fn t_args(key: &str, fallback: &str, locale: &str, args: &[(&str, &str)]) -> String {
+    crate::i18n::panel_text_args(PROJECT_OWNER, key, fallback, locale, args)
+}
+
+/// 构造一条本面板 `LocalizedText`(后台任务/生产端拿不到 locale 时用),
+/// 渲染端用 `crate::i18n::render_localized` 按当前 locale 解析。
+pub(crate) fn keyed(key: &str, fallback: &str) -> dozer_model::LocalizedText {
+    crate::i18n::panel_keyed(PROJECT_OWNER, key, fallback)
+}
+
+/// 同 [`keyed`],带具名参数。
+pub(crate) fn keyed_args(
+    key: &str,
+    fallback: &str,
+    args: &[(&str, &str)],
+) -> dozer_model::LocalizedText {
+    crate::i18n::panel_keyed_args(PROJECT_OWNER, key, fallback, args)
+}
+
 use iced_widget::core::Rectangle;
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
@@ -45,7 +75,7 @@ pub enum BackfillStepState {
     Pending,
     Running(BackfillProgress),
     Done(BackfillProgress),
-    Failed(String),
+    Failed(dozer_model::LocalizedText),
 }
 
 /// 一次"修复项目"弹窗跑的完整状态:4 个同步步骤 + 转录历史补录 + 补总结
@@ -54,18 +84,18 @@ pub enum BackfillStepState {
 /// 拼接顺序一致)。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScaffoldRunState {
-    pub steps: Vec<(String, ScaffoldStepState)>,
+    pub steps: Vec<(&'static str, ScaffoldStepState)>,
     pub backfill: BackfillStepState,
 }
 
 impl ScaffoldRunState {
     /// 初始态:全部步骤 Pending,补总结也 Pending。
     fn pending() -> Self {
-        let mut steps: Vec<(String, ScaffoldStepState)> = scaffold::scaffold_steps()
+        let mut steps: Vec<(&'static str, ScaffoldStepState)> = scaffold::scaffold_steps()
             .into_iter()
-            .map(|s| (s.label.to_string(), ScaffoldStepState::Pending))
+            .map(|s| (s.label_key, ScaffoldStepState::Pending))
             .collect();
-        steps.push(("agent 历史".to_string(), ScaffoldStepState::Pending));
+        steps.push(("scaffold.step.agent_history", ScaffoldStepState::Pending));
         Self {
             steps,
             backfill: BackfillStepState::Pending,
@@ -142,7 +172,7 @@ pub struct WorkspaceState {
     /// 待删除确认的记忆 id(`None` = 未在确认删除)。同 `delete_pending`
     /// 的既有先例(项目删除的二次确认),不用弹独立模态框。
     memory_delete_pending: Option<i64>,
-    error: Option<String>,
+    error: Option<dozer_model::LocalizedText>,
     pub(crate) scaffold_run: Option<ScaffoldRunState>,
     pub(crate) delete_pending: Option<delete::DeleteScope>,
 }
@@ -331,7 +361,7 @@ pub enum Message {
     /// 磁盘占用统计结果(排除构建产物后的字节数)。
     DiskUsageLoaded(i64, u64),
     /// daemon 改名结果。带 `project_id`,走 `with_project` 路由。
-    NameRenamed(i64, Result<dozer_model::ProjectInfo, String>),
+    NameRenamed(i64, Result<dozer_model::ProjectInfo, Option<String>>),
     /// 点项目名进入编辑态(`name_edit_focus_pending` 置位)。
     NameEditStart,
     /// 名称编辑框草稿变化(iced `text_input::on_input`)。
@@ -416,7 +446,7 @@ pub enum Message {
     /// 终态数)。completed 追平 total 时 update() 把 backfill 置为 Done。
     #[allow(clippy::type_complexity)]
     SummaryBackfillProgress(i64, u32, u32, u32, u32, u32),
-    SummaryBackfillFailed(i64, String),
+    SummaryBackfillFailed(i64, dozer_model::LocalizedText),
     /// 弹窗"关闭"按钮(全部完成才可点)。
     ScaffoldPopupClose,
     /// 共享记忆列表拉取结果。
@@ -729,7 +759,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         update(
             &mut ws,
-            Message::NameRenamed(1, Err("连接失败".into())),
+            Message::NameRenamed(1, Err(Some("连接失败".into()))),
             1,
             "旧名字",
             &test_repo_path(),
@@ -1406,7 +1436,12 @@ mod tests {
             rt.handle(),
             |_| {},
         );
-        assert_eq!(ws.error.as_deref(), Some("读取记忆失败: 连接被拒"));
+        assert_eq!(
+            ws.error
+                .as_ref()
+                .map(|e| crate::i18n::render_localized(e, "zh-CN")),
+            Some("读取记忆失败: 连接被拒".to_string())
+        );
         assert!(ws.memory_detail.is_none(), "读取失败不应留下半截详情");
     }
 
@@ -1599,7 +1634,7 @@ mod tests {
         let (emit, rx) = collect();
         submit_name_edit(&mut ws, 1, "旧名", project, rt.handle(), emit);
         match rx.recv_timeout(TIMEOUT).unwrap().result_payload() {
-            Message::NameRenamed(1, Err(text)) => assert_eq!(text, "项目不存在"),
+            Message::NameRenamed(1, Err(None)) => {}
             other => panic!("意外消息: {other:?}"),
         }
     }
@@ -1635,10 +1670,14 @@ mod tests {
             .with_submit(Ok((7, 3)))
             .with_batches(vec![Ok(Some(batch(3, 0, 0, 3, 0, 0)))]);
         let msgs = run_repair(project);
-        assert!(msgs.iter().any(|m| matches!(
-            m,
-            Message::TranscriptBackfillFinished(1, scaffold::ScaffoldStepResult::Created(t)) if t == "导入 2 个历史文件"
-        )), "{msgs:?}");
+        assert!(
+            msgs.iter().any(|m| matches!(
+                m,
+                Message::TranscriptBackfillFinished(1, scaffold::ScaffoldStepResult::Created(t))
+                    if crate::i18n::render_localized(&t, "en") == "Imported 2 history files"
+            )),
+            "{msgs:?}"
+        );
         assert!(
             matches!(
                 msgs.last().unwrap(),
@@ -1654,7 +1693,9 @@ mod tests {
         let msgs = run_repair(project);
         assert!(
             matches!(msgs.last().unwrap(),
-            Message::SummaryBackfillFailed(1, t) if t == "总结批次不存在，请重试"),
+            Message::SummaryBackfillFailed(1, t)
+                if crate::i18n::render_localized(&t, "en")
+                    == "Summary batch not found, please retry"),
             "{msgs:?}"
         );
     }
@@ -1668,7 +1709,8 @@ mod tests {
         let msgs = run_repair(project);
         assert!(
             matches!(msgs.last().unwrap(),
-            Message::SummaryBackfillFailed(1, t) if t == "daemon 错误: nope"),
+            Message::SummaryBackfillFailed(1, t)
+                if crate::i18n::render_localized(&t, "en") == "Failed to summarize: daemon 错误: nope"),
             "{msgs:?}"
         );
     }
@@ -1716,7 +1758,7 @@ mod tests {
         );
         let (id, dereg, errors) = rx.recv_timeout(TIMEOUT).unwrap();
         assert_eq!((id, dereg), (1, false));
-        assert_eq!(errors, vec!["取消项目登记失败: boom".to_string()]);
+        assert_eq!(errors, vec!["Deregister project: boom".to_string()]);
         assert_eq!(
             fake.calls(),
             vec!["remove_project(1)".to_string()],

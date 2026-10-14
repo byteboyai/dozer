@@ -119,7 +119,8 @@ impl ProjectDeleteOverlay {
             &self.window,
             self.cursor,
             backdrop_card(
-                project::view::project_delete_card(&ws.project_panel).map(Message::Project),
+                project::view::project_delete_card(&ws.project_panel, app.locale.active_locale())
+                    .map(Message::Project),
                 card_logical_size(&self.window),
             ),
         );
@@ -150,7 +151,8 @@ impl ProjectDeleteOverlay {
             &self.window,
             self.cursor,
             backdrop_card(
-                project::view::project_delete_card(&ws.project_panel).map(Message::Project),
+                project::view::project_delete_card(&ws.project_panel, app.locale.active_locale())
+                    .map(Message::Project),
                 card_logical_size(&self.window),
             ),
             iced_event,

@@ -37,13 +37,13 @@ pub fn spawn_delete_project(
     let cwd = repo_path.to_string_lossy().into_owned();
     handle.spawn(async move {
         if let Err(e) = project.remove_project(project_id).await {
-            on_done(project_id, false, vec![format!("取消项目登记失败: {e}")]);
+            on_done(project_id, false, vec![format!("Deregister project: {e}")]);
             return;
         }
         if scope != DeleteScope::DozerOnly
             && let Err(e) = project.delete_project_transcripts(cwd.clone()).await
         {
-            on_done(project_id, true, vec![format!("删除 agent 历史失败: {e}")]);
+            on_done(project_id, true, vec![format!("Delete agent history: {e}")]);
             return;
         }
         let repo_path_fs = repo_path.clone();
@@ -53,21 +53,21 @@ pub fn spawn_delete_project(
             if dozer_dir.exists()
                 && let Err(e) = trash::delete(&dozer_dir)
             {
-                errors.push(format!(".dozer 目录: {e}"));
+                errors.push(format!(".dozer directory: {e}"));
             }
             if scope != DeleteScope::DozerOnly {
                 let home = dozer_core::agent_paths::home_dir();
                 let agent_dirs = [
                     (
-                        "Claude 缓存",
+                        "Claude cache",
                         dozer_core::agent_paths::claude_project_dir_in(&home, &repo_path_fs),
                     ),
                     (
-                        "CodeBuddy 缓存",
+                        "CodeBuddy cache",
                         dozer_core::agent_paths::codebuddy_project_dir_in(&home, &repo_path_fs),
                     ),
                     (
-                        "OpenCode 缓存",
+                        "OpenCode cache",
                         dozer_core::agent_paths::opencode_project_dir_in(&home, &repo_path_fs),
                     ),
                 ];
@@ -82,12 +82,12 @@ pub fn spawn_delete_project(
             if scope == DeleteScope::WithProjectFiles
                 && let Err(e) = trash::delete(&repo_path_fs)
             {
-                errors.push(format!("项目文件: {e}"));
+                errors.push(format!("Project files: {e}"));
             }
             errors
         })
         .await
-        .unwrap_or_else(|e| vec![format!("内部错误: {e}")]);
+        .unwrap_or_else(|e| vec![format!("Internal error: {e}")]);
         on_done(project_id, true, errors);
     });
 }

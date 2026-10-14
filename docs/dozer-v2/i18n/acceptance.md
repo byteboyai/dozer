@@ -506,6 +506,32 @@ python3 scripts/i18n/build_inventory.py
 - Task 10 其余面板（project/group_chat）按面板逐个提交。
 - 双语运行期视觉核对随 Task 13 执行。
 
+## Task 10 验收（project 面板，按面板拆分提交）
+
+### 交付内容
+
+- 资源：`crates/dozer-app/locales/panels/project/{en,zh-CN}.json`（owner `dozer.project`；`panel.title`/`desc.*`/`usage.*`/`root_dir`/`git_remote`/`unset`/`docs.*`/`memory.*`/`footer.*`/`scaffold.step.*`/`scaffold.result.*`/`scaffold.*`/`delete.*`/`error.*`，共 63 key）。
+- `extensions/project.rs`：`PROJECT_OWNER` + 本地 `t()`/`t_args()`/`keyed`/`keyed_args`；`WorkspaceState.error` 改 `Option<LocalizedText>`；`ScaffoldRunState.steps` 标签改 `&'static str` i18n key、`BackfillStepState::Failed` 改 `LocalizedText`；`Message::NameRenamed` 错误改 `Result<_, Option<String>>`、`Message::SummaryBackfillFailed` 改 `LocalizedText`。
+- `extensions/project/scaffold.rs`：`ScaffoldStep.label` → `label_key`（i18n key）+ `step_label_fallback` 英文查表；`ScaffoldStepResult::{Created,Failed}` 改 `LocalizedText`，后台用 `keyed`/`keyed_args` 造 keyed 文案（`scaffold.result.*`）。
+- `extensions/project/update.rs`：`scaffold`/`transcript`/`summary` 后台结果 keyed；`submit_name_edit` 错误改 `Option<String>`（`None` = 项目不存在）；改名/保存/记忆 UI 流程错误改 `keyed_args`；`MemoriesLoadFailed` Toast 改 `keyed_args`（`error.memory_load_failed`）。
+- `extensions/project/delete.rs`：删除流程错误在后台产生、最终并入 host Toast（`toast.delete_projects_incomplete`），按后台文本规则改**英文**字面量。
+- `extensions/project/view.rs`：`view`/`links_section`/`project_footer_bar`/`footer_button_label`/`scaffold_step_row`/`scaffold_backfill_row`/`project_scaffold_card`/`project_delete_card`/`memory_section`/`memory_detail_view` 穿 `locale`；`links_section.title`/`footer_button_label.label`/`radio_row.label` 收 `String`；面板 `error` 经 `render_localized`；`scaffold` 步骤标签 key 经 `step_label_fallback` 取英文 fallback。
+- `app/update.rs`：`NameRenamed` 错误分支改匹配 `Option`。
+- `platform/{project_delete_overlay,project_scaffold_overlay}.rs`：`project_delete_card`/`project_scaffold_card` 传 `app.locale.active_locale()`。
+- `i18n.rs`：`PANEL_OWNERS` 增 `dozer.project`。
+
+### 验证命令与结果
+
+- `cargo build -p dozer-app`：通过。
+- `cargo test -p dozer-app`：**2001 passed / 0 failed / 2 ignored**（project 用例断言改按 `render_localized(.., "en")`/`render_localized(.., "zh-CN")` 校验；删除流程错误断言改英文）。
+- `cargo fmt --all -- --check`、`cargo clippy -p dozer-app --all-targets`（0 error）、`python3 scripts/i18n/check_resources.py`（**12 个 owner 目录**）、`bash scripts/check-log-scope.sh`、`python3 scripts/audit/check_panel_boundary.py`（213 refs / 5 files）：全绿。
+- `python3 scripts/i18n/build_inventory.py`：`counts: {"excluded": 3082, "migrated": 0, "unresolved": 214}`；`unresolved by task: {"10": 92, "11": 122}`；`dozer.project` **0 条**。
+
+### 残留
+
+- Task 10 剩余 `dozer.group_chat`（92）按面板提交。
+- 双语运行期视觉核对随 Task 13 执行。
+
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |
 |---|---|---|

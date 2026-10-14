@@ -69,7 +69,15 @@ pub fn update(
                 ws_state.error = None;
             }
             Err(e) => {
-                ws_state.error = Some(format!("改名失败: {e}"));
+                ws_state.error = Some(if let Some(raw) = e {
+                    keyed_args(
+                        "error.rename_failed",
+                        "Rename failed: {error}",
+                        &[("error", &raw)],
+                    )
+                } else {
+                    keyed("error.project_not_found", "Project not found")
+                });
                 // 保留编辑态原始输入,允许重试。
             }
         },
@@ -97,7 +105,11 @@ pub fn update(
                     ws_state.error = None;
                 }
                 Err(e) => {
-                    ws_state.error = Some(format!("保存失败: {e}"));
+                    ws_state.error = Some(keyed_args(
+                        "error.save_failed",
+                        "Save failed: {error}",
+                        &[("error", &e.to_string())],
+                    ));
                     ws_state.description_editing = Some(content); // 保留编辑态允许重试
                 }
             }
@@ -113,7 +125,11 @@ pub fn update(
                     Ok(()) => ws_state.error = None,
                     Err(e) => {
                         ws_state.links.list_mut(target).pop();
-                        ws_state.error = Some(format!("保存失败: {e}"));
+                        ws_state.error = Some(keyed_args(
+                            "error.save_failed",
+                            "Save failed: {error}",
+                            &[("error", &e.to_string())],
+                        ));
                     }
                 }
             }
@@ -131,7 +147,11 @@ pub fn update(
             if let Err(e) = links::save(repo_path, &ws_state.links) {
                 ws_state.links.dismissed.pop();
                 ws_state.links.list_mut(target).insert(index, removed);
-                ws_state.error = Some(format!("保存失败: {e}"));
+                ws_state.error = Some(keyed_args(
+                    "error.save_failed",
+                    "Save failed: {error}",
+                    &[("error", &e.to_string())],
+                ));
             } else {
                 ws_state.error = None;
             }
@@ -289,7 +309,11 @@ pub fn update(
         }
         Message::MemoryMutated(res) => {
             if let Err(e) = res {
-                ws_state.error = Some(format!("保存记忆失败: {e}"));
+                ws_state.error = Some(keyed_args(
+                    "error.memory_save_failed",
+                    "Failed to save memory: {error}",
+                    &[("error", &e)],
+                ));
             } else {
                 ws_state.error = None;
             }
@@ -308,7 +332,11 @@ pub fn update(
                 ws_state.outbox.push_keyed_cooldown(
                     LOG,
                     crate::extensions::toast::Level::Error,
-                    crate::extensions::toast::literal(format!("记忆加载失败: {message}")),
+                    keyed_args(
+                        "error.memory_load_failed",
+                        "Failed to load memories: {error}",
+                        &[("error", &message)],
+                    ),
                     "project-memories-load",
                     std::time::Instant::now(),
                 );
@@ -333,7 +361,11 @@ pub fn update(
             ws_state.memory_detail = Some(detail);
         }
         Message::MemoryDetailLoadFailed(e) => {
-            ws_state.error = Some(format!("读取记忆失败: {e}"));
+            ws_state.error = Some(keyed_args(
+                "error.memory_read_failed",
+                "Failed to read memory: {error}",
+                &[("error", &e)],
+            ));
         }
         Message::MemoryDetailClose => {
             ws_state.requests.invalidate("detail");
@@ -528,15 +560,25 @@ pub fn spawn_repair_run(
             let repo_path3 = repo_path.clone();
             let result = tokio::task::spawn_blocking(move || (step.run)(&repo_path3))
                 .await
-                .unwrap_or_else(|e| scaffold::ScaffoldStepResult::Failed(format!("内部错误: {e}")));
+                .unwrap_or_else(|e| {
+                    scaffold::ScaffoldStepResult::Failed(keyed_args(
+                        "scaffold.result.internal_error",
+                        "Internal error: {error}",
+                        &[("error", &e.to_string())],
+                    ))
+                });
             emit(Message::ScaffoldStepFinished(project_id, idx, result));
         }
 
         emit(Message::TranscriptBackfillStarted(project_id));
         let backfill_result = match project.backfill_project_transcripts(cwd.clone()).await {
             Ok(0) => scaffold::ScaffoldStepResult::AlreadyOk,
-            Ok(n) => scaffold::ScaffoldStepResult::Created(format!("导入 {n} 个历史文件")),
-            Err(e) => scaffold::ScaffoldStepResult::Failed(e.message),
+            Ok(n) => scaffold::ScaffoldStepResult::Created(keyed_args(
+                "scaffold.result.imported",
+                "Imported {n} history files",
+                &[("n", &n.to_string())],
+            )),
+            Err(e) => scaffold::ScaffoldStepResult::Failed(e.message.into()),
         };
         emit(Message::TranscriptBackfillFinished(
             project_id,
@@ -549,7 +591,14 @@ pub fn spawn_repair_run(
             Ok(pair) => pair,
             Err(e) => {
                 dozer_core::log_warn!(LOG, error = %e, "提交总结批次失败");
-                emit(Message::SummaryBackfillFailed(project_id, e.message));
+                emit(Message::SummaryBackfillFailed(
+                    project_id,
+                    keyed_args(
+                        "error.summary_failed",
+                        "Failed to summarize: {error}",
+                        &[("error", &e.message)],
+                    ),
+                ));
                 return;
             }
         };
@@ -577,13 +626,23 @@ pub fn spawn_repair_run(
                     dozer_core::log_warn!(LOG, batch_id, "批次不存在,停止轮询");
                     emit(Message::SummaryBackfillFailed(
                         project_id,
-                        "总结批次不存在，请重试".into(),
+                        keyed(
+                            "error.summary_batch_missing",
+                            "Summary batch not found, please retry",
+                        ),
                     ));
                     break;
                 }
                 Err(e) => {
                     dozer_core::log_warn!(LOG, error = %e, "查询总结批次失败,停止轮询");
-                    emit(Message::SummaryBackfillFailed(project_id, e.message));
+                    emit(Message::SummaryBackfillFailed(
+                        project_id,
+                        keyed_args(
+                            "error.summary_failed",
+                            "Failed to summarize: {error}",
+                            &[("error", &e.message)],
+                        ),
+                    ));
                     break;
                 }
             }
@@ -614,8 +673,8 @@ pub fn submit_name_edit(
         let result = project
             .rename_project(project_id, name)
             .await
-            .map_err(|e| e.message)
-            .and_then(|opt| opt.ok_or_else(|| "项目不存在".to_string()));
+            .map_err(|e| Some(e.message))
+            .and_then(|opt| opt.ok_or(None));
         emit(Message::NameRenamed(project_id, result));
     });
 }
