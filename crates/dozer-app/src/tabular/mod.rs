@@ -278,7 +278,13 @@ pub fn load_cancellable(
             if ext == "tsv" { b'\t' } else { b',' },
             &should_cancel,
         ),
-        _ => Err(format!("非表格文件: {ext}")),
+        _ => Err(crate::i18n::panel_text_args(
+            crate::preview::PREVIEW_OWNER,
+            "tabular.not_tabular_file",
+            "not a tabular file: {ext}",
+            "en",
+            &[("ext", &ext)],
+        )),
     }
 }
 

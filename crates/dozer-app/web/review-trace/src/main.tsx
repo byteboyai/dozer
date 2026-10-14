@@ -3,7 +3,11 @@ import { useEffect, useState } from 'preact/hooks';
 import type { TraceData } from './types.ts';
 import { SummaryHeader } from './components/SummaryHeader.tsx';
 import { Entry } from './components/Entry.tsx';
+import { setLocale, t } from './i18n.ts';
 import './styles.css';
+
+// locale 由 Rust 经 host URL `&locale=` 传入(与 `&theme=` 同一机制)。
+setLocale(new URLSearchParams(location.search).get('locale') ?? 'en');
 
 declare global {
   interface Window {
@@ -36,7 +40,8 @@ class RenderErrorBoundary extends Component<{ children: ComponentChildren }, { e
   }
 
   render() {
-    if (this.state.error) return <>{'加载失败: ' + this.state.error}</>;
+    if (this.state.error)
+      return <>{t('trace.load_failed', 'Load failed: {error}', { error: this.state.error })}</>;
     return this.props.children;
   }
 }
@@ -64,7 +69,7 @@ function App() {
     }
   }, [data, error]);
 
-  if (error) return <>{'加载失败: ' + error}</>;
+  if (error) return <>{t('trace.load_failed', 'Load failed: {error}', { error })}</>;
   if (!data) return null;
 
   return (

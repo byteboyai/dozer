@@ -26,10 +26,10 @@
 </head>
 <body>
 <div id="toolbar">
-  <button id="tool-pan" class="active" data-tool="">平移</button>
-  <button id="tool-rect" data-tool="rectangle">矩形</button>
-  <button id="tool-point" data-tool="point">点</button>
-  <button id="tool-polygon" data-tool="polygon">多边形</button>
+  <button id="tool-pan" class="active" data-tool="" data-i18n="tool_pan">Pan</button>
+  <button id="tool-rect" data-tool="rectangle" data-i18n="tool_rect">Rectangle</button>
+  <button id="tool-point" data-tool="point" data-i18n="tool_point">Point</button>
+  <button id="tool-polygon" data-tool="polygon" data-i18n="tool_polygon">Polygon</button>
 </div>
 <div id="viewer"></div>
 <script type="module">
@@ -44,6 +44,35 @@
   const p = params.get('p') || '';
   const theme = params.get('theme') === 'light' ? 'light' : 'dark';
   document.documentElement.setAttribute('data-theme', theme);
+
+  // 语言由 Rust 经 URL `&locale=` 传入(与 `theme` 同机制);用于工具条与
+  // 页面内用户可见文案,缺省回落 en。
+  const LOCALE = params.get('locale') || 'en';
+  const STRINGS = {
+    en: {
+      tool_pan: 'Pan',
+      tool_rect: 'Rectangle',
+      tool_point: 'Point',
+      tool_polygon: 'Polygon',
+      image_decode_failed: 'Image decode failed',
+      viewer_init_failed: 'Viewer initialization failed',
+    },
+    'zh-CN': {
+      tool_pan: '平移',
+      tool_rect: '矩形',
+      tool_point: '点',
+      tool_polygon: '多边形',
+      image_decode_failed: '图片解码失败',
+      viewer_init_failed: '查看器初始化失败',
+    },
+  };
+  function t(key) {
+    const bundle = STRINGS[LOCALE] || STRINGS.en;
+    return bundle[key] || STRINGS.en[key] || key;
+  }
+  document.querySelectorAll('#toolbar button[data-i18n]').forEach(function (btn) {
+    btn.textContent = t(btn.getAttribute('data-i18n'));
+  });
 
   // T9:host -> Rust 的统一 envelope 通道,与 Flyfish 的 `__dozerFlyfishPost`
   // 平行但不共享——payload kind 集合不同(见 `ImageAnnotateEvent`)。
@@ -88,7 +117,7 @@
       post({ kind: 'document_loaded' });
     });
     viewer.addHandler('open-failed', function (e) {
-      post({ kind: 'failed', message: (e && e.message) || '图片解码失败', recoverable: true });
+      post({ kind: 'failed', message: (e && e.message) || t('image_decode_failed'), recoverable: true });
     });
 
     const anno = createOSDAnnotator(viewer, { drawingEnabled: false });
@@ -118,7 +147,7 @@
       });
     });
   } catch (e) {
-    post({ kind: 'failed', message: (e && e.message) || '查看器初始化失败', recoverable: true });
+    post({ kind: 'failed', message: (e && e.message) || t('viewer_init_failed'), recoverable: true });
   }
 </script>
 </body>

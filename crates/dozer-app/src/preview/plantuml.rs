@@ -103,33 +103,100 @@ pub enum PlantUmlLoadError {
     UnresolvableInclude { target: String },
 }
 
-impl std::fmt::Display for PlantUmlLoadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl PlantUmlLoadError {
+    /// 稳定 key / 英文 fallback / 具名参数(唯一真相;`en.json` 须与 fallback
+    /// 逐字一致)。面向用户的展示走 [`PlantUmlLoadError::localized`]。
+    fn key_fallback_args(&self) -> (&'static str, &'static str, Vec<(&'static str, String)>) {
         match self {
-            Self::RootTooLarge { bytes, limit } => {
-                write!(f, "根文件过大({bytes} 字节,上限 {limit})")
+            Self::RootTooLarge { bytes, limit } => (
+                "plantuml.root_too_large",
+                "Root file too large ({bytes} bytes, limit {limit})",
+                vec![("bytes", bytes.to_string()), ("limit", limit.to_string())],
+            ),
+            Self::RootUnreadable { .. } => {
+                ("plantuml.root_unreadable", "Cannot read root file", vec![])
             }
-            Self::RootUnreadable { .. } => write!(f, "无法读取根文件"),
-            Self::RootNotUtf8 { .. } => write!(f, "根文件不是 UTF-8 文本"),
-            Self::TooDeep { depth, limit, .. } => {
-                write!(f, "include 嵌套过深({depth} 层,上限 {limit})")
-            }
-            Self::TooManyFiles { count, limit } => {
-                write!(f, "include 文件过多({count} 个,上限 {limit})")
-            }
-            Self::TotalTooLarge { bytes, limit } => {
-                write!(f, "include 内容过大({bytes} 字节,上限 {limit})")
-            }
-            Self::Cycle { .. } => write!(f, "include 存在环"),
-            Self::RemoteInclude { .. } => write!(f, "远程 include 已禁用"),
-            Self::FileUrlInclude { .. } => write!(f, "file:// include 已禁用"),
-            Self::AbsoluteInclude { .. } => write!(f, "绝对路径 include 已禁用"),
-            Self::OutsideRoot { .. } => write!(f, "include 越出项目根"),
-            Self::IncludeUnreadable { .. } => write!(f, "无法读取 include 文件"),
-            Self::NotRegularFile { .. } => write!(f, "include 目标不是普通文件"),
-            Self::IncludeNotUtf8 { .. } => write!(f, "include 文件不是 UTF-8 文本"),
-            Self::UnresolvableInclude { .. } => write!(f, "无法静态解析该 include"),
+            Self::RootNotUtf8 { .. } => (
+                "plantuml.root_not_utf8",
+                "Root file is not UTF-8 text",
+                vec![],
+            ),
+            Self::TooDeep { depth, limit, .. } => (
+                "plantuml.include_nested_too_deep",
+                "include nesting too deep ({depth} levels, limit {limit})",
+                vec![("depth", depth.to_string()), ("limit", limit.to_string())],
+            ),
+            Self::TooManyFiles { count, limit } => (
+                "plantuml.include_too_many",
+                "too many include files ({count}, limit {limit})",
+                vec![("count", count.to_string()), ("limit", limit.to_string())],
+            ),
+            Self::TotalTooLarge { bytes, limit } => (
+                "plantuml.include_too_large",
+                "include content too large ({bytes} bytes, limit {limit})",
+                vec![("bytes", bytes.to_string()), ("limit", limit.to_string())],
+            ),
+            Self::Cycle { .. } => ("plantuml.include_cycle", "include cycle detected", vec![]),
+            Self::RemoteInclude { .. } => (
+                "plantuml.include_remote_disabled",
+                "Remote include is disabled",
+                vec![],
+            ),
+            Self::FileUrlInclude { .. } => (
+                "plantuml.include_file_url_disabled",
+                "file:// include is disabled",
+                vec![],
+            ),
+            Self::AbsoluteInclude { .. } => (
+                "plantuml.include_absolute_disabled",
+                "Absolute-path include is disabled",
+                vec![],
+            ),
+            Self::OutsideRoot { .. } => (
+                "plantuml.include_escapes_root",
+                "include escapes the project root",
+                vec![],
+            ),
+            Self::IncludeUnreadable { .. } => (
+                "plantuml.include_unreadable",
+                "Cannot read include file",
+                vec![],
+            ),
+            Self::NotRegularFile { .. } => (
+                "plantuml.include_not_plain_file",
+                "include target is not a regular file",
+                vec![],
+            ),
+            Self::IncludeNotUtf8 { .. } => (
+                "plantuml.include_not_utf8",
+                "include file is not UTF-8 text",
+                vec![],
+            ),
+            Self::UnresolvableInclude { .. } => (
+                "plantuml.include_unparseable",
+                "Cannot statically parse this include",
+                vec![],
+            ),
         }
+    }
+
+    /// 按当前 locale 解析成用户可见文案(owner `dozer.preview`)。
+    pub fn localized(&self, locale: &str) -> String {
+        let (key, fallback, args) = self.key_fallback_args();
+        let refs: Vec<(&str, &str)> = args.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        crate::i18n::panel_text_args(super::PREVIEW_OWNER, key, fallback, locale, &refs)
+    }
+}
+
+impl std::fmt::Display for PlantUmlLoadError {
+    /// 稳定英文文案(语言无关;日志/诊断用)。面向用户走 [`Self::localized`]。
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (_key, fallback, args) = self.key_fallback_args();
+        let mut s = fallback.to_string();
+        for (name, value) in args {
+            s = s.replace(&format!("{{{name}}}"), &value);
+        }
+        write!(f, "{s}")
     }
 }
 

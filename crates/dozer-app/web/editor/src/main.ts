@@ -61,6 +61,7 @@ import {
 } from './protocol';
 import { themeFor } from './themes';
 import { languageFor } from './languages';
+import { setLocale, t } from './i18n';
 import './editor.css';
 
 interface Binding {
@@ -78,6 +79,8 @@ const binding: Binding = {
   document_id: params.get('doc') ?? '',
 };
 const scheme = params.get('theme') === 'light' ? 'light' : 'dark';
+// 语言由 Rust 经 URL `&locale=` 传入(与 `theme` 同机制)。
+setLocale(params.get('locale') ?? 'en');
 // URLSearchParams 已经完成一次百分号解码；不要再次 decodeURIComponent，
 // 否则文件名含有字面量 `%` 时会抛异常。fetch URL 由分段编码重建，
 // 确保 `#`、`?`、`%` 等字符不会被当作 fragment/query。
@@ -116,7 +119,10 @@ function updateTruncationBanner(truncated: boolean): void {
     if (!truncationBanner) {
       truncationBanner = document.createElement('div');
       truncationBanner.className = 'windowed-truncation-banner';
-      truncationBanner.textContent = '本行过长,仅显示开头部分';
+      truncationBanner.textContent = t(
+        'editor.long_line_truncated',
+        'This line is too long; only the beginning is shown',
+      );
       editorRoot.appendChild(truncationBanner);
     }
   } else if (truncationBanner) {
@@ -750,10 +756,14 @@ async function reloadDocument(): Promise<void> {
       text = await res.text();
       bytes = new TextEncoder().encode(text).length;
     } else {
-      error = `读取文件失败: ${res.status}`;
+      error = t('editor.read_failed', 'Failed to read file: {status}', {
+        status: String(res.status),
+      });
     }
   } catch (err) {
-    error = `读取文件异常: ${String(err)}`;
+    error = t('editor.read_error', 'Error reading file: {error}', {
+      error: String(err),
+    });
   }
   if (error === null) {
     revision += 1;
@@ -814,8 +824,14 @@ async function boot(): Promise<void> {
     const banner = document.createElement('div');
     banner.className = 'windowed-truncation-banner';
     banner.textContent = lossy
-      ? '该文件不是有效的 UTF-8 文本,仅只读显示;保存已禁用以免破坏原文件'
-      : '该文件是 UTF-16 编码,已转码为只读文本;保存已禁用以免改变原编码';
+      ? t(
+          'editor.not_utf8_readonly',
+          'This file is not valid UTF-8 text; shown read-only and saving is disabled to avoid corrupting the original file',
+        )
+      : t(
+          'editor.utf16_readonly',
+          'This file is UTF-16; it has been transcoded to read-only text and saving is disabled to preserve the original encoding',
+        );
     editorRoot.appendChild(banner);
   }
 
@@ -826,7 +842,10 @@ async function boot(): Promise<void> {
     globalScrollbar.className = 'windowed-global-scrollbar';
     globalScrollbar.min = '1';
     globalScrollbar.step = '1';
-    globalScrollbar.setAttribute('aria-label', '全局文件滚动位置');
+    globalScrollbar.setAttribute(
+      'aria-label',
+      t('editor.global_scroll_label', 'Global file scroll position'),
+    );
     globalScrollbar.addEventListener('input', () => {
       const line = Number(globalScrollbar?.value ?? 1);
       if (Number.isFinite(line)) {
@@ -854,10 +873,14 @@ async function boot(): Promise<void> {
         text = await res.text();
         bytes = new TextEncoder().encode(text).length;
       } else {
-        error = `读取文件失败: ${res.status}`;
+        error = t('editor.read_failed', 'Failed to read file: {status}', {
+          status: String(res.status),
+        });
       }
     } catch (err) {
-      error = `读取文件异常: ${String(err)}`;
+      error = t('editor.read_error', 'Error reading file: {error}', {
+        error: String(err),
+      });
     }
     if (error === null) {
       // 正文真正挂上后再上报 `document_loaded`(Rust 以此 finish 加载并显示)。

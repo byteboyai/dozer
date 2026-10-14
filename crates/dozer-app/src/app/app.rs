@@ -1666,14 +1666,15 @@ impl App {
                 pane.suspend_tab(*tab_id);
             }
         }
+        let denied_reason = crate::i18n::host_text(
+            "preview.resource_budget_insufficient",
+            "Insufficient preview resource budget (close other large files and retry)",
+            self.locale.active_locale(),
+        );
         for ((project, panel, tab_id), generation) in &outcome.denied {
             if let Some(ws) = loaded_workspace_mut(&mut self.projects, *project) {
                 let pane = ws.preview_pane_mut(*panel);
-                pane.mark_reserve_denied(
-                    *tab_id,
-                    *generation,
-                    "预览资源预算不足(可关闭其它大文件后重试)",
-                );
+                pane.mark_reserve_denied(*tab_id, *generation, denied_reason.as_str());
             }
         }
         if let Some(ws) = self.active_workspace_mut() {
@@ -3856,6 +3857,7 @@ impl App {
         // (2026-09-23,见 `platform::*_overlay`),同样不参与这里的隐藏
         // 判断——不要为它们再加分支。
         let app_modal_open = self.text_input_menu.is_some();
+        let locale = self.locale.active_locale();
         let mut out = Vec::new();
         for side in [Side::Left, Side::Right] {
             let kind = match side {
@@ -3888,7 +3890,7 @@ impl App {
                         );
                         let spec = WebviewSpec {
                             id: crate::app::GIT_LOG_DIFF_ID_OFFSET,
-                            url: binding.diff_url(crate::preview::scheme_query_value()),
+                            url: binding.diff_url(crate::preview::scheme_query_value(), locale),
                             visible: !app_modal_open,
                             editor_binding: Some(binding),
                             reserve: None,
@@ -4057,52 +4059,64 @@ impl App {
             // host 进入池)。
             let reserve_project_id = ws.project.as_ref().map(|p| p.id).unwrap_or(0);
             let (mut specs, id_offset): (Vec<WebviewSpec>, usize) = match kind {
-                PanelKind::Files => (ws.preview.desired_webviews(reserve_project_id, kind), 0),
+                PanelKind::Files => (
+                    ws.preview
+                        .desired_webviews(reserve_project_id, kind, locale),
+                    0,
+                ),
                 PanelKind::Project => (
                     ws.project_preview
-                        .desired_webviews(reserve_project_id, kind),
+                        .desired_webviews(reserve_project_id, kind, locale),
                     PROJECT_PREVIEW_ID_OFFSET,
                 ),
                 PanelKind::Conversations => (
-                    crate::workspace::review_webview_spec(ws.review.as_ref()),
+                    crate::workspace::review_webview_spec(ws.review.as_ref(), locale),
                     CONVERSATION_REVIEW_ID_OFFSET,
                 ),
                 _ => continue,
             };
             if let Some(project) = &ws.project {
                 match kind {
-                    PanelKind::Files => specs.extend(
-                        ws.preview
-                            .desired_editor_webviews(project.id, PanelKind::Files),
-                    ),
-                    PanelKind::Project => specs.extend(
-                        ws.project_preview
-                            .desired_editor_webviews(project.id, PanelKind::Project),
-                    ),
+                    PanelKind::Files => specs.extend(ws.preview.desired_editor_webviews(
+                        project.id,
+                        PanelKind::Files,
+                        locale,
+                    )),
+                    PanelKind::Project => specs.extend(ws.project_preview.desired_editor_webviews(
+                        project.id,
+                        PanelKind::Project,
+                        locale,
+                    )),
                     _ => {}
                 }
                 // 对照期:严格 JSON Tree 的 vanilla-jsoneditor host。
                 match kind {
-                    PanelKind::Files => specs.extend(
-                        ws.preview
-                            .desired_json_webviews(project.id, PanelKind::Files),
-                    ),
-                    PanelKind::Project => specs.extend(
-                        ws.project_preview
-                            .desired_json_webviews(project.id, PanelKind::Project),
-                    ),
+                    PanelKind::Files => specs.extend(ws.preview.desired_json_webviews(
+                        project.id,
+                        PanelKind::Files,
+                        locale,
+                    )),
+                    PanelKind::Project => specs.extend(ws.project_preview.desired_json_webviews(
+                        project.id,
+                        PanelKind::Project,
+                        locale,
+                    )),
                     _ => {}
                 }
                 // Tabular Grid 视图的 ag-grid webview host。
                 match kind {
-                    PanelKind::Files => specs.extend(
-                        ws.preview
-                            .desired_tabular_webviews(project.id, PanelKind::Files),
-                    ),
-                    PanelKind::Project => specs.extend(
-                        ws.project_preview
-                            .desired_tabular_webviews(project.id, PanelKind::Project),
-                    ),
+                    PanelKind::Files => specs.extend(ws.preview.desired_tabular_webviews(
+                        project.id,
+                        PanelKind::Files,
+                        locale,
+                    )),
+                    PanelKind::Project => {
+                        specs.extend(ws.project_preview.desired_tabular_webviews(
+                            project.id,
+                            PanelKind::Project,
+                            locale,
+                        ))
+                    }
                     _ => {}
                 }
                 // T9:Flyfish host 的稳定绑定(project/panel/tab/document)写进

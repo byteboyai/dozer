@@ -5,6 +5,7 @@
 // 拉取(Rust 只对白名单放行)。
 
 import { createJSONEditor, type Content } from 'vanilla-jsoneditor';
+import { setLocale, t } from './i18n';
 import './theme.css';
 
 const PROTOCOL_VERSION = 1;
@@ -24,6 +25,7 @@ const binding: Binding = {
   document_id: params.get('doc') ?? '',
 };
 const scheme = params.get('theme') === 'light' ? 'light' : 'dark';
+setLocale(params.get('locale') ?? 'en');
 const filePath = params.get('p') ?? '';
 const initialReadOnly = params.get('ro') === '1';
 
@@ -123,10 +125,14 @@ async function boot(): Promise<void> {
     if (res.ok) {
       text = await res.text();
     } else {
-      error = `读取文件失败: ${res.status}`;
+      error = t('editor.read_failed', 'Failed to read file: {status}', {
+        status: String(res.status),
+      });
     }
   } catch (err) {
-    error = `读取文件异常: ${String(err)}`;
+    error = t('editor.read_error', 'Error reading file: {error}', {
+      error: String(err),
+    });
   }
   if (error === null) {
     // Tree 视图要求合法 JSON:先显式解析,把非法 JSON 作为 `document_loaded.error`
@@ -135,7 +141,9 @@ async function boot(): Promise<void> {
     try {
       JSON.parse(text ?? '');
     } catch (err) {
-      error = `JSON 解析失败: ${String(err)}`;
+      error = t('editor.json_parse_failed', 'JSON parse failed: {error}', {
+        error: String(err),
+      });
     }
   }
   if (error === null) {

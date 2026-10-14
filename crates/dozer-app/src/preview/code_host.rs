@@ -72,13 +72,14 @@ impl EditorHostBinding {
 
     /// editor host 页面 URL。路径逐段百分号编码(保留 `/`);`theme` 跟随全局
     /// 配色方案,`ro` / `lang` 给首屏直接渲染用,Rust 侧仍会以绑定为准校验。
-    pub fn url(&self, theme: &str, read_only: bool) -> String {
+    pub fn url(&self, theme: &str, read_only: bool, locale: &str) -> String {
         // `fs`/`lh`:终端同款等宽字号与行高倍数(基准值,不含全局 scale——
         // WebView 的 pageZoom 已承担缩放),让编辑器与 PTY 观感一致。
         format!(
-            "{EDITOR_URL_PREFIX}index.html?p={}&theme={}&ro={}&doc={}&proj={}&panel={}&tab={}&lang={}&fs={}&lh={}",
+            "{EDITOR_URL_PREFIX}index.html?p={}&theme={}&locale={}&ro={}&doc={}&proj={}&panel={}&tab={}&lang={}&fs={}&lh={}",
             encode_path(&self.path),
             theme,
+            locale,
             if read_only { 1 } else { 0 },
             super::encode_component(&self.document_id()),
             self.project_id,
@@ -94,10 +95,11 @@ impl EditorHostBinding {
     /// `SetDiffDocument` 命令推送),恒 `ro=1`。`path` 仍参与 `document_id`/
     /// 资源预算估算(见 `runtime.rs` 的 `fs::metadata` 兜底),只是不会被
     /// JS 端 `fetch()`。
-    pub fn diff_url(&self, theme: &str) -> String {
+    pub fn diff_url(&self, theme: &str, locale: &str) -> String {
         format!(
-            "{EDITOR_URL_PREFIX}index.html?mode=diff&theme={}&ro=1&doc={}&proj={}&panel={}&tab={}&lang={}&fs={}&lh={}",
+            "{EDITOR_URL_PREFIX}index.html?mode=diff&theme={}&locale={}&ro=1&doc={}&proj={}&panel={}&tab={}&lang={}&fs={}&lh={}",
             theme,
+            locale,
             super::encode_component(&self.document_id()),
             self.project_id,
             self.panel_token(),
@@ -110,11 +112,12 @@ impl EditorHostBinding {
 
     /// JSON host(vanilla-jsoneditor)URL:tree/text 由命令驱动,主题经 class,
     /// 不需要 lang/fs。
-    pub fn json_url(&self, theme: &str, read_only: bool) -> String {
+    pub fn json_url(&self, theme: &str, read_only: bool, locale: &str) -> String {
         format!(
-            "{JSON_EDITOR_URL_PREFIX}index.html?p={}&theme={}&ro={}&doc={}&proj={}&panel={}&tab={}",
+            "{JSON_EDITOR_URL_PREFIX}index.html?p={}&theme={}&locale={}&ro={}&doc={}&proj={}&panel={}&tab={}",
             encode_path(&self.path),
             theme,
+            locale,
             if read_only { 1 } else { 0 },
             super::encode_component(&self.document_id()),
             self.project_id,
@@ -128,11 +131,12 @@ impl EditorHostBinding {
     /// CodeMirror 专用的等宽字号参数——tabular 走系统默认字体,见
     /// CLAUDE.md"非代码/终端场景禁用等宽字体"裁决)。恒只读,不带 `ro=`
     /// 参数(host 本身不支持编辑,无需首屏协商)。
-    pub fn tabular_url(&self, theme: &str) -> String {
+    pub fn tabular_url(&self, theme: &str, locale: &str) -> String {
         format!(
-            "{TABULAR_URL_PREFIX}index.html?p={}&theme={}&doc={}&proj={}&panel={}&tab={}",
+            "{TABULAR_URL_PREFIX}index.html?p={}&theme={}&locale={}&doc={}&proj={}&panel={}&tab={}",
             encode_path(&self.path),
             theme,
+            locale,
             super::encode_component(&self.document_id()),
             self.project_id,
             self.panel_token(),
@@ -236,7 +240,7 @@ mod tests {
     fn url_encodes_path_and_carries_binding() {
         let b =
             EditorHostBinding::new(7, PanelKind::Project, 3, PathBuf::from("/repo/a b/main.rs"));
-        let url = b.url("dark", true);
+        let url = b.url("dark", true, "en");
         assert!(is_editor_url(&url));
         assert!(url.contains("panel=project"));
         assert!(url.contains("tab=3"));
@@ -257,7 +261,7 @@ mod tests {
     #[test]
     fn json_editor_url_is_distinct() {
         let b = binding(PanelKind::Files, 3);
-        let url = b.json_url("dark", true);
+        let url = b.json_url("dark", true, "en");
         assert!(is_json_editor_url(&url));
         assert!(!is_editor_url(&url));
         assert!(url.contains("dozer://json-editor/index.html"));
@@ -268,7 +272,7 @@ mod tests {
     #[test]
     fn tabular_url_is_distinct_and_always_read_only() {
         let b = binding(PanelKind::Files, 3);
-        let url = b.tabular_url("dark");
+        let url = b.tabular_url("dark", "en");
         assert!(is_tabular_url(&url));
         assert!(!is_editor_url(&url));
         assert!(!is_json_editor_url(&url));
@@ -283,7 +287,7 @@ mod tests {
     #[test]
     fn is_host_url_covers_tabular() {
         let b = binding(PanelKind::Files, 3);
-        assert!(is_host_url(&b.tabular_url("dark")));
+        assert!(is_host_url(&b.tabular_url("dark", "en")));
     }
 
     #[test]
@@ -315,7 +319,7 @@ mod tests {
     #[test]
     fn diff_url_carries_mode_and_gitlog_panel_token() {
         let b = EditorHostBinding::new(0, PanelKind::GitLog, 0, PathBuf::from("src/lib.rs"));
-        let url = b.diff_url("dark");
+        let url = b.diff_url("dark", "en");
         assert!(is_editor_url(&url));
         assert!(url.contains("mode=diff"));
         assert!(url.contains("panel=gitlog"));

@@ -15,6 +15,9 @@
 use crate::capabilities::ResourceBudgets;
 use crate::preview::file_profile::FileProfile;
 
+/// 本面板 i18n owner(资源在 `locales/panels/preview/`)。
+const OWNER: &str = super::PREVIEW_OWNER;
+
 /// 文本文件四档策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextFilePolicy {
@@ -63,13 +66,19 @@ pub struct TextPolicyDecision {
     pub estimated_bytes: u64,
     /// 命中的绝对护栏(字节),窗口化时为 `None`(无护栏,直接流式)。
     pub guard_bytes: Option<u64>,
-    /// 人类可读的降级说明(含文件大小/最长行/预算)。
-    pub reason: String,
+    /// 人类可读的降级说明(含文件大小/最长行/预算),存成 keyed 文案,渲染端
+    /// 按当前 locale 解析(见 [`TextPolicyDecision::reason_text`])。
+    pub reason: dozer_model::LocalizedText,
 }
 
 impl TextPolicyDecision {
     pub fn is_windowed(&self) -> bool {
         self.policy == TextFilePolicy::Windowed
+    }
+
+    /// 按当前 locale 解析降级说明。
+    pub fn reason_text(&self, locale: &str) -> String {
+        crate::i18n::render_localized(&self.reason, locale)
     }
 }
 
@@ -87,47 +96,58 @@ pub fn decide_text_policy(profile: &FileProfile, budgets: &ResourceBudgets) -> T
     if max_line > FORCE_WINDOWED_LINE_BYTES {
         return windowed(
             plain_est,
-            format!(
-                "最长行 {} 超过 5MiB,强制窗口化(文件 {} 字节)",
-                max_line, size
+            crate::i18n::panel_keyed_args(
+                OWNER,
+                "policy.max_line_force_windowed",
+                "Longest line {max_line} exceeds 5MiB; forced windowing ({size} bytes)",
+                &[
+                    ("max_line", &max_line.to_string()),
+                    ("size", &size.to_string()),
+                ],
             ),
             max_line,
         );
     }
 
     // 2) 逐档判定,取第一档同时满足"绝对护栏"与"工作集预算"的。
-    let (policy, estimated, guard, base_reason) =
-        if size <= EDITABLE_MAX_BYTES && editable_est <= budget {
-            (
-                TextFilePolicy::EditableCode,
-                editable_est,
-                EDITABLE_MAX_BYTES,
-                "可编辑工作集在预算内且 <= 30MiB",
-            )
-        } else if size <= HIGHLIGHT_MAX_BYTES && highlight_est <= budget {
-            (
-                TextFilePolicy::ReadOnlyHighlighted,
-                highlight_est,
-                HIGHLIGHT_MAX_BYTES,
-                "可编辑超预算/超 30MiB,只读高亮在预算内且 <= 64MiB",
-            )
-        } else if size <= PLAIN_MAX_BYTES && plain_est <= budget {
-            (
-                TextFilePolicy::ReadOnlyPlain,
-                plain_est,
-                PLAIN_MAX_BYTES,
-                "高亮超预算/超 64MiB,只读纯文本在预算内且 <= 128MiB",
-            )
-        } else {
-            return windowed(
-                plain_est,
-                format!(
-                    "文件 {} 字节或工作集超过单编辑器预算 {} 字节,窗口化",
-                    size, budget
-                ),
-                max_line,
-            );
-        };
+    let (policy, estimated, guard, base_key, base_fallback) = if size <= EDITABLE_MAX_BYTES
+        && editable_est <= budget
+    {
+        (
+            TextFilePolicy::EditableCode,
+            editable_est,
+            EDITABLE_MAX_BYTES,
+            "policy.editable_in_budget",
+            "Editable working set within budget and <= 30MiB",
+        )
+    } else if size <= HIGHLIGHT_MAX_BYTES && highlight_est <= budget {
+        (
+            TextFilePolicy::ReadOnlyHighlighted,
+            highlight_est,
+            HIGHLIGHT_MAX_BYTES,
+            "policy.readonly_highlight_in_budget",
+            "Editable over budget/30MiB; read-only highlight within budget and <= 64MiB",
+        )
+    } else if size <= PLAIN_MAX_BYTES && plain_est <= budget {
+        (
+            TextFilePolicy::ReadOnlyPlain,
+            plain_est,
+            PLAIN_MAX_BYTES,
+            "policy.readonly_plain_in_budget",
+            "Highlight over budget/64MiB; read-only plain text within budget and <= 128MiB",
+        )
+    } else {
+        return windowed(
+            plain_est,
+            crate::i18n::panel_keyed_args(
+                OWNER,
+                "policy.over_single_editor_budget",
+                "File {size} bytes or working set exceeds the single-editor budget {budget} bytes; windowing",
+                &[("size", &size.to_string()), ("budget", &budget.to_string())],
+            ),
+            max_line,
+        );
+    };
 
     let editable = policy == TextFilePolicy::EditableCode;
     let highlight = matches!(
@@ -137,13 +157,35 @@ pub fn decide_text_policy(profile: &FileProfile, budgets: &ResourceBudgets) -> T
     let fold = highlight;
     let wrap = max_line <= WRAP_OFF_LINE_BYTES;
 
-    let mut reason = format!("{base_reason}(文件 {size} 字节, 最长行 {max_line} 字节)");
+    // 降级说明是诊断文本(当前不直接进 UI):基档文案 + 后缀拼成一段**稳定
+    // 语言无关**串作为 detail 的具名参数,detail 模板本身按 locale 解析。
+    let mut base_reason = crate::i18n::panel_text(OWNER, base_key, base_fallback, "en");
     if !wrap {
-        reason.push_str(";最长行 >100KiB,关闭自动换行");
+        base_reason.push_str(&crate::i18n::panel_text(
+            OWNER,
+            "policy.wrap_off",
+            ";longest line >100KiB, auto-wrap off",
+            "en",
+        ));
     }
     if !highlight {
-        reason.push_str(";最长行 >1MiB,关闭高亮/折叠");
+        base_reason.push_str(&crate::i18n::panel_text(
+            OWNER,
+            "policy.highlight_off",
+            ";longest line >1MiB, highlight/folding off",
+            "en",
+        ));
     }
+    let reason = crate::i18n::panel_keyed_args(
+        OWNER,
+        "policy.reason_detail",
+        "{base_reason} (file {size} bytes, longest line {max_line} bytes)",
+        &[
+            ("base_reason", &base_reason),
+            ("size", &size.to_string()),
+            ("max_line", &max_line.to_string()),
+        ],
+    );
 
     TextPolicyDecision {
         policy,
@@ -159,7 +201,11 @@ pub fn decide_text_policy(profile: &FileProfile, budgets: &ResourceBudgets) -> T
     }
 }
 
-fn windowed(estimated: u64, reason: String, max_line: u64) -> TextPolicyDecision {
+fn windowed(
+    estimated: u64,
+    reason: dozer_model::LocalizedText,
+    max_line: u64,
+) -> TextPolicyDecision {
     TextPolicyDecision {
         policy: TextFilePolicy::Windowed,
         capabilities: TextCapabilities {
@@ -212,7 +258,7 @@ mod tests {
         let d = decide_text_policy(&profile(MIB, 80), &budget(512 * MIB));
         assert_eq!(d.policy, TextFilePolicy::EditableCode);
         assert!(d.capabilities.editable && d.capabilities.wrap && d.capabilities.highlight);
-        assert!(!d.reason.is_empty());
+        assert!(!d.reason_text("en").is_empty());
     }
 
     #[test]

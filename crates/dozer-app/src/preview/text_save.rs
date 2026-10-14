@@ -70,7 +70,13 @@ pub fn save_text_atomic(path: &Path, text: &str) -> std::io::Result<()> {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "dozer-save".to_string());
     let mut tmp = None;
-    let mut write_result = Err(std::io::Error::other("无法创建保存临时文件"));
+    // 内部 IO 错误文案:稳定英文(spec §6;不随 locale 变,落 `en.json`)。
+    let mut write_result = Err(std::io::Error::other(crate::i18n::panel_text(
+        super::PREVIEW_OWNER,
+        "text_save.temp_create_failed",
+        "Cannot create temporary save file",
+        "en",
+    )));
     for attempt in 0..16u32 {
         let candidate = dir.join(format!(
             ".{file_name}.dozer-tmp-{}-{attempt}",

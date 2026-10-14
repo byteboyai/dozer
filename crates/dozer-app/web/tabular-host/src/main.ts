@@ -18,6 +18,7 @@ import {
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-quartz.css';
 import './theme.css';
+import { setLocale, t } from './i18n';
 
 const PROTOCOL_VERSION = 1;
 
@@ -36,6 +37,7 @@ const binding: Binding = {
   document_id: params.get('doc') ?? '',
 };
 const scheme = params.get('theme') === 'light' ? 'light' : 'dark';
+setLocale(params.get('locale') ?? 'en');
 document.documentElement.dataset.theme = scheme;
 document.documentElement.classList.toggle('ag-theme-quartz-dark', scheme === 'dark');
 document.documentElement.classList.toggle('ag-theme-quartz', scheme !== 'dark');
@@ -97,6 +99,20 @@ const tabScrollLeft = document.getElementById('tab-scroll-left') as HTMLButtonEl
 const tabScrollRight = document.getElementById('tab-scroll-right') as HTMLButtonElement;
 const gridHost = document.getElementById('grid-host') as HTMLDivElement;
 const banner = document.getElementById('truncated-banner') as HTMLDivElement;
+
+// 语言经 URL `&locale=` 传入;静态 HTML 里的英文文案在此替换为当前语言。
+tabScrollLeft.setAttribute(
+  'aria-label',
+  t('tabular.prev_sheet_group', 'Previous sheet group'),
+);
+tabScrollRight.setAttribute(
+  'aria-label',
+  t('tabular.next_sheet_group', 'Next sheet group'),
+);
+banner.textContent = t(
+  'tabular.first_rows_only',
+  'Showing only the first 100,000 rows (the file has more; total line count not exactly determined)',
+);
 
 // 一次滚动的距离(约 2-3 个 tab 的宽度),与左右按钮点击/长按体感对齐。
 const TAB_SCROLL_STEP = 160;

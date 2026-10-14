@@ -93,22 +93,37 @@ impl PreviewLoadStage {
         Self::ALL.into_iter().filter(|s| s.is_active())
     }
 
-    /// 该阶段的用户可见文案。`Idle` 不产生 loading 文案(返回 `None`)。
+    /// 该阶段的用户可见文案 key 与稳定英文 fallback。`Idle` 不产生 loading
+    /// 文案(返回 `None`)。
     ///
-    /// 映射集中在此,保证各 viewer 调用同一套文案、不漂移(plan T1)。
-    pub fn label(self) -> Option<&'static str> {
+    /// 映射集中在此,保证各 viewer 调用同一套文案、不漂移(plan T1)。展示时用
+    /// [`PreviewLoadStage::localized`] 按当前 locale 解析(owner `dozer.preview`)。
+    pub fn label_key(self) -> Option<(&'static str, &'static str)> {
         Some(match self {
             PreviewLoadStage::Idle => return None,
-            PreviewLoadStage::Profiling => "正在识别文件…",
-            PreviewLoadStage::Reserving => "正在准备预览资源…",
-            PreviewLoadStage::CreatingHost => "正在启动预览…",
-            PreviewLoadStage::Reading => "正在读取文件…",
-            PreviewLoadStage::Indexing => "正在索引大文件…",
-            PreviewLoadStage::LoadingWindow => "正在加载文件内容…",
-            PreviewLoadStage::Parsing => "正在解析文件…",
-            PreviewLoadStage::Searching => "正在搜索整个文件…",
-            PreviewLoadStage::SwitchingMode => "正在切换预览模式…",
+            PreviewLoadStage::Profiling => ("loading.profiling", "Detecting file…"),
+            PreviewLoadStage::Reserving => ("loading.reserving", "Preparing preview resources…"),
+            PreviewLoadStage::CreatingHost => ("loading.creating_host", "Starting preview…"),
+            PreviewLoadStage::Reading => ("loading.reading", "Reading file…"),
+            PreviewLoadStage::Indexing => ("loading.indexing", "Indexing large file…"),
+            PreviewLoadStage::LoadingWindow => ("loading.loading_window", "Loading file content…"),
+            PreviewLoadStage::Parsing => ("loading.parsing", "Parsing file…"),
+            PreviewLoadStage::Searching => ("loading.searching", "Searching the whole file…"),
+            PreviewLoadStage::SwitchingMode => {
+                ("loading.switching_mode", "Switching preview mode…")
+            }
         })
+    }
+
+    /// 按当前 locale 解析该阶段的 loading 文案;`Idle` 返回 `None`。
+    pub fn localized(self, locale: &str) -> Option<String> {
+        let (key, fallback) = self.label_key()?;
+        Some(crate::i18n::panel_text(
+            super::PREVIEW_OWNER,
+            key,
+            fallback,
+            locale,
+        ))
     }
 
     /// 是否处于"有加载在途"的阶段(`Idle` 之外都算)。
@@ -286,15 +301,18 @@ mod tests {
     #[test]
     fn every_active_stage_has_non_empty_label() {
         for stage in PreviewLoadStage::active_stages() {
-            let label = stage.label().unwrap_or("");
-            assert!(!label.is_empty(), "{stage:?} 必须有非空文案");
+            let en = stage.localized("en").unwrap_or_default();
+            assert!(!en.is_empty(), "{stage:?} 必须有非空文案");
+            let zh = stage.localized("zh-CN").unwrap_or_default();
+            assert!(!zh.is_empty(), "{stage:?} 必须有非空 zh-CN 文案");
             assert!(stage.is_active(), "{stage:?} 应为在途阶段");
         }
     }
 
     #[test]
     fn idle_has_no_label_and_is_not_active() {
-        assert!(PreviewLoadStage::Idle.label().is_none());
+        assert!(PreviewLoadStage::Idle.label_key().is_none());
+        assert!(PreviewLoadStage::Idle.localized("en").is_none());
         assert!(!PreviewLoadStage::Idle.is_active());
         assert!(!PreviewLoadState::default().is_active());
     }

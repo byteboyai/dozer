@@ -121,7 +121,7 @@ export function loadEngine(): Promise<EngineModule> {
       /* @vite-ignore */ `${ASSET_BASE}plantuml.js`
     )) as EngineModule;
     if (typeof mod.renderToString !== "function") {
-      throw new RenderError("engine", "引擎未导出 renderToString");
+      throw new RenderError("engine", "engine did not export renderToString");
     }
     return mod;
   })();

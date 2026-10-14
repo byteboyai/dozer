@@ -47,5 +47,5 @@ test("rejects non-SVG output", () => {
 
 test("rejects oversized SVG", () => {
   const big = `<svg xmlns="http://www.w3.org/2000/svg">${"a".repeat(MAX_SVG_BYTES + 1)}</svg>`;
-  assert.throws(() => sanitizeSvg(big), /上限/);
+  assert.throws(() => sanitizeSvg(big), /exceeds the limit/);
 });

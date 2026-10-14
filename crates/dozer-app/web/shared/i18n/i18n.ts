@@ -141,9 +141,9 @@ export function normalizeLocale(raw: string): string | null {
   const s = (raw ?? "").trim();
   if (!s) return null;
   const lower = s.replace(/_/g, "-").toLowerCase();
-  const primary = lower.split("@")[0];
+  const primary = lower.split("@")[0] ?? "";
   const parts = primary.split("-").filter((p) => p.length > 0);
-  const lang = parts[0];
+  const lang = parts[0] ?? "";
   if (lang === "en") return "en";
   if (lang === "zh") {
     let hasHant = false;

@@ -5,5 +5,12 @@
   "entry.missing": "{name}(缺失)",
   "error.list_load_failed": "加载上下文列表失败: {e}",
   "error.remove_failed": "移除失败: {e}",
-  "error.add_record_failed": "已发送到终端,但未能记录到上下文列表: {e}"
+  "error.add_record_failed": "已发送到终端,但未能记录到上下文列表: {e}",
+  "trace.role_tool_result": "工具结果",
+  "trace.thought_process": "思考过程",
+  "trace.action_process": "操作过程",
+  "trace.failed_prefix": "⚠ 失败 · ",
+  "trace.load_failed": "加载失败: {error}",
+  "trace.tool_calls": "{count} 次工具调用",
+  "trace.tool_calls_with_failures": "{count} 次工具调用({failed} 失败)"
 }

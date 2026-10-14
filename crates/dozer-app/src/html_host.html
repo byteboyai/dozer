@@ -6,7 +6,7 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'none'; img-src dozer: data:; media-src dozer:; style-src 'unsafe-inline' dozer:; font-src dozer: data:; connect-src 'self'; frame-src 'self' dozer:; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
     />
-    <title>Dozer HTML 预览</title>
+    <title>Dozer HTML Preview</title>
     <style>
       html, body { margin: 0; height: 100%; background: #0a0e16; }
       html[data-theme='light'] body { background: #ffffff; }
@@ -37,6 +37,17 @@
         var q = new URLSearchParams(location.search);
         var p = q.get('p') || '';
         var theme = q.get('theme') === 'light' ? 'light' : 'dark';
+        // 语言由 Rust 经 URL `&locale=` 传入(与 `theme` 同机制);仅用于页面内
+        // 的用户可见文案,缺省回落 en。
+        var LOCALE = q.get('locale') || 'en';
+        var STRINGS = {
+          en: { read_html_failed: 'Failed to read HTML file: ' },
+          'zh-CN': { read_html_failed: '无法读取 HTML 文件: ' },
+        };
+        function t(key) {
+          var bundle = STRINGS[LOCALE] || STRINGS.en;
+          return bundle[key] || STRINGS.en[key] || key;
+        }
         document.documentElement.setAttribute('data-theme', theme);
         var frame = document.getElementById('view');
         var msg = document.getElementById('msg');
@@ -91,8 +102,9 @@
           .catch(function (err) {
             frame.hidden = true;
             msg.hidden = false;
-            msg.textContent = '无法读取 HTML 文件: ' + String(err);
-            post({ kind: 'failed', message: '无法读取 HTML 文件: ' + String(err), recoverable: true });
+            var text = t('read_html_failed') + String(err);
+            msg.textContent = text;
+            post({ kind: 'failed', message: text, recoverable: true });
           });
       })();
     </script>

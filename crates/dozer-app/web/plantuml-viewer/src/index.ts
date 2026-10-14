@@ -11,10 +11,14 @@ import type { PlantUmlCommand, PlantUmlEvent, PlantUmlFailureKind } from "./type
 import { renderToString, classifyEngineError, setLocalIncludes } from "./renderer.ts";
 import { sanitizeSvg } from "./sanitize.ts";
 import { Viewport } from "./viewport.ts";
+import { setLocale, t } from "./i18n.ts";
 
 function qs(): URLSearchParams {
   return new URLSearchParams(location.search);
 }
+
+// 语言由 Rust 经 URL `&locale=` 传入(与 `&theme=` 同一机制)。
+setLocale(qs().get("locale") || "en");
 
 function postEvent(event: PlantUmlEvent, revision = 0): void {
   const q = qs();
@@ -45,10 +49,10 @@ const viewport = new Viewport(stage, content);
 function showStatus(title: string, detail?: string, error = false): void {
   status.classList.remove("hidden");
   status.innerHTML = "";
-  const t = document.createElement("div");
-  t.className = "title";
-  t.textContent = title;
-  status.appendChild(t);
+  const titleEl = document.createElement("div");
+  titleEl.className = "title";
+  titleEl.textContent = title;
+  status.appendChild(titleEl);
   if (detail) {
     const d = document.createElement("div");
     d.className = error ? "error" : "";
@@ -57,7 +61,7 @@ function showStatus(title: string, detail?: string, error = false): void {
   }
   if (error) {
     const btn = document.createElement("button");
-    btn.textContent = "查看源码";
+    btn.textContent = t("plantuml_viewer.view_source", "View source");
     btn.addEventListener("click", () => postEvent({ kind: "open_source", line: null }));
     status.appendChild(btn);
   }
@@ -79,7 +83,13 @@ function fail(revision: number, kind: PlantUmlFailureKind, message: string, line
   if (revision < currentRevision) {
     return;
   }
-  showStatus("渲染失败", `${message}${line ? `（第 ${line} 行）` : ""}`, true);
+  showStatus(
+    t("plantuml_viewer.render_failed", "Render failed"),
+    line !== null
+      ? `${message} (line ${line})`
+      : message,
+    true,
+  );
   postEvent({ kind: "failed", failure_kind: kind, message, line }, revision);
 }
 
@@ -90,11 +100,14 @@ async function setDocument(cmd: Extract<PlantUmlCommand, { kind: "set_document" 
   content.innerHTML = "";
   diagnostics.textContent = "";
   if (cmd.source.trim() === "") {
-    showStatus("暂无可渲染内容", "该 PlantUML 文件为空。");
+    showStatus(
+      t("plantuml_viewer.nothing_to_render", "Nothing to render yet"),
+      t("plantuml_viewer.empty_file", "This PlantUML file is empty."),
+    );
     postEvent({ kind: "rendered", width: 0, height: 0, duration_ms: 0 }, cmd.revision);
     return;
   }
-  showStatus("正在渲染…");
+  showStatus(t("plantuml_viewer.rendering", "Rendering…"));
   const t0 = performance.now();
   try {
     const svgText = await renderToString(cmd.source);
@@ -111,7 +124,7 @@ async function setDocument(cmd: Extract<PlantUmlCommand, { kind: "set_document" 
     hideStatus();
     viewport.fit();
     const duration = Math.round(performance.now() - t0);
-    diagnostics.textContent = `${width}×${height} · ${duration}ms${removed ? ` · 清理 ${removed}` : ""}`;
+    diagnostics.textContent = `${width}×${height} · ${duration}ms${removed ? ` · cleaned ${removed}` : ""}`;
     if (cmd.revision === currentRevision) {
       postEvent({ kind: "rendered", width, height, duration_ms: duration }, cmd.revision);
     }

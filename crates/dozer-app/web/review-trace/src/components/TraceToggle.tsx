@@ -5,6 +5,7 @@ import { renderMarkdown } from '../markdown.ts';
 import { ToolCallRow } from './ToolCallRow.tsx';
 import { ToolResultRow } from './ToolResultRow.tsx';
 import { pairCallsAndResults } from '../pairing.ts';
+import { t } from '../i18n.ts';
 
 export function TraceToggle({ v }: { v: AiTurnData }) {
   const hasThinking = !!v.thinking_text;
@@ -28,7 +29,7 @@ export function TraceToggle({ v }: { v: AiTurnData }) {
       <div class="trace-timeline">
         {hasThinking ? (
           <div class="trace-item thinking">
-            <div class="item-title">思考过程</div>
+            <div class="item-title">{t('trace.thought_process', 'Thought process')}</div>
             <div class="thinking-text">{renderMarkdown(v.thinking_text as string)}</div>
           </div>
         ) : null}
@@ -36,7 +37,7 @@ export function TraceToggle({ v }: { v: AiTurnData }) {
           <Fragment key={i}>
             {pair.call ? (
               <div class="trace-item tool-call">
-                {i === 0 ? <div class="item-title">操作过程</div> : null}
+                {i === 0 ? <div class="item-title">{t('trace.action_process', 'Action process')}</div> : null}
                 <ToolCallRow call={pair.call} />
               </div>
             ) : null}

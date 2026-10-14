@@ -472,7 +472,10 @@ pub(crate) fn agent_close_confirm_spec(
 /// 固定填 0,真正的池 key 由调用方(`App::preview_desired`)加
 /// `CONVERSATION_REVIEW_ID_OFFSET` 决定——这个面板任意时刻只有一份内容,
 /// 不需要 Files/Project 那种按 tab id 分池的能力。
-pub(crate) fn review_webview_spec(review: Option<&ReviewView>) -> Vec<crate::preview::WebviewSpec> {
+pub(crate) fn review_webview_spec(
+    review: Option<&ReviewView>,
+    locale: &str,
+) -> Vec<crate::preview::WebviewSpec> {
     let Some(rv) = review else {
         return Vec::new();
     };
@@ -482,7 +485,10 @@ pub(crate) fn review_webview_spec(review: Option<&ReviewView>) -> Vec<crate::pre
     let loaded = rv.loaded_nonce == Some(rv.nonce);
     vec![crate::preview::WebviewSpec {
         id: 0,
-        url: format!("dozer://review-trace/host.html?_r={}", rv.nonce),
+        url: format!(
+            "dozer://review-trace/host.html?_r={}&locale={}",
+            rv.nonce, locale
+        ),
         visible: loaded,
         editor_binding: None,
         reserve: None,
@@ -1131,11 +1137,19 @@ pub(crate) fn project_root_dir_name(ws: &Workspace) -> Option<String> {
 /// 着 `ws.project.path` 走,不需要回写 tab 字段。没项目(启动初帧 / 切项目中
 /// 间帧)时回退 `tab.title`,即原 `"空白"`,保留原语义。宽度预算与实际渲染
 /// 共用同一份 helper,避免选错宽度导致标题裁切。
-pub(crate) fn preview_tab_display_title(ws: &Workspace, tab: &PreviewTab) -> String {
+pub(crate) fn preview_tab_display_title(ws: &Workspace, tab: &PreviewTab, locale: &str) -> String {
     if matches!(tab.kind, crate::preview::TabKind::Blank)
         && let Some(root) = project_root_dir_name(ws)
     {
         return root;
+    }
+    if matches!(tab.kind, crate::preview::TabKind::Blank) {
+        return crate::i18n::panel_text(
+            crate::preview::PREVIEW_OWNER,
+            "view.blank",
+            "Blank",
+            locale,
+        );
     }
     tab.title.clone()
 }
@@ -1227,7 +1241,13 @@ pub(crate) fn preview_pane_for<'a>(
     let widths: Vec<f32> = preview
         .tabs()
         .iter()
-        .map(|t| preview_tab_display_width(&preview_tab_display_title(ws, t)))
+        .map(|t| {
+            preview_tab_display_width(&preview_tab_display_title(
+                ws,
+                t,
+                app.locale.active_locale(),
+            ))
+        })
         .collect();
     let window = tab_window(
         &widths,
@@ -1249,7 +1269,7 @@ pub(crate) fn preview_pane_for<'a>(
             // 预算仍按 `tab.title`(不带星)估,最坏多一个字符略挤,不换行折叠。
             // 空白页 tab(`TabKind::Blank`)的标题走 [`preview_tab_display_title`]
             // 替换成项目根名(见该函数文档),宽度预算与渲染共用同一个 helper。
-            let mut display_title = preview_tab_display_title(ws, tab);
+            let mut display_title = preview_tab_display_title(ws, tab, app.locale.active_locale());
             if tab.dirty {
                 display_title.push_str(" *");
             }
@@ -1511,9 +1531,11 @@ pub(crate) fn preview_pane_for<'a>(
             // T1:External / Unsupported(及 Failed)统一 fallback 页——不再
             // 依赖 Flyfish 偶然兜底或空白。失败优先于 loading:终态不能被动画盖住。
             content = content.push(page);
-        } else if let Some(loading) =
-            preview_loading_view(&active_tab.load_state, active_tab.load_observe.as_ref())
-        {
+        } else if let Some(loading) = preview_loading_view(
+            &active_tab.load_state,
+            active_tab.load_observe.as_ref(),
+            app.locale.active_locale(),
+        ) {
             // T2:有阶段在途(Profiling/CreatingHost/Reading/Indexing/…)时显示
             // 统一 loading。原生 WebView 在 `preview_desired` 里因
             // `backend_state != Ready` 而不产出 spec(或不置 visible),所以
@@ -2194,17 +2216,32 @@ pub(crate) fn agent_launch_command(agent: AgentKind, hook_exe: &str) -> Option<S
 fn preview_loading_view<'a>(
     load_state: &crate::preview::PreviewLoadState,
     observe: Option<&crate::preview::LoadObservation>,
+    locale: &str,
 ) -> Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> {
     // 走到这里说明本帧确实要渲染 loading 动画:记首帧(按当前世代,旧世代忽略)。
     if let Some(observe) = observe {
         observe.mark_first_frame(load_state.generation);
     }
-    let label = load_state.stage.label()?;
-    let hint = byteui::feedback::math_curve::loading_hint(
-        byteui::feedback::math_curve::Curve::RoseThree,
-        label,
-        48.0,
-    );
+    let label = load_state.stage.localized(locale)?;
+    // byteui::loading_hint 只收 `&'static str`(byteui 已独立发版,不能改),
+    // 本地化文案是运行期 owned,故就地复用其 `view_animated` 组一个同样的
+    // 曲线 + 文案容器。
+    let hint: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> = container(
+        column![
+            byteui::feedback::math_curve::view_animated(
+                byteui::feedback::math_curve::Curve::RoseThree,
+                48.0,
+            ),
+            text(label)
+                .size(byteui::theme::font::body())
+                .color(byteui::theme::color::current().dim),
+        ]
+        .spacing(12)
+        .align_x(iced_widget::core::alignment::Horizontal::Center),
+    )
+    .center_x(Length::Fill)
+    .center_y(Length::Fill)
+    .into();
     let Some(progress) = load_state.progress else {
         return Some(hint);
     };
@@ -2251,7 +2288,7 @@ fn preview_fallback_page<'a>(
     let reason = tab
         .route
         .as_ref()
-        .map(|r| r.reason.to_string())
+        .map(|r| r.reason.localized(locale))
         .unwrap_or_default();
     let path = match &tab.kind {
         TabKind::File(p) => p.to_string_lossy().into_owned(),
@@ -2439,13 +2476,13 @@ mod tests {
         for stage in PreviewLoadStage::active_stages() {
             let state = PreviewLoadState::starting(1, stage);
             assert!(
-                preview_loading_view(&state, None).is_some(),
+                preview_loading_view(&state, None, "en").is_some(),
                 "{stage:?} 应产出 loading 视图"
             );
         }
         let idle = PreviewLoadState::default();
         assert!(
-            preview_loading_view(&idle, None).is_none(),
+            preview_loading_view(&idle, None, "en").is_none(),
             "Idle 不应产出 loading 视图"
         );
     }
@@ -2457,7 +2494,7 @@ mod tests {
         let state = PreviewLoadState::starting(5, PreviewLoadStage::Reading);
         let observe = LoadObservation::new(5);
         assert!(
-            preview_loading_view(&state, Some(&observe)).is_some(),
+            preview_loading_view(&state, Some(&observe), "en").is_some(),
             "在途阶段产出视图"
         );
         assert!(
@@ -2467,7 +2504,7 @@ mod tests {
 
         // 视图仍在画旧世代(observe 属于别的 generation)→ 不写回。
         let stale = LoadObservation::new(9);
-        let _ = preview_loading_view(&state, Some(&stale));
+        let _ = preview_loading_view(&state, Some(&stale), "en");
         assert!(
             stale.first_frame_offset_ms().is_none(),
             "世代不符不应写回首帧"

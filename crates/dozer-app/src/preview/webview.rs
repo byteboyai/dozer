@@ -100,11 +100,12 @@ pub fn encode_component(s: &str) -> String {
 /// `byteui::theme::color::current_scheme()`)——host.html 读它设置
 /// flyfish 的 `theme` 属性,不再硬编码深色。切主题时由 `App` 推进所有
 /// wry 文件 tab 的 `reload_nonce`,让 webview 带着新 theme 参数重新导航。
-pub(crate) fn flyfish_url(path: &std::path::Path) -> String {
+pub(crate) fn flyfish_url(path: &std::path::Path, locale: &str) -> String {
     let mut u = format!(
-        "dozer://flyfish/host.html?p={}&theme={}",
+        "dozer://flyfish/host.html?p={}&theme={}&locale={}",
         encode_component(&path.to_string_lossy()),
-        crate::preview::scheme_query_value()
+        crate::preview::scheme_query_value(),
+        locale
     );
     if is_editable_extension(path) {
         u.push_str("&ln=1");
@@ -141,22 +142,24 @@ pub(crate) fn is_html_extension(path: &std::path::Path) -> bool {
 /// 由 host 把绑定文件放进**无脚本 sandbox iframe** 渲染,相对资源经
 /// `dozer://html/__file__` 白名单(已打开文件所在目录子树)解析。详见
 /// `assets::serve_html_file` 与内嵌 `html_host.html`。
-pub(crate) fn html_url(path: &std::path::Path) -> String {
+pub(crate) fn html_url(path: &std::path::Path, locale: &str) -> String {
     format!(
-        "dozer://html/host.html?p={}&theme={}",
+        "dozer://html/host.html?p={}&theme={}&locale={}",
         encode_component(&path.to_string_lossy()),
-        scheme_query_value()
+        scheme_query_value(),
+        locale
     )
 }
 
 /// image-annotate host 的 URL:与 `flyfish_url` 同为 Rendered host,但走
 /// OpenSeadragon + Annotorious 图片查看/标注 host。仅 `png/jpg/jpeg/webp/bmp/ico`
 /// 经此(判据 `router::is_image_annotate_extension`),`gif/tif/tiff` 仍走 Flyfish。
-pub(crate) fn image_annotate_url(path: &std::path::Path) -> String {
+pub(crate) fn image_annotate_url(path: &std::path::Path, locale: &str) -> String {
     format!(
-        "dozer://image-annotate/host.html?p={}&theme={}",
+        "dozer://image-annotate/host.html?p={}&theme={}&locale={}",
         encode_component(&path.to_string_lossy()),
-        scheme_query_value()
+        scheme_query_value(),
+        locale
     )
 }
 
@@ -210,37 +213,42 @@ pub(crate) fn flyfish_binding_from_url(url: &str) -> Option<HostBinding> {
 /// 与 PlantUML 引入前的行为一致——但正常路径下调用方 `desired_webviews` 一定
 /// 已持有 `Some(PreviewBackend::Rendered(..))`。扩展名判据仍集中在
 /// `router::is_image_annotate_extension`,不再额外新增 PlantUML 扩展名判断。
-pub(crate) fn preview_url(path: &std::path::Path, backend: Option<&PreviewBackend>) -> String {
+pub(crate) fn preview_url(
+    path: &std::path::Path,
+    backend: Option<&PreviewBackend>,
+    locale: &str,
+) -> String {
     if let Some(PreviewBackend::Rendered(rendered)) = backend {
         match rendered.renderer {
-            RenderedRenderer::PlantUml => return plantuml_viewer_url(),
-            RenderedRenderer::IsolatedHtml => return html_url(path),
+            RenderedRenderer::PlantUml => return plantuml_viewer_url(locale),
+            RenderedRenderer::IsolatedHtml => return html_url(path, locale),
             RenderedRenderer::Flyfish => {
                 // Flyfish 仍然承载 image-annotate 图片(OpenSeadragon)——图片
                 // 扩展名由 router 判据决定,不由 renderer 决定。
                 if is_image_annotate_extension(path) {
-                    return image_annotate_url(path);
+                    return image_annotate_url(path, locale);
                 }
-                return flyfish_url(path);
+                return flyfish_url(path, locale);
             }
         }
     }
     if is_image_annotate_extension(path) {
-        return image_annotate_url(path);
+        return image_annotate_url(path, locale);
     }
     if is_html_extension(path) {
-        html_url(path)
+        html_url(path, locale)
     } else {
-        flyfish_url(path)
+        flyfish_url(path, locale)
     }
 }
 
 /// PlantUML viewer host 的 URL。与其它 Rendered host 一样在调用处再追加
 /// `proj`/`panel`/`tab`/`doc` 绑定查询串(`hosts_rendered_binding`)。
-pub(crate) fn plantuml_viewer_url() -> String {
+pub(crate) fn plantuml_viewer_url(locale: &str) -> String {
     format!(
-        "dozer://plantuml-viewer/index.html?theme={}",
-        scheme_query_value()
+        "dozer://plantuml-viewer/index.html?theme={}&locale={}",
+        scheme_query_value(),
+        locale
     )
 }
 
@@ -268,7 +276,7 @@ mod tests {
 
     #[test]
     fn image_annotate_url_targets_its_namespace_and_carries_theme() {
-        let u = image_annotate_url(std::path::Path::new("/tmp/图 a.png"));
+        let u = image_annotate_url(std::path::Path::new("/tmp/图 a.png"), "en");
         assert!(u.starts_with("dozer://image-annotate/host.html?p="), "{u}");
         assert!(u.contains("&theme="), "{u}");
     }
@@ -288,7 +296,7 @@ mod tests {
 
     #[test]
     fn plantuml_viewer_url_targets_namespace_and_binds() {
-        let u = plantuml_viewer_url();
+        let u = plantuml_viewer_url("en");
         assert!(u.starts_with("dozer://plantuml-viewer/index.html?"), "{u}");
         // 与其它 rendered host 一样,绑定由调用处(desired_webviews→app.rs)注入;
         // 解析走同一 `flyfish_binding_from_url`。
@@ -305,11 +313,15 @@ mod tests {
             source_language: Some("plantuml".to_string()),
         });
         // 即便路径无关(fixture 文件名),只要 backend 说是 PlantUML 就走 viewer。
-        let u = preview_url(std::path::Path::new("/tmp/diagram.puml"), Some(&backend));
+        let u = preview_url(
+            std::path::Path::new("/tmp/diagram.puml"),
+            Some(&backend),
+            "en",
+        );
         assert!(u.starts_with("dozer://plantuml-viewer/index.html?"), "{u}");
         // 无 backend 时退化为扩展名分派:PlantUML 扩展名在没有 backend 判定时
         // 不特殊处理,仍回落 flyfish(ProductInt:backend 是唯一身份来源)。
-        let fallback = preview_url(std::path::Path::new("/tmp/diagram.puml"), None);
+        let fallback = preview_url(std::path::Path::new("/tmp/diagram.puml"), None, "en");
         assert!(fallback.starts_with("dozer://flyfish/"), "{fallback}");
     }
 
@@ -321,7 +333,8 @@ mod tests {
         // 走 image_annotate_url 构造出的 URL 本身不挂 proj/panel/tab/doc(由
         // app.rs 注入),故直接解析应为 None——注入后才可解析(E2E 覆盖)。
         assert!(
-            flyfish_binding_from_url(&image_annotate_url(std::path::Path::new("a.png"))).is_none()
+            flyfish_binding_from_url(&image_annotate_url(std::path::Path::new("a.png"), "en"))
+                .is_none()
         );
     }
 }

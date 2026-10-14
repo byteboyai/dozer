@@ -319,6 +319,7 @@ impl App {
             }
             Message::TodoContentWebviewEvent(event) => self.todo_content_event(event),
             Message::EditorWebviewEvent(binding, event) => {
+                let locale = self.locale.active_locale().to_string();
                 self.with_project(binding.project_id, move |ws, io| {
                     let pane = ws.preview_pane_mut(binding.panel);
                     // `Ready` 时若该 tab 有"打开后跳转到某行"的诉求(代码健康度
@@ -544,16 +545,18 @@ impl App {
                                 // 拒绝写盘;冲突需用户先选择保留或重载。
                                 match tab.save_gate() {
                                     crate::preview::SaveGate::ReadOnly => {
-                                        tab.web_error = Some(
-                                            "该文件为只读/非 UTF-8 文本,已禁用保存以免破坏原文件"
-                                                .into(),
-                                        );
+                                        tab.web_error = Some(crate::i18n::host_text(
+                                            "preview.readonly_save_disabled",
+                                            "This file is read-only or non-UTF-8 text; saving is disabled to avoid corrupting the original",
+                                            &locale,
+                                        ));
                                     }
                                     crate::preview::SaveGate::Conflict => {
-                                        tab.web_error = Some(
-                                            "磁盘文件已被外部修改,请先选择「保留我的修改」或「重载磁盘」。"
-                                                .into(),
-                                        );
+                                        tab.web_error = Some(crate::i18n::host_text(
+                                            "preview.disk_conflict_save_notice",
+                                            "The file on disk changed externally; first choose \"Keep my changes\" or \"Reload from disk\".",
+                                            &locale,
+                                        ));
                                     }
                                     crate::preview::SaveGate::Allow => {
                                         if revision == event.revision
@@ -586,8 +589,12 @@ impl App {
                                                     });
                                                 }
                                                 Err(error) => {
-                                                    tab.web_error =
-                                                        Some(format!("保存失败: {error}"))
+                                                    tab.web_error = Some(crate::i18n::host_text_args(
+                                                        "error.save_failed",
+                                                        "Save failed: {message}",
+                                                        &locale,
+                                                        &[("message", &error.to_string())],
+                                                    ))
                                                 }
                                             }
                                         } else if !want_close {
@@ -696,8 +703,11 @@ impl App {
                                     path,
                                 );
                                 let detail = if count >= crate::preview::FAILURE_THRESHOLD {
-                                    format!(
-                                        "{message}(已连续失败 {count} 次,请改用纯文本/外部打开)"
+                                    crate::i18n::host_text_args(
+                                        "preview.repeated_save_failed",
+                                        "{message} (failed {count} times in a row; switch to plain text or open externally)",
+                                        &locale,
+                                        &[("message", message.as_str()), ("count", &count.to_string())],
                                     )
                                 } else {
                                     message.clone()
@@ -1131,6 +1141,7 @@ impl App {
                 });
             }
             Message::PlantUmlLoaded(project_id, panel, tab_id, generation, result) => {
+                let locale = self.locale.active_locale().to_string();
                 self.with_project(project_id, move |ws, _io| {
                     let pane = ws.preview_pane_mut(panel);
                     match result {
@@ -1143,7 +1154,7 @@ impl App {
                             }
                         }
                         Err(error) => {
-                            pane.apply_plantuml_load_error(tab_id, generation, &error);
+                            pane.apply_plantuml_load_error(tab_id, generation, &error, &locale);
                         }
                     }
                 });
@@ -1162,6 +1173,7 @@ impl App {
                 });
             }
             Message::PreviewWindowIndex(project_id, panel, tab_id, result) => {
+                let locale = self.locale.active_locale().to_string();
                 self.with_project(project_id, move |ws, io| {
                     // T11 bullet 3:结构化日志(读取字节 + 行数,不记正文)。
                     match &result {
@@ -1222,7 +1234,12 @@ impl App {
                         Err(error) => {
                             let pane = ws.preview_pane_mut(panel);
                             if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == tab_id) {
-                                tab.web_error = Some(format!("建立行索引失败: {error}"));
+                                tab.web_error = Some(crate::i18n::host_text_args(
+                                    "preview.line_index_failed",
+                                    "Failed to build line index: {error}",
+                                    &locale,
+                                    &[("error", &error.to_string())],
+                                ));
                             }
                         }
                     }
@@ -1389,6 +1406,7 @@ impl App {
                 });
             }
             Message::PreviewLoadTimeout(project_id, panel, tab_id, generation, stage) => {
+                let locale = self.locale.active_locale().to_string();
                 self.with_project(project_id, move |ws, _io| {
                     let pane = ws.preview_pane_mut(panel);
                     // T11:只有仍在该 generation **且仍停在同 stage**的加载才判超时。
@@ -1406,7 +1424,11 @@ impl App {
                             tab_id,
                             generation,
                             crate::preview::PreviewError::new(
-                                "预览加载超时,请重试".to_string(),
+                                crate::i18n::host_text(
+                                    "preview.load_timeout_retry",
+                                    "Preview load timed out; please retry",
+                                    &locale,
+                                ),
                                 true,
                             ),
                         );
@@ -4479,10 +4501,12 @@ impl App {
         // 读已缓存目录(`reload_tree_from_disk`,只重读已展开/缓存过的层,开销
         // 小),预览则只重载路径命中的 webview tab。
         if changes.workdir_changed || changes.refs_changed {
-            self.with_project(project_id, |ws, io| {
+            let locale = self.locale.active_locale().to_string();
+            self.with_project(project_id, move |ws, io| {
                 ws.files.reload_tree_from_disk();
-                ws.preview.reload_webviews_for(&changes.paths);
-                ws.project_preview.reload_webviews_for(&changes.paths);
+                ws.preview.reload_webviews_for(&changes.paths, &locale);
+                ws.project_preview
+                    .reload_webviews_for(&changes.paths, &locale);
                 // Task 7:根文件/include 变化后重跑受影响的 PlantUML 图,重读
                 // include。放在 `reload_webviews_for` 之后立即取走队列。
                 ws.spawn_pending_plantuml_reloads(PanelKind::Files, io);

@@ -78,7 +78,7 @@ pub enum Reservation {
     /// 需先按顺序淘汰这些 viewer 才能加载。
     NeedEviction(Vec<ViewerKey>),
     /// 无论如何都放不下(含淘汰后仍超,或没有任何可淘汰者)。
-    Denied { reason: String },
+    Denied { reason: dozer_model::LocalizedText },
 }
 
 /// viewer 的宿主种类,仅用于**资源诊断**区分(不改变预算算法)。诊断只报种类
@@ -365,9 +365,14 @@ impl ResourceManager {
         // 单个 viewer 就超过总预算 → 直接拒绝(不可能靠淘汰别人腾出)。
         if bytes > self.budgets.total_preview_bytes {
             return Reservation::Denied {
-                reason: format!(
-                    "单 viewer {bytes} 字节超过总预览预算 {}",
-                    self.budgets.total_preview_bytes
+                reason: crate::i18n::panel_keyed_args(
+                    super::PREVIEW_OWNER,
+                    "resources.single_viewer_over_budget",
+                    "Single viewer {bytes} bytes exceeds the total preview budget {budget}",
+                    &[
+                        ("bytes", &bytes.to_string()),
+                        ("budget", &self.budgets.total_preview_bytes.to_string()),
+                    ],
                 ),
             };
         }
@@ -412,9 +417,17 @@ impl ResourceManager {
         } else {
             Reservation::Denied {
                 reason: if candidates.is_empty() {
-                    "超预算且没有可淘汰的 viewer".to_string()
+                    crate::i18n::panel_keyed(
+                        super::PREVIEW_OWNER,
+                        "resources.no_evictable_viewer",
+                        "Over budget and no evictable viewer",
+                    )
                 } else {
-                    "即使淘汰全部可淘汰 viewer 仍超预算".to_string()
+                    crate::i18n::panel_keyed(
+                        super::PREVIEW_OWNER,
+                        "resources.still_over_after_evict",
+                        "Still over budget after evicting all evictable viewers",
+                    )
                 },
             }
         }

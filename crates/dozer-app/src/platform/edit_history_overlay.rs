@@ -263,7 +263,10 @@ impl EditHistoryOverlay {
             0,
             PathBuf::from(&entry.target_path),
         );
-        let url = binding.diff_url(crate::preview::scheme_query_value());
+        let url = binding.diff_url(
+            crate::preview::scheme_query_value(),
+            app.locale.active_locale(),
+        );
         let logical_size: LogicalSize<f32> = self
             .window
             .inner_size()

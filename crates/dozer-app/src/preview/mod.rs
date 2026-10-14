@@ -27,6 +27,11 @@ mod view;
 mod webview;
 mod webview_protocol;
 
+/// 预览层的 i18n owner(spec §6.1:官方 owner 固定 `dozer.<id>`)。
+/// 预览不是 `PanelKind` 面板,资源在 `locales/panels/preview/`,但归
+/// `dozer.preview` 命名空间,由 `extensions::PANEL_OWNERS` 一并登记以便解析。
+pub(crate) const PREVIEW_OWNER: &str = "dozer.preview";
+
 pub(crate) use backend::*;
 pub(crate) use file_profile::*;
 pub(crate) use loading::*;

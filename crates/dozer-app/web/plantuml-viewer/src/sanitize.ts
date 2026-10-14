@@ -64,12 +64,12 @@ function walk(el: Element, onRemove: () => void): void {
 export function sanitizeSvg(svgText: string): SanitizeResult {
   // Byte length of the UTF-8 encoding, matching the Rust-side cap.
   if (new TextEncoder().encode(svgText).length > MAX_SVG_BYTES) {
-    throw new Error(`SVG 输出超过上限 ${MAX_SVG_BYTES} 字节`);
+    throw new Error(`SVG output exceeds the limit of ${MAX_SVG_BYTES} bytes`);
   }
   const doc = new DOMParser().parseFromString(svgText, "image/svg+xml");
   const parseError = doc.querySelector("parsererror");
   if (parseError || doc.documentElement.tagName.toLowerCase() !== "svg") {
-    throw new Error("引擎输出不是合法 SVG");
+    throw new Error("engine output is not valid SVG");
   }
   const svg = doc.documentElement as unknown as SVGSVGElement;
   let removed = 0;

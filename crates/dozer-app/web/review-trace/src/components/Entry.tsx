@@ -4,8 +4,12 @@ import { renderMarkdown } from '../markdown.ts';
 import { ToolResultRow } from './ToolResultRow.tsx';
 import { TraceToggle } from './TraceToggle.tsx';
 import { AvatarIcon } from './AvatarIcon.tsx';
+import { t } from '../i18n.ts';
 
-const ROLE_LABEL: Record<string, string> = { ToolResult: '工具结果' };
+function roleLabel(kind: string): string {
+  if (kind === 'ToolResult') return t('trace.role_tool_result', 'Tool result');
+  return kind;
+}
 
 export function Entry({ entry, agentLabel }: { entry: TraceEntry; agentLabel?: AgentLabel }) {
   const kind = Object.keys(entry)[0] as 'Human' | 'AiTurn' | 'ToolResult';
@@ -31,7 +35,7 @@ export function Entry({ entry, agentLabel }: { entry: TraceEntry; agentLabel?: A
     head = (
       <div class="msg-head">
         <span class="avatar-dot" />
-        <span>{ROLE_LABEL[kind] || kind}</span>
+        <span>{roleLabel(kind)}</span>
       </div>
     );
   }

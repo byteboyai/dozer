@@ -108,20 +108,109 @@ pub enum RouteReason {
 }
 
 impl fmt::Display for RouteReason {
+    /// 稳定英文文案(spec §6:资源落 `en` 必须与 fallback 一致)。用作语言
+    /// 无关的诊断/日志输出;面向用户的展示请走 [`RouteReason::localized`]。
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (key, fallback, arg) = self.key_fallback();
+        match arg {
+            RouteReasonArg::None => write!(f, "{fallback}"),
+            RouteReasonArg::Ext(e) => {
+                let _ = key;
+                write!(f, "{}", fallback.replace("{e}", e))
+            }
+            RouteReasonArg::Rule(r) => write!(f, "{}", fallback.replace("{rule}", r)),
+        }
+    }
+}
+
+/// `RouteReason` 的具名参数种类(供 [`RouteReason::localized`] 组装插值参数)。
+enum RouteReasonArg {
+    None,
+    Ext(&'static str),
+    Rule(&'static str),
+}
+
+impl RouteReason {
+    /// 稳定 key / 英文 fallback / 具名参数(唯一真相;`en.json` 必须与 fallback
+    /// 逐字一致,`check_resources.py` 与迁移扫描据此对齐)。
+    fn key_fallback(&self) -> (&'static str, &'static str, RouteReasonArg) {
         match self {
-            Self::TabularExtension => write!(f, "表格扩展名"),
-            Self::JsonTreeExtension => write!(f, "JSON 树扩展名"),
-            Self::JsonLinesExtension => write!(f, "JSON Lines 扩展名"),
-            Self::RenderedExtension(e) => write!(f, "渲染扩展名 .{e}"),
-            Self::CodeExtension => write!(f, "代码扩展名"),
-            Self::FilenameRule(rule) => write!(f, "文件名规则 {rule}"),
-            Self::KnownMediaExtension => write!(f, "媒体/文档扩展名"),
-            Self::ArchiveFallback => write!(f, "压缩包"),
-            Self::ContentBinaryFallback => write!(f, "未知二进制"),
-            Self::ContentTextProbe => write!(f, "未知文本(内容探测)"),
-            Self::EmptyFile => write!(f, "空文件"),
-            Self::PersistedMode => write!(f, "用户持久化模式"),
+            Self::TabularExtension => (
+                "route.tabular_extension",
+                "Table extension",
+                RouteReasonArg::None,
+            ),
+            Self::JsonTreeExtension => (
+                "route.json_tree_extension",
+                "JSON tree extension",
+                RouteReasonArg::None,
+            ),
+            Self::JsonLinesExtension => (
+                "route.json_lines_extension",
+                "JSON Lines extension",
+                RouteReasonArg::None,
+            ),
+            Self::RenderedExtension(e) => (
+                "route.rendered_extension",
+                "Rendered extension .{e}",
+                RouteReasonArg::Ext(e),
+            ),
+            Self::CodeExtension => (
+                "route.code_extension",
+                "Code extension",
+                RouteReasonArg::None,
+            ),
+            Self::FilenameRule(rule) => (
+                "route.filename_rule",
+                "Filename rule {rule}",
+                RouteReasonArg::Rule(rule),
+            ),
+            Self::KnownMediaExtension => (
+                "route.media_document_extension",
+                "Media/document extension",
+                RouteReasonArg::None,
+            ),
+            Self::ArchiveFallback => ("route.archive", "Archive", RouteReasonArg::None),
+            Self::ContentBinaryFallback => (
+                "route.unknown_binary",
+                "Unknown binary",
+                RouteReasonArg::None,
+            ),
+            Self::ContentTextProbe => (
+                "route.unknown_text_probe",
+                "Unknown text (content probe)",
+                RouteReasonArg::None,
+            ),
+            Self::EmptyFile => ("route.empty_file", "Empty file", RouteReasonArg::None),
+            Self::PersistedMode => (
+                "route.persisted_mode",
+                "User-persisted mode",
+                RouteReasonArg::None,
+            ),
+        }
+    }
+
+    /// 按当前 locale 解析成用户可见文案(owner `dozer.preview`)。
+    pub fn localized(&self, locale: &str) -> String {
+        let (key, fallback, arg) = self.key_fallback();
+        match arg {
+            RouteReasonArg::None => {
+                crate::i18n::panel_text(super::PREVIEW_OWNER, key, fallback, locale)
+            }
+            RouteReasonArg::Ext(e) => crate::i18n::panel_text_args(
+                super::PREVIEW_OWNER,
+                key,
+                fallback,
+                locale,
+                &[("e", e)],
+            ),
+            RouteReasonArg::Rule(r) => crate::i18n::panel_text_args(
+                super::PREVIEW_OWNER,
+                key,
+                fallback,
+                locale,
+                &[("rule", r)],
+            ),
         }
     }
 }

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 #[test]
 fn review_webview_spec_empty_when_no_review() {
-    assert_eq!(review_webview_spec(None), Vec::new());
+    assert_eq!(review_webview_spec(None, "en"), Vec::new());
 }
 
 #[test]
@@ -26,7 +26,7 @@ fn review_webview_spec_empty_on_error_or_empty_entries() {
         summary_time: None,
         loaded_nonce: None,
     };
-    assert_eq!(review_webview_spec(Some(&with_error)), Vec::new());
+    assert_eq!(review_webview_spec(Some(&with_error), "en"), Vec::new());
 
     let empty_entries = ReviewView {
         source: ReviewSource::Conversation("a".into()),
@@ -39,7 +39,7 @@ fn review_webview_spec_empty_on_error_or_empty_entries() {
         summary_time: None,
         loaded_nonce: None,
     };
-    assert_eq!(review_webview_spec(Some(&empty_entries)), Vec::new());
+    assert_eq!(review_webview_spec(Some(&empty_entries), "en"), Vec::new());
 }
 
 #[test]
@@ -55,9 +55,12 @@ fn review_webview_spec_url_carries_nonce_and_is_visible_when_loaded() {
         summary_time: None,
         loaded_nonce: Some(7),
     };
-    let specs = review_webview_spec(Some(&rv));
+    let specs = review_webview_spec(Some(&rv), "en");
     assert_eq!(specs.len(), 1);
-    assert_eq!(specs[0].url, "dozer://review-trace/host.html?_r=7");
+    assert_eq!(
+        specs[0].url,
+        "dozer://review-trace/host.html?_r=7&locale=en"
+    );
     assert!(specs[0].visible);
 }
 
@@ -74,7 +77,7 @@ fn review_webview_spec_hidden_until_loaded_nonce_matches() {
         summary_time: None,
         loaded_nonce: None,
     };
-    let specs = review_webview_spec(Some(&rv));
+    let specs = review_webview_spec(Some(&rv), "en");
     assert_eq!(
         specs.len(),
         1,
@@ -96,7 +99,7 @@ fn review_webview_spec_visible_when_loaded_nonce_matches() {
         summary_time: None,
         loaded_nonce: Some(3),
     };
-    let specs = review_webview_spec(Some(&rv));
+    let specs = review_webview_spec(Some(&rv), "en");
     assert!(specs[0].visible);
 }
 
@@ -116,7 +119,7 @@ fn review_webview_spec_empty_entries_still_wins_over_loaded_nonce() {
         summary_time: None,
         loaded_nonce: Some(3),
     };
-    assert_eq!(review_webview_spec(Some(&rv)), Vec::new());
+    assert_eq!(review_webview_spec(Some(&rv), "en"), Vec::new());
 }
 
 #[test]
@@ -1327,20 +1330,22 @@ fn preview_tab_display_title_blank_uses_root_dir_basename() {
         created_ms: 0,
         updated_ms: 0,
     });
-    let title = preview_tab_display_title(&ws, ws.preview.tabs().first().unwrap());
+    let title = preview_tab_display_title(&ws, ws.preview.tabs().first().unwrap(), "en");
     assert_eq!(
         title, "byteboy",
         "Blank tab 标题 = 根目录 basename,与显示名脱钩"
     );
 }
 
-/// 无项目时回退 `tab.title`(数据层 `placeholder_tab` 写死的 "空白"),
-/// 不让 UI 拿到空字符串或裸 None。
+/// 无项目时回退本地化的 `view.blank`(数据层 `placeholder_tab` 存稳定英文
+/// `"Blank"`),不让 UI 拿到空字符串或裸 None。
 #[test]
 fn preview_tab_display_title_blank_falls_back_to_placeholder_text() {
     let ws = Workspace::empty_for_project_placeholder();
-    let title = preview_tab_display_title(&ws, ws.preview.tabs().first().unwrap());
-    assert_eq!(title, "空白", "无项目 → 维持原 \"空白\" 文案");
+    let title = preview_tab_display_title(&ws, ws.preview.tabs().first().unwrap(), "en");
+    assert_eq!(title, "Blank", "无项目 → 本地化 view.blank(英文兜底)");
+    let zh = preview_tab_display_title(&ws, ws.preview.tabs().first().unwrap(), "zh-CN");
+    assert_eq!(zh, "空白", "无项目 → 本地化 view.blank(中文)");
 }
 
 /// T13:resolve_preview_command_target 按 target 解析到 (panel, tab_id)。

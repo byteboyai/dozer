@@ -21,7 +21,7 @@ test('buildTraceStatsLabel is empty with no tool calls and no tokens', () => {
 test('buildTraceStatsLabel reports tool call count without errors', () => {
   assert.equal(
     buildTraceStatsLabel({ tool_calls: [{ summary: 'a' }, { summary: 'b' }] }),
-    '2 次工具调用',
+    '2 tool calls',
   );
 });
 
@@ -31,7 +31,7 @@ test('buildTraceStatsLabel reports failed tool result count in parentheses', () 
       tool_calls: [{ summary: 'a' }],
       tool_results: [{ content: 'x', is_error: true }],
     }),
-    '1 次工具调用(1 失败)',
+    '1 tool calls (1 failed)',
   );
 });
 
@@ -42,7 +42,7 @@ test('buildTraceStatsLabel joins tool-call count and token total with a middle d
       tokens_in: 500,
       tokens_out: 700,
     }),
-    '1 次工具调用 · 1.2k tokens',
+    '1 tool calls · 1.2k tokens',
   );
 });
 

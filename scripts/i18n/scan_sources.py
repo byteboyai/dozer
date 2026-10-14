@@ -456,8 +456,10 @@ HTML_ATTR_RE = re.compile(r'\b(?:title|aria-label|placeholder|alt|label)\s*=\s*"
 def extract_html(text: str, rel: str, records: list):
     for m in HTML_ATTR_RE.finditer(text):
         _maybe_record(m.group(1), m.start(1), rel, text, records, "html_attr")
-    # 去掉 <script>/<style>/标签后剩的文本节点
-    stripped = re.sub(r"<(script|style)\b.*?</\1>", " ", text, flags=re.S | re.I)
+    # 去掉 <script>/<style>/注释/标签后剩的文本节点。HTML 注释里的中文是文档,
+    # 不翻译(与 Rust 注释同一口径,见 is_test_context/comment 排除)。
+    stripped = re.sub(r"<!--.*?-->", " ", text, flags=re.S)
+    stripped = re.sub(r"<(script|style)\b.*?</\1>", " ", stripped, flags=re.S | re.I)
     stripped = re.sub(r"<[^>]*>", "\n", stripped)
     base = text.find(stripped[:0])  # 不精确定位,取整文偏移 0 作为近似
     for m in re.finditer(r"[^\s<>][^<>\n]*[\u4e00-\u9fff][^<>\n]*", stripped):

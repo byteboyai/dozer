@@ -554,8 +554,35 @@ python3 scripts/i18n/build_inventory.py
 
 ### 残留
 
-- Task 11（122：`dozer.preview` 79 / `dozer.host` 36 / `dozer.agent` 7）未开始。
+- Task 11（编辑/预览 Web 与 HTML 模板）未开始。
 - 双语运行期视觉核对随 Task 13 执行。
+
+## Task 11 验收（preview + host + agent Web，单提交）
+
+用户裁决：Task 11 以**单次提交**交付（不再按面板拆分）。
+
+### 交付内容
+
+- **资源**：`crates/dozer-app/locales/panels/preview/{en,zh-CN}.json`（owner `dozer.preview`，含 `loading.*`/`route.*`/`policy.*`/`plantuml.*`/`resources.*`/`view.*`/`text_save.*`/`editor.*`/`plantuml_viewer.*`/`tabular.*`）；`locales/host/{en,zh-CN}.json` 增 `preview.{readonly_save_disabled,disk_conflict_save_notice,repeated_save_failed,line_index_failed,load_timeout_retry,resource_budget_insufficient}`；`locales/panels/agent/{en,zh-CN}.json` 增 `trace.{role_tool_result,thought_process,action_process,failed_prefix,load_failed,tool_calls,tool_calls_with_failures}`。`i18n.rs` 的 `PANEL_OWNERS` 增 `dozer.preview`。
+- **Rust（预览）**：`preview/{router,loading,file_policy,plantuml,resources,text_save,view,tabular/mod}.rs` 全量迁移；`PreviewCommandOutcome.detail`（7 处）保持**稳定英文**（诊断/协议值不改语言）。
+- **locale 传递（`&locale=` 机制，与 `&theme=` 同款）**：`preview/webview.rs` 的 `flyfish_url`/`html_url`/`image_annotate_url`/`plantuml_viewer_url`/`preview_url` 与 `preview/code_host.rs` 的 `url`/`diff_url`/`json_url`/`tabular_url` 追加 `&locale=`；`preview/view.rs` 的 `desired_webviews`/`desired_editor_webviews`/`desired_json_webviews`/`desired_tabular_webviews` 穿 `locale`，新增 `reload_all_webviews_for_locale`（Locale 变化经 `sync_webview_pool` 因 `spec.url` 变化自动重载，无需显式 reload 处理）；`workspace/view.rs::review_webview_spec(review, locale)` 追加 `&locale=`；`app/{app,update}.rs` 与 `platform/{edit_history_overlay,file_history_overlay}.rs` 穿 `active_locale()`。
+- **HTML 宿主（`dozer.host`）**：`html_host.html`/`image_annotate_host.html` 内联 locale 字典读 `&locale=`，静态文案置英文 fallback，启动按当前语言替换；`app/update.rs` 的 `PreviewLoadTimeout` 与 `app/app.rs` 的 `apply_preview_pool_evictions`（`resource_budget_insufficient`）经 `crate::i18n::host_text`。
+- **TS 宿主（`dozer.preview`）**：新建 `web/{editor,json-editor,plantuml-viewer,tabular-host}/src/i18n.ts`（静态打包 `dozer.preview` 面板 JSON + 复用中性共享 `web/shared/i18n`）；`editor`/`json-editor`/`plantuml-viewer`/`tabular-host` 的 `main.ts`/`index.ts`/`index.html` 迁移（含 `editor.read_failed`/`read_error`、`json-editor` 状态串、`plantuml-viewer` 状态/诊断、`tabular-host` 的 sheet 分组 aria-label 与截断横幅）；`web/shared/i18n/i18n.ts` 的 `normalizeLocale` 加 `?? ""` 守卫以适配 `noUncheckedIndexedAccess`；各 host `tsconfig.json` 增 `allowImportingTsExtensions`/`resolveJsonModule`/`types:["node"]`。
+- **TS 宿主（`dozer.agent`）**：`web/review-trace/src/{i18n.ts(new),main.tsx,traceStats.ts,components/{Entry,ToolResultRow,TraceToggle}.tsx}` 迁移；locale 经 host URL `&locale=` 注入（`ReviewView` 的 host URL 追加 `&locale=`，component 不变）。
+- **扫描器**：`scripts/i18n/scan_sources.py::extract_html` 剥离 HTML 注释（`<!-- -->`），避免注释中的中文被判为 UI 候选。
+- **测试**：`web/plantuml-viewer/src/{sanitize,host}.test.mjs` 与 `web/review-trace/src/traceStats.test.ts` 断言改为**英文**输出；`preview/view.rs` 的 flyfish/HTML URL 期望补 `&locale=en`；`workspace/tests.rs` 的 review host URL 期望补 `&locale=en`；`usage_probe/host.rs` 引用行号随 `app/update.rs` 位移更新（`BuildActivationCtx` 5455→5479、`RouteLoaded`/`DropOtherProject` 1651→1673）。
+
+### 验证命令与结果
+
+- `cargo build -p dozer-app`：通过。
+- `cargo test -p dozer-app`：**2001 passed / 0 failed / 2 ignored**。
+- webview：`npm run typecheck`（editor/json-editor/plantuml-viewer/tabular-host/review-trace 全绿）、`npm test`（plantuml-viewer 含 render-smoke、review-trace 30 全绿）、`npm run build`（四个 preview host + review-trace 产物重生成）：全绿。
+- `cargo fmt --all -- --check`、`cargo clippy -p dozer-app --all-targets`（0 error）、`python3 scripts/i18n/check_resources.py`（**14 个 owner 目录**）、`bash scripts/check-log-scope.sh`、`python3 scripts/audit/check_panel_boundary.py`（213 refs / 5 files）：全绿。
+- `python3 scripts/i18n/build_inventory.py`：`counts: {"excluded": 3042, "migrated": 0, "unresolved": 0}`；`unresolved by task: {}`；`dozer.preview`/`dozer.host`/`dozer.agent` **全 0 条**。**全库总账闭合**。
+
+### 残留
+
+- 双语**运行期视觉核对**（切换后原生/Web 同步）随 Task 13 的 L07/L09/L10/L14 执行。
 
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |

@@ -22,7 +22,7 @@ test("empty document acknowledges completion and applies the requested theme", a
   assert.equal(events.at(-1).payload.kind, "rendered");
   assert.equal(events.at(-1).revision, 7);
   assert.equal(events.at(-1).payload.width, 0);
-  assert.match(dom.window.document.getElementById("status").textContent, /暂无可渲染内容/);
+  assert.match(dom.window.document.getElementById("status").textContent, /Nothing to render yet/);
   assert.ok(dom.window.document.documentElement.classList.contains("theme-light"));
   dom.window.close();
 });

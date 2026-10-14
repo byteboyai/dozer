@@ -5,5 +5,12 @@
   "entry.missing": "{name} (missing)",
   "error.list_load_failed": "Failed to load context list: {e}",
   "error.remove_failed": "Remove failed: {e}",
-  "error.add_record_failed": "Sent to terminal, but failed to record to context list: {e}"
+  "error.add_record_failed": "Sent to terminal, but failed to record to context list: {e}",
+  "trace.role_tool_result": "Tool result",
+  "trace.thought_process": "Thought process",
+  "trace.action_process": "Action process",
+  "trace.failed_prefix": "⚠ Failed · ",
+  "trace.load_failed": "Load failed: {error}",
+  "trace.tool_calls": "{count} tool calls",
+  "trace.tool_calls_with_failures": "{count} tool calls ({failed} failed)"
 }

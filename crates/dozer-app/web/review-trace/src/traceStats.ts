@@ -1,4 +1,5 @@
 import type { AiTurnData } from './types.ts';
+import { t } from './i18n.ts';
 
 // 1000 进 "k",一位小数、去掉多余的 ".0"——轨迹摘要行放不下完整数字,
 // 只需要一眼看出量级。
@@ -19,7 +20,14 @@ export function buildTraceStatsLabel(v: AiTurnData): string {
   const toolCount = (v.tool_calls || []).length;
   if (toolCount > 0) {
     const errCount = (v.tool_results || []).filter((r) => r.is_error).length;
-    parts.push(`${toolCount} 次工具调用${errCount > 0 ? `(${errCount} 失败)` : ''}`);
+    parts.push(
+      errCount > 0
+        ? t('trace.tool_calls_with_failures', '{count} tool calls ({failed} failed)', {
+            count: String(toolCount),
+            failed: String(errCount),
+          })
+        : t('trace.tool_calls', '{count} tool calls', { count: String(toolCount) }),
+    );
   }
   const totalTokens =
     (v.tokens_in || 0) + (v.tokens_out || 0) + (v.tokens_cache_read || 0) + (v.tokens_cache_write || 0);

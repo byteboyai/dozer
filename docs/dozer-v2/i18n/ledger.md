@@ -29,20 +29,20 @@
 | 08 | WebView locale 传递基础 | 8 |
 | 09 | Todo / Usage / Code Health 首批面板 | 150 |
 | 10 | 其余官方面板与辅助界面 | 418 |
-| 11 | 编辑/预览 Web 与 HTML 模板 | 115 |
-| **合计** | | **781** |
+| 11 | 编辑/预览 Web 与 HTML 模板 | 0 |
+| **合计** | | **0** |
 
 未分配的 UI 区域：**0**（生成器 `build_inventory.py` 在存在无任务候选时报警并列出）。
 
 ## 3. 未解决 UI 候选按 owner 分布
 
-当前快照（`build_inventory.py`，共 122 条；已完成面板已从表中移除）：
+当前快照（`build_inventory.py`，共 **0** 条；全部任务已完成）：
 
 | owner | 数量 |
 |---|---|
-| dozer.preview | 79 |
-| dozer.host | 36（全在 Task 11：`html_host.html`/`image_annotate_host.html`/预览预算等；Task 10 已清零） |
-| dozer.agent | 7（全在 Task 11 的 `web/review-trace/`；Task 10 的 Rust `agent_context.rs` 已清零） |
+| dozer.preview | 0 |
+| dozer.host | 0 |
+| dozer.agent | 0 |
 | dozer.group_chat | 0 |
 | dozer.project | 0 |
 | dozer.database | 0 |
@@ -77,7 +77,8 @@
 | 10 (database 面板) | ✅ 完成（按面板一提交） | `crates/dozer-app/locales/panels/database/{en,zh-CN}.json`(owner `dozer.database`，含 `panel.title`/`drivers.*`/`source.*`/`form.*`/`list.*`/`footer.*`/`delete.*`/`tab.*`/`content.*`/`browse.*`/`query.*`/`tree.*`/`driver.disabled`/`error.*`/`toast.*`)、Rust：`extensions/database/mod.rs`(`DATABASE_OWNER` + 本地 `t()`/`t_args()`/`keyed`/`keyed_args`/`db_error`/`loading_hint_localized`)、`state.rs`(`TestStatus::Err`/`ColumnLoad::Failed`/`SchemaState.tables_error`/`SchemaRowKind::ColumnsFailed` 改 `LocalizedText`，驱动保存失败 Toast 改 `panel_keyed_args`)、`load.rs`(加载器返回 `LocalizedText`，超时/连接错误走 `db_error`/`error.*` keyed)、`update.rs`(`test_connection`/`apply_browse_result`/`apply_query_result` 改 `LocalizedText`；源保存 Toast keyed；`update` 增 `locale` 形参)、`view.rs`(全部 UI 中文改 `t`/`t_args`；`database_footer_bar`/`database_drivers_card`/`source_tree_node`/`database_source_card`/`content_pane`/`tab_overflow_items`/`tab_overflow_popup`/`browse_view`/`query_view`/`schema_tree_row`/`delete_confirm_spec` 穿 `locale`；`BrowseState.error`/`QueryState.error` 改 `Option<LocalizedText>`；`loading_hint` 复刻为 `loading_hint_localized`)、`app/{view,update}.rs`(6 处 `database::update` 传 `active_locale()`；辅助结果参数改 `LocalizedText`)、`platform/{confirm_overlay,database_drivers_overlay,database_source_overlay}.rs`(穿 `locale`)、`i18n.rs`(`PANEL_OWNERS` 增 `dozer.database`)、`usage_probe/host.rs` 引用 5437→5451 | Task 10 内 database 面板候选清零;`dozer.database` 69→0 |
 | 10 (project 面板) | ✅ 完成（按面板一提交） | `crates/dozer-app/locales/panels/project/{en,zh-CN}.json`(owner `dozer.project`，含 `panel.title`/`desc.*`/`usage.*`/`root_dir`/`git_remote`/`unset`/`docs.*`/`memory.*`/`footer.*`/`scaffold.step.*`/`scaffold.result.*`/`scaffold.*`/`delete.*`/`error.*`)、Rust：`extensions/project.rs`(`PROJECT_OWNER` + 本地 `t()`/`t_args()`/`keyed`/`keyed_args`；`WorkspaceState.error` 由 `Option<String>` 改 `Option<LocalizedText>`；`ScaffoldRunState.steps` 标签改 `&'static str` key、`BackfillStepState::Failed` 改 `LocalizedText`；`Message::NameRenamed` 错误改 `Result<_, Option<String>>`、`SummaryBackfillFailed` 改 `LocalizedText`)、`extensions/project/scaffold.rs`(`ScaffoldStep.label`→`label_key`(i18n key)+`step_label_fallback` 英文查表；`ScaffoldStepResult::{Created,Failed}` 改 `LocalizedText`、后台用 `keyed`/`keyed_args` 造 keyed 文案)、`extensions/project/update.rs`(`scaffold`/`transcript`/`summary` 后台结果 keyed；`submit_name_edit` 错误 `Option<String>`；UI 流程错误(改名/保存/记忆)改 `keyed_args`；`MemoriesLoadFailed` Toast 改 `keyed_args`)、`extensions/project/delete.rs`(删除流程错误为后台产生、并入 host Toast，按规则改**英文**字面量)、`extensions/project/view.rs`(`view`/`links_section`/`project_footer_bar`/`footer_button_label`/`scaffold_step_row`/`scaffold_backfill_row`/`project_scaffold_card`/`project_delete_card`/`memory_section`/`memory_detail_view` 穿 `locale`；`links_section.title`/`footer_button_label.label` 收 `String`；`error` 经 `render_localized`)、`app/update.rs`(`NameRenamed` 错误分支改 `Option`)、`platform/{project_delete_overlay,project_scaffold_overlay}.rs`(穿 `active_locale()`)、`i18n.rs`(`PANEL_OWNERS` 增 `dozer.project`) | Task 10 内 project 面板(含修复项目进度/删除确认/共享记忆/文档链接)候选清零;`dozer.project` 79→0 |
 | 10 (group_chat 面板) | ✅ 完成（按面板一提交） | `crates/dozer-app/locales/panels/group_chat/{en,zh-CN}.json`(owner `dozer.group_chat`，含 `head.list`/`empty.no_groups`/`new_group.*`/`delete.*`/`cancel.button`/`members.*`/`content.*`/`retry`/`author.*`/`hint.*`/`list.*`/`messages.*`/`member_bar.*`/`composer.*`/`status.*`/`message.*`/`dialog.*`/`handle.error.*`/`duration.*`/`phase.*`/`elapsed.*`/`error.*`)、Rust：`extensions/group_chat/mod.rs`(`GROUP_CHAT_OWNER` + 本地 `t()`/`t_args()`/`keyed`/`keyed_args`；`hint` 改 `Option<LocalizedText>`、`Message::Failed(i64, LocalizedText)`、`hint()` 返回 `Option<&LocalizedText>`、`spawn_command` 的 `fail()` 全命令 keyed)、`extensions/group_chat/protocol.rs`(`AuthorVm.label` 按 locale 解析 `author.*`；`current_view_payload` 增 `locale` 形参；`hint` 经 `render_localized`；`WebviewPushState.failed: Option<LocalizedText>`、`set_failed` 收 `LocalizedText`；超时用 host `webview.load_timeout`)、`extensions/group_chat/view.rs`(`list_pane`/`group_row`/`new_group_row` 显式 `<'a>` 并穿 `locale`；`content_pane` 收 `Option<&LocalizedText>`+`locale`，render 经 `host_render`)、`app/view.rs`(GroupChat arm 传 `app.locale.active_locale()`)、`app/app.rs`(`current_view_payload(.., active_locale())`)、`app/update.rs`(webview `failed` 事件 → `LocalizedText::literal`)、`i18n.rs`(`PANEL_OWNERS` 增 `dozer.group_chat`)、`usage_probe/host.rs`(引用表 `app/update.rs` 顺移更新)、Web：`web/group-chat-content/src/{i18n.ts(new),main.tsx(setLocale 随 envelope),components/{App,Composer,Dialogs,MemberBar,MessageItem,MessageList}.tsx,format.ts,handle.ts,fixtures.ts,render-smoke.tsx}`(静态打包面板 JSON；`statusLabel()` 按 key 查表) | Task 10 内 group_chat(列表/成员/消息状态/发送控制/对话框/handle 校验/耗时阶段)候选清零;`dozer.group_chat` 92→0;全库 unresolved 214→122(余 Task 11) |
-| 10–11 (其余) | 未开始 | — | 依赖 07/08 || 12–14 | 未开始 | — | 见计划 §2 |
+| 11 (preview + host + agent Web) | ✅ 完成（单提交，用户裁决） | `crates/dozer-app/locales/panels/preview/{en,zh-CN}.json`(owner `dozer.preview`，含 `loading.*`/`route.*`/`policy.*`/`plantuml.*`/`resources.*`/`view.*`/`text_save.*`/`editor.*`/`plantuml_viewer.*`/`tabular.*`)、`locales/host/{en,zh-CN}.json` 增 `preview.*`、`locales/panels/agent/{en,zh-CN}.json` 增 `trace.*`、Rust：[`preview/{router,loading,file_policy,plantuml,resources,text_save,view,code_host,webview}.rs`](crates/dozer-app/src/preview) 迁移(`PreviewCommandOutcome.detail` 保持稳定英文)；`webview.rs` URL builder 追加 `&locale=`(`flyfish_url`/`html_url`/`image_annotate_url`/`plantuml_viewer_url`/`preview_url`；`code_host.rs` 的 `url`/`diff_url`/`json_url`/`tabular_url`)；`view.rs` `desired_webviews`/`desired_editor_webviews`/`desired_json_webviews`/`desired_tabular_webviews` 穿 `locale`、`reload_all_webviews_for_locale`；`workspace/view.rs` `review_webview_spec(.., locale)` 追加 `&locale=`；`app/{app,update}.rs` 与 `platform/{edit_history_overlay,file_history_overlay}.rs` 穿 `active_locale()`；HTML 宿主 `html_host.html`/`image_annotate_host.html` 内联 locale 字典读 `&locale=`；TS 宿主新建 `web/{editor,json-editor,plantuml-viewer,tabular-host,review-trace}/src/i18n.ts`(中性共享 `web/shared/i18n`)；`web/review-trace/**`(`dozer.agent`) 迁 `trace.*`；`scripts/i18n/scan_sources.py::extract_html` 剥离 HTML 注释；`usage_probe/host.rs` 引用行号随迁 | Task 11 未解决候选清零(122→0)；**全库 unresolved = 0,总账闭合** |
+| 12–14 | 未开始 | — | 见计划 §2 |
 
 ## 5. 门禁与工具
 
