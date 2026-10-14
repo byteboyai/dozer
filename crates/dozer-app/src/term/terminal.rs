@@ -78,7 +78,10 @@ pub(crate) fn terminal_pane<'a>(
     // 展开的上下文列表浮在终端底部之上(有意偏差 1:不推挤终端,PTY 网格
     // 不因展开/折叠重算)。`stack!` 让面板锚在底部、条的下缘。
     let term: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
-        match crate::extensions::agent_context::expanded_panel(&ws.agent_context) {
+        match crate::extensions::agent_context::expanded_panel(
+            &ws.agent_context,
+            app.locale.active_locale(),
+        ) {
             Some(panel) => iced_widget::stack![
                 term,
                 container(column![
@@ -100,7 +103,7 @@ pub(crate) fn terminal_pane<'a>(
         };
     content = content.push(term);
     content = content.push(
-        crate::extensions::agent_context::strip(&ws.agent_context)
+        crate::extensions::agent_context::strip(&ws.agent_context, app.locale.active_locale())
             .map(move |m| Message::AgentContext(pid, m)),
     );
 

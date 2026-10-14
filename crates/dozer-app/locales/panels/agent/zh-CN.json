@@ -1,0 +1,9 @@
+{
+  "strip.label": "Agent 上下文 · {count} 项",
+  "action.history": "修改历史",
+  "action.remove": "移除",
+  "entry.missing": "{name}(缺失)",
+  "error.list_load_failed": "加载上下文列表失败: {e}",
+  "error.remove_failed": "移除失败: {e}",
+  "error.add_record_failed": "已发送到终端,但未能记录到上下文列表: {e}"
+}

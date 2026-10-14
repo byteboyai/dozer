@@ -411,6 +411,28 @@ python3 scripts/i18n/build_inventory.py
 - Task 10 其余面板（host/agent/files/database/project/group_chat）按面板逐个提交。
 - 双语运行期视觉核对随 Task 13 执行。
 
+## Task 10 验收（agent 面板 Rust，按面板拆分提交）
+
+### 交付内容
+
+- 资源：`crates/dozer-app/locales/panels/agent/{en,zh-CN}.json`（owner `dozer.agent`，含 `strip.label`/`action.history`/`action.remove`/`entry.missing`/`error.*`）。
+- 迁移：`extensions/agent_context.rs`（`AGENT_OWNER` + 本地 `t()`/`t_args()`；三条 outbox Toast 改 `i18n::panel_keyed_args` keyed；`strip`/`expanded_panel` 收 `locale`，条标题计数、修改历史、逐项历史/移除、缺失标记全 keyed；`expanded_panel` 加显式 `<'a>` 绑 `state: &'a State`）。
+- 接线：`term/terminal.rs`（`strip`/`expanded_panel` 传 `app.locale.active_locale()`）。
+- 范围裁决：`web/review-trace/`（Agent 审阅侧 webview host）归 **Task 11**（owner 仍 `dozer.agent`）；`build_inventory.py` 任务号 10→11。
+
+### 验证命令与结果
+
+- `cargo build -p dozer-app`：通过。
+- `cargo test -p dozer-app`：**2001 passed / 0 failed**（`added_failure_*` 断言改英文 fallback "Sent to terminal"）。
+- `cargo fmt --all -- --check`、`cargo clippy -p dozer-app --all-targets`（仅既有告警）、`python3 scripts/i18n/check_resources.py`（9 个 owner 目录）、`bash scripts/check-log-scope.sh`、`python3 scripts/audit/check_panel_boundary.py`：全绿。
+- `python3 scripts/i18n/build_inventory.py`：`counts: {"excluded": 3113, "migrated": 0, "unresolved": 424}`；`unresolved by task: {"10": 302, "11": 122}`；`dozer.agent` Task 10 Rust 路径 **0 条**（余 8 条全为 Task 11 的 `web/review-trace/`）。
+
+### 残留
+
+- Task 10 其余面板（host/files/database/project/group_chat）按面板逐个提交。
+- `web/review-trace/` 在 Task 11 迁移。
+- 双语运行期视觉核对随 Task 13 执行。
+
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |
 |---|---|---|

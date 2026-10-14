@@ -1,0 +1,9 @@
+{
+  "strip.label": "Agent context · {count} items",
+  "action.history": "Edit history",
+  "action.remove": "Remove",
+  "entry.missing": "{name} (missing)",
+  "error.list_load_failed": "Failed to load context list: {e}",
+  "error.remove_failed": "Remove failed: {e}",
+  "error.add_record_failed": "Sent to terminal, but failed to record to context list: {e}"
+}

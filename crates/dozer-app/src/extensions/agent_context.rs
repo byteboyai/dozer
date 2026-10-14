@@ -15,6 +15,19 @@ use std::sync::Arc;
 
 dozer_core::scope!(pub(crate) LOG, panel, "agent");
 
+/// 本面板 i18n 资源 owner。
+const AGENT_OWNER: &str = "dozer.agent";
+
+/// 按当前 locale 取一条本面板文案。
+fn t(key: &str, fallback: &str, locale: &str) -> String {
+    crate::i18n::panel_text(AGENT_OWNER, key, fallback, locale)
+}
+
+/// 带具名参数的 [`t`]。
+fn t_args(key: &str, fallback: &str, locale: &str, args: &[(&str, &str)]) -> String {
+    crate::i18n::panel_text_args(AGENT_OWNER, key, fallback, locale, args)
+}
+
 /// 条的固定高度。折叠/展开都不改变它:展开的列表用 `stack!` 浮在终端底部
 /// 之上,不推挤终端,所以 PTY 网格不会因折叠/展开重算(见 plan「有意偏差 1」)。
 pub const STRIP_HEIGHT: f32 = 28.0;
@@ -104,7 +117,12 @@ pub fn apply(state: &mut State, msg: Message) -> Followup {
             state.outbox.push(
                 LOG,
                 crate::extensions::toast::Level::Error,
-                crate::extensions::toast::literal(format!("加载上下文列表失败: {e}")),
+                crate::i18n::panel_keyed_args(
+                    AGENT_OWNER,
+                    "error.list_load_failed",
+                    "Failed to load context list: {e}",
+                    &[("e", e.as_str())],
+                ),
             );
             Followup::None
         }
@@ -118,7 +136,12 @@ pub fn apply(state: &mut State, msg: Message) -> Followup {
                 state.outbox.push(
                     LOG,
                     crate::extensions::toast::Level::Error,
-                    crate::extensions::toast::literal(format!("移除失败: {e}")),
+                    crate::i18n::panel_keyed_args(
+                        AGENT_OWNER,
+                        "error.remove_failed",
+                        "Remove failed: {e}",
+                        &[("e", e.as_str())],
+                    ),
                 );
             }
             Followup::Refresh
@@ -129,9 +152,12 @@ pub fn apply(state: &mut State, msg: Message) -> Followup {
                 state.outbox.push(
                     LOG,
                     crate::extensions::toast::Level::Warning,
-                    crate::extensions::toast::literal(format!(
-                        "已发送到终端,但未能记录到上下文列表: {e}"
-                    )),
+                    crate::i18n::panel_keyed_args(
+                        AGENT_OWNER,
+                        "error.add_record_failed",
+                        "Sent to terminal, but failed to record to context list: {e}",
+                        &[("e", e.as_str())],
+                    ),
                 );
             }
             Followup::Refresh
@@ -241,19 +267,28 @@ fn flat_button(
 
 /// 终端下方恒定高度的一条:`Agent 上下文 · N 项`(点击展开/收起) + 提示 +
 /// `修改历史`。字体走系统默认(非代码/终端场景)。
-pub fn strip(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+pub fn strip<'a>(
+    state: &'a State,
+    locale: &str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = byteui::theme::color::current();
     let arrow = if state.expanded() {
         icons::IconKind::ChevronDown
     } else {
         icons::IconKind::ChevronUp
     };
+    let count = state.items().len().to_string();
     let toggle = button(
         row![
             icons::view(arrow, byteui::theme::icon_size::row(), colors.dim),
-            text(format!("Agent 上下文 · {} 项", state.items().len()))
-                .size(byteui::theme::font::label())
-                .color(colors.cream),
+            text(t_args(
+                "strip.label",
+                "Agent context · {count} items",
+                locale,
+                &[("count", count.as_str())],
+            ))
+            .size(byteui::theme::font::label())
+            .color(colors.cream),
         ]
         .spacing(6)
         .align_y(Alignment::Center),
@@ -265,7 +300,7 @@ pub fn strip(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_ren
     let bar = row![toggle].spacing(12).align_y(Alignment::Center);
     let bar = bar.push(iced_widget::space::horizontal()).push(
         button(
-            text("修改历史")
+            text(t("action.history", "Edit history", locale))
                 .size(byteui::theme::font::label())
                 .color(colors.gold),
         )
@@ -282,9 +317,10 @@ pub fn strip(state: &State) -> Element<'_, Message, iced_widget::Theme, iced_ren
 
 /// 展开态的逐项列表(折叠、或列表为空时返回 `None`)。由 `terminal_pane` 用
 /// `stack!` 浮在终端底部、条的正上方。缺失项灰显并标"缺失"。
-pub fn expanded_panel(
-    state: &State,
-) -> Option<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> {
+pub fn expanded_panel<'a>(
+    state: &'a State,
+    locale: &str,
+) -> Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> {
     if !state.expanded() || state.items().is_empty() {
         return None;
     }
@@ -298,7 +334,12 @@ pub fn expanded_panel(
         };
         let label_color = if e.missing { colors.dim } else { colors.cream };
         let label = if e.missing {
-            format!("{}(缺失)", e.info.entity_ref)
+            t_args(
+                "entry.missing",
+                "{name} (missing)",
+                locale,
+                &[("name", e.info.entity_ref.as_str())],
+            )
         } else {
             e.info.entity_ref.clone()
         };
@@ -318,7 +359,7 @@ pub fn expanded_panel(
                 icons::view(kind_icon, byteui::theme::icon_size::row(), label_color),
                 name,
                 button(
-                    text("历史")
+                    text(t("action.history", "Edit history", locale))
                         .size(byteui::theme::font::label())
                         .color(colors.gold)
                 )
@@ -326,7 +367,7 @@ pub fn expanded_panel(
                 .on_press(Message::OpenHistory(Some(e.info.id)))
                 .style(flat_button(colors.gold)),
                 button(
-                    text("移除")
+                    text(t("action.remove", "Remove", locale))
                         .size(byteui::theme::font::label())
                         .color(colors.dim)
                 )
@@ -434,7 +475,10 @@ mod tests {
         let got = s.take_outbox();
         assert_eq!(got.len(), 1);
         let n = &got[0].text_stable();
-        assert!(n.contains("已发送到终端") && n.contains("db 挂了"), "{n}");
+        assert!(
+            n.contains("Sent to terminal") && n.contains("db 挂了"),
+            "{n}"
+        );
         // 终端粘贴已经发生、只是记录失败:是警告而不是错误。
         assert_eq!(got[0].level, crate::extensions::toast::Level::Warning);
         assert_eq!(got[0].scope.name, "agent");

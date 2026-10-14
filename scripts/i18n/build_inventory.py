@@ -81,7 +81,8 @@ FILE_TASK = [
     ("crates/dozer-app/src/extensions/git_log.rs", "10"),
     ("crates/dozer-app/src/extensions/app_logs.rs", "10"),
     ("crates/dozer-app/src/extensions/diff_content.rs", "10"),
-    ("crates/dozer-app/web/review-trace/", "10"),
+    # review-trace 是 Agent 审阅侧 webview host,按计划 Task 11 的"编辑/预览 Web"
+    # 文件清单迁移(用户裁决 2026-10-14),不随 Task 10 的 agent_context.rs。
     # Preview web + html templates
     ("crates/dozer-app/src/preview/", "11"),
     ("crates/dozer-app/src/html_host.html", "11"),
@@ -89,6 +90,7 @@ FILE_TASK = [
     ("crates/dozer-app/web/editor/", "11"),
     ("crates/dozer-app/web/json-editor/", "11"),
     ("crates/dozer-app/web/tabular-host/", "11"),
+    ("crates/dozer-app/web/review-trace/", "11"),
     ("crates/dozer-app/web/flyfish/", "11"),
     ("crates/dozer-app/web/plantuml-viewer/", "11"),
     ("crates/dozer-app/src/tabular/mod.rs", "11"),

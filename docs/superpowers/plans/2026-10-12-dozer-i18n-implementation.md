@@ -217,6 +217,8 @@
 
 **修改：** `web/{editor,json-editor,tabular-host,group-chat-content,review-trace,plantuml-viewer,flyfish}`，`src/{html_host,image_annotate_host}.html`，`preview/` 原生 chrome 与对应资源构建脚本。
 
+> **范围裁决（用户确认，2026-10-14）：** `web/review-trace/`（Agent 审阅侧 webview host）按本任务文件清单迁移，不随 Task 10 的 `agent_context.rs`；owner 保持 `dozer.agent`（它是 Agent 面板自己的 host，非预览层），任务号改为 11（`build_inventory.py` 已同步）。
+
 - [ ] 迁移源文件中自有按钮、状态、搜索、复制、图片标注、媒体查看、表格页数、错误提示、title/aria-label 与 HTML 模板固定文案。
 - [ ] 预览工具文案使用独立 owner（例如 dozer.preview）由 Host/预览层共同加载，用户内容不进入词表。
 - [ ] 中文渲染文档、代码、SQL、PlantUML 图内文字保持原文；不翻译编辑器语法 language token，不篡改外部站点。
