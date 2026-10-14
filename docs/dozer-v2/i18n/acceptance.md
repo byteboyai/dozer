@@ -278,6 +278,33 @@ python3 scripts/i18n/build_inventory.py
 - Task 09 剩余 150 条属 **Usage（27）** 与 **Code Health（123）**，各按面板后续单独提交。
 - 双语**运行期视觉核对**（切换后原生/Web 同步）随 Task 13 的 L07/L09/L10/L14 执行。
 
+## Task 09 验收（Usage 面板，按面板拆分提交）
+
+计划 Task 09 面向 Todo/Usage/Code Health 三个首批面板。本记录只覆盖 **Usage 面板**（Todo 见上一节）。
+
+### 交付内容
+
+- **资源（独立 crate 自带）**：`crates/dozer-panel-usage/locales/{en,zh-CN}.json`（owner `dozer.usage`）；面板文案不外置到 dozer-app。
+- **Rust 接缝**：`dozer-panel-usage/src/i18n.rs`（新增）用中性 `dozer-i18n` 解析器 `include_str!` 自身两种语言包，暴露 `USAGE_OWNER`/`t`/`t_static`/`resolve`，并含 en/zh key-parity 单测；`Cargo.toml` 增 `dozer-i18n` 依赖。**不反向依赖 dozer-app / daemon**——单面板 FakePanelHost 测试宿主即可渲染（计划 §Task 09 第 4 条）。
+- **Rust 迁移**：`src/adapter.rs`（`UsageNotice.text: LocalizedText`、`UsageOutbox::{push,push_plain}` 收 `LocalizedText`、新增 `PanelHeadKind{Content,AgentFilter}` 令 `PanelDisplay::panel_head(kind, title, actions)` 按语义而非标题字面选图标）、`src/state.rs`（加载失败改 keyed `LocalizedText`）、`src/view.rs`（标题/折叠展开/加载中/筛选等经 `i18n::t`，`t_static` 供只收 `&'static str` 的 `loading_hint`）、`src/lib.rs`（导出 `PanelHeadKind`）。
+- **原生调用方**：`app/view.rs`（传 `app.locale.active_locale()`）、`panel_host.rs`、`usage_probe/{scenarios,fake_panel_host}.rs`、`host_adapters/usage_panel.rs`（`panel_head` 按 kind 选图标、`notices_to_pending` 直传 `LocalizedText`）。
+- **Web 迁移**：`web/usage-content/src/i18n.ts`（新增；**经相对路径静态 import 共享 `web/shared/i18n` 解析器**，并静态打包同一份 `dozer.usage` JSON）、`main.tsx`（dispatch 时 `setLocale` + 响应式 locale 信号）、`theme.ts`（`SERIES_META.label`→`labelKey`）、`components/{App,EmptyStates,ProjectSummaryBoxes,TrendSection,TrendLineChart}.tsx`。数字/金额/聚合与数据排序未改。
+- 计划 Task 09 第 6 条"独立库自我携带资源"由本面板首次落地。
+
+### 验证命令与结果
+
+- `cargo build -p dozer-panel-usage -p dozer-app`：通过。
+- `cargo test -p dozer-panel-usage`：58 passed（含新增 `i18n.rs` 的 en/zh key-parity 等 4 条）。
+- `cargo test -p dozer-app`：1995 passed / 1 failed；唯一 failure 是**既有无关**的 `usage_probe::host::tests::host_site_citations_point_at_the_code_they_name`（在 HEAD `ec183de2` 的干净 worktree 上同样失败，与本次改动无关）。
+- `node --test src/*.test.ts`（usage-content）：18 passed（含新增 `i18n.test.ts`、改写 `theme.test.ts` 的双语/回退用例）；`npm run typecheck`、`npm run build`（重建 `assets/usage-content/usage-content.js`）：通过。
+- `cargo fmt --all -- --check`、`cargo clippy -p dozer-panel-usage -p dozer-app --all-targets`（无新增告警）、`python3 scripts/i18n/check_resources.py`、`bash scripts/check-log-scope.sh`、`python3 scripts/audit/check_panel_boundary.py`：全绿。
+- `python3 scripts/i18n/build_inventory.py`：Task 09 内 usage 项候选清零（`counts: {"excluded": 3122, "migrated": 0, "unresolved": 656}`；`unresolved by task: {"09": 123, "10": 418, "11": 115}`）。
+
+### 残留
+
+- Task 09 剩余 123 条全部属 **Code Health**，按面板后续单独提交。
+- 双语**运行期视觉核对**（切换后原生/Web 同步）随 Task 13 的 L07/L09/L10/L14 执行。
+
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |
 |---|---|---|

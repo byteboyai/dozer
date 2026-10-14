@@ -140,7 +140,12 @@ pub fn update(ws_state: &mut WorkspaceState, msg: Message) {
             ws_state.loading = false;
             ws_state.outbox.push(
                 NoticeLevel::Error,
-                format!("用量统计失败: {message}"),
+                dozer_model::LocalizedText::keyed(
+                    crate::i18n::USAGE_OWNER,
+                    "error.load_failed",
+                    "Failed to load usage: {message}",
+                )
+                .with_arg("message", message),
                 "usage-load",
             );
         }
@@ -350,7 +355,8 @@ mod tests {
         let notices = ws.take_outbox();
         assert_eq!(notices.len(), 1);
         assert_eq!(notices[0].level, NoticeLevel::Error);
-        assert!(notices[0].text.contains("daemon 断开"));
+        let text = crate::i18n::resolve(&notices[0].text, "zh-CN");
+        assert!(text.contains("daemon 断开"), "实际: {text}");
         assert_eq!(notices[0].key.as_deref(), Some("usage-load"));
         assert!(ws.take_outbox().is_empty(), "排空后不重复");
     }

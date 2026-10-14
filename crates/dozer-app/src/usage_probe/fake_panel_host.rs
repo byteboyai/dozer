@@ -66,6 +66,7 @@ impl crate::extensions::usage::adapter::PanelDisplay<crate::app::Message> for Fa
     }
     fn panel_head<'a>(
         &self,
+        _kind: crate::extensions::usage::adapter::PanelHeadKind,
         _title: &'a str,
         _actions: Option<
             Element<'a, crate::app::Message, iced_widget::Theme, iced_renderer::Renderer>,
@@ -103,8 +104,9 @@ mod tests {
     fn usage_views_build_against_the_fake_host() {
         let host = FakePanelHost::default();
         let ws = WorkspaceState::default();
-        let _content = usage::content_pane(&host, false, &ws, Length::Fill, Border::default());
-        let _list = usage::list_pane(&host, &ws, Length::Fill, Border::default());
+        let _content =
+            usage::content_pane(&host, false, &ws, Length::Fill, Border::default(), "en");
+        let _list = usage::list_pane(&host, &ws, Length::Fill, Border::default(), "en");
         assert_eq!(host.collapse_buttons_asked(), 1);
     }
 }

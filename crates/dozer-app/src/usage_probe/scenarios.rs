@@ -71,8 +71,15 @@ fn s1_activate_loads_rows_and_pushes_one_payload() {
 
     // 视图也能在假 host 上构造(规格 §1:面板只靠 PanelHost + PanelDisplay 契约就能画)。
     let fake = FakePanelHost::default();
-    let _c = usage::content_pane(&fake, false, &host.ws, Length::Fill, Border::default());
-    let _l = usage::list_pane(&fake, &host.ws, Length::Fill, Border::default());
+    let _c = usage::content_pane(
+        &fake,
+        false,
+        &host.ws,
+        Length::Fill,
+        Border::default(),
+        "en",
+    );
+    let _l = usage::list_pane(&fake, &host.ws, Length::Fill, Border::default(), "en");
     assert_eq!(fake.collapse_buttons_asked(), 1);
 
     // 这个场景里 host 替面板做的事,就是缺口报告“host 能力清单”的底稿。

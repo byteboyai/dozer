@@ -19,14 +19,24 @@ pub const HOST_OWNER: &str = "dozer.host";
 const HOST_EN: &str = include_str!("../locales/host/en.json");
 const HOST_ZH_CN: &str = include_str!("../locales/host/zh-CN.json");
 
-/// 面板 owner(spec §5):仍在 `dozer-app` 内的面板资源在 `locales/panels/<id>/`。
-/// 每项 `(owner_id, en, zh-CN)`。独立 crate 的面板(`dozer-panel-usage`)自带
-/// 资源,不经此处。
-const PANEL_OWNERS: &[(&str, &str, &str)] = &[(
-    "dozer.todo",
-    include_str!("../locales/panels/todo/en.json"),
-    include_str!("../locales/panels/todo/zh-CN.json"),
-)];
+/// 面板 owner(spec §5):仍在 `dozer-app` 内的面板资源在 `locales/panels/<id>/`,
+/// 独立 crate 的面板资源在其 crate 的 `locales/`。每项 `(owner_id, en, zh-CN)`。
+///
+/// Host 解析器需要聚合**所有可能经 Host 渲染的 owner**(如面板经 `outbox` 推来、
+/// 由 Host Toast 呈现的 `LocalizedText`),因此独立 crate 的 `dozer.usage` 也在此
+/// 登记;面板自身 view 则用其 crate 内 `i18n.rs` 的独立解析器(同名资源,不重复)。
+const PANEL_OWNERS: &[(&str, &str, &str)] = &[
+    (
+        "dozer.todo",
+        include_str!("../locales/panels/todo/en.json"),
+        include_str!("../locales/panels/todo/zh-CN.json"),
+    ),
+    (
+        "dozer.usage",
+        include_str!("../../dozer-panel-usage/locales/en.json"),
+        include_str!("../../dozer-panel-usage/locales/zh-CN.json"),
+    ),
+];
 
 fn build_host_resolver() -> Resolver {
     let mut entries: Vec<(String, String, String)> = vec![
@@ -190,6 +200,27 @@ mod tests {
         assert_eq!(
             host_text_args("time.minutes_ago", "{n} minutes ago", "en", &[("n", "3")]),
             "3 minutes ago"
+        );
+    }
+
+    #[test]
+    fn host_resolver_renders_independent_crate_panel_owner() {
+        // 独立 crate(dozer.usage)的风险:它经 `outbox` 推给 Host Toast 的
+        // `LocalizedText` 由 Host 解析器渲染,故其 owner 必须登记在此,
+        // 否则中文界面会回落到英文 fallback。
+        let t = dozer_model::LocalizedText::keyed(
+            "dozer.usage",
+            "error.load_failed",
+            "Failed to load usage: {message}",
+        )
+        .with_arg("message", "断线");
+        assert_eq!(
+            host_resolver().resolve(&t, "zh-CN").text,
+            "用量统计失败: 断线"
+        );
+        assert_eq!(
+            host_resolver().resolve(&t, "en").text,
+            "Failed to load usage: 断线"
         );
     }
 }

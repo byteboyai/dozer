@@ -17,6 +17,7 @@
 pub mod activation;
 pub mod adapter;
 pub mod aggregate;
+pub mod i18n;
 pub mod protocol;
 pub mod state;
 pub mod surface;
@@ -24,8 +25,8 @@ pub mod view;
 
 pub use activation::ActivationCtx;
 pub use adapter::{
-    GitStatsProvider, NoGitStats, NoticeLevel, PanelDisplay, ScriptDispatch, UsageNotice,
-    UsageOutbox,
+    GitStatsProvider, NoGitStats, NoticeLevel, PanelDisplay, PanelHeadKind, ScriptDispatch,
+    UsageNotice, UsageOutbox,
 };
 pub use aggregate::{
     ConversationUsage, DayAgentTotals, DaySeries, ProjectUsageTotals, agent_cache_token_share,

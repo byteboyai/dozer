@@ -20,7 +20,9 @@ export function agentColorVar(agent: AgentKind): string {
 }
 
 export interface SeriesMeta {
-  label: string;
+  // 资源 key(查 `dozer.usage` 语言包取展示文案);渲染端经 `seriesLabel` 解析,
+  // 不在模块级固定语言,见 i18n.ts。
+  labelKey: string;
   colorVar: string;
 }
 
@@ -29,19 +31,19 @@ export interface SeriesMeta {
 // Rust 侧 `TrendDay.values[i]` 一一对应,不能重排。
 export const SERIES_META: Record<TrendChartKind, SeriesMeta[]> = {
   session_round: [
-    { label: '会话', colorVar: '--cream' },
-    { label: '回合', colorVar: '--green' },
+    { labelKey: 'series.session', colorVar: '--cream' },
+    { labelKey: 'series.turns', colorVar: '--green' },
   ],
   io_tokens: [
-    { label: 'Input', colorVar: '--cyan' },
-    { label: 'Output', colorVar: '--purple' },
+    { labelKey: 'series.input', colorVar: '--cyan' },
+    { labelKey: 'series.output', colorVar: '--purple' },
   ],
   cache_tokens: [
-    { label: '读', colorVar: '--lime' },
-    { label: '写', colorVar: '--green' },
+    { labelKey: 'series.cache_read', colorVar: '--lime' },
+    { labelKey: 'series.cache_write', colorVar: '--green' },
   ],
   behavior: [
-    { label: '触达文件', colorVar: '--cream' },
-    { label: 'Git提交', colorVar: '--green' },
+    { labelKey: 'series.files_touched', colorVar: '--cream' },
+    { labelKey: 'series.git_commits', colorVar: '--green' },
   ],
 };

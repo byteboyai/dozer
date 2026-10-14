@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AGENT_COLOR_VAR, SERIES_META } from './theme.ts';
+import { setLocale, t } from './i18n.ts';
 
 test('AGENT_COLOR_VAR covers all eight AgentKind values', () => {
   const kinds = ['unknown', 'claude', 'codebuddy', 'opencode', 'codex', 'goose', 'aider', 'v8agent'] as const;
@@ -26,21 +27,37 @@ test('SERIES_META has exactly two series per known TrendChartKind', () => {
   }
 });
 
-test('SERIES_META labels match chart.rs series constructors', () => {
+test('SERIES_META labels resolve to chart.rs series constructors (en) and zh-CN', () => {
+  setLocale('en');
   assert.deepEqual(
-    SERIES_META.session_round.map((s) => s.label),
-    ['会话', '回合'],
+    SERIES_META.session_round.map((s) => t(s.labelKey, s.labelKey)),
+    ['Sessions', 'Turns'],
   );
   assert.deepEqual(
-    SERIES_META.io_tokens.map((s) => s.label),
+    SERIES_META.io_tokens.map((s) => t(s.labelKey, s.labelKey)),
     ['Input', 'Output'],
   );
   assert.deepEqual(
-    SERIES_META.cache_tokens.map((s) => s.label),
+    SERIES_META.cache_tokens.map((s) => t(s.labelKey, s.labelKey)),
+    ['Read', 'Write'],
+  );
+  assert.deepEqual(
+    SERIES_META.behavior.map((s) => t(s.labelKey, s.labelKey)),
+    ['Files touched', 'Git commits'],
+  );
+
+  setLocale('zh-CN');
+  assert.deepEqual(
+    SERIES_META.session_round.map((s) => t(s.labelKey, s.labelKey)),
+    ['会话', '回合'],
+  );
+  assert.deepEqual(
+    SERIES_META.cache_tokens.map((s) => t(s.labelKey, s.labelKey)),
     ['读', '写'],
   );
   assert.deepEqual(
-    SERIES_META.behavior.map((s) => s.label),
+    SERIES_META.behavior.map((s) => t(s.labelKey, s.labelKey)),
     ['触达文件', 'Git提交'],
   );
+  setLocale('en');
 });

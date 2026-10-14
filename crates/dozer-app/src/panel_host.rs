@@ -468,6 +468,7 @@ mod tests {
         }
         fn panel_head<'a>(
             &self,
+            _kind: dozer_panel_usage::adapter::PanelHeadKind,
             _title: &'a str,
             _actions: Option<
                 Element<'a, crate::app::Message, iced_widget::Theme, iced_renderer::Renderer>,
@@ -505,6 +506,7 @@ mod tests {
             &ws_state,
             Length::Fill,
             Border::default(),
+            "en",
         );
         assert_eq!(host.collapse_buttons_asked.get(), 1);
     }

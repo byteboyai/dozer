@@ -3,6 +3,7 @@ import { useState, useEffect } from 'preact/hooks';
 import './styles.css';
 import type { UsageViewPayload } from './types.ts';
 import { App } from './components/App.tsx';
+import { setLocale } from './i18n.ts';
 
 declare global {
   interface Window {
@@ -20,7 +21,7 @@ function applyThemeFromUrl() {
 
 function Root() {
   const [payload, setPayload] = useState<UsageViewPayload | null>(null);
-  const [locale, setLocale] = useState<string>('en');
+  const [locale, setLocaleState] = useState<string>('en');
 
   useEffect(() => {
     window.__dozer = {
@@ -31,10 +32,11 @@ function Root() {
             ui_locale?: string;
           };
           if (envelope.payload) setPayload(envelope.payload);
-          // spec §8:语言上下文缺省(旧 Host)按 `en` 处理。locale 是响应式信号,
-          // 供后续语言包接入;当前驱动 `document.documentElement.lang`。
+          // spec §8:语言上下文缺省(旧 Host)按 `en` 处理。locale 既是响应式
+          // 信号,也写入面板文案解析器,组件重渲染即换文案。
           const uiLocale = typeof envelope.ui_locale === 'string' ? envelope.ui_locale : 'en';
           setLocale(uiLocale);
+          setLocaleState(uiLocale);
           if (typeof document !== 'undefined' && document.documentElement) {
             document.documentElement.lang = uiLocale;
           }

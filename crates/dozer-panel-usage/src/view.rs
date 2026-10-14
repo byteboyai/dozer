@@ -5,8 +5,9 @@
 //! 全部经注入的 [`PanelDisplay`] 提供,库内不再引用产品的 `crate::workspace` /
 //! `crate::chrome` / `crate::app`。`byteui` 是公共 UI,库内直接用。
 
-use crate::adapter::PanelDisplay;
+use crate::adapter::{PanelDisplay, PanelHeadKind};
 use crate::aggregate::agents_present;
+use crate::i18n;
 use crate::state::{Message, WorkspaceState};
 use byteui::interaction::icons;
 use dozer_model::AgentKind;
@@ -24,6 +25,7 @@ pub fn content_pane<'a, M, D>(
     ws_state: &'a WorkspaceState,
     width: Length,
     outer: Border,
+    locale: &str,
 ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>
 where
     M: Clone + 'a,
@@ -35,12 +37,16 @@ where
     // 以便恢复)。
     let collapse = display.list_collapse_button(
         collapsed,
-        "收起列表",
-        "展开列表",
+        i18n::t("collapse", "Collapse list", locale),
+        i18n::t("expand", "Expand list", locale),
         display.toggle_list_collapse(),
         move |hovered| display.collapse_hover(hovered),
     );
-    let head = display.panel_head("用量", Some(collapse));
+    let head = display.panel_head(
+        PanelHeadKind::Content,
+        i18n::t_static("title", "Usage", locale),
+        Some(collapse),
+    );
     let mut content = column![head].spacing(12).padding(14).width(Length::Fill);
     if ws_state.loading() {
         // 统计中(`math_curve` 动画)时没有 webview 可挂,原生渲染那个动画——
@@ -48,7 +54,7 @@ where
         // `dozer://usage-content` webview(见 protocol.rs::current_view_payload)。
         content = content.push(byteui::feedback::math_curve::loading_hint(
             byteui::feedback::math_curve::Curve::RoseThree,
-            "统计中…",
+            i18n::t_static("loading", "Calculating…", locale),
             64.0,
         ));
     }
@@ -77,6 +83,7 @@ pub fn list_pane<'a, M, D>(
     ws_state: &'a WorkspaceState,
     width: Length,
     outer: Border,
+    locale: &str,
 ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>
 where
     M: Clone + 'a,
@@ -89,6 +96,7 @@ where
         ws_state.agent_filter(),
         width,
         outer,
+        locale,
     )
 }
 
@@ -103,17 +111,21 @@ fn agent_filter_sidebar<'a, M, D>(
     current: Option<AgentKind>,
     width: Length,
     outer: Border,
+    locale: &str,
 ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>
 where
     M: Clone + 'a,
     D: PanelDisplay<M>,
 {
-    let header = container(display.panel_head("Agent", None)).padding(iced_widget::core::Padding {
-        top: 12.0,
-        right: 12.0,
-        bottom: 8.0,
-        left: 12.0,
-    });
+    // 筛选栏头部固定 "Agent"(品牌术语,spec §6.1 豁免,不翻译),与迁移前一致。
+    let header = container(display.panel_head(PanelHeadKind::AgentFilter, "Agent", None)).padding(
+        iced_widget::core::Padding {
+            top: 12.0,
+            right: 12.0,
+            bottom: 8.0,
+            left: 12.0,
+        },
+    );
 
     let mut nav = column![].spacing(4).padding(iced_widget::core::Padding {
         top: 0.0,
@@ -125,7 +137,7 @@ where
         display,
         None,
         current,
-        "全部agent".to_string(),
+        i18n::t("filter.all", "All agents", locale),
         rows.len(),
         // "全部agent" 用公共 `BarChart3`,颜色按选中态在金/暗之间切——这部分
         // 不是产品专属语义,库内直接用 byteui。

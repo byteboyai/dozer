@@ -2,16 +2,20 @@ import type { TrendChart, TokenTrendSection as TokenTrendSectionType } from '../
 import { formatCount } from '../format.ts';
 import { SERIES_META } from '../theme.ts';
 import { TrendLineChart } from './TrendLineChart.tsx';
+import { t } from '../i18n.ts';
 
 function InlineLegend({ chartKind }: { chartKind: TrendChart['kind'] }) {
   return (
     <div class="usage-inline-legend">
-      {SERIES_META[chartKind].map((s) => (
-        <div class="usage-legend-row" key={s.label}>
-          <span class="usage-legend-dot" style={{ background: `var(${s.colorVar})` }} />
-          <span class="usage-legend-text">{s.label}</span>
-        </div>
-      ))}
+      {SERIES_META[chartKind].map((s) => {
+        const label = t(s.labelKey, s.labelKey, undefined);
+        return (
+          <div class="usage-legend-row" key={s.labelKey}>
+            <span class="usage-legend-dot" style={{ background: `var(${s.colorVar})` }} />
+            <span class="usage-legend-text">{label}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -34,7 +38,7 @@ export function TrendSection({ title, chart }: { title: string; chart: TrendChar
 export function TokenTrendSectionView({ section }: { section: TokenTrendSectionType }) {
   return (
     <div class="usage-section">
-      <div class="usage-section-head">Token 趋势</div>
+      <div class="usage-section-head">{t('section.token_trend', 'Token trend')}</div>
       {section.io && (
         <>
           <div class="usage-section-head-row">

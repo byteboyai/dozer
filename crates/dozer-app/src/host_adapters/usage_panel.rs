@@ -19,7 +19,9 @@
 use crate::app::{HoverId, Message as AppMessage, PanelKind};
 use byteui::interaction::icons;
 use dozer_model::AgentKind;
-use dozer_panel_usage::adapter::{GitStatsProvider, NoticeLevel, PanelDisplay, UsageNotice};
+use dozer_panel_usage::adapter::{
+    GitStatsProvider, NoticeLevel, PanelDisplay, PanelHeadKind, UsageNotice,
+};
 use dozer_panel_usage::{WorkspaceState, activation, on_activate};
 use iced_widget::core::{Color, Element};
 
@@ -48,14 +50,16 @@ impl PanelDisplay<AppMessage> for crate::app::App {
 
     fn panel_head<'a>(
         &self,
+        kind: PanelHeadKind,
         title: &'a str,
         actions: Option<Element<'a, AppMessage, iced_widget::Theme, iced_renderer::Renderer>>,
     ) -> Element<'a, AppMessage, iced_widget::Theme, iced_renderer::Renderer> {
-        // 库只按标题调本方法,图标按标题选:内容侧"用量"用 `BarChart3`,筛选栏
-        // "Agent"用 `Bot`——与抽取前 `view.rs`/`mod.rs` 的两处头部逐字一致。
-        let icon = match title {
-            "Agent" => icons::IconKind::Bot,
-            _ => icons::IconKind::BarChart3,
+        // 图标按稳定身份选(不解析标题——i18n 后标题会变):内容侧"用量"用
+        // `BarChart3`,筛选栏"Agent"用 `Bot`——与抽取前 `view.rs`/`mod.rs` 的
+        // 两处头部逐字一致。
+        let icon = match kind {
+            PanelHeadKind::AgentFilter => icons::IconKind::Bot,
+            PanelHeadKind::Content => icons::IconKind::BarChart3,
         };
         crate::chrome::homespace::home_panel_head_with_actions(icon, title, actions)
     }
@@ -130,7 +134,7 @@ pub fn notices_to_pending(notices: Vec<UsageNotice>) -> Vec<crate::extensions::t
             crate::extensions::toast::Pending {
                 scope: LOG,
                 level,
-                text: crate::extensions::toast::literal(notice.text),
+                text: notice.text,
                 key: notice.key,
             }
         })

@@ -2,6 +2,7 @@ import type { TrendChart } from '../types.ts';
 import { formatCount } from '../format.ts';
 import { SERIES_META } from '../theme.ts';
 import { GridLines, yFor, GRID_CANVAS_HEIGHT, GRID_LABEL_GUTTER } from './GridLines.tsx';
+import { t } from '../i18n.ts';
 
 export function TrendLineChart({ chart }: { chart: TrendChart }) {
   const days = chart.days;
@@ -21,7 +22,7 @@ export function TrendLineChart({ chart }: { chart: TrendChart }) {
         >
           {series.map((s, idx) => (
             <polyline
-              key={s.label}
+              key={s.labelKey}
               points={days
                 .map((d, i) => `${(100 * (i + 0.5)) / n},${yFor(d.values[idx], maxTotal)}`)
                 .join(' ')}
@@ -35,7 +36,7 @@ export function TrendLineChart({ chart }: { chart: TrendChart }) {
         {series.flatMap((s, idx) =>
           days.map((d, i) => (
             <div
-              key={`${s.label}-${i}`}
+              key={`${s.labelKey}-${i}`}
               class="usage-trend-dot"
               style={{
                 left: `${((i + 0.5) / n) * 100}%`,
@@ -54,10 +55,10 @@ export function TrendLineChart({ chart }: { chart: TrendChart }) {
                 {series.map(
                   (s, idx) =>
                     d.values[idx] > 0 && (
-                      <div class="usage-legend-row" key={s.label}>
+                      <div class="usage-legend-row" key={s.labelKey}>
                         <span class="usage-legend-dot" style={{ background: `var(${s.colorVar})` }} />
                         <span class="usage-legend-text">
-                          {s.label}: {formatCount(d.values[idx])}
+                          {t(s.labelKey, s.labelKey)}: {formatCount(d.values[idx])}
                         </span>
                       </div>
                     ),

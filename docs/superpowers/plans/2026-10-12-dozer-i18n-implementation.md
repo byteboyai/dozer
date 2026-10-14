@@ -186,7 +186,8 @@
 - [ ] 每个面板单独完成“盘点→中文抽取→英文补齐→调用替换→双语测试→清单关闭”，不要一次巨型替换后才测试。
 - [x] Todo：状态/筛选/分类操作/详情/拖拽提示/确认、WebView 空态及菜单；保留任务文本与用户分类名。
   - 本轮完成 Rust（`extensions/todo/{view,update,protocol}.rs`、`platform/{confirm,todo_detail}_overlay.rs`）+ Web（`web/todo-content/src/{i18n.ts,statusMeta.ts,components/*}`），owner `dozer.todo`，资源 `crates/dozer-app/locales/panels/todo/{en,zh-CN}.json`。Webview 加载超时是通用宿主文案，落 `dozer.host` 的 `webview.load_timeout`。新建分类默认名 `新分类` 按“保留用户分类名”豁免（`NON_UI_STRINGS`）。inventory Task 09 todo 项已清零。
-- [ ] Usage：原生加载/错误状态、统计单位、图例、tooltip、空态及 Web 图表；数字/金额/聚合与数据排序不变。
+- [x] Usage：原生加载/错误状态、统计单位、图例、tooltip、空态及 Web 图表；数字/金额/聚合与数据排序不变。
+  - 本轮完成独立 crate 自带资源（owner `dozer.usage`，`crates/dozer-panel-usage/locales/{en,zh-CN}.json`）与 `src/i18n.rs`（复用中性 `dozer-i18n` 解析器，不反向依赖 dozer-app）；原生 `PanelHeadKind{Content,AgentFilter}` 令图标按语义选而非标题字面；Web 侧静态打包同一份 JSON（经 `web/shared/i18n` 相对 import）。数字/聚合/排序未改动。inventory Task 09 usage 项已清零。
 - [ ] Code Health：原生壳、分类/严重度/扫描状态、`view_model.rs`/`protocol.rs` 已拼中文的计数及详情；追加语义字段并由渲染端翻译，保留旧字段兼容。
 - [ ] 独立 Usage 库自行携带资源，locale 由 Host 注入；单面板测试宿主不需要依赖 dozer-app/daemon 才能渲染。
 - [ ] 更新 UI fixture/渲染 smoke 测试，中文用户内容 fixture 保持不变；验证切换后的状态保留。

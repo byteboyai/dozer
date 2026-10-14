@@ -2139,6 +2139,7 @@ dependencies = [
  "bytehost-core",
  "bytehost-desktop",
  "byteui",
+ "dozer-i18n",
  "dozer-model",
  "dozer-services",
  "iced_renderer",

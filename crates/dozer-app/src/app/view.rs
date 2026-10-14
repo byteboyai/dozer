@@ -981,6 +981,7 @@ pub(crate) fn panel_body<'a>(
                     &ws.usage,
                     Length::Fill,
                     zone_pane_border(zone, ac),
+                    app.locale.active_locale(),
                 );
             }
             if app.list_collapsed(PanelKind::Usage) {
@@ -990,6 +991,7 @@ pub(crate) fn panel_body<'a>(
                     &ws.usage,
                     Length::Fill,
                     zone_pane_border(zone, ac),
+                    app.locale.active_locale(),
                 );
             }
             let (list_portion, content_portion) = split_portions(app.dims.usage_split);
@@ -999,6 +1001,7 @@ pub(crate) fn panel_body<'a>(
                 &ws.usage,
                 Length::FillPortion(content_portion),
                 zone_pane_border(zone, lc),
+                app.locale.active_locale(),
             );
 
             let list_pane = usage::list_pane(
@@ -1006,6 +1009,7 @@ pub(crate) fn panel_body<'a>(
                 &ws.usage,
                 Length::FillPortion(list_portion),
                 zone_pane_border(zone, rc),
+                app.locale.active_locale(),
             );
 
             let content_bg = byteui::theme::color::current().panel;

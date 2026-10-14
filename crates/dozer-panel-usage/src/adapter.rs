@@ -9,6 +9,7 @@
 //! - 展示语义(agent 图标/颜色、面板头、列表折叠按钮等)由产品的 [`PanelDisplay`] 提供。
 
 use dozer_model::AgentKind;
+use dozer_model::LocalizedText;
 use iced_widget::core::{Color, Element};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -45,11 +46,12 @@ pub enum NoticeLevel {
 }
 
 /// 一条待发提示。产品排空后按自己的方式呈现(如转成 `toast::Pending` 并写入
-/// 自己的日志来源)。
+/// 自己的日志来源)。文本是 `LocalizedText`:locale 由产品在渲染时注入,库内
+/// 只带 owner/key/fallback(库自带 `dozer.usage` 资源,见 [`crate::i18n`])。
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageNotice {
     pub level: NoticeLevel,
-    pub text: String,
+    pub text: LocalizedText,
     /// 去重键:同 key 再推 = 刷新文本/级别,不新增。
     pub key: Option<String>,
 }
@@ -62,18 +64,18 @@ pub struct UsageOutbox {
 }
 
 impl UsageOutbox {
-    pub fn push(&mut self, level: NoticeLevel, text: impl Into<String>, key: impl Into<String>) {
+    pub fn push(&mut self, level: NoticeLevel, text: LocalizedText, key: impl Into<String>) {
         self.items.push(UsageNotice {
             level,
-            text: text.into(),
+            text,
             key: Some(key.into()),
         });
     }
 
-    pub fn push_plain(&mut self, level: NoticeLevel, text: impl Into<String>) {
+    pub fn push_plain(&mut self, level: NoticeLevel, text: LocalizedText) {
         self.items.push(UsageNotice {
             level,
-            text: text.into(),
+            text,
             key: None,
         });
     }
@@ -87,6 +89,15 @@ impl UsageOutbox {
 /// `preview::dispatch_script`;其他产品注入自己的等价实现。返回 `String` 以便
 /// `surface.rs` 在纯函数里构造(实际下发仍由产品完成)。
 pub type ScriptDispatch = fn(&str) -> String;
+
+/// 面板头的稳定身份(与展示标题解耦):产品据此选图标,不解析标题字面量。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelHeadKind {
+    /// 内容侧头部("用量")。
+    Content,
+    /// agent 筛选栏头部("Agent")。
+    AgentFilter,
+}
 
 /// 产品展示适配:面板 view 需要的产品专属语义(agent 图标/颜色、面板头、
 /// 列表折叠按钮、悬停事件映射)。泛型 `M` 是产品的面板 `Message` 类型。
@@ -108,9 +119,12 @@ pub trait PanelDisplay<M> {
         agent: AgentKind,
         color: Color,
     ) -> Element<'static, M, iced_widget::Theme, iced_renderer::Renderer>;
-    /// 面板头(图标 + 标题 + 分割线,右侧可选操作元素)。
+    /// 面板头(图标 + 标题 + 分割线,右侧可选操作元素)。`kind` 是稳定身份
+    /// (选中图标用),`title` 是已按当前 locale 解析好的展示标题——两者分开,
+    /// 避免产品侧靠匹配标题字面量选图标(i18n 后标题会变)。
     fn panel_head<'a>(
         &self,
+        kind: PanelHeadKind,
         title: &'a str,
         actions: Option<Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>>,
     ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>;
