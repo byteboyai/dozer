@@ -56,11 +56,17 @@ pub(crate) fn persist_sources(ws_state: &mut WorkspaceState, repo_path: &Path) {
         ws_state.outbox.push(
             LOG,
             crate::extensions::toast::Level::Error,
-            crate::extensions::toast::literal(format!("数据库连接配置未能保存到磁盘: {e}")),
+            crate::i18n::panel_keyed_args(
+                DATABASE_OWNER,
+                "toast.sources_save_failed",
+                "Failed to save database connection settings to disk: {error}",
+                &[("error", &e.to_string())],
+            ),
         );
     }
 }
 
+#[allow(clippy::too_many_arguments)] // 计划给定签名:面板状态/宿主状态/消息/项目 id/仓库路径/运行时 + emit + locale,边界合理
 pub fn update(
     ws_state: &mut WorkspaceState,
     app_state: &mut AppState,
@@ -69,6 +75,7 @@ pub fn update(
     repo_path: &Path,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + Clone + 'static,
+    locale: &str,
 ) {
     match msg {
         // 这两个溢出开关由 `app.rs` 主级 `update` 拦截(需要 `App::last_cursor`),
@@ -177,7 +184,10 @@ pub fn update(
                 .await;
                 let result = match result {
                     Ok(r) => r,
-                    Err(_) => Err("连接超时(5秒)".to_string()),
+                    Err(_) => Err(keyed(
+                        "error.connect_timeout_5s",
+                        "Connection timed out (5s)",
+                    )),
                 };
                 emit(Message::DraftTestConnectionResult(result));
             });
@@ -218,7 +228,10 @@ pub fn update(
                 .await;
                 let result = match result {
                     Ok(r) => r,
-                    Err(_) => Err("连接超时(5秒)".to_string()),
+                    Err(_) => Err(keyed(
+                        "error.connect_timeout_5s",
+                        "Connection timed out (5s)",
+                    )),
                 };
                 emit(Message::TestConnectionResult(project_id, id, result));
             });
@@ -446,11 +459,11 @@ pub fn update(
         }
         Message::SelectTab(idx) => {
             ws_state.content.select(idx);
-            reveal_tab_widths(ws_state, idx + 1);
+            reveal_tab_widths(ws_state, idx + 1, locale);
         }
         Message::SelectBlankTab => {
             ws_state.content.select_blank();
-            reveal_tab_widths(ws_state, 0);
+            reveal_tab_widths(ws_state, 0, locale);
         }
         Message::CloseTab(idx) => ws_state.content.close(idx),
         Message::BrowseWhereChanged(tab_id, v) => {
@@ -648,7 +661,10 @@ pub(crate) fn dispatch_browse_run(
 /// `Message::BrowseResult` 分支里做完才会调到这个函数,这里只管把结果写
 /// 进状态。模块私有——`app.rs`(Task 6)不直接调它,而是把消息重新塞回
 /// `database::update()`,由 `update()` 内部调这个函数。
-pub(crate) fn apply_browse_result(b: &mut BrowseState, result: Result<BrowsePage, String>) {
+pub(crate) fn apply_browse_result(
+    b: &mut BrowseState,
+    result: Result<BrowsePage, dozer_model::LocalizedText>,
+) {
     b.loading = false;
     match result {
         Ok(page) => {
@@ -661,7 +677,10 @@ pub(crate) fn apply_browse_result(b: &mut BrowseState, result: Result<BrowsePage
 }
 
 /// `QueryResult` 落地,同上——模块私有,理由同 `apply_browse_result`。
-pub(crate) fn apply_query_result(q: &mut QueryState, result: Result<QueryOutcome, String>) {
+pub(crate) fn apply_query_result(
+    q: &mut QueryState,
+    result: Result<QueryOutcome, dozer_model::LocalizedText>,
+) {
     q.running = false;
     match result {
         Ok(outcome) => {
@@ -839,28 +858,23 @@ pub(crate) fn inject_password_into_uri(uri: &str, password: Option<&str>) -> Str
 pub(crate) async fn test_connection(
     source: DataSource,
     password: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), dozer_model::LocalizedText> {
     match source.driver {
         DriverKind::Postgres | DriverKind::MySQL | DriverKind::Sqlite => {
             let url = build_sql_url(&source, password.as_deref());
-            let pool = sqlx::AnyPool::connect(&url)
-                .await
-                .map_err(|e| e.to_string())?;
+            let pool = sqlx::AnyPool::connect(&url).await.map_err(db_error)?;
             sqlx::query("SELECT 1")
                 .execute(&pool)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(db_error)?;
             Ok(())
         }
         DriverKind::MongoDB => {
             let url = build_mongo_url(&source, password.as_deref());
             let client = mongodb::Client::with_uri_str(&url)
                 .await
-                .map_err(|e| e.to_string())?;
-            client
-                .list_database_names()
-                .await
-                .map_err(|e| e.to_string())?;
+                .map_err(db_error)?;
+            client.list_database_names().await.map_err(db_error)?;
             Ok(())
         }
     }

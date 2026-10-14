@@ -119,7 +119,8 @@ impl DatabaseDriversOverlay {
             &self.window,
             self.cursor,
             backdrop_card(
-                database::database_drivers_card(&app.database).map(Message::Database),
+                database::database_drivers_card(&app.database, app.locale.active_locale())
+                    .map(Message::Database),
                 card_logical_size(&self.window),
             ),
         );
@@ -147,7 +148,8 @@ impl DatabaseDriversOverlay {
             &self.window,
             self.cursor,
             backdrop_card(
-                database::database_drivers_card(&app.database).map(Message::Database),
+                database::database_drivers_card(&app.database, app.locale.active_locale())
+                    .map(Message::Database),
                 card_logical_size(&self.window),
             ),
             iced_event,

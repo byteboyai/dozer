@@ -1896,7 +1896,9 @@ impl App {
                     let last_cursor = self.last_cursor;
                     let items = self
                         .active_workspace()
-                        .map(|ws| database::tab_overflow_items(&ws.database))
+                        .map(|ws| {
+                            database::tab_overflow_items(&ws.database, self.locale.active_locale())
+                        })
                         .unwrap_or_default();
                     if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
                         self.update(Message::Database(msg));
@@ -4528,8 +4530,9 @@ impl App {
         &mut self,
         project_id: i64,
         source_id: String,
-        result: Result<(), String>,
+        result: Result<(), dozer_model::LocalizedText>,
     ) {
+        let locale = self.locale.active_locale().to_string();
         let app_db = &mut self.database;
         let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
             return;
@@ -4551,6 +4554,7 @@ impl App {
             &repo_path,
             &handle,
             emit,
+            &locale,
         );
     }
 
@@ -4559,8 +4563,9 @@ impl App {
         project_id: i64,
         tab_id: usize,
         run_seq: u64,
-        result: Result<database::BrowsePage, String>,
+        result: Result<database::BrowsePage, dozer_model::LocalizedText>,
     ) {
+        let locale = self.locale.active_locale().to_string();
         let app_db = &mut self.database;
         let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
             return;
@@ -4582,6 +4587,7 @@ impl App {
             &repo_path,
             &handle,
             emit,
+            &locale,
         );
     }
 
@@ -4590,8 +4596,9 @@ impl App {
         project_id: i64,
         tab_id: usize,
         run_seq: u64,
-        result: Result<database::QueryOutcome, String>,
+        result: Result<database::QueryOutcome, dozer_model::LocalizedText>,
     ) {
+        let locale = self.locale.active_locale().to_string();
         let app_db = &mut self.database;
         let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
             return;
@@ -4613,6 +4620,7 @@ impl App {
             &repo_path,
             &handle,
             emit,
+            &locale,
         );
     }
 
@@ -4620,8 +4628,9 @@ impl App {
         &mut self,
         project_id: i64,
         source_id: String,
-        result: Result<Vec<database::TableRef>, String>,
+        result: Result<Vec<database::TableRef>, dozer_model::LocalizedText>,
     ) {
+        let locale = self.locale.active_locale().to_string();
         let app_db = &mut self.database;
         let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
             return;
@@ -4643,6 +4652,7 @@ impl App {
             &repo_path,
             &handle,
             emit,
+            &locale,
         );
     }
 
@@ -4652,8 +4662,9 @@ impl App {
         source_id: String,
         schema: Option<String>,
         table: String,
-        result: Result<Vec<database::ColumnInfo>, String>,
+        result: Result<Vec<database::ColumnInfo>, dozer_model::LocalizedText>,
     ) {
+        let locale = self.locale.active_locale().to_string();
         let app_db = &mut self.database;
         let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
             return;
@@ -4681,6 +4692,7 @@ impl App {
             &repo_path,
             &handle,
             emit,
+            &locale,
         );
     }
 
@@ -4701,6 +4713,7 @@ impl App {
         let Some(project_id) = self.active_project_id else {
             return;
         };
+        let locale = self.locale.active_locale().to_string();
         let app_db = &mut self.database;
         let Some(ws) = loaded_workspace_mut(&mut self.projects, project_id) else {
             return;
@@ -4722,6 +4735,7 @@ impl App {
             &repo_path,
             &handle,
             emit,
+            &locale,
         );
     }
 

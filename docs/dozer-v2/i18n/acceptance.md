@@ -480,6 +480,32 @@ python3 scripts/i18n/build_inventory.py
 - Task 10 其余面板（database/project/group_chat）按面板逐个提交。
 - 双语运行期视觉核对随 Task 13 执行。
 
+## Task 10 验收（database 面板，按面板拆分提交）
+
+### 交付内容
+
+- 资源：`crates/dozer-app/locales/panels/database/{en,zh-CN}.json`（owner `dozer.database`；`panel.title`/`drivers.*`/`source.*`/`form.*`/`list.*`/`footer.*`/`delete.*`/`tab.*`/`content.*`/`browse.*`/`query.*`/`tree.*`/`driver.disabled`/`error.*`/`toast.*`，共 66 key）。
+- `extensions/database/mod.rs`：`DATABASE_OWNER` + 本地 `t()`/`t_args()`/`keyed`/`keyed_args`/`db_error`/`loading_hint_localized`（`byteui` 的 `loading_hint` label 是 `&'static str`，故复刻其结构并穿 `locale`）。
+- `extensions/database/state.rs`：`TestStatus::Err`/`ColumnLoad::Failed`/`SchemaState.tables_error`/`SchemaRowKind::ColumnsFailed` 改存 `LocalizedText`；驱动保存失败 Toast 改 `crate::i18n::panel_keyed_args`。
+- `extensions/database/load.rs`：加载器返回 `LocalizedText`；连接/超时错误走 `db_error` 与 `error.*` keyed（`load_timeout_5s`/`connect_timeout_5s`/`query_timeout_15s`/`query_timeout_30s` 等）。
+- `extensions/database/update.rs`：`test_connection`/`apply_browse_result`/`apply_query_result` 结果类型改 `LocalizedText`；源保存失败 Toast 改 keyed；`update` 增 `locale` 形参（`#[allow(clippy::too_many_arguments)]`，与 `files/update.rs` 同款）。
+- `extensions/database/view.rs`：全部 UI 中文改 `t`/`t_args`；`database_footer_bar`/`database_drivers_card`/`source_tree_node`/`database_source_card`/`content_pane`/`tab_overflow_items`/`tab_overflow_popup`/`browse_view`/`query_view`/`schema_tree_row`/`delete_confirm_spec` 穿 `locale`；`BrowseState.error`/`QueryState.error` 改 `Option<LocalizedText>`；未支持类型的单元格值保留英文裸串（后台产文本无 locale，见资源规则）。
+- `app/{view,update}.rs`：6 处 `database::update` 调用与 database 视图入口传 `app.locale.active_locale()`；辅助方法结果参数改 `LocalizedText`；`app/update.rs` 行号迁移致 `usage_probe/host.rs` 引用 5437→5451。
+- `platform/{confirm_overlay,database_drivers_overlay,database_source_overlay}.rs`：`delete_confirm_spec`/`card` 传 `locale`。
+- `i18n.rs`：`PANEL_OWNERS` 增 `dozer.database`。
+
+### 验证命令与结果
+
+- `cargo build -p dozer-app`：通过。
+- `cargo test -p dozer-app`：**2001 passed / 0 failed**（database 用例断言改按 `render_localized(.., "zh-CN")` 与英文 fallback 校验；persist 失败 Toast 断言改英文子串）。
+- `cargo fmt --all -- --check`、`cargo clippy -p dozer-app --all-targets`（database 路径仅 `update` 一处 `too_many_arguments`，已 `#[allow]`）、`python3 scripts/i18n/check_resources.py`（**11 个 owner 目录**）、`bash scripts/check-log-scope.sh`、`python3 scripts/audit/check_panel_boundary.py`（213 refs / 5 files）：全绿。
+- `python3 scripts/i18n/build_inventory.py`：`counts: {"excluded": 3093, "migrated": 0, "unresolved": 293}`；`unresolved by task: {"10": 171, "11": 122}`；`dozer.database` **0 条**。
+
+### 残留
+
+- Task 10 其余面板（project/group_chat）按面板逐个提交。
+- 双语运行期视觉核对随 Task 13 执行。
+
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |
 |---|---|---|

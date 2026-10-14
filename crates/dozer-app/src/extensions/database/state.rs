@@ -74,7 +74,7 @@ pub enum TestStatus {
     Idle,
     Testing,
     Ok,
-    Err(String),
+    Err(dozer_model::LocalizedText),
 }
 
 /// schema 树里的一个表/视图(阶段 2)。
@@ -99,7 +99,7 @@ pub struct ColumnInfo {
 pub enum ColumnLoad {
     Loading,
     Loaded(Vec<ColumnInfo>),
-    Failed(String),
+    Failed(dozer_model::LocalizedText),
 }
 
 /// 单个数据源的 schema 树状态(**纯内存,不持久化**——schema 是即时快照,
@@ -107,7 +107,7 @@ pub enum ColumnLoad {
 #[derive(Debug, Default)]
 pub struct SchemaState {
     pub(crate) loading_tables: bool,
-    pub(crate) tables_error: Option<String>,
+    pub(crate) tables_error: Option<dozer_model::LocalizedText>,
     /// 按 (schema, name) 有序(SQL 层 ORDER BY,客户端不再排序)。
     pub(crate) tables: Vec<TableRef>,
     /// Postgres schema 节点展开集。
@@ -123,8 +123,8 @@ impl SchemaState {
         self.loading_tables
     }
 
-    pub fn tables_error(&self) -> Option<&str> {
-        self.tables_error.as_deref()
+    pub fn tables_error(&self) -> Option<&dozer_model::LocalizedText> {
+        self.tables_error.as_ref()
     }
 
     pub fn tables(&self) -> &[TableRef] {
@@ -151,7 +151,7 @@ pub enum SchemaRowKind<'a> {
     Table(&'a TableRef),
     Column(&'a ColumnInfo),
     ColumnsLoading,
-    ColumnsFailed(&'a str),
+    ColumnsFailed(&'a dozer_model::LocalizedText),
 }
 
 /// 把 `SchemaState` 摊平成可见行(纯函数,单测友好;渲染侧单层循环)。
@@ -286,7 +286,12 @@ impl AppState {
             self.outbox.push(
                 LOG,
                 crate::extensions::toast::Level::Error,
-                crate::extensions::toast::literal(format!("数据库驱动配置未能保存到磁盘: {e}")),
+                crate::i18n::panel_keyed_args(
+                    DATABASE_OWNER,
+                    "toast.drivers_save_failed",
+                    "Failed to save database driver settings to disk: {error}",
+                    &[("error", &e.to_string())],
+                ),
             );
         }
     }
@@ -508,7 +513,7 @@ pub enum Message {
     /// 字段(只有表单开着才会渲染),不会串到别的数据源卡片上;真正的防线
     /// 是 `AddSourceStart`/`EditSourceStart` 每次打开表单都重置这个字段,
     /// 不会把上一次(甚至上一个项目)的残留结果带出来。
-    DraftTestConnectionResult(Result<(), String>),
+    DraftTestConnectionResult(Result<(), dozer_model::LocalizedText>),
     /// 右键菜单点"删除":只记待确认态,弹出确认对话框,不立即删
     /// (同 `ssh::Message::DeleteHostRequest`)。
     DeleteSourceRequest(String),
@@ -524,7 +529,7 @@ pub enum Message {
     /// 回传"一节,不能只带 `source_id`,用户可能在等待期间切走了项目
     /// 页签,`App::update` 必须按这里的 `project_id` 而不是"当前聚焦
     /// 项目"路由。
-    TestConnectionResult(i64, String, Result<(), String>),
+    TestConnectionResult(i64, String, Result<(), dozer_model::LocalizedText>),
     /// 数据源树 header 行左键点(chevron/名字):展开/收起该源的 schema 树。
     /// 首次展开且从未加载过才自动发起表加载(有缓存/有错误保留现状,
     /// 错误态由右键菜单"刷新"触发)。允许多个源同时展开。
@@ -553,14 +558,18 @@ pub enum Message {
     },
     /// 表清单异步结果。**带 `project_id`**——结果可能晚于用户切走项目页签,
     /// 必须按自带 id 路由(同 `TestConnectionResult` 的口径)。
-    TablesLoaded(i64, String, Result<Vec<TableRef>, String>),
+    TablesLoaded(
+        i64,
+        String,
+        Result<Vec<TableRef>, dozer_model::LocalizedText>,
+    ),
     /// 列加载异步结果,带 `project_id`/`source_id` 双路由。
     ColumnsLoaded {
         project_id: i64,
         source_id: String,
         schema: Option<String>,
         table: String,
-        result: Result<Vec<ColumnInfo>, String>,
+        result: Result<Vec<ColumnInfo>, dozer_model::LocalizedText>,
     },
 
     // ---- 右侧内容窗格:表/集合/查询 tab 的开关 ----
@@ -606,7 +615,12 @@ pub enum Message {
     /// 只查 `loading` 布尔标志分辨不出"哪一轮"结果,连续两次改 WHERE 会让
     /// 旧结果覆盖新结果(设计文档"架构与数据流 §7"的过期防线,数字比对是
     /// 必须的,不能简化成布尔)。
-    BrowseResult(i64, usize, u64, Result<BrowsePage, String>),
+    BrowseResult(
+        i64,
+        usize,
+        u64,
+        Result<BrowsePage, dozer_model::LocalizedText>,
+    ),
 
     // ---- SQL 查询控制台 ----
     /// 编辑器动作(`text_editor::Action`),`update()` 只管
@@ -614,5 +628,10 @@ pub enum Message {
     QueryTextAction(usize, iced_widget::text_editor::Action),
     QueryRun(usize),
     /// 第三个字段同 `BrowseResult`,是 `QueryState::begin_run()` 的 `run_seq`。
-    QueryResult(i64, usize, u64, Result<QueryOutcome, String>),
+    QueryResult(
+        i64,
+        usize,
+        u64,
+        Result<QueryOutcome, dozer_model::LocalizedText>,
+    ),
 }

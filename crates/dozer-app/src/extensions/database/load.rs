@@ -63,25 +63,26 @@ pub(crate) async fn load_tables(
     kind: DriverKind,
     url: &str,
     mongo_db: Option<&str>,
-) -> Result<Vec<TableRef>, String> {
+) -> Result<Vec<TableRef>, dozer_model::LocalizedText> {
     if kind == DriverKind::MongoDB {
         let Some(db_name) = mongo_db.filter(|s| !s.is_empty()) else {
-            return Err("请在数据源配置里填写数据库名后再浏览集合".to_string());
+            return Err(keyed(
+                "error.mongo_db_required",
+                "Enter a database name in the data source settings before browsing collections.",
+            ));
         };
         return load_mongo_collections(url, db_name).await;
     }
     let work = async {
-        let pool = sqlx::AnyPool::connect(url)
-            .await
-            .map_err(|e| e.to_string())?;
+        let pool = sqlx::AnyPool::connect(url).await.map_err(db_error)?;
         let out = async {
             let sql = tables_sql(kind);
             if kind == DriverKind::Postgres {
                 let rows: Vec<(String, String, String)> = sqlx::query_as(sql)
                     .fetch_all(&pool)
                     .await
-                    .map_err(|e| e.to_string())?;
-                Ok::<_, String>(
+                    .map_err(db_error)?;
+                Ok::<_, dozer_model::LocalizedText>(
                     rows.into_iter()
                         .map(|(schema, name, table_type)| TableRef {
                             schema: Some(schema),
@@ -94,7 +95,7 @@ pub(crate) async fn load_tables(
                 let rows: Vec<(String, String)> = sqlx::query_as(sql)
                     .fetch_all(&pool)
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(db_error)?;
                 Ok(rows
                     .into_iter()
                     .map(|(name, ty)| TableRef {
@@ -117,7 +118,7 @@ pub(crate) async fn load_tables(
     };
     match tokio::time::timeout(std::time::Duration::from_secs(5), work).await {
         Ok(r) => r,
-        Err(_) => Err("加载超时(5秒)".to_string()),
+        Err(_) => Err(keyed("error.load_timeout_5s", "Load timed out (5s)")),
     }
 }
 
@@ -130,16 +131,14 @@ pub(crate) async fn load_tables(
 pub(crate) async fn load_mongo_collections(
     url: &str,
     db_name: &str,
-) -> Result<Vec<TableRef>, String> {
+) -> Result<Vec<TableRef>, dozer_model::LocalizedText> {
     let work = async {
-        let client = mongodb::Client::with_uri_str(url)
-            .await
-            .map_err(|e| e.to_string())?;
+        let client = mongodb::Client::with_uri_str(url).await.map_err(db_error)?;
         let names = client
             .database(db_name)
             .list_collection_names()
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(db_error)?;
         let mut refs: Vec<TableRef> = names
             .into_iter()
             .map(|name| TableRef {
@@ -149,11 +148,11 @@ pub(crate) async fn load_mongo_collections(
             })
             .collect();
         refs.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok::<_, String>(refs)
+        Ok::<_, dozer_model::LocalizedText>(refs)
     };
     match tokio::time::timeout(std::time::Duration::from_secs(5), work).await {
         Ok(r) => r,
-        Err(_) => Err("加载超时(5秒)".to_string()),
+        Err(_) => Err(keyed("error.load_timeout_5s", "Load timed out (5s)")),
     }
 }
 
@@ -162,14 +161,15 @@ pub(crate) async fn load_columns(
     url: &str,
     schema: Option<&str>,
     table: &str,
-) -> Result<Vec<ColumnInfo>, String> {
+) -> Result<Vec<ColumnInfo>, dozer_model::LocalizedText> {
     if kind == DriverKind::MongoDB {
-        return Err("MongoDB 集合浏览将在后续阶段支持".to_string());
+        return Err(keyed(
+            "error.mongo_browse_unsupported",
+            "Browsing MongoDB collections will be supported in a later phase.",
+        ));
     }
     let work = async {
-        let pool = sqlx::AnyPool::connect(url)
-            .await
-            .map_err(|e| e.to_string())?;
+        let pool = sqlx::AnyPool::connect(url).await.map_err(db_error)?;
         let out = async {
             let out: Vec<ColumnInfo> = match kind {
                 DriverKind::Postgres => {
@@ -178,7 +178,7 @@ pub(crate) async fn load_columns(
                         .bind(table)
                         .fetch_all(&pool)
                         .await
-                        .map_err(|e| e.to_string())?;
+                        .map_err(db_error)?;
                     rows.into_iter()
                         .map(|(name, dt, nullable)| ColumnInfo {
                             name,
@@ -192,7 +192,7 @@ pub(crate) async fn load_columns(
                         .bind(table)
                         .fetch_all(&pool)
                         .await
-                        .map_err(|e| e.to_string())?;
+                        .map_err(db_error)?;
                     rows.into_iter()
                         .map(|(name, dt, nullable)| ColumnInfo {
                             name,
@@ -206,7 +206,7 @@ pub(crate) async fn load_columns(
                         .bind(table)
                         .fetch_all(&pool)
                         .await
-                        .map_err(|e| e.to_string())?;
+                        .map_err(db_error)?;
                     rows.into_iter()
                         .map(|(name, ty, notnull)| ColumnInfo {
                             name,
@@ -220,9 +220,13 @@ pub(crate) async fn load_columns(
             // 真实表必然有 ≥1 列;0 行 → 表不存在(Postgres/MySQL 走 information_schema,
             // SQLite 走 pragma_table_info,缺表一律返回空集而非错误)
             if out.is_empty() {
-                return Err(format!("表不存在或无可见列:{table}"));
+                return Err(keyed_args(
+                    "error.table_missing_or_no_columns",
+                    "Table does not exist or has no visible columns: {table}",
+                    &[("table", table)],
+                ));
             }
-            Ok::<_, String>(out)
+            Ok::<_, dozer_model::LocalizedText>(out)
         }
         .await;
         pool.close().await;
@@ -230,7 +234,7 @@ pub(crate) async fn load_columns(
     };
     match tokio::time::timeout(std::time::Duration::from_secs(5), work).await {
         Ok(r) => r,
-        Err(_) => Err("加载超时(5秒)".to_string()),
+        Err(_) => Err(keyed("error.load_timeout_5s", "Load timed out (5s)")),
     }
 }
 

@@ -125,6 +125,7 @@ impl DatabaseSourceOverlay {
     fn card<'a>(
         ws: &'a crate::workspace::Workspace,
         app_state: &'a database::AppState,
+        locale: &'a str,
     ) -> Option<
         iced_widget::core::Element<
             'a,
@@ -138,6 +139,7 @@ impl DatabaseSourceOverlay {
             draft,
             app_state,
             ws.database.draft_test_status(),
+            locale,
         ))
     }
 
@@ -145,7 +147,7 @@ impl DatabaseSourceOverlay {
         let Some(ws) = app.active_workspace() else {
             return;
         };
-        let Some(card) = Self::card(ws, &app.database) else {
+        let Some(card) = Self::card(ws, &app.database, app.locale.active_locale()) else {
             return;
         };
         self.gpu.redraw(
@@ -176,7 +178,7 @@ impl DatabaseSourceOverlay {
         let Some(ws) = app.active_workspace() else {
             return Vec::new();
         };
-        let Some(card) = Self::card(ws, &app.database) else {
+        let Some(card) = Self::card(ws, &app.database, app.locale.active_locale()) else {
             return Vec::new();
         };
         self.gpu.dispatch(

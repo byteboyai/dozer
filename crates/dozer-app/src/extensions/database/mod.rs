@@ -16,6 +16,71 @@ pub(crate) use state::*;
 pub(crate) use update::*;
 pub(crate) use view::*;
 
+/// 本面板 i18n owner(`crate::i18n::PANEL_OWNERS` 之一;资源在
+/// `locales/panels/database/`)。驱动/数据源表单、浏览/查询视图、错误文案都归它。
+pub(crate) const DATABASE_OWNER: &str = "dozer.database";
+
+/// 取一条本面板文案(见 `crate::i18n::panel_text`)。`fallback` 必须是英文,
+/// 且与 `locales/panels/database/en.json` 一致。
+pub(crate) fn t(key: &str, fallback: &str, locale: &str) -> String {
+    crate::i18n::panel_text(DATABASE_OWNER, key, fallback, locale)
+}
+
+/// 同上,带 `{name}` 占位参数。
+pub(crate) fn t_args(key: &str, fallback: &str, locale: &str, args: &[(&str, &str)]) -> String {
+    crate::i18n::panel_text_args(DATABASE_OWNER, key, fallback, locale, args)
+}
+
+/// 构造一条本面板 `LocalizedText`(后台任务/状态里存 keyed 文案,渲染端再按
+/// locale 解析,见 `crate::i18n::panel_keyed`)。
+pub(crate) fn keyed(key: &str, fallback: &str) -> dozer_model::LocalizedText {
+    crate::i18n::panel_keyed(DATABASE_OWNER, key, fallback)
+}
+
+/// 同上,带具名参数。
+pub(crate) fn keyed_args(
+    key: &str,
+    fallback: &str,
+    args: &[(&str, &str)],
+) -> dozer_model::LocalizedText {
+    crate::i18n::panel_keyed_args(DATABASE_OWNER, key, fallback, args)
+}
+
+/// 把驱动/后端返回的任意错误包成一条可本地化的错误文案(`{error}` 占位)。
+/// 底层错误文本(来自 sqlx/mongodb)保持原文,只有外层壳可翻译。
+pub(crate) fn db_error(e: impl std::fmt::Display) -> dozer_model::LocalizedText {
+    keyed_args(
+        "error.connection_failed",
+        "{error}",
+        &[("error", &e.to_string())],
+    )
+}
+
+/// 同 `byteui::feedback::math_curve::loading_hint`,但文案按 locale 运行时
+/// 解析(该组件 `label` 是 `&'static str`,吃不下运行时字符串)。
+pub(crate) fn loading_hint_localized<'a>(
+    curve: byteui::feedback::math_curve::Curve,
+    key: &str,
+    fallback: &str,
+    locale: &str,
+    size: f32,
+) -> iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    use iced_widget::core::Length;
+    iced_widget::container(
+        iced_widget::column![
+            byteui::feedback::math_curve::view_animated(curve, size),
+            iced_widget::text(t(key, fallback, locale))
+                .size(byteui::theme::font::body())
+                .color(byteui::theme::color::current().dim),
+        ]
+        .spacing(12)
+        .align_x(iced_widget::core::alignment::Horizontal::Center),
+    )
+    .center_x(Length::Fill)
+    .center_y(Length::Fill)
+    .into()
+}
+
 #[cfg(test)]
 mod url_tests {
     use super::*;
@@ -151,8 +216,8 @@ mod tests {
         let mut ws_state = WorkspaceState::default();
         ws_state.sources = vec![ds("abc", DriverKind::Postgres)];
         ws_state.delete_confirm = Some("abc".into());
-        let spec = delete_confirm_spec(&ws_state, "abc").expect("spec present");
-        assert_eq!(spec.title, "删除数据源 \"test-abc\"?");
+        let spec = delete_confirm_spec(&ws_state, "abc", "en").expect("spec present");
+        assert_eq!(spec.title, "Delete data source “test-abc”?");
         assert!(matches!(
             spec.confirm_msg,
             Message::DeleteSource(id) if id == "abc"
@@ -279,8 +344,10 @@ mod tests {
         st.expanded_tables.insert((None, "a".into()));
         st.expanded_tables.insert((None, "b".into()));
         st.columns.insert((None, "a".into()), ColumnLoad::Loading);
-        st.columns
-            .insert((None, "b".into()), ColumnLoad::Failed("nope".into()));
+        st.columns.insert(
+            (None, "b".into()),
+            ColumnLoad::Failed(keyed("error.load_timeout_5s", "nope")),
+        );
         let rows = tree_rows(&st, DriverKind::MySQL);
         assert!(
             rows.iter()
@@ -288,7 +355,7 @@ mod tests {
         );
         assert!(
             rows.iter()
-                .any(|r| matches!(r.kind, SchemaRowKind::ColumnsFailed(e) if e == "nope"))
+                .any(|r| matches!(r.kind, SchemaRowKind::ColumnsFailed(e) if e.fallback == "nope"))
         );
     }
 
@@ -300,7 +367,16 @@ mod tests {
         let mut app_state = AppState::default();
         let dir = tempfile::tempdir().unwrap();
         rt.block_on(async {
-            update(ws, &mut app_state, msg, 42, dir.path(), rt.handle(), |_| ());
+            update(
+                ws,
+                &mut app_state,
+                msg,
+                42,
+                dir.path(),
+                rt.handle(),
+                |_| (),
+                "en",
+            );
         });
     }
 
@@ -474,7 +550,7 @@ mod tests {
         assert!(
             tree_rows(ws.schema_state("s1").unwrap(), DriverKind::Postgres)
                 .iter()
-                .any(|r| matches!(r.kind, SchemaRowKind::ColumnsFailed("boom")))
+                .any(|r| matches!(r.kind, SchemaRowKind::ColumnsFailed(e) if e.fallback == "boom"))
         );
         // 收起再展开 → 回到 Loading(重试语义)
         update_with(
@@ -573,7 +649,10 @@ mod tests {
             Message::TablesLoaded(42, "s2".into(), Err("net down".into())),
         );
         let st = ws.schema_state("s2").unwrap();
-        assert_eq!(st.tables_error(), Some("net down"));
+        assert_eq!(
+            st.tables_error().map(|e| e.fallback.as_str()),
+            Some("net down")
+        );
         assert_eq!(st.tables()[0].name, "old"); // 旧快照不闪空
     }
 
@@ -724,7 +803,7 @@ mod sqlite_introspection {
         let err = load_columns(DriverKind::Sqlite, &url, None, "nope")
             .await
             .unwrap_err();
-        assert!(!err.is_empty());
+        assert!(!crate::i18n::render_localized(&err, "en").is_empty());
     }
 
     #[tokio::test]
@@ -733,11 +812,11 @@ mod sqlite_introspection {
         let err = load_tables(DriverKind::MongoDB, "mongodb://x", None)
             .await
             .unwrap_err();
-        assert!(err.contains("数据库名"));
+        assert!(crate::i18n::render_localized(&err, "zh-CN").contains("数据库名"));
         let err = load_columns(DriverKind::MongoDB, "mongodb://x", None, "c")
             .await
             .unwrap_err();
-        assert!(err.contains("MongoDB"));
+        assert!(crate::i18n::render_localized(&err, "zh-CN").contains("MongoDB"));
     }
 }
 
@@ -1115,7 +1194,7 @@ mod sqlite_browse_and_query {
         let err = run_query(DriverKind::Sqlite, &url, "SELEKT * FROM items")
             .await
             .unwrap_err();
-        assert!(!err.is_empty());
+        assert!(!crate::i18n::render_localized(&err, "en").is_empty());
     }
 }
 
@@ -1128,7 +1207,7 @@ mod mongo_collection_tests {
         let err = load_tables(DriverKind::MongoDB, "mongodb://x", None)
             .await
             .unwrap_err();
-        assert!(err.contains("数据库名"));
+        assert!(crate::i18n::render_localized(&err, "zh-CN").contains("数据库名"));
     }
 
     #[tokio::test]
@@ -1136,7 +1215,7 @@ mod mongo_collection_tests {
         let err = load_tables(DriverKind::MongoDB, "mongodb://x", Some(""))
             .await
             .unwrap_err();
-        assert!(err.contains("数据库名"));
+        assert!(crate::i18n::render_localized(&err, "zh-CN").contains("数据库名"));
     }
 }
 
@@ -1165,7 +1244,16 @@ mod content_message_tests {
         let mut app_state = AppState::default();
         let dir = tempfile::tempdir().unwrap();
         rt.block_on(async {
-            update(ws, &mut app_state, msg, 42, dir.path(), rt.handle(), |_| ());
+            update(
+                ws,
+                &mut app_state,
+                msg,
+                42,
+                dir.path(),
+                rt.handle(),
+                |_| (),
+                "en",
+            );
         });
     }
 
@@ -1257,8 +1345,11 @@ mod content_message_tests {
 
         let mut b2 = BrowseState::default();
         b2.begin_run();
-        apply_browse_result(&mut b2, Err("boom".into()));
-        assert_eq!(b2.error.as_deref(), Some("boom"));
+        apply_browse_result(
+            &mut b2,
+            Err(dozer_model::LocalizedText::literal(DATABASE_OWNER, "boom")),
+        );
+        assert_eq!(b2.error.as_ref().map(|e| e.fallback.as_str()), Some("boom"));
     }
 
     /// 过期的浏览结果(seq 不匹配当前轮)在 `update()` 的 `BrowseResult` 臂里
@@ -1294,7 +1385,7 @@ mod content_message_tests {
     #[test]
     fn tab_overflow_items_empty_when_no_tabs_open() {
         let ws_state = WorkspaceState::default();
-        assert!(tab_overflow_items(&ws_state).is_empty());
+        assert!(tab_overflow_items(&ws_state, "en").is_empty());
     }
 }
 
@@ -1312,7 +1403,9 @@ mod persist_tests {
         let got = ws.take_outbox();
         assert_eq!(got.len(), 1);
         assert!(
-            got[0].text_stable().contains("数据库"),
+            got[0]
+                .text_stable()
+                .contains("database connection settings"),
             "{}",
             got[0].text_stable()
         );
@@ -1337,7 +1430,7 @@ mod persist_tests {
         let got = app.take_outbox();
         assert_eq!(got.len(), 1);
         assert!(
-            got[0].text_stable().contains("数据库驱动"),
+            got[0].text_stable().contains("database driver settings"),
             "{}",
             got[0].text_stable()
         );

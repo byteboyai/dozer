@@ -13,16 +13,17 @@ use crate::panel_host::PanelHost;
 /// `platform::database_drivers_overlay`),卡片填满窗口本身(不再套居中
 /// 容器、不再按主窗口宽度算 `dialog::width`)。每行一个 checkbox 前置位的
 /// 条目(启用的打 ✓),点按切换启用/禁用,不关弹窗。
-pub fn database_drivers_card(
-    app_state: &AppState,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+pub fn database_drivers_card<'a>(
+    app_state: &'a AppState,
+    locale: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let title = row![
         icons::view(
             icons::IconKind::Database,
             byteui::theme::icon_size::row(),
             byteui::theme::color::current().cream,
         ),
-        text("管理驱动")
+        text(t("drivers.title", "Manage Drivers", locale))
             .size(byteui::theme::font::subtitle())
             .color(byteui::theme::color::current().cream),
     ]
@@ -45,7 +46,7 @@ pub fn database_drivers_card(
     }
 
     let close = button(
-        text("关闭")
+        text(t("drivers.close", "Close", locale))
             .size(byteui::theme::font::label())
             .color(byteui::theme::color::current().dim),
     )
@@ -58,9 +59,13 @@ pub fn database_drivers_card(
     container(
         column![
             title,
-            text("勾选的驱动才会出现在「新增数据源」的驱动下拉里。")
-                .size(byteui::theme::font::label())
-                .color(byteui::theme::color::current().dim),
+            text(t(
+                "drivers.hint",
+                "Only checked drivers appear in the driver dropdown of “New Data Source”.",
+                locale,
+            ))
+            .size(byteui::theme::font::label())
+            .color(byteui::theme::color::current().dim),
             items_col,
             byteui::feedback::dialog::actions(row![close]),
         ]
@@ -113,6 +118,7 @@ pub(crate) fn source_tree_node<'a>(
     status: &'a TestStatus,
     expanded: bool,
     st: Option<&'a SchemaState>,
+    locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let chevron = if expanded {
         icons::IconKind::ChevronDown
@@ -152,12 +158,23 @@ pub(crate) fn source_tree_node<'a>(
 
     let status_line = match status {
         TestStatus::Idle => None,
-        TestStatus::Testing => Some(("测试中…".to_string(), byteui::theme::color::current().dim)),
+        TestStatus::Testing => Some((
+            t("source.testing", "Testing…", locale),
+            byteui::theme::color::current().dim,
+        )),
         TestStatus::Ok => Some((
-            "✓ 连接成功".to_string(),
+            t("source.test_ok", "✓ Connected", locale),
             byteui::theme::color::current().green,
         )),
-        TestStatus::Err(e) => Some((format!("✗ {e}"), byteui::theme::color::current().red)),
+        TestStatus::Err(e) => Some((
+            t_args(
+                "source.test_err",
+                "✗ {error}",
+                locale,
+                &[("error", &crate::i18n::render_localized(e, locale))],
+            ),
+            byteui::theme::color::current().red,
+        )),
     };
     if let Some((line, color)) = status_line {
         col = col.push(indented_line(line, color));
@@ -171,7 +188,7 @@ pub(crate) fn source_tree_node<'a>(
         col = col.push(row![
             iced_widget::space::Space::new().width(source_tree_indent()),
             button(
-                text("+ 新查询")
+                text(t("source.new_query", "+ New Query", locale))
                     .size(byteui::theme::font::caption_sm())
                     .color(byteui::theme::color::current().dim)
             )
@@ -185,39 +202,63 @@ pub(crate) fn source_tree_node<'a>(
 
     let dim = byteui::theme::color::current().dim;
     let Some(st) = st else {
-        return col.push(indented_line("加载中…", dim)).into();
+        return col
+            .push(indented_line(t("source.loading", "Loading…", locale), dim))
+            .into();
     };
 
     // 旧快照在手 + 正在刷新 → 一行"刷新中…"提示,旧树照常(同 git_log 不闪空惯例)
     if st.loading_tables() && !st.tables().is_empty() {
-        col = col.push(indented_line("刷新中…", dim));
+        col = col.push(indented_line(
+            t("source.refreshing", "Refreshing…", locale),
+            dim,
+        ));
     }
     if let Some(e) = st.tables_error()
         && !st.tables().is_empty()
     {
         col = col.push(indented_line(
-            format!("刷新失败:{e}"),
+            t_args(
+                "source.refresh_failed",
+                "Refresh failed: {error}",
+                locale,
+                &[("error", &crate::i18n::render_localized(e, locale))],
+            ),
             byteui::theme::color::current().red,
         ));
     }
 
     if st.loading_tables() && st.tables().is_empty() {
-        col.push(indented_line("加载中…", dim)).into()
+        col.push(indented_line(t("source.loading", "Loading…", locale), dim))
+            .into()
     } else if st.tables().is_empty() {
         if let Some(e) = st.tables_error() {
             col.push(indented_line(
-                format!("✗ {e}(右键菜单可重试)"),
+                t_args(
+                    "source.refresh_failed_retry",
+                    "✗ {error} (right-click to retry)",
+                    locale,
+                    &[("error", &crate::i18n::render_localized(e, locale))],
+                ),
                 byteui::theme::color::current().red,
             ))
             .into()
         } else {
-            col.push(indented_line("该库没有表或视图", dim)).into()
+            col.push(indented_line(
+                t(
+                    "source.no_tables",
+                    "This database has no tables or views",
+                    locale,
+                ),
+                dim,
+            ))
+            .into()
         }
     } else {
         for r in tree_rows(st, source.driver) {
             col = col.push(row![
                 iced_widget::space::Space::new().width(source_tree_indent()),
-                schema_tree_row(&source.id, source.driver, r),
+                schema_tree_row(&source.id, source.driver, r, locale),
             ]);
         }
         col.into()
@@ -235,11 +276,12 @@ pub fn database_source_card<'a>(
     draft: &'a DataSourceDraft,
     app_state: &'a AppState,
     test_status: &'a TestStatus,
+    locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let title_text = if draft.id.is_some() {
-        "编辑数据源"
+        t("form.edit_title", "Edit Data Source", locale)
     } else {
-        "新增数据源"
+        t("form.new_title", "New Data Source", locale)
     };
     let title = row![
         icons::view(
@@ -266,7 +308,12 @@ pub fn database_source_card<'a>(
         let label = if app_state.is_enabled(driver) {
             driver.label().to_string()
         } else {
-            format!("{}(已禁用)", driver.label())
+            t_args(
+                "driver.disabled",
+                "{name} (disabled)",
+                locale,
+                &[("name", driver.label())],
+            )
         };
         driver_options.push(DriverOption { driver, label });
     }
@@ -283,7 +330,7 @@ pub fn database_source_card<'a>(
     let mut col = column![title, driver_select].spacing(8);
     col = col.push(wrap_form_input(
         byteui::form::input_text::view_on_bg(
-            "名字",
+            &t("form.name", "Name", locale),
             &draft.name,
             false,
             Some(form_field_id("name")),
@@ -298,7 +345,7 @@ pub fn database_source_card<'a>(
     if draft.driver == DriverKind::Sqlite {
         col = col.push(wrap_form_input(
             byteui::form::input_text::view_on_bg(
-                "文件路径",
+                &t("form.file_path", "File Path", locale),
                 &draft.database,
                 false,
                 Some(form_field_id("sqlite-database")),
@@ -313,7 +360,11 @@ pub fn database_source_card<'a>(
     } else {
         col = col.push(wrap_form_input(
             byteui::form::input_text::view_on_bg(
-                "连接 URI(可选,填了则忽略下面各项,例如 postgres://user:pw@host:5432/db)",
+                &t(
+                    "form.uri",
+                    "Connection URI (optional; if set, the fields below are ignored, e.g. postgres://user:pw@host:5432/db)",
+                    locale,
+                ),
                 &draft.uri,
                 false,
                 Some(form_field_id("uri")),
@@ -327,7 +378,7 @@ pub fn database_source_card<'a>(
         ));
         col = col.push(wrap_form_input(
             byteui::form::input_text::view_on_bg(
-                "host",
+                &t("form.host", "host", locale),
                 &draft.host,
                 false,
                 Some(form_field_id("host")),
@@ -341,7 +392,7 @@ pub fn database_source_card<'a>(
         ));
         col = col.push(wrap_form_input(
             byteui::form::input_text::view_on_bg(
-                "port",
+                &t("form.port", "port", locale),
                 &draft.port,
                 false,
                 Some(form_field_id("port")),
@@ -355,7 +406,7 @@ pub fn database_source_card<'a>(
         ));
         col = col.push(wrap_form_input(
             byteui::form::input_text::view_on_bg(
-                "database",
+                &t("form.database", "database", locale),
                 &draft.database,
                 false,
                 Some(form_field_id("database")),
@@ -369,7 +420,7 @@ pub fn database_source_card<'a>(
         ));
         col = col.push(wrap_form_input(
             byteui::form::input_text::view_on_bg(
-                "username",
+                &t("form.username", "username", locale),
                 &draft.username,
                 false,
                 Some(form_field_id("username")),
@@ -383,7 +434,11 @@ pub fn database_source_card<'a>(
         ));
         col = col.push(wrap_form_input(
             byteui::form::input_text::view_on_bg(
-                "password(留空则不修改)",
+                &t(
+                    "form.password",
+                    "password (leave blank to keep unchanged)",
+                    locale,
+                ),
                 &draft.password,
                 true,
                 Some(form_field_id("password")),
@@ -399,7 +454,7 @@ pub fn database_source_card<'a>(
     // 按钮样式照抄 `ssh.rs::host_form` 的 `text_btn`:透明背景 + 1px
     // 描边(描边色=文字色),不再用纯色填充按钮,跟主机表单保持同一产品
     // 语言(设计文档回顾)。
-    let text_btn = |label: &'a str, color: iced_widget::core::Color, msg: Message| {
+    let text_btn = |label: String, color: iced_widget::core::Color, msg: Message| {
         button(text(label).size(byteui::theme::font::label()).color(color))
             .on_press(msg)
             .padding([6, 12])
@@ -432,19 +487,19 @@ pub fn database_source_card<'a>(
     // 两组各自的对齐关系仍旧,`row!` 里混进一个 `Length::Fill` 子元素会让
     // 外层 `row!` 自动升级成 `Fill` 宽度,不需要再套一层 `dialog::actions`)。
     let left = row![text_btn(
-        "测试连接",
+        t("form.test_connection", "Test Connection", locale),
         byteui::theme::color::current().cream,
         Message::DraftTestConnection
     )]
     .spacing(6);
     let right = row![
         text_btn(
-            "保存",
+            t("form.save", "Save", locale),
             byteui::theme::color::current().cream,
             Message::DraftSave
         ),
         text_btn(
-            "取消",
+            t("form.cancel", "Cancel", locale),
             byteui::theme::color::current().dim,
             Message::DraftCancel
         ),
@@ -461,12 +516,23 @@ pub fn database_source_card<'a>(
     // 处理)。
     let (status_text, status_color) = match test_status {
         TestStatus::Idle => (String::new(), byteui::theme::color::current().dim),
-        TestStatus::Testing => ("测试中…".to_string(), byteui::theme::color::current().dim),
+        TestStatus::Testing => (
+            t("source.testing", "Testing…", locale),
+            byteui::theme::color::current().dim,
+        ),
         TestStatus::Ok => (
-            "✓ 连接成功".to_string(),
+            t("source.test_ok", "✓ Connected", locale),
             byteui::theme::color::current().green,
         ),
-        TestStatus::Err(e) => (format!("✗ {e}"), byteui::theme::color::current().red),
+        TestStatus::Err(e) => (
+            t_args(
+                "source.test_err",
+                "✗ {error}",
+                locale,
+                &[("error", &crate::i18n::render_localized(e, locale))],
+            ),
+            byteui::theme::color::current().red,
+        ),
     };
     if !status_text.is_empty() {
         col = col.push(
@@ -509,6 +575,7 @@ pub fn view<'a>(
     ws_state: &'a WorkspaceState,
     width: Length,
     outer: Border,
+    locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     // 顶部面板标题固定、中间可滚动、底部「管理驱动/新增数据源」footer-bar
     // 固定在面板最下方——镜像 `ssh.rs::view`/`ssh_footer_bar` 的既有布局
@@ -516,7 +583,7 @@ pub fn view<'a>(
     // 面板"添加主机"统一到 footer-bar)。
     let head = container(crate::chrome::homespace::home_panel_head(
         icons::IconKind::Database,
-        "数据库",
+        t("panel.title", "Database", locale),
     ))
     .padding(crate::theme::region::project_pane().padding);
 
@@ -524,7 +591,7 @@ pub fn view<'a>(
 
     if ws_state.sources().is_empty() {
         list = list.push(
-            text("还没有数据源")
+            text(t("list.empty", "No data sources yet", locale))
                 .size(byteui::theme::font::body())
                 .color(byteui::theme::color::current().dim),
         );
@@ -536,6 +603,7 @@ pub fn view<'a>(
                 ws_state.test_status(&source.id),
                 expanded,
                 ws_state.schema_state(&source.id),
+                locale,
             ));
         }
     }
@@ -548,7 +616,7 @@ pub fn view<'a>(
         ))
         .style(|_t, _s| byteui::interaction::scrollbar::scrollbar_style());
 
-    let body = column![head, scroll, database_footer_bar()].spacing(0);
+    let body = column![head, scroll, database_footer_bar(locale)].spacing(0);
 
     let base = container(body)
         .width(width)
@@ -576,6 +644,7 @@ pub fn view<'a>(
 pub(crate) fn delete_confirm_spec(
     ws_state: &WorkspaceState,
     source_id: &str,
+    locale: &str,
 ) -> Option<byteui::feedback::dialog::ConfirmDialog<Message>> {
     let name = ws_state
         .sources()
@@ -585,11 +654,20 @@ pub(crate) fn delete_confirm_spec(
         .unwrap_or_else(|| source_id.to_string());
     Some(byteui::feedback::dialog::ConfirmDialog {
         icon: None,
-        title: format!("删除数据源 \"{name}\"?"),
-        description: "这会永久删除这条连接记录及其保存的密码。".to_string(),
-        cancel_label: "取消".to_string(),
+        title: t_args(
+            "delete.title",
+            "Delete data source “{name}”?",
+            locale,
+            &[("name", &name)],
+        ),
+        description: t(
+            "delete.description",
+            "This permanently deletes this connection record and its saved password.",
+            locale,
+        ),
+        cancel_label: t("delete.cancel", "Cancel", locale),
         cancel_msg: Message::DeleteSourceCancel,
-        confirm_label: "删除".to_string(),
+        confirm_label: t("delete.confirm", "Delete", locale),
         confirm_msg: Message::DeleteSource(source_id.to_string()),
         close_msg: None,
         confirm_color: byteui::theme::color::current().red,
@@ -603,9 +681,10 @@ pub(crate) fn delete_confirm_spec(
 /// 按统一按钮规范(见 `dialog::action_button_border_color` 文档)走灰字 +
 /// 描边静止态 `border`、悬浮/按下态变 `gold`(此前固定奶油字 + 不响应
 /// hover 的静态描边)。
-pub(crate) fn database_footer_bar<'a>()
--> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-    let btn = |icon: icons::IconKind, label: &'static str, on_press: Message| {
+pub(crate) fn database_footer_bar<'a>(
+    locale: &'a str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    let btn = |icon: icons::IconKind, label: String, on_press: Message| {
         // 内容套一层 `width(Fill).align_x(Center)` 容器,让图标+文字在撑满
         // 半行的按钮里整体居中(与 `project/view.rs::footer_button_label`
         // 同款手法——button 本身不会把 Shrink 内容居中,只贴左上角)。
@@ -645,12 +724,12 @@ pub(crate) fn database_footer_bar<'a>()
     let bar = row![
         btn(
             icons::IconKind::Settings,
-            "管理驱动",
+            t("footer.manage_drivers", "Manage Drivers", locale),
             Message::DriversPopupToggle,
         ),
         btn(
             icons::IconKind::SquarePlus,
-            "新增数据源",
+            t("footer.add_source", "New Data Source", locale),
             Message::AddSourceStart
         ),
     ]
@@ -689,6 +768,7 @@ pub fn content_pane<'a>(
     ws_state: &'a WorkspaceState,
     width: Length,
     outer: Border,
+    locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let content = ws_state.content();
     // "空白"占位 tab 固定打头,不对应 `content.tabs()` 里任何一条记录,
@@ -709,9 +789,11 @@ pub fn content_pane<'a>(
         Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
     )> = vec![(
         // tab 宽度估算要把前缀图标(图标宽 + 4px 间距)算进去,窗口裁剪才准。
-        tab_title_display_width("空白") + byteui::theme::icon_size::row() + 4.0,
+        tab_title_display_width(&t("tab.blank_title", "Blank", locale))
+            + byteui::theme::icon_size::row()
+            + 4.0,
         crate::chrome::tab_widget::panel_tab(crate::chrome::tab_widget::PanelTabArgs {
-            title: "空白".to_string(),
+            title: t("tab.blank_title", "Blank", locale),
             active: blank_active,
             hover_t: app.hover_progress(crate::app::HoverId::tab_item(
                 crate::app::PanelKind::Database,
@@ -747,7 +829,7 @@ pub fn content_pane<'a>(
             crate::app::PanelKind::Database,
             idx as u64,
         ));
-        let title = tab_title(tab, ws_state);
+        let title = tab_title(tab, ws_state, locale);
         (
             tab_title_display_width(&title),
             crate::chrome::tab_widget::panel_tab(crate::chrome::tab_widget::PanelTabArgs {
@@ -805,8 +887,8 @@ pub fn content_pane<'a>(
         crate::app::PanelKind::Database,
         app.list_collapsed(crate::app::PanelKind::Database),
         crate::app::HoverId::list_collapse(crate::app::PanelKind::Database),
-        "收起列表",
-        "展开列表",
+        t("list.collapse", "Collapse list", locale),
+        t("list.expand", "Expand list", locale),
         Message::ToggleListCollapse,
         move |hovered| {
             Message::Hover(
@@ -835,9 +917,13 @@ pub fn content_pane<'a>(
         None => {
             col = col.push(
                 container(
-                    text("在左侧 schema 树点一张表/视图/集合,或点 + 新查询")
-                        .size(byteui::theme::font::subtitle())
-                        .color(byteui::theme::color::current().dim),
+                    text(t(
+                        "content.placeholder",
+                        "Click a table/view/collection in the schema tree on the left, or click + New Query",
+                        locale,
+                    ))
+                    .size(byteui::theme::font::subtitle())
+                    .color(byteui::theme::color::current().dim),
                 )
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -848,8 +934,8 @@ pub fn content_pane<'a>(
         Some(tab) => {
             let tab_id = tab.id;
             match content.content(tab_id) {
-                Some(TabContent::Browse(b)) => col = col.push(browse_view(tab_id, b)),
-                Some(TabContent::Query(q)) => col = col.push(query_view(tab_id, q)),
+                Some(TabContent::Browse(b)) => col = col.push(browse_view(tab_id, b, locale)),
+                Some(TabContent::Query(q)) => col = col.push(query_view(tab_id, q, locale)),
                 None => {}
             }
         }
@@ -874,6 +960,7 @@ pub fn content_pane<'a>(
 #[cfg(target_os = "macos")]
 pub(crate) fn tab_overflow_items(
     ws_state: &WorkspaceState,
+    locale: &str,
 ) -> Vec<crate::chrome::native_menu::Item<Message>> {
     let content = ws_state.content();
     let mut entries: Vec<(usize, String, bool)> = Vec::new();
@@ -881,7 +968,7 @@ pub(crate) fn tab_overflow_items(
         let idx = i + 1;
         entries.push((
             idx,
-            tab_title(tab, ws_state),
+            tab_title(tab, ws_state, locale),
             Some(i) == content.active_idx(),
         ));
     }
@@ -901,6 +988,7 @@ pub(crate) fn tab_overflow_items(
 pub fn tab_overflow_popup<'a>(
     app: &'a impl PanelHost,
     ws_state: &'a WorkspaceState,
+    locale: &'a str,
 ) -> Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> {
     let content = ws_state.content();
     let anchor = content.tab_overflow_anchor()?;
@@ -915,7 +1003,7 @@ pub fn tab_overflow_popup<'a>(
         overflow_entries.push(crate::chrome::tab_widget::TabOverflowEntry {
             index: idx,
             prefix: None,
-            title: tab_title(tab, ws_state),
+            title: tab_title(tab, ws_state, locale),
             active: Some(i) == content.active_idx(),
             closable: true,
             hover_t: app.hover_progress(crate::app::HoverId::TabOverflowRow(idx)),
@@ -942,7 +1030,7 @@ pub fn tab_overflow_popup<'a>(
     ))
 }
 
-pub(crate) fn tab_title(tab: &DatabaseTab, ws_state: &WorkspaceState) -> String {
+pub(crate) fn tab_title(tab: &DatabaseTab, ws_state: &WorkspaceState, locale: &str) -> String {
     let source_name = |id: &str| {
         ws_state
             .sources()
@@ -966,7 +1054,15 @@ pub(crate) fn tab_title(tab: &DatabaseTab, ws_state: &WorkspaceState) -> String 
         DatabaseTabKind::Query {
             source_id,
             console_seq,
-        } => format!("查询 {console_seq}@{}", source_name(source_id)),
+        } => t_args(
+            "tab.query_title",
+            "Query {seq}@{source}",
+            locale,
+            &[
+                ("seq", &console_seq.to_string()),
+                ("source", &source_name(source_id)),
+            ],
+        ),
     }
 }
 
@@ -981,15 +1077,19 @@ pub(crate) fn tab_title_display_width(title: &str) -> f32 {
 /// `DatabaseContentState::reveal_tab` 把选中 tab 带入可见区。用实际内容宽
 /// (而非早年的统一上限 `PANEL_TAB_MAX_W`)喂给翻页窗口数学,见渲染侧
 /// `content_pane` 同款 `tab_title_display_width` 口径。
-pub(crate) fn reveal_tab_widths(ws_state: &mut WorkspaceState, target: usize) {
+pub(crate) fn reveal_tab_widths(ws_state: &mut WorkspaceState, target: usize, locale: &str) {
     let widths = {
         let content = ws_state.content();
-        let mut w = vec![tab_title_display_width("空白")];
+        let mut w = vec![tab_title_display_width(&t(
+            "tab.blank_title",
+            "Blank",
+            locale,
+        ))];
         w.extend(
             content
                 .tabs()
                 .iter()
-                .map(|tab| tab_title_display_width(&tab_title(tab, ws_state))),
+                .map(|tab| tab_title_display_width(&tab_title(tab, ws_state, locale))),
         );
         w
     };
@@ -1112,11 +1212,16 @@ where
 pub(crate) fn browse_view<'a>(
     tab_id: usize,
     b: &'a BrowseState,
+    locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let toolbar = row![
         wrap_form_input(
             byteui::form::input_text::view(
-                "WHERE(原始 SQL 片段,例如 id > 100)",
+                &t(
+                    "browse.where",
+                    "WHERE (raw SQL fragment, e.g. id > 100)",
+                    locale
+                ),
                 &b.where_clause,
                 false,
                 Some(new_tab_field_id("browse-where", tab_id)),
@@ -1130,7 +1235,11 @@ pub(crate) fn browse_view<'a>(
         ),
         wrap_form_input(
             byteui::form::input_text::view(
-                "ORDER BY(原始 SQL 片段,例如 title DESC)",
+                &t(
+                    "browse.order_by",
+                    "ORDER BY (raw SQL fragment, e.g. title DESC)",
+                    locale
+                ),
                 &b.order_by,
                 false,
                 Some(new_tab_field_id("browse-order", tab_id)),
@@ -1145,8 +1254,10 @@ pub(crate) fn browse_view<'a>(
         byteui::form::select::view(&PAGE_SIZES[..], Some(&b.page_size), move |v| {
             Message::BrowsePageSizeChanged(tab_id, v)
         }),
-        button(text("上一页")).on_press_maybe((b.page > 0).then_some(Message::BrowsePrev(tab_id))),
-        button(text("下一页")).on_press_maybe(b.has_more.then_some(Message::BrowseNext(tab_id))),
+        button(text(t("browse.prev", "Previous", locale)))
+            .on_press_maybe((b.page > 0).then_some(Message::BrowsePrev(tab_id))),
+        button(text(t("browse.next", "Next", locale)))
+            .on_press_maybe(b.has_more.then_some(Message::BrowseNext(tab_id))),
     ]
     .spacing(8)
     .align_y(iced_widget::core::Alignment::Center);
@@ -1154,18 +1265,25 @@ pub(crate) fn browse_view<'a>(
     let mut col = column![toolbar].spacing(8).height(Length::Fill);
 
     if b.loading {
-        col = col.push(byteui::feedback::math_curve::loading_hint(
+        col = col.push(loading_hint_localized(
             byteui::feedback::math_curve::Curve::RoseThree,
-            "查询中…",
+            "browse.querying",
+            "Querying…",
+            locale,
             48.0,
         ));
         return col.into();
     }
     if let Some(e) = &b.error {
         col = col.push(
-            text(format!("✗ {e}"))
-                .size(byteui::theme::font::caption_sm())
-                .color(byteui::theme::color::current().red),
+            text(t_args(
+                "source.test_err",
+                "✗ {error}",
+                locale,
+                &[("error", &crate::i18n::render_localized(e, locale))],
+            ))
+            .size(byteui::theme::font::caption_sm())
+            .color(byteui::theme::color::current().red),
         );
     }
 
@@ -1173,7 +1291,7 @@ pub(crate) fn browse_view<'a>(
         None => {
             if !b.loading && b.error.is_none() {
                 col = col.push(
-                    text("暂无数据")
+                    text(t("browse.no_data", "No data", locale))
                         .size(byteui::theme::font::body())
                         .color(byteui::theme::color::current().dim),
                 );
@@ -1181,9 +1299,13 @@ pub(crate) fn browse_view<'a>(
         }
         Some(result) if result.rows.is_empty() => {
             col = col.push(
-                text("该表当前没有数据(或筛选条件不匹配任何行)")
-                    .size(byteui::theme::font::body())
-                    .color(byteui::theme::color::current().dim),
+                text(t(
+                    "browse.empty_table",
+                    "This table currently has no data (or no rows match the filter)",
+                    locale,
+                ))
+                .size(byteui::theme::font::body())
+                .color(byteui::theme::color::current().dim),
             );
         }
         Some(result) => {
@@ -1267,11 +1389,16 @@ pub(crate) fn result_table<'a>(
 pub(crate) fn query_view<'a>(
     tab_id: usize,
     q: &'a QueryState,
+    locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let toolbar = row![
-        button(text(if q.running { "执行中…" } else { "执行" }))
-            .on_press_maybe((!q.running).then_some(Message::QueryRun(tab_id))),
-        text("Cmd+Enter 快捷执行")
+        button(text(if q.running {
+            t("query.running", "Running…", locale)
+        } else {
+            t("query.run", "Run", locale)
+        }))
+        .on_press_maybe((!q.running).then_some(Message::QueryRun(tab_id))),
+        text(t("query.shortcut", "Cmd+Enter to run", locale))
             .size(byteui::theme::font::caption_sm())
             .color(byteui::theme::color::current().dim),
     ]
@@ -1295,9 +1422,14 @@ pub(crate) fn query_view<'a>(
 
     if let Some(e) = &q.error {
         col = col.push(
-            text(format!("✗ {e}"))
-                .size(byteui::theme::font::caption_sm())
-                .color(byteui::theme::color::current().red),
+            text(t_args(
+                "source.test_err",
+                "✗ {error}",
+                locale,
+                &[("error", &crate::i18n::render_localized(e, locale))],
+            ))
+            .size(byteui::theme::font::caption_sm())
+            .color(byteui::theme::color::current().red),
         );
     }
 
@@ -1305,7 +1437,7 @@ pub(crate) fn query_view<'a>(
         None => {}
         Some(QueryOutcome::Rows(result)) if result.rows.is_empty() => {
             col = col.push(
-                text("查询未返回任何行")
+                text(t("query.no_rows", "Query returned no rows", locale))
                     .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().dim),
             );
@@ -1315,14 +1447,19 @@ pub(crate) fn query_view<'a>(
         }
         Some(QueryOutcome::Affected(n)) => {
             col = col.push(
-                text(format!("{n} 行受影响"))
-                    .size(byteui::theme::font::body())
-                    .color(byteui::theme::color::current().green),
+                text(t_args(
+                    "query.affected",
+                    "{n} rows affected",
+                    locale,
+                    &[("n", &n.to_string())],
+                ))
+                .size(byteui::theme::font::body())
+                .color(byteui::theme::color::current().green),
             );
         }
         Some(QueryOutcome::Ddl) => {
             col = col.push(
-                text("执行成功")
+                text(t("query.success", "Execution succeeded", locale))
                     .size(byteui::theme::font::body())
                     .color(byteui::theme::color::current().green),
             );
@@ -1338,6 +1475,7 @@ pub(crate) fn schema_tree_row<'a>(
     source_id: &str,
     driver: DriverKind,
     r: SchemaRow<'a>,
+    locale: &'a str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let indent = text("  ".repeat(r.depth)).size(crate::workspace::tree_row_font_size());
     match r.kind {
@@ -1493,7 +1631,7 @@ pub(crate) fn schema_tree_row<'a>(
                         + byteui::theme::icon_size::tree_row_gap(),
                 ))
                 .height(Length::Shrink),
-            text("加载列中…")
+            text(t("tree.columns_loading", "Loading columns…", locale))
                 .size(crate::workspace::tree_row_font_size())
                 .color(byteui::theme::color::current().dim),
         ]
@@ -1510,12 +1648,21 @@ pub(crate) fn schema_tree_row<'a>(
                         + byteui::theme::icon_size::tree_row_gap(),
                 ))
                 .height(Length::Shrink),
-            text(format!("列加载失败:{e}"))
-                .size(crate::workspace::tree_row_font_size())
-                .color(byteui::theme::color::current().red),
-            text("(收起再展开可重试)")
-                .size(byteui::theme::font::caption_sm())
-                .color(byteui::theme::color::current().dim),
+            text(t_args(
+                "tree.columns_failed",
+                "Failed to load columns: {error}",
+                locale,
+                &[("error", &crate::i18n::render_localized(e, locale))],
+            ))
+            .size(crate::workspace::tree_row_font_size())
+            .color(byteui::theme::color::current().red),
+            text(t(
+                "tree.columns_failed_retry",
+                "(collapse and expand to retry)",
+                locale,
+            ))
+            .size(byteui::theme::font::caption_sm())
+            .color(byteui::theme::color::current().dim),
         ]
         .spacing(6)
         .align_y(iced_widget::core::Alignment::Center)
@@ -1572,7 +1719,7 @@ pub struct BrowseState {
     pub page_size: u32,
     pub has_more: bool,
     pub loading: bool,
-    pub error: Option<String>,
+    pub error: Option<dozer_model::LocalizedText>,
     pub result: Option<QueryResult>,
     pub(crate) run_seq: u64,
 }
@@ -1614,7 +1761,7 @@ impl BrowseState {
 pub struct QueryState {
     pub sql: iced_widget::text_editor::Content,
     pub running: bool,
-    pub error: Option<String>,
+    pub error: Option<dozer_model::LocalizedText>,
     pub result: Option<QueryOutcome>,
     pub(crate) run_seq: u64,
 }
@@ -1969,7 +2116,7 @@ pub(crate) fn stringify_pg_row(row: &sqlx::postgres::PgRow) -> Vec<CellValue> {
         };
         out.push(match decoded {
             Some(s) => CellValue::Text(s),
-            None => CellValue::Text(format!("<不支持的类型: {type_name}>")),
+            None => CellValue::Text(format!("<unsupported type: {type_name}>")),
         });
     }
     out
@@ -2022,7 +2169,7 @@ pub(crate) fn stringify_mysql_row(row: &sqlx::mysql::MySqlRow) -> Vec<CellValue>
         };
         out.push(match decoded {
             Some(s) => CellValue::Text(s),
-            None => CellValue::Text(format!("<不支持的类型: {type_name}>")),
+            None => CellValue::Text(format!("<unsupported type: {type_name}>")),
         });
     }
     out
@@ -2056,7 +2203,7 @@ pub(crate) fn stringify_sqlite_row(row: &sqlx::sqlite::SqliteRow) -> Vec<CellVal
         };
         out.push(match decoded {
             Some(s) => CellValue::Text(s),
-            None => CellValue::Text(format!("<不支持的类型: {type_name}>")),
+            None => CellValue::Text(format!("<unsupported type: {type_name}>")),
         });
     }
     out
@@ -2167,7 +2314,9 @@ pub(crate) struct BrowseTableParams<'a> {
     pub(crate) page_size: u32,
 }
 
-pub(crate) async fn browse_table(params: BrowseTableParams<'_>) -> Result<BrowsePage, String> {
+pub(crate) async fn browse_table(
+    params: BrowseTableParams<'_>,
+) -> Result<BrowsePage, dozer_model::LocalizedText> {
     let BrowseTableParams {
         kind,
         url,
@@ -2183,24 +2332,15 @@ pub(crate) async fn browse_table(params: BrowseTableParams<'_>) -> Result<Browse
         let pool = connect_native(kind, url).await?;
         let mut result = match &pool {
             NativePool::Pg(p) => {
-                let rows = sqlx::query(&sql)
-                    .fetch_all(p)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                let rows = sqlx::query(&sql).fetch_all(p).await.map_err(db_error)?;
                 rows_to_result(&rows, stringify_pg_row)
             }
             NativePool::MySql(p) => {
-                let rows = sqlx::query(&sql)
-                    .fetch_all(p)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                let rows = sqlx::query(&sql).fetch_all(p).await.map_err(db_error)?;
                 rows_to_result(&rows, stringify_mysql_row)
             }
             NativePool::Sqlite(p) => {
-                let rows = sqlx::query(&sql)
-                    .fetch_all(p)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                let rows = sqlx::query(&sql).fetch_all(p).await.map_err(db_error)?;
                 rows_to_result(&rows, stringify_sqlite_row)
             }
         };
@@ -2209,11 +2349,11 @@ pub(crate) async fn browse_table(params: BrowseTableParams<'_>) -> Result<Browse
         if has_more {
             result.rows.truncate(page_size as usize);
         }
-        Ok::<_, String>(BrowsePage { result, has_more })
+        Ok::<_, dozer_model::LocalizedText>(BrowsePage { result, has_more })
     };
     match tokio::time::timeout(std::time::Duration::from_secs(15), work).await {
         Ok(r) => r,
-        Err(_) => Err("查询超时(15秒)".to_string()),
+        Err(_) => Err(keyed("error.query_timeout_15s", "Query timed out (15s)")),
     }
 }
 
@@ -2226,12 +2366,10 @@ pub(crate) async fn browse_collection(
     name: &str,
     page: u32,
     page_size: u32,
-) -> Result<BrowsePage, String> {
+) -> Result<BrowsePage, dozer_model::LocalizedText> {
     use futures::stream::TryStreamExt;
     let work = async {
-        let client = mongodb::Client::with_uri_str(url)
-            .await
-            .map_err(|e| e.to_string())?;
+        let client = mongodb::Client::with_uri_str(url).await.map_err(db_error)?;
         let coll: mongodb::Collection<mongodb::bson::Document> =
             client.database(db_name).collection(name);
         let mut cursor = coll
@@ -2239,9 +2377,9 @@ pub(crate) async fn browse_collection(
             .skip(page as u64 * page_size as u64)
             .limit(page_size as i64 + 1)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(db_error)?;
         let mut docs = Vec::new();
-        while let Some(doc) = cursor.try_next().await.map_err(|e| e.to_string())? {
+        while let Some(doc) = cursor.try_next().await.map_err(db_error)? {
             docs.push(doc);
         }
         let has_more = docs.len() > page_size as usize;
@@ -2255,7 +2393,7 @@ pub(crate) async fn browse_collection(
                 )]
             })
             .collect();
-        Ok::<_, String>(BrowsePage {
+        Ok::<_, dozer_model::LocalizedText>(BrowsePage {
             result: QueryResult {
                 columns: vec!["document".to_string()],
                 rows,
@@ -2265,7 +2403,7 @@ pub(crate) async fn browse_collection(
     };
     match tokio::time::timeout(std::time::Duration::from_secs(15), work).await {
         Ok(r) => r,
-        Err(_) => Err("查询超时(15秒)".to_string()),
+        Err(_) => Err(keyed("error.query_timeout_15s", "Query timed out (15s)")),
     }
 }
 
@@ -2276,31 +2414,22 @@ pub(crate) async fn run_query(
     kind: DriverKind,
     url: &str,
     sql: &str,
-) -> Result<QueryOutcome, String> {
+) -> Result<QueryOutcome, dozer_model::LocalizedText> {
     let work = async {
         let pool = connect_native(kind, url).await?;
         let outcome = match classify_statement(sql) {
             StatementKind::Rows => {
                 let result = match &pool {
                     NativePool::Pg(p) => rows_to_result(
-                        &sqlx::query(sql)
-                            .fetch_all(p)
-                            .await
-                            .map_err(|e| e.to_string())?,
+                        &sqlx::query(sql).fetch_all(p).await.map_err(db_error)?,
                         stringify_pg_row,
                     ),
                     NativePool::MySql(p) => rows_to_result(
-                        &sqlx::query(sql)
-                            .fetch_all(p)
-                            .await
-                            .map_err(|e| e.to_string())?,
+                        &sqlx::query(sql).fetch_all(p).await.map_err(db_error)?,
                         stringify_mysql_row,
                     ),
                     NativePool::Sqlite(p) => rows_to_result(
-                        &sqlx::query(sql)
-                            .fetch_all(p)
-                            .await
-                            .map_err(|e| e.to_string())?,
+                        &sqlx::query(sql).fetch_all(p).await.map_err(db_error)?,
                         stringify_sqlite_row,
                     ),
                 };
@@ -2311,17 +2440,17 @@ pub(crate) async fn run_query(
                     NativePool::Pg(p) => sqlx::query(sql)
                         .execute(p)
                         .await
-                        .map_err(|e| e.to_string())?
+                        .map_err(db_error)?
                         .rows_affected(),
                     NativePool::MySql(p) => sqlx::query(sql)
                         .execute(p)
                         .await
-                        .map_err(|e| e.to_string())?
+                        .map_err(db_error)?
                         .rows_affected(),
                     NativePool::Sqlite(p) => sqlx::query(sql)
                         .execute(p)
                         .await
-                        .map_err(|e| e.to_string())?
+                        .map_err(db_error)?
                         .rows_affected(),
                 };
                 if is_ddl_keyword(sql) {
@@ -2332,10 +2461,10 @@ pub(crate) async fn run_query(
             }
         };
         close_native(pool).await;
-        Ok::<_, String>(outcome)
+        Ok::<_, dozer_model::LocalizedText>(outcome)
     };
     match tokio::time::timeout(std::time::Duration::from_secs(30), work).await {
         Ok(r) => r,
-        Err(_) => Err("查询超时(30秒)".to_string()),
+        Err(_) => Err(keyed("error.query_timeout_30s", "Query timed out (30s)")),
     }
 }

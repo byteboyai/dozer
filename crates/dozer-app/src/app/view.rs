@@ -338,7 +338,7 @@ impl App {
                     .height(Length::Fill),
             )
             .on_press(Message::Database(database::Message::TabOverflowDismiss));
-            match database::tab_overflow_popup(self, &ws.database) {
+            match database::tab_overflow_popup(self, &ws.database, self.locale.active_locale()) {
                 Some(popup) => stack![base, dismiss, popup.map(Message::Database)]
                     .width(Length::Fill)
                     .height(Length::Fill)
@@ -763,6 +763,7 @@ pub(crate) fn panel_body<'a>(
                     &ws.database,
                     Length::Fill,
                     zone_pane_border(zone, ac),
+                    app.locale.active_locale(),
                 )
                 .map(Message::Database);
             }
@@ -771,6 +772,7 @@ pub(crate) fn panel_body<'a>(
                 &ws.database,
                 Length::FillPortion(list_portion),
                 zone_pane_border(zone, lc),
+                app.locale.active_locale(),
             )
             .map(Message::Database);
             let content_pane = database::content_pane(
@@ -778,6 +780,7 @@ pub(crate) fn panel_body<'a>(
                 &ws.database,
                 Length::FillPortion(content_portion),
                 zone_pane_border(zone, rc),
+                app.locale.active_locale(),
             )
             .map(Message::Database);
             let list_bg = theme::region::project_pane()

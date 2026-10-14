@@ -181,7 +181,7 @@ pub(crate) fn desired_confirm(
     }
     if let Some(source_id) = ws.database.delete_confirm()
         && let Some(spec) =
-            crate::extensions::database::delete_confirm_spec(&ws.database, source_id)
+            crate::extensions::database::delete_confirm_spec(&ws.database, source_id, locale)
     {
         return Some((ConfirmTrigger::DatabaseDelete, map_database_spec(spec)));
     }
