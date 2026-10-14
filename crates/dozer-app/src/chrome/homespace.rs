@@ -283,6 +283,7 @@ fn home_right_zone(app: &App) -> Element<'_, Message, iced_widget::Theme, iced_r
         Length::Fill,
         zone_pane_border(zone, PaneCorner::All),
         false,
+        app.locale.active_locale(),
     )
     .map(Message::HomeBrowser);
     let zone_box = container(inner)

@@ -370,6 +370,26 @@ python3 scripts/i18n/build_inventory.py
 - Task 10 其余面板（host/web/conversations/agent/files/database/project/group_chat）按面板逐个提交。
 - 双语运行期视觉核对随 Task 13 执行。
 
+## Task 10 验收（web/browser 面板，按面板拆分提交）
+
+### 交付内容
+
+- 资源：`crates/dozer-app/locales/panels/web/{en,zh-CN}.json`（owner `dozer.web`）。
+- 迁移：`extensions/browser.rs`（`WEB_OWNER` + 本地 `t()`；`Tabs::addr_submit` 返回 `Err(dozer_model::LocalizedText)`（key `error.local_path`）；`State.error` 由 `Option<String>` 改 `Option<LocalizedText>`，收藏夹读/写失败经 `i18n::panel_keyed_args`（`error.bookmarks_load_failed`/`error.bookmarks_op_failed`）；`view`/`nav_button`/`star_button`/`bookmarks_toggle_button`/`bookmarks_panel` 穿 `locale`，`bookmark_group` 标题改收 `String`；导航/星标/收藏夹/新标签页 tooltip、地址占位、侧栏分组与空态、空页面、错误行经 `t`/`render_localized`）、`app/view.rs` 与 `chrome/homespace.rs`（`browser::view` 传 `app.locale.active_locale()`）、`i18n.rs`（`PANEL_OWNERS` 增 `dozer.web`）。
+- 附带修复：`scripts/i18n/scan_sources.py` 的 `is_test_context` 之前用"最后一个 `#[cfg(test)]` 位置"判定测试区，当测试模块 `mod tests` 之后还有别的 `#[cfg(test)]` 项（本文件有 `#[cfg(test)] impl Message`）时边界被推到文件末尾，测试模块内的夹具字面量被误判为 UI 文案；改为优先取 `#[cfg(test)] mod .. {` 模块起界后，browser.rs 的 7 条测试夹具字面量与 `dozer.database` 的同类 1 条一并归为 excluded。
+
+### 验证命令与结果
+
+- `cargo build -p dozer-app`：通过。
+- `cargo test -p dozer-app`：**2001 passed / 0 failed**（含更新后的 `addr_submit`/`update_addr_submit_local_path_*`/`update_bookmarks_mutated_error_*`/收藏夹读失败/`stale_*` 用例）。
+- `cargo fmt --all -- --check`、`cargo clippy -p dozer-panel-usage -p dozer-app --all-targets`（仅既有告警）、`python3 scripts/i18n/check_resources.py`（7 个 owner 目录）、`bash scripts/check-log-scope.sh`、`python3 scripts/audit/check_panel_boundary.py`：全绿。
+- `python3 scripts/i18n/build_inventory.py`：browser 路径候选**清零**（`counts: {"excluded": 3114, "migrated": 0, "unresolved": 445}`；`unresolved by task: {"10": 330, "11": 115}`；`dozer.web` 0 条）。
+
+### 残留
+
+- Task 10 其余面板（host/conversations/agent/files/database/project/group_chat）按面板逐个提交。
+- 双语运行期视觉核对随 Task 13 执行。
+
 ## 规格 L01–L14 验收（Task 13 执行，当前未开始）
 | ID | 场景 | 状态 |
 |---|---|---|

@@ -244,7 +244,19 @@ def in_ranges(pos: int, ranges) -> bool:
 def is_test_context(rel: str, text: str, pos: int) -> bool:
     if re.search(r"_test\.(?:rs)$", rel) or ".test." in rel:
         return True
-    # `#[cfg(test)]` 之后视为测试区(粗判:取最后一个 cfg(test) 位置)。
+    # `#[cfg(test)]` 引入的测试模块或测试辅助项之后视为测试区。
+    #
+    # 之前用"最后一个 `#[cfg(test)]` 位置"做粗判,会在测试模块之后还有别的
+    # `#[cfg(test)]` 项(如 `#[cfg(test)] impl Message { .. }`)的文件里把边界
+    # 推到文件末尾,导致测试模块内的字面量被误判成 UI 文案。
+    # 改为:(a) 若存在 `#[cfg(test)]\s*mod .. {`,取该模块 `{` 之后为测试区;
+    # (b) 否则退回"最后一个 `#[cfg(test)]` 之后"。
+    mod_m = None
+    for m2 in re.finditer(r"#\[cfg\(test\)\]\s*mod\s+\w+\s*\{", text):
+        mod_m = m2
+        break
+    if mod_m is not None:
+        return pos > mod_m.end() - 1
     m = None
     for m2 in re.finditer(r"#\[cfg\(test\)\]", text):
         m = m2

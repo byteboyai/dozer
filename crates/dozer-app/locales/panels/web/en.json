@@ -1,0 +1,16 @@
+{
+  "nav.back": "Back",
+  "nav.forward": "Forward",
+  "nav.refresh": "Refresh",
+  "addr.placeholder": "Enter a URL",
+  "star.tooltip": "Bookmark",
+  "bookmarks.tooltip": "Bookmarks",
+  "sidebar.global_group": "Global bookmarks",
+  "sidebar.project_group": "Project bookmarks",
+  "sidebar.empty": "No bookmarks yet",
+  "tab.new": "New tab",
+  "empty.no_page": "No page yet — type a URL in the address bar",
+  "error.local_path": "Opening local files is not supported in the browser",
+  "error.bookmarks_load_failed": "Failed to load bookmarks: {e}",
+  "error.bookmarks_op_failed": "Bookmark operation failed: {e}"
+}

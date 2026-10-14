@@ -1,9 +1,9 @@
 {
  "_comment": "由 scripts/i18n/build_inventory.py 生成;每次覆盖重写,勿手改结构。",
  "counts": {
-  "excluded": 3111,
+  "excluded": 3114,
   "migrated": 0,
-  "unresolved": 466
+  "unresolved": 445
  },
  "records": [
   {
@@ -1329,12 +1329,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-app/src/app/layout.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 23840",
    "task": null,
    "text": "off量级应远超真实 tab 数,才不会反向撞回 ws.preview 的 id",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -1343,12 +1343,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-app/src/app/layout.rs",
-   "reason": "测试/黄金值工具/诊断探针/内部常量;非面向用户文案",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 47088",
    "task": null,
    "text": "导出黄金值用:cargo test -p dozer-app drag_characterization_dump -- --ignored --nocapture",
-   "usage": "ui"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -1357,12 +1357,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-app/src/app/layout.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 47489",
    "task": null,
    "text": "用例数变了",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -1553,12 +1553,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-app/src/app/state.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 16232",
    "task": null,
    "text": "重复的面板日志名: {n}",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -1567,12 +1567,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-app/src/app/state.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 17836",
    "task": null,
    "text": "{}: 未知面板日志名 {name:?}(必须是 PanelKind 对应的名字)",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -1581,12 +1581,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-app/src/app/state.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 18393",
    "task": null,
    "text": "源码扫描没找到 panel 来源 {expected:?},实际找到 {found:?}",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -3515,7 +3515,7 @@
    "path": "crates/dozer-app/src/chrome/homespace.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 37700",
+   "symbol_hint": "string@offset 37736",
    "task": null,
    "text": "只有项目 A(git repo)贡献一条改动文件",
    "usage": "test"
@@ -3529,7 +3529,7 @@
    "path": "crates/dozer-app/src/chrome/homespace.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 37825",
+   "symbol_hint": "string@offset 37861",
    "task": null,
    "text": "卡片点击应带回所属项目 id",
    "usage": "test"
@@ -3543,7 +3543,7 @@
    "path": "crates/dozer-app/src/chrome/homespace.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 37929",
+   "symbol_hint": "string@offset 37965",
    "task": null,
    "text": "两个项目都没有 daemon 返回的会话",
    "usage": "test"
@@ -3557,7 +3557,7 @@
    "path": "crates/dozer-app/src/chrome/homespace.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 38774",
+   "symbol_hint": "string@offset 38810",
    "task": null,
    "text": "跨项目合并后只取前 4 条(对齐 Figma 卡片行数)",
    "usage": "test"
@@ -3571,7 +3571,7 @@
    "path": "crates/dozer-app/src/chrome/homespace.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 41114",
+   "symbol_hint": "string@offset 41150",
    "task": null,
    "text": "大小写不敏感,只匹配名称包含子串的项目",
    "usage": "test"
@@ -4829,40 +4829,12 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 11520",
+   "symbol_hint": "string@offset 11939",
    "task": null,
    "text": "每次都新开 tab,不去重",
-   "usage": "diag"
-  },
-  {
-   "evidence": null,
-   "id": "cand-7d7309ec05e2",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
-   "status": "excluded",
-   "symbol_hint": "string@offset 12853",
-   "task": null,
-   "text": "浏览器不支持打开本地文件",
-   "usage": "diag"
-  },
-  {
-   "evidence": null,
-   "id": "cand-7d7309ec05e2",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
-   "status": "excluded",
-   "symbol_hint": "string@offset 13004",
-   "task": null,
-   "text": "浏览器不支持打开本地文件",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -4871,12 +4843,12 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 13158",
+   "symbol_hint": "string@offset 13955",
    "task": null,
    "text": "空输入不产生动作",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -4885,12 +4857,12 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 14504",
+   "symbol_hint": "string@offset 15301",
    "task": null,
    "text": "about:blank 不预填,避免拼出垃圾",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -4899,12 +4871,12 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 15560",
+   "symbol_hint": "string@offset 16357",
    "task": null,
    "text": "无 tab 时没有 webview",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -4913,12 +4885,12 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 16231",
+   "symbol_hint": "string@offset 17028",
    "task": null,
    "text": "非激活 tab 不可见",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -4927,12 +4899,26 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 17857",
+   "symbol_hint": "string@offset 18654",
    "task": null,
    "text": "不该看到别的项目的收藏",
-   "usage": "diag"
+   "usage": "test"
+  },
+  {
+   "evidence": null,
+   "id": "cand-9451f3382609",
+   "key": null,
+   "kind": "string",
+   "owner": "dozer.web",
+   "path": "crates/dozer-app/src/extensions/browser.rs",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
+   "status": "excluded",
+   "symbol_hint": "string@offset 19702",
+   "task": null,
+   "text": "改名",
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -4941,12 +4927,12 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 18973",
+   "symbol_hint": "string@offset 19770",
    "task": null,
    "text": "已存在则不重复插入",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -4955,12 +4941,12 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 22456",
+   "symbol_hint": "string@offset 23344",
    "task": null,
    "text": "默认带一个 about:blank(下标 0),提交应在该激活 tab 打开而不新增",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -4969,12 +4955,12 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 22933",
+   "symbol_hint": "string@offset 23821",
    "task": null,
    "text": "复用激活 tab,数量不变",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -4983,26 +4969,12 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 23183",
+   "symbol_hint": "string@offset 24071",
    "task": null,
    "text": "无关 tab 不受影响",
-   "usage": "diag"
-  },
-  {
-   "evidence": null,
-   "id": "cand-7d7309ec05e2",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
-   "status": "excluded",
-   "symbol_hint": "string@offset 24579",
-   "task": null,
-   "text": "浏览器不支持打开本地文件",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -5011,12 +4983,12 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 24681",
+   "symbol_hint": "string@offset 25759",
    "task": null,
    "text": "仍是默认的 about:blank,未新增 tab",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -5025,12 +4997,12 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 27540",
+   "symbol_hint": "string@offset 28709",
    "task": null,
    "text": "无 tab 时不该 emit",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -5039,12 +5011,12 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 28748",
+   "symbol_hint": "string@offset 29917",
    "task": null,
    "text": "project_id 为 None 时不该 emit 网络请求",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -5053,12 +5025,12 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 28840",
+   "symbol_hint": "string@offset 30009",
    "task": null,
    "text": "本地乐观更新仍然发生",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -5067,12 +5039,40 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 32993",
+   "symbol_hint": "string@offset 33899",
    "task": null,
    "text": "daemon 错误: boom",
-   "usage": "diag"
+   "usage": "test"
+  },
+  {
+   "evidence": null,
+   "id": "cand-2c9992181305",
+   "key": null,
+   "kind": "string",
+   "owner": "dozer.web",
+   "path": "crates/dozer-app/src/extensions/browser.rs",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
+   "status": "excluded",
+   "symbol_hint": "string@offset 34379",
+   "task": null,
+   "text": "daemon 错误: boom",
+   "usage": "test"
+  },
+  {
+   "evidence": null,
+   "id": "cand-b6ac91488082",
+   "key": null,
+   "kind": "string",
+   "owner": "dozer.web",
+   "path": "crates/dozer-app/src/extensions/browser.rs",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
+   "status": "excluded",
+   "symbol_hint": "string@offset 35071",
+   "task": null,
+   "text": "daemon 断开",
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -5081,12 +5081,12 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 33905",
+   "symbol_hint": "string@offset 35291",
    "task": null,
    "text": "读失败不得清空缓存",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -5095,26 +5095,12 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 33983",
+   "symbol_hint": "string@offset 35369",
    "task": null,
    "text": "Unavailable 由顶栏徽标表达,不写内联错误",
-   "usage": "diag"
-  },
-  {
-   "evidence": null,
-   "id": "cand-ed09b95b22ff",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
-   "status": "excluded",
-   "symbol_hint": "string@offset 34895",
-   "task": null,
-   "text": "收藏夹加载失败: daemon 错误: boom",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -5123,12 +5109,68 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 37217",
+   "symbol_hint": "string@offset 35981",
    "task": null,
    "text": "daemon 错误: boom",
-   "usage": "diag"
+   "usage": "test"
+  },
+  {
+   "evidence": null,
+   "id": "cand-2c9992181305",
+   "key": null,
+   "kind": "string",
+   "owner": "dozer.web",
+   "path": "crates/dozer-app/src/extensions/browser.rs",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
+   "status": "excluded",
+   "symbol_hint": "string@offset 36448",
+   "task": null,
+   "text": "daemon 错误: boom",
+   "usage": "test"
+  },
+  {
+   "evidence": null,
+   "id": "cand-23b848a26557",
+   "key": null,
+   "kind": "string",
+   "owner": "dozer.web",
+   "path": "crates/dozer-app/src/extensions/browser.rs",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
+   "status": "excluded",
+   "symbol_hint": "string@offset 38033",
+   "task": null,
+   "text": "Global 收藏的目标项目恒为 None",
+   "usage": "test"
+  },
+  {
+   "evidence": null,
+   "id": "cand-2c9992181305",
+   "key": null,
+   "kind": "string",
+   "owner": "dozer.web",
+   "path": "crates/dozer-app/src/extensions/browser.rs",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
+   "status": "excluded",
+   "symbol_hint": "string@offset 38277",
+   "task": null,
+   "text": "daemon 错误: boom",
+   "usage": "test"
+  },
+  {
+   "evidence": null,
+   "id": "cand-2c9992181305",
+   "key": null,
+   "kind": "string",
+   "owner": "dozer.web",
+   "path": "crates/dozer-app/src/extensions/browser.rs",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
+   "status": "excluded",
+   "symbol_hint": "string@offset 38778",
+   "task": null,
+   "text": "daemon 错误: boom",
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -5137,26 +5179,12 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 60324",
+   "symbol_hint": "string@offset 62076",
    "task": null,
    "text": "收藏夹读取失败(dozerd 不可用): {}",
-   "usage": "log"
-  },
-  {
-   "evidence": null,
-   "id": "cand-9df7a5541046",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
-   "status": "excluded",
-   "symbol_hint": "string@offset 60427",
-   "task": null,
-   "text": "收藏夹加载失败: {}",
-   "usage": "log"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -5165,12 +5193,12 @@
    "kind": "string",
    "owner": "dozer.web",
    "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 61012",
+   "symbol_hint": "string@offset 63187",
    "task": null,
    "text": "由内核拦截处理,见 browser::Message::TextInputMenuOpen 文档",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -6910,17 +6938,31 @@
   },
   {
    "evidence": null,
+   "id": "cand-a4ce61190554",
+   "key": null,
+   "kind": "string",
+   "owner": "dozer.database",
+   "path": "crates/dozer-app/src/extensions/database/mod.rs",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
+   "status": "excluded",
+   "symbol_hint": "string@offset 18108",
+   "task": null,
+   "text": "旧错误",
+   "usage": "test"
+  },
+  {
+   "evidence": null,
    "id": "cand-920422d8c008",
    "key": null,
    "kind": "string",
    "owner": "dozer.database",
    "path": "crates/dozer-app/src/extensions/database/mod.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 26090",
    "task": null,
    "text": "数据库名",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -6929,12 +6971,12 @@
    "kind": "string",
    "owner": "dozer.database",
    "path": "crates/dozer-app/src/extensions/database/mod.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 27404",
    "task": null,
    "text": "应为 Browse",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -6943,12 +6985,12 @@
    "kind": "string",
    "owner": "dozer.database",
    "path": "crates/dozer-app/src/extensions/database/mod.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 28247",
    "task": null,
    "text": "应为 Query",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -6957,12 +6999,12 @@
    "kind": "string",
    "owner": "dozer.database",
    "path": "crates/dozer-app/src/extensions/database/mod.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 35599",
    "task": null,
    "text": "应为 Rows",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -6971,12 +7013,12 @@
    "kind": "string",
    "owner": "dozer.database",
    "path": "crates/dozer-app/src/extensions/database/mod.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 37719",
    "task": null,
    "text": "行里所有列都插了值,不应有 NULL",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -6985,12 +7027,12 @@
    "kind": "string",
    "owner": "dozer.database",
    "path": "crates/dozer-app/src/extensions/database/mod.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 38743",
    "task": null,
    "text": "数据库名",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -6999,12 +7041,12 @@
    "kind": "string",
    "owner": "dozer.database",
    "path": "crates/dozer-app/src/extensions/database/mod.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 38996",
    "task": null,
    "text": "数据库名",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -7013,12 +7055,12 @@
    "kind": "string",
    "owner": "dozer.database",
    "path": "crates/dozer-app/src/extensions/database/mod.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 40821",
    "task": null,
    "text": "应为 Browse",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -7027,12 +7069,12 @@
    "kind": "string",
    "owner": "dozer.database",
    "path": "crates/dozer-app/src/extensions/database/mod.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 43555",
    "task": null,
    "text": "应为 Browse",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -7041,12 +7083,12 @@
    "kind": "string",
    "owner": "dozer.database",
    "path": "crates/dozer-app/src/extensions/database/mod.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 43616",
    "task": null,
    "text": "过期/未运行的结果不应落地",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -15429,7 +15471,7 @@
    "path": "crates/dozer-app/src/i18n.rs",
    "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
    "status": "excluded",
-   "symbol_hint": "string@offset 2448",
+   "symbol_hint": "string@offset 2595",
    "task": null,
    "text": "内嵌语言包必须是合法扁平原",
    "usage": "diag"
@@ -15443,7 +15485,7 @@
    "path": "crates/dozer-app/src/i18n.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 6559",
+   "symbol_hint": "string@offset 6706",
    "task": null,
    "text": "设置",
    "usage": "test"
@@ -15457,7 +15499,7 @@
    "path": "crates/dozer-app/src/i18n.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 6749",
+   "symbol_hint": "string@offset 6896",
    "task": null,
    "text": "文件",
    "usage": "test"
@@ -15471,7 +15513,7 @@
    "path": "crates/dozer-app/src/i18n.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 6926",
+   "symbol_hint": "string@offset 7073",
    "task": null,
    "text": "代码健康度",
    "usage": "test"
@@ -15485,7 +15527,7 @@
    "path": "crates/dozer-app/src/i18n.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 7290",
+   "symbol_hint": "string@offset 7437",
    "task": null,
    "text": "保存失败：disk full",
    "usage": "test"
@@ -15499,7 +15541,7 @@
    "path": "crates/dozer-app/src/i18n.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 7865",
+   "symbol_hint": "string@offset 8012",
    "task": null,
    "text": "3 分钟前",
    "usage": "test"
@@ -15513,7 +15555,7 @@
    "path": "crates/dozer-app/src/i18n.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 8465",
+   "symbol_hint": "string@offset 8612",
    "task": null,
    "text": "断线",
    "usage": "test"
@@ -15527,7 +15569,7 @@
    "path": "crates/dozer-app/src/i18n.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 8559",
+   "symbol_hint": "string@offset 8706",
    "task": null,
    "text": "用量统计失败: 断线",
    "usage": "test"
@@ -15541,7 +15583,7 @@
    "path": "crates/dozer-app/src/i18n.rs",
    "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
-   "symbol_hint": "string@offset 8667",
+   "symbol_hint": "string@offset 8814",
    "task": null,
    "text": "Failed to load usage: 断线",
    "usage": "test"
@@ -28671,12 +28713,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "后端 crate 非 UI 字符串(错误/协议/日志);如经服务边界展示给用户,由 Task 07 适配稳定 code + 本地化摘要",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 49444",
    "task": null,
    "text": "daemon 错误: dozerd 正在停止中",
-   "usage": "ui"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -28685,12 +28727,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 49581",
    "task": null,
    "text": "正在停止中",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -28699,12 +28741,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 49983",
    "task": null,
    "text": "超时",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -28727,12 +28769,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 52978",
    "task": null,
    "text": "读任务应在丢弃接收端后退出",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -28741,12 +28783,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 53058",
    "task": null,
    "text": "连接应被关闭(EOF),得到 {line:?}",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -28755,12 +28797,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "后端 crate 非 UI 字符串(错误/协议/日志);如经服务边界展示给用户,由 Task 07 适配稳定 code + 本地化摘要",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 53859",
    "task": null,
    "text": "宿主不可用",
-   "usage": "ui"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -28811,12 +28853,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "后端 crate 非 UI 字符串(错误/协议/日志);如经服务边界展示给用户,由 Task 07 适配稳定 code + 本地化摘要",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 73075",
    "task": null,
    "text": "daemon 错误: boom",
-   "usage": "ui"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -28825,12 +28867,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 73248",
    "task": null,
    "text": "daemon 错误: boom",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -28839,12 +28881,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "后端 crate 非 UI 字符串(错误/协议/日志);如经服务边界展示给用户,由 Task 07 适配稳定 code + 本地化摘要",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 73385",
    "task": null,
    "text": "意外应答: Ok",
-   "usage": "ui"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -28853,12 +28895,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 73485",
    "task": null,
    "text": "意外应答: Ok",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -28867,12 +28909,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 75513",
    "task": null,
    "text": "daemon 断开",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -28881,12 +28923,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 76049",
    "task": null,
    "text": "daemon 错误: boom",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -28895,12 +28937,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "后端 crate 非 UI 字符串(错误/协议/日志);如经服务边界展示给用户,由 Task 07 适配稳定 code + 本地化摘要",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 78104",
    "task": null,
    "text": "协议错误: unknown variant `get_locale`",
-   "usage": "ui"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -28923,12 +28965,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 80786",
    "task": null,
    "text": "daemon 断开",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -28937,12 +28979,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 81329",
    "task": null,
    "text": "daemon 错误: boom",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -28965,12 +29007,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 83296",
    "task": null,
    "text": "daemon 断开",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -28979,12 +29021,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 83756",
    "task": null,
    "text": "daemon 错误: boom",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -28993,12 +29035,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 84999",
    "task": null,
    "text": "daemon 断开",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -29007,12 +29049,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 85540",
    "task": null,
    "text": "daemon 错误: boom",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -29035,12 +29077,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 87243",
    "task": null,
    "text": "daemon 断开",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -29049,12 +29091,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 87897",
    "task": null,
    "text": "daemon 错误: boom",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -29063,12 +29105,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 89260",
    "task": null,
    "text": "daemon 断开",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -29091,12 +29133,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 89817",
    "task": null,
    "text": "daemon 错误: boom",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -29105,12 +29147,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 91068",
    "task": null,
    "text": "daemon 断开",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -29119,12 +29161,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 91618",
    "task": null,
    "text": "daemon 错误: boom",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -29147,12 +29189,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "后端 crate 非 UI 字符串(错误/协议/日志);如经服务边界展示给用户,由 Task 07 适配稳定 code + 本地化摘要",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 93746",
    "task": null,
    "text": "撤销:改",
-   "usage": "ui"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -29161,12 +29203,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 94667",
    "task": null,
    "text": "服务端应收到请求",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -29175,12 +29217,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 95584",
    "task": null,
    "text": "outcome 原样带回",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -29189,12 +29231,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 95656",
    "task": null,
    "text": "服务端应收到请求",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -29203,12 +29245,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 96639",
    "task": null,
    "text": "撤销:改",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -29217,12 +29259,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 97221",
    "task": null,
    "text": "daemon 断开",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -29231,12 +29273,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozer-client/src/lib.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 97775",
    "task": null,
    "text": "daemon 错误: boom",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -36245,12 +36287,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/ide_bridge.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 16037",
    "task": null,
    "text": "ide_bridge projects 索引锁",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -36259,12 +36301,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/ide_bridge.rs",
-   "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 17233",
    "task": null,
    "text": "ide_bridge 绑定端口失败,跳过该项目的自动上下文",
-   "usage": "log"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -36273,12 +36315,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/ide_bridge.rs",
-   "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 17499",
    "task": null,
    "text": "ide_bridge 读取本地端口失败,跳过",
-   "usage": "log"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -36287,12 +36329,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/ide_bridge.rs",
-   "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 18309",
    "task": null,
    "text": "ide_bridge 写锁文件失败,跳过",
-   "usage": "log"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -36301,12 +36343,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/ide_bridge.rs",
-   "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 18469",
    "task": null,
    "text": "ide_bridge 写锁文件任务崩溃,跳过",
-   "usage": "log"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -36315,12 +36357,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/ide_bridge.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 19179",
    "task": null,
    "text": "ide_bridge projects 索引锁",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -36329,12 +36371,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/ide_bridge.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 20057",
    "task": null,
    "text": "ide_bridge projects 索引锁",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -36343,12 +36385,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/ide_bridge.rs",
-   "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 21021",
    "task": null,
    "text": "ide_bridge 并发连接数已达上限,丢弃这次连接",
-   "usage": "log"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -36357,12 +36399,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/ide_bridge.rs",
-   "reason": "日志宏参数;机器日志不翻译(可另行保留原文)",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 22847",
    "task": null,
    "text": "ide_bridge 鉴权失败,关闭连接",
-   "usage": "log"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -36385,12 +36427,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/ide_bridge.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 27732",
    "task": null,
    "text": "bridge 应该已经写出锁文件",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -36399,12 +36441,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/ide_bridge.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 28529",
    "task": null,
    "text": "握手应成功",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -36413,12 +36455,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/ide_bridge.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 28915",
    "task": null,
    "text": "期望文本帧",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -36427,12 +36469,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/ide_bridge.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 29648",
    "task": null,
    "text": "WS 握手本身仍会成功",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -36441,12 +36483,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/ide_bridge.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 30093",
    "task": null,
    "text": "鉴权失败不应该收到任何应答帧",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -36455,12 +36497,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/ide_bridge.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 31008",
    "task": null,
    "text": "前 N 条应该正常握手成功",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -36469,12 +36511,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/ide_bridge.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 31310",
    "task": null,
    "text": "超过并发上限的连接不应该握手成功",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -43189,12 +43231,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/transcripts/parse.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 44025",
    "task": null,
    "text": "改一下 README",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -43203,12 +43245,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/transcripts/parse.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 44210",
    "task": null,
    "text": "好的，我来改。",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -43217,12 +43259,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/transcripts/parse.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 46831",
    "task": null,
    "text": "只有真实消息应该摄取成回合",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -43231,12 +43273,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/transcripts/parse.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 46886",
    "task": null,
    "text": "真正的问题在这里",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -43245,12 +43287,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/transcripts/parse.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 49079",
    "task": null,
    "text": "主机面板，一个主机只能打开一个SSH tab",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -43259,12 +43301,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/transcripts/parse.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 50944",
    "task": null,
    "text": "status=incomplete 应判定为失败",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -43273,12 +43315,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/transcripts/parse.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 54598",
    "task": null,
    "text": "1 用户消息 + 1 assistant 消息;快照行跳过",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -43287,12 +43329,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/transcripts/parse.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 56219",
    "task": null,
    "text": "timestamp 字符串应该被解析成毫秒",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -43301,12 +43343,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/transcripts/parse.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 56322",
    "task": null,
    "text": "应该取 payload.id,不退化成 fallback_key",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -43315,12 +43357,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/transcripts/parse.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 58321",
    "task": null,
    "text": "两次调用各有独立 response_id,不能共用 message_key 互相覆盖",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -43329,12 +43371,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/transcripts/parse.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 59640",
    "task": null,
    "text": "回复一",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -43343,12 +43385,12 @@
    "kind": "string",
    "owner": "dozer.host",
    "path": "crates/dozerd/src/transcripts/parse.rs",
-   "reason": "开发期诊断宏(assert/expect/panic);不面向用户",
+   "reason": "测试/fixture 内文案;协议相关者随协议迁移(Task 08/09/11)",
    "status": "excluded",
    "symbol_hint": "string@offset 60494",
    "task": null,
    "text": "真正的问题",
-   "usage": "diag"
+   "usage": "test"
   },
   {
    "evidence": null,
@@ -43772,286 +43814,6 @@
   },
   {
    "evidence": null,
-   "id": "cand-9451f3382609",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 18905",
-   "task": "10",
-   "text": "改名",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-ee042867601d",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 20223",
-   "task": "10",
-   "text": "旧错误",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-ee042867601d",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 24854",
-   "task": "10",
-   "text": "旧错误",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-2c9992181305",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 32513",
-   "task": "10",
-   "text": "daemon 错误: boom",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-b6ac91488082",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 33685",
-   "task": "10",
-   "text": "daemon 断开",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-2c9992181305",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 34595",
-   "task": "10",
-   "text": "daemon 错误: boom",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-23b848a26557",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 36472",
-   "task": "10",
-   "text": "Global 收藏的目标项目恒为 None",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-2c9992181305",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 36716",
-   "task": "10",
-   "text": "daemon 错误: boom",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-952c3c81cacd",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 62197",
-   "task": "10",
-   "text": "后退",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-22bd9e8b2520",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 62284",
-   "task": "10",
-   "text": "前进",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-c8ce92bb485d",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 62366",
-   "task": "10",
-   "text": "刷新",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-933873a3edfe",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 63874",
-   "task": "10",
-   "text": "收藏",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-7dac2a762c07",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 66561",
-   "task": "10",
-   "text": "全局收藏",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-0e45e203bd18",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 66648",
-   "task": "10",
-   "text": "本项目收藏",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-a2771fe185a7",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 66726",
-   "task": "10",
-   "text": "暂无收藏",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-5de911d1a669",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 69327",
-   "task": "10",
-   "text": "新标签页",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-cd15b9c115f2",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 70118",
-   "task": "10",
-   "text": "输入网址",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-7d7309ec05e2",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 7333",
-   "task": "10",
-   "text": "浏览器不支持打开本地文件",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-112b10801197",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 73330",
-   "task": "10",
-   "text": "暂无网页——在地址栏输入网址",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-62f1293157d2",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.web",
-   "path": "crates/dozer-app/src/extensions/browser.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 75612",
-   "task": "10",
-   "text": "收藏夹",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
    "id": "cand-ae4da95e790e",
    "key": null,
    "kind": "string",
@@ -44314,20 +44076,6 @@
    "symbol_hint": "string@offset 8622",
    "task": "10",
    "text": "加载超时(5秒)",
-   "usage": "ui"
-  },
-  {
-   "evidence": null,
-   "id": "cand-a4ce61190554",
-   "key": null,
-   "kind": "string",
-   "owner": "dozer.database",
-   "path": "crates/dozer-app/src/extensions/database/mod.rs",
-   "reason": null,
-   "status": "unresolved",
-   "symbol_hint": "string@offset 18108",
-   "task": "10",
-   "text": "旧错误",
    "usage": "ui"
   },
   {
@@ -50086,10 +49834,10 @@
   }
  ],
  "schema": 1,
- "total": 3577,
+ "total": 3559,
  "unassigned_unresolved": 0,
  "unresolved_by_task": {
-  "10": 351,
+  "10": 330,
   "11": 115
  }
 }

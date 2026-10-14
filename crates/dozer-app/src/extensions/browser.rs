@@ -26,6 +26,14 @@ use std::sync::Arc;
 
 dozer_core::scope!(LOG, panel, "web");
 
+/// 浏览器面板的 i18n owner(`locales/panels/web/`)。
+pub(crate) const WEB_OWNER: &str = "dozer.web";
+
+/// 按当前 locale 取一条本面板文案。
+fn t(key: &str, fallback: &str, locale: &str) -> String {
+    crate::i18n::panel_text(WEB_OWNER, key, fallback, locale)
+}
+
 /// 一个浏览器 tab。
 #[derive(Debug, Clone, PartialEq)]
 pub struct BrowserTab {
@@ -213,14 +221,18 @@ impl Tabs {
     /// 无 scheme 的裸输入(域名/IP/`host:port`)才补 `https://`。**不**自动
     /// 失焦(同 Files 搜索框 Stage 2 的决定,Enter 提交后光标仍留在输入框
     /// 里,是记录在案的小行为变化,不是遗漏)。
-    pub fn addr_submit(&mut self) -> Result<Option<String>, String> {
+    pub fn addr_submit(&mut self) -> Result<Option<String>, dozer_model::LocalizedText> {
         let input = std::mem::take(&mut self.addr_buffer);
         let input = input.trim();
         if input.is_empty() {
             return Ok(None);
         }
         if input.starts_with('/') || input.starts_with("~/") {
-            return Err("浏览器不支持打开本地文件".to_string());
+            return Err(dozer_model::LocalizedText::keyed(
+                WEB_OWNER,
+                "error.local_path",
+                "Opening local files is not supported in the browser",
+            ));
         }
         if input.contains("://") || has_explicit_scheme(input) {
             return Ok(Some(input.to_string()));
@@ -378,11 +390,25 @@ mod tests {
 
         t.set_addr_focused(true);
         t.set_addr_buffer("/tmp/x".to_string());
-        assert_eq!(t.addr_submit(), Err("浏览器不支持打开本地文件".to_string()));
+        assert_eq!(
+            t.addr_submit(),
+            Err(dozer_model::LocalizedText::keyed(
+                WEB_OWNER,
+                "error.local_path",
+                "Opening local files is not supported in the browser"
+            ))
+        );
 
         t.set_addr_focused(true);
         t.set_addr_buffer("~/x".to_string());
-        assert_eq!(t.addr_submit(), Err("浏览器不支持打开本地文件".to_string()));
+        assert_eq!(
+            t.addr_submit(),
+            Err(dozer_model::LocalizedText::keyed(
+                WEB_OWNER,
+                "error.local_path",
+                "Opening local files is not supported in the browser"
+            ))
+        );
 
         t.set_addr_focused(true);
         t.set_addr_buffer("".to_string());
@@ -608,7 +634,10 @@ mod tests {
     #[tokio::test]
     async fn update_open_url_clears_error() {
         let mut state = State {
-            error: Some("旧错误".to_string()),
+            error: Some(dozer_model::LocalizedText::literal(
+                WEB_OWNER,
+                "stale error",
+            )),
             ..State::default()
         };
         let handle = tokio::runtime::Handle::current();
@@ -745,7 +774,14 @@ mod tests {
             &handle,
             |_| {},
         );
-        assert_eq!(state.error.as_deref(), Some("浏览器不支持打开本地文件"));
+        assert_eq!(
+            state.error,
+            Some(dozer_model::LocalizedText::keyed(
+                WEB_OWNER,
+                "error.local_path",
+                "Opening local files is not supported in the browser"
+            ))
+        );
         assert_eq!(
             state.tabs.tabs().len(),
             1,
@@ -756,7 +792,10 @@ mod tests {
     #[tokio::test]
     async fn update_star_click_toggles_bookmark() {
         let mut state = State {
-            error: Some("旧错误".to_string()),
+            error: Some(dozer_model::LocalizedText::literal(
+                WEB_OWNER,
+                "stale error",
+            )),
             ..State::default()
         };
         state.tabs.open_url("http://a.com".into());
@@ -931,7 +970,15 @@ mod tests {
             &handle,
             |_| {},
         );
-        assert_eq!(state.error.as_deref(), Some("boom"));
+        assert_eq!(
+            state.error,
+            Some(crate::i18n::panel_keyed_args(
+                WEB_OWNER,
+                "error.bookmarks_op_failed",
+                "Bookmark operation failed: {e}",
+                &[("e", "boom")],
+            ))
+        );
     }
 
     #[test]
@@ -1064,8 +1111,13 @@ mod tests {
         );
         assert_eq!(state.bookmarks, cached);
         assert_eq!(
-            state.error.as_deref(),
-            Some("收藏夹加载失败: daemon 错误: boom")
+            state.error,
+            Some(crate::i18n::panel_keyed_args(
+                WEB_OWNER,
+                "error.bookmarks_load_failed",
+                "Failed to load bookmarks: {e}",
+                &[("e", "daemon 错误: boom")],
+            ))
         );
     }
 
@@ -1218,7 +1270,16 @@ mod tests {
                 )),
             ),
         );
-        assert!(state.error.as_ref().unwrap().contains("current"));
+        assert_eq!(
+            state
+                .error
+                .as_ref()
+                .unwrap()
+                .args
+                .get("e")
+                .map(String::as_str),
+            Some("current")
+        );
         apply(
             &mut state,
             Message::AsyncResult(
@@ -1438,7 +1499,7 @@ impl TabHover {
 pub struct State {
     pub(crate) requests: crate::panel_host::RequestTrackers,
     tabs: Tabs,
-    error: Option<String>,
+    error: Option<dozer_model::LocalizedText>,
     bookmarks: Vec<BookmarkInfo>,
     bookmarks_open: bool,
     /// tab 标题/关闭按钮的 hover 进度,键 `(tab 序号, 是否关闭按钮)`。
@@ -1734,6 +1795,7 @@ pub fn update(
             Ok(None) => {}
             Err(message) => state.error = Some(message),
         },
+
         Message::StarClick => {
             state.error = None;
             let Some(url) = state
@@ -1811,12 +1873,22 @@ pub fn update(
             if e.kind == ServiceErrorKind::Unavailable {
                 dozer_core::log_debug!(LOG, "收藏夹读取失败(dozerd 不可用): {}", e.message);
             } else {
-                state.error = Some(format!("收藏夹加载失败: {}", e.message));
+                state.error = Some(crate::i18n::panel_keyed_args(
+                    WEB_OWNER,
+                    "error.bookmarks_load_failed",
+                    "Failed to load bookmarks: {e}",
+                    &[("e", e.message.as_str())],
+                ));
             }
         }
         Message::BookmarksMutated(_, res) => {
             if let Err(message) = res {
-                state.error = Some(message);
+                state.error = Some(crate::i18n::panel_keyed_args(
+                    WEB_OWNER,
+                    "error.bookmarks_op_failed",
+                    "Bookmark operation failed: {e}",
+                    &[("e", message.as_str())],
+                ));
             }
             request_bookmarks_refresh(&state.requests, project_id, service, handle, emit);
         }
@@ -1857,14 +1929,27 @@ pub fn request_bookmarks_refresh(
 /// (`icon_button_entry`),静止 DIM、hover 平滑过渡到 GOLD,与同行星标/
 /// 收藏夹按钮观感一致。点击发 `Message::Nav(action)`,真正的 webview
 /// 历史导航/刷新由 main.rs `dispatch` 拦截执行。
-fn nav_button(
-    state: &State,
+fn nav_button<'a>(
+    state: &'a State,
     action: NavAction,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    locale: &str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let (kind, tooltip, key) = match action {
-        NavAction::Back => (icons::IconKind::CircleArrowLeft, "后退", NAV_BACK_KEY),
-        NavAction::Forward => (icons::IconKind::CircleArrowRight, "前进", NAV_FORWARD_KEY),
-        NavAction::Refresh => (icons::IconKind::RotateCw, "刷新", NAV_REFRESH_KEY),
+        NavAction::Back => (
+            icons::IconKind::CircleArrowLeft,
+            t("nav.back", "Back", locale),
+            NAV_BACK_KEY,
+        ),
+        NavAction::Forward => (
+            icons::IconKind::CircleArrowRight,
+            t("nav.forward", "Forward", locale),
+            NAV_FORWARD_KEY,
+        ),
+        NavAction::Refresh => (
+            icons::IconKind::RotateCw,
+            t("nav.refresh", "Refresh", locale),
+            NAV_REFRESH_KEY,
+        ),
     };
     icons::icon_button_entry(
         kind,
@@ -1887,10 +1972,11 @@ fn nav_button(
 /// 真实值,不能传 `None` 占位——否则"只在本项目收藏、没加全局收藏"的
 /// 网址会被误判成未收藏(`bookmark_status` 的 `project` 字段只在传了
 /// `Some(pid)` 时才会去匹配)。
-fn star_button(
-    state: &State,
+fn star_button<'a>(
+    state: &'a State,
     project_id: Option<i64>,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    locale: &str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let url = state
         .tabs
         .tabs()
@@ -1913,14 +1999,14 @@ fn star_button(
         url.is_some(),
         Message::StarClick,
         |hovered| Message::Hover(STAR_HOVER_KEY, false, hovered),
-        "收藏",
+        t("star.tooltip", "Bookmark", locale),
     )
 }
 
 /// 一组收藏条目:文件夹图标 + 标题(点击新开 tab)+ `×` 删除按钮,风格照抄
 /// tab 关闭按钮。条目在文件夹标题下缩进一级,呼应收藏夹"文件夹树"视觉。
 fn bookmark_group<'a>(
-    title: &'static str,
+    title: String,
     items: &[&'a BookmarkInfo],
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let header = row![
@@ -1973,11 +2059,12 @@ fn bookmark_group<'a>(
 /// 文案。`width` 由调用方按配对布局里侧栏那一份宽度的 flex 权重传入,侧栏
 /// 背景用列表侧一致的 `byteui::theme::color::current().bg`(结构性常驻侧栏,不再是盖在下方的
 /// 浮层卡片)。
-fn bookmarks_panel(
-    state: &State,
+fn bookmarks_panel<'a>(
+    state: &'a State,
     project_id: Option<i64>,
     width: Length,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    locale: &str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let global: Vec<&BookmarkInfo> = state
         .bookmarks
         .iter()
@@ -1991,12 +2078,18 @@ fn bookmarks_panel(
 
     let both_empty = global.is_empty() && project.is_empty();
     let mut col = column![].spacing(6);
-    col = col.push(bookmark_group("全局收藏", &global));
+    col = col.push(bookmark_group(
+        t("sidebar.global_group", "Global bookmarks", locale),
+        &global,
+    ));
     if project_id.is_some() {
-        col = col.push(bookmark_group("本项目收藏", &project));
+        col = col.push(bookmark_group(
+            t("sidebar.project_group", "Project bookmarks", locale),
+            &project,
+        ));
     }
     if both_empty {
-        col = col.push(lh(text("暂无收藏")
+        col = col.push(lh(text(t("sidebar.empty", "No bookmarks yet", locale))
             .size(byteui::theme::font::subtitle())
             .color(byteui::theme::color::current().dim)));
     }
@@ -2015,14 +2108,15 @@ fn bookmarks_panel(
 /// 浏览器面板:表头 + (可选 tab 栏)+ 地址栏(与星标/收藏夹按钮)+ (可选
 /// 星标菜单/收藏夹面板)+ (可选错误文案)+ 激活 tab 的网页预览。
 /// `project_id` 用于星标收藏态判定(全局/本项目两档)。
-pub fn view(
-    state: &State,
+pub fn view<'a>(
+    state: &'a State,
     project_id: Option<i64>,
     bookmarks_split: f32,
     width: Length,
     outer: Border,
     mirror: bool,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+    locale: &str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let region = theme::region::browser_pane();
 
     let items: Vec<Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>> = state
@@ -2069,7 +2163,7 @@ pub fn view(
         true,
         Message::OpenUrl("about:blank".to_string()),
         |hovered| Message::Hover(NEW_TAB_KEY, false, hovered),
-        "新标签页",
+        t("tab.new", "New tab", locale),
     );
     let tabs_row = row(items
         .into_iter()
@@ -2093,9 +2187,10 @@ pub fn view(
     } else {
         active_url
     };
+    let addr_placeholder = t("addr.placeholder", "Enter a URL", locale);
     let addr_input = byteui::interaction::context_menu::wrap(
         byteui::form::input_text::view(
-            "输入网址",
+            &addr_placeholder,
             addr_value,
             false,
             Some(addr_field_id()),
@@ -2126,7 +2221,7 @@ pub fn view(
                 .height(Length::Fill)
                 .align_y(iced_widget::core::alignment::Vertical::Center)
                 .align_x(iced_widget::core::alignment::Horizontal::Left),
-            container(star_button(state, project_id))
+            container(star_button(state, project_id, locale))
                 .height(Length::Fill)
                 .align_y(iced_widget::core::alignment::Vertical::Center),
         ]
@@ -2154,9 +2249,9 @@ pub fn view(
     // 后退/前进/刷新三颗导航按钮紧凑成组(组内间距 0,比下方整体 4 更紧),
     // 再与地址栏/收藏等拉开到 4,突出"导航簇"的视觉聚合。
     let nav_buttons = row![
-        nav_button(state, NavAction::Back),
-        nav_button(state, NavAction::Forward),
-        nav_button(state, NavAction::Refresh),
+        nav_button(state, NavAction::Back, locale),
+        nav_button(state, NavAction::Forward, locale),
+        nav_button(state, NavAction::Refresh, locale),
     ]
     .spacing(0)
     .align_y(iced_widget::core::alignment::Vertical::Center);
@@ -2166,9 +2261,13 @@ pub fn view(
     // 内压低来瘦身高,这里只贡献下边距、不再加别的内边距。
     let addr_row = container(
         container(
-            row![nav_buttons, addr_box, bookmarks_toggle_button(state),]
-                .spacing(4)
-                .align_y(iced_widget::core::alignment::Vertical::Center),
+            row![
+                nav_buttons,
+                addr_box,
+                bookmarks_toggle_button(state, locale),
+            ]
+            .spacing(4)
+            .align_y(iced_widget::core::alignment::Vertical::Center),
         )
         .width(Length::Fill),
     )
@@ -2177,16 +2276,23 @@ pub fn view(
     let mut content = column![tab_bar, tab_divider(), addr_row].spacing(region.gap);
 
     if let Some(err) = &state.error {
-        content = content.push(lh(text(format!("⚠ {err}"))
-            .size(byteui::theme::font::body())
-            .color(byteui::theme::color::current().red)));
+        content = content.push(lh(text(format!(
+            "⚠ {}",
+            crate::i18n::render_localized(err, locale)
+        ))
+        .size(byteui::theme::font::body())
+        .color(byteui::theme::color::current().red)));
     }
 
     let body: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
         if state.tabs.tabs().is_empty() {
-            container(lh(text("暂无网页——在地址栏输入网址")
-                .size(byteui::theme::font::subtitle())
-                .color(byteui::theme::color::current().dim)))
+            container(lh(text(t(
+                "empty.no_page",
+                "No page yet — type a URL in the address bar",
+                locale,
+            ))
+            .size(byteui::theme::font::subtitle())
+            .color(byteui::theme::color::current().dim)))
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
@@ -2205,7 +2311,8 @@ pub fn view(
             .unwrap_or(byteui::theme::color::current().bg);
         let (list_portion, content_portion) = split_portions(1.0 - bookmarks_split);
         let content_box = container(body).width(Length::FillPortion(content_portion));
-        let bookmarks_box = bookmarks_panel(state, project_id, Length::FillPortion(list_portion));
+        let bookmarks_box =
+            bookmarks_panel(state, project_id, Length::FillPortion(list_portion), locale);
         let divider = crate::app::divider_bar(
             crate::app::Divider::BrowserBookmarksSplit,
             bg,
@@ -2237,9 +2344,10 @@ pub fn view(
 /// 地址栏"收藏夹"展开按钮:切换收藏夹侧栏。图标用 `FolderBookmark`,颜色
 /// 恒定(不像星标那样带收藏状态)。走统一 icon 按钮规范(DIM→GOLD hover,
 /// 无选中态),hover 动画走浏览器自己的 `State` 进度机(哨兵键)。
-fn bookmarks_toggle_button(
-    state: &State,
-) -> Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> {
+fn bookmarks_toggle_button<'a>(
+    state: &'a State,
+    locale: &str,
+) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     icons::icon_button_entry(
         icons::IconKind::FolderBookmark,
         byteui::theme::icon_size::row(),
@@ -2251,7 +2359,7 @@ fn bookmarks_toggle_button(
         true,
         Message::BookmarksToggle,
         |hovered| Message::Hover(STAR_HOVER_KEY, true, hovered),
-        "收藏夹",
+        t("bookmarks.tooltip", "Bookmarks", locale),
     )
 }
 

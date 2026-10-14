@@ -863,6 +863,7 @@ pub(crate) fn panel_body<'a>(
             Length::Fill,
             zone_pane_border(zone, ac),
             app.panel_mirrored(PanelKind::Web),
+            app.locale.active_locale(),
         )
         .map(Message::Browser),
         PanelKind::Agent => {

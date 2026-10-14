@@ -1,0 +1,16 @@
+{
+  "nav.back": "后退",
+  "nav.forward": "前进",
+  "nav.refresh": "刷新",
+  "addr.placeholder": "输入网址",
+  "star.tooltip": "收藏",
+  "bookmarks.tooltip": "收藏夹",
+  "sidebar.global_group": "全局收藏",
+  "sidebar.project_group": "本项目收藏",
+  "sidebar.empty": "暂无收藏",
+  "tab.new": "新标签页",
+  "empty.no_page": "暂无网页——在地址栏输入网址",
+  "error.local_path": "浏览器不支持打开本地文件",
+  "error.bookmarks_load_failed": "收藏夹加载失败: {e}",
+  "error.bookmarks_op_failed": "收藏操作失败: {e}"
+}
