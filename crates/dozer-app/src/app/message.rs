@@ -569,6 +569,10 @@ pub enum Message {
     /// 应用 webview(`app_webview`)里的 mousedown:带 webview id,据此反查是哪个应用面板拿到了键盘焦点
     /// (共用的 `WebViewFocused` 不带面板信息,会被误判成 Files/Project/Browser)。
     AppWebViewFocused(usize),
+    /// 应用 webview 导航完成(主框架 `PageLoadEvent::Finished`):`runtime.rs` 的
+    /// `with_on_page_load_handler` 经事件环发来,请求宿主把当前 locale 快照推给语言桥
+    /// (初始化脚本只装桥骨架、冻结于创建时,真实值必须导航后 evaluate)。仅装了桥的应用会发。
+    AppWebViewLocaleReady(usize),
     /// 子 webview 上的鼠标松开(winit 收不到,JS 经 IPC 发来)。目的是结束
     /// 页签拖拽:若用户把 tab 从 iced 表层一路拖进 webview 并在这里松开,
     /// winit 的根本 `MouseInput{Released}` 收不到,`TabDragEnd` 就永不触发,

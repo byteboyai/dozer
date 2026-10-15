@@ -1664,6 +1664,7 @@ impl PreviewPane {
                     // 视图下 rAF 被 WebKit 挂起会死锁(见字段文档);未就绪时用
                     // 离屏停放代替 hidden。已就绪者交给上层 visible 判断。
                     park_offscreen: !tab.backend_state.is_ready(),
+                    display_i18n: None,
                 })
             })
             .collect()
@@ -1748,6 +1749,7 @@ impl PreviewPane {
                     // CodeMirror host 不依赖 rAF 完成 boot(hidden 下可正常
                     // 建索引/读正文),保持原有的「hidden 预创建」语义。
                     park_offscreen: false,
+                    display_i18n: None,
                 })
             })
             .collect()
@@ -1790,6 +1792,7 @@ impl PreviewPane {
                     surface: None,
                     // JSON Tree host 同为 hidden 预创建 boot,不依赖 rAF。
                     park_offscreen: false,
+                    display_i18n: None,
                 })
             })
             .collect()
@@ -1836,6 +1839,7 @@ impl PreviewPane {
                     loading_generation: loading.then_some(tab.load_state.generation),
                     surface: None,
                     park_offscreen: false,
+                    display_i18n: None,
                 })
             })
             .collect()

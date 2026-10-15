@@ -1979,11 +1979,9 @@ impl App {
     fn spawn_locale_fetch(&self, seq: u64) {
         let client = self.client.clone();
         let proxy = self.proxy.clone();
+        let candidates = crate::platform::locale::system_language_candidates();
         self.handle.spawn(async move {
-            let outcome = match dozer_services::LocaleService::get_locale(&client).await {
-                Ok(snapshot) => FetchOutcome::Ok(snapshot),
-                Err(_) => FetchOutcome::Unavailable,
-            };
+            let outcome = super::locale::fetch_locale(&client, candidates).await;
             let _ = proxy.send_event(Message::LocaleFetched { seq, outcome });
         });
     }
@@ -2012,7 +2010,7 @@ impl App {
         dozer_core::log_info!(LOG, active = %self.locale.active_locale(), "界面语言生效值变化");
     }
 
-    pub fn next_locale_wake(&self) -> std::time::Duration {
+    pub fn next_locale_wake(&self) -> Option<std::time::Duration> {
         self.locale.next_wake(std::time::Instant::now())
     }
 
@@ -3901,6 +3899,7 @@ impl App {
                             // 可见性只由 `app_modal_open` 决定(浮层遮挡时真隐藏),
                             // 无「隐藏预创建」语义,不需要离屏停放。
                             park_offscreen: false,
+                            display_i18n: None,
                         };
                         out.push((spec, bounds));
                     }
@@ -3937,6 +3936,7 @@ impl App {
                         surface: Some(self.usage_surface.id()),
                         // 用量内容 webview 无隐藏预创建,不涉及离屏停放。
                         park_offscreen: false,
+                        display_i18n: None,
                     };
                     out.push((spec, bounds));
                 }
@@ -3968,6 +3968,7 @@ impl App {
                         // 归属由共享宿主 Surface 显式校验(instance/slot/generation)。
                         surface: Some(self.codehealth_surface.id()),
                         park_offscreen: false,
+                        display_i18n: None,
                     };
                     out.push((spec, bounds));
                 }
@@ -3999,6 +4000,7 @@ impl App {
                         loading_generation: None,
                         surface: None,
                         park_offscreen: false,
+                        display_i18n: None,
                     };
                     out.push((spec, bounds));
                 }
@@ -4048,6 +4050,7 @@ impl App {
                         loading_generation: None,
                         surface: None,
                         park_offscreen: false,
+                        display_i18n: None,
                     };
                     out.push((spec, bounds));
                 }

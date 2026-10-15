@@ -2,8 +2,9 @@
 
 use bytehost_apps::gateway::GatewayConfig;
 use bytehost_apps::id::AppId;
+use bytehost_apps::i18n::WebViewLocale;
 use bytehost_apps::plan::{Approval, Provenance, TrustLevel};
-use bytehost_apps::proto::{AppErrorKind, AppSource};
+use bytehost_apps::proto::{AppDisplayI18n, AppErrorKind, AppSource, DisplayTitleScope};
 use bytehost_apps::registry::UninstallMode;
 use bytehost_apps::service::AppService;
 use bytehost_client::AppHostApi;
@@ -123,6 +124,38 @@ fn id(s: &str) -> AppId {
     AppId::new(s).unwrap()
 }
 
+/// 带 `[i18n]` 声明的应用:`webview_locale = "live"`,presentation 标题 key `app.title`,
+/// 字符串落在默认 `locales/` 目录。`display_i18n` 含逐语言解析出的标题值。
+fn write_app_with_i18n(dir: &Path, id_str: &str, body: &str) -> AppSource {
+    std::fs::create_dir_all(dir.join("web")).unwrap();
+    std::fs::create_dir_all(dir.join("locales")).unwrap();
+    std::fs::write(
+        dir.join("manifest.toml"),
+        format!(
+            "schema_version = 1\nmin_host_version = \"0.1.0\"\nid = \"{id_str}\"\nname = \"{id_str} app\"\nversion = \"1.0.0\"\n\n\
+             [i18n]\ndefault_locale = \"en\"\nsupported_locales = [\"en\", \"zh-CN\"]\nwebview_locale = \"live\"\n\n\
+             [presentation]\nentrypoint = \"main\"\ntitle_key = \"app.title\"\ntitle_fallback = \"Notes\"\n\n\
+             [entrypoints.main]\ntype = \"web\"\npath = \"/\"\n\n\
+             [runtime]\nkind = \"static_web\"\nsource = \"web/\"\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(dir.join("web/index.html"), body).unwrap();
+    std::fs::write(
+        dir.join("locales/en.json"),
+        "{\"app.title\": \"Notes\"}",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("locales/zh-CN.json"),
+        "{\"app.title\": \"笔记\"}",
+    )
+    .unwrap();
+    AppSource::LocalDir {
+        path: dir.to_path_buf(),
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_whole_install_run_stop_uninstall_cycle_works_over_the_socket() {
     let tmp = tempfile::tempdir().unwrap();
@@ -180,6 +213,57 @@ async fn the_whole_install_run_stop_uninstall_cycle_works_over_the_socket() {
     assert!(err.text().contains("没有安装"), "{err}");
     let runtimes = c.app_probe_runtimes().await.unwrap();
     assert_eq!(runtimes.len(), 3);
+}
+
+/// B12:带 `[i18n]` 的应用,其 `AppSummary.display_i18n`(默认语言 / 支持语言 / webview 桥能力 /
+/// 逐语言解析标题)经真实 UDS + `dozer-client` 完整体现在 `app_list` 应答里——即 bytehost 的投影
+/// DTO 与 dozer 宿主消费的是同一份结构,协商逻辑(精确匹配 supported → default → fallback)一致。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn i18n_metadata_round_trips_through_the_socket() {
+    let tmp = tempfile::tempdir().unwrap();
+    let apps =
+        AppService::start_with(&tmp.path().join("bytehost"), GatewayConfig { port: 0 }).await;
+    let d = start_daemon(apps).await;
+    let c = &d.client;
+
+    let source = write_app_with_i18n(&tmp.path().join("src/notes"), "notes", "<h1>hi</h1>");
+    let plan = c
+        .app_plan(source.clone(), Provenance::Local, TrustLevel::Trusted)
+        .await
+        .unwrap();
+    c.app_install(
+        plan.approve(Approval {
+            approver: "test".into(),
+            approved_ms: 1,
+        }),
+        source,
+    )
+    .await
+    .unwrap();
+
+    let listed = c.app_list().await.unwrap();
+    assert_eq!(listed.len(), 1);
+    let di: &AppDisplayI18n = listed[0]
+        .display_i18n
+        .as_ref()
+        .expect("带 [i18n] 的应用必须投影 display_i18n");
+    assert_eq!(di.default_locale, "en");
+    assert_eq!(di.supported_locales, vec!["en".to_string(), "zh-CN".to_string()]);
+    assert_eq!(di.webview_locale, WebViewLocale::Live, "webview_locale 协商为 live");
+    // 协商逻辑与 bytehost 纯 resolver 一致:命中 zh-CN、回落 default(en)。
+    assert_eq!(
+        di.resolve_title(&DisplayTitleScope::Presentation, "zh-CN"),
+        Some("笔记")
+    );
+    assert_eq!(
+        di.resolve_title(&DisplayTitleScope::Presentation, "en"),
+        Some("Notes")
+    );
+    assert_eq!(
+        di.resolve_title(&DisplayTitleScope::Presentation, "fr"),
+        Some("Notes"),
+        "未知语言回落 default"
+    );
 }
 
 /// 手动回滚经真实 UDS + `dozer-client` 走一遍:装两版 → `app_rollback` → `app_list` 反映旧版本。

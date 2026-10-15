@@ -37,6 +37,41 @@ mod tests {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
+    #[tokio::test]
+    async fn delete_completion_preserves_originating_project() {
+        let dir = tempfile::tempdir().unwrap();
+        // Exercise the asynchronous error path without moving anything to Trash.
+        let missing = dir.path().join("missing.txt");
+        let mut ws = WorkspaceState::default();
+        ws.tree_delete_confirm = Some(vec![(missing.clone(), false)]);
+        let mut app = AppState::default();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        update(
+            &mut ws,
+            &mut app,
+            Message::DeleteConfirm,
+            42,
+            &tokio::runtime::Handle::current(),
+            move |msg| {
+                tx.send(msg).unwrap();
+            },
+            &crate::external_apps::ExternalAppsConfig::default(),
+            true,
+            "en",
+        );
+        let completion = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let Message::DeleteApplied(project_id, results) = completion else {
+            panic!("expected delete completion");
+        };
+        assert_eq!(project_id, 42);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, missing);
+        assert!(results[0].1.is_err());
+    }
+
     fn ws_with_tree(root: PathBuf) -> WorkspaceState {
         WorkspaceState::new(FileTree::new(root))
     }

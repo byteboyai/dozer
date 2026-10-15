@@ -23,6 +23,47 @@ use dozer_model::{Locale, LocalePreference, LocaleSnapshot};
 /// 跨进程读取的最小间隔:运行期间至多每 2 秒一次(spec §4.3)。
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
+/// Bound the complete read/reconcile operation so an unresponsive daemon cannot
+/// leave refreshes permanently in flight.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub(super) async fn fetch_locale(
+    service: &impl dozer_services::LocaleService,
+    candidates: Vec<String>,
+) -> FetchOutcome {
+    fetch_locale_with_timeout(service, candidates, FETCH_TIMEOUT).await
+}
+
+async fn fetch_locale_with_timeout(
+    service: &impl dozer_services::LocaleService,
+    candidates: Vec<String>,
+    timeout: Duration,
+) -> FetchOutcome {
+    let fetch = async {
+        let snapshot = service.get_locale().await?;
+        let system_locale = dozer_i18n::resolve_from_candidates(&candidates);
+        if snapshot.preference == LocalePreference::System
+            && snapshot.active_locale.as_str() != system_locale
+        {
+            // CAS protects an explicit preference selected in another window
+            // between this read and write. A conflict is authoritative too.
+            match service
+                .set_locale(LocalePreference::System, snapshot.revision, candidates)
+                .await?
+            {
+                dozer_model::LocaleWriteOutcome::Applied { snapshot }
+                | dozer_model::LocaleWriteOutcome::Conflict { snapshot } => Ok(snapshot),
+            }
+        } else {
+            Ok::<_, dozer_services::ServiceError>(snapshot)
+        }
+    };
+    match tokio::time::timeout(timeout, fetch).await {
+        Ok(Ok(snapshot)) => FetchOutcome::Ok(snapshot),
+        Ok(Err(_)) | Err(_) => FetchOutcome::Unavailable,
+    }
+}
+
 /// 快照来源:仅用于判断"当前显示的是不是权威值"。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnapshotSource {
@@ -185,11 +226,14 @@ impl LocaleController {
     ///
     /// 在途时有回包在等,不额外排;否则返回距 `last_fetch_at` 满
     /// `REFRESH_INTERVAL` 的剩余时间(从未发过则立即)。
-    pub fn next_wake(&self, now: Instant) -> Duration {
-        match self.last_fetch_at {
+    pub fn next_wake(&self, now: Instant) -> Option<Duration> {
+        if self.in_flight.is_some() {
+            return None;
+        }
+        Some(match self.last_fetch_at {
             None => Duration::ZERO,
             Some(last) => REFRESH_INTERVAL.saturating_sub(now.duration_since(last)),
-        }
+        })
     }
 
     /// 应用一次读取回包。
@@ -292,6 +336,148 @@ mod tests {
     fn explicit(loc: &str) -> LocalePreference {
         LocalePreference::Explicit {
             locale: Locale(loc.into()),
+        }
+    }
+
+    #[test]
+    fn pending_fetch_suspends_wakes_and_failure_allows_retry() {
+        let mut c = LocaleController::new();
+        let now = Instant::now();
+        let seq = c.begin_fetch(now).unwrap();
+        let later = now + Duration::from_secs(10);
+        assert_eq!(c.next_wake(later), None);
+        c.request_immediate();
+        assert_eq!(c.next_wake(later), None);
+        c.apply_fetch(seq, FetchOutcome::Unavailable);
+        assert_eq!(c.next_wake(later), Some(Duration::ZERO));
+        assert!(c.begin_fetch(later).is_some());
+    }
+
+    struct LocaleServiceStub {
+        snapshot: LocaleSnapshot,
+        conflict: Option<LocaleSnapshot>,
+        writes: std::sync::atomic::AtomicUsize,
+        stall_read: bool,
+        stall_write: bool,
+    }
+
+    impl Default for LocaleServiceStub {
+        fn default() -> Self {
+            Self {
+                snapshot: LocaleSnapshot::default_snapshot(),
+                conflict: None,
+                writes: std::sync::atomic::AtomicUsize::new(0),
+                stall_read: false,
+                stall_write: false,
+            }
+        }
+    }
+
+    impl dozer_services::LocaleService for LocaleServiceStub {
+        fn get_locale(
+            &self,
+        ) -> dozer_services::BoxFuture<'_, Result<LocaleSnapshot, dozer_services::ServiceError>>
+        {
+            Box::pin(async move {
+                if self.stall_read {
+                    std::future::pending::<()>().await;
+                }
+                Ok(self.snapshot.clone())
+            })
+        }
+
+        fn set_locale(
+            &self,
+            preference: LocalePreference,
+            expected_revision: u64,
+            candidates: Vec<String>,
+        ) -> dozer_services::BoxFuture<
+            '_,
+            Result<dozer_model::LocaleWriteOutcome, dozer_services::ServiceError>,
+        > {
+            Box::pin(async move {
+                self.writes
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                assert_eq!(preference, LocalePreference::System);
+                assert_eq!(expected_revision, self.snapshot.revision);
+                if self.stall_write {
+                    std::future::pending::<()>().await;
+                }
+                if let Some(snapshot) = &self.conflict {
+                    return Ok(dozer_model::LocaleWriteOutcome::Conflict {
+                        snapshot: snapshot.clone(),
+                    });
+                }
+                Ok(dozer_model::LocaleWriteOutcome::Applied {
+                    snapshot: snap(
+                        expected_revision + 1,
+                        dozer_i18n::resolve_from_candidates(candidates),
+                        preference,
+                    ),
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn first_launch_reconciles_system_language_before_display() {
+        let service = LocaleServiceStub::default();
+        let FetchOutcome::Ok(snapshot) = fetch_locale(&service, vec!["zh-CN".into()]).await else {
+            panic!("expected confirmed snapshot");
+        };
+        assert_eq!(snapshot, snap(1, "zh-CN", LocalePreference::System));
+    }
+
+    #[tokio::test]
+    async fn explicit_or_matching_system_preference_does_not_write() {
+        for snapshot in [
+            snap(3, "en", explicit("en")),
+            snap(4, "zh-CN", LocalePreference::System),
+        ] {
+            let service = LocaleServiceStub {
+                snapshot: snapshot.clone(),
+                ..Default::default()
+            };
+            let FetchOutcome::Ok(actual) = fetch_locale(&service, vec!["zh-CN".into()]).await
+            else {
+                panic!("expected confirmed snapshot");
+            };
+            assert_eq!(actual, snapshot);
+            assert_eq!(service.writes.load(std::sync::atomic::Ordering::Relaxed), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn system_reconciliation_preserves_concurrent_explicit_choice() {
+        let chosen = snap(1, "en", explicit("en"));
+        let service = LocaleServiceStub {
+            conflict: Some(chosen.clone()),
+            ..Default::default()
+        };
+        let FetchOutcome::Ok(actual) = fetch_locale(&service, vec!["zh-CN".into()]).await else {
+            panic!("expected conflict snapshot");
+        };
+        assert_eq!(actual, chosen);
+        assert_eq!(service.writes.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn stalled_read_and_reconciliation_both_time_out() {
+        for stall_read in [true, false] {
+            let service = LocaleServiceStub {
+                stall_read,
+                stall_write: !stall_read,
+                ..Default::default()
+            };
+            assert!(matches!(
+                fetch_locale_with_timeout(
+                    &service,
+                    vec!["zh-CN".into()],
+                    Duration::from_millis(10)
+                )
+                .await,
+                FetchOutcome::Unavailable
+            ));
         }
     }
 

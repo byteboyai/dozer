@@ -3268,6 +3268,7 @@ impl App {
             Message::Files(
                 msg @ (files::Message::StatusesRefreshed(project_id, ..)
                 | files::Message::PasteDone(project_id, ..)
+                | files::Message::DeleteApplied(project_id, ..)
                 | files::Message::OpDone { project_id, .. }
                 | files::Message::GitInfoLoaded(project_id, ..)
                 | files::Message::BranchSwitchDone(project_id, ..)
@@ -4170,6 +4171,9 @@ impl App {
             Message::WebViewFocused => {}
             // 同上:只在 main.rs 的 dispatch 里设 pending_focus。
             Message::AppWebViewFocused(_) => {}
+            // 应用 webview 导航完成、请求推 locale 快照:副作用(对 webview 句柄
+            // `evaluate_script`)在 `window_events::dispatch` 里执行,`App::update` 不处理。
+            Message::AppWebViewLocaleReady(_) => {}
             // 鼠标在子 webview 上松开(见 `WebViewMouseUp` 文档):一并结束页签
             // 拖拽,避免"松开还能继续拖"。
             Message::WebViewMouseUp => self.end_tab_drag(),

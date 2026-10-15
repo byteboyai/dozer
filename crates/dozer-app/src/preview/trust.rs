@@ -90,6 +90,7 @@ mod tests {
             loading_generation: None,
             surface: None,
             park_offscreen: false,
+            display_i18n: None,
         }
     }
 

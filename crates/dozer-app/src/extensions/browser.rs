@@ -264,6 +264,7 @@ impl Tabs {
                 surface: None,
                 // 浏览器 tab 激活即显示,没有隐藏预创建,不涉及离屏停放。
                 park_offscreen: false,
+                display_i18n: None,
             })
             .collect()
     }

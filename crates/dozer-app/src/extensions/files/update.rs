@@ -326,10 +326,10 @@ pub fn update(
                     })
                     .await
                     .unwrap_or_else(|e| vec![(PathBuf::new(), Err(e.to_string()))]);
-                emit(Message::DeleteApplied(results));
+                emit(Message::DeleteApplied(project_id, results));
             });
         }
-        Message::DeleteApplied(results) => {
+        Message::DeleteApplied(_, results) => {
             for (path, result) in results {
                 match result {
                     Ok(()) => {

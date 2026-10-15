@@ -497,6 +497,7 @@ pub(crate) fn review_webview_spec(
         // review-trace 是同款「未就绪先创建」的 Rendered 宿主(Preact 渲染),
         // 未就绪时离屏停放,避免 hidden 下 rAF 被挂起拖慢/卡住首帧。
         park_offscreen: !loaded,
+        display_i18n: None,
     }]
 }
 

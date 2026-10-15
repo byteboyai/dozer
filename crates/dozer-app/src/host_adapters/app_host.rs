@@ -122,6 +122,11 @@ pub(crate) fn apply_effects(app: &mut App, effects: Vec<Effect>) {
 /// 应用宿主的消息入口 + 到点轮询:驱动状态机并执行其吐出的副作用。两条调用点
 /// (`ResumeTimeReached` 的到点轮询、面板消息)共用本函数,保持与迁移前一致。
 pub(crate) fn update(app: &mut App, msg: M) {
+    // T6:列表结果里带出每个应用的 `display_i18n`,收进 `AppViews`(外壳标题解析 +
+    // WebView 语言桥推送都靠它)。列表是权威来源,全量覆盖。
+    if let M::ListLoaded(Ok(summaries)) = &msg {
+        app.app_views.sync_display_i18n(summaries);
+    }
     let effects = app
         .app_host
         .update(msg, std::time::Instant::now(), &app.visible_app_slots());

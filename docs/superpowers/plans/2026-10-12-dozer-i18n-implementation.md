@@ -263,6 +263,8 @@
 
 ### Task 14：bytehost 应用 i18n 契约及 Dozer 消费（独立阶段）
 
+> 2026-10-14：独立阶段已展开为 [接入 spec](../specs/2026-10-14-bytehost-i18n-integration-design.md) 与 [实施 plan](2026-10-14-bytehost-i18n-integration.md) 草案。新草案按现有 Web 入口收敛本期范围；下列 External 等远期条目不代表本期必须新增对应 Surface。
+
 **归属：** manifest/资源校验/公共语言能力在 bytehost 仓库；Dozer 只改适配、依赖 tag 及样例验收记录。
 
 - [ ] 先核对上游 schema/协商/标题形状，追加可选 i18n/title_key 字段及 fallback，测试旧应用可安装/启动。

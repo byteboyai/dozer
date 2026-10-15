@@ -168,6 +168,8 @@ Code Health 等当前带已格式化文本的 payload，优先追加原始计数
 
 ## 9. 第三方应用与未来插件
 
+> 2026-10-14：bytehost 现有 Web 应用的具体契约、兼容矩阵与分期范围见 [独立接入规格草案](2026-10-14-bytehost-i18n-integration-design.md)。本节保留整体方向，未实现的 Surface 不作为本期完成声明。
+
 架构分析中的可选 `[i18n]` 契约保留：`default_locale`、`supported_locales`、`strings_dir`，Panel/Page/Tab/Command 使用 `title_key` + 必填 `title_fallback`。无 i18n 声明时直接使用 fallback；声明缺少当前语言时遵循 §6 顺序。
 
 当前 bytehost 应用模型不能等同于完整 V2 Plugin Manifest。涉及安装包 schema、资源路径校验或跨产品公共桌面契约的改动，必须在 bytehost 独立仓库追加兼容能力并发 tag，Dozer 只写消费适配。未经该能力接入的第三方应用仅保证外壳标题显示 fallback，不声称其内部 UI 已本地化。

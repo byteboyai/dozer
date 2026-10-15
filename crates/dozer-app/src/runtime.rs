@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use iced_winit::runtime::user_interface::UserInterface;
+use wry::PageLoadEvent;
 use wry::WebViewBuilderExtDarwin;
 
 use crate::app::{App, Message};
@@ -247,8 +248,17 @@ fn build_app_webview(
     };
     let webview_id = spec.id;
     let app_id = origin.app_id().to_owned();
+    let on_load_proxy = proxy.clone();
     let ipc_proxy = proxy;
     let nonce = crate::app_webview::new_ipc_nonce();
+    // T6:仅当该应用声明了 `[i18n]` 且 `webview_locale != none` 才在初始化脚本里装入
+    // 只读语言桥骨架(`app_init_script` 的第二个参数);桥的真实快照由宿主在导航完成后经
+    // `evaluate_script` 下发(见 `Message::AppWebViewLocaleReady`)。初始化脚本创建时冻结,
+    // 无法携带运行时 locale,故首帧必须经 evaluate 推送。
+    let install_bridge = spec
+        .display_i18n
+        .as_ref()
+        .is_some_and(|d| crate::app_webview::i18n::should_install_bridge(d.webview_locale));
     let built = wry::WebViewBuilder::new()
         .with_url(&spec.url)
         .with_bounds(bounds)
@@ -257,7 +267,14 @@ fn build_app_webview(
         .with_data_store_identifier(crate::app_webview::data_store_identifier(&app_id))
         .with_download_started_handler(|_, _| false)
         .with_devtools(false)
-        .with_initialization_script(crate::app_webview::app_init_script(&nonce))
+        .with_initialization_script(crate::app_webview::app_init_script(&nonce, install_bridge))
+        // 导航完成(主框架)后,经事件环把"首帧 locale 推送"消息送回主线程;真正
+        // 的 `evaluate_script` 在 `window_events` 里、握有 webview 句柄时执行。
+        .with_on_page_load_handler(move |event, _url| {
+            if install_bridge && matches!(event, PageLoadEvent::Finished) {
+                let _ = on_load_proxy.send_event(Message::AppWebViewLocaleReady(webview_id));
+            }
+        })
         .with_ipc_handler(move |req| {
             use crate::app_webview::AppIpc;
             let message = match AppIpc::parse(req.body().as_str(), &nonce) {

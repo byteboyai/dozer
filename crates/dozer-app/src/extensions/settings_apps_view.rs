@@ -2,7 +2,7 @@
 //! 纯展示函数,不含任何状态迁移逻辑(状态机在 `bytehost_panel::install`)。
 
 use bytehost_apps::plan::InstallPlan;
-use bytehost_apps::proto::{AppSummary, RuntimeInstallPlan, RuntimeProbe};
+use bytehost_apps::proto::{AppSummary, DisplayTitleScope, RuntimeInstallPlan, RuntimeProbe};
 use bytehost_apps::registry::UninstallMode;
 use bytehost_apps::state::ObservedState;
 use bytehost_panel::install::{
@@ -209,8 +209,14 @@ fn app_row<'a>(state: &'a State, app: &'a AppSummary, locale: &str) -> El<'a> {
             ("observed", &observed_label(&app.observed)),
         ],
     );
+    // T6:外壳标题按当前 UI 语言解析;无 i18n 投影或解析落空时回落语言中立的 `app.name`。
+    let title = app
+        .display_i18n
+        .as_ref()
+        .and_then(|d| d.resolve_title(&DisplayTitleScope::Presentation, locale))
+        .unwrap_or(app.name.as_str());
     let mut r = row![
-        text(app.name.as_str())
+        text(title)
             .size(byteui::theme::font::body())
             .color(colors.cream),
         dim(version_line),

@@ -470,7 +470,10 @@ pub(crate) fn icon_rail(
     let step = button_size + region.gap;
     let mut layers = Vec::new();
     for (idx, &kind) in app.shell_layout.rail_layout.side(side).iter().enumerate() {
-        let (icon, tooltip) = panel_meta(kind, app.locale.active_locale());
+        let (icon, tooltip) = panel_meta(kind, app.locale.active_locale(), |slot| {
+            app.app_views
+                .localized_title(slot, app.locale.active_locale())
+        });
         // `interactive: false`——按下选中不走这里内层的
         // `iced_widget::button::on_press`(松手才触发,时机不对,见
         // `rail_drag_surface` 的注释),改由外层 `rail_drag_surface` 的
@@ -614,10 +617,19 @@ pub(crate) fn icon_rail(
 
 /// 面板 → (图标, 图标栏 tooltip 文案),取自面板清单(见 `product::dozer_catalog`)。
 /// 标题按 `locale` 解析(见 `PanelDescriptor::title`):切换语言后重新求值即得新文案。
-fn panel_meta(kind: PanelKind, locale: &str) -> (icons::IconKind, String) {
-    // 应用面板不在清单里:标题是应用 id,图标 A3 先用通用的列表图标(应用自带图标由 A4 接入)。
+///
+/// `app_title` 拿到应用面板 slot 时回调,取出该应用按 `locale` 解析出的本地化外壳标题
+/// (T6,来自 `AppSummary.display_i18n`);返回 `None`(无 i18n 投影)则回落应用 id。
+fn panel_meta(
+    kind: PanelKind,
+    locale: &str,
+    app_title: impl Fn(crate::app::AppSlot) -> Option<String>,
+) -> (icons::IconKind, String) {
+    // 应用面板不在清单里:标题按当前 UI 语言解析 i18n 投影,无投影时回落应用 id;
+    // 图标 A3 先用通用的列表图标(应用自带图标由 A4 接入)。
     if let PanelKind::App(slot) = kind {
-        return (icons::IconKind::LayoutList, slot.id().to_string());
+        let title = app_title(slot).unwrap_or_else(|| slot.id().to_string());
+        return (icons::IconKind::LayoutList, title);
     }
     let d = crate::panel_registry::catalog()
         .descriptor(kind)
@@ -702,7 +714,10 @@ pub(crate) fn rail_drag_ghost(
     let Some(kind) = app.dragged_panel_kind() else {
         return column![].into();
     };
-    let (icon, _tooltip) = panel_meta(kind, app.locale.active_locale());
+    let (icon, _tooltip) = panel_meta(kind, app.locale.active_locale(), |slot| {
+        app.app_views
+            .localized_title(slot, app.locale.active_locale())
+    });
     let size = byteui::theme::geometry::rail_button_size();
     let colors = byteui::theme::color::current();
 
@@ -962,9 +977,9 @@ mod tests {
 
     #[test]
     fn group_chat_has_rail_meta() {
-        let (_icon, tip_zh) = panel_meta(PanelKind::GroupChat, "zh-CN");
+        let (_icon, tip_zh) = panel_meta(PanelKind::GroupChat, "zh-CN", |_| None);
         assert_eq!(tip_zh, "群聊");
-        let (_icon, tip_en) = panel_meta(PanelKind::GroupChat, "en");
+        let (_icon, tip_en) = panel_meta(PanelKind::GroupChat, "en", |_| None);
         assert_eq!(tip_en, "Group Chat");
     }
 
@@ -1360,10 +1375,10 @@ mod tests {
             (CodeHealth, I::SquareActivity, "代码健康度", "Code Health"),
         ];
         for (kind, icon, title_zh, title_en) in expected {
-            let (got_icon, got_zh) = panel_meta(kind, "zh-CN");
+            let (got_icon, got_zh) = panel_meta(kind, "zh-CN", |_| None);
             assert_eq!(got_icon, icon, "{kind:?} 图标");
             assert_eq!(got_zh, title_zh, "{kind:?} 中文文案");
-            let (_icon, got_en) = panel_meta(kind, "en");
+            let (_icon, got_en) = panel_meta(kind, "en", |_| None);
             assert_eq!(got_en, title_en, "{kind:?} 英文文案");
         }
     }
@@ -1479,9 +1494,30 @@ mod tests {
     #[test]
     fn app_entries_have_title_icon_and_default_side() {
         let a = slot("rail-meta");
-        let (icon, title) = panel_meta(PanelKind::App(a), "zh-CN");
+        let (icon, title) = panel_meta(PanelKind::App(a), "zh-CN", |_| None);
         assert_eq!(title, "rail-meta");
         assert_eq!(icon, icons::IconKind::LayoutList);
         assert_eq!(PanelKind::App(a).default_side(), Side::Left);
+    }
+
+    /// T6:`PanelKind::App` 的 rail 标题按当前 UI 语言解析 i18n 投影;无投影时回落应用 id。
+    #[test]
+    fn app_rail_title_resolves_i18n_or_falls_back_to_id() {
+        let a = slot("app-x");
+        // 无 i18n 投影:回落应用 id。
+        let (_icon, title) = panel_meta(PanelKind::App(a), "zh-CN", |_| None);
+        assert_eq!(title, "app-x");
+        // 有 i18n 投影且命中 zh-CN:返回本地化标题。
+        let (_icon, title) = panel_meta(PanelKind::App(a), "zh-CN", |_| Some("应用X".into()));
+        assert_eq!(title, "应用X");
+        // 语言切换后重新求值即用新文案(闭包按 locale 给值,这里用不同 locale 走不同分支)。
+        let localized = |locale: &str| match locale {
+            "en" => Some("App X".to_string()),
+            _ => Some("应用X".to_string()),
+        };
+        assert_eq!(
+            panel_meta(PanelKind::App(a), "en", |_| localized("en")).1,
+            "App X"
+        );
     }
 }

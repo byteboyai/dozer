@@ -805,7 +805,7 @@ dependencies = [
 [[package]]
 name = "bytehost-apps"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.2.0#7f25d71f4118ce5660efc4bdab92f5d65f70c6d9"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.3.0#a98fd040f1f665900fea8d7cd5d7f51ff0d6126b"
 dependencies = [
  "bytes",
  "flate2",
@@ -827,7 +827,7 @@ dependencies = [
 [[package]]
 name = "bytehost-client"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.2.0#7f25d71f4118ce5660efc4bdab92f5d65f70c6d9"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.3.0#a98fd040f1f665900fea8d7cd5d7f51ff0d6126b"
 dependencies = [
  "bytehost-apps",
  "tokio",
@@ -837,7 +837,7 @@ dependencies = [
 [[package]]
 name = "bytehost-core"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.2.0#7f25d71f4118ce5660efc4bdab92f5d65f70c6d9"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.3.0#a98fd040f1f665900fea8d7cd5d7f51ff0d6126b"
 dependencies = [
  "serde",
  "serde_json",
@@ -846,7 +846,7 @@ dependencies = [
 [[package]]
 name = "bytehost-desktop"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.2.0#7f25d71f4118ce5660efc4bdab92f5d65f70c6d9"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.3.0#a98fd040f1f665900fea8d7cd5d7f51ff0d6126b"
 dependencies = [
  "bytehost-core",
  "bytehost-webview",
@@ -868,7 +868,7 @@ dependencies = [
 [[package]]
 name = "bytehost-panel"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.2.0#7f25d71f4118ce5660efc4bdab92f5d65f70c6d9"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.3.0#a98fd040f1f665900fea8d7cd5d7f51ff0d6126b"
 dependencies = [
  "bytehost-apps",
  "bytehost-client",
@@ -877,9 +877,11 @@ dependencies = [
 [[package]]
 name = "bytehost-webview"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.2.0#7f25d71f4118ce5660efc4bdab92f5d65f70c6d9"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.3.0#a98fd040f1f665900fea8d7cd5d7f51ff0d6126b"
 dependencies = [
  "bytehost-apps",
+ "serde",
+ "serde_json",
  "url",
  "uuid",
 ]

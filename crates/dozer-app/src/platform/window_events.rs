@@ -146,6 +146,9 @@ pub(crate) enum Runner {
         /// "地球图标"浏览器视图——两个池各自独立增删,tab id 空间即使
         /// 撞了也不会互相覆盖(不同 HashMap)。
         browser_webviews: std::collections::HashMap<usize, (wry::WebView, String)>,
+        /// T6:最近一次观察到的 `display_generation`(仅供参考)。实际「是否已对本 slot 推送本代次」
+        /// 由 `AppViews::locale_pushed` 跟踪,`apply_pending_app_locales` 据此做幂等重推与失败重试。
+        app_locale_generation: u64,
         /// 上一次同步 webview 池时聚焦的项目 id。两个池都是**窗口级**的,
         /// key 是 `PreviewPane` 的 tab id,而那个 id 在每个项目的
         /// `Workspace` 里都从 0 独立起编——项目 A 的预览 tab 0 和项目 B 的
@@ -2416,6 +2419,23 @@ impl Runner {
                     show_native_find(view);
                 }
             }
+            // T6:应用 webview 导航完成(`PageLoadEvent::Finished`),把当前 locale 快照推给只读语言桥。
+            // 初始化脚本只装桥骨架、冻结于创建时,真实值必须导航后经 `evaluate_script` 下发
+            // (`window.__bytehost_i18n_set`)。无 `display_i18n` 或未装桥的应用不产生脚本。
+            Message::AppWebViewLocaleReady(id) => {
+                if let Some((view, _)) = webviews.get(&id)
+                    && let Some(slot) = crate::app_webview::slot_for_webview_id(id)
+                    && let Some(script) = app.app_views.locale_push_script(
+                        slot,
+                        app.locale.active_locale(),
+                        app.locale.display_generation(),
+                    )
+                {
+                    if view.evaluate_script(&script).is_ok() {
+                        app.app_views.mark_locale_pushed(slot, app.locale.display_generation());
+                    }
+                }
+            }
             // 新增任务框已迁 iced 原生 `text_editor`(Stage 4),点击命中
             // 区域内由组件自身接管聚焦与光标定位,不再有 `AddEditStart`/
             // `AddCursorAt` 自绘换算分支。任务内容编辑框已迁 iced 原生
@@ -2503,6 +2523,42 @@ impl Runner {
                 let _ = view.zoom(scale);
             }
         }
+    }
+
+    /// T6:locale 变化时,把新快照重新推给所有存活的应用 webview 语言桥。
+    ///
+    /// 节奏同 `apply_pending_zoom_toggle`(派发完消息后轮询):`app.locale` 的
+    /// `display_generation` 一旦比上次推送的高,就对所有"池里有句柄且装了桥"的 `live`
+    /// 应用 webview 重新 `evaluate_script`(`live_locale_push_script` 已排除 `initial` /
+    /// `none` 并做代次幂等)。推送失败不下帧重试(只记日志),下一帧 `display_generation`
+    /// 不变但 `locale_pushed` 仍未更新,会继续尝试——有界、无忙循环。桥只读、不暴露宿主命令。
+    pub(crate) fn apply_pending_app_locales(&mut self) {
+        let Self::Ready {
+            app,
+            webviews,
+            app_locale_generation,
+            ..
+        } = self
+        else {
+            return;
+        };
+        let generation = app.locale.display_generation();
+        let ui_locale = app.locale.active_locale().to_owned();
+        for (id, (view, _)) in webviews.iter() {
+            if let Some(slot) = crate::app_webview::slot_for_webview_id(*id)
+                && let Some(script) = app
+                    .app_views
+                    .live_locale_push_script(slot, &ui_locale, generation)
+            {
+                match view.evaluate_script(&script) {
+                    Ok(()) => app.app_views.mark_locale_pushed(slot, generation),
+                    Err(e) => {
+                        ::tracing::warn!("i18n locale push failed for {slot:?}: {e}");
+                    }
+                }
+            }
+        }
+        *app_locale_generation = generation;
     }
 
     /// webview(flyfish)档 Find 的副作用落点:把 `PreviewPane` 里"待下发"的搜索
@@ -2853,10 +2909,9 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                     next_drag_expand.unwrap_or(extensions::files::DRAG_HOVER_EXPAND_DELAY),
                 ),
                 (next_toast.is_some(), next_toast.unwrap_or(Duration::ZERO)),
-                // i18n Task 04:跨进程语言快照同步按固定 2s 周期节拍。恒为
-                // active(本地快照随时可能因别处窗口/daemon 变更而更新),由
-                // `poll_locale_if_due` 自己在控制器里做限速与在途合并。
-                (true, next_locale),
+                // An in-flight fetch wakes us through its completion event;
+                // only schedule the next poll when no request is pending.
+                (next_locale.is_some(), next_locale.unwrap_or(Duration::ZERO)),
             ];
             if let Some(interval) = wakes
                 .into_iter()
@@ -3022,6 +3077,10 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             // You should change this if you want to render continuously
             event_loop.set_control_flow(ControlFlow::Wait);
 
+            // T6:在把 `app` 移进 `Runner::Ready` 之前取出当前 locale 代,
+            // 用于 `apply_pending_app_locales` 的增量对比。
+            let app_locale_generation = app.locale.display_generation();
+
             *self = Self::Ready {
                 window,
                 device,
@@ -3041,6 +3100,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 resized: false,
                 webviews: std::collections::HashMap::new(),
                 browser_webviews: std::collections::HashMap::new(),
+                app_locale_generation,
                 // 池是空的,记 `None` 让第一次 sync_previews 自然对齐到
                 // 当前项目(清空空池是 no-op)。
                 webview_project: None,
@@ -3089,6 +3149,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_previews();
         self.apply_pending_focus();
         self.apply_pending_zoom_toggle();
+        self.apply_pending_app_locales();
         self.apply_pending_preview_find();
         self.apply_pending_editor_commands();
         self.apply_pending_blank_info();

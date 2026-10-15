@@ -67,6 +67,10 @@ pub struct WebviewSpec {
     /// bounds。真正「已就绪但被浮层/非激活隐藏」的场景仍走 `set_visible(false)`
     /// (`park_offscreen=false`),以免后台 tab 常驻渲染空耗。
     pub park_offscreen: bool,
+    /// T6:应用外壳标题 / WebView 语言桥的 i18n 投影(`AppSummary.display_i18n`)。
+    /// 仅应用 webview 由 `AppViews` 填充;其余(预览/浏览器/共享 Surface)一律 `None`,
+    /// 不装桥、标题回落 `app.name`。
+    pub display_i18n: Option<bytehost_apps::proto::AppDisplayI18n>,
 }
 
 /// RFC3986 严格百分号编码:unreserved(字母/数字/`-._~`)之外全部 %XX。

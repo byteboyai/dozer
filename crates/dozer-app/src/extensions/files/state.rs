@@ -319,10 +319,11 @@ pub enum Message {
     DeleteConfirm,
     DeleteCancel,
     /// 批量删除确认框"确定"后,`DeleteConfirm` 异步完成全部删除的收尾:
+    /// 首字段保留发起项目 id,避免切换项目后把结果投递到当前项目。
     /// `results` 逐项是 `(被删路径, 删除结果)`,成功项刷新其父目录、失败项
     /// 推 Toast。比单文件时用的 `OpDone` 更通用——多文件会命中多个不同父目录,
     /// 需要逐个刷新。
-    DeleteApplied(Vec<(PathBuf, std::result::Result<(), String>)>),
+    DeleteApplied(i64, Vec<(PathBuf, std::result::Result<(), String>)>),
     OpDone {
         project_id: i64,
         parent: Result<PathBuf, String>,

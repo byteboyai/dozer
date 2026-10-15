@@ -12,11 +12,12 @@ use std::collections::HashMap;
 
 use crate::app::{APP_CONTENT_ID_OFFSET, AppSlot};
 use crate::preview::WebviewSpec;
+use bytehost_apps::proto::{AppDisplayI18n, DisplayTitleScope};
 
 /// 纯安全策略 crate:origin 导航白名单、存储标识、IPC nonce/注入脚本、存储清除排队。
 pub(crate) use bytehost_webview::{
     AppIpc, AppOrigin, StoreRemovalOutcome, StoreRemovals, app_init_script, data_store_identifier,
-    new_ipc_nonce, supports_store_removal,
+    i18n, new_ipc_nonce, supports_store_removal,
 };
 
 /// 池里这个 id 是不是应用 webview(`APP_CONTENT_ID_OFFSET + 槽号`,段内最多 65536 个)。
@@ -41,6 +42,15 @@ pub(crate) fn slot_for_webview_id(id: usize) -> Option<AppSlot> {
 #[derive(Debug, Default)]
 pub(crate) struct AppViews {
     urls: HashMap<AppSlot, String>,
+    /// slot → 应用外壳标题 / 语言桥的 i18n 投影(T6,来自 `AppSummary.display_i18n`)。
+    /// 每次 `ListLoaded` 全量覆盖(列表是权威来源);外壳标题按当前 UI 语言解析,
+    /// 语言桥据此推首帧 / 变更。
+    display_i18n: HashMap<AppSlot, AppDisplayI18n>,
+    /// slot → 最近一次**成功**推送到该应用 webview 语言桥的 `display_generation`。
+    /// 用于同文档语言变化的幂等重推:仅当 generation 严格大于已推送值时才再推,
+    /// 推送失败时留空 → 下一帧重试(有界、无忙循环);旧文档(旧 webview id)不会
+    /// 被误推。与「新文档首帧推送」(`locale_push_script`,覆盖 initial/live)区分开。
+    locale_pushed: HashMap<AppSlot, u64>,
 }
 
 impl AppViews {
@@ -56,10 +66,78 @@ impl AppViews {
         self.urls.get(&slot).map(String::as_str)
     }
 
+    /// 用一份列表结果全量刷新 i18n 投影(`id` 已可解析为 `AppSlot` 才收纳)。
+    pub(crate) fn sync_display_i18n(&mut self, summaries: &[bytehost_apps::proto::AppSummary]) {
+        self.display_i18n.clear();
+        self.locale_pushed.clear();
+        for s in summaries {
+            if let (Some(slot), Some(di)) = (AppSlot::intern(s.id.as_str()), s.display_i18n.clone())
+            {
+                self.display_i18n.insert(slot, di);
+            }
+        }
+    }
+
+    /// 按 `locale` 解析后的本地化外壳标题;无投影或解析落空返回 `None`(调用方回落 `app.name`)。
+    pub(crate) fn localized_title(&self, slot: AppSlot, locale: &str) -> Option<String> {
+        self.display_i18n.get(&slot).and_then(|d| {
+            d.resolve_title(&DisplayTitleScope::Presentation, locale)
+                .map(str::to_owned)
+        })
+    }
+
+    /// 该 slot 应用 webview 的**语言桥首帧 / 变更脚本**:`display_i18n` 缺失或 `webview_locale == none`
+    /// (不装桥)返回 `None`。脚本经 `evaluate_script` 下发到 `window.__bytehost_i18n_set`(只读桥)。
+    ///
+    /// 用于「新文档首帧」(`AppWebViewLocaleReady` / navigation 完成),`initial` 与 `live` 都会收到
+    /// 当时最新语言;同文档语言变化由 [`Self::live_locale_push_script`] 负责(`initial` 不热改)。
+    pub(crate) fn locale_push_script(
+        &self,
+        slot: AppSlot,
+        ui_locale: &str,
+        revision: u64,
+    ) -> Option<String> {
+        let di = self.display_i18n.get(&slot)?;
+        if !i18n::should_install_bridge(di.webview_locale) {
+            return None;
+        }
+        let snapshot = i18n::build_i18n_snapshot(di, ui_locale, revision);
+        Some(i18n::i18n_set_locale_script(&snapshot))
+    }
+
+    /// 同文档语言变化(宿主 `display_generation` 递增)时的推送脚本。仅 `live` 应用接收同文档热更新;
+    /// `initial` 只在「新文档」首帧推送(`locale_push_script`),**不**接收同文档变化;`none` 不装桥。
+    /// 同时按已推送代次做幂等:`revision` 不大于已成功推送值时返回 `None`(避免重复下发)。
+    pub(crate) fn live_locale_push_script(
+        &self,
+        slot: AppSlot,
+        ui_locale: &str,
+        revision: u64,
+    ) -> Option<String> {
+        let di = self.display_i18n.get(&slot)?;
+        if di.webview_locale != i18n::WebViewLocale::Live {
+            return None;
+        }
+        if self
+            .locale_pushed
+            .get(&slot)
+            .is_some_and(|&g| g >= revision)
+        {
+            return None;
+        }
+        let snapshot = i18n::build_i18n_snapshot(di, ui_locale, revision);
+        Some(i18n::i18n_set_locale_script(&snapshot))
+    }
+
+    /// 标记某 slot 的语言桥已成功收到 `revision` 代次的快照;失败不应调用,以便下帧重试。
+    pub(crate) fn mark_locale_pushed(&mut self, slot: AppSlot, revision: u64) {
+        self.locale_pushed.insert(slot, revision);
+    }
+
     /// 该应用面板的 webview 期望项;没有地址(未运行)返回 `None`。
     pub(crate) fn spec(&self, slot: AppSlot, visible: bool) -> Option<WebviewSpec> {
         self.url(slot)
-            .map(|url| app_webview_spec(slot, url, visible))
+            .map(|url| app_webview_spec(slot, url, visible, self.display_i18n.get(&slot).cloned()))
     }
 }
 
@@ -80,7 +158,12 @@ pub(crate) fn take_store_removals_ready(
     q.take_ready(now, |id| AppSlot::intern(id).is_some_and(&webview_in_pool))
 }
 
-pub(crate) fn app_webview_spec(slot: AppSlot, url: &str, visible: bool) -> WebviewSpec {
+pub(crate) fn app_webview_spec(
+    slot: AppSlot,
+    url: &str,
+    visible: bool,
+    display_i18n: Option<AppDisplayI18n>,
+) -> WebviewSpec {
     WebviewSpec {
         id: webview_id(slot),
         url: url.to_owned(),
@@ -90,6 +173,7 @@ pub(crate) fn app_webview_spec(slot: AppSlot, url: &str, visible: bool) -> Webvi
         loading_generation: None,
         surface: None,
         park_offscreen: false,
+        display_i18n,
     }
 }
 
@@ -124,6 +208,11 @@ mod tests {
             ".with_new_window_req_handler(",
             ".with_navigation_handler(",
             "AppIpc::parse(",
+            // T6:语言桥——初始化脚本按清单 `[i18n].webview_locale` 装桥骨架(第二参),
+            // 导航完成后经事件环回传 `AppWebViewLocaleReady` 触发 evaluate 下发真实快照。
+            "app_init_script(&nonce,",
+            ".with_on_page_load_handler(",
+            "Message::AppWebViewLocaleReady(",
         ] {
             assert!(body.contains(required), "缺少 {required}");
         }
@@ -134,6 +223,82 @@ mod tests {
         ] {
             assert!(!body.contains(forbidden), "不得出现 {forbidden}");
         }
+    }
+
+    /// T6:`AppViews` 捕获 `display_i18n` 后,外壳标题按 locale 解析、语言桥推送脚本按
+    /// `build_i18n_snapshot` + `i18n_set_locale_script` 生成;`webview_locale = none` 不装桥。
+    #[test]
+    fn display_i18n_is_captured_resolved_and_pushed() {
+        use bytehost_apps::i18n::WebViewLocale;
+        use bytehost_apps::id::{AppId, Version};
+        use bytehost_apps::proto::{
+            AppDisplayI18n, AppDisplayTitle, AppSummary, DisplayTitleScope,
+        };
+        use bytehost_apps::state::{DesiredState, ObservedState};
+        use std::collections::BTreeMap;
+
+        let slot = AppSlot::intern("i18n-app").unwrap();
+        let di = AppDisplayI18n {
+            default_locale: "en".into(),
+            supported_locales: vec!["en".into(), "zh-CN".into()],
+            webview_locale: WebViewLocale::Live,
+            titles: vec![AppDisplayTitle {
+                scope: DisplayTitleScope::Presentation,
+                key: "app.title".into(),
+                fallback: "Notes".into(),
+                values: [
+                    ("en".to_string(), "Notes".to_string()),
+                    ("zh-CN".to_string(), "笔记".to_string()),
+                ]
+                .into_iter()
+                .collect::<BTreeMap<_, _>>(),
+            }],
+        };
+        let summary = AppSummary {
+            id: AppId::new("i18n-app").unwrap(),
+            name: "i18n-app".into(),
+            version: Version::new(1, 0, 0),
+            desired: DesiredState::Stopped,
+            observed: ObservedState::Stopped,
+            url: None,
+            issue: None,
+            previous_version: None,
+            rollback_note: None,
+            display_i18n: Some(di.clone()),
+        };
+        let mut views = AppViews::default();
+        views.sync_display_i18n(std::slice::from_ref(&summary));
+        // 外壳标题按当前 locale 解析。
+        assert_eq!(
+            views.localized_title(slot, "zh-CN").as_deref(),
+            Some("笔记")
+        );
+        assert_eq!(views.localized_title(slot, "en").as_deref(), Some("Notes"));
+        // 语言桥首帧/变更脚本:JSON 数据注入,可解析回等价快照。
+        let script = views
+            .locale_push_script(slot, "zh-CN", 7)
+            .expect("live 应产生推送脚本");
+        assert!(script.contains("window.__bytehost_i18n_set("));
+        assert!(script.contains("\"ui_locale\":\"zh-CN\""));
+        assert!(script.contains("\"app_locale\":\"zh-CN\""));
+        assert!(script.contains("\"locale_revision\":\"7\""));
+        // `webview_locale = none` 不装桥:产生不了脚本。
+        let di_none = AppDisplayI18n {
+            webview_locale: WebViewLocale::None,
+            ..di
+        };
+        views.sync_display_i18n(&[AppSummary {
+            id: AppId::new("i18n-app").unwrap(),
+            display_i18n: Some(di_none),
+            ..summary.clone()
+        }]);
+        assert!(
+            views.locale_push_script(slot, "zh-CN", 7).is_none(),
+            "none 不应装桥"
+        );
+        // 空列表清掉投影。
+        views.sync_display_i18n(&[]);
+        assert!(views.localized_title(slot, "zh-CN").is_none());
     }
 
     #[test]
