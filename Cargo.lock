@@ -795,6 +795,7 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 [[package]]
 name = "bytegit"
 version = "0.7.0"
+source = "git+https://github.com/byteboyai/bytegit?tag=v0.7.0#0a3d2ab3e835ed20119dcaa6ce1a88d0a075ae3f"
 dependencies = [
  "git2",
  "notify",
@@ -927,6 +928,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "byteui"
 version = "0.4.3"
+source = "git+https://github.com/byteboyai/byteui?tag=v0.4.3#e82bdf44a236515409cb886e9be58ed51ba5041b"
 dependencies = [
  "iced_futures",
  "iced_renderer",
@@ -1993,6 +1995,7 @@ dependencies = [
  "dozer-i18n",
  "dozer-mcp",
  "dozer-model",
+ "dozer-panel-host",
  "dozer-panel-usage",
  "dozer-services",
  "futures",
@@ -2132,6 +2135,16 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "dozer-panel-host"
+version = "0.1.0"
+dependencies = [
+ "bytehost-core",
+ "dozer-model",
+ "dozer-services",
+ "tokio",
 ]
 
 [[package]]
