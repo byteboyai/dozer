@@ -31,6 +31,7 @@ pub fn spawn_delete_project(
     repo_path: PathBuf,
     scope: DeleteScope,
     project: std::sync::Arc<dyn dozer_services::ProjectService>,
+    transcript: std::sync::Arc<dyn dozer_services::TranscriptService>,
     handle: &tokio::runtime::Handle,
     on_done: impl Fn(i64, bool, Vec<String>) + Send + 'static,
 ) {
@@ -41,7 +42,7 @@ pub fn spawn_delete_project(
             return;
         }
         if scope != DeleteScope::DozerOnly
-            && let Err(e) = project.delete_project_transcripts(cwd.clone()).await
+            && let Err(e) = transcript.delete_project_transcripts(cwd.clone()).await
         {
             on_done(project_id, true, vec![format!("Delete agent history: {e}")]);
             return;

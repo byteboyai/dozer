@@ -12,7 +12,8 @@ use dozer_core::protocol::{
 use dozer_services::{
     BookmarkService, BoxFuture, CodeHealthService, ContextService, ConversationRows,
     ConversationService, EditHistoryService, GroupChatService, LocaleService, MemoryService,
-    PreciseEdit, ProjectService, ServiceError, ServiceErrorKind, TodoService, UsageRows,
+    PreciseEdit, ProjectService, ServiceError, ServiceErrorKind, TodoService, TranscriptService,
+    UsageRows,
     UsageService,
 };
 use std::path::PathBuf;
@@ -1871,6 +1872,28 @@ impl ProjectService for Client {
                 .map_err(into_service_error)
         })
     }
+    fn open_project(
+        &self,
+        path: String,
+    ) -> BoxFuture<'_, Result<Option<dozer_core::protocol::ProjectInfo>, ServiceError>> {
+        Box::pin(async move {
+            Client::open_project(self, &path)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+    fn list_projects(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<dozer_core::protocol::ProjectInfo>, ServiceError>> {
+        Box::pin(async move {
+            Client::list_projects(self)
+                .await
+                .map_err(into_service_error)
+        })
+    }
+}
+
+impl TranscriptService for Client {
     fn delete_project_transcripts(&self, cwd: String) -> BoxFuture<'_, Result<u32, ServiceError>> {
         Box::pin(async move {
             Client::delete_project_transcripts(self, &cwd)
@@ -1906,25 +1929,6 @@ impl ProjectService for Client {
     ) -> BoxFuture<'_, Result<Option<dozer_core::protocol::SummaryBatchInfo>, ServiceError>> {
         Box::pin(async move {
             Client::get_summary_batch(self, batch_id)
-                .await
-                .map_err(into_service_error)
-        })
-    }
-    fn open_project(
-        &self,
-        path: String,
-    ) -> BoxFuture<'_, Result<Option<dozer_core::protocol::ProjectInfo>, ServiceError>> {
-        Box::pin(async move {
-            Client::open_project(self, &path)
-                .await
-                .map_err(into_service_error)
-        })
-    }
-    fn list_projects(
-        &self,
-    ) -> BoxFuture<'_, Result<Vec<dozer_core::protocol::ProjectInfo>, ServiceError>> {
-        Box::pin(async move {
-            Client::list_projects(self)
                 .await
                 .map_err(into_service_error)
         })
@@ -2460,7 +2464,7 @@ mod locale_service_tests {
 mod project_service_tests {
     use super::todo_service_tests::serve_once;
     use super::*;
-    use dozer_services::{MemoryService, ProjectService, ServiceErrorKind};
+    use dozer_services::{MemoryService, ProjectService, ServiceErrorKind, TranscriptService};
     #[tokio::test]
     async fn list_memories_comes_back_as_ok() {
         let sock = serve_once("mem-list", Some(Reply::Memories { memories: vec![] }));
@@ -2484,7 +2488,7 @@ mod project_service_tests {
             Some(Reply::BackfillDone { imported_files: 3 }),
         );
         let got =
-            ProjectService::backfill_project_transcripts(&Client::new(sock.clone()), "/p".into())
+            TranscriptService::backfill_project_transcripts(&Client::new(sock.clone()), "/p".into())
                 .await;
         assert_eq!(got, Ok(3));
         let _ = std::fs::remove_file(&sock);

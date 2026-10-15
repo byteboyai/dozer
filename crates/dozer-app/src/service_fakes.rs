@@ -10,6 +10,7 @@ use dozer_services::{
     BookmarkService, BoxFuture, CodeHealthService, ContextService, ConversationRows,
     ConversationService, DaemonService, EditHistoryService, GroupChatService, LocaleService,
     MemoryService, PostedMessages, PreciseEdit, ProjectService, ServiceError, ServiceErrorKind,
+    TranscriptService,
     Services, TodoService,
 };
 use std::sync::{Arc, Mutex};
@@ -187,6 +188,7 @@ pub(crate) fn base_services() -> Services {
         usage: Arc::new(crate::usage_probe::fake_usage::FakeUsage::ok(vec![])),
         todo: Arc::new(FakeTodo::default()),
         project: Arc::new(FakeProject::default()),
+        transcript: Arc::new(FakeProject::default()),
         memory: Arc::new(FakeMemory::default()),
         group_chat: Arc::new(FakeGroupChat::default()),
         conversation: Arc::new(FakeConversation::default()),
@@ -429,7 +431,8 @@ impl FakeProject {
     }
     pub(crate) fn into_services(self) -> Services {
         Services {
-            project: Arc::new(self),
+            project: Arc::new(self.clone()),
+            transcript: Arc::new(self),
             ..base_services()
         }
     }
@@ -452,6 +455,24 @@ impl ProjectService for FakeProject {
         let r = s.remove.clone();
         Box::pin(async move { r })
     }
+    fn open_project(
+        &self,
+        path: String,
+    ) -> BoxFuture<'_, Result<Option<ProjectInfo>, ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls.push(format!("open_project({path})"));
+        let r = s.open.clone();
+        Box::pin(async move { r })
+    }
+    fn list_projects(&self) -> BoxFuture<'_, Result<Vec<ProjectInfo>, ServiceError>> {
+        let mut s = self.state.lock().unwrap();
+        s.calls.push("list_projects()".to_string());
+        let r = s.projects.clone();
+        Box::pin(async move { r })
+    }
+}
+
+impl TranscriptService for FakeProject {
     fn delete_project_transcripts(&self, cwd: String) -> BoxFuture<'_, Result<u32, ServiceError>> {
         let mut s = self.state.lock().unwrap();
         s.calls.push(format!("delete_project_transcripts({cwd})"));
@@ -491,21 +512,6 @@ impl ProjectService for FakeProject {
             s.batches[i].clone()
         };
         s.batch_calls += 1;
-        Box::pin(async move { r })
-    }
-    fn open_project(
-        &self,
-        path: String,
-    ) -> BoxFuture<'_, Result<Option<ProjectInfo>, ServiceError>> {
-        let mut s = self.state.lock().unwrap();
-        s.calls.push(format!("open_project({path})"));
-        let r = s.open.clone();
-        Box::pin(async move { r })
-    }
-    fn list_projects(&self) -> BoxFuture<'_, Result<Vec<ProjectInfo>, ServiceError>> {
-        let mut s = self.state.lock().unwrap();
-        s.calls.push("list_projects()".to_string());
-        let r = s.projects.clone();
         Box::pin(async move { r })
     }
 }

@@ -4301,13 +4301,13 @@ impl App {
         // 新开的项目 tab(区别于"已开着、只是前台化"那条 `focus_project_tab`
         // 早退分支):静默跑一次 ensure(README/.dozer/git/agent 历史),不
         // 展示结果(见 project_scaffold 设计"打开即 ensure"一节)。
-        let project = crate::host_adapters::services::services_for(&self.client).project;
+        let transcript = crate::host_adapters::services::services_for(&self.client).transcript;
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
         let emit = move |m| {
             let _ = proxy.send_event(Message::Project(m));
         };
-        project::spawn_scaffold_run(repo_path, project, &handle, emit, skip_git_init);
+        project::spawn_scaffold_run(repo_path, transcript, &handle, emit, skip_git_init);
     }
 
     pub(crate) fn project_tab_switch(&mut self, id: i64) {
@@ -4422,7 +4422,8 @@ impl App {
         // 关 tab 必须在发起删除请求之前——删除一旦成功,这个项目在
         // dozerd/磁盘上都可能已经不存在了,`Workspace` 不该继续留着。
         self.project_tab_close(project_id);
-        let project = crate::host_adapters::services::services_for(&self.client).project;
+        let services = crate::host_adapters::services::services_for(&self.client);
+        let (project, transcript) = (services.project, services.transcript);
         let handle = self.handle.clone();
         let proxy = self.proxy.clone();
         let on_done = move |project_id, deregistered, errors: Vec<String>| {
@@ -4433,7 +4434,7 @@ impl App {
             });
         };
         project::delete::spawn_delete_project(
-            project_id, repo_path, scope, project, &handle, on_done,
+            project_id, repo_path, scope, project, transcript, &handle, on_done,
         );
     }
 

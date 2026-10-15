@@ -1647,7 +1647,7 @@ mod tests {
         spawn_repair_run(
             dir.path().to_path_buf(),
             1,
-            project.into_services().project,
+            project.into_services().transcript,
             rt.handle(),
             emit,
         );
@@ -1726,7 +1726,7 @@ mod tests {
         let (emit, rx) = collect();
         spawn_scaffold_run(
             dir.path().to_path_buf(),
-            fake.clone().into_services().project,
+            fake.clone().into_services().transcript,
             rt.handle(),
             emit,
             true,
@@ -1751,6 +1751,7 @@ mod tests {
             dir.path().to_path_buf(),
             delete::DeleteScope::WithAgentCache,
             fake.clone().into_services().project,
+            fake.clone().into_services().transcript,
             rt.handle(),
             move |id, dereg, errors| {
                 let _ = tx.lock().unwrap().send((id, dereg, errors));

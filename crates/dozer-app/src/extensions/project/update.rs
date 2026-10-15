@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::panel_host::RequestTokenWrapExt;
-use dozer_services::{MemoryService, ProjectService, ServiceErrorKind, Services};
+use dozer_services::{MemoryService, ProjectService, ServiceErrorKind, Services, TranscriptService};
 use std::sync::Arc;
 
 dozer_core::scope!(LOG, panel, "project");
@@ -180,7 +180,7 @@ pub fn update(
             spawn_repair_run(
                 repo_path.to_path_buf(),
                 project_id,
-                services.project.clone(),
+                services.transcript.clone(),
                 handle,
                 emit,
             );
@@ -481,7 +481,7 @@ pub fn update(
 /// 2026-08-28,避免每次静默打开项目都真实拉起 agent 进程)。
 pub fn spawn_scaffold_run(
     repo_path: std::path::PathBuf,
-    project: Arc<dyn ProjectService>,
+    transcript: Arc<dyn TranscriptService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
     skip_git_init: bool,
@@ -493,7 +493,7 @@ pub fn spawn_scaffold_run(
             scaffold::run_sync_steps(&repo_path2, skip_git_init)
         })
         .await;
-        if let Err(e) = project.backfill_project_transcripts(cwd.clone()).await {
+        if let Err(e) = transcript.backfill_project_transcripts(cwd.clone()).await {
             dozer_core::log_warn!(LOG, error = %e, "补录转录失败");
         }
         emit(Message::ScaffoldDone);
@@ -548,7 +548,7 @@ const SUMMARY_BACKFILL_POLL_INTERVAL: std::time::Duration = if cfg!(test) {
 pub fn spawn_repair_run(
     repo_path: std::path::PathBuf,
     project_id: i64,
-    project: Arc<dyn ProjectService>,
+    transcript: Arc<dyn TranscriptService>,
     handle: &tokio::runtime::Handle,
     emit: impl Fn(Message) + Send + 'static,
 ) {
@@ -571,7 +571,7 @@ pub fn spawn_repair_run(
         }
 
         emit(Message::TranscriptBackfillStarted(project_id));
-        let backfill_result = match project.backfill_project_transcripts(cwd.clone()).await {
+        let backfill_result = match transcript.backfill_project_transcripts(cwd.clone()).await {
             Ok(0) => scaffold::ScaffoldStepResult::AlreadyOk,
             Ok(n) => scaffold::ScaffoldStepResult::Created(keyed_args(
                 "scaffold.result.imported",
@@ -587,7 +587,7 @@ pub fn spawn_repair_run(
 
         // 总结步骤改用 V2 批次协议:提交批次 → 轮询批次状态,展示成功/失败/
         // 跳过计数,不再用旧 0/0 进度掩盖失败(spec 2026-09-26 A7)。
-        let (batch_id, _total) = match project.submit_summary_batch(cwd.clone(), None, None).await {
+        let (batch_id, _total) = match transcript.submit_summary_batch(cwd.clone(), None, None).await {
             Ok(pair) => pair,
             Err(e) => {
                 dozer_core::log_warn!(LOG, error = %e, "提交总结批次失败");
@@ -604,7 +604,7 @@ pub fn spawn_repair_run(
         };
         loop {
             tokio::time::sleep(SUMMARY_BACKFILL_POLL_INTERVAL).await;
-            match project.get_summary_batch(batch_id).await {
+            match transcript.get_summary_batch(batch_id).await {
                 Ok(Some(batch)) => {
                     let completed = batch
                         .total
