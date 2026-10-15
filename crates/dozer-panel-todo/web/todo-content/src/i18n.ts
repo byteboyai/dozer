@@ -2,7 +2,7 @@
  * Todo 内容区前端 i18n(spec 2026-10-12-dozer-i18n-design §5/§6/§8)。
  *
  * 资源是**构建期静态打包**的 `dozer.todo` 语言包(与 Rust 侧读同一份 JSON),
- * 离线、无 CDN、无运行时 fetch。解析规则复用中性共享模块 `web/shared/i18n`,
+ * 离线、无 CDN、无运行时 fetch。解析规则复用中性共享模块 `web/shared/i18n`(位于 `dozer-app/web/shared`,各 Web 包静态 import 其相对路径),
  * 不复制实现。
  *
  * locale 来自 Host 随 envelope 推送的 `ui_locale`(spec §8):`main.tsx` 每次
@@ -13,9 +13,9 @@ import {
   Resolver,
   type Bundle,
   type ResourceSet,
-} from '../../shared/i18n/i18n.ts';
-import en from '../../../locales/panels/todo/en.json' with { type: 'json' };
-import zhCN from '../../../locales/panels/todo/zh-CN.json' with { type: 'json' };
+} from '../../../../dozer-app/web/shared/i18n/i18n.ts';
+import en from '../../../locales/en.json' with { type: 'json' };
+import zhCN from '../../../locales/zh-CN.json' with { type: 'json' };
 
 export const TODO_OWNER = 'dozer.todo';
 const DEFAULT_LOCALE = 'en';

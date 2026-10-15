@@ -7,4 +7,5 @@
 
 pub(crate) mod app_host;
 pub(crate) mod services;
+pub(crate) mod todo_panel;
 pub(crate) mod usage_panel;

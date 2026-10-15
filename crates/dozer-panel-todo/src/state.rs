@@ -1,8 +1,8 @@
 //! Todo 面板状态类型与状态机:TodoState/TodoView/分类/状态过滤/拖拽/
 //! WorkspaceState/Message/焦点捕获/刷新请求。
 
-use crate::app::HoverId;
-use crate::panel_host::RequestTokenWrapExt;
+use bytehost_desktop::HoverSlot;
+use dozer_panel_host::RequestTokenWrapExt;
 
 use dozer_model::{CategoryInfo, TodoInfo};
 use dozer_services::{ServiceErrorKind, TodoService};
@@ -12,6 +12,13 @@ use iced_widget::core::widget::{Id, Operation};
 use std::sync::Arc;
 
 use super::*;
+
+/// 新增任务框高度上/下限(逻辑像素)。下限即默认高(约 5 行正文,保证多行
+/// 任务内容可见);上限让列表区至少留出约 140px,且 `app.rs::RowDrag` 的
+/// `TodoAddGrow` 分支会再按窗口高夹一道,这里给的是硬上限(窗口极矮时由
+/// 那里兜底)。
+pub const ADD_INPUT_MIN_HEIGHT: f32 = 120.0;
+pub const ADD_INPUT_MAX_HEIGHT: f32 = 400.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TodoState {
@@ -57,7 +64,7 @@ pub fn todo_display_state(item: &TodoInfo, target_alive: bool) -> TodoState {
 
 /// 正在"谈/进行"（等于总能在"活动段"里被拖拽重排的子集）：`!done && !paused`。
 /// 搁置（`paused`）是中间第三个不可拖放的段，完成是沉底段——都不可拖。
-pub(crate) fn is_active_todo(item: &TodoInfo) -> bool {
+pub fn is_active_todo(item: &TodoInfo) -> bool {
     !item.done && !item.paused
 }
 
@@ -89,7 +96,7 @@ pub struct CategoryTreeRow {
 /// (`t + ADD_SELECT_HIGHLIGHT`)。`next_flash_wake`/`advance_flash` 据此
 /// 恰好到点清除,不空转也不永远选中。
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Flash {
+pub struct Flash {
     idx: usize,
     until: std::time::Instant,
 }
@@ -97,79 +104,86 @@ pub(crate) struct Flash {
 /// 新增任务后卡片选中高亮保持的时长。之后 `selected_row` 自动清除,
 /// 除非用户在这期间已经手动点了别的卡片(见 `RowSelect` 里对 `flash`
 /// 的清除)。
-pub(crate) const ADD_SELECT_HIGHLIGHT: std::time::Duration = std::time::Duration::from_secs(2);
+pub const ADD_SELECT_HIGHLIGHT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Todo 面板挂在每个 `Workspace` 上的状态。
 #[derive(Default)]
 pub struct WorkspaceState {
-    pub(crate) requests: crate::panel_host::RequestTrackers,
+    pub requests: dozer_panel_host::RequestTrackers,
     /// 待发提示(失败/被拒等一次性反馈)。`App::update` 的包装函数每次处理完消息后
-    /// 统一排空成 Toast,见 `extensions::toast::Outbox`。
-    pub(crate) outbox: crate::extensions::toast::Outbox,
-    pub(crate) items: Vec<TodoInfo>,
+    /// 统一排空成 Toast,见 `dozer_panel_host::NoticeOutbox`。
+    pub outbox: dozer_panel_host::NoticeOutbox,
+    /// 只写日志、不弹 Toast 的诊断(例如 dozerd 不可用时的静默读取失败)。产品用 `take_diagnostics` 取走并记日志。
+    pub diagnostics: Vec<String>,
+    pub items: Vec<TodoInfo>,
     /// 新增任务框高度(逻辑像素)。前端拖拽手柄调高后经 `AddHeight` 事件写回,
     /// 0 表示"未拖过、用默认高",视图侧一律 `max(ADD_INPUT_MIN_HEIGHT)` 兜底。
-    pub(crate) add_input_height: f32,
-    pub(crate) selected_row: Option<usize>,
+    pub add_input_height: f32,
+    pub selected_row: Option<usize>,
     /// 新增任务后"置顶 + 选中保持 2 秒"的计时态。`Some(Flash)` 表示刚新增
     /// 了一条任务,其卡片的 `selected_row` 高亮要在 `flash.until` 时刻自动
     /// 清除;期间的挂起唤醒由 `next_flash_wake` 驱动(main.rs 据此排下次
     /// 重绘,见 `App::advance_flash`)。用户手动点了其它卡片会清除本字段,
     /// 不再让 2 秒倒计时去抢用户的主动选中。
-    pub(crate) flash: Option<Flash>,
+    pub flash: Option<Flash>,
     /// 每次 `start_flash`(新增任务后要滚回顶部)时递增;随推送带给 webview,
     /// 前端据此滚回顶部。取代旧 iced `scrollable::scroll_to` 的一次性标记。
-    pub(crate) scroll_nonce: u32,
+    pub scroll_nonce: u32,
     /// 乐观新增的临时 id 序号(见 `alloc_optimistic_id`)。
-    pub(crate) optimistic_seq: u32,
+    pub optimistic_seq: u32,
     /// 当前项目全部分类节点,随 `ListTodos` 同一轮轮询一并拉取
     /// (`request_categories_refresh`)。
-    pub(crate) categories: Vec<CategoryInfo>,
+    pub categories: Vec<CategoryInfo>,
     /// 展开的分类节点 id,纯 UI 态,不落盘(对齐 `FileTree::expanded`
     /// 同样"只在内存里"的处理)。
-    pub(crate) category_expanded: std::collections::HashSet<i64>,
+    pub category_expanded: std::collections::HashSet<i64>,
     /// 当前选中的分类过滤节点,默认"全部"。
-    pub(crate) category_selected: CategoryFilter,
+    pub category_selected: CategoryFilter,
     /// 分类树行内改名态(分类 id, 草稿字符串),镜像
     /// `files::TreeEdit`——单行文本,不用 `text_editor::Content`。
-    pub(crate) category_renaming: Option<(i64, String)>,
+    pub category_renaming: Option<(i64, String)>,
     /// 改名框是否持有 iced 真实焦点,镜像 `files.rs::tree_edit_focused`。
-    pub(crate) category_rename_focused: bool,
+    pub category_rename_focused: bool,
     /// 一次性聚焦标记,镜像 `files.rs::tree_edit_focus_pending`。
-    pub(crate) category_rename_focus_pending: bool,
+    pub category_rename_focus_pending: bool,
     /// 右区视图模式:列表视图 `List`(默认)/ 看板视图 `Kanban`。
-    pub(crate) view: TodoView,
+    pub view: TodoView,
     /// 详情弹窗展开态(卡片下标),`None` = 未展开。跟 `dispatch_open`/
     /// `calendar_open` 同一种"同时只能有一个"模型。
-    pub(crate) detail_open: Option<usize>,
+    pub detail_open: Option<usize>,
     /// 详情弹窗拉到的回合列表(`GetTodoDetail` 应答),弹窗关闭时清空。
-    pub(crate) detail_turns: Vec<dozer_model::TurnRecord>,
+    pub detail_turns: Vec<dozer_model::TurnRecord>,
     /// 回复框草稿(`text_input` 的 value)。
-    pub(crate) detail_reply_draft: String,
+    pub detail_reply_draft: String,
     /// 回复框是否持有 iced 内部真实焦点,每帧由 `CaptureDetailReplyFocus`
     /// 写入,镜像 `category_rename_focused`。
-    pub(crate) detail_reply_focused: bool,
+    pub detail_reply_focused: bool,
     /// "处理"按钮是否正在等待 `ProcessTodoNow` RPC 返回——耗时可能到 10
     /// 分钟,期间按钮显示 loading 态、禁用重复提交。
-    pub(crate) detail_processing: bool,
+    pub detail_processing: bool,
     /// "清空列表"确认弹窗是否展开。点 footbar「清空列表」按钮先弹这个
     /// 确认框(危险操作,不可撤销),取消/遮罩收起,确认才真正触发
     /// `Message::ClearListConfirm`。
-    pub(crate) clear_confirm: bool,
+    pub clear_confirm: bool,
     /// 分类树拖动移动的进行态(`None` = 没在拖)。见 `category_drag::CategoryDrag`。
-    pub(crate) category_drag: Option<CategoryDrag>,
+    pub category_drag: Option<CategoryDrag>,
 }
 
 impl WorkspaceState {
     /// 取走待发提示(`App::drain_outboxes` 调用)。
-    pub fn take_outbox(&mut self) -> Vec<crate::extensions::toast::Pending> {
+    pub fn take_outbox(&mut self) -> Vec<dozer_panel_host::Notice> {
         self.outbox.take()
+    }
+
+    /// 取走待记日志的诊断(`App::drain_outboxes` 旁调用)。
+    pub fn take_diagnostics(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.diagnostics)
     }
 
     /// 开场新增任务选中闪光:`selected_row` 置为新增后的下标并保持
     /// `ADD_SELECT_HIGHLIGHT`;同时递增 `scroll_nonce`,让前端滚回顶部使
     /// 新任务可见。
-    pub(crate) fn start_flash(&mut self, idx: usize) {
+    pub fn start_flash(&mut self, idx: usize) {
         self.selected_row = Some(idx);
         self.flash = Some(Flash {
             idx,
@@ -206,7 +220,7 @@ impl WorkspaceState {
     }
 
     /// 分配一个唯一的乐观临时 id(-1, -2, …)。
-    pub(crate) fn alloc_optimistic_id(&mut self) -> i64 {
+    pub fn alloc_optimistic_id(&mut self) -> i64 {
         self.optimistic_seq = self.optimistic_seq.wrapping_add(1);
         -(self.optimistic_seq as i64)
     }
@@ -264,14 +278,14 @@ impl WorkspaceState {
 
     /// 把分类移到 `new_parent` 下之后展开它(`None` = 顶层,不变),否则被移动的节点
     /// (可能正是选中项)会因为新父节点折叠而从树里消失。只展开,不是 toggle。
-    pub(crate) fn expand_for_reparent(&mut self, new_parent: Option<i64>) {
+    pub fn expand_for_reparent(&mut self, new_parent: Option<i64>) {
         if let Some(id) = new_parent {
             self.category_expanded.insert(id);
         }
     }
 
     /// 展开/收起某个分类节点(点左侧树箭头)。
-    pub(crate) fn toggle_category_expanded(&mut self, id: i64) {
+    pub fn toggle_category_expanded(&mut self, id: i64) {
         if !self.category_expanded.remove(&id) {
             self.category_expanded.insert(id);
         }
@@ -297,7 +311,7 @@ impl WorkspaceState {
     }
 
     /// 草稿变化时调用(`on_input`)。
-    pub(crate) fn set_category_rename_draft(&mut self, text: String) {
+    pub fn set_category_rename_draft(&mut self, text: String) {
         if let Some((_, draft)) = self.category_renaming.as_mut() {
             *draft = text;
         }
@@ -305,7 +319,7 @@ impl WorkspaceState {
 
     /// 提交(回车/失焦边缘触发共用)。返回 `Some((id, new_name))` 表示有
     /// 改动需要落盘(空白/未变都视为无改动,直接丢弃草稿)。
-    pub(crate) fn commit_category_rename(&mut self) -> Option<(i64, String)> {
+    pub fn commit_category_rename(&mut self) -> Option<(i64, String)> {
         let (id, draft) = self.category_renaming.take()?;
         let new_name = draft.trim().to_string();
         if new_name.is_empty() {
@@ -320,13 +334,13 @@ impl WorkspaceState {
 
     /// `app.rs::set_category_rename_focused` 失焦边缘触发用的公开入口,
     /// 转发到 `commit_category_rename`。
-    pub(crate) fn commit_category_rename_for_blur(&mut self) -> Option<(i64, String)> {
+    pub fn commit_category_rename_for_blur(&mut self) -> Option<(i64, String)> {
         self.commit_category_rename()
     }
 
     /// 分类行被按下:武装拖拽(`Pending`)。该消息由内核拦截(要拿 `last_cursor`),
     /// 内核直接调用这个方法。
-    pub(crate) fn arm_category_drag(
+    pub fn arm_category_drag(
         &mut self,
         source: i64,
         press_pos: (f32, f32),
@@ -341,31 +355,31 @@ impl WorkspaceState {
         });
     }
 
-    pub(crate) fn category_drag(&self) -> Option<&CategoryDrag> {
+    pub fn category_drag(&self) -> Option<&CategoryDrag> {
         self.category_drag.as_ref()
     }
 
     /// 已确认(`Dragging`)——视图层据此给行挂 `on_move`、换抓取光标、画高亮。
     /// `Pending` 期间返回 `false`:此时必须完全没有反应。
-    pub(crate) fn category_drag_confirmed(&self) -> bool {
+    pub fn category_drag_confirmed(&self) -> bool {
         self.category_drag
             .as_ref()
             .is_some_and(|d| d.phase == CategoryDragPhase::Dragging)
     }
 
-    pub(crate) fn confirm_category_drag(&mut self) {
+    pub fn confirm_category_drag(&mut self) {
         if let Some(d) = self.category_drag.as_mut() {
             d.phase = CategoryDragPhase::Dragging;
         }
     }
 
-    pub(crate) fn cancel_category_drag(&mut self) {
+    pub fn cancel_category_drag(&mut self) {
         self.category_drag = None;
     }
 
     /// 光标悬停到某个候选目标。`Pending` 期间忽略;`target` 不合法时清空记录
     /// (UI 不高亮非法目标),所以 `over` 里永远只有合法目标。
-    pub(crate) fn set_category_drag_over(&mut self, target: Option<DropTarget>) {
+    pub fn set_category_drag_over(&mut self, target: Option<DropTarget>) {
         let Some(d) = self.category_drag.as_mut() else {
             return;
         };
@@ -377,7 +391,7 @@ impl WorkspaceState {
         self.category_drag.as_mut().unwrap().over = valid;
     }
 
-    pub(crate) fn take_category_drag(&mut self) -> Option<CategoryDrag> {
+    pub fn take_category_drag(&mut self) -> Option<CategoryDrag> {
         self.category_drag.take()
     }
 
@@ -489,7 +503,7 @@ pub enum Message {
     ToggleListCollapse,
     /// 新增框 / 搜索框 / 内容编辑框被右键:内核拦截,不进 `update`——转发成
     /// 顶层 `Message::TextInputMenuOpen` 弹出通用输入框右键菜单(见 app.rs)。
-    TextInputMenuOpen(crate::app::TextInputTarget),
+    TextInputMenuOpen(crate::adapter::TextInputTarget),
     /// 关闭详情弹窗(Esc / 点外部 / 点关闭按钮)。
     DetailClose,
     /// 详情弹窗回复框草稿变化(`text_input::on_input`,给全量当前字符串)。
@@ -508,7 +522,7 @@ pub enum Message {
     /// 悬停某张任务卡(由 `todo_card` 外层的 `MouseArea::on_enter/on_exit`
     /// 构造),转交内核的悬停动画表(`app.rs::set_hover`),与全应用其它卡片
     /// 用同一套 hover 机制。
-    Hover(HoverId, bool),
+    Hover(HoverSlot, bool),
     /// 点 footbar 的"清空列表"按钮:弹出确认框(危险操作,不可撤销),
     /// 不直接清空,见 `clear_confirm_popup`。
     ClearListRequest,
@@ -642,7 +656,7 @@ impl Operation<()> for CaptureDetailReplyFocus {
 /// (见 `WorkspaceState::alloc_optimistic_id`),一次往返内连续新增多条也不会撞 id
 /// (前端按 id 做 key 与事件路由)。`Mutated` 触发的刷新会用服务端权威列表整体
 /// 替换掉乐观行。
-pub(crate) fn is_optimistic_id(id: i64) -> bool {
+pub fn is_optimistic_id(id: i64) -> bool {
     id <= 0
 }
 
@@ -650,7 +664,7 @@ pub(crate) fn is_optimistic_id(id: i64) -> bool {
 /// request_bookmarks_refresh`)同款手法的搬家版本:异步拉取某项目的任务
 /// 列表。轮询(`App::poll_todo_if_visible`)和任一写操作成功后都调它。
 pub fn request_todos_refresh(
-    requests: &crate::panel_host::RequestTrackers,
+    requests: &dozer_panel_host::RequestTrackers,
     project_id: i64,
     service: &Arc<dyn TodoService>,
     handle: &tokio::runtime::Handle,
@@ -670,7 +684,7 @@ pub fn request_todos_refresh(
 
 /// `request_todos_refresh` 的分类树版本:异步拉取某项目的全部分类节点。
 pub fn request_categories_refresh(
-    requests: &crate::panel_host::RequestTrackers,
+    requests: &dozer_panel_host::RequestTrackers,
     project_id: i64,
     service: &Arc<dyn TodoService>,
     handle: &tokio::runtime::Handle,
@@ -689,7 +703,7 @@ pub fn request_categories_refresh(
 }
 
 /// 面板切入:刷新任务列表与分类树(两个请求各回一条消息)。
-pub fn on_activate(state: &WorkspaceState, ctx: &crate::panel_host::ActivationCtx<Message>) {
+pub fn on_activate(state: &WorkspaceState, ctx: &dozer_panel_host::ActivationCtx<Message>) {
     let emit = ctx.io.emitter();
     request_todos_refresh(
         &state.requests,
@@ -707,10 +721,10 @@ pub fn on_activate(state: &WorkspaceState, ctx: &crate::panel_host::ActivationCt
     );
 }
 
-#[cfg(test)]
+/// 测试辅助:剥掉 `AsyncResult` 信封看内层载荷。留在 Dozer 一侧的集成测试要用,所以不加 `cfg(test)`。
+#[doc(hidden)]
 impl Message {
-    // Existing payload tests inspect service conversion separately from delivery guards.
-    pub(crate) fn result_payload(self) -> Self {
+    pub fn result_payload(self) -> Self {
         match self {
             Self::AsyncResult(_, inner) => inner.result_payload(),
             other => other,
@@ -719,9 +733,9 @@ impl Message {
 }
 
 impl Message {
-    pub(crate) fn result_project(&self) -> Option<i64> {
+    pub fn result_project(&self) -> Option<i64> {
         match self {
-            Self::AsyncResult(token, _) => crate::panel_host::project_of(token.scope()),
+            Self::AsyncResult(token, _) => dozer_panel_host::project_of(token.scope()),
             _ => None,
         }
     }

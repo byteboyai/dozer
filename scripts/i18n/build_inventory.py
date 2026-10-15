@@ -62,8 +62,8 @@ FILE_TASK = [
     ("crates/dozer-app/src/preview/webview_protocol.rs", "08"),
     # First panels
     ("crates/dozer-app/src/extensions/todo/", "09"),
-    ("crates/dozer-app/web/todo-content/", "09"),
     ("crates/dozer-panel-usage/", "09"),
+    ("crates/dozer-panel-todo/", "09"),
     ("crates/dozer-app/src/extensions/codehealth/", "09"),
     ("crates/dozer-app/web/codehealth-content/", "09"),
     # Remaining official panels + aux
@@ -111,8 +111,8 @@ EXCLUDED_FILES = [
     # Web 面板的测试支撑模块:fixtures.ts 是 wire payload 样例(含用户任务文本/
     # 分类名等用户内容),render-smoke.tsx 是渲染 smoke 用例的断言描述;都不是
     # 发布 UI,文案按 spec 保持不变(smoke 描述是开发者断言,不必本地化)。
-    "crates/dozer-app/web/todo-content/src/fixtures.ts",
-    "crates/dozer-app/web/todo-content/src/render-smoke.tsx",
+    "crates/dozer-panel-todo/web/todo-content/src/fixtures.ts",
+    "crates/dozer-panel-todo/web/todo-content/src/render-smoke.tsx",
     "crates/dozer-app/web/codehealth-content/src/fixtures.ts",
     "crates/dozer-app/web/codehealth-content/src/render-smoke.tsx",
 ]
@@ -138,7 +138,8 @@ NON_UI_STRINGS = {
     ("crates/dozer-app/src/preview/webview_protocol.rs", "tab_id 不匹配(收到 {got},期望 {expected})"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
     ("crates/dozer-app/src/preview/webview_protocol.rs", "document_id 不匹配(收到 {got},期望 {expected})"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
     ("crates/dozer-app/src/preview/webview_protocol.rs", "未知 payload kind: {k}"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
-    ("crates/dozer-app/src/extensions/todo/update.rs", "新分类"): "新建分类的默认名,是**用户数据的初始值**(落库后立即进入改名态);按计划「保留用户分类名」,不本地化",
+    ("crates/dozer-panel-todo/src/update.rs", "新分类"): "新建分类的默认名,是**用户数据的初始值**(落库后立即进入改名态);按计划「保留用户分类名」,不本地化",
+    ("crates/dozer-panel-todo/src/update.rs", "任务/分类读取失败(dozerd 不可用): {message}"): "只进 `WorkspaceState.diagnostics`,由宿主 `drain_outboxes` 写 debug 日志;不面向用户(原先是 `log_debug!` 参数,抽库后库不依赖 `dozer-core`,改走诊断通道)",
 }
 
 # 非 app 的后端 crate:字符串不是 UI,按 §10 归为"错误/诊断适配",由 Task 07 与

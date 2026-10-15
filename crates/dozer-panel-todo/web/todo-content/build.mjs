@@ -1,5 +1,5 @@
 // 生产构建:把 Todo 内容区打包成离线、无 CDN、无运行时 Node 的确定性产物到
-// `crates/dozer-app/assets/todo-content/`。不输出 source map;minify 后去掉
+// `crates/dozer-panel-todo/assets/todo-content/`。不输出 source map;minify 后去掉
 // 所有 legal comments。
 
 import { build } from 'esbuild';

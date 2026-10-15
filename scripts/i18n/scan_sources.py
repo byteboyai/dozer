@@ -53,6 +53,8 @@ SRC_ROOTS = [
     "crates/dozer-app/src/image_annotate_host.html",
     "crates/dozer-panel-usage/src",
     "crates/dozer-panel-usage/web",
+    "crates/dozer-panel-todo/src",
+    "crates/dozer-panel-todo/web",
     "crates/dozerd/src",
     "crates/dozer-core/src",
     "crates/dozer-model/src",
@@ -71,6 +73,7 @@ SOURCE_SUFFIXES = [".rs", ".ts", ".tsx", ".js", ".mjs", ".jsx", ".html"]
 # ---- owner 粗判(路径 → owner_id)。最终 owner 由注册来源绑定,这里只给初值。----
 OWNER_RULES = [
     ("crates/dozer-panel-usage/", "dozer.usage"),
+    ("crates/dozer-panel-todo/", "dozer.todo"),
     ("crates/dozer-app/src/extensions/todo/", "dozer.todo"),
     ("crates/dozer-app/src/extensions/codehealth/", "dozer.codehealth"),
     ("crates/dozer-app/src/extensions/files/", "dozer.files"),
@@ -90,7 +93,6 @@ OWNER_RULES = [
     ("crates/dozer-app/web/tabular-host/", "dozer.preview"),
     ("crates/dozer-app/web/flyfish/", "dozer.preview"),
     ("crates/dozer-app/web/plantuml-viewer/", "dozer.preview"),
-    ("crates/dozer-app/web/todo-content/", "dozer.todo"),
     ("crates/dozer-app/web/codehealth-content/", "dozer.codehealth"),
     ("crates/dozer-app/web/group-chat-content/", "dozer.group_chat"),
     ("crates/dozer-app/web/review-trace/", "dozer.agent"),

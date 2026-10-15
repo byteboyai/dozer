@@ -1,17 +1,15 @@
 //! Todo 面板 update 消息分发 + 日历日期纯函数。
 
-use crate::panel_host::RequestTokenWrapExt;
+use dozer_panel_host::RequestTokenWrapExt;
 use dozer_model::TodoInfo;
 use dozer_services::{ServiceErrorKind, TodoService};
 use std::sync::Arc;
 
 use super::*;
 
-dozer_core::scope!(pub(crate) LOG, panel, "todo");
-
 /// 本地时区无关的"今天" (年, 月, 日),用 `SystemTime::now()` 的 UTC 秒数
 /// 经 `civil_from_days` 换算。只用于日历默认停在当前月,时区偏差一天内无感。
-pub(crate) fn today_ymd() -> (i32, u32, u32) {
+pub fn today_ymd() -> (i32, u32, u32) {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -22,7 +20,7 @@ pub(crate) fn today_ymd() -> (i32, u32, u32) {
 }
 
 /// 完成时间(毫秒) → "MM-DD"(SUCCESS 徽章用,只取月日)。
-pub(crate) fn format_todo_month_day(ms: u64) -> String {
+pub fn format_todo_month_day(ms: u64) -> String {
     let secs = ms / 1000;
     let days = (secs / 86400) as i64;
     let (_y, m, d) = civil_from_days(days);
@@ -31,7 +29,7 @@ pub(crate) fn format_todo_month_day(ms: u64) -> String {
 
 /// civil-from-days:把"自 1970-01-01 的天数"换算成 (年, 月, 日)。
 /// 用 Hinnant 经典公式,范围覆盖 1970..=2100,足够"完成于"提示用。
-pub(crate) fn civil_from_days(z: i64) -> (i64, u32, u32) {
+pub fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
     let doe = z - era * 146097;
@@ -46,7 +44,7 @@ pub(crate) fn civil_from_days(z: i64) -> (i64, u32, u32) {
 
 /// 解析 "MM-DD"(允许 `8-3` 这种缺前导零写法,兼容用户手敲的计划日期),
 /// 返回 (月, 日);解析失败返回 `None`。
-pub(crate) fn parse_month_day(s: &str) -> Option<(u32, u32)> {
+pub fn parse_month_day(s: &str) -> Option<(u32, u32)> {
     let (mm, dd) = s.split_once('-')?;
     let m: u32 = mm.trim().parse().ok()?;
     let d: u32 = dd.trim().parse().ok()?;
@@ -54,7 +52,7 @@ pub(crate) fn parse_month_day(s: &str) -> Option<(u32, u32)> {
 }
 
 /// 插入一条乐观新增项(置顶)并起闪光,返回它的临时 id。纯状态操作,便于单测。
-pub(crate) fn insert_optimistic_todo(
+pub fn insert_optimistic_todo(
     ws_state: &mut WorkspaceState,
     project_id: i64,
     text: String,
@@ -125,7 +123,7 @@ pub fn update(
 ) {
     let mut msg = msg;
     while let Message::AsyncResult(token, inner) = msg {
-        if token.scope() != &crate::panel_host::scope_of(Some(project_id))
+        if token.scope() != &dozer_panel_host::scope_of(Some(project_id))
             || !ws_state.requests.accepts(&token)
         {
             return;
@@ -178,8 +176,7 @@ pub fn update(
             // 失败时列表随后会按磁盘状态刷新回旧样子,用户会以为没生效——Toast 说明。
             if let Err(e) = &res {
                 ws_state.outbox.push(
-                    LOG,
-                    crate::extensions::toast::Level::Error,
+                    dozer_panel_host::NoticeLevel::Error,
                     dozer_model::LocalizedText::keyed(
                         TODO_OWNER,
                         "error.action_failed",
@@ -193,11 +190,10 @@ pub fn update(
         Message::CategoriesLoaded(categories) => ws_state.categories = categories,
         Message::LoadFailed(kind, message) => {
             if kind == ServiceErrorKind::Unavailable {
-                dozer_core::log_debug!(LOG, "任务/分类读取失败(dozerd 不可用): {message}");
+                ws_state.diagnostics.push(format!("任务/分类读取失败(dozerd 不可用): {message}"));
             } else {
                 ws_state.outbox.push_keyed_cooldown(
-                    LOG,
-                    crate::extensions::toast::Level::Error,
+                    dozer_panel_host::NoticeLevel::Error,
                     dozer_model::LocalizedText::keyed(
                         TODO_OWNER,
                         "error.tasks_load_failed",
@@ -212,8 +208,7 @@ pub fn update(
         Message::CategoryMutated(res) => {
             if let Err(e) = &res {
                 ws_state.outbox.push(
-                    LOG,
-                    crate::extensions::toast::Level::Error,
+                    dozer_panel_host::NoticeLevel::Error,
                     dozer_model::LocalizedText::keyed(
                         TODO_OWNER,
                         "error.category_failed",

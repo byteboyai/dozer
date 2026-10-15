@@ -393,6 +393,11 @@ impl App {
     }
 }
 
+/// Todo 内容区 webview 的失败原因:先按当前语言渲染成文本再交给面板视图(共享库不认识宿主的解析器)。
+fn todo_webview_failed(app: &crate::app::App) -> Option<String> {
+    app.todo_webview.failed().map(|text| crate::i18n::host_render(text, app.locale.active_locale()))
+}
+
 /// 左二预览 pane:表头 + tab 栏 + 地址栏;内容区本体是 wry webview
 /// 子视图(不在 iced 树里),这里只留占位背景——无 tab 时显示提示文案。
 /// 左一项目栏：项目卡（名称 + git 分支/脏 + 路径）+ 文件树；无项目时"打开项目…" + 最近。
@@ -636,7 +641,7 @@ pub(crate) fn panel_body<'a>(
                 return todo::view(
                     app,
                     &ws.todo,
-                    app.todo_webview.failed(),
+                    todo_webview_failed(app),
                     Length::Fixed(0.0),
                     Border::default(),
                     Length::Fill,
@@ -649,7 +654,7 @@ pub(crate) fn panel_body<'a>(
             let (sidebar_pane, content_pane) = todo::view(
                 app,
                 &ws.todo,
-                app.todo_webview.failed(),
+                todo_webview_failed(app),
                 Length::FillPortion(list_portion),
                 zone_pane_border(zone, lc),
                 Length::FillPortion(content_portion),

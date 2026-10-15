@@ -212,7 +212,11 @@ impl App {
         for slot in self.projects.values_mut() {
             if let WorkspaceSlot::Loaded(ws) = slot {
                 pending.extend(ws.files.take_outbox());
-                pending.extend(ws.todo.take_outbox());
+                pending.extend(ws.todo.take_outbox().into_iter().map(|n| toast::pending_from_notice(todo::LOG, n)));
+                // 只写日志、不弹 Toast 的诊断(例如 dozerd 不可用时的静默读取失败)。
+                for line in ws.todo.take_diagnostics() {
+                    dozer_core::log_debug!(todo::LOG, "{line}");
+                }
                 pending.extend(ws.project_panel.take_outbox());
                 pending.extend(ws.conversations.take_outbox());
                 pending.extend(ws.codehealth.take_outbox());
@@ -1942,9 +1946,9 @@ impl App {
             Message::Database(database::Message::Hover(id, h)) => self.set_hover(id, h),
             Message::Database(msg) => self.database_message(msg),
             Message::Todo(msg) => match msg {
-                todo::Message::Hover(id, h) => self.set_hover(id, h),
+                todo::Message::Hover(slot, h) => self.set_hover(todo::hover_id_of(slot), h),
                 todo::Message::TextInputMenuOpen(target) => {
-                    self.update(Message::TextInputMenuOpen(target));
+                    self.update(Message::TextInputMenuOpen(todo::text_target_of(target)));
                 }
                 todo::Message::ToggleListCollapse => {
                     self.toggle_panel_list_collapse(PanelKind::Todo);

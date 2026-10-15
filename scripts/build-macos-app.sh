@@ -132,9 +132,10 @@ cp -R "$ROOT_DIR/crates/dozer-panel-usage/assets/usage-content" "$APP_DIR/Conten
 cp -R "$ROOT_DIR/crates/dozer-app/assets/image-annotate" "$APP_DIR/Contents/Resources/image-annotate"
 # 代码健康度 / Todo 面板内容侧 host。`dozer://codehealth-content/` 与
 # `dozer://todo-content/` 从 flyfish 根的兄弟目录读,漏拷会导致分发后这两个
-# 面板整个 404(dev 态 `cargo run` 走源码树回退测不出来)。
+# 面板整个 404(dev 态 `cargo run` 走源码树回退测不出来)。todo-content 的产物唯一来源是
+# `dozer-panel-todo` crate(S3a 起,不再从 dozer-app 下取)。
 cp -R "$ROOT_DIR/crates/dozer-app/assets/codehealth-content" "$APP_DIR/Contents/Resources/codehealth-content"
-cp -R "$ROOT_DIR/crates/dozer-app/assets/todo-content" "$APP_DIR/Contents/Resources/todo-content"
+cp -R "$ROOT_DIR/crates/dozer-panel-todo/assets/todo-content" "$APP_DIR/Contents/Resources/todo-content"
 # 群聊面板内容侧 host。`dozer://group-chat-content/` 从 flyfish 根的兄弟目录
 # `Contents/Resources/group-chat-content` 读(2026-10-02 起),漏拷会导致分发后
 # 群聊面板整个 404。

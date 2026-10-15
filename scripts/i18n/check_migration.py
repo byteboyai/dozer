@@ -61,7 +61,7 @@ def load_bundles() -> dict:
     与 `i18n.rs` 的 `PANEL_OWNERS`/`dozer-panel-usage` 约定一致:
       - `locales/host/` → `dozer.host`
       - `locales/panels/<id>/` → `dozer.<id>`(codehealth 例外映射到 code_health)
-      - 独立面板 `crates/dozer-panel-usage/locales/` → `dozer.usage`
+      - 独立面板 `crates/dozer-panel-usage/locales/` → `dozer.usage`、`crates/dozer-panel-todo/locales/` → `dozer.todo`
     """
     dir_owner = {}
     for base, dirs, files in os.walk(os.path.join(ROOT, "crates")):
@@ -124,6 +124,7 @@ def _default_srcroots():
     return [
         os.path.join(ROOT, "crates", "dozer-app", "src"),
         os.path.join(ROOT, "crates", "dozer-panel-usage", "src"),
+        os.path.join(ROOT, "crates", "dozer-panel-todo", "src"),
     ]
 
 
@@ -376,6 +377,7 @@ def main(argv):
         asset_dirs = [
             os.path.join(ROOT, "crates", "dozer-app", "assets"),
             os.path.join(ROOT, "crates", "dozer-panel-usage", "assets"),
+            os.path.join(ROOT, "crates", "dozer-panel-todo", "assets"),
         ]
         for p in check_assets_no_runtime_locale_read(asset_dirs):
             problems.append(p)
