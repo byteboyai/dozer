@@ -7,11 +7,13 @@
 //! 每个工作区上的渲染态(`WorkspaceState`)与视图 / 更新逻辑,List/Add/Toggle 经 `TodoService` 同步。
 
 pub mod adapter;
+pub mod i18n;
 mod category_drag;
 mod filter;
 mod protocol;
 mod state;
 mod update;
+pub mod view;
 
 /// 面板 owner id(spec §5):`locales/`(随库)。
 pub const TODO_OWNER: &str = "dozer.todo";

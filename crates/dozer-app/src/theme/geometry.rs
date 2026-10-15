@@ -101,7 +101,7 @@ pub fn usage_content_chrome_top_px() -> f32 {
 /// (tab 按钮同样钉 `tab_button_size()` 高),不靠内容自然撑高——几何侧才能
 /// 精确地给 webview 让出这段。
 pub fn todo_top_row_inner_h_px() -> f32 {
-    byteui::theme::geometry::tab_button_size() + 8.0
+    dozer_panel_todo::adapter::top_row_inner_h_px()
 }
 
 /// tab 行 + 其下 1px 分割线(`byteui::layout::divider::horizontal`)的总高。
@@ -113,6 +113,13 @@ pub fn todo_top_row_h_px() -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 评审关注点 4:原生 webview 让位的高度与库里视图用的是同一个数。
+    #[test]
+    fn todo_top_row_height_is_the_librarys() {
+        assert_eq!(todo_top_row_inner_h_px(), dozer_panel_todo::adapter::top_row_inner_h_px());
+        assert_eq!(todo_top_row_h_px(), dozer_panel_todo::adapter::top_row_inner_h_px() + 1.0);
+    }
 
     /// 文件树几何随 token 变化时同步折算（基准 scale=1 的字面量）。若
     /// 渲染侧 `files::view` 的固定堆栈高度改动，这里也要跟着改——两侧是

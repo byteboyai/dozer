@@ -5,13 +5,62 @@
 //! 走 UDS 与 dozerd 同步;不再直接读写 `.dozer/todo.md`/`todo_meta.json`
 //! (MARKDOWN 整文件视图已随迁移移除)。
 
-mod view;
-
-// 面板本体已抽到共享库 `dozer-panel-todo`(S3a);这里重新导出,`todo::…` 的调用点不变。视图在 Task 5 搬走。
+// 面板本体已抽到共享库 `dozer-panel-todo`(S3a);这里重新导出,`todo::…` 的调用点不变。
 pub(crate) use dozer_panel_todo::*;
-pub(crate) use view::*;
+pub(crate) use dozer_panel_todo::view::*;
 
 dozer_core::scope!(pub(crate) LOG, panel, "todo");
+
+/// Todo 视图向宿主要的展示能力:全部转调 Dozer 现有的 `PanelHost` 与 chrome 函数(行为与抽库前逐项相同)。
+impl dozer_panel_todo::adapter::PanelDisplay for crate::app::App {
+    fn hover_progress(&self, slot: bytehost_desktop::HoverSlot) -> f32 {
+        crate::panel_host::PanelHost::hover_progress(self, hover_id_of(slot))
+    }
+
+    fn list_collapsed(&self) -> bool {
+        crate::panel_host::PanelHost::list_collapsed(self, crate::app::PanelKind::Todo)
+    }
+
+    fn list_collapse_button<'a, M: Clone + 'a>(
+        &self,
+        collapsed: bool,
+        tooltip_collapse: String,
+        tooltip_expand: String,
+        on_select: M,
+        on_hover: impl Fn(bool) -> M + 'a,
+    ) -> iced_widget::core::Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
+        crate::panel_host::PanelHost::list_collapse_button(
+            self,
+            crate::app::PanelKind::Todo,
+            collapsed,
+            crate::app::HoverId::list_collapse(crate::app::PanelKind::Todo),
+            tooltip_collapse,
+            tooltip_expand,
+            on_select,
+            on_hover,
+        )
+    }
+
+    fn panel_head<'a, M: 'a>(
+        &self,
+        icon: byteui::interaction::icons::IconKind,
+        title: String,
+    ) -> iced_widget::core::Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
+        crate::chrome::homespace::home_panel_head(icon, title)
+    }
+
+    fn header_padding(&self) -> iced_widget::core::Padding {
+        crate::theme::region::project_pane().padding
+    }
+
+    fn tab_divider<'a, M: 'a>(&self) -> iced_widget::core::Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
+        crate::app::tab_divider()
+    }
+
+    fn locale(&self) -> &str {
+        crate::panel_host::PanelHost::locale(self)
+    }
+}
 
 /// 库的悬停槽位 → Dozer 悬停动画表的键。
 pub(crate) fn hover_id_of(slot: bytehost_desktop::HoverSlot) -> crate::app::HoverId {

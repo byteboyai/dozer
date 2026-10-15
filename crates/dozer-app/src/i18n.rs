@@ -28,8 +28,8 @@ const HOST_ZH_CN: &str = include_str!("../locales/host/zh-CN.json");
 const PANEL_OWNERS: &[(&str, &str, &str)] = &[
     (
         "dozer.todo",
-        include_str!("../locales/panels/todo/en.json"),
-        include_str!("../locales/panels/todo/zh-CN.json"),
+        include_str!("../../dozer-panel-todo/locales/en.json"),
+        include_str!("../../dozer-panel-todo/locales/zh-CN.json"),
     ),
     (
         "dozer.usage",
