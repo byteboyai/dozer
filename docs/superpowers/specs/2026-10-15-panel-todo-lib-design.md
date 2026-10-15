@@ -1,7 +1,7 @@
 # S3a 把 todo 面板抽成共享库 `dozer-panel-todo`
 
 - 日期:2026-10-15
-- 状态:待评审
+- 状态:待评审(2026-10-15 读完 `panel_host` 与 Dozer 门禁脚本后修订,见 §9)
 - 路径:架构级(新增共享 crate,重组 `dozer-app` 里一个面板的代码归属)
 - 起点:Dozer `main` 的 `7cdbffd0`(worktree `../dozer-panel-todo`,分支 `feat/panel-todo-lib`)
 - 相关:`docs/dozer-v2/dozer-v2-面板独立性与服务化要求.md`、`docs/dozer-v2/digger-bytehost-integration/`(用量面板当年的抽库记录:Task 19/20);Digger 一侧的上游 spec:`digger/docs/superpowers/specs/2026-10-14-window-shell-design.md`(S1)、`2026-10-15-usage-pair-design.md`(S2)
@@ -113,3 +113,15 @@ dozer-panel-todo/
 ## 8. 交付物与 3b 的接口
 
 3a 完成时,库的公开面就是 3b 需要的全部:`WorkspaceState`、`Message`、`update`、`on_activate`、`content_pane` / `list_pane`、`PanelDisplay`、`TodoOutbox`、`web_assets_root()`。Digger 另需实现 `TodoService`(S3b)。
+
+## 9. 修订(2026-10-15,写实施计划时读代码发现)
+
+1. **新增一个共享的 `dozer-panel-host` crate(用户已确认)。** `dozer-app/src/panel_host.rs` 不是 todo 专用,约 15 个模块共用(项目、群聊、会话、SSH、浏览器、git 日志、数据库……)。其中**不依赖 `App`** 的部分——`scope_of` / `project_of`、`wrap_token` 与 `RequestTokenWrapExt`、`RequestTrackers`、`PanelIo`、`ActivationCtx`、`PanelCommand` / `HostRequest` / `HostOutbox`——先抽成 `dozer-panel-host`;Dozer 的 `panel_host.rs` 重新导出它,行为不变。todo 库(以及 S4 的会话 / 群聊 / agent 库)直接用它,不再各自带一份。§4.2 里"库自带请求追踪与激活上下文"据此改为"用 `dozer-panel-host`"。`PanelHost` 视图契约 trait 仍留在 Dozer(它绑着 `HoverId` / `PanelKind`),todo 库用自己的 `PanelDisplay`。
+2. **提示发件箱要中性化。** Dozer 的 `toast::Outbox` 依赖 `dozer_core::log::Scope` 与 `crate::i18n::host_render_stable`,库不能依赖它们。`dozer-panel-host` 提供中性的 `NoticeOutbox`(级别、`LocalizedText`、可选 key、带冷却的去重),由 `dozer-i18n` 取语言无关的稳定值;Dozer 排空后转成自己的 `toast::Pending`(补上 `Scope`)。
+3. **日志**:`update.rs` 里唯一的 `log_debug!(LOG, ..)` 改成库内发一条 Debug 级 `Notice`,由产品排空时记日志;库不依赖 `dozer-core`。
+4. **悬停键**:`Message::Hover(HoverId, bool)` 改成 `Message::Hover(HoverSlot, bool)`(`bytehost_desktop::HoverSlot` 已是产品中立词汇,含 `ListCollapse`、`Row(u64)`),产品在边界上映射成 `HoverId::Panel(PanelKind::Todo, slot)`。
+5. **文本框目标**:库定义同形状的 `TextInputTarget { id, secure }`,产品转成自己的。
+6. **主题几何**:`theme::geometry::todo_top_row_inner_h_px()` 就是 `byteui tab_button_size() + 8`,搬进库并导出;Dozer 的同名函数改为委托它,保证原生 webview 让位的高度与视图同源。`theme::region::project_pane().padding`(来自 Dozer 的 `workspace.json`)经 `PanelDisplay::header_padding()` 注入。
+7. **agent 图标**:`protocol.rs` 里的 `crate::workspace::agent_icon` 经 `PanelDisplay::agent_icon(kind)` 注入。
+8. **Dozer 的仓库门禁要同步登记新 crate**(照 `dozer-panel-usage` 的每一处):`scripts/i18n/scan_sources.py`、`check_migration.py`、`build_inventory.py`、`scripts/build-macos-app.sh`、`scripts/audit/panel-boundary.baseline.json`,以及 `docs/dozer-v2/i18n/inventory.json` 里 81 条指向 `extensions/todo` 的路径。门禁(`check-i18n.sh`、`check-log-scope.sh`、`check_panel_boundary.py`)在基线与终态都要跑。
+9. **规模修正**:todo 的 Rust 代码约 4,300 行(不是 3,300)。
