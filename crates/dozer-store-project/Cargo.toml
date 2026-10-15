@@ -1,0 +1,17 @@
+[package]
+name = "dozer-store-project"
+version = "0.1.0"
+edition.workspace = true
+
+# Project 注册表与共享记忆的 SQLite 存储 + 进程内服务实现。Dozer(dozerd)与 Digger 共用这份代码,
+# 各自打开自己的数据库文件。依赖闭包不得含 dozer-app / dozer-client / dozer-core / dozerd。
+[dependencies]
+dozer-model = { path = "../dozer-model" }
+dozer-services = { path = "../dozer-services" }
+anyhow.workspace = true
+bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.7.0" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true }
