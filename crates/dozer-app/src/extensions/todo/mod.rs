@@ -8,85 +8,10 @@
 // 面板本体已抽到共享库 `dozer-panel-todo`(S3a);这里重新导出,`todo::…` 的调用点不变。
 pub(crate) use dozer_panel_todo::*;
 pub(crate) use dozer_panel_todo::view::*;
+// 产品侧适配(展示契约、类型映射)在 `host_adapters::todo_panel`(面板边界门禁不许 `extensions/` 下出现 `crate::app::App`)。
+pub(crate) use crate::host_adapters::todo_panel::{current_view_payload, hover_id_of, text_target_of};
 
 dozer_core::scope!(pub(crate) LOG, panel, "todo");
-
-/// Todo 视图向宿主要的展示能力:全部转调 Dozer 现有的 `PanelHost` 与 chrome 函数(行为与抽库前逐项相同)。
-impl dozer_panel_todo::adapter::PanelDisplay for crate::app::App {
-    fn hover_progress(&self, slot: bytehost_desktop::HoverSlot) -> f32 {
-        crate::panel_host::PanelHost::hover_progress(self, hover_id_of(slot))
-    }
-
-    fn list_collapsed(&self) -> bool {
-        crate::panel_host::PanelHost::list_collapsed(self, crate::app::PanelKind::Todo)
-    }
-
-    fn list_collapse_button<'a, M: Clone + 'a>(
-        &self,
-        collapsed: bool,
-        tooltip_collapse: String,
-        tooltip_expand: String,
-        on_select: M,
-        on_hover: impl Fn(bool) -> M + 'a,
-    ) -> iced_widget::core::Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
-        crate::panel_host::PanelHost::list_collapse_button(
-            self,
-            crate::app::PanelKind::Todo,
-            collapsed,
-            crate::app::HoverId::list_collapse(crate::app::PanelKind::Todo),
-            tooltip_collapse,
-            tooltip_expand,
-            on_select,
-            on_hover,
-        )
-    }
-
-    fn panel_head<'a, M: 'a>(
-        &self,
-        icon: byteui::interaction::icons::IconKind,
-        title: String,
-    ) -> iced_widget::core::Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
-        crate::chrome::homespace::home_panel_head(icon, title)
-    }
-
-    fn header_padding(&self) -> iced_widget::core::Padding {
-        crate::theme::region::project_pane().padding
-    }
-
-    fn tab_divider<'a, M: 'a>(&self) -> iced_widget::core::Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
-        crate::app::tab_divider()
-    }
-
-    fn locale(&self) -> &str {
-        crate::panel_host::PanelHost::locale(self)
-    }
-}
-
-/// 库的悬停槽位 → Dozer 悬停动画表的键。
-pub(crate) fn hover_id_of(slot: bytehost_desktop::HoverSlot) -> crate::app::HoverId {
-    crate::app::HoverId::Panel(crate::app::PanelKind::Todo, slot)
-}
-
-/// 库的文本框目标 → Dozer 的。
-pub(crate) fn text_target_of(t: dozer_panel_todo::adapter::TextInputTarget) -> crate::app::TextInputTarget {
-    crate::app::TextInputTarget { id: t.id, secure: t.secure }
-}
-
-/// agent 图标:库不认识 `workspace::agent_icon`,在这里取字节交给它。
-pub(crate) fn agent_icon_data(agent: dozer_model::AgentKind) -> dozer_panel_todo::adapter::AgentIconData {
-    let icon = crate::workspace::agent_icon(agent);
-    dozer_panel_todo::adapter::AgentIconData { bytes: icon.bytes().to_vec(), preserves_color: icon.preserves_original_color() }
-}
-
-/// 同库的 `current_view_payload`,但图标取自 Dozer 的 `workspace::agent_icon`,调用点不用改。
-pub(crate) fn current_view_payload(
-    todo: &WorkspaceState,
-    session_alive: &dyn Fn(&str) -> bool,
-    project_id: i64,
-    today: (i32, u32, u32),
-) -> TodoViewPayload {
-    dozer_panel_todo::current_view_payload(todo, session_alive, project_id, today, &agent_icon_data)
-}
 
 #[cfg(test)]
 mod tests {
@@ -110,24 +35,6 @@ mod tests {
             category_id: None,
             assigned_agent: None,
         }
-    }
-
-    /// 评审关注点 3:库里的 `HoverSlot` 映射回的 `HoverId`,必须与抽库前 `HoverId::row(..)` / `HoverId::list_collapse(..)` 构造的完全相同。
-    #[test]
-    fn hover_slots_map_back_to_the_same_hover_ids() {
-        use crate::app::{HoverId, PanelKind};
-        use bytehost_desktop::HoverSlot;
-        assert_eq!(hover_id_of(HoverSlot::Row(42)), HoverId::row(PanelKind::Todo, 42));
-        assert_eq!(hover_id_of(HoverSlot::ListCollapse), HoverId::list_collapse(PanelKind::Todo));
-        assert_eq!(hover_id_of(HoverSlot::Choice(3)), HoverId::choice(PanelKind::Todo, 3));
-    }
-
-    /// 库里的 `agents_are_the_four_headless_kinds_with_inline_svg` 用桩图标;这里用 Dozer 的真图标验证同一件事。
-    #[test]
-    fn the_real_agent_icons_are_inline_svg() {
-        let agents = dozer_panel_todo::agent_vms(&agent_icon_data);
-        assert_eq!(agents.len(), 4);
-        assert!(agents.iter().all(|a| a.icon_svg.contains("<svg")));
     }
 
     /// 语言无关的稳定文本(原 `toast::Pending::text_stable`,发件箱改成中性类型后在测试里直接算)。
