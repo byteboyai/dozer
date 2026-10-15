@@ -1,7 +1,7 @@
 # S3a 把 todo 面板抽成共享库 `dozer-panel-todo`
 
 - 日期:2026-10-15
-- 状态:待评审(2026-10-15 读完 `panel_host` 与 Dozer 门禁脚本后修订,见 §9)
+- 状态:已实现(待用户在 Dozer 上目测验收;未合入主线、未推送)。2026-10-15 读完 `panel_host` 与 Dozer 门禁脚本后修订(见 §9)
 - 路径:架构级(新增共享 crate,重组 `dozer-app` 里一个面板的代码归属)
 - 起点:Dozer `main` 的 `7cdbffd0`(worktree `../dozer-panel-todo`,分支 `feat/panel-todo-lib`)
 - 相关:`docs/dozer-v2/dozer-v2-面板独立性与服务化要求.md`、`docs/dozer-v2/digger-bytehost-integration/`(用量面板当年的抽库记录:Task 19/20);Digger 一侧的上游 spec:`digger/docs/superpowers/specs/2026-10-14-window-shell-design.md`(S1)、`2026-10-15-usage-pair-design.md`(S2)
@@ -125,3 +125,10 @@ dozer-panel-todo/
 7. **agent 图标**:`protocol.rs` 里的 `crate::workspace::agent_icon` 经 `PanelDisplay::agent_icon(kind)` 注入。
 8. **Dozer 的仓库门禁要同步登记新 crate**(照 `dozer-panel-usage` 的每一处):`scripts/i18n/scan_sources.py`、`check_migration.py`、`build_inventory.py`、`scripts/build-macos-app.sh`、`scripts/audit/panel-boundary.baseline.json`,以及 `docs/dozer-v2/i18n/inventory.json` 里 81 条指向 `extensions/todo` 的路径。门禁(`check-i18n.sh`、`check-log-scope.sh`、`check_panel_boundary.py`)在基线与终态都要跑。
 9. **规模修正**:todo 的 Rust 代码约 4,300 行(不是 3,300)。
+
+## 10. 实现结果(2026-10-15)
+
+- 分支 `feat/panel-todo-lib`(起点 `7cdbffd0`),7 个实现提交 + 文档提交;新 crate `dozer-panel-host`(8 个测试)与 `dozer-panel-todo`(69 个测试)。
+- 与计划不同的几处(均已写入实施记录):计划的 Task 3 与 Task 4 合并(`state` / `protocol` / `filter` / `category_drag` 互相引用类型,无法分两步搬);`NoticeLevel::Debug` 去掉,改为 `WorkspaceState.diagnostics` 诊断通道;树内拖拽阈值搬进 `dozer-panel-host`(文件树共用);Dozer 一侧的 `PanelDisplay` 实现放在 `host_adapters/todo_panel.rs`(面板边界门禁 `R-APP` 不许 `extensions/` 下出现 `App`);语言包在 Task 5 就搬了。
+- 测试数对账:Rust 合计 基线 2011 → 终态 2027(`dozer-app` 1950 + 库 69 + host 8),净增 16 条守护 / 新增测试,搬走的 65 条测试随代码走、期望值未改;前端 60 + 9 不变;前端构建产物与搬走前逐字节相同。
+- 终态仍红的两个测试与本改动无关:基线里就红的 `usage_probe::host::tests::host_site_citations_point_at_the_code_they_name`(行号引用漂移),以及依赖仓库历史的 `git_log::tests::build_populates_time_and_is_merge`(`main` 前进后本分支不含其新提交,合入 / 变基后应恢复)。`check-log-scope.sh` 仍有基线里那一处 `window_events.rs:2556`。
