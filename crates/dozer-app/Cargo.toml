@@ -17,16 +17,16 @@ dozer-model = { path = "../dozer-model" }
 dozer-i18n = { path = "../dozer-i18n" }
 dozer-client = { path = "../dozer-client" }
 dozer-services = { path = "../dozer-services" }
-bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.3.0" }
-bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.3.0" }
-bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.3.0" }
-bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.3.0" }
+bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.0" }
+bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.0" }
+bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.0" }
+bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.0" }
 # 公共桌面宿主契约:稳定身份、请求身份、布局 DTO(bytehost-core,本地 patch 联调)。
-bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.3.0" }
+bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.0" }
 # 共享桌面宿主执行层:Surface 生命周期/路由/几何(iced + wry 平台实现)。
 # `overlay` feature(C10 方案 C):浮层共用 wgpu 渲染管线 + 遮罩外壳
 # (`bytehost_desktop::overlay_gpu`),dozer-app 侧不再自写建窗/alpha 机制。
-bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.3.0", features = ["overlay"] }
+bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.0", features = ["overlay"] }
 dozer-codehealth = { path = "../dozer-codehealth" }
 # 同源 Usage 面板库(Task 19):Dozer 只做 ctor/重导出包装,数据层/视图层/资源
 # 都在此 crate;其依赖闭包不含 dozer-app(见 crate 文档)。
@@ -36,7 +36,7 @@ dozer-panel-usage = { path = "../dozer-panel-usage" }
 dozer-hook = { path = "../dozer-hook" }
 # 新建 agent 会话时静默注册对应 CLI 的 dozer-mcp（第一个写工具 2026-08-27）。
 dozer-mcp = { path = "../dozer-mcp" }
-byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.2" }
+byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.3" }
 bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.7.0", features = ["watch"] }
 anyhow.workspace = true
 serde.workspace = true
