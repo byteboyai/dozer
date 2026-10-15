@@ -439,9 +439,10 @@ pub struct TabDrag {
 }
 
 // 树内拖拽的确认阈值已搬到共享库 `dozer-panel-host`(文件树与 Todo 分类树共用);这里重新导出,路径不变。
-pub(crate) use dozer_panel_host::{
-    TREE_DRAG_CONFIRM_THRESHOLD_PX, TREE_DRAG_MIN_HOLD_DURATION, tree_drag_held_long_enough, tree_drag_past_threshold,
-};
+pub(crate) use dozer_panel_host::{tree_drag_held_long_enough, tree_drag_past_threshold};
+// 常量只有测试直接引用(生产代码走上面两个函数)。
+#[cfg(test)]
+pub(crate) use dozer_panel_host::{TREE_DRAG_CONFIRM_THRESHOLD_PX, TREE_DRAG_MIN_HOLD_DURATION};
 
 /// 判断某一侧的 webview 是否要因为**面板自身内部**的原生浮层被强制隐藏
 /// ——`preview_desired` 里 `app_modal_open`/`tab_overflow_open` 两种"整块

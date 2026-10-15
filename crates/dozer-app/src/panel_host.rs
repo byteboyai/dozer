@@ -9,7 +9,6 @@
 
 use crate::app::{App, HoverId, PanelKind};
 use iced_widget::core::Element;
-use std::path::PathBuf;
 // 请求追踪 / `PanelIo` / `ActivationCtx` / 宿主需求发件箱已抽到共享库 `dozer-panel-host`
 // (todo 起,Digger 与以后的共享面板库共用);这里重新导出,面板和 `App` 的 `crate::panel_host::…` 路径不变。
 pub(crate) use dozer_panel_host::{
@@ -105,6 +104,7 @@ impl PanelHost for App {
 #[cfg(test)]
 pub(crate) mod testing {
     use super::*;
+    use std::path::PathBuf;
     use std::sync::{Mutex, mpsc};
     use std::time::Duration;
 
