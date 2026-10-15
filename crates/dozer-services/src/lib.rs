@@ -141,8 +141,8 @@ pub trait MemoryService: Send + Sync {
     ) -> BoxFuture<'_, Result<(), ServiceError>>;
 }
 
-/// 项目维护(Project 面板):改名、取消登记、转录补录/删除、总结批次。
-/// 返回值保持 `Client` 原样——面板用到补录条数、批次 id/进度、改名结果。
+/// 项目注册表(host 层共享业务):登记、列表、改名、取消登记。Project 就是磁盘上的一个目录。
+/// Dozer 经 `dozerd` 实现它,Digger 用 `dozer-store-project` 的进程内实现。
 pub trait ProjectService: Send + Sync {
     fn rename_project(
         &self,
@@ -150,6 +150,18 @@ pub trait ProjectService: Send + Sync {
         name: String,
     ) -> BoxFuture<'_, Result<Option<ProjectInfo>, ServiceError>>;
     fn remove_project(&self, id: i64) -> BoxFuture<'_, Result<(), ServiceError>>;
+    /// 登记(或取回)一个项目;路径不存在等情形服务端返回 `Ok(None)` 或 `Err`,面板按原样展示。
+    fn open_project(
+        &self,
+        path: String,
+    ) -> BoxFuture<'_, Result<Option<ProjectInfo>, ServiceError>>;
+    /// 项目列表(最近优先),供创建后刷新最近项目。
+    fn list_projects(&self) -> BoxFuture<'_, Result<Vec<ProjectInfo>, ServiceError>>;
+}
+
+/// Dozer 的 agent 转录补录/删除与总结批次。Digger 没有 agent 转录,不实现它。
+/// 返回值保持 `Client` 原样——面板用到补录条数、批次 id/进度。
+pub trait TranscriptService: Send + Sync {
     fn delete_project_transcripts(&self, cwd: String) -> BoxFuture<'_, Result<u32, ServiceError>>;
     fn backfill_project_transcripts(&self, cwd: String)
     -> BoxFuture<'_, Result<u32, ServiceError>>;
@@ -163,13 +175,6 @@ pub trait ProjectService: Send + Sync {
         &self,
         batch_id: i64,
     ) -> BoxFuture<'_, Result<Option<SummaryBatchInfo>, ServiceError>>;
-    /// 登记(或取回)一个项目;路径不存在等情形服务端返回 `Ok(None)` 或 `Err`,面板按原样展示。
-    fn open_project(
-        &self,
-        path: String,
-    ) -> BoxFuture<'_, Result<Option<ProjectInfo>, ServiceError>>;
-    /// 项目列表(最近优先),供创建后刷新最近项目。
-    fn list_projects(&self) -> BoxFuture<'_, Result<Vec<ProjectInfo>, ServiceError>>;
 }
 
 /// `post_group_message` 的结果:(人类消息, 排队中的 agent 占位消息, 未识别的 @ 句柄)。
@@ -353,6 +358,7 @@ pub struct Services {
     pub usage: Arc<dyn UsageService>,
     pub todo: Arc<dyn TodoService>,
     pub project: Arc<dyn ProjectService>,
+    pub transcript: Arc<dyn TranscriptService>,
     pub memory: Arc<dyn MemoryService>,
     pub group_chat: Arc<dyn GroupChatService>,
     pub conversation: Arc<dyn ConversationService>,
@@ -418,6 +424,7 @@ mod tests {
             usage: Arc::new(Mem(Ok(vec![]))),
             todo: Arc::new(MemTodo(Ok(vec![]))),
             project: Arc::new(MemProject),
+            transcript: Arc::new(MemTranscript),
             memory: Arc::new(MemMemory(Ok(vec![]))),
             group_chat: Arc::new(MemGroupChat(Ok(vec![]))),
             conversation: Arc::new(MemConversation(Ok(vec![]))),
@@ -436,6 +443,7 @@ mod tests {
         assert!(Arc::ptr_eq(&s.usage, &t.usage));
         assert!(Arc::ptr_eq(&s.todo, &t.todo));
         assert!(Arc::ptr_eq(&s.project, &t.project));
+        assert!(Arc::ptr_eq(&s.transcript, &t.transcript));
         assert!(Arc::ptr_eq(&s.memory, &t.memory));
         assert!(Arc::ptr_eq(&s.group_chat, &t.group_chat));
         assert!(Arc::ptr_eq(&s.conversation, &t.conversation));
@@ -622,6 +630,20 @@ mod tests {
         fn remove_project(&self, _i: i64) -> BoxFuture<'_, Result<(), ServiceError>> {
             unit()
         }
+        fn open_project(
+            &self,
+            _p: String,
+        ) -> BoxFuture<'_, Result<Option<ProjectInfo>, ServiceError>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn list_projects(&self) -> BoxFuture<'_, Result<Vec<ProjectInfo>, ServiceError>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+    }
+
+    struct MemTranscript;
+
+    impl TranscriptService for MemTranscript {
         fn delete_project_transcripts(
             &self,
             _c: String,
@@ -648,31 +670,21 @@ mod tests {
         ) -> BoxFuture<'_, Result<Option<SummaryBatchInfo>, ServiceError>> {
             Box::pin(async { Ok(None) })
         }
-
-        fn open_project(
-            &self,
-            _p: String,
-        ) -> BoxFuture<'_, Result<Option<ProjectInfo>, ServiceError>> {
-            Box::pin(async { Ok(None) })
-        }
-        fn list_projects(&self) -> BoxFuture<'_, Result<Vec<ProjectInfo>, ServiceError>> {
-            Box::pin(async { Ok(vec![]) })
-        }
     }
 
     /// `handle.spawn` 要 `'static + Send`:持有 `Arc<dyn …>` 的 async 块必须满足。
     #[test]
-    fn dyn_project_and_memory_futures_run_inside_tokio_spawn() {
+    fn dyn_transcript_and_memory_futures_run_inside_tokio_spawn() {
         let memory: Arc<dyn MemoryService> = Arc::new(MemMemory(Ok(vec![])));
-        let project: Arc<dyn ProjectService> = Arc::new(MemProject);
+        let transcript: Arc<dyn TranscriptService> = Arc::new(MemTranscript);
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
         let (list, backfilled, batch) = rt.block_on(async move {
             tokio::spawn(async move {
                 let list = memory.list_memories(7).await;
-                let backfilled = project.backfill_project_transcripts("/p".into()).await;
-                let batch = project.submit_summary_batch("/p".into(), None, None).await;
+                let backfilled = transcript.backfill_project_transcripts("/p".into()).await;
+                let batch = transcript.submit_summary_batch("/p".into(), None, None).await;
                 (list, backfilled, batch)
             })
             .await

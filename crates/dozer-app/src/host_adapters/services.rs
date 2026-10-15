@@ -15,6 +15,7 @@ pub(crate) fn services_for(client: &Client) -> Services {
         usage: Arc::new(client.clone()),
         todo: Arc::new(client.clone()),
         project: Arc::new(client.clone()),
+        transcript: Arc::new(client.clone()),
         memory: Arc::new(client.clone()),
         group_chat: Arc::new(client.clone()),
         conversation: Arc::new(client.clone()),
