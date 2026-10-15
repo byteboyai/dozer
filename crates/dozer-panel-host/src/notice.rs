@@ -13,8 +13,6 @@ pub const NOTICE_COOLDOWN: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoticeLevel {
-    /// 只写日志、不弹 Toast 的诊断(例如 dozerd 不可用时的静默读取失败)。
-    Debug,
     Info,
     Success,
     Warning,

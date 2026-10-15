@@ -1,6 +1,6 @@
 //! 左栏分类树的拖动移动:放置目标、合法性与松手收尾的纯逻辑。机制照抄文件树
 //! `TreeDrag`(按下武装 `Pending` → 越过距离+时长阈值确认 `Dragging` → 松手收尾),
-//! 见 `app/layout.rs::tree_drag_past_threshold` / `tree_drag_held_long_enough`。
+//! 见 `dozer-panel-host` 的 `tree_drag_past_threshold` / `tree_drag_held_long_enough`。
 
 use super::category_descendants;
 use dozer_model::CategoryInfo;
@@ -58,8 +58,8 @@ pub struct CategoryDrag {
 /// `Pending → Dragging` 的确认条件:距离与按住时长两道阈值都越过(同文件树)。
 pub fn should_confirm(drag: &CategoryDrag, cursor: (f32, f32), now: Instant) -> bool {
     drag.phase == CategoryDragPhase::Pending
-        && crate::app::tree_drag_past_threshold(drag.press_pos, cursor)
-        && crate::app::tree_drag_held_long_enough(now.saturating_duration_since(drag.armed_at))
+        && dozer_panel_host::tree_drag_past_threshold(drag.press_pos, cursor)
+        && dozer_panel_host::tree_drag_held_long_enough(now.saturating_duration_since(drag.armed_at))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,7 +82,7 @@ pub fn release_action_at(
     cursor: (f32, f32),
 ) -> ReleaseAction {
     if drag.phase == CategoryDragPhase::Pending
-        && crate::app::tree_drag_past_threshold(drag.press_pos, cursor)
+        && dozer_panel_host::tree_drag_past_threshold(drag.press_pos, cursor)
     {
         return ReleaseAction::Nothing;
     }

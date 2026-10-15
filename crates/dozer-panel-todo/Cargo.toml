@@ -1,0 +1,25 @@
+[package]
+name = "dozer-panel-todo"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# 同源 Todo 面板库(S3a):Dozer 与 Digger 共用的状态 / 更新 / 协议 / 视图 / web 资源。
+# 依赖闭包刻意**不含** dozer-app / dozer-client / dozer-core(见 spec §4.1):领域 model/services、
+# 共享宿主件与公共 UI 允许,产品专属语义经注入的适配器提供。
+[dependencies]
+dozer-model = { path = "../dozer-model" }
+dozer-services = { path = "../dozer-services" }
+dozer-i18n = { path = "../dozer-i18n" }
+dozer-panel-host = { path = "../dozer-panel-host" }
+byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.3" }
+bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.0" }
+bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.0" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+iced_widget = { version = "0.14", features = ["canvas", "svg"] }
+iced_renderer = "0.14"
+
+[dev-dependencies]
+tempfile = "3"

@@ -91,10 +91,7 @@ pub fn view<'a>(
         t(app, "expand", "Expand"),
         Message::ToggleListCollapse,
         move |hovered| {
-            Message::Hover(
-                crate::app::HoverId::list_collapse(crate::app::PanelKind::Todo),
-                hovered,
-            )
+            Message::Hover(bytehost_desktop::HoverSlot::ListCollapse, hovered)
         },
     );
     // 右区顶栏(原生,保留):左侧「列表视图 / 看板视图」切换 tab,右端收起/展开
@@ -269,12 +266,6 @@ pub(crate) fn todo_content_slot<'a>(
     }
 }
 
-/// 新增任务框高度上/下限(逻辑像素)。下限即默认高(约 5 行正文,保证多行
-/// 任务内容可见);上限让列表区至少留出约 140px,且 `app.rs::RowDrag` 的
-/// `TodoAddGrow` 分支会再按窗口高夹一道,这里给的是硬上限(窗口极矮时由
-/// 那里兜底)。
-pub const ADD_INPUT_MIN_HEIGHT: f32 = 120.0;
-pub const ADD_INPUT_MAX_HEIGHT: f32 = 400.0;
 
 /// 左栏底部栏(位于分类导航之下、靠底):"清空列表"按钮撑满整行,不再展示
 /// 左侧任务计数与图标。已从 content pane 右下角迁到左栏(见 `view`)。样式
@@ -495,7 +486,7 @@ pub(crate) fn category_tree_nav<'a>(
                     true,
                     Message::CategoryToggleExpand(row.id),
                     move |hovered| {
-                        Message::Hover(HoverId::row(PanelKind::Todo, row.id as u64), hovered)
+                        Message::Hover(bytehost_desktop::HoverSlot::Row(row.id as u64), hovered)
                     },
                     if row.expanded {
                         t(app, "collapse", "Collapse")
@@ -598,7 +589,7 @@ pub(crate) fn category_rename_row<'a>(
     });
     byteui::interaction::context_menu::wrap(
         field.into(),
-        Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+        Some(Message::TextInputMenuOpen(dozer_panel_todo::adapter::TextInputTarget {
             id: category_rename_field_id(),
             secure: false,
         })),

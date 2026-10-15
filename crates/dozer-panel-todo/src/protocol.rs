@@ -4,11 +4,11 @@
 //! 形态仿 `extensions/codehealth/protocol.rs`(声明式比较 + 固定单槽)。
 
 use super::{
-    CategoryFilter, Message, TodoState, WorkspaceState, filter_todos_by_category,
+    HOST_OWNER, CategoryFilter, Message, TodoState, WorkspaceState, filter_todos_by_category,
     format_todo_month_day, is_active_todo, is_optimistic_id, parse_month_day, todo_display_state,
     visible_category_rows,
 };
-use crate::workspace::agent_icon;
+use crate::adapter::AgentIconData;
 use dozer_model::{AgentKind, LocaleStamp, LocalizedText, Stamped, TodoInfo};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
@@ -113,23 +113,23 @@ pub struct TodoViewPayload {
 }
 
 /// 指派选择器里的四个 headless agent(与 `dispatch_items` 一致)。
-pub(crate) const DISPATCH_AGENTS: [AgentKind; 4] = [
+pub const DISPATCH_AGENTS: [AgentKind; 4] = [
     AgentKind::Claude,
     AgentKind::Codebuddy,
     AgentKind::Opencode,
     AgentKind::V8agent,
 ];
 
-pub(crate) fn agent_vms() -> Vec<AgentVm> {
+pub fn agent_vms(icon_of: &dyn Fn(AgentKind) -> AgentIconData) -> Vec<AgentVm> {
     DISPATCH_AGENTS
         .into_iter()
         .map(|agent| {
-            let icon = agent_icon(agent);
+            let icon = icon_of(agent);
             AgentVm {
                 kind: agent,
                 label: agent.display_label(),
-                icon_svg: String::from_utf8_lossy(icon.bytes()).into_owned(),
-                preserves_color: icon.preserves_original_color(),
+                icon_svg: String::from_utf8_lossy(&icon.bytes).into_owned(),
+                preserves_color: icon.preserves_color,
             }
         })
         .collect()
@@ -138,7 +138,7 @@ pub(crate) fn agent_vms() -> Vec<AgentVm> {
 /// 每张任务卡片的派生状态(需要看派发的目标 session 是否存活,所以除了 `WorkspaceState` 还要
 /// 一个"session 是否存活"的查询,由调用方按宿主的会话表给出——本模块不认识宿主的 `Workspace`)。
 /// 顺序与 `todo.items` 一一对应。
-pub(crate) fn derive_states(
+pub fn derive_states(
     todo: &WorkspaceState,
     session_alive: &dyn Fn(&str) -> bool,
 ) -> Vec<TodoState> {
@@ -155,23 +155,24 @@ pub(crate) fn derive_states(
         .collect()
 }
 
-pub(crate) fn current_view_payload(
+pub fn current_view_payload(
     todo: &WorkspaceState,
     session_alive: &dyn Fn(&str) -> bool,
     project_id: i64,
     today: (i32, u32, u32),
+    icon_of: &dyn Fn(AgentKind) -> AgentIconData,
 ) -> TodoViewPayload {
     build_payload(
         todo,
         &derive_states(todo, session_alive),
         project_id,
         today,
-        agent_vms(),
+        agent_vms(icon_of),
     )
 }
 
 /// 纯函数,便于不构造 `Workspace` 地测试。`states` 与 `todo.items` 等长。
-pub(crate) fn build_payload(
+pub fn build_payload(
     todo: &WorkspaceState,
     states: &[TodoState],
     project_id: i64,
@@ -348,7 +349,7 @@ fn clean_text(text: &str) -> Option<String> {
 /// 消息与更新逻辑。`id` 已不存在(任务被别的 agent 删了)或入参非法一律返回
 /// `None`(空操作),绝不能落到别的行。`Ready`/`Failed` 由 `App` 自己处理,这里
 /// 返回 `None`。
-pub(crate) fn route_event(items: &[TodoInfo], event: TodoWebviewEvent) -> Option<Routed> {
+pub fn route_event(items: &[TodoInfo], event: TodoWebviewEvent) -> Option<Routed> {
     use TodoWebviewEvent as Ev;
     match event {
         Ev::Ready | Ev::Failed { .. } => None,
@@ -449,7 +450,7 @@ impl WebviewPushState {
         let since = *self.waiting_since.get_or_insert(now);
         if self.failed.is_none() && now.duration_since(since) > READY_TIMEOUT {
             self.failed = Some(LocalizedText::keyed(
-                crate::i18n::HOST_OWNER,
+                HOST_OWNER,
                 "webview.load_timeout",
                 "Panel page load timed out",
             ));
@@ -492,7 +493,7 @@ impl WebviewPushState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extensions::todo::{CategoryFilter, Message};
+    use crate::{CategoryFilter, Message};
     use dozer_model::CategoryInfo;
     use serde_json::json;
 
@@ -636,9 +637,13 @@ mod tests {
         }
     }
 
+    fn stub_icon(_: AgentKind) -> AgentIconData {
+        AgentIconData { bytes: b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>".to_vec(), preserves_color: false }
+    }
+
     #[test]
     fn agents_are_the_four_headless_kinds_with_inline_svg() {
-        let agents = agent_vms();
+        let agents = agent_vms(&stub_icon);
         let kinds: Vec<_> = agents.iter().map(|a| a.kind).collect();
         assert_eq!(
             kinds,
