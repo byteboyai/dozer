@@ -3,11 +3,12 @@
 //! 见 `platform/edit_history_overlay.rs`。设计见
 //! `docs/superpowers/specs/2026-09-30-agent-native-file-editor-phase3-context-history-design.md`。
 
+use crate::ui_text::text;
 use byteui::interaction::icons;
 use dozer_model::{FileEditHistoryInfo, MutationOutcome};
 use dozer_services::{EditHistoryService, PreciseEdit};
 use iced_widget::core::{Alignment, Element, Length};
-use iced_widget::{button, column, container, row, scrollable, text};
+use iced_widget::{button, column, container, row, scrollable};
 use std::sync::Arc;
 
 /// 列表栏宽与底部操作栏高。视图与宿主里的 diff 区几何计算共用这两个常量。

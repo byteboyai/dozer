@@ -1,9 +1,10 @@
 //! 项目面板的 view:主视图/footer/scaffold 进度弹层/删除确认/文档链接段。
 
+use crate::ui_text::text;
 use byteui::interaction::icons;
 use dozer_model::ProjectInfo;
 use iced_widget::core::{Border, Element, Length};
-use iced_widget::{MouseArea, button, column, container, row, text};
+use iced_widget::{MouseArea, button, column, container, row};
 use std::path::PathBuf;
 
 use super::*;
@@ -931,20 +932,26 @@ fn memory_section<'a>(
                     row![
                         text(m.title.clone())
                             .size(byteui::theme::font::body())
-                            .color(byteui::theme::color::current().body),
+                            .color(byteui::theme::color::current().body)
+                            .width(Length::Fill)
+                            .wrapping(iced_widget::core::text::Wrapping::WordOrGlyph),
                         text(format!(" [{}]", m.kind))
                             .size(byteui::theme::font::caption())
-                            .color(byteui::theme::color::current().dim),
-                    ],
+                            .color(byteui::theme::color::current().dim)
+                            .wrapping(iced_widget::core::text::Wrapping::None),
+                    ]
+                    .width(Length::Fill),
                     text(m.description.clone())
                         .size(byteui::theme::font::caption())
-                        .color(byteui::theme::color::current().dim),
+                        .color(byteui::theme::color::current().dim)
+                        .wrapping(iced_widget::core::text::Wrapping::WordOrGlyph),
                     text(updated_line)
                         .size(byteui::theme::font::caption_sm())
                         .color(byteui::theme::color::current().dim),
                 ]
                 .spacing(2),
             )
+            .width(Length::Fill)
             .on_press(Message::MemoryDetailOpen(m.id))
             .style(move |_t, _s| iced_widget::button::Style {
                 text_color: byteui::theme::color::current().body,

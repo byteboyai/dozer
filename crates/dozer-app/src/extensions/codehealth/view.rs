@@ -3,9 +3,10 @@
 //! (见 `web/codehealth-content/` 与 `protocol.rs`)。
 
 use super::{CODE_HEALTH_OWNER, CodeHealthCategory, Message, WorkspaceState};
+use crate::ui_text::text;
 use byteui::interaction::icons;
 use iced_widget::core::{Border, Color, Element, Length};
-use iced_widget::{button, column, container, row, space, text};
+use iced_widget::{button, column, container, row, space};
 
 fn category_icon(category: CodeHealthCategory) -> icons::IconKind {
     match category {

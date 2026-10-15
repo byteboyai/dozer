@@ -12,13 +12,14 @@ use bytehost_panel::install::{
 };
 use bytehost_panel::logs::LogsView;
 
+use crate::ui_text::text;
 use iced_widget::core::{Alignment, Element, Length};
-use iced_widget::{Space, button, column, container, row, scrollable, text};
+use iced_widget::{Space, button, column, container, row, scrollable};
 
 type El<'a> = Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>;
 
 fn action_button<'a>(
-    label: impl text::IntoFragment<'a>,
+    label: impl iced_widget::core::text::IntoFragment<'a>,
     msg: Message,
     color: iced_widget::core::Color,
 ) -> El<'a> {
@@ -37,7 +38,7 @@ fn heading<'a>(label: &str) -> El<'a> {
 }
 
 fn dim<'a>(
-    s: impl text::IntoFragment<'a>,
+    s: impl iced_widget::core::text::IntoFragment<'a>,
 ) -> iced_widget::Text<'a, iced_widget::Theme, iced_renderer::Renderer> {
     text(s)
         .size(byteui::theme::font::label())

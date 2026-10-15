@@ -33,6 +33,7 @@ mod tabular;
 mod term;
 mod theme;
 mod transcript;
+mod ui_text;
 #[cfg(test)]
 mod usage_probe;
 mod webview_geometry;

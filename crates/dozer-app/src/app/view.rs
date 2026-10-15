@@ -20,6 +20,7 @@ use crate::extensions::usage;
 use crate::term::term_view;
 use crate::term::terminal;
 use crate::theme;
+use crate::ui_text::text;
 use crate::workspace::{
     PreviewPaneKind, Workspace, agent_list_pane, agent_picker_popup, dot_color,
     no_project_placeholder, preview_pane, preview_tab_overflow_popup, project_preview_pane,
@@ -32,7 +33,7 @@ use iced_widget::core::font::Weight;
 use iced_widget::core::mouse;
 use iced_widget::core::{Border, Color, Element, Font, Length, Padding};
 use iced_widget::tooltip::{Position, Tooltip};
-use iced_widget::{MouseArea, column, container, row, stack, text};
+use iced_widget::{MouseArea, column, container, row, stack};
 
 use super::*;
 impl App {

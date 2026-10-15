@@ -10,6 +10,7 @@ use crate::chrome::rail::RailButton;
 use crate::extensions::browser;
 use crate::extensions::files::git_status;
 use crate::theme;
+use crate::ui_text::text;
 use crate::workspace::{agent_dot_color, agent_icon, lh, relative_time_text};
 use byteui::interaction::icons;
 use dozer_core::protocol::ProjectInfo;
@@ -17,7 +18,7 @@ use dozer_model::ConversationMeta;
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};
 use iced_widget::core::{Border, Color, Element, Length, Padding, Rectangle};
-use iced_widget::{Scrollable, button, column, container, row, scrollable, text};
+use iced_widget::{Scrollable, button, column, container, row, scrollable};
 use std::path::PathBuf;
 
 /// 首页项目列表搜索框(iced 原生 `text_input`)的 `widget::Id`:main.rs 每帧

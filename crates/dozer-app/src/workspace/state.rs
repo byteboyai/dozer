@@ -21,10 +21,10 @@ use crate::preview_state;
 use crate::project::FileTree;
 use crate::term::term_model::TerminalModel;
 use crate::transcript::{self, ReviewEntry};
+use crate::ui_text::text;
 use byteui::interaction::tab_strip::tab_window_reveal;
 use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
-use iced_widget::text;
 use iced_widget::text_editor::Action as EditorAction;
 
 dozer_core::scope!(LOG, module, "shell");

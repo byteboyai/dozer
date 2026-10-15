@@ -4,13 +4,14 @@
 
 use crate::extensions::settings_apps;
 use crate::git_accounts::{self, GitAccountsState, GitProvider};
+use crate::ui_text::text;
 use bytehost_client::AppHostApi;
 use byteui::interaction::icons;
 use byteui::theme::color::ColorScheme;
 use dozer_model::{Locale, LocalePreference, LocaleSnapshot};
 use dozer_services::DaemonService;
 use iced_widget::core::{Alignment, Border, Element, Length, Padding};
-use iced_widget::{MouseArea, Space, button, column, container, row, text};
+use iced_widget::{MouseArea, Space, button, column, container, row};
 use std::collections::HashMap;
 
 dozer_core::scope!(LOG, module, "settings");

@@ -3,10 +3,11 @@ use crate::app::{HoverId, PanelKind};
 use crate::panel_host::PanelHost;
 
 use crate::theme;
+use crate::ui_text::text;
 use byteui::interaction::icons;
 use iced_widget::core::mouse;
 use iced_widget::core::{Border, Color, Element, Length, Padding};
-use iced_widget::{MouseArea, button, column, container, row, space, text};
+use iced_widget::{MouseArea, button, column, container, row, space};
 
 use super::*;
 

@@ -6,11 +6,12 @@
 use crate::panel_host::RequestTokenWrapExt;
 use std::path::PathBuf;
 
+use crate::ui_text::text;
 use byteui::interaction::icons;
 use dozer_model::ContextItemInfo;
 use dozer_services::ContextService;
 use iced_widget::core::{Alignment, Element, Length};
-use iced_widget::{button, column, container, row, scrollable, text};
+use iced_widget::{button, column, container, row, scrollable};
 use std::sync::Arc;
 
 dozer_core::scope!(pub(crate) LOG, panel, "agent");

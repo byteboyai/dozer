@@ -12,6 +12,7 @@ use crate::menu_spec::{MenuSpec, MenuSpecItem};
 use crate::preview::{PreviewPane, PreviewTab, TabKind};
 use crate::theme;
 use crate::theme::terminal_font;
+use crate::ui_text::text;
 use byteui::interaction::icons;
 use byteui::interaction::icons::IconKind;
 use byteui::interaction::tab_strip::tab_window;
@@ -19,7 +20,7 @@ use dozer_core::protocol::AgentKind;
 use iced_widget::core::mouse;
 use iced_widget::core::text::LineHeight;
 use iced_widget::core::{Border, Element, Length, Padding};
-use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable, text};
+use iced_widget::{MouseArea, Scrollable, button, column, container, row, scrollable};
 
 use super::*;
 
@@ -260,6 +261,8 @@ pub(crate) fn work_content_and_workspace_row(
     text(value)
         .size(byteui::theme::font::caption())
         .color(byteui::theme::color::current().dim)
+        // 工作内容可能是无空格长串(如粘贴的临时文件路径),默认按词换行会外溢。
+        .wrapping(iced_widget::core::text::Wrapping::WordOrGlyph)
         .into()
 }
 

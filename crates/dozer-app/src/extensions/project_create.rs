@@ -6,10 +6,11 @@
 
 use crate::git_accounts::{self, GitProvider, RemoteRepo};
 use crate::panel_host::HostRequest;
+use crate::ui_text::text;
 use byteui::interaction::icons;
 use dozer_services::ProjectService;
 use iced_widget::core::{Border, Color, Length, Padding};
-use iced_widget::{MouseArea, Space, button, column, container, row, text};
+use iced_widget::{MouseArea, Space, button, column, container, row};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
