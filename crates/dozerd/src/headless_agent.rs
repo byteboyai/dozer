@@ -124,6 +124,9 @@ pub(crate) fn bare_program_name(agent: AgentKind) -> Option<&'static str> {
         AgentKind::Goose => Some("goose"),
         AgentKind::Aider => Some("aider"),
         AgentKind::V8agent => Some("v8agent"),
+        // qodercn 本期(L1)只接入终端/hook/MCP,没有 headless 适配器:群聊发言、
+        // 会话总结、任务处理都不会选它。需要时先实测 `-p`/`--output-format` 与只读权限参数。
+        AgentKind::Qodercn => None,
         AgentKind::Unknown => None,
     }
 }
@@ -337,7 +340,8 @@ pub(crate) fn build_command_parts(
             cmd.env_remove("DOZER_SESSION_ID");
             Some((cmd, None))
         }
-        AgentKind::Unknown => None,
+        // L1 不做 headless(见 `bare_program_name`)。
+        AgentKind::Qodercn | AgentKind::Unknown => None,
     }
 }
 
@@ -423,7 +427,8 @@ fn build_task_command(
             cmd.env_remove("DOZER_AIDER_BRIDGE_STATE");
             Some((cmd, None))
         }
-        AgentKind::Unknown | AgentKind::Codex => None,
+        // Codex 没有任务场景适配;qodercn 的 headless 留待 L3。
+        AgentKind::Unknown | AgentKind::Codex | AgentKind::Qodercn => None,
     }
 }
 
@@ -904,6 +909,16 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err, HeadlessError::Timeout);
+    }
+
+    #[test]
+    fn qodercn_has_no_headless_adapter_yet() {
+        assert_eq!(bare_program_name(AgentKind::Qodercn), None);
+        assert!(build_command_parts(AgentKind::Qodercn, "qodercn", "i", "d").is_none());
+        assert!(
+            build_task_command(AgentKind::Qodercn, "qodercn", Path::new("/tmp"), "s", "p")
+                .is_none()
+        );
     }
 
     #[test]

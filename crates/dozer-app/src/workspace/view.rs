@@ -62,14 +62,14 @@ pub(crate) fn load_more_button<'a>(
 pub(crate) const CONVERSATION_DETAIL_PAGE_SIZE: u32 = 200;
 
 /// 按 `AgentKind` 把会话 tab 分组,固定顺序 Claude → Codebuddy → Opencode
-/// → Codex → Goose → Aider → V8agent → Unknown(与 `conversation_agents_present`
+/// → Codex → Goose → Aider → V8agent → Qodercn → Unknown(与 `conversation_agents_present`
 /// 同一份顺序),只返回非空分组(没有该 agent 的会话就不出现,面板不留空
 /// 分组占位)。组内保持 `tabs` 原有顺序(tab 打开顺序)。返回下标而非
 /// 引用——渲染时既要下标发 `Message::SelectTab(idx)`,又要用下标回查
 /// `ws.tabs[idx]` 取展示字段,直接存下标比存 `&SessionTab` 省一次生命
 /// 周期纠缠。
 pub(crate) fn group_tabs_by_agent(tabs: &[SessionTab]) -> Vec<(AgentKind, Vec<usize>)> {
-    const ORDER: [AgentKind; 8] = [
+    const ORDER: [AgentKind; 9] = [
         AgentKind::Claude,
         AgentKind::Codebuddy,
         AgentKind::Opencode,
@@ -77,6 +77,7 @@ pub(crate) fn group_tabs_by_agent(tabs: &[SessionTab]) -> Vec<(AgentKind, Vec<us
         AgentKind::Goose,
         AgentKind::Aider,
         AgentKind::V8agent,
+        AgentKind::Qodercn,
         AgentKind::Unknown,
     ];
     ORDER
@@ -347,13 +348,14 @@ pub(crate) fn branch_picker_items<Msg: Clone>(
 /// Agent 选择器菜单内容——native(`agent_picker_items`)和 iced fallback
 /// (`agent_picker_popup`)共用同一份数据，只在这里组装一次。
 pub(crate) fn agent_picker_spec() -> MenuSpec<Message> {
-    let agents: [(&str, PickerLaunch); 7] = [
+    let agents: [(&str, PickerLaunch); 8] = [
         ("Aider", PickerLaunch::Agent(Some(AgentKind::Aider))),
         ("Claude", PickerLaunch::Agent(Some(AgentKind::Claude))),
         ("CodeBuddy", PickerLaunch::Agent(Some(AgentKind::Codebuddy))),
         ("Codex", PickerLaunch::Agent(Some(AgentKind::Codex))),
         ("Goose", PickerLaunch::Agent(Some(AgentKind::Goose))),
         ("OpenCode", PickerLaunch::Agent(Some(AgentKind::Opencode))),
+        ("Qoder CN", PickerLaunch::Agent(Some(AgentKind::Qodercn))),
         ("v8agent", PickerLaunch::Agent(Some(AgentKind::V8agent))),
     ];
     let shells: [(&str, PickerLaunch); 2] = [
@@ -2194,6 +2196,7 @@ pub(crate) fn agent_launch_command(agent: AgentKind, hook_exe: &str) -> Option<S
         AgentKind::Goose => Some("goose session".into()),
         AgentKind::Aider => Some(format!("{} launch aider", sh_single_quote(hook_exe))),
         AgentKind::V8agent => Some("v8agent".into()),
+        AgentKind::Qodercn => Some("qodercn".into()),
     }
 }
 

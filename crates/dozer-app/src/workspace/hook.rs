@@ -81,7 +81,10 @@ pub(crate) enum HookInstallTarget {
 
 pub(crate) fn hook_install_target(agent: AgentKind) -> Option<HookInstallTarget> {
     match agent {
-        AgentKind::Claude | AgentKind::Codebuddy | AgentKind::Codex => {
+        // qodercn 的 hook 载荷与配置格式同 Claude 系(2026-10-15 实测:SessionStart/
+        // UserPromptSubmit/Stop/SessionEnd 都带 session_id、transcript_path、cwd),
+        // 写进 `~/.qoder-cn/settings.json`。
+        AgentKind::Claude | AgentKind::Codebuddy | AgentKind::Codex | AgentKind::Qodercn => {
             Some(HookInstallTarget::Settings)
         }
         AgentKind::Opencode => Some(HookInstallTarget::Opencode),
@@ -280,6 +283,10 @@ pub(crate) fn agent_dot_color(agent: AgentKind) -> Color {
         AgentKind::Goose => byteui::theme::color::current().blue,
         AgentKind::Aider => byteui::theme::color::current().magenta,
         AgentKind::V8agent => byteui::theme::color::current().lime,
+        // byteui 的语义色相已被前面七家用完;`ignored` 与 `dim` 数值相同(会和普通 shell 的圆点
+        // 混淆),只剩 `red` 不与任何 agent 重复。红色在别处表示错误,这是个待用户确认的折中
+        // (真正的解法是 byteui 增加一个 agent 专用色,需要单独发版)。
+        AgentKind::Qodercn => byteui::theme::color::current().red,
         AgentKind::Unknown => byteui::theme::color::current().dim,
     }
 }
@@ -299,7 +306,7 @@ pub(crate) fn agent_icon(agent: AgentKind) -> IconKind {
             byteui::theme::color::ColorScheme::Dark => IconKind::GooseDark,
         },
         // 暂无确认可用的品牌素材，回落通用图标（spec §8/§6 明确允许）。
-        AgentKind::V8agent | AgentKind::Unknown => IconKind::Bot,
+        AgentKind::V8agent | AgentKind::Qodercn | AgentKind::Unknown => IconKind::Bot,
     }
 }
 

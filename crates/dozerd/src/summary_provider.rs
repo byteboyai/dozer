@@ -82,7 +82,8 @@ pub fn provider_isolation(agent: AgentKind) -> Option<Isolation> {
         AgentKind::Codebuddy | AgentKind::Opencode | AgentKind::Goose | AgentKind::Aider => {
             Some(Isolation::TempDirOnly)
         }
-        AgentKind::Unknown => None,
+        // qodercn 的 CLI 级只读/禁工具能力未核实,不能当总结 provider(L3 再测)。
+        AgentKind::Qodercn | AgentKind::Unknown => None,
     }
 }
 
@@ -492,6 +493,11 @@ mod tests {
             Some(Isolation::TempDirOnly)
         );
         assert_eq!(provider_isolation(AgentKind::Unknown), None);
+        assert_eq!(
+            provider_isolation(AgentKind::Qodercn),
+            None,
+            "qodercn 的隔离能力未核实,不得被当成可用的总结 provider"
+        );
     }
 
     #[test]

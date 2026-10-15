@@ -670,6 +670,12 @@ fn should_summarize_on_close_false_for_unsupported_agents_or_dead_or_ssh() {
         true,
         &TabBackend::Daemon
     ));
+    // qodercn 没有 headless 适配器(L1):关闭时不能走"总结后关闭"。
+    assert!(!should_summarize_on_close(
+        AgentKind::Qodercn,
+        true,
+        &TabBackend::Daemon
+    ));
     assert!(!should_summarize_on_close(
         AgentKind::Claude,
         false,
@@ -812,6 +818,53 @@ fn group_tabs_by_agent_includes_codex_goose_aider_and_v8agent() {
 }
 
 #[test]
+fn qodercn_is_wired_into_hooks_grouping_and_the_picker() {
+    // hook 配置写进 settings.json(与 Claude 系同一路径),不是 opencode/goose 那类专用安装器。
+    assert!(matches!(
+        hook_install_target(AgentKind::Qodercn),
+        Some(HookInstallTarget::Settings)
+    ));
+    // 圆点色与其它所有 agent 都不同,否则对话列表里分不出来。
+    let q = agent_dot_color(AgentKind::Qodercn);
+    for other in [
+        AgentKind::Claude,
+        AgentKind::Codebuddy,
+        AgentKind::Opencode,
+        AgentKind::Codex,
+        AgentKind::Goose,
+        AgentKind::Aider,
+        AgentKind::V8agent,
+        AgentKind::Unknown,
+    ] {
+        assert_ne!(q, agent_dot_color(other), "与 {other:?} 同色");
+    }
+    // 会话分组:出现在 Unknown 之前、V8agent 之后。
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let tabs = vec![
+        make_test_tab(&rt, "u", AgentKind::Unknown),
+        make_test_tab(&rt, "q", AgentKind::Qodercn),
+        make_test_tab(&rt, "v", AgentKind::V8agent),
+    ];
+    assert_eq!(
+        group_tabs_by_agent(&tabs),
+        vec![
+            (AgentKind::V8agent, vec![2]),
+            (AgentKind::Qodercn, vec![1]),
+            (AgentKind::Unknown, vec![0]),
+        ]
+    );
+}
+
+#[test]
+fn agent_picker_offers_qodercn_with_its_display_name() {
+    let dbg = format!("{:?}", agent_picker_spec());
+    assert!(
+        dbg.contains("Qoder CN"),
+        "新建 agent 菜单应有 Qoder CN: {dbg}"
+    );
+}
+
+#[test]
 fn agent_dot_color_maps_each_kind_and_avoids_gold() {
     let cases = [
         (AgentKind::Claude, byteui::theme::color::current().cyan),
@@ -821,6 +874,7 @@ fn agent_dot_color_maps_each_kind_and_avoids_gold() {
         (AgentKind::Goose, byteui::theme::color::current().blue),
         (AgentKind::Aider, byteui::theme::color::current().magenta),
         (AgentKind::V8agent, byteui::theme::color::current().lime),
+        (AgentKind::Qodercn, byteui::theme::color::current().red),
         (AgentKind::Unknown, byteui::theme::color::current().dim),
     ];
     for (agent, expected) in cases {
@@ -849,6 +903,8 @@ fn agent_icon_maps_each_kind_to_brand_icon() {
         }
     );
     assert_eq!(agent_icon(AgentKind::V8agent), IconKind::Bot);
+    // qodercn 暂无品牌素材,回落通用图标(byteui 没有 Qoder 图标)。
+    assert_eq!(agent_icon(AgentKind::Qodercn), IconKind::Bot);
     // Unknown 同样回落 Bot 图标。
     assert_eq!(agent_icon(AgentKind::Unknown), IconKind::Bot);
 }
@@ -879,6 +935,10 @@ fn agent_launch_command_maps_known_agents_and_none_for_unknown() {
     assert_eq!(
         agent_launch_command(AgentKind::V8agent, hook_exe),
         Some("v8agent".into())
+    );
+    assert_eq!(
+        agent_launch_command(AgentKind::Qodercn, hook_exe),
+        Some("qodercn".into())
     );
     assert_eq!(agent_launch_command(AgentKind::Unknown, hook_exe), None);
 }
@@ -1256,10 +1316,10 @@ fn blur_inputs_keep_native_preview_editor_skips_pending_unfocus() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn agent_picker_items_has_ten_rows_matching_old_picker() {
-    // 七个 agent + 1 条分隔线 + 两个 shell(Git Shell/纯 Shell)= 10 行,
-    // 对应文档说的"九个选项"(不含分隔线本身)。
-    assert_eq!(agent_picker_items().len(), 10);
+fn agent_picker_items_has_eleven_rows_matching_old_picker() {
+    // 八个 agent(含 Qoder CN)+ 1 条分隔线 + 两个 shell(Git Shell/纯 Shell)= 11 行,
+    // 不含分隔线本身是十个选项。
+    assert_eq!(agent_picker_items().len(), 11);
 }
 
 #[cfg(target_os = "macos")]
@@ -1267,7 +1327,7 @@ fn agent_picker_items_has_ten_rows_matching_old_picker() {
 fn agent_picker_items_separator_splits_agents_from_shells() {
     let items = agent_picker_items();
     assert!(matches!(
-        items[7],
+        items[8],
         crate::chrome::native_menu::Item::Separator
     ));
     let launches: Vec<PickerLaunch> = items
@@ -1280,9 +1340,9 @@ fn agent_picker_items_separator_splits_agents_from_shells() {
             _ => None,
         })
         .collect();
-    assert_eq!(launches.len(), 9, "七个 agent + 两个 shell,不含分隔线");
-    assert_eq!(launches[7], PickerLaunch::Git);
-    assert_eq!(launches[8], PickerLaunch::Agent(None));
+    assert_eq!(launches.len(), 10, "八个 agent + 两个 shell,不含分隔线");
+    assert_eq!(launches[8], PickerLaunch::Git);
+    assert_eq!(launches[9], PickerLaunch::Agent(None));
 }
 
 /// 空白页 / Blank tab 标题 / 卡片头部应取**项目根目录 basename**,不是

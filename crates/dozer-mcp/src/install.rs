@@ -211,6 +211,14 @@ pub fn config_path_for(agent: &str) -> Option<ConfigTarget> {
                 .unwrap_or_else(|_| PathBuf::from(&home).join(".codebuddy").join(".mcp.json")),
             run_at_claude_like,
         )),
+        // Qoder CLI CN 的用户级 MCP 就写在 `<配置根>/settings.json` 的 `mcpServers` 里
+        // (`qodercn mcp add --scope user` 实测),形状与 Claude 系一致 → 复用同一个处理器。
+        "qodercn" => Some((
+            std::env::var("DOZER_QODERCN_MCP_CONFIG")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from(&home).join(".qoder-cn").join("settings.json")),
+            run_at_claude_like,
+        )),
         "codex" => Some((
             std::env::var("DOZER_CODEX_MCP_CONFIG")
                 .map(PathBuf::from)
@@ -244,7 +252,7 @@ pub fn run_at_with_exe(path: &Path, agent: &str, install: bool, exe: &str) -> i3
     match config_path_for(agent) {
         Some((_, handler)) => handler(path, install, exe),
         None => {
-            eprintln!("不支持的 agent: {agent}（支持 claude/codebuddy/codex/opencode）");
+            eprintln!("不支持的 agent: {agent}（支持 claude/codebuddy/qodercn/codex/opencode）");
             2
         }
     }
@@ -254,7 +262,7 @@ fn run_at_with_exe_impl(agent: &str, install: bool, exe: &str) -> i32 {
     match config_path_for(agent) {
         Some((path, handler)) => handler(&path, install, exe),
         None => {
-            eprintln!("不支持的 agent: {agent}（支持 claude/codebuddy/codex/opencode）");
+            eprintln!("不支持的 agent: {agent}（支持 claude/codebuddy/qodercn/codex/opencode）");
             2
         }
     }
@@ -432,6 +440,49 @@ mod tests {
         assert_eq!(servers.len(), 2);
         assert_eq!(servers["other-server"]["command"], "foo");
         assert_eq!(servers["dozer"]["args"][0], "serve");
+    }
+
+    /// qodercn 的 MCP 与 hook 共用一份 settings.json:装/卸 MCP 不能动 hooks、permissions 等别的段。
+    #[test]
+    fn qodercn_mcp_install_shares_settings_json_without_touching_other_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"permissions":{"allow":["Bash(ls)"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"x"}]}]},"mcpServers":{"other":{"command":"foo"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            run_at_with_exe(&path, "qodercn", true, "/opt/dozer/dozer-mcp"),
+            0
+        );
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            root["mcpServers"]["dozer"]["command"],
+            "/opt/dozer/dozer-mcp"
+        );
+        assert_eq!(root["mcpServers"]["other"]["command"], "foo");
+        assert_eq!(root["permissions"]["allow"][0], "Bash(ls)");
+        assert_eq!(root["hooks"]["Stop"][0]["hooks"][0]["command"], "x");
+
+        assert_eq!(
+            run_at_with_exe(&path, "qodercn", false, "/opt/dozer/dozer-mcp"),
+            0
+        );
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(root["mcpServers"].get("dozer").is_none());
+        assert_eq!(root["mcpServers"]["other"]["command"], "foo");
+        assert_eq!(root["hooks"]["Stop"][0]["hooks"][0]["command"], "x");
+    }
+
+    #[test]
+    fn qodercn_default_mcp_config_is_the_qoder_cn_settings_file() {
+        let (path, _) = config_path_for("qodercn").expect("qodercn is supported");
+        if std::env::var("DOZER_QODERCN_MCP_CONFIG").is_err() {
+            assert!(path.ends_with(".qoder-cn/settings.json"), "{path:?}");
+        }
     }
 
     #[test]

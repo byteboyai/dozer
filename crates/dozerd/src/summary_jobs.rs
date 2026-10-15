@@ -29,6 +29,7 @@ fn agent_from_str(s: &str) -> AgentKind {
         "goose" => AgentKind::Goose,
         "aider" => AgentKind::Aider,
         "v8agent" => AgentKind::V8agent,
+        "qodercn" => AgentKind::Qodercn,
         _ => AgentKind::Unknown,
     }
 }
@@ -723,6 +724,23 @@ impl SummaryJobStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 库里存的是 `label()`;读回来必须还是同一个 agent(`_ => Unknown` 的兜底会悄悄吞掉漏写的一家)。
+    #[test]
+    fn every_agent_survives_the_persisted_string_round_trip() {
+        for agent in [
+            AgentKind::Claude,
+            AgentKind::Codebuddy,
+            AgentKind::Opencode,
+            AgentKind::Codex,
+            AgentKind::Goose,
+            AgentKind::Aider,
+            AgentKind::V8agent,
+            AgentKind::Qodercn,
+        ] {
+            assert_eq!(agent_from_str(agent_to_str(agent)), agent, "{agent:?}");
+        }
+    }
     use dozer_core::protocol::SummaryStatus;
 
     fn result(conversation_id: &str, title: &str) -> ConversationSummaryResult {

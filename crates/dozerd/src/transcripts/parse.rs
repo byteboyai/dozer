@@ -929,6 +929,9 @@ pub fn parse_chunk(
         AgentKind::Codex => parse_codex_shaped_chunk(text, conversation_id, starting_turn_index),
         AgentKind::Goose => parse_goose_hook_chunk(text, conversation_id, starting_turn_index),
         AgentKind::Aider => parse_aider_chunk(text, conversation_id, starting_turn_index),
+        // qodercn 的 transcript 格式还没拿到真实对话样本(本机只有空会话),不猜形状:
+        // 本期(L1)不摄取,返回空,等 L2 用真实 payload 写解析。
+        AgentKind::Qodercn => Vec::new(),
     }
 }
 
@@ -972,6 +975,8 @@ pub fn extract_turn_trace_detail(raw_json: &str, agent: AgentKind) -> TurnTraceD
         // Aider canonical 行只有 human/ai 文本,没有结构化工具/思考字段,
         // 读时补全维持全空(见 parse_aider_chunk)。
         AgentKind::Aider => TurnTraceDetail::default(),
+        // 同 `parse_chunk`:L1 不摄取 qodercn,所以也没有可读时补全的明细。
+        AgentKind::Qodercn => TurnTraceDetail::default(),
     }
 }
 
@@ -1127,6 +1132,15 @@ fn extract_goose_trace_detail(v: &Value) -> TurnTraceDetail {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qodercn_is_not_ingested_until_its_transcript_shape_is_known() {
+        // 即使喂一段看起来像 Claude 的行也不能猜着解析:L1 明确不摄取。
+        let line = r#"{"type":"user","message":{"role":"user","content":"hi"}}"#;
+        assert!(parse_chunk(AgentKind::Qodercn, line, "c1", 0).is_empty());
+        let detail = extract_turn_trace_detail(line, AgentKind::Qodercn);
+        assert_eq!(detail, TurnTraceDetail::default());
+    }
 
     #[test]
     fn parses_human_and_ai_turn_with_usage_and_tools() {

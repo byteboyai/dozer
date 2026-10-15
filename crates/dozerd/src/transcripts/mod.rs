@@ -70,6 +70,7 @@ fn agent_to_str(a: AgentKind) -> &'static str {
         AgentKind::Goose => "goose",
         AgentKind::Aider => "aider",
         AgentKind::V8agent => "v8agent",
+        AgentKind::Qodercn => "qodercn",
     }
 }
 
@@ -82,6 +83,7 @@ fn agent_from_str(s: &str) -> AgentKind {
         "goose" => AgentKind::Goose,
         "aider" => AgentKind::Aider,
         "v8agent" => AgentKind::V8agent,
+        "qodercn" => AgentKind::Qodercn,
         _ => AgentKind::Unknown,
     }
 }
@@ -480,6 +482,12 @@ impl TranscriptStore {
     /// dozerd 自己的 PTY session id(两者是不同的 id 空间:后者只在
     /// agent 活着时存在,回填历史文件时根本没有)。
     pub fn ingest_session(&self, agent: AgentKind, file_path: &Path) -> Result<()> {
+        // qodercn 本期(L1)没有 transcript 解析器(还没拿到真实对话样本)。它的每个 hook 事件都带
+        // transcript_path,走到这里;若放行,会建出 0 轮的空会话行并把 `parsed_offset` 推到文件尾,
+        // L2 上线后这段内容就读不到了。所以在碰任何文件/数据库之前直接返回。
+        if agent == AgentKind::Qodercn {
+            return Ok(());
+        }
         let conversation_id = conversation_id_for_path(file_path).ok_or_else(|| {
             anyhow::anyhow!("无法从文件名派生 conversation_id: {}", file_path.display())
         })?;
@@ -1125,6 +1133,56 @@ impl TranscriptStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_agent_round_trips_through_its_persisted_name() {
+        // 会话库里存的是这个字符串;任何一家映射不回来都会读成 Unknown。
+        for agent in [
+            AgentKind::Claude,
+            AgentKind::Codebuddy,
+            AgentKind::Opencode,
+            AgentKind::Codex,
+            AgentKind::Goose,
+            AgentKind::Aider,
+            AgentKind::V8agent,
+            AgentKind::Qodercn,
+        ] {
+            assert_eq!(agent_from_str(agent_to_str(agent)), agent, "{agent:?}");
+        }
+        assert_eq!(agent_to_str(AgentKind::Qodercn), "qodercn");
+        assert_eq!(agent_from_str("qodercn"), AgentKind::Qodercn);
+    }
+
+    /// qodercn 每个 hook 事件都带 transcript_path,会走到 `ingest_session`。L1 没有它的解析器:
+    /// 不能建 0 轮的空会话行,更不能推进 `parsed_offset`——否则 L2 上线后已有内容会被跳过。
+    #[test]
+    fn ingesting_a_qodercn_transcript_has_no_side_effects_yet() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("dozer.db")).unwrap();
+        let file = tmp
+            .path()
+            .join("11111111-2222-3333-4444-555555555555.jsonl");
+        std::fs::write(
+            &file,
+            "{\"type\":\"user\",\"message\":{\"content\":\"hi\"}}\n",
+        )
+        .unwrap();
+
+        store.ingest_session(AgentKind::Qodercn, &file).unwrap();
+
+        let conn = store.conn.lock().unwrap();
+        let conversations: i64 = conn
+            .query_row("SELECT COUNT(*) FROM conversations", [], |r| r.get(0))
+            .unwrap();
+        let turns: i64 = conn
+            .query_row("SELECT COUNT(*) FROM conversation_turns", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            (conversations, turns),
+            (0, 0),
+            "L1 不摄取 qodercn,不留任何痕迹"
+        );
+    }
 
     fn fixture(dir: &Path, name: &str, content: &str) -> std::path::PathBuf {
         let p = dir.join(name);

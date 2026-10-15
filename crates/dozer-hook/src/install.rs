@@ -27,6 +27,15 @@ pub fn settings_path_for(agent: &str) -> PathBuf {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
             PathBuf::from(home).join(".codebuddy").join("settings.json")
         }
+        // Qoder CLI CN:用户级设置就是 `<配置根>/settings.json`(MCP 的 user 作用域也写在这里,
+        // 2026-10-15 实测),hook 载荷与 Claude 同构。配置根默认 `~/.qoder-cn`。
+        "qodercn" => {
+            if let Ok(p) = std::env::var("DOZER_QODERCN_SETTINGS") {
+                return PathBuf::from(p);
+            }
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+            PathBuf::from(home).join(".qoder-cn").join("settings.json")
+        }
         "codex" => {
             if let Ok(p) = std::env::var("DOZER_CODEX_SETTINGS") {
                 return PathBuf::from(p);
@@ -226,6 +235,76 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(cmd.contains(" codebuddy "), "{cmd}");
+    }
+
+    #[test]
+    fn install_writes_agent_specific_command_for_qodercn() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        assert_eq!(
+            run_at_with_exe(&path, "qodercn", true, "/opt/dozer-hook"),
+            0
+        );
+        let root = read(&path);
+        for ev in EVENTS {
+            let cmd = root["hooks"][ev][0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap();
+            assert_eq!(cmd, format!("'/opt/dozer-hook' qodercn {ev}"));
+        }
+    }
+
+    /// qodercn 的 settings.json 里本来就有用户的 permissions / security / mcpServers:
+    /// 安装与卸载都只能动自己的 hook 条目。
+    #[test]
+    fn qodercn_install_and_uninstall_keep_the_users_own_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"permissions":{"allow":["Bash(ls)"]},"security":{"x":1},"mcpServers":{"a":{"command":"c"}},
+               "hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            run_at_with_exe(&path, "qodercn", true, "/opt/dozer-hook"),
+            0
+        );
+        // 重复安装幂等。
+        assert_eq!(
+            run_at_with_exe(&path, "qodercn", true, "/opt/dozer-hook"),
+            0
+        );
+        let root = read(&path);
+        assert_eq!(root["permissions"]["allow"][0], "Bash(ls)");
+        assert_eq!(root["mcpServers"]["a"]["command"], "c");
+        assert_eq!(
+            root["hooks"]["Stop"].as_array().unwrap().len(),
+            2,
+            "用户自己的 + dozer 的各一条"
+        );
+        assert_eq!(root["hooks"]["Stop"][0]["hooks"][0]["command"], "echo mine");
+
+        assert_eq!(
+            run_at_with_exe(&path, "qodercn", false, "/opt/dozer-hook"),
+            0
+        );
+        let root = read(&path);
+        assert_eq!(root["hooks"]["Stop"].as_array().unwrap().len(), 1);
+        assert_eq!(root["hooks"]["Stop"][0]["hooks"][0]["command"], "echo mine");
+        assert_eq!(root["security"]["x"], 1);
+    }
+
+    #[test]
+    fn settings_path_for_qodercn_points_at_qoder_cn_dir() {
+        unsafe { std::env::set_var("DOZER_QODERCN_SETTINGS", "/tmp/probe-qodercn.json") };
+        assert_eq!(
+            settings_path_for("qodercn"),
+            std::path::PathBuf::from("/tmp/probe-qodercn.json")
+        );
+        unsafe { std::env::remove_var("DOZER_QODERCN_SETTINGS") };
+        let default = settings_path_for("qodercn");
+        assert!(default.ends_with(".qoder-cn/settings.json"), "{default:?}");
     }
 
     #[test]

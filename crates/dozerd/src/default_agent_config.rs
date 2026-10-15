@@ -83,6 +83,7 @@ mod tests {
             ("v8agent", AgentKind::V8agent),
             ("goose", AgentKind::Goose),
             ("aider", AgentKind::Aider),
+            ("qodercn", AgentKind::Qodercn),
         ] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("config.toml");

@@ -108,7 +108,7 @@ pub(crate) fn filter_sessions<'a>(
 /// chip;返回空 = 没有会话数据,footbar 不渲染。`pub(crate)` 理由同
 /// `filter_sessions`。
 pub(crate) fn conversation_agents_present(rows: &[SessionRow]) -> Vec<AgentKind> {
-    const ORDER: [AgentKind; 8] = [
+    const ORDER: [AgentKind; 9] = [
         AgentKind::Claude,
         AgentKind::Codebuddy,
         AgentKind::Opencode,
@@ -116,6 +116,7 @@ pub(crate) fn conversation_agents_present(rows: &[SessionRow]) -> Vec<AgentKind>
         AgentKind::Goose,
         AgentKind::Aider,
         AgentKind::V8agent,
+        AgentKind::Qodercn,
         AgentKind::Unknown,
     ];
     ORDER

@@ -85,6 +85,7 @@ fn parse_agent(arg: &str) -> AgentKind {
         "opencode" => AgentKind::Opencode,
         "codex" => AgentKind::Codex,
         "goose" => AgentKind::Goose,
+        "qodercn" => AgentKind::Qodercn,
         _ => AgentKind::Unknown,
     }
 }
@@ -184,6 +185,7 @@ mod tests {
     fn parse_agent_recognizes_known_names() {
         assert_eq!(parse_agent("claude"), AgentKind::Claude);
         assert_eq!(parse_agent("codebuddy"), AgentKind::Codebuddy);
+        assert_eq!(parse_agent("qodercn"), AgentKind::Qodercn);
         assert_eq!(parse_agent("opencode"), AgentKind::Opencode);
     }
 
@@ -191,6 +193,26 @@ mod tests {
     fn parse_agent_falls_back_to_unknown() {
         assert_eq!(parse_agent("something-else"), AgentKind::Unknown);
         assert_eq!(parse_agent(""), AgentKind::Unknown);
+    }
+
+    /// qodercn 的事件名与 Claude 完全一致(2026-10-15 实测),按原名透传,不做 CodeBuddy 式翻译。
+    #[test]
+    fn resolve_event_passes_qodercn_events_through_unchanged() {
+        for ev in [
+            "SessionStart",
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PostToolUse",
+            "Notification",
+            "Stop",
+            "SessionEnd",
+        ] {
+            assert_eq!(
+                resolve_event(AgentKind::Qodercn, Some(ev)),
+                Some(ev.to_string()),
+                "{ev}"
+            );
+        }
     }
 
     #[test]

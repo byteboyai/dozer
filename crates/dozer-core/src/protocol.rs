@@ -1718,6 +1718,21 @@ mod tests {
     }
 
     #[test]
+    fn agent_kind_recognizes_qodercn() {
+        // 线上/落盘字符串必须稳定:老 dozerd 读到 "qodercn" 会反序列化失败,所以名字一旦发出就不能改。
+        assert_eq!(
+            serde_json::to_string(&AgentKind::Qodercn).unwrap(),
+            "\"qodercn\""
+        );
+        assert_eq!(
+            serde_json::from_str::<AgentKind>("\"qodercn\"").unwrap(),
+            AgentKind::Qodercn
+        );
+        assert_eq!(AgentKind::Qodercn.label(), "qodercn");
+        assert_eq!(AgentKind::Qodercn.display_label(), "Qoder CN");
+    }
+
+    #[test]
     fn preview_context_round_trips() {
         let ctx = PreviewContext {
             path: "/repo/src/main.rs".into(),

@@ -26,6 +26,7 @@ pub enum AgentKind {
     Goose,
     Aider,
     V8agent,
+    Qodercn,
 }
 
 impl AgentKind {
@@ -45,6 +46,7 @@ impl AgentKind {
             AgentKind::Goose => "goose",
             AgentKind::Aider => "aider",
             AgentKind::V8agent => "v8agent",
+            AgentKind::Qodercn => "qodercn",
         }
     }
 
@@ -62,6 +64,7 @@ impl AgentKind {
             AgentKind::Goose => "Goose",
             AgentKind::Aider => "Aider",
             AgentKind::V8agent => "v8agent",
+            AgentKind::Qodercn => "Qoder CN",
         }
     }
 }
