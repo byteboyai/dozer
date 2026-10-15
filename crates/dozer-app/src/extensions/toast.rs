@@ -227,6 +227,23 @@ impl Outbox {
     }
 }
 
+/// 共享面板库的中性提示 → Dozer 的待发提示:补上日志来源 `scope`,级别一一对应。
+/// `Debug` 级只写日志、不弹 Toast,所以返回 `None` 并在这里落日志。
+pub fn pending_from_notice(scope: Scope, n: dozer_panel_host::Notice) -> Option<Pending> {
+    use dozer_panel_host::NoticeLevel;
+    let level = match n.level {
+        NoticeLevel::Debug => {
+            dozer_core::log_debug!(LOG, scope = scope.target, "{}", crate::i18n::host_render_stable(&n.text));
+            return None;
+        }
+        NoticeLevel::Info => Level::Info,
+        NoticeLevel::Success => Level::Success,
+        NoticeLevel::Warning => Level::Warning,
+        NoticeLevel::Error => Level::Error,
+    };
+    Some(Pending { scope, level, text: n.text, key: n.key })
+}
+
 /// 折叠所有空白(含换行)成单个空格并去首尾:Toast 是固定高度的单/双行卡片,
 /// 多行文本会撑坏几何。
 pub(crate) fn normalize(text: &str) -> String {
@@ -310,6 +327,17 @@ impl ToastCenter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_neutral_notice_becomes_a_pending_toast_with_the_scope_added_and_debug_never_toasts() {
+        use dozer_panel_host::{Notice, NoticeLevel};
+        let text = dozer_model::LocalizedText::keyed("dozer.todo", "k", "fallback");
+        let n = |level| Notice { level, text: text.clone(), key: Some("x".into()) };
+        let p = pending_from_notice(crate::extensions::todo::LOG, n(NoticeLevel::Error)).unwrap();
+        assert_eq!((p.level, p.key.as_deref()), (Level::Error, Some("x")));
+        assert_eq!(pending_from_notice(crate::extensions::todo::LOG, n(NoticeLevel::Warning)).unwrap().level, Level::Warning);
+        assert!(pending_from_notice(crate::extensions::todo::LOG, n(NoticeLevel::Debug)).is_none());
+    }
 
     fn center() -> (ToastCenter, Instant) {
         (ToastCenter::default(), Instant::now())

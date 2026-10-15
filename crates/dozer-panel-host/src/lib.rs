@@ -4,6 +4,9 @@
 //! 都依赖它,而不是各自复制一份。逐字搬自 `dozer-app/src/panel_host.rs`(只改可见性),Dozer 的 `panel_host`
 //! 重新导出;依赖 `App` 的 `PanelHost` 视图契约 trait 仍留在 Dozer。
 
+mod notice;
+pub use notice::{NOTICE_COOLDOWN, Notice, NoticeLevel, NoticeOutbox};
+
 use bytehost_core::id::ScopeId;
 use dozer_services::Services;
 use std::future::Future;
