@@ -190,10 +190,16 @@ fn codehealth_content_root_for(flyfish_root: &Path) -> PathBuf {
     flyfish_root.with_file_name("codehealth-content")
 }
 
-/// todo-content host(Todo 面板内容区)静态资源根 = flyfish 根的兄弟目录
-/// `todo-content`。同 `codehealth_content_root_for`。
+/// todo-content host(Todo 面板内容区)静态资源根。产物唯一来源在 `dozer-panel-todo` crate(S3a 起);
+/// 打包分发时 `build-macos-app.sh` 把它拷进 `Contents/Resources/todo-content`,此时 `flyfish_root` 的兄弟
+/// 目录 `todo-content` 存在,优先用它;dev 态(兄弟目录不存在)回退到 crate 自带资源根。同 `usage_content_root_for`。
 fn todo_content_root_for(flyfish_root: &Path) -> PathBuf {
-    flyfish_root.with_file_name("todo-content")
+    let bundled = flyfish_root.with_file_name("todo-content");
+    if bundled.is_dir() {
+        bundled
+    } else {
+        dozer_panel_todo::web_assets_root()
+    }
 }
 
 /// group-chat-content host(群聊面板)静态资源根 = flyfish 根的兄弟目录
@@ -507,6 +513,14 @@ mod tests {
         }
     }
 
+    /// 评审关注点 5:todo-content 产物的**唯一来源**在 `dozer-panel-todo`;`dozer-app` 里不再留副本。
+    #[test]
+    fn todo_content_has_one_source_and_dozer_app_keeps_no_copy() {
+        assert!(dozer_panel_todo::web_assets_root().join("host.html").is_file());
+        let old = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/todo-content");
+        assert!(!old.exists(), "dozer-app 里不应再留 todo-content 副本: {}", old.display());
+    }
+
     /// 严格 CSP、无 connect-src(没有 fetch 端点,数据全靠推送)、无网络。
     #[test]
     fn usage_content_host_has_strict_csp_and_no_external_refs() {
@@ -765,7 +779,7 @@ mod tests {
     /// 提交的 todo-content 产物必须齐全(防止忘记 `npm run build` 就提交)。
     #[test]
     fn todo_content_bundle_assets_are_present() {
-        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/todo-content"));
+        let root = dozer_panel_todo::web_assets_root();
         for f in ["host.html", "todo-content.js", "todo-content.css"] {
             let p = root.join(f);
             assert!(p.is_file(), "缺少 todo-content 产物 {f}: {}", p.display());
@@ -779,7 +793,7 @@ mod tests {
     /// 严格 CSP、无 connect-src、无网络引用。
     #[test]
     fn todo_content_host_has_strict_csp_and_no_external_refs() {
-        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/todo-content"));
+        let root = dozer_panel_todo::web_assets_root();
         let html = std::fs::read_to_string(root.join("host.html")).expect("读 host.html");
         assert!(html.contains("default-src 'none'"));
         assert!(html.contains("script-src 'self'"));

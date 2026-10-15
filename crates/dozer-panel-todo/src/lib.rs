@@ -27,6 +27,13 @@ pub use protocol::*;
 pub use state::*;
 pub use update::*;
 
+/// 本 crate 自带的 todo-content web 资源根(`assets/todo-content/`,由 `web/todo-content/build.mjs` 构建)。
+/// **唯一来源**:消费方(Dozer / Digger)从这条路径取 `host.html` / `todo-content.js` / `todo-content.css`,
+/// 不各自留副本。返回 `PathBuf` 而非 `&'static Path`,便于消费方在打包态改为指向 `Contents/Resources/todo-content`。
+pub fn web_assets_root() -> std::path::PathBuf {
+    std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/todo-content"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

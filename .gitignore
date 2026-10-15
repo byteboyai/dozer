@@ -33,8 +33,8 @@ crates/dozer-app/web/codehealth-content/node_modules/
 # tabular host deps (built assets under assets/tabular-host are committed)
 crates/dozer-app/web/tabular-host/node_modules/
 
-# todo-content host deps (built assets under assets/todo-content are committed)
-crates/dozer-app/web/todo-content/node_modules/
+# todo-content host deps (built assets under crates/dozer-panel-todo/assets/todo-content are committed)
+crates/dozer-panel-todo/web/todo-content/node_modules/
 
 # group-chat-content host deps (built assets under assets/group-chat-content are committed)
 crates/dozer-app/web/group-chat-content/node_modules/
