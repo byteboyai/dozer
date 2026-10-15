@@ -903,8 +903,14 @@ fn agent_icon_maps_each_kind_to_brand_icon() {
         }
     );
     assert_eq!(agent_icon(AgentKind::V8agent), IconKind::Bot);
-    // qodercn 暂无品牌素材,回落通用图标(byteui 没有 Qoder 图标)。
-    assert_eq!(agent_icon(AgentKind::Qodercn), IconKind::Bot);
+    // Qoder 与 Goose 同构:按当前明暗主题选黑/白版 logo。
+    assert_eq!(
+        agent_icon(AgentKind::Qodercn),
+        match byteui::theme::color::current_scheme() {
+            byteui::theme::color::ColorScheme::Light => IconKind::QoderLight,
+            byteui::theme::color::ColorScheme::Dark => IconKind::QoderDark,
+        }
+    );
     // Unknown 同样回落 Bot 图标。
     assert_eq!(agent_icon(AgentKind::Unknown), IconKind::Bot);
 }

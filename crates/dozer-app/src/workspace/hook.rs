@@ -305,8 +305,13 @@ pub(crate) fn agent_icon(agent: AgentKind) -> IconKind {
             byteui::theme::color::ColorScheme::Light => IconKind::GooseLight,
             byteui::theme::color::ColorScheme::Dark => IconKind::GooseDark,
         },
+        // Qoder 同 Goose:自带固定色的明暗两版 logo,按当前主题选。
+        AgentKind::Qodercn => match byteui::theme::color::current_scheme() {
+            byteui::theme::color::ColorScheme::Light => IconKind::QoderLight,
+            byteui::theme::color::ColorScheme::Dark => IconKind::QoderDark,
+        },
         // 暂无确认可用的品牌素材，回落通用图标（spec §8/§6 明确允许）。
-        AgentKind::V8agent | AgentKind::Qodercn | AgentKind::Unknown => IconKind::Bot,
+        AgentKind::V8agent | AgentKind::Unknown => IconKind::Bot,
     }
 }
 
