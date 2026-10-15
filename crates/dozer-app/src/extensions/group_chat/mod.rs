@@ -7,7 +7,7 @@
 
 use crate::extensions::toast::{Level, Outbox, Pending};
 use crate::panel_host::PanelIo;
-use dozer_model::{GroupInfo, GroupMessageInfo, GroupMessageStatus, LocalizedText};
+use dozer_model::{AgentKind, GroupInfo, GroupMessageInfo, GroupMessageStatus, LocalizedText};
 use dozer_services::ServiceError;
 use std::time::{Duration, Instant};
 
@@ -24,6 +24,17 @@ dozer_core::scope!(pub(crate) LOG, panel, "group_chat");
 
 /// 面板 owner(spec 2026-10-12-dozer-i18n-design §5)。
 pub const GROUP_CHAT_OWNER: &str = "dozer.group_chat";
+
+/// 新建群弹窗内可勾选的 agent(后端当前支持的群聊成员种类)。daemon 侧
+/// `dozerd::group_store::agent_to_str` 与 app 侧 `protocol::route_event`
+/// 的 `AddMember` 校验必须与此保持一致。
+pub(crate) const CREATABLE_AGENTS: &[AgentKind] = &[
+    AgentKind::Claude,
+    AgentKind::Codex,
+    AgentKind::Codebuddy,
+    AgentKind::Opencode,
+    AgentKind::Qodercn,
+];
 
 /// 解析一条群聊面板文案(渲染端拿得到 locale 时用)。
 pub(crate) fn t(key: &str, fallback: &str, locale: &str) -> String {
@@ -72,10 +83,13 @@ pub struct WorkspaceState {
     last_poll: Option<Instant>,
     backoff_until: Option<Instant>,
     hint: Option<LocalizedText>,
-    /// 原生群列表侧"新建群聊"内联输入框的草稿。空串 = 未在新建。
+    /// 原生群列表侧"新建群聊"弹窗输入框的草稿。空串 = 未在新建。
     new_group_topic: String,
-    /// 原生群列表侧待确认删除的群 id(内联二次确认,不弹独立窗口)。
-    delete_confirm: Option<i64>,
+    /// 原生群列表侧"新建群聊"弹窗是否打开。
+    new_group_dialog_open: bool,
+    /// 新建群弹窗里已勾选要加入的 agent(后端支持的成员种类,见 `CREATABLE_AGENTS`)。
+    /// 提交创建群后由 `GroupCreated` 消费为 `AddMembers` effect。
+    new_group_selected_agents: Vec<AgentKind>,
     pub(crate) outbox: Outbox,
 }
 
@@ -114,16 +128,16 @@ pub enum Message {
     },
     /// 原生群列表:点一行选中该群。
     SelectRequested(i64),
-    /// 原生群列表"新建群聊"内联输入框内容变化。
+    /// 原生群列表"新建群聊"弹窗输入框内容变化。
     NewGroupDraftChanged(i64, String),
+    /// 打开/关闭原生群列表"新建群聊"弹窗。
+    NewGroupDialogToggle(i64),
+    /// 取消并关闭"新建群聊"弹窗。
+    NewGroupDialogCancel(i64),
+    /// 新建群弹窗内勾选/取消某个参与 agent。
+    NewGroupAgentToggled(i64, AgentKind),
     /// 原生群列表提交"新建群聊"(空主题忽略)。
     NewGroupSubmit(i64),
-    /// 原生群列表点删除,进入内联二次确认态。
-    DeleteRequested(i64, i64),
-    /// 内联确认删除。
-    DeleteConfirmed(i64),
-    /// 取消内联二次确认。
-    DeleteCancelled(i64),
     /// 原生列表交互的悬停/无操作占位。
     Noop(i64),
     /// 一次性失败(新建群失败、发送失败…),进 Toast。后台任务(拿不到 locale)
@@ -143,10 +157,10 @@ impl Message {
             | Message::GroupDeleted(p, _)
             | Message::MessageUpdated(p, _)
             | Message::NewGroupDraftChanged(p, _)
+            | Message::NewGroupDialogToggle(p)
+            | Message::NewGroupDialogCancel(p)
             | Message::NewGroupSubmit(p)
-            | Message::DeleteRequested(p, _)
-            | Message::DeleteConfirmed(p)
-            | Message::DeleteCancelled(p)
+            | Message::NewGroupAgentToggled(p, _)
             | Message::Noop(p)
             | Message::Failed(p, _) => *p,
             Message::SelectRequested(p)
@@ -162,10 +176,13 @@ impl Message {
 pub enum Effect {
     /// 从头拉某群的消息(`after_rev = 0`)。
     FetchMessages { group_id: i64 },
-    /// 新建群(主题由原生列表内联输入提供)。
+    /// 新建群(主题由弹窗输入提供)。
     CreateGroup { topic: String },
-    /// 删除某群(原生列表内联二次确认通过后)。
-    DeleteGroup { group_id: i64 },
+    /// 群创建成功后批量加入已勾选的 agent(handle 默认取品牌名,角色留空)。
+    AddMembers {
+        group_id: i64,
+        members: Vec<AgentKind>,
+    },
 }
 
 fn is_active(status: &Option<GroupMessageStatus>) -> bool {
@@ -211,13 +228,17 @@ impl WorkspaceState {
     pub fn hint(&self) -> Option<&LocalizedText> {
         self.hint.as_ref()
     }
-    /// 原生群列表"新建群聊"内联输入框的当前草稿。
+    /// 原生群列表"新建群聊"弹窗输入框的当前草稿。
     pub fn new_group_topic(&self) -> &str {
         &self.new_group_topic
     }
-    /// 原生群列表内联二次确认待删除的群 id。
-    pub fn delete_confirm(&self) -> Option<i64> {
-        self.delete_confirm
+    /// 原生群列表"新建群聊"弹窗是否打开。
+    pub fn new_group_dialog_open(&self) -> bool {
+        self.new_group_dialog_open
+    }
+    /// 新建群弹窗里已勾选要加入的 agent。
+    pub fn new_group_selected_agents(&self) -> &[AgentKind] {
+        &self.new_group_selected_agents
     }
 
     pub fn has_active_turn(&self) -> bool {
@@ -345,7 +366,16 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
             state.groups.insert(0, group);
             state.selected = Some(id);
             state.reset_messages();
-            vec![Effect::FetchMessages { group_id: id }]
+            let mut fx = vec![Effect::FetchMessages { group_id: id }];
+            // 弹窗里勾选的 agent 在群创建成功后加入(不清草稿之外的状态,这里 drain)。
+            if !state.new_group_selected_agents.is_empty() {
+                let members = std::mem::take(&mut state.new_group_selected_agents);
+                fx.push(Effect::AddMembers {
+                    group_id: id,
+                    members,
+                });
+            }
+            fx
         }
         Message::GroupChanged(_, group) => {
             state.mark_stale();
@@ -357,9 +387,6 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
         Message::GroupDeleted(_, id) => {
             state.mark_stale();
             state.groups.retain(|g| g.id != id);
-            if state.delete_confirm == Some(id) {
-                state.delete_confirm = None;
-            }
             if state.selected == Some(id) {
                 state.selected = None;
             }
@@ -454,6 +481,29 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
             state.new_group_topic = text;
             Vec::new()
         }
+        Message::NewGroupDialogToggle(_) => {
+            // 仅打开(幂等):关闭走 Cancel / Esc / 创建后的 `NewGroupDialogCancel`,
+            // 避免误触把已填主题与已选 agent 丢掉。
+            state.new_group_dialog_open = true;
+            Vec::new()
+        }
+        Message::NewGroupAgentToggled(_, agent) => {
+            if let Some(pos) = state
+                .new_group_selected_agents
+                .iter()
+                .position(|a| *a == agent)
+            {
+                state.new_group_selected_agents.remove(pos);
+            } else {
+                state.new_group_selected_agents.push(agent);
+            }
+            Vec::new()
+        }
+        Message::NewGroupDialogCancel(_) => {
+            state.new_group_dialog_open = false;
+            state.new_group_topic.clear();
+            Vec::new()
+        }
         Message::NewGroupSubmit(_) => {
             let topic = state.new_group_topic.trim().to_string();
             if topic.is_empty() {
@@ -461,19 +511,8 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
                 return Vec::new();
             }
             state.new_group_topic.clear();
+            state.new_group_dialog_open = false;
             vec![Effect::CreateGroup { topic }]
-        }
-        Message::DeleteRequested(_, id) => {
-            state.delete_confirm = Some(id);
-            Vec::new()
-        }
-        Message::DeleteConfirmed(_) => match state.delete_confirm.take() {
-            Some(id) => vec![Effect::DeleteGroup { group_id: id }],
-            None => Vec::new(),
-        },
-        Message::DeleteCancelled(_) => {
-            state.delete_confirm = None;
-            Vec::new()
         }
         Message::Noop(_) => Vec::new(),
         Message::Failed(_, text) => {
@@ -665,8 +704,22 @@ pub fn run_effect(
         Effect::CreateGroup { topic } => {
             spawn_command(requests, project_id, Command::CreateGroup { topic }, io)
         }
-        Effect::DeleteGroup { group_id } => {
-            spawn_command(requests, project_id, Command::DeleteGroup { group_id }, io)
+        Effect::AddMembers { group_id, members } => {
+            // handle 默认取品牌名(均属合法 handle 字符),角色留空。每个 agent
+            // 一条独立的 `AddMember`,后端逐一回 `GroupChanged`。
+            for agent in members {
+                spawn_command(
+                    requests,
+                    project_id,
+                    Command::AddMember {
+                        group_id,
+                        agent,
+                        handle: agent.display_label().into(),
+                        role_prompt: String::new(),
+                    },
+                    io,
+                );
+            }
         }
     }
 }
@@ -1042,6 +1095,72 @@ mod tests {
     }
 
     #[test]
+    fn new_group_agent_toggled_adds_and_removes() {
+        let mut s = WorkspaceState::default();
+        assert!(s.new_group_selected_agents().is_empty());
+        update(&mut s, Message::NewGroupAgentToggled(1, AgentKind::Claude));
+        assert_eq!(s.new_group_selected_agents(), &[AgentKind::Claude]);
+        update(&mut s, Message::NewGroupAgentToggled(1, AgentKind::Codex));
+        assert_eq!(
+            s.new_group_selected_agents(),
+            &[AgentKind::Claude, AgentKind::Codex]
+        );
+        // 再点一次同一个 → 取消勾选(去重,不重复)。
+        update(&mut s, Message::NewGroupAgentToggled(1, AgentKind::Claude));
+        assert_eq!(s.new_group_selected_agents(), &[AgentKind::Codex]);
+    }
+
+    #[test]
+    fn new_group_submit_keeps_selected_agents_and_creates() {
+        let mut s = WorkspaceState::default();
+        update(&mut s, Message::NewGroupAgentToggled(1, AgentKind::Claude));
+        update(&mut s, Message::NewGroupDialogToggle(1)); // 仅打开
+        assert!(s.new_group_dialog_open());
+        update(&mut s, Message::NewGroupDraftChanged(1, "评审方案".into()));
+        let fx = update(&mut s, Message::NewGroupSubmit(1));
+        assert_eq!(
+            fx,
+            vec![Effect::CreateGroup {
+                topic: "评审方案".to_string()
+            }]
+        );
+        // 选中 agent 不清(留到 GroupCreated 消费)。
+        assert_eq!(s.new_group_selected_agents(), &[AgentKind::Claude]);
+        assert!(!s.new_group_dialog_open(), "提交后关闭弹窗");
+        assert!(s.new_group_topic().is_empty(), "提交后清空草稿");
+    }
+
+    #[test]
+    fn new_group_submit_ignores_empty_topic() {
+        let mut s = WorkspaceState::default();
+        update(&mut s, Message::NewGroupAgentToggled(1, AgentKind::Claude));
+        let fx = update(&mut s, Message::NewGroupSubmit(1));
+        assert!(fx.is_empty(), "空主题不创建群(无副作用)");
+        // 主题草稿与已选 agent 都保留,避免误触空提交丢掉用户已做的选择。
+        assert_eq!(s.new_group_selected_agents(), &[AgentKind::Claude]);
+    }
+
+    #[test]
+    fn group_created_emits_add_members_for_selected() {
+        let mut s = loaded(vec![group(1, "A")]);
+        update(&mut s, Message::NewGroupAgentToggled(1, AgentKind::Claude));
+        update(&mut s, Message::NewGroupAgentToggled(1, AgentKind::Codex));
+        update(&mut s, Message::NewGroupDraftChanged(1, "评审".into()));
+        let fx = update(&mut s, Message::GroupCreated(1, group(2, "新群")));
+        // 先 FetchMessages(选中新群)再 AddMembers(已选 agent)。
+        assert_eq!(fx[0], Effect::FetchMessages { group_id: 2 });
+        assert_eq!(
+            fx[1],
+            Effect::AddMembers {
+                group_id: 2,
+                members: vec![AgentKind::Claude, AgentKind::Codex],
+            }
+        );
+        // 消费后清空,避免下次 GroupCreated 再次加入。
+        assert!(s.new_group_selected_agents().is_empty());
+    }
+
+    #[test]
     fn group_changed_replaces_in_place() {
         let mut s = loaded(vec![group(1, "A"), group(2, "B")]);
         let mut g = group(2, "B");
@@ -1208,6 +1327,13 @@ mod tests {
                 message_id: 1,
                 todo_id: 1,
             },
+            Message::SelectRequested(3),
+            Message::NewGroupDraftChanged(3, "t".into()),
+            Message::NewGroupDialogToggle(3),
+            Message::NewGroupDialogCancel(3),
+            Message::NewGroupSubmit(3),
+            Message::NewGroupAgentToggled(3, AgentKind::Claude),
+            Message::Noop(3),
             Message::Failed(3, "x".into()),
         ];
         for msg in all {
@@ -1392,17 +1518,6 @@ mod tests {
             rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
             Message::Failed(7, ref t)
                 if crate::i18n::render_localized(t, "en").starts_with("Failed to create group chat")
-        ));
-        run_effect(
-            &Default::default(),
-            Effect::DeleteGroup { group_id: 5 },
-            7,
-            &io,
-        );
-        assert!(matches!(
-            rx.recv_timeout(TIMEOUT).unwrap().result_payload(),
-            Message::Failed(7, ref t)
-                if crate::i18n::render_localized(t, "en").starts_with("Failed to delete group chat")
         ));
     }
 

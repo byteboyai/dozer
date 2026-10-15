@@ -50,6 +50,7 @@ use crate::platform::database_source_overlay;
 use crate::platform::edit_history_overlay;
 use crate::platform::file_history_overlay;
 use crate::platform::files_move_overlay;
+use crate::platform::group_create_overlay;
 use crate::platform::project_create_overlay;
 use crate::platform::project_delete_overlay;
 use crate::platform::project_scaffold_overlay;
@@ -261,6 +262,11 @@ pub(crate) enum Runner {
         /// `sync_todo_detail_overlay` 按当前工作区 `todo.detail_popup_open()`
         /// 单向驱动。需 IME + 失焦即关闭。
         todo_detail_overlay: Option<todo_detail_overlay::TodoDetailOverlay>,
+        /// 群聊「新建群聊」表单的独立窗口宿主,生命周期由
+        /// `sync_group_chat_create_overlay` 按当前工作区
+        /// `group_chat.new_group_dialog_open()` 单向驱动。需 IME;失焦不关闭
+        /// (保留已填主题与已选 agent),仅 Esc / 取消 / 创建按钮关闭。
+        group_chat_create_overlay: Option<group_create_overlay::GroupChatCreateOverlay>,
         /// Toast 的独立原生窗口。**不参与** `OverlayKind`/`close_other_overlays`
         /// (非模态,与任何模态弹窗并存)。生命周期由 `sync_toast_overlay` 按
         /// `app.toast` 单向驱动:有 Toast 才建窗,清空即销毁。
@@ -307,6 +313,7 @@ pub(crate) enum OverlayKind {
     ProjectDelete,
     SshHost,
     TodoDetail,
+    GroupChatCreate,
 }
 
 impl Runner {
@@ -1237,6 +1244,7 @@ impl Runner {
                 project_delete_overlay,
                 ssh_host_overlay,
                 todo_detail_overlay,
+                group_chat_create_overlay,
                 ..
             } = self
             else {
@@ -1300,6 +1308,11 @@ impl Runner {
             }
             if keep != OverlayKind::TodoDetail
                 && let Some(overlay) = todo_detail_overlay.take()
+            {
+                cancels.push(overlay.cancel_message());
+            }
+            if keep != OverlayKind::GroupChatCreate
+                && let Some(overlay) = group_chat_create_overlay.take()
             {
                 cancels.push(overlay.cancel_message());
             }
@@ -2010,6 +2023,71 @@ impl Runner {
         }
     }
 
+    /// 群聊「新建群聊」表单:开关条件是当前工作区
+    /// `group_chat.new_group_dialog_open()`,三段 `match SyncAction` 模式。
+    fn sync_group_chat_create_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let action = {
+            let Self::Ready {
+                app,
+                group_chat_create_overlay,
+                ..
+            } = self
+            else {
+                return;
+            };
+            let open = app
+                .active_workspace()
+                .is_some_and(|ws| ws.group_chat.new_group_dialog_open());
+            group_create_overlay::sync_action(open, group_chat_create_overlay.is_some())
+        };
+        match action {
+            group_create_overlay::SyncAction::Open => {
+                self.close_other_overlays(OverlayKind::GroupChatCreate);
+                let Self::Ready {
+                    window,
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    app,
+                    group_chat_create_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                let Some(project_id) = app.active_project_id else {
+                    return;
+                };
+                *group_chat_create_overlay =
+                    Some(group_create_overlay::GroupChatCreateOverlay::open(
+                        window, adapter, device, queue, instance, el, project_id,
+                    ));
+            }
+            group_create_overlay::SyncAction::Close => {
+                let Self::Ready {
+                    group_chat_create_overlay,
+                    ..
+                } = self
+                else {
+                    return;
+                };
+                *group_chat_create_overlay = None;
+            }
+            group_create_overlay::SyncAction::Noop => {}
+        }
+        let Self::Ready {
+            group_chat_create_overlay,
+            ..
+        } = self
+        else {
+            return;
+        };
+        if let Some(overlay) = group_chat_create_overlay {
+            overlay.request_redraw();
+        }
+    }
+
     /// Project「删除项目」三选一确认:开关条件是当前工作区
     /// `project_panel.delete_pending.is_some()`,三段 `match SyncAction` 模式。
     fn sync_project_delete_overlay(&mut self, el: &winit::event_loop::ActiveEventLoop) {
@@ -2432,7 +2510,8 @@ impl Runner {
                     )
                 {
                     if view.evaluate_script(&script).is_ok() {
-                        app.app_views.mark_locale_pushed(slot, app.locale.display_generation());
+                        app.app_views
+                            .mark_locale_pushed(slot, app.locale.display_generation());
                     }
                 }
             }
@@ -3129,6 +3208,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 project_delete_overlay: None,
                 ssh_host_overlay: None,
                 todo_detail_overlay: None,
+                group_chat_create_overlay: None,
                 toast_overlay: None,
             };
         }
@@ -3166,6 +3246,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_ssh_host_overlay(event_loop);
         self.sync_project_delete_overlay(event_loop);
         self.sync_todo_detail_overlay(event_loop);
+        self.sync_group_chat_create_overlay(event_loop);
     }
 
     fn window_event(
@@ -3575,6 +3656,32 @@ impl winit::application::ApplicationHandler<Message> for Runner {
             return;
         }
 
+        // 群聊「新建群聊」窗口自己那份 `WindowId` 的事件。失焦不关闭(保留
+        // 已填主题与已选 agent),所以 `Focused` 分支不处理——点主窗口不会
+        // 误关弹窗;关闭只走 Esc / 取消 / 创建按钮(均经 `cancel_message`/
+        // 各自消息清 `new_group_dialog_open`)。
+        if let Self::Ready {
+            app,
+            group_chat_create_overlay,
+            ..
+        } = self
+            && let Some(overlay) = group_chat_create_overlay
+            && window_id == overlay.window_id()
+        {
+            if matches!(event, WindowEvent::RedrawRequested) {
+                overlay.redraw(app);
+            } else if matches!(event, WindowEvent::CloseRequested) {
+                let msg = overlay.cancel_message();
+                self.dispatch(msg);
+            } else {
+                for message in overlay.handle_input(app, &event) {
+                    self.dispatch(message);
+                }
+            }
+            self.sync_group_chat_create_overlay(event_loop);
+            return;
+        }
+
         // Todo 任务详情弹窗窗口自己那份 `WindowId` 的事件。
         if let Self::Ready {
             app,
@@ -3640,6 +3747,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                 project_scaffold_overlay,
                 project_delete_overlay,
                 ssh_host_overlay,
+                group_chat_create_overlay,
                 todo_detail_overlay,
                 toast_overlay,
                 ..
@@ -4527,6 +4635,16 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             window.scale_factor(),
                         );
                     }
+                    if let Some(overlay) = group_chat_create_overlay {
+                        overlay.reposition(
+                            device,
+                            window
+                                .outer_position()
+                                .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0)),
+                            new_size,
+                            window.scale_factor(),
+                        );
+                    }
                     if let Some(overlay) = project_delete_overlay {
                         overlay.reposition(
                             device,
@@ -4766,6 +4884,7 @@ impl winit::application::ApplicationHandler<Message> for Runner {
         self.sync_ssh_host_overlay(event_loop);
         self.sync_project_delete_overlay(event_loop);
         self.sync_todo_detail_overlay(event_loop);
+        self.sync_group_chat_create_overlay(event_loop);
     }
 }
 

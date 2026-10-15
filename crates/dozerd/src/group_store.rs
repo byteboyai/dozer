@@ -28,11 +28,15 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// 第一版只有这两家能入群。
+/// 可入群的 agent 种类(后端当前支持的成员集合)。与 app 侧
+/// `extensions::group_chat::CREATABLE_AGENTS` 保持一致。
 fn agent_to_str(agent: AgentKind) -> Result<&'static str> {
     match agent {
         AgentKind::Claude => Ok("claude"),
         AgentKind::Codex => Ok("codex"),
+        AgentKind::Codebuddy => Ok("codebuddy"),
+        AgentKind::Opencode => Ok("opencode"),
+        AgentKind::Qodercn => Ok("qodercn"),
         other => bail!("{} 暂不支持加入群聊", other.display_label()),
     }
 }
@@ -41,6 +45,9 @@ fn agent_from_str(s: &str) -> AgentKind {
     match s {
         "claude" => AgentKind::Claude,
         "codex" => AgentKind::Codex,
+        "codebuddy" => AgentKind::Codebuddy,
+        "opencode" => AgentKind::Opencode,
+        "qodercn" => AgentKind::Qodercn,
         _ => AgentKind::Unknown,
     }
 }
@@ -937,5 +944,29 @@ mod tests {
         assert_eq!(g.members.len(), 1);
         assert!(s.get_message(ph[0].id).is_ok());
         assert!(s.get_member(m1).unwrap().is_none());
+    }
+
+    #[test]
+    fn agent_to_str_round_trips_the_supported_members() {
+        use dozer_core::protocol::AgentKind;
+        for (agent, expected) in [
+            (AgentKind::Claude, "claude"),
+            (AgentKind::Codex, "codex"),
+            (AgentKind::Codebuddy, "codebuddy"),
+            (AgentKind::Opencode, "opencode"),
+            (AgentKind::Qodercn, "qodercn"),
+        ] {
+            assert_eq!(agent_to_str(agent).unwrap(), expected);
+            assert_eq!(agent_from_str(expected), agent);
+        }
+        // 其它 agent 仍被拒绝。
+        for unsupported in [
+            AgentKind::Goose,
+            AgentKind::Aider,
+            AgentKind::V8agent,
+            AgentKind::Unknown,
+        ] {
+            assert!(agent_to_str(unsupported).is_err());
+        }
     }
 }

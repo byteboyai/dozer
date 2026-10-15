@@ -1,8 +1,8 @@
 //! 应用宿主请求经 UDS 到达 dozerd 的 `AppService`:走真实的 socket 协议与 `dozer-client`。
 
 use bytehost_apps::gateway::GatewayConfig;
-use bytehost_apps::id::AppId;
 use bytehost_apps::i18n::WebViewLocale;
+use bytehost_apps::id::AppId;
 use bytehost_apps::plan::{Approval, Provenance, TrustLevel};
 use bytehost_apps::proto::{AppDisplayI18n, AppErrorKind, AppSource, DisplayTitleScope};
 use bytehost_apps::registry::UninstallMode;
@@ -141,16 +141,8 @@ fn write_app_with_i18n(dir: &Path, id_str: &str, body: &str) -> AppSource {
     )
     .unwrap();
     std::fs::write(dir.join("web/index.html"), body).unwrap();
-    std::fs::write(
-        dir.join("locales/en.json"),
-        "{\"app.title\": \"Notes\"}",
-    )
-    .unwrap();
-    std::fs::write(
-        dir.join("locales/zh-CN.json"),
-        "{\"app.title\": \"笔记\"}",
-    )
-    .unwrap();
+    std::fs::write(dir.join("locales/en.json"), "{\"app.title\": \"Notes\"}").unwrap();
+    std::fs::write(dir.join("locales/zh-CN.json"), "{\"app.title\": \"笔记\"}").unwrap();
     AppSource::LocalDir {
         path: dir.to_path_buf(),
     }
@@ -248,8 +240,15 @@ async fn i18n_metadata_round_trips_through_the_socket() {
         .as_ref()
         .expect("带 [i18n] 的应用必须投影 display_i18n");
     assert_eq!(di.default_locale, "en");
-    assert_eq!(di.supported_locales, vec!["en".to_string(), "zh-CN".to_string()]);
-    assert_eq!(di.webview_locale, WebViewLocale::Live, "webview_locale 协商为 live");
+    assert_eq!(
+        di.supported_locales,
+        vec!["en".to_string(), "zh-CN".to_string()]
+    );
+    assert_eq!(
+        di.webview_locale,
+        WebViewLocale::Live,
+        "webview_locale 协商为 live"
+    );
     // 协商逻辑与 bytehost 纯 resolver 一致:命中 zh-CN、回落 default(en)。
     assert_eq!(
         di.resolve_title(&DisplayTitleScope::Presentation, "zh-CN"),

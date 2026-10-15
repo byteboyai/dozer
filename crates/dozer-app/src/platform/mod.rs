@@ -9,6 +9,7 @@ pub mod edit_history_overlay;
 pub mod file_drag;
 pub mod file_history_overlay;
 pub mod files_move_overlay;
+pub mod group_create_overlay;
 pub mod locale;
 pub mod overlay_gpu;
 pub mod overlay_window;

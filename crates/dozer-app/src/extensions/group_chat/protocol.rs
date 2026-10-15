@@ -389,9 +389,7 @@ pub(crate) fn route_event(state: &WorkspaceState, event: GroupChatWebviewEvent) 
             handle,
             role_prompt,
         } => {
-            if !group_exists(state, group_id)
-                || !matches!(agent, AgentKind::Claude | AgentKind::Codex)
-            {
+            if !group_exists(state, group_id) || !super::CREATABLE_AGENTS.contains(&agent) {
                 return None;
             }
             Some(Command::AddMember {
@@ -824,21 +822,20 @@ mod tests {
     }
 
     #[test]
-    fn add_member_accepts_only_claude_and_codex() {
+    fn add_member_accepts_claude_codex_codebuddy_opencode_qodercn() {
         let s = state_with_messages(vec![]);
-        let ok = ev(
-            json!({"kind":"add_member","group_id":1,"agent":"codex","handle":" 审阅者2 ","role_prompt":"挑刺"}),
-        );
-        assert_eq!(
-            route_event(&s, ok),
-            Some(Command::AddMember {
-                group_id: 1,
-                agent: AgentKind::Codex,
-                handle: "审阅者2".into(),
-                role_prompt: "挑刺".into()
-            })
-        );
-        for agent in ["goose", "aider", "unknown", "codebuddy"] {
+        // 后端支持的五种成员种类都应放行。
+        for agent in ["claude", "codex", "codebuddy", "opencode", "qodercn"] {
+            let ok = ev(
+                json!({"kind":"add_member","group_id":1,"agent":agent,"handle":"x","role_prompt":""}),
+            );
+            assert!(
+                matches!(route_event(&s, ok), Some(Command::AddMember { .. })),
+                "{agent} 应被接受"
+            );
+        }
+        // 其余种类仍被拒绝。
+        for agent in ["goose", "aider", "v8agent", "unknown"] {
             let bad = ev(
                 json!({"kind":"add_member","group_id":1,"agent":agent,"handle":"x","role_prompt":""}),
             );
