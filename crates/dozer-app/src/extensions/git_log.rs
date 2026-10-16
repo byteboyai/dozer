@@ -1807,34 +1807,29 @@ mod tests {
         format!("{n:02x}").repeat(20).parse().unwrap()
     }
 
-    /// spike 验证核心问题:`gleisbau` 能否对 Dozer 自己这个真实、有分叉/合并
-    /// 历史的仓库跑出合理的 commit 列表 + refs 标签 + is_merge 标记。跑
-    /// `cargo test -p dozer-app git_log::tests -- --nocapture` 看打印的前 20
-    /// 行,人工核对 sha/refs/summary 是否符合直觉。
+    /// `gleisbau` 能否对有分叉/合并历史的仓库跑出合理的 commit 列表 + is_merge
+    /// 标记。用临时仓库(不依赖 dozer 自己的历史形状);跑
+    /// `cargo test -p dozer-app git_log::tests -- --nocapture` 可看打印的行。
     #[test]
-    fn build_against_real_repo() {
-        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("crates/dozer-app 应有两层上级目录到仓库根");
-        let snapshot =
-            build(repo_root, DEFAULT_MAX_COMMITS).expect("gleisbau 应能解析 dozer 自己的仓库");
+    fn build_against_merge_repo() {
+        let (_dir, repo_root) = mkrepo_with_merge();
+        let snapshot = build(&repo_root, DEFAULT_MAX_COMMITS).expect("gleisbau 应能解析临时仓库");
 
-        assert!(!snapshot.rows.is_empty(), "真实仓库应至少有一个 commit");
+        assert!(!snapshot.rows.is_empty(), "仓库应至少有一个 commit");
 
-        for (row_idx, row) in snapshot.rows.iter().take(20).enumerate() {
+        for (row_idx, row) in snapshot.rows.iter().enumerate() {
             println!(
                 "row={row_idx} sha={} merge={} summary={:?}",
                 row.short_sha, row.is_merge, row.summary
             );
         }
 
-        // merge commit 理应至少出现一次——Dozer 仓库历史里确实有过 merge
-        // (如 2429d15),不是纯线性历史。
-        assert!(
-            snapshot.rows.iter().any(|r| r.is_merge),
-            "200 个 commit 窗口内应能看到至少一个 merge"
-        );
+        let merge = snapshot
+            .rows
+            .iter()
+            .find(|r| r.is_merge)
+            .expect("应能看到 merge 提交");
+        assert_eq!(merge.summary, "merge side");
     }
 
     /// tempdir 里造一个带真实 merge 提交的仓库(`--no-ff` 合并侧分支),
