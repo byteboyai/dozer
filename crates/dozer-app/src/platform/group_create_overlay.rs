@@ -32,6 +32,10 @@ use crate::workspace::{agent_dot_color, agent_icon};
 /// 卡片固定宽度(高度随内容/agent 行数自适应,用 `backdrop_card_shrink`)。
 const CARD_WIDTH: f32 = 420.0;
 
+/// 主题文本框定高:约 3 行(body 14 × 行高 ≈ 19 + 上下 padding 16)。
+/// 提交走「创建」按钮/回车提交已移除——多行文本里 Enter 是换行。
+const TOPIC_AREA_HEIGHT: f32 = 72.0;
+
 /// 开关决策拆成纯函数,便于单测(同 `ssh_host_overlay::sync_action`)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SyncAction {
@@ -137,15 +141,13 @@ impl GroupChatCreateOverlay {
         let c = byteui::theme::color::current();
         let gc = &ws.group_chat;
 
-        let input = byteui::form::input_text::view(
-            &group_chat::t("new_group.placeholder", "New group topic…", locale),
+        let input = byteui::form::text_area::view(
             gc.new_group_topic(),
-            false,
+            &group_chat::t("new_group.placeholder", "New group topic…", locale),
             Some(iced_widget::core::widget::Id::new("group-chat-new-topic")),
             false,
-            Some(GroupChatMessage::NewGroupSubmit(project_id)),
-            false,
-            move |s| GroupChatMessage::NewGroupDraftChanged(project_id, s),
+            Some(TOPIC_AREA_HEIGHT),
+            move |action| GroupChatMessage::NewGroupTopicAction(project_id, action),
         );
 
         // 参与 agent 勾选行:遍历后端支持的成员种类。用 `Vec<Element<…>>` 收集,

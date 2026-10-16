@@ -83,8 +83,8 @@ pub struct WorkspaceState {
     last_poll: Option<Instant>,
     backoff_until: Option<Instant>,
     hint: Option<LocalizedText>,
-    /// 原生群列表侧"新建群聊"弹窗输入框的草稿。空串 = 未在新建。
-    new_group_topic: String,
+    /// 原生群列表侧"新建群聊"弹窗主题框草稿(多行 text_editor,约 3 行定高)。
+    new_group_topic: iced_widget::text_editor::Content,
     /// 原生群列表侧"新建群聊"弹窗是否打开。
     new_group_dialog_open: bool,
     /// 新建群弹窗里已勾选要加入的 agent(后端支持的成员种类,见 `CREATABLE_AGENTS`)。
@@ -128,8 +128,8 @@ pub enum Message {
     },
     /// 原生群列表:点一行选中该群。
     SelectRequested(i64),
-    /// 原生群列表"新建群聊"弹窗输入框内容变化。
-    NewGroupDraftChanged(i64, String),
+    /// 原生群列表"新建群聊"弹窗主题文本框的编辑动作(text_editor)。
+    NewGroupTopicAction(i64, iced_widget::text_editor::Action),
     /// 打开/关闭原生群列表"新建群聊"弹窗。
     NewGroupDialogToggle(i64),
     /// 取消并关闭"新建群聊"弹窗。
@@ -156,7 +156,7 @@ impl Message {
             | Message::GroupChanged(p, _)
             | Message::GroupDeleted(p, _)
             | Message::MessageUpdated(p, _)
-            | Message::NewGroupDraftChanged(p, _)
+            | Message::NewGroupTopicAction(p, _)
             | Message::NewGroupDialogToggle(p)
             | Message::NewGroupDialogCancel(p)
             | Message::NewGroupSubmit(p)
@@ -228,8 +228,8 @@ impl WorkspaceState {
     pub fn hint(&self) -> Option<&LocalizedText> {
         self.hint.as_ref()
     }
-    /// 原生群列表"新建群聊"弹窗输入框的当前草稿。
-    pub fn new_group_topic(&self) -> &str {
+    /// 原生群列表"新建群聊"弹窗主题框的当前草稿。
+    pub fn new_group_topic(&self) -> &iced_widget::text_editor::Content {
         &self.new_group_topic
     }
     /// 原生群列表"新建群聊"弹窗是否打开。
@@ -477,8 +477,8 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
             Vec::new()
         }
         Message::SelectRequested(id) => state.select(id),
-        Message::NewGroupDraftChanged(_, text) => {
-            state.new_group_topic = text;
+        Message::NewGroupTopicAction(_, action) => {
+            state.new_group_topic.perform(action.clone());
             Vec::new()
         }
         Message::NewGroupDialogToggle(_) => {
@@ -501,16 +501,16 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
         }
         Message::NewGroupDialogCancel(_) => {
             state.new_group_dialog_open = false;
-            state.new_group_topic.clear();
+            state.new_group_topic = iced_widget::text_editor::Content::new();
             Vec::new()
         }
         Message::NewGroupSubmit(_) => {
-            let topic = state.new_group_topic.trim().to_string();
+            let topic = state.new_group_topic.text().trim().to_string();
             if topic.is_empty() {
                 // 空主题忽略(与后端校验一致),不清草稿以免用户误触丢输入。
                 return Vec::new();
             }
-            state.new_group_topic.clear();
+            state.new_group_topic = iced_widget::text_editor::Content::new();
             state.new_group_dialog_open = false;
             vec![Effect::CreateGroup { topic }]
         }
@@ -1116,7 +1116,15 @@ mod tests {
         update(&mut s, Message::NewGroupAgentToggled(1, AgentKind::Claude));
         update(&mut s, Message::NewGroupDialogToggle(1)); // 仅打开
         assert!(s.new_group_dialog_open());
-        update(&mut s, Message::NewGroupDraftChanged(1, "评审方案".into()));
+        update(
+            &mut s,
+            Message::NewGroupTopicAction(
+                1,
+                iced_widget::text_editor::Action::Edit(iced_widget::text_editor::Edit::Paste(
+                    std::sync::Arc::new("评审方案".into()),
+                )),
+            ),
+        );
         let fx = update(&mut s, Message::NewGroupSubmit(1));
         assert_eq!(
             fx,
@@ -1127,7 +1135,7 @@ mod tests {
         // 选中 agent 不清(留到 GroupCreated 消费)。
         assert_eq!(s.new_group_selected_agents(), &[AgentKind::Claude]);
         assert!(!s.new_group_dialog_open(), "提交后关闭弹窗");
-        assert!(s.new_group_topic().is_empty(), "提交后清空草稿");
+        assert!(s.new_group_topic().text().is_empty(), "提交后清空草稿");
     }
 
     #[test]
@@ -1145,7 +1153,15 @@ mod tests {
         let mut s = loaded(vec![group(1, "A")]);
         update(&mut s, Message::NewGroupAgentToggled(1, AgentKind::Claude));
         update(&mut s, Message::NewGroupAgentToggled(1, AgentKind::Codex));
-        update(&mut s, Message::NewGroupDraftChanged(1, "评审".into()));
+        update(
+            &mut s,
+            Message::NewGroupTopicAction(
+                1,
+                iced_widget::text_editor::Action::Edit(iced_widget::text_editor::Edit::Paste(
+                    std::sync::Arc::new("评审".into()),
+                )),
+            ),
+        );
         let fx = update(&mut s, Message::GroupCreated(1, group(2, "新群")));
         // 先 FetchMessages(选中新群)再 AddMembers(已选 agent)。
         assert_eq!(fx[0], Effect::FetchMessages { group_id: 2 });
@@ -1328,7 +1344,10 @@ mod tests {
                 todo_id: 1,
             },
             Message::SelectRequested(3),
-            Message::NewGroupDraftChanged(3, "t".into()),
+            Message::NewGroupTopicAction(
+                3,
+                iced_widget::text_editor::Action::Edit(iced_widget::text_editor::Edit::Enter),
+            ),
             Message::NewGroupDialogToggle(3),
             Message::NewGroupDialogCancel(3),
             Message::NewGroupSubmit(3),
