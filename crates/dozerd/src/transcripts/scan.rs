@@ -5,7 +5,9 @@
 //! 子目录"(启动时全量摄取用)。Codex 不按项目建目录,项目归属只能读文件头
 //! `session_meta.payload.cwd` 逐个判断。
 
-use dozer_core::agent_paths::{codex_sessions_dir_in, home_dir, project_session_dir_in, projects_root_in};
+use dozer_core::agent_paths::{
+    codex_sessions_dir_in, home_dir, project_session_dir_in, projects_root_in,
+};
 use dozer_core::protocol::AgentKind;
 use std::path::PathBuf;
 

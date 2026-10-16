@@ -14,8 +14,8 @@ dozer-services = { path = "../dozer-services" }
 dozer-i18n = { path = "../dozer-i18n" }
 byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.4" }
 # Surface 是公共机制(bytehost-core/desktop),产品只给策略与资源;不在库里复刻 wry 初始化。
-bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.0" }
-bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.0" }
+bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.1" }
+bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.1" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

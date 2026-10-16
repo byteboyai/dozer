@@ -292,7 +292,11 @@ mod tests {
         for a in AgentKind::ALL {
             let root = projects_root_in(a, home);
             let dir = project_session_dir_in(a, home, cwd);
-            assert_eq!(root.is_some(), dir.is_some(), "{a:?}: 两个表的覆盖范围必须一致");
+            assert_eq!(
+                root.is_some(),
+                dir.is_some(),
+                "{a:?}: 两个表的覆盖范围必须一致"
+            );
             if let (Some(r), Some(d)) = (root, dir) {
                 assert_eq!(d.parent(), Some(r.as_path()), "{a:?}");
             }

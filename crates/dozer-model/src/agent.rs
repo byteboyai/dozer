@@ -186,7 +186,11 @@ mod tests {
         assert_eq!(AgentKind::from_label("shell"), None);
         assert_eq!(AgentKind::from_label("unknown"), None);
         assert_eq!(AgentKind::from_label(""), None);
-        assert_eq!(AgentKind::from_label("Claude"), None, "大小写敏感,与旧 match 一致");
+        assert_eq!(
+            AgentKind::from_label("Claude"),
+            None,
+            "大小写敏感,与旧 match 一致"
+        );
         assert_eq!(AgentKind::from_label("chatgpt"), None);
     }
 }

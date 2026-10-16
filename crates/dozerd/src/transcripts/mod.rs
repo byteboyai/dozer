@@ -1935,10 +1935,12 @@ mod tests {
             .delete_project_transcripts_in(home.path(), "/proj/a")
             .unwrap();
         assert_eq!(deleted, 1);
-        assert!(store
-            .list_conversations_in(home.path(), "/proj/a", None, 10, 0)
-            .unwrap()
-            .is_empty());
+        assert!(
+            store
+                .list_conversations_in(home.path(), "/proj/a", None, 10, 0)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             store
                 .list_conversations_in(home.path(), "/proj/b", None, 10, 0)
