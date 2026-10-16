@@ -864,6 +864,35 @@ fn agent_picker_offers_qodercn_with_its_display_name() {
     );
 }
 
+/// 菜单项由 `AgentKind::known()` 派生后,顺序必须仍是按展示名不分大小写的字母序
+/// (验收反馈 2026-08-21),shell 项在分隔线之后。
+#[test]
+fn agent_picker_lists_every_known_agent_in_label_order() {
+    let dbg = format!("{:?}", agent_picker_spec());
+    let order = [
+        "Aider",
+        "Claude",
+        "CodeBuddy",
+        "Codex",
+        "Goose",
+        "OpenCode",
+        "Qoder CN",
+        "v8agent",
+        "Git Shell",
+        "OS Shell",
+    ];
+    let mut at = 0;
+    for label in order {
+        let found = dbg[at..]
+            .find(label)
+            .unwrap_or_else(|| panic!("菜单缺少或乱序: {label}"));
+        at += found + label.len();
+    }
+    for a in AgentKind::known() {
+        assert!(dbg.contains(a.display_label()), "{a:?} 不在菜单里");
+    }
+}
+
 #[test]
 fn agent_dot_color_maps_each_kind_and_avoids_gold() {
     let cases = [

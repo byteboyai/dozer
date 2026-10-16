@@ -351,16 +351,11 @@ pub(crate) fn branch_picker_items<Msg: Clone>(
 /// Agent 选择器菜单内容——native(`agent_picker_items`)和 iced fallback
 /// (`agent_picker_popup`)共用同一份数据，只在这里组装一次。
 pub(crate) fn agent_picker_spec() -> MenuSpec<Message> {
-    let agents: [(&str, PickerLaunch); 8] = [
-        ("Aider", PickerLaunch::Agent(Some(AgentKind::Aider))),
-        ("Claude", PickerLaunch::Agent(Some(AgentKind::Claude))),
-        ("CodeBuddy", PickerLaunch::Agent(Some(AgentKind::Codebuddy))),
-        ("Codex", PickerLaunch::Agent(Some(AgentKind::Codex))),
-        ("Goose", PickerLaunch::Agent(Some(AgentKind::Goose))),
-        ("OpenCode", PickerLaunch::Agent(Some(AgentKind::Opencode))),
-        ("Qoder CN", PickerLaunch::Agent(Some(AgentKind::Qodercn))),
-        ("v8agent", PickerLaunch::Agent(Some(AgentKind::V8agent))),
-    ];
+    // 由 `AgentKind::known()` 派生:新增 agent 自动出现在菜单里;按展示名不分大小写排序。
+    let mut agents: Vec<(&'static str, PickerLaunch)> = AgentKind::known()
+        .map(|k| (k.display_label(), PickerLaunch::Agent(Some(k))))
+        .collect();
+    agents.sort_by_key(|(label, _)| label.to_lowercase());
     let shells: [(&str, PickerLaunch); 2] = [
         ("Git Shell", PickerLaunch::Git),
         ("OS Shell", PickerLaunch::Agent(None)),
