@@ -1412,6 +1412,9 @@ impl App {
         let Some(ws) = self.active_workspace() else {
             return Vec::new();
         };
+        // 先把用到 `ws` 的两份内容算完(草稿快照 + 目标载荷),再碰
+        // `self.group_chat_webview` 的可变方法,避免借用冲突。
+        let drafts_json = ws.group_chat.composer_drafts_restore_json();
         let desired = crate::extensions::group_chat::current_view_payload(
             &ws.group_chat,
             project_id,
@@ -1419,14 +1422,28 @@ impl App {
         );
         let stamp = self.locale_stamp();
         let desired = dozer_model::Stamped::new(stamp, desired);
-        let Some(payload) = self.group_chat_webview.pending_push(&desired) else {
-            return Vec::new();
-        };
-        let revision = self.group_chat_webview.mark_sent(payload.clone());
-        let (locale, payload) = payload.into_parts();
-        let envelope =
-            crate::extensions::group_chat::encode_group_chat_push(revision, Some(locale), payload);
-        vec![(webview_id, crate::preview::dispatch_script(&envelope))]
+        let mut scripts = Vec::new();
+        // 页面(重)加载后先下一次输入框草稿快照(`__gcDrafts` + `__gcApplyDrafts`,
+        // 顺序无关:前端组件挂载时也会主动应用一次)。若并入声明式载荷,每个
+        // 键都会触发整份载荷重推 + 前端整树 diff,故走一次性脚本(见
+        // `WebviewPushState::needs_draft_restore`)。
+        if self.group_chat_webview.take_needs_draft_restore() {
+            scripts.push((
+                webview_id,
+                format!("window.__gcDrafts={drafts_json};window.__gcApplyDrafts&&window.__gcApplyDrafts()"),
+            ));
+        }
+        if let Some(payload) = self.group_chat_webview.pending_push(&desired) {
+            let revision = self.group_chat_webview.mark_sent(payload.clone());
+            let (locale, payload) = payload.into_parts();
+            let envelope = crate::extensions::group_chat::encode_group_chat_push(
+                revision,
+                Some(locale),
+                payload,
+            );
+            scripts.push((webview_id, crate::preview::dispatch_script(&envelope)));
+        }
+        scripts
     }
 
     /// 找到某个 pane 里处于"CodeMirror 且 Ready"的 tab(Agent 命令入口的前置

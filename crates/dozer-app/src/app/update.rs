@@ -4190,6 +4190,9 @@ impl App {
             // responder / 调 WKWebView `findString:`)都在 main.rs 的
             // `dispatch` 里对 webview 句柄执行,`App::update` 无需处理。
             Message::WebViewFindFocus(_) | Message::WebViewFindNative(_) => {}
+            // ⌘V 粘贴进子 webview(见消息文档):副作用(读剪贴板 +
+            // `evaluate_script`)在 `window_events::dispatch` 里执行。
+            Message::WebViewPasteRequest(_) => {}
         }
     }
 
@@ -5094,6 +5097,20 @@ impl App {
                         crate::i18n::HOST_OWNER,
                         reason.clone(),
                     ));
+                return;
+            }
+            // 输入框草稿逐键上报:纯视图状态,不进 Command、不 spawn,直接写
+            // host 侧权威副本(切面板销毁 webview 后据此恢复,见
+            // `take_group_chat_content_script` 的恢复脚本)。校验(群存在、
+            // 长度上限)在 `set_composer_draft` 里。需要 `&mut Workspace`,
+            // 走 `with_project`(同 `group_chat_command` 的门禁口径:只认
+            // 当前活跃项目)。
+            Ev::SetDraft { group_id, text } => {
+                if let Some(project_id) = self.active_project_id {
+                    self.with_project(project_id, |ws, _io| {
+                        ws.group_chat.set_composer_draft(*group_id, text);
+                    });
+                }
                 return;
             }
             _ => {}

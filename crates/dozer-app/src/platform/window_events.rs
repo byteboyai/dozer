@@ -2497,6 +2497,25 @@ impl Runner {
                     show_native_find(view);
                 }
             }
+            // ⌘V 粘贴进子 webview(见 `WebViewPasteRequest` 文档):读剪贴板
+            // 文本,`evaluate_script` 调页面 `window.__dozerPaste(text)` 插进
+            // 当前聚焦的输入元素。页面无权读剪贴板,只能宿主代劳;句柄只活在
+            // 事件环(同 WebViewFindFocus)。
+            Message::WebViewPasteRequest(id) => {
+                let text = clipboard.read(iced_winit::core::clipboard::Kind::Standard);
+                if let (Some(text), Some(view)) = (
+                    text,
+                    webviews
+                        .get(&id)
+                        .map(|(v, _)| v)
+                        .or_else(|| browser_webviews.get(&id).map(|(v, _)| v)),
+                ) {
+                    let json = serde_json::to_string(&text).unwrap_or_default();
+                    let _ = view.evaluate_script(&format!(
+                        "window.__dozerPaste&&window.__dozerPaste({json})"
+                    ));
+                }
+            }
             // T6:应用 webview 导航完成(`PageLoadEvent::Finished`),把当前 locale 快照推给只读语言桥。
             // 初始化脚本只装桥骨架、冻结于创建时,真实值必须导航后经 `evaluate_script` 下发
             // (`window.__bytehost_i18n_set`)。无 `display_i18n` 或未装桥的应用不产生脚本。

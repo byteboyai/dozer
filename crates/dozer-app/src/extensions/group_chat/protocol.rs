@@ -257,6 +257,13 @@ pub enum GroupChatWebviewEvent {
     Failed {
         reason: String,
     },
+    /// 消息输入框草稿变化(逐键上报)。纯视图状态:不进 `Command`,由 `App`
+    /// 直接写进 `WorkspaceState.composer_drafts`,webview 重建时再一次性
+    /// 下发恢复(切面板销毁单固定槽 webview 会丢前端 `useRef`)。
+    SetDraft {
+        group_id: i64,
+        text: String,
+    },
     CreateGroup {
         topic: String,
     },
@@ -373,7 +380,8 @@ fn member_exists(state: &WorkspaceState, id: i64) -> bool {
 pub(crate) fn route_event(state: &WorkspaceState, event: GroupChatWebviewEvent) -> Option<Command> {
     use GroupChatWebviewEvent as Ev;
     match event {
-        Ev::Ready | Ev::Failed { .. } => None,
+        // `SetDraft` 由 `App` 在进本函数前直接消费(纯视图状态,不产命令)。
+        Ev::Ready | Ev::Failed { .. } | Ev::SetDraft { .. } => None,
         Ev::CreateGroup { topic } => Some(Command::CreateGroup {
             topic: clean(&topic, MAX_TOPIC_CHARS)?,
         }),
@@ -480,6 +488,12 @@ pub struct WebviewPushState {
     /// 加载失败/超时原因;`Some` 时内容区回落原生占位页(重试清除)。存 keyed
     /// 文案,渲染端按当前 locale 解析(超时用 host 词表,webview 报错原样透传)。
     failed: Option<LocalizedText>,
+    /// 页面(重新)加载后待下发一次输入框草稿快照。webview 是单固定槽,切
+    /// 面板即销毁重建,前端草稿 `useRef` 随页面丢失;`set_ready(true)` 置位,
+    /// `take_group_chat_content_script` 取走并下发恢复脚本(见 `Ct` 的
+    /// `__gcApplyDrafts`)。放进推流而不是推载荷:草稿逐键变化,若并入声明式
+    /// 载荷,每个键都会触发整份载荷(全部消息)重推 + 前端整树 diff。
+    needs_draft_restore: bool,
 }
 
 impl WebviewPushState {
@@ -489,7 +503,15 @@ impl WebviewPushState {
             // 新实例(或重新确认 ready)一律强制重发当前内容。
             self.last_sent = None;
             self.waiting_since = None;
+            // 新页面要恢复输入框草稿(见 `needs_draft_restore` 文档)。
+            self.needs_draft_restore = true;
         }
+    }
+
+    /// 取走"待下发草稿恢复"标记(有则由 `take_group_chat_content_script`
+    /// 组一条一次性恢复脚本)。
+    pub fn take_needs_draft_restore(&mut self) -> bool {
+        std::mem::take(&mut self.needs_draft_restore)
     }
 
     /// 每帧由消费点调用:`available` = webview 当前在池里。
@@ -778,6 +800,20 @@ mod tests {
             route_event(&s, ev(json!({"kind":"failed","reason":"x"}))),
             None
         );
+    }
+
+    #[test]
+    fn set_draft_parses_and_is_not_a_command() {
+        let s = state_with_messages(vec![]);
+        let e = ev(json!({"kind":"set_draft","group_id":1,"text":"评审一下"}));
+        assert_eq!(
+            e,
+            GroupChatWebviewEvent::SetDraft {
+                group_id: 1,
+                text: "评审一下".into()
+            }
+        );
+        assert_eq!(route_event(&s, e), None, "纯视图状态,不产命令");
     }
 
     #[test]
@@ -1131,6 +1167,20 @@ mod tests {
         assert!(ps.failed().is_some());
         ps.clear_failed();
         assert!(ps.failed().is_none());
+    }
+
+    /// 每次 `set_ready(true)`(新页面/重建实例)都要重新武装一次草稿恢复,
+    /// `take` 取走后不再重复下发。
+    #[test]
+    fn push_state_rearms_draft_restore_on_each_ready() {
+        let mut ps = WebviewPushState::default();
+        assert!(!ps.take_needs_draft_restore(), "默认不恢复");
+        ps.set_ready(true);
+        assert!(ps.take_needs_draft_restore(), "ready 后待恢复");
+        assert!(!ps.take_needs_draft_restore(), "取走即清");
+        // 重建实例再次 ready → 再武装(切面板销毁重建 webview 的场景)。
+        ps.set_ready(true);
+        assert!(ps.take_needs_draft_restore());
     }
 
     #[test]

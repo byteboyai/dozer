@@ -588,6 +588,13 @@ pub enum Message {
     /// 退回调 WKWebView 原生 `findString:withConfiguration:completionHandler:`
     /// 弹出 macOS 系统查找条。`usize` 是 webview 池 key。见 `runtime.rs`。
     WebViewFindNative(usize),
+    /// 子 webview 里按 ⌘V(注入 JS 拦截后经 IPC 转发,见 `runtime.rs` 注入
+    /// 脚本的 ⌘V 分支——本应用没有 macOS Edit 菜单,WKWebView 不会自己派发
+    /// `paste:`,粘贴只能由宿主代劳)。宿主读剪贴板文本,`evaluate_script`
+    /// 调页面 `window.__dozerPaste(...)` 插进当前聚焦的输入元素。`usize` 是
+    /// webview 池 key。副作用全在 `window_events::dispatch`,`App::update`
+    /// 不处理(同 `WebViewFindFocus`)。
+    WebViewPasteRequest(usize),
     /// CodeMirror host 发回的已校验协议事件。binding 由 Rust 创建 WebView 时
     /// 捕获，不采信 JS 自报路径。
     EditorWebviewEvent(

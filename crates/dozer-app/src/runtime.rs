@@ -577,6 +577,15 @@ pub(crate) fn sync_webview_pool(
                     script.push_str(
                         "(function(){var s=document.createElement('style');s.textContent=\"html,body,body *{cursor:text!important}a,a *,button,*[role='link'],*[role='button'],summary,*[onclick],label[for]{cursor:pointer!important}\";(document.head||document.documentElement).appendChild(s);document.addEventListener('keydown',function(e){if((e.ctrlKey||e.metaKey)&&e.code==='KeyC'){e.preventDefault();var ok=false;try{ok=document.execCommand('copy')}catch(_){}if(!ok){var g=window.getSelection&&window.getSelection();if(g&&g.toString()){try{navigator.clipboard.writeText(g.toString()).then(function(){},function(){})}catch(_){}}}}});})();",
                     );
+                    // 剪切/粘贴/全选(所有 webview 的可编辑元素):本应用没有
+                    // macOS Edit 菜单,WKWebView 不派发 cut:/paste:/selectAll:,
+                    // 这三个组合键在页面输入框里默认全部失效。⌘X/⌘A 在页面内
+                    // 自己解决;⌘V 读剪贴板必须宿主代劳(WKWebView 禁止页面读
+                    // 剪贴板),经 IPC 发 `paste_request`、宿主回灌
+                    // `window.__dozerPaste(text)` 插进聚焦元素。
+                    script.push_str(
+                        "(function(){function _dozEdit(el){if(!el)return false;var t=el.tagName;if(t==='TEXTAREA'||el.isContentEditable)return true;if(t==='INPUT'){var y=el.type;return !y||y==='text'||y==='search'||y==='url'||y==='tel'||y==='password'||y==='number';}return false;}window.__dozerPaste=function(text){var el=document.activeElement;if(!_dozEdit(el))return;if(el.setRangeText){var s=el.selectionStart??0;el.setRangeText(text,s,el.selectionEnd??s,'end');el.setSelectionRange(s+text.length,s+text.length);el.dispatchEvent(new Event('input',{bubbles:true}));}else{try{document.execCommand('insertText',false,text)}catch(_){}}};document.addEventListener('keydown',function(e){if(!(e.ctrlKey||e.metaKey))return;var c=e.code;if(c==='KeyV'){if(_dozEdit(document.activeElement)){e.preventDefault();window.ipc&&window.ipc.postMessage('paste_request');}}else if(c==='KeyX'){e.preventDefault();try{document.execCommand('cut')}catch(_){}}else if(c==='KeyA'){e.preventDefault();var el=document.activeElement;if(_dozEdit(el)){if(el.setSelectionRange)el.setSelectionRange(0,el.value?el.value.length:0);else try{document.execCommand('selectAll')}catch(_){}}else{var g=window.getSelection&&window.getSelection();g&&g.selectAllChildren(document);}}},true);})();",
+                    );
                     if is_flyfish_host {
                         // Flyfish host 明确关闭了自带 toolbar，因此页面内没有可聚焦
                         // 的搜索框。WebView 聚焦时直接把 Cmd/Ctrl+F 交还给 Dozer，
@@ -666,6 +675,16 @@ pub(crate) fn sync_webview_pool(
                             "find_native" => {
                                 let _ =
                                     ipc_proxy.send_event(Message::WebViewFindNative(webview_id));
+                            }
+                            // ⌘V 粘贴进页面输入框(见注入脚本的 ⌘V 分支):
+                            // WKWebView 没有宿主 Edit 菜单不会自己派发
+                            // `paste:`,页面又无权读剪贴板——宿主读文本后
+                            // evaluate_script 回灌 `window.__dozerPaste`。
+                            // 带发来的 webview id,由 `dispatch` 找回句柄
+                            // 执行(同 find_page/find_native)。
+                            "paste_request" => {
+                                let _ =
+                                    ipc_proxy.send_event(Message::WebViewPasteRequest(webview_id));
                             }
                             // 浏览器面板报回页面 HTML 标题:`title:<id>:<title>`。
                             // `splitn(2, ':')` 只拆第一个冒号,标题里再带冒号

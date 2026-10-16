@@ -9,6 +9,7 @@ use crate::extensions::toast::{Level, Outbox, Pending};
 use crate::panel_host::PanelIo;
 use dozer_model::{AgentKind, GroupInfo, GroupMessageInfo, GroupMessageStatus, LocalizedText};
 use dozer_services::ServiceError;
+use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 
 mod protocol;
@@ -85,6 +86,10 @@ pub struct WorkspaceState {
     hint: Option<LocalizedText>,
     /// 原生群列表侧"新建群聊"弹窗主题框草稿(多行 text_editor,约 3 行定高)。
     new_group_topic: iced_widget::text_editor::Content,
+    /// 群聊内容页(webview)消息输入框草稿,按 group_id 存。webview 是单固定
+    /// 槽、切面板即销毁重建,前端 `useRef` 里的草稿会随页面一起丢;这里持有
+    /// host 侧权威副本(`set_draft` 事件逐键同步),页面加载完再整体下发恢复。
+    composer_drafts: HashMap<i64, String>,
     /// 原生群列表侧"新建群聊"弹窗是否打开。
     new_group_dialog_open: bool,
     /// 新建群弹窗里已勾选要加入的 agent(后端支持的成员种类,见 `CREATABLE_AGENTS`)。
@@ -241,6 +246,30 @@ impl WorkspaceState {
         &self.new_group_selected_agents
     }
 
+    /// webview 发来的消息输入框草稿(群必须存在;空/纯空白即清除;超长丢弃)。
+    /// 校验收敛在这里,调用方(`App` 的 `SetDraft` 分支)只管透传。
+    pub(crate) fn set_composer_draft(&mut self, group_id: i64, text: &str) {
+        if !self.groups.iter().any(|g| g.id == group_id) {
+            return;
+        }
+        if text.chars().count() > protocol::MAX_POST_CHARS {
+            return;
+        }
+        if text.trim().is_empty() {
+            self.composer_drafts.remove(&group_id);
+        } else {
+            self.composer_drafts.insert(group_id, text.to_string());
+        }
+    }
+
+    /// 整份草稿快照序列化成 JSON(`{"<group_id>":"<text>"}`),供 webview
+    /// (重)加载后一次性恢复前端 `useRef`。键序稳定(BTreeMap),便于测试。
+    pub(crate) fn composer_drafts_restore_json(&self) -> String {
+        let map: BTreeMap<i64, &String> =
+            self.composer_drafts.iter().map(|(k, v)| (*k, v)).collect();
+        serde_json::to_string(&map).unwrap_or_else(|_| "{}".into())
+    }
+
     pub fn has_active_turn(&self) -> bool {
         self.messages.iter().any(|m| is_active(&m.status))
     }
@@ -387,6 +416,8 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
         Message::GroupDeleted(_, id) => {
             state.mark_stale();
             state.groups.retain(|g| g.id != id);
+            // 草稿随群一起清,避免删群后重建同名 id 的群时捞出旧草稿。
+            state.composer_drafts.remove(&id);
             if state.selected == Some(id) {
                 state.selected = None;
             }
@@ -1146,6 +1177,40 @@ mod tests {
         assert!(fx.is_empty(), "空主题不创建群(无副作用)");
         // 主题草稿与已选 agent 都保留,避免误触空提交丢掉用户已做的选择。
         assert_eq!(s.new_group_selected_agents(), &[AgentKind::Claude]);
+    }
+
+    // ---- 输入框草稿(webview → host 同步,切面板后恢复) ----
+
+    #[test]
+    fn composer_draft_set_update_clear_and_rejects() {
+        let mut s = loaded(vec![group(1, "A")]);
+        // 存草稿。
+        s.set_composer_draft(1, "评审一下这个方案");
+        assert_eq!(
+            s.composer_drafts_restore_json(),
+            r#"{"1":"评审一下这个方案"}"#
+        );
+        // 覆盖更新。
+        s.set_composer_draft(1, "第二版");
+        assert_eq!(s.composer_drafts_restore_json(), r#"{"1":"第二版"}"#);
+        // 空白文本 = 清除(与前端"发空清草稿"一致)。
+        s.set_composer_draft(1, "   ");
+        assert_eq!(s.composer_drafts_restore_json(), "{}");
+        // 超长(超过 Post 上限)丢弃,不落 host 副本。
+        let long = "字".repeat(crate::extensions::group_chat::protocol::MAX_POST_CHARS + 1);
+        s.set_composer_draft(1, &long);
+        assert_eq!(s.composer_drafts_restore_json(), "{}");
+        // 群不存在不落(换群后迟到的 set_draft 不许写脏)。
+        s.set_composer_draft(99, "x");
+        assert_eq!(s.composer_drafts_restore_json(), "{}");
+    }
+
+    #[test]
+    fn group_deleted_prunes_composer_draft() {
+        let mut s = loaded(vec![group(1, "A")]);
+        s.set_composer_draft(1, "草稿");
+        update(&mut s, Message::GroupDeleted(7, 1));
+        assert_eq!(s.composer_drafts_restore_json(), "{}");
     }
 
     #[test]
