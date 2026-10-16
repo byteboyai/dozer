@@ -1,0 +1,44 @@
+@startuml
+title Dozer 组件概览
+
+skinparam componentStyle rectangle
+
+actor "用户(甲方)" as User
+
+package "GUI" {
+  [dozer-app\n(iced 0.14)] as App
+  [Panels\n(Files / GitLog / Todo / ...)] as Panels
+}
+
+package "Daemon" as DaemonPackage {
+  [dozerd\n(PTY 池 / 会话)] as Daemon
+}
+
+package "共享库" {
+  [dozer-core] as Core
+  [dozer-model] as Model
+  [dozer-services] as Services
+  [dozer-client] as Client
+}
+
+package "外部 agent" {
+  [Claude / Codex / ...] as Agent
+  [dozer-hook] as Hook
+  [dozer-mcp] as Mcp
+}
+
+User --> App
+App --> Panels
+Panels --> Services : PanelIo.services()
+Services ..> Model
+Client ..|> Services : 生产实现
+App --> Client
+Client --> Daemon : UDS
+Daemon --> Core
+Daemon --> Agent : 启动 / PTY
+Agent --> Hook : hooks
+Hook --> Daemon : UDS
+Agent --> Mcp : stdio
+Mcp --> Client
+
+@enduml

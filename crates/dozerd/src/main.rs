@@ -180,8 +180,7 @@ async fn main() -> Result<()> {
             summary_shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
             r?
         }
-        _ = tokio::signal::ctrl_c() => {
-            dozer_core::log_info!(LOG, "收到 Ctrl-C，退出");
+        _ = shutdown_signal() => {
             apps.shutdown().await;
             summary_shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
             let _ = std::fs::remove_file(&socket);
@@ -189,4 +188,29 @@ async fn main() -> Result<()> {
     }
     let _ = summary_worker.await;
     Ok(())
+}
+
+/// 等到 Ctrl-C(SIGINT)或 SIGTERM。`kill`、launchd 停止、系统关机默认发 SIGTERM;
+/// 不处理它,dozerd 会直接被杀,跳过 `apps.shutdown()`,留下 PPID=1 的孤儿应用进程。
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => tokio::select! {
+                _ = tokio::signal::ctrl_c() => dozer_core::log_info!(LOG, "收到 Ctrl-C，退出"),
+                _ = term.recv() => dozer_core::log_info!(LOG, "收到 SIGTERM，退出"),
+            },
+            Err(e) => {
+                dozer_core::log_warn!(LOG, "无法监听 SIGTERM: {e}");
+                let _ = tokio::signal::ctrl_c().await;
+                dozer_core::log_info!(LOG, "收到 Ctrl-C，退出");
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        dozer_core::log_info!(LOG, "收到 Ctrl-C，退出");
+    }
 }
