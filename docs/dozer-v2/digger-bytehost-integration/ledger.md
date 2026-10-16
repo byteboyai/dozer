@@ -231,6 +231,7 @@
 ## Task 08 — Surface 状态机、原生执行与 Usage 接入
 
 - **状态：** IN_PROGRESS（bytehost 部分 DONE，Dozer 接入部分代码完成、待提交与真实窗口人工确认）
+  > 2026-10-16 备注：此行是 Task 08 当时的快照，没有回写；后续 Task 09–23 已在其上执行（Task 23 DONE）。真实窗口人工确认仍未做，属 `acceptance.md` §3 人工项。
 - **输入 revision：**
   - B `4a8dba0`（Task 07 之上）
   - 计划 §Task 08 `:127-138`；规格 §5.4 `:85-170`、§11 闸门

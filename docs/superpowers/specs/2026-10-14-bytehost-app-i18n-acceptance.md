@@ -10,7 +10,7 @@
 | --- | --- |
 | ✅ bytehost | bytehost 侧证据齐备（单测 / 样例 / 安装夹具） |
 | ✅ Dozer | Dozer 侧证据齐备（单测 / UDS e2e） |
-| ⏳ 待 T7 | 需上游真实 tag + 真实样例冒烟后才能标完成（不靠本地 `[patch]` 联调替代） |
+| ⏳ 待真实环境 | T7 已完成（`v0.3.0` 已发布、Dozer 已切 tag）；仍需真实样例/真实 WebView 冒烟才能标完成（2026-10-16 更新：该冒烟尚未执行） |
 
 ## B01–B12 证据索引
 
@@ -66,6 +66,6 @@
 
 I4 本期完成 = 上游代码/契约/测试 + 已发布 tag + Dozer 适配 + B01–B12 证据。
 
-- 当前状态：bytehost T0–T5 完成（样例 + 安装夹具 + 桥 + 投影 + 解析）；Dozer T6 消费适配完成（本地 `[patch]` 联调，未跑真实样例）。
-- 待 T7 发布真实 tag 后：删除 Dozer `.cargo/config.toml` 联调 patch、统一指向 tag、复跑样例冒烟；届时把 ⏳ 条目中"真实样例/真实 webview/双窗口"证据补齐，再于 T8 写入 `docs/dozer-v2/i18n/bytehost-acceptance.md` 并勾选 I4。
+- 当前状态（2026-10-16 更新）：bytehost T0–T5 完成；Dozer T6 消费适配完成；**T7 完成**（bytehost `v0.3.0` 已发布，Dozer 联调 patch 已删并指向 tag，现为 `v0.4.1`）；**T8 完成**（`docs/dozer-v2/i18n/bytehost-acceptance.md`，dozer `e5d6d585`）。
+- 仍待：把 ⏳ 条目中"真实样例/真实 webview/双窗口"证据补齐（真实样例冒烟尚未执行），补齐后才算 I4 全部完成。
 - 报告明确"现有 Web 应用契约已完成"，不宣称所有未来 V2 Surface 或任意第三方应用已本地化；External/Declarative/完整插件注册系统继续列后续事项。

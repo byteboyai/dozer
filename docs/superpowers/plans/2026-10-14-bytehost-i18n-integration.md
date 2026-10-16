@@ -1,6 +1,6 @@
 # bytehost i18n 上游实现与 Dozer 接入计划
 
-> 日期：2026-10-14。状态：**T0、T1、T2、T3、T4、T5 已完成**（bytehost 侧：清单/资源装载/投影/桥/样例与门禁齐备）；**T6 Dozer 侧消费适配已实现**（本地 `[patch]` 联调，未跑真实样例，待 T7 发布 tag）；T7（上游发布 tag + Dozer 固定 tag）与 T8（I4 交付记录）待上游发布后执行。
+> 日期：2026-10-14。状态：**T0、T1、T2、T3、T4、T5 已完成**（bytehost 侧：清单/资源装载/投影/桥/样例与门禁齐备）；**T6 Dozer 侧消费适配已实现**；**T7 已完成**（bytehost 发布 `v0.3.0`，Dozer 切到 tag、联调 patch 已删，现随依赖升到 `v0.4.1`）；**T8 已完成**（I4 交付记录：`docs/dozer-v2/i18n/bytehost-acceptance.md`，dozer `e5d6d585`，2026-10-15）。**仍未做：** 真实 WebView 里的样例冒烟（`bilingual-live` 热切换、`partial-initial` 重开、双窗口代次隔离等，见验收文档的 ⏳ 项），状态更新于 2026-10-16。
 > 规格：**权威版现位于 bytehost 仓库** [`docs/superpowers/specs/2026-10-14-bytehost-app-i18n.md`](https://github.com/byteboy/bytehost)；Dozer 侧评审稿 `../specs/2026-10-14-bytehost-i18n-integration-design.md` 仅作指针与消费范围，不再作为分叉契约。
 > 本计划展开原 [Dozer i18n Task 14](2026-10-12-dozer-i18n-implementation.md)，内置 UI 已按用户反馈收口，其后续细节修复不作为本计划前置门槛。
 > **T0 产出（在 bytehost）**：基线记录、AppSummary 接缝清单、WebView 注入 spike 结论、版本/locale/限额/bridge 命名决策，见 `bytehost/docs/superpowers/plans/2026-10-14-bytehost-i18n-baseline.md`；旧 scaffold 已降级为指针（`bytehost/.../2026-10-14-bytehost-app-i18n-contract.md`）。

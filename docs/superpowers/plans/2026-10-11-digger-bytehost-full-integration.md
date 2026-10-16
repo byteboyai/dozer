@@ -1,6 +1,6 @@
 # Digger 完整接入 bytehost 实施计划
 
-> 日期：2026-10-11。状态：待实施，所有复选框均表示尚未完成。
+> 日期：2026-10-11。状态（2026-10-16 更新）：**Task 01–23 均已有执行记录**（见 `docs/dozer-v2/digger-bytehost-integration/ledger.md`），但**整体不标"完全接入"**：最终判定 pass 7 · partial 11，硬缺口为 A17（真实 Usage 生产端）与 A18（发布包签名，无 Developer ID 证书，永久阻塞）；复审登记的 #2–#6 归后续计划。本文复选框没有随执行回写，**不要把复选框当进度**，以台账与 `acceptance.md` §4.5 为准。
 > 规格：[完整接入设计](../specs/2026-10-11-digger-bytehost-full-integration-design.md)。
 > 目标：Dozer 与 Digger 同源使用共享桌面宿主；Digger 接通现有应用平台全部约定能力，并实际复用 Usage。
 > 本文是跨仓库主计划，按 Task 执行和记录证据；不是已完成报告。新增文件和接口均为规划，不假定它们已存在。
