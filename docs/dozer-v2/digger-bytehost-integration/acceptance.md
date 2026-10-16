@@ -32,6 +32,8 @@
 
 **既有失败基线（贯穿所有阶段）：** Dozer 边界门禁 `R-HOST-EXECUTORS` 0→1、审计单测 `test_unit_edges.ScanUsage`、dozer-app `extensions::files::tests::delete_confirm_spec_reflects_pending_target`（见 [baseline.md](./baseline.md) §4）。这些为**历史失败**，不计入新增失败；后续每阶段门禁"只降不升"。
 
+> **2026-10-16 更新:** 上述三项历史失败已清零（`delete_confirm_spec…` 已自行转绿；`host_site_citations…` 改为按文件内容核对；`ScanUsage` 跟随 Usage 面板搬到 `dozer-panel-usage`）。`cargo fmt --all --check` 现为 clean。clippy 仍有 33 条 warning（死代码与风格类，未纳入本次），基线数字见 `cargo clippy --workspace --all-targets 2>&1 | grep -c '^warning'`。
+
 ## 2. 兼容桥清单（临时适配器）
 
 删除条件均**可测**（有明确断言或门禁指标）。目标收口 Task：21（通用兼容桥清零）。

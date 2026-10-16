@@ -75,6 +75,8 @@
 | 审计单测 | `python3 -m unittest discover -s scripts/audit -p 'test_*.py'` | **1** | 46 项中 1 项失败：`test_unit_edges.ScanUsage.test_usage_has_no_unclassified_edges`（见 §4.1.2） |
 | dozer-app 单测 | `cargo test -p dozer-app` | **1** | 1 项既有失败：`extensions::files::tests::delete_confirm_spec_reflects_pending_target`（见 §4.1.3） |
 
+> **2026-10-16 更新:** 上表三项历史失败已清零（`delete_confirm_spec…` 已自行转绿；`host_site_citations…` 改为按文件内容核对；`ScanUsage` 跟随 Usage 面板搬到 `dozer-panel-usage`）。`cargo fmt --all --check` 现为 clean。clippy 仍有 33 条 warning（死代码与风格类，未纳入本次），基线数字见 `cargo clippy --workspace --all-targets 2>&1 | grep -c '^warning'`。
+
 #### 4.1.1 面板边界基线（`scripts/audit/panel-boundary.baseline.json`）
 
 已提交基线值（只降不升）：

@@ -2632,7 +2632,7 @@ impl Runner {
                 match view.evaluate_script(&script) {
                     Ok(()) => app.app_views.mark_locale_pushed(slot, generation),
                     Err(e) => {
-                        ::tracing::warn!("i18n locale push failed for {slot:?}: {e}");
+                        dozer_core::log_warn!(LOG, "i18n locale push failed for {slot:?}: {e}");
                     }
                 }
             }
