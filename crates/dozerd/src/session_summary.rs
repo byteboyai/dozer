@@ -13,17 +13,7 @@ fn agent_to_str(a: AgentKind) -> &'static str {
 }
 
 fn agent_from_str(s: &str) -> AgentKind {
-    match s {
-        "claude" => AgentKind::Claude,
-        "codebuddy" => AgentKind::Codebuddy,
-        "opencode" => AgentKind::Opencode,
-        "codex" => AgentKind::Codex,
-        "goose" => AgentKind::Goose,
-        "aider" => AgentKind::Aider,
-        "v8agent" => AgentKind::V8agent,
-        "qodercn" => AgentKind::Qodercn,
-        _ => AgentKind::Unknown,
-    }
+    AgentKind::from_label(s).unwrap_or(AgentKind::Unknown)
 }
 
 fn status_to_str(s: SummaryStatus) -> &'static str {
@@ -234,16 +224,7 @@ mod tests {
     /// 库里存的是 `label()`;读回来必须还是同一个 agent(`_ => Unknown` 的兜底会悄悄吞掉漏写的一家)。
     #[test]
     fn every_agent_survives_the_persisted_string_round_trip() {
-        for agent in [
-            AgentKind::Claude,
-            AgentKind::Codebuddy,
-            AgentKind::Opencode,
-            AgentKind::Codex,
-            AgentKind::Goose,
-            AgentKind::Aider,
-            AgentKind::V8agent,
-            AgentKind::Qodercn,
-        ] {
+        for agent in AgentKind::known() {
             assert_eq!(agent_from_str(agent_to_str(agent)), agent, "{agent:?}");
         }
     }

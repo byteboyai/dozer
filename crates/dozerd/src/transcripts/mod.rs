@@ -62,30 +62,14 @@ fn now_ms() -> u64 {
 
 fn agent_to_str(a: AgentKind) -> &'static str {
     match a {
+        // 历史写法,与 `label()` 的 "shell" 不同,保持以兼容已有库。
         AgentKind::Unknown => "unknown",
-        AgentKind::Claude => "claude",
-        AgentKind::Codebuddy => "codebuddy",
-        AgentKind::Opencode => "opencode",
-        AgentKind::Codex => "codex",
-        AgentKind::Goose => "goose",
-        AgentKind::Aider => "aider",
-        AgentKind::V8agent => "v8agent",
-        AgentKind::Qodercn => "qodercn",
+        other => other.label(),
     }
 }
 
 fn agent_from_str(s: &str) -> AgentKind {
-    match s {
-        "claude" => AgentKind::Claude,
-        "codebuddy" => AgentKind::Codebuddy,
-        "opencode" => AgentKind::Opencode,
-        "codex" => AgentKind::Codex,
-        "goose" => AgentKind::Goose,
-        "aider" => AgentKind::Aider,
-        "v8agent" => AgentKind::V8agent,
-        "qodercn" => AgentKind::Qodercn,
-        _ => AgentKind::Unknown,
-    }
+    AgentKind::from_label(s).unwrap_or(AgentKind::Unknown)
 }
 
 /// `list_conversations_in` 两个查询分支(按 `dir` 的四家 / 按 `cwd` 的 Codex)
@@ -1134,23 +1118,15 @@ impl TranscriptStore {
 mod tests {
     use super::*;
 
+    /// `agent_to_str`/`agent_from_str` 是写入/读回 `conversations.agent_kind` 的编码。
+    /// `Unknown` 在这里历史上写作 "unknown"(不是 `label()` 的 "shell"),必须保持。
     #[test]
-    fn every_agent_round_trips_through_its_persisted_name() {
-        // 会话库里存的是这个字符串;任何一家映射不回来都会读成 Unknown。
-        for agent in [
-            AgentKind::Claude,
-            AgentKind::Codebuddy,
-            AgentKind::Opencode,
-            AgentKind::Codex,
-            AgentKind::Goose,
-            AgentKind::Aider,
-            AgentKind::V8agent,
-            AgentKind::Qodercn,
-        ] {
-            assert_eq!(agent_from_str(agent_to_str(agent)), agent, "{agent:?}");
+    fn agent_str_round_trips_every_agent_and_keeps_unknown_spelling() {
+        for a in AgentKind::ALL {
+            assert_eq!(agent_from_str(agent_to_str(a)), a, "{a:?}");
         }
-        assert_eq!(agent_to_str(AgentKind::Qodercn), "qodercn");
-        assert_eq!(agent_from_str("qodercn"), AgentKind::Qodercn);
+        assert_eq!(agent_to_str(AgentKind::Unknown), "unknown");
+        assert_eq!(agent_from_str("something-new"), AgentKind::Unknown);
     }
 
     /// qodercn 每个 hook 事件都带 transcript_path,会走到 `ingest_session`。L1 没有它的解析器:
