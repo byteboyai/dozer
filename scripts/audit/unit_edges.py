@@ -21,6 +21,7 @@ INTERNAL = {
     ("app", "PanelKind"): "B",
     ("workspace", "agent_icon"): "B",
     ("workspace", "agent_dot_color"): "B",
+    ("host_adapters", "usage_panel"): "A",
     ("conversation", "ConversationMeta"): "C",
 }
 EXTERNAL = {"dozer_core": "C", "dozer_model": "C", "dozer_client": "S", "bytegit": "S", "byteui": "B"}

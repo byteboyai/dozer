@@ -31,9 +31,10 @@ class ScanUsage(unittest.TestCase):
         self.assertTrue(rows, "ext:usage 应至少有一条依赖边")
         self.assertEqual([r for r in rows if r[0] == "?"], [])
 
-    def test_usage_depends_on_workspace_helpers(self):
+    def test_usage_depends_only_on_its_host_adapter(self):
+        # Usage 面板已搬到 dozer-panel-usage;dozer-app 内只剩 host 适配层一条边。
         mods = {(r[1], r[2]) for r in unit_edges.scan("ext:usage")}
-        self.assertIn(("workspace", "agent_icon"), mods)
+        self.assertIn(("host_adapters", "usage_panel"), mods)
 
 
 if __name__ == "__main__":
