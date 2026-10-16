@@ -70,3 +70,26 @@
 另一个相关发现:`byteui` 的语义色已被 8 家 agent 用完(`ignored` 与 `dim` 数值相同)。qodercn 目前用 `red`,有"像错误色"的歧义;根治需要 byteui 增加 agent 专用色并发版。
 
 L1 之外未做(各需单独验证):transcript 解析与用量/会话历史(需要真实对话样本)、headless 调用与总结 provider(需核实 `-p`/只读权限)、前端里的 agent 映射(`usage-content`、`review-trace`)。
+
+## 8. 跟进:AgentKind 表化第一刀(2026-10-16,分支 `feat/v2-hygiene`)
+
+第 5 节建议的"第一刀"落了第一步,只做**身份/档案 + 路径配置**这一层,不碰解析器/hook/headless/PTY:
+
+- `dozer-model/src/agent.rs` 新增 `AgentKind::ALL`(`[AgentKind; 9]`)、`known()` 迭代器、
+  `from_label()`;测试里的 `variant_index` 用无通配 `match` 强制"新增变体即编译失败"。
+- `dozer-core/src/agent_paths.rs` 新增 `projects_root_in()` / `project_session_dir_in()`(无通配,
+  新变体必须表态),`dozerd/src/transcripts/scan.rs` 与 `transcripts/mod.rs` 的目录枚举改为表驱动,
+  删掉 `AGENT_ROOTS`。**这顺带修掉一个 bug**:v8agent 的删除路径原先漏在表外(见下)。
+- `workspace/view.rs::agent_picker_spec()` 的 8 项硬编码菜单改为从 `AgentKind::known()` 派生
+  (按展示名字母序),新 agent 自动出现。
+- `session_summary.rs` / `summary_jobs.rs` 的手写 `agent_from_str` 收敛为
+  `AgentKind::from_label(...).unwrap_or(Unknown)`,靠已有往返测试钉住。
+
+**量出来的结果:接入新 agent 的"档案 + 路径"部分从手写 22 处降到填表 + 少量不可避免的 UI
+分支。** 剩下的非通配 `match`(颜色/图标/启动命令/hook/headless/解析器)按 §1 的清单逐处表态,
+编译器会一条条报出来。
+
+**清单文档:** 接新 agent 时逐条对照 [`adding-an-agent.md`](./adding-an-agent.md)——它把"编译器
+抓得到的点位、抓不到的 `_ =>`/前端字符串映射、持久化名不可改、门禁"都固化下来。
+
+**仍未解决(维持 §6):** §6 的 Q15-1/Q15-2/Q15-3 裁决未变;`byteui` agent 专用色仍未加。
