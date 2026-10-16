@@ -112,7 +112,7 @@ commit_count_by_day(&self) -> Result<BTreeMap<i64, u64>, GitError>            //
 churn(&self, since: SystemTime) -> Result<HashMap<PathBuf, u32>, GitError>    // P3;现 recent_churn
 ```
 
-- `LogOptions` 用 `LogOptions::new(n).path(p)` 构造,`#[non_exhaustive]`;**没有 `since`**:P3 的三个使用者要的是 `churn(since)`、提交计数与按日分桶,没有 `log` + `since` 的使用者(YAGNI;需要时再加)。`path` 按 pathspec 解释(通配符有效、无 `--follow`),见 §8 O11。
+- `LogOptions` 用 `LogOptions::new(n).path(p)` 构造,`#[non_exhaustive]`;**没有 `since`**:P3 的三个使用者要的是 `churn(since)`、提交计数与按日分桶,没有 `log` + `since` 的使用者(YAGNI;需要时再加)。`path` 按字面路径匹配(`v0.8.1` 起,通配符无效;目录前缀仍匹配其下文件;无 `--follow`),见 §8 O11。
 - `CommitSummary.time` 是**提交者时间**(committer time,`git log --format=%ct`),不是作者时间(迁移前 `git_log`/`file_history` 的注释写 "author time",实际取的也是 `commit.time()`,即提交者时间)。
 - `FileChange`: `commit_files` **不做改名检测**,所以 `old_path` 目前恒为 `None`;合并提交相对第一父,根提交相对空树。
 - `Content` 是 `enum { Text(String), TooLarge{bytes}, Binary, NotUtf8, NotAFile }`(最后一项 = 路径是目录/子模块),**吸收现在 `git_log::classify_diff_bytes` 与 `DiffBlobContent`**,`git_log` 与 `file_history` 共用同一套截断阈值(`ContentLimits`),不再靠注释对齐。`ContentPair { old: Option<Content>, new: Option<Content> }`(`None` = 该侧没有这个文件)。判定顺序:先大小(恰好等于上限不算超)→ NUL → UTF-8。
@@ -233,7 +233,7 @@ TempRepo::new()                         // 临时目录 + git init，固定作�
 
 - **D14（状态类已完成；历史类未做）：统一“只认仓库根 vs 向上查找”。** 状态类已改：`project_git_snapshot`、`load_branch_picker_data` 的改动、`git_snapshot`/`head_short_sha`、`files::git_status::file_statuses` 全部向上查找（`file_statuses` 只含项目目录之内的路径，键按项目路径拼；“是否有改动”是整个仓库的，不只项目子树）。历史类（`file_history`/`git_log`/`diff_content`）仍是 `open_exact`，待做。原建议： 建议：状态类查询（`project_git_snapshot` 的分支/改动/文件状态、`load_branch_picker_data` 的改动、`git_snapshot`）改成向上查找，文件状态的键仍按项目路径拼，这是安全的改动；**历史类**（`file_history`/`git_log` 的 `file_path` 是相对项目根的，而 pathspec 相对仓库根）统一需要先把 `file_path` 换算成相对仓库根，是单独的、有风险的改动。P6 完成后做这件事就是“逐个调用点把 `Repo::open_exact` 换成 `Repo::discover`”，bytegit 与 API 都不用动。
 | O10 | 同一子目录项目下 `git_hotspots::dirty_paths`（相对仓库根）与 `recent_churn`（`--relative`，相对项目根）路径口径不同 | **P3 已完成**：bytegit 的路径一律相对仓库根（`status` 与 `churn` 一致）；`recent_churn` 的适配层再转成相对项目根（`dirty_paths` 仍相对仓库根，与迁移前一致） |
-| O11 | `log`/`file_history` 的 `path` 按 pathspec 解释：文件名含 `[`、`*` 时会混入别的文件的提交（`build_treats_glob_characters_in_the_file_name_as_a_pathspec_known_quirk` 已固化该行为） | 待用户裁决；刻画测试已固定现状，修不修都先不擅自改 |
+| O11 | `log`/`file_history` 的 `path` 原按 pathspec 解释：文件名含 `[`、`*` 时会混入别的文件的提交 | **v0.8.1 已修**：`log` 与 `workdir_patch` 改为字面匹配（`disable_pathspec_match`）；目录前缀仍匹配其下文件。dozer 的刻画测试已翻转 |
 | O12 | P2 中三处错误文案由英文原文改为中文（`该历史版本对应的不是一个文件` 等） | 记录为已知的用户可见文案变化；若需要保持英文另议 |
 | O13 | `churn` 对"HEAD 提交过旧而更深处有近期提交"（提交时间戳不单调，rebase/cherry-pick 保留旧提交日期时可能出现）的结果比迁移前的 `git log --since` 多 | 有意差异：`churn` 对提交时间做全局排序，更符合"近 30 天"的字面含义。迁移前行为已由 Task 3 的刻画测试固定，Task 6 翻转。若要逐字保持旧行为需在 `churn` 里模仿 git"遇到第一个过旧提交就停"并放弃全局排序 |
 | O14 | `churn` 在超大仓库上比命令行 `git log --since` 慢：libgit2 的时间排序遍历会先解析整段可达历史再产出，而 git 借助提交图可提前结束 | 与 O5 同类，不在迁移中优化；另立项 |

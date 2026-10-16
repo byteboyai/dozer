@@ -1061,10 +1061,10 @@ mod tests {
         git(repo, &["commit", "-qm", msg]);
     }
 
-    /// 刻画测试:`build` 把文件名当 pathspec,`[`、`*` 是通配符,所以 `a[1].txt` 的历史里会
-    /// 混进 `a1.txt` 的提交。这是迁移前就有的怪癖,迁移保持原样(见 P2 计划"待决事项" D3)。
+    /// O11:文件名按字面匹配,`[`、`*` 不是通配符,`a[1].txt` 的历史里不会混进 `a1.txt` 的提交
+    /// (bytegit v0.8.1;迁移前是 pathspec 通配的怪癖)。
     #[test]
-    fn build_treats_glob_characters_in_the_file_name_as_a_pathspec_known_quirk() {
+    fn build_treats_glob_characters_in_the_file_name_literally() {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().to_path_buf();
         git(&repo, &["init", "-q"]);
@@ -1079,7 +1079,7 @@ mod tests {
                 .collect()
         };
         assert_eq!(summaries("a1.txt"), vec!["a1"]);
-        assert_eq!(summaries("a[1].txt"), vec!["a1", "literal bracket"]);
+        assert_eq!(summaries("a[1].txt"), vec!["literal bracket"]);
     }
 
     #[test]
