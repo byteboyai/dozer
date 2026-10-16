@@ -1,6 +1,6 @@
 # bytegit 设计规格
 
-> 状态：**草案，待用户审阅**。日期：2026-10-02。
+> 状态：**P0–P6 迁移已完成**（`v0.7.0`）；`v0.8.0` 补了 O3/O15/O16，D14（状态类）已统一。日期：2026-10-02。
 > 依据：`docs/dozer-v2/dozer-v2-面板独立性与服务化要求.md`（§2.5、§2.6）、`docs/dozer-v2/bytegit-调用点盘点.md`（B1–B6 已按盘点文档的倾向裁决）。
 > 本规格只定义 `bytegit` 本身与迁移顺序，不含事件总线、面板注册制的设计（见要求文档 Q8、Q9）。
 
@@ -211,7 +211,7 @@ TempRepo::new()                         // 临时目录 + git init，固定作�
 |---|------|------|
 | O1 | §4.3 口径（untracked/ignored、`discover` vs `open`）现状不一致，且未读对应测试 | **P1 已完成**：`is_dirty` 含未跟踪、不含被忽略；`file_statuses` 含未跟踪与被忽略；`current_branch_has_commits` 在 detached HEAD 为 `true`。结论写入 §4.3 |
 | O2 | 写操作 `git2` 化的可行性（`clone` 认证/进度、`checkout` 冲突） | **P5 已完成**：`init` 用 `git2`；`clone`/`checkout_branch` 留命令行（本构建 libgit2 无 https/ssh；不执行 hook 与外部过滤器；报错信息退化）。结论见 §4.6，评估存档 `docs/superpowers/specs/2026-10-03-bytegit-write-ops-evaluation.md` |
-| O3 | `.git` 为文件（worktree/子模块）的监听与读取 | v0.1 不强求，API 留位；v2 引入 worktree 时必须解决。**P4 实测**：`bytegit::watch` 只监听 `root` 目录树，linked worktree 的真实 gitdir 在树外，`refs_changed` 收不到；`.git` 文件本身的变化也被丢弃（其 mtime 变化落到根路径）。 |
+| O3 | `.git` 为文件（worktree/子模块）的监听与读取 | **v0.8.0 已完成**：`watch` 启动时解析 `.git` 文件，一并监听真实 gitdir 的 `HEAD`/`index`/`refs/*`，以及 linked worktree 经 `commondir` 指回的主仓库 `packed-refs`/`refs/*`。限制：只在启动时解析一次，`.git` 文件被改指别处不会重新接线；`.git` 文件本身的变化不上报 |
 | O4 | `git2`（libgit2）与命令行 git 在边角行为上的差异（如大仓库 `status` 性能、`.gitattributes`/filter、submodule、sparse checkout） | P1 用并行比对测试覆盖现有用法；P2 的实际情况是并行比对用刻画测试代替（同一批测试在旧/新实现都通过），libgit2 与命令行 git 在 P2 覆盖的用法上未发现差异；未覆盖的差异记为已知限制 |
 | O5 | 大仓库性能：`log` 的 `max_count`、`churn` 的全历史扫描，`usage` 的全量 revwalk | 保持现有上限与调用方式，不在迁移中优化；另立项。P3 的 `commit_count*`、`churn` 沿用全历史扫描口径，未优化（见 O14） |
 | O6 | 25 处 `delivery::*` 调用方的逐个核对只做了数量统计 | **P1 已完成核对**（保留为签名不变的适配层）。**P6 已完成拆除**：25 个调用点逐个迁移到直接调 `bytegit`，`delivery.rs` 删除，`dozer-app` 不再直接依赖 `git2`。 |
@@ -225,17 +225,17 @@ TempRepo::new()                         // 临时目录 + git init，固定作�
 
 | 构造函数 | 调用点（含它取的字段） |
 |---|---|
-| `Repo::open_exact`（只认仓库根；项目在仓库子目录里时拿不到） | `workspace::project_git_snapshot` 的分支/是否有改动/文件状态；`git_log::load_branch_picker_data` 的“是否有改动”；`git_hotspots::git_snapshot` 的分支/是否有改动、`head_short_sha`；`file_history`/`git_log`/`diff_content` 的历史、blob、工作区内容、回滚、上一版本（经 `diff_content::open_exact_repo`）；`files::git_status::file_statuses` |
+| `Repo::open_exact`（只认仓库根；项目在仓库子目录里时拿不到） | （D14 后状态类已迁到 `discover`/`discover_workdir`，仅余历史类）`file_history`/`git_log`/`diff_content` 的历史、blob、工作区内容、回滚、上一版本（经 `diff_content::open_exact_repo`） |
 | `Repo::discover`（向上查找） | `workspace::project_git_snapshot` 的 remote URL；`git_log::load_branch_picker_data` 的分支列表；`checkout_branch` 的两个调用点；`usage` 的提交计数（P3）；`recent_churn`（P3）；`dozerd` 项目更新时间（P3） |
 | `Repo::discover_workdir`（目录、非 bare、向上查找） | `workspace::workspace_git_info`；`files::load_git_info`；`git_hotspots::git_snapshot` 的“是否在仓库里”判断；首页最近文件（`homespace::load_home_recents`） |
 
 同一个“项目在仓库子目录里”的场景，在不同面板里表现不同（分支栏有分支，Project 面板没有分支、Git Log 的“有改动”恒为否但分支列表是全的……）。**这是迁移前就有的不一致**，P6 用刻画测试把它钉住。
 
-- **D14（请用户决定是否排期）：统一“只认仓库根 vs 向上查找”。** 建议：状态类查询（`project_git_snapshot` 的分支/改动/文件状态、`load_branch_picker_data` 的改动、`git_snapshot`）改成向上查找，文件状态的键仍按项目路径拼，这是安全的改动；**历史类**（`file_history`/`git_log` 的 `file_path` 是相对项目根的，而 pathspec 相对仓库根）统一需要先把 `file_path` 换算成相对仓库根，是单独的、有风险的改动。P6 完成后做这件事就是“逐个调用点把 `Repo::open_exact` 换成 `Repo::discover`”，bytegit 与 API 都不用动。
+- **D14（状态类已完成；历史类未做）：统一“只认仓库根 vs 向上查找”。** 状态类已改：`project_git_snapshot`、`load_branch_picker_data` 的改动、`git_snapshot`/`head_short_sha`、`files::git_status::file_statuses` 全部向上查找（`file_statuses` 只含项目目录之内的路径，键按项目路径拼；“是否有改动”是整个仓库的，不只项目子树）。历史类（`file_history`/`git_log`/`diff_content`）仍是 `open_exact`，待做。原建议： 建议：状态类查询（`project_git_snapshot` 的分支/改动/文件状态、`load_branch_picker_data` 的改动、`git_snapshot`）改成向上查找，文件状态的键仍按项目路径拼，这是安全的改动；**历史类**（`file_history`/`git_log` 的 `file_path` 是相对项目根的，而 pathspec 相对仓库根）统一需要先把 `file_path` 换算成相对仓库根，是单独的、有风险的改动。P6 完成后做这件事就是“逐个调用点把 `Repo::open_exact` 换成 `Repo::discover`”，bytegit 与 API 都不用动。
 | O10 | 同一子目录项目下 `git_hotspots::dirty_paths`（相对仓库根）与 `recent_churn`（`--relative`，相对项目根）路径口径不同 | **P3 已完成**：bytegit 的路径一律相对仓库根（`status` 与 `churn` 一致）；`recent_churn` 的适配层再转成相对项目根（`dirty_paths` 仍相对仓库根，与迁移前一致） |
 | O11 | `log`/`file_history` 的 `path` 按 pathspec 解释：文件名含 `[`、`*` 时会混入别的文件的提交（`build_treats_glob_characters_in_the_file_name_as_a_pathspec_known_quirk` 已固化该行为） | 待用户裁决；刻画测试已固定现状，修不修都先不擅自改 |
 | O12 | P2 中三处错误文案由英文原文改为中文（`该历史版本对应的不是一个文件` 等） | 记录为已知的用户可见文案变化；若需要保持英文另议 |
 | O13 | `churn` 对"HEAD 提交过旧而更深处有近期提交"（提交时间戳不单调，rebase/cherry-pick 保留旧提交日期时可能出现）的结果比迁移前的 `git log --since` 多 | 有意差异：`churn` 对提交时间做全局排序，更符合"近 30 天"的字面含义。迁移前行为已由 Task 3 的刻画测试固定，Task 6 翻转。若要逐字保持旧行为需在 `churn` 里模仿 git"遇到第一个过旧提交就停"并放弃全局排序 |
 | O14 | `churn` 在超大仓库上比命令行 `git log --since` 慢：libgit2 的时间排序遍历会先解析整段可达历史再产出，而 git 借助提交图可提前结束 | 与 O5 同类，不在迁移中优化；另立项 |
-| O15 | `watch` 与迁移前一样**不过滤 notify 的事件种类**：macOS 的 FSEvents 只报修改类事件，但 Linux 的 inotify 后端会报「文件被打开/读取」这类 Access 事件，届时 dozer 自己读文件（如 `git status`）可能反过来触发刷新。 | 非 macOS 平台从未实际编译过（见 `CLAUDE.md`），发布前处理；`bytegit::watch` 的 API 不需变，加事件种类过滤即可。 |
-| O16 | P5 写操作迁移前就有的三个怪癖：① `git checkout <name>` 分支名与同名文件并存时报歧义、`-` 开头被当选项；② `clone` 从终端启动 dozer 时 git 可能在终端提示凭据、GUI 任务一直等；③ `init` 不再生成 14 个 `.sample` 示例 hook（只一个 `README.sample`） | **保持原样**（迁移前就有，非迁移引入）；要修另提：① 拒绝 `-` 开头或加 `--`；② 设 `GIT_TERMINAL_PROMPT=0`；③ 纯外观差异 |
+| O15 | `watch` 与迁移前一样**不过滤 notify 的事件种类**：macOS 的 FSEvents 只报修改类事件，但 Linux 的 inotify 后端会报「文件被打开/读取」这类 Access 事件，届时 dozer 自己读文件（如 `git status`）可能反过来触发刷新。 | **v0.8.0 已完成**：回调里直接丢弃 `notify::EventKind::Access` |
+| O16 | P5 写操作迁移前就有的三个怪癖：① `git checkout <name>` 分支名与同名文件并存时报歧义、`-` 开头被当选项；② `clone` 从终端启动 dozer 时 git 可能在终端提示凭据、GUI 任务一直等；③ `init` 不再生成 14 个 `.sample` 示例 hook（只一个 `README.sample`） | **v0.8.0 已修 ①②**：`checkout_branch` 拒绝 `-` 开头的名字并加 `--`（分支与同名文件并存不再歧义）；`git` 子进程设 `GIT_TERMINAL_PROMPT=0`（clone 不再卡在看不见的凭据提示）。③ `init` 少 `.sample` hook 仍是纯外观差异，保持原样 |

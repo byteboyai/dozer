@@ -849,13 +849,13 @@ pub fn commit_detail(repo_path: &Path, oid: CommitId) -> Result<CommitDetail, St
 
 /// 分支选择器要的数据:`(本地分支名升序, 工作区是否有改动)`。
 ///
-/// **注意口径不一致(迁移前就如此,保持原样):** 分支列表向上查找(`repo_path` 在仓库子目录里
-/// 也能取到),"是否有改动"只认仓库根(子目录里恒为 `false`)。不在仓库里为 `(空, false)`。
+/// 都向上查找(`repo_path` 在仓库子目录里也行),"是否有改动"是整个仓库的。
+/// 不在仓库里为 `(空, false)`。
 pub(crate) fn load_branch_picker_data(repo_path: &Path) -> (Vec<String>, bool) {
     let branches = Repo::discover(repo_path)
         .and_then(|repo| repo.local_branches())
         .unwrap_or_default();
-    let dirty = Repo::open_exact(repo_path)
+    let dirty = Repo::discover_workdir(repo_path)
         .and_then(|repo| repo.is_dirty(StatusOptions::default()))
         .unwrap_or(false);
     (branches, dirty)
@@ -3285,16 +3285,16 @@ mod tests {
         assert_eq!(load_branch_picker_data(t.path()), (branches, true));
     }
 
-    /// 口径不一致(迁移前就如此):子目录里分支列表能取到,"是否有改动"恒为 false。
+    /// D14:子目录里分支列表与"是否有改动"都向上查找。
     #[test]
-    fn branch_picker_data_in_a_repo_subdirectory_finds_branches_but_never_dirtiness() {
+    fn branch_picker_data_in_a_repo_subdirectory_looks_upward_for_dirtiness() {
         use bytegit::testutil::TempRepo;
         let t = TempRepo::new();
         t.commit_file("sub/a.txt", "x\n", "one");
         t.write_untracked("new.txt", "y");
         assert_eq!(
             load_branch_picker_data(&t.path().join("sub")),
-            (vec!["main".to_string()], false)
+            (vec!["main".to_string()], true)
         );
     }
 }

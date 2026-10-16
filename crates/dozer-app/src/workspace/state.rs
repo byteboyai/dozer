@@ -3159,8 +3159,8 @@ pub(crate) fn workspace_git_info(cwd: &Path) -> Option<WorkspaceGitInfo> {
 
 /// 项目的 git 快照:`(当前分支, 是否有改动, 文件级状态, 全部 remote 的 URL)`。
 ///
-/// **注意口径不一致(迁移前就如此,保持原样):** 分支、改动、文件状态只认仓库根——项目目录
-/// 在仓库子目录里时它们是 `None`/`false`/空;而 remote URL 向上查找,子目录里照样能取到。
+/// 全部向上查找:项目目录在仓库子目录里时,分支/remote 取整个仓库的,"是否有改动"是整个仓库
+/// 的(不只项目子树),文件状态只含项目目录之内的路径(规格 O9 / D14)。
 pub(crate) fn project_git_snapshot(
     repo_path: &Path,
 ) -> (
@@ -3169,7 +3169,7 @@ pub(crate) fn project_git_snapshot(
     HashMap<PathBuf, files::git_status::FileGitStatus>,
     Vec<String>,
 ) {
-    let exact = bytegit::Repo::open_exact(repo_path).ok();
+    let exact = bytegit::Repo::discover_workdir(repo_path).ok();
     let branch = exact
         .as_ref()
         .and_then(|repo| repo.head().ok())
@@ -3366,17 +3366,23 @@ mod git_snapshot_tests {
         );
     }
 
-    /// 口径不一致(迁移前就如此):项目在仓库子目录里时,分支/改动/文件状态按"不是仓库"处理,
-    /// remote URL 却能向上找到。是否统一是规格 O9 的待决事项,迁移保持原样。
+    /// D14:项目在仓库子目录里时,分支/改动/文件状态/remote 都向上查找;文件状态只含项目之内
+    /// 的路径,键按项目路径拼。
     #[test]
-    fn project_git_snapshot_in_a_repo_subdirectory_only_finds_remotes() {
+    fn project_git_snapshot_in_a_repo_subdirectory_looks_upward() {
         let t = TempRepo::new();
         t.commit_file("sub/a.txt", "x\n", "one");
         t.add_remote("origin", "https://example.com/x.git");
         t.write_untracked("new.txt", "y");
-        let (branch, dirty, statuses, remotes) = project_git_snapshot(&t.path().join("sub"));
-        assert_eq!((branch, dirty), (None, false));
-        assert!(statuses.is_empty());
+        t.write_untracked("sub/inner.txt", "z");
+        let sub = t.path().join("sub");
+        let (branch, dirty, statuses, remotes) = project_git_snapshot(&sub);
+        assert_eq!((branch.as_deref(), dirty), (Some("main"), true));
+        // 仓库根的 new.txt 在项目之外,不出现;项目内的 inner.txt 以项目路径为键。
+        assert_eq!(
+            statuses.keys().collect::<Vec<_>>(),
+            vec![&sub.join("inner.txt")]
+        );
         assert_eq!(remotes, vec!["https://example.com/x.git".to_string()]);
     }
 }

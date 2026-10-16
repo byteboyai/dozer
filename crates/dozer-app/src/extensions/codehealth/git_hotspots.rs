@@ -13,18 +13,11 @@ use std::path::Path;
 /// 采集当前 Git 元数据。非 git 目录返回 `None`（detached HEAD 时 `head` 有值、
 /// `branch` 为 `None`，仍返回 `Some`）。
 pub fn git_snapshot(project_root: &Path) -> Option<GitSnapshot> {
-    // 先确认在某个仓库里(向上查找),分支/改动再按"项目路径就是仓库根"取——项目在仓库子目录
-    // 时它们是 `None`/`false`(迁移前就如此,保持原样)。
-    Repo::discover_workdir(project_root).ok()?;
+    // 向上查找:项目在仓库子目录时,HEAD/分支/改动取整个仓库的(规格 O9 / D14)。
+    let repo = Repo::discover_workdir(project_root).ok()?;
     let head = head_short_sha(project_root);
-    let exact = Repo::open_exact(project_root).ok();
-    let branch = exact
-        .as_ref()
-        .and_then(|repo| repo.head().ok())
-        .and_then(|head| head.branch);
-    let dirty = exact
-        .as_ref()
-        .is_some_and(|repo| repo.is_dirty(StatusOptions::default()).unwrap_or(false));
+    let branch = repo.head().ok().and_then(|head| head.branch);
+    let dirty = repo.is_dirty(StatusOptions::default()).unwrap_or(false);
     Some(GitSnapshot {
         head,
         branch,
@@ -32,9 +25,9 @@ pub fn git_snapshot(project_root: &Path) -> Option<GitSnapshot> {
     })
 }
 
-/// HEAD 提交的前 7 位。和迁移前一致只认仓库根(见 `Repo::open_exact`)。
+/// HEAD 提交的前 7 位。向上查找仓库。
 fn head_short_sha(dir: &Path) -> Option<String> {
-    let commit = Repo::open_exact(dir).ok()?.head().ok()?.commit?;
+    let commit = Repo::discover_workdir(dir).ok()?.head().ok()?.commit?;
     Some(commit.short(7))
 }
 
@@ -520,15 +513,15 @@ mod tests {
     }
 
     #[test]
-    fn head_short_sha_is_seven_chars_at_the_root_and_none_elsewhere() {
+    fn head_short_sha_is_seven_chars_and_looks_upward() {
         let dir = repo_with_two_files();
         let r = dir.path();
         let sha = head_short_sha(r).expect("有提交应有 sha");
         assert_eq!(sha.len(), 7);
         assert!(sha.chars().all(|c| c.is_ascii_hexdigit()));
-        // 只认仓库根:子目录、空仓库、非 git 目录都是 None
+        // 向上查找:子目录取到同一个 sha;空仓库、非 git 目录是 None
         std::fs::create_dir(r.join("pkg")).unwrap();
-        assert_eq!(head_short_sha(&r.join("pkg")), None);
+        assert_eq!(head_short_sha(&r.join("pkg")), Some(sha));
         let empty = tempfile::tempdir().unwrap();
         run_git(empty.path(), &["init", "-q"]);
         assert_eq!(head_short_sha(empty.path()), None);

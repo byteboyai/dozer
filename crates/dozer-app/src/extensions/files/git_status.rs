@@ -29,13 +29,27 @@ pub struct FileGitStatus {
     pub ignored: bool,
 }
 
-/// 取整个仓库的文件级状态(含未跟踪与被忽略)。`repo` 必须是仓库根(见 `bytegit::Repo::open_exact`);
-/// 非 git / 打开失败返回空。键是 `repo.join(相对路径)`。
-pub fn file_statuses(repo: &Path) -> HashMap<PathBuf, FileGitStatus> {
+/// 项目目录相对仓库根的前缀(项目就是仓库根时为空)。`project` 不存在或不在仓库工作区内时 `None`。
+///
+/// `repo.root()` 是 libgit2 解析后的真实路径(macOS 上 `/var/...` 会变成 `/private/var/...`),
+/// 所以先规范化项目路径再求前缀。
+pub(crate) fn project_prefix(repo: &Repo, project: &Path) -> Option<PathBuf> {
+    let canon = project.canonicalize().ok()?;
+    Some(canon.strip_prefix(repo.root()).ok()?.to_path_buf())
+}
+
+/// 取项目所在仓库的文件级状态(含未跟踪与被忽略),只含项目目录之内的路径。`project` 在仓库
+/// 子目录里也行(向上查找仓库)。非 git / 打开失败返回空。键是 `project.join(相对项目的路径)`,
+/// 与文件树里的路径同口径。
+pub fn file_statuses(project: &Path) -> HashMap<PathBuf, FileGitStatus> {
     let mut map = HashMap::new();
-    let Ok(git_repo) = Repo::open_exact(repo) else {
+    let Ok(git_repo) = Repo::discover(project) else {
         return map;
     };
+    let Some(prefix) = project_prefix(&git_repo, project) else {
+        return map;
+    };
+    let repo = project;
     let opts = StatusOptions {
         include_untracked: true,
         include_ignored: true,
@@ -45,10 +59,14 @@ pub fn file_statuses(repo: &Path) -> HashMap<PathBuf, FileGitStatus> {
         return map;
     };
     for entry in entries {
+        // bytegit 的路径相对仓库根;项目在子目录时换成相对项目,仓库里项目之外的路径丢弃。
+        let Ok(rel) = entry.path.strip_prefix(&prefix) else {
+            continue;
+        };
         let st = entry.state;
         if st.ignored {
             map.insert(
-                repo.join(&entry.path),
+                repo.join(rel),
                 FileGitStatus {
                     kind: ChangeKind::Modified,
                     staged: false,
@@ -72,7 +90,7 @@ pub fn file_statuses(repo: &Path) -> HashMap<PathBuf, FileGitStatus> {
             ChangeKind::Modified
         };
         map.insert(
-            repo.join(&entry.path),
+            repo.join(rel),
             FileGitStatus {
                 kind,
                 staged,
