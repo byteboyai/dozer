@@ -9,7 +9,7 @@ edition.workspace = true
 dozer-model = { path = "../dozer-model" }
 dozer-services = { path = "../dozer-services" }
 anyhow.workspace = true
-bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.7.0" }
+bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.8.0" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 [dev-dependencies]

@@ -39,7 +39,7 @@ dozer-hook = { path = "../dozer-hook" }
 # 新建 agent 会话时静默注册对应 CLI 的 dozer-mcp（第一个写工具 2026-08-27）。
 dozer-mcp = { path = "../dozer-mcp" }
 byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.4" }
-bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.7.0", features = ["watch"] }
+bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.8.0", features = ["watch"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
@@ -111,7 +111,7 @@ csv = "1"
 tracing-subscriber.workspace = true
 tempfile = "3"
 # 面板单元测试用 `TempRepo` 造真实仓库。
-bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.7.0", features = ["testutil"] }
+bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.8.0", features = ["testutil"] }
 
 # macOS 原生右键菜单(`native_menu`)在运行时把内嵌 Lucide SVG 栅格化成
 # PNG 包成 NSImage,依赖 resvg/usvg/tiny-skia。三个 crate 已经是 iced_wgpu
