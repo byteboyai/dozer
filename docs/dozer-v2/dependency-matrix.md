@@ -17,7 +17,7 @@
 ## 2. 规则
 
 1. **同日一起升:** 升级 bytehost / byteui 时,dozer 与 digger 必须在同一天一起升级。否则 digger 会解析出两份 `PanelId`(类型互不兼容)或让 byteui 的全局主题状态分裂(用量面板的主题会错)。
-2. **门禁:** dozer 侧 `scripts/check-shared-pins.sh`(单一 tag 门禁,支持 `--self-test`)与 digger 侧 `scripts/check-host-deps.sh`(共享宿主去重门禁)是硬门禁,CI/提交前都要跑。
+2. **门禁:** dozer 侧 `scripts/check-shared-deps.sh`(共享库依赖守卫:本地 patch / lock 指向本地 / 远端 tag 缺失 / 多份版本 / 落后提示;pre-push 钩子需 `git config core.hooksPath .githooks` 启用)与 digger 侧 `scripts/check-host-deps.sh`(共享宿主去重门禁)是硬门禁,CI/提交前都要跑。
 3. **本地 patch 只用于联调,不提交:** dozer 的 `.cargo/config.toml` 里 `[patch.".../byteui"]` / `[patch.".../bytegit"]` 只用于本地联调,不提交;digger 已删除全部 `[patch]` 段,不再保留任何本地路径 patch。
 
 ## 3. 单一副本校验
@@ -30,4 +30,4 @@ cargo tree -p <root-crate> -i bytehost-core   # 期望只有一行
 cargo tree -p <root-crate> -i dozer-model     # 期望只有一行
 ```
 
-dozer 侧等价门禁:`bash scripts/check-shared-pins.sh`;digger 侧:`bash scripts/check-host-deps.sh`。
+dozer 侧等价门禁:`bash scripts/check-shared-deps.sh --rev HEAD`;digger 侧:`bash scripts/check-host-deps.sh`。
