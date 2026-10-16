@@ -1837,14 +1837,44 @@ mod tests {
         );
     }
 
+    /// tempdir 里造一个带真实 merge 提交的仓库(`--no-ff` 合并侧分支),
+    /// 不依赖 dozer 自己的历史形状。返回 (tempdir, 仓库路径)。
+    fn mkrepo_with_merge() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .unwrap();
+            assert!(st.status.success(), "git {args:?}: {st:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "root"]);
+        git(&["checkout", "-qb", "side"]);
+        std::fs::write(repo.join("b.txt"), "side\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "side work"]);
+        git(&["checkout", "-q", "main"]);
+        std::fs::write(repo.join("c.txt"), "main\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "main work"]);
+        git(&["merge", "-q", "--no-ff", "-m", "merge side", "side"]);
+        (dir, repo)
+    }
+
     #[test]
     fn build_populates_time_and_is_merge() {
-        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("crates/dozer-app 应有两层上级目录到仓库根");
-        let snapshot =
-            build(repo_root, DEFAULT_MAX_COMMITS).expect("gleisbau 应能解析 dozer 自己的仓库");
+        let (_dir, repo_root) = mkrepo_with_merge();
+        let snapshot = build(&repo_root, DEFAULT_MAX_COMMITS).expect("应能解析临时仓库");
+        assert_eq!(snapshot.rows.len(), 4, "root + side + main + merge");
 
         // 每一行的 time 都应该是合理的正数(Unix 秒,仓库不可能早于 2020 年)。
         let epoch_2020 = 1_577_836_800_i64;
@@ -1856,19 +1886,17 @@ mod tests {
             );
         }
 
-        // Dozer 仓库历史里确实有过 merge(如 2429d15),is_merge 应该跟
-        // 真实的 git parent 数一致(不能拿 `parents.len()` 比——那是按
-        // `max_count` 窗口过滤后的 Vec,父提交恰好被窗口截断时两者会不一致,
-        // 见 `CommitRow::is_merge` 字段注释)。
-        let has_merge_row = snapshot.rows.iter().any(|r| r.is_merge);
-        assert!(
-            has_merge_row,
-            "200 个 commit 窗口内应能看到至少一个 is_merge=true 的行"
+        // is_merge 应该跟真实的 git parent 数一致(不能拿 `parents.len()` 比——
+        // 那是按 `max_count` 窗口过滤后的 Vec,见 `CommitRow::is_merge` 字段注释)。
+        assert_eq!(
+            snapshot.rows.iter().filter(|r| r.is_merge).count(),
+            1,
+            "恰好一个 merge 提交"
         );
-        let repo = Repo::discover(repo_root).expect("应能打开 dozer 自己的仓库");
+        let repo = Repo::discover(&repo_root).expect("应能打开临时仓库");
         let parents: std::collections::HashMap<CommitId, usize> = repo
             .log(bytegit::LogOptions::new(DEFAULT_MAX_COMMITS))
-            .expect("应能读出 dozer 自己的提交历史")
+            .expect("应能读出临时仓库的提交历史")
             .into_iter()
             .map(|c| (c.id, c.parents.len()))
             .collect();
