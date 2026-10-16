@@ -34,6 +34,33 @@
 
 > **2026-10-16 更新:** 上述三项历史失败已清零（`delete_confirm_spec…` 已自行转绿；`host_site_citations…` 改为按文件内容核对；`ScanUsage` 跟随 Usage 面板搬到 `dozer-panel-usage`）。`cargo fmt --all --check` 现为 clean。clippy 仍有 33 条 warning（死代码与风格类，未纳入本次），基线数字见 `cargo clippy --workspace --all-targets 2>&1 | grep -c '^warning'`。
 
+> **2026-10-16 更新（digger 对齐，Task 11/12）:** digger 已在分支 `chore/align-deps-2026-10`（提交 `54f9749`）完成依赖对齐，改动如下:
+>
+> - 七个 `bytehost-*` `v0.2.0` → **`v0.4.1`**;`byteui` `v0.4.1` → **`v0.4.4`**;四个 `dozer-*` `rev = 67ab0e65…` → **`tag = "libs-2026-10-16b"`**（库快照 tag,非 App 的 `v0.5.x`）。
+> - **删除**文件末尾全部三个 `[patch.…]` 段。`grep -n "^\[patch" Cargo.toml` → `NO_PATCH`。
+> - 适配 bytehost v0.4.1 API:`UsagePanel::take_notices` 取 `LocalizedText::fallback`;`content_pane`/`list_pane` 加末尾 locale 参(`"en"`);`panel_head` 增 `PanelHeadKind` 首参(图标按稳定身份选);`list_collapse_button` tooltip 改 `impl Into<Cow<str>>`;usage surface `set_desired` 包 `Stamped<LocaleStamp>`;`build_app_child` 传 `install_i18n_bridge = false`;`app-host` 测试 `AppSummary` literal 补 `display_i18n: None`。
+>
+> 实跑结果(命令均在 digger 仓库、当前工作副本):
+>
+> ```text
+> cargo metadata --format-version 1 >/dev/null && echo RESOLVED   → RESOLVED
+> cargo build --workspace                                          → 通过
+> cargo test -p digger-desktop                                     → 118 passed
+> cargo test --workspace --no-fail-fast                            → 无失败
+> scripts/check-host-deps.sh                                       → ok(审视了 2 个业务 crate)
+> scripts/check-shell-regions.sh                                   → ok
+> cargo tree -p digger-desktop -i byteui        → 单份 v0.4.4#4c539c7b
+> cargo tree -p digger-desktop -i bytehost-core → 单份 v0.4.1#79212c08
+> cargo tree -p digger-desktop -i dozer-model   → 单份 libs-2026-10-16b#2cddd564
+> cargo tree -p digger-desktop -i bytegit       → 单份 v0.7.0#0a3d2ab3
+> ```
+>
+> **not-run / 未达项(如实记录):**
+>
+> - `cargo clippy --workspace --all-targets -- -D warnings`:**未达标**。报错全部落在 `crates/editor/`(并发会话 WIP 的既有 lint 债:`parse.rs:60`、`reconcile.rs:309/450`、`doc.rs:49/144`),与本次依赖对齐无关;`crates/editor` 不依赖任何 bytehost/byteui/dozer crate。已对齐的 `digger-desktop` 代码本身无新增 lint。
+> - `cargo build -p digger-desktop --release`:**在 digger 上失败**,错误为 `iced_renderer` 缺 renderer feature(`compile_error!`)。经在 digger 提交 `5d481eb`(**改动前**)上复原实验确认,该失败**在本次改动前即存在**,与依赖对齐无关(dozer 同栈 release 构建正常,差异在 digger 的 `iced default-features = false` 配置)。属独立问题,未在本次范围内修。
+> - `scripts/run-editor-selftest.sh` 冷启动实跑:**not-run**。该脚本需真实图形会话(开真实窗口、屏幕亮且未锁);本执行环境为无头/agent 环境,无法可靠承载,故未跑。
+
 ## 2. 兼容桥清单（临时适配器）
 
 删除条件均**可测**（有明确断言或门禁指标）。目标收口 Task：21（通用兼容桥清零）。
