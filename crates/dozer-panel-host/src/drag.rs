@@ -34,8 +34,7 @@ pub fn tree_drag_past_threshold(press_pos: (f32, f32), cursor: (f32, f32)) -> bo
 /// 距离阈值之外的第二重确认。200ms 在第二轮反馈里仍偏紧——刻意放慢、想
 /// 点准的一次单击也可能超过 200ms,调到 300ms 留更多余量,真实拖拽(移动
 /// 到目标目录、看着高亮再松手)耗时远不止于此。
-pub const TREE_DRAG_MIN_HOLD_DURATION: std::time::Duration =
-    std::time::Duration::from_millis(300);
+pub const TREE_DRAG_MIN_HOLD_DURATION: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// 按下到松开的 `elapsed` 是否已达到 [`TREE_DRAG_MIN_HOLD_DURATION`]——同
 /// `tree_drag_past_threshold` 一起、两者都满足才判定为一次真实拖拽(见

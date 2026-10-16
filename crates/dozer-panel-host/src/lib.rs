@@ -6,7 +6,10 @@
 
 mod drag;
 mod notice;
-pub use drag::{TREE_DRAG_CONFIRM_THRESHOLD_PX, TREE_DRAG_MIN_HOLD_DURATION, tree_drag_held_long_enough, tree_drag_past_threshold};
+pub use drag::{
+    TREE_DRAG_CONFIRM_THRESHOLD_PX, TREE_DRAG_MIN_HOLD_DURATION, tree_drag_held_long_enough,
+    tree_drag_past_threshold,
+};
 pub use notice::{NOTICE_COOLDOWN, Notice, NoticeLevel, NoticeOutbox};
 
 use bytehost_core::id::ScopeId;
@@ -15,7 +18,6 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::runtime::Handle;
-
 
 /// Dozer 的业务作用域 → 中性 `ScopeId` 的**唯一转换点**(compat bridge C8 收口)。
 ///
@@ -291,7 +293,10 @@ mod tests {
         let token_a = a.begin(Some(1), "todos");
         let token_b = b.begin(Some(1), "todos");
         assert!(a.accepts(&token_a));
-        assert!(!a.accepts(&token_b), "another instance's token is not accepted");
+        assert!(
+            !a.accepts(&token_b),
+            "another instance's token is not accepted"
+        );
         assert!(!b.accepts(&token_a));
     }
 
@@ -307,7 +312,11 @@ mod tests {
     #[test]
     fn scope_round_trips_the_project_id() {
         assert_eq!(project_of(&scope_of(Some(7))), Some(7));
-        assert_eq!(project_of(&scope_of(None)), None, "the global lane has no project");
+        assert_eq!(
+            project_of(&scope_of(None)),
+            None,
+            "the global lane has no project"
+        );
     }
 
     #[test]

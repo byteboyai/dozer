@@ -59,7 +59,9 @@ pub struct CategoryDrag {
 pub fn should_confirm(drag: &CategoryDrag, cursor: (f32, f32), now: Instant) -> bool {
     drag.phase == CategoryDragPhase::Pending
         && dozer_panel_host::tree_drag_past_threshold(drag.press_pos, cursor)
-        && dozer_panel_host::tree_drag_held_long_enough(now.saturating_duration_since(drag.armed_at))
+        && dozer_panel_host::tree_drag_held_long_enough(
+            now.saturating_duration_since(drag.armed_at),
+        )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

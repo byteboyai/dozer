@@ -4,7 +4,7 @@
 //! 形态仿 `extensions/codehealth/protocol.rs`(声明式比较 + 固定单槽)。
 
 use super::{
-    HOST_OWNER, CategoryFilter, Message, TodoState, WorkspaceState, filter_todos_by_category,
+    CategoryFilter, HOST_OWNER, Message, TodoState, WorkspaceState, filter_todos_by_category,
     format_todo_month_day, is_active_todo, is_optimistic_id, parse_month_day, todo_display_state,
     visible_category_rows,
 };
@@ -638,7 +638,10 @@ mod tests {
     }
 
     fn stub_icon(_: AgentKind) -> AgentIconData {
-        AgentIconData { bytes: b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>".to_vec(), preserves_color: false }
+        AgentIconData {
+            bytes: b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>".to_vec(),
+            preserves_color: false,
+        }
     }
 
     #[test]

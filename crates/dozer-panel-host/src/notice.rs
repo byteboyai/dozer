@@ -37,17 +37,36 @@ pub struct NoticeOutbox {
 
 impl NoticeOutbox {
     pub fn push(&mut self, level: NoticeLevel, text: impl Into<LocalizedText>) {
-        self.items.push(Notice { level, text: text.into(), key: None });
+        self.items.push(Notice {
+            level,
+            text: text.into(),
+            key: None,
+        });
     }
 
     /// 带去重键的版本:同 key 再推只刷新文本与计时(语义同 `App::push_toast_keyed`)。
-    pub fn push_keyed(&mut self, level: NoticeLevel, text: impl Into<LocalizedText>, key: impl Into<String>) {
-        self.items.push(Notice { level, text: text.into(), key: Some(key.into()) });
+    pub fn push_keyed(
+        &mut self,
+        level: NoticeLevel,
+        text: impl Into<LocalizedText>,
+        key: impl Into<String>,
+    ) {
+        self.items.push(Notice {
+            level,
+            text: text.into(),
+            key: Some(key.into()),
+        });
     }
 
     /// 带冷却的 `push_keyed`:同一 key 下,与上一次推出的文本相同且距今不足 [`NOTICE_COOLDOWN`] 则不推;
     /// 文本变了或已过冷却则推并更新记录。`now` 由调用方注入。
-    pub fn push_keyed_cooldown(&mut self, level: NoticeLevel, text: impl Into<LocalizedText>, key: impl Into<String>, now: Instant) {
+    pub fn push_keyed_cooldown(
+        &mut self,
+        level: NoticeLevel,
+        text: impl Into<LocalizedText>,
+        key: impl Into<String>,
+        now: Instant,
+    ) {
         let text = text.into();
         let key = key.into();
         let repeat = matches!(self.cooldowns.get(&key), Some((last, at)) if *last == text && now.duration_since(*at) < NOTICE_COOLDOWN);
@@ -78,8 +97,14 @@ mod tests {
         o.push_keyed(NoticeLevel::Warning, text("b"), "k");
         let items = o.take();
         assert_eq!(items.len(), 2);
-        assert_eq!((items[0].level, items[0].key.as_deref()), (NoticeLevel::Error, None));
-        assert_eq!((items[1].level, items[1].key.as_deref()), (NoticeLevel::Warning, Some("k")));
+        assert_eq!(
+            (items[0].level, items[0].key.as_deref()),
+            (NoticeLevel::Error, None)
+        );
+        assert_eq!(
+            (items[1].level, items[1].key.as_deref()),
+            (NoticeLevel::Warning, Some("k"))
+        );
         assert!(o.take().is_empty());
     }
 
@@ -89,8 +114,18 @@ mod tests {
         let mut o = NoticeOutbox::default();
         let t0 = Instant::now();
         o.push_keyed_cooldown(NoticeLevel::Error, text("load"), "poll", t0);
-        o.push_keyed_cooldown(NoticeLevel::Error, text("load"), "poll", t0 + Duration::from_secs(1));
-        o.push_keyed_cooldown(NoticeLevel::Error, text("load"), "poll", t0 + Duration::from_secs(59));
+        o.push_keyed_cooldown(
+            NoticeLevel::Error,
+            text("load"),
+            "poll",
+            t0 + Duration::from_secs(1),
+        );
+        o.push_keyed_cooldown(
+            NoticeLevel::Error,
+            text("load"),
+            "poll",
+            t0 + Duration::from_secs(59),
+        );
         assert_eq!(o.take().len(), 1);
     }
 
@@ -99,9 +134,23 @@ mod tests {
         let mut o = NoticeOutbox::default();
         let t0 = Instant::now();
         o.push_keyed_cooldown(NoticeLevel::Error, text("load"), "poll", t0);
-        o.push_keyed_cooldown(NoticeLevel::Error, text("other"), "poll", t0 + Duration::from_secs(1));
-        o.push_keyed_cooldown(NoticeLevel::Error, text("other"), "poll", t0 + Duration::from_secs(61));
-        assert_eq!(o.take().len(), 3, "a changed error shows again, and so does the same one after 60s");
+        o.push_keyed_cooldown(
+            NoticeLevel::Error,
+            text("other"),
+            "poll",
+            t0 + Duration::from_secs(1),
+        );
+        o.push_keyed_cooldown(
+            NoticeLevel::Error,
+            text("other"),
+            "poll",
+            t0 + Duration::from_secs(61),
+        );
+        assert_eq!(
+            o.take().len(),
+            3,
+            "a changed error shows again, and so does the same one after 60s"
+        );
     }
 
     #[test]
@@ -110,7 +159,15 @@ mod tests {
         let t0 = Instant::now();
         o.push_keyed_cooldown(NoticeLevel::Error, text("load"), "poll", t0);
         assert_eq!(o.take().len(), 1);
-        o.push_keyed_cooldown(NoticeLevel::Error, text("load"), "poll", t0 + Duration::from_secs(1));
-        assert!(o.take().is_empty(), "draining every frame must not defeat the cooldown");
+        o.push_keyed_cooldown(
+            NoticeLevel::Error,
+            text("load"),
+            "poll",
+            t0 + Duration::from_secs(1),
+        );
+        assert!(
+            o.take().is_empty(),
+            "draining every frame must not defeat the cooldown"
+        );
     }
 }

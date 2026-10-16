@@ -212,7 +212,12 @@ impl App {
         for slot in self.projects.values_mut() {
             if let WorkspaceSlot::Loaded(ws) = slot {
                 pending.extend(ws.files.take_outbox());
-                pending.extend(ws.todo.take_outbox().into_iter().map(|n| toast::pending_from_notice(todo::LOG, n)));
+                pending.extend(
+                    ws.todo
+                        .take_outbox()
+                        .into_iter()
+                        .map(|n| toast::pending_from_notice(todo::LOG, n)),
+                );
                 // 只写日志、不弹 Toast 的诊断(例如 dozerd 不可用时的静默读取失败)。
                 for line in ws.todo.take_diagnostics() {
                     dozer_core::log_debug!(todo::LOG, "{line}");

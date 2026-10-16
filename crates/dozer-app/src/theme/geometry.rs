@@ -117,8 +117,14 @@ mod tests {
     /// 评审关注点 4:原生 webview 让位的高度与库里视图用的是同一个数。
     #[test]
     fn todo_top_row_height_is_the_librarys() {
-        assert_eq!(todo_top_row_inner_h_px(), dozer_panel_todo::adapter::top_row_inner_h_px());
-        assert_eq!(todo_top_row_h_px(), dozer_panel_todo::adapter::top_row_inner_h_px() + 1.0);
+        assert_eq!(
+            todo_top_row_inner_h_px(),
+            dozer_panel_todo::adapter::top_row_inner_h_px()
+        );
+        assert_eq!(
+            todo_top_row_h_px(),
+            dozer_panel_todo::adapter::top_row_inner_h_px() + 1.0
+        );
     }
 
     /// 文件树几何随 token 变化时同步折算（基准 scale=1 的字面量）。若

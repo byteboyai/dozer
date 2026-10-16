@@ -7,9 +7,9 @@
 //! 每个工作区上的渲染态(`WorkspaceState`)与视图 / 更新逻辑,List/Add/Toggle 经 `TodoService` 同步。
 
 pub mod adapter;
-pub mod i18n;
 mod category_drag;
 mod filter;
+pub mod i18n;
 mod protocol;
 mod state;
 mod update;
@@ -330,5 +330,4 @@ mod tests {
         assert!(ws_state.category_drag().is_none());
         ws_state.cancel_category_drag(); // 幂等
     }
-
 }

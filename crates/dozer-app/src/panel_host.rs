@@ -12,7 +12,8 @@ use iced_widget::core::Element;
 // 请求追踪 / `PanelIo` / `ActivationCtx` / 宿主需求发件箱已抽到共享库 `dozer-panel-host`
 // (todo 起,Digger 与以后的共享面板库共用);这里重新导出,面板和 `App` 的 `crate::panel_host::…` 路径不变。
 pub(crate) use dozer_panel_host::{
-    ActivationCtx, HostOutbox, HostRequest, PanelCommand, PanelIo, RequestTokenWrapExt, RequestTrackers, project_of, scope_of,
+    ActivationCtx, HostOutbox, HostRequest, PanelCommand, PanelIo, RequestTokenWrapExt,
+    RequestTrackers, project_of, scope_of,
 };
 
 /// 面板内一个可悬停元素的**槽位**——词汇通用,不含任何面板名(规格 E2:宿主公开类型里不出现业务类型)。

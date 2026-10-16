@@ -395,7 +395,9 @@ impl App {
 
 /// Todo 内容区 webview 的失败原因:先按当前语言渲染成文本再交给面板视图(共享库不认识宿主的解析器)。
 fn todo_webview_failed(app: &crate::app::App) -> Option<String> {
-    app.todo_webview.failed().map(|text| crate::i18n::host_render(text, app.locale.active_locale()))
+    app.todo_webview
+        .failed()
+        .map(|text| crate::i18n::host_render(text, app.locale.active_locale()))
 }
 
 /// 左二预览 pane:表头 + tab 栏 + 地址栏;内容区本体是 wry webview

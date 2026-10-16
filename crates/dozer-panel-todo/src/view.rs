@@ -258,7 +258,6 @@ pub fn todo_content_slot<'a>(
     }
 }
 
-
 /// 左栏底部栏(位于分类导航之下、靠底):"清空列表"按钮撑满整行,不再展示
 /// 左侧任务计数与图标。已从 content pane 右下角迁到左栏(见 `view`)。样式
 /// 对齐 `project/view.rs::project_footer_bar` / `database/view.rs::
@@ -352,16 +351,14 @@ pub fn clear_confirm_spec(locale: &str) -> byteui::feedback::dialog::ConfirmDial
     byteui::feedback::dialog::ConfirmDialog {
         icon: Some(icons::IconKind::ListTodo),
         title: crate::i18n::t("clear_confirm.title", "Clear list", locale),
-        description: crate::i18n::t("clear_confirm.description",
+        description: crate::i18n::t(
+            "clear_confirm.description",
             "This clears all tasks in the current project and cannot be undone.",
             locale,
         ),
         cancel_label: crate::i18n::t("clear_confirm.cancel", "Cancel", locale),
         cancel_msg: Message::ClearListCancel,
-        confirm_label: crate::i18n::t("clear_confirm.confirm",
-            "Clear",
-            locale,
-        ),
+        confirm_label: crate::i18n::t("clear_confirm.confirm", "Clear", locale),
         confirm_msg: Message::ClearListConfirm,
         close_msg: None,
         confirm_color: byteui::theme::color::current().red,
@@ -473,9 +470,7 @@ pub fn category_tree_nav<'a>(
                     byteui::theme::geometry::tab_button_size(),
                     true,
                     Message::CategoryToggleExpand(row.id),
-                    move |hovered| {
-                        Message::Hover(HoverSlot::Row(row.id as u64), hovered)
-                    },
+                    move |hovered| Message::Hover(HoverSlot::Row(row.id as u64), hovered),
                     if row.expanded {
                         t(app, "collapse", "Collapse")
                     } else {
@@ -577,10 +572,12 @@ pub fn category_rename_row<'a>(
     });
     byteui::interaction::context_menu::wrap(
         field.into(),
-        Some(Message::TextInputMenuOpen(crate::adapter::TextInputTarget {
-            id: category_rename_field_id(),
-            secure: false,
-        })),
+        Some(Message::TextInputMenuOpen(
+            crate::adapter::TextInputTarget {
+                id: category_rename_field_id(),
+                secure: false,
+            },
+        )),
     )
 }
 
@@ -659,15 +656,13 @@ pub fn todo_detail_card<'a>(
         text(item.text.clone()).size(byteui::theme::font::subtitle()),
         text(
             item.assigned_agent
-                .map(|a| crate::i18n::t_args("detail.assigned_to",
+                .map(|a| crate::i18n::t_args(
+                    "detail.assigned_to",
                     "Assigned to: {agent}",
                     locale,
                     &[("agent", a.label())]
                 ))
-                .unwrap_or_else(|| crate::i18n::t("detail.unassigned",
-                    "Unassigned",
-                    locale
-                ))
+                .unwrap_or_else(|| crate::i18n::t("detail.unassigned", "Unassigned", locale))
         )
         .size(byteui::theme::font::body())
         .color(byteui::theme::color::current().dim),
@@ -766,6 +761,9 @@ mod top_row_tests {
     /// 评审关注点 4:视图用的顶栏行高就是 `adapter::top_row_inner_h_px`,没有第二份。
     #[test]
     fn top_row_height_has_one_source() {
-        assert_eq!(crate::adapter::top_row_inner_h_px(), byteui::theme::geometry::tab_button_size() + 8.0);
+        assert_eq!(
+            crate::adapter::top_row_inner_h_px(),
+            byteui::theme::geometry::tab_button_size() + 8.0
+        );
     }
 }

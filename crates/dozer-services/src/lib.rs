@@ -684,7 +684,9 @@ mod tests {
             tokio::spawn(async move {
                 let list = memory.list_memories(7).await;
                 let backfilled = transcript.backfill_project_transcripts("/p".into()).await;
-                let batch = transcript.submit_summary_batch("/p".into(), None, None).await;
+                let batch = transcript
+                    .submit_summary_batch("/p".into(), None, None)
+                    .await;
                 (list, backfilled, batch)
             })
             .await

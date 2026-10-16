@@ -43,7 +43,8 @@ pub trait PanelDisplay {
     /// 面板头与分割线外侧的内边距(Dozer 取自 `workspace.json` 的 `project_pane` 区域)。
     fn header_padding(&self) -> Padding;
     /// 两个 pane 之间的水平分割线。
-    fn tab_divider<'a, M: 'a>(&self) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>;
+    fn tab_divider<'a, M: 'a>(&self)
+    -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>;
     /// 当前生效语言(BCP-47)。
     fn locale(&self) -> &str {
         "en"

@@ -2,7 +2,9 @@
 
 use super::*;
 use crate::panel_host::RequestTokenWrapExt;
-use dozer_services::{MemoryService, ProjectService, ServiceErrorKind, Services, TranscriptService};
+use dozer_services::{
+    MemoryService, ProjectService, ServiceErrorKind, Services, TranscriptService,
+};
 use std::sync::Arc;
 
 dozer_core::scope!(LOG, panel, "project");
@@ -587,7 +589,10 @@ pub fn spawn_repair_run(
 
         // 总结步骤改用 V2 批次协议:提交批次 → 轮询批次状态,展示成功/失败/
         // 跳过计数,不再用旧 0/0 进度掩盖失败(spec 2026-09-26 A7)。
-        let (batch_id, _total) = match transcript.submit_summary_batch(cwd.clone(), None, None).await {
+        let (batch_id, _total) = match transcript
+            .submit_summary_batch(cwd.clone(), None, None)
+            .await
+        {
             Ok(pair) => pair,
             Err(e) => {
                 dozer_core::log_warn!(LOG, error = %e, "提交总结批次失败");

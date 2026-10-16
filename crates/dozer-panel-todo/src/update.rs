@@ -1,7 +1,7 @@
 //! Todo 面板 update 消息分发 + 日历日期纯函数。
 
-use dozer_panel_host::RequestTokenWrapExt;
 use dozer_model::TodoInfo;
+use dozer_panel_host::RequestTokenWrapExt;
 use dozer_services::{ServiceErrorKind, TodoService};
 use std::sync::Arc;
 
@@ -52,11 +52,7 @@ pub fn parse_month_day(s: &str) -> Option<(u32, u32)> {
 }
 
 /// 插入一条乐观新增项(置顶)并起闪光,返回它的临时 id。纯状态操作,便于单测。
-pub fn insert_optimistic_todo(
-    ws_state: &mut WorkspaceState,
-    project_id: i64,
-    text: String,
-) -> i64 {
+pub fn insert_optimistic_todo(ws_state: &mut WorkspaceState, project_id: i64, text: String) -> i64 {
     let id = ws_state.alloc_optimistic_id();
     ws_state.items.insert(
         0,
@@ -190,7 +186,9 @@ pub fn update(
         Message::CategoriesLoaded(categories) => ws_state.categories = categories,
         Message::LoadFailed(kind, message) => {
             if kind == ServiceErrorKind::Unavailable {
-                ws_state.diagnostics.push(format!("任务/分类读取失败(dozerd 不可用): {message}"));
+                ws_state
+                    .diagnostics
+                    .push(format!("任务/分类读取失败(dozerd 不可用): {message}"));
             } else {
                 ws_state.outbox.push_keyed_cooldown(
                     dozer_panel_host::NoticeLevel::Error,

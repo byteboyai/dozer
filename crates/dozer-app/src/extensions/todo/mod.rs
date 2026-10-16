@@ -6,10 +6,12 @@
 //! (MARKDOWN 整文件视图已随迁移移除)。
 
 // 面板本体已抽到共享库 `dozer-panel-todo`(S3a);这里重新导出,`todo::…` 的调用点不变。
-pub(crate) use dozer_panel_todo::*;
 pub(crate) use dozer_panel_todo::view::*;
+pub(crate) use dozer_panel_todo::*;
 // 产品侧适配(展示契约、类型映射)在 `host_adapters::todo_panel`(面板边界门禁不许 `extensions/` 下出现 `crate::app::App`)。
-pub(crate) use crate::host_adapters::todo_panel::{current_view_payload, hover_id_of, text_target_of};
+pub(crate) use crate::host_adapters::todo_panel::{
+    current_view_payload, hover_id_of, text_target_of,
+};
 
 dozer_core::scope!(pub(crate) LOG, panel, "todo");
 
@@ -369,4 +371,3 @@ mod tests {
         assert_eq!(state.items()[0].id, 2);
     }
 }
-

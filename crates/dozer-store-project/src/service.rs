@@ -34,7 +34,10 @@ impl ProjectService for LocalProjectService {
         let trimmed = name.trim();
         // 与 dozerd 的 RenameProject 同规则:空名字不是合法名字。
         let r = if trimmed.is_empty() {
-            Err(ServiceError::new(ServiceErrorKind::Rejected, "名称不能为空"))
+            Err(ServiceError::new(
+                ServiceErrorKind::Rejected,
+                "名称不能为空",
+            ))
         } else {
             self.store.rename(id, trimmed).map(Some).map_err(rejected)
         };
@@ -54,7 +57,10 @@ impl ProjectService for LocalProjectService {
         // 末尾分隔符与 `.` 段不应造出第二个项目:`projects.path` 是 UNIQUE 的原样文本,先规整成同一种写法。
         let normalized: PathBuf = Path::new(&path).components().collect();
         let r = if normalized.is_dir() {
-            self.store.open(&normalized.to_string_lossy()).map(Some).map_err(rejected)
+            self.store
+                .open(&normalized.to_string_lossy())
+                .map(Some)
+                .map_err(rejected)
         } else {
             Ok(None)
         };
@@ -164,8 +170,12 @@ mod tests {
         std::fs::create_dir(&proj).unwrap();
         let plain = proj.to_string_lossy().into_owned();
         let a = block_on(p.open_project(plain.clone())).unwrap().unwrap();
-        let b = block_on(p.open_project(format!("{plain}/"))).unwrap().unwrap();
-        let c = block_on(p.open_project(format!("{plain}/."))).unwrap().unwrap();
+        let b = block_on(p.open_project(format!("{plain}/")))
+            .unwrap()
+            .unwrap();
+        let c = block_on(p.open_project(format!("{plain}/.")))
+            .unwrap()
+            .unwrap();
         assert_eq!((a.id, a.id), (b.id, c.id));
         assert_eq!(block_on(p.list_projects()).unwrap().len(), 1);
     }
@@ -208,7 +218,11 @@ mod tests {
         let e = block_on(p.rename_project(info.id, "   ".into())).unwrap_err();
         assert_eq!(e.kind, ServiceErrorKind::Rejected);
         let e = block_on(p.rename_project(9999, "x".into())).unwrap_err();
-        assert_eq!(e.kind, ServiceErrorKind::Rejected, "不存在的 id 是明确的拒绝,不是静默成功");
+        assert_eq!(
+            e.kind,
+            ServiceErrorKind::Rejected,
+            "不存在的 id 是明确的拒绝,不是静默成功"
+        );
     }
 
     #[test]
@@ -256,11 +270,21 @@ mod tests {
     fn memory_write_is_an_upsert_by_title_and_keeps_history() {
         let (_dir, _, m) = services();
         let first = block_on(m.write_memory(
-            1, "标题".into(), "project".into(), "d".into(), "正文一".into(), "user".into(),
+            1,
+            "标题".into(),
+            "project".into(),
+            "d".into(),
+            "正文一".into(),
+            "user".into(),
         ))
         .unwrap();
         let second = block_on(m.write_memory(
-            1, "标题".into(), "project".into(), "d".into(), "正文二".into(), "user".into(),
+            1,
+            "标题".into(),
+            "project".into(),
+            "d".into(),
+            "正文二".into(),
+            "user".into(),
         ))
         .unwrap();
         assert_eq!(first.id, second.id);
@@ -276,8 +300,24 @@ mod tests {
     #[test]
     fn memories_of_different_projects_do_not_mix() {
         let (_dir, _, m) = services();
-        block_on(m.write_memory(1, "t".into(), "user".into(), "".into(), "a".into(), "u".into())).unwrap();
-        block_on(m.write_memory(2, "t".into(), "user".into(), "".into(), "b".into(), "u".into())).unwrap();
+        block_on(m.write_memory(
+            1,
+            "t".into(),
+            "user".into(),
+            "".into(),
+            "a".into(),
+            "u".into(),
+        ))
+        .unwrap();
+        block_on(m.write_memory(
+            2,
+            "t".into(),
+            "user".into(),
+            "".into(),
+            "b".into(),
+            "u".into(),
+        ))
+        .unwrap();
         assert_eq!(block_on(m.list_memories(1)).unwrap().len(), 1);
         assert_eq!(block_on(m.list_memories(2)).unwrap().len(), 1);
     }

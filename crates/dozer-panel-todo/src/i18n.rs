@@ -16,8 +16,14 @@ fn resolver() -> &'static Resolver {
     RESOLVER.get_or_init(|| {
         let mut set = ResourceSet::new(TODO_OWNER);
         // 资源与 Rust 同源静态打入二进制;装载失败在开发期即暴露(fail fast)。
-        set.insert_bundle("en", ResourceBundle::from_json(EN_JSON).expect("todo en.json 必须合法"));
-        set.insert_bundle("zh-CN", ResourceBundle::from_json(ZH_CN_JSON).expect("todo zh-CN.json 必须合法"));
+        set.insert_bundle(
+            "en",
+            ResourceBundle::from_json(EN_JSON).expect("todo en.json 必须合法"),
+        );
+        set.insert_bundle(
+            "zh-CN",
+            ResourceBundle::from_json(ZH_CN_JSON).expect("todo zh-CN.json 必须合法"),
+        );
         let mut resolver = Resolver::new();
         resolver.insert(set);
         resolver
@@ -26,7 +32,9 @@ fn resolver() -> &'static Resolver {
 
 /// 解析一条 `dozer.todo` 文案。`fallback` 是英文兜底。
 pub fn t(key: &str, fallback: &str, locale: &str) -> String {
-    resolver().resolve(&LocalizedText::keyed(TODO_OWNER, key, fallback), locale).text
+    resolver()
+        .resolve(&LocalizedText::keyed(TODO_OWNER, key, fallback), locale)
+        .text
 }
 
 /// 同 [`t`],带具名参数。
@@ -47,12 +55,21 @@ mod tests {
     fn the_bundled_catalogs_resolve_in_both_languages() {
         assert_eq!(t("title", "Todo", "en"), "Todo");
         assert!(!t("title", "Todo", "zh-CN").is_empty());
-        assert_eq!(t("no.such.key", "Fallback text", "zh-CN"), "Fallback text", "a missing key falls back to the English text");
+        assert_eq!(
+            t("no.such.key", "Fallback text", "zh-CN"),
+            "Fallback text",
+            "a missing key falls back to the English text"
+        );
     }
 
     #[test]
     fn named_arguments_are_interpolated() {
-        let s = t_args("detail.assigned_to", "Assigned to: {agent}", "en", &[("agent", "Claude")]);
+        let s = t_args(
+            "detail.assigned_to",
+            "Assigned to: {agent}",
+            "en",
+            &[("agent", "Claude")],
+        );
         assert_eq!(s, "Assigned to: Claude");
     }
 }

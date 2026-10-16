@@ -53,7 +53,9 @@ impl dozer_panel_todo::adapter::PanelDisplay for crate::app::App {
         crate::theme::region::project_pane().padding
     }
 
-    fn tab_divider<'a, M: 'a>(&self) -> iced_widget::core::Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
+    fn tab_divider<'a, M: 'a>(
+        &self,
+    ) -> iced_widget::core::Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
         crate::app::tab_divider()
     }
 
@@ -68,14 +70,24 @@ pub(crate) fn hover_id_of(slot: bytehost_desktop::HoverSlot) -> crate::app::Hove
 }
 
 /// 库的文本框目标 → Dozer 的。
-pub(crate) fn text_target_of(t: dozer_panel_todo::adapter::TextInputTarget) -> crate::app::TextInputTarget {
-    crate::app::TextInputTarget { id: t.id, secure: t.secure }
+pub(crate) fn text_target_of(
+    t: dozer_panel_todo::adapter::TextInputTarget,
+) -> crate::app::TextInputTarget {
+    crate::app::TextInputTarget {
+        id: t.id,
+        secure: t.secure,
+    }
 }
 
 /// agent 图标:库不认识 `workspace::agent_icon`,在这里取字节交给它。
-pub(crate) fn agent_icon_data(agent: dozer_model::AgentKind) -> dozer_panel_todo::adapter::AgentIconData {
+pub(crate) fn agent_icon_data(
+    agent: dozer_model::AgentKind,
+) -> dozer_panel_todo::adapter::AgentIconData {
     let icon = crate::workspace::agent_icon(agent);
-    dozer_panel_todo::adapter::AgentIconData { bytes: icon.bytes().to_vec(), preserves_color: icon.preserves_original_color() }
+    dozer_panel_todo::adapter::AgentIconData {
+        bytes: icon.bytes().to_vec(),
+        preserves_color: icon.preserves_original_color(),
+    }
 }
 
 /// 同库的 `current_view_payload`,但图标取自 Dozer 的 `workspace::agent_icon`,调用点不用改。
@@ -97,9 +109,18 @@ mod tests {
     fn hover_slots_map_back_to_the_same_hover_ids() {
         use crate::app::{HoverId, PanelKind};
         use bytehost_desktop::HoverSlot;
-        assert_eq!(hover_id_of(HoverSlot::Row(42)), HoverId::row(PanelKind::Todo, 42));
-        assert_eq!(hover_id_of(HoverSlot::ListCollapse), HoverId::list_collapse(PanelKind::Todo));
-        assert_eq!(hover_id_of(HoverSlot::Choice(3)), HoverId::choice(PanelKind::Todo, 3));
+        assert_eq!(
+            hover_id_of(HoverSlot::Row(42)),
+            HoverId::row(PanelKind::Todo, 42)
+        );
+        assert_eq!(
+            hover_id_of(HoverSlot::ListCollapse),
+            HoverId::list_collapse(PanelKind::Todo)
+        );
+        assert_eq!(
+            hover_id_of(HoverSlot::Choice(3)),
+            HoverId::choice(PanelKind::Todo, 3)
+        );
     }
 
     /// 库里的 `agents_are_the_four_headless_kinds_with_inline_svg` 用桩图标;这里用 Dozer 的真图标验证同一件事。

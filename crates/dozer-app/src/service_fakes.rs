@@ -10,8 +10,7 @@ use dozer_services::{
     BookmarkService, BoxFuture, CodeHealthService, ContextService, ConversationRows,
     ConversationService, DaemonService, EditHistoryService, GroupChatService, LocaleService,
     MemoryService, PostedMessages, PreciseEdit, ProjectService, ServiceError, ServiceErrorKind,
-    TranscriptService,
-    Services, TodoService,
+    Services, TodoService, TranscriptService,
 };
 use std::sync::{Arc, Mutex};
 

@@ -13,8 +13,7 @@ use dozer_services::{
     BookmarkService, BoxFuture, CodeHealthService, ContextService, ConversationRows,
     ConversationService, EditHistoryService, GroupChatService, LocaleService, MemoryService,
     PreciseEdit, ProjectService, ServiceError, ServiceErrorKind, TodoService, TranscriptService,
-    UsageRows,
-    UsageService,
+    UsageRows, UsageService,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -2487,9 +2486,11 @@ mod project_service_tests {
             "proj-backfill",
             Some(Reply::BackfillDone { imported_files: 3 }),
         );
-        let got =
-            TranscriptService::backfill_project_transcripts(&Client::new(sock.clone()), "/p".into())
-                .await;
+        let got = TranscriptService::backfill_project_transcripts(
+            &Client::new(sock.clone()),
+            "/p".into(),
+        )
+        .await;
         assert_eq!(got, Ok(3));
         let _ = std::fs::remove_file(&sock);
     }

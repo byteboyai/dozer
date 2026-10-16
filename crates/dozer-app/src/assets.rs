@@ -516,9 +516,17 @@ mod tests {
     /// 评审关注点 5:todo-content 产物的**唯一来源**在 `dozer-panel-todo`;`dozer-app` 里不再留副本。
     #[test]
     fn todo_content_has_one_source_and_dozer_app_keeps_no_copy() {
-        assert!(dozer_panel_todo::web_assets_root().join("host.html").is_file());
+        assert!(
+            dozer_panel_todo::web_assets_root()
+                .join("host.html")
+                .is_file()
+        );
         let old = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/todo-content");
-        assert!(!old.exists(), "dozer-app 里不应再留 todo-content 副本: {}", old.display());
+        assert!(
+            !old.exists(),
+            "dozer-app 里不应再留 todo-content 副本: {}",
+            old.display()
+        );
     }
 
     /// 严格 CSP、无 connect-src(没有 fetch 端点,数据全靠推送)、无网络。
