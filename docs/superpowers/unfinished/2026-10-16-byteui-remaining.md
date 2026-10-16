@@ -20,7 +20,7 @@
 | 项 | 现状 | 建议 |
 |---|---|---|
 | ~~本地残留的旧 tag~~ | **已处理（2026-10-16）**：本地删除了 `v0.5.151`/`v0.5.152`/`v0.5.153`/`v0.5.157`/`v0.5.158`（原指向 `35a494c`、`35a494c`、`dfc2185`、`6841bfc`、`3147ac6`，均为 `v0.4.4` 的祖先；远程本来就没有）。现在只剩 `v0.1.0`–`v0.4.4` | — |
-| 远程遗留分支 | `origin/feat/badge-tag-button`、`feat/dialog`、`feat/gallery`、`feat/tab-strip`、`fix/gallery-polish` 五个分支相对 `main` 显示“未合并”，但对应提交在 `main` 的历史里能找到同名提交（疑似改写历史后的残留） | 逐个核对内容已在 `main` 后删除远程分支 |
+| ~~远程遗留分支~~ | **无需处理（2026-10-16 核对）**：远程 `origin` 上只有 `main`（`git ls-remote --heads origin` 为证）。之前看到的 `feat/badge-tag-button` 等五个是本地过期的远程跟踪引用，`git fetch --prune` 已清掉；远程分支早已删除，并非未合并的遗留 | — |
 | ~~README 示例版本~~ | **已处理**：示例改为 `tag = "vX.Y.Z"` | — |
 | ~~CHANGELOG 缺项~~ | **已处理**：补了 `0.4.2` 一节 | — |
 | CI | 只有 macOS 一个 job：`fmt --check`、`clippy --all-targets -D warnings`（含 examples）、`test`。没有与 dozer/digger/bytehost 的联合构建，发版前不知道会不会破坏消费方 | 见 §4 |
