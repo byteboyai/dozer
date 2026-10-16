@@ -1270,29 +1270,12 @@ impl DaemonService for FakeDaemon {
 #[derive(Clone)]
 pub(crate) struct FakeLocale {
     snapshot: LocaleSnapshot,
-    calls: Vec<String>,
 }
 
 impl Default for FakeLocale {
     fn default() -> Self {
         Self {
             snapshot: LocaleSnapshot::default_snapshot(),
-            calls: vec![],
-        }
-    }
-}
-
-impl FakeLocale {
-    pub(crate) fn snapshot(&self) -> LocaleSnapshot {
-        self.snapshot.clone()
-    }
-    pub(crate) fn calls(&self) -> Vec<String> {
-        self.calls.clone()
-    }
-    pub(crate) fn into_services(self) -> Services {
-        Services {
-            locale: Arc::new(self),
-            ..base_services()
         }
     }
 }

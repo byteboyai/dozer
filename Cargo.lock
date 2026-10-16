@@ -1974,7 +1974,6 @@ name = "dozer-app"
 version = "0.5.293"
 dependencies = [
  "alacritty_terminal",
- "anyhow",
  "arboard",
  "block2 0.6.2",
  "bytegit",
@@ -2211,7 +2210,6 @@ version = "0.3.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "bytegit",
  "bytehost-apps",
  "bytehost-client",
  "dozer-client",

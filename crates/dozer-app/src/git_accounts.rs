@@ -115,6 +115,7 @@ pub enum GitProvider {
 }
 
 impl GitProvider {
+    #[cfg(test)]
     pub const ALL: [GitProvider; 3] =
         [GitProvider::GitHub, GitProvider::GitLab, GitProvider::Gitee];
 

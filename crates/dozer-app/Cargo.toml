@@ -40,7 +40,6 @@ dozer-hook = { path = "../dozer-hook" }
 dozer-mcp = { path = "../dozer-mcp" }
 byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.4" }
 bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.7.0", features = ["watch"] }
-anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

@@ -430,7 +430,8 @@ pub fn move_item_to(
 }
 
 /// 把 `source`(文件或目录)移动到 `target_dir` 下,用源的文件名——
-/// `move_item_to` 的常用简写,不改名的既有拖拽场景用它。
+/// `move_item_to` 的常用简写(仅测试用;生产路径都带目标名,走 `move_item_to`)。
+#[cfg(test)]
 pub fn move_item(
     source: &Path,
     source_is_dir: bool,

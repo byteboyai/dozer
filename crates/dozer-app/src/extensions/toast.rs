@@ -53,15 +53,6 @@ pub struct Toast {
     pub expires: Instant,
 }
 
-impl Toast {
-    /// 语言无关的稳定渲染值(英文 fallback + 已插值参数、折叠空白),供测试与
-    /// 去重比較,与界面显示一致。
-    #[cfg(test)]
-    pub fn text_stable(&self) -> String {
-        normalize(&crate::i18n::host_render_stable(&self.text))
-    }
-}
-
 #[derive(Debug, Default)]
 pub struct ToastCenter {
     items: Vec<Toast>,

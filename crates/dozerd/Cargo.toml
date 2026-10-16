@@ -9,7 +9,6 @@ dozer-i18n = { path = "../dozer-i18n" }
 dozer-store-project = { path = "../dozer-store-project" }
 # 应用宿主:`server` feature = gateway + AppManager(只有 dozerd 打开)
 bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.1", features = ["server"] }
-bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.7.0" }
 anyhow.workspace = true
 tokio.workspace = true
 portable-pty.workspace = true

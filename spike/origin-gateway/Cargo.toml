@@ -11,4 +11,3 @@ publish = false
 wry = "0.55.1"
 tao = "0.35.3"
 tungstenite = "0.28"
-serde_json = "1"

@@ -3118,14 +3118,6 @@ impl PreviewPane {
         self.reload_all_bound_hosts();
     }
 
-    /// 语言生效值变化时重载所有渲染 host:渲染 host 的语言经 URL `&locale=`
-    /// 传入(与 `&theme=` 同一手法),原地换语言必须重新导航。数据由 Rust
-    /// 内存持有的 host(Tabular/PlantUML)在重新 `ready` 后由既有汇合逻辑自动
-    /// 补推,不丢数据。
-    pub fn reload_all_webviews_for_locale(&mut self) {
-        self.reload_all_bound_hosts();
-    }
-
     /// 推进所有渲染 host tab 的 `reload_nonce`,逼其重新导航(主题/语言变化
     /// 共用同一机制)。
     fn reload_all_bound_hosts(&mut self) {
