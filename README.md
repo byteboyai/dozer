@@ -35,3 +35,12 @@ cargo test -p dozerd           # 单 crate 测试
 cargo run -p dozer-app         # 跑 GUI
 cargo clippy --all-targets && cargo fmt
 ```
+
+## 共享库依赖守卫
+
+`scripts/check-shared-deps.sh` 检查 bytehost / byteui / bytegit 等 `byteboyai/*` 共享库的依赖:拦下本地路径 `[patch]`、指向本地路径的 `Cargo.lock`、远端不存在的 tag/rev、同一工作区里同一共享库的多份版本,并提示落后。它取代了原来的 `scripts/check-shared-pins.sh`。规则与设计见 digger 仓库 `docs/superpowers/specs/2026-10-16-shared-deps-guard-design.md`。
+
+- 启用 pre-push 钩子(每个克隆一次):`git config core.hooksPath .githooks`。推 `main` 或 tag 时阻断,推其他分支只警告;确认要绕过时用 `git push --no-verify`。
+- 随时手动跑:`scripts/check-shared-deps.sh`(检查工作区)或 `scripts/check-shared-deps.sh --rev HEAD`(检查已提交内容)。
+- 本地联调共享库:复制 `scripts/dev-patch.example.toml` 到 `.cargo/config.toml`(已被忽略,不入库)。
+- 脚本正本在 bytehost 的 `tools/shared-deps-guard/`,本仓库是 vendor 副本(见 `scripts/check_shared_deps.py` 里的 `SOURCE_TAG`)。
