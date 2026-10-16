@@ -5,21 +5,9 @@
 //! 子目录"(启动时全量摄取用)。Codex 不按项目建目录,项目归属只能读文件头
 //! `session_meta.payload.cwd` 逐个判断。
 
-use dozer_core::agent_paths::{
-    aider_project_dir_in, claude_project_dir_in, codebuddy_project_dir_in, codex_sessions_dir_in,
-    goose_project_dir_in, home_dir, opencode_project_dir_in, v8agent_project_dir_in,
-};
+use dozer_core::agent_paths::{codex_sessions_dir_in, home_dir, project_session_dir_in, projects_root_in};
 use dozer_core::protocol::AgentKind;
 use std::path::PathBuf;
-
-const AGENT_ROOTS: [(AgentKind, &str); 6] = [
-    (AgentKind::Claude, ".claude"),
-    (AgentKind::Codebuddy, ".codebuddy"),
-    (AgentKind::Opencode, ".dozer/agents/opencode"),
-    (AgentKind::Goose, ".dozer/agents/goose"),
-    (AgentKind::Aider, ".dozer/agents/aider"),
-    (AgentKind::V8agent, ".v8agent"),
-];
 
 pub(crate) fn jsonl_files_in(dir: &std::path::Path) -> Vec<PathBuf> {
     let Ok(rd) = std::fs::read_dir(dir) else {
@@ -57,8 +45,10 @@ pub fn discover_all_transcript_files() -> Vec<(AgentKind, PathBuf)> {
 /// `home` 显式传入版本,测试用(不碰 `HOME` 环境变量)。
 pub fn discover_all_transcript_files_in(home: &std::path::Path) -> Vec<(AgentKind, PathBuf)> {
     let mut out = Vec::new();
-    for (agent, root) in AGENT_ROOTS {
-        let projects_dir = home.join(root).join("projects");
+    for agent in AgentKind::known() {
+        let Some(projects_dir) = projects_root_in(agent, home) else {
+            continue;
+        };
         let Ok(rd) = std::fs::read_dir(&projects_dir) else {
             continue;
         };
@@ -97,14 +87,10 @@ pub fn discover_project_transcript_files_in(
     cwd: &std::path::Path,
 ) -> Vec<(AgentKind, PathBuf)> {
     let mut out = Vec::new();
-    for (agent, dir) in [
-        (AgentKind::Claude, claude_project_dir_in(home, cwd)),
-        (AgentKind::Codebuddy, codebuddy_project_dir_in(home, cwd)),
-        (AgentKind::Opencode, opencode_project_dir_in(home, cwd)),
-        (AgentKind::Goose, goose_project_dir_in(home, cwd)),
-        (AgentKind::Aider, aider_project_dir_in(home, cwd)),
-        (AgentKind::V8agent, v8agent_project_dir_in(home, cwd)),
-    ] {
+    for agent in AgentKind::known() {
+        let Some(dir) = project_session_dir_in(agent, home, cwd) else {
+            continue;
+        };
         for f in jsonl_files_in(&dir) {
             out.push((agent, f));
         }
@@ -151,8 +137,8 @@ mod tests {
         assert!(discover_all_transcript_files_in(home.path()).is_empty());
     }
 
-    /// 回归测试：`AGENT_ROOTS` 曾经只有三家(Claude/Codebuddy/Opencode)，
-    /// V8agent 的项目子目录永远不会被启动全量回填扫到。
+    /// 回归测试：全量回填的 agent 覆盖范围(`projects_root_in`)曾经只有三家
+    /// (Claude/Codebuddy/Opencode)，V8agent 的项目子目录永远不会被启动全量回填扫到。
     #[test]
     fn discovers_v8agent_files_alongside_the_other_three_agents() {
         let home = tempfile::tempdir().unwrap();

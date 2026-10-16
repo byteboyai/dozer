@@ -807,18 +807,10 @@ impl TranscriptStore {
 
     /// `home` 显式传入版本，测试用。
     pub fn delete_project_transcripts_in(&self, home: &Path, cwd: &str) -> Result<u32> {
-        use dozer_core::agent_paths::{
-            aider_project_dir_in, claude_project_dir_in, codebuddy_project_dir_in,
-            goose_project_dir_in, opencode_project_dir_in,
-        };
         let cwd_path = Path::new(cwd);
-        let dirs = [
-            claude_project_dir_in(home, cwd_path),
-            codebuddy_project_dir_in(home, cwd_path),
-            opencode_project_dir_in(home, cwd_path),
-            goose_project_dir_in(home, cwd_path),
-            aider_project_dir_in(home, cwd_path),
-        ];
+        let dirs: Vec<std::path::PathBuf> = AgentKind::known()
+            .filter_map(|a| dozer_core::agent_paths::project_session_dir_in(a, home, cwd_path))
+            .collect();
 
         let mut conn = self.conn.lock().expect("db lock");
         let tx = conn.transaction()?;
@@ -877,40 +869,20 @@ impl TranscriptStore {
         limit: u32,
         offset: u32,
     ) -> Result<Vec<dozer_core::protocol::ConversationSummary>> {
-        use dozer_core::agent_paths::{
-            aider_project_dir_in, claude_project_dir_in, codebuddy_project_dir_in,
-            goose_project_dir_in, opencode_project_dir_in, v8agent_project_dir_in,
-        };
         let cwd_path = Path::new(cwd);
         let conn = self.conn.lock().expect("db lock");
         let mut out = Vec::new();
 
-        // 按 `dir` 查的六家:它们的 `dir` 本身就是各自的项目存储目录,天然
-        // 能按项目过滤。Codex 不在这里——它的 `dir` 是日期目录
-        // (`~/.codex/sessions/YYYY/MM/DD/`),项目归属存在 `cwd` 列,走下面
-        // 独立的按 cwd 分支(见 `agent_paths::codex_sessions_dir_in` 注释)。
-        let dir_agents = [
-            AgentKind::Claude,
-            AgentKind::Codebuddy,
-            AgentKind::Opencode,
-            AgentKind::Goose,
-            AgentKind::Aider,
-            AgentKind::V8agent,
-        ];
-        let dir_candidates: Vec<(AgentKind, String)> = dir_agents
-            .iter()
-            .filter(|a| agent.is_none() || agent == Some(**a))
-            .map(|a| {
-                let dir = match a {
-                    AgentKind::Claude => claude_project_dir_in(home, cwd_path),
-                    AgentKind::Codebuddy => codebuddy_project_dir_in(home, cwd_path),
-                    AgentKind::Opencode => opencode_project_dir_in(home, cwd_path),
-                    AgentKind::Goose => goose_project_dir_in(home, cwd_path),
-                    AgentKind::Aider => aider_project_dir_in(home, cwd_path),
-                    AgentKind::V8agent => v8agent_project_dir_in(home, cwd_path),
-                    _ => unreachable!("dir_agents 只有六家"),
-                };
-                (*a, dir.to_string_lossy().into_owned())
+        // 按 `dir` 查的 agent(有按项目目录的,见 `agent_paths::project_session_dir_in`):
+        // 它们的 `dir` 本身就是各自的项目存储目录,天然能按项目过滤。Codex 不在
+        // 这里——它的 `dir` 是日期目录(`~/.codex/sessions/YYYY/MM/DD/`),项目归属
+        // 存在 `cwd` 列,走下面独立的按 cwd 分支(见
+        // `agent_paths::codex_sessions_dir_in` 注释)。
+        let dir_candidates: Vec<(AgentKind, String)> = AgentKind::known()
+            .filter(|a| agent.is_none() || agent == Some(*a))
+            .filter_map(|a| {
+                dozer_core::agent_paths::project_session_dir_in(a, home, cwd_path)
+                    .map(|d| (a, d.to_string_lossy().into_owned()))
             })
             .collect();
         for (_, dir) in &dir_candidates {
@@ -1937,6 +1909,43 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+    }
+
+    /// 回归:项目删除曾用手写五家清单,漏了 v8agent,导致删项目后 v8agent 会话残留。
+    #[test]
+    fn delete_project_transcripts_in_also_removes_v8agent_and_spares_other_projects() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TranscriptStore::open(&tmp.path().join("t.db")).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let line = "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n";
+
+        let a = std::path::Path::new("/proj/a");
+        let b = std::path::Path::new("/proj/b");
+        let a_dir = dozer_core::agent_paths::v8agent_project_dir_in(home.path(), a);
+        let b_dir = dozer_core::agent_paths::v8agent_project_dir_in(home.path(), b);
+        std::fs::create_dir_all(&a_dir).unwrap();
+        std::fs::create_dir_all(&b_dir).unwrap();
+        let fa = fixture(&a_dir, "a.jsonl", line);
+        let fb = fixture(&b_dir, "b.jsonl", line);
+        store.ingest_session(AgentKind::V8agent, &fa).unwrap();
+        store.ingest_session(AgentKind::V8agent, &fb).unwrap();
+
+        let deleted = store
+            .delete_project_transcripts_in(home.path(), "/proj/a")
+            .unwrap();
+        assert_eq!(deleted, 1);
+        assert!(store
+            .list_conversations_in(home.path(), "/proj/a", None, 10, 0)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            store
+                .list_conversations_in(home.path(), "/proj/b", None, 10, 0)
+                .unwrap()
+                .len(),
+            1,
+            "别的项目的 v8agent 会话不能被波及"
         );
     }
 

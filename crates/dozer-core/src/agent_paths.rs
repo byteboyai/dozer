@@ -3,6 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::protocol::AgentKind;
+
 pub fn home_dir() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()))
 }
@@ -151,6 +153,37 @@ pub fn codex_sessions_dir_in(home: &Path) -> PathBuf {
     home.join(".codex").join("sessions")
 }
 
+/// 各家 agent 的"按项目建子目录"根:`<home>/<root>/projects`。供启动全量扫描枚举所有项目。
+/// 无通配 `match`:新增 `AgentKind` 变体时必须在这里表态。
+pub fn projects_root_in(agent: AgentKind, home: &Path) -> Option<PathBuf> {
+    let root = match agent {
+        AgentKind::Claude => ".claude",
+        AgentKind::Codebuddy => ".codebuddy",
+        AgentKind::Opencode => ".dozer/agents/opencode",
+        AgentKind::Goose => ".dozer/agents/goose",
+        AgentKind::Aider => ".dozer/agents/aider",
+        AgentKind::V8agent => ".v8agent",
+        // Codex 按日期建目录(见 `codex_sessions_dir_in`);Qodercn 目前只做到 L1,
+        // 没有 transcript 解析;Unknown 不是 agent。
+        AgentKind::Unknown | AgentKind::Codex | AgentKind::Qodercn => return None,
+    };
+    Some(home.join(root).join("projects"))
+}
+
+/// 某项目(`cwd`)在某家 agent 下的会话目录。`None` 的集合与 `projects_root_in` 一致。
+/// 各家的目录编码规则不同(见 `claude_project_key` / `codebuddy_project_key`),不能统一。
+pub fn project_session_dir_in(agent: AgentKind, home: &Path, cwd: &Path) -> Option<PathBuf> {
+    Some(match agent {
+        AgentKind::Claude => claude_project_dir_in(home, cwd),
+        AgentKind::Codebuddy => codebuddy_project_dir_in(home, cwd),
+        AgentKind::Opencode => opencode_project_dir_in(home, cwd),
+        AgentKind::Goose => goose_project_dir_in(home, cwd),
+        AgentKind::Aider => aider_project_dir_in(home, cwd),
+        AgentKind::V8agent => v8agent_project_dir_in(home, cwd),
+        AgentKind::Unknown | AgentKind::Codex | AgentKind::Qodercn => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,5 +283,32 @@ mod tests {
     fn codex_sessions_dir_is_a_flat_root_without_project_key() {
         let d = codex_sessions_dir_in(Path::new("/home/u"));
         assert_eq!(d, PathBuf::from("/home/u/.codex/sessions"));
+    }
+
+    #[test]
+    fn project_session_dir_sits_under_projects_root_for_every_agent() {
+        let home = Path::new("/h");
+        let cwd = Path::new("/a/b");
+        for a in AgentKind::ALL {
+            let root = projects_root_in(a, home);
+            let dir = project_session_dir_in(a, home, cwd);
+            assert_eq!(root.is_some(), dir.is_some(), "{a:?}: 两个表的覆盖范围必须一致");
+            if let (Some(r), Some(d)) = (root, dir) {
+                assert_eq!(d.parent(), Some(r.as_path()), "{a:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn agents_without_per_project_dirs_are_exactly_unknown_codex_qodercn() {
+        let home = Path::new("/h");
+        let none: Vec<_> = AgentKind::ALL
+            .into_iter()
+            .filter(|a| projects_root_in(*a, home).is_none())
+            .collect();
+        assert_eq!(
+            none,
+            vec![AgentKind::Unknown, AgentKind::Codex, AgentKind::Qodercn]
+        );
     }
 }
