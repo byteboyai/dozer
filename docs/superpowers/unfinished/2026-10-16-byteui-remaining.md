@@ -1,6 +1,6 @@
 # byteui 剩余未尽事项
 
-整理日期：2026-10-16（同日已处理 README 示例、CHANGELOG `0.4.2`、本地旧 tag 三项，见 §2；这些文档提交在 byteui 本地提交 `6748902`，未推送时远程仍是旧内容）。byteui 当前 `v0.4.4`（仓库 `byteboyai/byteui`，`main` 与远程同步，无本地未推送提交）。dozer、digger、bytehost（`bytehost-chrome`）均依赖 `v0.4.4`。本地验证：`cargo test` 85 个测试通过；`clippy` 无 byteui 自身告警（只有依赖 `block` 的 future-incompat 提示）。
+整理日期：2026-10-16（同日已处理 README 示例、CHANGELOG `0.4.2`、本地旧 tag 三项，见 §2；文档提交为 byteui `6748902`，已推送）。byteui 当前 `v0.4.4`（仓库 `byteboyai/byteui`，`main` 与远程同步，无本地未推送提交）。dozer、digger、bytehost（`bytehost-chrome`）均依赖 `v0.4.4`。本地验证：`cargo test` 85 个测试通过；`clippy` 无 byteui 自身告警（只有依赖 `block` 的 future-incompat 提示）。
 
 权威来源：`docs/superpowers/specs/2026-10-01-byteui-standalone-repo-design.md`（§8 未决项）、`2026-08-18-byteui-library-design.md`、`2026-08-19-byteui-runtime-theme-tokens-design.md`。拆库本身已完成；以下是拆库之后仍悬着的事。
 
