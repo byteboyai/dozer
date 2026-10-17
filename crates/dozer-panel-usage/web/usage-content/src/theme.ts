@@ -8,8 +8,11 @@ export const AGENT_COLOR_VAR: Record<AgentKind, string> = {
   claude: '--cyan',
   codebuddy: '--purple',
   opencode: '--green',
-  codex: '--orange',
-  goose: '--blue',
+  // Codex 品牌 logo 是蓝紫渐变,但更偏蓝;用 `--blue`(纯蓝)贴合,与 Claude 的
+  // `--cyan`、Codebuddy 的 `--purple` 都拉开差距。腾出的 `--blue` 顺给 Goose
+  // 会让它与 Codex 撞色,故 Goose 改走新增的 `--teal`,保证八色互不重复。
+  codex: '--blue',
+  goose: '--teal',
   aider: '--magenta',
   v8agent: '--lime',
   unknown: '--dim',

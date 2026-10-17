@@ -13,6 +13,7 @@
   --orange: #FF9B4D;
   --blue: #4D8CFF;
   --magenta: #FF6EC7;
+  --teal: #2DD4BF;
 }
 :root[data-theme="light"] {
   --bg: #fffdf6;
@@ -29,6 +30,7 @@
   --orange: #c97a1b;
   --blue: #2f6fe0;
   --magenta: #c93b93;
+  --teal: #0D9488;
 }
 * { box-sizing: border-box; }
 html, body {

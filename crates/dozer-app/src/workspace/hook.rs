@@ -279,8 +279,11 @@ pub(crate) fn agent_dot_color(agent: AgentKind) -> Color {
         AgentKind::Claude => byteui::theme::color::current().cyan,
         AgentKind::Codebuddy => byteui::theme::color::current().purple,
         AgentKind::Opencode => byteui::theme::color::current().green,
-        AgentKind::Codex => byteui::theme::color::current().orange,
-        AgentKind::Goose => byteui::theme::color::current().blue,
+        // Codex 品牌 logo 是蓝紫渐变但更偏蓝,用 `blue`(纯蓝)贴合,与 Claude 的
+        // `cyan`、Codebuddy 的 `purple` 都拉开差距。Goose 原本占 `blue`,为避免
+        // 与 Codex 撞色改走新增的 `teal`。web 侧 `AGENT_COLOR_VAR` 须同步。
+        AgentKind::Codex => byteui::theme::color::current().blue,
+        AgentKind::Goose => byteui::theme::color::current().teal,
         AgentKind::Aider => byteui::theme::color::current().magenta,
         AgentKind::V8agent => byteui::theme::color::current().lime,
         // byteui 的语义色相已被前面七家用完;`ignored` 与 `dim` 数值相同(会和普通 shell 的圆点

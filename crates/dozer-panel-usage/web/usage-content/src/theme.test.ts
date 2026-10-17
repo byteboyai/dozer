@@ -14,8 +14,8 @@ test('AGENT_COLOR_VAR matches PanelDisplay::agent_icon_color mapping', () => {
   assert.equal(AGENT_COLOR_VAR.claude, '--cyan');
   assert.equal(AGENT_COLOR_VAR.codebuddy, '--purple');
   assert.equal(AGENT_COLOR_VAR.opencode, '--green');
-  assert.equal(AGENT_COLOR_VAR.codex, '--orange');
-  assert.equal(AGENT_COLOR_VAR.goose, '--blue');
+  assert.equal(AGENT_COLOR_VAR.codex, '--blue');
+  assert.equal(AGENT_COLOR_VAR.goose, '--teal');
   assert.equal(AGENT_COLOR_VAR.aider, '--magenta');
   assert.equal(AGENT_COLOR_VAR.v8agent, '--lime');
   assert.equal(AGENT_COLOR_VAR.unknown, '--dim');
