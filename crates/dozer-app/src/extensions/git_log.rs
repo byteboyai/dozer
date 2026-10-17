@@ -1919,14 +1919,19 @@ mod tests {
         // 当前 HEAD 分支(dogfooding 仓库跑测试时几乎总在 main,但不强行假设
         // 分支名——只断言"存在且第 0 行的 refs 里能找到它")。
         let head = snapshot.head_branch.clone().expect("应能取到当前分支名");
-        let first = &snapshot.rows[0];
-        assert!(
-            first
-                .refs
+        // 不能假设第 0 行就是 HEAD:历史按提交时间从新到旧排,跨所有分支;当 HEAD 落后于仓库里别的分支
+        // 的最新提交时(例如在落后于 `main` 的 worktree 里跑测试)第 0 行是别的提交。所以找"带当前分支标签
+        // 的那一行"。窗口 50 行,HEAD 总在最新提交附近。
+        let has_head_label = snapshot.rows.iter().any(|row| {
+            row.refs
                 .iter()
-                .any(|r| r.name == head && r.kind == RefKind::LocalBranch),
-            "HEAD 所在行的 refs 应包含当前分支: {:?}",
-            first.refs
+                .any(|r| r.name == head && r.kind == RefKind::LocalBranch)
+        });
+        assert!(
+            has_head_label,
+            "前 {} 行里没找到带当前分支 {head:?} 标签的提交;第 0 行 refs: {:?}",
+            snapshot.rows.len(),
+            snapshot.rows[0].refs
         );
     }
 
