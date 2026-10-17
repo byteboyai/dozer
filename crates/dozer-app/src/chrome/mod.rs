@@ -2,6 +2,7 @@
 //! 首页落地页。Phase 4.4 把 `topbar.rs`/`rail.rs`/`tab_widget.rs`/`menu.rs`/
 //! `native_menu.rs`/`homespace.rs` 六个平铺文件聚合进本目录。
 
+pub mod app_badge;
 pub mod homespace;
 pub mod menu;
 pub mod native_menu;

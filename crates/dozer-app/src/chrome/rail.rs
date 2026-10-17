@@ -7,11 +7,12 @@
 //! Rail 逻辑物理搬出 `app.rs`。见
 //! `docs/superpowers/specs/2026-08-21-rail-extraction-pilot-design.md`。
 
+use super::app_badge;
 use crate::app::{App, AppSlot, HoverId, MaximizedPane, Message, PanelKind, Side};
 use crate::theme;
 use byteui::interaction::icons;
 use iced_widget::core::mouse;
-use iced_widget::core::{Border, Element, Length, Padding};
+use iced_widget::core::{Border, Color, Element, Length, Padding};
 use iced_widget::{MouseArea, column, container};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -470,7 +471,7 @@ pub(crate) fn icon_rail(
     let step = button_size + region.gap;
     let mut layers = Vec::new();
     for (idx, &kind) in app.shell_layout.rail_layout.side(side).iter().enumerate() {
-        let (icon, tooltip) = panel_meta(kind, app.locale.active_locale(), |slot| {
+        let (visual, tooltip) = rail_visual(kind, app.locale.active_locale(), |slot| {
             app.app_views
                 .localized_title(slot, app.locale.active_locale())
         });
@@ -481,20 +482,41 @@ pub(crate) fn icon_rail(
         // 内部真正接线,原样传 `Message::PanelSelect(kind)` 保持调用方
         // 语义一致。视觉(选中金框/hover 渐变)不受 `interactive` 影响,
         // 只有交互接线这一步被跳过。
-        let base: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> =
-            icons::icon_button_entry(
+        let selected = kind == active_kind && open;
+        let drag_dim = app.rail_drag_confirmed() && Some(kind) == app.dragged_panel_kind();
+        let hover_t = app.hover_progress(HoverId::Rail(RailButton::Panel(kind)));
+        let on_hover =
+            move |hovered| Message::Hover(HoverId::Rail(RailButton::Panel(kind)), hovered);
+        let base: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> = match visual {
+            RailVisual::Icon(icon) => icons::icon_button_entry(
                 icon,
                 byteui::theme::icon_size::rail(),
-                kind == active_kind && open,
-                app.rail_drag_confirmed() && Some(kind) == app.dragged_panel_kind(),
-                app.hover_progress(HoverId::Rail(RailButton::Panel(kind))),
+                selected,
+                drag_dim,
+                hover_t,
                 true,
                 button_size,
                 false,
                 Message::PanelSelect(kind),
-                move |hovered| Message::Hover(HoverId::Rail(RailButton::Panel(kind)), hovered),
+                on_hover,
                 tooltip,
-            );
+            ),
+            RailVisual::Badge { glyph, fill, ink } => icons::glyph_button_entry(
+                glyph,
+                fill,
+                ink,
+                byteui::theme::icon_size::rail(),
+                selected,
+                drag_dim,
+                hover_t,
+                true,
+                button_size,
+                false,
+                Message::PanelSelect(kind),
+                on_hover,
+                tooltip,
+            ),
+        };
         let y = region.padding.top + app.rail_slot_position(side, kind, idx) * step;
         let positioned = container(rail_drag_surface(
             base,
@@ -637,6 +659,42 @@ fn panel_meta(
     (d.icon, d.title(locale))
 }
 
+/// 图标栏按钮的视觉:内置面板是 SVG 图标;已安装应用是首字母徽标(验收:原先所有应用都是同一个通用
+/// 列表图标,分不清)。
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum RailVisual {
+    Icon(icons::IconKind),
+    Badge {
+        glyph: char,
+        fill: Color,
+        ink: Color,
+    },
+}
+
+/// 一个面板在图标栏里的视觉与提示文字。应用面板的字符取自**当前语言下的标题**(无标题回落应用 id),
+/// 底色由应用 id 决定(同一个应用永远同一种颜色)。
+fn rail_visual(
+    kind: PanelKind,
+    locale: &str,
+    app_title: impl Fn(AppSlot) -> Option<String>,
+) -> (RailVisual, String) {
+    if let PanelKind::App(slot) = kind {
+        let title = app_title(slot).unwrap_or_else(|| slot.id().to_string());
+        let tokens = byteui::theme::color::current();
+        let fill = app_badge::badge_fill(&tokens, slot.id());
+        return (
+            RailVisual::Badge {
+                glyph: app_badge::badge_glyph(&title),
+                fill,
+                ink: app_badge::badge_ink(&tokens, fill),
+            },
+            title,
+        );
+    }
+    let (icon, title) = panel_meta(kind, locale, app_title);
+    (RailVisual::Icon(icon), title)
+}
+
 /// 给一个图标栏按钮包上"拖拽换栏/换位"的感应层,手法同 `tab_core::select`
 /// (`MouseArea::on_press`)——**这一层现在是按钮唯一的选中/拖拽入口**,
 /// 调用方必须给内层 `icon_button_entry` 传 `interactive: false`(见本函数
@@ -714,31 +772,32 @@ pub(crate) fn rail_drag_ghost(
     let Some(kind) = app.dragged_panel_kind() else {
         return column![].into();
     };
-    let (icon, _tooltip) = panel_meta(kind, app.locale.active_locale(), |slot| {
+    let (visual, _tooltip) = rail_visual(kind, app.locale.active_locale(), |slot| {
         app.app_views
             .localized_title(slot, app.locale.active_locale())
     });
     let size = byteui::theme::geometry::rail_button_size();
     let colors = byteui::theme::color::current();
 
-    let ghost = container(icons::view(
-        icon,
-        byteui::theme::icon_size::rail(),
-        colors.gold,
-    ))
-    .width(Length::Fixed(size))
-    .height(Length::Fixed(size))
-    .align_x(iced_widget::core::alignment::Horizontal::Center)
-    .align_y(iced_widget::core::alignment::Vertical::Center)
-    .style(move |_t: &iced_widget::Theme| container::Style {
-        background: Some(colors.card.into()),
-        border: Border {
-            color: colors.gold,
-            width: 1.0,
-            radius: 8.0.into(),
-        },
-        ..container::Style::default()
-    });
+    let glyph_size = byteui::theme::icon_size::rail();
+    let face: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer> = match visual {
+        RailVisual::Icon(icon) => icons::view(icon, glyph_size, colors.gold),
+        RailVisual::Badge { glyph, fill, ink } => icons::glyph_view(glyph, glyph_size, fill, ink),
+    };
+    let ghost = container(face)
+        .width(Length::Fixed(size))
+        .height(Length::Fixed(size))
+        .align_x(iced_widget::core::alignment::Horizontal::Center)
+        .align_y(iced_widget::core::alignment::Vertical::Center)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: Some(colors.card.into()),
+            border: Border {
+                color: colors.gold,
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..container::Style::default()
+        });
 
     // 幽灵图标以光标为中心(减半个按钮边长做偏移),并钳制在窗口范围内
     // ——防止贴着窗口边缘拖拽时图标一半画到窗口外。
@@ -1492,12 +1551,40 @@ mod tests {
     }
 
     #[test]
-    fn app_entries_have_title_icon_and_default_side() {
+    fn app_entries_have_title_and_default_side() {
         let a = slot("rail-meta");
-        let (icon, title) = panel_meta(PanelKind::App(a), "zh-CN", |_| None);
+        let (_icon, title) = panel_meta(PanelKind::App(a), "zh-CN", |_| None);
         assert_eq!(title, "rail-meta");
-        assert_eq!(icon, icons::IconKind::LayoutList);
         assert_eq!(PanelKind::App(a).default_side(), Side::Left);
+    }
+
+    /// 验收:已安装应用在图标栏里都是同一个通用列表图标,分不清。应用面板画首字母徽标。
+    #[test]
+    fn an_app_panel_gets_a_badge_not_the_generic_list_icon() {
+        let a = slot("rail-badge");
+        let (visual, tooltip) = rail_visual(PanelKind::App(a), "zh-CN", |_| Some("应用X".into()));
+        assert_eq!(tooltip, "应用X");
+        match visual {
+            RailVisual::Badge { glyph, .. } => assert_eq!(glyph, '应'),
+            other => panic!("应用面板应是徽标,实际 {other:?}"),
+        }
+        // 没有 i18n 标题时,标题与字符都回落到应用 id。
+        let (visual, tooltip) = rail_visual(PanelKind::App(a), "zh-CN", |_| None);
+        assert_eq!(tooltip, "rail-badge");
+        assert!(
+            matches!(visual, RailVisual::Badge { glyph: 'R', .. }),
+            "{visual:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_panels_keep_their_icons() {
+        let (visual, _) = rail_visual(PanelKind::Files, "zh-CN", |_| None);
+        let (want, _) = panel_meta(PanelKind::Files, "zh-CN", |_| None);
+        assert!(
+            matches!(visual, RailVisual::Icon(k) if k == want),
+            "{visual:?}"
+        );
     }
 
     /// T6:`PanelKind::App` 的 rail 标题按当前 UI 语言解析 i18n 投影;无投影时回落应用 id。
