@@ -4,7 +4,7 @@
 
 本文只收**尚未做完**的项。来源：bytehost 的 `docs/superpowers/specs/2026-10-04-bytehost-app-host-design.md`（§9 待裁决清单）、五份验收报告（A5、A6e、A6f、A6g、A6h）、dozer 的 `docs/dozer-v2/bytehost-manual-acceptance-checklist.md`、`bytehost-H8-evaluation.md`、`2026-10-04-bytehost-extraction-roadmap.md`、i18n 与 Digger 集成两条线的计划/台账。
 
-**核对方式：** 读文档、tag、`Cargo.toml`、git 历史；没有重新跑 bytehost 或 dozer 的测试，所以下面引用的“已知失败测试”是验收报告当时的记录，现状未复核。
+**核对方式：** 读文档、tag、`Cargo.toml`、git 历史；§5 的“已知失败测试”已于 2026-10-16 复跑，§1 的 A 级命令行项已于 2026-10-17 执行。
 
 ## 1. 最大的一项：真实 GUI 手工验收全部未执行
 
@@ -18,10 +18,10 @@ dozer 已经有一份分级清单 `docs/dozer-v2/bytehost-manual-acceptance-chec
 | B | 要操作 Dozer 窗口，**能否用 `agent-desktop` 读到 iced/wry 的控件还没验证**，先做探针 |
 | C | 需要人判断或人的环境：视觉观感、中文输入法、真实 https 服务器、系统剪贴板 |
 
-- **现在就能做：** A 级项（例如 A5-5 伪造 `Host: evil.example` 应得 4xx、A5-7 退出 GUI 后端口仍服务、停 dozerd 后端口关闭）。
+- **A 级已部分执行（2026-10-17）：** 纯命令行部分已在隔离 HOME 的 `dozerd` 上跑过，A5-5（伪造 Host 得 421）、A6e-3（crash 约 2 秒、hang 约 34 秒自动恢复，计数保留）、A5-7/A6e-4（停 dozerd 网关关闭，重启后端口不变、应用恢复）通过；A6f-1 只确认了网关立刻关闭。**没做：** A5-7 中"退出整个 GUI"一半、Excalidraw 打包、各项夹带的其余命令行步骤。详见清单文末「A 级执行记录」。
 - **做之前要先探针：** B 级项能否自动化。
 - **只能人来做：** C 级（A6h 的真实 https 下载与中文输入法、A5 的复制粘贴/导出/手写体字形）。
-- **后果：** 在这些项有结论前，A5、A6e、A6f、A6g、A6h 五个切片在文档里都不能标完成；spec §7 的 A5 行也明确这样写。
+- **后果：** 在 B/C 项有结论前，A5、A6e、A6f、A6g、A6h 五个切片在文档里都不能标完成；spec §7 的 A5 行也明确这样写。
 
 ## 2. 文档状态与实际不一致（2026-10-16 已对账）
 
