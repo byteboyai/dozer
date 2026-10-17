@@ -43,7 +43,7 @@ h3 { margin: 18px 0 8px; font-size: 14px; font-weight: 600; color: var(--cream);
 .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 
 /* 页头 */
-.scan-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.scan-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
 .btn {
   appearance: none; border: 1px solid var(--border); background: var(--card);
   color: var(--cream); font: inherit; padding: 4px 12px; border-radius: 8px;
@@ -78,7 +78,7 @@ h3 { margin: 18px 0 8px; font-size: 14px; font-weight: 600; color: var(--cream);
   transition: background .15s, border-color .15s, box-shadow .15s;
 }
 .finding:hover { background: var(--card-hover); border-color: var(--gold); box-shadow: var(--shadow); }
-.finding-head { display: flex; align-items: baseline; gap: 8px; }
+.finding-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .badge {
   font-size: 11px; padding: 0 7px; border-radius: 999px; border: 1px solid currentColor;
   white-space: nowrap;
@@ -106,7 +106,7 @@ h3 { margin: 18px 0 8px; font-size: 14px; font-weight: 600; color: var(--cream);
 .skip-list li { font-size: 11px; color: var(--dim); word-break: break-all; padding: 1px 0; }
 
 /* 架构页 */
-.arch-layout { display: flex; flex-direction: column; gap: 10px; height: calc(100vh - 28px); }
+.arch-layout { display: flex; flex-direction: column; gap: 10px; height: 100%; }
 .arch-main { display: flex; gap: 10px; min-height: 0; flex: 1; }
 .graph-canvas {
   flex: 1; min-width: 0; min-height: 320px;

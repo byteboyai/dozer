@@ -714,9 +714,25 @@ fn pair_content_pane_bounds_for(
     let mirrored = state.layout.rail_layout.side_of(pane.kind) != pane.kind.default_side();
     let chrome_top = pane.chrome_top;
 
+    // 区圆角 = 区圆角半径 - 区内边距;左右各内缩区内边距、底部内缩「内边距 +
+    // 圆角半径」,是为让直角原生子视图(webview)停在区间圆弧起点之上、不戳出
+    // 面板圆角(见下方 `inx`/`inh` 处理)。顶部同理:没有原生面板头兜底时
+    // (`chrome_top` < 「内边距 + 圆角半径」,目前是代码健康度内容列与群聊
+    // 详情列),webview 也得自己让出这段,否则顶部两个直角会盖住面板顶部圆角——
+    // 底部已处理,这里把顶部也补对称(放大态由 `CORNER_INSET` 统一处理,不参与)。
+    let zone = match side {
+        Side::Left => theme::region::left_zone(),
+        Side::Right => theme::region::right_zone(),
+    };
+    let pad = zone.padding.left;
+    let corner_r = zone
+        .border
+        .map(|b| (b.radius.bottom_left - zone.padding.bottom).max(0.0))
+        .unwrap_or(0.0);
     // 给定"面板区外框(区)矩形" → 内容矩形。放大态与非放大态只差这个输入
     // 矩形,分块逻辑共用(同 `git_log_diff_pane_bounds_for` 的 `compute` 手法)。
-    let compute = |inx: f32, iny: f32, inw: f32, inh: f32| -> (f32, f32, f32, f32) {
+    // `top_inset` 为该分支下 webview 顶部应让出的高度(原生面板头或圆角内缩)。
+    let compute = |inx: f32, iny: f32, inw: f32, inh: f32, top_inset: f32| -> (f32, f32, f32, f32) {
         let (x, w) = if pane.list_visible {
             let pair_w = pair_content_width(inw);
             let cols = pair_columns(
@@ -732,8 +748,8 @@ fn pair_content_pane_bounds_for(
         } else {
             (inx, inw.max(0.0))
         };
-        let y = iny + chrome_top;
-        let h = (inh - chrome_top).max(0.0);
+        let y = iny + top_inset;
+        let h = (inh - top_inset).max(0.0);
         (x, y, w, h)
     };
 
@@ -764,7 +780,9 @@ fn pair_content_pane_bounds_for(
             - byteui::theme::geometry::status_bar_height()
             - CORNER_INSET * 2.0)
             .max(0.0);
-        return compute(inx, iny, inw, inh);
+        // 放大态 `iny` 已含 `CORNER_INSET`,顶部圆角已由它兜底;这里只补原生
+        // 面板头(`chrome_top`,代码健康度/群聊为 0,放大态用不上)。
+        return compute(inx, iny, inw, inh, chrome_top);
     }
 
     let m = match side {
@@ -783,19 +801,9 @@ fn pair_content_pane_bounds_for(
         Side::Left => left_zone_width(window_width, state),
         Side::Right => right_zone_width(window_width, state),
     };
-    // webview 是直角原生子视图,恒盖在 iced 之上:既会盖住区外框 1px 内边距
-    // (左右两侧),也会让底部两个直角戳出面板圆角(`zone_pane_border` 的
-    // 半径 = 区圆角 - 区内边距)。左右各内缩区内边距,底部内缩「内边距 + 圆角
-    // 半径」,让矩形停在圆弧起点之上(放大态同理用 `CORNER_INSET`)。
-    let zone = match side {
-        Side::Left => theme::region::left_zone(),
-        Side::Right => theme::region::right_zone(),
-    };
-    let pad = zone.padding.left;
-    let corner_r = zone
-        .border
-        .map(|b| (b.radius.bottom_left - zone.padding.bottom).max(0.0))
-        .unwrap_or(0.0);
+    // webview 是直角原生子视图,恒盖在 iced 之上:左右各内缩区内边距,底部内缩
+    // 「内边距 + 圆角半径」,让矩形停在圆弧起点之上;顶部的内缩由 `top_inset`
+    // 在 `compute` 里统一处理(与底部对称)。`pad`/`corner_r` 已在上方定义。
     let inx = zone_x0 + m.left + pad;
     let iny = byteui::theme::geometry::top_bar_height() + m.top;
     let inw = (zone_raw_w - m.left - m.right - pad * 2.0).max(0.0);
@@ -806,7 +814,12 @@ fn pair_content_pane_bounds_for(
         - corner_r
         - byteui::theme::geometry::status_bar_height())
     .max(0.0);
-    compute(inx, iny, inw, inh)
+    // 顶部内缩:原生面板头(`chrome_top`)已占用顶部时由它兜底(用量/Todo 走
+    // 这条);没有原生头(代码健康度内容列 / 群聊详情列,`chrome_top` 为 0)
+    // 则让出「内边距 + 圆角半径」,与底部对称——否则直角 webview 会盖住面板
+    // 顶部圆角(底部 `inh` 已内缩同款)。
+    let top_inset = chrome_top.max(pad + corner_r);
+    compute(inx, iny, inw, inh, top_inset)
 }
 
 /// 逻辑 x 是否落在左侧文件预览内容区列内。焦点路由用:点击落在
@@ -1918,18 +1931,25 @@ mod tests {
         assert!(w2 != w, "拖动分栏后宽度应变化: {w} vs {w2}");
     }
 
-    /// 本面板内容列顶部没有原生面板头(分类导航那一列才有),webview 紧贴区顶。
+    /// 本面板内容列顶部没有原生面板头(分类导航那一列才有),但直角的 webview
+    /// 仍需让出「内边距 + 圆角半径」,不戳出面板顶部圆角——y 比区顶低这段。
     #[test]
-    fn codehealth_content_y_starts_at_zone_top() {
+    fn codehealth_content_y_starts_below_zone_top_by_corner_inset() {
         let state = ShellState {
             left_view: PanelKind::CodeHealth,
             ..test_state()
         };
         let (_, y, _, _) =
             codehealth_content_pane_bounds_for(Side::Left, 1600.0, 900.0, &state, true);
-        let zone_top =
-            byteui::theme::geometry::top_bar_height() + theme::region::left_zone().margin.top;
-        assert!((y - zone_top).abs() < 1.0, "y={y} zone_top={zone_top}");
+        let zone = theme::region::left_zone();
+        let pad = zone.padding.left;
+        let corner_r = zone
+            .border
+            .map(|b| (b.radius.bottom_left - zone.padding.bottom).max(0.0))
+            .unwrap_or(0.0);
+        let zone_top = byteui::theme::geometry::top_bar_height() + zone.margin.top;
+        let expected = zone_top + pad + corner_r;
+        assert!((y - expected).abs() < 1.0, "y={y} expected={expected}");
     }
 
     #[test]
@@ -2118,17 +2138,25 @@ mod tests {
         );
     }
 
+    /// 群聊详情列顶部也没有原生面板头,直角 webview 同样要让出「内边距 +
+    /// 圆角半径」,不戳出面板顶部圆角——y 比区顶低这段。
     #[test]
-    fn group_chat_content_y_starts_at_zone_top() {
+    fn group_chat_content_y_starts_below_zone_top_by_corner_inset() {
         let state = ShellState {
             right_view: PanelKind::GroupChat,
             ..test_state()
         };
         let (_, y, _, _) =
             group_chat_content_pane_bounds_for(Side::Right, 1600.0, 900.0, &state, true, false);
-        let zone_top =
-            byteui::theme::geometry::top_bar_height() + theme::region::right_zone().margin.top;
-        assert!((y - zone_top).abs() < 1.0, "y={y} zone_top={zone_top}");
+        let zone = theme::region::right_zone();
+        let pad = zone.padding.left;
+        let corner_r = zone
+            .border
+            .map(|b| (b.radius.bottom_left - zone.padding.bottom).max(0.0))
+            .unwrap_or(0.0);
+        let zone_top = byteui::theme::geometry::top_bar_height() + zone.margin.top;
+        let expected = zone_top + pad + corner_r;
+        assert!((y - expected).abs() < 1.0, "y={y} expected={expected}");
     }
 
     #[test]
