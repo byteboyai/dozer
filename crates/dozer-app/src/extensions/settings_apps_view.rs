@@ -2,7 +2,9 @@
 //! 纯展示函数,不含任何状态迁移逻辑(状态机在 `bytehost_panel::install`)。
 
 use bytehost_apps::plan::InstallPlan;
-use bytehost_apps::proto::{AppSummary, DisplayTitleScope, RuntimeInstallPlan, RuntimeProbe};
+use bytehost_apps::proto::{
+    AppSummary, DisplayTitleScope, ManagedRuntime, RuntimeInstallPlan, RuntimeProbe,
+};
 use bytehost_apps::registry::UninstallMode;
 use bytehost_apps::state::ObservedState;
 use bytehost_panel::install::{
@@ -142,10 +144,49 @@ pub fn view<'a>(state: &'a State, locale: &str) -> El<'a> {
 }
 
 /// 一行受管运行时:名称、状态、受管版本、进度或安装/卸载按钮。
+/// 运行时一行的第二层里此刻该显示的条目(纯逻辑,与视图分开以便测试)。顺序即显示顺序。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RuntimeAction {
+    /// 一个已装的受管版本(纯文字)。
+    Version(String),
+    /// 该受管版本正在卸载:只显示"处理中",没有按钮。
+    Processing(String),
+    Uninstall(ManagedRuntime, String),
+    /// 没有任何受管版本、此平台又有固定版本可装时才给的「安装…」。
+    Install(ManagedRuntime),
+}
+
+fn runtime_actions(
+    probe: &RuntimeProbe,
+    runtime: Option<ManagedRuntime>,
+    uninstalling: &dyn Fn(ManagedRuntime, &str) -> bool,
+) -> Vec<RuntimeAction> {
+    let mut items = Vec::new();
+    if !probe.managed.is_empty() {
+        for v in &probe.managed {
+            let Some(rt) = runtime else {
+                items.push(RuntimeAction::Version(v.clone()));
+                continue;
+            };
+            if uninstalling(rt, v) {
+                items.push(RuntimeAction::Processing(v.clone()));
+                continue;
+            }
+            items.push(RuntimeAction::Version(v.clone()));
+            items.push(RuntimeAction::Uninstall(rt, v.clone()));
+        }
+    } else if probe.installable
+        && let Some(rt) = runtime
+    {
+        items.push(RuntimeAction::Install(rt));
+    }
+    items
+}
+
 fn runtime_row_view<'a>(state: &'a State, probe: &'a RuntimeProbe, locale: &str) -> El<'a> {
     let colors = byteui::theme::color::current();
     let (name, status, _) = runtime_line(probe);
-    let mut r = row![
+    let mut head = row![
         text(name.to_string())
             .size(byteui::theme::font::body())
             .color(colors.cream),
@@ -155,47 +196,48 @@ fn runtime_row_view<'a>(state: &'a State, probe: &'a RuntimeProbe, locale: &str)
 
     if probe_is_installing(probe) {
         let progress = probe.job.as_ref().map(progress_text).unwrap_or_default();
-        r = r.push(dim(progress));
-        r = r.push(Space::new().width(Length::Fill));
-        return r.into();
+        head = head.push(dim(progress));
+        head = head.push(Space::new().width(Length::Fill));
+        return head.into();
     }
 
-    r = r.push(dim(status));
-    r = r.push(Space::new().width(Length::Fill));
+    // 状态文字可能很长(`可用 · uv 0.8.2 (21fadbcc1 2025-07-22)`):占满剩余宽度并允许换行,
+    // 按钮放到下面自己的可换行行里,不再被挤成两行(验收)。
+    head = head.push(dim(status).width(Length::Fill));
 
     let runtime = managed_runtime_of(&probe.runtime);
-    if !probe.managed.is_empty() {
-        for v in &probe.managed {
-            let Some(rt) = runtime else {
-                r = r.push(dim(v.clone()));
-                continue;
-            };
-            if state.runtime_uninstalling(rt, v) {
-                r = r.push(dim(crate::i18n::host_text_args(
-                    "settings.apps.version_processing",
-                    "{v} (processing…)",
-                    locale,
-                    &[("v", v)],
-                )));
-                continue;
-            }
-            r = r.push(dim(v.clone()));
-            r = r.push(action_button(
-                crate::i18n::host_text("settings.apps.uninstall", "Uninstall", locale),
-                Message::RuntimeUninstallClicked(rt, v.clone()),
-                colors.red,
-            ));
-        }
-    } else if probe.installable
-        && let Some(rt) = runtime
-    {
-        r = r.push(action_button(
-            crate::i18n::host_text("settings.apps.install_ellipsis", "Install…", locale),
-            Message::RuntimeInstallClicked(rt),
-            colors.gold,
-        ));
+    let actions = runtime_actions(probe, runtime, &|rt, v| state.runtime_uninstalling(rt, v));
+    if actions.is_empty() {
+        return head.into();
     }
-    r.into()
+    let mut buttons = row![].spacing(8).align_y(Alignment::Center);
+    for action in actions {
+        let item: El<'a> = match action {
+            RuntimeAction::Version(v) => dim(v).into(),
+            RuntimeAction::Processing(v) => dim(crate::i18n::host_text_args(
+                "settings.apps.version_processing",
+                "{v} (processing…)",
+                locale,
+                &[("v", &v)],
+            ))
+            .into(),
+            RuntimeAction::Uninstall(rt, v) => action_button(
+                crate::i18n::host_text("settings.apps.uninstall", "Uninstall", locale),
+                Message::RuntimeUninstallClicked(rt, v),
+                colors.red,
+            ),
+            RuntimeAction::Install(rt) => action_button(
+                crate::i18n::host_text("settings.apps.install_ellipsis", "Install…", locale),
+                Message::RuntimeInstallClicked(rt),
+                colors.gold,
+            ),
+        };
+        buttons = buttons.push(item);
+    }
+    column![El::from(head), buttons.wrap().vertical_spacing(6)]
+        .spacing(6)
+        .width(Length::Fill)
+        .into()
 }
 
 /// 应用行里此刻该显示的动作(纯逻辑,与视图分开以便测试)。顺序即显示顺序。
@@ -874,9 +916,9 @@ fn review_view<'a>(plan: &'a InstallPlan, running: bool, locale: &str) -> El<'a>
 
 #[cfg(test)]
 mod tests {
-    use super::{RowAction, row_actions};
+    use super::{RowAction, RuntimeAction, row_actions, runtime_actions};
     use bytehost_apps::id::{AppId, Version};
-    use bytehost_apps::proto::AppSummary;
+    use bytehost_apps::proto::{AppSummary, ManagedRuntime, RuntimeAvailability, RuntimeProbe};
     use bytehost_apps::state::{DesiredState, ObservedState};
 
     fn summary(observed: ObservedState, previous: Option<Version>) -> AppSummary {
@@ -931,6 +973,64 @@ mod tests {
         );
         let b = summary(ObservedState::Updating, None);
         assert!(!row_actions(&b, false, false).contains(&RowAction::Uninstall));
+    }
+
+    fn probe(runtime: &str, managed: &[&str], installable: bool) -> RuntimeProbe {
+        RuntimeProbe {
+            runtime: runtime.into(),
+            availability: RuntimeAvailability::Available {
+                detail: "uv 0.8.2 (21fadbcc1 2025-07-22)".into(),
+            },
+            managed: managed.iter().map(|s| s.to_string()).collect(),
+            installable,
+            job: None,
+        }
+    }
+
+    /// 验收:运行时区域里 Python 一行状态文字很长,「安装…」按钮被挤成两行(`安 / 装…`)。
+    /// 先钉住"此刻该显示哪些动作",再把按钮挪进自己的可换行行里。
+    #[test]
+    fn an_installable_runtime_with_no_managed_version_offers_install() {
+        let p = probe("python", &[], true);
+        assert_eq!(
+            runtime_actions(&p, Some(ManagedRuntime::Python), &|_, _| false),
+            vec![RuntimeAction::Install(ManagedRuntime::Python)]
+        );
+    }
+
+    #[test]
+    fn a_managed_version_offers_uninstall_and_shows_processing_while_uninstalling() {
+        let p = probe("node", &["22.1.0", "20.5.0"], true);
+        assert_eq!(
+            runtime_actions(&p, Some(ManagedRuntime::Node), &|_, v| v == "20.5.0"),
+            vec![
+                RuntimeAction::Version("22.1.0".into()),
+                RuntimeAction::Uninstall(ManagedRuntime::Node, "22.1.0".into()),
+                RuntimeAction::Processing("20.5.0".into()),
+            ],
+            "处理中的版本只显示\"处理中\",没有卸载按钮"
+        );
+    }
+
+    #[test]
+    fn a_runtime_that_already_has_a_managed_version_does_not_offer_install() {
+        let p = probe("node", &["22.1.0"], true);
+        assert!(
+            !runtime_actions(&p, Some(ManagedRuntime::Node), &|_, _| false)
+                .iter()
+                .any(|a| matches!(a, RuntimeAction::Install(_)))
+        );
+    }
+
+    #[test]
+    fn a_probe_without_a_known_runtime_offers_no_actions_but_still_lists_versions() {
+        let p = probe("docker", &[], false);
+        assert!(runtime_actions(&p, None, &|_, _| false).is_empty());
+        let p = probe("docker", &["27.0"], false);
+        assert_eq!(
+            runtime_actions(&p, None, &|_, _| false),
+            vec![RuntimeAction::Version("27.0".into())]
+        );
     }
 
     #[test]
