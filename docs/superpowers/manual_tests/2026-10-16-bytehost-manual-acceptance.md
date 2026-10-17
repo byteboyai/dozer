@@ -71,7 +71,7 @@ target/aarch64-apple-darwin/debug/dozer
 | # | 操作 | 预期 | 结果 |
 |---|---|---|---|
 | 3.1 | 点 `/crash` | 面板在 1 秒内进入"启动中…",不是等 2 秒轮询 | ✅ 命令触发后 0.34 秒内的第一张截图就是"Py Notes / 启动中…"(截图间隔约 0.3 秒) |
-| 3.2 | 另开终端只杀隔离的 dozerd:`HOME=/tmp/dzh pkill -9 -f "debug/dozerd"` | 2 秒内显示 dozerd 不可用;重启后自动恢复订阅 | ❌ `kill -9` 后连续截图到 +25 秒,**界面任何地方都没有"dozerd 不可用"**(应用面板保持旧页面,终端显示"[会话已结束]",顶栏无徽标);GUI 日志只有每 2–4 秒一条 WARN"应用变更订阅失败,将退避重试"。重启 dozerd 后 WARN 立即停止(可推断已重新订阅),应用恢复 Running,但**日志里没有明确的"重订阅成功"一行**,面板仍是旧页面(`hits: 3`)未刷新 |
+| 3.2 | 另开终端只杀隔离的 dozerd:`HOME=/tmp/dzh pkill -9 -f "debug/dozerd"` | 2 秒内显示 dozerd 不可用;重启后自动恢复订阅 | ✅(原为 ❌,已修复,见末尾"已修复并复测")原先的现象:`kill -9` 后连续截图到 +25 秒,**界面任何地方都没有"dozerd 不可用"**(应用面板保持旧页面,终端显示"[会话已结束]",顶栏无徽标);GUI 日志只有每 2–4 秒一条 WARN"应用变更订阅失败,将退避重试"。重启 dozerd 后 WARN 立即停止(可推断已重新订阅),应用恢复 Running,但**日志里没有明确的"重订阅成功"一行**,面板仍是旧页面(`hits: 3`)未刷新。**[2026-10-17 已修复并复测]** bytehost `v0.4.6` 的状态机新增 `ConnectionLost`/`ConnectionRestored`,dozer 适配层映射成带 key 的 Toast(提交 dozer `d6800f3c`)。真 GUI 复测(隔离环境):`kill -9` dozerd 后约 **3 秒**出现 Warning Toast "Lost connection to dozerd, reconnecting…"(日志 08:17:12.6 kill → 08:17:15.6),此后重连又失败多次**不重复弹**;重启 dozerd 后约 3 秒出现 Success Toast "Reconnected to dozerd"。设置里**主动停止** dozerd(约 14 分钟、298 次订阅失败)期间**没有**新增"连接中断"。比报告原文的"2 秒"略慢,因为要等第二次重订阅失败才判定为真断线(单次抖动不提示)。Toast 是点击穿透的独立原生窗口,没有截到图,证据是日志行。 |
 | 3.3 | 设置 → 应用 → 点「日志」,另开终端往应用发请求让它打印 | 约 1 秒内出现新行 | ✅ `py-notes` 对请求不打印,改用 `/crash` 触发重启产生新行 `listening on 65454`:日志文件 12:47:55.9 写入;约 1 秒后的截图里设置窗口仍是 3 行,约 2.6 秒后的截图是 4 行(延迟 1–2.6 秒,日志每秒整段重读,含截图约 0.3 秒滞后) |
 | 3.4 | 在日志里上滚,再触发新行 | 不会被拉回底部 | ✅ 用自制 `py-chatty`(启动打 30 行、之后每 2 秒一行)。用户上滚后,相隔 5 秒的两张截图完全一致(都停在 `startup line 01–10`),期间日志文件从 36 行增到 46 行,位置未被拉回。第三张(+10 秒)位置变到底部附近,疑为用户又滚动,未确认 |
 | 3.5 | 关掉设置页 | 之后不再有读日志的请求(可看 dozerd 日志确认) | ⚠️ GUI 层面未能观测:dozerd 对读日志请求不留任何日志(任何级别),文件 atime 也不随读取更新。代码层面:`bytehost-panel/src/logs.rs` 的 `tick` 只在展开着时才发读取、`hide` 后不再发,有单元测试覆盖 |
@@ -133,7 +133,9 @@ target/aarch64-apple-darwin/debug/dozer
 | 缺陷:应用日志文字没跟主题走,深色主题下几乎看不见 | 深色主题下日志文字(深色)压在深色背景上难以辨认;用户的浅色主题截图里同一处是黑字、清晰可读。代码层面:面板日志 `dozer-app/src/app/view.rs:1450` 与设置页日志 `extensions/settings_apps_view.rs:367` 的 `iced_widget::text(...)` 都没有 `.color(...)`,用的是 iced 默认文字色;同一处的标签文字都显式设了 `.color(dim)`。应改为取主题色 |
 | 观察:措辞 | 后端状态原因写 `python3`,问题页标题写 `Python` |
 | 说明:§4 的界面文案来源 | 4.1–4.3 的审批卡/确认/回滚提示文案是用户肉眼确认后口头反馈,我没有逐步截图;状态变化、版本和计数来自 dozerd 事件日志与 `state.json`、`counter.txt`。用的是自制样例 `py-ver`(1.0.0/1.1.0/1.2.0),不是 `py-notes` |
-| 3.2 的原因与待裁决 | 订阅断开时 `bytehost-panel` 状态机只回退到快速轮询并退避重订阅(`SubscriptionLost`),不会写 `App.daemon_unavailable`;该字段按项目约定只有"启动连不上、设置里停止、打开项目成功即清除"三处写入,所以运行中被 `kill -9` 不会触发顶栏徽标或面板提示。A6f 报告原文预期"2s 内显示 dozerd 不可用",与现状不符:要么补一个断线提示,要么修订报告预期,需用户裁决 |
+| 3.2 的原因与处置(已裁决:补 Toast) | 订阅断开时状态机原先只回退到快速轮询并退避重订阅,不写 `App.daemon_unavailable`(按项目约定只有"启动连不上、设置里停止、打开项目成功即清除"三处写入),所以运行中被 `kill -9` 界面静默;状态机模块文档"顶栏的 dozerd 徽标负责告知"的假设不成立。处置:状态机发中立效果,dozer 映射成 Toast;"dozerd 断着"既是事件也是状态,也可映射成顶栏徽标,换映射只改 `host_adapters/app_host.rs::connection_toast`。计划:`docs/superpowers/plans/2026-10-17-dozerd-disconnect-hint.md` |
+| 发现:重订阅退避实际从不拉长 | 复测时 dozerd 停了 14 分钟,GUI 每 2–4 秒重连一次共 298 次。原因:`subscribe_if_due` 一发起重订阅就把状态从 `Backoff` 改成 `Pending`,下一次失败时 `attempt` 又从 0 算起,`RESUBSCRIBE_BACKOFF` 的 2/5/15/30 秒档位在真实流程里只会用到第 0 档(现有测试因连续喂 `SubscriptionLost` 而没经过 `subscribe_if_due`,没抓到)。未修 |
+| 发现:两个依赖仓库状态/并行的偶发测试 | ① bytehost `service::tests::the_first_run_is_unavailable_when_the_port_cannot_be_saved`:断言端口关闭后可重新绑定,并行跑时临时端口会被别的测试抢到,整仓 3 次里失败 1 次,单独跑 15/15 通过;② dozer `extensions::git_log::tests::build_marks_head_branch_and_labels`:读 dozer 自己的 git 仓库并期望历史第 0 行带当前分支,当 HEAD 落后于仓库里最新提交时(例如在落后于 `main` 的 worktree 里)稳定失败。均与功能无关,未修 |
 | 缺陷:设置页应用行的按钮被裁切 | 设置窗口里 `Py Crashy`、`Py Notes` 两行右侧按钮被窗口右边缘裁掉(只露出「卸载」的一小截红色),`Py BadVer` 一行完整。行内文字或按钮较多时没有换行/收缩 |
 | 观察:清单"dozerd 日志确认"不可行 | dozerd 对 `Logs` 请求没有任何日志,A6f 报告和本清单 3.5 里"看 dozerd 日志确认"的验证手段不存在;若要保留这条验收,需给该请求加 debug 级日志 |
 | 观察:4.3 提示文案已见 | 设置页 `Py Ver` 行下方显示"已从 1.2.0 自动回滚到 1.1.0:新版本 1.2.0 启动失败,已自动回滚"(4.3 的预期文案,截图可见) |

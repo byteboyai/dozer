@@ -60,6 +60,9 @@ dozer 已经有一份分级清单 `docs/dozer-v2/bytehost-manual-acceptance-chec
 - **压缩包条目路径不接受开头的 `./`**（A6h 报告：可用性上偏严，不是越权）；要支持需在 `safe_segments` 里先剥掉开头的 `./` 段，属 A6h 跟进或用户裁决事项。
 - **日志刷新是整段重读**（每秒读末尾 ≤256 KiB，未做偏移增量），有界但可能多读。
 - **打包 Excalidraw 时联网下载 3 个字体，未校验摘要**，镜像用 `latest`，以验收报告记录的摘要为准。
+- **重订阅退避不会拉长(待修):** `bytehost-panel` 的 `subscribe_if_due` 把 `Backoff` 改成 `Pending`,下一次失败时档位重新从 0 算起,真实流程里一直 2 秒重连一次(dozerd 停 14 分钟共 298 次)。修法是在 `Pending` 里保留上一次的 `attempt`,并补一条经过 `subscribe_if_due` 的测试(2026-10-17 验收复测发现)。
+- **PanelEffect 新增 `ConnectionLost`/`ConnectionRestored`(`v0.4.6`):** 它不是 `#[non_exhaustive]`,digger 升到 `v0.4.6` 时任何对 `PanelEffect` 的穷尽 `match` 都会编译失败,需要处理这两个变体。
+- **两个偶发测试(待修):** bytehost 的 `the_first_run_is_unavailable_when_the_port_cannot_be_saved`(并行时临时端口被抢)与 dozer 的 `git_log::tests::build_marks_head_branch_and_labels`(依赖 HEAD 是仓库里最新提交)。
 - **`data_store_identifier` 算法已钉死**，改动即破坏用户的 webview 数据归属，不得改。
 
 ## 5. 验收报告里记录的“已知无关失败”（2026-10-16 已复核）
