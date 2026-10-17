@@ -11,3 +11,68 @@ pub use bytehost_panel::logs::{FETCH_LINES, LogsEffect, LogsState, LogsView, REF
 pub fn scroll_id(app_id: &str) -> iced_widget::core::widget::Id {
     iced_widget::core::widget::Id::from(format!("app-log-view:{app_id}"))
 }
+
+/// 日志正文的文字色:主题的主文字色(`cream`,浅色主题里它是深色)。
+///
+/// 日志 `text(..)` 不设色时用的是 iced 默认文字色,和 Dozer 自己的主题脱节:浅色主题碰巧能看,深色主题下
+/// 几乎看不见(验收 2.7)。面板里的日志和设置页里的日志共用这一个入口。
+pub(crate) fn log_text_color(
+    tokens: &byteui::theme::color::ColorTokens,
+) -> iced_widget::core::Color {
+    tokens.cream
+}
+
+#[cfg(test)]
+mod tests {
+    use super::log_text_color;
+    use byteui::theme::color::ColorTokens;
+    use iced_widget::core::Color;
+
+    /// WCAG 相对亮度(sRGB → 线性)。
+    fn luminance(c: Color) -> f32 {
+        let lin = |v: f32| {
+            if v <= 0.03928 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+
+    fn contrast(a: Color, b: Color) -> f32 {
+        let (la, lb) = (luminance(a), luminance(b));
+        (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+    }
+
+    /// 验收 2.7/3.x:深色主题下日志文字几乎看不见(用的是 iced 默认文字色)。
+    /// 深色、浅色两套 token 下,日志文字与面板底色的对比度都要 ≥ 4.5(WCAG AA 正文)。
+    #[test]
+    fn log_text_is_readable_on_the_panel_in_both_themes() {
+        for (name, t) in [
+            ("dark", ColorTokens::byteboy2077()),
+            ("light", ColorTokens::byteboy2077_light()),
+        ] {
+            let ratio = contrast(log_text_color(&t), t.panel);
+            assert!(ratio >= 4.5, "{name}: 对比度 {ratio:.2} < 4.5");
+        }
+    }
+
+    /// 面板里的日志(`app/view.rs`)和设置页里的日志(`settings_apps_view.rs`)都必须经这个函数取色,
+    /// 防止以后又有一处漏设色。
+    #[test]
+    fn the_two_log_views_use_the_shared_colour() {
+        for (name, src) in [
+            ("app/view.rs", include_str!("../app/view.rs")),
+            (
+                "extensions/settings_apps_view.rs",
+                include_str!("settings_apps_view.rs"),
+            ),
+        ] {
+            assert!(
+                src.contains("log_text_color("),
+                "{name} 没有使用 log_text_color"
+            );
+        }
+    }
+}

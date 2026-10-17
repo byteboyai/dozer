@@ -1449,6 +1449,9 @@ fn render_logs_body<'a>(
             }
             let lines = iced_widget::text(text)
                 .size(byteui::theme::font::body())
+                .color(crate::extensions::app_logs::log_text_color(
+                    &byteui::theme::color::current(),
+                ))
                 .font(Font::default())
                 .shaping(iced_widget::core::text::Shaping::Advanced)
                 .width(Length::Fill);

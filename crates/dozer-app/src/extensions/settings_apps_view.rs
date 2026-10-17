@@ -366,6 +366,9 @@ fn log_viewer(view: LogsView, app_id: &bytehost_apps::id::AppId, locale: &str) -
             let scrolled_id = app_id.to_string();
             let lines = iced_widget::text(log_text)
                 .size(byteui::theme::font::body())
+                .color(crate::extensions::app_logs::log_text_color(
+                    &byteui::theme::color::current(),
+                ))
                 .shaping(iced_widget::core::text::Shaping::Advanced)
                 .width(Length::Fill);
             col = col.push(
