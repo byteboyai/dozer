@@ -1,14 +1,25 @@
 # bytehost 剩余未尽事项
 
-整理日期：2026-10-16。bytehost 仓库 `byteboyai/bytehost`，`main` 与远程同步、工作区干净，HEAD 即 `v0.4.4`。包含 7 个 crate（`bytehost-core`/`-chrome`/`-desktop`/`-webview`/`-apps`/`-client`/`-panel`）。dozer 与 digger 都依赖 `v0.4.1`。
+整理日期：2026-10-16；**2026-10-17 重写了现状**(同日做完 GUI 手工验收与一批修复)。bytehost 仓库 `byteboyai/bytehost`,`main` 与远程同步,HEAD 即 `v0.4.7`。包含 7 个 crate（`bytehost-core`/`-chrome`/`-desktop`/`-webview`/`-apps`/`-client`/`-panel`）。dozer 已依赖 `v0.4.7`(byteui `v0.4.5`);digger 的升级由用户在 digger 仓库处理。
 
 本文只收**尚未做完**的项。来源：bytehost 的 `docs/superpowers/specs/2026-10-04-bytehost-app-host-design.md`（§9 待裁决清单）、五份验收报告（A5、A6e、A6f、A6g、A6h）、dozer 的 `docs/dozer-v2/bytehost-manual-acceptance-checklist.md`、`bytehost-H8-evaluation.md`、`2026-10-04-bytehost-extraction-roadmap.md`、i18n 与 Digger 集成两条线的计划/台账。
 
 **核对方式：** 读文档、tag、`Cargo.toml`、git 历史；§5 的“已知失败测试”已于 2026-10-16 复跑，§1 的 A 级命令行项已于 2026-10-17 执行。
 
-## 1. 最大的一项：真实 GUI 手工验收全部未执行
+## 1. 真实 GUI 手工验收:做了一大半,仍有未做项
 
-五份验收报告都写着同一句：**自动化项已跑通，需要真实 GUI 的项尚未执行，不得据此把对应切片标成“已完成”**。未勾选项合计 30 个：A5 九项、A6e 八项、A6f 四项、A6g 三项、A6h 六项。i18n 验收里还有标 ⏳ 的 B 项。
+2026-10-17 在隔离环境里用真 GUI 做了手工验收,逐项结果见 `docs/superpowers/manual_tests/2026-10-16-bytehost-manual-acceptance.md`,五份验收报告的勾选状态也已按结果回写。**五个切片(A5、A6e、A6f、A6g、A6h)仍不标"已完成"**,因为还有这些没做:
+
+- **A5 Excalidraw 本体(12 项):** 需要先联网打包字体;已用 `py-notes` 验证过同一个网关的 Host 伪造、dozerd 停/重启。
+- **A6h 网络来源(3 项):** 需要真实 https 服务器;可以借 GitHub 的 raw 地址当一个真实来源。输入法一项只能人来做。
+- **A6e:** `node-notes` 那一遍、藏起 node 的"尚未安装"提示、受管 Node(要联网下载)、"退出整个 GUI"那一半。
+- **应用 i18n 的双窗口隔离(6.3):** 依赖分离窗口功能(已推迟),现在做不了。
+
+验收中发现的问题大多已修(见手测文档里带"已修复"的行);已修的:WebSocket 经网关握手失败(bytehost `v0.4.5`)、断线静默(`v0.4.6` + dozer Toast)、日志文字不跟主题、设置页按钮裁切/挤压、i18n 样例被 CSP 拦、审批卡"来源渠道"标签、重订阅退避不拉长(`v0.4.7`)、压缩包 `./` 前缀(`v0.4.7`)、图标栏无区分(首字母徽标,byteui `v0.4.5`)。**撤回一条:** 验收时记的"crash 恢复后页面不重载"是我看错了,复测两条路径都会重载。
+
+**有意不改(已裁决,写在这里避免被当成遗漏):**
+- **hang 期间约 35 秒内面板仍显示"运行中"的旧页面,没有"无响应"提示。** 要显示就得新增"无响应"状态并追加 wire、改 supervisor 与面板,收益小。
+- **启动即崩的应用要等约 40 秒才出现 Crashed 页。** 退避 1/2/4/8/16 秒重启 5 次才放弃是 supervisor 的设计,期间面板只显示"启动中…"。
 
 dozer 已经有一份分级清单 `docs/dozer-v2/bytehost-manual-acceptance-checklist.md`（2026-10-16 整理）：
 
@@ -36,7 +47,7 @@ dozer 已经有一份分级清单 `docs/dozer-v2/bytehost-manual-acceptance-chec
 | dozer `CLAUDE.md` bytehost 一行 | 按 tag `v0.1.1` | `v0.4.1` |
 | bytehost `README.md` | “四个 crate”；Digger 嵌入“尚未随 tag 发布” | 七个 crate（补 `core`/`desktop`/`chrome`，并说明前四个与后三个的依赖边界不同）；嵌入已随 tag 发布（`v0.2.0` 起，来自台账 Task 22/23） |
 
-**仍然存在的不一致（没改）：** bytehost 各 crate 的 `Cargo.toml` 版本都是 `0.1.0`，而 tag 已到 `v0.4.4`。`bytehost-acceptance.md` 说明“`HOST_VERSION` 仍为 `0.1.0`，tag 版本与宿主能力版本解耦”，所以这是有意约定，但没有写进 README，容易让人困惑。
+**仍然存在的不一致（没改）：** bytehost 各 crate 的 `Cargo.toml` 版本都是 `0.1.0`，而 tag 已到 `v0.4.7`。`bytehost-acceptance.md` 说明“`HOST_VERSION` 仍为 `0.1.0`，tag 版本与宿主能力版本解耦”，所以这是有意约定，但没有写进 README，容易让人困惑。
 
 ## 3. 功能层面明确还没做的
 
@@ -57,12 +68,12 @@ dozer 已经有一份分级清单 `docs/dozer-v2/bytehost-manual-acceptance-chec
 - **UDS 上的请求等于“同一用户”。** 同用户进程（包括 Dozer 的 PTY 里的 Agent）可以自己出计划、自己批准、自己安装并启动应用；“甲方批准”只是产品层约定，dozerd 不强制。需要强制时要由 supervisor 保存计划并只接受自己签发的。
 - **`LocalDir` 安装会把整个源目录永久拷进应用目录**（含 `.env` 之类的敏感文件），即使 gateway 只提供 `runtime.source` 子目录。
 - **本机压缩包享受 `Trusted`**：用户手动选中一个从网上下载的压缩包，与选目录一样受信。
-- **压缩包条目路径不接受开头的 `./`**（A6h 报告：可用性上偏严，不是越权）；要支持需在 `safe_segments` 里先剥掉开头的 `./` 段，属 A6h 跟进或用户裁决事项。
+- ~~**压缩包条目路径不接受开头的 `./`**（A6h 报告：可用性上偏严，不是越权）；要支持需在 `safe_segments` 里先剥掉开头的 `./` 段，属 A6h 跟进或用户裁决事项。~~ **已处理(2026-10-17):bytehost `v0.4.7` 起接受开头的 `./`,根目录条目被跳过;`a/./b`、`./../x`、`.//a`、绝对路径等仍拒绝,真实系统 `tar -czf x.tgz .` 已测。**
 - **日志刷新是整段重读**（每秒读末尾 ≤256 KiB，未做偏移增量），有界但可能多读。
 - **打包 Excalidraw 时联网下载 3 个字体，未校验摘要**，镜像用 `latest`，以验收报告记录的摘要为准。
-- **重订阅退避不会拉长(待修):** `bytehost-panel` 的 `subscribe_if_due` 把 `Backoff` 改成 `Pending`,下一次失败时档位重新从 0 算起,真实流程里一直 2 秒重连一次(dozerd 停 14 分钟共 298 次)。修法是在 `Pending` 里保留上一次的 `attempt`,并补一条经过 `subscribe_if_due` 的测试(2026-10-17 验收复测发现)。
+- ~~**重订阅退避不会拉长(待修):** `bytehost-panel` 的 `subscribe_if_due` 把 `Backoff` 改成 `Pending`,下一次失败时档位重新从 0 算起,真实流程里一直 2 秒重连一次(dozerd 停 14 分钟共 298 次)。修法是在 `Pending` 里保留上一次的 `attempt`,并补一条经过 `subscribe_if_due` 的测试(2026-10-17 验收复测发现)。~~ **已修复(2026-10-17):bytehost `v0.4.7`,`Pending` 带着上一次的档位。**
 - **PanelEffect 新增 `ConnectionLost`/`ConnectionRestored`(`v0.4.6`):** 它不是 `#[non_exhaustive]`,digger 升到 `v0.4.6` 时任何对 `PanelEffect` 的穷尽 `match` 都会编译失败,需要处理这两个变体。
-- **两个偶发测试(待修):** bytehost 的 `the_first_run_is_unavailable_when_the_port_cannot_be_saved`(并行时临时端口被抢)与 dozer 的 `git_log::tests::build_marks_head_branch_and_labels`(依赖 HEAD 是仓库里最新提交)。
+- **偶发测试:** 已修两个——bytehost `the_first_run_is_unavailable_when_the_port_cannot_be_saved`(端口释放断言改成带 2 秒重试,`v0.4.7`)、dozer `git_log::tests::build_marks_head_branch_and_labels`(改成找带当前分支标签的那一行)。**复测又发现两个同类偶发(待修):** bytehost `service::tests::start_uses_the_persisted_port_across_restarts`(同样是"先挑空闲端口、稍后才绑定"的竞态,40 遍整套并行失败 2 次)和 `manager::tests::a_python_app_installs_starts_runs_behind_the_gateway_and_stops`(事件顺序断言,约 1/40)。
 - **`data_store_identifier` 算法已钉死**，改动即破坏用户的 webview 数据归属，不得改。
 
 ## 5. 验收报告里记录的“已知无关失败”（2026-10-16 已复核）
@@ -76,7 +87,7 @@ dozer 已经有一份分级清单 `docs/dozer-v2/bytehost-manual-acceptance-chec
 
 ## 6. 架构线：H8 与 Digger 一并推进
 
-- **H8（面板状态与消息信封从“点名 12 个面板”改为按面板 id 取的容器）。** 评估报告 `bytehost-H8-evaluation.md`：Q-H8-1 已按 A+B 裁决（停在 H7a，先做 O12 探针）；Usage 探针（2026-10-08）按原判据只命中 2 条，未达阈值，结论是 H8 的合理范围不是全量动态化，而是补齐几块契约。O7（`protocol` 归属）已解（`dozer-model`），X0 试点（Usage 经 `dozer-services` 取数）已落地，其余面板在按纵向切片迁移（CLAUDE.md 称全部面板已迁）。**报告里 Q-H8-2（Digger 复用 Dozer 面板是近期已排期还是“将来可能”）、Q-H8-3（首要目标是“host 可复用”还是“`update.rs` 变小”）我没有找到明确的裁决记录**；Digger 现在已经在复用 Usage 面板（`libs-2026-10-16c`），Q-H8-2 事实上已回答，但没有写回。路线图 X4 只做 host 骨架需要的最小部分；每一步开工前先复测三个度量（`PanelKind` 引用、`update.rs` 面板臂数、`Workspace` 面板字段数），确认数字确实下降。**不要自动排全量 H8。**
+- **H8（面板状态与消息信封从“点名 12 个面板”改为按面板 id 取的容器）。** 评估报告 `bytehost-H8-evaluation.md`：Q-H8-1 已按 A+B 裁决（停在 H7a，先做 O12 探针）；Usage 探针（2026-10-08）按原判据只命中 2 条，未达阈值，结论是 H8 的合理范围不是全量动态化，而是补齐几块契约。O7（`protocol` 归属）已解（`dozer-model`），X0 试点（Usage 经 `dozer-services` 取数）已落地，其余面板在按纵向切片迁移（CLAUDE.md 称全部面板已迁）。**报告里 Q-H8-2（Digger 复用 Dozer 面板是近期已排期还是“将来可能”）、Q-H8-3（首要目标是“host 可复用”还是“`update.rs` 变小”）我没有找到明确的裁决记录**；Digger 现在已经在复用 Usage 面板（`libs-2026-10-16c`），Q-H8-2 事实上已回答；**该事实结论已于 2026-10-17 写回 `bytehost-H8-evaluation.md`**(裁决仍属用户,Q-H8-3 仍未裁决)。路线图 X4 只做 host 骨架需要的最小部分；每一步开工前先复测三个度量（`PanelKind` 引用、`update.rs` 面板臂数、`Workspace` 面板字段数），确认数字确实下降。**不要自动排全量 H8。**
 - **A8（Digger 的 supervisor 怎么实现）：** spec 写“待 Digger 启动时裁决”。实际 Digger 已选**进程内嵌入**（`bytehost-client/in-process` 的 `InProcess`，无守护进程），可以把这条标成已定。
 - **Digger 完整接入的硬缺口**（台账 Task 23 标 DONE，但 `docs/dozer-v2/digger-bytehost-integration/acceptance.md` §4.5 的最终判定是 **pass 7 · partial 11，整体不标“完全接入”**）：
   - **A17 真实 Usage 生产端：** 真实生产事件 → 账本 → UI → 跨重启没有实跑；应用运行携带的 token 诚实为 0（S6/S7 不完整）。
