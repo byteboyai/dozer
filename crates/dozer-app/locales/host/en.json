@@ -49,6 +49,8 @@
   "app.reading_state": "Reading app state…",
   "app.cannot_connect_dozerd": "Cannot connect to dozerd",
   "app.state_unavailable_detail": "App state is temporarily unavailable; it will recover once connected",
+  "app.host_connection_lost": "Lost connection to dozerd, reconnecting…",
+  "app.host_connection_restored": "Reconnected to dozerd",
   "app.not_in_installed_list": "This app is no longer in the installed list",
   "app.not_running": "App not running",
   "app.start": "Start",

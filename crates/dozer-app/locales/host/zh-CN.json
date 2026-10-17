@@ -49,6 +49,8 @@
   "app.reading_state": "正在读取应用状态…",
   "app.cannot_connect_dozerd": "无法连接 dozerd",
   "app.state_unavailable_detail": "应用状态暂时读不到,连上后会自动恢复",
+  "app.host_connection_lost": "与 dozerd 的连接中断,正在重连…",
+  "app.host_connection_restored": "已重新连上 dozerd",
   "app.not_in_installed_list": "这个应用已不在已安装列表里",
   "app.not_running": "应用未运行",
   "app.start": "启动",

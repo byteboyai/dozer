@@ -19,10 +19,9 @@ pub const LOAD_FAILURE_COOLDOWN: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
-    // 预留的级别:目前的调用点都是失败/警告,成功/信息类提示暂无调用点。
+    // 预留的级别:`Info` 暂无调用点;`Success` 只有 dozerd 订阅恢复提示在用。
     #[allow(dead_code)]
     Info,
-    #[allow(dead_code)]
     Success,
     Warning,
     Error,
