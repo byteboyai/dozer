@@ -198,6 +198,41 @@ fn runtime_row_view<'a>(state: &'a State, probe: &'a RuntimeProbe, locale: &str)
     r.into()
 }
 
+/// 应用行里此刻该显示的动作(纯逻辑,与视图分开以便测试)。顺序即显示顺序。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RowAction {
+    Stop,
+    Rollback(bytehost_apps::id::Version),
+    /// `open`:日志查看器是否已展开(展开着时按钮变「收起日志」)。
+    Logs {
+        open: bool,
+    },
+    Uninstall,
+}
+
+/// `acting`:该应用有动作在处理中(此时只显示"处理中…",不给按钮)。
+fn row_actions(app: &AppSummary, acting: bool, log_open: bool) -> Vec<RowAction> {
+    if acting {
+        return Vec::new();
+    }
+    let mut actions = Vec::new();
+    if matches!(
+        app.observed,
+        ObservedState::Running | ObservedState::Starting
+    ) {
+        actions.push(RowAction::Stop);
+    }
+    // 有上一版才给回滚入口(A6g)。
+    if let Some(to) = app.previous_version {
+        actions.push(RowAction::Rollback(to));
+    }
+    actions.push(RowAction::Logs { open: log_open });
+    if !app.observed.is_transient() {
+        actions.push(RowAction::Uninstall);
+    }
+    actions
+}
+
 fn app_row<'a>(state: &'a State, app: &'a AppSummary, locale: &str) -> El<'a> {
     let colors = byteui::theme::color::current();
     let id = app.id.as_str().to_owned();
@@ -216,72 +251,65 @@ fn app_row<'a>(state: &'a State, app: &'a AppSummary, locale: &str) -> El<'a> {
         .as_ref()
         .and_then(|d| d.resolve_title(&DisplayTitleScope::Presentation, locale))
         .unwrap_or(app.name.as_str());
-    let mut r = row![
+    let acting = state.is_acting(&id).is_some();
+    // 第一层:标题 + 版本/状态(+ 处理中提示);第二层:动作按钮,放进可换行的行里,
+    // 窄对话框里换行而不是被裁切或把文字挤成多行。
+    let mut head = row![
         text(title)
             .size(byteui::theme::font::body())
             .color(colors.cream),
         dim(version_line),
-        Space::new().width(Length::Fill),
     ]
     .spacing(10)
     .align_y(Alignment::Center);
-    match state.is_acting(&id) {
-        Some(_) => {
-            r = r.push(dim(crate::i18n::host_text(
-                "settings.apps.processing",
-                "Processing…",
-                locale,
-            )))
-        }
-        None => {
-            if matches!(
-                app.observed,
-                ObservedState::Running | ObservedState::Starting
-            ) {
-                r = r.push(action_button(
-                    crate::i18n::host_text("settings.apps.stop", "Stop", locale),
-                    Message::StopClicked(id.clone()),
-                    colors.dim,
-                ));
-            }
-            // 有上一版才给回滚入口(A6g)。
-            if let Some(to) = app.previous_version {
-                r = r.push(action_button(
-                    crate::i18n::host_text_args(
-                        "settings.apps.rollback_to",
-                        "Roll back to {to}",
-                        locale,
-                        &[("to", &to.to_string())],
-                    ),
-                    Message::RollbackClicked(id.clone()),
-                    colors.dim,
-                ));
-            }
+    if acting {
+        head = head.push(dim(crate::i18n::host_text(
+            "settings.apps.processing",
+            "Processing…",
+            locale,
+        )));
+    }
+    let mut buttons = row![].spacing(8).align_y(Alignment::Center);
+    for action in row_actions(app, acting, state.is_log_open(&id)) {
+        buttons = buttons.push(match action {
+            RowAction::Stop => action_button(
+                crate::i18n::host_text("settings.apps.stop", "Stop", locale),
+                Message::StopClicked(id.clone()),
+                colors.dim,
+            ),
+            RowAction::Rollback(to) => action_button(
+                crate::i18n::host_text_args(
+                    "settings.apps.rollback_to",
+                    "Roll back to {to}",
+                    locale,
+                    &[("to", &to.to_string())],
+                ),
+                Message::RollbackClicked(id.clone()),
+                colors.dim,
+            ),
             // 运行中与失败都能看日志;展开着时按钮变「收起日志」。
-            let (log_label, log_msg) = if state.is_log_open(&id) {
-                (
-                    crate::i18n::host_text("settings.apps.hide_logs", "Hide logs", locale),
-                    Message::HideLogs,
-                )
-            } else {
-                (
-                    crate::i18n::host_text("settings.apps.logs", "Logs", locale),
-                    Message::ShowLogs(id.clone()),
-                )
-            };
-            r = r.push(action_button(log_label, log_msg, colors.dim));
-            if !app.observed.is_transient() {
-                r = r.push(action_button(
-                    crate::i18n::host_text("settings.apps.uninstall", "Uninstall", locale),
-                    Message::UninstallClicked(id.clone()),
-                    colors.red,
-                ));
-            }
-        }
+            RowAction::Logs { open: true } => action_button(
+                crate::i18n::host_text("settings.apps.hide_logs", "Hide logs", locale),
+                Message::HideLogs,
+                colors.dim,
+            ),
+            RowAction::Logs { open: false } => action_button(
+                crate::i18n::host_text("settings.apps.logs", "Logs", locale),
+                Message::ShowLogs(id.clone()),
+                colors.dim,
+            ),
+            RowAction::Uninstall => action_button(
+                crate::i18n::host_text("settings.apps.uninstall", "Uninstall", locale),
+                Message::UninstallClicked(id.clone()),
+                colors.red,
+            ),
+        });
     }
 
-    let first: El<'a> = r.into();
-    let mut col = column![first].spacing(6).width(Length::Fill);
+    let mut col = column![El::from(head)].spacing(6).width(Length::Fill);
+    if !acting {
+        col = col.push(buttons.wrap().vertical_spacing(6));
+    }
     // 该应用的回滚确认开着:行内二次确认(不用 Toast)。
     if let Flow::ConfirmRollback {
         id: pending, to, ..
@@ -842,4 +870,75 @@ fn review_view<'a>(plan: &'a InstallPlan, running: bool, locale: &str) -> El<'a>
         .spacing(8),
     );
     container(col).padding(10).width(Length::Fill).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RowAction, row_actions};
+    use bytehost_apps::id::{AppId, Version};
+    use bytehost_apps::proto::AppSummary;
+    use bytehost_apps::state::{DesiredState, ObservedState};
+
+    fn summary(observed: ObservedState, previous: Option<Version>) -> AppSummary {
+        AppSummary {
+            id: AppId::new("demo").unwrap(),
+            name: "Demo".into(),
+            version: Version::new(1, 1, 0),
+            desired: DesiredState::Running,
+            observed,
+            url: None,
+            issue: None,
+            previous_version: previous,
+            rollback_note: None,
+            display_i18n: None,
+        }
+    }
+
+    /// 验收:`Py Notes` 一行的按钮被裁切、「回滚到 1.0.0」被挤成三行。把按钮挪到自己的可换行行里之前,
+    /// 先钉住"此刻该显示哪些按钮、什么顺序",保证重构不丢按钮。
+    #[test]
+    fn a_running_app_with_a_previous_version_offers_stop_rollback_logs_uninstall_in_order() {
+        let prev = Version::new(1, 0, 0);
+        let a = summary(ObservedState::Running, Some(prev));
+        assert_eq!(
+            row_actions(&a, false, false),
+            vec![
+                RowAction::Stop,
+                RowAction::Rollback(prev),
+                RowAction::Logs { open: false },
+                RowAction::Uninstall,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_stopped_app_without_a_previous_version_offers_only_logs_and_uninstall() {
+        let a = summary(ObservedState::Stopped, None);
+        assert_eq!(
+            row_actions(&a, false, true),
+            vec![RowAction::Logs { open: true }, RowAction::Uninstall],
+            "日志展开着时按钮变「收起日志」(open: true)"
+        );
+    }
+
+    #[test]
+    fn a_transient_app_cannot_be_uninstalled_and_a_starting_one_can_be_stopped() {
+        let a = summary(ObservedState::Starting, None);
+        assert_eq!(
+            row_actions(&a, false, false),
+            vec![RowAction::Stop, RowAction::Logs { open: false }],
+            "Starting:有停止、没有卸载"
+        );
+        let b = summary(ObservedState::Updating, None);
+        assert!(!row_actions(&b, false, false).contains(&RowAction::Uninstall));
+    }
+
+    #[test]
+    fn an_app_being_acted_on_shows_no_buttons() {
+        let a = summary(ObservedState::Running, Some(Version::new(1, 0, 0)));
+        assert!(
+            row_actions(&a, true, false).is_empty(),
+            "处理中只显示\"处理中…\""
+        );
+    }
 }
