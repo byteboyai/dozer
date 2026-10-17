@@ -131,8 +131,9 @@ pub enum Message {
         message_id: i64,
         todo_id: i64,
     },
-    /// 原生群列表:点一行选中该群。
-    SelectRequested(i64),
+    /// 原生群列表:点一行选中该群(项目 id, 群 id)。项目 id 用于消息路由,
+    /// 群 id 才是 `select` 的目标——两者不可混用。
+    SelectRequested(i64, i64),
     /// 原生群列表"新建群聊"弹窗主题文本框的编辑动作(text_editor)。
     NewGroupTopicAction(i64, iced_widget::text_editor::Action),
     /// 打开/关闭原生群列表"新建群聊"弹窗。
@@ -168,7 +169,7 @@ impl Message {
             | Message::NewGroupAgentToggled(p, _)
             | Message::Noop(p)
             | Message::Failed(p, _) => *p,
-            Message::SelectRequested(p)
+            Message::SelectRequested(p, _)
             | Message::Polled { project_id: p, .. }
             | Message::Posted { project_id: p, .. }
             | Message::TodoPushed { project_id: p, .. } => *p,
@@ -507,7 +508,7 @@ pub fn update(state: &mut WorkspaceState, msg: Message) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Message::SelectRequested(id) => state.select(id),
+        Message::SelectRequested(_, group_id) => state.select(group_id),
         Message::NewGroupTopicAction(_, action) => {
             state.new_group_topic.perform(action.clone());
             Vec::new()
@@ -1408,7 +1409,7 @@ mod tests {
                 message_id: 1,
                 todo_id: 1,
             },
-            Message::SelectRequested(3),
+            Message::SelectRequested(3, 1),
             Message::NewGroupTopicAction(
                 3,
                 iced_widget::text_editor::Action::Edit(iced_widget::text_editor::Edit::Enter),
@@ -1631,6 +1632,16 @@ mod tests {
         select_group(&mut s, 7, 999, &io);
         assert_eq!(s.selected(), Some(5));
         assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+    }
+
+    #[test]
+    fn select_requested_uses_the_group_id_not_the_project_id() {
+        // 回归:原生列表曾把项目 id 当群 id 传给 `select`,只有「群 id 恰好等于
+        // 项目 id」的那一行能选中,其余行点了没反应。
+        let mut s = loaded(vec![group(5, "A"), group(6, "B")]);
+        let fx = update(&mut s, Message::SelectRequested(1, 6));
+        assert_eq!(s.selected(), Some(6));
+        assert_eq!(fx, vec![Effect::FetchMessages { group_id: 6 }]);
     }
 
     #[test]

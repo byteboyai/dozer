@@ -110,7 +110,8 @@ fn group_row<'a>(
         ]
         .spacing(4),
     )
-    .on_press(Message::SelectRequested(project_id))
+    // 项目 id 供消息路由,群 id 供 `select` 选中该行——不能只传项目 id。
+    .on_press(Message::SelectRequested(project_id, group.id))
     .width(Length::Fill)
     .padding(10)
     .style(byteui::interaction::cards::button_card(current, c.card))
