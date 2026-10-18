@@ -64,7 +64,7 @@ target/aarch64-apple-darwin/debug/dozer
 | 2.7 | 把 `server.py` 改成启动即退出再重装 | Crashed 页,点「查看日志」能看到输出末尾 | py:✅ 约 40 秒后出现 Crashed 页("应用已退出 / 健康检查没通过: 进程已经退出(重启次数过多,已放弃)",按钮「重新启动」「查看日志」);日志展开后 6 行输出(1 次首启 + 5 次重启);**但日志文字对比度极低**,见下表 |
 | 2.8 | 卸载「保留数据」再装 | 计数还在 | py:✅ 卸载前计数 4,重装后 `counter.txt` 仍是 4,修改时间在卸载之前(未被重写) |
 | 2.9 | 卸载「含数据」再装 | 计数归零 | py:✅ 卸载后 `data/` 目录消失;日志有"已清除应用的 WebView 数据存储";重装并启动后页面与 `counter.txt` 都是 `hits: 1` |
-| 2.10 | 设置里装受管 Node(要联网),再启动 `node-notes` | 页面显示的 node 版本是受管版本 | ☐ |
+| 2.10 | 设置里装受管 Node(要联网),再启动 `node-notes` | 页面显示的 node 版本是受管版本 | node:✅(2026-10-18,隔离 `HOME=/tmp/dzh`)审批卡显示:Node.js 24.21.0、来源 `https://nodejs.org/dist/v24.21.0/node-v24.21.0-darwin-arm64.tar.gz`、SHA-256 `bed7eea5…6057`("官方 nodejs.org 发行版,已固定的 SHA-256")、安装位置在 bytehost 的 `runtimes/node/24.21.0`、"下载并校验 SHA-256 / 解压 / 不修改系统环境与 shell 配置";**该 SHA-256 与代码里钉死的值、nodejs.org 官方 `SHASUMS256.txt` 三方一致**。批准后安装完成:`bin/node -v` = v24.21.0,目录 199M,无残留临时文件。启动 `node-notes`:页面 `runtime: Node.js 24.21.0`(同机系统 node 为 24.14.0 与 26.11.1,所以能区分),应用进程路径是 `runtimes/node/24.21.0/bin/node`,父进程为 dozerd;系统 node 未被改动。 |
 
 ## 3. 状态推送与日志(A6f)
 
