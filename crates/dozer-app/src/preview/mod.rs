@@ -17,6 +17,8 @@ mod trust;
 mod view;
 mod webview;
 mod webview_protocol;
+#[cfg(test)]
+mod webview_spec_golden;
 
 /// 预览层的 i18n owner(spec §6.1:官方 owner 固定 `dozer.<id>`)。
 /// 预览不是 `PanelKind` 面板,资源在 `locales/panels/preview/`,但归
