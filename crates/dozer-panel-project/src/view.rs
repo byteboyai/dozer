@@ -1143,6 +1143,7 @@ fn memory_detail_view<'a>(
     col.into()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn links_section<'a>(
     title: String,
     target: links::LinkTarget,

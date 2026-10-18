@@ -67,6 +67,24 @@ pub fn keyed_args(key: &str, fallback: &str, args: &[(&str, &str)]) -> Localized
     text
 }
 
+/// 语言无关的稳定渲染值(英文 + 已插值参数、折叠空白):测试与去重比较用,
+/// 与 Dozer `i18n::host_render_stable` + `toast::normalize` 的口径一致。
+#[cfg(test)]
+pub fn stable(text: &LocalizedText) -> String {
+    resolver()
+        .resolve(text, "en")
+        .text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// 按中文解析一条本面板文案(测试用)。
+#[cfg(test)]
+pub fn resolve_zh(text: &LocalizedText) -> String {
+    resolver().resolve(text, "zh-CN").text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,22 +121,4 @@ mod tests {
         );
         assert_eq!(text.owner, PROJECT_OWNER);
     }
-}
-
-/// 语言无关的稳定渲染值(英文 + 已插值参数、折叠空白):测试与去重比较用,
-/// 与 Dozer `i18n::host_render_stable` + `toast::normalize` 的口径一致。
-#[cfg(test)]
-pub fn stable(text: &LocalizedText) -> String {
-    resolver()
-        .resolve(text, "en")
-        .text
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// 按中文解析一条本面板文案(测试用)。
-#[cfg(test)]
-pub fn resolve_zh(text: &LocalizedText) -> String {
-    resolver().resolve(text, "zh-CN").text
 }

@@ -41,6 +41,7 @@ pub fn delete_scopes() -> Vec<DeleteScope> {
 /// `transcript = None`(Digger)时跳过转录删除;`agent_dir(label, repo)`
 /// 由产品给出三家 agent 缓存目录(`dozer-core` 的路径规则留在产品侧,库不依赖
 /// 它)。
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_delete_project(
     project_id: i64,
     repo_path: PathBuf,

@@ -732,26 +732,27 @@ fn pair_content_pane_bounds_for(
     // 给定"面板区外框(区)矩形" → 内容矩形。放大态与非放大态只差这个输入
     // 矩形,分块逻辑共用(同 `git_log_diff_pane_bounds_for` 的 `compute` 手法)。
     // `top_inset` 为该分支下 webview 顶部应让出的高度(原生面板头或圆角内缩)。
-    let compute = |inx: f32, iny: f32, inw: f32, inh: f32, top_inset: f32| -> (f32, f32, f32, f32) {
-        let (x, w) = if pane.list_visible {
-            let pair_w = pair_content_width(inw);
-            let cols = pair_columns(
-                pair_w,
-                pane.split,
-                if pane.content_first {
-                    !mirrored
-                } else {
-                    mirrored
-                },
-            );
-            (inx + cols.content_x, cols.content_w.max(0.0))
-        } else {
-            (inx, inw.max(0.0))
+    let compute =
+        |inx: f32, iny: f32, inw: f32, inh: f32, top_inset: f32| -> (f32, f32, f32, f32) {
+            let (x, w) = if pane.list_visible {
+                let pair_w = pair_content_width(inw);
+                let cols = pair_columns(
+                    pair_w,
+                    pane.split,
+                    if pane.content_first {
+                        !mirrored
+                    } else {
+                        mirrored
+                    },
+                );
+                (inx + cols.content_x, cols.content_w.max(0.0))
+            } else {
+                (inx, inw.max(0.0))
+            };
+            let y = iny + top_inset;
+            let h = (inh - top_inset).max(0.0);
+            (x, y, w, h)
         };
-        let y = iny + top_inset;
-        let h = (inh - top_inset).max(0.0);
-        (x, y, w, h)
-    };
 
     if let Some(maximized) = state.maximized {
         let showing_side = match maximized {

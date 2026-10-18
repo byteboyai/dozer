@@ -825,7 +825,7 @@ fn memory_detail_load_failed_sets_the_inline_error() {
         |_| {},
     );
     assert_eq!(
-        ws.error.as_ref().map(|e| crate::i18n::resolve_zh(e)),
+        ws.error.as_ref().map(crate::i18n::resolve_zh),
         Some("读取记忆失败: 连接被拒".to_string())
     );
     assert!(ws.memory_detail.is_none(), "读取失败不应留下半截详情");
@@ -1058,7 +1058,7 @@ fn repair_run_success_reports_the_import_count_and_final_progress() {
         msgs.iter().any(|m| matches!(
             m,
             Message::TranscriptBackfillFinished(1, scaffold::ScaffoldStepResult::Created(t))
-                if stable(&t) == "Imported 2 history files"
+                if stable(t) == "Imported 2 history files"
         )),
         "{msgs:?}"
     );
@@ -1078,7 +1078,7 @@ fn repair_run_reports_a_missing_batch() {
     assert!(
         matches!(msgs.last().unwrap(),
             Message::SummaryBackfillFailed(1, t)
-                if stable(&t)
+                if stable(t)
                     == "Summary batch not found, please retry"),
         "{msgs:?}"
     );
@@ -1094,7 +1094,7 @@ fn repair_run_reports_a_failed_batch_query_with_the_service_text() {
     assert!(
         matches!(msgs.last().unwrap(),
             Message::SummaryBackfillFailed(1, t)
-                if stable(&t) == "Failed to summarize: daemon 错误: nope"),
+                if stable(t) == "Failed to summarize: daemon 错误: nope"),
         "{msgs:?}"
     );
 }
