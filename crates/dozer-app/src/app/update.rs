@@ -3601,10 +3601,7 @@ impl App {
             }
             Message::Project(project::Message::TextInputMenuOpen(target)) => {
                 self.update(Message::TextInputMenuOpen(
-                    crate::app::state::TextInputTarget {
-                        id: target.id,
-                        secure: target.secure,
-                    },
+                    crate::host_adapters::project_panel::text_target_of(target),
                 ));
             }
             Message::Project(project::Message::ToolbarHover(target, hovered)) => {

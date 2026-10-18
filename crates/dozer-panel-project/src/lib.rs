@@ -15,6 +15,7 @@ pub mod meta;
 pub mod scaffold;
 pub mod state;
 pub mod update;
+pub mod view;
 
 #[cfg(test)]
 mod fakes;

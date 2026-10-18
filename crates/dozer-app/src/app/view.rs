@@ -705,21 +705,14 @@ pub(crate) fn panel_body<'a>(
             let (list_portion, content_portion) = split_portions(app.dims.project_split);
             let info_pane: Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> =
                 project::view(
+                    app,
                     &ws.project_panel,
                     ws.project.as_ref(),
                     Length::FillPortion(list_portion),
                     zone_pane_border(zone, lc),
-                    project::ProjectPaneHover {
-                        docs_add: app
-                            .hover_progress(HoverId::named(PanelKind::Project, "docs_add")),
-                        remote_add: app
-                            .hover_progress(HoverId::named(PanelKind::Project, "remote_add")),
-                        memory_add: app
-                            .hover_progress(HoverId::named(PanelKind::Project, "memory_add")),
-                    },
+                    crate::host_adapters::project_panel::pane_hover(app),
                     app.locale.active_locale(),
-                )
-                .map(Message::Project);
+                );
             let preview = project_preview_pane(
                 app,
                 ws,

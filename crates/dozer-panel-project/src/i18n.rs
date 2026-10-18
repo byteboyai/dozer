@@ -46,6 +46,13 @@ pub fn t_args(key: &str, fallback: &str, locale: &str, args: &[(&str, &str)]) ->
     resolver().resolve(&text, locale).text
 }
 
+/// 按当前 locale 解析一条**任意 owner** 的 `LocalizedText`(状态里存的 keyed 文案)。
+/// 本面板自有的文案走 [`t`];其他 owner(共享记忆等)在本地解析不到时回落英文兜底,
+/// 与产品侧解析器的行为一致。
+pub fn t_from(text: &LocalizedText, locale: &str) -> String {
+    resolver().resolve(text, locale).text
+}
+
 /// 构造一条本面板 `LocalizedText`(后台任务 / 生产端拿不到 locale 时用),渲染端按当前 locale 解析。
 pub fn keyed(key: &str, fallback: &str) -> LocalizedText {
     LocalizedText::keyed(PROJECT_OWNER, key, fallback)

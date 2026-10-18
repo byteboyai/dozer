@@ -59,6 +59,10 @@
   "scaffold.step.git": "Git repository",
   "scaffold.step.readme": "README",
   "scaffold.title": "Repair project",
+  "time.days_ago": "{n} days ago",
+  "time.hours_ago": "{n} hours ago",
+  "time.just_now": "Just now",
+  "time.minutes_ago": "{n} minutes ago",
   "unset": "Not set",
   "usage.label": "File storage",
   "usage.with_size": "File storage ({size} MB)"

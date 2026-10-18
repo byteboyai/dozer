@@ -59,6 +59,10 @@
   "scaffold.step.git": "git 仓库",
   "scaffold.step.readme": "README",
   "scaffold.title": "修复项目",
+  "time.days_ago": "{n} 天前",
+  "time.hours_ago": "{n} 小时前",
+  "time.just_now": "刚刚",
+  "time.minutes_ago": "{n} 分钟前",
   "unset": "未设置",
   "usage.label": "文件存储",
   "usage.with_size": "文件存储 ({size} MB)"
