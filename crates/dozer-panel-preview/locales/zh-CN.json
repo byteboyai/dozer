@@ -1,1 +1,6 @@
-{}
+{
+  "preview.line_index_failed": "建立行索引失败: {error}",
+  "preview.load_timeout_retry": "预览加载超时,请重试",
+  "preview.enter_code_mode_failed": "打开代码模式失败: {e}",
+  "preview.file_unreadable": "文件不存在或不可读: {path}"
+}

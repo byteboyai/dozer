@@ -21,6 +21,7 @@
   "route.unknown_text_probe": "Unknown text (content probe)",
   "route.empty_file": "Empty file",
   "route.persisted_mode": "User-persisted mode",
+  "route.backend_disabled": "Preview not enabled in this app",
 
   "policy.max_line_force_windowed": "Longest line {max_line} exceeds 5MiB; forced windowing ({size} bytes)",
   "policy.editable_in_budget": "Editable working set within budget and <= 30MiB",

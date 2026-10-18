@@ -1,0 +1,400 @@
+//! 预览 tab(仅文件类)按项目本地持久化——重启/切项目后认回上次打开的
+//! 文件。`load`/`save` 是真实调用方入口(固定读写
+//! `dozer_core::paths::config_dir()/preview_state/<project_id>.json`);
+//! `load_from`/`save_to` 接收显式路径,供单测指向临时文件。
+//!
+//! Phase A 起 schema 前向兼容:旧 `{paths, active_path}` 仍可读入并迁移成
+//! [`PersistedPreviewTab`] 描述符;保存后只写新版。本阶段仍按现有方式加载
+//! 内容,不提前引入 Suspended 行为(那是 Phase C)。
+
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+use crate::{FoldRange, PreviewMode, TextPosition, TextRange};
+
+/// 当前 schema 版本。
+pub const PREVIEW_STATE_VERSION: u32 = 1;
+
+/// 表格 tab 的持久视图状态(active sheet + 逻辑滚动锚点,不持久化像素)。
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PersistedTabular {
+    pub sheet: usize,
+    pub scroll_row: usize,
+    pub scroll_col: usize,
+}
+
+/// 一个持久化的预览 tab 描述符。Phase A 只填 `path`/`mode`/`active` 三项,
+/// 其余字段允许缺省,留给 Phase C 恢复光标/选区/滚动/折叠。
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct PersistedPreviewTab {
+    pub path: PathBuf,
+    /// 用户在该 tab 上持久选择的 mode(未知/失效值安全落回默认)。
+    #[serde(
+        default,
+        deserialize_with = "deserialize_mode",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub mode: Option<PreviewMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<TextPosition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<TextRange>,
+    /// 逻辑滚动锚点(top line),不持久化像素值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scroll_anchor: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folds: Vec<FoldRange>,
+    /// 上次持久化时的文件 revision。
+    #[serde(default)]
+    pub revision: u64,
+    pub active: bool,
+    /// 表格 tab 的 sheet / 滚动锚点。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tabular: Option<PersistedTabular>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PreviewState {
+    /// 0 = 旧 schema(无该字段),load 时归一为当前版本。
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    pub tabs: Vec<PersistedPreviewTab>,
+    #[serde(default)]
+    pub active_path: Option<PathBuf>,
+    /// 旧 schema(v0)遗留字段,只读兼容;保存恒为空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<PathBuf>,
+}
+
+impl Default for PreviewState {
+    fn default() -> Self {
+        Self {
+            version: PREVIEW_STATE_VERSION,
+            tabs: Vec::new(),
+            active_path: None,
+            paths: Vec::new(),
+        }
+    }
+}
+
+impl PreviewState {
+    /// 旧版 `{paths, active_path}` -> 新 descriptor;已是新版则只更新 version。
+    fn normalize(mut self) -> Self {
+        if self.tabs.is_empty() && !self.paths.is_empty() {
+            let active = self.active_path.clone();
+            self.tabs = self
+                .paths
+                .drain(..)
+                .map(|path| {
+                    let is_active = active.as_deref() == Some(path.as_path());
+                    PersistedPreviewTab {
+                        path,
+                        active: is_active,
+                        ..Default::default()
+                    }
+                })
+                .collect();
+        }
+        self.version = PREVIEW_STATE_VERSION;
+        self
+    }
+}
+
+/// 宽容解析 mode:未知字符串回退 `None`,由路由落回默认,不 panic。
+fn deserialize_mode<'de, D>(deserializer: D) -> Result<Option<PreviewMode>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<String>::deserialize(deserializer)?;
+    Ok(raw.and_then(|s| PreviewMode::from_persisted(&s)))
+}
+
+/// 预览 tab 状态与未保存快照的落盘位置——产品相关(Dozer 的配置目录布局、Digger 的数据库),
+/// 库只通过这个 trait 读写。加载同步、保存由调用方放到后台线程。
+pub trait PreviewPersistence: Send + Sync {
+    fn load(&self, project_id: i64) -> PreviewState;
+    fn save(&self, project_id: i64, state: &PreviewState) -> std::io::Result<()>;
+    /// 脏 tab 未保存快照目录(见 `dozer_preview_core::recovery`)。
+    fn recovery_dir(&self) -> PathBuf;
+}
+
+/// 按配置目录落盘的实现:`<dir>/preview_state/<project_id>.json` 与 `recovery_dir_in(<dir>)`。
+#[derive(Debug, Clone)]
+pub struct FilePersistence {
+    pub config_dir: PathBuf,
+}
+
+impl FilePersistence {
+    fn state_path(&self, project_id: i64) -> PathBuf {
+        self.config_dir
+            .join("preview_state")
+            .join(format!("{project_id}.json"))
+    }
+}
+
+impl PreviewPersistence for FilePersistence {
+    fn load(&self, project_id: i64) -> PreviewState {
+        load_from(&self.state_path(project_id))
+    }
+    fn save(&self, project_id: i64, state: &PreviewState) -> std::io::Result<()> {
+        save_to(&self.state_path(project_id), state)
+    }
+    fn recovery_dir(&self) -> PathBuf {
+        crate::recovery_dir_in(&self.config_dir)
+    }
+}
+
+pub fn load_from(path: &Path) -> PreviewState {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<PreviewState>(&s).ok())
+        .unwrap_or_default()
+        .normalize()
+}
+
+pub fn save_to(path: &Path, state: &PreviewState) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    // 保存只写新版:清空 legacy paths,version 固定当前值。
+    let mut out = state.clone();
+    out.version = PREVIEW_STATE_VERSION;
+    out.paths.clear();
+    let s = serde_json::to_string_pretty(&out).unwrap_or_default();
+    std::fs::write(path, s)
+}
+
+impl crate::PreviewPane {
+    /// 当前文件类页签的持久化快照(纯数据,由 `Effect::PersistTabs` 异步落盘)。
+    /// `Blank` 占位页签恒在 index 0,没有真实路径,不写进快照——`PreviewPane::default()`
+    /// 天然带这个占位,恢复时无需从盘上再变一个出来。
+    pub fn persisted_snapshot(&self) -> PreviewState {
+        use crate::{PreviewRuntime, TabKind, TabularState};
+        let active_idx = self.active_idx();
+        let mut tabs = Vec::new();
+        let mut active_path = None;
+        for (idx, tab) in self.tabs().iter().enumerate() {
+            let TabKind::File(p) = &tab.kind else {
+                continue;
+            };
+            let is_active = idx == active_idx;
+            if is_active {
+                active_path = Some(p.clone());
+            }
+            // CodeMirror tab 的镜像视图状态(T11):优先用完整 `web_view_state`
+            // 镜像(cursor/selection/top_line/folds),没有则退回 web_selection/web_viewport。
+            let (cursor, selection, scroll_anchor, folds) = match &tab.web_view_state {
+                Some(vs) => (
+                    vs.cursor,
+                    vs.selection.filter(|r| r.start != r.end),
+                    vs.top_line.map(|t| t as u64),
+                    vs.folds.clone(),
+                ),
+                None => (
+                    tab.web_selection.map(|r| r.end),
+                    tab.web_selection.filter(|r| r.start != r.end),
+                    tab.web_viewport.map(|(from, _)| from as u64),
+                    Vec::new(),
+                ),
+            };
+            // 表格 tab:持久化 active sheet + 逻辑滚动锚点。
+            let tabular = match &tab.runtime {
+                PreviewRuntime::Tabular(TabularState::Ready(view)) => Some(PersistedTabular {
+                    sheet: view.active_sheet,
+                    scroll_row: view.scroll_row,
+                    scroll_col: view.scroll_col,
+                }),
+                _ => None,
+            };
+            tabs.push(PersistedPreviewTab {
+                path: p.clone(),
+                mode: tab.current_mode(),
+                cursor,
+                selection,
+                scroll_anchor,
+                folds,
+                tabular,
+                active: is_active,
+                ..Default::default()
+            });
+        }
+        PreviewState {
+            version: PREVIEW_STATE_VERSION,
+            tabs,
+            active_path,
+            paths: Vec::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_persistence_round_trips_per_project_and_binds_the_given_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = FilePersistence {
+            config_dir: dir.path().to_path_buf(),
+        };
+        let state = PreviewState {
+            tabs: vec![PersistedPreviewTab {
+                path: PathBuf::from("/repo/a.rs"),
+                active: true,
+                ..Default::default()
+            }],
+            active_path: Some(PathBuf::from("/repo/a.rs")),
+            ..Default::default()
+        };
+        p.save(7, &state).unwrap();
+        assert_eq!(p.load(7), state);
+        assert_eq!(p.load(8), PreviewState::default(), "项目之间互不串");
+        assert!(dir.path().join("preview_state").join("7.json").is_file());
+        assert!(p.recovery_dir().starts_with(dir.path()));
+    }
+
+    #[test]
+    fn load_from_missing_file_returns_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("does-not-exist.json");
+        assert_eq!(load_from(&path), PreviewState::default());
+    }
+
+    #[test]
+    fn load_from_corrupt_file_returns_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("preview_state.json");
+        std::fs::write(&path, "not valid json").unwrap();
+        assert_eq!(load_from(&path), PreviewState::default());
+    }
+
+    #[test]
+    fn legacy_schema_is_migrated_to_descriptors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("preview_state.json");
+        std::fs::write(
+            &path,
+            r#"{"paths":["/repo/a.rs","/repo/README.md"],"active_path":"/repo/README.md"}"#,
+        )
+        .unwrap();
+        let state = load_from(&path);
+        assert_eq!(state.version, PREVIEW_STATE_VERSION);
+        assert_eq!(state.tabs.len(), 2);
+        assert_eq!(state.tabs[0].path, PathBuf::from("/repo/a.rs"));
+        assert!(!state.tabs[0].active);
+        assert_eq!(state.tabs[1].path, PathBuf::from("/repo/README.md"));
+        assert!(state.tabs[1].active);
+        assert!(state.tabs[0].mode.is_none());
+    }
+
+    #[test]
+    fn new_schema_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("preview_state.json");
+        let state = PreviewState {
+            version: PREVIEW_STATE_VERSION,
+            tabs: vec![
+                PersistedPreviewTab {
+                    path: PathBuf::from("/repo/main.rs"),
+                    mode: Some(PreviewMode::Code),
+                    active: false,
+                    ..Default::default()
+                },
+                PersistedPreviewTab {
+                    path: PathBuf::from("/repo/README.md"),
+                    mode: Some(PreviewMode::Source),
+                    cursor: Some(TextPosition { line: 3, column: 7 }),
+                    selection: Some(TextRange {
+                        start: TextPosition { line: 3, column: 1 },
+                        end: TextPosition { line: 3, column: 7 },
+                    }),
+                    scroll_anchor: Some(120),
+                    folds: vec![FoldRange {
+                        from_line: 10,
+                        to_line: 20,
+                    }],
+                    revision: 4,
+                    active: true,
+                    tabular: None,
+                },
+            ],
+            active_path: Some(PathBuf::from("/repo/README.md")),
+            paths: Vec::new(),
+        };
+        save_to(&path, &state).unwrap();
+        let loaded = load_from(&path);
+        assert_eq!(loaded, state);
+    }
+
+    #[test]
+    fn missing_optional_fields_default_cleanly() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("preview_state.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"tabs":[{"path":"/repo/a.rs","active":true}]}"#,
+        )
+        .unwrap();
+        let state = load_from(&path);
+        assert_eq!(state.tabs.len(), 1);
+        assert_eq!(state.tabs[0].mode, None);
+        assert_eq!(state.tabs[0].revision, 0);
+        assert!(state.tabs[0].folds.is_empty());
+        assert_eq!(state.tabs[0].tabular, None);
+    }
+
+    #[test]
+    fn tabular_view_state_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("preview_state.json");
+        let state = PreviewState {
+            version: PREVIEW_STATE_VERSION,
+            tabs: vec![PersistedPreviewTab {
+                path: PathBuf::from("/repo/data.csv"),
+                mode: Some(PreviewMode::Tabular),
+                tabular: Some(PersistedTabular {
+                    sheet: 2,
+                    scroll_row: 120,
+                    scroll_col: 3,
+                }),
+                active: true,
+                ..Default::default()
+            }],
+            active_path: Some(PathBuf::from("/repo/data.csv")),
+            paths: Vec::new(),
+        };
+        save_to(&path, &state).unwrap();
+        assert_eq!(load_from(&path), state);
+    }
+
+    #[test]
+    fn unknown_mode_falls_back_to_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("preview_state.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"tabs":[{"path":"/repo/a.rs","mode":"hologram","active":false}]}"#,
+        )
+        .unwrap();
+        let state = load_from(&path);
+        assert_eq!(state.tabs[0].mode, None, "未知 mode 安全落回 None");
+    }
+
+    #[test]
+    fn saved_file_only_contains_new_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("preview_state.json");
+        let legacy = PreviewState {
+            version: 0,
+            tabs: Vec::new(),
+            active_path: Some(PathBuf::from("/repo/a.rs")),
+            paths: vec![PathBuf::from("/repo/a.rs")],
+        };
+        save_to(&path, &legacy).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("\"paths\""));
+        assert!(raw.contains("\"version\""));
+    }
+}

@@ -1,1 +1,6 @@
-{}
+{
+  "preview.line_index_failed": "Failed to build line index: {error}",
+  "preview.load_timeout_retry": "Preview load timed out; please retry",
+  "preview.enter_code_mode_failed": "Failed to switch to code mode: {e}",
+  "preview.file_unreadable": "The file does not exist or is unreadable: {path}"
+}

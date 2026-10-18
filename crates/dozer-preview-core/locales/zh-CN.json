@@ -21,6 +21,7 @@
   "route.unknown_text_probe": "未知文本(内容探测)",
   "route.empty_file": "空文件",
   "route.persisted_mode": "用户持久化模式",
+  "route.backend_disabled": "此应用未启用该类型的预览",
 
   "policy.max_line_force_windowed": "最长行 {max_line} 超过 5MiB,强制窗口化(文件 {size} 字节)",
   "policy.editable_in_budget": "可编辑工作集在预算内且 <= 30MiB",

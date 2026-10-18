@@ -105,6 +105,8 @@ pub enum RouteReason {
     EmptyFile,
     /// 用户持久化的 mode 覆盖了默认值。
     PersistedMode,
+    /// 该类型的预览后端在当前产品里未启用(`PreviewCapabilities`),降级为不支持。
+    BackendDisabled,
 }
 
 impl fmt::Display for RouteReason {
@@ -185,6 +187,11 @@ impl RouteReason {
             Self::PersistedMode => (
                 "route.persisted_mode",
                 "User-persisted mode",
+                RouteReasonArg::None,
+            ),
+            Self::BackendDisabled => (
+                "route.backend_disabled",
+                "Preview not enabled in this app",
                 RouteReasonArg::None,
             ),
         }

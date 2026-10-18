@@ -9,13 +9,20 @@
 
 pub mod capabilities;
 pub mod code_host;
+pub mod effects;
 pub mod i18n;
+pub mod message;
 pub mod pane;
 #[cfg(test)]
 mod pane_isolation_tests;
+pub mod panel;
+pub mod persistence;
 pub mod plantuml;
 pub mod state;
 pub mod tabular;
+pub mod update;
+#[cfg(test)]
+mod update_tests;
 pub mod webview;
 pub mod webview_protocol;
 
@@ -38,6 +45,10 @@ pub use dozer_preview_core::{file_profile, native_editor};
 
 pub use code_host::*;
 pub use pane::*;
+pub use persistence::{
+    FilePersistence, PREVIEW_STATE_VERSION, PersistedPreviewTab, PersistedTabular,
+    PreviewPersistence, PreviewState,
+};
 pub use plantuml::*;
 pub use state::*;
 pub use webview::*;
@@ -55,3 +66,8 @@ pub fn default_client_capabilities() -> dozer_preview_core::capabilities::Client
         logical_cpu_count: 8,
     })
 }
+
+pub use effects::{Effect, run_effect};
+pub use message::Message;
+pub use panel::PreviewPanelState;
+pub use update::{PanelBehavior, UpdateCtx, load_preview_tab, restore_tabs, update};
