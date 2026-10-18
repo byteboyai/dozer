@@ -47,7 +47,7 @@ dozer 已经有一份分级清单 `docs/dozer-v2/bytehost-manual-acceptance-chec
 | dozer `CLAUDE.md` bytehost 一行 | 按 tag `v0.1.1` | `v0.4.1` |
 | bytehost `README.md` | “四个 crate”；Digger 嵌入“尚未随 tag 发布” | 七个 crate（补 `core`/`desktop`/`chrome`，并说明前四个与后三个的依赖边界不同）；嵌入已随 tag 发布（`v0.2.0` 起，来自台账 Task 22/23） |
 
-**仍然存在的不一致（没改）：** bytehost 各 crate 的 `Cargo.toml` 版本都是 `0.1.0`，而 tag 已到 `v0.4.7`。`bytehost-acceptance.md` 说明“`HOST_VERSION` 仍为 `0.1.0`，tag 版本与宿主能力版本解耦”，所以这是有意约定，但没有写进 README，容易让人困惑。
+**crate 版本号 `0.1.0` 与 tag 不一致是有意约定**，已写在 bytehost README 的“tag 即发布”一条里(2026-10-18 核对,此前这里写“没写进 README”是过期的)。
 
 ## 3. 功能层面明确还没做的
 
@@ -73,7 +73,8 @@ dozer 已经有一份分级清单 `docs/dozer-v2/bytehost-manual-acceptance-chec
 - **打包 Excalidraw 时联网下载 3 个字体，未校验摘要**，镜像用 `latest`，以验收报告记录的摘要为准。
 - ~~**重订阅退避不会拉长(待修):** `bytehost-panel` 的 `subscribe_if_due` 把 `Backoff` 改成 `Pending`,下一次失败时档位重新从 0 算起,真实流程里一直 2 秒重连一次(dozerd 停 14 分钟共 298 次)。修法是在 `Pending` 里保留上一次的 `attempt`,并补一条经过 `subscribe_if_due` 的测试(2026-10-17 验收复测发现)。~~ **已修复(2026-10-17):bytehost `v0.4.7`,`Pending` 带着上一次的档位。**
 - **PanelEffect 新增 `ConnectionLost`/`ConnectionRestored`(`v0.4.6`):** 它不是 `#[non_exhaustive]`,digger 升到 `v0.4.6` 时任何对 `PanelEffect` 的穷尽 `match` 都会编译失败,需要处理这两个变体。
-- **偶发测试:** 已修两个——bytehost `the_first_run_is_unavailable_when_the_port_cannot_be_saved`(端口释放断言改成带 2 秒重试,`v0.4.7`)、dozer `git_log::tests::build_marks_head_branch_and_labels`(改成找带当前分支标签的那一行)。**复测又发现两个同类偶发(待修):** bytehost `service::tests::start_uses_the_persisted_port_across_restarts`(同样是"先挑空闲端口、稍后才绑定"的竞态,40 遍整套并行失败 2 次)和 `manager::tests::a_python_app_installs_starts_runs_behind_the_gateway_and_stops`(事件顺序断言,约 1/40)。
+- **`PanelEffect` 已在 `v0.4.9` 标 `#[non_exhaustive]`(2026-10-18):** 消费方对它的 `match` 需要兜底分支;dozer 已处理(`libs-2026-10-18b`),digger 同步时要在 `effects.rs` 加。
+- **偶发测试(2026-10-18 已全部处理):** 32 线程并行下复现并修了四个同族问题——"先探测再使用"的端口被并行测试抢走(`start_uses_the_persisted_port_across_restarts`、`the_first_run_*`,改成现取端口 + 有界重试)、`Running` 事件晚于状态可见(`a_python_app_installs_starts_*`,改成有界等待事件)、`a_python_app_runs_through_the_wire_*` 查的其实是 gateway 端口而不是应用端口(改成读应用日志里的真实端口)。修后 40 轮 32 线程 0 失败(修前约 1/40 到 3/40)。**机器同时有别的重负载时**,运行时安装的"试跑超时"和进程型 e2e 的端口冲突仍可能偶发,这是负载造成的,没有处理。
 - **`data_store_identifier` 算法已钉死**，改动即破坏用户的 webview 数据归属，不得改。
 
 ## 5. 验收报告里记录的“已知无关失败”（2026-10-16 已复核）
