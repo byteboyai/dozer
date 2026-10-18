@@ -60,7 +60,7 @@ target/aarch64-apple-darwin/debug/dozer
 | 2.3 | 点页面上的 crash | 面板短暂"启动中…",自动恢复 | py:✅ 命令触发 `/crash`;截图见"Py Notes / 启动中…",约 10 秒内回到 Running(自动恢复) |
 | 2.4 | 点 hang | 约 40–45 秒后自动恢复 | py:✅ 命令触发 `/hang`;约 35 秒后状态 Starting、2 秒后 Running,页面重新加载(`hits` 3→4) |
 | 2.5 | 装一份 manifest 里写 `python = ">=99"` 的副本 | 问题页,有「去设置安装」 | py:✅ 问题页显示"需要 Python / 要求 >=99,当前 3.13.1",按钮「去设置安装」「重试」;dozerd 状态 `Failed{需要 python3 >=99,当前 3.13.1, retryable:true}` |
-| 2.6 | 临时把 `node` 从 PATH 里去掉后启动 node 样例 | 提示"尚未安装";装好后点「重试」恢复 | ☐ |
+| 2.6 | 临时把 `node` 从 PATH 里去掉后启动 node 样例 | 提示"尚未安装";装好后点「重试」恢复 | node:✅(2026-10-18)提示页原文:标题"Node Notes"、"需要 Node.js"、"尚未安装,可在 设置 → 应用 里一键安装",按钮「去设置安装」「重试」。把独立的 node(v24.14.0)放进 dozerd 的 PATH 目录后点「重试」,面板恢复运行,页面 `runtime: Node.js 24.14.0`、`hits: 2`,进程路径是新放入的那份(此前系统 node 是 26.11.1),说明重试确实重新解析了运行时。**注意构造方法:** 只改 `PATH` 藏不住 node——`resolve.rs` 总会把 `/opt/homebrew/bin`、`/usr/local/bin` 追加进搜索目录(GUI 拉起的 dozerd `PATH` 很短,这是有意的)。本次用 `sandbox-exec -p '(version 1)(allow default)(deny file* process-exec (literal <node 真实路径>)…)'` 在沙箱里启动隔离环境,不改动系统里的 node。 |
 | 2.7 | 把 `server.py` 改成启动即退出再重装 | Crashed 页,点「查看日志」能看到输出末尾 | py:✅ 约 40 秒后出现 Crashed 页("应用已退出 / 健康检查没通过: 进程已经退出(重启次数过多,已放弃)",按钮「重新启动」「查看日志」);日志展开后 6 行输出(1 次首启 + 5 次重启);**但日志文字对比度极低**,见下表 |
 | 2.8 | 卸载「保留数据」再装 | 计数还在 | py:✅ 卸载前计数 4,重装后 `counter.txt` 仍是 4,修改时间在卸载之前(未被重写) |
 | 2.9 | 卸载「含数据」再装 | 计数归零 | py:✅ 卸载后 `data/` 目录消失;日志有"已清除应用的 WebView 数据存储";重装并启动后页面与 `counter.txt` 都是 `hits: 1` |
