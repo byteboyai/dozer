@@ -88,8 +88,8 @@ const PANEL_OWNERS: &[(&str, &str, &str)] = &[
     ),
     (
         "dozer.preview",
-        include_str!("../locales/panels/preview/en.json"),
-        include_str!("../locales/panels/preview/zh-CN.json"),
+        include_str!("../../dozer-preview-core/locales/en.json"),
+        include_str!("../../dozer-preview-core/locales/zh-CN.json"),
     ),
 ];
 

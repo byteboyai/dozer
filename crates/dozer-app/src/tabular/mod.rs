@@ -29,9 +29,8 @@ pub const TABULAR_CANCELLED: &str = "tabular load cancelled";
 /// T11:检查取消的批次间隔(每读这么多行/单元格查一次信号),兼顾响应与开销。
 const CANCEL_CHECK_ROWS: usize = 4096;
 
-/// 表格类数据文件,预览时委托 Tabular Viewer(而非代码编辑器 / flyfish)。
-/// 纯函数已搬进 `dozer-preview-core`(路由要用);这里转调保持原路径。
-pub use dozer_preview_core::tabular_ext::is_tabular_extension;
+// `is_tabular_extension`(扩展名判定)已搬进 `dozer-preview-core::tabular_ext`:路由要用它,
+// 而解析器(calamine / csv)不属于核心。dozer-app 内部不再有调用方。
 
 /// 一个已打开表格文件的运行时状态(挂在 `PreviewTab` 上,平行于 `editor`)。
 /// 派生 `Clone`纯粹是为了满足顶层 `Message` 枚举整体 `#[derive(Clone)]`

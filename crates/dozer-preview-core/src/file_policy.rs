@@ -13,10 +13,10 @@
 #![allow(dead_code)]
 
 use crate::capabilities::ResourceBudgets;
-use crate::preview::file_profile::FileProfile;
+use crate::file_profile::FileProfile;
 
 /// 本面板 i18n owner(资源在 `locales/panels/preview/`)。
-const OWNER: &str = super::PREVIEW_OWNER;
+const OWNER: &str = crate::PREVIEW_OWNER;
 
 /// 文本文件四档策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -223,9 +223,7 @@ fn windowed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::preview::file_profile::{
-        ContentKind, FileProfile, LineEnding, TextEncoding, Utf8Status,
-    };
+    use crate::file_profile::{ContentKind, FileProfile, LineEnding, TextEncoding, Utf8Status};
     use std::time::SystemTime;
 
     fn budget(single_editor: u64) -> ResourceBudgets {
@@ -343,5 +341,26 @@ mod tests {
             decide_text_policy(&f, &small).policy,
             decide_text_policy(&f, &big).policy
         );
+    }
+
+    /// 「可编辑整载」的绝对护栏恰好在 30MiB 翻转:`B-1` 与 `B` 仍可编辑,`B+1` 降为只读。
+    #[test]
+    fn file_policy_decision_flips_exactly_at_the_budget_boundary() {
+        use crate::capabilities::{HardwareCapabilities, estimate_capabilities};
+        let caps = estimate_capabilities(HardwareCapabilities {
+            total_memory_bytes: 64 * 1024 * MIB,
+            available_memory_at_start_bytes: 64 * 1024 * MIB,
+            physical_cpu_count: 16,
+            logical_cpu_count: 32,
+        });
+        let at = |size: u64| {
+            let profile = crate::file_profile::analyze(b"x\n", None, size, None);
+            decide_text_policy(&profile, &caps.budgets).policy
+        };
+        assert_eq!(at(EDITABLE_MAX_BYTES - 1), TextFilePolicy::EditableCode);
+        assert_eq!(at(EDITABLE_MAX_BYTES), TextFilePolicy::EditableCode);
+        assert_ne!(at(EDITABLE_MAX_BYTES + 1), TextFilePolicy::EditableCode);
+        // 128MiB 以上进窗口化。
+        assert_eq!(at(PLAIN_MAX_BYTES + 1), TextFilePolicy::Windowed);
     }
 }

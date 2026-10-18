@@ -119,7 +119,7 @@ impl PreviewLoadStage {
     pub fn localized(self, locale: &str) -> Option<String> {
         let (key, fallback) = self.label_key()?;
         Some(crate::i18n::panel_text(
-            super::PREVIEW_OWNER,
+            crate::PREVIEW_OWNER,
             key,
             fallback,
             locale,

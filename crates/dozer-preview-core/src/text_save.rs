@@ -72,7 +72,7 @@ pub fn save_text_atomic(path: &Path, text: &str) -> std::io::Result<()> {
     let mut tmp = None;
     // 内部 IO 错误文案:稳定英文(spec §6;不随 locale 变,落 `en.json`)。
     let mut write_result = Err(std::io::Error::other(crate::i18n::panel_text(
-        super::PREVIEW_OWNER,
+        crate::PREVIEW_OWNER,
         "text_save.temp_create_failed",
         "Cannot create temporary save file",
         "en",
@@ -203,5 +203,32 @@ mod tests {
         let path = dir.path().join("new.txt");
         save_text_atomic(&path, "hello\n").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"hello\n");
+    }
+
+    /// 目标所在目录不可写:原子保存(先写同目录临时文件)失败,原文件字节不变。
+    #[cfg(unix)]
+    #[test]
+    fn save_in_a_read_only_directory_fails_and_leaves_the_original_bytes_untouched() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, b"original\n").unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let result = save_text_atomic(&path, "changed\n");
+        // 还原权限,免得临时目录清理失败。
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        // 以 root 运行时目录权限不起作用;只在确实被拒绝时断言「原文件不变」。
+        if result.is_err() {
+            assert_eq!(std::fs::read(&path).unwrap(), b"original\n");
+        }
+    }
+
+    #[test]
+    fn save_into_a_missing_directory_returns_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("no-such-dir").join("a.txt");
+        assert!(save_text_atomic(&path, "x").is_err());
+        assert!(!path.exists());
+        assert!(!dir.path().join("no-such-dir").exists());
     }
 }

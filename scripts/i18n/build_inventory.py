@@ -85,6 +85,7 @@ FILE_TASK = [
     # 文件清单迁移(用户裁决 2026-10-14),不随 Task 10 的 agent_context.rs。
     # Preview web + html templates
     ("crates/dozer-app/src/preview/", "11"),
+    ("crates/dozer-preview-core/", "11"),
     ("crates/dozer-app/src/html_host.html", "11"),
     ("crates/dozer-app/src/image_annotate_host.html", "11"),
     ("crates/dozer-app/web/editor/", "11"),

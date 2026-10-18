@@ -8,16 +8,12 @@
 
 mod backend;
 mod code_host;
-mod file_policy;
-mod loading;
 mod paths;
 // Task 5 建好后,Task 6 才会接线消费;在那之前内部条目视为暂未使用。
 #[allow(dead_code)]
 mod plantuml;
 mod resources;
-mod router;
 mod state;
-mod text_save;
 mod trust;
 mod view;
 mod webview;
@@ -26,20 +22,22 @@ mod webview_protocol;
 /// 预览层的 i18n owner(spec §6.1:官方 owner 固定 `dozer.<id>`)。
 /// 预览不是 `PanelKind` 面板,资源在 `locales/panels/preview/`,但归
 /// `dozer.preview` 命名空间,由 `extensions::PANEL_OWNERS` 一并登记以便解析。
-pub(crate) const PREVIEW_OWNER: &str = "dozer.preview";
+pub(crate) use dozer_preview_core::PREVIEW_OWNER;
 
 // 已搬进 `dozer-preview-core` 的模块:保留 `crate::preview::<mod>::` 与 `super::<mod>::` 路径,
 // 没搬走的文件(`state.rs` / `view.rs` / `webview*.rs` 等)不用改 `use`。
-pub(crate) use dozer_preview_core::{file_profile, native_editor};
+#[cfg(test)]
+pub(crate) use dozer_preview_core::file_profile;
+pub(crate) use dozer_preview_core::{native_editor, router};
 // 产品相关的默认落盘位置(核心只提供 `*_in(config_dir)`):Dozer 在这里绑定自己的配置目录。
 pub(crate) use backend::*;
 pub(crate) use dozer_preview_core::file_profile::*;
+pub(crate) use dozer_preview_core::loading::*;
 pub(crate) use dozer_preview_core::native_editor::*;
-pub(crate) use loading::*;
+pub(crate) use dozer_preview_core::router::*;
+pub(crate) use dozer_preview_core::text_save::*;
 pub(crate) use paths::*;
-pub(crate) use router::*;
 pub(crate) use state::*;
-pub(crate) use text_save::*;
 pub(crate) use trust::WebviewTrust;
 pub(crate) use view::*;
 pub(crate) use webview::*;
@@ -49,9 +47,9 @@ pub(crate) use webview::*;
 #[allow(unused_imports)]
 pub(crate) use code_host::*;
 #[allow(unused_imports)]
-pub(crate) use dozer_preview_core::large_text::*;
+pub(crate) use dozer_preview_core::file_policy::*;
 #[allow(unused_imports)]
-pub(crate) use file_policy::*;
+pub(crate) use dozer_preview_core::large_text::*;
 // `plantuml`(Task 5 受限 include resolver)当前只在自身单测使用;对外
 // re-export 待 Task 6 的加载接线接入。
 #[allow(unused_imports)]

@@ -55,6 +55,7 @@ SRC_ROOTS = [
     "crates/dozer-panel-usage/web",
     "crates/dozer-panel-todo/src",
     "crates/dozer-panel-todo/web",
+    "crates/dozer-preview-core/src",
     "crates/dozerd/src",
     "crates/dozer-core/src",
     "crates/dozer-model/src",
@@ -74,6 +75,7 @@ SOURCE_SUFFIXES = [".rs", ".ts", ".tsx", ".js", ".mjs", ".jsx", ".html"]
 OWNER_RULES = [
     ("crates/dozer-panel-usage/", "dozer.usage"),
     ("crates/dozer-panel-todo/", "dozer.todo"),
+    ("crates/dozer-preview-core/", "dozer.preview"),
     ("crates/dozer-app/src/extensions/todo/", "dozer.todo"),
     ("crates/dozer-app/src/extensions/codehealth/", "dozer.codehealth"),
     ("crates/dozer-app/src/extensions/files/", "dozer.files"),

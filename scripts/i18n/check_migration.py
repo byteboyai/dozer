@@ -103,6 +103,9 @@ def _owner_from_dir(rel: str) -> str:
     if rel.endswith("/locales"):
         # 独立面板:locales/ 直接挂在 crate 根(如 dozer-panel-usage)。
         crate = rel.rsplit("/locales", 1)[0].rsplit("/", 1)[-1]
+        # 预览核心 crate 的 owner 是 dozer.preview(不是 dozer.dozer_preview_core)。
+        if crate == "dozer-preview-core":
+            return "dozer.preview"
         return f"dozer.{crate.replace('dozer-panel-', '').replace('-', '_')}"
     return "dozer.host"
 
@@ -125,6 +128,7 @@ def _default_srcroots():
         os.path.join(ROOT, "crates", "dozer-app", "src"),
         os.path.join(ROOT, "crates", "dozer-panel-usage", "src"),
         os.path.join(ROOT, "crates", "dozer-panel-todo", "src"),
+        os.path.join(ROOT, "crates", "dozer-preview-core", "src"),
     ]
 
 

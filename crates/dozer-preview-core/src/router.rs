@@ -14,8 +14,8 @@
 use std::fmt;
 use std::path::Path;
 
-use super::file_profile::{ContentKind, FileProfile, TextEncoding};
-use super::native_editor::{
+use crate::file_profile::{ContentKind, FileProfile, TextEncoding};
+use crate::native_editor::{
     filename_code_rule, is_editable_extension, prefers_rendered_preview, wry_toggle_eligible,
 };
 
@@ -195,17 +195,17 @@ impl RouteReason {
         let (key, fallback, arg) = self.key_fallback();
         match arg {
             RouteReasonArg::None => {
-                crate::i18n::panel_text(super::PREVIEW_OWNER, key, fallback, locale)
+                crate::i18n::panel_text(crate::PREVIEW_OWNER, key, fallback, locale)
             }
             RouteReasonArg::Ext(e) => crate::i18n::panel_text_args(
-                super::PREVIEW_OWNER,
+                crate::PREVIEW_OWNER,
                 key,
                 fallback,
                 locale,
                 &[("e", e)],
             ),
             RouteReasonArg::Rule(r) => crate::i18n::panel_text_args(
-                super::PREVIEW_OWNER,
+                crate::PREVIEW_OWNER,
                 key,
                 fallback,
                 locale,
@@ -284,19 +284,19 @@ fn classify_kind(path: &Path, profile: &FileProfile) -> (PreviewKind, RouteReaso
         }
         return (PreviewKind::Code, RouteReason::FilenameRule(rule));
     }
-    if crate::tabular::is_tabular_extension(path) {
+    if crate::tabular_ext::is_tabular_extension(path) {
         return (PreviewKind::Tabular, RouteReason::TabularExtension);
     }
-    if crate::preview::native_editor::is_json_lines_extension(path) {
+    if crate::native_editor::is_json_lines_extension(path) {
         // JSONL/NDJSON:逐行一个独立 JSON root(T8),走流式 backend。
         return (PreviewKind::Streamed, RouteReason::JsonLinesExtension);
     }
-    if crate::preview::native_editor::is_json_family_extension(path) {
+    if crate::native_editor::is_json_family_extension(path) {
         // JSON 家族统一走 `PreviewKind::Json`:严格 `.json` 给 Tree/Text 双视图,
         // json5/jsonc/jsonl/ndjson 一律只给 CodeMirror 文本(见 `default_modes`)。
         return (PreviewKind::Json, RouteReason::JsonTreeExtension);
     }
-    if crate::preview::native_editor::is_plantuml_extension(path) {
+    if crate::native_editor::is_plantuml_extension(path) {
         // PlantUML 专用扩展名**不能凌驾于内容安全检查**:`.puml` 里塞 NUL/
         // 二进制时落安全 fallback,而不是进 renderer(与 `.md` 等既有"渲染优先"
         // 分支不同,故单列)。空文件仍归 PlantUML 路由(显示"暂无可渲染内容")。
@@ -471,7 +471,7 @@ pub fn is_archive_extension(path: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::capabilities::{HardwareCapabilities, estimate_capabilities};
-    use crate::preview::file_profile::analyze;
+    use crate::file_profile::analyze;
     use std::path::PathBuf;
 
     fn caps() -> crate::capabilities::ClientCapabilities {
@@ -679,13 +679,13 @@ mod tests {
             "X.WSD",
         ] {
             assert!(
-                crate::preview::native_editor::is_plantuml_extension(&PathBuf::from(p)),
+                crate::native_editor::is_plantuml_extension(&PathBuf::from(p)),
                 "{p}"
             );
         }
         for p in ["a.md", "a.txt", "a.pumlx", "a.pu.txt", "apuml"] {
             assert!(
-                !crate::preview::native_editor::is_plantuml_extension(&PathBuf::from(p)),
+                !crate::native_editor::is_plantuml_extension(&PathBuf::from(p)),
                 "{p}"
             );
         }
@@ -1013,5 +1013,34 @@ mod tests {
                     expected.lines().count()
                 ))
         );
+    }
+
+    /// 每个原因变体在 en / zh-CN 都解析出非空、且不残留 `{` 占位的文本。
+    #[test]
+    fn reason_text_resolves_in_en_and_zh_cn() {
+        let reasons = [
+            RouteReason::TabularExtension,
+            RouteReason::JsonTreeExtension,
+            RouteReason::JsonLinesExtension,
+            RouteReason::RenderedExtension("md"),
+            RouteReason::CodeExtension,
+            RouteReason::FilenameRule("Dockerfile"),
+            RouteReason::KnownMediaExtension,
+            RouteReason::ArchiveFallback,
+            RouteReason::ContentBinaryFallback,
+            RouteReason::ContentTextProbe,
+            RouteReason::EmptyFile,
+            RouteReason::PersistedMode,
+        ];
+        for reason in reasons {
+            for locale in ["en", "zh-CN"] {
+                let text = reason.localized(locale);
+                assert!(!text.is_empty(), "{reason:?} 在 {locale} 为空");
+                assert!(
+                    !text.contains('{') && !text.contains('}'),
+                    "{reason:?} 在 {locale} 残留占位: {text}"
+                );
+            }
+        }
     }
 }
