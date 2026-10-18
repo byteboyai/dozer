@@ -225,13 +225,13 @@ TempRepo::new()                         // 临时目录 + git init，固定作�
 
 | 构造函数 | 调用点（含它取的字段） |
 |---|---|
-| `Repo::open_exact`（只认仓库根；项目在仓库子目录里时拿不到） | （D14 后状态类已迁到 `discover`/`discover_workdir`，仅余历史类）`file_history`/`git_log`/`diff_content` 的历史、blob、工作区内容、回滚、上一版本（经 `diff_content::open_exact_repo`） |
-| `Repo::discover`（向上查找） | `workspace::project_git_snapshot` 的 remote URL；`git_log::load_branch_picker_data` 的分支列表；`checkout_branch` 的两个调用点；`usage` 的提交计数（P3）；`recent_churn`（P3）；`dozerd` 项目更新时间（P3） |
+| `Repo::open_exact`（只认仓库根；项目在仓库子目录里时拿不到） | **dozer 里已无调用点**（D14 完成：状态类与历史类都已改成向上查找）。构造函数本身保留在 bytegit，供 Digger 等消费方按需使用 |
+| `Repo::discover`（向上查找） | `file_history`/`git_log`/`diff_content` 的历史、blob、工作区内容、回滚、上一版本（D14，经 `diff_content::open_repo` / `open_project_repo`，后者把项目内 `file_path` 换算成仓库内路径）；`workspace::project_git_snapshot` 的 remote URL；`git_log::load_branch_picker_data` 的分支列表；`checkout_branch` 的两个调用点；`usage` 的提交计数（P3）；`recent_churn`（P3）；`dozerd` 项目更新时间（P3） |
 | `Repo::discover_workdir`（目录、非 bare、向上查找） | `workspace::workspace_git_info`；`files::load_git_info`；`git_hotspots::git_snapshot` 的“是否在仓库里”判断；首页最近文件（`homespace::load_home_recents`） |
 
 同一个“项目在仓库子目录里”的场景，在不同面板里表现不同（分支栏有分支，Project 面板没有分支、Git Log 的“有改动”恒为否但分支列表是全的……）。**这是迁移前就有的不一致**，P6 用刻画测试把它钉住。
 
-- **D14（状态类已完成；历史类未做）：统一“只认仓库根 vs 向上查找”。** 状态类已改：`project_git_snapshot`、`load_branch_picker_data` 的改动、`git_snapshot`/`head_short_sha`、`files::git_status::file_statuses` 全部向上查找（`file_statuses` 只含项目目录之内的路径，键按项目路径拼；“是否有改动”是整个仓库的，不只项目子树）。历史类（`file_history`/`git_log`/`diff_content`）仍是 `open_exact`，待做。原建议： 建议：状态类查询（`project_git_snapshot` 的分支/改动/文件状态、`load_branch_picker_data` 的改动、`git_snapshot`）改成向上查找，文件状态的键仍按项目路径拼，这是安全的改动；**历史类**（`file_history`/`git_log` 的 `file_path` 是相对项目根的，而 pathspec 相对仓库根）统一需要先把 `file_path` 换算成相对仓库根，是单独的、有风险的改动。P6 完成后做这件事就是“逐个调用点把 `Repo::open_exact` 换成 `Repo::discover`”，bytegit 与 API 都不用动。
+- **D14（已完成，2026-10-18）：统一“只认仓库根 vs 向上查找”。** 历史类（`file_history`/`git_log`/`diff_content`）已改成向上查找：`diff_content::open_project_repo` 返回仓库与“项目目录相对仓库根的前缀”，带 `file_path` 的查询先经 `ProjectRepo::in_repo` 换算成相对仓库根的路径（面板看到的与回滚写盘用的仍是项目内路径）；不带路径的查询（提交列表/详情/blob）直接 `open_repo`。原先“子目录里报错”的刻画测试已翻转成“按项目内路径解析、不会查到仓库根同名文件”。下面是当时的记录： 状态类（先做）：`project_git_snapshot`、`load_branch_picker_data` 的改动、`git_snapshot`/`head_short_sha`、`files::git_status::file_statuses` 全部向上查找（`file_statuses` 只含项目目录之内的路径，键按项目路径拼；“是否有改动”是整个仓库的，不只项目子树）。历史类（`file_history`/`git_log`/`diff_content`）仍是 `open_exact`，待做。原建议： 建议：状态类查询（`project_git_snapshot` 的分支/改动/文件状态、`load_branch_picker_data` 的改动、`git_snapshot`）改成向上查找，文件状态的键仍按项目路径拼，这是安全的改动；**历史类**（`file_history`/`git_log` 的 `file_path` 是相对项目根的，而 pathspec 相对仓库根）统一需要先把 `file_path` 换算成相对仓库根，是单独的、有风险的改动。P6 完成后做这件事就是“逐个调用点把 `Repo::open_exact` 换成 `Repo::discover`”，bytegit 与 API 都不用动。
 | O10 | 同一子目录项目下 `git_hotspots::dirty_paths`（相对仓库根）与 `recent_churn`（`--relative`，相对项目根）路径口径不同 | **P3 已完成**：bytegit 的路径一律相对仓库根（`status` 与 `churn` 一致）；`recent_churn` 的适配层再转成相对项目根（`dirty_paths` 仍相对仓库根，与迁移前一致） |
 | O11 | `log`/`file_history` 的 `path` 原按 pathspec 解释：文件名含 `[`、`*` 时会混入别的文件的提交 | **v0.8.1 已修**：`log` 与 `workdir_patch` 改为字面匹配（`disable_pathspec_match`）；目录前缀仍匹配其下文件。dozer 的刻画测试已翻转 |
 | O12 | P2 中三处错误文案由英文原文改为中文（`该历史版本对应的不是一个文件` 等） | 记录为已知的用户可见文案变化；若需要保持英文另议 |

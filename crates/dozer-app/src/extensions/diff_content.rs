@@ -32,10 +32,39 @@ fn not_renderable((owner, key): (&str, &str)) -> DiffBlobContent {
     }
 }
 
-/// 按"项目路径就是仓库根"打开仓库(项目在仓库子目录里时报错,而不是向上查找),失败信息可直接展示。
-/// 两个面板的历史/文件内容查询共用它:`file_path` 是相对项目根的,必须和仓库根一致,否则查错文件。
-pub(crate) fn open_exact_repo(path: &Path) -> Result<Repo, String> {
-    Repo::open_exact(path).map_err(|e| e.message().to_string())
+/// 向上查找项目目录所属的仓库(项目在仓库子目录里也行),失败信息可直接展示。
+/// 只给不涉及"项目内路径"的查询用(如提交详情、blob 内容);带 `file_path` 的查询用 [`open_project_repo`]。
+pub(crate) fn open_repo(project: &Path) -> Result<Repo, String> {
+    Repo::discover(project).map_err(|e| e.message().to_string())
+}
+
+/// 项目目录所属的仓库,以及项目目录相对仓库根的前缀(项目就是仓库根时为空)。
+///
+/// 面板拿到的 `file_path` 是**相对项目根**的,而 bytegit 的路径一律相对**仓库根**:项目在仓库子目录里时
+/// 必须先经 [`ProjectRepo::in_repo`] 换算,否则会查错文件(迁移前用只认仓库根的 `open_exact` 规避了这个问题,
+/// 代价是子目录项目的历史面板直接报错;D14 统一成向上查找)。
+pub(crate) struct ProjectRepo {
+    pub repo: Repo,
+    prefix: std::path::PathBuf,
+}
+
+impl ProjectRepo {
+    /// 项目内路径 → 仓库内路径。
+    pub fn in_repo(&self, project_relative: &Path) -> std::path::PathBuf {
+        self.prefix.join(project_relative)
+    }
+}
+
+pub(crate) fn open_project_repo(project: &Path) -> Result<ProjectRepo, String> {
+    let repo = open_repo(project)?;
+    // `Repo::root` 是 libgit2 解析后的真实路径(macOS 上 `/var` → `/private/var`),所以两边都先规范化再比较。
+    let root = std::fs::canonicalize(repo.root()).map_err(|e| e.to_string())?;
+    let project = std::fs::canonicalize(project).map_err(|e| e.to_string())?;
+    let prefix = project
+        .strip_prefix(&root)
+        .map_err(|_| format!("{} 不在仓库工作区内", project.display()))?
+        .to_path_buf();
+    Ok(ProjectRepo { repo, prefix })
 }
 
 /// 两个 blob 之间的双侧文本。`None` 侧按新增/删除文件语义当空字符串;
