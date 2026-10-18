@@ -544,14 +544,9 @@ impl ViewStateRestore {
 /// `extensions::project::compute_blank_info`,与"用量徽章"共用
 /// `DISK_USAGE_EXCLUDE`(`target/`/`.git/`/`node_modules` 等不计)。`created`/
 /// `modified` 来自 `fs::metadata(root)`,平台不支持时为 `None`。
-#[derive(Debug, Clone)]
-pub struct BlankPaneInfo {
-    pub path: PathBuf,
-    pub size_bytes: u64,
-    pub file_count: u64,
-    pub created: Option<SystemTime>,
-    pub modified: Option<SystemTime>,
-}
+/// 结构随纯逻辑一起搬进 `dozer-panel-project::disk::BlankInfo`,这里保留旧名
+/// 的别名,`PreviewBlankInfoLoaded` 等既有调用点不变。
+pub type BlankPaneInfo = dozer_panel_project::disk::BlankInfo;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TabKind {

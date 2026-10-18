@@ -1,32 +1,7 @@
-//! 项目描述:`.dozer/description.md`,纯文本,无格式约束。跟 `goal.rs` 平级
-//! ——目标和描述是两种独立数据,只是都挂在 `.dozer/` 下。
+//! 项目描述:`.dozer/description.md`。读写实现已搬进 `dozer-panel-project::meta`,
+//! 这里只保留原路径转调(避免改所有调用点)。
 
-use std::path::{Path, PathBuf};
-
-fn description_path(repo: &Path) -> PathBuf {
-    repo.join(".dozer").join("description.md")
-}
-
-/// 文件不存在或内容 trim 后为空 → `None`。
-pub fn load_description(repo: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(description_path(repo)).ok()?;
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
-/// 整份重写。空字符串仍然写入一个空文件(不是删除文件)——跟
-/// `load_description` 的"trim 后为空 → None"配合,行为等价于清空。
-pub fn write_description(repo: &Path, text: &str) -> std::io::Result<()> {
-    let path = description_path(repo);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(path, text)
-}
+pub use dozer_panel_project::meta::{load_description, write_description};
 
 #[cfg(test)]
 mod tests {
@@ -59,7 +34,7 @@ mod tests {
     fn write_creates_dozer_dir() {
         let dir = tempfile::tempdir().unwrap();
         write_description(dir.path(), "x").unwrap();
-        assert!(description_path(dir.path()).exists());
+        assert!(dir.path().join(".dozer").join("description.md").exists());
     }
 
     #[test]

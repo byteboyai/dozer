@@ -6,6 +6,7 @@ members = ["crates/*", "spike/*"]
 # docs/superpowers/specs/2026-10-08-bytehost-a7-acceptance-report.md)。
 exclude = ["spike/v2-excalidraw"]
 
+
 [workspace.package]
 edition = "2024"
 license = "MIT"

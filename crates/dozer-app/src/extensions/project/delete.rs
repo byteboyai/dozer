@@ -1,94 +1,43 @@
-//! "删除项目"三级方案的执行编排(spec 2026-08-22)。dozerd 侧两步
-//! (`RemoveProject`/`DeleteProjectTranscripts`)先跑、失败即中止、不碰
-//! 文件系统；文件系统三步(`.dozer`/agent 缓存目录/项目文件本身)在其后
-//! 尽力而为，统一用 `trash::delete`(可从系统回收站找回)。
+//! "删除项目"三级方案:分级与执行编排已搬进 `dozer-panel-project::delete`,
+//! 这里只保留 Dozer 自己的 agent 缓存路径规则(`dozer_core::agent_paths`)
+//! 并转调库函数,调用点签名不变。
 
-use std::path::PathBuf;
+pub use dozer_panel_project::delete::DeleteScope;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum DeleteScope {
-    /// 只删 dozer 登记 + `.dozer/` 缓存。
-    DozerOnly,
-    /// 含 `DozerOnly`，再删三家 agent 为这个项目缓存的历史数据。
-    WithAgentCache,
-    /// 含 `WithAgentCache`，再删项目文件本身(含 `.git`)。
-    WithProjectFiles,
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// 三家 agent 为项目缓存的目录(`dozer_core::agent_paths` 的路径规则留在
+/// 产品侧,共享库不依赖 `dozer-core`)。
+fn agent_cache_dir(kind: &'static str, repo: &Path) -> PathBuf {
+    let home = dozer_core::agent_paths::home_dir();
+    match kind {
+        "claude" => dozer_core::agent_paths::claude_project_dir_in(&home, repo),
+        "codebuddy" => dozer_core::agent_paths::codebuddy_project_dir_in(&home, repo),
+        "opencode" => dozer_core::agent_paths::opencode_project_dir_in(&home, repo),
+        _ => PathBuf::new(),
+    }
 }
 
-/// 跑一次完整的删除流程。`on_done(project_id, deregistered, errors)`:
-/// `deregistered` = dozerd 侧登记已成功取消(`RemoveProject` 通过)——
-/// 无论后续步骤是否失败,登记一取消项目就该从各 recent 列表里消失;
-/// `errors` 是文件系统步骤里各自独立失败的原因(空 = 全部成功);dozerd
-/// 两步任一失败时,`on_done` 只收到那一条错误、且 `deregistered=false`、
-/// 后续步骤(含文件系统步骤)都不会跑。调用方
-/// (`app.rs::App::project_delete_confirm`)负责在调这个函数**之前**先把
-/// 这个项目的 tab 关掉——这个函数本身不碰任何 `Workspace`/UI 状态，
-/// 只认 `project_id`(用于 dozerd 请求，虽然当前两个请求都不需要
-/// `project_id`，只需要 `cwd`——保留这个参数是为了跟调用方的日志/未来
-/// 扩展对齐，不是死代码；如果实现阶段发现完全用不上，可以去掉)。
+/// 跑一次完整的删除流程。语义同 `dozer_panel_project::delete::spawn_delete_project`:
+/// 调用方负责先关掉这个项目的 tab。
 pub fn spawn_delete_project(
     project_id: i64,
     repo_path: PathBuf,
     scope: DeleteScope,
-    project: std::sync::Arc<dyn dozer_services::ProjectService>,
-    transcript: std::sync::Arc<dyn dozer_services::TranscriptService>,
+    project: Arc<dyn dozer_services::ProjectService>,
+    transcript: Arc<dyn dozer_services::TranscriptService>,
     handle: &tokio::runtime::Handle,
     on_done: impl Fn(i64, bool, Vec<String>) + Send + 'static,
 ) {
-    let cwd = repo_path.to_string_lossy().into_owned();
-    handle.spawn(async move {
-        if let Err(e) = project.remove_project(project_id).await {
-            on_done(project_id, false, vec![format!("Deregister project: {e}")]);
-            return;
-        }
-        if scope != DeleteScope::DozerOnly
-            && let Err(e) = transcript.delete_project_transcripts(cwd.clone()).await
-        {
-            on_done(project_id, true, vec![format!("Delete agent history: {e}")]);
-            return;
-        }
-        let repo_path_fs = repo_path.clone();
-        let errors = tokio::task::spawn_blocking(move || {
-            let mut errors = Vec::new();
-            let dozer_dir = repo_path_fs.join(".dozer");
-            if dozer_dir.exists()
-                && let Err(e) = trash::delete(&dozer_dir)
-            {
-                errors.push(format!(".dozer directory: {e}"));
-            }
-            if scope != DeleteScope::DozerOnly {
-                let home = dozer_core::agent_paths::home_dir();
-                let agent_dirs = [
-                    (
-                        "Claude cache",
-                        dozer_core::agent_paths::claude_project_dir_in(&home, &repo_path_fs),
-                    ),
-                    (
-                        "CodeBuddy cache",
-                        dozer_core::agent_paths::codebuddy_project_dir_in(&home, &repo_path_fs),
-                    ),
-                    (
-                        "OpenCode cache",
-                        dozer_core::agent_paths::opencode_project_dir_in(&home, &repo_path_fs),
-                    ),
-                ];
-                for (label, dir) in agent_dirs {
-                    if dir.exists()
-                        && let Err(e) = trash::delete(&dir)
-                    {
-                        errors.push(format!("{label}: {e}"));
-                    }
-                }
-            }
-            if scope == DeleteScope::WithProjectFiles
-                && let Err(e) = trash::delete(&repo_path_fs)
-            {
-                errors.push(format!("Project files: {e}"));
-            }
-            errors
-        })
-        .await
-        .unwrap_or_else(|e| vec![format!("Internal error: {e}")]);
-        on_done(project_id, true, errors);
-    });
+    dozer_panel_project::delete::spawn_delete_project(
+        project_id,
+        repo_path,
+        scope,
+        project,
+        Some(transcript),
+        agent_cache_dir,
+        handle,
+        on_done,
+    );
 }

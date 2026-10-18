@@ -2,43 +2,19 @@
 //! 重构项目,设计见 `docs/superpowers/specs/2026-08-13-project-info-pane-v2-design.md`。
 
 pub mod delete;
-pub mod links;
-pub mod scaffold;
 pub mod update;
 pub mod view;
 
 pub use update::*;
 pub use view::*;
 
-/// 本面板 i18n owner(`crate::i18n::PANEL_OWNERS` 之一;资源在
-/// `locales/panels/project/`)。项目信息/文档链接/共享记忆/修复/删除文案归它。
-pub(crate) const PROJECT_OWNER: &str = "dozer.project";
-
-/// 取一条本面板文案(见 `crate::i18n::panel_text`)。`fallback` 必须是英文,
-/// 且与 `locales/panels/project/en.json` 一致。
-pub(crate) fn t(key: &str, fallback: &str, locale: &str) -> String {
-    crate::i18n::panel_text(PROJECT_OWNER, key, fallback, locale)
-}
-
-/// 同上,带 `{}` 位置参数(见 `crate::i18n::panel_text_args`)。
-pub(crate) fn t_args(key: &str, fallback: &str, locale: &str, args: &[(&str, &str)]) -> String {
-    crate::i18n::panel_text_args(PROJECT_OWNER, key, fallback, locale, args)
-}
-
-/// 构造一条本面板 `LocalizedText`(后台任务/生产端拿不到 locale 时用),
-/// 渲染端用 `crate::i18n::render_localized` 按当前 locale 解析。
-pub(crate) fn keyed(key: &str, fallback: &str) -> dozer_model::LocalizedText {
-    crate::i18n::panel_keyed(PROJECT_OWNER, key, fallback)
-}
-
-/// 同 [`keyed`],带具名参数。
-pub(crate) fn keyed_args(
-    key: &str,
-    fallback: &str,
-    args: &[(&str, &str)],
-) -> dozer_model::LocalizedText {
-    crate::i18n::panel_keyed_args(PROJECT_OWNER, key, fallback, args)
-}
+/// 纯逻辑(链接发现、脚手架步骤、描述文件、尺寸统计)已搬进共享库
+/// `dozer-panel-project`;这里重新导出,原有 `project::links::…` 调用点不变。
+pub use dozer_panel_project::disk::{DISK_USAGE_EXCLUDE, compute_blank_info, dir_size_excluding};
+pub use dozer_panel_project::i18n::{keyed, keyed_args, t, t_args};
+pub use dozer_panel_project::links;
+pub use dozer_panel_project::scaffold;
+pub(crate) use dozer_panel_project::PROJECT_OWNER;
 
 use iced_widget::core::Rectangle;
 use iced_widget::core::widget::operation::Focusable;
@@ -490,99 +466,6 @@ pub enum Message {
     MemoryDeleteRequest(i64),
     MemoryDeleteCancel,
     MemoryDeleteConfirm,
-}
-
-/// 磁盘占用统计的排除名单——跟 `crates/dozer-app/src/project.rs::HIDDEN`
-/// (文件树"要不要显示这一行")语义不同,这里是"算不算项目真实内容",不复用
-/// 那份常量。
-pub const DISK_USAGE_EXCLUDE: [&str; 7] = [
-    ".git",
-    "target",
-    "node_modules",
-    "dist",
-    "build",
-    ".venv",
-    "__pycache__",
-];
-
-/// 递归求和 `root` 下所有文件大小,跳过名字命中 `exclude` 的目录(整个子树
-/// 跳过,不下钻)。读不到的条目(权限/符号链接死链)跳过不计入,不中断整体
-/// 计算。
-pub fn dir_size_excluding(root: &std::path::Path, exclude: &[&str]) -> u64 {
-    let Ok(rd) = std::fs::read_dir(root) else {
-        return 0;
-    };
-    let mut total = 0u64;
-    for entry in rd.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_dir() {
-            if exclude.contains(&name.as_str()) {
-                continue;
-            }
-            total += dir_size_excluding(&entry.path(), exclude);
-        } else if let Ok(meta) = entry.metadata() {
-            total += meta.len();
-        }
-    }
-    total
-}
-
-/// 空白页(`PreviewPane::blank_info`)用的项目根目录简介:递归求总字节数
-/// + 文件计数 + `fs::metadata(root)` 拿 ctime/mtime。
-///
-/// 复用 `[DISK_USAGE_EXCLUDE]`,与"用量徽章"统计口径一致——`target/`、
-/// `.git/`、`node_modules` 等不计入。
-///
-/// 读不到的子项静默跳过,不破坏外层结果:大仓库上难免有 `EACCES` / 死链,
-/// 中断会让卡片永久卡在"计算中"。
-///
-/// `created` / `modified` 是平台 syscall,macOS 全支持;某些 sandboxed
-/// 环境会回 `Err`,此时对应字段为 `None`,view 用 `—` 占位。
-pub fn compute_blank_info(root: &std::path::Path) -> crate::preview::BlankPaneInfo {
-    let (size_bytes, file_count) = dir_size_and_count(root, &DISK_USAGE_EXCLUDE);
-    let (created, modified) = match std::fs::metadata(root) {
-        Ok(md) => (md.created().ok(), md.modified().ok()),
-        Err(_) => (None, None),
-    };
-    crate::preview::BlankPaneInfo {
-        path: root.to_path_buf(),
-        size_bytes,
-        file_count,
-        created,
-        modified,
-    }
-}
-
-/// 递归求总字节数 + 文件计数。`dir_size_excluding` 的近亲,但要同时给
-/// 出两份数。命名上跟 `dir_size_excluding` 解耦避免返回值签名膨胀,本函数
-/// 是空白页专用,后者(`dir_size_excluding`)的 u64 调用点不动。
-fn dir_size_and_count(root: &std::path::Path, exclude: &[&str]) -> (u64, u64) {
-    let Ok(rd) = std::fs::read_dir(root) else {
-        return (0, 0);
-    };
-    let mut total_size = 0u64;
-    let mut total_count = 0u64;
-    for entry in rd.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_dir() {
-            if exclude.contains(&name.as_str()) {
-                continue;
-            }
-            let (s, c) = dir_size_and_count(&entry.path(), exclude);
-            total_size += s;
-            total_count += c;
-        } else if let Ok(meta) = entry.metadata() {
-            total_size += meta.len();
-            total_count += 1;
-        }
-    }
-    (total_size, total_count)
 }
 
 /// 把一次 `get_memory` 的结果变成要回给 `update` 的消息:成功 → `MemoryDetailLoaded`,
