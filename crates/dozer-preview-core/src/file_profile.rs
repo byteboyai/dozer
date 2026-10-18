@@ -254,6 +254,8 @@ pub fn decode_utf16_to_utf8(bytes: &[u8]) -> Option<String> {
     if !body.len().is_multiple_of(2) {
         return None;
     }
+    // 逐字保留搬迁前的实现;新版 clippy 建议改 `as_chunks`,不在抽库里顺手改行为无关的写法。
+    #[allow(clippy::chunks_exact_to_as_chunks)]
     let units: Vec<u16> = body
         .chunks_exact(2)
         .map(|pair| {
@@ -586,8 +588,8 @@ mod tests {
         let bad = analyze(&[b'a', 0xC3, 0x28, 0xFF, b'z'], None, 5, None);
         assert_eq!(bad.utf8, Utf8Status::Invalid);
         // size 与采样不一致 / 只有尾部样本 / 头部为空尾部非空,均不 panic。
-        let _ = analyze(&[], Some(&[b'x']), 1, None);
-        let _ = analyze(&[b'x'], Some(&[]), 10_000_000_000, None);
+        let _ = analyze(&[], Some(b"x"), 1, None);
+        let _ = analyze(b"x", Some(b""), 10_000_000_000, None);
         // 磁盘入口:目录、不存在的路径返回 Err 而不是 panic。
         let dir = tempfile::tempdir().unwrap();
         assert!(profile_file(dir.path()).is_err());
