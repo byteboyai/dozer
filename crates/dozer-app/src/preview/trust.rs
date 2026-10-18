@@ -77,7 +77,7 @@ fn is_builtin_panel_slot(id: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::PanelKind;
+    use crate::preview::ViewerPanel;
     use crate::preview::WebviewSpec;
 
     fn spec(id: usize) -> WebviewSpec {
@@ -125,7 +125,7 @@ mod tests {
         let mut s = spec(7);
         s.editor_binding = Some(crate::preview::EditorHostBinding::new(
             1,
-            PanelKind::Files,
+            ViewerPanel::Files,
             1,
             std::path::PathBuf::from("/tmp/x.rs"),
         ));

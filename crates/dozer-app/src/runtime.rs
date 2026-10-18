@@ -350,11 +350,7 @@ pub(crate) fn sync_webview_pool(
                     .unwrap_or(1024 * 1024)
                     .min(manager.budgets().single_editor_bytes);
                 (
-                    (
-                        binding.project_id,
-                        crate::preview::viewer_panel(binding.panel),
-                        binding.tab_id,
-                    ),
+                    (binding.project_id, binding.panel, binding.tab_id),
                     bytes,
                     true,
                     crate::preview::ViewerHostKind::Editor,
@@ -384,10 +380,7 @@ pub(crate) fn sync_webview_pool(
             if let crate::preview::Reservation::NeedEviction(keys) = reservation {
                 for (project, panel, tab) in keys {
                     let marker = format!("proj={project}");
-                    let panel_marker = format!(
-                        "panel={}",
-                        crate::preview::panel_token(crate::app::PanelKind::from(panel))
-                    );
+                    let panel_marker = format!("panel={}", crate::preview::panel_token(panel));
                     let tab_marker = format!("tab={tab}");
                     let ids: Vec<usize> = pool
                         .iter()
@@ -664,7 +657,7 @@ pub(crate) fn sync_webview_pool(
                             "find_preview" if is_flyfish_host => {
                                 if let Some(binding) = flyfish_binding.as_ref() {
                                     let _ = ipc_proxy
-                                        .send_event(Message::PreviewFindOpen(binding.panel));
+                                        .send_event(Message::PreviewFindOpen(binding.panel.into()));
                                 }
                             }
                             // ⌘F 页内查找:JS 找到并聚焦了页面自带搜索框
@@ -898,7 +891,7 @@ pub(crate) fn sync_webview_pool(
                                                 if let Err(error) = event.validate(&expected) {
                                                     dozer_core::log_warn!(LOG, %error, "拒绝无效 editor IPC");
                                                 } else if binding.panel
-                                                    == crate::app::PanelKind::GitLog
+                                                    == crate::preview::ViewerPanel::GitLog
                                                 {
                                                     let _ = ipc_proxy.send_event(
                                                         Message::GitLogDiffWebviewEvent(

@@ -335,7 +335,7 @@ impl App {
             Message::EditorWebviewEvent(binding, event) => {
                 let locale = self.locale.active_locale().to_string();
                 self.with_project(binding.project_id, move |ws, io| {
-                    let pane = ws.preview_pane_mut(binding.panel);
+                    let pane = ws.preview_pane_mut(binding.panel.into());
                     // `Ready` 时若该 tab 有"打开后跳转到某行"的诉求(代码健康度
                     // 面板),取出来在 tab 借用结束后排队一条 reveal 命令。
                     let mut pending_reveal: Option<(usize, u32)> = None;
@@ -403,7 +403,7 @@ impl App {
                                          // T11:arm `Indexing` 看门狗(建索引 + 首窗)。
                                          io.arm_load_timeout(
                                              binding.project_id,
-                                             binding.panel,
+                                             binding.panel.into(),
                                              tab.id,
                                              tab.load_state.generation,
                                              crate::preview::PreviewLoadStage::Indexing,
@@ -429,7 +429,7 @@ impl App {
                                          // T11:arm `Reading` 看门狗(等 document_loaded)。
                                          io.arm_load_timeout(
                                              binding.project_id,
-                                             binding.panel,
+                                             binding.panel.into(),
                                              tab.id,
                                              tab.load_state.generation,
                                              crate::preview::PreviewLoadStage::Reading,
@@ -627,7 +627,7 @@ impl App {
                                 if revision >= tab.web_revision {
                                     tab.web_revision = revision;
                                     let project_id = binding.project_id;
-                                    let panel = binding.panel;
+                                    let panel: PanelKind = binding.panel.into();
                                     let tab_id = tab.id;
                                     let snap_path = path.clone();
                                     let recovery_cursor = tab.web_selection.map(|range| range.end);
@@ -750,7 +750,7 @@ impl App {
                             } => {
                                 let _ = io.proxy.send_event(Message::PreviewSelectionMenuOpen {
                                     project_id: binding.project_id,
-                                    panel: binding.panel,
+                                    panel: binding.panel.into(),
                                     tab_id: binding.tab_id,
                                     path: path.clone(),
                                     x,
@@ -769,7 +769,7 @@ impl App {
                     }
                     if let Some((tab_id, path, revision, cancel)) = build_index {
                         let project_id = binding.project_id;
-                        let panel = binding.panel;
+                        let panel: PanelKind = binding.panel.into();
                         let proxy = io.proxy.clone();
                         io.handle.spawn(async move {
                             let result = tokio::task::spawn_blocking(move || {
@@ -843,7 +843,7 @@ impl App {
                         && pane.take_pending_close(tab_id)
                     {
                         pane.close_by_id(tab_id);
-                        *ws.preview_tab_first_mut(binding.panel) = 0;
+                        *ws.preview_tab_first_mut(binding.panel.into()) = 0;
                         ws.spawn_preview_state_save(io);
                         ws.flush_preview_context_push(io);
                     }
@@ -856,7 +856,7 @@ impl App {
             }
             Message::JsonEditorEvent(binding, event) => {
                 self.with_project(binding.project_id, move |ws, _io| {
-                    let pane = ws.preview_pane_mut(binding.panel);
+                    let pane = ws.preview_pane_mut(binding.panel.into());
                     if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == binding.tab_id) {
                         use crate::preview::JsonEvent;
                         match event.payload {
@@ -919,7 +919,7 @@ impl App {
             }
             Message::TabularHostEvent(binding, event) => {
                 self.with_project(binding.project_id, move |ws, io| {
-                    let panel = binding.panel;
+                    let panel: PanelKind = binding.panel.into();
                     let mut push_initial = false;
                     let mut restore_view: Option<(usize, u32, u32)> = None;
                     let mut window_push: Option<(usize, u32, Vec<Vec<String>>, u64)> = None;
@@ -1040,16 +1040,16 @@ impl App {
                     use crate::preview::FlyfishEvent;
                     // 搜索状态:只在本次 webview Find 会话正锁定该 tab 时回填。
                     if let FlyfishEvent::SearchState { current, total } = event.payload {
-                        let pane = ws.preview_pane_mut(binding.panel);
+                        let pane = ws.preview_pane_mut(binding.panel.into());
                         let matches = pane
                             .find_state()
                             .is_some_and(|f| f.is_webview && f.tab_id == binding.tab_id);
                         if matches {
-                            ws.preview_find_set_webview_state(binding.panel, current, total);
+                            ws.preview_find_set_webview_state(binding.panel.into(), current, total);
                         }
                         return;
                     }
-                    let pane = ws.preview_pane_mut(binding.panel);
+                    let pane = ws.preview_pane_mut(binding.panel.into());
                     if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == binding.tab_id) {
                         match event.payload {
                             FlyfishEvent::Ready => {
@@ -1124,14 +1124,14 @@ impl App {
             }
             Message::ImageAnnotateEvent(binding, event) => {
                 self.with_project(binding.project_id, move |ws, _io| {
-                    let pane = ws.preview_pane_mut(binding.panel);
+                    let pane = ws.preview_pane_mut(binding.panel.into());
                     pane.apply_image_annotate_event(binding.tab_id, event.payload);
                 });
             }
             Message::PlantUmlEvent(binding, event) => {
                 self.with_project(binding.project_id, move |ws, _io| {
                     let event_revision = event.revision;
-                    let pane = ws.preview_pane_mut(binding.panel);
+                    let pane = ws.preview_pane_mut(binding.panel.into());
                     let open_source =
                         pane.apply_plantuml_event(binding.tab_id, event_revision, event.payload);
                     if let Some(line) = open_source {

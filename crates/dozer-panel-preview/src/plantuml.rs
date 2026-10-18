@@ -184,7 +184,13 @@ impl PlantUmlLoadError {
     pub fn localized(&self, locale: &str) -> String {
         let (key, fallback, args) = self.key_fallback_args();
         let refs: Vec<(&str, &str)> = args.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        crate::i18n::panel_text_args(super::PREVIEW_OWNER, key, fallback, locale, &refs)
+        dozer_preview_core::i18n::panel_text_args(
+            super::PREVIEW_OWNER,
+            key,
+            fallback,
+            locale,
+            &refs,
+        )
     }
 }
 
@@ -468,7 +474,7 @@ fn read_utf8_file(path: &Path) -> Result<String, ()> {
 }
 
 /// 项目相对规范路径(POSIX 分隔符)。不在根内时退化为文件名。
-pub(crate) fn project_relative(root: &Path, abs: &Path) -> String {
+pub fn project_relative(root: &Path, abs: &Path) -> String {
     match abs.strip_prefix(root) {
         Ok(rel) => include_key(rel),
         Err(_) => abs

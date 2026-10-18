@@ -259,13 +259,14 @@ impl EditHistoryOverlay {
 
         let binding = crate::preview::EditorHostBinding::new(
             0,
-            crate::app::PanelKind::Files,
+            crate::preview::ViewerPanel::Files,
             0,
             PathBuf::from(&entry.target_path),
         );
         let url = binding.diff_url(
             crate::preview::scheme_query_value(),
             app.locale.active_locale(),
+            crate::preview::editor_font(),
         );
         let logical_size: LogicalSize<f32> = self
             .window

@@ -83,3 +83,9 @@ mod tests {
         assert_eq!(budgets, crate::capabilities::current().budgets);
     }
 }
+
+impl From<PanelKind> for ViewerPanel {
+    fn from(kind: PanelKind) -> Self {
+        viewer_panel(kind)
+    }
+}

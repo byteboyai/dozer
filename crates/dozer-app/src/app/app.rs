@@ -1100,7 +1100,7 @@ impl App {
         };
         let pane = ws.preview_pane_mut(kind);
         let pending =
-            pane.take_pending_editor_commands_for(available_webview_ids, project_id, kind);
+            pane.take_pending_editor_commands_for(available_webview_ids, project_id, kind.into());
         let mut out = Vec::new();
         for (tab_id, command) in pending {
             let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
@@ -1117,11 +1117,15 @@ impl App {
             let crate::preview::TabKind::File(path) = &tab.kind else {
                 continue;
             };
-            let binding =
-                crate::preview::EditorHostBinding::new(project_id, kind, tab_id, path.clone());
+            let binding = crate::preview::EditorHostBinding::new(
+                project_id,
+                kind.into(),
+                tab_id,
+                path.clone(),
+            );
             let envelope = crate::preview::encode_command(
                 project_id,
-                kind,
+                kind.into(),
                 tab_id,
                 &binding.document_id(),
                 tab.web_revision,
@@ -1151,7 +1155,7 @@ impl App {
         };
         let pane = ws.preview_pane_mut(kind);
         let pending =
-            pane.take_pending_tabular_commands_for(available_webview_ids, project_id, kind);
+            pane.take_pending_tabular_commands_for(available_webview_ids, project_id, kind.into());
         let mut out = Vec::new();
         for (tab_id, command) in pending {
             let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
@@ -1163,11 +1167,15 @@ impl App {
             let crate::preview::TabKind::File(path) = &tab.kind else {
                 continue;
             };
-            let binding =
-                crate::preview::EditorHostBinding::new(project_id, kind, tab_id, path.clone());
+            let binding = crate::preview::EditorHostBinding::new(
+                project_id,
+                kind.into(),
+                tab_id,
+                path.clone(),
+            );
             let envelope = crate::preview::encode_tabular_command(
                 project_id,
-                kind,
+                kind.into(),
                 tab_id,
                 &binding.document_id(),
                 tab.web_revision,
@@ -1197,7 +1205,7 @@ impl App {
         };
         let pane = ws.preview_pane_mut(kind);
         let pending =
-            pane.take_pending_plantuml_commands_for(available_webview_ids, project_id, kind);
+            pane.take_pending_plantuml_commands_for(available_webview_ids, project_id, kind.into());
         let mut out = Vec::new();
         for (tab_id, command) in pending {
             let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
@@ -1209,11 +1217,15 @@ impl App {
             let crate::preview::TabKind::File(path) = &tab.kind else {
                 continue;
             };
-            let binding =
-                crate::preview::EditorHostBinding::new(project_id, kind, tab_id, path.clone());
+            let binding = crate::preview::EditorHostBinding::new(
+                project_id,
+                kind.into(),
+                tab_id,
+                path.clone(),
+            );
             let envelope = crate::preview::encode_plantuml_command(
                 project_id,
-                kind,
+                kind.into(),
                 tab_id,
                 &binding.document_id(),
                 tab.web_revision,
@@ -1250,7 +1262,7 @@ impl App {
         let path = std::path::PathBuf::from(&path_str);
         let binding = crate::preview::EditorHostBinding::new(
             0,
-            crate::app::PanelKind::GitLog,
+            crate::preview::ViewerPanel::GitLog,
             0,
             path.clone(),
         );
@@ -1269,7 +1281,7 @@ impl App {
         };
         let envelope = crate::preview::encode_command(
             0,
-            crate::app::PanelKind::GitLog,
+            crate::preview::ViewerPanel::GitLog,
             0,
             &binding.document_id(),
             0,
@@ -3918,13 +3930,17 @@ impl App {
                     if bounds.2 > 0.0 && bounds.3 > 0.0 {
                         let binding = crate::preview::EditorHostBinding::new(
                             0,
-                            PanelKind::GitLog,
+                            crate::preview::ViewerPanel::GitLog,
                             0,
                             std::path::PathBuf::from(path),
                         );
                         let spec = WebviewSpec {
                             id: crate::app::GIT_LOG_DIFF_ID_OFFSET,
-                            url: binding.diff_url(crate::preview::scheme_query_value(), locale),
+                            url: binding.diff_url(
+                                crate::preview::scheme_query_value(),
+                                locale,
+                                crate::preview::editor_font(),
+                            ),
                             visible: !app_modal_open,
                             editor_binding: Some(binding),
                             reserve: None,
@@ -4100,12 +4116,18 @@ impl App {
             let (mut specs, id_offset): (Vec<WebviewSpec>, usize) = match kind {
                 PanelKind::Files => (
                     ws.preview
-                        .desired_webviews(reserve_project_id, kind, locale),
+                        .desired_webviews(reserve_project_id, kind.into(), locale)
+                        .into_iter()
+                        .map(WebviewSpec::from)
+                        .collect::<Vec<_>>(),
                     0,
                 ),
                 PanelKind::Project => (
                     ws.project_preview
-                        .desired_webviews(reserve_project_id, kind, locale),
+                        .desired_webviews(reserve_project_id, kind.into(), locale)
+                        .into_iter()
+                        .map(WebviewSpec::from)
+                        .collect::<Vec<_>>(),
                     PROJECT_PREVIEW_ID_OFFSET,
                 ),
                 PanelKind::Conversations => (
@@ -4116,46 +4138,74 @@ impl App {
             };
             if let Some(project) = &ws.project {
                 match kind {
-                    PanelKind::Files => specs.extend(ws.preview.desired_editor_webviews(
-                        project.id,
-                        PanelKind::Files,
-                        locale,
-                    )),
-                    PanelKind::Project => specs.extend(ws.project_preview.desired_editor_webviews(
-                        project.id,
-                        PanelKind::Project,
-                        locale,
-                    )),
+                    PanelKind::Files => specs.extend(
+                        ws.preview
+                            .desired_editor_webviews(
+                                project.id,
+                                crate::preview::ViewerPanel::Files,
+                                locale,
+                            )
+                            .into_iter()
+                            .map(WebviewSpec::from),
+                    ),
+                    PanelKind::Project => specs.extend(
+                        ws.project_preview
+                            .desired_editor_webviews(
+                                project.id,
+                                crate::preview::ViewerPanel::Project,
+                                locale,
+                            )
+                            .into_iter()
+                            .map(WebviewSpec::from),
+                    ),
                     _ => {}
                 }
                 // 对照期:严格 JSON Tree 的 vanilla-jsoneditor host。
                 match kind {
-                    PanelKind::Files => specs.extend(ws.preview.desired_json_webviews(
-                        project.id,
-                        PanelKind::Files,
-                        locale,
-                    )),
-                    PanelKind::Project => specs.extend(ws.project_preview.desired_json_webviews(
-                        project.id,
-                        PanelKind::Project,
-                        locale,
-                    )),
+                    PanelKind::Files => specs.extend(
+                        ws.preview
+                            .desired_json_webviews(
+                                project.id,
+                                crate::preview::ViewerPanel::Files,
+                                locale,
+                            )
+                            .into_iter()
+                            .map(WebviewSpec::from),
+                    ),
+                    PanelKind::Project => specs.extend(
+                        ws.project_preview
+                            .desired_json_webviews(
+                                project.id,
+                                crate::preview::ViewerPanel::Project,
+                                locale,
+                            )
+                            .into_iter()
+                            .map(WebviewSpec::from),
+                    ),
                     _ => {}
                 }
                 // Tabular Grid 视图的 ag-grid webview host。
                 match kind {
-                    PanelKind::Files => specs.extend(ws.preview.desired_tabular_webviews(
-                        project.id,
-                        PanelKind::Files,
-                        locale,
-                    )),
-                    PanelKind::Project => {
-                        specs.extend(ws.project_preview.desired_tabular_webviews(
-                            project.id,
-                            PanelKind::Project,
-                            locale,
-                        ))
-                    }
+                    PanelKind::Files => specs.extend(
+                        ws.preview
+                            .desired_tabular_webviews(
+                                project.id,
+                                crate::preview::ViewerPanel::Files,
+                                locale,
+                            )
+                            .into_iter()
+                            .map(WebviewSpec::from),
+                    ),
+                    PanelKind::Project => specs.extend(
+                        ws.project_preview
+                            .desired_tabular_webviews(
+                                project.id,
+                                crate::preview::ViewerPanel::Project,
+                                locale,
+                            )
+                            .into_iter()
+                            .map(WebviewSpec::from),
+                    ),
                     _ => {}
                 }
                 // T9:Flyfish host 的稳定绑定(project/panel/tab/document)写进
@@ -4166,7 +4216,7 @@ impl App {
                         s.url.push_str(&format!(
                             "&proj={}&panel={}&tab={}&doc={}",
                             project.id,
-                            crate::preview::panel_token(kind),
+                            crate::preview::panel_token(kind.into()),
                             s.id,
                             crate::preview::encode_component(&doc),
                         ));

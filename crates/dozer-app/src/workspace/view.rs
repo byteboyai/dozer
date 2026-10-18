@@ -1418,7 +1418,7 @@ pub(crate) fn preview_find_bar_widget<'a>(
         ),
         &find.query,
         false,
-        Some(crate::preview::find_field_id(panel)),
+        Some(crate::preview::find_field_id(panel.into())),
         !find.query.is_empty(),
         None,
         move |q: String| match panel {
@@ -1801,7 +1801,7 @@ pub(crate) fn preview_large_file_search_bar_widget<'a>(
         ),
         &session.query,
         false,
-        Some(crate::preview::large_file_search_field_id(panel)),
+        Some(crate::preview::large_file_search_field_id(panel.into())),
         !session.query.is_empty(),
         Some(Message::PreviewLargeFileSearchSubmit(
             panel,

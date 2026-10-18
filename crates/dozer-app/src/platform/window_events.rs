@@ -2848,7 +2848,15 @@ impl Runner {
                 .await;
                 if let Ok(info) = result {
                     let _ = proxy.send_event(Message::PreviewBlankInfoLoaded(
-                        project_id, panel_kind, info,
+                        project_id,
+                        panel_kind,
+                        crate::preview::BlankPaneInfo {
+                            path: info.path,
+                            size_bytes: info.size_bytes,
+                            file_count: info.file_count,
+                            created: info.created,
+                            modified: info.modified,
+                        },
                     ));
                 }
             });
@@ -3891,15 +3899,19 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                             // 位)。取的是 `find_field_id(kind)` 这个稳定静态 id——它
                             // 只出现在有条的那一帧,位与条同帧建立、同帧被这里消费。
                             let preview_find_focus_id = app.active_workspace_mut().and_then(|ws| {
-                                ws.preview
-                                    .take_pending_find_focus()
-                                    .then(|| crate::preview::find_field_id(PanelKind::Files))
+                                ws.preview.take_pending_find_focus().then(|| {
+                                    crate::preview::find_field_id(
+                                        crate::preview::ViewerPanel::Files,
+                                    )
+                                })
                             });
                             let project_preview_find_focus_id =
                                 app.active_workspace_mut().and_then(|ws| {
-                                    ws.project_preview
-                                        .take_pending_find_focus()
-                                        .then(|| crate::preview::find_field_id(PanelKind::Project))
+                                    ws.project_preview.take_pending_find_focus().then(|| {
+                                        crate::preview::find_field_id(
+                                            crate::preview::ViewerPanel::Project,
+                                        )
+                                    })
                                 });
                             // 查找跳到某个命中后,编辑器需要补聚焦才能画出选区高亮
                             // (一次性位,消费即复位;不撵走 Find 输入框的真焦点,
@@ -4154,8 +4166,10 @@ impl winit::application::ApplicationHandler<Message> for Runner {
                                     &mut preview::CaptureFindFocus,
                                 );
                                 (
-                                    preview::take_find_focused(crate::app::PanelKind::Files),
-                                    preview::take_find_focused(crate::app::PanelKind::Project),
+                                    preview::take_find_focused(crate::preview::ViewerPanel::Files),
+                                    preview::take_find_focused(
+                                        crate::preview::ViewerPanel::Project,
+                                    ),
                                 )
                             } else {
                                 (false, false)

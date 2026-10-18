@@ -11,9 +11,8 @@
 // 完成前部分 API 暂未被非测试代码调用;显式允许,避免 dead_code 噪声。
 #![allow(dead_code)]
 
+use dozer_preview_core::resources::ViewerPanel;
 use serde::{Deserialize, Serialize};
-
-use crate::app::PanelKind;
 
 /// 当前协议版本。JS/Rust 两侧必须一致,否则消息被拒。
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -288,13 +287,13 @@ impl std::fmt::Display for ProtocolError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostBinding {
     pub project_id: i64,
-    pub panel: PanelKind,
+    pub panel: ViewerPanel,
     pub tab_id: usize,
     pub document_id: String,
 }
 
 impl HostBinding {
-    pub fn new(project_id: i64, panel: PanelKind, tab_id: usize, document_id: String) -> Self {
+    pub fn new(project_id: i64, panel: ViewerPanel, tab_id: usize, document_id: String) -> Self {
         Self {
             project_id,
             panel,
@@ -305,8 +304,8 @@ impl HostBinding {
 
     fn panel_token(&self) -> &'static str {
         match self.panel {
-            PanelKind::Project => "project",
-            PanelKind::GitLog => "gitlog",
+            ViewerPanel::Project => "project",
+            ViewerPanel::GitLog => "gitlog",
             _ => "files",
         }
     }
@@ -549,7 +548,7 @@ pub fn parse_tabular_event(raw: &str) -> Result<WebviewEnvelope<TabularEvent>, P
 /// 硬编码 `EditorCommand`,不是泛型,故需要这个平行函数)。
 pub fn encode_tabular_command(
     project_id: i64,
-    panel: PanelKind,
+    panel: ViewerPanel,
     tab_id: usize,
     document_id: &str,
     revision: u64,
@@ -560,8 +559,8 @@ pub fn encode_tabular_command(
         protocol_version: PROTOCOL_VERSION,
         project_id,
         panel: match panel {
-            PanelKind::Project => "project".to_string(),
-            PanelKind::GitLog => "gitlog".to_string(),
+            ViewerPanel::Project => "project".to_string(),
+            ViewerPanel::GitLog => "gitlog".to_string(),
             _ => "files".to_string(),
         },
         tab_id,
@@ -737,7 +736,7 @@ pub fn parse_review_trace_event(
 /// 编码一条 Rust -> 编辑器的命令为 envelope JSON,供 `evaluate_script` 注入。
 pub fn encode_command(
     project_id: i64,
-    panel: PanelKind,
+    panel: ViewerPanel,
     tab_id: usize,
     document_id: &str,
     revision: u64,
@@ -748,8 +747,8 @@ pub fn encode_command(
         protocol_version: PROTOCOL_VERSION,
         project_id,
         panel: match panel {
-            PanelKind::Project => "project".to_string(),
-            PanelKind::GitLog => "gitlog".to_string(),
+            ViewerPanel::Project => "project".to_string(),
+            ViewerPanel::GitLog => "gitlog".to_string(),
             _ => "files".to_string(),
         },
         tab_id,
@@ -936,7 +935,7 @@ pub fn parse_plantuml_event(raw: &str) -> Result<WebviewEnvelope<PlantUmlEvent>,
 /// 注入。与 [`encode_tabular_command`] 同结构,只是 payload 类型不同。
 pub fn encode_plantuml_command(
     project_id: i64,
-    panel: PanelKind,
+    panel: ViewerPanel,
     tab_id: usize,
     document_id: &str,
     revision: u64,
@@ -947,8 +946,8 @@ pub fn encode_plantuml_command(
         protocol_version: PROTOCOL_VERSION,
         project_id,
         panel: match panel {
-            PanelKind::Project => "project".to_string(),
-            PanelKind::GitLog => "gitlog".to_string(),
+            ViewerPanel::Project => "project".to_string(),
+            ViewerPanel::GitLog => "gitlog".to_string(),
             _ => "files".to_string(),
         },
         tab_id,
@@ -965,7 +964,7 @@ mod tests {
     use super::*;
 
     fn binding() -> HostBinding {
-        HostBinding::new(7, PanelKind::Files, 3, "p7-t3".to_string())
+        HostBinding::new(7, ViewerPanel::Files, 3, "p7-t3".to_string())
     }
 
     fn raw(payload: &str) -> String {
@@ -1149,7 +1148,7 @@ mod tests {
     fn encodes_set_window_command() {
         let s = encode_command(
             1,
-            PanelKind::Files,
+            ViewerPanel::Files,
             2,
             "p1-t2",
             3,
@@ -1172,7 +1171,7 @@ mod tests {
     fn encodes_set_diff_document_command() {
         let s = encode_command(
             0,
-            PanelKind::GitLog,
+            ViewerPanel::GitLog,
             0,
             "gitlog-diff",
             9,
@@ -1213,7 +1212,7 @@ mod tests {
     fn encodes_save_document_command() {
         let s = encode_command(
             1,
-            PanelKind::Files,
+            ViewerPanel::Files,
             2,
             "p1-t2",
             7,
@@ -1365,7 +1364,7 @@ mod tests {
     fn encodes_tabular_commands() {
         let s = encode_tabular_command(
             1,
-            PanelKind::Files,
+            ViewerPanel::Files,
             2,
             "p1-t2",
             0,
@@ -1382,7 +1381,7 @@ mod tests {
 
         let win = encode_tabular_command(
             1,
-            PanelKind::Files,
+            ViewerPanel::Files,
             2,
             "p1-t2",
             0,
@@ -1400,7 +1399,7 @@ mod tests {
 
         let sel = encode_tabular_command(
             1,
-            PanelKind::Files,
+            ViewerPanel::Files,
             2,
             "p1-t2",
             0,
@@ -1417,7 +1416,7 @@ mod tests {
         let env = parse_tabular_event(&raw(r#"{"kind":"ready"}"#)).unwrap();
         assert!(env.validate(&binding()).is_ok());
         assert!(
-            env.validate(&HostBinding::new(8, PanelKind::Files, 3, "p7-t3".into()))
+            env.validate(&HostBinding::new(8, ViewerPanel::Files, 3, "p7-t3".into()))
                 .is_err()
         );
     }
@@ -1495,7 +1494,7 @@ mod tests {
     fn encodes_command_envelope() {
         let s = encode_command(
             7,
-            PanelKind::Project,
+            ViewerPanel::Project,
             3,
             "p7-t3",
             5,
@@ -1513,7 +1512,7 @@ mod tests {
 
     #[test]
     fn host_binding_panel_token_covers_gitlog() {
-        let b = HostBinding::new(0, PanelKind::GitLog, 0, "gitlog-diff".into());
+        let b = HostBinding::new(0, ViewerPanel::GitLog, 0, "gitlog-diff".into());
         // 不能直接调用私有 `panel_token()`,靠 `validate()` 间接验证:一条
         // 携带 `panel: "gitlog"` 的 envelope 必须通过校验。
         let env = WebviewEnvelope {
@@ -1564,19 +1563,24 @@ mod tests {
                 recoverable: true
             }
         );
-        let good = HostBinding::new(7, PanelKind::Files, 3, "p7-t3".into());
+        let good = HostBinding::new(7, ViewerPanel::Files, 3, "p7-t3".into());
         assert!(env.validate(&good).is_ok());
         // 自报别的 project/tab/doc 一律拒绝。
         assert!(
-            env.validate(&HostBinding::new(8, PanelKind::Files, 3, "p7-t3".into()))
+            env.validate(&HostBinding::new(8, ViewerPanel::Files, 3, "p7-t3".into()))
                 .is_err()
         );
         assert!(
-            env.validate(&HostBinding::new(7, PanelKind::Project, 3, "p7-t3".into()))
-                .is_err()
+            env.validate(&HostBinding::new(
+                7,
+                ViewerPanel::Project,
+                3,
+                "p7-t3".into()
+            ))
+            .is_err()
         );
         assert!(
-            env.validate(&HostBinding::new(7, PanelKind::Files, 4, "p7-t4".into()))
+            env.validate(&HostBinding::new(7, ViewerPanel::Files, 4, "p7-t4".into()))
                 .is_err()
         );
 
@@ -1638,11 +1642,16 @@ mod tests {
                 recoverable: true
             }
         );
-        let good = HostBinding::new(7, PanelKind::Files, 3, "p7-t3".into());
+        let good = HostBinding::new(7, ViewerPanel::Files, 3, "p7-t3".into());
         assert!(env.validate(&good).is_ok());
         assert!(
-            env.validate(&HostBinding::new(7, PanelKind::Project, 3, "p7-t3".into()))
-                .is_err()
+            env.validate(&HostBinding::new(
+                7,
+                ViewerPanel::Project,
+                3,
+                "p7-t3".into()
+            ))
+            .is_err()
         );
 
         for (raw, want) in [
@@ -1786,7 +1795,7 @@ mod tests {
             }],
             theme: PlantUmlTheme::Dark,
         };
-        let json = encode_plantuml_command(7, PanelKind::Files, 3, "p7-t3", 5, None, cmd.clone());
+        let json = encode_plantuml_command(7, ViewerPanel::Files, 3, "p7-t3", 5, None, cmd.clone());
         let env: WebviewEnvelope<PlantUmlCommand> = serde_json::from_str(&json).unwrap();
         assert_eq!(env.payload, cmd);
         assert_eq!(env.project_id, 7);
@@ -1796,7 +1805,7 @@ mod tests {
         // Project 面板映射到 "project"。
         let json = encode_plantuml_command(
             7,
-            PanelKind::Project,
+            ViewerPanel::Project,
             1,
             "p7-t1",
             0,
@@ -1837,23 +1846,28 @@ mod tests {
             }
         );
 
-        let good = HostBinding::new(7, PanelKind::Files, 3, "p7-t3".into());
+        let good = HostBinding::new(7, ViewerPanel::Files, 3, "p7-t3".into());
         assert!(env.validate(&good).is_ok());
         // 任一身份不匹配都拒绝:project/panel/tab/document。
         assert!(
-            env.validate(&HostBinding::new(8, PanelKind::Files, 3, "p7-t3".into()))
+            env.validate(&HostBinding::new(8, ViewerPanel::Files, 3, "p7-t3".into()))
                 .is_err()
         );
         assert!(
-            env.validate(&HostBinding::new(7, PanelKind::Project, 3, "p7-t3".into()))
+            env.validate(&HostBinding::new(
+                7,
+                ViewerPanel::Project,
+                3,
+                "p7-t3".into()
+            ))
+            .is_err()
+        );
+        assert!(
+            env.validate(&HostBinding::new(7, ViewerPanel::Files, 4, "p7-t3".into()))
                 .is_err()
         );
         assert!(
-            env.validate(&HostBinding::new(7, PanelKind::Files, 4, "p7-t3".into()))
-                .is_err()
-        );
-        assert!(
-            env.validate(&HostBinding::new(7, PanelKind::Files, 3, "p7-t9".into()))
+            env.validate(&HostBinding::new(7, ViewerPanel::Files, 3, "p7-t9".into()))
                 .is_err()
         );
     }

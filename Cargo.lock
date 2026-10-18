@@ -2151,11 +2151,13 @@ dependencies = [
 name = "dozer-panel-preview"
 version = "0.1.0"
 dependencies = [
+ "byteui",
  "calamine",
  "csv",
  "dozer-i18n",
  "dozer-model",
  "dozer-preview-core",
+ "iced_widget",
  "serde",
  "serde_json",
  "tempfile",

@@ -10,7 +10,32 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::app::{GIT_LOG_DIFF_ID_OFFSET, PROJECT_PREVIEW_ID_OFFSET, PanelKind};
+use dozer_preview_core::resources::ViewerPanel;
+
+/// `ws.preview`(Files)与 `ws.project_preview`(Project)是两个独立 `PreviewPane`,各自 `next_id`
+/// 从 0 起数——两者的 webview 一旦同时进同一个 `webviews` 池,原始 id 会撞。给 `Project` 那一侧的
+/// id 统一加这个偏移,`Files` 侧不动;按 id 反查 Project webview 的地方都要用同一个偏移量加/减。
+pub const PROJECT_PREVIEW_ID_OFFSET: usize = 1_000_000;
+
+/// Git Log 面板 diff webview 的固定单槽位 id(没有 tab 概念,任意时刻最多一个 diff webview)。
+pub const GIT_LOG_DIFF_ID_OFFSET: usize = 3_000_000;
+
+/// editor host 的等宽字号与行高倍数(产品的终端字体设定,基准值,不含全局 scale)。
+/// 库不读任何全局:Dozer 取 `theme::terminal_font`,Digger 取自己的。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EditorFont {
+    pub size: f32,
+    pub line_height_factor: f32,
+}
+
+impl Default for EditorFont {
+    fn default() -> Self {
+        Self {
+            size: 14.0,
+            line_height_factor: 1.6,
+        }
+    }
+}
 
 /// editor host 页面 URL 前缀。`sync_webview_pool` 据此把 editor webview 与
 /// flyfish webview 分流(不同注入脚本/IPC 路由)。
@@ -26,23 +51,23 @@ pub const TABULAR_URL_PREFIX: &str = "dozer://tabular/";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditorHostBinding {
     pub project_id: i64,
-    pub panel: PanelKind,
+    pub panel: ViewerPanel,
     pub tab_id: usize,
     pub path: PathBuf,
 }
 
-/// `PanelKind` → webview URL 里的 `panel=` token(Files 与 Project 两个预览面板
+/// `ViewerPanel` → webview URL 里的 `panel=` token(Files 与 Project 两个预览面板
 /// 共用同一个编辑器 host,靠它区分)。资源淘汰按 URL 里的 `panel=`/`tab=` 定位。
-pub fn panel_token(panel: PanelKind) -> &'static str {
+pub fn panel_token(panel: ViewerPanel) -> &'static str {
     match panel {
-        PanelKind::Project => "project",
-        PanelKind::GitLog => "gitlog",
+        ViewerPanel::Project => "project",
+        ViewerPanel::GitLog => "gitlog",
         _ => "files",
     }
 }
 
 impl EditorHostBinding {
-    pub fn new(project_id: i64, panel: PanelKind, tab_id: usize, path: PathBuf) -> Self {
+    pub fn new(project_id: i64, panel: ViewerPanel, tab_id: usize, path: PathBuf) -> Self {
         Self {
             project_id,
             panel,
@@ -64,15 +89,15 @@ impl EditorHostBinding {
     /// webview 池 key(= 本地 id + 面板偏移,与 flyfish 预览一致)。
     pub fn webview_id(&self) -> usize {
         match self.panel {
-            PanelKind::Project => PROJECT_PREVIEW_ID_OFFSET + self.tab_id,
-            PanelKind::GitLog => GIT_LOG_DIFF_ID_OFFSET,
+            ViewerPanel::Project => PROJECT_PREVIEW_ID_OFFSET + self.tab_id,
+            ViewerPanel::GitLog => GIT_LOG_DIFF_ID_OFFSET,
             _ => self.tab_id,
         }
     }
 
     /// editor host 页面 URL。路径逐段百分号编码(保留 `/`);`theme` 跟随全局
     /// 配色方案,`ro` / `lang` 给首屏直接渲染用,Rust 侧仍会以绑定为准校验。
-    pub fn url(&self, theme: &str, read_only: bool, locale: &str) -> String {
+    pub fn url(&self, theme: &str, read_only: bool, locale: &str, font: EditorFont) -> String {
         // `fs`/`lh`:终端同款等宽字号与行高倍数(基准值,不含全局 scale——
         // WebView 的 pageZoom 已承担缩放),让编辑器与 PTY 观感一致。
         format!(
@@ -86,8 +111,8 @@ impl EditorHostBinding {
             self.panel_token(),
             self.tab_id,
             super::extension_to_syntax(&self.path),
-            crate::theme::terminal_font::size(),
-            crate::theme::terminal_font::editor_line_height_factor(),
+            font.size,
+            font.line_height_factor,
         )
     }
 
@@ -95,7 +120,7 @@ impl EditorHostBinding {
     /// `SetDiffDocument` 命令推送),恒 `ro=1`。`path` 仍参与 `document_id`/
     /// 资源预算估算(见 `runtime.rs` 的 `fs::metadata` 兜底),只是不会被
     /// JS 端 `fetch()`。
-    pub fn diff_url(&self, theme: &str, locale: &str) -> String {
+    pub fn diff_url(&self, theme: &str, locale: &str, font: EditorFont) -> String {
         format!(
             "{EDITOR_URL_PREFIX}index.html?mode=diff&theme={}&locale={}&ro=1&doc={}&proj={}&panel={}&tab={}&lang={}&fs={}&lh={}",
             theme,
@@ -105,8 +130,8 @@ impl EditorHostBinding {
             self.panel_token(),
             self.tab_id,
             super::extension_to_syntax(&self.path),
-            crate::theme::terminal_font::size(),
-            crate::theme::terminal_font::editor_line_height_factor(),
+            font.size,
+            font.line_height_factor,
         )
     }
 
@@ -147,13 +172,13 @@ impl EditorHostBinding {
 
 /// 把 webview 池 key 反解成 `(panel, tab_id)`(IPC 回来时按 id 找绑定用)。
 /// 越界/负数按 Files 处理(不可能出现,防御)。
-pub fn panel_and_tab_from_webview_id(id: usize) -> (PanelKind, usize) {
+pub fn panel_and_tab_from_webview_id(id: usize) -> (ViewerPanel, usize) {
     if id == GIT_LOG_DIFF_ID_OFFSET {
-        (PanelKind::GitLog, 0)
+        (ViewerPanel::GitLog, 0)
     } else if id >= PROJECT_PREVIEW_ID_OFFSET {
-        (PanelKind::Project, id - PROJECT_PREVIEW_ID_OFFSET)
+        (ViewerPanel::Project, id - PROJECT_PREVIEW_ID_OFFSET)
     } else {
-        (PanelKind::Files, id)
+        (ViewerPanel::Files, id)
     }
 }
 
@@ -208,39 +233,43 @@ fn encode_path(path: &Path) -> String {
 mod tests {
     use super::*;
 
-    fn binding(panel: PanelKind, tab_id: usize) -> EditorHostBinding {
+    fn binding(panel: ViewerPanel, tab_id: usize) -> EditorHostBinding {
         EditorHostBinding::new(7, panel, tab_id, PathBuf::from("/repo/src/main.rs"))
     }
 
     #[test]
     fn document_id_is_derived_and_stable() {
-        let b = binding(PanelKind::Files, 3);
+        let b = binding(ViewerPanel::Files, 3);
         assert_eq!(b.document_id(), "p7-t3");
     }
 
     #[test]
     fn webview_id_applies_project_offset() {
-        assert_eq!(binding(PanelKind::Files, 3).webview_id(), 3);
+        assert_eq!(binding(ViewerPanel::Files, 3).webview_id(), 3);
         assert_eq!(
-            binding(PanelKind::Project, 3).webview_id(),
+            binding(ViewerPanel::Project, 3).webview_id(),
             PROJECT_PREVIEW_ID_OFFSET + 3
         );
     }
 
     #[test]
     fn webview_id_inverts_back_to_panel_and_tab() {
-        assert_eq!(panel_and_tab_from_webview_id(3), (PanelKind::Files, 3));
+        assert_eq!(panel_and_tab_from_webview_id(3), (ViewerPanel::Files, 3));
         assert_eq!(
             panel_and_tab_from_webview_id(PROJECT_PREVIEW_ID_OFFSET + 9),
-            (PanelKind::Project, 9)
+            (ViewerPanel::Project, 9)
         );
     }
 
     #[test]
     fn url_encodes_path_and_carries_binding() {
-        let b =
-            EditorHostBinding::new(7, PanelKind::Project, 3, PathBuf::from("/repo/a b/main.rs"));
-        let url = b.url("dark", true, "en");
+        let b = EditorHostBinding::new(
+            7,
+            ViewerPanel::Project,
+            3,
+            PathBuf::from("/repo/a b/main.rs"),
+        );
+        let url = b.url("dark", true, "en", EditorFont::default());
         assert!(is_editor_url(&url));
         assert!(url.contains("panel=project"));
         assert!(url.contains("tab=3"));
@@ -260,7 +289,7 @@ mod tests {
 
     #[test]
     fn json_editor_url_is_distinct() {
-        let b = binding(PanelKind::Files, 3);
+        let b = binding(ViewerPanel::Files, 3);
         let url = b.json_url("dark", true, "en");
         assert!(is_json_editor_url(&url));
         assert!(!is_editor_url(&url));
@@ -271,7 +300,7 @@ mod tests {
 
     #[test]
     fn tabular_url_is_distinct_and_always_read_only() {
-        let b = binding(PanelKind::Files, 3);
+        let b = binding(ViewerPanel::Files, 3);
         let url = b.tabular_url("dark", "en");
         assert!(is_tabular_url(&url));
         assert!(!is_editor_url(&url));
@@ -286,7 +315,7 @@ mod tests {
 
     #[test]
     fn is_host_url_covers_tabular() {
-        let b = binding(PanelKind::Files, 3);
+        let b = binding(ViewerPanel::Files, 3);
         assert!(is_host_url(&b.tabular_url("dark", "en")));
     }
 
@@ -297,14 +326,14 @@ mod tests {
 
     #[test]
     fn gitlog_panel_token_is_distinct() {
-        assert_eq!(panel_token(PanelKind::GitLog), "gitlog");
-        assert_eq!(panel_token(PanelKind::Files), "files");
-        assert_eq!(panel_token(PanelKind::Project), "project");
+        assert_eq!(panel_token(ViewerPanel::GitLog), "gitlog");
+        assert_eq!(panel_token(ViewerPanel::Files), "files");
+        assert_eq!(panel_token(ViewerPanel::Project), "project");
     }
 
     #[test]
     fn gitlog_webview_id_applies_own_offset() {
-        let b = EditorHostBinding::new(0, PanelKind::GitLog, 0, PathBuf::from("a.txt"));
+        let b = EditorHostBinding::new(0, ViewerPanel::GitLog, 0, PathBuf::from("a.txt"));
         assert_eq!(b.webview_id(), GIT_LOG_DIFF_ID_OFFSET);
     }
 
@@ -312,14 +341,14 @@ mod tests {
     fn gitlog_webview_id_inverts_back() {
         assert_eq!(
             panel_and_tab_from_webview_id(GIT_LOG_DIFF_ID_OFFSET),
-            (PanelKind::GitLog, 0)
+            (ViewerPanel::GitLog, 0)
         );
     }
 
     #[test]
     fn diff_url_carries_mode_and_gitlog_panel_token() {
-        let b = EditorHostBinding::new(0, PanelKind::GitLog, 0, PathBuf::from("src/lib.rs"));
-        let url = b.diff_url("dark", "en");
+        let b = EditorHostBinding::new(0, ViewerPanel::GitLog, 0, PathBuf::from("src/lib.rs"));
+        let url = b.diff_url("dark", "en", EditorFont::default());
         assert!(is_editor_url(&url));
         assert!(url.contains("mode=diff"));
         assert!(url.contains("panel=gitlog"));

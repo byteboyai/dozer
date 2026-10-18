@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn blank_tab_title_follows_the_project_root_basename_then_the_localized_blank() {
-        let mut pane = PreviewPane::default();
+        let mut pane = crate::preview::new_preview_pane();
         let blank = crate::preview::placeholder_tab(0);
         let p = project("/Users/a/Projects/dozer", "Dozer AI Coder");
         assert_eq!(preview_tab_title(Some(&p), &blank, "en"), "dozer");
@@ -552,7 +552,7 @@ mod tests {
 
     #[test]
     fn tab_label_appends_a_star_only_for_dirty_tabs_and_keeps_cjk_titles() {
-        let mut pane = PreviewPane::default();
+        let mut pane = crate::preview::new_preview_pane();
         let id = file_tab(&mut pane, "/tmp/说明文档.md");
         let tab = pane.tabs_mut().iter_mut().find(|t| t.id == id).unwrap();
         assert_eq!(preview_tab_label(None, tab, "zh-CN"), "说明文档.md");
@@ -568,7 +568,7 @@ mod tests {
 
     #[test]
     fn placeholder_close_selects_only_when_it_is_the_only_tab() {
-        let mut pane = PreviewPane::default();
+        let mut pane = crate::preview::new_preview_pane();
         let blank = crate::preview::placeholder_tab(0);
         assert!(tab_close_selects_instead(&blank, 1));
         assert!(!tab_close_selects_instead(&blank, 2));
@@ -649,7 +649,7 @@ mod tests {
 
     #[test]
     fn fallback_model_covers_every_backend_and_state_combination() {
-        let mut pane = PreviewPane::default();
+        let mut pane = crate::preview::new_preview_pane();
         // 代码 tab 就绪:不画降级页。
         let code = file_tab(&mut pane, "/tmp/a.rs");
         let t = pane.tabs().iter().find(|t| t.id == code).unwrap();
@@ -707,7 +707,7 @@ mod tests {
 
     #[test]
     fn toolbar_shows_mode_buttons_only_for_the_eligible_active_tab() {
-        let mut pane = PreviewPane::default();
+        let mut pane = crate::preview::new_preview_pane();
         // 只有 Blank:都不出现。
         assert_eq!(toolbar_model(&pane), ToolbarModel::default());
         // 纯代码文件:不出现。

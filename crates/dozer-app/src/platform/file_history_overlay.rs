@@ -242,11 +242,16 @@ impl FileHistoryOverlay {
             return;
         };
 
-        let binding =
-            crate::preview::EditorHostBinding::new(0, crate::app::PanelKind::Files, 0, file_path);
+        let binding = crate::preview::EditorHostBinding::new(
+            0,
+            crate::preview::ViewerPanel::Files,
+            0,
+            file_path,
+        );
         let url = binding.diff_url(
             crate::preview::scheme_query_value(),
             app.locale.active_locale(),
+            crate::preview::editor_font(),
         );
         let logical_size: LogicalSize<f32> = self
             .window

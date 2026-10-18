@@ -14,7 +14,7 @@ pub struct PendingPlantUmlDocument {
     /// 项目根相对规范化路径(仅用于展示/host 内部标记,不含绝对路径)。
     pub path: String,
     pub source: String,
-    pub includes: Vec<crate::preview::PlantUmlInclude>,
+    pub includes: Vec<crate::PlantUmlInclude>,
 }
 
 /// 一个预览 tab。
@@ -63,7 +63,7 @@ pub struct PreviewTab {
     pub pending_restore: Option<String>,
     /// T11 bullet 4:本次加载的三段延迟观测(`loading_started → first_frame →
     /// ready`;不记文件内容)。
-    pub load_observe: Option<crate::preview::LoadObservation>,
+    pub load_observe: Option<crate::LoadObservation>,
     /// 启动恢复/淘汰恢复的完整视图状态(cursor/selection/top_line/folds),
     /// editor `ready` 后经一次 `RestoreViewState` 应用。
     pub pending_view: Option<ViewStateRestore>,
@@ -73,7 +73,7 @@ pub struct PreviewTab {
     /// CodeMirror host 的轻量镜像；正文仍由 WebView 持有，Rust 只保留 Agent、
     /// 保存和过期事件校验所需状态。
     pub web_revision: u64,
-    pub web_selection: Option<crate::preview::TextRange>,
+    pub web_selection: Option<crate::TextRange>,
     pub web_selected_text: Option<String>,
     pub web_viewport: Option<(u32, u32)>,
     /// T11:最近一次 `view_state` 事件的完整镜像(cursor/selection/top_line/
@@ -381,7 +381,7 @@ impl PreviewTab {
     }
 
     /// 窗口化稀疏行索引(就绪后才有)。
-    pub fn window_index(&self) -> Option<&Arc<crate::preview::LineIndex>> {
+    pub fn window_index(&self) -> Option<&Arc<crate::LineIndex>> {
         self.window_runtime().and_then(|w| w.index.as_ref())
     }
 
@@ -508,7 +508,7 @@ impl PreviewRuntime {
 #[derive(Debug, Clone, Default)]
 pub struct WindowedRuntime {
     /// 稀疏行索引(后台建好后回填);外部变更/重载会清空使其失效。
-    pub index: Option<Arc<crate::preview::LineIndex>>,
+    pub index: Option<Arc<crate::LineIndex>>,
     /// 最近一次读取窗口的全局起始行(诊断/恢复用)。
     pub window_start_line: u32,
     /// 最近一次读取的窗口是否因字节上限被截断(超长单行)。
@@ -521,10 +521,10 @@ pub struct WindowedRuntime {
 /// 资源淘汰前序列化、物化后恢复共用同一形状,保证三者字段一致。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ViewStateRestore {
-    pub cursor: Option<crate::preview::TextPosition>,
-    pub selection: Option<crate::preview::TextRange>,
+    pub cursor: Option<crate::TextPosition>,
+    pub selection: Option<crate::TextRange>,
     pub top_line: Option<u32>,
-    pub folds: Vec<crate::preview::FoldRange>,
+    pub folds: Vec<crate::FoldRange>,
 }
 
 impl ViewStateRestore {
@@ -544,9 +544,15 @@ impl ViewStateRestore {
 /// `extensions::project::compute_blank_info`,与"用量徽章"共用
 /// `DISK_USAGE_EXCLUDE`(`target/`/`.git/`/`node_modules` 等不计)。`created`/
 /// `modified` 来自 `fs::metadata(root)`,平台不支持时为 `None`。
-/// 结构随纯逻辑一起搬进 `dozer-panel-project::disk::BlankInfo`,这里保留旧名
-/// 的别名,`PreviewBlankInfoLoaded` 等既有调用点不变。
-pub type BlankPaneInfo = dozer_panel_project::disk::BlankInfo;
+/// 结构由产品从各自的磁盘统计结果转换而来(Dozer:`dozer-panel-project::disk::BlankInfo`)。
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlankPaneInfo {
+    pub path: PathBuf,
+    pub size_bytes: u64,
+    pub file_count: u64,
+    pub created: Option<std::time::SystemTime>,
+    pub modified: Option<std::time::SystemTime>,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TabKind {
@@ -649,11 +655,11 @@ pub struct FindState {
 /// `preview_desired` 会把 webview 矩形下推 + 压低这一高度,把这块条让给 iced
 /// 渲染(见 `App::preview_find_bar_over_webview` 与 `crate::app::App::
 /// preview_desired`)。原生 editor 档 find 不盖 webview,那条路不读这个常量。
-pub(crate) const PREVIEW_FIND_BAR_HEIGHT: f32 = 44.0;
+pub const PREVIEW_FIND_BAR_HEIGHT: f32 = 44.0;
 
 /// T10 冲突条占的纵向高度(逻辑像素)。与 Find 条同款:webview 是原生子视图、
 /// 不听 iced 绘制顺序,画冲突条时必须显式把 webview 矩形下推这一高度。
-pub(crate) const PREVIEW_CONFLICT_BAR_HEIGHT: f32 = 44.0;
+pub const PREVIEW_CONFLICT_BAR_HEIGHT: f32 = 44.0;
 
 /// 只读大文件档的搜索会话——⌘F 在这类 tab 上不打开 `FindState`(内存线性
 /// 扫描,大文件上代价不可接受),而是打开这个,走
@@ -667,7 +673,7 @@ pub(crate) const PREVIEW_CONFLICT_BAR_HEIGHT: f32 = 44.0;
 pub struct LargeFileSearch {
     pub tab_id: usize,
     pub query: String,
-    pub hits: Vec<crate::extensions::search::SearchHit>,
+    pub hits: Vec<crate::FileSearchHit>,
     pub current: usize,
     /// 是否有查询在途(搜索条据此显示小尺寸 math_curve loading)。
     pub running: bool,
@@ -680,7 +686,7 @@ pub struct LargeFileSearch {
     /// 搜索失败信息(局部错误,不把整个 preview 置 Failed)。
     pub error: Option<String>,
     /// 已扫描字节/总字节(展示用;`total == 0` 表示未知)。
-    pub progress: Option<crate::preview::PreviewLoadProgress>,
+    pub progress: Option<crate::PreviewLoadProgress>,
     /// 取消信号:置位后后台任务在下一个分段检查点退出。`Arc` 与任务共享。
     pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
@@ -713,23 +719,33 @@ impl LargeFileSearch {
     }
 }
 
+/// 一条大文件搜索命中(只读大文件档的「整文件搜索」结果行)。
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileSearchHit {
+    pub path: PathBuf,
+    pub line_no: u64,
+    pub line_text: String,
+}
+
 pub struct PreviewPane {
-    pub(crate) tabs: Vec<PreviewTab>,
-    pub(crate) active: usize,
-    pub(crate) next_id: usize,
+    pub tabs: Vec<PreviewTab>,
+    pub active: usize,
+    pub next_id: usize,
     /// 全局客户端能力快照(启动探测一次)。`Default` 取当前安装值;Workspace
     /// 装配时会用 `ShellIo` 里那份显式覆盖(见 `Workspace::from_restore`),
     /// 保证同一进程内所有预览路由读的是同一份预算。
-    pub(crate) capabilities: Arc<crate::capabilities::ClientCapabilities>,
+    pub capabilities: Arc<dozer_preview_core::capabilities::ClientCapabilities>,
+    /// editor host URL 里带的等宽字号 / 行高倍数;产品在装配时按自己的终端字体覆盖。
+    pub editor_font: crate::EditorFont,
     /// 新建原生编辑器 tab 时置位的一次性程序化聚焦标记——`CodeView` 的焦点
     /// 是真实 iced 焦点树的一部分,构造时不能直接拿到,要等下一帧
     /// `UserInterface::build` 之后由 main.rs 用 `operation::focusable::focus`
     /// 强制聚焦(同项目树行内编辑/Todo 内容编辑的既有手法)。
-    pub(crate) pending_editor_focus: bool,
+    pub pending_editor_focus: bool,
     /// Find 条输入框同样要一次性程序化聚焦(⌘F 打开输入框那帧无法直接拿到
     /// 真正的 text_input 焦点,靠 main.rs 下一帧 operation 拨)。`*_focus_for_find`
     /// 在 open/close 时置位,消费式读走。
-    pub(crate) pending_find_focus: bool,
+    pub pending_find_focus: bool,
     /// 一次性标记:`select_range`/`select_range_backward` 刚给编辑器选中一段
     /// 查找命中时置位——原生 `iced_widget::text_editor` 的选区高亮只在**真持有
     /// iced 焦点**时才画(`draw()` 里 `if let Some(focus) = state.focus.as_ref()`
@@ -741,13 +757,13 @@ pub struct PreviewPane {
     /// `.focus()` 目标、不碰其它 focusable)把编辑器也标记为聚焦,让它画出高亮,
     /// 同时不动 Find 输入框已有的真焦点(2026-09 用户实测反馈:查找跳到第 n 个
     /// 命中时代码里应该真的选中那段文字,不能只是计数器数字变了)。
-    pub(crate) pending_editor_reveal_focus: bool,
+    pub pending_editor_reveal_focus: bool,
     /// 文件内搜索(⌘F)会话,`Some` 表示条已显示;Files / Project 各一份,独立。
-    pub(crate) find: Option<FindState>,
+    pub find: Option<FindState>,
     /// 只读大文件档的搜索会话,`Some` 表示条已显示。与 `find`(小文件 ⌘F)
     /// 互斥:同一时刻一个 tab 只可能命中其中一种(`open_large_file_search`/
     /// `preview_find_open` 由调用方按 `editor.is_read_only()` 二选一触发)。
-    pub(crate) large_file_search: Option<LargeFileSearch>,
+    pub large_file_search: Option<LargeFileSearch>,
     /// webview(flyfish)档 find 关条/切走时,需往旧 webview 注入一次
     /// `clearDocumentSearch()` 把高亮抹掉——但 `FindState` 在 `close_find`/
     /// `cull_stale_find` 里已经被丢,句柄又只在 window_events 事件环里拿得到,
@@ -755,53 +771,53 @@ pub struct PreviewPane {
     /// `apply_pending_preview_find` 消费(window_events 同 `pending_focus` 的
     /// "派发完消息后轮询"节奏)。`Some(id)` 存的是该 webview 池 key(已含
     /// Project 偏移);`None` 表示无事发生。
-    pub(crate) pending_webview_find_clear: Option<usize>,
+    pub pending_webview_find_clear: Option<usize>,
     /// `push_tab` 刚创建、还没被外层 spawn 后台加载的表格 tab
     /// `(PreviewTab.id, 文件路径)` 队列。调用方在 `open_path`/`push_tab`
     /// 返回后立即 `take_pending_tabular_loads()` 取走清空,不应该攒着不取
     /// (见 `PreviewPane::take_pending_tabular_loads` 文档)。
-    pub(crate) pending_tabular_loads: Vec<(usize, PathBuf)>,
+    pub pending_tabular_loads: Vec<(usize, PathBuf)>,
     /// 待下发给 CodeMirror editor webview 的命令队列(`tab_id`, 命令)。
     /// `window_events` 每帧(同 `apply_pending_preview_find` 节奏)取走并
     /// `evaluate_script` 注入;Agent reveal/select 与外部 reload 用它。
-    pub(crate) pending_editor_commands: Vec<(usize, EditorCommand)>,
+    pub pending_editor_commands: Vec<(usize, EditorCommand)>,
     /// 待下发给 Tabular webview host(ag-grid)的命令队列(`tab_id`, 命令)。
     /// 与 `pending_editor_commands` 平行:`window_events` 每帧取走并
     /// `evaluate_script` 注入;初始 `Init`/`SetSchema`/`SetWindow`、滚动窗口
     /// 回包、reveal、跨 sheet 切换都经它。
-    pub(crate) pending_tabular_commands: Vec<(usize, TabularCommand)>,
+    pub pending_tabular_commands: Vec<(usize, TabularCommand)>,
     /// 待下发给 PlantUML viewer host 的命令队列(`tab_id`, 命令)。与
     /// `pending_tabular_commands` 平行:`window_events` 每帧取走并
     /// `evaluate_script` 注入;初始 `SetDocument`、`FitView` 等经它。
-    pub(crate) pending_plantuml_commands: Vec<(usize, PlantUmlCommand)>,
+    pub pending_plantuml_commands: Vec<(usize, PlantUmlCommand)>,
     /// Task 7:因根文件/include 变化而需要重跑 `load_document` 的 PlantUML tab
     /// 队列 `(tab_id, 根文件路径)`。`reload_webviews_for` 里不能做 I/O,故只
     /// 把受影响的 tab 记到这里,由调用方(手上有 `io`/`project` 的 `App`)在
     /// 同一轮事件里取走并 spawn 后台重载。与 `pending_tabular_loads` 平行。
-    pub(crate) pending_plantuml_reloads: Vec<(usize, PathBuf)>,
+    pub pending_plantuml_reloads: Vec<(usize, PathBuf)>,
     /// Task 7:PlantUML 依赖反向索引 `dependency(canonical) -> [tab_id]`。一个
     /// include 被多张图共享时,该依赖命中会刷新全部引用它的 tab。索引是本 pane
     /// 维护的派生视图:任何改动 tab / 依赖集的操作都经
     /// `rebuild_plantuml_dep_index` 从 `tabs[*].plantuml_dependencies` 整体重建,
     /// 避免增量维护在多处漏改。viewer 身份即"本 pane + tab_id"(每个面板各有
     /// 一份 `PreviewPane`,天然区分 Files / Project)。
-    pub(crate) plantuml_dep_index: std::collections::HashMap<PathBuf, Vec<usize>>,
+    pub plantuml_dep_index: std::collections::HashMap<PathBuf, Vec<usize>>,
     /// "保存后再关闭"的 CodeMirror tab id 列表。Rust 侧不持有编辑器全文,
     /// 关闭 dirty tab 不能直接落盘,得先向 host 下发 `SaveDocument`,待
     /// host 回 `save_requested` 真正落盘后再移除 tab。`pending_editor_commands`
     /// 里对应的那条 `SaveDocument` 已在关 tab 那一刻排队,本列表只记"这条
     /// tab 的保存回来后要把 tab 关掉"。
-    pub(crate) pending_close: Vec<usize>,
+    pub pending_close: Vec<usize>,
     /// 空白页信息卡:激活 tab 为 `TabKind::Blank` 时,`apply_pending_blank_info`
     /// 异步跑出来的项目根目录简介。`None` 表示还没拉;view 层用 `—` 占位。
     /// `clear_all`/`PreviewTabSwitch` 路径会同步置回 `None`(项目切换后
     /// `path` 变化,旧结果失配)。
-    pub(crate) blank_info: Option<BlankPaneInfo>,
+    pub blank_info: Option<BlankPaneInfo>,
     /// 防重复 spawn 的幂等位:空白页拉信息时由 `apply_pending_blank_info`
     /// 在 `handle.spawn` **之前**置 true,`PreviewBlankInfoLoaded` 到达时清回
     /// false。必须先置再 spawn,否则同帧 `user_event`/`window_event` 各扫到
     /// 一次,会起两份后台任务。
-    pub(crate) blank_info_in_flight: bool,
+    pub blank_info_in_flight: bool,
 }
 
 impl Default for PreviewPane {
@@ -814,7 +830,8 @@ impl Default for PreviewPane {
             tabs: vec![placeholder_tab(0)],
             active: 0,
             next_id: 1,
-            capabilities: crate::capabilities::current(),
+            capabilities: Arc::new(crate::default_client_capabilities()),
+            editor_font: crate::EditorFont::default(),
             pending_editor_focus: false,
             pending_find_focus: false,
             pending_editor_reveal_focus: false,
@@ -837,7 +854,7 @@ impl Default for PreviewPane {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::preview::view::placeholder_tab;
+    use crate::pane::placeholder_tab;
 
     fn tabular_tab(mode: TabularMode) -> PreviewTab {
         let mut tab = placeholder_tab(1);
