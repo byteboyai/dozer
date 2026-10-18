@@ -821,4 +821,113 @@ mod tests {
             );
         }
     }
+
+    /// P1 的守恒依据:路由表**一字不差**。对一组固定路径 × 若干内容画像调
+    /// `classify_preview`,把 `(路径, 内容, kind, 默认模式, 备选模式, 原因, 文本 /
+    /// 有损 / UTF-16 标志)` 序列化,与 `tests/fixtures/preview_router_golden.txt`
+    /// 逐行比较。黄金文件在抽库**之前**于现状上生成一次(`UPDATE_GOLDEN=1`),
+    /// 搬迁过程中不得重新生成。
+    #[test]
+    fn classify_preview_golden_corpus() {
+        const GOLDEN: &str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/preview_router_golden.txt"
+        );
+        // 内容画像:用 `analyze` 直接构造字节,不碰磁盘。
+        let text = b"fn main() {}\nhello world\n".to_vec();
+        let binary = vec![0x00, 0x01, 0x02, 0xFF, 0x00, 0x7F, 0x00, 0x10];
+        let invalid_utf8 = vec![b'a', b'b', 0xC3, 0x28, b'c', 0xFF, 0xFE, b'd'];
+        let utf16_le = vec![0xFF, 0xFE, b'h', 0, b'i', 0];
+        let utf8_bom = vec![0xEF, 0xBB, 0xBF, b'h', b'i', b'\n'];
+        let contents: Vec<(&str, Vec<u8>)> = vec![
+            ("text", text),
+            ("binary", binary),
+            ("invalid_utf8", invalid_utf8),
+            ("utf16le_bom", utf16_le),
+            ("utf8_bom", utf8_bom),
+            ("empty", Vec::new()),
+        ];
+        let names: Vec<&str> = vec![
+            // 代码(扩展名)
+            "a.rs", "a.py", "a.js", "a.ts", "a.tsx", "a.go", "a.java", "a.c", "a.cpp", "a.h",
+            "a.sh", "a.rb", "a.php", "a.swift", "a.kt", "a.toml", "a.yaml", "a.yml", "a.ini",
+            "a.sql", "a.css", "a.scss", "a.lua", "a.ex", "a.txt", "a.log", "a.vue",
+            // 文件名注册表
+            "Dockerfile", "Makefile", "LICENSE", "LICENSE-MIT", "LICENCE", ".env", ".env.local",
+            ".gitignore", ".gitattributes", "Cargo.lock", "CMakeLists.txt", "Gemfile", "Rakefile",
+            // 渲染型
+            "a.md", "a.markdown", "a.html", "a.htm", "a.svg", "A.MD", "B.HTML",
+            // 图片 / 媒体 / 文档
+            "a.png", "a.jpg", "a.jpeg", "a.gif", "a.webp", "a.bmp", "a.ico", "Photo.PNG", "a.pdf",
+            "a.mp4", "a.mov", "a.mp3", "a.wav", "a.docx", "a.pptx",
+            // JSON 家族
+            "a.json", "a.jsonc", "a.json5", "a.jsonl", "a.ndjson", "C.JSON",
+            // 表格
+            "a.csv", "a.tsv", "a.xlsx", "a.xls", "a.ods", "B.CSV", "a.csvx",
+            // PlantUML
+            "a.puml", "a.plantuml", "a.pu", "a.iuml",
+            // 压缩包
+            "a.zip", "a.tar", "a.gz", "a.tgz", "a.7z", "a.rar",
+            // 未知 / 边界
+            "foo.xyz", "noext", "README", ".hidden", "a.b.c", "dir.d/file", "weird name.rs",
+            "中文文件.md", "emoji😀.txt", "x.", ".md",
+        ];
+        assert!(names.len() >= 60, "语料不足 60 条: {}", names.len());
+        let caps = caps();
+        let mut out = String::new();
+        for name in &names {
+            for (label, bytes) in &contents {
+                let size = bytes.len() as u64;
+                let profile = analyze(bytes, None, size, None);
+                let route = classify_preview(&PathBuf::from(name), &profile, &caps, None);
+                out.push_str(&format!(
+                    "{name}\t{label}\t{:?}\t{:?}\t{:?}\t{:?}\ttext={} lossy={} utf16={}\n",
+                    route.kind,
+                    route.default_mode,
+                    route.alternate_modes,
+                    route.reason,
+                    route.content_is_text,
+                    route.encoding_lossy,
+                    route.encoding_utf16,
+                ));
+            }
+        }
+        // 持久化 mode 覆盖:对每种 kind 的代表文件,试每个 mode。
+        for name in ["a.md", "a.html", "a.json", "a.csv", "a.rs", "a.png", "a.jsonl"] {
+            for mode in [
+                PreviewMode::Code,
+                PreviewMode::Rendered,
+                PreviewMode::Source,
+                PreviewMode::Tree,
+                PreviewMode::Text,
+            ] {
+                let profile = analyze(b"x\n", None, 2, None);
+                let route = classify_preview(&PathBuf::from(name), &profile, &caps, Some(mode));
+                out.push_str(&format!(
+                    "persisted\t{name}\t{mode:?}\t{:?}\t{:?}\t{:?}\t{:?}\n",
+                    route.kind, route.default_mode, route.alternate_modes, route.reason,
+                ));
+            }
+        }
+        if std::env::var_os("UPDATE_GOLDEN").is_some() {
+            std::fs::write(GOLDEN, &out).expect("写黄金文件");
+            return;
+        }
+        let expected = std::fs::read_to_string(GOLDEN)
+            .expect("缺少黄金文件:先在抽库之前用 UPDATE_GOLDEN=1 生成并提交");
+        assert!(
+            out == expected,
+            "路由结果与黄金不一致。首个差异:{}",
+            out.lines()
+                .zip(expected.lines())
+                .enumerate()
+                .find(|(_, (a, b))| a != b)
+                .map(|(i, (a, b))| format!("第 {} 行 actual={a:?} expected={b:?}", i + 1))
+                .unwrap_or_else(|| format!(
+                    "行数不同 actual={} expected={}",
+                    out.lines().count(),
+                    expected.lines().count()
+                ))
+        );
+    }
 }
