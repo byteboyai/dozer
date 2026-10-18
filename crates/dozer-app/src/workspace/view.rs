@@ -835,15 +835,10 @@ fn preview_blank_info_card<'a>(
     locale: &str,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let theme_colors = byteui::theme::color::current();
-    // 头部名称取**项目根目录 basename**(`path.file_name()`)而不是
-    // `ProjectInfo::name`(用户给项目起的"显示名",如 "Dozer AI Coder"):
-    // 空白页想表达"打开的是哪个目录",与 `ws.preview_blank_info_card` 其它
-    // 字段(位置/大小/创建/修改)语义自洽。无项目时回退到 `name` 占位
-    // (不太可能触发——`active_is_blank` 与项目加载在 `apply_pending_blank_info`
-    // 那一侧就已经过滤过了)。
-    let header_label = project_root_dir_name(ws)
-        .or_else(|| ws.project.as_ref().map(|p| p.name.clone()))
-        .unwrap_or_default();
+    // 文案与占位的取舍都在 `blank_info_model`(纯函数,有测试):头部名称取
+    // **项目根目录 basename** 而不是 `ProjectInfo::name`(显示名);无项目只画
+    // 头部;后台信息还没回来时三行值画 `—`。
+    let model = blank_info_model(ws.project.as_ref(), preview.blank_info.as_ref(), locale);
     // 四行 stats 的两条对齐锚线(`:` 竖线 + 行首 padding)在 header 之前就定
     // 好,因为头部 icon 要借同一条 `:` 竖线右对齐(见下面的 `icon_slot_w`)。
     // `label_colon_w=96` 容下"修改时间:"(5 CJK + 冒号 @body_font 14,实测约
@@ -855,9 +850,8 @@ fn preview_blank_info_card<'a>(
     // 右缘正好落在四行 label 的 `:` 那条竖线上。icon 比原来小一档(96 → 64),
     // 不再压过 2 倍 title 的项目名,也不会撑得整张卡头重脚轻。
     let icon_slot_w: f32 = stats_padding_left + label_colon_w;
-    // 头部 icon 用 Lucide `folder-dot`(一个底角圆点暗示"当前位置/选中"
-    // 的语义,比纯 folder 更贴合空白页"信息卡"语境);文件夹名字号直接
-    // ×2(从 title() 16 → 32),与下方 body() 14 拉开视觉主次。
+    // 头部 icon 用 Lucide `folder-dot`;文件夹名字号直接 ×2(从 title() 16 → 32),
+    // 与下方 body() 14 拉开视觉主次。
     let icon_size: f32 = 64.0;
     let header_spacing: f32 = 20.0;
     let header = row![
@@ -868,14 +862,14 @@ fn preview_blank_info_card<'a>(
         ))
         .width(Length::Fixed(icon_slot_w))
         .align_x(iced_widget::core::alignment::Horizontal::Right),
-        text(header_label)
+        text(model.header_label)
             .size(byteui::theme::font::title() * 2)
             .color(theme_colors.cream),
     ]
     .spacing(header_spacing)
     .align_y(iced_widget::core::Alignment::Center);
 
-    let Some(project) = ws.project.as_ref() else {
+    let Some(rows) = model.stats else {
         return container(
             column![header]
                 .spacing(0)
@@ -888,95 +882,28 @@ fn preview_blank_info_card<'a>(
         .into();
     };
 
-    let info = preview.blank_info.as_ref();
-    let size_value = info.map_or("—".to_string(), |i| {
-        crate::i18n::host_text_args(
-            "preview.blank_size_value",
-            "{human} ({bytes} bytes on disk), {count} items",
-            locale,
-            &[
-                ("human", format_human_size(i.size_bytes).as_str()),
-                ("bytes", with_thousands_separator(i.size_bytes).as_str()),
-                ("count", with_thousands_separator(i.file_count).as_str()),
-            ],
-        )
-    });
-    let created_value = info
-        .and_then(|i| i.created)
-        .map(|t| format_time(t, locale))
-        .unwrap_or_else(|| "—".to_string());
-    let modified_value = info
-        .and_then(|i| i.modified)
-        .map(|t| format_time(t, locale))
-        .unwrap_or_else(|| "—".to_string());
-
     let dim = theme_colors.dim;
     let cream = theme_colors.cream;
     let body_font = byteui::theme::font::body();
-    // 不抽 label/value 闭包:`text` 返回 `Text<'a>` 含生命周期,把 `&str` 闭包
-    // 返回 `Text<'b>` 会撞 iced 的 invariant 约束(报错点就是这个),就地写
-    // 反而短。
     // `:` 对齐方案:每个 label 段包进 width(Fixed(label_colon_w)) + 右对齐
     // 的 container,于是该行 `:` 落在 `label_colon_w` 框右边界;stats column
     // 再用 `stats_padding_left` 把整组横向推 16px,这条竖线才落到头部 icon
     // 的右缘上——两条锚线由上面的 `icon_slot_w` 绑成同一条。
+    let stat_row = |(label, value): (String, String)| {
+        row![
+            container(text(label).size(body_font).color(dim))
+                .width(Length::Fixed(label_colon_w))
+                .align_x(iced_widget::core::alignment::Horizontal::Right),
+            text(value).size(body_font).color(cream),
+        ]
+        .spacing(8)
+    };
+    let [location, size, created, modified] = rows;
     let stats = column![
-        row![
-            container(
-                text(crate::i18n::host_text(
-                    "preview.info_location",
-                    "Location:",
-                    locale
-                ))
-                .size(body_font)
-                .color(dim)
-            )
-            .width(Length::Fixed(label_colon_w))
-            .align_x(iced_widget::core::alignment::Horizontal::Right),
-            text(project.path.clone()).size(body_font).color(cream),
-        ]
-        .spacing(8),
-        row![
-            container(
-                text(crate::i18n::host_text("preview.info_size", "Size:", locale))
-                    .size(body_font)
-                    .color(dim)
-            )
-            .width(Length::Fixed(label_colon_w))
-            .align_x(iced_widget::core::alignment::Horizontal::Right),
-            text(size_value).size(body_font).color(cream),
-        ]
-        .spacing(8),
-        row![
-            container(
-                text(crate::i18n::host_text(
-                    "preview.info_created",
-                    "Created:",
-                    locale
-                ))
-                .size(body_font)
-                .color(dim)
-            )
-            .width(Length::Fixed(label_colon_w))
-            .align_x(iced_widget::core::alignment::Horizontal::Right),
-            text(created_value).size(body_font).color(cream),
-        ]
-        .spacing(8),
-        row![
-            container(
-                text(crate::i18n::host_text(
-                    "preview.info_modified",
-                    "Modified:",
-                    locale
-                ))
-                .size(body_font)
-                .color(dim)
-            )
-            .width(Length::Fixed(label_colon_w))
-            .align_x(iced_widget::core::alignment::Horizontal::Right),
-            text(modified_value).size(body_font).color(cream),
-        ]
-        .spacing(8),
+        stat_row(location),
+        stat_row(size),
+        stat_row(created),
+        stat_row(modified),
     ]
     .spacing(8)
     .padding(Padding {
@@ -998,161 +925,22 @@ fn preview_blank_info_card<'a>(
         .into()
 }
 
-/// `n` 插入千位分隔符(中文惯例就是半角逗号,与英文一致)。`23456` →
-/// `"23,456"`;`0` → `"0"`。纯展示,不损失精度。
-fn with_thousands_separator(n: u64) -> String {
-    let s = n.to_string();
-    let mut out = String::with_capacity(s.len() + s.len() / 3);
-    for (i, c) in s.chars().rev().enumerate() {
-        if i != 0 && i % 3 == 0 {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out.chars().rev().collect()
-}
-
-/// 字节数转成 KB/MB/GB 可读串:`0`~`1023` → `"N B"`;`1024` → `"1KB"`;
-/// `10240` → `"10KB"`;`1536` → `"1.5KB"`;`1.2GB` 保留一位小数。整除整单位
-/// 时不显示小数,避免 `"10.0KB"` 这类啰嗦写法。纯展示,精度足够项目大小
-/// 展示用;精确字节数由调用方另以括号补出。
-fn format_human_size(bytes: u64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = 1024.0 * 1024.0;
-    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
-    let b = bytes as f64;
-    let (v, unit) = if b >= GB {
-        (b / GB, "GB")
-    } else if b >= MB {
-        (b / MB, "MB")
-    } else if b >= KB {
-        (b / KB, "KB")
-    } else {
-        return format!("{bytes} B");
-    };
-    if (v.round() - v).abs() < 0.05 {
-        format!("{}{}", v as i64, unit)
-    } else {
-        format!("{:.1}{}", v, unit)
-    }
-}
-
-/// SystemTime → 本地化日期串(无秒)。中文为
-/// `"YYYY年M月D日 星期X HH:MM"`,英文为 `"Mon, D MMM YYYY HH:MM"`。Howard
-/// Hinnant 的 `civil_from_days` 同款算法(见 `extensions/git_log.rs::1283`,
-/// 那里只输出 `YYYY-MM-DD HH:MM:SS`,这里加星期)。失败(平台不支持 /
-/// 1970 之前)时回退 `"未知"` / `"Unknown"`。
-fn format_time(t: std::time::SystemTime, locale: &str) -> String {
-    let dur = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-    let total_secs = dur.as_secs();
-    let days = (total_secs / 86_400) as i64;
-    let secs_of_day = total_secs % 86_400;
-    let (h, m, _) = (
-        secs_of_day / 3600,
-        (secs_of_day / 60) % 60,
-        secs_of_day % 60,
-    );
-    let (y, mo, d) = civil_from_days(days);
-    // 1970-01-01 是星期四,加天数 mod 7 拿到 0..6,offset = 周一 = 0
-    let weekday = (((days + 3) % 7) + 7) % 7;
-    let weekday_key = [
-        "date.weekday_mon",
-        "date.weekday_tue",
-        "date.weekday_wed",
-        "date.weekday_thu",
-        "date.weekday_fri",
-        "date.weekday_sat",
-        "date.weekday_sun",
-    ][weekday as usize];
-    let weekday_fallback = [
-        "Monday",
-        "Tuesday",
-        "Wednesday",
-        "Thursday",
-        "Friday",
-        "Saturday",
-        "Sunday",
-    ][weekday as usize];
-    let weekday_name = crate::i18n::host_text(weekday_key, weekday_fallback, locale);
-    // 占位符名在两种语言的模板里必须一致(资源校验要求 key 集合逐个相同),
-    // 差异只在模板形状与取值:英文月份给缩写、中文给数字月。
-    let month_value = if locale.starts_with("zh") {
-        mo.to_string()
-    } else {
-        month_name_en(mo).to_string()
-    };
-    crate::i18n::host_text_args(
-        "date.datetime",
-        "{weekday}, {day} {month} {y} {hh}:{mm}",
-        locale,
-        &[
-            ("weekday", weekday_name.as_str()),
-            ("y", &y.to_string()),
-            ("month", month_value.as_str()),
-            ("day", &d.to_string()),
-            ("hh", &format!("{h:02}")),
-            ("mm", &format!("{m:02}")),
-        ],
-    )
-}
-
-/// 英文月份缩写(英文日期串用;中文串不用月份名,直接 `M月`)。
-fn month_name_en(mo: u32) -> &'static str {
-    [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ][(mo as usize).saturating_sub(1).min(11)]
-}
-
-/// Howard Hinnant 的 `civil_from_days`:Unix epoch 起的天数 → (年, 月, 日)。
-/// 范围覆盖 1970..=2100,足够文件系统时间戳用。与 `git_log.rs` 的同名函数
-/// 同源(那个是模块私有,这里复制一份给空白页信息卡用)。
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
-}
-
-/// 当前项目根目录的 basename(`ws.project.path` 的最后一段路径分量)。
-/// 与 `ProjectInfo::name`(用户创建项目时给的"显示名"——`"Dozer AI Coder"`
-/// 这种)刻意区分:空白页 / 文件 tab 标题想表达的是"打开的是哪个目录",
-/// `name` 偏品牌文案的语义,不该混。拿不到文件名(尾部是 `..`/`/` 等)
-/// 回退到 `path.display()` 完整字符串。无项目时返回 `None`。
+/// 当前项目根目录的 basename(`ws.project.path` 的最后一段路径分量)。生产代码
+/// 走 [`project_root_dir_name_of`](纯函数,在 `preview_models`);这个按 `Workspace`
+/// 取的薄封装只给既有测试用,保持它们原样。
+#[cfg(test)]
 pub(crate) fn project_root_dir_name(ws: &Workspace) -> Option<String> {
-    let project = ws.project.as_ref()?;
-    let path = std::path::Path::new(&project.path);
-    path.file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .or_else(|| Some(path.display().to_string()))
+    project_root_dir_name_of(ws.project.as_ref())
 }
 
 /// 预览 tab 的渲染标题。`TabKind::Blank` 的占位 tab 返回当前项目根目录的
-/// basename(见 [`project_root_dir_name`])——而不是数据层 `placeholder_tab`
+/// basename(见 [`project_root_dir_name_of`])——而不是数据层 `placeholder_tab`
 /// 写死的 `"空白"` 或 `ProjectInfo::name` 这种"显示名"。切项目时标题自然跟
 /// 着 `ws.project.path` 走,不需要回写 tab 字段。没项目(启动初帧 / 切项目中
 /// 间帧)时回退 `tab.title`,即原 `"空白"`,保留原语义。宽度预算与实际渲染
 /// 共用同一份 helper,避免选错宽度导致标题裁切。
 pub(crate) fn preview_tab_display_title(ws: &Workspace, tab: &PreviewTab, locale: &str) -> String {
-    if matches!(tab.kind, crate::preview::TabKind::Blank)
-        && let Some(root) = project_root_dir_name(ws)
-    {
-        return root;
-    }
-    if matches!(tab.kind, crate::preview::TabKind::Blank) {
-        return crate::i18n::panel_text(
-            crate::preview::PREVIEW_OWNER,
-            "view.blank",
-            "Blank",
-            locale,
-        );
-    }
-    tab.title.clone()
+    preview_tab_title(ws.project.as_ref(), tab, locale)
 }
 
 /// 预览 pane 的共同渲染(Files 预览与 Project 面板右配对复用同一套 tab
@@ -1270,15 +1058,12 @@ pub(crate) fn preview_pane_for<'a>(
             // 预算仍按 `tab.title`(不带星)估,最坏多一个字符略挤,不换行折叠。
             // 空白页 tab(`TabKind::Blank`)的标题走 [`preview_tab_display_title`]
             // 替换成项目根名(见该函数文档),宽度预算与渲染共用同一个 helper。
-            let mut display_title = preview_tab_display_title(ws, tab, app.locale.active_locale());
-            if tab.dirty {
-                display_title.push_str(" *");
-            }
+            let display_title =
+                preview_tab_label(ws.project.as_ref(), tab, app.locale.active_locale());
             // index 0 的 `Blank` 占位 tab 不可关闭:它上面的 × 点击等同于
             // "选中空白页"(不真关),与 SSH/数据库面板 tab 条最前面那个固定
             // "空白"占位(`app.rs::ssh_tab_bar` 的 `on_close: SelectBlankTab`)
             // 完全同一套做法——数据层 `PreviewPane::close(0)` 另有兜底 no-op。
-            let is_placeholder = matches!(tab.kind, crate::preview::TabKind::Blank);
             // 页签右键菜单:仅对真实文件 tab(`TabKind::File`,排除 index 0 的
             // `Blank` 占位)生效——占位 tab 没对应文件,没有可操作的右键目标。
             // 这里用循环变量里的 `tab`(PreviewTab)取路径,必须在下面
@@ -1304,7 +1089,7 @@ pub(crate) fn preview_pane_for<'a>(
                 // 单独存在时是 select(等价 no-op,数据层 `close` 关完会立刻
                 // 自动补回一个 Blank,净效果为空,但点击 × 不会有"列表瞬空再补"
                 // 的视觉跳动)。文件 tab 一律真关。
-                on_close: if is_placeholder && preview.tabs().len() == 1 {
+                on_close: if tab_close_selects_instead(tab, preview.tabs().len()) {
                     select_msg(idx)
                 } else {
                     close_msg(idx)
@@ -1345,73 +1130,41 @@ pub(crate) fn preview_pane_for<'a>(
     // 一份。仅对 `wry_toggle_eligible`(文本可编辑却默认走 wry/flyfish 渲染)
     // 的文件出现,随当前代码模式换图标(`editor.is_some()` = 代码模式 →
     // 显示 FilePlay,点它切回预览;否则显示 FileCode 切进代码)。
+    // 三个模式切换按钮出现与否、当前态都由 `toolbar_model` 决定(纯函数,有测试)。
+    let toolbar = toolbar_model(preview);
     let render_mode_button: Option<
         Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
-    > = preview.tabs().get(preview.active_idx()).and_then(|tab| {
-        let eligible = match &tab.kind {
-            crate::preview::TabKind::File(p) => crate::preview::wry_toggle_eligible(p),
-            _ => false,
-        };
-        eligible.then(|| {
-            tab_render_mode_button(
-                tab.uses_rendered_source_editor(),
-                app.hover_progress(render_mode_hover()),
-                toggle_msg(preview.active_idx()),
-                move |hovered| Message::Hover(render_mode_hover(), hovered),
-            )
-        })
+    > = toolbar.render_mode.map(|b| {
+        tab_render_mode_button(
+            b.in_code_mode,
+            app.hover_progress(render_mode_hover()),
+            toggle_msg(b.tab_idx),
+            move |hovered| Message::Hover(render_mode_hover(), hovered),
+        )
     });
     // CSV/TSV 的「网格 / 原文」切换:仅激活 tab 是 csv/tsv 的 Tabular 时出现。
-    // 切到原文(feature 下)由 CodeMirror editor host 承载,网格仍原生。
     let tabular_mode_button: Option<
         Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
-    > = preview.tabs().get(preview.active_idx()).and_then(|tab| {
-        let crate::preview::PreviewBackend::Tabular(tabular) = tab.backend.as_ref()? else {
-            return None;
-        };
-        if tabular.format == crate::preview::TabularFormat::Workbook {
-            return None;
-        }
-        let tab_id = tab.id;
-        let in_text = tabular.mode == crate::preview::TabularMode::Text;
-        Some(tab_tabular_mode_button(
+    > = toolbar.tabular_mode.map(|(tab_id, in_text)| {
+        tab_tabular_mode_button(
             in_text,
             app.hover_progress(tabular_mode_hover()),
             Message::PreviewTabularTextModeToggle(find_panel(), tab_id),
             move |hovered| Message::Hover(tabular_mode_hover(), hovered),
             app.locale.active_locale(),
-        ))
+        )
     });
-    // 严格 `.json` 的「树 / 文本」切换:仅激活 tab 是 JSON 且 route 支持双视图
-    // (即严格 `.json`,Tree⇄Text)时出现。JSONC/JSON5/JSONL/NDJSON 只有文本,
-    // route.alternate_modes 为空,不会画按钮。
+    // 严格 `.json` 的「树 / 文本」切换。
     let json_mode_button: Option<
         Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>,
-    > = preview.tabs().get(preview.active_idx()).and_then(|tab| {
-        if !matches!(
-            tab.backend.as_ref(),
-            Some(crate::preview::PreviewBackend::Json(_))
-        ) {
-            return None;
-        }
-        let route = tab.route.as_ref()?;
-        if !route.supports(crate::preview::PreviewMode::Tree)
-            || !route.supports(crate::preview::PreviewMode::Text)
-        {
-            return None;
-        }
-        let tab_id = tab.id;
-        let in_text = tab
-            .backend
-            .as_ref()
-            .is_some_and(|b| b.current_mode() == crate::preview::PreviewMode::Text);
-        Some(tab_json_mode_button(
+    > = toolbar.json_mode.map(|(tab_id, in_text)| {
+        tab_json_mode_button(
             in_text,
             app.hover_progress(json_mode_hover()),
             Message::PreviewJsonModeToggle(find_panel(), tab_id),
             move |hovered| Message::Hover(json_mode_hover(), hovered),
             app.locale.active_locale(),
-        ))
+        )
     });
     let overflow_button = tab_overflow_button(
         preview.tabs().len(),
@@ -2268,93 +2021,39 @@ fn preview_fallback_page<'a>(
     tab: &'a PreviewTab,
     locale: &str,
 ) -> Option<Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>> {
-    let backend = tab.backend.as_ref()?;
-    let is_ext = matches!(
-        backend,
-        crate::preview::PreviewBackend::External(_)
-            | crate::preview::PreviewBackend::Unsupported(_)
-    );
-    // Failed 一律走这一页(hosts_webview/editor/json host 都已在非 Ready 时
-    // 不产出 viewer,原生子视图不会盖住它)。详见 T1/T3。
-    let show_failed = tab.backend_state.is_failed();
-    if !(is_ext || show_failed) {
-        return None;
-    }
+    // 是否画降级页(External / Unsupported / Failed)与全部文案、可用动作都由
+    // `fallback_model` 决定(纯函数,有测试)。Failed 一律走这一页(hosts_webview/
+    // editor/json host 都已在非 Ready 时不产出 viewer,原生子视图不会盖住它)。
+    let model = fallback_model(tab, locale)?;
     let panel = match kind {
         PreviewPaneKind::Project => PanelKind::Project,
         _ => PanelKind::Files,
     };
-    let tab_id = tab.id;
-    let content_is_text = tab.route.as_ref().is_some_and(|r| r.content_is_text);
-    let actions = crate::preview::fallback_actions(backend, &tab.backend_state, content_is_text);
-    let reason = tab
-        .route
-        .as_ref()
-        .map(|r| r.reason.localized(locale))
-        .unwrap_or_default();
-    let path = match &tab.kind {
-        TabKind::File(p) => p.to_string_lossy().into_owned(),
-        _ => String::new(),
-    };
-    let failure = tab.web_error.clone().or_else(|| match &tab.backend_state {
-        crate::preview::BackendState::Failed(e) => Some(e.message.clone()),
-        _ => None,
-    });
+    let tab_id = model.tab_id;
+    let actions = model.actions;
 
     let colors = byteui::theme::color::current();
     let body = byteui::theme::font::body();
     let label = byteui::theme::font::label();
     let caption = byteui::theme::font::caption_sm();
     let mut col = column![
-        text(tab.title.clone())
+        text(model.title)
             .size(byteui::theme::font::title())
             .color(colors.cream),
-        text(crate::i18n::host_text(
-            "preview.fallback_title",
-            "Cannot preview this file inside Dozer",
-            locale,
-        ))
-        .size(body)
-        .color(colors.dim),
+        text(model.headline).size(body).color(colors.dim),
     ]
     .spacing(8)
     .align_x(iced_widget::core::Alignment::Start);
-    if !path.is_empty() {
+    if let Some(path) = model.path {
         col = col.push(text(path).size(caption).color(colors.dim));
     }
-    if !reason.is_empty() {
-        col = col.push(
-            text(crate::i18n::host_text_args(
-                "preview.fallback_route",
-                "Route: {reason}",
-                locale,
-                &[("reason", reason.as_str())],
-            ))
-            .size(caption)
-            .color(colors.dim),
-        );
+    if let Some(route) = model.route {
+        col = col.push(text(route).size(caption).color(colors.dim));
     }
-    if let Some(err) = failure {
-        col = col.push(
-            text(crate::i18n::host_text_args(
-                "preview.fallback_reason",
-                "Reason: {error}",
-                locale,
-                &[("error", err.as_str())],
-            ))
-            .size(caption)
-            .color(colors.red),
-        );
+    if let Some(failure) = model.failure {
+        col = col.push(text(failure).size(caption).color(colors.red));
     }
-    col = col.push(
-        text(crate::i18n::host_text(
-            "preview.fallback_security_note",
-            "For safety, Dozer will not execute or decode this file inline.",
-            locale,
-        ))
-        .size(caption)
-        .color(colors.dim),
-    );
+    col = col.push(text(model.security_note).size(caption).color(colors.dim));
 
     // 三个动作按钮走系统统一的操作按钮样式(`action_button_hover_style`:
     // PANEL 底 + 描边变金 + hover `tab_hover` 胶囊,圆角 4),与「新建项目」/
@@ -2423,35 +2122,14 @@ fn preview_conflict_bar_widget<'a>(
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let colors = byteui::theme::color::current();
     let body = byteui::theme::font::body();
-    let keep = iced_widget::button(
-        text(crate::i18n::host_text(
-            "preview.conflict_keep",
-            "Keep my changes",
-            locale,
-        ))
-        .size(body),
-    )
-    .on_press(Message::PreviewConflictKeep(panel, tab_id));
-    let reload_label = if armed {
-        crate::i18n::host_text(
-            "preview.conflict_reload_confirm",
-            "Reload from disk (discard my changes)",
-            locale,
-        )
-    } else {
-        crate::i18n::host_text("preview.conflict_reload", "Reload from disk", locale)
-    };
-    let reload = iced_widget::button(text(reload_label).size(body))
+    let model = conflict_bar_model(armed, locale);
+    let keep = iced_widget::button(text(model.keep_label).size(body))
+        .on_press(Message::PreviewConflictKeep(panel, tab_id));
+    let reload = iced_widget::button(text(model.reload_label).size(body))
         .on_press(Message::PreviewConflictReload(panel, tab_id));
     container(
         row![
-            text(crate::i18n::host_text(
-                "preview.conflict_notice",
-                "File on disk changed externally",
-                locale,
-            ))
-            .size(body)
-            .color(colors.red),
+            text(model.notice).size(body).color(colors.red),
             iced_widget::space::horizontal(),
             keep,
             reload,
