@@ -13,8 +13,8 @@ dozer-services = { path = "../dozer-services" }
 dozer-i18n = { path = "../dozer-i18n" }
 dozer-panel-host = { path = "../dozer-panel-host" }
 byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.5" }
-bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.7" }
-bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.7" }
+bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.8" }
+bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.8" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
