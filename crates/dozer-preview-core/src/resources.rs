@@ -12,20 +12,28 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
 
 use crate::capabilities::ResourceBudgets;
 
 /// viewer 归属键(项目 + 面板 + tab)。**必须含面板**:Files 与 Project 两个
 /// 预览面板各有独立的 `tab_id` 空间,只用 `(project_id, tab_id)` 会让两边同号
 /// tab 互相顶掉预算/Touch(T3)。
-pub type ViewerKey = (i64, crate::app::PanelKind, usize);
+pub type ViewerKey = (i64, ViewerPanel, usize);
+
+/// 占用预览资源预算的面板种类。核心只认识这三个预览宿主面板;产品把自己的面板枚举
+/// (Dozer 的 `PanelKind`)在边界处映射过来。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ViewerPanel {
+    Files,
+    Project,
+    GitLog,
+}
 
 /// 一个驻留 viewer 的登记信息(纯数据,由调用方在创建/销毁 viewer 时维护)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ViewerRegistration {
     pub project_id: i64,
-    pub panel: crate::app::PanelKind,
+    pub panel: ViewerPanel,
     pub tab_id: usize,
     pub estimated_bytes: u64,
     /// 是否占用一个"重型 WebView"名额(CodeMirror/Flyfish)。
@@ -43,7 +51,7 @@ pub struct ViewerRegistration {
 }
 
 impl ViewerRegistration {
-    pub fn new(project_id: i64, panel: crate::app::PanelKind, tab_id: usize) -> Self {
+    pub fn new(project_id: i64, panel: ViewerPanel, tab_id: usize) -> Self {
         Self {
             project_id,
             panel,
@@ -138,11 +146,11 @@ pub const PLANTUML_RESIDENT_BYTES: u64 = 8 * 1024 * 1024 + 32 * 1024 * 1024;
 /// - Tabular 网格:iced 原生(不占重型名额),按文件大小估;
 /// - External/Unsupported:无 viewer,0 成本。
 pub fn estimate_cost(
-    backend: Option<&crate::preview::PreviewBackend>,
+    backend: Option<&crate::backend::PreviewBackend>,
     windowed: bool,
     file_size: u64,
 ) -> ViewerCost {
-    use crate::preview::PreviewBackend;
+    use crate::backend::PreviewBackend;
     let Some(backend) = backend else {
         return ViewerCost {
             estimated_bytes: 0,
@@ -163,7 +171,7 @@ pub fn estimate_cost(
         PreviewBackend::Json(json) => ViewerCost {
             estimated_bytes: file_size,
             heavy_webview: true,
-            kind: if json.mode == crate::preview::JsonMode::Tree {
+            kind: if json.mode == crate::backend::JsonMode::Tree {
                 ViewerHostKind::JsonEditor
             } else {
                 ViewerHostKind::Editor
@@ -179,11 +187,11 @@ pub fn estimate_cost(
             kind: ViewerHostKind::Editor,
         },
         PreviewBackend::Rendered(rendered) => {
-            let heavy = matches!(rendered.mode, crate::preview::RenderedMode::Rendered);
+            let heavy = matches!(rendered.mode, crate::backend::RenderedMode::Rendered);
             // PlantUML 渲染态:固定引擎+SVG 上界 + 根源码大小;源码态由 CodeMirror
             // 承载,只按文件大小(与其它文本一致)。
             let (estimated_bytes, kind) = match rendered.renderer {
-                crate::preview::RenderedRenderer::PlantUml => {
+                crate::backend::RenderedRenderer::PlantUml => {
                     if heavy {
                         (
                             PLANTUML_RESIDENT_BYTES.saturating_add(file_size),
@@ -204,7 +212,7 @@ pub fn estimate_cost(
         PreviewBackend::Tabular(tabular) => ViewerCost {
             estimated_bytes: file_size,
             heavy_webview: false,
-            kind: if tabular.mode == crate::preview::TabularMode::Grid {
+            kind: if tabular.mode == crate::backend::TabularMode::Grid {
                 ViewerHostKind::TabularGrid
             } else {
                 ViewerHostKind::Editor
@@ -237,14 +245,6 @@ pub struct ResourceManager {
     budgets: ResourceBudgets,
     registrations: HashMap<ViewerKey, ViewerRegistration>,
     clock: u64,
-}
-
-static GLOBAL_MANAGER: OnceLock<Mutex<ResourceManager>> = OnceLock::new();
-
-/// 进程级共享资源管理器。所有项目和预览面板共用同一份预算。
-pub fn global_manager() -> &'static Mutex<ResourceManager> {
-    GLOBAL_MANAGER
-        .get_or_init(|| Mutex::new(ResourceManager::new(crate::capabilities::current().budgets)))
 }
 
 impl ResourceManager {
@@ -300,7 +300,7 @@ impl ResourceManager {
     pub fn prune_project(
         &mut self,
         project_id: i64,
-        keep: &std::collections::HashSet<(crate::app::PanelKind, usize)>,
+        keep: &std::collections::HashSet<(ViewerPanel, usize)>,
     ) {
         self.registrations.retain(|(project, panel, tab), _| {
             *project != project_id || keep.contains(&(*panel, *tab))
@@ -366,7 +366,7 @@ impl ResourceManager {
         if bytes > self.budgets.total_preview_bytes {
             return Reservation::Denied {
                 reason: crate::i18n::panel_keyed_args(
-                    super::PREVIEW_OWNER,
+                    crate::PREVIEW_OWNER,
                     "resources.single_viewer_over_budget",
                     "Single viewer {bytes} bytes exceeds the total preview budget {budget}",
                     &[
@@ -418,13 +418,13 @@ impl ResourceManager {
             Reservation::Denied {
                 reason: if candidates.is_empty() {
                     crate::i18n::panel_keyed(
-                        super::PREVIEW_OWNER,
+                        crate::PREVIEW_OWNER,
                         "resources.no_evictable_viewer",
                         "Over budget and no evictable viewer",
                     )
                 } else {
                     crate::i18n::panel_keyed(
-                        super::PREVIEW_OWNER,
+                        crate::PREVIEW_OWNER,
                         "resources.still_over_after_evict",
                         "Still over budget after evicting all evictable viewers",
                     )
@@ -458,8 +458,8 @@ impl ResourceManager {
 
 #[cfg(test)]
 mod tests {
+    use super::ViewerPanel;
     use super::*;
-    use crate::app::PanelKind;
 
     fn budgets() -> ResourceBudgets {
         ResourceBudgets {
@@ -473,14 +473,14 @@ mod tests {
     }
 
     fn k(project: i64, tab: usize) -> ViewerKey {
-        (project, PanelKind::Files, tab)
+        (project, ViewerPanel::Files, tab)
     }
 
     fn reg(project: i64, tab: usize, bytes: u64, heavy: bool) -> ViewerRegistration {
         ViewerRegistration {
             estimated_bytes: bytes,
             heavy_webview: heavy,
-            ..ViewerRegistration::new(project, PanelKind::Files, tab)
+            ..ViewerRegistration::new(project, ViewerPanel::Files, tab)
         }
     }
 
@@ -501,13 +501,13 @@ mod tests {
         // T3:Files 与 Project 面板各有 tab_id 空间,同号不得互相顶掉。
         let mut m = ResourceManager::new(budgets());
         m.register(reg(1, 1, 40, true));
-        let mut project = ViewerRegistration::new(1, PanelKind::Project, 1);
+        let mut project = ViewerRegistration::new(1, ViewerPanel::Project, 1);
         project.estimated_bytes = 30;
         project.heavy_webview = true;
         m.register(project);
         assert_eq!(m.total_resident_bytes(), 70);
         assert_eq!(m.diagnostics().resident_count, 2);
-        m.release((1, PanelKind::Files, 1));
+        m.release((1, ViewerPanel::Files, 1));
         assert_eq!(m.total_resident_bytes(), 30, "只释放 Files 那份");
     }
 
@@ -635,9 +635,9 @@ mod tests {
 
     #[test]
     fn estimate_cost_plantuml_rendered_is_heavy_with_fixed_engine_overhead() {
-        let rendered = crate::preview::PreviewBackend::Rendered(crate::preview::RenderedBackend {
-            renderer: crate::preview::RenderedRenderer::PlantUml,
-            mode: crate::preview::RenderedMode::Rendered,
+        let rendered = crate::backend::PreviewBackend::Rendered(crate::backend::RenderedBackend {
+            renderer: crate::backend::RenderedRenderer::PlantUml,
+            mode: crate::backend::RenderedMode::Rendered,
             source_language: Some("plantuml".into()),
         });
         let c = estimate_cost(Some(&rendered), false, 1000);
@@ -645,9 +645,9 @@ mod tests {
         assert_eq!(c.estimated_bytes, PLANTUML_RESIDENT_BYTES + 1000);
 
         // 源码态由 CodeMirror 承载:不占重型名额,按文件大小。
-        let source = crate::preview::PreviewBackend::Rendered(crate::preview::RenderedBackend {
-            renderer: crate::preview::RenderedRenderer::PlantUml,
-            mode: crate::preview::RenderedMode::Source,
+        let source = crate::backend::PreviewBackend::Rendered(crate::backend::RenderedBackend {
+            renderer: crate::backend::RenderedRenderer::PlantUml,
+            mode: crate::backend::RenderedMode::Source,
             source_language: Some("plantuml".into()),
         });
         let c = estimate_cost(Some(&source), false, 1000);
@@ -657,7 +657,7 @@ mod tests {
 
     #[test]
     fn diagnostics_distinguishes_plantuml_via_estimate_cost() {
-        use crate::preview::{PreviewBackend, RenderedBackend, RenderedMode, RenderedRenderer};
+        use crate::backend::{PreviewBackend, RenderedBackend, RenderedMode, RenderedRenderer};
         let mut m = ResourceManager::new(ResourceBudgets {
             total_preview_bytes: 1_000_000,
             ..budgets()
@@ -672,7 +672,7 @@ mod tests {
             1000,
         );
         assert_eq!(plantuml.kind, ViewerHostKind::PlantUml);
-        let mut reg = ViewerRegistration::new(1, PanelKind::Files, 1);
+        let mut reg = ViewerRegistration::new(1, ViewerPanel::Files, 1);
         reg.estimated_bytes = plantuml.estimated_bytes;
         reg.heavy_webview = plantuml.heavy_webview;
         reg.kind = plantuml.kind;
@@ -687,11 +687,11 @@ mod tests {
 
     #[test]
     fn estimate_cost_classifies_backends() {
-        use crate::preview::PreviewBackend;
+        use crate::backend::PreviewBackend;
         // 窗口化:常驻固定,不随文件增长,重型。
         let windowed = estimate_cost(
-            Some(&PreviewBackend::Code(crate::preview::CodeBackend {
-                mode: crate::preview::CodeMode::ReadOnly,
+            Some(&PreviewBackend::Code(crate::backend::CodeBackend {
+                mode: crate::backend::CodeMode::ReadOnly,
                 language: "rust".into(),
             })),
             true,
@@ -700,8 +700,8 @@ mod tests {
         assert_eq!(windowed.estimated_bytes, WINDOWED_RESIDENT_BYTES);
         assert!(windowed.heavy_webview);
         // External/Unsupported:无 viewer,0 成本。
-        let ext = PreviewBackend::External(crate::preview::ExternalBackend {
-            reason: crate::preview::RouteReason::ArchiveFallback,
+        let ext = PreviewBackend::External(crate::backend::ExternalBackend {
+            reason: crate::router::RouteReason::ArchiveFallback,
         });
         assert_eq!(
             estimate_cost(Some(&ext), false, 1234),
@@ -711,5 +711,59 @@ mod tests {
                 kind: ViewerHostKind::Other,
             }
         );
+    }
+
+    /// 同一 `ViewerKey` 重复登记只覆盖、不叠加字节与重型名额。
+    #[test]
+    fn reserving_the_same_viewer_twice_does_not_double_count() {
+        let mut m = ResourceManager::new(budgets());
+        let mut r = ViewerRegistration::new(1, ViewerPanel::Files, 1);
+        r.estimated_bytes = 10;
+        r.heavy_webview = true;
+        m.register(r.clone());
+        m.register(r.clone());
+        assert_eq!(m.total_resident_bytes(), 10);
+        assert_eq!(m.heavy_webviews(), 1);
+        // 改大后再登记:以最新为准。
+        r.estimated_bytes = 25;
+        m.register(r);
+        assert_eq!(m.total_resident_bytes(), 25);
+    }
+
+    /// 释放一个从未登记的键:总量不变、不 panic;重复释放幂等。
+    #[test]
+    fn releasing_an_unknown_key_is_a_no_op_and_keeps_totals() {
+        let mut m = ResourceManager::new(budgets());
+        let mut r = ViewerRegistration::new(1, ViewerPanel::Project, 3);
+        r.estimated_bytes = 7;
+        m.register(r);
+        m.release((9, ViewerPanel::GitLog, 99));
+        assert_eq!(m.total_resident_bytes(), 7);
+        m.release((1, ViewerPanel::Project, 3));
+        m.release((1, ViewerPanel::Project, 3));
+        assert_eq!(m.total_resident_bytes(), 0);
+        assert_eq!(m.heavy_webviews(), 0);
+    }
+
+    /// 面板是 `ViewerKey` 的一部分:Files 与 Project 同号 tab 互不顶替;`prune_project`
+    /// 只清本项目里不在 keep 集合内的 viewer。
+    #[test]
+    fn panels_have_independent_tab_id_spaces_and_prune_is_per_project() {
+        let mut m = ResourceManager::new(budgets());
+        for (project, panel, tab) in [
+            (1, ViewerPanel::Files, 1),
+            (1, ViewerPanel::Project, 1),
+            (2, ViewerPanel::Files, 1),
+        ] {
+            let mut r = ViewerRegistration::new(project, panel, tab);
+            r.estimated_bytes = 1;
+            m.register(r);
+        }
+        assert_eq!(m.total_resident_bytes(), 3);
+        let keep: std::collections::HashSet<_> = [(ViewerPanel::Files, 1)].into_iter().collect();
+        m.prune_project(1, &keep);
+        assert!(m.contains((1, ViewerPanel::Files, 1)));
+        assert!(!m.contains((1, ViewerPanel::Project, 1)));
+        assert!(m.contains((2, ViewerPanel::Files, 1)), "别的项目不受影响");
     }
 }

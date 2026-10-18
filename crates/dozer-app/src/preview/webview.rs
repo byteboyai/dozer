@@ -23,7 +23,11 @@ pub struct ReserveHint {
 
 impl ReserveHint {
     pub fn key(&self) -> crate::preview::ViewerKey {
-        (self.project_id, self.panel, self.tab_id)
+        (
+            self.project_id,
+            crate::preview::viewer_panel(self.panel),
+            self.tab_id,
+        )
     }
 }
 
@@ -129,18 +133,8 @@ pub(crate) fn scheme_query_value() -> &'static str {
     }
 }
 
-/// `.html`/`.htm`(大小写不敏感)判据——隔离 host 的唯一真相源,`backend.rs`
-/// 选 renderer 与 `preview_url` 无 backend 回退共用,避免两处各写一份。
-pub(crate) fn is_html_extension(path: &std::path::Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase()
-            .as_str(),
-        "html" | "htm"
-    )
-}
+// `is_html_extension` 已搬进 `dozer-preview-core::native_editor`(后端选择要用),经 `preview` 的
+// `native_editor::*` 通配导出,路径不变。
 
 /// HTML/HTM 的隔离 host URL:不再直接 `file://` 加载,改走 `dozer://html/host.html`,
 /// 由 host 把绑定文件放进**无脚本 sandbox iframe** 渲染,相对资源经

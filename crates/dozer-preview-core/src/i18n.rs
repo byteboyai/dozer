@@ -58,6 +58,11 @@ pub fn panel_text_args(
     resolver().resolve(&text, locale).text
 }
 
+/// 构造一条不带参数的 `LocalizedText`(不解析)。
+pub fn panel_keyed(owner: &str, key: &str, fallback: &str) -> LocalizedText {
+    LocalizedText::keyed(owner, key, fallback)
+}
+
 /// 构造一条 `LocalizedText`(不解析):后台任务拿不到 locale 时先存起来,渲染端再解析。
 pub fn panel_keyed_args(
     owner: &str,

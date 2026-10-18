@@ -6,13 +6,12 @@
 //! 面板扩展化(`extensions::browser::Tabs`)搬走——文件预览面板从来没有
 //! 地址栏,这里只保留文件/验收两种 tab。
 
-mod backend;
 mod code_host;
 mod paths;
+mod resources_global;
 // Task 5 建好后,Task 6 才会接线消费;在那之前内部条目视为暂未使用。
 #[allow(dead_code)]
 mod plantuml;
-mod resources;
 mod state;
 mod trust;
 mod view;
@@ -28,9 +27,9 @@ pub(crate) use dozer_preview_core::PREVIEW_OWNER;
 // 没搬走的文件(`state.rs` / `view.rs` / `webview*.rs` 等)不用改 `use`。
 #[cfg(test)]
 pub(crate) use dozer_preview_core::file_profile;
-pub(crate) use dozer_preview_core::{native_editor, router};
+pub(crate) use dozer_preview_core::native_editor;
 // 产品相关的默认落盘位置(核心只提供 `*_in(config_dir)`):Dozer 在这里绑定自己的配置目录。
-pub(crate) use backend::*;
+pub(crate) use dozer_preview_core::backend::*;
 pub(crate) use dozer_preview_core::file_profile::*;
 pub(crate) use dozer_preview_core::loading::*;
 pub(crate) use dozer_preview_core::native_editor::*;
@@ -55,10 +54,11 @@ pub(crate) use dozer_preview_core::large_text::*;
 #[allow(unused_imports)]
 pub(crate) use dozer_preview_core::recovery::*;
 #[allow(unused_imports)]
+pub(crate) use dozer_preview_core::resources::*;
+#[allow(unused_imports)]
 pub(crate) use dozer_preview_core::startup::*;
 #[allow(unused_imports)]
 pub(crate) use plantuml::*;
-#[allow(unused_imports)]
-pub(crate) use resources::*;
+pub(crate) use resources_global::*;
 #[allow(unused_imports)]
 pub(crate) use webview_protocol::*;

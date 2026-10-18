@@ -175,6 +175,19 @@ pub fn extension_to_syntax(path: &std::path::Path) -> String {
     .to_string()
 }
 
+/// `.html`/`.htm`(大小写不敏感)判据——隔离 host 的唯一真相源,`backend.rs`
+/// 选 renderer 与 `preview_url` 无 backend 回退共用,避免两处各写一份。
+pub fn is_html_extension(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
+        "html" | "htm"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

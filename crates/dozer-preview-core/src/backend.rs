@@ -12,7 +12,7 @@
 
 use std::path::Path;
 
-use super::router::{PreviewKind, PreviewMode, PreviewRoute, RouteReason};
+use crate::router::{PreviewKind, PreviewMode, PreviewRoute, RouteReason};
 
 /// 一个 backend 的生命周期状态。合法转换见 [`BackendState::can_transition_to`]。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -214,20 +214,20 @@ impl PreviewBackend {
                 } else {
                     CodeMode::Editable
                 },
-                language: super::native_editor::extension_to_syntax(path),
+                language: crate::native_editor::extension_to_syntax(path),
             }),
             PreviewKind::Rendered => {
                 // renderer 在这里选定,**不再**由 `preview_url` 按扩展名隐式猜:
                 // PlantUML 走离线 viewer,HTML/HTM 走隔离 host,其余落 Flyfish。
-                let renderer = if super::native_editor::is_plantuml_extension(path) {
+                let renderer = if crate::native_editor::is_plantuml_extension(path) {
                     RenderedRenderer::PlantUml
-                } else if super::webview::is_html_extension(path) {
+                } else if crate::native_editor::is_html_extension(path) {
                     RenderedRenderer::IsolatedHtml
                 } else {
                     RenderedRenderer::Flyfish
                 };
                 let source_language = if route.supports(PreviewMode::Source) {
-                    Some(super::native_editor::extension_to_syntax(path))
+                    Some(crate::native_editor::extension_to_syntax(path))
                 } else {
                     None
                 };
@@ -359,8 +359,8 @@ fn tabular_format(path: &Path) -> TabularFormat {
 mod tests {
     use super::*;
     use crate::capabilities::{HardwareCapabilities, estimate_capabilities};
-    use crate::preview::file_profile::analyze;
-    use crate::preview::router::classify_preview;
+    use crate::file_profile::analyze;
+    use crate::router::classify_preview;
     use std::path::PathBuf;
 
     fn caps() -> crate::capabilities::ClientCapabilities {
@@ -392,7 +392,7 @@ mod tests {
     /// T8:JSONL backend 默认 Streamed,持久化 Text 可回退。
     #[test]
     fn streamed_backend_defaults_and_persisted_text() {
-        use crate::preview::router::classify_preview;
+        use crate::router::classify_preview;
         let profile = analyze(b"{}\n{}\n", None, 6, None);
         let p = PathBuf::from("rows.jsonl");
         let route = classify_preview(&p, &profile, &caps(), None);

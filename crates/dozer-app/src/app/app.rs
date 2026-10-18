@@ -1683,11 +1683,12 @@ impl App {
         let io = self.shell_io();
         for ((project, panel, tab_id), generation) in &outcome.granted {
             if let Some(ws) = loaded_workspace_mut(&mut self.projects, *project) {
-                let pane = ws.preview_pane_mut(*panel);
+                let panel = PanelKind::from(*panel);
+                let pane = ws.preview_pane_mut(panel);
                 if pane.grant_reserve(*tab_id, *generation) {
                     io.arm_load_timeout(
                         *project,
-                        *panel,
+                        panel,
                         *tab_id,
                         *generation,
                         crate::preview::PreviewLoadStage::CreatingHost,
@@ -1697,7 +1698,7 @@ impl App {
         }
         for (project, panel, tab_id) in &outcome.evicted {
             if let Some(ws) = loaded_workspace_mut(&mut self.projects, *project) {
-                let pane = ws.preview_pane_mut(*panel);
+                let pane = ws.preview_pane_mut(PanelKind::from(*panel));
                 pane.suspend_tab(*tab_id);
             }
         }
@@ -1708,7 +1709,7 @@ impl App {
         );
         for ((project, panel, tab_id), generation) in &outcome.denied {
             if let Some(ws) = loaded_workspace_mut(&mut self.projects, *project) {
-                let pane = ws.preview_pane_mut(*panel);
+                let pane = ws.preview_pane_mut(PanelKind::from(*panel));
                 pane.mark_reserve_denied(*tab_id, *generation, denied_reason.as_str());
             }
         }

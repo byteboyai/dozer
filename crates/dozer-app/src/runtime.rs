@@ -350,7 +350,11 @@ pub(crate) fn sync_webview_pool(
                     .unwrap_or(1024 * 1024)
                     .min(manager.budgets().single_editor_bytes);
                 (
-                    (binding.project_id, binding.panel, binding.tab_id),
+                    (
+                        binding.project_id,
+                        crate::preview::viewer_panel(binding.panel),
+                        binding.tab_id,
+                    ),
                     bytes,
                     true,
                     crate::preview::ViewerHostKind::Editor,
@@ -380,7 +384,10 @@ pub(crate) fn sync_webview_pool(
             if let crate::preview::Reservation::NeedEviction(keys) = reservation {
                 for (project, panel, tab) in keys {
                     let marker = format!("proj={project}");
-                    let panel_marker = format!("panel={}", crate::preview::panel_token(panel));
+                    let panel_marker = format!(
+                        "panel={}",
+                        crate::preview::panel_token(crate::app::PanelKind::from(panel))
+                    );
                     let tab_marker = format!("tab={tab}");
                     let ids: Vec<usize> = pool
                         .iter()
