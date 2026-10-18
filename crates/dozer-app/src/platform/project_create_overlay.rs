@@ -149,10 +149,14 @@ impl ProjectCreateOverlay {
             &mut Vec::new(),
         );
         if let iced_winit::runtime::user_interface::State::Updated {
-            mouse_interaction, ..
+            mouse_interaction,
+            input_method,
+            ..
         } = state
         {
             crate::platform::overlay_gpu::apply_cursor(&self.window, mouse_interaction);
+            // 输入法候选条跟着文本光标走;缺了这步候选条会落在整个窗口左上角。
+            crate::platform::overlay_gpu::apply_input_method(&self.window, &input_method);
         }
         interface.draw(
             &mut self.gpu.renderer,
@@ -231,10 +235,14 @@ impl ProjectCreateOverlay {
             &mut messages,
         );
         if let iced_winit::runtime::user_interface::State::Updated {
-            mouse_interaction, ..
+            mouse_interaction,
+            input_method,
+            ..
         } = state
         {
             crate::platform::overlay_gpu::apply_cursor(&self.window, mouse_interaction);
+            // 输入法候选条跟着文本光标走;缺了这步候选条会落在整个窗口左上角。
+            crate::platform::overlay_gpu::apply_input_method(&self.window, &input_method);
         }
         self.gpu.cache = interface.into_cache();
         self.window.request_redraw();

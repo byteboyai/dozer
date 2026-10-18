@@ -11,4 +11,4 @@
 //! 调用方自带 `scrim`。
 
 #[allow(unused_imports)]
-pub(crate) use bytehost_desktop::overlay_gpu::{OverlayGpu, apply_cursor};
+pub(crate) use bytehost_desktop::overlay_gpu::{OverlayGpu, apply_cursor, apply_input_method};
