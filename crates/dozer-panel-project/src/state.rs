@@ -106,48 +106,48 @@ pub struct WorkspaceState {
     pub(crate) dirty: bool,
     /// git remote 的 fetch URL 列表(`bytegit::Repo::remotes`,去重后)。空 = 无 remote/
     /// 非 git(面板据此显示"未设置")。
-    pub(crate) remote_url: Vec<String>,
+    pub remote_url: Vec<String>,
     /// 磁盘占用字节数(排除构建产物)。None=尚未算出来。
-    pub(crate) disk_usage_bytes: Option<u64>,
+    pub disk_usage_bytes: Option<u64>,
     /// 项目描述(`.dozer/description.md` 内容)。None=尚未写入。
-    pub(crate) description: Option<String>,
+    pub description: Option<String>,
     /// 项目名称行内编辑态(None=未在编辑)。
-    pub(crate) name_editing: Option<String>,
+    pub name_editing: Option<String>,
     /// 名称编辑框是否持有 iced 内部真实焦点,每帧由 `CaptureNameEditFocus`
     /// 写入。
     name_edit_focused: bool,
     /// 一次性标记:点项目名(`NameEditStart`)刚触发编辑时置真。
     pub(crate) name_edit_focus_pending: bool,
     /// 项目描述编辑态(None=未在编辑)。采用 iced 原生 `text_editor::Content`。
-    pub(crate) description_editing: Option<iced_widget::text_editor::Content>,
+    pub description_editing: Option<iced_widget::text_editor::Content>,
     /// 描述编辑框是否持有 iced 内部真实焦点,每帧由 `CaptureDescriptionEditFocus`
     /// 写入(同 `name_edit_focused`,供产品原生输入路由闸门放行)。
     description_edit_focused: bool,
     /// 项目文档虚拟链接。
-    pub(crate) links: links::LinksState,
+    pub links: links::LinksState,
     /// 已展开状态目录 → 其子项列表(就地展开/收起)。
-    pub(crate) expanded_link_dirs: std::collections::HashMap<PathBuf, Vec<links::DirRow>>,
+    pub expanded_link_dirs: std::collections::HashMap<PathBuf, Vec<links::DirRow>>,
     /// 链接区(项目文档)当前选中项路径。单击文件(`OpenLink`)/
     /// 目录(`LinkDirToggle`)/展开子项、右击行(`LinkContextMenu`)都会选中,
     /// 用来整行高亮——参考文件树 `files::WorkspaceState::tree_selected`。
     /// `None`=无选中(新开项目默认)。
-    pub(crate) selected_link: Option<PathBuf>,
+    pub selected_link: Option<PathBuf>,
     /// 共享记忆列表(不含正文),`RequestMemoriesRefresh` 拉取后写入。
-    pub(crate) memories: Vec<dozer_model::MemoryInfo>,
+    pub memories: Vec<dozer_model::MemoryInfo>,
     /// 待发提示;产品每条消息后统一排空成自己的 Toast。
-    pub(crate) outbox: NoticeOutbox,
+    pub outbox: NoticeOutbox,
     /// 新建记忆的表单草稿(`None` = 表单未打开)。
-    pub(crate) memory_create_draft: Option<MemoryDraft>,
+    pub memory_create_draft: Option<MemoryDraft>,
     /// 当前打开的记忆详情(`None` = 未打开详情面板)。
-    pub(crate) memory_detail: Option<dozer_model::MemoryDetail>,
+    pub memory_detail: Option<dozer_model::MemoryDetail>,
     /// 详情页的编辑草稿(`None` = 只读展示态,未进入编辑)。
-    pub(crate) memory_edit_draft: Option<MemoryDraft>,
+    pub memory_edit_draft: Option<MemoryDraft>,
     /// 待删除确认的记忆 id(`None` = 未在确认删除)。同 `delete_pending`
     /// 的既有先例(项目删除的二次确认),不用弹独立模态框。
-    pub(crate) memory_delete_pending: Option<i64>,
-    pub(crate) error: Option<LocalizedText>,
-    pub(crate) scaffold_run: Option<ScaffoldRunState>,
-    pub(crate) delete_pending: Option<delete::DeleteScope>,
+    pub memory_delete_pending: Option<i64>,
+    pub error: Option<LocalizedText>,
+    pub scaffold_run: Option<ScaffoldRunState>,
+    pub delete_pending: Option<delete::DeleteScope>,
 }
 
 impl WorkspaceState {

@@ -67,10 +67,12 @@ pub fn view<'a>(
                     true,
                     Message::NameEditInput,
                 ),
-                Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
-                    id: name_field_id(),
-                    secure: false,
-                })),
+                Some(Message::TextInputMenuOpen(
+                    dozer_panel_project::adapter::TextInputTarget {
+                        id: name_field_id(),
+                        secure: false,
+                    },
+                )),
             ))
             .padding([8, 12])
             .width(Length::Fill)
@@ -128,10 +130,12 @@ pub fn view<'a>(
                     .into();
             byteui::interaction::context_menu::wrap(
                 editor,
-                Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
-                    id: description_field_id(),
-                    secure: false,
-                })),
+                Some(Message::TextInputMenuOpen(
+                    dozer_panel_project::adapter::TextInputTarget {
+                        id: description_field_id(),
+                        secure: false,
+                    },
+                )),
             )
         } else {
             let label = ws_state
