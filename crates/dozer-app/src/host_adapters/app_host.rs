@@ -163,6 +163,11 @@ pub(crate) fn apply_effects(app: &mut App, effects: Vec<Effect>) {
                 let level = crate::extensions::app_host::notice_level(level);
                 app.push_toast_keyed(LOG, level, crate::extensions::toast::literal(text), &key);
             }
+            // `PanelEffect` 是 `non_exhaustive`:宿主库新增的效果在这里先忽略并留痕,不让升级编译失败。
+            // 不打印效果内容(`SetUrl` 携带启动地址,是秘密)。
+            _ => {
+                dozer_core::log_warn!(LOG, "收到本版本不认识的应用面板效果,已忽略");
+            }
         }
     }
 }
