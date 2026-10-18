@@ -217,31 +217,6 @@ pub(crate) fn memory_detail(id: i64, title: &str) -> MemoryDetail {
     }
 }
 
-/// 固定 `SummaryBatchInfo`(其余字段取固定值)。
-pub(crate) fn batch(
-    total: u32,
-    queued: u32,
-    running: u32,
-    succeeded: u32,
-    failed: u32,
-    skipped: u32,
-) -> SummaryBatchInfo {
-    SummaryBatchInfo {
-        batch_id: 7,
-        cwd: "/p".into(),
-        strategy: "missing_or_stale".into(),
-        total,
-        queued,
-        running,
-        succeeded,
-        failed,
-        cancelled: 0,
-        skipped,
-        created_ts_ms: 0,
-        updated_ts_ms: 0,
-    }
-}
-
 // ---- FakeMemory ----
 
 struct MemoryState {
@@ -267,12 +242,6 @@ impl FakeMemory {
     pub(crate) fn ok(list: Vec<MemoryInfo>) -> Self {
         Self::with(Ok(list), None, None)
     }
-    pub(crate) fn failing_list(kind: ServiceErrorKind, message: &str) -> Self {
-        Self::with(Err(ServiceError::new(kind, message)), None, None)
-    }
-    pub(crate) fn failing_writes(kind: ServiceErrorKind, message: &str) -> Self {
-        Self::with(Ok(vec![]), None, Some(ServiceError::new(kind, message)))
-    }
     fn with(
         list: Result<Vec<MemoryInfo>, ServiceError>,
         get_error: Option<ServiceError>,
@@ -285,15 +254,6 @@ impl FakeMemory {
                 write_error,
                 calls: vec![],
             })),
-        }
-    }
-    pub(crate) fn calls(&self) -> Vec<String> {
-        self.state.lock().unwrap().calls.clone()
-    }
-    pub(crate) fn into_services(self) -> Services {
-        Services {
-            memory: Arc::new(self),
-            ..base_services()
         }
     }
 }
@@ -403,26 +363,6 @@ impl FakeProject {
     }
     pub(crate) fn with_list_projects(self, r: Result<Vec<ProjectInfo>, ServiceError>) -> Self {
         self.state.lock().unwrap().projects = r;
-        self
-    }
-    pub(crate) fn with_remove(self, r: Result<(), ServiceError>) -> Self {
-        self.state.lock().unwrap().remove = r;
-        self
-    }
-    pub(crate) fn with_backfill(self, r: Result<u32, ServiceError>) -> Self {
-        self.state.lock().unwrap().backfill = r;
-        self
-    }
-    pub(crate) fn with_submit(self, r: Result<(i64, u32), ServiceError>) -> Self {
-        self.state.lock().unwrap().submit = r;
-        self
-    }
-    /// 按调用顺序依次返回;用完后重复最后一项;为空时 `Ok(None)`。
-    pub(crate) fn with_batches(
-        self,
-        r: Vec<Result<Option<SummaryBatchInfo>, ServiceError>>,
-    ) -> Self {
-        self.state.lock().unwrap().batches = r;
         self
     }
     pub(crate) fn calls(&self) -> Vec<String> {

@@ -222,7 +222,12 @@ impl App {
                 for line in ws.todo.take_diagnostics() {
                     dozer_core::log_debug!(todo::LOG, "{line}");
                 }
-                pending.extend(ws.project_panel.take_outbox());
+                pending.extend(
+                    ws.project_panel
+                        .take_outbox()
+                        .into_iter()
+                        .map(|n| toast::pending_from_notice(project::LOG, n)),
+                );
                 pending.extend(ws.conversations.take_outbox());
                 pending.extend(ws.codehealth.take_outbox());
                 pending.extend(ws.group_chat.take_outbox());
@@ -3595,7 +3600,9 @@ impl App {
                 self.project_delete_confirm();
             }
             Message::Project(project::Message::TextInputMenuOpen(target)) => {
-                self.update(Message::TextInputMenuOpen(target));
+                self.update(Message::TextInputMenuOpen(
+                    crate::host_adapters::project_panel::text_target_of(target),
+                ));
             }
             Message::Project(project::Message::ToolbarHover(target, hovered)) => {
                 // Project 面板头部"＋"按钮的 hover:本面板不挂 App 的 hover 动画表,
@@ -4315,7 +4322,7 @@ impl App {
         let emit = move |m| {
             let _ = proxy.send_event(Message::Project(m));
         };
-        project::spawn_scaffold_run(repo_path, transcript, &handle, emit, skip_git_init);
+        project::spawn_scaffold_run(repo_path, Some(transcript), &handle, emit, skip_git_init);
     }
 
     pub(crate) fn project_tab_switch(&mut self, id: i64) {

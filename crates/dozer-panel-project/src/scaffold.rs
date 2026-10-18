@@ -4,7 +4,8 @@
 //! (`extensions::project::spawn_repair_run`)驱动、逐步骤实时反馈进弹窗
 //! (spec 2026-08-28)。
 
-use crate::extensions::project::{keyed, keyed_args, links};
+use crate::i18n::{keyed, keyed_args};
+use crate::links;
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq)]
