@@ -23,6 +23,13 @@ tokio.workspace = true
 iced_widget = { version = "0.14", features = ["canvas", "svg"] }
 iced_renderer = "0.14"
 trash = "5.2.6"
+# 面板日志:产品侧(`dozer-core`)的 scope 宏搬不过来(库不许依赖它),
+# 这里直接打 `tracing`,target 沿用 `dozer::panel::project`。
+tracing = "0.1"
 
 [dev-dependencies]
 tempfile = "3"
+# 只在测试构建里启用:默认 `iced_renderer` feature 下 `Renderer` 走 null 文本后端,
+# `text_editor::Content::with_text` 读回来永远是空串,描述编辑的测试会假失败。
+# 产品(dozer-app)本来就开 `wgpu`,这里不改变生产构建。
+iced_widget = { version = "0.14", features = ["wgpu", "canvas", "svg"] }

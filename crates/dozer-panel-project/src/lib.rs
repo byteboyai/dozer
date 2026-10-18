@@ -13,8 +13,29 @@ pub mod i18n;
 pub mod links;
 pub mod meta;
 pub mod scaffold;
+pub mod state;
+pub mod update;
+
+#[cfg(test)]
+mod fakes;
+#[cfg(test)]
+mod tests;
+
+pub use state::*;
+pub use update::*;
+
+/// 面板日志:中性薄封装(`tracing` 直接打,不引 `dozer-core`)。
+pub mod log {
+    /// 调试级一行日志。
+    pub fn debug(message: &str, detail: &str) {
+        tracing::debug!(target: "dozer::panel::project", "{message}: {detail}");
+    }
+
+    /// 警告级一行日志。
+    pub fn warn(message: &str, detail: &str) {
+        tracing::warn!(target: "dozer::panel::project", "{message}: {detail}");
+    }
+}
 
 /// 面板 owner id:`locales/`(随库)。
 pub const PROJECT_OWNER: &str = "dozer.project";
-
-

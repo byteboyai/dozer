@@ -93,7 +93,11 @@ mod tests {
     fn load_description_returns_none_for_non_utf8() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".dozer")).unwrap();
-        std::fs::write(dir.path().join(".dozer").join("description.md"), [0xff, 0xfe]).unwrap();
+        std::fs::write(
+            dir.path().join(".dozer").join("description.md"),
+            [0xff, 0xfe],
+        )
+        .unwrap();
         assert_eq!(load_description(dir.path()), None);
     }
 }

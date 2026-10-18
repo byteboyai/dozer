@@ -22,3 +22,11 @@ impl PanelDisplay {
         locale: "en",
     };
 }
+
+/// 文本框的右键菜单目标:库只发出这个不透明目标,由产品转成自己的菜单请求。
+/// 形状与 Dozer `app::TextInputTarget` 相同。
+#[derive(Debug, Clone)]
+pub struct TextInputTarget {
+    pub id: iced_widget::core::widget::Id,
+    pub secure: bool,
+}
