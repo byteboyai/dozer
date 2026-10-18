@@ -15,9 +15,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::file_profile::FileProfile;
-use super::file_profile::{LineEnding, TextEncoding};
-use super::webview_protocol::{TextPosition, TextRange};
+use crate::file_profile::FileProfile;
+use crate::file_profile::{LineEnding, TextEncoding};
+use crate::text_range::{TextPosition, TextRange};
 
 /// 当前 manifest 版本。
 pub const RECOVERY_VERSION: u32 = 1;
@@ -89,9 +89,9 @@ pub fn path_key(path: &Path) -> usize {
     h.finish() as usize
 }
 
-/// 默认恢复目录:`<config_dir>/preview_recovery/`。
-pub fn recovery_dir() -> PathBuf {
-    dozer_core::paths::config_dir().join("preview_recovery")
+/// 恢复目录:`<config_dir>/preview_recovery/`。`config_dir` 由产品传入。
+pub fn recovery_dir_in(config_dir: &Path) -> PathBuf {
+    config_dir.join("preview_recovery")
 }
 
 fn manifest_path(dir: &Path, project_id: i64, tab_id: usize) -> PathBuf {
@@ -202,7 +202,7 @@ fn line_ending_token(l: LineEnding) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::preview::file_profile::{ContentKind, Utf8Status, profile_file};
+    use crate::file_profile::{ContentKind, Utf8Status, profile_file};
     use std::time::{Duration, SystemTime};
 
     fn profile(size: u64, mtime: Option<SystemTime>) -> FileProfile {

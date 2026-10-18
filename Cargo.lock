@@ -2213,6 +2213,7 @@ version = "0.1.0"
 dependencies = [
  "dozer-i18n",
  "dozer-model",
+ "memchr",
  "serde",
  "serde_json",
  "tempfile",

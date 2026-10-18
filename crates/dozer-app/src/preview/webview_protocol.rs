@@ -47,19 +47,8 @@ pub struct WebviewEnvelope<T> {
     pub payload: T,
 }
 
-/// 1-based 文本位置。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TextPosition {
-    pub line: u32,
-    pub column: u32,
-}
-
-/// 文本选区。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TextRange {
-    pub start: TextPosition,
-    pub end: TextPosition,
-}
+/// 1-based 文本位置 / 选区:纯数据,已搬进 `dozer-preview-core`(恢复快照要用),这里转导出。
+pub use dozer_preview_core::text_range::{TextPosition, TextRange};
 
 /// 折叠区(行范围)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

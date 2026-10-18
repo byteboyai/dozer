@@ -572,4 +572,25 @@ mod tests {
         let prof = profile_file(&path).unwrap();
         assert_eq!(prof.sampled_max_line_bytes, FIRST_LINE_PROBE_CAP as usize);
     }
+
+    /// 退化输入不 panic:空文件、仅 BOM、含 NUL、非 UTF-8、指向目录的路径。
+    #[test]
+    fn profile_never_panics_on_degenerate_inputs() {
+        // 纯函数入口:空 / 仅 BOM / 含 NUL / 非 UTF-8。
+        let empty = analyze(&[], None, 0, None);
+        assert_eq!(empty.content_kind, ContentKind::Empty);
+        let bom_only = analyze(&[0xEF, 0xBB, 0xBF], None, 3, None);
+        let _ = (bom_only.content_kind, bom_only.encoding);
+        let nul = analyze(&[b'a', 0, b'b', 0, 0], None, 5, None);
+        assert_eq!(nul.content_kind, ContentKind::Binary);
+        let bad = analyze(&[b'a', 0xC3, 0x28, 0xFF, b'z'], None, 5, None);
+        assert_eq!(bad.utf8, Utf8Status::Invalid);
+        // size 与采样不一致 / 只有尾部样本 / 头部为空尾部非空,均不 panic。
+        let _ = analyze(&[], Some(&[b'x']), 1, None);
+        let _ = analyze(&[b'x'], Some(&[]), 10_000_000_000, None);
+        // 磁盘入口:目录、不存在的路径返回 Err 而不是 panic。
+        let dir = tempfile::tempdir().unwrap();
+        assert!(profile_file(dir.path()).is_err());
+        assert!(profile_file(&dir.path().join("missing")).is_err());
+    }
 }

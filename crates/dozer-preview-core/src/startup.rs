@@ -29,14 +29,15 @@ pub struct StartupMarker {
     pub started_ms: u64,
 }
 
-/// 默认标记文件:`<config_dir>/preview_startup.json`。
-pub fn marker_path() -> PathBuf {
-    dozer_core::paths::config_dir().join("preview_startup.json")
+/// 标记文件:`<config_dir>/preview_startup.json`。`config_dir` 由产品传入(核心不认识
+/// 任何产品的目录布局;Dozer 在 `dozer-app` 里用 `dozer_core::paths::config_dir()` 包一层)。
+pub fn marker_path_in(config_dir: &Path) -> PathBuf {
+    config_dir.join("preview_startup.json")
 }
 
-/// 默认失败计数文件:`<config_dir>/preview_failures.json`。
-pub fn failures_path() -> PathBuf {
-    dozer_core::paths::config_dir().join("preview_failures.json")
+/// 失败计数文件:`<config_dir>/preview_failures.json`。
+pub fn failures_path_in(config_dir: &Path) -> PathBuf {
+    config_dir.join("preview_failures.json")
 }
 
 fn now_ms() -> u64 {

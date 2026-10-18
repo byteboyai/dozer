@@ -12,6 +12,8 @@ dozer-i18n = { path = "../dozer-i18n" }
 dozer-model = { path = "../dozer-model" }
 serde.workspace = true
 serde_json.workspace = true
+# 大文件窗口化「整文件搜索」的分段有界扫描(`large_text`)。
+memchr = "2"
 
 [dev-dependencies]
 tempfile = "3"

@@ -30,16 +30,8 @@ pub const TABULAR_CANCELLED: &str = "tabular load cancelled";
 const CANCEL_CHECK_ROWS: usize = 4096;
 
 /// 表格类数据文件,预览时委托 Tabular Viewer(而非代码编辑器 / flyfish)。
-pub fn is_tabular_extension(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase()
-            .as_str(),
-        "xlsx" | "xls" | "ods" | "csv" | "tsv"
-    )
-}
+/// 纯函数已搬进 `dozer-preview-core`(路由要用);这里转调保持原路径。
+pub use dozer_preview_core::tabular_ext::is_tabular_extension;
 
 /// 一个已打开表格文件的运行时状态(挂在 `PreviewTab` 上,平行于 `editor`)。
 /// 派生 `Clone`纯粹是为了满足顶层 `Message` 枚举整体 `#[derive(Clone)]`
@@ -532,23 +524,6 @@ mod tests {
         // 未取消时正常解析。
         assert!(load_cancellable(&path, || false).is_ok());
         let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn is_tabular_extension_covers_formats_case_insensitive() {
-        for p in [
-            "/tmp/a.xlsx",
-            "/tmp/a.xls",
-            "/tmp/a.ods",
-            "/tmp/a.csv",
-            "/tmp/a.tsv",
-            "/tmp/A.CSV",
-        ] {
-            assert!(is_tabular_extension(Path::new(p)), "{p}");
-        }
-        for p in ["/tmp/a.md", "/tmp/a.rs", "/tmp/a.png", "/tmp/a.json"] {
-            assert!(!is_tabular_extension(Path::new(p)), "{p}");
-        }
     }
 
     #[test]

@@ -29,7 +29,7 @@ pub fn is_editable_extension(path: &std::path::Path) -> bool {
 /// 默认预览要不要走 flyfish 渲染而不是文本:`.md`/`.markdown`/`.html`/`.htm`
 /// 以及 `.svg`(T5:SVG 默认图像渲染,另提供 CodeMirror XML 源码模式)。这只
 /// 决定**默认预览**走渲染效果;用户切到源码后仍是可写文本(CodeMirror)。
-pub(crate) fn prefers_rendered_preview(path: &std::path::Path) -> bool {
+pub fn prefers_rendered_preview(path: &std::path::Path) -> bool {
     matches!(
         path.extension()
             .and_then(|e| e.to_str())
@@ -44,7 +44,7 @@ pub(crate) fn prefers_rendered_preview(path: &std::path::Path) -> bool {
 /// 返回 `(规则名, language token)`——规则名进 `RouteReason` 供诊断,语言 token
 /// 交给 CodeMirror。仅覆盖计划点名的少量稳定文件名,不做"所有 dotfile 都是
 /// 文本"的宽泛规则;调用方仍须用内容画像(含 NUL/二进制)做安全检查。
-pub(crate) fn filename_code_rule(path: &std::path::Path) -> Option<(&'static str, &'static str)> {
+pub fn filename_code_rule(path: &std::path::Path) -> Option<(&'static str, &'static str)> {
     let name = path.file_name()?.to_str()?;
     let lower = name.to_ascii_lowercase();
     match lower.as_str() {
@@ -80,7 +80,7 @@ pub fn is_plantuml_extension(path: &std::path::Path) -> bool {
 /// JSON 家族扩展名(严格 json 与 json5/jsonc)。路由据此归入
 /// `PreviewKind::Json`;其中严格 `.json` 给 Tree/Text 双视图,其余只给文本。
 /// JSONL/NDJSON 不在此列——它们走 `PreviewKind::Streamed`(T8)。
-pub(crate) fn is_json_family_extension(path: &std::path::Path) -> bool {
+pub fn is_json_family_extension(path: &std::path::Path) -> bool {
     matches!(
         path.extension()
             .and_then(|e| e.to_str())
@@ -93,7 +93,7 @@ pub(crate) fn is_json_family_extension(path: &std::path::Path) -> bool {
 
 /// 严格 `.json` 扩展名(唯一支持 Tree 视图的 JSON 家族成员,T6)。json5/jsonc
 /// 含注释、vanilla-jsoneditor 不解析,只给 CodeMirror 文本。
-pub(crate) fn is_strict_json_extension(path: &std::path::Path) -> bool {
+pub fn is_strict_json_extension(path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("json"))
@@ -101,7 +101,7 @@ pub(crate) fn is_strict_json_extension(path: &std::path::Path) -> bool {
 
 /// JSON Lines / NDJSON 扩展名(T8):每行一个独立 JSON root,路由到
 /// `PreviewKind::Streamed`。
-pub(crate) fn is_json_lines_extension(path: &std::path::Path) -> bool {
+pub fn is_json_lines_extension(path: &std::path::Path) -> bool {
     matches!(
         path.extension()
             .and_then(|e| e.to_str())
@@ -121,7 +121,7 @@ pub fn wry_toggle_eligible(path: &std::path::Path) -> bool {
 /// 把文件扩展名映射到语言 token(前端 CodeMirror / JSON host 用来加载语言)。
 /// 未知扩展名回退 "txt"(plain text)。前端 `web/editor/src/languages.ts` 与
 /// 这份映射**一一对应**,改动需同步。
-pub(crate) fn extension_to_syntax(path: &std::path::Path) -> String {
+pub fn extension_to_syntax(path: &std::path::Path) -> String {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
