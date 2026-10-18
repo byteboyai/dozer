@@ -3,7 +3,7 @@
 > 日期:2026-10-16。来源:`docs/superpowers/specs/` 下 A5、A6e、A6f、A6g、A6h 五份验收报告里"待人工在真实 GUI 里完成"的项,以及 `2026-10-14-bytehost-app-i18n-acceptance.md` 里标 ⏳ 的项。
 > 命令行能验证的项(伪造 `Host` 被拒、令牌门、同源校验、crash/hang 自动恢复、停重启 dozerd 后应用恢复)已在隔离环境里自动跑过,**不在本清单里**。
 > 分级与自动化可行性见 `docs/dozer-v2/bytehost-manual-acceptance-checklist.md`。
-> **全部项有结论之前,不得把 A5、A6e–A6h 标成"已完成"。**
+> **2026-10-18 对账结论:A6f、A6g 完成;A6e、A6h 基本完成(各剩一处);A5 仍部分完成**(Excalidraw 本体未做)。依据与逐项说明见 bytehost 仓库 `docs/superpowers/specs/` 下五份验收报告的状态行。
 
 ## 0. 准备(一次)
 
