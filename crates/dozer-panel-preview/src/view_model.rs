@@ -4,12 +4,20 @@
 //!
 //! 这里的每个函数都是**现状行为的逐字等价抽取**:不改文案、不改判定顺序。
 
-use crate::preview::BlankPaneInfo;
-use crate::preview::{
-    BackendState, FallbackActions, PreviewBackend, PreviewMode, PreviewPane, PreviewTab, TabKind,
-    TabularFormat, TabularMode,
+use crate::{
+    BackendState, BlankPaneInfo, FallbackActions, PANEL_OWNER, PreviewBackend, PreviewMode,
+    PreviewPane, PreviewTab, TabKind, TabularFormat, TabularMode,
 };
 use dozer_model::ProjectInfo;
+
+/// 本库文案(owner `dozer.preview_panel`)。
+fn host_text(key: &str, fallback: &str, locale: &str) -> String {
+    crate::i18n::panel_text(PANEL_OWNER, key, fallback, locale)
+}
+
+fn host_text_args(key: &str, fallback: &str, locale: &str, args: &[(&str, &str)]) -> String {
+    crate::i18n::panel_text_args(PANEL_OWNER, key, fallback, locale, args)
+}
 
 // ---------------------------------------------------------------------------
 // 数字 / 时间格式化(空白信息卡用)
@@ -17,7 +25,7 @@ use dozer_model::ProjectInfo;
 
 /// `n` 插入千位分隔符(中文惯例就是半角逗号,与英文一致)。`23456` →
 /// `"23,456"`;`0` → `"0"`。纯展示,不损失精度。
-pub(crate) fn with_thousands_separator(n: u64) -> String {
+pub fn with_thousands_separator(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, c) in s.chars().rev().enumerate() {
@@ -33,7 +41,7 @@ pub(crate) fn with_thousands_separator(n: u64) -> String {
 /// `10240` → `"10KB"`;`1536` → `"1.5KB"`;`1.2GB` 保留一位小数。整除整单位
 /// 时不显示小数,避免 `"10.0KB"` 这类啰嗦写法。纯展示,精度足够项目大小
 /// 展示用;精确字节数由调用方另以括号补出。
-pub(crate) fn format_human_size(bytes: u64) -> String {
+pub fn format_human_size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = 1024.0 * 1024.0;
     const GB: f64 = 1024.0 * 1024.0 * 1024.0;
@@ -59,7 +67,7 @@ pub(crate) fn format_human_size(bytes: u64) -> String {
 /// Hinnant 的 `civil_from_days` 同款算法(见 `extensions/git_log.rs::1283`,
 /// 那里只输出 `YYYY-MM-DD HH:MM:SS`,这里加星期)。失败(平台不支持 /
 /// 1970 之前)时回退 `"未知"` / `"Unknown"`。
-pub(crate) fn format_time(t: std::time::SystemTime, locale: &str) -> String {
+pub fn format_time(t: std::time::SystemTime, locale: &str) -> String {
     let dur = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     let total_secs = dur.as_secs();
     let days = (total_secs / 86_400) as i64;
@@ -90,7 +98,7 @@ pub(crate) fn format_time(t: std::time::SystemTime, locale: &str) -> String {
         "Saturday",
         "Sunday",
     ][weekday as usize];
-    let weekday_name = crate::i18n::host_text(weekday_key, weekday_fallback, locale);
+    let weekday_name = host_text(weekday_key, weekday_fallback, locale);
     // 占位符名在两种语言的模板里必须一致(资源校验要求 key 集合逐个相同),
     // 差异只在模板形状与取值:英文月份给缩写、中文给数字月。
     let month_value = if locale.starts_with("zh") {
@@ -98,7 +106,7 @@ pub(crate) fn format_time(t: std::time::SystemTime, locale: &str) -> String {
     } else {
         month_name_en(mo).to_string()
     };
-    crate::i18n::host_text_args(
+    host_text_args(
         "date.datetime",
         "{weekday}, {day} {month} {y} {hh}:{mm}",
         locale,
@@ -142,7 +150,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 
 /// 当前项目根目录的 basename(`project.path` 的最后一段路径分量)。拿不到文件
 /// 名(尾部是 `..`/`/` 等)回退到 `path.display()` 完整字符串。无项目时 `None`。
-pub(crate) fn project_root_dir_name_of(project: Option<&ProjectInfo>) -> Option<String> {
+pub fn project_root_dir_name_of(project: Option<&ProjectInfo>) -> Option<String> {
     let project = project?;
     let path = std::path::Path::new(&project.path);
     path.file_name()
@@ -152,19 +160,15 @@ pub(crate) fn project_root_dir_name_of(project: Option<&ProjectInfo>) -> Option<
 
 /// 预览 tab 的渲染标题(宽度预算与实际渲染共用)。`Blank` 占位 tab 返回项目
 /// 根目录 basename;没项目时回退本地化的 `Blank`;其余返回 `tab.title`。
-pub(crate) fn preview_tab_title(
-    project: Option<&ProjectInfo>,
-    tab: &PreviewTab,
-    locale: &str,
-) -> String {
+pub fn preview_tab_title(project: Option<&ProjectInfo>, tab: &PreviewTab, locale: &str) -> String {
     if matches!(tab.kind, TabKind::Blank)
         && let Some(root) = project_root_dir_name_of(project)
     {
         return root;
     }
     if matches!(tab.kind, TabKind::Blank) {
-        return crate::i18n::panel_text(
-            crate::preview::PREVIEW_OWNER,
+        return dozer_preview_core::i18n::panel_text(
+            crate::PREVIEW_OWNER,
             "view.blank",
             "Blank",
             locale,
@@ -175,11 +179,7 @@ pub(crate) fn preview_tab_title(
 
 /// 页签条上实际显示的标题:在 [`preview_tab_title`] 之后,就地可写的 tab 有
 /// 未保存改动时加 ` *` 后缀。(宽度预算按不带星的标题估,最坏多一个字符。)
-pub(crate) fn preview_tab_label(
-    project: Option<&ProjectInfo>,
-    tab: &PreviewTab,
-    locale: &str,
-) -> String {
+pub fn preview_tab_label(project: Option<&ProjectInfo>, tab: &PreviewTab, locale: &str) -> String {
     let mut title = preview_tab_title(project, tab, locale);
     if tab.dirty {
         title.push_str(" *");
@@ -189,7 +189,7 @@ pub(crate) fn preview_tab_label(
 
 /// index 0 的 `Blank` 占位 tab 单独存在时,其 × 等价于「选中」(不真关,避免
 /// 「列表瞬空再补」的视觉跳动);有兄弟 tab 时是真关。文件 tab 一律真关。
-pub(crate) fn tab_close_selects_instead(tab: &PreviewTab, tab_count: usize) -> bool {
+pub fn tab_close_selects_instead(tab: &PreviewTab, tab_count: usize) -> bool {
     matches!(tab.kind, TabKind::Blank) && tab_count == 1
 }
 
@@ -199,14 +199,14 @@ pub(crate) fn tab_close_selects_instead(tab: &PreviewTab, tab_count: usize) -> b
 
 /// 空白页信息卡的文案模型。`stats` 为 `None` = 无项目,只画头部。
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct BlankInfoModel {
+pub struct BlankInfoModel {
     pub header_label: String,
     /// 四行 `(label, value)`:位置 / 大小 / 创建时间 / 修改时间。
     pub stats: Option<[(String, String); 4]>,
 }
 
 /// `info` 为 `None`(后台还在跑)时三行值画 `—`;位置行始终是项目路径。
-pub(crate) fn blank_info_model(
+pub fn blank_info_model(
     project: Option<&ProjectInfo>,
     info: Option<&BlankPaneInfo>,
     locale: &str,
@@ -221,7 +221,7 @@ pub(crate) fn blank_info_model(
         };
     };
     let size_value = info.map_or("—".to_string(), |i| {
-        crate::i18n::host_text_args(
+        host_text_args(
             "preview.blank_size_value",
             "{human} ({bytes} bytes on disk), {count} items",
             locale,
@@ -244,19 +244,16 @@ pub(crate) fn blank_info_model(
         header_label,
         stats: Some([
             (
-                crate::i18n::host_text("preview.info_location", "Location:", locale),
+                host_text("preview.info_location", "Location:", locale),
                 project.path.clone(),
             ),
+            (host_text("preview.info_size", "Size:", locale), size_value),
             (
-                crate::i18n::host_text("preview.info_size", "Size:", locale),
-                size_value,
-            ),
-            (
-                crate::i18n::host_text("preview.info_created", "Created:", locale),
+                host_text("preview.info_created", "Created:", locale),
                 created_value,
             ),
             (
-                crate::i18n::host_text("preview.info_modified", "Modified:", locale),
+                host_text("preview.info_modified", "Modified:", locale),
                 modified_value,
             ),
         ]),
@@ -269,7 +266,7 @@ pub(crate) fn blank_info_model(
 
 /// 降级页(External / Unsupported / Failed)的文案模型。
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct FallbackModel {
+pub struct FallbackModel {
     pub tab_id: usize,
     pub title: String,
     pub headline: String,
@@ -281,7 +278,7 @@ pub(crate) struct FallbackModel {
 }
 
 /// 该 tab 此刻是否该画降级页;是则给出全部文案与可用动作。
-pub(crate) fn fallback_model(tab: &PreviewTab, locale: &str) -> Option<FallbackModel> {
+pub fn fallback_model(tab: &PreviewTab, locale: &str, product: &str) -> Option<FallbackModel> {
     let backend = tab.backend.as_ref()?;
     let is_ext = matches!(
         backend,
@@ -294,7 +291,7 @@ pub(crate) fn fallback_model(tab: &PreviewTab, locale: &str) -> Option<FallbackM
         return None;
     }
     let content_is_text = tab.route.as_ref().is_some_and(|r| r.content_is_text);
-    let actions = crate::preview::fallback_actions(backend, &tab.backend_state, content_is_text);
+    let actions = crate::fallback_actions(backend, &tab.backend_state, content_is_text);
     let reason = tab
         .route
         .as_ref()
@@ -311,14 +308,15 @@ pub(crate) fn fallback_model(tab: &PreviewTab, locale: &str) -> Option<FallbackM
     Some(FallbackModel {
         tab_id: tab.id,
         title: tab.title.clone(),
-        headline: crate::i18n::host_text(
+        headline: host_text_args(
             "preview.fallback_title",
-            "Cannot preview this file inside Dozer",
+            "Cannot preview this file inside {product}",
             locale,
+            &[("product", product)],
         ),
         path: (!path.is_empty()).then_some(path),
         route: (!reason.is_empty()).then(|| {
-            crate::i18n::host_text_args(
+            host_text_args(
                 "preview.fallback_route",
                 "Route: {reason}",
                 locale,
@@ -326,17 +324,18 @@ pub(crate) fn fallback_model(tab: &PreviewTab, locale: &str) -> Option<FallbackM
             )
         }),
         failure: failure.map(|err| {
-            crate::i18n::host_text_args(
+            host_text_args(
                 "preview.fallback_reason",
                 "Reason: {error}",
                 locale,
                 &[("error", err.as_str())],
             )
         }),
-        security_note: crate::i18n::host_text(
+        security_note: host_text_args(
             "preview.fallback_security_note",
-            "For safety, Dozer will not execute or decode this file inline.",
+            "For safety, {product} will not execute or decode this file inline.",
             locale,
+            &[("product", product)],
         ),
         actions,
     })
@@ -347,29 +346,29 @@ pub(crate) fn fallback_model(tab: &PreviewTab, locale: &str) -> Option<FallbackM
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ConflictBarModel {
+pub struct ConflictBarModel {
     pub notice: String,
     pub keep_label: String,
     pub reload_label: String,
 }
 
 /// `armed` 为真时重载键变成二次确认文案(再点一次才丢弃改动)。
-pub(crate) fn conflict_bar_model(armed: bool, locale: &str) -> ConflictBarModel {
+pub fn conflict_bar_model(armed: bool, locale: &str) -> ConflictBarModel {
     ConflictBarModel {
-        notice: crate::i18n::host_text(
+        notice: host_text(
             "preview.conflict_notice",
             "File on disk changed externally",
             locale,
         ),
-        keep_label: crate::i18n::host_text("preview.conflict_keep", "Keep my changes", locale),
+        keep_label: host_text("preview.conflict_keep", "Keep my changes", locale),
         reload_label: if armed {
-            crate::i18n::host_text(
+            host_text(
                 "preview.conflict_reload_confirm",
                 "Reload from disk (discard my changes)",
                 locale,
             )
         } else {
-            crate::i18n::host_text("preview.conflict_reload", "Reload from disk", locale)
+            host_text("preview.conflict_reload", "Reload from disk", locale)
         },
     }
 }
@@ -380,7 +379,7 @@ pub(crate) fn conflict_bar_model(armed: bool, locale: &str) -> ConflictBarModel 
 
 /// 激活 tab 上哪些模式切换按钮出现,以及各自的当前态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct ToolbarModel {
+pub struct ToolbarModel {
     /// 预览 / 代码切换:`Some(in_code_mode)`;仅 `wry_toggle_eligible` 的文件 tab。
     pub render_mode: Option<RenderModeButton>,
     /// CSV / TSV 的「网格 / 原文」:`Some((tab_id, in_text))`;工作簿(xlsx 等)不出现。
@@ -390,18 +389,18 @@ pub(crate) struct ToolbarModel {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RenderModeButton {
+pub struct RenderModeButton {
     pub tab_idx: usize,
     pub in_code_mode: bool,
 }
 
-pub(crate) fn toolbar_model(preview: &PreviewPane) -> ToolbarModel {
+pub fn toolbar_model(preview: &PreviewPane) -> ToolbarModel {
     let Some(tab) = preview.tabs().get(preview.active_idx()) else {
         return ToolbarModel::default();
     };
     let render_mode = {
         let eligible = match &tab.kind {
-            TabKind::File(p) => crate::preview::wry_toggle_eligible(p),
+            TabKind::File(p) => crate::wry_toggle_eligible(p),
             _ => false,
         };
         eligible.then(|| RenderModeButton {
@@ -536,8 +535,8 @@ mod tests {
 
     #[test]
     fn blank_tab_title_follows_the_project_root_basename_then_the_localized_blank() {
-        let mut pane = crate::preview::new_preview_pane();
-        let blank = crate::preview::placeholder_tab(0);
+        let mut pane = PreviewPane::default();
+        let blank = crate::placeholder_tab(0);
         let p = project("/Users/a/Projects/dozer", "Dozer AI Coder");
         assert_eq!(preview_tab_title(Some(&p), &blank, "en"), "dozer");
         assert_eq!(preview_tab_title(None, &blank, "en"), "Blank");
@@ -552,7 +551,7 @@ mod tests {
 
     #[test]
     fn tab_label_appends_a_star_only_for_dirty_tabs_and_keeps_cjk_titles() {
-        let mut pane = crate::preview::new_preview_pane();
+        let mut pane = PreviewPane::default();
         let id = file_tab(&mut pane, "/tmp/说明文档.md");
         let tab = pane.tabs_mut().iter_mut().find(|t| t.id == id).unwrap();
         assert_eq!(preview_tab_label(None, tab, "zh-CN"), "说明文档.md");
@@ -568,8 +567,8 @@ mod tests {
 
     #[test]
     fn placeholder_close_selects_only_when_it_is_the_only_tab() {
-        let mut pane = crate::preview::new_preview_pane();
-        let blank = crate::preview::placeholder_tab(0);
+        let mut pane = PreviewPane::default();
+        let blank = crate::placeholder_tab(0);
         assert!(tab_close_selects_instead(&blank, 1));
         assert!(!tab_close_selects_instead(&blank, 2));
         let id = file_tab(&mut pane, "/tmp/a.rs");
@@ -649,32 +648,35 @@ mod tests {
 
     #[test]
     fn fallback_model_covers_every_backend_and_state_combination() {
-        let mut pane = crate::preview::new_preview_pane();
+        let mut pane = PreviewPane::default();
         // 代码 tab 就绪:不画降级页。
         let code = file_tab(&mut pane, "/tmp/a.rs");
         let t = pane.tabs().iter().find(|t| t.id == code).unwrap();
-        assert!(fallback_model(t, "en").is_none());
+        assert!(fallback_model(t, "en", "Dozer").is_none());
         // 同一 tab 失败:画降级页,带原因,可重试时有 retry。
         let tab = pane.tabs_mut().iter_mut().find(|t| t.id == code).unwrap();
-        tab.backend_state = BackendState::Failed(crate::preview::PreviewError::new("boom", true));
-        let m = fallback_model(tab, "en").unwrap();
+        tab.backend_state = BackendState::Failed(crate::PreviewError::new("boom", true));
+        let m = fallback_model(tab, "en", "Dozer").unwrap();
         assert_eq!(m.tab_id, code);
         assert_eq!(m.failure.as_deref(), Some("Reason: boom"));
         assert!(m.actions.retry && m.actions.external_open);
         assert_eq!(m.path.as_deref(), Some("/tmp/a.rs"));
         // 不可重试的失败没有 retry。
-        tab.backend_state = BackendState::Failed(crate::preview::PreviewError::new("nope", false));
-        assert!(!fallback_model(tab, "en").unwrap().actions.retry);
+        tab.backend_state = BackendState::Failed(crate::PreviewError::new("nope", false));
+        assert!(!fallback_model(tab, "en", "Dozer").unwrap().actions.retry);
         // `web_error` 优先于后端错误。
         tab.web_error = Some("render crashed".into());
         assert_eq!(
-            fallback_model(tab, "en").unwrap().failure.as_deref(),
+            fallback_model(tab, "en", "Dozer")
+                .unwrap()
+                .failure
+                .as_deref(),
             Some("Reason: render crashed")
         );
         // 未知二进制:路由为 External/Unsupported → 降级页,无 plain-text 退路。
         let bin = file_tab(&mut pane, "/tmp/blob.bin");
         let t = pane.tabs().iter().find(|t| t.id == bin).unwrap();
-        if let Some(m) = fallback_model(t, "en") {
+        if let Some(m) = fallback_model(t, "en", "Dozer") {
             assert!(m.actions.external_open);
             assert_eq!(
                 m.security_note,
@@ -682,8 +684,8 @@ mod tests {
             );
         }
         // Blank 占位 tab 没有 backend → None。
-        let blank = crate::preview::placeholder_tab(0);
-        assert!(fallback_model(&blank, "en").is_none());
+        let blank = crate::placeholder_tab(0);
+        assert!(fallback_model(&blank, "en", "Dozer").is_none());
     }
 
     // ---- 冲突条 ----
@@ -707,7 +709,7 @@ mod tests {
 
     #[test]
     fn toolbar_shows_mode_buttons_only_for_the_eligible_active_tab() {
-        let mut pane = crate::preview::new_preview_pane();
+        let mut pane = PreviewPane::default();
         // 只有 Blank:都不出现。
         assert_eq!(toolbar_model(&pane), ToolbarModel::default());
         // 纯代码文件:不出现。

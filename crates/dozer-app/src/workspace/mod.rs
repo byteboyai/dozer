@@ -30,13 +30,11 @@
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
 
 mod hook;
-mod preview_models;
 mod state;
 #[cfg(test)]
 mod tests;
 mod view;
 
 pub(crate) use hook::*;
-pub(crate) use preview_models::*;
 pub(crate) use state::*;
 pub(crate) use view::*;

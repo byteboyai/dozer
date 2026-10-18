@@ -9,9 +9,6 @@ mod webview;
 #[cfg(test)]
 mod webview_spec_golden;
 
-/// 预览层的 i18n owner(spec §6.1:官方 owner 固定 `dozer.<id>`)。
-pub(crate) use dozer_preview_core::PREVIEW_OWNER;
-
 // 已搬进 `dozer-preview-core` 的模块:保留 `crate::preview::<mod>::` 路径。
 
 pub(crate) use dozer_preview_core::backend::*;

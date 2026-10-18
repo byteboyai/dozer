@@ -2157,6 +2157,7 @@ dependencies = [
  "dozer-i18n",
  "dozer-model",
  "dozer-preview-core",
+ "iced_renderer",
  "iced_widget",
  "serde",
  "serde_json",

@@ -9,6 +9,7 @@
 
 pub mod capabilities;
 pub mod code_host;
+pub mod display;
 pub mod effects;
 pub mod i18n;
 pub mod message;
@@ -23,6 +24,10 @@ pub mod tabular;
 pub mod update;
 #[cfg(test)]
 mod update_tests;
+pub mod view;
+pub mod view_model;
+#[cfg(test)]
+mod view_tests;
 pub mod webview;
 pub mod webview_protocol;
 
@@ -67,7 +72,9 @@ pub fn default_client_capabilities() -> dozer_preview_core::capabilities::Client
     })
 }
 
+pub use display::{PaneStyle, PanelDisplay, PreviewHover};
 pub use effects::{Effect, run_effect};
 pub use message::Message;
 pub use panel::PreviewPanelState;
 pub use update::{PanelBehavior, UpdateCtx, load_preview_tab, restore_tabs, update};
+pub use view::ViewCtx;
