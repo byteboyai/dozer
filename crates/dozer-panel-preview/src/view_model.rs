@@ -11,11 +11,11 @@ use crate::{
 use dozer_model::ProjectInfo;
 
 /// 本库文案(owner `dozer.preview_panel`)。
-fn host_text(key: &str, fallback: &str, locale: &str) -> String {
+fn lib_text(key: &str, fallback: &str, locale: &str) -> String {
     crate::i18n::panel_text(PANEL_OWNER, key, fallback, locale)
 }
 
-fn host_text_args(key: &str, fallback: &str, locale: &str, args: &[(&str, &str)]) -> String {
+fn lib_text_args(key: &str, fallback: &str, locale: &str, args: &[(&str, &str)]) -> String {
     crate::i18n::panel_text_args(PANEL_OWNER, key, fallback, locale, args)
 }
 
@@ -98,7 +98,7 @@ pub fn format_time(t: std::time::SystemTime, locale: &str) -> String {
         "Saturday",
         "Sunday",
     ][weekday as usize];
-    let weekday_name = host_text(weekday_key, weekday_fallback, locale);
+    let weekday_name = lib_text(weekday_key, weekday_fallback, locale);
     // 占位符名在两种语言的模板里必须一致(资源校验要求 key 集合逐个相同),
     // 差异只在模板形状与取值:英文月份给缩写、中文给数字月。
     let month_value = if locale.starts_with("zh") {
@@ -106,7 +106,7 @@ pub fn format_time(t: std::time::SystemTime, locale: &str) -> String {
     } else {
         month_name_en(mo).to_string()
     };
-    host_text_args(
+    lib_text_args(
         "date.datetime",
         "{weekday}, {day} {month} {y} {hh}:{mm}",
         locale,
@@ -221,7 +221,7 @@ pub fn blank_info_model(
         };
     };
     let size_value = info.map_or("—".to_string(), |i| {
-        host_text_args(
+        lib_text_args(
             "preview.blank_size_value",
             "{human} ({bytes} bytes on disk), {count} items",
             locale,
@@ -244,16 +244,19 @@ pub fn blank_info_model(
         header_label,
         stats: Some([
             (
-                host_text("preview.info_location", "Location:", locale),
+                crate::i18n::panel_text(PANEL_OWNER, "preview.info_location", "Location:", locale),
                 project.path.clone(),
             ),
-            (host_text("preview.info_size", "Size:", locale), size_value),
             (
-                host_text("preview.info_created", "Created:", locale),
+                crate::i18n::panel_text(PANEL_OWNER, "preview.info_size", "Size:", locale),
+                size_value,
+            ),
+            (
+                crate::i18n::panel_text(PANEL_OWNER, "preview.info_created", "Created:", locale),
                 created_value,
             ),
             (
-                host_text("preview.info_modified", "Modified:", locale),
+                crate::i18n::panel_text(PANEL_OWNER, "preview.info_modified", "Modified:", locale),
                 modified_value,
             ),
         ]),
@@ -308,7 +311,7 @@ pub fn fallback_model(tab: &PreviewTab, locale: &str, product: &str) -> Option<F
     Some(FallbackModel {
         tab_id: tab.id,
         title: tab.title.clone(),
-        headline: host_text_args(
+        headline: lib_text_args(
             "preview.fallback_title",
             "Cannot preview this file inside {product}",
             locale,
@@ -316,7 +319,7 @@ pub fn fallback_model(tab: &PreviewTab, locale: &str, product: &str) -> Option<F
         ),
         path: (!path.is_empty()).then_some(path),
         route: (!reason.is_empty()).then(|| {
-            host_text_args(
+            lib_text_args(
                 "preview.fallback_route",
                 "Route: {reason}",
                 locale,
@@ -324,14 +327,14 @@ pub fn fallback_model(tab: &PreviewTab, locale: &str, product: &str) -> Option<F
             )
         }),
         failure: failure.map(|err| {
-            host_text_args(
+            lib_text_args(
                 "preview.fallback_reason",
                 "Reason: {error}",
                 locale,
                 &[("error", err.as_str())],
             )
         }),
-        security_note: host_text_args(
+        security_note: lib_text_args(
             "preview.fallback_security_note",
             "For safety, {product} will not execute or decode this file inline.",
             locale,
@@ -355,20 +358,20 @@ pub struct ConflictBarModel {
 /// `armed` 为真时重载键变成二次确认文案(再点一次才丢弃改动)。
 pub fn conflict_bar_model(armed: bool, locale: &str) -> ConflictBarModel {
     ConflictBarModel {
-        notice: host_text(
+        notice: lib_text(
             "preview.conflict_notice",
             "File on disk changed externally",
             locale,
         ),
-        keep_label: host_text("preview.conflict_keep", "Keep my changes", locale),
+        keep_label: lib_text("preview.conflict_keep", "Keep my changes", locale),
         reload_label: if armed {
-            host_text(
+            lib_text(
                 "preview.conflict_reload_confirm",
                 "Reload from disk (discard my changes)",
                 locale,
             )
         } else {
-            host_text("preview.conflict_reload", "Reload from disk", locale)
+            lib_text("preview.conflict_reload", "Reload from disk", locale)
         },
     }
 }
