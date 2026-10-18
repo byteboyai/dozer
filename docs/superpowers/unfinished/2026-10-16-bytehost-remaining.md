@@ -6,13 +6,13 @@
 
 **核对方式：** 读文档、tag、`Cargo.toml`、git 历史；§5 的“已知失败测试”已于 2026-10-16 复跑，§1 的 A 级命令行项已于 2026-10-17 执行。
 
-## 1. 真实 GUI 手工验收:做了一大半,仍有未做项
+## 1. 真实 GUI 手工验收:基本做完,剩几处
 
-2026-10-17 在隔离环境里用真 GUI 做了手工验收,逐项结果见 `docs/superpowers/manual_tests/2026-10-16-bytehost-manual-acceptance.md`,五份验收报告的勾选状态也已按结果回写。**五个切片(A5、A6e、A6f、A6g、A6h)仍不标"已完成"**,因为还有这些没做:
+2026-10-17/18 在隔离环境里用真 GUI 做了手工验收,逐项结果见 `docs/superpowers/manual_tests/2026-10-16-bytehost-manual-acceptance.md`。五份验收报告(**权威且最新的副本在 bytehost 仓库** `docs/superpowers/specs/`,本仓 `specs/` 下的同名文件是 2026-10-08 的旧拷贝,已加说明)已于 2026-10-18 按结果对账:**A6f、A6g、A6h 完成;A6e 基本完成(剩一处);A5 仍部分完成。**
 
-- **A5 Excalidraw 本体(12 项):** 需要先联网打包字体;已用 `py-notes` 验证过同一个网关的 Host 伪造、dozerd 停/重启。
-- **A6h 网络来源(3 项):** 需要真实 https 服务器;可以借 GitHub 的 raw 地址当一个真实来源。输入法一项只能人来做。
-- **A6e:** `node-notes` 那一遍、藏起 node 的"尚未安装"提示、受管 Node(要联网下载)、"退出整个 GUI"那一半。
+- **A5(部分完成):** Excalidraw 本体相关项没做(2026-10-18 决定先不做;需要联网打包字体):§3 的 1、2、3、4、6、8 与 V2 手工补项。第 7 项的行为(dozerd 停/重启、退出整个 GUI 后网关与应用仍在)已用 `py-notes`/`node-notes` 验证,但字面写的是 Excalidraw,没勾。第 5 项(`Host` 伪造)已勾。
+- **A6e(基本完成):** 只剩一处未验:`py-notes` 审批卡里"全部权限强制等级为仅声明,不强制"的标注(样例没有声明任何权限,看不到这个标注)。`node-notes` 一遍、退出整个 GUI、藏起 node 的"尚未安装"提示、受管 Node 都已于 2026-10-17/18 做完;受管 Python(uv)没有对应的验收项,未验。
+- **A6h(完成):** 网络来源 3 项已于 2026-10-18 做完,但 https 下载是对本机 TLS 服务器(临时 CA)做的,**未覆盖公网证书链与重定向**。输入法一项原先有缺陷(overlay 窗口里候选条出现在窗口左上角),已于 2026-10-18 修复(bytehost `v0.4.10` + dozer 3 个手写 overlay 接线),复测设置、创建项目、新建群聊三处都贴着输入框;overlay 里仍没有带下划线的组字预览,未做。
 - **应用 i18n 的双窗口隔离(6.3):** 依赖分离窗口功能(已推迟),现在做不了。
 
 验收中发现的问题大多已修(见手测文档里带"已修复"的行);已修的:WebSocket 经网关握手失败(bytehost `v0.4.5`)、断线静默(`v0.4.6` + dozer Toast)、日志文字不跟主题、设置页按钮裁切/挤压、i18n 样例被 CSP 拦、审批卡"来源渠道"标签、重订阅退避不拉长(`v0.4.7`)、压缩包 `./` 前缀(`v0.4.7`)、图标栏无区分(首字母徽标,byteui `v0.4.5`)。**撤回一条:** 验收时记的"crash 恢复后页面不重载"是我看错了,复测两条路径都会重载。
@@ -47,7 +47,7 @@ dozer 已经有一份分级清单 `docs/dozer-v2/bytehost-manual-acceptance-chec
 | dozer `CLAUDE.md` bytehost 一行 | 按 tag `v0.1.1` | `v0.4.1` |
 | bytehost `README.md` | “四个 crate”；Digger 嵌入“尚未随 tag 发布” | 七个 crate（补 `core`/`desktop`/`chrome`，并说明前四个与后三个的依赖边界不同）；嵌入已随 tag 发布（`v0.2.0` 起，来自台账 Task 22/23） |
 
-**仍然存在的不一致（没改）：** bytehost 各 crate 的 `Cargo.toml` 版本都是 `0.1.0`，而 tag 已到 `v0.4.7`。`bytehost-acceptance.md` 说明“`HOST_VERSION` 仍为 `0.1.0`，tag 版本与宿主能力版本解耦”，所以这是有意约定，但没有写进 README，容易让人困惑。
+**crate 版本号 `0.1.0` 与 tag 不一致是有意约定**，已写在 bytehost README 的“tag 即发布”一条里(2026-10-18 核对,此前这里写“没写进 README”是过期的)。
 
 ## 3. 功能层面明确还没做的
 
@@ -73,7 +73,8 @@ dozer 已经有一份分级清单 `docs/dozer-v2/bytehost-manual-acceptance-chec
 - **打包 Excalidraw 时联网下载 3 个字体，未校验摘要**，镜像用 `latest`，以验收报告记录的摘要为准。
 - ~~**重订阅退避不会拉长(待修):** `bytehost-panel` 的 `subscribe_if_due` 把 `Backoff` 改成 `Pending`,下一次失败时档位重新从 0 算起,真实流程里一直 2 秒重连一次(dozerd 停 14 分钟共 298 次)。修法是在 `Pending` 里保留上一次的 `attempt`,并补一条经过 `subscribe_if_due` 的测试(2026-10-17 验收复测发现)。~~ **已修复(2026-10-17):bytehost `v0.4.7`,`Pending` 带着上一次的档位。**
 - **PanelEffect 新增 `ConnectionLost`/`ConnectionRestored`(`v0.4.6`):** 它不是 `#[non_exhaustive]`,digger 升到 `v0.4.6` 时任何对 `PanelEffect` 的穷尽 `match` 都会编译失败,需要处理这两个变体。
-- **偶发测试:** 已修两个——bytehost `the_first_run_is_unavailable_when_the_port_cannot_be_saved`(端口释放断言改成带 2 秒重试,`v0.4.7`)、dozer `git_log::tests::build_marks_head_branch_and_labels`(改成找带当前分支标签的那一行)。**复测又发现两个同类偶发(待修):** bytehost `service::tests::start_uses_the_persisted_port_across_restarts`(同样是"先挑空闲端口、稍后才绑定"的竞态,40 遍整套并行失败 2 次)和 `manager::tests::a_python_app_installs_starts_runs_behind_the_gateway_and_stops`(事件顺序断言,约 1/40)。
+- **`PanelEffect` 已在 `v0.4.9` 标 `#[non_exhaustive]`(2026-10-18):** 消费方对它的 `match` 需要兜底分支;dozer 已处理(`libs-2026-10-18b`),digger 同步时要在 `effects.rs` 加。
+- **偶发测试(2026-10-18 已全部处理):** 32 线程并行下复现并修了四个同族问题——"先探测再使用"的端口被并行测试抢走(`start_uses_the_persisted_port_across_restarts`、`the_first_run_*`,改成现取端口 + 有界重试)、`Running` 事件晚于状态可见(`a_python_app_installs_starts_*`,改成有界等待事件)、`a_python_app_runs_through_the_wire_*` 查的其实是 gateway 端口而不是应用端口(改成读应用日志里的真实端口)。修后 40 轮 32 线程 0 失败(修前约 1/40 到 3/40)。**机器同时有别的重负载时**,运行时安装的"试跑超时"和进程型 e2e 的端口冲突仍可能偶发,这是负载造成的,没有处理。
 - **`data_store_identifier` 算法已钉死**，改动即破坏用户的 webview 数据归属，不得改。
 
 ## 5. 验收报告里记录的“已知无关失败”（2026-10-16 已复核）

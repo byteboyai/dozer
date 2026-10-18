@@ -3,7 +3,7 @@
 > 日期:2026-10-16。来源:`docs/superpowers/specs/` 下 A5、A6e、A6f、A6g、A6h 五份验收报告里"待人工在真实 GUI 里完成"的项,以及 `2026-10-14-bytehost-app-i18n-acceptance.md` 里标 ⏳ 的项。
 > 命令行能验证的项(伪造 `Host` 被拒、令牌门、同源校验、crash/hang 自动恢复、停重启 dozerd 后应用恢复)已在隔离环境里自动跑过,**不在本清单里**。
 > 分级与自动化可行性见 `docs/dozer-v2/bytehost-manual-acceptance-checklist.md`。
-> **全部项有结论之前,不得把 A5、A6e–A6h 标成"已完成"。**
+> **2026-10-18 对账结论:A6f、A6g、A6h 完成;A6e 基本完成(剩一处);A5 仍部分完成**(Excalidraw 本体未做)。依据与逐项说明见 bytehost 仓库 `docs/superpowers/specs/` 下五份验收报告的状态行。
 
 ## 0. 准备(一次)
 
@@ -38,7 +38,7 @@ target/aarch64-apple-darwin/debug/dozer
 |---|---|---|---|
 | 1.1 | 安装 `~/excalidraw-app` | 审批卡显示来源"本地目录"、运行方式 `static_web`、权限全最严 | ☐ |
 | 1.2 | 批准安装,图标栏出现图标,打开,画几笔 | 画布正常 | ☐ |
-| 1.3 | 退出整个 Dozer(dozerd 保持运行)再重开,进该应用 | 画还在 | ☐ |
+| 1.3 | 退出整个 Dozer(dozerd 保持运行)再重开,进该应用 | 画还在 | ☐ Excalidraw 本体未做。**进程型应用的同一动作已用 `node-notes` 验证(2026-10-18):** `hits` 递增到 2 后 ⌘Q 退出整个 GUI,GUI 进程消失,而 dozerd、node 进程与网关端口 20027 仍在且网关继续应答(无令牌 403、伪造 Host 421);重新启动 GUI 后连上的仍是原 dozerd,node 进程未重启,`gateway.json` 端口不变,应用直接 Running,计数续上(`hits` 3,`counter.txt` 之后到 4) |
 | 1.4 | 审批卡停留时,另开终端改 `~/excalidraw-app/web/index.html` 再点批准 | 提示"应用源码在审批之后发生了变化" | ☐ |
 | 1.5 | 卸载选「保留数据」,重装 | 画还在 | ☐ |
 | 1.6 | 再画一笔,卸载选「连数据一起删」,重装。**卸载确认后立刻关掉设置窗口** | 画布空白(验证关窗也会清除,这是 Task 3 的 App 层接线唯一的验证途径) | ☐ |
@@ -56,15 +56,15 @@ target/aarch64-apple-darwin/debug/dozer
 | # | 操作 | 预期 | 结果 |
 |---|---|---|---|
 | 2.1 | 安装 | 审批卡显示运行方式、命令行、版本要求,所有权限标"仅声明,不强制" | py:⚠️ 运行方式/命令行/版本要求 ✅;权限标注未验(样例没声明权限,卡片写"不申请任何权限") |
-| 2.2 | 批准、启动、打开面板 | 页面出现,计数可点,SSE 在滚动,WebSocket 能回显 | py:✅(WebSocket 原为 ❌,已修复,见"2.2 WebSocket"行) 页面、`hits`、运行时版本、SSE(tick 1–5)✅;**WebSocket ❌**(`ws error` / close 1006),见下表 |
+| 2.2 | 批准、启动、打开面板 | 页面出现,计数可点,SSE 在滚动,WebSocket 能回显 | py:✅(WebSocket 原为 ❌,已修复,见"2.2 WebSocket"行) 页面、`hits`、运行时版本、SSE(tick 1–5)✅;**WebSocket ❌**(`ws error` / close 1006),见下表 ;node:✅(2026-10-18,隔离 `HOME=/tmp/dzh`,最新 `main`)经「本机目录」装 `node-notes` 并启动:标题按 i18n 显示"Node 笔记",`hits` 随刷新递增,`runtime: Node.js 24.14.0`(系统 node,非受管),SSE tick 1–5,`ws: hello` 回显(WebSocket 经网关正常),图标栏出现蓝色 "N" 首字母徽标;审批卡内容未逐项记录 |
 | 2.3 | 点页面上的 crash | 面板短暂"启动中…",自动恢复 | py:✅ 命令触发 `/crash`;截图见"Py Notes / 启动中…",约 10 秒内回到 Running(自动恢复) |
 | 2.4 | 点 hang | 约 40–45 秒后自动恢复 | py:✅ 命令触发 `/hang`;约 35 秒后状态 Starting、2 秒后 Running,页面重新加载(`hits` 3→4) |
 | 2.5 | 装一份 manifest 里写 `python = ">=99"` 的副本 | 问题页,有「去设置安装」 | py:✅ 问题页显示"需要 Python / 要求 >=99,当前 3.13.1",按钮「去设置安装」「重试」;dozerd 状态 `Failed{需要 python3 >=99,当前 3.13.1, retryable:true}` |
-| 2.6 | 临时把 `node` 从 PATH 里去掉后启动 node 样例 | 提示"尚未安装";装好后点「重试」恢复 | ☐ |
+| 2.6 | 临时把 `node` 从 PATH 里去掉后启动 node 样例 | 提示"尚未安装";装好后点「重试」恢复 | node:✅(2026-10-18)提示页原文:标题"Node Notes"、"需要 Node.js"、"尚未安装,可在 设置 → 应用 里一键安装",按钮「去设置安装」「重试」。把独立的 node(v24.14.0)放进 dozerd 的 PATH 目录后点「重试」,面板恢复运行,页面 `runtime: Node.js 24.14.0`、`hits: 2`,进程路径是新放入的那份(此前系统 node 是 26.11.1),说明重试确实重新解析了运行时。**注意构造方法:** 只改 `PATH` 藏不住 node——`resolve.rs` 总会把 `/opt/homebrew/bin`、`/usr/local/bin` 追加进搜索目录(GUI 拉起的 dozerd `PATH` 很短,这是有意的)。本次用 `sandbox-exec -p '(version 1)(allow default)(deny file* process-exec (literal <node 真实路径>)…)'` 在沙箱里启动隔离环境,不改动系统里的 node。 |
 | 2.7 | 把 `server.py` 改成启动即退出再重装 | Crashed 页,点「查看日志」能看到输出末尾 | py:✅ 约 40 秒后出现 Crashed 页("应用已退出 / 健康检查没通过: 进程已经退出(重启次数过多,已放弃)",按钮「重新启动」「查看日志」);日志展开后 6 行输出(1 次首启 + 5 次重启);**但日志文字对比度极低**,见下表 |
 | 2.8 | 卸载「保留数据」再装 | 计数还在 | py:✅ 卸载前计数 4,重装后 `counter.txt` 仍是 4,修改时间在卸载之前(未被重写) |
 | 2.9 | 卸载「含数据」再装 | 计数归零 | py:✅ 卸载后 `data/` 目录消失;日志有"已清除应用的 WebView 数据存储";重装并启动后页面与 `counter.txt` 都是 `hits: 1` |
-| 2.10 | 设置里装受管 Node(要联网),再启动 `node-notes` | 页面显示的 node 版本是受管版本 | ☐ |
+| 2.10 | 设置里装受管 Node(要联网),再启动 `node-notes` | 页面显示的 node 版本是受管版本 | node:✅(2026-10-18,隔离 `HOME=/tmp/dzh`)审批卡显示:Node.js 24.21.0、来源 `https://nodejs.org/dist/v24.21.0/node-v24.21.0-darwin-arm64.tar.gz`、SHA-256 `bed7eea5…6057`("官方 nodejs.org 发行版,已固定的 SHA-256")、安装位置在 bytehost 的 `runtimes/node/24.21.0`、"下载并校验 SHA-256 / 解压 / 不修改系统环境与 shell 配置";**该 SHA-256 与代码里钉死的值、nodejs.org 官方 `SHASUMS256.txt` 三方一致**。批准后安装完成:`bin/node -v` = v24.21.0,目录 199M,无残留临时文件。启动 `node-notes`:页面 `runtime: Node.js 24.21.0`(同机系统 node 为 24.14.0 与 26.11.1,所以能区分),应用进程路径是 `runtimes/node/24.21.0/bin/node`,父进程为 dozerd;系统 node 未被改动。 |
 
 ## 3. 状态推送与日志(A6f)
 
@@ -93,10 +93,10 @@ target/aarch64-apple-darwin/debug/dozer
 |---|---|---|---|
 | 5.1 | 选本机目录安装一个应用(回归) | 仍正常 | ✅ 本次验收所有应用(py-notes、py-ver、py-badver、py-crashy、py-chatty、node-badlock 等)均经「本机目录」安装,流程正常 |
 | 5.2 | 把 `py-notes` 打成 zip 后安装并启动。用顶层目录形态:`cd <samples 的上一级> && zip -r py-notes.zip py-notes`;tar.gz 要加 `--no-mac-metadata` | 能装能跑 | ✅ 自制 `py-zip.zip`(顶层目录 `py-zip/`,`zip -X`)经「本机压缩包」安装。审批卡显示来源"本机压缩包"、位置、压缩包 SHA-256、大小 3.3 KiB、"顶层目录已剥掉 py-zip"、"来自压缩包,内容已解压校验";批准后在面板点「启动」,页面正常出现,`package/1.0.0/` 下直接是 `manifest.toml`、`server.py` |
-| 5.3 | 填一个真实 https 的静态应用 zip 地址 | 审批卡显示来源、哈希、"来自网络,不可信";批准后能打开 | ☐ |
-| 5.4 | 同一个地址故意填错 sha256 | 输入框内联拒绝,不弹 Toast,已填的 URL 和 sha256 保留 | ☐ |
-| 5.5 | 填一个 Node 应用的 URL | 内联提示"网络来源只能安装静态应用" | ☐ |
-| 5.6 | 在这些输入框里用中文输入法输入、粘贴 | 都正常 | ☐ |
+| 5.3 | 填一个真实 https 的静态应用 zip 地址 | 审批卡显示来源、哈希、"来自网络,不可信";批准后能打开 | ✅ 审批卡:来源渠道"第三方来源"、信任"不受信任"、运行方式 static_web、"来自网络,不可信 / 只允许静态应用,运行在严格 CSP 下"、来源"网络(https)"、位置 `https://127.0.0.1:18443/live.zip`、压缩包 SHA-256(与 `shasum` 一致)、大小 3.4 KiB、"顶层目录 已剥掉 live-app"、"完整性 已匹配你提供的 sha256"、"不执行任何命令""不申请任何权限";服务器日志有 dozerd 的 `HEAD`+`GET`。批准后页面正常(`你好,世界!`、`ui_locale=zh-CN app_locale=zh-CN revision=1`),图标栏出现"双"徽标,后端 desired/observed 均为 running。环境(2026-10-18):隔离 `HOME=/tmp/dzh`、最新 `main`;https 来源是本机 `127.0.0.1:18443` 的真 TLS 服务器,证书由临时 CA 签发,只经 `CURL_CA_BUNDLE` 让隔离的 dozerd 信任(系统钥匙串未改;下载走 `/usr/bin/curl`;不带 CA 时握手被拒已验证)。未覆盖公网证书链与重定向。 |
+| 5.4 | 同一个地址故意填错 sha256 | 输入框内联拒绝,不弹 Toast,已填的 URL 和 sha256 保留 | ✅(措辞修正)哈希不符是**下载之后**才知道的,走"流程内失败页",不是输入框下方的内联红字:红字"下载内容的 sha256 与期望不符(期望 …c70,实际 …c71)"+「知道了」;日志里没有新增 Toast;点「知道了」后 URL 与 sha256 两个框内容都还在。真正的"内联红字"(`url_error`)只用于下载前的本地校验(空 URL、非 https、sha 格式不对)。 |
+| 5.5 | 填一个 Node 应用的 URL | 内联提示"网络来源只能安装静态应用" | ✅ 流程内失败页,原文"网络来源只能安装静态应用";无新增 Toast;服务器日志显示 `node.zip` 已被完整下载后才判定(`apps/` 里没有 Node 应用)。同 5.4,是失败页而非输入框内联。 |
+| 5.6 | 在这些输入框里用中文输入法输入、粘贴 | 都正常 | ✅(2026-10-18 修复后复测)输入、选词、粘贴、⌘C/⌘X、光标移动、退格删汉字、组字时按回车不误提交均 ✅;**候选条位置原先出现在整个窗口左上角 ❌,已修复**(见下表):修复后设置(网络 URL 输入框)、创建项目、新建群聊三处的候选条都贴着输入框。 |
 
 5.3–5.5 需要一个真实的 https 静态服务器;没有的话先跳过并在结果列注明。
 
@@ -144,3 +144,7 @@ target/aarch64-apple-darwin/debug/dozer
 | 缺陷:审批卡"来源"标签混乱 | 压缩包的审批卡上先有一行`来源 本地目录`,下面又有`来源: / 来源 本机压缩包 / 位置 …`。第一行是来源渠道(Provenance=本地),第二行才是具体来源类型,两者都叫"来源",且对压缩包来说第一行的"本地目录"是错的/误导的;之前记的"来源重复"应改为这个解释 **[2026-10-17 已修复:bytehost `c097aa2`(`v0.4.5`),渠道一行改为"来源渠道 本机"]** |
 | 观察:已安装未启动应用的入口 | 打开面板显示"应用未运行 / 启动"按钮,启动入口在面板里,设置页的应用行没有「启动」按钮(只有停止/回滚/日志/卸载) |
 | 缺陷(样例):`bilingual-live` 在宿主里跑不起来 | 样例 `scripts/samples/i18n/bilingual-live/web/index.html` 第 42 行用内联 `<script>`,而网关给静态应用的 CSP 是 `script-src 'self' 'wasm-unsafe-eval'`(不允许内联脚本),脚本被拦,页面停在占位状态(标题 `…`、提示/底部为空、60 行日志也没生成)。把脚本挪到 `web/app.js` 并改成 `<script src=\"app.js\">`(副本 `bilingual-fix`)后立即正常。按项目规则不得放宽 CSP,应修样例。`partial-initial` 很可能有同样问题(未验) **[2026-10-17 已修复:bytehost `98599c4`(`v0.4.5`),两个 i18n 样例的脚本移到外部 `app.js`,并新增"静态样例不得有内联可执行脚本"的门禁测试;真 GUI 复测原版样例直接渲染]** |
+| 缺陷:overlay 窗口里中文输入法候选条位置错(窗口左上角) | 设置窗口的 URL 输入框里用拼音输入时,候选条出现在整个窗口左上角;文字能正确提交。**根因(2026-10-18 读代码确认):** 主窗口 `platform/window_events.rs` 在界面更新后按 `InputMethod::Enabled { cursor, .. }` 调 `window.set_ime_cursor_area(...)`;所有 overlay 子窗口(`settings`/`search`/`project_create`/`group_create`/`ssh_host`/`database_source`/`files_move`/`todo_detail` 共 8 个)都调了 `set_ime_allowed(true)`,但每帧的 `State::Updated { mouse_interaction, .. }` 把 `input_method` 丢掉了,从不设置光标区域,候选条落在系统默认位置。凡是 overlay 里有文本框的地方都应受影响。**[2026-10-18 已修复:根因一半在 bytehost——共用的 `bytehost_desktop::OverlayGpu::redraw/dispatch` 也丢了 `input_method`。bytehost `d3a8990`(`v0.4.10`)新增 `ime_cursor_area`(纯函数,3 条单测,变异验证)与 `apply_input_method`,`redraw/dispatch` 内部自动调用;dozer 手写 `UserInterface` 的 3 个 overlay(设置、搜索、新建项目)在 `apply_cursor` 旁各补一次(6 处,`b05905bc`)。真 GUI 复测:设置、创建项目(手写路径)与新建群聊(共用路径)的候选条都贴着输入框;搜索、SSH 主机、数据库数据源、文件移动、Todo 详情未逐个实测,走同样两条路径之一。overlay 里仍没有主窗口那种带下划线的组字预览,未做]** |
+| 观察:审批卡"已匹配你提供的 sha256"出现两遍 | 网络来源且填了 sha256 时,`install.rs` 既推了一行"完整性 已匹配你提供的 sha256",又把同一句话推进黄色的 `warnings`,同一句出现两次,而且"匹配"是好消息却用了警告样式。**[2026-10-18 记录,不修]** |
+| 观察:网络来源的"只允许静态应用"要下载完才判定 | 5.5 里 `node.zip` 被完整下载并读到 manifest 之后才拒绝;大包会白下载一次(上限 200 MiB)。要提前拒绝得在下载前就知道应用类型,拿不到,所以是固有行为。 |
+| 观察:本机 https 验证方法 | 安装器下载走 `/usr/bin/curl`,且接受回环/内网地址;因此可以用本机 TLS 服务器 + 临时 CA + 仅给隔离 dozerd 设 `CURL_CA_BUNDLE` 做 5.3–5.5,不碰系统钥匙串也不对公网暴露。 |

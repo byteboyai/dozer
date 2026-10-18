@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytegit::{CommitId, LogOptions};
 
-use crate::extensions::diff_content::{DiffBlobContent, open_exact_repo, workdir_content};
+use crate::extensions::diff_content::{DiffBlobContent, open_project_repo, workdir_content};
 use byteui::interaction::icons;
 use iced_widget::core::{Element, Length};
 use iced_widget::{button, column, container, row, scrollable, text};
@@ -392,8 +392,8 @@ fn spawn_diff_content<E>(
         let repo_path2 = repo_path.clone();
         let file_path2 = file_path.clone();
         let result = tokio::task::spawn_blocking(move || {
-            let repo = open_exact_repo(&repo_path2)?;
-            workdir_content(&repo, oid, &file_path2)
+            let project = open_project_repo(&repo_path2)?;
+            workdir_content(&project.repo, oid, &project.in_repo(&file_path2))
         })
         .await
         .unwrap_or_else(|e| {
@@ -422,9 +422,10 @@ pub fn build(
     file_path: &Path,
     max_count: usize,
 ) -> Result<FileHistorySnapshot, String> {
-    let repo = open_exact_repo(repo_path)?;
-    let log = repo
-        .log(LogOptions::new(max_count).path(file_path))
+    let project = open_project_repo(repo_path)?;
+    let log = project
+        .repo
+        .log(LogOptions::new(max_count).path(project.in_repo(file_path)))
         .map_err(|e| e.message().to_string())?;
     let entries = log
         .into_iter()
@@ -458,9 +459,10 @@ pub fn diff_against_current(
     file_path: &Path,
     id: CommitId,
 ) -> Result<String, String> {
-    let repo = open_exact_repo(repo_path)?;
-    let patch = repo
-        .workdir_patch(id, file_path, MAX_PATCH_CHARS)
+    let project = open_project_repo(repo_path)?;
+    let patch = project
+        .repo
+        .workdir_patch(id, &project.in_repo(file_path), MAX_PATCH_CHARS)
         .map_err(|e| e.message().to_string())?;
     let mut text = patch.text;
     if patch.truncated {
@@ -478,9 +480,10 @@ pub fn rollback_to(
     id: CommitId,
     locale: &str,
 ) -> Result<(), String> {
-    let repo = open_exact_repo(repo_path)?;
-    let bytes = repo
-        .file_bytes_at(id, file_path)
+    let project = open_project_repo(repo_path)?;
+    let bytes = project
+        .repo
+        .file_bytes_at(id, &project.in_repo(file_path))
         .map_err(|e| e.message().to_string())?
         .ok_or_else(|| {
             crate::i18n::host_text_args(
@@ -506,8 +509,10 @@ pub fn rollback_to(
 /// (没有更早的版本),回落到那唯一一次提交(等价于把工作区还原到最近一次提交、丢弃
 /// 未提交改动);文件不在 git 跟踪内(历史为空)则返回 `None`。
 pub fn previous_commit(repo_path: &Path, file_path: &Path) -> Result<Option<CommitId>, String> {
-    let repo = open_exact_repo(repo_path)?;
-    repo.previous_version(file_path)
+    let project = open_project_repo(repo_path)?;
+    project
+        .repo
+        .previous_version(&project.in_repo(file_path))
         .map_err(|e| e.message().to_string())
 }
 
@@ -1082,13 +1087,68 @@ mod tests {
         assert_eq!(summaries("a[1].txt"), vec!["literal bracket"]);
     }
 
+    /// D14:项目目录在仓库子目录时向上查找仓库,`file_path` 仍是**相对项目根**的:
+    /// 仓库根有 `a.txt`、`sub/` 里有 `s.txt`,项目 = `sub/` 时 `s.txt` 查到 `sub/s.txt` 的提交,
+    /// `a.txt` 查的是不存在的 `sub/a.txt`(空历史),而不是仓库根的 `a.txt`(那会是悄悄的错误历史)。
     #[test]
-    fn build_in_a_repo_subdirectory_is_an_error_not_a_wrong_history() {
-        // 迁移前用 `Repository::open`(只认仓库根):项目目录在仓库子目录时直接报错,
-        // 而不是在"相对仓库根"的 pathspec 下悄悄给出错误的历史。
+    fn history_in_a_repo_subdirectory_resolves_paths_relative_to_the_project() {
         let (_d, repo) = mkrepo();
-        std::fs::create_dir(repo.join("sub")).unwrap();
-        assert!(build(&repo.join("sub"), Path::new("a.txt"), 10).is_err());
+        commit_bytes(&repo, "sub/s.txt", b"s1\n", "add s");
+        commit_bytes(&repo, "sub/s.txt", b"s2\n", "change s");
+        let project = repo.join("sub");
+
+        let s = build(&project, Path::new("s.txt"), 10).unwrap();
+        let summaries: Vec<_> = s.entries.iter().map(|e| e.summary.as_str()).collect();
+        assert_eq!(summaries, vec!["change s", "add s"]);
+        assert_eq!(s.file_path, Path::new("s.txt"), "面板看到的仍是项目内路径");
+
+        let root_file = build(&project, Path::new("a.txt"), 10).unwrap();
+        assert!(
+            root_file.entries.is_empty(),
+            "项目内没有 a.txt,不能借到仓库根的 a.txt 的历史"
+        );
+    }
+
+    #[test]
+    fn diff_rollback_and_previous_commit_in_a_repo_subdirectory_use_project_relative_paths() {
+        let (_d, repo) = mkrepo();
+        commit_bytes(&repo, "sub/s.txt", b"s1\n", "add s");
+        commit_bytes(&repo, "sub/s.txt", b"s2\n", "change s");
+        let project = repo.join("sub");
+        let snapshot = build(&project, Path::new("s.txt"), 10).unwrap();
+        let first = snapshot.entries[1].oid;
+
+        let patch = diff_against_current(&project, Path::new("s.txt"), first).unwrap();
+        assert!(patch.contains("-s1") && patch.contains("+s2"), "{patch}");
+
+        let prev = previous_commit(&project, Path::new("s.txt")).unwrap();
+        assert_eq!(prev, Some(first));
+
+        rollback_to(&project, Path::new("s.txt"), first, "zh-CN").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(project.join("s.txt")).unwrap(),
+            "s1\n"
+        );
+        assert!(
+            !repo.join("s.txt").exists(),
+            "回滚写的是项目内路径,不能写到仓库根"
+        );
+    }
+
+    #[test]
+    fn workdir_content_in_a_repo_subdirectory_reads_the_project_file() {
+        let (_d, repo) = mkrepo();
+        commit_bytes(&repo, "sub/s.txt", b"s1\n", "add s");
+        commit_bytes(&repo, "sub/s.txt", b"s2\n", "change s");
+        let project = repo.join("sub");
+        let first = build(&project, Path::new("s.txt"), 10).unwrap().entries[1].oid;
+        let opened = open_project_repo(&project).unwrap();
+        let content =
+            workdir_content(&opened.repo, first, &opened.in_repo(Path::new("s.txt"))).unwrap();
+        let DiffBlobContent::Text { old_text, new_text } = content else {
+            panic!("应为可渲染文本");
+        };
+        assert_eq!((old_text.as_str(), new_text.as_str()), ("s1\n", "s2\n"));
     }
 
     #[test]

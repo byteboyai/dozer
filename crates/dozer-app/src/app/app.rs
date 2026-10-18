@@ -533,6 +533,13 @@ pub(crate) fn focus_project_tab(
     true
 }
 
+/// 一个项目页签都没有、且当前不在首页时,该进首页:没有项目就不该停在"未打开任何项目"的占位文字上,
+/// 首页(最近项目、打开/创建项目入口)才是此时有用的落地页。已经在首页则不重复进入——
+/// `top_bar_home` 会重置首页状态并再拉一次最近项目。
+pub(crate) fn should_enter_home(project_order: &[i64], page: AppPage) -> bool {
+    project_order.is_empty() && page != AppPage::Home
+}
+
 /// 关掉某个页签后,焦点该落到谁身上:原位置的右邻优先,没有右邻取左邻,
 /// 一个都不剩则 `None`(退回"未打开任何项目"的空外壳)。
 ///
@@ -777,6 +784,7 @@ impl App {
         if pruned {
             app.persist_open_projects();
         }
+        app.enter_home_if_no_projects();
         app
     }
 
@@ -812,6 +820,8 @@ impl App {
             app.locale
                 .adopt_initial(temp, SnapshotSource::SystemTemporary);
         }
+        // daemon 连不上时同样没有任何项目:落到首页(daemon 状态由顶栏徽标展示)。
+        app.enter_home_if_no_projects();
         app
     }
     /// 两个构造函数共用的"只有外壳、一个项目都没打开"的起点。
@@ -1591,6 +1601,14 @@ impl App {
     /// 读回来的一侧目前只有 `App::bootstrap` 用了 `active_project_id`(启动
     /// 恢复上次聚焦的那个项目);把 `project_ids` 整份恢复成多页签是 Task 7
     /// 的活儿,那时这里已经有正确的数据可读。
+    /// 没有任何项目页签时进首页(判据见 [`should_enter_home`])。启动恢复完、daemon 连不上、
+    /// 关掉/删掉最后一个项目之后各调一次。
+    pub(crate) fn enter_home_if_no_projects(&mut self) {
+        if should_enter_home(&self.project_order, self.current_page) {
+            self.top_bar_home();
+        }
+    }
+
     pub(crate) fn persist_open_projects(&self) {
         let state = open_projects::OpenProjectsState {
             project_ids: self.project_order.clone(),
@@ -5052,6 +5070,20 @@ mod tests {
         assert_eq!(active, None);
         assert!(order.is_empty());
         assert!(projects.is_empty());
+    }
+
+    /// 一个项目页签都没有时落地页是首页(而不是"未打开任何项目"的占位文字):
+    /// 启动没恢复出项目、关掉/删掉最后一个项目都走这条判断。
+    #[test]
+    fn no_open_project_means_the_home_page() {
+        use crate::app::state::AppPage;
+        assert!(should_enter_home(&[], AppPage::Workspace));
+        assert!(
+            !should_enter_home(&[], AppPage::Home),
+            "已经在首页,不要重复进入(会重置首页状态并再拉一次最近项目)"
+        );
+        assert!(!should_enter_home(&[7], AppPage::Workspace));
+        assert!(!should_enter_home(&[7, 9], AppPage::Home));
     }
 
     /// 关一个不存在的页签是彻底的空操作(不改 active、不改顺序表)。

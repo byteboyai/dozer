@@ -11,7 +11,7 @@ use crate::chrome::tab_widget::{
     NO_TAB_W_LIMIT, PANEL_TAB_PAD_LEFT, PANEL_TAB_PAD_X, PANEL_TAB_PAD_Y, tab_container_style,
     tab_label,
 };
-use crate::extensions::diff_content::{DiffBlobContent, blob_pair_content, open_exact_repo};
+use crate::extensions::diff_content::{DiffBlobContent, blob_pair_content, open_repo};
 use crate::panel_host::PanelHost;
 use crate::theme;
 use bytegit::{BlobId, ChangeKind, CommitId, Repo, StatusOptions};
@@ -612,7 +612,7 @@ pub fn update(
             let repo_path = state.cache.as_ref().map(|c| c.repo_path().to_path_buf())?;
             handle.spawn(async move {
                 let result = match tokio::task::spawn_blocking(move || {
-                    let repo = open_exact_repo(&repo_path)?;
+                    let repo = open_repo(&repo_path)?;
                     blob_pair_content(&repo, old_blob, new_blob)
                 })
                 .await
@@ -831,7 +831,7 @@ pub(crate) fn request_project_refresh(
 /// 底层走 `bytegit::Repo::commit_files`,不再自己 `find_blob`/`diff_tree_to_tree`;
 /// 内容的文本判定与双侧读取交给 [`blob_pair_content`]。
 pub fn commit_detail(repo_path: &Path, oid: CommitId) -> Result<CommitDetail, String> {
-    let repo = open_exact_repo(repo_path)?;
+    let repo = open_repo(repo_path)?;
     let files = repo
         .commit_files(oid)
         .map_err(|e| e.message().to_string())?
@@ -2178,13 +2178,17 @@ mod tests {
         assert!(matches!(content, DiffBlobContent::NotRenderable { .. }));
     }
 
-    /// 迁移前 `commit_detail` 用 `Repository::open`(只认仓库根):项目目录在仓库子目录时报错。
+    /// D14:项目目录在仓库子目录时,提交列表与提交详情都向上查找整个仓库(路径本来就是相对仓库根的)。
     #[test]
-    fn commit_detail_in_a_repo_subdirectory_is_an_error() {
+    fn log_and_commit_detail_in_a_repo_subdirectory_look_upward() {
         let (_dir, repo) = mkrepo_with_one_commit();
-        let snapshot = build(&repo, DEFAULT_MAX_COMMITS).unwrap();
-        std::fs::create_dir(repo.join("sub")).unwrap();
-        assert!(commit_detail(&repo.join("sub"), snapshot.rows[0].oid).is_err());
+        let sub = repo.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let snapshot =
+            build(&sub, DEFAULT_MAX_COMMITS).expect("子目录里也应能画出整个仓库的提交图");
+        assert!(!snapshot.rows.is_empty());
+        let detail = commit_detail(&sub, snapshot.rows[0].oid).unwrap();
+        assert!(detail.files.iter().any(|f| f.path == "a.txt"));
     }
 
     #[test]

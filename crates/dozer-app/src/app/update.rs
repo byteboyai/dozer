@@ -4402,6 +4402,8 @@ impl App {
         }
         self.sync_terminal_grid(); // 清放大态后重算网格,理由同 `ProjectTabSwitch`
         self.persist_open_projects();
+        // 关掉(或删掉)的是最后一个项目:落到首页而不是"未打开任何项目"的占位。
+        self.enter_home_if_no_projects();
     }
 
     /// 把一个项目从所有"最近项目"镜像列表里剪掉(`App::recent_projects`

@@ -7,9 +7,9 @@ edition.workspace = true
 dozer-core = { path = "../dozer-core" }
 dozer-services = { path = "../dozer-services" }
 # 应用宿主的线上类型(默认 feature,只有 serde)
-bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.7" }
+bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.10" }
 # 与传输无关的应用宿主客户端 trait / 失败类型 / 事件类型
-bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.7" }
+bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.10" }
 anyhow.workspace = true
 tokio.workspace = true
 base64.workspace = true
