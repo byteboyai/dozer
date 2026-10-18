@@ -29,7 +29,6 @@ mod runtime;
 mod secrets;
 #[cfg(test)]
 mod service_fakes;
-mod tabular;
 mod term;
 mod theme;
 mod transcript;

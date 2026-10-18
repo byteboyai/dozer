@@ -258,10 +258,6 @@ pub enum Message {
     TermTabOverflowToggle,
     /// 终端 tab 栏溢出下拉：点击外部区域关闭。
     TermTabOverflowDismiss,
-    /// 文件预览 tab 栏溢出下拉开关,语义同 `TermTabOverflowToggle`。
-    PreviewTabOverflowToggle,
-    /// 文件预览 tab 栏溢出下拉:点击外部关闭。
-    PreviewTabOverflowDismiss,
     /// 终端左键按下：在视口格 `(col, row)` 起新选区（`right` = 按点在
     /// 格子右半）。
     TermSelStart {
@@ -280,167 +276,6 @@ pub enum Message {
     /// ⌘V 粘贴剪贴板文本：按会话的 bracketed paste 模式决定是否包裹
     /// `ESC[200~`/`ESC[201~` 后写入 daemon。
     TermPaste(terminal::TermTarget, String),
-    /// 预览:打开本地文件为新 tab(路径已由入口侧确认存在,来自项目树点击/
-    /// 会话恢复;预览面板本身已不再有"打开文件…"按钮或地址栏)。
-    PreviewOpenPath(PathBuf),
-    /// Files 面板原生编辑器异步读盘+构造结果回灌。`ProjectId` 按打开时所属
-    /// 空白页信息卡后台扫描结果:由 `apply_pending_blank_info`
-    /// (`platform/window_events.rs`)在 `PreviewPane` 空白 tab 激活且
-    /// `blank_info` 为空时,通过 `tokio::task::spawn_blocking` 跑
-    /// `extensions::project::compute_blank_info` 后回灌。`project_id` 路由
-    /// 到正确的 workspace(用户中途切项目则 `info.path != ws.project.path`,
-    /// handler 直接丢弃,见 `Message::PreviewBlankInfoLoaded` handler)。
-    PreviewBlankInfoLoaded(
-        crate::app::layout::ProjectId,
-        PanelKind,
-        crate::preview::BlankPaneInfo,
-    ),
-    /// 窗口化大文件 ⌘F:打开整文件流式搜索条,锁定 `usize`(`PreviewTab.id`),
-    /// 由 host `find_request` 经 `open_large_file_search` 直接打开。
-    PreviewLargeFileSearchClose(PanelKind),
-    /// 查询框回车/点搜索:`String` 是本次提交的 query。
-    PreviewLargeFileSearchSubmit(PanelKind, usize, String),
-    /// 异步结果回灌(T9):`u64` 为发起查询时的 generation,过期结果被丢弃。
-    PreviewLargeFileSearchResults(
-        crate::app::layout::ProjectId,
-        PanelKind,
-        usize,
-        u64,
-        Result<crate::preview::SearchOutcome, String>,
-    ),
-    /// 搜索进度回灌(T9,已限频):`u64` 是 generation,后两个是已扫描/总字节。
-    PreviewLargeFileSearchProgress(
-        crate::app::layout::ProjectId,
-        PanelKind,
-        usize,
-        u64,
-        u64,
-        u64,
-    ),
-    /// 上一条/下一条命中(`bool` = 是否前进)。
-    PreviewLargeFileSearchGo(PanelKind, bool),
-    /// 预览:用系统默认应用打开某个文件 tab(失败时的外部打开 fallback)。
-    /// 路径取自当前 tab 并再次校验存在,不隐式执行文件本身。
-    PreviewOpenExternal(PanelKind, usize),
-    /// 预览 fallback 页(T1):重试加载某个 Failed 的文件 tab。
-    PreviewRetry(PanelKind, usize),
-    /// 预览 fallback 页(T1):以纯文本只读方式尝试打开某个文件 tab。
-    PreviewPlainTextOpen(PanelKind, usize),
-    /// 预览冲突(T10):「保留我的修改」——清冲突态,继续以 editor buffer 为准。
-    PreviewConflictKeep(PanelKind, usize),
-    /// 预览冲突(T10):「重载磁盘(丢弃我的修改)」——第一次点击进入二次确认,
-    /// 再点一次才真正丢弃。
-    PreviewConflictReload(PanelKind, usize),
-    /// 预览:CSV/TSV 的「网格 / 原文」切换(切原文时 feature 下走 CodeMirror)。
-    PreviewTabularTextModeToggle(PanelKind, usize),
-    /// 预览:严格 `.json` 的「树 / 文本」视图切换(tab 最右侧按钮;切文本走
-    /// CodeMirror,切树走 vanilla-jsoneditor)。
-    PreviewJsonModeToggle(PanelKind, usize),
-    /// 预览:切换 tab(vec 位置).
-    PreviewSelectTab(usize),
-    /// 预览:关闭 tab(vec 位置).
-    PreviewCloseTab(usize),
-    /// 预览:点 tab 上的预览/代码切换按钮(只对 `wry_toggle_eligible` 的文件
-    /// 画)——`usize` 是 vec 位置,交给 `Workspace::preview_pane_toggle_render_mode`
-    /// 落盘 + 切渲染路径。Files 预览面板。
-    PreviewToggleRenderMode(usize),
-    /// 原生预览就地可写后的 ⌘S:把 `kind` 指向面板(`Files`/`Project`)当前激活
-    /// 原生 tab 的改动保存到磁盘(仅脏的原生 tab 动作;见
-    /// `Workspace::preview_pane_save_active`)。携带 `PanelKind`(可由 main.rs
-    /// `FocusIntent::Preview` 直接转发,不必频繁 preview↔panel 双枚举映射)。
-    PreviewSaveActive(PanelKind),
-    /// 原生预览 tab 就地敲 Tab(裸 Tab、非 ⌘/⌃/⌥ 组合):iced 官方
-    /// `text_editor` 默认 Binding 对 Tab 完全不产生动作,必须在这里作为一条
-    /// 编辑动作手工插 `\t`(走 `CodeView::perform` 的原生 Content 光标,选区
-    /// 替换/撤销都能对)。`kind` 指向当前真正聚焦的原生编辑器所在面板,同
-    /// `PreviewSaveActive` 一跳区分、不做 preview↔panel 双枚举映射。构造/调用
-    /// 处是 main.rs 原生预览闸门;先拦下,没命中的键才放行给 iced。
-    PreviewTabInsertTab(PanelKind),
-    /// 原生预览撤销(⌘Z,非 shift):把 `kind` 面板当前激活原生 tab 的 buffer
-    /// 回退到上一条编辑命令前状态(见 `Workspace::preview_pane_undo_active` /
-    /// `CodeView::undo`)。官方 `text_editor` 没有任何 undo/redo API,历史是
-    /// 应用层按编辑命令粒度记的整文本快照栈(code_editor 模块"已知取舍"),因
-    /// 此撤销序列不是逐键、光标只近似还原。`kind` 语义同 `PreviewSaveActive`。
-    PreviewUndoActive(PanelKind),
-    /// 原生预览重做(⌘⇧Z):重放被 `PreviewUndoActive` 撤掉的最后一条编辑,
-    /// 语义同 `CodeView::redo`。`kind` 语义同 `PreviewSaveActive`。
-    PreviewRedoActive(PanelKind),
-    /// 原生预览打开 File-Find(⌘F)。`kind` 指向 `Files` 或 `Project` 面板——
-    /// File-Find 对两个面板的原生编辑 tab 语义相同(见
-    /// `Workspace::preview_find_open`,⌘F 已开时是重聚焦的 no-op)。跟
-    /// `PreviewSaveActive` 一样用 `PanelKind` 一跳区分面板,不强做 preview↔panel
-    /// 双枚举映射。
-    PreviewFindOpen(PanelKind),
-    /// 同 `PreviewFindOpen`(⌘R),但替换行默认展开——查询框前的圆盘箭头也
-    /// 展示这个展开态,`HoverId::named(PanelKind::Files, "find_replace_toggle")` 对应的按钮再手动翻转。
-    PreviewFindOpenWithReplace(PanelKind),
-    /// 查询框前的圆盘箭头点击:手动翻转替换行展开/收起,不受 ⌘F/⌘R 影响。
-    PreviewFindReplaceToggle(PanelKind),
-    /// File-Find 关闭(输入框 × / Esc / 切走文件)。`kind` 语义同
-    /// `PreviewFindOpen`。
-    PreviewFindClose(PanelKind),
-    /// File-Find 输入框每键的 query 落定:同步到面板并让面板当场重算、跳首个命中。
-    PreviewFindText(PanelKind, String),
-    /// File-Find 下一条 / 上一条。
-    PreviewFindGo(PanelKind, bool),
-    /// File-Find 大小写敏感开关(`true`=逐字严格、`false`=ASCII 大小写折叠)——
-    /// 点条上「Aa」切换钮落定的方向。只翻当轮会话的语义,不改全局默认。
-    PreviewFindCase(PanelKind, bool),
-    /// File-Find 条的「替换为」输入框每键落定(只写 `FindState::replacement`
-    /// 草稿,不触发任何替换;真正动作在点「替…」按钮时发生)。
-    PreviewFindReplacement(PanelKind, String),
-    /// File-Find 条「替换当前」:把本轮 `current` 指着的那一处清掉换成替换框
-    /// 文本。照 Enter/⌘S 外的普通打字语义,只改**原生 buffer 并标脏**等待用户
-    /// ⌘S 落盘——替换不隐式写盘([CLAUDE.md 裁决]预览优先渲染/不可逆动作留给
-    /// 显式保存)。
-    PreviewFindReplaceCurrent(PanelKind),
-    /// File-Find 条「替换全部」:与 `PreviewFindReplaceCurrent` 同一 buffer-only
-    /// 语义,只是把这轮每一处命中一次性全改、同样标脏等 ⌘S。
-    PreviewFindReplaceAll(PanelKind),
-    /// webview(flyfish)档 Find 的命中计数 / 当前序号回写:flyfish
-    /// `getSearchState()` 异步算完(`apply_pending_preview_find` 注入
-    /// `searchDocument`/`next`/`prev` 后用 `evaluate_script_with_callback`
-    /// 取回)经 `EventLoopProxy` 送回主线程,落进 `kind` 面板当前 webview Find
-    /// 会话的 `count`/`current`。`current` 是 0-based 序号(idx),`total` 是命中
-    /// 总数(0 表示无命中)。原生 editor 档不走这条(计数是本地现算的)。
-    PreviewFindWebviewState(PanelKind, usize, usize),
-    /// 表格 tab 首次打开的后台加载完成(见 `crate::tabular` 模块文档"够数
-    /// 即停"的性能策略——大文件解析不能卡 UI 线程)。`ProjectId` 按项目路由
-    /// (异步结果可能晚于用户切走项目才回来,不能假设"当前聚焦的就是它",
-    /// 同 `database::Message` 的既有做法);`PanelKind`+`usize`(`PreviewTab.id`)
-    /// 定位具体哪个面板的哪个 tab。
-    /// `u64` 是启动后台解析时的 `PreviewLoadState.generation`;回灌时经
-    /// `accepts` 校验,tab 关闭/重开/重试后到达的旧结果被丢弃(T7 取消不回填)。
-    TabularLoaded(
-        ProjectId,
-        PanelKind,
-        usize,
-        u64,
-        Result<crate::tabular::TabularView, String>,
-    ),
-    /// 表格 tab 懒加载某个 sheet 完成(用户切到一个还没加载过的 sheet 触发,
-    /// 见 `crate::tabular::SheetLoadRequest`),回填进已存在的 `TabularView`。
-    /// 路由字段含义同 `TabularLoaded`,多一个 `usize` 是 sheet 下标。
-    TabularSheetLoaded(
-        ProjectId,
-        PanelKind,
-        usize,
-        usize,
-        Result<crate::tabular::Sheet, String>,
-    ),
-    /// Project 面板右配对预览:打开本地文件为新 tab,语义同 `PreviewOpenPath`。
-    ProjectPreviewOpenPath(PathBuf),
-    /// Project 面板右配对预览:切换 tab(vec 位置)。
-    ProjectPreviewSelectTab(usize),
-    /// Project 面板右配对预览:关闭 tab(vec 位置)。
-    ProjectPreviewCloseTab(usize),
-    /// Project 面板右配对预览:预览/代码切换按钮,语义同 `PreviewToggleRenderMode`。
-    ProjectPreviewToggleRenderMode(usize),
-    /// Project 面板右配对预览 tab 栏溢出下拉开关,语义同上
-    /// (`PreviewTabOverflowToggle`)。
-    ProjectPreviewTabOverflowToggle,
-    /// Project 面板右配对预览 tab 栏溢出下拉:点击外部关闭。
-    ProjectPreviewTabOverflowDismiss,
     /// 浏览器面板的全部消息,内核只转发不解读——见
     /// `extensions::browser::Message`。
     Browser(browser::Message),
@@ -681,17 +516,6 @@ pub enum Message {
         crate::preview::HostBinding,
         crate::preview::WebviewEnvelope<crate::preview::PlantUmlEvent>,
     ),
-    /// Task 6:后台 `plantuml::load_document`(读取根文件 + 授权 include)完成
-    /// 回灌(后台线程 → UI 线程)。`project_id` 按项目路由;`generation` 用于
-    /// 丢弃过期结果(用户在加载期间关闭/重开/reload)。`result` 是待推给 host
-    /// 的文档,或带安全相对链的加载错误。
-    PlantUmlLoaded(
-        ProjectId,
-        PanelKind,
-        usize,
-        u64,
-        Result<crate::preview::PlantUmlDocument, crate::preview::PlantUmlLoadError>,
-    ),
     /// Tabular(ag-grid)预览 host 发回的已校验事件(ready/sheet_selected/
     /// window_request/window_applied/failed)。binding 由 Rust 从 webview URL
     /// 解析,不采信 JS 自报归属。
@@ -699,47 +523,15 @@ pub enum Message {
         crate::preview::EditorHostBinding,
         crate::preview::WebviewEnvelope<crate::preview::TabularEvent>,
     ),
+    /// 预览面板的 UI 消息(Files / Project 两个面板共用,`PanelKind` 区分),作用于当前聚焦项目。
+    /// 语义与全部处理器在 `dozer-panel-preview::update`。
+    Preview(PanelKind, dozer_panel_preview::Message),
+    /// 预览面板的后台任务结果(画像 / 加载超时 / 行索引 / recovery / 表格 / PlantUML / 大文件搜索 /
+    /// 空白信息卡):按 `project_id` 路由到发起它的项目,即使用户已切到别的项目。
+    PreviewResult(ProjectId, PanelKind, dozer_panel_preview::Message),
     /// T13:后台轮询取回的待处理预览命令(project_id, 命令列表)。处理后逐条
     /// 回报终态给 dozerd。
     PreviewCommandsFetched(i64, Vec<dozer_core::protocol::PreviewCommand>),
-    /// T3:文件 tab 的后台画像(`spawn_blocking(profile_file)`)完成回灌
-    /// (后台线程 → UI 线程)。`project_id` 按项目路由(异步结果可能晚于用户
-    /// 切走项目才回来,同 `TabularLoaded`);`PanelKind`+`tab_id` 定位面板/tab;
-    /// `generation` 是建壳时记下的 load generation,用于丢弃过期结果(用户在
-    /// 画像期间关闭/重开/tab 已被替换)。
-    PreviewProfiled(
-        ProjectId,
-        PanelKind,
-        usize,
-        u64,
-        Result<crate::preview::FileProfile, String>,
-    ),
-    /// T8/T11:某个加载阶段的看门狗超时。携带 arm 时的 `stage`;处理时只有 tab
-    /// 仍停在同 `generation` **且同 stage**(说明既没重开也没推进到下一阶段)
-    /// 才判失败,避免迟到的旧超时误杀已推进的加载。时长见
-    /// `preview::loading::stage_timeout`。
-    PreviewLoadTimeout(
-        ProjectId,
-        PanelKind,
-        usize,
-        u64,
-        crate::preview::PreviewLoadStage,
-    ),
-    /// 窗口化 viewer 的稀疏行索引建立完成(后台线程 → UI 线程)。成功后由
-    /// App 推送初始窗口(必要时先 reveal 到目标行)。
-    PreviewWindowIndex(
-        i64,
-        PanelKind,
-        usize,
-        Result<std::sync::Arc<crate::preview::LineIndex>, String>,
-    ),
-    /// 脏 tab 的 recovery snapshot 已成功落盘 → 标记 `recovery_written`(脏 tab
-    /// 允许休眠的前提)。
-    PreviewRecoveryWritten(i64, PanelKind, usize),
-    /// T10 bullet 3:recovery 快照读取 + 磁盘冲突分类在 `spawn_blocking` 完成后
-    /// 回灌(后台线程 → UI 线程)。`generation` 为物化时的 load 世代,过期丢弃;
-    /// `Some(text)` 表示可恢复(磁盘未变、快照存在),`None` 表示无需恢复。
-    PreviewRecoveryRead(ProjectId, PanelKind, usize, u64, Option<String>),
     /// 顶栏设置齿轮:打开设置弹窗(独立原生窗口,主题 + Git 账户)。
     SettingsOpen,
     /// 设置弹窗内部消息,转发给 `extensions::settings::update`。

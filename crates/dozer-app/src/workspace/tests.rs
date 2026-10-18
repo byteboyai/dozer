@@ -1307,16 +1307,6 @@ fn preview_pane_redo_active_reapplies_undone_edit_and_marks_dirty() {
 }
 
 #[test]
-fn preview_pane_undo_active_noop_without_native_tab() {
-    let (_dir, path) = write_temp_file("a.png", "");
-    let mut ws = Workspace::empty_for_project_placeholder();
-    ws.preview.open_path(path);
-    // .png 走 wry(无 editor):撤销应静默 no-op,不 panic、不乱标脏。
-    ws.preview_pane_undo_active(PanelKind::Files);
-    assert!(!ws.preview.tabs()[ws.preview.active_idx()].dirty);
-}
-
-#[test]
 fn blur_preview_editors_sets_pending_unfocus_flag() {
     let mut ws = Workspace::empty_for_project_placeholder();
     assert!(!ws.take_editor_unfocus_pending());

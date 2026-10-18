@@ -1825,6 +1825,17 @@ impl PreviewPane {
     #[cfg(test)]
     pub fn mark_dirty_by_id(&mut self, _tab_id: usize) {}
     /// Find 条目当前是否显示(至少打开过一次且没被生命周期/手动关掉)。
+    /// flyfish `getSearchState()` 回写:命中总数 / 当前序号(0-based)落进当前 webview Find 会话;
+    /// 原生档的计数是本地现算的,不是 webview 会话时 no-op。
+    pub fn set_find_webview_state(&mut self, current: usize, total: usize) {
+        if let Some(f) = self.find.as_mut()
+            && f.is_webview
+        {
+            f.count = total;
+            f.current = current;
+        }
+    }
+
     pub fn find_bar_open(&self) -> bool {
         self.find.is_some()
     }

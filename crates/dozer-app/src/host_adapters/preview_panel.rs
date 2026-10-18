@@ -48,92 +48,9 @@ pub(crate) fn hover_id_of(panel: ViewerPanel, hover: PreviewHover) -> HoverId {
     }
 }
 
-/// 库消息 → 今天的顶层消息:Files → `Message::Preview*`,Project → `Message::ProjectPreview*`;
-/// 没有 Project 专属变体的,走原有的带 `PanelKind` 的变体。库里只描述「对这个面板做什么」的 UI
-/// 消息有映射;后台任务结果(`Profiled` 等)由产品带路由信息自行构造,返回 `None`。
-pub(crate) fn legacy_message(panel: ViewerPanel, message: LibMessage) -> Option<Message> {
-    let project = panel == ViewerPanel::Project;
-    let kind = kind_of(panel);
-    Some(match message {
-        LibMessage::OpenPath { path, .. } => {
-            if project {
-                Message::ProjectPreviewOpenPath(path)
-            } else {
-                Message::PreviewOpenPath(path)
-            }
-        }
-        LibMessage::SelectTab(i) => {
-            if project {
-                Message::ProjectPreviewSelectTab(i)
-            } else {
-                Message::PreviewSelectTab(i)
-            }
-        }
-        LibMessage::CloseTab(i) => {
-            if project {
-                Message::ProjectPreviewCloseTab(i)
-            } else {
-                Message::PreviewCloseTab(i)
-            }
-        }
-        LibMessage::ToggleRenderMode(i) => {
-            if project {
-                Message::ProjectPreviewToggleRenderMode(i)
-            } else {
-                Message::PreviewToggleRenderMode(i)
-            }
-        }
-        LibMessage::TabOverflowToggle { .. } => {
-            if project {
-                Message::ProjectPreviewTabOverflowToggle
-            } else {
-                Message::PreviewTabOverflowToggle
-            }
-        }
-        LibMessage::TabOverflowDismiss => {
-            if project {
-                Message::ProjectPreviewTabOverflowDismiss
-            } else {
-                Message::PreviewTabOverflowDismiss
-            }
-        }
-        LibMessage::OpenExternal(t) => Message::PreviewOpenExternal(kind, t),
-        LibMessage::Retry(t) => Message::PreviewRetry(kind, t),
-        LibMessage::PlainTextOpen(t) => Message::PreviewPlainTextOpen(kind, t),
-        LibMessage::ConflictKeep(t) => Message::PreviewConflictKeep(kind, t),
-        LibMessage::ConflictReload(t) => Message::PreviewConflictReload(kind, t),
-        LibMessage::TabularTextModeToggle(t) => Message::PreviewTabularTextModeToggle(kind, t),
-        LibMessage::JsonModeToggle(t) => Message::PreviewJsonModeToggle(kind, t),
-        LibMessage::SaveActive => Message::PreviewSaveActive(kind),
-        LibMessage::InsertTab => Message::PreviewTabInsertTab(kind),
-        LibMessage::UndoActive => Message::PreviewUndoActive(kind),
-        LibMessage::RedoActive => Message::PreviewRedoActive(kind),
-        LibMessage::FindOpen => Message::PreviewFindOpen(kind),
-        LibMessage::FindOpenWithReplace => Message::PreviewFindOpenWithReplace(kind),
-        LibMessage::FindReplaceToggle => Message::PreviewFindReplaceToggle(kind),
-        LibMessage::FindClose => Message::PreviewFindClose(kind),
-        LibMessage::FindText(q) => Message::PreviewFindText(kind, q),
-        LibMessage::FindGo(next) => Message::PreviewFindGo(kind, next),
-        LibMessage::FindCase(c) => Message::PreviewFindCase(kind, c),
-        LibMessage::FindReplacement(r) => Message::PreviewFindReplacement(kind, r),
-        LibMessage::FindReplaceCurrent => Message::PreviewFindReplaceCurrent(kind),
-        LibMessage::FindReplaceAll => Message::PreviewFindReplaceAll(kind),
-        LibMessage::FindWebviewState { current, total } => {
-            Message::PreviewFindWebviewState(kind, current, total)
-        }
-        LibMessage::LargeFileSearchClose => Message::PreviewLargeFileSearchClose(kind),
-        LibMessage::LargeFileSearchSubmit { tab_id, query } => {
-            Message::PreviewLargeFileSearchSubmit(kind, tab_id, query)
-        }
-        LibMessage::LargeFileSearchGo(forward) => Message::PreviewLargeFileSearchGo(kind, forward),
-        _ => return None,
-    })
-}
-
 impl PanelDisplay<Message> for App {
     fn wrap(&self, panel: ViewerPanel, message: LibMessage) -> Message {
-        legacy_message(panel, message)
-            .expect("视图只发 UI 类消息;后台任务结果由产品带路由信息自行构造")
+        Message::Preview(kind_of(panel), message)
     }
 
     fn locale(&self) -> &str {
@@ -350,5 +267,113 @@ impl PanelDisplay<Message> for App {
 
     fn line_height_factor(&self) -> f32 {
         crate::theme::terminal_font::line_height_factor()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    const ALL_HOVERS: [PreviewHover; 12] = [
+        PreviewHover::TabItem(3),
+        PreviewHover::TabClose(3),
+        PreviewHover::TabOverflow,
+        PreviewHover::TabOverflowRow(3),
+        PreviewHover::RenderMode,
+        PreviewHover::TabularMode,
+        PreviewHover::JsonMode,
+        PreviewHover::FindNext,
+        PreviewHover::FindPrev,
+        PreviewHover::FindReplaceToggle,
+        PreviewHover::FindReplaceCurrent,
+        PreviewHover::FindReplaceAll,
+    ];
+
+    /// 穷举:`PreviewHover` 新增变体时这里编译即报错,提醒补 `hover_id_of`。
+    fn assert_exhaustive(h: PreviewHover) {
+        match h {
+            PreviewHover::TabItem(_)
+            | PreviewHover::TabClose(_)
+            | PreviewHover::TabOverflow
+            | PreviewHover::TabOverflowRow(_)
+            | PreviewHover::RenderMode
+            | PreviewHover::TabularMode
+            | PreviewHover::JsonMode
+            | PreviewHover::FindNext
+            | PreviewHover::FindPrev
+            | PreviewHover::FindReplaceToggle
+            | PreviewHover::FindReplaceCurrent
+            | PreviewHover::FindReplaceAll => {}
+        }
+    }
+
+    #[test]
+    fn hover_slots_map_one_to_one_to_the_legacy_hover_ids() {
+        for h in ALL_HOVERS {
+            assert_exhaustive(h);
+        }
+        // 与迁移前 `workspace/view.rs` 里逐个构造的 `HoverId` 一致。
+        for (panel, kind) in [
+            (ViewerPanel::Files, PanelKind::Files),
+            (ViewerPanel::Project, PanelKind::Project),
+        ] {
+            assert_eq!(
+                hover_id_of(panel, PreviewHover::TabItem(3)),
+                HoverId::tab_item(kind, 3)
+            );
+            assert_eq!(
+                hover_id_of(panel, PreviewHover::TabClose(3)),
+                HoverId::tab_close(kind, 3)
+            );
+            assert_eq!(
+                hover_id_of(panel, PreviewHover::TabOverflow),
+                HoverId::tab_overflow(kind)
+            );
+            for (h, name) in [
+                (PreviewHover::RenderMode, "render_mode"),
+                (PreviewHover::TabularMode, "tabular_mode"),
+                (PreviewHover::JsonMode, "json_mode"),
+                (PreviewHover::FindNext, "find_next"),
+                (PreviewHover::FindPrev, "find_prev"),
+                (PreviewHover::FindReplaceToggle, "find_replace_toggle"),
+                (PreviewHover::FindReplaceCurrent, "find_replace_current"),
+                (PreviewHover::FindReplaceAll, "find_replace_all"),
+            ] {
+                assert_eq!(hover_id_of(panel, h), HoverId::named(kind, name), "{h:?}");
+            }
+            // 溢出下拉的行悬停是全局键(下拉同一时刻只属于一个面板)。
+            assert_eq!(
+                hover_id_of(panel, PreviewHover::TabOverflowRow(3)),
+                HoverId::TabOverflowRow(3)
+            );
+        }
+        // Files 与 Project 不碰撞(按面板区分的部件)。
+        let mut seen = HashSet::new();
+        for panel in [ViewerPanel::Files, ViewerPanel::Project] {
+            for h in ALL_HOVERS {
+                if matches!(h, PreviewHover::TabOverflowRow(_)) {
+                    continue;
+                }
+                assert!(seen.insert(format!("{:?}", hover_id_of(panel, h))), "{h:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn panel_kind_mapping_is_total_for_preview_panels_and_falls_back_to_files_for_others() {
+        assert_eq!(kind_of(ViewerPanel::Files), PanelKind::Files);
+        assert_eq!(kind_of(ViewerPanel::Project), PanelKind::Project);
+        assert_eq!(kind_of(ViewerPanel::GitLog), PanelKind::GitLog);
+        assert_eq!(
+            ViewerPanel::from(PanelKind::Conversations),
+            ViewerPanel::Files
+        );
+    }
+
+    #[test]
+    fn tab_groups_follow_the_panel() {
+        assert_eq!(tab_group_of(ViewerPanel::Files), TabGroup::Preview);
+        assert_eq!(tab_group_of(ViewerPanel::Project), TabGroup::ProjectPreview);
     }
 }

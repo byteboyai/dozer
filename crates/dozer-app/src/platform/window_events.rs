@@ -839,37 +839,64 @@ impl Runner {
                 // 裸 Tab(非 ⌘/⌃ 组合,Find 条关着):iced 官方 text_editor
                 // 默认 Binding 不把 Tab 落成任何动作,这里让它变成"向前聚焦
                 // 编辑器插一个制表符"的编辑动作(见 `PreviewTabInsertTab`)。
-                Some(Message::PreviewTabInsertTab(kind_root))
+                Some(Message::Preview(
+                    kind_root,
+                    dozer_panel_preview::Message::InsertTab,
+                ))
             } else if modifiers.super_key() {
                 if normal_char("s") {
-                    Some(Message::PreviewSaveActive(kind_root))
+                    Some(Message::Preview(
+                        kind_root,
+                        dozer_panel_preview::Message::SaveActive,
+                    ))
                 } else if normal_char("z") {
                     // ⌘Z 撤销 / ⌘⇧Z 重做:官方 text_editor 无 undo API,
                     // 走应用层快照栈(见 code_editor 模块"已知取舍")。
                     // shift 分支必须先判,否则 ⌘⇧Z 会被 ⌘Z 抢走。
                     if modifiers.shift_key() {
-                        Some(Message::PreviewRedoActive(kind_root))
+                        Some(Message::Preview(
+                            kind_root,
+                            dozer_panel_preview::Message::RedoActive,
+                        ))
                     } else {
-                        Some(Message::PreviewUndoActive(kind_root))
+                        Some(Message::Preview(
+                            kind_root,
+                            dozer_panel_preview::Message::UndoActive,
+                        ))
                     }
                 } else if normal_char("f") {
                     // 第二趟 ⌘F 仍是开/聚焦(消息贴合 request_find_focus)。
-                    Some(Message::PreviewFindOpen(kind_root))
+                    Some(Message::Preview(
+                        kind_root,
+                        dozer_panel_preview::Message::FindOpen,
+                    ))
                 } else if normal_char("r") {
                     // ⌘R:同 ⌘F 但替换行默认展开(用户需求:F 收起/R 展开,
                     // 查询框前圆盘箭头再手动切换)。
-                    Some(Message::PreviewFindOpenWithReplace(kind_root))
+                    Some(Message::Preview(
+                        kind_root,
+                        dozer_panel_preview::Message::FindOpenWithReplace,
+                    ))
                 } else if bar_open && normal_char("g") {
                     // 下一个命中(文件内循环)。无条时空放给 iced 无副作用。
-                    Some(Message::PreviewFindGo(kind_root, true))
+                    Some(Message::Preview(
+                        kind_root,
+                        dozer_panel_preview::Message::FindGo(true),
+                    ))
                 } else if bar_open && named(winit::keyboard::NamedKey::ArrowUp) {
-                    Some(Message::PreviewFindGo(kind_root, false))
+                    Some(Message::Preview(
+                        kind_root,
+                        dozer_panel_preview::Message::FindGo(false),
+                    ))
                 } else {
                     None
                 }
             } else if bar_open && named(winit::keyboard::NamedKey::Escape) {
                 // Esc 关条并把焦点归还编辑器(`PreviewFindClose` 内层触发)。
-                Some(Message::PreviewFindClose(kind_root))
+                Some(Message::Preview(
+                    kind_root,
+                    dozer_panel_preview::Message::FindClose,
+                ))
             } else {
                 None
             };
@@ -2267,12 +2294,20 @@ impl Runner {
         // 新建/切换/落成终端 tab 时把焦点交回窗口,确保光标落在输入框。
         if matches!(
             message,
-            Message::PreviewOpenPath(_) | Message::PreviewSelectTab(_)
+            Message::Preview(
+                PanelKind::Files,
+                dozer_panel_preview::Message::OpenPath { .. }
+                    | dozer_panel_preview::Message::SelectTab(_)
+            )
         ) {
             focus.set(FocusIntent::Preview(PanelKind::Files).target());
         } else if matches!(
             message,
-            Message::ProjectPreviewOpenPath(_) | Message::ProjectPreviewSelectTab(_)
+            Message::Preview(
+                PanelKind::Project,
+                dozer_panel_preview::Message::OpenPath { .. }
+                    | dozer_panel_preview::Message::SelectTab(_)
+            )
         ) {
             focus.set(FocusIntent::Preview(PanelKind::Project).target());
         } else if matches!(
@@ -2450,7 +2485,13 @@ impl Runner {
                     crate::extensions::search::Message::SearchClose,
                 ));
                 focus.set(FocusIntent::Preview(PanelKind::Files).target());
-                app.update(Message::PreviewOpenPath(hit.path));
+                app.update(Message::Preview(
+                    PanelKind::Files,
+                    dozer_panel_preview::Message::OpenPath {
+                        path: hit.path,
+                        target_line: None,
+                    },
+                ));
                 window.request_redraw();
             }
             // 浏览器后退/前进/刷新:webview 句柄只在 main.rs 的浏览器池里,
@@ -2691,8 +2732,10 @@ impl Runner {
                 let proxy2 = proxy.clone();
                 let _ = view.evaluate_script_with_callback(&js, move |res| {
                     if let Some((current, total)) = parse_flyfish_search_state(&res) {
-                        let _ = proxy2
-                            .send_event(Message::PreviewFindWebviewState(kind, current, total));
+                        let _ = proxy2.send_event(Message::Preview(
+                            kind,
+                            dozer_panel_preview::Message::FindWebviewState { current, total },
+                        ));
                     }
                 });
             }
@@ -2798,7 +2841,7 @@ impl Runner {
     /// 空白页信息卡后台扫描钩子:`PreviewPane::blank_info` 空、active tab 为
     /// `TabKind::Blank`、项目已加载时,起一次 `tokio::task::spawn_blocking`
     /// 跑 `compute_blank_info`,结果通过 `proxy` 回灌
-    /// `Message::PreviewBlankInfoLoaded`。每个 pane(Files/Project)各一次,
+    /// `Message::PreviewResult`(`BlankInfoLoaded`)。每个 pane(Files/Project)各一次,
     /// 但各自走自己的 `blank_info` 槽,不互踩。**先置 `blank_info_in_flight`,
     /// 再 `handle.spawn`**——同帧 `user_event` + `window_event` 各扫到一次,
     /// 若 spawn 先于置位会起两份任务。
@@ -2847,15 +2890,17 @@ impl Runner {
                 })
                 .await;
                 if let Ok(info) = result {
-                    let _ = proxy.send_event(Message::PreviewBlankInfoLoaded(
+                    let _ = proxy.send_event(Message::PreviewResult(
                         project_id,
                         panel_kind,
-                        crate::preview::BlankPaneInfo {
-                            path: info.path,
-                            size_bytes: info.size_bytes,
-                            file_count: info.file_count,
-                            created: info.created,
-                            modified: info.modified,
+                        dozer_panel_preview::Message::BlankInfoLoaded {
+                            info: crate::preview::BlankPaneInfo {
+                                path: info.path,
+                                size_bytes: info.size_bytes,
+                                file_count: info.file_count,
+                                created: info.created,
+                                modified: info.modified,
+                            },
                         },
                     ));
                 }

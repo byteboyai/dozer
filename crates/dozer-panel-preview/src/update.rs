@@ -123,12 +123,7 @@ pub fn update(state: &mut PreviewPanelState, msg: Message, ctx: &UpdateCtx<'_>) 
             state.pane.replace_all();
         }
         Message::FindWebviewState { current, total } => {
-            if let Some(f) = state.pane.find.as_mut()
-                && f.is_webview
-            {
-                f.count = total;
-                f.current = current;
-            }
+            state.pane.set_find_webview_state(current, total)
         }
         Message::LargeFileSearchClose => state.pane.close_large_file_search(),
         Message::LargeFileSearchSubmit { tab_id, query } => {
@@ -390,7 +385,7 @@ fn open_path(
             });
         }
     }
-    drain_tabular_loads(&mut state.pane, fx);
+    drain_tabular_loads_into(&mut state.pane, fx);
     let active = state.pane.active_idx();
     reveal_active(state, ctx, active);
     persist_and_context(state, ctx, fx, false);
@@ -733,7 +728,7 @@ fn profiled(
         });
     }
     // 画像可能把临时非表格 route 改判为表格:此时才入队,需立即起解析。
-    drain_tabular_loads(pane, fx);
+    drain_tabular_loads_into(pane, fx);
 }
 
 fn window_index(
@@ -913,7 +908,13 @@ fn tabular_sheet_loaded(
 }
 
 /// 把窗格刚 `open_path` / `push_tab` 攒下的待加载表格 tab 转成解析效果。
-fn drain_tabular_loads(pane: &mut PreviewPane, fx: &mut Vec<Effect>) {
+pub fn drain_tabular_loads(pane: &mut PreviewPane) -> Vec<Effect> {
+    let mut fx = Vec::new();
+    drain_tabular_loads_into(pane, &mut fx);
+    fx
+}
+
+fn drain_tabular_loads_into(pane: &mut PreviewPane, fx: &mut Vec<Effect>) {
     for (tab_id, path) in pane.take_pending_tabular_loads() {
         // 捕获启动时的 generation:tab 关闭 / 重开 / 重试后到达的旧结果按此丢弃。
         let (generation, cancel) = match pane.tabs().iter().find(|t| t.id == tab_id) {
@@ -1049,7 +1050,7 @@ pub fn load_preview_tab(
     }
 
     // 侧载的后台任务(表格)。
-    drain_tabular_loads(pane, fx);
+    drain_tabular_loads_into(pane, fx);
 
     // Rendered 的 Source 持久模式:物化后切到源码视图。
     if mode == Some(PreviewMode::Source)

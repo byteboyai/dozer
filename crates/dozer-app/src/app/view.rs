@@ -283,7 +283,10 @@ impl App {
                     .width(Length::Fill)
                     .height(Length::Fill),
             )
-            .on_press(Message::PreviewTabOverflowDismiss);
+            .on_press(Message::Preview(
+                PanelKind::Files,
+                dozer_panel_preview::Message::TabOverflowDismiss,
+            ));
             match preview_tab_overflow_popup(self, ws, PreviewPaneKind::Files) {
                 Some(popup) => stack![base, dismiss, popup]
                     .width(Length::Fill)
@@ -301,7 +304,10 @@ impl App {
                     .width(Length::Fill)
                     .height(Length::Fill),
             )
-            .on_press(Message::ProjectPreviewTabOverflowDismiss);
+            .on_press(Message::Preview(
+                PanelKind::Project,
+                dozer_panel_preview::Message::TabOverflowDismiss,
+            ));
             match preview_tab_overflow_popup(self, ws, PreviewPaneKind::Project) {
                 Some(popup) => stack![base, dismiss, popup]
                     .width(Length::Fill)

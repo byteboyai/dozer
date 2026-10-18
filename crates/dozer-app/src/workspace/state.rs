@@ -17,7 +17,6 @@ use crate::extensions::todo;
 use crate::extensions::usage;
 use crate::osc::{OscEvent, OscScanner};
 use crate::preview::{PreviewPane, TabKind};
-use crate::preview_state;
 use crate::project::FileTree;
 use crate::term::term_model::TerminalModel;
 use crate::transcript::{self, ReviewEntry};
@@ -25,7 +24,6 @@ use crate::ui_text::text;
 use byteui::interaction::tab_strip::tab_window_reveal;
 use dozer_client::{Client, TermEvent};
 use dozer_core::protocol::{AgentKind, AgentState, ProjectInfo, SessionInfo};
-use iced_widget::text_editor::Action as EditorAction;
 
 dozer_core::scope!(LOG, module, "shell");
 
@@ -356,7 +354,7 @@ impl ShellIo {
     }
 
     /// T11 bullet 3:为某个加载阶段 arm 一个看门狗超时。睡 `stage_timeout(stage)`
-    /// 后回灌 [`Message::PreviewLoadTimeout`],由处理器按 generation + stage 校验
+    /// 后回灌 [`Message::PreviewResult`](`LoadTimeout`),由处理器按 generation + stage 校验
     /// 决定是否判失败(推进到下一阶段会 arm 新的超时,旧的自然失配被丢弃)。
     pub(crate) fn arm_load_timeout(
         &self,
@@ -370,8 +368,14 @@ impl ShellIo {
         let duration = crate::preview::stage_timeout(stage);
         self.handle.spawn(async move {
             tokio::time::sleep(duration).await;
-            let _ = proxy.send_event(Message::PreviewLoadTimeout(
-                project_id, kind, tab_id, generation, stage,
+            let _ = proxy.send_event(Message::PreviewResult(
+                project_id,
+                kind,
+                dozer_panel_preview::Message::LoadTimeout {
+                    tab_id,
+                    generation,
+                    stage,
+                },
             ));
         });
     }
@@ -1230,81 +1234,6 @@ impl Workspace {
         // 换位不影响能见度,但拖拽中视觉以光标为准,无需强制归零 first。
     }
 
-    /// 把当前预览 tab(仅文件类)异步写盘,同 `layout::save` 走
-    /// `handle.spawn` 的既有模式,不阻塞 UI 线程。没有打开项目时不存
-    /// (状态按项目 id 分文件,没有项目就没有归属)。
-    pub(crate) fn spawn_preview_state_save(&self, io: &ShellIo) {
-        let Some(project) = &self.project else {
-            return;
-        };
-        let project_id = project.id;
-        let active_idx = self.preview.active_idx();
-        let mut tabs = Vec::new();
-        let mut active_path = None;
-        for (idx, tab) in self.preview.tabs().iter().enumerate() {
-            // `Blank` 占位 tab(恒在 index 0 的那个)没有真实路径,不写进
-            // 持久化状态——`PreviewPane::default()` 天然就带这个占位,恢复时
-            // 无需从盘上再变一个出来。
-            let TabKind::File(p) = &tab.kind else {
-                continue;
-            };
-            let is_active = idx == active_idx;
-            if is_active {
-                active_path = Some(p.clone());
-            }
-            // CodeMirror tab 的镜像视图状态(T11):优先用完整 `web_view_state`
-            // 镜像(cursor/selection/top_line/folds),没有则退回 web_selection/
-            // web_viewport 兼容路径。
-            let (cursor, selection, scroll_anchor, folds) = match &tab.web_view_state {
-                Some(vs) => (
-                    vs.cursor,
-                    vs.selection.filter(|r| r.start != r.end),
-                    vs.top_line.map(|t| t as u64),
-                    vs.folds.clone(),
-                ),
-                None => (
-                    tab.web_selection.map(|r| r.end),
-                    tab.web_selection.filter(|r| r.start != r.end),
-                    tab.web_viewport.map(|(from, _)| from as u64),
-                    Vec::new(),
-                ),
-            };
-            // 表格 tab:持久化 active sheet + 逻辑滚动锚点。
-            let tabular = match &tab.runtime {
-                crate::preview::PreviewRuntime::Tabular(crate::preview::TabularState::Ready(
-                    view,
-                )) => Some(preview_state::PersistedTabular {
-                    sheet: view.active_sheet,
-                    scroll_row: view.scroll_row,
-                    scroll_col: view.scroll_col,
-                }),
-                _ => None,
-            };
-            tabs.push(preview_state::PersistedPreviewTab {
-                path: p.clone(),
-                mode: tab.current_mode(),
-                cursor,
-                selection,
-                scroll_anchor,
-                folds,
-                tabular,
-                active: is_active,
-                ..Default::default()
-            });
-        }
-        let state = preview_state::PreviewState {
-            version: preview_state::PREVIEW_STATE_VERSION,
-            tabs,
-            active_path,
-            paths: Vec::new(),
-        };
-        io.handle.spawn(async move {
-            if let Err(e) = preview_state::save(project_id, &state) {
-                dozer_core::log_warn!(LOG, "预览 tab 状态写盘失败: {e}");
-            }
-        });
-    }
-
     /// 把当前预览上下文(活动 tab 路径 + 光标/选区)防抖推给 `dozerd`。
     /// 无活动 tab、或活动 tab 无原生 `CodeEditor`(图片/webview 类)时推
     /// `None`。~250ms trailing-edge 防抖:连续快速触发(方向键连按)只有
@@ -1407,240 +1336,6 @@ impl Workspace {
                 dozer_core::log_warn!(LOG, "推送预览上下文失败: {e}");
             }
         });
-    }
-
-    /// 项目打开/启动恢复时,认回上次持久化的预览 tab(仅文件类;已被删除/
-    /// 移动的文件静默跳过,不报错占位)。
-    ///
-    /// **Phase C Task 5**:所有 tab 先建立 `Suspended` 壳(不读盘、不建
-    /// viewer、不建 WebView);首屏后**只物化当前项目当前文件**,其余等用户
-    /// 切到/打开时再 [`Self::load_preview_tab`]。这样历史大文件 tab 再多,启动
-    /// 工作量也不随 tab 数线性增长。
-    pub(crate) fn restore_preview_state(&mut self, io: &ShellIo) {
-        let Some(project) = &self.project else {
-            return;
-        };
-        let state = preview_state::load(project.id);
-        let active_path = state.active_path.clone();
-        let mut active_id = None;
-        let mut first_id = None;
-        for persisted in state.tabs {
-            let path = persisted.path;
-            if !path.is_file() {
-                continue;
-            }
-            let is_active = active_path
-                .as_deref()
-                .map(|active| active == path.as_path())
-                .unwrap_or(persisted.active);
-            self.allowed_files
-                .lock()
-                .expect("allowed_files 锁")
-                .insert(path.clone());
-            let id = self.preview.push_shell_tab(path, persisted.mode);
-            self.preview.set_pending_view(
-                id,
-                crate::preview::ViewStateRestore {
-                    cursor: persisted.cursor,
-                    selection: persisted.selection,
-                    top_line: persisted.scroll_anchor.map(|v| v as u32),
-                    folds: persisted.folds,
-                },
-            );
-            if let Some(t) = persisted.tabular {
-                self.preview
-                    .set_pending_tabular(id, t.sheet, t.scroll_row, t.scroll_col);
-            }
-            first_id.get_or_insert(id);
-            if is_active {
-                active_id = Some(id);
-            }
-        }
-        // 只排队当前项目当前文件;没有 active 时退而物化第一个,保证首屏有内容。
-        // 安全启动下**不自动物化**任何文件(只留壳),避免上次未完成的启动循环。
-        if io.safe_startup {
-            dozer_core::log_warn!(LOG, "安全启动:预览 tab 仅恢复壳,不自动加载");
-            return;
-        }
-        let to_load = active_id.or(first_id);
-        if let Some(id) = to_load {
-            if let Some(idx) = self.preview.tabs().iter().position(|t| t.id == id) {
-                self.preview.select(idx);
-            }
-            self.load_preview_tab(PanelKind::Files, id, io);
-        }
-    }
-
-    /// 物化一个 `Suspended` 预览壳(Phase C Task 5):按 route 分派到对应的
-    /// 加载路径。幂等——非 Suspended 的 tab 直接返回。按 CodeMirror 场景,
-    /// 内容由 editor WebView 自取,这里只需把状态推进到 Ready。
-    pub(crate) fn load_preview_tab(&mut self, kind: PanelKind, tab_id: usize, io: &ShellIo) {
-        let Some(project_id) = self.project_id() else {
-            return;
-        };
-        let pane = self.preview_pane_mut(kind);
-        if !pane.is_pending_load(tab_id) {
-            return;
-        }
-        let idx = match pane.tabs().iter().position(|t| t.id == tab_id) {
-            Some(i) => i,
-            None => return,
-        };
-        let route_kind = pane.tabs()[idx].route.as_ref().map(|r| r.kind);
-        let mode = pane.tabs()[idx].route.as_ref().map(|r| r.default_mode);
-        let path = match &pane.tabs()[idx].kind {
-            TabKind::File(p) => p.clone(),
-            _ => return,
-        };
-        let editor_host = pane.tabs()[idx].uses_editor_host();
-        let windowed = pane.tabs()[idx].windowed;
-
-        // T11:三段延迟观测由 `begin_load` 创建(`loading_started → first_frame →
-        // ready`),这里不再单独记起始时刻。
-
-        // T2/T10:物化一条已存在的壳(retry / 启动恢复 / 选中 Suspended)。host 类
-        // 路由**不在此处 finish**:先进入 `Reserving`(editor/JSON 等需占预算的
-        // host,等 `sync_webview_pool` 回灌 `granted` 再进 `CreatingHost`)或
-        // `CreatingHost`(渲染 host,等自身 `document_loaded`/`window_applied`),
-        // 由后续 ACK 结束加载;这样"Loading 动画"如实反映 host 尚未可见,而不是
-        // 建壳即 Ready 却被空白原生子视图盖住。纯 iced/fallback 路由无 host 可等,
-        // 直接 finish(T10 bullet 3:选中 Suspended 进入对应 stage)。
-        use crate::preview::PreviewLoadStage as Stage;
-        let begin_only = |pane: &mut crate::preview::PreviewPane, stage: Stage| -> Option<u64> {
-            pane.begin_load(tab_id, stage)
-        };
-        // host 类路由是否需要占资源预算(editor/JSON),还是无 host(fallback)。
-        let needs_reserve_route = pane
-            .tabs()
-            .iter()
-            .find(|t| t.id == tab_id)
-            .is_some_and(|t| t.uses_editor_host() || t.uses_json_editor());
-        let load_generation: Option<u64> = match route_kind {
-            // CodeMirror(含窗口化只读):editor WebView 自取内容/由 Rust 推窗口。
-            Some(crate::preview::PreviewKind::Code) if editor_host => {
-                begin_only(pane, Stage::Reserving)
-            }
-            // JSON 家族:严格 .json 走 vanilla-jsoneditor host,JSONC/JSON5 走
-            // CodeMirror 文本。
-            Some(crate::preview::PreviewKind::Json) => {
-                if needs_reserve_route {
-                    begin_only(pane, Stage::Reserving)
-                } else {
-                    begin_only(pane, Stage::Parsing)
-                }
-            }
-            // 流式 JSONL/NDJSON(T8):editor host(Streamed 窗口化只读 / Text)。
-            Some(crate::preview::PreviewKind::Streamed) => begin_only(pane, Stage::Reserving),
-            // 其余 Code 到 editor host。
-            Some(crate::preview::PreviewKind::Code) => begin_only(pane, Stage::Reserving),
-            Some(crate::preview::PreviewKind::Tabular) => {
-                // 首次解析:进入 `Parsing`,网格后台加载完成前保持 Loading。这段
-                // 实际等的是"解析 + ag-grid host 握手(ready/window_applied)"
-                // 两件事;此前没有看门狗,host 握手卡住会永久停在"正在解析
-                // 文件…"(2026-09-28 复现),补上与其余阶段同款的超时兜底。
-                if let Some(generation) = begin_only(pane, Stage::Parsing) {
-                    pane.set_tabular_loading(tab_id, path.clone());
-                    io.arm_load_timeout(project_id, kind, tab_id, generation, Stage::Parsing);
-                    // CSV/TSV 原文模式:同时让 editor host 就绪(网格仍在后台加载,
-                    // 便于切回)。原文 host 需占预算,故回到 `Reserving` 等 grant,
-                    // 而非直接 finish。
-                    if editor_host {
-                        pane.advance_load(tab_id, generation, Stage::Reserving);
-                    }
-                }
-                None
-            }
-            // 渲染:交给 Flyfish/隔离 HTML host,等其 `document_loaded` 才 finish。
-            // arm host-ready 超时(T8 bullet 5),避免外链/网络卡死无限动画。
-            Some(crate::preview::PreviewKind::Rendered) => {
-                if let Some(generation) = begin_only(pane, Stage::CreatingHost) {
-                    // T8/T11:Rendered host 可能因外链/资源卡死,arm 一个
-                    // `CreatingHost` 看门狗,超时进入可重试 Failed。
-                    io.arm_load_timeout(project_id, kind, tab_id, generation, Stage::CreatingHost);
-                    Some(generation)
-                } else {
-                    None
-                }
-            }
-            // 外部/不支持:无 host,由 fallback 页承载,直接就绪。
-            Some(crate::preview::PreviewKind::External)
-            | Some(crate::preview::PreviewKind::Unsupported) => {
-                if let Some(generation) = begin_only(pane, Stage::CreatingHost) {
-                    pane.finish_load(tab_id, generation);
-                }
-                None
-            }
-            None => None,
-        };
-
-        // T10 bullet 3:dirty recovery 读取 + 磁盘冲突分类挪到后台。只有非窗口化
-        // (窗口化正文只读、不走 recovery)且确有在途加载时才去读;结果经
-        // `PreviewRecoveryRead` 回灌,世代校验后再落 `pending_restore`。
-        if !windowed && let Some(generation) = load_generation {
-            let key = crate::preview::path_key(&path);
-            let recovery_dir = crate::preview::recovery_dir();
-            let path_for_read = path.clone();
-            let proxy = io.proxy.clone();
-            let handle = io.handle.clone();
-            let panel = kind;
-            // T11:recovery 读取也纳入取消(tab 关闭/重开即弃结果)。
-            let cancel = self
-                .preview
-                .tabs()
-                .iter()
-                .find(|t| t.id == tab_id)
-                .map(|t| t.task_cancel_token())
-                .unwrap_or_else(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
-            handle.spawn(async move {
-                let restore = tokio::task::spawn_blocking(move || {
-                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                        return None;
-                    }
-                    let (manifest, text) =
-                        crate::preview::read_snapshot(&recovery_dir, project_id, key)?;
-                    // 读完再查一次:长读期间被取消则不回灌。
-                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                        return None;
-                    }
-                    let disk = crate::preview::profile_file(&path_for_read).ok();
-                    if crate::preview::classify_recovery(&manifest, disk.as_ref())
-                        != crate::preview::RecoveryResolution::Restore
-                    {
-                        return None;
-                    }
-                    // 快照正文与磁盘一致 → 本就没有未保存改动,不是有效 recovery。
-                    // (老版本会在"打开即失焦"时为未修改文件写快照,这里兜底丢弃。)
-                    if std::fs::read_to_string(&path_for_read).ok().as_deref()
-                        == Some(text.as_str())
-                    {
-                        let _ = crate::preview::clear_snapshot(&recovery_dir, project_id, key);
-                        return None;
-                    }
-                    Some(text)
-                })
-                .await
-                .unwrap_or(None);
-                let _ = proxy.send_event(crate::app::Message::PreviewRecoveryRead(
-                    project_id, panel, tab_id, generation, restore,
-                ));
-            });
-        }
-
-        // 侧载的后台任务(表格)由 Workspace 自己 spawn。
-        self.spawn_pending_tabular_loads(kind, io);
-
-        // Rendered 的 Source 持久模式:物化后切到源码视图(老 iced editor;
-        // Markdown/HTML 的 CodeMirror source 留待 Phase D)。
-        if mode == Some(crate::preview::PreviewMode::Source)
-            && route_kind == Some(crate::preview::PreviewKind::Rendered)
-        {
-            let pane = self.preview_pane_mut(kind);
-            if let Some(idx) = pane.tabs().iter().position(|t| t.id == tab_id)
-                && let Err(error) = pane.enter_code_mode(idx)
-            {
-                dozer_core::log_warn!(LOG, %error, "恢复预览源码模式失败，回退到渲染模式");
-            }
-        }
     }
 
     /// 保证"项目打开时至少有一个终端 tab"这条不变式:启动恢复、关闭最后
@@ -2306,17 +2001,6 @@ text: dozer_model::LocalizedText::keyed(
         }
     }
 
-    /// `kind` 对应面板的预览错误槽(`preview_error` / `project_preview_error`)。
-    pub(crate) fn preview_error_mut(
-        &mut self,
-        kind: PanelKind,
-    ) -> &mut Option<dozer_model::LocalizedText> {
-        match kind {
-            PanelKind::Project => &mut self.project_preview_error,
-            _ => &mut self.preview_error,
-        }
-    }
-
     /// `kind` 对应预览 tab 条的翻页窗口起点(`preview_tab_first` / `project_preview_tab_first`)。
     pub(crate) fn preview_tab_first_mut(&mut self, kind: PanelKind) -> &mut usize {
         match kind {
@@ -2340,99 +2024,10 @@ text: dozer_model::LocalizedText::keyed(
             .is_some_and(|t| t.tabular_state().is_some())
     }
 
-    /// 把 `kind` 面板**当前激活原生 tab** 的 CodeView `perform` 一条应用层
-    /// 编辑 `Action`。这是 main.rs 键盘路由在原生预览闸门里手工补 `Tab`
-    /// 的落点:`Active` 的编辑器 Content 光标在 CodeView 内部,直接
-    /// `Action::Edit(Edit::Insert('\t'))`(非只读、非 webview/Blank)就插在
-    /// 用户当前光标、替换现选区,撤销/脏标记照常,与 widget 自发 Action 走
-    /// 同一条 perform 管线(见 code_editor 模块)。目标 tab 非原生/无编辑器
-    /// 一律 no-op。
-    pub fn preview_pane_active_editor_event(&mut self, _kind: PanelKind, _action: EditorAction) {
-        // 老 iced editor 已退役。
-    }
-
-    /// ⌘Z:老 iced editor 已退役(undo 由 CodeMirror host 内部 history 处理)。
-    pub fn preview_pane_undo_active(&mut self, _kind: PanelKind) {}
-
-    /// ⌘⇧Z:老 iced editor 已退役(redo 由 CodeMirror host 内部 history 处理)。
-    pub fn preview_pane_redo_active(&mut self, _kind: PanelKind) {}
-    /// ⌘S:把 `kind` 面板**当前激活原生 tab** 的就地改动保存到磁盘,语义同
-    /// `preview_pane_save_at`——除了定位固定取"当前激活 tab"。
-    pub fn preview_pane_save_active(&mut self, kind: PanelKind) {
-        let idx = self.preview_pane_mut(kind).active_idx();
-        self.preview_pane_save_at(kind, idx);
-    }
-
-    /// T1 fallback 页的「重试」:把 Failed tab 退回 Loading 后走正常物化路径
-    /// (CodeMirror/JSON 直接 Ready;Rendered 重新导航 Flyfish;Tabular 重新
-    /// spawn 后台解析)。非 Failed tab 是 no-op。
-    pub fn preview_retry(&mut self, kind: PanelKind, tab_id: usize, io: &ShellIo) {
-        {
-            let pane = self.preview_pane_mut(kind);
-            if !pane.is_pending_load(tab_id) {
-                return;
-            }
-        }
-        self.load_preview_tab(kind, tab_id, io);
-    }
-
-    /// T1 fallback 页的「以纯文本只读尝试」:把该 tab backend 强制成只读 Code
-    /// 并置 Ready;若该文件按 `file_policy` 应窗口化,附带建一次稀疏行索引,
-    /// 让窗口化 host 能滚动。
-    pub fn preview_plain_text_open(&mut self, kind: PanelKind, tab_id: usize, io: &ShellIo) {
-        let windowed = {
-            let pane = self.preview_pane(kind);
-            pane.tabs()
-                .iter()
-                .find(|t| t.id == tab_id)
-                .is_some_and(|t| t.windowed && matches!(t.kind, crate::preview::TabKind::File(_)))
-        };
-        let pane = self.preview_pane_mut(kind);
-        if !pane.force_plain_text(tab_id) {
-            return;
-        }
-        if windowed {
-            self.preview_spawn_window_index(kind, tab_id, io);
-        }
-    }
-
     /// T10:该面板是否有激活的磁盘冲突(渲染/几何让位用)。
     pub fn preview_conflict_active(&self, kind: PanelKind) -> bool {
         let pane = self.preview_pane(kind);
         pane.active_conflict().is_some()
-    }
-
-    /// T10:「保留我的修改」——清冲突态,以当前磁盘 mtime 为保存基线。
-    pub fn preview_conflict_keep(&mut self, kind: PanelKind, tab_id: usize) {
-        let pane = self.preview_pane_mut(kind);
-        pane.keep_conflict_changes(tab_id);
-    }
-
-    /// T10:「重载磁盘(丢弃我的修改)」——第一次点击进入二次确认,再点一次才
-    /// 真正丢弃:清冲突/清 dirty/推进 reload/复位 revision,并删除 recovery 快照。
-    pub fn preview_conflict_reload(&mut self, kind: PanelKind, tab_id: usize, io: &ShellIo) {
-        let pane = self.preview_pane_mut(kind);
-        let armed = pane
-            .tabs()
-            .iter()
-            .find(|t| t.id == tab_id)
-            .is_some_and(|t| t.conflict_reload_armed);
-        if !armed {
-            pane.arm_conflict_reload(tab_id);
-            return;
-        }
-        let Some(path) = pane.discard_conflict_and_reload(tab_id) else {
-            return;
-        };
-        if let Some(project_id) = self.project_id() {
-            io.handle.spawn_blocking(move || {
-                crate::preview::clear_snapshot(
-                    &crate::preview::recovery_dir(),
-                    project_id,
-                    crate::preview::path_key(&path),
-                );
-            });
-        }
     }
 
     /// T13:按命令 target 定位 tab(panel/tab 或 path),必要时先物化 Suspended
@@ -2501,275 +2096,6 @@ text: dozer_model::LocalizedText::keyed(
         }
     }
 
-    /// 为窗口化 tab 建稀疏行索引(后台),完成后经 `PreviewWindowIndex` 回填
-    /// (同 `app/update.rs` 里窗口化索引的生成点)。
-    fn preview_spawn_window_index(&mut self, kind: PanelKind, tab_id: usize, io: &ShellIo) {
-        let Some(project_id) = self.project_id() else {
-            return;
-        };
-        let pane = self.preview_pane(kind);
-        let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
-            return;
-        };
-        let crate::preview::TabKind::File(path) = &tab.kind else {
-            return;
-        };
-        let path = path.clone();
-        // T11:捕获该 tab 的取消信号,tab 关闭/reload/切 mode 时置位即尽早退出。
-        let cancel = tab.task_cancel_token();
-        let proxy = io.proxy.clone();
-        io.handle.spawn(async move {
-            let result = tokio::task::spawn_blocking(move || {
-                let cancelled = {
-                    let cancel = cancel.clone();
-                    move || cancel.load(std::sync::atomic::Ordering::Relaxed)
-                };
-                crate::preview::LineIndex::build_cancellable(&path, 1000, 0, cancelled)
-                    .and_then(|index| index.ok_or_else(|| std::io::Error::other("index cancelled")))
-                    .map(std::sync::Arc::new)
-                    .map_err(|e| e.to_string())
-            })
-            .await
-            .unwrap_or_else(|e| Err(e.to_string()));
-            let _ = proxy.send_event(Message::PreviewWindowIndex(
-                project_id, kind, tab_id, result,
-            ));
-        });
-    }
-
-    /// 把 `kind` 面板刚 `open_path`/`push_tab` 攒下的待加载表格 tab 全部
-    /// spawn 到后台线程,完成后经 `Message::TabularLoaded` 回填(按
-    /// `project_id` 路由,见该消息文档)。`open_path` 调用方在拿到返回值
-    /// 之后应立即调用这个方法——不能攒着不调,不然队列里的条目会一直
-    /// 停在待发状态,对应 tab 也就一直卡在 `TabularState::Loading`。
-    pub fn spawn_pending_tabular_loads(&mut self, kind: PanelKind, io: &ShellIo) {
-        let Some(project_id) = self.project_id() else {
-            return;
-        };
-        let pane = self.preview_pane_mut(kind);
-        for (tab_id, path) in pane.take_pending_tabular_loads() {
-            // 捕获启动时的 generation:tab 关闭/重开/重试后到达的旧结果按此丢弃
-            // (T7 取消不回填旧 sheet)。
-            let (generation, cancel) = match pane.tabs().iter().find(|t| t.id == tab_id) {
-                Some(tab) => (tab.load_state.generation, tab.task_cancel_token()),
-                None => (
-                    0,
-                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                ),
-            };
-            let proxy = io.proxy.clone();
-            io.handle.spawn_blocking(move || {
-                // T11:表格解析按批次检查取消,tab 关闭/重试即尽早退出。
-                let cancelled = move || cancel.load(std::sync::atomic::Ordering::Relaxed);
-                let result = crate::tabular::load_cancellable(&path, cancelled);
-                let _ = proxy.send_event(Message::TabularLoaded(
-                    project_id, kind, tab_id, generation, result,
-                ));
-            });
-        }
-    }
-
-    /// Task 7:把 `reload_webviews_for` 攒下的、因文件/include 变化而待重载的
-    /// PlantUML tab 全部 spawn 到后台重跑 `load_document`(重读根与 include)。
-    /// 完成后经 `Message::PlantUmlLoaded` 回填,按 `project_id` 路由 + `generation`
-    /// 闸门丢弃过期结果。调用方在 `reload_webviews_for` 之后立即调用——不能攒着
-    /// 不调,否则对应的图会一直停在 Loading。
-    pub fn spawn_pending_plantuml_reloads(&mut self, kind: PanelKind, io: &ShellIo) {
-        let Some(project) = self.project.clone() else {
-            return;
-        };
-        let root = PathBuf::from(&project.path);
-        let pane = self.preview_pane_mut(kind);
-        for (tab_id, path) in pane.take_pending_plantuml_reloads() {
-            // 捕获当前 generation:tab 关闭/重开/再次重载后到达的旧结果据此丢弃。
-            let generation = match pane.tabs().iter().find(|t| t.id == tab_id) {
-                Some(tab) => tab.load_state.generation,
-                None => 0,
-            };
-            let proxy = io.proxy.clone();
-            let project_id = project.id;
-            let root = root.clone();
-            io.handle.spawn_blocking(move || {
-                let result = crate::preview::load_document(
-                    &root,
-                    &path,
-                    crate::preview::PlantUmlLimits::default(),
-                );
-                let _ = proxy.send_event(Message::PlantUmlLoaded(
-                    project_id, kind, tab_id, generation, result,
-                ));
-            });
-        }
-    }
-
-    /// 表格预览 tab 的交互动作(滚动/sheet 切换):按 `tab_id` 定位对应 tab 的
-    /// `TabularView` 并 `apply`。tab 不存在 / 该 tab 不是表格 / 还在加载中都
-    /// no-op。切到一个还没加载过的 sheet 时,`select_sheet` 会返回
-    /// `SheetLoadRequest`——这里负责把它 spawn 到后台线程,完成后经
-    /// `Message::TabularSheetLoaded` 回填(同 `TabularLoaded` 的路由方式,
-    /// 按 `project_id` 而非"当前聚焦项目",见该消息文档)。
-    pub fn preview_pane_tabular_action(
-        &mut self,
-        kind: PanelKind,
-        tab_id: usize,
-        sheet: usize,
-        io: &ShellIo,
-    ) {
-        let Some(project_id) = self.project_id() else {
-            return;
-        };
-        let pane = self.preview_pane_mut(kind);
-        let Some(request) = pane
-            .tabular_mut(tab_id)
-            .and_then(|view| view.select_sheet(sheet))
-        else {
-            return;
-        };
-        // 该 sheet 还没加载过,才会走到这里:让 webview 把对应 tab 标 loading
-        // 态(见 Task 4 的 `TabularCommand::SetSheetLoading`)。
-        pane.queue_tabular_command(
-            tab_id,
-            crate::preview::TabularCommand::SetSheetLoading {
-                sheet_index: request.index,
-                loading: true,
-            },
-        );
-        // T11:sheet 懒加载同样可取消(tab 关闭/切换即弃)。
-        let cancel = pane
-            .tabs()
-            .iter()
-            .find(|t| t.id == tab_id)
-            .map(|t| t.task_cancel_token())
-            .unwrap_or_else(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
-        let proxy = io.proxy.clone();
-        io.handle.spawn_blocking(move || {
-            let cancelled = move || cancel.load(std::sync::atomic::Ordering::Relaxed);
-            let result =
-                crate::tabular::load_sheet_cancellable(&request.path, &request.name, cancelled);
-            let _ = proxy.send_event(Message::TabularSheetLoaded(
-                project_id,
-                kind,
-                tab_id,
-                request.index,
-                result,
-            ));
-        });
-    }
-
-    /// 把 `kind` 面板**指定下标**tab 的就地改动保存到磁盘,语义同
-    /// `preview_pane_save_active`(其实现已改为委托这个方法),差别只是不再
-    /// 局限于"当前激活"——`preview_pane_toggle_render_mode`(代码→预览)、
-    /// `PreviewCloseTab`/`ProjectPreviewCloseTab`(关闭前静默保存)都可能要
-    /// 保存一个非激活的背景 tab。仅当该 tab 是原生可编辑且脏时动作,其余
-    /// 沿用原实现(不脏不动磁盘、失败写面板 error)。`pub(crate)`(而非
-    /// 私有 `fn`)是因为 `app.rs::update` 的 `PreviewCloseTab`/
-    /// `ProjectPreviewCloseTab` 分支(Step 8)要直接调它做关闭前静默保存。
-    pub(crate) fn preview_pane_save_at(&mut self, kind: PanelKind, idx: usize) {
-        let _ = (kind, idx);
-        // CodeMirror 的保存由 host 经 IPC 处理;老 iced 就地保存已退役。
-    }
-
-    /// 切换 `kind` 面板某个 tab 的预览/代码渲染模式(仅对 `wry_toggle_eligible`
-    /// 的文件 tab 有意义——按钮只在这类 tab 上画,其它 tab 点不到)。
-    /// 代码→预览:先 `preview_pane_save_at` 静默落盘(不脏则内部直接
-    /// no-op),再 `exit_code_mode` 转回渲染。预览→代码:直接
-    /// `enter_code_mode` 读盘建原生编辑器,失败写对应面板 error。
-    ///
-    /// 返回 `Some((tab_id, generation))`(进入 `SwitchingMode` + Loading 的 tab),
-    /// 供调用方 arm [`PreviewLoadStage::SwitchingMode`] 看门狗;无切换/出错返回
-    /// `None`。
-    pub(crate) fn preview_pane_toggle_render_mode(
-        &mut self,
-        kind: PanelKind,
-        idx: usize,
-    ) -> Option<(usize, u64)> {
-        let in_code_mode = {
-            let pane = self.preview_pane(kind);
-            pane.tabs()
-                .get(idx)
-                .is_some_and(|t| t.uses_rendered_source_editor())
-        };
-        if in_code_mode {
-            self.preview_pane_save_at(kind, idx);
-            let pane = self.preview_pane_mut(kind);
-            pane.exit_code_mode(idx);
-        } else {
-            let pane = self.preview_pane_mut(kind);
-            if let Err(e) = pane.enter_code_mode(idx) {
-                let err = Some(
-                    dozer_model::LocalizedText::keyed(
-                        crate::i18n::HOST_OWNER,
-                        "preview.enter_code_mode_failed",
-                        "Failed to switch to code mode: {e}",
-                    )
-                    .with_arg("e", e.to_string()),
-                );
-                *self.preview_error_mut(kind) = err;
-                return None;
-            }
-        }
-        // T11:切换进入 `SwitchingMode` 且仍在 Loading 时,取 tab_id/generation
-        // 供上层 arm 看门狗(等目标 host 首帧)。
-        let pane = self.preview_pane(kind);
-        let tab = pane.tabs().get(idx)?;
-        (tab.load_state.stage == crate::preview::PreviewLoadStage::SwitchingMode)
-            .then_some((tab.id, tab.load_state.generation))
-    }
-
-    /// 切换 `kind` 面板某个 JSON tab 的 Tree ⇄ Text 视图(严格 `.json` 的
-    /// "树/文本"双视图)。读取当前 backend mode 决定目标 mode,再交给
-    /// `PreviewPane::restore_json_mode`(其内部决定是否需要 `SwitchingMode`)。
-    /// 返回 `Some((tab_id, generation))` 供上层 arm 看门狗;非 JSON tab 返回
-    /// `None`。
-    pub(crate) fn preview_pane_toggle_json_mode(
-        &mut self,
-        kind: PanelKind,
-        tab_id: usize,
-    ) -> Option<(usize, u64)> {
-        let pane = self.preview_pane_mut(kind);
-        let backend = pane
-            .tabs()
-            .iter()
-            .find(|t| t.id == tab_id)?
-            .backend
-            .as_ref()?;
-        let current = backend.current_mode();
-        let target = match current {
-            crate::preview::PreviewMode::Tree => crate::preview::PreviewMode::Text,
-            crate::preview::PreviewMode::Text => crate::preview::PreviewMode::Tree,
-            _ => return None,
-        };
-        pane.restore_json_mode(tab_id, target)
-    }
-
-    /// 把 `kind` 面板的 Find 命令转发给面板执行。四种都只需要分面板取到变引用
-    /// 调对应方法(面板自持 buffer + Find 状态,逻辑全在 pane 内,这里只当跳板,
-    /// 避免 workspace 顶部对各项目冗余拆两支)。
-    /// ⌘F 打开同时在面板上置一次性"请求聚焦输入框"(已开着的第二次 ⌘F 也只是
-    /// 把焦点拨回输入框——见 `open_find_on_active` 的 no-op 语义),主循环次帧
-    /// 用 `find_field_id(panel)` 真正把焦点给输入框。替换行默认收起(⌘R 走
-    /// `preview_find_open_with_replace` 才展开)。
-    pub fn preview_find_open(&mut self, kind: PanelKind) {
-        let pool_id = self.active_preview_webview_id(kind);
-        let pane = self.preview_pane_mut(kind);
-        pane.open_find_on_active(false, pool_id);
-        pane.request_find_focus();
-    }
-
-    /// 同 `preview_find_open`,但替换行默认展开(⌘R)。webview(flyfish)档没有
-    /// 替换概念,展开态会被 `open_find_on_active` 强制收起。
-    pub fn preview_find_open_with_replace(&mut self, kind: PanelKind) {
-        let pool_id = self.active_preview_webview_id(kind);
-        let pane = self.preview_pane_mut(kind);
-        pane.open_find_on_active(true, pool_id);
-        pane.request_find_focus();
-    }
-
-    /// 查询框前的圆盘箭头:手动翻转 `kind` 面板 Find 条的替换行展开态。
-    pub fn preview_find_toggle_replace(&mut self, kind: PanelKind) {
-        self.preview_pane_mut(kind).toggle_find_replace();
-    }
-
     /// `kind` 面板的 Find 条当前是否显示(main.rs Esc/⌘ 键盘路由、视图渲染分层
     /// 共用)。
     pub fn preview_find_bar_open(&self, kind: PanelKind) -> bool {
@@ -2798,48 +2124,6 @@ text: dozer_model::LocalizedText::keyed(
         self.preview_pane_mut(kind).set_find_query_focused(focused);
     }
 
-    /// 关闭 `kind` 面板 Find 条(× / Esc / ⌘F 里输入框清空后的迁离)。关闭后把
-    /// 焦点拨回其下代码编辑器(`request_editor_focus` 置一次性位,次帧 main.rs
-    /// 用 `active_editor_focus_id` 真正聚焦回)——⌘F 打开时开条会抢走输入框焦
-    /// 点,关闭就该还回去,不许键盘焦点悬空在已消失的 widget 上。
-    pub fn preview_find_close(&mut self, kind: PanelKind) {
-        let pane = self.preview_pane_mut(kind);
-        pane.close_find();
-        pane.request_editor_focus();
-    }
-
-    /// 键入:转发 query 到面板,让面板当场重算与跳第一个命中。
-    pub fn preview_find_type(&mut self, kind: PanelKind, query: String) {
-        self.preview_pane_mut(kind).find_type(query);
-    }
-
-    /// 下一个/上一个命中。
-    pub fn preview_find_go(&mut self, kind: PanelKind, next: bool) {
-        self.preview_pane_mut(kind).find_go(next);
-    }
-
-    /// 翻转 Find 条大小写敏感开关(`case_sensitive` 真=逐字严格、假=ASCII 折叠),
-    /// 作用在 `kind` 面板当前打开的会话上;条未开是 no-op。
-    pub fn preview_find_case(&mut self, kind: PanelKind, case_sensitive: bool) {
-        self.preview_pane_mut(kind).set_find_case(case_sensitive);
-    }
-
-    /// 落定「替换为」草稿到 `kind` 面板当前 Find 会话(只写,不触发替换)。
-    pub fn preview_find_set_replacement(&mut self, kind: PanelKind, replacement: String) {
-        self.preview_pane_mut(kind)
-            .set_find_replacement(replacement);
-    }
-
-    /// 「替换当前命中」。作用对象与返回值语义见 `PreviewPane::replace_current`。
-    pub fn preview_find_replace_current(&mut self, kind: PanelKind) {
-        self.preview_pane_mut(kind).replace_current();
-    }
-
-    /// 「替换全部」。作用对象与返回值语义见 `PreviewPane::replace_all`。
-    pub fn preview_find_replace_all(&mut self, kind: PanelKind) {
-        self.preview_pane_mut(kind).replace_all();
-    }
-
     /// 取走 `kind` 面板 webview(flyfish)档 Find 待下发的搜索动作 + 查询词 +
     /// 大小写开关,供 `window_events::apply_pending_preview_find` 注入 flyfish JS。
     /// 非 webview 会话 / 无待发动作时返回 `None`。
@@ -2855,24 +2139,6 @@ text: dozer_model::LocalizedText::keyed(
     pub fn take_preview_webview_find_clear(&mut self, kind: PanelKind) -> Option<usize> {
         self.preview_pane_mut(kind)
             .take_pending_webview_find_clear()
-    }
-
-    /// 把 flyfish `getSearchState()` 回写的命中总数 / 当前序号(idx,0-based)
-    /// 落进 `kind` 面板当前 webview Find 会话的 `count`/`current`。回调只在
-    /// webview 会话上生效,否则 no-op(原生 editor 档的计数是本地现算的)。
-    pub fn preview_find_set_webview_state(
-        &mut self,
-        kind: PanelKind,
-        current: usize,
-        total: usize,
-    ) {
-        let pane = self.preview_pane_mut(kind);
-        if let Some(f) = pane.find.as_mut()
-            && f.is_webview
-        {
-            f.count = total;
-            f.current = current;
-        }
     }
 
     /// 当前激活浏览器 tab 的 webview id,语义同 `active_preview_webview_id`,

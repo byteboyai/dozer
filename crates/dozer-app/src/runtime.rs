@@ -657,7 +657,10 @@ pub(crate) fn sync_webview_pool(
                             "find_preview" if is_flyfish_host => {
                                 if let Some(binding) = flyfish_binding.as_ref() {
                                     let _ = ipc_proxy
-                                        .send_event(Message::PreviewFindOpen(binding.panel.into()));
+                                        .send_event(Message::Preview(
+                                            binding.panel.into(),
+                                            dozer_panel_preview::Message::FindOpen,
+                                        ));
                                 }
                             }
                             // ⌘F 页内查找:JS 找到并聚焦了页面自带搜索框

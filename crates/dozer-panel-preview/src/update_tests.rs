@@ -230,9 +230,13 @@ fn external_open_action_is_available_on_every_degraded_tab() {
 
 #[test]
 fn save_and_legacy_editor_messages_are_noops() {
+    let dir = tempfile::tempdir().unwrap();
+    let png = file(dir.path(), "a.png", "");
     let caps = PreviewCapabilities::all();
     let c = ctx(&caps, None);
     let mut st = PreviewPanelState::default();
+    // .png 走 wry(无 editor):撤销 / 重做 / 保存应静默 no-op,不 panic、不乱标脏。
+    open(&mut st, &c, &png);
     for m in [
         Message::SaveActive,
         Message::InsertTab,
@@ -241,6 +245,7 @@ fn save_and_legacy_editor_messages_are_noops() {
     ] {
         assert!(update(&mut st, m, &c).is_empty());
     }
+    assert!(!st.pane.tabs()[st.pane.active_idx()].dirty);
 }
 
 #[test]

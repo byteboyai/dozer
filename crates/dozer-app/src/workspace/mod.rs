@@ -30,6 +30,7 @@
 //!   靠 `Handle::spawn`，两个方向都不需要锁。
 
 mod hook;
+mod preview_panel;
 mod state;
 #[cfg(test)]
 mod tests;

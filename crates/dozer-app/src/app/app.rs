@@ -3692,19 +3692,6 @@ impl App {
             .and_then(|ws| ws.take_preview_webview_find_clear(kind))
     }
 
-    /// 把 flyfish `getSearchState()` 回写的命中计数 / 当前序号落进 `kind`
-    /// 面板当前 webview Find 会话。
-    pub fn preview_find_set_webview_state(
-        &mut self,
-        kind: PanelKind,
-        current: usize,
-        total: usize,
-    ) {
-        if let Some(ws) = self.active_workspace_mut() {
-            ws.preview_find_set_webview_state(kind, current, total);
-        }
-    }
-
     /// 每帧渲染循环读走 `preview::CaptureFindFocus` 查到的真实焦点态后写进
     /// 当前工作区。
     pub fn set_find_query_focused(&mut self, kind: PanelKind, focused: bool) {

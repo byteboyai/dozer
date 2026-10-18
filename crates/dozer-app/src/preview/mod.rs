@@ -31,7 +31,6 @@ pub(crate) use dozer_preview_core::text_save::*;
 // 搬进 `dozer-panel-preview` 的状态机 / URL / 协议契约。核心已有同名项(`SearchHit` 等)时以核心为准。
 pub(crate) use dozer_panel_preview::code_host::*;
 pub(crate) use dozer_panel_preview::pane::*;
-pub(crate) use dozer_panel_preview::plantuml::*;
 pub(crate) use dozer_panel_preview::state::*;
 pub(crate) use dozer_panel_preview::webview::*;
 pub(crate) use dozer_panel_preview::webview_protocol::*;

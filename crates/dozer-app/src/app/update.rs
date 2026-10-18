@@ -24,9 +24,9 @@ use crate::panel_host::ActivationCtx;
 use crate::term::terminal;
 use crate::workspace::{
     CONVERSATION_DETAIL_PAGE_SIZE, RestorePayload, ReviewSource, ReviewView, SshOut,
-    TabAttachedArgs, TabBackend, Workspace, exited_marker, preview_tab_display_width,
-    relative_time_text, review_should_refresh_on_turn, spawn_disk_usage_refresh,
-    spawn_project_git_refresh, tab_display_width, tab_title,
+    TabAttachedArgs, TabBackend, Workspace, exited_marker, relative_time_text,
+    review_should_refresh_on_turn, spawn_disk_usage_refresh, spawn_project_git_refresh,
+    tab_display_width, tab_title,
 };
 use byteui::interaction::icons;
 use dozer_core::protocol::{
@@ -663,8 +663,10 @@ impl App {
                                         .unwrap_or(false);
                                         if ok {
                                             let _ =
-                                                proxy.send_event(Message::PreviewRecoveryWritten(
-                                                    project_id, panel, tab_id,
+                                                proxy.send_event(Message::PreviewResult(
+                                                    project_id,
+                                                    panel,
+                                                    dozer_panel_preview::Message::RecoveryWritten(tab_id),
                                                 ));
                                         }
                                     });
@@ -792,8 +794,10 @@ impl App {
                             })
                             .await
                             .unwrap_or_else(|e| Err(e.to_string()));
-                            let _ = proxy.send_event(Message::PreviewWindowIndex(
-                                project_id, panel, tab_id, result,
+                            let _ = proxy.send_event(Message::PreviewResult(
+                                project_id,
+                                panel,
+                                dozer_panel_preview::Message::WindowIndex { tab_id, result },
                             ));
                         });
                     }
@@ -1154,24 +1158,9 @@ impl App {
                     }
                 });
             }
-            Message::PlantUmlLoaded(project_id, panel, tab_id, generation, result) => {
-                let locale = self.locale.active_locale().to_string();
-                self.with_project(project_id, move |ws, _io| {
-                    let pane = ws.preview_pane_mut(panel);
-                    match result {
-                        Ok(doc) => {
-                            // host 报 `rendered`/`failed` 时回带的 revision 与本次
-                            // 推送一致;用 load generation 当渲染世代。
-                            if !pane.store_plantuml_document(tab_id, generation, generation, doc) {
-                                // tab 已关闭/替换/切走:丢弃过期结果,不落状态。
-                                dozer_core::log_debug!(LOG, tab_id, "丢弃过期的 PlantUML 加载结果");
-                            }
-                        }
-                        Err(error) => {
-                            pane.apply_plantuml_load_error(tab_id, generation, &error, &locale);
-                        }
-                    }
-                });
+            Message::Preview(kind, msg) => self.preview_ui(kind, msg),
+            Message::PreviewResult(project_id, kind, msg) => {
+                self.preview_result(project_id, kind, msg)
             }
             Message::PreviewCommandsFetched(project_id, commands) => {
                 self.with_project(project_id, move |ws, io| {
@@ -1183,311 +1172,6 @@ impl App {
                                 dozer_core::log_warn!(PREVIEW_LOG, %e, "回报预览命令结果失败");
                             }
                         });
-                    }
-                });
-            }
-            Message::PreviewWindowIndex(project_id, panel, tab_id, result) => {
-                let locale = self.locale.active_locale().to_string();
-                self.with_project(project_id, move |ws, io| {
-                    // T11 bullet 3:结构化日志(读取字节 + 行数,不记正文)。
-                    match &result {
-                        Ok(index) => dozer_core::log_debug!(PREVIEW_LOG,
-                            panel = ?panel,
-                            tab_id,
-                            bytes = index.file_len(),
-                            total_lines = index.total_lines(),
-                            "大文件行索引建立完成"
-                        ),
-                        Err(error) => {
-                            dozer_core::log_warn!(PREVIEW_LOG, panel = ?panel, tab_id, %error, "大文件行索引建立失败")
-                        }
-                    }
-                    match result {
-                        Ok(index) => {
-                            let pane = ws.preview_pane_mut(panel);
-                            // 过期索引(文件 revision 已变)必须丢弃,不得套到
-                            // 新内容上——见 `PreviewPane::apply_window_index`。
-                            if pane.apply_window_index(tab_id, index) {
-                                let jump = pane
-                                    .tabs_mut()
-                                    .iter_mut()
-                                    .find(|t| t.id == tab_id)
-                                    .and_then(|t| t.pending_jump_line.take())
-                                    .map(|l| l as u32);
-                                // 索引就绪:推初始窗口(有跳转诉求就以目标行为中心,
-                                // 窗口就位后再 reveal)。
-                                let center = jump.unwrap_or(1);
-                                // T4:进入 LoadingWindow,等 host 回 `window_applied`
-                                // 才 finish(此前 host 保持 hidden/loading)。
-                                let generation = pane.load_generation(tab_id);
-                                pane.advance_load(
-                                    tab_id,
-                                    generation,
-                                    crate::preview::PreviewLoadStage::LoadingWindow,
-                                );
-                                // T11:arm `LoadingWindow` 看门狗(等 window_applied)。
-                                io.arm_load_timeout(
-                                    project_id,
-                                    panel,
-                                    tab_id,
-                                    generation,
-                                    crate::preview::PreviewLoadStage::LoadingWindow,
-                                );
-                                pane.queue_windowed_view(tab_id, center);
-                                if let Some(line) = jump {
-                                    pane.queue_editor_command(
-                                        tab_id,
-                                        crate::preview::EditorCommand::RevealPosition {
-                                            line,
-                                            column: 1,
-                                        },
-                                    );
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            let pane = ws.preview_pane_mut(panel);
-                            if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == tab_id) {
-                                tab.web_error = Some(crate::i18n::host_text_args(
-                                    "preview.line_index_failed",
-                                    "Failed to build line index: {error}",
-                                    &locale,
-                                    &[("error", &error.to_string())],
-                                ));
-                            }
-                        }
-                    }
-                });
-            }
-            Message::PreviewProfiled(project_id, panel, tab_id, generation, result) => {
-                self.with_project(project_id, move |ws, io| {
-                    // Task 6:PlantUML 渲染视图的 include 授权读取在后台跑
-                    // (CodeMirror 源码模式不需要)。路径在这里捕获,spawn 放到
-                    // `pane` 可变借用结束之后,避免借用冲突。
-                    let plantuml_path = ws
-                        .preview_pane(panel)
-                        .tabs()
-                        .iter()
-                        .find(|t| t.id == tab_id)
-                        .filter(|t| t.uses_plantuml_host())
-                        .and_then(|t| match &t.kind {
-                            crate::preview::TabKind::File(p) => Some(p.clone()),
-                            _ => None,
-                        });
-                    let pane = ws.preview_pane_mut(panel);
-                    match result {
-                        Ok(profile) => {
-                            if !pane.apply_profile(tab_id, generation, &profile) {
-                                // generation 已过期(tab 关闭/重开/被替换):丢弃。
-                                return;
-                            }
-                            // 画像落定:表格继续走它自己的后台解析(TabularLoaded
-                            // 结束);窗口化继续走索引 + 首窗(T4,PreviewWindowIndex
-                            // 期间保持 Loading);其余 host(CodeMirror/JSON/Flyfish)
-                            // 一律推进到 `CreatingHost`,等 host 自己的
-                            // `document_loaded` / 渲染完成信号才 finish(T5/T6/T8)。
-                            //
-                            // 例外:纯 iced 承载、无 host 的场景(Unsupported/External
-                            // 走 fallback 页)没有 host 可等,直接 finish。
-                            let (is_tabular, hosts_host) = pane
-                                .tabs()
-                                .iter()
-                                .find(|t| t.id == tab_id)
-                                .map(|t| (t.tabular_state().is_some(), t.hosts_any_webview()))
-                                .unwrap_or((false, false));
-                            if is_tabular {
-                                // 表格:进入 `Parsing`,等后台解析出的首个可显示
-                                // sheet(TabularLoaded)且 ag-grid host 回
-                                // `ready`+`window_applied` 才 finish(T7 bullet 2)。
-                                // CSV/TSV 原文模式另有 editor host,由 `load_preview_tab`
-                                // 的恢复路径处理;正常打开路径这里不再 finish。
-                                //
-                                // 这段实际等的是"解析 + host 握手"两件事,任一个卡住
-                                // (如 host 从未报 `window_applied`)先前都没有看门狗,
-                                // 会永久停在"正在解析文件…"(2026-09-28 复现:CSV 文件
-                                // 打开后卡死,数据其实已解析完成)。补上与 Reserving/
-                                // CreatingHost/LoadingWindow 同款的超时兜底。
-                                pane.advance_load(
-                                    tab_id,
-                                    generation,
-                                    crate::preview::PreviewLoadStage::Parsing,
-                                );
-                                io.arm_load_timeout(
-                                    project_id,
-                                    panel,
-                                    tab_id,
-                                    generation,
-                                    crate::preview::PreviewLoadStage::Parsing,
-                                );
-                            } else if !hosts_host {
-                                // 无 host 的 fallback 页:直接就绪。
-                                pane.finish_load(tab_id, generation);
-                            } else {
-                                // 窗口化与非窗口化 host 都保持 Loading。T10:先进入
-                                // `Reserving` 等待资源预算;reserve 获批由
-                                // `apply_preview_pool_evictions` 的 `granted` 台账推进到
-                                // `CreatingHost`,之后 host 信号才 finish
-                                // (窗口化:ready→Indexing→首窗→window_applied;
-                                // 非窗口化:ready→Reading→document_loaded)。
-                                //
-                                // 无编辑器 host 的渲染类(Rendered/Flyfish/HTML)不参与
-                                // reserve,直接就绪到 `CreatingHost`。
-                                //
-                                // T8 bullet 5:Rendered(Flyfish/隔离 HTML)host 可能
-                                // 因外链/相对资源/网络卡住,arm 一个 host-ready 超时,
-                                // 超时后进入可重试 Failed,不永久转圈。其余 host 的
-                                // 分阶段超时归 T11。
-                                let (rendered_host, needs_reserve) = pane
-                                    .tabs()
-                                    .iter()
-                                    .find(|t| t.id == tab_id)
-                                    .map(|t| {
-                                        (
-                                            t.hosts_webview(),
-                                            t.uses_editor_host()
-                                                || t.uses_json_editor()
-                                                || t.uses_plantuml_host(),
-                                        )
-                                    })
-                                    .unwrap_or((false, false));
-                                if rendered_host {
-                                    io.arm_load_timeout(
-                                        project_id,
-                                        panel,
-                                        tab_id,
-                                        generation,
-                                        crate::preview::PreviewLoadStage::CreatingHost,
-                                    );
-                                }
-                                if needs_reserve {
-                                    // 等 `sync_webview_pool` 回灌 `granted` 再进
-                                    // `CreatingHost`;届时若 host 已就绪,`grant_reserve`
-                                    // 为 no-op(非 `Reserving`)。
-                                    pane.advance_load(
-                                        tab_id,
-                                        generation,
-                                        crate::preview::PreviewLoadStage::Reserving,
-                                    );
-                                    // T11:等预算最长也有个上限;若 `granted` 迟迟不来
-                                    // 则超时进入可重试 Failed(而非永久 Reserving)。
-                                    io.arm_load_timeout(
-                                        project_id,
-                                        panel,
-                                        tab_id,
-                                        generation,
-                                        crate::preview::PreviewLoadStage::Reserving,
-                                    );
-                                } else {
-                                    pane.advance_load(
-                                        tab_id,
-                                        generation,
-                                        crate::preview::PreviewLoadStage::CreatingHost,
-                                    );
-                                    io.arm_load_timeout(
-                                        project_id,
-                                        panel,
-                                        tab_id,
-                                        generation,
-                                        crate::preview::PreviewLoadStage::CreatingHost,
-                                    );
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            pane.fail_load(
-                                tab_id,
-                                generation,
-                                crate::preview::PreviewError::new(error, true),
-                            );
-                        }
-                    }
-                    // Task 6:画像落定后,若该 tab 走 PlantUML 渲染 host,起后台
-                    // 授权读取(`load_document`)。放在 `pane` 可变借用结束后,
-                    // spawn 只需 `ws.project` 与已捕获的路径。
-                    if let (Some(path), Some(project)) =
-                        (plantuml_path.as_ref(), ws.project.as_ref())
-                        && ws
-                            .preview_pane(panel)
-                            .tabs()
-                            .iter()
-                            .any(|t| t.id == tab_id && t.uses_plantuml_host())
-                    {
-                        Self::spawn_plantuml_load(project, io, panel, tab_id, generation, path);
-                    }
-                    // 画像可能把临时非表格 route 改判为表格:此时才入队,需立即
-                    // spawn(建壳时已入队的由调用方 `preview_open_path` 那侧已 spawn)。
-                    ws.spawn_pending_tabular_loads(panel, io);
-                });
-            }
-            Message::PreviewLoadTimeout(project_id, panel, tab_id, generation, stage) => {
-                let locale = self.locale.active_locale().to_string();
-                self.with_project(project_id, move |ws, _io| {
-                    let pane = ws.preview_pane_mut(panel);
-                    // T11:只有仍在该 generation **且仍停在同 stage**的加载才判超时。
-                    // stage 不符说明已推进到下一阶段(会有新的超时接管),generation
-                    // 不符说明已重开/被替换——两者都静默丢弃,避免迟到超时误杀。
-                    if pane.load_timeout_matches(tab_id, generation, stage) {
-                        dozer_core::log_warn!(PREVIEW_LOG,
-                            panel = ?panel,
-                            tab_id,
-                            generation,
-                            stage = ?stage,
-                            "预览加载阶段超时,进入可重试失败"
-                        );
-                        pane.fail_load(
-                            tab_id,
-                            generation,
-                            crate::preview::PreviewError::new(
-                                crate::i18n::host_text(
-                                    "preview.load_timeout_retry",
-                                    "Preview load timed out; please retry",
-                                    &locale,
-                                ),
-                                true,
-                            ),
-                        );
-                    }
-                });
-            }
-            Message::PreviewRecoveryWritten(project_id, panel, tab_id) => {
-                self.with_project(project_id, move |ws, _io| {
-                    let pane = ws.preview_pane_mut(panel);
-                    if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == tab_id) {
-                        tab.recovery_written = true;
-                    }
-                });
-            }
-            Message::PreviewRecoveryRead(project_id, panel, tab_id, generation, restore) => {
-                self.with_project(project_id, move |ws, _io| {
-                    let pane = ws.preview_pane_mut(panel);
-                    let Some(text) = restore else {
-                        return;
-                    };
-                    // 通常加载仍在途 → 记入 pending_restore,由 DocumentLoaded 消费;
-                    // 若 recovery 读比 host 就绪还慢,由本方法就地生成恢复指令。
-                    if let Some((tab_id, text, revision)) =
-                        pane.apply_recovery_restore(tab_id, generation, text)
-                    {
-                        let language = pane
-                            .tabs()
-                            .iter()
-                            .find(|t| t.id == tab_id)
-                            .and_then(|t| match &t.kind {
-                                crate::preview::TabKind::File(p) => {
-                                    Some(crate::preview::extension_to_syntax(p))
-                                }
-                                _ => None,
-                            })
-                            .unwrap_or_default();
-                        pane.queue_editor_command(
-                            tab_id,
-                            crate::preview::EditorCommand::SetDocument {
-                                text,
-                                revision,
-                                language,
-                                read_only: false,
-                            },
-                        );
                     }
                 });
             }
@@ -2319,47 +2003,6 @@ impl App {
                     ws.term_tab_overflow_anchor = None;
                 });
             }
-            Message::PreviewTabOverflowToggle => {
-                #[cfg(target_os = "macos")]
-                {
-                    let last_cursor = self.last_cursor;
-                    let items = match self.active_workspace() {
-                        Some(ws) => {
-                            let entries: Vec<(usize, String, bool)> = ws
-                                .preview
-                                .tabs()
-                                .iter()
-                                .enumerate()
-                                .map(|(idx, tab)| {
-                                    (idx, tab.title.clone(), idx == ws.preview.active_idx())
-                                })
-                                .collect();
-                            tab_widget::tab_overflow_items(&entries, Message::PreviewSelectTab)
-                        }
-                        None => Vec::new(),
-                    };
-                    if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
-                        self.update(msg);
-                    }
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    let last_cursor = self.last_cursor;
-                    self.with_focused_project(|ws, _io| {
-                        ws.preview_tab_overflow_anchor = if ws.preview_tab_overflow_anchor.is_some()
-                        {
-                            None
-                        } else {
-                            Some(last_cursor)
-                        };
-                    });
-                }
-            }
-            Message::PreviewTabOverflowDismiss => {
-                self.with_focused_project(|ws, _io| {
-                    ws.preview_tab_overflow_anchor = None;
-                });
-            }
             Message::TermSelStart {
                 target,
                 col,
@@ -2393,585 +2036,6 @@ impl App {
                 });
             }
             Message::TermPaste(target, text) => self.term_paste(target, text),
-            Message::PreviewOpenPath(path) => self.preview_open_path(path),
-            // 空白页信息卡回灌:路由到 spawn 时记录的项目(用户中途切项目则
-            // `info.path != ws.project.path` → 直接丢)。同框 `blank_info_in_flight`
-            // 先清回 false,再做 stale guard(active tab 已不是 Blank 也丢)。
-            Message::PreviewBlankInfoLoaded(project_id, kind, info) => {
-                self.with_project(project_id, move |ws, _io| {
-                    // 先取项目根(`preview_pane_mut` 会借走整个 `ws`,不能再和它并存)。
-                    let current_root = ws.project.as_ref().map(|p| p.path.clone());
-                    let pane = ws.preview_pane_mut(kind);
-                    pane.blank_info_in_flight = false;
-                    if !current_root
-                        .as_deref()
-                        .is_some_and(|r| r == info.path.to_string_lossy().as_ref())
-                    {
-                        return;
-                    }
-                    let active_is_blank = pane
-                        .tabs
-                        .get(pane.active)
-                        .is_some_and(|t| matches!(t.kind, crate::preview::TabKind::Blank));
-                    if !active_is_blank {
-                        return;
-                    }
-                    pane.blank_info = Some(info);
-                });
-            }
-            Message::PreviewLargeFileSearchClose(kind) => {
-                self.with_focused_project(move |ws, _io| {
-                    ws.preview_pane_mut(kind).close_large_file_search()
-                });
-            }
-            Message::PreviewLargeFileSearchSubmit(kind, tab_id, query) => {
-                let Some(project_id) = self.active_project_id else {
-                    return;
-                };
-                self.with_focused_project(move |ws, io| {
-                    let pane = ws.preview_pane_mut(kind);
-                    // T9 bullet 5:空查询立即取消在途查询并清 loading,不派任务。
-                    if query.trim().is_empty() {
-                        pane.clear_large_file_search(tab_id);
-                        return;
-                    }
-                    let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
-                        return;
-                    };
-                    let crate::preview::TabKind::File(path) = tab.kind.clone() else {
-                        return;
-                    };
-                    // T9 bullet 2:作废旧 generation(置位共享取消信号),新查询
-                    // 的 generation + 取消句柄捕获进后台任务。
-                    let Some((generation, cancel)) =
-                        pane.start_large_file_search(tab_id, query.clone())
-                    else {
-                        return;
-                    };
-                    let proxy = io.proxy.clone();
-                    let progress_proxy = io.proxy.clone();
-                    io.handle.spawn(async move {
-                        let result = tokio::task::spawn_blocking(move || {
-                            // 进度限频:最快每 100ms 回灌一次(命中与进度都
-                            // 封顶,长文件扫描不至于把 UI 事件队列打爆)。
-                            let mut last = std::time::Instant::now()
-                                .checked_sub(std::time::Duration::from_secs(1))
-                                .unwrap_or_else(std::time::Instant::now);
-                            let should_cancel = {
-                                let cancel = cancel.clone();
-                                move || cancel.load(std::sync::atomic::Ordering::Relaxed)
-                            };
-                            // 窗口化:在整文件上流式搜索(不只搜持有窗口)。
-                            crate::preview::stream_search_cancellable(
-                                &path,
-                                &query,
-                                crate::preview::SearchOptions::default(),
-                                should_cancel,
-                                move |p| {
-                                    let now = std::time::Instant::now();
-                                    if now.duration_since(last)
-                                        < std::time::Duration::from_millis(100)
-                                    {
-                                        return;
-                                    }
-                                    last = now;
-                                    let _ = progress_proxy.send_event(
-                                        Message::PreviewLargeFileSearchProgress(
-                                            project_id,
-                                            kind,
-                                            tab_id,
-                                            generation,
-                                            p.completed,
-                                            p.total,
-                                        ),
-                                    );
-                                },
-                            )
-                            .map_err(|e| e.to_string())
-                        })
-                        .await
-                        .unwrap_or_else(|e| Err(e.to_string()));
-                        // 取消返回 `Ok(None)`:任务已被新查询/关闭作废,结果与
-                        // generation 都过期,直接丢弃(T9 bullet 2)。
-                        let message = match result {
-                            Ok(Some(outcome)) => Ok(outcome),
-                            // 取消(`Ok(None)`):已被新查询/关闭作废,静默丢弃。
-                            Ok(None) => return,
-                            Err(error) => Err(error),
-                        };
-                        let _ = proxy.send_event(Message::PreviewLargeFileSearchResults(
-                            project_id, kind, tab_id, generation, message,
-                        ));
-                    });
-                });
-            }
-            Message::PreviewLargeFileSearchResults(
-                project_id,
-                kind,
-                tab_id,
-                generation,
-                result,
-            ) => {
-                self.with_project(project_id, move |ws, _io| {
-                    let pane = ws.preview_pane_mut(kind);
-                    pane.set_large_file_search_results(tab_id, generation, result);
-                });
-            }
-            Message::PreviewLargeFileSearchProgress(
-                project_id,
-                kind,
-                tab_id,
-                generation,
-                completed,
-                total,
-            ) => {
-                self.with_project(project_id, move |ws, _io| {
-                    let pane = ws.preview_pane_mut(kind);
-                    pane.set_large_file_search_progress(
-                        tab_id,
-                        generation,
-                        crate::preview::PreviewLoadProgress {
-                            completed,
-                            total: (total > 0).then_some(total),
-                        },
-                    );
-                });
-            }
-            Message::PreviewLargeFileSearchGo(kind, forward) => {
-                self.with_focused_project(move |ws, _io| {
-                    let pane = ws.preview_pane_mut(kind);
-                    let Some(session) = pane.large_file_search.clone() else {
-                        return;
-                    };
-                    if session.hits.is_empty() {
-                        return;
-                    }
-                    let next = if forward {
-                        (session.current + 1) % session.hits.len()
-                    } else {
-                        (session.current + session.hits.len() - 1) % session.hits.len()
-                    };
-                    let hit = session.hits[next].clone();
-                    // 窗口化只读:命中在未加载区,先装窗口再全局 reveal。
-                    let line = hit.line_no.max(1) as u32;
-                    pane.queue_windowed_view(session.tab_id, line);
-                    pane.queue_editor_command(
-                        session.tab_id,
-                        crate::preview::EditorCommand::RevealPosition { line, column: 1 },
-                    );
-                    if let Some(s) = pane.large_file_search.as_mut() {
-                        s.current = next;
-                    }
-                    // `pane` 的可变借用到此结束,再取不相交的错误槽(两步借用不重叠)。
-                    *ws.preview_error_mut(kind) = None;
-                });
-            }
-            Message::PreviewSelectTab(idx) => self.preview_select_tab(idx),
-            Message::PreviewOpenExternal(kind, tab_id) => {
-                self.with_focused_project(move |ws, io| {
-                    let pane = ws.preview_pane(kind);
-                    let Some(tab) = pane.tabs().iter().find(|t| t.id == tab_id) else {
-                        return;
-                    };
-                    let crate::preview::TabKind::File(path) = &tab.kind else {
-                        return;
-                    };
-                    if !path.is_file() {
-                        return;
-                    }
-                    // 只交给系统默认应用打开,不隐式执行文件本身。
-                    #[cfg(target_os = "macos")]
-                    let program = "open";
-                    #[cfg(not(target_os = "macos"))]
-                    let program = "xdg-open";
-                    // `spawn()` 成功不代表打开成功(应用找不到/被拒时进程随后才非零退出),
-                    // 后台等退出状态,失败经 `proxy` 发 Toast(`Message::Toast` 分支会写日志)。
-                    let path = path.clone();
-                    let proxy = io.proxy.clone();
-                    io.handle.spawn(async move {
-                        let mut command = std::process::Command::new(program);
-                        command.arg(&path);
-                        let result = tokio::task::spawn_blocking(move || {
-                            crate::external_apps::run_open_command(command)
-                        })
-                        .await
-                        .unwrap_or_else(|e| {
-                            Err(crate::external_apps::OpenError::Spawn {
-                                program: program.to_string(),
-                                error: e.to_string(),
-                            })
-                        });
-                        if let Err(reason) = result {
-                            let _ = proxy.send_event(Message::Toast(toast::Message::Push {
-                                scope: PREVIEW_LOG,
-                                level: toast::Level::Error,
-                                text: crate::external_apps::open_failure_message(
-                                    None, &path, &reason,
-                                ),
-                                key: None,
-                            }));
-                        }
-                    });
-                });
-            }
-            Message::PreviewRetry(kind, tab_id) => {
-                self.with_focused_project(move |ws, io| {
-                    ws.preview_retry(kind, tab_id, io);
-                });
-            }
-            Message::PreviewPlainTextOpen(kind, tab_id) => {
-                self.with_focused_project(move |ws, io| {
-                    ws.preview_plain_text_open(kind, tab_id, io);
-                });
-            }
-            Message::PreviewConflictKeep(kind, tab_id) => {
-                self.with_focused_project(move |ws, _io| {
-                    ws.preview_conflict_keep(kind, tab_id);
-                });
-            }
-            Message::PreviewConflictReload(kind, tab_id) => {
-                self.with_focused_project(move |ws, io| {
-                    ws.preview_conflict_reload(kind, tab_id, io);
-                });
-            }
-            Message::PreviewTabularTextModeToggle(kind, tab_id) => {
-                self.with_focused_project(move |ws, _io| {
-                    let pane = ws.preview_pane_mut(kind);
-                    if let Some(tab) = pane.tabs_mut().iter_mut().find(|t| t.id == tab_id)
-                        && let Some(crate::preview::PreviewBackend::Tabular(tabular)) =
-                            tab.backend.as_mut()
-                    {
-                        tabular.mode = match tabular.mode {
-                            crate::preview::TabularMode::Grid => crate::preview::TabularMode::Text,
-                            crate::preview::TabularMode::Text => crate::preview::TabularMode::Grid,
-                        };
-                    }
-                });
-            }
-            Message::PreviewJsonModeToggle(kind, tab_id) => {
-                self.with_focused_project(move |ws, io| {
-                    if let Some((tab_id, generation)) =
-                        ws.preview_pane_toggle_json_mode(kind, tab_id)
-                        && let Some(project_id) = ws.project.as_ref().map(|p| p.id)
-                    {
-                        io.arm_load_timeout(
-                            project_id,
-                            kind,
-                            tab_id,
-                            generation,
-                            crate::preview::PreviewLoadStage::SwitchingMode,
-                        );
-                    }
-                });
-            }
-            Message::PreviewCloseTab(idx) => {
-                let mut closed_old_len = None;
-                self.with_focused_project(|ws, io| {
-                    // 关闭前静默保存该 tab 的就地改动。老 iced editor 走
-                    // `preview_pane_save_at` 就地落盘;CodeMirror tab 的正文
-                    // 活在 webview 里,Rust 不持有,改为下发 `SaveDocument`,
-                    // 等 host 回 `save_requested` 落盘后再关(见该分支的
-                    // `take_pending_close`)。此路径下这里**不**立刻 close。
-                    if ws.preview.request_save_before_close_if_dirty(idx) {
-                        return;
-                    }
-                    ws.preview_pane_save_at(PanelKind::Files, idx);
-                    closed_old_len = Some(ws.preview.tabs().len());
-                    ws.preview.close(idx);
-                    // 关 tab 后位置全变，旧 first 可能越界——归零防御（P1L T5）。
-                    ws.preview_tab_first = 0;
-                    ws.spawn_preview_state_save(io);
-                    // 关闭:上下文多半变了,立即 flush,不等防抖窗口。
-                    ws.flush_preview_context_push(io);
-                });
-                // 见 `App::dehover_after_tab_close` 文档:关掉的 tab 若正被
-                // 悬停,残留的 hover 记录会被将来复用同一下标的新 tab 继承。
-                if let Some(old_len) = closed_old_len {
-                    self.dehover_after_tab_close(
-                        |i| HoverId::tab_item(PanelKind::Files, i as u64),
-                        |i| HoverId::tab_close(PanelKind::Files, i as u64),
-                        idx,
-                        old_len,
-                    );
-                }
-            }
-            Message::PreviewToggleRenderMode(idx) => {
-                self.with_focused_project(|ws, io| {
-                    if let Some((tab_id, generation)) =
-                        ws.preview_pane_toggle_render_mode(PanelKind::Files, idx)
-                        && let Some(project_id) = ws.project.as_ref().map(|p| p.id)
-                    {
-                        io.arm_load_timeout(
-                            project_id,
-                            PanelKind::Files,
-                            tab_id,
-                            generation,
-                            crate::preview::PreviewLoadStage::SwitchingMode,
-                        );
-                    }
-                    ws.spawn_pending_plantuml_reloads(PanelKind::Files, io);
-                });
-            }
-            Message::PreviewSaveActive(kind) => {
-                self.with_focused_project(move |ws, _io| ws.preview_pane_save_active(kind));
-            }
-            Message::PreviewTabInsertTab(kind) => {
-                self.with_focused_project(move |ws, _io| {
-                    ws.preview_pane_active_editor_event(
-                        kind,
-                        iced_widget::text_editor::Action::Edit(
-                            iced_widget::text_editor::Edit::Insert('\t'),
-                        ),
-                    );
-                });
-            }
-            Message::PreviewUndoActive(kind) => {
-                self.with_focused_project(move |ws, _io| ws.preview_pane_undo_active(kind));
-            }
-            Message::PreviewRedoActive(kind) => {
-                self.with_focused_project(move |ws, _io| ws.preview_pane_redo_active(kind));
-            }
-            Message::PreviewFindOpen(kind) => {
-                self.with_focused_project(move |ws, _io| {
-                    // 窗口化 CodeMirror tab:普通 Find 只搜持有窗口没意义,改为
-                    // 打开整文件流式搜索条(与 host `find_request` 同一条 session)。
-                    let windowed_id = {
-                        let pane = ws.preview_pane(kind);
-                        let idx = pane.active_idx();
-                        pane.tabs()
-                            .get(idx)
-                            .filter(|t| t.uses_windowed_editor())
-                            .map(|t| t.id)
-                    };
-                    if let Some(tab_id) = windowed_id {
-                        let pane = ws.preview_pane_mut(kind);
-                        pane.open_large_file_search(tab_id);
-                    } else {
-                        ws.preview_find_open(kind);
-                    }
-                });
-            }
-            Message::PreviewFindOpenWithReplace(kind) => {
-                // 窗口化大文件没有"替换"概念,同样分流到整文件搜索条(忽略
-                // "默认展开替换行"这个语义,大文件搜索条本来就没有替换行)。
-                self.with_focused_project(move |ws, _io| {
-                    let windowed_id = {
-                        let pane = ws.preview_pane(kind);
-                        let idx = pane.active_idx();
-                        pane.tabs()
-                            .get(idx)
-                            .filter(|t| t.uses_windowed_editor())
-                            .map(|t| t.id)
-                    };
-                    if let Some(tab_id) = windowed_id {
-                        let pane = ws.preview_pane_mut(kind);
-                        pane.open_large_file_search(tab_id);
-                    } else {
-                        ws.preview_find_open_with_replace(kind);
-                    }
-                });
-            }
-            Message::PreviewFindReplaceToggle(kind) => {
-                self.with_focused_project(move |ws, _io| ws.preview_find_toggle_replace(kind));
-            }
-            Message::PreviewFindClose(kind) => {
-                self.with_focused_project(move |ws, _io| ws.preview_find_close(kind));
-            }
-            Message::PreviewFindText(kind, query) => {
-                self.with_focused_project(move |ws, _io| ws.preview_find_type(kind, query));
-            }
-            Message::PreviewFindGo(kind, next) => {
-                self.with_focused_project(move |ws, _io| ws.preview_find_go(kind, next));
-            }
-            Message::PreviewFindCase(kind, sensitive) => {
-                self.with_focused_project(move |ws, _io| ws.preview_find_case(kind, sensitive));
-            }
-            Message::PreviewFindReplacement(kind, repl) => {
-                self.with_focused_project(move |ws, _io| {
-                    ws.preview_find_set_replacement(kind, repl);
-                });
-            }
-            Message::PreviewFindReplaceCurrent(kind) => {
-                self.with_focused_project(move |ws, _io| {
-                    ws.preview_find_replace_current(kind);
-                });
-            }
-            Message::PreviewFindReplaceAll(kind) => {
-                self.with_focused_project(move |ws, _io| {
-                    ws.preview_find_replace_all(kind);
-                });
-            }
-            Message::PreviewFindWebviewState(kind, current, total) => {
-                // flyfish `getSearchState()` 回写:直接落进 `kind` 面板当前
-                // webview Find 会话的 `current`/`count`。这是异步回调(经
-                // `EventLoopProxy` 送回),不依赖任何 webview 句柄,在 `App`
-                // 顶部 update 里落库即可——真正的 JS 注入在 `window_events::
-                // apply_pending_preview_find`(句柄只在那里拿得到)。iced 在
-                // 处理完这条消息后会自然重绘,n/m 计数立即刷新。
-                self.preview_find_set_webview_state(kind, current, total);
-            }
-            Message::TabularLoaded(project_id, kind, tab_id, generation, result) => {
-                self.with_project(project_id, move |ws, io| {
-                    // T11:取消是正常结束,不当作解析失败告警。
-                    match &result {
-                        Err(error) if error == crate::tabular::TABULAR_CANCELLED => {
-                            dozer_core::log_debug!(PREVIEW_LOG, panel = ?kind, tab_id, generation, "表格加载已取消");
-                        }
-                        Err(error) => {
-                            dozer_core::log_warn!(PREVIEW_LOG, panel = ?kind, tab_id, generation, %error, "表格首次加载失败");
-                        }
-                        Ok(view) => {
-                            dozer_core::log_debug!(PREVIEW_LOG,
-                                panel = ?kind,
-                                tab_id,
-                                generation,
-                                sheets = view.sheet_names.len(),
-                                "表格首次加载完成"
-                            );
-                        }
-                    }
-                    let sheet_to_select = {
-                        let pane = ws.preview_pane_mut(kind);
-                        pane.finish_tabular_load(tab_id, generation, result)
-                    };
-                    // 恢复的 active sheet 不是首个 → 触发一次懒加载。
-                    // `select_sheet`(经 `preview_pane_tabular_action`)会把
-                    // scroll_row/scroll_col 重置为 0(正常切 sheet 的预期
-                    // 行为),因此要在它之后把持久化的 row/col 重新应用
-                    // 一遍,否则恢复到非首个 sheet 的滚动位置会被静默清零。
-                    if let Some((sheet, row, col)) = sheet_to_select {
-                        ws.preview_pane_tabular_action(kind, tab_id, sheet, io);
-                        let pane = ws.preview_pane_mut(kind);
-                        if let Some(view) = pane.tabular_mut(tab_id) {
-                            view.scroll_row = row;
-                            view.scroll_col = col;
-                        }
-                    }
-                });
-            }
-            Message::TabularSheetLoaded(project_id, kind, tab_id, sheet_index, result) => {
-                self.with_project(project_id, move |ws, _io| {
-                    let pane = ws.preview_pane_mut(kind);
-                    let loaded_ok = result.is_ok();
-                    if let Some(crate::preview::TabularState::Ready(view)) =
-                        pane.tabular_state_mut(tab_id)
-                    {
-                        view.apply_sheet_loaded(sheet_index, result);
-                    }
-                    pane.queue_tabular_command(
-                        tab_id,
-                        crate::preview::TabularCommand::SetSheetLoading {
-                            sheet_index,
-                            loading: false,
-                        },
-                    );
-                    // 用户可能在这次懒加载完成前又切到了别的 sheet
-                    // (rapid switch)——`view.active_sheet` 已经不是
-                    // `sheet_index` 时,不该把 JS 拽回这个已经不再是目标的
-                    // sheet(否则会看到一个没数据的空白网格)。
-                    let still_active = pane
-                        .tabular_mut(tab_id)
-                        .is_some_and(|view| view.active_sheet == sheet_index);
-                    if loaded_ok && still_active {
-                        pane.queue_tabular_command(
-                            tab_id,
-                            crate::preview::TabularCommand::SelectSheet { sheet_index },
-                        );
-                        pane.push_sheet_schema_and_window(tab_id, sheet_index);
-                    }
-                });
-            }
-            Message::ProjectPreviewOpenPath(path) => self.project_preview_open_path(path),
-            Message::ProjectPreviewSelectTab(idx) => self.project_preview_select_tab(idx),
-            Message::ProjectPreviewCloseTab(idx) => {
-                let mut closed_old_len = None;
-                self.with_focused_project(|ws, _io| {
-                    // 关闭前静默保存,语义同 `PreviewCloseTab`:CodeMirror tab
-                    // 下发 `SaveDocument` 等回落盘再关,其余就地 `save_at` 后关。
-                    if ws.project_preview.request_save_before_close_if_dirty(idx) {
-                        return;
-                    }
-                    ws.preview_pane_save_at(PanelKind::Project, idx);
-                    closed_old_len = Some(ws.project_preview.tabs().len());
-                    ws.project_preview.close(idx);
-                    ws.project_preview_tab_first = 0;
-                });
-                // 见 `App::dehover_after_tab_close` 文档:关掉的 tab 若正被
-                // 悬停,残留的 hover 记录会被将来复用同一下标的新 tab 继承。
-                if let Some(old_len) = closed_old_len {
-                    self.dehover_after_tab_close(
-                        |i| HoverId::tab_item(PanelKind::Project, i as u64),
-                        |i| HoverId::tab_close(PanelKind::Project, i as u64),
-                        idx,
-                        old_len,
-                    );
-                }
-            }
-            Message::ProjectPreviewToggleRenderMode(idx) => {
-                self.with_focused_project(|ws, io| {
-                    if let Some((tab_id, generation)) =
-                        ws.preview_pane_toggle_render_mode(PanelKind::Project, idx)
-                        && let Some(project_id) = ws.project.as_ref().map(|p| p.id)
-                    {
-                        io.arm_load_timeout(
-                            project_id,
-                            PanelKind::Project,
-                            tab_id,
-                            generation,
-                            crate::preview::PreviewLoadStage::SwitchingMode,
-                        );
-                    }
-                    ws.spawn_pending_plantuml_reloads(PanelKind::Project, io);
-                });
-            }
-            Message::ProjectPreviewTabOverflowToggle => {
-                #[cfg(target_os = "macos")]
-                {
-                    let last_cursor = self.last_cursor;
-                    let items = match self.active_workspace() {
-                        Some(ws) => {
-                            let entries: Vec<(usize, String, bool)> = ws
-                                .project_preview
-                                .tabs()
-                                .iter()
-                                .enumerate()
-                                .map(|(idx, tab)| {
-                                    (
-                                        idx,
-                                        tab.title.clone(),
-                                        idx == ws.project_preview.active_idx(),
-                                    )
-                                })
-                                .collect();
-                            tab_widget::tab_overflow_items(
-                                &entries,
-                                Message::ProjectPreviewSelectTab,
-                            )
-                        }
-                        None => Vec::new(),
-                    };
-                    if let Some(msg) = crate::chrome::native_menu::show(items, last_cursor) {
-                        self.update(msg);
-                    }
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    let last_cursor = self.last_cursor;
-                    self.with_focused_project(|ws, _io| {
-                        ws.project_preview_tab_overflow_anchor =
-                            if ws.project_preview_tab_overflow_anchor.is_some() {
-                                None
-                            } else {
-                                Some(last_cursor)
-                            };
-                    });
-                }
-            }
-            Message::ProjectPreviewTabOverflowDismiss => {
-                self.with_focused_project(|ws, _io| {
-                    ws.project_preview_tab_overflow_anchor = None;
-                });
-            }
             Message::Browser(browser::Message::BookmarksLoaded(pid, bookmarks)) => {
                 self.browser_bookmarks_loaded(pid, bookmarks)
             }
@@ -3395,7 +2459,7 @@ impl App {
                 if is_dir {
                     self.update(Message::Files(files::Message::Toggle(path)));
                 } else {
-                    self.update(Message::PreviewOpenPath(path));
+                    self.preview_open_path(path);
                 }
             }
             #[cfg(target_os = "macos")]
@@ -3548,7 +2612,7 @@ impl App {
             Message::Project(project::Message::OpenLink(path)) => {
                 // 项目链接打开的文件进 Project 面板右配对的预览(`ws.project_preview`),
                 // 不冲进 Files 预览——两条预览各自独立,互相不打扰。
-                self.update(Message::ProjectPreviewOpenPath(path));
+                self.project_preview_open_path(path);
             }
             Message::Project(project::Message::Pick(target)) => {
                 // 文件/目录选择器依赖 macOS 主线程原生能力(rfd/NSOpenPanel 模态,
@@ -5759,67 +4823,6 @@ impl App {
         });
     }
 
-    /// T3:把一个文件 tab 的画像(`profile_file`,有界采样 + 病态长首行探测)
-    /// 丢到 `spawn_blocking` 后台线程跑,UI 线程不做任何文件 I/O。完成后经
-    /// [`Message::PreviewProfiled`] 回灌,按 `project_id` 路由 + `generation`
-    /// 闸门丢弃过期结果。`EventLoopProxy` 发送失败(App 已退出)= 任务自然结束。
-    fn spawn_preview_profile(
-        ws: &Workspace,
-        io: &crate::workspace::ShellIo,
-        panel: PanelKind,
-        tab_id: usize,
-        generation: u64,
-        path: &std::path::Path,
-    ) {
-        let Some(project_id) = ws.project_id() else {
-            return;
-        };
-        let path = path.to_path_buf();
-        let proxy = io.proxy.clone();
-        io.handle.spawn_blocking(move || {
-            let result = crate::preview::profile_file(&path).map_err(|e| e.to_string());
-            let _ = proxy.send_event(Message::PreviewProfiled(
-                project_id, panel, tab_id, generation, result,
-            ));
-        });
-    }
-
-    /// Task 6:把 PlantUML `load_document`(读父源码 + 递归授权 include,含
-    /// 安全校验)丢到 `spawn_blocking` 后台线程跑,UI 线程不做文件 I/O。完成
-    /// 后经 [`Message::PlantUmlLoaded`] 回灌,按 `project_id` 路由 + `generation`
-    /// 闸门丢弃过期结果。
-    fn spawn_plantuml_load(
-        project: &dozer_core::protocol::ProjectInfo,
-        io: &crate::workspace::ShellIo,
-        panel: PanelKind,
-        tab_id: usize,
-        generation: u64,
-        path: &std::path::Path,
-    ) {
-        let root = std::path::PathBuf::from(&project.path);
-        let path = path.to_path_buf();
-        let proxy = io.proxy.clone();
-        let project_id = project.id;
-        io.handle.spawn_blocking(move || {
-            let result = crate::preview::load_document(
-                &root,
-                &path,
-                crate::preview::PlantUmlLimits::default(),
-            );
-            let _ = proxy.send_event(Message::PlantUmlLoaded(
-                project_id, panel, tab_id, generation, result,
-            ));
-        });
-    }
-
-    /// 打开文件预览:统一走 `PreviewPane::open_path` 按路由得到 editor host /
-    /// JSON host / tabular / webview 后端。老 iced 原生编辑器候选的
-    /// `insert_loading_tab` + 后台 `read_and_build_native_editor` 异步构造
-    /// 路径已随 Phase D 退役。
-    pub(crate) fn preview_open_path(&mut self, path: PathBuf) {
-        self.preview_open_path_at(path, None);
-    }
-
     /// 上下文条的消息路由。`project_id` 来自信封,异步应答即使在用户切到别的
     /// 项目之后到达,也只写回发起它的那个 `Workspace`。
     pub(crate) fn agent_context_message(
@@ -5997,84 +5000,143 @@ impl App {
         }
     }
 
+    /// 打开文件预览(Files 面板)。`target_line` 仅 CodeMirror 类页签生效。
+    pub(crate) fn preview_open_path(&mut self, path: PathBuf) {
+        self.preview_open_path_at(path, None);
+    }
+
     pub(crate) fn preview_open_path_at(&mut self, path: PathBuf, target_line: Option<usize>) {
-        // 同 `preview_select_tab`:`preview_tab_bar_avail_px` 要 `&self`,
-        // 得在 `with_focused_project` 的 `&mut self` 借用之前先算好。
-        let avail_w = self.preview_tab_bar_avail_px(PanelKind::Files);
-        if self.active_project_id.is_none() {
+        self.preview_ui(
+            PanelKind::Files,
+            dozer_panel_preview::Message::OpenPath { path, target_line },
+        );
+    }
+
+    /// Project 面板右配对预览打开文件(独立的 `ws.project_preview`)。
+    pub(crate) fn project_preview_open_path(&mut self, path: PathBuf) {
+        self.preview_ui(
+            PanelKind::Project,
+            dozer_panel_preview::Message::OpenPath {
+                path,
+                target_line: None,
+            },
+        );
+    }
+
+    /// 预览面板的 UI 消息:交给库的 `update`,再处理需要 `App` 级状态的通知(拖拽武装、悬停清理)。
+    pub(crate) fn preview_ui(&mut self, kind: PanelKind, msg: dozer_panel_preview::Message) {
+        use dozer_panel_preview::Message as PM;
+        let cursor = self.last_cursor;
+        #[cfg(target_os = "macos")]
+        if matches!(msg, PM::TabOverflowToggle { .. }) {
+            // macOS:原生菜单,选中项回投 `SelectTab`。
+            let items = match self.active_workspace() {
+                Some(ws) => {
+                    let pane = ws.preview_pane(kind);
+                    let entries: Vec<(usize, String, bool)> = pane
+                        .tabs()
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, tab)| (idx, tab.title.clone(), idx == pane.active_idx()))
+                        .collect();
+                    tab_widget::tab_overflow_items(&entries, move |i| {
+                        Message::Preview(kind, PM::SelectTab(i))
+                    })
+                }
+                None => Vec::new(),
+            };
+            if let Some(msg) = crate::chrome::native_menu::show(items, cursor) {
+                self.update(msg);
+            }
             return;
         }
-        self.with_focused_project(move |ws, io| {
-            if !path.is_file() {
-                ws.preview_error = Some(
-                    dozer_model::LocalizedText::keyed(
-                        crate::i18n::HOST_OWNER,
-                        "preview.file_unreadable",
-                        "The file does not exist or is unreadable: {path}",
-                    )
-                    .with_arg("path", path.display().to_string()),
-                );
-                return;
-            }
-            ws.preview_error = None;
-            ws.files.set_tree_selected(path.clone());
-            ws.allowed_files
-                .lock()
-                .expect("allowed_files 锁")
-                .insert(path.clone());
-
-            if let Some(idx) = ws.preview.find_existing_file_tab(&path) {
-                // 同一文件已开则切过去,不重复开/重复读盘。
-                ws.preview.select(idx);
-                // 命中的是只恢复了壳的 tab:物化它。
-                if let Some(tab_id) = ws.preview.tabs().get(idx).map(|t| t.id)
-                    && ws.preview.is_suspended(tab_id)
-                {
-                    ws.load_preview_tab(PanelKind::Files, tab_id, io);
-                }
-                if let Some(line) = target_line
-                    && let Some(tab) = ws.preview.tabs_mut().get_mut(idx)
-                {
-                    tab.pending_jump_line = Some(line);
-                }
-            } else {
-                // T3:UI 线程不读盘——建临时 route 壳(Profiling),画像丢后台。
-                let (id, generation) = ws.preview.open_path_provisional(path.clone());
-                // CodeMirror tab 在 host `ready` 后由 `EditorWebviewEvent`
-                // 排队 reveal;webview/表格类仍无法跳转光标,target_line 忽略。
-                if let Some(line) = target_line
-                    && let Some(tab) = ws.preview.tabs_mut().iter_mut().find(|t| t.id == id)
-                    && tab.uses_editor_host()
-                {
-                    tab.pending_jump_line = Some(line);
-                }
-                if let Some(generation) = generation {
-                    Self::spawn_preview_profile(ws, io, PanelKind::Files, id, generation, &path);
-                }
-            }
-            ws.spawn_pending_tabular_loads(PanelKind::Files, io);
-            // 新 tab 落在末尾(复用已开的文件则落在该文件原来的位置)——
-            // 用跟 `preview_select_tab` 同一套 `tab_window_reveal`,把窗口
-            // 起点钳到"包含这个新激活 tab"的位置,而不是无脑滚回最左
-            // (此前 `= 0` 的写法:tab 一多,新开的文件反而被滚出可见区,
-            // 2026-09-14 用户反馈"新打开文件时 tab 应该跳转到对应位置")。
-            let active = ws.preview.active_idx();
-            let widths: Vec<f32> = ws
-                .preview
-                .tabs()
-                .iter()
-                .map(|t| preview_tab_display_width(&t.title))
-                .collect();
-            ws.preview_tab_first = byteui::interaction::tab_strip::tab_window_reveal(
-                &widths,
-                4.0,
-                avail_w,
-                ws.preview_tab_first,
-                active,
-            );
-            ws.spawn_preview_state_save(io);
-            ws.spawn_preview_context_push(io);
+        let msg = match msg {
+            PM::TabOverflowToggle { .. } => PM::TabOverflowToggle { cursor },
+            other => other,
+        };
+        // 得在借用 `ws` 之前算好——`preview_tab_bar_avail_px` 要 `&self`。
+        let avail_px = self.preview_tab_bar_avail_px(kind);
+        let locale = self.locale.active_locale().to_string();
+        let mut app_level = Vec::new();
+        self.with_focused_project(|ws, io| {
+            app_level = ws.preview_dispatch(kind, msg, io, &locale, avail_px);
         });
+        self.handle_preview_app_effects(kind, app_level);
+    }
+
+    /// 预览面板的后台任务结果:按 `project_id` 路由到发起它的项目。
+    pub(crate) fn preview_result(
+        &mut self,
+        project_id: ProjectId,
+        kind: PanelKind,
+        msg: dozer_panel_preview::Message,
+    ) {
+        if let dozer_panel_preview::Message::OpenExternalFailed { path, error } = &msg {
+            #[cfg(target_os = "macos")]
+            let program = "open";
+            #[cfg(not(target_os = "macos"))]
+            let program = "xdg-open";
+            let reason = crate::external_apps::OpenError::Spawn {
+                program: program.to_string(),
+                error: error.clone(),
+            };
+            self.update(Message::Toast(toast::Message::Push {
+                scope: PREVIEW_LOG,
+                level: toast::Level::Error,
+                text: crate::external_apps::open_failure_message(None, path, &reason),
+                key: None,
+            }));
+            return;
+        }
+        let locale = self.locale.active_locale().to_string();
+        let mut app_level = Vec::new();
+        self.with_project(project_id, |ws, io| {
+            app_level = ws.preview_dispatch(kind, msg, io, &locale, 0.0);
+        });
+        self.handle_preview_app_effects(kind, app_level);
+    }
+
+    fn handle_preview_app_effects(
+        &mut self,
+        kind: PanelKind,
+        effects: Vec<dozer_panel_preview::Effect>,
+    ) {
+        use dozer_panel_preview::Effect;
+        for effect in effects {
+            match effect {
+                // 按住页签(选中处理)＝准备拖的来源。
+                Effect::TabSelected { index } => {
+                    let group = match kind {
+                        PanelKind::Project => TabGroup::ProjectPreview,
+                        _ => TabGroup::Preview,
+                    };
+                    self.tab_drag = Some(TabDrag {
+                        group,
+                        source: index,
+                        press_pos: self.last_cursor,
+                    });
+                }
+                // 关掉的 tab 若正被悬停,残留的 hover 记录会被将来复用同一下标的新 tab 继承。
+                Effect::TabClosed { index, old_len } => {
+                    if matches!(kind, PanelKind::Project) {
+                        self.dehover_after_tab_close(
+                            |i| HoverId::tab_item(PanelKind::Project, i as u64),
+                            |i| HoverId::tab_close(PanelKind::Project, i as u64),
+                            index,
+                            old_len,
+                        );
+                    } else {
+                        self.dehover_after_tab_close(
+                            |i| HoverId::tab_item(PanelKind::Files, i as u64),
+                            |i| HoverId::tab_close(PanelKind::Files, i as u64),
+                            index,
+                            old_len,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     /// 点"扫描"(原生按钮与 webview 事件共用入口)。
@@ -6158,110 +5220,6 @@ impl App {
         });
     }
 
-    pub(crate) fn preview_select_tab(&mut self, idx: usize) {
-        let arming = self
-            .active_workspace()
-            .map(|ws| idx < ws.preview.tabs().len())
-            .unwrap_or(false);
-        // 得在借用 `ws` 之前算好——`preview_tab_bar_avail_px` 要 `&self`,
-        // 跟下面 `with_focused_project` 内部的 `&mut self` 借用冲突,必须
-        // 提前拿到这个值再原样传进闭包(同渲染侧 `preview_pane_for` 用的
-        // 是同一个真实宽度,窗口起点算法两边才不会算出不一致的结果)。
-        let avail_w = self.preview_tab_bar_avail_px(PanelKind::Files);
-        self.with_focused_project(|ws, io| {
-            ws.preview.select(idx);
-            // Phase C Task 5:切到只恢复了壳的 tab 时物化它(其余 tab 保持 Suspended)。
-            if let Some(tab_id) = ws.preview.tabs().get(idx).map(|t| t.id)
-                && ws.preview.is_suspended(tab_id)
-            {
-                ws.load_preview_tab(PanelKind::Files, tab_id, io);
-            }
-            if idx < ws.preview.tabs().len() {
-                let widths: Vec<f32> = ws
-                    .preview
-                    .tabs()
-                    .iter()
-                    .map(|t| preview_tab_display_width(&t.title))
-                    .collect();
-                ws.preview_tab_first = byteui::interaction::tab_strip::tab_window_reveal(
-                    &widths,
-                    4.0,
-                    avail_w,
-                    ws.preview_tab_first,
-                    idx,
-                );
-                ws.preview_tab_overflow_anchor = None;
-            }
-            ws.spawn_preview_state_save(io);
-            // 切换 tab:上下文立即变,flush 到 dozerd 不等防抖。
-            ws.flush_preview_context_push(io);
-        });
-        if arming {
-            self.tab_drag = Some(TabDrag {
-                group: TabGroup::Preview,
-                source: idx,
-                press_pos: self.last_cursor,
-            });
-        }
-    }
-
-    /// Project 面板右配对预览打开文件:写入 `ws.project_preview`(独立的
-    /// `PreviewPane`),完全不碰 Files 预览的 `ws.preview`/`ws.files`。
-    /// tab 是项目链接点开产生的会话期状态,不持久化、也不向 daemon 推上下文,
-    /// 避免与 Files 预览那份持久化 `preview_state` 互相覆盖。
-    pub(crate) fn project_preview_open_path(&mut self, path: PathBuf) {
-        let avail_w = self.preview_tab_bar_avail_px(PanelKind::Project);
-        if self.active_project_id.is_none() {
-            return;
-        }
-        self.with_focused_project(move |ws, io| {
-            if !path.is_file() {
-                ws.project_preview_error = Some(
-                    dozer_model::LocalizedText::keyed(
-                        crate::i18n::HOST_OWNER,
-                        "preview.file_unreadable",
-                        "The file does not exist or is unreadable: {path}",
-                    )
-                    .with_arg("path", path.display().to_string()),
-                );
-                return;
-            }
-            ws.project_preview_error = None;
-            ws.project_panel.set_selected_link(path.clone());
-            ws.allowed_files
-                .lock()
-                .expect("allowed_files 锁")
-                .insert(path.clone());
-
-            if let Some(idx) = ws.project_preview.find_existing_file_tab(&path) {
-                ws.project_preview.select(idx);
-            } else {
-                // T3:同 Files 预览——建临时 route 壳,画像丢后台。
-                let (id, generation) = ws.project_preview.open_path_provisional(path.clone());
-                if let Some(generation) = generation {
-                    Self::spawn_preview_profile(ws, io, PanelKind::Project, id, generation, &path);
-                }
-            }
-            ws.spawn_pending_tabular_loads(PanelKind::Project, io);
-            // 新 tab 落在末尾(或复用已开文件原位),用 `tab_window_reveal`
-            // 钳出包含它的窗口起点,不再无脑滚回最左(同 Files 预览)。
-            let active = ws.project_preview.active_idx();
-            let widths: Vec<f32> = ws
-                .project_preview
-                .tabs()
-                .iter()
-                .map(|t| preview_tab_display_width(&t.title))
-                .collect();
-            ws.project_preview_tab_first = byteui::interaction::tab_strip::tab_window_reveal(
-                &widths,
-                4.0,
-                avail_w,
-                ws.project_preview_tab_first,
-                active,
-            );
-        });
-    }
-
     /// 项目信息面板切入时调用:确保项目根目录有一份 `README.md`(没有就按
     /// 项目名 + 描述生成,已有则原样保留),然后**一律**在右侧配套预览窗打
     /// 开这份 README(首次切进来就让它展示项目文档)。
@@ -6278,42 +5236,6 @@ impl App {
             return;
         };
         self.project_preview_open_path(readme);
-    }
-
-    pub(crate) fn project_preview_select_tab(&mut self, idx: usize) {
-        let arming = self
-            .active_workspace()
-            .map(|ws| idx < ws.project_preview.tabs().len())
-            .unwrap_or(false);
-        // 同 `preview_select_tab`:提前算好真实可用宽度,避免跟
-        // `with_focused_project` 的 `&mut self` 借用冲突。
-        let avail_w = self.preview_tab_bar_avail_px(PanelKind::Project);
-        self.with_focused_project(|ws, _io| {
-            ws.project_preview.select(idx);
-            if idx < ws.project_preview.tabs().len() {
-                let widths: Vec<f32> = ws
-                    .project_preview
-                    .tabs()
-                    .iter()
-                    .map(|t| preview_tab_display_width(&t.title))
-                    .collect();
-                ws.project_preview_tab_first = byteui::interaction::tab_strip::tab_window_reveal(
-                    &widths,
-                    4.0,
-                    avail_w,
-                    ws.project_preview_tab_first,
-                    idx,
-                );
-                ws.project_preview_tab_overflow_anchor = None;
-            }
-        });
-        if arming {
-            self.tab_drag = Some(TabDrag {
-                group: TabGroup::ProjectPreview,
-                source: idx,
-                press_pos: self.last_cursor,
-            });
-        }
     }
 
     pub(crate) fn agent_state_changed(
