@@ -11,6 +11,8 @@ pub mod capabilities;
 pub mod code_host;
 pub mod i18n;
 pub mod pane;
+#[cfg(test)]
+mod pane_isolation_tests;
 pub mod plantuml;
 pub mod state;
 pub mod tabular;

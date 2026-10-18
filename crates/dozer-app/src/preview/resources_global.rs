@@ -89,3 +89,19 @@ impl From<PanelKind> for ViewerPanel {
         viewer_panel(kind)
     }
 }
+
+#[cfg(test)]
+mod mapping_tests {
+    use super::*;
+
+    /// 穷举 `PanelKind` 里的预览宿主面板:映射到 `ViewerPanel` 后能原样映射回来;
+    /// 其余面板不会产生 viewer,落到 `Files`。
+    #[test]
+    fn panelkind_to_viewerpanel_mapping_is_total() {
+        for kind in [PanelKind::Files, PanelKind::Project, PanelKind::GitLog] {
+            assert_eq!(PanelKind::from(viewer_panel(kind)), kind);
+            assert_eq!(ViewerPanel::from(kind), viewer_panel(kind));
+        }
+        assert_eq!(viewer_panel(PanelKind::Conversations), ViewerPanel::Files);
+    }
+}
