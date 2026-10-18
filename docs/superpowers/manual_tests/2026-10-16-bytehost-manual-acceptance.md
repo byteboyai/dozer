@@ -38,7 +38,7 @@ target/aarch64-apple-darwin/debug/dozer
 |---|---|---|---|
 | 1.1 | 安装 `~/excalidraw-app` | 审批卡显示来源"本地目录"、运行方式 `static_web`、权限全最严 | ☐ |
 | 1.2 | 批准安装,图标栏出现图标,打开,画几笔 | 画布正常 | ☐ |
-| 1.3 | 退出整个 Dozer(dozerd 保持运行)再重开,进该应用 | 画还在 | ☐ |
+| 1.3 | 退出整个 Dozer(dozerd 保持运行)再重开,进该应用 | 画还在 | ☐ Excalidraw 本体未做。**进程型应用的同一动作已用 `node-notes` 验证(2026-10-18):** `hits` 递增到 2 后 ⌘Q 退出整个 GUI,GUI 进程消失,而 dozerd、node 进程与网关端口 20027 仍在且网关继续应答(无令牌 403、伪造 Host 421);重新启动 GUI 后连上的仍是原 dozerd,node 进程未重启,`gateway.json` 端口不变,应用直接 Running,计数续上(`hits` 3,`counter.txt` 之后到 4) |
 | 1.4 | 审批卡停留时,另开终端改 `~/excalidraw-app/web/index.html` 再点批准 | 提示"应用源码在审批之后发生了变化" | ☐ |
 | 1.5 | 卸载选「保留数据」,重装 | 画还在 | ☐ |
 | 1.6 | 再画一笔,卸载选「连数据一起删」,重装。**卸载确认后立刻关掉设置窗口** | 画布空白(验证关窗也会清除,这是 Task 3 的 App 层接线唯一的验证途径) | ☐ |
@@ -56,7 +56,7 @@ target/aarch64-apple-darwin/debug/dozer
 | # | 操作 | 预期 | 结果 |
 |---|---|---|---|
 | 2.1 | 安装 | 审批卡显示运行方式、命令行、版本要求,所有权限标"仅声明,不强制" | py:⚠️ 运行方式/命令行/版本要求 ✅;权限标注未验(样例没声明权限,卡片写"不申请任何权限") |
-| 2.2 | 批准、启动、打开面板 | 页面出现,计数可点,SSE 在滚动,WebSocket 能回显 | py:✅(WebSocket 原为 ❌,已修复,见"2.2 WebSocket"行) 页面、`hits`、运行时版本、SSE(tick 1–5)✅;**WebSocket ❌**(`ws error` / close 1006),见下表 |
+| 2.2 | 批准、启动、打开面板 | 页面出现,计数可点,SSE 在滚动,WebSocket 能回显 | py:✅(WebSocket 原为 ❌,已修复,见"2.2 WebSocket"行) 页面、`hits`、运行时版本、SSE(tick 1–5)✅;**WebSocket ❌**(`ws error` / close 1006),见下表 ;node:✅(2026-10-18,隔离 `HOME=/tmp/dzh`,最新 `main`)经「本机目录」装 `node-notes` 并启动:标题按 i18n 显示"Node 笔记",`hits` 随刷新递增,`runtime: Node.js 24.14.0`(系统 node,非受管),SSE tick 1–5,`ws: hello` 回显(WebSocket 经网关正常),图标栏出现蓝色 "N" 首字母徽标;审批卡内容未逐项记录 |
 | 2.3 | 点页面上的 crash | 面板短暂"启动中…",自动恢复 | py:✅ 命令触发 `/crash`;截图见"Py Notes / 启动中…",约 10 秒内回到 Running(自动恢复) |
 | 2.4 | 点 hang | 约 40–45 秒后自动恢复 | py:✅ 命令触发 `/hang`;约 35 秒后状态 Starting、2 秒后 Running,页面重新加载(`hits` 3→4) |
 | 2.5 | 装一份 manifest 里写 `python = ">=99"` 的副本 | 问题页,有「去设置安装」 | py:✅ 问题页显示"需要 Python / 要求 >=99,当前 3.13.1",按钮「去设置安装」「重试」;dozerd 状态 `Failed{需要 python3 >=99,当前 3.13.1, retryable:true}` |
