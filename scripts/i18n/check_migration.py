@@ -106,6 +106,9 @@ def _owner_from_dir(rel: str) -> str:
         # 预览核心 crate 的 owner 是 dozer.preview(不是 dozer.dozer_preview_core)。
         if crate == "dozer-preview-core":
             return "dozer.preview"
+        # 同源预览面板库的 owner 是 dozer.preview_panel(不是 dozer.preview)。
+        if crate == "dozer-panel-preview":
+            return "dozer.preview_panel"
         return f"dozer.{crate.replace('dozer-panel-', '').replace('-', '_')}"
     return "dozer.host"
 
@@ -129,6 +132,7 @@ def _default_srcroots():
         os.path.join(ROOT, "crates", "dozer-panel-usage", "src"),
         os.path.join(ROOT, "crates", "dozer-panel-todo", "src"),
         os.path.join(ROOT, "crates", "dozer-preview-core", "src"),
+        os.path.join(ROOT, "crates", "dozer-panel-preview", "src"),
     ]
 
 

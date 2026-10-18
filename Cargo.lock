@@ -1984,8 +1984,6 @@ dependencies = [
  "bytehost-panel",
  "bytehost-webview",
  "byteui",
- "calamine",
- "csv",
  "dozer-client",
  "dozer-codehealth",
  "dozer-core",
@@ -1994,6 +1992,7 @@ dependencies = [
  "dozer-mcp",
  "dozer-model",
  "dozer-panel-host",
+ "dozer-panel-preview",
  "dozer-panel-project",
  "dozer-panel-todo",
  "dozer-panel-usage",
@@ -2146,6 +2145,22 @@ dependencies = [
  "dozer-model",
  "dozer-services",
  "tokio",
+]
+
+[[package]]
+name = "dozer-panel-preview"
+version = "0.1.0"
+dependencies = [
+ "calamine",
+ "csv",
+ "dozer-i18n",
+ "dozer-model",
+ "dozer-preview-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "unicode-width",
 ]
 
 [[package]]

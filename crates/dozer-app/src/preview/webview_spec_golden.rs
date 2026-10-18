@@ -122,7 +122,7 @@ fn preview_webview_specs_match_the_golden() {
             .find(|(_, (a, b))| a != b)
             .map(|(i, (a, b))| format!("line {}: actual={a:?} expected={b:?}", i + 1))
             .unwrap_or_else(|| format!(
-                "长度不同:actual {} 行,expected {} 行",
+                "length differs: actual {} lines, expected {} lines",
                 actual.lines().count(),
                 expected.lines().count()
             ))

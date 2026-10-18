@@ -1,0 +1,29 @@
+[package]
+name = "dozer-panel-preview"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# 同源预览面板库(S5b-2 P2):Dozer 与 Digger 共用的预览面板状态、更新与视图。
+# 依赖闭包刻意**不含** dozer-app / dozer-client / dozer-core / wry / winit(见 spec §5.1):
+# 纯逻辑在 `dozer-preview-core`,产品专属语义(全局单例、落盘位置、webview 池)经注入提供。
+[features]
+default = []
+# 表格文件解析器(calamine + csv):Dozer 开,Digger 第一批不开。数据模型始终编译。
+tabular-loader = ["dep:calamine", "dep:csv"]
+
+[dependencies]
+dozer-preview-core = { path = "../dozer-preview-core" }
+dozer-i18n = { path = "../dozer-i18n" }
+dozer-model = { path = "../dozer-model" }
+serde.workspace = true
+serde_json.workspace = true
+# 面板日志:库不许依赖 `dozer-core` 的 scope 宏,直接打 `tracing`,target 沿用 `dozer::module::preview`。
+tracing.workspace = true
+# 表格 / 电子表格解析(只在 `tabular-loader` 下编译;版本与原 dozer-app 一致)。
+calamine = { version = "0.36", features = ["dates"], optional = true }
+csv = { version = "1", optional = true }
+unicode-width = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

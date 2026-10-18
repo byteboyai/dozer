@@ -107,8 +107,7 @@ memchr = "2"
 # calamine：表格预览(Tabular Viewer)解析 .xls/.xlsx/.ods,`dates` feature
 # 打开 chrono 日期值供单元格日期格式化(见 tabular::data_to_string)。
 # csv：.csv/.tsv 的流式解析(引号/转义/参差行由它处理)。
-calamine = { version = "0.36", features = ["dates"] }
-csv = "1"
+dozer-panel-preview = { path = "../dozer-panel-preview", features = ["tabular-loader"] }
 
 [dev-dependencies]
 tracing-subscriber.workspace = true
