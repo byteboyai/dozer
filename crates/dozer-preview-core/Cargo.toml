@@ -1,0 +1,17 @@
+[package]
+name = "dozer-preview-core"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# 预览引擎的**纯逻辑核心**(S5b-2 P1):路由、文件画像、策略、加载、资源预算、保存、恢复。
+# 依赖闭包刻意**不含** iced / wry / dozer-app / dozer-client / dozer-core:Dozer 与 Digger
+# 共用同一份决策逻辑,产品专属的全局单例、硬件探测、webview 池都留在各自的产品里。
+[dependencies]
+dozer-i18n = { path = "../dozer-i18n" }
+dozer-model = { path = "../dozer-model" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
