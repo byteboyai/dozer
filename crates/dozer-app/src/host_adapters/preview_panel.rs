@@ -140,7 +140,7 @@ impl PanelDisplay<Message> for App {
         if let Some(path) = path {
             area = area.on_right_press(Message::Files(
                 crate::extensions::files::Message::TabContextMenuOpen {
-                    kind: kind_of(panel),
+                    kind: crate::extensions::files::state::preview_kind_of(kind_of(panel)),
                     path,
                 },
             ));

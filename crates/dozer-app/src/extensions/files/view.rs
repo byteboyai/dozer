@@ -55,10 +55,12 @@ pub fn view<'a>(
     );
     let search_box = byteui::interaction::context_menu::wrap(
         search_box,
-        Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
-            id: search_field_id(),
-            secure: false,
-        })),
+        Some(Message::TextInputMenuOpen(
+            dozer_panel_files::adapter::TextInputTarget {
+                id: search_field_id(),
+                secure: false,
+            },
+        )),
     );
 
     // "显示/隐藏点文件"按钮:切换后 `ToggleDotfiles` 调
@@ -570,10 +572,12 @@ fn tree_edit_row(
         .into();
     byteui::interaction::context_menu::wrap(
         field,
-        Some(Message::TextInputMenuOpen(crate::app::TextInputTarget {
-            id: tree_edit_field_id(),
-            secure: false,
-        })),
+        Some(Message::TextInputMenuOpen(
+            dozer_panel_files::adapter::TextInputTarget {
+                id: tree_edit_field_id(),
+                secure: false,
+            },
+        )),
     )
 }
 
@@ -965,151 +969,49 @@ pub(crate) fn context_menu_spec(params: FileContextMenuParams, locale: &str) -> 
     } = params;
     let dim = byteui::theme::color::current().dim;
     let target = target.to_path_buf();
-    // 菜单项文案与打开动作都按扩展名查一次配置:有配置显示"用 {app} 打开"
-    // 并指定 App,查不到显示"用外部软件打开"、退回系统默认。和预览工具栏
-    // 同款(见 `App::external_apps`),把结果同时喂给 label 与 `OpenWithDefault`
-    // 消息,handler 不再重复查。目录不走查表:文案固定"在Finder中打开",
-    // 动作固定 `open <dir>`(macOS 上即用 Finder 打开),避免目录名恰好
-    // 带扩展名后缀时被配置误命中、`open -a` 到无关 App。
-    let open_app_name = if is_dir {
-        None
-    } else {
-        external_apps.lookup_for_path(&target).map(str::to_string)
-    };
-    let open_label = match &open_app_name {
-        _ if is_dir => t("menu.open_in_finder", "Open in Finder", locale),
-        Some(name) => t_args(
-            "menu.open_with_app",
-            "Open with {name}",
-            locale,
-            &[("name", name.as_str())],
-        ),
-        None => t("menu.open_with_external", "Open with external app", locale),
-    };
 
-    // 顶部操作组:文件夹=搜索/新建;文件=回滚/历史(git 才有)。
-    let mut top: Vec<MenuSpecItem<Message>> = Vec::new();
-    top.push(MenuSpecItem::Entry {
-        icon: Some(icons::IconKind::MessageSquare),
-        icon_color: None,
-        label: t("menu.add_to_agent_context", "Add to Agent context", locale),
-        color: if agent_terminal_visible {
-            byteui::theme::color::current().body
-        } else {
-            dim
+    // 消息与条目现在由共享库组装(S5b-1);这里只把库的中性 `MenuItem`
+    // 转成 Dozer 的 `MenuSpecItem`。库只知道"能力是否存在",不知道终端
+    // 是否可见,所以"添加到 Agent 上下文"的禁用态仍由这里补齐。
+    let items = dozer_panel_files::menu::context_menu_items(
+        dozer_panel_files::menu::FileContextMenuParams {
+            target: &target,
+            is_dir,
+            is_root,
+            has_clipboard,
+            is_git_repo,
+            external_apps,
         },
-        enabled: agent_terminal_visible,
-        msg: Message::SendToAgentContext(target.clone(), is_dir),
-    });
-    if is_dir {
-        top.push(MenuSpecItem::entry(
-            Some(icons::IconKind::Search),
-            t("menu.search", "Search", locale),
-            Message::OpenSearch(target.clone(), is_dir),
-        ));
-        top.push(MenuSpecItem::entry(
-            Some(icons::IconKind::FilePlus),
-            t("menu.new_file", "New file", locale),
-            Message::NewFile(target.clone()),
-        ));
-        top.push(MenuSpecItem::entry(
-            Some(icons::IconKind::FolderPlus),
-            t("menu.new_folder", "New folder", locale),
-            Message::NewFolder(target.clone()),
-        ));
-    } else if is_git_repo {
-        top.push(MenuSpecItem::entry(
-            Some(icons::IconKind::Undo2),
-            t("menu.rollback", "Roll back", locale),
-            Message::FileHistoryRollbackPrevious(target.clone()),
-        ));
-        top.push(MenuSpecItem::entry(
-            Some(icons::IconKind::FileClock),
-            t("menu.history", "History", locale),
-            Message::FileHistoryOpen(target.clone()),
-        ));
-    }
-
-    // 中间主操作组:复制恒在;粘贴仅目录(无剪贴内容时置灰禁用);删除/重命名
-    // 仅非根目标才有。
-    let mut mid: Vec<MenuSpecItem<Message>> = Vec::new();
-    mid.push(MenuSpecItem::entry(
-        Some(icons::IconKind::Copy),
-        t("menu.copy", "Copy", locale),
-        Message::Copy(target.clone(), is_dir),
-    ));
-    if is_dir {
-        mid.push(MenuSpecItem::Entry {
-            icon: Some(icons::IconKind::ClipboardPaste),
-            icon_color: None,
-            label: t("menu.paste", "Paste", locale),
-            color: if has_clipboard {
-                byteui::theme::color::current().body
-            } else {
-                dim
-            },
-            enabled: has_clipboard,
-            msg: Message::Paste(target.clone()),
-        });
-    }
-    if !is_root {
-        mid.push(MenuSpecItem::entry(
-            Some(icons::IconKind::Trash),
-            t("menu.delete", "Delete", locale),
-            Message::DeleteRequest(target.clone(), is_dir),
-        ));
-        mid.push(MenuSpecItem::entry(
-            Some(icons::IconKind::Rename),
-            t("menu.rename", "Rename", locale),
-            Message::RenameStart(target.clone()),
-        ));
-    }
-
-    // 底部工具组:纯文字(无图标)。"复制目录名称"/"复制文件名称"按目标类型
-    // 二选一,复制最后一段名字(文件含后缀)。
-    let name_label = if is_dir {
-        t("menu.copy_dir_name", "Copy folder name", locale)
-    } else {
-        t("menu.copy_file_name", "Copy file name", locale)
-    };
-    let bottom: Vec<MenuSpecItem<Message>> = vec![
-        MenuSpecItem::entry(
-            None,
-            &name_label,
-            Message::CopyPath(target.clone(), PathKind::Name),
-        ),
-        MenuSpecItem::entry(
-            None,
-            t("menu.copy_relative_path", "Copy relative path", locale),
-            Message::CopyPath(target.clone(), PathKind::Relative),
-        ),
-        MenuSpecItem::entry(
-            None,
-            t("menu.copy_absolute_path", "Copy absolute path", locale),
-            Message::CopyPath(target.clone(), PathKind::Absolute),
-        ),
-        MenuSpecItem::entry(
-            None,
-            &open_label,
-            Message::OpenWithDefault(target.clone(), open_app_name),
-        ),
-        MenuSpecItem::entry(
-            None,
-            t("menu.reload_from_disk", "Reload from disk", locale),
-            Message::ReloadFromDisk,
-        ),
-    ];
-
-    let mut items = Vec::new();
-    let has_top = !top.is_empty();
-    items.extend(top);
-    if has_top {
-        items.push(MenuSpecItem::separator());
-    }
-    items.extend(mid);
-    items.push(MenuSpecItem::separator());
-    items.extend(bottom);
-    items
+        &dozer_panel_files::adapter::FilesCapabilities::all(),
+        locale,
+    );
+    return items
+        .into_iter()
+        .map(|item| match item {
+            dozer_panel_files::menu::MenuItem::Entry {
+                icon,
+                label,
+                enabled,
+                msg,
+            } => {
+                let is_agent_entry = matches!(msg, Message::SendToAgentContext(..));
+                let enabled = enabled && (!is_agent_entry || agent_terminal_visible);
+                MenuSpecItem::Entry {
+                    icon,
+                    icon_color: None,
+                    label,
+                    color: if enabled {
+                        byteui::theme::color::current().body
+                    } else {
+                        dim
+                    },
+                    enabled,
+                    msg,
+                }
+            }
+            dozer_panel_files::menu::MenuItem::Separator => MenuSpecItem::Separator,
+        })
+        .collect();
 }
 
 /// 右键菜单浮层本体:纵向按钮列表,`container` 用 `Padding{top,left,..}`
@@ -1230,7 +1132,7 @@ pub fn preview_selection_context_menu_popup<'a>(
 /// `context_menu_spec` 的三段式)。
 /// 没有目录语义(已打开的 tab 必是文件),故不带新建/粘贴/删除/重命名。
 pub(crate) fn tab_context_menu_spec(
-    kind: crate::app::PanelKind,
+    kind: dozer_panel_files::adapter::PreviewKind,
     path: &Path,
     is_git_repo: bool,
     external_apps: &crate::external_apps::ExternalAppsConfig,
@@ -1314,7 +1216,7 @@ pub(crate) fn tab_context_menu_spec(
 /// 由 `tab_context_menu_spec` 组好数据再 `to_native` 转译,供 macOS 原生菜单
 /// 使用。
 pub(crate) fn tab_context_menu_items(
-    kind: crate::app::PanelKind,
+    kind: dozer_panel_files::adapter::PreviewKind,
     path: &Path,
     is_git_repo: bool,
     external_apps: &crate::external_apps::ExternalAppsConfig,
@@ -1341,7 +1243,7 @@ pub fn tab_context_menu_popup<'a>(
         return column![].into();
     };
     let spec = tab_context_menu_spec(
-        menu.kind,
+        super::state::preview_kind_of(menu.kind),
         &menu.path,
         ws_state.git_is_repo,
         external_apps,

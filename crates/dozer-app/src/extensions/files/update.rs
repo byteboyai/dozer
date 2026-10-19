@@ -170,7 +170,12 @@ pub fn update(
             #[cfg(not(target_os = "macos"))]
             {
                 app_state.tab_context_menu =
-                    Some(crate::extensions::files::state::TabContextMenu { x, y, kind, path });
+                    Some(crate::extensions::files::state::TabContextMenu {
+                        x,
+                        y,
+                        kind: super::state::panel_kind_of(kind),
+                        path,
+                    });
             }
         }
         Message::TabContextMenuClose => {

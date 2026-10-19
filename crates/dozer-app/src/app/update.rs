@@ -164,6 +164,7 @@ impl App {
                 self.update(Message::Search(search::Message::SearchOpen(scope)));
             }
             PanelCommand::ShowFileHistory { path } => self.show_file_history(path),
+            PanelCommand::OpenFile { path } => self.preview_open_path(path),
         }
     }
 
@@ -1307,7 +1308,10 @@ impl App {
             }
             Message::Conversations(conversations::Message::Hover(id, h)) => self.set_hover(id, h),
             Message::Conversations(conversations::Message::TextInputMenuOpen(target)) => {
-                self.update(Message::TextInputMenuOpen(target));
+                self.update(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+                    id: target.id,
+                    secure: target.secure,
+                }));
             }
             Message::Conversations(conversations::Message::AgentPickerOpen) => {
                 #[cfg(target_os = "macos")]
@@ -1605,7 +1609,10 @@ impl App {
                 self.set_hover(id, hovered);
             }
             Message::Database(database::Message::TextInputMenuOpen(target)) => {
-                self.update(Message::TextInputMenuOpen(target));
+                self.update(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+                    id: target.id,
+                    secure: target.secure,
+                }));
             }
             Message::Database(database::Message::ToggleListCollapse) => {
                 self.toggle_panel_list_collapse(PanelKind::Database);
@@ -1707,7 +1714,10 @@ impl App {
                 self.search_results(project_id, result)
             }
             Message::Search(search::Message::TextInputMenuOpen(target)) => {
-                self.update(Message::TextInputMenuOpen(target));
+                self.update(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+                    id: target.id,
+                    secure: target.secure,
+                }));
             }
             Message::Search(msg) => {
                 let handle = self.handle.clone();
@@ -2050,7 +2060,10 @@ impl App {
                 self.update(Message::ColumnDragStart(Divider::BrowserBookmarksSplit));
             }
             Message::Browser(browser::Message::TextInputMenuOpen(target)) => {
-                self.update(Message::TextInputMenuOpen(target));
+                self.update(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+                    id: target.id,
+                    secure: target.secure,
+                }));
             }
             Message::Browser(msg) => self.browser_message(msg),
             Message::ProjectSelect(id) => self.project_select(id),
@@ -2203,7 +2216,10 @@ impl App {
                 });
             }
             Message::GitLog(git_log::Message::TextInputMenuOpen(target)) => {
-                self.update(Message::TextInputMenuOpen(target));
+                self.update(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+                    id: target.id,
+                    secure: target.secure,
+                }));
             }
             Message::GitLog(msg) => {
                 if let git_log::Message::Hover(id, h) = msg {
@@ -2416,7 +2432,10 @@ impl App {
                 self.set_hover(id, hovered);
             }
             Message::Files(files::Message::TextInputMenuOpen(target)) => {
-                self.update(Message::TextInputMenuOpen(target));
+                self.update(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+                    id: target.id,
+                    secure: target.secure,
+                }));
             }
             // 树内行被按下:只武装拖拽(供 main.rs 全局松开左键时收尾),
             // **不**立即执行任何点击语义(既不展开/折叠目录,也不打开文件)。
@@ -2983,7 +3002,10 @@ impl App {
                 self.ssh_terminal_connect_failed(project_id, host_id, tab_id, err)
             }
             Message::Ssh(ssh::Message::TextInputMenuOpen(target)) => {
-                self.update(Message::TextInputMenuOpen(target));
+                self.update(Message::TextInputMenuOpen(crate::app::TextInputTarget {
+                    id: target.id,
+                    secure: target.secure,
+                }));
             }
             Message::Ssh(msg) => {
                 if let ssh::Message::Hover(id, h) = msg {

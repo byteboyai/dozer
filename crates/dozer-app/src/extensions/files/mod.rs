@@ -4,7 +4,7 @@
 use git_status::FileGitStatus;
 
 pub(crate) use dozer_panel_files::git_status;
-mod state;
+pub(crate) mod state;
 mod tree;
 mod update;
 mod view;
