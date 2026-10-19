@@ -759,6 +759,27 @@ mod tests {
         assert!(!is_single_path_component(""));
     }
 
+    /// 树只按 `file_type()` 判目录(不 follow symlink),所以指向目录的
+    /// 符号链接会作为"文件"出现、点击时也不会被当目录展开——这是刻意的:
+    /// follow 会带来成环(指向祖先)和无界递归,而文件树没有环检测。
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_dir_is_not_followed_as_dir() {
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::write(real.join("inner.txt"), "").unwrap();
+        std::os::unix::fs::symlink(&real, d.path().join("link")).unwrap();
+
+        let t = FileTree::new(d.path().to_path_buf());
+        let row = t
+            .visible_rows()
+            .into_iter()
+            .find(|r| r.name == "link")
+            .expect("symlink shows up as a row");
+        assert!(!row.is_dir, "symlink must not be treated as a directory");
+    }
+
     #[test]
     fn path_string_absolute_is_full_path() {
         let root = Path::new("/repo");
