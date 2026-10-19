@@ -959,4 +959,271 @@ mod tests {
             404
         );
     }
+
+    #[test]
+    fn editor_bundle_assets_are_present() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/editor"));
+        for f in [
+            "index.html",
+            "editor.js",
+            "editor.css",
+            "fonts/JetBrainsMono.ttf",
+        ] {
+            let p = root.join(f);
+            assert!(p.is_file(), "缺少 editor 产物 {f}: {}", p.display());
+            assert!(
+                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 0,
+                "editor 产物为空: {f}"
+            );
+        }
+    }
+
+    #[test]
+    fn editor_index_has_strict_csp_and_no_external_refs() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/editor"));
+        let html = std::fs::read_to_string(root.join("index.html")).expect("读 index.html");
+        assert!(
+            html.contains("Content-Security-Policy"),
+            "index.html 必须声明 CSP"
+        );
+        assert!(
+            html.contains("default-src 'none'"),
+            "CSP 必须以 default-src 'none' 起步"
+        );
+        assert!(html.contains("script-src 'self'"), "脚本仅 self");
+        assert!(html.contains("connect-src 'self'"), "仅允许同源 fetch");
+        assert!(
+            !html.contains("http://") && !html.contains("https://"),
+            "editor 首页不得引用外部 URL(离线约束)"
+        );
+        assert!(html.contains("editor.js") && html.contains("editor.css"));
+    }
+
+    #[test]
+    fn editor_js_has_no_absolute_paths_or_sourcemap() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/editor"));
+        let js = std::fs::read_to_string(root.join("editor.js")).expect("读 editor.js");
+        assert!(!js.contains("sourceMappingURL"), "不应有 sourcemap 引用");
+        assert!(
+            !js.contains(env!("CARGO_MANIFEST_DIR")),
+            "不应含源码树绝对路径"
+        );
+        assert!(!js.contains("/Users/"), "不应含用户绝对路径");
+    }
+
+    #[test]
+    fn json_editor_bundle_assets_are_present() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/json-editor"));
+        for f in ["index.html", "json-editor.js", "json-editor.css"] {
+            let p = root.join(f);
+            assert!(p.is_file(), "缺少 json-editor 产物 {f}: {}", p.display());
+            assert!(
+                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 0,
+                "json-editor 产物为空: {f}"
+            );
+        }
+        let html = std::fs::read_to_string(root.join("index.html")).unwrap();
+        assert!(html.contains("default-src 'none'"));
+        assert!(!html.contains("http://") && !html.contains("https://"));
+    }
+
+    #[test]
+    fn tabular_host_bundle_assets_are_present() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/tabular-host"));
+        for f in ["index.html", "tabular-host.js", "tabular-host.css"] {
+            let p = root.join(f);
+            assert!(p.is_file(), "缺少 tabular-host 产物 {f}: {}", p.display());
+            assert!(
+                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 0,
+                "tabular-host 产物为空: {f}"
+            );
+        }
+        let html = std::fs::read_to_string(root.join("index.html")).unwrap();
+        assert!(html.contains("default-src 'none'"));
+        assert!(html.contains("script-src 'self'"), "脚本仅 self");
+        assert!(
+            !html.contains("http://") && !html.contains("https://"),
+            "tabular host 不得引用外部 URL(离线约束)"
+        );
+        assert!(html.contains("tabular-host.js") && html.contains("tabular-host.css"));
+        let js = std::fs::read_to_string(root.join("tabular-host.js")).unwrap();
+        assert!(!js.contains("sourceMappingURL"), "不应有 sourcemap 引用");
+        assert!(
+            !js.contains(env!("CARGO_MANIFEST_DIR")),
+            "不应含源码树绝对路径"
+        );
+        assert!(!js.contains("/Users/"), "不应含用户绝对路径");
+    }
+
+    #[test]
+    fn plantuml_viewer_bundle_assets_are_present() {
+        let root = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/plantuml-viewer"
+        ));
+        for f in [
+            "index.html",
+            "bundle.js",
+            "bundle.css",
+            "plantuml.js",
+            "viz-global.js",
+            "themes.js",
+            "emoji.js",
+            "openiconic.js",
+            "stdlib/c4.min.js",
+        ] {
+            let p = root.join(f);
+            assert!(
+                p.is_file(),
+                "缺少 plantuml-viewer 产物 {f}: {}",
+                p.display()
+            );
+            assert!(
+                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 0,
+                "plantuml-viewer 产物为空: {f}"
+            );
+        }
+    }
+
+    #[test]
+    fn plantuml_viewer_bundle_has_no_absolute_paths_or_sourcemap() {
+        let root = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/plantuml-viewer"
+        ));
+        let js = std::fs::read_to_string(root.join("bundle.js")).expect("读 bundle.js");
+        assert!(!js.contains("sourceMappingURL"), "不应有 sourcemap 引用");
+        assert!(
+            !js.contains(env!("CARGO_MANIFEST_DIR")),
+            "不应含源码树绝对路径"
+        );
+    }
+
+    #[test]
+    fn plantuml_viewer_host_has_strict_csp_and_no_external_refs() {
+        let root = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/plantuml-viewer"
+        ));
+        let html = std::fs::read_to_string(root.join("index.html")).expect("读 index.html");
+        assert!(html.contains("Content-Security-Policy"), "必须声明 CSP");
+        assert!(
+            html.contains("default-src 'none'"),
+            "CSP 必须以 default-src 'none' 起步"
+        );
+        assert!(html.contains("script-src 'self'"), "脚本仅 self");
+        assert!(
+            !html.contains("connect-src"),
+            "plantuml-viewer 无 fetch 端点,不应声明 connect-src"
+        );
+        assert!(
+            !html.contains("unsafe-eval"),
+            "主线程 TeaVM 路径不需要 unsafe-eval(§12.2)"
+        );
+        assert!(
+            !html.contains("http://") && !html.contains("https://"),
+            "index.html 不得引用外部 URL(离线约束)"
+        );
+        assert!(html.contains("bundle.js") && html.contains("viz-global.js"));
+    }
+
+    #[test]
+    fn image_annotate_host_has_strict_csp_and_no_external_refs() {
+        let html = include_str!("../assets/image_annotate_host.html");
+        assert!(html.contains("Content-Security-Policy"), "必须声明 CSP");
+        assert!(
+            html.contains("default-src 'none'"),
+            "CSP 必须以 default-src 'none' 起步"
+        );
+        assert!(html.contains("script-src 'self'"), "脚本仅 self");
+        assert!(
+            !html.contains("http://") && !html.contains("https://"),
+            "host.html 不得引用外部 URL(离线约束)"
+        );
+        assert!(html.contains("vendor/openseadragon.esm.js"));
+        assert!(html.contains("vendor/annotorious-openseadragon.esm.js"));
+        assert!(html.contains("__dozerImageAnnotatePost"));
+    }
+
+    #[test]
+    fn image_annotate_host_csp_allows_inline_and_eval() {
+        let html = include_str!("../assets/image_annotate_host.html");
+        assert!(html.contains("script-src 'self' 'unsafe-inline' 'unsafe-eval'"));
+    }
+
+    #[test]
+    fn image_annotate_vendor_assets_are_present() {
+        let root = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/image-annotate/vendor"
+        ));
+        for f in ["openseadragon.esm.js", "annotorious-openseadragon.esm.js"] {
+            let p = root.join(f);
+            assert!(
+                p.is_file(),
+                "缺少 image-annotate vendor 产物 {f}: {}",
+                p.display()
+            );
+            assert!(
+                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 0,
+                "image-annotate vendor 产物为空: {f}"
+            );
+        }
+    }
+
+    #[test]
+    fn image_annotate_vendor_assets_have_no_external_refs() {
+        let root = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/image-annotate/vendor"
+        ));
+        for f in ["openseadragon.esm.js", "annotorious-openseadragon.esm.js"] {
+            let js = std::fs::read_to_string(root.join(f)).expect("读 vendor 产物");
+            for (needle, what) in [
+                ("import(\"http", "动态 import"),
+                ("import('http", "动态 import"),
+                ("import( \"http", "动态 import"),
+                ("import( 'http", "动态 import"),
+                ("fetch(\"http", "fetch"),
+                ("fetch('http", "fetch"),
+                ("src=\"http", "<script src>"),
+                ("src='http", "<script src>"),
+            ] {
+                assert!(
+                    !js.contains(needle),
+                    "{f} 含外部网络加载形态({what}: {needle}),违反离线约束"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn image_annotate_vendor_imports_are_relative() {
+        for f in ["openseadragon.esm.js", "annotorious-openseadragon.esm.js"] {
+            let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/image-annotate/vendor/");
+            let js = std::fs::read_to_string(format!("{path}{f}")).unwrap();
+            assert!(
+                !js.contains("from\"/") && !js.contains("import\"/"),
+                "{f} 含根路径 import,dozer:// 下无法解析"
+            );
+        }
+    }
+
+    #[test]
+    fn image_annotate_file_endpoint_requires_allowlist() {
+        let root = scratch();
+        let f = root.join("photo.png");
+        fs::write(&f, b"\x89PNG\r\n").unwrap();
+        let uri = format!("dozer://image-annotate/__file__{}", f.to_string_lossy());
+        assert_eq!(
+            handle_protocol(&root, &HashSet::new(), &uri)
+                .expect("预览命名空间")
+                .status,
+            404
+        );
+        let mut allowed = HashSet::new();
+        allowed.insert(f.clone());
+        let r = handle_protocol(&root, &allowed, &uri).expect("预览命名空间");
+        assert_eq!((r.status, r.mime), (200, "image/png"));
+    }
 }

@@ -134,6 +134,38 @@ fn rendering_the_specs_twice_gives_identical_text() {
     assert_eq!(render(), render());
 }
 
+/// 注入脚本里"文本编辑段"是否安装,必须等价于搬迁前的 `editor_binding.is_none()`:
+/// 用真实清单逐条核对 URL 分类出来的 host 种类,防止 JSON / 表格 host 被误装。
+#[test]
+fn text_editing_script_follows_the_editor_binding_of_every_real_spec() {
+    use dozer_panel_preview::host_ipc::WebviewKind;
+    let mut seen = std::collections::HashSet::new();
+    for (name, pane) in scenarios() {
+        for panel in [ViewerPanel::Files, ViewerPanel::Project] {
+            let all = [
+                pane.desired_webviews(7, panel, "en"),
+                pane.desired_editor_webviews(7, panel, "en"),
+                pane.desired_json_webviews(7, panel, "en"),
+                pane.desired_tabular_webviews(7, panel, "en"),
+            ]
+            .concat();
+            for spec in all {
+                let kind = WebviewKind::of_url(&spec.url);
+                seen.insert(format!("{kind:?}"));
+                assert_eq!(
+                    kind.wants_text_editing(),
+                    spec.editor_binding.is_none(),
+                    "{name}: {}",
+                    spec.url
+                );
+            }
+        }
+    }
+    for want in ["Editor", "Json", "Tabular", "Flyfish", "Html"] {
+        assert!(seen.contains(want), "场景里缺少 {want} host: {seen:?}");
+    }
+}
+
 fn specs(v: Vec<PreviewWebviewSpec>) -> Vec<WebviewSpec> {
     v.into_iter().map(WebviewSpec::from).collect()
 }

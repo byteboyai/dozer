@@ -84,10 +84,10 @@ impl WebviewKind {
 
     /// 该 host 的常驻脚本要不要装文本光标/复制/剪切粘贴段落。
     ///
-    /// 与搬迁前 `editor_binding.is_none()` 的判定等价:有 editor 绑定就一定是
-    /// editor/JSON/tabular host(自带编辑行为),其余全部装。
+    /// 与搬迁前 `editor_binding.is_none()` 的判定等价:CodeMirror、JSON、表格三种 host 的 spec
+    /// 都带 editor 绑定(自带编辑行为,不能被强加文本光标和剪贴板拦截),其余全部装。
     pub fn wants_text_editing(self) -> bool {
-        !matches!(self, Self::Editor)
+        !matches!(self, Self::Editor | Self::Json | Self::Tabular)
     }
 
     /// 从 URL 解析 host 归属绑定(Flyfish / 隔离 HTML / image-annotate /
@@ -637,10 +637,13 @@ mod tests {
         ] {
             assert_eq!(WebviewKind::of_url(url), want, "{url}");
         }
-        assert!(!WebviewKind::Editor.wants_text_editing());
+        for kind in [WebviewKind::Editor, WebviewKind::Json, WebviewKind::Tabular] {
+            assert!(
+                !kind.wants_text_editing(),
+                "{kind:?} specs carry an editor binding: no text-editing script"
+            );
+        }
         for kind in [
-            WebviewKind::Json,
-            WebviewKind::Tabular,
             WebviewKind::Flyfish,
             WebviewKind::Html,
             WebviewKind::ImageAnnotate,
