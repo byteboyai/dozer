@@ -298,5 +298,6 @@
   "conversations.no_review_content": "No review content—click a conversation in the list on the left to start reviewing",
   "agent.new_session": "New agent session",
   "agent.no_conversations": "No conversations",
-  "files.no_project": "No project open"
+  "files.no_project": "No project open",
+  "file_history.project_outside_repo": "{project} is not inside the repository work tree"
 }

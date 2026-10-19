@@ -62,7 +62,16 @@ pub(crate) fn open_project_repo(project: &Path) -> Result<ProjectRepo, String> {
     let project = std::fs::canonicalize(project).map_err(|e| e.to_string())?;
     let prefix = project
         .strip_prefix(&root)
-        .map_err(|_| format!("{} 不在仓库工作区内", project.display()))?
+        .map_err(|_| {
+            // 这里拿不到当前 locale(调用方多是后台任务),按英文 fallback 出文,
+            // 与同目录其它后台错误一致:key 在 host 资源里,界面侧不会再翻一次。
+            crate::i18n::host_text_args(
+                "file_history.project_outside_repo",
+                "{project} is not inside the repository work tree",
+                "",
+                &[("project", &project.display().to_string())],
+            )
+        })?
         .to_path_buf();
     Ok(ProjectRepo { repo, prefix })
 }

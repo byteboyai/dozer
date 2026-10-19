@@ -298,5 +298,6 @@
   "conversations.no_review_content": "暂无审阅内容——点击左侧对话列表中的对话开始审阅",
   "agent.new_session": "新建 Agent 会话",
   "agent.no_conversations": "暂无会话",
-  "files.no_project": "未打开项目"
+  "files.no_project": "未打开项目",
+  "file_history.project_outside_repo": "{project} 不在仓库工作区内"
 }
