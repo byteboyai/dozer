@@ -10,6 +10,7 @@ pub mod git_status;
 pub mod i18n;
 pub mod menu;
 pub mod state;
+pub mod tree;
 
 pub use state::{FilesToolbarTarget, GitInfo, Message};
 

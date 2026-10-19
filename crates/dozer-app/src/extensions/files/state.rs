@@ -2,7 +2,7 @@
 //! WorkspaceState/GitInfo/AppState/Message/焦点捕获。
 
 use super::git_status;
-use crate::project::{FileTree, PathKind};
+use crate::project::FileTree;
 use iced_widget::core::Rectangle;
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};

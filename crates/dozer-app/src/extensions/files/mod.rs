@@ -6,6 +6,7 @@ use git_status::FileGitStatus;
 pub(crate) use dozer_panel_files::git_status;
 pub(crate) mod state;
 mod tree;
+pub(crate) use tree::tree_drop_target;
 mod update;
 mod view;
 

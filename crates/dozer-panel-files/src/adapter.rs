@@ -64,12 +64,27 @@ pub enum PreviewKind {
 /// 面板骨架方法,文件树只用得上这几个,所以单独收窄——产品实现时不必
 /// 关心文件树用不到的面板语义。
 pub trait PanelDisplay {
-    /// 面板头部行高——树视图据此算可视区。
-    fn panel_head(&self) -> f32;
+    /// 面板头(图标 + 已本地化的标题 + 分割线)。文件树头部纯展示、不产生
+    /// 消息,但标题字号/分割线颜色来自产品主题,所以仍由产品渲染,库只
+    /// 负责把它放进自己的布局。
+    fn panel_head<'a>(
+        &self,
+        icon: byteui::interaction::icons::IconKind,
+        title: String,
+    ) -> iced_widget::core::Element<'a, crate::Message, iced_widget::Theme, iced_renderer::Renderer>;
+
     /// 头部内边距。
     fn header_padding(&self) -> iced_widget::core::Padding;
     /// 树行字号(随产品密度变化)。
     fn tree_row_font_size(&self) -> f32;
+    /// 树行行高倍数(相对字号)。Dozer 与终端行距对齐,取终端字体配置。
+    fn line_height_factor(&self) -> f32;
+    /// Files 面板所在区域的样式(背景/边框/内边距/间隔)。
+    fn region(&self) -> byteui::theme::region::RegionStyle;
     /// 当前 locale(`"en"` / `"zh-CN"`)。
     fn locale(&self) -> &str;
+    /// 窗口逻辑尺寸 `(宽, 高)`——拖拽幽灵胶囊据此把自身钳在窗口内。
+    fn window_size(&self) -> (f32, f32);
+    /// 最近一次光标位置(窗口逻辑坐标)——拖拽幽灵胶囊跟着它走。
+    fn last_cursor(&self) -> (f32, f32);
 }
