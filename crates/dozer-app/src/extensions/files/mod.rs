@@ -3,7 +3,7 @@
 //! `docs/superpowers/specs/2026-08-07-files-extension-pilot-design.md`。
 use git_status::FileGitStatus;
 
-pub(crate) mod git_status;
+pub(crate) use dozer_panel_files::git_status;
 mod state;
 mod tree;
 mod update;

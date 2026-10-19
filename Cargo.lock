@@ -1991,6 +1991,7 @@ dependencies = [
  "dozer-i18n",
  "dozer-mcp",
  "dozer-model",
+ "dozer-panel-files",
  "dozer-panel-host",
  "dozer-panel-preview",
  "dozer-panel-project",
@@ -2135,6 +2136,26 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "dozer-panel-files"
+version = "0.1.0"
+dependencies = [
+ "bytegit",
+ "bytehost-core",
+ "bytehost-desktop",
+ "byteui",
+ "dozer-i18n",
+ "dozer-model",
+ "dozer-panel-host",
+ "dozer-services",
+ "iced_renderer",
+ "iced_widget",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

@@ -36,6 +36,8 @@ dozer-panel-host = { path = "../dozer-panel-host" }
 dozer-panel-todo = { path = "../dozer-panel-todo" }
 # 同源 Project 面板库(S5a):纯逻辑/状态/视图在库,dozer-app 只做重导出与注册包装。
 dozer-panel-project = { path = "../dozer-panel-project" }
+# 同源 Files 面板库(S5b-1):文件树状态/更新/视图在库,dozer-app 只做重导出与注册包装。
+dozer-panel-files = { path = "../dozer-panel-files" }
 # 复用 dozer-hook 的 hook 安装逻辑(install::run_at/opencode_install::run_at)，
 # 新建 agent 会话时静默注册对应 CLI 的 hook，不必用户手动跑 `dozer-hook install`。
 dozer-hook = { path = "../dozer-hook" }
