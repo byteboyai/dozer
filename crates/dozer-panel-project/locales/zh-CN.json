@@ -3,7 +3,7 @@
   "delete.confirm": "删除",
   "delete.hint": "选择删除范围,操作会把对应内容移入系统回收站(可找回)。",
   "delete.scope.agent": "以上 + 所有 agent 缓存数据",
-  "delete.scope.dozer": "只删 dozer 关联与缓存文件",
+  "delete.scope.dozer": "只删 {product} 关联与缓存文件",
   "delete.scope.project": "以上 + 项目文件与版本仓库",
   "delete.title": "删除项目",
   "desc.add": "点击添加项目描述…",

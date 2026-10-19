@@ -1153,6 +1153,37 @@ fn delete_stops_after_a_failed_deregistration() {
 }
 
 #[test]
+fn delete_without_a_transcript_service_leaves_agent_cache_dirs_alone() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let probe = cache.path().join("probe.txt");
+    std::fs::write(&probe, "keep").unwrap();
+    let fake = FakeProject::default();
+    let (tx, rx) = mpsc::channel();
+    let tx = Mutex::new(tx);
+    let cache_dir = cache.path().to_path_buf();
+    delete::spawn_delete_project(
+        1,
+        dir.path().to_path_buf(),
+        delete::DeleteScope::WithAgentCache,
+        fake.clone().into_services().project,
+        None,
+        move |_, _| cache_dir.clone(),
+        rt.handle(),
+        move |id, dereg, errors| {
+            let _ = tx.lock().unwrap().send((id, dereg, errors));
+        },
+    );
+    let (_, dereg, errors) = rx.recv_timeout(TIMEOUT).unwrap();
+    assert!(dereg && errors.is_empty(), "{errors:?}");
+    assert!(
+        probe.exists(),
+        "agent 缓存目录不属于没有转录的产品,不得被删"
+    );
+}
+
+#[test]
 fn stale_memory_detail_cannot_replace_new_selection_or_reopen_closed_detail() {
     let rt = runtime();
     let services = test_services();

@@ -68,6 +68,7 @@ FILE_TASK = [
     ("crates/dozer-app/web/codehealth-content/", "09"),
     # Remaining official panels + aux
     ("crates/dozer-app/src/extensions/files/", "10"),
+    ("crates/dozer-panel-project/", "10"),
     ("crates/dozer-app/src/extensions/project.rs", "10"),
     ("crates/dozer-app/src/extensions/project/", "10"),
     ("crates/dozer-app/src/extensions/database/", "10"),
@@ -139,6 +140,11 @@ NON_UI_STRINGS = {
     ("crates/dozer-app/src/preview/webview_protocol.rs", "tab_id 不匹配(收到 {got},期望 {expected})"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
     ("crates/dozer-app/src/preview/webview_protocol.rs", "document_id 不匹配(收到 {got},期望 {expected})"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
     ("crates/dozer-app/src/preview/webview_protocol.rs", "未知 payload kind: {k}"): "IPC 校验错误的 `Display` 实现,只在 `log_warn!` 里格式化;不面向用户(日志保持原文)",
+    ("crates/dozer-panel-project/src/update.rs", "记忆列表读取失败(dozerd 不可用)"): "库内诊断日志(`crate::log::*` → tracing);不面向用户(日志保持原文)",
+    ("crates/dozer-panel-project/src/update.rs", "补录转录失败"): "库内诊断日志(`crate::log::*` → tracing);不面向用户(日志保持原文)",
+    ("crates/dozer-panel-project/src/update.rs", "提交总结批次失败"): "库内诊断日志(`crate::log::*` → tracing);不面向用户(日志保持原文)",
+    ("crates/dozer-panel-project/src/update.rs", "批次不存在,停止轮询"): "库内诊断日志(`crate::log::*` → tracing);不面向用户(日志保持原文)",
+    ("crates/dozer-panel-project/src/update.rs", "查询总结批次失败,停止轮询"): "库内诊断日志(`crate::log::*` → tracing);不面向用户(日志保持原文)",
     ("crates/dozer-panel-todo/src/update.rs", "新分类"): "新建分类的默认名,是**用户数据的初始值**(落库后立即进入改名态);按计划「保留用户分类名」,不本地化",
     ("crates/dozer-panel-todo/src/update.rs", "任务/分类读取失败(dozerd 不可用): {message}"): "只进 `WorkspaceState.diagnostics`,由宿主 `drain_outboxes` 写 debug 日志;不面向用户(原先是 `log_debug!` 参数,抽库后库不依赖 `dozer-core`,改走诊断通道)",
 }

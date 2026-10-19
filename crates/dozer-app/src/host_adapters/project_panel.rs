@@ -29,21 +29,6 @@ impl dozer_panel_project::adapter::PanelDisplay<crate::app::Message> for crate::
         crate::chrome::homespace::home_panel_head(icon, title)
     }
 
-    fn header_padding(&self) -> iced_widget::core::Padding {
-        crate::theme::region::project_pane().padding
-    }
-
-    fn tab_divider<'a>(
-        &self,
-    ) -> iced_widget::core::Element<
-        'a,
-        crate::app::Message,
-        iced_widget::Theme,
-        iced_renderer::Renderer,
-    > {
-        crate::app::tab_divider()
-    }
-
     fn locale(&self) -> &str {
         crate::panel_host::PanelHost::locale(self)
     }
@@ -68,3 +53,10 @@ pub(crate) fn text_target_of(
         secure: t.secure,
     }
 }
+
+/// Dozer 在「删除项目」/「修复项目」卡片上的产品参数:有 agent 转录,文案里的产品名是 `dozer`(与抽库前逐字相同)。
+pub(crate) const DOZER_CARD: dozer_panel_project::view::CardOptions<'static> =
+    dozer_panel_project::view::CardOptions {
+        agent_history: true,
+        product: "dozer",
+    };

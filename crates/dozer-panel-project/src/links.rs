@@ -130,12 +130,22 @@ pub fn load_or_discover(repo: &Path) -> LinksState {
     if let Some(state) = load(repo) {
         return state;
     }
-    let state = LinksState {
-        docs: discover_docs(repo),
-        dismissed: Vec::new(),
-    };
+    let state = discover_state(repo);
     let _ = save(repo, &state);
     state
+}
+
+/// 同 [`load_or_discover`],但**不落盘**:文件不存在时只在内存里跑发现。给"打开项目不做任何静默写盘"的
+/// 产品(Digger)用;用户第一次增删链接时库的 `save` 才会创建 `.dozer/links.json`。
+pub fn load_or_discover_readonly(repo: &Path) -> LinksState {
+    load(repo).unwrap_or_else(|| discover_state(repo))
+}
+
+fn discover_state(repo: &Path) -> LinksState {
+    LinksState {
+        docs: discover_docs(repo),
+        dismissed: Vec::new(),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -252,6 +262,15 @@ mod tests {
         std::fs::write(dir.path().join("CHANGELOG.md"), "").unwrap();
         let state2 = load_or_discover(dir.path());
         assert_eq!(state2.docs.len(), 1);
+    }
+
+    #[test]
+    fn readonly_discovery_finds_docs_without_creating_the_links_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("README.md"), "# x").unwrap();
+        let state = load_or_discover_readonly(dir.path());
+        assert!(!state.docs.is_empty());
+        assert!(!dir.path().join(".dozer").exists(), "不得创建 .dozer");
     }
 
     #[test]

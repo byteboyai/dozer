@@ -54,6 +54,7 @@ SRC_ROOTS = [
     "crates/dozer-panel-usage/src",
     "crates/dozer-panel-usage/web",
     "crates/dozer-panel-todo/src",
+    "crates/dozer-panel-project/src",
     "crates/dozer-panel-todo/web",
     "crates/dozer-preview-core/src",
     "crates/dozerd/src",
@@ -75,6 +76,7 @@ SOURCE_SUFFIXES = [".rs", ".ts", ".tsx", ".js", ".mjs", ".jsx", ".html"]
 OWNER_RULES = [
     ("crates/dozer-panel-usage/", "dozer.usage"),
     ("crates/dozer-panel-todo/", "dozer.todo"),
+    ("crates/dozer-panel-project/", "dozer.project"),
     ("crates/dozer-preview-core/", "dozer.preview"),
     ("crates/dozer-app/src/extensions/todo/", "dozer.todo"),
     ("crates/dozer-app/src/extensions/codehealth/", "dozer.codehealth"),
@@ -347,7 +349,8 @@ def _item_span_end(text: str, start: int) -> int:
 
 
 def is_test_context(rel: str, text: str, pos: int) -> bool:
-    if re.search(r"_test\.(?:rs)$", rel) or ".test." in rel:
+    # 独立的测试文件(`#[cfg(test)] mod tests;` 声明在别处):`tests.rs` / `*_tests.rs`。
+    if re.search(r"(?:_tests?|/tests)\.rs$", rel) or ".test." in rel:
         return True
     # `#[cfg(test)]` 绑定到**紧随其后的那一个 item**,不是"其后全部内容"。
     #

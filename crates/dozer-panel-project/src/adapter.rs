@@ -1,7 +1,7 @@
 //! 产品专属语义的注入点。库本身不依赖 `dozer-app` / `dozer-client` / `dozer-core`;
 //! 产品(Dozer / Digger)在这里把"面板外观"与"文本框菜单目标"接进来。
 
-use iced_widget::core::{Element, Padding};
+use iced_widget::core::Element;
 
 pub use dozer_panel_host::{Notice, NoticeLevel, NoticeOutbox};
 
@@ -20,10 +20,6 @@ pub trait PanelDisplay<M> {
         icon: byteui::interaction::icons::IconKind,
         title: String,
     ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>;
-    /// 面板头与分割线外侧的内边距(Dozer 取自 `workspace.json` 的 `project_pane` 区域)。
-    fn header_padding(&self) -> Padding;
-    /// 两个 pane 之间的水平分割线。
-    fn tab_divider<'a>(&self) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>;
     /// 当前生效语言(BCP-47)。
     fn locale(&self) -> &str {
         "en"

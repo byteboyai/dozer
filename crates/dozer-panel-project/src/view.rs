@@ -269,8 +269,7 @@ pub fn view<'a, M: 'a>(
         .spacing(6)
         .align_y(iced_widget::core::Alignment::Center),
     )
-    .width(Length::Shrink)
-    .height(Length::Shrink)
+    .padding(iced_widget::core::Padding::new(0.0).left(tree_indent))
     .into();
     content = content.push(remote_head.map(|m| display.wrap(m)));
     if ws_state.remote_url.is_empty() {
@@ -592,6 +591,14 @@ fn scaffold_backfill_row<'a>(
     .into()
 }
 
+/// 两张弹窗卡片的产品差异:不带 agent 转录的产品(Digger)隐藏"agent 缓存"那一档和"总结"那一行;
+/// `product` 是文案里的产品名(Dozer 传 `"dozer"`,文案与抽库前逐字相同)。
+#[derive(Debug, Clone, Copy)]
+pub struct CardOptions<'a> {
+    pub agent_history: bool,
+    pub product: &'a str,
+}
+
 /// "修复项目"进度弹窗的内容(卡片本体):由独立原生窗口宿主
 /// `platform::project_scaffold_overlay` 渲染。进行中时"关闭"按钮不可点
 /// (`on_press_maybe`),全部完成(`ScaffoldRunState::all_done`)才激活。
@@ -599,6 +606,7 @@ fn scaffold_backfill_row<'a>(
 pub fn project_scaffold_card<'a>(
     ws_state: &'a WorkspaceState,
     locale: &'a str,
+    options: CardOptions<'a>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let Some(run) = &ws_state.scaffold_run else {
         return container(column![]).into();
@@ -607,7 +615,9 @@ pub fn project_scaffold_card<'a>(
     for (label_key, state) in &run.steps {
         rows = rows.push(scaffold_step_row(label_key, state, locale));
     }
-    rows = rows.push(scaffold_backfill_row(&run.backfill, locale));
+    if options.agent_history {
+        rows = rows.push(scaffold_backfill_row(&run.backfill, locale));
+    }
 
     let done = run.all_done();
     let close_label = if done {
@@ -678,6 +688,7 @@ pub fn project_scaffold_card<'a>(
 pub fn project_delete_card<'a>(
     ws_state: &'a WorkspaceState,
     locale: &'a str,
+    options: CardOptions<'a>,
 ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
     let selected = ws_state
         .delete_pending
@@ -764,6 +775,35 @@ pub fn project_delete_card<'a>(
     .spacing(6)
     .align_y(iced_widget::core::Alignment::Center);
 
+    let mut scopes = column![radio_row(
+        delete::DeleteScope::DozerOnly,
+        t_args(
+            "delete.scope.dozer",
+            "Only {product} registration and cache files",
+            locale,
+            &[("product", options.product)],
+        ),
+    )]
+    .spacing(8);
+    if options.agent_history {
+        scopes = scopes.push(radio_row(
+            delete::DeleteScope::WithAgentCache,
+            t(
+                "delete.scope.agent",
+                "Above + all agent cached data",
+                locale,
+            ),
+        ));
+    }
+    scopes = scopes.push(radio_row(
+        delete::DeleteScope::WithProjectFiles,
+        t(
+            "delete.scope.project",
+            "Above + project files and VCS repository",
+            locale,
+        ),
+    ));
+
     let dialog = container(
         column![
             title,
@@ -774,33 +814,7 @@ pub fn project_delete_card<'a>(
             ))
             .size(byteui::theme::font::label())
             .color(byteui::theme::color::current().dim),
-            column![
-                radio_row(
-                    delete::DeleteScope::DozerOnly,
-                    t(
-                        "delete.scope.dozer",
-                        "Only dozer registration and cache files",
-                        locale
-                    )
-                ),
-                radio_row(
-                    delete::DeleteScope::WithAgentCache,
-                    t(
-                        "delete.scope.agent",
-                        "Above + all agent cached data",
-                        locale
-                    )
-                ),
-                radio_row(
-                    delete::DeleteScope::WithProjectFiles,
-                    t(
-                        "delete.scope.project",
-                        "Above + project files and VCS repository",
-                        locale
-                    )
-                ),
-            ]
-            .spacing(8),
+            scopes,
             byteui::feedback::dialog::actions(row![cancel, confirm].spacing(8)),
         ]
         .spacing(12),
@@ -1304,16 +1318,6 @@ mod view_tests {
             _title: String,
         ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
             iced_widget::text("head").into()
-        }
-
-        fn header_padding(&self) -> iced_widget::core::Padding {
-            iced_widget::core::Padding::new(0.0)
-        }
-
-        fn tab_divider<'a>(
-            &self,
-        ) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer> {
-            iced_widget::text("divider").into()
         }
     }
 

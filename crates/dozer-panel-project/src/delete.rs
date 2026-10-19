@@ -3,9 +3,9 @@
 //! 文件系统；文件系统三步(`.dozer`/agent 缓存目录/项目文件本身)在其后
 //! 尽力而为，统一用 `trash::delete`(可从系统回收站找回)。
 //!
-//! 产品差异只有一处:调用方在构造本库的 `Services` 时,不装 `transcript`
-//! 功能的面板库(Digger)可以传 `transcript = None`——此时分级里的转录那一档
-//! 不出现,`WithAgentCache`/`WithProjectFiles` 跳过转录删除这一步。
+//! 产品差异只有一处:不装 `transcript` 功能的产品(Digger)传 `transcript = None`——
+//! 此时 `WithAgentCache` 那一档在界面里不出现(见 `view::CardOptions`),`WithProjectFiles`
+//! 也跳过转录删除和三家 agent 缓存目录,只处理登记、`.dozer/` 与项目文件。
 
 use std::path::PathBuf;
 
@@ -17,16 +17,6 @@ pub enum DeleteScope {
     WithAgentCache,
     /// 含 `WithAgentCache`，再删项目文件本身(含 `.git`)。
     WithProjectFiles,
-}
-
-/// 删除弹窗里可选的层级。有转录服务时三档都在;没有转录服务时 `WithAgentCache`
-/// 仍然可选(它还会删 agent 缓存目录),只是少了转录那一半。
-pub fn delete_scopes() -> Vec<DeleteScope> {
-    vec![
-        DeleteScope::DozerOnly,
-        DeleteScope::WithAgentCache,
-        DeleteScope::WithProjectFiles,
-    ]
 }
 
 /// 跑一次完整的删除流程。`on_done(project_id, deregistered, errors)`:
@@ -53,6 +43,8 @@ pub fn spawn_delete_project(
     on_done: impl Fn(i64, bool, Vec<String>) + Send + 'static,
 ) {
     let cwd = repo_path.to_string_lossy().into_owned();
+    // 没有转录服务的产品(Digger)与 agent 缓存无关:连三家 agent 的缓存目录也不碰。
+    let has_agent_history = transcript.is_some();
     handle.spawn(async move {
         if let Err(e) = project.remove_project(project_id).await {
             on_done(project_id, false, vec![format!("Deregister project: {e}")]);
@@ -74,7 +66,7 @@ pub fn spawn_delete_project(
             {
                 errors.push(format!(".dozer directory: {e}"));
             }
-            if scope != DeleteScope::DozerOnly {
+            if scope != DeleteScope::DozerOnly && has_agent_history {
                 let agent_dirs = [
                     ("Claude cache", agent_dir("claude", &repo_path_fs)),
                     ("CodeBuddy cache", agent_dir("codebuddy", &repo_path_fs)),
