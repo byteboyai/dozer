@@ -15,6 +15,8 @@ use std::path::Path;
 
 use super::*;
 
+pub(crate) use dozer_panel_files::dialogs::delete_confirm_spec;
+
 /// 文件树可滚动列表(现有 `workspace.rs::project_pane` 的搬家版本,签名改吃
 /// 本模块状态,去掉了不再归属本模块的项目信息卡/底部状态条)。
 pub fn view<'a>(
@@ -1243,7 +1245,7 @@ pub fn tab_context_menu_popup<'a>(
         return column![].into();
     };
     let spec = tab_context_menu_spec(
-        super::state::preview_kind_of(menu.kind),
+        menu.kind,
         &menu.path,
         ws_state.git_is_repo,
         external_apps,
@@ -1266,90 +1268,6 @@ pub fn tab_context_menu_popup<'a>(
 /// 保证文案/消息不因迁移而分叉。`None` 表示当前没有待确认的删除。
 /// 多个待删除项时,标题显示数量、说明里逐项列出每个文件的(相对项目根的)
 /// 路径,确保用户操作多个文件时能看到全部文件名(2026-10 用户反馈)。
-pub(crate) fn delete_confirm_spec(
-    ws_state: &WorkspaceState,
-    locale: &str,
-) -> Option<byteui::feedback::dialog::ConfirmDialog<Message>> {
-    let targets = ws_state.tree_delete_confirm.as_ref()?;
-    if targets.is_empty() {
-        return None;
-    }
-    // 各待删除项的相对项目根路径(同 `files_move_card` 的 source_display
-    // 手法),比单文件名更能定位目标——同名文件散在不同子目录时不再有歧义;
-    // 文件树尚未加载/路径不在根下时兜底完整路径原文。
-    let rel_paths: Vec<String> = targets
-        .iter()
-        .map(|(p, _)| {
-            ws_state
-                .file_tree
-                .as_ref()
-                .and_then(|t| p.strip_prefix(t.root()).ok())
-                .map(|rp| rp.to_string_lossy().into_owned())
-                .unwrap_or_else(|| p.display().to_string())
-        })
-        .collect();
-    let (title, description) = if targets.len() == 1 {
-        let kind = if targets[0].1 {
-            t("kind.folder", "folder", locale)
-        } else {
-            t("kind.file", "file", locale)
-        };
-        // 单文件沿用旧版"只显示文件名"(basename)的口径,保持交互习惯不变;
-        // 多文件才列出全部相对路径(见下方 `else` 分支),两者职责不同。
-        let name = targets[0]
-            .0
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| targets[0].0.display().to_string());
-        (
-            t_args(
-                "confirm.delete.title_single",
-                "Delete {kind} \"{name}\"?",
-                locale,
-                &[("kind", kind.as_str()), ("name", name.as_str())],
-            ),
-            t_args(
-                "confirm.delete.desc_single",
-                "The {kind} will be moved to the Trash. You can restore it from the Trash.",
-                locale,
-                &[("kind", kind.as_str())],
-            ),
-        )
-    } else {
-        let list = rel_paths
-            .iter()
-            .map(|r| format!("• {r}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        (
-            t_args(
-                "confirm.delete.title_multi",
-                "Delete {count} files/folders?",
-                locale,
-                &[("count", targets.len().to_string().as_str())],
-            ),
-            t_args(
-                "confirm.delete.desc_multi",
-                "{list}\n\nThese files/folders will be moved to the Trash. You can restore them from the Trash.",
-                locale,
-                &[("list", list.as_str())],
-            ),
-        )
-    };
-    Some(byteui::feedback::dialog::ConfirmDialog {
-        icon: Some(icons::IconKind::CircleAlert),
-        title,
-        description,
-        cancel_label: t("confirm.delete.cancel", "Cancel", locale),
-        cancel_msg: Message::DeleteCancel,
-        confirm_label: t("confirm.delete.confirm", "Delete", locale),
-        confirm_msg: Message::DeleteConfirm,
-        close_msg: Some(Message::DeleteCancel),
-        confirm_color: byteui::theme::color::current().red,
-        content_spacing: 8.0,
-    })
-}
-
 /// 拖拽移动确认框的内容(卡片本体):由独立原生窗口宿主
 /// `platform::files_move_overlay` 渲染。多出"新名称"/"到目录"两个真正的
 /// `iced_widget::text_input`(复用 `byteui::form::input_text::view`),用户

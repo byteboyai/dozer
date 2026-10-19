@@ -9,10 +9,11 @@
 use byteui::interaction::icons::IconKind;
 
 use crate::Message;
-use crate::adapter::FilesCapabilities;
+use crate::adapter::{FilesCapabilities, PreviewKind};
 use crate::external_apps::ExternalAppsConfig;
 use crate::fs::PathKind;
 use crate::i18n::{t, t_args};
+use std::path::Path;
 
 /// 一条右键菜单项。形状对应 Dozer `menu_spec::MenuSpecItem`,但不含任何
 /// 原生菜单类型——库只产出这个,产品自己转成 `NSMenu` / iced 浮层。
@@ -550,4 +551,82 @@ mod tests {
         assert!(labels.iter().any(|l| l == "搜索"), "{labels:?}");
         assert!(!labels.iter().any(|l| l == "New file"), "{labels:?}");
     }
+}
+
+/// 预览标签页右键菜单。只在 `caps.preview_tabs` 为真时有意义(调用方据此
+/// 决定是否产生 `TabContextMenuOpen`);文件历史的条目再受
+/// `caps.file_history` 门控。
+pub fn tab_context_menu_items(
+    kind: PreviewKind,
+    path: &Path,
+    is_git_repo: bool,
+    external_apps: &ExternalAppsConfig,
+    caps: &FilesCapabilities,
+    locale: &str,
+) -> Vec<MenuItem<Message>> {
+    let target = path.to_path_buf();
+    let open_app_name = external_apps.lookup_for_path(&target).map(str::to_string);
+    let open_label = match &open_app_name {
+        Some(name) => t_args(
+            "menu.open_with_app",
+            "Open with {name}",
+            locale,
+            &[("name", name.as_str())],
+        ),
+        None => t("menu.open_with_external", "Open with external app", locale),
+    };
+
+    let mut items: Vec<MenuItem<Message>> = vec![MenuItem::entry(
+        Some(IconKind::CircleX),
+        t("menu.close", "Close", locale),
+        Message::TabContextMenuCloseTab(kind, target.clone()),
+    )];
+    items.push(MenuItem::Separator);
+
+    let mut top: Vec<MenuItem<Message>> = Vec::new();
+    if is_git_repo && caps.file_history {
+        top.push(MenuItem::entry(
+            Some(IconKind::Undo2),
+            t("menu.rollback", "Roll back", locale),
+            Message::FileHistoryRollbackPrevious(target.clone()),
+        ));
+        top.push(MenuItem::entry(
+            Some(IconKind::FileClock),
+            t("menu.history", "History", locale),
+            Message::FileHistoryOpen(target.clone()),
+        ));
+    }
+    if !top.is_empty() {
+        items.extend(top);
+        items.push(MenuItem::Separator);
+    }
+
+    items.extend([
+        MenuItem::entry(
+            None,
+            t("menu.copy_file_name", "Copy file name", locale),
+            Message::CopyPath(target.clone(), PathKind::Name),
+        ),
+        MenuItem::entry(
+            None,
+            t("menu.copy_relative_path", "Copy relative path", locale),
+            Message::CopyPath(target.clone(), PathKind::Relative),
+        ),
+        MenuItem::entry(
+            None,
+            t("menu.copy_absolute_path", "Copy absolute path", locale),
+            Message::CopyPath(target.clone(), PathKind::Absolute),
+        ),
+        MenuItem::entry(
+            None,
+            &open_label,
+            Message::OpenWithDefault(target.clone(), open_app_name),
+        ),
+        MenuItem::entry(
+            None,
+            t("menu.reload_from_disk", "Reload from disk", locale),
+            Message::TabReloadFromDisk(target.clone()),
+        ),
+    ]);
+    normalize(items)
 }

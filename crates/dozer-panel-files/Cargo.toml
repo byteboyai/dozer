@@ -8,6 +8,7 @@ publish = false
 # 依赖闭包刻意**不含** dozer-app / dozer-client / dozer-core(见 spec §4.1):领域 model/services、
 # 共享宿主件与公共 UI 允许,产品专属语义(原生菜单、预览、Agent 发送)经注入的适配器提供。
 [dependencies]
+trash = "5.2.6"
 dozer-model = { path = "../dozer-model" }
 dozer-services = { path = "../dozer-services" }
 dozer-i18n = { path = "../dozer-i18n" }

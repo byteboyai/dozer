@@ -42,6 +42,17 @@ pub enum FilesRequest {
         items: Vec<MenuItem<Message>>,
         at: (f32, f32),
     },
+    /// 用产品自己的菜单机制弹同一个条目表。Dozer 走 macOS 原生 NSMenu
+    /// (选中后经回调把 `msg` 送回 `update`),非 macOS 退化成 `ShowContextMenu`;
+    /// 不认识原生菜单的产品(如 Digger)同样按 `ShowContextMenu` 处理。
+    ///
+    /// 与 `ShowContextMenu` 分开是因为两者语义不同:前者一定会被渲染成产品
+    /// 自己的浮层,而原生菜单在 `ShowNativeMenu` 弹出后**要等用户选择**才
+    /// 产生消息,库不能在弹出点就把菜单状态写死。
+    ShowNativeMenu {
+        items: Vec<MenuItem<Message>>,
+        at: (f32, f32),
+    },
 }
 
 /// 文本输入框右键菜单的目标。`id` 是产生右键的那个输入框(主窗口搜索框 /
